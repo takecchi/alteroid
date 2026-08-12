@@ -1,0 +1,12 @@
+# 実行系の版をここで一本化する（mise）。
+#
+# 「ローカルでは動く」を無くすのが目的なので、ローカルと CI は同じここを読む
+# （CI は .github/workflows/ci.yml の jdx/mise-action がこのファイルを使う）。
+# 版を上げるときは以下も一緒に見ること — ずれたら「環境によってできない」が
+# 生まれ、それは仕様ではなくバグである:
+#   - package.json の `engines.node` / `packageManager`
+#   - Dockerfile の `FROM node:22-bookworm-slim`
+#   - pnpm-workspace.yaml の catalog `@types/node`
+[tools]
+node = "22.23.2"
+pnpm = "11.21.0"
