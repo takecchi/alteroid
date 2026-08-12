@@ -30,10 +30,36 @@ RUN pnpm build
 
 FROM node:22-bookworm-slim AS runtime
 
-# マネージャーが人間と同じ手つきで作業するための素の道具（runner で使う）
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates git ripgrep curl \
-  && rm -rf /var/lib/apt/lists/*
+# マネージャーが人間と同じ手つきで作業するための素の道具（runner で使う）。
+#
+# **`gh` も素の道具である。** 人間の Claude Code には `gh` があるので、ここに無いと
+# 「PR を出す」が層を下りた瞬間にできなくなる — それは仕様ではなくバグである
+# （north_star 禁止1）。Debian の apt には無いので GitHub 公式の apt リポジトリを足す。
+#
+# **版は固定しない。** git / ripgrep / curl と同じ扱いにして、器を作り直したときに
+# その時点の版が入るようにしてある。`gh` だけを固定版にすると、人間の手元より古い
+# `gh` をマネージャーに持たせることになり、その遅れがそのままデグレードになる
+# （新しい subcommand が「マネージャーだと使えない」として現れる）。版を揃える必要が
+# 出たら、固定するのは `gh` 単体ではなくベースイメージごとである。
+RUN set -eux; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends ca-certificates curl; \
+  install -m 0755 -d /etc/apt/keyrings; \
+  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    -o /etc/apt/keyrings/githubcli-archive-keyring.gpg; \
+  chmod 0644 /etc/apt/keyrings/githubcli-archive-keyring.gpg; \
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+    > /etc/apt/sources.list.d/github-cli.list; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends git ripgrep jq gh; \
+  rm -rf /var/lib/apt/lists/*; \
+  gh --version
+
+# git の資格情報は `gh` から借りる（人間が `gh auth setup-git` でやることと同じ）。
+# **鍵をイメージに焼かない。** ここにあるのは経路だけで、実際の鍵は runner の
+# 環境変数（`GH_TOKEN`）から来る。トークンが無ければ（空文字でも同じ）このヘルパーは
+# 何も返さず、git は「資格情報が無い」として次へ進む（公開リポジトリの clone は通る）。
+RUN git config --system credential.https://github.com.helper '!gh auth git-credential'
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH

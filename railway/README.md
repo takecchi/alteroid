@@ -112,6 +112,14 @@ Config as Code のパスは Root Directory を見ないので、**リポジト�
 - `ALTEROID_BIND` — デーモンの API は**叩けばクローンのターンが起きる実行の口**で、認証が無い。127.0.0.1 のままにする
 - public domain（Generate Domain）— 上と同じ理由。外から使いたくなったら、手前に境界（認証・トンネル・リバースプロキシ）を置くのが先
 
+**置いたら必ず名前を検算する。** ダッシュボードへ貼るときに前後の空白が混ざると、Railway は `RAILWAY_RUN_UID` と ` RAILWAY_RUN_UID` を**別の変数として保存する**。後者は誰も読まないので「設定したのに効かない」になる。
+
+```bash
+railway variable list --service runner --json | python3 -c "import json,sys; [print(repr(k)) for k in json.load(sys.stdin)]"
+```
+
+`' RAILWAY_RUN_UID'` のように引用符の内側に空白が見えたら消して置き直す（`railway variable delete " RAILWAY_RUN_UID" --service runner`）。
+
 ### 4. デプロイ
 
 **`runner` を先に上げる。** daemon は起動時に runner の `/health` へ名乗りを聞きに行き、繋がらなければ落ちる（鍵無しで繋ぐくらいなら起動しない設計）。`restartPolicyType: ALWAYS` なので放っておいても収束するが、順番どおりなら1回で上がる。
@@ -152,19 +160,121 @@ chat の中で使えるもの:
 
 ### 6. 上がったあとに確かめること
 
-境界が本当に立っているかは、思い込みではなく runner の中から確かめる。
+境界が本当に立っているかは、思い込みではなく runner の中から確かめる。**素の `grep` は使わない** — `RAILWAY_GIT_COMMIT_MESSAGE` にこの文書の一部が入るので、変数名を含む文章に当たって「有る」ように見える。行頭で固定する。
 
 ```bash
-railway ssh --service runner
-env | grep ALTEROID_DATABASE_URL     # 何も出ないこと（記憶ストアの鍵が無い）
-env | grep ALTEROID_RUNNER_TOKEN     # _SHA256 だけが出ること（素の合鍵が無い）
+railway ssh --service runner -- sh -lc '
+env | grep -qE "^ALTEROID_DATABASE_URL=" && echo "!! DB の鍵がある" || echo "DB の鍵は無い"
+env | grep -qE "^ALTEROID_RUNNER_TOKEN="  && echo "!! 素の合鍵がある" || echo "素の合鍵は無い（sha256 だけ）"
+
+# uid 1001（マネージャーと同じ主体）から制御面 → 401 であること
+su -s /bin/sh worker -c "curl -s -o /dev/null -w %{http_code}\\\\n http://127.0.0.1:4518/managers"
+
+# 生存確認だけは鍵なしで通る（制御面の情報は返さない）
+su -s /bin/sh worker -c "curl -s http://127.0.0.1:4518/livez"
+'
 ```
+
+実測（2026-08）: 制御面は **401**、`/livez` は `{"ok":true}`、runner の環境変数は `ALTEROID_RUNNER_TOKEN_SHA256` だけで素の合鍵と `ALTEROID_DATABASE_URL` は無い。つまり M4 受け入れ基準4は Railway でも成立している。
+
+いっぽう `getent hosts postgres.railway.internal` は `fd12:…` を返す（＝「先に読む」2の弱まりが実測でも出る）。db へ届く経路はあるが、鍵が無い。
+
+`railway ssh` は**サービスの実行 UID とは無関係に root で入る**（`RAILWAY_RUN_UID` を設定していない `app` でも `uid=0`）。だから上のように `su` で降りてから叩くこと。root のまま叩いた 401 は「マネージャーから叩けない」の証拠にならない。
 
 能力が落ちていないことも確かめる（境界を入れた側が示す義務。north_star「立ち戻るための問い」最終項）。
 
 - `alteroid chat` でマネージャーへ委譲し、git を叩く作業が完遂すること
 - 許可確認がクローン経由で `/approvals` に届き、`/answer` で**その仕事だけ**が再開すること
 - `app` を再デプロイしても同じ人格で応答し、走行中だったマネージャーを把握していること
+
+---
+
+## マネージャーに GitHub を渡す（PR を出させる）
+
+クローンに「実装して PR を出して」と頼むには、マネージャーの手元に**人間が Claude Code に渡しているものと同じ**3つが揃っている必要がある。
+
+| 要るもの       | 置き場                       | 状態                                                                                  |
+| -------------- | ---------------------------- | ------------------------------------------------------------------------------------- |
+| `gh` コマンド  | イメージ（`Dockerfile`）     | 同梱済み（版は固定しない。ビルドし直せば上がる）。git の credential helper も配線済み |
+| 書き込みの鍵   | **`runner` の Service 変数** | `GH_TOKEN` を置く（下記）                                                             |
+| コミットの身元 | **`runner` の Service 変数** | `GIT_AUTHOR_*` / `GIT_COMMITTER_*` を置く（下記）                                     |
+
+**daemon 側には置かない。** これはクローンの鍵ではなく**マネージャー自身の道具の鍵**である（クローンの道具はマネージャーであって git ではない）。記憶ストアの鍵と逆で、下へ渡すのが正しい。
+
+### 鍵を作る
+
+GitHub → Settings → Developer settings → Personal access tokens → **Fine-grained tokens**
+
+| 項目              | 値                                            |
+| ----------------- | --------------------------------------------- |
+| Repository access | Only select repositories → 対象リポジトリだけ |
+| Contents          | Read and write（clone / push）                |
+| Pull requests     | Read and write（`gh pr create`）              |
+| Metadata          | Read-only（自動で付く）                       |
+| Expiration        | 切る。無期限にしない                          |
+
+公開リポジトリなら clone だけは鍵なしで通る。**push と PR 作成に要る**のがこの鍵である。
+
+### 置く
+
+```bash
+# 鍵は stdin から。引数で渡すとシェル履歴とプロセス一覧に残る
+printf %s 'github_pat_xxx' | railway variable set GH_TOKEN --stdin --service runner --skip-deploys
+
+railway variable set GIT_AUTHOR_NAME=takecchi --service runner --skip-deploys
+railway variable set GIT_AUTHOR_EMAIL=takeaki.kobayashi@gmail.com --service runner --skip-deploys
+railway variable set GIT_COMMITTER_NAME=takecchi --service runner --skip-deploys
+railway variable set GIT_COMMITTER_EMAIL=takeaki.kobayashi@gmail.com --service runner
+```
+
+**Shared Variables に置かない。** `runner` の Service 変数として置く（daemon にも降りる場所へ置くと、記憶の鍵と同じ器に GitHub の書き込み権が並ぶ）。
+
+`GIT_*` を**環境変数で**渡すのは、`git config` を焼くと器を作り直すたびに消えるからである（git は設定ファイルが無くてもこの4つを読む）。置き忘れると commit が `Please tell me who you are` で失敗する。**空文字で置くのは未設定より悪い** — git は `empty ident name` で即座に落ちる。置かないなら変数ごと消す。
+
+### ローカル（`docker compose`）でも同じ
+
+同じ5つを `.env` に置けば `runner` へ渡る（`compose.yaml` の runner の `environment`）。確認は `docker compose exec -u 1001 runner gh auth status`。
+
+### 通っているか確かめる
+
+マネージャーと同じ主体（uid 1001）で確かめる。root で通っても意味がない。
+
+```bash
+railway ssh --service runner -- su -s /bin/sh worker -c '
+  gh auth status
+  cd /tmp && git clone --depth 1 https://github.com/<owner>/<repo> r && cd r
+  git commit --allow-empty -m "probe" && git log -1 --format="%an <%ae>"
+'
+```
+
+### 頼む
+
+```bash
+railway ssh --service app
+alteroid chat
+> alteroid リポジトリの M5 を実装して PR を出して。AGENTS.md と docs/roadmap.md を先に読んで。
+```
+
+あとは閉じてよい。**人間の不在で止まるのは承認待ちだけ**なので、判断に迷ったものが `/approvals` に溜まる。溜まったら `alteroid chat` の `/approvals` → `/answer <番号> <回答>`。進み具合は `/managers` と `/manager <id>`（生ログ）で見える。
+
+**長い仕事を頼むときは、早めに push させること。** workspace はボリュームを付けていないので、runner が再デプロイされるとコミット前の変更は消える（「先に読む」3）。数時間かかる仕事を投げるなら、その間デプロイしないか、`/workspace` にボリュームを付ける。
+
+**M5 は実装だけでは受け入れ基準を満たさない。** 基準1が「runner を2台以上登録し、複数マネージャーが配置される」なので、`runner` Service をもう1つ（別の `ALTEROID_RUNNER_ID`）足して初めて確認できる。実装を頼むときに「1台構成のまま通るところまで」と「2台目を足してからの確認」を分けて伝えると迷子にならない。
+
+---
+
+## 症状から引く
+
+| 症状                                                             | 原因                                                                                                                                                                                              |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `railway ssh` が一瞬で切れる（プロンプトは出る）                 | そのコンテナが再起動を繰り返している。ssh はデプロイに繋がっているので、器が入れ替わるとセッションごと落ちる。**ssh の問題ではない**ので `railway logs` を見る                                    |
+| `alteroidd: 起動に失敗しました: TypeError: fetch failed`         | daemon が runner の `/health` へ届いていない。runner のログを見る（大抵 runner が上がっていない）。次に `ALTEROID_RUNNER_URL` のサービス名と `ALTEROID_RUNNER_BIND=::` を確認する                 |
+| `alteroid-runner: ALTEROID_RUNNER_CHILD_UID が指定されているが…` | runner が root で走っていない。`RAILWAY_RUN_UID=0` が無い／名前に空白が混ざっている。**これは異常ではなく設計**で、同じ UID のまま走ると子プロセスが制御面に手を届かせるので、runner は起動を拒む |
+| 変数を設定したのに効かない                                       | 名前の前後に空白。`railway variable list --json` で `repr` して検算する（上の「置いたら必ず名前を検算する」）                                                                                     |
+| 日報が想定と違う時刻に出る                                       | `TZ` 未設定。既定の `22:00` は**コンテナのローカル時刻**なので、UTC のまま動くと日本時間の翌 7:00 になる                                                                                          |
+| `env \| grep ALTEROID_DATABASE_URL` が runner で何か返す         | 慌てる前に行頭固定で取り直す。`RAILWAY_GIT_COMMIT_MESSAGE` にこの文書の一部が入っている                                                                                                           |
+| マネージャーの commit が `Please tell me who you are` で失敗する | `GIT_AUTHOR_*` / `GIT_COMMITTER_*` が runner に無い（「マネージャーに GitHub を渡す」）                                                                                                           |
+| マネージャーの push が 403 になる                                | `GH_TOKEN` が無いか、fine-grained PAT の Contents が Read-only か、対象リポジトリが選択されていない                                                                                               |
 
 ---
 

@@ -25,3 +25,44 @@ jobs:
       - run: pnpm lint
       - run: pnpm format:check
       - run: pnpm test
+
+  # イメージもここで焼く。**マネージャーの道具は版を固定していない**（人間の手元より
+  # 古い `gh` を配らないため）ので、上流が変わって壊れたことに気づく場所が要る。
+  # ここが無いと、気づくのがデプロイ時になる。
+  #
+  # 焼くのは runtime ステージ = 実際に走る器そのものである。amd64 だけ焼く
+  # （Railway と同じ。アーキテクチャ差は apt の `dpkg --print-architecture` 任せに
+  # してあるので、arm64 固有の分岐はもう無い）。
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runtime
+          load: true
+          tags: alteroid:ci
+          cache-from: type=gha
+          cache-to: type=gha
+
+      # **マネージャーが実際に走る主体（uid 1001）で見る。** root で揃っていても、
+      # 降りた先で欠けていれば「コンテナだからできない」が生まれる（north_star 禁止1）。
+      - name: マネージャーの道具が揃っているか
+        run: |
+          docker run --rm -u 1001 alteroid:ci sh -eu -c '
+            for t in git gh jq rg curl node pnpm alteroid; do
+              command -v "$t" >/dev/null || { echo "道具が無い: $t" >&2; exit 1; }
+            done
+            gh --version
+            git --version
+
+            # git が資格情報を gh から借りる配線。鍵は焼かないが、経路は焼く。
+            helper=$(git config --get-urlmatch credential.helper https://github.com/x/y)
+            test "$helper" = "!gh auth git-credential" \
+              || { echo "credential helper が違う: $helper" >&2; exit 1; }
+
+            # 鍵が無くても公開リポジトリの clone は通る（無い状態が壊れていないこと）。
+            cd /tmp && git clone --depth 1 -q https://github.com/cli/cli.git probe
+          '
