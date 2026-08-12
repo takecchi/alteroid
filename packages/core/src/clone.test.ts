@@ -95,7 +95,9 @@ function setup(
   sdkOptions: { delayMs?: number; failWith?: string } = {},
 ): Setup {
   const { fn, calls } = fakeSdk(reply, sdkOptions);
-  const clone = createClone({ stores, queryFn: fn });
+  // マネージャーも偽物にしておく。ここで検証したいのはクローンのループだけであり、
+  // 誤って本物の SDK を起こさないようにする。
+  const clone = createClone({ stores, queryFn: fn, managerQueryFn: fakeSdk().fn });
   const events: ChatStreamEvent[] = [];
   clone.subscribe('conv-1', (event) => events.push(event));
   return { clone, stores, calls, events };
@@ -228,6 +230,52 @@ describe('クローン', () => {
         timeout: 3000,
       })
       .toBe(true);
+
+    await s.clone.stop();
+  });
+
+  it('マネージャーの報告と確認は受信箱を通ってクローンに届く（配線）', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    s.clone.post({
+      type: 'manager_message',
+      id: 'evt-report',
+      at: new Date().toISOString(),
+      managerId: 'mgr-1',
+      kind: 'report',
+      text: '直しました',
+    });
+    s.clone.post({
+      type: 'manager_message',
+      id: 'evt-permission',
+      at: new Date().toISOString(),
+      managerId: 'mgr-2',
+      kind: 'permission',
+      text: 'Bash の実行許可: git push',
+      requestId: 'req-1',
+    });
+
+    const inputs = () => (s.calls[0] as FakeCall).inputs;
+    await expect
+      .poll(() => inputs().some((input) => input.includes('直しました')), { timeout: 3000 })
+      .toBe(true);
+
+    const permission = await expect
+      .poll(() => inputs().find((input) => input.includes('git push')), { timeout: 3000 })
+      .toBeTruthy()
+      .then(() => inputs().find((input) => input.includes('git push')) ?? '');
+
+    // 止まっているのはその仕事だけだと伝わり、答え方の経路も示される
+    expect(permission).toContain('mgr-2');
+    expect(permission).toContain('manager_send');
+    expect(permission).toContain('ask_human');
+
+    // マネージャーとの往復も日誌に残る（見えない層を作らない）
+    const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as { with: string }[];
+    expect(exchanges.some((entry) => entry.with === 'manager')).toBe(true);
 
     await s.clone.stop();
   });

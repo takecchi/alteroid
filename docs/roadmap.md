@@ -43,13 +43,13 @@
 
 **ゴール**: クローンが複数のマネージャーを並行に使い、エスカレーションが人間まで一本の経路で届く。
 
-- [ ] `manager_start` / `manager_send` / `manager_list` の実装。委譲はノンブロッキング、`manager_id` と SDK session_id の対応は JobStore へ
-- [ ] マネージャー: SDK 子プロセス、model `opus`、**`tools` を渡さない**、`settingSources` で人間の `.mcp.json` を共有、cwd = 実ワークスペース
-- [ ] 作業者: `agents` 定義、model `sonnet`、**`tools` フィールド省略**（全継承）
-- [ ] 配線: マネージャーの `AskUserQuestion`・許可確認・最終報告をクローンの受信箱へルーティング。クローンは記憶に根拠があれば自分で答え、無ければ `ask_human` で承認待ちキューへ
-- [ ] 承認待ちキューを chat と HTTP API から閲覧・回答できる
-- [ ] PostToolUse フックでマネージャー・作業者の全ツール実行を日誌へ記録（監査）
-- [ ] セッションログの閲覧: manager_id からそのセッションのトランスクリプト（アーカイブ含む）へ chat / API で降りられる（可観測性3層の下2つがここで揃う）
+- [x] `manager_start` / `manager_send` / `manager_list` の実装。委譲はノンブロッキング、`manager_id` と SDK session_id の対応は JobStore へ
+- [x] マネージャー: SDK 子プロセス、model `opus`、**`tools` を渡さない**、`settingSources` で人間の `.mcp.json` を共有、cwd = 実ワークスペース
+- [x] 作業者: `agents` 定義、model `sonnet`、**`tools` フィールド省略**（全継承）
+- [x] 配線: マネージャーの `AskUserQuestion`・許可確認・最終報告をクローンの受信箱へルーティング。クローンは記憶に根拠があれば自分で答え、無ければ `ask_human` で承認待ちキューへ
+- [x] 承認待ちキューを chat と HTTP API から閲覧・回答できる
+- [x] PostToolUse フックでマネージャー・作業者の全ツール実行を日誌へ記録（監査）
+- [x] セッションログの閲覧: manager_id からそのセッションのトランスクリプト（アーカイブ含む）へ chat / API で降りられる（可観測性3層の下2つがここで揃う）
 
 **受け入れ基準**:
 1. クローンが2つ以上のマネージャーを同時に走らせ、交錯して届く報告を捌ける

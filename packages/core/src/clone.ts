@@ -6,6 +6,7 @@ import type { Options, Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/c
 
 import type { CloneHost } from './host.js';
 import { Inbox } from './inbox.js';
+import { createManagerPool, type ManagerPool } from './manager.js';
 import { buildCloneSystemPrompt, buildDistillPrompt } from './prompt.js';
 import type { ChatStreamEvent, InboxEvent, JournalEntryInput } from './schema.js';
 import type { Stores } from './store.js';
@@ -43,6 +44,20 @@ export interface CloneOptions {
    * 迷子になる）。デーモンは `~/.alteroid` を渡す。
    */
   cwd?: string;
+  /**
+   * マネージャー用の `query`（主にテスト用）。クローンのものと分けてあるのは、
+   * 両者が別プロセス・別モデル帯だからである。
+   */
+  managerQueryFn?: typeof query;
+  /**
+   * `manager_start` で cwd を省いたときの作業ディレクトリ。クローンの `cwd`
+   * （人格データの置き場）とは別物で、こちらは実プロジェクト側である。
+   */
+  managerCwd?: string;
+  /** 主にテスト用。マネージャー子プロセスへ渡す環境変数の素。 */
+  managerEnv?: NodeJS.ProcessEnv;
+  /** 主にテスト用。差し替えると委譲先ごと入れ替えられる。 */
+  managers?: ManagerPool;
 }
 
 type Listener = (event: ChatStreamEvent) => void;
@@ -64,6 +79,7 @@ class Clone implements CloneHost {
   readonly #stores: Stores;
   readonly #queryFn: typeof query;
   readonly #cwd: string | undefined;
+  readonly #managers: ManagerPool;
 
   readonly #inbox = new Inbox();
   readonly #listeners = new Map<string, Set<Listener>>();
@@ -84,11 +100,27 @@ class Clone implements CloneHost {
   #resumedFrom: string | null = null;
   #sawInit = false;
 
-  constructor({ stores, queryFn, cwd }: CloneOptions) {
+  constructor(options: CloneOptions) {
+    const { stores, queryFn, cwd, managerQueryFn, managerCwd, managerEnv, managers } = options;
     this.#stores = stores;
     this.#queryFn = queryFn ?? query;
     this.#cwd = cwd;
+    this.#managers =
+      managers ??
+      createManagerPool({
+        stores,
+        // マネージャーからの報告・質問も、人間の発言と同じ受信箱を通る。
+        post: (event) => this.post(event),
+        ...(managerQueryFn === undefined ? {} : { queryFn: managerQueryFn }),
+        ...(managerCwd === undefined ? {} : { defaultCwd: managerCwd }),
+        ...(managerEnv === undefined ? {} : { env: managerEnv }),
+      });
     void this.#pump();
+  }
+
+  /** デーモンの HTTP 層から一覧・生ログへ降りるための口。 */
+  get managers(): ManagerPool {
+    return this.#managers;
   }
 
   // -------------------------------------------------------------------------
@@ -173,6 +205,8 @@ class Clone implements CloneHost {
       // 既に閉じている
     }
     await this.#reader?.catch(() => undefined);
+    // 走行中のマネージャーも畳む。返事待ちで宙吊りのまま消えない。
+    await this.#managers.stop().catch(() => undefined);
   }
 
   // -------------------------------------------------------------------------
@@ -192,7 +226,7 @@ class Clone implements CloneHost {
       try {
         await this.#handle(event);
       } catch (error) {
-        this.#emit(this.#conversationOf(event), { type: 'error', message: String(error) });
+        await this.#reportFailure(this.#conversationOf(event), String(error));
         this.#finishTurn();
       } finally {
         const done = this.#completions.get(event.id);
@@ -207,6 +241,26 @@ class Clone implements CloneHost {
 
   #conversationOf(event: InboxEvent): string | null {
     return event.type === 'human_message' ? event.conversationId : null;
+  }
+
+  /**
+   * ターンの失敗を必ずどこかに残す。
+   *
+   * 人間が繋がっていれば chat へ流れるが、**内部ターンには聞き手が居ない**。
+   * マネージャーからの確認も蒸留も内部ターンなので、そこで握り潰すと、
+   * 「クローンが黙り、マネージャーが永久に返事を待つ」が無記録で起きる。
+   */
+  async #reportFailure(conversationId: string | null, message: string): Promise<void> {
+    if (conversationId !== null) {
+      this.#emit(conversationId, { type: 'error', message });
+      return;
+    }
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text: `内部ターンが失敗した: ${message}`,
+    });
   }
 
   async #handle(event: InboxEvent): Promise<void> {
@@ -235,10 +289,32 @@ class Clone implements CloneHost {
       case 'human_answer': {
         const approval = await this.#stores.jobs.getApproval(event.approvalId);
         const question = approval?.question ?? '(不明な質問)';
+        // 宛先は managerId と requestId の対で戻す。requestId を落とすと、
+        // そのマネージャーが複数を待っているとき宛先が決まらず、人間が答えたのに
+        // 仕事が再開しない（人間へ回る経路の端から端まで id を運ぶこと）。
+        const waiting =
+          approval?.jobId === undefined
+            ? ''
+            : `\n\nこの確認はマネージャー ${approval.jobId} のものである。` +
+              `回答を \`manager_send\`（許可確認なら decision 付き）で返すと、止まっていたその仕事が再開する。` +
+              `\n宛先: managerId: "${approval.jobId}"` +
+              (approval.requestId === undefined ? '' : `, requestId: "${approval.requestId}"`);
         await this.#runInternal(
-          `[system] 承認待ちにしていた質問に人間が答えた。\n\n質問: ${question}\n回答: ${event.answer}\n\n` +
+          `[system] 承認待ちにしていた質問に人間が答えた。\n\n質問: ${question}\n回答: ${event.answer}` +
+            `${waiting}\n\n` +
             'この回答に沿って続きを進めよ。今後同じ判断を自分でできるよう、必要なら記憶へ残すこと。',
         );
+        return;
+      }
+
+      case 'manager_message': {
+        await this.#journal({
+          type: 'exchange',
+          with: 'manager',
+          role: 'inbound',
+          text: `[${event.managerId}/${event.kind}] ${event.text}`,
+        });
+        await this.#runInternal(managerPrompt(event));
         return;
       }
 
@@ -246,7 +322,6 @@ class Clone implements CloneHost {
       case 'timer':
       case 'external':
       case 'self_initiative':
-      case 'manager_message':
         await this.#runInternal(
           `[system] 未対応の起点 (${event.type}) を受け取った。M3 以降で実装される。`,
         );
@@ -274,7 +349,7 @@ class Clone implements CloneHost {
       await this.#ensureQuery();
       this.#pushInput(await this.#withFreshMemory(text));
     } catch (error) {
-      this.#emit(conversationId, { type: 'error', message: String(error) });
+      await this.#reportFailure(conversationId, String(error));
       this.#finishTurn();
     }
 
@@ -373,6 +448,7 @@ class Clone implements CloneHost {
         [MCP_SERVER_NAME]: createCloneMcpServer({
           stores: this.#stores,
           emit: (event) => this.#emit(this.#turn?.conversationId ?? null, event),
+          managers: this.#managers,
         }),
       },
       systemPrompt: buildCloneSystemPrompt({ memory }),
@@ -486,10 +562,10 @@ class Clone implements CloneHost {
         // result を伴わずに終わってもターンを取り残さない（取り残すと受信箱ごと止まる）
         const turn = this.#turn;
         if (turn) {
-          this.#emit(turn.conversationId, {
-            type: 'error',
-            message: failure ?? 'クローンのセッションが終了した',
-          });
+          await this.#reportFailure(
+            turn.conversationId,
+            failure ?? 'クローンのセッションが終了した',
+          );
         }
         this.#finishTurn();
         this.#query = null;
@@ -580,6 +656,50 @@ class Clone implements CloneHost {
       }
     }
   }
+}
+
+/**
+ * マネージャーからの一件をクローンの言葉に直す。
+ *
+ * ここに「何なら答えてよいか」の一覧を書かないこと。答えるか人間に回すかの線引きは
+ * クローンが記憶として持っているものであり、書いた瞬間に人による違いが潰れる
+ * （PRD「権限境界」/ AGENTS.md 地雷3）。
+ */
+function managerPrompt(event: Extract<InboxEvent, { type: 'manager_message' }>): string {
+  const head = `[system] マネージャー ${event.managerId} から届いた。`;
+
+  if (event.kind === 'report') {
+    return [
+      `${head}（報告）`,
+      '',
+      event.text,
+      '',
+      '続きが要るなら `manager_send` で指示を出し、要らないなら何もしなくてよい。',
+      '学びや判断の基準になったことがあれば記憶へ移すこと。',
+    ].join('\n');
+  }
+
+  const label = event.kind === 'question' ? '質問' : '実行の許可確認';
+  // 宛先には requestId まで書く。同じマネージャーが同時に複数を待つことがあり
+  // （1応答で並列に呼ばれた道具）、宛先を欠いた回答は宛先を推測できない。
+  const to =
+    event.requestId === undefined
+      ? `managerId: "${event.managerId}"`
+      : `managerId: "${event.managerId}", requestId: "${event.requestId}"`;
+
+  return [
+    `${head}（${label}）`,
+    '',
+    event.text,
+    '',
+    `返事をするまで ${event.managerId} のこの1件だけが止まっている（他のマネージャーも、同じマネージャーの別の確認も、それぞれ独立に待っている）。`,
+    `記憶に根拠があるなら自分で決めて \`manager_send\`（${to}）で返し、その判断を \`journal_write\` に残せ。`,
+    event.kind === 'permission' ? '許可確認なので `decision` に allow / deny を明示すること。' : '',
+    `根拠が無いなら \`ask_human\` に ${to} を添えて積み、人間の回答が届いてから同じ宛先へ \`manager_send\` で返せ。` +
+      '（宛先を添えないと、人間が答えてもこの仕事を再開できない）',
+  ]
+    .filter((line) => line !== '')
+    .join('\n');
 }
 
 interface Block {

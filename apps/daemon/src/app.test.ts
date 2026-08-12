@@ -1,4 +1,11 @@
-import type { ChatStreamEvent, CloneHost, InboxEvent, Stores } from '@alteroid/core';
+import type {
+  ChatStreamEvent,
+  CloneHost,
+  InboxEvent,
+  ManagerPool,
+  ManagerSummary,
+  Stores,
+} from '@alteroid/core';
 import { createMemoryStores } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -16,7 +23,27 @@ function fakeClone() {
     for (const listener of listeners.get(conversationId) ?? []) listener(event);
   };
 
+  const managerList: ManagerSummary[] = [];
+  const transcripts = new Map<string, string>();
+
+  const managers: ManagerPool = {
+    async start() {
+      throw new Error('この偽クローンからはマネージャーを起こさない');
+    },
+    async send() {
+      return { outcome: 'unknown' as const, detail: '' };
+    },
+    async list() {
+      return managerList;
+    },
+    async transcript(managerId) {
+      return transcripts.get(managerId) ?? null;
+    },
+    async stop() {},
+  };
+
   const clone: CloneHost = {
+    managers,
     post(event) {
       posted.push(event);
       if (event.type !== 'human_message') return;
@@ -44,6 +71,8 @@ function fakeClone() {
     ended,
     answered,
     posted,
+    managerList,
+    transcripts,
     setReply(events: ChatStreamEvent[]) {
       reply = events;
     },
@@ -195,6 +224,32 @@ describe('HTTP API', () => {
 
     const read = await app.request(`/archive/${id}`);
     expect(await read.text()).toBe('{"a":1}\n');
+  });
+
+  it('manager_id から一覧・状態・生ログへ降りられる（可観測性の下2層）', async () => {
+    fake.managerList.push({
+      managerId: 'mgr-1234',
+      status: 'running',
+      live: true,
+      cwd: '/work/project',
+      request: 'ログイン周りを直して',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+      waiting: [{ requestId: 'req-1', summary: 'Bash の実行許可' }],
+    });
+    fake.transcripts.set('mgr-1234', '{"type":"user"}\n');
+
+    const list = await app.request('/managers');
+    expect(await list.json()).toMatchObject({ managers: [{ managerId: 'mgr-1234' }] });
+
+    const detail = await app.request('/managers/mgr-1234');
+    expect(await detail.json()).toMatchObject({ manager: { cwd: '/work/project' } });
+
+    const transcript = await app.request('/managers/mgr-1234/transcript');
+    expect(await transcript.text()).toBe('{"type":"user"}\n');
+
+    expect((await app.request('/managers/nope')).status).toBe(404);
+    expect((await app.request('/managers/nope/transcript')).status).toBe(404);
   });
 
   it('/shutdown で停止を要求できる', async () => {

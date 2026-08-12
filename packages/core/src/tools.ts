@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 
+import type { ManagerPool } from './manager.js';
 import type { ChatStreamEvent, PendingApproval } from './schema.js';
 import type { Stores } from './store.js';
 
@@ -21,6 +22,11 @@ export interface ToolContext {
   stores: Stores;
   /** いま人間と繋がっている会話へイベントを流す（繋がっていなければ捨てる）。 */
   emit(event: ChatStreamEvent): void;
+  /**
+   * 委譲先。省略できるのは蒸留用の短命セッションのためで、そこでは
+   * マネージャーを起こさない（記憶へ移すだけの内部ターン）。
+   */
+  managers?: ManagerPool;
 }
 
 export function qualifiedToolName(name: string): string {
@@ -47,11 +53,10 @@ function text(body: string) {
   return { content: [{ type: 'text' as const, text: body }] };
 }
 
-const NOT_YET = (name: string) =>
-  text(
-    `${name} は M2（委譲）で実装される。いまはマネージャーを起こせない。` +
-      `実作業が必要な依頼は、その旨を人間に伝えるか記憶に残しておくこと。`,
-  );
+const NO_POOL = text(
+  'いまは委譲できない場面である（記憶へ移すための内部ターン）。' +
+    '実作業が必要なら、この場では記憶に残すだけにして、次の会話で委譲すること。',
+);
 
 /** ツール定義そのもの。MCP の配線を通さずに単体テストできるよう分けてある。 */
 export function createCloneTools(context: ToolContext) {
@@ -152,13 +157,26 @@ export function createCloneTools(context: ToolContext) {
       {
         question: z.string().describe('人間への質問。何を判断してほしいかを具体的に'),
         context: z.string().optional().describe('判断に必要な背景'),
+        managerId: z
+          .string()
+          .optional()
+          .describe('マネージャーからの確認を人間に回す場合、その manager_id'),
+        requestId: z
+          .string()
+          .optional()
+          .describe(
+            'マネージャーからの確認を人間に回す場合、受信箱に届いた requestId。' +
+              '人間の回答をこの確認へ返すために必要なので、managerId と必ず対で渡すこと',
+          ),
       },
-      async ({ question, context: background }) => {
+      async ({ question, context: background, managerId, requestId }) => {
         const approval: PendingApproval = {
           id: randomUUID(),
           createdAt: new Date().toISOString(),
           question,
           ...(background === undefined ? {} : { context: background }),
+          ...(managerId === undefined ? {} : { jobId: managerId }),
+          ...(requestId === undefined ? {} : { requestId }),
         };
         await stores.jobs.putApproval(approval);
         await stores.journal.append({
@@ -171,26 +189,101 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    // --- 委譲（M2 で実装） ------------------------------------------------
+    // --- 委譲 --------------------------------------------------------------
     tool(
       'manager_start',
-      'マネージャーを起こして仕事を任せる（M2 で実装）。',
+      [
+        'マネージャー（あなたが起こす Claude Code）に仕事を任せる。',
+        '起動して即返るので、完了を待たずに次の判断へ移ってよい。同時に何本走らせてもよい。',
+        '依頼できるのは実装だけではない。調査・設計の相談・外部サービスの確認・レビューも同じように頼める。',
+      ].join(' '),
       {
-        request: z.string().describe('依頼内容'),
-        cwd: z.string().optional().describe('作業ディレクトリ'),
+        request: z
+          .string()
+          .describe('依頼内容。人間が Claude Code に書くのと同じ粒度で、背景と狙いを添えて書く'),
+        cwd: z
+          .string()
+          .optional()
+          .describe('作業ディレクトリ（実プロジェクトの場所）。省略時はデーモンの既定'),
       },
-      async () => NOT_YET('manager_start'),
+      async ({ request, cwd }) => {
+        if (!context.managers) return NO_POOL;
+        const started = await context.managers.start({
+          request,
+          ...(cwd === undefined ? {} : { cwd }),
+        });
+        await stores.journal.append({
+          type: 'decision',
+          decision: `マネージャー ${started.managerId} を起こした（cwd: ${started.cwd}）: ${request}`,
+          grounds: '委譲の判断',
+        });
+        return text(
+          `マネージャー ${started.managerId} を起こした（cwd: ${started.cwd}）。` +
+            '報告・質問は後から受信箱に届く。',
+        );
+      },
     ),
 
     tool(
       'manager_send',
-      '走行中のマネージャーに追加指示や回答を送る（M2 で実装）。',
-      { managerId: z.string(), message: z.string() },
-      async () => NOT_YET('manager_send'),
+      [
+        '走行中のマネージャーへ追加指示を送る、または止まっている質問・許可確認に答える。',
+        'そのマネージャーが返事待ちなら、これが回答になる（止まっていたその仕事だけが再開する）。',
+        '許可確認への回答では decision を必ず付けること。',
+      ].join(' '),
+      {
+        managerId: z.string().describe('manager_start が返した id'),
+        message: z
+          .string()
+          .describe('マネージャーへの本文。deny のときは、なぜ駄目でどうしてほしいかを書く'),
+        decision: z
+          .enum(['allow', 'deny'])
+          .optional()
+          .describe('許可確認への回答のとき必須。それ以外では不要'),
+        requestId: z
+          .string()
+          .optional()
+          .describe(
+            'どの確認への回答かを示す id（受信箱に届いた requestId）。' +
+              '1本のマネージャーが複数を同時に待つことがあるので、回答では必ず添えること',
+          ),
+      },
+      async ({ managerId, message, decision, requestId }) => {
+        if (!context.managers) return NO_POOL;
+        const result = await context.managers.send(managerId, message, {
+          ...(decision === undefined ? {} : { decision }),
+          ...(requestId === undefined ? {} : { requestId }),
+        });
+        return text(result.detail);
+      },
     ),
 
-    tool('manager_list', '走行中のマネージャーの一覧と状態を見る（M2 で実装）。', {}, async () =>
-      NOT_YET('manager_list'),
+    tool(
+      'manager_list',
+      'マネージャーの一覧と状態を見る。何が走っていて、何が返事待ちかが分かる。',
+      {},
+      async () => {
+        if (!context.managers) return NO_POOL;
+        const managers = await context.managers.list();
+        if (managers.length === 0) return text('（マネージャーは1本も居ない）');
+        return text(
+          managers
+            .map((manager) =>
+              [
+                `- ${manager.managerId} [${manager.status}${manager.live ? '' : '/セッション切断'}]`,
+                `  依頼: ${manager.request}`,
+                `  cwd: ${manager.cwd}`,
+                ...manager.waiting.map(
+                  (item) => `  返事待ち(requestId: ${item.requestId}): ${item.summary}`,
+                ),
+                manager.lastReport === undefined ? null : `  直近の報告: ${manager.lastReport}`,
+              ]
+                .filter((line) => line !== null)
+                .join('\n'),
+            )
+            .join('\n'),
+        );
+      },
     ),
   ];
 }

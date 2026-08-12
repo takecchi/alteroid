@@ -165,6 +165,8 @@ function parseSSEChunk(chunk: string): SSEEvent | null {
 const HELP = `/memory              記憶の一覧
 /memory <slug>       記憶の中身
 /journal [件数]      日誌（新しい順）
+/managers            マネージャーの一覧と状態
+/manager <id>        そのマネージャーのセッション生ログ
 /archive             セッションの生ログ一覧
 /archive <id>        生ログの中身
 /approvals           承認待ち
@@ -218,6 +220,43 @@ async function runSlashCommand(
       for (const entry of entries) {
         stdout.write(`  ${entry.at}  [${entry.type}] ${summarize(entry)}\n`);
       }
+      return 'ok';
+    }
+
+    case '/managers': {
+      const response = await client.managers.$get();
+      if (!response.ok) {
+        stdout.write('マネージャーの一覧を読めませんでした\n');
+        return 'ok';
+      }
+      const { managers } = await response.json();
+      if (managers.length === 0) stdout.write('（マネージャーは1本も居ません）\n');
+      for (const manager of managers) {
+        const live = manager.live ? '' : ' /セッション切断';
+        stdout.write(`  ${manager.managerId}  [${manager.status}${live}]  ${manager.request}\n`);
+        stdout.write(`      cwd: ${manager.cwd}\n`);
+        for (const item of manager.waiting) {
+          stdout.write(`      返事待ち (${item.requestId}): ${summarizeText(item.summary)}\n`);
+        }
+        if (manager.lastReport)
+          stdout.write(`      直近の報告: ${summarizeText(manager.lastReport)}\n`);
+      }
+      return 'ok';
+    }
+
+    case '/manager': {
+      // 日誌で足りないときに、manager_id からそのセッションの生ログへ降りる
+      const id = rest[0];
+      if (!id) {
+        stdout.write('使い方: /manager <manager_id>\n');
+        return 'ok';
+      }
+      const response = await client.managers[':id'].transcript.$get({ param: { id } });
+      if (!response.ok) {
+        stdout.write('そのマネージャーの生ログはまだありません\n');
+        return 'ok';
+      }
+      stdout.write(`${await response.text()}\n`);
       return 'ok';
     }
 
@@ -282,7 +321,12 @@ async function runSlashCommand(
 function summarize(entry: Record<string, unknown>): string {
   for (const key of ['text', 'decision', 'question', 'summary', 'body', 'tool']) {
     const value = entry[key];
-    if (typeof value === 'string') return value.length > 80 ? `${value.slice(0, 80)}…` : value;
+    if (typeof value === 'string') return summarizeText(value);
   }
   return '';
+}
+
+function summarizeText(value: string): string {
+  const single = value.replace(/\s+/g, ' ').trim();
+  return single.length > 80 ? `${single.slice(0, 80)}…` : single;
 }

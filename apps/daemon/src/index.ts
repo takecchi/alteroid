@@ -39,7 +39,12 @@ export async function main(): Promise<void> {
   // クローンのセッションは人格データディレクトリを基準に置く。呼び出し元の
   // カレントディレクトリに依存させると、別の場所から起動した瞬間に resume が
   // 迷子になる（同一性は記憶に宿るとはいえ、無駄に文脈を捨てない）。
-  const clone = createClone({ stores, cwd: paths.root });
+  // マネージャーの既定の作業ディレクトリ。人間が Claude Code を開く場所と同じ
+  // 意味を持つので、クローンの cwd（人格データの置き場）とは別に決める。
+  // クローンが `manager_start` に cwd を渡せば、そのつど別の場所も使える。
+  const workspace = process.env.ALTEROID_WORKSPACE || process.cwd();
+
+  const clone = createClone({ stores, cwd: paths.root, managerCwd: workspace });
   const port = Number(process.env.ALTEROID_PORT ?? '4517');
 
   // 起動ごとに作り直す。状態ファイルが残っていても、別プロセスを自分だと
@@ -84,7 +89,9 @@ export async function main(): Promise<void> {
   process.on('SIGTERM', () => void shutdown());
   process.on('SIGINT', () => void shutdown());
 
-  process.stdout.write(`alteroidd: http://127.0.0.1:${port} （記憶: ${paths.root}）\n`);
+  process.stdout.write(
+    `alteroidd: http://127.0.0.1:${port} （記憶: ${paths.root} / 作業: ${workspace}）\n`,
+  );
 }
 
 /**

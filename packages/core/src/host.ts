@@ -1,3 +1,4 @@
+import type { ManagerPool } from './manager.js';
 import type { ChatStreamEvent, InboxEvent } from './schema.js';
 
 /**
@@ -21,6 +22,12 @@ export interface CloneHost {
 
   /** 承認待ちへの回答。止まっていたその仕事だけが再開する。 */
   answerApproval(approvalId: string, answer: string): Promise<void>;
+
+  /**
+   * 委譲先の一覧と生ログ。HTTP 層はここから可観測性の下2層へ降りる。
+   * 起こすのはクローンだけである（人間が直接マネージャーを起こす口は作らない）。
+   */
+  readonly managers: ManagerPool;
 
   /** 走行中のターンを止めて片付ける。 */
   stop(): Promise<void>;
