@@ -20,6 +20,11 @@ import { z } from 'zod';
 export interface AppDeps {
   clone: CloneHost;
   stores: Stores;
+  /**
+   * 起動ごとの本人確認用トークン。CLI は PID ではなくこれで
+   * 「いま応答しているのが自分が起こしたデーモンか」を確かめる。
+   */
+  token: string;
   /** `daemon stop` の受け口。 */
   shutdown: () => void;
 }
@@ -44,7 +49,7 @@ export function createApp(deps: AppDeps) {
   const { clone, stores } = deps;
 
   const app = new Hono()
-    .get('/health', (c) => c.json({ ok: true, pid: process.pid }))
+    .get('/health', (c) => c.json({ ok: true, pid: process.pid, token: deps.token }))
 
     // --- chat（SSE） -------------------------------------------------------
     .post('/chat', zValidator('json', chatBody), async (c) => {

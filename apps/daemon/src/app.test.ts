@@ -59,7 +59,12 @@ beforeEach(() => {
   stores = createMemoryStores();
   fake = fakeClone();
   shutdowns = 0;
-  app = createApp({ clone: fake.clone, stores, shutdown: () => (shutdowns += 1) });
+  app = createApp({
+    clone: fake.clone,
+    stores,
+    token: 'test-token',
+    shutdown: () => (shutdowns += 1),
+  });
 });
 
 const json = (body: unknown) => ({
@@ -69,10 +74,10 @@ const json = (body: unknown) => ({
 });
 
 describe('HTTP API', () => {
-  it('/health が生死を返す', async () => {
+  it('/health は本人確認用のトークンを返す（CLI が PID を信用しないため）', async () => {
     const response = await app.request('/health');
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ ok: true });
+    expect(await response.json()).toMatchObject({ ok: true, token: 'test-token' });
   });
 
   it('/chat は SSE でクローンの応答を流す', async () => {

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
@@ -11,7 +12,12 @@ import { createApp } from './app.js';
 import { clearRuntimeInfo, writeRuntimeInfo } from './runtime.js';
 
 export { createApp, type AppDeps, type AppType } from './app.js';
-export { readRuntimeInfo, runtimeFilePath, type DaemonRuntimeInfo } from './runtime.js';
+export {
+  parseRuntimeInfo,
+  readRuntimeInfo,
+  runtimeFilePath,
+  type DaemonRuntimeInfo,
+} from './runtime.js';
 
 /** 空文字の環境変数を「未指定」として扱う（CLI 側の解釈と揃える）。 */
 function envRoot(): string | undefined {
@@ -36,7 +42,11 @@ export async function main(): Promise<void> {
   const clone = createClone({ stores, cwd: paths.root });
   const port = Number(process.env.ALTEROID_PORT ?? '4517');
 
-  const app = createApp({ clone, stores, shutdown: () => void shutdown() });
+  // 起動ごとに作り直す。状態ファイルが残っていても、別プロセスを自分だと
+  // 誤認させない（PID の再利用で無関係なプロセスを止めないため）。
+  const token = randomUUID();
+
+  const app = createApp({ clone, stores, token, shutdown: () => void shutdown() });
   const server = serve({ fetch: app.fetch, port, hostname: '127.0.0.1' });
 
   server.on('error', (error: unknown) => {
@@ -68,6 +78,7 @@ export async function main(): Promise<void> {
     pid: process.pid,
     port,
     startedAt: new Date().toISOString(),
+    token,
   });
 
   process.on('SIGTERM', () => void shutdown());

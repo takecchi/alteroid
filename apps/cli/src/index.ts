@@ -52,8 +52,24 @@ daemonCommand
   .command('stop')
   .description('デーモンを止める')
   .action(async () => {
-    const stopped = await daemon.stop();
-    stdout.write(stopped ? 'alteroidd を停止しました\n' : 'alteroidd は動いていません\n');
+    switch (await daemon.stop()) {
+      case 'stopped':
+        stdout.write('alteroidd を停止しました\n');
+        return;
+      case 'not-running':
+        stdout.write('alteroidd は動いていません\n');
+        return;
+      case 'stale':
+        // 本人確認できない PID にシグナルは送らない（別プロセスを殺しうる）
+        stdout.write(
+          'alteroidd は応答しません。古い状態ファイルを片付けました。\n' +
+            'プロセスが残っている場合は手で確認して終了してください。\n',
+        );
+        return;
+      case 'unresponsive':
+        stdout.write('alteroidd が停止要求に応じません。ログを確認してください。\n');
+        return;
+    }
   });
 
 daemonCommand
