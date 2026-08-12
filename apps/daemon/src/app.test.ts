@@ -391,6 +391,57 @@ describe('HTTP API', () => {
     expect(schedule.ran).toEqual([]);
   });
 
+  /**
+   * ブラウザが単純リクエストか否かを決めるのは MIME essence（`;` より前）だけである。
+   * パラメータに `application/json` と書いても safelist のまま preflight 無しで飛ぶので、
+   * 部分一致で判定すると門番があるつもりで通ってしまう。
+   */
+  it('パラメータに application/json と書いた safelist な content-type を受けない', async () => {
+    const disguises = [
+      'text/plain; note=application/json',
+      'text/plain;application/json',
+      'application/x-www-form-urlencoded; note=application/json',
+      'multipart/form-data; boundary=application/json',
+    ];
+
+    for (const contentType of disguises) {
+      for (const path of [
+        '/schedule/self_initiative/run',
+        '/shutdown',
+        '/chat/conv-x/end',
+        '/events/github',
+      ]) {
+        const response = await app.request(path, {
+          method: 'POST',
+          headers: { 'content-type': contentType },
+          body: '{"action":"注入"}',
+        });
+        expect(response.status, `${path} [${contentType}]`).toBe(415);
+      }
+    }
+
+    expect(fake.posted).toEqual([]);
+    expect(fake.ended).toEqual([]);
+    expect(schedule.ran).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(shutdowns).toBe(0);
+  });
+
+  it('charset 付き・大文字の application/json は通す（本物の webhook を弾かない）', async () => {
+    for (const contentType of [
+      'application/json; charset=utf-8',
+      'APPLICATION/JSON',
+      ' application/json ',
+    ]) {
+      const response = await app.request('/schedule/daily_report/run', {
+        method: 'POST',
+        headers: { 'content-type': contentType },
+      });
+      expect(response.status, contentType).toBe(200);
+    }
+    expect(schedule.ran).toEqual(['daily_report', 'daily_report', 'daily_report']);
+  });
+
   it('中身のない通知も受ける（source だけ）', async () => {
     const response = await app.request('/events', json({ source: 'cron' }));
     expect(response.status).toBe(200);

@@ -89,12 +89,23 @@ const approvalsQuery = z.object({ pending: z.enum(['true', 'false']).default('tr
  * **本文検査の無い POST を足すときは、必ずこれを付けること。**
  */
 const deliberateClient = createMiddleware(async (c, next) => {
-  const contentType = c.req.header('content-type')?.toLowerCase() ?? '';
-  if (!contentType.includes('application/json')) {
+  if (mimeEssence(c.req.header('content-type')) !== 'application/json') {
     return c.json({ error: 'content-type: application/json が要る' as const }, 415);
   }
   await next();
 });
+
+/**
+ * `Content-Type` の MIME essence（`;` より前）だけを取り出す。
+ *
+ * **部分一致で判定してはいけない。** ブラウザが単純リクエストか否かを決めるのは
+ * essence だけなので、`text/plain; note=application/json` は safelist のまま
+ * preflight 無しで飛ぶ。`includes('application/json')` はこれを通してしまい、
+ * 門番があるつもりで穴が空く。
+ */
+function mimeEssence(contentType: string | undefined): string {
+  return (contentType ?? '').split(';', 1)[0]?.trim().toLowerCase() ?? '';
+}
 
 type DailyReport = Extract<JournalEntry, { type: 'daily_report' }>;
 
