@@ -11,6 +11,7 @@ import type {
 } from '@alteroid/core';
 import { localDayRange, memorySlugSchema, runnerSetCredentialsCommandSchema } from '@alteroid/core';
 
+import type { ApiAuth } from './auth.js';
 import type { JournalBus } from './journal-bus.js';
 import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
@@ -65,7 +66,17 @@ export interface AppDeps {
    * いないことを黙って隠さない**ため（テストの HTTP 層検証では省略できる）。
    */
   journalEvents?: Pick<JournalBus, 'subscribe'>;
+  /**
+   * API の本人確認（`auth.ts`）。省略すると誰でも叩ける従来どおりの姿になる。
+   *
+   * **鍵が無いことを既定にしてあるのは方針である。** `alteroid init` →
+   * `alteroid chat` が動くローカルの体験を、外へ出したい人の都合で壊さない。
+   */
+  auth?: ApiAuth;
 }
+
+/** ブラウザが持つ会話の鍵。値は配った鍵そのものではなく、その場で作る使い捨て。 */
+const SESSION_COOKIE = 'alteroid_session';
 
 const chatBody = z.object({
   text: z.string().min(1),
@@ -118,6 +129,25 @@ const managerMessageBody = z.object({
   decision: z.enum(['allow', 'deny']).optional(),
 });
 const abortBody = z.object({ reason: z.string().min(1).optional() });
+const loginBody = z.object({ token: z.string().min(1) });
+
+/**
+ * cookie を1つ取り出す。
+ *
+ * **前方一致で拾わないこと。** `alteroid_session_old` のような別の名前を
+ * 掴むと、締め出したはずの鍵で通ってしまう。
+ */
+function readCookie(header: string | undefined, name: string): string | undefined {
+  if (header === undefined) return undefined;
+  for (const part of header.split(';')) {
+    const separator = part.indexOf('=');
+    if (separator === -1) continue;
+    if (part.slice(0, separator).trim() !== name) continue;
+    const value = part.slice(separator + 1).trim();
+    return value.length > 0 ? value : undefined;
+  }
+  return undefined;
+}
 
 interface Conversation {
   conversationId: string;
@@ -175,8 +205,89 @@ function isDailyReport(entry: JournalEntry): entry is DailyReport {
 
 export function createApp(deps: AppDeps) {
   const { clone, stores } = deps;
+  const auth = deps.auth;
+
+  /**
+   * ブラウザに渡した使い捨ての鍵。**配った鍵そのものを cookie に入れない** —
+   * 入れると、画面を開いた端末から鍵の値が持ち出せてしまう。
+   *
+   * デーモンが生きている間だけ有効で、作り直せば全部の画面が締め出される。
+   * 「失くした端末を締め出す」の最後の手段がここにある。
+   */
+  const sessions = new Set<string>();
+
+  /**
+   * 門番。**鍵が配られていなければ何も要求しない**（ローカルの体験は変わらない）。
+   *
+   * ここで見ているのは「誰か」だけである。通った先で何ができるかには触らない。
+   */
+  const authenticated = createMiddleware(async (c, next) => {
+    if (auth === undefined || !(await auth.enabled())) return next();
+
+    const header = c.req.header('authorization');
+    const bearer = /^Bearer\s+(.+)$/i.exec(header ?? '')?.[1];
+    if (bearer !== undefined && (await auth.accepts(bearer))) return next();
+
+    const cookie = readCookie(c.req.header('cookie'), SESSION_COOKIE);
+    if (cookie !== undefined && sessions.has(cookie)) return next();
+
+    return c.json({ error: 'unauthorized' as const }, 401);
+  });
 
   const app = new Hono()
+    /**
+     * 器の生存確認だけ。**鍵を要求しない代わりに、何も明かさない。**
+     * `/health` は本人確認用のトークンを含むので、こちらとは別に守る。
+     */
+    .get('/livez', (c) => c.json({ ok: true }))
+
+    /**
+     * 鍵が要るのかどうかを、鍵なしで知れる口。
+     *
+     * これが無いと、CLI も画面も「401 が返ってきたから鍵が要るらしい」と
+     * 推測することになる。要求の有無は隠す価値のある秘密ではない。
+     */
+    .get('/auth', async (c) => c.json({ required: auth !== undefined && (await auth.enabled()) }))
+
+    /**
+     * 画面のためのログイン。配った鍵を、この器限りの使い捨てに引き換える。
+     *
+     * `SameSite=Strict` にしてあるのは、他人のページから起きた遷移や送信に
+     * cookie を付けさせないためである（`deliberateClient` と合わせて二重に塞ぐ）。
+     */
+    .post('/auth/login', zValidator('json', loginBody), async (c) => {
+      if (auth === undefined || !(await auth.enabled())) {
+        return c.json({ error: '鍵が配られていない（ログインは要らない）' as const }, 409);
+      }
+      if (!(await auth.accepts(c.req.valid('json').token))) {
+        return c.json({ error: 'unauthorized' as const }, 401);
+      }
+      const session = randomUUID();
+      sessions.add(session);
+      const secure = new URL(c.req.url).protocol === 'https:' ? ' Secure;' : '';
+      c.header(
+        'set-cookie',
+        `${SESSION_COOKIE}=${session}; Path=/; HttpOnly; SameSite=Strict;${secure} Max-Age=2592000`,
+      );
+      return c.json({ ok: true });
+    })
+
+    /** この画面だけを締め出す（他の端末は生きたまま）。 */
+    .post('/auth/logout', deliberateClient, (c) => {
+      const cookie = readCookie(c.req.header('cookie'), SESSION_COOKIE);
+      if (cookie !== undefined) sessions.delete(cookie);
+      c.header('set-cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`);
+      return c.json({ ok: true });
+    })
+
+    /**
+     * **ここから下は全部、鍵が配られていれば鍵が要る。**
+     *
+     * 経路ごとに要否を選ばない。選び始めると「この口は読むだけだから」という
+     * 判断が入り込み、その判断が漏れたところが穴になる。
+     */
+    .use('*', authenticated)
+
     .get('/health', (c) =>
       c.json({ ok: true, pid: process.pid, token: deps.token, storage: deps.storage ?? '' }),
     )

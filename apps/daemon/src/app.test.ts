@@ -11,6 +11,7 @@ import { createMemoryStores } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
+import { createApiAuth } from './auth.js';
 import { createJournalBus, type JournalBus } from './journal-bus.js';
 
 /** クローンの代わり。HTTP 層だけを検証する。 */
@@ -721,5 +722,132 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     expect((await app.request('/memory/missing', { method: 'DELETE' })).status).toBe(404);
     // 形が不正なものは 400（無いのか、そもそも名前として成立しないのかを分ける）
     expect((await app.request('/memory/居ない', { method: 'DELETE' })).status).toBe(400);
+  });
+});
+
+/**
+ * 鍵を置いたときだけ守る。
+ *
+ * **壊れたときに開かないこと**と、**持ち主が締め出されないこと**の両方を見る。
+ * どちらか片方だけなら簡単で、両立していないと使われずに外されるか、
+ * 外から叩かれるかのどちらかになる。
+ */
+describe('API の本人確認', () => {
+  const token = 'phone-key';
+
+  function guarded() {
+    return createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      journalEvents: journalBus,
+      auth: createApiAuth({ tokens: token }),
+    });
+  }
+
+  it('鍵を置いていなければ、今までどおり誰でも叩ける', async () => {
+    expect((await app.request('/journal')).status).toBe(200);
+  });
+
+  it('鍵を置くと、名乗らない相手は通らない', async () => {
+    expect((await guarded().request('/journal')).status).toBe(401);
+    expect((await guarded().request('/memory')).status).toBe(401);
+    expect((await guarded().request('/managers')).status).toBe(401);
+  });
+
+  it('鍵を持っていれば通る', async () => {
+    const response = await guarded().request('/journal', {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(response.status).toBe(200);
+  });
+
+  it('違う鍵では通らない', async () => {
+    const response = await guarded().request('/journal', {
+      headers: { authorization: 'Bearer someone-else' },
+    });
+    expect(response.status).toBe(401);
+  });
+
+  it('生存確認と、鍵が要るかどうかは鍵なしで分かる', async () => {
+    const secured = guarded();
+    expect((await secured.request('/livez')).status).toBe(200);
+
+    const auth = await (await secured.request('/auth')).json();
+    expect(auth).toEqual({ required: true });
+
+    const open = await (await app.request('/auth')).json();
+    expect(open).toEqual({ required: false });
+  });
+
+  it('/health は守る（本人確認用のトークンを含むため）', async () => {
+    expect((await guarded().request('/health')).status).toBe(401);
+  });
+
+  it('ブラウザは鍵を使い捨てに引き換えて、以後は cookie で通る', async () => {
+    const secured = guarded();
+
+    const login = await secured.request('/auth/login', {
+      ...post,
+      body: JSON.stringify({ token }),
+    });
+    expect(login.status).toBe(200);
+
+    const cookie = login.headers.get('set-cookie') ?? '';
+    // 配った鍵そのものは cookie に入っていない
+    expect(cookie).not.toContain(token);
+    expect(cookie).toContain('HttpOnly');
+    expect(cookie).toContain('SameSite=Strict');
+
+    const session = /alteroid_session=([^;]+)/.exec(cookie)?.[1] ?? '';
+    const response = await secured.request('/journal', {
+      headers: { cookie: `alteroid_session=${session}` },
+    });
+    expect(response.status).toBe(200);
+  });
+
+  it('間違った鍵ではログインできない', async () => {
+    const login = await guarded().request('/auth/login', {
+      ...post,
+      body: JSON.stringify({ token: 'someone-else' }),
+    });
+    expect(login.status).toBe(401);
+    expect(login.headers.get('set-cookie')).toBeNull();
+  });
+
+  it('ログアウトすると、その画面だけが締め出される', async () => {
+    const secured = guarded();
+    const login = await secured.request('/auth/login', {
+      ...post,
+      body: JSON.stringify({ token }),
+    });
+    const session =
+      /alteroid_session=([^;]+)/.exec(login.headers.get('set-cookie') ?? '')?.[1] ?? '';
+    const headers = { cookie: `alteroid_session=${session}` };
+
+    await secured.request('/auth/logout', { ...post, headers: { ...post.headers, ...headers } });
+
+    expect((await secured.request('/journal', { headers })).status).toBe(401);
+    // 鍵そのものはまだ生きている（1台の締め出しが全台に及ばない）
+    const still = await secured.request('/journal', {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(still.status).toBe(200);
+  });
+
+  it('似た名前の cookie を掴まない', async () => {
+    const secured = guarded();
+    const login = await secured.request('/auth/login', {
+      ...post,
+      body: JSON.stringify({ token }),
+    });
+    const session =
+      /alteroid_session=([^;]+)/.exec(login.headers.get('set-cookie') ?? '')?.[1] ?? '';
+
+    const response = await secured.request('/journal', {
+      headers: { cookie: `alteroid_session_old=${session}` },
+    });
+    expect(response.status).toBe(401);
   });
 });

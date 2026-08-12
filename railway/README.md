@@ -109,8 +109,31 @@ Config as Code のパスは Root Directory を見ないので、**リポジト�
 
 **置かないもの**
 
-- `ALTEROID_BIND` — デーモンの API は**叩けばクローンのターンが起きる実行の口**で、認証が無い。127.0.0.1 のままにする
-- public domain（Generate Domain）— 上と同じ理由。外から使いたくなったら、手前に境界（認証・トンネル・リバースプロキシ）を置くのが先
+- `ALTEROID_BIND` — デーモンの API は**叩けばクローンのターンが起きる実行の口**である。開けるなら先に鍵を置く（下記）
+- public domain（Generate Domain）— 上と同じ。**鍵を置いてから**にする
+
+### 外から使う（鍵を置く）
+
+鍵を置くと API 全体に本人確認が付く。置かなければ何も要求しない（ローカルの体験は変わらない）。
+
+| 変数                      | 置き場 | なぜ                                                                                 |
+| ------------------------- | ------ | ------------------------------------------------------------------------------------ |
+| `ALTEROID_API_TOKEN`      | `app`  | カンマ区切りで複数置ける。**端末ごとに配ると、1台失くしても他を巻き込まずに消せる**  |
+| `ALTEROID_API_TOKEN_FILE` | `app`  | 鍵を書いたファイル（1行1本）。**呼ばれるたびに読み直す**ので、器を止めずに鍵を回せる |
+
+```bash
+# 端末ごとに1本
+PHONE=$(openssl rand -hex 32); LAPTOP=$(openssl rand -hex 32)
+railway variable set ALTEROID_API_TOKEN="$PHONE,$LAPTOP" --service app
+```
+
+**`ALTEROID_API_TOKEN` は器を作り直すまで凍る。** 失くした端末を今すぐ締め出したいなら `ALTEROID_API_TOKEN_FILE` を使う（`GH_TOKEN` で踏んだのと同じ話。「置く」と「回す」は別の手順である）。
+
+CLI も `ALTEROID_API_TOKEN` を読んで名乗るので、`alteroid chat` は鍵を置いても今までどおり動く。ブラウザは `POST /auth/login` で鍵を使い捨てに引き換え、以後は cookie で通る（`HttpOnly` / `SameSite=Strict`。**配った鍵そのものは cookie に入らない**）。
+
+鍵なしで通るのは `GET /livez`（生存確認。何も明かさない）と `GET /auth`（鍵が要るかどうか）だけである。
+
+**開けたうえで鍵を置いていないと、起動ログが警告する。** 黙って全開にはしない。
 
 **置いたら必ず名前を検算する。** ダッシュボードへ貼るときに前後の空白が混ざると、Railway は `RAILWAY_RUN_UID` と ` RAILWAY_RUN_UID` を**別の変数として保存する**。後者は誰も読まないので「設定したのに効かない」になる。
 
