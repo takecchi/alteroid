@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createManagerPool, type ManagerPool } from './manager.js';
 import { createLocalRunner } from './runner-local.js';
-import type { RunnerCapacity, RunnerClient } from './runner-protocol.js';
+import type { RunnerCapacity, RunnerClient, RunnerEvent } from './runner-protocol.js';
 import { createRunnerRegistry, type RunnerRegistry } from './runner-registry.js';
 import type { InboxEvent } from './schema.js';
 import type { Stores } from './store.js';
@@ -122,11 +122,29 @@ function fakeSdk(sessionId: string) {
 interface Rig {
   client: RunnerClient;
   sessions: FakeSession[];
-  /** 器を落とす。以後は名乗りも命令も返らない（コンテナが消えた状態）。 */
+  /**
+   * 器を落とす。以後は名乗りも命令も返らない。
+   *
+   * **デーモンから見ると、コンテナが消えたのか、ネットワークだけが切れて中の
+   * マネージャーが走り続けているのかは区別できない。** だから `kill()` と
+   * 「生きたまま分断」は同じ挙動をする — 違うのは器の中で何が起きているかだけで、
+   * 移送してよいかの判断は貸し出し期限（lease）でしか付けられない。
+   */
   kill(): void;
+  /** その器から降りてくる出来事を直に流す（遅れて届いた分の再現に使う）。 */
+  emit(event: RunnerEvent): void;
 }
 
-function rig(runnerId: string, sessionId: string, capacity: Partial<RunnerCapacity> = {}): Rig {
+/**
+ * @param leaseTtlMs 器が「この時間名乗りを聞かれなければ自分で畳む」と報告する値。
+ *   `null` にすると報告しない器になる（＝止まったことを確かめられない器）。
+ */
+function rig(
+  runnerId: string,
+  sessionId: string,
+  capacity: Partial<RunnerCapacity> = {},
+  leaseTtlMs: number | null = 2_000,
+): Rig {
   const { fn, sessions } = fakeSdk(sessionId);
   const inner = createLocalRunner({
     runnerId,
@@ -146,6 +164,7 @@ function rig(runnerId: string, sessionId: string, capacity: Partial<RunnerCapaci
   });
 
   let dead = false;
+  let listener: ((event: RunnerEvent) => void) | null = null;
   const gone = () => new Error(`${runnerId} は落ちている`);
 
   // 落ちた器は名乗りも命令も返さない。**「落ちている」を戻り値で表さない** —
@@ -159,10 +178,13 @@ function rig(runnerId: string, sessionId: string, capacity: Partial<RunnerCapaci
     },
     async health() {
       if (dead) throw gone();
-      return inner.health();
+      const health = await inner.health();
+      // 器は「この時間名乗りを聞かれなければ自分で畳む」と名乗る（fencing lease）。
+      return leaseTtlMs === null ? health : { ...health, lease: { ttlMs: leaseTtlMs } };
     },
     async connect(onEvent) {
       if (dead) throw gone();
+      listener = onEvent;
       return inner.connect(onEvent);
     },
     async start(command) {
@@ -182,7 +204,9 @@ function rig(runnerId: string, sessionId: string, capacity: Partial<RunnerCapaci
       return inner.answer(managerId, answer);
     },
     async stop(managerId) {
-      if (dead) return;
+      // **届かない器で「畳めた」ことにしない。** ここを黙って成功にすると、走り
+      // 続けているセッションを止めたつもりで別の器に2本目を開くことになる。
+      if (dead) throw gone();
       return inner.stop(managerId);
     },
     async list() {
@@ -203,6 +227,9 @@ function rig(runnerId: string, sessionId: string, capacity: Partial<RunnerCapaci
     sessions,
     kill() {
       dead = true;
+    },
+    emit(event) {
+      listener?.(event);
     },
   };
 }
@@ -240,6 +267,9 @@ function fleet(
     stores,
     post: (event) => inbox.push(event),
     runners: registry,
+    // 器が自分で畳む期限（テストの器は 2 秒）＋この余裕を過ぎて初めて移送してよい。
+    fenceMarginMs: 500,
+    now: time.now,
     ...(options.workspace === undefined ? {} : { workspace: options.workspace }),
   });
   return { pool, registry, stores, inbox, advance: time.advance };
@@ -442,6 +472,130 @@ describe('複数 runner — 配置と経路', () => {
     // 開き直るのは1本だけ（2本並ぶと同じ workspace へ二重に書く）
     expect(b.sessions.length + c.sessions.length).toBe(1);
     expect(sent.outcome).toBe('delivered');
+
+    await f.pool.stop();
+  });
+
+  /**
+   * ここから3本は、**移送の安全側**を固定する（同じ session を2か所で開かない）。
+   *
+   * 生存確認が途絶えたことは「器が死んだ」ことを意味しない。ネットワークだけが
+   * 切れて、マネージャーはその器で走り続けていることがある。そこで resume すれば
+   * 1つの仕事が2か所で動き、共有 workspace への二重書きと、PR 作成のような
+   * 取り消せない操作の二重実行が起きる。**デーモン内の排他では別プロセスの1本を
+   * 止められない**ので、器が自分で畳む期限（lease）を待って初めて移す。
+   */
+  it('落ちて見えても、元の器が畳む期限までは移送しない（ネットワーク分断）', async () => {
+    const a = rig('runner-a', 'sess-a');
+    const b = rig('runner-b', 'sess-b');
+    const f = fleet([a], {
+      workspace: { kind: 'shared-volume', path: '/mnt/shared/app' },
+    });
+
+    await f.pool.start({ request: '長い仕事' });
+    await expect
+      .poll(async () => (await f.stores.jobs.listJobs())[0]?.sessionId, { timeout: 2000 })
+      .toBeDefined();
+
+    f.registry.register(b.client);
+    // 器へ届かなくなった。**中のマネージャーは走り続けている**（分断であって
+    // クラッシュではない）が、デーモンからは区別が付かない。
+    a.kill();
+
+    // 生存判定（2 秒）は過ぎたが、器が自分で畳む期限（2 秒 ＋ 余裕 0.5 秒）はまだ。
+    f.advance(2_100);
+    await f.registry.heartbeat();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // ここで開き直すと2本並ぶ。**開かない。**
+    expect(b.sessions.length).toBe(0);
+    const deferred = f.inbox.find(
+      (event) => event.type === 'manager_message' && event.text.includes('2か所で走る'),
+    );
+    if (deferred?.type !== 'manager_message') throw new Error('保留の通知が受信箱に無い');
+    expect(deferred.text).toContain('期限');
+
+    // 期限を過ぎれば、話しかけられるのを待たずに自分で置き直す（自律は落とさない）。
+    f.advance(1_000);
+    const moved = await f.pool.rebalance();
+    expect(moved.length).toBe(1);
+    await expect.poll(() => b.sessions.length, { timeout: 2000 }).toBe(1);
+    // 器が変わっても、開いたのは1本だけ（元の1本＋移送先の1本にはならない）
+    expect(a.sessions.length).toBe(1);
+
+    await f.pool.stop();
+  });
+
+  it('期限を報告しない器の仕事は、自動では移さず人間の確認へ回す', async () => {
+    // 貸し出し期限を名乗らない器 = 止まったことを確かめる術が無い器
+    const a = rig('runner-a', 'sess-a', {}, null);
+    const b = rig('runner-b', 'sess-b');
+    const f = fleet([a], { workspace: { kind: 'shared-volume', path: '/mnt/shared/app' } });
+
+    const started = await f.pool.start({ request: '長い仕事' });
+    await expect
+      .poll(async () => (await f.stores.jobs.listJobs())[0]?.sessionId, { timeout: 2000 })
+      .toBeDefined();
+
+    f.registry.register(b.client);
+    a.kill();
+    f.advance(10_000);
+    await f.registry.heartbeat();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // どれだけ待っても確かめられないものは、勝手に移さない
+    expect(b.sessions.length).toBe(0);
+    const notice = f.inbox.find(
+      (event) => event.type === 'manager_message' && event.text.includes('確かめられない'),
+    );
+    if (notice?.type !== 'manager_message') throw new Error('要確認の通知が受信箱に無い');
+    expect(notice.text).toContain('2か所で走る');
+    expect(notice.text).toContain('manager_move');
+
+    // 話しかけても「届いた」とは言わない（何が起きているかは返る）
+    const sent = await f.pool.send(started.managerId, 'どうなった？');
+    expect(sent.outcome).toBe('unknown');
+
+    // 確かめた側は引き取れる（能力を落とさない）
+    const result = await f.pool.move(started.managerId, { force: true });
+    expect(result.moved?.runnerId).toBe('runner-b');
+    await expect.poll(() => b.sessions.length, { timeout: 2000 }).toBe(1);
+    // force で移したことは判断として日誌に残る
+    const decisions = await f.stores.journal.list({ types: ['decision'] });
+    expect(decisions.some((entry) => JSON.stringify(entry).includes('force'))).toBe(true);
+
+    await f.pool.stop();
+  });
+
+  it('移送のあと、元の器から遅れて届いた出来事で今の状態を壊さない', async () => {
+    const a = rig('runner-a', 'sess-a');
+    const b = rig('runner-b', 'sess-b');
+    const f = fleet([a], { workspace: { kind: 'shared-volume', path: '/mnt/shared/app' } });
+
+    const started = await f.pool.start({ request: '長い仕事' });
+    await expect
+      .poll(async () => (await f.stores.jobs.listJobs())[0]?.sessionId, { timeout: 2000 })
+      .toBeDefined();
+
+    f.registry.register(b.client);
+    a.kill();
+    f.advance(3_000);
+    await f.registry.heartbeat();
+    await expect.poll(() => b.sessions.length, { timeout: 2000 }).toBe(1);
+
+    // 元の器が繋がり直して、畳んだときの `closed` を遅れて流してくる。
+    // **拾うと、いまの器で走っている仕事が「閉じた」ことにされる。**
+    a.emit({
+      type: 'closed',
+      managerId: started.managerId,
+      status: 'failed',
+      reason: '貸し出し期限が切れたので畳んだ',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const job = (await f.stores.jobs.listJobs())[0];
+    expect(job?.runnerId).toBe('runner-b');
+    expect(job?.status).toBe('running');
 
     await f.pool.stop();
   });

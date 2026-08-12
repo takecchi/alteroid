@@ -11,6 +11,7 @@ interface Harness {
   emitted: ChatStreamEvent[];
   sent: { managerId: string; message: string; decision?: string; requestId?: string }[];
   started: { request: string; cwd?: string }[];
+  moved: { managerId: string; force?: boolean }[];
   call(name: string, args: Record<string, unknown>): Promise<string>;
 }
 
@@ -19,6 +20,7 @@ function harness(): Harness {
   const emitted: ChatStreamEvent[] = [];
   const sent: { managerId: string; message: string; decision?: string; requestId?: string }[] = [];
   const started: { request: string; cwd?: string }[] = [];
+  const moved: { managerId: string; force?: boolean }[] = [];
   const running: ManagerSummary[] = [];
 
   const managers: ManagerPool = {
@@ -53,6 +55,10 @@ function harness(): Harness {
     async rebalance() {
       return [];
     },
+    async move(managerId, options = {}) {
+      moved.push({ managerId, ...options });
+      return { moved: null, detail: `${managerId} は別の器へ移せなかった。` };
+    },
     async stop() {},
   };
 
@@ -63,6 +69,7 @@ function harness(): Harness {
     emitted,
     sent,
     started,
+    moved,
     async call(name, args) {
       const found = tools.find((entry) => entry.name === name);
       if (!found) throw new Error(`ツール ${name} が無い`);
@@ -236,6 +243,23 @@ describe('クローンの道具', () => {
     const reply = await h.call('manager_list', {});
     expect(reply).toContain('mgr-1');
     expect(reply).toContain('running');
+  });
+
+  /**
+   * 器が落ちただけなら自動で移る。この道具を使うのは、自動の移送が「元の器が
+   * 止まったと言い切れない」で止まったときだけである（M5）。
+   */
+  it('manager_move は、確かめた側が移送を引き取るための口である', async () => {
+    const h = harness();
+
+    const reply = await h.call('manager_move', { managerId: 'mgr-1', force: true });
+
+    expect(h.moved).toEqual([{ managerId: 'mgr-1', force: true }]);
+    expect(reply).toContain('mgr-1');
+
+    // 何も言わなければ、確認の代わりは立たない（既定は安全側）
+    await h.call('manager_move', { managerId: 'mgr-1' });
+    expect(h.moved[1]).toEqual({ managerId: 'mgr-1' });
   });
 
   it('委譲先が無い場面（蒸留の内部ターン）は、黙らずにそう返す', async () => {

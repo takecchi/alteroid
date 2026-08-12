@@ -40,6 +40,20 @@ export interface RunnerAppDeps {
    * 境界」）。マネージャーの道具は1つも減っていない。
    */
   tokenSha256: string;
+  /**
+   * 貸し出し期限（fencing lease / M5）。**複数構成では必須に近い。**
+   *
+   * これがあると `GET /health` が名乗りと同時に期限の更新になり、途絶えたときは
+   * 器が自分でセッションを畳む。デーモンはそれを根拠に、落ちて見えた器の仕事を
+   * 別の器で開き直す（無ければ「止まったと言い切れない」ので自動では移さない）。
+   */
+  lease?: LeasePort;
+}
+
+/** app が触る範囲だけの貸し出し期限（実体は [lease.ts](./lease.ts)）。 */
+export interface LeasePort {
+  readonly ttlMs: number;
+  touch(): void;
 }
 
 const AUTH_SCHEME = /^Bearer\s+(.+)$/i;
@@ -102,7 +116,7 @@ export class Outbox {
 }
 
 export function createRunnerApp(deps: RunnerAppDeps) {
-  const { host, outbox } = deps;
+  const { host, outbox, lease } = deps;
 
   /**
    * 制御面の門番。**runner の中から叩けても、鍵が無ければ通らない。**
@@ -132,17 +146,23 @@ export function createRunnerApp(deps: RunnerAppDeps) {
      * `capacity` は**実測だけ**を載せる。「あと何本置けるか」を器が答え始めた
      * 瞬間、それは定員＝能力の制限になる（roadmap M5 の地雷）。詰まっていることは
      * 数字から分かるが、詰まったことを理由に委譲を拒む口はここにも無い。
+     *
+     * **ここが貸し出し期限を延ばす唯一の口である。** 他の口でも延ばすと、器の期限が
+     * デーモンの見立て（最後に名乗りが返った時刻から数える）より後ろへずれ、まだ
+     * 走っているセッションを別の器へ移されることになる（[lease.ts](./lease.ts)）。
      */
-    .get('/health', (c) =>
-      c.json({
+    .get('/health', (c) => {
+      lease?.touch();
+      return c.json({
         ok: true as const,
         runnerId: host.runnerId,
         workspacePath: host.workspacePath,
         managers: host.list().length,
         pendingEvents: outbox.pending,
         capacity: host.capacity(),
-      }),
-    )
+        ...(lease === undefined ? {} : { lease: { ttlMs: lease.ttlMs } }),
+      });
+    })
 
     /**
      * 出来事のストリーム。**接続を張るのはデーモン側**である。

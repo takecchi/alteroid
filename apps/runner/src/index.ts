@@ -7,8 +7,16 @@ import { createRunnerHost, type RunnerChildUser } from '@alteroid/core';
 import { createAdaptorServer } from '@hono/node-server';
 
 import { createRunnerApp, Outbox } from './app.js';
+import { leaseTtlMsOf, SessionLease } from './lease.js';
 
-export { createRunnerApp, Outbox, type RunnerAppDeps, type RunnerAppType } from './app.js';
+export {
+  createRunnerApp,
+  Outbox,
+  type LeasePort,
+  type RunnerAppDeps,
+  type RunnerAppType,
+} from './app.js';
+export { leaseTtlMsOf, SessionLease, type SessionLeaseOptions } from './lease.js';
 
 /**
  * alteroid-runner — マネージャーと作業者を隔離して走らせる常駐プロセス。
@@ -91,7 +99,36 @@ export async function main(): Promise<void> {
     ...(childUser === undefined ? {} : { childUser }),
   });
 
-  const app = createRunnerApp({ host, outbox, tokenSha256 });
+  // 貸し出し期限。デーモンから名乗りを聞かれない時間が続けば、抱えている
+  // セッションを**自分で**畳む。これが無いと、通信が切れただけの器で走り続けている
+  // 仕事を、デーモンが別の器で開き直してしまう（同じ仕事が2か所で走る）。
+  const leaseTtlMs = leaseTtlMsOf();
+  const lease =
+    leaseTtlMs === null
+      ? undefined
+      : new SessionLease({
+          ttlMs: leaseTtlMs,
+          fence: async () => {
+            const ids = host.list().map((state) => state.managerId);
+            for (const id of ids) await host.stop(id).catch(() => undefined);
+            return ids;
+          },
+          onFenced: (ids) => {
+            process.stderr.write(
+              `alteroid-runner: デーモンから ${Math.round(leaseTtlMs / 1000)} 秒名乗りを聞かれないので、` +
+                `走行中のマネージャーを畳みました（${ids.join(', ')}）。` +
+                '別の器で続きが開かれても二重に走らないためです。\n',
+            );
+          },
+        });
+  lease?.start();
+
+  const app = createRunnerApp({
+    host,
+    outbox,
+    tokenSha256,
+    ...(lease === undefined ? {} : { lease }),
+  });
   const server = createAdaptorServer({ fetch: app.fetch });
 
   server.on('error', (error: unknown) => {
@@ -132,6 +169,7 @@ export async function main(): Promise<void> {
   const shutdown = async (): Promise<void> => {
     if (stopping) return;
     stopping = true;
+    lease?.stop();
     server.close();
     if (socketPath !== undefined) rmSync(socketPath, { force: true });
     // 走行中のマネージャーは畳む。生ログはこの中でデーモンへ渡される
@@ -147,7 +185,12 @@ export async function main(): Promise<void> {
 
   process.stdout.write(
     `alteroid-runner: ${listeningOn} （runner_id: ${runnerId} / 作業: ${workspacePath}` +
-      `${childUser === undefined ? '' : ` / 子プロセス: uid ${childUser.uid}`}）\n`,
+      `${childUser === undefined ? '' : ` / 子プロセス: uid ${childUser.uid}`}` +
+      `${
+        leaseTtlMs === null
+          ? ' / 期限なし（自動移送の対象外になります）'
+          : ` / 期限: ${Math.round(leaseTtlMs / 1000)}秒`
+      }）\n`,
   );
 }
 

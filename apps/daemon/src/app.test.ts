@@ -28,6 +28,7 @@ function fakeClone() {
 
   const managerList: ManagerSummary[] = [];
   const transcripts = new Map<string, string>();
+  const moveCalls: { managerId: string; force?: boolean }[] = [];
 
   const managers: ManagerPool = {
     async start() {
@@ -47,6 +48,10 @@ function fakeClone() {
     },
     async rebalance() {
       return [];
+    },
+    async move(managerId, options = {}) {
+      moveCalls.push({ managerId, ...options });
+      return { moved: null, detail: `${managerId} は別の器へ移せなかった。` };
     },
     async stop() {},
   };
@@ -82,6 +87,7 @@ function fakeClone() {
     posted,
     managerList,
     transcripts,
+    moveCalls,
     setReply(events: ChatStreamEvent[]) {
       reply = events;
     },
@@ -350,6 +356,26 @@ describe('HTTP API', () => {
 
     expect((await app.request('/managers/nope')).status).toBe(404);
     expect((await app.request('/managers/nope/transcript')).status).toBe(404);
+  });
+
+  /**
+   * 器が落ちただけなら自動で移る。ここを叩くのは、自動の移送が「元の器が止まったと
+   * 言い切れない」で止まったときである（M5）。
+   */
+  it('取り残されたマネージャーを、確かめた上で別の器へ移せる', async () => {
+    const response = await app.request('/managers/mgr-1234/move', json({ force: true }));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ moved: null, detail: expect.any(String) });
+    expect(fake.moveCalls).toEqual([{ managerId: 'mgr-1234', force: true }]);
+
+    // 何も言わなければ、確認の代わりは立たない（既定は安全側）
+    await app.request('/managers/mgr-1234/move', json({}));
+    expect(fake.moveCalls[1]).toEqual({ managerId: 'mgr-1234' });
+
+    // 他人が開いたページからは叩けない。**本文が全部省略できる形なので、
+    // `zValidator` だけでは空の指定として通ってしまう** — だから content-type も見る。
+    expect((await app.request('/managers/mgr-1234/move', simpleRequest())).status).toBe(415);
+    expect(fake.moveCalls.length).toBe(2);
   });
 
   it('runner の名簿を読める（何台居て、どれが生きていて、どれだけ余裕があるか）', async () => {

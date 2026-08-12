@@ -47,6 +47,7 @@ export const CLONE_TOOL_NAMES = [
   'manager_start',
   'manager_send',
   'manager_list',
+  'manager_move',
 ] as const;
 
 /** 自作ツールは確認なしで通す（能力の削除ではなく、道具が道具として使えること）。 */
@@ -342,6 +343,33 @@ export function createCloneTools(context: ToolContext) {
             )
             .join('\n'),
         );
+      },
+    ),
+
+    tool(
+      'manager_move',
+      [
+        '走らせていた器へ届かなくなったマネージャーを、別の器で開き直す。',
+        '器が落ちただけなら自動で移るので、これを呼ぶ必要は普通は無い。',
+        '自動の移送が「元の器が止まったと言い切れない」で止まったときだけ、確かめた上で force を立てる。',
+      ].join(' '),
+      {
+        managerId: z.string().describe('移す対象の manager_id'),
+        force: z
+          .boolean()
+          .optional()
+          .describe(
+            '元の器がもう走っていないことを、あなたが請け合う。' +
+              '**確かめずに立てると、同じ仕事が2か所で走る**（同じ作業ディレクトリへの二重書き、' +
+              'PR やメッセージの二重送信）。器が消えていることを確かめてから立てること',
+          ),
+      },
+      async ({ managerId, force }) => {
+        if (!context.managers) return NO_POOL;
+        const result = await context.managers.move(managerId, {
+          ...(force === undefined ? {} : { force }),
+        });
+        return text(result.detail);
       },
     ),
   ];

@@ -100,6 +100,18 @@ services:
       - ALTEROID_RUNNER_SOCKET_GID=1000
       # 制御面の合鍵は**ハッシュだけ**。読めても鍵は作れない。
       - ALTEROID_RUNNER_TOKEN_SHA256=${ALTEROID_RUNNER_TOKEN_SHA256:?openssl rand -hex 32 の sha256 を .env に置くこと}
+      # 貸し出し期限（秒。既定 30 / `off` で無効）。この時間デーモンから `GET /health`
+      # が届かなければ、器は**自分で**走行中のセッションを畳む。
+      #
+      # **これが無いと、落ちて見えた器の仕事を別の器へ移せない。** 生存確認が途絶えた
+      # ことは器が死んだことを意味しない（ネットワークだけが切れて、中のマネージャーは
+      # 走り続けている）。その状態で同じ session を別の器で開くと、同じ workspace への
+      # 二重書きと、PR 作成のような取り消せない操作の二重実行が起きる。デーモンはこの
+      # 期限を根拠にしてしか自動では移さない（`off` にした器の仕事は人間の確認待ちになる）。
+      #
+      # 能力の制限ではない。ターン数のような人工上限ではなく、「デーモンに繋がっていない
+      # 器はセッションを持ち続けない」という実行環境の境界である（north_star 禁止2）。
+      - ALTEROID_RUNNER_LEASE_TTL=${ALTEROID_RUNNER_LEASE_TTL:-30}
       # 認証はサブスクリプションの長期トークン（claude setup-token）。
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:?claude setup-token で取得して .env に置くこと}
       - TZ=${TZ:-Asia/Tokyo}
@@ -164,6 +176,9 @@ services:
       # 合鍵は**全 runner で同じ sha256**。制御面の本人確認はデーモンかどうかの
       # 判定であって、器を区別するためのものではない。
       - ALTEROID_RUNNER_TOKEN_SHA256=${ALTEROID_RUNNER_TOKEN_SHA256:?openssl rand -hex 32 の sha256 を .env に置くこと}
+      # 期限も全 runner で揃える（デーモンは器ごとの申告を見るが、揃っていない構成は
+      # 人間が読めなくなる）。
+      - ALTEROID_RUNNER_LEASE_TTL=${ALTEROID_RUNNER_LEASE_TTL:-30}
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:?claude setup-token で取得して .env に置くこと}
       - TZ=${TZ:-Asia/Tokyo}
       - GH_TOKEN

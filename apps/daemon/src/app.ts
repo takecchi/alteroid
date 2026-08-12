@@ -64,6 +64,13 @@ const chatBody = z.object({
 });
 
 const memoryBody = z.object({ content: z.string() });
+/**
+ * 取り残された委譲を別の器へ移す（M5）。
+ *
+ * `force` は「元の器はもう走っていない」という確認の代わりである。**確かめずに
+ * 立てると、同じ仕事が2か所で走る。**
+ */
+const managerMoveBody = z.object({ force: z.boolean().optional() });
 const answerBody = z.object({ answer: z.string().min(1) });
 /** まとめて答える（溜まった保留を人間が一度に片付けるための口）。 */
 const answersBody = z.object({
@@ -382,6 +389,31 @@ export function createApp(deps: AppDeps) {
       if (!manager) return c.json({ error: 'not found' as const }, 404);
       return c.json({ manager });
     })
+
+    /**
+     * 落ちた器に取り残された1本を、別の器で開き直す（M5）。
+     *
+     * 器が落ちただけなら自動で移るので、ここを叩くのは自動の移送が
+     * **「元の器が止まったと言い切れない」で止まったとき**である。`force` は
+     * その確認の代わりなので、確かめた人（クローンか人間）だけが立てる。
+     *
+     * **`deliberateClient` も要る。** 本文の項目が全部省略できる形では、
+     * `zValidator` だけだと本文の無い単純リクエストが「空の指定」として通る
+     * （＝他人が開いたページからマネージャーを移送させられる）。「本文検査があれば
+     * 足りる」という前提が崩れるのは、この形のときである。
+     */
+    .post(
+      '/managers/:id/move',
+      deliberateClient,
+      zValidator('json', managerMoveBody),
+      async (c) => {
+        const { force } = c.req.valid('json');
+        const result = await clone.managers.move(c.req.param('id'), {
+          ...(force === undefined ? {} : { force }),
+        });
+        return c.json({ moved: result.moved, detail: result.detail });
+      },
+    )
 
     /**
      * manager_id からそのセッションの生ログへ。走行中ならファイルの上、
