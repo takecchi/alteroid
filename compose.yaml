@@ -140,6 +140,56 @@ services:
     networks: [control]
     restart: unless-stopped
 
+  # 2台目の manager-runner（roadmap M5）。**既定では起きない。**
+  #
+  #   docker compose --profile scale up -d
+  #
+  # 増やしても、能力もプロトコルも1台構成と同じままである（名簿が宛先を選ぶだけ）。
+  # 器ごとに違うのは3つだけ: 安定した識別子・ソケットの名前・workspace の volume。
+  #
+  # **器が落ちた委譲を別の器へ移したいなら、workspace の運用を選ぶこと**（既定の
+  # runner-volume は器ごとに別の volume なので移せない。移せないことは人間へ報告
+  # されるが、報告で作業は戻らない）。app の `ALTEROID_WORKSPACE_KIND` を見よ。
+  runner-b:
+    profiles: [scale]
+    build: .
+    command: ['node', 'apps/runner/dist/index.js']
+    user: root
+    environment:
+      - ALTEROID_RUNNER_ID=${ALTEROID_RUNNER_B_ID:-runner-b}
+      # ソケットは器ごとに別の名前にする（同じ control volume の上に並ぶ）。
+      - ALTEROID_RUNNER_SOCKET=/run/alteroid/runner-b.sock
+      - ALTEROID_RUNNER_SOCKET_UID=1000
+      - ALTEROID_RUNNER_SOCKET_GID=1000
+      # 合鍵は**全 runner で同じ sha256**。制御面の本人確認はデーモンかどうかの
+      # 判定であって、器を区別するためのものではない。
+      - ALTEROID_RUNNER_TOKEN_SHA256=${ALTEROID_RUNNER_TOKEN_SHA256:?openssl rand -hex 32 の sha256 を .env に置くこと}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:?claude setup-token で取得して .env に置くこと}
+      - TZ=${TZ:-Asia/Tokyo}
+      - GH_TOKEN
+      - GIT_AUTHOR_NAME
+      - GIT_AUTHOR_EMAIL
+      - GIT_COMMITTER_NAME
+      - GIT_COMMITTER_EMAIL
+    volumes:
+      # 既定は器ごとの volume。共有 FS で運用するなら、ここを runner と同じ volume に
+      # して app に `ALTEROID_WORKSPACE_KIND=shared-volume` を置く（同じ木を複数の
+      # マネージャーが触ることになる点は、人間が1つの作業ツリーを使い回すのと同じ）。
+      - ${ALTEROID_WORKSPACE_B_HOST:-workspace-b}:/workspace
+      - control:/run/alteroid
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'curl -fsS --unix-socket /run/alteroid/runner-b.sock http://runner/livez || exit 1',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    stop_grace_period: 60s
+    networks: [control]
+    restart: unless-stopped
+
   app:
     build: .
     depends_on:
@@ -150,8 +200,21 @@ services:
     environment:
       # 記憶・日誌・ジョブ・セッションの置き場。**この鍵はデーモンだけが持つ。**
       ALTEROID_DATABASE_URL: postgres://alteroid:${POSTGRES_PASSWORD}@db:5432/alteroid
-      # 委譲先。固定 URL をコードに埋めず、ここで名簿へ登録する。
-      ALTEROID_RUNNER_URL: unix:/run/alteroid/runner.sock
+      # 委譲先の名簿。固定 URL をコードに埋めず、ここで登録する。
+      #
+      # 2台目を起こすなら、`.env` で宛先を並べる（カンマ区切り）:
+      #   ALTEROID_RUNNER_URLS=unix:/run/alteroid/runner.sock,unix:/run/alteroid/runner-b.sock
+      #
+      # 名乗りを返さない器が混ざっていても、デーモンは残りで走り、返るように
+      # なった時点でその器も使う（1台の不在で全部を止めない）。
+      ALTEROID_RUNNER_URLS: ${ALTEROID_RUNNER_URLS:-unix:/run/alteroid/runner.sock}
+      # workspace の運用選択（M5）。器が落ちた委譲を別の器で続けられるかが決まる。
+      #   runner-volume（既定）… 器ごとの volume。移せない（失われたことは報告される）
+      #   shared-volume        … 全 runner が同じパスで同じ FS を見ている前提
+      #   git                  … マネージャー自身が clone し直して続ける
+      ALTEROID_WORKSPACE_KIND: ${ALTEROID_WORKSPACE_KIND:-runner-volume}
+      ALTEROID_WORKSPACE_REPOSITORY: ${ALTEROID_WORKSPACE_REPOSITORY:-}
+      ALTEROID_WORKSPACE_REF: ${ALTEROID_WORKSPACE_REF:-main}
       # 制御面の合鍵。**素の値を持つのはデーモンだけ**（runner はハッシュのみ）。
       ALTEROID_RUNNER_TOKEN: ${ALTEROID_RUNNER_TOKEN:?openssl rand -hex 32 で作って .env に置くこと}
       # クローン（Fable）も SDK セッションなので、こちらにも認証が要る。
@@ -182,5 +245,7 @@ volumes:
   db:
   state:
   workspace:
+  # 2台目の runner の作業場所（`--profile scale` のときだけ使われる）
+  workspace-b:
   # デーモンと runner の間の口（Unix ソケット）だけを置く場所
   control:

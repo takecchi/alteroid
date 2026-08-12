@@ -1,8 +1,8 @@
-# Railway へ常駐させる（1 runner 構成）
+# Railway へ常駐させる
 
-compose.yaml の3コンテナ構成（daemon / manager-runner / PostgreSQL）を、そのまま Railway の3 Service に写した運用手順である。ここに**要件は書かない** — 正典は [docs/](../docs/) であり、この文書は「どう置くか」だけを扱う。
+compose.yaml のコンテナ構成（daemon / manager-runner / PostgreSQL）を、そのまま Railway の Service に写した運用手順である。ここに**要件は書かない** — 正典は [docs/](../docs/) であり、この文書は「どう置くか」だけを扱う。
 
-roadmap M5 の「Railway の複数 Service …で runner 数を増減できるデプロイ定義」はまだ来ていない。ここで置くのは **runner 1台**である（`RunnerRegistry` の宛先が1つなのは M4 と同じ）。
+まずは **runner 1台**（M4 と同じ形）で上げ、必要になったら [runner を増やす](#runner-を増やすm5)。**増やしても能力もプロトコルも変わらない**（roadmap M5 のゴール）ので、1台で上げてから足すのが安全である。
 
 ---
 
@@ -72,7 +72,7 @@ railway add --database postgres
 
 ### 2. Service を2つ作る（同じリポジトリから）
 
-ダッシュボードで GitHub リポジトリを2回追加し、名前を **`app`** と **`runner`** にする（`ALTEROID_RUNNER_URL` がこの名前を参照する）。それぞれ **Settings → Config as Code** に次を指定する。
+ダッシュボードで GitHub リポジトリを2回追加し、名前を **`app`** と **`runner`** にする（`ALTEROID_RUNNER_URLS` がこの名前を参照する）。それぞれ **Settings → Config as Code** に次を指定する。
 
 | Service  | Config as Code         |
 | -------- | ---------------------- |
@@ -97,15 +97,15 @@ Config as Code のパスは Root Directory を見ないので、**リポジト�
 
 **`app`**
 
-| 変数                        | 値                                               | なぜ                                                                                                       |
-| --------------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
-| `ALTEROID_DATABASE_URL`     | `${{Postgres.DATABASE_URL}}`                     | private の接続文字列（`postgres.railway.internal`）。`DATABASE_PUBLIC_URL` は公衆網に出るので使わない      |
-| `ALTEROID_RUNNER_URL`       | `http://${{runner.RAILWAY_PRIVATE_DOMAIN}}:4518` | 固定 URL をコードに埋めず、ここで名簿へ登録する。private network は Wireguard で暗号化済みなので `http://` |
-| `ALTEROID_RUNNER_TOKEN`     | 素の `$TOKEN`                                    | **素の値を持つのは daemon だけ**                                                                           |
-| `CLAUDE_CODE_OAUTH_TOKEN`   | `claude setup-token` の値                        | クローンも SDK セッションなので要る                                                                        |
-| `ALTEROID_DAILY_REPORT_AT`  | `22:00`                                          | 省略しても既定で動く（自律は後から足す機能ではない）                                                       |
-| `ALTEROID_INITIATIVE_EVERY` | `60`                                             | 同上（分）                                                                                                 |
-| `TZ`                        | `Asia/Tokyo`                                     | 日報の締め時刻がこれで決まる                                                                               |
+| 変数                        | 値                                               | なぜ                                                                                                                                         |
+| --------------------------- | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ALTEROID_DATABASE_URL`     | `${{Postgres.DATABASE_URL}}`                     | private の接続文字列（`postgres.railway.internal`）。`DATABASE_PUBLIC_URL` は公衆網に出るので使わない                                        |
+| `ALTEROID_RUNNER_URLS`      | `http://${{runner.RAILWAY_PRIVATE_DOMAIN}}:4518` | 委譲先の名簿（カンマ区切りで何台でも）。固定 URL をコードに埋めず、ここで登録する。private network は Wireguard で暗号化済みなので `http://` |
+| `ALTEROID_RUNNER_TOKEN`     | 素の `$TOKEN`                                    | **素の値を持つのは daemon だけ**                                                                                                             |
+| `CLAUDE_CODE_OAUTH_TOKEN`   | `claude setup-token` の値                        | クローンも SDK セッションなので要る                                                                                                          |
+| `ALTEROID_DAILY_REPORT_AT`  | `22:00`                                          | 省略しても既定で動く（自律は後から足す機能ではない）                                                                                         |
+| `ALTEROID_INITIATIVE_EVERY` | `60`                                             | 同上（分）                                                                                                                                   |
+| `TZ`                        | `Asia/Tokyo`                                     | 日報の締め時刻がこれで決まる                                                                                                                 |
 
 **置かないもの**
 
@@ -189,6 +189,72 @@ su -s /bin/sh worker -c "curl -s http://127.0.0.1:4518/livez"
 
 ---
 
+## runner を増やす（M5）
+
+**足すのは Service と変数だけである。** コードもプロトコルも変わらない — デーモンは名簿（`RunnerRegistry`）しか見ておらず、宛先が1つか3つかを知らない。
+
+### 1. Service をもう1つ作る
+
+同じリポジトリから Service を追加し、**`runner-2`** という名前にする。Config as Code は `/railway/runner.json`（1台目と同じ）。変数は1台目と同じものを置き、**`ALTEROID_RUNNER_ID` だけを変える**。
+
+| 変数                           | `runner`         | `runner-2` | なぜ                                                                                           |
+| ------------------------------ | ---------------- | ---------- | ---------------------------------------------------------------------------------------------- |
+| `ALTEROID_RUNNER_ID`           | `runner-primary` | `runner-2` | **器ごとに違う値**。台帳の `manager_id → runner_id` はこれで引くので、被ると宛先が壊れる       |
+| `ALTEROID_RUNNER_TOKEN_SHA256` | 同じ             | 同じ       | 制御面の本人確認は「デーモンかどうか」の判定であって、器を区別するためのものではない           |
+| `RAILWAY_RUN_UID`              | `0`              | `0`        | 子プロセスを uid 1001 へ降ろす特権（無いと runner は起動を拒む）                               |
+| `ALTEROID_RUNNER_BIND`         | `::`             | `::`       | Railway の private network（IPv6）                                                             |
+| `ALTEROID_RUNNER_PORT`         | `4518`           | `4518`     | Service ごとに別ホストなので、同じ番号でよい                                                   |
+| `CLAUDE_CODE_OAUTH_TOKEN`      | 同じ             | 同じ       | マネージャーと作業者の認証                                                                     |
+| `GH_TOKEN` / `GIT_*`           | 同じ             | 同じ       | どの器へ置かれたマネージャーも同じことができなければならない（**片方だけに置くとデグレード**） |
+
+### 2. daemon に宛先を並べる
+
+```bash
+railway variable set \
+  'ALTEROID_RUNNER_URLS=http://${{runner.RAILWAY_PRIVATE_DOMAIN}}:4518,http://${{runner-2.RAILWAY_PRIVATE_DOMAIN}}:4518' \
+  --service app
+```
+
+**1台が落ちていても daemon は上がる**（複数構成では、名乗りを返さない器は名簿に載ったまま生存確認の対象になり、返るようになった時点で使われる）。全部が返らないときだけ起動を止める。
+
+### 3. workspace の運用を選ぶ（増やすなら必須）
+
+Railway はボリュームを付けていないので（「先に読む」3）、器が落ちた委譲の作業ディレクトリは**その器と一緒に消える**。2台以上で運用するなら、**git 再構築**を選ぶ。
+
+```bash
+railway variable set ALTEROID_WORKSPACE_KIND=git --service app
+railway variable set ALTEROID_WORKSPACE_REPOSITORY=https://github.com/<owner>/<repo> --service app
+railway variable set ALTEROID_WORKSPACE_REF=main --service app
+```
+
+これを置かないと（既定の `runner-volume`）、器が落ちた委譲は別の器へ移せない。**移せないこと自体は黙って起きない** — 「セッションは預かってあるが、コミットしていない変更は復旧できない」という報告がクローンの受信箱へ届き、そこから人間へ回る（roadmap M5 受け入れ基準4 の後段）。それでも作業は戻らないので、先に選んでおくこと。
+
+### 4. 確かめる
+
+```bash
+railway ssh --service app
+alteroid chat
+> /runners     # 2台とも「生存」で、CPU・メモリ・走行中の本数が出る
+> /managers    # 各マネージャーの runner が出る（宛先は台帳から引かれる）
+```
+
+`GET /runners` でも同じものが読める。**`capacity` は実測であって定員ではない** — 空きが少ないことは「もう頼めない」を意味しない（配置の材料。人工上限はどの層にも無い）。
+
+片方の Service を Stop すると、そこに居た走行中の委譲が別の器で開き直り、クローンの受信箱へ「移した」報告が届く（`git` 運用なら clone し直しの指示つき）。
+
+### 他のオーケストレータ（ECS / Fargate 等）へ写すとき
+
+守るのは4つだけで、あとは器の話である。
+
+1. **器ごとに違う `ALTEROID_RUNNER_ID`** を渡す（台帳の宛先。被らせない・使い回さない）
+2. **全 runner の宛先を daemon の `ALTEROID_RUNNER_URLS` に並べる**（合鍵の sha256 は全器で同じ）
+3. **記憶ストアの鍵を runner へ渡さない**（`ALTEROID_DATABASE_URL` は daemon だけ。素の合鍵も daemon だけ）
+4. **workspace の運用を選ぶ**（`ALTEROID_WORKSPACE_KIND`）。共有 FS を全器へ同じパスでマウントするか、git 再構築にする
+
+**いまの登録は静的である。** 名簿は起動時に `ALTEROID_RUNNER_URLS` から作られるので、オートスケールで器が増えても daemon は勝手には見つけない（`RunnerRegistry.register` は動的登録を受けられる形にしてあるが、サービス発見の口はまだ無い）。台数を変えたら daemon の変数を更新して上げ直す。**これは制限ではなく未実装**であり、必要になったら発見の口を足す側で直す。
+
+---
+
 ## マネージャーに GitHub を渡す（PR を出させる）
 
 クローンに「実装して PR を出して」と頼むには、マネージャーの手元に**人間が Claude Code に渡しているものと同じ**3つが揃っている必要がある。
@@ -259,27 +325,27 @@ alteroid chat
 
 **長い仕事を頼むときは、早めに push させること。** workspace はボリュームを付けていないので、runner が再デプロイされるとコミット前の変更は消える（「先に読む」3）。数時間かかる仕事を投げるなら、その間デプロイしないか、`/workspace` にボリュームを付ける。
 
-**M5 は実装だけでは受け入れ基準を満たさない。** 基準1が「runner を2台以上登録し、複数マネージャーが配置される」なので、`runner` Service をもう1つ（別の `ALTEROID_RUNNER_ID`）足して初めて確認できる。実装を頼むときに「1台構成のまま通るところまで」と「2台目を足してからの確認」を分けて伝えると迷子にならない。
+**runner を2台以上にしてからしか確認できないこともある**（M5 受け入れ基準1・4）。実装は入っているが、実際に配置が分かれることと器の停止から続けられることは、Service を足して初めて見える → [runner を増やす](#runner-を増やすm5)。
 
 ---
 
 ## 症状から引く
 
-| 症状                                                             | 原因                                                                                                                                                                                              |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `railway ssh` が一瞬で切れる（プロンプトは出る）                 | そのコンテナが再起動を繰り返している。ssh はデプロイに繋がっているので、器が入れ替わるとセッションごと落ちる。**ssh の問題ではない**ので `railway logs` を見る                                    |
-| `alteroidd: 起動に失敗しました: TypeError: fetch failed`         | daemon が runner の `/health` へ届いていない。runner のログを見る（大抵 runner が上がっていない）。次に `ALTEROID_RUNNER_URL` のサービス名と `ALTEROID_RUNNER_BIND=::` を確認する                 |
-| `alteroid-runner: ALTEROID_RUNNER_CHILD_UID が指定されているが…` | runner が root で走っていない。`RAILWAY_RUN_UID=0` が無い／名前に空白が混ざっている。**これは異常ではなく設計**で、同じ UID のまま走ると子プロセスが制御面に手を届かせるので、runner は起動を拒む |
-| 変数を設定したのに効かない                                       | 名前の前後に空白。`railway variable list --json` で `repr` して検算する（上の「置いたら必ず名前を検算する」）                                                                                     |
-| 日報が想定と違う時刻に出る                                       | `TZ` 未設定。既定の `22:00` は**コンテナのローカル時刻**なので、UTC のまま動くと日本時間の翌 7:00 になる                                                                                          |
-| `env \| grep ALTEROID_DATABASE_URL` が runner で何か返す         | 慌てる前に行頭固定で取り直す。`RAILWAY_GIT_COMMIT_MESSAGE` にこの文書の一部が入っている                                                                                                           |
-| マネージャーの commit が `Please tell me who you are` で失敗する | `GIT_AUTHOR_*` / `GIT_COMMITTER_*` が runner に無い（「マネージャーに GitHub を渡す」）                                                                                                           |
-| マネージャーの push が 403 になる                                | `GH_TOKEN` が無いか、fine-grained PAT の Contents が Read-only か、対象リポジトリが選択されていない                                                                                               |
+| 症状                                                             | 原因                                                                                                                                                                                                                                       |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `railway ssh` が一瞬で切れる（プロンプトは出る）                 | そのコンテナが再起動を繰り返している。ssh はデプロイに繋がっているので、器が入れ替わるとセッションごと落ちる。**ssh の問題ではない**ので `railway logs` を見る                                                                             |
+| `alteroidd: 起動に失敗しました: TypeError: fetch failed`         | daemon が runner の `/health` へ届いていない。runner のログを見る（大抵 runner が上がっていない）。次に `ALTEROID_RUNNER_URLS` のサービス名と `ALTEROID_RUNNER_BIND=::` を確認する（**2台以上なら1台の不在では落ちない**ので、全滅を疑う） |
+| `alteroid-runner: ALTEROID_RUNNER_CHILD_UID が指定されているが…` | runner が root で走っていない。`RAILWAY_RUN_UID=0` が無い／名前に空白が混ざっている。**これは異常ではなく設計**で、同じ UID のまま走ると子プロセスが制御面に手を届かせるので、runner は起動を拒む                                          |
+| 変数を設定したのに効かない                                       | 名前の前後に空白。`railway variable list --json` で `repr` して検算する（上の「置いたら必ず名前を検算する」）                                                                                                                              |
+| 日報が想定と違う時刻に出る                                       | `TZ` 未設定。既定の `22:00` は**コンテナのローカル時刻**なので、UTC のまま動くと日本時間の翌 7:00 になる                                                                                                                                   |
+| `env \| grep ALTEROID_DATABASE_URL` が runner で何か返す         | 慌てる前に行頭固定で取り直す。`RAILWAY_GIT_COMMIT_MESSAGE` にこの文書の一部が入っている                                                                                                                                                    |
+| マネージャーの commit が `Please tell me who you are` で失敗する | `GIT_AUTHOR_*` / `GIT_COMMITTER_*` が runner に無い（「マネージャーに GitHub を渡す」）                                                                                                                                                    |
+| マネージャーの push が 403 になる                                | `GH_TOKEN` が無いか、fine-grained PAT の Contents が Read-only か、対象リポジトリが選択されていない                                                                                                                                        |
 
 ---
 
 ## 既知のざらつき
 
-1. **runner の再デプロイで daemon も一度落ちる。** daemon は起動時に runner へ繋げないと落ちる（`apps/daemon/src/index.ts` の `openRunner`）。`ALWAYS` で復帰し、走行中のマネージャーは runner が生きていれば繋ぎ直し、器ごと落ちていれば JobStore の `session_id` と預かった生ログから resume される。起動時リトライを入れるかは別途判断（要件ではなく実装のざらつき）
+1. **runner 1台構成では、runner の再デプロイで daemon も一度落ちる。** 宛先が1つのときだけ、繋げない起動は失敗にしてある（`apps/daemon/src/index.ts` の `openRunners`）。`ALWAYS` で復帰し、走行中のマネージャーは runner が生きていれば繋ぎ直し、器ごと落ちていれば JobStore の `session_id` と預かった生ログから resume される。**2台以上なら落ちない**（残りで走り、戻った器は生存確認が拾う）
 2. **App Sleep を有効にしないこと。** 常駐は自律の前提であり、寝かせると起点②〜④が止まる
-3. **3 Service が常時起動する。** 止めてよいのは承認待ちの仕事だけで、器ではない
+3. **全 Service が常時起動する。** 止めてよいのは承認待ちの仕事だけで、器ではない

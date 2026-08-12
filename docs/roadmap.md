@@ -103,13 +103,13 @@
 
 **ゴール**: runner を増やしても、能力もプロトコルも1台構成と同じままでいる。
 
-- [ ] runner の登録・heartbeat・生存判定
-- [ ] 新規マネージャーの runner 配置（CPU・メモリ・稼働セッション等、**実行環境の資源**を材料にする。固定の `maxManagers` のような人工上限は置かない）
-- [ ] `manager_id → runner_id` に基づく sticky routing
-- [ ] runner 障害時の session 再開と workspace 復旧
-- [ ] workspace locator の運用選択（runner-volume / 共有 FS / Git 再構築）
-- [ ] Railway の複数 Service、AWS ECS/Fargate 等で runner 数を増減できるデプロイ定義
-- [ ] 1 runner 構成と能力・プロトコルが同じであることの回帰テスト
+- [x] runner の登録・heartbeat・生存判定
+- [x] 新規マネージャーの runner 配置（CPU・メモリ・稼働セッション等、**実行環境の資源**を材料にする。固定の `maxManagers` のような人工上限は置かない）
+- [x] `manager_id → runner_id` に基づく sticky routing
+- [x] runner 障害時の session 再開と workspace 復旧
+- [x] workspace locator の運用選択（runner-volume / 共有 FS / Git 再構築）
+- [x] Railway の複数 Service、AWS ECS/Fargate 等で runner 数を増減できるデプロイ定義
+- [x] 1 runner 構成と能力・プロトコルが同じであることの回帰テスト
 
 **受け入れ基準**:
 1. runner を2台以上登録し、複数マネージャーが配置される
