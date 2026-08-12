@@ -1,0 +1,17 @@
+# IDE
+.idea/
+.vscode/
+
+# Node
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# env / secrets
+.env
+.env.*
+
+# misc
+*.log
+.DS_Store
