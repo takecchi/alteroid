@@ -32,8 +32,32 @@ FROM node:22-bookworm-slim AS runtime
 
 # マネージャーが人間と同じ手つきで作業するための素の道具（runner で使う）
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates git ripgrep curl \
+  && apt-get install -y --no-install-recommends ca-certificates git ripgrep curl jq \
   && rm -rf /var/lib/apt/lists/*
+
+# GitHub CLI。**人間の Claude Code には `gh` がある**ので、ここに無いと
+# 「PR を出す」が層を下りた瞬間にできなくなる — それは仕様ではなくバグである
+# （north_star 禁止1）。apt の bookworm には入っていないので公式リリースから取る。
+ARG GH_VERSION=2.97.0
+ARG TARGETARCH
+RUN set -eux; \
+  arch="${TARGETARCH:-amd64}"; \
+  case "$arch" in \
+    amd64 | arm64) ;; \
+    *) echo "gh: 未対応のアーキテクチャ $arch" >&2; exit 1 ;; \
+  esac; \
+  dir="gh_${GH_VERSION}_linux_${arch}"; \
+  curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/${dir}.tar.gz" -o /tmp/gh.tgz; \
+  tar -xzf /tmp/gh.tgz -C /tmp; \
+  install -m 0755 "/tmp/${dir}/bin/gh" /usr/local/bin/gh; \
+  rm -rf /tmp/gh.tgz "/tmp/${dir}"; \
+  gh --version
+
+# git の資格情報は `gh` から借りる（人間が `gh auth setup-git` でやることと同じ）。
+# **鍵をイメージに焼かない。** ここにあるのは経路だけで、実際の鍵は runner の
+# 環境変数（`GH_TOKEN`）から来る。トークンが無ければこのヘルパーは何も返さず、
+# git は「資格情報が無い」として次へ進むだけである（公開リポジトリの clone は通る）。
+RUN git config --system credential.https://github.com.helper '!gh auth git-credential'
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
