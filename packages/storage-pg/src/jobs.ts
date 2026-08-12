@@ -3,6 +3,7 @@ import type { Job, JobStore, PendingApproval } from '@alteroid/core';
 import { asc, eq, isNull } from 'drizzle-orm';
 
 import type { Db } from './db.js';
+import { stripNulls } from './db.js';
 import { approvals, jobs } from './schema.js';
 
 /**
@@ -27,7 +28,8 @@ export class PgJobStore implements JobStore {
   }
 
   async putJob(job: Job): Promise<void> {
-    const value = jobSchema.parse(job);
+    // 依頼文や報告に NUL が混ざりうる（マネージャーの出力をそのまま持つため）
+    const value = stripNulls(jobSchema.parse(job));
     await this.#db
       .insert(jobs)
       .values({
@@ -68,7 +70,7 @@ export class PgJobStore implements JobStore {
   }
 
   async putApproval(approval: PendingApproval): Promise<void> {
-    const value = pendingApprovalSchema.parse(approval);
+    const value = stripNulls(pendingApprovalSchema.parse(approval));
     const answeredAt = value.answeredAt === undefined ? null : new Date(value.answeredAt);
     await this.#db
       .insert(approvals)

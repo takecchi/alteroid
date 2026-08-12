@@ -632,15 +632,36 @@ describe('デーモン再起動後（M4）', () => {
     await s.pool.stop();
   });
 
-  it('セッションの生ログを SessionStore へ預ける（コンテナのディスクは消える）', async () => {
+  it('セッションの生ログを SessionStore へ預け、そこから生ログへ降りられる', async () => {
+    // コンテナのディスクは再起動で消える。ローカルのファイルもアーカイブも無い
+    // 状態で manager_id から生ログへ降りられないなら、可観測性の最下段が
+    // クラウドでだけ欠ける（＝デグレード）。
+    const appended: { projectKey: string; entries: unknown[] }[] = [];
     const sessionStore = {
-      append: async () => undefined,
-      load: async () => null,
+      append: async (key: { projectKey: string }, entries: unknown[]) => {
+        appended.push({ projectKey: key.projectKey, entries });
+      },
+      load: async (key: { projectKey: string; sessionId: string }) =>
+        key.projectKey === 'proj-key' && key.sessionId === 'sess-mgr'
+          ? [{ type: 'user', uuid: 'u1' }]
+          : null,
     };
     const s = setup(undefined, { sessionStore });
-    await s.pool.start({ request: '調べて' });
+    const { managerId } = await s.pool.start({ request: '調べて' });
 
-    expect((s.sessions[0] as FakeSession).options.sessionStore).toBe(sessionStore);
+    // SDK には包んだものを渡す（預けた本人が projectKey を控えるため）
+    const passed = (s.sessions[0] as FakeSession).options.sessionStore as typeof sessionStore;
+    expect(passed).toBeDefined();
+    await passed.append({ projectKey: 'proj-key' }, [{ type: 'user', uuid: 'u1' }]);
+    expect(appended).toHaveLength(1);
+
+    // 控えた projectKey は台帳に残る（再起動を跨いで引き当てるため）
+    await expect
+      .poll(async () => (await s.stores.jobs.listJobs())[0]?.projectKey, { timeout: 2000 })
+      .toBe('proj-key');
+
+    // ファイルもアーカイブも無いが、生ログは DB から返る
+    expect(await s.pool.transcript(managerId)).toBe('{"type":"user","uuid":"u1"}\n');
 
     await s.pool.stop();
   });

@@ -87,6 +87,22 @@ export async function main(): Promise<void> {
     post: (event) => clone.post(event),
   });
 
+  // **受け口を開ける前に**、走行中だったマネージャーを台帳から拾い直す。知らせない
+  // と器を作り直した瞬間に走っていた仕事がクローンから見て消えるし（roadmap M4
+  // 受け入れ基準2）、引き取る前に chat を開けると、同じ仕事をクローンが二重に
+  // 起こしうる。
+  const restored = await clone.managers.restore().catch((error: unknown) => {
+    process.stderr.write(`alteroidd: マネージャーの引き継ぎに失敗しました: ${String(error)}\n`);
+    return [];
+  });
+  if (restored.length > 0) {
+    process.stdout.write(
+      `alteroidd: 再起動前のマネージャーを引き継ぎました: ${restored
+        .map((manager) => manager.managerId)
+        .join(', ')}\n`,
+    );
+  }
+
   const app = createApp({
     clone,
     stores,
@@ -95,6 +111,15 @@ export async function main(): Promise<void> {
     scheduler,
     storage: storage.description,
   });
+  // 開けたこと自体は方針の変更であって禁止事項ではない。ただし**黙って**外へ
+  // 出さない — ここは叩けばクローンのターンが起きる実行の口である。
+  if (hostname !== DEFAULT_BIND && hostname !== 'localhost' && hostname !== '::1') {
+    process.stderr.write(
+      `alteroidd: ${hostname} で待ち受けます。この API に認証はありません。` +
+        '手前に境界（リバースプロキシ・トンネル・認証）を置いてください。\n',
+    );
+  }
+
   const server = serve({ fetch: app.fetch, port, hostname });
 
   server.on('error', (error: unknown) => {
@@ -135,20 +160,6 @@ export async function main(): Promise<void> {
   process.on('SIGINT', () => void shutdown());
 
   scheduler.start();
-
-  // 走行中だったマネージャーを台帳から拾い直す。**知らせないと、器を作り直した
-  // 瞬間に走っていた仕事がクローンから見て消える**（roadmap M4 受け入れ基準2）。
-  const restored = await clone.managers.restore().catch((error: unknown) => {
-    process.stderr.write(`alteroidd: マネージャーの引き継ぎに失敗しました: ${String(error)}\n`);
-    return [];
-  });
-  if (restored.length > 0) {
-    process.stdout.write(
-      `alteroidd: 再起動前のマネージャーを引き継ぎました: ${restored
-        .map((manager) => manager.managerId)
-        .join(', ')}\n`,
-    );
-  }
 
   // 締め時刻に自分が動いていなければ、その日の日報は誰も作らない。「日報は毎日
   // 生成される」は要件なので、動いていなかった日の分を起動時に拾い直す。

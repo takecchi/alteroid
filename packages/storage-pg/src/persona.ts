@@ -3,7 +3,7 @@ import type { MemoryDocument, MemoryDocumentMeta, PersonaStore } from '@alteroid
 import { asc, eq, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
-import { toIso } from './db.js';
+import { stripNulls, toIso } from './db.js';
 import { memory } from './schema.js';
 
 /**
@@ -47,7 +47,7 @@ export class PgPersonaStore implements PersonaStore {
 
   async write(slug: string, content: string): Promise<MemoryDocument> {
     const key = this.#slug(slug);
-    const body = ensureTrailingNewline(content);
+    const body = stripNulls(ensureTrailingNewline(content));
     const rows = await this.#db
       .insert(memory)
       .values({ slug: key, content: body, updatedAt: new Date() })
@@ -69,7 +69,7 @@ export class PgPersonaStore implements PersonaStore {
    */
   async append(slug: string, content: string): Promise<MemoryDocument> {
     const key = this.#slug(slug);
-    const body = ensureTrailingNewline(content);
+    const body = stripNulls(ensureTrailingNewline(content));
     const rows = await this.#db
       .insert(memory)
       .values({ slug: key, content: body, updatedAt: new Date() })

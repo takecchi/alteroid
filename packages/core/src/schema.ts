@@ -237,6 +237,14 @@ export const jobSchema = z.object({
   managerId: z.string().optional(),
   /** SDK のセッション id。M4 の resume の足がかり。 */
   sessionId: z.string().optional(),
+  /**
+   * SDK が生ログを預けるときの scope（SessionStore の `projectKey`）。
+   *
+   * **これが無いと、器を作り直したあとに生ログを引き当てられない。** ローカルの
+   * トランスクリプトはコンテナと一緒に消えるので、可観測性の最下段へ降りる経路は
+   * `projectKey` + `sessionId` の対で持つしかない（PRD「可観測性」）。
+   */
+  projectKey: z.string().optional(),
   summary: z.string(),
   /** クローンが出した依頼の全文。 */
   request: z.string().optional(),

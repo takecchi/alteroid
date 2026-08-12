@@ -18,12 +18,12 @@
   },
   "dependencies": {
     "@alteroid/core": "workspace:*",
+    "@anthropic-ai/claude-agent-sdk": "catalog:",
     "drizzle-orm": "catalog:",
     "pg": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@anthropic-ai/claude-agent-sdk": "catalog:",
     "@electric-sql/pglite": "catalog:",
     "@types/node": "catalog:",
     "@types/pg": "catalog:",

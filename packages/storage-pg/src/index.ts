@@ -43,8 +43,17 @@ export interface PgStores extends Stores {
 export interface CreatePgStoresOptions {
   /** `postgres://user:pass@host:5432/db` */
   url: string;
-  /** 主にテスト用。既に張った drizzle のハンドルを使う。 */
+  /** 接続プールの上限。既定は node-postgres のまま。 */
   max?: number;
+  /**
+   * 接続の異常を受け取る先。既定は stderr。
+   *
+   * **握り潰さない。** node-postgres の Pool は idle 接続のエラー（DB 再起動・
+   * ネットワーク断）を `error` として投げ、受け手が居ないと Node ごと落ちる。
+   * デーモンが落ちれば走行中のマネージャーも巻き添えになる — 常駐は自律の前提
+   * なので、記憶の器の瞬断でクローンを殺さない。
+   */
+  onError?: (error: Error) => void;
 }
 
 /** 既存の drizzle ハンドルからストア一式を組む（ドライバを問わない）。 */
@@ -68,14 +77,24 @@ export function createPgStoresFromDb(db: Db, close?: () => Promise<void>): PgSto
  * 受け入れ基準だからである（人間の手順を足さない）。
  */
 export async function createPgStores(options: CreatePgStoresOptions | string): Promise<PgStores> {
-  const { url, max } = typeof options === 'string' ? { url: options, max: undefined } : options;
+  const config = typeof options === 'string' ? { url: options } : options;
   const pool = new Pool({
-    connectionString: url,
-    ...(max === undefined ? {} : { max }),
+    connectionString: config.url,
+    ...(config.max === undefined ? {} : { max: config.max }),
   });
+
+  // idle 接続のエラーを受ける。受けなければ uncaughtException でデーモンごと死ぬ。
+  const onError =
+    config.onError ??
+    ((error: Error) => {
+      process.stderr.write(`alteroid: PostgreSQL の接続でエラー: ${error.message}\n`);
+    });
+  pool.on('error', onError);
+
   const db = drizzle(pool);
   await migrate(db);
   return createPgStoresFromDb(db, async () => {
+    pool.off('error', onError);
     await pool.end();
   });
 }

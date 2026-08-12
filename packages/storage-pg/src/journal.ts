@@ -5,6 +5,7 @@ import type { JournalEntry, JournalEntryInput, JournalQuery, JournalStore } from
 import { and, desc, gte, inArray } from 'drizzle-orm';
 
 import type { Db } from './db.js';
+import { stripNulls } from './db.js';
 import { journal } from './schema.js';
 
 /**
@@ -28,11 +29,13 @@ export class PgJournalStore implements JournalStore {
       at: new Date().toISOString(),
     });
 
+    // PostgreSQL は NUL を含む文字列を受け付けない。落とさずに投げると挿入ごと
+    // 失敗し、呼び出し側（`#journal`）が握り潰すので**記録が静かに消える**。
     await this.#db.insert(journal).values({
       id: entry.id,
       at: new Date(entry.at),
       type: entry.type,
-      entry,
+      entry: stripNulls(entry),
     });
 
     return entry;

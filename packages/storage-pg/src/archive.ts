@@ -2,6 +2,7 @@ import type { TranscriptArchive } from '@alteroid/core';
 import { desc, eq } from 'drizzle-orm';
 
 import type { Db } from './db.js';
+import { stripNulls } from './db.js';
 import { archive } from './schema.js';
 
 /**
@@ -19,13 +20,14 @@ export class PgTranscriptArchive implements TranscriptArchive {
   }
 
   async archive(sessionId: string, transcript: string): Promise<string> {
+    const body = stripNulls(transcript);
     const at = new Date();
     const stamp = at.toISOString().replace(/[:.]/g, '-');
     const id = `${sanitize(sessionId)}-${stamp}.jsonl`;
     await this.#db
       .insert(archive)
-      .values({ id, sessionId, at, body: transcript })
-      .onConflictDoUpdate({ target: archive.id, set: { body: transcript } });
+      .values({ id, sessionId, at, body })
+      .onConflictDoUpdate({ target: archive.id, set: { body } });
     return id;
   }
 

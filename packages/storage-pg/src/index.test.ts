@@ -155,15 +155,38 @@ describe('PgJournalStore', () => {
   });
 
   it('同じミリ秒に並んでも追記順が保たれる（日報が順番を失わない）', async () => {
-    await Promise.all(
-      Array.from({ length: 20 }, (_, i) =>
-        stores.journal.append({ type: 'exchange', with: 'human', role: 'inbound', text: `t${i}` }),
-      ),
-    );
+    // 直列に積む。`at` で並べ替える実装に退行すると、同一ミリ秒の分が入れ替わる。
+    for (let i = 0; i < 20; i += 1) {
+      await stores.journal.append({
+        type: 'exchange',
+        with: 'human',
+        role: 'inbound',
+        text: `t${i}`,
+      });
+    }
 
     const entries = await stores.journal.list();
-    expect(entries).toHaveLength(20);
+    const texts = entries.map((entry) => (entry as { text: string }).text);
+
+    expect(texts).toEqual(Array.from({ length: 20 }, (_, i) => `t${19 - i}`));
     expect(new Set(entries.map((entry) => entry.id)).size).toBe(20);
+  });
+
+  it('NUL を含む記録も残す（PostgreSQL は NUL を受け付けない）', async () => {
+    // マネージャー・作業者の全ツール実行を落とす以上、バイナリ由来の NUL は来る。
+    // ここで挿入ごと落ちると、fs なら残る記録が pg では静かに消える。
+    await stores.journal.append({
+      type: 'tool_use',
+      actor: 'manager:mgr-1',
+      tool: 'Bash',
+      input: { command: 'cat /dev/urandom', output: 'a\u0000b' },
+    });
+
+    const [entry] = await stores.journal.list({ types: ['tool_use'] });
+
+    expect(entry).toBeDefined();
+    expect(JSON.stringify(entry)).not.toContain('\u0000');
+    expect(JSON.stringify(entry)).toContain('ab');
   });
 });
 

@@ -352,7 +352,29 @@ class Pool implements ManagerPool {
       const body = await this.#stores.archive.read(id);
       if (body !== null) return body;
     }
-    return null;
+
+    // 最後の砦。コンテナが強制終了されるとローカルのファイルも退避も無いが、
+    // 生ログ自体は SessionStore に載っている。**見えるはずのものが器の都合で
+    // 見えない状態を作らない**（PRD「可観測性」）。
+    return this.#fromSessionStore(job);
+  }
+
+  async #fromSessionStore(job: Job): Promise<string | null> {
+    const store = this.#sessionStore;
+    if (store === undefined || job.sessionId === undefined || job.projectKey === undefined) {
+      return null;
+    }
+    try {
+      const entries = await store.load({
+        projectKey: job.projectKey,
+        sessionId: job.sessionId,
+      });
+      if (entries === null || entries.length === 0) return null;
+      // 生ログの形（1行1 JSON）のまま返す。読む側は fs 由来と区別しなくてよい。
+      return `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`;
+    } catch {
+      return null;
+    }
   }
 
   async stop(): Promise<void> {
@@ -400,6 +422,7 @@ class ManagerSession {
   #sessionId: string | undefined;
   #transcriptPath: string | undefined;
   #lastReport: string | undefined;
+  #projectKey: string | undefined;
   #stopped = false;
   /** 再起動前のセッション。話しかけられた時に、ここから続きへ戻る。 */
   #resumeFrom: string | undefined;
@@ -423,6 +446,7 @@ class ManagerSession {
     this.#resumeFrom = restored?.sessionId;
     this.#transcriptPath = restored?.transcriptPath;
     this.#lastReport = restored?.lastReport;
+    this.#projectKey = restored?.projectKey;
     // 走っていた・返事を待っていたマネージャーは、器が死んだ時点で手を止めている。
     // `running` のまま見せると返ってこない報告を待つことになり、`waiting_human`
     // のまま見せると誰も答えられない行列が残る。どちらも待機（`done`）に直す。
@@ -587,6 +611,13 @@ class ManagerSession {
     if (this.#stopped) return;
     this.#stopped = true;
 
+    // **止まる前に生ログを退避する。** ローカルではディスクに残るので実害が
+    // 出なかったが、コンテナのトランスクリプトは器と一緒に消える。ここを
+    // 怠ると、再起動後に manager_id から生ログへ降りられない（M2 受け入れ基準4
+    // が M4 で崩れる = デグレード）。
+    await this.#archiveTranscript();
+    await this.#persist();
+
     this.#settleAll('デーモンが停止した。');
 
     this.#wakeInput();
@@ -628,7 +659,9 @@ class ManagerSession {
       env: this.#childEnv(),
       // 生ログを外（PostgreSQL）にも預ける。コンテナのディスクは再起動で消えるので、
       // ここが無いと「器を作り直したら続きへ戻れない」（roadmap M4 受け入れ基準2）。
-      ...(this.#sessionStore === undefined ? {} : { sessionStore: this.#sessionStore }),
+      ...(this.#sessionStore === undefined
+        ? {}
+        : { sessionStore: this.#watchKey(this.#sessionStore) }),
       ...(resume === undefined ? {} : { resume }),
       canUseTool: (toolName, input, extra) => this.#onPermission(toolName, input, extra),
       hooks: {
@@ -636,6 +669,38 @@ class ManagerSession {
         PreCompact: [{ hooks: [(input) => this.#onPreCompact(input)] }],
       },
     };
+  }
+
+  /**
+   * SessionStore を包んで、SDK が使う `projectKey` を控える。
+   *
+   * この値は SDK が cwd から決めるもので、外からは分からない。控えておかないと、
+   * ローカルのファイルもアーカイブも失われたとき（コンテナの強制終了）、生ログが
+   * DB にあるのに引き当てられなくなる。**預けた本人が鍵を覚えておく。**
+   */
+  #watchKey(store: SessionStore): SessionStore {
+    const wrapped: SessionStore = {
+      append: async (key, entries) => {
+        if (key.projectKey !== this.#projectKey) {
+          this.#projectKey = key.projectKey;
+          await this.#persist();
+        }
+        await store.append(key, entries);
+      },
+      load: (key) => store.load(key),
+    };
+
+    // 任意のメソッドは在るものだけ通す（無いものを生やすと SDK の分岐が変わる）
+    const { listSessions, listSessionSummaries, listSubkeys } = store;
+    const remove = store.delete;
+    if (listSessions) wrapped.listSessions = (projectKey) => listSessions.call(store, projectKey);
+    if (listSessionSummaries) {
+      wrapped.listSessionSummaries = (projectKey) => listSessionSummaries.call(store, projectKey);
+    }
+    if (listSubkeys) wrapped.listSubkeys = (key) => listSubkeys.call(store, key);
+    if (remove) wrapped.delete = (key) => remove.call(store, key);
+
+    return wrapped;
   }
 
   /** 記憶ストアの所在は子プロセスへ渡さない（渡さなければ構造的に触れない）。 */
@@ -896,6 +961,7 @@ class ManagerSession {
       request: this.#request,
       cwd: this.#cwd,
       ...(this.#sessionId === undefined ? {} : { sessionId: this.#sessionId }),
+      ...(this.#projectKey === undefined ? {} : { projectKey: this.#projectKey }),
       ...(this.#transcriptPath === undefined ? {} : { transcriptPath: this.#transcriptPath }),
       ...(this.#archiveIds.length === 0 ? {} : { archiveIds: [...this.#archiveIds] }),
       ...(this.#lastReport === undefined ? {} : { lastReport: this.#lastReport }),

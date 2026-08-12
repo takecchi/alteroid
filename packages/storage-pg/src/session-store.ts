@@ -2,6 +2,7 @@ import type { SessionKey, SessionStore, SessionStoreEntry } from '@anthropic-ai/
 import { and, asc, eq, ne, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
+import { stripNulls } from './db.js';
 import { sessionEntries, sessions } from './schema.js';
 
 /**
@@ -41,7 +42,7 @@ export class PgSessionStore implements SessionStore {
             sessionId: key.sessionId,
             subpath,
             uuid: entry.uuid ?? null,
-            entry,
+            entry: stripNulls(entry),
           })),
         )
         .onConflictDoNothing({
@@ -64,7 +65,7 @@ export class PgSessionStore implements SessionStore {
           sessionId: key.sessionId,
           subpath,
           uuid: null,
-          entry,
+          entry: stripNulls(entry),
         })),
       );
     }

@@ -1,19 +1,31 @@
 # ローカルと同じものを、コンテナ + PostgreSQL で常駐させる（roadmap M4）。
 #
 #   claude setup-token          # 長期トークンを取る（人間が一度だけ）
-#   echo "CLAUDE_CODE_OAUTH_TOKEN=..." > .env
+#   cat > .env <<'EOF'
+#   CLAUDE_CODE_OAUTH_TOKEN=...
+#   POSTGRES_PASSWORD=...       # 推測できない値にする（既定値は用意しない）
+#   EOF
+#   mkdir -p workspace          # マネージャーが触る場所。所有者を自分に揃える
 #   docker compose up -d
 #   docker compose exec app alteroid chat
 #
 # **待ち受けは 127.0.0.1 のまま、ポートも公開しない。** クローンへ話しかける口は
 # 叩けばターンが起きる実行の口なので、外に出すなら手前に境界（認証・トンネル・
 # リバースプロキシ）を置くのが先である。中から使うなら exec で足りる。
+#
+# **既知の穴（人間の判断待ち）**: マネージャーはデーモンと同じコンテナ・同じ UID で
+# 走るので、`/proc/1/environ` からデーモンの環境変数（＝DB 接続情報）を読めてしまう。
+# roadmap M4 の受け入れ基準3「マネージャープロセスから記憶ストアに到達する認証経路が
+# 存在しない」は、ここまででは**まだ成立していない**。塞ぐならマネージャーを別 UID か
+# 別コンテナへ出す必要があり、それは設計判断なので人間に預けている。
+# **この穴をツールの削除で塞がないこと**（north_star 禁止2）。
 services:
   db:
     image: postgres:17-alpine
     environment:
       POSTGRES_USER: alteroid
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-alteroid}
+      # 既定値を置かない。置けば「compose を読めば入れる」DB になる。
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?推測できない値を .env に置くこと}
       POSTGRES_DB: alteroid
     volumes:
       - db:/var/lib/postgresql/data
@@ -31,8 +43,8 @@ services:
         condition: service_healthy
     environment:
       # 記憶・日誌・ジョブ・セッションの置き場。**この鍵はデーモンだけが持つ。**
-      # マネージャー子プロセスの環境変数からは落ちる（非対称な可視性の本命）。
-      ALTEROID_DATABASE_URL: postgres://alteroid:${POSTGRES_PASSWORD:-alteroid}@db:5432/alteroid
+      # マネージャー子プロセスの環境変数からは落ちる（非対称な可視性）。
+      ALTEROID_DATABASE_URL: postgres://alteroid:${POSTGRES_PASSWORD}@db:5432/alteroid
       # 認証はサブスクリプションの長期トークン（claude setup-token）。
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:?claude setup-token で取得して .env に置くこと}
       # 自律の既定（日報・発意）は環境変数で開け閉めできる。これは方針であって
@@ -41,10 +53,15 @@ services:
       ALTEROID_INITIATIVE_EVERY: ${ALTEROID_INITIATIVE_EVERY:-60}
       TZ: ${TZ:-Asia/Tokyo}
     volumes:
-      # マネージャーが実際に触るプロジェクト。人間が Claude Code を開く場所と同じ意味。
+      # マネージャーが実際に触るプロジェクト。人間が Claude Code を開く場所と同じ
+      # 意味を持つ。**MCP 設定（.mcp.json）もここに置く** — cwd がこの場所なので、
+      # 人間が使っているのと同じ連携がマネージャーからも見える（下向きの可視性）。
       - ${ALTEROID_WORKSPACE_HOST:-./workspace}:/workspace
       # state（daemon.json）だけ。記憶は PostgreSQL 側にある。
       - state:/data/alteroid
+    # 落ちる前の最後の蒸留（クローンのターン1本）が終わるまで待つ。既定の 10 秒だと
+    # 途中で SIGKILL され、記憶へ移すはずだったものが消える（蒸留は生存条件）。
+    stop_grace_period: 60s
     restart: unless-stopped
 
 volumes:

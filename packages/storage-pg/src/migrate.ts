@@ -10,6 +10,10 @@ import type { Db } from './db.js';
  * 「先にマイグレーションを流す」という人間の手順を足した時点でそれが崩れる。
  * 定義の実体は schema.ts で、ここはその DDL 表現。ずれれば pg のテストが落ちる
  * （storage-pg のテストは実 PostgreSQL（PGlite）で全 IF を通す）。
+ *
+ * 列を足すときは `alter table ... add column if not exists` をこの配列の末尾へ
+ * 加える（既存の DB にも順に当たる）。**既存行の意味を変える変更を黙って混ぜない**
+ * — それは記憶の書き換えであり、人間の確認が要る。
  */
 const STATEMENTS = [
   `create table if not exists memory (
