@@ -90,6 +90,7 @@
   - ネットワークも分けてある（`data`: daemon↔db / `control`: daemon↔runner）。**runner から db は名前解決すらできない**。ここを1つに戻すと、鍵を持たないという境界が「鍵を渡していないだけ」に薄まる
   - マネージャーへ渡す MCP 設定・プロジェクト設定は `workspace/`（＝runner コンテナの `/workspace`）に置く。cwd がそこなので `settingSources: ['project','local']` がそのまま拾う
   - 境界の確認は `docker compose exec runner env | grep ALTEROID_DATABASE_URL`（出ないこと）と `docker compose exec runner getent hosts db`（引けないこと）
+  - マネージャーに PR を出させるなら `.env` に `GH_TOKEN` と `GIT_AUTHOR_*` / `GIT_COMMITTER_*` を足す（runner へ渡る）。無くても公開リポジトリの clone は通る。手順とスコープは [railway/README.md](./railway/README.md) の「マネージャーに GitHub を渡す」。**`gh` の版は固定していない** — 固定すると人間の手元より古い `gh` を配ることになり、その遅れがデグレードになる
 - ホスティング（Railway）の手順は [railway/README.md](./railway/README.md)。**同じ3つを Service に写すだけだが、境界が2か所ゆるむ**（サービス間でボリュームを共有できないので制御面が TCP になる／`*.railway.internal` がフラットなので runner から db が名前解決できる）。ゆるみの内訳と、それでも残る守りは同文書に書いてある。**素の合鍵と `ALTEROID_DATABASE_URL` を Shared Variables に置かないこと** — 置いた瞬間に runner へ降りて、残った守りが消える
 - pg ドライバのテストは PGlite（インプロセスの実 PostgreSQL）で回る。CI に DB を用意する必要はないが、**偽の DB で代用しない**（SQL と索引と冪等性ごと確かめる意味が消える）
 - デーモン再起動時の引き取りは2通り。**runner が生きていれば繋ぎ直すだけ**（マネージャーは走り続けている）、**runner ごと落ちていれば実際に resume する**（JobStore の `session_id` ＋ 預かった生ログ）。どちらもクローンの受信箱へ知らせる

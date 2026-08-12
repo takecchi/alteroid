@@ -193,11 +193,11 @@ su -s /bin/sh worker -c "curl -s http://127.0.0.1:4518/livez"
 
 クローンに「実装して PR を出して」と頼むには、マネージャーの手元に**人間が Claude Code に渡しているものと同じ**3つが揃っている必要がある。
 
-| 要るもの       | 置き場                       | 状態                                              |
-| -------------- | ---------------------------- | ------------------------------------------------- |
-| `gh` コマンド  | イメージ（`Dockerfile`）     | 同梱済み。git の credential helper も配線済み     |
-| 書き込みの鍵   | **`runner` の Service 変数** | `GH_TOKEN` を置く（下記）                         |
-| コミットの身元 | **`runner` の Service 変数** | `GIT_AUTHOR_*` / `GIT_COMMITTER_*` を置く（下記） |
+| 要るもの       | 置き場                       | 状態                                                                                  |
+| -------------- | ---------------------------- | ------------------------------------------------------------------------------------- |
+| `gh` コマンド  | イメージ（`Dockerfile`）     | 同梱済み（版は固定しない。ビルドし直せば上がる）。git の credential helper も配線済み |
+| 書き込みの鍵   | **`runner` の Service 変数** | `GH_TOKEN` を置く（下記）                                                             |
+| コミットの身元 | **`runner` の Service 変数** | `GIT_AUTHOR_*` / `GIT_COMMITTER_*` を置く（下記）                                     |
 
 **daemon 側には置かない。** これはクローンの鍵ではなく**マネージャー自身の道具の鍵**である（クローンの道具はマネージャーであって git ではない）。記憶ストアの鍵と逆で、下へ渡すのが正しい。
 
@@ -218,14 +218,22 @@ GitHub → Settings → Developer settings → Personal access tokens → **Fine
 ### 置く
 
 ```bash
-railway variable set GH_TOKEN=github_pat_xxx --service runner --skip-deploys
+# 鍵は stdin から。引数で渡すとシェル履歴とプロセス一覧に残る
+printf %s 'github_pat_xxx' | railway variable set GH_TOKEN --stdin --service runner --skip-deploys
+
 railway variable set GIT_AUTHOR_NAME=takecchi --service runner --skip-deploys
 railway variable set GIT_AUTHOR_EMAIL=takeaki.kobayashi@gmail.com --service runner --skip-deploys
 railway variable set GIT_COMMITTER_NAME=takecchi --service runner --skip-deploys
 railway variable set GIT_COMMITTER_EMAIL=takeaki.kobayashi@gmail.com --service runner
 ```
 
-`GIT_*` を**環境変数で**渡すのは、`git config` を焼くと器を作り直すたびに消えるからである（git は設定ファイルが無くてもこの4つを読む）。置き忘れると commit が `Please tell me who you are` で失敗する。
+**Shared Variables に置かない。** `runner` の Service 変数として置く（daemon にも降りる場所へ置くと、記憶の鍵と同じ器に GitHub の書き込み権が並ぶ）。
+
+`GIT_*` を**環境変数で**渡すのは、`git config` を焼くと器を作り直すたびに消えるからである（git は設定ファイルが無くてもこの4つを読む）。置き忘れると commit が `Please tell me who you are` で失敗する。**空文字で置くのは未設定より悪い** — git は `empty ident name` で即座に落ちる。置かないなら変数ごと消す。
+
+### ローカル（`docker compose`）でも同じ
+
+同じ5つを `.env` に置けば `runner` へ渡る（`compose.yaml` の runner の `environment`）。確認は `docker compose exec -u 1001 runner gh auth status`。
 
 ### 通っているか確かめる
 
