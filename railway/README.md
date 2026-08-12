@@ -112,6 +112,14 @@ Config as Code のパスは Root Directory を見ないので、**リポジト�
 - `ALTEROID_BIND` — デーモンの API は**叩けばクローンのターンが起きる実行の口**で、認証が無い。127.0.0.1 のままにする
 - public domain（Generate Domain）— 上と同じ理由。外から使いたくなったら、手前に境界（認証・トンネル・リバースプロキシ）を置くのが先
 
+**置いたら必ず名前を検算する。** ダッシュボードへ貼るときに前後の空白が混ざると、Railway は `RAILWAY_RUN_UID` と ` RAILWAY_RUN_UID` を**別の変数として保存する**。後者は誰も読まないので「設定したのに効かない」になる。
+
+```bash
+railway variable list --service runner --json | python3 -c "import json,sys; [print(repr(k)) for k in json.load(sys.stdin)]"
+```
+
+`' RAILWAY_RUN_UID'` のように引用符の内側に空白が見えたら消して置き直す（`railway variable delete " RAILWAY_RUN_UID" --service runner`）。
+
 ### 4. デプロイ
 
 **`runner` を先に上げる。** daemon は起動時に runner の `/health` へ名乗りを聞きに行き、繋がらなければ落ちる（鍵無しで繋ぐくらいなら起動しない設計）。`restartPolicyType: ALWAYS` なので放っておいても収束するが、順番どおりなら1回で上がる。
@@ -152,19 +160,45 @@ chat の中で使えるもの:
 
 ### 6. 上がったあとに確かめること
 
-境界が本当に立っているかは、思い込みではなく runner の中から確かめる。
+境界が本当に立っているかは、思い込みではなく runner の中から確かめる。**素の `grep` は使わない** — `RAILWAY_GIT_COMMIT_MESSAGE` にこの文書の一部が入るので、変数名を含む文章に当たって「有る」ように見える。行頭で固定する。
 
 ```bash
-railway ssh --service runner
-env | grep ALTEROID_DATABASE_URL     # 何も出ないこと（記憶ストアの鍵が無い）
-env | grep ALTEROID_RUNNER_TOKEN     # _SHA256 だけが出ること（素の合鍵が無い）
+railway ssh --service runner -- sh -lc '
+env | grep -qE "^ALTEROID_DATABASE_URL=" && echo "!! DB の鍵がある" || echo "DB の鍵は無い"
+env | grep -qE "^ALTEROID_RUNNER_TOKEN="  && echo "!! 素の合鍵がある" || echo "素の合鍵は無い（sha256 だけ）"
+
+# uid 1001（マネージャーと同じ主体）から制御面 → 401 であること
+su -s /bin/sh worker -c "curl -s -o /dev/null -w %{http_code}\\\\n http://127.0.0.1:4518/managers"
+
+# 生存確認だけは鍵なしで通る（制御面の情報は返さない）
+su -s /bin/sh worker -c "curl -s http://127.0.0.1:4518/livez"
+'
 ```
+
+実測（2026-08）: 制御面は **401**、`/livez` は `{"ok":true}`、runner の環境変数は `ALTEROID_RUNNER_TOKEN_SHA256` だけで素の合鍵と `ALTEROID_DATABASE_URL` は無い。つまり M4 受け入れ基準4は Railway でも成立している。
+
+いっぽう `getent hosts postgres.railway.internal` は `fd12:…` を返す（＝「先に読む」2の弱まりが実測でも出る）。db へ届く経路はあるが、鍵が無い。
+
+`railway ssh` は**サービスの実行 UID とは無関係に root で入る**（`RAILWAY_RUN_UID` を設定していない `app` でも `uid=0`）。だから上のように `su` で降りてから叩くこと。root のまま叩いた 401 は「マネージャーから叩けない」の証拠にならない。
 
 能力が落ちていないことも確かめる（境界を入れた側が示す義務。north_star「立ち戻るための問い」最終項）。
 
 - `alteroid chat` でマネージャーへ委譲し、git を叩く作業が完遂すること
 - 許可確認がクローン経由で `/approvals` に届き、`/answer` で**その仕事だけ**が再開すること
 - `app` を再デプロイしても同じ人格で応答し、走行中だったマネージャーを把握していること
+
+---
+
+## 症状から引く
+
+| 症状                                                             | 原因                                                                                                                                                                                              |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `railway ssh` が一瞬で切れる（プロンプトは出る）                 | そのコンテナが再起動を繰り返している。ssh はデプロイに繋がっているので、器が入れ替わるとセッションごと落ちる。**ssh の問題ではない**ので `railway logs` を見る                                    |
+| `alteroidd: 起動に失敗しました: TypeError: fetch failed`         | daemon が runner の `/health` へ届いていない。runner のログを見る（大抵 runner が上がっていない）。次に `ALTEROID_RUNNER_URL` のサービス名と `ALTEROID_RUNNER_BIND=::` を確認する                 |
+| `alteroid-runner: ALTEROID_RUNNER_CHILD_UID が指定されているが…` | runner が root で走っていない。`RAILWAY_RUN_UID=0` が無い／名前に空白が混ざっている。**これは異常ではなく設計**で、同じ UID のまま走ると子プロセスが制御面に手を届かせるので、runner は起動を拒む |
+| 変数を設定したのに効かない                                       | 名前の前後に空白。`railway variable list --json` で `repr` して検算する（上の「置いたら必ず名前を検算する」）                                                                                     |
+| 日報が想定と違う時刻に出る                                       | `TZ` 未設定。既定の `22:00` は**コンテナのローカル時刻**なので、UTC のまま動くと日本時間の翌 7:00 になる                                                                                          |
+| `env \| grep ALTEROID_DATABASE_URL` が runner で何か返す         | 慌てる前に行頭固定で取り直す。`RAILWAY_GIT_COMMIT_MESSAGE` にこの文書の一部が入っている                                                                                                           |
 
 ---
 
