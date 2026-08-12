@@ -86,6 +86,7 @@
 - [x] runner は安定した `runner_id` を持ち、JobStore に `manager_id → runner_id → session_id → workspace locator` を永続化する
 - [x] デーモン再起動時、**走行中だったマネージャーは実際に resume する**（runner が生きていれば繋ぎ直し、器ごと落ちていれば預かった生ログから再開）。待機中（`done`）の遅延 resume とは分ける
 - [x] Dockerfile + docker compose（daemon + manager-runner + postgres の3コンテナ）。認証は `CLAUDE_CODE_OAUTH_TOKEN`（`claude setup-token`）をシークレット注入
+- [x] **制御面の分離**: runner API はマネージャーから叩けない（TCP を開かず Unix ソケットのみ、ソケットはデーモン UID の 0600、合鍵は runner にハッシュだけ、SDK 子プロセスは別 UID）。マネージャーが自分の許可確認に自分で答えられないことを実際の子プロセスから検証する
 - [x] 記憶ストア認証情報の分離を検証: runner と子プロセスに DB 接続情報が**無く**、runner から DB への経路も**無い**こと
 
 **受け入れ基準**:
@@ -95,6 +96,8 @@
    - manager から daemon の `/proc`・環境変数・人格データが見えない
    - manager / runner に Persona 用 DB 資格情報が無い
    - runner から Persona 用 DB へ接続できない
+4. マネージャープロセスから runner の制御面（list / answer / send / stop / resume / transcript）に到達できない
+   - 自分宛の許可確認に自分で答えられない（クローンと人間を迂回できない）
 
 ## M5 — 複数 manager-runner と水平スケール
 

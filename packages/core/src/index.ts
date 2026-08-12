@@ -58,7 +58,12 @@ export {
  * デーモンは `RunnerRegistry` しか見ない — 固定 URL も runner のローカルパスも
  * 前提にしない（docs/architecture.md「プロセス境界」）。
  */
-export { createRunnerHost, type RunnerHost, type RunnerHostOptions } from './runner.js';
+export {
+  createRunnerHost,
+  type RunnerChildUser,
+  type RunnerHost,
+  type RunnerHostOptions,
+} from './runner.js';
 export { createLocalRunner, type LocalRunnerOptions } from './runner-local.js';
 export {
   createRunnerRegistry,

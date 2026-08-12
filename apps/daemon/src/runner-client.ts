@@ -6,6 +6,9 @@ import type {
   RunnerResumeCommand,
   RunnerStartCommand,
 } from '@alteroid/core';
+import { request as httpRequest } from 'node:http';
+import { Readable } from 'node:stream';
+
 import { runnerEventSchema, runnerManagerStateSchema } from '@alteroid/core';
 
 /**
@@ -16,11 +19,27 @@ import { runnerEventSchema, runnerManagerStateSchema } from '@alteroid/core';
  * 経路でデーモンの API（＝記憶）へ届くようになる（architecture.md「非対称な可視性」）。
  */
 export interface HttpRunnerOptions {
+  /** `http://runner:4518` か `unix:/run/alteroid/runner.sock`。 */
   baseUrl: string;
-  /** 主にテスト用。既定はグローバルの `fetch`。 */
+  /**
+   * 制御面の合鍵。**デーモンだけが素の値を持つ。**
+   *
+   * runner 側にあるのは sha256 だけなので、runner の中で走るマネージャーが
+   * `/proc/1/environ` を読めたとしても、この鍵は作れない。鍵が無ければ
+   * `POST /managers/:id/answers` は通らない — マネージャーが自分宛の許可確認に
+   * 自分で `allow` を返す経路を塞ぐ、いちばん内側の一枚である。
+   */
+  token: string;
+  /** 主にテスト用。既定はグローバルの `fetch`（Unix ソケットなら node:http）。 */
   fetchFn?: typeof fetch;
   /** ストリームが切れたときに待つミリ秒。 */
   retryDelayMs?: number;
+}
+
+/** `unix:/path/to.sock` を取り出す（無ければ TCP）。 */
+function socketPathOf(baseUrl: string): string | null {
+  const match = /^unix:(?:\/\/)?(.+)$/.exec(baseUrl);
+  return match?.[1] ?? null;
 }
 
 /** 接続して runner_id を確かめてから使う（宛先を台帳に残すため）。 */
@@ -39,15 +58,34 @@ class HttpRunner implements RunnerClient {
   runnerId = 'runner-primary';
   workspacePath = '';
   readonly #baseUrl: string;
+  readonly #socketPath: string | null;
+  readonly #token: string;
   readonly #fetch: typeof fetch;
   readonly #retryDelayMs: number;
   #controller: AbortController | null = null;
   #closed = false;
 
   constructor(options: HttpRunnerOptions) {
-    this.#baseUrl = options.baseUrl.replace(/\/$/, '');
-    this.#fetch = options.fetchFn ?? fetch;
+    this.#socketPath = socketPathOf(options.baseUrl);
+    // ソケットのときも URL の形は要る（ホスト名は使われない）
+    this.#baseUrl =
+      this.#socketPath === null ? options.baseUrl.replace(/\/$/, '') : 'http://runner';
+    this.#token = options.token;
+    this.#fetch = options.fetchFn ?? ((input, init) => this.#send(input, init));
     this.#retryDelayMs = options.retryDelayMs ?? 1000;
+  }
+
+  /**
+   * Unix ソケット越しにも喋れる送信口。
+   *
+   * グローバルの `fetch` はソケットへ繋げないので、ソケットのときだけ node:http を
+   * 使う。**ソケットにするのは、マネージャーと同じ器の中に TCP の口を開けない
+   * ため**である（開いていれば `curl 127.0.0.1` の宛先になる）。
+   */
+  #send(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+    if (this.#socketPath === null) return fetch(input, init);
+    const url = new URL(typeof input === 'string' ? input : input.toString());
+    return requestOverSocket(this.#socketPath, url, init ?? {});
   }
 
   /** 名乗りを聞く。ここで得た runner_id が `manager_id → runner_id` の宛先になる。 */
@@ -87,7 +125,7 @@ class HttpRunner implements RunnerClient {
     const controller = new AbortController();
     this.#controller = controller;
     const response = await this.#fetch(`${this.#baseUrl}/events`, {
-      headers: { accept: 'text/event-stream' },
+      headers: { accept: 'text/event-stream', authorization: `Bearer ${this.#token}` },
       signal: controller.signal,
     });
     if (!response.ok || response.body === null) {
@@ -166,6 +204,7 @@ class HttpRunner implements RunnerClient {
     try {
       const response = await this.#fetch(
         `${this.#baseUrl}/managers/${encodeURIComponent(managerId)}/transcript`,
+        { headers: { authorization: `Bearer ${this.#token}` } },
       );
       if (!response.ok) return null;
       return await response.text();
@@ -187,9 +226,11 @@ class HttpRunner implements RunnerClient {
   async #call(method: string, path: string, body?: unknown): Promise<Response> {
     const response = await this.#fetch(`${this.#baseUrl}${path}`, {
       method,
-      ...(body === undefined
-        ? {}
-        : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+      headers: {
+        authorization: `Bearer ${this.#token}`,
+        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
     if (!response.ok) {
       const detail = await response.text().catch(() => '');
@@ -197,4 +238,42 @@ class HttpRunner implements RunnerClient {
     }
     return response;
   }
+}
+
+/** node:http で Unix ソケットへ投げ、`fetch` と同じ形の応答に均す。 */
+function requestOverSocket(socketPath: string, url: URL, init: RequestInit): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const headers = new Headers(init.headers ?? {});
+    const outgoing: Record<string, string> = {};
+    headers.forEach((value, key) => {
+      outgoing[key] = value;
+    });
+
+    const req = httpRequest(
+      {
+        socketPath,
+        path: `${url.pathname}${url.search}`,
+        method: init.method ?? 'GET',
+        headers: outgoing,
+      },
+      (res) => {
+        // 本文はそのまま流す（SSE は開いたまま読み続ける）
+        const body = Readable.toWeb(res) as ReadableStream<Uint8Array>;
+        resolve(
+          new Response(body, {
+            status: res.statusCode ?? 500,
+            headers: Object.entries(res.headers).flatMap(([key, value]) =>
+              typeof value === 'string' ? [[key, value] as [string, string]] : [],
+            ),
+          }),
+        );
+      },
+    );
+
+    req.on('error', reject);
+    const signal = init.signal;
+    if (signal) signal.addEventListener('abort', () => req.destroy(), { once: true });
+    if (typeof init.body === 'string') req.write(init.body);
+    req.end();
+  });
 }

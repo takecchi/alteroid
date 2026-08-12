@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
@@ -53,14 +54,40 @@ export const WORKER_AGENT_NAME = 'worker';
 /**
  * runner の子プロセスへ渡さない環境変数。
  *
- * 分離後の runner は記憶ストアの鍵をそもそも持たないので、ここは**二重の底**である。
- * 同一プロセスで動かすローカル構成（インプロセス runner）では、ここだけが頼りになる。
+ * 記憶ストアの鍵（ローカルのパス / DB 接続情報）に加えて、**runner の制御面の鍵**も
+ * 落とす。マネージャーが runner の API を叩けると、自分宛の許可確認に自分で
+ * `allow` を返せてしまう — クローンも人間も通らずに権限境界を迂回できる
+ * （「マネージャーから見たユーザーはクローン」という配線が崩れる）。
+ *
+ * ここは**二重の底**である。本命は実行環境の分離（別コンテナ・別 UID・鍵の非配布）で、
+ * ここはその内側でもう一枚落としているだけ。**ここだけを頼りにしないこと。**
  */
 export const WITHHELD_ENV_KEYS = [
   'ALTEROID_HOME',
   'ALTEROID_PORT',
   'ALTEROID_DATABASE_URL',
+  'ALTEROID_RUNNER_TOKEN',
+  'ALTEROID_RUNNER_TOKEN_SHA256',
+  'ALTEROID_RUNNER_SOCKET',
 ] as const;
+
+/**
+ * SDK 子プロセス（マネージャーと作業者）を走らせる UID。
+ *
+ * **同じ UID で走らせると、子プロセスは runner の `/proc/1/environ` を読み、
+ * 制御面の鍵も、Unix ソケットへの接続権も手に入れる。** 分けて初めて、
+ * 「マネージャーは自分の許可確認に答えられない」が構造として成立する。
+ *
+ * 落とすには特権が要るので、runner 本体は root で走る（子だけを降ろす）。
+ * 特権が無いのに設定されていたら、黙って同じ UID で走らせずに落とすこと —
+ * 境界があるつもりで無い状態が、いちばん危ない。
+ */
+export interface RunnerChildUser {
+  uid: number;
+  gid: number;
+  /** 子プロセスの `HOME`。root の home を渡すと書けずに落ちる。 */
+  home?: string;
+}
 
 export interface RunnerHostOptions {
   /** 安定した識別子。デーモンが `manager_id → runner_id` を台帳に残す。 */
@@ -75,6 +102,8 @@ export interface RunnerHostOptions {
   env?: NodeJS.ProcessEnv;
   /** `WITHHELD_ENV_KEYS` に足して伏せる鍵。 */
   withheldEnvKeys?: readonly string[];
+  /** SDK 子プロセスを別 UID で走らせる（コンテナ構成の既定）。 */
+  childUser?: RunnerChildUser;
 }
 
 export interface RunnerHost {
@@ -102,6 +131,7 @@ class Host implements RunnerHost {
   readonly #queryFn: typeof query;
   readonly #env: NodeJS.ProcessEnv;
   readonly #withheldEnvKeys: readonly string[];
+  readonly #childUser: RunnerChildUser | undefined;
   readonly #sessions = new Map<string, RunnerSession>();
 
   constructor(options: RunnerHostOptions) {
@@ -111,6 +141,7 @@ class Host implements RunnerHost {
     this.#queryFn = options.queryFn ?? query;
     this.#env = options.env ?? process.env;
     this.#withheldEnvKeys = [...WITHHELD_ENV_KEYS, ...(options.withheldEnvKeys ?? [])];
+    this.#childUser = options.childUser;
   }
 
   #create(managerId: string, request: string, cwd: string): RunnerSession {
@@ -122,6 +153,7 @@ class Host implements RunnerHost {
       queryFn: this.#queryFn,
       env: this.#env,
       withheldEnvKeys: this.#withheldEnvKeys,
+      ...(this.#childUser === undefined ? {} : { childUser: this.#childUser }),
       onClosed: () => this.#sessions.delete(managerId),
     });
     this.#sessions.set(managerId, session);
@@ -209,6 +241,7 @@ interface RunnerSessionOptions {
   queryFn: typeof query;
   env: NodeJS.ProcessEnv;
   withheldEnvKeys: readonly string[];
+  childUser?: RunnerChildUser;
   onClosed: () => void;
 }
 
@@ -220,6 +253,7 @@ class RunnerSession {
   readonly #queryFn: typeof query;
   readonly #env: NodeJS.ProcessEnv;
   readonly #withheldEnvKeys: readonly string[];
+  readonly #childUser: RunnerChildUser | undefined;
   readonly #onClosed: () => void;
 
   readonly #input: SDKUserMessage[] = [];
@@ -243,6 +277,7 @@ class RunnerSession {
     this.#queryFn = options.queryFn;
     this.#env = options.env;
     this.#withheldEnvKeys = options.withheldEnvKeys;
+    this.#childUser = options.childUser;
     this.#onClosed = options.onClosed;
   }
 
@@ -368,6 +403,11 @@ class RunnerSession {
       // 鍵を runner に置かないため）。
       sessionStore: this.#sessionStore(),
       ...(resume === undefined ? {} : { resume }),
+      // 子プロセスを別 UID へ降ろす。**能力は1つも削らない** — 道具も preset も
+      // そのままで、変えるのは実行する主体だけである（実行環境の境界）。
+      ...(this.#childUser === undefined
+        ? {}
+        : { spawnClaudeCodeProcess: (options) => this.#spawnAsChildUser(options) }),
       canUseTool: (toolName, input, extra) => this.#onPermission(toolName, input, extra),
       hooks: {
         PostToolUse: [{ hooks: [(input) => this.#onPostToolUse(input)] }],
@@ -403,6 +443,33 @@ class RunnerSession {
         return this.#seed ?? null;
       },
     };
+  }
+
+  /**
+   * SDK の子プロセスを別 UID で起こす。
+   *
+   * `HOME` を差し替えるのは、root の home のまま降ろすと設定を書けずに落ちるから
+   * である。**能力を削るのではなく、走らせる主体を変えているだけ**であることに注意。
+   */
+  #spawnAsChildUser(options: {
+    command: string;
+    args: string[];
+    cwd?: string;
+    env: Record<string, string | undefined>;
+    signal: AbortSignal;
+  }) {
+    const user = this.#childUser as RunnerChildUser;
+    return spawn(options.command, options.args, {
+      ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+      env: {
+        ...options.env,
+        ...(user.home === undefined ? {} : { HOME: user.home }),
+      },
+      signal: options.signal,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      uid: user.uid,
+      gid: user.gid,
+    });
   }
 
   /** 記憶ストアの所在は子プロセスへ渡さない（渡さなければ構造的に触れない）。 */

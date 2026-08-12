@@ -71,13 +71,23 @@ RUN ln -sf /app/apps/cli/dist/index.js /usr/local/bin/alteroid \
 ENV ALTEROID_HOME=/data/alteroid
 ENV ALTEROID_WORKSPACE=/workspace
 RUN mkdir -p /data/alteroid /workspace \
-  && chown -R node:node /data /workspace /app
+  && chown -R node:node /data /app
+
+# マネージャーと作業者を走らせる UID。**runner 本体（root）とは別にする。**
+# 同じ UID だと、子プロセスが runner の /proc/1/environ を読み、制御面のソケットにも
+# 繋げてしまう — 自分宛の許可確認に自分で allow を返せる状態になる。
+RUN useradd --uid 1001 --create-home --shell /usr/sbin/nologin worker \
+  && chown -R worker:worker /workspace
+ENV ALTEROID_RUNNER_CHILD_UID=1001
+ENV ALTEROID_RUNNER_CHILD_GID=1001
+ENV ALTEROID_RUNNER_CHILD_HOME=/home/worker
 
 # 待ち受けは 127.0.0.1 のまま（既定）。コンテナの外から叩きたい場合は
 # ALTEROID_BIND を開けたうえで、手前に境界（認証・トンネル）を置くこと。
 ENV ALTEROID_PORT=4517
-ENV ALTEROID_RUNNER_PORT=4518
 
+# 既定はデーモン（＝非特権）。runner だけは compose 側で root へ上げる
+# （子プロセスを別 UID へ降ろすのに特権が要るため。降ろした先が worker である）。
 USER node
 
 # 同じ像から2つの役を起こす（compose が command で選ぶ）:

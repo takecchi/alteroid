@@ -21,7 +21,13 @@ import {
 import { createRunnerApp, Outbox } from '@alteroid/runner';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { createHash } from 'node:crypto';
+
 import { createHttpRunner } from './runner-client.js';
+
+/** 制御面の合鍵。runner が持つのは sha256 だけである。 */
+const TOKEN = 'test-runner-token';
+const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
 
 /**
  * デーモン ↔ manager-runner を**実際の HTTP 境界越しに**通す統合テスト（roadmap M4）。
@@ -165,10 +171,11 @@ async function rig(options: { stores?: Stores; sessionId?: string } = {}): Promi
     queryFn: fn,
     env: { PATH: '/usr/bin', ALTEROID_DATABASE_URL: 'postgres://secret@db/alteroid' },
   });
-  const app = createRunnerApp({ host, outbox });
+  const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
 
   const client = await createHttpRunner({
     baseUrl: 'http://runner.test',
+    token: TOKEN,
     fetchFn: fetchInto(app),
   });
 
@@ -315,12 +322,13 @@ describe('デーモン ↔ manager-runner（HTTP 境界）', () => {
       emit: (event) => outbox.push(event),
       queryFn: fn,
     });
-    const app = createRunnerApp({ host, outbox });
+    const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
     const stores = createMemoryStores();
 
     const connect = async (): Promise<ManagerPool> => {
       const client = await createHttpRunner({
         baseUrl: 'http://runner.test',
+        token: TOKEN,
         fetchFn: fetchInto(app),
       });
       return createManagerPool({
@@ -400,6 +408,64 @@ describe('デーモン ↔ manager-runner（HTTP 境界）', () => {
     ).toBe(true);
   });
 
+  it('Unix ソケット越しでも同じように動く（コンテナ構成の実経路）', async () => {
+    // コンテナでは TCP を開かない（同じ器のマネージャーに curl の宛先を作らない）。
+    // その経路自体を通しておかないと、テストだけが通る配線になる。
+    const { mkdtempSync, rmSync, chmodSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { createAdaptorServer } = await import('@hono/node-server');
+
+    const dir = mkdtempSync(join(tmpdir(), 'alteroid-sock-'));
+    const socketPath = join(dir, 'runner.sock');
+    const { fn, sessions } = fakeSdk('sess-sock');
+    const outbox = new Outbox();
+    const host = createRunnerHost({
+      runnerId: 'runner-primary',
+      workspacePath: '/workspace',
+      emit: (event) => outbox.push(event),
+      queryFn: fn,
+    });
+    const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+    const server = createAdaptorServer({ fetch: app.fetch });
+    await new Promise<void>((resolve) => server.listen({ path: socketPath }, resolve));
+    chmodSync(socketPath, 0o600);
+
+    try {
+      const client = await createHttpRunner({ baseUrl: `unix:${socketPath}`, token: TOKEN });
+      const stores = createMemoryStores();
+      const inbox: InboxEvent[] = [];
+      const pool = createManagerPool({
+        stores,
+        post: (event) => inbox.push(event),
+        runners: createRunnerRegistry([client]),
+      });
+
+      const summary = await pool.start({ request: 'ソケット越しに委譲' });
+      expect(summary.runnerId).toBe('runner-primary');
+
+      // 出来事（SSE）もソケットを流れて届く
+      await expect
+        .poll(async () => (await stores.jobs.listJobs())[0]?.sessionId, { timeout: 3000 })
+        .toBe('sess-sock');
+
+      // 許可確認の往復も通る
+      await expect.poll(() => sessions.length, { timeout: 2000 }).toBe(1);
+      const asked = (sessions[0] as FakeSession).ask('Bash', 'req-sock');
+      await expect
+        .poll(() => inbox.some((event) => event.type === 'manager_message'), { timeout: 3000 })
+        .toBe(true);
+      await pool.send(summary.managerId, 'よい', { decision: 'allow', requestId: 'req-sock' });
+      expect(await asked).toEqual({ behavior: 'allow' });
+
+      await pool.stop();
+    } finally {
+      await host.shutdown().catch(() => undefined);
+      server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('繋いでいない間に降りてきた確認も、繋ぎ直したときに届く（宙吊りにしない）', async () => {
     const { fn, sessions } = fakeSdk('sess-queue');
     const outbox = new Outbox();
@@ -409,12 +475,13 @@ describe('デーモン ↔ manager-runner（HTTP 境界）', () => {
       emit: (event) => outbox.push(event),
       queryFn: fn,
     });
-    const app = createRunnerApp({ host, outbox });
+    const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
     const stores = createMemoryStores();
     const inbox: InboxEvent[] = [];
 
     const client = await createHttpRunner({
       baseUrl: 'http://runner.test',
+      token: TOKEN,
       fetchFn: fetchInto(app),
     });
     const pool = createManagerPool({
@@ -430,6 +497,7 @@ describe('デーモン ↔ manager-runner（HTTP 境界）', () => {
 
     const client2 = await createHttpRunner({
       baseUrl: 'http://runner.test',
+      token: TOKEN,
       fetchFn: fetchInto(app),
     });
     const revived = createManagerPool({

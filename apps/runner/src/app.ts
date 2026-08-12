@@ -1,3 +1,5 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
+
 import type { RunnerEvent, RunnerHost } from '@alteroid/core';
 import {
   runnerAnswerCommandSchema,
@@ -7,6 +9,7 @@ import {
 } from '@alteroid/core';
 import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
+import { createMiddleware } from 'hono/factory';
 import { streamSSE } from 'hono/streaming';
 
 /**
@@ -24,6 +27,39 @@ export interface RunnerAppDeps {
   host: RunnerHost;
   /** デーモンが繋いでいない間の出来事を溜める箱。 */
   outbox: Outbox;
+  /**
+   * 制御面の合鍵の **sha256（16進）**。デーモンだけが元の値を持つ。
+   *
+   * **なぜハッシュだけを持つのか。** マネージャーは runner の中で走る子プロセスで
+   * あり、素の鍵を runner の環境変数に置けば `/proc/1/environ` から読める。読めた
+   * 瞬間、マネージャーは `POST /managers/:id/answers` で**自分宛の許可確認に自分で
+   * allow を返せる** — クローンも人間も通らずに権限境界を迂回できる。
+   * ハッシュしか無ければ、読めても鍵は作れない。
+   *
+   * これは能力の制限ではなく、制御面の本人確認である（north_star 禁止2の「実行環境の
+   * 境界」）。マネージャーの道具は1つも減っていない。
+   */
+  tokenSha256: string;
+}
+
+const AUTH_SCHEME = /^Bearer\s+(.+)$/i;
+
+function sha256(value: string): Buffer {
+  return createHash('sha256').update(value, 'utf8').digest();
+}
+
+/** 一致の判定は長さを揃えて定数時間で（総当たりに時間の手がかりを与えない）。 */
+function matches(header: string | undefined, expectedHex: string): boolean {
+  const token = AUTH_SCHEME.exec(header ?? '')?.[1];
+  if (token === undefined) return false;
+  let expected: Buffer;
+  try {
+    expected = Buffer.from(expectedHex, 'hex');
+  } catch {
+    return false;
+  }
+  if (expected.length !== 32) return false;
+  return timingSafeEqual(sha256(token), expected);
 }
 
 /**
@@ -68,7 +104,28 @@ export class Outbox {
 export function createRunnerApp(deps: RunnerAppDeps) {
   const { host, outbox } = deps;
 
+  /**
+   * 制御面の門番。**runner の中から叩けても、鍵が無ければ通らない。**
+   *
+   * ここを外すと、マネージャーが `curl` で自分の `requestId` を調べ、自分に
+   * `allow` を返せる（権限境界の完全な迂回）。
+   */
+  const control = createMiddleware(async (c, next) => {
+    if (!matches(c.req.header('authorization'), deps.tokenSha256)) {
+      return c.json({ error: 'unauthorized' as const }, 401);
+    }
+    await next();
+  });
+
   const app = new Hono()
+    /** 器の生存確認だけ。制御面の情報は何も返さない（だから鍵を要求しない）。 */
+    .get('/livez', (c) => c.json({ ok: true }))
+
+    .use('/health', control)
+    .use('/events', control)
+    .use('/managers', control)
+    .use('/managers/*', control)
+
     .get('/health', (c) =>
       c.json({
         ok: true,

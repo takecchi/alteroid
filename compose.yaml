@@ -1,31 +1,44 @@
 # ローカルと同じものを、コンテナ + PostgreSQL で常駐させる（roadmap M4）。
 #
 #   claude setup-token          # 長期トークンを取る（人間が一度だけ）
-#   cat > .env <<'EOF'
+#   TOKEN=$(openssl rand -hex 32)
+#   cat > .env <<EOF
 #   CLAUDE_CODE_OAUTH_TOKEN=...
-#   POSTGRES_PASSWORD=...       # 推測できない値にする（既定値は用意しない）
+#   POSTGRES_PASSWORD=$(openssl rand -hex 16)
+#   ALTEROID_RUNNER_TOKEN=$TOKEN
+#   ALTEROID_RUNNER_TOKEN_SHA256=$(printf %s "$TOKEN" | shasum -a 256 | cut -d' ' -f1)
 #   EOF
-#   mkdir -p workspace          # マネージャーが触る場所。所有者を自分に揃える
 #   docker compose up -d
 #   docker compose exec app alteroid chat
+#
+# runner に渡すのが**ハッシュだけ**なのは、runner の中で走るマネージャーが
+# `/proc/1/environ` を読んでも鍵を作れないようにするためである。
 #
 # ## なぜ3つに分かれているか
 #
 # ```
-#   app（デーモン）──────────── db（PostgreSQL）    ← data ネットワーク
+#   app（デーモン・uid 1000）──── db（PostgreSQL）   ← data ネットワーク
 #     ├ クローン（Fable）                             記憶・日誌・ジョブ・生ログ
-#     └ 記憶ストアの鍵を持つ**唯一の**プロセス
-#     │
-#     └───────────── runner（manager-runner）        ← control ネットワーク
-#                      ├ マネージャー（Opus）＋作業者（Sonnet）
-#                      ├ workspace / MCP 設定 / OAuth トークン
-#                      └ **記憶ストアの鍵も、DB への経路も持たない**
+#     └ 記憶ストアの鍵と、runner の合鍵を持つ**唯一の**プロセス
+#     │  Unix ソケット（共有 volume。mode 0600 / owner uid 1000）
+#     └───────────── runner（root）
+#                      └ マネージャー（Opus）＋作業者（Sonnet）は **uid 1001**
+#                        ├ workspace / MCP 設定 / OAuth トークン
+#                        └ **記憶ストアの鍵も、DB への経路も、制御面の鍵も持たない**
 # ```
 #
 # 同じ器で走らせている限り、マネージャーは `/proc/1/environ` からデーモンの環境
 # 変数（＝DB 接続情報）を読める。ツールを削って塞ぐのは禁止（north_star 禁止2）
-# なので、**実行環境を分けて**塞ぐ。ネットワークも分けてあるので、runner から
-# db への経路はそもそも存在しない。
+# なので、**実行環境を分けて**塞ぐ。
+#
+# **制御面（runner API）もマネージャーから触らせない。** 触れると、自分宛の許可確認に
+# 自分で `allow` を返せてしまう（クローンも人間も通らない迂回路）。3枚で塞いである:
+#
+# 1. runner は TCP を開かない。待ち受けは共有 volume 上の Unix ソケットだけ
+# 2. そのソケットは mode 0600 / owner uid 1000（デーモン）。uid 1001 の子は繋げない
+# 3. runner が持つのは合鍵の sha256 だけ。読めても鍵は作れない
+#
+# ネットワークも分けてあるので、runner から db への経路はそもそも存在しない。
 #
 # **待ち受けは 127.0.0.1 のまま、ポートも公開しない。** クローンへ話しかける口は
 # 叩けばターンが起きる実行の口なので、外に出すなら手前に境界（認証・トンネル・
@@ -53,13 +66,21 @@ services:
   runner:
     build: .
     command: ['node', 'apps/runner/dist/index.js']
+    # **root で走らせる。** 子プロセス（マネージャーと作業者）を uid 1001 へ降ろす
+    # のに特権が要るためで、権限を配るためではない。降りた先の worker は非特権である。
+    user: root
     environment:
       # 安定した識別子。台帳の `manager_id → runner_id` はこれで引く
       # （器を作り直しても同じ宛先として戻る）。
       ALTEROID_RUNNER_ID: ${ALTEROID_RUNNER_ID:-runner-primary}
-      # デーモンから届かせるため、この待ち受けだけはコンテナの外向き。
-      # ポートは公開しないので、届くのは control ネットワークの中からだけ。
-      ALTEROID_RUNNER_BIND: 0.0.0.0
+      # **TCP を開かない。** 待ち受けは共有 volume の Unix ソケットだけなので、
+      # 同じ器のマネージャーから `curl http://127.0.0.1:...` の宛先が存在しない。
+      ALTEROID_RUNNER_SOCKET: /run/alteroid/runner.sock
+      # ソケットの持ち主はデーモン（uid 1000）。mode 0600 なので uid 1001 は繋げない。
+      ALTEROID_RUNNER_SOCKET_UID: '1000'
+      ALTEROID_RUNNER_SOCKET_GID: '1000'
+      # 制御面の合鍵は**ハッシュだけ**。読めても鍵は作れない。
+      ALTEROID_RUNNER_TOKEN_SHA256: ${ALTEROID_RUNNER_TOKEN_SHA256:?openssl rand -hex 32 の sha256 を .env に置くこと}
       # 認証はサブスクリプションの長期トークン（claude setup-token）。
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:?claude setup-token で取得して .env に置くこと}
       TZ: ${TZ:-Asia/Tokyo}
@@ -67,9 +88,17 @@ services:
       # マネージャーが実際に触るプロジェクト。人間が Claude Code を開く場所と同じ
       # 意味を持つ。**MCP 設定（.mcp.json）もここに置く** — cwd がこの場所なので、
       # 人間が使っているのと同じ連携がマネージャーからも見える（下向きの可視性）。
-      - ${ALTEROID_WORKSPACE_HOST:-./workspace}:/workspace
+      # 既定は名前付き volume（uid 1001 の所有で初期化される）。ホストのディレクトリを
+      # 使うなら、その所有者を uid 1001 に揃えること。
+      - ${ALTEROID_WORKSPACE_HOST:-workspace}:/workspace
+      - control:/run/alteroid
     healthcheck:
-      test: ['CMD-SHELL', 'curl -fsS http://127.0.0.1:4518/health || exit 1']
+      # 生存確認だけの口（制御面の情報は返さない）。ソケット越しに叩く。
+      test:
+        [
+          'CMD-SHELL',
+          'curl -fsS --unix-socket /run/alteroid/runner.sock http://runner/livez || exit 1',
+        ]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -89,7 +118,9 @@ services:
       # 記憶・日誌・ジョブ・セッションの置き場。**この鍵はデーモンだけが持つ。**
       ALTEROID_DATABASE_URL: postgres://alteroid:${POSTGRES_PASSWORD}@db:5432/alteroid
       # 委譲先。固定 URL をコードに埋めず、ここで名簿へ登録する。
-      ALTEROID_RUNNER_URL: http://runner:4518
+      ALTEROID_RUNNER_URL: unix:/run/alteroid/runner.sock
+      # 制御面の合鍵。**素の値を持つのはデーモンだけ**（runner はハッシュのみ）。
+      ALTEROID_RUNNER_TOKEN: ${ALTEROID_RUNNER_TOKEN:?openssl rand -hex 32 で作って .env に置くこと}
       # クローン（Fable）も SDK セッションなので、こちらにも認証が要る。
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:?claude setup-token で取得して .env に置くこと}
       # 自律の既定（日報・発意）は環境変数で開け閉めできる。これは方針であって
@@ -100,6 +131,8 @@ services:
     volumes:
       # state（daemon.json）だけ。記憶は PostgreSQL 側にある。
       - state:/data/alteroid
+      # runner への口（Unix ソケット）。**runner の workspace は覗かない。**
+      - control:/run/alteroid
     # 落ちる前の最後の蒸留（クローンのターン1本）が終わるまで待つ。既定の 10 秒だと
     # 途中で SIGKILL され、記憶へ移すはずだったものが消える（蒸留は生存条件）。
     stop_grace_period: 60s
@@ -115,3 +148,6 @@ networks:
 volumes:
   db:
   state:
+  workspace:
+  # デーモンと runner の間の口（Unix ソケット）だけを置く場所
+  control:

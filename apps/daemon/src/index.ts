@@ -59,7 +59,16 @@ const DEFAULT_BIND = '127.0.0.1';
 async function openRunner(workspace: string, withheldEnvKeys: string[]): Promise<RunnerClient> {
   const url = process.env.ALTEROID_RUNNER_URL;
   if (url !== undefined && url.length > 0) {
-    return createHttpRunner({ baseUrl: url });
+    const token = process.env.ALTEROID_RUNNER_TOKEN;
+    if (token === undefined || token.length === 0) {
+      // 鍵なしで繋がる制御面は、runner の中のマネージャーからも叩ける。
+      // **その状態でつなぐくらいなら起動しない。**
+      throw new Error(
+        'ALTEROID_RUNNER_URL があるのに ALTEROID_RUNNER_TOKEN が無い' +
+          '（runner の制御面は鍵で守る。runner には sha256 を渡すこと）',
+      );
+    }
+    return createHttpRunner({ baseUrl: url, token });
   }
   return createLocalRunner({
     runnerId: 'runner-local',
