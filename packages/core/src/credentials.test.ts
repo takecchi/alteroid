@@ -154,3 +154,71 @@ describe('鍵の器', () => {
     expect(JSON.stringify(env)).not.toContain('ghp_x');
   });
 });
+
+/**
+ * 境界破りの回帰。
+ *
+ * どれも「鍵を回せるようにする」ために足した仕組みが、**先にあった守りを
+ * 越えてしまっていた**もので、機能としては動いていた。動いていることは
+ * 守れていることの証拠にならない。
+ */
+describe('鍵の器が越えてはいけない線', () => {
+  it('器の外を指す名前を受け付けない（root で任意のパスに書けない）', async () => {
+    const store = createCredentialStore({ dir, seed: {}, names: ['GH_TOKEN'] });
+
+    for (const name of [
+      '../../../etc/cron.d/x',
+      '..',
+      'a/b',
+      '/etc/passwd',
+      'GH_TOKEN/../../x',
+      'gh_token',
+    ]) {
+      await expect(store.set([{ name, value: 'x' }])).rejects.toThrow();
+    }
+  });
+
+  it('伏せる鍵を、鍵として配れない（消したものを注入し直せない）', async () => {
+    const store = createCredentialStore({
+      dir,
+      seed: {},
+      names: ['GH_TOKEN'],
+      withheldEnvKeys: ['ALTEROID_DATABASE_URL', 'ALTEROID_RUNNER_TOKEN'],
+    });
+
+    await expect(
+      store.set([{ name: 'ALTEROID_DATABASE_URL', value: 'postgres://stolen' }]),
+    ).rejects.toThrow();
+    expect(store.values().ALTEROID_DATABASE_URL).toBeUndefined();
+  });
+
+  it('器へ書けなかったら、memory も元に戻す（指紋が実ファイルと食い違わない）', async () => {
+    const store = createCredentialStore({ dir, seed: { GH_TOKEN: 'v1' }, names: ['GH_TOKEN'] });
+    await store.flush();
+
+    // 置き場をファイルで塞いで、書き込みだけを失敗させる
+    rmSync(dir, { recursive: true, force: true });
+    writeFileSync(dir, 'not a directory');
+
+    await expect(store.set([{ name: 'GH_TOKEN', value: 'v2' }])).rejects.toThrow();
+
+    // **配る値も指紋も、器に入っている古い鍵のまま。** 片方だけ進むと、
+    // 指紋（食い違いを見つけるために足したもの）自体が嘘をつく
+    expect(store.values().GH_TOKEN).toBe('v1');
+    expect(store.fingerprints()[0]?.sha256).toBe(fingerprintOf('v1'));
+  });
+
+  it('扱う鍵ぜんぶの所在を子へ知らせる（回せない鍵を作らない）', () => {
+    const store = createCredentialStore({
+      dir,
+      seed: { GH_TOKEN: 'a' },
+      names: ['GH_TOKEN', 'GITHUB_TOKEN'],
+    });
+
+    const env = store.env();
+
+    expect(env.ALTEROID_GH_TOKEN_FILE).toBe(join(dir, 'GH_TOKEN'));
+    // 種が無くても所在は知らせる（後から置かれた鍵も同じ経路で届く）
+    expect(env.ALTEROID_GITHUB_TOKEN_FILE).toBe(join(dir, 'GITHUB_TOKEN'));
+  });
+});

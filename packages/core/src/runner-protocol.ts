@@ -87,7 +87,18 @@ export const runnerMessageCommandSchema = z.object({ text: z.string().min(1) });
  * これは判断ではなく事実の伝達である（何を許すかの表ではない）。
  */
 export const runnerCredentialSchema = z.object({
-  name: z.string().min(1),
+  /**
+   * 環境変数の名前そのもの。**自由な文字列にしない。**
+   *
+   * ここを緩くしていたせいで `../../../etc/cron.d/x` のような名前がそのまま
+   * ファイル名になり、root で器の外へ書けた。名前は器の中のファイル名になるので、
+   * パスとして解釈されうる形を最初から名前として認めない。
+   */
+  name: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(/^[A-Z][A-Z0-9_]*$/, '鍵の名前は英大文字・数字・_ のみ'),
   /** 空文字は「鍵を外す」。未設定へ戻す意思を表せるようにしてある。 */
   value: z.string(),
 });

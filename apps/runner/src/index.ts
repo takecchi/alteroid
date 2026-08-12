@@ -3,7 +3,12 @@ import { chmodSync, chownSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { createCredentialStore, createRunnerHost, type RunnerChildUser } from '@alteroid/core';
+import {
+  createCredentialStore,
+  createRunnerHost,
+  WITHHELD_ENV_KEYS,
+  type RunnerChildUser,
+} from '@alteroid/core';
 import { createAdaptorServer } from '@hono/node-server';
 
 import { createRunnerApp, Outbox } from './app.js';
@@ -96,6 +101,9 @@ export async function main(): Promise<void> {
       ? {}
       : { dir: process.env.ALTEROID_CREDENTIAL_DIR as string }),
     ...(childUser === undefined ? {} : { reader: { uid: childUser.uid, gid: childUser.gid } }),
+    // 伏せる鍵は鍵として配れない。**伏せる仕組みと配る仕組みを結び付けておく** —
+    // 別々のままだと、後から足した配る側が前からある守りを黙って越える。
+    withheldEnvKeys: WITHHELD_ENV_KEYS,
   });
   const seeded = await credentials.flush();
   process.stderr.write(

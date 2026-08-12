@@ -36,6 +36,30 @@ export const DEFAULT_CREDENTIAL_DIR = '/run/alteroid/credentials';
 export const ROTATABLE_CREDENTIAL_KEYS = ['GH_TOKEN', 'GITHUB_TOKEN'] as const;
 
 /**
+ * 鍵の名前として認めるかたち。**環境変数の名前そのものである。**
+ *
+ * ここを自由な文字列にしていたせいで、`../../../etc/cron.d/x` のような名前が
+ * そのままファイル名になり、**root で器の外へ書けた**（空文字を渡せば削除もできた）。
+ * 名前は器の中のファイル名になるのだから、パスとして解釈されうる形を最初から
+ * 名前として認めない。
+ *
+ * 経路の途中で弾くのではなく**名前の定義そのものを狭める**のは、検査を1か所でも
+ * 通り忘れたら穴になるからである。
+ */
+export const CREDENTIAL_NAME = /^[A-Z][A-Z0-9_]*$/;
+
+/**
+ * 鍵として配ってはいけない名前か。
+ *
+ * `WITHHELD_ENV_KEYS`（記憶ストアの所在・制御面の合鍵）を鍵の名前として渡されると、
+ * **伏せたはずの環境変数を子プロセスへ注入し直せる**。伏せる仕組みと配る仕組みが
+ * 別々にあると、後から足したほうが前からある守りを黙って越える。
+ */
+export function isWithheldCredentialName(name: string, withheld: readonly string[]): boolean {
+  return withheld.includes(name);
+}
+
+/**
  * 鍵が合っているかを、**値を出さずに**照合するための指紋。
  *
  * 人間が置いた鍵とマネージャーが握っている鍵が同じかどうかは、これが無いと
@@ -83,6 +107,13 @@ export interface CredentialStoreOptions {
   reader?: { uid: number; gid: number };
   /** 現在時刻。テストで固定するため。 */
   now?: () => Date;
+  /**
+   * 子プロセスへ伏せる環境変数の名前。**この名前は鍵として受け付けない。**
+   *
+   * 伏せる仕組み（`WITHHELD_ENV_KEYS`）と配る仕組みが互いを知らないと、後から
+   * 足したほうが前からある守りを黙って越える。ここで結び付けておく。
+   */
+  withheldEnvKeys?: readonly string[];
 }
 
 /** 値そのものを出さずに同一性だけ見せる。 */
@@ -104,6 +135,9 @@ class Store implements CredentialStore {
   readonly #reader: { uid: number; gid: number } | undefined;
   readonly #now: () => Date;
   readonly #held = new Map<string, Held>();
+  /** 扱う鍵の名前（所在を子へ知らせる対象）。中身の有無とは別に決まる。 */
+  readonly #names: readonly string[];
+  readonly #withheld: readonly string[];
   /** 器へ書けなかったことを、黙って握り潰さないための印。 */
   #lastWriteError: string | undefined;
 
@@ -114,8 +148,13 @@ class Store implements CredentialStore {
 
     const seed = options.seed ?? process.env;
     const names = options.names ?? ROTATABLE_CREDENTIAL_KEYS;
+    this.#withheld = options.withheldEnvKeys ?? [];
+    // 名前として成立しないものは、種の時点で落とす（器の外を指す名前を持ち込ませない）
+    this.#names = names.filter(
+      (name) => CREDENTIAL_NAME.test(name) && !isWithheldCredentialName(name, this.#withheld),
+    );
     const at = this.#now().toISOString();
-    for (const name of names) {
+    for (const name of this.#names) {
       const value = seed[name];
       // 空文字は「置かれていない」と同じに扱う。空の鍵を配ると、鍵が無い場合より
       // 悪い壊れ方（`empty ident` 相当の即死）をする経路がある。
@@ -130,12 +169,16 @@ class Store implements CredentialStore {
     return out;
   }
 
+  /**
+   * 子へ知らせる**所在**（値ではない）。
+   *
+   * 扱う鍵ぜんぶに `ALTEROID_<NAME>_FILE` を出す。GH_TOKEN だけを特別扱いすると、
+   * 「回せる」と言いながら回らない鍵ができる（実際に `GITHUB_TOKEN` がそうなっていた
+   * — 器には置かれるのに、走行中のマネージャーへ届く経路がどこにも無かった）。
+   */
   env(): Record<string, string> {
     const out: Record<string, string> = { ALTEROID_CREDENTIAL_DIR: this.#dir };
-    // `gh` のシムが見る所在。名前ごとに1ファイルなので、パスは名前から決まる。
-    if (this.#held.has('GH_TOKEN') || this.#held.size === 0) {
-      out.ALTEROID_GH_TOKEN_FILE = join(this.#dir, 'GH_TOKEN');
-    }
+    for (const name of this.#names) out[`ALTEROID_${name}_FILE`] = join(this.#dir, name);
     return out;
   }
 
@@ -148,7 +191,27 @@ class Store implements CredentialStore {
   }
 
   async set(entries: readonly CredentialEntry[]): Promise<CredentialFingerprint[]> {
+    // **名前は器の中のファイル名になる。** パスとして解釈されうる形を受けない。
+    for (const entry of entries) {
+      if (!CREDENTIAL_NAME.test(entry.name)) {
+        throw new Error(
+          `鍵の名前として認められない: ${JSON.stringify(entry.name)}（英大文字・数字・_ のみ）`,
+        );
+      }
+      if (isWithheldCredentialName(entry.name, this.#withheld)) {
+        throw new Error(
+          `${entry.name} は子プロセスへ伏せる鍵なので、鍵として配れない` +
+            '（伏せる仕組みを鍵の仕組みで越えさせない）',
+        );
+      }
+    }
+
     const at = this.#now().toISOString();
+    // 器へ届かなかったときに戻せるよう、先に写しを取る。**memory だけが新しく
+    // なると、指紋は新しい鍵を指すのに走行中のマネージャーは古い鍵のまま**に
+    // なり、食い違いを見つけるために足した指紋そのものが嘘をつく。
+    const snapshot = new Map(this.#held);
+
     for (const entry of entries) {
       if (entry.value.length === 0) {
         this.#held.delete(entry.name);
@@ -156,12 +219,19 @@ class Store implements CredentialStore {
       }
       this.#held.set(entry.name, { value: entry.value, updatedAt: at });
     }
-    // **差し替えは黙って落とさない。** 器へ届かなければ走行中のマネージャーには
-    // 永久に届かず、「差し替えたのに直らない」という元の病気に戻る。
-    await this.#write(
-      entries.map((entry) => entry.name),
-      { strict: true },
-    );
+
+    try {
+      // **差し替えは黙って落とさない。** 器へ届かなければ走行中のマネージャーには
+      // 永久に届かず、「差し替えたのに直らない」という元の病気に戻る。
+      await this.#write(
+        entries.map((entry) => entry.name),
+        { strict: true },
+      );
+    } catch (error) {
+      this.#held.clear();
+      for (const [name, held] of snapshot) this.#held.set(name, held);
+      throw error;
+    }
     return this.fingerprints();
   }
 
