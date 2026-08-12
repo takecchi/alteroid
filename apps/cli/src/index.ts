@@ -7,6 +7,7 @@ import { Command } from 'commander';
 import { chatCommand } from './chat.js';
 import * as daemon from './daemon.js';
 import { alteroidRoot } from './paths.js';
+import { webCommand } from './web.js';
 
 /**
  * alteroid — デーモンへの薄いクライアント。
@@ -36,6 +37,15 @@ program
   .description('クローンと会話する（デーモンが居なければ起こす）')
   .action(async () => {
     await chatCommand();
+  });
+
+program
+  .command('web')
+  .description('WebUI をブラウザ用に開く（デーモンが居なければ起こす）')
+  .option('-p, --port <port>', '待ち受けポート（既定 4518）', (value) => Number(value))
+  .option('--bind <address>', '待ち受けアドレス（既定 127.0.0.1）')
+  .action(async (options: { port?: number; bind?: string }) => {
+    await webCommand(options);
   });
 
 const daemonCommand = program.command('daemon').description('常駐デーモンの操作');

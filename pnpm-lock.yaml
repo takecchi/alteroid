@@ -80,6 +80,9 @@ importers:
       '@alteroid/storage-fs':
         specifier: workspace:*
         version: link:../../packages/storage-fs
+      '@alteroid/web':
+        specifier: workspace:*
+        version: link:../web
       commander:
         specifier: 'catalog:'
         version: 15.0.0
@@ -158,6 +161,28 @@ importers:
       '@anthropic-ai/claude-agent-sdk':
         specifier: 'catalog:'
         version: 0.3.228(@anthropic-ai/sdk@0.116.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(zod@4.4.3)
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.20.1
+      tsup:
+        specifier: 'catalog:'
+        version: 8.5.1(postcss@8.5.26)(typescript@6.0.3)
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+
+  apps/web:
+    dependencies:
+      '@hono/node-server':
+        specifier: 'catalog:'
+        version: 2.1.0(hono@4.13.1)
+      hono:
+        specifier: 'catalog:'
+        version: 4.13.1
+    devDependencies:
+      '@alteroid/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@types/node':
         specifier: 'catalog:'
         version: 22.20.1

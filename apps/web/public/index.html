@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>alteroid</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>alteroid</h1>
+      <nav id="tabs">
+        <button type="button" data-tab="chat" class="active">会話</button>
+        <button type="button" data-tab="status">実行状況</button>
+        <button type="button" data-tab="reports">日報</button>
+      </nav>
+      <span id="connection" class="muted"></span>
+    </header>
+
+    <main>
+      <section id="tab-chat" class="tab active">
+        <div id="messages" class="messages"></div>
+        <form id="composer">
+          <textarea
+            id="input"
+            rows="3"
+            placeholder="クローンに指示を送る（Enter で送信 / Shift+Enter で改行）"
+          ></textarea>
+          <div class="row">
+            <span id="conversation" class="muted"></span>
+            <span class="spacer"></span>
+            <button type="button" id="end-conversation" title="学びを記憶へ蒸留して会話を閉じる">
+              会話を終える
+            </button>
+            <button type="submit" id="send">送信</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="tab-status" class="tab">
+        <div class="columns">
+          <div class="column">
+            <h2>承認待ち <span id="approvals-count" class="muted"></span></h2>
+            <div id="approvals" class="list"></div>
+            <h2>マネージャー</h2>
+            <div id="managers" class="list"></div>
+            <h2>次の定期実行</h2>
+            <div id="schedule" class="list"></div>
+          </div>
+          <div class="column">
+            <h2>生ログ <span id="transcript-of" class="muted"></span></h2>
+            <pre id="transcript" class="pane">マネージャーを選ぶと出ます</pre>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-reports" class="tab">
+        <div class="columns">
+          <div class="column narrow">
+            <h2>日報</h2>
+            <div id="report-list" class="list"></div>
+          </div>
+          <div class="column">
+            <h2 id="report-title">日報</h2>
+            <pre id="report-body" class="pane">日付を選ぶと出ます</pre>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>

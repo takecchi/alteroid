@@ -1,0 +1,10 @@
+{
+  // 画面側はブラウザで走るので lib を差し替える。node の型は入れない
+  // （うっかり fs や process を掴んだらビルドではなく型で落ちてほしい）。
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": []
+  },
+  "include": ["src/client"]
+}

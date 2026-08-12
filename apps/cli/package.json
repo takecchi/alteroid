@@ -16,6 +16,7 @@
   "dependencies": {
     "@alteroid/daemon": "workspace:*",
     "@alteroid/storage-fs": "workspace:*",
+    "@alteroid/web": "workspace:*",
     "commander": "catalog:",
     "hono": "catalog:"
   },

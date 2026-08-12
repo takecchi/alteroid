@@ -1,0 +1,297 @@
+/* 作り込みは後回し。読めること・押せること・詰まらないことだけを満たす。 */
+
+:root {
+  --bg: #14161a;
+  --panel: #1c1f26;
+  --line: #2c313b;
+  --text: #e6e8ec;
+  --muted: #8b93a1;
+  --accent: #7aa2f7;
+  --warn: #e0af68;
+  --error: #f7768e;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family:
+    system-ui,
+    -apple-system,
+    'Hiragino Sans',
+    'Noto Sans JP',
+    sans-serif;
+  font-size: 14px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+h1 {
+  font-size: 15px;
+  margin: 0;
+  letter-spacing: 0.08em;
+}
+
+h2 {
+  font-size: 13px;
+  margin: 16px 0 6px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+h2:first-child {
+  margin-top: 0;
+}
+
+nav {
+  display: flex;
+  gap: 4px;
+}
+
+button {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 12px;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--accent);
+}
+
+button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+main {
+  flex: 1;
+  min-height: 0;
+}
+
+.tab {
+  display: none;
+  height: 100%;
+  padding: 16px;
+  overflow: hidden;
+}
+
+.tab.active {
+  display: flex;
+  flex-direction: column;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* 会話 */
+
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-right: 8px;
+}
+
+.message {
+  max-width: 62rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.65;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.message.human {
+  align-self: flex-end;
+  border-color: var(--accent);
+}
+
+.message.tool {
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 0 4px;
+}
+
+.message.ask {
+  border-color: var(--warn);
+}
+
+.message.error {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+#composer textarea {
+  width: 100%;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font: inherit;
+  resize: vertical;
+}
+
+#composer textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* 実行状況・日報 */
+
+.columns {
+  display: flex;
+  gap: 16px;
+  height: 100%;
+  min-height: 0;
+}
+
+.column {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.column.narrow {
+  flex: 0 0 14rem;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.card {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.card.selectable {
+  cursor: pointer;
+}
+
+.card.selectable:hover,
+.card.selected {
+  border-color: var(--accent);
+}
+
+.card .title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.card .body {
+  margin-top: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+.badge {
+  font-size: 11px;
+  border-radius: 999px;
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.badge.running {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.badge.waiting_human {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.badge.failed {
+  color: var(--error);
+  border-color: var(--error);
+}
+
+.answer {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.answer input {
+  flex: 1;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font: inherit;
+}
+
+.answer input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.pane {
+  margin: 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+}
+
+.empty {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 2px;
+}
