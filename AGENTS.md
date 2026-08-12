@@ -54,7 +54,8 @@
 
 ## 開発手順
 
-- 要件: Node 22+ / pnpm（バージョンは `package.json` の `packageManager`）
+- 実行系の版は **`mise.toml`**（Node / pnpm）。`mise install` で揃える。CI も同じファイルを読む（`jdx/mise-action`）ので、ここを直せば両方が動く
+  - mise を使わないなら Node 22 系 / pnpm は `package.json` の `packageManager` に合わせる（`corepack enable`）
 - `pnpm install` → `pnpm build` → `pnpm typecheck` / `pnpm lint` / `pnpm format:check` / `pnpm test`
 - **build が先。** ワークスペース間の型解決が各パッケージの `dist/` に依存するため、build 前の typecheck / test は失敗する
 - TypeScript は 6 系に固定（typescript-eslint が TS 7 未対応のため。`pnpm-workspace.yaml` の catalog 参照）。TS6 は `@types` を自動で取り込まないので、新パッケージには `@types/node`（`catalog:`）を devDependencies に入れる
