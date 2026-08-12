@@ -1,5 +1,5 @@
 {
-  "name": "@alteroid/daemon",
+  "name": "@alteroid/runner",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -12,7 +12,7 @@
     }
   },
   "bin": {
-    "alteroidd": "./dist/index.js"
+    "alteroid-runner": "./dist/index.js"
   },
   "files": [
     "dist"
@@ -23,16 +23,13 @@
   },
   "dependencies": {
     "@alteroid/core": "workspace:*",
-    "@alteroid/storage-fs": "workspace:*",
-    "@alteroid/storage-pg": "workspace:*",
-    "@anthropic-ai/claude-agent-sdk": "catalog:",
     "@hono/node-server": "catalog:",
     "@hono/zod-validator": "catalog:",
     "hono": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@alteroid/runner": "workspace:*",
+    "@anthropic-ai/claude-agent-sdk": "catalog:",
     "@types/node": "catalog:",
     "tsup": "catalog:",
     "typescript": "catalog:"

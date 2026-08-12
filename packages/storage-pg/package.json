@@ -16,8 +16,17 @@
     "build": "tsup",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "@alteroid/core": "workspace:*",
+    "@anthropic-ai/claude-agent-sdk": "catalog:",
+    "drizzle-orm": "catalog:",
+    "pg": "catalog:",
+    "zod": "catalog:"
+  },
   "devDependencies": {
+    "@electric-sql/pglite": "catalog:",
     "@types/node": "catalog:",
+    "@types/pg": "catalog:",
     "tsup": "catalog:",
     "typescript": "catalog:"
   }

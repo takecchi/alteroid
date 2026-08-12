@@ -228,6 +228,34 @@ export const jobStatusSchema = z.enum(['running', 'waiting_human', 'done', 'fail
 
 export type JobStatus = z.infer<typeof jobStatusSchema>;
 
+/**
+ * workspace の所在（M4 で置く継ぎ目）。
+ *
+ * 文字列のパスだけにしないのは、**runner が増えたときに移送の話になる**からである
+ * （M5）。いまは `runner-volume` しか使わないが、共有 FS や git からの再構築へ
+ * 伸ばせる形で JobStore に残しておく。ここが欠けると、runner が落ちたときに
+ * 「どこで何を触っていたのか」が復元できない。
+ */
+export const workspaceLocatorSchema = z.discriminatedUnion('kind', [
+  /** その runner に固定された volume。M4 の既定。 */
+  z.object({
+    kind: z.literal('runner-volume'),
+    runnerId: z.string(),
+    path: z.string(),
+  }),
+  /** 複数 runner から見える共有ファイルシステム（M5 の選択肢）。 */
+  z.object({ kind: z.literal('shared-volume'), path: z.string() }),
+  /** git から作り直す（M5 の選択肢。未コミット差分は別途退避が要る）。 */
+  z.object({
+    kind: z.literal('git'),
+    repository: z.string(),
+    ref: z.string(),
+    patchId: z.string().optional(),
+  }),
+]);
+
+export type WorkspaceLocator = z.infer<typeof workspaceLocatorSchema>;
+
 export const jobSchema = z.object({
   id: z.string(),
   createdAt: isoDateTime,
@@ -237,13 +265,37 @@ export const jobSchema = z.object({
   managerId: z.string().optional(),
   /** SDK のセッション id。M4 の resume の足がかり。 */
   sessionId: z.string().optional(),
+  /**
+   * SDK が生ログを預けるときの scope（SessionStore の `projectKey`）。
+   *
+   * **これが無いと、器を作り直したあとに生ログを引き当てられない。** ローカルの
+   * トランスクリプトはコンテナと一緒に消えるので、可観測性の最下段へ降りる経路は
+   * `projectKey` + `sessionId` の対で持つしかない（PRD「可観測性」）。
+   */
+  projectKey: z.string().optional(),
   summary: z.string(),
   /** クローンが出した依頼の全文。 */
   request: z.string().optional(),
   /** マネージャーの作業ディレクトリ（人間が Claude Code を開く場所と同じ）。 */
   cwd: z.string().optional(),
-  /** 走行中セッションのトランスクリプト。可観測性の最下段への入口。 */
-  transcriptPath: z.string().optional(),
+  /**
+   * どの manager-runner で走っているか（M4）。
+   *
+   * `manager_id → runner_id → session_id → workspace` の鎖をここで持つ。
+   * **これが無いと、runner が増えた瞬間に `manager_send` の宛先が決まらない。**
+   * 1台構成でも最初から残しておく（後から足すと、既存のジョブに宛先が無い）。
+   */
+  runnerId: z.string().optional(),
+  /** workspace の所在。runner affinity と合わせて復元できるようにする。 */
+  workspace: workspaceLocatorSchema.optional(),
+  /**
+   * 退避済みトランスクリプト以外の生ログへの入口は**ここに持たない**。
+   *
+   * 走行中の生ログは manager-runner のディスクの上にあり、デーモンはその中を
+   * 仮定しない（runner のローカルパスを台帳に書くと、runner が入れ替わった
+   * 瞬間に嘘になる）。降り方は runner の API → アーカイブ → 預かった
+   * セッションの生ログ、の順である。
+   */
   /** 退避済みトランスクリプト（TranscriptArchive の id）。 */
   archiveIds: z.array(z.string()).optional(),
   /** 直近の報告。一覧でクローンが状況を掴むためのもの。 */

@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 
 import { CLONE_MODEL, createClone } from './clone.js';
 import type { CloneHost } from './host.js';
+import { createLocalRunner } from './runner-local.js';
+import { createRunnerRegistry } from './runner-protocol.js';
 import type { ChatStreamEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores, humanMessage } from './testing.js';
@@ -97,7 +99,15 @@ function setup(
   const { fn, calls } = fakeSdk(reply, sdkOptions);
   // マネージャーも偽物にしておく。ここで検証したいのはクローンのループだけであり、
   // 誤って本物の SDK を起こさないようにする。
-  const clone = createClone({ stores, queryFn: fn, managerQueryFn: fakeSdk().fn });
+  const clone = createClone({
+    stores,
+    queryFn: fn,
+    // 委譲先も偽物にしておく。ここで検証したいのはクローンのループだけであり、
+    // 誤って本物の SDK を起こさないようにする。
+    runners: createRunnerRegistry([
+      createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+    ]),
+  });
   const events: ChatStreamEvent[] = [];
   clone.subscribe('conv-1', (event) => events.push(event));
   return { clone, stores, calls, events };

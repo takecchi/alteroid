@@ -7,17 +7,23 @@ import { serve } from '@hono/node-server';
 
 import {
   createClone,
+  createLocalRunner,
+  createRunnerRegistry,
   createScheduler,
   dailyReportEvent,
   missingDailyReportDates,
+  type RunnerClient,
 } from '@alteroid/core';
-import { createFsStores, initWorkspace } from '@alteroid/storage-fs';
 
 import { createApp } from './app.js';
+import { createHttpRunner } from './runner-client.js';
 import { clearRuntimeInfo, writeRuntimeInfo } from './runtime.js';
 import { buildSchedule, readScheduleConfig } from './schedule.js';
+import { openStorage } from './storage.js';
 
 export { createApp, type AppDeps, type AppType } from './app.js';
+export { openStorage, DATABASE_URL_ENV, type Storage } from './storage.js';
+export { createHttpRunner, type HttpRunnerOptions } from './runner-client.js';
 export {
   buildSchedule,
   readScheduleConfig,
@@ -33,10 +39,42 @@ export {
   type DaemonRuntimeInfo,
 } from './runtime.js';
 
-/** 空文字の環境変数を「未指定」として扱う（CLI 側の解釈と揃える）。 */
-function envRoot(): string | undefined {
-  const value = process.env.ALTEROID_HOME;
-  return value !== undefined && value.length > 0 ? value : undefined;
+/**
+ * 待ち受けるアドレス。既定は 127.0.0.1 のまま。
+ *
+ * **これは方針であって能力の削除ではない**（方針は設定で開けられる — north_star
+ * 禁止2）。コンテナの外へ出したいなら開けられるが、開けた側が手前に境界
+ * （リバースプロキシ・トンネル・認証）を置くこと。この API は叩けば
+ * クローンのターンが起きる実行の口である。
+ */
+const DEFAULT_BIND = '127.0.0.1';
+
+/**
+ * 委譲先を開く。
+ *
+ * `ALTEROID_RUNNER_URL` があれば、そこが manager-runner である（コンテナ構成）。
+ * 無ければ同一プロセスの runner に落とす — `alteroid chat` を叩くだけで使える
+ * というローカルの体験を、分離のために壊さないため。
+ */
+async function openRunner(workspace: string, withheldEnvKeys: string[]): Promise<RunnerClient> {
+  const url = process.env.ALTEROID_RUNNER_URL;
+  if (url !== undefined && url.length > 0) {
+    const token = process.env.ALTEROID_RUNNER_TOKEN;
+    if (token === undefined || token.length === 0) {
+      // 鍵なしで繋がる制御面は、runner の中のマネージャーからも叩ける。
+      // **その状態でつなぐくらいなら起動しない。**
+      throw new Error(
+        'ALTEROID_RUNNER_URL があるのに ALTEROID_RUNNER_TOKEN が無い' +
+          '（runner の制御面は鍵で守る。runner には sha256 を渡すこと）',
+      );
+    }
+    return createHttpRunner({ baseUrl: url, token });
+  }
+  return createLocalRunner({
+    runnerId: 'runner-local',
+    workspacePath: workspace,
+    withheldEnvKeys,
+  });
 }
 
 /**
@@ -46,9 +84,10 @@ function envRoot(): string | undefined {
  * chat を開いていなくてもクローンは生きている。
  */
 export async function main(): Promise<void> {
-  const root = envRoot();
-  const { paths } = await initWorkspace(root);
-  const stores = createFsStores(root);
+  // 記憶の置き場（ローカルの fs か、クラウドの PostgreSQL か）。器が違っても
+  // 上の階層は同じものを見る（roadmap M4 受け入れ基準1）。
+  const storage = await openStorage();
+  const { stores, paths } = storage;
 
   // クローンのセッションは人格データディレクトリを基準に置く。呼び出し元の
   // カレントディレクトリに依存させると、別の場所から起動した瞬間に resume が
@@ -58,8 +97,20 @@ export async function main(): Promise<void> {
   // クローンが `manager_start` に cwd を渡せば、そのつど別の場所も使える。
   const workspace = process.env.ALTEROID_WORKSPACE || process.cwd();
 
-  const clone = createClone({ stores, cwd: paths.root, managerCwd: workspace });
+  // 委譲先（manager-runner）。**別プロセスが既定**である — 同じ器で走らせる限り、
+  // マネージャーは `/proc/1/environ` からデーモンの環境変数＝記憶ストアの鍵に届く。
+  // ローカルで runner を立てていないときだけ、同一プロセスの runner へ落とす
+  // （その場合は既知の穴が残る。塞ぐのはコンテナ構成の役目である）。
+  const runners = createRunnerRegistry([await openRunner(workspace, storage.withheldEnvKeys)]);
+
+  const clone = createClone({
+    stores,
+    cwd: paths.root,
+    runners,
+    ...(storage.sessionStore === undefined ? {} : { sessionStore: storage.sessionStore }),
+  });
   const port = Number(process.env.ALTEROID_PORT ?? '4517');
+  const hostname = process.env.ALTEROID_BIND || DEFAULT_BIND;
 
   // 起動ごとに作り直す。状態ファイルが残っていても、別プロセスを自分だと
   // 誤認させない（PID の再利用で無関係なプロセスを止めないため）。
@@ -73,8 +124,40 @@ export async function main(): Promise<void> {
     post: (event) => clone.post(event),
   });
 
-  const app = createApp({ clone, stores, token, shutdown: () => void shutdown(), scheduler });
-  const server = serve({ fetch: app.fetch, port, hostname: '127.0.0.1' });
+  // **受け口を開ける前に**、走行中だったマネージャーを台帳から拾い直す。知らせない
+  // と器を作り直した瞬間に走っていた仕事がクローンから見て消えるし（roadmap M4
+  // 受け入れ基準2）、引き取る前に chat を開けると、同じ仕事をクローンが二重に
+  // 起こしうる。
+  const restored = await clone.managers.restore().catch((error: unknown) => {
+    process.stderr.write(`alteroidd: マネージャーの引き継ぎに失敗しました: ${String(error)}\n`);
+    return [];
+  });
+  if (restored.length > 0) {
+    process.stdout.write(
+      `alteroidd: 再起動前のマネージャーを引き継ぎました: ${restored
+        .map((manager) => manager.managerId)
+        .join(', ')}\n`,
+    );
+  }
+
+  const app = createApp({
+    clone,
+    stores,
+    token,
+    shutdown: () => void shutdown(),
+    scheduler,
+    storage: storage.description,
+  });
+  // 開けたこと自体は方針の変更であって禁止事項ではない。ただし**黙って**外へ
+  // 出さない — ここは叩けばクローンのターンが起きる実行の口である。
+  if (hostname !== DEFAULT_BIND && hostname !== 'localhost' && hostname !== '::1') {
+    process.stderr.write(
+      `alteroidd: ${hostname} で待ち受けます。この API に認証はありません。` +
+        '手前に境界（リバースプロキシ・トンネル・認証）を置いてください。\n',
+    );
+  }
+
+  const server = serve({ fetch: app.fetch, port, hostname });
 
   server.on('error', (error: unknown) => {
     process.stderr.write(`alteroidd: 待ち受けに失敗しました (port ${port}): ${String(error)}\n`);
@@ -99,6 +182,7 @@ export async function main(): Promise<void> {
     } catch {
       // 片付けに失敗しても落ちる
     }
+    await storage.close().catch(() => undefined);
     process.exit(0);
   }
 
@@ -130,7 +214,7 @@ export async function main(): Promise<void> {
   }
 
   process.stdout.write(
-    `alteroidd: http://127.0.0.1:${port} （記憶: ${paths.root} / 作業: ${workspace}）\n`,
+    `alteroidd: http://${hostname}:${port} （記憶: ${storage.description} / 作業: ${workspace}）\n`,
   );
 }
 

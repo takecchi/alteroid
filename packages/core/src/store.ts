@@ -1,3 +1,5 @@
+import type { SessionStore } from '@anthropic-ai/claude-agent-sdk';
+
 import type {
   Job,
   JournalEntry,
@@ -74,4 +76,12 @@ export interface Stores {
   jobs: JobStore;
   archive: TranscriptArchive;
   sessions: SessionRegistry;
+  /**
+   * SDK のセッション生ログの預け先（M4 のクラウド構成でだけ付く）。
+   *
+   * **manager-runner はこれを持たない。** runner から預かった生ログをここへ落とすのは
+   * デーモンであり、runner には記憶ストアへ到達する鍵を渡さない
+   * （docs/architecture.md「非対称な可視性」）。
+   */
+  sessionStore?: SessionStore;
 }

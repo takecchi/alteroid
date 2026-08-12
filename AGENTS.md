@@ -66,10 +66,32 @@
 - 人格データは既定で `~/.alteroid/`。**`ALTEROID_HOME` で差し替えられる**ので、動作確認は必ず一時ディレクトリを指すこと（自分の記憶を壊さない）
 - デーモンの待ち受けポートは `ALTEROID_PORT`（既定 4517）。接続先とプロセス id は `$ALTEROID_HOME/state/daemon.json` にある
 - マネージャーの既定の作業ディレクトリは `ALTEROID_WORKSPACE`（既定はデーモンの cwd）。**実プロジェクトを直に触るので、動作確認では捨ててよい一時ディレクトリを指すこと**
-- `ALTEROID_HOME` と `ALTEROID_PORT` はマネージャー子プロセスの環境変数から落としてある（記憶ストアの所在を配らない）。ここに環境変数を足すときは、それが下へ漏れてよいものか先に考える
+- `ALTEROID_HOME` `ALTEROID_PORT` `ALTEROID_DATABASE_URL` はマネージャー子プロセスの環境変数から落としてある（記憶ストアの所在を配らない）。ここに環境変数を足すときは、それが下へ漏れてよいものか先に考える。記憶へ到達する鍵を増やしたら `Storage.withheldEnvKeys`（`apps/daemon/src/storage.ts`）にも足すこと
 - SDK を実際に呼ぶ確認は `curl -N -X POST http://127.0.0.1:$PORT/chat -d '{"text":"..."}'` が手軽。ローカルの `claude` のログイン認証がそのまま使われる
 - 委譲まわりの確認は `GET /managers`（一覧と状態）、`GET /managers/:id/transcript`（生ログ）、`GET /journal?type=tool_use`（マネージャー・作業者の全ツール実行）を見る。chat からは `/managers` `/manager <id>`
-- クローンの挙動を SDK 抜きで検証したいときは `createClone({ queryFn })` に偽の `query` を渡す（`packages/core/src/clone.test.ts`）。マネージャー側は `createManagerPool({ queryFn })`（`packages/core/src/manager.test.ts`）で、こちらは `canUseTool` とフックを直接叩いて配線を確かめる
+- クローンの挙動を SDK 抜きで検証したいときは `createClone({ queryFn })` に偽の `query` を渡す（`packages/core/src/clone.test.ts`）。マネージャー側は runner に偽の `query` を渡す（`createLocalRunner({ queryFn })` → `createRunnerRegistry`。`packages/core/src/manager.test.ts`）。デーモンと runner の境界そのものは `apps/daemon/src/runner-client.test.ts` が実際の HTTP 経路で通している
+
+## クラウド構成（PostgreSQL と3コンテナ）
+
+- 構成は **daemon（クローン＋記憶）/ manager-runner（SDK）/ PostgreSQL** の3つ。マネージャーは runner の中だけで走る
+  - **runner に記憶ストアの鍵を足さないこと。** 足した瞬間、その中の子プロセス（＝マネージャー）が `/proc/1/environ` から鍵を取れる状態に戻り、分離した意味が消える
+  - **繋ぎに行くのは常にデーモン側**（命令は HTTP、出来事は `GET /events` の SSE）。逆向きのコールバックを足すと、同じ経路でマネージャーが記憶へ届く
+  - **制御面（runner API）はマネージャーから触れない形を崩さないこと。** 触れると自分宛の許可確認に自分で `allow` を返せる。守っているのは3枚（TCP を開かない / ソケットは 0600・デーモン所有 / 合鍵は runner にはハッシュだけ）＋ SDK 子プロセスを別 UID で走らせること
+    - **素の合鍵を runner の環境変数に置かない。** 置いた瞬間、子プロセスが `/proc/1/environ` から読めるようになり3枚目が消える
+    - 確認は `apps/runner/src/boundary.test.ts`（実際に子プロセスを起こして全経路を叩く）と、コンテナでは `docker compose exec -u 1001 runner curl --unix-socket ...`（繋がらないこと）
+  - runner を立てていないローカルでは同一プロセスの runner に落ちる（`ALTEROID_RUNNER_URL` が無いとき）。**そのときは既知の穴が残る** — 塞ぐのはコンテナ構成の役目で、ツール削除ではない
+  - 委譲の宛先は `RunnerRegistry` 越しに決める。固定 URL も runner のローカルパスもデーモンに書かない（M5 で runner が増える）
+- 記憶の置き場は `ALTEROID_DATABASE_URL` の有無だけで決まる（無ければローカルの fs）。**器が違うだけで、上の層が見るものは同じ**。切り替えでできなくなることを作らない
+  - 起動時にスキーマを自分で用意する（`packages/storage-pg/src/migrate.ts`）。「先にマイグレーションを流す」という人間の手順を足さないこと
+  - `state/daemon.json`（CLI がデーモンを見つける手段）は pg 構成でもローカルに残る。記憶ではない
+- `docker compose up -d` → `docker compose exec app alteroid chat`。`.env` に `CLAUDE_CODE_OAUTH_TOKEN`（`claude setup-token`）と `POSTGRES_PASSWORD` を置く。先に `mkdir -p workspace`（Docker に作らせると root 所有になり、コンテナ内の `node` が書けない＝「コンテナだからできない」が生まれる）
+  - **ポートは公開していない。** 待ち受けは既定で 127.0.0.1（`ALTEROID_BIND` で開けられるが、開けるなら手前に境界を置くのが先）。runner だけは `ALTEROID_RUNNER_BIND=0.0.0.0` でデーモンから届かせるが、公開はしない
+  - ネットワークも分けてある（`data`: daemon↔db / `control`: daemon↔runner）。**runner から db は名前解決すらできない**。ここを1つに戻すと、鍵を持たないという境界が「鍵を渡していないだけ」に薄まる
+  - マネージャーへ渡す MCP 設定・プロジェクト設定は `workspace/`（＝runner コンテナの `/workspace`）に置く。cwd がそこなので `settingSources: ['project','local']` がそのまま拾う
+  - 境界の確認は `docker compose exec runner env | grep ALTEROID_DATABASE_URL`（出ないこと）と `docker compose exec runner getent hosts db`（引けないこと）
+- pg ドライバのテストは PGlite（インプロセスの実 PostgreSQL）で回る。CI に DB を用意する必要はないが、**偽の DB で代用しない**（SQL と索引と冪等性ごと確かめる意味が消える）
+- デーモン再起動時の引き取りは2通り。**runner が生きていれば繋ぎ直すだけ**（マネージャーは走り続けている）、**runner ごと落ちていれば実際に resume する**（JobStore の `session_id` ＋ 預かった生ログ）。どちらもクローンの受信箱へ知らせる
+  - **走行中だったものを「話しかけられるまで止めておく」にしないこと。** 人間の不在で止まってよいのは承認待ちの仕事だけである（PRD「自律」）。待機（`done`）だったものだけが遅延 resume でよい
 
 ## 自律まわりの動かし方（起点4つ）
 
