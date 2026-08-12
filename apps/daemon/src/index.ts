@@ -13,15 +13,18 @@ import {
   dailyReportEvent,
   missingDailyReportDates,
   type RunnerClient,
+  type Stores,
 } from '@alteroid/core';
 
 import { createApp } from './app.js';
+import { createJournalBus } from './journal-bus.js';
 import { createHttpRunner } from './runner-client.js';
 import { clearRuntimeInfo, writeRuntimeInfo } from './runtime.js';
 import { buildSchedule, readScheduleConfig } from './schedule.js';
 import { openStorage } from './storage.js';
 
 export { createApp, type AppDeps, type AppType } from './app.js';
+export { createJournalBus, type JournalBus } from './journal-bus.js';
 export { openStorage, DATABASE_URL_ENV, type Storage } from './storage.js';
 export { createHttpRunner, type HttpRunnerOptions } from './runner-client.js';
 export {
@@ -87,7 +90,13 @@ export async function main(): Promise<void> {
   // 記憶の置き場（ローカルの fs か、クラウドの PostgreSQL か）。器が違っても
   // 上の階層は同じものを見る（roadmap M4 受け入れ基準1）。
   const storage = await openStorage();
-  const { stores, paths } = storage;
+  const { paths } = storage;
+
+  // 日誌を購読できる形にしてから配る。**クローンもデーモンも同じ器を使う**ので、
+  // どこから追記されても `GET /journal/stream` に流れる（人間が聞きに行かなくても
+  // 承認待ちが出たことに気づける）。ここを通さない書き手を作らないこと。
+  const journalBus = createJournalBus(storage.stores.journal);
+  const stores: Stores = { ...storage.stores, journal: journalBus.journal };
 
   // クローンのセッションは人格データディレクトリを基準に置く。呼び出し元の
   // カレントディレクトリに依存させると、別の場所から起動した瞬間に resume が
@@ -148,6 +157,7 @@ export async function main(): Promise<void> {
     scheduler,
     storage: storage.description,
     runners,
+    journalEvents: journalBus,
   });
   // 開けたこと自体は方針の変更であって禁止事項ではない。ただし**黙って**外へ
   // 出さない — ここは叩けばクローンのターンが起きる実行の口である。

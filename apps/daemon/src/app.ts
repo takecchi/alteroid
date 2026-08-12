@@ -10,6 +10,8 @@ import type {
   Stores,
 } from '@alteroid/core';
 import { localDayRange, memorySlugSchema, runnerSetCredentialsCommandSchema } from '@alteroid/core';
+
+import type { JournalBus } from './journal-bus.js';
 import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
@@ -56,6 +58,13 @@ export interface AppDeps {
    * GitHub の書き込み権が並ぶ（railway/README.md「daemon 側には置かない」）。
    */
   runners?: RunnerRegistry;
+  /**
+   * 日誌の追記を購読する口（`GET /journal/stream`）。
+   *
+   * 無ければその経路だけが 503 を返す。**能力を落とすのではなく、配線されて
+   * いないことを黙って隠さない**ため（テストの HTTP 層検証では省略できる）。
+   */
+  journalEvents?: Pick<JournalBus, 'subscribe'>;
 }
 
 const chatBody = z.object({
@@ -86,6 +95,43 @@ const journalQuery = z.object({
   type: z.string().optional(),
 });
 const approvalsQuery = z.object({ pending: z.enum(['true', 'false']).default('true') });
+/**
+ * 会話は日誌から組み立てる。`scan` はどこまで遡るかで、`limit` は返す本数。
+ * **黙って打ち切らない** — 応答に `scanned` を返して、遡り切れていないことが
+ * 呼ぶ側に見えるようにしてある。
+ */
+const conversationsQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(20),
+  scan: z.coerce.number().int().min(1).max(10000).default(2000),
+});
+const conversationQuery = z.object({
+  scan: z.coerce.number().int().min(1).max(10000).default(2000),
+});
+const journalStreamQuery = z.object({
+  /** カンマ区切りの種別。指定しなければ全部流れる。 */
+  type: z.string().optional(),
+});
+const managerMessageBody = z.object({
+  text: z.string().min(1),
+  /** 許可確認への回答なら付ける。複数を待っているときは省略できない。 */
+  requestId: z.string().min(1).optional(),
+  decision: z.enum(['allow', 'deny']).optional(),
+});
+const abortBody = z.object({ reason: z.string().min(1).optional() });
+
+interface Conversation {
+  conversationId: string;
+  startedAt: string;
+  updatedAt: string;
+  messages: number;
+  preview: string;
+}
+
+/** 一覧に出す短い抜粋。全文は `GET /conversations/:id` にある。 */
+function preview(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length <= 80 ? flat : `${flat.slice(0, 80)}…`;
+}
 
 /**
  * 本文検査を持たない POST の門番。
@@ -195,6 +241,139 @@ export function createApp(deps: AppDeps) {
       return c.json({ ok: true });
     })
 
+    // --- 会話（続きから話せること自体が要件） -------------------------------
+    /**
+     * 会話の一覧。
+     *
+     * **`POST /chat` の SSE は流すだけで、後から読み直す口が無かった。** その口が
+     * 無いと、器（端末・タブ・アプリ）を替えた瞬間に会話が消える。人間が同じ
+     * クローンと話し続けられないなら、それは器の都合が能力を削っている
+     * （north_star 禁止1）。
+     *
+     * 日誌から組み立てているので、新しく持つ状態は無い。追記専用の記録が
+     * そのまま会話の履歴になる。
+     */
+    .get('/conversations', zValidator('query', conversationsQuery), async (c) => {
+      const { limit, scan } = c.req.valid('query');
+      const entries = await stores.journal.list({ limit: scan, types: ['exchange'] });
+      const conversations = new Map<string, Conversation>();
+
+      /**
+       * 日誌は新しい順。**その順序をそのまま会話の順序にする。**
+       *
+       * `at` で並べ直さないのは、同じミリ秒に並んだ発言の前後が時刻からは
+       * 決められないからである。追記専用の記録が持っている順序のほうが、
+       * 後から組み立てた順序より正しい。
+       */
+      for (const entry of entries) {
+        if (entry.type !== 'exchange' || entry.with !== 'human') continue;
+        const id = entry.conversationId;
+        if (id === undefined) continue;
+        const found = conversations.get(id);
+        if (found === undefined) {
+          // 最初に出会うのが最新の発言（＝この会話の updatedAt と抜粋）
+          conversations.set(id, {
+            conversationId: id,
+            startedAt: entry.at,
+            updatedAt: entry.at,
+            messages: 1,
+            preview: preview(entry.text),
+          });
+          continue;
+        }
+        // 以降は古い方へ遡るので、開始時刻だけを更新していく
+        found.startedAt = entry.at;
+        found.messages += 1;
+      }
+
+      return c.json({
+        conversations: [...conversations.values()].slice(0, limit),
+        /** 遡った範囲。ここより古い会話は出てこない（`scan` を増やせば見える）。 */
+        scanned: entries.length,
+      });
+    })
+
+    /** 1つの会話の中身（古い順）。器を替えても続きから話せるための口。 */
+    .get('/conversations/:id', zValidator('query', conversationQuery), async (c) => {
+      const id = c.req.param('id');
+      const { scan } = c.req.valid('query');
+      const entries = await stores.journal.list({ limit: scan, types: ['exchange'] });
+      const messages = entries
+        .filter(
+          (entry) =>
+            entry.type === 'exchange' && entry.with === 'human' && entry.conversationId === id,
+        )
+        .reverse()
+        .map((entry) => {
+          const exchange = entry as Extract<JournalEntry, { type: 'exchange' }>;
+          return {
+            id: exchange.id,
+            at: exchange.at,
+            /** `inbound` = 人間の発言 / `outbound` = クローンの返答。 */
+            role: exchange.role,
+            text: exchange.text,
+          };
+        });
+
+      if (messages.length === 0) return c.json({ error: 'not found' as const }, 404);
+      return c.json({ conversationId: id, messages });
+    })
+
+    /**
+     * 出来事の流れ（SSE）。**日誌に載ったものがそのまま流れる。**
+     *
+     * 聞きに行かないと分からない状態だと、承認待ちが出たことに人間は気づけない。
+     * 画面が数秒ごとに聞き直すのは、その穴を器の側で埋めているだけである。
+     *
+     * ここで種別を選り分ける表を持たない（`type` の絞り込みは**呼ぶ側**が指定する）。
+     * 見えない層を作らないための口で選別を始めたら、意味が消える。
+     */
+    .get('/journal/stream', zValidator('query', journalStreamQuery), (c) => {
+      const bus = deps.journalEvents;
+      if (bus === undefined) {
+        return c.json({ error: '出来事の流れが配線されていない' as const }, 503);
+      }
+      const types = c.req
+        .valid('query')
+        .type?.split(',')
+        .filter((value) => value.length > 0);
+
+      return streamSSE(c, async (stream) => {
+        const queue: JournalEntry[] = [];
+        let wake: (() => void) | null = null;
+        let closed = false;
+
+        const unsubscribe = bus.subscribe((entry) => {
+          if (types !== undefined && !types.includes(entry.type)) return;
+          queue.push(entry);
+          wake?.();
+        });
+        stream.onAbort(() => {
+          closed = true;
+          wake?.();
+        });
+
+        await stream.writeSSE({ event: 'open', data: JSON.stringify({ ok: true }) });
+
+        try {
+          for (;;) {
+            if (closed || stream.aborted || stream.closed) break;
+            const entry = queue.shift();
+            if (entry === undefined) {
+              await new Promise<void>((resolve) => {
+                wake = resolve;
+              });
+              wake = null;
+              continue;
+            }
+            await stream.writeSSE({ event: entry.type, data: JSON.stringify(entry) });
+          }
+        } finally {
+          unsubscribe();
+        }
+      });
+    })
+
     // --- 記憶（人間が読んで直せること自体が要件） ---------------------------
     .get('/memory', async (c) => c.json({ documents: await stores.persona.list() }))
 
@@ -217,6 +396,30 @@ export function createApp(deps: AppDeps) {
         summary: 'HTTP API 経由で人間が記憶を書き換えた',
       });
       return c.json({ document: doc });
+    })
+
+    /**
+     * 記憶を1つ消す。
+     *
+     * 書けるのに消せないと、間違って作った記憶が**永久に判断の材料に残る**。
+     * 人間が読んで直せることが要件なのだから、直すことには消すことも含まれる。
+     * 消した事実は日誌に残るので、記憶から消えても記録からは消えない。
+     */
+    .delete('/memory/:slug', async (c) => {
+      const slug = c.req.param('slug');
+      if (!memorySlugSchema.safeParse(slug).success) {
+        return c.json({ error: '記憶のスラッグが不正' as const }, 400);
+      }
+      const existing = await stores.persona.read(slug);
+      if (existing === null) return c.json({ error: 'not found' as const }, 404);
+      await stores.persona.remove(slug);
+      await stores.journal.append({
+        type: 'memory_update',
+        slug,
+        cause: 'human',
+        summary: 'HTTP API 経由で人間が記憶を削除した',
+      });
+      return c.json({ ok: true, slug });
     })
 
     // --- 日誌 --------------------------------------------------------------
@@ -368,6 +571,44 @@ export function createApp(deps: AppDeps) {
       const body = await clone.managers.transcript(c.req.param('id'));
       if (body === null) return c.json({ error: 'not found' as const }, 404);
       return c.text(body);
+    })
+
+    /**
+     * 人間からマネージャーへ直接話しかける。
+     *
+     * **これが無いと、人間の言葉はクローンを経由してしか届かない。** クローンが
+     * 取り込み中のときも、クローンの伝え方が間違っているときも、人間は手を出せない。
+     * 実際に「マネージャーが正しく 403 を報告しているのに、伝言が間違っていて
+     * 一晩噛み合わなかった」ということが起きている。
+     *
+     * クローンの代わりに判断するための口ではない（判断はクローンの仕事のまま）。
+     * 人間が自分の言葉を自分で届けるための口である。
+     */
+    .post('/managers/:id/messages', zValidator('json', managerMessageBody), async (c) => {
+      const { text, requestId, decision } = c.req.valid('json');
+      const result = await clone.managers.send(c.req.param('id'), text, {
+        ...(requestId === undefined ? {} : { requestId }),
+        ...(decision === undefined ? {} : { decision }),
+      });
+      if (result.outcome === 'unknown') return c.json({ error: result.detail }, 404);
+      return c.json({ outcome: result.outcome, detail: result.detail });
+    })
+
+    /**
+     * この仕事をやめさせる。
+     *
+     * runner には `DELETE /managers/:id` があるのに、人間が届く側には無かった。
+     * 暴走を止める手段が「器ごと落とす」しか無いと、**関係の無い仕事まで道連れ**
+     * になる（それで M5 の作業が3回消えている）。止めた事実は日誌に残る。
+     */
+    .delete('/managers/:id', zValidator('json', abortBody), async (c) => {
+      const { reason } = c.req.valid('json');
+      const result = await clone.managers.abort(
+        c.req.param('id'),
+        ...(reason === undefined ? [] : ([reason] as const)),
+      );
+      if (result.outcome === 'unknown') return c.json({ error: result.detail }, 404);
+      return c.json({ outcome: result.outcome, detail: result.detail });
     })
 
     // --- 委譲先の器と、そこへ配る鍵 ----------------------------------------
