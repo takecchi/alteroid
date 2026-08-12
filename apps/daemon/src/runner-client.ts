@@ -10,7 +10,12 @@ import type {
 import { request as httpRequest } from 'node:http';
 import { Readable } from 'node:stream';
 
-import { runnerEventSchema, runnerHealthSchema, runnerManagerStateSchema } from '@alteroid/core';
+import {
+  runnerEventSchema,
+  runnerHealthSchema,
+  runnerManagerStateSchema,
+  withDeadline,
+} from '@alteroid/core';
 
 /**
  * manager-runner への HTTP の口（roadmap M4）。
@@ -50,7 +55,28 @@ export interface HttpRunnerOptions {
    * 複数構成では、1台の不在で残りを使えなくしない方が正しい（M5 受け入れ基準5）。
    */
   requireHello?: boolean;
+  /**
+   * 名乗り（`GET /health`）に置く期限。既定 5 秒。**短くしてある。**
+   *
+   * 生存判定と配置はここを待ち合わせる。接続を拒まれるなら例外はすぐ返るが、
+   * TCP は繋がったまま黙る・パケットが落ちる・half-open のまま残る相手では、
+   * 期限が無い限り約束は永久に解けない。1台の沈黙で `heartbeat()` と `select()`
+   * が止まると、**落ちたことに誰も気づかず、健康な器への委譲も始まらない**
+   * （M5 受け入れ基準5 が崩れる）。
+   */
+  healthTimeoutMs?: number;
+  /**
+   * 命令（start / resume / send / answer / stop / list）に置く期限。既定 30 秒。
+   *
+   * 名乗りより長いのは、`resume` が生ログを丸ごと運ぶからである（器を作り直した
+   * 後の再開では大きくなる）。**それでも無期限にはしない** — 返らない命令は
+   * そのままクローンと人間の待ちになる。
+   */
+  requestTimeoutMs?: number;
 }
+
+const DEFAULT_HEALTH_TIMEOUT_MS = 5_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 /** `unix:/path/to.sock` を取り出す（無ければ TCP）。 */
 function socketPathOf(baseUrl: string): string | null {
@@ -95,10 +121,14 @@ class HttpRunner implements RunnerClient {
   readonly #token: string;
   readonly #fetch: typeof fetch;
   readonly #retryDelayMs: number;
+  readonly #healthTimeoutMs: number;
+  readonly #requestTimeoutMs: number;
   #controller: AbortController | null = null;
   #closed = false;
 
   constructor(options: HttpRunnerOptions) {
+    this.#healthTimeoutMs = options.healthTimeoutMs ?? DEFAULT_HEALTH_TIMEOUT_MS;
+    this.#requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.runnerId = options.runnerId ?? `${UNCONFIRMED_RUNNER_PREFIX}${options.baseUrl}`;
     this.#socketPath = socketPathOf(options.baseUrl);
     // ソケットのときも URL の形は要る（ホスト名は使われない）
@@ -137,8 +167,8 @@ class HttpRunner implements RunnerClient {
    * あとも同じ宛先として戻ってこられるようにするためである。
    */
   async health(): Promise<RunnerHealth> {
-    const response = await this.#call('GET', '/health');
-    const health = runnerHealthSchema.parse(await response.json());
+    const body = await this.#call('GET', '/health', undefined, this.#healthTimeoutMs);
+    const health = runnerHealthSchema.parse(JSON.parse(body));
     this.runnerId = health.runnerId;
     this.workspacePath = health.workspacePath;
     return health;
@@ -200,7 +230,13 @@ class HttpRunner implements RunnerClient {
         if (data.length > 0) {
           try {
             const parsed = runnerEventSchema.safeParse(JSON.parse(data));
-            if (parsed.success) onEvent(parsed.data);
+            if (parsed.success) {
+              // ストリームの先頭の名乗りでも id は確定する。名乗りが `GET /health`
+              // でしか埋まらないと、繋がっているのに「(未確認)」のままの器が生まれ、
+              // そこから降りてきた出来事の出どころが分からなくなる。
+              if (parsed.data.type === 'hello') this.runnerId = parsed.data.runnerId;
+              onEvent(parsed.data);
+            }
           } catch {
             // 壊れた1フレームでストリームごと落とさない
           }
@@ -223,12 +259,9 @@ class HttpRunner implements RunnerClient {
   }
 
   async answer(managerId: string, answer: RunnerAnswerCommand): Promise<boolean> {
-    const response = await this.#call(
-      'POST',
-      `/managers/${encodeURIComponent(managerId)}/answers`,
-      answer,
-    );
-    const body = (await response.json()) as { ok?: unknown };
+    const body = JSON.parse(
+      await this.#call('POST', `/managers/${encodeURIComponent(managerId)}/answers`, answer),
+    ) as { ok?: unknown };
     return body.ok === true;
   }
 
@@ -237,8 +270,7 @@ class HttpRunner implements RunnerClient {
   }
 
   async list(): Promise<RunnerManagerState[]> {
-    const response = await this.#call('GET', '/managers');
-    const body = (await response.json()) as { managers?: unknown };
+    const body = JSON.parse(await this.#call('GET', '/managers')) as { managers?: unknown };
     if (!Array.isArray(body.managers)) return [];
     return body.managers.flatMap((entry) => {
       const parsed = runnerManagerStateSchema.safeParse(entry);
@@ -248,13 +280,14 @@ class HttpRunner implements RunnerClient {
 
   async transcript(managerId: string): Promise<string | null> {
     try {
-      const response = await this.#fetch(
-        `${this.#baseUrl}/managers/${encodeURIComponent(managerId)}/transcript`,
-        { headers: { authorization: `Bearer ${this.#token}` } },
+      return await this.#call(
+        'GET',
+        `/managers/${encodeURIComponent(managerId)}/transcript`,
+        undefined,
+        this.#requestTimeoutMs,
       );
-      if (!response.ok) return null;
-      return await response.text();
     } catch {
+      // 生ログが取れないだけでは何も止めない（デーモン側の退避へ降りる）。
       return null;
     }
   }
@@ -269,20 +302,38 @@ class HttpRunner implements RunnerClient {
     this.#controller = null;
   }
 
-  async #call(method: string, path: string, body?: unknown): Promise<Response> {
-    const response = await this.#fetch(`${this.#baseUrl}${path}`, {
-      method,
-      headers: {
-        authorization: `Bearer ${this.#token}`,
-        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  /**
+   * 1回の呼び出し。**必ず期限内に終わる。**
+   *
+   * 応答が来ないことも失敗として確定させる（`withDeadline`）。本文を読み切るまでを
+   * 期限の内側に入れてあるのは、ヘッダだけ返って本文が止まる相手が居るからである
+   * — そこを外に出すと、期限を通り抜けた `json()` が永久に解けない約束になる。
+   *
+   * 期限を過ぎたら `AbortSignal` で片付けの合図も送る。ただし相手が見てくれるとは
+   * 限らないので、**期限そのものは合図に依存していない**。
+   */
+  async #call(
+    method: string,
+    path: string,
+    body?: unknown,
+    timeoutMs: number = this.#requestTimeoutMs,
+  ): Promise<string> {
+    return withDeadline(`runner ${method} ${path}`, timeoutMs, async (signal) => {
+      const response = await this.#fetch(`${this.#baseUrl}${path}`, {
+        method,
+        headers: {
+          authorization: `Bearer ${this.#token}`,
+          ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        signal,
+      });
+      const text = await response.text();
+      if (!response.ok) {
+        throw new Error(`runner ${method} ${path} が失敗した (${response.status}) ${text}`);
+      }
+      return text;
     });
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '');
-      throw new Error(`runner ${method} ${path} が失敗した (${response.status}) ${detail}`);
-    }
-    return response;
   }
 }
 

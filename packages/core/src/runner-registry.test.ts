@@ -185,6 +185,43 @@ describe('RunnerRegistry — 登録と生存判定', () => {
     expect(b.healthCalls).toBe(0);
     expect(await registry.probe('runner-x')).toBeNull();
   });
+
+  /**
+   * **接続を拒む器より、黙り込む器の方が危ない。**
+   *
+   * 拒まれるなら例外はすぐ返るが、TCP は繋がったまま応答が無い・パケットが落ちる・
+   * half-open のまま残る相手では、期限を置かない限り約束が解けない。生存判定も
+   * 配置も全 runner を待ち合わせるので、1台の沈黙が名簿ごと止める。
+   */
+  it('応答しない1台が、生存判定と配置を止めない（M5 受け入れ基準5）', async () => {
+    const time = clock();
+    const silent = fakeRunner('runner-silent');
+    // 例外も返さず、ただ黙る器
+    silent.health = () => new Promise<RunnerHealth>(() => undefined);
+    const healthy = fakeRunner('runner-healthy');
+    const registry = createRunnerRegistry([silent, healthy], {
+      now: time.now,
+      probeTimeoutMs: 30,
+    });
+
+    // 期限内に終わる（ここが返らなければ、落ちたことに誰も気づかない）
+    const states = await registry.heartbeat();
+    expect(states.find((state) => state.runnerId === 'runner-silent')?.alive).toBe(false);
+    expect(states.find((state) => state.runnerId === 'runner-healthy')?.alive).toBe(true);
+    expect(states.find((state) => state.runnerId === 'runner-silent')?.lastError).toContain('期限');
+
+    // 新しい委譲も、黙っている器を待たずに健康な器へ置ける
+    time.advance(20_000);
+    const chosen = await registry.select();
+    expect(chosen.runnerId).toBe('runner-healthy');
+
+    // 落ちたことも1回だけ鳴る（期限切れは「まだ分からない」ではなく失敗である）
+    const lost: string[] = [];
+    const registry2 = createRunnerRegistry([silent], { now: time.now, probeTimeoutMs: 30 });
+    registry2.onLost((state) => lost.push(state.runnerId));
+    await registry2.heartbeat();
+    expect(lost).toEqual(['runner-silent']);
+  });
 });
 
 describe('RunnerRegistry — 配置（資源で決める。定員は置かない）', () => {

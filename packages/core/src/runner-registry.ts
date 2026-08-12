@@ -1,4 +1,5 @@
-import type { RunnerCapacity, RunnerClient } from './runner-protocol.js';
+import { withDeadline } from './deadline.js';
+import type { RunnerCapacity, RunnerClient, RunnerLease } from './runner-protocol.js';
 
 /**
  * runner の名簿 — 登録・生存判定・資源による配置（roadmap M5）。
@@ -31,6 +32,14 @@ export interface RunnerHealthState {
   misses: number;
   /** 最後に測れた資源（報告しない器では省かれる）。 */
   capacity?: RunnerCapacity;
+  /**
+   * その器が自分に課している貸し出し期限（報告しない器では省かれる）。
+   *
+   * **これがある器だけが、落ちて見えたときに自動で移送できる。** 期限を過ぎれば
+   * 器が自分でセッションを畳むと約束しているので、`lastSeenAt` から数えて安全に
+   * なる時刻を計算できる（`runnerLeaseSchema` を見よ）。
+   */
+  lease?: RunnerLease;
   /** 最後の失敗の理由（人間が読む用）。 */
   lastError?: string;
 }
@@ -89,12 +98,24 @@ export interface RunnerRegistryOptions {
    * 生きている器から仕事を引き剥がす。
    */
   livenessTimeoutMs?: number;
+  /**
+   * 1台への名乗りの問い合わせに置く期限（ミリ秒）。既定 5 秒。
+   *
+   * **応答しない器を待ち続けないための線である。** 生存判定も配置も全 runner を
+   * 待ち合わせるので、ここに期限が無いと、黙り込んだ1台が `heartbeat()` と
+   * `select()` を丸ごと止める（＝落ちたことに誰も気づかず、健康な器への委譲も
+   * 始まらない）。期限切れは「まだ分からない」ではなく**失敗として確定させる**。
+   *
+   * 生存確認の間隔より短くすること（既定は 5 秒 / 10 秒）。
+   */
+  probeTimeoutMs?: number;
   /** 主にテスト用。既定は `Date.now`。 */
   now?: () => number;
 }
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 10_000;
 const DEFAULT_LIVENESS_TIMEOUT_MS = 30_000;
+const DEFAULT_PROBE_TIMEOUT_MS = 5_000;
 
 interface MutableState {
   /** 最後に聞いた時刻（成功・失敗どちらも）。まだ聞いていなければ null。 */
@@ -111,6 +132,7 @@ interface MutableState {
   alive: boolean;
   misses: number;
   capacity: RunnerCapacity | undefined;
+  lease: RunnerLease | undefined;
   lastError: string | undefined;
   /**
    * 直近この器へ置いた本数のうち、まだ実測（`capacity.activeManagers`）へ
@@ -141,12 +163,14 @@ class Registry implements RunnerRegistry {
   readonly #listeners = new Set<(state: RunnerHealthState) => void>();
   readonly #heartbeatIntervalMs: number;
   readonly #livenessTimeoutMs: number;
+  readonly #probeTimeoutMs: number;
   readonly #now: () => number;
   #timer: ReturnType<typeof setInterval> | null = null;
 
   constructor(runners: RunnerClient[], options: RunnerRegistryOptions) {
     this.#heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
     this.#livenessTimeoutMs = options.livenessTimeoutMs ?? DEFAULT_LIVENESS_TIMEOUT_MS;
+    this.#probeTimeoutMs = options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
     this.#now = options.now ?? (() => Date.now());
     for (const runner of runners) this.register(runner);
   }
@@ -160,6 +184,7 @@ class Registry implements RunnerRegistry {
       alive: true,
       misses: 0,
       capacity: undefined,
+      lease: undefined,
       lastError: undefined,
       placements: 0,
     });
@@ -260,6 +285,10 @@ class Registry implements RunnerRegistry {
    *
    * 落ちたと**見えた**瞬間だけ聞き手へ知らせる（毎回の失敗では鳴らさない）。
    * 鳴らし続けると、フェイルオーバーが同じ仕事を何度も掴み直す。
+   *
+   * **必ず期限内に終わる。** 応答しない器はここで失敗として確定する。確定しないと、
+   * この1台を待ち合わせている `heartbeat()` と `select()` が丸ごと止まり、
+   * 「1台の不在が残りを止めない」（M5 受け入れ基準5）が崩れる。
    */
   async #probe(runner: RunnerClient): Promise<void> {
     const state = this.#states.get(runner);
@@ -270,10 +299,15 @@ class Registry implements RunnerRegistry {
     state.probedAt = at;
 
     try {
-      const health = await runner.health();
+      const health = await withDeadline(
+        `runner ${runner.runnerId} の名乗り`,
+        this.#probeTimeoutMs,
+        () => runner.health(),
+      );
       state.lastSeen = at;
       state.misses = 0;
       state.capacity = health.capacity;
+      state.lease = health.lease;
       state.lastError = undefined;
       // 実測に置き換わったので、見込みで数えていた分は畳む。
       state.placements = 0;
@@ -333,6 +367,7 @@ class Registry implements RunnerRegistry {
           : new Date(state.lastSeen).toISOString(),
       misses: state?.misses ?? 0,
       ...(state?.capacity === undefined ? {} : { capacity: state.capacity }),
+      ...(state?.lease === undefined ? {} : { lease: state.lease }),
       ...(state?.lastError === undefined ? {} : { lastError: state.lastError }),
     };
   }

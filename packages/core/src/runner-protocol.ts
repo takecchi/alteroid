@@ -66,10 +66,45 @@ export const runnerCapacitySchema = z.object({
 export type RunnerCapacity = z.infer<typeof runnerCapacitySchema>;
 
 /**
+ * 器が自分に課している貸し出し期限（fencing lease / roadmap M5）。
+ *
+ * **これが無いと、落ちて見えた器の仕事を別の器へ移せない。** 生存確認が途絶えた
+ * ことは「器が死んだ」ことを意味しない — デーモンとの通信だけが切れて、マネージャーは
+ * 走り続けている（ネットワーク分断）こともある。そこで同じ session を別の器で
+ * resume すると、**1つの仕事が2か所で同時に動く**。共有 workspace への二重書き、
+ * `gh pr create` や MCP 越しの外部操作の二重実行が起きる。デーモン側の排他
+ * （移送を1本にまとめる類）は同じプロセスの中しか守れないので、ここは器自身が
+ * 引き受けるしかない。
+ *
+ * だから約束はこうである。**`ttlMs` のあいだ `GET /health` が届かなければ、器は
+ * 自分が抱えている SDK セッションを畳む。** デーモンはこれを根拠に、最後に名乗りが
+ * 返った時刻から `ttlMs` ＋ 余裕を過ぎたときだけ、別の器で開き直してよい。
+ *
+ * **報告しない器は「畳まない器」として扱われる。** その器の仕事は自動では移らず、
+ * 人間かクローンの確認を待つ（黙って二重に走らせるよりは止める）。
+ */
+export const runnerLeaseSchema = z.object({
+  /**
+   * この時間 `GET /health` が届かなければ、器が自分でセッションを畳む（ミリ秒）。
+   *
+   * **生存確認の間隔より十分長くすること。** 短いと、少し詰まっただけの器が
+   * 走っている仕事を自分で殺す。
+   */
+  ttlMs: z.number().int().positive(),
+});
+
+export type RunnerLease = z.infer<typeof runnerLeaseSchema>;
+
+/**
  * runner の名乗り（`GET /health`）。生存判定と配置はこれ1枚で足りる。
  *
  * `capacity` を省略可能にしてあるのは、資源を報告しない古い器が名簿に混ざっても
  * **配置から落とさない**ためである（報告が無いことは能力の欠落ではない）。
+ *
+ * **`GET /health` は貸し出し期限の更新でもある**（`lease` を見よ）。更新の口を
+ * ここ1つに絞ってあるのは、デーモンが「最後に名乗りが返った時刻」から器側の期限を
+ * 安全側に見積もれるようにするためである。他の口でも更新すると、器の期限がデーモンの
+ * 見立てより後ろにずれ、まだ走っている仕事を移してしまう。
  */
 export const runnerHealthSchema = z.object({
   ok: z.literal(true),
@@ -78,6 +113,7 @@ export const runnerHealthSchema = z.object({
   managers: z.number().int().nonnegative(),
   pendingEvents: z.number().int().nonnegative(),
   capacity: runnerCapacitySchema.optional(),
+  lease: runnerLeaseSchema.optional(),
 });
 
 export type RunnerHealth = z.infer<typeof runnerHealthSchema>;
@@ -218,6 +254,14 @@ export interface RunnerClient {
   send(managerId: string, text: string): Promise<void>;
   /** `false` = その確認は runner 側に無い（既に解けた / 別の宛先）。 */
   answer(managerId: string, answer: RunnerAnswerCommand): Promise<boolean>;
+  /**
+   * そのセッションを畳ませる。
+   *
+   * **通ったことが「もうその器では走っていない」の確認になる**（別の器へ移す前に
+   * ここを通す）。だから**届かなければ例外を投げること。** 落ちている器で黙って
+   * 成功したことにすると、走り続けているセッションを止めたつもりで別の器に2本目を
+   * 開くことになる。
+   */
   stop(managerId: string): Promise<void>;
   /** いま runner が抱えているセッション（再接続時の突き合わせに使う）。 */
   list(): Promise<RunnerManagerState[]>;

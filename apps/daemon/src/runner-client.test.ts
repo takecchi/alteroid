@@ -544,3 +544,77 @@ describe('デーモン ↔ manager-runner（HTTP 境界）', () => {
     await host.shutdown();
   });
 });
+
+/**
+ * 期限（roadmap M5）。
+ *
+ * **接続を拒む器より、黙り込む器の方が危ない。** 拒まれるならすぐ例外が返るが、
+ * TCP は繋がったまま応答が無い相手では、期限を置かない限り約束が解けない。
+ * デーモンはそこを待ち合わせるので、1台の沈黙が生存判定と配置ごと止める。
+ */
+describe('runner への呼び出しには期限がある', () => {
+  /** 何も返さない相手（`AbortSignal` も見ない）。 */
+  const silence: typeof fetch = (() => new Promise(() => undefined)) as typeof fetch;
+
+  it('名乗りは期限で失敗として確定する（返らないままにしない）', async () => {
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn: silence,
+      healthTimeoutMs: 30,
+      requireHello: false,
+    });
+
+    await expect(client.health()).rejects.toThrow('期限');
+  });
+
+  it('命令も期限で失敗する（返らない命令はそのまま人間の待ちになる）', async () => {
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn: silence,
+      healthTimeoutMs: 30,
+      requestTimeoutMs: 30,
+      requireHello: false,
+    });
+
+    await expect(client.send('mgr-1', 'やあ')).rejects.toThrow('期限');
+    await expect(client.stop('mgr-1')).rejects.toThrow('期限');
+  });
+
+  it('黙っている器が混ざっても、名簿の生存判定と配置は期限内に終わる', async () => {
+    const { fn } = fakeSdk('sess-alive');
+    const outbox = new Outbox();
+    const host = createRunnerHost({
+      runnerId: 'runner-alive',
+      workspacePath: '/workspace',
+      emit: (event) => outbox.push(event),
+      queryFn: fn,
+      env: { PATH: '/usr/bin' },
+    });
+    const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+
+    // **同時に作る。** 順に名乗りを聞くと、黙っている1台の期限が切れるまで
+    // 残りの器を起こせない（デーモンの `openRunners` と同じ形）。
+    const [mute, alive] = await Promise.all([
+      createHttpRunner({
+        baseUrl: 'http://mute.test',
+        token: TOKEN,
+        fetchFn: silence,
+        healthTimeoutMs: 30,
+        requireHello: false,
+      }),
+      createHttpRunner({ baseUrl: 'http://runner.test', token: TOKEN, fetchFn: fetchInto(app) }),
+    ]);
+    if (mute === undefined || alive === undefined) throw new Error('runner を作れていない');
+
+    const registry = createRunnerRegistry([mute, alive], { probeTimeoutMs: 30 });
+    const states = await registry.heartbeat();
+
+    expect(states.find((state) => state.runnerId === 'runner-alive')?.alive).toBe(true);
+    // 委譲の宛先は健康な器になる（黙っている1台は選ばれないし、待たされもしない）
+    expect((await registry.select()).runnerId).toBe('runner-alive');
+
+    await host.shutdown();
+  });
+});

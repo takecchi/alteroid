@@ -106,18 +106,22 @@ async function openRunners(workspace: string, withheldEnvKeys: string[]): Promis
     );
   }
 
-  const runners: RunnerClient[] = [];
-  const silent: string[] = [];
-  for (const baseUrl of urls) {
-    const client = await createHttpRunner({
-      baseUrl,
-      token,
-      // 1台しか居ないなら、返らないことは起動失敗である。
-      requireHello: urls.length === 1,
-    });
-    if (isUnconfirmed(client)) silent.push(baseUrl);
-    runners.push(client);
-  }
+  // **同時に聞く。** 順に聞くと、黙っている1台の期限が切れるまで残りの器を
+  // 起こせない（名乗りには期限があるので止まりはしないが、待つ理由も無い）。
+  const runners: RunnerClient[] = await Promise.all(
+    urls.map((baseUrl) =>
+      createHttpRunner({
+        baseUrl,
+        token,
+        // 1台しか居ないなら、返らないことは起動失敗である。
+        requireHello: urls.length === 1,
+      }),
+    ),
+  );
+  const silent = urls.filter((_, index) => {
+    const client = runners[index];
+    return client !== undefined && isUnconfirmed(client);
+  });
 
   if (silent.length === urls.length) {
     throw new Error(
