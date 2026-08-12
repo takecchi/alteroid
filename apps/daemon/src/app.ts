@@ -11,6 +11,7 @@ import type {
 import { localDayRange, memorySlugSchema } from '@alteroid/core';
 import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
+import { createMiddleware } from 'hono/factory';
 import { streamSSE } from 'hono/streaming';
 import { z } from 'zod';
 
@@ -71,6 +72,29 @@ const journalQuery = z.object({
   type: z.string().optional(),
 });
 const approvalsQuery = z.object({ pending: z.enum(['true', 'false']).default('true') });
+
+/**
+ * 本文検査を持たない POST の門番。
+ *
+ * 待ち受けているのは 127.0.0.1 だけだが、**それはブラウザからの保護にならない。**
+ * 人間が開いた任意のページから `fetch(..., { mode: 'no-cors' })` や HTML form で
+ * ここへ POST できてしまい（CORS の単純リクエスト）、応答が読めなくても送信は成立する。
+ * 見ていないクローンのターンを他人が起こせる状態は、観測の口ではなく実行の口である。
+ *
+ * `application/json` を要求すると preflight が必須になり、CORS ヘッダを返さない
+ * このデーモンでは preflight が通らない。**ツールや能力を削るのではなく、
+ * 実行環境の境界で塞ぐ**（north_star 禁止2）。
+ *
+ * `zValidator('json', ...)` を持つ経路は hono が同じ検査をするので、こちらは要らない。
+ * **本文検査の無い POST を足すときは、必ずこれを付けること。**
+ */
+const deliberateClient = createMiddleware(async (c, next) => {
+  const contentType = c.req.header('content-type')?.toLowerCase() ?? '';
+  if (!contentType.includes('application/json')) {
+    return c.json({ error: 'content-type: application/json が要る' as const }, 415);
+  }
+  await next();
+});
 
 type DailyReport = Extract<JournalEntry, { type: 'daily_report' }>;
 
@@ -139,7 +163,7 @@ export function createApp(deps: AppDeps) {
     })
 
     /** 会話の終了 = 蒸留の契機。CLI が chat を抜けるときに叩く。 */
-    .post('/chat/:conversationId/end', async (c) => {
+    .post('/chat/:conversationId/end', deliberateClient, async (c) => {
       await clone.endConversation(c.req.param('conversationId'));
       return c.json({ ok: true });
     })
@@ -269,18 +293,9 @@ export function createApp(deps: AppDeps) {
     /**
      * 他人が形を決めている webhook 用。本文をそのまま payload として運ぶので、
      * 送り元を改造できなくても届く（GitHub や CI からそのまま叩ける）。
-     *
-     * **`application/json` を要求する。** これはブラウザに preflight を強制する
-     * ためである。要求しないと、人間が開いた任意のページから 127.0.0.1 へ
-     * 投げ込めてしまい（CORS の単純リクエスト）、見ていないクローンに他人が
-     * 好きな出来事を届けられる。判断の材料に他人が書き込める穴を残さない。
      */
-    .post('/events/:source', async (c) => {
+    .post('/events/:source', deliberateClient, async (c) => {
       const source = c.req.param('source');
-      const contentType = c.req.header('content-type') ?? '';
-      if (!contentType.toLowerCase().includes('application/json')) {
-        return c.json({ error: 'content-type: application/json が要る' as const }, 415);
-      }
       const raw = await c.req.text();
       let payload: unknown = raw;
       try {
@@ -296,8 +311,13 @@ export function createApp(deps: AppDeps) {
     // --- 時間起点のジョブ ---------------------------------------------------
     .get('/schedule', (c) => c.json({ entries: deps.scheduler?.list() ?? [] }))
 
-    /** 定期ジョブを今すぐ起こす（人間が待たずに確かめるための口）。 */
-    .post('/schedule/:kind/run', (c) => {
+    /**
+     * 定期ジョブを今すぐ起こす（人間が待たずに確かめるための口）。
+     *
+     * これは観測ではなく**実行**である。起こせばクローンのターンが走り、記憶に
+     * 基づく委譲や外部への操作の判断まで動く。ブラウザから叩けてはいけない。
+     */
+    .post('/schedule/:kind/run', deliberateClient, (c) => {
       const kind = c.req.param('kind');
       if (deps.scheduler?.run(kind) !== true) return c.json({ error: 'not found' as const }, 404);
       return c.json({ ok: true });
@@ -332,7 +352,7 @@ export function createApp(deps: AppDeps) {
       return c.text(body);
     })
 
-    .post('/shutdown', (c) => {
+    .post('/shutdown', deliberateClient, (c) => {
       setTimeout(() => deps.shutdown(), 10);
       return c.json({ ok: true });
     });

@@ -158,6 +158,9 @@ export async function stop(): Promise<StopOutcome> {
     async requestShutdown(info) {
       const response = await fetch(`${baseUrl(info)}/shutdown`, {
         method: 'POST',
+        // デーモンは本文の無い POST に application/json を要求する（ブラウザの
+        // 単純リクエストで他人が止められないようにするため）
+        headers: { 'content-type': 'application/json' },
         signal: AbortSignal.timeout(5000),
       });
       if (!response.ok) throw new Error(`shutdown が失敗した (${response.status})`);

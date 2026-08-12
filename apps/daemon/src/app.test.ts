@@ -132,6 +132,19 @@ const json = (body: unknown) => ({
   body: JSON.stringify(body),
 });
 
+/** 本文を持たない POST（CLI はこれに content-type を付けて叩く）。 */
+const post = { method: 'POST', headers: { 'content-type': 'application/json' } };
+
+/**
+ * ブラウザの単純リクエスト。人間が開いた任意のページから 127.0.0.1 へ投げられる形。
+ * 応答は読めないが、送信は成立する。
+ */
+const simpleRequest = (body = 'x') => ({
+  method: 'POST',
+  headers: { 'content-type': 'text/plain;charset=UTF-8' },
+  body,
+});
+
 describe('HTTP API', () => {
   it('/health は本人確認用のトークンを返す（CLI が PID を信用しないため）', async () => {
     const response = await app.request('/health');
@@ -164,7 +177,7 @@ describe('HTTP API', () => {
   });
 
   it('会話終了で蒸留が促される', async () => {
-    const response = await app.request('/chat/conv-x/end', { method: 'POST' });
+    const response = await app.request('/chat/conv-x/end', post);
 
     expect(response.status).toBe(200);
     expect(fake.ended).toEqual(['conv-x']);
@@ -333,17 +346,49 @@ describe('HTTP API', () => {
     expect(fake.posted[0]).toMatchObject({ source: 'mail', payload: 'ただの文章' });
   });
 
-  it('content-type を名乗らない投げ込みは受けない（見ていないクローンへの横入りを塞ぐ）', async () => {
-    // ブラウザの単純リクエストで 127.0.0.1 へ投げ込めると、人間が開いた任意のページから
-    // クローンの判断材料に他人が書き込めてしまう
-    const response = await app.request('/events/github', {
-      method: 'POST',
-      headers: { 'content-type': 'text/plain;charset=UTF-8' },
-      body: '{"action":"注入"}',
-    });
+  /**
+   * 127.0.0.1 で待つことはブラウザからの保護にならない。人間が開いた任意のページが
+   * 単純リクエストを投げられ、応答が読めなくても**送信は成立する**。クローンのターンを
+   * 他人が起こせる状態を残さない（塞ぐのは能力側ではなく実行環境の境界）。
+   */
+  it('ブラウザの単純リクエストでは、状態を変える POST を叩けない', async () => {
+    const cases = [
+      // 他人が判断材料を書き込める
+      { path: '/events/github', body: '{"action":"注入"}' },
+      // 他人が自律ターン（モデル利用・委譲の判断）を起こせる
+      { path: '/schedule/self_initiative/run' },
+      // 他人が蒸留ターンを起こせる
+      { path: '/chat/conv-x/end' },
+      // 他人がデーモンを止められる
+      { path: '/shutdown' },
+    ];
 
-    expect(response.status).toBe(415);
+    for (const { path, body } of cases) {
+      const response = await app.request(path, simpleRequest(body));
+      expect(response.status, path).toBe(415);
+    }
+
+    // どれも通っていない
     expect(fake.posted).toEqual([]);
+    expect(fake.ended).toEqual([]);
+    expect(schedule.ran).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(shutdowns).toBe(0);
+  });
+
+  it('form / no-cors で投げられる content-type も受けない', async () => {
+    for (const contentType of [
+      'application/x-www-form-urlencoded',
+      'multipart/form-data; boundary=x',
+      '',
+    ]) {
+      const response = await app.request('/schedule/daily_report/run', {
+        method: 'POST',
+        ...(contentType === '' ? {} : { headers: { 'content-type': contentType } }),
+      });
+      expect(response.status, contentType).toBe(415);
+    }
+    expect(schedule.ran).toEqual([]);
   });
 
   it('中身のない通知も受ける（source だけ）', async () => {
@@ -356,11 +401,11 @@ describe('HTTP API', () => {
     const list = await app.request('/schedule');
     expect(await list.json()).toMatchObject({ entries: [{ kind: 'daily_report' }] });
 
-    const run = await app.request('/schedule/daily_report/run', { method: 'POST' });
+    const run = await app.request('/schedule/daily_report/run', post);
     expect(run.status).toBe(200);
     expect(schedule.ran).toEqual(['daily_report']);
 
-    expect((await app.request('/schedule/nope/run', { method: 'POST' })).status).toBe(404);
+    expect((await app.request('/schedule/nope/run', post)).status).toBe(404);
   });
 
   it('溜まった承認待ちをまとめて片付けられる（1件失敗しても残りは進む）', async () => {
@@ -426,7 +471,7 @@ describe('HTTP API', () => {
   });
 
   it('/shutdown で停止を要求できる', async () => {
-    const response = await app.request('/shutdown', { method: 'POST' });
+    const response = await app.request('/shutdown', post);
     expect(response.status).toBe(200);
 
     await new Promise((resolve) => setTimeout(resolve, 30));
