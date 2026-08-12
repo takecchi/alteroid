@@ -147,6 +147,7 @@ export async function main(): Promise<void> {
     shutdown: () => void shutdown(),
     scheduler,
     storage: storage.description,
+    runners,
   });
   // 開けたこと自体は方針の変更であって禁止事項ではない。ただし**黙って**外へ
   // 出さない — ここは叩けばクローンのターンが起きる実行の口である。

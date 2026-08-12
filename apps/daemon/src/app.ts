@@ -5,10 +5,11 @@ import type {
   CloneHost,
   JournalEntry,
   JournalEntryType,
+  RunnerRegistry,
   Scheduler,
   Stores,
 } from '@alteroid/core';
-import { localDayRange, memorySlugSchema } from '@alteroid/core';
+import { localDayRange, memorySlugSchema, runnerSetCredentialsCommandSchema } from '@alteroid/core';
 import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
@@ -47,6 +48,14 @@ export interface AppDeps {
    * CLI がこれを見せるので、人間が器を取り違えない。接続情報は含めない。
    */
   storage?: string;
+  /**
+   * 委譲先の名簿。**マネージャーの道具の鍵を、器を作り直さずに回すための口**が
+   * ここから生える（`GET /runners` / `POST /runners/credentials`）。
+   *
+   * デーモンが鍵を保管するのではない。降ろすだけである — 保管すると、記憶の器に
+   * GitHub の書き込み権が並ぶ（railway/README.md「daemon 側には置かない」）。
+   */
+  runners?: RunnerRegistry;
 }
 
 const chatBody = z.object({
@@ -360,6 +369,67 @@ export function createApp(deps: AppDeps) {
       if (body === null) return c.json({ error: 'not found' as const }, 404);
       return c.text(body);
     })
+
+    // --- 委譲先の器と、そこへ配る鍵 ----------------------------------------
+    /**
+     * runner の一覧と、**そこで配られている鍵の指紋**。
+     *
+     * 指紋を出すのは、人間が置いた鍵とマネージャーが握っている鍵が同じかどうかを
+     * 確かめる手段が他に無いからである。無いと「鍵の権限が足りない」のか「鍵が
+     * 届いていない」のかを誰も切り分けられず、人間とマネージャーが両方正しいまま
+     * 何時間もすれ違う（実際に起きた）。**値は返らない。**
+     */
+    .get('/runners', async (c) => {
+      const registry = deps.runners;
+      if (registry === undefined) return c.json({ runners: [] });
+      const runners = await registry.list();
+      return c.json({
+        runners: await Promise.all(
+          runners.map(async (runner) => ({
+            runnerId: runner.runnerId,
+            workspacePath: runner.workspacePath,
+            credentials: await runner.credentials().catch(() => []),
+          })),
+        ),
+      });
+    })
+
+    /**
+     * マネージャーの道具の鍵を差し替える。**器を作り直さない。**
+     *
+     * これが無いと、鍵の更新に再デプロイが要る＝「鍵を直す」と「走行中の仕事を
+     * 失う」が同じ操作になる。走っている人の仕事をデーモンの都合で殺さないのと
+     * 同じ理由で、鍵の都合でも殺さない。
+     *
+     * 鍵はここに保管しない。受け取って runner へ降ろすだけである（デーモンの器に
+     * 記憶の鍵と GitHub の書き込み権を並べない）。
+     */
+    .post(
+      '/runners/credentials',
+      zValidator('json', runnerSetCredentialsCommandSchema),
+      async (c) => {
+        const registry = deps.runners;
+        if (registry === undefined) {
+          return c.json({ error: 'runner が登録されていない' as const }, 503);
+        }
+        const runners = await registry.list();
+        const { credentials } = c.req.valid('json');
+        const results = await Promise.all(
+          runners.map(async (runner) => {
+            try {
+              return {
+                runnerId: runner.runnerId,
+                ok: true as const,
+                credentials: await runner.setCredentials(credentials),
+              };
+            } catch (error) {
+              return { runnerId: runner.runnerId, ok: false as const, error: String(error) };
+            }
+          }),
+        );
+        return c.json({ results });
+      },
+    )
 
     // --- セッションログ（アーカイブ） --------------------------------------
     .get('/archive', async (c) => c.json({ entries: await stores.archive.list() }))

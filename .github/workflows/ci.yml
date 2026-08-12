@@ -66,3 +66,33 @@ jobs:
             # 鍵が無くても公開リポジトリの clone は通る（無い状態が壊れていないこと）。
             cd /tmp && git clone --depth 1 -q https://github.com/cli/cli.git probe
           '
+
+      # **鍵が凍らないこと。** env で配ると、鍵は runner の起動時に固定され、走行中の
+      # マネージャーには永久に届かない（「鍵を直す」と「走行中の仕事を失う」が同じ
+      # 操作になる）。`gh` が毎回ファイルを読むこと自体をここで見る。手元で壊れたことに
+      # 気づける場所が他に無い。
+      - name: 鍵が走行中に差し替えられるか（gh がファイルを読み直す）
+        run: |
+          docker run --rm -u 1001 alteroid:ci sh -eu -c '
+            f=/tmp/gh-token
+            export ALTEROID_GH_TOKEN_FILE="$f"
+
+            # シムが実体より先に見つかること（PATH の順序が崩れていないこと）
+            test "$(command -v gh)" = /usr/local/bin/gh \
+              || { echo "gh のシムが効いていない: $(command -v gh)" >&2; exit 1; }
+
+            printf %s "token-one" > "$f"
+            gh auth token 2>/dev/null | grep -qx "token-one" \
+              || { echo "1回目の鍵を読めていない" >&2; exit 1; }
+
+            # **同じプロセス環境のまま**中身だけ差し替える（走行中の差し替えを模す）
+            printf %s "token-two" > "$f"
+            gh auth token 2>/dev/null | grep -qx "token-two" \
+              || { echo "差し替えた鍵が届いていない（凍っている）" >&2; exit 1; }
+
+            # 空の鍵は「置かれていない」と同じ扱い（空を export すると壊れ方が悪化する）
+            : > "$f"
+            gh auth token >/dev/null 2>&1 \
+              && { echo "空の鍵が鍵として通っている" >&2; exit 1; }
+            exit 0
+          '

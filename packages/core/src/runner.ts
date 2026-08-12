@@ -14,6 +14,7 @@ import type {
   SessionStoreEntry,
 } from '@anthropic-ai/claude-agent-sdk';
 
+import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
 import { buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
 import type {
   RunnerAnswerCommand,
@@ -104,11 +105,23 @@ export interface RunnerHostOptions {
   withheldEnvKeys?: readonly string[];
   /** SDK 子プロセスを別 UID で走らせる（コンテナ構成の既定）。 */
   childUser?: RunnerChildUser;
+  /**
+   * マネージャーの道具の鍵（`GH_TOKEN` など）。
+   *
+   * 渡すと、鍵は `env` のスナップショットではなく**こちらが持つ現在値**が配られる。
+   * 走行中に差し替えても新しいマネージャーには即座に、既に走っているマネージャーにも
+   * 器（ファイル）越しに次の `git` / `gh` 呼び出しから届く（`credentials.ts`）。
+   */
+  credentials?: CredentialStore;
 }
 
 export interface RunnerHost {
   readonly runnerId: string;
   readonly workspacePath: string;
+  /** いま配っている鍵の指紋。**値は出さない。** */
+  credentials(): CredentialFingerprint[];
+  /** 鍵を差し替える。器を作り直さずに鍵を回すための唯一の口である。 */
+  setCredentials(entries: readonly CredentialEntry[]): Promise<CredentialFingerprint[]>;
   start(command: RunnerStartCommand): Promise<void>;
   resume(command: RunnerResumeCommand): Promise<void>;
   send(managerId: string, text: string): Promise<boolean>;
@@ -132,6 +145,7 @@ class Host implements RunnerHost {
   readonly #env: NodeJS.ProcessEnv;
   readonly #withheldEnvKeys: readonly string[];
   readonly #childUser: RunnerChildUser | undefined;
+  readonly #credentials: CredentialStore | undefined;
   readonly #sessions = new Map<string, RunnerSession>();
 
   constructor(options: RunnerHostOptions) {
@@ -142,6 +156,20 @@ class Host implements RunnerHost {
     this.#env = options.env ?? process.env;
     this.#withheldEnvKeys = [...WITHHELD_ENV_KEYS, ...(options.withheldEnvKeys ?? [])];
     this.#childUser = options.childUser;
+    this.#credentials = options.credentials;
+  }
+
+  credentials(): CredentialFingerprint[] {
+    return this.#credentials?.fingerprints() ?? [];
+  }
+
+  async setCredentials(entries: readonly CredentialEntry[]): Promise<CredentialFingerprint[]> {
+    if (this.#credentials === undefined) {
+      throw new Error(
+        '鍵の器が無い runner では差し替えられない（ALTEROID_CREDENTIAL_DIR を用意すること）',
+      );
+    }
+    return this.#credentials.set(entries);
   }
 
   #create(managerId: string, request: string, cwd: string): RunnerSession {
@@ -154,6 +182,7 @@ class Host implements RunnerHost {
       env: this.#env,
       withheldEnvKeys: this.#withheldEnvKeys,
       ...(this.#childUser === undefined ? {} : { childUser: this.#childUser }),
+      ...(this.#credentials === undefined ? {} : { credentials: this.#credentials }),
       onClosed: () => this.#sessions.delete(managerId),
     });
     this.#sessions.set(managerId, session);
@@ -242,6 +271,7 @@ interface RunnerSessionOptions {
   env: NodeJS.ProcessEnv;
   withheldEnvKeys: readonly string[];
   childUser?: RunnerChildUser;
+  credentials?: CredentialStore;
   onClosed: () => void;
 }
 
@@ -254,6 +284,7 @@ class RunnerSession {
   readonly #env: NodeJS.ProcessEnv;
   readonly #withheldEnvKeys: readonly string[];
   readonly #childUser: RunnerChildUser | undefined;
+  readonly #credentials: CredentialStore | undefined;
   readonly #onClosed: () => void;
 
   readonly #input: SDKUserMessage[] = [];
@@ -278,6 +309,7 @@ class RunnerSession {
     this.#env = options.env;
     this.#withheldEnvKeys = options.withheldEnvKeys;
     this.#childUser = options.childUser;
+    this.#credentials = options.credentials;
     this.#onClosed = options.onClosed;
   }
 
@@ -472,10 +504,20 @@ class RunnerSession {
     });
   }
 
-  /** 記憶ストアの所在は子プロセスへ渡さない（渡さなければ構造的に触れない）。 */
+  /**
+   * 記憶ストアの所在は子プロセスへ渡さない（渡さなければ構造的に触れない）。
+   *
+   * 逆に、**下（外の世界）へ手を伸ばす鍵は現在値で上書きして渡す**。`this.#env` は
+   * runner が起動した瞬間のスナップショットなので、そのまま配ると人間が後から
+   * 差し替えた鍵が永久に届かない（`credentials.ts`）。
+   */
   #childEnv(): NodeJS.ProcessEnv {
     const env = { ...this.#env };
     for (const key of this.#withheldEnvKeys) delete env[key];
+    if (this.#credentials !== undefined) {
+      // 器の現在値が凍った env に勝つ。順番を逆にすると意味が消える。
+      Object.assign(env, this.#credentials.values(), this.#credentials.env());
+    }
     return env;
   }
 
