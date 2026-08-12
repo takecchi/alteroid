@@ -17,6 +17,12 @@ catalog:
   '@hono/zod-validator': ^0.9.0
   zod: ^4.4.3
   commander: ^15.0.0
+  # クラウド段（M4）の記憶ストア
+  drizzle-orm: ^0.45.2
+  pg: ^8.23.0
+  '@types/pg': ^8.21.0
+  # pg ドライバのテスト用。実 PostgreSQL をインプロセスで動かす（CI に DB を要求しない）
+  '@electric-sql/pglite': ^0.5.4
 
 minimumReleaseAgeExclude:
   - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.228'

@@ -158,16 +158,20 @@ interface Setup {
   inbox: InboxEvent[];
 }
 
-function setup(env: NodeJS.ProcessEnv = { PATH: '/usr/bin', ALTEROID_HOME: '/secret' }): Setup {
+function setup(
+  env: NodeJS.ProcessEnv = { PATH: '/usr/bin', ALTEROID_HOME: '/secret' },
+  extra: Partial<Parameters<typeof createManagerPool>[0]> = {},
+): Setup {
   const { fn, sessions } = fakeSdk();
-  const stores = createMemoryStores();
+  const stores = extra.stores ?? createMemoryStores();
   const inbox: InboxEvent[] = [];
   const pool = createManagerPool({
-    stores,
     queryFn: fn,
     post: (event) => inbox.push(event),
     defaultCwd: '/work/project',
     env,
+    ...extra,
+    stores,
   });
   return { pool, stores, sessions, inbox };
 }
@@ -508,6 +512,136 @@ describe('マネージャー', () => {
   it('居ないマネージャーへの送信は、黙って捨てずに理由を返す', async () => {
     const s = setup();
     expect((await s.pool.send('mgr-nope', 'やあ')).outcome).toBe('unknown');
+    await s.pool.stop();
+  });
+
+  it('記憶ストアの接続情報を子プロセスへ渡さない（クラウド構成の本命の強制）', async () => {
+    // ローカルではパス、クラウドでは DB 認証情報。**渡さなければ到達経路が無い**。
+    // ツールを削って塞ぐのではなく、認証情報の配布範囲で守る（roadmap M4 受け入れ基準3）。
+    const s = setup(
+      {
+        PATH: '/usr/bin',
+        HOME: '/home/alteroid',
+        ALTEROID_HOME: '/data/alteroid',
+        ALTEROID_DATABASE_URL: 'postgres://alteroid:secret@db:5432/alteroid',
+        CLAUDE_CODE_OAUTH_TOKEN: 'token-for-the-sdk',
+      },
+      { withheldEnvKeys: ['PGPASSWORD'] },
+    );
+    await s.pool.start({ request: '調べて' });
+
+    const env = (s.sessions[0] as FakeSession).options.env ?? {};
+    expect(env.ALTEROID_DATABASE_URL).toBeUndefined();
+    expect(env.PGPASSWORD).toBeUndefined();
+    for (const key of WITHHELD_ENV_KEYS) expect(env[key]).toBeUndefined();
+
+    // 記憶ストアと関係のない環境は削らない。認証を落とせばマネージャーは
+    // ただ動かなくなる = デグレードであって境界ではない。
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('token-for-the-sdk');
+    expect(env.PATH).toBe('/usr/bin');
+
+    await s.pool.stop();
+  });
+});
+
+describe('デーモン再起動後（M4）', () => {
+  const runningJob = {
+    id: 'mgr-old',
+    managerId: 'mgr-old',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T01:00:00.000Z',
+    status: 'running' as const,
+    summary: '移行作業',
+    request: 'DB の移行をやって',
+    cwd: '/work/project',
+    sessionId: 'sess-before-restart',
+    lastReport: 'スキーマまで書いた',
+  };
+
+  it('走行中だったマネージャーを台帳から拾い、クローンへ知らせる（受け入れ基準2）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const s = setup(undefined, { stores });
+
+    const restored = await s.pool.restore();
+
+    // 拾い直しただけでは子プロセスを起こさない（起動のたびに全部起こさない）
+    expect(s.sessions).toHaveLength(0);
+    expect(restored.map((m) => m.managerId)).toEqual(['mgr-old']);
+
+    // クローンが「続きがある」ことを知る経路は受信箱ただ1つ
+    const notice = s.inbox.find((event) => event.type === 'manager_message');
+    expect(notice).toMatchObject({ managerId: 'mgr-old', kind: 'report' });
+    expect((notice as { text: string }).text).toContain('DB の移行をやって');
+    expect((notice as { text: string }).text).toContain('スキーマまで書いた');
+
+    // 一覧では「話しかけられる」状態として見える（手は止まっている＝待機）
+    const listed = (await s.pool.list()).find((m) => m.managerId === 'mgr-old');
+    expect(listed).toMatchObject({ live: true, status: 'done', sessionId: 'sess-before-restart' });
+
+    await s.pool.stop();
+  });
+
+  it('話しかけた時に session_id から resume する', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const s = setup(undefined, { stores });
+    await s.pool.restore();
+
+    const result = await s.pool.send('mgr-old', '続きをやって');
+
+    expect(result.outcome).toBe('delivered');
+    expect(s.sessions).toHaveLength(1);
+    expect((s.sessions[0] as FakeSession).options.resume).toBe('sess-before-restart');
+    await expect
+      .poll(() => (s.sessions[0] as FakeSession).inputs, { timeout: 2000 })
+      .toEqual(['続きをやって']);
+
+    // 二度目は同じセッションのまま（resume を繰り返さない）
+    await s.pool.send('mgr-old', 'もう一つ');
+    expect(s.sessions).toHaveLength(1);
+
+    await s.pool.stop();
+  });
+
+  it('待機中だった仕事は黙って引き取る（報告はしないが、話しかければ続く）', async () => {
+    // `done` は死ではなく待機である。ここで拾わないと、一度再起動を跨いだ仕事は
+    // 二度目の再起動で resume できなくなる（人間が開いたままの窓を勝手に閉じる形）。
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({ ...runningJob, id: 'mgr-done', status: 'done' });
+    const s = setup(undefined, { stores });
+
+    expect(await s.pool.restore()).toEqual([]);
+    expect(s.inbox).toEqual([]);
+
+    expect((await s.pool.send('mgr-done', 'まだ続きがある')).outcome).toBe('delivered');
+    expect((s.sessions[0] as FakeSession).options.resume).toBe('sess-before-restart');
+
+    await s.pool.stop();
+  });
+
+  it('session_id の無い仕事は拾い直さない（戻る先が無い）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({ ...runningJob, id: 'mgr-nosession', sessionId: undefined });
+    const s = setup(undefined, { stores });
+
+    expect(await s.pool.restore()).toEqual([]);
+    expect(s.inbox).toEqual([]);
+    expect((await s.pool.send('mgr-nosession', 'やあ')).outcome).toBe('unknown');
+
+    await s.pool.stop();
+  });
+
+  it('セッションの生ログを SessionStore へ預ける（コンテナのディスクは消える）', async () => {
+    const sessionStore = {
+      append: async () => undefined,
+      load: async () => null,
+    };
+    const s = setup(undefined, { sessionStore });
+    await s.pool.start({ request: '調べて' });
+
+    expect((s.sessions[0] as FakeSession).options.sessionStore).toBe(sessionStore);
+
     await s.pool.stop();
   });
 });

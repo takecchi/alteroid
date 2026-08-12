@@ -66,10 +66,20 @@
 - 人格データは既定で `~/.alteroid/`。**`ALTEROID_HOME` で差し替えられる**ので、動作確認は必ず一時ディレクトリを指すこと（自分の記憶を壊さない）
 - デーモンの待ち受けポートは `ALTEROID_PORT`（既定 4517）。接続先とプロセス id は `$ALTEROID_HOME/state/daemon.json` にある
 - マネージャーの既定の作業ディレクトリは `ALTEROID_WORKSPACE`（既定はデーモンの cwd）。**実プロジェクトを直に触るので、動作確認では捨ててよい一時ディレクトリを指すこと**
-- `ALTEROID_HOME` と `ALTEROID_PORT` はマネージャー子プロセスの環境変数から落としてある（記憶ストアの所在を配らない）。ここに環境変数を足すときは、それが下へ漏れてよいものか先に考える
+- `ALTEROID_HOME` `ALTEROID_PORT` `ALTEROID_DATABASE_URL` はマネージャー子プロセスの環境変数から落としてある（記憶ストアの所在を配らない）。ここに環境変数を足すときは、それが下へ漏れてよいものか先に考える。記憶へ到達する鍵を増やしたら `Storage.withheldEnvKeys`（`apps/daemon/src/storage.ts`）にも足すこと
 - SDK を実際に呼ぶ確認は `curl -N -X POST http://127.0.0.1:$PORT/chat -d '{"text":"..."}'` が手軽。ローカルの `claude` のログイン認証がそのまま使われる
 - 委譲まわりの確認は `GET /managers`（一覧と状態）、`GET /managers/:id/transcript`（生ログ）、`GET /journal?type=tool_use`（マネージャー・作業者の全ツール実行）を見る。chat からは `/managers` `/manager <id>`
 - クローンの挙動を SDK 抜きで検証したいときは `createClone({ queryFn })` に偽の `query` を渡す（`packages/core/src/clone.test.ts`）。マネージャー側は `createManagerPool({ queryFn })`（`packages/core/src/manager.test.ts`）で、こちらは `canUseTool` とフックを直接叩いて配線を確かめる
+
+## クラウド構成（PostgreSQL とコンテナ）
+
+- 記憶の置き場は `ALTEROID_DATABASE_URL` の有無だけで決まる（無ければローカルの fs）。**器が違うだけで、上の層が見るものは同じ**。切り替えでできなくなることを作らない
+  - 起動時にスキーマを自分で用意する（`packages/storage-pg/src/migrate.ts`）。「先にマイグレーションを流す」という人間の手順を足さないこと
+  - `state/daemon.json`（CLI がデーモンを見つける手段）は pg 構成でもローカルに残る。記憶ではない
+- `docker compose up -d` → `docker compose exec app alteroid chat`。認証は `claude setup-token` で取った `CLAUDE_CODE_OAUTH_TOKEN` を `.env` に置く
+  - **ポートは公開していない。** 待ち受けは既定で 127.0.0.1（`ALTEROID_BIND` で開けられるが、開けるなら手前に境界を置くのが先）
+- pg ドライバのテストは PGlite（インプロセスの実 PostgreSQL）で回る。CI に DB を用意する必要はないが、**偽の DB で代用しない**（SQL と索引と冪等性ごと確かめる意味が消える）
+- デーモン再起動時は JobStore の `session_id` から走行中だったマネージャーを引き取り、クローンの受信箱へ知らせる。**子プロセスを一斉に起こさない** — resume は `manager_send` で話しかけた時に走る（人間が再起動後に必要な窓だけ開き直すのと同じ）
 
 ## 自律まわりの動かし方（起点4つ）
 

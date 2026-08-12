@@ -1,0 +1,52 @@
+# ローカルと同じものを、コンテナ + PostgreSQL で常駐させる（roadmap M4）。
+#
+#   claude setup-token          # 長期トークンを取る（人間が一度だけ）
+#   echo "CLAUDE_CODE_OAUTH_TOKEN=..." > .env
+#   docker compose up -d
+#   docker compose exec app alteroid chat
+#
+# **待ち受けは 127.0.0.1 のまま、ポートも公開しない。** クローンへ話しかける口は
+# 叩けばターンが起きる実行の口なので、外に出すなら手前に境界（認証・トンネル・
+# リバースプロキシ）を置くのが先である。中から使うなら exec で足りる。
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: alteroid
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-alteroid}
+      POSTGRES_DB: alteroid
+    volumes:
+      - db:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U alteroid -d alteroid']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # 記憶・日誌・ジョブ・セッションの置き場。**この鍵はデーモンだけが持つ。**
+      # マネージャー子プロセスの環境変数からは落ちる（非対称な可視性の本命）。
+      ALTEROID_DATABASE_URL: postgres://alteroid:${POSTGRES_PASSWORD:-alteroid}@db:5432/alteroid
+      # 認証はサブスクリプションの長期トークン（claude setup-token）。
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:?claude setup-token で取得して .env に置くこと}
+      # 自律の既定（日報・発意）は環境変数で開け閉めできる。これは方針であって
+      # 実行回数の制限ではない（north_star 禁止2）。
+      ALTEROID_DAILY_REPORT_AT: ${ALTEROID_DAILY_REPORT_AT:-22:00}
+      ALTEROID_INITIATIVE_EVERY: ${ALTEROID_INITIATIVE_EVERY:-60}
+      TZ: ${TZ:-Asia/Tokyo}
+    volumes:
+      # マネージャーが実際に触るプロジェクト。人間が Claude Code を開く場所と同じ意味。
+      - ${ALTEROID_WORKSPACE_HOST:-./workspace}:/workspace
+      # state（daemon.json）だけ。記憶は PostgreSQL 側にある。
+      - state:/data/alteroid
+    restart: unless-stopped
+
+volumes:
+  db:
+  state:

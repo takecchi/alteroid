@@ -22,8 +22,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "catalog:",
     "@alteroid/core": "workspace:*",
     "@alteroid/storage-fs": "workspace:*",
+    "@alteroid/storage-pg": "workspace:*",
     "@hono/node-server": "catalog:",
     "@hono/zod-validator": "catalog:",
     "hono": "catalog:",

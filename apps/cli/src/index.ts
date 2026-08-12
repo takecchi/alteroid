@@ -83,7 +83,10 @@ daemonCommand
     } else {
       stdout.write('停止中\n');
     }
-    stdout.write(`  記憶: ${alteroidRoot()}\n`);
+    // 記憶がどこにあるかは**デーモンに聞く**。クラウド構成では PostgreSQL に
+    // あるので、CLI 側のパスを表示すると人間が器を取り違える。
+    const storage = running ? await daemon.storageOf(info) : null;
+    stdout.write(`  記憶: ${storage ?? alteroidRoot()}\n`);
   });
 
 program.parseAsync(process.argv).catch((error: unknown) => {

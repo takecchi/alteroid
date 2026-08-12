@@ -11,13 +11,14 @@ import {
   dailyReportEvent,
   missingDailyReportDates,
 } from '@alteroid/core';
-import { createFsStores, initWorkspace } from '@alteroid/storage-fs';
 
 import { createApp } from './app.js';
 import { clearRuntimeInfo, writeRuntimeInfo } from './runtime.js';
 import { buildSchedule, readScheduleConfig } from './schedule.js';
+import { openStorage } from './storage.js';
 
 export { createApp, type AppDeps, type AppType } from './app.js';
+export { openStorage, DATABASE_URL_ENV, type Storage } from './storage.js';
 export {
   buildSchedule,
   readScheduleConfig,
@@ -33,11 +34,15 @@ export {
   type DaemonRuntimeInfo,
 } from './runtime.js';
 
-/** 空文字の環境変数を「未指定」として扱う（CLI 側の解釈と揃える）。 */
-function envRoot(): string | undefined {
-  const value = process.env.ALTEROID_HOME;
-  return value !== undefined && value.length > 0 ? value : undefined;
-}
+/**
+ * 待ち受けるアドレス。既定は 127.0.0.1 のまま。
+ *
+ * **これは方針であって能力の削除ではない**（方針は設定で開けられる — north_star
+ * 禁止2）。コンテナの外へ出したいなら開けられるが、開けた側が手前に境界
+ * （リバースプロキシ・トンネル・認証）を置くこと。この API は叩けば
+ * クローンのターンが起きる実行の口である。
+ */
+const DEFAULT_BIND = '127.0.0.1';
 
 /**
  * alteroidd — 常駐デーモン。
@@ -46,9 +51,10 @@ function envRoot(): string | undefined {
  * chat を開いていなくてもクローンは生きている。
  */
 export async function main(): Promise<void> {
-  const root = envRoot();
-  const { paths } = await initWorkspace(root);
-  const stores = createFsStores(root);
+  // 記憶の置き場（ローカルの fs か、クラウドの PostgreSQL か）。器が違っても
+  // 上の階層は同じものを見る（roadmap M4 受け入れ基準1）。
+  const storage = await openStorage();
+  const { stores, paths } = storage;
 
   // クローンのセッションは人格データディレクトリを基準に置く。呼び出し元の
   // カレントディレクトリに依存させると、別の場所から起動した瞬間に resume が
@@ -58,8 +64,16 @@ export async function main(): Promise<void> {
   // クローンが `manager_start` に cwd を渡せば、そのつど別の場所も使える。
   const workspace = process.env.ALTEROID_WORKSPACE || process.cwd();
 
-  const clone = createClone({ stores, cwd: paths.root, managerCwd: workspace });
+  const clone = createClone({
+    stores,
+    cwd: paths.root,
+    managerCwd: workspace,
+    // 記憶ストアへ到達する鍵は子プロセスへ配らない（非対称な可視性）
+    withheldEnvKeys: storage.withheldEnvKeys,
+    ...(storage.sessionStore === undefined ? {} : { sessionStore: storage.sessionStore }),
+  });
   const port = Number(process.env.ALTEROID_PORT ?? '4517');
+  const hostname = process.env.ALTEROID_BIND || DEFAULT_BIND;
 
   // 起動ごとに作り直す。状態ファイルが残っていても、別プロセスを自分だと
   // 誤認させない（PID の再利用で無関係なプロセスを止めないため）。
@@ -73,8 +87,15 @@ export async function main(): Promise<void> {
     post: (event) => clone.post(event),
   });
 
-  const app = createApp({ clone, stores, token, shutdown: () => void shutdown(), scheduler });
-  const server = serve({ fetch: app.fetch, port, hostname: '127.0.0.1' });
+  const app = createApp({
+    clone,
+    stores,
+    token,
+    shutdown: () => void shutdown(),
+    scheduler,
+    storage: storage.description,
+  });
+  const server = serve({ fetch: app.fetch, port, hostname });
 
   server.on('error', (error: unknown) => {
     process.stderr.write(`alteroidd: 待ち受けに失敗しました (port ${port}): ${String(error)}\n`);
@@ -99,6 +120,7 @@ export async function main(): Promise<void> {
     } catch {
       // 片付けに失敗しても落ちる
     }
+    await storage.close().catch(() => undefined);
     process.exit(0);
   }
 
@@ -113,6 +135,20 @@ export async function main(): Promise<void> {
   process.on('SIGINT', () => void shutdown());
 
   scheduler.start();
+
+  // 走行中だったマネージャーを台帳から拾い直す。**知らせないと、器を作り直した
+  // 瞬間に走っていた仕事がクローンから見て消える**（roadmap M4 受け入れ基準2）。
+  const restored = await clone.managers.restore().catch((error: unknown) => {
+    process.stderr.write(`alteroidd: マネージャーの引き継ぎに失敗しました: ${String(error)}\n`);
+    return [];
+  });
+  if (restored.length > 0) {
+    process.stdout.write(
+      `alteroidd: 再起動前のマネージャーを引き継ぎました: ${restored
+        .map((manager) => manager.managerId)
+        .join(', ')}\n`,
+    );
+  }
 
   // 締め時刻に自分が動いていなければ、その日の日報は誰も作らない。「日報は毎日
   // 生成される」は要件なので、動いていなかった日の分を起動時に拾い直す。
@@ -130,7 +166,7 @@ export async function main(): Promise<void> {
   }
 
   process.stdout.write(
-    `alteroidd: http://127.0.0.1:${port} （記憶: ${paths.root} / 作業: ${workspace}）\n`,
+    `alteroidd: http://${hostname}:${port} （記憶: ${storage.description} / 作業: ${workspace}）\n`,
   );
 }
 

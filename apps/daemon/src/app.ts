@@ -42,6 +42,11 @@ export interface AppDeps {
   shutdown: () => void;
   /** 時間起点のジョブ。テストの HTTP 層検証では省略できる。 */
   scheduler?: Scheduler;
+  /**
+   * 記憶がどこにあるか（ローカルのパス / PostgreSQL）。
+   * CLI がこれを見せるので、人間が器を取り違えない。接続情報は含めない。
+   */
+  storage?: string;
 }
 
 const chatBody = z.object({
@@ -117,7 +122,9 @@ export function createApp(deps: AppDeps) {
   const { clone, stores } = deps;
 
   const app = new Hono()
-    .get('/health', (c) => c.json({ ok: true, pid: process.pid, token: deps.token }))
+    .get('/health', (c) =>
+      c.json({ ok: true, pid: process.pid, token: deps.token, storage: deps.storage ?? '' }),
+    )
 
     // --- chat（SSE） -------------------------------------------------------
     .post('/chat', zValidator('json', chatBody), async (c) => {

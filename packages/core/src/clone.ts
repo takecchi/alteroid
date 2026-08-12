@@ -2,7 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import type { Options, Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import type {
+  Options,
+  Query,
+  SDKMessage,
+  SDKUserMessage,
+  SessionStore,
+} from '@anthropic-ai/claude-agent-sdk';
 
 import { buildActivityDigest } from './digest.js';
 import type { CloneHost } from './host.js';
@@ -74,6 +80,13 @@ export interface CloneOptions {
   managerCwd?: string;
   /** 主にテスト用。マネージャー子プロセスへ渡す環境変数の素。 */
   managerEnv?: NodeJS.ProcessEnv;
+  /** 記憶ストアへ到達する鍵。マネージャー子プロセスの環境変数から伏せる。 */
+  withheldEnvKeys?: readonly string[];
+  /**
+   * SDK のセッション永続化先（M4）。クローンとマネージャーの生ログを同じ
+   * PostgreSQL へ載せる。渡さなければローカルディスクのまま（M1〜M3 と同じ）。
+   */
+  sessionStore?: SessionStore;
   /** 主にテスト用。差し替えると委譲先ごと入れ替えられる。 */
   managers?: ManagerPool;
 }
@@ -97,6 +110,7 @@ class Clone implements CloneHost {
   readonly #stores: Stores;
   readonly #queryFn: typeof query;
   readonly #cwd: string | undefined;
+  readonly #sessionStore: SessionStore | undefined;
   readonly #managers: ManagerPool;
 
   readonly #inbox = new Inbox();
@@ -119,10 +133,21 @@ class Clone implements CloneHost {
   #sawInit = false;
 
   constructor(options: CloneOptions) {
-    const { stores, queryFn, cwd, managerQueryFn, managerCwd, managerEnv, managers } = options;
+    const {
+      stores,
+      queryFn,
+      cwd,
+      managerQueryFn,
+      managerCwd,
+      managerEnv,
+      withheldEnvKeys,
+      sessionStore,
+      managers,
+    } = options;
     this.#stores = stores;
     this.#queryFn = queryFn ?? query;
     this.#cwd = cwd;
+    this.#sessionStore = sessionStore;
     this.#managers =
       managers ??
       createManagerPool({
@@ -132,6 +157,8 @@ class Clone implements CloneHost {
         ...(managerQueryFn === undefined ? {} : { queryFn: managerQueryFn }),
         ...(managerCwd === undefined ? {} : { defaultCwd: managerCwd }),
         ...(managerEnv === undefined ? {} : { env: managerEnv }),
+        ...(withheldEnvKeys === undefined ? {} : { withheldEnvKeys }),
+        ...(sessionStore === undefined ? {} : { sessionStore }),
       });
     void this.#pump();
   }
@@ -559,6 +586,10 @@ class Clone implements CloneHost {
       includePartialMessages: true,
       ...(this.#cwd === undefined ? {} : { cwd: this.#cwd }),
       ...(resume === null ? {} : { resume }),
+      // セッションの生ログも記憶ストアと同じ PostgreSQL へ（M4）。器を作り直しても
+      // resume の素材が残る。**同一性はそれでも記憶に宿る** — ここが空でも、
+      // 記憶と日誌が同じならクローンは同じクローンである。
+      ...(this.#sessionStore === undefined ? {} : { sessionStore: this.#sessionStore }),
       hooks: {
         PreCompact: [
           {

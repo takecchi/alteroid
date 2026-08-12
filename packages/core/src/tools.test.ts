@@ -47,6 +47,9 @@ function harness(): Harness {
     async transcript() {
       return null;
     },
+    async restore() {
+      return [];
+    },
     async stop() {},
   };
 

@@ -8,6 +8,7 @@ import type {
   Query,
   SDKMessage,
   SDKUserMessage,
+  SessionStore,
 } from '@anthropic-ai/claude-agent-sdk';
 
 import { buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
@@ -43,9 +44,19 @@ export const WORKER_AGENT_NAME = 'worker';
  *
  * 上向きの不可視は、ツールを絞ってではなく**認証情報の配布範囲**で守る
  * （architecture.md「非対称な可視性」）。ローカルでは同一ユーザーで動く以上
- * 既知の穴が残るが、その穴をツール削除で塞がないこと。本命の強制は M4。
+ * 既知の穴が残る（マネージャーは Bash で `~/.alteroid/` を読めてしまう）。
+ * その穴をツール削除で塞がないこと。
+ *
+ * クラウド構成ではここが本命になる。記憶が PostgreSQL にあるなら、**接続情報を
+ * 渡さない限り到達経路が存在しない** — 実行環境の境界だけで強制が成立する
+ * （roadmap M4 の受け入れ基準3）。実際に伏せる鍵はデーモンが
+ * `withheldEnvKeys` で足す（記憶ストアの所在を決めるのはデーモンだから）。
  */
-export const WITHHELD_ENV_KEYS = ['ALTEROID_HOME', 'ALTEROID_PORT'] as const;
+export const WITHHELD_ENV_KEYS = [
+  'ALTEROID_HOME',
+  'ALTEROID_PORT',
+  'ALTEROID_DATABASE_URL',
+] as const;
 
 export interface ManagerStartInput {
   request: string;
@@ -56,7 +67,13 @@ export interface ManagerStartInput {
 export interface ManagerSummary {
   managerId: string;
   status: JobStatus;
-  /** このデーモンの中でセッションが生きているか（再起動を跨ぐと false）。 */
+  /**
+   * このデーモンから話しかけられるか。
+   *
+   * 再起動を跨いで台帳から拾い直した分も `true` になる（`manager_send` で
+   * session_id から resume する）。台帳にしか残っていない — 例えばセッションを
+   * 持たずに終わった — ものだけが `false`。
+   */
   live: boolean;
   cwd: string;
   request: string;
@@ -98,6 +115,11 @@ export interface ManagerPool {
   list(): Promise<ManagerSummary[]>;
   /** manager_id からセッションの生ログへ降りる（可観測性の最下段）。 */
   transcript(managerId: string): Promise<string | null>;
+  /**
+   * デーモン再起動時に、走行中だったマネージャーを台帳から拾い直す（roadmap M4）。
+   * 戻り値は拾い直した分の一覧。
+   */
+  restore(): Promise<ManagerSummary[]>;
   stop(): Promise<void>;
 }
 
@@ -111,6 +133,16 @@ export interface ManagerPoolOptions {
   defaultCwd?: string;
   /** 主にテスト用。既定は `process.env`。 */
   env?: NodeJS.ProcessEnv;
+  /**
+   * `WITHHELD_ENV_KEYS` に足して伏せる環境変数。
+   * デーモンが記憶ストアへ到達するのに使った鍵をここで塞ぐ。
+   */
+  withheldEnvKeys?: readonly string[];
+  /**
+   * SDK のセッション永続化先（M4）。渡すとマネージャーの生ログが同じ
+   * PostgreSQL に載り、器を作り直しても走行中だったセッションへ戻れる。
+   */
+  sessionStore?: SessionStore;
 }
 
 export function createManagerPool(options: ManagerPoolOptions): ManagerPool {
@@ -135,15 +167,38 @@ class Pool implements ManagerPool {
   readonly #queryFn: typeof query;
   readonly #defaultCwd: string;
   readonly #env: NodeJS.ProcessEnv;
+  readonly #withheldEnvKeys: readonly string[];
+  readonly #sessionStore: SessionStore | undefined;
   readonly #sessions = new Map<string, ManagerSession>();
   #stopped = false;
 
-  constructor({ stores, post, queryFn, defaultCwd, env }: ManagerPoolOptions) {
+  constructor({
+    stores,
+    post,
+    queryFn,
+    defaultCwd,
+    env,
+    withheldEnvKeys,
+    sessionStore,
+  }: ManagerPoolOptions) {
     this.#stores = stores;
     this.#post = post;
     this.#queryFn = queryFn ?? query;
     this.#defaultCwd = defaultCwd ?? process.cwd();
     this.#env = env ?? process.env;
+    this.#withheldEnvKeys = [...WITHHELD_ENV_KEYS, ...(withheldEnvKeys ?? [])];
+    this.#sessionStore = sessionStore;
+  }
+
+  #sessionOptions(): Omit<ManagerSessionOptions, 'managerId' | 'request' | 'cwd'> {
+    return {
+      stores: this.#stores,
+      post: this.#post,
+      queryFn: this.#queryFn,
+      env: this.#env,
+      withheldEnvKeys: this.#withheldEnvKeys,
+      ...(this.#sessionStore === undefined ? {} : { sessionStore: this.#sessionStore }),
+    };
   }
 
   async start(input: ManagerStartInput): Promise<ManagerSummary> {
@@ -154,10 +209,7 @@ class Pool implements ManagerPool {
       managerId,
       request: input.request,
       cwd: input.cwd ?? this.#defaultCwd,
-      stores: this.#stores,
-      post: this.#post,
-      queryFn: this.#queryFn,
-      env: this.#env,
+      ...this.#sessionOptions(),
     });
     this.#sessions.set(managerId, session);
 
@@ -220,6 +272,70 @@ class Pool implements ManagerPool {
     return [...live.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
   }
 
+  /**
+   * デーモン再起動後、走行中だったマネージャーを台帳から拾い直す。
+   *
+   * **ここで子プロセスを一斉に起こさない。** resume は `manager_send` の時に行う
+   * （SDK の `resume` に session_id を渡す）。人間が PC を再起動したあと、開いて
+   * いた Claude Code の窓は閉じており、続けたいものだけを開き直すのと同じ写像で
+   * ある。起動と同時に全部起こすのは、人間がやらないことを機械的にやる形になる。
+   *
+   * 拾い直した分はクローンの受信箱へ報告として流す。**知らせないと、走っていた
+   * 仕事はクローンから見て消える** — 受け入れ基準2（再起動後、走行中だった
+   * マネージャーの続きを把握している）はここで満たす。
+   */
+  async restore(): Promise<ManagerSummary[]> {
+    if (this.#stopped) return [];
+
+    const restored: ManagerSummary[] = [];
+    for (const job of await this.#stores.jobs.listJobs()) {
+      if (job.sessionId === undefined) continue;
+      if (this.#sessions.has(job.id)) continue;
+
+      const session = new ManagerSession({
+        managerId: job.id,
+        request: job.request ?? job.summary,
+        cwd: job.cwd ?? this.#defaultCwd,
+        ...this.#sessionOptions(),
+        restoreFrom: job,
+      });
+      this.#sessions.set(job.id, session);
+
+      // **セッションを持つ仕事は状態を問わず引き取る。** `done` は死ではなく待機
+      // であり（jobStatus の定義）、人間が窓を開いたままにしておくのと同じで
+      // 話しかければ続く。ここで `running` だけを拾うと、一度再起動を跨いだ仕事は
+      // 二度目の再起動で resume できなくなる。
+      if (job.status !== 'running' && job.status !== 'waiting_human') continue;
+
+      // 知らせるのは、手を動かしている最中に器が落ちた分だけ。待機中のものまで
+      // 起動のたびに報告すると、クローンの受信箱が過去の一覧で埋まる。
+      await session.adopt();
+      restored.push(session.summary());
+
+      this.#post({
+        type: 'manager_message',
+        id: randomUUID(),
+        at: new Date().toISOString(),
+        managerId: job.id,
+        kind: 'report',
+        text: [
+          'デーモンが再起動した。この委譲は再起動前から続いている。',
+          `依頼: ${job.request ?? job.summary}`,
+          `作業ディレクトリ: ${job.cwd ?? this.#defaultCwd}`,
+          `再起動前の状態: ${job.status === 'waiting_human' ? '返事待ち' : '作業中'}`,
+          job.lastReport === undefined ? '' : `直近の報告: ${job.lastReport}`,
+          '',
+          '`manager_send` で話しかければ、このセッションの続きから再開する。',
+          '返事待ちだったなら、その確認は再起動で失われている。何を待っていたかは' +
+            '日誌（escalation）と生ログで辿れる。必要なら聞き直させること。',
+        ]
+          .filter((line) => line !== '')
+          .join('\n'),
+      });
+    }
+    return restored;
+  }
+
   async transcript(managerId: string): Promise<string | null> {
     const job = (await this.#stores.jobs.listJobs()).find((entry) => entry.id === managerId);
     if (!job) return null;
@@ -254,6 +370,10 @@ interface ManagerSessionOptions {
   post: (event: InboxEvent) => void;
   queryFn: typeof query;
   env: NodeJS.ProcessEnv;
+  withheldEnvKeys: readonly string[];
+  sessionStore?: SessionStore;
+  /** デーモン再起動時に台帳から拾い直した状態（resume の素材）。 */
+  restoreFrom?: Job;
 }
 
 class ManagerSession {
@@ -264,21 +384,25 @@ class ManagerSession {
   readonly #post: (event: InboxEvent) => void;
   readonly #queryFn: typeof query;
   readonly #env: NodeJS.ProcessEnv;
+  readonly #withheldEnvKeys: readonly string[];
+  readonly #sessionStore: SessionStore | undefined;
 
-  readonly #startedAt = new Date().toISOString();
+  readonly #startedAt: string;
   readonly #input: SDKUserMessage[] = [];
   readonly #pending: PendingRequest[] = [];
-  readonly #archiveIds: string[] = [];
+  readonly #archiveIds: string[];
 
   #inputWaiter: (() => void) | null = null;
   #query: Query | null = null;
   #reader: Promise<void> | null = null;
   #status: JobStatus = 'running';
-  #updatedAt = this.#startedAt;
+  #updatedAt: string;
   #sessionId: string | undefined;
   #transcriptPath: string | undefined;
   #lastReport: string | undefined;
   #stopped = false;
+  /** 再起動前のセッション。話しかけられた時に、ここから続きへ戻る。 */
+  #resumeFrom: string | undefined;
 
   constructor(options: ManagerSessionOptions) {
     this.#id = options.managerId;
@@ -288,13 +412,32 @@ class ManagerSession {
     this.#post = options.post;
     this.#queryFn = options.queryFn;
     this.#env = options.env;
+    this.#withheldEnvKeys = options.withheldEnvKeys;
+    this.#sessionStore = options.sessionStore;
+
+    const restored = options.restoreFrom;
+    this.#startedAt = restored?.createdAt ?? new Date().toISOString();
+    this.#updatedAt = restored?.updatedAt ?? this.#startedAt;
+    this.#archiveIds = [...(restored?.archiveIds ?? [])];
+    this.#sessionId = restored?.sessionId;
+    this.#resumeFrom = restored?.sessionId;
+    this.#transcriptPath = restored?.transcriptPath;
+    this.#lastReport = restored?.lastReport;
+    // 走っていた・返事を待っていたマネージャーは、器が死んだ時点で手を止めている。
+    // `running` のまま見せると返ってこない報告を待つことになり、`waiting_human`
+    // のまま見せると誰も答えられない行列が残る。どちらも待機（`done`）に直す。
+    // それ以外（`done` / `failed`）は台帳のままが事実である。
+    this.#status =
+      restored === undefined
+        ? 'running'
+        : restored.status === 'running' || restored.status === 'waiting_human'
+          ? 'done'
+          : restored.status;
   }
 
   async begin(): Promise<void> {
     this.#push(this.#request);
-    const q = this.#queryFn({ prompt: this.#inputStream(), options: this.#buildOptions() });
-    this.#query = q;
-    this.#reader = this.#read(q);
+    this.#openQuery();
     await this.#persist();
     await this.#journal({
       type: 'exchange',
@@ -302,6 +445,44 @@ class ManagerSession {
       role: 'outbound',
       text: `[${this.#id}] ${this.#request}`,
     });
+  }
+
+  /**
+   * 再起動前のジョブを引き取ったことを台帳に反映する。
+   *
+   * 状態を `done`（＝待機）へ直すのは、器が死んだ時点でそのマネージャーが手を
+   * 動かしていないからである。`running` のまま残すと、一覧を見たクローンが
+   * 「まだ走っている」と誤解し、返ってこない報告を待ち続ける。
+   */
+  async adopt(): Promise<void> {
+    await this.#persist();
+    await this.#journal({
+      type: 'exchange',
+      with: 'manager',
+      role: 'inbound',
+      text:
+        `[${this.#id}] デーモンが再起動した。` +
+        `session_id ${this.#sessionId ?? '(不明)'} から続きを再開できる。`,
+    });
+  }
+
+  /**
+   * SDK セッションを開く。`#resumeFrom` があれば、そのセッションの続きから。
+   *
+   * 再起動後にここを通るのは**話しかけられた時だけ**である（Pool.restore の
+   * コメント）。resume を先回りして全部起こすと、誰も読まない子プロセスが
+   * 起動のたびに並ぶ。
+   */
+  #openQuery(): void {
+    if (this.#query) return;
+    const resume = this.#resumeFrom;
+    this.#resumeFrom = undefined;
+    const q = this.#queryFn({
+      prompt: this.#inputStream(),
+      options: this.#buildOptions(resume),
+    });
+    this.#query = q;
+    this.#reader = this.#read(q);
   }
 
   summary(): ManagerSummary {
@@ -367,6 +548,8 @@ class ManagerSession {
       return { outcome: 'unknown', detail: `${this.#id} のセッションは既に閉じている。` };
     }
 
+    // 再起動を跨いだ相手なら、ここで前のセッションの続きへ戻る。
+    this.#openQuery();
     this.#push(message);
     this.#status = 'running';
     await this.#persist();
@@ -419,7 +602,7 @@ class ManagerSession {
   // SDK セッション
   // -------------------------------------------------------------------------
 
-  #buildOptions(): Options {
+  #buildOptions(resume?: string): Options {
     return {
       model: MANAGER_MODEL,
       // `tools` は渡さない = preset 全部。明示リストで絞らない（AGENTS.md 地雷1）。
@@ -443,6 +626,10 @@ class ManagerSession {
       // 人間が使っているのと同じ設定・同じ .mcp.json を渡す（下向きは同じものが見える）
       settingSources: ['user', 'project', 'local'],
       env: this.#childEnv(),
+      // 生ログを外（PostgreSQL）にも預ける。コンテナのディスクは再起動で消えるので、
+      // ここが無いと「器を作り直したら続きへ戻れない」（roadmap M4 受け入れ基準2）。
+      ...(this.#sessionStore === undefined ? {} : { sessionStore: this.#sessionStore }),
+      ...(resume === undefined ? {} : { resume }),
       canUseTool: (toolName, input, extra) => this.#onPermission(toolName, input, extra),
       hooks: {
         PostToolUse: [{ hooks: [(input) => this.#onPostToolUse(input)] }],
@@ -454,7 +641,7 @@ class ManagerSession {
   /** 記憶ストアの所在は子プロセスへ渡さない（渡さなければ構造的に触れない）。 */
   #childEnv(): NodeJS.ProcessEnv {
     const env = { ...this.#env };
-    for (const key of WITHHELD_ENV_KEYS) delete env[key];
+    for (const key of this.#withheldEnvKeys) delete env[key];
     return env;
   }
 

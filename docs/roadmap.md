@@ -79,11 +79,11 @@
 
 **ゴール**: ローカルと同じものが、コンテナ + PostgreSQL で常駐する。
 
-- [ ] `storage-pg`: drizzle で PersonaStore / JournalStore / JobStore（記憶は同じ Markdown 文書をテーブルに格納。人間の閲覧・編集は CLI / API 経由で担保）
-- [ ] SDK SessionStore アダプタで セッション永続化も同じ PostgreSQL へ
-- [ ] デーモン再起動時、JobStore の session_id から走行中マネージャーを resume
-- [ ] Dockerfile + docker compose（app + postgres）。認証は `CLAUDE_CODE_OAUTH_TOKEN`（`claude setup-token`）をシークレット注入
-- [ ] 記憶ストア認証情報の分離を検証: マネージャー子プロセスの環境変数に DB 接続情報が**渡っていない**こと（非対称な可視性の本命の強制がここで成立する）
+- [x] `storage-pg`: drizzle で PersonaStore / JournalStore / JobStore（記憶は同じ Markdown 文書をテーブルに格納。人間の閲覧・編集は CLI / API 経由で担保）
+- [x] SDK SessionStore アダプタで セッション永続化も同じ PostgreSQL へ
+- [x] デーモン再起動時、JobStore の session_id から走行中マネージャーを resume
+- [x] Dockerfile + docker compose（app + postgres）。認証は `CLAUDE_CODE_OAUTH_TOKEN`（`claude setup-token`）をシークレット注入
+- [x] 記憶ストア認証情報の分離を検証: マネージャー子プロセスの環境変数に DB 接続情報が**渡っていない**こと（非対称な可視性の本命の強制がここで成立する）
 
 **受け入れ基準**:
 1. `docker compose up` + トークン注入で起動し、M1〜M3 の受け入れ基準が同じように通る

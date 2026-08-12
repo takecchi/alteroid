@@ -12,6 +12,9 @@ coverage/
 .env
 .env.*
 
+# compose の既定の作業ディレクトリ（マネージャーが実際に触る場所）
+workspace/
+
 # misc
 *.log
 .DS_Store

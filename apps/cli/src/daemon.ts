@@ -67,6 +67,24 @@ async function verify(info: DaemonRuntimeInfo): Promise<boolean> {
   }
 }
 
+/**
+ * 記憶がどこにあるかをデーモンに聞く（ローカルのパス / PostgreSQL）。
+ * 応答に無い（古いデーモン）なら null。接続情報そのものは返らない。
+ */
+export async function storageOf(info: DaemonRuntimeInfo | null): Promise<string | null> {
+  if (!info) return null;
+  try {
+    const response = await fetch(`${baseUrl(info)}/health`, {
+      signal: AbortSignal.timeout(1500),
+    });
+    if (!response.ok) return null;
+    const body = (await response.json()) as { storage?: unknown };
+    return typeof body.storage === 'string' && body.storage.length > 0 ? body.storage : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function status(): Promise<DaemonStatus> {
   const info = await readRuntimeInfo();
   if (!info) return { running: false, info: null };

@@ -40,6 +40,9 @@ function fakeClone() {
     async transcript(managerId) {
       return transcripts.get(managerId) ?? null;
     },
+    async restore() {
+      return [];
+    },
     async stop() {},
   };
 
