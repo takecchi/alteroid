@@ -1,0 +1,175 @@
+# Railway へ常駐させる（1 runner 構成）
+
+compose.yaml の3コンテナ構成（daemon / manager-runner / PostgreSQL）を、そのまま Railway の3 Service に写した運用手順である。ここに**要件は書かない** — 正典は [docs/](../docs/) であり、この文書は「どう置くか」だけを扱う。
+
+roadmap M5 の「Railway の複数 Service …で runner 数を増減できるデプロイ定義」はまだ来ていない。ここで置くのは **runner 1台**である（`RunnerRegistry` の宛先が1つなのは M4 と同じ）。
+
+---
+
+## 先に読む — compose と何が違うか
+
+Railway の実行環境の性質で、境界が2か所ゆるむ。**どちらも能力の削減ではないが、黙って進めてよい話でもない**ので先に書く。
+
+### 1. 制御面が Unix ソケットから TCP になる
+
+Railway はサービス間でボリュームを共有できないので、共有 volume 上のソケット（`/run/alteroid/runner.sock`）が置けない。runner の制御面を守る4枚のうち2枚が消える。
+
+| 守り                           | compose | Railway                                    |
+| ------------------------------ | ------- | ------------------------------------------ |
+| runner は TCP を開かない       | ○       | **×**（private network 越しに TCP で待つ） |
+| ソケットは 0600・デーモン所有  | ○       | **×**（ソケットが無い）                    |
+| 合鍵は runner にはハッシュだけ | ○       | ○                                          |
+| SDK 子プロセスは別 UID（1001） | ○       | ○                                          |
+
+残る2枚で M4 受け入れ基準4（**マネージャーが自分宛の許可確認に自分で `allow` を返せない**）は構造的に保たれる。制御面の全経路が `Bearer` を要求し（`apps/runner/src/app.ts` の `control`）、runner が持つのは sha256 だけなので、`/proc/1/environ` を読めても鍵は作れない。
+
+→ **`ALTEROID_RUNNER_TOKEN`（素の合鍵）を Shared Variables に置かないこと。** 置いた瞬間に runner にも降り、残った2枚のうち1枚が0枚になる。Service ごとの変数に置く。
+
+### 2. ネットワークが1枚になる
+
+compose の `data`（daemon↔db）/ `control`（daemon↔runner）の分離が Railway には無い。`*.railway.internal` は環境ごとにフラットなので、**runner から db が名前解決できてしまう**。
+
+M4 受け入れ基準3の「runner から Persona 用 DB へ接続できない」が、compose の「**経路が無い**」から Railway では「**資格情報を配っていない**」に弱まる。`ALTEROID_DATABASE_URL` は daemon の Service 変数にだけ置く（ここも Shared Variables 禁止）。
+
+### 3. workspace は毎デプロイで消える
+
+**ボリュームを付けない。** roadmap M5「workspace locator の運用選択（runner-volume / 共有 FS / Git 再構築）」のうち **Git 再構築**を採る、という運用判断である。人間がやることと同じで、マネージャーの作業は git へ push されて初めて残る。
+
+その代わり、次の2つが毎デプロイで消える。
+
+- マネージャーの作業ディレクトリ（コミットしていない変更は失われる）
+- `/workspace/.mcp.json`（＝MCP 連携）
+
+MCP を渡したいなら、`/workspace` にボリュームを付けて所有者を uid 1001 に揃えるか、設定をイメージへ焼く。**「Railway だから MCP が使えない」は仕様ではなくバグ**なので、必要になった時点でどちらかを選ぶ（north_star 禁止1）。
+
+記憶・日誌・ジョブ・生ログは PostgreSQL にあるので、**ボリュームは1つも要らない**。`ALTEROID_HOME`（`/data/alteroid`）に残るのは `state/daemon.json` と `daemon.log` だけで、これは CLI がデーモンを見つける手段であって記憶ではない。
+
+---
+
+## 手順
+
+### 0. 用意するもの
+
+```bash
+npm i -g @railway/cli
+railway login
+
+# クローンとマネージャーの認証（サブスクリプションの長期トークン）
+claude setup-token          # → CLAUDE_CODE_OAUTH_TOKEN
+
+# 制御面の合鍵。素の値は daemon にだけ、sha256 は runner にだけ置く
+TOKEN=$(openssl rand -hex 32)
+echo "raw   : $TOKEN"
+echo "sha256: $(printf %s "$TOKEN" | shasum -a 256 | cut -d' ' -f1)"
+```
+
+### 1. プロジェクトと PostgreSQL
+
+```bash
+railway init -n alteroid
+railway add --database postgres
+```
+
+### 2. Service を2つ作る（同じリポジトリから）
+
+ダッシュボードで GitHub リポジトリを2回追加し、名前を **`app`** と **`runner`** にする（`ALTEROID_RUNNER_URL` がこの名前を参照する）。それぞれ **Settings → Config as Code** に次を指定する。
+
+| Service  | Config as Code         |
+| -------- | ---------------------- |
+| `app`    | `/railway/daemon.json` |
+| `runner` | `/railway/runner.json` |
+
+Config as Code のパスは Root Directory を見ないので、**リポジトリ先頭からの絶対パス**で書く。同じ `Dockerfile` から `startCommand` で役を選ぶ（compose の `command` と同じ考え方）。
+
+### 3. 変数（Shared Variables は使わない）
+
+**`runner`**
+
+| 変数                           | 値                        | なぜ                                                                                                                                                                                                                       |
+| ------------------------------ | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RAILWAY_RUN_UID`              | `0`                       | イメージの `USER node` のままだと子プロセスを uid 1001 へ降ろす特権が無く、runner は**起動を拒否する**（同じ UID で走り続けるより落ちる方を選んである）。root なのは権限を配るためではなく、降ろすのに特権が要るからである |
+| `ALTEROID_RUNNER_BIND`         | `::`                      | Railway の private network は IPv6（新しい環境は dual stack）。既定の `127.0.0.1` のままだと daemon から届かない                                                                                                           |
+| `ALTEROID_RUNNER_PORT`         | `4518`                    |                                                                                                                                                                                                                            |
+| `ALTEROID_RUNNER_ID`           | `runner-primary`          | 台帳の `manager_id → runner_id` を引く安定した識別子。器を作り直しても同じ宛先として戻る                                                                                                                                   |
+| `ALTEROID_RUNNER_TOKEN_SHA256` | 上の sha256               | **ハッシュだけ。** 素の値をここに置かない                                                                                                                                                                                  |
+| `CLAUDE_CODE_OAUTH_TOKEN`      | `claude setup-token` の値 | マネージャーと作業者の認証                                                                                                                                                                                                 |
+| `TZ`                           | `Asia/Tokyo`              |                                                                                                                                                                                                                            |
+
+**`app`**
+
+| 変数                        | 値                                               | なぜ                                                                                                       |
+| --------------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `ALTEROID_DATABASE_URL`     | `${{Postgres.DATABASE_URL}}`                     | private の接続文字列（`postgres.railway.internal`）。`DATABASE_PUBLIC_URL` は公衆網に出るので使わない      |
+| `ALTEROID_RUNNER_URL`       | `http://${{runner.RAILWAY_PRIVATE_DOMAIN}}:4518` | 固定 URL をコードに埋めず、ここで名簿へ登録する。private network は Wireguard で暗号化済みなので `http://` |
+| `ALTEROID_RUNNER_TOKEN`     | 素の `$TOKEN`                                    | **素の値を持つのは daemon だけ**                                                                           |
+| `CLAUDE_CODE_OAUTH_TOKEN`   | `claude setup-token` の値                        | クローンも SDK セッションなので要る                                                                        |
+| `ALTEROID_DAILY_REPORT_AT`  | `22:00`                                          | 省略しても既定で動く（自律は後から足す機能ではない）                                                       |
+| `ALTEROID_INITIATIVE_EVERY` | `60`                                             | 同上（分）                                                                                                 |
+| `TZ`                        | `Asia/Tokyo`                                     | 日報の締め時刻がこれで決まる                                                                               |
+
+**置かないもの**
+
+- `ALTEROID_BIND` — デーモンの API は**叩けばクローンのターンが起きる実行の口**で、認証が無い。127.0.0.1 のままにする
+- public domain（Generate Domain）— 上と同じ理由。外から使いたくなったら、手前に境界（認証・トンネル・リバースプロキシ）を置くのが先
+
+### 4. デプロイ
+
+**`runner` を先に上げる。** daemon は起動時に runner の `/health` へ名乗りを聞きに行き、繋がらなければ落ちる（鍵無しで繋ぐくらいなら起動しない設計）。`restartPolicyType: ALWAYS` なので放っておいても収束するが、順番どおりなら1回で上がる。
+
+GitHub 連携で作った Service は push で自動デプロイされる。初回だけダッシュボードから `runner` → `app` の順に Deploy を押す（以後は両方が同時に上がり直し、daemon が1〜2回再起動して収束する）。
+
+```bash
+railway logs --service runner
+railway logs --service app
+```
+
+ローカルから直に上げるなら `railway up --service runner --detach` → `railway up --service app --detach`。
+
+`app` のログにこれが出れば上がっている。
+
+```
+alteroidd: http://127.0.0.1:4517 （記憶: PostgreSQL（postgres.railway.internal:5432/railway） / 作業: /workspace）
+```
+
+### 5. 使う
+
+CLI はデーモンを `$ALTEROID_HOME/state/daemon.json` 経由で `127.0.0.1` に見に行く。**リモートのデーモンを指す手段は無い**（意図的）ので、同じコンテナの中から使う。
+
+```bash
+railway ssh --service app
+alteroid chat
+```
+
+chat の中で使えるもの:
+
+| 入力                                         | 何が起きるか                                                         |
+| -------------------------------------------- | -------------------------------------------------------------------- |
+| `/approvals` → `/answer <番号> <回答>`       | 溜まった承認待ちを処理する。**人間の不在で止まってよいのはこれだけ** |
+| `/managers` / `/manager <id>`                | 委譲の一覧と生ログ                                                   |
+| `/report` / `/reports`                       | 日報                                                                 |
+| `/run daily_report` / `/run self_initiative` | 時間起点を待たずに起こす                                             |
+| `/event <source> <本文>`                     | 外部イベント起点を手で叩く                                           |
+
+### 6. 上がったあとに確かめること
+
+境界が本当に立っているかは、思い込みではなく runner の中から確かめる。
+
+```bash
+railway ssh --service runner
+env | grep ALTEROID_DATABASE_URL     # 何も出ないこと（記憶ストアの鍵が無い）
+env | grep ALTEROID_RUNNER_TOKEN     # _SHA256 だけが出ること（素の合鍵が無い）
+```
+
+能力が落ちていないことも確かめる（境界を入れた側が示す義務。north_star「立ち戻るための問い」最終項）。
+
+- `alteroid chat` でマネージャーへ委譲し、git を叩く作業が完遂すること
+- 許可確認がクローン経由で `/approvals` に届き、`/answer` で**その仕事だけ**が再開すること
+- `app` を再デプロイしても同じ人格で応答し、走行中だったマネージャーを把握していること
+
+---
+
+## 既知のざらつき
+
+1. **runner の再デプロイで daemon も一度落ちる。** daemon は起動時に runner へ繋げないと落ちる（`apps/daemon/src/index.ts` の `openRunner`）。`ALWAYS` で復帰し、走行中のマネージャーは runner が生きていれば繋ぎ直し、器ごと落ちていれば JobStore の `session_id` と預かった生ログから resume される。起動時リトライを入れるかは別途判断（要件ではなく実装のざらつき）
+2. **App Sleep を有効にしないこと。** 常駐は自律の前提であり、寝かせると起点②〜④が止まる
+3. **3 Service が常時起動する。** 止めてよいのは承認待ちの仕事だけで、器ではない
