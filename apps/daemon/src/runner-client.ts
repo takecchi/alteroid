@@ -59,6 +59,19 @@ function socketPathOf(baseUrl: string): string | null {
 }
 
 /**
+ * 名乗りがまだ返っていない器の仮の名前。
+ *
+ * **台帳の runner_id と偶然一致しない形にしてある。** 一致すると、その器へ
+ * 走っていたはずの仕事が「見つかった」ことになり、返事の来ない宛先へ命令が飛ぶ。
+ */
+export const UNCONFIRMED_RUNNER_PREFIX = '(未確認) ';
+
+/** まだ名乗りが返っていないか（名簿には載るが、宛先としては引けない）。 */
+export function isUnconfirmed(runner: Pick<RunnerClient, 'runnerId'>): boolean {
+  return runner.runnerId.startsWith(UNCONFIRMED_RUNNER_PREFIX);
+}
+
+/**
  * 接続して runner_id を確かめてから使う（宛先を台帳に残すため）。
  *
  * `requireHello: false` のときだけ、返らない器も名簿に載る形で返る（複数構成で
@@ -86,8 +99,7 @@ class HttpRunner implements RunnerClient {
   #closed = false;
 
   constructor(options: HttpRunnerOptions) {
-    // 仮の名前は宛先の見た目を持たせない（台帳の runner_id と偶然一致させない）。
-    this.runnerId = options.runnerId ?? `(未確認) ${options.baseUrl}`;
+    this.runnerId = options.runnerId ?? `${UNCONFIRMED_RUNNER_PREFIX}${options.baseUrl}`;
     this.#socketPath = socketPathOf(options.baseUrl);
     // ソケットのときも URL の形は要る（ホスト名は使われない）
     this.#baseUrl =

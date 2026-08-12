@@ -16,7 +16,7 @@ import {
 } from '@alteroid/core';
 
 import { createApp } from './app.js';
-import { createHttpRunner } from './runner-client.js';
+import { createHttpRunner, isUnconfirmed } from './runner-client.js';
 import { clearRuntimeInfo, writeRuntimeInfo } from './runtime.js';
 import { buildSchedule, readScheduleConfig } from './schedule.js';
 import { openStorage } from './storage.js';
@@ -24,7 +24,12 @@ import { readWorkspaceConfig } from './workspace.js';
 
 export { createApp, type AppDeps, type AppType } from './app.js';
 export { openStorage, DATABASE_URL_ENV, type Storage } from './storage.js';
-export { createHttpRunner, type HttpRunnerOptions } from './runner-client.js';
+export {
+  createHttpRunner,
+  isUnconfirmed,
+  UNCONFIRMED_RUNNER_PREFIX,
+  type HttpRunnerOptions,
+} from './runner-client.js';
 export {
   buildSchedule,
   readScheduleConfig,
@@ -110,7 +115,7 @@ async function openRunners(workspace: string, withheldEnvKeys: string[]): Promis
       // 1台しか居ないなら、返らないことは起動失敗である。
       requireHello: urls.length === 1,
     });
-    if (client.workspacePath === '') silent.push(baseUrl);
+    if (isUnconfirmed(client)) silent.push(baseUrl);
     runners.push(client);
   }
 

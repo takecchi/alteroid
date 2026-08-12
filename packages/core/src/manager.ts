@@ -130,6 +130,15 @@ interface ManagerRecord {
   waiting: { requestId: string; summary: string }[];
   /** runner に生きたセッションがあるか。無ければ send のときに resume する。 */
   attached: boolean;
+  /**
+   * いま移送中なら、その約束。
+   *
+   * **同じ仕事を2か所で開かないための鍵である。** 移送の契機は2つ（名簿の「落ちた」
+   * 通知と、話しかけられたとき）あり、重なると同じ session を別々の器で resume
+   * しかける。そうなると1つの仕事に2本のマネージャーが並び、同じ workspace へ
+   * 二重に書く。
+   */
+  moving?: Promise<ManagerSummary | null>;
 }
 
 class Pool implements ManagerPool {
@@ -567,6 +576,18 @@ class Pool implements ManagerPool {
    * のかをクローンの受信箱へ上げる。
    */
   async #failover(record: ManagerRecord): Promise<ManagerSummary | null> {
+    // 契機が重なっても、移送は1本にまとめる（同じ session を2か所で開かない）。
+    const inFlight = record.moving;
+    if (inFlight !== undefined) return inFlight;
+
+    const moving = this.#move(record).finally(() => {
+      record.moving = undefined;
+    });
+    record.moving = moving;
+    return moving;
+  }
+
+  async #move(record: ManagerRecord): Promise<ManagerSummary | null> {
     const from = record.job.runnerId;
     const locator = record.job.workspace;
 

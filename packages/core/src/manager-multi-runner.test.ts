@@ -414,6 +414,38 @@ describe('複数 runner — 配置と経路', () => {
     await f.pool.stop();
   });
 
+  it('移送の契機が重なっても、同じ仕事を2か所で開かない', async () => {
+    const a = rig('runner-a', 'sess-a');
+    const b = rig('runner-b', 'sess-b');
+    const c = rig('runner-c', 'sess-c');
+    const f = fleet([a], {
+      workspace: { kind: 'git', repository: 'git@github.com:acme/app.git', ref: 'main' },
+    });
+
+    const started = await f.pool.start({ request: '長い仕事' });
+    await expect
+      .poll(async () => (await f.stores.jobs.listJobs())[0]?.sessionId, { timeout: 2000 })
+      .toBeDefined();
+
+    f.registry.register(b.client);
+    f.registry.register(c.client);
+    a.kill();
+    f.advance(3_000);
+
+    // 生存確認（名簿の通知）と、話しかけられたことが同時に起きる状況
+    const [, sent] = await Promise.all([
+      f.registry.heartbeat(),
+      f.pool.send(started.managerId, 'どうなった？'),
+      f.pool.rebalance(),
+    ]);
+
+    // 開き直るのは1本だけ（2本並ぶと同じ workspace へ二重に書く）
+    expect(b.sessions.length + c.sessions.length).toBe(1);
+    expect(sent.outcome).toBe('delivered');
+
+    await f.pool.stop();
+  });
+
   it('共有 FS なら作業ディレクトリごと引き継ぐ', async () => {
     const a = rig('runner-a', 'sess-a');
     const b = rig('runner-b', 'sess-b');
