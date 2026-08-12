@@ -35,13 +35,28 @@ export interface SessionLeaseOptions {
    */
   fence: () => Promise<string[]> | string[];
   /**
-   * 期限が切れてから**畳み終わる**までに要りうる時間の上限（ミリ秒）。既定 5 秒。
+   * 期限が切れてから**畳み終わる**までの上限（ミリ秒）。既定 5 秒。
    *
    * デーモンへはこの値を申告し、デーモンは `ttlMs + graceMs` ＋自分の余裕を過ぎて
-   * から移送する。**畳むのに実際かかる時間より短く申告しないこと** — 申告が短いと、
-   * デーモンが「もう止まっている」と見なした後もセッションが動いている窓ができる。
+   * から移送する。**だからこれは見込みではなく、守らせる約束である** — 畳み終わら
+   * なければ `onGraceExceeded` で器ごと降りる（下記）。
    */
   graceMs?: number;
+  /**
+   * 猶予の内に畳み終えられなかったときの最後の手段。
+   *
+   * **ここが無いと `graceMs` はただの自己申告になる。** SDK の子プロセスが固まる、
+   * アーカイブの送信が詰まる、といった理由で `fence` が返らないことはありうるが、
+   * デーモンは申告した時刻が来ただけで「もう止まっている」と見なして別の器で
+   * 開き直す。つまり**畳み終わっていないのに二重に走る**。
+   *
+   * 分断されている以上、デーモンへ「畳めなかった」と伝える経路は無い（伝えられる
+   * なら分断ではない）。だから器の側で片を付けるしかない。既定の実装は**プロセス
+   * ごと落とす**（コンテナでは中の子プロセスも一緒に消えるので、約束が守られる）。
+   *
+   * 通常の期限切れでは器は落とさない — 落とすのは**畳めなかったときだけ**である。
+   */
+  onGraceExceeded?: () => void;
   /** この起動を指す id（省略時は起動ごとに作る）。 */
   incarnation?: string;
   /** 畳んだことを人間に見せる（既定は何もしない）。 */
@@ -63,6 +78,7 @@ export class SessionLease {
   readonly #incarnation: string;
   readonly #fence: () => Promise<string[]> | string[];
   readonly #onFenced: (managerIds: string[]) => void;
+  readonly #onGraceExceeded: () => void;
   readonly #now: () => number;
   readonly #timers: NonNullable<SessionLeaseOptions['timers']>;
   #lastContactAt: number;
@@ -79,6 +95,7 @@ export class SessionLease {
     this.#incarnation = options.incarnation ?? randomUUID();
     this.#fence = options.fence;
     this.#onFenced = options.onFenced ?? (() => undefined);
+    this.#onGraceExceeded = options.onGraceExceeded ?? (() => undefined);
     this.#now = options.now ?? (() => Date.now());
     this.#timers = options.timers ?? {
       set: (callback, ms) => {
@@ -126,6 +143,11 @@ export class SessionLease {
   /**
    * 期限を過ぎていれば畳む。返るのは畳んだ manager_id。
    *
+   * **猶予（`graceMs`）は実際の上限として守らせる。** デーモンはこの時間が過ぎた
+   * ことだけを根拠に別の器で開き直すので、ここで待ち続けてしまうと「止まっている
+   * はず」の裏付けが無いまま二重に走る。畳み終わらなければ `onGraceExceeded`
+   * （既定では器ごと降りる）へ落とす。
+   *
    * 畳んでいる最中にもう一度呼ばれても、同じ約束を返す（二重に畳まない）。
    */
   async check(): Promise<string[]> {
@@ -133,9 +155,25 @@ export class SessionLease {
     if (this.#fencing !== null) return this.#fencing;
 
     const fencing = (async () => {
-      const fenced = await this.#fence();
-      if (fenced.length > 0) this.#onFenced(fenced);
-      return fenced;
+      const fenced = Promise.resolve(this.#fence());
+      let overdue: unknown = null;
+      const guard = new Promise<'overdue'>((resolve) => {
+        overdue = this.#timers.set(() => resolve('overdue'), this.#graceMs);
+      });
+      // **競争させる。** `fence` が返らないケースこそがこの見張りの理由である。
+      const outcome = await Promise.race([
+        fenced.then((ids) => ({ ids })).catch((error: unknown) => ({ error })),
+        guard,
+      ]);
+      if (overdue !== null) this.#timers.clear(overdue);
+
+      if (outcome === 'overdue') {
+        this.#onGraceExceeded();
+        return [];
+      }
+      if ('error' in outcome) throw outcome.error;
+      if (outcome.ids.length > 0) this.#onFenced(outcome.ids);
+      return outcome.ids;
     })().finally(() => {
       this.#fencing = null;
     });

@@ -140,6 +140,72 @@ describe('SessionLease — 器が自分で降りる', () => {
     expect(fenced).toEqual([['mgr-1']]);
   });
 
+  /**
+   * **`graceMs` は見込みではなく、守らせる約束である。**
+   *
+   * デーモンは申告された `ttl + grace` が過ぎたことだけを根拠に別の器で開き直す。
+   * SDK の子プロセスが固まる・アーカイブの送信が詰まるなどで畳み終わらないまま
+   * 待ち続けると、**止まっていないのに二重に走る**。分断されている以上、畳めな
+   * かったことをデーモンへ伝える経路も無いので、器の側で片を付けるしかない。
+   */
+  it('猶予の内に畳み終えられなければ、最後の手段へ落とす（器ごと降りる）', async () => {
+    const time = clock();
+    const pending: { at: number; run: () => void }[] = [];
+    let exceeded = 0;
+    let fenced = 0;
+
+    const lease = new SessionLease({
+      ttlMs: 30_000,
+      graceMs: 5_000,
+      now: time.now,
+      // 畳もうとしたまま**永久に返らない**（子プロセスが固まった状態）
+      fence: () =>
+        new Promise<string[]>(() => {
+          fenced += 1;
+        }),
+      onGraceExceeded: () => {
+        exceeded += 1;
+      },
+      timers: {
+        set: (run, ms) => {
+          const entry = { at: time.now() + ms, run };
+          pending.push(entry);
+          return entry;
+        },
+        clear: (handle) => {
+          const index = pending.indexOf(handle as (typeof pending)[number]);
+          if (index >= 0) pending.splice(index, 1);
+        },
+      },
+    });
+
+    const advance = async (ms: number) => {
+      time.advance(ms);
+      for (const entry of [...pending]) {
+        if (entry.at > time.now()) continue;
+        pending.splice(pending.indexOf(entry), 1);
+        entry.run();
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    };
+
+    lease.start();
+
+    // 期限が切れて畳み始めるが、返ってこない
+    await advance(30_001);
+    expect(fenced).toBe(1);
+    expect(exceeded).toBe(0);
+
+    // 猶予の内はまだ待つ
+    await advance(4_000);
+    expect(exceeded).toBe(0);
+
+    // **申告した猶予を過ぎたら、待ち続けない。** デーモンはもう移送してよいと
+    // 判断する時刻なので、ここで粘ると二重に走る。
+    await advance(1_100);
+    expect(exceeded).toBe(1);
+  });
+
   it('期限は秒で設定でき、off で外せる（外した器は自動移送の対象外になる）', () => {
     expect(leaseTtlMsOf({})).toBe(30_000);
     expect(leaseTtlMsOf({ ALTEROID_RUNNER_LEASE_TTL: '45' })).toBe(45_000);

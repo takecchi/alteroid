@@ -231,14 +231,6 @@ class Pool implements ManagerPool {
   readonly #connected = new WeakSet<RunnerClient>();
   readonly #fenceMarginMs: number;
   readonly #now: () => number;
-  /**
-   * このデーモンが起きた時刻。
-   *
-   * 台帳にしか無い器（このデーモンは一度も名乗りを聞いていない）の貸し出し期限を
-   * 数える基準になる。前のデーモンが最後に触った時刻は分からないが、**その器を
-   * 触っていたプロセスはもう居ない**ので、ここから数えれば安全側に寄る。
-   */
-  readonly #startedAt: number;
   /** 期限切れを待っている移送の再試行。`stop()` で片付ける。 */
   readonly #timers = new Set<ReturnType<typeof setTimeout>>();
   /** 名簿の「落ちた」通知の購読を解く手。 */
@@ -252,7 +244,6 @@ class Pool implements ManagerPool {
     this.#workspace = workspace ?? DEFAULT_WORKSPACE_POLICY;
     this.#fenceMarginMs = fenceMarginMs ?? DEFAULT_FENCE_MARGIN_MS;
     this.#now = now ?? (() => Date.now());
-    this.#startedAt = this.#now();
     // 器が落ちたら、話しかけられるのを待たずに置き直す。人間の不在で止まって
     // よいのは承認待ちの仕事だけである（PRD「自律」）。
     this.#unwatch = this.#runners.onLost(() => {
@@ -564,14 +555,27 @@ class Pool implements ManagerPool {
     const states = this.#runners.states();
     const dead = new Set(states.filter((state) => !state.alive).map((state) => state.runnerId));
     const known = new Set(states.map((state) => state.runnerId));
+    /** いまその宛先を名乗っている起動（同じ id が複数居るときは生きている方）。 */
+    const current = new Map<string, string | undefined>();
+    for (const state of states) {
+      if (current.has(state.runnerId) && !state.alive) continue;
+      current.set(state.runnerId, state.incarnation);
+    }
 
     const moved: ManagerSummary[] = [];
     for (const record of [...this.#records.values()]) {
-      const { runnerId, status } = record.job;
+      const { runnerId, runnerIncarnation, status } = record.job;
       if (status !== 'running' && status !== 'waiting_human') continue;
       if (runnerId === undefined) continue;
+      // 同じ名前で器が作り直されていたら、そこにこの仕事はもう無い。**生きて見えて
+      // いても置き直しの対象である** — 話しかけられるまで放っておくと、入れ替わりで
+      // 消えた仕事が誰にも気づかれずに止まったままになる（PRD「自律」）。
+      const replaced =
+        runnerIncarnation !== undefined &&
+        current.get(runnerId) !== undefined &&
+        current.get(runnerId) !== runnerIncarnation;
       // 名簿に居ない器も「もう届かない」側である（器ごと消えた構成）。
-      if (!dead.has(runnerId) && known.has(runnerId)) continue;
+      if (!dead.has(runnerId) && known.has(runnerId) && !replaced) continue;
 
       const summary = await this.#failover(record).catch(() => null);
       if (summary !== null) moved.push(summary);
@@ -857,15 +861,19 @@ class Pool implements ManagerPool {
       if (stopped) return { kind: 'confirmed' };
     }
 
-    // 2. 器が自分で畳むと約束していた分だけ待つ。
-    const anchor = this.#fenceAnchor(from, record.job.runnerIncarnation);
+    // 2. **その仕事を置いた起動が**自分で畳むと約束していた分だけ待つ。
+    const placedOn = record.job.runnerIncarnation;
+    const anchor = this.#fenceAnchor(from, placedOn);
     const ttlMs = anchor?.lease?.ttlMs;
     if (anchor === null || ttlMs === undefined) {
       return {
         kind: 'unknown',
         why:
-          `runner ${from} は貸し出し期限（lease）を報告していないので、` +
-          'いまも走り続けているかどうかを確かめられない。',
+          placedOn === undefined
+            ? `runner ${from} のどの起動に置いたのかが分からない（貸し出し期限を報告しない器か、` +
+              'それを記録する前に置かれた委譲である）ので、いまも走り続けているかどうかを確かめられない。'
+            : `runner ${from} の起動 ${placedOn} をこのデーモンは観測していないので、` +
+              'その器が自分でセッションを畳んだと言い切れない。',
       };
     }
 
@@ -879,51 +887,34 @@ class Pool implements ManagerPool {
   }
 
   /**
-   * 期限を数え始める基準（＝その仕事を置いた**起動**を最後に見た時刻）。
+   * 期限を数える基準。**その仕事を置いた起動について観測したものだけ**を使う。
    *
-   * **`runner_id` で引いた「いまの状態」を使ってはいけない。** 器が同じ名前で
-   * 作り直されていると、新しい器の名乗りで基準が延び続け、古い器（分断されたまま
-   * 走っているかもしれない方）の期限が永遠に来ない。
+   * 材料は2つとも、その起動に紐づいていなければならない。
+   *
+   * - 最後に見た時刻 — 新しい器の名乗りで数えると、分断されたまま走っている
+   *   古い器の期限が永遠に来ない（または誤って早く来る）
+   * - **その起動が名乗っていた期限** — いまの器の値を流用してはいけない。旧器が
+   *   `ttl=60s` を名乗って分断され、新器が `ttl=5s` で起きた構成では、旧器が
+   *   最大 70 秒走り続けているのに移送してしまう（設定変更を伴うローリング更新で
+   *   普通に起きる）
+   *
+   * **どちらも取れないなら `null`。** 時間だけで安全と決めない。
    */
   #fenceAnchor(
     runnerId: string,
     placedOn: string | undefined,
   ): { lease: RunnerHealthState['lease']; since: number } | null {
-    const at = (value: string | null | undefined): number | null => {
-      if (value === null || value === undefined) return null;
-      const parsed = Date.parse(value);
-      return Number.isNaN(parsed) ? null : parsed;
-    };
+    if (placedOn === undefined) return null;
 
-    const states = this.#runners.states().filter((entry) => entry.runnerId === runnerId);
-    if (states.length === 0) return null;
-
-    if (placedOn !== undefined) {
-      // その起動そのものが名簿に居る（落ちて見えている器も含む）。
-      const exact = states.find((entry) => entry.incarnation === placedOn);
-      if (exact !== undefined) {
-        return { lease: exact.lease, since: at(exact.lastSeenAt) ?? this.#startedAt };
-      }
-      // 同じ名前で作り直されていた。**新しい器の名乗りでは数えない。**
-      const replaced = states.find((entry) => entry.previousIncarnation?.incarnation === placedOn);
-      if (replaced?.previousIncarnation !== undefined) {
-        return {
-          lease: replaced.lease,
-          since: at(replaced.previousIncarnation.lastSeenAt) ?? this.#startedAt,
-        };
-      }
+    for (const state of this.#runners.states()) {
+      if (state.runnerId !== runnerId) continue;
+      const seen = state.incarnations?.find((entry) => entry.incarnation === placedOn);
+      if (seen === undefined) continue;
+      const since = Date.parse(seen.lastSeenAt);
+      if (Number.isNaN(since)) continue;
+      return { lease: seen.lease, since };
     }
-
-    // どの起動に置いたのか分からない（このデーモンより前に置かれた等）。
-    // **いちばん新しい観測を基準にする＝いちばん長く待つ。**
-    let since = this.#startedAt;
-    let lease: RunnerHealthState['lease'];
-    for (const entry of states) {
-      const seen = at(entry.lastSeenAt);
-      if (seen !== null && seen >= since) since = seen;
-      lease = lease ?? entry.lease;
-    }
-    return { lease, since };
+    return null;
   }
 
   /**

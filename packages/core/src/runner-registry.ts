@@ -21,6 +21,19 @@ import type { RunnerCapacity, RunnerClient, RunnerLease } from './runner-protoco
  *   観測側の失敗であることもある。そのときは投げた先で本物の失敗が返る）
  */
 
+/**
+ * ある器の**1つの起動**について観測したこと。
+ *
+ * `lease` は**その起動が名乗っていた**値である（いまの器のものではない）。
+ */
+export interface RunnerIncarnation {
+  incarnation: string;
+  /** その起動を最後に見た時刻（ISO 8601）。 */
+  lastSeenAt: string;
+  /** その起動が名乗っていた貸し出し期限。 */
+  lease?: RunnerLease;
+}
+
 /** 直近の生存判定の結果。**判定の材料と結論だけ**で、処分は含まない。 */
 export interface RunnerHealthState {
   runnerId: string;
@@ -48,13 +61,18 @@ export interface RunnerHealthState {
    */
   incarnation?: string;
   /**
-   * 同じ `runnerId` で**入れ替わる前**の起動と、それを最後に見た時刻。
+   * この宛先で見た起動の履歴（新しい順）。**起動ごとに、その器が名乗っていた
+   * 期限と、最後に見た時刻を組で持つ。**
    *
-   * **入れ替わりに気づかないと、fencing の基準時刻が新しい器の名乗りで延び続ける。**
-   * 古い器（分断されたまま走っているかもしれない方）の期限は、その器を最後に見た
-   * 時刻から数えなければならない。
+   * fencing の計算に要るのは「いまの器」ではなく「**その仕事を置いた器**」の
+   * 数字である。ここを取り違えると、例えば旧器が `ttl=60s` を名乗って分断され、
+   * 新器が `ttl=5s` で起きた構成で、旧器がまだ走っているのに移送してしまう
+   * （設定変更を伴うローリング更新で普通に起きる）。
+   *
+   * 1世代しか覚えないと、続けて入れ替わったときに元の仕事の基準が消える。だから
+   * 履歴として持つ。
    */
-  previousIncarnation?: { incarnation: string; lastSeenAt: string };
+  incarnations?: RunnerIncarnation[];
   /** 最後の失敗の理由（人間が読む用）。 */
   lastError?: string;
 }
@@ -131,6 +149,13 @@ export interface RunnerRegistryOptions {
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 10_000;
 const DEFAULT_LIVENESS_TIMEOUT_MS = 30_000;
 const DEFAULT_PROBE_TIMEOUT_MS = 5_000;
+/**
+ * 覚えておく起動の数。
+ *
+ * **1世代では足りない。** 続けて作り直された器の下で、まだ移送できていない仕事の
+ * 基準（その起動を最後に見た時刻と、その起動が名乗っていた期限）が消えてしまう。
+ */
+const MAX_INCARNATION_HISTORY = 16;
 
 interface MutableState {
   /** 最後に聞いた時刻（成功・失敗どちらも）。まだ聞いていなければ null。 */
@@ -149,7 +174,8 @@ interface MutableState {
   capacity: RunnerCapacity | undefined;
   lease: RunnerLease | undefined;
   incarnation: string | undefined;
-  previousIncarnation: { incarnation: string; lastSeen: number } | undefined;
+  /** 起動ごとの観測（挿入順＝古い順）。上限を超えたら古い方から落とす。 */
+  incarnations: Map<string, { lastSeen: number; lease: RunnerLease | undefined }>;
   lastError: string | undefined;
   /**
    * 直近この器へ置いた本数のうち、まだ実測（`capacity.activeManagers`）へ
@@ -203,7 +229,7 @@ class Registry implements RunnerRegistry {
       capacity: undefined,
       lease: undefined,
       incarnation: undefined,
-      previousIncarnation: undefined,
+      incarnations: new Map(),
       lastError: undefined,
       placements: 0,
     });
@@ -324,20 +350,19 @@ class Registry implements RunnerRegistry {
         () => runner.health(),
       );
 
-      // 同じ宛先の器が作り直されていたら、**前の起動を最後に見た時刻を残す。**
-      // ここを上書きしてしまうと、分断されたまま走っているかもしれない古い器の
-      // 期限が、新しい器の名乗りで延び続ける（＝いつまでも移送できない / 誤って
-      // 移送する、のどちらかになる）。
+      // 起動ごとに「最後に見た時刻」と「そのとき名乗っていた期限」を残す。
+      // **新しい器の数字で古い器の期限を数えない**ための土台である（古い器は
+      // 分断されたまま走っているかもしれず、その期限は古い器の申告で決まる）。
       const incarnation = health.lease?.incarnation;
-      if (
-        incarnation !== undefined &&
-        state.incarnation !== undefined &&
-        incarnation !== state.incarnation
-      ) {
-        state.previousIncarnation = {
-          incarnation: state.incarnation,
-          lastSeen: state.lastSeen ?? at,
-        };
+      if (incarnation !== undefined) {
+        // 挿入順を新しくするため、いったん消してから入れ直す。
+        state.incarnations.delete(incarnation);
+        state.incarnations.set(incarnation, { lastSeen: at, lease: health.lease });
+        while (state.incarnations.size > MAX_INCARNATION_HISTORY) {
+          const oldest = state.incarnations.keys().next();
+          if (oldest.done === true) break;
+          state.incarnations.delete(oldest.value);
+        }
       }
       state.incarnation = incarnation;
 
@@ -406,13 +431,16 @@ class Registry implements RunnerRegistry {
       ...(state?.capacity === undefined ? {} : { capacity: state.capacity }),
       ...(state?.lease === undefined ? {} : { lease: state.lease }),
       ...(state?.incarnation === undefined ? {} : { incarnation: state.incarnation }),
-      ...(state?.previousIncarnation === undefined
+      ...(state === undefined || state.incarnations.size === 0
         ? {}
         : {
-            previousIncarnation: {
-              incarnation: state.previousIncarnation.incarnation,
-              lastSeenAt: new Date(state.previousIncarnation.lastSeen).toISOString(),
-            },
+            incarnations: [...state.incarnations.entries()]
+              .reverse()
+              .map(([incarnation, seen]) => ({
+                incarnation,
+                lastSeenAt: new Date(seen.lastSeen).toISOString(),
+                ...(seen.lease === undefined ? {} : { lease: seen.lease }),
+              })),
           }),
       ...(state?.lastError === undefined ? {} : { lastError: state.lastError }),
     };
