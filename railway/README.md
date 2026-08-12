@@ -189,6 +189,80 @@ su -s /bin/sh worker -c "curl -s http://127.0.0.1:4518/livez"
 
 ---
 
+## マネージャーに GitHub を渡す（PR を出させる）
+
+クローンに「実装して PR を出して」と頼むには、マネージャーの手元に**人間が Claude Code に渡しているものと同じ**3つが揃っている必要がある。
+
+| 要るもの       | 置き場                       | 状態                                                                                  |
+| -------------- | ---------------------------- | ------------------------------------------------------------------------------------- |
+| `gh` コマンド  | イメージ（`Dockerfile`）     | 同梱済み（版は固定しない。ビルドし直せば上がる）。git の credential helper も配線済み |
+| 書き込みの鍵   | **`runner` の Service 変数** | `GH_TOKEN` を置く（下記）                                                             |
+| コミットの身元 | **`runner` の Service 変数** | `GIT_AUTHOR_*` / `GIT_COMMITTER_*` を置く（下記）                                     |
+
+**daemon 側には置かない。** これはクローンの鍵ではなく**マネージャー自身の道具の鍵**である（クローンの道具はマネージャーであって git ではない）。記憶ストアの鍵と逆で、下へ渡すのが正しい。
+
+### 鍵を作る
+
+GitHub → Settings → Developer settings → Personal access tokens → **Fine-grained tokens**
+
+| 項目              | 値                                            |
+| ----------------- | --------------------------------------------- |
+| Repository access | Only select repositories → 対象リポジトリだけ |
+| Contents          | Read and write（clone / push）                |
+| Pull requests     | Read and write（`gh pr create`）              |
+| Metadata          | Read-only（自動で付く）                       |
+| Expiration        | 切る。無期限にしない                          |
+
+公開リポジトリなら clone だけは鍵なしで通る。**push と PR 作成に要る**のがこの鍵である。
+
+### 置く
+
+```bash
+# 鍵は stdin から。引数で渡すとシェル履歴とプロセス一覧に残る
+printf %s 'github_pat_xxx' | railway variable set GH_TOKEN --stdin --service runner --skip-deploys
+
+railway variable set GIT_AUTHOR_NAME=takecchi --service runner --skip-deploys
+railway variable set GIT_AUTHOR_EMAIL=takeaki.kobayashi@gmail.com --service runner --skip-deploys
+railway variable set GIT_COMMITTER_NAME=takecchi --service runner --skip-deploys
+railway variable set GIT_COMMITTER_EMAIL=takeaki.kobayashi@gmail.com --service runner
+```
+
+**Shared Variables に置かない。** `runner` の Service 変数として置く（daemon にも降りる場所へ置くと、記憶の鍵と同じ器に GitHub の書き込み権が並ぶ）。
+
+`GIT_*` を**環境変数で**渡すのは、`git config` を焼くと器を作り直すたびに消えるからである（git は設定ファイルが無くてもこの4つを読む）。置き忘れると commit が `Please tell me who you are` で失敗する。**空文字で置くのは未設定より悪い** — git は `empty ident name` で即座に落ちる。置かないなら変数ごと消す。
+
+### ローカル（`docker compose`）でも同じ
+
+同じ5つを `.env` に置けば `runner` へ渡る（`compose.yaml` の runner の `environment`）。確認は `docker compose exec -u 1001 runner gh auth status`。
+
+### 通っているか確かめる
+
+マネージャーと同じ主体（uid 1001）で確かめる。root で通っても意味がない。
+
+```bash
+railway ssh --service runner -- su -s /bin/sh worker -c '
+  gh auth status
+  cd /tmp && git clone --depth 1 https://github.com/<owner>/<repo> r && cd r
+  git commit --allow-empty -m "probe" && git log -1 --format="%an <%ae>"
+'
+```
+
+### 頼む
+
+```bash
+railway ssh --service app
+alteroid chat
+> alteroid リポジトリの M5 を実装して PR を出して。AGENTS.md と docs/roadmap.md を先に読んで。
+```
+
+あとは閉じてよい。**人間の不在で止まるのは承認待ちだけ**なので、判断に迷ったものが `/approvals` に溜まる。溜まったら `alteroid chat` の `/approvals` → `/answer <番号> <回答>`。進み具合は `/managers` と `/manager <id>`（生ログ）で見える。
+
+**長い仕事を頼むときは、早めに push させること。** workspace はボリュームを付けていないので、runner が再デプロイされるとコミット前の変更は消える（「先に読む」3）。数時間かかる仕事を投げるなら、その間デプロイしないか、`/workspace` にボリュームを付ける。
+
+**M5 は実装だけでは受け入れ基準を満たさない。** 基準1が「runner を2台以上登録し、複数マネージャーが配置される」なので、`runner` Service をもう1つ（別の `ALTEROID_RUNNER_ID`）足して初めて確認できる。実装を頼むときに「1台構成のまま通るところまで」と「2台目を足してからの確認」を分けて伝えると迷子にならない。
+
+---
+
 ## 症状から引く
 
 | 症状                                                             | 原因                                                                                                                                                                                              |
@@ -199,6 +273,8 @@ su -s /bin/sh worker -c "curl -s http://127.0.0.1:4518/livez"
 | 変数を設定したのに効かない                                       | 名前の前後に空白。`railway variable list --json` で `repr` して検算する（上の「置いたら必ず名前を検算する」）                                                                                     |
 | 日報が想定と違う時刻に出る                                       | `TZ` 未設定。既定の `22:00` は**コンテナのローカル時刻**なので、UTC のまま動くと日本時間の翌 7:00 になる                                                                                          |
 | `env \| grep ALTEROID_DATABASE_URL` が runner で何か返す         | 慌てる前に行頭固定で取り直す。`RAILWAY_GIT_COMMIT_MESSAGE` にこの文書の一部が入っている                                                                                                           |
+| マネージャーの commit が `Please tell me who you are` で失敗する | `GIT_AUTHOR_*` / `GIT_COMMITTER_*` が runner に無い（「マネージャーに GitHub を渡す」）                                                                                                           |
+| マネージャーの push が 403 になる                                | `GH_TOKEN` が無いか、fine-grained PAT の Contents が Read-only か、対象リポジトリが選択されていない                                                                                               |
 
 ---
 
