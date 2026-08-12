@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    // tsup の dts ビルドが baseUrl を注入するため、TS6 の非推奨エラー(TS5101)を抑止
+    "ignoreDeprecations": "6.0",
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "declaration": true,
+    "noEmit": true,
+    // TS6 は @types を自動で取り込まないため明示する。全パッケージが @types/node（catalog:）を持つ前提
+    "types": ["node"]
+  }
+}
