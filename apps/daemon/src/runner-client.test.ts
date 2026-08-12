@@ -16,6 +16,7 @@ import {
   createMemoryStores,
   type ManagerPool,
   type InboxEvent,
+  type RunnerClient,
   type Stores,
 } from '@alteroid/core';
 import { createRunnerApp, Outbox } from '@alteroid/runner';
@@ -154,6 +155,8 @@ function fetchInto(app: ReturnType<typeof createRunnerApp>): typeof fetch {
 
 interface Rig {
   pool: ManagerPool;
+  /** runner への口そのもの（名乗り＝生存判定を直に確かめるため）。 */
+  client: RunnerClient;
   stores: Stores;
   inbox: InboxEvent[];
   sessions: FakeSession[];
@@ -189,6 +192,7 @@ async function rig(options: { stores?: Stores; sessionId?: string } = {}): Promi
 
   return {
     pool,
+    client,
     stores,
     inbox,
     sessions,
@@ -225,6 +229,23 @@ describe('デーモン ↔ manager-runner（HTTP 境界）', () => {
     await expect
       .poll(async () => (await r.stores.jobs.listJobs())[0]?.sessionId, { timeout: 2000 })
       .toBe('sess-1');
+  });
+
+  it('名乗りに資源が乗って降りてくる（M5 の生存判定と配置の材料）', async () => {
+    const r = await open();
+
+    // 制御面越しに実測が返る。**定員は返らない**（返した瞬間それは能力の制限）。
+    const health = await r.client.health();
+    expect(health).toMatchObject({ ok: true, runnerId: 'runner-primary' });
+    expect(health.capacity?.cpuCount).toBeGreaterThan(0);
+    expect(health.capacity?.activeManagers).toBe(0);
+    expect(health.capacity).not.toHaveProperty('maxManagers');
+
+    await r.pool.start({ request: '調べて' });
+    // 走らせた本数は実測として上がる（配置の材料になる）
+    await expect
+      .poll(async () => (await r.client.health()).capacity?.activeManagers, { timeout: 2000 })
+      .toBe(1);
   });
 
   it('記憶ストアの鍵は runner の子プロセスにも渡らない（受け入れ基準3の二重の底）', async () => {

@@ -20,6 +20,7 @@ import { createHttpRunner } from './runner-client.js';
 import { clearRuntimeInfo, writeRuntimeInfo } from './runtime.js';
 import { buildSchedule, readScheduleConfig } from './schedule.js';
 import { openStorage } from './storage.js';
+import { readWorkspaceConfig } from './workspace.js';
 
 export { createApp, type AppDeps, type AppType } from './app.js';
 export { openStorage, DATABASE_URL_ENV, type Storage } from './storage.js';
@@ -38,6 +39,7 @@ export {
   runtimeFilePath,
   type DaemonRuntimeInfo,
 } from './runtime.js';
+export { readWorkspaceConfig, type WorkspaceConfig } from './workspace.js';
 
 /**
  * 待ち受けるアドレス。既定は 127.0.0.1 のまま。
@@ -50,31 +52,81 @@ export {
 const DEFAULT_BIND = '127.0.0.1';
 
 /**
+ * 名簿へ載せる runner の宛先。
+ *
+ * `ALTEROID_RUNNER_URLS`（カンマ区切り）で**複数**、`ALTEROID_RUNNER_URL` で1台。
+ * 両方あれば合わせて載せる（重複は畳む）。**固定 URL をコードに書かない** —
+ * どこに何台居るかは配置の話であって、デーモンの実装の話ではない。
+ */
+export function runnerUrlsOf(env: NodeJS.ProcessEnv = process.env): string[] {
+  const listed = (env.ALTEROID_RUNNER_URLS ?? '')
+    .split(/[,\s]+/)
+    .map((url) => url.trim())
+    .filter((url) => url.length > 0);
+  const single = (env.ALTEROID_RUNNER_URL ?? '').trim();
+  const all = single.length > 0 ? [...listed, single] : listed;
+  return [...new Set(all)];
+}
+
+/**
  * 委譲先を開く。
  *
- * `ALTEROID_RUNNER_URL` があれば、そこが manager-runner である（コンテナ構成）。
- * 無ければ同一プロセスの runner に落とす — `alteroid chat` を叩くだけで使える
- * というローカルの体験を、分離のために壊さないため。
+ * 宛先が設定されていれば、そこが manager-runner である（コンテナ構成）。無ければ
+ * 同一プロセスの runner に落とす — `alteroid chat` を叩くだけで使えるというローカルの
+ * 体験を、分離のために壊さないため。
+ *
+ * **複数構成では、1台の不在で残りを使えなくしない**（M5 受け入れ基準5）。名乗りが
+ * 返らない器も名簿に載せておき、生存確認が通った時点で使えるようにする。1台構成では
+ * 従来どおり、返らないなら起動しない（宛先の無いデーモンは何もできない）。
  */
-async function openRunner(workspace: string, withheldEnvKeys: string[]): Promise<RunnerClient> {
-  const url = process.env.ALTEROID_RUNNER_URL;
-  if (url !== undefined && url.length > 0) {
-    const token = process.env.ALTEROID_RUNNER_TOKEN;
-    if (token === undefined || token.length === 0) {
-      // 鍵なしで繋がる制御面は、runner の中のマネージャーからも叩ける。
-      // **その状態でつなぐくらいなら起動しない。**
-      throw new Error(
-        'ALTEROID_RUNNER_URL があるのに ALTEROID_RUNNER_TOKEN が無い' +
-          '（runner の制御面は鍵で守る。runner には sha256 を渡すこと）',
-      );
-    }
-    return createHttpRunner({ baseUrl: url, token });
+async function openRunners(workspace: string, withheldEnvKeys: string[]): Promise<RunnerClient[]> {
+  const urls = runnerUrlsOf();
+  if (urls.length === 0) {
+    return [
+      createLocalRunner({
+        runnerId: 'runner-local',
+        workspacePath: workspace,
+        withheldEnvKeys,
+      }),
+    ];
   }
-  return createLocalRunner({
-    runnerId: 'runner-local',
-    workspacePath: workspace,
-    withheldEnvKeys,
-  });
+
+  const token = process.env.ALTEROID_RUNNER_TOKEN;
+  if (token === undefined || token.length === 0) {
+    // 鍵なしで繋がる制御面は、runner の中のマネージャーからも叩ける。
+    // **その状態でつなぐくらいなら起動しない。**
+    throw new Error(
+      'runner の宛先があるのに ALTEROID_RUNNER_TOKEN が無い' +
+        '（runner の制御面は鍵で守る。runner には sha256 を渡すこと）',
+    );
+  }
+
+  const runners: RunnerClient[] = [];
+  const silent: string[] = [];
+  for (const baseUrl of urls) {
+    const client = await createHttpRunner({
+      baseUrl,
+      token,
+      // 1台しか居ないなら、返らないことは起動失敗である。
+      requireHello: urls.length === 1,
+    });
+    if (client.workspacePath === '') silent.push(baseUrl);
+    runners.push(client);
+  }
+
+  if (silent.length === urls.length) {
+    throw new Error(
+      `runner がどこも名乗りを返さない（${silent.join(', ')}）。` +
+        'runner を先に上げてから、デーモンを起こすこと。',
+    );
+  }
+  for (const baseUrl of silent) {
+    process.stderr.write(
+      `alteroidd: ${baseUrl} の runner が名乗りを返しません。名簿には載せたので、` +
+        '生存確認が通った時点で使います。\n',
+    );
+  }
+  return runners;
 }
 
 /**
@@ -101,12 +153,20 @@ export async function main(): Promise<void> {
   // マネージャーは `/proc/1/environ` からデーモンの環境変数＝記憶ストアの鍵に届く。
   // ローカルで runner を立てていないときだけ、同一プロセスの runner へ落とす
   // （その場合は既知の穴が残る。塞ぐのはコンテナ構成の役目である）。
-  const runners = createRunnerRegistry([await openRunner(workspace, storage.withheldEnvKeys)]);
+  //
+  // 名簿は1台でも複数でも同じ形である（M5）。増えるのは宛先の選び方だけで、
+  // 上の層（クローン・道具・API）から見えるものは何も変わらない。
+  const runners = createRunnerRegistry(await openRunners(workspace, storage.withheldEnvKeys));
+
+  // workspace の運用選択。器が落ちた委譲を別の器へ移せるかはここで決まる。
+  const workspaceConfig = readWorkspaceConfig();
+  for (const note of workspaceConfig.notes) process.stderr.write(`alteroidd: ${note}\n`);
 
   const clone = createClone({
     stores,
     cwd: paths.root,
     runners,
+    workspace: workspaceConfig.policy,
     ...(storage.sessionStore === undefined ? {} : { sessionStore: storage.sessionStore }),
   });
   const port = Number(process.env.ALTEROID_PORT ?? '4517');
@@ -147,6 +207,7 @@ export async function main(): Promise<void> {
     shutdown: () => void shutdown(),
     scheduler,
     storage: storage.description,
+    runners,
   });
   // 開けたこと自体は方針の変更であって禁止事項ではない。ただし**黙って**外へ
   // 出さない — ここは叩けばクローンのターンが起きる実行の口である。
@@ -172,6 +233,7 @@ export async function main(): Promise<void> {
     // 先に受け口を閉じて runtime 情報を消す。クローンの後片付け（最後の蒸留）が
     // 長引いても、CLI からは「止まった」と見えるようにする。
     scheduler.stop();
+    runners.stop();
     server.close();
     await clearRuntimeInfo(paths.state).catch(() => undefined);
 
@@ -197,6 +259,9 @@ export async function main(): Promise<void> {
   process.on('SIGINT', () => void shutdown());
 
   scheduler.start();
+  // 器の生存確認を回し始める。落ちた器に居た仕事は、話しかけられるのを待たずに
+  // 別の器へ置き直される（M5 受け入れ基準4。移せないものは受信箱へ上がる）。
+  runners.start();
 
   // 締め時刻に自分が動いていなければ、その日の日報は誰も作らない。「日報は毎日
   // 生成される」は要件なので、動いていなかった日の分を起動時に拾い直す。

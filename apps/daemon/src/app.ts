@@ -5,6 +5,7 @@ import type {
   CloneHost,
   JournalEntry,
   JournalEntryType,
+  RunnerRegistry,
   Scheduler,
   Stores,
 } from '@alteroid/core';
@@ -47,6 +48,14 @@ export interface AppDeps {
    * CLI がこれを見せるので、人間が器を取り違えない。接続情報は含めない。
    */
   storage?: string;
+  /**
+   * runner の名簿（M5）。何台居て、どれが生きていて、どれだけ余裕があるかを
+   * 人間が見るための口である。
+   *
+   * **制御面の鍵や URL は返さない。** ここは観測の口であって、runner へ手を
+   * 伸ばすための口ではない。
+   */
+  runners?: RunnerRegistry;
 }
 
 const chatBody = z.object({
@@ -339,6 +348,29 @@ export function createApp(deps: AppDeps) {
       const kind = c.req.param('kind');
       if (deps.scheduler?.run(kind) !== true) return c.json({ error: 'not found' as const }, 404);
       return c.json({ ok: true });
+    })
+
+    // --- runner の名簿（M5） -----------------------------------------------
+    /**
+     * 何台居て、どれが生きていて、どれだけ余裕があるか。
+     *
+     * `capacity` は**実測**であって定員ではない（roadmap M5 の地雷）。ここを
+     * 「残り何本置けるか」に読み替えないこと — 数字が小さいことは、委譲を
+     * 断る理由にはならない。
+     */
+    .get('/runners', async (c) => {
+      const registry = deps.runners;
+      if (registry === undefined) return c.json({ runners: [] });
+
+      const paths = new Map(
+        (await registry.list()).map((runner) => [runner.runnerId, runner.workspacePath]),
+      );
+      return c.json({
+        runners: registry.states().map((state) => ({
+          ...state,
+          workspacePath: paths.get(state.runnerId) ?? '',
+        })),
+      });
     })
 
     // --- マネージャー（可観測性の中段から下段へ降りる経路） ------------------

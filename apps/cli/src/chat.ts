@@ -173,6 +173,7 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /journal [件数]      日誌（新しい順）
 /managers            マネージャーの一覧と状態
 /manager <id>        そのマネージャーのセッション生ログ
+/runners             manager-runner の一覧（生死と資源）
 /archive             セッションの生ログ一覧
 /archive <id>        生ログの中身
 /approvals           承認待ち（番号付き）
@@ -332,12 +333,48 @@ async function runSlashCommand(
       for (const manager of managers) {
         const live = manager.live ? '' : ' /セッション切断';
         stdout.write(`  ${manager.managerId}  [${manager.status}${live}]  ${manager.request}\n`);
+        // どの器で走っているか（器が落ちて移った先もここに出る）
+        if (manager.runnerId) stdout.write(`      runner: ${manager.runnerId}\n`);
         stdout.write(`      cwd: ${manager.cwd}\n`);
         for (const item of manager.waiting) {
           stdout.write(`      返事待ち (${item.requestId}): ${summarizeText(item.summary)}\n`);
         }
         if (manager.lastReport)
           stdout.write(`      直近の報告: ${summarizeText(manager.lastReport)}\n`);
+      }
+      return 'ok';
+    }
+
+    /**
+     * 器の一覧（M5）。
+     *
+     * 出るのは**実測**であって定員ではない。空きが少ないことは「もう頼めない」を
+     * 意味しない（配置の材料であって上限ではない）。
+     */
+    case '/runners': {
+      const response = await client.runners.$get();
+      if (!response.ok) {
+        stdout.write('runner の一覧を読めませんでした\n');
+        return 'ok';
+      }
+      const { runners } = await response.json();
+      if (runners.length === 0) stdout.write('（runner が名簿に居ません）\n');
+      for (const runner of runners) {
+        const state = runner.alive ? '生存' : `不通（${runner.misses}回）`;
+        stdout.write(`  ${runner.runnerId}  [${state}]  ${runner.workspacePath}\n`);
+        if (runner.lastSeenAt) stdout.write(`      最後の応答: ${runner.lastSeenAt}\n`);
+        const capacity = runner.capacity;
+        if (capacity) {
+          const freeGiB = (capacity.freeMemoryBytes / 1024 ** 3).toFixed(1);
+          const totalGiB = (capacity.totalMemoryBytes / 1024 ** 3).toFixed(1);
+          stdout.write(
+            `      CPU ${capacity.cpuCount}（負荷 ${capacity.load1m.toFixed(2)}） / ` +
+              `メモリ 空き ${freeGiB}GiB / ${totalGiB}GiB / ` +
+              `走行中 ${capacity.activeManagers}本\n`,
+          );
+        }
+        if (runner.lastError)
+          stdout.write(`      直近の失敗: ${summarizeText(runner.lastError)}\n`);
       }
       return 'ok';
     }

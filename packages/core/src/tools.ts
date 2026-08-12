@@ -329,6 +329,8 @@ export function createCloneTools(context: ToolContext) {
               [
                 `- ${manager.managerId} [${manager.status}${manager.live ? '' : '/セッション切断'}]`,
                 `  依頼: ${manager.request}`,
+                // どの器で走っているか。器が落ちて移った先もここに出る（M5）。
+                manager.runnerId === undefined ? null : `  runner: ${manager.runnerId}`,
                 `  cwd: ${manager.cwd}`,
                 ...manager.waiting.map(
                   (item) => `  返事待ち(requestId: ${item.requestId}): ${item.summary}`,

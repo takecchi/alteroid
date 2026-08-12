@@ -4,10 +4,12 @@ import type {
   InboxEvent,
   ManagerPool,
   ManagerSummary,
+  RunnerClient,
+  RunnerRegistry,
   Scheduler,
   Stores,
 } from '@alteroid/core';
-import { createMemoryStores } from '@alteroid/core';
+import { createMemoryStores, createRunnerRegistry } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
@@ -112,9 +114,56 @@ function fakeScheduler() {
   return { scheduler, ran };
 }
 
+/**
+ * runner の名簿の代わり（M5）。
+ *
+ * HTTP 層から見たいのは「何台居て、どれが生きていて、どれだけ余裕があるか」が
+ * 読めることだけである。器の中身はここでは問わない。
+ */
+function fakeRunners(): RunnerRegistry {
+  const client = {
+    runnerId: 'runner-a',
+    workspacePath: '/work/runner-a',
+    async health() {
+      return {
+        ok: true as const,
+        runnerId: 'runner-a',
+        workspacePath: '/work/runner-a',
+        managers: 1,
+        pendingEvents: 0,
+        capacity: {
+          cpuCount: 4,
+          load1m: 0.5,
+          totalMemoryBytes: 8_000_000_000,
+          freeMemoryBytes: 6_000_000_000,
+          activeManagers: 1,
+          uptimeSeconds: 42,
+        },
+      };
+    },
+    async connect() {},
+    async start() {},
+    async resume() {},
+    async send() {},
+    async answer() {
+      return true;
+    },
+    async stop() {},
+    async list() {
+      return [];
+    },
+    async transcript() {
+      return null;
+    },
+    async close() {},
+  } as RunnerClient;
+  return createRunnerRegistry([client]);
+}
+
 let stores: Stores;
 let fake: ReturnType<typeof fakeClone>;
 let schedule: ReturnType<typeof fakeScheduler>;
+let runners: RunnerRegistry;
 let app: ReturnType<typeof createApp>;
 let shutdowns: number;
 
@@ -122,6 +171,7 @@ beforeEach(() => {
   stores = createMemoryStores();
   fake = fakeClone();
   schedule = fakeScheduler();
+  runners = fakeRunners();
   shutdowns = 0;
   app = createApp({
     clone: fake.clone,
@@ -129,6 +179,7 @@ beforeEach(() => {
     token: 'test-token',
     shutdown: () => (shutdowns += 1),
     scheduler: schedule.scheduler,
+    runners,
   });
 });
 
@@ -299,6 +350,34 @@ describe('HTTP API', () => {
 
     expect((await app.request('/managers/nope')).status).toBe(404);
     expect((await app.request('/managers/nope/transcript')).status).toBe(404);
+  });
+
+  it('runner の名簿を読める（何台居て、どれが生きていて、どれだけ余裕があるか）', async () => {
+    // まだ生存確認を回していない時点でも、名簿は見える
+    const before = await app.request('/runners');
+    expect(before.status).toBe(200);
+    expect(await before.json()).toMatchObject({
+      runners: [{ runnerId: 'runner-a', alive: true, workspacePath: '/work/runner-a' }],
+    });
+
+    await runners.heartbeat();
+    const after = await app.request('/runners');
+    const body = (await after.json()) as {
+      runners: { capacity?: { activeManagers: number }; lastSeenAt: string | null }[];
+    };
+    // 実測（定員ではない）が読める
+    expect(body.runners[0]?.capacity?.activeManagers).toBe(1);
+    expect(body.runners[0]?.lastSeenAt).not.toBeNull();
+  });
+
+  it('名簿を渡していないデーモンでも /runners は空で答える（1台構成と形を変えない）', async () => {
+    const bare = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+    });
+    expect(await (await bare.request('/runners')).json()).toEqual({ runners: [] });
   });
 
   it('日報を読める（可観測性の最上段。普段の接点はほぼこれだけ）', async () => {
