@@ -17,6 +17,7 @@ import {
 } from '@alteroid/core';
 
 import { createApp } from './app.js';
+import { apiAuthFromEnv } from './auth.js';
 import { createJournalBus } from './journal-bus.js';
 import { createHttpRunner } from './runner-client.js';
 import { clearRuntimeInfo, writeRuntimeInfo } from './runtime.js';
@@ -25,6 +26,7 @@ import { openStorage } from './storage.js';
 
 export { createApp, type AppDeps, type AppType } from './app.js';
 export { createJournalBus, type JournalBus } from './journal-bus.js';
+export { apiAuthFromEnv, createApiAuth, type ApiAuth, type ApiAuthOptions } from './auth.js';
 export { openStorage, DATABASE_URL_ENV, type Storage } from './storage.js';
 export { createHttpRunner, type HttpRunnerOptions } from './runner-client.js';
 export {
@@ -121,6 +123,10 @@ export async function main(): Promise<void> {
   const port = Number(process.env.ALTEROID_PORT ?? '4517');
   const hostname = process.env.ALTEROID_BIND || DEFAULT_BIND;
 
+  // API の本人確認。鍵が置かれていなければ何も要求しない（ローカルの体験は不変）。
+  const auth = apiAuthFromEnv();
+  const authRequired = await auth.enabled();
+
   // 起動ごとに作り直す。状態ファイルが残っていても、別プロセスを自分だと
   // 誤認させない（PID の再利用で無関係なプロセスを止めないため）。
   const token = randomUUID();
@@ -158,13 +164,17 @@ export async function main(): Promise<void> {
     storage: storage.description,
     runners,
     journalEvents: journalBus,
+    auth,
   });
   // 開けたこと自体は方針の変更であって禁止事項ではない。ただし**黙って**外へ
   // 出さない — ここは叩けばクローンのターンが起きる実行の口である。
   if (hostname !== DEFAULT_BIND && hostname !== 'localhost' && hostname !== '::1') {
     process.stderr.write(
-      `alteroidd: ${hostname} で待ち受けます。この API に認証はありません。` +
-        '手前に境界（リバースプロキシ・トンネル・認証）を置いてください。\n',
+      authRequired
+        ? `alteroidd: ${hostname} で待ち受けます（鍵が要ります）。\n`
+        : `alteroidd: ${hostname} で待ち受けます。**この API に認証はありません。**` +
+            'ALTEROID_API_TOKEN か ALTEROID_API_TOKEN_FILE を置くか、' +
+            '手前に境界（リバースプロキシ・トンネル）を置いてください。\n',
     );
   }
 

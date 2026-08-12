@@ -107,6 +107,8 @@
 - 待たずに確かめるなら `POST /schedule/:kind/run`（chat では `/run daily_report` / `/run self_initiative`）。`GET /schedule` で次の発火が見える
 - **外部イベントの入口は HTTP の `POST /events`**（`{source, payload}`）。送り元の形を変えられない webhook 用に `POST /events/:source`（本文まるごとが payload）もある。chat からは `/event <source> <本文>`
   - 開いているのは 127.0.0.1 だけ。外から叩かせるならトンネル・リバースプロキシ側に境界を置く（ここで認証を足す前に、それが方針か境界かを考える）
+  - **鍵を置けば API 全体に本人確認が付く**（`ALTEROID_API_TOKEN` / 差し替えたいなら `ALTEROID_API_TOKEN_FILE`。`apps/daemon/src/auth.ts`）。置かなければ何も要求しない — ローカルの体験を公開したい人の都合で壊さないため。これは「誰か」を確かめるだけで、**通った先で何ができるかには触らない**（クローンの権限境界は記憶を根拠にした判断のまま）
+    - 経路ごとに要否を選ばないこと。「この口は読むだけだから」という判断が入り込むと、その判断が漏れたところが穴になる。鍵なしで通るのは `GET /livez` と `GET /auth` だけである
   - **127.0.0.1 で待つことはブラウザからの保護にならない。** 人間が開いた任意のページが単純リクエスト（`text/plain` や form の POST）を投げられ、応答が読めなくても送信は成立する。状態を変える POST を足すときは、`zValidator('json', ...)` を付けるか、本文の無い経路なら `deliberateClient`（`apps/daemon/src/app.ts`）を必ず通すこと — でないと他人がクローンのターンを起こせる。塞ぐのは能力側ではなく実行環境の境界である
   - MCP 経由のポーリングは**別機構にしない**。「Slack を見に行く」は定期ジョブ＋マネージャーへの委譲で足りる（マネージャーは人間と同じ `.mcp.json` を持つ）
 - 日報は `GET /reports` / `GET /reports/:date`、chat では `/report` `/reports`。**日報が無い日を作らないこと** — クローンが `daily_report_write` を呼び忘れたらその応答をそのまま日報にする実装になっている（`clone.ts` の `#dailyReport`）
