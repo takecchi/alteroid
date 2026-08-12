@@ -100,6 +100,15 @@ interface MutableState {
   /** 最後に聞いた時刻（成功・失敗どちらも）。まだ聞いていなければ null。 */
   probedAt: number | null;
   lastSeen: number | null;
+  /**
+   * 前回の生存確認の時点で生きていたか。
+   *
+   * **経過時間から都度計算するだけでは、落ちた瞬間を誰も見ない。** 猶予を過ぎた
+   * ことは時間が経てば自動的に真になるので、確認の前後で比べても差が出ない
+   * 瞬間があり、そこで通知が消える（＝フェイルオーバーが起きない）。だから
+   * 「前はどう見えていたか」を覚えておいて、確認のたびに突き合わせる。
+   */
+  alive: boolean;
   misses: number;
   capacity: RunnerCapacity | undefined;
   lastError: string | undefined;
@@ -148,6 +157,7 @@ class Registry implements RunnerRegistry {
     this.#states.set(runner, {
       probedAt: null,
       lastSeen: null,
+      alive: true,
       misses: 0,
       capacity: undefined,
       lastError: undefined,
@@ -255,7 +265,7 @@ class Registry implements RunnerRegistry {
     const state = this.#states.get(runner);
     if (state === undefined) return;
 
-    const wasAlive = this.#aliveOf(runner);
+    const wasAlive = state.alive;
     const at = this.#now();
     state.probedAt = at;
 
@@ -272,7 +282,8 @@ class Registry implements RunnerRegistry {
       state.lastError = String(error);
     }
 
-    if (wasAlive && !this.#aliveOf(runner)) {
+    state.alive = this.#aliveOf(runner);
+    if (wasAlive && !state.alive) {
       const lost = this.#stateOf(runner);
       for (const listener of this.#listeners) {
         try {
