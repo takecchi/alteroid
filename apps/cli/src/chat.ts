@@ -235,7 +235,9 @@ async function runSlashCommand(
         const live = manager.live ? '' : ' /セッション切断';
         stdout.write(`  ${manager.managerId}  [${manager.status}${live}]  ${manager.request}\n`);
         stdout.write(`      cwd: ${manager.cwd}\n`);
-        if (manager.waitingOn) stdout.write(`      返事待ち: ${manager.waitingOn}\n`);
+        for (const item of manager.waiting) {
+          stdout.write(`      返事待ち (${item.requestId}): ${summarizeText(item.summary)}\n`);
+        }
         if (manager.lastReport)
           stdout.write(`      直近の報告: ${summarizeText(manager.lastReport)}\n`);
       }

@@ -37,6 +37,7 @@ interface FakeSession {
     toolName: string,
     input: Record<string, unknown>,
     signal?: AbortSignal,
+    requestId?: string,
   ): Promise<PermissionResult>;
   /** マネージャー側の1ターンが終わる。 */
   report(text: string): Promise<void>;
@@ -50,6 +51,7 @@ function fakeSdk() {
   const fn = ((params: { prompt: unknown; options?: Options }) => {
     const options = params.options ?? {};
     let emit: ((message: SDKMessage) => void) | null = null;
+    let asks = 0;
     const buffered: SDKMessage[] = [];
     const inputs: string[] = [];
 
@@ -61,12 +63,15 @@ function fakeSdk() {
     const session: FakeSession = {
       options,
       inputs,
-      async ask(toolName, input, signal) {
+      async ask(toolName, input, signal, requestId) {
         const canUseTool = options.canUseTool as CanUseTool;
+        // SDK は1回の応答で並列に呼ばれた道具を、それぞれ別の request_id で
+        // 同時に降ろしてくる。既定でも被らせない。
+        const id = requestId ?? `req-${(asks += 1)}`;
         const result = await canUseTool(toolName, input, {
           signal: signal ?? new AbortController().signal,
-          toolUseID: 'tool-1',
-          requestId: 'req-1',
+          toolUseID: `tool-${id}`,
+          requestId: id,
         } as never);
         if (result === null) throw new Error('canUseTool が null を返した（返事が届かない）');
         return result;
@@ -259,10 +264,10 @@ describe('マネージャー', () => {
     // 止まっているのはこの仕事だけ（一覧からもそう見える）
     const waiting = (await s.pool.list()).find((m) => m.managerId === managerId);
     expect(waiting?.status).toBe('waiting_human');
-    expect(waiting?.waitingOn).toContain('Bash');
+    expect(waiting?.waiting[0]?.summary).toContain('Bash');
 
     // クローンが答えると、そこだけが再開する
-    const result = await s.pool.send(managerId, 'よい', 'allow');
+    const result = await s.pool.send(managerId, 'よい', { decision: 'allow' });
     expect(result.outcome).toBe('answered');
     expect(await asked).toEqual({ behavior: 'allow' });
     expect((await s.pool.list()).find((m) => m.managerId === managerId)?.status).toBe('running');
@@ -287,7 +292,7 @@ describe('マネージャー', () => {
 
     const asked = session.ask('Bash', { command: 'rm -rf /' });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    await s.pool.send(managerId, 'それはやめて、代わりに一覧だけ見せて', 'deny');
+    await s.pool.send(managerId, 'それはやめて、代わりに一覧だけ見せて', { decision: 'deny' });
 
     expect(await asked).toMatchObject({
       behavior: 'deny',
@@ -387,6 +392,94 @@ describe('マネージャー', () => {
     expect(await asked).toMatchObject({ behavior: 'deny' });
   });
 
+  it('同時に複数を待っているとき、回答は requestId の宛先へ届く（取り違えない）', async () => {
+    // 1回の応答で並列に道具を呼ぶと、確認は同時に複数降りてくる。宛先を見ずに
+    // 先頭へ入れると、拒否のつもりの一言が別の質問の答えになり、拒否したかった
+    // 道具は次の一言で通ってしまう。
+    const s = setup();
+    const { managerId } = await s.pool.start({ request: '整理して' });
+    const session = s.sessions[0] as FakeSession;
+
+    const question = session.ask('AskUserQuestion', {
+      questions: [{ question: 'DB は？', header: 'DB', options: [], multiSelect: false }],
+    });
+    const danger = session.ask('Bash', { command: 'rm -rf /' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const waiting = (await s.pool.list()).find((m) => m.managerId === managerId)?.waiting ?? [];
+    expect(waiting).toHaveLength(2);
+    const dangerId = waiting.find((item) => item.summary.includes('Bash'))?.requestId as string;
+    const questionId = waiting.find((item) => item.summary.includes('DB'))?.requestId as string;
+
+    // 宛先を書かずに答えるのは拒む（推測して取り違えるより、聞き返す）
+    const guessed = await s.pool.send(managerId, 'それは危険なのでやめて', { decision: 'deny' });
+    expect(guessed.outcome).toBe('unknown');
+    expect(guessed.detail).toContain('requestId');
+
+    // 宛先を指せば、その1件だけが解ける
+    await s.pool.send(managerId, 'それは危険なのでやめて', {
+      decision: 'deny',
+      requestId: dangerId,
+    });
+    expect(await danger).toMatchObject({ behavior: 'deny', message: 'それは危険なのでやめて' });
+
+    await s.pool.send(managerId, 'PostgreSQL で', { requestId: questionId });
+    expect(await question).toMatchObject({
+      behavior: 'allow',
+      updatedInput: { answers: { 'DB は？': 'PostgreSQL で' } },
+    });
+
+    await s.pool.stop();
+  });
+
+  it('同じ確認が再送されても、待ちを二重に積まない（回答が二重に消費されない）', async () => {
+    const s = setup();
+    const { managerId } = await s.pool.start({ request: '調べて' });
+    const session = s.sessions[0] as FakeSession;
+
+    const first = session.ask('Bash', { command: 'ls' }, undefined, 'req-same');
+    const again = session.ask('Bash', { command: 'ls' }, undefined, 'req-same');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect((await s.pool.list()).find((m) => m.managerId === managerId)?.waiting).toHaveLength(1);
+
+    await s.pool.send(managerId, 'よい', { decision: 'allow', requestId: 'req-same' });
+    expect(await first).toEqual({ behavior: 'allow' });
+    expect(await again).toEqual({ behavior: 'allow' });
+
+    await s.pool.stop();
+  });
+
+  it('decision を書き忘れても、日本語の拒否を承認と読み違えない', async () => {
+    // 「それはやめて」の「やめ」の前に区切りは無い。語境界で探すと**見つからず**、
+    // 見つからないことが allow として表に出る（拒否が承認になる最悪の壊れ方）。
+    const s = setup();
+    const { managerId } = await s.pool.start({ request: 'デプロイして' });
+    const session = s.sessions[0] as FakeSession;
+
+    const asked = session.ask('Bash', { command: 'git push --force' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await s.pool.send(managerId, 'それはやめて、代わりに差分だけ見せて');
+
+    expect(await asked).toMatchObject({ behavior: 'deny' });
+
+    await s.pool.stop();
+  });
+
+  it('肯定の返事は通す（迷ったら止める、にはしない）', async () => {
+    const s = setup();
+    const { managerId } = await s.pool.start({ request: '調べて' });
+    const session = s.sessions[0] as FakeSession;
+
+    const asked = session.ask('Read', { file_path: '/work/a.ts' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await s.pool.send(managerId, 'よい、そのまま進めて');
+
+    expect(await asked).toEqual({ behavior: 'allow' });
+
+    await s.pool.stop();
+  });
+
   it('中断で解けた確認は待ち行列に残らない（次の指示を食い潰さない）', async () => {
     // マネージャー側の中断で宙吊りを解いたあと、その1件が行列に残っていると、
     // 次にクローンが送った「追加指示」が誰も待っていない返事として消える。
@@ -404,7 +497,7 @@ describe('マネージャー', () => {
     // 返事待ちは解けている
     const after = (await s.pool.list()).find((m) => m.managerId === managerId);
     expect(after?.status).toBe('running');
-    expect(after?.waitingOn).toBeUndefined();
+    expect(after?.waiting).toEqual([]);
 
     // 次の一言はちゃんと追加指示として届く
     expect((await s.pool.send(managerId, 'こっちを見て')).outcome).toBe('delivered');

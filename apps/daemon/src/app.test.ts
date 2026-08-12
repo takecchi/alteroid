@@ -235,6 +235,7 @@ describe('HTTP API', () => {
       request: 'ログイン周りを直して',
       startedAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:01:00.000Z',
+      waiting: [{ requestId: 'req-1', summary: 'Bash の実行許可' }],
     });
     fake.transcripts.set('mgr-1234', '{"type":"user"}\n');
 

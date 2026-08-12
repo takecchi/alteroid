@@ -9,7 +9,7 @@ import { CLONE_ALLOWED_TOOLS, createCloneTools, qualifiedToolName } from './tool
 interface Harness {
   stores: Stores;
   emitted: ChatStreamEvent[];
-  sent: { managerId: string; message: string; decision?: string }[];
+  sent: { managerId: string; message: string; decision?: string; requestId?: string }[];
   started: { request: string; cwd?: string }[];
   call(name: string, args: Record<string, unknown>): Promise<string>;
 }
@@ -17,7 +17,7 @@ interface Harness {
 function harness(): Harness {
   const stores = createMemoryStores();
   const emitted: ChatStreamEvent[] = [];
-  const sent: { managerId: string; message: string; decision?: string }[] = [];
+  const sent: { managerId: string; message: string; decision?: string; requestId?: string }[] = [];
   const started: { request: string; cwd?: string }[] = [];
   const running: ManagerSummary[] = [];
 
@@ -32,12 +32,13 @@ function harness(): Harness {
         request: input.request,
         startedAt: '2026-01-01T00:00:00.000Z',
         updatedAt: '2026-01-01T00:00:00.000Z',
+        waiting: [],
       };
       running.push(summary);
       return summary;
     },
-    async send(managerId, message, decision) {
-      sent.push({ managerId, message, ...(decision === undefined ? {} : { decision }) });
+    async send(managerId, message, options = {}) {
+      sent.push({ managerId, message, ...options });
       return { outcome: 'answered', detail: '回答した。' };
     },
     async list() {
@@ -157,12 +158,19 @@ describe('クローンの道具', () => {
     expect(entry).toMatchObject({ decision: expect.stringContaining('mgr-1') });
   });
 
-  it('manager_send は decision を添えて許可確認に答えられる', async () => {
+  it('manager_send は decision と requestId を添えて、宛先を指して答えられる', async () => {
     const h = harness();
 
-    await h.call('manager_send', { managerId: 'mgr-1', message: 'よい', decision: 'allow' });
+    await h.call('manager_send', {
+      managerId: 'mgr-1',
+      message: 'よい',
+      decision: 'allow',
+      requestId: 'req-9',
+    });
 
-    expect(h.sent).toEqual([{ managerId: 'mgr-1', message: 'よい', decision: 'allow' }]);
+    expect(h.sent).toEqual([
+      { managerId: 'mgr-1', message: 'よい', decision: 'allow', requestId: 'req-9' },
+    ]);
   });
 
   it('manager_list は状態と返事待ちを返す', async () => {

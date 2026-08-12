@@ -232,10 +232,20 @@ export function createCloneTools(context: ToolContext) {
           .enum(['allow', 'deny'])
           .optional()
           .describe('許可確認への回答のとき必須。それ以外では不要'),
+        requestId: z
+          .string()
+          .optional()
+          .describe(
+            'どの確認への回答かを示す id（受信箱に届いた requestId）。' +
+              '1本のマネージャーが複数を同時に待つことがあるので、回答では必ず添えること',
+          ),
       },
-      async ({ managerId, message, decision }) => {
+      async ({ managerId, message, decision, requestId }) => {
         if (!context.managers) return NO_POOL;
-        const result = await context.managers.send(managerId, message, decision);
+        const result = await context.managers.send(managerId, message, {
+          ...(decision === undefined ? {} : { decision }),
+          ...(requestId === undefined ? {} : { requestId }),
+        });
         return text(result.detail);
       },
     ),
@@ -255,7 +265,9 @@ export function createCloneTools(context: ToolContext) {
                 `- ${manager.managerId} [${manager.status}${manager.live ? '' : '/セッション切断'}]`,
                 `  依頼: ${manager.request}`,
                 `  cwd: ${manager.cwd}`,
-                manager.waitingOn === undefined ? null : `  返事待ち: ${manager.waitingOn}`,
+                ...manager.waiting.map(
+                  (item) => `  返事待ち(requestId: ${item.requestId}): ${item.summary}`,
+                ),
                 manager.lastReport === undefined ? null : `  直近の報告: ${manager.lastReport}`,
               ]
                 .filter((line) => line !== null)

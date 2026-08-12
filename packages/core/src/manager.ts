@@ -64,8 +64,14 @@ export interface ManagerSummary {
   updatedAt: string;
   sessionId?: string;
   lastReport?: string;
-  /** 返事待ちで止まっている件（あればここに要旨が入る）。 */
-  waitingOn?: string;
+  /**
+   * 返事待ちで止まっている件。
+   *
+   * **1本のマネージャーが同時に複数を待つことがある。** 1回のアシスタント応答で
+   * 並列に呼ばれた道具は、それぞれ別の確認として同時に降りてくる。だから配列で持ち、
+   * 回答は `requestId` で宛先を指定する。
+   */
+  waiting: { requestId: string; summary: string }[];
 }
 
 export type ManagerDecision = 'allow' | 'deny';
@@ -76,9 +82,19 @@ export interface ManagerSendResult {
   detail: string;
 }
 
+export interface ManagerSendOptions {
+  decision?: ManagerDecision;
+  /** どの確認への回答か。複数を待っているときは省略できない。 */
+  requestId?: string;
+}
+
 export interface ManagerPool {
   start(input: ManagerStartInput): Promise<ManagerSummary>;
-  send(managerId: string, message: string, decision?: ManagerDecision): Promise<ManagerSendResult>;
+  send(
+    managerId: string,
+    message: string,
+    options?: ManagerSendOptions,
+  ): Promise<ManagerSendResult>;
   list(): Promise<ManagerSummary[]>;
   /** manager_id からセッションの生ログへ降りる（可観測性の最下段）。 */
   transcript(managerId: string): Promise<string | null>;
@@ -109,6 +125,8 @@ interface PendingRequest {
   input: Record<string, unknown>;
   summary: string;
   settle: (answer: { message: string; decision?: ManagerDecision }) => void;
+  /** 同じ確認が再送されたときに同じ結果を返すための約束（SDK は再送しうる）。 */
+  result: Promise<PermissionResult>;
 }
 
 class Pool implements ManagerPool {
@@ -144,14 +162,21 @@ class Pool implements ManagerPool {
     this.#sessions.set(managerId, session);
 
     // 委譲はノンブロッキング。起動して即返し、クローンは次の判断へ移る。
-    await session.begin();
+    try {
+      await session.begin();
+    } catch (error) {
+      // 起こせなかったものを一覧に残さない。残すと「走っている」と見えるのに
+      // 誰も読まない入力待ち行列へ、クローンが指示を送り続けることになる。
+      this.#sessions.delete(managerId);
+      throw error;
+    }
     return session.summary();
   }
 
   async send(
     managerId: string,
     message: string,
-    decision?: ManagerDecision,
+    options: ManagerSendOptions = {},
   ): Promise<ManagerSendResult> {
     const session = this.#sessions.get(managerId);
     if (!session) {
@@ -164,7 +189,7 @@ class Pool implements ManagerPool {
           : `${managerId} というマネージャーは居ない。`,
       };
     }
-    return session.send(message, decision);
+    return session.send(message, options);
   }
 
   async list(): Promise<ManagerSummary[]> {
@@ -185,6 +210,8 @@ class Pool implements ManagerPool {
         request: job.request ?? job.summary,
         startedAt: job.createdAt,
         updatedAt: job.updatedAt,
+        // セッションが居ない以上、待っているものも生きていない
+        waiting: [],
         ...(job.sessionId === undefined ? {} : { sessionId: job.sessionId }),
         ...(job.lastReport === undefined ? {} : { lastReport: job.lastReport }),
       });
@@ -278,7 +305,6 @@ class ManagerSession {
   }
 
   summary(): ManagerSummary {
-    const waiting = this.#pending[0];
     return {
       managerId: this.#id,
       status: this.#status,
@@ -287,19 +313,42 @@ class ManagerSession {
       request: this.#request,
       startedAt: this.#startedAt,
       updatedAt: this.#updatedAt,
+      waiting: this.#pending.map((request) => ({
+        requestId: request.id,
+        summary: request.summary,
+      })),
       ...(this.#sessionId === undefined ? {} : { sessionId: this.#sessionId }),
       ...(this.#lastReport === undefined ? {} : { lastReport: this.#lastReport }),
-      ...(waiting === undefined ? {} : { waitingOn: waiting.summary }),
     };
   }
 
   /**
    * クローンからの一言。止まっている確認があればそれへの回答として使い、
    * 無ければ追加指示として流す（architecture.md「会話に戻れる」）。
+   *
+   * **宛先を推測しない。** 1本のマネージャーが複数の確認を同時に待つことがあり
+   * （1応答で並列に呼ばれた道具）、そこで先頭に入れてしまうと、拒否のつもりの
+   * 一言が別の質問の答えになり、拒否したかった道具は次の一言で通ってしまう。
    */
-  async send(message: string, decision?: ManagerDecision): Promise<ManagerSendResult> {
-    // 先頭の1件だけを見る。行列から外すのは settle 側。
-    const pending = this.#pending[0];
+  async send(message: string, options: ManagerSendOptions = {}): Promise<ManagerSendResult> {
+    const { decision, requestId } = options;
+
+    const pending = this.#choosePending(requestId);
+    if (pending === 'ambiguous') {
+      return {
+        outcome: 'unknown',
+        detail:
+          `${this.#id} は複数の確認を同時に待っている。requestId を指定して答えること: ` +
+          this.#pending.map((request) => `${request.id}（${request.summary}）`).join(' / '),
+      };
+    }
+    if (pending === 'gone') {
+      return {
+        outcome: 'unknown',
+        detail: `${requestId ?? ''} という確認は ${this.#id} で待っていない（既に解けたか、別のマネージャーのもの）。`,
+      };
+    }
+
     if (pending) {
       pending.settle({ message, ...(decision === undefined ? {} : { decision }) });
       // 追記専用なので新しい行。日誌だけを追っても、誰が何と答えたかまで分かる。
@@ -328,6 +377,19 @@ class ManagerSession {
       text: `[${this.#id}] ${message}`,
     });
     return { outcome: 'delivered', detail: '追加指示として届けた。' };
+  }
+
+  /**
+   * どの確認に答えようとしているのかを決める。
+   * `null` = 返事待ちは無い（＝追加指示）。推測が危ういときは答えを返さない。
+   */
+  #choosePending(requestId: string | undefined): PendingRequest | null | 'ambiguous' | 'gone' {
+    if (requestId !== undefined) {
+      return this.#pending.find((request) => request.id === requestId) ?? 'gone';
+    }
+    if (this.#pending.length === 0) return null;
+    if (this.#pending.length === 1) return this.#pending[0] ?? null;
+    return 'ambiguous';
   }
 
   /** 待たせたまま消えない。止まっている確認は理由付きで全部解く。 */
@@ -381,7 +443,7 @@ class ManagerSession {
       // 人間が使っているのと同じ設定・同じ .mcp.json を渡す（下向きは同じものが見える）
       settingSources: ['user', 'project', 'local'],
       env: this.#childEnv(),
-      canUseTool: (toolName, input, extra) => this.#onPermission(toolName, input, extra.signal),
+      canUseTool: (toolName, input, extra) => this.#onPermission(toolName, input, extra),
       hooks: {
         PostToolUse: [{ hooks: [(input) => this.#onPostToolUse(input)] }],
         PreCompact: [{ hooks: [(input) => this.#onPreCompact(input)] }],
@@ -462,6 +524,15 @@ class ManagerSession {
   async #finish(status: JobStatus, reason: string): Promise<void> {
     this.#stopped = true;
     this.#settleAll(reason);
+    // 読み取りが終わっても、入力側を起こして本体を閉じておく。ここを怠ると
+    // `stop()` が「もう停止済み」と見て素通りし、閉じられない Query と
+    // 起きない `#inputStream` が残る。
+    this.#wakeInput();
+    try {
+      this.#query?.close();
+    } catch {
+      // 既に閉じている
+    }
     this.#status = status;
     await this.#archiveTranscript();
     await this.#persist();
@@ -482,70 +553,84 @@ class ManagerSession {
   async #onPermission(
     toolName: string,
     input: Record<string, unknown>,
-    signal: AbortSignal,
+    extra: { signal: AbortSignal; requestId?: string; toolUseID?: string },
   ): Promise<PermissionResult> {
+    // SDK は同じ確認を再送しうる（通信の切れ目など）。id を SDK 側の識別子に
+    // 揃えて、再送では新しい待ちを積まずに同じ結果を返す。積んでしまうと、
+    // クローンの1回の回答が二重に消費され、片方が永久に返らない。
+    const id = extra.requestId ?? extra.toolUseID ?? randomUUID();
+    const already = this.#pending.find((request) => request.id === id);
+    if (already) return already.result;
+
     const kind = toolName === 'AskUserQuestion' ? 'question' : 'permission';
     const summary =
       kind === 'question' ? describeQuestions(input) : `${toolName} の実行許可: ${brief(input)}`;
 
-    const answer = await new Promise<{ message: string; decision?: ManagerDecision }>((resolve) => {
-      let done = false;
-      let unlisten = () => undefined as void;
-
-      const request: PendingRequest = {
-        id: randomUUID(),
-        kind,
-        toolName,
-        input,
-        summary,
-        // **待ち行列から自分を外すのは settle の責任**。ここを呼び出し側任せに
-        // すると、中断で解けた1件が行列に残り、次にクローンが送った言葉を
-        // 「誰も待っていない返事」として食い潰す。
-        settle: (value) => {
-          if (done) return;
-          done = true;
-          unlisten();
-          const at = this.#pending.indexOf(request);
-          if (at !== -1) this.#pending.splice(at, 1);
-          if (this.#status === 'waiting_human' && this.#pending.length === 0) {
-            this.#status = 'running';
-          }
-          void this.#persist();
-          resolve(value);
-        },
-      };
-
-      this.#pending.push(request);
-      this.#status = 'waiting_human';
-      void this.#persist();
-
-      // マネージャー側で中断されたら宙吊りにしない。
-      const onAbort = () =>
-        request.settle({ message: 'マネージャー側で中断された。', decision: 'deny' });
-      if (signal.aborted) {
-        onAbort();
-      } else {
-        signal.addEventListener('abort', onAbort, { once: true });
-        unlisten = () => signal.removeEventListener('abort', onAbort);
-      }
-
-      void this.#journal({
-        type: 'escalation',
-        question: summary,
-        approvalId: request.id,
-        managerId: this.#id,
-      });
-      this.#emit(kind, summary, request.id);
+    let settle!: PendingRequest['settle'];
+    const answered = new Promise<{ message: string; decision?: ManagerDecision }>((resolve) => {
+      settle = resolve;
     });
 
-    if (kind === 'question') {
-      return { behavior: 'allow', updatedInput: withAnswers(input, answer.message) };
+    const result = answered.then((answer) => {
+      if (kind === 'question') {
+        return { behavior: 'allow' as const, updatedInput: withAnswers(input, answer.message) };
+      }
+      const decision = answer.decision ?? inferDecision(answer.message);
+      return decision === 'allow'
+        ? { behavior: 'allow' as const }
+        : { behavior: 'deny' as const, message: answer.message };
+    });
+
+    let done = false;
+    let unlisten = () => undefined as void;
+
+    const request: PendingRequest = {
+      id,
+      kind,
+      toolName,
+      input,
+      summary,
+      result,
+      // **待ち行列から自分を外すのは settle の責任**。ここを呼び出し側任せに
+      // すると、中断で解けた1件が行列に残り、次にクローンが送った言葉を
+      // 「誰も待っていない返事」として食い潰す。
+      settle: (value) => {
+        if (done) return;
+        done = true;
+        unlisten();
+        const at = this.#pending.indexOf(request);
+        if (at !== -1) this.#pending.splice(at, 1);
+        if (this.#status === 'waiting_human' && this.#pending.length === 0) {
+          this.#status = 'running';
+        }
+        void this.#persist();
+        settle(value);
+      },
+    };
+
+    this.#pending.push(request);
+    this.#status = 'waiting_human';
+    void this.#persist();
+
+    // マネージャー側で中断されたら宙吊りにしない。
+    const onAbort = () =>
+      request.settle({ message: 'マネージャー側で中断された。', decision: 'deny' });
+    if (extra.signal.aborted) {
+      onAbort();
+    } else {
+      extra.signal.addEventListener('abort', onAbort, { once: true });
+      unlisten = () => extra.signal.removeEventListener('abort', onAbort);
     }
 
-    const decision = answer.decision ?? inferDecision(answer.message);
-    return decision === 'allow'
-      ? { behavior: 'allow' }
-      : { behavior: 'deny', message: answer.message };
+    await this.#journal({
+      type: 'escalation',
+      question: summary,
+      approvalId: id,
+      managerId: this.#id,
+    });
+    this.#emit(kind, summary, id);
+
+    return result;
   }
 
   /** マネージャーと作業者の全ツール実行を日誌へ（監査。既知の穴はここで受ける）。 */
@@ -583,6 +668,9 @@ class ManagerSession {
     const { transcript_path: path } = input as { transcript_path?: string };
     if (typeof path === 'string' && path.length > 0) this.#transcriptPath = path;
     await this.#archiveTranscript();
+    // 退避先の id をここで台帳に落とす。落とさないままデーモンが死ぬと、
+    // manager_id から生ログへ降りる経路（M2 の約束）が切れる。
+    await this.#persist();
     return { continue: true };
   }
 
@@ -673,17 +761,37 @@ function describeQuestions(input: Record<string, unknown>): string {
   return texts.length > 0 ? texts.join(' / ') : brief(input);
 }
 
+/** 否定として読み取る語。日本語は語境界が無いので素直に部分一致で見る。 */
+const DENIAL_PHRASES = [
+  'やめ',
+  'だめ',
+  '駄目',
+  '不可',
+  '中止',
+  '却下',
+  'しないで',
+  '止めて',
+  '待って',
+  '許可しない',
+  '承認しない',
+];
+
+/** 英語側は語境界で見る（`nothing` の `no` を否定と読まないため）。 */
+const DENIAL_WORDS = /\b(deny|denied|no|nope|don't|do not|stop|cancel)\b/i;
+
 /**
  * `decision` を付け忘れた回答の読み取り。
  *
  * 迷ったら通さない — ではなく、**否定が読み取れたときだけ拒否**する。ここで
  * 保守的に倒すと、クローンが承認したつもりの仕事が黙って止まる（デグレード）。
  * 拒否の場合もメッセージは理由としてマネージャーへ渡るので、会話は続く。
+ *
+ * 日本語を語境界（`\s` や `\b`）で探してはいけない。「それはやめて」の「やめ」の
+ * 前に区切りは無く、探せていないことが**承認**として表に出る。
  */
 function inferDecision(message: string): ManagerDecision {
-  return /(^|\s)(deny|no|やめ|だめ|駄目|不可|中止|却下|しないで|止めて)/i.test(message)
-    ? 'deny'
-    : 'allow';
+  if (DENIAL_PHRASES.some((phrase) => message.includes(phrase))) return 'deny';
+  return DENIAL_WORDS.test(message) ? 'deny' : 'allow';
 }
 
 function brief(value: unknown, limit = 200): string {

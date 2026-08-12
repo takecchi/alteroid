@@ -25,6 +25,7 @@ export {
   type ManagerDecision,
   type ManagerPool,
   type ManagerPoolOptions,
+  type ManagerSendOptions,
   type ManagerSendResult,
   type ManagerStartInput,
   type ManagerSummary,

@@ -226,7 +226,7 @@ class Clone implements CloneHost {
       try {
         await this.#handle(event);
       } catch (error) {
-        this.#emit(this.#conversationOf(event), { type: 'error', message: String(error) });
+        await this.#reportFailure(this.#conversationOf(event), String(error));
         this.#finishTurn();
       } finally {
         const done = this.#completions.get(event.id);
@@ -241,6 +241,26 @@ class Clone implements CloneHost {
 
   #conversationOf(event: InboxEvent): string | null {
     return event.type === 'human_message' ? event.conversationId : null;
+  }
+
+  /**
+   * ターンの失敗を必ずどこかに残す。
+   *
+   * 人間が繋がっていれば chat へ流れるが、**内部ターンには聞き手が居ない**。
+   * マネージャーからの確認も蒸留も内部ターンなので、そこで握り潰すと、
+   * 「クローンが黙り、マネージャーが永久に返事を待つ」が無記録で起きる。
+   */
+  async #reportFailure(conversationId: string | null, message: string): Promise<void> {
+    if (conversationId !== null) {
+      this.#emit(conversationId, { type: 'error', message });
+      return;
+    }
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text: `内部ターンが失敗した: ${message}`,
+    });
   }
 
   async #handle(event: InboxEvent): Promise<void> {
@@ -324,7 +344,7 @@ class Clone implements CloneHost {
       await this.#ensureQuery();
       this.#pushInput(await this.#withFreshMemory(text));
     } catch (error) {
-      this.#emit(conversationId, { type: 'error', message: String(error) });
+      await this.#reportFailure(conversationId, String(error));
       this.#finishTurn();
     }
 
@@ -537,10 +557,10 @@ class Clone implements CloneHost {
         // result を伴わずに終わってもターンを取り残さない（取り残すと受信箱ごと止まる）
         const turn = this.#turn;
         if (turn) {
-          this.#emit(turn.conversationId, {
-            type: 'error',
-            message: failure ?? 'クローンのセッションが終了した',
-          });
+          await this.#reportFailure(
+            turn.conversationId,
+            failure ?? 'クローンのセッションが終了した',
+          );
         }
         this.#finishTurn();
         this.#query = null;
@@ -655,15 +675,22 @@ function managerPrompt(event: Extract<InboxEvent, { type: 'manager_message' }>):
   }
 
   const label = event.kind === 'question' ? '質問' : '実行の許可確認';
+  // 宛先には requestId まで書く。同じマネージャーが同時に複数を待つことがあり
+  // （1応答で並列に呼ばれた道具）、宛先を欠いた回答は宛先を推測できない。
+  const to =
+    event.requestId === undefined
+      ? `managerId: "${event.managerId}"`
+      : `managerId: "${event.managerId}", requestId: "${event.requestId}"`;
+
   return [
     `${head}（${label}）`,
     '',
     event.text,
     '',
-    `返事をするまで ${event.managerId} の仕事だけが止まっている（他のマネージャーは走り続けている）。`,
-    '記憶に根拠があるなら自分で決めて `manager_send` で返し、その判断を `journal_write` に残せ。',
+    `返事をするまで ${event.managerId} のこの1件だけが止まっている（他のマネージャーも、同じマネージャーの別の確認も、それぞれ独立に待っている）。`,
+    `記憶に根拠があるなら自分で決めて \`manager_send\`（${to}）で返し、その判断を \`journal_write\` に残せ。`,
     event.kind === 'permission' ? '許可確認なので `decision` に allow / deny を明示すること。' : '',
-    `根拠が無いなら \`ask_human\` に managerId: "${event.managerId}" を添えて積み、人間の回答が届いてから返せ。`,
+    `根拠が無いなら \`ask_human\` に managerId: "${event.managerId}" を添えて積み、人間の回答が届いてから同じ宛先へ返せ。`,
   ]
     .filter((line) => line !== '')
     .join('\n');
