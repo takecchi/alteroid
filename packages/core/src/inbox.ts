@@ -21,6 +21,16 @@ export class Inbox {
     return this.#closed;
   }
 
+  /**
+   * まだ取り出されていないイベントに、条件を満たすものがあるか。
+   *
+   * 「同じ合図が処理前に二重に積まれた」を呼び出し側が判断するためのもの。
+   * 処理中のものは既に取り出されているのでここには居ない。
+   */
+  hasPending(predicate: (event: InboxEvent) => boolean): boolean {
+    return this.#queue.some(predicate);
+  }
+
   push(event: InboxEvent): void {
     if (this.#closed) throw new Error('受信箱は既に閉じている');
     const waiter = this.#waiters.shift();

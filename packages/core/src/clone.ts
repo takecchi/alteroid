@@ -4,10 +4,19 @@ import { readFile } from 'node:fs/promises';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { Options, Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 
+import { buildActivityDigest } from './digest.js';
 import type { CloneHost } from './host.js';
 import { Inbox } from './inbox.js';
 import { createManagerPool, type ManagerPool } from './manager.js';
-import { buildCloneSystemPrompt, buildDistillPrompt } from './prompt.js';
+import {
+  buildCloneSystemPrompt,
+  buildDailyReportPrompt,
+  buildDistillPrompt,
+  buildExternalEventPrompt,
+  buildSelfInitiativePrompt,
+  buildTimerPrompt,
+} from './prompt.js';
+import { DAILY_REPORT_KIND, localDate, localDayRange } from './schedule.js';
 import type { ChatStreamEvent, InboxEvent, JournalEntryInput } from './schema.js';
 import type { Stores } from './store.js';
 import { CLONE_ALLOWED_TOOLS, MCP_SERVER_NAME, createCloneMcpServer } from './tools.js';
@@ -32,6 +41,15 @@ const DISTILL_TRANSCRIPT_TAIL_BYTES = 60_000;
 
 /** PreCompact フック内の蒸留に許す時間（秒）。超えたら compaction を待たせない。 */
 const PRE_COMPACT_HOOK_TIMEOUT_SECONDS = 120;
+
+/** 発意 tick と定期ジョブに渡す「直近」の幅。 */
+const RECENT_DIGEST_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/** 日報が既に書かれたかを確かめるときに遡る件数。 */
+const DAILY_REPORT_LOOKUP = 30;
+
+/** 外部イベントの中身をクローンに見せる上限。全文が要るなら送り元で切ること。 */
+const EXTERNAL_PAYLOAD_LIMIT = 8_000;
 
 export interface CloneOptions {
   stores: Stores;
@@ -129,6 +147,13 @@ class Clone implements CloneHost {
 
   post(event: InboxEvent): void {
     if (this.#stopped) return;
+
+    // 同じ合図がまだ読まれないまま積み重なっても、読んだときに見る材料は同じなので
+    // 畳む。**これは実行回数の制限ではない**（AGENTS.md 地雷2）— 発火を減らすのでも
+    // 遅らせるのでもなく、「まだ読んでいない同じ合図」を二度読まないだけである。
+    // 人間の発言・マネージャーからの一件・外部イベントは中身が違うので絶対に畳まない。
+    if (isTick(event) && this.#inbox.hasPending((queued) => isSameTick(queued, event))) return;
+
     this.#inbox.push(event);
   }
 
@@ -318,14 +343,38 @@ class Clone implements CloneHost {
         return;
       }
 
-      // M3 で起点が増える。受信箱の構造は既にそれを受けられる。
-      case 'timer':
-      case 'external':
-      case 'self_initiative':
+      // --- 人間以外の起点（PRD「自律」の②③④） -------------------------------
+      // どれも人間が見ていない時間に来る。だから応答の宛先は無く（内部ターン）、
+      // 何をするかの判断はプロンプトではなくクローンに残す。
+
+      case 'timer': {
+        if (event.kind === DAILY_REPORT_KIND) {
+          await this.#dailyReport(event.target ?? localDate(new Date(event.at)));
+          return;
+        }
         await this.#runInternal(
-          `[system] 未対応の起点 (${event.type}) を受け取った。M3 以降で実装される。`,
+          buildTimerPrompt(event.kind, event.target, await this.#recentDigest()),
         );
         return;
+      }
+
+      case 'external': {
+        const body = renderPayload(event.payload);
+        await this.#journal({
+          type: 'external_event',
+          source: event.source,
+          summary: body,
+        });
+        await this.#runInternal(buildExternalEventPrompt({ source: event.source, body }));
+        return;
+      }
+
+      case 'self_initiative': {
+        await this.#runInternal(
+          buildSelfInitiativePrompt({ reason: event.reason, digest: await this.#recentDigest() }),
+        );
+        return;
+      }
 
       default: {
         const exhaustive: never = event;
@@ -338,11 +387,14 @@ class Clone implements CloneHost {
   // ターンの実行
   // -------------------------------------------------------------------------
 
-  async #runTurn(conversationId: string | null, text: string): Promise<void> {
+  /** 応答の本文を返す（内部ターンの結果を取りこぼさないため）。 */
+  async #runTurn(conversationId: string | null, text: string): Promise<string> {
     // ターンは **セッションを起こす前に** 登録する。セッションの生成が失敗したり
     // 読み取りが即死したりしても、待っているターンを必ず誰かが解放できるように。
+    let turn!: Turn;
     const done = new Promise<void>((resolve) => {
-      this.#turn = { conversationId, text: '', streamed: false, resolve };
+      turn = { conversationId, text: '', streamed: false, resolve };
+      this.#turn = turn;
     });
 
     try {
@@ -354,11 +406,60 @@ class Clone implements CloneHost {
     }
 
     await done;
+    return turn.text;
   }
 
-  /** 人間に見せない内部ターン（蒸留・承認回答の反映）。 */
-  async #runInternal(text: string): Promise<void> {
-    await this.#runTurn(null, text);
+  /** 人間に見せない内部ターン（蒸留・承認回答の反映・人間以外の起点）。 */
+  async #runInternal(text: string): Promise<string> {
+    return this.#runTurn(null, text);
+  }
+
+  // -------------------------------------------------------------------------
+  // 自律（人間以外の起点の中身）
+  // -------------------------------------------------------------------------
+
+  /** 発意・定期ジョブに渡す直近の状況。 */
+  async #recentDigest(): Promise<string> {
+    try {
+      return await buildActivityDigest(this.#stores, {
+        since: new Date(Date.now() - RECENT_DIGEST_WINDOW_MS),
+      });
+    } catch (error) {
+      return `（直近の状況をまとめられなかった: ${String(error)}）`;
+    }
+  }
+
+  /**
+   * 日報 — 人間が普段読む唯一の層（PRD「可観測性」）。
+   *
+   * クローンに `daily_report_write` で書かせるが、**書かれなかった日を作らない**。
+   * 道具を呼び忘れたらその応答をそのまま日報にする。ここで穴が開くと、人間が
+   * 見ようとしたときに見えないという、要件上バグとして扱う状態になる。
+   */
+  async #dailyReport(date: string): Promise<void> {
+    const range = localDayRange(date);
+    const digest =
+      range === null
+        ? await this.#recentDigest()
+        : await buildActivityDigest(this.#stores, range).catch(
+            (error: unknown) => `（この日の記録をまとめられなかった: ${String(error)}）`,
+          );
+
+    const answer = await this.#runInternal(buildDailyReportPrompt({ date, digest }));
+
+    const written = await this.#stores.journal
+      .list({ types: ['daily_report'], limit: DAILY_REPORT_LOOKUP })
+      .catch(() => []);
+    if (written.some((entry) => entry.type === 'daily_report' && entry.date === date)) return;
+
+    await this.#journal({
+      type: 'daily_report',
+      date,
+      body:
+        answer.trim().length > 0
+          ? answer
+          : '（クローンがこの日の日報を残さなかった。日誌から直接辿ること。）',
+    });
   }
 
   /**
@@ -700,6 +801,46 @@ function managerPrompt(event: Extract<InboxEvent, { type: 'manager_message' }>):
   ]
     .filter((line) => line !== '')
     .join('\n');
+}
+
+/**
+ * 中身を持たない「見に行け」の合図か。
+ *
+ * 時間起点の発火と発意 tick だけがこれに当たる。どちらも materialize されるのは
+ * 処理の瞬間（そこで最新の状況をまとめ直す）なので、読まれる前の重複には情報が無い。
+ */
+function isTick(event: InboxEvent): boolean {
+  return event.type === 'self_initiative' || event.type === 'timer';
+}
+
+function isSameTick(a: InboxEvent, b: InboxEvent): boolean {
+  if (a.type !== b.type) return false;
+  if (a.type === 'self_initiative') return true;
+  if (a.type === 'timer' && b.type === 'timer') {
+    // 対象日が違えば別の仕事（別の日の日報は畳めない）
+    return a.kind === b.kind && a.target === b.target;
+  }
+  return false;
+}
+
+/** 外部から届いた中身を、そのままクローンに読ませられる形にする。 */
+function renderPayload(payload: unknown): string {
+  // 中身なしの通知（source だけ）もある。`undefined` という文字列を読ませない。
+  if (payload === undefined || payload === null || payload === '') {
+    return '（中身のない通知。source だけが届いた。）';
+  }
+  const body = typeof payload === 'string' ? payload : safeJson(payload);
+  return body.length > EXTERNAL_PAYLOAD_LIMIT
+    ? `${body.slice(0, EXTERNAL_PAYLOAD_LIMIT)}\n…（以下省略）`
+    : body;
+}
+
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2) ?? String(value);
+  } catch {
+    return String(value);
+  }
 }
 
 interface Block {

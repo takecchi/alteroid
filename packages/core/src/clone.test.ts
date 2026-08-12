@@ -279,23 +279,225 @@ describe('クローン', () => {
 
     await s.clone.stop();
   });
+});
 
-  it('未対応の起点も受信箱で受け取れる（M3 で自律に化けられる構造）', async () => {
-    const s = setup();
+/**
+ * 起点4つ（PRD「自律」）。人間の発言以外の3つは、**人間が一切入力していない状態**で
+ * 起きることが本質なので、どのテストも human_message を送らずに始める。
+ */
+describe('クローン — 自律（人間以外の起点）', () => {
+  const inputsOf = (s: Setup) => () => (s.calls[0]?.inputs ?? []).join('\n');
 
-    s.clone.post(humanMessage('やあ'));
-    await waitForDone(s.events);
+  it('発意 tick で、人間が黙っていても自分の判断が動く（起点④）', async () => {
+    const s = setup(() => '今回は動かない');
+
     s.clone.post({
       type: 'self_initiative',
       id: 'evt-self',
       at: new Date().toISOString(),
-      reason: '目的から次の一手を決める',
+      reason: '定期 tick',
     });
 
     await expect
-      .poll(() => (s.calls[0] as FakeCall).inputs.some((i) => i.includes('self_initiative')), {
+      .poll(() => inputsOf(s)().includes('次にやることがあるか'), { timeout: 3000 })
+      .toBe(true);
+    // 人間には見せない内部ターンなので chat には出ない
+    expect(s.events).toEqual([]);
+
+    await s.clone.stop();
+  });
+
+  it('外部イベントは日誌に残り、中身がクローンに渡る（起点③）', async () => {
+    const s = setup(() => '見た');
+
+    s.clone.post({
+      type: 'external',
+      id: 'evt-ext',
+      at: new Date().toISOString(),
+      source: 'ci',
+      payload: { repo: 'alteroid', status: 'failure' },
+    });
+
+    await expect.poll(() => inputsOf(s)().includes('"failure"'), { timeout: 3000 }).toBe(true);
+    expect(inputsOf(s)()).toContain('source: ci');
+
+    const externals = (await s.stores.journal.list({ types: ['external_event'] })) as {
+      source: string;
+    }[];
+    expect(externals[0]?.source).toBe('ci');
+
+    await s.clone.stop();
+  });
+
+  it('締めの時刻で日報が作られ、対象日は発火が運んだ日である（起点② / 可観測性の最上段）', async () => {
+    const s = setup(() => '今日はログイン周りを直した。保留は無い。');
+
+    s.clone.post({
+      type: 'timer',
+      id: 'evt-timer',
+      at: new Date().toISOString(),
+      kind: 'daily_report',
+      // デーモンが止まっていた日を後から締めることがあるので、対象日は運ばれてくる
+      target: '2026-08-11',
+    });
+
+    const reports = await expect
+      .poll(() => s.stores.journal.list({ types: ['daily_report'] }), { timeout: 3000 })
+      .toHaveLength(1)
+      .then(() => s.stores.journal.list({ types: ['daily_report'] }));
+
+    expect(reports[0]).toMatchObject({
+      date: '2026-08-11',
+      body: expect.stringContaining('ログイン周り'),
+    });
+    expect(inputsOf(s)()).toContain('2026-08-11 を締める');
+
+    await s.clone.stop();
+  });
+
+  it('クローンが自分で日報を書いていれば二重に作らない', async () => {
+    const stores = createMemoryStores();
+    await stores.journal.append({
+      type: 'daily_report',
+      date: '2026-08-11',
+      body: 'クローンが道具で書いた日報',
+    });
+
+    const s = setup(() => '書いておいた', stores);
+    s.clone.post({
+      type: 'timer',
+      id: 'evt-timer',
+      at: new Date().toISOString(),
+      kind: 'daily_report',
+      target: '2026-08-11',
+    });
+
+    // ターンが終わったことを内部ターンの日誌で確かめる
+    await expect
+      .poll(
+        async () =>
+          ((await stores.journal.list({ types: ['exchange'] })) as { with: string }[]).some(
+            (entry) => entry.with === 'self',
+          ),
+        { timeout: 3000 },
+      )
+      .toBe(true);
+
+    const reports = await stores.journal.list({ types: ['daily_report'] });
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({ body: 'クローンが道具で書いた日報' });
+
+    await s.clone.stop();
+  });
+
+  it('人間の回答待ちが溜まっていても、他の仕事は進む（受け入れ基準2）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putApproval({
+      id: 'ap-1',
+      createdAt: new Date().toISOString(),
+      question: '本番に出してよいか',
+    });
+
+    const s = setup(() => '保留は保留のまま、別の件を進める', stores);
+    s.clone.post({
+      type: 'self_initiative',
+      id: 'evt-self',
+      at: new Date().toISOString(),
+      reason: '定期 tick',
+    });
+
+    await expect.poll(() => (s.calls[0]?.inputs ?? []).length > 0, { timeout: 3000 }).toBe(true);
+    // 保留は保留のまま（回答待ちを勝手に片付けない）
+    expect(await stores.jobs.listApprovals({ pendingOnly: true })).toHaveLength(1);
+    // それでも発意 tick は状況を見て動いている
+    expect((s.calls[0]?.inputs ?? []).join('\n')).toContain('本番に出してよいか');
+
+    await s.clone.stop();
+  });
+
+  it('読まれる前に積み重なった同じ tick は畳む（発火は減らさない）', async () => {
+    // ターンが長引いているあいだに tick が溜まると、同じ材料の同じ判断を
+    // 連続で走らせることになる（重複した委譲が起きうる）。読む前の重複には
+    // 情報が無いので畳む。回数の上限を置くのとは別物。
+    const s = setup(() => '見た', createMemoryStores(), { delayMs: 120 });
+
+    for (let i = 0; i < 4; i += 1) {
+      s.clone.post({
+        type: 'self_initiative',
+        id: `evt-self-${i}`,
+        at: new Date().toISOString(),
+        reason: '定期 tick',
+      });
+    }
+
+    // 処理中の1件 + 待ち行列の1件 だけが走る
+    await expect
+      .poll(() => (s.calls[0]?.inputs ?? []).length, { timeout: 3000 })
+      .toBeGreaterThanOrEqual(2);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(s.calls[0]?.inputs).toHaveLength(2);
+
+    await s.clone.stop();
+  }, 10_000);
+
+  it('対象日が違う日報は畳まない（別の日の締めは別の仕事）', async () => {
+    const stores = createMemoryStores();
+    const s = setup(() => '締めた', stores, { delayMs: 60 });
+
+    for (const target of ['2026-08-10', '2026-08-11', '2026-08-11']) {
+      s.clone.post({
+        type: 'timer',
+        id: `evt-${target}-${Math.random()}`,
+        at: new Date().toISOString(),
+        kind: 'daily_report',
+        target,
+      });
+    }
+
+    await expect
+      .poll(() => stores.journal.list({ types: ['daily_report'] }), { timeout: 5000 })
+      .toHaveLength(2);
+
+    const dates = ((await stores.journal.list({ types: ['daily_report'] })) as { date: string }[])
+      .map((entry) => entry.date)
+      .sort();
+    expect(dates).toEqual(['2026-08-10', '2026-08-11']);
+
+    await s.clone.stop();
+  }, 10_000);
+
+  it('中身のない通知でも「undefined」を読ませない', async () => {
+    const s = setup(() => '見た');
+
+    s.clone.post({
+      type: 'external',
+      id: 'evt-empty',
+      at: new Date().toISOString(),
+      source: 'cron',
+    });
+
+    await expect
+      .poll(() => (s.calls[0]?.inputs ?? []).join('\n').includes('中身のない通知'), {
         timeout: 3000,
       })
+      .toBe(true);
+    expect((s.calls[0]?.inputs ?? []).join('\n')).not.toContain('undefined');
+
+    await s.clone.stop();
+  });
+
+  it('日報以外の定期ジョブも受け取れる（人間が後から仕込んだもの）', async () => {
+    const s = setup(() => '見直した');
+
+    s.clone.post({
+      type: 'timer',
+      id: 'evt-timer',
+      at: new Date().toISOString(),
+      kind: 'weekly_review',
+    });
+
+    await expect
+      .poll(() => inputsOf(s)().includes('定期ジョブ weekly_review'), { timeout: 3000 })
       .toBe(true);
 
     await s.clone.stop();

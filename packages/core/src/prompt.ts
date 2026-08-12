@@ -39,11 +39,21 @@ export function buildCloneSystemPrompt({ memory }: CloneSystemPromptInput): stri
 - 人間に聞かずに実行した判断は、必ず \`journal_write\` に残す。人間が後から読んで否定できることが最終承認の実体である。
 - 一度「それはやっていい」「それはやらないで」と言われたら、それを記憶に書く。承認は設定ではなく記憶として持続する。
 
+# 仕事の起点
+
+あなたが動くきっかけは人間の発言だけではない。**人間が席に居ない時間も、あなたは動いている。**
+
+- 人間の依頼／時間（定期ジョブ）／外部イベント（外から届く通知）／あなた自身の発意、この4つが等しく起点である。
+- 人間の回答を待っている件があっても、止まるのは**その件だけ**である。他の仕事は進めてよい。
+- 人間が居ないあいだに決めたことも、必ず \`journal_write\` に残す。人間が後から読んで否定できることが最終承認の実体である。
+
 # 道具
 
 - \`memory_list\` / \`memory_read\` / \`memory_write\` / \`memory_append\`: 記憶
 - \`journal_write\` / \`journal_read\`: 日誌（追記専用）
 - \`ask_human\`: 人間の承認待ちキューに質問を積む
+- \`approvals_list\`: いま人間の回答を待っている件の一覧
+- \`daily_report_write\`: 日報を残す（人間が普段読む唯一の層）
 - \`manager_start\` / \`manager_send\` / \`manager_list\`: マネージャーへの委譲
 
 # 委譲
@@ -83,6 +93,105 @@ export function buildDistillPrompt(reason: 'conversation_end' | 'pre_compact'): 
 あるなら \`memory_write\` か \`memory_append\` で記憶を更新し、何を更新したかを \`journal_write\` に残せ。
 無いなら何もせず、「更新なし」とだけ答えよ。既に記憶にあることを書き直す必要はない。
 人間への返事は不要である。`;
+}
+
+// ---------------------------------------------------------------------------
+// 自律（起点4つのうち、人間以外の3つ）
+// ---------------------------------------------------------------------------
+
+/**
+ * 日報の指示（PRD「可観測性」の最上段 / 起点②の最初の実例）。
+ *
+ * 人間が普段読むのはこれだけである。したがって**何を書くかは要件**（今日何をしたか・
+ * 何が決まったか・何が保留か）だが、**何を良しとするかは書かない** — 評価の基準は
+ * クローンが記憶として持っている価値観である。
+ */
+export interface DailyReportPromptInput {
+  /** 対象日（`YYYY-MM-DD`、ローカル日付）。 */
+  date: string;
+  /** その日に何が起きたかの要約（digest.ts）。 */
+  digest: string;
+}
+
+export function buildDailyReportPrompt({ date, digest }: DailyReportPromptInput): string {
+  return `[system] ${date} を締める時刻になった。この日の日報をまとめよ。
+
+人間が普段読むのは日報だけである。日報を読んだだけでその日が分かり、掘りたくなったら日誌へ降りられる、という粒度で書くこと。
+
+含めるもの:
+
+- 今日何をしたか（委譲した仕事とその結果を、人間の関心の粒度で）
+- 何が決まったか（あなたが自分で決めたことは、根拠も添えて）
+- 何が保留か（人間の回答待ち、途中で止まっているもの）
+
+書き終えたら \`daily_report_write\` に \`date: "${date}"\` を付けて残せ。人間はこれを \`alteroid chat\` の \`/report\` と HTTP API から読む。
+細部が要るなら \`journal_read\` や \`manager_list\` で自分で掘ってよい。
+
+以下はこの日の記録の要約である。
+
+${digest}`;
+}
+
+/**
+ * 発意 tick の指示（起点④）。
+ *
+ * ここが「制限された自動化ジョブ」との分水嶺である。だから**やることの一覧を
+ * 渡さない**。何をするか、あるいは何もしないかは、記憶にある目的からクローンが決める。
+ */
+export interface SelfInitiativePromptInput {
+  reason: string;
+  digest: string;
+}
+
+export function buildSelfInitiativePrompt({ reason, digest }: SelfInitiativePromptInput): string {
+  return `[system] 誰にも呼ばれていないが、あなた自身のために手が空いた時間である（${reason}）。
+
+記憶にある目的と、いまの状況を見て、次にやることがあるかを決めよ。
+
+- あるなら自分で始める。実作業なら \`manager_start\` で委譲する。
+- 走っている仕事の様子が気になるなら \`manager_list\` で見て、必要なら \`manager_send\` で追う。
+- 人間に確かめたいことができたら \`ask_human\` に積む（人間が居なくても、そこで止まるのはその件だけである）。
+- **何もしないという結論でよい。** そのときは何もせず「今回は動かない」とだけ答えよ。無理に仕事を作らないこと。
+
+聞かずに動いたなら \`journal_write\` に残せ。
+
+以下は直近の状況である。
+
+${digest}`;
+}
+
+/**
+ * 外部イベントの指示（起点③）。
+ *
+ * 何が届いたら何をするかの対応表を書かないこと。書いた瞬間に、これは
+ * 「webhook で起動する自動化」になり、人による違いが潰れる（PRD「権限境界」）。
+ */
+export interface ExternalEventPromptInput {
+  source: string;
+  /** 届いた中身（JSON なら整形済みの文字列）。 */
+  body: string;
+}
+
+export function buildExternalEventPrompt({ source, body }: ExternalEventPromptInput): string {
+  return `[system] 外部から出来事が届いた（source: ${source}）。人間はこれを見ていない。
+
+中身を読み、記憶にある目的と価値観に照らして、何をするか決めよ。動く必要が無ければ何もしなくてよい。
+判断の根拠が記憶に無く、しかも放っておけないことなら \`ask_human\` に積む。聞かずに動いたなら \`journal_write\` に残せ。
+
+---
+
+${body}`;
+}
+
+/** 日報以外の定期ジョブ（人間が後から仕込んだもの）が来たとき。 */
+export function buildTimerPrompt(kind: string, target: string | undefined, digest: string): string {
+  return `[system] 定期ジョブ ${kind} の時刻になった${target === undefined ? '' : `（対象: ${target}）`}。
+
+この定期ジョブが何のために仕込まれているかは記憶にある。照らして、必要なことをせよ。何もしなくてよいならそう答えよ。
+
+以下は直近の状況である。
+
+${digest}`;
 }
 
 // ---------------------------------------------------------------------------

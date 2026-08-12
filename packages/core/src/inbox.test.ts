@@ -61,7 +61,19 @@ describe('Inbox', () => {
     expect(seen).toEqual(['evt-a', 'evt-b']);
   });
 
-  it('起点の種類を問わず同じ口から入る（M3 で自律に化けられること）', async () => {
+  it('まだ読まれていないイベントを覗ける（同じ合図の重複判定に使う）', async () => {
+    const inbox = new Inbox();
+    inbox.push(humanMessage('a'));
+
+    expect(inbox.hasPending((event) => event.type === 'human_message')).toBe(true);
+    expect(inbox.hasPending((event) => event.type === 'timer')).toBe(false);
+
+    // 取り出したものは「処理中」であって、もう待ち行列には居ない
+    await inbox.next();
+    expect(inbox.hasPending(() => true)).toBe(false);
+  });
+
+  it('起点の種類を問わず同じ口から入る（4つの起点が同じ受信箱を通る）', async () => {
     const inbox = new Inbox();
     inbox.push({ type: 'timer', id: 'evt-timer', at: new Date(0).toISOString(), kind: 'daily' });
     inbox.push({

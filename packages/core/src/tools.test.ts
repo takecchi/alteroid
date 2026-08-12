@@ -143,6 +143,56 @@ describe('クローンの道具', () => {
     expect(pending?.jobId).toBe('mgr-1');
   });
 
+  it('approvals_list で、人間の回答待ちを自分で見られる（溜まった保留の運用）', async () => {
+    const h = harness();
+    expect(await h.call('approvals_list', {})).toContain('回答待ちは無い');
+
+    await h.call('ask_human', {
+      question: '本番に出してよいか',
+      managerId: 'mgr-1',
+      requestId: 'req-9',
+    });
+    await h.stores.jobs.putApproval({
+      id: 'ap-old',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      question: '済んだ質問',
+      answeredAt: '2026-01-01T01:00:00.000Z',
+      answer: 'よい',
+    });
+
+    const reply = await h.call('approvals_list', {});
+    expect(reply).toContain('本番に出してよいか');
+    expect(reply).toContain('req-9');
+    // 回答済みは並べない（片付ける先がここだから）
+    expect(reply).not.toContain('済んだ質問');
+  });
+
+  it('daily_report_write は指定された日付で日報を残す', async () => {
+    const h = harness();
+
+    await h.call('daily_report_write', { date: '2026-08-11', body: '# 日報\n\n直した' });
+
+    const [entry] = await h.stores.journal.list({ types: ['daily_report'] });
+    expect(entry).toMatchObject({ type: 'daily_report', date: '2026-08-11' });
+  });
+
+  it('日付が無い・壊れている・存在しない日なら今日として残す（読めない日報を作らない）', async () => {
+    const h = harness();
+    const today = new Date();
+    const expected = `${today.getFullYear()}-${`${today.getMonth() + 1}`.padStart(2, '0')}-${`${today.getDate()}`.padStart(2, '0')}`;
+
+    await h.call('daily_report_write', { body: '本文' });
+    await h.call('daily_report_write', { date: 'きのう', body: '本文' });
+    // 形は合っているが存在しない日。ここを通すと書いた日と読める日がずれる
+    await h.call('daily_report_write', { date: '2026-02-31', body: '本文' });
+
+    const entries = (await h.stores.journal.list({ types: ['daily_report'] })) as {
+      date: string;
+    }[];
+    expect(entries).toHaveLength(3);
+    for (const entry of entries) expect(entry.date).toBe(expected);
+  });
+
   it('manager_start は起こして即返り、委譲の判断が日誌に残る', async () => {
     const h = harness();
 

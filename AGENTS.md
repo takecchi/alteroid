@@ -70,3 +70,16 @@
 - SDK を実際に呼ぶ確認は `curl -N -X POST http://127.0.0.1:$PORT/chat -d '{"text":"..."}'` が手軽。ローカルの `claude` のログイン認証がそのまま使われる
 - 委譲まわりの確認は `GET /managers`（一覧と状態）、`GET /managers/:id/transcript`（生ログ）、`GET /journal?type=tool_use`（マネージャー・作業者の全ツール実行）を見る。chat からは `/managers` `/manager <id>`
 - クローンの挙動を SDK 抜きで検証したいときは `createClone({ queryFn })` に偽の `query` を渡す（`packages/core/src/clone.test.ts`）。マネージャー側は `createManagerPool({ queryFn })`（`packages/core/src/manager.test.ts`）で、こちらは `canUseTool` とフックを直接叩いて配線を確かめる
+
+## 自律まわりの動かし方（起点4つ）
+
+- **既定で動く。** 日報（既定 22:00）と発意 tick（既定 60 分）は何も設定しなくても回る。常駐と自律は後から足す機能ではないので、既定を「止まっている」にしないこと
+  - `ALTEROID_DAILY_REPORT_AT`（`HH:MM` / `off`）、`ALTEROID_INITIATIVE_EVERY`（分 / `off`）、`ALTEROID_REPORT_LOOKBACK_DAYS`（起動時に遡って日報を作る日数、既定 3）
+  - これらは**方針**の設定であって、暴走を止めるための回数制限ではない。抑止は実行環境の境界で行う（north_star 禁止2）
+- 待たずに確かめるなら `POST /schedule/:kind/run`（chat では `/run daily_report` / `/run self_initiative`）。`GET /schedule` で次の発火が見える
+- **外部イベントの入口は HTTP の `POST /events`**（`{source, payload}`）。送り元の形を変えられない webhook 用に `POST /events/:source`（本文まるごとが payload）もある。chat からは `/event <source> <本文>`
+  - 開いているのは 127.0.0.1 だけ。外から叩かせるならトンネル・リバースプロキシ側に境界を置く（ここで認証を足す前に、それが方針か境界かを考える）
+  - MCP 経由のポーリングは**別機構にしない**。「Slack を見に行く」は定期ジョブ＋マネージャーへの委譲で足りる（マネージャーは人間と同じ `.mcp.json` を持つ）
+- 日報は `GET /reports` / `GET /reports/:date`、chat では `/report` `/reports`。**日報が無い日を作らないこと** — クローンが `daily_report_write` を呼び忘れたらその応答をそのまま日報にする実装になっている（`clone.ts` の `#dailyReport`）
+- 溜まった承認待ちは chat の `/approvals`（番号付き）→ `/answer <番号> <回答>`、API では `POST /approvals/answer` にまとめて渡す
+- 時間起点の確認を SDK 抜きでやるなら `createScheduler({ now, post })` に偽の時計を渡して `tick(日時)` を直接呼ぶ（`packages/core/src/schedule.test.ts`）。実 SDK での確認は `ALTEROID_INITIATIVE_EVERY=1`＋締め時刻を数分後にして放置するのが早い
