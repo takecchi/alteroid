@@ -1,0 +1,7 @@
+# 生成物
+dist/
+coverage/
+pnpm-lock.yaml
+
+# docs/ は正典。整形ツールにも触らせない（AGENTS.md「リポジトリの約束」）
+docs/
