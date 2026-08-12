@@ -59,6 +59,7 @@
 - **build が先。** ワークスペース間の型解決が各パッケージの `dist/` に依存するため、build 前の typecheck / test は失敗する
 - TypeScript は 6 系に固定（typescript-eslint が TS 7 未対応のため。`pnpm-workspace.yaml` の catalog 参照）。TS6 は `@types` を自動で取り込まないので、新パッケージには `@types/node`（`catalog:`）を devDependencies に入れる
 - 新しい依存の追加はバージョンを catalog（`pnpm-workspace.yaml`）に寄せられるか先に検討する
+- CI はイメージ（`runtime` ステージ）も焼き、**uid 1001＝マネージャーが実際に走る主体**で道具が揃っているかを見る（`.github/workflows/ci.yml` の `image`）。マネージャーの道具は版を固定していないので、上流の変化で壊れたことに気づく場所はここしかない。手元で同じことをするなら `docker build --target runtime -t alteroid:ci .`
 
 ## 動かす
 
