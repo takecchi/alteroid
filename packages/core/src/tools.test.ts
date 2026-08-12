@@ -19,6 +19,7 @@ function harness(): Harness {
   const emitted: ChatStreamEvent[] = [];
   const sent: { managerId: string; message: string; decision?: string; requestId?: string }[] = [];
   const started: { request: string; cwd?: string }[] = [];
+  const aborted: { managerId: string; reason?: string }[] = [];
   const running: ManagerSummary[] = [];
 
   const managers: ManagerPool = {
@@ -49,6 +50,10 @@ function harness(): Harness {
     },
     async restore() {
       return [];
+    },
+    async abort(managerId: string, reason?: string) {
+      aborted.push({ managerId, ...(reason === undefined ? {} : { reason }) });
+      return { outcome: 'stopped' as const, detail: '止めた' };
     },
     async stop() {},
   };

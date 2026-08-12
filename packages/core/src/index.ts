@@ -65,21 +65,40 @@ export {
   type RunnerHostOptions,
 } from './runner.js';
 export { createLocalRunner, type LocalRunnerOptions } from './runner-local.js';
+/**
+ * マネージャーの道具の鍵。**器を作り直さずに回せる形**で持つ（`credentials.ts`）。
+ * 伏せるのは上（記憶）へ到達する鍵だけで、下（外の世界）へ手を伸ばす鍵は配る。
+ */
+export {
+  DEFAULT_CREDENTIAL_DIR,
+  ROTATABLE_CREDENTIAL_KEYS,
+  createCredentialStore,
+  fingerprintOf,
+  type CredentialEntry,
+  type CredentialFingerprint,
+  type CredentialStore,
+  type CredentialStoreOptions,
+} from './credentials.js';
 export {
   createRunnerRegistry,
   runnerAnswerCommandSchema,
+  runnerCredentialFingerprintSchema,
+  runnerCredentialSchema,
   runnerEventSchema,
   runnerManagerStateSchema,
   runnerMessageCommandSchema,
   runnerResumeCommandSchema,
+  runnerSetCredentialsCommandSchema,
   runnerStartCommandSchema,
   runnerWaitingSchema,
   type RunnerAnswerCommand,
   type RunnerClient,
+  type RunnerCredentialFingerprint,
   type RunnerEvent,
   type RunnerManagerState,
   type RunnerRegistry,
   type RunnerResumeCommand,
+  type RunnerSetCredentialsCommand,
   type RunnerStartCommand,
   type RunnerWaiting,
 } from './runner-protocol.js';

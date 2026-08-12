@@ -1,0 +1,156 @@
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { createCredentialStore, fingerprintOf } from './credentials.js';
+
+/**
+ * 鍵は器を作り直さずに回せること。
+ *
+ * ここで固定しているのは、実際に一晩溶かした失敗そのものである。人間は鍵を正しく
+ * 差し替え、マネージャーは正しく 403 を報告し、**両方とも正しいまま噛み合わなかった**。
+ * 原因は権限ではなく経路で、鍵が runner の起動時 env に凍っていた。
+ */
+
+let dir: string;
+
+/** 置き場として使えないパス（途中がファイルなので mkdir が ENOTDIR で落ちる）。 */
+function unusableDir(): string {
+  const blocker = join(dir, 'blocker');
+  writeFileSync(blocker, 'not a directory');
+  return join(blocker, 'credentials');
+}
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'alteroid-cred-'));
+});
+
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true });
+});
+
+describe('鍵の器', () => {
+  it('起動時の env から拾って器へ置く', async () => {
+    const store = createCredentialStore({
+      dir,
+      seed: { GH_TOKEN: 'ghp_old' },
+      names: ['GH_TOKEN'],
+    });
+    await store.flush();
+
+    expect(store.values()).toEqual({ GH_TOKEN: 'ghp_old' });
+    expect(readFileSync(join(dir, 'GH_TOKEN'), 'utf8')).toBe('ghp_old');
+  });
+
+  it('差し替えると、配る値も器の中身も新しくなる（再起動なしで回る）', async () => {
+    const store = createCredentialStore({
+      dir,
+      seed: { GH_TOKEN: 'ghp_old' },
+      names: ['GH_TOKEN'],
+    });
+    await store.flush();
+
+    await store.set([{ name: 'GH_TOKEN', value: 'ghp_new' }]);
+
+    // 新しいマネージャーへ配る値
+    expect(store.values().GH_TOKEN).toBe('ghp_new');
+    // **既に走っているマネージャーが読む器**。ここが変わることが本題である。
+    expect(readFileSync(join(dir, 'GH_TOKEN'), 'utf8')).toBe('ghp_new');
+  });
+
+  it('空文字は「鍵を外す」— 器からも消える', async () => {
+    const store = createCredentialStore({
+      dir,
+      seed: { GH_TOKEN: 'ghp_old' },
+      names: ['GH_TOKEN'],
+    });
+    await store.flush();
+
+    await store.set([{ name: 'GH_TOKEN', value: '' }]);
+
+    expect(store.values().GH_TOKEN).toBeUndefined();
+    expect(() => readFileSync(join(dir, 'GH_TOKEN'), 'utf8')).toThrow();
+  });
+
+  it('空の env は「置かれていない」と同じに扱う（空の鍵を配らない）', () => {
+    const store = createCredentialStore({ dir, seed: { GH_TOKEN: '' }, names: ['GH_TOKEN'] });
+    expect(store.values()).toEqual({});
+    expect(store.fingerprints()).toEqual([]);
+  });
+
+  it('指紋は値を出さずに同一性だけを見せる', async () => {
+    const store = createCredentialStore({
+      dir,
+      seed: { GH_TOKEN: 'ghp_secret_value' },
+      names: ['GH_TOKEN'],
+      now: () => new Date('2026-08-13T00:00:00.000Z'),
+    });
+
+    const [fingerprint] = store.fingerprints();
+
+    expect(fingerprint?.name).toBe('GH_TOKEN');
+    expect(fingerprint?.sha256).toBe(fingerprintOf('ghp_secret_value'));
+    expect(fingerprint?.sha256).toHaveLength(12);
+    // 値そのものは、どこにも現れない
+    expect(JSON.stringify(store.fingerprints())).not.toContain('ghp_secret_value');
+  });
+
+  it('器のファイルは所有者しか読めない（0400）', async () => {
+    const store = createCredentialStore({ dir, seed: { GH_TOKEN: 'ghp_x' }, names: ['GH_TOKEN'] });
+    await store.flush();
+
+    expect(statSync(join(dir, 'GH_TOKEN')).mode & 0o777).toBe(0o400);
+  });
+
+  it('値に改行を足さない（cat した中身がそのまま鍵になる）', async () => {
+    const store = createCredentialStore({ dir, seed: { GH_TOKEN: 'ghp_x' }, names: ['GH_TOKEN'] });
+    await store.flush();
+
+    expect(readFileSync(join(dir, 'GH_TOKEN'), 'utf8')).toBe('ghp_x');
+  });
+
+  it('器へ書けなくても値は配れる（経路が1本折れても能力を落とさない）', async () => {
+    const store = createCredentialStore({
+      dir: unusableDir(),
+      seed: { GH_TOKEN: 'ghp_x' },
+      names: ['GH_TOKEN'],
+    });
+    // 書けない置き場でも起動は止めない（env 経由の経路は残る）
+    await expect(store.flush()).resolves.toBeDefined();
+    expect(store.values().GH_TOKEN).toBe('ghp_x');
+    // ただし黙って隠さない
+    expect(store.lastWriteError).toBeDefined();
+  });
+
+  it('差し替えが器へ届かなければ、黙って成功にしない', async () => {
+    const store = createCredentialStore({ dir: unusableDir(), seed: {}, names: ['GH_TOKEN'] });
+
+    // 起動（flush）は器が無くても止めないが、**差し替え（set）は落ちたら知らせる**。
+    // ここを握り潰すと「差し替えたのに直らない」という元の病気に戻る。
+    await expect(store.set([{ name: 'GH_TOKEN', value: 'ghp_new' }])).rejects.toThrow();
+    expect(store.lastWriteError).toBeDefined();
+  });
+
+  it('0400 の鍵を上書きできる（差し替えが黙って落ちない）', async () => {
+    const store = createCredentialStore({ dir, seed: { GH_TOKEN: 'v1' }, names: ['GH_TOKEN'] });
+    await store.flush();
+
+    // 3回回しても、毎回ちゃんと入れ替わること
+    for (const value of ['v2', 'v3', 'v4']) {
+      await store.set([{ name: 'GH_TOKEN', value }]);
+      expect(readFileSync(join(dir, 'GH_TOKEN'), 'utf8')).toBe(value);
+    }
+    expect(store.lastWriteError).toBeUndefined();
+  });
+
+  it('子へ知らせるのは所在であって値ではない', () => {
+    const store = createCredentialStore({ dir, seed: { GH_TOKEN: 'ghp_x' }, names: ['GH_TOKEN'] });
+
+    const env = store.env();
+
+    expect(env.ALTEROID_GH_TOKEN_FILE).toBe(join(dir, 'GH_TOKEN'));
+    expect(JSON.stringify(env)).not.toContain('ghp_x');
+  });
+});

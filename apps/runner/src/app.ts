@@ -5,6 +5,7 @@ import {
   runnerAnswerCommandSchema,
   runnerMessageCommandSchema,
   runnerResumeCommandSchema,
+  runnerSetCredentialsCommandSchema,
   runnerStartCommandSchema,
 } from '@alteroid/core';
 import { zValidator } from '@hono/zod-validator';
@@ -125,6 +126,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     .use('/events', control)
     .use('/managers', control)
     .use('/managers/*', control)
+    .use('/credentials', control)
 
     .get('/health', (c) =>
       c.json({
@@ -133,8 +135,27 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         workspacePath: host.workspacePath,
         managers: host.list().length,
         pendingEvents: outbox.pending,
+        /**
+         * いま配っている鍵の**指紋だけ**。値は決して出さない。
+         *
+         * これが無いと、人間が置いた鍵とマネージャーが握っている鍵が同じかどうかを
+         * 誰も確かめられず、「鍵の権限が足りない」のか「鍵が届いていない」のかを
+         * 切り分けられない。実際にその切り分けができずに一晩溶けたことがある。
+         */
+        credentials: host.credentials(),
       }),
     )
+
+    /**
+     * 鍵の差し替え。**制御面なので、runner の中のマネージャーからは叩けない。**
+     *
+     * ここが叩けてしまうと、マネージャーは自分に配られる鍵を自分で書き換えられる。
+     * 門番（`control`）を外さないこと。
+     */
+    .post('/credentials', zValidator('json', runnerSetCredentialsCommandSchema), async (c) => {
+      const fingerprints = await host.setCredentials(c.req.valid('json').credentials);
+      return c.json({ ok: true, credentials: fingerprints });
+    })
 
     /**
      * 出来事のストリーム。**接続を張るのはデーモン側**である。
