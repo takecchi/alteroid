@@ -1,6 +1,6 @@
 # ロードマップ — alteroid 実装計画
 
-[architecture.md](./architecture.md) のフェーズ表 M0〜M4 を、実装を引き継ぐ AI が単独で遂行できる粒度に展開したもの。上位文書は [north_star.md](./north_star.md)（正典）→ [PRD.md](./PRD.md)（要件）→ [architecture.md](./architecture.md)（設計）。矛盾したら上位が勝つ。
+[architecture.md](./architecture.md) のフェーズ表 M0〜M5 を、実装を引き継ぐ AI が単独で遂行できる粒度に展開したもの。上位文書は [north_star.md](./north_star.md)（正典）→ [PRD.md](./PRD.md)（要件）→ [architecture.md](./architecture.md)（設計）。矛盾したら上位が勝つ。
 
 **着手前の儀式**: フェーズを始める前に north_star の「立ち戻るための問い」を通し、AGENTS.md の地雷表を読むこと。
 
@@ -75,20 +75,47 @@
 3. PRD「自律」の起点4つ（人間・時間・外部イベント・発意）がすべて動作する
 4. 日報が毎日生成され、`alteroid chat` と HTTP API で読める
 
-## M4 — クラウド（PostgreSQL とコンテナ）
+## M4 — クラウド（PostgreSQL、daemon / manager-runner の分離）
 
-**ゴール**: ローカルと同じものが、コンテナ + PostgreSQL で常駐する。
+**ゴール**: ローカルと同じものが、コンテナ + PostgreSQL で常駐する。そのうえで、**マネージャーから記憶ストアへ到達する経路が構造的に存在しない**。
 
 - [x] `storage-pg`: drizzle で PersonaStore / JournalStore / JobStore（記憶は同じ Markdown 文書をテーブルに格納。人間の閲覧・編集は CLI / API 経由で担保）
 - [x] SDK SessionStore アダプタで セッション永続化も同じ PostgreSQL へ
-- [x] デーモン再起動時、JobStore の session_id から走行中マネージャーを resume
-- [x] Dockerfile + docker compose（app + postgres）。認証は `CLAUDE_CODE_OAUTH_TOKEN`（`claude setup-token`）をシークレット注入
-- [x] 記憶ストア認証情報の分離を検証: マネージャー子プロセスの環境変数に DB 接続情報が**渡っていない**こと（非対称な可視性の本命の強制がここで成立する）
+- [x] **daemon / manager-runner の分離**: SDK（マネージャーと作業者）は runner の中だけで走る。runner は判断も権限一覧も独自のエージェント基盤も持たず、SDK セッションの start / send / stop / resume と出来事の返送だけを担う
+- [x] `RunnerRegistry`（`list` / `get` / `select`）を間接層として置く。M4 の `select` は唯一の `runner-primary` を返すだけでよいが、**デーモンは固定 URL も runner のローカルパスも前提にしない**
+- [x] runner は安定した `runner_id` を持ち、JobStore に `manager_id → runner_id → session_id → workspace locator` を永続化する
+- [x] デーモン再起動時、**走行中だったマネージャーは実際に resume する**（runner が生きていれば繋ぎ直し、器ごと落ちていれば預かった生ログから再開）。待機中（`done`）の遅延 resume とは分ける
+- [x] Dockerfile + docker compose（daemon + manager-runner + postgres の3コンテナ）。認証は `CLAUDE_CODE_OAUTH_TOKEN`（`claude setup-token`）をシークレット注入
+- [x] 記憶ストア認証情報の分離を検証: runner と子プロセスに DB 接続情報が**無く**、runner から DB への経路も**無い**こと
 
 **受け入れ基準**:
-1. `docker compose up` + トークン注入で起動し、M1〜M3 の受け入れ基準が同じように通る
+1. `docker compose up -d` + トークン注入で起動し、M1〜M3 の受け入れ基準が同じように通る（MCP・許可確認・監査・生ログ経路が分離後も落ちない）
 2. コンテナ再起動後、クローンは同じ人格で、走行中だったマネージャーの続きを把握している
 3. マネージャープロセスから記憶ストアに到達する認証経路が存在しない
+   - manager から daemon の `/proc`・環境変数・人格データが見えない
+   - manager / runner に Persona 用 DB 資格情報が無い
+   - runner から Persona 用 DB へ接続できない
+
+## M5 — 複数 manager-runner と水平スケール
+
+**ゴール**: runner を増やしても、能力もプロトコルも1台構成と同じままでいる。
+
+- [ ] runner の登録・heartbeat・生存判定
+- [ ] 新規マネージャーの runner 配置（CPU・メモリ・稼働セッション等、**実行環境の資源**を材料にする。固定の `maxManagers` のような人工上限は置かない）
+- [ ] `manager_id → runner_id` に基づく sticky routing
+- [ ] runner 障害時の session 再開と workspace 復旧
+- [ ] workspace locator の運用選択（runner-volume / 共有 FS / Git 再構築）
+- [ ] Railway の複数 Service、AWS ECS/Fargate 等で runner 数を増減できるデプロイ定義
+- [ ] 1 runner 構成と能力・プロトコルが同じであることの回帰テスト
+
+**受け入れ基準**:
+1. runner を2台以上登録し、複数マネージャーが配置される
+2. `manager_send` / 許可確認 / 報告が、常に割り当て先の runner へ届く
+3. デーモン再起動後も runner affinity を復元できる
+4. 1台の runner 停止時、永続化済み session と workspace から別 runner で継続できる。できない場合は、復旧不能な未永続状態を人間へ明示できる
+5. runner 数を増減しても、人工的なセッション数上限や能力削減が入らない
+
+**このフェーズの地雷**: 配置の判断（資源を見る）と、能力の制限（何本までと決める）を混同しないこと。前者は実行環境の話であり、後者は禁止2の違反である。
 
 ---
 

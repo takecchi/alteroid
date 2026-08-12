@@ -12,8 +12,10 @@ import type {
 
 import { buildActivityDigest } from './digest.js';
 import type { CloneHost } from './host.js';
+import { createRunnerRegistry } from './runner-protocol.js';
 import { Inbox } from './inbox.js';
 import { createManagerPool, type ManagerPool } from './manager.js';
+import type { RunnerRegistry } from './runner-protocol.js';
 import {
   buildCloneSystemPrompt,
   buildDailyReportPrompt,
@@ -69,19 +71,13 @@ export interface CloneOptions {
    */
   cwd?: string;
   /**
-   * マネージャー用の `query`（主にテスト用）。クローンのものと分けてあるのは、
-   * 両者が別プロセス・別モデル帯だからである。
+   * 委譲先（manager-runner）の名簿。
+   *
+   * **クローンは SDK を直接起こさない。** マネージャーは別プロセス（既定では
+   * 別コンテナ）の runner で走り、ここはその宛先を決める間接層だけを見る
+   * （docs/architecture.md「プロセス境界」）。
    */
-  managerQueryFn?: typeof query;
-  /**
-   * `manager_start` で cwd を省いたときの作業ディレクトリ。クローンの `cwd`
-   * （人格データの置き場）とは別物で、こちらは実プロジェクト側である。
-   */
-  managerCwd?: string;
-  /** 主にテスト用。マネージャー子プロセスへ渡す環境変数の素。 */
-  managerEnv?: NodeJS.ProcessEnv;
-  /** 記憶ストアへ到達する鍵。マネージャー子プロセスの環境変数から伏せる。 */
-  withheldEnvKeys?: readonly string[];
+  runners?: RunnerRegistry;
   /**
    * SDK のセッション永続化先（M4）。クローンとマネージャーの生ログを同じ
    * PostgreSQL へ載せる。渡さなければローカルディスクのまま（M1〜M3 と同じ）。
@@ -133,17 +129,7 @@ class Clone implements CloneHost {
   #sawInit = false;
 
   constructor(options: CloneOptions) {
-    const {
-      stores,
-      queryFn,
-      cwd,
-      managerQueryFn,
-      managerCwd,
-      managerEnv,
-      withheldEnvKeys,
-      sessionStore,
-      managers,
-    } = options;
+    const { stores, queryFn, cwd, runners, sessionStore, managers } = options;
     this.#stores = stores;
     this.#queryFn = queryFn ?? query;
     this.#cwd = cwd;
@@ -154,11 +140,7 @@ class Clone implements CloneHost {
         stores,
         // マネージャーからの報告・質問も、人間の発言と同じ受信箱を通る。
         post: (event) => this.post(event),
-        ...(managerQueryFn === undefined ? {} : { queryFn: managerQueryFn }),
-        ...(managerCwd === undefined ? {} : { defaultCwd: managerCwd }),
-        ...(managerEnv === undefined ? {} : { env: managerEnv }),
-        ...(withheldEnvKeys === undefined ? {} : { withheldEnvKeys }),
-        ...(sessionStore === undefined ? {} : { sessionStore }),
+        runners: runners ?? createRunnerRegistry([]),
       });
     void this.#pump();
   }

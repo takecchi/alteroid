@@ -7,18 +7,23 @@ import { serve } from '@hono/node-server';
 
 import {
   createClone,
+  createLocalRunner,
+  createRunnerRegistry,
   createScheduler,
   dailyReportEvent,
   missingDailyReportDates,
+  type RunnerClient,
 } from '@alteroid/core';
 
 import { createApp } from './app.js';
+import { createHttpRunner } from './runner-client.js';
 import { clearRuntimeInfo, writeRuntimeInfo } from './runtime.js';
 import { buildSchedule, readScheduleConfig } from './schedule.js';
 import { openStorage } from './storage.js';
 
 export { createApp, type AppDeps, type AppType } from './app.js';
 export { openStorage, DATABASE_URL_ENV, type Storage } from './storage.js';
+export { createHttpRunner, type HttpRunnerOptions } from './runner-client.js';
 export {
   buildSchedule,
   readScheduleConfig,
@@ -45,6 +50,25 @@ export {
 const DEFAULT_BIND = '127.0.0.1';
 
 /**
+ * 委譲先を開く。
+ *
+ * `ALTEROID_RUNNER_URL` があれば、そこが manager-runner である（コンテナ構成）。
+ * 無ければ同一プロセスの runner に落とす — `alteroid chat` を叩くだけで使える
+ * というローカルの体験を、分離のために壊さないため。
+ */
+async function openRunner(workspace: string, withheldEnvKeys: string[]): Promise<RunnerClient> {
+  const url = process.env.ALTEROID_RUNNER_URL;
+  if (url !== undefined && url.length > 0) {
+    return createHttpRunner({ baseUrl: url });
+  }
+  return createLocalRunner({
+    runnerId: 'runner-local',
+    workspacePath: workspace,
+    withheldEnvKeys,
+  });
+}
+
+/**
  * alteroidd — 常駐デーモン。
  *
  * 常駐は自律の前提であり、後から足す機能ではない（PRD）。M1 の時点で人間が
@@ -64,12 +88,16 @@ export async function main(): Promise<void> {
   // クローンが `manager_start` に cwd を渡せば、そのつど別の場所も使える。
   const workspace = process.env.ALTEROID_WORKSPACE || process.cwd();
 
+  // 委譲先（manager-runner）。**別プロセスが既定**である — 同じ器で走らせる限り、
+  // マネージャーは `/proc/1/environ` からデーモンの環境変数＝記憶ストアの鍵に届く。
+  // ローカルで runner を立てていないときだけ、同一プロセスの runner へ落とす
+  // （その場合は既知の穴が残る。塞ぐのはコンテナ構成の役目である）。
+  const runners = createRunnerRegistry([await openRunner(workspace, storage.withheldEnvKeys)]);
+
   const clone = createClone({
     stores,
     cwd: paths.root,
-    managerCwd: workspace,
-    // 記憶ストアへ到達する鍵は子プロセスへ配らない（非対称な可視性）
-    withheldEnvKeys: storage.withheldEnvKeys,
+    runners,
     ...(storage.sessionStore === undefined ? {} : { sessionStore: storage.sessionStore }),
   });
   const port = Number(process.env.ALTEROID_PORT ?? '4517');

@@ -20,6 +20,7 @@ COPY packages/core/package.json packages/core/
 COPY packages/storage-fs/package.json packages/storage-fs/
 COPY packages/storage-pg/package.json packages/storage-pg/
 COPY apps/daemon/package.json apps/daemon/
+COPY apps/runner/package.json apps/runner/
 COPY apps/cli/package.json apps/cli/
 RUN pnpm install --frozen-lockfile
 
@@ -29,7 +30,7 @@ RUN pnpm build
 
 FROM node:22-bookworm-slim AS runtime
 
-# マネージャーが人間と同じ手つきで作業するための素の道具
+# マネージャーが人間と同じ手つきで作業するための素の道具（runner で使う）
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates git ripgrep curl \
   && rm -rf /var/lib/apt/lists/*
@@ -47,6 +48,7 @@ COPY packages/core/package.json packages/core/
 COPY packages/storage-fs/package.json packages/storage-fs/
 COPY packages/storage-pg/package.json packages/storage-pg/
 COPY apps/daemon/package.json apps/daemon/
+COPY apps/runner/package.json apps/runner/
 COPY apps/cli/package.json apps/cli/
 RUN pnpm install --prod --frozen-lockfile
 
@@ -54,12 +56,14 @@ COPY --from=build /app/packages/core/dist packages/core/dist
 COPY --from=build /app/packages/storage-fs/dist packages/storage-fs/dist
 COPY --from=build /app/packages/storage-pg/dist packages/storage-pg/dist
 COPY --from=build /app/apps/daemon/dist apps/daemon/dist
+COPY --from=build /app/apps/runner/dist apps/runner/dist
 COPY --from=build /app/apps/cli/dist apps/cli/dist
 
 # `docker compose exec app alteroid chat` で入れるようにする。CLI はデーモンへの
 # 薄いクライアントであり、コンテナの中から脳に接続する手段である。
 RUN ln -sf /app/apps/cli/dist/index.js /usr/local/bin/alteroid \
-  && chmod +x /app/apps/cli/dist/index.js /app/apps/daemon/dist/index.js
+  && chmod +x /app/apps/cli/dist/index.js /app/apps/daemon/dist/index.js \
+    /app/apps/runner/dist/index.js
 
 # 人格データの置き場（pg 構成では state だけがここに残る）と、マネージャーの
 # 作業ディレクトリ。**別々に持つ。** 記憶と実プロジェクトを同じ場所に置くと、
@@ -72,7 +76,11 @@ RUN mkdir -p /data/alteroid /workspace \
 # 待ち受けは 127.0.0.1 のまま（既定）。コンテナの外から叩きたい場合は
 # ALTEROID_BIND を開けたうえで、手前に境界（認証・トンネル）を置くこと。
 ENV ALTEROID_PORT=4517
+ENV ALTEROID_RUNNER_PORT=4518
 
 USER node
 
+# 同じ像から2つの役を起こす（compose が command で選ぶ）:
+#   デーモン: node apps/daemon/dist/index.js   ← 記憶ストアの鍵を持つ
+#   runner  : node apps/runner/dist/index.js   ← **鍵を持たない**。SDK を隔離して走らせる
 CMD ["node", "apps/daemon/dist/index.js"]

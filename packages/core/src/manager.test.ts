@@ -18,6 +18,8 @@ import {
   createManagerPool,
   type ManagerPool,
 } from './manager.js';
+import { createLocalRunner } from './runner-local.js';
+import { createRunnerRegistry, type RunnerClient } from './runner-protocol.js';
 import type { InboxEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
@@ -156,24 +158,46 @@ interface Setup {
   stores: Stores;
   sessions: FakeSession[];
   inbox: InboxEvent[];
+  runner: RunnerClient;
 }
 
+interface SetupOptions {
+  stores?: Stores;
+  withheldEnvKeys?: readonly string[];
+  /** 差し替えると runner ごと入れ替えられる（HTTP 越しの検証に使う）。 */
+  runner?: RunnerClient;
+}
+
+/**
+ * デーモン側のプール＋同一プロセスの runner。
+ *
+ * SDK を握るのは runner なので、偽の `query` は runner に渡す。デーモンは
+ * `RunnerRegistry` しか知らない（固定 URL も runner の内部も前提にしない）。
+ */
 function setup(
   env: NodeJS.ProcessEnv = { PATH: '/usr/bin', ALTEROID_HOME: '/secret' },
-  extra: Partial<Parameters<typeof createManagerPool>[0]> = {},
+  options: SetupOptions = {},
 ): Setup {
   const { fn, sessions } = fakeSdk();
-  const stores = extra.stores ?? createMemoryStores();
+  const stores = options.stores ?? createMemoryStores();
   const inbox: InboxEvent[] = [];
+  const runner =
+    options.runner ??
+    createLocalRunner({
+      runnerId: 'runner-test',
+      workspacePath: '/work/project',
+      queryFn: fn,
+      env,
+      ...(options.withheldEnvKeys === undefined
+        ? {}
+        : { withheldEnvKeys: options.withheldEnvKeys }),
+    });
   const pool = createManagerPool({
-    queryFn: fn,
-    post: (event) => inbox.push(event),
-    defaultCwd: '/work/project',
-    env,
-    ...extra,
     stores,
+    post: (event) => inbox.push(event),
+    runners: createRunnerRegistry([runner]),
   });
-  return { pool, stores, sessions, inbox };
+  return { pool, stores, sessions, inbox, runner };
 }
 
 describe('マネージャー', () => {
@@ -366,7 +390,7 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
-  it('manager_id と SDK の session_id の対応が JobStore に残る（M4 の resume の足がかり）', async () => {
+  it('manager_id → runner_id → session_id → workspace が JobStore に残る（resume の足がかり）', async () => {
     const s = setup();
     const { managerId } = await s.pool.start({ request: '直して' });
 
@@ -375,13 +399,20 @@ describe('マネージャー', () => {
       .toBe('sess-mgr');
 
     const job = (await s.stores.jobs.listJobs())[0];
-    expect(job).toMatchObject({ id: managerId, request: '直して', cwd: '/work/project' });
+    expect(job).toMatchObject({
+      id: managerId,
+      request: '直して',
+      cwd: '/work/project',
+      // 宛先（どの runner か）と workspace の所在まで残す。ここが欠けると、
+      // runner が増えた瞬間に manager_send の宛先が決まらない。
+      runnerId: 'runner-test',
+      workspace: { kind: 'runner-volume', runnerId: 'runner-test', path: '/work/project' },
+    });
 
-    // 生ログへの入口も残る（可観測性の最下段へ降りるため）
+    // **runner のローカルパスは台帳に持たない。** 生ログへは runner の API か、
+    // 預かったアーカイブ／セッションから降りる（デーモンは runner の中を仮定しない）。
     await (s.sessions[0] as FakeSession).usedTool('Read');
-    await expect
-      .poll(async () => (await s.stores.jobs.listJobs())[0]?.transcriptPath, { timeout: 2000 })
-      .toBe('/tmp/does-not-exist.jsonl');
+    expect(job).not.toHaveProperty('transcriptPath');
 
     await s.pool.stop();
   });
@@ -558,16 +589,23 @@ describe('デーモン再起動後（M4）', () => {
     lastReport: 'スキーマまで書いた',
   };
 
-  it('走行中だったマネージャーを台帳から拾い、クローンへ知らせる（受け入れ基準2）', async () => {
+  it('走行中だったマネージャーを実際に resume し、続きを進めさせる（受け入れ基準2）', async () => {
+    // **開き直すだけでは足りない。** 人間の不在で止まってよいのは承認待ちの仕事
+    // だけであり（PRD「自律」）、器が落ちたことを理由に止まったままにはしない。
+    // 「話しかけられるまで待つ」形にすると、自律運転中の再起動で仕事が永久に止まる。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const s = setup(undefined, { stores });
 
     const restored = await s.pool.restore();
 
-    // 拾い直しただけでは子プロセスを起こさない（起動のたびに全部起こさない）
-    expect(s.sessions).toHaveLength(0);
     expect(restored.map((m) => m.managerId)).toEqual(['mgr-old']);
+    // session_id から SDK セッションが起き、続きの指示まで届いている
+    expect(s.sessions).toHaveLength(1);
+    expect((s.sessions[0] as FakeSession).options.resume).toBe('sess-before-restart');
+    await expect
+      .poll(() => (s.sessions[0] as FakeSession).inputs, { timeout: 2000 })
+      .toEqual(['[system] デーモンが再起動した。中断していた作業の続きを進めよ。']);
 
     // クローンが「続きがある」ことを知る経路は受信箱ただ1つ
     const notice = s.inbox.find((event) => event.type === 'manager_message');
@@ -575,33 +613,50 @@ describe('デーモン再起動後（M4）', () => {
     expect((notice as { text: string }).text).toContain('DB の移行をやって');
     expect((notice as { text: string }).text).toContain('スキーマまで書いた');
 
-    // 一覧では「話しかけられる」状態として見える（手は止まっている＝待機）
+    // 一覧では走行中に戻っている（止まったまま live: true に見せない）
     const listed = (await s.pool.list()).find((m) => m.managerId === 'mgr-old');
-    expect(listed).toMatchObject({ live: true, status: 'done', sessionId: 'sess-before-restart' });
+    // resume 後のセッション id は SDK が返す新しいもので上書きされる
+    // （次の再起動でもそこから戻れるように、台帳は常に最新の id を持つ）。
+    expect(listed).toMatchObject({ live: true, status: 'running', runnerId: 'runner-test' });
 
     await s.pool.stop();
   });
 
-  it('話しかけた時に session_id から resume する', async () => {
+  it('返事待ちだったマネージャーには、確認が失われたことを伝えて再開させる', async () => {
+    // 待っていた確認は器と一緒に消えている。黙って再開させると、マネージャーは
+    // 返ってこない返事を待ち続ける。
     const stores = createMemoryStores();
-    await stores.jobs.putJob(runningJob);
+    await stores.jobs.putJob({ ...runningJob, status: 'waiting_human' });
     const s = setup(undefined, { stores });
+
     await s.pool.restore();
 
-    const result = await s.pool.send('mgr-old', '続きをやって');
-
-    expect(result.outcome).toBe('delivered');
-    expect(s.sessions).toHaveLength(1);
-    expect((s.sessions[0] as FakeSession).options.resume).toBe('sess-before-restart');
     await expect
-      .poll(() => (s.sessions[0] as FakeSession).inputs, { timeout: 2000 })
-      .toEqual(['続きをやって']);
-
-    // 二度目は同じセッションのまま（resume を繰り返さない）
-    await s.pool.send('mgr-old', 'もう一つ');
-    expect(s.sessions).toHaveLength(1);
+      .poll(() => (s.sessions[0] as FakeSession).inputs.join(''), { timeout: 2000 })
+      .toContain('待っていた確認は器と一緒に失われている');
 
     await s.pool.stop();
+  });
+
+  it('runner に生きているセッションは resume せず、繋ぎ直すだけ（二重に起こさない）', async () => {
+    // デーモンだけが再起動した場合、マネージャーは runner の中で手を動かし続けて
+    // いる。ここで resume すると、走っているセッションを二重に起こすことになる。
+    const stores = createMemoryStores();
+    const first = setup(undefined, { stores });
+    const { managerId } = await first.pool.start({ request: '長い仕事' });
+
+    // 同じ runner に別のデーモンが繋ぎ直す（＝デーモンだけが入れ替わった。
+    // runner は別プロセスなので、デーモンが消えてもセッションは生きている）。
+    const second = setup(undefined, { stores, runner: first.runner });
+    const restored = await second.pool.restore();
+
+    expect(restored.map((m) => m.managerId)).toEqual([managerId]);
+    // セッションは増えていない（resume していない）
+    expect(first.sessions).toHaveLength(1);
+    const notice = second.inbox.find((event) => event.type === 'manager_message');
+    expect((notice as { text: string }).text).toContain('runner の中で走り続けている');
+
+    await second.pool.stop();
   });
 
   it('待機中だった仕事は黙って引き取る（報告はしないが、話しかければ続く）', async () => {
@@ -613,6 +668,7 @@ describe('デーモン再起動後（M4）', () => {
 
     expect(await s.pool.restore()).toEqual([]);
     expect(s.inbox).toEqual([]);
+    expect(s.sessions).toHaveLength(0);
 
     expect((await s.pool.send('mgr-done', 'まだ続きがある')).outcome).toBe('delivered');
     expect((s.sessions[0] as FakeSession).options.resume).toBe('sess-before-restart');
@@ -632,10 +688,10 @@ describe('デーモン再起動後（M4）', () => {
     await s.pool.stop();
   });
 
-  it('セッションの生ログを SessionStore へ預け、そこから生ログへ降りられる', async () => {
-    // コンテナのディスクは再起動で消える。ローカルのファイルもアーカイブも無い
-    // 状態で manager_id から生ログへ降りられないなら、可観測性の最下段が
-    // クラウドでだけ欠ける（＝デグレード）。
+  it('生ログは runner からデーモンへ上がり、そこから降りられる', async () => {
+    // **runner は記憶ストアの鍵を持たない。** だから生ログを永続化するのは
+    // デーモンであり、runner は預けるだけである。ここが切れると、器を作り直した
+    // 後に manager_id から生ログへ降りられない（可観測性の最下段の欠落）。
     const appended: { projectKey: string; entries: unknown[] }[] = [];
     const sessionStore = {
       append: async (key: { projectKey: string }, entries: unknown[]) => {
@@ -646,21 +702,22 @@ describe('デーモン再起動後（M4）', () => {
           ? [{ type: 'user', uuid: 'u1' }]
           : null,
     };
-    const s = setup(undefined, { sessionStore });
+    const stores = { ...createMemoryStores(), sessionStore };
+    const s = setup(undefined, { stores });
     const { managerId } = await s.pool.start({ request: '調べて' });
 
-    // SDK には包んだものを渡す（預けた本人が projectKey を控えるため）
+    // runner 側の SDK が生ログを預けると、デーモンの側に落ちる
     const passed = (s.sessions[0] as FakeSession).options.sessionStore as typeof sessionStore;
     expect(passed).toBeDefined();
     await passed.append({ projectKey: 'proj-key' }, [{ type: 'user', uuid: 'u1' }]);
-    expect(appended).toHaveLength(1);
+    await expect.poll(() => appended.length, { timeout: 2000 }).toBe(1);
 
-    // 控えた projectKey は台帳に残る（再起動を跨いで引き当てるため）
+    // 生ログを引き当てる鍵（projectKey）も台帳に残る
     await expect
       .poll(async () => (await s.stores.jobs.listJobs())[0]?.projectKey, { timeout: 2000 })
       .toBe('proj-key');
 
-    // ファイルもアーカイブも無いが、生ログは DB から返る
+    // runner のファイルもアーカイブも無いが、預けた生ログから返せる
     expect(await s.pool.transcript(managerId)).toBe('{"type":"user","uuid":"u1"}\n');
 
     await s.pool.stop();

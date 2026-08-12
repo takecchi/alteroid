@@ -53,6 +53,31 @@ export {
   type ManagerStartInput,
   type ManagerSummary,
 } from './manager.js';
+/**
+ * manager-runner 側（SDK を隔離して走らせる層）と、その境界。
+ * デーモンは `RunnerRegistry` しか見ない — 固定 URL も runner のローカルパスも
+ * 前提にしない（docs/architecture.md「プロセス境界」）。
+ */
+export { createRunnerHost, type RunnerHost, type RunnerHostOptions } from './runner.js';
+export { createLocalRunner, type LocalRunnerOptions } from './runner-local.js';
+export {
+  createRunnerRegistry,
+  runnerAnswerCommandSchema,
+  runnerEventSchema,
+  runnerManagerStateSchema,
+  runnerMessageCommandSchema,
+  runnerResumeCommandSchema,
+  runnerStartCommandSchema,
+  runnerWaitingSchema,
+  type RunnerAnswerCommand,
+  type RunnerClient,
+  type RunnerEvent,
+  type RunnerManagerState,
+  type RunnerRegistry,
+  type RunnerResumeCommand,
+  type RunnerStartCommand,
+  type RunnerWaiting,
+} from './runner-protocol.js';
 export {
   CLONE_ALLOWED_TOOLS,
   CLONE_TOOL_NAMES,

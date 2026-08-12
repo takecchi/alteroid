@@ -1,62 +1,26 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
 
-import { query } from '@anthropic-ai/claude-agent-sdk';
-import type {
-  Options,
-  PermissionResult,
-  Query,
-  SDKMessage,
-  SDKUserMessage,
-  SessionStore,
-} from '@anthropic-ai/claude-agent-sdk';
-
-import { buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
-import type { InboxEvent, Job, JobStatus, JournalEntryInput } from './schema.js';
+import type { RunnerClient, RunnerEvent, RunnerRegistry } from './runner-protocol.js';
+import { brief } from './runner.js';
+import type { InboxEvent, Job, JobStatus, JournalEntryInput, WorkspaceLocator } from './schema.js';
 import type { Stores } from './store.js';
 
 /**
- * マネージャーと作業者（docs/architecture.md「プロセスモデル」「配線」）。
+ * 委譲のデーモン側（docs/architecture.md「配線」）。
  *
- * **マネージャーと作業者は実装物ではない。** どちらも実体は Claude Code そのもので
- * あり、ここに書くのは配線だけ — 起こす・話しかける・クローンへ回す・日誌に落とす。
+ * SDK を動かすのはここではない。**マネージャーは manager-runner の中で走り**、
+ * ここがするのは「どの runner へ命じるか」「返ってきた出来事をどう記録し、
+ * クローンの受信箱へどう回すか」だけである。
  *
- * ここは2つの禁止（north_star）がまともに効く場所である:
+ * 分けた理由は認証情報の配布範囲である。同じ器で走らせる限り、マネージャーは
+ * `/proc/1/environ` からデーモンの環境変数＝記憶ストアの鍵に届いてしまう。
+ * ツールを削って塞ぐのは禁止（north_star 禁止2）なので、実行環境を分ける。
  *
- * - `tools` を**渡さない**（preset 全部）。明示リストで絞った瞬間に能力の削除になる
- * - `maxTurns` を渡さない。暴走はターン数ではなく実行環境の境界で止める
- * - 同時数に人工上限を設けない。上限はマシンリソースそのもの
- * - `permissionMode` を触らない。人間が Claude Code を開いたときと同じ既定のまま、
- *   確認は `canUseTool` でクローンへ回す（人間 → Claude Code の対話の写像）
+ * 記録（日誌・ジョブ台帳・アーカイブ・セッションの生ログ）は**すべてこちら側**に
+ * 残る。runner は記憶へ到達する鍵を持たないので、書けるのはデーモンだけである。
  */
 
-/** マネージャーのモデル帯。変更には人間の承認が要る（AGENTS.md 地雷5）。 */
-export const MANAGER_MODEL = 'opus';
-
-/** 作業者のモデル帯。SDK の既定はマネージャーの継承なので、必ず明示する。 */
-export const WORKER_MODEL = 'sonnet';
-
-/** 作業者層の本体はこの `agents` 定義1個だけ。独自のワーカープールを作らない。 */
-export const WORKER_AGENT_NAME = 'worker';
-
-/**
- * マネージャー子プロセスへ渡さない環境変数。
- *
- * 上向きの不可視は、ツールを絞ってではなく**認証情報の配布範囲**で守る
- * （architecture.md「非対称な可視性」）。ローカルでは同一ユーザーで動く以上
- * 既知の穴が残る（マネージャーは Bash で `~/.alteroid/` を読めてしまう）。
- * その穴をツール削除で塞がないこと。
- *
- * クラウド構成ではここが本命になる。記憶が PostgreSQL にあるなら、**接続情報を
- * 渡さない限り到達経路が存在しない** — 実行環境の境界だけで強制が成立する
- * （roadmap M4 の受け入れ基準3）。実際に伏せる鍵はデーモンが
- * `withheldEnvKeys` で足す（記憶ストアの所在を決めるのはデーモンだから）。
- */
-export const WITHHELD_ENV_KEYS = [
-  'ALTEROID_HOME',
-  'ALTEROID_PORT',
-  'ALTEROID_DATABASE_URL',
-] as const;
+export { MANAGER_MODEL, WORKER_MODEL, WORKER_AGENT_NAME, WITHHELD_ENV_KEYS } from './runner.js';
 
 export interface ManagerStartInput {
   request: string;
@@ -70,9 +34,8 @@ export interface ManagerSummary {
   /**
    * このデーモンから話しかけられるか。
    *
-   * 再起動を跨いで台帳から拾い直した分も `true` になる（`manager_send` で
-   * session_id から resume する）。台帳にしか残っていない — 例えばセッションを
-   * 持たずに終わった — ものだけが `false`。
+   * 再起動を跨いで台帳から拾い直した分も `true` になる（宛先の runner が居て、
+   * session_id から resume できる）。宛先を失ったものだけが `false`。
    */
   live: boolean;
   cwd: string;
@@ -81,6 +44,9 @@ export interface ManagerSummary {
   updatedAt: string;
   sessionId?: string;
   lastReport?: string;
+  /** どの runner で走っているか（`manager_id → runner_id` の対応）。 */
+  runnerId?: string;
+  workspace?: WorkspaceLocator;
   /**
    * 返事待ちで止まっている件。
    *
@@ -116,8 +82,8 @@ export interface ManagerPool {
   /** manager_id からセッションの生ログへ降りる（可観測性の最下段）。 */
   transcript(managerId: string): Promise<string | null>;
   /**
-   * デーモン再起動時に、走行中だったマネージャーを台帳から拾い直す（roadmap M4）。
-   * 戻り値は拾い直した分の一覧。
+   * デーモン起動時に、走行中だったマネージャーを台帳と runner から拾い直す。
+   * 戻り値は「中断されていて実際に resume した」分。
    */
   restore(): Promise<ManagerSummary[]>;
   stop(): Promise<void>;
@@ -127,847 +93,554 @@ export interface ManagerPoolOptions {
   stores: Stores;
   /** マネージャーからの出来事をクローンの受信箱へ流す。 */
   post: (event: InboxEvent) => void;
-  /** 主にテスト用。既定は SDK の `query`。 */
-  queryFn?: typeof query;
-  /** `cwd` を省いた委譲の既定の作業ディレクトリ。 */
-  defaultCwd?: string;
-  /** 主にテスト用。既定は `process.env`。 */
-  env?: NodeJS.ProcessEnv;
-  /**
-   * `WITHHELD_ENV_KEYS` に足して伏せる環境変数。
-   * デーモンが記憶ストアへ到達するのに使った鍵をここで塞ぐ。
-   */
-  withheldEnvKeys?: readonly string[];
-  /**
-   * SDK のセッション永続化先（M4）。渡すとマネージャーの生ログが同じ
-   * PostgreSQL に載り、器を作り直しても走行中だったセッションへ戻れる。
-   */
-  sessionStore?: SessionStore;
+  /** runner の名簿。宛先の決定はここを通す（固定 URL を前提にしない）。 */
+  runners: RunnerRegistry;
 }
 
 export function createManagerPool(options: ManagerPoolOptions): ManagerPool {
   return new Pool(options);
 }
 
-/** 返事を待って止まっている1件（許可確認 or 質問）。 */
-interface PendingRequest {
-  id: string;
-  kind: 'question' | 'permission';
-  toolName: string;
-  input: Record<string, unknown>;
-  summary: string;
-  settle: (answer: { message: string; decision?: ManagerDecision }) => void;
-  /** 同じ確認が再送されたときに同じ結果を返すための約束（SDK は再送しうる）。 */
-  result: Promise<PermissionResult>;
+/** デーモン側が持つ1マネージャーの像（正本は JobStore）。 */
+interface ManagerRecord {
+  job: Job;
+  waiting: { requestId: string; summary: string }[];
+  /** runner に生きたセッションがあるか。無ければ send のときに resume する。 */
+  attached: boolean;
 }
 
 class Pool implements ManagerPool {
   readonly #stores: Stores;
   readonly #post: (event: InboxEvent) => void;
-  readonly #queryFn: typeof query;
-  readonly #defaultCwd: string;
-  readonly #env: NodeJS.ProcessEnv;
-  readonly #withheldEnvKeys: readonly string[];
-  readonly #sessionStore: SessionStore | undefined;
-  readonly #sessions = new Map<string, ManagerSession>();
+  readonly #runners: RunnerRegistry;
+  readonly #records = new Map<string, ManagerRecord>();
+  #connected = false;
   #stopped = false;
 
-  constructor({
-    stores,
-    post,
-    queryFn,
-    defaultCwd,
-    env,
-    withheldEnvKeys,
-    sessionStore,
-  }: ManagerPoolOptions) {
+  constructor({ stores, post, runners }: ManagerPoolOptions) {
     this.#stores = stores;
     this.#post = post;
-    this.#queryFn = queryFn ?? query;
-    this.#defaultCwd = defaultCwd ?? process.cwd();
-    this.#env = env ?? process.env;
-    this.#withheldEnvKeys = [...WITHHELD_ENV_KEYS, ...(withheldEnvKeys ?? [])];
-    this.#sessionStore = sessionStore;
+    this.#runners = runners;
   }
 
-  #sessionOptions(): Omit<ManagerSessionOptions, 'managerId' | 'request' | 'cwd'> {
-    return {
-      stores: this.#stores,
-      post: this.#post,
-      queryFn: this.#queryFn,
-      env: this.#env,
-      withheldEnvKeys: this.#withheldEnvKeys,
-      ...(this.#sessionStore === undefined ? {} : { sessionStore: this.#sessionStore }),
-    };
-  }
+  // -------------------------------------------------------------------------
+  // 委譲
+  // -------------------------------------------------------------------------
 
   async start(input: ManagerStartInput): Promise<ManagerSummary> {
     if (this.#stopped) throw new Error('デーモンが停止中のためマネージャーを起こせない');
+    await this.#ensureConnected();
 
-    const managerId = `mgr-${randomUUID().slice(0, 8)}`;
-    const session = new ManagerSession({
-      managerId,
-      request: input.request,
-      cwd: input.cwd ?? this.#defaultCwd,
-      ...this.#sessionOptions(),
+    const runner = await this.#runners.select({
+      ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
     });
-    this.#sessions.set(managerId, session);
+    const managerId = `mgr-${randomUUID().slice(0, 8)}`;
+    const cwd = input.cwd ?? runner.workspacePath;
+    const at = new Date().toISOString();
 
-    // 委譲はノンブロッキング。起動して即返し、クローンは次の判断へ移る。
+    const record: ManagerRecord = {
+      job: {
+        id: managerId,
+        managerId,
+        createdAt: at,
+        updatedAt: at,
+        status: 'running',
+        summary: brief({ request: input.request }),
+        request: input.request,
+        cwd,
+        runnerId: runner.runnerId,
+        workspace: { kind: 'runner-volume', runnerId: runner.runnerId, path: cwd },
+      },
+      waiting: [],
+      attached: true,
+    };
+    this.#records.set(managerId, record);
+
+    // 委譲はノンブロッキング。起こして即返し、クローンは次の判断へ移る。
     try {
-      await session.begin();
+      await runner.start({ managerId, request: input.request, cwd });
     } catch (error) {
-      // 起こせなかったものを一覧に残さない。残すと「走っている」と見えるのに
-      // 誰も読まない入力待ち行列へ、クローンが指示を送り続けることになる。
-      this.#sessions.delete(managerId);
+      // 起こせなかったものを一覧に残さない。残すと「走っている」と見えるのに、
+      // 誰も読まない相手へクローンが指示を送り続けることになる。
+      this.#records.delete(managerId);
       throw error;
     }
-    return session.summary();
+
+    await this.#persist(record);
+    await this.#journal({
+      type: 'exchange',
+      with: 'manager',
+      role: 'outbound',
+      text: `[${managerId}] ${input.request}`,
+    });
+    return summaryOf(record);
   }
 
+  /**
+   * クローンからの一言。止まっている確認があればその回答として使い、無ければ
+   * 追加指示として流す（architecture.md「会話に戻れる」）。
+   *
+   * **宛先を推測しない。** 1本のマネージャーが複数の確認を同時に待つことがあり、
+   * そこで先頭に入れてしまうと、拒否のつもりの一言が別の質問の答えになる。
+   */
   async send(
     managerId: string,
     message: string,
     options: ManagerSendOptions = {},
   ): Promise<ManagerSendResult> {
-    const session = this.#sessions.get(managerId);
-    if (!session) {
-      const known = await this.#stores.jobs.listJobs();
-      const stale = known.some((job) => job.id === managerId);
+    await this.#ensureConnected();
+
+    const record = this.#records.get(managerId) ?? (await this.#load(managerId));
+    if (!record) {
+      return { outcome: 'unknown', detail: `${managerId} というマネージャーは居ない。` };
+    }
+
+    const runner = await this.#runnerOf(record);
+    if (!runner) {
       return {
         outcome: 'unknown',
-        detail: stale
-          ? `${managerId} のセッションはこのデーモンでは生きていない。新しく起こし直すこと。`
-          : `${managerId} というマネージャーは居ない。`,
+        detail:
+          `${managerId} を走らせていた runner（${record.job.runnerId ?? '不明'}）が居ない。` +
+          '別の runner で続きを起こすには workspace の移送が要る。',
       };
     }
-    return session.send(message, options);
-  }
 
-  async list(): Promise<ManagerSummary[]> {
-    const live = new Map<string, ManagerSummary>();
-    for (const session of this.#sessions.values()) {
-      const summary = session.summary();
-      live.set(summary.managerId, summary);
-    }
-
-    // デーモン再起動を跨いだ分も見えるようにする（セッションは死んでいる）。
-    for (const job of await this.#stores.jobs.listJobs()) {
-      if (live.has(job.id)) continue;
-      live.set(job.id, {
-        managerId: job.id,
-        status: job.status,
-        live: false,
-        cwd: job.cwd ?? '',
-        request: job.request ?? job.summary,
-        startedAt: job.createdAt,
-        updatedAt: job.updatedAt,
-        // セッションが居ない以上、待っているものも生きていない
-        waiting: [],
-        ...(job.sessionId === undefined ? {} : { sessionId: job.sessionId }),
-        ...(job.lastReport === undefined ? {} : { lastReport: job.lastReport }),
-      });
-    }
-
-    return [...live.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
-  }
-
-  /**
-   * デーモン再起動後、走行中だったマネージャーを台帳から拾い直す。
-   *
-   * **ここで子プロセスを一斉に起こさない。** resume は `manager_send` の時に行う
-   * （SDK の `resume` に session_id を渡す）。人間が PC を再起動したあと、開いて
-   * いた Claude Code の窓は閉じており、続けたいものだけを開き直すのと同じ写像で
-   * ある。起動と同時に全部起こすのは、人間がやらないことを機械的にやる形になる。
-   *
-   * 拾い直した分はクローンの受信箱へ報告として流す。**知らせないと、走っていた
-   * 仕事はクローンから見て消える** — 受け入れ基準2（再起動後、走行中だった
-   * マネージャーの続きを把握している）はここで満たす。
-   */
-  async restore(): Promise<ManagerSummary[]> {
-    if (this.#stopped) return [];
-
-    const restored: ManagerSummary[] = [];
-    for (const job of await this.#stores.jobs.listJobs()) {
-      if (job.sessionId === undefined) continue;
-      if (this.#sessions.has(job.id)) continue;
-
-      const session = new ManagerSession({
-        managerId: job.id,
-        request: job.request ?? job.summary,
-        cwd: job.cwd ?? this.#defaultCwd,
-        ...this.#sessionOptions(),
-        restoreFrom: job,
-      });
-      this.#sessions.set(job.id, session);
-
-      // **セッションを持つ仕事は状態を問わず引き取る。** `done` は死ではなく待機
-      // であり（jobStatus の定義）、人間が窓を開いたままにしておくのと同じで
-      // 話しかければ続く。ここで `running` だけを拾うと、一度再起動を跨いだ仕事は
-      // 二度目の再起動で resume できなくなる。
-      if (job.status !== 'running' && job.status !== 'waiting_human') continue;
-
-      // 知らせるのは、手を動かしている最中に器が落ちた分だけ。待機中のものまで
-      // 起動のたびに報告すると、クローンの受信箱が過去の一覧で埋まる。
-      await session.adopt();
-      restored.push(session.summary());
-
-      this.#post({
-        type: 'manager_message',
-        id: randomUUID(),
-        at: new Date().toISOString(),
-        managerId: job.id,
-        kind: 'report',
-        text: [
-          'デーモンが再起動した。この委譲は再起動前から続いている。',
-          `依頼: ${job.request ?? job.summary}`,
-          `作業ディレクトリ: ${job.cwd ?? this.#defaultCwd}`,
-          `再起動前の状態: ${job.status === 'waiting_human' ? '返事待ち' : '作業中'}`,
-          job.lastReport === undefined ? '' : `直近の報告: ${job.lastReport}`,
-          '',
-          '`manager_send` で話しかければ、このセッションの続きから再開する。',
-          '返事待ちだったなら、その確認は再起動で失われている。何を待っていたかは' +
-            '日誌（escalation）と生ログで辿れる。必要なら聞き直させること。',
-        ]
-          .filter((line) => line !== '')
-          .join('\n'),
-      });
-    }
-    return restored;
-  }
-
-  async transcript(managerId: string): Promise<string | null> {
-    const job = (await this.#stores.jobs.listJobs()).find((entry) => entry.id === managerId);
-    if (!job) return null;
-
-    // 走行中のセッションはまだファイルの上にいる。無ければ退避済みへ降りる。
-    if (job.transcriptPath !== undefined) {
-      try {
-        return await readFile(job.transcriptPath, 'utf8');
-      } catch {
-        // 消えていればアーカイブへ
-      }
-    }
-    for (const id of [...(job.archiveIds ?? [])].reverse()) {
-      const body = await this.#stores.archive.read(id);
-      if (body !== null) return body;
-    }
-
-    // 最後の砦。コンテナが強制終了されるとローカルのファイルも退避も無いが、
-    // 生ログ自体は SessionStore に載っている。**見えるはずのものが器の都合で
-    // 見えない状態を作らない**（PRD「可観測性」）。
-    return this.#fromSessionStore(job);
-  }
-
-  async #fromSessionStore(job: Job): Promise<string | null> {
-    const store = this.#sessionStore;
-    if (store === undefined || job.sessionId === undefined || job.projectKey === undefined) {
-      return null;
-    }
-    try {
-      const entries = await store.load({
-        projectKey: job.projectKey,
-        sessionId: job.sessionId,
-      });
-      if (entries === null || entries.length === 0) return null;
-      // 生ログの形（1行1 JSON）のまま返す。読む側は fs 由来と区別しなくてよい。
-      return `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`;
-    } catch {
-      return null;
-    }
-  }
-
-  async stop(): Promise<void> {
-    this.#stopped = true;
-    await Promise.all([...this.#sessions.values()].map((session) => session.stop()));
-    this.#sessions.clear();
-  }
-}
-
-interface ManagerSessionOptions {
-  managerId: string;
-  request: string;
-  cwd: string;
-  stores: Stores;
-  post: (event: InboxEvent) => void;
-  queryFn: typeof query;
-  env: NodeJS.ProcessEnv;
-  withheldEnvKeys: readonly string[];
-  sessionStore?: SessionStore;
-  /** デーモン再起動時に台帳から拾い直した状態（resume の素材）。 */
-  restoreFrom?: Job;
-}
-
-class ManagerSession {
-  readonly #id: string;
-  readonly #request: string;
-  readonly #cwd: string;
-  readonly #stores: Stores;
-  readonly #post: (event: InboxEvent) => void;
-  readonly #queryFn: typeof query;
-  readonly #env: NodeJS.ProcessEnv;
-  readonly #withheldEnvKeys: readonly string[];
-  readonly #sessionStore: SessionStore | undefined;
-
-  readonly #startedAt: string;
-  readonly #input: SDKUserMessage[] = [];
-  readonly #pending: PendingRequest[] = [];
-  readonly #archiveIds: string[];
-
-  #inputWaiter: (() => void) | null = null;
-  #query: Query | null = null;
-  #reader: Promise<void> | null = null;
-  #status: JobStatus = 'running';
-  #updatedAt: string;
-  #sessionId: string | undefined;
-  #transcriptPath: string | undefined;
-  #lastReport: string | undefined;
-  #projectKey: string | undefined;
-  #stopped = false;
-  /** 再起動前のセッション。話しかけられた時に、ここから続きへ戻る。 */
-  #resumeFrom: string | undefined;
-
-  constructor(options: ManagerSessionOptions) {
-    this.#id = options.managerId;
-    this.#request = options.request;
-    this.#cwd = options.cwd;
-    this.#stores = options.stores;
-    this.#post = options.post;
-    this.#queryFn = options.queryFn;
-    this.#env = options.env;
-    this.#withheldEnvKeys = options.withheldEnvKeys;
-    this.#sessionStore = options.sessionStore;
-
-    const restored = options.restoreFrom;
-    this.#startedAt = restored?.createdAt ?? new Date().toISOString();
-    this.#updatedAt = restored?.updatedAt ?? this.#startedAt;
-    this.#archiveIds = [...(restored?.archiveIds ?? [])];
-    this.#sessionId = restored?.sessionId;
-    this.#resumeFrom = restored?.sessionId;
-    this.#transcriptPath = restored?.transcriptPath;
-    this.#lastReport = restored?.lastReport;
-    this.#projectKey = restored?.projectKey;
-    // 走っていた・返事を待っていたマネージャーは、器が死んだ時点で手を止めている。
-    // `running` のまま見せると返ってこない報告を待つことになり、`waiting_human`
-    // のまま見せると誰も答えられない行列が残る。どちらも待機（`done`）に直す。
-    // それ以外（`done` / `failed`）は台帳のままが事実である。
-    this.#status =
-      restored === undefined
-        ? 'running'
-        : restored.status === 'running' || restored.status === 'waiting_human'
-          ? 'done'
-          : restored.status;
-  }
-
-  async begin(): Promise<void> {
-    this.#push(this.#request);
-    this.#openQuery();
-    await this.#persist();
-    await this.#journal({
-      type: 'exchange',
-      with: 'manager',
-      role: 'outbound',
-      text: `[${this.#id}] ${this.#request}`,
-    });
-  }
-
-  /**
-   * 再起動前のジョブを引き取ったことを台帳に反映する。
-   *
-   * 状態を `done`（＝待機）へ直すのは、器が死んだ時点でそのマネージャーが手を
-   * 動かしていないからである。`running` のまま残すと、一覧を見たクローンが
-   * 「まだ走っている」と誤解し、返ってこない報告を待ち続ける。
-   */
-  async adopt(): Promise<void> {
-    await this.#persist();
-    await this.#journal({
-      type: 'exchange',
-      with: 'manager',
-      role: 'inbound',
-      text:
-        `[${this.#id}] デーモンが再起動した。` +
-        `session_id ${this.#sessionId ?? '(不明)'} から続きを再開できる。`,
-    });
-  }
-
-  /**
-   * SDK セッションを開く。`#resumeFrom` があれば、そのセッションの続きから。
-   *
-   * 再起動後にここを通るのは**話しかけられた時だけ**である（Pool.restore の
-   * コメント）。resume を先回りして全部起こすと、誰も読まない子プロセスが
-   * 起動のたびに並ぶ。
-   */
-  #openQuery(): void {
-    if (this.#query) return;
-    const resume = this.#resumeFrom;
-    this.#resumeFrom = undefined;
-    const q = this.#queryFn({
-      prompt: this.#inputStream(),
-      options: this.#buildOptions(resume),
-    });
-    this.#query = q;
-    this.#reader = this.#read(q);
-  }
-
-  summary(): ManagerSummary {
-    return {
-      managerId: this.#id,
-      status: this.#status,
-      live: !this.#stopped,
-      cwd: this.#cwd,
-      request: this.#request,
-      startedAt: this.#startedAt,
-      updatedAt: this.#updatedAt,
-      waiting: this.#pending.map((request) => ({
-        requestId: request.id,
-        summary: request.summary,
-      })),
-      ...(this.#sessionId === undefined ? {} : { sessionId: this.#sessionId }),
-      ...(this.#lastReport === undefined ? {} : { lastReport: this.#lastReport }),
-    };
-  }
-
-  /**
-   * クローンからの一言。止まっている確認があればそれへの回答として使い、
-   * 無ければ追加指示として流す（architecture.md「会話に戻れる」）。
-   *
-   * **宛先を推測しない。** 1本のマネージャーが複数の確認を同時に待つことがあり
-   * （1応答で並列に呼ばれた道具）、そこで先頭に入れてしまうと、拒否のつもりの
-   * 一言が別の質問の答えになり、拒否したかった道具は次の一言で通ってしまう。
-   */
-  async send(message: string, options: ManagerSendOptions = {}): Promise<ManagerSendResult> {
     const { decision, requestId } = options;
-
-    const pending = this.#choosePending(requestId);
+    const pending = this.#choosePending(record, requestId);
     if (pending === 'ambiguous') {
       return {
         outcome: 'unknown',
         detail:
-          `${this.#id} は複数の確認を同時に待っている。requestId を指定して答えること: ` +
-          this.#pending.map((request) => `${request.id}（${request.summary}）`).join(' / '),
+          `${managerId} は複数の確認を同時に待っている。requestId を指定して答えること: ` +
+          record.waiting.map((item) => `${item.requestId}（${item.summary}）`).join(' / '),
       };
     }
     if (pending === 'gone') {
       return {
         outcome: 'unknown',
-        detail: `${requestId ?? ''} という確認は ${this.#id} で待っていない（既に解けたか、別のマネージャーのもの）。`,
+        detail: `${requestId ?? ''} という確認は ${managerId} で待っていない（既に解けたか、別のマネージャーのもの）。`,
       };
     }
 
     if (pending) {
-      pending.settle({ message, ...(decision === undefined ? {} : { decision }) });
+      const answered = await runner.answer(managerId, {
+        requestId: pending.requestId,
+        message,
+        ...(decision === undefined ? {} : { decision }),
+      });
+      if (!answered) {
+        return {
+          outcome: 'unknown',
+          detail: `${pending.requestId} は runner 側で既に解けている。`,
+        };
+      }
       // 追記専用なので新しい行。日誌だけを追っても、誰が何と答えたかまで分かる。
       await this.#journal({
         type: 'escalation',
         question: pending.summary,
-        approvalId: pending.id,
-        managerId: this.#id,
+        approvalId: pending.requestId,
+        managerId,
         answeredAt: new Date().toISOString(),
         answer: decision === undefined ? message : `[${decision}] ${message}`,
       });
       return { outcome: 'answered', detail: `${pending.summary} に回答した。` };
     }
 
-    if (this.#stopped) {
-      return { outcome: 'unknown', detail: `${this.#id} のセッションは既に閉じている。` };
+    // 待機していた（＝runner にセッションが居ない）相手なら、ここで続きへ戻す。
+    if (!record.attached) {
+      const resumed = await this.#resume(record, runner, message);
+      if (!resumed) {
+        return {
+          outcome: 'unknown',
+          detail: `${managerId} は session_id を持っておらず、続きへ戻れない。新しく起こし直すこと。`,
+        };
+      }
+    } else {
+      await runner.send(managerId, message);
     }
 
-    // 再起動を跨いだ相手なら、ここで前のセッションの続きへ戻る。
-    this.#openQuery();
-    this.#push(message);
-    this.#status = 'running';
-    await this.#persist();
+    record.job.status = 'running';
+    await this.#persist(record);
     await this.#journal({
       type: 'exchange',
       with: 'manager',
       role: 'outbound',
-      text: `[${this.#id}] ${message}`,
+      text: `[${managerId}] ${message}`,
     });
     return { outcome: 'delivered', detail: '追加指示として届けた。' };
   }
 
-  /**
-   * どの確認に答えようとしているのかを決める。
-   * `null` = 返事待ちは無い（＝追加指示）。推測が危ういときは答えを返さない。
-   */
-  #choosePending(requestId: string | undefined): PendingRequest | null | 'ambiguous' | 'gone' {
-    if (requestId !== undefined) {
-      return this.#pending.find((request) => request.id === requestId) ?? 'gone';
+  async list(): Promise<ManagerSummary[]> {
+    await this.#ensureConnected();
+
+    const known = new Map<string, ManagerSummary>();
+    for (const record of this.#records.values()) {
+      known.set(record.job.id, summaryOf(record));
     }
-    if (this.#pending.length === 0) return null;
-    if (this.#pending.length === 1) return this.#pending[0] ?? null;
-    return 'ambiguous';
+    // 台帳にしか無い分も見せる（宛先の runner が居ないものは live: false）。
+    for (const job of await this.#stores.jobs.listJobs()) {
+      if (known.has(job.id)) continue;
+      known.set(job.id, summaryOf({ job, waiting: [], attached: false }, false));
+    }
+    return [...known.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
   }
 
-  /** 待たせたまま消えない。止まっている確認は理由付きで全部解く。 */
-  #settleAll(reason: string): void {
-    for (const request of [...this.#pending]) {
-      request.settle({ message: reason, decision: 'deny' });
+  async transcript(managerId: string): Promise<string | null> {
+    const job = (await this.#stores.jobs.listJobs()).find((entry) => entry.id === managerId);
+    if (!job) return null;
+
+    // 走行中なら runner のディスクの上にある。
+    const record = this.#records.get(managerId);
+    if (record) {
+      const runner = await this.#runnerOf(record);
+      const live = await runner?.transcript(managerId).catch(() => null);
+      if (live !== null && live !== undefined && live.length > 0) return live;
     }
-    this.#pending.length = 0;
+
+    // 無ければ退避済みへ降りる。
+    for (const id of [...(job.archiveIds ?? [])].reverse()) {
+      const body = await this.#stores.archive.read(id);
+      if (body !== null) return body;
+    }
+
+    // 最後の砦。runner が強制終了されても、生ログ自体は預かってある。
+    return this.#fromSessionStore(job);
+  }
+
+  /**
+   * 起動時に、走っていたマネージャーを拾い直す。
+   *
+   * 2通りある。**runner が生きていれば、そのセッションはまだ手を動かしている**
+   * （デーモンの再起動でマネージャーは死なない）。この場合は繋ぎ直すだけでよい。
+   * runner ごと作り直されていたら、JobStore の session_id と預かった生ログから
+   * **実際に resume する** — 「話しかけられるまで止めておく」は、人間の不在で
+   * 仕事が止まらないという要件（PRD「自律」）に反する。
+   */
+  async restore(): Promise<ManagerSummary[]> {
+    if (this.#stopped) return [];
+    await this.#ensureConnected();
+
+    // runner に生きているセッションを先に拾う（繋ぎ直しの相手）。
+    const alive = new Map<
+      string,
+      { runner: RunnerClient; state: Awaited<ReturnType<RunnerClient['list']>>[number] }
+    >();
+    for (const runner of await this.#runners.list()) {
+      for (const state of await runner.list().catch(() => [])) {
+        alive.set(state.managerId, { runner, state });
+      }
+    }
+
+    const resumed: ManagerSummary[] = [];
+    for (const job of await this.#stores.jobs.listJobs()) {
+      if (this.#records.has(job.id)) continue;
+
+      const living = alive.get(job.id);
+      if (living) {
+        // まだ走っている。状態は runner のものが正しい。
+        const record: ManagerRecord = {
+          job: {
+            ...job,
+            status: living.state.status,
+            runnerId: living.runner.runnerId,
+            ...(living.state.sessionId === undefined ? {} : { sessionId: living.state.sessionId }),
+          },
+          waiting: living.state.waiting,
+          attached: true,
+        };
+        this.#records.set(job.id, record);
+        await this.#persist(record);
+        this.#notifyRestored(record, 'attached');
+        resumed.push(summaryOf(record));
+        continue;
+      }
+
+      if (job.sessionId === undefined) continue;
+
+      const record: ManagerRecord = { job: { ...job }, waiting: [], attached: false };
+      this.#records.set(job.id, record);
+
+      // 手を動かしている最中に器が落ちた分だけ、実際に続きへ戻す。待機（`done`）
+      // だったものは台帳に載せるだけにする（話しかけられたら resume する）。
+      if (job.status !== 'running' && job.status !== 'waiting_human') continue;
+
+      const runner = await this.#runnerOf(record);
+      if (!runner) continue;
+
+      const ok = await this.#resume(record, runner, restartNudge(job.status));
+      if (!ok) continue;
+      record.job.status = 'running';
+      await this.#persist(record);
+      await this.#journal({
+        type: 'exchange',
+        with: 'manager',
+        role: 'outbound',
+        text: `[${job.id}] （再起動後の再開）${restartNudge(job.status)}`,
+      });
+      this.#notifyRestored(record, 'resumed');
+      resumed.push(summaryOf(record));
+    }
+    return resumed;
   }
 
   async stop(): Promise<void> {
-    if (this.#stopped) return;
     this.#stopped = true;
-
-    // **止まる前に生ログを退避する。** ローカルではディスクに残るので実害が
-    // 出なかったが、コンテナのトランスクリプトは器と一緒に消える。ここを
-    // 怠ると、再起動後に manager_id から生ログへ降りられない（M2 受け入れ基準4
-    // が M4 で崩れる = デグレード）。
-    await this.#archiveTranscript();
-    await this.#persist();
-
-    this.#settleAll('デーモンが停止した。');
-
-    this.#wakeInput();
-    try {
-      this.#query?.close();
-    } catch {
-      // 既に閉じている
+    // **runner のマネージャーは止めない。** デーモンの都合で人の仕事を殺さない
+    // （インプロセス runner だけは、プロセスが消えるので中で畳まれる）。
+    for (const runner of await this.#runners.list().catch(() => [])) {
+      await runner.close().catch(() => undefined);
     }
-    await this.#reader?.catch(() => undefined);
+    this.#records.clear();
   }
 
   // -------------------------------------------------------------------------
-  // SDK セッション
+  // runner との配線
   // -------------------------------------------------------------------------
 
-  #buildOptions(resume?: string): Options {
-    return {
-      model: MANAGER_MODEL,
-      // `tools` は渡さない = preset 全部。明示リストで絞らない（AGENTS.md 地雷1）。
-      // `maxTurns` も渡さない（地雷2）。
-      systemPrompt: {
-        type: 'preset',
-        preset: 'claude_code',
-        append: buildManagerSystemPrompt({ managerId: this.#id, workerName: WORKER_AGENT_NAME }),
-      },
-      // 作業者層の本体はこの1個だけ。`tools` を書かない = 親の全ツールを継承。
-      agents: {
-        [WORKER_AGENT_NAME]: {
-          description:
-            'コストと文脈のために切り出した実作業の担い手。実装に限らず、調査・下読み・' +
-            '外部サービスの確認・レビュー・相談のたたき台づくりまで任せてよい。',
-          prompt: buildWorkerPrompt(),
-          model: WORKER_MODEL,
-        },
-      },
-      cwd: this.#cwd,
-      // 人間が使っているのと同じ設定・同じ .mcp.json を渡す（下向きは同じものが見える）
-      settingSources: ['user', 'project', 'local'],
-      env: this.#childEnv(),
-      // 生ログを外（PostgreSQL）にも預ける。コンテナのディスクは再起動で消えるので、
-      // ここが無いと「器を作り直したら続きへ戻れない」（roadmap M4 受け入れ基準2）。
-      ...(this.#sessionStore === undefined
-        ? {}
-        : { sessionStore: this.#watchKey(this.#sessionStore) }),
-      ...(resume === undefined ? {} : { resume }),
-      canUseTool: (toolName, input, extra) => this.#onPermission(toolName, input, extra),
-      hooks: {
-        PostToolUse: [{ hooks: [(input) => this.#onPostToolUse(input)] }],
-        PreCompact: [{ hooks: [(input) => this.#onPreCompact(input)] }],
-      },
-    };
+  /** イベントの受け口を開く。**繋ぎに行くのはデーモン側**である。 */
+  async #ensureConnected(): Promise<void> {
+    if (this.#connected || this.#stopped) return;
+    this.#connected = true;
+    for (const runner of await this.#runners.list()) {
+      await runner.connect((event) => void this.#onEvent(event));
+    }
+  }
+
+  async #runnerOf(record: ManagerRecord): Promise<RunnerClient | null> {
+    const runnerId = record.job.runnerId;
+    // 宛先が書かれていない古いジョブは、いまの1台へ寄せる（M4 は単一 runner）。
+    if (runnerId === undefined) return this.#runners.select({}).catch(() => null);
+    return this.#runners.get(runnerId);
+  }
+
+  async #resume(
+    record: ManagerRecord,
+    runner: RunnerClient,
+    message: string | undefined,
+  ): Promise<boolean> {
+    const { sessionId, cwd, request, projectKey } = record.job;
+    if (sessionId === undefined) return false;
+
+    // 生ログを渡して materialize させる。runner のディスクに残っている前提を
+    // 置かない（器は作り直される）。
+    const entries = await this.#loadSession(projectKey, sessionId);
+
+    await runner.resume({
+      managerId: record.job.id,
+      sessionId,
+      cwd: cwd ?? runner.workspacePath,
+      request: request ?? record.job.summary,
+      ...(message === undefined ? {} : { message }),
+      ...(entries === null ? {} : { entries }),
+    });
+    record.attached = true;
+    record.job.runnerId = runner.runnerId;
+    return true;
+  }
+
+  async #loadSession(projectKey: string | undefined, sessionId: string): Promise<unknown[] | null> {
+    const store = this.#stores.sessionStore;
+    if (store === undefined || projectKey === undefined) return null;
+    try {
+      return await store.load({ projectKey, sessionId });
+    } catch {
+      return null;
+    }
+  }
+
+  async #fromSessionStore(job: Job): Promise<string | null> {
+    const entries = await this.#loadSession(job.projectKey, job.sessionId ?? '');
+    if (entries === null || entries.length === 0) return null;
+    // 生ログの形（1行1 JSON）のまま返す。読む側は runner 由来と区別しなくてよい。
+    return `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`;
   }
 
   /**
-   * SessionStore を包んで、SDK が使う `projectKey` を控える。
+   * runner から降りてきた出来事をさばく。
    *
-   * この値は SDK が cwd から決めるもので、外からは分からない。控えておかないと、
-   * ローカルのファイルもアーカイブも失われたとき（コンテナの強制終了）、生ログが
-   * DB にあるのに引き当てられなくなる。**預けた本人が鍵を覚えておく。**
+   * 記録（日誌・台帳・アーカイブ・生ログ）はすべてここで行う。runner は記憶へ
+   * 到達する鍵を持たないので、書けるのはデーモンだけである。
    */
-  #watchKey(store: SessionStore): SessionStore {
-    const wrapped: SessionStore = {
-      append: async (key, entries) => {
-        if (key.projectKey !== this.#projectKey) {
-          this.#projectKey = key.projectKey;
-          await this.#persist();
+  async #onEvent(event: RunnerEvent): Promise<void> {
+    if (event.type === 'hello') return;
+
+    const record = this.#records.get(event.managerId) ?? (await this.#load(event.managerId));
+    if (!record) return;
+
+    switch (event.type) {
+      case 'session': {
+        record.job.sessionId = event.sessionId;
+        record.attached = true;
+        await this.#persist(record);
+        return;
+      }
+
+      case 'project_key': {
+        if (record.job.projectKey === event.projectKey) return;
+        record.job.projectKey = event.projectKey;
+        await this.#persist(record);
+        return;
+      }
+
+      case 'report': {
+        record.job.lastReport = event.text;
+        record.job.status = event.status;
+        await this.#persist(record);
+        await this.#journal({
+          type: 'exchange',
+          with: 'manager',
+          role: 'inbound',
+          text: `[${event.managerId}] ${event.text}`,
+        });
+        this.#emit(event.managerId, 'report', event.text);
+        return;
+      }
+
+      case 'ask': {
+        if (!record.waiting.some((item) => item.requestId === event.requestId)) {
+          record.waiting.push({ requestId: event.requestId, summary: event.summary });
         }
-        await store.append(key, entries);
-      },
-      load: (key) => store.load(key),
-    };
-
-    // 任意のメソッドは在るものだけ通す（無いものを生やすと SDK の分岐が変わる）
-    const { listSessions, listSessionSummaries, listSubkeys } = store;
-    const remove = store.delete;
-    if (listSessions) wrapped.listSessions = (projectKey) => listSessions.call(store, projectKey);
-    if (listSessionSummaries) {
-      wrapped.listSessionSummaries = (projectKey) => listSessionSummaries.call(store, projectKey);
-    }
-    if (listSubkeys) wrapped.listSubkeys = (key) => listSubkeys.call(store, key);
-    if (remove) wrapped.delete = (key) => remove.call(store, key);
-
-    return wrapped;
-  }
-
-  /** 記憶ストアの所在は子プロセスへ渡さない（渡さなければ構造的に触れない）。 */
-  #childEnv(): NodeJS.ProcessEnv {
-    const env = { ...this.#env };
-    for (const key of this.#withheldEnvKeys) delete env[key];
-    return env;
-  }
-
-  #push(text: string): void {
-    this.#input.push({
-      type: 'user',
-      message: { role: 'user', content: text },
-      parent_tool_use_id: null,
-    });
-    this.#wakeInput();
-  }
-
-  #wakeInput(): void {
-    const waiter = this.#inputWaiter;
-    this.#inputWaiter = null;
-    waiter?.();
-  }
-
-  async *#inputStream(): AsyncGenerator<SDKUserMessage> {
-    for (;;) {
-      const next = this.#input.shift();
-      if (next !== undefined) {
-        yield next;
-        continue;
+        record.job.status = 'waiting_human';
+        await this.#persist(record);
+        await this.#journal({
+          type: 'escalation',
+          question: event.summary,
+          approvalId: event.requestId,
+          managerId: event.managerId,
+        });
+        this.#emit(event.managerId, event.kind, event.summary, event.requestId);
+        return;
       }
-      if (this.#stopped) return;
-      await new Promise<void>((resolve) => {
-        this.#inputWaiter = resolve;
-      });
-    }
-  }
 
-  async #read(q: Query): Promise<void> {
-    try {
-      for await (const message of q) {
-        await this.#dispatch(message);
+      case 'settled': {
+        record.waiting = record.waiting.filter((item) => item.requestId !== event.requestId);
+        if (record.job.status === 'waiting_human' && record.waiting.length === 0) {
+          record.job.status = 'running';
+        }
+        await this.#persist(record);
+        return;
       }
-      if (!this.#stopped) await this.#finish('done', 'マネージャーのセッションが閉じた。');
-    } catch (error) {
-      await this.#finish('failed', `マネージャーのセッションが落ちた: ${String(error)}`);
+
+      case 'tool_use': {
+        await this.#journal({
+          type: 'tool_use',
+          actor: event.actor,
+          tool: event.tool,
+          input: event.input,
+        });
+        return;
+      }
+
+      case 'mirror': {
+        const store = this.#stores.sessionStore;
+        if (store === undefined) return;
+        try {
+          await store.append(event.key, event.entries as never);
+        } catch {
+          // 生ログを預かれなくてもマネージャーは止めない
+        }
+        return;
+      }
+
+      case 'archive': {
+        try {
+          const id = await this.#stores.archive.archive(event.managerId, event.body);
+          record.job.archiveIds = [...(record.job.archiveIds ?? []), id];
+          await this.#persist(record);
+        } catch {
+          // 退避できなくてもマネージャーを止めない
+        }
+        return;
+      }
+
+      case 'closed': {
+        record.job.status = event.status;
+        record.waiting = [];
+        record.attached = false;
+        await this.#persist(record);
+        if (event.status === 'failed') this.#emit(event.managerId, 'report', event.reason);
+        return;
+      }
+
+      default: {
+        const exhaustive: never = event;
+        throw new Error(`未知の runner イベント: ${JSON.stringify(exhaustive)}`);
+      }
     }
-  }
-
-  async #dispatch(message: SDKMessage): Promise<void> {
-    if (message.type === 'system' && message.subtype === 'init') {
-      this.#sessionId = message.session_id;
-      await this.#persist();
-      return;
-    }
-
-    if (message.type !== 'result') return;
-
-    // 最終報告はクローンの受信箱へ。人間が chat を開いていなくても処理される。
-    const text = resultText(message);
-    this.#lastReport = text;
-    this.#status = this.#pending.length > 0 ? 'waiting_human' : 'done';
-    await this.#persist();
-    await this.#journal({
-      type: 'exchange',
-      with: 'manager',
-      role: 'inbound',
-      text: `[${this.#id}] ${text}`,
-    });
-    this.#emit('report', text);
-  }
-
-  async #finish(status: JobStatus, reason: string): Promise<void> {
-    this.#stopped = true;
-    this.#settleAll(reason);
-    // 読み取りが終わっても、入力側を起こして本体を閉じておく。ここを怠ると
-    // `stop()` が「もう停止済み」と見て素通りし、閉じられない Query と
-    // 起きない `#inputStream` が残る。
-    this.#wakeInput();
-    try {
-      this.#query?.close();
-    } catch {
-      // 既に閉じている
-    }
-    this.#status = status;
-    await this.#archiveTranscript();
-    await this.#persist();
-    if (status === 'failed') this.#emit('report', reason);
   }
 
   // -------------------------------------------------------------------------
-  // 配線 — マネージャーから見た「ユーザー」はクローン
+  // 台帳と受信箱
   // -------------------------------------------------------------------------
 
-  /**
-   * 許可確認と `AskUserQuestion` をクローンへ回す。
-   *
-   * ここは追加の関門ではない。人間が画面越しに受け取っていた確認が、そのまま
-   * クローンへ届くだけである。だから既定の `permissionMode` を触らず、
-   * 待ち時間にも上限を置かない — 止まるのはこの仕事だけで、他は走り続ける。
-   */
-  async #onPermission(
-    toolName: string,
-    input: Record<string, unknown>,
-    extra: { signal: AbortSignal; requestId?: string; toolUseID?: string },
-  ): Promise<PermissionResult> {
-    // SDK は同じ確認を再送しうる（通信の切れ目など）。id を SDK 側の識別子に
-    // 揃えて、再送では新しい待ちを積まずに同じ結果を返す。積んでしまうと、
-    // クローンの1回の回答が二重に消費され、片方が永久に返らない。
-    const id = extra.requestId ?? extra.toolUseID ?? randomUUID();
-    const already = this.#pending.find((request) => request.id === id);
-    if (already) return already.result;
-
-    const kind = toolName === 'AskUserQuestion' ? 'question' : 'permission';
-    const summary =
-      kind === 'question' ? describeQuestions(input) : `${toolName} の実行許可: ${brief(input)}`;
-
-    let settle!: PendingRequest['settle'];
-    const answered = new Promise<{ message: string; decision?: ManagerDecision }>((resolve) => {
-      settle = resolve;
-    });
-
-    const result = answered.then((answer) => {
-      if (kind === 'question') {
-        return { behavior: 'allow' as const, updatedInput: withAnswers(input, answer.message) };
-      }
-      const decision = answer.decision ?? inferDecision(answer.message);
-      return decision === 'allow'
-        ? { behavior: 'allow' as const }
-        : { behavior: 'deny' as const, message: answer.message };
-    });
-
-    let done = false;
-    let unlisten = () => undefined as void;
-
-    const request: PendingRequest = {
-      id,
-      kind,
-      toolName,
-      input,
-      summary,
-      result,
-      // **待ち行列から自分を外すのは settle の責任**。ここを呼び出し側任せに
-      // すると、中断で解けた1件が行列に残り、次にクローンが送った言葉を
-      // 「誰も待っていない返事」として食い潰す。
-      settle: (value) => {
-        if (done) return;
-        done = true;
-        unlisten();
-        const at = this.#pending.indexOf(request);
-        if (at !== -1) this.#pending.splice(at, 1);
-        if (this.#status === 'waiting_human' && this.#pending.length === 0) {
-          this.#status = 'running';
-        }
-        void this.#persist();
-        settle(value);
-      },
-    };
-
-    this.#pending.push(request);
-    this.#status = 'waiting_human';
-    void this.#persist();
-
-    // マネージャー側で中断されたら宙吊りにしない。
-    const onAbort = () =>
-      request.settle({ message: 'マネージャー側で中断された。', decision: 'deny' });
-    if (extra.signal.aborted) {
-      onAbort();
-    } else {
-      extra.signal.addEventListener('abort', onAbort, { once: true });
-      unlisten = () => extra.signal.removeEventListener('abort', onAbort);
+  #choosePending(
+    record: ManagerRecord,
+    requestId: string | undefined,
+  ): { requestId: string; summary: string } | null | 'ambiguous' | 'gone' {
+    if (requestId !== undefined) {
+      return record.waiting.find((item) => item.requestId === requestId) ?? 'gone';
     }
-
-    await this.#journal({
-      type: 'escalation',
-      question: summary,
-      approvalId: id,
-      managerId: this.#id,
-    });
-    this.#emit(kind, summary, id);
-
-    return result;
+    if (record.waiting.length === 0) return null;
+    if (record.waiting.length === 1) return record.waiting[0] ?? null;
+    return 'ambiguous';
   }
 
-  /** マネージャーと作業者の全ツール実行を日誌へ（監査。既知の穴はここで受ける）。 */
-  async #onPostToolUse(input: unknown): Promise<{ continue: true }> {
-    const hook = input as {
-      tool_name?: string;
-      tool_input?: unknown;
-      session_id?: string;
-      transcript_path?: string;
-      agent_id?: string;
-      agent_type?: string;
-    };
-
-    // 生ログへの入口はここで拾う。manager_id からセッションへ降りられるようになる。
-    if (typeof hook.transcript_path === 'string' && hook.transcript_path !== this.#transcriptPath) {
-      this.#transcriptPath = hook.transcript_path;
-      await this.#persist();
-    }
-
-    await this.#journal({
-      type: 'tool_use',
-      actor:
-        hook.agent_id === undefined
-          ? `manager:${this.#id}`
-          : `worker:${this.#id}:${hook.agent_type ?? WORKER_AGENT_NAME}`,
-      tool: hook.tool_name ?? '(不明)',
-      input: hook.tool_input,
-    });
-
-    return { continue: true };
+  /** 台帳から像を作る（再起動後に届いたイベントの受け皿）。 */
+  async #load(managerId: string): Promise<ManagerRecord | null> {
+    const job = (await this.#stores.jobs.listJobs()).find((entry) => entry.id === managerId);
+    if (!job) return null;
+    const record: ManagerRecord = { job: { ...job }, waiting: [], attached: false };
+    this.#records.set(managerId, record);
+    return record;
   }
 
-  /** 要約に潰される前に全文を退避する（監査は日誌＋アーカイブで担保する）。 */
-  async #onPreCompact(input: unknown): Promise<{ continue: true }> {
-    const { transcript_path: path } = input as { transcript_path?: string };
-    if (typeof path === 'string' && path.length > 0) this.#transcriptPath = path;
-    await this.#archiveTranscript();
-    // 退避先の id をここで台帳に落とす。落とさないままデーモンが死ぬと、
-    // manager_id から生ログへ降りる経路（M2 の約束）が切れる。
-    await this.#persist();
-    return { continue: true };
-  }
-
-  async #archiveTranscript(): Promise<void> {
-    const path = this.#transcriptPath;
-    if (path === undefined) return;
-    try {
-      const body = await readFile(path, 'utf8');
-      this.#archiveIds.push(await this.#stores.archive.archive(this.#id, body));
-    } catch {
-      // 退避できなくてもマネージャーを止めない
-    }
-  }
-
-  #emit(kind: 'report' | 'question' | 'permission', text: string, requestId?: string): void {
+  #notifyRestored(record: ManagerRecord, how: 'attached' | 'resumed'): void {
+    const { job } = record;
     this.#post({
       type: 'manager_message',
       id: randomUUID(),
       at: new Date().toISOString(),
-      managerId: this.#id,
+      managerId: job.id,
+      kind: 'report',
+      text: [
+        how === 'attached'
+          ? 'デーモンが再起動した。この委譲は runner の中で走り続けている。'
+          : 'デーモンが再起動した。中断されていたこの委譲を、前のセッションから再開させた。',
+        `依頼: ${job.request ?? job.summary}`,
+        `作業ディレクトリ: ${job.cwd ?? '(不明)'}`,
+        job.lastReport === undefined ? '' : `直近の報告: ${job.lastReport}`,
+        '',
+        how === 'attached'
+          ? '返事待ちがあれば改めて届く。`manager_send` で追加の指示も送れる。'
+          : '再開の指示は送信済みなので、報告を待てばよい。' +
+            '返事待ちだった確認は器と一緒に失われているので、必要ならマネージャーが聞き直してくる。',
+      ]
+        .filter((line) => line !== '')
+        .join('\n'),
+    });
+  }
+
+  #emit(
+    managerId: string,
+    kind: 'report' | 'question' | 'permission',
+    text: string,
+    requestId?: string,
+  ): void {
+    this.#post({
+      type: 'manager_message',
+      id: randomUUID(),
+      at: new Date().toISOString(),
+      managerId,
       kind,
       text,
       ...(requestId === undefined ? {} : { requestId }),
     });
   }
 
-  async #persist(): Promise<void> {
-    this.#updatedAt = new Date().toISOString();
-    const job: Job = {
-      id: this.#id,
-      managerId: this.#id,
-      createdAt: this.#startedAt,
-      updatedAt: this.#updatedAt,
-      status: this.#status,
-      summary: brief({ request: this.#request }),
-      request: this.#request,
-      cwd: this.#cwd,
-      ...(this.#sessionId === undefined ? {} : { sessionId: this.#sessionId }),
-      ...(this.#projectKey === undefined ? {} : { projectKey: this.#projectKey }),
-      ...(this.#transcriptPath === undefined ? {} : { transcriptPath: this.#transcriptPath }),
-      ...(this.#archiveIds.length === 0 ? {} : { archiveIds: [...this.#archiveIds] }),
-      ...(this.#lastReport === undefined ? {} : { lastReport: this.#lastReport }),
-    };
+  async #persist(record: ManagerRecord): Promise<void> {
+    record.job.updatedAt = new Date().toISOString();
     try {
-      await this.#stores.jobs.putJob(job);
+      await this.#stores.jobs.putJob(record.job);
     } catch {
       // ジョブ台帳が書けなくてもマネージャーは走らせる
     }
@@ -982,73 +655,31 @@ class ManagerSession {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 小道具
-// ---------------------------------------------------------------------------
-
-function resultText(message: SDKMessage): string {
-  const candidate = message as { result?: unknown; subtype?: string; error?: unknown };
-  if (typeof candidate.result === 'string' && candidate.result.length > 0) return candidate.result;
-  if (candidate.subtype !== undefined && candidate.subtype !== 'success') {
-    return `（結果なしで終了: ${candidate.subtype}）`;
+/** 再起動後に流す一言。**開き直すだけでは仕事は進まない。** */
+function restartNudge(status: JobStatus): string {
+  if (status === 'waiting_human') {
+    return (
+      '[system] デーモンが再起動した。あなたが待っていた確認は器と一緒に失われている。' +
+      'まだ必要なら聞き直し、不要なら中断していた作業の続きを進めよ。'
+    );
   }
-  return '（報告なし）';
+  return '[system] デーモンが再起動した。中断していた作業の続きを進めよ。';
 }
 
-/** `AskUserQuestion` の回答は「質問文 → 回答」の対応で返す（SDK の入力形）。 */
-function withAnswers(input: Record<string, unknown>, message: string): Record<string, unknown> {
-  const questions = Array.isArray(input.questions) ? input.questions : [];
-  const answers: Record<string, string> = {};
-  for (const question of questions) {
-    const text = (question as { question?: unknown }).question;
-    if (typeof text === 'string') answers[text] = message;
-  }
-  return { ...input, answers };
-}
-
-function describeQuestions(input: Record<string, unknown>): string {
-  const questions = Array.isArray(input.questions) ? input.questions : [];
-  const texts = questions
-    .map((question) => (question as { question?: unknown }).question)
-    .filter((text): text is string => typeof text === 'string');
-  return texts.length > 0 ? texts.join(' / ') : brief(input);
-}
-
-/** 否定として読み取る語。日本語は語境界が無いので素直に部分一致で見る。 */
-const DENIAL_PHRASES = [
-  'やめ',
-  'だめ',
-  '駄目',
-  '不可',
-  '中止',
-  '却下',
-  'しないで',
-  '止めて',
-  '待って',
-  '許可しない',
-  '承認しない',
-];
-
-/** 英語側は語境界で見る（`nothing` の `no` を否定と読まないため）。 */
-const DENIAL_WORDS = /\b(deny|denied|no|nope|don't|do not|stop|cancel)\b/i;
-
-/**
- * `decision` を付け忘れた回答の読み取り。
- *
- * 迷ったら通さない — ではなく、**否定が読み取れたときだけ拒否**する。ここで
- * 保守的に倒すと、クローンが承認したつもりの仕事が黙って止まる（デグレード）。
- * 拒否の場合もメッセージは理由としてマネージャーへ渡るので、会話は続く。
- *
- * 日本語を語境界（`\s` や `\b`）で探してはいけない。「それはやめて」の「やめ」の
- * 前に区切りは無く、探せていないことが**承認**として表に出る。
- */
-function inferDecision(message: string): ManagerDecision {
-  if (DENIAL_PHRASES.some((phrase) => message.includes(phrase))) return 'deny';
-  return DENIAL_WORDS.test(message) ? 'deny' : 'allow';
-}
-
-function brief(value: unknown, limit = 200): string {
-  const text = typeof value === 'string' ? value : JSON.stringify(value);
-  if (text === undefined) return '';
-  return text.length > limit ? `${text.slice(0, limit)}…` : text;
+function summaryOf(record: ManagerRecord, live = true): ManagerSummary {
+  const { job } = record;
+  return {
+    managerId: job.id,
+    status: job.status,
+    live,
+    cwd: job.cwd ?? '',
+    request: job.request ?? job.summary,
+    startedAt: job.createdAt,
+    updatedAt: job.updatedAt,
+    waiting: [...record.waiting],
+    ...(job.sessionId === undefined ? {} : { sessionId: job.sessionId }),
+    ...(job.lastReport === undefined ? {} : { lastReport: job.lastReport }),
+    ...(job.runnerId === undefined ? {} : { runnerId: job.runnerId }),
+    ...(job.workspace === undefined ? {} : { workspace: job.workspace }),
+  };
 }
