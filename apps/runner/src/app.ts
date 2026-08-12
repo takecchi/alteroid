@@ -53,6 +53,10 @@ export interface RunnerAppDeps {
 /** app が触る範囲だけの貸し出し期限（実体は [lease.ts](./lease.ts)）。 */
 export interface LeasePort {
   readonly ttlMs: number;
+  /** 期限切れから畳み終わるまでに要りうる時間の上限。 */
+  readonly graceMs: number;
+  /** この起動を指す id（同じ runner_id で作り直された器と区別する）。 */
+  readonly incarnation: string;
   touch(): void;
 }
 
@@ -160,7 +164,15 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         managers: host.list().length,
         pendingEvents: outbox.pending,
         capacity: host.capacity(),
-        ...(lease === undefined ? {} : { lease: { ttlMs: lease.ttlMs } }),
+        ...(lease === undefined
+          ? {}
+          : {
+              lease: {
+                ttlMs: lease.ttlMs,
+                graceMs: lease.graceMs,
+                incarnation: lease.incarnation,
+              },
+            }),
       });
     })
 
@@ -240,9 +252,17 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       return c.json({ ok: settled });
     })
 
+    /**
+     * 1本を畳む。**在ったかどうかを返す**（`stopped`）。
+     *
+     * デーモンはこの応答を「もうこの器では走っていない」の確認に使う。無い相手にも
+     * 一律 `ok` を返すと、同じ `runner_id` で作り直された**新しい**器が、分断された
+     * まま走り続けている**古い**器のセッションについて「畳んだ」と答えることになり、
+     * デーモンは二重実行へ踏み出す（`RunnerClient.stop` を見よ）。
+     */
     .delete('/managers/:id', async (c) => {
-      await host.stop(c.req.param('id'));
-      return c.json({ ok: true });
+      const stopped = await host.stop(c.req.param('id'));
+      return c.json({ ok: true, stopped });
     })
 
     /** 走行中セッションの生ログ（可観測性の最下段へ降りる入口）。 */

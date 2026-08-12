@@ -112,6 +112,11 @@ services:
       # 能力の制限ではない。ターン数のような人工上限ではなく、「デーモンに繋がっていない
       # 器はセッションを持ち続けない」という実行環境の境界である（north_star 禁止2）。
       - ALTEROID_RUNNER_LEASE_TTL=${ALTEROID_RUNNER_LEASE_TTL:-30}
+      # 期限が切れてから**畳み終わる**までに要りうる時間（秒。既定 5）。デーモンは
+      # 期限＋この申告ぶん待ってから移送する。**実際に畳むのにかかる時間より短く
+      # しないこと** — 短いと、デーモンが「もう止まっている」と見なした後もセッションが
+      # 動いている窓ができる（長くする分には移送が遅くなるだけで安全側）。
+      - ALTEROID_RUNNER_LEASE_GRACE=${ALTEROID_RUNNER_LEASE_GRACE:-5}
       # 認証はサブスクリプションの長期トークン（claude setup-token）。
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:?claude setup-token で取得して .env に置くこと}
       - TZ=${TZ:-Asia/Tokyo}
@@ -179,6 +184,7 @@ services:
       # 期限も全 runner で揃える（デーモンは器ごとの申告を見るが、揃っていない構成は
       # 人間が読めなくなる）。
       - ALTEROID_RUNNER_LEASE_TTL=${ALTEROID_RUNNER_LEASE_TTL:-30}
+      - ALTEROID_RUNNER_LEASE_GRACE=${ALTEROID_RUNNER_LEASE_GRACE:-5}
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:?claude setup-token で取得して .env に置くこと}
       - TZ=${TZ:-Asia/Tokyo}
       - GH_TOKEN

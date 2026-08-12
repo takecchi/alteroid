@@ -61,7 +61,9 @@ function fakeRunner(runnerId: string, capacity: Partial<RunnerCapacity> = {}): F
     async answer() {
       return true;
     },
-    async stop() {},
+    async stop() {
+      return true;
+    },
     async list(): Promise<RunnerManagerState[]> {
       return [];
     },

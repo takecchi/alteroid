@@ -79,6 +79,67 @@ describe('SessionLease — 器が自分で降りる', () => {
     expect(calls).toBe(1);
   });
 
+  /**
+   * **見張りの位相を、デーモンの計算に持ち込まない。**
+   *
+   * 一定間隔で期限を見に行く作りだと、最後の名乗りが「見た直後」に届いた場合、
+   * 実際に畳み始めるのは最大で「間隔ぶん」遅れる。デーモンは最後の名乗りから
+   * `ttlMs` を数えて安全な時刻を出すので、その遅れがそのまま**二重に走る窓**に
+   * なる（TTL 30 秒・間隔 7.5 秒・余裕 5 秒なら、約 2.5 秒の窓）。
+   *
+   * だから見張りは名乗りのたびに張り直し、**`ttlMs` ちょうど**に起きるようにする。
+   */
+  it('最悪の位相でも、期限ちょうどに畳み始める（デーモンの計算とずれない）', async () => {
+    const time = clock();
+    const fenced: string[][] = [];
+    // 手で進められる時計仕掛け（実時間を待たずに位相を作る）
+    const pending: { at: number; run: () => void }[] = [];
+    const lease = new SessionLease({
+      ttlMs: 30_000,
+      now: time.now,
+      fence: () => ['mgr-1'],
+      onFenced: (ids) => fenced.push(ids),
+      timers: {
+        set: (run, ms) => {
+          const entry = { at: time.now() + ms, run };
+          pending.push(entry);
+          return entry;
+        },
+        clear: (handle) => {
+          const index = pending.indexOf(handle as (typeof pending)[number]);
+          if (index >= 0) pending.splice(index, 1);
+        },
+      },
+    });
+
+    /** 時計を進め、その時刻までに来ている見張りを起こす。 */
+    const advance = async (ms: number) => {
+      time.advance(ms);
+      for (const entry of [...pending]) {
+        if (entry.at > time.now()) continue;
+        pending.splice(pending.indexOf(entry), 1);
+        entry.run();
+      }
+      // 畳む処理は非同期なので、1ティック待つ
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    };
+
+    lease.start();
+
+    // **見張りが起きる直前に名乗りが届く**（いちばん意地の悪い位相）
+    await advance(29_999);
+    lease.touch();
+    expect(fenced).toEqual([]);
+
+    // 名乗りから TTL に1ミリ足りない時点では、まだ畳まない
+    await advance(29_999);
+    expect(fenced).toEqual([]);
+
+    // **名乗りから TTL ちょうどで畳み始める。** 見張りの間隔ぶん遅れない
+    await advance(2);
+    expect(fenced).toEqual([['mgr-1']]);
+  });
+
   it('期限は秒で設定でき、off で外せる（外した器は自動移送の対象外になる）', () => {
     expect(leaseTtlMsOf({})).toBe(30_000);
     expect(leaseTtlMsOf({ ALTEROID_RUNNER_LEASE_TTL: '45' })).toBe(45_000);
@@ -111,13 +172,26 @@ describe('GET /health — 名乗りと期限の更新', () => {
 
   it('期限を名乗る（デーモンはこれを根拠に移送してよいかを決める）', async () => {
     const time = clock();
-    const lease = new SessionLease({ ttlMs: 30_000, now: time.now, fence: () => [] });
+    const lease = new SessionLease({
+      ttlMs: 30_000,
+      graceMs: 4_000,
+      incarnation: 'inc-1',
+      now: time.now,
+      fence: () => [],
+    });
     const { app } = rig(lease);
 
     const body = (await (await app.request('/health', auth)).json()) as {
-      lease?: { ttlMs: number };
+      lease?: { ttlMs: number; graceMs?: number; incarnation?: string };
     };
-    expect(body.lease).toEqual({ ttlMs: 30_000 });
+    // 期限だけでは足りない。**畳み終わるまでの猶予**（デーモンはこのぶん余計に待つ）と、
+    // **この起動を指す id**（同じ名前で作り直された器と区別する）まで名乗る。
+    expect(body.lease).toEqual({ ttlMs: 30_000, graceMs: 4_000, incarnation: 'inc-1' });
+  });
+
+  it('起動ごとに違う id を名乗る（作り直された器を取り違えない）', () => {
+    const make = () => new SessionLease({ ttlMs: 30_000, fence: () => [] });
+    expect(make().incarnation).not.toBe(make().incarnation);
   });
 
   it('期限を報告しない器もそのまま動く（報告が無いことは能力の欠落ではない）', async () => {
@@ -142,6 +216,19 @@ describe('GET /health — 名乗りと期限の更新', () => {
     time.advance(20_000);
     await app.request('/managers', auth);
     expect(await lease.check()).toEqual(['mgr-1']);
+  });
+
+  /**
+   * **「無かった」を成功にしない。** デーモンはこの応答を停止確認に使うので、
+   * 一律 `ok` を返すと、同じ名前で作り直された新しい器が、古い器の抱えたままの
+   * セッションについて「畳んだ」と答えることになる（＝二重実行へ踏み出す）。
+   */
+  it('DELETE /managers/:id は、実際に畳んだかどうかを返す', async () => {
+    const { app } = rig();
+
+    const response = await app.request('/managers/mgr-居ない', { method: 'DELETE', ...auth });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true, stopped: false });
   });
 
   it('鍵の無い呼び出しでは期限が延びない（延ばせるのはデーモンだけ）', async () => {

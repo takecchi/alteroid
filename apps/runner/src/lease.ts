@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 /**
  * 貸し出し期限（fencing lease / roadmap M5）。
  *
@@ -23,7 +25,7 @@
  */
 
 export interface SessionLeaseOptions {
-  /** この時間デーモンから名乗りを聞かれなければ畳む（ミリ秒）。 */
+  /** この時間デーモンから名乗りを聞かれなければ畳み始める（ミリ秒）。 */
   ttlMs: number;
   /**
    * 期限切れで畳む。返すのは畳んだ manager_id。
@@ -32,22 +34,40 @@ export interface SessionLeaseOptions {
    * 通信が戻ってもデーモンが繋ぎ直す先が無くなる。
    */
   fence: () => Promise<string[]> | string[];
-  /** 期限を見張る間隔（ミリ秒）。既定は `ttlMs` の1/4（最短1秒）。 */
-  checkIntervalMs?: number;
+  /**
+   * 期限が切れてから**畳み終わる**までに要りうる時間の上限（ミリ秒）。既定 5 秒。
+   *
+   * デーモンへはこの値を申告し、デーモンは `ttlMs + graceMs` ＋自分の余裕を過ぎて
+   * から移送する。**畳むのに実際かかる時間より短く申告しないこと** — 申告が短いと、
+   * デーモンが「もう止まっている」と見なした後もセッションが動いている窓ができる。
+   */
+  graceMs?: number;
+  /** この起動を指す id（省略時は起動ごとに作る）。 */
+  incarnation?: string;
   /** 畳んだことを人間に見せる（既定は何もしない）。 */
   onFenced?: (managerIds: string[]) => void;
   /** 主にテスト用。既定は `Date.now`。 */
   now?: () => number;
+  /** 主にテスト用。既定は `setTimeout` / `clearTimeout`。 */
+  timers?: {
+    set: (callback: () => void, ms: number) => unknown;
+    clear: (handle: unknown) => void;
+  };
 }
+
+const DEFAULT_GRACE_MS = 5_000;
 
 export class SessionLease {
   readonly #ttlMs: number;
-  readonly #checkIntervalMs: number;
+  readonly #graceMs: number;
+  readonly #incarnation: string;
   readonly #fence: () => Promise<string[]> | string[];
   readonly #onFenced: (managerIds: string[]) => void;
   readonly #now: () => number;
+  readonly #timers: NonNullable<SessionLeaseOptions['timers']>;
   #lastContactAt: number;
-  #timer: ReturnType<typeof setInterval> | null = null;
+  #timer: unknown = null;
+  #armed = false;
   #fencing: Promise<string[]> | null = null;
 
   constructor(options: SessionLeaseOptions) {
@@ -55,11 +75,20 @@ export class SessionLease {
       throw new Error('貸し出し期限（ttlMs）は正の数でなければならない');
     }
     this.#ttlMs = options.ttlMs;
-    this.#checkIntervalMs =
-      options.checkIntervalMs ?? Math.max(1_000, Math.floor(options.ttlMs / 4));
+    this.#graceMs = options.graceMs ?? DEFAULT_GRACE_MS;
+    this.#incarnation = options.incarnation ?? randomUUID();
     this.#fence = options.fence;
     this.#onFenced = options.onFenced ?? (() => undefined);
     this.#now = options.now ?? (() => Date.now());
+    this.#timers = options.timers ?? {
+      set: (callback, ms) => {
+        const handle = setTimeout(callback, ms);
+        // 見張りだけでプロセスを生かし続けない。
+        handle.unref?.();
+        return handle;
+      },
+      clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+    };
     // 起きた時刻から数え始める。**誰も繋いでこないまま期限が来ても畳むものは無い**
     // （セッションはデーモンの命令でしか生まれない）ので、これで困らない。
     this.#lastContactAt = this.#now();
@@ -69,9 +98,24 @@ export class SessionLease {
     return this.#ttlMs;
   }
 
-  /** デーモンから名乗りを聞かれた。ここでだけ期限が延びる。 */
+  get graceMs(): number {
+    return this.#graceMs;
+  }
+
+  get incarnation(): string {
+    return this.#incarnation;
+  }
+
+  /**
+   * デーモンから名乗りを聞かれた。ここでだけ期限が延びる。
+   *
+   * **見張りもここで張り直す。** 一定間隔で見に行く作りだと、最後の名乗りと見張りの
+   * 位相が揃わず、畳み始めるのが最大で「間隔ぶん」遅れる。デーモンは `ttlMs` から
+   * 数えて安全な時刻を出すので、その遅れがそのまま**二重に走る窓**になる。
+   */
   touch(): void {
     this.#lastContactAt = this.#now();
+    if (this.#armed) this.#arm();
   }
 
   /** 期限を過ぎているか。 */
@@ -101,17 +145,44 @@ export class SessionLease {
   }
 
   start(): void {
-    if (this.#timer !== null) return;
-    this.#timer = setInterval(() => {
-      void this.check().catch(() => undefined);
-    }, this.#checkIntervalMs);
-    // 見張りだけでプロセスを生かし続けない。
-    this.#timer.unref?.();
+    if (this.#armed) return;
+    this.#armed = true;
+    this.#arm();
   }
 
   stop(): void {
+    this.#armed = false;
+    this.#disarm();
+  }
+
+  /**
+   * 次に見るべき時刻ちょうどに1回だけ起きるように張る。
+   *
+   * 期限が来ていなければ残り時間ぶん、来ていれば即座に畳む。**間隔で回さない**
+   * のは、名乗りとの位相のずれをデーモンの計算に持ち込まないためである。
+   */
+  #arm(): void {
+    this.#disarm();
+    if (!this.#armed) return;
+    const remaining = this.#lastContactAt + this.#ttlMs - this.#now();
+    this.#timer = this.#timers.set(
+      () => {
+        this.#timer = null;
+        void this.check()
+          .catch(() => undefined)
+          .finally(() => {
+            // 畳み終えたら、次に名乗りが届くまで張り直さない（同じ判定を回し続けない）。
+            // 名乗りが戻れば `touch()` が張り直す — 器はその後も普通に使われる。
+            if (this.#armed && !this.expired()) this.#arm();
+          });
+      },
+      Math.max(remaining, 0),
+    );
+  }
+
+  #disarm(): void {
     if (this.#timer === null) return;
-    clearInterval(this.#timer);
+    this.#timers.clear(this.#timer);
     this.#timer = null;
   }
 }
@@ -131,6 +202,24 @@ export function leaseTtlMsOf(env: NodeJS.ProcessEnv = process.env): number | nul
   const seconds = Number(raw);
   if (!Number.isFinite(seconds) || seconds <= 0) {
     throw new Error(`ALTEROID_RUNNER_LEASE_TTL が読めない（秒か off を渡すこと）: ${raw}`);
+  }
+  return Math.round(seconds * 1000);
+}
+
+/**
+ * 畳み終わるまでの猶予を環境変数から読む（`ALTEROID_RUNNER_LEASE_GRACE`、秒）。
+ *
+ * 既定 5 秒。**デーモンはこの申告ぶん余計に待ってから移送する**ので、走行中の
+ * セッションを畳むのに実際かかる時間より短くしないこと。長くする分には安全側
+ * （移送が遅くなるだけ）である。
+ */
+export function leaseGraceMsOf(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.ALTEROID_RUNNER_LEASE_GRACE;
+  if (raw === undefined || raw.length === 0) return 5_000;
+
+  const seconds = Number(raw);
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    throw new Error(`ALTEROID_RUNNER_LEASE_GRACE が読めない（秒を渡すこと）: ${raw}`);
   }
   return Math.round(seconds * 1000);
 }

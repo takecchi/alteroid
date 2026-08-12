@@ -7,7 +7,7 @@ import { createRunnerHost, type RunnerChildUser } from '@alteroid/core';
 import { createAdaptorServer } from '@hono/node-server';
 
 import { createRunnerApp, Outbox } from './app.js';
-import { leaseTtlMsOf, SessionLease } from './lease.js';
+import { leaseGraceMsOf, leaseTtlMsOf, SessionLease } from './lease.js';
 
 export {
   createRunnerApp,
@@ -16,7 +16,7 @@ export {
   type RunnerAppDeps,
   type RunnerAppType,
 } from './app.js';
-export { leaseTtlMsOf, SessionLease, type SessionLeaseOptions } from './lease.js';
+export { leaseGraceMsOf, leaseTtlMsOf, SessionLease, type SessionLeaseOptions } from './lease.js';
 
 /**
  * alteroid-runner — マネージャーと作業者を隔離して走らせる常駐プロセス。
@@ -113,6 +113,9 @@ export async function main(): Promise<void> {
             for (const id of ids) await host.stop(id).catch(() => undefined);
             return ids;
           },
+          // 畳み終えるまでに要りうる時間を申告する。**デーモンはこれを待ってから
+          // 移送する**ので、実際にかかる時間より短く申告しないこと。
+          graceMs: leaseGraceMsOf(),
           onFenced: (ids) => {
             process.stderr.write(
               `alteroid-runner: デーモンから ${Math.round(leaseTtlMs / 1000)} 秒名乗りを聞かれないので、` +

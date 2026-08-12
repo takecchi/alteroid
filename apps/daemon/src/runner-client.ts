@@ -265,8 +265,18 @@ class HttpRunner implements RunnerClient {
     return body.ok === true;
   }
 
-  async stop(managerId: string): Promise<void> {
-    await this.#call('DELETE', `/managers/${encodeURIComponent(managerId)}`);
+  /**
+   * 1本を畳ませる。**在ったかどうかを返す。**
+   *
+   * 古い runner は `stopped` を返さない。そのときは `false`（確認は取れていない）に
+   * 倒す — 「返ってきたから畳めた」と読むと、停止確認が実質的に「HTTP が通った」
+   * だけの意味になり、二重実行を防げない。
+   */
+  async stop(managerId: string): Promise<boolean> {
+    const body = JSON.parse(
+      await this.#call('DELETE', `/managers/${encodeURIComponent(managerId)}`),
+    ) as { stopped?: unknown };
+    return body.stopped === true;
   }
 
   async list(): Promise<RunnerManagerState[]> {

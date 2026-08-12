@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { withDeadline } from './deadline.js';
 import type { RunnerClient, RunnerEvent } from './runner-protocol.js';
-import type { RunnerRegistry } from './runner-registry.js';
+import type { RunnerHealthState, RunnerRegistry } from './runner-registry.js';
 import { brief } from './runner.js';
 import type { InboxEvent, Job, JobStatus, JournalEntryInput, WorkspaceLocator } from './schema.js';
 import type { Stores } from './store.js';
@@ -286,6 +286,11 @@ class Pool implements ManagerPool {
         request: input.request,
         cwd,
         runnerId: runner.runnerId,
+        // **どの起動に置いたかまで残す。** 器は同じ名前で作り直されるので、
+        // 名前だけでは「いま名乗っている器が、置いた器と同じか」が分からない。
+        ...(this.#incarnationOf(runner) === undefined
+          ? {}
+          : { runnerIncarnation: this.#incarnationOf(runner) }),
         workspace: locatorFor(this.#workspace, { runnerId: runner.runnerId, cwd }),
       },
       waiting: [],
@@ -335,7 +340,7 @@ class Pool implements ManagerPool {
     // 宛先が落ちている / 居ないなら、まず別の器へ置き直す（M5）。ここで諦めると、
     // 器の故障がそのまま人間の待ちになる。
     const found = await this.#runnerOf(record);
-    if (found === null || !found.alive) {
+    if (found === null || !found.alive || found.replaced) {
       const moved = await this.#failover(record);
       if (moved === null) {
         return {
@@ -520,9 +525,10 @@ class Pool implements ManagerPool {
       if (job.status !== 'running' && job.status !== 'waiting_human') continue;
 
       const found = await this.#runnerOf(record);
-      // 宛先の器そのものが居ない / 落ちているなら、別の器へ置き直す（M5）。
-      // デーモンだけでなく runner ごと入れ替わった構成では、これが通常の経路になる。
-      if (found === null || !found.alive) {
+      // 宛先の器そのものが居ない / 落ちている / 同じ名前で作り直されているなら、
+      // 別の器へ置き直す（M5）。デーモンだけでなく runner ごと入れ替わった構成では、
+      // これが通常の経路になる。
+      if (found === null || !found.alive || found.replaced) {
         const moved = await this.#failover(record);
         if (moved !== null) resumed.push(moved);
         continue;
@@ -656,17 +662,30 @@ class Pool implements ManagerPool {
    * 生きているかどうかは名簿に聞き直す（周期を待たない） — 落ちた器へ命令を
    * 投げると、返らない待ちがそのまま人間の待ちになる。
    */
-  async #runnerOf(record: ManagerRecord): Promise<{ runner: RunnerClient; alive: boolean } | null> {
+  async #runnerOf(
+    record: ManagerRecord,
+  ): Promise<{ runner: RunnerClient; alive: boolean; replaced: boolean } | null> {
     const runnerId = record.job.runnerId;
     // 宛先が書かれていない古いジョブは、いまの器へ寄せる。
     if (runnerId === undefined) {
       const chosen = await this.#runners.select({}).catch(() => null);
-      return chosen === null ? null : { runner: chosen, alive: true };
+      return chosen === null ? null : { runner: chosen, alive: true, replaced: false };
     }
     const runner = await this.#runners.get(runnerId);
     if (runner === null) return null;
     const state = await this.#runners.probe(runnerId).catch(() => null);
-    return { runner, alive: state?.alive ?? true };
+    // **同じ名前でも、別の起動ならそこにセッションは無い。** ローリング更新で
+    // 入れ替わった器へ「続き」を流すと、古い器がまだ走っている場合に2本になる。
+    const placedOn = record.job.runnerIncarnation;
+    const current = state?.incarnation;
+    const replaced = placedOn !== undefined && current !== undefined && placedOn !== current;
+    return { runner, alive: state?.alive ?? true, replaced };
+  }
+
+  /** いまその宛先を名乗っている器の起動（報告しない器では undefined）。 */
+  #incarnationOf(runner: RunnerClient): string | undefined {
+    const states = this.#runners.states().filter((entry) => entry.runnerId === runner.runnerId);
+    return (states.find((entry) => entry.alive) ?? states[0])?.incarnation;
   }
 
   async #resume(
@@ -693,6 +712,7 @@ class Pool implements ManagerPool {
     });
     record.attached = true;
     record.job.runnerId = runner.runnerId;
+    record.job.runnerIncarnation = this.#incarnationOf(runner);
     record.job.cwd = where;
     return true;
   }
@@ -809,9 +829,12 @@ class Pool implements ManagerPool {
    *
    * 順に強い方から:
    *
-   * 1. その器へまだ届くなら、**実際に畳ませる**。通ればそれが確認になる
-   * 2. 器が貸し出し期限を報告していたなら、最後の名乗りから期限＋余裕を過ぎた
-   *    時点で、器は自分で畳んでいる（`runnerLeaseSchema` の約束）
+   * 1. その器へまだ届き、**そのセッションを実際に畳めたなら**それが確認になる。
+   *    `stop` が「そんなセッションは無い」と答えた場合は確認ではない — 同じ
+   *    `runner_id` で作り直された**新しい**器は、古い器が抱えたままのセッションを
+   *    知らないまま答えられる（`RunnerClient.stop` を見よ）
+   * 2. 器が貸し出し期限を報告していたなら、**その起動を最後に見た時刻**から
+   *    `ttlMs + graceMs` ＋余裕を過ぎた時点で、器は畳み終えている
    * 3. どちらも取れないなら**移さない**。二重に走らせるより、止めて人間へ回す
    */
   async #fence(record: ManagerRecord): Promise<Fence> {
@@ -825,20 +848,19 @@ class Pool implements ManagerPool {
     //    失敗したことを短く確定させて、期限の話（2.）へ落とす。
     const old = await this.#runners.get(from).catch(() => null);
     if (old !== null) {
+      // **「畳んだ」と答えたときだけ確認になる。** 届いたこと自体は確認ではない。
       const stopped = await withDeadline(
         `runner ${from} での停止確認`,
         STOP_CONFIRM_TIMEOUT_MS,
         () => old.stop(record.job.id),
-      )
-        .then(() => true)
-        .catch(() => false);
+      ).catch(() => false);
       if (stopped) return { kind: 'confirmed' };
     }
 
     // 2. 器が自分で畳むと約束していた分だけ待つ。
-    const state = this.#runners.states().find((entry) => entry.runnerId === from);
-    const ttlMs = state?.lease?.ttlMs;
-    if (ttlMs === undefined) {
+    const anchor = this.#fenceAnchor(from, record.job.runnerIncarnation);
+    const ttlMs = anchor?.lease?.ttlMs;
+    if (anchor === null || ttlMs === undefined) {
       return {
         kind: 'unknown',
         why:
@@ -847,13 +869,61 @@ class Pool implements ManagerPool {
       };
     }
 
-    const since =
-      state?.lastSeenAt === null || state?.lastSeenAt === undefined
-        ? this.#startedAt
-        : Date.parse(state.lastSeenAt);
-    const safeAt = (Number.isNaN(since) ? this.#startedAt : since) + ttlMs + this.#fenceMarginMs;
+    // **申告が無ければ TTL ぶん余計に待つ。** 器が期限切れに気づいて畳み終えるまでの
+    // 時間を 0 と決めてかかると、デーモンが「もう止まっている」と見なした時刻の方が、
+    // 器が畳み始める時刻より先に来る（そこが二重に走る窓になる）。
+    const graceMs = anchor.lease?.graceMs ?? ttlMs;
+    const safeAt = anchor.since + ttlMs + graceMs + this.#fenceMarginMs;
     const now = this.#now();
     return now >= safeAt ? { kind: 'expired' } : { kind: 'wait', ms: safeAt - now };
+  }
+
+  /**
+   * 期限を数え始める基準（＝その仕事を置いた**起動**を最後に見た時刻）。
+   *
+   * **`runner_id` で引いた「いまの状態」を使ってはいけない。** 器が同じ名前で
+   * 作り直されていると、新しい器の名乗りで基準が延び続け、古い器（分断されたまま
+   * 走っているかもしれない方）の期限が永遠に来ない。
+   */
+  #fenceAnchor(
+    runnerId: string,
+    placedOn: string | undefined,
+  ): { lease: RunnerHealthState['lease']; since: number } | null {
+    const at = (value: string | null | undefined): number | null => {
+      if (value === null || value === undefined) return null;
+      const parsed = Date.parse(value);
+      return Number.isNaN(parsed) ? null : parsed;
+    };
+
+    const states = this.#runners.states().filter((entry) => entry.runnerId === runnerId);
+    if (states.length === 0) return null;
+
+    if (placedOn !== undefined) {
+      // その起動そのものが名簿に居る（落ちて見えている器も含む）。
+      const exact = states.find((entry) => entry.incarnation === placedOn);
+      if (exact !== undefined) {
+        return { lease: exact.lease, since: at(exact.lastSeenAt) ?? this.#startedAt };
+      }
+      // 同じ名前で作り直されていた。**新しい器の名乗りでは数えない。**
+      const replaced = states.find((entry) => entry.previousIncarnation?.incarnation === placedOn);
+      if (replaced?.previousIncarnation !== undefined) {
+        return {
+          lease: replaced.lease,
+          since: at(replaced.previousIncarnation.lastSeenAt) ?? this.#startedAt,
+        };
+      }
+    }
+
+    // どの起動に置いたのか分からない（このデーモンより前に置かれた等）。
+    // **いちばん新しい観測を基準にする＝いちばん長く待つ。**
+    let since = this.#startedAt;
+    let lease: RunnerHealthState['lease'];
+    for (const entry of states) {
+      const seen = at(entry.lastSeenAt);
+      if (seen !== null && seen >= since) since = seen;
+      lease = lease ?? entry.lease;
+    }
+    return { lease, since };
   }
 
   /**

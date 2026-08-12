@@ -202,6 +202,7 @@ su -s /bin/sh worker -c "curl -s http://127.0.0.1:4518/livez"
 | `ALTEROID_RUNNER_ID`           | `runner-primary` | `runner-2` | **器ごとに違う値**。台帳の `manager_id → runner_id` はこれで引くので、被ると宛先が壊れる       |
 | `ALTEROID_RUNNER_TOKEN_SHA256` | 同じ             | 同じ       | 制御面の本人確認は「デーモンかどうか」の判定であって、器を区別するためのものではない           |
 | `ALTEROID_RUNNER_LEASE_TTL`    | `30`（既定）     | 同じ       | **器が自分でセッションを畳むまでの秒数。移送の安全はここが根拠である**（下の「3.5」）          |
+| `ALTEROID_RUNNER_LEASE_GRACE`  | `5`（既定）      | 同じ       | 期限切れから**畳み終わる**までに要りうる秒数。デーモンはこのぶんも待ってから移送する           |
 | `RAILWAY_RUN_UID`              | `0`              | `0`        | 子プロセスを uid 1001 へ降ろす特権（無いと runner は起動を拒む）                               |
 | `ALTEROID_RUNNER_BIND`         | `::`             | `::`       | Railway の private network（IPv6）                                                             |
 | `ALTEROID_RUNNER_PORT`         | `4518`           | `4518`     | Service ごとに別ホストなので、同じ番号でよい                                                   |
@@ -239,8 +240,15 @@ railway variable set ALTEROID_WORKSPACE_REF=main --service app
 ```bash
 railway ssh --service app
 curl -s http://${RUNNER_HOST}:4518/health -H "authorization: Bearer $ALTEROID_RUNNER_TOKEN" | jq .lease
-# => { "ttlMs": 30000 }   ← これが出ない器の仕事は、自動では移らない
+# => { "ttlMs": 30000, "graceMs": 5000, "incarnation": "..." }
+#    これが出ない器の仕事は、自動では移らない
 ```
+
+3つとも意味がある。
+
+- `ttlMs` — この時間名乗りを聞かれなければ、器は畳み**始める**
+- `graceMs` — 畳み**終わる**までに要りうる時間。デーモンは `ttlMs + graceMs` ＋自分の余裕を過ぎてから移送する。**これが無いと、デーモンが「もう止まっている」と見なす時刻の方が、器が畳み終わる時刻より先に来る**
+- `incarnation` — 器の**この起動**を指す id。`runner_id` は器を作り直しても同じ名前で戻るので、これが無いと、ローリング更新で入れ替わった新しい器の応答を、分断されたまま走り続けている古い器の応答と取り違える
 
 `off` にした器（と、この版より古い器）は「畳まない器」として扱われ、その仕事は自動では移らない。落ちたときは「元の器が止まっているかを確かめられない」という報告がクローンの受信箱へ届き、確かめた上で `manager_move`（chat では `/move <id> force`）で引き取る形になる。**黙って二重に走らせるよりは止める**、という選択である。
 

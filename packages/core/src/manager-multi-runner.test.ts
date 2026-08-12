@@ -136,14 +136,18 @@ interface Rig {
 }
 
 /**
- * @param leaseTtlMs 器が「この時間名乗りを聞かれなければ自分で畳む」と報告する値。
- *   `null` にすると報告しない器になる（＝止まったことを確かめられない器）。
+ * @param lease 器が名乗る貸し出し期限。`null` にすると報告しない器になる
+ *   （＝止まったことを確かめられない器）。`incarnation` は器の**この起動**を指す
+ *   id で、同じ `runnerId` で作り直された器と区別するために使う。
  */
 function rig(
   runnerId: string,
   sessionId: string,
   capacity: Partial<RunnerCapacity> = {},
-  leaseTtlMs: number | null = 2_000,
+  lease: { ttlMs: number; graceMs: number; incarnation?: string } | null = {
+    ttlMs: 1_500,
+    graceMs: 500,
+  },
 ): Rig {
   const { fn, sessions } = fakeSdk(sessionId);
   const inner = createLocalRunner({
@@ -180,7 +184,17 @@ function rig(
       if (dead) throw gone();
       const health = await inner.health();
       // 器は「この時間名乗りを聞かれなければ自分で畳む」と名乗る（fencing lease）。
-      return leaseTtlMs === null ? health : { ...health, lease: { ttlMs: leaseTtlMs } };
+      // `incarnation` まで名乗るので、同じ名前で作り直された器と区別が付く。
+      return lease === null
+        ? health
+        : {
+            ...health,
+            lease: {
+              ttlMs: lease.ttlMs,
+              graceMs: lease.graceMs,
+              incarnation: lease.incarnation ?? `${runnerId}-inc-1`,
+            },
+          };
     },
     async connect(onEvent) {
       if (dead) throw gone();
@@ -522,6 +536,88 @@ describe('複数 runner — 配置と経路', () => {
     await expect.poll(() => b.sessions.length, { timeout: 2000 }).toBe(1);
     // 器が変わっても、開いたのは1本だけ（元の1本＋移送先の1本にはならない）
     expect(a.sessions.length).toBe(1);
+
+    await f.pool.stop();
+  });
+
+  /**
+   * **`runner_id` は器を作り直しても同じ名前で戻る。** だからローリング更新の直後は、
+   * 分断されたまま走り続けている古い器と、その名前を引き継いだ新しい器が同時に
+   * 存在しうる。新しい器は古い器のセッションを知らないので、「畳んだか」を聞けば
+   * 何も知らないまま答えられる — それを停止確認と扱うと二重実行に踏み出す。
+   */
+  it('同じ名前で作り直された器の「畳んだ」応答を、停止確認と扱わない', async () => {
+    const old = rig('runner-a', 'sess-a', {}, { ttlMs: 1_500, graceMs: 500 });
+    // 同じ宛先を名乗る新しい器（別の起動。古い器のセッションは持っていない）
+    const fresh = rig(
+      'runner-a',
+      'sess-a-fresh',
+      {},
+      { ttlMs: 1_500, graceMs: 500, incarnation: 'runner-a-inc-2' },
+    );
+    const b = rig('runner-b', 'sess-b');
+    const f = fleet([old], { workspace: { kind: 'shared-volume', path: '/mnt/shared/app' } });
+
+    const started = await f.pool.start({ request: '長い仕事' });
+    await expect
+      .poll(async () => (await f.stores.jobs.listJobs())[0]?.sessionId, { timeout: 2000 })
+      .toBeDefined();
+    // どの起動に置いたかまで台帳に残っている（名前だけでは区別が付かない）
+    expect((await f.stores.jobs.listJobs())[0]?.runnerIncarnation).toBe('runner-a-inc-1');
+
+    f.registry.register(fresh.client);
+    f.registry.register(b.client);
+    old.kill();
+
+    // 生存判定は過ぎたが、古い器が自分で畳む期限はまだ来ていない
+    f.advance(2_100);
+    await f.registry.heartbeat();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // 新しい器は「そんなセッションは無い」と答えるだけ。**確認にはならない。**
+    expect(fresh.sessions.length).toBe(0);
+    expect(b.sessions.length).toBe(0);
+
+    // 期限を過ぎれば移る。移送先は別の器で、名前を引き継いだ新しい器ではない
+    f.advance(1_000);
+    const moved = await f.pool.rebalance();
+    expect(moved.length).toBe(1);
+    expect(moved[0]?.runnerId).toBe('runner-b');
+    await expect.poll(() => b.sessions.length, { timeout: 2000 }).toBe(1);
+    expect(fresh.sessions.length).toBe(0);
+
+    // 話しかけても、名前を引き継いだだけの器へ「続き」を流さない
+    const sent = await f.pool.send(started.managerId, '続きを頼む');
+    expect(sent.outcome).toBe('delivered');
+    expect(fresh.sessions.length).toBe(0);
+
+    await f.pool.stop();
+  });
+
+  it('器が申告した「畳み終わるまでの猶予」ぶんも待つ', async () => {
+    // 期限切れに気づいてから畳み終わるまでに 5 秒かかると名乗る器
+    const a = rig('runner-a', 'sess-a', {}, { ttlMs: 1_500, graceMs: 5_000 });
+    const b = rig('runner-b', 'sess-b');
+    const f = fleet([a], { workspace: { kind: 'shared-volume', path: '/mnt/shared/app' } });
+
+    await f.pool.start({ request: '長い仕事' });
+    await expect
+      .poll(async () => (await f.stores.jobs.listJobs())[0]?.sessionId, { timeout: 2000 })
+      .toBeDefined();
+
+    f.registry.register(b.client);
+    a.kill();
+
+    // TTL（1.5 秒）＋余裕（0.5 秒）は過ぎたが、申告された猶予（5 秒）の中
+    f.advance(3_000);
+    await f.registry.heartbeat();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(b.sessions.length).toBe(0);
+
+    // 申告ぶんを過ぎたら移る（1.5 + 5 + 0.5 = 7 秒）
+    f.advance(4_100);
+    expect((await f.pool.rebalance()).length).toBe(1);
+    await expect.poll(() => b.sessions.length, { timeout: 2000 }).toBe(1);
 
     await f.pool.stop();
   });

@@ -118,8 +118,8 @@ class LocalRunner implements RunnerClient {
     return this.#host.answer(managerId, answer);
   }
 
-  async stop(managerId: string): Promise<void> {
-    await this.#host.stop(managerId);
+  async stop(managerId: string): Promise<boolean> {
+    return this.#host.stop(managerId);
   }
 
   async list() {

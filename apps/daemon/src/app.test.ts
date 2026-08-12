@@ -154,7 +154,9 @@ function fakeRunners(): RunnerRegistry {
     async answer() {
       return true;
     },
-    async stop() {},
+    async stop() {
+      return true;
+    },
     async list() {
       return [];
     },

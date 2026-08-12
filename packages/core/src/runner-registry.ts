@@ -40,6 +40,21 @@ export interface RunnerHealthState {
    * なる時刻を計算できる（`runnerLeaseSchema` を見よ）。
    */
   lease?: RunnerLease;
+  /**
+   * いま名乗っている器の**起動**（`lease.incarnation`）。
+   *
+   * `runnerId` は器を作り直しても同じ名前で戻る安定した宛先なので、「その仕事を
+   * 置いた器と、いま名乗っている器が同じ起動か」はこれでしか分からない。
+   */
+  incarnation?: string;
+  /**
+   * 同じ `runnerId` で**入れ替わる前**の起動と、それを最後に見た時刻。
+   *
+   * **入れ替わりに気づかないと、fencing の基準時刻が新しい器の名乗りで延び続ける。**
+   * 古い器（分断されたまま走っているかもしれない方）の期限は、その器を最後に見た
+   * 時刻から数えなければならない。
+   */
+  previousIncarnation?: { incarnation: string; lastSeenAt: string };
   /** 最後の失敗の理由（人間が読む用）。 */
   lastError?: string;
 }
@@ -133,6 +148,8 @@ interface MutableState {
   misses: number;
   capacity: RunnerCapacity | undefined;
   lease: RunnerLease | undefined;
+  incarnation: string | undefined;
+  previousIncarnation: { incarnation: string; lastSeen: number } | undefined;
   lastError: string | undefined;
   /**
    * 直近この器へ置いた本数のうち、まだ実測（`capacity.activeManagers`）へ
@@ -185,6 +202,8 @@ class Registry implements RunnerRegistry {
       misses: 0,
       capacity: undefined,
       lease: undefined,
+      incarnation: undefined,
+      previousIncarnation: undefined,
       lastError: undefined,
       placements: 0,
     });
@@ -304,6 +323,24 @@ class Registry implements RunnerRegistry {
         this.#probeTimeoutMs,
         () => runner.health(),
       );
+
+      // 同じ宛先の器が作り直されていたら、**前の起動を最後に見た時刻を残す。**
+      // ここを上書きしてしまうと、分断されたまま走っているかもしれない古い器の
+      // 期限が、新しい器の名乗りで延び続ける（＝いつまでも移送できない / 誤って
+      // 移送する、のどちらかになる）。
+      const incarnation = health.lease?.incarnation;
+      if (
+        incarnation !== undefined &&
+        state.incarnation !== undefined &&
+        incarnation !== state.incarnation
+      ) {
+        state.previousIncarnation = {
+          incarnation: state.incarnation,
+          lastSeen: state.lastSeen ?? at,
+        };
+      }
+      state.incarnation = incarnation;
+
       state.lastSeen = at;
       state.misses = 0;
       state.capacity = health.capacity;
@@ -368,6 +405,15 @@ class Registry implements RunnerRegistry {
       misses: state?.misses ?? 0,
       ...(state?.capacity === undefined ? {} : { capacity: state.capacity }),
       ...(state?.lease === undefined ? {} : { lease: state.lease }),
+      ...(state?.incarnation === undefined ? {} : { incarnation: state.incarnation }),
+      ...(state?.previousIncarnation === undefined
+        ? {}
+        : {
+            previousIncarnation: {
+              incarnation: state.previousIncarnation.incarnation,
+              lastSeenAt: new Date(state.previousIncarnation.lastSeen).toISOString(),
+            },
+          }),
       ...(state?.lastError === undefined ? {} : { lastError: state.lastError }),
     };
   }
