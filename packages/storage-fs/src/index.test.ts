@@ -144,6 +144,33 @@ describe('FsJournalStore', () => {
     expect(JSON.parse(raw.trim())).toMatchObject({ type: 'decision', decision: 'd' });
   });
 
+  it('since より古い日のファイルは読まない（日報・要約が毎回全部を読まないため）', async () => {
+    await stores.journal.append({ type: 'decision', decision: '今日の分', grounds: 'g' });
+
+    const journalDir = join(root, 'journal');
+    // 過去の日誌を手で置く。読まれてしまうなら壊れた行で気づける。
+    await writeFile(join(journalDir, '2020-01-01.jsonl'), 'これは JSON ではない\n', 'utf8');
+    const old = join(journalDir, '2020-01-02.jsonl');
+    await writeFile(
+      old,
+      `${JSON.stringify({
+        type: 'decision',
+        id: 'old',
+        at: '2020-01-02T00:00:00.000Z',
+        decision: '昔の分',
+        grounds: 'g',
+      })}\n`,
+      'utf8',
+    );
+
+    const since = `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
+    const entries = await stores.journal.list({ since });
+    expect(entries.map((entry) => (entry as { decision?: string }).decision)).toEqual(['今日の分']);
+
+    // since を外せば古い分まで見える（打ち切りは読み飛ばしであって欠落ではない）
+    expect(await stores.journal.list()).toHaveLength(2);
+  });
+
   it('同時追記でも行が壊れない', async () => {
     await Promise.all(
       Array.from({ length: 20 }, (_, i) =>

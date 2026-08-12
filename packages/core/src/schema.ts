@@ -72,15 +72,23 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
     type: z.literal('timer'),
     id: z.string(),
     at: isoDateTime,
-    /** 何の定期ジョブか（M3） */
+    /** 何の定期ジョブか */
     kind: z.string(),
+    /**
+     * その発火が何を対象にしているか（日報なら対象日 `YYYY-MM-DD`）。
+     *
+     * **発火時刻から逆算させないこと。** デーモンが止まっていた日の日報を後から
+     * 作るとき、発火時刻はその日ではない。対象は起こした側が決めて運ぶ。
+     */
+    target: z.string().optional(),
   }),
   z.object({
     type: z.literal('external'),
     id: z.string(),
     at: isoDateTime,
     source: z.string(),
-    payload: z.unknown(),
+    /** 中身のない通知（source だけが届く）もあるので省略できる。 */
+    payload: z.unknown().optional(),
   }),
   z.object({
     type: z.literal('self_initiative'),
@@ -177,6 +185,20 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     at: isoDateTime,
     date: z.string(),
     body: z.string(),
+  }),
+  z.object({
+    type: z.literal('external_event'),
+    id: z.string(),
+    at: isoDateTime,
+    /** どこから届いたか（webhook の呼び出し元が名乗る名前）。 */
+    source: z.string(),
+    /**
+     * 届いた中身。長いものは切って入る。
+     *
+     * 要約ではなく中身を落とすのは、日誌が「何かあったときに掘る」層だからである
+     * （PRD「可観測性」）。何が届いたのか分からない記録は掘る役に立たない。
+     */
+    summary: z.string(),
   }),
 ]);
 

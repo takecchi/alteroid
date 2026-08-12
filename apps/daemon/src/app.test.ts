@@ -4,6 +4,7 @@ import type {
   InboxEvent,
   ManagerPool,
   ManagerSummary,
+  Scheduler,
   Stores,
 } from '@alteroid/core';
 import { createMemoryStores } from '@alteroid/core';
@@ -79,20 +80,49 @@ function fakeClone() {
   };
 }
 
+/** スケジューラの代わり。HTTP 層から起こせることだけを見る。 */
+function fakeScheduler() {
+  const ran: string[] = [];
+  const scheduler: Scheduler = {
+    start() {},
+    stop() {},
+    list() {
+      return [
+        {
+          kind: 'daily_report',
+          description: '毎日 22:00（ローカル時刻）にその日の日報をまとめる',
+          nextAt: '2026-08-12T13:00:00.000Z',
+        },
+      ];
+    },
+    run(kind) {
+      ran.push(kind);
+      return kind === 'daily_report';
+    },
+    tick() {
+      return [];
+    },
+  };
+  return { scheduler, ran };
+}
+
 let stores: Stores;
 let fake: ReturnType<typeof fakeClone>;
+let schedule: ReturnType<typeof fakeScheduler>;
 let app: ReturnType<typeof createApp>;
 let shutdowns: number;
 
 beforeEach(() => {
   stores = createMemoryStores();
   fake = fakeClone();
+  schedule = fakeScheduler();
   shutdowns = 0;
   app = createApp({
     clone: fake.clone,
     stores,
     token: 'test-token',
     shutdown: () => (shutdowns += 1),
+    scheduler: schedule.scheduler,
   });
 });
 
@@ -100,6 +130,19 @@ const json = (body: unknown) => ({
   method: 'POST',
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify(body),
+});
+
+/** 本文を持たない POST（CLI はこれに content-type を付けて叩く）。 */
+const post = { method: 'POST', headers: { 'content-type': 'application/json' } };
+
+/**
+ * ブラウザの単純リクエスト。人間が開いた任意のページから 127.0.0.1 へ投げられる形。
+ * 応答は読めないが、送信は成立する。
+ */
+const simpleRequest = (body = 'x') => ({
+  method: 'POST',
+  headers: { 'content-type': 'text/plain;charset=UTF-8' },
+  body,
 });
 
 describe('HTTP API', () => {
@@ -134,7 +177,7 @@ describe('HTTP API', () => {
   });
 
   it('会話終了で蒸留が促される', async () => {
-    const response = await app.request('/chat/conv-x/end', { method: 'POST' });
+    const response = await app.request('/chat/conv-x/end', post);
 
     expect(response.status).toBe(200);
     expect(fake.ended).toEqual(['conv-x']);
@@ -252,8 +295,234 @@ describe('HTTP API', () => {
     expect((await app.request('/managers/nope/transcript')).status).toBe(404);
   });
 
+  it('日報を読める（可観測性の最上段。普段の接点はほぼこれだけ）', async () => {
+    await stores.journal.append({ type: 'daily_report', date: '2026-08-11', body: '昨日の日報' });
+    await stores.journal.append({ type: 'daily_report', date: '2026-08-12', body: '今日の日報' });
+
+    const list = await app.request('/reports?limit=7');
+    const body = (await list.json()) as { reports: { date: string }[] };
+    // 新しい順
+    expect(body.reports.map((report) => report.date)).toEqual(['2026-08-12', '2026-08-11']);
+
+    const one = await app.request('/reports/2026-08-11');
+    expect(await one.json()).toMatchObject({ reports: [{ body: '昨日の日報' }] });
+
+    expect((await app.request('/reports/2026-08-10')).status).toBe(404);
+    expect((await app.request('/reports/2026%2F08%2F10')).status).toBe(400);
+  });
+
+  it('外部イベントを受けてクローンの受信箱へ積む（起点③）', async () => {
+    const response = await app.request('/events', json({ source: 'ci', payload: { ok: false } }));
+
+    expect(response.status).toBe(200);
+    expect(fake.posted[0]).toMatchObject({
+      type: 'external',
+      source: 'ci',
+      payload: { ok: false },
+    });
+  });
+
+  it('送り元の形を変えられない webhook も、本文ごと受けられる', async () => {
+    const response = await app.request('/events/github', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'review_requested' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(fake.posted[0]).toMatchObject({
+      type: 'external',
+      source: 'github',
+      payload: { action: 'review_requested' },
+    });
+  });
+
+  it('JSON として読めない本文はそのまま渡す', async () => {
+    await app.request('/events/mail', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: 'ただの文章',
+    });
+    expect(fake.posted[0]).toMatchObject({ source: 'mail', payload: 'ただの文章' });
+  });
+
+  /**
+   * 127.0.0.1 で待つことはブラウザからの保護にならない。人間が開いた任意のページが
+   * 単純リクエストを投げられ、応答が読めなくても**送信は成立する**。クローンのターンを
+   * 他人が起こせる状態を残さない（塞ぐのは能力側ではなく実行環境の境界）。
+   */
+  it('ブラウザの単純リクエストでは、状態を変える POST を叩けない', async () => {
+    const cases = [
+      // 他人が判断材料を書き込める
+      { path: '/events/github', body: '{"action":"注入"}' },
+      // 他人が自律ターン（モデル利用・委譲の判断）を起こせる
+      { path: '/schedule/self_initiative/run' },
+      // 他人が蒸留ターンを起こせる
+      { path: '/chat/conv-x/end' },
+      // 他人がデーモンを止められる
+      { path: '/shutdown' },
+    ];
+
+    for (const { path, body } of cases) {
+      const response = await app.request(path, simpleRequest(body));
+      expect(response.status, path).toBe(415);
+    }
+
+    // どれも通っていない
+    expect(fake.posted).toEqual([]);
+    expect(fake.ended).toEqual([]);
+    expect(schedule.ran).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(shutdowns).toBe(0);
+  });
+
+  it('form / no-cors で投げられる content-type も受けない', async () => {
+    for (const contentType of [
+      'application/x-www-form-urlencoded',
+      'multipart/form-data; boundary=x',
+      '',
+    ]) {
+      const response = await app.request('/schedule/daily_report/run', {
+        method: 'POST',
+        ...(contentType === '' ? {} : { headers: { 'content-type': contentType } }),
+      });
+      expect(response.status, contentType).toBe(415);
+    }
+    expect(schedule.ran).toEqual([]);
+  });
+
+  /**
+   * ブラウザが単純リクエストか否かを決めるのは MIME essence（`;` より前）だけである。
+   * パラメータに `application/json` と書いても safelist のまま preflight 無しで飛ぶので、
+   * 部分一致で判定すると門番があるつもりで通ってしまう。
+   */
+  it('パラメータに application/json と書いた safelist な content-type を受けない', async () => {
+    const disguises = [
+      'text/plain; note=application/json',
+      'text/plain;application/json',
+      'application/x-www-form-urlencoded; note=application/json',
+      'multipart/form-data; boundary=application/json',
+    ];
+
+    for (const contentType of disguises) {
+      for (const path of [
+        '/schedule/self_initiative/run',
+        '/shutdown',
+        '/chat/conv-x/end',
+        '/events/github',
+      ]) {
+        const response = await app.request(path, {
+          method: 'POST',
+          headers: { 'content-type': contentType },
+          body: '{"action":"注入"}',
+        });
+        expect(response.status, `${path} [${contentType}]`).toBe(415);
+      }
+    }
+
+    expect(fake.posted).toEqual([]);
+    expect(fake.ended).toEqual([]);
+    expect(schedule.ran).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(shutdowns).toBe(0);
+  });
+
+  it('charset 付き・大文字の application/json は通す（本物の webhook を弾かない）', async () => {
+    for (const contentType of [
+      'application/json; charset=utf-8',
+      'APPLICATION/JSON',
+      ' application/json ',
+    ]) {
+      const response = await app.request('/schedule/daily_report/run', {
+        method: 'POST',
+        headers: { 'content-type': contentType },
+      });
+      expect(response.status, contentType).toBe(200);
+    }
+    expect(schedule.ran).toEqual(['daily_report', 'daily_report', 'daily_report']);
+  });
+
+  it('中身のない通知も受ける（source だけ）', async () => {
+    const response = await app.request('/events', json({ source: 'cron' }));
+    expect(response.status).toBe(200);
+    expect(fake.posted[0]).toMatchObject({ type: 'external', source: 'cron' });
+  });
+
+  it('定期ジョブの一覧と、手で起こす口がある', async () => {
+    const list = await app.request('/schedule');
+    expect(await list.json()).toMatchObject({ entries: [{ kind: 'daily_report' }] });
+
+    const run = await app.request('/schedule/daily_report/run', post);
+    expect(run.status).toBe(200);
+    expect(schedule.ran).toEqual(['daily_report']);
+
+    expect((await app.request('/schedule/nope/run', post)).status).toBe(404);
+  });
+
+  it('溜まった承認待ちをまとめて片付けられる（1件失敗しても残りは進む）', async () => {
+    for (const id of ['ap-1', 'ap-2']) {
+      await stores.jobs.putApproval({
+        id,
+        createdAt: new Date().toISOString(),
+        question: `${id} を進めてよいか`,
+      });
+    }
+
+    const response = await app.request(
+      '/approvals/answer',
+      json({
+        answers: [
+          { id: 'ap-1', answer: 'よい' },
+          { id: 'ap-nope', answer: 'よい' },
+          { id: 'ap-2', answer: 'だめ' },
+        ],
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      results: [
+        { id: 'ap-1', ok: true },
+        { id: 'ap-nope', ok: false },
+        { id: 'ap-2', ok: true },
+      ],
+    });
+    expect(fake.answered).toEqual([
+      { id: 'ap-1', answer: 'よい' },
+      { id: 'ap-2', answer: 'だめ' },
+    ]);
+  });
+
+  it('回答済みの承認待ちには二度答えられない（再開した仕事に同じ回答を流さない）', async () => {
+    await stores.jobs.putApproval({
+      id: 'ap-1',
+      createdAt: '2026-08-12T00:00:00.000Z',
+      question: '進めてよいか',
+      answeredAt: '2026-08-12T01:00:00.000Z',
+      answer: 'よい',
+    });
+
+    const single = await app.request('/approvals/ap-1/answer', json({ answer: 'やっぱり駄目' }));
+    expect(single.status).toBe(409);
+
+    const batch = await app.request(
+      '/approvals/answer',
+      json({ answers: [{ id: 'ap-1', answer: 'やっぱり駄目' }] }),
+    );
+    expect(await batch.json()).toMatchObject({
+      results: [{ id: 'ap-1', ok: false, error: 'already answered' }],
+    });
+
+    expect(fake.answered).toEqual([]);
+  });
+
+  it('存在しない日付の日報は 400（黙って別の日にずらさない）', async () => {
+    expect((await app.request('/reports/2026-02-31')).status).toBe(400);
+    expect((await app.request('/reports/0000-00-00')).status).toBe(400);
+  });
+
   it('/shutdown で停止を要求できる', async () => {
-    const response = await app.request('/shutdown', { method: 'POST' });
+    const response = await app.request('/shutdown', post);
     expect(response.status).toBe(200);
 
     await new Promise((resolve) => setTimeout(resolve, 30));

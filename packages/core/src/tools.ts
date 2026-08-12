@@ -4,6 +4,7 @@ import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 
 import type { ManagerPool } from './manager.js';
+import { localDate, localDayRange } from './schedule.js';
 import type { ChatStreamEvent, PendingApproval } from './schema.js';
 import type { Stores } from './store.js';
 
@@ -41,6 +42,8 @@ export const CLONE_TOOL_NAMES = [
   'journal_write',
   'journal_read',
   'ask_human',
+  'approvals_list',
+  'daily_report_write',
   'manager_start',
   'manager_send',
   'manager_list',
@@ -186,6 +189,60 @@ export function createCloneTools(context: ToolContext) {
         });
         context.emit({ type: 'ask_human', approvalId: approval.id, question });
         return text(`承認待ちキューに積んだ（${approval.id}）。回答は後から届く。`);
+      },
+    ),
+
+    tool(
+      'approvals_list',
+      [
+        'いま人間の回答を待っている件の一覧。',
+        '人間が席に居ないあいだに溜まる。溜まっていても他の仕事は進めてよい。',
+      ].join(' '),
+      {},
+      async () => {
+        const pending = await stores.jobs.listApprovals({ pendingOnly: true });
+        if (pending.length === 0) return text('（人間の回答待ちは無い）');
+        return text(
+          pending
+            .map((approval) =>
+              [
+                `- ${approval.id}（${approval.createdAt}）${approval.question}`,
+                approval.jobId === undefined
+                  ? null
+                  : `  宛先: managerId: "${approval.jobId}"` +
+                    (approval.requestId === undefined
+                      ? ''
+                      : `, requestId: "${approval.requestId}"`),
+              ]
+                .filter((line) => line !== null)
+                .join('\n'),
+            )
+            .join('\n'),
+        );
+      },
+    ),
+
+    // --- 日報 --------------------------------------------------------------
+    tool(
+      'daily_report_write',
+      [
+        'その日の日報を残す。人間が普段読むのはこれだけである。',
+        '今日何をしたか・何が決まったか・何が保留か、が読んだだけで分かるように書くこと。',
+      ].join(' '),
+      {
+        date: z
+          .string()
+          .optional()
+          .describe('対象日 YYYY-MM-DD（省略時は今日。締めの指示に書かれた日付を使うこと）'),
+        body: z.string().describe('日報の本文（Markdown）'),
+      },
+      async ({ date, body }) => {
+        // 存在しない日付（2026-02-31 など）で残すと、その日報は二度と読めない。
+        // 形の検査だけでは通ってしまうので localDayRange に確かめさせる。
+        const target =
+          date !== undefined && localDayRange(date) !== null ? date : localDate(new Date());
+        await stores.journal.append({ type: 'daily_report', date: target, body });
+        return text(`${target} の日報を残した。`);
       },
     ),
 

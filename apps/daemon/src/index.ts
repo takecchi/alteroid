@@ -5,13 +5,27 @@ import { pathToFileURL } from 'node:url';
 
 import { serve } from '@hono/node-server';
 
-import { createClone } from '@alteroid/core';
+import {
+  createClone,
+  createScheduler,
+  dailyReportEvent,
+  missingDailyReportDates,
+} from '@alteroid/core';
 import { createFsStores, initWorkspace } from '@alteroid/storage-fs';
 
 import { createApp } from './app.js';
 import { clearRuntimeInfo, writeRuntimeInfo } from './runtime.js';
+import { buildSchedule, readScheduleConfig } from './schedule.js';
 
 export { createApp, type AppDeps, type AppType } from './app.js';
+export {
+  buildSchedule,
+  readScheduleConfig,
+  DEFAULT_DAILY_REPORT_AT,
+  DEFAULT_INITIATIVE_EVERY_MINUTES,
+  DEFAULT_REPORT_LOOKBACK_DAYS,
+  type ScheduleConfig,
+} from './schedule.js';
 export {
   parseRuntimeInfo,
   readRuntimeInfo,
@@ -51,7 +65,15 @@ export async function main(): Promise<void> {
   // 誤認させない（PID の再利用で無関係なプロセスを止めないため）。
   const token = randomUUID();
 
-  const app = createApp({ clone, stores, token, shutdown: () => void shutdown() });
+  // 時間起点のジョブ（起点② / ④）。発火は必ずクローンの受信箱を通る。
+  const schedule = readScheduleConfig();
+  for (const note of schedule.notes) process.stderr.write(`alteroidd: ${note}\n`);
+  const scheduler = createScheduler({
+    entries: buildSchedule(schedule),
+    post: (event) => clone.post(event),
+  });
+
+  const app = createApp({ clone, stores, token, shutdown: () => void shutdown(), scheduler });
   const server = serve({ fetch: app.fetch, port, hostname: '127.0.0.1' });
 
   server.on('error', (error: unknown) => {
@@ -66,6 +88,7 @@ export async function main(): Promise<void> {
 
     // 先に受け口を閉じて runtime 情報を消す。クローンの後片付け（最後の蒸留）が
     // 長引いても、CLI からは「止まった」と見えるようにする。
+    scheduler.stop();
     server.close();
     await clearRuntimeInfo(paths.state).catch(() => undefined);
 
@@ -88,6 +111,23 @@ export async function main(): Promise<void> {
 
   process.on('SIGTERM', () => void shutdown());
   process.on('SIGINT', () => void shutdown());
+
+  scheduler.start();
+
+  // 締め時刻に自分が動いていなければ、その日の日報は誰も作らない。「日報は毎日
+  // 生成される」は要件なので、動いていなかった日の分を起動時に拾い直す。
+  if (schedule.dailyReportAt !== null) {
+    const missed = await missingDailyReportDates({
+      journal: stores.journal,
+      at: schedule.dailyReportAt,
+      now: new Date(),
+      lookbackDays: schedule.reportLookbackDays,
+    }).catch(() => []);
+    for (const date of missed) clone.post(dailyReportEvent(date));
+    if (missed.length > 0) {
+      process.stdout.write(`alteroidd: 取りこぼした日報を作ります: ${missed.join(', ')}\n`);
+    }
+  }
 
   process.stdout.write(
     `alteroidd: http://127.0.0.1:${port} （記憶: ${paths.root} / 作業: ${workspace}）\n`,

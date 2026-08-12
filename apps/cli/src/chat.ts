@@ -8,7 +8,9 @@ import { createClient } from './client.js';
  * `alteroid chat` — クローンとの会話。
  *
  * 3層（日報・日誌・セッションログ）は chat と HTTP API の両方から読める必要が
- * ある（PRD「可観測性」）。M1 の chat ではスラッシュコマンドがその入口になる。
+ * ある（PRD「可観測性」）。chat ではスラッシュコマンドがその入口になり、
+ * 普段は `/report` だけ読んで暮らせて、掘りたくなったら `/journal` →
+ * `/manager` `/archive` と一本道で降りられる。
  */
 export async function chatCommand(): Promise<void> {
   const info = await ensureRunning();
@@ -17,6 +19,8 @@ export async function chatCommand(): Promise<void> {
 
   const rl = createInterface({ input: stdin, output: stdout });
   let conversationId: string | null = null;
+  // 直前に一覧した承認待ち。番号で答えられるようにするため覚えておく。
+  const listed: string[] = [];
 
   stdout.write('alteroid chat（Ctrl-D で終了 / /help でコマンド）\n');
 
@@ -31,7 +35,7 @@ export async function chatCommand(): Promise<void> {
       if (line.length === 0) continue;
 
       if (line.startsWith('/')) {
-        const handled = await runSlashCommand(line, client);
+        const handled = await runSlashCommand(line, client, listed);
         if (handled === 'quit') break;
         continue;
       }
@@ -162,21 +166,27 @@ function parseSSEChunk(chunk: string): SSEEvent | null {
   };
 }
 
-const HELP = `/memory              記憶の一覧
+const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-MM-DD）
+/reports [件数]       日報の一覧
+/memory              記憶の一覧
 /memory <slug>       記憶の中身
 /journal [件数]      日誌（新しい順）
 /managers            マネージャーの一覧と状態
 /manager <id>        そのマネージャーのセッション生ログ
 /archive             セッションの生ログ一覧
 /archive <id>        生ログの中身
-/approvals           承認待ち
-/answer <id> <回答>  承認待ちに答える
+/approvals           承認待ち（番号付き）
+/answer <番号|id> <回答>  承認待ちに答える（番号は /approvals の並び）
+/schedule            時間起点のジョブと次の発火
+/run <kind>          定期ジョブを今すぐ起こす
+/event <source> <本文>  外部イベントをクローンに届ける
 /quit                終了
 `;
 
 async function runSlashCommand(
   line: string,
   client: ReturnType<typeof createClient>,
+  listed: string[],
 ): Promise<'ok' | 'quit'> {
   const [command, ...rest] = line.split(/\s+/);
 
@@ -184,6 +194,94 @@ async function runSlashCommand(
     case '/help':
       stdout.write(HELP);
       return 'ok';
+
+    // --- 日報（人間の普段の接点はほぼこれだけ） -----------------------------
+    case '/report': {
+      const date = rest[0];
+      if (date) {
+        const response = await client.reports[':date'].$get({ param: { date } });
+        if (!response.ok) {
+          stdout.write(`${date} の日報はありません\n`);
+          return 'ok';
+        }
+        const body = await response.json();
+        if ('reports' in body) for (const report of body.reports) writeReport(report);
+        return 'ok';
+      }
+      const response = await client.reports.$get({ query: { limit: '1' } });
+      if (!response.ok) {
+        stdout.write('日報を読めませんでした\n');
+        return 'ok';
+      }
+      const { reports } = await response.json();
+      if (reports.length === 0) {
+        stdout.write('（日報はまだありません。/run daily_report で今すぐ作れます）\n');
+        return 'ok';
+      }
+      for (const report of reports) writeReport(report);
+      return 'ok';
+    }
+
+    case '/reports': {
+      const limit = rest[0] ?? '14';
+      const response = await client.reports.$get({ query: { limit } });
+      if (!response.ok) {
+        stdout.write('日報を読めませんでした\n');
+        return 'ok';
+      }
+      const { reports } = await response.json();
+      if (reports.length === 0) stdout.write('（日報はまだありません）\n');
+      for (const report of reports) {
+        stdout.write(`  ${report.date}  ${summarizeText(report.body)}\n`);
+      }
+      return 'ok';
+    }
+
+    // --- 自律（時間起点と外部イベント） -------------------------------------
+    case '/schedule': {
+      const response = await client.schedule.$get();
+      if (!response.ok) {
+        stdout.write('定期ジョブを読めませんでした\n');
+        return 'ok';
+      }
+      const { entries } = await response.json();
+      if (entries.length === 0) stdout.write('（定期ジョブは仕込まれていません）\n');
+      for (const entry of entries) {
+        stdout.write(`  ${entry.kind}  次: ${entry.nextAt}\n      ${entry.description}\n`);
+      }
+      return 'ok';
+    }
+
+    case '/run': {
+      const kind = rest[0];
+      if (!kind) {
+        stdout.write('使い方: /run <kind>（/schedule で一覧）\n');
+        return 'ok';
+      }
+      const response = await client.schedule[':kind'].run.$post({ param: { kind } });
+      stdout.write(
+        response.ok
+          ? `${kind} を起こしました（結果は日誌・日報に出ます）\n`
+          : `${kind} という定期ジョブはありません\n`,
+      );
+      return 'ok';
+    }
+
+    case '/event': {
+      const [source, ...bodyParts] = rest;
+      const body = bodyParts.join(' ');
+      if (!source || body.length === 0) {
+        stdout.write('使い方: /event <source> <本文>\n');
+        return 'ok';
+      }
+      const response = await client.events.$post({ json: { source, payload: body } });
+      stdout.write(
+        response.ok
+          ? '外部イベントとして届けました（クローンが判断します）\n'
+          : '届けられませんでした\n',
+      );
+      return 'ok';
+    }
 
     case '/quit':
     case '/exit':
@@ -283,6 +381,10 @@ async function runSlashCommand(
       return 'ok';
     }
 
+    /**
+     * 溜まった保留を人間がまとめて片付けるための一覧。番号を振るのは、
+     * 人間が席に戻ったときに UUID を写す作業をさせないためである。
+     */
     case '/approvals': {
       const response = await client.approvals.$get({ query: {} });
       if (!response.ok) {
@@ -290,18 +392,32 @@ async function runSlashCommand(
         return 'ok';
       }
       const { approvals } = await response.json();
-      if (approvals.length === 0) stdout.write('（承認待ちはありません）\n');
-      for (const approval of approvals) {
-        stdout.write(`  ${approval.id}  ${approval.question}\n`);
+      listed.length = 0;
+      if (approvals.length === 0) {
+        stdout.write('（承認待ちはありません）\n');
+        return 'ok';
       }
+      approvals.forEach((approval, index) => {
+        listed.push(approval.id);
+        stdout.write(`  [${index + 1}] ${approval.question}\n`);
+        stdout.write(`      id: ${approval.id}  積まれた: ${approval.createdAt}\n`);
+        if (approval.jobId) stdout.write(`      マネージャー: ${approval.jobId}\n`);
+        if (approval.context) stdout.write(`      背景: ${summarizeText(approval.context)}\n`);
+      });
+      stdout.write('  /answer <番号> <回答> で答えられます（答えた仕事だけが再開します）\n');
       return 'ok';
     }
 
     case '/answer': {
-      const [id, ...answerParts] = rest;
+      const [reference, ...answerParts] = rest;
       const answer = answerParts.join(' ');
-      if (!id || answer.length === 0) {
-        stdout.write('使い方: /answer <id> <回答>\n');
+      if (!reference || answer.length === 0) {
+        stdout.write('使い方: /answer <番号|id> <回答>\n');
+        return 'ok';
+      }
+      const id = resolveApprovalId(reference, listed);
+      if (id === null) {
+        stdout.write(`[${reference}] は /approvals の一覧にありません\n`);
         return 'ok';
       }
       const response = await client.approvals[':id'].answer.$post({
@@ -316,6 +432,16 @@ async function runSlashCommand(
       stdout.write(`不明なコマンド: ${command ?? ''}\n${HELP}`);
       return 'ok';
   }
+}
+
+function writeReport(report: { date: string; body: string }): void {
+  stdout.write(`── ${report.date} の日報 ──\n${report.body}\n`);
+}
+
+/** 番号（`/approvals` の並び）でも id そのままでも答えられるようにする。 */
+function resolveApprovalId(reference: string, listed: string[]): string | null {
+  if (/^\d+$/.test(reference)) return listed[Number(reference) - 1] ?? null;
+  return reference;
 }
 
 function summarize(entry: Record<string, unknown>): string {

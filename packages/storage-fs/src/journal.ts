@@ -42,9 +42,14 @@ export class FsJournalStore implements JournalStore {
     const files = await this.#files();
     const found: JournalEntry[] = [];
     const limit = query.limit ?? Number.POSITIVE_INFINITY;
+    // ファイル名は追記時の UTC 日付なので、`since` より古い日のファイルは開かなくてよい。
+    // 件数指定の無い `since` 問い合わせ（日報・要約）は M3 から常時走るため、
+    // ここで打ち切らないと日誌全部を毎回読むことになる。
+    const sinceDay = query.since?.slice(0, 10);
 
     // 新しい日付のファイルから読み、必要な件数が揃ったら止める
     for (const file of files) {
+      if (sinceDay !== undefined && file.slice(0, 10) < sinceDay) break;
       const raw = await readFile(join(this.#dir, file), 'utf8');
       const lines = raw.split('\n').filter((line) => line.length > 0);
       for (let i = lines.length - 1; i >= 0; i -= 1) {

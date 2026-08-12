@@ -12,10 +12,33 @@ export type { CloneHost } from './host.js';
 export { Inbox } from './inbox.js';
 export {
   buildCloneSystemPrompt,
+  buildDailyReportPrompt,
   buildDistillPrompt,
+  buildExternalEventPrompt,
   buildManagerSystemPrompt,
+  buildSelfInitiativePrompt,
+  buildTimerPrompt,
   buildWorkerPrompt,
 } from './prompt.js';
+export { buildActivityDigest, type DigestWindow } from './digest.js';
+export {
+  DAILY_REPORT_KIND,
+  SELF_INITIATIVE_KIND,
+  createScheduler,
+  dailyReportEntry,
+  dailyReportEvent,
+  localDate,
+  localDayRange,
+  missingDailyReportDates,
+  parseTimeOfDay,
+  selfInitiativeEntry,
+  startOfLocalDay,
+  type ScheduleEntry,
+  type ScheduleStatus,
+  type Scheduler,
+  type SchedulerOptions,
+  type TimeOfDay,
+} from './schedule.js';
 export {
   MANAGER_MODEL,
   WORKER_AGENT_NAME,
