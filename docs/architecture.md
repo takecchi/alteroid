@@ -144,6 +144,8 @@ apps/cli             alteroid = daemon への薄いクライアント（hono/cli
 | M3 | 自律 — スケジューラ、外部イベント、クローンの発意、承認待ちキュー |
 | M4 | クラウド — pg ドライバ、SessionStore、Dockerfile + compose、setup-token |
 
+各フェーズの成果物・受け入れ基準・地雷は [roadmap.md](./roadmap.md) に展開してある。実装はそちらに従う。
+
 ## 未解決事項
 
 - SDK のサンドボックス設定が公開されたら、ローカルの「既知の穴」をそれで塞げるか再評価する

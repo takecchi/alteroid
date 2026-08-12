@@ -4,8 +4,10 @@
 
 1. [docs/north_star.md](./docs/north_star.md) — **正典**。プロダクトの全判断の基準
 2. [docs/PRD.md](./docs/PRD.md) — 正典から導出された要件
+3. [docs/architecture.md](./docs/architecture.md) — 設計
+4. [docs/roadmap.md](./docs/roadmap.md) — 実装計画。**実装を引き継いだらここから着手する**
 
-**この2文書とコードが矛盾したら、バグなのはコードである。** 実装の都合で要件を下げない。
+**これらの文書とコードが矛盾したら、バグなのはコードである**（優先順位は番号順）。実装の都合で要件を下げない。
 
 ## この文書の役割
 
