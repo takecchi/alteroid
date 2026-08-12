@@ -289,11 +289,16 @@ class Clone implements CloneHost {
       case 'human_answer': {
         const approval = await this.#stores.jobs.getApproval(event.approvalId);
         const question = approval?.question ?? '(不明な質問)';
+        // 宛先は managerId と requestId の対で戻す。requestId を落とすと、
+        // そのマネージャーが複数を待っているとき宛先が決まらず、人間が答えたのに
+        // 仕事が再開しない（人間へ回る経路の端から端まで id を運ぶこと）。
         const waiting =
           approval?.jobId === undefined
             ? ''
             : `\n\nこの確認はマネージャー ${approval.jobId} のものである。` +
-              `回答を \`manager_send\`（許可確認なら decision 付き）で ${approval.jobId} へ返すと、止まっていたその仕事が再開する。`;
+              `回答を \`manager_send\`（許可確認なら decision 付き）で返すと、止まっていたその仕事が再開する。` +
+              `\n宛先: managerId: "${approval.jobId}"` +
+              (approval.requestId === undefined ? '' : `, requestId: "${approval.requestId}"`);
         await this.#runInternal(
           `[system] 承認待ちにしていた質問に人間が答えた。\n\n質問: ${question}\n回答: ${event.answer}` +
             `${waiting}\n\n` +
@@ -690,7 +695,8 @@ function managerPrompt(event: Extract<InboxEvent, { type: 'manager_message' }>):
     `返事をするまで ${event.managerId} のこの1件だけが止まっている（他のマネージャーも、同じマネージャーの別の確認も、それぞれ独立に待っている）。`,
     `記憶に根拠があるなら自分で決めて \`manager_send\`（${to}）で返し、その判断を \`journal_write\` に残せ。`,
     event.kind === 'permission' ? '許可確認なので `decision` に allow / deny を明示すること。' : '',
-    `根拠が無いなら \`ask_human\` に managerId: "${event.managerId}" を添えて積み、人間の回答が届いてから同じ宛先へ返せ。`,
+    `根拠が無いなら \`ask_human\` に ${to} を添えて積み、人間の回答が届いてから同じ宛先へ \`manager_send\` で返せ。` +
+      '（宛先を添えないと、人間が答えてもこの仕事を再開できない）',
   ]
     .filter((line) => line !== '')
     .join('\n');

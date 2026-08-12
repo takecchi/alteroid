@@ -236,7 +236,16 @@ export const pendingApprovalSchema = z.object({
   createdAt: isoDateTime,
   question: z.string(),
   context: z.string().optional(),
+  /** どのマネージャーの件か（= manager_id）。 */
   jobId: z.string().optional(),
+  /**
+   * マネージャー側で止まっている確認の id。
+   *
+   * **`jobId` だけでは足りない。** 1本のマネージャーが同時に複数を待つので、
+   * ここが欠けると人間の回答をどの確認へ返せばよいか決められず、答えたのに
+   * 仕事が再開しない。人間へ回る経路の端から端まで、この id を運ぶこと。
+   */
+  requestId: z.string().optional(),
   answeredAt: isoDateTime.optional(),
   answer: z.string().optional(),
 });

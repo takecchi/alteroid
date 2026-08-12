@@ -161,14 +161,22 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe('マネージャーからの確認を人間に回す場合、その manager_id'),
+        requestId: z
+          .string()
+          .optional()
+          .describe(
+            'マネージャーからの確認を人間に回す場合、受信箱に届いた requestId。' +
+              '人間の回答をこの確認へ返すために必要なので、managerId と必ず対で渡すこと',
+          ),
       },
-      async ({ question, context: background, managerId }) => {
+      async ({ question, context: background, managerId, requestId }) => {
         const approval: PendingApproval = {
           id: randomUUID(),
           createdAt: new Date().toISOString(),
           question,
           ...(background === undefined ? {} : { context: background }),
           ...(managerId === undefined ? {} : { jobId: managerId }),
+          ...(requestId === undefined ? {} : { requestId }),
         };
         await stores.jobs.putApproval(approval);
         await stores.journal.append({
