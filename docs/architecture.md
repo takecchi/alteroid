@@ -15,7 +15,8 @@
 │   └ 記憶ストア ← このプロセスだけが接続情報を持つ          │
 │                                                          │
 │  スケジューラ / 外部イベント入口 / 承認待ちキュー           │
-│  HTTP API（hono）─ chat(SSE)・jobs・journal・承認         │
+│  HTTP API（hono）─ chat(SSE)・jobs・承認                  │
+│                    日報・日誌・セッションログ（可観測性3層）  │
 └──────┬───────────────────────────────────────────┘
        │ 子プロセスとして起動（SDK が spawn）× N 並行
 ┌──────▼────────────────────────────┐   ┌───────────────┐
@@ -99,7 +100,8 @@ core にストアのインターフェースを切り、ドライバを差し替
 | インターフェース | 中身 | fs ドライバ（ローカル） | pg ドライバ（クラウド） |
 |---|---|---|---|
 | PersonaStore | 記憶（価値観・学び） | Markdown ファイル群 | PostgreSQL（同じ Markdown 文書をテーブルに） |
-| JournalStore | 日誌（追記専用） | JSONL | PostgreSQL |
+| JournalStore | 日誌（追記専用・型付きエントリ: やり取り、判断、エスカレーション、ツール実行、日報） | JSONL | PostgreSQL |
+| TranscriptArchive | セッション生ログ（PreCompact 退避分を含む） | JSONL ファイル | PostgreSQL または S3 互換 |
 | JobStore | ジョブ・承認待ち・manager_id と SDK session_id の対応 | JSON | PostgreSQL |
 
 - **fs を先に作る**。記憶が Markdown ファイルであることは「人間がいつでも読んで直せる」（提供価値1）の最短の実装
