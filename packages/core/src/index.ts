@@ -65,24 +65,51 @@ export {
   type RunnerHostOptions,
 } from './runner.js';
 export { createLocalRunner, type LocalRunnerOptions } from './runner-local.js';
+export { measureCapacity, type CapacityIo } from './capacity.js';
 export {
-  createRunnerRegistry,
   runnerAnswerCommandSchema,
+  runnerCapacitySchema,
   runnerEventSchema,
+  runnerHealthSchema,
   runnerManagerStateSchema,
   runnerMessageCommandSchema,
   runnerResumeCommandSchema,
   runnerStartCommandSchema,
   runnerWaitingSchema,
   type RunnerAnswerCommand,
+  type RunnerCapacity,
   type RunnerClient,
   type RunnerEvent,
+  type RunnerHealth,
   type RunnerManagerState,
-  type RunnerRegistry,
   type RunnerResumeCommand,
   type RunnerStartCommand,
   type RunnerWaiting,
 } from './runner-protocol.js';
+/**
+ * 名簿 — 登録・生存判定・資源による配置（M5）。**上限はここにも無い。**
+ */
+export {
+  createRunnerRegistry,
+  type RunnerHealthState,
+  type RunnerRegistry,
+  type RunnerRegistryOptions,
+  type RunnerSelectInput,
+} from './runner-registry.js';
+/** workspace の運用選択と、runner を跨いだ移送の可否（M5）。 */
+export {
+  DEFAULT_WORKSPACE_POLICY,
+  describeLoss,
+  isPortable,
+  locatorFor,
+  pinnedRunnerId,
+  relocate,
+  workspaceLocatorKindSchema,
+  workspacePolicySchema,
+  type Relocation,
+  type WorkspaceLocatorKind,
+  type WorkspacePolicy,
+} from './workspace.js';
 export {
   CLONE_ALLOWED_TOOLS,
   CLONE_TOOL_NAMES,

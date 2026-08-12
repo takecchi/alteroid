@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { CLONE_MODEL, createClone } from './clone.js';
 import type { CloneHost } from './host.js';
 import { createLocalRunner } from './runner-local.js';
-import { createRunnerRegistry } from './runner-protocol.js';
+import { createRunnerRegistry } from './runner-registry.js';
 import type { ChatStreamEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores, humanMessage } from './testing.js';

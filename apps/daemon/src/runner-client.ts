@@ -2,6 +2,7 @@ import type {
   RunnerAnswerCommand,
   RunnerClient,
   RunnerEvent,
+  RunnerHealth,
   RunnerManagerState,
   RunnerResumeCommand,
   RunnerStartCommand,
@@ -9,7 +10,7 @@ import type {
 import { request as httpRequest } from 'node:http';
 import { Readable } from 'node:stream';
 
-import { runnerEventSchema, runnerManagerStateSchema } from '@alteroid/core';
+import { runnerEventSchema, runnerHealthSchema, runnerManagerStateSchema } from '@alteroid/core';
 
 /**
  * manager-runner への HTTP の口（roadmap M4）。
@@ -34,6 +35,21 @@ export interface HttpRunnerOptions {
   fetchFn?: typeof fetch;
   /** ストリームが切れたときに待つミリ秒。 */
   retryDelayMs?: number;
+  /**
+   * 名乗りが返るまでの仮の runner_id。
+   *
+   * 名簿に載っている器が全部いつも生きているとは限らない（M5）。落ちている器を
+   * 名簿から消してしまうと復帰しても誰も繋ぎ直さないので、仮の名前で載せておき、
+   * 名乗りが返った時点で本当の id に置き換える。
+   */
+  runnerId?: string;
+  /**
+   * 名乗りが返らなければ失敗にするか（既定 true）。
+   *
+   * 1台構成では**返らないなら起動しない**のが正しい（宛先の無いデーモンは何もできない）。
+   * 複数構成では、1台の不在で残りを使えなくしない方が正しい（M5 受け入れ基準5）。
+   */
+  requireHello?: boolean;
 }
 
 /** `unix:/path/to.sock` を取り出す（無ければ TCP）。 */
@@ -42,20 +58,24 @@ function socketPathOf(baseUrl: string): string | null {
   return match?.[1] ?? null;
 }
 
-/** 接続して runner_id を確かめてから使う（宛先を台帳に残すため）。 */
+/**
+ * 接続して runner_id を確かめてから使う（宛先を台帳に残すため）。
+ *
+ * `requireHello: false` のときだけ、返らない器も名簿に載る形で返る（複数構成で
+ * 1台の不在が残りを止めないため）。その器は生存確認が通った時点で使えるようになる。
+ */
 export async function createHttpRunner(options: HttpRunnerOptions): Promise<RunnerClient> {
   const client = new HttpRunner(options);
-  await client.hello();
+  try {
+    await client.hello();
+  } catch (error) {
+    if (options.requireHello !== false) throw error;
+  }
   return client;
 }
 
-interface HealthBody {
-  runnerId?: unknown;
-  workspacePath?: unknown;
-}
-
 class HttpRunner implements RunnerClient {
-  runnerId = 'runner-primary';
+  runnerId: string;
   workspacePath = '';
   readonly #baseUrl: string;
   readonly #socketPath: string | null;
@@ -66,6 +86,8 @@ class HttpRunner implements RunnerClient {
   #closed = false;
 
   constructor(options: HttpRunnerOptions) {
+    // 仮の名前は宛先の見た目を持たせない（台帳の runner_id と偶然一致させない）。
+    this.runnerId = options.runnerId ?? `(未確認) ${options.baseUrl}`;
     this.#socketPath = socketPathOf(options.baseUrl);
     // ソケットのときも URL の形は要る（ホスト名は使われない）
     this.#baseUrl =
@@ -90,12 +112,24 @@ class HttpRunner implements RunnerClient {
 
   /** 名乗りを聞く。ここで得た runner_id が `manager_id → runner_id` の宛先になる。 */
   async hello(): Promise<void> {
+    await this.health();
+  }
+
+  /**
+   * 名乗りと資源（生存判定の1回分）。
+   *
+   * **届かなければ投げる。** 「落ちている」を戻り値で表すと、名簿が生きている器と
+   * 区別できず、落ちた器へ委譲を置き続ける（M5 受け入れ基準4）。
+   *
+   * 名乗りが返るたびに `runner_id` と workspace を取り直すのは、器が作り直された
+   * あとも同じ宛先として戻ってこられるようにするためである。
+   */
+  async health(): Promise<RunnerHealth> {
     const response = await this.#call('GET', '/health');
-    const body = (await response.json()) as HealthBody;
-    if (typeof body.runnerId === 'string' && body.runnerId.length > 0) {
-      this.runnerId = body.runnerId;
-    }
-    if (typeof body.workspacePath === 'string') this.workspacePath = body.workspacePath;
+    const health = runnerHealthSchema.parse(await response.json());
+    this.runnerId = health.runnerId;
+    this.workspacePath = health.workspacePath;
+    return health;
   }
 
   /**

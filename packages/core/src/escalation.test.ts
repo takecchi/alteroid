@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { createClone } from './clone.js';
 import { createManagerPool, type ManagerPool } from './manager.js';
 import { createLocalRunner } from './runner-local.js';
-import { createRunnerRegistry } from './runner-protocol.js';
+import { createRunnerRegistry } from './runner-registry.js';
 import type { InboxEvent, PendingApproval } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';

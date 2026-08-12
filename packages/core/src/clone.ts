@@ -12,10 +12,9 @@ import type {
 
 import { buildActivityDigest } from './digest.js';
 import type { CloneHost } from './host.js';
-import { createRunnerRegistry } from './runner-protocol.js';
 import { Inbox } from './inbox.js';
 import { createManagerPool, type ManagerPool } from './manager.js';
-import type { RunnerRegistry } from './runner-protocol.js';
+import { createRunnerRegistry, type RunnerRegistry } from './runner-registry.js';
 import {
   buildCloneSystemPrompt,
   buildDailyReportPrompt,
@@ -28,6 +27,7 @@ import { DAILY_REPORT_KIND, localDate, localDayRange } from './schedule.js';
 import type { ChatStreamEvent, InboxEvent, JournalEntryInput } from './schema.js';
 import type { Stores } from './store.js';
 import { CLONE_ALLOWED_TOOLS, MCP_SERVER_NAME, createCloneMcpServer } from './tools.js';
+import type { WorkspacePolicy } from './workspace.js';
 
 /**
  * クローン = デーモン内の長寿命 SDK セッション1本（docs/architecture.md）。
@@ -83,6 +83,12 @@ export interface CloneOptions {
    * PostgreSQL へ載せる。渡さなければローカルディスクのまま（M1〜M3 と同じ）。
    */
   sessionStore?: SessionStore;
+  /**
+   * workspace の運用選択（M5）。既定は runner ごとの volume（M4 と同じ挙動）。
+   *
+   * runner を跨いで仕事を続けられるかはここで決まる（共有 FS / git 再構築）。
+   */
+  workspace?: WorkspacePolicy;
   /** 主にテスト用。差し替えると委譲先ごと入れ替えられる。 */
   managers?: ManagerPool;
 }
@@ -129,7 +135,7 @@ class Clone implements CloneHost {
   #sawInit = false;
 
   constructor(options: CloneOptions) {
-    const { stores, queryFn, cwd, runners, sessionStore, managers } = options;
+    const { stores, queryFn, cwd, runners, sessionStore, workspace, managers } = options;
     this.#stores = stores;
     this.#queryFn = queryFn ?? query;
     this.#cwd = cwd;
@@ -141,6 +147,7 @@ class Clone implements CloneHost {
         // マネージャーからの報告・質問も、人間の発言と同じ受信箱を通る。
         post: (event) => this.post(event),
         runners: runners ?? createRunnerRegistry([]),
+        ...(workspace === undefined ? {} : { workspace }),
       });
     void this.#pump();
   }

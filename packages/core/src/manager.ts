@@ -1,9 +1,18 @@
 import { randomUUID } from 'node:crypto';
 
-import type { RunnerClient, RunnerEvent, RunnerRegistry } from './runner-protocol.js';
+import type { RunnerClient, RunnerEvent } from './runner-protocol.js';
+import type { RunnerRegistry } from './runner-registry.js';
 import { brief } from './runner.js';
 import type { InboxEvent, Job, JobStatus, JournalEntryInput, WorkspaceLocator } from './schema.js';
 import type { Stores } from './store.js';
+import {
+  DEFAULT_WORKSPACE_POLICY,
+  describeLoss,
+  isPortable,
+  locatorFor,
+  relocate,
+  type WorkspacePolicy,
+} from './workspace.js';
 
 /**
  * 委譲のデーモン側（docs/architecture.md「配線」）。
@@ -86,6 +95,13 @@ export interface ManagerPool {
    * 戻り値は「中断されていて実際に resume した」分。
    */
   restore(): Promise<ManagerSummary[]>;
+  /**
+   * 落ちた runner に居た仕事を、別の器へ置き直す（roadmap M5 受け入れ基準4）。
+   *
+   * 戻り値は**実際に移せた**分。移せなかった分は戻り値に現れず、代わりに
+   * クローンの受信箱へ「何が復旧不能なのか」が届く（黙って諦めない）。
+   */
+  rebalance(): Promise<ManagerSummary[]>;
   stop(): Promise<void>;
 }
 
@@ -95,6 +111,13 @@ export interface ManagerPoolOptions {
   post: (event: InboxEvent) => void;
   /** runner の名簿。宛先の決定はここを通す（固定 URL を前提にしない）。 */
   runners: RunnerRegistry;
+  /**
+   * workspace の運用選択（M5）。既定は runner ごとの volume（M4 と同じ）。
+   *
+   * ここが `runner-volume` のままだと、器が落ちた仕事は別の器へ移せない
+   * （移せないこと自体は正しく報告される）。
+   */
+  workspace?: WorkspacePolicy;
 }
 
 export function createManagerPool(options: ManagerPoolOptions): ManagerPool {
@@ -113,14 +136,30 @@ class Pool implements ManagerPool {
   readonly #stores: Stores;
   readonly #post: (event: InboxEvent) => void;
   readonly #runners: RunnerRegistry;
+  readonly #workspace: WorkspacePolicy;
   readonly #records = new Map<string, ManagerRecord>();
-  #connected = false;
+  /**
+   * もう受け口を開いた runner。
+   *
+   * **数ではなく相手で覚える。** 名簿は増える（M5）ので「1回繋いだら済み」に
+   * すると、後から加わった器の出来事が誰にも届かない。逆に同じ相手へ二重に
+   * 繋ぐと、同じ確認が2回降りてくる。
+   */
+  readonly #connected = new WeakSet<RunnerClient>();
+  /** 名簿の「落ちた」通知の購読を解く手。 */
+  #unwatch: (() => void) | null = null;
   #stopped = false;
 
-  constructor({ stores, post, runners }: ManagerPoolOptions) {
+  constructor({ stores, post, runners, workspace }: ManagerPoolOptions) {
     this.#stores = stores;
     this.#post = post;
     this.#runners = runners;
+    this.#workspace = workspace ?? DEFAULT_WORKSPACE_POLICY;
+    // 器が落ちたら、話しかけられるのを待たずに置き直す。人間の不在で止まって
+    // よいのは承認待ちの仕事だけである（PRD「自律」）。
+    this.#unwatch = this.#runners.onLost(() => {
+      void this.rebalance().catch(() => undefined);
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -149,7 +188,7 @@ class Pool implements ManagerPool {
         request: input.request,
         cwd,
         runnerId: runner.runnerId,
-        workspace: { kind: 'runner-volume', runnerId: runner.runnerId, path: cwd },
+        workspace: locatorFor(this.#workspace, { runnerId: runner.runnerId, cwd }),
       },
       waiting: [],
       attached: true,
@@ -195,15 +234,31 @@ class Pool implements ManagerPool {
       return { outcome: 'unknown', detail: `${managerId} というマネージャーは居ない。` };
     }
 
-    const runner = await this.#runnerOf(record);
-    if (!runner) {
-      return {
-        outcome: 'unknown',
-        detail:
-          `${managerId} を走らせていた runner（${record.job.runnerId ?? '不明'}）が居ない。` +
-          '別の runner で続きを起こすには workspace の移送が要る。',
-      };
+    // 宛先が落ちている / 居ないなら、まず別の器へ置き直す（M5）。ここで諦めると、
+    // 器の故障がそのまま人間の待ちになる。
+    const found = await this.#runnerOf(record);
+    if (found === null || !found.alive) {
+      const moved = await this.#failover(record);
+      if (moved === null) {
+        return {
+          outcome: 'unknown',
+          detail:
+            `${managerId} を走らせていた runner（${record.job.runnerId ?? '不明'}）へ届かない。` +
+            `${describeLoss(record.job.workspace, record.job.runnerId)}`,
+        };
+      }
+      // 移送先で開き直した。この一言はその続きへ流す。
+      const target = await this.#runners.get(moved.runnerId ?? '');
+      if (target !== null) await target.send(managerId, message);
+      await this.#journal({
+        type: 'exchange',
+        with: 'manager',
+        role: 'outbound',
+        text: `[${managerId}] ${message}`,
+      });
+      return { outcome: 'delivered', detail: `別の runner（${moved.runnerId}）で続きへ届けた。` };
     }
+    const runner = found.runner;
 
     const { decision, requestId } = options;
     const pending = this.#choosePending(record, requestId);
@@ -292,8 +347,8 @@ class Pool implements ManagerPool {
     // 走行中なら runner のディスクの上にある。
     const record = this.#records.get(managerId);
     if (record) {
-      const runner = await this.#runnerOf(record);
-      const live = await runner?.transcript(managerId).catch(() => null);
+      const found = await this.#runnerOf(record);
+      const live = await found?.runner.transcript(managerId).catch(() => null);
       if (live !== null && live !== undefined && live.length > 0) return live;
     }
 
@@ -364,10 +419,16 @@ class Pool implements ManagerPool {
       // だったものは台帳に載せるだけにする（話しかけられたら resume する）。
       if (job.status !== 'running' && job.status !== 'waiting_human') continue;
 
-      const runner = await this.#runnerOf(record);
-      if (!runner) continue;
+      const found = await this.#runnerOf(record);
+      // 宛先の器そのものが居ない / 落ちているなら、別の器へ置き直す（M5）。
+      // デーモンだけでなく runner ごと入れ替わった構成では、これが通常の経路になる。
+      if (found === null || !found.alive) {
+        const moved = await this.#failover(record);
+        if (moved !== null) resumed.push(moved);
+        continue;
+      }
 
-      const ok = await this.#resume(record, runner, restartNudge(job.status));
+      const ok = await this.#resume(record, found.runner, restartNudge(job.status));
       if (!ok) continue;
       record.job.status = 'running';
       await this.#persist(record);
@@ -383,8 +444,39 @@ class Pool implements ManagerPool {
     return resumed;
   }
 
+  /**
+   * 落ちた器に居た仕事を、生きている器へ置き直す（M5 受け入れ基準4）。
+   *
+   * 呼ばれるのは2つ。名簿が「落ちた」と言ったとき（自動）と、デーモンの起動時
+   * （`restore` 経由）である。**走行中と返事待ちだけ**を動かす — 待機（`done`）は
+   * 話しかけられたときに置き直せばよく、生きている仕事を掴み直す理由が無い。
+   */
+  async rebalance(): Promise<ManagerSummary[]> {
+    if (this.#stopped) return [];
+    await this.#ensureConnected();
+
+    const states = this.#runners.states();
+    const dead = new Set(states.filter((state) => !state.alive).map((state) => state.runnerId));
+    const known = new Set(states.map((state) => state.runnerId));
+
+    const moved: ManagerSummary[] = [];
+    for (const record of [...this.#records.values()]) {
+      const { runnerId, status } = record.job;
+      if (status !== 'running' && status !== 'waiting_human') continue;
+      if (runnerId === undefined) continue;
+      // 名簿に居ない器も「もう届かない」側である（器ごと消えた構成）。
+      if (!dead.has(runnerId) && known.has(runnerId)) continue;
+
+      const summary = await this.#failover(record).catch(() => null);
+      if (summary !== null) moved.push(summary);
+    }
+    return moved;
+  }
+
   async stop(): Promise<void> {
     this.#stopped = true;
+    this.#unwatch?.();
+    this.#unwatch = null;
     // **runner のマネージャーは止めない。** デーモンの都合で人の仕事を殺さない
     // （インプロセス runner だけは、プロセスが消えるので中で畳まれる）。
     for (const runner of await this.#runners.list().catch(() => [])) {
@@ -397,45 +489,145 @@ class Pool implements ManagerPool {
   // runner との配線
   // -------------------------------------------------------------------------
 
-  /** イベントの受け口を開く。**繋ぎに行くのはデーモン側**である。 */
+  /**
+   * イベントの受け口を開く。**繋ぎに行くのはデーモン側**である。
+   *
+   * 名簿にある全部へ繋ぐ。runner が増えても（M5）、上の層は何も変わらない —
+   * 増えたぶんの口がここで開くだけである。
+   */
   async #ensureConnected(): Promise<void> {
-    if (this.#connected || this.#stopped) return;
-    this.#connected = true;
+    if (this.#stopped) return;
     for (const runner of await this.#runners.list()) {
-      await runner.connect((event) => void this.#onEvent(event));
+      if (this.#connected.has(runner)) continue;
+      this.#connected.add(runner);
+      try {
+        await runner.connect((event) => void this.#onEvent(event));
+      } catch {
+        // 繋げない器は生存判定が拾う。ここで残りの器を諦めない（M5 では
+        // 1台の不在が全体を止めてはいけない）。
+        this.#connected.delete(runner);
+      }
     }
   }
 
-  async #runnerOf(record: ManagerRecord): Promise<RunnerClient | null> {
+  /**
+   * その仕事の宛先（sticky routing）。
+   *
+   * `manager_id → runner_id` は台帳にあるので、**推測せずにそこへ届ける**。
+   * 生きているかどうかは名簿に聞き直す（周期を待たない） — 落ちた器へ命令を
+   * 投げると、返らない待ちがそのまま人間の待ちになる。
+   */
+  async #runnerOf(record: ManagerRecord): Promise<{ runner: RunnerClient; alive: boolean } | null> {
     const runnerId = record.job.runnerId;
-    // 宛先が書かれていない古いジョブは、いまの1台へ寄せる（M4 は単一 runner）。
-    if (runnerId === undefined) return this.#runners.select({}).catch(() => null);
-    return this.#runners.get(runnerId);
+    // 宛先が書かれていない古いジョブは、いまの器へ寄せる。
+    if (runnerId === undefined) {
+      const chosen = await this.#runners.select({}).catch(() => null);
+      return chosen === null ? null : { runner: chosen, alive: true };
+    }
+    const runner = await this.#runners.get(runnerId);
+    if (runner === null) return null;
+    const state = await this.#runners.probe(runnerId).catch(() => null);
+    return { runner, alive: state?.alive ?? true };
   }
 
   async #resume(
     record: ManagerRecord,
     runner: RunnerClient,
     message: string | undefined,
+    cwd?: string,
   ): Promise<boolean> {
-    const { sessionId, cwd, request, projectKey } = record.job;
+    const { sessionId, request, projectKey } = record.job;
     if (sessionId === undefined) return false;
 
     // 生ログを渡して materialize させる。runner のディスクに残っている前提を
     // 置かない（器は作り直される）。
     const entries = await this.#loadSession(projectKey, sessionId);
+    const where = cwd ?? record.job.cwd ?? runner.workspacePath;
 
     await runner.resume({
       managerId: record.job.id,
       sessionId,
-      cwd: cwd ?? runner.workspacePath,
+      cwd: where,
       request: request ?? record.job.summary,
       ...(message === undefined ? {} : { message }),
       ...(entries === null ? {} : { entries }),
     });
     record.attached = true;
     record.job.runnerId = runner.runnerId;
+    record.job.cwd = where;
     return true;
+  }
+
+  /**
+   * 落ちた器に居た1本を、別の器へ置き直す（M5 受け入れ基準4）。
+   *
+   * 移せるかを決めるのは workspace の運用選択である（`workspace.ts`）。共有 FS なら
+   * 同じ場所が見えるのでそのまま、git 再構築なら**マネージャー自身に clone し直させる**。
+   * その器の volume の中にしか無いなら移せない — そのときは黙らずに、何が失われた
+   * のかをクローンの受信箱へ上げる。
+   */
+  async #failover(record: ManagerRecord): Promise<ManagerSummary | null> {
+    const from = record.job.runnerId;
+    const locator = record.job.workspace;
+
+    if (record.job.sessionId === undefined) {
+      this.#notifyStranded(
+        record,
+        `${describeLoss(locator, from)} この委譲はまだ session_id を持っていないので、続きへは戻れない。`,
+      );
+      return null;
+    }
+
+    if (!isPortable(locator)) {
+      this.#notifyStranded(record, describeLoss(locator, from));
+      return null;
+    }
+
+    // 落ちた器へは戻さない。
+    const target = await this.#runners
+      .select({ exclude: from === undefined ? [] : [from] })
+      .catch(() => null);
+    if (target === null || target.runnerId === from) {
+      this.#notifyStranded(
+        record,
+        `${describeLoss(locator, from)} 置き直せる別の runner が名簿に無い。`,
+      );
+      return null;
+    }
+
+    const moved = relocate(locator, {
+      runnerId: target.runnerId,
+      workspacePath: target.workspacePath,
+    });
+    if (moved === null) {
+      this.#notifyStranded(record, describeLoss(locator, from));
+      return null;
+    }
+
+    await this.#ensureConnected();
+    const ok = await this.#resume(record, target, moved.nudge, moved.cwd).catch(() => false);
+    if (!ok) {
+      this.#notifyStranded(
+        record,
+        `${describeLoss(locator, from)} 別の runner（${target.runnerId}）で開き直そうとしたが失敗した。`,
+      );
+      return null;
+    }
+
+    record.job.workspace = moved.locator;
+    record.job.status = 'running';
+    // 返事待ちだった確認は落ちた器と一緒に消えている。行列に残すと、次に届いた
+    // 言葉を誰も読まない確認が食い潰す。
+    record.waiting = [];
+    await this.#persist(record);
+    await this.#journal({
+      type: 'exchange',
+      with: 'manager',
+      role: 'outbound',
+      text: `[${record.job.id}] （${from ?? '不明'} → ${target.runnerId} へ移送）${moved.nudge}`,
+    });
+    this.#notifyMoved(record, from, target.runnerId);
+    return summaryOf(record);
   }
 
   async #loadSession(projectKey: string | undefined, sessionId: string): Promise<unknown[] | null> {
@@ -614,6 +806,58 @@ class Pool implements ManagerPool {
           ? '返事待ちがあれば改めて届く。`manager_send` で追加の指示も送れる。'
           : '再開の指示は送信済みなので、報告を待てばよい。' +
             '返事待ちだった確認は器と一緒に失われているので、必要ならマネージャーが聞き直してくる。',
+      ]
+        .filter((line) => line !== '')
+        .join('\n'),
+    });
+  }
+
+  /** 別の器へ置き直したことを知らせる（クローンは状況を把握したままでいる）。 */
+  #notifyMoved(record: ManagerRecord, from: string | undefined, to: string): void {
+    const { job } = record;
+    this.#post({
+      type: 'manager_message',
+      id: randomUUID(),
+      at: new Date().toISOString(),
+      managerId: job.id,
+      kind: 'report',
+      text: [
+        `走らせていた runner（${from ?? '不明'}）へ届かなくなったので、この委譲を ${to} で開き直した。`,
+        `依頼: ${job.request ?? job.summary}`,
+        `作業ディレクトリ: ${job.cwd ?? '(不明)'}`,
+        job.lastReport === undefined ? '' : `直近の報告: ${job.lastReport}`,
+        '',
+        '再開の指示は送信済みなので、報告を待てばよい。' +
+          '返事待ちだった確認は落ちた器と一緒に失われているので、必要ならマネージャーが聞き直してくる。',
+      ]
+        .filter((line) => line !== '')
+        .join('\n'),
+    });
+  }
+
+  /**
+   * 置き直せなかったことを知らせる（M5 受け入れ基準4 の後段）。
+   *
+   * **ここで黙ると、失われた作業が「進んでいるつもり」のまま残る。** 判断は
+   * クローンがする（記憶に根拠があれば自分で決め、無ければ人間へ回す）ので、
+   * ここでは事実だけを渡す。
+   */
+  #notifyStranded(record: ManagerRecord, detail: string): void {
+    const { job } = record;
+    this.#post({
+      type: 'manager_message',
+      id: randomUUID(),
+      at: new Date().toISOString(),
+      managerId: job.id,
+      kind: 'report',
+      text: [
+        `この委譲は続きを開けない状態になった。${detail}`,
+        `依頼: ${job.request ?? job.summary}`,
+        `作業ディレクトリ: ${job.cwd ?? '(不明)'}`,
+        job.lastReport === undefined ? '' : `直近の報告: ${job.lastReport}`,
+        '',
+        'どうするか（新しく起こし直す / 諦める / 人間に確認する）を決めること。' +
+          'コミットされていない作業が失われている可能性は、記憶に根拠が無ければ人間へ回すのが正しい。',
       ]
         .filter((line) => line !== '')
         .join('\n'),

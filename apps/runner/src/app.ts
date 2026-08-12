@@ -126,13 +126,21 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     .use('/managers', control)
     .use('/managers/*', control)
 
+    /**
+     * 名乗りと資源の報告（M4 の宛先確認 ＋ M5 の生存判定・配置）。
+     *
+     * `capacity` は**実測だけ**を載せる。「あと何本置けるか」を器が答え始めた
+     * 瞬間、それは定員＝能力の制限になる（roadmap M5 の地雷）。詰まっていることは
+     * 数字から分かるが、詰まったことを理由に委譲を拒む口はここにも無い。
+     */
     .get('/health', (c) =>
       c.json({
-        ok: true,
+        ok: true as const,
         runnerId: host.runnerId,
         workspacePath: host.workspacePath,
         managers: host.list().length,
         pendingEvents: outbox.pending,
+        capacity: host.capacity(),
       }),
     )
 

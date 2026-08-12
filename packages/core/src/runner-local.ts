@@ -4,8 +4,10 @@ import type { query } from '@anthropic-ai/claude-agent-sdk';
 
 import type {
   RunnerAnswerCommand,
+  RunnerCapacity,
   RunnerClient,
   RunnerEvent,
+  RunnerHealth,
   RunnerResumeCommand,
   RunnerStartCommand,
 } from './runner-protocol.js';
@@ -29,6 +31,8 @@ export interface LocalRunnerOptions {
   queryFn?: typeof query;
   env?: NodeJS.ProcessEnv;
   withheldEnvKeys?: readonly string[];
+  /** 主にテスト用。既定は実際の器を測る。 */
+  capacityFn?: (activeManagers: number) => RunnerCapacity;
 }
 
 export function createLocalRunner(options: LocalRunnerOptions): RunnerClient {
@@ -54,7 +58,25 @@ class LocalRunner implements RunnerClient {
       ...(options.withheldEnvKeys === undefined
         ? {}
         : { withheldEnvKeys: options.withheldEnvKeys }),
+      ...(options.capacityFn === undefined ? {} : { capacityFn: options.capacityFn }),
     });
+  }
+
+  /**
+   * 同じプロセスなので、名乗りは必ず返る。
+   *
+   * それでも HTTP 実装と同じ形で返すのは、**生存判定の材料が器の違いで変わらない**
+   * ようにするためである（M5 の回帰テストが見ているのはここ）。
+   */
+  async health(): Promise<RunnerHealth> {
+    return {
+      ok: true,
+      runnerId: this.runnerId,
+      workspacePath: this.workspacePath,
+      managers: this.#host.list().length,
+      pendingEvents: this.#queue.length,
+      capacity: this.#host.capacity(),
+    };
   }
 
   /**

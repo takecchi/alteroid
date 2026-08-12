@@ -14,9 +14,11 @@ import type {
   SessionStoreEntry,
 } from '@anthropic-ai/claude-agent-sdk';
 
+import { measureCapacity } from './capacity.js';
 import { buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
 import type {
   RunnerAnswerCommand,
+  RunnerCapacity,
   RunnerEvent,
   RunnerManagerState,
   RunnerResumeCommand,
@@ -100,6 +102,8 @@ export interface RunnerHostOptions {
   queryFn?: typeof query;
   /** 主にテスト用。既定は `process.env`。 */
   env?: NodeJS.ProcessEnv;
+  /** 主にテスト用。既定は実際の器を測る（`measureCapacity`）。 */
+  capacityFn?: (activeManagers: number) => RunnerCapacity;
   /** `WITHHELD_ENV_KEYS` に足して伏せる鍵。 */
   withheldEnvKeys?: readonly string[];
   /** SDK 子プロセスを別 UID で走らせる（コンテナ構成の既定）。 */
@@ -109,6 +113,13 @@ export interface RunnerHostOptions {
 export interface RunnerHost {
   readonly runnerId: string;
   readonly workspacePath: string;
+  /**
+   * いまの資源（配置の材料。roadmap M5）。
+   *
+   * **定員を返す口ではない。** ここに「あと何本置けるか」を足さないこと — 置ける
+   * か否かを器が決め始めた瞬間、それは能力の制限になる（禁止2）。
+   */
+  capacity(): RunnerCapacity;
   start(command: RunnerStartCommand): Promise<void>;
   resume(command: RunnerResumeCommand): Promise<void>;
   send(managerId: string, text: string): Promise<boolean>;
@@ -132,6 +143,7 @@ class Host implements RunnerHost {
   readonly #env: NodeJS.ProcessEnv;
   readonly #withheldEnvKeys: readonly string[];
   readonly #childUser: RunnerChildUser | undefined;
+  readonly #capacityFn: (activeManagers: number) => RunnerCapacity;
   readonly #sessions = new Map<string, RunnerSession>();
 
   constructor(options: RunnerHostOptions) {
@@ -142,6 +154,11 @@ class Host implements RunnerHost {
     this.#env = options.env ?? process.env;
     this.#withheldEnvKeys = [...WITHHELD_ENV_KEYS, ...(options.withheldEnvKeys ?? [])];
     this.#childUser = options.childUser;
+    this.#capacityFn = options.capacityFn ?? ((active) => measureCapacity(active));
+  }
+
+  capacity(): RunnerCapacity {
+    return this.#capacityFn(this.#sessions.size);
   }
 
   #create(managerId: string, request: string, cwd: string): RunnerSession {

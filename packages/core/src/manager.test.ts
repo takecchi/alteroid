@@ -19,7 +19,8 @@ import {
   type ManagerPool,
 } from './manager.js';
 import { createLocalRunner } from './runner-local.js';
-import { createRunnerRegistry, type RunnerClient } from './runner-protocol.js';
+import { createRunnerRegistry } from './runner-registry.js';
+import type { RunnerClient } from './runner-protocol.js';
 import type { InboxEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';

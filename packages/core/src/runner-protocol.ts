@@ -42,6 +42,46 @@ export const runnerManagerStateSchema = z.object({
 
 export type RunnerManagerState = z.infer<typeof runnerManagerStateSchema>;
 
+/**
+ * runner が報告する実行環境の資源（roadmap M5）。
+ *
+ * **配置の材料であって、定員ではない。** 「同時に何本まで」を決める数をここへ
+ * 足さないこと（`maxManagers` のような人工上限は禁止2 の違反であり、M5 の地雷
+ * そのものである）。ここに並ぶのは全部**実測**で、詰まっていることは分かるが、
+ * 詰まったことを理由に委譲を拒む口はどこにも無い。
+ */
+export const runnerCapacitySchema = z.object({
+  /** 使える CPU（cgroup で絞られていれば小数になる）。 */
+  cpuCount: z.number().positive(),
+  /** 直近1分の負荷。取れない環境では 0。 */
+  load1m: z.number().nonnegative(),
+  totalMemoryBytes: z.number().nonnegative(),
+  freeMemoryBytes: z.number().nonnegative(),
+  /** いま抱えている SDK セッションの本数（実測。上限ではない）。 */
+  activeManagers: z.number().int().nonnegative(),
+  /** 器が起きてからの秒数。作り直されたことの手がかりになる。 */
+  uptimeSeconds: z.number().nonnegative(),
+});
+
+export type RunnerCapacity = z.infer<typeof runnerCapacitySchema>;
+
+/**
+ * runner の名乗り（`GET /health`）。生存判定と配置はこれ1枚で足りる。
+ *
+ * `capacity` を省略可能にしてあるのは、資源を報告しない古い器が名簿に混ざっても
+ * **配置から落とさない**ためである（報告が無いことは能力の欠落ではない）。
+ */
+export const runnerHealthSchema = z.object({
+  ok: z.literal(true),
+  runnerId: z.string().min(1),
+  workspacePath: z.string(),
+  managers: z.number().int().nonnegative(),
+  pendingEvents: z.number().int().nonnegative(),
+  capacity: runnerCapacitySchema.optional(),
+});
+
+export type RunnerHealth = z.infer<typeof runnerHealthSchema>;
+
 // ---------------------------------------------------------------------------
 // デーモン → runner（命令）
 // ---------------------------------------------------------------------------
@@ -164,6 +204,13 @@ export interface RunnerClient {
   readonly runnerId: string;
   /** この runner の既定の作業ディレクトリ（workspace locator の path になる）。 */
   readonly workspacePath: string;
+  /**
+   * 名乗りと資源の報告（生存判定の1回分）。
+   *
+   * **届かなければ例外を投げること。** 「落ちている」を戻り値で表すと、呼び出し側が
+   * 生きている器と区別できず、落ちた器へ委譲を置き続ける（M5 受け入れ基準4）。
+   */
+  health(): Promise<RunnerHealth>;
   /** イベントの受け取りを始める。**接続を張るのはデーモン側**である。 */
   connect(onEvent: (event: RunnerEvent) => void): Promise<void>;
   start(command: RunnerStartCommand): Promise<void>;
@@ -187,44 +234,9 @@ export interface RunnerClient {
 }
 
 /**
- * runner の名簿。デーモンは**固定 URL ではなくここ**を見る。
+ * 名簿（`RunnerRegistry`）は [runner-registry.ts](./runner-registry.ts) にある。
  *
- * M4 で登録されるのは1台だけだが、間接層をここに置いておかないと、宛先の決定が
- * 呼び出し側に散らばって M5（複数 runner・水平スケール）で全部書き直しになる。
- *
- * **`select` に人工的な上限を入れないこと。** 「同時に何本まで」は能力の削除で
- * あって配置の判断ではない（north_star 禁止2）。将来ここで見てよいのは、runner が
- * 報告する CPU・メモリ・稼働セッション数といった**実行環境の資源**である。
+ * 宛先の決定・生存判定・資源による配置は**振る舞い**なので、この形の定義だけを
+ * 置いておくファイルには入れない。デーモンが見るのは名簿だけで、固定 URL も
+ * runner のローカルパスも前提にしない（docs/architecture.md「プロセス境界」）。
  */
-export interface RunnerRegistry {
-  list(): Promise<RunnerClient[]>;
-  get(runnerId: string): Promise<RunnerClient | null>;
-  /** 新しい委譲をどの runner に置くか。M4 では唯一の1台を返す。 */
-  select(input: { cwd?: string }): Promise<RunnerClient>;
-}
-
-/**
- * 1台だけの名簿（M4 の既定）。
- *
- * 複数渡せる形にしてあるのは、M5 で `select` の中身だけを差し替えられるように
- * するためである。いまは先頭を返す。
- */
-export function createRunnerRegistry(runners: RunnerClient[]): RunnerRegistry {
-  return {
-    async list() {
-      return [...runners];
-    },
-    async get(runnerId) {
-      return runners.find((runner) => runner.runnerId === runnerId) ?? null;
-    },
-    async select() {
-      const first = runners[0];
-      if (first === undefined) {
-        throw new Error(
-          'manager-runner が登録されていない（ALTEROID_RUNNER_URL か同一プロセスの runner が要る）',
-        );
-      }
-      return first;
-    },
-  };
-}

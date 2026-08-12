@@ -43,6 +43,9 @@ function fakeClone() {
     async restore() {
       return [];
     },
+    async rebalance() {
+      return [];
+    },
     async stop() {},
   };
 

@@ -50,6 +50,9 @@ function harness(): Harness {
     async restore() {
       return [];
     },
+    async rebalance() {
+      return [];
+    },
     async stop() {},
   };
 
