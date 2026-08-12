@@ -12,11 +12,11 @@
 
 **ゴール**: 空でもビルド・テスト・型チェックが回る骨格。
 
-- [ ] pnpm workspaces（`packages/core`, `packages/storage-fs`, `packages/storage-pg`（空スタブ）, `apps/daemon`, `apps/cli`）
-- [ ] TypeScript strict / ESM 統一、ビルドは tsup
-- [ ] vitest / eslint + prettier
-- [ ] GitHub Actions: install → typecheck → lint → test
-- [ ] AGENTS.md「リポジトリの約束」にビルド・テスト手順を追記（書いた人が追記する約束）
+- [x] pnpm workspaces（`packages/core`, `packages/storage-fs`, `packages/storage-pg`（空スタブ）, `apps/daemon`, `apps/cli`）
+- [x] TypeScript strict / ESM 統一、ビルドは tsup
+- [x] vitest / eslint + prettier
+- [x] GitHub Actions: install → typecheck → lint → test
+- [x] AGENTS.md「リポジトリの約束」にビルド・テスト手順を追記（書いた人が追記する約束）
 
 **受け入れ基準**: clean checkout から `pnpm install && pnpm build && pnpm test` が通り、CI が green。
 
@@ -24,14 +24,14 @@
 
 **ゴール**: 常駐デーモン内のクローンと会話でき、価値観が蒸留されて Markdown 記憶に残り、人間がそれを直接編集できる。
 
-- [ ] `core`: ストア IF（PersonaStore / JournalStore / JobStore）と型付きメッセージ（エスカレーション・日誌・受信箱イベント）の zod スキーマ
-- [ ] `core`: クローンループ — SDK `query()`、model `fable`、`tools: []`、インプロセス MCP（`memory_*` / `journal_*` / `ask_human`。`manager_*` は M2 までスタブ）
-- [ ] `core`: **受信箱を M1 から作る**。この時点で届くのは人間の発言だけだが、構造はイベント駆動にしておく（chat 専用の作りにすると M3 で自律に化けられない — AGENTS.md 地雷4）
-- [ ] `storage-fs`: 記憶 = Markdown、日誌 = JSONL、ジョブ = JSON（`~/.alteroid/`）
-- [ ] `apps/daemon`: hono で chat(SSE)・journal 閲覧・記憶閲覧。クローンは常に1インスタンス
-- [ ] `apps/cli`: `alteroid init` / `chat` / `daemon start|stop|status`（hono/client の型付きクライアント）
-- [ ] 蒸留: 会話終了時 + PreCompact フック時（寿命モデル: 蒸留は生存条件）
-- [ ] PreCompact で全文トランスクリプトをアーカイブへ退避
+- [x] `core`: ストア IF（PersonaStore / JournalStore / JobStore）と型付きメッセージ（エスカレーション・日誌・受信箱イベント）の zod スキーマ
+- [x] `core`: クローンループ — SDK `query()`、model `fable`、`tools: []`、インプロセス MCP（`memory_*` / `journal_*` / `ask_human`。`manager_*` は M2 までスタブ）
+- [x] `core`: **受信箱を M1 から作る**。この時点で届くのは人間の発言だけだが、構造はイベント駆動にしておく（chat 専用の作りにすると M3 で自律に化けられない — AGENTS.md 地雷4）
+- [x] `storage-fs`: 記憶 = Markdown、日誌 = JSONL、ジョブ = JSON（`~/.alteroid/`）
+- [x] `apps/daemon`: hono で chat(SSE)・journal 閲覧・記憶閲覧。クローンは常に1インスタンス
+- [x] `apps/cli`: `alteroid init` / `chat` / `daemon start|stop|status`（hono/client の型付きクライアント）
+- [x] 蒸留: 会話終了時 + PreCompact フック時（寿命モデル: 蒸留は生存条件）
+- [x] PreCompact で全文トランスクリプトをアーカイブへ退避
 
 **受け入れ基準**:
 1. `alteroid init` → `~/.alteroid/` が生成される
