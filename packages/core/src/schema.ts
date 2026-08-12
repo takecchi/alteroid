@@ -93,9 +93,14 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
     id: z.string(),
     at: isoDateTime,
     managerId: z.string(),
-    /** マネージャーからの報告 / 質問 / 許可確認（M2 で配線される） */
+    /** マネージャーからの報告 / 質問 / 許可確認 */
     kind: z.enum(['report', 'question', 'permission']),
     text: z.string(),
+    /**
+     * 質問・許可確認のときだけ付く。マネージャー側でその1件が返事を待って
+     * 止まっている。クローンが `manager_send` で答えるとそこだけが再開する。
+     */
+    requestId: z.string().optional(),
   }),
 ]);
 
@@ -138,7 +143,10 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     id: z.string(),
     at: isoDateTime,
     question: z.string(),
+    /** 承認待ちキューの項目 id、またはマネージャーの確認1件の id。 */
     approvalId: z.string(),
+    /** マネージャー発の確認ならその manager_id（誰が止まっているかを辿るため）。 */
+    managerId: z.string().optional(),
     answeredAt: isoDateTime.optional(),
     answer: z.string().optional(),
   }),
@@ -146,7 +154,10 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     type: z.literal('tool_use'),
     id: z.string(),
     at: isoDateTime,
-    /** 実行した層（M2 でマネージャー・作業者が入る） */
+    /**
+     * 実行した層。`manager:<id>` / `worker:<id>:<agent>` の形で入る。
+     * マネージャーと作業者の全ツール実行がここに落ちる（監査）。
+     */
     actor: z.string(),
     tool: z.string(),
     input: z.unknown(),
@@ -180,15 +191,41 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K>
 // ジョブ・承認待ち
 // ---------------------------------------------------------------------------
 
+/**
+ * ジョブの状態。
+ *
+ * - `running`: マネージャーが手を動かしている
+ * - `waiting_human`: 上（クローン、必要なら人間）の返事待ちで、**その仕事だけ**が止まっている
+ * - `done`: 直近の依頼を終えて待機中。セッションは生きているので追加指示を送れる
+ * - `failed`: セッションが落ちた
+ *
+ * 「終わったら片付ける」ためのものではない。人間が Claude Code の窓を開いたまま
+ * にしておくのと同じで、`done` は死ではなく待機である。
+ */
+export const jobStatusSchema = z.enum(['running', 'waiting_human', 'done', 'failed']);
+
+export type JobStatus = z.infer<typeof jobStatusSchema>;
+
 export const jobSchema = z.object({
   id: z.string(),
   createdAt: isoDateTime,
   updatedAt: isoDateTime,
-  status: z.enum(['running', 'waiting_human', 'done', 'failed']),
-  /** M2 でマネージャーの SDK session_id を持つ。M1 では未使用。 */
+  status: jobStatusSchema,
+  /** マネージャーの識別子。ジョブ1件 = マネージャー1本なので id と同じ値が入る。 */
   managerId: z.string().optional(),
+  /** SDK のセッション id。M4 の resume の足がかり。 */
   sessionId: z.string().optional(),
   summary: z.string(),
+  /** クローンが出した依頼の全文。 */
+  request: z.string().optional(),
+  /** マネージャーの作業ディレクトリ（人間が Claude Code を開く場所と同じ）。 */
+  cwd: z.string().optional(),
+  /** 走行中セッションのトランスクリプト。可観測性の最下段への入口。 */
+  transcriptPath: z.string().optional(),
+  /** 退避済みトランスクリプト（TranscriptArchive の id）。 */
+  archiveIds: z.array(z.string()).optional(),
+  /** 直近の報告。一覧でクローンが状況を掴むためのもの。 */
+  lastReport: z.string().optional(),
 });
 
 export type Job = z.infer<typeof jobSchema>;

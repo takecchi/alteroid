@@ -6,6 +6,7 @@ import type { Options, Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/c
 
 import type { CloneHost } from './host.js';
 import { Inbox } from './inbox.js';
+import { createManagerPool, type ManagerPool } from './manager.js';
 import { buildCloneSystemPrompt, buildDistillPrompt } from './prompt.js';
 import type { ChatStreamEvent, InboxEvent, JournalEntryInput } from './schema.js';
 import type { Stores } from './store.js';
@@ -43,6 +44,20 @@ export interface CloneOptions {
    * 迷子になる）。デーモンは `~/.alteroid` を渡す。
    */
   cwd?: string;
+  /**
+   * マネージャー用の `query`（主にテスト用）。クローンのものと分けてあるのは、
+   * 両者が別プロセス・別モデル帯だからである。
+   */
+  managerQueryFn?: typeof query;
+  /**
+   * `manager_start` で cwd を省いたときの作業ディレクトリ。クローンの `cwd`
+   * （人格データの置き場）とは別物で、こちらは実プロジェクト側である。
+   */
+  managerCwd?: string;
+  /** 主にテスト用。マネージャー子プロセスへ渡す環境変数の素。 */
+  managerEnv?: NodeJS.ProcessEnv;
+  /** 主にテスト用。差し替えると委譲先ごと入れ替えられる。 */
+  managers?: ManagerPool;
 }
 
 type Listener = (event: ChatStreamEvent) => void;
@@ -64,6 +79,7 @@ class Clone implements CloneHost {
   readonly #stores: Stores;
   readonly #queryFn: typeof query;
   readonly #cwd: string | undefined;
+  readonly #managers: ManagerPool;
 
   readonly #inbox = new Inbox();
   readonly #listeners = new Map<string, Set<Listener>>();
@@ -84,11 +100,27 @@ class Clone implements CloneHost {
   #resumedFrom: string | null = null;
   #sawInit = false;
 
-  constructor({ stores, queryFn, cwd }: CloneOptions) {
+  constructor(options: CloneOptions) {
+    const { stores, queryFn, cwd, managerQueryFn, managerCwd, managerEnv, managers } = options;
     this.#stores = stores;
     this.#queryFn = queryFn ?? query;
     this.#cwd = cwd;
+    this.#managers =
+      managers ??
+      createManagerPool({
+        stores,
+        // マネージャーからの報告・質問も、人間の発言と同じ受信箱を通る。
+        post: (event) => this.post(event),
+        ...(managerQueryFn === undefined ? {} : { queryFn: managerQueryFn }),
+        ...(managerCwd === undefined ? {} : { defaultCwd: managerCwd }),
+        ...(managerEnv === undefined ? {} : { env: managerEnv }),
+      });
     void this.#pump();
+  }
+
+  /** デーモンの HTTP 層から一覧・生ログへ降りるための口。 */
+  get managers(): ManagerPool {
+    return this.#managers;
   }
 
   // -------------------------------------------------------------------------
@@ -173,6 +205,8 @@ class Clone implements CloneHost {
       // 既に閉じている
     }
     await this.#reader?.catch(() => undefined);
+    // 走行中のマネージャーも畳む。返事待ちで宙吊りのまま消えない。
+    await this.#managers.stop().catch(() => undefined);
   }
 
   // -------------------------------------------------------------------------
@@ -235,10 +269,27 @@ class Clone implements CloneHost {
       case 'human_answer': {
         const approval = await this.#stores.jobs.getApproval(event.approvalId);
         const question = approval?.question ?? '(不明な質問)';
+        const waiting =
+          approval?.jobId === undefined
+            ? ''
+            : `\n\nこの確認はマネージャー ${approval.jobId} のものである。` +
+              `回答を \`manager_send\`（許可確認なら decision 付き）で ${approval.jobId} へ返すと、止まっていたその仕事が再開する。`;
         await this.#runInternal(
-          `[system] 承認待ちにしていた質問に人間が答えた。\n\n質問: ${question}\n回答: ${event.answer}\n\n` +
+          `[system] 承認待ちにしていた質問に人間が答えた。\n\n質問: ${question}\n回答: ${event.answer}` +
+            `${waiting}\n\n` +
             'この回答に沿って続きを進めよ。今後同じ判断を自分でできるよう、必要なら記憶へ残すこと。',
         );
+        return;
+      }
+
+      case 'manager_message': {
+        await this.#journal({
+          type: 'exchange',
+          with: 'manager',
+          role: 'inbound',
+          text: `[${event.managerId}/${event.kind}] ${event.text}`,
+        });
+        await this.#runInternal(managerPrompt(event));
         return;
       }
 
@@ -246,7 +297,6 @@ class Clone implements CloneHost {
       case 'timer':
       case 'external':
       case 'self_initiative':
-      case 'manager_message':
         await this.#runInternal(
           `[system] 未対応の起点 (${event.type}) を受け取った。M3 以降で実装される。`,
         );
@@ -373,6 +423,7 @@ class Clone implements CloneHost {
         [MCP_SERVER_NAME]: createCloneMcpServer({
           stores: this.#stores,
           emit: (event) => this.#emit(this.#turn?.conversationId ?? null, event),
+          managers: this.#managers,
         }),
       },
       systemPrompt: buildCloneSystemPrompt({ memory }),
@@ -580,6 +631,42 @@ class Clone implements CloneHost {
       }
     }
   }
+}
+
+/**
+ * マネージャーからの一件をクローンの言葉に直す。
+ *
+ * ここに「何なら答えてよいか」の一覧を書かないこと。答えるか人間に回すかの線引きは
+ * クローンが記憶として持っているものであり、書いた瞬間に人による違いが潰れる
+ * （PRD「権限境界」/ AGENTS.md 地雷3）。
+ */
+function managerPrompt(event: Extract<InboxEvent, { type: 'manager_message' }>): string {
+  const head = `[system] マネージャー ${event.managerId} から届いた。`;
+
+  if (event.kind === 'report') {
+    return [
+      `${head}（報告）`,
+      '',
+      event.text,
+      '',
+      '続きが要るなら `manager_send` で指示を出し、要らないなら何もしなくてよい。',
+      '学びや判断の基準になったことがあれば記憶へ移すこと。',
+    ].join('\n');
+  }
+
+  const label = event.kind === 'question' ? '質問' : '実行の許可確認';
+  return [
+    `${head}（${label}）`,
+    '',
+    event.text,
+    '',
+    `返事をするまで ${event.managerId} の仕事だけが止まっている（他のマネージャーは走り続けている）。`,
+    '記憶に根拠があるなら自分で決めて `manager_send` で返し、その判断を `journal_write` に残せ。',
+    event.kind === 'permission' ? '許可確認なので `decision` に allow / deny を明示すること。' : '',
+    `根拠が無いなら \`ask_human\` に managerId: "${event.managerId}" を添えて積み、人間の回答が届いてから返せ。`,
+  ]
+    .filter((line) => line !== '')
+    .join('\n');
 }
 
 interface Block {

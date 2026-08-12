@@ -165,6 +165,26 @@ export function createApp(deps: AppDeps) {
       return c.json({ ok: true });
     })
 
+    // --- マネージャー（可観測性の中段から下段へ降りる経路） ------------------
+    .get('/managers', async (c) => c.json({ managers: await clone.managers.list() }))
+
+    .get('/managers/:id', async (c) => {
+      const id = c.req.param('id');
+      const manager = (await clone.managers.list()).find((entry) => entry.managerId === id);
+      if (!manager) return c.json({ error: 'not found' as const }, 404);
+      return c.json({ manager });
+    })
+
+    /**
+     * manager_id からそのセッションの生ログへ。走行中ならファイルの上、
+     * 退避済みならアーカイブから返る（可観測性3層の最下段）。
+     */
+    .get('/managers/:id/transcript', async (c) => {
+      const body = await clone.managers.transcript(c.req.param('id'));
+      if (body === null) return c.json({ error: 'not found' as const }, 404);
+      return c.text(body);
+    })
+
     // --- セッションログ（アーカイブ） --------------------------------------
     .get('/archive', async (c) => c.json({ entries: await stores.archive.list() }))
 

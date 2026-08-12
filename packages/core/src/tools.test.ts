@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import type { ManagerPool, ManagerSummary } from './manager.js';
 import type { ChatStreamEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
@@ -8,17 +9,53 @@ import { CLONE_ALLOWED_TOOLS, createCloneTools, qualifiedToolName } from './tool
 interface Harness {
   stores: Stores;
   emitted: ChatStreamEvent[];
+  sent: { managerId: string; message: string; decision?: string }[];
+  started: { request: string; cwd?: string }[];
   call(name: string, args: Record<string, unknown>): Promise<string>;
 }
 
 function harness(): Harness {
   const stores = createMemoryStores();
   const emitted: ChatStreamEvent[] = [];
-  const tools = createCloneTools({ stores, emit: (event) => emitted.push(event) });
+  const sent: { managerId: string; message: string; decision?: string }[] = [];
+  const started: { request: string; cwd?: string }[] = [];
+  const running: ManagerSummary[] = [];
+
+  const managers: ManagerPool = {
+    async start(input) {
+      started.push(input);
+      const summary: ManagerSummary = {
+        managerId: `mgr-${started.length}`,
+        status: 'running',
+        live: true,
+        cwd: input.cwd ?? '/work',
+        request: input.request,
+        startedAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      };
+      running.push(summary);
+      return summary;
+    },
+    async send(managerId, message, decision) {
+      sent.push({ managerId, message, ...(decision === undefined ? {} : { decision }) });
+      return { outcome: 'answered', detail: '回答した。' };
+    },
+    async list() {
+      return running;
+    },
+    async transcript() {
+      return null;
+    },
+    async stop() {},
+  };
+
+  const tools = createCloneTools({ stores, emit: (event) => emitted.push(event), managers });
 
   return {
     stores,
     emitted,
+    sent,
+    started,
     async call(name, args) {
       const found = tools.find((entry) => entry.name === name);
       if (!found) throw new Error(`ツール ${name} が無い`);
@@ -96,12 +133,53 @@ describe('クローンの道具', () => {
     expect(reply).toContain('承認待ちキューに積んだ');
   });
 
-  it('manager_* は M2 まで未実装だと自己申告する（能力の欠落を黙らせない）', async () => {
+  it('ask_human は manager_id を添えれば、どの仕事が止まっているか辿れる', async () => {
     const h = harness();
 
-    for (const name of ['manager_start', 'manager_send', 'manager_list']) {
-      const reply = await h.call(name, { request: 'x', managerId: 'm', message: 'y' });
-      expect(reply).toContain('M2');
-    }
+    await h.call('ask_human', { question: '本番に出してよいか', managerId: 'mgr-1' });
+
+    const [pending] = await h.stores.jobs.listApprovals({ pendingOnly: true });
+    expect(pending?.jobId).toBe('mgr-1');
+  });
+
+  it('manager_start は起こして即返り、委譲の判断が日誌に残る', async () => {
+    const h = harness();
+
+    const reply = await h.call('manager_start', {
+      request: 'ログイン周りを直して',
+      cwd: '/work/x',
+    });
+
+    expect(h.started).toEqual([{ request: 'ログイン周りを直して', cwd: '/work/x' }]);
+    expect(reply).toContain('mgr-1');
+
+    const [entry] = await h.stores.journal.list({ types: ['decision'] });
+    expect(entry).toMatchObject({ decision: expect.stringContaining('mgr-1') });
+  });
+
+  it('manager_send は decision を添えて許可確認に答えられる', async () => {
+    const h = harness();
+
+    await h.call('manager_send', { managerId: 'mgr-1', message: 'よい', decision: 'allow' });
+
+    expect(h.sent).toEqual([{ managerId: 'mgr-1', message: 'よい', decision: 'allow' }]);
+  });
+
+  it('manager_list は状態と返事待ちを返す', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+
+    const reply = await h.call('manager_list', {});
+    expect(reply).toContain('mgr-1');
+    expect(reply).toContain('running');
+  });
+
+  it('委譲先が無い場面（蒸留の内部ターン）は、黙らずにそう返す', async () => {
+    const stores = createMemoryStores();
+    const tools = createCloneTools({ stores, emit: () => undefined });
+    const found = tools.find((entry) => entry.name === 'manager_start');
+    const result = await found?.handler({ request: 'x' } as never, {});
+
+    expect(JSON.stringify(result)).toContain('委譲できない');
   });
 });
