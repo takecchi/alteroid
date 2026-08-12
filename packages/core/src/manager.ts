@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 
+import { withDeadline } from './deadline.js';
 import type { RunnerClient, RunnerEvent } from './runner-protocol.js';
-import type { RunnerRegistry } from './runner-registry.js';
+import type { RunnerHealthState, RunnerRegistry } from './runner-registry.js';
 import { brief } from './runner.js';
 import type { InboxEvent, Job, JobStatus, JournalEntryInput, WorkspaceLocator } from './schema.js';
 import type { Stores } from './store.js';
@@ -80,6 +81,26 @@ export interface ManagerSendOptions {
   requestId?: string;
 }
 
+export interface ManagerMoveOptions {
+  /**
+   * 元の器が止まっていることを**呼び出し側が請け合う**。
+   *
+   * 自動の移送は「器が自分でセッションを畳んだ」と言い切れるときにしか起きない
+   * （`runnerLeaseSchema`）。器が名簿ごと消えた・貸し出し期限を報告しない器だった、
+   * といった場合は確かめる術が無いので、そこを引き取るための口である。
+   *
+   * **確かめずに立てると、同じ仕事が2か所で走る。** 器が本当に消えていることを
+   * 見てから立てること（判断の根拠は日誌に残る）。
+   */
+  force?: boolean;
+}
+
+export interface ManagerMoveResult {
+  /** 実際に別の器で開き直せた分。移せなければ null。 */
+  moved: ManagerSummary | null;
+  detail: string;
+}
+
 export interface ManagerPool {
   start(input: ManagerStartInput): Promise<ManagerSummary>;
   send(
@@ -102,6 +123,13 @@ export interface ManagerPool {
    * クローンの受信箱へ「何が復旧不能なのか」が届く（黙って諦めない）。
    */
   rebalance(): Promise<ManagerSummary[]>;
+  /**
+   * 1本だけを名指しで置き直す。
+   *
+   * 自動の移送が「元の器が止まったと言い切れない」で止まったものを、確かめた側が
+   * 引き取るための口である（`ManagerMoveOptions.force`）。
+   */
+  move(managerId: string, options?: ManagerMoveOptions): Promise<ManagerMoveResult>;
   stop(): Promise<void>;
 }
 
@@ -118,7 +146,26 @@ export interface ManagerPoolOptions {
    * （移せないこと自体は正しく報告される）。
    */
   workspace?: WorkspacePolicy;
+  /**
+   * 器の貸し出し期限に上乗せする余裕（ミリ秒）。既定 5 秒。
+   *
+   * 器が「自分で畳む」と約束した時刻ちょうどに移し始めない、というだけの数である。
+   * 時計のずれと畳むのにかかる時間を吸収する。
+   */
+  fenceMarginMs?: number;
+  /** 主にテスト用。既定は `Date.now`。 */
+  now?: () => number;
 }
+
+const DEFAULT_FENCE_MARGIN_MS = 5_000;
+/**
+ * 「元の器で畳めたか」を確かめる呼び出しの期限（ミリ秒）。
+ *
+ * ここが返らないことは珍しくない（移送を考えている時点で、その器は怪しい）。
+ * 待ち続けると、話しかけた人間がそのまま待たされる。**確認に失敗したことを
+ * 短く確定させて、期限（lease）の話へ落とす。**
+ */
+const STOP_CONFIRM_TIMEOUT_MS = 5_000;
 
 export function createManagerPool(options: ManagerPoolOptions): ManagerPool {
   return new Pool(options);
@@ -137,9 +184,36 @@ interface ManagerRecord {
    * 通知と、話しかけられたとき）あり、重なると同じ session を別々の器で resume
    * しかける。そうなると1つの仕事に2本のマネージャーが並び、同じ workspace へ
    * 二重に書く。
+   *
+   * **これが守るのは同じデーモンの中だけである。** 別のプロセスで走り続けている
+   * セッションはここでは止められないので、器の側の貸し出し期限（fencing lease）と
+   * 組みで初めて「2か所で走らない」が成立する（`#fence` を見よ）。
    */
   moving?: Promise<ManagerSummary | null>;
+  /**
+   * 直近の移送で何が起きたか（人間とクローンへ返す言葉）。
+   *
+   * 移せなかった理由は「器が無い」だけではない。**元の器が止まったと言い切れない**
+   * ために待っているのか、確かめる術が無いのかで、次にすべきことが変わる。
+   */
+  moveNote?: string;
+  /** 「期限切れを待っている」ことを既に知らせたか（同じ通知を鳴らし続けない）。 */
+  fenceNotified?: boolean;
 }
+
+/**
+ * 元の器が止まったと言い切れるか（fencing の判定）。
+ *
+ * - `confirmed` — その器へ届いて、実際に畳ませた（いちばん強い確認）
+ * - `expired` — 器が約束した貸し出し期限を過ぎた。器は自分で畳んでいる
+ * - `forced` — 呼び出し側が止まっていることを請け合った
+ * - `wait` — 期限まであと `ms`。**まだ移してはいけない**
+ * - `unknown` — 確かめる術が無い。自動では移さず、人間かクローンの確認へ回す
+ */
+type Fence =
+  | { kind: 'confirmed' | 'expired' | 'forced' }
+  | { kind: 'wait'; ms: number }
+  | { kind: 'unknown'; why: string };
 
 class Pool implements ManagerPool {
   readonly #stores: Stores;
@@ -155,15 +229,21 @@ class Pool implements ManagerPool {
    * 繋ぐと、同じ確認が2回降りてくる。
    */
   readonly #connected = new WeakSet<RunnerClient>();
+  readonly #fenceMarginMs: number;
+  readonly #now: () => number;
+  /** 期限切れを待っている移送の再試行。`stop()` で片付ける。 */
+  readonly #timers = new Set<ReturnType<typeof setTimeout>>();
   /** 名簿の「落ちた」通知の購読を解く手。 */
   #unwatch: (() => void) | null = null;
   #stopped = false;
 
-  constructor({ stores, post, runners, workspace }: ManagerPoolOptions) {
+  constructor({ stores, post, runners, workspace, fenceMarginMs, now }: ManagerPoolOptions) {
     this.#stores = stores;
     this.#post = post;
     this.#runners = runners;
     this.#workspace = workspace ?? DEFAULT_WORKSPACE_POLICY;
+    this.#fenceMarginMs = fenceMarginMs ?? DEFAULT_FENCE_MARGIN_MS;
+    this.#now = now ?? (() => Date.now());
     // 器が落ちたら、話しかけられるのを待たずに置き直す。人間の不在で止まって
     // よいのは承認待ちの仕事だけである（PRD「自律」）。
     this.#unwatch = this.#runners.onLost(() => {
@@ -197,6 +277,11 @@ class Pool implements ManagerPool {
         request: input.request,
         cwd,
         runnerId: runner.runnerId,
+        // **どの起動に置いたかまで残す。** 器は同じ名前で作り直されるので、
+        // 名前だけでは「いま名乗っている器が、置いた器と同じか」が分からない。
+        ...(this.#incarnationOf(runner) === undefined
+          ? {}
+          : { runnerIncarnation: this.#incarnationOf(runner) }),
         workspace: locatorFor(this.#workspace, { runnerId: runner.runnerId, cwd }),
       },
       waiting: [],
@@ -246,14 +331,16 @@ class Pool implements ManagerPool {
     // 宛先が落ちている / 居ないなら、まず別の器へ置き直す（M5）。ここで諦めると、
     // 器の故障がそのまま人間の待ちになる。
     const found = await this.#runnerOf(record);
-    if (found === null || !found.alive) {
+    if (found === null || !found.alive || found.replaced) {
       const moved = await this.#failover(record);
       if (moved === null) {
         return {
           outcome: 'unknown',
           detail:
             `${managerId} を走らせていた runner（${record.job.runnerId ?? '不明'}）へ届かない。` +
-            `${describeLoss(record.job.workspace, record.job.runnerId)}`,
+            // 移せなかった理由はここで確定している。**「届かない」で終わらせない** —
+            // 期限待ちなのか、確かめる術が無いのかで、次にすべきことが変わる。
+            (record.moveNote ?? describeLoss(record.job.workspace, record.job.runnerId)),
         };
       }
       // 移送先で開き直した。この一言はその続きへ流す。
@@ -429,9 +516,10 @@ class Pool implements ManagerPool {
       if (job.status !== 'running' && job.status !== 'waiting_human') continue;
 
       const found = await this.#runnerOf(record);
-      // 宛先の器そのものが居ない / 落ちているなら、別の器へ置き直す（M5）。
-      // デーモンだけでなく runner ごと入れ替わった構成では、これが通常の経路になる。
-      if (found === null || !found.alive) {
+      // 宛先の器そのものが居ない / 落ちている / 同じ名前で作り直されているなら、
+      // 別の器へ置き直す（M5）。デーモンだけでなく runner ごと入れ替わった構成では、
+      // これが通常の経路になる。
+      if (found === null || !found.alive || found.replaced) {
         const moved = await this.#failover(record);
         if (moved !== null) resumed.push(moved);
         continue;
@@ -467,14 +555,27 @@ class Pool implements ManagerPool {
     const states = this.#runners.states();
     const dead = new Set(states.filter((state) => !state.alive).map((state) => state.runnerId));
     const known = new Set(states.map((state) => state.runnerId));
+    /** いまその宛先を名乗っている起動（同じ id が複数居るときは生きている方）。 */
+    const current = new Map<string, string | undefined>();
+    for (const state of states) {
+      if (current.has(state.runnerId) && !state.alive) continue;
+      current.set(state.runnerId, state.incarnation);
+    }
 
     const moved: ManagerSummary[] = [];
     for (const record of [...this.#records.values()]) {
-      const { runnerId, status } = record.job;
+      const { runnerId, runnerIncarnation, status } = record.job;
       if (status !== 'running' && status !== 'waiting_human') continue;
       if (runnerId === undefined) continue;
+      // 同じ名前で器が作り直されていたら、そこにこの仕事はもう無い。**生きて見えて
+      // いても置き直しの対象である** — 話しかけられるまで放っておくと、入れ替わりで
+      // 消えた仕事が誰にも気づかれずに止まったままになる（PRD「自律」）。
+      const replaced =
+        runnerIncarnation !== undefined &&
+        current.get(runnerId) !== undefined &&
+        current.get(runnerId) !== runnerIncarnation;
       // 名簿に居ない器も「もう届かない」側である（器ごと消えた構成）。
-      if (!dead.has(runnerId) && known.has(runnerId)) continue;
+      if (!dead.has(runnerId) && known.has(runnerId) && !replaced) continue;
 
       const summary = await this.#failover(record).catch(() => null);
       if (summary !== null) moved.push(summary);
@@ -482,10 +583,47 @@ class Pool implements ManagerPool {
     return moved;
   }
 
+  /**
+   * 1本だけを名指しで置き直す。
+   *
+   * `force` は「元の器はもう走っていない」という**確認の代わり**である。自動の
+   * 移送が `unknown` で止まったもの（器ごと名簿から消えた、貸し出し期限を報告
+   * しない器だった）を、確かめた側が引き取るための口なので、判断を日誌に残す。
+   */
+  async move(managerId: string, options: ManagerMoveOptions = {}): Promise<ManagerMoveResult> {
+    await this.#ensureConnected();
+
+    const record = this.#records.get(managerId) ?? (await this.#load(managerId));
+    if (!record) {
+      return { moved: null, detail: `${managerId} というマネージャーは居ない。` };
+    }
+
+    if (options.force === true) {
+      await this.#journal({
+        type: 'decision',
+        decision:
+          `${managerId} を、元の runner（${record.job.runnerId ?? '不明'}）が止まっている前提で` +
+          '別の器へ移すと決めた。',
+        grounds: '元の器の停止を確かめた上での移送（force）',
+      });
+    }
+
+    const moved = await this.#failover(record, options.force === true);
+    return {
+      moved,
+      detail:
+        moved === null
+          ? (record.moveNote ?? `${managerId} は別の器へ移せなかった。`)
+          : `${managerId} を ${moved.runnerId ?? '別の器'} で開き直した。`,
+    };
+  }
+
   async stop(): Promise<void> {
     this.#stopped = true;
     this.#unwatch?.();
     this.#unwatch = null;
+    for (const timer of this.#timers) clearTimeout(timer);
+    this.#timers.clear();
     // **runner のマネージャーは止めない。** デーモンの都合で人の仕事を殺さない
     // （インプロセス runner だけは、プロセスが消えるので中で畳まれる）。
     for (const runner of await this.#runners.list().catch(() => [])) {
@@ -510,7 +648,9 @@ class Pool implements ManagerPool {
       if (this.#connected.has(runner)) continue;
       this.#connected.add(runner);
       try {
-        await runner.connect((event) => void this.#onEvent(event));
+        // **どの器から降りてきたのかを覚えたまま渡す。** 移送のあと、古い器から
+        // 遅れて届いた出来事で、いまの器の状態を壊さないため。
+        await runner.connect((event) => void this.#onEvent(event, runner));
       } catch {
         // 繋げない器は生存判定が拾う。ここで残りの器を諦めない（M5 では
         // 1台の不在が全体を止めてはいけない）。
@@ -526,17 +666,30 @@ class Pool implements ManagerPool {
    * 生きているかどうかは名簿に聞き直す（周期を待たない） — 落ちた器へ命令を
    * 投げると、返らない待ちがそのまま人間の待ちになる。
    */
-  async #runnerOf(record: ManagerRecord): Promise<{ runner: RunnerClient; alive: boolean } | null> {
+  async #runnerOf(
+    record: ManagerRecord,
+  ): Promise<{ runner: RunnerClient; alive: boolean; replaced: boolean } | null> {
     const runnerId = record.job.runnerId;
     // 宛先が書かれていない古いジョブは、いまの器へ寄せる。
     if (runnerId === undefined) {
       const chosen = await this.#runners.select({}).catch(() => null);
-      return chosen === null ? null : { runner: chosen, alive: true };
+      return chosen === null ? null : { runner: chosen, alive: true, replaced: false };
     }
     const runner = await this.#runners.get(runnerId);
     if (runner === null) return null;
     const state = await this.#runners.probe(runnerId).catch(() => null);
-    return { runner, alive: state?.alive ?? true };
+    // **同じ名前でも、別の起動ならそこにセッションは無い。** ローリング更新で
+    // 入れ替わった器へ「続き」を流すと、古い器がまだ走っている場合に2本になる。
+    const placedOn = record.job.runnerIncarnation;
+    const current = state?.incarnation;
+    const replaced = placedOn !== undefined && current !== undefined && placedOn !== current;
+    return { runner, alive: state?.alive ?? true, replaced };
+  }
+
+  /** いまその宛先を名乗っている器の起動（報告しない器では undefined）。 */
+  #incarnationOf(runner: RunnerClient): string | undefined {
+    const states = this.#runners.states().filter((entry) => entry.runnerId === runner.runnerId);
+    return (states.find((entry) => entry.alive) ?? states[0])?.incarnation;
   }
 
   async #resume(
@@ -563,6 +716,7 @@ class Pool implements ManagerPool {
     });
     record.attached = true;
     record.job.runnerId = runner.runnerId;
+    record.job.runnerIncarnation = this.#incarnationOf(runner);
     record.job.cwd = where;
     return true;
   }
@@ -575,24 +729,24 @@ class Pool implements ManagerPool {
    * その器の volume の中にしか無いなら移せない — そのときは黙らずに、何が失われた
    * のかをクローンの受信箱へ上げる。
    */
-  async #failover(record: ManagerRecord): Promise<ManagerSummary | null> {
+  async #failover(record: ManagerRecord, force = false): Promise<ManagerSummary | null> {
     // 契機が重なっても、移送は1本にまとめる（同じ session を2か所で開かない）。
     const inFlight = record.moving;
     if (inFlight !== undefined) return inFlight;
 
-    const moving = this.#move(record).finally(() => {
+    const moving = this.#move(record, force).finally(() => {
       record.moving = undefined;
     });
     record.moving = moving;
     return moving;
   }
 
-  async #move(record: ManagerRecord): Promise<ManagerSummary | null> {
+  async #move(record: ManagerRecord, force: boolean): Promise<ManagerSummary | null> {
     const from = record.job.runnerId;
     const locator = record.job.workspace;
 
     if (record.job.sessionId === undefined) {
-      this.#notifyStranded(
+      this.#strand(
         record,
         `${describeLoss(locator, from)} この委譲はまだ session_id を持っていないので、続きへは戻れない。`,
       );
@@ -600,7 +754,7 @@ class Pool implements ManagerPool {
     }
 
     if (!isPortable(locator)) {
-      this.#notifyStranded(record, describeLoss(locator, from));
+      this.#strand(record, describeLoss(locator, from));
       return null;
     }
 
@@ -609,9 +763,23 @@ class Pool implements ManagerPool {
       .select({ exclude: from === undefined ? [] : [from] })
       .catch(() => null);
     if (target === null || target.runnerId === from) {
-      this.#notifyStranded(
+      this.#strand(record, `${describeLoss(locator, from)} 置き直せる別の runner が名簿に無い。`);
+      return null;
+    }
+
+    // **ここから先は「元の器では走っていない」と言い切れるときだけ。**
+    const fence = force ? ({ kind: 'forced' } as const) : await this.#fence(record);
+    if (fence.kind === 'wait') {
+      this.#deferMove(record, from, fence.ms);
+      return null;
+    }
+    if (fence.kind === 'unknown') {
+      this.#strand(
         record,
-        `${describeLoss(locator, from)} 置き直せる別の runner が名簿に無い。`,
+        `${describeLoss(locator, from)} ${fence.why}` +
+          '確かめずに別の器で開き直すと、同じ仕事が2か所で走る（同じ workspace への二重書き、' +
+          'PR やメッセージの二重送信）。元の器が本当に止まっていることを確かめたなら、' +
+          '`manager_move` を force 付きで呼べば引き取れる。',
       );
       return null;
     }
@@ -621,20 +789,22 @@ class Pool implements ManagerPool {
       workspacePath: target.workspacePath,
     });
     if (moved === null) {
-      this.#notifyStranded(record, describeLoss(locator, from));
+      this.#strand(record, describeLoss(locator, from));
       return null;
     }
 
     await this.#ensureConnected();
     const ok = await this.#resume(record, target, moved.nudge, moved.cwd).catch(() => false);
     if (!ok) {
-      this.#notifyStranded(
+      this.#strand(
         record,
         `${describeLoss(locator, from)} 別の runner（${target.runnerId}）で開き直そうとしたが失敗した。`,
       );
       return null;
     }
 
+    record.moveNote = `別の runner（${target.runnerId}）で続きを開いた。`;
+    record.fenceNotified = false;
     record.job.workspace = moved.locator;
     record.job.status = 'running';
     // 返事待ちだった確認は落ちた器と一緒に消えている。行列に残すと、次に届いた
@@ -649,6 +819,152 @@ class Pool implements ManagerPool {
     });
     this.#notifyMoved(record, from, target.runnerId);
     return summaryOf(record);
+  }
+
+  /**
+   * 元の器で本当に止まっているか（fencing）。
+   *
+   * **生存確認が途絶えたことは、器が死んだことを意味しない。** デーモンとの通信
+   * だけが切れて、マネージャーは走り続けている（ネットワーク分断）こともある。
+   * そこで同じ session を別の器で resume すれば、1つの仕事が2か所で動く —
+   * 共有 workspace への二重書きと、PR 作成やメッセージ送信のような**取り消せない
+   * 外部操作の二重実行**が起きる。デーモン側の排他（`record.moving`）は同じ
+   * プロセスの中しか守れないので、ここで別プロセスの1本を確かめる。
+   *
+   * 順に強い方から:
+   *
+   * 1. その器へまだ届き、**そのセッションを実際に畳めたなら**それが確認になる。
+   *    `stop` が「そんなセッションは無い」と答えた場合は確認ではない — 同じ
+   *    `runner_id` で作り直された**新しい**器は、古い器が抱えたままのセッションを
+   *    知らないまま答えられる（`RunnerClient.stop` を見よ）
+   * 2. 器が貸し出し期限を報告していたなら、**その起動を最後に見た時刻**から
+   *    `ttlMs + graceMs` ＋余裕を過ぎた時点で、器は畳み終えている
+   * 3. どちらも取れないなら**移さない**。二重に走らせるより、止めて人間へ回す
+   */
+  async #fence(record: ManagerRecord): Promise<Fence> {
+    const from = record.job.runnerId;
+    if (from === undefined) {
+      return { kind: 'unknown', why: 'どの runner で走っていたのかが台帳に無い。' };
+    }
+
+    // 1. まだ届くなら、その場で畳ませる（いちばん強い確認）。
+    //    **期限を置く。** 届かない器はここで待ち続ける相手になりうるので、確認に
+    //    失敗したことを短く確定させて、期限の話（2.）へ落とす。
+    const old = await this.#runners.get(from).catch(() => null);
+    if (old !== null) {
+      // **「畳んだ」と答えたときだけ確認になる。** 届いたこと自体は確認ではない。
+      const stopped = await withDeadline(
+        `runner ${from} での停止確認`,
+        STOP_CONFIRM_TIMEOUT_MS,
+        () => old.stop(record.job.id),
+      ).catch(() => false);
+      if (stopped) return { kind: 'confirmed' };
+    }
+
+    // 2. **その仕事を置いた起動が**自分で畳むと約束していた分だけ待つ。
+    const placedOn = record.job.runnerIncarnation;
+    const anchor = this.#fenceAnchor(from, placedOn);
+    const ttlMs = anchor?.lease?.ttlMs;
+    if (anchor === null || ttlMs === undefined) {
+      return {
+        kind: 'unknown',
+        why:
+          placedOn === undefined
+            ? `runner ${from} のどの起動に置いたのかが分からない（貸し出し期限を報告しない器か、` +
+              'それを記録する前に置かれた委譲である）ので、いまも走り続けているかどうかを確かめられない。'
+            : `runner ${from} の起動 ${placedOn} をこのデーモンは観測していないので、` +
+              'その器が自分でセッションを畳んだと言い切れない。',
+      };
+    }
+
+    // **申告が無ければ TTL ぶん余計に待つ。** 器が期限切れに気づいて畳み終えるまでの
+    // 時間を 0 と決めてかかると、デーモンが「もう止まっている」と見なした時刻の方が、
+    // 器が畳み始める時刻より先に来る（そこが二重に走る窓になる）。
+    const graceMs = anchor.lease?.graceMs ?? ttlMs;
+    const safeAt = anchor.since + ttlMs + graceMs + this.#fenceMarginMs;
+    const now = this.#now();
+    return now >= safeAt ? { kind: 'expired' } : { kind: 'wait', ms: safeAt - now };
+  }
+
+  /**
+   * 期限を数える基準。**その仕事を置いた起動について観測したものだけ**を使う。
+   *
+   * 材料は2つとも、その起動に紐づいていなければならない。
+   *
+   * - 最後に見た時刻 — 新しい器の名乗りで数えると、分断されたまま走っている
+   *   古い器の期限が永遠に来ない（または誤って早く来る）
+   * - **その起動が名乗っていた期限** — いまの器の値を流用してはいけない。旧器が
+   *   `ttl=60s` を名乗って分断され、新器が `ttl=5s` で起きた構成では、旧器が
+   *   最大 70 秒走り続けているのに移送してしまう（設定変更を伴うローリング更新で
+   *   普通に起きる）
+   *
+   * **どちらも取れないなら `null`。** 時間だけで安全と決めない。
+   */
+  #fenceAnchor(
+    runnerId: string,
+    placedOn: string | undefined,
+  ): { lease: RunnerHealthState['lease']; since: number } | null {
+    if (placedOn === undefined) return null;
+
+    for (const state of this.#runners.states()) {
+      if (state.runnerId !== runnerId) continue;
+      const seen = state.incarnations?.find((entry) => entry.incarnation === placedOn);
+      if (seen === undefined) continue;
+      const since = Date.parse(seen.lastSeenAt);
+      if (Number.isNaN(since)) continue;
+      return { lease: seen.lease, since };
+    }
+    return null;
+  }
+
+  /**
+   * 期限が来るまで移送を待つ。**放置ではない** — 待つと決めた以上、時間が来たら
+   * 自分で置き直す（人間の不在で仕事が止まってよいのは承認待ちだけである）。
+   */
+  #deferMove(record: ManagerRecord, from: string | undefined, ms: number): void {
+    const seconds = Math.ceil(ms / 1000);
+    record.moveNote =
+      `${record.job.id} を走らせていた runner（${from ?? '不明'}）へ届かないが、` +
+      `その器が自分でセッションを畳む期限まであと ${seconds} 秒ある。` +
+      '先に開き直すと同じ仕事が2か所で走るので、期限が過ぎてから自動で置き直す。';
+
+    if (record.fenceNotified !== true) {
+      record.fenceNotified = true;
+      this.#emit(record.job.id, 'report', record.moveNote);
+    }
+
+    const timer = setTimeout(
+      () => {
+        this.#timers.delete(timer);
+        void this.#retryMove(record, from);
+      },
+      Math.max(ms, 1),
+    );
+    timer.unref?.();
+    this.#timers.add(timer);
+  }
+
+  /**
+   * 期限が来たので置き直す — **ただし、まだ必要なら**。
+   *
+   * 待っているあいだに話しかけられて移送が済んでいることも、器が戻ってくることも
+   * ある。確かめずに掴み直すと、いま元気に走っている仕事を別の器へ引き剥がす。
+   */
+  async #retryMove(record: ManagerRecord, from: string | undefined): Promise<void> {
+    if (this.#stopped) return;
+    if (record.job.runnerId !== from) return;
+
+    const found = await this.#runnerOf(record).catch(() => null);
+    if (found !== null && found.alive) return;
+
+    await this.#failover(record).catch(() => undefined);
+  }
+
+  /** 置き直せなかったことを記録して知らせる（`send` の返事にも同じ言葉を使う）。 */
+  #strand(record: ManagerRecord, detail: string): void {
+    record.moveNote = detail;
+    record.fenceNotified = false;
+    this.#notifyStranded(record, detail);
   }
 
   async #loadSession(projectKey: string | undefined, sessionId: string): Promise<unknown[] | null> {
@@ -674,11 +990,22 @@ class Pool implements ManagerPool {
    * 記録（日誌・台帳・アーカイブ・生ログ）はすべてここで行う。runner は記憶へ
    * 到達する鍵を持たないので、書けるのはデーモンだけである。
    */
-  async #onEvent(event: RunnerEvent): Promise<void> {
+  async #onEvent(event: RunnerEvent, source?: RunnerClient): Promise<void> {
     if (event.type === 'hello') return;
 
     const record = this.#records.get(event.managerId) ?? (await this.#load(event.managerId));
     if (!record) return;
+
+    // 別の器へ移したあと、元の器が繋がり直して遅れて流してくる分は捨てる。
+    // **拾うと、いまの器で走っている仕事が「閉じた」ことにされる**（`closed`）し、
+    // 預かる生ログも2本のセッションが混ざる。宛先は台帳が正本である。
+    if (
+      source !== undefined &&
+      record.job.runnerId !== undefined &&
+      record.job.runnerId !== source.runnerId
+    ) {
+      return;
+    }
 
     switch (event.type) {
       case 'session': {

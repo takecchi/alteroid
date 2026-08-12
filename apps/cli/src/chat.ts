@@ -173,6 +173,7 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /journal [件数]      日誌（新しい順）
 /managers            マネージャーの一覧と状態
 /manager <id>        そのマネージャーのセッション生ログ
+/move <id> [force]   取り残されたマネージャーを別の器で開き直す（force は「元の器は止まっている」の確認）
 /runners             manager-runner の一覧（生死と資源）
 /archive             セッションの生ログ一覧
 /archive <id>        生ログの中身
@@ -392,6 +393,33 @@ async function runSlashCommand(
         return 'ok';
       }
       stdout.write(`${await response.text()}\n`);
+      return 'ok';
+    }
+
+    /**
+     * 器が落ちて取り残された1本を、別の器で開き直す。
+     *
+     * **`force` は確認の代わりである。** 自動の移送は「元の器が止まった」と言い切れる
+     * ときにしか起きない（器が自分で畳む期限を過ぎたか、実際に畳ませたか）。それが
+     * 取れない場合にここで押し切れるが、元の器が生きていれば同じ仕事が2か所で走る。
+     */
+    case '/move': {
+      const id = rest[0];
+      if (!id) {
+        stdout.write('使い方: /move <manager_id> [force]\n');
+        return 'ok';
+      }
+      const force = rest[1] === 'force';
+      const response = await client.managers[':id'].move.$post({
+        param: { id },
+        json: force ? { force: true } : {},
+      });
+      if (!response.ok) {
+        stdout.write('移送を頼めませんでした\n');
+        return 'ok';
+      }
+      const { detail } = await response.json();
+      stdout.write(`${detail}\n`);
       return 'ok';
     }
 

@@ -1,4 +1,5 @@
-import type { RunnerCapacity, RunnerClient } from './runner-protocol.js';
+import { withDeadline } from './deadline.js';
+import type { RunnerCapacity, RunnerClient, RunnerLease } from './runner-protocol.js';
 
 /**
  * runner の名簿 — 登録・生存判定・資源による配置（roadmap M5）。
@@ -20,6 +21,19 @@ import type { RunnerCapacity, RunnerClient } from './runner-protocol.js';
  *   観測側の失敗であることもある。そのときは投げた先で本物の失敗が返る）
  */
 
+/**
+ * ある器の**1つの起動**について観測したこと。
+ *
+ * `lease` は**その起動が名乗っていた**値である（いまの器のものではない）。
+ */
+export interface RunnerIncarnation {
+  incarnation: string;
+  /** その起動を最後に見た時刻（ISO 8601）。 */
+  lastSeenAt: string;
+  /** その起動が名乗っていた貸し出し期限。 */
+  lease?: RunnerLease;
+}
+
 /** 直近の生存判定の結果。**判定の材料と結論だけ**で、処分は含まない。 */
 export interface RunnerHealthState {
   runnerId: string;
@@ -31,6 +45,34 @@ export interface RunnerHealthState {
   misses: number;
   /** 最後に測れた資源（報告しない器では省かれる）。 */
   capacity?: RunnerCapacity;
+  /**
+   * その器が自分に課している貸し出し期限（報告しない器では省かれる）。
+   *
+   * **これがある器だけが、落ちて見えたときに自動で移送できる。** 期限を過ぎれば
+   * 器が自分でセッションを畳むと約束しているので、`lastSeenAt` から数えて安全に
+   * なる時刻を計算できる（`runnerLeaseSchema` を見よ）。
+   */
+  lease?: RunnerLease;
+  /**
+   * いま名乗っている器の**起動**（`lease.incarnation`）。
+   *
+   * `runnerId` は器を作り直しても同じ名前で戻る安定した宛先なので、「その仕事を
+   * 置いた器と、いま名乗っている器が同じ起動か」はこれでしか分からない。
+   */
+  incarnation?: string;
+  /**
+   * この宛先で見た起動の履歴（新しい順）。**起動ごとに、その器が名乗っていた
+   * 期限と、最後に見た時刻を組で持つ。**
+   *
+   * fencing の計算に要るのは「いまの器」ではなく「**その仕事を置いた器**」の
+   * 数字である。ここを取り違えると、例えば旧器が `ttl=60s` を名乗って分断され、
+   * 新器が `ttl=5s` で起きた構成で、旧器がまだ走っているのに移送してしまう
+   * （設定変更を伴うローリング更新で普通に起きる）。
+   *
+   * 1世代しか覚えないと、続けて入れ替わったときに元の仕事の基準が消える。だから
+   * 履歴として持つ。
+   */
+  incarnations?: RunnerIncarnation[];
   /** 最後の失敗の理由（人間が読む用）。 */
   lastError?: string;
 }
@@ -89,12 +131,31 @@ export interface RunnerRegistryOptions {
    * 生きている器から仕事を引き剥がす。
    */
   livenessTimeoutMs?: number;
+  /**
+   * 1台への名乗りの問い合わせに置く期限（ミリ秒）。既定 5 秒。
+   *
+   * **応答しない器を待ち続けないための線である。** 生存判定も配置も全 runner を
+   * 待ち合わせるので、ここに期限が無いと、黙り込んだ1台が `heartbeat()` と
+   * `select()` を丸ごと止める（＝落ちたことに誰も気づかず、健康な器への委譲も
+   * 始まらない）。期限切れは「まだ分からない」ではなく**失敗として確定させる**。
+   *
+   * 生存確認の間隔より短くすること（既定は 5 秒 / 10 秒）。
+   */
+  probeTimeoutMs?: number;
   /** 主にテスト用。既定は `Date.now`。 */
   now?: () => number;
 }
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 10_000;
 const DEFAULT_LIVENESS_TIMEOUT_MS = 30_000;
+const DEFAULT_PROBE_TIMEOUT_MS = 5_000;
+/**
+ * 覚えておく起動の数。
+ *
+ * **1世代では足りない。** 続けて作り直された器の下で、まだ移送できていない仕事の
+ * 基準（その起動を最後に見た時刻と、その起動が名乗っていた期限）が消えてしまう。
+ */
+const MAX_INCARNATION_HISTORY = 16;
 
 interface MutableState {
   /** 最後に聞いた時刻（成功・失敗どちらも）。まだ聞いていなければ null。 */
@@ -111,6 +172,10 @@ interface MutableState {
   alive: boolean;
   misses: number;
   capacity: RunnerCapacity | undefined;
+  lease: RunnerLease | undefined;
+  incarnation: string | undefined;
+  /** 起動ごとの観測（挿入順＝古い順）。上限を超えたら古い方から落とす。 */
+  incarnations: Map<string, { lastSeen: number; lease: RunnerLease | undefined }>;
   lastError: string | undefined;
   /**
    * 直近この器へ置いた本数のうち、まだ実測（`capacity.activeManagers`）へ
@@ -141,12 +206,14 @@ class Registry implements RunnerRegistry {
   readonly #listeners = new Set<(state: RunnerHealthState) => void>();
   readonly #heartbeatIntervalMs: number;
   readonly #livenessTimeoutMs: number;
+  readonly #probeTimeoutMs: number;
   readonly #now: () => number;
   #timer: ReturnType<typeof setInterval> | null = null;
 
   constructor(runners: RunnerClient[], options: RunnerRegistryOptions) {
     this.#heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
     this.#livenessTimeoutMs = options.livenessTimeoutMs ?? DEFAULT_LIVENESS_TIMEOUT_MS;
+    this.#probeTimeoutMs = options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
     this.#now = options.now ?? (() => Date.now());
     for (const runner of runners) this.register(runner);
   }
@@ -160,6 +227,9 @@ class Registry implements RunnerRegistry {
       alive: true,
       misses: 0,
       capacity: undefined,
+      lease: undefined,
+      incarnation: undefined,
+      incarnations: new Map(),
       lastError: undefined,
       placements: 0,
     });
@@ -260,6 +330,10 @@ class Registry implements RunnerRegistry {
    *
    * 落ちたと**見えた**瞬間だけ聞き手へ知らせる（毎回の失敗では鳴らさない）。
    * 鳴らし続けると、フェイルオーバーが同じ仕事を何度も掴み直す。
+   *
+   * **必ず期限内に終わる。** 応答しない器はここで失敗として確定する。確定しないと、
+   * この1台を待ち合わせている `heartbeat()` と `select()` が丸ごと止まり、
+   * 「1台の不在が残りを止めない」（M5 受け入れ基準5）が崩れる。
    */
   async #probe(runner: RunnerClient): Promise<void> {
     const state = this.#states.get(runner);
@@ -270,10 +344,32 @@ class Registry implements RunnerRegistry {
     state.probedAt = at;
 
     try {
-      const health = await runner.health();
+      const health = await withDeadline(
+        `runner ${runner.runnerId} の名乗り`,
+        this.#probeTimeoutMs,
+        () => runner.health(),
+      );
+
+      // 起動ごとに「最後に見た時刻」と「そのとき名乗っていた期限」を残す。
+      // **新しい器の数字で古い器の期限を数えない**ための土台である（古い器は
+      // 分断されたまま走っているかもしれず、その期限は古い器の申告で決まる）。
+      const incarnation = health.lease?.incarnation;
+      if (incarnation !== undefined) {
+        // 挿入順を新しくするため、いったん消してから入れ直す。
+        state.incarnations.delete(incarnation);
+        state.incarnations.set(incarnation, { lastSeen: at, lease: health.lease });
+        while (state.incarnations.size > MAX_INCARNATION_HISTORY) {
+          const oldest = state.incarnations.keys().next();
+          if (oldest.done === true) break;
+          state.incarnations.delete(oldest.value);
+        }
+      }
+      state.incarnation = incarnation;
+
       state.lastSeen = at;
       state.misses = 0;
       state.capacity = health.capacity;
+      state.lease = health.lease;
       state.lastError = undefined;
       // 実測に置き換わったので、見込みで数えていた分は畳む。
       state.placements = 0;
@@ -333,6 +429,19 @@ class Registry implements RunnerRegistry {
           : new Date(state.lastSeen).toISOString(),
       misses: state?.misses ?? 0,
       ...(state?.capacity === undefined ? {} : { capacity: state.capacity }),
+      ...(state?.lease === undefined ? {} : { lease: state.lease }),
+      ...(state?.incarnation === undefined ? {} : { incarnation: state.incarnation }),
+      ...(state === undefined || state.incarnations.size === 0
+        ? {}
+        : {
+            incarnations: [...state.incarnations.entries()]
+              .reverse()
+              .map(([incarnation, seen]) => ({
+                incarnation,
+                lastSeenAt: new Date(seen.lastSeen).toISOString(),
+                ...(seen.lease === undefined ? {} : { lease: seen.lease }),
+              })),
+          }),
       ...(state?.lastError === undefined ? {} : { lastError: state.lastError }),
     };
   }

@@ -7,8 +7,16 @@ import { createRunnerHost, type RunnerChildUser } from '@alteroid/core';
 import { createAdaptorServer } from '@hono/node-server';
 
 import { createRunnerApp, Outbox } from './app.js';
+import { leaseGraceMsOf, leaseTtlMsOf, SessionLease } from './lease.js';
 
-export { createRunnerApp, Outbox, type RunnerAppDeps, type RunnerAppType } from './app.js';
+export {
+  createRunnerApp,
+  Outbox,
+  type LeasePort,
+  type RunnerAppDeps,
+  type RunnerAppType,
+} from './app.js';
+export { leaseGraceMsOf, leaseTtlMsOf, SessionLease, type SessionLeaseOptions } from './lease.js';
 
 /**
  * alteroid-runner — マネージャーと作業者を隔離して走らせる常駐プロセス。
@@ -91,7 +99,58 @@ export async function main(): Promise<void> {
     ...(childUser === undefined ? {} : { childUser }),
   });
 
-  const app = createRunnerApp({ host, outbox, tokenSha256 });
+  // 貸し出し期限。デーモンから名乗りを聞かれない時間が続けば、抱えている
+  // セッションを**自分で**畳む。これが無いと、通信が切れただけの器で走り続けている
+  // 仕事を、デーモンが別の器で開き直してしまう（同じ仕事が2か所で走る）。
+  const leaseTtlMs = leaseTtlMsOf();
+  const lease =
+    leaseTtlMs === null
+      ? undefined
+      : new SessionLease({
+          ttlMs: leaseTtlMs,
+          fence: async () => {
+            const ids = host.list().map((state) => state.managerId);
+            for (const id of ids) await host.stop(id).catch(() => undefined);
+            return ids;
+          },
+          // 畳み終えるまでに要りうる時間を申告する。**デーモンはこれを待ってから
+          // 移送する**ので、実際にかかる時間より短く申告しないこと。
+          graceMs: leaseGraceMsOf(),
+          onFenced: (ids) => {
+            process.stderr.write(
+              `alteroid-runner: デーモンから ${Math.round(leaseTtlMs / 1000)} 秒名乗りを聞かれないので、` +
+                `走行中のマネージャーを畳みました（${ids.join(', ')}）。` +
+                '別の器で続きが開かれても二重に走らないためです。\n',
+            );
+          },
+          /**
+           * 猶予の内に畳み終えられなかった。**器ごと降りる。**
+           *
+           * デーモンはこの時刻を過ぎたことだけを根拠に別の器で開き直すので、ここで
+           * 「まだ畳めていません」と粘るのがいちばん危ない（同じ仕事が2か所で走り、
+           * PR やメッセージが二重に出る）。分断されている以上、畳めなかったことを
+           * デーモンへ伝える経路も無い。
+           *
+           * **プロセスを終えると、コンテナでは中の SDK 子プロセスも一緒に消える**
+           * （待ち受けは PID 1）。器はオーケストレータが起こし直すので、失うのは
+           * 畳めなかったセッションだけで、それは元々失われている。
+           */
+          onGraceExceeded: () => {
+            process.stderr.write(
+              'alteroid-runner: 貸し出し期限が切れたのに、猶予の内にマネージャーを畳み終えられませんでした。' +
+                'デーモンはこの時刻を過ぎたら別の器で続きを開くので、二重に走らせないために器ごと終了します。\n',
+            );
+            process.exit(1);
+          },
+        });
+  lease?.start();
+
+  const app = createRunnerApp({
+    host,
+    outbox,
+    tokenSha256,
+    ...(lease === undefined ? {} : { lease }),
+  });
   const server = createAdaptorServer({ fetch: app.fetch });
 
   server.on('error', (error: unknown) => {
@@ -132,6 +191,7 @@ export async function main(): Promise<void> {
   const shutdown = async (): Promise<void> => {
     if (stopping) return;
     stopping = true;
+    lease?.stop();
     server.close();
     if (socketPath !== undefined) rmSync(socketPath, { force: true });
     // 走行中のマネージャーは畳む。生ログはこの中でデーモンへ渡される
@@ -147,7 +207,12 @@ export async function main(): Promise<void> {
 
   process.stdout.write(
     `alteroid-runner: ${listeningOn} （runner_id: ${runnerId} / 作業: ${workspacePath}` +
-      `${childUser === undefined ? '' : ` / 子プロセス: uid ${childUser.uid}`}）\n`,
+      `${childUser === undefined ? '' : ` / 子プロセス: uid ${childUser.uid}`}` +
+      `${
+        leaseTtlMs === null
+          ? ' / 期限なし（自動移送の対象外になります）'
+          : ` / 期限: ${Math.round(leaseTtlMs / 1000)}秒`
+      }）\n`,
   );
 }
 

@@ -124,7 +124,8 @@ export interface RunnerHost {
   resume(command: RunnerResumeCommand): Promise<void>;
   send(managerId: string, text: string): Promise<boolean>;
   answer(managerId: string, answer: RunnerAnswerCommand): Promise<boolean>;
-  stop(managerId: string): Promise<void>;
+  /** `true` = そのセッションが実際にここに在って、畳んだ。 */
+  stop(managerId: string): Promise<boolean>;
   list(): RunnerManagerState[];
   transcript(managerId: string): Promise<string | null>;
   /** 全セッションを畳む。プロセスが消えるときだけ呼ぶ。 */
@@ -220,8 +221,18 @@ class Host implements RunnerHost {
     return session.answer(answer);
   }
 
-  async stop(managerId: string): Promise<void> {
-    await this.#sessions.get(managerId)?.stop('デーモンから停止を指示された。');
+  /**
+   * 1本を畳む。**在ったかどうかを返す。**
+   *
+   * 「無かった」を成功と区別できないと、デーモンの停止確認が意味を失う — 同じ
+   * `runner_id` で作り直された新しい器が、古い器の抱えるセッションについて
+   * 「畳んだ」と答えてしまう（`RunnerClient.stop` を見よ）。
+   */
+  async stop(managerId: string): Promise<boolean> {
+    const session = this.#sessions.get(managerId);
+    if (session === undefined) return false;
+    await session.stop('デーモンから停止を指示された。');
+    return true;
   }
 
   list(): RunnerManagerState[] {

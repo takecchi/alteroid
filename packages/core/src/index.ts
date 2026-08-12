@@ -46,6 +46,8 @@ export {
   WITHHELD_ENV_KEYS,
   createManagerPool,
   type ManagerDecision,
+  type ManagerMoveOptions,
+  type ManagerMoveResult,
   type ManagerPool,
   type ManagerPoolOptions,
   type ManagerSendOptions,
@@ -66,11 +68,16 @@ export {
 } from './runner.js';
 export { createLocalRunner, type LocalRunnerOptions } from './runner-local.js';
 export { measureCapacity, type CapacityIo } from './capacity.js';
+/**
+ * 期限付きで待つ（M5）。応答しない1台に、生存判定と配置を止めさせないための線。
+ */
+export { DeadlineError, isDeadlineError, withDeadline } from './deadline.js';
 export {
   runnerAnswerCommandSchema,
   runnerCapacitySchema,
   runnerEventSchema,
   runnerHealthSchema,
+  runnerLeaseSchema,
   runnerManagerStateSchema,
   runnerMessageCommandSchema,
   runnerResumeCommandSchema,
@@ -81,6 +88,7 @@ export {
   type RunnerClient,
   type RunnerEvent,
   type RunnerHealth,
+  type RunnerLease,
   type RunnerManagerState,
   type RunnerResumeCommand,
   type RunnerStartCommand,

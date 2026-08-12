@@ -286,6 +286,15 @@ export const jobSchema = z.object({
    * 1台構成でも最初から残しておく（後から足すと、既存のジョブに宛先が無い）。
    */
   runnerId: z.string().optional(),
+  /**
+   * その runner の**どの起動**に置いたか（M5 の fencing）。
+   *
+   * `runnerId` は器を作り直しても同じ宛先として戻る安定した名前なので、これだけでは
+   * 「いま名乗っている器が、この仕事を置いた器と同じか」が分からない。**分からない
+   * まま停止確認や期限の計算をすると、ローリング更新で入れ替わった新しい器の応答を、
+   * 分断されたまま走り続けている古い器の応答と取り違える**（＝同じ仕事が2か所で走る）。
+   */
+  runnerIncarnation: z.string().optional(),
   /** workspace の所在。runner affinity と合わせて復元できるようにする。 */
   workspace: workspaceLocatorSchema.optional(),
   /**

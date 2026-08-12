@@ -66,10 +66,68 @@ export const runnerCapacitySchema = z.object({
 export type RunnerCapacity = z.infer<typeof runnerCapacitySchema>;
 
 /**
+ * 器が自分に課している貸し出し期限（fencing lease / roadmap M5）。
+ *
+ * **これが無いと、落ちて見えた器の仕事を別の器へ移せない。** 生存確認が途絶えた
+ * ことは「器が死んだ」ことを意味しない — デーモンとの通信だけが切れて、マネージャーは
+ * 走り続けている（ネットワーク分断）こともある。そこで同じ session を別の器で
+ * resume すると、**1つの仕事が2か所で同時に動く**。共有 workspace への二重書き、
+ * `gh pr create` や MCP 越しの外部操作の二重実行が起きる。デーモン側の排他
+ * （移送を1本にまとめる類）は同じプロセスの中しか守れないので、ここは器自身が
+ * 引き受けるしかない。
+ *
+ * だから約束はこうである。**`ttlMs` のあいだ `GET /health` が届かなければ、器は
+ * 自分が抱えている SDK セッションを畳み始め、遅くとも `ttlMs + graceMs` までに
+ * 畳み終える。** デーモンはこれを根拠に、最後に名乗りが返った時刻からこの時間＋
+ * 余裕を過ぎたときだけ、別の器で開き直してよい。
+ *
+ * **`graceMs` を省いてはいけない。** 器が期限切れに気づくのが遅れる分（見張りの
+ * 粒度）と、実際に畳み終えるまでの時間を含まないと、デーモンが「もう止まっている」
+ * と見なす時刻の方が、器が畳み始める時刻より**先に来る**。そこが二重実行の窓に
+ * なる（申告が無ければデーモンは安全側に倒して `ttlMs` ぶん余計に待つ）。
+ *
+ * **報告しない器は「畳まない器」として扱われる。** その器の仕事は自動では移らず、
+ * 人間かクローンの確認を待つ（黙って二重に走らせるよりは止める）。
+ */
+export const runnerLeaseSchema = z.object({
+  /**
+   * この時間 `GET /health` が届かなければ、器が自分でセッションを畳み始める（ミリ秒）。
+   *
+   * **生存確認の間隔より十分長くすること。** 短いと、少し詰まっただけの器が
+   * 走っている仕事を自分で殺す。
+   */
+  ttlMs: z.number().int().positive(),
+  /**
+   * 期限が切れてから**畳み終わる**までに要りうる時間の上限（ミリ秒）。
+   *
+   * 器が自分の実装について知っていることを申告する枠である。期限切れの検査が
+   * 遅れる分と、セッションを畳むのにかかる時間が入る。ここを 0 と偽ると、
+   * デーモンは畳み終える前に別の器で開き直す。
+   */
+  graceMs: z.number().int().nonnegative().optional(),
+  /**
+   * 器の**この起動**を指す id（プロセスごとに作り直される）。
+   *
+   * `runner_id` は器を作り直しても同じ宛先として戻るための**安定した**名前なので、
+   * 「いま名乗っているのが、その仕事を置いた器と同じ起動か」はこれでしか分からない。
+   * 区別できないと、ローリング更新で入れ替わった新しい器の応答を、分断されたまま
+   * 走り続けている古い器の応答と取り違える。
+   */
+  incarnation: z.string().min(1).optional(),
+});
+
+export type RunnerLease = z.infer<typeof runnerLeaseSchema>;
+
+/**
  * runner の名乗り（`GET /health`）。生存判定と配置はこれ1枚で足りる。
  *
  * `capacity` を省略可能にしてあるのは、資源を報告しない古い器が名簿に混ざっても
  * **配置から落とさない**ためである（報告が無いことは能力の欠落ではない）。
+ *
+ * **`GET /health` は貸し出し期限の更新でもある**（`lease` を見よ）。更新の口を
+ * ここ1つに絞ってあるのは、デーモンが「最後に名乗りが返った時刻」から器側の期限を
+ * 安全側に見積もれるようにするためである。他の口でも更新すると、器の期限がデーモンの
+ * 見立てより後ろにずれ、まだ走っている仕事を移してしまう。
  */
 export const runnerHealthSchema = z.object({
   ok: z.literal(true),
@@ -78,6 +136,7 @@ export const runnerHealthSchema = z.object({
   managers: z.number().int().nonnegative(),
   pendingEvents: z.number().int().nonnegative(),
   capacity: runnerCapacitySchema.optional(),
+  lease: runnerLeaseSchema.optional(),
 });
 
 export type RunnerHealth = z.infer<typeof runnerHealthSchema>;
@@ -218,7 +277,21 @@ export interface RunnerClient {
   send(managerId: string, text: string): Promise<void>;
   /** `false` = その確認は runner 側に無い（既に解けた / 別の宛先）。 */
   answer(managerId: string, answer: RunnerAnswerCommand): Promise<boolean>;
-  stop(managerId: string): Promise<void>;
+  /**
+   * そのセッションを畳ませる。**`true` = 実際にそこに在って、畳んだ。**
+   *
+   * これが別の器へ移す前の停止確認になるので、区別を潰さないこと。
+   *
+   * - 届かない → **例外**（確認は取れていない）
+   * - 届いたが、そのセッションはそこに無い → **`false`**
+   * - 届いて、畳んだ → `true`
+   *
+   * **「無かった」を成功にしないのが要点である。** `runner_id` は器を作り直しても
+   * 同じ名前で戻るので、ローリング更新後の**新しい器**は、古い器が抱えたままの
+   * セッションについて何も知らないまま「畳んだ」と答えられてしまう。それを確認と
+   * 扱うと、分断されて走り続けている古い器と二重に動く。
+   */
+  stop(managerId: string): Promise<boolean>;
   /** いま runner が抱えているセッション（再接続時の突き合わせに使う）。 */
   list(): Promise<RunnerManagerState[]>;
   /** runner のローカルにある生ログ。無ければ null。 */
