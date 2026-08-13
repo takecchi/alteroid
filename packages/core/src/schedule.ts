@@ -85,6 +85,14 @@ export interface SchedulerOptions {
  */
 const MAX_SLEEP_MS = 60_000;
 
+/**
+ * 元の時間軸を辿るときの歩数の上限。
+ *
+ * **これは発火の回数制限ではない**（AGENTS.md 地雷2）。「1分ごと」の依頼で1週間
+ * 止まっていた、のような場合に予定を数え直す歩数であって、起こす回数ではない。
+ */
+const TIMELINE_WALK_LIMIT = 20_000;
+
 export function createScheduler(options: SchedulerOptions): Scheduler {
   return new TimerScheduler(options);
 }
@@ -262,9 +270,13 @@ class TimerScheduler implements Scheduler {
         // 同じ回を何度も配り直さない（次の器が引き取る。**これは回数制限ではなく、
         // 同じ発火を二重に配らないための識別である** — AGENTS.md 地雷2）。
         this.#redelivered.set(entry.kind, resume.at);
-        // 次の予定も**元の発火**から数える。復旧時刻から数えると、落ちて起き直す
-        // たびに位相が後ろへ動く（直したはずの「依頼自身の時間軸」が壊れる）。
-        this.#due.set(entry.kind, entry.nextAt(new Date(resume.at)).getTime());
+        // **配り直す発火の同一性と、次の定期予定の時間軸は別物である。**
+        // 次の予定は定期の時間軸（基準＝定期で動いた時刻、無ければ仕込んだ時刻）から
+        // 数える。配り直した発火の時刻から数えると、手で起こした1回が予定を動かし
+        // （`manual` の pending で位相がずれる）、長く止まっていた場合は過去の時刻が
+        // 次回になって直後に余分な発火が続く。
+        const plan = this.#requests.get(entry.kind)?.plan;
+        this.#due.set(entry.kind, this.#nextOnTimeline(entry, plan, now).getTime());
         fired.push(entry.kind);
         const event = entry.event(now);
         this.#post(
@@ -288,6 +300,28 @@ class TimerScheduler implements Scheduler {
    * **元の時刻と理由をそのまま返す。** ここで現在時刻に置き換えると、完了時に
    * 記録される基準が復旧時刻になって位相がずれ、手動実行が定期の予定を動かす。
    */
+  /**
+   * 依頼自身の時間軸に乗ったまま、`now` より後の最初の予定を返す。
+   *
+   * **止まっていた回数ぶんをまとめて撃たない**（拾い直しは1回だけ、が原則）。かつ
+   * 過去の時刻を次回に残さない — 残すと直後の刻みで余分な発火が続き、そこで位相が
+   * 現在時刻へ引き直されてしまう。
+   */
+  #nextOnTimeline(entry: ScheduleEntry, plan: ScheduledRequest | undefined, now: Date): Date {
+    const raw = new Date(plan?.lastScheduledRunAt ?? plan?.createdAt ?? now.toISOString());
+    let cursor = Number.isNaN(raw.getTime()) ? now : raw;
+
+    for (let step = 0; step < TIMELINE_WALK_LIMIT; step += 1) {
+      const next = entry.nextAt(cursor);
+      if (next.getTime() > now.getTime()) return next;
+      // 前へ進まない指定（読めない周期など）で回り続けない
+      if (next.getTime() <= cursor.getTime()) break;
+      cursor = next;
+    }
+    // 元の時間軸を辿り切れないほど離れている場合だけ、現在時刻から数え直す
+    return entry.nextAt(now);
+  }
+
   #resumable(kind: string): { at: string; cause: 'schedule' | 'manual' } | undefined {
     const pending = this.#requests.get(kind)?.plan.pendingRun;
     if (pending === undefined) return undefined;

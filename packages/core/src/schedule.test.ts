@@ -434,7 +434,104 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     scheduler.stop();
   });
 
-  it('未完了の手動発火を配り直しても、定期の予定は動かない', async () => {
+  it('未完了の手動発火を配り直しても、次の定期予定は動かない', async () => {
+    // 08:00 仕込みの60分ごと（定期の初回は 09:00）。08:30 に手で起こして未完了のまま落ちた
+    const stores = createMemoryStores();
+    const posted: InboxEvent[] = [];
+    await stores.schedules.put({
+      ...plan('watch', { type: 'every', minutes: 60 }),
+      lastRunAt: at(2026, 8, 12, 8, 30).toISOString(),
+      pendingRun: { at: at(2026, 8, 12, 8, 30).toISOString(), cause: 'manual' },
+    });
+
+    const clock = at(2026, 8, 12, 8, 40);
+    const scheduler = createScheduler({
+      entries: [],
+      post: (event) => posted.push(event),
+      now: () => clock,
+      schedules: stores.schedules,
+    });
+    await scheduler.refresh();
+    scheduler.start();
+
+    expect(scheduler.tick(clock)).toEqual(['watch']);
+    expect(posted.at(-1)).toMatchObject({
+      at: at(2026, 8, 12, 8, 30).toISOString(),
+      cause: 'manual',
+    });
+    // **定期の予定は 09:00 のまま**（手で起こした1回の時刻から数え直さない）
+    expect(scheduler.list().find((item) => item.kind === 'watch')?.nextAt).toBe(
+      at(2026, 8, 12, 9, 0).toISOString(),
+    );
+
+    scheduler.stop();
+  });
+
+  it('長く止まっていた後の配り直しでも、次回は未来かつ元の位相の上にある', async () => {
+    // 09:00 の定期発火が未完了。復旧は 11:30（1周期以上あと）
+    const stores = createMemoryStores();
+    const posted: InboxEvent[] = [];
+    await stores.schedules.put({
+      ...plan('watch', { type: 'every', minutes: 60 }),
+      lastRunAt: at(2026, 8, 12, 9, 0).toISOString(),
+      pendingRun: { at: at(2026, 8, 12, 9, 0).toISOString(), cause: 'schedule' },
+    });
+
+    const clock = at(2026, 8, 12, 11, 30);
+    const scheduler = createScheduler({
+      entries: [],
+      post: (event) => posted.push(event),
+      now: () => clock,
+      schedules: stores.schedules,
+    });
+    await scheduler.refresh();
+    scheduler.start();
+
+    expect(scheduler.tick(clock)).toEqual(['watch']);
+    // 次回は元の位相（毎正時）の上で、いまより後の最初 = 12:00
+    expect(scheduler.list().find((item) => item.kind === 'watch')?.nextAt).toBe(
+      at(2026, 8, 12, 12, 0).toISOString(),
+    );
+    // 過去の時刻を次回に残さない（直後の刻みで余分な発火を続けない）
+    expect(scheduler.tick(at(2026, 8, 12, 11, 31))).toEqual([]);
+    expect(posted).toHaveLength(1);
+
+    scheduler.stop();
+  });
+
+  it('cron でも複数回ぶん止まっていた後の次回が、未来かつ元の系列の上にある', async () => {
+    // 毎週月曜 10:00。8/10（月）の発火が未完了で、復旧は 8/19（水）
+    const stores = createMemoryStores();
+    const posted: InboxEvent[] = [];
+    await stores.schedules.put({
+      ...plan('weekly-review', { type: 'cron', expression: '0 10 * * 1' }),
+      lastRunAt: at(2026, 8, 10, 10, 0).toISOString(),
+      lastScheduledRunAt: at(2026, 8, 3, 10, 0).toISOString(),
+      pendingRun: { at: at(2026, 8, 10, 10, 0).toISOString(), cause: 'schedule' },
+    });
+
+    const clock = at(2026, 8, 19, 12, 0);
+    const scheduler = createScheduler({
+      entries: [],
+      post: (event) => posted.push(event),
+      now: () => clock,
+      schedules: stores.schedules,
+    });
+    await scheduler.refresh();
+    scheduler.start();
+
+    expect(scheduler.tick(clock)).toEqual(['weekly-review']);
+    expect(posted.at(-1)).toMatchObject({ at: at(2026, 8, 10, 10, 0).toISOString() });
+    // 次の月曜 10:00（8/24）。過去でも、いまから数え直した 8/26 でもない
+    expect(scheduler.list().find((item) => item.kind === 'weekly-review')?.nextAt).toBe(
+      at(2026, 8, 24, 10, 0).toISOString(),
+    );
+    expect(scheduler.tick(at(2026, 8, 19, 12, 1))).toEqual([]);
+
+    scheduler.stop();
+  });
+
+  it('未完了の手動発火を配り直しても、定期の基準は動かない', async () => {
     const stores = createMemoryStores();
     const posted: InboxEvent[] = [];
     await stores.schedules.put({
