@@ -8,6 +8,61 @@
 
 export * from './schema.js';
 export * from './store.js';
+/**
+ * ログイン（誰がこの API を叩いているか）と、alteroid を使ってよいかの2値。
+ *
+ * **PRD「権限境界」とは別の層である。** あちらはクローンが記憶を根拠に
+ * 「何を人間へ確認するか」を決める話で、行為の一覧を持ってはいけない。
+ * こちらは north_star 禁止2 が制限の表現方法として認めている
+ * **実行環境の境界**（認証情報の配布範囲）そのものである。
+ */
+export {
+  ACCESS_TOKEN_PREFIX,
+  accessTokenRecordSchema,
+  authAccountSchema,
+  authIdentitySchema,
+  authProviderIdSchema,
+  createPkcePair,
+  decodeState,
+  encodeState,
+  isAccessTokenUsable,
+  isAccountGranted,
+  isLoginRequestOpen,
+  issueAccessTokenValue,
+  loginRequestSchema,
+  randomToken,
+  sha256Hex,
+  timingSafeEqualHex,
+  type AccessTokenRecord,
+  type AuthAccount,
+  type AuthIdentity,
+  type AuthStore,
+  type LoginRequest,
+  type LoginRequestStatus,
+} from './auth.js';
+export {
+  GOOGLE_PROVIDER_ID,
+  createAuthProviderRegistry,
+  createGoogleProvider,
+  type AuthProvider,
+  type AuthProviderRegistry,
+  type AuthorizationRequest,
+  type ExchangeRequest,
+  type OAuthProfile,
+  type OAuthProvider,
+  type OAuthProviderConfig,
+  type PasswordProvider,
+} from './auth-providers.js';
+export {
+  createAuthService,
+  type AuthService,
+  type AuthServiceOptions,
+  type ClaimResult,
+  type CompleteLoginError,
+  type CompleteLoginResult,
+  type StartLoginInput,
+  type StartLoginResult,
+} from './auth-service.js';
 export type { CloneHost } from './host.js';
 export { Inbox } from './inbox.js';
 export {

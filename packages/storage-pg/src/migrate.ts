@@ -81,6 +81,54 @@ const STATEMENTS = [
      primary key (project_key, session_id, subpath)
    )`,
   `create index if not exists sessions_project_idx on sessions (project_key, updated_at)`,
+
+  // --- ログインとアクセス許可 ---------------------------------------------
+  // 「誰がこの API に触れるか」の層。PRD「権限境界」（クローンが記憶を根拠に
+  // 何を人間へ確認するか）とは別物なので、行為ごとのスコープ列は置かない。
+  `create table if not exists auth_accounts (
+     id text primary key,
+     display_name text,
+     email text,
+     created_at timestamptz not null,
+     last_login_at timestamptz,
+     granted_at timestamptz,
+     granted_by text
+   )`,
+  // email は null を許す（未検証・衝突時は入れない）。PostgreSQL の unique は
+  // null を重複と見なさないので、これで「検証済みメールは高々1アカウント」になる。
+  `create unique index if not exists auth_accounts_email_idx on auth_accounts (email)`,
+
+  `create table if not exists auth_identities (
+     provider text not null,
+     subject text not null,
+     account_id text not null,
+     email text,
+     email_verified boolean not null default false,
+     created_at timestamptz not null,
+     last_login_at timestamptz not null,
+     primary key (provider, subject)
+   )`,
+  `create index if not exists auth_identities_account_idx on auth_identities (account_id)`,
+
+  `create table if not exists auth_access_tokens (
+     id text primary key,
+     account_id text not null,
+     sha256 text not null,
+     label text not null default '',
+     created_at timestamptz not null,
+     expires_at timestamptz,
+     last_used_at timestamptz,
+     revoked_at timestamptz
+   )`,
+  `create unique index if not exists auth_access_tokens_sha256_idx on auth_access_tokens (sha256)`,
+  `create index if not exists auth_access_tokens_account_idx on auth_access_tokens (account_id)`,
+
+  `create table if not exists auth_login_requests (
+     id text primary key,
+     request jsonb not null,
+     expires_at timestamptz not null
+   )`,
+  `create index if not exists auth_login_requests_expires_idx on auth_login_requests (expires_at)`,
 ] as const;
 
 export async function migrate(db: Db): Promise<void> {

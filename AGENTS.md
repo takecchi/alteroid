@@ -79,6 +79,23 @@
   - 対象は**デーモンの API だけ**。runner の API は制御面であって外へ出すものではない（触れると自分宛の許可確認に自分で答えられる）
 - クローンの挙動を SDK 抜きで検証したいときは `createClone({ queryFn })` に偽の `query` を渡す（`packages/core/src/clone.test.ts`）。マネージャー側は runner に偽の `query` を渡す（`createLocalRunner({ queryFn })` → `createRunnerRegistry`。`packages/core/src/manager.test.ts`）。デーモンと runner の境界そのものは `apps/daemon/src/runner-client.test.ts` が実際の HTTP 経路で通している
 
+## ログインとアクセス許可（入口の認証）
+
+**PRD「権限境界」と混同しないこと。** あちらは「クローンが何を人間へ確認するか」を*記憶*で決める話で、行為の一覧を持ってはいけない。ここは「そもそも誰が HTTP API に触れるか」の話であり、north_star 禁止2 が制限の表現方法として**認めている実行環境の境界**（認証情報の配布範囲）そのものである。持っているのは**許可されているか否かの2値だけ**で、クローン・マネージャー・作業者の道具は1つも減らない。
+
+- マルチユーザーではない（PRD 非ゴール）。**持ち主が複数の端末・複数のログイン手段から入れるようにするための層**であって、利用者ごとにデータを分けない
+- **通る資格は2種類**。①`Authorization: Bearer <アクセストークン>`（`alteroid login` で発行。許可されたアカウントのものだけ通る）②`Authorization: Bearer <state/daemon.json の token>`（＝**実行環境の持ち主**。CLI が使う。この口だけが `/access/*` を叩ける）
+  - ②が「最初の1人を誰が通すか」の出口である。守っているのは**ファイルの許可**であって新しい秘密ではない。これが無いと誰も `access grant` を実行できない
+- **既定では認証を要求しない。** `ALTEROID_GOOGLE_CLIENT_ID` と `ALTEROID_GOOGLE_CLIENT_SECRET` が揃うと自動で有効になり、`ALTEROID_AUTH=off` で明示的に切れる。設定していない人の `alteroid chat` が突然通らなくなるのは、境界の導入が実質のデグレードになる典型なので、**既定を「要求する」に倒さないこと**
+- **ログインしただけでは使えない。** `alteroid access list` で見て `alteroid access grant <id>` で通す。取り消しは `revoke` で、**発行済みトークンを消さなくても即座に効く**（許可はリクエストごとに見ている）
+- **`/access/*` に行為ごとのスコープを足さないこと。** 「chat は可・記憶の編集は不可」を入れた瞬間、それは地雷表3行目の `permissions.yaml` と同じ形になる
+- **`/health` にトークンを載せ直さないこと。** かつては返していたが、いまその値は `access grant` を通せる資格そのものである。CLI は「提示して `operator` が返るか」で本人確認する（PID 再利用の検知としては同じ強さ）
+- 認証の鍵は**上（記憶）へ到達する鍵**なので、マネージャー子プロセスの env から落としてある（`AUTH_WITHHELD_ENV_KEYS`）。`GH_TOKEN` のような**下（外の世界）へ手を伸ばす鍵**とは扱いが逆である。環境変数名に `ALTEROID_` を付けてあるのは、人間が MCP で使う素の `GOOGLE_CLIENT_ID` を巻き添えで伏せないため
+- ログイン手段を足すのは `packages/core/src/auth-providers.ts` に1つ書いて登録するだけ。**メール+パスワードは `oauth2` の枠に押し込まない**（`kind: 'password'` の枠を型として用意してある — パスワードは「外部の identity」ではなく「本人が持つ資格情報」で、概念が違う）
+- **メールが一致しても既存アカウントへ相乗りさせない。** 別プロバイダで他人のメールを名乗れる以上、自動結合は乗っ取り経路になる。必ず別アカウントを作り、許可は人間が明示的に与える
+- 動作確認: `alteroid login` / `alteroid whoami` / `alteroid access list|grant|revoke`。別のデーモンへ繋ぐなら `ALTEROID_URL=https://…`（手元のデーモンには**ログイン不要**で、状態ファイルを読めることで通る）
+- コンテナでは `docker compose exec app alteroid access grant <id>`。Redirect URI は `<ALTEROID_PUBLIC_URL>/auth/google/callback` の1本だけ登録すればよい
+
 ## クラウド構成（PostgreSQL と3コンテナ）
 
 - 構成は **daemon（クローン＋記憶）/ manager-runner（SDK）/ PostgreSQL** の3つ。マネージャーは runner の中だけで走る

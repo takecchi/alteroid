@@ -19,7 +19,15 @@ describe('initWorkspace', () => {
     const result = await initWorkspace(root);
 
     expect(await readdir(root)).toEqual(
-      expect.arrayContaining(['memory', 'journal', 'jobs', 'archive', 'state', 'README.md']),
+      expect.arrayContaining([
+        'memory',
+        'journal',
+        'jobs',
+        'archive',
+        'state',
+        'auth',
+        'README.md',
+      ]),
     );
     expect(result.created.some((p) => p.endsWith('about-me.md'))).toBe(true);
   });
@@ -234,5 +242,114 @@ describe('FsSessionRegistry', () => {
 
     await stores.sessions.setCloneSessionId(null);
     expect(await stores.sessions.getCloneSessionId()).toBeNull();
+  });
+});
+
+/**
+ * ログインとアクセス許可。**fs と pg で同じ振る舞いになること**を両方で問う
+ * （器が違うだけで上の層が見るものは同じ、が M4 の要件）。
+ */
+describe('AuthStore', () => {
+  const account = {
+    id: 'account-1',
+    displayName: 'Owner',
+    email: 'owner@example.test',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    lastLoginAt: '2026-01-01T00:00:00.000Z',
+    grantedAt: null,
+    grantedBy: null,
+  };
+
+  it('アカウントを保存して読み戻せる', async () => {
+    await stores.auth.putAccount(account);
+
+    expect(await stores.auth.getAccount('account-1')).toEqual(account);
+    expect(await stores.auth.listAccounts()).toEqual([account]);
+    expect(await stores.auth.getAccount('居ない')).toBeNull();
+  });
+
+  it('許可の2値を書き換えられる（alteroid access grant の実体）', async () => {
+    await stores.auth.putAccount(account);
+    await stores.auth.putAccount({
+      ...account,
+      grantedAt: '2026-01-02T00:00:00.000Z',
+      grantedBy: 'operator',
+    });
+
+    const stored = await stores.auth.getAccount('account-1');
+    expect(stored?.grantedAt).toBe('2026-01-02T00:00:00.000Z');
+    expect(stored?.grantedBy).toBe('operator');
+    // 上書きであって増殖ではない
+    expect(await stores.auth.listAccounts()).toHaveLength(1);
+  });
+
+  it('検証済みメールからアカウントを引ける（相乗りの検査に使う）', async () => {
+    await stores.auth.putAccount(account);
+
+    expect((await stores.auth.findAccountByEmail('owner@example.test'))?.id).toBe('account-1');
+    expect(await stores.auth.findAccountByEmail('別人@example.test')).toBeNull();
+  });
+
+  it('identity は (provider, subject) で一意（同じ人の入り直しで増えない）', async () => {
+    await stores.auth.putAccount(account);
+    const identity = {
+      provider: 'google',
+      subject: 'sub-1',
+      accountId: 'account-1',
+      email: 'owner@example.test',
+      emailVerified: true,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      lastLoginAt: '2026-01-01T00:00:00.000Z',
+    };
+    await stores.auth.putIdentity(identity);
+    await stores.auth.putIdentity({ ...identity, lastLoginAt: '2026-01-05T00:00:00.000Z' });
+
+    const identities = await stores.auth.listIdentities('account-1');
+    expect(identities).toHaveLength(1);
+    expect(identities[0]?.lastLoginAt).toBe('2026-01-05T00:00:00.000Z');
+    expect((await stores.auth.findIdentity('google', 'sub-1'))?.accountId).toBe('account-1');
+    expect(await stores.auth.findIdentity('google', '別の sub')).toBeNull();
+  });
+
+  it('アクセストークンは sha256 で引ける（素の値は持たない）', async () => {
+    await stores.auth.putAccount(account);
+    const token = {
+      id: 'token-1',
+      accountId: 'account-1',
+      sha256: 'a'.repeat(64),
+      label: 'laptop',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      expiresAt: '2026-02-01T00:00:00.000Z',
+      lastUsedAt: null,
+      revokedAt: null,
+    };
+    await stores.auth.putAccessToken(token);
+
+    expect(await stores.auth.findAccessTokenBySha256('a'.repeat(64))).toEqual(token);
+    expect(await stores.auth.findAccessTokenBySha256('b'.repeat(64))).toBeNull();
+    expect(await stores.auth.listAccessTokens('account-1')).toEqual([token]);
+  });
+
+  it('ログイン要求を保存して読み戻せる（ブラウザ往復の突き合わせ）', async () => {
+    const request = {
+      id: 'login-1',
+      provider: 'google',
+      nonce: 'nonce',
+      codeVerifier: 'verifier',
+      claimSha256: 'c'.repeat(64),
+      redirectUri: 'http://127.0.0.1:4517/auth/google/callback',
+      label: 'laptop',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      expiresAt: '2999-01-01T00:00:00.000Z',
+      status: 'pending' as const,
+      accountId: null,
+      error: null,
+    };
+    await stores.auth.putLoginRequest(request);
+    expect(await stores.auth.getLoginRequest('login-1')).toEqual(request);
+
+    await stores.auth.putLoginRequest({ ...request, status: 'consumed' as const });
+    expect((await stores.auth.getLoginRequest('login-1'))?.status).toBe('consumed');
+    expect(await stores.auth.getLoginRequest('居ない')).toBeNull();
   });
 });

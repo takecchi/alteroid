@@ -20,6 +20,20 @@
 #   GIT_COMMITTER_NAME=...
 #   GIT_COMMITTER_EMAIL=...
 #
+# 外から HTTP API を叩かせるなら、Google ログインを有効にする（同じ `.env` へ）。
+# ログインしただけでは使えない — 許可は人間が CLI から与える:
+#
+#   ALTEROID_GOOGLE_CLIENT_ID=...apps.googleusercontent.com
+#   ALTEROID_GOOGLE_CLIENT_SECRET=...
+#   ALTEROID_PUBLIC_URL=https://alteroid.example    # 外から届く起点
+#
+#   docker compose exec app alteroid access list          # 誰がログインしたか
+#   docker compose exec app alteroid access grant <id>    # 使えるようにする
+#
+# Google 側に登録する Redirect URI は `<ALTEROID_PUBLIC_URL>/auth/google/callback`
+# の1本だけでよい。**この2つの鍵は app にだけ渡る**（runner へ降ろすと、その中の
+# マネージャーが鍵を読んで自分でトークンを発行できてしまう）。
+#
 # 通っているかは**マネージャーと同じ主体**で確かめる（root で通っても意味がない）:
 #
 #   docker compose exec -u 1001 runner gh auth status
@@ -160,6 +174,19 @@ services:
       # 実行回数の制限ではない（north_star 禁止2）。
       ALTEROID_DAILY_REPORT_AT: ${ALTEROID_DAILY_REPORT_AT:-22:00}
       ALTEROID_INITIATIVE_EVERY: ${ALTEROID_INITIATIVE_EVERY:-60}
+      # 入口の認証（誰がこの API を叩いてよいか）。**app にだけ置く。**
+      # runner へ降ろすと、その中のマネージャーが `/proc/1/environ` から鍵を取り、
+      # 自分でアクセストークンを発行して記憶へ届いてしまう（伏せるのは
+      # **上＝記憶へ到達する鍵**であって、下＝外の世界へ手を伸ばす鍵ではない）。
+      # デーモン自身も、マネージャー子プロセスの env からこの2つを落とす。
+      #
+      # 未設定なら認証を要求しない（ポートを公開していない既定の構成では、
+      # 境界は待ち受け先の側にある）。
+      ALTEROID_GOOGLE_CLIENT_ID: ${ALTEROID_GOOGLE_CLIENT_ID:-}
+      ALTEROID_GOOGLE_CLIENT_SECRET: ${ALTEROID_GOOGLE_CLIENT_SECRET:-}
+      # ブラウザが戻ってくる先の起点。**外から届く URL を書く**（プロバイダに
+      # 登録する Redirect URI は `<これ>/auth/google/callback` の1本だけでよい）。
+      ALTEROID_PUBLIC_URL: ${ALTEROID_PUBLIC_URL:-}
       TZ: ${TZ:-Asia/Tokyo}
     volumes:
       # state（daemon.json）だけ。記憶は PostgreSQL 側にある。

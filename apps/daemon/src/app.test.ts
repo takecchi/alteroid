@@ -173,10 +173,24 @@ const simpleRequest = (body = 'x') => ({
 });
 
 describe('HTTP API', () => {
-  it('/health は本人確認用のトークンを返す（CLI が PID を信用しないため）', async () => {
+  it('/health はトークンそのものを返さない（許可を付与できる資格になったため）', async () => {
     const response = await app.request('/health');
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ ok: true, token: 'test-token' });
+
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body).toMatchObject({ ok: true, operator: false });
+    // かつてはここに token を載せていた。いまはこれ1本で access grant まで通るので、
+    // 無認証で読める応答に置いてはいけない。
+    expect(body).not.toHaveProperty('token');
+    expect(JSON.stringify(body)).not.toContain('test-token');
+  });
+
+  it('/health は実行環境の持ち主のトークンを提示すると operator を返す（CLI の本人確認）', async () => {
+    const response = await app.request('/health', {
+      headers: { authorization: 'Bearer test-token' },
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ ok: true, operator: true });
   });
 
   it('/chat は SSE でクローンの応答を流す', async () => {

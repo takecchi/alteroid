@@ -18,6 +18,13 @@ export interface AlteroidPaths {
   archive: string;
   /** クローンのセッション id など、デーモンの状態 */
   state: string;
+  /**
+   * ログインしたアカウントとアクセス許可: JSON（0600）。
+   *
+   * **`memory/` には置かない。** 記憶は人間が手で書き換える前提の場所だが、
+   * ここは鍵の材料（トークンの sha256）と許可の2値が入る。
+   */
+  auth: string;
 }
 
 export const ALTEROID_HOME_ENV = 'ALTEROID_HOME';
@@ -36,5 +43,6 @@ export function resolvePaths(root: string = defaultRoot()): AlteroidPaths {
     jobs: join(root, 'jobs'),
     archive: join(root, 'archive'),
     state: join(root, 'state'),
+    auth: join(root, 'auth'),
   };
 }

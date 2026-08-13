@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   bigserial,
+  boolean,
   index,
   jsonb,
   pgTable,
@@ -122,4 +123,77 @@ export const sessions = pgTable(
     primaryKey({ columns: [table.projectKey, table.sessionId, table.subpath] }),
     index('sessions_project_idx').on(table.projectKey, table.updatedAt),
   ],
+);
+
+/**
+ * ログインしたアカウント。**マルチユーザーのための表ではない**（PRD 非ゴール）。
+ * 持ち主が複数の端末・複数のログイン手段から入れるようにするための層である。
+ *
+ * `granted_at` が許可の2値。行為ごとのスコープ列は**置かない** — 置いた瞬間に
+ * 「確認が要る行為の一覧」に化け、PRD「権限境界」と衝突する。
+ */
+export const authAccounts = pgTable(
+  'auth_accounts',
+  {
+    id: text('id').primaryKey(),
+    displayName: text('display_name'),
+    /** 本人が選んだ連絡先。検証済みのものだけが入る（不変条件）。 */
+    email: text('email'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    lastLoginAt: timestamp('last_login_at', { withTimezone: true, mode: 'date' }),
+    grantedAt: timestamp('granted_at', { withTimezone: true, mode: 'date' }),
+    grantedBy: text('granted_by'),
+  },
+  (table) => [uniqueIndex('auth_accounts_email_idx').on(table.email)],
+);
+
+/** 外部プロバイダ上の identity。`(provider, subject)` が一意。 */
+export const authIdentities = pgTable(
+  'auth_identities',
+  {
+    provider: text('provider').notNull(),
+    subject: text('subject').notNull(),
+    accountId: text('account_id').notNull(),
+    email: text('email'),
+    emailVerified: boolean('email_verified').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    lastLoginAt: timestamp('last_login_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.provider, table.subject] }),
+    index('auth_identities_account_idx').on(table.accountId),
+  ],
+);
+
+/**
+ * 発行済みアクセストークン。**素の値は入れない**（sha256 だけ）。
+ * 漏れた保管先から復元できてはいけない（記憶へ到達できる鍵であるため）。
+ */
+export const authAccessTokens = pgTable(
+  'auth_access_tokens',
+  {
+    id: text('id').primaryKey(),
+    accountId: text('account_id').notNull(),
+    sha256: text('sha256').notNull(),
+    label: text('label').notNull().default(''),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true, mode: 'date' }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true, mode: 'date' }),
+  },
+  (table) => [
+    uniqueIndex('auth_access_tokens_sha256_idx').on(table.sha256),
+    index('auth_access_tokens_account_idx').on(table.accountId),
+  ],
+);
+
+/** 進行中のログイン試行（CLI とブラウザの往復を繋ぐ一時的な行）。 */
+export const authLoginRequests = pgTable(
+  'auth_login_requests',
+  {
+    id: text('id').primaryKey(),
+    request: jsonb('request').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [index('auth_login_requests_expires_idx').on(table.expiresAt)],
 );
