@@ -120,7 +120,8 @@ export function createMemoryStores(): Stores {
     async markRun(kind, at) {
       const existing = schedules.get(kind);
       if (!existing) return;
-      schedules.set(kind, { ...existing, lastRunAt: at, updatedAt: at });
+      // updatedAt は「依頼が書き換えられた時刻」なので動かさない
+      schedules.set(kind, { ...existing, lastRunAt: at });
     },
   };
 

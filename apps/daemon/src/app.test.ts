@@ -514,6 +514,19 @@ describe('HTTP API', () => {
     expect(await stores.journal.list({ types: ['decision'] })).toHaveLength(1);
   });
 
+  it('読めない時刻は API でも弾く（道具と同じ真実を持つ）', async () => {
+    // 通ると一覧に「毎日 25:99」と出るのに実際は 00:00 に起きる、という
+    // 人間が読んで矛盾する状態が作れてしまう
+    for (const at of ['25:99', '99:00', '9:5', 'あさ']) {
+      const response = await app.request(
+        '/schedule',
+        json({ kind: 'issue-round', request: 'x', spec: { type: 'daily', at } }),
+      );
+      expect(response.status, at).toBe(400);
+    }
+    expect(await stores.schedules.list()).toEqual([]);
+  });
+
   it('既定の定期ジョブの名前は API からも奪えない', async () => {
     const response = await app.request(
       '/schedule',

@@ -73,15 +73,16 @@ export class PgScheduleStore implements ScheduleStore {
    *
    * jsonb の中も一緒に直す（読み出しは `plan` からなので、列だけ直しても
    * クローンが見る値は変わらない）。知らない kind なら 0 行更新で何も起きない。
+   *
+   * **`updatedAt` は動かさない** — あれは「依頼が最後に書き換えられた時刻」であり、
+   * 発火で上書きすると人間が「この依頼いつ直したか」を追えなくなる。
    */
   async markRun(kind: string, at: string): Promise<void> {
-    const stamp = new Date(at);
     await this.#db
       .update(schedules)
       .set({
-        updatedAt: stamp,
-        lastRunAt: stamp,
-        plan: sql`jsonb_set(jsonb_set(${schedules.plan}, '{lastRunAt}', ${JSON.stringify(at)}::jsonb, true), '{updatedAt}', ${JSON.stringify(at)}::jsonb, true)`,
+        lastRunAt: new Date(at),
+        plan: sql`jsonb_set(${schedules.plan}, '{lastRunAt}', ${JSON.stringify(at)}::jsonb, true)`,
       })
       .where(eq(schedules.kind, kind));
   }

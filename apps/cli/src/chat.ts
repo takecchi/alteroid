@@ -178,6 +178,7 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /approvals           承認待ち（番号付き）
 /answer <番号|id> <回答>  承認待ちに答える（番号は /approvals の並び）
 /schedule            時間起点のジョブ・継続中の依頼と次の発火
+/schedule <kind> <HH:MM|30m> <依頼>  継続する依頼を仕込む
 /unschedule <kind>   継続中の依頼を外す
 /run <kind>          定期ジョブを今すぐ起こす
 /event <source> <本文>  外部イベントをクローンに届ける
@@ -239,7 +240,34 @@ async function runSlashCommand(
     }
 
     // --- 自律（時間起点と外部イベント） -------------------------------------
+    /**
+     * 引数なしなら一覧、あれば仕込む。
+     *
+     * **人間の側にも仕込む口を置く。** 外せるのに足せないのは不揃いで、
+     * 「クローンに頼めばよい」で済ませると人間の手が API を直に叩くしかなくなる。
+     */
     case '/schedule': {
+      if (rest.length >= 3) {
+        const [kind, when, ...requestParts] = rest;
+        const spec = parseWhen(when ?? '');
+        if (spec === null) {
+          stdout.write('周期は HH:MM（毎日その時刻）か 30m / 30（分ごと）で書いてください\n');
+          return 'ok';
+        }
+        const created = await client.schedule.$post({
+          json: { kind: kind ?? '', request: requestParts.join(' '), spec },
+        });
+        stdout.write(
+          created.ok
+            ? `${kind ?? ''} を仕込みました（/schedule で確認できます）\n`
+            : `仕込めませんでした（名前は英小文字・数字・. _ -、既定の定期ジョブの名前は使えません）\n`,
+        );
+        return 'ok';
+      }
+      if (rest.length > 0) {
+        stdout.write('使い方: /schedule <kind> <HH:MM|30m> <依頼の本文>\n');
+        return 'ok';
+      }
       const response = await client.schedule.$get();
       if (!response.ok) {
         stdout.write('定期ジョブを読めませんでした\n');
@@ -456,6 +484,20 @@ async function runSlashCommand(
 
 function writeReport(report: { date: string; body: string }): void {
   stdout.write(`── ${report.date} の日報 ──\n${report.body}\n`);
+}
+
+/**
+ * 人間が書く周期の言い方を読む。`09:00` なら毎日その時刻、`30m` / `30` なら分ごと。
+ * 読めなければ null（黙って別の周期で仕込まない）。
+ */
+function parseWhen(
+  value: string,
+): { type: 'daily'; at: string } | { type: 'every'; minutes: number } | null {
+  if (/^(?:[01]?\d|2[0-3]):[0-5]\d$/.test(value)) return { type: 'daily', at: value };
+  const minutes = /^(\d+)m?$/.exec(value);
+  if (minutes === null) return null;
+  const parsed = Number(minutes[1]);
+  return parsed >= 1 ? { type: 'every', minutes: parsed } : null;
 }
 
 /** 番号（`/approvals` の並び）でも id そのままでも答えられるようにする。 */

@@ -244,7 +244,24 @@ describe('FsScheduleStore', () => {
     await stores.schedules.markRun('しらない', '2026-08-13T00:00:00.000Z');
 
     expect((await stores.schedules.get('issue-round'))?.lastRunAt).toBe('2026-08-13T00:00:00.000Z');
+    // updatedAt は「依頼が書き換えられた時刻」なので発火では動かない
+    expect((await stores.schedules.get('issue-round'))?.updatedAt).toBe(plan.updatedAt);
     expect(await stores.schedules.list()).toHaveLength(1);
+  });
+
+  it('同時に書いても取りこぼさない（発火の記録と人間の書き換えは並行して来る）', async () => {
+    await stores.schedules.put(plan);
+
+    await Promise.all([
+      stores.schedules.put({ ...plan, kind: 'a', request: 'A の依頼' }),
+      stores.schedules.put({ ...plan, kind: 'b', request: 'B の依頼' }),
+      stores.schedules.markRun('issue-round', '2026-08-13T00:00:00.000Z'),
+      stores.schedules.remove('しらない'),
+    ]);
+
+    const plans = await stores.schedules.list();
+    expect(plans.map((entry) => entry.kind)).toEqual(['a', 'b', 'issue-round']);
+    expect((await stores.schedules.get('issue-round'))?.lastRunAt).toBe('2026-08-13T00:00:00.000Z');
   });
 
   it('外せる', async () => {

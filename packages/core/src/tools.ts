@@ -316,8 +316,12 @@ export function createCloneTools(context: ToolContext) {
           return text(`kind "${kind}" は使えない（英小文字・数字・. _ - のみ、64文字まで）。`);
         }
         if (RESERVED_SCHEDULE_KINDS.includes(parsedKind.data)) {
+          // 名前が使えないことだけ言って黙らない。既定の刻みを変えたいなら手段は
+          // 別にあり（デーモンの設定）、それを人間に頼めることまで伝える。
           return text(
-            `${parsedKind.data} は既定の定期ジョブの名前なので使えない（別の名前を付けること）。`,
+            `${parsedKind.data} は既定の定期ジョブの名前なので使えない（別の名前を付けること）。` +
+              '日報の締め時刻や発意 tick の間隔そのものを変えたいなら、それはデーモンの設定' +
+              '（`ALTEROID_DAILY_REPORT_AT` / `ALTEROID_INITIATIVE_EVERY`）なので人間に頼むこと。',
           );
         }
         if ((dailyAt === undefined) === (everyMinutes === undefined)) {

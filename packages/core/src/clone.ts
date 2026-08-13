@@ -363,7 +363,20 @@ class Clone implements CloneHost {
         }
         // 依頼の本文は**いま**読む。イベントに載せて運ぶと、人間が依頼を書き換えても
         // 発火時点の写しで走ることになる（真実はストア側にある）。
-        const plan = await this.#stores.schedules.get(event.kind).catch(() => null);
+        let plan = null;
+        try {
+          plan = await this.#stores.schedules.get(event.kind);
+        } catch (error) {
+          // 読めないままターンを起こすと、依頼の本文なしで「記憶に照らせ」と言うことに
+          // なる。判断が変わりうるので、握り潰さず記録する（システムの失敗なので
+          // クローンの判断としては残さない）。
+          await this.#journal({
+            type: 'exchange',
+            with: 'self',
+            role: 'outbound',
+            text: `定期の依頼 ${event.kind} を読めなかった: ${String(error)}`,
+          });
+        }
         // 記録は走らせる前に付ける。ターンが失敗しても「起きた」ことは残り、
         // 次の発火で前回時刻が空のまま同じ仕事をまっさらから始めることがない。
         if (plan !== null) {

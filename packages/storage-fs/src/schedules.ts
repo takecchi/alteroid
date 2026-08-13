@@ -50,10 +50,14 @@ export class FsScheduleStore implements ScheduleStore {
     }));
   }
 
+  /**
+   * 発火の記録。**`updatedAt` は動かさない** — あれは「依頼が最後に書き換えられた
+   * 時刻」であって、発火で上書きすると人間が「この依頼いつ直したか」を追えなくなる。
+   */
   async markRun(kind: string, at: string): Promise<void> {
     await this.#update((file) => ({
       schedules: file.schedules.map((existing) =>
-        existing.kind === kind ? { ...existing, lastRunAt: at, updatedAt: at } : existing,
+        existing.kind === kind ? { ...existing, lastRunAt: at } : existing,
       ),
     }));
   }

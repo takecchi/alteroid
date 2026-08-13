@@ -103,6 +103,8 @@ class TimerScheduler implements Scheduler {
 
   #timer: ReturnType<typeof setTimeout> | null = null;
   #started = false;
+  /** 走行中の読み直し。重ねずに直列に流すための鎖。 */
+  #refreshing: Promise<void> | null = null;
 
   constructor({ entries, post, now, schedules }: SchedulerOptions) {
     this.#base = entries;
@@ -148,7 +150,20 @@ class TimerScheduler implements Scheduler {
     return true;
   }
 
-  async refresh(): Promise<void> {
+  /**
+   * 読み直しは**直列**にする。
+   *
+   * タイマーの刻みと、人間が API から足した／外した直後の読み直しは必ず重なりうる。
+   * 並行に走らせると、先に読み始めた側が古い一覧で `#requests` を上書きし、
+   * 外したはずの依頼が復活する（＝外したと言われた依頼がもう一度起きる）。
+   */
+  refresh(): Promise<void> {
+    const run = (this.#refreshing ?? Promise.resolve()).then(() => this.#reconcile());
+    this.#refreshing = run.catch(() => undefined);
+    return run;
+  }
+
+  async #reconcile(): Promise<void> {
     if (this.#store === undefined) return;
     const plans = await this.#store.list();
     const now = this.#now();
@@ -167,7 +182,7 @@ class TimerScheduler implements Scheduler {
       }
       const entry = scheduledRequestEntry(plan);
       this.#requests.set(plan.kind, { entry, spec, plan });
-      this.#due.set(plan.kind, entry.nextAt(now).getTime());
+      this.#due.set(plan.kind, this.#firstDue(entry, plan, now).getTime());
     }
 
     for (const kind of [...this.#requests.keys()]) {
@@ -178,6 +193,22 @@ class TimerScheduler implements Scheduler {
 
     // 仕込みが増えたなら、次の見張りをその予定に合わせ直す
     this.#arm();
+  }
+
+  /**
+   * 落ちていた間に過ぎた予定を取りこぼさない。
+   *
+   * 現在時刻から次を数えるだけだと、**停止していた時間が周期より長い依頼は一度も
+   * 起きない**（毎日 09:00 の依頼で 09:30 に起き直したらその日は飛ぶ／1日ごとの
+   * 依頼で毎日再起動したら永久に飛ぶ）。「時刻が来れば必ず届く」と道具の説明で
+   * 約束している以上、これはバグである。日報の後追い（`missingDailyReportDates`）と
+   * 同じ考え方で、**1回だけ**拾う（溜まった回数ぶん撃たない）。
+   */
+  #firstDue(entry: ScheduleEntry, plan: ScheduledRequest, now: Date): Date {
+    const seed = new Date(plan.lastRunAt ?? plan.createdAt);
+    if (Number.isNaN(seed.getTime())) return entry.nextAt(now);
+    // 前回（無ければ仕込んだ時）から数えた予定が既に過ぎているなら、いま起こす
+    return entry.nextAt(seed).getTime() <= now.getTime() ? now : entry.nextAt(now);
   }
 
   #entries(): ScheduleEntry[] {
@@ -213,6 +244,10 @@ class TimerScheduler implements Scheduler {
           // 依頼が増減していればこの刻みで拾う。仕込みの真実はストア側にしか無い
           // ので、ここを通らないと「足したのに起きない」が起きる。
           await this.#refreshQuietly();
+          // **待っている間に止められていたら、もう起こさない。** ここを見ないと
+          // シャットダウン中（クローンが最後の蒸留をしている間）に新しいターンが
+          // 走り、マネージャーまで起きうる。
+          if (!this.#started) return;
           this.tick();
         } finally {
           this.#arm();

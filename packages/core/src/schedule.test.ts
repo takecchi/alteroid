@@ -323,6 +323,145 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     s.scheduler.stop();
   });
 
+  it('落ちていた間に過ぎた予定を、起き直したときに1回だけ拾う', async () => {
+    // 1日ごとの依頼で、前回動いたのは36時間前。「毎日再起動していたら永久に起きない」
+    // を作らないこと（道具は「時刻が来れば必ず届く」と約束している）。
+    const s = setup(at(2026, 8, 13, 10, 0));
+    await s.stores.schedules.put({
+      ...plan('watch', { type: 'every', minutes: 1440 }),
+      lastRunAt: at(2026, 8, 11, 22, 0).toISOString(),
+    });
+    await s.scheduler.refresh();
+    s.scheduler.start();
+
+    expect(s.scheduler.tick(at(2026, 8, 13, 10, 0))).toEqual(['watch']);
+    // 拾うのは1回だけ。溜まった回数ぶん撃たない
+    expect(s.scheduler.tick(at(2026, 8, 13, 10, 1))).toEqual([]);
+
+    s.scheduler.stop();
+  });
+
+  it('毎日の依頼は、その日の時刻を過ぎて起き直しても翌日まで飛ばない', async () => {
+    const s = setup(at(2026, 8, 13, 9, 30));
+    await s.stores.schedules.put({
+      ...plan('issue-round', { type: 'daily', at: '09:00' }),
+      lastRunAt: at(2026, 8, 12, 9, 0).toISOString(),
+    });
+    await s.scheduler.refresh();
+    s.scheduler.start();
+
+    expect(s.scheduler.tick(at(2026, 8, 13, 9, 30))).toEqual(['issue-round']);
+    // 拾った後は明日の 09:00
+    expect(s.scheduler.list().find((item) => item.kind === 'issue-round')?.nextAt).toBe(
+      at(2026, 8, 14, 9, 0).toISOString(),
+    );
+
+    s.scheduler.stop();
+  });
+
+  it('今日ぶんが済んでいれば、起き直しても二度は起きない', async () => {
+    const s = setup(at(2026, 8, 13, 9, 30));
+    await s.stores.schedules.put({
+      ...plan('issue-round', { type: 'daily', at: '09:00' }),
+      lastRunAt: at(2026, 8, 13, 9, 0).toISOString(),
+    });
+    await s.scheduler.refresh();
+    s.scheduler.start();
+
+    expect(s.scheduler.tick(at(2026, 8, 13, 9, 30))).toEqual([]);
+    expect(s.scheduler.list().find((item) => item.kind === 'issue-round')?.nextAt).toBe(
+      at(2026, 8, 14, 9, 0).toISOString(),
+    );
+
+    s.scheduler.stop();
+  });
+
+  it('読み直しが重なっても、外した依頼が復活しない', async () => {
+    const s = setup(at(2026, 8, 12, 8, 0));
+    await s.stores.schedules.put(plan('watch', { type: 'every', minutes: 10 }));
+
+    // 「読み始めてから、読み終わる前に外される」を作る
+    const first = s.scheduler.refresh();
+    await s.stores.schedules.remove('watch');
+    const second = s.scheduler.refresh();
+    await Promise.all([first, second]);
+
+    expect(s.scheduler.list().map((item) => item.kind)).toEqual([DAILY_REPORT_KIND]);
+  });
+
+  it('ストアが読めなくても時計は止まらず、既に仕込んである予定は消えない', async () => {
+    const s = setup(at(2026, 8, 12, 8, 0));
+    await s.stores.schedules.put(plan('watch', { type: 'every', minutes: 30 }));
+    await s.scheduler.refresh();
+    s.scheduler.start();
+
+    s.stores.schedules.list = () => Promise.reject(new Error('DB が揺れた'));
+    // 明示的に呼べば失敗は伝わる（握り潰すのはタイマー側だけ）
+    await expect(s.scheduler.refresh()).rejects.toThrow('DB が揺れた');
+
+    // それでも仕込みは残っていて、予定どおり起きる
+    expect(s.scheduler.tick(at(2026, 8, 12, 8, 30))).toEqual(['watch']);
+
+    s.scheduler.stop();
+  });
+
+  it('手で今すぐ起こせる（人間が待たずに確かめる経路も本番と同じ形）', async () => {
+    const s = setup(at(2026, 8, 12, 8, 0));
+    await s.stores.schedules.put(plan('issue-round', { type: 'daily', at: '09:00' }));
+    await s.scheduler.refresh();
+    s.scheduler.start();
+
+    expect(s.scheduler.run('issue-round')).toBe(true);
+    expect(s.posted).toMatchObject([{ type: 'timer', kind: 'issue-round' }]);
+    // 予定はずらさない
+    expect(s.scheduler.list().find((item) => item.kind === 'issue-round')?.nextAt).toBe(
+      at(2026, 8, 12, 9, 0).toISOString(),
+    );
+
+    s.scheduler.stop();
+  });
+
+  it('止めたあとは、読み直しの待ち時間が明けても起こさない', async () => {
+    const posted: InboxEvent[] = [];
+    const stores = createMemoryStores();
+    let clock = at(2026, 8, 12, 8, 0);
+    const scheduler = createScheduler({
+      entries: [],
+      post: (event) => posted.push(event),
+      now: () => clock,
+      schedules: stores.schedules,
+    });
+
+    await stores.schedules.put(plan('watch', { type: 'every', minutes: 1 }));
+    await scheduler.refresh();
+    // 予定を過ぎた状態にしてから時計を動かし始める（刻みが即座に来る）
+    clock = at(2026, 8, 12, 8, 2);
+
+    // 読み直しが遅い器（pg なら実ネットワーク往復）を模す
+    const fast = stores.schedules.list.bind(stores.schedules);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let reading = false;
+    stores.schedules.list = async () => {
+      reading = true;
+      await gate;
+      return fast();
+    };
+
+    scheduler.start();
+
+    // タイマーの刻みが読み直しの中で止まっているあいだに畳む
+    await expect.poll(() => reading, { timeout: 3000 }).toBe(true);
+    scheduler.stop();
+    release();
+
+    // シャットダウン中に新しいターンが走らないこと（クローンはこの間に最後の蒸留をしている）
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(posted).toEqual([]);
+  });
+
   it('ストアを渡していなければ refresh は何もしない（既定の仕込みは回り続ける）', async () => {
     const posted: InboxEvent[] = [];
     const scheduler = createScheduler({

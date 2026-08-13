@@ -84,6 +84,11 @@ export async function buildActivityDigest(stores: Stores, window: DigestWindow):
           `\n  前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}`,
       );
     }
+    // 黙って切らない。他の節は期間で切った一部だが、ここは「常に材料である」ことが
+    // 趣旨なので、切ったことを見せないと「あるのに見えない」になる。
+    if (standing.length > MAX_ITEMS) {
+      sections.push(`- …ほか ${standing.length - MAX_ITEMS} 件（\`schedule_list\` で全部見える）`);
+    }
   }
 
   if (managers.length > 0) {

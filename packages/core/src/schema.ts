@@ -230,8 +230,17 @@ export const scheduleKindSchema = z
  * 表す形をここへ足さないこと。表すのは「いつ起こすか」だけである。
  */
 export const scheduleSpecSchema = z.discriminatedUnion('type', [
-  /** 毎日この時刻（ローカル時刻）。 */
-  z.object({ type: z.literal('daily'), at: z.string().regex(/^\d{1,2}:\d{2}$/, 'HH:MM で書く') }),
+  /**
+   * 毎日この時刻（ローカル時刻）。
+   *
+   * **時刻の範囲までここで見る。** 形だけ見て通すと `25:99` が保存でき、一覧には
+   * 「毎日 25:99」と出るのに実際は 00:00 に発火する（人間が読んで矛盾する状態を
+   * 作れてしまう）。検査を経路ごとに置くと、どれか1本を通り忘れた時点で穴になる。
+   */
+  z.object({
+    type: z.literal('daily'),
+    at: z.string().regex(/^(?:[01]?\d|2[0-3]):[0-5]\d$/, 'HH:MM（00:00〜23:59）で書く'),
+  }),
   /** この分数ごと。 */
   z.object({ type: z.literal('every'), minutes: z.number().int().min(1) }),
 ]);
