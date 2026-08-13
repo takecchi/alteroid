@@ -20,8 +20,16 @@ if (typeof Element !== 'undefined' && Element.prototype.scrollIntoView === undef
   Element.prototype.scrollIntoView = () => undefined;
 }
 
-/** 1つの経路に対する応答。`undefined` を返すと「その URL は知らない」。 */
-export type Route = (url: string, init: RequestInit | undefined) => Response | undefined;
+/**
+ * 1つの経路に対する応答。`undefined` を返すと「その URL は知らない」。
+ *
+ * `Promise` を返せるようにしてあるのは、**まだ返事が来ていない要求**を作るため
+ * （切り替えた後に古い相手の応答が届く、という順番を試験できる）。
+ */
+export type Route = (
+  url: string,
+  init: RequestInit | undefined,
+) => Response | Promise<Response> | undefined;
 
 /**
  * 試験で使う接続先。

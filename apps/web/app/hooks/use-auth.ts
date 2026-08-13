@@ -37,7 +37,7 @@ export interface AuthState {
 }
 
 export function useAuth() {
-  const { client, baseUrl, credential, setCredential } = useApiContext();
+  const { client, baseUrl, credential, setCredential, clearCredentialIfCurrent } = useApiContext();
 
   const query = useSWR<AuthState>(
     // 接続先と鍵が変われば見直す。
@@ -85,8 +85,11 @@ export function useAuth() {
            *
            * 捨てると鍵が変わるので、このキー自体が引き直される（`credential === null`
            * の枝に落ちて、`/auth/me` を叩かずに anonymous を返す）。
+           *
+           * **この応答が使った組を渡す。** 遅れて届いた 401 が、既に切り替えた先の
+           * 有効な鍵を巻き添えにしないため（判定は `api.tsx` 側で行う）。
            */
-          setCredential(null);
+          clearCredentialIfCurrent(baseUrl, credential.token);
           return { status: 'anonymous', providers, account: null, operator: false };
         }
         throw error;
