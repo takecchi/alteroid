@@ -1,0 +1,184 @@
+import { Link } from 'react-router';
+
+import { Page } from '~/components/page';
+import { Badge, Card, CardHeader, Empty, ErrorNote, Spinner } from '~/components/ui';
+import {
+  summarizeJournalEntry,
+  useApprovals,
+  useManagers,
+  useReports,
+  useSchedule,
+} from '~/hooks/queries';
+import { useJournalLive } from '~/hooks/use-journal-live';
+import { formatDateTime, formatRelative } from '~/lib/format';
+
+import { ManagerStatusBadge } from './managers';
+
+/**
+ * 普段の接点。
+ *
+ * PRD の可観測性は「日報だけ読んで暮らせるが、掘れば生ログまで一本道で降りられる」
+ * ことを求めている。だからここは**日報が主役**で、他は「今どうなっているか」を
+ * 一目で見るためのものに留める。
+ */
+export default function Dashboard() {
+  const reports = useReports(1);
+  const approvals = useApprovals(true);
+  const managers = useManagers();
+  const schedule = useSchedule();
+  const live = useJournalLive();
+
+  const latestReport = reports.data?.reports[0];
+  const pending = approvals.data?.approvals ?? [];
+  const running = (managers.data?.managers ?? []).filter((m) => m.status === 'running');
+
+  return (
+    <Page title="ダッシュボード" description="いま何が動いていて、何が人間を待っているか">
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Card className="lg:col-span-2">
+          <CardHeader
+            title="最新の日報"
+            subtitle={latestReport === undefined ? undefined : latestReport.date}
+            action={
+              <Link to="/reports" className="text-xs text-accent hover:underline">
+                すべて見る
+              </Link>
+            }
+          />
+          {reports.error !== undefined ? (
+            <ErrorNote error={reports.error} className="m-4" />
+          ) : reports.isLoading ? (
+            <Spinner />
+          ) : latestReport === undefined ? (
+            <Empty>まだ日報がない。締め時刻を待つか、スケジュールから今すぐ回せる。</Empty>
+          ) : (
+            <div className="max-h-96 overflow-y-auto px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap">
+              {latestReport.body}
+            </div>
+          )}
+        </Card>
+
+        <div className="flex flex-col gap-4">
+          <Card>
+            <CardHeader
+              title="承認待ち"
+              subtitle="人間が答えるまで、この仕事だけが止まる"
+              action={
+                pending.length > 0 ? (
+                  <Link to="/approvals" className="text-xs text-accent hover:underline">
+                    答える
+                  </Link>
+                ) : undefined
+              }
+            />
+            {approvals.error !== undefined ? (
+              <ErrorNote error={approvals.error} className="m-4" />
+            ) : pending.length === 0 ? (
+              <Empty>なし。</Empty>
+            ) : (
+              <ul>
+                {pending.slice(0, 5).map((approval) => (
+                  <li
+                    key={approval.id}
+                    className="border-b border-border px-4 py-2 last:border-b-0"
+                  >
+                    <Link to="/approvals" className="block text-sm hover:text-accent">
+                      <span className="line-clamp-2">{approval.question}</span>
+                      <span className="mt-0.5 block text-[11px] text-muted">
+                        {formatRelative(approval.createdAt)}
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+
+          <Card>
+            <CardHeader
+              title="稼働中のマネージャー"
+              action={
+                <Link to="/managers" className="text-xs text-accent hover:underline">
+                  一覧
+                </Link>
+              }
+            />
+            {managers.error !== undefined ? (
+              <ErrorNote error={managers.error} className="m-4" />
+            ) : running.length === 0 ? (
+              <Empty>いま走っているものはない。</Empty>
+            ) : (
+              <ul>
+                {running.slice(0, 5).map((manager) => (
+                  <li
+                    key={manager.managerId}
+                    className="border-b border-border px-4 py-2 last:border-b-0"
+                  >
+                    <Link
+                      to={`/managers/${manager.managerId}`}
+                      className="flex items-center gap-2 text-sm hover:text-accent"
+                    >
+                      <ManagerStatusBadge status={manager.status} />
+                      <span className="min-w-0 flex-1 truncate">{manager.request}</span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+
+          <Card>
+            <CardHeader title="次の自動実行" />
+            {schedule.data === undefined ? (
+              <Empty>—</Empty>
+            ) : (
+              <ul>
+                {schedule.data.entries.map((entry) => (
+                  <li
+                    key={entry.kind}
+                    className="flex items-center justify-between gap-2 border-b border-border px-4 py-2 text-sm last:border-b-0"
+                  >
+                    <span className="min-w-0 truncate text-muted">{entry.description}</span>
+                    <Badge tone="accent">{formatRelative(entry.nextAt)}</Badge>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+        </div>
+      </div>
+
+      <Card className="mt-4">
+        <CardHeader
+          title="いま届いている出来事"
+          subtitle="この画面を開いてから流れてきた日誌"
+          action={
+            <Link to="/journal" className="text-xs text-accent hover:underline">
+              日誌を掘る
+            </Link>
+          }
+        />
+        {live.recent.length === 0 ? (
+          <Empty>まだ何も届いていない。</Empty>
+        ) : (
+          <ul className="max-h-72 overflow-y-auto">
+            {live.recent.slice(0, 30).map((entry) => (
+              <li
+                key={entry.id}
+                className="flex gap-3 border-b border-border px-4 py-2 text-sm last:border-b-0"
+              >
+                <span className="shrink-0 font-mono text-[11px] text-muted">
+                  {formatDateTime(entry.at)}
+                </span>
+                <Badge>{entry.type}</Badge>
+                <span className="min-w-0 flex-1 truncate text-muted">
+                  {summarizeJournalEntry(entry)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+    </Page>
+  );
+}
