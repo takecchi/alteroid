@@ -81,6 +81,19 @@ export const daemonState = pgTable('daemon_state', {
 });
 
 /**
+ * 実行環境プロファイル（人間の `.zprofile` に当たるもの）。**高々1行**。
+ *
+ * 用途ごとに行を増やせる形にしない。増やせるようにした瞬間、「どの行がどの層に
+ * 効くか」の対応表が要るようになり、それは行為ごとの許可一覧と同じ形をしている
+ * （AGENTS.md 地雷3）。効かせ分けが要るなら、本文の中でシェルとして分岐すればよい。
+ */
+export const envProfile = pgTable('env_profile', {
+  id: text('id').primaryKey(),
+  script: text('script').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+});
+
+/**
  * SDK の SessionStore が預ける生ログ1行。
  *
  * `uuid` を持つ行は冪等キーとして扱う（SDK が再送・再取り込みしうる）。

@@ -8,6 +8,7 @@ import { FsAuthStore } from './auth.js';
 import { FsJobStore } from './jobs.js';
 import { FsJournalStore } from './journal.js';
 import { FsPersonaStore } from './persona.js';
+import { FsProfileStore } from './profile.js';
 import { resolvePaths, type AlteroidPaths } from './paths.js';
 import { FsSessionRegistry } from './sessions.js';
 
@@ -16,6 +17,7 @@ export { FsAuthStore } from './auth.js';
 export { FsJobStore } from './jobs.js';
 export { FsJournalStore } from './journal.js';
 export { FsPersonaStore } from './persona.js';
+export { FsProfileStore } from './profile.js';
 export { FsSessionRegistry } from './sessions.js';
 export { ALTEROID_HOME_ENV, defaultRoot, resolvePaths, type AlteroidPaths } from './paths.js';
 
@@ -30,6 +32,7 @@ export function createFsStores(root?: string): Stores & { paths: AlteroidPaths }
     archive: new FsTranscriptArchive(paths.archive),
     sessions: new FsSessionRegistry(paths.state),
     auth: new FsAuthStore(paths.auth),
+    profile: new FsProfileStore(paths.profile),
   };
 }
 
@@ -91,6 +94,7 @@ alteroid のクローンの人格データ。**すべて人間が直接読んで
 | \`archive/\` | セッションの生ログ（compaction 前に退避したもの） |
 | \`state/\` | デーモンの内部状態（セッション id など。消してもクローンは記憶から戻る） |
 | \`auth/\` | ログインしたアカウントと、alteroid を使ってよいかの許可。**手で編集しない**（許可の付与は \`alteroid access grant\`） |
+| \`profile.sh\` | 実行環境プロファイル（\`.zprofile\` 相当）。ここに \`export\` を書けば、クローンにもマネージャーにも作業者にも届く。器を作り直す必要は無い |
 
 書き換えるのは \`memory/\` だけでよい。日誌を読んで「それは違う」と伝えれば、
 その否定が次の記憶になる。

@@ -15,10 +15,12 @@ import type {
   LoginRequest,
 } from './auth.js';
 import type {
+  EnvProfile,
   JobStore,
   JournalQuery,
   JournalStore,
   PersonaStore,
+  ProfileStore,
   SessionRegistry,
   Stores,
   TranscriptArchive,
@@ -35,6 +37,7 @@ export function createMemoryStores(): Stores {
   const approvals = new Map<string, PendingApproval>();
   const archives = new Map<string, string>();
   let cloneSessionId: string | null = null;
+  let envProfile: EnvProfile | null = null;
   let counter = 0;
   const nextId = () => `id-${++counter}`;
 
@@ -204,7 +207,18 @@ export function createMemoryStores(): Stores {
     },
   };
 
-  return { persona, journal, jobs: jobStore, archive, sessions, auth };
+  const profile: ProfileStore = {
+    async read() {
+      return envProfile;
+    },
+    async write(script) {
+      envProfile =
+        script.trim().length === 0 ? null : { script, updatedAt: new Date().toISOString() };
+      return envProfile ?? { script: '', updatedAt: new Date().toISOString() };
+    },
+  };
+
+  return { persona, journal, jobs: jobStore, archive, sessions, auth, profile };
 }
 
 export function humanMessage(text: string, conversationId = 'conv-1'): InboxEvent {

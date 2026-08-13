@@ -15,11 +15,14 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
+import { createProfileApplier, type ProfileApplier, type ProfileVessel } from './profile.js';
 import { buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
 import type {
   RunnerAnswerCommand,
   RunnerEvent,
   RunnerManagerState,
+  RunnerProfileFingerprint,
+  RunnerProfileResult,
   RunnerResumeCommand,
   RunnerStartCommand,
 } from './runner-protocol.js';
@@ -113,6 +116,15 @@ export interface RunnerHostOptions {
    * 器（ファイル）越しに次の `git` / `gh` 呼び出しから届く（`credentials.ts`）。
    */
   credentials?: CredentialStore;
+  /**
+   * 実行環境プロファイル（`.zprofile` 相当）の器。
+   *
+   * 渡すと、デーモンから降りてきたシェルスクリプトを置き、**SDK 子プロセスの
+   * env とすべての Bash 実行に効かせる**。渡さなければプロファイルは使えない
+   * （＝差し替えの口が 501 を返す）。**runner が自分で記憶ストアを読みに行く形に
+   * しないこと** — 読みに行けるということは鍵があるということである。
+   */
+  profile?: ProfileVessel;
 }
 
 export interface RunnerHost {
@@ -122,6 +134,10 @@ export interface RunnerHost {
   credentials(): CredentialFingerprint[];
   /** 鍵を差し替える。器を作り直さずに鍵を回すための唯一の口である。 */
   setCredentials(entries: readonly CredentialEntry[]): Promise<CredentialFingerprint[]>;
+  /** いま置いてある実行環境プロファイルの指紋。**本文は出さない。** */
+  profile(): RunnerProfileFingerprint | undefined;
+  /** 実行環境プロファイルを差し替える。**置く前に評価して、結果を返す。** */
+  setProfile(script: string): Promise<RunnerProfileResult>;
   start(command: RunnerStartCommand): Promise<void>;
   resume(command: RunnerResumeCommand): Promise<void>;
   send(managerId: string, text: string): Promise<boolean>;
@@ -146,6 +162,16 @@ class Host implements RunnerHost {
   readonly #withheldEnvKeys: readonly string[];
   readonly #childUser: RunnerChildUser | undefined;
   readonly #credentials: CredentialStore | undefined;
+  /**
+   * 実行環境プロファイル。
+   *
+   * **起こすたびに評価し直さない。** 評価はプロセスを1本起こす操作なので、
+   * マネージャーを起こす経路に挟むと、人間の書いたスクリプト次第で委譲そのものが
+   * 遅くなる（返ってこないスクリプトなら止まる）。差し替えの口で1度だけ評価し、
+   * 結果を持つ。走行中のコマンドへは `BASH_ENV` 経由で毎回届くので、
+   * 「差し替えが届かない」は起きない。
+   */
+  readonly #profile: ProfileApplier | undefined;
   readonly #sessions = new Map<string, RunnerSession>();
 
   constructor(options: RunnerHostOptions) {
@@ -157,6 +183,19 @@ class Host implements RunnerHost {
     this.#withheldEnvKeys = [...WITHHELD_ENV_KEYS, ...(options.withheldEnvKeys ?? [])];
     this.#childUser = options.childUser;
     this.#credentials = options.credentials;
+    this.#profile =
+      options.profile === undefined
+        ? undefined
+        : createProfileApplier({
+            vessel: options.profile,
+            baseEnv: () => this.#baseChildEnv(),
+            withheldEnvKeys: this.#withheldEnvKeys,
+            // 読むのは SDK 子プロセスと同じ主体である。root で読めても意味がない
+            // （降りた先では読めないプロファイルを「置けた」と報告することになる）。
+            ...(this.#childUser === undefined
+              ? {}
+              : { spawnFn: (spawnOptions) => this.#spawnAsChildUser(spawnOptions) }),
+          });
   }
 
   credentials(): CredentialFingerprint[] {
@@ -172,6 +211,54 @@ class Host implements RunnerHost {
     return this.#credentials.set(entries);
   }
 
+  profile(): RunnerProfileFingerprint | undefined {
+    return this.#profile?.fingerprint();
+  }
+
+  /**
+   * プロファイルを置き換える。**置く前に1度評価する。**
+   *
+   * 評価せずに置くと、構文を間違えたスクリプトが `BASH_ENV` に載り、以後
+   * すべてのコマンドが壊れた環境で走る。しかも失敗はコマンドの出力に紛れるので、
+   * 人間は「なぜか動かない」としか分からない。**壊れているなら置かずに、
+   * 理由を返す**（前のプロファイルはそのまま残る）。
+   */
+  async setProfile(script: string): Promise<RunnerProfileResult> {
+    if (this.#profile === undefined) {
+      throw new Error(
+        'プロファイルの器が無い runner では差し替えられない（ALTEROID_PROFILE_FILE を用意すること）',
+      );
+    }
+    return this.#profile.apply(script);
+  }
+
+  /**
+   * プロファイルを重ねる前の env。鍵まで載せた状態で評価する。
+   *
+   * 素の `process.env` で評価すると、プロファイルの中で `gh` を叩くような書き方
+   * （`eval "$(gh auth token)"` 等）が評価時だけ失敗する。実際に配る env と
+   * 同じものを渡す。
+   */
+  #baseChildEnv(): NodeJS.ProcessEnv {
+    const env = { ...this.#env };
+    if (this.#credentials !== undefined) {
+      Object.assign(env, this.#credentials.values(), this.#credentials.env());
+    }
+    for (const key of this.#withheldEnvKeys) delete env[key];
+    return env;
+  }
+
+  /** 子プロセスを別 UID で起こす（プロファイルの評価も同じ主体で行う）。 */
+  #spawnAsChildUser(options: {
+    command: string;
+    args: string[];
+    cwd?: string;
+    env: Record<string, string | undefined>;
+    signal: AbortSignal;
+  }) {
+    return spawnAsUser(this.#childUser as RunnerChildUser, options);
+  }
+
   #create(managerId: string, request: string, cwd: string): RunnerSession {
     const session = new RunnerSession({
       managerId,
@@ -183,6 +270,7 @@ class Host implements RunnerHost {
       withheldEnvKeys: this.#withheldEnvKeys,
       ...(this.#childUser === undefined ? {} : { childUser: this.#childUser }),
       ...(this.#credentials === undefined ? {} : { credentials: this.#credentials }),
+      profileEnv: () => this.#profile?.env() ?? {},
       onClosed: () => this.#sessions.delete(managerId),
     });
     this.#sessions.set(managerId, session);
@@ -272,6 +360,13 @@ interface RunnerSessionOptions {
   withheldEnvKeys: readonly string[];
   childUser?: RunnerChildUser;
   credentials?: CredentialStore;
+  /**
+   * プロファイル由来の env（評価済みの差分＋`BASH_ENV` などの所在）。
+   *
+   * **関数で受ける。** 走行中に差し替わるので、値で渡すと後から起こした
+   * マネージャーだけが古い環境で走る。
+   */
+  profileEnv: () => Record<string, string>;
   onClosed: () => void;
 }
 
@@ -285,6 +380,7 @@ class RunnerSession {
   readonly #withheldEnvKeys: readonly string[];
   readonly #childUser: RunnerChildUser | undefined;
   readonly #credentials: CredentialStore | undefined;
+  readonly #profileEnv: () => Record<string, string>;
   readonly #onClosed: () => void;
 
   readonly #input: SDKUserMessage[] = [];
@@ -310,6 +406,7 @@ class RunnerSession {
     this.#withheldEnvKeys = options.withheldEnvKeys;
     this.#childUser = options.childUser;
     this.#credentials = options.credentials;
+    this.#profileEnv = options.profileEnv;
     this.#onClosed = options.onClosed;
   }
 
@@ -477,12 +574,7 @@ class RunnerSession {
     };
   }
 
-  /**
-   * SDK の子プロセスを別 UID で起こす。
-   *
-   * `HOME` を差し替えるのは、root の home のまま降ろすと設定を書けずに落ちるから
-   * である。**能力を削るのではなく、走らせる主体を変えているだけ**であることに注意。
-   */
+  /** SDK の子プロセスを別 UID で起こす（実体は `spawnAsUser`）。 */
   #spawnAsChildUser(options: {
     command: string;
     args: string[];
@@ -490,18 +582,7 @@ class RunnerSession {
     env: Record<string, string | undefined>;
     signal: AbortSignal;
   }) {
-    const user = this.#childUser as RunnerChildUser;
-    return spawn(options.command, options.args, {
-      ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-      env: {
-        ...options.env,
-        ...(user.home === undefined ? {} : { HOME: user.home }),
-      },
-      signal: options.signal,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      uid: user.uid,
-      gid: user.gid,
-    });
+    return spawnAsUser(this.#childUser as RunnerChildUser, options);
   }
 
   /**
@@ -517,10 +598,19 @@ class RunnerSession {
       // 器の現在値が凍った env に勝つ。順番を逆にすると鍵が回らない。
       Object.assign(env, this.#credentials.values(), this.#credentials.env());
     }
+    // **プロファイルは鍵より後。** 人間が明示的に書いたほうが勝つ（`credentials`
+    // は1つの鍵を回すための細い口で、こちらは実行環境そのものの宣言である）。
+    //
+    // 重ねるのは2つ。評価済みの差分（MCP サーバのように Bash を経由しない子へ
+    // 効かせるため）と、`BASH_ENV` などの所在（走行中のコマンドへ毎回届かせるため）。
+    // 前者だけだと差し替えが走行中のマネージャーに届かず、後者だけだと MCP に
+    // 届かない。**両方要る。**
+    Object.assign(env, this.#profileEnv());
     // **伏せるのは最後。** 先に消してから鍵を重ねると、鍵の名前として
     // `ALTEROID_DATABASE_URL` を渡すだけで、伏せたはずの値を注入し直せる。
     // 配る仕組みが伏せる仕組みを越えないよう、順序でも保証する（`credentials.ts`
-    // の名前検査と二重にしてあるのは、片方を通り忘れても穴にしないため）。
+    // の名前検査・プロファイル末尾の `unset` と三重にしてあるのは、どれか1つを
+    // 通り忘れても穴にしないため）。
     for (const key of this.#withheldEnvKeys) delete env[key];
     return env;
   }
@@ -787,4 +877,36 @@ export function brief(value: unknown, limit = 200): string {
   const text = typeof value === 'string' ? value : JSON.stringify(value);
   if (text === undefined) return '';
   return text.length > limit ? `${text.slice(0, limit)}…` : text;
+}
+
+/**
+ * 子プロセスを別 UID で起こす。
+ *
+ * `HOME` を差し替えるのは、root の home のまま降ろすと設定を書けずに落ちるから
+ * である。**能力を削るのではなく、走らせる主体を変えているだけ**であることに注意。
+ *
+ * SDK の子プロセスとプロファイルの評価で共有している。評価だけ root で走らせると、
+ * **降りた先では読めないプロファイルを「置けた」と報告する**ことになる。
+ */
+function spawnAsUser(
+  user: RunnerChildUser,
+  options: {
+    command: string;
+    args: string[];
+    cwd?: string;
+    env: Record<string, string | undefined>;
+    signal: AbortSignal;
+  },
+) {
+  return spawn(options.command, options.args, {
+    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+    env: {
+      ...options.env,
+      ...(user.home === undefined ? {} : { HOME: user.home }),
+    },
+    signal: options.signal,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    uid: user.uid,
+    gid: user.gid,
+  });
 }

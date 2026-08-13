@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { serve } from '@hono/node-server';
@@ -10,11 +11,14 @@ import {
   CLONE_MODEL_ENV_KEY,
   createClone,
   createLocalRunner,
+  createProfileApplier,
+  createProfileVessel,
   createRunnerRegistry,
   createScheduler,
   dailyReportEvent,
   missingDailyReportDates,
   resolveCloneModel,
+  WITHHELD_ENV_KEYS,
   type RunnerClient,
   type Stores,
 } from '@alteroid/core';
@@ -100,7 +104,11 @@ const RUNNER_CONNECT_MAX_DELAY_MS = 15_000;
  * 無ければ同一プロセスの runner に落とす — `alteroid chat` を叩くだけで使える
  * というローカルの体験を、分離のために壊さないため。
  */
-async function openRunner(workspace: string, withheldEnvKeys: string[]): Promise<RunnerClient> {
+async function openRunner(
+  workspace: string,
+  withheldEnvKeys: string[],
+  profilePath: string,
+): Promise<RunnerClient> {
   const url = process.env.ALTEROID_RUNNER_URL;
   if (url !== undefined && url.length > 0) {
     const token = process.env.ALTEROID_RUNNER_TOKEN;
@@ -118,6 +126,13 @@ async function openRunner(workspace: string, withheldEnvKeys: string[]): Promise
     runnerId: 'runner-local',
     workspacePath: workspace,
     withheldEnvKeys,
+    // **ローカルでもプロファイルを効かせる。** コンテナ構成でだけ `.zprofile` が
+    // 効く形にすると、器が違うだけでできることが変わる（M4 受け入れ基準1）。
+    // クローン側とは別のファイルにする — こちらには伏せる鍵の `unset` が付く。
+    profile: createProfileVessel({
+      path: profilePath,
+      withheldEnvKeys: [...WITHHELD_ENV_KEYS, ...withheldEnvKeys],
+    }),
   });
 }
 
@@ -186,7 +201,9 @@ export async function main(): Promise<void> {
   // マネージャーは `/proc/1/environ` からデーモンの環境変数＝記憶ストアの鍵に届く。
   // ローカルで runner を立てていないときだけ、同一プロセスの runner へ落とす
   // （その場合は既知の穴が残る。塞ぐのはコンテナ構成の役目である）。
-  const runners = createRunnerRegistry([await openRunner(workspace, storage.withheldEnvKeys)]);
+  const runners = createRunnerRegistry([
+    await openRunner(workspace, storage.withheldEnvKeys, join(paths.state, 'runner-profile.sh')),
+  ]);
 
   // 層とモデル帯の対応は設計判断であり、変更には人間の承認が要る（AGENTS.md 地雷5）。
   // 差し替えられていたら**黙って通さない** — 上位帯から降りたことは人間が意図した
@@ -199,10 +216,42 @@ export async function main(): Promise<void> {
     );
   }
 
+  /**
+   * 実行環境プロファイル（`.zprofile` 相当）をクローンへ効かせる器。
+   *
+   * **クローンにも効かせる**のは、人間の `.zshenv` が「Claude Code に頼むとき」
+   * にも「自分で端末を叩くとき」にも同じように効くからである。クローンは人間の
+   * 写像であって、道具を持たない存在ではない（north_star「適用範囲」）。
+   *
+   * 記憶ストアの鍵は落とさない。伏せるのは**下の層へ配らない**ためであって、
+   * 記憶の持ち主から取り上げるためではない。
+   */
+  const profile = createProfileApplier({
+    vessel: createProfileVessel({ path: join(paths.state, 'profile.sh') }),
+    baseEnv: () => process.env,
+  });
+
+  // 置いてあるものを起動時に1度効かせる。**器を作り直しても環境が痩せない**
+  // ことが、この仕組みを環境変数と別に持つ理由そのものである。
+  const storedProfile = await stores.profile.read().catch(() => null);
+  if (storedProfile !== null) {
+    const applied = await profile
+      .apply(storedProfile.script)
+      .catch((error: unknown) => ({ ok: false, error: String(error), output: undefined }));
+    if (!applied.ok) {
+      // **黙って古い環境で走らせない。** 何が効いていないかが見えないと、
+      // 「鍵が届いていない」のか「鍵の権限が足りない」のかを誰も切り分けられない。
+      process.stderr.write(
+        `alteroidd: 実行環境プロファイルを読めませんでした（クローンには効きません）: ${applied.error ?? '理由不明'}\n`,
+      );
+    }
+  }
+
   const clone = createClone({
     stores,
     cwd: paths.root,
     runners,
+    profile,
     ...(storage.sessionStore === undefined ? {} : { sessionStore: storage.sessionStore }),
   });
   const port = Number(process.env.ALTEROID_PORT ?? '4517');
@@ -251,6 +300,7 @@ export async function main(): Promise<void> {
     runners,
     journalEvents: journalBus,
     auth: { plan: authPlan },
+    profile,
   });
   // 開けたこと自体は方針の変更であって禁止事項ではない。ただし**黙って**外へ
   // 出さない — ここは叩けばクローンのターンが起きる実行の口である。

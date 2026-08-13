@@ -87,6 +87,12 @@ RUN set -eux; \
     '  [ -n "$t" ] || continue' \
     '  eval "$n=\$t"; export "$n"' \
     'done' \
+    '# 実行環境プロファイル（人間の .zprofile 相当）も読む。**鍵より後**に読むのは、' \
+    '# 人間が明示的に書いたほうを勝たせるためである（`profile.ts` と同じ順序）。' \
+    '# Bash 経由なら BASH_ENV で既に読まれているので、番人が二度読みを止める。' \
+    'p="${ALTEROID_PROFILE_FILE:-/run/alteroid/profile/profile.sh}"' \
+    '# 本文の標準出力は stderr へ寄せる（gh の出力に混ぜない）。' \
+    'if [ -r "$p" ]; then . "$p" >&2 || true; fi' \
     'exec /usr/bin/gh "$@"' \
     > /usr/local/bin/gh; \
   chmod 0755 /usr/local/bin/gh; \
@@ -94,6 +100,13 @@ RUN set -eux; \
 # 鍵の置き場。中身は runner が起動時と差し替え時に書く（イメージには入らない）。
 # 一覧はできなくてよいので 0711 — 読めるのは、名前を知っている子プロセスだけである。
 RUN install -d -m 0711 /run/alteroid/credentials
+
+# 実行環境プロファイル（人間の `~/.zprofile` に当たるもの）の置き場。
+#
+# **中身はイメージに入らないし、runner が取りに行くこともない。** 本文は記憶
+# ストア側にあり、デーモンが繋いだときに制御面で降ろす（runner に記憶ストアの鍵は
+# 無い）。ここに用意するのは器だけである。
+RUN install -d -m 0711 /run/alteroid/profile
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH

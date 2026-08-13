@@ -64,6 +64,30 @@ export interface TranscriptArchive {
   read(id: string): Promise<string | null>;
 }
 
+/**
+ * 実行環境プロファイル（人間の `.zprofile` / `.zshenv` に当たるもの）。
+ *
+ * **記憶ではない。** 人格は記憶（Markdown）に宿るのであって、鍵や `PATH` の話は
+ * そこに混ぜない。器を作り直しても残るという性質だけが同じなので、同じストアの
+ * 一員として持つ。
+ *
+ * 持つのはデーモンだけである。runner は自分で読みに行かず、**降ってきたものを
+ * 器に置くだけ**にしてある（読みに行けるということは、runner から記憶ストアへの
+ * 経路があるということで、それは M4 の受け入れ基準3 が無いと言っているものである）。
+ */
+export interface EnvProfile {
+  /** 人間が書いたシェルスクリプトそのもの。器は中身を解釈しない。 */
+  script: string;
+  updatedAt: string;
+}
+
+export interface ProfileStore {
+  /** 置かれていなければ null。 */
+  read(): Promise<EnvProfile | null>;
+  /** 全文置換。空文字は「プロファイルを外す」。 */
+  write(script: string): Promise<EnvProfile>;
+}
+
 /** クローンのセッション id を跨いで覚えておくための最小の永続化。 */
 export interface SessionRegistry {
   getCloneSessionId(): Promise<string | null>;
@@ -84,6 +108,11 @@ export interface Stores {
    * 記憶を根拠に何を人間へ確認するか）とは別の層である。** 混ぜてはいけない。
    */
   auth: AuthStore;
+  /**
+   * 実行環境プロファイル（`.zprofile` 相当）。**環境変数を器に増やす代わりの口**で
+   * あり、用途が増えるたびに実装を直さずに済ませるためにここに置く。
+   */
+  profile: ProfileStore;
   /**
    * SDK のセッション生ログの預け先（M4 のクラウド構成でだけ付く）。
    *

@@ -15,6 +15,7 @@ import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { Inbox } from './inbox.js';
 import { createManagerPool, type ManagerPool } from './manager.js';
+import type { ProfileApplier } from './profile.js';
 import type { RunnerRegistry } from './runner-protocol.js';
 import {
   buildCloneSystemPrompt,
@@ -118,6 +119,15 @@ export interface CloneOptions {
    * 既定は `process.env`。
    */
   env?: NodeJS.ProcessEnv;
+  /**
+   * 実行環境プロファイル（`.zprofile` 相当）。
+   *
+   * **クローンにも効かせる。** 人間の `.zshenv` は、その人が Claude Code に頼む
+   * ときにも、自分で端末を叩くときにも同じように効く。クローンは人間の写像で
+   * あって「道具を持たない存在」ではない（north_star「適用範囲」）ので、
+   * 「マネージャーには効くがクローンには効かない」を作らない。
+   */
+  profile?: ProfileApplier;
 }
 
 type Listener = (event: ChatStreamEvent) => void;
@@ -165,14 +175,18 @@ class Clone implements CloneHost {
   /** resume を試みた session id。init が来る前に落ちたら捨てる。 */
   #resumedFrom: string | null = null;
   #sawInit = false;
+  readonly #env: NodeJS.ProcessEnv;
+  readonly #profile: ProfileApplier | undefined;
 
   constructor(options: CloneOptions) {
-    const { stores, queryFn, cwd, runners, sessionStore, managers, env } = options;
+    const { stores, queryFn, cwd, runners, sessionStore, managers, env, profile } = options;
     this.#stores = stores;
     this.#queryFn = queryFn ?? query;
     this.#cwd = cwd;
     this.#sessionStore = sessionStore;
     this.#model = resolveCloneModel(env ?? process.env);
+    this.#env = env ?? process.env;
+    this.#profile = profile;
     this.#managers =
       managers ??
       createManagerPool({
@@ -604,6 +618,8 @@ class Clone implements CloneHost {
       // 人間のプロジェクト設定を持ち込まない。クローンは実プロジェクトの
       // 作業者ではなく、判断する側である（設定の共有は M2 のマネージャー側）。
       settingSources: [],
+      // 人間が置いた実行環境プロファイルを、クローンの手にも効かせる。
+      env: this.#childEnv(),
       includePartialMessages: true,
       ...(this.#cwd === undefined ? {} : { cwd: this.#cwd }),
       ...(resume === null ? {} : { resume }),
@@ -620,6 +636,18 @@ class Clone implements CloneHost {
         ],
       },
     };
+  }
+
+  /**
+   * クローンの SDK 子プロセスへ渡す env。
+   *
+   * **記憶ストアの鍵は落とさない。** ここはマネージャー（`runner.ts` の
+   * `#childEnv`）と扱いが逆である — 伏せるのは「上（記憶）へ到達する鍵を
+   * *下の層* へ配らない」ためであって、記憶の持ち主であるクローン自身から
+   * 取り上げるためではない。取り上げれば、それはただのデグレードになる。
+   */
+  #childEnv(): NodeJS.ProcessEnv {
+    return { ...this.#env, ...(this.#profile?.env() ?? {}) };
   }
 
   /**
@@ -685,6 +713,7 @@ class Clone implements CloneHost {
         },
         systemPrompt: buildCloneSystemPrompt({ memory }),
         settingSources: [],
+        env: this.#childEnv(),
         persistSession: false,
         ...(this.#cwd === undefined ? {} : { cwd: this.#cwd }),
       },

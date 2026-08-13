@@ -5,6 +5,8 @@ import type {
   RunnerEvent,
   RunnerManagerState,
   RunnerResumeCommand,
+  RunnerProfileFingerprint,
+  RunnerProfileResult,
   RunnerSetCredentialsCommand,
   RunnerStartCommand,
 } from '@alteroid/core';
@@ -14,6 +16,8 @@ import { Readable } from 'node:stream';
 import {
   RunnerHttpError,
   runnerCredentialFingerprintSchema,
+  runnerProfileFingerprintSchema,
+  runnerProfileResultSchema,
   runnerEventSchema,
   runnerManagerStateSchema,
 } from '@alteroid/core';
@@ -64,6 +68,7 @@ interface HealthBody {
   runnerId?: unknown;
   workspacePath?: unknown;
   credentials?: unknown;
+  profile?: unknown;
 }
 
 /** 指紋の配列だけを取り出す（値は runner も返さないし、こちらも持たない）。 */
@@ -239,6 +244,26 @@ class HttpRunner implements RunnerClient {
     const response = await this.#call('POST', '/credentials', { credentials });
     const body = (await response.json()) as { credentials?: unknown };
     return fingerprintsOf(body.credentials);
+  }
+
+  async profile(): Promise<RunnerProfileFingerprint | undefined> {
+    const response = await this.#call('GET', '/health');
+    const body = (await response.json()) as HealthBody;
+    const parsed = runnerProfileFingerprintSchema.safeParse(body.profile);
+    return parsed.success ? parsed.data : undefined;
+  }
+
+  /**
+   * 実行環境プロファイルを差し替える。**器は作り直さない。**
+   *
+   * 走行中のマネージャーにも `BASH_ENV` 越しに次のコマンドから届く。runner は
+   * これを自分で取りに行けない（記憶ストアの鍵を持たないため）ので、**繋ぎ直しの
+   * たびに降ろし直すのはデーモンの責任**である。
+   */
+  async setProfile(script: string): Promise<RunnerProfileResult> {
+    const response = await this.#call('POST', '/profile', { script });
+    const parsed = runnerProfileResultSchema.safeParse(await response.json());
+    return parsed.success ? parsed.data : { ok: false, error: 'runner の応答を読めなかった' };
   }
 
   async transcript(managerId: string): Promise<string | null> {

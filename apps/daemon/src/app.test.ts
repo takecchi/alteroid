@@ -817,3 +817,164 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     expect((await app.request('/memory/居ない', { method: 'DELETE' })).status).toBe(400);
   });
 });
+
+/**
+ * 実行環境プロファイル（`.zprofile` 相当）。
+ *
+ * 固定しているのは「器を作り直さずに環境を差し替えられること」と、
+ * 「壊れたものを保存も配布もしないこと」の2つである。前者が無いと、道具の鍵を
+ * 1つ足すたびに `compose.yaml` を直して器を焼き直すことになり（＝走行中の仕事が
+ * 死ぬ）、後者が無いと、構文を間違えた1回で以後すべてのコマンドが壊れた環境で
+ * 走り続ける。
+ */
+describe('実行環境プロファイル', () => {
+  it('置いていなければ空を返す', async () => {
+    const response = await app.request('/profile');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ script: '' });
+  });
+
+  it('置いたものを読み直せる（人間が自分で直せる）', async () => {
+    const withProfile = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      profile: fakeApplier(),
+    });
+
+    const put = await withProfile.request('/profile', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ script: 'export SOME_API_TOKEN=abc123' }),
+    });
+    expect(put.status).toBe(200);
+
+    const read = (await (await withProfile.request('/profile')).json()) as { script: string };
+    // 入口で末尾の改行だけ整える（保存・配布・指紋が同じ文字列を見るため）。
+    expect(read.script).toBe('export SOME_API_TOKEN=abc123\n');
+  });
+
+  it('PUT が返す指紋と GET が返す指紋が一致する', async () => {
+    // **ここが食い違うと、届いているかを見る道具そのものが嘘をつく。**
+    // 置き場が末尾の改行を足すだけで「置いた指紋」と「読んだ指紋」がずれ、
+    // `alteroid profile status` が永久に「届いていない」と言い続ける
+    // （鍵の指紋でも同じ失敗をしている）。
+    const withProfile = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      profile: fakeApplier(),
+    });
+
+    // 末尾に改行が無い本文（人間が普通に書く形）
+    const put = (await (
+      await withProfile.request('/profile', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ script: 'export OK=1' }),
+      })
+    ).json()) as { sha256: string };
+    const get = (await (await withProfile.request('/profile')).json()) as { sha256: string };
+
+    expect(get.sha256).toBe(put.sha256);
+  });
+
+  it('runner へ降ろし、結果を返す', async () => {
+    const runner = fakeRunner('runner-primary');
+    const withProfile = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      runners: registryOf([runner]),
+      profile: fakeApplier(),
+    });
+
+    const response = await withProfile.request('/profile', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ script: 'export OK=1' }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { runners: { runnerId: string; ok: boolean }[] };
+    expect(body.runners).toEqual([{ runnerId: 'runner-primary', ok: true }]);
+    expect(runner.received).toEqual(['export OK=1\n']);
+  });
+
+  it('読めないものは保存も配布もしない（前のものが残る）', async () => {
+    const runner = fakeRunner('runner-primary');
+    const applier = fakeApplier({ rejects: '壊れている' });
+    const withProfile = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      runners: registryOf([runner]),
+      profile: applier,
+    });
+    await stores.profile.write('export GOOD=1');
+
+    const response = await withProfile.request('/profile', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ script: 'if [ ; then' }),
+    });
+
+    expect(response.status).toBe(400);
+    // 保存されていない ＝ 器を作り直しても、前の効くプロファイルが戻る
+    expect((await stores.profile.read())?.script).toBe('export GOOD=1');
+    // 降ろしてもいない
+    expect(runner.received).toEqual([]);
+  });
+});
+
+function fakeRunner(runnerId: string) {
+  const received: string[] = [];
+  return {
+    runnerId,
+    workspacePath: '/work',
+    received,
+    async setProfile(script: string) {
+      received.push(script);
+      return { ok: true as const };
+    },
+    async profile() {
+      return undefined;
+    },
+    async credentials() {
+      return [];
+    },
+  };
+}
+
+function registryOf(runners: ReturnType<typeof fakeRunner>[]) {
+  return {
+    async list() {
+      return runners;
+    },
+    async get(id: string) {
+      return runners.find((runner) => runner.runnerId === id) ?? null;
+    },
+    async select() {
+      throw new Error('この検証では使わない');
+    },
+  } as never;
+}
+
+/** クローン側の器の代わり。評価の成否だけを差し替える。 */
+function fakeApplier(options: { rejects?: string } = {}) {
+  return {
+    vessel: {} as never,
+    fingerprint: () => undefined,
+    env: () => ({}),
+    async apply(script: string) {
+      if (options.rejects !== undefined) {
+        return { ok: false, error: options.rejects, output: script };
+      }
+      return { ok: true, names: [] };
+    },
+  } as never;
+}

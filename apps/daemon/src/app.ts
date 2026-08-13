@@ -5,6 +5,8 @@ import type {
   CloneHost,
   JournalEntry,
   JournalEntryType,
+  ProfileApplier,
+  ProfileApplyResult,
   RunnerRegistry,
   Scheduler,
   Stores,
@@ -17,6 +19,8 @@ import {
   journalEntrySchema,
   localDayRange,
   memorySlugSchema,
+  fingerprintOf,
+  normalizeProfileScript,
   runnerSetCredentialsCommandSchema,
   type AuthAccount,
   type AuthService,
@@ -57,6 +61,10 @@ import {
   okResponseSchema,
   openApiDocumentation,
   openApiExcludePaths,
+  profileErrorResponseSchema,
+  profileResponseSchema,
+  profileUpdateRequestSchema,
+  profileUpdateResponseSchema,
   reportsResponseSchema,
   runnersCredentialsResponseSchema,
   runnersListResponseSchema,
@@ -126,6 +134,13 @@ export interface AppDeps {
    * という問い）。
    */
   auth?: { plan: AuthPlan; service?: AuthService };
+  /**
+   * 実行環境プロファイル（`.zprofile` 相当）をクローンへ効かせる器。
+   *
+   * **無くても経路は生かす。** 保管（記憶ストア）と runner への配布はこれが
+   * 無くてもできるので、クローンにだけ効かないことを 501 で隠さない。
+   */
+  profile?: ProfileApplier;
 }
 
 const chatBody = z.object({
@@ -1429,6 +1444,7 @@ export function createApp(deps: AppDeps) {
               runnerId: runner.runnerId,
               workspacePath: runner.workspacePath,
               credentials: await runner.credentials().catch(() => []),
+              profile: await runner.profile().catch(() => undefined),
             })),
           ),
         });
@@ -1492,6 +1508,126 @@ export function createApp(deps: AppDeps) {
           }),
         );
         return c.json({ results });
+      },
+    )
+
+    // --- 実行環境プロファイル（/profile） ----------------------------------
+
+    /**
+     * 人間が置いた実行環境プロファイル（`.zprofile` 相当）。
+     *
+     * **本文を返す。** ここを通れるのは持ち主だけであり、自分が書いたものを
+     * 読み直せないと typo ひとつ直せない。指紋しか返さないのは runner の制御面の
+     * ほうで、あちらは「マネージャーが読めてはいけない」からそうしている
+     * （守っている相手が違う）。
+     */
+    .get(
+      '/profile',
+      describeRoute({
+        tags: ['profile'],
+        summary: '実行環境プロファイル（.zprofile 相当）を読む',
+        description:
+          '器の環境変数を増やす代わりに、シェルスクリプト1本を記憶ストアへ置く。' +
+          'クローン・マネージャー・作業者のすべてに効く。',
+        responses: {
+          200: {
+            description: 'プロファイルの本文。置かれていなければ空文字。',
+            content: { 'application/json': { schema: resolver(profileResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        const stored = await deps.stores.profile.read();
+        if (stored === null) return c.json({ script: '' });
+        return c.json({
+          script: stored.script,
+          updatedAt: stored.updatedAt,
+          sha256: fingerprintOf(stored.script),
+          bytes: Buffer.byteLength(stored.script),
+        });
+      },
+    )
+
+    /**
+     * プロファイルを差し替える。**器を作り直さない。**
+     *
+     * これが無いと、道具の鍵や `PATH` を1つ足すたびに `compose.yaml` を直して
+     * 器を焼き直すことになる＝「環境を直す」と「走行中の仕事を失う」が同じ操作に
+     * なる。鍵の差し替え（`POST /runners/credentials`）と同じ理由で口を開けてある。
+     *
+     * **壊れているものは保存もしない。** プロファイルは人間が書いたシェル
+     * スクリプトなので、構文を間違えれば読めない。それを保存すると、以後の
+     * 再接続のたびに配布が失敗し、器を作り直した瞬間に環境が黙って痩せる。
+     * 先に評価して、通らなければ 400 で理由を返す（前のものが残る）。
+     */
+    .put(
+      '/profile',
+      describeRoute({
+        tags: ['profile'],
+        summary: '実行環境プロファイルを差し替える',
+        description:
+          '置く前に評価する。読めなければ保存も配布もせず、理由を返す（前のものが残る）。',
+        responses: {
+          200: {
+            description: 'クローンと各 runner への反映結果。',
+            content: { 'application/json': { schema: resolver(profileUpdateResponseSchema) } },
+          },
+          400: {
+            description: 'プロファイルが読めなかった（保存していない）。',
+            content: { 'application/json': { schema: resolver(profileErrorResponseSchema) } },
+          },
+        },
+      }),
+      validator('json', profileUpdateRequestSchema),
+      async (c) => {
+        // **入口で形を決める。** 保存・配布・指紋が同じ文字列を見ないと、
+        // `PUT` の sha256 と `GET` の sha256 が食い違い、届いているかを見る道具が
+        // 嘘をつく。
+        const script = normalizeProfileScript(c.req.valid('json').script);
+
+        // **先に評価する。** クローンの器で読めないものは、同じ像から焼いた
+        // runner でも読めない。ここで弾けば保存も配布もせずに済む。
+        const clone: ProfileApplyResult =
+          deps.profile === undefined
+            ? { ok: true }
+            : await deps.profile
+                .apply(script)
+                .catch((error: unknown) => ({ ok: false, error: String(error) }));
+
+        if (!clone.ok) {
+          return c.json(
+            {
+              error: 'プロファイルが読めなかったので保存していない' as const,
+              detail: [clone.error ?? '理由不明', clone.output ?? ''].join('\n').trim(),
+            },
+            400,
+          );
+        }
+
+        const stored = await deps.stores.profile.write(script);
+
+        const registry = deps.runners;
+        const runners =
+          registry === undefined
+            ? []
+            : await Promise.all(
+                (await registry.list()).map(async (runner) => {
+                  try {
+                    return { runnerId: runner.runnerId, ...(await runner.setProfile(script)) };
+                  } catch (error) {
+                    return { runnerId: runner.runnerId, ok: false, error: String(error) };
+                  }
+                }),
+              );
+
+        return c.json({
+          updatedAt: stored.updatedAt,
+          ...(script.trim().length === 0
+            ? {}
+            : { sha256: fingerprintOf(script), bytes: Buffer.byteLength(script) }),
+          clone,
+          runners,
+        });
       },
     )
 

@@ -119,6 +119,55 @@ export const runnerCredentialFingerprintSchema = z.object({
 
 export type RunnerCredentialFingerprint = z.infer<typeof runnerCredentialFingerprintSchema>;
 
+/**
+ * 実行環境プロファイル（`.zprofile` 相当）の差し替え。
+ *
+ * **なぜ命令として降ろすのか。** 鍵と同じ理由である。runner の環境変数として
+ * 配ると値は起動時に凍り、人間が直しても器を作り直すまで届かない。加えて、
+ * **runner に記憶ストアを読ませない**という境界がある以上、runner が自分で
+ * 取りに行くことはできない（M4 受け入れ基準3）。だから降ろす。
+ *
+ * 中身は解釈しない。**環境変数の一覧を持たない**のがこの口の要点で、名前検査を
+ * 足したくなったら、それは `credentials` の口の仕事である。
+ */
+export const runnerSetProfileCommandSchema = z.object({
+  /** シェルスクリプトそのもの。空文字は「プロファイルを外す」。 */
+  script: z.string(),
+});
+
+export type RunnerSetProfileCommand = z.infer<typeof runnerSetProfileCommandSchema>;
+
+/** 置いてあるプロファイルの同一性。**本文は返さない。** */
+export const runnerProfileFingerprintSchema = z.object({
+  /** 人間が書いた本文の sha256（16進）先頭12桁。 */
+  sha256: z.string(),
+  bytes: z.number(),
+  updatedAt: z.string(),
+});
+
+export type RunnerProfileFingerprint = z.infer<typeof runnerProfileFingerprintSchema>;
+
+/**
+ * 差し替えの結果。**「置けた」で終わらせない。**
+ *
+ * プロファイルは人間が書いたシェルスクリプトなので、構文を間違えれば読み込みが
+ * 失敗する。そのまま置くと、以後すべてのコマンドが壊れた環境で走り、原因は
+ * どこにも出ない。だから置いた直後に1度評価して、**結果を人間へ返す**。
+ */
+export const runnerProfileResultSchema = z.object({
+  profile: runnerProfileFingerprintSchema.optional(),
+  /** 置いたものが実際に読めたか。 */
+  ok: z.boolean(),
+  /** 読めなかった理由。 */
+  error: z.string().optional(),
+  /** プロファイルが出した出力（人間が原因を見るための窓）。 */
+  output: z.string().optional(),
+  /** 評価の結果、実際に増減した環境変数の名前。**値は返さない。** */
+  names: z.array(z.string()).optional(),
+});
+
+export type RunnerProfileResult = z.infer<typeof runnerProfileResultSchema>;
+
 export const runnerAnswerCommandSchema = z.object({
   requestId: z.string().min(1),
   message: z.string(),
@@ -269,6 +318,15 @@ export interface RunnerClient {
   setCredentials(
     credentials: RunnerSetCredentialsCommand['credentials'],
   ): Promise<RunnerCredentialFingerprint[]>;
+  /** いま runner に置いてある実行環境プロファイルの指紋。**本文は返らない。** */
+  profile(): Promise<RunnerProfileFingerprint | undefined>;
+  /**
+   * 実行環境プロファイルを差し替える。器を作り直さない。
+   *
+   * **runner が繋ぎ直すたびに降ろし直すこと。** 器が入れ替われば置いたものは
+   * 消えるので、降ろし直さないと「再デプロイしたら鍵が消えた」が起きる。
+   */
+  setProfile(script: string): Promise<RunnerProfileResult>;
   /**
    * 口を閉じる。
    *

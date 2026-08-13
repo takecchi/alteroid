@@ -751,6 +751,8 @@ function swappableRunner(runnerId = 'runner-primary') {
      */
     listCalls: 0,
     answers: [] as { managerId: string; requestId: string }[],
+    /** 降ろされた実行環境プロファイル。名乗るたびに1本増える。 */
+    profiles: [] as string[],
   };
   const runner: RunnerClient = {
     runnerId,
@@ -799,6 +801,13 @@ function swappableRunner(runnerId = 'runner-primary') {
     },
     async setCredentials() {
       return [];
+    },
+    async profile() {
+      return undefined;
+    },
+    async setProfile(script: string) {
+      state.profiles.push(script);
+      return { ok: true };
     },
     async close() {
       /* この検証では使わない */
@@ -915,6 +924,27 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     expect(fake.state.answers).toEqual([]);
 
     await s.pool.stop();
+  });
+
+  it('runner が名乗るたびに、実行環境プロファイルを降ろし直す', async () => {
+    // **runner は記憶ストアを読めない**（M4 受け入れ基準3）ので、プロファイルを
+    // 自分で取りに行けない。降ろし直さないと、器を作り直した瞬間に「昨日まで
+    // 通っていた鍵が消える」が起きる — しかも誰も気づけない。
+    const stores = createMemoryStores();
+    await stores.profile.write('export SOME_API_TOKEN=abc123');
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    // **委譲を始める前に降りている。** 名乗り任せにすると、最初のマネージャーが
+    // プロファイルの届く前に走り出しうる。
+    await s.pool.restore();
+    await expect.poll(() => fake.state.profiles.length, { timeout: 2000 }).toBe(1);
+    expect(fake.state.profiles[0]).toContain('SOME_API_TOKEN');
+
+    // 器が入れ替わる ＝ 置いたものは消えている。もう一度降ろす。
+    fake.swap();
+    await expect.poll(() => fake.state.profiles.length, { timeout: 2000 }).toBe(2);
+    expect(fake.state.profiles[1]).toContain('SOME_API_TOKEN');
   });
 
   it('取り直しの最中に起こされた委譲を、死んだものとして起こし直さない', async () => {

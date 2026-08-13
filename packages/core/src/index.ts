@@ -138,6 +138,31 @@ export {
   type CredentialStore,
   type CredentialStoreOptions,
 } from './credentials.js';
+/**
+ * 実行環境プロファイル（`.zprofile` 相当）。**環境変数を器に増やす代わりの口**で、
+ * 用途が増えるたびに実装を直さずに済ませるためにある（`profile.ts`）。
+ */
+export {
+  DEFAULT_PROFILE_PATH,
+  PROFILE_EVAL_TIMEOUT_MS,
+  PROFILE_FILE_ENV_KEY,
+  PROFILE_SOURCED_ENV_KEY,
+  createProfileApplier,
+  createProfileVessel,
+  evaluateProfile,
+  normalizeProfileScript,
+  renderProfileFile,
+  type EvaluateProfileOptions,
+  type ProfileApplier,
+  type ProfileApplierOptions,
+  type ProfileApplyResult,
+  type ProfileEvaluation,
+  type ProfileFingerprint,
+  type ProfileSpawn,
+  type ProfileVessel,
+  type ProfileVesselOptions,
+  type StagedProfile,
+} from './profile.js';
 export {
   createRunnerRegistry,
   isRetryableRunnerError,
@@ -148,8 +173,11 @@ export {
   runnerEventSchema,
   runnerManagerStateSchema,
   runnerMessageCommandSchema,
+  runnerProfileFingerprintSchema,
+  runnerProfileResultSchema,
   runnerResumeCommandSchema,
   runnerSetCredentialsCommandSchema,
+  runnerSetProfileCommandSchema,
   runnerStartCommandSchema,
   runnerWaitingSchema,
   type RunnerAnswerCommand,
@@ -157,9 +185,12 @@ export {
   type RunnerCredentialFingerprint,
   type RunnerEvent,
   type RunnerManagerState,
+  type RunnerProfileFingerprint,
+  type RunnerProfileResult,
   type RunnerRegistry,
   type RunnerResumeCommand,
   type RunnerSetCredentialsCommand,
+  type RunnerSetProfileCommand,
   type RunnerStartCommand,
   type RunnerWaiting,
 } from './runner-protocol.js';

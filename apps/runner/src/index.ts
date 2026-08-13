@@ -6,7 +6,9 @@ import { pathToFileURL } from 'node:url';
 
 import {
   createCredentialStore,
+  createProfileVessel,
   createRunnerHost,
+  DEFAULT_PROFILE_PATH,
   WITHHELD_ENV_KEYS,
   type RunnerChildUser,
 } from '@alteroid/core';
@@ -144,12 +146,31 @@ export async function main(): Promise<void> {
       .join('')}\n`,
   );
 
+  /**
+   * 実行環境プロファイル（`.zprofile` 相当）の器。
+   *
+   * **runner は中身を取りに行かない。** 記憶ストアを読める runner は、その中の
+   * 子プロセス（＝マネージャー）が鍵に届く runner である（M4 受け入れ基準3）。
+   * デーモンが繋いだときに降ろしてくるので、ここでは置き場を用意するだけでよい。
+   */
+  const profilePath = envValue(process.env, 'ALTEROID_PROFILE_FILE') ?? DEFAULT_PROFILE_PATH;
+  // **前の器の置き土産を引き継がない。** 置き場は volume なので、器を作り直しても
+  // ファイルは残る。残ったものを配ると、デーモンが降ろす前の一瞬だけ古い
+  // プロファイルが効く（しかも指紋は「無い」と答えるので誰も気づけない）。
+  rmSync(profilePath, { force: true });
+  const profile = createProfileVessel({
+    path: profilePath,
+    ...(childUser === undefined ? {} : { reader: { uid: childUser.uid, gid: childUser.gid } }),
+    withheldEnvKeys: WITHHELD_ENV_KEYS,
+  });
+
   const outbox = new Outbox();
   const host = createRunnerHost({
     runnerId,
     workspacePath,
     emit: (event) => outbox.push(event),
     credentials,
+    profile,
     ...(childUser === undefined ? {} : { childUser }),
   });
 
