@@ -8,6 +8,11 @@ dist/
 coverage/
 *.tsbuildinfo
 
+# OpenAPI spec から起こす型（pnpm build が毎回作る）。
+# **spec（apps/daemon/openapi.json）の方はコミットする** — コードとのずれを
+# CI が検出できる場所がそこだからで、そこから機械的に落ちるだけのこれは持たない。
+packages/api-client/src/generated/
+
 # env / secrets
 .env
 .env.*
