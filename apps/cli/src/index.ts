@@ -8,6 +8,13 @@ import { accessGrantCommand, accessListCommand, accessRevokeCommand } from './ac
 import { chatCommand } from './chat.js';
 import * as daemon from './daemon.js';
 import { loginCommand, logoutCommand, whoamiCommand } from './login.js';
+import {
+  profileClearCommand,
+  profileEditCommand,
+  profileSetCommand,
+  profileShowCommand,
+  profileStatusCommand,
+} from './profile.js';
 import { alteroidRoot } from './paths.js';
 
 /**
@@ -97,6 +104,53 @@ accessCommand
   .description('alteroid を使う許可を取り消す')
   .action(async (accountId: string) => {
     await accessRevokeCommand(accountId);
+  });
+
+/**
+ * 実行環境プロファイル。**器の環境変数を増やす代わりの口である。**
+ *
+ * 道具の鍵や `PATH` を1つ足すたびに `compose.yaml` を直して器を焼き直すのは、
+ * 人間が `~/.zshenv` に1行足せば済ませていることを実装作業に変えることであり、
+ * それはデグレードである（north_star 禁止1）。
+ */
+const profileCommand = program
+  .command('profile')
+  .description('実行環境プロファイル（~/.zprofile に当たるもの）を見る・書き換える');
+
+profileCommand
+  .command('show')
+  .description('いま置かれているプロファイルの本文を出す')
+  .action(async () => {
+    await profileShowCommand();
+  });
+
+profileCommand
+  .command('status')
+  .description('プロファイルが各層へ届いているかを見る（本文は出さない）')
+  .action(async () => {
+    await profileStatusCommand();
+  });
+
+profileCommand
+  .command('edit')
+  .description('$EDITOR で開いて書き換える（閉じたら反映）')
+  .action(async () => {
+    await profileEditCommand();
+  });
+
+profileCommand
+  .command('set')
+  .description('ファイル（または標準入力）の内容で丸ごと置き換える')
+  .option('-f, --file <path>', '読み込むファイル（省略か - で標準入力）')
+  .action(async (options: { file?: string }) => {
+    await profileSetCommand(options);
+  });
+
+profileCommand
+  .command('clear')
+  .description('プロファイルを外す')
+  .action(async () => {
+    await profileClearCommand();
   });
 
 const daemonCommand = program.command('daemon').description('常駐デーモンの操作');

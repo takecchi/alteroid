@@ -16,10 +16,12 @@ import type {
   LoginRequest,
 } from './auth.js';
 import type {
+  EnvProfile,
   JobStore,
   JournalQuery,
   JournalStore,
   PersonaStore,
+  ProfileStore,
   ScheduleStore,
   SessionRegistry,
   Stores,
@@ -38,6 +40,7 @@ export function createMemoryStores(): Stores {
   const schedules = new Map<string, ScheduledRequest>();
   const archives = new Map<string, string>();
   let cloneSessionId: string | null = null;
+  let envProfile: EnvProfile | null = null;
   let counter = 0;
   const nextId = () => `id-${++counter}`;
 
@@ -238,6 +241,20 @@ export function createMemoryStores(): Stores {
     },
   };
 
+  const profile: ProfileStore = {
+    async read() {
+      return envProfile;
+    },
+    async write(script) {
+      envProfile =
+        script.trim().length === 0 ? null : { script, updatedAt: new Date().toISOString() };
+      return envProfile ?? { script: '', updatedAt: new Date().toISOString() };
+    },
+    async revert(previous) {
+      envProfile = previous;
+    },
+  };
+
   return {
     persona,
     journal,
@@ -246,6 +263,7 @@ export function createMemoryStores(): Stores {
     archive,
     sessions,
     auth,
+    profile,
   };
 }
 

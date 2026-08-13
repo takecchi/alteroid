@@ -6,6 +6,7 @@ import {
   runnerMessageCommandSchema,
   runnerResumeCommandSchema,
   runnerSetCredentialsCommandSchema,
+  runnerSetProfileCommandSchema,
   runnerStartCommandSchema,
 } from '@alteroid/core';
 import { zValidator } from '@hono/zod-validator';
@@ -127,6 +128,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     .use('/managers', control)
     .use('/managers/*', control)
     .use('/credentials', control)
+    .use('/profile', control)
 
     .get('/health', (c) =>
       c.json({
@@ -143,6 +145,8 @@ export function createRunnerApp(deps: RunnerAppDeps) {
          * 切り分けられない。実際にその切り分けができずに一晩溶けたことがある。
          */
         credentials: host.credentials(),
+        /** 置いてある実行環境プロファイルの**指紋だけ**。本文は出さない。 */
+        profile: host.profile(),
       }),
     )
 
@@ -155,6 +159,22 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     .post('/credentials', zValidator('json', runnerSetCredentialsCommandSchema), async (c) => {
       const fingerprints = await host.setCredentials(c.req.valid('json').credentials);
       return c.json({ ok: true, credentials: fingerprints });
+    })
+
+    /**
+     * 実行環境プロファイル（`.zprofile` 相当）の差し替え。
+     *
+     * **鍵の差し替えと同じく制御面である。** マネージャーが叩けると、自分に効く
+     * 環境をも自分で書き換えられる（門番を外さないこと）。
+     *
+     * **置く前に評価する。** 構文を間違えたスクリプトを `BASH_ENV` に載せると、
+     * 以後すべてのコマンドが壊れた環境で走り、原因はどこにも出ない。壊れていれば
+     * 置かずに理由を返す（前のものが残る）。
+     */
+    .get('/profile', (c) => c.json({ ok: true, profile: host.profile() }))
+    .post('/profile', zValidator('json', runnerSetProfileCommandSchema), async (c) => {
+      const result = await host.setProfile(c.req.valid('json').script);
+      return c.json(result);
     })
 
     /**

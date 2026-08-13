@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import type { ProfileService } from './profile-service.js';
 import { isRetryableRunnerError } from './runner-protocol.js';
 import type { RunnerClient, RunnerEvent, RunnerRegistry } from './runner-protocol.js';
 import { brief } from './runner.js';
@@ -110,6 +111,13 @@ export interface ManagerPoolOptions {
   post: (event: InboxEvent) => void;
   /** runner の名簿。宛先の決定はここを通す（固定 URL を前提にしない）。 */
   runners: RunnerRegistry;
+  /**
+   * 実行環境プロファイルの1本道。
+   *
+   * **降ろし直しもここを通す。** runner へ書く操作は更新（`apply`）と同じ列に
+   * 入れないと、更新の最中に古い本文を読んで新しい本文を上書きする。
+   */
+  profile?: ProfileService;
 }
 
 export function createManagerPool(options: ManagerPoolOptions): ManagerPool {
@@ -138,6 +146,7 @@ class Pool implements ManagerPool {
   readonly #stores: Stores;
   readonly #post: (event: InboxEvent) => void;
   readonly #runners: RunnerRegistry;
+  readonly #profile: ProfileService | undefined;
   readonly #records = new Map<string, ManagerRecord>();
   /** 起動時の引き取りが走っている間だけ立つ。`#reattach` はこれを待つ。 */
   #restoring: Promise<void> | null = null;
@@ -167,10 +176,11 @@ class Pool implements ManagerPool {
   #connected = false;
   #stopped = false;
 
-  constructor({ stores, post, runners }: ManagerPoolOptions) {
+  constructor({ stores, post, runners, profile }: ManagerPoolOptions) {
     this.#stores = stores;
     this.#post = post;
     this.#runners = runners;
+    this.#profile = profile;
   }
 
   // -------------------------------------------------------------------------
@@ -520,12 +530,56 @@ class Pool implements ManagerPool {
   // runner との配線
   // -------------------------------------------------------------------------
 
+  /**
+   * 名乗ってきた runner へ、いまの実行環境プロファイルを降ろす。
+   *
+   * **runner が自分で取りに行く形にしない。** 取りに行けるということは runner に
+   * 記憶ストアの鍵があるということで、それは M4 受け入れ基準3 が無いと言っている
+   * ものである（AGENTS.md「runner に記憶ストアの鍵を足さないこと」）。
+   *
+   * 失敗しても委譲は止めない。**プロファイルが降りていないことは日誌に残す** —
+   * 黙って古い環境で走ると、「鍵が届いていない」のか「鍵の権限が足りない」のかを
+   * 誰も切り分けられなくなる（鍵の指紋を出しているのと同じ理由）。
+   */
+  async #pushProfile(runner: RunnerClient): Promise<void> {
+    if (this.#stopped || this.#profile === undefined) return;
+    const runnerId = runner.runnerId;
+    try {
+      // **更新と同じ列に入れる。** 直に読んで直に書くと、人間やクローンの更新の
+      // 最中に古い本文で上書きしうる（3層が別々の本文を持つ状態になる）。
+      const result = await this.#profile.syncRunner(runner);
+      if (result === null || result.ok) return;
+
+      await this.#stores.journal.append({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text:
+          `${runnerId} に実行環境プロファイルを置けなかった（前のものが残っている）: ` +
+          `${result.error ?? '理由不明'}${result.output === undefined || result.output.length === 0 ? '' : `\n${result.output}`}`,
+      });
+    } catch (error) {
+      await this.#stores.journal
+        .append({
+          type: 'exchange',
+          with: 'self',
+          role: 'outbound',
+          text: `${runnerId} へ実行環境プロファイルを降ろせなかった: ${String(error)}`,
+        })
+        .catch(() => undefined);
+    }
+  }
+
   /** イベントの受け口を開く。**繋ぎに行くのはデーモン側**である。 */
   async #ensureConnected(): Promise<void> {
     if (this.#connected || this.#stopped) return;
     this.#connected = true;
     for (const runner of await this.#runners.list()) {
       await runner.connect((event) => void this.#onEvent(event));
+      // **委譲を始める前に環境を整える。** ここを名乗り（`hello`）任せにすると、
+      // 最初のマネージャーがプロファイルの届く前に走り出しうる。届いていない
+      // ことは本人には見えないので、「たまに鍵が無い」という形で現れる。
+      await this.#pushProfile(runner);
     }
   }
 
@@ -566,6 +620,11 @@ class Pool implements ManagerPool {
         return null;
       });
       if (runner === null) return;
+
+      // **取り直しの前に環境を整える。** 器が入れ替わっていれば置いたものは
+      // 消えているので、resume して走り出す前に降ろし直す（走り出してから
+      // 降ろすと、その仕事の最初のコマンドだけが古い環境で走る）。
+      await this.#pushProfile(runner);
 
       // **台帳を先に、runner を後に読む。** 逆にすると、2つの読みの隙間で起こされた
       // 委譲が「runner に居ないのに台帳には居る」と見えて、走り出したばかりの仕事を

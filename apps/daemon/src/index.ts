@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { serve } from '@hono/node-server';
@@ -12,11 +13,15 @@ import {
   WORKER_MODEL,
   createClone,
   createLocalRunner,
+  createProfileApplier,
+  createProfileService,
+  createProfileVessel,
   createRunnerRegistry,
   createScheduler,
   dailyReportEvent,
   missingDailyReportDates,
   resolveCloneModel,
+  WITHHELD_ENV_KEYS,
   type RunnerClient,
   type SelfFacts,
   type Stores,
@@ -103,7 +108,11 @@ const RUNNER_CONNECT_MAX_DELAY_MS = 15_000;
  * 無ければ同一プロセスの runner に落とす — `alteroid chat` を叩くだけで使える
  * というローカルの体験を、分離のために壊さないため。
  */
-async function openRunner(workspace: string, withheldEnvKeys: string[]): Promise<RunnerClient> {
+async function openRunner(
+  workspace: string,
+  withheldEnvKeys: string[],
+  profilePath: string,
+): Promise<RunnerClient> {
   const url = process.env.ALTEROID_RUNNER_URL;
   if (url !== undefined && url.length > 0) {
     const token = process.env.ALTEROID_RUNNER_TOKEN;
@@ -121,6 +130,13 @@ async function openRunner(workspace: string, withheldEnvKeys: string[]): Promise
     runnerId: 'runner-local',
     workspacePath: workspace,
     withheldEnvKeys,
+    // **ローカルでもプロファイルを効かせる。** コンテナ構成でだけ `.zprofile` が
+    // 効く形にすると、器が違うだけでできることが変わる（M4 受け入れ基準1）。
+    // クローン側とは別のファイルにする — こちらには伏せる鍵の `unset` が付く。
+    profile: createProfileVessel({
+      path: profilePath,
+      withheldEnvKeys: [...WITHHELD_ENV_KEYS, ...withheldEnvKeys],
+    }),
   });
 }
 
@@ -203,7 +219,9 @@ export async function main(): Promise<void> {
   // マネージャーは `/proc/1/environ` からデーモンの環境変数＝記憶ストアの鍵に届く。
   // ローカルで runner を立てていないときだけ、同一プロセスの runner へ落とす
   // （その場合は既知の穴が残る。塞ぐのはコンテナ構成の役目である）。
-  const runners = createRunnerRegistry([await openRunner(workspace, storage.withheldEnvKeys)]);
+  const runners = createRunnerRegistry([
+    await openRunner(workspace, storage.withheldEnvKeys, join(paths.state, 'runner-profile.sh')),
+  ]);
   const runnerDescription = describeRunner();
 
   // 層とモデル帯の対応は設計判断であり、変更には人間の承認が要る（AGENTS.md 地雷5）。
@@ -215,6 +233,57 @@ export async function main(): Promise<void> {
       `alteroidd: クローンのモデル帯を ${CLONE_MODEL} から ${cloneModel} へ差し替えています` +
         `（${CLONE_MODEL_ENV_KEY}）。既定へ戻すにはこの環境変数を外してください\n`,
     );
+  }
+
+  /**
+   * 実行環境プロファイル（`.zprofile` 相当）をクローンへ効かせる器。
+   *
+   * **クローンにも効かせる**のは、人間の `.zshenv` が「Claude Code に頼むとき」
+   * にも「自分で端末を叩くとき」にも同じように効くからである。クローンは人間の
+   * 写像であって、道具を持たない存在ではない（north_star「適用範囲」）。
+   *
+   * **プロファイルからは伏せる名前を置かせない。** クローンから記憶ストアの鍵を
+   * 取り上げるという意味ではない — クローンの子は `process.env` からこれまでどおり
+   * 本物の値を受け取る。禁じているのは「プロファイル経由でその名前を*差し替える*」
+   * ことで、ここを開けると、保存の入口（＝ここ）を通ったものがそのまま runner へ
+   * 降り、下の層の境界を上書きできてしまう。
+   *
+   * **保存する前に弾ける唯一の場所でもある。** ここが素通りすると、壊れた
+   * プロファイルが記憶ストアに残り、以後の再接続のたびに配布が失敗し続ける。
+   */
+  const profile = createProfileApplier({
+    vessel: createProfileVessel({
+      path: join(paths.state, 'profile.sh'),
+      withheldEnvKeys: [...WITHHELD_ENV_KEYS, ...storage.withheldEnvKeys],
+    }),
+    baseEnv: () => process.env,
+  });
+
+  /**
+   * 置いて配るまでの1本道。**インスタンスは1つだけ作って全経路へ渡す。**
+   *
+   * 人間の口（`PUT /profile`）・クローンの道具（`profile_write`）・runner の
+   * 再接続時の降ろし直しは、どれも同じものを書き換える。別のインスタンスを持つと
+   * 直列化の意味が消え、層ごとに違う本文が残る。
+   */
+  const profileService = createProfileService({ stores, applier: profile, runners });
+
+  // 置いてあるものを起動時に1度効かせる。**器を作り直しても環境が痩せない**
+  // ことが、この仕組みを環境変数と別に持つ理由そのものである。
+  {
+    // **効かせ直すだけで、保存はし直さない。** ここで書くと、デーモンを起こした
+    // だけで `updatedAt` が動き、「人間かクローンが最後に本文を変えた時刻」という
+    // 意味が消える（本文を一度も変えていなくても監査情報が失われる）。
+    const applied = await profileService
+      .restore()
+      .catch((error: unknown) => ({ ok: false, error: String(error), output: undefined }));
+    if (applied !== null && !applied.ok) {
+      // **黙って古い環境で走らせない。** 何が効いていないかが見えないと、
+      // 「鍵が届いていない」のか「鍵の権限が足りない」のかを誰も切り分けられない。
+      process.stderr.write(
+        `alteroidd: 実行環境プロファイルを読めませんでした（クローンには効きません）: ${applied.error ?? '理由不明'}\n`,
+      );
+    }
   }
 
   const port = Number(process.env.ALTEROID_PORT ?? '4517');
@@ -249,6 +318,8 @@ export async function main(): Promise<void> {
     stores,
     cwd: paths.root,
     runners,
+    profile,
+    profileService,
     self,
     ...(storage.sessionStore === undefined ? {} : { sessionStore: storage.sessionStore }),
   });
@@ -313,6 +384,7 @@ export async function main(): Promise<void> {
     journalEvents: journalBus,
     allowedOrigins,
     auth: { plan: authPlan },
+    profile: profileService,
   });
   // 開けたこと自体は方針の変更であって禁止事項ではない。ただし**黙って**外へ
   // 出さない — ここは叩けばクローンのターンが起きる実行の口である。

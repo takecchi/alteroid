@@ -3,11 +3,14 @@ import { randomUUID } from 'node:crypto';
 import type { query } from '@anthropic-ai/claude-agent-sdk';
 
 import type { CredentialStore } from './credentials.js';
+import type { ProfileVessel } from './profile.js';
 import type {
   RunnerAnswerCommand,
   RunnerClient,
   RunnerCredentialFingerprint,
   RunnerEvent,
+  RunnerProfileFingerprint,
+  RunnerProfileResult,
   RunnerResumeCommand,
   RunnerSetCredentialsCommand,
   RunnerStartCommand,
@@ -37,6 +40,11 @@ export interface LocalRunnerOptions {
    * という差を作らないためである（器が違うだけで、上の層が見るものは同じ）。
    */
   credentials?: CredentialStore;
+  /**
+   * プロファイルの器。**ローカルでも渡す。** コンテナ構成でだけ `.zprofile` が
+   * 効く形にすると、器が違うだけでできることが変わってしまう（M4 受け入れ基準1）。
+   */
+  profile?: ProfileVessel;
 }
 
 export function createLocalRunner(options: LocalRunnerOptions): RunnerClient {
@@ -63,6 +71,7 @@ class LocalRunner implements RunnerClient {
         ? {}
         : { withheldEnvKeys: options.withheldEnvKeys }),
       ...(options.credentials === undefined ? {} : { credentials: options.credentials }),
+      ...(options.profile === undefined ? {} : { profile: options.profile }),
     });
   }
 
@@ -125,6 +134,14 @@ class LocalRunner implements RunnerClient {
     credentials: RunnerSetCredentialsCommand['credentials'],
   ): Promise<RunnerCredentialFingerprint[]> {
     return this.#host.setCredentials(credentials);
+  }
+
+  async profile(): Promise<RunnerProfileFingerprint | undefined> {
+    return this.#host.profile();
+  }
+
+  async setProfile(script: string): Promise<RunnerProfileResult> {
+    return this.#host.setProfile(script);
   }
 
   /** 同じプロセスが消えるので、セッションごと畳む（HTTP 実装とはここが違う）。 */

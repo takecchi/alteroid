@@ -7,6 +7,7 @@ import {
   memoryDocumentSchema,
   pendingApprovalSchema,
   runnerCredentialFingerprintSchema,
+  runnerProfileFingerprintSchema,
   workspaceLocatorSchema,
   type CloneHost,
   type JournalEntry,
@@ -286,6 +287,8 @@ const runnerSummarySchema = z.object({
   workspacePath: z.string(),
   /** 配られている鍵の指紋。**値は返らない。** */
   credentials: z.array(runnerCredentialFingerprintSchema),
+  /** 置かれている実行環境プロファイルの指紋。**本文は返らない。** */
+  profile: runnerProfileFingerprintSchema.optional(),
 });
 
 export const runnersListResponseSchema = z.object({ runners: z.array(runnerSummarySchema) });
@@ -297,6 +300,67 @@ export const runnersCredentialsResponseSchema = z.object({
       ok: z.boolean(),
       credentials: z.array(runnerCredentialFingerprintSchema).optional(),
       error: z.string().optional(),
+    }),
+  ),
+});
+
+// ---------------------------------------------------------------------------
+// 実行環境プロファイル（/profile）
+// ---------------------------------------------------------------------------
+
+/**
+ * 人間が置いたプロファイル。
+ *
+ * **本文を返す。** ここは持ち主だけが通る口であり（`/access` と同じ資格）、
+ * 人間が自分で書いたものを読み直せないと、typo ひとつ直せない。指紋しか返さない
+ * のは runner の制御面のほうで、あちらは「マネージャーが読めてはいけない」から
+ * そうしている。守っている相手が違う。
+ */
+export const profileResponseSchema = z.object({
+  script: z.string(),
+  updatedAt: z.string().optional(),
+  sha256: z.string().optional(),
+  bytes: z.number().optional(),
+});
+
+/**
+ * 保存も配布もしなかったときの応答。
+ *
+ * **理由を本文で返す。** シェルの構文エラーは行番号込みでしか直せないので、
+ * 「読めなかった」だけ返すのは実質「直せない」と同じである。
+ */
+export const profileErrorResponseSchema = z.object({
+  error: z.string(),
+  detail: z.string(),
+});
+
+export const profileUpdateRequestSchema = z.object({
+  /** シェルスクリプトそのもの。空文字は「プロファイルを外す」。 */
+  script: z.string(),
+});
+
+export const profileUpdateResponseSchema = z.object({
+  updatedAt: z.string(),
+  sha256: z.string().optional(),
+  bytes: z.number().optional(),
+  /**
+   * クローン（デーモン自身）へ効かせた結果。**壊れていれば置いていない。**
+   */
+  clone: z.object({
+    ok: z.boolean(),
+    error: z.string().optional(),
+    output: z.string().optional(),
+    names: z.array(z.string()).optional(),
+  }),
+  /** 各 runner へ降ろした結果。 */
+  runners: z.array(
+    z.object({
+      runnerId: z.string(),
+      ok: z.boolean(),
+      error: z.string().optional(),
+      output: z.string().optional(),
+      names: z.array(z.string()).optional(),
+      profile: runnerProfileFingerprintSchema.optional(),
     }),
   ),
 });

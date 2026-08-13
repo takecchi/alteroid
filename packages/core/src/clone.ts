@@ -15,6 +15,8 @@ import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { Inbox } from './inbox.js';
 import { createManagerPool, type ManagerPool } from './manager.js';
+import type { ProfileApplier } from './profile.js';
+import type { ProfileService } from './profile-service.js';
 import type { RunnerRegistry } from './runner-protocol.js';
 import {
   buildCloneSystemPrompt,
@@ -137,6 +139,23 @@ export interface CloneOptions {
    */
   env?: NodeJS.ProcessEnv;
   /**
+   * 実行環境プロファイル（`.zprofile` 相当）。
+   *
+   * **クローンにも効かせる。** 人間の `.zshenv` は、その人が Claude Code に頼む
+   * ときにも、自分で端末を叩くときにも同じように効く。クローンは人間の写像で
+   * あって「道具を持たない存在」ではない（north_star「適用範囲」）ので、
+   * 「マネージャーには効くがクローンには効かない」を作らない。
+   */
+  profile?: ProfileApplier;
+  /**
+   * 実行環境プロファイルを置いて配る1本道（`profile_read` / `profile_write` と
+   * 再接続時の降ろし直しが通る）。
+   *
+   * **デーモンが作った同じインスタンスを渡すこと。** 人間の口とクローンの道具が
+   * 別のインスタンスを持つと直列化の意味が消える（層ごとに違う本文が残る）。
+   */
+  profileService?: ProfileService;
+  /**
    * いま自分がどう走っているかの事実（記憶の器・作業ディレクトリ・委譲先・
    * 入口・モデル帯）。システムプロンプトの自己認識の節に載る。
    *
@@ -195,19 +214,37 @@ class Clone implements CloneHost {
   /** resume を試みた session id。init が来る前に落ちたら捨てる。 */
   #resumedFrom: string | null = null;
   #sawInit = false;
+  readonly #env: NodeJS.ProcessEnv;
+  readonly #profile: ProfileApplier | undefined;
+  readonly #profileService: ProfileService | undefined;
 
   constructor(options: CloneOptions) {
-    const { stores, queryFn, cwd, runners, sessionStore, managers, env, self } = options;
+    const {
+      stores,
+      queryFn,
+      cwd,
+      runners,
+      sessionStore,
+      managers,
+      env,
+      profile,
+      profileService,
+      self,
+    } = options;
     this.#stores = stores;
     this.#queryFn = queryFn ?? query;
     this.#cwd = cwd;
     this.#sessionStore = sessionStore;
     this.#model = resolveCloneModel(env ?? process.env);
+    this.#env = env ?? process.env;
+    this.#profile = profile;
+    this.#profileService = profileService;
     this.#self = self;
     this.#managers =
       managers ??
       createManagerPool({
         stores,
+        ...(profileService === undefined ? {} : { profile: profileService }),
         // マネージャーからの報告・質問も、人間の発言と同じ受信箱を通る。
         post: (event) => this.post(event),
         runners: runners ?? createRunnerRegistry([]),
@@ -832,6 +869,7 @@ class Clone implements CloneHost {
           stores: this.#stores,
           emit: (event) => this.#emit(this.#turn?.conversationId ?? null, event),
           managers: this.#managers,
+          ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
         }),
       },
       systemPrompt: buildCloneSystemPrompt({
@@ -841,6 +879,8 @@ class Clone implements CloneHost {
       // 人間のプロジェクト設定を持ち込まない。クローンは実プロジェクトの
       // 作業者ではなく、判断する側である（設定の共有は M2 のマネージャー側）。
       settingSources: [],
+      // 人間が置いた実行環境プロファイルを、クローンの手にも効かせる。
+      env: this.#childEnv(),
       includePartialMessages: true,
       ...(this.#cwd === undefined ? {} : { cwd: this.#cwd }),
       ...(resume === null ? {} : { resume }),
@@ -857,6 +897,18 @@ class Clone implements CloneHost {
         ],
       },
     };
+  }
+
+  /**
+   * クローンの SDK 子プロセスへ渡す env。
+   *
+   * **記憶ストアの鍵は落とさない。** ここはマネージャー（`runner.ts` の
+   * `#childEnv`）と扱いが逆である — 伏せるのは「上（記憶）へ到達する鍵を
+   * *下の層* へ配らない」ためであって、記憶の持ち主であるクローン自身から
+   * 取り上げるためではない。取り上げれば、それはただのデグレードになる。
+   */
+  #childEnv(): NodeJS.ProcessEnv {
+    return { ...this.#env, ...(this.#profile?.env() ?? {}) };
   }
 
   /**
@@ -918,6 +970,9 @@ class Clone implements CloneHost {
           [MCP_SERVER_NAME]: createCloneMcpServer({
             stores: this.#stores,
             emit: () => undefined,
+            // **蒸留のターンでも同じ道具を渡す。** ここだけ欠けていると、
+            // 会話の最後に「鍵を実行環境へ移す」をやろうとして失敗する。
+            ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
           }),
         },
         systemPrompt: buildCloneSystemPrompt({
@@ -925,6 +980,7 @@ class Clone implements CloneHost {
           ...(this.#self === undefined ? {} : { self: this.#self }),
         }),
         settingSources: [],
+        env: this.#childEnv(),
         persistSession: false,
         ...(this.#cwd === undefined ? {} : { cwd: this.#cwd }),
       },

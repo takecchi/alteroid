@@ -25,6 +25,15 @@ export interface AlteroidPaths {
    * ここは鍵の材料（トークンの sha256）と許可の2値が入る。
    */
   auth: string;
+  /**
+   * 実行環境プロファイル: シェルスクリプト（0600）。
+   *
+   * **人間の `.zprofile` に当たるもの。** 素のスクリプトで置くのは、記憶が素の
+   * Markdown なのと同じ理由（いつでも開いて直せる）である。記憶ではないので
+   * `memory/` には置かない — こちらへ書いたものはクローンのシステムプロンプトに
+   * 載らない。
+   */
+  profile: string;
 }
 
 export const ALTEROID_HOME_ENV = 'ALTEROID_HOME';
@@ -44,5 +53,6 @@ export function resolvePaths(root: string = defaultRoot()): AlteroidPaths {
     archive: join(root, 'archive'),
     state: join(root, 'state'),
     auth: join(root, 'auth'),
+    profile: join(root, 'profile.sh'),
   };
 }

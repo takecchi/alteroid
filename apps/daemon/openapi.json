@@ -2927,6 +2927,21 @@
                               },
                               "required": ["name", "sha256", "updatedAt"]
                             }
+                          },
+                          "profile": {
+                            "type": "object",
+                            "properties": {
+                              "sha256": {
+                                "type": "string"
+                              },
+                              "bytes": {
+                                "type": "number"
+                              },
+                              "updatedAt": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["sha256", "bytes", "updatedAt"]
                           }
                         },
                         "required": ["runnerId", "workspacePath", "credentials"]
@@ -3064,6 +3079,201 @@
                   }
                 },
                 "required": ["credentials"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/profile": {
+      "get": {
+        "operationId": "getProfile",
+        "tags": ["profile"],
+        "summary": "実行環境プロファイル（.zprofile 相当）を読む",
+        "description": "器の環境変数を増やす代わりに、シェルスクリプト1本を記憶ストアへ置く。クローン・マネージャー・作業者のすべてに効く。",
+        "responses": {
+          "200": {
+            "description": "プロファイルの本文。置かれていなければ空文字。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "script": {
+                      "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    },
+                    "sha256": {
+                      "type": "string"
+                    },
+                    "bytes": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["script"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "実行環境の持ち主ではない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "putProfile",
+        "tags": ["profile"],
+        "summary": "実行環境プロファイルを差し替える",
+        "description": "置く前に評価する。読めなければ保存も配布もせず、理由を返す（前のものが残る）。",
+        "responses": {
+          "200": {
+            "description": "クローンと各 runner への反映結果。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "updatedAt": {
+                      "type": "string"
+                    },
+                    "sha256": {
+                      "type": "string"
+                    },
+                    "bytes": {
+                      "type": "number"
+                    },
+                    "clone": {
+                      "type": "object",
+                      "properties": {
+                        "ok": {
+                          "type": "boolean"
+                        },
+                        "error": {
+                          "type": "string"
+                        },
+                        "output": {
+                          "type": "string"
+                        },
+                        "names": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": ["ok"]
+                    },
+                    "runners": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "runnerId": {
+                            "type": "string"
+                          },
+                          "ok": {
+                            "type": "boolean"
+                          },
+                          "error": {
+                            "type": "string"
+                          },
+                          "output": {
+                            "type": "string"
+                          },
+                          "names": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "profile": {
+                            "type": "object",
+                            "properties": {
+                              "sha256": {
+                                "type": "string"
+                              },
+                              "bytes": {
+                                "type": "number"
+                              },
+                              "updatedAt": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["sha256", "bytes", "updatedAt"]
+                          }
+                        },
+                        "required": ["runnerId", "ok"]
+                      }
+                    }
+                  },
+                  "required": ["updatedAt", "clone", "runners"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "プロファイルが読めなかった（保存していない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error", "detail"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "実行環境の持ち主ではない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "script": {
+                    "type": "string"
+                  }
+                },
+                "required": ["script"]
               }
             }
           }

@@ -5,6 +5,7 @@ import { z } from 'zod';
 
 import { isCronExpression } from './cron.js';
 import type { ManagerPool } from './manager.js';
+import type { ProfileService } from './profile-service.js';
 import {
   RESERVED_SCHEDULE_KINDS,
   describeScheduleSpec,
@@ -37,6 +38,15 @@ export interface ToolContext {
    * マネージャーを起こさない（記憶へ移すだけの内部ターン）。
    */
   managers?: ManagerPool;
+  /**
+   * 実行環境プロファイルを置いて配るための器と宛先。
+   *
+   * **クローンにも人間と同じ手を持たせる。** 人間は自分の `~/.zshenv` を開いて
+   * 直せるのだから、その写像であるクローンにできないのは能力の削除である
+   * （north_star 禁止2 は層を問わず効く）。鍵が文脈に載ることは**方針**
+   * （システムプロンプト）で扱い、道具を取り上げて表現しない。
+   */
+  profile?: ProfileService;
 }
 
 export function qualifiedToolName(name: string): string {
@@ -56,6 +66,8 @@ export const CLONE_TOOL_NAMES = [
   'schedule_list',
   'schedule_create',
   'schedule_remove',
+  'profile_read',
+  'profile_write',
   'self_read',
   'manager_start',
   'manager_send',
@@ -404,6 +416,94 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
+    // --- 実行環境プロファイル --------------------------------------------
+    //
+    // **人間の `~/.zshenv` に当たるもの。** 人間が自分で開いて直せる以上、
+    // その写像であるクローンにできないのは能力の削除である（north_star 禁止2）。
+    // 鍵が文脈に載ることは方針（システムプロンプト）で扱う。
+    tool(
+      'profile_read',
+      [
+        '実行環境プロファイル（人間の ~/.zprofile に当たるもの）の本文を読む。',
+        'ここに書いた export は、あなた自身にも、あなたが起こすマネージャーと作業者にも効く。',
+        '**本文には鍵が入っている。読んだ中身を記憶や日誌へ書き写さないこと**',
+        '（記憶はあなたのシステムプロンプトに載るし、人間がいつでも開く場所である）。',
+      ].join(' '),
+      {},
+      async () => {
+        const current = await stores.profile.read();
+        if (current === null) {
+          return text('実行環境プロファイルは置かれていない。');
+        }
+        return text(`（最終更新 ${current.updatedAt}）\n${current.script}`);
+      },
+    ),
+
+    tool(
+      'profile_write',
+      [
+        '実行環境プロファイルを全文置換する（空文字で外す）。',
+        '人間から「このトークンを使って」「PATH にこれを足して」のように**実行環境そのもの**を',
+        '渡されたら、会話の中に置いたままにせずここへ移すこと — 会話は要約に潰れ、器は作り直される。',
+        '記憶（判断の根拠）とは別の器である。鍵や PATH を記憶に書かないこと。',
+        '置く前に実際に読めるかを確かめるので、読めなければ保存も配布もされず理由が返る。',
+        '**全文置換なので、足すだけのつもりなら先に profile_read で今の本文を取ること。**',
+      ].join(' '),
+      {
+        script: z
+          .string()
+          .describe(
+            'シェルスクリプト全文（`export FOO=bar` / `export PATH="$HOME/bin:$PATH"` / `eval "$(tool env)"` など）。' +
+              '空文字はプロファイルを外す意味になる',
+          ),
+        summary: z
+          .string()
+          .describe('何を変えたかの一行要約（日誌に残る。**値そのものは書かない**）'),
+      },
+      async ({ script, summary }) => {
+        if (context.profile === undefined) {
+          return text(
+            'いまは実行環境プロファイルを差し替えられない場面である（記憶へ移すための内部ターン）。' +
+              '次の会話で置くこと。',
+          );
+        }
+        // **人間の口（`PUT /profile`）とまったく同じ1本道を通る。** 評価・保存・
+        // 配布が1つの区間として直列に行われるので、人間の更新と重なっても層ごとに
+        // 違う本文が残らない。
+        const result = await context.profile.apply(script);
+
+        // **失敗を判断として記録しない。** 置けなかったのはシステムの結果であって
+        // クローンの判断ではない。理由はそのまま返して、直すのはこの場でやらせる。
+        if (!result.stored) {
+          return text(
+            `実行環境プロファイルを置けなかった（保存も配布もしていない）: ${result.clone.error ?? '理由不明'}` +
+              `${result.clone.output === undefined || result.clone.output.length === 0 ? '' : `\n${result.clone.output}`}`,
+          );
+        }
+
+        await stores.journal.append({
+          type: 'decision',
+          decision: `実行環境プロファイルを更新した: ${summary}`,
+          grounds: '人間から実行環境そのものを渡された（値は記録しない）',
+        });
+
+        const failed = result.runners.filter((runner) => !runner.ok);
+        const delivered = result.runners.filter((runner) => runner.ok).map((r) => r.runnerId);
+        return text(
+          [
+            `実行環境プロファイルを更新した（sha256 ${result.sha256 ?? '外した'}）。`,
+            delivered.length === 0 ? null : `配った先: ${delivered.join(', ')}`,
+            failed.length === 0
+              ? null
+              : `配れなかった先: ${failed.map((r) => `${r.runnerId}（${r.error ?? '理由不明'}）`).join(', ')}`,
+            'これから起こす仕事には即座に効く。走行中の仕事は gh / git だけが次の呼び出しから拾う。',
+          ]
+            .filter((line) => line !== null)
+            .join('\n'),
+        );
+      },
+    ),
+
     // --- 自分自身 -----------------------------------------------------------
     tool(
       'self_read',
@@ -534,7 +634,7 @@ export function createCloneMcpServer(context: ToolContext) {
     instructions:
       'alteroid のクローン自身の道具。記憶（人間がいつでも読み書きする Markdown）、' +
       '日誌（追記専用）、人間への確認、継続中の依頼（時間起点の仕込み）、' +
-      '自分自身（alteroid）の正典、マネージャーへの委譲。',
+      '実行環境プロファイル（`.zprofile` 相当）、自分自身（alteroid）の正典、マネージャーへの委譲。',
     tools: createCloneTools(context),
   });
 }

@@ -67,6 +67,15 @@ const STATEMENTS = [
      value text
    )`,
 
+  // 実行環境プロファイル（\`.zprofile\` 相当）。**高々1行**である。
+  // 用途ごとに行を増やす形にしないのは、増やせる形にした瞬間に「どの行が
+  // どの層に効くか」の対応表が生まれ、それが権限の一覧に化けるからである。
+  `create table if not exists env_profile (
+     id text primary key,
+     script text not null,
+     updated_at timestamptz not null default now()
+   )`,
+
   `create table if not exists session_entries (
      seq bigserial primary key,
      project_key text not null,

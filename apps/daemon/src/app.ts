@@ -5,6 +5,7 @@ import type {
   CloneHost,
   JournalEntry,
   JournalEntryType,
+  ProfileService,
   RunnerRegistry,
   Scheduler,
   Stores,
@@ -18,6 +19,7 @@ import {
   journalEntrySchema,
   localDayRange,
   memorySlugSchema,
+  fingerprintOf,
   runnerSetCredentialsCommandSchema,
   scheduleKindSchema,
   scheduleSpecSchema,
@@ -61,6 +63,10 @@ import {
   okResponseSchema,
   openApiDocumentation,
   openApiExcludePaths,
+  profileErrorResponseSchema,
+  profileResponseSchema,
+  profileUpdateRequestSchema,
+  profileUpdateResponseSchema,
   reportsResponseSchema,
   runnersCredentialsResponseSchema,
   runnersListResponseSchema,
@@ -153,6 +159,13 @@ export interface AppDeps {
    * という問い）。
    */
   auth?: { plan: AuthPlan; service?: AuthService };
+  /**
+   * 実行環境プロファイルを置いて配るまでの1本道。
+   *
+   * **クローンの道具（`profile_write`）と同じインスタンスを渡すこと。** 別々だと
+   * 直列化の意味が消え、同時更新で層ごとに違う本文が残る。
+   */
+  profile?: ProfileService;
 }
 
 /**
@@ -1696,6 +1709,7 @@ export function createApp(deps: AppDeps) {
               runnerId: runner.runnerId,
               workspacePath: runner.workspacePath,
               credentials: await runner.credentials().catch(() => []),
+              profile: await runner.profile().catch(() => undefined),
             })),
           ),
         });
@@ -1759,6 +1773,134 @@ export function createApp(deps: AppDeps) {
           }),
         );
         return c.json({ results });
+      },
+    )
+
+    // --- 実行環境プロファイル（/profile） ----------------------------------
+
+    /**
+     * 人間が置いた実行環境プロファイル（`.zprofile` 相当）。
+     *
+     * **実行環境の持ち主だけ**（`requireOperator`）。`/access/*` と同じ資格である。
+     *
+     * 単一の持ち主しか許可できない以上、`access grant` 済みのアカウントも同じ人間の
+     * はずだが、**この口だけは「使ってよい」より一段強い**。理由は下の `PUT` にある
+     * とおりで、読み側も同じ扱いにする — 本文には `GH_TOKEN` のような鍵が丸ごと
+     * 入りうるので、`GET` が緩いと `PUT` を締めても意味が無い。
+     *
+     * **本文を返す。** 自分が書いたものを読み直せないと typo ひとつ直せない。
+     * 指紋しか返さないのは runner の制御面のほうで、あちらは「マネージャーが
+     * 読めてはいけない」からそうしている（守っている相手が違う）。
+     *
+     * **デグレードではない。** 人間が `.zshenv` を直すのは、その人が持っている
+     * 箱の上である。ここも同じで、遠隔から直したいなら `access grant` と同じく
+     * `docker compose exec app alteroid profile edit` を通る。
+     */
+    .get(
+      '/profile',
+      describeRoute({
+        tags: ['profile'],
+        summary: '実行環境プロファイル（.zprofile 相当）を読む',
+        description:
+          '器の環境変数を増やす代わりに、シェルスクリプト1本を記憶ストアへ置く。' +
+          'クローン・マネージャー・作業者のすべてに効く。',
+        responses: {
+          200: {
+            description: 'プロファイルの本文。置かれていなければ空文字。',
+            content: { 'application/json': { schema: resolver(profileResponseSchema) } },
+          },
+          403: {
+            description: '実行環境の持ち主ではない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      requireOperator,
+      async (c) => {
+        const stored = await deps.stores.profile.read();
+        if (stored === null) return c.json({ script: '' });
+        return c.json({
+          script: stored.script,
+          updatedAt: stored.updatedAt,
+          sha256: fingerprintOf(stored.script),
+          bytes: Buffer.byteLength(stored.script),
+        });
+      },
+    )
+
+    /**
+     * プロファイルを差し替える。**器を作り直さない。**
+     *
+     * これが無いと、道具の鍵や `PATH` を1つ足すたびに `compose.yaml` を直して
+     * 器を焼き直すことになる＝「環境を直す」と「走行中の仕事を失う」が同じ操作に
+     * なる。鍵の差し替え（`POST /runners/credentials`）と同じ理由で口を開けてある。
+     *
+     * **実行環境の持ち主だけ**（`requireOperator`）。ここは「alteroid を使ってよい」
+     * より一段強い口である — 受け取った本文はデーモンの `process.env` を土台に
+     * その場で評価されるので、**記憶ストアの鍵を持つプロセスでの任意コマンド実行**
+     * そのものであり、評価中の出力は応答にも返る。`access grant` を通っただけの
+     * アカウントに、実行環境そのものを差し替える資格まで渡さない
+     * （許可が持っているのは「使ってよい」の2値だけである）。
+     *
+     * **壊れているものは保存もしない。** プロファイルは人間が書いたシェル
+     * スクリプトなので、構文を間違えれば読めない。それを保存すると、以後の
+     * 再接続のたびに配布が失敗し、器を作り直した瞬間に環境が黙って痩せる。
+     * 先に評価して、通らなければ 400 で理由を返す（前のものが残る）。
+     */
+    .put(
+      '/profile',
+      describeRoute({
+        tags: ['profile'],
+        summary: '実行環境プロファイルを差し替える',
+        description:
+          '置く前に評価する。読めなければ保存も配布もせず、理由を返す（前のものが残る）。',
+        responses: {
+          200: {
+            description: 'クローンと各 runner への反映結果。',
+            content: { 'application/json': { schema: resolver(profileUpdateResponseSchema) } },
+          },
+          400: {
+            description: 'プロファイルが読めなかった（保存していない）。',
+            content: { 'application/json': { schema: resolver(profileErrorResponseSchema) } },
+          },
+          403: {
+            description: '実行環境の持ち主ではない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      requireOperator,
+      validator('json', profileUpdateRequestSchema),
+      async (c) => {
+        // **クローンの道具（`profile_write`）とまったく同じ経路を通る。** 別々に
+        // 書くと、片方だけに検査が入って「人間が置くと弾かれるのにクローンが置くと
+        // 通る」が生まれる。ここは境界を確かめる場所なので、経路が2本あること自体が
+        // 穴になる。
+        if (deps.profile === undefined) {
+          return c.json({ error: 'プロファイルの器が無い' as const, detail: '' }, 400);
+        }
+        const result = await deps.profile.apply(c.req.valid('json').script);
+
+        if (!result.stored) {
+          return c.json(
+            {
+              error: 'プロファイルが読めなかったので保存していない' as const,
+              detail: [result.clone.error ?? '理由不明', result.clone.output ?? '']
+                .join('\n')
+                .trim(),
+            },
+            400,
+          );
+        }
+
+        return c.json({
+          updatedAt: result.updatedAt as string,
+          ...(result.sha256 === undefined
+            ? {}
+            : { sha256: result.sha256, bytes: result.bytes as number }),
+          clone: result.clone,
+          runners: result.runners,
+        });
       },
     )
 

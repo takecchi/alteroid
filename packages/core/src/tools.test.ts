@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ManagerPool, ManagerSummary } from './manager.js';
+import { createProfileService } from './profile-service.js';
 import type { ChatStreamEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
@@ -11,6 +12,8 @@ interface Harness {
   emitted: ChatStreamEvent[];
   sent: { managerId: string; message: string; decision?: string; requestId?: string }[];
   started: { request: string; cwd?: string }[];
+  /** runner へ降ろされたプロファイルの本文。 */
+  distributed: string[];
   call(name: string, args: Record<string, unknown>): Promise<string>;
 }
 
@@ -58,13 +61,43 @@ function harness(): Harness {
     async stop() {},
   };
 
-  const tools = createCloneTools({ stores, emit: (event) => emitted.push(event), managers });
+  // 実行環境プロファイルの配布先。人間の口と同じ配線を通す。
+  const distributed: string[] = [];
+  const runners = {
+    async list() {
+      return [
+        {
+          runnerId: 'runner-test',
+          async setProfile(script: string) {
+            distributed.push(script);
+            return { ok: true as const };
+          },
+        },
+      ];
+    },
+    async get() {
+      return null;
+    },
+    async select() {
+      throw new Error('この検証では使わない');
+    },
+  } as never;
+
+  const tools = createCloneTools({
+    stores,
+    emit: (event) => emitted.push(event),
+    managers,
+    // **本番と同じ1本道を通す。** ここを偽物にすると、直列化も検査も
+    // テストの外に出てしまう。
+    profile: createProfileService({ stores, runners }),
+  });
 
   return {
     stores,
     emitted,
     sent,
     started,
+    distributed,
     async call(name, args) {
       const found = tools.find((entry) => entry.name === name);
       if (!found) throw new Error(`ツール ${name} が無い`);
@@ -94,6 +127,91 @@ describe('クローンの道具', () => {
     expect((await h.stores.persona.read('values'))?.content).toContain('速さより正しさ');
     const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
     expect(entry).toMatchObject({ type: 'memory_update', slug: 'values', cause: 'clone' });
+  });
+
+  /**
+   * 実行環境プロファイル。
+   *
+   * **クローンにも人間と同じ手を持たせる。** 人間は自分の `~/.zshenv` を開いて
+   * 直せるのだから、その写像であるクローンにできないのは能力の削除である
+   * （north_star 禁止2 は層を問わず効く）。
+   *
+   * 固定するのは「人間が言ったことを永続化できる」ことと、「置いたものが
+   * ちゃんと配られる」ことの2つ。**人間の口（`PUT /profile`）と同じ経路を通る**
+   * ので、片方だけ検査が緩いという状態を作らない。
+   */
+  it('profile_write は保存し、runner へも降ろす', async () => {
+    const h = harness();
+
+    const result = await h.call('profile_write', {
+      script: 'export SOME_API_TOKEN=abc123',
+      summary: '人間から渡されたトークンを実行環境へ移した',
+    });
+
+    expect(result).toContain('更新した');
+    expect((await h.stores.profile.read())?.script).toContain('SOME_API_TOKEN');
+    // **置くだけで終わらせない。** 配られていなければマネージャーには効かない。
+    expect(h.distributed).toHaveLength(1);
+    expect(h.distributed[0]).toContain('SOME_API_TOKEN');
+  });
+
+  it('profile_read で今の本文を取れる（足すだけの更新ができる）', async () => {
+    const h = harness();
+    await h.call('profile_write', { script: 'export A=1', summary: 'A' });
+
+    const body = await h.call('profile_read', {});
+
+    expect(body).toContain('export A=1');
+  });
+
+  it('置けなかったら判断として記録せず、理由をその場で返す', async () => {
+    const h = harness();
+    // 器が「読めない」と答える状況。置けなかったのはシステムの結果であって、
+    // クローンの判断ではない（日誌の decision を汚さない）。
+    const tools = createCloneTools({
+      stores: h.stores,
+      emit: () => undefined,
+      profile: createProfileService({
+        stores: h.stores,
+        applier: {
+          vessel: {} as never,
+          fingerprint: () => undefined,
+          env: () => ({}),
+          async apply() {
+            return { ok: false, error: '構文が壊れている' };
+          },
+          async prepare() {
+            return {
+              ok: false,
+              error: '構文が壊れている',
+              commit: async () => undefined,
+              discard: async () => undefined,
+            };
+          },
+        },
+      }),
+    });
+    const write = tools.find((entry) => entry.name === 'profile_write');
+    const result = await write?.handler({ script: 'if [ ; then', summary: 'x' } as never, {});
+    const body = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+
+    expect(body).toContain('置けなかった');
+    expect(body).toContain('構文が壊れている');
+    expect(await h.stores.profile.read()).toBeNull();
+    expect(await h.stores.journal.list({ types: ['decision'] })).toHaveLength(0);
+  });
+
+  it('日誌に残すのは何を変えたかであって、値ではない', async () => {
+    const h = harness();
+
+    await h.call('profile_write', {
+      script: 'export SOME_API_TOKEN=super-secret',
+      summary: 'Slack の鍵を置いた',
+    });
+
+    const [entry] = await h.stores.journal.list({ types: ['decision'] });
+    expect(JSON.stringify(entry)).not.toContain('super-secret');
+    expect(JSON.stringify(entry)).toContain('Slack の鍵を置いた');
   });
 
   // --- 継続中の依頼 --------------------------------------------------------
