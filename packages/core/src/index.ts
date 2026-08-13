@@ -22,6 +22,7 @@ export {
   type TimerPromptInput,
 } from './prompt.js';
 export { buildActivityDigest, type DigestWindow } from './digest.js';
+export { CRON_EXPRESSION_MAX, isCronExpression, parseCron, type CronSchedule } from './cron.js';
 export {
   DAILY_REPORT_KIND,
   RESERVED_SCHEDULE_KINDS,

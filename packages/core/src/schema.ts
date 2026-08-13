@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { CRON_EXPRESSION_MAX, isCronExpression } from './cron.js';
+
 /**
  * 型付きメッセージのスキーマ（docs/architecture.md「配線」）。
  *
@@ -243,6 +245,23 @@ export const scheduleSpecSchema = z.discriminatedUnion('type', [
   }),
   /** この分数ごと。 */
   z.object({ type: z.literal('every'), minutes: z.number().int().min(1) }),
+  /**
+   * cron 式（ローカル時刻）。
+   *
+   * **人間が cron で書けることは、この階層でも書けるべきである**（north_star 禁止1）。
+   * 「毎週月曜の朝」を `daily` で表そうとすると「毎日起きて曜日を見て何もしない」に
+   * なり、7回に6回は上位モデルのターンを空焼きする。
+   *
+   * 読める式かどうかまでここで見る。読めない式を保存できると、一覧には出るのに
+   * 発火しない仕込みが作れてしまう。
+   */
+  z.object({
+    type: z.literal('cron'),
+    expression: z
+      .string()
+      .max(CRON_EXPRESSION_MAX)
+      .refine(isCronExpression, 'cron 式として読めない（例: 毎週月曜 10:00 なら `0 10 * * 1`）'),
+  }),
 ]);
 
 /**

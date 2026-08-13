@@ -138,10 +138,38 @@ describe('クローンの道具', () => {
     });
   });
 
-  it('周期の指定は片方だけ。読めない指定は仕込まない', async () => {
+  it('cron 式でも仕込める（曜日の指定が要る依頼のため）', async () => {
     const h = harness();
 
-    expect(await h.call('schedule_create', { kind: 'a', request: 'x' })).toContain('どちらか一方');
+    const created = await h.call('schedule_create', {
+      kind: 'weekly-review',
+      request: '週次で先週の日報を読み直して、抜けている決めごとを拾う',
+      cron: '0 10 * * 1',
+    });
+    expect(created).toContain('cron: 0 10 * * 1');
+
+    expect((await h.stores.schedules.list())[0]).toMatchObject({
+      spec: { type: 'cron', expression: '0 10 * * 1' },
+    });
+  });
+
+  it('読めない cron 式は仕込まない', async () => {
+    const h = harness();
+
+    const result = await h.call('schedule_create', {
+      kind: 'weekly-review',
+      request: 'x',
+      cron: 'まいしゅう げつようび',
+    });
+
+    expect(result).toContain('cron 式として読めない');
+    expect(await h.stores.schedules.list()).toEqual([]);
+  });
+
+  it('周期の指定は1つだけ。読めない指定は仕込まない', async () => {
+    const h = harness();
+
+    expect(await h.call('schedule_create', { kind: 'a', request: 'x' })).toContain('どれか1つだけ');
     expect(
       await h.call('schedule_create', {
         kind: 'a',
@@ -149,7 +177,15 @@ describe('クローンの道具', () => {
         dailyAt: '09:00',
         everyMinutes: 30,
       }),
-    ).toContain('どちらか一方');
+    ).toContain('どれか1つだけ');
+    expect(
+      await h.call('schedule_create', {
+        kind: 'a',
+        request: 'x',
+        dailyAt: '09:00',
+        cron: '0 10 * * 1',
+      }),
+    ).toContain('どれか1つだけ');
     expect(
       await h.call('schedule_create', { kind: 'a', request: 'x', dailyAt: '25:00' }),
     ).toContain('読めない');

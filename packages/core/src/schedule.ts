@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { parseCron } from './cron.js';
 import type { InboxEvent, ScheduleSpec, ScheduledRequest } from './schema.js';
 import type { JournalStore, ScheduleStore } from './store.js';
 
@@ -400,6 +401,9 @@ export function selfInitiativeEntry(options: { everyMinutes: number }): Schedule
 /** 既定の仕込みの名前。依頼で乗っ取らせない。 */
 export const RESERVED_SCHEDULE_KINDS: readonly string[] = [DAILY_REPORT_KIND, SELF_INITIATIVE_KIND];
 
+/** 読めない指定を落とす先（沈黙させないため）。 */
+const MIDNIGHT: TimeOfDay = { hour: 0, minute: 0 };
+
 /** 人間が `/schedule` で読む周期の言い方。 */
 export function describeScheduleSpec(spec: ScheduleSpec): string {
   if (spec.type === 'daily') {
@@ -409,6 +413,13 @@ export function describeScheduleSpec(spec: ScheduleSpec): string {
         ? spec.at
         : `${`${time.hour}`.padStart(2, '0')}:${`${time.minute}`.padStart(2, '0')}`;
     return `毎日 ${label}（ローカル時刻）`;
+  }
+  if (spec.type === 'cron') {
+    // 読めない式は保存できないが、人間が手でストアを直すことはある。**黙って
+    // 別の時刻で走らせない** — 一覧で壊れていることが分かるようにする。
+    return parseCron(spec.expression) === null
+      ? `cron: ${spec.expression}（読めないので毎日 00:00 に起こす）`
+      : `cron: ${spec.expression}（ローカル時刻）`;
   }
   return `${spec.minutes} 分ごと`;
 }
@@ -423,23 +434,32 @@ export function describeScheduleSpec(spec: ScheduleSpec): string {
 export function scheduledRequestEntry(plan: ScheduledRequest): ScheduleEntry {
   const description = `${describeScheduleSpec(plan.spec)}: ${plan.request.replace(/\s+/g, ' ').trim()}`;
 
-  const nextAt =
-    plan.spec.type === 'daily'
-      ? (after: Date): Date => {
-          // 読めない時刻で沈黙させない。設定の誤りは 00:00 に寄せて、毎日必ず起こす
-          const at = parseTimeOfDay(plan.spec.type === 'daily' ? plan.spec.at : '00:00') ?? {
-            hour: 0,
-            minute: 0,
-          };
-          const today = atTimeOnDay(after, at);
-          if (today.getTime() > after.getTime()) return today;
-          const tomorrow = new Date(after.getFullYear(), after.getMonth(), after.getDate() + 1);
-          return atTimeOnDay(tomorrow, at);
-        }
-      : (after: Date): Date => {
-          const minutes = plan.spec.type === 'every' ? plan.spec.minutes : 60;
-          return new Date(after.getTime() + Math.max(1, Math.floor(minutes)) * 60_000);
-        };
+  const spec = plan.spec;
+
+  /**
+   * 読めない指定で沈黙させないための最後の砦。
+   *
+   * 保存の時点で弾いているので通常は来ないが、人間がストアを手で直すことはある。
+   * **黙って止まるより、毎日 00:00 に起こして一覧で壊れていると見せる**
+   * （`describeScheduleSpec` がその旨を書く）。
+   */
+  const dailyAt = (after: Date, at: TimeOfDay): Date => {
+    const today = atTimeOnDay(after, at);
+    if (today.getTime() > after.getTime()) return today;
+    const tomorrow = new Date(after.getFullYear(), after.getMonth(), after.getDate() + 1);
+    return atTimeOnDay(tomorrow, at);
+  };
+
+  const nextAt = (after: Date): Date => {
+    if (spec.type === 'daily') {
+      return dailyAt(after, parseTimeOfDay(spec.at) ?? { hour: 0, minute: 0 });
+    }
+    if (spec.type === 'cron') {
+      // croner はローカル時刻で、`after` より後の最初の時刻を返す
+      return parseCron(spec.expression)?.nextAfter(after) ?? dailyAt(after, MIDNIGHT);
+    }
+    return new Date(after.getTime() + Math.max(1, Math.floor(spec.minutes)) * 60_000);
+  };
 
   return {
     kind: plan.kind,

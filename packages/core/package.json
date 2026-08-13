@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "catalog:",
+    "croner": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

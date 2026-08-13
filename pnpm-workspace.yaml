@@ -17,6 +17,9 @@ catalog:
   '@hono/zod-validator': ^0.9.0
   zod: ^4.4.3
   commander: ^15.0.0
+  # 継続中の依頼の周期。人間が cron で書けることをこの階層でも書けるようにする。
+  # 依存ゼロ・ESM・型付きなので croner を採った（cron-parser は luxon を連れてくる）
+  croner: ^10.0.1
   # OpenAPI（外から API を記述できるようにするための一式。Issue #20）
   #
   # 生成側は hono-openapi。既存のチェーン記法と `AppType`（CLI の `hc<AppType>` が

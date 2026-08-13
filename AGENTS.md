@@ -109,7 +109,8 @@
   - `ALTEROID_DAILY_REPORT_AT`（`HH:MM` / `off`）、`ALTEROID_INITIATIVE_EVERY`（分 / `off`）、`ALTEROID_REPORT_LOOKBACK_DAYS`（起動時に遡って日報を作る日数、既定 3）
   - これらは**方針**の設定であって、暴走を止めるための回数制限ではない。抑止は実行環境の境界で行う（north_star 禁止2）
 - 待たずに確かめるなら `POST /schedule/:kind/run`（chat では `/run daily_report` / `/run self_initiative`）。`GET /schedule` で次の発火が見える
-- **「定期的に〜しておいて」は記憶だけに書かせない。** 記憶は根拠を置く場所で時計を持たないので、そこにだけ書いた依頼は「発意 tick のときに思い出せるかどうか」の賭けになる。継続する依頼はクローンが `schedule_create`（`kind` ＋ `dailyAt` / `everyMinutes` ＋ 依頼の本文）で仕込み、時刻が来れば必ず受信箱へ届く形にする（`schedule_list` / `schedule_remove` で読む・外す）
+- **「定期的に〜しておいて」は記憶だけに書かせない。** 記憶は根拠を置く場所で時計を持たないので、そこにだけ書いた依頼は「発意 tick のときに思い出せるかどうか」の賭けになる。継続する依頼はクローンが `schedule_create`（`kind` ＋ `dailyAt` / `everyMinutes` / `cron` のどれか1つ ＋ 依頼の本文）で仕込み、時刻が来れば必ず受信箱へ届く形にする（`schedule_list` / `schedule_remove` で読む・外す）
+  - 周期は3つ。曜日や月の指定が要るものは **cron 式**（`croner`。ローカル時刻。例 `0 10 * * 1`）で書く。**「毎日起きて曜日を見て何もしない」で代用しないこと** — 7回に6回は Fable のターンを空焼きする。読めない式は保存の時点で弾く（`scheduleSpecSchema`）ので、経路ごとに検査を足さない
   - 器は `ScheduleStore`（`packages/core/src/store.ts`）。fs では `~/.alteroid/jobs/schedules.json`、pg では `schedules` テーブル。**真実はストア側だけに置く** — スケジューラへ直接足す口を作ると、デーモン再起動で仕込みが消える
   - スケジューラは `refresh()` でストアを読み直す。内部タイマーが刻むたびに通るので、足した依頼は最大1分で効く。人間が API から足した時とデーモン起動時は明示的に呼んで待たせない
   - 発火イベントに載るのは `kind` だけである。**依頼の本文をイベントに載せないこと** — 載せた瞬間に発火時点の写しになり、人間が本文を直しても古い依頼で走る

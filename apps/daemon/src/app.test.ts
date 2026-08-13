@@ -527,6 +527,31 @@ describe('HTTP API', () => {
     expect(await stores.schedules.list()).toEqual([]);
   });
 
+  it('cron 式でも仕込めるが、読めない式は弾く', async () => {
+    const ok = await app.request(
+      '/schedule',
+      json({
+        kind: 'weekly-review',
+        request: '週次レビュー',
+        spec: { type: 'cron', expression: '0 10 * * 1' },
+      }),
+    );
+    expect(ok.status).toBe(200);
+    expect(await stores.schedules.list()).toMatchObject([
+      { spec: { type: 'cron', expression: '0 10 * * 1' } },
+    ]);
+
+    const broken = await app.request(
+      '/schedule',
+      json({
+        kind: 'weekly-review',
+        request: '週次レビュー',
+        spec: { type: 'cron', expression: 'まいしゅう げつようび' },
+      }),
+    );
+    expect(broken.status).toBe(400);
+  });
+
   it('既定の定期ジョブの名前は API からも奪えない', async () => {
     const response = await app.request(
       '/schedule',

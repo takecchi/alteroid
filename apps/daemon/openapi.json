@@ -2099,6 +2099,20 @@
                           }
                         },
                         "required": ["type", "minutes"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "cron"
+                          },
+                          "expression": {
+                            "type": "string",
+                            "maxLength": 120
+                          }
+                        },
+                        "required": ["type", "expression"]
                       }
                     ]
                   }

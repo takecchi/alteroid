@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 
+import { isCronExpression } from './cron.js';
 import type { ManagerPool } from './manager.js';
 import {
   RESERVED_SCHEDULE_KINDS,
@@ -302,15 +303,22 @@ export function createCloneTools(context: ToolContext) {
         dailyAt: z
           .string()
           .optional()
-          .describe('毎日この時刻に起こす（ローカル時刻の HH:MM）。everyMinutes とどちらか一方'),
+          .describe('毎日この時刻に起こす（ローカル時刻の HH:MM）。周期はどれか1つだけ渡す'),
         everyMinutes: z
           .number()
           .int()
           .min(1)
           .optional()
-          .describe('この分数ごとに起こす。dailyAt とどちらか一方'),
+          .describe('この分数ごとに起こす。周期はどれか1つだけ渡す'),
+        cron: z
+          .string()
+          .optional()
+          .describe(
+            'cron 式で起こす（ローカル時刻。例: 毎週月曜 10:00 なら `0 10 * * 1`）。' +
+              '曜日や月の指定が要るときはこれを使う。周期はどれか1つだけ渡す',
+          ),
       },
-      async ({ kind, request, dailyAt, everyMinutes }) => {
+      async ({ kind, request, dailyAt, everyMinutes, cron }) => {
         const parsedKind = scheduleKindSchema.safeParse(kind);
         if (!parsedKind.success) {
           return text(`kind "${kind}" は使えない（英小文字・数字・. _ - のみ、64文字まで）。`);
@@ -324,17 +332,25 @@ export function createCloneTools(context: ToolContext) {
               '（`ALTEROID_DAILY_REPORT_AT` / `ALTEROID_INITIATIVE_EVERY`）なので人間に頼むこと。',
           );
         }
-        if ((dailyAt === undefined) === (everyMinutes === undefined)) {
-          return text('dailyAt か everyMinutes を、どちらか一方だけ渡すこと。');
+        const given = [dailyAt, everyMinutes, cron].filter((value) => value !== undefined);
+        if (given.length !== 1) {
+          return text('dailyAt / everyMinutes / cron のうち、どれか1つだけ渡すこと。');
         }
         if (dailyAt !== undefined && parseTimeOfDay(dailyAt) === null) {
           return text(`dailyAt "${dailyAt}" は HH:MM として読めない。`);
+        }
+        if (cron !== undefined && !isCronExpression(cron)) {
+          return text(
+            `cron "${cron}" は cron 式として読めない（例: 毎週月曜 10:00 なら \`0 10 * * 1\`）。`,
+          );
         }
 
         const spec: ScheduleSpec =
           dailyAt !== undefined
             ? { type: 'daily', at: dailyAt }
-            : { type: 'every', minutes: everyMinutes ?? 60 };
+            : cron !== undefined
+              ? { type: 'cron', expression: cron }
+              : { type: 'every', minutes: everyMinutes ?? 60 };
         const parsedSpec = scheduleSpecSchema.safeParse(spec);
         if (!parsedSpec.success) return text(`周期を読めなかった: ${parsedSpec.error.message}`);
 

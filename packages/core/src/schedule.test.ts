@@ -240,6 +240,52 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     expect(every.nextAt(at(2026, 8, 12, 9, 0))).toEqual(at(2026, 8, 12, 9, 30));
   });
 
+  it('cron 式で曜日を指定できる（毎日起きて曜日を見る、をしなくてよい）', () => {
+    // 2026-08-12 は水曜。次の月曜 10:00 は 8/17
+    const weekly = scheduledRequestEntry(
+      plan('weekly-review', { type: 'cron', expression: '0 10 * * 1' }),
+    );
+    expect(weekly.nextAt(at(2026, 8, 12, 8, 0))).toEqual(at(2026, 8, 17, 10, 0));
+    // その月曜の 10:00 を過ぎていれば翌週
+    expect(weekly.nextAt(at(2026, 8, 17, 10, 0))).toEqual(at(2026, 8, 24, 10, 0));
+    expect(weekly.description).toContain('cron: 0 10 * * 1');
+
+    // 平日だけ、も書ける
+    const weekdays = scheduledRequestEntry(
+      plan('weekday-check', { type: 'cron', expression: '30 9 * * 1-5' }),
+    );
+    expect(weekdays.nextAt(at(2026, 8, 14, 10, 0))).toEqual(at(2026, 8, 17, 9, 30)); // 金→月
+  });
+
+  it('cron の依頼も、落ちていた間に過ぎた予定を1回だけ拾う', async () => {
+    // 2026-08-19（水）に起き直す。前回は 8/10（月）で、8/17（月）の予定を逃している
+    const s = setup(at(2026, 8, 19, 12, 0));
+    await s.stores.schedules.put({
+      ...plan('weekly-review', { type: 'cron', expression: '0 10 * * 1' }),
+      lastRunAt: at(2026, 8, 10, 10, 0).toISOString(),
+    });
+    await s.scheduler.refresh();
+    s.scheduler.start();
+
+    expect(s.scheduler.tick(at(2026, 8, 19, 12, 0))).toEqual(['weekly-review']);
+    expect(s.scheduler.tick(at(2026, 8, 19, 12, 1))).toEqual([]);
+    // 拾った後は次の月曜
+    expect(s.scheduler.list().find((item) => item.kind === 'weekly-review')?.nextAt).toBe(
+      at(2026, 8, 24, 10, 0).toISOString(),
+    );
+
+    s.scheduler.stop();
+  });
+
+  it('読めない cron が仕込まれていても沈黙しない（一覧で壊れていると分かる）', () => {
+    // 保存の時点で弾いているが、人間がストアを手で直すことはある
+    const broken = scheduledRequestEntry(
+      plan('broken', { type: 'cron', expression: 'まいにち あさ' }),
+    );
+    expect(broken.description).toContain('読めない');
+    expect(broken.nextAt(at(2026, 8, 12, 8, 0))).toEqual(at(2026, 8, 13, 0, 0));
+  });
+
   it('発火イベントは kind だけを運ぶ（本文は処理する瞬間にストアから読む）', () => {
     const entry = scheduledRequestEntry(plan('issue-round', { type: 'daily', at: '09:00' }));
     const event = entry.event(at(2026, 8, 12, 9, 0));
