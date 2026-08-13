@@ -241,9 +241,13 @@ function assertBodyRequired<T>(bodyIsRequired: BodyIsRequired<T>): BodyIsRequire
   return bodyIsRequired;
 }
 
+// `deliberateClient` を通る経路の**全部**（`app.ts` で門番を足したら、ここにも足す）。
 assertBodyRequired<paths['/chat/{conversationId}/end']['post']['requestBody']>(true);
 assertBodyRequired<paths['/events/{source}']['post']['requestBody']>(true);
+assertBodyRequired<paths['/schedule/{kind}']['delete']['requestBody']>(true);
 assertBodyRequired<paths['/schedule/{kind}/run']['post']['requestBody']>(true);
+assertBodyRequired<paths['/access/{accountId}/grant']['post']['requestBody']>(true);
+assertBodyRequired<paths['/access/{accountId}/revoke']['post']['requestBody']>(true);
 assertBodyRequired<paths['/shutdown']['post']['requestBody']>(true);
 
 /**
@@ -254,7 +258,7 @@ assertBodyRequired<paths['/shutdown']['post']['requestBody']>(true);
  * 既定ヘッダなど注入しないので、そちらでも通らなければ「spec から起こしたクライアントは
  * 415 に当たる」が残る。だからここは `createClient<paths>` を**既定ヘッダ無しで**直に組む。
  *
- * 見るのは「415 でないこと」だけである。200 か 404 かは deps の有無で決まるが、どちらも
+ * 見るのは「415 でないこと」だけである。200 / 403 / 404 のどれになるかは deps と資格で決まるが、どれも
  * 門番を**通り抜けた**ことを意味する（415 は通れなかったことしか意味しない）。
  */
 it('既定ヘッダを注入しない素の生成クライアントでも 415 にならない', async () => {
@@ -284,6 +288,32 @@ it('既定ヘッダを注入しない素の生成クライアントでも 415 �
         (
           await bare.POST('/schedule/{kind}/run', {
             params: { path: { kind: 'daily_report' } },
+            body: {},
+          })
+        ).response.status,
+    },
+    {
+      name: 'DELETE /schedule/{kind}',
+      status: async () =>
+        (await bare.DELETE('/schedule/{kind}', { params: { path: { kind: 'ci' } }, body: {} }))
+          .response.status,
+    },
+    {
+      name: 'POST /access/{accountId}/grant',
+      status: async () =>
+        (
+          await bare.POST('/access/{accountId}/grant', {
+            params: { path: { accountId: 'なんでもよい' } },
+            body: {},
+          })
+        ).response.status,
+    },
+    {
+      name: 'POST /access/{accountId}/revoke',
+      status: async () =>
+        (
+          await bare.POST('/access/{accountId}/revoke', {
+            params: { path: { accountId: 'なんでもよい' } },
             body: {},
           })
         ).response.status,

@@ -87,20 +87,17 @@ export interface AlteroidClient {
  * クライアントを作る。
  *
  * `content-type: application/json` を既定で必ず付けるのは、デーモンが**本文を読まない
- * POST**（会話終了・定期ジョブの手動起動・停止・許可の付与と取り消し）にもこれを要求する
- * からである。ブラウザの単純リクエストで他人がクローンのターンを起こせないようにする
+ * POST / DELETE**（会話終了・定期の依頼を外す・定期ジョブの手動起動・停止・許可の付与と
+ * 取り消し）にもこれを要求するからである。ブラウザの単純リクエストで他人がクローンのターンを起こせないようにする
  * 境界（`deliberateClient`）であり、意図した呼び出し側はここを素通りできる必要がある。
  * CLI の `hono/client` が同じことをしているのと同じ理由（`apps/cli/src/client.ts`）。
  *
- * **これを消しても `api` 経由は動くが、それを理由に消さないこと。** spec 側が該当経路の
+ * **これを消しても `api` 経由は動くが、それを理由に消さないこと。** 門番つきの経路は spec 側で
  * requestBody を `required` にしてあるので、`body: {}` を渡す呼び出しには openapi-fetch が
- * 自分でヘッダを付ける（それが本筋で、`packages/api-client/src/client.test.ts` の
- * 「素の生成クライアント」の test が固定している）。ここが要るのは残りの2つ:
- *
- * 1. **SSE は openapi-fetch を通らない。** `chat()` は素の `fetch` で `POST /chat` へ
- *    本文を送るので、ヘッダを付けるのはこちらの仕事である
- * 2. `POST /access/{id}/grant` / `revoke` は spec に requestBody が無く、ヘッダの要求が
- *    まだ 415 の description にしか出ていない（門番は同じように通る）
+ * 自分でヘッダを付ける（それが本筋で、`packages/api-client/src/client.test.ts` が型と実行時の
+ * 両方で固定している）。ここがまだ要るのは **SSE が openapi-fetch を通らない**からで、
+ * `chat()` は素の `fetch` で `POST /chat` へ本文を送るため、ヘッダを付けるのはこちらの仕事に
+ * なる。
  */
 export function createAlteroidClient(options: AlteroidClientOptions): AlteroidClient {
   const { baseUrl, headers, fetch: fetchImpl, ...rest } = options;

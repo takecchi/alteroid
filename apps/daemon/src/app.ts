@@ -354,7 +354,11 @@ function isDailyReport(entry: JournalEntry): entry is DailyReport {
 }
 
 /**
- * 本文検査が無い POST（`deliberateClient` のみ）に共通の requestBody。
+ * 本文検査が無い POST / DELETE（`deliberateClient` のみ）に共通の requestBody。
+ *
+ * **門番を足したら必ずこれも付けること。** 片方だけの経路があると「門番つきなら本文必須」が
+ * 例外つきの規則になり、生成クライアントはその経路でだけ 415 に当たる。
+ * `packages/api-client/src/client.test.ts` が7経路すべてを型の側で数え上げている。
  *
  * **サーバは本文を読まないが、`content-type: application/json` は要る。** それを
  * 415 の description（散文）だけで伝えると、spec から起こした他言語のクライアントは
@@ -1426,6 +1430,12 @@ export function createApp(deps: AppDeps) {
         description:
           '済んだ依頼・もう要らない依頼をここで外す。既定の定期ジョブは仕込みではないので' +
           'ここでは外せない（間隔と締め時刻はデーモンの設定である）。',
+        requestBody: noBodyPostRequestBody(
+          '**中身は読まないので `{}` を送ればよい。** `DELETE` だが本文が必須なのは、' +
+            '門番（`deliberateClient`）が `content-type: application/json` を要求することを' +
+            'spec の機械可読部で表す手段がこれしか無いからである（`DELETE /managers/{id}` も' +
+            '本文を要求する）。',
+        ),
         responses: {
           200: {
             description: '外した。',
@@ -2016,10 +2026,16 @@ export function createApp(deps: AppDeps) {
         tags: ['access'],
         summary: 'alteroid を使う許可を与える',
         description:
-          'ログインしただけでは使えない。ここで初めて使えるようになる。本文は無い。\n\n' +
+          'ログインしただけでは使えない。ここで初めて使えるようになる。運ぶ情報は無い' +
+          '（`{}` を送る）。\n\n' +
           '**許可できるアカウントは高々1つ。** alteroid は単一の持ち主のものであり、' +
           'マルチユーザー / チーム利用は非ゴールである（docs/PRD.md「スコープ外」）。' +
           '既に別のアカウントが許可されていれば 409 を返す — 持ち主を移すなら先に取り消す。',
+        requestBody: noBodyPostRequestBody(
+          '**中身は読まないので `{}` を送ればよい。** 本文そのものではなく ' +
+            '`content-type: application/json` が要る（ブラウザの単純リクエストで持ち主を' +
+            '足されないため）。',
+        ),
         responses: {
           200: {
             description: '許可した（既に許可済みでも 200）。',
@@ -2074,7 +2090,13 @@ export function createApp(deps: AppDeps) {
         summary: 'alteroid を使う許可を取り消す',
         description:
           '発行済みトークンは消さない。**許可はリクエストごとに見ているので、' +
-          'これだけで即座に通らなくなる**（消し忘れたトークンが生き残らない）。本文は無い。',
+          'これだけで即座に通らなくなる**（消し忘れたトークンが生き残らない）。運ぶ情報は' +
+          '無い（`{}` を送る）。',
+        requestBody: noBodyPostRequestBody(
+          '**中身は読まないので `{}` を送ればよい。** 本文そのものではなく ' +
+            '`content-type: application/json` が要る（ブラウザの単純リクエストで持ち主の' +
+            '許可を落とされないため）。',
+        ),
         responses: {
           200: {
             description: '取り消した（既に未許可でも 200）。',
