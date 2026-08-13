@@ -10,13 +10,13 @@
 │  クローン（Fable / SDK query・preset 一式）               │   │ = daemon の    │
 │   ├ 道具: manager_start / manager_send / manager_list    │   │ 薄い HTTP      │
 │   │       memory_* / journal_* / ask_human               │   │ クライアント    │
-│   │       （インプロセス MCP の自作ツール）                │   └───────────────┘
-│   │     ＋ 組み込み一式と人間の MCP 連携                   │
-│   │       （委譲は方針。道具は削らない）                   │
-│   ├ 受信箱（イベント駆動ループ）                          │
-│   └ 記憶ストア ← **このプロセスだけが接続情報を持つ**       │
-│                                                          │
-│  スケジューラ / 外部イベント入口 / 承認待ちキュー           │
+│   │       （インプロセス MCP の自作ツール）                │   ├───────────────┤
+│   │     ＋ 組み込み一式と人間の MCP 連携                   │   │ apps/web       │
+│   │       （委譲は方針。道具は削らない）                   │   │ = React Router │
+│   ├ 受信箱（イベント駆動ループ）                          │   │   の SPA。      │
+│   └ 記憶ストア ← **このプロセスだけが接続情報を持つ**       │   │   同じ API しか│
+│                                                          │   │   持たない      │
+│  スケジューラ / 外部イベント入口 / 承認待ちキュー           │   └───────────────┘
 │  HTTP API（hono）─ chat(SSE)・jobs・承認                  │
 │                    日報・日誌・セッションログ（可観測性3層）  │
 │  RunnerRegistry ─ 委譲の宛先を決める間接層                 │
@@ -265,6 +265,9 @@ packages/storage-pg  クラウド用ドライバ（PostgreSQL / drizzle）
 apps/daemon          alteroidd = core をホストする常駐プロセス + HTTP API（hono）
 apps/runner          alteroid-runner = manager-runner。SDK を隔離して走らせる
 apps/cli             alteroid = daemon への薄いクライアント（hono/client で型共有）
+apps/web             公式の画面。React Router v7 の SPA。@alteroid/api-client 経由で
+                     デーモンの API だけを見る（独自の経路を持たない）
+packages/api-client  生成 spec から起こした外部向けクライアント。apps/web が最初の消費者
 ```
 
 境界の両側が `core` に居るのは、**プロトコルと型を1か所に置くため**である。実際に動くときは
@@ -284,10 +287,45 @@ apps/cli             alteroid = daemon への薄いクライアント（hono/cli
 | テスト | vitest | — |
 | CLI | commander + SSE ストリーミング | chat は readline ベースで開始。TUI 化は後から可能 |
 
+## Web UI — 画面とデーモンのオリジンが違うこと
+
+要件は PRD「インターフェース」にある。ここには設計判断だけを書く。
+
+**SPA（`ssr: false`）である。** 画面のためのサーバを増やさない。デーモンをどこに置き画面を
+どこに置くかは人によって違う（同一ホスト / `api.example.com` + `www.example.com` /
+デーモンは自宅で画面は静的ホスティング）ので、**サーバを持たない静的成果物**ならそのどれにも
+同じものを置ける。SSR にすると「画面を動かすための実行系」が増え、置ける場所がそれを持てる
+ところに縮む。
+
+**接続先はビルドに焼き込まない。** 上から順に、①人間がこの画面で設定した値（`localStorage`）
+②ビルド時の `VITE_ALTEROID_API_URL` ③同一オリジンの `/api`。①があるので、公式が配る成果物
+1つのまま人によって違うデーモンへ向けられる。
+
+**資格情報は Cookie ではなくヘッダで運ぶ。** 別ドメイン間の Cookie は成立しない —
+`SameSite=None; Secure` はサードパーティ Cookie の廃止と ITP で消えていく経路であり、
+`www.hoge.vercel.app` と `api.example.com` のように**登録可能ドメインが違えば `Domain` 属性で
+共有することもできない**。ヘッダならオリジンに縛られないのでどの配置でも同じように動き、かつ
+**単純リクエストでは付けられない**ので CSRF が構造的に成立しない。認証そのものは別途。
+
+**CORS は既定で閉じている。** `ALTEROID_ALLOWED_ORIGINS` に**明示列挙**したオリジンだけを
+そのまま返す（ワイルドカードは受け付けず、`credentials` も返さない）。既定は空で、そのとき
+デーモンは CORS ヘッダを一切返さない — つまり**既定の姿勢は今までと1バイトも変わらない**。
+
+ここを緩めてはいけない理由が `deliberateClient`（`apps/daemon/src/app.ts`）にある。127.0.0.1
+で待つことはブラウザからの保護にならず、人間が開いた任意のページが単純リクエストを投げられる。
+本文検査の無い POST に `application/json` を要求すると preflight が必須になり、**CORS ヘッダを
+返さないから preflight が通らない**という形で塞いでいる。`*` を返した瞬間にこの前提が消え、
+他人がクローンのターンを起こせる状態に戻る。開けるかどうかは人間が決め、開けた先は列挙した
+相手だけに限る — これが方針ではなく**実行環境の境界**で表すということである（north_star 禁止2）。
+
+開発中は Vite の proxy（`/api` → デーモン）で同一オリジンに見せる。**開発のためだけに CORS を
+開けさせない。**
+
 ## 認証
 
 - ローカル: Claude サブスクリプション（OAuth）。人間が `claude` でログイン済みの認証を SDK が使う
 - クラウド / コンテナ: `claude setup-token` の長期トークンを `CLAUDE_CODE_OAUTH_TOKEN` としてシークレット注入（公式サポート。2026-08 確認）
+- **デーモンの API 自体には認証がまだ無い**（別途進行中）。入るときは3つの入口すべてに等しく効く形で入れる。それまでは、外から届く場所に置くなら手前に境界（リバースプロキシ・トンネル・認証）を置くこと
 
 ## 実装フェーズ
 
@@ -299,6 +337,7 @@ apps/cli             alteroid = daemon への薄いクライアント（hono/cli
 | M3 | 自律 — スケジューラ、外部イベント、クローンの発意、承認待ちキュー |
 | M4 | クラウド — pg ドライバ、SessionStore、**daemon / manager-runner の分離**、Dockerfile + compose（3コンテナ）、setup-token |
 | M5 | 複数 manager-runner と水平スケール — runner の登録・生存判定・配置、runner 障害時の再開 |
+| M6 | Web UI — React Router v7 の SPA（`apps/web`）。CLI と等価な入口を API の上に用意する |
 
 各フェーズの成果物・受け入れ基準・地雷は [roadmap.md](./roadmap.md) に展開してある。実装はそちらに従う。
 

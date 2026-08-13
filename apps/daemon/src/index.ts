@@ -19,14 +19,14 @@ import {
   type Stores,
 } from '@alteroid/core';
 
-import { createApp } from './app.js';
+import { createApp, parseAllowedOrigins } from './app.js';
 import { createJournalBus } from './journal-bus.js';
 import { createHttpRunner } from './runner-client.js';
 import { clearRuntimeInfo, writeRuntimeInfo } from './runtime.js';
 import { buildSchedule, readScheduleConfig } from './schedule.js';
 import { openStorage } from './storage.js';
 
-export { createApp, type AppDeps, type AppType } from './app.js';
+export { createApp, parseAllowedOrigins, type AppDeps, type AppType } from './app.js';
 /**
  * spec 生成専用のスタブで `createApp` を呼び、`/openapi.json` を叩いて JSON を
  * 得る（`apps/daemon/scripts/write-openapi.mjs` が使う本体）。デーモンを実際に
@@ -170,6 +170,24 @@ export async function main(): Promise<void> {
     );
   }
 
+  // 画面（apps/web）を別オリジンに置く配置のための境界設定。既定は空＝今まで通り
+  // CORS ヘッダを返さない。捨てた値は黙って飲み込まない（許可したつもりとの差が
+  // 境界の穴になる）。
+  const { origins: allowedOrigins, rejected } = parseAllowedOrigins(
+    process.env.ALTEROID_ALLOWED_ORIGINS,
+  );
+  for (const value of rejected) {
+    process.stderr.write(
+      `alteroidd: ALTEROID_ALLOWED_ORIGINS の "${value}" を無視しました` +
+        '（scheme://host[:port] の形だけを受け付けます。* と経路付きは不可）\n',
+    );
+  }
+  if (allowedOrigins.length > 0) {
+    process.stderr.write(
+      `alteroidd: 次のオリジンからのブラウザ呼び出しを許可します: ${allowedOrigins.join(', ')}\n`,
+    );
+  }
+
   const app = createApp({
     clone,
     stores,
@@ -179,6 +197,7 @@ export async function main(): Promise<void> {
     storage: storage.description,
     runners,
     journalEvents: journalBus,
+    allowedOrigins,
   });
   // 開けたこと自体は方針の変更であって禁止事項ではない。ただし**黙って**外へ
   // 出さない — ここは叩けばクローンのターンが起きる実行の口である。

@@ -22,6 +22,9 @@ COPY packages/storage-pg/package.json packages/storage-pg/
 # 外部向けの生成クライアント。この器では使わないが、ワークスペースの一員なので
 # 置かないと `--frozen-lockfile` が「lockfile と合わない」で落ちる
 COPY packages/api-client/package.json packages/api-client/
+# 公式の画面。**この器では配信しない**（静的成果物なので置き場は人間が選ぶ）が、
+# 同じくワークスペースの一員なので、置かないと `--frozen-lockfile` が落ちる
+COPY apps/web/package.json apps/web/
 COPY apps/daemon/package.json apps/daemon/
 COPY apps/runner/package.json apps/runner/
 COPY apps/cli/package.json apps/cli/
@@ -110,6 +113,9 @@ COPY packages/storage-pg/package.json packages/storage-pg/
 # 外部向けの生成クライアント。この器では使わないが、ワークスペースの一員なので
 # 置かないと `--frozen-lockfile` が「lockfile と合わない」で落ちる
 COPY packages/api-client/package.json packages/api-client/
+# 公式の画面。**この器では配信しない**（静的成果物なので置き場は人間が選ぶ）が、
+# 同じくワークスペースの一員なので、置かないと `--frozen-lockfile` が落ちる
+COPY apps/web/package.json apps/web/
 COPY apps/daemon/package.json apps/daemon/
 COPY apps/runner/package.json apps/runner/
 COPY apps/cli/package.json apps/cli/
