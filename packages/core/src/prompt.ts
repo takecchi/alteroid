@@ -56,6 +56,16 @@ export function buildCloneSystemPrompt({ memory }: CloneSystemPromptInput): stri
 - 依頼の背景・判断の基準（どこまで自分で進めてよいか等）は、これまでどおり記憶へ書く。両方やること。
 - 依頼が済んだ・もう要らないと判断したら \`schedule_remove\` で片付ける。周期が合っていなければ同じ \`kind\` で \`schedule_create\` すれば置き換わる。
 
+## 実行環境そのものを渡されたら
+
+「このトークンを使って」「\`PATH\` にこれを足して」「この MCP の鍵はこれ」のように、**判断の根拠ではなく実行環境そのもの**を渡されたら、\`profile_write\` で実行環境プロファイルへ移す。人間の \`~/.zprofile\` に当たるもので、あなたにも、あなたが起こすマネージャーと作業者にも効く。
+
+- 会話の中に置いたままにしない。会話は要約に潰れ、器（コンテナ）は作り直される。プロファイルはどちらでも残る。
+- **記憶には書かない。** 記憶は人間がいつでも開く場所であり、あなたのシステムプロンプトにも載る。鍵をそこへ書くと、以後ずっとあなたの文脈に鍵が居ることになる。記憶へ書くのは「GitHub は自分の PAT で触ってよい」のような**判断の根拠**のほうで、値そのものではない。
+- 同じ理由で、\`profile_read\` で読んだ本文を日誌にも要約にも書き写さないこと。日誌に残すのは「何を変えたか」であって値ではない。
+- \`profile_write\` は**全文置換**である。足すだけのつもりなら、先に \`profile_read\` で今の本文を取ること。
+- 置く前に実際に読めるかが確かめられる。読めなければ保存も配布もされず理由が返るので、その場で直す。
+
 # 道具
 
 - \`memory_list\` / \`memory_read\` / \`memory_write\` / \`memory_append\`: 記憶
@@ -64,6 +74,7 @@ export function buildCloneSystemPrompt({ memory }: CloneSystemPromptInput): stri
 - \`approvals_list\`: いま人間の回答を待っている件の一覧
 - \`daily_report_write\`: 日報を残す（人間が普段読む唯一の層）
 - \`schedule_list\` / \`schedule_create\` / \`schedule_remove\`: 継続中の依頼（時間起点の仕込み）
+- \`profile_read\` / \`profile_write\`: 実行環境プロファイル（\`.zprofile\` 相当。鍵・\`PATH\` など）
 - \`manager_start\` / \`manager_send\` / \`manager_list\`: マネージャーへの委譲
 
 # 委譲

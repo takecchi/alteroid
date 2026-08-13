@@ -6,7 +6,6 @@ import type {
   JournalEntry,
   JournalEntryType,
   ProfileApplier,
-  ProfileApplyResult,
   RunnerRegistry,
   Scheduler,
   Stores,
@@ -20,8 +19,8 @@ import {
   journalEntrySchema,
   localDayRange,
   memorySlugSchema,
+  applyEnvProfile,
   fingerprintOf,
-  normalizeProfileScript,
   runnerSetCredentialsCommandSchema,
   scheduleKindSchema,
   scheduleSpecSchema,
@@ -1813,53 +1812,36 @@ export function createApp(deps: AppDeps) {
       requireOperator,
       validator('json', profileUpdateRequestSchema),
       async (c) => {
-        // **入口で形を決める。** 保存・配布・指紋が同じ文字列を見ないと、
-        // `PUT` の sha256 と `GET` の sha256 が食い違い、届いているかを見る道具が
-        // 嘘をつく。
-        const script = normalizeProfileScript(c.req.valid('json').script);
+        // **クローンの道具（`profile_write`）とまったく同じ経路を通る。** 別々に
+        // 書くと、片方だけに検査が入って「人間が置くと弾かれるのにクローンが置くと
+        // 通る」が生まれる。ここは境界を確かめる場所なので、経路が2本あること自体が
+        // 穴になる。
+        const result = await applyEnvProfile({
+          stores: deps.stores,
+          ...(deps.profile === undefined ? {} : { profile: deps.profile }),
+          ...(deps.runners === undefined ? {} : { runners: deps.runners }),
+          script: c.req.valid('json').script,
+        });
 
-        // **先に評価する。** クローンの器で読めないものは、同じ像から焼いた
-        // runner でも読めない。ここで弾けば保存も配布もせずに済む。
-        const clone: ProfileApplyResult =
-          deps.profile === undefined
-            ? { ok: true }
-            : await deps.profile
-                .apply(script)
-                .catch((error: unknown) => ({ ok: false, error: String(error) }));
-
-        if (!clone.ok) {
+        if (!result.stored) {
           return c.json(
             {
               error: 'プロファイルが読めなかったので保存していない' as const,
-              detail: [clone.error ?? '理由不明', clone.output ?? ''].join('\n').trim(),
+              detail: [result.clone.error ?? '理由不明', result.clone.output ?? '']
+                .join('\n')
+                .trim(),
             },
             400,
           );
         }
 
-        const stored = await deps.stores.profile.write(script);
-
-        const registry = deps.runners;
-        const runners =
-          registry === undefined
-            ? []
-            : await Promise.all(
-                (await registry.list()).map(async (runner) => {
-                  try {
-                    return { runnerId: runner.runnerId, ...(await runner.setProfile(script)) };
-                  } catch (error) {
-                    return { runnerId: runner.runnerId, ok: false, error: String(error) };
-                  }
-                }),
-              );
-
         return c.json({
-          updatedAt: stored.updatedAt,
-          ...(script.trim().length === 0
+          updatedAt: result.updatedAt as string,
+          ...(result.sha256 === undefined
             ? {}
-            : { sha256: fingerprintOf(script), bytes: Buffer.byteLength(script) }),
-          clone,
-          runners,
+            : { sha256: result.sha256, bytes: result.bytes as number }),
+          clone: result.clone,
+          runners: result.runners,
         });
       },
     )

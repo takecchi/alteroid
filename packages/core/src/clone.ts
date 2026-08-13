@@ -194,6 +194,8 @@ class Clone implements CloneHost {
   #sawInit = false;
   readonly #env: NodeJS.ProcessEnv;
   readonly #profile: ProfileApplier | undefined;
+  /** 委譲先の名簿。プロファイルを配る宛先としても要る（起こすのは #managers）。 */
+  readonly #runners: RunnerRegistry | undefined;
 
   constructor(options: CloneOptions) {
     const { stores, queryFn, cwd, runners, sessionStore, managers, env, profile } = options;
@@ -204,6 +206,7 @@ class Clone implements CloneHost {
     this.#model = resolveCloneModel(env ?? process.env);
     this.#env = env ?? process.env;
     this.#profile = profile;
+    this.#runners = runners;
     this.#managers =
       managers ??
       createManagerPool({
@@ -832,6 +835,7 @@ class Clone implements CloneHost {
           stores: this.#stores,
           emit: (event) => this.#emit(this.#turn?.conversationId ?? null, event),
           managers: this.#managers,
+          profile: this.#profileTools(),
         }),
       },
       systemPrompt: buildCloneSystemPrompt({ memory }),
@@ -868,6 +872,19 @@ class Clone implements CloneHost {
    */
   #childEnv(): NodeJS.ProcessEnv {
     return { ...this.#env, ...(this.#profile?.env() ?? {}) };
+  }
+
+  /**
+   * 実行環境プロファイルの道具に渡す配線。
+   *
+   * **人間の口（`PUT /profile`）と同じものを通す。** 別の経路にすると、片方だけに
+   * 検査が入って「人間が置くと弾かれるのにクローンが置くと通る」が生まれる。
+   */
+  #profileTools(): { applier?: ProfileApplier; runners?: RunnerRegistry } {
+    return {
+      ...(this.#profile === undefined ? {} : { applier: this.#profile }),
+      ...(this.#runners === undefined ? {} : { runners: this.#runners }),
+    };
   }
 
   /**
@@ -929,6 +946,9 @@ class Clone implements CloneHost {
           [MCP_SERVER_NAME]: createCloneMcpServer({
             stores: this.#stores,
             emit: () => undefined,
+            // **蒸留のターンでも同じ道具を渡す。** ここだけ欠けていると、
+            // 会話の最後に「鍵を実行環境へ移す」をやろうとして失敗する。
+            profile: this.#profileTools(),
           }),
         },
         systemPrompt: buildCloneSystemPrompt({ memory }),
