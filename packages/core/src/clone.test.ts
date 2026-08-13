@@ -745,6 +745,8 @@ describe('クローン — 自律（人間以外の起点）', () => {
       .toBe(true);
     // 走りかけていた可能性は隠さない（二重に手を出す前に確かめさせる）
     expect(inputsOf(restarted)()).toContain('引き受けたまま終わっていない');
+    // 添えるのは**元の発火時刻**（復旧時刻に置き換えない）
+    expect(inputsOf(restarted)()).toContain('2026-08-12T00:00:00.000Z');
 
     // 終わったので印は消え、定期の基準が進む
     await expect
@@ -754,6 +756,43 @@ describe('クローン — 自律（人間以外の起点）', () => {
 
     scheduler.stop();
     await restarted.clone.stop();
+  });
+
+  it('配り直された発火は、元の時刻・元の理由で確定する', async () => {
+    const stores = createMemoryStores();
+    // 09:10 の手動発火を引き受けたまま落ちた状態
+    await stores.schedules.put({
+      kind: 'issue-round',
+      spec: { type: 'every' as const, minutes: 60 },
+      request: 'open issue を見て実装を進める',
+      createdAt: '2026-08-12T08:00:00.000Z',
+      updatedAt: '2026-08-12T08:00:00.000Z',
+      lastRunAt: '2026-08-12T09:10:00.000Z',
+      pendingRun: { at: '2026-08-12T09:10:00.000Z', cause: 'manual' as const },
+    });
+
+    const s = setup(() => '配り直された分を見た', stores);
+    // スケジューラが配り直す形（元の時刻・元の理由をそのまま運ぶ）
+    s.clone.post({
+      type: 'timer',
+      id: 'evt-resume',
+      at: '2026-08-12T09:10:00.000Z',
+      kind: 'issue-round',
+      cause: 'manual',
+    });
+
+    await expect
+      .poll(async () => (await stores.schedules.list())[0]?.pendingRun, { timeout: 3000 })
+      .toBeUndefined();
+
+    const after = (await stores.schedules.list())[0];
+    // 手で起こした1回だったので、配り直しても定期の基準は動かない
+    expect(after?.lastScheduledRunAt).toBeUndefined();
+    expect(after?.lastRunAt).toBe('2026-08-12T09:10:00.000Z');
+    // 走りかけていたことは元の時刻で伝わる
+    expect(inputsOf(s)()).toContain('2026-08-12T09:10:00.000Z');
+
+    await s.clone.stop();
   });
 
   it('手で起こした発火は、観測用の前回時刻だけを進める（定期の基準は動かさない）', async () => {

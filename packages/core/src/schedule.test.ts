@@ -383,6 +383,96 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     scheduler.stop();
   });
 
+  it('未完了の定期発火は、元の時刻の発火として配り直される（位相を復旧時刻へ動かさない）', async () => {
+    // 09:00 の定期発火を引き受けたまま器が落ちた状態（claim 済み・未完了）
+    const stores = createMemoryStores();
+    const posted: InboxEvent[] = [];
+    await stores.schedules.put({
+      ...plan('watch', { type: 'every', minutes: 60 }),
+      lastRunAt: at(2026, 8, 12, 9, 0).toISOString(),
+      pendingRun: { at: at(2026, 8, 12, 9, 0).toISOString(), cause: 'schedule' },
+    });
+
+    // 09:30 に起き直す
+    const clock = at(2026, 8, 12, 9, 30);
+    const scheduler = createScheduler({
+      entries: [],
+      post: (event) => posted.push(event),
+      now: () => clock,
+      schedules: stores.schedules,
+    });
+    await scheduler.refresh();
+    scheduler.start();
+
+    expect(scheduler.tick(clock)).toEqual(['watch']);
+    // **元の発火として**届く（復旧時刻に置き換えない）
+    expect(posted.at(-1)).toMatchObject({
+      type: 'timer',
+      kind: 'watch',
+      at: at(2026, 8, 12, 9, 0).toISOString(),
+      cause: 'schedule',
+    });
+
+    // 受け取った側は、その時刻・その理由で確定させて完了する
+    const held = await stores.schedules.get('watch');
+    const fired = posted.at(-1);
+    if (fired?.type !== 'timer') throw new Error('timer ではない');
+    await stores.schedules.claimRun('watch', held?.updatedAt ?? '', fired.at, 'schedule');
+    await stores.schedules.completeRun('watch', fired.at, 'schedule');
+
+    // 基準は 09:00 のまま。次回は 10:00（10:30 にずれない）
+    expect((await stores.schedules.get('watch'))?.lastScheduledRunAt).toBe(
+      at(2026, 8, 12, 9, 0).toISOString(),
+    );
+    expect(scheduler.list().find((item) => item.kind === 'watch')?.nextAt).toBe(
+      at(2026, 8, 12, 10, 0).toISOString(),
+    );
+
+    // 同じ回を配り直し続けない
+    expect(scheduler.tick(at(2026, 8, 12, 9, 31))).toEqual([]);
+
+    scheduler.stop();
+  });
+
+  it('未完了の手動発火を配り直しても、定期の予定は動かない', async () => {
+    const stores = createMemoryStores();
+    const posted: InboxEvent[] = [];
+    await stores.schedules.put({
+      ...plan('watch', { type: 'every', minutes: 60 }),
+      lastRunAt: at(2026, 8, 12, 9, 10).toISOString(),
+      pendingRun: { at: at(2026, 8, 12, 9, 10).toISOString(), cause: 'manual' },
+    });
+
+    const clock = at(2026, 8, 12, 9, 30);
+    const scheduler = createScheduler({
+      entries: [],
+      post: (event) => posted.push(event),
+      now: () => clock,
+      schedules: stores.schedules,
+    });
+    await scheduler.refresh();
+    scheduler.start();
+
+    expect(scheduler.tick(clock)).toEqual(['watch']);
+    // 手で起こした1回として配り直す（`schedule` に化けさせない）
+    expect(posted.at(-1)).toMatchObject({
+      type: 'timer',
+      at: at(2026, 8, 12, 9, 10).toISOString(),
+      cause: 'manual',
+    });
+
+    const held = await stores.schedules.get('watch');
+    const fired = posted.at(-1);
+    if (fired?.type !== 'timer') throw new Error('timer ではない');
+    await stores.schedules.claimRun('watch', held?.updatedAt ?? '', fired.at, 'manual');
+    await stores.schedules.completeRun('watch', fired.at, 'manual');
+
+    // 定期の基準は動いていない（仕込んだ 08:00 から数えたままである）
+    expect((await stores.schedules.get('watch'))?.lastScheduledRunAt).toBeUndefined();
+
+    scheduler.stop();
+  });
+
   it('手で起こしても定期の予定はずれない（再起動を挟んでも）', async () => {
     // 08:00 に仕込んだ60分ごと。本来の予定は 09:00 → 10:00
     const stores = createMemoryStores();

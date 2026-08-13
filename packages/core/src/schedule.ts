@@ -106,6 +106,14 @@ class TimerScheduler implements Scheduler {
   #started = false;
   /** 走行中の読み直し。重ねずに直列に流すための鎖。 */
   #refreshing: Promise<void> | null = null;
+  /**
+   * この器で配り直した「未完了の発火」の時刻（kind ごと）。
+   *
+   * 同じ回を配り直すのは1度だけにする。完了できないまま残っているなら、次の器が
+   * 引き取るのが正しい（同じ発火を刻みごとに配り続けると、受け取る側から見て
+   * 二重の仕事になる）。
+   */
+  readonly #redelivered = new Map<string, string>();
 
   constructor({ entries, post, now, schedules }: SchedulerOptions) {
     this.#base = entries;
@@ -180,6 +188,8 @@ class TimerScheduler implements Scheduler {
       seen.add(plan.kind);
       const spec = JSON.stringify(plan.spec);
       const existing = this.#requests.get(plan.kind);
+      // 終わった発火の記録は捨てる（次に未完了が出たらまた配り直せるように）
+      if (plan.pendingRun === undefined) this.#redelivered.delete(plan.kind);
       if (existing?.spec === spec) {
         // 周期が同じなら次の予定はずらさない。lastRunAt だけ新しくする
         existing.plan = plan;
@@ -194,6 +204,7 @@ class TimerScheduler implements Scheduler {
       if (seen.has(kind)) continue;
       this.#requests.delete(kind);
       this.#due.delete(kind);
+      this.#redelivered.delete(kind);
     }
 
     // 仕込みが増えたなら、次の見張りをその予定に合わせ直す
@@ -244,6 +255,24 @@ class TimerScheduler implements Scheduler {
     for (const entry of this.#entries()) {
       const due = this.#due.get(entry.kind);
       if (due === undefined || due > now.getTime()) continue;
+
+      // 引き受けたまま終わっていない発火は、**元の発火として**配り直す。
+      const resume = this.#resumable(entry.kind);
+      if (resume !== undefined) {
+        // 同じ回を何度も配り直さない（次の器が引き取る。**これは回数制限ではなく、
+        // 同じ発火を二重に配らないための識別である** — AGENTS.md 地雷2）。
+        this.#redelivered.set(entry.kind, resume.at);
+        // 次の予定も**元の発火**から数える。復旧時刻から数えると、落ちて起き直す
+        // たびに位相が後ろへ動く（直したはずの「依頼自身の時間軸」が壊れる）。
+        this.#due.set(entry.kind, entry.nextAt(new Date(resume.at)).getTime());
+        fired.push(entry.kind);
+        const event = entry.event(now);
+        this.#post(
+          event.type === 'timer' ? { ...event, at: resume.at, cause: resume.cause } : event,
+        );
+        continue;
+      }
+
       // 次の予定を先に決める。イベント投入で例外が出ても、同じ発火を
       // 取りこぼしなく繰り返し続ける（＝暴走する）ことがないように。
       this.#due.set(entry.kind, entry.nextAt(now).getTime());
@@ -251,6 +280,18 @@ class TimerScheduler implements Scheduler {
       this.#post(entry.event(now));
     }
     return fired;
+  }
+
+  /**
+   * 配り直すべき「引き受けたまま終わっていない発火」があるか。
+   *
+   * **元の時刻と理由をそのまま返す。** ここで現在時刻に置き換えると、完了時に
+   * 記録される基準が復旧時刻になって位相がずれ、手動実行が定期の予定を動かす。
+   */
+  #resumable(kind: string): { at: string; cause: 'schedule' | 'manual' } | undefined {
+    const pending = this.#requests.get(kind)?.plan.pendingRun;
+    if (pending === undefined) return undefined;
+    return this.#redelivered.get(kind) === pending.at ? undefined : pending;
   }
 
   #arm(): void {
