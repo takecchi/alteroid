@@ -197,19 +197,31 @@ class TimerScheduler implements Scheduler {
   }
 
   /**
-   * 落ちていた間に過ぎた予定を取りこぼさない。
+   * 依頼自身の時間軸で次の予定を決める。**現在時刻を基準にしない。**
    *
-   * 現在時刻から次を数えるだけだと、**停止していた時間が周期より長い依頼は一度も
-   * 起きない**（毎日 09:00 の依頼で 09:30 に起き直したらその日は飛ぶ／1日ごとの
-   * 依頼で毎日再起動したら永久に飛ぶ）。「時刻が来れば必ず届く」と道具の説明で
-   * 約束している以上、これはバグである。日報の後追い（`missingDailyReportDates`）と
-   * 同じ考え方で、**1回だけ**拾う（溜まった回数ぶん撃たない）。
+   * 予定は「前回動いた時刻（無ければ仕込んだ時刻）から数えた次」である。ここを
+   * `now` から数え直すと2つ壊れる。
+   *
+   * 1. **`every` が再起動のたびに後ろへずれる。** 08:00 に仕込んだ60分ごとの依頼は
+   *    09:00 が初回だが、08:30 に起き直した瞬間に 09:30 へ動く。周期より短い間隔で
+   *    再起動していれば**一度も発火しない**（`/run` で `lastRunAt` が付いた後も同じ）
+   * 2. 手で起こしても「定期の予定はずらさない」という `run()` の約束が崩れる
+   *
+   * 逆に、その予定が既に過ぎているなら落ちていた間に取りこぼしているので、いま
+   * 起こす。日報の後追い（`missingDailyReportDates`）と同じ考え方で、**1回だけ**拾う
+   * （溜まった回数ぶん撃たない）。
    */
   #firstDue(entry: ScheduleEntry, plan: ScheduledRequest, now: Date): Date {
     const seed = new Date(plan.lastRunAt ?? plan.createdAt);
     if (Number.isNaN(seed.getTime())) return entry.nextAt(now);
-    // 前回（無ければ仕込んだ時）から数えた予定が既に過ぎているなら、いま起こす
-    return entry.nextAt(seed).getTime() <= now.getTime() ? now : entry.nextAt(now);
+
+    const fromSeed = entry.nextAt(seed);
+    // 過ぎている = 落ちていた間に取りこぼした
+    if (fromSeed.getTime() <= now.getTime()) return now;
+    // まだ来ていない = 本来の予定をそのまま守る。ただし、時計のずれや人為的に
+    // 未来の日付が入った場合に永久に沈黙しないよう、現在時刻から数えた次より
+    // 後ろにはしない（黙って止まるより遅れて起きる方がよい）。
+    return new Date(Math.min(fromSeed.getTime(), entry.nextAt(now).getTime()));
   }
 
   #entries(): ScheduleEntry[] {

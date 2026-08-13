@@ -309,6 +309,96 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     s.scheduler.stop();
   });
 
+  it('再起動しても `every` の予定が後ろへずれない（依頼自身の時間軸で数える）', async () => {
+    // 08:00 に仕込んだ60分ごと。初回は 09:00 のはずで、08:30 に起き直しても動かない
+    const s = setup(at(2026, 8, 12, 8, 30));
+    await s.stores.schedules.put(plan('watch', { type: 'every', minutes: 60 }));
+    await s.scheduler.refresh();
+    s.scheduler.start();
+
+    expect(s.scheduler.list().find((item) => item.kind === 'watch')?.nextAt).toBe(
+      at(2026, 8, 12, 9, 0).toISOString(),
+    );
+
+    s.scheduler.stop();
+  });
+
+  it('前回実行済みでも、再起動で次回が後ろへずれない', async () => {
+    // 09:00 に動いた60分ごとの依頼。09:10 に起き直しても次は 10:00（10:10 ではない）
+    const s = setup(at(2026, 8, 12, 9, 10));
+    await s.stores.schedules.put({
+      ...plan('watch', { type: 'every', minutes: 60 }),
+      lastRunAt: at(2026, 8, 12, 9, 0).toISOString(),
+    });
+    await s.scheduler.refresh();
+    s.scheduler.start();
+
+    expect(s.scheduler.list().find((item) => item.kind === 'watch')?.nextAt).toBe(
+      at(2026, 8, 12, 10, 0).toISOString(),
+    );
+
+    s.scheduler.stop();
+  });
+
+  it('周期より短い間隔で何度再起動しても、本来の期限にちょうど1回発火する', async () => {
+    const stores = createMemoryStores();
+    const posted: InboxEvent[] = [];
+    await stores.schedules.put({
+      ...plan('watch', { type: 'every', minutes: 60 }),
+      createdAt: at(2026, 8, 12, 8, 0).toISOString(),
+      updatedAt: at(2026, 8, 12, 8, 0).toISOString(),
+    });
+
+    // 10分ごとに器を作り直す（デーモンの再起動）。09:00 を越えるまで一度も発火しない
+    for (const minute of [10, 20, 30, 40, 50]) {
+      const clock = at(2026, 8, 12, 8, minute);
+      const scheduler = createScheduler({
+        entries: [],
+        post: (event) => posted.push(event),
+        now: () => clock,
+        schedules: stores.schedules,
+      });
+      await scheduler.refresh();
+      scheduler.start();
+      expect(scheduler.tick(clock)).toEqual([]);
+      scheduler.stop();
+    }
+    expect(posted).toEqual([]);
+
+    // 09:00 を迎えた器では、ちょうど1回起きる
+    const clock = at(2026, 8, 12, 9, 0);
+    const scheduler = createScheduler({
+      entries: [],
+      post: (event) => posted.push(event),
+      now: () => clock,
+      schedules: stores.schedules,
+    });
+    await scheduler.refresh();
+    scheduler.start();
+    expect(scheduler.tick(clock)).toEqual(['watch']);
+    expect(scheduler.tick(at(2026, 8, 12, 9, 1))).toEqual([]);
+    expect(posted).toHaveLength(1);
+    scheduler.stop();
+  });
+
+  it('未来の日付が入っていても永久に沈黙しない（黙って止まるより遅れて起きる）', async () => {
+    // 時計のずれや手編集で createdAt が先の日付になっている場合
+    const s = setup(at(2026, 8, 12, 8, 0));
+    await s.stores.schedules.put({
+      ...plan('watch', { type: 'every', minutes: 60 }),
+      createdAt: at(2030, 1, 1, 0, 0).toISOString(),
+      updatedAt: at(2030, 1, 1, 0, 0).toISOString(),
+    });
+    await s.scheduler.refresh();
+    s.scheduler.start();
+
+    expect(s.scheduler.list().find((item) => item.kind === 'watch')?.nextAt).toBe(
+      at(2026, 8, 12, 9, 0).toISOString(),
+    );
+
+    s.scheduler.stop();
+  });
+
   it('周期が同じなら読み直しても予定はずれない（前回時刻だけ新しくなる）', async () => {
     const s = setup(at(2026, 8, 12, 8, 0));
     await s.stores.schedules.put(plan('watch', { type: 'every', minutes: 30 }));
