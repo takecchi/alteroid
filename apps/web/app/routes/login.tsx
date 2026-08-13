@@ -2,6 +2,7 @@ import { ExternalLink, LogIn } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Navigate, useNavigate } from 'react-router';
 
+import { ConnectionCard } from '~/components/connection';
 import { Badge, Button, Card, ErrorNote, Input, Spinner } from '~/components/ui';
 import { useAuth } from '~/hooks/use-auth';
 import { useApiContext } from '~/lib/api';
@@ -10,6 +11,21 @@ import { claimUntilReady, openAuthorization, startLogin, type ClaimOutcome } fro
 
 export default function Login() {
   const auth = useAuth();
+
+  // 繋がらないなら、ログイン手段の一覧すら引けていない。**「確認中」より先に見る**
+  // （応答が無いあいだ `status` は checking のままなので、逆にすると輪が回り続ける）。
+  // 直す口をここにも置く — この画面へ直接来た人は設定画面へ行けない。
+  if (auth.error !== undefined) {
+    return (
+      <Shell>
+        <h1 className="text-sm font-semibold">デーモンに繋がらない</h1>
+        <ErrorNote error={auth.error} className="mt-3" />
+        <div className="mt-4">
+          <ConnectionCard compact />
+        </div>
+      </Shell>
+    );
+  }
 
   // 認証を要求していないデーモン、あるいは既に通っているなら、ここは用が無い。
   if (auth.status === 'checking') {
@@ -138,7 +154,7 @@ function SignIn() {
         接続先: <span className="font-mono">{baseUrl}</span>
       </p>
 
-      <ErrorNote error={auth.error ?? failure} className="mt-3" />
+      <ErrorNote error={failure} className="mt-3" />
 
       {auth.providers.length === 0 ? (
         <div className="mt-4 rounded-md border border-border bg-bg p-3 text-xs leading-relaxed text-muted">

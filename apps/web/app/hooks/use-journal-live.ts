@@ -114,7 +114,12 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
       break;
     case 'exchange':
       if (entry.with === 'manager') void mutate(KEY.managers);
-      if (entry.with === 'human') void mutate((key) => isKeyOfType(key, 'conversations'));
+      if (entry.with === 'human') {
+        void mutate((key) => isKeyOfType(key, 'conversations'));
+        // **一覧だけでなく本文も落とす。** ここを忘れると、会話の画面を開いた
+        // ときに一度読んだ履歴のまま止まり、裏で進んだ往復が追いつかない。
+        void mutate((key) => isKeyOfType(key, 'conversation'));
+      }
       break;
     case 'external_event':
     case 'decision':

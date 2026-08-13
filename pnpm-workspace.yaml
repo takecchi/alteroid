@@ -68,6 +68,10 @@ catalog:
   # `^` だと 2.5 系まで入ってしまうので `~` で 2.4 系に留める
   swr: ~2.4.2
   clsx: ^2.1.1
+  # 画面の回帰テスト（描画して操作する分だけ。DOM が要るファイルにだけ jsdom を指定する）
+  jsdom: ^30.0.1
+  '@testing-library/react': ^16.3.2
+  '@testing-library/dom': ^10.4.1
   tailwind-merge: ^3.6.0
   lucide-react: ^1.31.0
 

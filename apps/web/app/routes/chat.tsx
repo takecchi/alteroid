@@ -30,8 +30,13 @@ export default function Chat({ loaderData }: Route.ComponentProps) {
   return (
     <div className="flex h-dvh">
       <ConversationList activeId={conversationId} />
-      {/* key を付けて、会話を切り替えたら状態を捨てる（前の会話の続きが混ざらない）。 */}
-      <ChatPane key={conversationId ?? 'new'} conversationId={conversationId} />
+      {/*
+        **`key` を付けてはいけない。** 新しい会話は受信の途中（`open`）で id が決まり、
+        URL をそこへ揃える。`key={conversationId}` にすると、その同期で作り直しが起きて
+        受信中のストリームが中断され、続く text / done が画面に出ない。
+        会話の切り替えは ChatPane が自分で見分ける。
+      */}
+      <ChatPane routeId={conversationId} />
     </div>
   );
 }
@@ -91,18 +96,58 @@ function ConversationList({ activeId }: { activeId: string | undefined }) {
   );
 }
 
-function ChatPane({ conversationId }: { conversationId: string | undefined }) {
+/** 会話1つ分の画面。**作り直しに弱いので**、回帰テストから直接組み立てられるようにしてある。 */
+export function ChatPane({ routeId }: { routeId: string | undefined }) {
   const api = useApi();
   const navigate = useNavigate();
   const endConversation = useEndConversation();
-  const history = useConversation(conversationId ?? null);
 
+  /**
+   * この画面が見せている会話。
+   *
+   * 新しい会話の id は受信の途中（`open`）で決まるので、**URL より先にここが決まる**。
+   * URL は後から追いつく。逆にすると、追いついた瞬間が「別の会話に変わった」と
+   * 区別できなくなる。
+   */
+  const [shownId, setShownId] = useState(routeId);
+  /** この画面で始めた会話か。始めたなら手元の `lines` が全文なので履歴を読まない。 */
+  const [startedHere, setStartedHere] = useState(false);
   const [lines, setLines] = useState<Line[]>([]);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
-  const abortRef = useRef<AbortController | undefined>(undefined);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+
+  /** 走っているストリームと、それが**どの会話のものか**。 */
+  const streamRef = useRef<{ controller: AbortController; id: string | undefined } | undefined>(
+    undefined,
+  );
+
+  /**
+   * 人間が別の会話を選んだときだけ状態を捨てる。
+   *
+   * **見るのは「URL が変わったか」であって「shownId と一致するか」ではない。**
+   * `open` で id を決めてから URL が追いつくまでのあいだ、shownId は URL より
+   * 先へ進んでいる。そこで一致だけを見ると、その隙間を「別の会話へ移った」と
+   * 誤って読み、送ったばかりの発言ごと消してしまう。
+   *
+   * （React の「props が変わったら state を調整する」パターン。effect でやると
+   * 一度古い内容を描いてから消すことになる。）
+   */
+  const [lastRouteId, setLastRouteId] = useState(routeId);
+  if (routeId !== lastRouteId) {
+    setLastRouteId(routeId);
+    // URL が自分の採番に追いついただけなら、捨てるものは何も無い。
+    if (routeId !== shownId) {
+      setShownId(routeId);
+      setStartedHere(false);
+      setLines([]);
+      setFailure(undefined);
+    }
+  }
+
+  // この画面で始めた会話なら、日誌から再構成した履歴を重ねない（二重に出る）。
+  const history = useConversation(startedHere ? null : (shownId ?? null));
 
   // 履歴（日誌から再構成されたもの）＋この画面で流れてきた分。
   const historyLines = useMemo<Line[]>(
@@ -121,15 +166,29 @@ function ChatPane({ conversationId }: { conversationId: string | undefined }) {
     bottomRef.current?.scrollIntoView({ block: 'end' });
   }, [all.length, lines]);
 
+  /**
+   * 別の会話へ移ったら、**前の会話の**ストリームだけを止める。
+   *
+   * `open` で自分が採番した id へ同期したときは、ストリームの所属も同時に
+   * その id へ移してあるので、ここは何もしない（止めると、続く text / done が
+   * 画面に出ないまま会話が終わったように見える）。
+   */
+  useEffect(() => {
+    const stream = streamRef.current;
+    if (stream !== undefined && stream.id !== shownId) stream.controller.abort();
+  }, [shownId]);
+
   // 画面を離れたら読むのをやめる（クローンのターンは止まらない。購読を外すだけ）。
-  useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(() => () => streamRef.current?.controller.abort(), []);
 
   const send = useCallback(
     async (text: string) => {
       if (text.trim() === '' || sending) return;
 
       const controller = new AbortController();
-      abortRef.current = controller;
+      // このストリームが属する会話。`open` で確定したらここも移す。
+      const stream = { controller, id: shownId };
+      streamRef.current = stream;
       setSending(true);
       setFailure(undefined);
       setDraft('');
@@ -138,9 +197,13 @@ function ChatPane({ conversationId }: { conversationId: string | undefined }) {
         { key: `h-${previous.length}-${text.slice(0, 8)}`, role: 'human', text },
       ]);
 
+      // 止めた後に届いた分を書き込まない（会話を切り替えた先へ前の続きが混ざる）。
+      const stale = () => controller.signal.aborted;
+
       // クローンの応答は細切れで届く。1行に継ぎ足していく。
       let replyKey: string | undefined;
       const append = (chunk: string) => {
+        if (stale()) return;
         setLines((previous) => {
           const index = previous.findIndex((line) => line.key === replyKey);
           if (index === -1) return previous;
@@ -153,6 +216,7 @@ function ChatPane({ conversationId }: { conversationId: string | undefined }) {
       };
 
       const setTransient = (text: string) => {
+        if (stale()) return;
         setLines((previous) => {
           const withoutTransient = previous.filter((line) => line.transient !== true);
           return [
@@ -164,13 +228,19 @@ function ChatPane({ conversationId }: { conversationId: string | undefined }) {
 
       try {
         for await (const message of api.chat(
-          { text, ...(conversationId === undefined ? {} : { conversationId }) },
+          { text, ...(shownId === undefined ? {} : { conversationId: shownId }) },
           { signal: controller.signal },
         )) {
           if (message.event === 'open') {
-            // 新しい会話なら、以降の往復が同じ id に乗るよう URL を差し替える。
-            if (conversationId === undefined) {
-              void navigate(`/chat/${message.data.conversationId}`, { replace: true });
+            if (stream.id === undefined) {
+              // **順番が大事。** 先にストリームの所属を新しい id へ移してから
+              // state を動かす。逆にすると、上の effect がこのストリームを
+              // 「前の会話のもの」と見なして止めてしまう。
+              stream.id = message.data.conversationId;
+              setShownId(stream.id);
+              setStartedHere(true);
+              // URL は後から追いつかせるだけ。作り直しは起きない（key を付けていない）。
+              void navigate(`/chat/${stream.id}`, { replace: true });
             }
             continue;
           }
@@ -215,12 +285,17 @@ function ChatPane({ conversationId }: { conversationId: string | undefined }) {
       } catch (caught) {
         if (!controller.signal.aborted) setFailure(caught);
       } finally {
-        setLines((previous) => previous.filter((line) => line.transient !== true));
+        // 進行中の合図は、まだこの会話を見ているときだけ畳む（切り替えた先の
+        // 内容を触らない）。**`sending` は必ず戻す** — これは会話ではなく
+        // この入力欄の状態なので、戻し忘れると「受信中」のまま二度と打てなくなる。
+        if (!stale()) {
+          setLines((previous) => previous.filter((line) => line.transient !== true));
+        }
         setSending(false);
-        abortRef.current = undefined;
+        if (streamRef.current === stream) streamRef.current = undefined;
       }
     },
-    [api, conversationId, navigate, sending],
+    [api, shownId, navigate, sending],
   );
 
   return (
@@ -229,14 +304,14 @@ function ChatPane({ conversationId }: { conversationId: string | undefined }) {
         <div className="min-w-0">
           <h1 className="text-base font-semibold">クローンと話す</h1>
           <p className="mt-0.5 truncate font-mono text-[11px] text-muted">
-            {conversationId ?? '新しい会話'}
+            {shownId ?? '新しい会話'}
           </p>
         </div>
-        {conversationId !== undefined && (
+        {shownId !== undefined && (
           <Button
             size="sm"
             onClick={() => {
-              void endConversation(conversationId).then(() => navigate('/chat'));
+              void endConversation(shownId).then(() => navigate('/chat'));
             }}
             title="クローンがここまでの学びを記憶へ蒸留する"
           >
@@ -246,7 +321,7 @@ function ChatPane({ conversationId }: { conversationId: string | undefined }) {
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-        {history.isLoading && conversationId !== undefined ? (
+        {history.isLoading && shownId !== undefined ? (
           <Spinner label="履歴を読み込み中" />
         ) : all.length === 0 ? (
           <Card>
@@ -299,7 +374,7 @@ function ChatPane({ conversationId }: { conversationId: string | undefined }) {
           {sending ? (
             <Button
               variant="default"
-              onClick={() => abortRef.current?.abort()}
+              onClick={() => streamRef.current?.controller.abort()}
               title="読むのをやめる。クローンのターンは止まらない"
             >
               <Square className="size-3.5" aria-hidden />

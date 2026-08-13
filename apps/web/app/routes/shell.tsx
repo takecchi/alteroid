@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { Navigate, NavLink, Outlet } from 'react-router';
 
+import { ConnectionCard } from '~/components/connection';
 import { Badge, ErrorNote, Spinner } from '~/components/ui';
 import { useApprovals, useHealth } from '~/hooks/queries';
 import { useAuth } from '~/hooks/use-auth';
@@ -39,29 +40,38 @@ const NAV = [
 export default function Shell() {
   const auth = useAuth();
 
-  if (auth.status === 'checking') {
+  /**
+   * 繋がらない・認証の確認自体が失敗した、は「未ログイン」ではない。
+   * ログイン画面へ飛ばすと、直しようのない画面をぐるぐる回すことになる。
+   *
+   * **「確認中」より先に見る。** 失敗したときは応答が無いので `status` は
+   * `checking` のままであり、順番を逆にすると回り続ける輪を出したまま
+   * ここへ永久に来ない。
+   *
+   * **直す手段をこの画面に置く。** 設定画面は門の内側にいるので、接続先が
+   * 間違っているとそこへは永久に到達できない（配る成果物の既定は同一オリジンの
+   * `/api` なので、別のホストのデーモンを指したい初回の人は必ずここで詰まる）。
+   */
+  if (auth.error !== undefined && auth.status !== 'anonymous' && auth.status !== 'ungranted') {
     return (
-      <div className="flex min-h-dvh items-center justify-center">
-        <Spinner label="接続を確認中" />
+      <div className="flex min-h-dvh items-center justify-center p-6">
+        <div className="w-full max-w-lg">
+          <h1 className="mb-3 text-sm font-semibold">デーモンに繋がらない</h1>
+          <ErrorNote error={auth.error} className="mb-4" />
+          <ConnectionCard />
+          <p className="mt-3 text-xs text-muted">
+            接続先を直すとこの画面は自動で進む。デーモンが起きていないだけなら
+            <code className="mx-1 font-mono">alteroid daemon start</code>。
+          </p>
+        </div>
       </div>
     );
   }
 
-  // 繋がらない・認証の確認自体が失敗した、は「未ログイン」ではない。
-  // ログイン画面へ飛ばすと、直しようのない画面をぐるぐる回すことになる。
-  if (auth.error !== undefined && auth.status !== 'anonymous' && auth.status !== 'ungranted') {
+  if (auth.status === 'checking') {
     return (
-      <div className="flex min-h-dvh items-center justify-center p-6">
-        <div className="w-full max-w-md">
-          <ErrorNote error={auth.error} />
-          <p className="mt-3 text-xs text-muted">
-            接続先が違うか、デーモンが起きていない。設定は{' '}
-            <a href="/settings" className="text-accent hover:underline">
-              /settings
-            </a>{' '}
-            で変えられる。
-          </p>
-        </div>
+      <div className="flex min-h-dvh items-center justify-center">
+        <Spinner label="接続を確認中" />
       </div>
     );
   }
