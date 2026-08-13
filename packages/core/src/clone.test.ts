@@ -9,6 +9,7 @@ import { CLONE_MODEL, CLONE_MODEL_ENV_KEY, createClone, resolveCloneModel } from
 import type { CloneHost } from './host.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
+import { createScheduler } from './schedule.js';
 import type { ChatStreamEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores, humanMessage } from './testing.js';
@@ -560,6 +561,133 @@ describe('クローン — 自律（人間以外の起点）', () => {
     expect(s.calls).toEqual([]);
     // 「動いた」ことにもしない。次の発火で同じ依頼がそのまま来る
     expect((await stores.schedules.list())[0]?.lastRunAt).toBeUndefined();
+
+    await s.clone.stop();
+  });
+
+  it('「起きた」を記録できない発火では動かない（動いてから記録できないと二重に走る）', async () => {
+    const stores = createMemoryStores();
+    const plan = {
+      kind: 'issue-round',
+      spec: { type: 'daily' as const, at: '09:00' },
+      request: 'open issue を見て、着手できるものから実装を進める',
+      createdAt: '2026-08-11T00:00:00.000Z',
+      updatedAt: '2026-08-11T00:00:00.000Z',
+    };
+    await stores.schedules.put(plan);
+
+    // 読めるが書けない（DB の一時障害で UPDATE だけ落ちる）を模す
+    const real = stores.schedules.markRun.bind(stores.schedules);
+    let failing = true;
+    stores.schedules.markRun = async (kind, at) => {
+      if (failing) throw new Error('UPDATE が落ちた');
+      return real(kind, at);
+    };
+
+    const s = setup(() => 'issue を1件拾って委譲した', stores);
+    const fire = () => ({
+      type: 'timer' as const,
+      id: `evt-${Math.random()}`,
+      at: '2026-08-12T00:00:00.000Z',
+      kind: 'issue-round',
+    });
+
+    s.clone.post(fire());
+
+    // ① 記録できないあいだは本体ターンを起こさない（PR や外部操作までやらせない）
+    await expect
+      .poll(
+        async () =>
+          ((await stores.journal.list({ types: ['exchange'] })) as { text: string }[]).some(
+            (entry) => entry.text.includes('記録できなかった'),
+          ),
+        { timeout: 3000 },
+      )
+      .toBe(true);
+    expect(s.calls).toEqual([]);
+    expect((await stores.schedules.list())[0]?.lastRunAt).toBeUndefined();
+
+    // ② 復旧すれば、次の発火で依頼の本文つきで動く
+    failing = false;
+    s.clone.post(fire());
+
+    await expect
+      .poll(() => inputsOf(s)().includes('open issue を見て'), { timeout: 3000 })
+      .toBe(true);
+    expect((await stores.schedules.list())[0]?.lastRunAt).toBe('2026-08-12T00:00:00.000Z');
+
+    // ③ 走ったのは1回だけ（再起動相当の拾い直しでも二重に実行しない）
+    const runs = (await stores.journal.list({ types: ['exchange'] })).filter((entry) =>
+      (entry as { text: string }).text.includes('委譲した'),
+    );
+    expect(runs).toHaveLength(1);
+
+    await s.clone.stop();
+  });
+
+  it('記録できなかった発火は、再起動相当の拾い直しでちょうど1回だけ実行される', async () => {
+    const stores = createMemoryStores();
+    await stores.schedules.put({
+      kind: 'watch',
+      spec: { type: 'every' as const, minutes: 60 },
+      request: '見張って進める',
+      // 「落ちている間に過ぎた予定」として拾われる位置に置く
+      createdAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+      updatedAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+    });
+
+    const real = stores.schedules.markRun.bind(stores.schedules);
+    let failing = true;
+    stores.schedules.markRun = async (kind, at) => {
+      if (failing) throw new Error('UPDATE が落ちた');
+      return real(kind, at);
+    };
+
+    const s = setup(() => '進めた', stores);
+    const posted: string[] = [];
+    const scheduler = createScheduler({
+      entries: [],
+      post: (event) => {
+        posted.push(event.type);
+        s.clone.post(event);
+      },
+      schedules: stores.schedules,
+    });
+
+    // 1回目の起動: 過ぎた予定を拾って発火するが、記録できないので動かない
+    await scheduler.refresh();
+    scheduler.start();
+    await expect.poll(() => posted.length >= 1, { timeout: 3000 }).toBe(true);
+    scheduler.stop();
+    await expect
+      .poll(
+        async () =>
+          ((await stores.journal.list({ types: ['exchange'] })) as { text: string }[]).some(
+            (entry) => entry.text.includes('記録できなかった'),
+          ),
+        { timeout: 3000 },
+      )
+      .toBe(true);
+    expect(s.calls).toEqual([]);
+
+    // 2回目の起動（器が直っている）: 同じ予定を拾い直して、今度は動く
+    failing = false;
+    const second = createScheduler({
+      entries: [],
+      post: (event) => s.clone.post(event),
+      schedules: stores.schedules,
+    });
+    await second.refresh();
+    second.start();
+
+    await expect.poll(() => inputsOf(s)().includes('見張って進める'), { timeout: 3000 }).toBe(true);
+    second.stop();
+
+    // 実際に走ったのは1回だけ
+    const runs = (await stores.journal.list({ types: ['exchange'] })).filter(
+      (entry) => (entry as { text: string }).text === '進めた',
+    );
+    expect(runs).toHaveLength(1);
 
     await s.clone.stop();
   });

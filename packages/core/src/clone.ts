@@ -88,13 +88,13 @@ const DAILY_REPORT_LOOKUP = 30;
 const EXTERNAL_PAYLOAD_LIMIT = 8_000;
 
 /**
- * 発火した定期の依頼を読むときの試行回数と間隔。
+ * 継続中の依頼の器に触るときの試行回数と間隔（読み取りと発火の記録の両方）。
  *
  * **これは回数制限ではない**（AGENTS.md 地雷2）。器が一瞬揺れただけで1周期ぶんの
  * 仕事を落とさないための拾い直しであって、仕事の量を絞るものではない。
  */
-const SCHEDULE_READ_ATTEMPTS = 3;
-const SCHEDULE_READ_RETRY_MS = 200;
+const SCHEDULE_STORE_ATTEMPTS = 3;
+const SCHEDULE_STORE_RETRY_MS = 200;
 
 export interface CloneOptions {
   stores: Stores;
@@ -431,10 +431,26 @@ class Clone implements CloneHost {
         }
 
         const plan = found.plan;
-        // 記録は走らせる前に付ける。ターンが失敗しても「起きた」ことは残り、
+        // 記録は走らせる**前**に付ける。ターンが失敗しても「起きた」ことは残り、
         // 次の発火で前回時刻が空のまま同じ仕事をまっさらから始めることがない。
+        //
+        // **記録できなければ動かない。** 動いてから記録できなかった場合、外の世界には
+        // 結果（PR・外部への操作）が残るのに `lastRunAt` は古いままなので、次の起動で
+        // 「落ちている間に過ぎた予定」と見えて同じ仕事をもう一度起こす。取り消せない
+        // 操作を二重にやる方が、1周期遅れるよりずっと高い。
         if (plan !== null) {
-          await this.#stores.schedules.markRun(event.kind, event.at).catch(() => undefined);
+          const recorded = await this.#markScheduleRun(event.kind, event.at);
+          if (recorded !== null) {
+            await this.#journal({
+              type: 'exchange',
+              with: 'self',
+              role: 'outbound',
+              text:
+                `定期の依頼 ${event.kind} の「起きた」を記録できなかったので、この発火では動かない` +
+                `（動いてから記録できないと、次の起動で同じ仕事をもう一度起こす）: ${recorded}`,
+            });
+            return;
+          }
         }
         await this.#runInternal(
           buildTimerPrompt({
@@ -525,9 +541,9 @@ class Clone implements CloneHost {
     { status: 'ok'; plan: ScheduledRequest | null } | { status: 'unreadable'; error: string }
   > {
     let last = '';
-    for (let attempt = 0; attempt < SCHEDULE_READ_ATTEMPTS; attempt += 1) {
+    for (let attempt = 0; attempt < SCHEDULE_STORE_ATTEMPTS; attempt += 1) {
       if (attempt > 0) {
-        await new Promise((resolve) => setTimeout(resolve, SCHEDULE_READ_RETRY_MS * attempt));
+        await new Promise((resolve) => setTimeout(resolve, SCHEDULE_STORE_RETRY_MS * attempt));
       }
       try {
         return { status: 'ok', plan: await this.#stores.schedules.get(kind) };
@@ -536,6 +552,30 @@ class Clone implements CloneHost {
       }
     }
     return { status: 'unreadable', error: last };
+  }
+
+  /**
+   * 「この発火で起きた」を記録する。書けたら null、書けなければ理由を返す。
+   *
+   * 読み取りと同じ理由で、この発火の中で書き直す（器の一瞬の揺れで1周期ぶんの仕事を
+   * 落とさない）。**それでも書けなければ動かない** — 動いた事実が外の世界にだけ残り、
+   * `lastRunAt` が古いままだと、次の起動で「落ちている間に過ぎた予定」として同じ仕事を
+   * もう一度起こす（取り消せない操作の二重実行は、1周期遅れるよりずっと高い）。
+   */
+  async #markScheduleRun(kind: string, at: string): Promise<string | null> {
+    let last = '';
+    for (let attempt = 0; attempt < SCHEDULE_STORE_ATTEMPTS; attempt += 1) {
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, SCHEDULE_STORE_RETRY_MS * attempt));
+      }
+      try {
+        await this.#stores.schedules.markRun(kind, at);
+        return null;
+      } catch (error) {
+        last = String(error);
+      }
+    }
+    return last;
   }
 
   /** 発意・定期ジョブに渡す直近の状況。 */
