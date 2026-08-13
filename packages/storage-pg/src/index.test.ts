@@ -1,4 +1,5 @@
 import { PGlite } from '@electric-sql/pglite';
+import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -296,6 +297,24 @@ describe('PgScheduleStore', () => {
     await stores.schedules.remove('issue-round');
 
     expect(await stores.schedules.list()).toEqual([]);
+  });
+
+  it('読めない行を「消された」に潰さない（fs 版と同じく失敗を表へ出す）', async () => {
+    // 人間が手で直した・古い形が残っている、を模して不正な plan を直接置く
+    await db.execute(
+      sql`insert into schedules (kind, created_at, updated_at, plan)
+          values ('broken', now(), now(), '{"kind":"broken"}'::jsonb)`,
+    );
+
+    // null を返すと、クローンから見て「消された依頼」と区別が付かなくなり、
+    // 本文なしの曖昧なターンが走る（clone.ts が読取不能を分けている意味が消える）
+    await expect(stores.schedules.get('broken')).rejects.toThrow(/読めない形/);
+    // 一覧から黙って落とすと、digest / schedule_list / refresh から消えて
+    // 人間にも原因が見えなくなる
+    await expect(stores.schedules.list()).rejects.toThrow(/読めない形/);
+
+    // 「無い」ことだけが null である
+    expect(await stores.schedules.get('しらない')).toBeNull();
   });
 });
 

@@ -270,6 +270,21 @@ describe('FsScheduleStore', () => {
 
     expect(await stores.schedules.list()).toEqual([]);
   });
+
+  it('読めない中身を「消された」に潰さない（pg 版と同じ振る舞い）', async () => {
+    // 人間が手で直した・古い形が残っている、を模す
+    await initWorkspace(root);
+    await writeFile(
+      join(root, 'jobs', 'schedules.json'),
+      JSON.stringify({ schedules: [{ kind: 'broken' }] }),
+      'utf8',
+    );
+
+    // null / 空配列に潰すと、クローンから見て「消された依頼」と区別が付かず、
+    // 本文なしの曖昧なターンが走る（clone.ts が読取不能を分けている意味が消える）
+    await expect(stores.schedules.get('broken')).rejects.toThrow();
+    await expect(stores.schedules.list()).rejects.toThrow();
+  });
 });
 
 describe('FsTranscriptArchive', () => {
