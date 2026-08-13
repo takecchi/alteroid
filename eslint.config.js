@@ -12,6 +12,8 @@ export default tseslint.config(
       // apps/web の生成物。`build/` は react-router の出力、`.react-router/` は typegen。
       '**/build/',
       '**/.react-router/',
+      // 正典を焼き込んだ写し（packages/core/scripts/write-canon.mjs が作る）
+      'packages/core/src/generated/',
     ],
   },
   js.configs.recommended,

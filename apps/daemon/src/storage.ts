@@ -34,6 +34,12 @@ export interface Storage {
    */
   withheldEnvKeys: string[];
   /**
+   * 記憶の器。**`paths.root` の意味がこれで変わる** — fs 構成ではそこに記憶が
+   * あるが、pg 構成ではローカルに残るのは state だけで記憶ではない。取り違えた
+   * まま表示すると、読んだ側が矛盾する2つの事実を同時に信じることになる。
+   */
+  kind: 'fs' | 'pg';
+  /**
    * 記憶がどこにあるかの1行（起動ログと `/health`）。**接続情報そのものは出さない。**
    * 人間が「いまどっちの器で動いているか」を取り違えないための表示であり、
    * 認証情報の配布経路にはしない。
@@ -95,6 +101,7 @@ export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise
       stores: createFsStores(plan.root),
       paths,
       withheldEnvKeys: plan.withheldEnvKeys,
+      kind: 'fs',
       description: paths.root,
       close: async () => undefined,
     };
@@ -115,6 +122,7 @@ export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise
     paths,
     sessionStore: pg.sessionStore,
     withheldEnvKeys: plan.withheldEnvKeys,
+    kind: 'pg',
     description: plan.description,
     close: () => pg.close(),
   };

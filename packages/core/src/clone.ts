@@ -28,6 +28,7 @@ import {
 } from './prompt.js';
 import { DAILY_REPORT_KIND, localDate, localDayRange } from './schedule.js';
 import type { ChatStreamEvent, InboxEvent, JournalEntryInput, ScheduledRequest } from './schema.js';
+import type { SelfFacts } from './self.js';
 import type { Stores } from './store.js';
 import { CLONE_ALLOWED_TOOLS, MCP_SERVER_NAME, createCloneMcpServer } from './tools.js';
 
@@ -154,6 +155,16 @@ export interface CloneOptions {
    * 別のインスタンスを持つと直列化の意味が消える（層ごとに違う本文が残る）。
    */
   profileService?: ProfileService;
+  /**
+   * いま自分がどう走っているかの事実（記憶の器・作業ディレクトリ・委譲先・
+   * 入口・モデル帯）。システムプロンプトの自己認識の節に載る。
+   *
+   * **省略できるのはテストのためだけである。** 本番の配線で落とすと、
+   * クローンは自分がどこで走っているかを知らないまま判断することになる。
+   * 組み立てるのはデーモン側 — 事実を知っているのはあちらだからで、
+   * ここで環境変数を読み直すと出所が2つになる。
+   */
+  self?: SelfFacts;
 }
 
 type Listener = (event: ChatStreamEvent) => void;
@@ -182,6 +193,8 @@ class Clone implements CloneHost {
    * 使う（片方だけ帯が違うと、蒸留＝人格の書き手だけが別の頭になる）。
    */
   readonly #model: string;
+  /** 自己認識の材料。デーモンが組み立てて渡す（テストでは省略される）。 */
+  readonly #self: SelfFacts | undefined;
 
   readonly #inbox = new Inbox();
   readonly #listeners = new Map<string, Set<Listener>>();
@@ -206,8 +219,18 @@ class Clone implements CloneHost {
   readonly #profileService: ProfileService | undefined;
 
   constructor(options: CloneOptions) {
-    const { stores, queryFn, cwd, runners, sessionStore, managers, env, profile, profileService } =
-      options;
+    const {
+      stores,
+      queryFn,
+      cwd,
+      runners,
+      sessionStore,
+      managers,
+      env,
+      profile,
+      profileService,
+      self,
+    } = options;
     this.#stores = stores;
     this.#queryFn = queryFn ?? query;
     this.#cwd = cwd;
@@ -216,6 +239,7 @@ class Clone implements CloneHost {
     this.#env = env ?? process.env;
     this.#profile = profile;
     this.#profileService = profileService;
+    this.#self = self;
     this.#managers =
       managers ??
       createManagerPool({
@@ -848,7 +872,10 @@ class Clone implements CloneHost {
           ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
         }),
       },
-      systemPrompt: buildCloneSystemPrompt({ memory }),
+      systemPrompt: buildCloneSystemPrompt({
+        memory,
+        ...(this.#self === undefined ? {} : { self: this.#self }),
+      }),
       // 人間のプロジェクト設定を持ち込まない。クローンは実プロジェクトの
       // 作業者ではなく、判断する側である（設定の共有は M2 のマネージャー側）。
       settingSources: [],
@@ -948,7 +975,10 @@ class Clone implements CloneHost {
             ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
           }),
         },
-        systemPrompt: buildCloneSystemPrompt({ memory }),
+        systemPrompt: buildCloneSystemPrompt({
+          memory,
+          ...(this.#self === undefined ? {} : { self: this.#self }),
+        }),
         settingSources: [],
         env: this.#childEnv(),
         persistSession: false,

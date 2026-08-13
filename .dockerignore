@@ -12,4 +12,6 @@ coverage
 *.log
 .env
 .env.*
-docs
+# docs/ は除外しない。**正典はビルドの入力である** — packages/core が
+# ここから自己認識の写しを焼き込む（scripts/write-canon.mjs）。除外すると
+# 「コンテナだと自分のことが分からない」クローンが焼き上がる。

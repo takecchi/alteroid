@@ -67,6 +67,7 @@ export {
 } from './auth-service.js';
 export type { CloneHost } from './host.js';
 export { Inbox } from './inbox.js';
+export type { CloneSystemPromptInput } from './prompt.js';
 export {
   buildCloneSystemPrompt,
   buildDailyReportPrompt,
@@ -79,6 +80,20 @@ export {
   type TimerPromptInput,
 } from './prompt.js';
 export { buildActivityDigest, type DigestWindow } from './digest.js';
+/**
+ * クローンの自己認識。正典（`docs/*.md`）の全文はビルド時に焼き込まれる
+ * （`scripts/write-canon.mjs`）。要約を手書きしないこと — docs と二重管理になる。
+ */
+export {
+  CANON_DOCUMENTS,
+  CANON_REVISION,
+  REPOSITORY_URL,
+  buildSelfKnowledge,
+  canonDocument,
+  canonNames,
+  type CanonDocument,
+  type SelfFacts,
+} from './self.js';
 export { CRON_EXPRESSION_MAX, isCronExpression, parseCron, type CronSchedule } from './cron.js';
 export {
   DAILY_REPORT_KIND,

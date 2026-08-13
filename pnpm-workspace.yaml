@@ -9,6 +9,10 @@ catalog:
   # typescript-eslint が TS 7（ネイティブコンパイラ）未対応のため 6 系に固定（peer: >=4.8.4 <6.1.0）
   typescript: ^6.0.3
   tsup: ^8.5.1
+  # root の `format:check` と apps/daemon の write-openapi.mjs（openapi.json を
+  # 整形して書き出す）が同じ版を使う必要がある。片方だけ上がると整形結果がずれ、
+  # 「コードは変えていないのに openapi.json に差分が出る」で CI が振れる。
+  prettier: ^3.9.6
   # CI の実行系（Node 22）に合わせる
   '@types/node': ^22.20.1
   '@anthropic-ai/claude-agent-sdk': ^0.3.228

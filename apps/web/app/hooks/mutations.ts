@@ -101,7 +101,12 @@ export function useRunSchedule() {
   const { mutate } = useSWRConfig();
   return useCallback(
     async (kind: string) => {
-      await api.api.POST('/schedule/{kind}/run', { params: { path: { kind } } }).then(unwrap);
+      // `body: {}` は spec が本文を必須にしているから（運ぶ情報は無い）。これがあると
+      // openapi-fetch が `content-type: application/json` を自分で付けるので、
+      // デーモンの門番（`deliberateClient`）を素通りできる。
+      await api.api
+        .POST('/schedule/{kind}/run', { params: { path: { kind } }, body: {} })
+        .then(unwrap);
       await mutate(KEY.schedule);
     },
     [api, mutate],
@@ -125,8 +130,9 @@ export function useEndConversation() {
   const { mutate } = useSWRConfig();
   return useCallback(
     async (conversationId: string) => {
+      // `body: {}` の理由は `useRunSchedule` と同じ（spec が本文を必須にしている）。
       await api.api
-        .POST('/chat/{conversationId}/end', { params: { path: { conversationId } } })
+        .POST('/chat/{conversationId}/end', { params: { path: { conversationId } }, body: {} })
         .then(unwrap);
       await mutate(KEY.memory);
     },
