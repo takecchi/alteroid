@@ -18,6 +18,7 @@ import {
   createManagerPool,
   type ManagerPool,
 } from './manager.js';
+import { createProfileService } from './profile-service.js';
 import { createLocalRunner } from './runner-local.js';
 import {
   createRunnerRegistry,
@@ -199,10 +200,14 @@ function setup(
         ? {}
         : { withheldEnvKeys: options.withheldEnvKeys }),
     });
+  const registry = createRunnerRegistry([runner]);
   const pool = createManagerPool({
     stores,
     post: (event) => inbox.push(event),
-    runners: createRunnerRegistry([runner]),
+    runners: registry,
+    // **本番と同じ1本道を通す。** 降ろし直しは更新と同じ列に入る必要があるので、
+    // ここを省くと「重なったら壊れる」経路をテストが見なくなる。
+    profile: createProfileService({ stores, runners: registry }),
   });
   return { pool, stores, sessions, inbox, runner };
 }

@@ -169,9 +169,10 @@ export {
   type StagedProfile,
 } from './profile.js';
 export {
-  applyEnvProfile,
-  type ApplyProfileInput,
+  createProfileService,
   type ApplyProfileResult,
+  type ProfileService,
+  type ProfileServiceOptions,
 } from './profile-service.js';
 export {
   createRunnerRegistry,

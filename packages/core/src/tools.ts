@@ -5,9 +5,7 @@ import { z } from 'zod';
 
 import { isCronExpression } from './cron.js';
 import type { ManagerPool } from './manager.js';
-import { applyEnvProfile } from './profile-service.js';
-import type { ProfileApplier } from './profile.js';
-import type { RunnerRegistry } from './runner-protocol.js';
+import type { ProfileService } from './profile-service.js';
 import {
   RESERVED_SCHEDULE_KINDS,
   describeScheduleSpec,
@@ -47,7 +45,7 @@ export interface ToolContext {
    * （north_star 禁止2 は層を問わず効く）。鍵が文脈に載ることは**方針**
    * （システムプロンプト）で扱い、道具を取り上げて表現しない。
    */
-  profile?: { applier?: ProfileApplier; runners?: RunnerRegistry };
+  profile?: ProfileService;
 }
 
 export function qualifiedToolName(name: string): string {
@@ -461,12 +459,16 @@ export function createCloneTools(context: ToolContext) {
           .describe('何を変えたかの一行要約（日誌に残る。**値そのものは書かない**）'),
       },
       async ({ script, summary }) => {
-        const result = await applyEnvProfile({
-          stores,
-          ...(context.profile?.applier === undefined ? {} : { profile: context.profile.applier }),
-          ...(context.profile?.runners === undefined ? {} : { runners: context.profile.runners }),
-          script,
-        });
+        if (context.profile === undefined) {
+          return text(
+            'いまは実行環境プロファイルを差し替えられない場面である（記憶へ移すための内部ターン）。' +
+              '次の会話で置くこと。',
+          );
+        }
+        // **人間の口（`PUT /profile`）とまったく同じ1本道を通る。** 評価・保存・
+        // 配布が1つの区間として直列に行われるので、人間の更新と重なっても層ごとに
+        // 違う本文が残らない。
+        const result = await context.profile.apply(script);
 
         // **失敗を判断として記録しない。** 置けなかったのはシステムの結果であって
         // クローンの判断ではない。理由はそのまま返して、直すのはこの場でやらせる。

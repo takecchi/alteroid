@@ -16,6 +16,7 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import { Inbox } from './inbox.js';
 import { createManagerPool, type ManagerPool } from './manager.js';
 import type { ProfileApplier } from './profile.js';
+import type { ProfileService } from './profile-service.js';
 import type { RunnerRegistry } from './runner-protocol.js';
 import {
   buildCloneSystemPrompt,
@@ -145,6 +146,14 @@ export interface CloneOptions {
    * 「マネージャーには効くがクローンには効かない」を作らない。
    */
   profile?: ProfileApplier;
+  /**
+   * 実行環境プロファイルを置いて配る1本道（`profile_read` / `profile_write` と
+   * 再接続時の降ろし直しが通る）。
+   *
+   * **デーモンが作った同じインスタンスを渡すこと。** 人間の口とクローンの道具が
+   * 別のインスタンスを持つと直列化の意味が消える（層ごとに違う本文が残る）。
+   */
+  profileService?: ProfileService;
 }
 
 type Listener = (event: ChatStreamEvent) => void;
@@ -194,11 +203,11 @@ class Clone implements CloneHost {
   #sawInit = false;
   readonly #env: NodeJS.ProcessEnv;
   readonly #profile: ProfileApplier | undefined;
-  /** 委譲先の名簿。プロファイルを配る宛先としても要る（起こすのは #managers）。 */
-  readonly #runners: RunnerRegistry | undefined;
+  readonly #profileService: ProfileService | undefined;
 
   constructor(options: CloneOptions) {
-    const { stores, queryFn, cwd, runners, sessionStore, managers, env, profile } = options;
+    const { stores, queryFn, cwd, runners, sessionStore, managers, env, profile, profileService } =
+      options;
     this.#stores = stores;
     this.#queryFn = queryFn ?? query;
     this.#cwd = cwd;
@@ -206,11 +215,12 @@ class Clone implements CloneHost {
     this.#model = resolveCloneModel(env ?? process.env);
     this.#env = env ?? process.env;
     this.#profile = profile;
-    this.#runners = runners;
+    this.#profileService = profileService;
     this.#managers =
       managers ??
       createManagerPool({
         stores,
+        ...(profileService === undefined ? {} : { profile: profileService }),
         // マネージャーからの報告・質問も、人間の発言と同じ受信箱を通る。
         post: (event) => this.post(event),
         runners: runners ?? createRunnerRegistry([]),
@@ -835,7 +845,7 @@ class Clone implements CloneHost {
           stores: this.#stores,
           emit: (event) => this.#emit(this.#turn?.conversationId ?? null, event),
           managers: this.#managers,
-          profile: this.#profileTools(),
+          ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
         }),
       },
       systemPrompt: buildCloneSystemPrompt({ memory }),
@@ -872,19 +882,6 @@ class Clone implements CloneHost {
    */
   #childEnv(): NodeJS.ProcessEnv {
     return { ...this.#env, ...(this.#profile?.env() ?? {}) };
-  }
-
-  /**
-   * 実行環境プロファイルの道具に渡す配線。
-   *
-   * **人間の口（`PUT /profile`）と同じものを通す。** 別の経路にすると、片方だけに
-   * 検査が入って「人間が置くと弾かれるのにクローンが置くと通る」が生まれる。
-   */
-  #profileTools(): { applier?: ProfileApplier; runners?: RunnerRegistry } {
-    return {
-      ...(this.#profile === undefined ? {} : { applier: this.#profile }),
-      ...(this.#runners === undefined ? {} : { runners: this.#runners }),
-    };
   }
 
   /**
@@ -948,7 +945,7 @@ class Clone implements CloneHost {
             emit: () => undefined,
             // **蒸留のターンでも同じ道具を渡す。** ここだけ欠けていると、
             // 会話の最後に「鍵を実行環境へ移す」をやろうとして失敗する。
-            profile: this.#profileTools(),
+            ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
           }),
         },
         systemPrompt: buildCloneSystemPrompt({ memory }),

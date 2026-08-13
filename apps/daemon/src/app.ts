@@ -5,7 +5,7 @@ import type {
   CloneHost,
   JournalEntry,
   JournalEntryType,
-  ProfileApplier,
+  ProfileService,
   RunnerRegistry,
   Scheduler,
   Stores,
@@ -19,7 +19,6 @@ import {
   journalEntrySchema,
   localDayRange,
   memorySlugSchema,
-  applyEnvProfile,
   fingerprintOf,
   runnerSetCredentialsCommandSchema,
   scheduleKindSchema,
@@ -161,12 +160,12 @@ export interface AppDeps {
    */
   auth?: { plan: AuthPlan; service?: AuthService };
   /**
-   * 実行環境プロファイル（`.zprofile` 相当）をクローンへ効かせる器。
+   * 実行環境プロファイルを置いて配るまでの1本道。
    *
-   * **無くても経路は生かす。** 保管（記憶ストア）と runner への配布はこれが
-   * 無くてもできるので、クローンにだけ効かないことを 501 で隠さない。
+   * **クローンの道具（`profile_write`）と同じインスタンスを渡すこと。** 別々だと
+   * 直列化の意味が消え、同時更新で層ごとに違う本文が残る。
    */
-  profile?: ProfileApplier;
+  profile?: ProfileService;
 }
 
 /**
@@ -1816,12 +1815,10 @@ export function createApp(deps: AppDeps) {
         // 書くと、片方だけに検査が入って「人間が置くと弾かれるのにクローンが置くと
         // 通る」が生まれる。ここは境界を確かめる場所なので、経路が2本あること自体が
         // 穴になる。
-        const result = await applyEnvProfile({
-          stores: deps.stores,
-          ...(deps.profile === undefined ? {} : { profile: deps.profile }),
-          ...(deps.runners === undefined ? {} : { runners: deps.runners }),
-          script: c.req.valid('json').script,
-        });
+        if (deps.profile === undefined) {
+          return c.json({ error: 'プロファイルの器が無い' as const, detail: '' }, 400);
+        }
+        const result = await deps.profile.apply(c.req.valid('json').script);
 
         if (!result.stored) {
           return c.json(

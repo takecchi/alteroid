@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ManagerPool, ManagerSummary } from './manager.js';
+import { createProfileService } from './profile-service.js';
 import type { ChatStreamEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
@@ -86,7 +87,9 @@ function harness(): Harness {
     stores,
     emit: (event) => emitted.push(event),
     managers,
-    profile: { runners },
+    // **本番と同じ1本道を通す。** ここを偽物にすると、直列化も検査も
+    // テストの外に出てしまう。
+    profile: createProfileService({ stores, runners }),
   });
 
   return {
@@ -168,7 +171,8 @@ describe('クローンの道具', () => {
     const tools = createCloneTools({
       stores: h.stores,
       emit: () => undefined,
-      profile: {
+      profile: createProfileService({
+        stores: h.stores,
         applier: {
           vessel: {} as never,
           fingerprint: () => undefined,
@@ -177,7 +181,7 @@ describe('クローンの道具', () => {
             return { ok: false, error: '構文が壊れている' };
           },
         },
-      },
+      }),
     });
     const write = tools.find((entry) => entry.name === 'profile_write');
     const result = await write?.handler({ script: 'if [ ; then', summary: 'x' } as never, {});

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { fingerprintOf } from './profile.js';
+import type { ProfileService } from './profile-service.js';
 import { isRetryableRunnerError } from './runner-protocol.js';
 import type { RunnerClient, RunnerEvent, RunnerRegistry } from './runner-protocol.js';
 import { brief } from './runner.js';
@@ -111,6 +111,13 @@ export interface ManagerPoolOptions {
   post: (event: InboxEvent) => void;
   /** runner の名簿。宛先の決定はここを通す（固定 URL を前提にしない）。 */
   runners: RunnerRegistry;
+  /**
+   * 実行環境プロファイルの1本道。
+   *
+   * **降ろし直しもここを通す。** runner へ書く操作は更新（`apply`）と同じ列に
+   * 入れないと、更新の最中に古い本文を読んで新しい本文を上書きする。
+   */
+  profile?: ProfileService;
 }
 
 export function createManagerPool(options: ManagerPoolOptions): ManagerPool {
@@ -139,6 +146,7 @@ class Pool implements ManagerPool {
   readonly #stores: Stores;
   readonly #post: (event: InboxEvent) => void;
   readonly #runners: RunnerRegistry;
+  readonly #profile: ProfileService | undefined;
   readonly #records = new Map<string, ManagerRecord>();
   /** 起動時の引き取りが走っている間だけ立つ。`#reattach` はこれを待つ。 */
   #restoring: Promise<void> | null = null;
@@ -168,10 +176,11 @@ class Pool implements ManagerPool {
   #connected = false;
   #stopped = false;
 
-  constructor({ stores, post, runners }: ManagerPoolOptions) {
+  constructor({ stores, post, runners, profile }: ManagerPoolOptions) {
     this.#stores = stores;
     this.#post = post;
     this.#runners = runners;
+    this.#profile = profile;
   }
 
   // -------------------------------------------------------------------------
@@ -533,24 +542,13 @@ class Pool implements ManagerPool {
    * 誰も切り分けられなくなる（鍵の指紋を出しているのと同じ理由）。
    */
   async #pushProfile(runner: RunnerClient): Promise<void> {
-    if (this.#stopped) return;
+    if (this.#stopped || this.#profile === undefined) return;
     const runnerId = runner.runnerId;
     try {
-      const stored = await this.#stores.profile.read();
-      const script = stored?.script ?? '';
-
-      // **既に同じものが載っていれば触らない。** ストリームが切れただけの
-      // 繋ぎ直しでも名乗りは届くので、毎回置き直すと人間の書いたスクリプトを
-      // そのたびに評価することになる（重い本文なら再接続のたびに待たされる）。
-      const current = await runner.profile().catch(() => undefined);
-      const same =
-        script.trim().length === 0
-          ? current === undefined
-          : current?.sha256 === fingerprintOf(script);
-      if (same) return;
-
-      const result = await runner.setProfile(script);
-      if (result.ok) return;
+      // **更新と同じ列に入れる。** 直に読んで直に書くと、人間やクローンの更新の
+      // 最中に古い本文で上書きしうる（3層が別々の本文を持つ状態になる）。
+      const result = await this.#profile.syncRunner(runner);
+      if (result === null || result.ok) return;
 
       await this.#stores.journal.append({
         type: 'exchange',

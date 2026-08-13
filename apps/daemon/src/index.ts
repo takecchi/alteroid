@@ -12,6 +12,7 @@ import {
   createClone,
   createLocalRunner,
   createProfileApplier,
+  createProfileService,
   createProfileVessel,
   createRunnerRegistry,
   createScheduler,
@@ -240,12 +241,22 @@ export async function main(): Promise<void> {
     baseEnv: () => process.env,
   });
 
+  /**
+   * 置いて配るまでの1本道。**インスタンスは1つだけ作って全経路へ渡す。**
+   *
+   * 人間の口（`PUT /profile`）・クローンの道具（`profile_write`）・runner の
+   * 再接続時の降ろし直しは、どれも同じものを書き換える。別のインスタンスを持つと
+   * 直列化の意味が消え、層ごとに違う本文が残る。
+   */
+  const profileService = createProfileService({ stores, applier: profile, runners });
+
   // 置いてあるものを起動時に1度効かせる。**器を作り直しても環境が痩せない**
   // ことが、この仕組みを環境変数と別に持つ理由そのものである。
-  const storedProfile = await stores.profile.read().catch(() => null);
+  const storedProfile = await profileService.read().catch(() => null);
   if (storedProfile !== null) {
-    const applied = await profile
+    const applied = await profileService
       .apply(storedProfile.script)
+      .then((result) => result.clone)
       .catch((error: unknown) => ({ ok: false, error: String(error), output: undefined }));
     if (!applied.ok) {
       // **黙って古い環境で走らせない。** 何が効いていないかが見えないと、
@@ -261,6 +272,7 @@ export async function main(): Promise<void> {
     cwd: paths.root,
     runners,
     profile,
+    profileService,
     ...(storage.sessionStore === undefined ? {} : { sessionStore: storage.sessionStore }),
   });
   const port = Number(process.env.ALTEROID_PORT ?? '4517');
@@ -331,7 +343,7 @@ export async function main(): Promise<void> {
     journalEvents: journalBus,
     allowedOrigins,
     auth: { plan: authPlan },
-    profile,
+    profile: profileService,
   });
   // 開けたこと自体は方針の変更であって禁止事項ではない。ただし**黙って**外へ
   // 出さない — ここは叩けばクローンのターンが起きる実行の口である。

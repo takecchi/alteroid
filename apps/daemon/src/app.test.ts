@@ -7,7 +7,7 @@ import type {
   Scheduler,
   Stores,
 } from '@alteroid/core';
-import { createMemoryStores } from '@alteroid/core';
+import { createMemoryStores, createProfileService } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp, parseAllowedOrigins } from './app.js';
@@ -939,7 +939,7 @@ describe('実行環境プロファイル', () => {
       stores,
       token: 'test-token',
       shutdown: () => undefined,
-      profile: fakeApplier(),
+      profile: profileService(stores),
     });
 
     const put = await withProfile.request('/profile', {
@@ -964,7 +964,7 @@ describe('実行環境プロファイル', () => {
       stores,
       token: 'test-token',
       shutdown: () => undefined,
-      profile: fakeApplier(),
+      profile: profileService(stores),
     });
 
     // 末尾に改行が無い本文（人間が普通に書く形）
@@ -988,7 +988,7 @@ describe('実行環境プロファイル', () => {
       token: 'test-token',
       shutdown: () => undefined,
       runners: registryOf([runner]),
-      profile: fakeApplier(),
+      profile: profileService(stores, { runners: [runner] }),
     });
 
     const response = await withProfile.request('/profile', {
@@ -1005,14 +1005,13 @@ describe('実行環境プロファイル', () => {
 
   it('読めないものは保存も配布もしない（前のものが残る）', async () => {
     const runner = fakeRunner('runner-primary');
-    const applier = fakeApplier({ rejects: '壊れている' });
     const withProfile = createApp({
       clone: fake.clone,
       stores,
       token: 'test-token',
       shutdown: () => undefined,
       runners: registryOf([runner]),
-      profile: applier,
+      profile: profileService(stores, { rejects: '壊れている', runners: [runner] }),
     });
     await stores.profile.write('export GOOD=1');
 
@@ -1063,19 +1062,30 @@ function registryOf(runners: ReturnType<typeof fakeRunner>[]) {
   } as never;
 }
 
-/** クローン側の器の代わり。評価の成否だけを差し替える。 */
-function fakeApplier(options: { rejects?: string } = {}) {
-  return {
-    vessel: {} as never,
-    fingerprint: () => undefined,
-    env: () => ({}),
-    async apply(script: string) {
-      if (options.rejects !== undefined) {
-        return { ok: false, error: options.rejects, output: script };
-      }
-      return { ok: true, names: [] };
+/**
+ * **本番と同じ1本道を通す。** 器（評価）の成否だけを差し替える。
+ *
+ * ここを偽物のサービスにすると、直列化も検査もテストの外に出てしまう。
+ */
+function profileService(
+  target: Stores,
+  options: { rejects?: string; runners?: ReturnType<typeof fakeRunner>[] } = {},
+) {
+  return createProfileService({
+    stores: target,
+    applier: {
+      vessel: {} as never,
+      fingerprint: () => undefined,
+      env: () => ({}),
+      async apply(script: string) {
+        if (options.rejects !== undefined) {
+          return { ok: false, error: options.rejects, output: script };
+        }
+        return { ok: true, names: [] };
+      },
     },
-  } as never;
+    ...(options.runners === undefined ? {} : { runners: registryOf(options.runners) }),
+  });
 }
 
 /**
