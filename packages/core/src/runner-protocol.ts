@@ -338,44 +338,375 @@ export interface RunnerClient {
 }
 
 /**
+ * 名簿に載せる1台。**「開いた接続」ではなく「開き方」を取る。**
+ *
+ * ここが接続そのものだと、名簿を作る前に runner を開き終える必要があり、
+ * デーモンは runner が上がるまで待つことになる（起動時に最大2分待って、その間
+ * chat も日誌も承認も止まっていた）。開き方を預かれば、**runner が上がっていなくても
+ * 名簿には載せられる** — 開くのは背景の仕事になり、失敗しても名簿の側が挑み直せる。
+ */
+export interface RunnerSource {
+  /**
+   * 人間が見る宛先（URL か「同一プロセス」）。
+   *
+   * **`runnerId` は登録時に要求しない。** 繋がるまで分からないからである
+   * （`/health` で runner 自身に名乗らせる）。名簿の中で1台を指す鍵はこの label で、
+   * 同じ label を登録し直すのは「その宛先を開き直す」意味になる。
+   */
+  label: string;
+  open: () => Promise<RunnerClient>;
+}
+
+/**
+ * 名簿から見た1台の様子。**生死と接続状態は別物である。**
+ *
+ * - `connecting` — いま開いている最中（初回）
+ * - `connected` — 開けた。委譲を置ける
+ * - `unreachable` — 開けなかったが待てば直る種類の失敗。背景で挑み直している
+ * - `unusable` — 挑み直しても同じ答えが返る失敗（鍵違い等）。**挑み直さない**
+ */
+export type RunnerLiveness = 'connecting' | 'connected' | 'unreachable' | 'unusable';
+
+/**
+ * 名簿の1行。**値は返さない**（鍵の指紋と同じ原則で、ここに出るのは状態だけ）。
+ *
+ * `runnerId` と `workspacePath` が省略されうるのは、**繋がるまで分からない**から
+ * である。「登録されているのに繋がっていない」を表せないと、`GET /runners` が
+ * 空を返すだけになり、人間には「runner を設定し忘れた」のか「上がってこない」のかが
+ * 区別できない。
+ */
+export interface RunnerEntry {
+  label: string;
+  state: RunnerLiveness;
+  runnerId?: string;
+  workspacePath?: string;
+  /** 直近の失敗の一行。原因を人間が見るための窓であって、値は載せない。 */
+  error?: string;
+  /** この状態になった時刻。 */
+  since: string;
+}
+
+/**
  * runner の名簿。デーモンは**固定 URL ではなくここ**を見る。
  *
- * M4 で登録されるのは1台だけだが、間接層をここに置いておかないと、宛先の決定が
- * 呼び出し側に散らばって M5（複数 runner・水平スケール）で全部書き直しになる。
+ * **動的である**ことがこの層の本体である（roadmap M5）。デーモンは名簿が空のまま
+ * 起動してよく、runner は後から載る。載る前に届いた委譲だけが待たされ、chat・日誌・
+ * 承認は最初から動く（PRD「自律」— 人間の不在で止まってよいのは承認待ちの仕事だけ）。
  *
  * **`select` に人工的な上限を入れないこと。** 「同時に何本まで」は能力の削除で
  * あって配置の判断ではない（north_star 禁止2）。将来ここで見てよいのは、runner が
  * 報告する CPU・メモリ・稼働セッション数といった**実行環境の資源**である。
  */
 export interface RunnerRegistry {
+  /** いま開けている runner。**開けていないものは並ばない**（`entries` で見る）。 */
   list(): Promise<RunnerClient[]>;
   get(runnerId: string): Promise<RunnerClient | null>;
-  /** 新しい委譲をどの runner に置くか。M4 では唯一の1台を返す。 */
+  /**
+   * 新しい委譲をどの runner に置くか。
+   *
+   * **常に返す。** 返さないのは登録が0台のとき（と、登録が全部 `unusable` で
+   * 挑み直す先が無いとき）だけである。まだ繋がっていないなら**繋がるまで待つ** —
+   * ここで「いま空いていないから断る」を作ると、それは定員であって配置ではない。
+   */
   select(input: { cwd?: string }): Promise<RunnerClient>;
+  /**
+   * 名簿に載せる。**開き終わるのを待たずに載る。**
+   *
+   * 最初の1回はここで試す（開ければ戻った時点で使える）が、**失敗しても投げない** —
+   * 開けなかったことは名簿の状態になり、待てば直る種類なら背景で挑み直す。
+   */
+  register(source: RunnerSource): Promise<void>;
+  /** 名簿から外す（背景の挑み直しも畳む）。label は `register` に渡したもの。 */
+  unregister(label: string): Promise<void>;
+  /** 登録されている全部。繋がっていないものも並ぶ（`GET /runners` の材料）。 */
+  entries(): RunnerEntry[];
+  /**
+   * runner が開けたときに呼ばれる。**後から現れた runner に繋ぐための口**である。
+   *
+   * これが無いと、デーモン側（`ManagerPool`）はイベントの受け口を開く契機を
+   * 起動時にしか持てず、後から載った runner の報告も許可確認も永久に届かない。
+   */
+  subscribe(onOpen: (runner: RunnerClient) => void): () => void;
+  /**
+   * 背景の挑み直しを畳む。
+   *
+   * **開いた runner は閉じない。** 閉じる方針は `ManagerPool` が持っている
+   * （デーモンの都合で人の仕事を殺さない）。ここで閉じると方針が2箇所に散る。
+   */
+  stop(): Promise<void>;
+}
+
+/** 名簿の外へ出す知らせ（いまは「挑み直しても直らない失敗」だけ）。 */
+export interface RunnerRegistryOptions {
+  /**
+   * 挑み直しても直らないと分かった失敗を、人間とクローンへ知らせる。
+   *
+   * **黙って挑み続けない。** 鍵違いや命令の形の誤りは待っても直らないので、
+   * 背景で無限に叩くと設定の誤りが「なぜか繋がらない」として永久に隠れる。
+   */
+  notify?: (failure: { label: string; error: string }) => void;
+  /** 挑み直しの間隔（倍々で伸びる）。**回数では諦めない。** 主にテスト用。 */
+  retryBaseMs?: number;
+  retryMaxMs?: number;
 }
 
 /**
- * 1台だけの名簿（M4 の既定）。
+ * 挑み直しの間隔。**これは能力の上限ではなく、混雑を作らないための間隔である。**
  *
- * 複数渡せる形にしてあるのは、M5 で `select` の中身だけを差し替えられるように
- * するためである。いまは先頭を返す。
+ * 上限で頭打ちにするのは、器が長く戻らないときに秒間何度も叩かないためであって、
+ * 諦めるためではない（north_star 禁止2 が禁じているのは実行回数の制限である）。
  */
-export function createRunnerRegistry(runners: RunnerClient[]): RunnerRegistry {
-  return {
-    async list() {
-      return [...runners];
-    },
-    async get(runnerId) {
-      return runners.find((runner) => runner.runnerId === runnerId) ?? null;
-    },
-    async select() {
-      const first = runners[0];
-      if (first === undefined) {
+const REGISTRY_RETRY_BASE_MS = 1_000;
+const REGISTRY_RETRY_MAX_MS = 30_000;
+
+/**
+ * 動的な名簿（roadmap M5）。
+ *
+ * 既に開いてある `RunnerClient` を渡す形も残してある — 既存の呼び出し（テストを
+ * 含む）はそのまま動き、渡した分は「常に開ける開き方」として登録される。
+ */
+export function createRunnerRegistry(
+  runners: RunnerClient[] = [],
+  options: RunnerRegistryOptions = {},
+): RunnerRegistry {
+  const registry = new Registry(options);
+  for (const runner of runners) registry.adopt(runner);
+  return registry;
+}
+
+/** 名簿が1台について持つもの。 */
+interface RegistryEntry {
+  source: RunnerSource;
+  state: RunnerLiveness;
+  since: string;
+  client: RunnerClient | null;
+  error?: string;
+  /** 開いている最中（**多重に開きに行かない**ための1本）。 */
+  opening: Promise<void> | null;
+  timer: ReturnType<typeof setTimeout> | null;
+  /** 次に待つ時間。開けたら忘れる。 */
+  delay: number;
+}
+
+class Registry implements RunnerRegistry {
+  readonly #entries = new Map<string, RegistryEntry>();
+  readonly #subscribers = new Set<(runner: RunnerClient) => void>();
+  /** `select` が繋がるのを待っている分。開けた瞬間に全部起こす。 */
+  readonly #waiting = new Set<{
+    resolve: (runner: RunnerClient) => void;
+    reject: (e: Error) => void;
+  }>();
+  readonly #notify: ((failure: { label: string; error: string }) => void) | undefined;
+  readonly #retryBaseMs: number;
+  readonly #retryMaxMs: number;
+  #stopped = false;
+
+  constructor(options: RunnerRegistryOptions) {
+    this.#notify = options.notify;
+    this.#retryBaseMs = options.retryBaseMs ?? REGISTRY_RETRY_BASE_MS;
+    this.#retryMaxMs = options.retryMaxMs ?? REGISTRY_RETRY_MAX_MS;
+  }
+
+  /** 既に開いてある1台を、開き方として載せる（旧来の呼び出しの受け皿）。 */
+  adopt(runner: RunnerClient): void {
+    const label = runner.runnerId;
+    this.#entries.set(label, {
+      source: { label, open: async () => runner },
+      state: 'connected',
+      since: new Date().toISOString(),
+      client: runner,
+      opening: null,
+      timer: null,
+      delay: this.#retryBaseMs,
+    });
+  }
+
+  async list(): Promise<RunnerClient[]> {
+    return [...this.#entries.values()].flatMap((entry) =>
+      entry.client === null ? [] : [entry.client],
+    );
+  }
+
+  async get(runnerId: string): Promise<RunnerClient | null> {
+    for (const entry of this.#entries.values()) {
+      if (entry.client?.runnerId === runnerId) return entry.client;
+    }
+    return null;
+  }
+
+  entries(): RunnerEntry[] {
+    return [...this.#entries.values()].map((entry) => ({
+      label: entry.source.label,
+      state: entry.state,
+      since: entry.since,
+      ...(entry.client === null
+        ? {}
+        : { runnerId: entry.client.runnerId, workspacePath: entry.client.workspacePath }),
+      ...(entry.error === undefined ? {} : { error: entry.error }),
+    }));
+  }
+
+  subscribe(onOpen: (runner: RunnerClient) => void): () => void {
+    this.#subscribers.add(onOpen);
+    return () => this.#subscribers.delete(onOpen);
+  }
+
+  async register(source: RunnerSource): Promise<void> {
+    if (this.#stopped) return;
+    const existing = this.#entries.get(source.label);
+    // 既に開けている宛先を登録し直しても、繋ぎ直さない（同じものが二重に載らない）。
+    if (existing?.state === 'connected') return;
+    // 開けていない宛先は、**予約を畳んでから**入れ替える。人間が設定を直して
+    // 登録し直した場合、古い開き方で挑み続ける予約が残ると直したものが効かない。
+    if (existing !== undefined && existing.timer !== null) clearTimeout(existing.timer);
+
+    const entry: RegistryEntry = {
+      source,
+      state: 'connecting',
+      since: new Date().toISOString(),
+      client: null,
+      opening: null,
+      timer: null,
+      delay: this.#retryBaseMs,
+    };
+    this.#entries.set(source.label, entry);
+    await this.#open(entry);
+  }
+
+  async unregister(label: string): Promise<void> {
+    const entry = this.#entries.get(label);
+    if (entry === undefined) return;
+    this.#entries.delete(label);
+    if (entry.timer !== null) clearTimeout(entry.timer);
+    // **外した宛先の口は閉じる。** 名簿から消えたのに SSE だけ残ると、誰も宛先と
+    // して選べない runner のイベントがデーモンに流れ続ける。
+    await entry.client?.close().catch(() => undefined);
+  }
+
+  async select(): Promise<RunnerClient> {
+    for (;;) {
+      if (this.#stopped) throw new Error('名簿が停止している');
+
+      // **配置の材料は実行環境の資源だけ**である（定員は作らない）。いまは
+      // 開けている先頭を返す。資源を見て選ぶのは runner が報告を始めてからの話。
+      const open = await this.list();
+      const first = open[0];
+      if (first !== undefined) return first;
+
+      if (this.#entries.size === 0) {
         throw new Error(
-          'manager-runner が登録されていない（ALTEROID_RUNNER_URL か同一プロセスの runner が要る）',
+          'manager-runner が登録されていない（ALTEROID_RUNNER_URLS / ALTEROID_RUNNER_URL か同一プロセスの runner が要る）',
         );
       }
-      return first;
-    },
-  };
+
+      // 挑み直す先が1つも無いなら、待っても誰も来ない。**理由を添えて返す** —
+      // ここで黙って待つと、鍵を間違えた人間が「なぜか委譲が返ってこない」を見る。
+      const pending = [...this.#entries.values()].filter((entry) => entry.state !== 'unusable');
+      if (pending.length === 0) {
+        const why = [...this.#entries.values()]
+          .map((entry) => `${entry.source.label}: ${entry.error ?? '理由不明'}`)
+          .join(' / ');
+        throw new Error(`登録されている runner がどれも使えない（${why}）`);
+      }
+
+      // まだ開いている最中（か、挑み直しを待っている）。**待つ。** 「いま空いて
+      // いないから断る」を作らないための一手である。
+      await this.#nextOpen();
+    }
+  }
+
+  async stop(): Promise<void> {
+    this.#stopped = true;
+    for (const entry of this.#entries.values()) {
+      if (entry.timer !== null) clearTimeout(entry.timer);
+      entry.timer = null;
+    }
+    for (const waiter of this.#waiting) waiter.reject(new Error('名簿が停止した'));
+    this.#waiting.clear();
+    this.#subscribers.clear();
+  }
+
+  // -------------------------------------------------------------------------
+  // 開く
+  // -------------------------------------------------------------------------
+
+  /** 1つの宛先を開く。**同じ宛先へ多重に開きに行かない。** */
+  #open(entry: RegistryEntry): Promise<void> {
+    const already = entry.opening;
+    if (already !== null) return already;
+
+    const opening = (async () => {
+      try {
+        const client = await entry.source.open();
+        if (this.#stopped || this.#entries.get(entry.source.label) !== entry) {
+          // 開いている間に外された（か止まった）。**握り潰さずに閉じる。**
+          await client.close().catch(() => undefined);
+          return;
+        }
+        entry.client = client;
+        entry.state = 'connected';
+        entry.since = new Date().toISOString();
+        delete entry.error;
+        entry.delay = this.#retryBaseMs;
+        for (const subscriber of this.#subscribers) subscriber(client);
+        for (const waiter of this.#waiting) waiter.resolve(client);
+        this.#waiting.clear();
+      } catch (error) {
+        if (this.#stopped || this.#entries.get(entry.source.label) !== entry) return;
+        entry.client = null;
+        entry.error = String(error);
+        entry.since = new Date().toISOString();
+        if (isRetryableRunnerError(error)) {
+          // 待てば直る。**回数では諦めない**（諦めた先に残るのは、宛先を失った
+          // まま誰にも知らされないデーモンである）。
+          entry.state = 'unreachable';
+          this.#scheduleOpen(entry);
+        } else {
+          // 待っても直らない。挑み直さずに知らせる（`select` はこの状態を見る）。
+          entry.state = 'unusable';
+          this.#notify?.({ label: entry.source.label, error: String(error) });
+          this.#failIfAllUnusable();
+        }
+      } finally {
+        entry.opening = null;
+      }
+    })();
+
+    entry.opening = opening;
+    return opening;
+  }
+
+  #scheduleOpen(entry: RegistryEntry): void {
+    if (this.#stopped || entry.timer !== null) return;
+    const delay = entry.delay;
+    entry.delay = Math.min(delay * 2, this.#retryMaxMs);
+    const timer = setTimeout(() => {
+      entry.timer = null;
+      if (this.#stopped || this.#entries.get(entry.source.label) !== entry) return;
+      void this.#open(entry);
+    }, delay);
+    // 名簿の挑み直しでプロセスの終了を引き延ばさない。
+    timer.unref?.();
+    entry.timer = timer;
+  }
+
+  /** 次にどれかが開けるまで待つ。 */
+  #nextOpen(): Promise<RunnerClient> {
+    return new Promise<RunnerClient>((resolve, reject) => {
+      this.#waiting.add({ resolve, reject });
+    });
+  }
+
+  /** 待っている `select` に、もう挑み直す先が無いことを伝える。 */
+  #failIfAllUnusable(): void {
+    if (this.#waiting.size === 0) return;
+    if ([...this.#entries.values()].some((entry) => entry.state !== 'unusable')) return;
+    const why = [...this.#entries.values()]
+      .map((entry) => `${entry.source.label}: ${entry.error ?? '理由不明'}`)
+      .join(' / ');
+    for (const waiter of this.#waiting) {
+      waiter.reject(new Error(`登録されている runner がどれも使えない（${why}）`));
+    }
+    this.#waiting.clear();
+  }
 }

@@ -20,6 +20,11 @@ import { createMemoryStores } from './testing.js';
  */
 function fakeSdk(): typeof sdkQuery {
   return ((params: { prompt: unknown }) => {
+    let close = (): void => undefined;
+    const closed = new Promise<void>((resolve) => {
+      close = resolve;
+    });
+
     async function* generate(): AsyncGenerator<SDKMessage, void> {
       yield {
         type: 'system',
@@ -30,16 +35,17 @@ function fakeSdk(): typeof sdkQuery {
 
       // クローンからの入力は読み捨てる（ここで見たいのは宛先の決定だけ）。
       void (async () => {
-        for await (const _ of params.prompt as AsyncIterable<unknown>) {
-          // 読み続けるだけ
+        for await (const message of params.prompt as AsyncIterable<unknown>) {
+          void message; // 読み続けるだけ
         }
       })();
 
-      await new Promise(() => undefined);
+      // 閉じられるまで走り続ける（畳めないセッションを作るとテストがハングする）。
+      await closed;
     }
 
     return Object.assign(generate(), {
-      close: () => undefined,
+      close: () => close(),
       interrupt: async () => undefined,
     }) as unknown as Query;
   }) as unknown as typeof sdkQuery;
