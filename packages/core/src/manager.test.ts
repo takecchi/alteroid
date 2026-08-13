@@ -1268,6 +1268,61 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     await s.pool.stop();
   });
 
+  it('諦めたジョブは、同じ runner の別ジョブの再試行に巻き込まれない', async () => {
+    // **予約は runner 単位、諦めの判定はジョブ単位である。** ジョブ側に覚えないと、
+    // 同じ runner に一時障害のジョブが1本あるだけで予約が積まれ続け、4xx で
+    // 「挑み直さない」と決めたジョブが毎回巻き込まれる。runner への無意味な
+    // resume と、同じ障害通知が予約の間隔ごとにクローンの受信箱へ積み上がる
+    // （`isRetryableRunnerError` と README の約束が複数ジョブで破れる）。
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({ ...runningJob, id: 'mgr-broken' });
+    await stores.jobs.putJob({ ...runningJob, id: 'mgr-flaky' });
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    await s.pool.restore();
+    expect(fake.state.resumes).toHaveLength(2);
+
+    const original = fake.runner.resume.bind(fake.runner);
+    const tries = { broken: 0, flaky: 0 };
+    fake.runner.resume = async (command) => {
+      if (command.managerId === 'mgr-broken') {
+        tries.broken += 1;
+        throw new RunnerHttpError('runner POST resume が失敗した (400)', 400);
+      }
+      tries.flaky += 1;
+      if (tries.flaky <= 2) {
+        throw new RunnerHttpError('runner POST resume が失敗した (503)', 503);
+      }
+      return original(command);
+    };
+
+    fake.swap();
+
+    // flaky は 503 を2回踏んでから戻る（＝予約が2回積まれる）。
+    await expect.poll(() => tries.flaky, { timeout: 8000 }).toBe(3);
+    await expect
+      .poll(() => fake.state.resumes.some((r) => r.managerId === 'mgr-flaky'), { timeout: 8000 })
+      .toBe(true);
+
+    // その間、broken は1回しか試されず、通知も1回だけ。
+    expect(tries.broken).toBe(1);
+    const notices = s.inbox.filter(
+      (event) =>
+        event.type === 'manager_message' &&
+        (event as { managerId: string }).managerId === 'mgr-broken' &&
+        (event as { text: string }).text.includes('戻せなかった'),
+    );
+    expect(notices).toHaveLength(1);
+
+    // **人間とクローンの明示的な経路は塞がない。** 諦めたのは自動の取り直しだけで、
+    // 頼まれたら投げに行く（結果は呼び手へ返る。ここでは runner が 400 を返す）。
+    await expect(s.pool.send('mgr-broken', 'やり直して')).rejects.toThrow('400');
+    expect(tries.broken).toBe(2);
+
+    await s.pool.stop();
+  });
+
   it('別の runner のジョブには手を出さない（M5 で runner が増えても混ざらない）', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putJob({ ...runningJob, id: 'mgr-elsewhere', runnerId: 'runner-second' });

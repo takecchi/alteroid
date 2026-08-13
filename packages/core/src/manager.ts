@@ -151,6 +151,19 @@ class Pool implements ManagerPool {
   readonly #reattachDelays = new Map<string, number>();
   /** いま resume を投げている最中のマネージャー（同じ session を二本起こさない）。 */
   readonly #resuming = new Set<string>();
+  /**
+   * 自動では戻せないと分かったマネージャー。
+   *
+   * **`retry` は runner 単位、この判定はジョブ単位である。** 同じ runner に一時
+   * 障害のジョブが1本あるだけで予約は積まれ続けるので、ここに覚えておかないと
+   * 「挑み直さない」と決めたジョブが毎回巻き込まれて再送され、同じ障害通知が
+   * クローンの受信箱に積み上がる。
+   *
+   * **人間とクローンの明示的な経路は塞がない** — `manager_send` の resume は
+   * ここを見ないし、成功すれば忘れる（`#resume`）。デーモンを作り直したときも
+   * 消える（別の器・別の runner なら結果が変わりうる）。
+   */
+  readonly #unresumable = new Set<string>();
   #connected = false;
   #stopped = false;
 
@@ -494,6 +507,7 @@ class Pool implements ManagerPool {
     for (const timer of this.#reattachTimers.values()) clearTimeout(timer);
     this.#reattachTimers.clear();
     this.#reattachDelays.clear();
+    this.#unresumable.clear();
     // **runner のマネージャーは止めない。** デーモンの都合で人の仕事を殺さない
     // （インプロセス runner だけは、プロセスが消えるので中で畳まれる）。
     for (const runner of await this.#runners.list().catch(() => [])) {
@@ -583,6 +597,11 @@ class Pool implements ManagerPool {
         // が拾って `runner_id` を書くので、次からはこの経路に乗る。
         if (job.runnerId !== runnerId || alive.has(job.id) || this.#stopped) continue;
 
+        // **一度「挑み直さない」と決めたものは、自動では二度と触らない。** ここを
+        // 抜かすと、同じ runner の別ジョブが一時障害で予約を積むたびに巻き込まれ、
+        // 無意味な resume と同じ通知が予約の間隔ごとに繰り返される。
+        if (this.#unresumable.has(job.id)) continue;
+
         // 器の中に居ないことは確かめた。台帳の `attached` はもう嘘である。
         const known = this.#records.get(job.id);
         if (known) known.attached = false;
@@ -624,7 +643,12 @@ class Pool implements ManagerPool {
           // 台帳が `running` のまま誰も走っていない仕事が残る — この経路が塞ごうと
           // していた穴と同じ形である。だから**自分で予約する**。
           if (isRetryableRunnerError(error)) retry = true;
-          else this.#notifyUnresumable(record, error);
+          else {
+            // 挑み直さないと決めたので、**ジョブ側に覚える**（runner 単位の `retry`
+            // では表せない。同じ runner の別ジョブが予約を積むたびに巻き込まれる）。
+            this.#unresumable.add(job.id);
+            this.#notifyUnresumable(record, error);
+          }
         }
       }
     } catch {
@@ -745,6 +769,8 @@ class Pool implements ManagerPool {
     });
     record.attached = true;
     record.job.runnerId = runner.runnerId;
+    // 戻れたなら諦めを忘れる（人間やクローンが起こし直した後も自動で拾える）。
+    this.#unresumable.delete(record.job.id);
     return true;
   }
 
