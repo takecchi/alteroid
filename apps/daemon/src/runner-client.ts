@@ -12,10 +12,15 @@ import { request as httpRequest } from 'node:http';
 import { Readable } from 'node:stream';
 
 import {
+  RunnerHttpError,
   runnerCredentialFingerprintSchema,
   runnerEventSchema,
   runnerManagerStateSchema,
 } from '@alteroid/core';
+
+// **失敗の種別は口の定義（`@alteroid/core`）が持つ。** この経路だけの都合にすると、
+// 同じ判断をインプロセスの runner 側で作り直すことになる。
+export { RunnerHttpError } from '@alteroid/core';
 
 /**
  * manager-runner への HTTP の口（roadmap M4）。
@@ -46,22 +51,6 @@ export interface HttpRunnerOptions {
 function socketPathOf(baseUrl: string): string | null {
   const match = /^unix:(?:\/\/)?(.+)$/.exec(baseUrl);
   return match?.[1] ?? null;
-}
-
-/**
- * runner が返した失敗。**status を落とさずに持ち上げる。**
- *
- * 呼ぶ側が「待てば直る（器の入れ替え中）」と「待っても直らない（鍵が違う）」を
- * 区別できないと、設定の誤りを再試行で何分も隠すことになる。
- */
-export class RunnerHttpError extends Error {
-  readonly status: number;
-
-  constructor(message: string, status: number) {
-    super(message);
-    this.name = 'RunnerHttpError';
-    this.status = status;
-  }
 }
 
 /** 接続して runner_id を確かめてから使う（宛先を台帳に残すため）。 */

@@ -83,6 +83,8 @@ export {
 } from './credentials.js';
 export {
   createRunnerRegistry,
+  isRetryableRunnerError,
+  RunnerHttpError,
   runnerAnswerCommandSchema,
   runnerCredentialFingerprintSchema,
   runnerCredentialSchema,

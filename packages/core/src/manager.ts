@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { isRetryableRunnerError } from './runner-protocol.js';
 import type { RunnerClient, RunnerEvent, RunnerRegistry } from './runner-protocol.js';
 import { brief } from './runner.js';
 import type { InboxEvent, Job, JobStatus, JournalEntryInput, WorkspaceLocator } from './schema.js';
@@ -115,6 +116,16 @@ export function createManagerPool(options: ManagerPoolOptions): ManagerPool {
   return new Pool(options);
 }
 
+/**
+ * 取り直しを挑み直すまでの待ち時間（倍々で伸ばし、上限で頭打ちにする）。
+ *
+ * **これは能力の上限ではなく、混雑を作らないための間隔である**（north_star 禁止2 は
+ * 実行回数の制限を禁じている。回数は制限していない）。上限で頭打ちにするのは、
+ * 器が長く戻らないときに秒間何度も叩かないためで、諦めるためではない。
+ */
+const REATTACH_RETRY_BASE_MS = 1_000;
+const REATTACH_RETRY_MAX_MS = 30_000;
+
 /** デーモン側が持つ1マネージャーの像（正本は JobStore）。 */
 interface ManagerRecord {
   job: Job;
@@ -134,6 +145,10 @@ class Pool implements ManagerPool {
   readonly #reattaching = new Set<string>();
   /** 取り直し中に届いた名乗り。**捨てずに、終わってからもう一度回す。** */
   readonly #reattachAgain = new Set<string>();
+  /** 予約済みの取り直し（`hello` を待たずに自分で挑み直すため）。 */
+  readonly #reattachTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** 次に待つ時間。うまくいったら忘れる。 */
+  readonly #reattachDelays = new Map<string, number>();
   /** いま resume を投げている最中のマネージャー（同じ session を二本起こさない）。 */
   readonly #resuming = new Set<string>();
   #connected = false;
@@ -475,6 +490,10 @@ class Pool implements ManagerPool {
 
   async stop(): Promise<void> {
     this.#stopped = true;
+    // 予約してあった取り直しは畳む（止めたはずのプールが後から動かない）。
+    for (const timer of this.#reattachTimers.values()) clearTimeout(timer);
+    this.#reattachTimers.clear();
+    this.#reattachDelays.clear();
     // **runner のマネージャーは止めない。** デーモンの都合で人の仕事を殺さない
     // （インプロセス runner だけは、プロセスが消えるので中で畳まれる）。
     for (const runner of await this.#runners.list().catch(() => [])) {
@@ -518,6 +537,7 @@ class Pool implements ManagerPool {
       return;
     }
     this.#reattaching.add(runnerId);
+    let retry = false;
     try {
       // 起動時の引き取りと重ならせない。両方が同じ `list()` を見てから動くと、
       // 同じ仕事を二本起こす。
@@ -579,17 +599,77 @@ class Pool implements ManagerPool {
             text: `[${job.id}] （runner 入れ替え後の再開）${message}`,
           });
           this.#notifyRestored(record, 'resumed', 'runner');
-        } catch {
-          // 戻せなかった分は次の `hello` でまた挑む（`list()` に居ないままなので）。
+        } catch (error) {
+          // **「次の `hello` でまた挑む」は嘘だった。** `hello` は SSE が繋がった
+          // ときにしか来ない。器は上がってストリームも安定しているのに resume だけが
+          // 一時的にこけた場合（起動直後・瞬断・5xx）、次の名乗りは永久に来ないので、
+          // 台帳が `running` のまま誰も走っていない仕事が残る — この経路が塞ごうと
+          // していた穴と同じ形である。だから**自分で予約する**。
+          if (isRetryableRunnerError(error)) retry = true;
+          else this.#notifyUnresumable(record, error);
         }
       }
     } catch {
-      // 台帳や名簿を引けないところで転んでもデーモンごと落とさない。
+      // 台帳や名簿を引けないところで転んでもデーモンごと落とさない。ここは名乗りが
+      // 来れば拾い直せる（`list()` に居ないままなので）。
     } finally {
       this.#reattaching.delete(runnerId);
       // 走っている間に届いた名乗りの分を、ここで回す。
       if (this.#reattachAgain.delete(runnerId) && !this.#stopped) void this.#reattach(runnerId);
+      else if (retry && !this.#stopped) this.#scheduleReattach(runnerId);
+      else this.#reattachDelays.delete(runnerId);
     }
+  }
+
+  /**
+   * 取り直しをもう一度予約する。**外からの合図を待たない。**
+   *
+   * 間隔は伸ばすが、**諦めはしない。** 回数で打ち切ると、打ち切った先に残るのは
+   * 「台帳では走っているのに誰も走っていない仕事」であり、それはこの経路が直そうと
+   * している状態そのものである（人間の不在で止まってよいのは承認待ちだけ。PRD
+   * 「自律」）。待っても直らない失敗は、そもそもここへ来ない（`isRetryableRunnerError`）。
+   */
+  #scheduleReattach(runnerId: string): void {
+    if (this.#reattachTimers.has(runnerId)) return;
+    const delay = this.#reattachDelays.get(runnerId) ?? REATTACH_RETRY_BASE_MS;
+    this.#reattachDelays.set(runnerId, Math.min(delay * 2, REATTACH_RETRY_MAX_MS));
+    const timer = setTimeout(() => {
+      this.#reattachTimers.delete(runnerId);
+      if (!this.#stopped) void this.#reattach(runnerId);
+    }, delay);
+    // デーモンの停止をこのタイマーで引き延ばさない。
+    timer.unref?.();
+    this.#reattachTimers.set(runnerId, timer);
+  }
+
+  /**
+   * 戻せないと分かった仕事をクローンへ知らせる。
+   *
+   * **黙って `running` のまま置かない。** 再試行しても同じ答えが返る失敗なので、
+   * ここで人間（とクローン）に見えるようにするのが唯一の出口である
+   * （roadmap M5 受け入れ基準4「復旧不能な未永続状態を人間へ明示できる」）。
+   */
+  #notifyUnresumable(record: ManagerRecord, error: unknown): void {
+    const { job } = record;
+    this.#post({
+      type: 'manager_message',
+      id: randomUUID(),
+      at: new Date().toISOString(),
+      managerId: job.id,
+      kind: 'report',
+      text: [
+        'runner の器が作り直されたが、この委譲を前のセッションから戻せなかった。',
+        `理由: ${String(error)}`,
+        `依頼: ${job.request ?? job.summary}`,
+        `作業ディレクトリ: ${job.cwd ?? '(不明)'}`,
+        job.lastReport === undefined ? '' : `直近の報告: ${job.lastReport}`,
+        '',
+        '同じ命令を投げ直しても同じ答えが返る種類の失敗なので、自動では再試行しない。' +
+          '続きが要るなら `manager_start` で起こし直すこと。',
+      ]
+        .filter((line) => line !== '')
+        .join('\n'),
+    });
   }
 
   async #runnerOf(record: ManagerRecord): Promise<RunnerClient | null> {

@@ -21,6 +21,7 @@ import {
 import { createLocalRunner } from './runner-local.js';
 import {
   createRunnerRegistry,
+  RunnerHttpError,
   type RunnerClient,
   type RunnerEvent,
   type RunnerManagerState,
@@ -1130,6 +1131,79 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     release();
 
     await expect.poll(() => fake.state.resumes.length, { timeout: 2000 }).toBe(2);
+
+    await s.pool.stop();
+  });
+
+  it('resume が一時的にこけても、次の名乗りを待たずに自分で戻す', async () => {
+    // **`hello` は SSE が繋がったときにしか来ない。** 器は上がってストリームも
+    // 安定しているのに resume だけが一時的にこけた場合（起動直後・瞬断・5xx）、
+    // 「次の名乗りでまた挑む」では永久に挑まれない。台帳は `running` のまま
+    // 誰も走っていない仕事が残り、この経路が塞いだ穴と同じ形になる。
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    await s.pool.restore();
+    expect(fake.state.resumes).toHaveLength(1);
+
+    // 次の resume だけ 503 で落とす（器は生きていて `list()` は答え続ける）。
+    const original = fake.runner.resume.bind(fake.runner);
+    let failed = 0;
+    fake.runner.resume = async (command) => {
+      if (failed === 0) {
+        failed += 1;
+        throw new RunnerHttpError('runner POST /managers/x/resume が失敗した (503)', 503);
+      }
+      return original(command);
+    };
+
+    fake.swap();
+
+    // 名乗りも `manager_send` も追加せずに復旧する。
+    await expect.poll(() => failed, { timeout: 2000 }).toBe(1);
+    expect(fake.state.resumes).toHaveLength(1);
+    await expect.poll(() => fake.state.resumes.length, { timeout: 5000 }).toBe(2);
+    expect(fake.state.resumes[1]).toMatchObject({
+      managerId: 'mgr-running',
+      sessionId: 'sess-before-swap',
+    });
+
+    await s.pool.stop();
+  });
+
+  it('投げ直しても同じ答えが返る失敗は、無限に再試行せずクローンへ知らせる', async () => {
+    // 400 は runner が「その命令は受け取れない」と答えている。同じものを投げ直しても
+    // 同じ答えが返るので、黙って `running` のまま置くのでも回し続けるのでもなく、
+    // 見えるようにするのが唯一の出口である（roadmap M5 受け入れ基準4）。
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    await s.pool.restore();
+    let attempts = 0;
+    fake.runner.resume = async () => {
+      attempts += 1;
+      throw new RunnerHttpError('runner POST /managers/x/resume が失敗した (400)', 400);
+    };
+
+    fake.swap();
+
+    await expect
+      .poll(
+        () =>
+          s.inbox
+            .filter((event) => event.type === 'manager_message')
+            .some((event) => (event as { text: string }).text.includes('戻せなかった')),
+        { timeout: 2000 },
+      )
+      .toBe(true);
+
+    // 予約が積まれていないこと（時間を置いても挑み直さない）。
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(attempts).toBe(1);
 
     await s.pool.stop();
   });
