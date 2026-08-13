@@ -2018,6 +2018,12 @@
                           },
                           "nextAt": {
                             "type": "string"
+                          },
+                          "request": {
+                            "type": "string"
+                          },
+                          "lastRunAt": {
+                            "type": "string"
                           }
                         },
                         "required": ["kind", "description", "nextAt"]
@@ -2030,6 +2036,208 @@
             }
           }
         }
+      },
+      "post": {
+        "operationId": "postSchedule",
+        "tags": ["schedule"],
+        "summary": "継続中の依頼を仕込む・直す",
+        "description": "「定期的に〜しておいて」をクローンの記憶任せにせず、時刻が来れば必ず届く形で置く。同じ kind なら置き換わる（前回動いた時刻は保つ）。真実はストア側にあり、スケジューラはそれを読み直すだけなので、デーモンを作り直しても残る。既定の定期ジョブ（daily_report / self_initiative）の名前は奪えない（→ 409）。",
+        "responses": {
+          "200": {
+            "description": "仕込んだ。次の発火は `GET /schedule` で見える。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": ["ok"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が JSON として不正（kind の形・時刻の範囲もここで弾く）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {},
+                    "error": {
+                      "type": "array",
+                      "items": {}
+                    },
+                    "success": {
+                      "type": "boolean",
+                      "const": false
+                    }
+                  },
+                  "required": ["data", "error", "success"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "既定の定期ジョブの名前。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                  },
+                  "request": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "spec": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "daily"
+                          },
+                          "at": {
+                            "type": "string",
+                            "pattern": "^(?:[01]?\\d|2[0-3]):[0-5]\\d$"
+                          }
+                        },
+                        "required": ["type", "at"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "every"
+                          },
+                          "minutes": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": ["type", "minutes"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "cron"
+                          },
+                          "expression": {
+                            "type": "string",
+                            "maxLength": 120
+                          }
+                        },
+                        "required": ["type", "expression"]
+                      }
+                    ]
+                  }
+                },
+                "required": ["kind", "request", "spec"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/schedule/{kind}": {
+      "delete": {
+        "operationId": "deleteScheduleByKind",
+        "tags": ["schedule"],
+        "summary": "継続中の依頼を外す",
+        "description": "済んだ依頼・もう要らない依頼をここで外す。既定の定期ジョブは仕込みではないのでここでは外せない（間隔と締め時刻はデーモンの設定である）。",
+        "responses": {
+          "200": {
+            "description": "外した。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": ["ok"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "その kind の継続中の依頼が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "content-type が application/json ではない（ブラウザの単純リクエスト対策 — 状態を変える POST は必ずここを通す）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "kind",
+            "required": true
+          }
+        ]
       }
     },
     "/schedule/{kind}/run": {

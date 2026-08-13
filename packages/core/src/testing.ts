@@ -6,6 +6,7 @@ import type {
   MemoryDocument,
   MemoryDocumentMeta,
   PendingApproval,
+  ScheduledRequest,
 } from './schema.js';
 import type {
   AccessTokenRecord,
@@ -21,6 +22,7 @@ import type {
   JournalStore,
   PersonaStore,
   ProfileStore,
+  ScheduleStore,
   SessionRegistry,
   Stores,
   TranscriptArchive,
@@ -35,6 +37,7 @@ export function createMemoryStores(): Stores {
   const entries: JournalEntry[] = [];
   const jobs = new Map<string, Job>();
   const approvals = new Map<string, PendingApproval>();
+  const schedules = new Map<string, ScheduledRequest>();
   const archives = new Map<string, string>();
   let cloneSessionId: string | null = null;
   let envProfile: EnvProfile | null = null;
@@ -108,6 +111,37 @@ export function createMemoryStores(): Stores {
     },
     async putApproval(approval) {
       approvals.set(approval.id, approval);
+    },
+  };
+
+  const scheduleStore: ScheduleStore = {
+    async list() {
+      return [...schedules.values()].sort((a, b) => a.kind.localeCompare(b.kind));
+    },
+    async get(kind) {
+      return schedules.get(kind) ?? null;
+    },
+    async put(entry) {
+      schedules.set(entry.kind, entry);
+    },
+    async remove(kind) {
+      schedules.delete(kind);
+    },
+    async claimRun(kind, expectedUpdatedAt, at, cause) {
+      const existing = schedules.get(kind);
+      // 消された・書き換わったなら古い本文で動かさない
+      if (!existing || existing.updatedAt !== expectedUpdatedAt) return null;
+      // updatedAt は版の識別子なので動かさない。定期の基準は completeRun まで進めない
+      schedules.set(kind, { ...existing, lastRunAt: at, pendingRun: { at, cause } });
+      return existing;
+    },
+    async completeRun(kind, at, cause) {
+      const existing = schedules.get(kind);
+      // 別の発火の印が付いているなら触らない
+      if (!existing || existing.pendingRun?.at !== at) return;
+      const rest = { ...existing };
+      delete rest.pendingRun;
+      schedules.set(kind, cause === 'schedule' ? { ...rest, lastScheduledRunAt: at } : rest);
     },
   };
 
@@ -218,7 +252,16 @@ export function createMemoryStores(): Stores {
     },
   };
 
-  return { persona, journal, jobs: jobStore, archive, sessions, auth, profile };
+  return {
+    persona,
+    journal,
+    jobs: jobStore,
+    schedules: scheduleStore,
+    archive,
+    sessions,
+    auth,
+    profile,
+  };
 }
 
 export function humanMessage(text: string, conversationId = 'conv-1'): InboxEvent {

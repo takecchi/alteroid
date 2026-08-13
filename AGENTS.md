@@ -156,6 +156,16 @@
   - `ALTEROID_DAILY_REPORT_AT`（`HH:MM` / `off`）、`ALTEROID_INITIATIVE_EVERY`（分 / `off`）、`ALTEROID_REPORT_LOOKBACK_DAYS`（起動時に遡って日報を作る日数、既定 3）
   - これらは**方針**の設定であって、暴走を止めるための回数制限ではない。抑止は実行環境の境界で行う（north_star 禁止2）
 - 待たずに確かめるなら `POST /schedule/:kind/run`（chat では `/run daily_report` / `/run self_initiative`）。`GET /schedule` で次の発火が見える
+- **「定期的に〜しておいて」は記憶だけに書かせない。** 記憶は根拠を置く場所で時計を持たないので、そこにだけ書いた依頼は「発意 tick のときに思い出せるかどうか」の賭けになる。継続する依頼はクローンが `schedule_create`（`kind` ＋ `dailyAt` / `everyMinutes` / `cron` のどれか1つ ＋ 依頼の本文）で仕込み、時刻が来れば必ず受信箱へ届く形にする（`schedule_list` / `schedule_remove` で読む・外す）
+  - 周期は3つ。曜日や月の指定が要るものは **cron 式**（`croner`。ローカル時刻。例 `0 10 * * 1`）で書く。**「毎日起きて曜日を見て何もしない」で代用しないこと** — 7回に6回は Fable のターンを空焼きする。読めない式は保存の時点で弾く（`scheduleSpecSchema`）ので、経路ごとに検査を足さない
+  - 器は `ScheduleStore`（`packages/core/src/store.ts`）。fs では `~/.alteroid/jobs/schedules.json`、pg では `schedules` テーブル。**真実はストア側だけに置く** — スケジューラへ直接足す口を作ると、デーモン再起動で仕込みが消える
+  - スケジューラは `refresh()` でストアを読み直す。内部タイマーが刻むたびに通るので、足した依頼は最大1分で効く。人間が API から足した時とデーモン起動時は明示的に呼んで待たせない
+  - 発火イベントに載るのは `kind` だけである。**依頼の本文をイベントに載せないこと** — 載せた瞬間に発火時点の写しになり、人間が本文を直しても古い依頼で走る
+  - **引き受け（`claimRun`）と完了（`completeRun`）を1つに戻さないこと。** 引き受けた印（`pendingRun`）だけを残して定期の基準（`lastScheduledRunAt`）は完了時に進める。片方に寄せると必ずどちらかが壊れる — 先に基準を進めれば claim 直後に落ちた回が「もう動いた」ことになって日次なら翌日まで消え、印だけにすると動いた後に落ちた回を止められない。印が残っていれば次の起動で配り直し、走りかけていた可能性をプロンプトに添える（`prompt.ts` の `unfinishedAt`）
+  - **手で起こした1回（`POST /schedule/:kind/run`）で定期の予定をずらさない。** 発火の合図の `cause` で区別し、`manual` では観測用の `lastRunAt` だけを動かす。ここを混ぜると、手動実行のたびに位相が動く（再起動後に露呈する）
+  - 依頼を直す経路（`schedule_create` / `POST /schedule`）では `lastScheduledRunAt` と `pendingRun` を**引き継ぐ**こと。落とすと、直した瞬間に位相が `createdAt` から引き直され、引き受けたまま終わっていない回も消える
+  - 発火のたびに `lastRunAt` が付き、依頼の一覧と前回時刻は digest（`digest.ts`）にも常に載る。同じ issue に何本もマネージャーが立つのを止めるのはこの材料と `manager_list` であって、**同時数の上限ではない**（north_star 禁止2）
+  - 人間側の口は `GET /schedule`（`request` / `lastRunAt` 付き）・`POST /schedule`・`DELETE /schedule/:kind`、chat では `/schedule` と `/unschedule <kind>`。`daily_report` / `self_initiative` の名前は奪えない（`RESERVED_SCHEDULE_KINDS`）
 - **外部イベントの入口は HTTP の `POST /events`**（`{source, payload}`）。送り元の形を変えられない webhook 用に `POST /events/:source`（本文まるごとが payload）もある。chat からは `/event <source> <本文>`
   - 開いているのは 127.0.0.1 だけ。外から叩かせるならトンネル・リバースプロキシ側に境界を置く（ここで認証を足す前に、それが方針か境界かを考える）
   - **127.0.0.1 で待つことはブラウザからの保護にならない。** 人間が開いた任意のページが単純リクエスト（`text/plain` や form の POST）を投げられ、応答が読めなくても送信は成立する。状態を変える POST を足すときは、`zValidator('json', ...)` を付けるか、本文の無い経路なら `deliberateClient`（`apps/daemon/src/app.ts`）を必ず通すこと — でないと他人がクローンのターンを起こせる。塞ぐのは能力側ではなく実行環境の境界である

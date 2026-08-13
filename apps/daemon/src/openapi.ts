@@ -227,6 +227,15 @@ export const scheduleStatusSchema = z.object({
   description: z.string(),
   /** 次の発火時刻（ISO 8601）。 */
   nextAt: z.string(),
+  /**
+   * 継続中の依頼として仕込まれたものだけが持つ。
+   *
+   * 既定の日報・発意 tick には無い（あれは設定で回っているもので、依頼ではない）。
+   * ここが出ているものは `DELETE /schedule/:kind` で外せる。
+   */
+  request: z.string().optional(),
+  /** 前回この kind で発火した時刻（ISO 8601）。一度も動いていなければ無い。 */
+  lastRunAt: z.string().optional(),
 });
 
 export const scheduleListResponseSchema = z.object({ entries: z.array(scheduleStatusSchema) });

@@ -188,7 +188,9 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /archive <id>        生ログの中身
 /approvals           承認待ち（番号付き）
 /answer <番号|id> <回答>  承認待ちに答える（番号は /approvals の並び）
-/schedule            時間起点のジョブと次の発火
+/schedule            時間起点のジョブ・継続中の依頼と次の発火
+/schedule <kind> <HH:MM|30m|cron 0 10 * * 1> <依頼>  継続する依頼を仕込む
+/unschedule <kind>   継続中の依頼を外す
 /run <kind>          定期ジョブを今すぐ起こす
 /event <source> <本文>  外部イベントをクローンに届ける
 /quit                終了
@@ -249,7 +251,36 @@ async function runSlashCommand(
     }
 
     // --- 自律（時間起点と外部イベント） -------------------------------------
+    /**
+     * 引数なしなら一覧、あれば仕込む。
+     *
+     * **人間の側にも仕込む口を置く。** 外せるのに足せないのは不揃いで、
+     * 「クローンに頼めばよい」で済ませると人間の手が API を直に叩くしかなくなる。
+     */
     case '/schedule': {
+      if (rest.length >= 3) {
+        const [kind, ...tail] = rest;
+        const parsed = takeWhen(tail);
+        if (parsed === null || parsed.request.length === 0) {
+          stdout.write(
+            '周期は HH:MM（毎日その時刻）／30m・30（分ごと）／cron <5項目>（例: cron 0 10 * * 1）\n',
+          );
+          return 'ok';
+        }
+        const created = await client.schedule.$post({
+          json: { kind: kind ?? '', request: parsed.request, spec: parsed.spec },
+        });
+        stdout.write(
+          created.ok
+            ? `${kind ?? ''} を仕込みました（/schedule で確認できます）\n`
+            : `仕込めませんでした（名前は英小文字・数字・. _ -、既定の定期ジョブの名前は使えません。cron 式なら書式も確かめてください）\n`,
+        );
+        return 'ok';
+      }
+      if (rest.length > 0) {
+        stdout.write('使い方: /schedule <kind> <HH:MM|30m|cron 0 10 * * 1> <依頼の本文>\n');
+        return 'ok';
+      }
       const response = await client.schedule.$get();
       if (!response.ok) {
         stdout.write('定期ジョブを読めませんでした\n');
@@ -259,7 +290,26 @@ async function runSlashCommand(
       if (entries.length === 0) stdout.write('（定期ジョブは仕込まれていません）\n');
       for (const entry of entries) {
         stdout.write(`  ${entry.kind}  次: ${entry.nextAt}\n      ${entry.description}\n`);
+        // 継続中の依頼だけが持つもの。何を頼まれたままなのかが人間に見えること
+        if (entry.request !== undefined) {
+          stdout.write(`      前回: ${entry.lastRunAt ?? '（まだ一度も動いていません）'}\n`);
+        }
       }
+      return 'ok';
+    }
+
+    case '/unschedule': {
+      const kind = rest[0];
+      if (!kind) {
+        stdout.write('使い方: /unschedule <kind>（/schedule で一覧）\n');
+        return 'ok';
+      }
+      const response = await client.schedule[':kind'].$delete({ param: { kind } });
+      stdout.write(
+        response.ok
+          ? `${kind} を外しました\n`
+          : `${kind} という継続中の依頼はありません（既定の定期ジョブは外せません）\n`,
+      );
       return 'ok';
     }
 
@@ -447,6 +497,41 @@ async function runSlashCommand(
 
 function writeReport(report: { date: string; body: string }): void {
   stdout.write(`── ${report.date} の日報 ──\n${report.body}\n`);
+}
+
+type ScheduleSpecInput =
+  | { type: 'daily'; at: string }
+  | { type: 'every'; minutes: number }
+  | { type: 'cron'; expression: string };
+
+/**
+ * 人間が書く周期の言い方を、先頭から必要なぶんだけ読む。
+ *
+ * `09:00` なら毎日その時刻、`30m` / `30` なら分ごと、`cron` なら**続く5項目**が式。
+ * cron 式は空白を含むので、依頼の本文との境目を語数で決める（引用符を人間に
+ * 要求すると、シェルの引用と混ざって書けなくなる）。読めなければ null。
+ */
+function takeWhen(tokens: string[]): { spec: ScheduleSpecInput; request: string } | null {
+  const [head, ...tail] = tokens;
+  if (head === undefined) return null;
+
+  if (head === 'cron') {
+    // cron の標準は5項目（分・時・日・月・曜日）
+    if (tail.length < 6) return null;
+    return {
+      spec: { type: 'cron', expression: tail.slice(0, 5).join(' ') },
+      request: tail.slice(5).join(' '),
+    };
+  }
+
+  const request = tail.join(' ');
+  if (/^(?:[01]?\d|2[0-3]):[0-5]\d$/.test(head)) {
+    return { spec: { type: 'daily', at: head }, request };
+  }
+  const minutes = /^(\d+)m?$/.exec(head);
+  if (minutes === null) return null;
+  const parsed = Number(minutes[1]);
+  return parsed >= 1 ? { spec: { type: 'every', minutes: parsed }, request } : null;
 }
 
 /** 番号（`/approvals` の並び）でも id そのままでも答えられるようにする。 */

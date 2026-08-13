@@ -18,6 +18,9 @@ export default defineConfig({
       // apps/web は react-router の作法で `app/` に置く（`src/` ではない）。
       // 画面を描いて試すものだけ `.tsx`（各ファイルの先頭で jsdom を指定する）。
       'apps/*/app/**/*.test.{ts,tsx}',
+      // railway/ はパッケージではないが、置く変数の割り振り（役ごとにどの鍵が渡るか）は
+      // 静かにずれても動作が正常に見えるので、ここで固定する
+      'railway/**/*.test.ts',
     ],
   },
 });

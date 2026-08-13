@@ -1,3 +1,4 @@
+import { describeScheduleSpec } from './schedule.js';
 import type { JournalEntry } from './schema.js';
 import type { Stores } from './store.js';
 
@@ -36,6 +37,9 @@ export async function buildActivityDigest(stores: Stores, window: DigestWindow):
 
   const jobs = await stores.jobs.listJobs();
   const pending = await stores.jobs.listApprovals({ pendingOnly: true });
+  // 継続中の依頼は期間で切らない。「いま何を頼まれたままか」は常に材料である
+  // （これが無いと、発意 tick のたびに頼まれた仕事を思い出せるかの賭けになる）。
+  const standing = await stores.schedules.list();
 
   const of = <T extends JournalEntry['type']>(type: T) =>
     entries.filter((entry): entry is Extract<JournalEntry, { type: T }> => entry.type === type);
@@ -69,7 +73,23 @@ export async function buildActivityDigest(stores: Stores, window: DigestWindow):
     `- 外部イベント: ${externals.length} 件`,
     `- マネージャー・作業者のツール実行: ${toolUses.length} 件`,
     `- いま人間の回答を待っているもの: ${pending.length} 件`,
+    `- 継続中の依頼（定期の仕込み）: ${standing.length} 件`,
   ];
+
+  if (standing.length > 0) {
+    sections.push('', '## 継続中の依頼（時刻が来れば届く。前回からの続きがあるか見ること）');
+    for (const plan of standing.slice(0, MAX_ITEMS)) {
+      sections.push(
+        `- ${plan.kind}（${describeScheduleSpec(plan.spec)}）${brief(plan.request)}` +
+          `\n  前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}`,
+      );
+    }
+    // 黙って切らない。他の節は期間で切った一部だが、ここは「常に材料である」ことが
+    // 趣旨なので、切ったことを見せないと「あるのに見えない」になる。
+    if (standing.length > MAX_ITEMS) {
+      sections.push(`- …ほか ${standing.length - MAX_ITEMS} 件（\`schedule_list\` で全部見える）`);
+    }
+  }
 
   if (managers.length > 0) {
     sections.push('', '## マネージャー');
