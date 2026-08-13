@@ -4,7 +4,12 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { createProfileApplier, createProfileVessel, fingerprintOf } from './profile.js';
+import {
+  createProfileApplier,
+  createProfileVessel,
+  fingerprintOf,
+  type ProfileApplier,
+} from './profile.js';
 import { createProfileService } from './profile-service.js';
 import type { RunnerClient, RunnerProfileFingerprint } from './runner-protocol.js';
 import type { Stores } from './store.js';
@@ -99,6 +104,33 @@ function tripwire(stores: Stores, runner: RunnerClient & { received: string[] })
     enter() {
       if (busy) violations.push('前の更新が終わる前に次の更新が始まった');
       busy = true;
+    },
+  };
+}
+
+/**
+ * 器のふりをする applier。**評価の成否だけを差し替える。**
+ *
+ * `prepare` を本体にしてあるのは、本物がそうだからである（評価と反映を分けないと、
+ * 正本へ書けなかった更新がクローンにだけ残る）。
+ */
+function fakeApplier(check: (script: string) => void = () => undefined): ProfileApplier {
+  return {
+    vessel: {} as never,
+    fingerprint: () => undefined,
+    env: () => ({}),
+    async apply(script: string) {
+      const prepared = await this.prepare(script);
+      if (prepared.ok) await prepared.commit();
+      return prepared;
+    },
+    async prepare(script: string) {
+      check(script);
+      return {
+        ok: true,
+        commit: async () => undefined,
+        discard: async () => undefined,
+      };
     },
   };
 }
@@ -217,19 +249,47 @@ describe('同時に更新されたとき', () => {
     expect(runner.received.at(-1)).toBe('export WHICH=NEW\n');
   });
 
+  it('正本へ書けなかったら、クローンにも効かせない（旧版で揃ったまま）', async () => {
+    // **一番たちの悪い分裂である。** 保存できていない ＝ 誰も成功と言っていない
+    // 更新を、これから起こすクローンの子だけが使う。しかも再起動するとストアの
+    // 古い値へ戻るので、後から見ても理由が分からない。
+    const stores = createMemoryStores();
+    const runner = fakeRunner();
+    const path = join(dir, 'profile.sh');
+    const vessel = createProfileVessel({ path });
+    const applier = createProfileApplier({ vessel, baseEnv: () => ({}) });
+    const service = createProfileService({ stores, applier, runners: registryOf([runner]) });
+
+    await service.apply('export WHICH=OLD');
+    const before = await stores.profile.read();
+
+    // 正本（記憶ストア）だけが落ちる。評価は通る本文である。
+    const write = stores.profile.write.bind(stores.profile);
+    stores.profile.write = async () => {
+      throw new Error('記憶ストアが一時的に落ちた');
+    };
+
+    await expect(service.apply('export WHICH=NEW')).rejects.toThrow('記憶ストア');
+
+    stores.profile.write = write;
+
+    // ① 正本は旧版のまま（更新日時ごと動いていない）
+    expect(await stores.profile.read()).toEqual(before);
+    // ② クローンの器も旧版のまま（本文・env・指紋の3つとも）
+    expect(readFileSync(path, 'utf8')).toContain('export WHICH=OLD');
+    expect(applier.env().WHICH).toBe('OLD');
+    expect(vessel.fingerprint()?.sha256).toBe(fingerprintOf('export WHICH=OLD\n'));
+    // ③ runner にも新版を配っていない
+    expect(runner.received).toEqual(['export WHICH=OLD\n']);
+  });
+
   it('読めない本文で列が止まらない（次の更新は通る）', async () => {
     const stores = createMemoryStores();
     const service = createProfileService({
       stores,
-      applier: {
-        vessel: {} as never,
-        fingerprint: () => undefined,
-        env: () => ({}),
-        async apply(script: string) {
-          if (script.includes('broken')) throw new Error('評価が落ちた');
-          return { ok: true };
-        },
-      },
+      applier: fakeApplier((script) => {
+        if (script.includes('broken')) throw new Error('評価が落ちた');
+      }),
     });
 
     const bad = await service.apply('broken');
@@ -238,6 +298,47 @@ describe('同時に更新されたとき', () => {
     const good = await service.apply('export OK=1');
     expect(good.stored).toBe(true);
     expect((await stores.profile.read())?.script).toBe('export OK=1\n');
+  });
+});
+
+describe('デーモンの起動時', () => {
+  it('効かせ直すだけで、保存し直さない（更新日時が動かない）', async () => {
+    // ここが動くと、`profile status` / `GET /profile` の「更新」が
+    // 「最後にデーモンを起こした時刻」になる。本文を一度も変えていないのに
+    // 監査情報が消えるので、後から「いつ誰が変えたのか」を追えなくなる。
+    const stores = createMemoryStores();
+    const path = join(dir, 'profile.sh');
+    const applier = createProfileApplier({
+      vessel: createProfileVessel({ path }),
+      baseEnv: () => ({}),
+    });
+    const service = createProfileService({ stores, applier });
+
+    await service.apply('export WHICH=KEEP');
+    const saved = await stores.profile.read();
+
+    // 器を作り直した想定で、同じ本文を効かせ直す。
+    const restored = createProfileApplier({
+      vessel: createProfileVessel({ path: join(dir, 'restored.sh') }),
+      baseEnv: () => ({}),
+    });
+    const next = createProfileService({ stores, applier: restored });
+    const result = await next.restore();
+
+    expect(result?.ok).toBe(true);
+    // クローンには効いている
+    expect(restored.env().WHICH).toBe('KEEP');
+    // **正本は1文字も動いていない**
+    expect(await stores.profile.read()).toEqual(saved);
+  });
+
+  it('置かれていなければ何もしない', async () => {
+    const stores = createMemoryStores();
+    const service = createProfileService({
+      stores,
+      applier: fakeApplier(),
+    });
+    expect(await service.restore()).toBeNull();
   });
 });
 

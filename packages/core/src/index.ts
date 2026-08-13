@@ -162,6 +162,7 @@ export {
   type ProfileApplierOptions,
   type ProfileApplyResult,
   type ProfileEvaluation,
+  type PreparedProfile,
   type ProfileFingerprint,
   type ProfileSpawn,
   type ProfileVessel,

@@ -252,13 +252,14 @@ export async function main(): Promise<void> {
 
   // 置いてあるものを起動時に1度効かせる。**器を作り直しても環境が痩せない**
   // ことが、この仕組みを環境変数と別に持つ理由そのものである。
-  const storedProfile = await profileService.read().catch(() => null);
-  if (storedProfile !== null) {
+  {
+    // **効かせ直すだけで、保存はし直さない。** ここで書くと、デーモンを起こした
+    // だけで `updatedAt` が動き、「人間かクローンが最後に本文を変えた時刻」という
+    // 意味が消える（本文を一度も変えていなくても監査情報が失われる）。
     const applied = await profileService
-      .apply(storedProfile.script)
-      .then((result) => result.clone)
+      .restore()
       .catch((error: unknown) => ({ ok: false, error: String(error), output: undefined }));
-    if (!applied.ok) {
+    if (applied !== null && !applied.ok) {
       // **黙って古い環境で走らせない。** 何が効いていないかが見えないと、
       // 「鍵が届いていない」のか「鍵の権限が足りない」のかを誰も切り分けられない。
       process.stderr.write(

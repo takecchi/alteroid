@@ -180,6 +180,14 @@ describe('クローンの道具', () => {
           async apply() {
             return { ok: false, error: '構文が壊れている' };
           },
+          async prepare() {
+            return {
+              ok: false,
+              error: '構文が壊れている',
+              commit: async () => undefined,
+              discard: async () => undefined,
+            };
+          },
         },
       }),
     });

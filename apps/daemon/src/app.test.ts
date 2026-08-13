@@ -1078,10 +1078,18 @@ function profileService(
       fingerprint: () => undefined,
       env: () => ({}),
       async apply(script: string) {
-        if (options.rejects !== undefined) {
-          return { ok: false, error: options.rejects, output: script };
-        }
-        return { ok: true, names: [] };
+        const prepared = await this.prepare(script);
+        if (prepared.ok) await prepared.commit();
+        return prepared;
+      },
+      // **`prepare` が本体である。** 本物も評価と反映を分けている（正本へ書けなかった
+      // 更新がクローンにだけ残らないようにするため）。
+      async prepare(script: string) {
+        const base =
+          options.rejects === undefined
+            ? { ok: true, names: [] }
+            : { ok: false, error: options.rejects, output: script };
+        return { ...base, commit: async () => undefined, discard: async () => undefined };
       },
     },
     ...(options.runners === undefined ? {} : { runners: registryOf(options.runners) }),

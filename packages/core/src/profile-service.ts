@@ -1,6 +1,7 @@
 import {
   fingerprintOf,
   normalizeProfileScript,
+  type PreparedProfile,
   type ProfileApplier,
   type ProfileApplyResult,
 } from './profile.js';
@@ -45,6 +46,17 @@ export interface ProfileService {
    * 空文字は「プロファイルを外す」。
    */
   apply(script: string): Promise<ApplyProfileResult>;
+  /**
+   * 保存済みの本文を、クローンの器へ**効かせ直す**（デーモンの起動時）。
+   *
+   * **記憶ストアへは書かない。** 起動しただけで `updatedAt` が動くと、`profile
+   * status` や `GET /profile` が見せる「更新」が「最後にデーモンを起こした時刻」に
+   * なり、人間かクローンが最後に本文を変えた時刻という意味が失われる（本文を一度も
+   * 変えていなくても監査情報が消える）。
+   *
+   * 置かれていなければ null。
+   */
+  restore(): Promise<ProfileApplyResult | null>;
   /**
    * 1台の runner へ、いま保存されている本文を降ろし直す。
    *
@@ -103,18 +115,58 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
         // 指紋と読んだ指紋が食い違い、届いているかを見る道具が嘘をつく。
         const normalized = normalizeProfileScript(script);
 
-        const clone: ProfileApplyResult =
+        /**
+         * **評価 → 正本へ保存 → 反映、の順に分ける。**
+         *
+         * 評価と反映を1つにしていた頃は、記憶ストアへの保存が落ちると
+         * 「クローンだけが新しい本文を持つ」状態が残った。保存できていない ＝
+         * 誰も成功と言っていない更新を、これから起こすクローンの子だけが使う、
+         * という一番たちの悪い分裂である（しかも再起動するとストアの古い値へ戻る）。
+         *
+         * 正本は記憶ストアで、クローンの器はそこから導かれるもの、という向きに
+         * 揃えておけば、途中で落ちても**古い版で揃っている**か、**次の起動で
+         * 追いつく**かのどちらかになる。分裂したまま残らない。
+         */
+        const prepared: PreparedProfile | null =
           applier === undefined
-            ? { ok: true }
-            : await applier.apply(normalized).catch((error: unknown) => ({
+            ? null
+            : await applier.prepare(normalized).catch((error: unknown): PreparedProfile => ({
                 ok: false,
                 error: String(error),
+                commit: async () => undefined,
+                discard: async () => undefined,
               }));
 
-        // 読めないものは保存も配布もしない（前のものが残る）。
-        if (!clone.ok) return { stored: false, clone, runners: [] };
+        // 呼び出し側へ返すのは「結果」だけ（`commit` / `discard` は器の都合）。
+        const clone: ProfileApplyResult =
+          prepared === null
+            ? { ok: true }
+            : {
+                ok: prepared.ok,
+                ...(prepared.profile === undefined ? {} : { profile: prepared.profile }),
+                ...(prepared.error === undefined ? {} : { error: prepared.error }),
+                ...(prepared.output === undefined ? {} : { output: prepared.output }),
+                ...(prepared.names === undefined ? {} : { names: prepared.names }),
+              };
 
-        const stored = await stores.profile.write(normalized);
+        // 読めないものは保存も配布もしない（前のものが残る）。
+        if (prepared !== null && !prepared.ok) {
+          await prepared.discard();
+          return { stored: false, clone, runners: [] };
+        }
+
+        let stored;
+        try {
+          stored = await stores.profile.write(normalized);
+        } catch (error) {
+          // **正本へ書けなかったものは、クローンにも効かせない。** ここで捨てないと、
+          // 呼び出し側が失敗を受け取ったのにクローンだけが新しい本文で走る。
+          await prepared?.discard();
+          throw error;
+        }
+
+        // ここから先は「保存できた」が確定している。器へ移す。
+        await prepared?.commit();
         const results = await pushAll(normalized);
 
         return {
@@ -128,6 +180,14 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
           clone,
           runners: results,
         };
+      }),
+
+    restore: () =>
+      serial(async () => {
+        const stored = await stores.profile.read();
+        if (stored === null || applier === undefined) return null;
+        // 記憶ストアには書かない（`updatedAt` は本文を変えた人のものである）。
+        return applier.apply(normalizeProfileScript(stored.script));
       }),
 
     syncRunner: (runner: RunnerClient) =>

@@ -574,6 +574,25 @@ export interface ProfileApplier {
   env(): Record<string, string>;
   /** 置く前に評価し、壊れていれば置かない（前のものが残る）。 */
   apply(script: string): Promise<ProfileApplyResult>;
+  /**
+   * **評価だけ済ませて、置くのは待つ。**
+   *
+   * 評価と反映を1つにしていると、記憶ストアへの保存が落ちたときに「クローンだけが
+   * 新しい本文を持っている」状態が残る（保存できていない ＝ 誰も成功と言っていない
+   * 更新を、これから起こすクローンの子だけが使う）。だから正本（記憶ストア）へ
+   * 書けたことを確かめてから `commit` する。
+   *
+   * 評価に落ちたものは `ok: false` で返り、`commit` しても何も起きない。
+   */
+  prepare(script: string): Promise<PreparedProfile>;
+}
+
+/** 評価まで済んで、まだ置かれていないプロファイル。 */
+export interface PreparedProfile extends ProfileApplyResult {
+  /** 器へ移して、子へ配る env を差し替える。 */
+  commit(): Promise<ProfileFingerprint | undefined>;
+  /** 捨てる。**いま効いているものは何も変わらない。** */
+  discard(): Promise<void>;
 }
 
 export interface ProfileApplierOptions {
@@ -596,17 +615,41 @@ export function createProfileApplier(options: ProfileApplierOptions): ProfileApp
   const { vessel, baseEnv, withheldEnvKeys = vessel.withheldEnvKeys, spawnFn } = options;
   let applied: Record<string, string> = {};
 
+  /** 置かずに終わるときの形。`commit` しても何も起きない。 */
+  function rejected(result: ProfileApplyResult, discard: () => Promise<void>): PreparedProfile {
+    return {
+      ...result,
+      commit: async () => vessel.fingerprint(),
+      discard,
+    };
+  }
+
   return {
     vessel,
     fingerprint: () => vessel.fingerprint(),
     env: () => ({ ...applied, ...vessel.env() }),
     async apply(script: string): Promise<ProfileApplyResult> {
+      const prepared = await this.prepare(script);
+      if (!prepared.ok) {
+        await prepared.discard();
+        return prepared;
+      }
+      await prepared.commit();
+      return prepared;
+    },
+    async prepare(script: string): Promise<PreparedProfile> {
       const staged = await vessel.stage(script);
 
       if (script.trim().length === 0) {
-        await staged.commit();
-        applied = {};
-        return { ok: true };
+        return {
+          ok: true,
+          commit: async () => {
+            const fingerprint = await staged.commit();
+            applied = {};
+            return fingerprint;
+          },
+          discard: () => staged.discard(),
+        };
       }
 
       const evaluation = await evaluateProfile({
@@ -619,8 +662,9 @@ export function createProfileApplier(options: ProfileApplierOptions): ProfileApp
       if (evaluation.error !== undefined) {
         // **壊れているものは置かない。** `BASH_ENV` に載せてしまうと、以後
         // すべてのコマンドが毎回エラーを吐く環境で走り、原因はどこにも出ない。
-        await staged.discard();
-        return { ok: false, error: evaluation.error, output: evaluation.output };
+        return rejected({ ok: false, error: evaluation.error, output: evaluation.output }, () =>
+          staged.discard(),
+        );
       }
 
       if (evaluation.leaked.length > 0) {
@@ -629,27 +673,39 @@ export function createProfileApplier(options: ProfileApplierOptions): ProfileApp
         // 落として配るだけでは足りない。ここで配る env から消しても、実際に効くのは
         // `BASH_ENV` 経由の読み込みで、そちらに Node のフィルタは無い。置いた時点で
         // 境界が消えるので、置かずに理由を返す（前のものが残る）。
-        await staged.discard();
-        return {
-          ok: false,
-          error:
-            `プロファイルが ${evaluation.leaked.join(' ')} を残している` +
-            '（上＝記憶へ到達する鍵は、プロファイルからは置けない）。' +
-            '本文の early return やシェル組み込みの再定義で、器が最後に置いている ' +
-            'unset が飛ばされていないか確かめること',
-          output: evaluation.output,
-        };
+        return rejected(
+          {
+            ok: false,
+            error:
+              `プロファイルが ${evaluation.leaked.join(' ')} を残している` +
+              '（上＝記憶へ到達する鍵は、プロファイルからは置けない）。' +
+              '本文の early return やシェル組み込みの再定義で、器が最後に置いている ' +
+              'unset が飛ばされていないか確かめること',
+            output: evaluation.output,
+          },
+          () => staged.discard(),
+        );
       }
 
-      const fingerprint = await staged.commit();
-      applied = evaluation.env;
       return {
-        ...(fingerprint === undefined ? {} : { profile: fingerprint }),
+        // **指紋は本文から先に決まる。** 置く前に呼び出し側へ返せないと、
+        // 保存の順序を組み替えられない。
+        profile: {
+          sha256: fingerprintOf(script),
+          bytes: Buffer.byteLength(script),
+          updatedAt: new Date().toISOString(),
+        },
         ok: true,
         output: evaluation.output,
         // **値は返さない。** 何が増えたかは人間の確認に要るが、値は指紋と同じで
         // ここに晒すものではない。
         names: Object.keys(evaluation.env).sort(),
+        commit: async () => {
+          const fingerprint = await staged.commit();
+          applied = evaluation.env;
+          return fingerprint;
+        },
+        discard: () => staged.discard(),
       };
     },
   };
