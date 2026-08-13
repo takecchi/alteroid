@@ -197,16 +197,24 @@ describe('スケジューラ', () => {
 });
 
 describe('継続中の依頼（時間起点の仕込み）', () => {
+  /**
+   * 各テストの「いま」。`at()` はローカル時刻を作るので、**仕込んだ時刻もここから
+   * 作る**こと。ISO の文字列を直に書くと、実行環境の時差ぶんだけ「過去に仕込まれた
+   * 依頼」になり（＝取りこぼしの拾い直しが働き）、CI と手元で結果が変わる。
+   */
+  const BASE = at(2026, 8, 12, 8, 0);
+
   const plan = (
     kind: string,
     spec: ScheduledRequest['spec'],
     request = 'GitHub の issue を見て実装を進める',
+    createdAt: Date = BASE,
   ): ScheduledRequest => ({
     kind,
     spec,
     request,
-    createdAt: '2026-08-12T00:00:00.000Z',
-    updatedAt: '2026-08-12T00:00:00.000Z',
+    createdAt: createdAt.toISOString(),
+    updatedAt: createdAt.toISOString(),
   });
 
   function setup(now: Date) {
@@ -337,6 +345,20 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     expect(s.scheduler.tick(at(2026, 8, 13, 10, 0))).toEqual(['watch']);
     // 拾うのは1回だけ。溜まった回数ぶん撃たない
     expect(s.scheduler.tick(at(2026, 8, 13, 10, 1))).toEqual([]);
+
+    s.scheduler.stop();
+  });
+
+  it('仕込んだ直後の依頼はいきなり起きない（拾い直しは取りこぼしのためだけ）', async () => {
+    const s = setup(BASE);
+    await s.stores.schedules.put(plan('watch', { type: 'every', minutes: 60 }));
+    await s.scheduler.refresh();
+    s.scheduler.start();
+
+    expect(s.scheduler.tick(BASE)).toEqual([]);
+    expect(s.scheduler.list().find((item) => item.kind === 'watch')?.nextAt).toBe(
+      at(2026, 8, 12, 9, 0).toISOString(),
+    );
 
     s.scheduler.stop();
   });
