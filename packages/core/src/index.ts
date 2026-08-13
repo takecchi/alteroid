@@ -72,25 +72,46 @@ export { measureCapacity, type CapacityIo } from './capacity.js';
  * 期限付きで待つ（M5）。応答しない1台に、生存判定と配置を止めさせないための線。
  */
 export { DeadlineError, isDeadlineError, withDeadline } from './deadline.js';
+/**
+ * マネージャーの道具の鍵。**器を作り直さずに回せる形**で持つ（`credentials.ts`）。
+ * 伏せるのは上（記憶）へ到達する鍵だけで、下（外の世界）へ手を伸ばす鍵は配る。
+ */
+export {
+  CREDENTIAL_NAME,
+  DEFAULT_CREDENTIAL_DIR,
+  ROTATABLE_CREDENTIAL_KEYS,
+  isWithheldCredentialName,
+  createCredentialStore,
+  fingerprintOf,
+  type CredentialEntry,
+  type CredentialFingerprint,
+  type CredentialStore,
+  type CredentialStoreOptions,
+} from './credentials.js';
 export {
   runnerAnswerCommandSchema,
   runnerCapacitySchema,
+  runnerCredentialFingerprintSchema,
+  runnerCredentialSchema,
   runnerEventSchema,
   runnerHealthSchema,
   runnerLeaseSchema,
   runnerManagerStateSchema,
   runnerMessageCommandSchema,
   runnerResumeCommandSchema,
+  runnerSetCredentialsCommandSchema,
   runnerStartCommandSchema,
   runnerWaitingSchema,
   type RunnerAnswerCommand,
   type RunnerCapacity,
   type RunnerClient,
+  type RunnerCredentialFingerprint,
   type RunnerEvent,
   type RunnerHealth,
   type RunnerLease,
   type RunnerManagerState,
   type RunnerResumeCommand,
+  type RunnerSetCredentialsCommand,
   type RunnerStartCommand,
   type RunnerWaiting,
 } from './runner-protocol.js';
@@ -127,7 +148,13 @@ export {
   qualifiedToolName,
   type ToolContext,
 } from './tools.js';
-export { CLONE_MODEL, createClone, type CloneOptions } from './clone.js';
+export {
+  CLONE_MODEL,
+  CLONE_MODEL_ENV_KEY,
+  createClone,
+  resolveCloneModel,
+  type CloneOptions,
+} from './clone.js';
 
 /** テスト用ユーティリティ（本番の配線には出てこない）。 */
 export { createMemoryStores, humanMessage } from './testing.js';

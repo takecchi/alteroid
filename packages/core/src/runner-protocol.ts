@@ -175,6 +175,49 @@ export type RunnerResumeCommand = z.infer<typeof runnerResumeCommandSchema>;
 
 export const runnerMessageCommandSchema = z.object({ text: z.string().min(1) });
 
+/**
+ * マネージャーの道具の鍵の差し替え（roadmap M4 の穴埋め）。
+ *
+ * **なぜ命令として降ろすのか。** 鍵を runner の環境変数で配ると、値は runner の
+ * プロセスが起動した瞬間に凍る。人間が鍵を直しても、器を作り直すまで届かない —
+ * つまり「鍵を直す」と「走行中の仕事を失う」が同じ操作になる。ここを通せば、
+ * 器はそのままで鍵だけが回る。
+ *
+ * これは判断ではなく事実の伝達である（何を許すかの表ではない）。
+ */
+export const runnerCredentialSchema = z.object({
+  /**
+   * 環境変数の名前そのもの。**自由な文字列にしない。**
+   *
+   * ここを緩くしていたせいで `../../../etc/cron.d/x` のような名前がそのまま
+   * ファイル名になり、root で器の外へ書けた。名前は器の中のファイル名になるので、
+   * パスとして解釈されうる形を最初から名前として認めない。
+   */
+  name: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(/^[A-Z][A-Z0-9_]*$/, '鍵の名前は英大文字・数字・_ のみ'),
+  /** 空文字は「鍵を外す」。未設定へ戻す意思を表せるようにしてある。 */
+  value: z.string(),
+});
+
+export const runnerSetCredentialsCommandSchema = z.object({
+  credentials: z.array(runnerCredentialSchema).min(1),
+});
+
+export type RunnerSetCredentialsCommand = z.infer<typeof runnerSetCredentialsCommandSchema>;
+
+/** 鍵が合っているかを**値を出さずに**照合するための指紋。 */
+export const runnerCredentialFingerprintSchema = z.object({
+  name: z.string(),
+  /** sha256（16進）の先頭12桁。 */
+  sha256: z.string(),
+  updatedAt: z.string(),
+});
+
+export type RunnerCredentialFingerprint = z.infer<typeof runnerCredentialFingerprintSchema>;
+
 export const runnerAnswerCommandSchema = z.object({
   requestId: z.string().min(1),
   message: z.string(),
@@ -296,6 +339,18 @@ export interface RunnerClient {
   list(): Promise<RunnerManagerState[]>;
   /** runner のローカルにある生ログ。無ければ null。 */
   transcript(managerId: string): Promise<string | null>;
+  /**
+   * いま runner が配っている鍵の指紋。**値は返らない。**
+   *
+   * 人間が置いた鍵とマネージャーが握っている鍵が同じかどうかは、これが無いと
+   * 誰にも見えない。見えないと「付けた」「付いてない」のすれ違いが起きて、
+   * 原因が鍵の権限にあるのか経路にあるのかを誰も切り分けられなくなる。
+   */
+  credentials(): Promise<RunnerCredentialFingerprint[]>;
+  /** 鍵を差し替える。器を作り直さずに鍵を回すための口。 */
+  setCredentials(
+    credentials: RunnerSetCredentialsCommand['credentials'],
+  ): Promise<RunnerCredentialFingerprint[]>;
   /**
    * 口を閉じる。
    *

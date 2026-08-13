@@ -9,12 +9,49 @@ import type {
   Scheduler,
   Stores,
 } from '@alteroid/core';
-import { localDayRange, memorySlugSchema } from '@alteroid/core';
-import { zValidator } from '@hono/zod-validator';
+import {
+  chatStreamEventSchema,
+  journalEntrySchema,
+  localDayRange,
+  memorySlugSchema,
+  runnerSetCredentialsCommandSchema,
+} from '@alteroid/core';
+
+import type { JournalBus } from './journal-bus.js';
+import { Scalar } from '@scalar/hono-api-reference';
 import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { streamSSE } from 'hono/streaming';
+import { describeRoute, openAPIRouteHandler, resolver, validator } from 'hono-openapi';
 import { z } from 'zod';
+
+import {
+  approvalsAnswerResponseSchema,
+  approvalsResponseSchema,
+  archiveListResponseSchema,
+  badRequestResponseSchema,
+  conversationDetailResponseSchema,
+  conversationsResponseSchema,
+  errorResponseSchema,
+  eventAcceptedResponseSchema,
+  healthResponseSchema,
+  journalListResponseSchema,
+  managerActionResponseSchema,
+  managerDetailResponseSchema,
+  managerMoveResponseSchema,
+  managersListResponseSchema,
+  memoryDeleteResponseSchema,
+  memoryListResponseSchema,
+  memoryReadResponseSchema,
+  okResponseSchema,
+  openApiDocumentation,
+  openApiExcludePaths,
+  reportsResponseSchema,
+  runnersCredentialsResponseSchema,
+  runnersListResponseSchema,
+  scheduleListResponseSchema,
+  validationErrorResponseSchema,
+} from './openapi.js';
 
 /**
  * HTTP API（hono）。CLI も外部アプリもここを叩く。
@@ -30,6 +67,12 @@ import { z } from 'zod';
  * 限らないための口であり、開いている先は 127.0.0.1 だけである。外から叩かせるなら、
  * 手前に境界（リバースプロキシ・トンネル・認証）を置くのが正しい — 能力側で
  * 絞るのではなく実行環境の境界で守る（north_star 禁止2）。
+ *
+ * **仕様は `GET /openapi.json`（OpenAPI 3.1）で外から読める。** 人間向けの画面は
+ * `GET /docs`（Scalar）。経路の入出力は zod スキーマ（`hono-openapi` の
+ * `describeRoute` / `validator`）から機械生成する — 手書きの spec を別に持つと、
+ * 経路を直したのに spec だけ古いままという事故が起きる（Issue #20 の設計上の注意）。
+ * 応答スキーマは `./openapi.ts` にまとめてある（ここに全部書くと配線が読めなくなる）。
  */
 export interface AppDeps {
   clone: CloneHost;
@@ -50,12 +93,24 @@ export interface AppDeps {
   storage?: string;
   /**
    * runner の名簿（M5）。何台居て、どれが生きていて、どれだけ余裕があるかを
-   * 人間が見るための口である。
+   * 人間が見るための口である（`GET /runners`）。
    *
-   * **制御面の鍵や URL は返さない。** ここは観測の口であって、runner へ手を
-   * 伸ばすための口ではない。
+   * **マネージャーの道具の鍵を、器を作り直さずに回すための口**もここから生える
+   * （`POST /runners/credentials`）。デーモンが鍵を保管するのではない。降ろす
+   * だけである — 保管すると、記憶の器に GitHub の書き込み権が並ぶ
+   * （railway/README.md「daemon 側には置かない」）。
+   *
+   * **制御面の鍵や URL は返さない。** ここは観測と受け渡しの口であって、runner へ
+   * 手を伸ばすための口ではない（鍵は指紋だけを出す）。
    */
   runners?: RunnerRegistry;
+  /**
+   * 日誌の追記を購読する口（`GET /journal/stream`）。
+   *
+   * 無ければその経路だけが 503 を返す。**能力を落とすのではなく、配線されて
+   * いないことを黙って隠さない**ため（テストの HTTP 層検証では省略できる）。
+   */
+  journalEvents?: Pick<JournalBus, 'subscribe'>;
 }
 
 const chatBody = z.object({
@@ -93,6 +148,43 @@ const journalQuery = z.object({
   type: z.string().optional(),
 });
 const approvalsQuery = z.object({ pending: z.enum(['true', 'false']).default('true') });
+/**
+ * 会話は日誌から組み立てる。`scan` はどこまで遡るかで、`limit` は返す本数。
+ * **黙って打ち切らない** — 応答に `scanned` を返して、遡り切れていないことが
+ * 呼ぶ側に見えるようにしてある。
+ */
+const conversationsQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(20),
+  scan: z.coerce.number().int().min(1).max(10000).default(2000),
+});
+const conversationQuery = z.object({
+  scan: z.coerce.number().int().min(1).max(10000).default(2000),
+});
+const journalStreamQuery = z.object({
+  /** カンマ区切りの種別。指定しなければ全部流れる。 */
+  type: z.string().optional(),
+});
+const managerMessageBody = z.object({
+  text: z.string().min(1),
+  /** 許可確認への回答なら付ける。複数を待っているときは省略できない。 */
+  requestId: z.string().min(1).optional(),
+  decision: z.enum(['allow', 'deny']).optional(),
+});
+const abortBody = z.object({ reason: z.string().min(1).optional() });
+
+interface Conversation {
+  conversationId: string;
+  startedAt: string;
+  updatedAt: string;
+  messages: number;
+  preview: string;
+}
+
+/** 一覧に出す短い抜粋。全文は `GET /conversations/:id` にある。 */
+function preview(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length <= 80 ? flat : `${flat.slice(0, 80)}…`;
+}
 
 /**
  * 本文検査を持たない POST の門番。
@@ -106,7 +198,7 @@ const approvalsQuery = z.object({ pending: z.enum(['true', 'false']).default('tr
  * このデーモンでは preflight が通らない。**ツールや能力を削るのではなく、
  * 実行環境の境界で塞ぐ**（north_star 禁止2）。
  *
- * `zValidator('json', ...)` を持つ経路は hono が同じ検査をするので、こちらは要らない。
+ * `validator('json', ...)` を持つ経路は hono が同じ検査をするので、こちらは要らない。
  * **本文検査の無い POST を足すときは、必ずこれを付けること。**
  */
 const deliberateClient = createMiddleware(async (c, next) => {
@@ -134,216 +226,782 @@ function isDailyReport(entry: JournalEntry): entry is DailyReport {
   return entry.type === 'daily_report';
 }
 
+/**
+ * 本文検査が無い POST（`deliberateClient` のみ）に共通の 415 応答。
+ *
+ * **関数にしてあるのは意図的。** `app.ts` と `openapi.ts` は互いを import する
+ * （app.ts は応答スキーマを、openapi.ts は spec 生成のため `createApp` を読む）。
+ * モジュールの初期化順によっては、片方のトップレベルで即座に評価する定数が
+ * まだ空の相手の export を読んでしまう。`describeRoute(...)` は
+ * `createApp` の呼び出し時（＝両モジュールの初期化が終わった後）まで実行を
+ * 遅らせるので、ここも定数ではなく関数にして遅延させる。
+ */
+function noBodyPostResponses() {
+  return {
+    415: {
+      description:
+        'content-type が application/json ではない（ブラウザの単純リクエスト対策 — ' +
+        '状態を変える POST は必ずここを通す）。',
+      content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+    },
+  } as const;
+}
+
 export function createApp(deps: AppDeps) {
   const { clone, stores } = deps;
 
   const app = new Hono()
-    .get('/health', (c) =>
-      c.json({ ok: true, pid: process.pid, token: deps.token, storage: deps.storage ?? '' }),
+    .get(
+      '/health',
+      describeRoute({
+        tags: ['system'],
+        summary: '死活監視と本人確認',
+        description:
+          'デーモンが応答しているかと、その pid・本人確認トークン・記憶の置き場を返す。' +
+          'CLI は pid ではなくこのトークンで「自分が起こしたデーモンか」を確かめる。',
+        responses: {
+          200: {
+            description: '応答している。',
+            content: { 'application/json': { schema: resolver(healthResponseSchema) } },
+          },
+        },
+      }),
+      (c) => c.json({ ok: true, pid: process.pid, token: deps.token, storage: deps.storage ?? '' }),
     )
 
     // --- chat（SSE） -------------------------------------------------------
-    .post('/chat', zValidator('json', chatBody), async (c) => {
-      const { text, conversationId: given } = c.req.valid('json');
-      const conversationId = given ?? randomUUID();
+    .post(
+      '/chat',
+      describeRoute({
+        tags: ['chat'],
+        summary: 'クローンと話す（SSE）',
+        description:
+          '人間の発言をクローンの受信箱へ積み、クローンの応答を SSE で流す。' +
+          '**SSE。** `event:` にイベント名（`open` / `text` / `thinking` / `tool` / ' +
+          '`ask_human` / `done` / `error`）、`data:` に対応する JSON が入る。`data:` の ' +
+          '形は下記スキーマ（`open` は `{conversationId}` のみで別枠、他は ' +
+          '`chatStreamEventSchema` の各枝）。人間が chat を閉じてもクローンのターンは' +
+          '走り続ける（人間の不在で止まるのは承認待ちの仕事だけ）。',
+        responses: {
+          200: {
+            description: 'SSE ストリーム。',
+            content: {
+              'text/event-stream': { schema: resolver(chatStreamEventSchema) },
+            },
+          },
+          400: {
+            description: '`text` が空、または本文が JSON として不正。',
+            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+          },
+        },
+      }),
+      validator('json', chatBody),
+      async (c) => {
+        const { text, conversationId: given } = c.req.valid('json');
+        const conversationId = given ?? randomUUID();
 
-      return streamSSE(c, async (stream) => {
-        const queue: ChatStreamEvent[] = [];
-        let wake: (() => void) | null = null;
-        let finished = false;
+        return streamSSE(c, async (stream) => {
+          const queue: ChatStreamEvent[] = [];
+          let wake: (() => void) | null = null;
+          let finished = false;
 
-        const unsubscribe = clone.subscribe(conversationId, (event) => {
-          queue.push(event);
-          if (event.type === 'done' || event.type === 'error') finished = true;
-          wake?.();
-        });
+          const unsubscribe = clone.subscribe(conversationId, (event) => {
+            queue.push(event);
+            if (event.type === 'done' || event.type === 'error') finished = true;
+            wake?.();
+          });
 
-        // 人間が chat を閉じても、クローンのターンは走り続ける（人間の不在で
-        // 止まるのは承認待ちの仕事だけ）。ここで手放すのは購読だけである。
-        stream.onAbort(() => {
-          finished = true;
-          wake?.();
-        });
+          // 人間が chat を閉じても、クローンのターンは走り続ける（人間の不在で
+          // 止まるのは承認待ちの仕事だけ）。ここで手放すのは購読だけである。
+          stream.onAbort(() => {
+            finished = true;
+            wake?.();
+          });
 
-        await stream.writeSSE({ event: 'open', data: JSON.stringify({ conversationId }) });
+          await stream.writeSSE({ event: 'open', data: JSON.stringify({ conversationId }) });
 
-        clone.post({
-          type: 'human_message',
-          id: randomUUID(),
-          at: new Date().toISOString(),
-          text,
-          conversationId,
-        });
+          clone.post({
+            type: 'human_message',
+            id: randomUUID(),
+            at: new Date().toISOString(),
+            text,
+            conversationId,
+          });
 
-        try {
-          for (;;) {
-            if (stream.aborted || stream.closed) break;
-            const event = queue.shift();
-            if (event === undefined) {
-              if (finished) break;
-              await new Promise<void>((resolve) => {
-                wake = resolve;
-              });
-              wake = null;
-              continue;
+          try {
+            for (;;) {
+              if (stream.aborted || stream.closed) break;
+              const event = queue.shift();
+              if (event === undefined) {
+                if (finished) break;
+                await new Promise<void>((resolve) => {
+                  wake = resolve;
+                });
+                wake = null;
+                continue;
+              }
+              await stream.writeSSE({ event: event.type, data: JSON.stringify(event) });
+              if (event.type === 'done' || event.type === 'error') break;
             }
-            await stream.writeSSE({ event: event.type, data: JSON.stringify(event) });
-            if (event.type === 'done' || event.type === 'error') break;
+          } finally {
+            unsubscribe();
           }
-        } finally {
-          unsubscribe();
-        }
-      });
-    })
+        });
+      },
+    )
 
     /** 会話の終了 = 蒸留の契機。CLI が chat を抜けるときに叩く。 */
-    .post('/chat/:conversationId/end', deliberateClient, async (c) => {
-      await clone.endConversation(c.req.param('conversationId'));
-      return c.json({ ok: true });
-    })
+    .post(
+      '/chat/:conversationId/end',
+      describeRoute({
+        tags: ['chat'],
+        summary: '会話の終了（蒸留の契機）',
+        description: '会話の終了 = 蒸留の契機。CLI が chat を抜けるときに叩く。本文は無い。',
+        responses: {
+          200: {
+            description: '蒸留を促した。',
+            content: { 'application/json': { schema: resolver(okResponseSchema) } },
+          },
+          ...noBodyPostResponses(),
+        },
+      }),
+      deliberateClient,
+      async (c) => {
+        await clone.endConversation(c.req.param('conversationId'));
+        return c.json({ ok: true });
+      },
+    )
+
+    // --- 会話（続きから話せること自体が要件） -------------------------------
+    /**
+     * 会話の一覧。
+     *
+     * **`POST /chat` の SSE は流すだけで、後から読み直す口が無かった。** その口が
+     * 無いと、器（端末・タブ・アプリ）を替えた瞬間に会話が消える。人間が同じ
+     * クローンと話し続けられないなら、それは器の都合が能力を削っている
+     * （north_star 禁止1）。
+     *
+     * 日誌から組み立てているので、新しく持つ状態は無い。追記専用の記録が
+     * そのまま会話の履歴になる。
+     */
+    .get(
+      '/conversations',
+      describeRoute({
+        tags: ['conversations'],
+        summary: '会話の一覧',
+        description:
+          '`POST /chat` の SSE は流すだけで読み直す口が無かった。器（端末・タブ・アプリ）' +
+          'を替えても続きから話せるための一覧。日誌から組み立てるので新しい状態は持たない。' +
+          '新しい順。`scanned` で遡り切れていないことが分かる（黙って打ち切らない）。',
+        responses: {
+          200: {
+            description: '会話の一覧（新しい順）。',
+            content: { 'application/json': { schema: resolver(conversationsResponseSchema) } },
+          },
+          400: {
+            description: 'クエリが不正。',
+            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+          },
+        },
+      }),
+      validator('query', conversationsQuery),
+      async (c) => {
+        const { limit, scan } = c.req.valid('query');
+        const entries = await stores.journal.list({ limit: scan, types: ['exchange'] });
+        const conversations = new Map<string, Conversation>();
+
+        /**
+         * 日誌は新しい順。**その順序をそのまま会話の順序にする。**
+         *
+         * `at` で並べ直さないのは、同じミリ秒に並んだ発言の前後が時刻からは
+         * 決められないからである。追記専用の記録が持っている順序のほうが、
+         * 後から組み立てた順序より正しい。
+         */
+        for (const entry of entries) {
+          if (entry.type !== 'exchange' || entry.with !== 'human') continue;
+          const id = entry.conversationId;
+          if (id === undefined) continue;
+          const found = conversations.get(id);
+          if (found === undefined) {
+            // 最初に出会うのが最新の発言（＝この会話の updatedAt と抜粋）
+            conversations.set(id, {
+              conversationId: id,
+              startedAt: entry.at,
+              updatedAt: entry.at,
+              messages: 1,
+              preview: preview(entry.text),
+            });
+            continue;
+          }
+          // 以降は古い方へ遡るので、開始時刻だけを更新していく
+          found.startedAt = entry.at;
+          found.messages += 1;
+        }
+
+        return c.json({
+          conversations: [...conversations.values()].slice(0, limit),
+          /** 遡った範囲。ここより古い会話は出てこない（`scan` を増やせば見える）。 */
+          scanned: entries.length,
+        });
+      },
+    )
+
+    /** 1つの会話の中身（古い順）。器を替えても続きから話せるための口。 */
+    .get(
+      '/conversations/:id',
+      describeRoute({
+        tags: ['conversations'],
+        summary: '1つの会話の中身（古い順）',
+        description: '1つの会話の中身（古い順）。器を替えても続きから話せるための口。',
+        responses: {
+          200: {
+            description: '会話の中身。',
+            content: {
+              'application/json': { schema: resolver(conversationDetailResponseSchema) },
+            },
+          },
+          400: {
+            description: 'クエリが不正。',
+            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+          },
+          404: {
+            description: '該当する会話が無い（内部ターン `self` は含まれない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      validator('query', conversationQuery),
+      async (c) => {
+        const id = c.req.param('id');
+        const { scan } = c.req.valid('query');
+        const entries = await stores.journal.list({ limit: scan, types: ['exchange'] });
+        const messages = entries
+          .filter(
+            (entry) =>
+              entry.type === 'exchange' && entry.with === 'human' && entry.conversationId === id,
+          )
+          .reverse()
+          .map((entry) => {
+            const exchange = entry as Extract<JournalEntry, { type: 'exchange' }>;
+            return {
+              id: exchange.id,
+              at: exchange.at,
+              /** `inbound` = 人間の発言 / `outbound` = クローンの返答。 */
+              role: exchange.role,
+              text: exchange.text,
+            };
+          });
+
+        if (messages.length === 0) return c.json({ error: 'not found' as const }, 404);
+        return c.json({ conversationId: id, messages });
+      },
+    )
+
+    /**
+     * 出来事の流れ（SSE）。**日誌に載ったものがそのまま流れる。**
+     *
+     * 聞きに行かないと分からない状態だと、承認待ちが出たことに人間は気づけない。
+     * 画面が数秒ごとに聞き直すのは、その穴を器の側で埋めているだけである。
+     *
+     * ここで種別を選り分ける表を持たない（`type` の絞り込みは**呼ぶ側**が指定する）。
+     * 見えない層を作らないための口で選別を始めたら、意味が消える。
+     */
+    .get(
+      '/journal/stream',
+      describeRoute({
+        tags: ['journal'],
+        summary: '日誌の追記をそのまま流す（SSE）',
+        description:
+          '日誌に載ったものがそのまま流れる（聞きに行かなくても承認待ちの発生に気づける）。' +
+          '**SSE。** `event:` に日誌エントリ種別（`open` に加え、`exchange` / `decision` / ' +
+          '`escalation` / `tool_use` / `memory_update` / `daily_report` / ' +
+          '`external_event`）、`data:` に日誌エントリ本体（`open` は `{ok:true}` のみ別枠）。' +
+          '`type` クエリで絞り込めるが、選り分ける表は持たない（絞り込みは呼ぶ側が決める）。',
+        responses: {
+          200: {
+            description: 'SSE ストリーム。',
+            content: { 'text/event-stream': { schema: resolver(journalEntrySchema) } },
+          },
+          400: {
+            description: 'クエリが不正。',
+            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+          },
+          503: {
+            description: '出来事の流れが配線されていない（能力を落とさず、黙って隠さない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      validator('query', journalStreamQuery),
+      (c) => {
+        const bus = deps.journalEvents;
+        if (bus === undefined) {
+          return c.json({ error: '出来事の流れが配線されていない' as const }, 503);
+        }
+        const types = c.req
+          .valid('query')
+          .type?.split(',')
+          .filter((value) => value.length > 0);
+
+        return streamSSE(c, async (stream) => {
+          const queue: JournalEntry[] = [];
+          let wake: (() => void) | null = null;
+          let closed = false;
+
+          const unsubscribe = bus.subscribe((entry) => {
+            if (types !== undefined && !types.includes(entry.type)) return;
+            queue.push(entry);
+            wake?.();
+          });
+          stream.onAbort(() => {
+            closed = true;
+            wake?.();
+          });
+
+          await stream.writeSSE({ event: 'open', data: JSON.stringify({ ok: true }) });
+
+          try {
+            for (;;) {
+              if (closed || stream.aborted || stream.closed) break;
+              const entry = queue.shift();
+              if (entry === undefined) {
+                await new Promise<void>((resolve) => {
+                  wake = resolve;
+                });
+                wake = null;
+                continue;
+              }
+              await stream.writeSSE({ event: entry.type, data: JSON.stringify(entry) });
+            }
+          } finally {
+            unsubscribe();
+          }
+        });
+      },
+    )
 
     // --- 記憶（人間が読んで直せること自体が要件） ---------------------------
-    .get('/memory', async (c) => c.json({ documents: await stores.persona.list() }))
+    .get(
+      '/memory',
+      describeRoute({
+        tags: ['memory'],
+        summary: '記憶文書の一覧',
+        description: '記憶（PersonaStore）の文書一覧。本文は含まない（メタ情報だけ）。',
+        responses: {
+          200: {
+            description: '記憶文書のメタ情報一覧。',
+            content: { 'application/json': { schema: resolver(memoryListResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => c.json({ documents: await stores.persona.list() }),
+    )
 
-    .get('/memory/:slug', async (c) => {
-      const doc = await stores.persona.read(c.req.param('slug'));
-      if (!doc) return c.json({ error: 'not found' as const }, 404);
-      return c.json({ document: doc });
-    })
+    .get(
+      '/memory/:slug',
+      describeRoute({
+        tags: ['memory'],
+        summary: '記憶文書を1つ読む',
+        responses: {
+          200: {
+            description: '記憶文書。',
+            content: { 'application/json': { schema: resolver(memoryReadResponseSchema) } },
+          },
+          404: {
+            description: '該当する記憶が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        const doc = await stores.persona.read(c.req.param('slug'));
+        if (!doc) return c.json({ error: 'not found' as const }, 404);
+        return c.json({ document: doc });
+      },
+    )
 
-    .put('/memory/:slug', zValidator('json', memoryBody), async (c) => {
-      const slug = c.req.param('slug');
-      if (!memorySlugSchema.safeParse(slug).success) {
-        return c.json({ error: '記憶のスラッグが不正' as const }, 400);
-      }
-      const doc = await stores.persona.write(slug, c.req.valid('json').content);
-      await stores.journal.append({
-        type: 'memory_update',
-        slug,
-        cause: 'human',
-        summary: 'HTTP API 経由で人間が記憶を書き換えた',
-      });
-      return c.json({ document: doc });
-    })
+    .put(
+      '/memory/:slug',
+      describeRoute({
+        tags: ['memory'],
+        summary: '記憶文書を全文置換で書く',
+        description: '人間が API から記憶を書き換える口。書き換えは日誌に残る（`cause: human`）。',
+        responses: {
+          200: {
+            description: '書き換え後の記憶文書。',
+            content: { 'application/json': { schema: resolver(memoryReadResponseSchema) } },
+          },
+          400: {
+            description: '記憶のスラッグが不正、または本文が JSON として不正。',
+            content: { 'application/json': { schema: resolver(badRequestResponseSchema) } },
+          },
+        },
+      }),
+      validator('json', memoryBody),
+      async (c) => {
+        const slug = c.req.param('slug');
+        if (!memorySlugSchema.safeParse(slug).success) {
+          return c.json({ error: '記憶のスラッグが不正' as const }, 400);
+        }
+        const doc = await stores.persona.write(slug, c.req.valid('json').content);
+        await stores.journal.append({
+          type: 'memory_update',
+          slug,
+          cause: 'human',
+          summary: 'HTTP API 経由で人間が記憶を書き換えた',
+        });
+        return c.json({ document: doc });
+      },
+    )
+
+    /**
+     * 記憶を1つ消す。
+     *
+     * 書けるのに消せないと、間違って作った記憶が**永久に判断の材料に残る**。
+     * 人間が読んで直せることが要件なのだから、直すことには消すことも含まれる。
+     * 消した事実は日誌に残るので、記憶から消えても記録からは消えない。
+     */
+    .delete(
+      '/memory/:slug',
+      describeRoute({
+        tags: ['memory'],
+        summary: '記憶文書を消す',
+        description:
+          '書けるのに消せないと、間違って作った記憶が永久に判断の材料に残る。消した事実は' +
+          '日誌に残る（`cause: human`）ので、記憶から消えても記録からは消えない。',
+        responses: {
+          200: {
+            description: '消した。',
+            content: { 'application/json': { schema: resolver(memoryDeleteResponseSchema) } },
+          },
+          400: {
+            description: '記憶のスラッグが名前として成立しない（「無い」とは区別する）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description: '該当する記憶が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        const slug = c.req.param('slug');
+        if (!memorySlugSchema.safeParse(slug).success) {
+          return c.json({ error: '記憶のスラッグが不正' as const }, 400);
+        }
+        const existing = await stores.persona.read(slug);
+        if (existing === null) return c.json({ error: 'not found' as const }, 404);
+        await stores.persona.remove(slug);
+        await stores.journal.append({
+          type: 'memory_update',
+          slug,
+          cause: 'human',
+          summary: 'HTTP API 経由で人間が記憶を削除した',
+        });
+        return c.json({ ok: true, slug });
+      },
+    )
 
     // --- 日誌 --------------------------------------------------------------
-    .get('/journal', zValidator('query', journalQuery), async (c) => {
-      const { limit, since, type } = c.req.valid('query');
-      const types = type?.split(',').filter((value) => value.length > 0) as
-        JournalEntryType[] | undefined;
-      return c.json({
-        entries: await stores.journal.list({
-          limit,
-          ...(since === undefined ? {} : { since }),
-          ...(types === undefined || types.length === 0 ? {} : { types }),
-        }),
-      });
-    })
+    .get(
+      '/journal',
+      describeRoute({
+        tags: ['journal'],
+        summary: '日誌を読む',
+        description: '日誌（追記専用の記録）を新しい順に読む。`type` `since` で掘れる。',
+        responses: {
+          200: {
+            description: '日誌エントリの一覧（新しい順）。',
+            content: { 'application/json': { schema: resolver(journalListResponseSchema) } },
+          },
+          400: {
+            description: 'クエリが不正。',
+            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+          },
+        },
+      }),
+      validator('query', journalQuery),
+      async (c) => {
+        const { limit, since, type } = c.req.valid('query');
+        const types = type?.split(',').filter((value) => value.length > 0) as
+          JournalEntryType[] | undefined;
+        return c.json({
+          entries: await stores.journal.list({
+            limit,
+            ...(since === undefined ? {} : { since }),
+            ...(types === undefined || types.length === 0 ? {} : { types }),
+          }),
+        });
+      },
+    )
 
     // --- 日報（可観測性の最上段。人間の普段の接点はほぼこれだけ） --------------
-    .get('/reports', zValidator('query', reportsQuery), async (c) => {
-      const entries = await stores.journal.list({
-        types: ['daily_report'],
-        limit: c.req.valid('query').limit,
-      });
-      return c.json({ reports: entries.filter(isDailyReport) });
-    })
+    .get(
+      '/reports',
+      describeRoute({
+        tags: ['reports'],
+        summary: '日報の一覧',
+        description: '日報（可観測性の最上段）を新しい順に読む。',
+        responses: {
+          200: {
+            description: '日報の一覧（新しい順）。',
+            content: { 'application/json': { schema: resolver(reportsResponseSchema) } },
+          },
+          400: {
+            description: 'クエリが不正。',
+            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+          },
+        },
+      }),
+      validator('query', reportsQuery),
+      async (c) => {
+        const entries = await stores.journal.list({
+          types: ['daily_report'],
+          limit: c.req.valid('query').limit,
+        });
+        return c.json({ reports: entries.filter(isDailyReport) });
+      },
+    )
 
-    .get('/reports/:date', async (c) => {
-      const date = c.req.param('date');
-      const range = localDayRange(date);
-      if (range === null) return c.json({ error: '日付は YYYY-MM-DD で指定する' as const }, 400);
+    .get(
+      '/reports/:date',
+      describeRoute({
+        tags: ['reports'],
+        summary: '1日分の日報',
+        responses: {
+          200: {
+            description: 'その日の日報。',
+            content: { 'application/json': { schema: resolver(reportsResponseSchema) } },
+          },
+          400: {
+            description: '日付が `YYYY-MM-DD` 形式ではない（黙って別の日にずらさない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description: 'その日の日報が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        const date = c.req.param('date');
+        const range = localDayRange(date);
+        if (range === null) return c.json({ error: '日付は YYYY-MM-DD で指定する' as const }, 400);
 
-      // その日以降だけを読む（日報は1日1件なので、遡る量は日数で収まる）
-      const entries = await stores.journal.list({
-        types: ['daily_report'],
-        since: range.since.toISOString(),
-      });
-      const reports = entries.filter(isDailyReport).filter((entry) => entry.date === date);
-      if (reports.length === 0) return c.json({ error: 'not found' as const }, 404);
-      return c.json({ reports });
-    })
+        // その日以降だけを読む（日報は1日1件なので、遡る量は日数で収まる）
+        const entries = await stores.journal.list({
+          types: ['daily_report'],
+          since: range.since.toISOString(),
+        });
+        const reports = entries.filter(isDailyReport).filter((entry) => entry.date === date);
+        if (reports.length === 0) return c.json({ error: 'not found' as const }, 404);
+        return c.json({ reports });
+      },
+    )
 
     // --- 承認待ちキュー ----------------------------------------------------
-    .get('/approvals', zValidator('query', approvalsQuery), async (c) =>
-      c.json({
-        approvals: await stores.jobs.listApprovals({
-          pendingOnly: c.req.valid('query').pending !== 'false',
-        }),
+    .get(
+      '/approvals',
+      describeRoute({
+        tags: ['approvals'],
+        summary: '承認待ちの一覧',
+        description: '`ask_human` が積んだ承認待ち。既定では未回答のみ（`pending=false` で全部）。',
+        responses: {
+          200: {
+            description: '承認待ちの一覧。',
+            content: { 'application/json': { schema: resolver(approvalsResponseSchema) } },
+          },
+          400: {
+            description: 'クエリが不正。',
+            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+          },
+        },
       }),
+      validator('query', approvalsQuery),
+      async (c) =>
+        c.json({
+          approvals: await stores.jobs.listApprovals({
+            pendingOnly: c.req.valid('query').pending !== 'false',
+          }),
+        }),
     )
 
     /**
      * 溜まった保留をまとめて片付ける。1件が駄目でも残りは進める（人間の不在で
      * 止まっていたそれぞれの仕事が、答えた順に独立に再開する）。
      */
-    .post('/approvals/answer', zValidator('json', answersBody), async (c) => {
-      const results: { id: string; ok: boolean; error?: string }[] = [];
-      for (const { id, answer } of c.req.valid('json').answers) {
-        const approval = await stores.jobs.getApproval(id);
-        if (!approval) {
-          results.push({ id, ok: false, error: 'not found' });
-          continue;
+    .post(
+      '/approvals/answer',
+      describeRoute({
+        tags: ['approvals'],
+        summary: '溜まった承認待ちにまとめて答える',
+        description:
+          '1件が駄目でも残りは進める（人間の不在で止まっていたそれぞれの仕事が、答えた順に' +
+          '独立に再開する）。結果は `answers` と同じ順で返る。',
+        responses: {
+          200: {
+            description: '各件の結果（1件ごとの成否）。',
+            content: {
+              'application/json': { schema: resolver(approvalsAnswerResponseSchema) },
+            },
+          },
+          400: {
+            description: '本文が JSON として不正。',
+            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+          },
+        },
+      }),
+      validator('json', answersBody),
+      async (c) => {
+        const results: { id: string; ok: boolean; error?: string }[] = [];
+        for (const { id, answer } of c.req.valid('json').answers) {
+          const approval = await stores.jobs.getApproval(id);
+          if (!approval) {
+            results.push({ id, ok: false, error: 'not found' });
+            continue;
+          }
+          if (approval.answeredAt !== undefined) {
+            results.push({ id, ok: false, error: 'already answered' });
+            continue;
+          }
+          try {
+            await clone.answerApproval(id, answer);
+            results.push({ id, ok: true });
+          } catch (error) {
+            results.push({ id, ok: false, error: String(error) });
+          }
         }
-        if (approval.answeredAt !== undefined) {
-          results.push({ id, ok: false, error: 'already answered' });
-          continue;
-        }
-        try {
-          await clone.answerApproval(id, answer);
-          results.push({ id, ok: true });
-        } catch (error) {
-          results.push({ id, ok: false, error: String(error) });
-        }
-      }
-      return c.json({ results });
-    })
+        return c.json({ results });
+      },
+    )
 
-    .post('/approvals/:id/answer', zValidator('json', answerBody), async (c) => {
-      const id = c.req.param('id');
-      const approval = await stores.jobs.getApproval(id);
-      if (!approval) return c.json({ error: 'not found' as const }, 404);
-      // 二度答えると、既に再開した仕事へ同じ回答がもう一度流れ、記録上の回答も
-      // 上書きされる。答え直したいなら新しい確認として来るのが正しい。
-      if (approval.answeredAt !== undefined) {
-        return c.json({ error: 'already answered' as const }, 409);
-      }
-      await clone.answerApproval(id, c.req.valid('json').answer);
-      return c.json({ ok: true });
-    })
+    .post(
+      '/approvals/:id/answer',
+      describeRoute({
+        tags: ['approvals'],
+        summary: '承認待ちに1件答える',
+        description:
+          '二度答えると、既に再開した仕事へ同じ回答がもう一度流れ、記録上の回答も上書きされる。' +
+          '答え直したいなら新しい確認として来るのが正しい（→ 409）。',
+        responses: {
+          200: {
+            description: '答えた。',
+            content: { 'application/json': { schema: resolver(okResponseSchema) } },
+          },
+          400: {
+            description: '本文が JSON として不正。',
+            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+          },
+          404: {
+            description: '該当する承認待ちが無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          409: {
+            description: '既に回答済み。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      validator('json', answerBody),
+      async (c) => {
+        const id = c.req.param('id');
+        const approval = await stores.jobs.getApproval(id);
+        if (!approval) return c.json({ error: 'not found' as const }, 404);
+        // 二度答えると、既に再開した仕事へ同じ回答がもう一度流れ、記録上の回答も
+        // 上書きされる。答え直したいなら新しい確認として来るのが正しい。
+        if (approval.answeredAt !== undefined) {
+          return c.json({ error: 'already answered' as const }, 409);
+        }
+        await clone.answerApproval(id, c.req.valid('json').answer);
+        return c.json({ ok: true });
+      },
+    )
 
     // --- 外部イベントの入口（起点③） ----------------------------------------
     /**
      * 自作ツール・ショートカット・CI からクローンへ出来事を届ける。
      * 何をするかはここで決めない（対応表を持った瞬間に自動化ジョブに戻る）。
      */
-    .post('/events', zValidator('json', eventBody), (c) => {
-      const { source, payload } = c.req.valid('json');
-      const id = randomUUID();
-      clone.post({ type: 'external', id, at: new Date().toISOString(), source, payload });
-      return c.json({ ok: true, id });
-    })
+    .post(
+      '/events',
+      describeRoute({
+        tags: ['events'],
+        summary: '外部イベントをクローンへ届ける',
+        description:
+          '自作ツール・ショートカット・CI からクローンへ出来事を届ける。何をするかはここで' +
+          '決めない（対応表を持った瞬間に自動化ジョブに戻る）。',
+        responses: {
+          200: {
+            description: '受信箱へ積んだ。',
+            content: { 'application/json': { schema: resolver(eventAcceptedResponseSchema) } },
+          },
+          400: {
+            description: '本文が JSON として不正。',
+            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+          },
+        },
+      }),
+      validator('json', eventBody),
+      (c) => {
+        const { source, payload } = c.req.valid('json');
+        const id = randomUUID();
+        clone.post({ type: 'external', id, at: new Date().toISOString(), source, payload });
+        return c.json({ ok: true, id });
+      },
+    )
 
     /**
      * 他人が形を決めている webhook 用。本文をそのまま payload として運ぶので、
      * 送り元を改造できなくても届く（GitHub や CI からそのまま叩ける）。
      */
-    .post('/events/:source', deliberateClient, async (c) => {
-      const source = c.req.param('source');
-      const raw = await c.req.text();
-      let payload: unknown = raw;
-      try {
-        payload = raw.length > 0 ? JSON.parse(raw) : '';
-      } catch {
-        // JSON でなければ本文のまま渡す
-      }
-      const id = randomUUID();
-      clone.post({ type: 'external', id, at: new Date().toISOString(), source, payload });
-      return c.json({ ok: true, id });
-    })
+    .post(
+      '/events/:source',
+      describeRoute({
+        tags: ['events'],
+        summary: '本文の形を選べない webhook 用の入口',
+        description:
+          '他人が形を決めている webhook 用。本文をそのまま payload として運ぶので、送り元を' +
+          '改造できなくても届く（GitHub や CI からそのまま叩ける）。JSON として読めない本文は' +
+          '文字列のまま渡す。',
+        responses: {
+          200: {
+            description: '受信箱へ積んだ。',
+            content: { 'application/json': { schema: resolver(eventAcceptedResponseSchema) } },
+          },
+          ...noBodyPostResponses(),
+        },
+      }),
+      deliberateClient,
+      async (c) => {
+        const source = c.req.param('source');
+        const raw = await c.req.text();
+        let payload: unknown = raw;
+        try {
+          payload = raw.length > 0 ? JSON.parse(raw) : '';
+        } catch {
+          // JSON でなければ本文のまま渡す
+        }
+        const id = randomUUID();
+        clone.post({ type: 'external', id, at: new Date().toISOString(), source, payload });
+        return c.json({ ok: true, id });
+      },
+    )
 
     // --- 時間起点のジョブ ---------------------------------------------------
-    .get('/schedule', (c) => c.json({ entries: deps.scheduler?.list() ?? [] }))
+    .get(
+      '/schedule',
+      describeRoute({
+        tags: ['schedule'],
+        summary: '定期ジョブの一覧と次の発火時刻',
+        responses: {
+          200: {
+            description: '定期ジョブの一覧。',
+            content: { 'application/json': { schema: resolver(scheduleListResponseSchema) } },
+          },
+        },
+      }),
+      (c) => c.json({ entries: deps.scheduler?.list() ?? [] }),
+    )
 
     /**
      * 定期ジョブを今すぐ起こす（人間が待たずに確かめるための口）。
@@ -351,44 +1009,74 @@ export function createApp(deps: AppDeps) {
      * これは観測ではなく**実行**である。起こせばクローンのターンが走り、記憶に
      * 基づく委譲や外部への操作の判断まで動く。ブラウザから叩けてはいけない。
      */
-    .post('/schedule/:kind/run', deliberateClient, (c) => {
-      const kind = c.req.param('kind');
-      if (deps.scheduler?.run(kind) !== true) return c.json({ error: 'not found' as const }, 404);
-      return c.json({ ok: true });
-    })
+    .post(
+      '/schedule/:kind/run',
+      describeRoute({
+        tags: ['schedule'],
+        summary: '定期ジョブを今すぐ起こす',
+        description:
+          'これは観測ではなく実行である。起こせばクローンのターンが走り、記憶に基づく委譲や' +
+          '外部への操作の判断まで動く。予定はずらさない（余分に1回起こす）。',
+        responses: {
+          200: {
+            description: '起こした。',
+            content: { 'application/json': { schema: resolver(okResponseSchema) } },
+          },
+          404: {
+            description: '知らない kind。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          ...noBodyPostResponses(),
+        },
+      }),
+      deliberateClient,
+      (c) => {
+        const kind = c.req.param('kind');
+        if (deps.scheduler?.run(kind) !== true) return c.json({ error: 'not found' as const }, 404);
+        return c.json({ ok: true });
+      },
+    )
 
     // --- runner の名簿（M5） -----------------------------------------------
-    /**
-     * 何台居て、どれが生きていて、どれだけ余裕があるか。
-     *
-     * `capacity` は**実測**であって定員ではない（roadmap M5 の地雷）。ここを
-     * 「残り何本置けるか」に読み替えないこと — 数字が小さいことは、委譲を
-     * 断る理由にはならない。
-     */
-    .get('/runners', async (c) => {
-      const registry = deps.runners;
-      if (registry === undefined) return c.json({ runners: [] });
-
-      const paths = new Map(
-        (await registry.list()).map((runner) => [runner.runnerId, runner.workspacePath]),
-      );
-      return c.json({
-        runners: registry.states().map((state) => ({
-          ...state,
-          workspacePath: paths.get(state.runnerId) ?? '',
-        })),
-      });
-    })
-
     // --- マネージャー（可観測性の中段から下段へ降りる経路） ------------------
-    .get('/managers', async (c) => c.json({ managers: await clone.managers.list() }))
+    .get(
+      '/managers',
+      describeRoute({
+        tags: ['managers'],
+        summary: '委譲先マネージャーの一覧',
+        responses: {
+          200: {
+            description: 'マネージャーの一覧と状態。',
+            content: { 'application/json': { schema: resolver(managersListResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => c.json({ managers: await clone.managers.list() }),
+    )
 
-    .get('/managers/:id', async (c) => {
-      const id = c.req.param('id');
-      const manager = (await clone.managers.list()).find((entry) => entry.managerId === id);
-      if (!manager) return c.json({ error: 'not found' as const }, 404);
-      return c.json({ manager });
-    })
+    .get(
+      '/managers/:id',
+      describeRoute({
+        tags: ['managers'],
+        summary: '1本のマネージャーの状態',
+        responses: {
+          200: {
+            description: 'マネージャーの状態。',
+            content: { 'application/json': { schema: resolver(managerDetailResponseSchema) } },
+          },
+          404: {
+            description: '該当するマネージャーが無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        const id = c.req.param('id');
+        const manager = (await clone.managers.list()).find((entry) => entry.managerId === id);
+        if (!manager) return c.json({ error: 'not found' as const }, 404);
+        return c.json({ manager });
+      },
+    )
 
     /**
      * 落ちた器に取り残された1本を、別の器で開き直す（M5）。
@@ -398,14 +1086,33 @@ export function createApp(deps: AppDeps) {
      * その確認の代わりなので、確かめた人（クローンか人間）だけが立てる。
      *
      * **`deliberateClient` も要る。** 本文の項目が全部省略できる形では、
-     * `zValidator` だけだと本文の無い単純リクエストが「空の指定」として通る
-     * （＝他人が開いたページからマネージャーを移送させられる）。「本文検査があれば
-     * 足りる」という前提が崩れるのは、この形のときである。
+     * `validator('json', ...)` だけだと本文の無い単純リクエストが「空の指定」として
+     * 通る（＝他人が開いたページからマネージャーを移送させられる）。「本文検査が
+     * あれば足りる」という前提が崩れるのは、この形のときである。
      */
     .post(
       '/managers/:id/move',
+      describeRoute({
+        tags: ['managers'],
+        summary: '取り残された委譲を別の器へ移す',
+        description:
+          '器が落ちただけなら自動で移る。ここを叩くのは、自動の移送が「元の器が止まったと' +
+          '言い切れない」で止まったときである。`force` はその確認の代わりなので、' +
+          '確かめた側だけが立てる（確かめずに立てると同じ仕事が2か所で走る）。',
+        responses: {
+          200: {
+            description: '移送の結果。移せなければ `moved` は null で、理由が `detail` に入る。',
+            content: { 'application/json': { schema: resolver(managerMoveResponseSchema) } },
+          },
+          400: {
+            description: '本文が JSON として不正。',
+            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+          },
+          ...noBodyPostResponses(),
+        },
+      }),
       deliberateClient,
-      zValidator('json', managerMoveBody),
+      validator('json', managerMoveBody),
       async (c) => {
         const { force } = c.req.valid('json');
         const result = await clone.managers.move(c.req.param('id'), {
@@ -419,25 +1126,314 @@ export function createApp(deps: AppDeps) {
      * manager_id からそのセッションの生ログへ。走行中ならファイルの上、
      * 退避済みならアーカイブから返る（可観測性3層の最下段）。
      */
-    .get('/managers/:id/transcript', async (c) => {
-      const body = await clone.managers.transcript(c.req.param('id'));
-      if (body === null) return c.json({ error: 'not found' as const }, 404);
-      return c.text(body);
-    })
+    .get(
+      '/managers/:id/transcript',
+      describeRoute({
+        tags: ['managers'],
+        summary: 'マネージャーの生ログ',
+        description:
+          'manager_id からそのセッションの生ログへ。走行中ならファイルの上、退避済みなら' +
+          'アーカイブから返る（可観測性3層の最下段）。',
+        responses: {
+          200: {
+            description: '生ログ（JSONL の生テキスト）。',
+            content: { 'text/plain': { schema: resolver(z.string()) } },
+          },
+          404: {
+            description: '該当するマネージャーの生ログが無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        const body = await clone.managers.transcript(c.req.param('id'));
+        if (body === null) return c.json({ error: 'not found' as const }, 404);
+        return c.text(body);
+      },
+    )
+
+    /**
+     * 人間からマネージャーへ直接話しかける。
+     *
+     * **これが無いと、人間の言葉はクローンを経由してしか届かない。** クローンが
+     * 取り込み中のときも、クローンの伝え方が間違っているときも、人間は手を出せない。
+     * 実際に「マネージャーが正しく 403 を報告しているのに、伝言が間違っていて
+     * 一晩噛み合わなかった」ということが起きている。
+     *
+     * クローンの代わりに判断するための口ではない（判断はクローンの仕事のまま）。
+     * 人間が自分の言葉を自分で届けるための口である。
+     */
+    .post(
+      '/managers/:id/messages',
+      describeRoute({
+        tags: ['managers'],
+        summary: '人間からマネージャーへ直接話しかける',
+        description:
+          'これが無いと、人間の言葉はクローンを経由してしか届かない。クローンの代わりに判断' +
+          'するための口ではない（判断はクローンの仕事のまま）。人間が自分の言葉を自分で届ける' +
+          'ための口である。許可確認への回答なら `requestId` を付ける。',
+        responses: {
+          200: {
+            description: '届いた（`answered` / `delivered`）。',
+            content: { 'application/json': { schema: resolver(managerActionResponseSchema) } },
+          },
+          400: {
+            description: '本文が JSON として不正。',
+            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+          },
+          404: {
+            description: '該当するマネージャーが無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      validator('json', managerMessageBody),
+      async (c) => {
+        const { text, requestId, decision } = c.req.valid('json');
+        const result = await clone.managers.send(c.req.param('id'), text, {
+          ...(requestId === undefined ? {} : { requestId }),
+          ...(decision === undefined ? {} : { decision }),
+        });
+        if (result.outcome === 'unknown') return c.json({ error: result.detail }, 404);
+        return c.json({ outcome: result.outcome, detail: result.detail });
+      },
+    )
+
+    /**
+     * この仕事をやめさせる。
+     *
+     * runner には `DELETE /managers/:id` があるのに、人間が届く側には無かった。
+     * 暴走を止める手段が「器ごと落とす」しか無いと、**関係の無い仕事まで道連れ**
+     * になる（それで M5 の作業が3回消えている）。止めた事実は日誌に残る。
+     */
+    .delete(
+      '/managers/:id',
+      describeRoute({
+        tags: ['managers'],
+        summary: 'この仕事をやめさせる',
+        description:
+          '暴走を止める手段が「器ごと落とす」しか無いと、関係の無い仕事まで道連れになる。' +
+          'この口は1本だけを止める。止めた事実は日誌に残る。',
+        responses: {
+          200: {
+            description: '止めた。',
+            content: { 'application/json': { schema: resolver(managerActionResponseSchema) } },
+          },
+          400: {
+            description: '本文が JSON として不正。',
+            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+          },
+          404: {
+            description: '該当するマネージャーが無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      validator('json', abortBody),
+      async (c) => {
+        const { reason } = c.req.valid('json');
+        const result = await clone.managers.abort(
+          c.req.param('id'),
+          ...(reason === undefined ? [] : ([reason] as const)),
+        );
+        if (result.outcome === 'unknown') return c.json({ error: result.detail }, 404);
+        return c.json({ outcome: result.outcome, detail: result.detail });
+      },
+    )
+
+    // --- 委譲先の器と、そこへ配る鍵 ----------------------------------------
+    /**
+     * runner の名簿と、**そこで配られている鍵の指紋**。
+     *
+     * 何台居て、どれが生きていて、どれだけ余裕があるか（M5）。`capacity` は
+     * **実測**であって定員ではない（roadmap M5 の地雷）。ここを「残り何本置けるか」に
+     * 読み替えないこと — 数字が小さいことは、委譲を断る理由にはならない。
+     *
+     * 指紋を出すのは、人間が置いた鍵とマネージャーが握っている鍵が同じかどうかを
+     * 確かめる手段が他に無いからである。無いと「鍵の権限が足りない」のか「鍵が
+     * 届いていない」のかを誰も切り分けられず、人間とマネージャーが両方正しいまま
+     * 何時間もすれ違う（実際に起きた）。**値は返らない。**
+     *
+     * **制御面の URL も合鍵も返さない。** ここは観測の口であって、runner へ手を
+     * 伸ばすための口ではない。
+     */
+    .get(
+      '/runners',
+      describeRoute({
+        tags: ['runners'],
+        summary: '委譲先 runner の名簿（生存・資源）と、配られている鍵の指紋',
+        description:
+          '何台居て、どれが生きていて、どれだけ余裕があるか。`capacity` は実測であって' +
+          '定員ではない。指紋を出すのは、人間が置いた鍵とマネージャーが握っている鍵が' +
+          '同じかどうかを確かめる手段が他に無いからである。**値は返らない。**',
+        responses: {
+          200: {
+            description: 'runner の名簿。',
+            content: { 'application/json': { schema: resolver(runnersListResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        const registry = deps.runners;
+        if (registry === undefined) return c.json({ runners: [] });
+        const clients = new Map(
+          (await registry.list()).map((runner) => [runner.runnerId, runner] as const),
+        );
+        return c.json({
+          runners: await Promise.all(
+            registry.states().map(async (state) => {
+              const runner = clients.get(state.runnerId);
+              return {
+                ...state,
+                workspacePath: runner?.workspacePath ?? '',
+                // **届かない器の指紋は空で返す。** 名乗りが返らない1台のせいで
+                // 名簿ごと落とさない（M5 受け入れ基準5）。
+                credentials: runner === undefined ? [] : await runner.credentials().catch(() => []),
+              };
+            }),
+          ),
+        });
+      },
+    )
+
+    /**
+     * マネージャーの道具の鍵を差し替える。**器を作り直さない。**
+     *
+     * これが無いと、鍵の更新に再デプロイが要る＝「鍵を直す」と「走行中の仕事を
+     * 失う」が同じ操作になる。走っている人の仕事をデーモンの都合で殺さないのと
+     * 同じ理由で、鍵の都合でも殺さない。
+     *
+     * 鍵はここに保管しない。受け取って runner へ降ろすだけである（デーモンの器に
+     * 記憶の鍵と GitHub の書き込み権を並べない）。
+     */
+    .post(
+      '/runners/credentials',
+      describeRoute({
+        tags: ['runners'],
+        summary: 'マネージャーの道具の鍵を差し替える',
+        description:
+          '器を作り直さない。鍵はここに保管せず、受け取って全 runner へ降ろすだけである' +
+          '（デーモンの器に記憶の鍵と GitHub の書き込み権を並べない）。',
+        responses: {
+          200: {
+            description: '各 runner への配布結果。',
+            content: {
+              'application/json': { schema: resolver(runnersCredentialsResponseSchema) },
+            },
+          },
+          400: {
+            description: '本文が JSON として不正。',
+            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+          },
+          503: {
+            description: 'runner が登録されていない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      validator('json', runnerSetCredentialsCommandSchema),
+      async (c) => {
+        const registry = deps.runners;
+        if (registry === undefined) {
+          return c.json({ error: 'runner が登録されていない' as const }, 503);
+        }
+        const runners = await registry.list();
+        const { credentials } = c.req.valid('json');
+        const results = await Promise.all(
+          runners.map(async (runner) => {
+            try {
+              return {
+                runnerId: runner.runnerId,
+                ok: true as const,
+                credentials: await runner.setCredentials(credentials),
+              };
+            } catch (error) {
+              return { runnerId: runner.runnerId, ok: false as const, error: String(error) };
+            }
+          }),
+        );
+        return c.json({ results });
+      },
+    )
 
     // --- セッションログ（アーカイブ） --------------------------------------
-    .get('/archive', async (c) => c.json({ entries: await stores.archive.list() }))
+    .get(
+      '/archive',
+      describeRoute({
+        tags: ['archive'],
+        summary: 'アーカイブ済みセッション生ログの一覧',
+        description: 'セッション生ログ（可観測性の最下段）の id 一覧。',
+        responses: {
+          200: {
+            description: 'アーカイブ id の一覧。',
+            content: { 'application/json': { schema: resolver(archiveListResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => c.json({ entries: await stores.archive.list() }),
+    )
 
-    .get('/archive/:id', async (c) => {
-      const body = await stores.archive.read(c.req.param('id'));
-      if (body === null) return c.json({ error: 'not found' as const }, 404);
-      return c.text(body);
-    })
+    .get(
+      '/archive/:id',
+      describeRoute({
+        tags: ['archive'],
+        summary: 'アーカイブ済み生ログを1件読む',
+        responses: {
+          200: {
+            description: '生ログ（JSONL の生テキスト）。',
+            content: { 'text/plain': { schema: resolver(z.string()) } },
+          },
+          404: {
+            description: '該当するアーカイブが無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        const body = await stores.archive.read(c.req.param('id'));
+        if (body === null) return c.json({ error: 'not found' as const }, 404);
+        return c.text(body);
+      },
+    )
 
-    .post('/shutdown', deliberateClient, (c) => {
-      setTimeout(() => deps.shutdown(), 10);
-      return c.json({ ok: true });
-    });
+    .post(
+      '/shutdown',
+      describeRoute({
+        tags: ['system'],
+        summary: 'デーモンを止める',
+        description: '`daemon stop` の受け口。本文は無い。',
+        responses: {
+          200: {
+            description: '停止を受け付けた（実際の停止は少し遅れる）。',
+            content: { 'application/json': { schema: resolver(okResponseSchema) } },
+          },
+          ...noBodyPostResponses(),
+        },
+      }),
+      deliberateClient,
+      (c) => {
+        setTimeout(() => deps.shutdown(), 10);
+        return c.json({ ok: true });
+      },
+    );
+
+  // --- OpenAPI 自体の配信 ---------------------------------------------------
+  //
+  // **チェーンに載せない。** `.get(...)` をチェーンへ差し込むと、以降の
+  // メソッドの型引数が積み重なって `AppType`（CLI の `hc<AppType>` が依存する
+  // 型）の推論が壊れかねない。別文で呼んで `app` を返す（Issue #20 の指示）。
+  //
+  // `describeRoute` を付けていないので、この2本は spec に自動では載らない
+  // （hono-openapi は describeRoute の無い経路を素通りする）。`exclude` は
+  // その動作を明示するための二重の安全策である。
+  app.get(
+    '/openapi.json',
+    openAPIRouteHandler(app, {
+      documentation: openApiDocumentation,
+      exclude: openApiExcludePaths,
+    }),
+  );
+  app.get('/docs', Scalar({ url: '/openapi.json' }));
 
   return app;
 }

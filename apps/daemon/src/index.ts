@@ -6,16 +6,21 @@ import { pathToFileURL } from 'node:url';
 import { serve } from '@hono/node-server';
 
 import {
+  CLONE_MODEL,
+  CLONE_MODEL_ENV_KEY,
   createClone,
   createLocalRunner,
   createRunnerRegistry,
   createScheduler,
   dailyReportEvent,
   missingDailyReportDates,
+  resolveCloneModel,
   type RunnerClient,
+  type Stores,
 } from '@alteroid/core';
 
 import { createApp } from './app.js';
+import { createJournalBus } from './journal-bus.js';
 import { createHttpRunner, isUnconfirmed } from './runner-client.js';
 import { clearRuntimeInfo, writeRuntimeInfo } from './runtime.js';
 import { buildSchedule, readScheduleConfig } from './schedule.js';
@@ -23,6 +28,14 @@ import { openStorage } from './storage.js';
 import { readWorkspaceConfig } from './workspace.js';
 
 export { createApp, type AppDeps, type AppType } from './app.js';
+/**
+ * spec 生成専用のスタブで `createApp` を呼び、`/openapi.json` を叩いて JSON を
+ * 得る（`apps/daemon/scripts/write-openapi.mjs` が使う本体）。デーモンを実際に
+ * 起動せずに spec だけ欲しい呼び出し元（生成クライアントのビルドなど）向けに
+ * ここからも引けるようにしておく。
+ */
+export { buildOpenApiDocument } from './openapi.js';
+export { createJournalBus, type JournalBus } from './journal-bus.js';
 export { openStorage, DATABASE_URL_ENV, type Storage } from './storage.js';
 export {
   createHttpRunner,
@@ -148,7 +161,13 @@ export async function main(): Promise<void> {
   // 記憶の置き場（ローカルの fs か、クラウドの PostgreSQL か）。器が違っても
   // 上の階層は同じものを見る（roadmap M4 受け入れ基準1）。
   const storage = await openStorage();
-  const { stores, paths } = storage;
+  const { paths } = storage;
+
+  // 日誌を購読できる形にしてから配る。**クローンもデーモンも同じ器を使う**ので、
+  // どこから追記されても `GET /journal/stream` に流れる（人間が聞きに行かなくても
+  // 承認待ちが出たことに気づける）。ここを通さない書き手を作らないこと。
+  const journalBus = createJournalBus(storage.stores.journal);
+  const stores: Stores = { ...storage.stores, journal: journalBus.journal };
 
   // クローンのセッションは人格データディレクトリを基準に置く。呼び出し元の
   // カレントディレクトリに依存させると、別の場所から起動した瞬間に resume が
@@ -170,6 +189,17 @@ export async function main(): Promise<void> {
   // workspace の運用選択。器が落ちた委譲を別の器へ移せるかはここで決まる。
   const workspaceConfig = readWorkspaceConfig();
   for (const note of workspaceConfig.notes) process.stderr.write(`alteroidd: ${note}\n`);
+
+  // 層とモデル帯の対応は設計判断であり、変更には人間の承認が要る（AGENTS.md 地雷5）。
+  // 差し替えられていたら**黙って通さない** — 上位帯から降りたことは人間が意図した
+  // ときだけ起きるべきで、起動ログに出ていなければ誰も気づけない。
+  const cloneModel = resolveCloneModel();
+  if (cloneModel !== CLONE_MODEL) {
+    process.stderr.write(
+      `alteroidd: クローンのモデル帯を ${CLONE_MODEL} から ${cloneModel} へ差し替えています` +
+        `（${CLONE_MODEL_ENV_KEY}）。既定へ戻すにはこの環境変数を外してください\n`,
+    );
+  }
 
   const clone = createClone({
     stores,
@@ -217,6 +247,7 @@ export async function main(): Promise<void> {
     scheduler,
     storage: storage.description,
     runners,
+    journalEvents: journalBus,
   });
   // 開けたこと自体は方針の変更であって禁止事項ではない。ただし**黙って**外へ
   // 出さない — ここは叩けばクローンのターンが起きる実行の口である。
