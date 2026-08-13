@@ -83,6 +83,15 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
      * 作るとき、発火時刻はその日ではない。対象は起こした側が決めて運ぶ。
      */
     target: z.string().optional(),
+    /**
+     * 定期の予定で来たのか、人間が手で起こしたのか（`POST /schedule/:kind/run`）。
+     *
+     * **同じ形で運ぶが、意味が違う。** 手で起こした1回は「余分に1回」であって
+     * 定期の予定をずらすものではない（`Scheduler.run` の契約）。ここで区別しないと、
+     * 受け取った側が予定の基準を手動実行の時刻へ動かしてしまい、再起動後に位相が
+     * ずれる。省略時は定期の予定である。
+     */
+    cause: z.enum(['schedule', 'manual']).optional(),
   }),
   z.object({
     type: z.literal('external'),
@@ -283,13 +292,25 @@ export const scheduledRequestSchema = z.object({
   createdAt: isoDateTime,
   updatedAt: isoDateTime,
   /**
-   * 前回この依頼で動いた時刻。
+   * 前回この依頼で動いた時刻（定期の予定でも、人間が手で起こした分でも動く）。
    *
    * 「前にいつ見たか」が分からないと、同じ仕事を毎回まっさらから起こすことになる
    * （＝同じ issue に何本もマネージャーが立つ）。重複を数の上限で止めるのは
    * 禁止2に触るので、材料として渡して判断に使わせる。
+   *
+   * **これは観測用であって、次の予定を数える基準ではない**（下の
+   * `lastScheduledRunAt` がその役）。
    */
   lastRunAt: isoDateTime.optional(),
+  /**
+   * 前回**定期の予定で**動いた時刻。次の予定を数える基準。
+   *
+   * `lastRunAt` と分けてあるのは、**手で起こした1回で位相を動かさない**ためである。
+   * 人間が `POST /schedule/:kind/run` で余分に1回起こすのは「予定に代えて割り込む」
+   * ことではない（`Scheduler.run` の契約）。ここを一緒にすると、手動実行の時刻が
+   * 基準になり、再起動した瞬間に定期の予定がその分ずれる。
+   */
+  lastScheduledRunAt: isoDateTime.optional(),
 });
 
 export type ScheduleKind = z.infer<typeof scheduleKindSchema>;

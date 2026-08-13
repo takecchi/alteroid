@@ -101,6 +101,7 @@ export class PgScheduleStore implements ScheduleStore {
     kind: string,
     expectedUpdatedAt: string,
     at: string,
+    cause: 'schedule' | 'manual',
   ): Promise<ScheduledRequest | null> {
     return this.#db.transaction(async (tx) => {
       const rows = await tx
@@ -117,12 +118,15 @@ export class PgScheduleStore implements ScheduleStore {
       // 書き換わった。人間の直しを無視して古い本文で動くのが一番まずい。
       if (plan.updatedAt !== expectedUpdatedAt) return null;
 
+      // 手で起こした1回では `lastScheduledRunAt` を動かさない（定期の予定をずらさない）
+      const stamped =
+        cause === 'schedule'
+          ? sql`jsonb_set(jsonb_set(${schedules.plan}, '{lastRunAt}', ${JSON.stringify(at)}::jsonb, true), '{lastScheduledRunAt}', ${JSON.stringify(at)}::jsonb, true)`
+          : sql`jsonb_set(${schedules.plan}, '{lastRunAt}', ${JSON.stringify(at)}::jsonb, true)`;
+
       await tx
         .update(schedules)
-        .set({
-          lastRunAt: new Date(at),
-          plan: sql`jsonb_set(${schedules.plan}, '{lastRunAt}', ${JSON.stringify(at)}::jsonb, true)`,
-        })
+        .set({ lastRunAt: new Date(at), plan: stamped })
         .where(eq(schedules.kind, kind));
 
       // 返すのは更新前の姿（呼び出し側は「前回いつ動いたか」を材料に要る）

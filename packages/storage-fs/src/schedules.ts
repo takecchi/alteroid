@@ -65,6 +65,7 @@ export class FsScheduleStore implements ScheduleStore {
     kind: string,
     expectedUpdatedAt: string,
     at: string,
+    cause: 'schedule' | 'manual',
   ): Promise<ScheduledRequest | null> {
     return this.#update((file) => {
       const found = file.schedules.find((entry) => entry.kind === kind);
@@ -75,7 +76,14 @@ export class FsScheduleStore implements ScheduleStore {
       return {
         next: {
           schedules: file.schedules.map((entry) =>
-            entry.kind === kind ? { ...entry, lastRunAt: at } : entry,
+            entry.kind === kind
+              ? {
+                  ...entry,
+                  lastRunAt: at,
+                  // 手で起こした1回で定期の予定をずらさない
+                  ...(cause === 'schedule' ? { lastScheduledRunAt: at } : {}),
+                }
+              : entry,
           ),
         },
         // 返すのは更新前の姿（呼び出し側は「前回いつ動いたか」を材料に要る）

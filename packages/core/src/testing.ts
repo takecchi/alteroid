@@ -124,12 +124,17 @@ export function createMemoryStores(): Stores {
     async remove(kind) {
       schedules.delete(kind);
     },
-    async claimRun(kind, expectedUpdatedAt, at) {
+    async claimRun(kind, expectedUpdatedAt, at, cause) {
       const existing = schedules.get(kind);
       // 消された・書き換わったなら古い本文で動かさない
       if (!existing || existing.updatedAt !== expectedUpdatedAt) return null;
-      // updatedAt は「依頼が書き換えられた時刻」＝版の識別子なので動かさない
-      schedules.set(kind, { ...existing, lastRunAt: at });
+      // updatedAt は「依頼が書き換えられた時刻」＝版の識別子なので動かさない。
+      // 手で起こした1回では定期の予定の基準（lastScheduledRunAt）も動かさない。
+      schedules.set(kind, {
+        ...existing,
+        lastRunAt: at,
+        ...(cause === 'schedule' ? { lastScheduledRunAt: at } : {}),
+      });
       return existing;
     },
   };

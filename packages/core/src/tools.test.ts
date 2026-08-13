@@ -126,7 +126,12 @@ describe('クローンの道具', () => {
     const h = harness();
     await h.call('schedule_create', { kind: 'watch', request: '最初の依頼', everyMinutes: 30 });
     const first = await h.stores.schedules.get('watch');
-    await h.stores.schedules.claimRun('watch', first?.updatedAt ?? '', '2026-08-12T00:00:00.000Z');
+    await h.stores.schedules.claimRun(
+      'watch',
+      first?.updatedAt ?? '',
+      '2026-08-12T00:00:00.000Z',
+      'schedule',
+    );
 
     await h.call('schedule_create', { kind: 'watch', request: '直した依頼', everyMinutes: 10 });
 

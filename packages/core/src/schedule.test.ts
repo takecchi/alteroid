@@ -263,6 +263,7 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     await s.stores.schedules.put({
       ...plan('weekly-review', { type: 'cron', expression: '0 10 * * 1' }),
       lastRunAt: at(2026, 8, 10, 10, 0).toISOString(),
+      lastScheduledRunAt: at(2026, 8, 10, 10, 0).toISOString(),
     });
     await s.scheduler.refresh();
     s.scheduler.start();
@@ -329,6 +330,7 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     await s.stores.schedules.put({
       ...plan('watch', { type: 'every', minutes: 60 }),
       lastRunAt: at(2026, 8, 12, 9, 0).toISOString(),
+      lastScheduledRunAt: at(2026, 8, 12, 9, 0).toISOString(),
     });
     await s.scheduler.refresh();
     s.scheduler.start();
@@ -381,6 +383,101 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     scheduler.stop();
   });
 
+  it('手で起こしても定期の予定はずれない（再起動を挟んでも）', async () => {
+    // 08:00 に仕込んだ60分ごと。本来の予定は 09:00 → 10:00
+    const stores = createMemoryStores();
+    const posted: InboxEvent[] = [];
+    await stores.schedules.put(plan('watch', { type: 'every', minutes: 60 }));
+
+    let clock = at(2026, 8, 12, 9, 0);
+    const scheduler = createScheduler({
+      entries: [],
+      post: (event) => posted.push(event),
+      now: () => clock,
+      schedules: stores.schedules,
+    });
+    await scheduler.refresh();
+    scheduler.start();
+    // 09:00 の定期発火が予定どおり起きる（受け取った側は定期として確定させる）
+    expect(scheduler.tick(clock)).toEqual(['watch']);
+    const held = await stores.schedules.get('watch');
+    await stores.schedules.claimRun(
+      'watch',
+      held?.updatedAt ?? '',
+      clock.toISOString(),
+      'schedule',
+    );
+
+    // 09:10 に人間が手で起こす
+    clock = at(2026, 8, 12, 9, 10);
+    expect(scheduler.run('watch')).toBe(true);
+    const manual = posted.at(-1);
+    expect(manual).toMatchObject({ type: 'timer', kind: 'watch', cause: 'manual' });
+    // 受け取った側（クローン相当）は手動として確定させる
+    const beforeManual = await stores.schedules.get('watch');
+    await stores.schedules.claimRun(
+      'watch',
+      beforeManual?.updatedAt ?? '',
+      at(2026, 8, 12, 9, 15).toISOString(),
+      'manual',
+    );
+
+    // メモリ上の次回は 10:00 のまま
+    expect(scheduler.list().find((item) => item.kind === 'watch')?.nextAt).toBe(
+      at(2026, 8, 12, 10, 0).toISOString(),
+    );
+    scheduler.stop();
+
+    // 手動実行の時刻は観測用に残るが、定期の基準にはならない
+    const after = await stores.schedules.get('watch');
+    expect(after?.lastRunAt).toBe(at(2026, 8, 12, 9, 15).toISOString());
+    expect(after?.lastScheduledRunAt).toBe(at(2026, 8, 12, 9, 0).toISOString());
+
+    // 09:20 に器を作り直しても次回は 10:00（10:15 にずれない）
+    clock = at(2026, 8, 12, 9, 20);
+    const restarted = createScheduler({
+      entries: [],
+      post: (event) => posted.push(event),
+      now: () => clock,
+      schedules: stores.schedules,
+    });
+    await restarted.refresh();
+    restarted.start();
+    expect(restarted.list().find((item) => item.kind === 'watch')?.nextAt).toBe(
+      at(2026, 8, 12, 10, 0).toISOString(),
+    );
+    restarted.stop();
+  });
+
+  it('一度も定期で動いていない依頼を手で起こしても、初回の予定はずれない', async () => {
+    // 08:00 仕込みの60分ごと（初回 09:00）を、08:30 に手で起こす
+    const stores = createMemoryStores();
+    await stores.schedules.put(plan('watch', { type: 'every', minutes: 60 }));
+    const held = await stores.schedules.get('watch');
+    await stores.schedules.claimRun(
+      'watch',
+      held?.updatedAt ?? '',
+      at(2026, 8, 12, 8, 30).toISOString(),
+      'manual',
+    );
+
+    const clock = at(2026, 8, 12, 8, 40);
+    const scheduler = createScheduler({
+      entries: [],
+      post: () => undefined,
+      now: () => clock,
+      schedules: stores.schedules,
+    });
+    await scheduler.refresh();
+    scheduler.start();
+
+    expect(scheduler.list().find((item) => item.kind === 'watch')?.nextAt).toBe(
+      at(2026, 8, 12, 9, 0).toISOString(),
+    );
+
+    scheduler.stop();
+  });
+
   it('未来の日付が入っていても永久に沈黙しない（黙って止まるより遅れて起きる）', async () => {
     // 時計のずれや手編集で createdAt が先の日付になっている場合
     const s = setup(at(2026, 8, 12, 8, 0));
@@ -408,7 +505,12 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     const before = s.scheduler.list().find((item) => item.kind === 'watch')?.nextAt;
     s.set(at(2026, 8, 12, 8, 20));
     const held = await s.stores.schedules.get('watch');
-    await s.stores.schedules.claimRun('watch', held?.updatedAt ?? '', '2026-08-12T08:20:00.000Z');
+    await s.stores.schedules.claimRun(
+      'watch',
+      held?.updatedAt ?? '',
+      '2026-08-12T08:20:00.000Z',
+      'schedule',
+    );
     await s.scheduler.refresh();
 
     const after = s.scheduler.list().find((item) => item.kind === 'watch');
@@ -475,6 +577,7 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     await s.stores.schedules.put({
       ...plan('watch', { type: 'every', minutes: 1440 }),
       lastRunAt: at(2026, 8, 11, 22, 0).toISOString(),
+      lastScheduledRunAt: at(2026, 8, 11, 22, 0).toISOString(),
     });
     await s.scheduler.refresh();
     s.scheduler.start();
@@ -505,6 +608,7 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     await s.stores.schedules.put({
       ...plan('issue-round', { type: 'daily', at: '09:00' }),
       lastRunAt: at(2026, 8, 12, 9, 0).toISOString(),
+      lastScheduledRunAt: at(2026, 8, 12, 9, 0).toISOString(),
     });
     await s.scheduler.refresh();
     s.scheduler.start();
@@ -523,6 +627,7 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     await s.stores.schedules.put({
       ...plan('issue-round', { type: 'daily', at: '09:00' }),
       lastRunAt: at(2026, 8, 13, 9, 0).toISOString(),
+      lastScheduledRunAt: at(2026, 8, 13, 9, 0).toISOString(),
     });
     await s.scheduler.refresh();
     s.scheduler.start();

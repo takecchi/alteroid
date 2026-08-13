@@ -419,7 +419,12 @@ class Clone implements CloneHost {
         }
         // 依頼の本文は**いま**読み、読んだその版で発火を確定させる。イベントに
         // 載せて運ぶと、人間が依頼を書き換えても発火時点の写しで走る（真実はストア側）。
-        const claimed = await this.#claimScheduledRun(event.kind, event.at);
+        const claimed = await this.#claimScheduledRun(
+          event.kind,
+          event.at,
+          // 省略時は定期の予定（`schema.ts` の `timer` の既定）
+          event.cause === 'manual' ? 'manual' : 'schedule',
+        );
 
         // **動かさない方を選ぶ場面が3つある。** どれも「時刻が来れば必ず届く」の側を
         // 1周期遅らせるだけで済むが、走らせてしまうと取り返せない。
@@ -549,6 +554,7 @@ class Clone implements CloneHost {
     kind: string,
     expectedUpdatedAt: string,
     at: string,
+    cause: 'schedule' | 'manual',
   ): Promise<
     { status: 'ok'; plan: ScheduledRequest | null } | { status: 'failed'; error: string }
   > {
@@ -560,7 +566,7 @@ class Clone implements CloneHost {
       try {
         return {
           status: 'ok',
-          plan: await this.#stores.schedules.claimRun(kind, expectedUpdatedAt, at),
+          plan: await this.#stores.schedules.claimRun(kind, expectedUpdatedAt, at, cause),
         };
       } catch (error) {
         last = String(error);
@@ -584,6 +590,7 @@ class Clone implements CloneHost {
   async #claimScheduledRun(
     kind: string,
     at: string,
+    cause: 'schedule' | 'manual',
   ): Promise<
     | { status: 'ok'; plan: ScheduledRequest }
     /**
@@ -616,7 +623,7 @@ class Clone implements CloneHost {
       }
       sawPlan = true;
 
-      const claimed = await this.#claimRun(kind, found.plan.updatedAt, at);
+      const claimed = await this.#claimRun(kind, found.plan.updatedAt, at, cause);
       if (claimed.status === 'failed') {
         return {
           status: 'unrecordable',
@@ -1038,8 +1045,9 @@ function isSameTick(a: InboxEvent, b: InboxEvent): boolean {
   if (a.type !== b.type) return false;
   if (a.type === 'self_initiative') return true;
   if (a.type === 'timer' && b.type === 'timer') {
-    // 対象日が違えば別の仕事（別の日の日報は畳めない）
-    return a.kind === b.kind && a.target === b.target;
+    // 対象日が違えば別の仕事（別の日の日報は畳めない）。手で起こした分と定期の
+    // 発火も別物である（前者は予定をずらさない＝記録先が違う）ので畳まない。
+    return a.kind === b.kind && a.target === b.target && a.cause === b.cause;
   }
   return false;
 }

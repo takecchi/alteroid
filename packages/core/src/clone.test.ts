@@ -579,9 +579,9 @@ describe('クローン — 自律（人間以外の起点）', () => {
     // 読めるが書けない（DB の一時障害で UPDATE だけ落ちる）を模す
     const real = stores.schedules.claimRun.bind(stores.schedules);
     let failing = true;
-    stores.schedules.claimRun = async (kind, expectedUpdatedAt, at) => {
+    stores.schedules.claimRun = async (kind, expectedUpdatedAt, at, cause) => {
       if (failing) throw new Error('UPDATE が落ちた');
-      return real(kind, expectedUpdatedAt, at);
+      return real(kind, expectedUpdatedAt, at, cause);
     };
 
     const s = setup(() => 'issue を1件拾って委譲した', stores);
@@ -638,9 +638,9 @@ describe('クローン — 自律（人間以外の起点）', () => {
 
     const real = stores.schedules.claimRun.bind(stores.schedules);
     let failing = true;
-    stores.schedules.claimRun = async (kind, expectedUpdatedAt, at) => {
+    stores.schedules.claimRun = async (kind, expectedUpdatedAt, at, cause) => {
       if (failing) throw new Error('UPDATE が落ちた');
-      return real(kind, expectedUpdatedAt, at);
+      return real(kind, expectedUpdatedAt, at, cause);
     };
 
     const s = setup(() => '進めた', stores);
@@ -688,6 +688,67 @@ describe('クローン — 自律（人間以外の起点）', () => {
       (entry) => (entry as { text: string }).text === '進めた',
     );
     expect(runs).toHaveLength(1);
+
+    await s.clone.stop();
+  });
+
+  it('手で起こした発火は、観測用の前回時刻だけを進める（定期の基準は動かさない）', async () => {
+    const stores = createMemoryStores();
+    await stores.schedules.put({
+      kind: 'issue-round',
+      spec: { type: 'every' as const, minutes: 60 },
+      request: 'open issue を見て実装を進める',
+      createdAt: '2026-08-12T08:00:00.000Z',
+      updatedAt: '2026-08-12T08:00:00.000Z',
+    });
+
+    const s = setup(() => '手で起こされたので見た', stores);
+    s.clone.post({
+      type: 'timer',
+      id: 'evt-manual',
+      at: '2026-08-12T09:10:00.000Z',
+      kind: 'issue-round',
+      cause: 'manual',
+    });
+
+    await expect
+      .poll(() => inputsOf(s)().includes('open issue を見て'), { timeout: 3000 })
+      .toBe(true);
+
+    const after = (await stores.schedules.list())[0];
+    expect(after?.lastRunAt).toBe('2026-08-12T09:10:00.000Z');
+    // 定期の予定の基準は動かない（次の起動で位相がずれない）
+    expect(after?.lastScheduledRunAt).toBeUndefined();
+
+    await s.clone.stop();
+  });
+
+  it('定期の発火は、観測用と定期の基準の両方を進める', async () => {
+    const stores = createMemoryStores();
+    await stores.schedules.put({
+      kind: 'issue-round',
+      spec: { type: 'every' as const, minutes: 60 },
+      request: 'open issue を見て実装を進める',
+      createdAt: '2026-08-12T08:00:00.000Z',
+      updatedAt: '2026-08-12T08:00:00.000Z',
+    });
+
+    const s = setup(() => '定期で見た', stores);
+    // cause を省略した発火は定期の予定として扱う（schema の既定）
+    s.clone.post({
+      type: 'timer',
+      id: 'evt-schedule',
+      at: '2026-08-12T09:00:00.000Z',
+      kind: 'issue-round',
+    });
+
+    await expect
+      .poll(() => inputsOf(s)().includes('open issue を見て'), { timeout: 3000 })
+      .toBe(true);
+
+    const after = (await stores.schedules.list())[0];
+    expect(after?.lastRunAt).toBe('2026-08-12T09:00:00.000Z');
+    expect(after?.lastScheduledRunAt).toBe('2026-08-12T09:00:00.000Z');
 
     await s.clone.stop();
   });

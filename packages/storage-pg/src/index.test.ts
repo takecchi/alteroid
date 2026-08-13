@@ -288,6 +288,7 @@ describe('PgScheduleStore', () => {
       'issue-round',
       plan.updatedAt,
       '2026-08-13T00:00:00.000Z',
+      'schedule',
     );
 
     // 返るのは更新前の姿（前回いつ動いたかを呼び出し側が要る）
@@ -299,17 +300,43 @@ describe('PgScheduleStore', () => {
     expect(await stores.schedules.list()).toHaveLength(1);
   });
 
+  it('手で起こした分は観測用の前回時刻だけを進める（定期の基準は動かさない）', async () => {
+    await stores.schedules.put(plan);
+
+    await stores.schedules.claimRun(
+      'issue-round',
+      plan.updatedAt,
+      '2026-08-13T00:00:00.000Z',
+      'manual',
+    );
+
+    const after = await stores.schedules.get('issue-round');
+    expect(after?.lastRunAt).toBe('2026-08-13T00:00:00.000Z');
+    // これを動かすと、再起動した瞬間に定期の予定が手動実行の時刻へずれる
+    expect(after?.lastScheduledRunAt).toBeUndefined();
+  });
+
   it('消された・書き換わった依頼は確定できない（条件つき UPDATE）', async () => {
     // 知らない kind
     expect(
-      await stores.schedules.claimRun('しらない', plan.updatedAt, '2026-08-13T00:00:00.000Z'),
+      await stores.schedules.claimRun(
+        'しらない',
+        plan.updatedAt,
+        '2026-08-13T00:00:00.000Z',
+        'schedule',
+      ),
     ).toBeNull();
 
     // 読んだ後に消された
     await stores.schedules.put(plan);
     await stores.schedules.remove('issue-round');
     expect(
-      await stores.schedules.claimRun('issue-round', plan.updatedAt, '2026-08-13T00:00:00.000Z'),
+      await stores.schedules.claimRun(
+        'issue-round',
+        plan.updatedAt,
+        '2026-08-13T00:00:00.000Z',
+        'schedule',
+      ),
     ).toBeNull();
 
     // 読んだ後に書き換えられた（版が違う）
@@ -320,7 +347,12 @@ describe('PgScheduleStore', () => {
       updatedAt: '2026-08-12T10:00:00.000Z',
     });
     expect(
-      await stores.schedules.claimRun('issue-round', plan.updatedAt, '2026-08-13T00:00:00.000Z'),
+      await stores.schedules.claimRun(
+        'issue-round',
+        plan.updatedAt,
+        '2026-08-13T00:00:00.000Z',
+        'schedule',
+      ),
     ).toBeNull();
     // 新しい版に古い発火の跡を付けない
     expect((await stores.schedules.get('issue-round'))?.lastRunAt).toBeUndefined();

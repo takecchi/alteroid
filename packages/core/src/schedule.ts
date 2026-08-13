@@ -147,7 +147,11 @@ class TimerScheduler implements Scheduler {
   run(kind: string): boolean {
     const entry = this.#entries().find((candidate) => candidate.kind === kind);
     if (!entry) return false;
-    this.#post(entry.event(this.#now()));
+    const event = entry.event(this.#now());
+    // **手で起こしたことを運ぶ。** 予定をずらさないのはここのメモリ上だけでは足りず、
+    // 受け取った側が「定期の予定の基準」を手動実行の時刻へ動かさないことまで要る
+    // （動かすと、次にデーモンを作り直した瞬間に位相がずれる）。
+    this.#post(event.type === 'timer' ? { ...event, cause: 'manual' } : event);
     return true;
   }
 
@@ -212,7 +216,9 @@ class TimerScheduler implements Scheduler {
    * （溜まった回数ぶん撃たない）。
    */
   #firstDue(entry: ScheduleEntry, plan: ScheduledRequest, now: Date): Date {
-    const seed = new Date(plan.lastRunAt ?? plan.createdAt);
+    // 基準は**定期の予定で動いた時刻**。`lastRunAt`（手で起こした分も動く）を使うと、
+    // 人間が余分に1回起こすたびに位相が動く（`run()` は予定をずらさない契約である）。
+    const seed = new Date(plan.lastScheduledRunAt ?? plan.createdAt);
     if (Number.isNaN(seed.getTime())) return entry.nextAt(now);
 
     const fromSeed = entry.nextAt(seed);

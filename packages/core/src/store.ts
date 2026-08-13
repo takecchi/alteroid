@@ -77,16 +77,25 @@ export interface ScheduleStore {
   /**
    * 発火を確定させる。**読むことと記録することを1操作に閉じる。**
    *
-   * `expectedUpdatedAt` と同じ版がまだ在るときだけ `lastRunAt` を付け、**確定した
-   * 依頼（`lastRunAt` を進める前の姿）** を返す。消えていた・書き換わっていたら null。
+   * `expectedUpdatedAt` と同じ版がまだ在るときだけ記録し、**確定した依頼（記録を
+   * 進める前の姿）** を返す。消えていた・書き換わっていたら null。
    *
    * **これが2操作に分かれていると、読んでから記録するまでの隙間で人間が消した・
    * 直した依頼が古い本文で走る。** 「本文は処理する瞬間にストアから読む」という
    * 約束は、競合したときにこそ効かないと意味がない（消した依頼が外の世界に手を
    * 出したら取り返せない）。返り値が更新前の姿なのは、呼び出し側が「前回いつ
    * 動いたか」を材料として要るからである。
+   *
+   * `cause` で記録先が変わる。`schedule` なら `lastRunAt` と `lastScheduledRunAt` の
+   * 両方、`manual`（人間が手で起こした1回）なら **`lastRunAt` だけ**。手で起こした
+   * ことで定期の予定をずらさないためである（`Scheduler.run` の契約）。
    */
-  claimRun(kind: string, expectedUpdatedAt: string, at: string): Promise<ScheduledRequest | null>;
+  claimRun(
+    kind: string,
+    expectedUpdatedAt: string,
+    at: string,
+    cause: 'schedule' | 'manual',
+  ): Promise<ScheduledRequest | null>;
 }
 
 /** セッションの生ログ退避先（PreCompact フックで落とす）。 */
