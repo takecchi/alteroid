@@ -10,13 +10,13 @@
 │  クローン（Fable / SDK query・preset 一式）               │   │ = daemon の    │
 │   ├ 道具: manager_start / manager_send / manager_list    │   │ 薄い HTTP      │
 │   │       memory_* / journal_* / ask_human               │   │ クライアント    │
-│   │       schedule_*（継続する依頼）ほか                  │   │                │
-│   │       （インプロセス MCP の自作ツール）                │   └───────────────┘
-│   │     ＋ 組み込み一式と人間の MCP 連携                   │
-│   │       （委譲は方針。道具は削らない）                   │
-│   ├ 受信箱（イベント駆動ループ）                          │
-│   └ 記憶ストア ← **このプロセスだけが接続情報を持つ**       │
-│                                                          │
+│   │       schedule_*（継続する依頼）ほか                  │   ├───────────────┤
+│   │       （インプロセス MCP の自作ツール）                │   │ apps/web       │
+│   │     ＋ 組み込み一式と人間の MCP 連携                   │   │ = React Router │
+│   │       （委譲は方針。道具は削らない）                   │   │   の SPA。      │
+│   ├ 受信箱（イベント駆動ループ）                          │   │   同じ API しか│
+│   └ 記憶ストア ← **このプロセスだけが接続情報を持つ**       │   │   持たない      │
+│                                                          │   └───────────────┘
 │  スケジューラ / 外部イベント入口 / 承認待ちキュー           │
 │  HTTP API（hono）─ chat(SSE)・jobs・承認                  │
 │                    日報・日誌・セッションログ（可観測性3層）  │
@@ -276,6 +276,9 @@ packages/storage-pg  クラウド用ドライバ（PostgreSQL / drizzle）
 apps/daemon          alteroidd = core をホストする常駐プロセス + HTTP API（hono）
 apps/runner          alteroid-runner = manager-runner。SDK を隔離して走らせる
 apps/cli             alteroid = daemon への薄いクライアント（hono/client で型共有）
+apps/web             公式の画面。React Router v7 の SPA。@alteroid/api-client 経由で
+                     デーモンの API だけを見る（独自の経路を持たない）
+packages/api-client  生成 spec から起こした外部向けクライアント。apps/web が最初の消費者
 ```
 
 境界の両側が `core` に居るのは、**プロトコルと型を1か所に置くため**である。実際に動くときは
@@ -295,10 +298,77 @@ apps/cli             alteroid = daemon への薄いクライアント（hono/cli
 | テスト | vitest | — |
 | CLI | commander + SSE ストリーミング | chat は readline ベースで開始。TUI 化は後から可能 |
 
+## Web UI — 画面とデーモンのオリジンが違うこと
+
+要件は PRD「インターフェース」にある。ここには設計判断だけを書く。
+
+**SPA（`ssr: false`）である。** 画面のためのサーバを増やさない。デーモンをどこに置き画面を
+どこに置くかは人によって違う（同一ホスト / `api.example.com` + `www.example.com` /
+デーモンは自宅で画面は静的ホスティング）ので、**サーバを持たない静的成果物**ならそのどれにも
+同じものを置ける。SSR にすると「画面を動かすための実行系」が増え、置ける場所がそれを持てる
+ところに縮む。
+
+**接続先はビルドに焼き込まない。** 上から順に、①人間がこの画面で設定した値（`localStorage`）
+②ビルド時の `VITE_ALTEROID_API_URL` ③同一オリジンの `/api`。①があるので、公式が配る成果物
+1つのまま人によって違うデーモンへ向けられる。
+
+**資格情報は Cookie ではなくヘッダで運ぶ。** 別ドメイン間の Cookie は成立しない —
+`SameSite=None; Secure` はサードパーティ Cookie の廃止と ITP で消えていく経路であり、
+`www.hoge.vercel.app` と `api.example.com` のように**登録可能ドメインが違えば `Domain` 属性で
+共有することもできない**。ヘッダならオリジンに縛られないのでどの配置でも同じように動き、かつ
+**単純リクエストでは付けられない**ので CSRF が構造的に成立しない。デーモン側も
+`Authorization: Bearer` しか見ない（`credentials` は返さない）。
+
+**ログインは CLI とまったく同じ経路を通る。** `POST /auth/login` が返す `claimSecret` は
+呼んだ相手に渡されるもので、端末に固有の仕掛けは無い。だから画面も同じように
+`POST /auth/login/:id/claim` で引き取れる — **画面のためにデーモンへ足した経路は1本も無い**
+（PRD「入口の等価性」）。コールバックは「端末に戻れ」と書いた HTML を返すだけで鍵を渡さない
+ので、始めたタブが生きている必要がある（ポップアップ＋`sessionStorage` の預かり）。
+
+**「未ログイン」と「許可が無い」を混ぜない。** 前者は 401 でログインし直せば解決するが、
+後者は 403 で、**何度ログインしても解決しない**（許可は人間が `alteroid access grant` で
+与えるものだから）。混ぜると、直しようのない導線を回し続ける画面になる。同じ理由で、
+401 では鍵を捨てるが 403 では捨てない。
+
+**CORS は既定で閉じている。** `ALTEROID_ALLOWED_ORIGINS` に**明示列挙**したオリジンだけを
+そのまま返す（ワイルドカードは受け付けず、`credentials` も返さない）。既定は空で、そのとき
+デーモンは CORS ヘッダを一切返さない — つまり**既定の姿勢は今までと1バイトも変わらない**。
+
+**CORS は認証より先に登録する。** ブラウザの preflight（OPTIONS）は `Authorization` を積んで
+来ないので、門番が先に立つと preflight が 401 になり、本リクエストが一度も飛ばない。
+`allowHeaders` に `authorization` を入れるのも同じ理由で、落とすと**ログインだけ成功して
+以降の全経路がブラウザに止められる**（`/auth/login` と `/claim` は `content-type` しか要らない
+ので、いちばん分かりにくい壊れ方をする）。
+
+ここを緩めてはいけない理由が `deliberateClient`（`apps/daemon/src/app.ts`）にある。127.0.0.1
+で待つことはブラウザからの保護にならず、人間が開いた任意のページが単純リクエストを投げられる。
+本文検査の無い POST に `application/json` を要求すると preflight が必須になり、**CORS ヘッダを
+返さないから preflight が通らない**という形で塞いでいる。`*` を返した瞬間にこの前提が消え、
+他人がクローンのターンを起こせる状態に戻る。開けるかどうかは人間が決め、開けた先は列挙した
+相手だけに限る — これが方針ではなく**実行環境の境界**で表すということである（north_star 禁止2）。
+
+開発中は Vite の proxy（`/api` → デーモン）で同一オリジンに見せる。**開発のためだけに CORS を
+開けさせない。**
+
 ## 認証
 
 - ローカル: Claude サブスクリプション（OAuth）。人間が `claude` でログイン済みの認証を SDK が使う
 - クラウド / コンテナ: `claude setup-token` の長期トークンを `CLAUDE_CODE_OAUTH_TOKEN` としてシークレット注入（公式サポート。2026-08 確認）
+### デーモンの API に入る資格
+
+**既定では要求しない。** `ALTEROID_GOOGLE_CLIENT_ID` と `ALTEROID_GOOGLE_CLIENT_SECRET` が揃うと自動で有効になり、`ALTEROID_AUTH` で明示的に開閉できる。設定していない人の `alteroid chat` が突然通らなくなるのは、境界の導入が実質のデグレードになる典型である（[north_star「立ち戻るための問い」](./north_star.md)の最後）。
+
+通る資格は2種類ある。
+
+| 資格 | 誰が持つ | できること |
+|---|---|---|
+| アクセストークン（`alt_…`） | `alteroid login` した端末・画面・外部アプリ | 許可されていれば API 全般 |
+| 実行環境の持ち主のトークン | `state/daemon.json` を読める者 | API 全般 ＋ `/access/*`（許可の付与） |
+
+- **ログインしただけでは使えない。** 使う許可は人間が `alteroid access grant` で与える。これは PRD「権限境界」とは別の層である — あちらは「クローンが何を人間へ確認するか」を記憶で決める話で、こちらは「そもそも誰が API に触れるか」であり、持つのは許可されているか否かの2値だけ（行為の一覧を持たない）
+- **入口ごとに認証を作らない。** CLI・HTTP API・Web UI は同じ門番を通る（PRD「インターフェース」）
+- 資格は `Authorization: Bearer` だけで運ぶ。Cookie は受けない（[Web UI](#web-ui--画面とデーモンのオリジンが違うこと)の項）
+- **CORS はブラウザにしか効かない。** `curl` は素通りするので、外から届く場所に置くならここを有効にするか、手前に境界（リバースプロキシ・トンネル）を置くこと。認証を切ったまま公開しないこと
 
 ## 実装フェーズ
 
@@ -310,6 +380,7 @@ apps/cli             alteroid = daemon への薄いクライアント（hono/cli
 | M3 | 自律 — スケジューラ、外部イベント、クローンの発意、承認待ちキュー |
 | M4 | クラウド — pg ドライバ、SessionStore、**daemon / manager-runner の分離**、Dockerfile + compose（3コンテナ）、setup-token |
 | M5 | 複数 manager-runner と水平スケール — runner の登録・生存判定・配置、runner 障害時の再開 |
+| M6 | Web UI — React Router v7 の SPA（`apps/web`）。CLI と等価な入口を API の上に用意する |
 
 各フェーズの成果物・受け入れ基準・地雷は [roadmap.md](./roadmap.md) に展開してある。実装はそちらに従う。
 

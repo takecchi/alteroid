@@ -26,6 +26,7 @@ import { bearerOf, isOperator, type AuthPlan, type AuthVariables } from './auth.
 import type { JournalBus } from './journal-bus.js';
 import { Scalar } from '@scalar/hono-api-reference';
 import { Hono } from 'hono';
+import { cors } from 'hono/cors';
 import { createMiddleware } from 'hono/factory';
 import { streamSSE } from 'hono/streaming';
 import { describeRoute, openAPIRouteHandler, resolver, validator } from 'hono-openapi';
@@ -67,9 +68,11 @@ import {
 /**
  * HTTP API（hono）。CLI も外部アプリもここを叩く。
  *
- * インターフェースは CLI と HTTP API のみ（非ゴール: Web UI）。CLI は core を
- * 埋め込まずこの API の薄いクライアントに徹する — でないと chat のたびに脳が
- * 分岐する（docs/architecture.md「脳は1インスタンス」）。
+ * 入口は CLI・HTTP API・Web UI（apps/web）の3つで、**どれも等しくこの API の
+ * 上に乗る**。CLI は core を埋め込まずこの API の薄いクライアントに徹する —
+ * でないと chat のたびに脳が分岐する（docs/architecture.md「脳は1インスタンス」）。
+ * Web UI も同じ理由で、独自の経路をここへ足さない（足したら入口ごとに
+ * できることが変わる）。
  *
  * 可観測性の3層（日報・日誌・セッションログ）はすべてここから読める必要がある
  * （PRD「可観測性」）。M3 で最上段の日報が揃い、3層が全部この API から読める。
@@ -118,6 +121,27 @@ export interface AppDeps {
    */
   journalEvents?: Pick<JournalBus, 'subscribe'>;
   /**
+   * ブラウザから叩いてよいオリジンの**明示列挙**（`ALTEROID_ALLOWED_ORIGINS`）。
+   *
+   * 空（既定）なら CORS ヘッダを一切返さない。**そこが今までの姿勢であり、
+   * 既定では1バイトも変わらない。**
+   *
+   * 画面（apps/web）とデーモンを別オリジンに置く配置があるので必要になった。
+   * ここで守っているものは3つある。
+   *
+   * 1. **ワイルドカードを受け付けない。** 列挙されたオリジンだけを、そのまま
+   *    エコーする。`*` を許すと `deliberateClient` の前提（preflight が通らない）
+   *    が消え、人間が開いた任意のページからクローンのターンを起こせる
+   * 2. **`credentials` を付けない。** Cookie を運ばせない設計なので、
+   *    `Access-Control-Allow-Credentials` は返さない（資格情報はヘッダで運ぶ）
+   * 3. **`allowHeaders` は最小。** `content-type` を通すのは `deliberateClient` が
+   *    それを要求するためで、増やすなら理由が要る
+   *
+   * これは能力の削除ではなく**実行環境の境界の設定**である（north_star 禁止2）。
+   * 開けるかどうかは人間が決め、開けた先は列挙した相手だけに限られる。
+   */
+  allowedOrigins?: readonly string[];
+  /**
    * ログインとアクセス許可（`./auth.ts`）。
    *
    * 省略すると認証を要求しない（＝この機能が入る前と同じ振る舞い）。**能力を
@@ -126,6 +150,45 @@ export interface AppDeps {
    * という問い）。
    */
   auth?: { plan: AuthPlan; service?: AuthService };
+}
+
+/**
+ * `ALTEROID_ALLOWED_ORIGINS` を読む。
+ *
+ * 受け付けるのは `scheme://host[:port]` だけである。**`*` と、経路を含む値と、
+ * 解釈できない値は捨てる**（捨てたことは呼び出し側が警告に出す）。ここを緩めると
+ * 「許可したつもりの範囲」と「実際に通る範囲」がずれ、境界が境界でなくなる。
+ */
+export function parseAllowedOrigins(raw: string | undefined): {
+  origins: string[];
+  rejected: string[];
+} {
+  const origins: string[] = [];
+  const rejected: string[] = [];
+
+  for (const entry of (raw ?? '').split(',')) {
+    const candidate = entry.trim();
+    if (candidate === '') continue;
+
+    let url: URL;
+    try {
+      url = new URL(candidate);
+    } catch {
+      rejected.push(candidate);
+      continue;
+    }
+
+    // `new URL('https://a.example.com/path').origin` は経路を落とすので、
+    // 元の文字列がオリジンそのものだったときだけ通す（打ち間違いを飲み込まない）。
+    const normalized = url.origin;
+    if (normalized === 'null' || candidate.replace(/\/+$/, '') !== normalized) {
+      rejected.push(candidate);
+      continue;
+    }
+    if (!origins.includes(normalized)) origins.push(normalized);
+  }
+
+  return { origins, rejected };
 }
 
 const chatBody = z.object({
@@ -436,7 +499,33 @@ export function createApp(deps: AppDeps) {
     await next();
   });
 
-  const app = new Hono<{ Variables: AuthVariables }>()
+  const base = new Hono<{ Variables: AuthVariables }>();
+
+  // **CORS は認証より先に登録する。** ブラウザの preflight（OPTIONS）は
+  // `Authorization` を積んで来ないので、門番が先に立つと preflight が 401 になり、
+  // 本リクエストが一度も飛ばない。hono の `cors()` は OPTIONS にその場で答えて
+  // `next()` を呼ばないので、ここに置けば門番も素通りしない。
+  //
+  // 列挙が空なら**何も登録しない** — CORS ヘッダを返さない今までの姿勢のまま。
+  const allowedOrigins = deps.allowedOrigins ?? [];
+  if (allowedOrigins.length > 0) {
+    base.use(
+      '*',
+      cors({
+        // 列挙にあるものだけをそのまま返す。`*` は返さない（`AppDeps` の注記）。
+        origin: (origin) => (allowedOrigins.includes(origin) ? origin : null),
+        allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+        // `content-type` は `deliberateClient` が、`authorization` は門番が要求する。
+        // 後者を落とすと、別オリジンの画面はログイン済みでも何も呼べない。
+        allowHeaders: ['content-type', 'authorization'],
+        // Cookie は運ばせない。資格情報はヘッダで運ぶ（apps/web/app/lib/config.ts）。
+        credentials: false,
+        maxAge: 600,
+      }),
+    );
+  }
+
+  const app = base
     .use('*', authenticate)
 
     .get(
