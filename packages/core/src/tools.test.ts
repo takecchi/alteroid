@@ -132,6 +132,7 @@ describe('クローンの道具', () => {
       '2026-08-12T00:00:00.000Z',
       'schedule',
     );
+    await h.stores.schedules.completeRun('watch', '2026-08-12T00:00:00.000Z', 'schedule');
 
     await h.call('schedule_create', { kind: 'watch', request: '直した依頼', everyMinutes: 10 });
 

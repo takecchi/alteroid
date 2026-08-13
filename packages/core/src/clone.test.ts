@@ -692,6 +692,70 @@ describe('クローン — 自律（人間以外の起点）', () => {
     await s.clone.stop();
   });
 
+  it('引き受けた直後に落ちた発火は、器を作り直したときに本文つきで配り直される', async () => {
+    const stores = createMemoryStores();
+    const plan = {
+      kind: 'issue-round',
+      spec: { type: 'daily' as const, at: '09:00' },
+      request: 'open issue を見て、着手できるものから実装を進める',
+      createdAt: '2026-08-11T00:00:00.000Z',
+      updatedAt: '2026-08-11T00:00:00.000Z',
+    };
+    await stores.schedules.put(plan);
+
+    // --- 1回目の器: claim できた直後に中断される -------------------------------
+    const crashing = setup(() => '届いていないのに動いた', stores);
+    // 「claim は成功したが、モデルへ渡す前に器が落ちた」を作る
+    const claim = stores.schedules.claimRun.bind(stores.schedules);
+    stores.schedules.claimRun = async (kind, expectedUpdatedAt, at, cause) => {
+      await claim(kind, expectedUpdatedAt, at, cause);
+      throw new Error('器が落ちた');
+    };
+
+    crashing.clone.post({
+      type: 'timer',
+      id: 'evt-crash',
+      at: '2026-08-12T00:00:00.000Z',
+      kind: 'issue-round',
+    });
+
+    await expect
+      .poll(async () => (await stores.schedules.list())[0]?.pendingRun?.at, { timeout: 3000 })
+      .toBe('2026-08-12T00:00:00.000Z');
+    // モデルには何も届いていない
+    expect(crashing.calls).toEqual([]);
+    // 定期の基準は進んでいない（「もう動いた」ことにしない）
+    expect((await stores.schedules.list())[0]?.lastScheduledRunAt).toBeUndefined();
+
+    // --- 2回目の器: 同じ Stores から作り直す -----------------------------------
+    await crashing.clone.stop();
+    stores.schedules.claimRun = claim;
+    const restarted = setup(() => 'issue を1件拾って委譲した', stores);
+    const scheduler = createScheduler({
+      entries: [],
+      post: (event) => restarted.clone.post(event),
+      schedules: stores.schedules,
+    });
+    await scheduler.refresh();
+    scheduler.start();
+
+    // 引き受けたまま終わっていない回が、依頼の本文つきで届く
+    await expect
+      .poll(() => inputsOf(restarted)().includes('open issue を見て'), { timeout: 3000 })
+      .toBe(true);
+    // 走りかけていた可能性は隠さない（二重に手を出す前に確かめさせる）
+    expect(inputsOf(restarted)()).toContain('引き受けたまま終わっていない');
+
+    // 終わったので印は消え、定期の基準が進む
+    await expect
+      .poll(async () => (await stores.schedules.list())[0]?.pendingRun, { timeout: 3000 })
+      .toBeUndefined();
+    expect((await stores.schedules.list())[0]?.lastScheduledRunAt).toBeDefined();
+
+    scheduler.stop();
+    await restarted.clone.stop();
+  });
+
   it('手で起こした発火は、観測用の前回時刻だけを進める（定期の基準は動かさない）', async () => {
     const stores = createMemoryStores();
     await stores.schedules.put({

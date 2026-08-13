@@ -362,7 +362,14 @@ export function createCloneTools(context: ToolContext) {
           request,
           createdAt: existing?.createdAt ?? now,
           updatedAt: now,
+          // **これまでの記録を引き継ぐ。** 落とすと、直した瞬間に定期の基準が消えて
+          // 位相が createdAt から引き直され（＝直後に1回余分に起きる）、引き受けたまま
+          // 終わっていない発火の印も消える（＝その回が失われる）。
           ...(existing?.lastRunAt === undefined ? {} : { lastRunAt: existing.lastRunAt }),
+          ...(existing?.lastScheduledRunAt === undefined
+            ? {}
+            : { lastScheduledRunAt: existing.lastScheduledRunAt }),
+          ...(existing?.pendingRun === undefined ? {} : { pendingRun: existing.pendingRun }),
         };
         await stores.schedules.put(plan);
         await stores.journal.append({

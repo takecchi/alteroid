@@ -77,19 +77,32 @@ export class FsScheduleStore implements ScheduleStore {
         next: {
           schedules: file.schedules.map((entry) =>
             entry.kind === kind
-              ? {
-                  ...entry,
-                  lastRunAt: at,
-                  // 手で起こした1回で定期の予定をずらさない
-                  ...(cause === 'schedule' ? { lastScheduledRunAt: at } : {}),
-                }
+              ? // 引き受けた印と観測用の時刻だけ。定期の基準は `completeRun` で進める
+                { ...entry, lastRunAt: at, pendingRun: { at, cause } }
               : entry,
           ),
         },
-        // 返すのは更新前の姿（呼び出し側は「前回いつ動いたか」を材料に要る）
+        // 返すのは更新前の姿（呼び出し側は「前回いつ動いたか」と、前の発火が
+        // 終わっていたかを材料に要る）
         result: found,
       };
     });
+  }
+
+  async completeRun(kind: string, at: string, cause: 'schedule' | 'manual'): Promise<void> {
+    await this.#update((file) => ({
+      next: {
+        schedules: file.schedules.map((entry) => {
+          // 別の発火の印が付いているなら触らない（後から来た発火のものを消さない）
+          if (entry.kind !== kind || entry.pendingRun?.at !== at) return entry;
+          const rest = { ...entry };
+          delete rest.pendingRun;
+          // 手で起こした1回では定期の予定をずらさない
+          return cause === 'schedule' ? { ...rest, lastScheduledRunAt: at } : rest;
+        }),
+      },
+      result: undefined,
+    }));
   }
 
   async #read(): Promise<ScheduleFile> {

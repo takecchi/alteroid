@@ -208,6 +208,14 @@ export interface TimerPromptInput {
   request?: string;
   /** 前回この依頼で動いた時刻。 */
   lastRunAt?: string;
+  /**
+   * 前の発火を引き受けたまま終わっていない場合、その時刻。
+   *
+   * **走りかけていた可能性を隠さない。** 器が落ちた跡なので、委譲まで進んでいたのか
+   * 何もしていないのかは分からない。分からないことを伝えて、二重に手を出す前に
+   * 確かめさせる（黙って配り直すと、取り消せない操作が2回起きうる）。
+   */
+  unfinishedAt?: string;
   digest: string;
 }
 
@@ -216,6 +224,7 @@ export function buildTimerPrompt({
   target,
   request,
   lastRunAt,
+  unfinishedAt,
   digest,
 }: TimerPromptInput): string {
   const head = `[system] 定期ジョブ ${kind} の時刻になった${target === undefined ? '' : `（対象: ${target}）`}。`;
@@ -231,6 +240,14 @@ export function buildTimerPrompt({
           '---',
           '',
           `前回この依頼で動いた時刻: ${lastRunAt ?? '（まだ一度も動いていない）'}`,
+          ...(unfinishedAt === undefined
+            ? []
+            : [
+                '',
+                `**${unfinishedAt} の発火は引き受けたまま終わっていない。** デーモンがその途中で落ちたので、` +
+                  'あなたに依頼が届く前だったのか、委譲まで進んでいたのかは分からない。この回を配り直しているので、' +
+                  '`manager_list` と日誌でその時刻の前後に何をしたかを確かめてから決めよ（取り消せない操作を二度やらないこと）。',
+              ]),
           '',
           'この依頼と記憶にある目的・価値観に照らして、いま何をするかを決めよ。',
           '',

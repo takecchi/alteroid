@@ -263,6 +263,45 @@ describe('FsScheduleStore', () => {
     expect((await stores.schedules.get('issue-round'))?.updatedAt).toBe(plan.updatedAt);
   });
 
+  it('引き受けた印は完了で消える。印が残っていれば配り直せる', async () => {
+    await stores.schedules.put(plan);
+
+    await stores.schedules.claimRun(
+      'issue-round',
+      plan.updatedAt,
+      '2026-08-13T00:00:00.000Z',
+      'schedule',
+    );
+
+    // claim だけでは定期の基準を進めない（ここで進めると、直後に落ちた回が消える）
+    const claimed = await stores.schedules.get('issue-round');
+    expect(claimed?.pendingRun).toEqual({ at: '2026-08-13T00:00:00.000Z', cause: 'schedule' });
+    expect(claimed?.lastScheduledRunAt).toBeUndefined();
+
+    await stores.schedules.completeRun('issue-round', '2026-08-13T00:00:00.000Z', 'schedule');
+
+    const done = await stores.schedules.get('issue-round');
+    expect(done?.pendingRun).toBeUndefined();
+    expect(done?.lastScheduledRunAt).toBe('2026-08-13T00:00:00.000Z');
+  });
+
+  it('別の発火の完了で、いま引き受けている印を消さない', async () => {
+    await stores.schedules.put(plan);
+    await stores.schedules.claimRun(
+      'issue-round',
+      plan.updatedAt,
+      '2026-08-13T00:00:00.000Z',
+      'schedule',
+    );
+
+    // 前の発火（別の時刻）の完了が遅れて届いた
+    await stores.schedules.completeRun('issue-round', '2026-08-12T00:00:00.000Z', 'schedule');
+
+    const held = await stores.schedules.get('issue-round');
+    expect(held?.pendingRun?.at).toBe('2026-08-13T00:00:00.000Z');
+    expect(held?.lastScheduledRunAt).toBeUndefined();
+  });
+
   it('手で起こした分は観測用の前回時刻だけを進める（定期の基準は動かさない）', async () => {
     await stores.schedules.put(plan);
 
@@ -272,6 +311,7 @@ describe('FsScheduleStore', () => {
       '2026-08-13T00:00:00.000Z',
       'manual',
     );
+    await stores.schedules.completeRun('issue-round', '2026-08-13T00:00:00.000Z', 'manual');
 
     const after = await stores.schedules.get('issue-round');
     expect(after?.lastRunAt).toBe('2026-08-13T00:00:00.000Z');

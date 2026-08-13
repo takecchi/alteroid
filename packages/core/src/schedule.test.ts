@@ -407,6 +407,7 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
       clock.toISOString(),
       'schedule',
     );
+    await stores.schedules.completeRun('watch', clock.toISOString(), 'schedule');
 
     // 09:10 に人間が手で起こす
     clock = at(2026, 8, 12, 9, 10);
@@ -421,6 +422,7 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
       at(2026, 8, 12, 9, 15).toISOString(),
       'manual',
     );
+    await stores.schedules.completeRun('watch', at(2026, 8, 12, 9, 15).toISOString(), 'manual');
 
     // メモリ上の次回は 10:00 のまま
     expect(scheduler.list().find((item) => item.kind === 'watch')?.nextAt).toBe(
@@ -460,6 +462,7 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
       at(2026, 8, 12, 8, 30).toISOString(),
       'manual',
     );
+    await stores.schedules.completeRun('watch', at(2026, 8, 12, 8, 30).toISOString(), 'manual');
 
     const clock = at(2026, 8, 12, 8, 40);
     const scheduler = createScheduler({
@@ -511,6 +514,7 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
       '2026-08-12T08:20:00.000Z',
       'schedule',
     );
+    await s.stores.schedules.completeRun('watch', '2026-08-12T08:20:00.000Z', 'schedule');
     await s.scheduler.refresh();
 
     const after = s.scheduler.list().find((item) => item.kind === 'watch');

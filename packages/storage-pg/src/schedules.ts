@@ -1,6 +1,6 @@
 import { scheduledRequestSchema } from '@alteroid/core';
 import type { ScheduleStore, ScheduledRequest } from '@alteroid/core';
-import { asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { stripNulls } from './db.js';
@@ -118,19 +118,32 @@ export class PgScheduleStore implements ScheduleStore {
       // 書き換わった。人間の直しを無視して古い本文で動くのが一番まずい。
       if (plan.updatedAt !== expectedUpdatedAt) return null;
 
-      // 手で起こした1回では `lastScheduledRunAt` を動かさない（定期の予定をずらさない）
-      const stamped =
-        cause === 'schedule'
-          ? sql`jsonb_set(jsonb_set(${schedules.plan}, '{lastRunAt}', ${JSON.stringify(at)}::jsonb, true), '{lastScheduledRunAt}', ${JSON.stringify(at)}::jsonb, true)`
-          : sql`jsonb_set(${schedules.plan}, '{lastRunAt}', ${JSON.stringify(at)}::jsonb, true)`;
+      // 引き受けた印と観測用の時刻だけ。定期の基準は `completeRun` で進める
+      const stamped = sql`jsonb_set(jsonb_set(${schedules.plan}, '{lastRunAt}', ${JSON.stringify(at)}::jsonb, true), '{pendingRun}', ${JSON.stringify({ at, cause })}::jsonb, true)`;
 
       await tx
         .update(schedules)
         .set({ lastRunAt: new Date(at), plan: stamped })
         .where(eq(schedules.kind, kind));
 
-      // 返すのは更新前の姿（呼び出し側は「前回いつ動いたか」を材料に要る）
+      // 返すのは更新前の姿（呼び出し側は「前回いつ動いたか」と、前の発火が
+      // 終わっていたかを材料に要る）
       return plan;
     });
+  }
+
+  async completeRun(kind: string, at: string, cause: 'schedule' | 'manual'): Promise<void> {
+    const cleared =
+      cause === 'schedule'
+        ? sql`jsonb_set(${schedules.plan} - 'pendingRun', '{lastScheduledRunAt}', ${JSON.stringify(at)}::jsonb, true)`
+        : sql`${schedules.plan} - 'pendingRun'`;
+
+    // 別の発火の印が付いているなら触らない（後から来た発火のものを消さない）
+    await this.#db
+      .update(schedules)
+      .set({ plan: cleared })
+      .where(
+        and(eq(schedules.kind, kind), sql`${schedules.plan} -> 'pendingRun' ->> 'at' = ${at}`),
+      );
   }
 }

@@ -216,6 +216,11 @@ class TimerScheduler implements Scheduler {
    * （溜まった回数ぶん撃たない）。
    */
   #firstDue(entry: ScheduleEntry, plan: ScheduledRequest, now: Date): Date {
+    // **引き受けたまま終わっていない発火があるなら、まずそれを配り直す。**
+    // claim の直後に器が落ちると、モデルには何も届いていないのに印だけが残る。
+    // ここで拾わないと、日次なら翌日・週次なら翌週までその回が消える。
+    if (plan.pendingRun !== undefined) return now;
+
     // 基準は**定期の予定で動いた時刻**。`lastRunAt`（手で起こした分も動く）を使うと、
     // 人間が余分に1回起こすたびに位相が動く（`run()` は予定をずらさない契約である）。
     const seed = new Date(plan.lastScheduledRunAt ?? plan.createdAt);

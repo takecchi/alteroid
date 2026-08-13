@@ -438,6 +438,7 @@ class Clone implements CloneHost {
           return;
         }
 
+        const cause = event.cause === 'manual' ? 'manual' : 'schedule';
         const plan = claimed.status === 'ok' ? claimed.plan : null;
         await this.#runInternal(
           buildTimerPrompt({
@@ -445,9 +446,17 @@ class Clone implements CloneHost {
             ...(event.target === undefined ? {} : { target: event.target }),
             ...(plan === null ? {} : { request: plan.request }),
             ...(plan?.lastRunAt === undefined ? {} : { lastRunAt: plan.lastRunAt }),
+            // 前の発火が終わっていなかったなら、それは器が落ちた跡である。
+            // 走りかけていた可能性があることを隠さない（二重に手を出さないため）。
+            ...(plan?.pendingRun === undefined ? {} : { unfinishedAt: plan.pendingRun.at }),
             digest: await this.#recentDigest(),
           }),
         );
+
+        // **終わったことを記録するのはここ。** claim（引き受けた印）とは別に置く。
+        // ここまで来ないうちに器が落ちたら、印が残っているので配り直される
+        // （日次なら翌日・週次なら翌週まで消える、を作らない）。
+        if (plan !== null) await this.#completeScheduledRun(event.kind, event.at, cause);
         return;
       }
 
@@ -573,6 +582,41 @@ class Clone implements CloneHost {
       }
     }
     return { status: 'failed', error: last };
+  }
+
+  /**
+   * 引き受けた発火が終わったことを記録する。
+   *
+   * 書けなくても**ターンはもう走っている**ので、ここで止めるものは無い。印が残るぶん
+   * 次の起動で配り直されるが、それは「消えるより配り直す」を選んだ結果である
+   * （プロンプトには前の発火が終わっていないことを添えるので、二重に手を出す前に
+   * クローンが `manager_list` と日誌を見られる）。
+   */
+  async #completeScheduledRun(
+    kind: string,
+    at: string,
+    cause: 'schedule' | 'manual',
+  ): Promise<void> {
+    let last = '';
+    for (let attempt = 0; attempt < SCHEDULE_STORE_ATTEMPTS; attempt += 1) {
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, SCHEDULE_STORE_RETRY_MS * attempt));
+      }
+      try {
+        await this.#stores.schedules.completeRun(kind, at, cause);
+        return;
+      } catch (error) {
+        last = String(error);
+      }
+    }
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text:
+        `定期の依頼 ${kind} の「終わった」を記録できなかった` +
+        `（引き受けた印が残るので、次の起動で配り直される）: ${last}`,
+    });
   }
 
   /**

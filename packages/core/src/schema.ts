@@ -311,6 +311,18 @@ export const scheduledRequestSchema = z.object({
    * 基準になり、再起動した瞬間に定期の予定がその分ずれる。
    */
   lastScheduledRunAt: isoDateTime.optional(),
+  /**
+   * 「この発火を引き受けたが、まだ終わっていない」印。
+   *
+   * **確定（claim）と完了を分けるためにある。** 引き受けた時点で印を付け、ターンが
+   * 終わってから消す。器を作り直したときにこの印が残っていれば、その回は
+   * **モデルに届かないまま失われた可能性がある**ので、依頼の本文つきで配り直す。
+   *
+   * 印が無く基準（`lastScheduledRunAt`）だけが進んでいると、claim の直後に落ちた
+   * 発火は「もう動いた」と見えて、日次なら翌日・週次なら翌週まで消える。逆に印だけで
+   * 基準を持たないと、動いた後に落ちたときの二重実行を止められない。**両方要る。**
+   */
+  pendingRun: z.object({ at: isoDateTime, cause: z.enum(['schedule', 'manual']) }).optional(),
 });
 
 export type ScheduleKind = z.infer<typeof scheduleKindSchema>;

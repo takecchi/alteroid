@@ -86,9 +86,9 @@ export interface ScheduleStore {
    * 出したら取り返せない）。返り値が更新前の姿なのは、呼び出し側が「前回いつ
    * 動いたか」を材料として要るからである。
    *
-   * `cause` で記録先が変わる。`schedule` なら `lastRunAt` と `lastScheduledRunAt` の
-   * 両方、`manual`（人間が手で起こした1回）なら **`lastRunAt` だけ**。手で起こした
-   * ことで定期の予定をずらさないためである（`Scheduler.run` の契約）。
+   * ここで付けるのは **`pendingRun`（引き受けた印）と `lastRunAt`（観測用）だけ**で、
+   * 定期の予定の基準（`lastScheduledRunAt`）は `completeRun` まで進めない。claim の
+   * 直後に器が落ちたとき、その回が「もう動いた」ことになって消えないようにするため。
    */
   claimRun(
     kind: string,
@@ -96,6 +96,15 @@ export interface ScheduleStore {
     at: string,
     cause: 'schedule' | 'manual',
   ): Promise<ScheduledRequest | null>;
+
+  /**
+   * 引き受けた発火が終わったことを記録する。`pendingRun` を消し、`schedule` なら
+   * 定期の予定の基準（`lastScheduledRunAt`）を進める。
+   *
+   * **`manual` では基準を動かさない**（手で起こした1回で予定をずらさない）。
+   * 消えている kind、別の発火の印が付いている場合は何もしない。
+   */
+  completeRun(kind: string, at: string, cause: 'schedule' | 'manual'): Promise<void>;
 }
 
 /** セッションの生ログ退避先（PreCompact フックで落とす）。 */
