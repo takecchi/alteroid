@@ -1758,7 +1758,11 @@ export function createApp(deps: AppDeps) {
       describeRoute({
         tags: ['access'],
         summary: 'alteroid を使う許可を与える',
-        description: 'ログインしただけでは使えない。ここで初めて使えるようになる。本文は無い。',
+        description:
+          'ログインしただけでは使えない。ここで初めて使えるようになる。本文は無い。\n\n' +
+          '**許可できるアカウントは高々1つ。** alteroid は単一の持ち主のものであり、' +
+          'マルチユーザー / チーム利用は非ゴールである（docs/PRD.md「スコープ外」）。' +
+          '既に別のアカウントが許可されていれば 409 を返す — 持ち主を移すなら先に取り消す。',
         responses: {
           200: {
             description: '許可した（既に許可済みでも 200）。',
@@ -1770,6 +1774,10 @@ export function createApp(deps: AppDeps) {
           },
           404: {
             description: '該当するアカウントが無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          409: {
+            description: '既に別のアカウントが許可されている（先に revoke する）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           ...noBodyPostResponses(),
