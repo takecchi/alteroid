@@ -16,6 +16,8 @@ packages/api-client/src/generated/
 # env / secrets
 .env
 .env.*
+# 雛形は中身が空なのでコミットする（人間が最初に読む場所）
+!.env.example
 
 # compose の既定の作業ディレクトリ（マネージャーが実際に触る場所）
 workspace/
