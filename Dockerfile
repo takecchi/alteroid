@@ -128,6 +128,13 @@ RUN ln -sf /app/apps/cli/dist/index.js /usr/local/bin/alteroid \
   && chmod +x /app/apps/cli/dist/index.js /app/apps/daemon/dist/index.js \
     /app/apps/runner/dist/index.js
 
+# 役ごとの起こし方。**`node <entry>` を直に叩かず、この2つを通す。**
+#
+# 器が引き受けているのは、人間が置く環境変数を app と runner で1つにするための
+# 前処理だけである（合鍵を sha256 へ畳む / root で来たら降りる）。判断は無い。
+COPY docker/alteroidd docker/alteroid-runner /usr/local/bin/
+RUN chmod 0755 /usr/local/bin/alteroidd /usr/local/bin/alteroid-runner
+
 # 人格データの置き場（pg 構成では state だけがここに残る）と、マネージャーの
 # 作業ディレクトリ。**別々に持つ。** 記憶と実プロジェクトを同じ場所に置くと、
 # マネージャーの作業が記憶の隣で行われることになる。
@@ -151,9 +158,10 @@ ENV ALTEROID_PORT=4517
 
 # 既定はデーモン（＝非特権）。runner だけは compose 側で root へ上げる
 # （子プロセスを別 UID へ降ろすのに特権が要るため。降ろした先が worker である）。
+# root で起こされた場合、デーモンは自分で `node` へ降りる（`docker/alteroidd`）。
 USER node
 
-# 同じ像から2つの役を起こす（compose が command で選ぶ）:
-#   デーモン: node apps/daemon/dist/index.js   ← 記憶ストアの鍵を持つ
-#   runner  : node apps/runner/dist/index.js   ← **鍵を持たない**。SDK を隔離して走らせる
-CMD ["node", "apps/daemon/dist/index.js"]
+# 同じ像から2つの役を起こす（compose と Railway が command で選ぶ）:
+#   デーモン: alteroidd         ← 記憶ストアの鍵を持つ。root で来たら node へ降りる
+#   runner  : alteroid-runner   ← **鍵を持たない**。合鍵は起動時に sha256 へ畳む
+CMD ["alteroidd"]
