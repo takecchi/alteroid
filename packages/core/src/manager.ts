@@ -128,6 +128,12 @@ class Pool implements ManagerPool {
   readonly #post: (event: InboxEvent) => void;
   readonly #runners: RunnerRegistry;
   readonly #records = new Map<string, ManagerRecord>();
+  /** 一度でも名乗りを聞いた runner。2回目以降の `hello` は繋ぎ直しである。 */
+  readonly #greeted = new Set<string>();
+  /** 取り直しが走っている runner（同じ runner について重ねない）。 */
+  readonly #reattaching = new Set<string>();
+  /** いま resume を投げている最中のマネージャー（同じ session を二本起こさない）。 */
+  readonly #resuming = new Set<string>();
   #connected = false;
   #stopped = false;
 
@@ -381,7 +387,8 @@ class Pool implements ManagerPool {
       const runner = await this.#runnerOf(record);
       if (!runner) continue;
 
-      const ok = await this.#resume(record, runner, restartNudge(job.status));
+      const nudge = restartNudge(job.status, 'daemon');
+      const ok = await this.#resumeOnce(record, runner, nudge);
       if (!ok) continue;
       record.job.status = 'running';
       await this.#persist(record);
@@ -389,7 +396,7 @@ class Pool implements ManagerPool {
         type: 'exchange',
         with: 'manager',
         role: 'outbound',
-        text: `[${job.id}] （再起動後の再開）${restartNudge(job.status)}`,
+        text: `[${job.id}] （再起動後の再開）${nudge}`,
       });
       this.#notifyRestored(record, 'resumed');
       resumed.push(summaryOf(record));
@@ -463,11 +470,104 @@ class Pool implements ManagerPool {
     }
   }
 
+  /**
+   * runner が繋ぎ直してきたときに、走っていたはずの仕事を取り直す。
+   *
+   * **引き取りの契機がデーモンの起動時しか無いと、デーモンだけが生き残った
+   * 再デプロイで仕事が誰にも拾われない。** runner の器だけが入れ替わると、
+   * 台帳は `running` のまま、runner の中にセッションは無く、クローンが
+   * `manager_send` するまで永久に止まる。人間の不在で止まってよいのは承認待ちの
+   * 仕事だけである（PRD「自律」）。
+   *
+   * ストリームが切れただけ（器はそのまま）なら、`list()` にセッションがそのまま
+   * 並ぶので何も起きない。**生死は台帳ではなく runner に聞く。**
+   */
+  async #reattach(runnerId: string): Promise<void> {
+    if (this.#stopped || this.#reattaching.has(runnerId)) return;
+    this.#reattaching.add(runnerId);
+    try {
+      const runner = await this.#runners.get(runnerId);
+      if (runner === null) return;
+
+      // **聞けなかったときは何もしない。** 応答が無いことを「セッションが無い」と
+      // 読むと、生きている仕事を二重に起こす。
+      const states = await runner.list().catch(() => null);
+      if (states === null) return;
+      const alive = new Set(states.map((state) => state.managerId));
+
+      for (const job of await this.#stores.jobs.listJobs()) {
+        // 宛先が書かれていない古いジョブはここでは触らない（どの runner の器が
+        // 入れ替わったのかを、この情報だけでは決められない）。起動時の `restore`
+        // が拾って `runner_id` を書くので、次からはこの経路に乗る。
+        if (job.runnerId !== runnerId || alive.has(job.id)) continue;
+
+        const record = this.#records.get(job.id) ?? {
+          job: { ...job },
+          waiting: [],
+          attached: false,
+        };
+        this.#records.set(job.id, record);
+        // 器の中に居ないことは確かめた。台帳の `attached` はもう嘘である。
+        record.attached = false;
+
+        // 手を動かしている最中だったものだけ戻す（`done` は死ではなく待機であり、
+        // 話しかけられたら続く。ここで起こすと開いたままの窓を勝手に閉じる）。
+        const { status } = record.job;
+        if (status !== 'running' && status !== 'waiting_human') continue;
+
+        // **1本が戻せなくても、残りを道連れにしない。** ここで抜けると、後ろに
+        // 並んでいた仕事が誰にも拾われないまま `running` として残る。
+        try {
+          const message = restartNudge(status, 'runner');
+          if (!(await this.#resumeOnce(record, runner, message))) continue;
+          record.job.status = 'running';
+          await this.#persist(record);
+          await this.#journal({
+            type: 'exchange',
+            with: 'manager',
+            role: 'outbound',
+            text: `[${job.id}] （runner 入れ替え後の再開）${message}`,
+          });
+          this.#notifyRestored(record, 'resumed', 'runner');
+        } catch {
+          // 戻せなかった分は次の `hello` でまた挑む（`list()` に居ないままなので）。
+        }
+      }
+    } catch {
+      // 台帳や名簿を引けないところで転んでもデーモンごと落とさない。
+    } finally {
+      this.#reattaching.delete(runnerId);
+    }
+  }
+
   async #runnerOf(record: ManagerRecord): Promise<RunnerClient | null> {
     const runnerId = record.job.runnerId;
     // 宛先が書かれていない古いジョブは、いまの1台へ寄せる（M4 は単一 runner）。
     if (runnerId === undefined) return this.#runners.select({}).catch(() => null);
     return this.#runners.get(runnerId);
+  }
+
+  /**
+   * 同じ session を二本起こさない resume。
+   *
+   * 引き取りの契機は複数ある（起動時の `restore` / runner の `hello` / クローンの
+   * `manager_send`）。重なると同じ仕事が二重に走り、同じコミットや同じ PR が
+   * 二度出る。**確かめてから立てるまでに `await` を挟まない**こと — 挟むと、
+   * その隙に別の契機が同じ判断をする。
+   */
+  async #resumeOnce(
+    record: ManagerRecord,
+    runner: RunnerClient,
+    message: string | undefined,
+  ): Promise<boolean> {
+    const id = record.job.id;
+    if (this.#resuming.has(id)) return false;
+    this.#resuming.add(id);
+    try {
+      return await this.#resume(record, runner, message);
+    } finally {
+      this.#resuming.delete(id);
+    }
   }
 
   async #resume(
@@ -519,7 +619,13 @@ class Pool implements ManagerPool {
    * 到達する鍵を持たないので、書けるのはデーモンだけである。
    */
   async #onEvent(event: RunnerEvent): Promise<void> {
-    if (event.type === 'hello') return;
+    if (event.type === 'hello') {
+      // 初回の名乗りは「いま繋いだ」だけで、引き取りは起動時の `restore` が行う。
+      // **2回目以降が、器が入れ替わったかもしれない合図**である。
+      if (this.#greeted.has(event.runnerId)) void this.#reattach(event.runnerId);
+      else this.#greeted.add(event.runnerId);
+      return;
+    }
 
     const record = this.#records.get(event.managerId) ?? (await this.#load(event.managerId));
     if (!record) return;
@@ -651,8 +757,13 @@ class Pool implements ManagerPool {
     return record;
   }
 
-  #notifyRestored(record: ManagerRecord, how: 'attached' | 'resumed'): void {
+  #notifyRestored(
+    record: ManagerRecord,
+    how: 'attached' | 'resumed',
+    cause: RestartCause = 'daemon',
+  ): void {
     const { job } = record;
+    const head = cause === 'runner' ? 'runner の器が作り直された' : 'デーモンが再起動した';
     this.#post({
       type: 'manager_message',
       id: randomUUID(),
@@ -661,8 +772,8 @@ class Pool implements ManagerPool {
       kind: 'report',
       text: [
         how === 'attached'
-          ? 'デーモンが再起動した。この委譲は runner の中で走り続けている。'
-          : 'デーモンが再起動した。中断されていたこの委譲を、前のセッションから再開させた。',
+          ? `${head}。この委譲は runner の中で走り続けている。`
+          : `${head}。中断されていたこの委譲を、前のセッションから再開させた。`,
         `依頼: ${job.request ?? job.summary}`,
         `作業ディレクトリ: ${job.cwd ?? '(不明)'}`,
         job.lastReport === undefined ? '' : `直近の報告: ${job.lastReport}`,
@@ -671,6 +782,12 @@ class Pool implements ManagerPool {
           ? '返事待ちがあれば改めて届く。`manager_send` で追加の指示も送れる。'
           : '再開の指示は送信済みなので、報告を待てばよい。' +
             '返事待ちだった確認は器と一緒に失われているので、必要ならマネージャーが聞き直してくる。',
+        // **作業ディレクトリが空かもしれないことを黙っていない。** 器に永続化が
+        // 無ければコミット前の変更は消えている（roadmap M5「workspace 復旧」）。
+        cause === 'runner'
+          ? '器に永続化が無ければ、コミット前の変更は失われている。' +
+            '同じ結果を期待せず、手元の状態から組み立て直させること。'
+          : '',
       ]
         .filter((line) => line !== '')
         .join('\n'),
@@ -712,15 +829,30 @@ class Pool implements ManagerPool {
   }
 }
 
+/**
+ * 何が作り直されたか。**マネージャーから見える景色が違う。**
+ *
+ * デーモンだけなら作業ディレクトリはそのまま残っている。runner ごとなら、
+ * 器に永続化が無ければコミット前の変更は消えている。
+ */
+type RestartCause = 'daemon' | 'runner';
+
 /** 再起動後に流す一言。**開き直すだけでは仕事は進まない。** */
-function restartNudge(status: JobStatus): string {
+function restartNudge(status: JobStatus, cause: RestartCause): string {
+  // **runner が入れ替わったことを「デーモンが再起動した」と伝えない。** 手元が
+  // 残っている前提で続きを書き始めると、消えた作業を書いたつもりで進む。
+  const head =
+    cause === 'runner'
+      ? '[system] runner の器が作り直された。作業ディレクトリが残っているとは限らないので、' +
+        '続きに入る前に手元の状態を確かめよ。'
+      : '[system] デーモンが再起動した。';
   if (status === 'waiting_human') {
     return (
-      '[system] デーモンが再起動した。あなたが待っていた確認は器と一緒に失われている。' +
+      `${head}あなたが待っていた確認は器と一緒に失われている。` +
       'まだ必要なら聞き直し、不要なら中断していた作業の続きを進めよ。'
     );
   }
-  return '[system] デーモンが再起動した。中断していた作業の続きを進めよ。';
+  return `${head}中断していた作業の続きを進めよ。`;
 }
 
 function summaryOf(record: ManagerRecord, live = true): ManagerSummary {

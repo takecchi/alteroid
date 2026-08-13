@@ -19,7 +19,13 @@ import {
   type ManagerPool,
 } from './manager.js';
 import { createLocalRunner } from './runner-local.js';
-import { createRunnerRegistry, type RunnerClient } from './runner-protocol.js';
+import {
+  createRunnerRegistry,
+  type RunnerClient,
+  type RunnerEvent,
+  type RunnerManagerState,
+  type RunnerResumeCommand,
+} from './runner-protocol.js';
 import type { InboxEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
@@ -719,6 +725,187 @@ describe('デーモン再起動後（M4）', () => {
 
     // runner のファイルもアーカイブも無いが、預けた生ログから返せる
     expect(await s.pool.transcript(managerId)).toBe('{"type":"user","uuid":"u1"}\n');
+
+    await s.pool.stop();
+  });
+});
+
+/**
+ * 器の入れ替えを再現できる runner。
+ *
+ * デーモンから見える顔（`RunnerClient`）だけで作る。HTTP 実装でも同一プロセス
+ * 実装でも、デーモンが知っているのはこの形しかない。
+ */
+function swappableRunner(runnerId = 'runner-primary') {
+  let emit: ((event: RunnerEvent) => void) | null = null;
+  const state = {
+    alive: [] as RunnerManagerState[],
+    resumes: [] as RunnerResumeCommand[],
+  };
+  const runner: RunnerClient = {
+    runnerId,
+    workspacePath: '/work/project',
+    async connect(onEvent) {
+      emit = onEvent;
+      // 本物と同じく、ストリームの先頭で必ず名乗る。
+      onEvent({ type: 'hello', runnerId });
+    },
+    async start() {
+      /* この検証では使わない */
+    },
+    async resume(command) {
+      state.resumes.push(command);
+      state.alive.push({
+        managerId: command.managerId,
+        status: 'running',
+        cwd: command.cwd,
+        request: command.request,
+        waiting: [],
+        sessionId: command.sessionId,
+      });
+    },
+    async send() {
+      /* この検証では使わない */
+    },
+    async answer() {
+      return true;
+    },
+    async stop() {
+      /* この検証では使わない */
+    },
+    async list() {
+      return [...state.alive];
+    },
+    async transcript() {
+      return null;
+    },
+    async credentials() {
+      return [];
+    },
+    async setCredentials() {
+      return [];
+    },
+    async close() {
+      /* この検証では使わない */
+    },
+  };
+  return {
+    runner,
+    state,
+    /** 器を作り直す ＝ 中のセッションは消え、新しいストリームが名乗り直す。 */
+    swap() {
+      state.alive = [];
+      emit?.({ type: 'hello', runnerId });
+    },
+    /** ストリームだけが切れて繋ぎ直す（器はそのまま）。 */
+    reconnect() {
+      emit?.({ type: 'hello', runnerId });
+    },
+  };
+}
+
+describe('runner だけが入れ替わったとき（デプロイ）', () => {
+  const runningJob = {
+    id: 'mgr-running',
+    managerId: 'mgr-running',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T01:00:00.000Z',
+    status: 'running' as const,
+    summary: '移行作業',
+    request: 'DB の移行をやって',
+    cwd: '/work/project',
+    sessionId: 'sess-before-swap',
+    runnerId: 'runner-primary',
+    lastReport: 'スキーマまで書いた',
+  };
+
+  it('デーモンが生き残っていても、走行中だった仕事を取り直す', async () => {
+    // **引き取りの契機がデーモンの起動時しか無いと、ここが落ちる。** runner だけを
+    // 再デプロイするとセッションは消えるのに台帳は `running` のままで、クローンが
+    // 話しかけるまで永久に止まる。人間の不在で止まってよいのは承認待ちの仕事だけ
+    // である（PRD「自律」）。
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    // 起動時の引き取り。runner に居ないので resume されて走り出す。
+    await s.pool.restore();
+    expect(fake.state.resumes).toHaveLength(1);
+
+    // ここで runner だけが入れ替わる（デーモンは生きたまま）。
+    fake.swap();
+
+    await expect.poll(() => fake.state.resumes.length, { timeout: 2000 }).toBe(2);
+    expect(fake.state.resumes[1]).toMatchObject({
+      managerId: 'mgr-running',
+      sessionId: 'sess-before-swap',
+    });
+
+    // **「デーモンが再起動した」と伝えない。** 手元が残っている前提で書き始める。
+    expect(fake.state.resumes[1]?.message).toContain('runner の器が作り直された');
+    expect(fake.state.resumes[1]?.message).toContain('手元の状態を確かめよ');
+
+    // クローンにも届く。作業ディレクトリが消えている可能性まで言う。
+    const notice = s.inbox.filter((event) => event.type === 'manager_message').at(-1);
+    expect((notice as { text: string }).text).toContain('runner の器が作り直された');
+    expect((notice as { text: string }).text).toContain('コミット前の変更は失われている');
+
+    await s.pool.stop();
+  });
+
+  it('ストリームが切れただけなら何もしない（走っている仕事を二重に起こさない）', async () => {
+    // 生死は台帳ではなく runner に聞く。聞かずに `hello` だけで再開させると、
+    // ネットワークが一瞬途切れるたびに同じ仕事が二本走る。
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    await s.pool.restore();
+    expect(fake.state.resumes).toHaveLength(1);
+
+    fake.reconnect();
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(fake.state.resumes).toHaveLength(1);
+
+    await s.pool.stop();
+  });
+
+  it('待機中だった仕事は起こさない（`done` は死ではなく待機である）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({ ...runningJob, id: 'mgr-done', status: 'done' });
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    await s.pool.restore();
+    fake.swap();
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(fake.state.resumes).toHaveLength(0);
+
+    await s.pool.stop();
+  });
+
+  it('runner に聞けなかったときは何もしない（応答が無いことを死と読まない）', async () => {
+    // `list()` が失敗したのを「セッションが無い」と読むと、生きている仕事を
+    // 二重に起こす。分からないときは触らない。
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    await s.pool.restore();
+    expect(fake.state.resumes).toHaveLength(1);
+
+    fake.runner.list = async () => {
+      throw new Error('runner が応答しない');
+    };
+    fake.swap();
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(fake.state.resumes).toHaveLength(1);
 
     await s.pool.stop();
   });

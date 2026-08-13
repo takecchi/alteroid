@@ -53,6 +53,18 @@ export {
 const DEFAULT_BIND = '127.0.0.1';
 
 /**
+ * runner が戻ってくるのを待つ上限と、待ち方。
+ *
+ * **同時に再デプロイされた runner を待てないと、デーモンが道連れで落ちる。**
+ * 落ちている間はクローンのターンも `/approvals` への回答も受け付けられないので、
+ * 「人間の不在で止まってよいのは承認待ちの仕事だけ」という前提が崩れる
+ * （PRD「自律」）。器の入れ替えは分単位では終わらない方が珍しいので、そこまでは
+ * 待つ。それを越えても繋がらないなら、黙って上がったふりをせずに落ちる。
+ */
+const RUNNER_CONNECT_WINDOW_MS = 120_000;
+const RUNNER_CONNECT_MAX_DELAY_MS = 15_000;
+
+/**
  * 委譲先を開く。
  *
  * `ALTEROID_RUNNER_URL` があれば、そこが manager-runner である（コンテナ構成）。
@@ -71,13 +83,39 @@ async function openRunner(workspace: string, withheldEnvKeys: string[]): Promise
           '（runner の制御面は鍵で守る。runner には sha256 を渡すこと）',
       );
     }
-    return createHttpRunner({ baseUrl: url, token });
+    return connectRunner(url, token);
   }
   return createLocalRunner({
     runnerId: 'runner-local',
     workspacePath: workspace,
     withheldEnvKeys,
   });
+}
+
+/**
+ * runner へ繋ぐ。**居なければ、戻ってくるまで待つ。**
+ *
+ * 待つのは「繋がらない」ときだけである。鍵が無い・鍵が違うといった**方針の
+ * 誤り**は待っても直らないので、上の `openRunner` で即座に落としてある。ここで
+ * 粘るのは器の入れ替え（デプロイ・再起動）だけを相手にしている。
+ */
+async function connectRunner(baseUrl: string, token: string): Promise<RunnerClient> {
+  const deadline = Date.now() + RUNNER_CONNECT_WINDOW_MS;
+  let delay = 1_000;
+  for (;;) {
+    try {
+      return await createHttpRunner({ baseUrl, token });
+    } catch (error) {
+      if (Date.now() >= deadline) throw error;
+      // **黙って待たない。** 上がらない理由を探す人間が最初に見るのはここである。
+      process.stderr.write(
+        `alteroidd: runner (${baseUrl}) に繋がりません。` +
+          `${Math.round(delay / 1000)} 秒後に試し直します: ${String(error)}\n`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      delay = Math.min(delay * 2, RUNNER_CONNECT_MAX_DELAY_MS);
+    }
+  }
 }
 
 /**
