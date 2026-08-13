@@ -135,6 +135,34 @@ export class FsAuthStore implements AuthStore {
   }
 
   /**
+   * `pending` → `processing` を**1つの排他区間の中で**行う。
+   *
+   * 外部プロバイダとの交換へ進む権利をここで1つに絞る。読んでから書く形だと、
+   * 同じ callback の並行到着で両方が交換し、失敗した側が成功した側の結果を
+   * 上書きしうる。
+   */
+  async beginLoginExchange(id: string): Promise<LoginRequest | null> {
+    return this.#mutate<LoginRequest | null>(
+      (file): { next: AuthFile | null; result: LoginRequest | null } => {
+        const found = file.loginRequests.find((request) => request.id === id);
+        if (found === undefined || found.status !== 'pending') {
+          return { next: null, result: null };
+        }
+        const processing: LoginRequest = { ...found, status: 'processing' };
+        return {
+          next: {
+            ...file,
+            loginRequests: file.loginRequests.map((request) =>
+              request.id === id ? processing : request,
+            ),
+          },
+          result: processing,
+        };
+      },
+    );
+  }
+
+  /**
    * `authenticated` → `consumed` と**トークンの保存を1回の書き込みで**行う。
    *
    * 分けると壊れる（読みと書きを分ければ二重発行、consumed を先に書けば保存失敗で

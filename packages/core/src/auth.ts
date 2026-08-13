@@ -106,7 +106,15 @@ export const loginRequestSchema = z.object({
   label: z.string(),
   createdAt: isoDateTime,
   expiresAt: isoDateTime,
-  status: z.enum(['pending', 'authenticated', 'consumed', 'failed']),
+  /**
+   * `processing` は「プロバイダとトークン交換中」。
+   *
+   * **これが無いと、同じ callback が並行に届いたとき両方が交換へ進む。** 認可コードは
+   * 一度きりなので片方は必ず失敗し、その失敗が古い写しを元に `failed` を書いて、
+   * 成功した側の `authenticated` を後から上書きしうる（ログインを回収できなくなる）。
+   * 交換へ進む権利は1リクエストだけが取る。
+   */
+  status: z.enum(['pending', 'processing', 'authenticated', 'consumed', 'failed']),
   accountId: z.string().nullable(),
   /** 失敗した理由（ブラウザではなく端末側に見せる）。 */
   error: z.string().nullable(),
@@ -139,6 +147,17 @@ export interface AuthStore {
 
   putLoginRequest(request: LoginRequest): Promise<void>;
   getLoginRequest(id: string): Promise<LoginRequest | null>;
+
+  /**
+   * `pending` のログイン要求を `processing` へ**原子的に**移し、移せたときだけ返す。
+   *
+   * **外部プロバイダとの交換へ進む権利をここで1つに絞る。** ブラウザの再送や
+   * プロキシのリトライで同じ `state + code` が並行に届くのは普通に起きる。読んでから
+   * 書く形だと両方が `pending` を通過して両方が交換し、認可コードが一度きりである以上
+   * 片方は失敗する。その失敗が古い写しから `failed` を書けば、成功した側の
+   * `authenticated` を上書きして**ログインを回収できなくなる**。
+   */
+  beginLoginExchange(id: string): Promise<LoginRequest | null>;
 
   /**
    * `authenticated` のログイン要求を `consumed` へ移し、**同じ操作で**

@@ -255,6 +255,67 @@ describe('createAuthService', () => {
     expect(await store.listAccessTokens(first.account.id)).toHaveLength(1);
   });
 
+  it('同じ callback が並行に届いても、交換は1回だけで成功が失敗に上書きされない', async () => {
+    let exchanges = 0;
+    const oneTimeCode = createAuthService({
+      store,
+      newId: () => `id-${++counter}`,
+      providers: createAuthProviderRegistry([
+        {
+          kind: 'oauth2',
+          id: 'fake',
+          label: 'Fake',
+          authorizationUrl: (request) => `https://example.test/authorize?state=${request.state}`,
+          exchange: async () => {
+            exchanges += 1;
+            // 認可コードは一度きり。2回目以降はプロバイダが必ず失敗させる。
+            if (exchanges > 1) throw new Error('invalid_grant');
+            return ALICE;
+          },
+        },
+      ]),
+    });
+
+    const started = await oneTimeCode.startLogin({
+      provider: 'fake',
+      redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
+    });
+    const state = new URL(started.authorizationUrl).searchParams.get('state') ?? '';
+
+    // ブラウザの再送・プロキシのリトライで普通に起きる形。
+    const results = await Promise.all([
+      oneTimeCode.completeLogin({ state, code: 'code-alice' }),
+      oneTimeCode.completeLogin({ state, code: 'code-alice' }),
+      oneTimeCode.completeLogin({ state, code: 'code-alice' }),
+    ]);
+
+    // 交換へ進めるのは1本だけ（進めてしまうと、失敗した側が成功を打ち消す）。
+    expect(exchanges).toBe(1);
+    expect(results.filter((result) => result.status === 'ok')).toHaveLength(1);
+
+    // 最終状態が authenticated のまま残っていること＝端末が回収できること。
+    const claimed = await oneTimeCode.claim({
+      requestId: started.requestId,
+      claimSecret: started.claimSecret,
+    });
+    expect(claimed.status).toBe('ready');
+  });
+
+  it('交換中（processing）の引き取りは pending として待たせる', async () => {
+    const started = await service.startLogin({
+      provider: 'fake',
+      redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
+    });
+    // ブラウザ側が交換に入ったところ
+    await store.beginLoginExchange(started.requestId);
+
+    const result = await service.claim({
+      requestId: started.requestId,
+      claimSecret: started.claimSecret,
+    });
+    expect(result).toEqual({ status: 'pending' });
+  });
+
   it('引き取りは一度きり（二度目は盗まれた可能性として拒む）', async () => {
     const { requestId, claimSecret } = await login('code-alice');
     expect((await service.claim({ requestId, claimSecret })).status).toBe('ready');

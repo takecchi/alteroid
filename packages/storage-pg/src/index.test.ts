@@ -577,6 +577,33 @@ describe('AuthStore', () => {
     expect((await stores.auth.getLoginRequest('login-4'))?.status).toBe('consumed');
     expect(await stores.auth.listAccessTokens('account-1')).toHaveLength(1);
   });
+  it('交換へ進む権利は1つのリクエストしか取れない', async () => {
+    await stores.auth.putLoginRequest({
+      id: 'login-5',
+      provider: 'google',
+      nonce: 'nonce',
+      codeVerifier: 'verifier',
+      claimSha256: 'a'.repeat(64),
+      redirectUri: 'http://127.0.0.1:4517/auth/google/callback',
+      label: '',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      expiresAt: '2999-01-01T00:00:00.000Z',
+      status: 'pending',
+      accountId: null,
+      error: null,
+    });
+
+    // 読んでから書く形だと、全部が pending を通過して全部が交換へ進む。
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => stores.auth.beginLoginExchange('login-5')),
+    );
+
+    expect(results.filter((result) => result !== null)).toHaveLength(1);
+    expect((await stores.auth.getLoginRequest('login-5'))?.status).toBe('processing');
+    // 一度 processing になったら、あとから何度呼んでも取れない。
+    expect(await stores.auth.beginLoginExchange('login-5')).toBeNull();
+    expect(await stores.auth.beginLoginExchange('居ない')).toBeNull();
+  });
 });
 
 /** 引き取れないはずの経路で呼ばれたら、テストとして落とす。 */

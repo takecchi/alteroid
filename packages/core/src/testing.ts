@@ -174,6 +174,14 @@ export function createMemoryStores(): Stores {
     async getLoginRequest(id) {
       return loginRequests.get(id) ?? null;
     },
+    async beginLoginExchange(id) {
+      // 検査から書き込みまでの間に await を挟まない（挟むと2本目が割り込む）。
+      const found = loginRequests.get(id);
+      if (found === undefined || found.status !== 'pending') return null;
+      const processing = { ...found, status: 'processing' as const };
+      loginRequests.set(id, processing);
+      return processing;
+    },
     async claimLoginRequest(id, issue) {
       // 検査から書き込みまでの間に await を挟まない（挟むと他の claim が割り込む）。
       const found = loginRequests.get(id);

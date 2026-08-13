@@ -200,6 +200,31 @@ export class PgAuthStore implements AuthStore {
   }
 
   /**
+   * `pending` → `processing` を**条件付き UPDATE 1文で**行う。
+   *
+   * 更新行数が「交換へ進む権利を取れたのは自分だけか」の判定になる。
+   */
+  async beginLoginExchange(id: string): Promise<LoginRequest | null> {
+    const rows = await this.#db
+      .update(authLoginRequests)
+      .set({
+        request: sql`jsonb_set(${authLoginRequests.request}, '{status}', '"processing"'::jsonb)`,
+      })
+      .where(
+        and(
+          eq(authLoginRequests.id, id),
+          sql`${authLoginRequests.request} ->> 'status' = 'pending'`,
+        ),
+      )
+      .returning({ request: authLoginRequests.request });
+
+    const row = rows[0];
+    if (row === undefined) return null;
+    const parsed = loginRequestSchema.safeParse(row.request);
+    return parsed.success ? parsed.data : null;
+  }
+
+  /**
    * `authenticated` → `consumed` と**トークンの INSERT を1つのトランザクションで**行う。
    *
    * 条件付き UPDATE の更新行数が「確保できたのは自分だけか」の判定になる

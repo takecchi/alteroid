@@ -153,9 +153,23 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
         return { status: 'error', reason: 'expired' };
       }
 
-      const provider = providers.oauth(request.provider);
+      /**
+       * **交換へ進む権利をここで取る。**
+       *
+       * 上の `pending` 検査は早期の門前払いでしかない。ブラウザの再送やプロキシの
+       * リトライで同じ `state + code` が並行に届くのは普通に起きて、読んでから書く
+       * 形だと両方が交換へ進む。認可コードは一度きりなので片方は必ず失敗し、その
+       * 失敗が**古い写しから** `failed` を書けば、成功した側の `authenticated` を
+       * 後から上書きしてログインを回収できなくする。
+       *
+       * 取れなかった側は「もう誰かが進んでいる」＝ `already_used` で降りる。
+       */
+      const claimedForExchange = await store.beginLoginExchange(decoded.requestId);
+      if (claimedForExchange === null) return { status: 'error', reason: 'already_used' };
+
+      const provider = providers.oauth(claimedForExchange.provider);
       if (provider === null) {
-        await fail(request, 'unknown_provider');
+        await fail(claimedForExchange, 'unknown_provider');
         return { status: 'error', reason: 'unknown_provider' };
       }
 
@@ -163,11 +177,11 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
       try {
         profile = await provider.exchange({
           code,
-          codeVerifier: request.codeVerifier,
-          redirectUri: request.redirectUri,
+          codeVerifier: claimedForExchange.codeVerifier,
+          redirectUri: claimedForExchange.redirectUri,
         });
       } catch {
-        await fail(request, 'exchange_failed');
+        await fail(claimedForExchange, 'exchange_failed');
         return { status: 'error', reason: 'exchange_failed' };
       }
 
@@ -229,7 +243,7 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
       }
 
       await store.putLoginRequest({
-        ...request,
+        ...claimedForExchange,
         status: 'authenticated',
         accountId: account.id,
       });
@@ -246,7 +260,8 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
       if (request.status === 'failed') return { status: 'error', reason: 'failed' };
       // 一度きり。二度目は盗まれた可能性があるので、素直に無効として扱う。
       if (request.status === 'consumed') return { status: 'error', reason: 'invalid_request' };
-      if (request.status === 'pending') {
+      // `processing` はプロバイダとの交換中。端末は待てばよい（`pending` と同じ扱い）。
+      if (request.status === 'pending' || request.status === 'processing') {
         if (!isLoginRequestOpen(request, now())) return { status: 'error', reason: 'expired' };
         return { status: 'pending' };
       }
