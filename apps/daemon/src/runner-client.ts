@@ -12,10 +12,15 @@ import { request as httpRequest } from 'node:http';
 import { Readable } from 'node:stream';
 
 import {
+  RunnerHttpError,
   runnerCredentialFingerprintSchema,
   runnerEventSchema,
   runnerManagerStateSchema,
 } from '@alteroid/core';
+
+// **失敗の種別は口の定義（`@alteroid/core`）が持つ。** この経路だけの都合にすると、
+// 同じ判断をインプロセスの runner 側で作り直すことになる。
+export { RunnerHttpError } from '@alteroid/core';
 
 /**
  * manager-runner への HTTP の口（roadmap M4）。
@@ -270,7 +275,10 @@ class HttpRunner implements RunnerClient {
     });
     if (!response.ok) {
       const detail = await response.text().catch(() => '');
-      throw new Error(`runner ${method} ${path} が失敗した (${response.status}) ${detail}`);
+      throw new RunnerHttpError(
+        `runner ${method} ${path} が失敗した (${response.status}) ${detail}`,
+        response.status,
+      );
     }
     return response;
   }

@@ -190,6 +190,44 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
 export type RunnerEvent = z.infer<typeof runnerEventSchema>;
 
 // ---------------------------------------------------------------------------
+// 失敗の種別
+// ---------------------------------------------------------------------------
+
+/**
+ * runner が返した失敗。**status を落とさずに持ち上げる。**
+ *
+ * 呼ぶ側が「待てば直る（器の入れ替え中・瞬断）」と「待っても直らない（鍵が違う・
+ * 命令の形が悪い）」を区別できないと、設定の誤りを再試行で何分も隠すか、逆に
+ * 一時的な失敗で仕事を諦めるかのどちらかになる。**この判断は宛先の実装
+ * （HTTP かインプロセスか）に依らない**ので、口の定義と同じ場所に置く。
+ */
+export class RunnerHttpError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'RunnerHttpError';
+    this.status = status;
+  }
+}
+
+/**
+ * もう一度投げてよい失敗か。
+ *
+ * **status が分からない失敗は「待てば直る」側に寄せる。** 経路が切れた
+ * （`fetch failed`）・器が起き上がりきっていない、はどちらも status を持たない。
+ * ここで諦めると、走行中だった仕事が誰にも拾われないまま `running` で残る。
+ *
+ * 逆に 4xx は runner が「その命令は受け取れない」と答えているので、同じものを
+ * 投げ直しても同じ答えが返る（混雑を表す 408 / 429 だけは別）。
+ */
+export function isRetryableRunnerError(error: unknown): boolean {
+  if (!(error instanceof RunnerHttpError)) return true;
+  if (error.status === 408 || error.status === 429) return true;
+  return error.status >= 500;
+}
+
+// ---------------------------------------------------------------------------
 // デーモン側から見た runner
 // ---------------------------------------------------------------------------
 

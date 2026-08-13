@@ -2,10 +2,24 @@
   "$schema": "https://railway.com/railway.schema.json",
   "build": {
     "builder": "DOCKERFILE",
-    "dockerfilePath": "Dockerfile"
+    "dockerfilePath": "Dockerfile",
+    "watchPatterns": [
+      "apps/runner/**",
+      "packages/core/**",
+      "Dockerfile",
+      ".dockerignore",
+      "docker/**",
+      "package.json",
+      "pnpm-lock.yaml",
+      "pnpm-workspace.yaml",
+      "tsconfig.base.json",
+      "railway/runner.json"
+    ]
   },
   "deploy": {
     "startCommand": "alteroid-runner",
-    "restartPolicyType": "ALWAYS"
+    "restartPolicyType": "ALWAYS",
+    "drainingSeconds": 60,
+    "restartPolicyMaxRetries": 100
   }
 }
