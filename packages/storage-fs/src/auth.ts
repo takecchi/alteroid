@@ -133,6 +133,31 @@ export class FsAuthStore implements AuthStore {
     return loginRequests.find((request) => request.id === id) ?? null;
   }
 
+  /**
+   * `authenticated` → `consumed` を**1つの排他区間の中で**行う。
+   *
+   * 読みと書きを分けると、同じ claim を同時に投げるだけで両方がトークンを
+   * 受け取れてしまう。`#mutate` は read-modify-write ごと直列化する。
+   */
+  async consumeLoginRequest(id: string): Promise<LoginRequest | null> {
+    return this.#mutate((file) => {
+      const found = file.loginRequests.find((request) => request.id === id);
+      if (found === undefined || found.status !== 'authenticated') {
+        return { next: null, result: null };
+      }
+      const consumed: LoginRequest = { ...found, status: 'consumed' };
+      return {
+        next: {
+          ...file,
+          loginRequests: file.loginRequests.map((request) =>
+            request.id === id ? consumed : request,
+          ),
+        },
+        result: consumed,
+      };
+    });
+  }
+
   async #read(): Promise<AuthFile> {
     try {
       const raw = await readFile(this.#path, 'utf8');
@@ -145,16 +170,28 @@ export class FsAuthStore implements AuthStore {
 
   /** read-modify-write を直列化する（デーモン1プロセス前提の最小の排他）。 */
   async #update(mutate: (file: AuthFile) => AuthFile): Promise<void> {
+    await this.#mutate((file) => ({ next: mutate(file), result: undefined }));
+  }
+
+  /**
+   * `#update` と同じ排他区間で、**中で決めた値を返せる**版。
+   *
+   * 「読んで、条件を見て、書いて、書けたかを返す」を呼び出し側で分けさせないために
+   * ある（分けた瞬間に一度きりの保証が壊れる）。`next` が `null` なら書かない。
+   */
+  async #mutate<T>(mutate: (file: AuthFile) => { next: AuthFile | null; result: T }): Promise<T> {
     const run = this.#chain.then(async () => {
-      const next = mutate(await this.#read());
+      const { next, result } = mutate(await this.#read());
+      if (next === null) return result;
       await mkdir(this.#dir, { recursive: true });
       const tmp = `${this.#path}.tmp`;
       // 一時ファイルの時点で 0600。rename 後に絞ると、その隙間で他人が読める。
       await writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
       await chmod(tmp, 0o600);
       await rename(tmp, this.#path);
+      return result;
     });
     this.#chain = run.catch(() => undefined);
-    await run;
+    return run;
   }
 }

@@ -41,16 +41,19 @@ function stubClone(): CloneHost {
   } as unknown as CloneHost;
 }
 
+/** 誰としてログインするかをテスト側から切り替える（2人目を作るため）。 */
+let nextSubject = 'sub-1';
+
 const FAKE_PROVIDER: OAuthProvider = {
   kind: 'oauth2',
   id: 'fake',
   label: 'Fake',
   authorizationUrl: (request) => `https://example.test/authorize?state=${request.state}`,
   exchange: async () => ({
-    subject: 'sub-1',
-    email: 'owner@example.test',
+    subject: nextSubject,
+    email: `${nextSubject}@example.test`,
     emailVerified: true,
-    displayName: 'Owner',
+    displayName: nextSubject,
   }),
 };
 
@@ -61,6 +64,7 @@ let stores: Stores;
 
 function buildApp(plan: Partial<AuthPlan> = {}) {
   stores = createMemoryStores();
+  nextSubject = 'sub-1';
   const resolved: AuthPlan = {
     enabled: true,
     providers: [FAKE_PROVIDER],
@@ -223,6 +227,45 @@ describe('認証が有効なとき', () => {
       (await app.request('/access', { headers: { authorization: `Bearer ${claimed.token}` } }))
         .status,
     ).toBe(403);
+  });
+
+  it('許可できるアカウントは高々1つ（2人目の grant は 409）', async () => {
+    const first = await loginThrough(app);
+    nextSubject = 'sub-2';
+    const second = await loginThrough(app);
+    expect(second.account.id).not.toBe(first.account.id);
+
+    const grantFirst = await app.request(`/access/${first.account.id}/grant`, {
+      ...post,
+      headers: { ...post.headers, ...OPERATOR },
+    });
+    expect(grantFirst.status).toBe(200);
+
+    // ここを 200 にすると、ログインした人数だけ同じクローンの記憶・日誌・実行 API が
+    // 開く＝そのままマルチユーザー利用になる（PRD 非ゴール）。
+    const grantSecond = await app.request(`/access/${second.account.id}/grant`, {
+      ...post,
+      headers: { ...post.headers, ...OPERATOR },
+    });
+    expect(grantSecond.status).toBe(409);
+    expect(
+      (await app.request('/memory', { headers: { authorization: `Bearer ${second.token}` } }))
+        .status,
+    ).toBe(403);
+
+    // 先に取り消せば移せる（持ち主の付け替えはできる）。
+    await app.request(`/access/${first.account.id}/revoke`, {
+      ...post,
+      headers: { ...post.headers, ...OPERATOR },
+    });
+    expect(
+      (
+        await app.request(`/access/${second.account.id}/grant`, {
+          ...post,
+          headers: { ...post.headers, ...OPERATOR },
+        })
+      ).status,
+    ).toBe(200);
   });
 
   it('許可の付与と取り消しは日誌に残る（事後に追えることが最終承認の実体）', async () => {

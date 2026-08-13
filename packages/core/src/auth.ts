@@ -139,6 +139,19 @@ export interface AuthStore {
 
   putLoginRequest(request: LoginRequest): Promise<void>;
   getLoginRequest(id: string): Promise<LoginRequest | null>;
+  /**
+   * `authenticated` のログイン要求を `consumed` へ**原子的に**移し、移せたときだけ
+   * その要求を返す（移せなければ `null`）。
+   *
+   * **読んでから書くまでを呼び出し側で分けてはいけない。** 分けると、同じ
+   * `requestId` と `claimSecret` を同時に投げるだけで、両方が `authenticated` を
+   * 読んでそれぞれトークンを発行できてしまう（「返るのはこの1回だけ」という
+   * API の約束が破れる）。**1回きりであることの強制はここにしか置けない。**
+   *
+   * ドライバはそれぞれの器で原子性を出すこと — fs は1つの排他区間で、
+   * pg は条件付き UPDATE の更新行数で。
+   */
+  consumeLoginRequest(id: string): Promise<LoginRequest | null>;
 }
 
 // ---------------------------------------------------------------------------

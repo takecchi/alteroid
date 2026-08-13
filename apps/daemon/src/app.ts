@@ -1778,16 +1778,27 @@ export function createApp(deps: AppDeps) {
       requireOperator,
       deliberateClient,
       async (c) => {
-        const account = await authService.grant(c.req.param('accountId'), 'operator');
-        if (account === null) return c.json({ error: 'not found' as const }, 404);
+        const result = await authService.grant(c.req.param('accountId'), 'operator');
+        if (result.status === 'not_found') return c.json({ error: 'not found' as const }, 404);
+        if (result.status === 'conflict') {
+          return c.json(
+            {
+              error:
+                `既に ${describeAccount(result.owner)} が許可されている。` +
+                'alteroid は単一の持ち主のものなので、許可できるアカウントは1つだけ。' +
+                `移すなら先に取り消す: alteroid access revoke ${result.owner.id}`,
+            },
+            409,
+          );
+        }
         // 誰を通したかは必ず残す。事後に追えることが「最終承認」の実体である
         // （PRD「可観測性」）。
         await stores.journal.append({
           type: 'decision',
-          decision: `アクセス許可を付与: ${describeAccount(account)}`,
+          decision: `アクセス許可を付与: ${describeAccount(result.account)}`,
           grounds: '実行環境の持ち主による操作（alteroid access grant）',
         });
-        return c.json({ account: await accountView(stores, account) });
+        return c.json({ account: await accountView(stores, result.account) });
       },
     )
 

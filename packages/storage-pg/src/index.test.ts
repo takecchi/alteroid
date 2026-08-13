@@ -457,4 +457,52 @@ describe('AuthStore', () => {
     expect((await stores.auth.getLoginRequest('login-1'))?.status).toBe('consumed');
     expect(await stores.auth.getLoginRequest('居ない')).toBeNull();
   });
+  it('ログイン要求の引き取りは1回だけ成功する（並行でも二重発行させない）', async () => {
+    const request = {
+      id: 'login-2',
+      provider: 'google',
+      nonce: 'nonce',
+      codeVerifier: 'verifier',
+      claimSha256: 'd'.repeat(64),
+      redirectUri: 'http://127.0.0.1:4517/auth/google/callback',
+      label: 'laptop',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      expiresAt: '2999-01-01T00:00:00.000Z',
+      status: 'authenticated' as const,
+      accountId: 'account-1',
+      error: null,
+    };
+    await stores.auth.putLoginRequest(request);
+
+    // 読んでから書く形だと、ここで全部が authenticated を掴んでしまう。
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => stores.auth.consumeLoginRequest('login-2')),
+    );
+
+    expect(results.filter((result) => result !== null)).toHaveLength(1);
+    expect((await stores.auth.getLoginRequest('login-2'))?.status).toBe('consumed');
+    // 一度 consumed になったら、あとから何度呼んでも取れない。
+    expect(await stores.auth.consumeLoginRequest('login-2')).toBeNull();
+  });
+
+  it('pending のログイン要求は引き取れない（ブラウザ側が終わる前に発行しない）', async () => {
+    await stores.auth.putLoginRequest({
+      id: 'login-3',
+      provider: 'google',
+      nonce: 'nonce',
+      codeVerifier: 'verifier',
+      claimSha256: 'e'.repeat(64),
+      redirectUri: 'http://127.0.0.1:4517/auth/google/callback',
+      label: '',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      expiresAt: '2999-01-01T00:00:00.000Z',
+      status: 'pending',
+      accountId: null,
+      error: null,
+    });
+
+    expect(await stores.auth.consumeLoginRequest('login-3')).toBeNull();
+    expect((await stores.auth.getLoginRequest('login-3'))?.status).toBe('pending');
+    expect(await stores.auth.consumeLoginRequest('居ない')).toBeNull();
+  });
 });

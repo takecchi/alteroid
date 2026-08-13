@@ -60,6 +60,7 @@ export {
   type ClaimResult,
   type CompleteLoginError,
   type CompleteLoginResult,
+  type GrantResult,
   type StartLoginInput,
   type StartLoginResult,
 } from './auth-service.js';

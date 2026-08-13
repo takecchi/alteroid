@@ -106,13 +106,48 @@ describe('createAuthService', () => {
     const claimed = await service.claim({ requestId, claimSecret });
     if (claimed.status !== 'ready') throw new Error('ログインできていない');
 
-    await service.grant(claimed.account.id, 'operator');
+    expect(await service.grant(claimed.account.id, 'operator')).toMatchObject({
+      status: 'granted',
+    });
     expect(isAccountGranted((await service.authenticate(claimed.token))!)).toBe(true);
 
     // **トークンを消さずに**許可だけ取り消す。許可はリクエストごとに見ているので、
     // 消し忘れたトークンが生き残らない。
     await service.revoke(claimed.account.id);
     expect(isAccountGranted((await service.authenticate(claimed.token))!)).toBe(false);
+  });
+
+  it('許可できるアカウントは高々1つ（マルチユーザーは非ゴール）', async () => {
+    const alice = await service.claim(await login('code-alice'));
+    const bob = await service.claim(await login('code-bob'));
+    if (alice.status !== 'ready' || bob.status !== 'ready') throw new Error('ログインできていない');
+
+    expect(await service.grant(alice.account.id, 'operator')).toMatchObject({ status: 'granted' });
+
+    // 2人目は通らない。ここを開けると、ログインした人数だけ同じクローンの
+    // 記憶・日誌・実行 API が開く＝そのままマルチユーザー利用になる。
+    const second = await service.grant(bob.account.id, 'operator');
+    expect(second.status).toBe('conflict');
+    if (second.status === 'conflict') expect(second.owner.id).toBe(alice.account.id);
+    expect(isAccountGranted((await service.authenticate(bob.token))!)).toBe(false);
+
+    // 持ち主を移すときは先に取り消す。
+    await service.revoke(alice.account.id);
+    expect(await service.grant(bob.account.id, 'operator')).toMatchObject({ status: 'granted' });
+    expect(isAccountGranted((await service.authenticate(bob.token))!)).toBe(true);
+    expect(isAccountGranted((await service.authenticate(alice.token))!)).toBe(false);
+  });
+
+  it('owner() は許可されている唯一のアカウントを返す', async () => {
+    expect(await service.owner()).toBeNull();
+    const alice = await service.claim(await login('code-alice'));
+    if (alice.status !== 'ready') throw new Error('ログインできていない');
+
+    await service.grant(alice.account.id, 'operator');
+    expect((await service.owner())?.id).toBe(alice.account.id);
+
+    await service.revoke(alice.account.id);
+    expect(await service.owner()).toBeNull();
   });
 
   it('検証済みメールが一致しても既存アカウントへ相乗りさせない', async () => {
@@ -148,6 +183,24 @@ describe('createAuthService', () => {
     // 端末ごとに別のトークンが出る（1本を使い回さない）。
     expect(claimedSecond.token).not.toBe(claimedFirst.token);
     expect(await service.authenticate(claimedFirst.token)).not.toBeNull();
+  });
+
+  it('同じ claim を並行に投げても、有効なトークンは1本しか出ない', async () => {
+    const { requestId, claimSecret } = await login('code-alice');
+
+    // 検査とトークン発行を分けていると、ここで全部が `authenticated` を読んで
+    // それぞれトークンを受け取れてしまう（「返るのはこの1回だけ」が破れる）。
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => service.claim({ requestId, claimSecret })),
+    );
+
+    const ready = results.filter((result) => result.status === 'ready');
+    expect(ready).toHaveLength(1);
+
+    const first = ready[0];
+    if (first?.status !== 'ready') throw new Error('ready が無い');
+    // 保存された側も1本だけ（応答が1本でも、器に2本残っていたら通ってしまう）。
+    expect(await store.listAccessTokens(first.account.id)).toHaveLength(1);
   });
 
   it('引き取りは一度きり（二度目は盗まれた可能性として拒む）', async () => {

@@ -13,6 +13,10 @@ import { describeAuthFailure, resolveTarget, type Target } from './target.js';
  *
  * 叩けるのは**実行環境の持ち主**（`~/.alteroid/state/daemon.json` を読める者）だけ。
  * これが「最初の1人を誰が通すか」の答えでもある。
+ *
+ * **許可できるアカウントは高々1つ。** alteroid は単一の持ち主のものであり、
+ * マルチユーザー / チーム利用は非ゴールである（docs/PRD.md「スコープ外」）。
+ * 持ち主を移すときは先に `revoke` する。
  */
 
 interface AccountView {
@@ -51,9 +55,16 @@ export async function accessListCommand(): Promise<void> {
     stdout.write('\n');
   }
 
+  const owner = accounts.find((account) => account.granted);
   const pending = accounts.filter((account) => !account.granted);
-  if (pending.length > 0) {
+  if (owner === undefined && pending.length > 0) {
     stdout.write(`許可するには: alteroid access grant ${pending[0]?.id ?? '<id>'}\n`);
+  } else if (owner !== undefined && pending.length > 0) {
+    // 「なぜ grant できないのか」を先に言う。叩いてから 409 で知るのは遅い。
+    stdout.write(
+      '許可できるアカウントは1つだけです（alteroid は単一の持ち主のもの）。\n' +
+        `移すには先に取り消します: alteroid access revoke ${owner.id}\n`,
+    );
   }
 }
 
@@ -94,6 +105,13 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
     }
     if (described !== null) throw new Error(described);
     if (response.status === 404) throw new Error('該当するアカウントがありません');
+    if (response.status === 409) {
+      // 単一の持ち主という不変条件。人間には「次に何をすればよいか」まで見せる。
+      const body = (await response.json().catch(() => ({}))) as { error?: unknown };
+      throw new Error(
+        typeof body.error === 'string' ? body.error : '既に別のアカウントが許可されています',
+      );
+    }
     throw new Error(`${path} が失敗しました (${response.status})`);
   }
   return response.json();

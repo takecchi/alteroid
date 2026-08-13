@@ -61,15 +61,29 @@ export type ClaimResult =
   | { status: 'ready'; token: string; account: AuthAccount }
   | { status: 'error'; reason: 'invalid_request' | 'invalid_secret' | 'expired' | 'failed' };
 
+/**
+ * 許可の付与の結果。
+ *
+ * `conflict` は「既に別のアカウントが許可されている」。**alteroid は単一の持ち主の
+ * ものなので、許可されたアカウントは高々1つしか存在しない**（PRD 非ゴール:
+ * マルチユーザー / チーム利用）。持ち主を移すときは先に `revoke` する。
+ */
+export type GrantResult =
+  | { status: 'granted'; account: AuthAccount }
+  | { status: 'not_found' }
+  | { status: 'conflict'; owner: AuthAccount };
+
 export interface AuthService {
   startLogin(input: StartLoginInput): Promise<StartLoginResult>;
   completeLogin(input: { state: string; code: string }): Promise<CompleteLoginResult>;
   claim(input: { requestId: string; claimSecret: string }): Promise<ClaimResult>;
   /** `Authorization: Bearer ...` の値からアカウントを引く。許可の判定はしない。 */
   authenticate(bearer: string): Promise<AuthAccount | null>;
-  grant(accountId: string, by: string): Promise<AuthAccount | null>;
+  grant(accountId: string, by: string): Promise<GrantResult>;
   revoke(accountId: string): Promise<AuthAccount | null>;
   listAccounts(): Promise<AuthAccount[]>;
+  /** いま alteroid を使える唯一のアカウント（居なければ `null`）。 */
+  owner(): Promise<AuthAccount | null>;
 }
 
 const DEFAULT_LOGIN_TTL_SECONDS = 600;
@@ -242,7 +256,16 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
         return { status: 'pending' };
       }
 
-      const accountId = request.accountId;
+      /**
+       * **ここで原子的に確保する。** 上の `status` 検査は早期の門前払いでしかなく、
+       * 検査とトークン発行の間に別の claim が割り込める。同じ `requestId` と
+       * `claimSecret` を並行に投げれば両方が `authenticated` を読めてしまうので、
+       * 「1回きり」の強制はストアの1操作に置く。
+       */
+      const consumed = await store.consumeLoginRequest(requestId);
+      if (consumed === null) return { status: 'error', reason: 'invalid_request' };
+
+      const accountId = consumed.accountId;
       if (accountId === null) return { status: 'error', reason: 'failed' };
       const account = await store.getAccount(accountId);
       if (account === null) return { status: 'error', reason: 'failed' };
@@ -253,7 +276,7 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
         id: newId(),
         accountId: account.id,
         sha256: sha256Hex(value),
-        label: request.label,
+        label: consumed.label,
         createdAt: at.toISOString(),
         expiresAt:
           tokenTtlDays === null
@@ -262,7 +285,6 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
         lastUsedAt: null,
         revokedAt: null,
       });
-      await store.putLoginRequest({ ...request, status: 'consumed' });
 
       return { status: 'ready', token: value, account };
     },
@@ -283,11 +305,27 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
 
     async grant(accountId, by) {
       const account = await store.getAccount(accountId);
-      if (account === null) return null;
-      if (account.grantedAt !== null) return account;
+      if (account === null) return { status: 'not_found' };
+      if (account.grantedAt !== null) return { status: 'granted', account };
+
+      /**
+       * **許可されたアカウントは高々1つ。**
+       *
+       * alteroid は単一の持ち主のものであり、マルチユーザー / チーム利用は
+       * 非ゴールである（PRD「スコープ外」）。ここを開けると、ログインした人数だけ
+       * 同じクローンの記憶・日誌・会話・実行 API が開く＝そのままマルチユーザーに
+       * なる。「データを分けない」ことは「複数人を受け入れない」ことではない。
+       *
+       * 持ち主を移すときは先に revoke する（同一人物が別のログイン手段へ移る場合も
+       * 同じ手順になる。identity を1つのアカウントへ束ねる仕組みは、必要になったら
+       * accountId を付け替える形で足せる）。
+       */
+      const existing = await findOwner(store);
+      if (existing !== null) return { status: 'conflict', owner: existing };
+
       const updated = { ...account, grantedAt: now().toISOString(), grantedBy: by };
       await store.putAccount(updated);
-      return updated;
+      return { status: 'granted', account: updated };
     },
 
     async revoke(accountId) {
@@ -300,7 +338,14 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
     },
 
     listAccounts: () => store.listAccounts(),
+    owner: () => findOwner(store),
   };
+}
+
+/** 許可されているアカウント（不変条件として高々1つ）。 */
+async function findOwner(store: AuthStore): Promise<AuthAccount | null> {
+  const accounts = await store.listAccounts();
+  return accounts.find((account) => account.grantedAt !== null) ?? null;
 }
 
 async function touch(store: AuthStore, record: AccessTokenRecord, at: Date): Promise<void> {

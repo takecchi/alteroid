@@ -11,7 +11,7 @@ import type {
   AuthStore,
   LoginRequest,
 } from '@alteroid/core';
-import { and, asc, eq, lt } from 'drizzle-orm';
+import { and, asc, eq, lt, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { stripNulls, toIso } from './db.js';
@@ -175,6 +175,34 @@ export class PgAuthStore implements AuthStore {
       .from(authLoginRequests)
       .where(eq(authLoginRequests.id, id))
       .limit(1);
+    const row = rows[0];
+    if (row === undefined) return null;
+    const parsed = loginRequestSchema.safeParse(row.request);
+    return parsed.success ? parsed.data : null;
+  }
+
+  /**
+   * `authenticated` → `consumed` を**条件付き UPDATE 1文で**行う。
+   *
+   * PostgreSQL は同じ行への並行 UPDATE を直列化し、待たされた側は再評価で
+   * `status = 'authenticated'` を満たさなくなる（＝0行更新）。だから
+   * 「更新できた1つ」だけが行を受け取る。読んでから書く形にすると、同じ claim を
+   * 同時に投げるだけで両方がトークンを受け取れてしまう。
+   */
+  async consumeLoginRequest(id: string): Promise<LoginRequest | null> {
+    const rows = await this.#db
+      .update(authLoginRequests)
+      .set({
+        request: sql`jsonb_set(${authLoginRequests.request}, '{status}', '"consumed"'::jsonb)`,
+      })
+      .where(
+        and(
+          eq(authLoginRequests.id, id),
+          sql`${authLoginRequests.request} ->> 'status' = 'authenticated'`,
+        ),
+      )
+      .returning({ request: authLoginRequests.request });
+
     const row = rows[0];
     if (row === undefined) return null;
     const parsed = loginRequestSchema.safeParse(row.request);

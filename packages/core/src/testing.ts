@@ -174,6 +174,14 @@ export function createMemoryStores(): Stores {
     async getLoginRequest(id) {
       return loginRequests.get(id) ?? null;
     },
+    async consumeLoginRequest(id) {
+      // 検査から書き込みまでの間に await を挟まない（挟むと他の claim が割り込む）。
+      const found = loginRequests.get(id);
+      if (found === undefined || found.status !== 'authenticated') return null;
+      const consumed = { ...found, status: 'consumed' as const };
+      loginRequests.set(id, consumed);
+      return consumed;
+    },
   };
 
   return { persona, journal, jobs: jobStore, archive, sessions, auth };
