@@ -826,7 +826,15 @@ class Pool implements ManagerPool {
   async #runnerOf(record: ManagerRecord): Promise<RunnerClient | null> {
     const runnerId = record.job.runnerId;
     // 宛先が書かれていない古いジョブは、いまの1台へ寄せる（M4 は単一 runner）。
-    if (runnerId === undefined) return this.#runners.select({}).catch(() => null);
+    //
+    // **ここで `select` を呼ばない。** `select` は繋がるまで待つ（新しい委譲を
+    // 「いま空いていない」で断らないため）が、この経路は起動時の引き取りや
+    // `manager_send` の下にあり、待たせると台帳を読むだけの操作が固まる。
+    // 開いている runner が無いなら「宛先が居ない」と答えるのが正しい。
+    if (runnerId === undefined) {
+      const open = await this.#runners.list().catch(() => []);
+      return open[0] ?? null;
+    }
     return this.#runners.get(runnerId);
   }
 
