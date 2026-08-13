@@ -135,6 +135,36 @@ jobs:
                 || { echo "デーモンと同じ値で通らない" >&2; exit 1; }
             '
 
+      # 入口の認証（ログイン）の鍵も、人間は共有の1か所に置く。**走っている runner が
+      # それを持っていないこと**を器そのもので見る（合鍵とまったく同じ理由 — 読めた
+      # 瞬間、マネージャーが自分でアクセストークンを発行して記憶へ届く）。
+      #
+      # 同時に、**下＝外の世界へ手を伸ばす鍵は落ちていないこと**も見る。ここを一緒に
+      # 見ないと、「危なそうな名前を全部消す」方向へ倒れて `gh pr create` が層を
+      # 下りた瞬間にできなくなる（デグレード。north_star 禁止1）。
+      - name: 走っている runner にログインの鍵が残らないか（GH_TOKEN は残ること）
+        run: |
+          docker run --rm -u 0 \
+            -e ALTEROID_RUNNER_TOKEN=raw-secret -e ALTEROID_RUNNER_PORT=4519 \
+            -e ALTEROID_GOOGLE_CLIENT_ID=client-id \
+            -e ALTEROID_GOOGLE_CLIENT_SECRET=client-secret \
+            -e GH_TOKEN=gh-secret \
+            alteroid:ci sh -eu -c '
+              alteroid-runner &
+              sleep 3
+              env_of() { tr "\0" "\n" < /proc/$1/environ; }
+
+              for key in ALTEROID_GOOGLE_CLIENT_ID ALTEROID_GOOGLE_CLIENT_SECRET; do
+                env_of $! | grep -q "^$key=" \
+                  && { echo "ログインの鍵が残っている: $key" >&2; exit 1; }
+              done
+
+              # 逆に、外の世界へ手を伸ばす鍵は**渡っていること**
+              env_of $! | grep -q "^GH_TOKEN=" \
+                || { echo "GH_TOKEN まで落ちている（デグレード）" >&2; exit 1; }
+              exit 0
+            '
+
       # デーモンは記憶ストアの鍵を持つ。**root で起こされても特権のまま走らない。**
       # （Railway は実行 UID を環境変数で決めるので、root で来る構成がありうる）
       #

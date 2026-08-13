@@ -8,6 +8,8 @@ import { index, layout, route, type RouteConfig } from '@react-router/dev/routes
  * ことを作らない** — 入口が増えただけで能力が変わるのはおかしい。
  */
 export default [
+  // ログインだけは shell の外（ナビも SSE も、通ってからでないと意味が無い）。
+  route('login', 'routes/login.tsx'),
   layout('routes/shell.tsx', [
     index('routes/dashboard.tsx'),
     // 省略可能な引数。`/chat` は新しい会話、`/chat/:id` は続き。

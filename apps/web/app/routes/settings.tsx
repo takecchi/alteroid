@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Page } from '~/components/page';
 import { Badge, Button, Card, CardHeader, Empty, ErrorNote, Input, Spinner } from '~/components/ui';
 import { useHealth, useRunners } from '~/hooks/queries';
+import { useAuth } from '~/hooks/use-auth';
 import { useApiContext } from '~/lib/api';
 import { SAME_ORIGIN_BASE_URL } from '~/lib/config';
 
@@ -11,6 +12,7 @@ export default function Settings() {
     <Page title="設定" description="この画面がどのデーモンを見ているか">
       <div className="flex flex-col gap-4">
         <Connection />
+        <Account />
         <Runners />
       </div>
     </Page>
@@ -92,15 +94,73 @@ function Connection() {
           </pre>
           <p className="mt-1.5">
             許可は<strong className="text-fg">列挙したオリジンだけ</strong>で、ワイルドカードは
-            受け付けない。資格情報は Cookie ではなくヘッダで運ぶ設計なので、
+            受け付けない。資格情報は Cookie ではなくヘッダ（
+            <code className="font-mono">Authorization: Bearer</code>）で運ぶ設計なので、
             別の登録可能ドメイン（例: <code className="font-mono">*.vercel.app</code>）に画面を
             置いても成立する。
           </p>
           <p className="mt-1.5">
-            デーモン自体には認証が無い。外から届く場所に置くなら、手前に境界
-            （リバースプロキシ・トンネル・認証）を必ず置くこと。
+            <strong className="text-fg">CORS はブラウザにしか効かない。</strong>
+            <code className="font-mono">curl</code>{' '}
+            は素通りするので、外から届く場所に置くならデーモン側のログイン（
+            <code className="font-mono">ALTEROID_GOOGLE_CLIENT_ID</code>）を有効にするか、
+            手前に境界（リバースプロキシ・トンネル）を置くこと。
           </p>
         </div>
+      </div>
+    </Card>
+  );
+}
+
+function Account() {
+  const auth = useAuth();
+
+  return (
+    <Card>
+      <CardHeader
+        title="ログイン"
+        subtitle="この画面がデーモンに対して何者か"
+        action={
+          auth.status === 'open' ? (
+            <Badge>認証なし</Badge>
+          ) : auth.operator ? (
+            <Badge tone="accent">実行環境の持ち主</Badge>
+          ) : (
+            <Badge tone="ok">ログイン済み</Badge>
+          )
+        }
+      />
+      <div className="px-4 py-3 text-sm">
+        {auth.status === 'open' ? (
+          <p className="text-xs leading-relaxed text-muted">
+            このデーモンは認証を要求していない（
+            <code className="font-mono">ALTEROID_GOOGLE_CLIENT_ID</code> が未設定か{' '}
+            <code className="font-mono">ALTEROID_AUTH=off</code>）。守りは待ち受け先（既定は
+            127.0.0.1）と、手前に置いた境界の側にある。
+          </p>
+        ) : (
+          <>
+            <dl className="grid grid-cols-[6rem_1fr] gap-y-1">
+              <dt className="text-muted">アカウント</dt>
+              <dd className="font-mono text-xs break-all">{auth.account?.id ?? '—'}</dd>
+              {auth.account?.email !== null && auth.account?.email !== undefined && (
+                <>
+                  <dt className="text-muted">メール</dt>
+                  <dd className="text-xs break-all">{auth.account.email}</dd>
+                </>
+              )}
+            </dl>
+            <div className="mt-3 flex items-center gap-2">
+              <Button size="sm" onClick={auth.logout}>
+                ログアウト
+              </Button>
+              <span className="text-[11px] text-muted">
+                この画面から鍵を捨てるだけ。デーモン側で失効させるなら{' '}
+                <code className="font-mono">alteroid access revoke</code>
+              </span>
+            </div>
+          </>
+        )}
       </div>
     </Card>
   );

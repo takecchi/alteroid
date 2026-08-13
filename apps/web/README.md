@@ -50,13 +50,54 @@ ALTEROID_ALLOWED_ORIGINS=https://www.example.com,https://www.hoge.vercel.app
 画面側は「設定」で `https://api.example.com` を入れるか、`VITE_ALTEROID_API_URL` を与えてビルドする。
 
 **Cookie は使わない。** 別ドメイン間の Cookie は成立しない（サードパーティ Cookie の廃止と
-ITP、そして登録可能ドメインが違えば `Domain` 属性でも共有できない）。資格情報はヘッダで運ぶ
-ので、どの配置でも同じように動く。認証そのものは別途進行中で、入るときは
-`app/lib/api.tsx` の `headers` 1か所に載る。
+ITP、そして登録可能ドメインが違えば `Domain` 属性でも共有できない）。資格情報は
+`Authorization: Bearer` ヘッダで運ぶので、どの配置でも同じように動く。
 
-> **デーモンの API にはまだ認証が無い。** 外から届く場所に置くなら、手前に境界
-> （リバースプロキシ・トンネル・認証）を必ず置くこと。CORS はブラウザにしか効かず、
-> `curl` は素通りする。
+> **CORS はブラウザにしか効かない。** `curl` は素通りする。外から届く場所に置くなら、
+> 下のログインを有効にするか、手前に境界（リバースプロキシ・トンネル）を置くこと。
+
+## ログイン
+
+デーモンに認証が設定されていれば（`ALTEROID_GOOGLE_CLIENT_ID` / `ALTEROID_GOOGLE_CLIENT_SECRET`）、
+画面は `/login` を出す。**CLI（`alteroid login`）とまったく同じ経路を通る** — 画面のために
+デーモンへ足した経路は1本も無い。
+
+```
+POST /auth/login              → {requestId, authorizationUrl, claimSecret, expiresAt}
+  ↓ authorizationUrl を別ウィンドウで開く（Google へ）
+GET  /auth/:provider/callback → 「端末に戻れ」と書いた HTML だけを返す
+  ↓ **鍵は URL にも Cookie にも載らない**
+POST /auth/login/:id/claim    → {token, account, granted}
+```
+
+コールバックの画面からはこちらへ何も返ってこない（`postMessage` もリダイレクトも無い）ので、
+**始めたタブが生きている必要がある**。ポップアップで開き、塞がれた場合に備えて引き換え券を
+`sessionStorage` にも預ける（同じタブごと遷移させられても引き取りを続けられる）。
+
+### ログインしただけでは使えない
+
+alteroid は単一の持ち主のものなので、使う許可は人間が CLI から与える。
+
+```sh
+alteroid access list
+alteroid access grant <アカウント id>
+```
+
+許可が無い状態は **403** で返る。画面はこれを「未ログイン」と混ぜず、専用の画面で
+アカウント id と上のコマンドを出す — ログインし直しても解決しないため。
+
+### 状態の見分け方
+
+| 状態        | 何が起きているか                  | 画面                                 |
+| ----------- | --------------------------------- | ------------------------------------ |
+| `open`      | デーモンが認証を要求していない    | ログイン画面を出さない（従来どおり） |
+| `anonymous` | 未ログイン / 鍵が無効（401）      | ログイン                             |
+| `ungranted` | ログイン済みだが許可が無い（403） | `access grant` の案内                |
+| `ready`     | 通る                              | 本体                                 |
+
+トークンは**接続先ごと**に `localStorage` へ持つ（発行したデーモンでしか通らないため）。
+寿命は既定 30 日で更新の仕組みは無いので、401 を受けたら捨ててログインし直す。
+403 では捨てない（鍵は有効なので、捨てると解決しない導線に落ちる）。
 
 ## 作り
 
@@ -64,15 +105,22 @@ ITP、そして登録可能ドメインが違えば `Domain` 属性でも共有�
 app/
   root.tsx            html の外枠と ApiProvider
   routes.ts           経路の割り当て（CLI のスラッシュコマンドと対応させる）
-  routes/shell.tsx    左のナビと、日誌 SSE の購読1本
+  routes/shell.tsx    通っていれば中身を出す門 ＋ 左のナビと日誌 SSE の購読1本
+  routes/login.tsx    ログイン / 「まだ許可が無い」
   routes/*.tsx        画面
   hooks/queries.ts    取得（SWR。キーはオブジェクト）
   hooks/mutations.ts  書き込み
+  hooks/use-auth.ts   open / anonymous / ungranted / ready の判定
   hooks/use-journal-live.ts  日誌 SSE →  SWR キャッシュの無効化
   lib/api.tsx         @alteroid/api-client の生成と、資格情報を足す唯一の場所
+  lib/auth.ts         トークンと引き換え券の置き場（接続先ごと）
+  lib/login.ts        ログインの段取り（開始と引き取り。UI を持たないので試験できる）
   lib/config.ts       接続先の決め方
   lib/types.ts        生成 spec から導出した型（手書きしない）
 ```
+
+**通るまで取得も購読も始めない。** `shell.tsx` は門と中身を別の部品に分けてある。同じ部品に
+混ぜると、未ログインのまま全経路が 401 を叩き、日誌のストリームが再接続を繰り返す。
 
 **画面ごとにポーリングを足さない。** デーモンはあらゆる日誌の追記を `GET /journal/stream` に
 流すので、購読は `shell.tsx` の1本だけでよく、届いた種別に応じて SWR のキャッシュを落とせば

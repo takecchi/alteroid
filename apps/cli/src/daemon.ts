@@ -56,12 +56,17 @@ async function readRuntimeInfo(): Promise<DaemonRuntimeInfo | null> {
  */
 async function verify(info: DaemonRuntimeInfo): Promise<boolean> {
   try {
+    // **トークンを送って、認められるかを見る。** かつては `/health` が返す token と
+    // 突き合わせていたが、この値は「許可を付与できる資格」そのものになったので、
+    // 無認証で読める応答には載せられない。提示して `operator` が返ることは、
+    // 突き合わせと同じ強さで本人確認になる（かつ秘密を配らない）。
     const response = await fetch(`${baseUrl(info)}/health`, {
+      headers: { authorization: `Bearer ${info.token}` },
       signal: AbortSignal.timeout(1500),
     });
     if (!response.ok) return false;
-    const body = (await response.json()) as { token?: unknown };
-    return body.token === info.token;
+    const body = (await response.json()) as { operator?: unknown };
+    return body.operator === true;
   } catch {
     return false;
   }
@@ -75,6 +80,7 @@ export async function storageOf(info: DaemonRuntimeInfo | null): Promise<string 
   if (!info) return null;
   try {
     const response = await fetch(`${baseUrl(info)}/health`, {
+      headers: { authorization: `Bearer ${info.token}` },
       signal: AbortSignal.timeout(1500),
     });
     if (!response.ok) return null;
@@ -177,8 +183,12 @@ export async function stop(): Promise<StopOutcome> {
       const response = await fetch(`${baseUrl(info)}/shutdown`, {
         method: 'POST',
         // デーモンは本文の無い POST に application/json を要求する（ブラウザの
-        // 単純リクエストで他人が止められないようにするため）
-        headers: { 'content-type': 'application/json' },
+        // 単純リクエストで他人が止められないようにするため）。認証が有効なら
+        // 実行環境の持ち主として名乗る必要もある。
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${info.token}`,
+        },
         signal: AbortSignal.timeout(5000),
       });
       if (!response.ok) throw new Error(`shutdown が失敗した (${response.status})`);

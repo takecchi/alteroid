@@ -9,10 +9,11 @@ import {
   Settings,
   Users,
 } from 'lucide-react';
-import { NavLink, Outlet } from 'react-router';
+import { Navigate, NavLink, Outlet } from 'react-router';
 
-import { Badge } from '~/components/ui';
+import { Badge, ErrorNote, Spinner } from '~/components/ui';
 import { useApprovals, useHealth } from '~/hooks/queries';
+import { useAuth } from '~/hooks/use-auth';
 import { useJournalLive, type LiveStatus } from '~/hooks/use-journal-live';
 import { cn } from '~/lib/cn';
 
@@ -28,7 +29,51 @@ const NAV = [
   { to: '/settings', label: '設定', icon: Settings, end: false },
 ] as const;
 
+/**
+ * 通ってから中身を出す。
+ *
+ * **中身を別の部品に分けてあるのは意図的である。** 取得も SSE の購読もその中に
+ * 置いてあるので、通っていない間は1本も飛ばない。同じ部品に混ぜると、未ログインの
+ * まま全経路が 401 を叩き、日誌のストリームが再接続を延々と繰り返す。
+ */
 export default function Shell() {
+  const auth = useAuth();
+
+  if (auth.status === 'checking') {
+    return (
+      <div className="flex min-h-dvh items-center justify-center">
+        <Spinner label="接続を確認中" />
+      </div>
+    );
+  }
+
+  // 繋がらない・認証の確認自体が失敗した、は「未ログイン」ではない。
+  // ログイン画面へ飛ばすと、直しようのない画面をぐるぐる回すことになる。
+  if (auth.error !== undefined && auth.status !== 'anonymous' && auth.status !== 'ungranted') {
+    return (
+      <div className="flex min-h-dvh items-center justify-center p-6">
+        <div className="w-full max-w-md">
+          <ErrorNote error={auth.error} />
+          <p className="mt-3 text-xs text-muted">
+            接続先が違うか、デーモンが起きていない。設定は{' '}
+            <a href="/settings" className="text-accent hover:underline">
+              /settings
+            </a>{' '}
+            で変えられる。
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (auth.status === 'anonymous' || auth.status === 'ungranted') {
+    return <Navigate to="/login" replace />;
+  }
+
+  return <AuthedShell />;
+}
+
+function AuthedShell() {
   // SSE はここで1本だけ張る。下の画面はこれが回した無効化に相乗りする。
   const live = useJournalLive();
   const { data: approvals } = useApprovals(true);
@@ -107,6 +152,9 @@ function LiveIndicator({ status }: { status: LiveStatus }) {
 
 function HealthFooter() {
   const { data, error } = useHealth();
+  const auth = useAuth();
+
+  const who = auth.account?.email ?? auth.account?.displayName ?? (auth.operator ? '持ち主' : null);
 
   return (
     <div className="border-t border-border px-4 py-3 text-[11px] text-muted">
@@ -119,6 +167,23 @@ function HealthFooter() {
           <span className="block truncate">記憶: {data.storage}</span>
           <span className="block truncate">pid {data.pid}</span>
         </>
+      )}
+
+      {/* 認証を要求していないデーモンでは、居ない人を出さない。 */}
+      {auth.status !== 'open' && (
+        <div className="mt-2 flex items-center justify-between gap-2 border-t border-border pt-2">
+          <span className="min-w-0 truncate" title={auth.account?.id}>
+            {who ?? '—'}
+          </span>
+          <button
+            type="button"
+            onClick={auth.logout}
+            className="shrink-0 underline hover:text-fg"
+            title="この画面から鍵を捨てる（デーモン側の失効は alteroid access revoke）"
+          >
+            ログアウト
+          </button>
+        </div>
       )}
     </div>
   );
