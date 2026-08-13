@@ -1,0 +1,42 @@
+#!/bin/sh
+# manager-runner を起こす。
+#
+# **ここで合鍵を畳む。** 人間が置くのは app と runner で同じ `ALTEROID_RUNNER_TOKEN`
+# ひとつだけでよい（＝一致させるだけ）。畳んだ素の値は `exec` の前に環境から落とす
+# ので、**runner のプロセスには sha256 しか残らない**。
+#
+# なぜ落とすのか。素の鍵が runner の環境に残ると、UID の分離が崩れた場面で子プロセス
+# （＝マネージャー）が `/proc/1/environ` から読める。読めた瞬間、自分宛の許可確認に
+# 自分で `allow` を返せる — クローンも人間も通らない迂回路ができる
+# （docs/architecture.md「制御面の保護」3枚目）。
+#
+# 人間の手元が楽になっただけで、守りは1枚も減っていない。減らすなら別の話として
+# 承認を取ること。
+set -eu
+
+# sha256 を出す道具はプラットフォームで名前が違う（Linux: sha256sum / macOS: shasum）。
+# **どちらでも動かす** — このスクリプトは器の中だけでなく、手元の検証でも走る。
+fold() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf %s "$1" | sha256sum | cut -d' ' -f1
+  else
+    printf %s "$1" | shasum -a 256 | cut -d' ' -f1
+  fi
+}
+
+if [ -n "${ALTEROID_RUNNER_TOKEN:-}" ]; then
+  folded="$(fold "$ALTEROID_RUNNER_TOKEN")"
+  # 両方置かれていて食い違うのが最悪である（人間は「置いた」、runner は 401 を返し
+  # 続け、どちらも正しいまま噛み合わない）。黙って片方を選ばず、ここで落とす。
+  if [ -n "${ALTEROID_RUNNER_TOKEN_SHA256:-}" ] && [ "$folded" != "$ALTEROID_RUNNER_TOKEN_SHA256" ]; then
+    echo 'alteroid-runner: ALTEROID_RUNNER_TOKEN と ALTEROID_RUNNER_TOKEN_SHA256 が食い違っている（どちらか一方だけを置くこと）' >&2
+    exit 1
+  fi
+  ALTEROID_RUNNER_TOKEN_SHA256="$folded"
+  export ALTEROID_RUNNER_TOKEN_SHA256
+fi
+
+# 置かれていなくても必ず消す（器を作り直す前の値を持ち越さない）。
+unset ALTEROID_RUNNER_TOKEN
+
+exec node /app/apps/runner/dist/index.js "$@"

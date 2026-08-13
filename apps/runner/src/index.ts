@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createHash } from 'node:crypto';
 import { chmodSync, chownSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -50,6 +51,34 @@ function envValue(env: NodeJS.ProcessEnv, key: string): string | undefined {
 }
 
 /**
+ * 制御面の合鍵の sha256（16進）。
+ *
+ * **素の値（`ALTEROID_RUNNER_TOKEN`）が来ていたら、ここで畳む。** 人間が置くのは
+ * デーモンと同じ値ひとつでよい、という体験のためである。守りは変わらない — 素の値は
+ * 畳んだ直後に環境から落とすし、器の起動スクリプト（`docker/alteroid-runner`）は
+ * `exec` の前に落としているので、**runner のプロセスに素の鍵は残らない**。
+ * ここに素の値が届くのは、スクリプトを通さず `node` を直に叩いたときだけである。
+ *
+ * 両方が置かれていて食い違うときは落とす。黙って片方を選ぶと、人間は「置いた」、
+ * runner は 401 を返し続け、**どちらも正しいまま噛み合わない**（鍵まわりで実際に
+ * 起きた壊れ方である）。
+ */
+export function tokenSha256Of(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const given = envValue(env, 'ALTEROID_RUNNER_TOKEN_SHA256');
+  const raw = envValue(env, 'ALTEROID_RUNNER_TOKEN');
+  if (raw === undefined) return given;
+
+  const folded = createHash('sha256').update(raw, 'utf8').digest('hex');
+  if (given !== undefined && given !== folded) {
+    throw new Error(
+      'ALTEROID_RUNNER_TOKEN と ALTEROID_RUNNER_TOKEN_SHA256 が食い違っている' +
+        '（どちらか一方だけを置くこと。既定はデーモンと同じ ALTEROID_RUNNER_TOKEN）',
+    );
+  }
+  return folded;
+}
+
+/**
  * 子プロセスを降ろす UID。
  *
  * **設定されているのに降ろせないなら落とす。** 同じ UID のまま走り続けると、
@@ -71,14 +100,17 @@ export async function main(): Promise<void> {
   const runnerId = runnerIdOf();
   const workspacePath = process.env.ALTEROID_WORKSPACE || process.cwd();
 
-  // 合鍵はハッシュだけを持つ。素の値はデーモンにしかない。
-  const tokenSha256 = envValue(process.env, 'ALTEROID_RUNNER_TOKEN_SHA256');
+  // 合鍵は**ハッシュだけを持つ**。素の値で渡されたら畳んで、環境からは落とす。
+  const tokenSha256 = tokenSha256Of();
   if (tokenSha256 === undefined) {
     throw new Error(
-      'ALTEROID_RUNNER_TOKEN_SHA256 が要る（制御面の本人確認。' +
-        'デーモンの ALTEROID_RUNNER_TOKEN の sha256 を16進で渡すこと）',
+      'ALTEROID_RUNNER_TOKEN が要る（制御面の本人確認。' +
+        'デーモンと同じ値を置くこと。sha256 を直に渡すなら ALTEROID_RUNNER_TOKEN_SHA256）',
     );
   }
+  // 子プロセスへ配る env は `WITHHELD_ENV_KEYS` でも落ちるが、**この器の環境からも
+  // 消す**。二重の底であって、どちらか一方に頼らない。
+  delete process.env.ALTEROID_RUNNER_TOKEN;
 
   const childUser = childUserOf();
   if (childUser !== undefined && process.getuid?.() !== 0) {
