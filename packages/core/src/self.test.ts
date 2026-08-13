@@ -12,10 +12,10 @@ import {
 
 const FACTS: SelfFacts = {
   storage: 'PostgreSQL（db:5432/alteroid）',
-  home: '/home/node/.alteroid',
+  local: '/data/alteroid（デーモンのローカル状態だけ。記憶は上の器にあり、ここには無い）',
   workspace: '/workspace',
   runner: '別プロセスの manager-runner（http://runner:4518）',
-  listen: 'http://127.0.0.1:4517',
+  entrypoint: 'https://alteroid.example',
   auth: '認証は有効。ログイン手段: google',
   models: { clone: 'fable', manager: 'opus', worker: 'sonnet' },
 };
@@ -71,11 +71,30 @@ describe('自己認識 — システムプロンプトに載る節', () => {
     const section = buildSelfKnowledge(FACTS);
 
     expect(section).toContain('PostgreSQL（db:5432/alteroid）');
-    expect(section).toContain('/home/node/.alteroid');
     expect(section).toContain('/workspace');
     expect(section).toContain('http://runner:4518');
-    expect(section).toContain('http://127.0.0.1:4517');
     expect(section).toContain('認証は有効');
+  });
+
+  /**
+   * pg 構成では、ローカルに残るのは state だけで**記憶ではない**。パスだけを
+   * 載せると「記憶: PostgreSQL」と「人格データの根: /data/alteroid」が並び、
+   * クローンは矛盾する2つの事実を同時に確信する。
+   */
+  it('ローカルの置き場は、そこに何が入っているかごと載る', () => {
+    const section = buildSelfKnowledge(FACTS);
+
+    expect(section).toContain('/data/alteroid（デーモンのローカル状態だけ');
+  });
+
+  /**
+   * 待ち受けアドレス（`ALTEROID_BIND=0.0.0.0`）を入口として載せない。
+   * 人間が叩く先は `ALTEROID_PUBLIC_URL` であり、scheme も違いうる。
+   */
+  it('入口は待ち受けアドレスではなく、人間が叩く先である', () => {
+    const section = buildSelfKnowledge(FACTS);
+
+    expect(section).toContain('人間からの入口: https://alteroid.example');
   });
 
   /**

@@ -17,7 +17,7 @@
  * （`packages/api-client/src/generated/` と同じ扱い）。
  */
 import { execFileSync } from 'node:child_process';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 // グローバルの `process` に頼らない（apps/daemon/scripts/write-openapi.mjs と同じ理由 —
 // この形の素の Node スクリプトは lint の環境定義から外れている）。
@@ -74,6 +74,25 @@ function revision() {
   } catch {
     return '';
   }
+}
+
+/**
+ * **`docs/` に増えた正典を黙って落とさない。**
+ *
+ * 上の一覧は手書きである（順序と一行説明はファイルシステムに無い情報なので、
+ * 自動では起こせない）。放っておくと5本目の正典を足した人は何の合図も受け取れず、
+ * クローンだけがそれを知らないまま走る — 気づける場所がどこにも無いので、
+ * ここで落とす。足す作業は1行で済む。
+ */
+const onDisk = (await readdir(docsDir)).filter((name) => name.endsWith('.md')).sort();
+const listed = new Set(CANON.map((entry) => entry.file));
+const missing = onDisk.filter((name) => !listed.has(name));
+if (missing.length > 0) {
+  throw new Error(
+    `docs/ に一覧へ載っていない正典があります: ${missing.join(', ')}。` +
+      'packages/core/scripts/write-canon.mjs の CANON に、優先順位の位置と一行説明を添えて足してください' +
+      '（載せないとクローンだけがその文書を知らないまま走ります）。',
+  );
 }
 
 const documents = [];

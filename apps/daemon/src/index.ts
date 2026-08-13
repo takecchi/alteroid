@@ -230,10 +230,17 @@ export async function main(): Promise<void> {
   // 鍵は入れないこと — そのままシステムプロンプトへ載る。
   const self: SelfFacts = {
     storage: storage.description,
-    home: paths.root,
+    // **パスだけを渡さない。** pg 構成でここに残るのは state だけで記憶ではない
+    // （storage.ts）。「記憶: PostgreSQL」と並べたときに矛盾して見えないようにする。
+    local:
+      storage.kind === 'pg'
+        ? `${paths.root}（デーモンのローカル状態だけ。記憶は上の器にあり、ここには無い）`
+        : `${paths.root}（記憶もここにある。人間が直接開いて書き換える）`,
     workspace,
     runner: runnerDescription,
-    listen: `http://${hostname}:${port}`,
+    // **待ち受けアドレスではなく人間が叩く先を渡す。** `ALTEROID_BIND=0.0.0.0` は
+    // 「どこで待つか」であって入口ではないし、TLS を手前で終端すれば scheme も違う。
+    entrypoint: authPlan.publicBaseUrl,
     auth: authPlan.description,
     models: { clone: cloneModel, manager: MANAGER_MODEL, worker: WORKER_MODEL },
   };

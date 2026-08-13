@@ -52,14 +52,27 @@ export function canonDocument(name: string): CanonDocument | undefined {
 export interface SelfFacts {
   /** 記憶の置き場の説明（ローカルのパス、または `PostgreSQL（host/db）`）。 */
   storage: string;
-  /** 人格データの根（`ALTEROID_HOME`）。 */
-  home: string;
+  /**
+   * ローカルの置き場（`ALTEROID_HOME`）と、**そこに何が入っているか**。
+   *
+   * パスだけを渡してはいけない。pg 構成でローカルに残るのは state（接続先と
+   * プロセス id）だけで**記憶ではない**（apps/daemon/src/storage.ts）。
+   * 「記憶: PostgreSQL」と「人格データの根: /data/alteroid」が並ぶと、
+   * クローンは矛盾する2つの事実を同時に確信する。
+   */
+  local: string;
   /** マネージャーの既定の作業ディレクトリ（`ALTEROID_WORKSPACE`）。 */
   workspace: string;
   /** 委譲先の器（別プロセスの manager-runner か、同一プロセスか）。 */
   runner: string;
-  /** 人間からの入口（待ち受け先）。 */
-  listen: string;
+  /**
+   * 人間からの入口。**待ち受けアドレスではない。**
+   *
+   * `ALTEROID_BIND=0.0.0.0` は「どこで待つか」であって人間が叩く先ではないし、
+   * TLS を手前で終端する構成では scheme も変わる。デーモンは
+   * `authPlan.publicBaseUrl`（`ALTEROID_PUBLIC_URL`、既定は 127.0.0.1）を渡す。
+   */
+  entrypoint: string;
   /** 入口の認証の状態（`planAuth` の一行説明）。 */
   auth: string;
   /** 実際に走っているモデル帯。既定から差し替えられていればその値。 */
@@ -95,10 +108,10 @@ export function buildSelfKnowledge(facts?: SelfFacts): string {
       '## いまのあなたが走っている環境',
       '',
       `- 記憶（あなたの同一性が宿る場所）: ${facts.storage}`,
-      `- 人格データの根: ${facts.home}`,
+      `- ローカルの置き場: ${facts.local}`,
       `- マネージャーの既定の作業ディレクトリ: ${facts.workspace}`,
       `- 委譲先: ${facts.runner}`,
-      `- 人間からの入口: ${facts.listen}（${facts.auth}）`,
+      `- 人間からの入口: ${facts.entrypoint}（${facts.auth}）`,
     );
   }
 
