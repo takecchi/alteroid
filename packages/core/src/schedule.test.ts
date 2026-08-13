@@ -499,6 +499,39 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     scheduler.stop();
   });
 
+  it('2万周期を超えて止まっていても、次回は元の格子の上にある（走査で諦めない）', async () => {
+    // 1分ごとの依頼を、2万分（約14日）より後に復旧する。復旧時刻は格子から30秒ずれている
+    const anchor = new Date(2026, 0, 1, 0, 0, 0, 0);
+    const clock = new Date(anchor.getTime() + 20_001 * 60_000 + 30_000);
+    const expected = new Date(anchor.getTime() + 20_002 * 60_000);
+
+    const stores = createMemoryStores();
+    const posted: InboxEvent[] = [];
+    await stores.schedules.put({
+      ...plan('watch', { type: 'every', minutes: 1 }, '見張る', anchor),
+      lastRunAt: anchor.toISOString(),
+      pendingRun: { at: anchor.toISOString(), cause: 'schedule' },
+    });
+
+    const scheduler = createScheduler({
+      entries: [],
+      post: (event) => posted.push(event),
+      now: () => clock,
+      schedules: stores.schedules,
+    });
+    await scheduler.refresh();
+    scheduler.start();
+
+    expect(scheduler.tick(clock)).toEqual(['watch']);
+    // 秒・ミリ秒まで元の格子（錨 + 1分の倍数）に乗っている。復旧時刻の30秒ずれを引き継がない
+    expect(scheduler.list().find((item) => item.kind === 'watch')?.nextAt).toBe(
+      expected.toISOString(),
+    );
+    expect(new Date(expected).getSeconds()).toBe(0);
+
+    scheduler.stop();
+  });
+
   it('cron でも複数回ぶん止まっていた後の次回が、未来かつ元の系列の上にある', async () => {
     // 毎週月曜 10:00。8/10（月）の発火が未完了で、復旧は 8/19（水）
     const stores = createMemoryStores();

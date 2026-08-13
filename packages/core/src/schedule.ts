@@ -85,14 +85,6 @@ export interface SchedulerOptions {
  */
 const MAX_SLEEP_MS = 60_000;
 
-/**
- * 元の時間軸を辿るときの歩数の上限。
- *
- * **これは発火の回数制限ではない**（AGENTS.md 地雷2）。「1分ごと」の依頼で1週間
- * 止まっていた、のような場合に予定を数え直す歩数であって、起こす回数ではない。
- */
-const TIMELINE_WALK_LIMIT = 20_000;
-
 export function createScheduler(options: SchedulerOptions): Scheduler {
   return new TimerScheduler(options);
 }
@@ -275,8 +267,9 @@ class TimerScheduler implements Scheduler {
         // 数える。配り直した発火の時刻から数えると、手で起こした1回が予定を動かし
         // （`manual` の pending で位相がずれる）、長く止まっていた場合は過去の時刻が
         // 次回になって直後に余分な発火が続く。
-        const plan = this.#requests.get(entry.kind)?.plan;
-        this.#due.set(entry.kind, this.#nextOnTimeline(entry, plan, now).getTime());
+        // 次の予定は依頼の格子の上で決まる（`nextAt` が錨から数えるので、配り直した
+        // 発火の時刻や現在時刻で位相が動かない）。過去を残さないので余分な発火も続かない。
+        this.#due.set(entry.kind, entry.nextAt(now).getTime());
         fired.push(entry.kind);
         const event = entry.event(now);
         this.#post(
@@ -300,28 +293,6 @@ class TimerScheduler implements Scheduler {
    * **元の時刻と理由をそのまま返す。** ここで現在時刻に置き換えると、完了時に
    * 記録される基準が復旧時刻になって位相がずれ、手動実行が定期の予定を動かす。
    */
-  /**
-   * 依頼自身の時間軸に乗ったまま、`now` より後の最初の予定を返す。
-   *
-   * **止まっていた回数ぶんをまとめて撃たない**（拾い直しは1回だけ、が原則）。かつ
-   * 過去の時刻を次回に残さない — 残すと直後の刻みで余分な発火が続き、そこで位相が
-   * 現在時刻へ引き直されてしまう。
-   */
-  #nextOnTimeline(entry: ScheduleEntry, plan: ScheduledRequest | undefined, now: Date): Date {
-    const raw = new Date(plan?.lastScheduledRunAt ?? plan?.createdAt ?? now.toISOString());
-    let cursor = Number.isNaN(raw.getTime()) ? now : raw;
-
-    for (let step = 0; step < TIMELINE_WALK_LIMIT; step += 1) {
-      const next = entry.nextAt(cursor);
-      if (next.getTime() > now.getTime()) return next;
-      // 前へ進まない指定（読めない周期など）で回り続けない
-      if (next.getTime() <= cursor.getTime()) break;
-      cursor = next;
-    }
-    // 元の時間軸を辿り切れないほど離れている場合だけ、現在時刻から数え直す
-    return entry.nextAt(now);
-  }
-
   #resumable(kind: string): { at: string; cause: 'schedule' | 'manual' } | undefined {
     const pending = this.#requests.get(kind)?.plan.pendingRun;
     if (pending === undefined) return undefined;
@@ -548,15 +519,39 @@ export function scheduledRequestEntry(plan: ScheduledRequest): ScheduleEntry {
     return atTimeOnDay(tomorrow, at);
   };
 
+  /**
+   * 「N 分ごと」の格子は**仕込んだ時刻に錨を打つ**。
+   *
+   * `after + N分` にすると、格子が呼ばれた時刻に依存して毎回動く。落ちて起き直した
+   * ときや手で1回起こしたときに位相がずれるのは、そこが原因だった。錨から数えれば、
+   * どれだけ止まっていても次の予定は必ず元の系列（錨 + N分の倍数）の上に載る。
+   *
+   * **除算で直接求める。** 1回ずつ辿って上限で諦める形にすると、長く止まったときだけ
+   * 現在時刻基準へ落ちて同じ穴が開く（1分ごとなら2週間の停止で到達する）。
+   *
+   * 錨より前を尋ねられたら（時計のずれ・未来の日付の手編集）錨を待たずに `after + N分`
+   * を返す。**黙って何年も沈黙するより遅れて起きる方がよい。**
+   */
+  const anchor = new Date(plan.createdAt);
+  const everyAfter = (after: Date, minutes: number): Date => {
+    const interval = Math.max(1, Math.floor(minutes)) * 60_000;
+    const base = anchor.getTime();
+    if (Number.isNaN(base) || after.getTime() < base) {
+      return new Date(after.getTime() + interval);
+    }
+    const steps = Math.floor((after.getTime() - base) / interval) + 1;
+    return new Date(base + steps * interval);
+  };
+
   const nextAt = (after: Date): Date => {
     if (spec.type === 'daily') {
       return dailyAt(after, parseTimeOfDay(spec.at) ?? { hour: 0, minute: 0 });
     }
     if (spec.type === 'cron') {
-      // croner はローカル時刻で、`after` より後の最初の時刻を返す
+      // cron はカレンダー上の絶対系列なので、`nextAfter(now)` 自体が系列の上にある
       return parseCron(spec.expression)?.nextAfter(after) ?? dailyAt(after, MIDNIGHT);
     }
-    return new Date(after.getTime() + Math.max(1, Math.floor(spec.minutes)) * 60_000);
+    return everyAfter(after, spec.minutes);
   };
 
   return {
