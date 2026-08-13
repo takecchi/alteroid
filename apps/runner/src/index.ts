@@ -3,7 +3,12 @@ import { chmodSync, chownSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { createRunnerHost, type RunnerChildUser } from '@alteroid/core';
+import {
+  createCredentialStore,
+  createRunnerHost,
+  WITHHELD_ENV_KEYS,
+  type RunnerChildUser,
+} from '@alteroid/core';
 import { createAdaptorServer } from '@hono/node-server';
 
 import { createRunnerApp, Outbox } from './app.js';
@@ -91,11 +96,36 @@ export async function main(): Promise<void> {
     );
   }
 
+  /**
+   * マネージャーの道具の鍵は、env のスナップショットではなく器から配る。
+   *
+   * env のまま配ると、鍵はこのプロセスが起動した瞬間に凍る。人間が鍵を直しても
+   * 器を作り直すまで届かず、**「鍵を直す」と「走行中の仕事を失う」が同じ操作**に
+   * なる（`credentials.ts` に経緯）。読む主体は SDK 子プロセスなので、降ろす UID で
+   * 読めるようにしておく。
+   */
+  const credentials = createCredentialStore({
+    ...(envValue(process.env, 'ALTEROID_CREDENTIAL_DIR') === undefined
+      ? {}
+      : { dir: process.env.ALTEROID_CREDENTIAL_DIR as string }),
+    ...(childUser === undefined ? {} : { reader: { uid: childUser.uid, gid: childUser.gid } }),
+    // 伏せる鍵は鍵として配れない。**伏せる仕組みと配る仕組みを結び付けておく** —
+    // 別々のままだと、後から足した配る側が前からある守りを黙って越える。
+    withheldEnvKeys: WITHHELD_ENV_KEYS,
+  });
+  const seeded = await credentials.flush();
+  process.stderr.write(
+    `alteroid-runner: 鍵 ${seeded.length} 件を器へ置きました${seeded
+      .map((entry) => ` ${entry.name}=${entry.sha256}`)
+      .join('')}\n`,
+  );
+
   const outbox = new Outbox();
   const host = createRunnerHost({
     runnerId,
     workspacePath,
     emit: (event) => outbox.push(event),
+    credentials,
     ...(childUser === undefined ? {} : { childUser }),
   });
 

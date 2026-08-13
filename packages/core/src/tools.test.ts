@@ -21,6 +21,7 @@ function harness(): Harness {
   const sent: { managerId: string; message: string; decision?: string; requestId?: string }[] = [];
   const started: { request: string; cwd?: string }[] = [];
   const moved: { managerId: string; force?: boolean }[] = [];
+  const aborted: { managerId: string; reason?: string }[] = [];
   const running: ManagerSummary[] = [];
 
   const managers: ManagerPool = {
@@ -58,6 +59,10 @@ function harness(): Harness {
     async move(managerId, options = {}) {
       moved.push({ managerId, ...options });
       return { moved: null, detail: `${managerId} は別の器へ移せなかった。` };
+    },
+    async abort(managerId: string, reason?: string) {
+      aborted.push({ managerId, ...(reason === undefined ? {} : { reason }) });
+      return { outcome: 'stopped' as const, detail: '止めた' };
     },
     async stop() {},
   };

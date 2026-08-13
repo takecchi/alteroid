@@ -19,6 +19,9 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/core/package.json packages/core/
 COPY packages/storage-fs/package.json packages/storage-fs/
 COPY packages/storage-pg/package.json packages/storage-pg/
+# 外部向けの生成クライアント。この器では使わないが、ワークスペースの一員なので
+# 置かないと `--frozen-lockfile` が「lockfile と合わない」で落ちる
+COPY packages/api-client/package.json packages/api-client/
 COPY apps/daemon/package.json apps/daemon/
 COPY apps/runner/package.json apps/runner/
 COPY apps/cli/package.json apps/cli/
@@ -56,10 +59,41 @@ RUN set -eux; \
   gh --version
 
 # git の資格情報は `gh` から借りる（人間が `gh auth setup-git` でやることと同じ）。
-# **鍵をイメージに焼かない。** ここにあるのは経路だけで、実際の鍵は runner の
-# 環境変数（`GH_TOKEN`）から来る。トークンが無ければ（空文字でも同じ）このヘルパーは
-# 何も返さず、git は「資格情報が無い」として次へ進む（公開リポジトリの clone は通る）。
+# **鍵をイメージに焼かない。** ここにあるのは経路だけである。
 RUN git config --system credential.https://github.com.helper '!gh auth git-credential'
+
+# `gh` は鍵を**呼ばれるたびにファイルから**読む。
+#
+# **なぜ環境変数のままではだめか。** env で渡すと、鍵は runner のプロセスが起動した
+# 瞬間に凍る。人間が鍵を差し替えても、器を作り直すまで届かない —「鍵を直す」と
+# 「走行中の仕事を失う」が同じ操作になる。しかも既に走っている SDK 子プロセスには
+# 永久に届かない（プロセスの環境変数は外から書き換えられない）。
+#
+# このシムを通せば、`gh` も、`gh` から資格情報を借りる `git` も、**次の呼び出しから**
+# 新しい鍵を使う。走行中のマネージャーを殺さずに鍵が回る。
+#
+# 能力は1つも減っていない。`gh` の版も引数もそのままで、変えたのは鍵の読み場所だけ。
+RUN set -eux; \
+  printf '%s\n' \
+    '#!/bin/sh' \
+    '# 鍵は毎回ファイルから読む（走行中の差し替えを届かせるため）。' \
+    '# **扱う鍵ぜんぶを読む。** 片方だけ読むと「回せる」と言いながら回らない鍵ができる。' \
+    'd="${ALTEROID_CREDENTIAL_DIR:-/run/alteroid/credentials}"' \
+    'for n in GH_TOKEN GITHUB_TOKEN; do' \
+    '  eval "f=\${ALTEROID_${n}_FILE:-$d/$n}"' \
+    '  [ -r "$f" ] || continue' \
+    '  t="$(cat "$f")"' \
+    '  # 空を export すると「鍵が無い」より悪い（hosts.yml も無視される）' \
+    '  [ -n "$t" ] || continue' \
+    '  eval "$n=\$t"; export "$n"' \
+    'done' \
+    'exec /usr/bin/gh "$@"' \
+    > /usr/local/bin/gh; \
+  chmod 0755 /usr/local/bin/gh; \
+  test -x /usr/bin/gh
+# 鍵の置き場。中身は runner が起動時と差し替え時に書く（イメージには入らない）。
+# 一覧はできなくてよいので 0711 — 読めるのは、名前を知っている子プロセスだけである。
+RUN install -d -m 0711 /run/alteroid/credentials
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
@@ -73,6 +107,9 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/core/package.json packages/core/
 COPY packages/storage-fs/package.json packages/storage-fs/
 COPY packages/storage-pg/package.json packages/storage-pg/
+# 外部向けの生成クライアント。この器では使わないが、ワークスペースの一員なので
+# 置かないと `--frozen-lockfile` が「lockfile と合わない」で落ちる
+COPY packages/api-client/package.json packages/api-client/
 COPY apps/daemon/package.json apps/daemon/
 COPY apps/runner/package.json apps/runner/
 COPY apps/cli/package.json apps/cli/

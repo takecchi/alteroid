@@ -2,13 +2,16 @@ import { randomUUID } from 'node:crypto';
 
 import type { query } from '@anthropic-ai/claude-agent-sdk';
 
+import type { CredentialStore } from './credentials.js';
 import type {
   RunnerAnswerCommand,
   RunnerCapacity,
   RunnerClient,
+  RunnerCredentialFingerprint,
   RunnerEvent,
   RunnerHealth,
   RunnerResumeCommand,
+  RunnerSetCredentialsCommand,
   RunnerStartCommand,
 } from './runner-protocol.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
@@ -33,6 +36,11 @@ export interface LocalRunnerOptions {
   withheldEnvKeys?: readonly string[];
   /** 主にテスト用。既定は実際の器を測る。 */
   capacityFn?: (activeManagers: number) => RunnerCapacity;
+  /**
+   * 鍵の器。ローカルでも渡せるようにしてあるのは、**コンテナ構成でだけ鍵が回る**
+   * という差を作らないためである（器が違うだけで、上の層が見るものは同じ）。
+   */
+  credentials?: CredentialStore;
 }
 
 export function createLocalRunner(options: LocalRunnerOptions): RunnerClient {
@@ -59,6 +67,7 @@ class LocalRunner implements RunnerClient {
         ? {}
         : { withheldEnvKeys: options.withheldEnvKeys }),
       ...(options.capacityFn === undefined ? {} : { capacityFn: options.capacityFn }),
+      ...(options.credentials === undefined ? {} : { credentials: options.credentials }),
     });
   }
 
@@ -128,6 +137,16 @@ class LocalRunner implements RunnerClient {
 
   async transcript(managerId: string): Promise<string | null> {
     return this.#host.transcript(managerId);
+  }
+
+  async credentials(): Promise<RunnerCredentialFingerprint[]> {
+    return this.#host.credentials();
+  }
+
+  async setCredentials(
+    credentials: RunnerSetCredentialsCommand['credentials'],
+  ): Promise<RunnerCredentialFingerprint[]> {
+    return this.#host.setCredentials(credentials);
   }
 
   /** 同じプロセスが消えるので、セッションごと畳む（HTTP 実装とはここが違う）。 */

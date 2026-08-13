@@ -101,6 +101,11 @@ export interface ManagerMoveResult {
   detail: string;
 }
 
+export interface ManagerAbortResult {
+  outcome: 'stopped' | 'unknown';
+  detail: string;
+}
+
 export interface ManagerPool {
   start(input: ManagerStartInput): Promise<ManagerSummary>;
   send(
@@ -108,6 +113,15 @@ export interface ManagerPool {
     message: string,
     options?: ManagerSendOptions,
   ): Promise<ManagerSendResult>;
+  /**
+   * この仕事をやめさせる（`stop()` の全停止とは別物）。
+   *
+   * **人間が直接止められること自体が要件である。** 走っているマネージャーを
+   * 止める手段がクローン経由しか無いと、クローンが取り込み中のときや、そもそも
+   * クローンの判断が間違っているときに、人間が手を出せない層ができる。
+   * 止めた事実は日誌に残る（見えない層を作らない）。
+   */
+  abort(managerId: string, reason?: string): Promise<ManagerAbortResult>;
   list(): Promise<ManagerSummary[]>;
   /** manager_id からセッションの生ログへ降りる（可観測性の最下段）。 */
   transcript(managerId: string): Promise<string | null>;
@@ -616,6 +630,55 @@ class Pool implements ManagerPool {
           ? (record.moveNote ?? `${managerId} は別の器へ移せなかった。`)
           : `${managerId} を ${moved.runnerId ?? '別の器'} で開き直した。`,
     };
+  }
+
+  /**
+   * この仕事をやめさせる（`stop()` の全停止とは別物）。
+   *
+   * 人間が直接止められること自体が要件なので、クローンを介さずに通す。
+   * 止めた事実は日誌と受信箱に残る（見えない層を作らない）。
+   */
+  async abort(managerId: string, reason?: string): Promise<ManagerAbortResult> {
+    await this.#ensureConnected();
+
+    const record = this.#records.get(managerId) ?? (await this.#load(managerId));
+    if (!record) {
+      return { outcome: 'unknown', detail: `${managerId} というマネージャーは居ない。` };
+    }
+
+    const runner = await this.#runnerOf(record);
+    if (!runner) {
+      return {
+        outcome: 'unknown',
+        detail: `${managerId} を走らせていた runner（${record.job.runnerId ?? '不明'}）が居ない。`,
+      };
+    }
+
+    await runner.stop(managerId);
+    record.waiting = [];
+    record.attached = false;
+    record.job.status = 'done';
+    await this.#persist(record);
+
+    // **止めたことを日誌に残す。** 消えた理由が分からないマネージャーを作らない
+    // （PRD「可観測性」）。クローンにも知らせるので、次のターンで気づける。
+    const detail = reason === undefined ? '人間が停止させた。' : `人間が停止させた: ${reason}`;
+    await this.#journal({
+      type: 'exchange',
+      with: 'manager',
+      role: 'outbound',
+      text: `[${managerId}] （停止）${detail}`,
+    });
+    this.#post({
+      type: 'manager_message',
+      id: randomUUID(),
+      at: new Date().toISOString(),
+      managerId,
+      kind: 'report',
+      text: `${managerId} を人間が停止させました。${reason === undefined ? '' : `理由: ${reason}`}`,
+    });
+
+    return { outcome: 'stopped', detail };
   }
 
   async stop(): Promise<void> {

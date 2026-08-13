@@ -1,20 +1,28 @@
 import type {
   RunnerAnswerCommand,
   RunnerClient,
+  RunnerCredentialFingerprint,
   RunnerEvent,
   RunnerHealth,
   RunnerManagerState,
   RunnerResumeCommand,
+  RunnerSetCredentialsCommand,
   RunnerStartCommand,
 } from '@alteroid/core';
 import { request as httpRequest } from 'node:http';
 import { Readable } from 'node:stream';
 
 import {
+<<<<<<< HEAD
   runnerEventSchema,
   runnerHealthSchema,
   runnerManagerStateSchema,
   withDeadline,
+=======
+  runnerCredentialFingerprintSchema,
+  runnerEventSchema,
+  runnerManagerStateSchema,
+>>>>>>> origin/main
 } from '@alteroid/core';
 
 /**
@@ -113,6 +121,24 @@ export async function createHttpRunner(options: HttpRunnerOptions): Promise<Runn
   return client;
 }
 
+<<<<<<< HEAD
+=======
+interface HealthBody {
+  runnerId?: unknown;
+  workspacePath?: unknown;
+  credentials?: unknown;
+}
+
+/** 指紋の配列だけを取り出す（値は runner も返さないし、こちらも持たない）。 */
+function fingerprintsOf(value: unknown): RunnerCredentialFingerprint[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    const parsed = runnerCredentialFingerprintSchema.safeParse(entry);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
+>>>>>>> origin/main
 class HttpRunner implements RunnerClient {
   runnerId: string;
   workspacePath = '';
@@ -286,6 +312,26 @@ class HttpRunner implements RunnerClient {
       const parsed = runnerManagerStateSchema.safeParse(entry);
       return parsed.success ? [parsed.data] : [];
     });
+  }
+
+  async credentials(): Promise<RunnerCredentialFingerprint[]> {
+    const response = await this.#call('GET', '/health');
+    const body = (await response.json()) as HealthBody;
+    return fingerprintsOf(body.credentials);
+  }
+
+  /**
+   * 鍵を差し替える。**器は作り直さない。**
+   *
+   * 走行中のマネージャーにも、器（ファイル）越しに次の `git` / `gh` 呼び出しから
+   * 届く。ここが無いと鍵の更新に再デプロイが要り、そのたびに走っている仕事が死ぬ。
+   */
+  async setCredentials(
+    credentials: RunnerSetCredentialsCommand['credentials'],
+  ): Promise<RunnerCredentialFingerprint[]> {
+    const response = await this.#call('POST', '/credentials', { credentials });
+    const body = (await response.json()) as { credentials?: unknown };
+    return fingerprintsOf(body.credentials);
   }
 
   async transcript(managerId: string): Promise<string | null> {

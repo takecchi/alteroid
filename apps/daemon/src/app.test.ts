@@ -13,6 +13,7 @@ import { createMemoryStores, createRunnerRegistry } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
+import { createJournalBus, type JournalBus } from './journal-bus.js';
 
 /** クローンの代わり。HTTP 層だけを検証する。 */
 function fakeClone() {
@@ -28,14 +29,34 @@ function fakeClone() {
 
   const managerList: ManagerSummary[] = [];
   const transcripts = new Map<string, string>();
+<<<<<<< HEAD
   const moveCalls: { managerId: string; force?: boolean }[] = [];
+=======
+  const managerSends: { managerId: string; text: string; requestId?: string }[] = [];
+  const managerAborts: { managerId: string; reason?: string }[] = [];
+>>>>>>> origin/main
 
   const managers: ManagerPool = {
     async start() {
       throw new Error('この偽クローンからはマネージャーを起こさない');
     },
-    async send() {
-      return { outcome: 'unknown' as const, detail: '' };
+    async send(managerId, text, options) {
+      if (!managerList.some((entry) => entry.managerId === managerId)) {
+        return { outcome: 'unknown' as const, detail: `${managerId} は居ない` };
+      }
+      managerSends.push({
+        managerId,
+        text,
+        ...(options?.requestId === undefined ? {} : { requestId: options.requestId }),
+      });
+      return { outcome: 'delivered' as const, detail: '届けた' };
+    },
+    async abort(managerId, reason) {
+      if (!managerList.some((entry) => entry.managerId === managerId)) {
+        return { outcome: 'unknown' as const, detail: `${managerId} は居ない` };
+      }
+      managerAborts.push({ managerId, ...(reason === undefined ? {} : { reason }) });
+      return { outcome: 'stopped' as const, detail: '止めた' };
     },
     async list() {
       return managerList;
@@ -87,7 +108,12 @@ function fakeClone() {
     posted,
     managerList,
     transcripts,
+<<<<<<< HEAD
     moveCalls,
+=======
+    managerSends,
+    managerAborts,
+>>>>>>> origin/main
     setReply(events: ChatStreamEvent[]) {
       reply = events;
     },
@@ -169,6 +195,7 @@ function fakeRunners(): RunnerRegistry {
 }
 
 let stores: Stores;
+let journalBus: JournalBus;
 let fake: ReturnType<typeof fakeClone>;
 let schedule: ReturnType<typeof fakeScheduler>;
 let runners: RunnerRegistry;
@@ -176,7 +203,9 @@ let app: ReturnType<typeof createApp>;
 let shutdowns: number;
 
 beforeEach(() => {
-  stores = createMemoryStores();
+  const base = createMemoryStores();
+  journalBus = createJournalBus(base.journal);
+  stores = { ...base, journal: journalBus.journal };
   fake = fakeClone();
   schedule = fakeScheduler();
   runners = fakeRunners();
@@ -187,7 +216,11 @@ beforeEach(() => {
     token: 'test-token',
     shutdown: () => (shutdowns += 1),
     scheduler: schedule.scheduler,
+<<<<<<< HEAD
     runners,
+=======
+    journalEvents: journalBus,
+>>>>>>> origin/main
   });
 });
 
@@ -640,5 +673,252 @@ describe('HTTP API', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(shutdowns).toBe(1);
+  });
+});
+
+/**
+ * OpenAPI の配信（Issue #20）。
+ *
+ * spec が経路の実装とずれたら「外から API を叩けます」という主張そのものが
+ * 嘘になる。ここでは「全経路が載っている」「SSE が SSE として書いてある」
+ * 「人間向け画面が出る」の3点だけを見る（内容の細部は `apps/daemon/openapi.json`
+ * 自体が machine-generated で、`pnpm build` のたびに作り直される）。
+ */
+describe('OpenAPI', () => {
+  it('/openapi.json が OpenAPI 3.1 の spec を返す（SSE 経路も含めて全部載る）', async () => {
+    const response = await app.request('/openapi.json');
+    expect(response.status).toBe(200);
+
+    const spec = (await response.json()) as {
+      openapi: string;
+      paths: Record<string, unknown>;
+    };
+    expect(spec.openapi).toBe('3.1.0');
+
+    // 手で削らない限りここに載る経路数（約30本）を大きく下回っていないか、
+    // 個別の経路名で確かめる。`/openapi.json` `/docs` 自身は載らない。
+    const paths = Object.keys(spec.paths);
+    for (const path of [
+      '/health',
+      '/chat',
+      '/chat/{conversationId}/end',
+      '/conversations',
+      '/conversations/{id}',
+      '/journal/stream',
+      '/memory',
+      '/memory/{slug}',
+      '/journal',
+      '/reports',
+      '/reports/{date}',
+      '/approvals',
+      '/approvals/answer',
+      '/approvals/{id}/answer',
+      '/events',
+      '/events/{source}',
+      '/schedule',
+      '/schedule/{kind}/run',
+      '/managers',
+      '/managers/{id}',
+      '/managers/{id}/transcript',
+      '/managers/{id}/messages',
+      '/runners',
+      '/runners/credentials',
+      '/archive',
+      '/archive/{id}',
+      '/shutdown',
+    ]) {
+      expect(paths, path).toContain(path);
+    }
+    expect(paths).not.toContain('/openapi.json');
+    expect(paths).not.toContain('/docs');
+  });
+
+  it('SSE 経路は text/event-stream を content に持つ（能力を単純化して削っていないこと）', async () => {
+    const spec = (await (await app.request('/openapi.json')).json()) as {
+      paths: Record<string, { post?: Operation; get?: Operation }>;
+    };
+    interface Operation {
+      responses?: Record<string, { content?: Record<string, unknown> }>;
+    }
+
+    const chatContent = spec.paths['/chat']?.post?.responses?.['200']?.content;
+    expect(Object.keys(chatContent ?? {})).toContain('text/event-stream');
+
+    const journalStreamContent = spec.paths['/journal/stream']?.get?.responses?.['200']?.content;
+    expect(Object.keys(journalStreamContent ?? {})).toContain('text/event-stream');
+  });
+
+  it('/docs は人間向けの画面（HTML）を返す', async () => {
+    const response = await app.request('/docs');
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('text/html');
+    expect(await response.text()).toContain('<!doctype html>');
+  });
+});
+
+/**
+ * 器を替えても続きから話せること、聞きに行かなくても気づけること、人間が
+ * 自分の言葉を自分で届けられること。
+ *
+ * どれも「読む口はあるのに触る口が無い」ために、画面や別の器から使おうとした
+ * 瞬間に能力の差として現れていた穴である（north_star 禁止1）。
+ */
+describe('会話・出来事・マネージャーへの手出し', () => {
+  async function exchange(conversationId: string, role: 'inbound' | 'outbound', text: string) {
+    await stores.journal.append({ type: 'exchange', with: 'human', role, text, conversationId });
+  }
+
+  it('会話の一覧が新しい順に返る（器を替えても続きが見つかる）', async () => {
+    await exchange('conv-a', 'inbound', '最初の会話');
+    await exchange('conv-a', 'outbound', 'はい');
+    await exchange('conv-b', 'inbound', 'あとの会話');
+
+    const body = (await (await app.request('/conversations')).json()) as {
+      conversations: { conversationId: string; messages: number; preview: string }[];
+    };
+
+    expect(body.conversations.map((entry) => entry.conversationId)).toEqual(['conv-b', 'conv-a']);
+    expect(body.conversations[1]?.messages).toBe(2);
+    // 抜粋はその会話のいちばん新しい発言
+    expect(body.conversations[1]?.preview).toBe('はい');
+  });
+
+  it('会話の中身は古い順（読み上げる順序と同じ）', async () => {
+    await exchange('conv-a', 'inbound', 'ひとつめ');
+    await exchange('conv-a', 'outbound', 'ふたつめ');
+
+    const body = (await (await app.request('/conversations/conv-a')).json()) as {
+      messages: { role: string; text: string }[];
+    };
+
+    expect(body.messages).toMatchObject([
+      { role: 'inbound', text: 'ひとつめ' },
+      { role: 'outbound', text: 'ふたつめ' },
+    ]);
+  });
+
+  it('内部ターン（self）は会話に混ざらない', async () => {
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text: '蒸留の独り言',
+      conversationId: 'conv-a',
+    });
+
+    expect((await app.request('/conversations/conv-a')).status).toBe(404);
+  });
+
+  it('日誌の追記がそのまま流れる（聞きに行かなくても気づける）', async () => {
+    const response = await app.request('/journal/stream?type=escalation');
+    expect(response.status).toBe(200);
+
+    const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+    const decoder = new TextDecoder();
+    // 最初のフレームは open
+    await reader.read();
+
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '流れてはいけない',
+    });
+    await stores.journal.append({
+      type: 'escalation',
+      question: '消してよいか',
+      approvalId: 'ap-9',
+      managerId: 'mgr-1',
+    });
+
+    const { value } = await reader.read();
+    const frame = decoder.decode(value);
+
+    // 絞り込んだ種別だけが届く。絞り込みを決めるのは呼ぶ側である
+    expect(frame).toContain('escalation');
+    expect(frame).toContain('消してよいか');
+    expect(frame).not.toContain('流れてはいけない');
+    await reader.cancel();
+  });
+
+  it('配線されていなければ、黙って空を返さず 503 で知らせる', async () => {
+    const bare = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+    });
+    expect((await bare.request('/journal/stream')).status).toBe(503);
+  });
+
+  it('人間からマネージャーへ直接届く', async () => {
+    fake.managerList.push({
+      managerId: 'mgr-1',
+      status: 'running',
+      live: true,
+      cwd: '/work',
+      request: '実装して',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      waiting: [],
+    });
+
+    const response = await app.request('/managers/mgr-1/messages', {
+      ...post,
+      body: JSON.stringify({ text: 'トークンは合っている。続けて', requestId: 'req-1' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(fake.managerSends).toEqual([
+      { managerId: 'mgr-1', text: 'トークンは合っている。続けて', requestId: 'req-1' },
+    ]);
+  });
+
+  it('居ないマネージャーへ送っても、届いたことにしない', async () => {
+    const response = await app.request('/managers/mgr-none/messages', {
+      ...post,
+      body: JSON.stringify({ text: 'やあ' }),
+    });
+    expect(response.status).toBe(404);
+    expect(fake.managerSends).toEqual([]);
+  });
+
+  it('走っている仕事を1つだけ止められる（器ごと落とさない）', async () => {
+    fake.managerList.push({
+      managerId: 'mgr-1',
+      status: 'running',
+      live: true,
+      cwd: '/work',
+      request: '暴走中',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      waiting: [],
+    });
+
+    const response = await app.request('/managers/mgr-1', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ reason: '方針が変わった' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(fake.managerAborts).toEqual([{ managerId: 'mgr-1', reason: '方針が変わった' }]);
+  });
+
+  it('記憶は消せるし、消したことは日誌に残る', async () => {
+    await stores.persona.write('habits', '朝は不機嫌');
+
+    const response = await app.request('/memory/habits', { method: 'DELETE' });
+
+    expect(response.status).toBe(200);
+    expect(await stores.persona.read('habits')).toBeNull();
+    const journal = await stores.journal.list({ types: ['memory_update'] });
+    expect(journal[0]).toMatchObject({ slug: 'habits', cause: 'human' });
+  });
+
+  it('無い記憶を消しても、消えたことにしない', async () => {
+    expect((await app.request('/memory/missing', { method: 'DELETE' })).status).toBe(404);
+    // 形が不正なものは 400（無いのか、そもそも名前として成立しないのかを分ける）
+    expect((await app.request('/memory/居ない', { method: 'DELETE' })).status).toBe(400);
   });
 });

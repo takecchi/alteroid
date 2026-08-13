@@ -310,6 +310,8 @@ GitHub → Settings → Developer settings → Personal access tokens → **Fine
 
 ### 置く
 
+**初回はこれでよい。差し替え（ローテーション）はこの手順ではない** — 走行中のプロセスには届かないので、下の「鍵を回す」を使う。
+
 ```bash
 # 鍵は stdin から。引数で渡すとシェル履歴とプロセス一覧に残る
 printf %s 'github_pat_xxx' | railway variable set GH_TOKEN --stdin --service runner --skip-deploys
@@ -327,6 +329,28 @@ railway variable set GIT_COMMITTER_EMAIL=takeaki.kobayashi@gmail.com --service r
 ### ローカル（`docker compose`）でも同じ
 
 同じ5つを `.env` に置けば `runner` へ渡る（`compose.yaml` の runner の `environment`）。確認は `docker compose exec -u 1001 runner gh auth status`。
+
+### 鍵を回す（走行中でも）
+
+**変数を置き直すだけでは走行中のマネージャーに届かない。** `railway variable set` は設定を書き換えるが、既に走っているプロセスの環境変数は書き換えられない。`--skip-deploys` を付ければなおさら何も起きない。そのまま「置いたのに 403 のまま」になり、人間は PAT の権限を疑い、マネージャーは正しく 403 を報告し続ける — **両方正しいまま、何時間も噛み合わない**（実際に起きた）。
+
+鍵は器（`/run/alteroid/credentials`）に置いてあり、`git` も `gh` も**呼ばれるたびに読み直す**。だから差し替えは daemon 経由で降ろす。器は作り直さないので、**走行中の仕事は死なない**。
+
+```bash
+railway ssh --service app
+
+# いま配られている鍵の指紋（値は出ない）
+curl -s http://127.0.0.1:$ALTEROID_PORT/runners | jq
+
+# 差し替える。走行中のマネージャーにも次の git / gh 呼び出しから届く
+printf %s 'github_pat_xxx' | jq -Rn '{credentials:[{name:"GH_TOKEN",value:input}]}' \
+  | curl -s -X POST http://127.0.0.1:$ALTEROID_PORT/runners/credentials \
+      -H 'content-type: application/json' -d @-
+```
+
+**Service 変数も一緒に直しておくこと。** 器が作り直されたとき（再デプロイ）に読まれるのは変数の方である。順序は「先に上の口で回して仕事を止めない → 落ち着いてから変数を直す」。
+
+指紋が食い違っていたら、鍵の権限ではなく**経路**の問題である。PAT の設定を見に行く前にここを見る。
 
 ### 通っているか確かめる
 
@@ -358,6 +382,7 @@ alteroid chat
 
 ## 症状から引く
 
+<<<<<<< HEAD
 | 症状                                                             | 原因                                                                                                                                                                                                                                       |
 | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `railway ssh` が一瞬で切れる（プロンプトは出る）                 | そのコンテナが再起動を繰り返している。ssh はデプロイに繋がっているので、器が入れ替わるとセッションごと落ちる。**ssh の問題ではない**ので `railway logs` を見る                                                                             |
@@ -368,6 +393,19 @@ alteroid chat
 | `env \| grep ALTEROID_DATABASE_URL` が runner で何か返す         | 慌てる前に行頭固定で取り直す。`RAILWAY_GIT_COMMIT_MESSAGE` にこの文書の一部が入っている                                                                                                                                                    |
 | マネージャーの commit が `Please tell me who you are` で失敗する | `GIT_AUTHOR_*` / `GIT_COMMITTER_*` が runner に無い（「マネージャーに GitHub を渡す」）                                                                                                                                                    |
 | マネージャーの push が 403 になる                                | `GH_TOKEN` が無いか、fine-grained PAT の Contents が Read-only か、対象リポジトリが選択されていない                                                                                                                                        |
+=======
+| 症状                                                             | 原因                                                                                                                                                                                                                |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `railway ssh` が一瞬で切れる（プロンプトは出る）                 | そのコンテナが再起動を繰り返している。ssh はデプロイに繋がっているので、器が入れ替わるとセッションごと落ちる。**ssh の問題ではない**ので `railway logs` を見る                                                      |
+| `alteroidd: 起動に失敗しました: TypeError: fetch failed`         | daemon が runner の `/health` へ届いていない。runner のログを見る（大抵 runner が上がっていない）。次に `ALTEROID_RUNNER_URL` のサービス名と `ALTEROID_RUNNER_BIND=::` を確認する                                   |
+| `alteroid-runner: ALTEROID_RUNNER_CHILD_UID が指定されているが…` | runner が root で走っていない。`RAILWAY_RUN_UID=0` が無い／名前に空白が混ざっている。**これは異常ではなく設計**で、同じ UID のまま走ると子プロセスが制御面に手を届かせるので、runner は起動を拒む                   |
+| 変数を設定したのに効かない                                       | 名前の前後に空白。`railway variable list --json` で `repr` して検算する（上の「置いたら必ず名前を検算する」）                                                                                                       |
+| 日報が想定と違う時刻に出る                                       | `TZ` 未設定。既定の `22:00` は**コンテナのローカル時刻**なので、UTC のまま動くと日本時間の翌 7:00 になる                                                                                                            |
+| `env \| grep ALTEROID_DATABASE_URL` が runner で何か返す         | 慌てる前に行頭固定で取り直す。`RAILWAY_GIT_COMMIT_MESSAGE` にこの文書の一部が入っている                                                                                                                             |
+| マネージャーの commit が `Please tell me who you are` で失敗する | `GIT_AUTHOR_*` / `GIT_COMMITTER_*` が runner に無い（「マネージャーに GitHub を渡す」）                                                                                                                             |
+| マネージャーの push が 403 になる                                | **まず指紋を突き合わせる**（下記）。合っていないなら鍵が届いていない側の問題で、PAT の権限を疑うのは順番が違う。合っていて 403 なら、fine-grained PAT の Contents が Read-only か、対象リポジトリが選択されていない |
+| 鍵を差し替えたのにマネージャーが「権限が無い」と言い続ける       | **走行中のマネージャーに古い鍵が残っている。** `--skip-deploys` で置いた変数は走っているプロセスに入らない。`POST /runners/credentials` で回す（下記「鍵を回す」）                                                  |
+>>>>>>> origin/main
 
 ---
 
