@@ -13,9 +13,10 @@ import { serve, type ServerType } from '@hono/node-server';
 import type { ChatStreamEvent, CloneHost, ManagerPool, Stores } from '@alteroid/core';
 import { createMemoryStores } from '@alteroid/core';
 import { createApp, createJournalBus } from '@alteroid/daemon';
+import createClient from 'openapi-fetch';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
-import { createAlteroidClient, type AlteroidClient } from './index.js';
+import { createAlteroidClient, type AlteroidClient, type paths } from './index.js';
 
 /**
  * クローンの代わり。話しかけられたら承認待ちを1件立てて `ask_human` を流す
@@ -211,6 +212,92 @@ it('日誌の SSE を外から購読できる（承認待ちが出たことに�
 it('本文の無い POST にも content-type が付く（deliberateClient を素通りできる）', async () => {
   const ended = await client.api.POST('/chat/{conversationId}/end', {
     params: { path: { conversationId: 'なんでもよい' } },
+    body: {},
   });
   expect(ended.response.status).toBe(200);
+});
+
+/**
+ * **spec が本文を「省略できないもの」として出していることを、型の側で固定する。**
+ *
+ * 門番（`deliberateClient`）が要求するのは `content-type: application/json` だが、
+ * OpenAPI にヘッダ必須を直接書く手段は無い（`Content-Type` を header parameter に
+ * 書いても仕様上*無視される*）。**唯一の機械可読な表現が「requestBody を `required`
+ * にする」ことである** — 生成クライアントは本文を必ず持つので、そのついでに
+ * content-type が必ず付く（openapi-fetch は body がある時だけ付ける実装）。
+ *
+ * **だからこの契約は実行時ではなく型に宿る。** 下の実行時 test に `body: {}` を書けば
+ * `required: false` でも 415 にはならないので、実行時だけを見る test は素通りする
+ * （実際に一度素通りした）。守りたいのは「本文を**省略した**呼び出しが型で書けない」
+ * ことなので、そこを直接見る。
+ *
+ * `required: false` に戻すと `requestBody` が `?:` になり、`undefined` が入って
+ * `never` へ落ち、この代入が `tsc` で落ちる（`pnpm typecheck` と CI が拾う）。
+ */
+type BodyIsRequired<T> = undefined extends T ? never : true;
+
+/** `true` を受け取れるのは本文が必須のときだけ（省略可なら引数の型が `never` になる）。 */
+function assertBodyRequired<T>(bodyIsRequired: BodyIsRequired<T>): BodyIsRequired<T> {
+  return bodyIsRequired;
+}
+
+assertBodyRequired<paths['/chat/{conversationId}/end']['post']['requestBody']>(true);
+assertBodyRequired<paths['/events/{source}']['post']['requestBody']>(true);
+assertBodyRequired<paths['/schedule/{kind}/run']['post']['requestBody']>(true);
+assertBodyRequired<paths['/shutdown']['post']['requestBody']>(true);
+
+/**
+ * **既定ヘッダを注入しない素の生成クライアントで、実際に門番を越えられることを見る。**
+ *
+ * 上の `it` が通るのは `createAlteroidClient` が全リクエストへ `content-type` を手で
+ * 足しているからで、spec が正しいことの証拠にはならない。他言語の素の生成クライアントは
+ * 既定ヘッダなど注入しないので、そちらでも通らなければ「spec から起こしたクライアントは
+ * 415 に当たる」が残る。だからここは `createClient<paths>` を**既定ヘッダ無しで**直に組む。
+ *
+ * 見るのは「415 でないこと」だけである。200 か 404 かは deps の有無で決まるが、どちらも
+ * 門番を**通り抜けた**ことを意味する（415 は通れなかったことしか意味しない）。
+ */
+it('既定ヘッダを注入しない素の生成クライアントでも 415 にならない', async () => {
+  const address = server.address() as AddressInfo;
+  const bare = createClient<paths>({ baseUrl: `http://127.0.0.1:${address.port}` });
+
+  const calls: { name: string; status: () => Promise<number> }[] = [
+    {
+      name: 'POST /chat/{conversationId}/end',
+      status: async () =>
+        (
+          await bare.POST('/chat/{conversationId}/end', {
+            params: { path: { conversationId: 'なんでもよい' } },
+            body: {},
+          })
+        ).response.status,
+    },
+    {
+      name: 'POST /events/{source}',
+      status: async () =>
+        (await bare.POST('/events/{source}', { params: { path: { source: 'ci' } }, body: {} }))
+          .response.status,
+    },
+    {
+      name: 'POST /schedule/{kind}/run',
+      status: async () =>
+        (
+          await bare.POST('/schedule/{kind}/run', {
+            params: { path: { kind: 'daily_report' } },
+            body: {},
+          })
+        ).response.status,
+    },
+    {
+      name: 'POST /shutdown',
+      status: async () => (await bare.POST('/shutdown', { body: {} })).response.status,
+    },
+  ];
+
+  const statuses: Record<string, number> = {};
+  for (const call of calls) statuses[call.name] = await call.status();
+
+  for (const [name, status] of Object.entries(statuses)) {
+    expect(status, `${name} が門番に弾かれた`).not.toBe(415);
+  }
 });

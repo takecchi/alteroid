@@ -356,10 +356,21 @@ function isDailyReport(entry: JournalEntry): entry is DailyReport {
 /**
  * 本文検査が無い POST（`deliberateClient` のみ）に共通の requestBody。
  *
- * **本文は要らないが、`content-type: application/json` は要る。** それを 415 の
- * description（散文）だけで伝えると、spec から起こした他言語のクライアントは
- * ヘッダを付けずに叩いて 415 に当たる。機械可読な形で「application/json で
- * 来い」と言うために、中身を縛らない本文を `required: false` で置いてある。
+ * **サーバは本文を読まないが、`content-type: application/json` は要る。** それを
+ * 415 の description（散文）だけで伝えると、spec から起こした他言語のクライアントは
+ * ヘッダを付けずに叩いて 415 に当たる。機械可読な形で「application/json で来い」と
+ * 言うためにここを置いてある。
+ *
+ * **`required: true` でなければ契約にならない。** OpenAPI では requestBody を省略
+ * した呼び出しに、その media type の `content-type` を送る義務が無い。つまり
+ * `required: false` だと生成クライアントは本文もヘッダも省略でき、直したはずの
+ * 415 がそのまま残る（実際 `openapi-fetch` は「body が無ければ `Content-Type` を
+ * 付けない」実装である）。だから**中身は縛らないまま `required: true`** にして、
+ * 「送るものが無くても `{}` は置く」を型の側から強制する。
+ *
+ * **サーバの方が緩いのは意図的。** 本文は読まないので空でも `{}` でも通る。spec が
+ * サーバより厳しい向きなら、spec から起こしたクライアントは必ず門番を素通りできる
+ * （逆向きにすると、spec が許した呼び方がサーバに弾かれる）。
  *
  * **門番を緩める変更ではない。** `deliberateClient` は無改変で、これは spec 側が
  * 門番の存在を表現していなかったことへの追随である。
@@ -368,7 +379,7 @@ function isDailyReport(entry: JournalEntry): entry is DailyReport {
  */
 function noBodyPostRequestBody(description: string) {
   return {
-    required: false,
+    required: true,
     description,
     // 中身は縛らない（free-form）。ここで伝えたいのは形ではなく content-type である。
     content: { 'application/json': { schema: {} } },
@@ -682,10 +693,12 @@ export function createApp(deps: AppDeps) {
       describeRoute({
         tags: ['chat'],
         summary: '会話の終了（蒸留の契機）',
-        description: '会話の終了 = 蒸留の契機。CLI が chat を抜けるときに叩く。本文は無い。',
+        description:
+          '会話の終了 = 蒸留の契機。CLI が chat を抜けるときに叩く。運ぶ情報は無い（`{}` を送る）。',
         requestBody: noBodyPostRequestBody(
-          '本文は要らない。`content-type: application/json` だけが要る（ブラウザの単純' +
-            'リクエストで蒸留ターンを起こされないため）。',
+          '**中身は読まないので `{}` を送ればよい。** 本文そのものではなく ' +
+            '`content-type: application/json` が要る（ブラウザの単純リクエストで蒸留ターンを' +
+            '起こされないため）。',
         ),
         responses: {
           200: {
@@ -1295,9 +1308,10 @@ export function createApp(deps: AppDeps) {
           '文字列のまま渡す。',
         requestBody: noBodyPostRequestBody(
           '**本文まるごとが payload になる。** 送り元が形を決めているので中身は縛らない。' +
-            'JSON として読めない本文は文字列のまま渡し、空の本文は空文字列になる。' +
-            '`content-type: application/json` は必要（ブラウザの単純リクエストで判断材料を' +
-            '書き込まれないため）。',
+            'JSON として読めない本文は文字列のまま渡す。`content-type: application/json` は' +
+            '必要（ブラウザの単純リクエストで判断材料を書き込まれないため）。サーバは空の' +
+            '本文も受けて空文字列にするが、**spec としては本文を必須にしてある** — 生成' +
+            'クライアントに content-type を必ず付けさせるため（運ぶものが無いなら `{}`）。',
         ),
         responses: {
           200: {
@@ -1455,8 +1469,9 @@ export function createApp(deps: AppDeps) {
           'これは観測ではなく実行である。起こせばクローンのターンが走り、記憶に基づく委譲や' +
           '外部への操作の判断まで動く。予定はずらさない（余分に1回起こす）。',
         requestBody: noBodyPostRequestBody(
-          '本文は要らない。`content-type: application/json` だけが要る（ブラウザの単純' +
-            'リクエストで自律ターンを起こされないため）。',
+          '**中身は読まないので `{}` を送ればよい。** 本文そのものではなく ' +
+            '`content-type: application/json` が要る（ブラウザの単純リクエストで自律ターンを' +
+            '起こされないため）。',
         ),
         responses: {
           200: {
@@ -2095,10 +2110,11 @@ export function createApp(deps: AppDeps) {
       describeRoute({
         tags: ['system'],
         summary: 'デーモンを止める',
-        description: '`daemon stop` の受け口。本文は無い。',
+        description: '`daemon stop` の受け口。運ぶ情報は無い（`{}` を送る）。',
         requestBody: noBodyPostRequestBody(
-          '本文は要らない。`content-type: application/json` だけが要る（ブラウザの単純' +
-            'リクエストでデーモンを止められないため）。',
+          '**中身は読まないので `{}` を送ればよい。** 本文そのものではなく ' +
+            '`content-type: application/json` が要る（ブラウザの単純リクエストでデーモンを' +
+            '止められないため）。',
         ),
         responses: {
           200: {
