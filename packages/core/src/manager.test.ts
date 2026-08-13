@@ -239,8 +239,10 @@ describe('マネージャー', () => {
     expect(options.maxBudgetUsd).toBeUndefined();
     expect(worker.maxTurns).toBeUndefined();
 
-    // 権限モードは人間が Claude Code を開いたときと同じ既定のまま
-    expect(options.permissionMode).toBeUndefined();
+    // 権限モードは人間が Claude Code を開いたときと同じ（Auto）。`canUseTool` の
+    // 配線はそのまま残す（要件。既定で確認を出すかどうかだけが変わる）
+    expect(options.permissionMode).toBe('auto');
+    expect(typeof options.canUseTool).toBe('function');
 
     // 人間と同じ設定・同じ .mcp.json を渡す（下向きは同じものが見える）
     expect(options.settingSources).toEqual(['user', 'project', 'local']);
@@ -288,10 +290,30 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
-  it('許可確認はクローンへ回り、返事が来るまでその仕事だけが止まる（受け入れ基準2）', async () => {
+  it('既定では当たり障りのない道具で確認を出さない（permissionMode: auto）', async () => {
+    // 人間が Claude Code を開けば `Read` や `grep` でいちいち止まらない。層を
+    // 下りた瞬間にそれが止まるならデグレード（north_star 禁止1）であって仕様ではない。
     const s = setup();
+    await s.pool.start({ request: 'ログイン周りを直して' });
+
+    const { options } = s.sessions[0] as FakeSession;
+    expect(options.permissionMode).toBe('auto');
+    // 経路そのものは残す。既定で確認を出すかどうかだけを変えている。
+    expect(typeof options.canUseTool).toBe('function');
+
+    await s.pool.stop();
+  });
+
+  it('許可確認はクローンへ回り、返事が来るまでその仕事だけが止まる（受け入れ基準2）', async () => {
+    // 都度確認へ戻した状態＝設定を戻せば従来どおり動くことの証明でもある。
+    const s = setup({
+      PATH: '/usr/bin',
+      ALTEROID_HOME: '/secret',
+      ALTEROID_MANAGER_PERMISSION_MODE: 'default',
+    });
     const { managerId } = await s.pool.start({ request: 'デプロイして' });
     const session = s.sessions[0] as FakeSession;
+    expect(session.options.permissionMode).toBe('default');
 
     const asked = session.ask('Bash', { command: 'git push' });
     await new Promise((resolve) => setTimeout(resolve, 0));
