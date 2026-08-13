@@ -1,6 +1,5 @@
 import {
   authAccountSchema,
-  chatStreamEventSchema,
   createMemoryStores,
   jobStatusSchema,
   journalEntrySchema,
@@ -182,52 +181,6 @@ export const memoryDeleteResponseSchema = z.object({ ok: z.literal(true), slug: 
 // ---------------------------------------------------------------------------
 
 export const journalListResponseSchema = z.object({ entries: z.array(journalEntrySchema) });
-
-// ---------------------------------------------------------------------------
-// SSE のメッセージ（/chat, /journal/stream）
-// ---------------------------------------------------------------------------
-
-/**
- * SSE の応答は「1 メッセージ ＝ `event` 名と `data` の組」として書く。
- *
- * **なぜ `data` だけを載せないのか。** どちらの経路も最初に `open` を流すが、その
- * `data` は以降のイベントと形が違う（`chatStreamEventSchema` / `journalEntrySchema`
- * のどの枝でもない）。`data` だけを載せると `open` が spec から落ち、生成
- * クライアントが手書きの型で補うことになる ＝ 二重管理で、線の上の形を変えても
- * spec の差分検査は通ってしまう（#22 のレビュー指摘）。
- *
- * **ここで表せる限界も書いておく。** OpenAPI は本文が SSE のフレーム列であることも、
- * 最初の 1 本が必ず `open` であることも表せない。このスキーマが言えるのは
- * **流れうる 1 メッセージの形**までで、順序と個数は description が引き受ける。
- * 無理に順序まで型で書こうとすると spec が嘘になる。
- *
- * 枝は core の union から起こす（イベント種別が増えたらここは自動で追いつく）。
- */
-function sseMessageSchema<Option extends z.ZodObject<{ type: z.ZodLiteral<string> }>>(
-  openData: z.ZodType,
-  options: readonly Option[],
-) {
-  return z.discriminatedUnion('event', [
-    z.object({ event: z.literal('open'), data: openData }),
-    ...options.map((option) => z.object({ event: option.shape.type, data: option })),
-  ]);
-}
-
-/** `open` が運ぶのは会話 id だけ（以降のイベントのような `type` を持たない）。 */
-const chatOpenDataSchema = z.object({ conversationId: z.string() });
-
-export const chatStreamMessageSchema = sseMessageSchema(
-  chatOpenDataSchema,
-  chatStreamEventSchema.options,
-);
-
-/** 日誌の `open` は配線が生きていることの合図だけを運ぶ。 */
-const journalOpenDataSchema = z.object({ ok: z.literal(true) });
-
-export const journalStreamMessageSchema = sseMessageSchema(
-  journalOpenDataSchema,
-  journalEntrySchema.options,
-);
 
 /**
  * `journalEntrySchema` は discriminatedUnion。`/reports` が実際に返すのは

@@ -499,16 +499,15 @@ export function createApp(deps: AppDeps) {
         description:
           '人間の発言をクローンの受信箱へ積み、クローンの応答を SSE で流す。' +
           '**SSE。** `event:` にイベント名（`open` / `text` / `thinking` / `tool` / ' +
-          '`ask_human` / `done` / `error`）、`data:` に対応する JSON が入る。下記スキーマは ' +
-          '**流れうる 1 メッセージ**（`event` 名と `data` の組）を表す — 本文はその列で、' +
-          '**最初の 1 本は必ず `open`**（会話 id を運ぶ）、`done` か `error` で終わる。' +
-          'この順序は OpenAPI では表せないのでここに書いてある。人間が chat を閉じても' +
-          'クローンのターンは走り続ける（人間の不在で止まるのは承認待ちの仕事だけ）。',
+          '`ask_human` / `done` / `error`）、`data:` に対応する JSON が入る。`data:` の ' +
+          '形は下記スキーマ（`open` は `{conversationId}` のみで別枠、他は ' +
+          '`chatStreamEventSchema` の各枝）。人間が chat を閉じてもクローンのターンは' +
+          '走り続ける（人間の不在で止まるのは承認待ちの仕事だけ）。',
         responses: {
           200: {
             description: 'SSE ストリーム。',
             content: {
-              'text/event-stream': { schema: resolver(chatStreamMessageSchema) },
+              'text/event-stream': { schema: resolver(chatStreamEventSchema) },
             },
           },
           400: {
@@ -741,15 +740,12 @@ export function createApp(deps: AppDeps) {
           '日誌に載ったものがそのまま流れる（聞きに行かなくても承認待ちの発生に気づける）。' +
           '**SSE。** `event:` に日誌エントリ種別（`open` に加え、`exchange` / `decision` / ' +
           '`escalation` / `tool_use` / `memory_update` / `daily_report` / ' +
-          '`external_event`）、`data:` に日誌エントリ本体。下記スキーマは**流れうる 1 ' +
-          'メッセージ**（`event` 名と `data` の組）を表す — 本文はその列で、**最初の 1 本は' +
-          '必ず `open`**（`{ok:true}` だけを運ぶ配線の合図）。この順序は OpenAPI では' +
-          '表せないのでここに書いてある。`type` クエリで絞り込めるが、選り分ける表は' +
-          '持たない（絞り込みは呼ぶ側が決める）。',
+          '`external_event`）、`data:` に日誌エントリ本体（`open` は `{ok:true}` のみ別枠）。' +
+          '`type` クエリで絞り込めるが、選り分ける表は持たない（絞り込みは呼ぶ側が決める）。',
         responses: {
           200: {
             description: 'SSE ストリーム。',
-            content: { 'text/event-stream': { schema: resolver(journalStreamMessageSchema) } },
+            content: { 'text/event-stream': { schema: resolver(journalEntrySchema) } },
           },
           400: {
             description: 'クエリが不正。',
