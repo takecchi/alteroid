@@ -43,7 +43,9 @@ import type { JobStatus } from './schema.js';
  * - `tools` を**渡さない**（preset 全部）。明示リストで絞れば能力の削除になる
  * - `maxTurns` を渡さない。暴走はターン数ではなく実行環境の境界で止める
  * - 同時セッション数に人工上限を設けない。上限はマシンリソースそのもの
- * - `permissionMode` を触らない。確認は `canUseTool` でデーモンへ回す
+ * - `permissionMode` は人間が開く Claude Code と同じ既定（`auto`）。層を下りた
+ *   途端に `Read` や `grep` で止まるのは仕様ではなくデグレード。確認そのものの
+ *   経路（`canUseTool` でデーモンへ回す）は残してあり、`default` へ戻せば効く
  */
 
 /** マネージャーのモデル帯。変更には人間の承認が要る（AGENTS.md 地雷5）。 */
@@ -93,6 +95,48 @@ export interface RunnerChildUser {
   home?: string;
 }
 
+/**
+ * SDK の権限モード。**既定は `auto`**（人間が開く Claude Code と同じ）。
+ *
+ * 人間が Claude Code を開けば `Read` や `grep` でいちいち止まらない。層を下りた
+ * 瞬間にそれが止まるなら、それはデグレード（north_star 禁止1）であって仕様ではない。
+ * `default` に戻せば従来どおり1件ずつクローンへ確認が回る（配線は残してある）。
+ */
+export const MANAGER_PERMISSION_MODES = [
+  'default',
+  'acceptEdits',
+  'bypassPermissions',
+  'plan',
+  'dontAsk',
+  'auto',
+] as const;
+
+export type ManagerPermissionMode = (typeof MANAGER_PERMISSION_MODES)[number];
+
+/** 既定の権限モード。ここを `default` に倒すと持ち主が確認で止まり続ける。 */
+export const DEFAULT_PERMISSION_MODE: ManagerPermissionMode = 'auto';
+
+/** 権限モードを差し替える環境変数（実行環境の設定であって、能力の制限ではない）。 */
+export const PERMISSION_MODE_ENV_KEY = 'ALTEROID_MANAGER_PERMISSION_MODE';
+
+/**
+ * `ALTEROID_MANAGER_PERMISSION_MODE` を読む。
+ *
+ * **不正な値は落とす。** 黙って既定へ倒すと、綴りを間違えた持ち主が「都度確認に
+ * したはずなのに確認が来ない」状態に気づけない。
+ */
+export function resolvePermissionMode(env: NodeJS.ProcessEnv): ManagerPermissionMode {
+  const given = env[PERMISSION_MODE_ENV_KEY]?.trim();
+  if (given === undefined || given.length === 0) return DEFAULT_PERMISSION_MODE;
+  if ((MANAGER_PERMISSION_MODES as readonly string[]).includes(given)) {
+    return given as ManagerPermissionMode;
+  }
+  throw new Error(
+    `${PERMISSION_MODE_ENV_KEY} の値が不正: ${given}` +
+      `（使えるのは ${MANAGER_PERMISSION_MODES.join(' / ')}。既定は ${DEFAULT_PERMISSION_MODE}）`,
+  );
+}
+
 export interface RunnerHostOptions {
   /** 安定した識別子。デーモンが `manager_id → runner_id` を台帳に残す。 */
   runnerId: string;
@@ -108,6 +152,11 @@ export interface RunnerHostOptions {
   withheldEnvKeys?: readonly string[];
   /** SDK 子プロセスを別 UID で走らせる（コンテナ構成の既定）。 */
   childUser?: RunnerChildUser;
+  /**
+   * 権限モード。省略すると `env` の `ALTEROID_MANAGER_PERMISSION_MODE`、
+   * それも無ければ `auto`。
+   */
+  permissionMode?: ManagerPermissionMode;
   /**
    * マネージャーの道具の鍵（`GH_TOKEN` など）。
    *
@@ -162,6 +211,7 @@ class Host implements RunnerHost {
   readonly #withheldEnvKeys: readonly string[];
   readonly #childUser: RunnerChildUser | undefined;
   readonly #credentials: CredentialStore | undefined;
+  readonly #permissionMode: ManagerPermissionMode;
   /**
    * 実行環境プロファイル。
    *
@@ -183,6 +233,7 @@ class Host implements RunnerHost {
     this.#withheldEnvKeys = [...WITHHELD_ENV_KEYS, ...(options.withheldEnvKeys ?? [])];
     this.#childUser = options.childUser;
     this.#credentials = options.credentials;
+    this.#permissionMode = options.permissionMode ?? resolvePermissionMode(this.#env);
     this.#profile =
       options.profile === undefined
         ? undefined
@@ -272,6 +323,7 @@ class Host implements RunnerHost {
       withheldEnvKeys: this.#withheldEnvKeys,
       ...(this.#childUser === undefined ? {} : { childUser: this.#childUser }),
       ...(this.#credentials === undefined ? {} : { credentials: this.#credentials }),
+      permissionMode: this.#permissionMode,
       profileEnv: () => this.#profile?.env() ?? {},
       onClosed: () => this.#sessions.delete(managerId),
     });
@@ -362,6 +414,7 @@ interface RunnerSessionOptions {
   withheldEnvKeys: readonly string[];
   childUser?: RunnerChildUser;
   credentials?: CredentialStore;
+  permissionMode: ManagerPermissionMode;
   /**
    * プロファイル由来の env（評価済みの差分＋`BASH_ENV` などの所在）。
    *
@@ -382,6 +435,7 @@ class RunnerSession {
   readonly #withheldEnvKeys: readonly string[];
   readonly #childUser: RunnerChildUser | undefined;
   readonly #credentials: CredentialStore | undefined;
+  readonly #permissionMode: ManagerPermissionMode;
   readonly #profileEnv: () => Record<string, string>;
   readonly #onClosed: () => void;
 
@@ -408,6 +462,7 @@ class RunnerSession {
     this.#withheldEnvKeys = options.withheldEnvKeys;
     this.#childUser = options.childUser;
     this.#credentials = options.credentials;
+    this.#permissionMode = options.permissionMode;
     this.#profileEnv = options.profileEnv;
     this.#onClosed = options.onClosed;
   }
@@ -511,6 +566,9 @@ class RunnerSession {
       model: MANAGER_MODEL,
       // `tools` は渡さない = preset 全部。明示リストで絞らない（AGENTS.md 地雷1）。
       // `maxTurns` も渡さない（地雷2）。
+      // 人間が開く Claude Code と同じ既定（Auto）。`canUseTool` は下に残してあり、
+      // `default` へ戻せば1件ずつクローンへ確認が回る。
+      permissionMode: this.#permissionMode,
       systemPrompt: {
         type: 'preset',
         preset: 'claude_code',
@@ -690,8 +748,11 @@ class RunnerSession {
    * 許可確認と `AskUserQuestion` をデーモン（＝クローン）へ回す。
    *
    * ここは追加の関門ではない。人間が画面越しに受け取っていた確認が、そのまま
-   * クローンへ届くだけである。だから既定の `permissionMode` を触らず、待ち時間にも
-   * 上限を置かない — 止まるのはこの1件だけで、他は走り続ける。
+   * クローンへ届くだけである。だから待ち時間に上限を置かない — 止まるのはこの
+   * 1件だけで、他は走り続ける。
+   *
+   * **`permissionMode` が `auto` でもこの配線は外さない。** SDK が確認を降ろして
+   * きたとき（`AskUserQuestion` を含む）の行き先はここ1本である。
    */
   async #onPermission(
     toolName: string,
