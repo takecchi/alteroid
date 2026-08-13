@@ -429,6 +429,22 @@ describe('HTTP API', () => {
     expect(body.runners[0]?.lastSeenAt).not.toBeNull();
   });
 
+  it('名簿には配られている鍵の指紋も並ぶ（値は出ない）', async () => {
+    const response = await app.request('/runners');
+    const text = await response.text();
+    const body = JSON.parse(text) as {
+      runners: { credentials: { name: string; sha256: string }[] }[];
+    };
+
+    // 人間が置いた鍵とマネージャーが握っている鍵を突き合わせられること（#17）と、
+    // 名簿（生存・資源）が同じ1本で読めること（M5）を、合流後も両方守る。
+    expect(body.runners[0]?.credentials).toEqual([
+      { name: 'GH_TOKEN', sha256: '0123456789ab', updatedAt: '2026-08-12T00:00:00.000Z' },
+    ]);
+    // **値は決して出ない。** 器の中の鍵そのものが応答に混ざっていないこと。
+    expect(text).not.toContain('ghp_');
+  });
+
   it('名簿を渡していないデーモンでも /runners は空で答える（1台構成と形を変えない）', async () => {
     const bare = createApp({
       clone: fake.clone,
