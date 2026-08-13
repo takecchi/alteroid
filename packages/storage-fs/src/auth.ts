@@ -12,6 +12,7 @@ import type {
   AuthAccount,
   AuthIdentity,
   AuthStore,
+  GrantOutcome,
   LoginRequest,
 } from '@alteroid/core';
 import { z } from 'zod';
@@ -134,26 +135,61 @@ export class FsAuthStore implements AuthStore {
   }
 
   /**
-   * `authenticated` → `consumed` を**1つの排他区間の中で**行う。
+   * `authenticated` → `consumed` と**トークンの保存を1回の書き込みで**行う。
    *
-   * 読みと書きを分けると、同じ claim を同時に投げるだけで両方がトークンを
-   * 受け取れてしまう。`#mutate` は read-modify-write ごと直列化する。
+   * 分けると壊れる（読みと書きを分ければ二重発行、consumed を先に書けば保存失敗で
+   * ログインを回収できなくなる）。ここは1つの排他区間かつ1回の `rename` なので、
+   * 両方が成るか両方が成らないかのどちらかにしかならない。
    */
-  async consumeLoginRequest(id: string): Promise<LoginRequest | null> {
-    return this.#mutate((file) => {
+  async claimLoginRequest(
+    id: string,
+    issue: (request: LoginRequest) => AccessTokenRecord,
+  ): Promise<{ request: LoginRequest; token: AccessTokenRecord } | null> {
+    type Claimed = { request: LoginRequest; token: AccessTokenRecord } | null;
+    return this.#mutate<Claimed>((file): { next: AuthFile | null; result: Claimed } => {
       const found = file.loginRequests.find((request) => request.id === id);
       if (found === undefined || found.status !== 'authenticated') {
         return { next: null, result: null };
       }
       const consumed: LoginRequest = { ...found, status: 'consumed' };
+      const token = accessTokenRecordSchema.parse(issue(consumed));
       return {
         next: {
           ...file,
           loginRequests: file.loginRequests.map((request) =>
             request.id === id ? consumed : request,
           ),
+          accessTokens: [...file.accessTokens.filter((it) => it.id !== token.id), token],
         },
-        result: consumed,
+        result: { request: consumed, token },
+      };
+    });
+  }
+
+  /**
+   * 「他に持ち主が居なければ許可する」を**1つの排他区間の中で**行う。
+   *
+   * 一覧を見てから書く形に分けると、owner が居ない状態で別々のアカウントへ同時に
+   * grant したとき両方が通り、「持ち主は高々1つ」が破れる（＝マルチユーザーになる）。
+   */
+  async grantExclusive(accountId: string, at: string, by: string): Promise<GrantOutcome> {
+    return this.#mutate<GrantOutcome>((file): { next: AuthFile | null; result: GrantOutcome } => {
+      const account = file.accounts.find((it) => it.id === accountId);
+      if (account === undefined) return { next: null, result: { status: 'not_found' as const } };
+      if (account.grantedAt !== null) {
+        return { next: null, result: { status: 'granted' as const, account } };
+      }
+      const owner = file.accounts.find((it) => it.grantedAt !== null);
+      if (owner !== undefined) {
+        return { next: null, result: { status: 'conflict' as const, owner } };
+      }
+      const granted = authAccountSchema.parse({ ...account, grantedAt: at, grantedBy: by });
+      return {
+        next: {
+          ...file,
+          accounts: file.accounts.map((it) => (it.id === accountId ? granted : it)),
+        },
+        result: { status: 'granted' as const, account: granted },
       };
     });
   }

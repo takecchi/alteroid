@@ -9,13 +9,31 @@ import type {
   AuthAccount,
   AuthIdentity,
   AuthStore,
+  GrantOutcome,
   LoginRequest,
 } from '@alteroid/core';
-import { and, asc, eq, lt, sql } from 'drizzle-orm';
+import { and, asc, eq, isNull, lt, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { stripNulls, toIso } from './db.js';
 import { authAccessTokens, authAccounts, authIdentities, authLoginRequests } from './schema.js';
+
+/**
+ * PostgreSQL の一意制約違反（SQLSTATE 23505）。索引に弾かれたことを `conflict` へ
+ * 翻訳するために見る。
+ *
+ * **`cause` を辿ること。** drizzle はドライバの例外を自前のエラーで包むので、
+ * 最前面だけを見ると `code` が見つからず、制約違反が「予期しない例外」として
+ * 外へ漏れる（実際、索引は正しく弾いていたのに翻訳できていなかった）。
+ */
+function isUniqueViolation(error: unknown): boolean {
+  for (let current: unknown = error, depth = 0; current !== null && depth < 5; depth += 1) {
+    if (typeof current !== 'object') return false;
+    if ('code' in current && (current as { code?: unknown }).code === '23505') return true;
+    current = (current as { cause?: unknown }).cause ?? null;
+  }
+  return false;
+}
 
 /** 期限切れのログイン要求をいつまでも抱えない（往復用の一時的な行なので）。 */
 const LOGIN_REQUEST_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -182,31 +200,85 @@ export class PgAuthStore implements AuthStore {
   }
 
   /**
-   * `authenticated` → `consumed` を**条件付き UPDATE 1文で**行う。
+   * `authenticated` → `consumed` と**トークンの INSERT を1つのトランザクションで**行う。
    *
-   * PostgreSQL は同じ行への並行 UPDATE を直列化し、待たされた側は再評価で
-   * `status = 'authenticated'` を満たさなくなる（＝0行更新）。だから
-   * 「更新できた1つ」だけが行を受け取る。読んでから書く形にすると、同じ claim を
-   * 同時に投げるだけで両方がトークンを受け取れてしまう。
+   * 条件付き UPDATE の更新行数が「確保できたのは自分だけか」の判定になる
+   * （PostgreSQL は同じ行への並行 UPDATE を直列化し、待たされた側は再評価で
+   * `status = 'authenticated'` を満たさなくなる＝0行更新）。INSERT が落ちれば
+   * トランザクションごと巻き戻り、要求は `authenticated` のまま残る — だから
+   * 「トークンは返らなかったのに二度と引き取れない」状態が作れない。
    */
-  async consumeLoginRequest(id: string): Promise<LoginRequest | null> {
-    const rows = await this.#db
-      .update(authLoginRequests)
-      .set({
-        request: sql`jsonb_set(${authLoginRequests.request}, '{status}', '"consumed"'::jsonb)`,
-      })
-      .where(
-        and(
-          eq(authLoginRequests.id, id),
-          sql`${authLoginRequests.request} ->> 'status' = 'authenticated'`,
-        ),
-      )
-      .returning({ request: authLoginRequests.request });
+  async claimLoginRequest(
+    id: string,
+    issue: (request: LoginRequest) => AccessTokenRecord,
+  ): Promise<{ request: LoginRequest; token: AccessTokenRecord } | null> {
+    return this.#db.transaction(async (tx) => {
+      const rows = await tx
+        .update(authLoginRequests)
+        .set({
+          request: sql`jsonb_set(${authLoginRequests.request}, '{status}', '"consumed"'::jsonb)`,
+        })
+        .where(
+          and(
+            eq(authLoginRequests.id, id),
+            sql`${authLoginRequests.request} ->> 'status' = 'authenticated'`,
+          ),
+        )
+        .returning({ request: authLoginRequests.request });
 
-    const row = rows[0];
-    if (row === undefined) return null;
-    const parsed = loginRequestSchema.safeParse(row.request);
-    return parsed.success ? parsed.data : null;
+      const row = rows[0];
+      if (row === undefined) return null;
+      const parsed = loginRequestSchema.safeParse(row.request);
+      if (!parsed.success) return null;
+
+      const token = accessTokenRecordSchema.parse(stripNulls(issue(parsed.data)));
+      await tx.insert(authAccessTokens).values({
+        id: token.id,
+        accountId: token.accountId,
+        sha256: token.sha256,
+        label: token.label,
+        createdAt: new Date(token.createdAt),
+        expiresAt: optionalDate(token.expiresAt),
+        lastUsedAt: optionalDate(token.lastUsedAt),
+        revokedAt: optionalDate(token.revokedAt),
+      });
+
+      return { request: parsed.data, token };
+    });
+  }
+
+  /**
+   * 「他に持ち主が居なければ許可する」。
+   *
+   * **強制しているのは `auth_accounts_single_owner_idx`（部分一意索引）である。**
+   * 一覧を見てから書く形では、owner が居ない状態の同時実行をすり抜ける
+   * （`not exists` の副問い合わせは行ロックを取らない）。だから最後の砦は器に置き、
+   * ここでは一意制約違反を `conflict` に翻訳している。
+   */
+  async grantExclusive(accountId: string, at: string, by: string): Promise<GrantOutcome> {
+    const account = await this.getAccount(accountId);
+    if (account === null) return { status: 'not_found' };
+    if (account.grantedAt !== null) return { status: 'granted', account };
+
+    try {
+      const rows = await this.#db
+        .update(authAccounts)
+        .set({ grantedAt: new Date(at), grantedBy: by })
+        .where(and(eq(authAccounts.id, accountId), isNull(authAccounts.grantedAt)))
+        .returning();
+      const row = rows[0];
+      if (row === undefined) {
+        // 同じ行が同時に許可された。読み直せばどちらが勝ったか分かる。
+        const current = await this.getAccount(accountId);
+        return current === null ? { status: 'not_found' } : { status: 'granted', account: current };
+      }
+      return { status: 'granted', account: this.#toAccount(row) };
+    } catch (error) {
+      if (!isUniqueViolation(error)) throw error;
+      // 別のアカウントが同時に持ち主になった（索引が弾いた）。
+      const owner = (await this.listAccounts()).find((it) => it.grantedAt !== null);
+      return owner === undefined ? { status: 'not_found' } : { status: 'conflict', owner };
+    }
   }
 
   #toAccount(row: typeof authAccounts.$inferSelect): AuthAccount {

@@ -144,7 +144,13 @@ export const authAccounts = pgTable(
     grantedAt: timestamp('granted_at', { withTimezone: true, mode: 'date' }),
     grantedBy: text('granted_by'),
   },
-  (table) => [uniqueIndex('auth_accounts_email_idx').on(table.email)],
+  (table) => [
+    uniqueIndex('auth_accounts_email_idx').on(table.email),
+    // 持ち主は高々1人（granted_at が入る行はテーブル全体で1行まで）。
+    uniqueIndex('auth_accounts_single_owner_idx')
+      .on(sql`(${table.grantedAt} is not null)`)
+      .where(sql`${table.grantedAt} is not null`),
+  ],
 );
 
 /** 外部プロバイダ上の identity。`(provider, subject)` が一意。 */

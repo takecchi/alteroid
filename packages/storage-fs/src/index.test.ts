@@ -367,17 +367,32 @@ describe('AuthStore', () => {
       accountId: 'account-1',
       error: null,
     };
+    await stores.auth.putAccount(account);
     await stores.auth.putLoginRequest(request);
 
     // 読んでから書く形だと、ここで全部が authenticated を掴んでしまう。
+    let issued = 0;
     const results = await Promise.all(
-      Array.from({ length: 5 }, () => stores.auth.consumeLoginRequest('login-2')),
+      Array.from({ length: 5 }, () =>
+        stores.auth.claimLoginRequest('login-2', (request) => ({
+          id: `token-race-${++issued}`,
+          accountId: request.accountId ?? '',
+          sha256: String(issued).repeat(64).slice(0, 64),
+          label: request.label,
+          createdAt: '2026-01-02T00:00:00.000Z',
+          expiresAt: null,
+          lastUsedAt: null,
+          revokedAt: null,
+        })),
+      ),
     );
 
     expect(results.filter((result) => result !== null)).toHaveLength(1);
     expect((await stores.auth.getLoginRequest('login-2'))?.status).toBe('consumed');
+    // 保存されたトークンも1本だけ（応答が1件でも器に2本あれば通ってしまう）。
+    expect(await stores.auth.listAccessTokens('account-1')).toHaveLength(1);
     // 一度 consumed になったら、あとから何度呼んでも取れない。
-    expect(await stores.auth.consumeLoginRequest('login-2')).toBeNull();
+    expect(await stores.auth.claimLoginRequest('login-2', () => neverIssued())).toBeNull();
   });
 
   it('pending のログイン要求は引き取れない（ブラウザ側が終わる前に発行しない）', async () => {
@@ -396,8 +411,70 @@ describe('AuthStore', () => {
       error: null,
     });
 
-    expect(await stores.auth.consumeLoginRequest('login-3')).toBeNull();
+    expect(await stores.auth.claimLoginRequest('login-3', () => neverIssued())).toBeNull();
     expect((await stores.auth.getLoginRequest('login-3'))?.status).toBe('pending');
-    expect(await stores.auth.consumeLoginRequest('居ない')).toBeNull();
+    expect(await stores.auth.claimLoginRequest('居ない', () => neverIssued())).toBeNull();
+  });
+  it('別々のアカウントへ同時に grant しても、持ち主は1人しかできない', async () => {
+    const other = { ...account, id: 'account-2', email: 'other@example.test' };
+    await stores.auth.putAccount(account);
+    await stores.auth.putAccount(other);
+
+    const at = '2026-01-02T00:00:00.000Z';
+    const results = await Promise.all([
+      stores.auth.grantExclusive('account-1', at, 'operator'),
+      stores.auth.grantExclusive('account-2', at, 'operator'),
+    ]);
+
+    expect(results.filter((result) => result.status === 'granted')).toHaveLength(1);
+    // 器に2人残っていたら、応答が1件でも両方が通ってしまう。
+    const granted = (await stores.auth.listAccounts()).filter((it) => it.grantedAt !== null);
+    expect(granted).toHaveLength(1);
+  });
+
+  it('トークンの保存が落ちたら、ログイン要求は authenticated のまま残る', async () => {
+    await stores.auth.putAccount(account);
+    await stores.auth.putLoginRequest({
+      id: 'login-4',
+      provider: 'google',
+      nonce: 'nonce',
+      codeVerifier: 'verifier',
+      claimSha256: 'f'.repeat(64),
+      redirectUri: 'http://127.0.0.1:4517/auth/google/callback',
+      label: '',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      expiresAt: '2999-01-01T00:00:00.000Z',
+      status: 'authenticated',
+      accountId: 'account-1',
+      error: null,
+    });
+
+    // 消費だけ先に確定してしまうと、トークンは返らないのに二度と引き取れなくなる。
+    await expect(
+      stores.auth.claimLoginRequest('login-4', () => {
+        throw new Error('トークンを作れなかった');
+      }),
+    ).rejects.toThrow();
+    expect((await stores.auth.getLoginRequest('login-4'))?.status).toBe('authenticated');
+
+    // 直れば、同じ要求をそのまま引き取れる。
+    const claimed = await stores.auth.claimLoginRequest('login-4', (request) => ({
+      id: 'token-4',
+      accountId: request.accountId ?? '',
+      sha256: 'b'.repeat(64),
+      label: request.label,
+      createdAt: '2026-01-02T00:00:00.000Z',
+      expiresAt: null,
+      lastUsedAt: null,
+      revokedAt: null,
+    }));
+    expect(claimed?.token.id).toBe('token-4');
+    expect((await stores.auth.getLoginRequest('login-4'))?.status).toBe('consumed');
+    expect(await stores.auth.listAccessTokens('account-1')).toHaveLength(1);
   });
 });
+
+/** 引き取れないはずの経路で呼ばれたら、テストとして落とす。 */
+function neverIssued(): never {
+  throw new Error('引き取れないはずの要求でトークンを作ろうとした');
+}

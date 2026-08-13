@@ -174,13 +174,25 @@ export function createMemoryStores(): Stores {
     async getLoginRequest(id) {
       return loginRequests.get(id) ?? null;
     },
-    async consumeLoginRequest(id) {
+    async claimLoginRequest(id, issue) {
       // 検査から書き込みまでの間に await を挟まない（挟むと他の claim が割り込む）。
       const found = loginRequests.get(id);
       if (found === undefined || found.status !== 'authenticated') return null;
       const consumed = { ...found, status: 'consumed' as const };
+      const token = issue(consumed);
       loginRequests.set(id, consumed);
-      return consumed;
+      accessTokens.set(token.id, token);
+      return { request: consumed, token };
+    },
+    async grantExclusive(accountId, at, by) {
+      const account = accounts.get(accountId);
+      if (account === undefined) return { status: 'not_found' };
+      if (account.grantedAt !== null) return { status: 'granted', account };
+      const owner = [...accounts.values()].find((it) => it.grantedAt !== null);
+      if (owner !== undefined) return { status: 'conflict', owner };
+      const granted = { ...account, grantedAt: at, grantedBy: by };
+      accounts.set(accountId, granted);
+      return { status: 'granted', account: granted };
     },
   };
 

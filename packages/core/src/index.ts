@@ -37,6 +37,7 @@ export {
   type AuthAccount,
   type AuthIdentity,
   type AuthStore,
+  type GrantOutcome,
   type LoginRequest,
   type LoginRequestStatus,
 } from './auth.js';

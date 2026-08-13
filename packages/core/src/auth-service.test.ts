@@ -32,6 +32,14 @@ function fakeProvider(profiles: Record<string, OAuthProfile>): OAuthProvider {
   };
 }
 
+/** トークンの保存だけが落ちる器（一時的な DB/FS エラーを模す）。 */
+function brokenTokenStore(inner: AuthStore): AuthStore {
+  return {
+    ...inner,
+    claimLoginRequest: () => Promise.reject(new Error('器が落ちた')),
+  };
+}
+
 const ALICE: OAuthProfile = {
   subject: 'sub-alice',
   email: 'alice@example.test',
@@ -136,6 +144,50 @@ describe('createAuthService', () => {
     expect(await service.grant(bob.account.id, 'operator')).toMatchObject({ status: 'granted' });
     expect(isAccountGranted((await service.authenticate(bob.token))!)).toBe(true);
     expect(isAccountGranted((await service.authenticate(alice.token))!)).toBe(false);
+  });
+
+  it('別々のアカウントへ同時に grant しても、持ち主は1人しかできない', async () => {
+    const alice = await service.claim(await login('code-alice'));
+    const bob = await service.claim(await login('code-bob'));
+    if (alice.status !== 'ready' || bob.status !== 'ready') throw new Error('ログインできていない');
+
+    // 一覧を見てから書く形だと、owner が居ない状態の同時実行を両方すり抜ける。
+    const results = await Promise.all([
+      service.grant(alice.account.id, 'operator'),
+      service.grant(bob.account.id, 'operator'),
+    ]);
+
+    expect(results.filter((result) => result.status === 'granted')).toHaveLength(1);
+    // 応答が1件でも、器に2人残っていたら両方が通ってしまう。
+    const granted = (await service.listAccounts()).filter((account) => account.grantedAt !== null);
+    expect(granted).toHaveLength(1);
+  });
+
+  it('トークンの保存に失敗したら、同じログインをもう一度引き取れる', async () => {
+    const failing = createAuthService({
+      store: brokenTokenStore(store),
+      providers: createAuthProviderRegistry([fakeProvider({ 'code-alice': ALICE })]),
+      newId: () => `id-${++counter}`,
+    });
+    const started = await failing.startLogin({ provider: 'fake', redirectUri: 'http://x/cb' });
+    const state = decodeState(new URL(started.authorizationUrl).searchParams.get('state') ?? '');
+    await failing.completeLogin({
+      state: `${state?.requestId}.${state?.nonce}`,
+      code: 'code-alice',
+    });
+
+    // 器が一時的に落ちる。ここで要求まで消費してしまうと、人間はやり直すしかない
+    // のに「やり直しても invalid_request」という袋小路に入る。
+    await expect(
+      failing.claim({ requestId: started.requestId, claimSecret: started.claimSecret }),
+    ).rejects.toThrow();
+
+    // 器が戻れば、同じログインをそのまま回収できる。
+    const recovered = await service.claim({
+      requestId: started.requestId,
+      claimSecret: started.claimSecret,
+    });
+    expect(recovered.status).toBe('ready');
   });
 
   it('owner() は許可されている唯一のアカウントを返す', async () => {

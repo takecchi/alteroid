@@ -97,6 +97,12 @@ const STATEMENTS = [
   // email は null を許す（未検証・衝突時は入れない）。PostgreSQL の unique は
   // null を重複と見なさないので、これで「検証済みメールは高々1アカウント」になる。
   `create unique index if not exists auth_accounts_email_idx on auth_accounts (email)`,
+  // **持ち主は高々1人。** 定数式に対する部分一意索引なので、granted_at が入っている
+  // 行はテーブル全体で1行しか存在できない。並行 grant を「読んでから書く」で
+  // 防ごうとすると、owner が居ない状態の同時実行をすり抜ける — 器の側で構造的に
+  // 潰しておく（マルチユーザーは PRD 非ゴール）。
+  `create unique index if not exists auth_accounts_single_owner_idx
+     on auth_accounts ((granted_at is not null)) where granted_at is not null`,
 
   `create table if not exists auth_identities (
      provider text not null,

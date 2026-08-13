@@ -139,20 +139,53 @@ export interface AuthStore {
 
   putLoginRequest(request: LoginRequest): Promise<void>;
   getLoginRequest(id: string): Promise<LoginRequest | null>;
+
   /**
-   * `authenticated` のログイン要求を `consumed` へ**原子的に**移し、移せたときだけ
-   * その要求を返す（移せなければ `null`）。
+   * `authenticated` のログイン要求を `consumed` へ移し、**同じ操作で**
+   * アクセストークンを保存する。移せたときだけ結果を返す（移せなければ `null`）。
    *
-   * **読んでから書くまでを呼び出し側で分けてはいけない。** 分けると、同じ
-   * `requestId` と `claimSecret` を同時に投げるだけで、両方が `authenticated` を
-   * 読んでそれぞれトークンを発行できてしまう（「返るのはこの1回だけ」という
-   * API の約束が破れる）。**1回きりであることの強制はここにしか置けない。**
+   * **2つに分けてはいけない。** 分け方は2通りあって、どちらも壊れる。
    *
-   * ドライバはそれぞれの器で原子性を出すこと — fs は1つの排他区間で、
-   * pg は条件付き UPDATE の更新行数で。
+   * - 「読む → 検査 → 書く」に分けると、同じ `requestId` と `claimSecret` を同時に
+   *   投げるだけで両方が `authenticated` を読み、それぞれ有効なトークンを受け取れる
+   *   （「返るのはこの1回だけ」が破れる）
+   * - 「先に `consumed` にする → 後でトークンを保存する」に分けると、保存に失敗した
+   *   ときトークンは返らないのに要求は `consumed` のままになり、**同じログインを
+   *   二度と回収できない**（人間はやり直すしかないが、それが分からない）
+   *
+   * したがって `issue` は**この操作の中で**呼ばれ、両方が成るか両方が成らないかの
+   * どちらかになる。`issue` は純粋関数として書くこと（中で待たない）。
+   *
+   * ドライバはそれぞれの器で原子性を出す — fs は1回の書き込みで、pg は1つの
+   * トランザクション内の条件付き UPDATE ＋ INSERT で。
    */
-  consumeLoginRequest(id: string): Promise<LoginRequest | null>;
+  claimLoginRequest(
+    id: string,
+    issue: (request: LoginRequest) => AccessTokenRecord,
+  ): Promise<{ request: LoginRequest; token: AccessTokenRecord } | null>;
+
+  /**
+   * 許可されたアカウントが他に居なければ、この account を許可する（1操作）。
+   *
+   * **「許可されたアカウントは高々1つ」を強制するのはここである。** 呼び出し側で
+   * 「一覧を見る → 居なければ書く」に分けると、owner が居ない状態で別々の account へ
+   * 同時に grant したとき両方が通り、**PRD 非ゴール（マルチユーザー / チーム利用）を
+   * 守るための中心的な不変条件そのものが破れる。**
+   *
+   * ドライバはそれぞれの器で原子性を出す — fs は1つの排他区間で、pg は
+   * 部分一意索引（`granted_at is not null` の行はテーブル全体で1行まで）で。
+   */
+  grantExclusive(accountId: string, at: string, by: string): Promise<GrantOutcome>;
 }
+
+/**
+ * 許可の付与の結果。`conflict` は「既に別のアカウントが持ち主である」。
+ * 持ち主を移すときは先に取り消す。
+ */
+export type GrantOutcome =
+  | { status: 'granted'; account: AuthAccount }
+  | { status: 'not_found' }
+  | { status: 'conflict'; owner: AuthAccount };
 
 // ---------------------------------------------------------------------------
 // 乱数・ハッシュ

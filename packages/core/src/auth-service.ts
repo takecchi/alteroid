@@ -12,6 +12,7 @@ import {
   type AccessTokenRecord,
   type AuthAccount,
   type AuthStore,
+  type GrantOutcome,
   type LoginRequest,
 } from './auth.js';
 import type { AuthProviderRegistry } from './auth-providers.js';
@@ -62,16 +63,10 @@ export type ClaimResult =
   | { status: 'error'; reason: 'invalid_request' | 'invalid_secret' | 'expired' | 'failed' };
 
 /**
- * 許可の付与の結果。
- *
- * `conflict` は「既に別のアカウントが許可されている」。**alteroid は単一の持ち主の
- * ものなので、許可されたアカウントは高々1つしか存在しない**（PRD 非ゴール:
- * マルチユーザー / チーム利用）。持ち主を移すときは先に `revoke` する。
+ * 許可の付与の結果（ストア側の `GrantOutcome` と同じもの）。
+ * **再定義しない** — 分けた瞬間、片方だけ直して意味がずれる。
  */
-export type GrantResult =
-  | { status: 'granted'; account: AuthAccount }
-  | { status: 'not_found' }
-  | { status: 'conflict'; owner: AuthAccount };
+export type GrantResult = GrantOutcome;
 
 export interface AuthService {
   startLogin(input: StartLoginInput): Promise<StartLoginResult>;
@@ -256,23 +251,23 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
         return { status: 'pending' };
       }
 
-      /**
-       * **ここで原子的に確保する。** 上の `status` 検査は早期の門前払いでしかなく、
-       * 検査とトークン発行の間に別の claim が割り込める。同じ `requestId` と
-       * `claimSecret` を並行に投げれば両方が `authenticated` を読めてしまうので、
-       * 「1回きり」の強制はストアの1操作に置く。
-       */
-      const consumed = await store.consumeLoginRequest(requestId);
-      if (consumed === null) return { status: 'error', reason: 'invalid_request' };
-
-      const accountId = consumed.accountId;
+      const accountId = request.accountId;
       if (accountId === null) return { status: 'error', reason: 'failed' };
       const account = await store.getAccount(accountId);
       if (account === null) return { status: 'error', reason: 'failed' };
 
       const at = now();
       const value = issueAccessTokenValue();
-      await store.putAccessToken({
+
+      /**
+       * **確保とトークンの保存を1操作で行う。**
+       *
+       * 上の `status` 検査は早期の門前払いでしかない。ここを「読む→検査→書く」に
+       * 割ると同じ claim の並行送信で二重発行になり、「先に consumed にする→後で
+       * 保存する」に割ると保存失敗でログインを回収できなくなる（トークンは返らない
+       * のに要求は消費済み）。だから両方をストアの1操作へ渡す。
+       */
+      const claimed = await store.claimLoginRequest(requestId, (consumed) => ({
         id: newId(),
         accountId: account.id,
         sha256: sha256Hex(value),
@@ -284,7 +279,8 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
             : new Date(at.getTime() + tokenTtlDays * 86_400_000).toISOString(),
         lastUsedAt: null,
         revokedAt: null,
-      });
+      }));
+      if (claimed === null) return { status: 'error', reason: 'invalid_request' };
 
       return { status: 'ready', token: value, account };
     },
@@ -304,28 +300,23 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
     },
 
     async grant(accountId, by) {
-      const account = await store.getAccount(accountId);
-      if (account === null) return { status: 'not_found' };
-      if (account.grantedAt !== null) return { status: 'granted', account };
-
       /**
-       * **許可されたアカウントは高々1つ。**
+       * **「許可されたアカウントは高々1つ」の強制はストア側に置く。**
        *
        * alteroid は単一の持ち主のものであり、マルチユーザー / チーム利用は
        * 非ゴールである（PRD「スコープ外」）。ここを開けると、ログインした人数だけ
        * 同じクローンの記憶・日誌・会話・実行 API が開く＝そのままマルチユーザーに
        * なる。「データを分けない」ことは「複数人を受け入れない」ことではない。
        *
+       * ここで一覧を見てから書くと、owner が居ない状態で別々のアカウントへ同時に
+       * grant したとき両方が通り、その不変条件そのものが破れる。だから
+       * 検査と書き込みを `grantExclusive` の1操作に閉じてある。
+       *
        * 持ち主を移すときは先に revoke する（同一人物が別のログイン手段へ移る場合も
        * 同じ手順になる。identity を1つのアカウントへ束ねる仕組みは、必要になったら
        * accountId を付け替える形で足せる）。
        */
-      const existing = await findOwner(store);
-      if (existing !== null) return { status: 'conflict', owner: existing };
-
-      const updated = { ...account, grantedAt: now().toISOString(), grantedBy: by };
-      await store.putAccount(updated);
-      return { status: 'granted', account: updated };
+      return store.grantExclusive(accountId, now().toISOString(), by);
     },
 
     async revoke(accountId) {
