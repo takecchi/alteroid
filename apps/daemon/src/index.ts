@@ -18,7 +18,7 @@ import {
 
 import { createApp } from './app.js';
 import { createJournalBus } from './journal-bus.js';
-import { createHttpRunner } from './runner-client.js';
+import { createHttpRunner, RunnerHttpError } from './runner-client.js';
 import { clearRuntimeInfo, writeRuntimeInfo } from './runtime.js';
 import { buildSchedule, readScheduleConfig } from './schedule.js';
 import { openStorage } from './storage.js';
@@ -26,7 +26,7 @@ import { openStorage } from './storage.js';
 export { createApp, type AppDeps, type AppType } from './app.js';
 export { createJournalBus, type JournalBus } from './journal-bus.js';
 export { openStorage, DATABASE_URL_ENV, type Storage } from './storage.js';
-export { createHttpRunner, type HttpRunnerOptions } from './runner-client.js';
+export { createHttpRunner, RunnerHttpError, type HttpRunnerOptions } from './runner-client.js';
 export {
   buildSchedule,
   readScheduleConfig,
@@ -60,6 +60,13 @@ const DEFAULT_BIND = '127.0.0.1';
  * 「人間の不在で止まってよいのは承認待ちの仕事だけ」という前提が崩れる
  * （PRD「自律」）。器の入れ替えは分単位では終わらない方が珍しいので、そこまでは
  * 待つ。それを越えても繋がらないなら、黙って上がったふりをせずに落ちる。
+ *
+ * **ここは踏み込みが足りていない。** 待っている間デーモンは待ち受けを開かないが、
+ * chat・日誌・日報・承認への回答は runner に一切依存しない。委譲先が不在なだけで
+ * それらまで止めているのは、「人間の不在で止まってよいのは承認待ちの仕事だけ」
+ * （PRD「自律」）に照らすと弱い。素直な形は「先に listen し、runner へは背景で
+ * 繋ぎ直し続け、委譲だけが一時的に失敗する」である（roadmap M5 で runner の
+ * 登録・生存判定を入れるときに一緒に倒す）。
  */
 const RUNNER_CONNECT_WINDOW_MS = 120_000;
 const RUNNER_CONNECT_MAX_DELAY_MS = 15_000;
@@ -95,8 +102,8 @@ async function openRunner(workspace: string, withheldEnvKeys: string[]): Promise
 /**
  * runner へ繋ぐ。**居なければ、戻ってくるまで待つ。**
  *
- * 待つのは「繋がらない」ときだけである。鍵が無い・鍵が違うといった**方針の
- * 誤り**は待っても直らないので、上の `openRunner` で即座に落としてある。ここで
+ * 待つのは「繋がらない」ときだけである。**方針の誤りは待っても直らない**ので、
+ * 鍵が無いときは上の `openRunner` が、鍵を拒まれたときはここが即座に落とす。
  * 粘るのは器の入れ替え（デプロイ・再起動）だけを相手にしている。
  */
 async function connectRunner(baseUrl: string, token: string): Promise<RunnerClient> {
@@ -106,6 +113,15 @@ async function connectRunner(baseUrl: string, token: string): Promise<RunnerClie
     try {
       return await createHttpRunner({ baseUrl, token });
     } catch (error) {
+      // **鍵を拒まれたなら、待っても直らない。** ここで粘ると、設定の誤りが
+      // 「器の入れ替え中かもしれません」という嘘のメッセージで2分間隠れる。
+      if (error instanceof RunnerHttpError && (error.status === 401 || error.status === 403)) {
+        throw new Error(
+          `runner (${baseUrl}) に鍵を拒まれました（${error.status}）。` +
+            'ALTEROID_RUNNER_TOKEN と runner の ALTEROID_RUNNER_TOKEN_SHA256 が揃っているか確かめてください。',
+          { cause: error },
+        );
+      }
       if (Date.now() >= deadline) throw error;
       // **黙って待たない。** 上がらない理由を探す人間が最初に見るのはここである。
       process.stderr.write(

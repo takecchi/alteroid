@@ -48,6 +48,22 @@ function socketPathOf(baseUrl: string): string | null {
   return match?.[1] ?? null;
 }
 
+/**
+ * runner が返した失敗。**status を落とさずに持ち上げる。**
+ *
+ * 呼ぶ側が「待てば直る（器の入れ替え中）」と「待っても直らない（鍵が違う）」を
+ * 区別できないと、設定の誤りを再試行で何分も隠すことになる。
+ */
+export class RunnerHttpError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'RunnerHttpError';
+    this.status = status;
+  }
+}
+
 /** 接続して runner_id を確かめてから使う（宛先を台帳に残すため）。 */
 export async function createHttpRunner(options: HttpRunnerOptions): Promise<RunnerClient> {
   const client = new HttpRunner(options);
@@ -270,7 +286,10 @@ class HttpRunner implements RunnerClient {
     });
     if (!response.ok) {
       const detail = await response.text().catch(() => '');
-      throw new Error(`runner ${method} ${path} が失敗した (${response.status}) ${detail}`);
+      throw new RunnerHttpError(
+        `runner ${method} ${path} が失敗した (${response.status}) ${detail}`,
+        response.status,
+      );
     }
     return response;
   }

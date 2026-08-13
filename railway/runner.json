@@ -5,7 +5,7 @@
     "dockerfilePath": "Dockerfile",
     "watchPatterns": [
       "apps/runner/**",
-      "packages/**",
+      "packages/core/**",
       "Dockerfile",
       ".dockerignore",
       "package.json",
@@ -18,6 +18,7 @@
   "deploy": {
     "startCommand": "node apps/runner/dist/index.js",
     "restartPolicyType": "ALWAYS",
-    "drainingSeconds": 60
+    "drainingSeconds": 60,
+    "restartPolicyMaxRetries": 100
   }
 }

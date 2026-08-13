@@ -741,14 +741,25 @@ function swappableRunner(runnerId = 'runner-primary') {
   const state = {
     alive: [] as RunnerManagerState[],
     resumes: [] as RunnerResumeCommand[],
+    /**
+     * `list()` が呼ばれた回数。
+     *
+     * **「resume が増えていない」だけでは、機構が動いて何もしなかったのか、
+     * そもそも動かなかったのかを区別できない。** ここを見れば、生死を runner に
+     * 聞きに行ったことまで確かめられる。
+     */
+    listCalls: 0,
+    answers: [] as { managerId: string; requestId: string }[],
   };
   const runner: RunnerClient = {
     runnerId,
     workspacePath: '/work/project',
     async connect(onEvent) {
+      // **ここで名乗らせない。** 本物（`apps/daemon/src/runner-client.ts` の
+      // `connect`）は `void this.#pump(...)` で即 return し、名乗りは後から SSE に
+      // 乗ってくる。同期的に名乗らせると、起動時の引き取りと名乗りの順序が現実と
+      // 変わり、「引き取りが見た器」と「SSE が繋がった器」がずれる場合を作れない。
       emit = onEvent;
-      // 本物と同じく、ストリームの先頭で必ず名乗る。
-      onEvent({ type: 'hello', runnerId });
     },
     async start() {
       /* この検証では使わない */
@@ -767,13 +778,16 @@ function swappableRunner(runnerId = 'runner-primary') {
     async send() {
       /* この検証では使わない */
     },
-    async answer() {
-      return true;
+    async answer(managerId, answer) {
+      state.answers.push({ managerId, requestId: answer.requestId });
+      // 新しい器はその request_id を知らない（＝解けない）。
+      return state.alive.some((s) => s.waiting.some((w) => w.requestId === answer.requestId));
     },
     async stop() {
       /* この検証では使わない */
     },
     async list() {
+      state.listCalls += 1;
       return [...state.alive];
     },
     async transcript() {
@@ -800,6 +814,18 @@ function swappableRunner(runnerId = 'runner-primary') {
     /** ストリームだけが切れて繋ぎ直す（器はそのまま）。 */
     reconnect() {
       emit?.({ type: 'hello', runnerId });
+    },
+    /** SDK のセッションが立った、と伝える（本物は `start` の直後に上がってくる）。 */
+    session(managerId: string, sessionId: string) {
+      const session = state.alive.find((s) => s.managerId === managerId);
+      if (session) session.sessionId = sessionId;
+      emit?.({ type: 'session', managerId, sessionId });
+    },
+    /** マネージャーが確認を上げる（デーモン側の待ち行列に積まれる）。 */
+    ask(managerId: string, requestId: string, summary: string) {
+      const session = state.alive.find((s) => s.managerId === managerId);
+      session?.waiting.push({ requestId, summary });
+      emit?.({ type: 'ask', managerId, requestId, kind: 'permission', summary });
     },
   };
 }
@@ -854,6 +880,99 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     await s.pool.stop();
   });
 
+  it('返事待ちだったマネージャーの、死んだ確認を持ち越さない', async () => {
+    // **持ち越すと、そのマネージャーには誰も届かなくなる。** 新しい器はその
+    // request_id を知らないので確認は永久に解けず、以後の `manager_send` は
+    // すべて死んだ確認への回答として横取りされ、`answer` が false を返して
+    // 握り潰される。resume したのにクローンからも人間からも到達できない相手が
+    // 残るのは、この修正が引いている PRD「自律」そのものの否定になる。
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({ ...runningJob, status: 'waiting_human' });
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    await s.pool.restore();
+    // 器の中で確認待ちになる（デーモン側の待ち行列にも積まれる）。
+    fake.ask('mgr-running', 'req-1', 'force push してよいか');
+    await expect
+      .poll(
+        async () =>
+          (await s.pool.list()).find((m) => m.managerId === 'mgr-running')?.waiting.length,
+        { timeout: 2000 },
+      )
+      .toBe(1);
+
+    fake.swap();
+    await expect.poll(() => fake.state.resumes.length, { timeout: 2000 }).toBe(2);
+
+    // 待ち行列は空になっている（新しい器は req-1 を知らない）。
+    expect((await s.pool.list()).find((m) => m.managerId === 'mgr-running')?.waiting).toEqual([]);
+
+    // 追加指示が、死んだ確認への回答として横取りされない。
+    const result = await s.pool.send('mgr-running', '続きをやって');
+    expect(result.outcome).toBe('delivered');
+    expect(fake.state.answers).toEqual([]);
+
+    await s.pool.stop();
+  });
+
+  it('取り直しの最中に起こされた委譲を、死んだものとして起こし直さない', async () => {
+    // **台帳と runner は別の瞬間に読まれる。** runner を先に読むと、その隙間で
+    // 起こされた委譲が「runner に居ないのに台帳には居る」と見え、走り出した
+    // ばかりの仕事を二本にしてしまう。台帳を先に読めば、隙間で生まれた仕事は
+    // そもそも手元の一覧に入らない。
+    const stores = createMemoryStores();
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    // 台帳を読んだ後・runner に聞く前で止める。
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let first = true;
+    fake.runner.list = async () => {
+      fake.state.listCalls += 1;
+      if (!first) return [...fake.state.alive];
+      first = false;
+      // 止まっている間に起きたことは、この応答には映らない（本物の HTTP 応答も
+      // 投げた時点の景色を返す）。
+      const before = [...fake.state.alive];
+      await gate;
+      return before;
+    };
+    // 起こした委譲が runner に居ることにする（本物の `start` と同じ）。
+    fake.runner.start = async (command) => {
+      fake.state.alive.push({
+        managerId: command.managerId,
+        status: 'running',
+        cwd: command.cwd,
+        request: command.request,
+        waiting: [],
+      });
+    };
+
+    fake.reconnect();
+    await expect.poll(() => fake.state.listCalls, { timeout: 2000 }).toBeGreaterThan(0);
+
+    // 取り直しが止まっている間に、新しい委譲が走り出す。セッションも立つ
+    // （＝台帳から見れば「resume できる走行中の仕事」に見える）。
+    const started = await s.pool.start({ request: 'いま起こした仕事' });
+    fake.session(started.managerId, 'sess-brand-new');
+    await expect
+      .poll(async () => (await stores.jobs.listJobs())[0]?.sessionId, { timeout: 2000 })
+      .toBe('sess-brand-new');
+
+    release();
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(fake.state.resumes.filter((r) => r.managerId === started.managerId)).toEqual([]);
+    expect(fake.state.resumes).toHaveLength(0);
+
+    await s.pool.stop();
+  });
+
   it('ストリームが切れただけなら何もしない（走っている仕事を二重に起こさない）', async () => {
     // 生死は台帳ではなく runner に聞く。聞かずに `hello` だけで再開させると、
     // ネットワークが一瞬途切れるたびに同じ仕事が二本走る。
@@ -865,9 +984,12 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     await s.pool.restore();
     expect(fake.state.resumes).toHaveLength(1);
 
+    const before = fake.state.listCalls;
     fake.reconnect();
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // **聞きに行ったうえで何もしなかった**ことを見る。resume の本数だけを見ると、
+    // 機構が存在しなくても・例外で死んでいても緑になる。
+    await expect.poll(() => fake.state.listCalls, { timeout: 2000 }).toBe(before + 1);
     expect(fake.state.resumes).toHaveLength(1);
 
     await s.pool.stop();
@@ -880,10 +1002,34 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     const s = setup(undefined, { stores, runner: fake.runner });
 
     await s.pool.restore();
+    const before = fake.state.listCalls;
     fake.swap();
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await expect.poll(() => fake.state.listCalls, { timeout: 2000 }).toBe(before + 1);
     expect(fake.state.resumes).toHaveLength(0);
+
+    // 待機のまま。話しかければ続く（`restore` が引き取った状態を壊さない）。
+    expect((await s.pool.list()).find((m) => m.managerId === 'mgr-done')?.status).toBe('done');
+
+    await s.pool.stop();
+  });
+
+  it('台帳にしか無い終わった仕事を、取り直しのついでに live へ格上げしない', async () => {
+    // ステータス判定より前に `#records` へ載せると、`list()` が終わった仕事まで
+    // `live: true` で見せる。クローンから見て「話しかけられる」のに、送ると必ず
+    // 失敗する相手が生まれる。
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({ ...runningJob, id: 'mgr-finished', status: 'done' });
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    // `restore` を通さずに（＝台帳にしか無い状態で）器が入れ替わる。
+    await s.pool.list();
+    fake.swap();
+
+    await expect.poll(() => fake.state.listCalls, { timeout: 2000 }).toBeGreaterThan(0);
+    expect(fake.state.resumes).toHaveLength(0);
+    expect((await s.pool.list()).find((m) => m.managerId === 'mgr-finished')?.live).toBe(false);
 
     await s.pool.stop();
   });
@@ -899,13 +1045,108 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     await s.pool.restore();
     expect(fake.state.resumes).toHaveLength(1);
 
+    let asked = 0;
     fake.runner.list = async () => {
+      asked += 1;
       throw new Error('runner が応答しない');
     };
     fake.swap();
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // 聞きには行っている（`#reattach` に入らないまま緑になるのを防ぐ）。
+    await expect.poll(() => asked, { timeout: 2000 }).toBe(1);
     expect(fake.state.resumes).toHaveLength(1);
+
+    await s.pool.stop();
+  });
+
+  it('起動時に掴んだ器と、名乗ってきた器が違っても取り直す', async () => {
+    // **畳まれつつある旧 runner は、猶予（`drainingSeconds`）の間ずっと `/health`
+    // と `/managers` に答え続ける。** 起動時の引き取りがそれを見て「生きている」
+    // と判断した直後に、SSE が新しい器へ繋がる、という順序が普通に起きる。
+    // ここで最初の名乗りを「初回だから」と素通りさせると、まさに拾いたい
+    // 入れ替えが落ちる。
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner();
+    fake.state.alive.push({
+      managerId: 'mgr-running',
+      status: 'running',
+      cwd: '/work/project',
+      request: 'DB の移行をやって',
+      waiting: [],
+      sessionId: 'sess-before-swap',
+    });
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    // 旧い器が答えるので、繋ぎ直しただけで resume はしない。
+    const restored = await s.pool.restore();
+    expect(restored.map((m) => m.managerId)).toEqual(['mgr-running']);
+    expect(fake.state.resumes).toHaveLength(0);
+
+    // SSE が繋がった先は、もう新しい器である。**これが最初の名乗りになる。**
+    fake.swap();
+
+    await expect.poll(() => fake.state.resumes.length, { timeout: 2000 }).toBe(1);
+    expect(fake.state.resumes[0]?.message).toContain('runner の器が作り直された');
+
+    await s.pool.stop();
+  });
+
+  it('取り直しの最中に届いた名乗りを取りこぼさない', async () => {
+    // **起動直後の名乗りを処理している最中に器が入れ替わるのは、まさに拾いたい
+    // 場合そのものである。** 走行中だから、と2つ目の名乗りを捨てると、その
+    // 入れ替えは誰にも見られないまま終わる。
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    await s.pool.restore();
+    expect(fake.state.resumes).toHaveLength(1);
+    // 起動時の名乗りで走った取り直しが片付くのを待ってから仕掛ける。
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // 1回目の取り直しを `list()` の途中で止め、そこに入れ替え前の景色を返させる。
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const base = fake.state.listCalls;
+    let first = true;
+    fake.runner.list = async () => {
+      fake.state.listCalls += 1;
+      if (!first) return [...fake.state.alive];
+      first = false;
+      const before = [...fake.state.alive];
+      await gate;
+      return before;
+    };
+
+    fake.reconnect();
+    await expect.poll(() => fake.state.listCalls, { timeout: 2000 }).toBe(base + 1);
+
+    // 止まっている間に器が入れ替わる。
+    fake.swap();
+    release();
+
+    await expect.poll(() => fake.state.resumes.length, { timeout: 2000 }).toBe(2);
+
+    await s.pool.stop();
+  });
+
+  it('別の runner のジョブには手を出さない（M5 で runner が増えても混ざらない）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({ ...runningJob, id: 'mgr-elsewhere', runnerId: 'runner-second' });
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    await s.pool.restore();
+    fake.swap();
+
+    await expect.poll(() => fake.state.listCalls, { timeout: 2000 }).toBeGreaterThan(1);
+    // 入れ替わったのは runner-primary の器だけ。他所の宛先まで起こし直さない
+    // （`#runners.get('runner-second')` が null を返すので `restore` も触らない）。
+    expect(fake.state.resumes).toHaveLength(0);
 
     await s.pool.stop();
   });

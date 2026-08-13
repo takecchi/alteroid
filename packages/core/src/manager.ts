@@ -128,10 +128,12 @@ class Pool implements ManagerPool {
   readonly #post: (event: InboxEvent) => void;
   readonly #runners: RunnerRegistry;
   readonly #records = new Map<string, ManagerRecord>();
-  /** 一度でも名乗りを聞いた runner。2回目以降の `hello` は繋ぎ直しである。 */
-  readonly #greeted = new Set<string>();
+  /** 起動時の引き取りが走っている間だけ立つ。`#reattach` はこれを待つ。 */
+  #restoring: Promise<void> | null = null;
   /** 取り直しが走っている runner（同じ runner について重ねない）。 */
   readonly #reattaching = new Set<string>();
+  /** 取り直し中に届いた名乗り。**捨てずに、終わってからもう一度回す。** */
+  readonly #reattachAgain = new Set<string>();
   /** いま resume を投げている最中のマネージャー（同じ session を二本起こさない）。 */
   readonly #resuming = new Set<string>();
   #connected = false;
@@ -268,7 +270,15 @@ class Pool implements ManagerPool {
 
     // 待機していた（＝runner にセッションが居ない）相手なら、ここで続きへ戻す。
     if (!record.attached) {
-      const resumed = await this.#resume(record, runner, message);
+      // 器の入れ替えで取り直している最中に重ねない（同じ session を二本起こす）。
+      // **「戻れない」とは別の理由なので、別のことを言う。**
+      if (this.#resuming.has(managerId)) {
+        return {
+          outcome: 'unknown',
+          detail: `${managerId} は器の入れ替えから取り直している最中である。少し置いてから送り直すこと。`,
+        };
+      }
+      const resumed = await this.#resumeOnce(record, runner, message);
       if (!resumed) {
         return {
           outcome: 'unknown',
@@ -337,6 +347,22 @@ class Pool implements ManagerPool {
    * 仕事が止まらないという要件（PRD「自律」）に反する。
    */
   async restore(): Promise<ManagerSummary[]> {
+    // **走っていることを、await を挟む前に立てる。** 同一プロセスの runner は
+    // `connect()` の中で同期的に名乗るので、ここで立てそこねると `#reattach` が
+    // 引き取りと同時に走り、同じ仕事を二重に起こす。
+    let finished!: () => void;
+    this.#restoring = new Promise<void>((resolve) => {
+      finished = resolve;
+    });
+    try {
+      return await this.#restoreJobs();
+    } finally {
+      this.#restoring = null;
+      finished();
+    }
+  }
+
+  async #restoreJobs(): Promise<ManagerSummary[]> {
     if (this.#stopped) return [];
     await this.#ensureConnected();
 
@@ -483,37 +509,61 @@ class Pool implements ManagerPool {
    * 並ぶので何も起きない。**生死は台帳ではなく runner に聞く。**
    */
   async #reattach(runnerId: string): Promise<void> {
-    if (this.#stopped || this.#reattaching.has(runnerId)) return;
+    if (this.#stopped) return;
+    // **重なった名乗りを捨てない。** 起動直後の名乗りを処理している最中に器が
+    // 入れ替わるのは、まさに拾いたい場合そのものである。ここで return するだけ
+    // だと、その入れ替えが誰にも見られないまま終わる。
+    if (this.#reattaching.has(runnerId)) {
+      this.#reattachAgain.add(runnerId);
+      return;
+    }
     this.#reattaching.add(runnerId);
     try {
+      // 起動時の引き取りと重ならせない。両方が同じ `list()` を見てから動くと、
+      // 同じ仕事を二本起こす。
+      await this.#restoring;
+      if (this.#stopped) return;
+
       const runner = await this.#runners.get(runnerId);
       if (runner === null) return;
+
+      // **台帳を先に、runner を後に読む。** 逆にすると、2つの読みの隙間で起こされた
+      // 委譲が「runner に居ないのに台帳には居る」と見えて、走り出したばかりの仕事を
+      // 死んだものとして起こし直す。この順なら、隙間で生まれた仕事はそもそも
+      // 手元の一覧に入らない。
+      const jobs = await this.#stores.jobs.listJobs();
 
       // **聞けなかったときは何もしない。** 応答が無いことを「セッションが無い」と
       // 読むと、生きている仕事を二重に起こす。
       const states = await runner.list().catch(() => null);
-      if (states === null) return;
+      if (states === null || this.#stopped) return;
       const alive = new Set(states.map((state) => state.managerId));
 
-      for (const job of await this.#stores.jobs.listJobs()) {
+      for (const job of jobs) {
         // 宛先が書かれていない古いジョブはここでは触らない（どの runner の器が
         // 入れ替わったのかを、この情報だけでは決められない）。起動時の `restore`
         // が拾って `runner_id` を書くので、次からはこの経路に乗る。
-        if (job.runnerId !== runnerId || alive.has(job.id)) continue;
+        if (job.runnerId !== runnerId || alive.has(job.id) || this.#stopped) continue;
 
-        const record = this.#records.get(job.id) ?? {
-          job: { ...job },
-          waiting: [],
-          attached: false,
-        };
-        this.#records.set(job.id, record);
         // 器の中に居ないことは確かめた。台帳の `attached` はもう嘘である。
-        record.attached = false;
+        const known = this.#records.get(job.id);
+        if (known) known.attached = false;
 
         // 手を動かしている最中だったものだけ戻す（`done` は死ではなく待機であり、
         // 話しかけられたら続く。ここで起こすと開いたままの窓を勝手に閉じる）。
-        const { status } = record.job;
+        // **判定より前に `#records` へ載せない** — 載せると `list()` が終わった
+        // 仕事まで `live: true` で見せ、話しかけると必ず失敗する相手が生まれる。
+        const status = known?.job.status ?? job.status;
         if (status !== 'running' && status !== 'waiting_human') continue;
+
+        const record = known ?? { job: { ...job }, waiting: [], attached: false };
+        this.#records.set(job.id, record);
+        record.attached = false;
+        // **待っていた確認を持ち越さない。** 新しい器はその request_id を知らない
+        // ので、残すと以後の `manager_send` が死んだ確認への回答として横取りされ、
+        // 解けもしない。クローンからも人間からも届かないマネージャーになる
+        // （`restartNudge` はマネージャーに「失われている」と伝えている）。
+        record.waiting = [];
 
         // **1本が戻せなくても、残りを道連れにしない。** ここで抜けると、後ろに
         // 並んでいた仕事が誰にも拾われないまま `running` として残る。
@@ -537,6 +587,8 @@ class Pool implements ManagerPool {
       // 台帳や名簿を引けないところで転んでもデーモンごと落とさない。
     } finally {
       this.#reattaching.delete(runnerId);
+      // 走っている間に届いた名乗りの分を、ここで回す。
+      if (this.#reattachAgain.delete(runnerId) && !this.#stopped) void this.#reattach(runnerId);
     }
   }
 
@@ -620,10 +672,11 @@ class Pool implements ManagerPool {
    */
   async #onEvent(event: RunnerEvent): Promise<void> {
     if (event.type === 'hello') {
-      // 初回の名乗りは「いま繋いだ」だけで、引き取りは起動時の `restore` が行う。
-      // **2回目以降が、器が入れ替わったかもしれない合図**である。
-      if (this.#greeted.has(event.runnerId)) void this.#reattach(event.runnerId);
-      else this.#greeted.add(event.runnerId);
+      // **名乗りは全部 `#reattach` に通す。** 「初回だけ素通り」にすると、起動時に
+      // 掴んだ器と、SSE が繋がった先の器が違う場合（畳まれつつある旧 runner が
+      // まだ `/health` に答える猶予の間）に取り直しが起きない。`#reattach` は
+      // runner に生死を聞くので、何も起きていなければ何もしない。
+      void this.#reattach(event.runnerId);
       return;
     }
 
