@@ -70,3 +70,31 @@ describe('API の鍵', () => {
     expect(await auth.enabled()).toBe(false);
   });
 });
+
+/**
+ * 鍵を消したら、その鍵で開いた画面もその場で閉まること。
+ *
+ * ここが効かないと「端末ごとに配れば1台だけ締め出せる」が言葉だけになる。
+ * cookie の寿命（30日）まで居座られたら、失くした端末を止める手段が
+ * 「デーモンを作り直す」＝走行中の仕事を殺すことだけになる。
+ */
+describe('鍵を消したときの画面', () => {
+  it('発行元の鍵が消えれば、その印は知らないものになる', async () => {
+    const path = join(dir, 'tokens');
+    writeFileSync(path, 'phone-key\nlaptop-key\n');
+    const auth = createApiAuth({ file: path });
+
+    const phone = await auth.identify('phone-key');
+    const laptop = await auth.identify('laptop-key');
+    expect(phone).not.toBeNull();
+    expect(laptop).not.toBeNull();
+    // 印は鍵そのものではない
+    expect(phone).not.toContain('phone-key');
+
+    // 失くした端末の鍵だけを消す
+    writeFileSync(path, 'laptop-key\n');
+
+    expect(await auth.knows(phone as string)).toBe(false);
+    expect(await auth.knows(laptop as string)).toBe(true);
+  });
+});

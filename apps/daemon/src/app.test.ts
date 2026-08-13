@@ -7,6 +7,10 @@ import type {
   Scheduler,
   Stores,
 } from '@alteroid/core';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { createMemoryStores } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -849,5 +853,51 @@ describe('API の本人確認', () => {
       headers: { cookie: `alteroid_session_old=${session}` },
     });
     expect(response.status).toBe(401);
+  });
+});
+
+/**
+ * 「1台だけ締め出せる」が HTTP の層でも成り立つこと。
+ *
+ * 鍵を消しても cookie が生き続けるなら、失くした端末を止める手段は
+ * デーモンを作り直すことだけになる（＝走行中の仕事を殺す）。
+ */
+describe('鍵を消したら、その画面も閉まる', () => {
+  it('消した鍵で開いた画面は 401、残した鍵の画面は通る', async () => {
+    const tokens = join(mkdtempSync(join(tmpdir(), 'alteroid-auth-http-')), 'tokens');
+    writeFileSync(tokens, 'phone-key\nlaptop-key\n');
+    const secured = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      journalEvents: journalBus,
+      auth: createApiAuth({ file: tokens }),
+    });
+
+    async function login(token: string): Promise<string> {
+      const response = await secured.request('/auth/login', {
+        ...post,
+        body: JSON.stringify({ token }),
+      });
+      expect(response.status).toBe(200);
+      return /alteroid_session=([^;]+)/.exec(response.headers.get('set-cookie') ?? '')?.[1] ?? '';
+    }
+
+    const phone = await login('phone-key');
+    const laptop = await login('laptop-key');
+
+    // 失くしたのはスマホ。その1本だけを消す
+    writeFileSync(tokens, 'laptop-key\n');
+
+    const asPhone = await secured.request('/journal', {
+      headers: { cookie: `alteroid_session=${phone}` },
+    });
+    const asLaptop = await secured.request('/journal', {
+      headers: { cookie: `alteroid_session=${laptop}` },
+    });
+
+    expect(asPhone.status).toBe(401);
+    expect(asLaptop.status).toBe(200);
   });
 });

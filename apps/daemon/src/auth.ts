@@ -25,6 +25,18 @@ export interface ApiAuth {
   enabled(): Promise<boolean>;
   /** この文字列が配った鍵のどれかと一致するか。 */
   accepts(candidate: string): Promise<boolean>;
+  /**
+   * 一致したなら、**どの鍵で通ったか**を表す安定した印を返す（不一致なら null）。
+   *
+   * ブラウザに渡す使い捨ての鍵を、これで発行元へ結び付ける。結び付けておかないと、
+   * 鍵を消しても**その鍵でログイン済みの端末は cookie の寿命まで通り続ける** —
+   * 「失くした端末を締め出せる」という約束が果たせない。
+   *
+   * 印は秘密そのものではなく digest である（値を持ち回らない）。
+   */
+  identify(candidate: string): Promise<string | null>;
+  /** その印の鍵が、**いまも**配られているか。cookie で通すたびに確かめる。 */
+  knows(id: string): Promise<boolean>;
 }
 
 export interface ApiAuthOptions {
@@ -89,14 +101,31 @@ class Auth implements ApiAuth {
    * 先に一致した本数から鍵の並びが漏れないようにするため。
    */
   async accepts(candidate: string): Promise<boolean> {
+    return (await this.identify(candidate)) !== null;
+  }
+
+  async identify(candidate: string): Promise<string | null> {
     const tokens = await this.#tokens();
-    if (tokens.length === 0) return false;
+    if (tokens.length === 0) return null;
     const given = digest(candidate);
     let matched = false;
     for (const token of tokens) {
       if (timingSafeEqual(given, digest(token))) matched = true;
     }
-    return matched;
+    return matched ? given.toString('hex') : null;
+  }
+
+  /**
+   * その印の鍵がいまも配られているか。
+   *
+   * **鍵を消したら、その鍵で開いた画面もその場で閉まる。** ここを毎回確かめる
+   * ことが「失くした端末を締め出せる」の実体で、cookie の寿命に頼らない。
+   */
+  async knows(id: string): Promise<boolean> {
+    for (const token of await this.#tokens()) {
+      if (digest(token).toString('hex') === id) return true;
+    }
+    return false;
   }
 
   async #tokens(): Promise<string[]> {

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
+import { authHeaders } from './auth.js';
 import { stateDir } from './paths.js';
 
 export interface DaemonRuntimeInfo {
@@ -57,6 +58,8 @@ async function readRuntimeInfo(): Promise<DaemonRuntimeInfo | null> {
 async function verify(info: DaemonRuntimeInfo): Promise<boolean> {
   try {
     const response = await fetch(`${baseUrl(info)}/health`, {
+      // 鍵が要るデーモンでは、名乗らないと 401 で「停止中」に見える
+      headers: authHeaders(),
       signal: AbortSignal.timeout(1500),
     });
     if (!response.ok) return false;
@@ -75,6 +78,7 @@ export async function storageOf(info: DaemonRuntimeInfo | null): Promise<string 
   if (!info) return null;
   try {
     const response = await fetch(`${baseUrl(info)}/health`, {
+      headers: authHeaders(),
       signal: AbortSignal.timeout(1500),
     });
     if (!response.ok) return null;
@@ -178,7 +182,7 @@ export async function stop(): Promise<StopOutcome> {
         method: 'POST',
         // デーモンは本文の無い POST に application/json を要求する（ブラウザの
         // 単純リクエストで他人が止められないようにするため）
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...authHeaders() },
         signal: AbortSignal.timeout(5000),
       });
       if (!response.ok) throw new Error(`shutdown が失敗した (${response.status})`);

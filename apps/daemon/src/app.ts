@@ -208,13 +208,17 @@ export function createApp(deps: AppDeps) {
   const auth = deps.auth;
 
   /**
-   * ブラウザに渡した使い捨ての鍵。**配った鍵そのものを cookie に入れない** —
-   * 入れると、画面を開いた端末から鍵の値が持ち出せてしまう。
+   * ブラウザに渡した使い捨ての鍵 → **それを発行した鍵の印**。
    *
-   * デーモンが生きている間だけ有効で、作り直せば全部の画面が締め出される。
-   * 「失くした端末を締め出す」の最後の手段がここにある。
+   * 配った鍵そのものを cookie に入れないのは、画面を開いた端末から鍵の値を
+   * 持ち出せないようにするためである。
+   *
+   * **発行元を覚えておくのが肝心。** 覚えていないと、鍵を消してもその鍵で
+   * ログイン済みの端末は cookie の寿命（30日）まで通り続ける — 「失くした端末を
+   * 締め出せる」という約束が果たせない。通すたびに発行元がまだ配られているかを
+   * 確かめる。
    */
-  const sessions = new Set<string>();
+  const sessions = new Map<string, string>();
 
   /**
    * 門番。**鍵が配られていなければ何も要求しない**（ローカルの体験は変わらない）。
@@ -229,7 +233,12 @@ export function createApp(deps: AppDeps) {
     if (bearer !== undefined && (await auth.accepts(bearer))) return next();
 
     const cookie = readCookie(c.req.header('cookie'), SESSION_COOKIE);
-    if (cookie !== undefined && sessions.has(cookie)) return next();
+    if (cookie !== undefined) {
+      const issuer = sessions.get(cookie);
+      // 発行元の鍵が消えていれば、その場で使い捨ても捨てる（居座らせない）
+      if (issuer !== undefined && (await auth.knows(issuer))) return next();
+      if (issuer !== undefined) sessions.delete(cookie);
+    }
 
     return c.json({ error: 'unauthorized' as const }, 401);
   });
@@ -259,11 +268,13 @@ export function createApp(deps: AppDeps) {
       if (auth === undefined || !(await auth.enabled())) {
         return c.json({ error: '鍵が配られていない（ログインは要らない）' as const }, 409);
       }
-      if (!(await auth.accepts(c.req.valid('json').token))) {
+      const issuer = await auth.identify(c.req.valid('json').token);
+      if (issuer === null) {
         return c.json({ error: 'unauthorized' as const }, 401);
       }
       const session = randomUUID();
-      sessions.add(session);
+      // **どの鍵で開いた画面かを覚える。** これが無いと鍵を消しても閉まらない。
+      sessions.set(session, issuer);
       const secure = new URL(c.req.url).protocol === 'https:' ? ' Secure;' : '';
       c.header(
         'set-cookie',

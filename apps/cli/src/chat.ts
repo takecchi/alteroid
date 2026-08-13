@@ -1,8 +1,9 @@
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 
-import { baseUrl, ensureRunning } from './daemon.js';
+import { authHeaders } from './auth.js';
 import { createClient } from './client.js';
+import { baseUrl, ensureRunning } from './daemon.js';
 
 /**
  * `alteroid chat` — クローンとの会話。
@@ -61,7 +62,7 @@ async function sendMessage(
 ): Promise<string | null> {
   const response = await fetch(`${base}/chat`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ text, conversationId: conversationId ?? undefined }),
   });
 
