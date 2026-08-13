@@ -106,7 +106,11 @@ function fakeClone() {
 /** スケジューラの代わり。HTTP 層から起こせることだけを見る。 */
 function fakeScheduler() {
   const ran: string[] = [];
+  let refreshed = 0;
   const scheduler: Scheduler = {
+    async refresh() {
+      refreshed += 1;
+    },
     start() {},
     stop() {},
     list() {
@@ -126,7 +130,11 @@ function fakeScheduler() {
       return [];
     },
   };
-  return { scheduler, ran };
+  return {
+    scheduler,
+    ran,
+    refreshCount: () => refreshed,
+  };
 }
 
 let stores: Stores;
@@ -498,6 +506,97 @@ describe('HTTP API', () => {
     expect(schedule.ran).toEqual(['daily_report']);
 
     expect((await app.request('/schedule/nope/run', post)).status).toBe(404);
+  });
+
+  it('人間も継続中の依頼を仕込める。仕込んだら次の刻みを待たずに効く', async () => {
+    const before = schedule.refreshCount();
+    const response = await app.request(
+      '/schedule',
+      json({
+        kind: 'issue-round',
+        request: 'open issue を見て実装を進める',
+        spec: { type: 'daily', at: '09:00' },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await stores.schedules.list()).toMatchObject([
+      { kind: 'issue-round', spec: { type: 'daily', at: '09:00' } },
+    ]);
+    expect(schedule.refreshCount()).toBe(before + 1);
+    // 人間が仕込んだことも日誌に残る（後から辿れること）
+    expect(await stores.journal.list({ types: ['decision'] })).toHaveLength(1);
+  });
+
+  it('読めない時刻は API でも弾く（道具と同じ真実を持つ）', async () => {
+    // 通ると一覧に「毎日 25:99」と出るのに実際は 00:00 に起きる、という
+    // 人間が読んで矛盾する状態が作れてしまう
+    for (const at of ['25:99', '99:00', '9:5', 'あさ']) {
+      const response = await app.request(
+        '/schedule',
+        json({ kind: 'issue-round', request: 'x', spec: { type: 'daily', at } }),
+      );
+      expect(response.status, at).toBe(400);
+    }
+    expect(await stores.schedules.list()).toEqual([]);
+  });
+
+  it('cron 式でも仕込めるが、読めない式は弾く', async () => {
+    const ok = await app.request(
+      '/schedule',
+      json({
+        kind: 'weekly-review',
+        request: '週次レビュー',
+        spec: { type: 'cron', expression: '0 10 * * 1' },
+      }),
+    );
+    expect(ok.status).toBe(200);
+    expect(await stores.schedules.list()).toMatchObject([
+      { spec: { type: 'cron', expression: '0 10 * * 1' } },
+    ]);
+
+    const broken = await app.request(
+      '/schedule',
+      json({
+        kind: 'weekly-review',
+        request: '週次レビュー',
+        spec: { type: 'cron', expression: 'まいしゅう げつようび' },
+      }),
+    );
+    expect(broken.status).toBe(400);
+  });
+
+  it('既定の定期ジョブの名前は API からも奪えない', async () => {
+    const response = await app.request(
+      '/schedule',
+      json({ kind: 'daily_report', request: '日報を潰す', spec: { type: 'every', minutes: 1 } }),
+    );
+
+    expect(response.status).toBe(409);
+    expect(await stores.schedules.list()).toEqual([]);
+  });
+
+  it('継続中の依頼を外せる。無いものは 404', async () => {
+    await stores.schedules.put({
+      kind: 'issue-round',
+      spec: { type: 'daily', at: '09:00' },
+      request: 'open issue を見て実装を進める',
+      createdAt: '2026-08-12T00:00:00.000Z',
+      updatedAt: '2026-08-12T00:00:00.000Z',
+    });
+
+    const removed = await app.request('/schedule/issue-round', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(removed.status).toBe(200);
+    expect(await stores.schedules.list()).toEqual([]);
+
+    const missing = await app.request('/schedule/nope', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(missing.status).toBe(404);
   });
 
   it('溜まった承認待ちをまとめて片付けられる（1件失敗しても残りは進む）', async () => {

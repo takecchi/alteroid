@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { CRON_EXPRESSION_MAX, isCronExpression } from './cron.js';
+
 /**
  * 型付きメッセージのスキーマ（docs/architecture.md「配線」）。
  *
@@ -81,6 +83,15 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
      * 作るとき、発火時刻はその日ではない。対象は起こした側が決めて運ぶ。
      */
     target: z.string().optional(),
+    /**
+     * 定期の予定で来たのか、人間が手で起こしたのか（`POST /schedule/:kind/run`）。
+     *
+     * **同じ形で運ぶが、意味が違う。** 手で起こした1回は「余分に1回」であって
+     * 定期の予定をずらすものではない（`Scheduler.run` の契約）。ここで区別しないと、
+     * 受け取った側が予定の基準を手動実行の時刻へ動かしてしまい、再起動後に位相が
+     * ずれる。省略時は定期の予定である。
+     */
+    cause: z.enum(['schedule', 'manual']).optional(),
   }),
   z.object({
     type: z.literal('external'),
@@ -208,6 +219,115 @@ export type JournalEntryType = JournalEntry['type'];
 export type JournalEntryInput = DistributiveOmit<JournalEntry, 'id' | 'at'>;
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+
+// ---------------------------------------------------------------------------
+// 定期の依頼（時間起点の器）
+// ---------------------------------------------------------------------------
+
+/**
+ * 定期の依頼の名前。`kind` は受信箱の `timer` イベントに載り、人間が
+ * `/schedule` や HTTP から手で起こすときの識別子にもなる。
+ */
+export const scheduleKindSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z0-9][a-z0-9._-]*$/, 'kind は英小文字・数字・. _ - のみ');
+
+/**
+ * 周期。
+ *
+ * **これは方針であって抑止装置ではない**（north_star 禁止2）。「何回まで」を
+ * 表す形をここへ足さないこと。表すのは「いつ起こすか」だけである。
+ */
+export const scheduleSpecSchema = z.discriminatedUnion('type', [
+  /**
+   * 毎日この時刻（ローカル時刻）。
+   *
+   * **時刻の範囲までここで見る。** 形だけ見て通すと `25:99` が保存でき、一覧には
+   * 「毎日 25:99」と出るのに実際は 00:00 に発火する（人間が読んで矛盾する状態を
+   * 作れてしまう）。検査を経路ごとに置くと、どれか1本を通り忘れた時点で穴になる。
+   */
+  z.object({
+    type: z.literal('daily'),
+    at: z.string().regex(/^(?:[01]?\d|2[0-3]):[0-5]\d$/, 'HH:MM（00:00〜23:59）で書く'),
+  }),
+  /** この分数ごと。 */
+  z.object({ type: z.literal('every'), minutes: z.number().int().min(1) }),
+  /**
+   * cron 式（ローカル時刻）。
+   *
+   * **人間が cron で書けることは、この階層でも書けるべきである**（north_star 禁止1）。
+   * 「毎週月曜の朝」を `daily` で表そうとすると「毎日起きて曜日を見て何もしない」に
+   * なり、7回に6回は上位モデルのターンを空焼きする。
+   *
+   * 読める式かどうかまでここで見る。読めない式を保存できると、一覧には出るのに
+   * 発火しない仕込みが作れてしまう。
+   */
+  z.object({
+    type: z.literal('cron'),
+    expression: z
+      .string()
+      .max(CRON_EXPRESSION_MAX)
+      .refine(isCronExpression, 'cron 式として読めない（例: 毎週月曜 10:00 なら `0 10 * * 1`）'),
+  }),
+]);
+
+/**
+ * 継続中の依頼1件（PRD「自律」の起点②を、記憶とは別に器として持つ）。
+ *
+ * **なぜ記憶だけでは足りないか。** 「毎朝 issue を見て進めておいて」は、記憶に
+ * 書けば根拠として残るが、時刻が来たことを誰も教えてくれない。発意 tick で
+ * 思い出せるかはそのときの判断に委ねられ、取りこぼしても誰も気づかない。
+ * ここに置いた依頼は時刻が来れば必ずクローンの受信箱へ届く。
+ *
+ * 逆に、**判断の根拠は依然として記憶側にある**。ここに持つのは「いつ起こすか」と
+ * 「何を頼まれたか」だけで、やるかやらないか・どうやるかはクローンが決める。
+ */
+export const scheduledRequestSchema = z.object({
+  kind: scheduleKindSchema,
+  spec: scheduleSpecSchema,
+  /** 依頼の全文。時刻が来たらそのままクローンへ渡る。 */
+  request: z.string().min(1),
+  createdAt: isoDateTime,
+  updatedAt: isoDateTime,
+  /**
+   * 前回この依頼で動いた時刻（定期の予定でも、人間が手で起こした分でも動く）。
+   *
+   * 「前にいつ見たか」が分からないと、同じ仕事を毎回まっさらから起こすことになる
+   * （＝同じ issue に何本もマネージャーが立つ）。重複を数の上限で止めるのは
+   * 禁止2に触るので、材料として渡して判断に使わせる。
+   *
+   * **これは観測用であって、次の予定を数える基準ではない**（下の
+   * `lastScheduledRunAt` がその役）。
+   */
+  lastRunAt: isoDateTime.optional(),
+  /**
+   * 前回**定期の予定で**動いた時刻。次の予定を数える基準。
+   *
+   * `lastRunAt` と分けてあるのは、**手で起こした1回で位相を動かさない**ためである。
+   * 人間が `POST /schedule/:kind/run` で余分に1回起こすのは「予定に代えて割り込む」
+   * ことではない（`Scheduler.run` の契約）。ここを一緒にすると、手動実行の時刻が
+   * 基準になり、再起動した瞬間に定期の予定がその分ずれる。
+   */
+  lastScheduledRunAt: isoDateTime.optional(),
+  /**
+   * 「この発火を引き受けたが、まだ終わっていない」印。
+   *
+   * **確定（claim）と完了を分けるためにある。** 引き受けた時点で印を付け、ターンが
+   * 終わってから消す。器を作り直したときにこの印が残っていれば、その回は
+   * **モデルに届かないまま失われた可能性がある**ので、依頼の本文つきで配り直す。
+   *
+   * 印が無く基準（`lastScheduledRunAt`）だけが進んでいると、claim の直後に落ちた
+   * 発火は「もう動いた」と見えて、日次なら翌日・週次なら翌週まで消える。逆に印だけで
+   * 基準を持たないと、動いた後に落ちたときの二重実行を止められない。**両方要る。**
+   */
+  pendingRun: z.object({ at: isoDateTime, cause: z.enum(['schedule', 'manual']) }).optional(),
+});
+
+export type ScheduleKind = z.infer<typeof scheduleKindSchema>;
+export type ScheduleSpec = z.infer<typeof scheduleSpecSchema>;
+export type ScheduledRequest = z.infer<typeof scheduledRequestSchema>;
 
 // ---------------------------------------------------------------------------
 // ジョブ・承認待ち

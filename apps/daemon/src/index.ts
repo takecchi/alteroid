@@ -218,6 +218,9 @@ export async function main(): Promise<void> {
   const scheduler = createScheduler({
     entries: buildSchedule(schedule),
     post: (event) => clone.post(event),
+    // 継続中の依頼（クローンか人間が仕込んだもの）。**器を作り直しても残る。**
+    // 「定期的に見ておいて」がデーモン再起動で消えたら、それは自律の穴である。
+    schedules: stores.schedules,
   });
 
   // **受け口を開ける前に**、走行中だったマネージャーを台帳から拾い直す。知らせない
@@ -323,7 +326,19 @@ export async function main(): Promise<void> {
   process.on('SIGTERM', () => void shutdown());
   process.on('SIGINT', () => void shutdown());
 
+  // 仕込んであった依頼を先に読み直す。ここを通さないと、前回の会話で仕込んだ
+  // 継続中の依頼が、次の刻み（最大1分）まで存在しないことになる。
+  await scheduler.refresh().catch((error: unknown) => {
+    process.stderr.write(`alteroidd: 継続中の依頼を読み込めませんでした: ${String(error)}\n`);
+  });
   scheduler.start();
+
+  const standing = scheduler.list().filter((entry) => entry.request !== undefined);
+  if (standing.length > 0) {
+    process.stdout.write(
+      `alteroidd: 継続中の依頼: ${standing.map((entry) => entry.kind).join(', ')}\n`,
+    );
+  }
 
   // 締め時刻に自分が動いていなければ、その日の日報は誰も作らない。「日報は毎日
   // 生成される」は要件なので、動いていなかった日の分を起動時に拾い直す。

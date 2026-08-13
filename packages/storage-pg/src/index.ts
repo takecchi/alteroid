@@ -9,6 +9,7 @@ import { PgJobStore } from './jobs.js';
 import { PgJournalStore } from './journal.js';
 import { migrate } from './migrate.js';
 import { PgPersonaStore } from './persona.js';
+import { PgScheduleStore } from './schedules.js';
 import { PgSessionRegistry } from './sessions.js';
 import { PgSessionStore } from './session-store.js';
 
@@ -17,6 +18,7 @@ export { PgAuthStore } from './auth.js';
 export { PgJobStore } from './jobs.js';
 export { PgJournalStore } from './journal.js';
 export { PgPersonaStore } from './persona.js';
+export { PgScheduleStore } from './schedules.js';
 export { PgSessionRegistry } from './sessions.js';
 export { PgSessionStore } from './session-store.js';
 export { migrate } from './migrate.js';
@@ -65,6 +67,7 @@ export function createPgStoresFromDb(db: Db, close?: () => Promise<void>): PgSto
     persona: new PgPersonaStore(db),
     journal: new PgJournalStore(db),
     jobs: new PgJobStore(db),
+    schedules: new PgScheduleStore(db),
     archive: new PgTranscriptArchive(db),
     sessions: new PgSessionRegistry(db),
     auth: new PgAuthStore(db),

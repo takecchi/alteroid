@@ -9,6 +9,7 @@ import type {
   MemoryDocument,
   MemoryDocumentMeta,
   PendingApproval,
+  ScheduledRequest,
 } from './schema.js';
 
 /**
@@ -56,6 +57,56 @@ export interface JobStore {
   putApproval(approval: PendingApproval): Promise<void>;
 }
 
+/**
+ * 継続中の定期の依頼（PRD「自律」の起点②）。
+ *
+ * **人間の依頼のうち「これから先ずっと」の部分を持つ器である。** 会話は消え、
+ * 受信箱は揮発し、記憶は根拠を持つ場所であって時計を持たない。ここが無いと
+ * 「定期的に見ておいて」は次の compaction かデーモン再起動で静かに消える。
+ *
+ * 人間もここを読んで直せること（CLI / HTTP API）が要件である — 人間の制御手段は
+ * 記憶・日誌・境界の3つだが、自分が出した継続の依頼が見えないのは可観測性の穴になる。
+ */
+export interface ScheduleStore {
+  /** kind の昇順。 */
+  list(): Promise<ScheduledRequest[]>;
+  get(kind: string): Promise<ScheduledRequest | null>;
+  /** 同じ kind があれば置き換える（`createdAt` は呼び出し側が引き継ぐ）。 */
+  put(entry: ScheduledRequest): Promise<void>;
+  remove(kind: string): Promise<void>;
+  /**
+   * 発火を確定させる。**読むことと記録することを1操作に閉じる。**
+   *
+   * `expectedUpdatedAt` と同じ版がまだ在るときだけ記録し、**確定した依頼（記録を
+   * 進める前の姿）** を返す。消えていた・書き換わっていたら null。
+   *
+   * **これが2操作に分かれていると、読んでから記録するまでの隙間で人間が消した・
+   * 直した依頼が古い本文で走る。** 「本文は処理する瞬間にストアから読む」という
+   * 約束は、競合したときにこそ効かないと意味がない（消した依頼が外の世界に手を
+   * 出したら取り返せない）。返り値が更新前の姿なのは、呼び出し側が「前回いつ
+   * 動いたか」を材料として要るからである。
+   *
+   * ここで付けるのは **`pendingRun`（引き受けた印）と `lastRunAt`（観測用）だけ**で、
+   * 定期の予定の基準（`lastScheduledRunAt`）は `completeRun` まで進めない。claim の
+   * 直後に器が落ちたとき、その回が「もう動いた」ことになって消えないようにするため。
+   */
+  claimRun(
+    kind: string,
+    expectedUpdatedAt: string,
+    at: string,
+    cause: 'schedule' | 'manual',
+  ): Promise<ScheduledRequest | null>;
+
+  /**
+   * 引き受けた発火が終わったことを記録する。`pendingRun` を消し、`schedule` なら
+   * 定期の予定の基準（`lastScheduledRunAt`）を進める。
+   *
+   * **`manual` では基準を動かさない**（手で起こした1回で予定をずらさない）。
+   * 消えている kind、別の発火の印が付いている場合は何もしない。
+   */
+  completeRun(kind: string, at: string, cause: 'schedule' | 'manual'): Promise<void>;
+}
+
 /** セッションの生ログ退避先（PreCompact フックで落とす）。 */
 export interface TranscriptArchive {
   /** 退避したアーカイブのパス（または識別子）を返す。 */
@@ -75,6 +126,14 @@ export interface Stores {
   persona: PersonaStore;
   journal: JournalStore;
   jobs: JobStore;
+  /**
+   * 継続中の定期の依頼。
+   *
+   * **省略可能にしないこと。** 器（fs / pg）が違うだけで上の層が見るものは同じで
+   * ある、が M4 の要件である。ここを任意にすると、片方の器では「定期的にやって」が
+   * 効かないという能力差が生まれる（north_star 禁止1）。
+   */
+  schedules: ScheduleStore;
   archive: TranscriptArchive;
   sessions: SessionRegistry;
   /**
