@@ -207,76 +207,58 @@ class Store implements CredentialStore {
     }
 
     const at = this.#now().toISOString();
-    // 器へ届かなかったときに戻せるよう、先に写しを取る。**memory だけが新しく
-    // なると、指紋は新しい鍵を指すのに走行中のマネージャーは古い鍵のまま**に
-    // なり、食い違いを見つけるために足した指紋そのものが嘘をつく。
-    const snapshot = new Map(this.#held);
 
+    /**
+     * **1鍵ずつ、器へ入ってから memory を進める。**
+     *
+     * まとめて memory を進めてから書くと、途中で失敗したときに戻す先が無い。
+     * ディスクは複数ファイルにまたがるので、後から巻き戻しても「1件目は新値・
+     * memory は旧値」という食い違いが残る（巻き戻し自体も失敗しうる）。
+     *
+     * だから**バッチの原子性を装わない**。1鍵ごとには不可分（staging → rename）で、
+     * バッチ全体は途中で止まりうる。止まったことは例外で知らせ、どこまで進んだかは
+     * 指紋を見れば分かる — **指紋は常に器の中身と一致している**、という約束のほうを
+     * 守る。食い違いを見つけるための道具が嘘をつかないことが、ここでは最優先である。
+     */
+    const applied: string[] = [];
     for (const entry of entries) {
-      if (entry.value.length === 0) {
-        this.#held.delete(entry.name);
-        continue;
+      const held = entry.value.length === 0 ? undefined : { value: entry.value, updatedAt: at };
+      try {
+        await this.#commit(entry.name, held);
+      } catch (error) {
+        this.#lastWriteError = String(error);
+        throw new Error(
+          `鍵の差し替えが ${entry.name} で止まった` +
+            `（適用済み: ${applied.length === 0 ? 'なし' : applied.join(', ')}` +
+            ` / 未適用: ${entries
+              .slice(applied.length)
+              .map((rest) => rest.name)
+              .join(', ')}）: ${String(error)}`,
+          { cause: error },
+        );
       }
-      this.#held.set(entry.name, { value: entry.value, updatedAt: at });
+      applied.push(entry.name);
     }
-
-    try {
-      // **差し替えは黙って落とさない。** 器へ届かなければ走行中のマネージャーには
-      // 永久に届かず、「差し替えたのに直らない」という元の病気に戻る。
-      await this.#write(
-        entries.map((entry) => entry.name),
-        { strict: true },
-      );
-    } catch (error) {
-      this.#held.clear();
-      for (const [name, held] of snapshot) this.#held.set(name, held);
-      throw error;
-    }
+    this.#lastWriteError = undefined;
     return this.fingerprints();
-  }
-
-  async flush(): Promise<CredentialFingerprint[]> {
-    // 起動は器が無くても続ける（ローカルでは置き場が作れないことがある）。
-    // その場合も env 経由の経路は残るので、新しいマネージャーには鍵が渡る。
-    await this.#write([...this.#held.keys()], { strict: false });
-    return this.fingerprints();
-  }
-
-  /** 直近の書き込みに失敗していれば理由。成功していれば undefined。 */
-  get lastWriteError(): string | undefined {
-    return this.#lastWriteError;
-  }
-
-  async #write(names: readonly string[], options: { strict: boolean }): Promise<void> {
-    if (names.length === 0) return;
-    try {
-      // 中を覗けるのは読める主体だけでよい。一覧はできなくてよいので 0o711。
-      await mkdir(this.#dir, { recursive: true, mode: 0o711 });
-      for (const name of names) await this.#writeOne(name);
-      this.#lastWriteError = undefined;
-    } catch (error) {
-      this.#lastWriteError = String(error);
-      process.stderr.write(
-        `alteroid-runner: 鍵を器へ書けませんでした（走行中の差し替えは届きません）: ${this.#lastWriteError}\n`,
-      );
-      if (options.strict) throw error;
-    }
   }
 
   /**
-   * 1件を器へ落とす。**書いてから名前を差し替える**（rename は不可分）。
+   * 1鍵を器へ入れ、**入ってから** memory を進める。
    *
-   * 直接上書きしないのは2つの理由による。1つは 0400 のファイルは所有者でも開き
-   * 直せないこと（ここを踏んで差し替えが黙って落ちた）。もう1つは、読む側が
-   * `cat` した瞬間に**書きかけの鍵**を掴む窓を作らないためである。
+   * 順序が逆だと、書けなかった鍵を配ってしまう（走行中のマネージャーは器を読み、
+   * これから起きるマネージャーは memory を読むので、両者が食い違う）。
    */
-  async #writeOne(name: string): Promise<void> {
+  async #commit(name: string, held: Held | undefined): Promise<void> {
+    await mkdir(this.#dir, { recursive: true, mode: 0o711 });
     const path = join(this.#dir, name);
-    const held = this.#held.get(name);
+
     if (held === undefined) {
       await rm(path, { force: true });
+      this.#held.delete(name);
       return;
     }
+
     const staging = `${path}.${randomUUID().slice(0, 8)}`;
     try {
       // 改行を足さない。`cat` した値がそのまま鍵になる。
@@ -289,5 +271,34 @@ class Store implements CredentialStore {
       await rm(staging, { force: true }).catch(() => undefined);
       throw error;
     }
+    this.#held.set(name, held);
+  }
+
+  /**
+   * 起動時に、環境変数から拾った分を器へ書き出す。
+   *
+   * **ここだけは書けなくても memory を落とさない。** 起動時にはまだ器を読む
+   * マネージャーが1人も居ないので食い違いようがなく、逆に memory を捨てると
+   * 「器が用意できないローカルでは鍵がまったく配られない」という能力の欠落に
+   * なる（env 経由の経路は残っているのに）。失敗は `lastWriteError` に残す。
+   */
+  async flush(): Promise<CredentialFingerprint[]> {
+    for (const [name, held] of [...this.#held]) {
+      try {
+        await this.#commit(name, held);
+        this.#lastWriteError = undefined;
+      } catch (error) {
+        this.#lastWriteError = String(error);
+        process.stderr.write(
+          `alteroid-runner: 鍵を器へ書けませんでした（走行中の差し替えは届きません）: ${this.#lastWriteError}\n`,
+        );
+      }
+    }
+    return this.fingerprints();
+  }
+
+  /** 直近の書き込みに失敗していれば理由。成功していれば undefined。 */
+  get lastWriteError(): string | undefined {
+    return this.#lastWriteError;
   }
 }

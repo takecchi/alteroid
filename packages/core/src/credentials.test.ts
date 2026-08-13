@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -220,5 +220,92 @@ describe('鍵の器が越えてはいけない線', () => {
     expect(env.ALTEROID_GH_TOKEN_FILE).toBe(join(dir, 'GH_TOKEN'));
     // 種が無くても所在は知らせる（後から置かれた鍵も同じ経路で届く）
     expect(env.ALTEROID_GITHUB_TOKEN_FILE).toBe(join(dir, 'GITHUB_TOKEN'));
+  });
+});
+
+/**
+ * バッチ更新の途中で失敗しても、**指紋が器の中身と食い違わない**こと。
+ *
+ * 複数ファイルにまたがる書き込みに原子性は無い。巻き戻しで取り繕おうとすると、
+ * 「1件目は新値・memory は旧値」という食い違いが残り（巻き戻し自体も失敗しうる）、
+ * 食い違いを見つけるために足した指紋そのものが嘘をつく。守るのは原子性の見かけ
+ * ではなく、**指紋が常に器と一致している**という約束のほうである。
+ */
+describe('途中で失敗したバッチ', () => {
+  /** その名前だけ rename を失敗させる（置き場所をディレクトリで塞ぐ）。 */
+  function block(name: string): void {
+    mkdirSync(join(dir, name), { recursive: true });
+    writeFileSync(join(dir, name, 'occupied'), 'x');
+  }
+
+  it('1件目が成功して2件目が失敗しても、指紋は器の中身と一致する', async () => {
+    const store = createCredentialStore({
+      dir,
+      seed: { GH_TOKEN: 'gh-old', GITHUB_TOKEN: 'github-old' },
+      names: ['GH_TOKEN', 'GITHUB_TOKEN'],
+    });
+    await store.flush();
+    rmSync(join(dir, 'GITHUB_TOKEN'));
+    block('GITHUB_TOKEN');
+
+    await expect(
+      store.set([
+        { name: 'GH_TOKEN', value: 'gh-new' },
+        { name: 'GITHUB_TOKEN', value: 'github-new' },
+      ]),
+    ).rejects.toThrow(/GITHUB_TOKEN/);
+
+    // 1件目は器にもメモリにも入っている（＝食い違わない）
+    expect(readFileSync(join(dir, 'GH_TOKEN'), 'utf8')).toBe('gh-new');
+    expect(store.values().GH_TOKEN).toBe('gh-new');
+    expect(store.fingerprints().find((f) => f.name === 'GH_TOKEN')?.sha256).toBe(
+      fingerprintOf('gh-new'),
+    );
+
+    // 2件目は器にもメモリにも入っていない
+    expect(store.values().GITHUB_TOKEN).toBe('github-old');
+    expect(store.fingerprints().find((f) => f.name === 'GITHUB_TOKEN')?.sha256).toBe(
+      fingerprintOf('github-old'),
+    );
+  });
+
+  it('削除が成功したあとに後続が失敗しても、削除は削除のまま残る', async () => {
+    const store = createCredentialStore({
+      dir,
+      seed: { GH_TOKEN: 'gh-old', GITHUB_TOKEN: 'github-old' },
+      names: ['GH_TOKEN', 'GITHUB_TOKEN'],
+    });
+    await store.flush();
+    rmSync(join(dir, 'GITHUB_TOKEN'));
+    block('GITHUB_TOKEN');
+
+    await expect(
+      store.set([
+        { name: 'GH_TOKEN', value: '' },
+        { name: 'GITHUB_TOKEN', value: 'github-new' },
+      ]),
+    ).rejects.toThrow(/GITHUB_TOKEN/);
+
+    // 消えたものは器からもメモリからも消えている
+    expect(() => readFileSync(join(dir, 'GH_TOKEN'), 'utf8')).toThrow();
+    expect(store.values().GH_TOKEN).toBeUndefined();
+    expect(store.fingerprints().some((f) => f.name === 'GH_TOKEN')).toBe(false);
+  });
+
+  it('どこまで進んだかを例外が伝える（黙って途中で止まらない）', async () => {
+    const store = createCredentialStore({
+      dir,
+      seed: { GH_TOKEN: 'gh-old' },
+      names: ['GH_TOKEN', 'GITHUB_TOKEN'],
+    });
+    await store.flush();
+    block('GITHUB_TOKEN');
+
+    await expect(
+      store.set([
+        { name: 'GH_TOKEN', value: 'gh-new' },
+        { name: 'GITHUB_TOKEN', value: 'github-new' },
+      ]),
+    ).rejects.toThrow(/適用済み: GH_TOKEN/);
   });
 });
