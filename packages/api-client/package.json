@@ -1,0 +1,32 @@
+{
+  "name": "@alteroid/api-client",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "generate": "openapi-typescript ./node_modules/@alteroid/daemon/openapi.json -o ./src/generated/openapi.d.ts",
+    "build": "pnpm generate && tsup",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "openapi-fetch": "catalog:"
+  },
+  "devDependencies": {
+    "@alteroid/core": "workspace:*",
+    "@alteroid/daemon": "workspace:*",
+    "@hono/node-server": "catalog:",
+    "@types/node": "catalog:",
+    "openapi-typescript": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:"
+  }
+}
