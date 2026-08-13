@@ -1,7 +1,11 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
-import { CLONE_MODEL, createClone } from './clone.js';
+import { CLONE_MODEL, CLONE_MODEL_ENV_KEY, createClone, resolveCloneModel } from './clone.js';
 import type { CloneHost } from './host.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -95,6 +99,9 @@ function setup(
   reply?: (input: string) => string,
   stores: Stores = createMemoryStores(),
   sdkOptions: { delayMs?: number; failWith?: string } = {},
+  // 既定は空。手元に ALTEROID_CLONE_MODEL が置いてあるかどうかでテストの結果を
+  // 変えない（不変条件の検証が環境に左右されたら意味がない）。
+  env: NodeJS.ProcessEnv = {},
 ): Setup {
   const { fn, calls } = fakeSdk(reply, sdkOptions);
   // マネージャーも偽物にしておく。ここで検証したいのはクローンのループだけであり、
@@ -102,6 +109,7 @@ function setup(
   const clone = createClone({
     stores,
     queryFn: fn,
+    env,
     // 委譲先も偽物にしておく。ここで検証したいのはクローンのループだけであり、
     // 誤って本物の SDK を起こさないようにする。
     runners: createRunnerRegistry([
@@ -155,7 +163,8 @@ describe('クローン', () => {
     await waitForDone(s.events);
 
     const { options } = s.calls[0] as FakeCall;
-    // クローン = Fable。変更には人間の承認が要る（AGENTS.md 地雷5）
+    // クローン = Fable。既定はここから動かない。降ろせるのは人間だけであり、
+    // 実装や AI の都合で既定を下げない（AGENTS.md 地雷5 / north_star 禁止1）
     expect(options.model).toBe(CLONE_MODEL);
     expect(CLONE_MODEL).toBe('fable');
     // 組み込みツールは持たせない（人間の写像としての配置）
@@ -168,6 +177,49 @@ describe('クローン', () => {
     expect(options.settingSources).toEqual([]);
     // ターン数上限で暴走を止めない（AGENTS.md 地雷2）
     expect(options.maxTurns).toBeUndefined();
+
+    await s.clone.stop();
+  });
+
+  it('モデル帯の既定は環境変数で動かない。空・空白は既定に落ちる', () => {
+    expect(resolveCloneModel({})).toBe(CLONE_MODEL);
+    expect(resolveCloneModel({ [CLONE_MODEL_ENV_KEY]: '' })).toBe(CLONE_MODEL);
+    expect(resolveCloneModel({ [CLONE_MODEL_ENV_KEY]: '   ' })).toBe(CLONE_MODEL);
+    // 人間が置いた値だけが効く。既知の別名で関門を作らない（SDK が増やした
+    // モデルを人間が選べなくなる＝能力の削除。north_star 禁止1）
+    expect(resolveCloneModel({ [CLONE_MODEL_ENV_KEY]: 'opus' })).toBe('opus');
+    expect(resolveCloneModel({ [CLONE_MODEL_ENV_KEY]: '  opus  ' })).toBe('opus');
+    expect(resolveCloneModel({ [CLONE_MODEL_ENV_KEY]: 'まだ無いモデル' })).toBe('まだ無いモデル');
+  });
+
+  it('差し替えた帯は本セッションと蒸留のサイドクエリの両方に効く', async () => {
+    const s = setup(undefined, createMemoryStores(), {}, { [CLONE_MODEL_ENV_KEY]: 'opus' });
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const main = s.calls[0] as FakeCall;
+    expect(main.options.model).toBe('opus');
+
+    // PreCompact の蒸留は別の短命セッションで走る。ここだけ帯が違うと、
+    // 人格を書く側だけが別の頭になる。
+    const dir = await mkdtemp(join(tmpdir(), 'alteroid-clone-model-'));
+    try {
+      const transcriptPath = join(dir, 'transcript.jsonl');
+      await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
+
+      const hook = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
+      if (hook === undefined) throw new Error('PreCompact フックが登録されていない');
+      await hook({ session_id: 'sess-fake', transcript_path: transcriptPath } as never, undefined, {
+        signal: new AbortController().signal,
+      } as never);
+
+      const side = s.calls.at(-1) as FakeCall;
+      expect(side).not.toBe(main);
+      expect(side.options.model).toBe('opus');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
 
     await s.clone.stop();
   });
