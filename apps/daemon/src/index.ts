@@ -25,6 +25,13 @@ import { buildSchedule, readScheduleConfig } from './schedule.js';
 import { openStorage } from './storage.js';
 
 export { createApp, type AppDeps, type AppType } from './app.js';
+/**
+ * spec 生成専用のスタブで `createApp` を呼び、`/openapi.json` を叩いて JSON を
+ * 得る（`apps/daemon/scripts/write-openapi.mjs` が使う本体）。デーモンを実際に
+ * 起動せずに spec だけ欲しい呼び出し元（生成クライアントのビルドなど）向けに
+ * ここからも引けるようにしておく。
+ */
+export { buildOpenApiDocument } from './openapi.js';
 export { createJournalBus, type JournalBus } from './journal-bus.js';
 export { apiAuthFromEnv, createApiAuth, type ApiAuth, type ApiAuthOptions } from './auth.js';
 export { openStorage, DATABASE_URL_ENV, type Storage } from './storage.js';

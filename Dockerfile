@@ -19,6 +19,9 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/core/package.json packages/core/
 COPY packages/storage-fs/package.json packages/storage-fs/
 COPY packages/storage-pg/package.json packages/storage-pg/
+# 外部向けの生成クライアント。この器では使わないが、ワークスペースの一員なので
+# 置かないと `--frozen-lockfile` が「lockfile と合わない」で落ちる
+COPY packages/api-client/package.json packages/api-client/
 COPY apps/daemon/package.json apps/daemon/
 COPY apps/runner/package.json apps/runner/
 COPY apps/cli/package.json apps/cli/
@@ -74,12 +77,16 @@ RUN set -eux; \
   printf '%s\n' \
     '#!/bin/sh' \
     '# 鍵は毎回ファイルから読む（走行中の差し替えを届かせるため）。' \
-    'f="${ALTEROID_GH_TOKEN_FILE:-/run/alteroid/credentials/GH_TOKEN}"' \
-    'if [ -r "$f" ]; then' \
+    '# **扱う鍵ぜんぶを読む。** 片方だけ読むと「回せる」と言いながら回らない鍵ができる。' \
+    'd="${ALTEROID_CREDENTIAL_DIR:-/run/alteroid/credentials}"' \
+    'for n in GH_TOKEN GITHUB_TOKEN; do' \
+    '  eval "f=\${ALTEROID_${n}_FILE:-$d/$n}"' \
+    '  [ -r "$f" ] || continue' \
     '  t="$(cat "$f")"' \
     '  # 空を export すると「鍵が無い」より悪い（hosts.yml も無視される）' \
-    '  if [ -n "$t" ]; then GH_TOKEN="$t"; export GH_TOKEN; fi' \
-    'fi' \
+    '  [ -n "$t" ] || continue' \
+    '  eval "$n=\$t"; export "$n"' \
+    'done' \
     'exec /usr/bin/gh "$@"' \
     > /usr/local/bin/gh; \
   chmod 0755 /usr/local/bin/gh; \
@@ -100,6 +107,9 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/core/package.json packages/core/
 COPY packages/storage-fs/package.json packages/storage-fs/
 COPY packages/storage-pg/package.json packages/storage-pg/
+# 外部向けの生成クライアント。この器では使わないが、ワークスペースの一員なので
+# 置かないと `--frozen-lockfile` が「lockfile と合わない」で落ちる
+COPY packages/api-client/package.json packages/api-client/
 COPY apps/daemon/package.json apps/daemon/
 COPY apps/runner/package.json apps/runner/
 COPY apps/cli/package.json apps/cli/

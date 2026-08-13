@@ -563,6 +563,86 @@ describe('HTTP API', () => {
 });
 
 /**
+ * OpenAPI の配信（Issue #20）。
+ *
+ * spec が経路の実装とずれたら「外から API を叩けます」という主張そのものが
+ * 嘘になる。ここでは「全経路が載っている」「SSE が SSE として書いてある」
+ * 「人間向け画面が出る」の3点だけを見る（内容の細部は `apps/daemon/openapi.json`
+ * 自体が machine-generated で、`pnpm build` のたびに作り直される）。
+ */
+describe('OpenAPI', () => {
+  it('/openapi.json が OpenAPI 3.1 の spec を返す（SSE 経路も含めて全部載る）', async () => {
+    const response = await app.request('/openapi.json');
+    expect(response.status).toBe(200);
+
+    const spec = (await response.json()) as {
+      openapi: string;
+      paths: Record<string, unknown>;
+    };
+    expect(spec.openapi).toBe('3.1.0');
+
+    // 手で削らない限りここに載る経路数（約30本）を大きく下回っていないか、
+    // 個別の経路名で確かめる。`/openapi.json` `/docs` 自身は載らない。
+    const paths = Object.keys(spec.paths);
+    for (const path of [
+      '/health',
+      '/chat',
+      '/chat/{conversationId}/end',
+      '/conversations',
+      '/conversations/{id}',
+      '/journal/stream',
+      '/memory',
+      '/memory/{slug}',
+      '/journal',
+      '/reports',
+      '/reports/{date}',
+      '/approvals',
+      '/approvals/answer',
+      '/approvals/{id}/answer',
+      '/events',
+      '/events/{source}',
+      '/schedule',
+      '/schedule/{kind}/run',
+      '/managers',
+      '/managers/{id}',
+      '/managers/{id}/transcript',
+      '/managers/{id}/messages',
+      '/runners',
+      '/runners/credentials',
+      '/archive',
+      '/archive/{id}',
+      '/shutdown',
+    ]) {
+      expect(paths, path).toContain(path);
+    }
+    expect(paths).not.toContain('/openapi.json');
+    expect(paths).not.toContain('/docs');
+  });
+
+  it('SSE 経路は text/event-stream を content に持つ（能力を単純化して削っていないこと）', async () => {
+    const spec = (await (await app.request('/openapi.json')).json()) as {
+      paths: Record<string, { post?: Operation; get?: Operation }>;
+    };
+    interface Operation {
+      responses?: Record<string, { content?: Record<string, unknown> }>;
+    }
+
+    const chatContent = spec.paths['/chat']?.post?.responses?.['200']?.content;
+    expect(Object.keys(chatContent ?? {})).toContain('text/event-stream');
+
+    const journalStreamContent = spec.paths['/journal/stream']?.get?.responses?.['200']?.content;
+    expect(Object.keys(journalStreamContent ?? {})).toContain('text/event-stream');
+  });
+
+  it('/docs は人間向けの画面（HTML）を返す', async () => {
+    const response = await app.request('/docs');
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('text/html');
+    expect(await response.text()).toContain('<!doctype html>');
+  });
+});
+
+/**
  * 器を替えても続きから話せること、聞きに行かなくても気づけること、人間が
  * 自分の言葉を自分で届けられること。
  *

@@ -70,8 +70,10 @@ export { createLocalRunner, type LocalRunnerOptions } from './runner-local.js';
  * 伏せるのは上（記憶）へ到達する鍵だけで、下（外の世界）へ手を伸ばす鍵は配る。
  */
 export {
+  CREDENTIAL_NAME,
   DEFAULT_CREDENTIAL_DIR,
   ROTATABLE_CREDENTIAL_KEYS,
+  isWithheldCredentialName,
   createCredentialStore,
   fingerprintOf,
   type CredentialEntry,

@@ -161,3 +161,40 @@ describe('runner が配る鍵', () => {
     expect(host.credentials()).toEqual([]);
   });
 });
+
+describe('鍵が伏せる仕組みを越えないこと', () => {
+  it('伏せた環境変数を、鍵として注入し直せない', async () => {
+    const fake = fakeSdk();
+    const credentials = createCredentialStore({
+      dir: join(dir, 'creds'),
+      seed: { GH_TOKEN: 'ghp_x' },
+      names: ['GH_TOKEN'],
+    });
+
+    host = createRunnerHost({
+      runnerId: 'runner-primary',
+      workspacePath: dir,
+      emit: () => undefined,
+      queryFn: fake.fn,
+      env: {
+        PATH: process.env.PATH ?? '',
+        ALTEROID_DATABASE_URL: 'postgres://alteroid:secret@db:5432/alteroid',
+      },
+      credentials,
+    });
+
+    // 名前検査をすり抜けたとしても、合成の順序で伏せが最後に効く
+    await credentials.set([{ name: 'GH_TOKEN', value: 'ghp_y' }]);
+    (credentials as unknown as { values(): Record<string, string> }).values = () => ({
+      GH_TOKEN: 'ghp_y',
+      ALTEROID_DATABASE_URL: 'postgres://stolen',
+    });
+
+    await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const env = fake.started[0]?.options.env ?? {};
+
+    expect(env.GH_TOKEN).toBe('ghp_y');
+    // **伏せるのが最後。** ここが通ると記憶ストアの所在が子へ渡る
+    expect(env.ALTEROID_DATABASE_URL).toBeUndefined();
+  });
+});

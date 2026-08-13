@@ -513,11 +513,15 @@ class RunnerSession {
    */
   #childEnv(): NodeJS.ProcessEnv {
     const env = { ...this.#env };
-    for (const key of this.#withheldEnvKeys) delete env[key];
     if (this.#credentials !== undefined) {
-      // 器の現在値が凍った env に勝つ。順番を逆にすると意味が消える。
+      // 器の現在値が凍った env に勝つ。順番を逆にすると鍵が回らない。
       Object.assign(env, this.#credentials.values(), this.#credentials.env());
     }
+    // **伏せるのは最後。** 先に消してから鍵を重ねると、鍵の名前として
+    // `ALTEROID_DATABASE_URL` を渡すだけで、伏せたはずの値を注入し直せる。
+    // 配る仕組みが伏せる仕組みを越えないよう、順序でも保証する（`credentials.ts`
+    // の名前検査と二重にしてあるのは、片方を通り忘れても穴にしないため）。
+    for (const key of this.#withheldEnvKeys) delete env[key];
     return env;
   }
 

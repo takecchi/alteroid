@@ -36,6 +36,30 @@ export const DEFAULT_CREDENTIAL_DIR = '/run/alteroid/credentials';
 export const ROTATABLE_CREDENTIAL_KEYS = ['GH_TOKEN', 'GITHUB_TOKEN'] as const;
 
 /**
+ * 鍵の名前として認めるかたち。**環境変数の名前そのものである。**
+ *
+ * ここを自由な文字列にしていたせいで、`../../../etc/cron.d/x` のような名前が
+ * そのままファイル名になり、**root で器の外へ書けた**（空文字を渡せば削除もできた）。
+ * 名前は器の中のファイル名になるのだから、パスとして解釈されうる形を最初から
+ * 名前として認めない。
+ *
+ * 経路の途中で弾くのではなく**名前の定義そのものを狭める**のは、検査を1か所でも
+ * 通り忘れたら穴になるからである。
+ */
+export const CREDENTIAL_NAME = /^[A-Z][A-Z0-9_]*$/;
+
+/**
+ * 鍵として配ってはいけない名前か。
+ *
+ * `WITHHELD_ENV_KEYS`（記憶ストアの所在・制御面の合鍵）を鍵の名前として渡されると、
+ * **伏せたはずの環境変数を子プロセスへ注入し直せる**。伏せる仕組みと配る仕組みが
+ * 別々にあると、後から足したほうが前からある守りを黙って越える。
+ */
+export function isWithheldCredentialName(name: string, withheld: readonly string[]): boolean {
+  return withheld.includes(name);
+}
+
+/**
  * 鍵が合っているかを、**値を出さずに**照合するための指紋。
  *
  * 人間が置いた鍵とマネージャーが握っている鍵が同じかどうかは、これが無いと
@@ -83,6 +107,13 @@ export interface CredentialStoreOptions {
   reader?: { uid: number; gid: number };
   /** 現在時刻。テストで固定するため。 */
   now?: () => Date;
+  /**
+   * 子プロセスへ伏せる環境変数の名前。**この名前は鍵として受け付けない。**
+   *
+   * 伏せる仕組み（`WITHHELD_ENV_KEYS`）と配る仕組みが互いを知らないと、後から
+   * 足したほうが前からある守りを黙って越える。ここで結び付けておく。
+   */
+  withheldEnvKeys?: readonly string[];
 }
 
 /** 値そのものを出さずに同一性だけ見せる。 */
@@ -104,6 +135,9 @@ class Store implements CredentialStore {
   readonly #reader: { uid: number; gid: number } | undefined;
   readonly #now: () => Date;
   readonly #held = new Map<string, Held>();
+  /** 扱う鍵の名前（所在を子へ知らせる対象）。中身の有無とは別に決まる。 */
+  readonly #names: readonly string[];
+  readonly #withheld: readonly string[];
   /** 器へ書けなかったことを、黙って握り潰さないための印。 */
   #lastWriteError: string | undefined;
 
@@ -114,8 +148,13 @@ class Store implements CredentialStore {
 
     const seed = options.seed ?? process.env;
     const names = options.names ?? ROTATABLE_CREDENTIAL_KEYS;
+    this.#withheld = options.withheldEnvKeys ?? [];
+    // 名前として成立しないものは、種の時点で落とす（器の外を指す名前を持ち込ませない）
+    this.#names = names.filter(
+      (name) => CREDENTIAL_NAME.test(name) && !isWithheldCredentialName(name, this.#withheld),
+    );
     const at = this.#now().toISOString();
-    for (const name of names) {
+    for (const name of this.#names) {
       const value = seed[name];
       // 空文字は「置かれていない」と同じに扱う。空の鍵を配ると、鍵が無い場合より
       // 悪い壊れ方（`empty ident` 相当の即死）をする経路がある。
@@ -130,12 +169,16 @@ class Store implements CredentialStore {
     return out;
   }
 
+  /**
+   * 子へ知らせる**所在**（値ではない）。
+   *
+   * 扱う鍵ぜんぶに `ALTEROID_<NAME>_FILE` を出す。GH_TOKEN だけを特別扱いすると、
+   * 「回せる」と言いながら回らない鍵ができる（実際に `GITHUB_TOKEN` がそうなっていた
+   * — 器には置かれるのに、走行中のマネージャーへ届く経路がどこにも無かった）。
+   */
   env(): Record<string, string> {
     const out: Record<string, string> = { ALTEROID_CREDENTIAL_DIR: this.#dir };
-    // `gh` のシムが見る所在。名前ごとに1ファイルなので、パスは名前から決まる。
-    if (this.#held.has('GH_TOKEN') || this.#held.size === 0) {
-      out.ALTEROID_GH_TOKEN_FILE = join(this.#dir, 'GH_TOKEN');
-    }
+    for (const name of this.#names) out[`ALTEROID_${name}_FILE`] = join(this.#dir, name);
     return out;
   }
 
@@ -148,65 +191,74 @@ class Store implements CredentialStore {
   }
 
   async set(entries: readonly CredentialEntry[]): Promise<CredentialFingerprint[]> {
-    const at = this.#now().toISOString();
+    // **名前は器の中のファイル名になる。** パスとして解釈されうる形を受けない。
     for (const entry of entries) {
-      if (entry.value.length === 0) {
-        this.#held.delete(entry.name);
-        continue;
+      if (!CREDENTIAL_NAME.test(entry.name)) {
+        throw new Error(
+          `鍵の名前として認められない: ${JSON.stringify(entry.name)}（英大文字・数字・_ のみ）`,
+        );
       }
-      this.#held.set(entry.name, { value: entry.value, updatedAt: at });
+      if (isWithheldCredentialName(entry.name, this.#withheld)) {
+        throw new Error(
+          `${entry.name} は子プロセスへ伏せる鍵なので、鍵として配れない` +
+            '（伏せる仕組みを鍵の仕組みで越えさせない）',
+        );
+      }
     }
-    // **差し替えは黙って落とさない。** 器へ届かなければ走行中のマネージャーには
-    // 永久に届かず、「差し替えたのに直らない」という元の病気に戻る。
-    await this.#write(
-      entries.map((entry) => entry.name),
-      { strict: true },
-    );
-    return this.fingerprints();
-  }
 
-  async flush(): Promise<CredentialFingerprint[]> {
-    // 起動は器が無くても続ける（ローカルでは置き場が作れないことがある）。
-    // その場合も env 経由の経路は残るので、新しいマネージャーには鍵が渡る。
-    await this.#write([...this.#held.keys()], { strict: false });
-    return this.fingerprints();
-  }
+    const at = this.#now().toISOString();
 
-  /** 直近の書き込みに失敗していれば理由。成功していれば undefined。 */
-  get lastWriteError(): string | undefined {
-    return this.#lastWriteError;
-  }
-
-  async #write(names: readonly string[], options: { strict: boolean }): Promise<void> {
-    if (names.length === 0) return;
-    try {
-      // 中を覗けるのは読める主体だけでよい。一覧はできなくてよいので 0o711。
-      await mkdir(this.#dir, { recursive: true, mode: 0o711 });
-      for (const name of names) await this.#writeOne(name);
-      this.#lastWriteError = undefined;
-    } catch (error) {
-      this.#lastWriteError = String(error);
-      process.stderr.write(
-        `alteroid-runner: 鍵を器へ書けませんでした（走行中の差し替えは届きません）: ${this.#lastWriteError}\n`,
-      );
-      if (options.strict) throw error;
+    /**
+     * **1鍵ずつ、器へ入ってから memory を進める。**
+     *
+     * まとめて memory を進めてから書くと、途中で失敗したときに戻す先が無い。
+     * ディスクは複数ファイルにまたがるので、後から巻き戻しても「1件目は新値・
+     * memory は旧値」という食い違いが残る（巻き戻し自体も失敗しうる）。
+     *
+     * だから**バッチの原子性を装わない**。1鍵ごとには不可分（staging → rename）で、
+     * バッチ全体は途中で止まりうる。止まったことは例外で知らせ、どこまで進んだかは
+     * 指紋を見れば分かる — **指紋は常に器の中身と一致している**、という約束のほうを
+     * 守る。食い違いを見つけるための道具が嘘をつかないことが、ここでは最優先である。
+     */
+    const applied: string[] = [];
+    for (const entry of entries) {
+      const held = entry.value.length === 0 ? undefined : { value: entry.value, updatedAt: at };
+      try {
+        await this.#commit(entry.name, held);
+      } catch (error) {
+        this.#lastWriteError = String(error);
+        throw new Error(
+          `鍵の差し替えが ${entry.name} で止まった` +
+            `（適用済み: ${applied.length === 0 ? 'なし' : applied.join(', ')}` +
+            ` / 未適用: ${entries
+              .slice(applied.length)
+              .map((rest) => rest.name)
+              .join(', ')}）: ${String(error)}`,
+          { cause: error },
+        );
+      }
+      applied.push(entry.name);
     }
+    this.#lastWriteError = undefined;
+    return this.fingerprints();
   }
 
   /**
-   * 1件を器へ落とす。**書いてから名前を差し替える**（rename は不可分）。
+   * 1鍵を器へ入れ、**入ってから** memory を進める。
    *
-   * 直接上書きしないのは2つの理由による。1つは 0400 のファイルは所有者でも開き
-   * 直せないこと（ここを踏んで差し替えが黙って落ちた）。もう1つは、読む側が
-   * `cat` した瞬間に**書きかけの鍵**を掴む窓を作らないためである。
+   * 順序が逆だと、書けなかった鍵を配ってしまう（走行中のマネージャーは器を読み、
+   * これから起きるマネージャーは memory を読むので、両者が食い違う）。
    */
-  async #writeOne(name: string): Promise<void> {
+  async #commit(name: string, held: Held | undefined): Promise<void> {
+    await mkdir(this.#dir, { recursive: true, mode: 0o711 });
     const path = join(this.#dir, name);
-    const held = this.#held.get(name);
+
     if (held === undefined) {
       await rm(path, { force: true });
+      this.#held.delete(name);
       return;
     }
+
     const staging = `${path}.${randomUUID().slice(0, 8)}`;
     try {
       // 改行を足さない。`cat` した値がそのまま鍵になる。
@@ -219,5 +271,34 @@ class Store implements CredentialStore {
       await rm(staging, { force: true }).catch(() => undefined);
       throw error;
     }
+    this.#held.set(name, held);
+  }
+
+  /**
+   * 起動時に、環境変数から拾った分を器へ書き出す。
+   *
+   * **ここだけは書けなくても memory を落とさない。** 起動時にはまだ器を読む
+   * マネージャーが1人も居ないので食い違いようがなく、逆に memory を捨てると
+   * 「器が用意できないローカルでは鍵がまったく配られない」という能力の欠落に
+   * なる（env 経由の経路は残っているのに）。失敗は `lastWriteError` に残す。
+   */
+  async flush(): Promise<CredentialFingerprint[]> {
+    for (const [name, held] of [...this.#held]) {
+      try {
+        await this.#commit(name, held);
+        this.#lastWriteError = undefined;
+      } catch (error) {
+        this.#lastWriteError = String(error);
+        process.stderr.write(
+          `alteroid-runner: 鍵を器へ書けませんでした（走行中の差し替えは届きません）: ${this.#lastWriteError}\n`,
+        );
+      }
+    }
+    return this.fingerprints();
+  }
+
+  /** 直近の書き込みに失敗していれば理由。成功していれば undefined。 */
+  get lastWriteError(): string | undefined {
+    return this.#lastWriteError;
   }
 }

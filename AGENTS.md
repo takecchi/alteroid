@@ -73,6 +73,10 @@
   - **逆に、マネージャー自身の道具の鍵（`GH_TOKEN` `CLAUDE_CODE_OAUTH_TOKEN` MCP の認証情報など）は下へ渡すのが正しい。** これを「鍵は配らない」と混同して伏せると、人間が Claude Code でできる `gh pr create` が層を下りた瞬間にできなくなる＝デグレード（north_star 禁止1）。伏せるのは**上（記憶）へ到達する鍵**だけであって、**下（外の世界）へ手を伸ばす鍵**ではない
 - SDK を実際に呼ぶ確認は `curl -N -X POST http://127.0.0.1:$PORT/chat -d '{"text":"..."}'` が手軽。ローカルの `claude` のログイン認証がそのまま使われる
 - 委譲まわりの確認は `GET /managers`（一覧と状態）、`GET /managers/:id/transcript`（生ログ）、`GET /journal?type=tool_use`（マネージャー・作業者の全ツール実行）を見る。chat からは `/managers` `/manager <id>`
+- **API の仕様は `GET /openapi.json`（OpenAPI 3.1）、人間が読むなら `GET /docs`。** 経路の zod スキーマから機械生成しており、`pnpm build` が `apps/daemon/openapi.json` を毎回書き直す。**手書きの spec を別に置かないこと**（二重管理になって必ずずれる）
+  - コミット済みの spec とコードがずれたら CI が落ちる（`.github/workflows/ci.yml` の「OpenAPI spec がコードと一致しているか」）。**経路やスキーマを変えたら `pnpm build` して `openapi.json` の差分も一緒にコミットすること**
+  - 外部向けの生成クライアントは `packages/api-client`（`openapi-typescript` + `openapi-fetch`）。**CLI はこれを使わない** — 同一リポジトリからは `hono/client` の型共有で足りているので無理に置き換えない。生成クライアントは外へ出す成果物である
+  - 対象は**デーモンの API だけ**。runner の API は制御面であって外へ出すものではない（触れると自分宛の許可確認に自分で答えられる）
 - クローンの挙動を SDK 抜きで検証したいときは `createClone({ queryFn })` に偽の `query` を渡す（`packages/core/src/clone.test.ts`）。マネージャー側は runner に偽の `query` を渡す（`createLocalRunner({ queryFn })` → `createRunnerRegistry`。`packages/core/src/manager.test.ts`）。デーモンと runner の境界そのものは `apps/daemon/src/runner-client.test.ts` が実際の HTTP 経路で通している
 
 ## クラウド構成（PostgreSQL と3コンテナ）

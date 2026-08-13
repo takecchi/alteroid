@@ -1,0 +1,3094 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "alteroid daemon API",
+    "description": "alteroidd（常駐デーモン）の HTTP API。クローンとの対話・記憶・日誌・日報・承認待ち・委譲先マネージャーの操作までを持つ。**runner の制御面（SDK の start/send/stop など）は含まない** — そこはマネージャーが自分宛の許可確認に 自分で答えられてしまう境界であり、外へ出す面ではない（docs/architecture.md 「制御面の保護」）。",
+    "version": "0.1.0"
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:4517",
+      "description": "既定の待ち受け。ポートは ALTEROID_PORT で変わる（既定 4517）。既定では 127.0.0.1 以外には開いていない（ALTEROID_BIND で変更可）。"
+    }
+  ],
+  "tags": [
+    {
+      "name": "system",
+      "description": "死活監視・停止など、デーモン自体の管理"
+    },
+    {
+      "name": "chat",
+      "description": "人間とクローンの対話（SSE）と会話終了（蒸留の契機）"
+    },
+    {
+      "name": "conversations",
+      "description": "会話の履歴。日誌から組み立てる（新しい状態は持たない）"
+    },
+    {
+      "name": "memory",
+      "description": "記憶（PersonaStore）。人間が読んでいつでも直せる Markdown 文書群"
+    },
+    {
+      "name": "journal",
+      "description": "日誌（追記専用の記録）。可観測性の中段"
+    },
+    {
+      "name": "reports",
+      "description": "日報。可観測性の最上段（人間の普段の接点はほぼこれだけ）"
+    },
+    {
+      "name": "approvals",
+      "description": "承認待ちキュー（`ask_human` の応答口）"
+    },
+    {
+      "name": "events",
+      "description": "外部イベントの入口（仕事の起点③）"
+    },
+    {
+      "name": "schedule",
+      "description": "時間起点のジョブ（起点②④）の一覧と手動起動"
+    },
+    {
+      "name": "managers",
+      "description": "委譲先マネージャーの一覧・状態・生ログ・直接の指示/停止"
+    },
+    {
+      "name": "runners",
+      "description": "委譲先 runner の名簿と、そこへ配る鍵の指紋"
+    },
+    {
+      "name": "archive",
+      "description": "セッション生ログ（可観測性の最下段）"
+    }
+  ],
+  "components": {
+    "securitySchemes": {}
+  },
+  "paths": {
+    "/livez": {
+      "get": {
+        "operationId": "getLivez",
+        "tags": ["system"],
+        "summary": "器の生存確認（鍵は要らない）",
+        "description": "デーモンのプロセスが応答しているかだけを返す。**鍵を要求しない代わりに、何も明かさない** — pid も記憶の置き場も含まない（それらは `/health`）。",
+        "responses": {
+          "200": {
+            "description": "生きている。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": ["ok"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth": {
+      "get": {
+        "operationId": "getAuth",
+        "tags": ["system"],
+        "summary": "鍵が要るかどうか（鍵は要らない）",
+        "description": "この API が本人確認を要求する構成かどうかを返す。**要求の有無は隠す価値のある秘密ではない** — 伏せると、CLI も画面も「401 が返ってきたから鍵が要るらしい」と推測することになる。",
+        "responses": {
+          "200": {
+            "description": "要否。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "required": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["required"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "operationId": "postAuthLogin",
+        "tags": ["system"],
+        "summary": "画面のためのログイン（鍵は要らない）",
+        "description": "配った鍵を、この器限りの使い捨て（cookie）に引き換える。**配った鍵そのものは cookie に入らない。** 使い捨ては発行元の鍵に結び付いていて、その鍵が取り下げられた時点で通らなくなる（失くした端末をデーモンを止めずに締め出せる）。",
+        "responses": {
+          "200": {
+            "description": "引き換えた。`Set-Cookie` に使い捨てが乗る。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": ["ok"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が不正。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {},
+                    "error": {
+                      "type": "array",
+                      "items": {}
+                    },
+                    "success": {
+                      "type": "boolean",
+                      "const": false
+                    }
+                  },
+                  "required": ["data", "error", "success"]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "配った鍵と一致しない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "鍵が配られていない構成（ログインは要らない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": ["token"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "operationId": "postAuthLogout",
+        "tags": ["system"],
+        "summary": "この画面だけを締め出す",
+        "description": "手元の使い捨てを捨てる。**他の端末は生きたまま**である（配った鍵ごと取り下げたいなら、鍵の一覧から消す）。本文は無い。",
+        "responses": {
+          "200": {
+            "description": "締め出した。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": ["ok"]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "content-type が application/json ではない（ブラウザの単純リクエスト対策 — 状態を変える POST は必ずここを通す）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "getHealth",
+        "tags": ["system"],
+        "summary": "死活監視と本人確認",
+        "description": "デーモンが応答しているかと、その pid・本人確認トークン・記憶の置き場を返す。CLI は pid ではなくこのトークンで「自分が起こしたデーモンか」を確かめる。",
+        "responses": {
+          "200": {
+            "description": "応答している。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "pid": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "token": {
+                      "type": "string"
+                    },
+                    "storage": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["ok", "pid", "token", "storage"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat": {
+      "post": {
+        "operationId": "postChat",
+        "tags": ["chat"],
+        "summary": "クローンと話す（SSE）",
+        "description": "人間の発言をクローンの受信箱へ積み、クローンの応答を SSE で流す。**SSE。** `event:` にイベント名（`open` / `text` / `thinking` / `tool` / `ask_human` / `done` / `error`）、`data:` に対応する JSON が入る。`data:` の 形は下記スキーマ（`open` は `{conversationId}` のみで別枠、他は `chatStreamEventSchema` の各枝）。人間が chat を閉じてもクローンのターンは走り続ける（人間の不在で止まるのは承認待ちの仕事だけ）。",
+        "responses": {
+          "200": {
+            "description": "SSE ストリーム。",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "text"
+                        },
+                        "text": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["type", "text"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "thinking"
+                        }
+                      },
+                      "required": ["type"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "tool"
+                        },
+                        "tool": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["type", "tool"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "ask_human"
+                        },
+                        "approvalId": {
+                          "type": "string"
+                        },
+                        "question": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["type", "approvalId", "question"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "done"
+                        }
+                      },
+                      "required": ["type"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "error"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["type", "message"]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`text` が空、または本文が JSON として不正。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {},
+                    "error": {
+                      "type": "array",
+                      "items": {}
+                    },
+                    "success": {
+                      "type": "boolean",
+                      "const": false
+                    }
+                  },
+                  "required": ["data", "error", "success"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "conversationId": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": ["text"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat/{conversationId}/end": {
+      "post": {
+        "operationId": "postChatByConversationIdEnd",
+        "tags": ["chat"],
+        "summary": "会話の終了（蒸留の契機）",
+        "description": "会話の終了 = 蒸留の契機。CLI が chat を抜けるときに叩く。本文は無い。",
+        "responses": {
+          "200": {
+            "description": "蒸留を促した。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": ["ok"]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "content-type が application/json ではない（ブラウザの単純リクエスト対策 — 状態を変える POST は必ずここを通す）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "conversationId",
+            "required": true
+          }
+        ]
+      }
+    },
+    "/conversations": {
+      "get": {
+        "operationId": "getConversations",
+        "tags": ["conversations"],
+        "summary": "会話の一覧",
+        "description": "`POST /chat` の SSE は流すだけで読み直す口が無かった。器（端末・タブ・アプリ）を替えても続きから話せるための一覧。日誌から組み立てるので新しい状態は持たない。新しい順。`scanned` で遡り切れていないことが分かる（黙って打ち切らない）。",
+        "responses": {
+          "200": {
+            "description": "会話の一覧（新しい順）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "conversations": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "conversationId": {
+                            "type": "string"
+                          },
+                          "startedAt": {
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "type": "string"
+                          },
+                          "messages": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "preview": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "conversationId",
+                          "startedAt",
+                          "updatedAt",
+                          "messages",
+                          "preview"
+                        ]
+                      }
+                    },
+                    "scanned": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": ["conversations", "scanned"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "クエリが不正。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {},
+                    "error": {
+                      "type": "array",
+                      "items": {}
+                    },
+                    "success": {
+                      "type": "boolean",
+                      "const": false
+                    }
+                  },
+                  "required": ["data", "error", "success"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 20,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          {
+            "in": "query",
+            "name": "scan",
+            "schema": {
+              "default": 2000,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            }
+          }
+        ]
+      }
+    },
+    "/conversations/{id}": {
+      "get": {
+        "operationId": "getConversationsById",
+        "tags": ["conversations"],
+        "summary": "1つの会話の中身（古い順）",
+        "description": "1つの会話の中身（古い順）。器を替えても続きから話せるための口。",
+        "responses": {
+          "200": {
+            "description": "会話の中身。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "conversationId": {
+                      "type": "string"
+                    },
+                    "messages": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "at": {
+                            "type": "string"
+                          },
+                          "role": {
+                            "type": "string",
+                            "enum": ["inbound", "outbound"]
+                          },
+                          "text": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["id", "at", "role", "text"]
+                      }
+                    }
+                  },
+                  "required": ["conversationId", "messages"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "クエリが不正。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {},
+                    "error": {
+                      "type": "array",
+                      "items": {}
+                    },
+                    "success": {
+                      "type": "boolean",
+                      "const": false
+                    }
+                  },
+                  "required": ["data", "error", "success"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "該当する会話が無い（内部ターン `self` は含まれない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "scan",
+            "schema": {
+              "default": 2000,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            }
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      }
+    },
+    "/journal/stream": {
+      "get": {
+        "operationId": "getJournalStream",
+        "tags": ["journal"],
+        "summary": "日誌の追記をそのまま流す（SSE）",
+        "description": "日誌に載ったものがそのまま流れる（聞きに行かなくても承認待ちの発生に気づける）。**SSE。** `event:` に日誌エントリ種別（`open` に加え、`exchange` / `decision` / `escalation` / `tool_use` / `memory_update` / `daily_report` / `external_event`）、`data:` に日誌エントリ本体（`open` は `{ok:true}` のみ別枠）。`type` クエリで絞り込めるが、選り分ける表は持たない（絞り込みは呼ぶ側が決める）。",
+        "responses": {
+          "200": {
+            "description": "SSE ストリーム。",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "exchange"
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "with": {
+                          "type": "string",
+                          "enum": ["human", "manager", "self"]
+                        },
+                        "role": {
+                          "type": "string",
+                          "enum": ["inbound", "outbound"]
+                        },
+                        "text": {
+                          "type": "string"
+                        },
+                        "conversationId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["type", "id", "at", "with", "role", "text"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "decision"
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "decision": {
+                          "type": "string"
+                        },
+                        "grounds": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["type", "id", "at", "decision", "grounds"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "escalation"
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "question": {
+                          "type": "string"
+                        },
+                        "approvalId": {
+                          "type": "string"
+                        },
+                        "managerId": {
+                          "type": "string"
+                        },
+                        "answeredAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "answer": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["type", "id", "at", "question", "approvalId"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "tool_use"
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "actor": {
+                          "type": "string"
+                        },
+                        "tool": {
+                          "type": "string"
+                        },
+                        "input": {}
+                      },
+                      "required": ["type", "id", "at", "actor", "tool", "input"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "memory_update"
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "slug": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                        },
+                        "cause": {
+                          "type": "string",
+                          "enum": ["distill", "clone", "human"]
+                        },
+                        "summary": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["type", "id", "at", "slug", "cause", "summary"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "daily_report"
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "date": {
+                          "type": "string"
+                        },
+                        "body": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["type", "id", "at", "date", "body"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "external_event"
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "source": {
+                          "type": "string"
+                        },
+                        "summary": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["type", "id", "at", "source", "summary"]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "クエリが不正。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {},
+                    "error": {
+                      "type": "array",
+                      "items": {}
+                    },
+                    "success": {
+                      "type": "boolean",
+                      "const": false
+                    }
+                  },
+                  "required": ["data", "error", "success"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "出来事の流れが配線されていない（能力を落とさず、黙って隠さない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "type",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/memory": {
+      "get": {
+        "operationId": "getMemory",
+        "tags": ["memory"],
+        "summary": "記憶文書の一覧",
+        "description": "記憶（PersonaStore）の文書一覧。本文は含まない（メタ情報だけ）。",
+        "responses": {
+          "200": {
+            "description": "記憶文書のメタ情報一覧。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "slug": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 128,
+                            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "bytes": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": ["slug", "title", "updatedAt", "bytes"]
+                      }
+                    }
+                  },
+                  "required": ["documents"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/memory/{slug}": {
+      "get": {
+        "operationId": "getMemoryBySlug",
+        "tags": ["memory"],
+        "summary": "記憶文書を1つ読む",
+        "responses": {
+          "200": {
+            "description": "記憶文書。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "document": {
+                      "type": "object",
+                      "properties": {
+                        "slug": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "updatedAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "bytes": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "content": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["slug", "title", "updatedAt", "bytes", "content"]
+                    }
+                  },
+                  "required": ["document"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "該当する記憶が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "slug",
+            "required": true
+          }
+        ]
+      },
+      "put": {
+        "operationId": "putMemoryBySlug",
+        "tags": ["memory"],
+        "summary": "記憶文書を全文置換で書く",
+        "description": "人間が API から記憶を書き換える口。書き換えは日誌に残る（`cause: human`）。",
+        "responses": {
+          "200": {
+            "description": "書き換え後の記憶文書。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "document": {
+                      "type": "object",
+                      "properties": {
+                        "slug": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "updatedAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "bytes": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "content": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["slug", "title", "updatedAt", "bytes", "content"]
+                    }
+                  },
+                  "required": ["document"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "記憶のスラッグが不正、または本文が JSON として不正。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {},
+                        "error": {
+                          "type": "array",
+                          "items": {}
+                        },
+                        "success": {
+                          "type": "boolean",
+                          "const": false
+                        }
+                      },
+                      "required": ["data", "error", "success"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["error"]
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "content": {
+                    "type": "string"
+                  }
+                },
+                "required": ["content"]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "slug",
+            "required": true
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "deleteMemoryBySlug",
+        "tags": ["memory"],
+        "summary": "記憶文書を消す",
+        "description": "書けるのに消せないと、間違って作った記憶が永久に判断の材料に残る。消した事実は日誌に残る（`cause: human`）ので、記憶から消えても記録からは消えない。",
+        "responses": {
+          "200": {
+            "description": "消した。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "slug": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["ok", "slug"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "記憶のスラッグが名前として成立しない（「無い」とは区別する）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "該当する記憶が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "slug",
+            "required": true
+          }
+        ]
+      }
+    },
+    "/journal": {
+      "get": {
+        "operationId": "getJournal",
+        "tags": ["journal"],
+        "summary": "日誌を読む",
+        "description": "日誌（追記専用の記録）を新しい順に読む。`type` `since` で掘れる。",
+        "responses": {
+          "200": {
+            "description": "日誌エントリの一覧（新しい順）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "const": "exchange"
+                              },
+                              "id": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              },
+                              "with": {
+                                "type": "string",
+                                "enum": ["human", "manager", "self"]
+                              },
+                              "role": {
+                                "type": "string",
+                                "enum": ["inbound", "outbound"]
+                              },
+                              "text": {
+                                "type": "string"
+                              },
+                              "conversationId": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["type", "id", "at", "with", "role", "text"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "const": "decision"
+                              },
+                              "id": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              },
+                              "decision": {
+                                "type": "string"
+                              },
+                              "grounds": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["type", "id", "at", "decision", "grounds"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "const": "escalation"
+                              },
+                              "id": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              },
+                              "question": {
+                                "type": "string"
+                              },
+                              "approvalId": {
+                                "type": "string"
+                              },
+                              "managerId": {
+                                "type": "string"
+                              },
+                              "answeredAt": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              },
+                              "answer": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["type", "id", "at", "question", "approvalId"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "const": "tool_use"
+                              },
+                              "id": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              },
+                              "actor": {
+                                "type": "string"
+                              },
+                              "tool": {
+                                "type": "string"
+                              },
+                              "input": {}
+                            },
+                            "required": ["type", "id", "at", "actor", "tool", "input"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "const": "memory_update"
+                              },
+                              "id": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              },
+                              "slug": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 128,
+                                "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                              },
+                              "cause": {
+                                "type": "string",
+                                "enum": ["distill", "clone", "human"]
+                              },
+                              "summary": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["type", "id", "at", "slug", "cause", "summary"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "const": "daily_report"
+                              },
+                              "id": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              },
+                              "date": {
+                                "type": "string"
+                              },
+                              "body": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["type", "id", "at", "date", "body"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "const": "external_event"
+                              },
+                              "id": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              },
+                              "source": {
+                                "type": "string"
+                              },
+                              "summary": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["type", "id", "at", "source", "summary"]
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "required": ["entries"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "クエリが不正。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {},
+                    "error": {
+                      "type": "array",
+                      "items": {}
+                    },
+                    "success": {
+                      "type": "boolean",
+                      "const": false
+                    }
+                  },
+                  "required": ["data", "error", "success"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 50,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "type",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/reports": {
+      "get": {
+        "operationId": "getReports",
+        "tags": ["reports"],
+        "summary": "日報の一覧",
+        "description": "日報（可観測性の最上段）を新しい順に読む。",
+        "responses": {
+          "200": {
+            "description": "日報の一覧（新しい順）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "reports": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "daily_report"
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "at": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "date": {
+                            "type": "string"
+                          },
+                          "body": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["type", "id", "at", "date", "body"]
+                      }
+                    }
+                  },
+                  "required": ["reports"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "クエリが不正。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {},
+                    "error": {
+                      "type": "array",
+                      "items": {}
+                    },
+                    "success": {
+                      "type": "boolean",
+                      "const": false
+                    }
+                  },
+                  "required": ["data", "error", "success"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 7,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 365
+            }
+          }
+        ]
+      }
+    },
+    "/reports/{date}": {
+      "get": {
+        "operationId": "getReportsByDate",
+        "tags": ["reports"],
+        "summary": "1日分の日報",
+        "responses": {
+          "200": {
+            "description": "その日の日報。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "reports": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "daily_report"
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "at": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "date": {
+                            "type": "string"
+                          },
+                          "body": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["type", "id", "at", "date", "body"]
+                      }
+                    }
+                  },
+                  "required": ["reports"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "日付が `YYYY-MM-DD` 形式ではない（黙って別の日にずらさない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "その日の日報が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "date",
+            "required": true
+          }
+        ]
+      }
+    },
+    "/approvals": {
+      "get": {
+        "operationId": "getApprovals",
+        "tags": ["approvals"],
+        "summary": "承認待ちの一覧",
+        "description": "`ask_human` が積んだ承認待ち。既定では未回答のみ（`pending=false` で全部）。",
+        "responses": {
+          "200": {
+            "description": "承認待ちの一覧。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "approvals": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "question": {
+                            "type": "string"
+                          },
+                          "context": {
+                            "type": "string"
+                          },
+                          "jobId": {
+                            "type": "string"
+                          },
+                          "requestId": {
+                            "type": "string"
+                          },
+                          "answeredAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "answer": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["id", "createdAt", "question"]
+                      }
+                    }
+                  },
+                  "required": ["approvals"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "クエリが不正。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {},
+                    "error": {
+                      "type": "array",
+                      "items": {}
+                    },
+                    "success": {
+                      "type": "boolean",
+                      "const": false
+                    }
+                  },
+                  "required": ["data", "error", "success"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "pending",
+            "schema": {
+              "default": "true",
+              "type": "string",
+              "enum": ["true", "false"]
+            }
+          }
+        ]
+      }
+    },
+    "/approvals/answer": {
+      "post": {
+        "operationId": "postApprovalsAnswer",
+        "tags": ["approvals"],
+        "summary": "溜まった承認待ちにまとめて答える",
+        "description": "1件が駄目でも残りは進める（人間の不在で止まっていたそれぞれの仕事が、答えた順に独立に再開する）。結果は `answers` と同じ順で返る。",
+        "responses": {
+          "200": {
+            "description": "各件の結果（1件ごとの成否）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "ok": {
+                            "type": "boolean"
+                          },
+                          "error": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["id", "ok"]
+                      }
+                    }
+                  },
+                  "required": ["results"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が JSON として不正。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {},
+                    "error": {
+                      "type": "array",
+                      "items": {}
+                    },
+                    "success": {
+                      "type": "boolean",
+                      "const": false
+                    }
+                  },
+                  "required": ["data", "error", "success"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "answers": {
+                    "minItems": 1,
+                    "maxItems": 200,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "answer": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": ["id", "answer"]
+                    }
+                  }
+                },
+                "required": ["answers"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/approvals/{id}/answer": {
+      "post": {
+        "operationId": "postApprovalsByIdAnswer",
+        "tags": ["approvals"],
+        "summary": "承認待ちに1件答える",
+        "description": "二度答えると、既に再開した仕事へ同じ回答がもう一度流れ、記録上の回答も上書きされる。答え直したいなら新しい確認として来るのが正しい（→ 409）。",
+        "responses": {
+          "200": {
+            "description": "答えた。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": ["ok"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が JSON として不正。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {},
+                    "error": {
+                      "type": "array",
+                      "items": {}
+                    },
+                    "success": {
+                      "type": "boolean",
+                      "const": false
+                    }
+                  },
+                  "required": ["data", "error", "success"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "該当する承認待ちが無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "既に回答済み。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "answer": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": ["answer"]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      }
+    },
+    "/events": {
+      "post": {
+        "operationId": "postEvents",
+        "tags": ["events"],
+        "summary": "外部イベントをクローンへ届ける",
+        "description": "自作ツール・ショートカット・CI からクローンへ出来事を届ける。何をするかはここで決めない（対応表を持った瞬間に自動化ジョブに戻る）。",
+        "responses": {
+          "200": {
+            "description": "受信箱へ積んだ。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["ok", "id"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が JSON として不正。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {},
+                    "error": {
+                      "type": "array",
+                      "items": {}
+                    },
+                    "success": {
+                      "type": "boolean",
+                      "const": false
+                    }
+                  },
+                  "required": ["data", "error", "success"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "payload": {}
+                },
+                "required": ["source"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/events/{source}": {
+      "post": {
+        "operationId": "postEventsBySource",
+        "tags": ["events"],
+        "summary": "本文の形を選べない webhook 用の入口",
+        "description": "他人が形を決めている webhook 用。本文をそのまま payload として運ぶので、送り元を改造できなくても届く（GitHub や CI からそのまま叩ける）。JSON として読めない本文は文字列のまま渡す。",
+        "responses": {
+          "200": {
+            "description": "受信箱へ積んだ。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["ok", "id"]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "content-type が application/json ではない（ブラウザの単純リクエスト対策 — 状態を変える POST は必ずここを通す）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "source",
+            "required": true
+          }
+        ]
+      }
+    },
+    "/schedule": {
+      "get": {
+        "operationId": "getSchedule",
+        "tags": ["schedule"],
+        "summary": "定期ジョブの一覧と次の発火時刻",
+        "responses": {
+          "200": {
+            "description": "定期ジョブの一覧。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string"
+                          },
+                          "description": {
+                            "type": "string"
+                          },
+                          "nextAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["kind", "description", "nextAt"]
+                      }
+                    }
+                  },
+                  "required": ["entries"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/schedule/{kind}/run": {
+      "post": {
+        "operationId": "postScheduleByKindRun",
+        "tags": ["schedule"],
+        "summary": "定期ジョブを今すぐ起こす",
+        "description": "これは観測ではなく実行である。起こせばクローンのターンが走り、記憶に基づく委譲や外部への操作の判断まで動く。予定はずらさない（余分に1回起こす）。",
+        "responses": {
+          "200": {
+            "description": "起こした。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": ["ok"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "知らない kind。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "content-type が application/json ではない（ブラウザの単純リクエスト対策 — 状態を変える POST は必ずここを通す）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "kind",
+            "required": true
+          }
+        ]
+      }
+    },
+    "/managers": {
+      "get": {
+        "operationId": "getManagers",
+        "tags": ["managers"],
+        "summary": "委譲先マネージャーの一覧",
+        "responses": {
+          "200": {
+            "description": "マネージャーの一覧と状態。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "managers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "managerId": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": ["running", "waiting_human", "done", "failed"]
+                          },
+                          "live": {
+                            "type": "boolean"
+                          },
+                          "cwd": {
+                            "type": "string"
+                          },
+                          "request": {
+                            "type": "string"
+                          },
+                          "startedAt": {
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "type": "string"
+                          },
+                          "sessionId": {
+                            "type": "string"
+                          },
+                          "lastReport": {
+                            "type": "string"
+                          },
+                          "runnerId": {
+                            "type": "string"
+                          },
+                          "workspace": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "runner-volume"
+                                  },
+                                  "runnerId": {
+                                    "type": "string"
+                                  },
+                                  "path": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["kind", "runnerId", "path"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "shared-volume"
+                                  },
+                                  "path": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["kind", "path"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "git"
+                                  },
+                                  "repository": {
+                                    "type": "string"
+                                  },
+                                  "ref": {
+                                    "type": "string"
+                                  },
+                                  "patchId": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["kind", "repository", "ref"]
+                              }
+                            ]
+                          },
+                          "waiting": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "requestId": {
+                                  "type": "string"
+                                },
+                                "summary": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["requestId", "summary"]
+                            }
+                          }
+                        },
+                        "required": [
+                          "managerId",
+                          "status",
+                          "live",
+                          "cwd",
+                          "request",
+                          "startedAt",
+                          "updatedAt",
+                          "waiting"
+                        ]
+                      }
+                    }
+                  },
+                  "required": ["managers"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/managers/{id}": {
+      "get": {
+        "operationId": "getManagersById",
+        "tags": ["managers"],
+        "summary": "1本のマネージャーの状態",
+        "responses": {
+          "200": {
+            "description": "マネージャーの状態。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "manager": {
+                      "type": "object",
+                      "properties": {
+                        "managerId": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": ["running", "waiting_human", "done", "failed"]
+                        },
+                        "live": {
+                          "type": "boolean"
+                        },
+                        "cwd": {
+                          "type": "string"
+                        },
+                        "request": {
+                          "type": "string"
+                        },
+                        "startedAt": {
+                          "type": "string"
+                        },
+                        "updatedAt": {
+                          "type": "string"
+                        },
+                        "sessionId": {
+                          "type": "string"
+                        },
+                        "lastReport": {
+                          "type": "string"
+                        },
+                        "runnerId": {
+                          "type": "string"
+                        },
+                        "workspace": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "runner-volume"
+                                },
+                                "runnerId": {
+                                  "type": "string"
+                                },
+                                "path": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["kind", "runnerId", "path"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "shared-volume"
+                                },
+                                "path": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["kind", "path"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "git"
+                                },
+                                "repository": {
+                                  "type": "string"
+                                },
+                                "ref": {
+                                  "type": "string"
+                                },
+                                "patchId": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["kind", "repository", "ref"]
+                            }
+                          ]
+                        },
+                        "waiting": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "requestId": {
+                                "type": "string"
+                              },
+                              "summary": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["requestId", "summary"]
+                          }
+                        }
+                      },
+                      "required": [
+                        "managerId",
+                        "status",
+                        "live",
+                        "cwd",
+                        "request",
+                        "startedAt",
+                        "updatedAt",
+                        "waiting"
+                      ]
+                    }
+                  },
+                  "required": ["manager"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "該当するマネージャーが無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "deleteManagersById",
+        "tags": ["managers"],
+        "summary": "この仕事をやめさせる",
+        "description": "暴走を止める手段が「器ごと落とす」しか無いと、関係の無い仕事まで道連れになる。この口は1本だけを止める。止めた事実は日誌に残る。",
+        "responses": {
+          "200": {
+            "description": "止めた。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "outcome": {
+                      "type": "string",
+                      "enum": ["answered", "delivered", "stopped"]
+                    },
+                    "detail": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["outcome", "detail"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が JSON として不正。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {},
+                    "error": {
+                      "type": "array",
+                      "items": {}
+                    },
+                    "success": {
+                      "type": "boolean",
+                      "const": false
+                    }
+                  },
+                  "required": ["data", "error", "success"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "該当するマネージャーが無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      }
+    },
+    "/managers/{id}/transcript": {
+      "get": {
+        "operationId": "getManagersByIdTranscript",
+        "tags": ["managers"],
+        "summary": "マネージャーの生ログ",
+        "description": "manager_id からそのセッションの生ログへ。走行中ならファイルの上、退避済みならアーカイブから返る（可観測性3層の最下段）。",
+        "responses": {
+          "200": {
+            "description": "生ログ（JSONL の生テキスト）。",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "該当するマネージャーの生ログが無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      }
+    },
+    "/managers/{id}/messages": {
+      "post": {
+        "operationId": "postManagersByIdMessages",
+        "tags": ["managers"],
+        "summary": "人間からマネージャーへ直接話しかける",
+        "description": "これが無いと、人間の言葉はクローンを経由してしか届かない。クローンの代わりに判断するための口ではない（判断はクローンの仕事のまま）。人間が自分の言葉を自分で届けるための口である。許可確認への回答なら `requestId` を付ける。",
+        "responses": {
+          "200": {
+            "description": "届いた（`answered` / `delivered`）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "outcome": {
+                      "type": "string",
+                      "enum": ["answered", "delivered", "stopped"]
+                    },
+                    "detail": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["outcome", "detail"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が JSON として不正。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {},
+                    "error": {
+                      "type": "array",
+                      "items": {}
+                    },
+                    "success": {
+                      "type": "boolean",
+                      "const": false
+                    }
+                  },
+                  "required": ["data", "error", "success"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "該当するマネージャーが無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "requestId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "decision": {
+                    "type": "string",
+                    "enum": ["allow", "deny"]
+                  }
+                },
+                "required": ["text"]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      }
+    },
+    "/runners": {
+      "get": {
+        "operationId": "getRunners",
+        "tags": ["runners"],
+        "summary": "委譲先 runner の一覧と、配られている鍵の指紋",
+        "description": "指紋を出すのは、人間が置いた鍵とマネージャーが握っている鍵が同じかどうかを確かめる手段が他に無いからである。**値は返らない。**",
+        "responses": {
+          "200": {
+            "description": "runner の一覧。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "runners": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "runnerId": {
+                            "type": "string"
+                          },
+                          "workspacePath": {
+                            "type": "string"
+                          },
+                          "credentials": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "sha256": {
+                                  "type": "string"
+                                },
+                                "updatedAt": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["name", "sha256", "updatedAt"]
+                            }
+                          }
+                        },
+                        "required": ["runnerId", "workspacePath", "credentials"]
+                      }
+                    }
+                  },
+                  "required": ["runners"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/runners/credentials": {
+      "post": {
+        "operationId": "postRunnersCredentials",
+        "tags": ["runners"],
+        "summary": "マネージャーの道具の鍵を差し替える",
+        "description": "器を作り直さない。鍵はここに保管せず、受け取って全 runner へ降ろすだけである（デーモンの器に記憶の鍵と GitHub の書き込み権を並べない）。",
+        "responses": {
+          "200": {
+            "description": "各 runner への配布結果。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "runnerId": {
+                            "type": "string"
+                          },
+                          "ok": {
+                            "type": "boolean"
+                          },
+                          "credentials": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "sha256": {
+                                  "type": "string"
+                                },
+                                "updatedAt": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["name", "sha256", "updatedAt"]
+                            }
+                          },
+                          "error": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["runnerId", "ok"]
+                      }
+                    }
+                  },
+                  "required": ["results"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が JSON として不正。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {},
+                    "error": {
+                      "type": "array",
+                      "items": {}
+                    },
+                    "success": {
+                      "type": "boolean",
+                      "const": false
+                    }
+                  },
+                  "required": ["data", "error", "success"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "runner が登録されていない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "credentials": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Z][A-Z0-9_]*$"
+                        },
+                        "value": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["name", "value"]
+                    }
+                  }
+                },
+                "required": ["credentials"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/archive": {
+      "get": {
+        "operationId": "getArchive",
+        "tags": ["archive"],
+        "summary": "アーカイブ済みセッション生ログの一覧",
+        "description": "セッション生ログ（可観測性の最下段）の id 一覧。",
+        "responses": {
+          "200": {
+            "description": "アーカイブ id の一覧。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": ["entries"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/archive/{id}": {
+      "get": {
+        "operationId": "getArchiveById",
+        "tags": ["archive"],
+        "summary": "アーカイブ済み生ログを1件読む",
+        "responses": {
+          "200": {
+            "description": "生ログ（JSONL の生テキスト）。",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "該当するアーカイブが無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      }
+    },
+    "/shutdown": {
+      "post": {
+        "operationId": "postShutdown",
+        "tags": ["system"],
+        "summary": "デーモンを止める",
+        "description": "`daemon stop` の受け口。本文は無い。",
+        "responses": {
+          "200": {
+            "description": "停止を受け付けた（実際の停止は少し遅れる）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": ["ok"]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "content-type が application/json ではない（ブラウザの単純リクエスト対策 — 状態を変える POST は必ずここを通す）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
