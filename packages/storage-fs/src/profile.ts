@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, rename, rm, stat, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, rename, rm, stat, readFile, utimes, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import type { EnvProfile, ProfileStore } from '@alteroid/core';
@@ -57,5 +57,22 @@ export class FsProfileStore implements ProfileStore {
       throw error;
     }
     return { script, updatedAt: at };
+  }
+
+  /**
+   * 取り消した更新をなかったことにする。
+   *
+   * **mtime も戻す。** ここは `read()` が `updatedAt` として返す値であり、
+   * 人間が `profile status` で見る「最後に本文を変えた時刻」である。本文だけ戻して
+   * 時刻を進めると、成功していない更新が最後の変更として表示される。
+   */
+  async revert(previous: EnvProfile | null): Promise<void> {
+    if (previous === null) {
+      await rm(this.#path, { force: true });
+      return;
+    }
+    await this.write(previous.script);
+    const at = new Date(previous.updatedAt);
+    await utimes(this.#path, at, at);
   }
 }

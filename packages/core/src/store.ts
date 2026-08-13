@@ -137,6 +137,18 @@ export interface ProfileStore {
   read(): Promise<EnvProfile | null>;
   /** 全文置換。空文字は「プロファイルを外す」。 */
   write(script: string): Promise<EnvProfile>;
+  /**
+   * **取り消した更新をなかったことにする**（本文と更新日時を組で戻す）。
+   *
+   * `write` で戻すと本文は元に戻っても `updatedAt` が失敗した時刻へ進む。
+   * そこは「人間かクローンが最後に**本文を変えた**時刻」であって、`profile status`
+   * と `GET /profile` が見せる監査情報である。成功していない更新でそこが動くと、
+   * 起動のたびに動いていたときと同じ意味の壊れ方をする。
+   *
+   * `null` は「置かれていなかった状態へ戻す」。**通常の書き込みに使わないこと** —
+   * 更新日時を呼び出し側が決められる口なので、失敗の巻き戻し専用である。
+   */
+  revert(previous: EnvProfile | null): Promise<void>;
 }
 
 /** クローンのセッション id を跨いで覚えておくための最小の永続化。 */

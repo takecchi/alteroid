@@ -452,6 +452,47 @@ describe('FsTranscriptArchive', () => {
   });
 });
 
+/**
+ * 実行環境プロファイル。
+ *
+ * **`revert` は本文と更新日時を組で戻す。** ここは人間が `profile status` で見る
+ * 「最後に本文を変えた時刻」であり、取り消された更新でそこが動くと、成功して
+ * いない更新が最後の変更として表示される（デーモンを起こすたびに動いていたのと
+ * 同じ意味の壊れ方）。**器が違っても同じ振る舞いになること**を fs / pg の両方で問う。
+ */
+describe('FsProfileStore', () => {
+  it('置いて読める。空文字で外れる', async () => {
+    expect(await stores.profile.read()).toBeNull();
+
+    await stores.profile.write('export A=1\n');
+    expect((await stores.profile.read())?.script).toBe('export A=1\n');
+
+    await stores.profile.write('');
+    expect(await stores.profile.read()).toBeNull();
+  });
+
+  it('revert は本文だけでなく更新日時も戻す', async () => {
+    await stores.profile.write('export WHICH=old\n');
+    const before = await stores.profile.read();
+
+    // 時刻が確実に進むまで待ってから、失敗する更新を模す。
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await stores.profile.write('export WHICH=new\n');
+    expect((await stores.profile.read())?.updatedAt).not.toBe(before?.updatedAt);
+
+    await stores.profile.revert(before);
+
+    // **まるごと一致すること。** 本文だけ戻して時刻が進むと監査情報が嘘になる。
+    expect(await stores.profile.read()).toEqual(before);
+  });
+
+  it('置かれていなかった状態へも戻せる', async () => {
+    await stores.profile.write('export WHICH=new\n');
+    await stores.profile.revert(null);
+    expect(await stores.profile.read()).toBeNull();
+  });
+});
+
 describe('FsSessionRegistry', () => {
   it('セッション id を覚えて忘れられる', async () => {
     expect(await stores.sessions.getCloneSessionId()).toBeNull();

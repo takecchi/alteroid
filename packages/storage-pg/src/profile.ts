@@ -48,4 +48,25 @@ export class PgProfileStore implements ProfileStore {
       .onConflictDoUpdate({ target: envProfile.id, set: { script, updatedAt: at } });
     return { script, updatedAt: at.toISOString() };
   }
+
+  /**
+   * 取り消した更新をなかったことにする。
+   *
+   * **`updated_at` も戻す。** ここは人間が `profile status` で見る「最後に本文を
+   * 変えた時刻」であり、成功していない更新でそこが動くと監査情報が嘘になる。
+   */
+  async revert(previous: EnvProfile | null): Promise<void> {
+    if (previous === null) {
+      await this.#db.delete(envProfile).where(eq(envProfile.id, PROFILE_ID));
+      return;
+    }
+    const at = new Date(previous.updatedAt);
+    await this.#db
+      .insert(envProfile)
+      .values({ id: PROFILE_ID, script: previous.script, updatedAt: at })
+      .onConflictDoUpdate({
+        target: envProfile.id,
+        set: { script: previous.script, updatedAt: at },
+      });
+  }
 }

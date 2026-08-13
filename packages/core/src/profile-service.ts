@@ -192,7 +192,10 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
            */
           await prepared?.discard();
           try {
-            await stores.profile.write(previous?.script ?? '');
+            // **本文と更新日時を組で戻す。** `write` で戻すと本文は元に戻っても
+            // `updatedAt` が失敗した時刻へ進み、成功していない更新が「最後の変更」
+            // として `profile status` に出る（起動のたびに動いていたのと同じ壊れ方）。
+            await stores.profile.revert(previous);
           } catch (rollbackError) {
             // **黙って握り潰さない。** ここまで来ると正本＝新版・クローン＝旧版が
             // 残るので、人間が手で直せるように両方の理由を出す。

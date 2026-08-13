@@ -89,6 +89,7 @@ function tripwire(stores: Stores, runner: RunnerClient & { received: string[] })
       return store.read();
     },
     write: (script: string) => store.write(script),
+    revert: (previous) => store.revert(previous),
   };
 
   const push = runner.setProfile.bind(runner);
@@ -322,8 +323,12 @@ describe('同時に更新されたとき', () => {
     );
     expect(failure).not.toBeNull();
 
-    // ① 正本は旧版に戻っている（更新日時は動くが、本文は直前の版）
-    expect((await stores.profile.read())?.script).toBe(before?.script);
+    // ① 正本は**まるごと**旧版に戻っている。
+    //
+    // **本文だけを見ない。** 取り消した更新で `updatedAt` が進むと、成功して
+    // いない更新が「最後に本文を変えた時刻」として `profile status` に出る
+    // （デーモンを起こすたびに動いていたのと同じ意味の壊れ方である）。
+    expect(await stores.profile.read()).toEqual(before);
     // ② クローンの器も旧版のまま
     expect(readFileSync(path, 'utf8')).toContain('export WHICH=OLD');
     expect(real.env().WHICH).toBe('OLD');
@@ -342,6 +347,34 @@ describe('同時に更新されたとき', () => {
     const next = await service.apply('export WHICH=NEXT');
     expect(next.stored).toBe(true);
     expect(runner.received.at(-1)).toBe('export WHICH=NEXT\n');
+  });
+
+  it('正本を書き戻せなかったら、その事実を理由つきで投げる', async () => {
+    // ここまで来ると正本＝新版・クローン＝旧版が残る。**黙って握り潰さない。**
+    const stores = createMemoryStores();
+    const path = join(dir, 'profile.sh');
+    const real = createProfileApplier({
+      vessel: createProfileVessel({ path }),
+      baseEnv: () => ({}),
+    });
+    const applier: ProfileApplier = {
+      ...real,
+      async prepare(script: string) {
+        const prepared = await real.prepare(script);
+        return {
+          ...prepared,
+          commit: async () => {
+            throw new Error('器へ移せなかった');
+          },
+        };
+      },
+    };
+    stores.profile.revert = async () => {
+      throw new Error('記憶ストアも落ちている');
+    };
+    const service = createProfileService({ stores, applier });
+
+    await expect(service.apply('export WHICH=NEW')).rejects.toThrow(/正本だけ新版のまま残っている/);
   });
 
   it('読めない本文で列が止まらない（次の更新は通る）', async () => {

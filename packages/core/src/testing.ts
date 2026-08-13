@@ -250,6 +250,9 @@ export function createMemoryStores(): Stores {
         script.trim().length === 0 ? null : { script, updatedAt: new Date().toISOString() };
       return envProfile ?? { script: '', updatedAt: new Date().toISOString() };
     },
+    async revert(previous) {
+      envProfile = previous;
+    },
   };
 
   return {
