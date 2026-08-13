@@ -9,6 +9,7 @@
       "packages/**",
       "Dockerfile",
       ".dockerignore",
+      "docker/**",
       "package.json",
       "pnpm-lock.yaml",
       "pnpm-workspace.yaml",
@@ -17,7 +18,7 @@
     ]
   },
   "deploy": {
-    "startCommand": "node apps/daemon/dist/index.js",
+    "startCommand": "alteroidd",
     "restartPolicyType": "ALWAYS",
     "drainingSeconds": 60,
     "restartPolicyMaxRetries": 100

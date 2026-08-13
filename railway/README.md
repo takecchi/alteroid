@@ -21,15 +21,15 @@ Railway はサービス間でボリュームを共有できないので、共有
 | 合鍵は runner にはハッシュだけ | ○       | ○                                          |
 | SDK 子プロセスは別 UID（1001） | ○       | ○                                          |
 
-残る2枚で M4 受け入れ基準4（**マネージャーが自分宛の許可確認に自分で `allow` を返せない**）は構造的に保たれる。制御面の全経路が `Bearer` を要求し（`apps/runner/src/app.ts` の `control`）、runner が持つのは sha256 だけなので、`/proc/1/environ` を読めても鍵は作れない。
+残る2枚で M4 受け入れ基準4（**マネージャーが自分宛の許可確認に自分で `allow` を返せない**）は構造的に保たれる。制御面の全経路が `Bearer` を要求し（`apps/runner/src/app.ts` の `control`）、runner のプロセスに残るのは sha256 だけなので、`/proc/1/environ` を読めても鍵は作れない。
 
-→ **`ALTEROID_RUNNER_TOKEN`（素の合鍵）を Shared Variables に置かないこと。** 置いた瞬間に runner にも降り、残った2枚のうち1枚が0枚になる。Service ごとの変数に置く。
+→ **`ALTEROID_RUNNER_TOKEN` は Shared Variables に置いてよい。** runner は起動時（`docker/alteroid-runner`）に sha256 へ畳み、素の値を自分の環境から落としてから node を `exec` する。**守りは「誰に配ったか」ではなく「走っている runner が何を持っているか」で決まる**ので、人間が2か所に別々の値を置く必要は無い（置き間違えれば 401 が出続けるだけで、1枚も守らない）。
 
 ### 2. ネットワークが1枚になる
 
 compose の `data`（daemon↔db）/ `control`（daemon↔runner）の分離が Railway には無い。`*.railway.internal` は環境ごとにフラットなので、**runner から db が名前解決できてしまう**。
 
-M4 受け入れ基準3の「runner から Persona 用 DB へ接続できない」が、compose の「**経路が無い**」から Railway では「**資格情報を配っていない**」に弱まる。`ALTEROID_DATABASE_URL` は daemon の Service 変数にだけ置く（ここも Shared Variables 禁止）。
+M4 受け入れ基準3の「runner から Persona 用 DB へ接続できない」が、compose の「**経路が無い**」から Railway では「**資格情報を配っていない**」に弱まる。**`ALTEROID_DATABASE_URL` は app の Service 変数にだけ置く（唯一の Shared Variables 禁止）。**
 
 ### 3. workspace は毎デプロイで消える
 
@@ -65,10 +65,14 @@ main へマージすると GitHub 連携が動く。**器の入れ替えは、�
 | `apps/daemon/**` / `apps/cli/**` | ○     | — （`alteroid chat` が走るのは daemon 側） |
 | `apps/runner/**`                 | —     | ○                                          |
 | `packages/**`                    | ○     | `packages/core/**` のみ                    |
+| `Dockerfile` / `.dockerignore`   | ○     | ○                                          |
+| `docker/**`                      | ○     | ○                                          |
 
-runner が import するのは `@alteroid/core` だけである（`storage-fs` / `storage-pg` は記憶の鍵を持たない runner が触らない）。ここを `packages/**` にしておくと、**`storage-pg` の1行修正がマネージャーを畳む。** 依存が増えたら `pnpm-lock.yaml` 側で拾える。
+runner が import するのは `@alteroid/core` だけである（`storage-fs` / `storage-pg` / `api-client` は記憶の鍵を持たない runner が触らない）。ここを `packages/**` にしておくと、**`storage-pg` の1行修正がマネージャーを畳む。** 依存が増えたら `pnpm-lock.yaml` 側で拾える。
 
-**イメージの中身を変えるものは全部入れる。** `Dockerfile` と `.dockerignore` はビルドコンテキストそのものを変えるので両方に入っている。逆に `eslint.config.js` `vitest.config.ts` `mise.toml` `.github/**` は焼かれるものを変えないので入れていない（node の版は `Dockerfile` が直に固定していて、mise を読まない）。
+**イメージの中身を変えるものは全部入れる。** `Dockerfile` と `.dockerignore` はビルドコンテキストそのものを変える。`docker/**` は `startCommand` の実体である（`alteroidd` / `alteroid-runner`）。**とくに `docker/alteroid-runner` は合鍵を sha256 へ畳んで素の値を落とす処理そのもの**なので、ここが watchPatterns から漏れていると「守りを直したのに走っている runner が古いまま」になる。
+
+逆に `eslint.config.js` `vitest.config.ts` `mise.toml` `.github/**` `.env.example` は焼かれるものを変えないので入れていない（node の版は `Dockerfile` が直に固定していて、mise を読まない）。
 
 パスを増やしたときは watchPatterns も直すこと。**漏らすと「直したのに反映されない」になる**ので、`app` 側は迷ったら広めに入れる。`runner` 側だけは、そこで本当に走るものかを確かめてから足す。
 
@@ -107,11 +111,11 @@ railway login
 # クローンとマネージャーの認証（サブスクリプションの長期トークン）
 claude setup-token          # → CLAUDE_CODE_OAUTH_TOKEN
 
-# 制御面の合鍵。素の値は daemon にだけ、sha256 は runner にだけ置く
-TOKEN=$(openssl rand -hex 32)
-echo "raw   : $TOKEN"
-echo "sha256: $(printf %s "$TOKEN" | shasum -a 256 | cut -d' ' -f1)"
+# 制御面の合鍵。**app と runner に同じ値を置くだけ**でよい
+openssl rand -hex 32        # → ALTEROID_RUNNER_TOKEN
 ```
+
+`.env.example` と同じものを Railway に置く、と思ってよい。**役ごとに違うのは `ALTEROID_DATABASE_URL` だけ**である。
 
 ### 1. プロジェクトと PostgreSQL
 
@@ -131,31 +135,33 @@ railway add --database postgres
 
 Config as Code のパスは Root Directory を見ないので、**リポジトリ先頭からの絶対パス**で書く。同じ `Dockerfile` から `startCommand` で役を選ぶ（compose の `command` と同じ考え方）。
 
-### 3. 変数（Shared Variables は使わない）
+### 3. 変数（1か所に書いて両方へ配る）
 
-**`runner`**
+**Shared Variables に書く。** `app` と `runner` の両方に紐づける（Postgres には付けない）。役ごとに書き分ける必要は無い — **使う / 使わないは役が決める**ので、片方が読まない変数が並んでいても害は無い。
 
-| 変数                           | 値                        | なぜ                                                                                                                                                                                                                       |
-| ------------------------------ | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `RAILWAY_RUN_UID`              | `0`                       | イメージの `USER node` のままだと子プロセスを uid 1001 へ降ろす特権が無く、runner は**起動を拒否する**（同じ UID で走り続けるより落ちる方を選んである）。root なのは権限を配るためではなく、降ろすのに特権が要るからである |
-| `ALTEROID_RUNNER_BIND`         | `::`                      | Railway の private network は IPv6（新しい環境は dual stack）。既定の `127.0.0.1` のままだと daemon から届かない                                                                                                           |
-| `ALTEROID_RUNNER_PORT`         | `4518`                    |                                                                                                                                                                                                                            |
-| `ALTEROID_RUNNER_ID`           | `runner-primary`          | 台帳の `manager_id → runner_id` を引く安定した識別子。器を作り直しても同じ宛先として戻る                                                                                                                                   |
-| `ALTEROID_RUNNER_TOKEN_SHA256` | 上の sha256               | **ハッシュだけ。** 素の値をここに置かない                                                                                                                                                                                  |
-| `CLAUDE_CODE_OAUTH_TOKEN`      | `claude setup-token` の値 | マネージャーと作業者の認証                                                                                                                                                                                                 |
-| `TZ`                           | `Asia/Tokyo`              |                                                                                                                                                                                                                            |
+| 変数                      | 値                                               | なぜ                                                                                                                                                                                                                                              |
+| ------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ALTEROID_RUNNER_TOKEN`   | `openssl rand -hex 32` の値                      | 制御面の合鍵。**同じ値を両方が持つだけでよい。** runner は起動時に sha256 へ畳み、素の値を自分の環境から落としてから走る（`docker/alteroid-runner`）ので、走っている runner に素の鍵は残らない                                                    |
+| `CLAUDE_CODE_OAUTH_TOKEN` | `claude setup-token` の値                        | クローンもマネージャーも SDK セッションなので、両方に要る                                                                                                                                                                                         |
+| `ALTEROID_RUNNER_URL`     | `http://${{runner.RAILWAY_PRIVATE_DOMAIN}}:4518` | 委譲の宛先（app が読む）。固定 URL をコードに埋めず、ここで名簿へ登録する。private network は Wireguard で暗号化済みなので `http://`                                                                                                              |
+| `ALTEROID_RUNNER_BIND`    | `::`                                             | runner の待ち受け。Railway の private network は IPv6（新しい環境は dual stack）で、既定の `127.0.0.1` のままだと daemon から届かない。**app 側は無視する**（daemon が見るのは `ALTEROID_BIND`）                                                  |
+| `ALTEROID_RUNNER_PORT`    | `4518`                                           | 同上                                                                                                                                                                                                                                              |
+| `ALTEROID_RUNNER_ID`      | `runner-primary`                                 | 台帳の `manager_id → runner_id` を引く安定した識別子。器を作り直しても同じ宛先として戻る                                                                                                                                                          |
+| `RAILWAY_RUN_UID`         | `0`                                              | runner は子プロセスを uid 1001 へ降ろすのに特権が要り、`USER node` のままだと**起動を拒否する**（同じ UID で走り続けるより落ちる方を選んである）。**daemon は root で起きても自分で `node` へ降りる**（`docker/alteroidd`）ので、共有して構わない |
+| `TZ`                      | `Asia/Tokyo`                                     | 日報の締め時刻がこれで決まる                                                                                                                                                                                                                      |
 
-**`app`**
+自律の既定を変えるならこれも（省略しても動く。**自律は後から足す機能ではない**）。
 
-| 変数                        | 値                                               | なぜ                                                                                                       |
-| --------------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
-| `ALTEROID_DATABASE_URL`     | `${{Postgres.DATABASE_URL}}`                     | private の接続文字列（`postgres.railway.internal`）。`DATABASE_PUBLIC_URL` は公衆網に出るので使わない      |
-| `ALTEROID_RUNNER_URL`       | `http://${{runner.RAILWAY_PRIVATE_DOMAIN}}:4518` | 固定 URL をコードに埋めず、ここで名簿へ登録する。private network は Wireguard で暗号化済みなので `http://` |
-| `ALTEROID_RUNNER_TOKEN`     | 素の `$TOKEN`                                    | **素の値を持つのは daemon だけ**                                                                           |
-| `CLAUDE_CODE_OAUTH_TOKEN`   | `claude setup-token` の値                        | クローンも SDK セッションなので要る                                                                        |
-| `ALTEROID_DAILY_REPORT_AT`  | `22:00`                                          | 省略しても既定で動く（自律は後から足す機能ではない）                                                       |
-| `ALTEROID_INITIATIVE_EVERY` | `60`                                             | 同上（分）                                                                                                 |
-| `TZ`                        | `Asia/Tokyo`                                     | 日報の締め時刻がこれで決まる                                                                               |
+| 変数                        | 値      |
+| --------------------------- | ------- |
+| `ALTEROID_DAILY_REPORT_AT`  | `22:00` |
+| `ALTEROID_INITIATIVE_EVERY` | `60`    |
+
+**`app` の Service 変数（ここだけ役ごと）**
+
+| 変数                    | 値                           | なぜ                                                                                                                                       |
+| ----------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ALTEROID_DATABASE_URL` | `${{Postgres.DATABASE_URL}}` | private の接続文字列（`postgres.railway.internal`）。`DATABASE_PUBLIC_URL` は公衆網に出るので使わない。**Shared Variables に置かないこと** |
 
 **置かないもの**
 
@@ -210,12 +216,16 @@ chat の中で使えるもの:
 
 ### 6. 上がったあとに確かめること
 
-境界が本当に立っているかは、思い込みではなく runner の中から確かめる。**素の `grep` は使わない** — `RAILWAY_GIT_COMMIT_MESSAGE` にこの文書の一部が入るので、変数名を含む文章に当たって「有る」ように見える。行頭で固定する。
+境界が本当に立っているかは、思い込みではなく runner の中から確かめる。
+
+**見るのは `env` ではなく `/proc/1/environ` である。** `railway ssh` のシェルには Service / Shared Variables がそのまま入るので、`env` に素の合鍵が見えるのは当たり前で、守りの証拠にならない。**マネージャーが読みに行く先＝走っている runner のプロセス**を見る。**素の `grep` も使わない** — `RAILWAY_GIT_COMMIT_MESSAGE` にこの文書の一部が入るので、変数名を含む文章に当たって「有る」ように見える。行頭で固定する。
 
 ```bash
 railway ssh --service runner -- sh -lc '
-env | grep -qE "^ALTEROID_DATABASE_URL=" && echo "!! DB の鍵がある" || echo "DB の鍵は無い"
-env | grep -qE "^ALTEROID_RUNNER_TOKEN="  && echo "!! 素の合鍵がある" || echo "素の合鍵は無い（sha256 だけ）"
+e() { tr "\\0" "\\n" < /proc/1/environ; }
+e | grep -qE "^ALTEROID_DATABASE_URL=" && echo "!! DB の鍵がある" || echo "DB の鍵は無い"
+e | grep -qE "^ALTEROID_RUNNER_TOKEN="  && echo "!! 素の合鍵が残っている" || echo "素の合鍵は残っていない"
+e | grep -qE "^ALTEROID_RUNNER_TOKEN_SHA256=" && echo "sha256 はある（畳めている）"
 
 # uid 1001（マネージャーと同じ主体）から制御面 → 401 であること
 su -s /bin/sh worker -c "curl -s -o /dev/null -w %{http_code}\\\\n http://127.0.0.1:4518/managers"
@@ -225,11 +235,13 @@ su -s /bin/sh worker -c "curl -s http://127.0.0.1:4518/livez"
 '
 ```
 
-実測（2026-08）: 制御面は **401**、`/livez` は `{"ok":true}`、runner の環境変数は `ALTEROID_RUNNER_TOKEN_SHA256` だけで素の合鍵と `ALTEROID_DATABASE_URL` は無い。つまり M4 受け入れ基準4は Railway でも成立している。
+実測（2026-08）: 制御面は **401**、`/livez` は `{"ok":true}`、runner に `ALTEROID_DATABASE_URL` は無い。つまり M4 受け入れ基準4は Railway でも成立している。
+
+**「素の合鍵が残っていない」の実測はこれからである**（合鍵を Shared Variables に置く形へ変えたのはこの回で、確かめたのは手元の器まで。`apps/runner/src/index.test.ts` が畳みと落としを固定している）。上のコマンドで `!!` が出たら、それは**運用の間違いではなく実装のバグ**として扱うこと（`docker/alteroid-runner` を通さず `node` を直に起こしていないか、`startCommand` を見る）。
 
 いっぽう `getent hosts postgres.railway.internal` は `fd12:…` を返す（＝「先に読む」2の弱まりが実測でも出る）。db へ届く経路はあるが、鍵が無い。
 
-`railway ssh` は**サービスの実行 UID とは無関係に root で入る**（`RAILWAY_RUN_UID` を設定していない `app` でも `uid=0`）。だから上のように `su` で降りてから叩くこと。root のまま叩いた 401 は「マネージャーから叩けない」の証拠にならない。
+`railway ssh` は**サービスの実行 UID とは無関係に root で入る**（`app` でも `uid=0`。デーモン本体は自分で `node` へ降りているので、`ps` で見える実体とは別である）。だから上のように `su` で降りてから叩くこと。root のまま叩いた 401 は「マネージャーから叩けない」の証拠にならない。
 
 能力が落ちていないことも確かめる（境界を入れた側が示す義務。north_star「立ち戻るための問い」最終項）。
 
@@ -243,13 +255,15 @@ su -s /bin/sh worker -c "curl -s http://127.0.0.1:4518/livez"
 
 クローンに「実装して PR を出して」と頼むには、マネージャーの手元に**人間が Claude Code に渡しているものと同じ**3つが揃っている必要がある。
 
-| 要るもの       | 置き場                       | 状態                                                                                  |
-| -------------- | ---------------------------- | ------------------------------------------------------------------------------------- |
-| `gh` コマンド  | イメージ（`Dockerfile`）     | 同梱済み（版は固定しない。ビルドし直せば上がる）。git の credential helper も配線済み |
-| 書き込みの鍵   | **`runner` の Service 変数** | `GH_TOKEN` を置く（下記）                                                             |
-| コミットの身元 | **`runner` の Service 変数** | `GIT_AUTHOR_*` / `GIT_COMMITTER_*` を置く（下記）                                     |
+| 要るもの       | 置き場                   | 状態                                                                                  |
+| -------------- | ------------------------ | ------------------------------------------------------------------------------------- |
+| `gh` コマンド  | イメージ（`Dockerfile`） | 同梱済み（版は固定しない。ビルドし直せば上がる）。git の credential helper も配線済み |
+| 書き込みの鍵   | **Shared Variables**     | `GH_TOKEN` を置く（下記）                                                             |
+| コミットの身元 | **Shared Variables**     | `GIT_AUTHOR_*` / `GIT_COMMITTER_*` を置く（下記）                                     |
 
-**daemon 側には置かない。** これはクローンの鍵ではなく**マネージャー自身の道具の鍵**である（クローンの道具はマネージャーであって git ではない）。記憶ストアの鍵と逆で、下へ渡すのが正しい。
+**これは下＝外の世界へ手を伸ばす鍵なので、渡すのが正しい**（記憶ストアの鍵と逆。伏せると人間が Claude Code でできる `gh pr create` が層を下りた瞬間にできなくなる＝デグレード。north_star 禁止1）。
+
+app にも降りるが、それでよい。**クローンは人間の写像であり、人間は Claude Code に頼むだけでなく自分の手も持っている**（north_star「適用範囲」）。「クローンの道具はマネージャーだけ」は写像として成り立たない。
 
 ### 鍵を作る
 
@@ -269,6 +283,8 @@ GitHub → Settings → Developer settings → Personal access tokens → **Fine
 
 **初回はこれでよい。差し替え（ローテーション）はこの手順ではない** — 走行中のプロセスには届かないので、下の「鍵を回す」を使う。
 
+ダッシュボードの **Shared Variables** に5つ置くのがいちばん早い（他の変数と同じ場所で済む）。CLI から入れるなら Service ごとに1回ずつになる。
+
 ```bash
 # 鍵は stdin から。引数で渡すとシェル履歴とプロセス一覧に残る
 printf %s 'github_pat_xxx' | railway variable set GH_TOKEN --stdin --service runner --skip-deploys
@@ -279,13 +295,11 @@ railway variable set GIT_COMMITTER_NAME=takecchi --service runner --skip-deploys
 railway variable set GIT_COMMITTER_EMAIL=takeaki.kobayashi@gmail.com --service runner
 ```
 
-**Shared Variables に置かない。** `runner` の Service 変数として置く（daemon にも降りる場所へ置くと、記憶の鍵と同じ器に GitHub の書き込み権が並ぶ）。
-
 `GIT_*` を**環境変数で**渡すのは、`git config` を焼くと器を作り直すたびに消えるからである（git は設定ファイルが無くてもこの4つを読む）。置き忘れると commit が `Please tell me who you are` で失敗する。**空文字で置くのは未設定より悪い** — git は `empty ident name` で即座に落ちる。置かないなら変数ごと消す。
 
 ### ローカル（`docker compose`）でも同じ
 
-同じ5つを `.env` に置けば `runner` へ渡る（`compose.yaml` の runner の `environment`）。確認は `docker compose exec -u 1001 runner gh auth status`。
+同じ5つを `.env` に置けば両方へ渡る（`compose.yaml` の `x-shared-env`）。確認は `docker compose exec -u 1001 runner gh auth status`。
 
 ### 鍵を回す（走行中でも）
 
@@ -305,7 +319,7 @@ printf %s 'github_pat_xxx' | jq -Rn '{credentials:[{name:"GH_TOKEN",value:input}
       -H 'content-type: application/json' -d @-
 ```
 
-**Service 変数も一緒に直しておくこと。** 器が作り直されたとき（再デプロイ）に読まれるのは変数の方である。順序は「先に上の口で回して仕事を止めない → 落ち着いてから変数を直す」。
+**変数（Shared Variables）も一緒に直しておくこと。** 器が作り直されたとき（再デプロイ）に読まれるのは変数の方である。順序は「先に上の口で回して仕事を止めない → 落ち着いてから変数を直す」。
 
 指紋が食い違っていたら、鍵の権限ではなく**経路**の問題である。PAT の設定を見に行く前にここを見る。
 
@@ -341,20 +355,21 @@ alteroid chat
 
 ## 症状から引く
 
-| 症状                                                             | 原因                                                                                                                                                                                                                |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `railway ssh` が一瞬で切れる（プロンプトは出る）                 | そのコンテナが再起動を繰り返している。ssh はデプロイに繋がっているので、器が入れ替わるとセッションごと落ちる。**ssh の問題ではない**ので `railway logs` を見る                                                      |
-| `alteroidd: runner (…) に繋がりません。… 秒後に試し直します`     | 器の入れ替え中なら、そのうち収束する（最大2分待つ）。2分を越えて `起動に失敗しました` まで行ったら下の行へ                                                                                                          |
-| `alteroidd: runner (…) に鍵を拒まれました（401）`                | 合鍵が食い違っている。**待っても直らないので即座に落ちる。** daemon の `ALTEROID_RUNNER_TOKEN` の sha256 と、runner の `ALTEROID_RUNNER_TOKEN_SHA256` を突き合わせる                                                |
-| `alteroidd: 起動に失敗しました: TypeError: fetch failed`         | 2分待っても daemon が runner の `/health` へ届かなかった。runner のログを見る（大抵 runner が上がっていない）。次に `ALTEROID_RUNNER_URL` のサービス名と `ALTEROID_RUNNER_BIND=::` を確認する                       |
-| コードを直したのに反映されない                                   | その Service の `watchPatterns` にパスが入っていない（`railway/*.json`）。新しいディレクトリを足したときに漏れやすい                                                                                                |
-| `alteroid-runner: ALTEROID_RUNNER_CHILD_UID が指定されているが…` | runner が root で走っていない。`RAILWAY_RUN_UID=0` が無い／名前に空白が混ざっている。**これは異常ではなく設計**で、同じ UID のまま走ると子プロセスが制御面に手を届かせるので、runner は起動を拒む                   |
-| 変数を設定したのに効かない                                       | 名前の前後に空白。`railway variable list --json` で `repr` して検算する（上の「置いたら必ず名前を検算する」）                                                                                                       |
-| 日報が想定と違う時刻に出る                                       | `TZ` 未設定。既定の `22:00` は**コンテナのローカル時刻**なので、UTC のまま動くと日本時間の翌 7:00 になる                                                                                                            |
-| `env \| grep ALTEROID_DATABASE_URL` が runner で何か返す         | 慌てる前に行頭固定で取り直す。`RAILWAY_GIT_COMMIT_MESSAGE` にこの文書の一部が入っている                                                                                                                             |
-| マネージャーの commit が `Please tell me who you are` で失敗する | `GIT_AUTHOR_*` / `GIT_COMMITTER_*` が runner に無い（「マネージャーに GitHub を渡す」）                                                                                                                             |
-| マネージャーの push が 403 になる                                | **まず指紋を突き合わせる**（下記）。合っていないなら鍵が届いていない側の問題で、PAT の権限を疑うのは順番が違う。合っていて 403 なら、fine-grained PAT の Contents が Read-only か、対象リポジトリが選択されていない |
-| 鍵を差し替えたのにマネージャーが「権限が無い」と言い続ける       | **走行中のマネージャーに古い鍵が残っている。** `--skip-deploys` で置いた変数は走っているプロセスに入らない。`POST /runners/credentials` で回す（下記「鍵を回す」）                                                  |
+| 症状                                                             | 原因                                                                                                                                                                                                                 |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `railway ssh` が一瞬で切れる（プロンプトは出る）                 | そのコンテナが再起動を繰り返している。ssh はデプロイに繋がっているので、器が入れ替わるとセッションごと落ちる。**ssh の問題ではない**ので `railway logs` を見る                                                       |
+| `alteroidd: runner (…) に繋がりません。… 秒後に試し直します`     | 器の入れ替え中なら、そのうち収束する（最大2分待つ）。2分を越えて `起動に失敗しました` まで行ったら下の行へ                                                                                                           |
+| `alteroidd: runner (…) に鍵を拒まれました（401）`                | 合鍵が食い違っている。**待っても直らないので即座に落ちる。** `ALTEROID_RUNNER_TOKEN` が Shared Variables にあり、app と runner の両方に紐づいているかを見る（片方だけに Service 変数で上書きが載っていると食い違う） |
+| `alteroidd: 起動に失敗しました: TypeError: fetch failed`         | 2分待っても daemon が runner の `/health` へ届かなかった。runner のログを見る（大抵 runner が上がっていない）。次に `ALTEROID_RUNNER_URL` のサービス名と `ALTEROID_RUNNER_BIND=::` を確認する                        |
+| コードを直したのに反映されない                                   | その Service の `watchPatterns` にパスが入っていない（`railway/*.json`）。新しいディレクトリを足したときに漏れやすい（`docker/**` のような、コードではないがイメージに焼かれるものがとくに危ない）                   |
+| `alteroid-runner: ALTEROID_RUNNER_CHILD_UID が指定されているが…` | runner が root で走っていない。`RAILWAY_RUN_UID=0` が無い／名前に空白が混ざっている。**これは異常ではなく設計**で、同じ UID のまま走ると子プロセスが制御面に手を届かせるので、runner は起動を拒む                    |
+| 変数を設定したのに効かない                                       | 名前の前後に空白。`railway variable list --json` で `repr` して検算する（上の「置いたら必ず名前を検算する」）                                                                                                        |
+| 日報が想定と違う時刻に出る                                       | `TZ` 未設定。既定の `22:00` は**コンテナのローカル時刻**なので、UTC のまま動くと日本時間の翌 7:00 になる                                                                                                             |
+| `env \| grep ALTEROID_DATABASE_URL` が runner で何か返す         | 慌てる前に行頭固定で取り直す。`RAILWAY_GIT_COMMIT_MESSAGE` にこの文書の一部が入っている                                                                                                                              |
+| runner の `/proc/1/environ` に素の合鍵が残っている               | 起動スクリプトを通っていない。`startCommand` が `alteroid-runner` か（`node apps/runner/dist/index.js` を直に叩くと畳みが起きない）。**運用の間違いではなく実装のバグ**として扱う                                    |
+| マネージャーの commit が `Please tell me who you are` で失敗する | `GIT_AUTHOR_*` / `GIT_COMMITTER_*` が runner に無い（「マネージャーに GitHub を渡す」）                                                                                                                              |
+| マネージャーの push が 403 になる                                | **まず指紋を突き合わせる**（下記）。合っていないなら鍵が届いていない側の問題で、PAT の権限を疑うのは順番が違う。合っていて 403 なら、fine-grained PAT の Contents が Read-only か、対象リポジトリが選択されていない  |
+| 鍵を差し替えたのにマネージャーが「権限が無い」と言い続ける       | **走行中のマネージャーに古い鍵が残っている。** `--skip-deploys` で置いた変数は走っているプロセスに入らない。`POST /runners/credentials` で回す（下記「鍵を回す」）                                                   |
 
 ---
 

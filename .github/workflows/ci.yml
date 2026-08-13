@@ -21,6 +21,19 @@ jobs:
           restore-keys: ${{ runner.os }}-pnpm-
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+
+      # **コードと OpenAPI spec がずれたまま気づかない状態を作らない。**
+      # spec は経路の zod スキーマから機械生成され、`pnpm build` が毎回書き直す。
+      # つまりここに差分が出るのは「コードを変えたのに commit した spec が古い」
+      # ときだけである。手書きの spec を別に置いて二重管理にしないための検査であり、
+      # 人間に「先に生成コマンドを流す」手順を足さないための場所でもある（Issue #20）。
+      - name: OpenAPI spec がコードと一致しているか
+        run: |
+          git diff --exit-code -- apps/daemon/openapi.json || {
+            echo "::error::apps/daemon/openapi.json が古い。pnpm build して差分をコミットすること" >&2
+            exit 1
+          }
+
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm format:check
@@ -95,4 +108,56 @@ jobs:
             gh auth token >/dev/null 2>&1 \
               && { echo "空の鍵が鍵として通っている" >&2; exit 1; }
             exit 0
+          '
+
+      # **人間が置く値は app と runner で同じ。** その楽さと引き換えに守りが落ちて
+      # いないことを、器そのもので見る（docs/architecture.md「制御面の保護」3枚目）。
+      # ここが落ちたら、直すのは運用手順ではなく `docker/alteroid-runner` である。
+      - name: 走っている runner に素の合鍵が残らないか
+        run: |
+          docker run --rm -u 0 -e ALTEROID_RUNNER_TOKEN=raw-secret -e ALTEROID_RUNNER_PORT=4518 \
+            alteroid:ci sh -eu -c '
+              alteroid-runner &
+              sleep 3
+
+              # 見るのは**走っているプロセスの環境**。ここに素の値が残ると、UID の分離が
+              # 崩れた場面で子プロセスが /proc から読める。
+              tr "\0" "\n" < /proc/$!/environ | grep -q "^ALTEROID_RUNNER_TOKEN=" \
+                && { echo "素の合鍵が残っている" >&2; exit 1; }
+              tr "\0" "\n" < /proc/$!/environ | grep -q "^ALTEROID_RUNNER_TOKEN_SHA256=" \
+                || { echo "sha256 へ畳めていない" >&2; exit 1; }
+
+              # 畳んでも本人確認は成立する（鍵が無ければ 401、同じ値なら通る）
+              test "$(curl -s -o /dev/null -w %{http_code} http://127.0.0.1:4518/managers)" = 401 \
+                || { echo "鍵なしで制御面が通った" >&2; exit 1; }
+              test "$(curl -s -o /dev/null -w %{http_code} -H "authorization: Bearer raw-secret" \
+                http://127.0.0.1:4518/managers)" = 200 \
+                || { echo "デーモンと同じ値で通らない" >&2; exit 1; }
+            '
+
+      # デーモンは記憶ストアの鍵を持つ。**root で起こされても特権のまま走らない。**
+      # （Railway は実行 UID を環境変数で決めるので、root で来る構成がありうる）
+      #
+      # **UID だけを見ても足りない。** `setpriv` は環境を変えないので、`HOME=/root` の
+      # まま降りると uid は正しいのにクローンの SDK セッションが設定を書けずに落ちる
+      # （「コンテナだからできない」＝north_star 禁止1）。降りた先で**実際に書けること**
+      # まで見る。
+      - name: デーモンは root で起こされても node へ降りるか（HOME ごと）
+        run: |
+          docker run --rm -u 0 alteroid:ci sh -eu -c '
+            alteroidd &
+            pid=$!
+            sleep 3
+
+            uid=$(awk "/^Uid:/ {print \$2}" /proc/$pid/status)
+            test "$uid" = 1000 || { echo "root のまま走っている: uid=$uid" >&2; exit 1; }
+
+            # 環境は**同じ主体からしか読めない**（docker の既定に CAP_SYS_PTRACE は
+            # 無いので、root でも降りた先のプロセスは覗けない）。node で読む。
+            home=$(su -s /bin/sh node -c "tr \"\\0\" \"\\n\" < /proc/$pid/environ" | sed -n "s/^HOME=//p")
+            test "$home" = /home/node || { echo "HOME が降りていない: $home" >&2; exit 1; }
+
+            # 降りた先の主体で、その HOME 配下へ実際に書けること
+            su -s /bin/sh node -c "mkdir -p \"$home/.claude\" && touch \"$home/.claude/probe\"" \
+              || { echo "降りた先で HOME へ書けない" >&2; exit 1; }
           '

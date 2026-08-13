@@ -32,8 +32,9 @@ import { CLONE_ALLOWED_TOOLS, MCP_SERVER_NAME, createCloneMcpServer } from './to
 /**
  * クローン = デーモン内の長寿命 SDK セッション1本（docs/architecture.md）。
  *
- * - model は `fable` 固定。役割とモデル帯の対応は設計判断であり、変更には
- *   人間の承認が要る（AGENTS.md 地雷5）。
+ * - model の既定は `fable`。役割とモデル帯の対応は設計判断であり、変更には
+ *   人間の承認が要る（AGENTS.md 地雷5）。`ALTEROID_CLONE_MODEL` はその
+ *   **承認そのもの**であって、AI や実装の都合で動かしてよい旋盤ではない。
  * - `tools: []` で組み込みツールを持たせない。これは人間の写像としての配置で
  *   あってデグレードではない。マネージャー以下へこの理由を流用しないこと。
  * - **ターンの起動口は受信箱ただ1つ。** 人間の発言もタイマーも蒸留も、必ず
@@ -41,8 +42,35 @@ import { CLONE_ALLOWED_TOOLS, MCP_SERVER_NAME, createCloneMcpServer } from './to
  *   走行中のターンを踏み潰してループごと止まる。
  */
 
-/** クローンのモデル帯。変更には人間の承認が要る。 */
+/** クローンのモデル帯の既定。変更には人間の承認が要る。 */
 export const CLONE_MODEL = 'fable';
+
+/**
+ * クローンのモデル帯を人間が差し替えるための環境変数。
+ *
+ * **これは設定ではなく、人間の承認の置き場である。** 層とモデル帯の対応は
+ * 設計判断であり（AGENTS.md 地雷5）、既定は `fable` のまま動かさない。ここに
+ * 値を置けるのは人間だけで、置いた事実はデーモンの起動時に必ず表へ出す
+ * （黙って上位帯から降りることを許さない）。
+ *
+ * 読むのはクローンを組み立てる一度きり。走行中の SDK セッションのモデルは
+ * どのみち差し替えられないので、途中で読み直すと本セッションと蒸留の
+ * サイドクエリだけがずれる。効かせたければ器を作り直すこと。
+ */
+export const CLONE_MODEL_ENV_KEY = 'ALTEROID_CLONE_MODEL';
+
+/**
+ * 環境変数を見てクローンのモデル帯を決める。空・空白なら既定（`fable`）。
+ *
+ * 値は検証しない。既知の別名だけを通す関門を置くと、SDK が新しいモデルを
+ * 増やすたびにこちらが追いつくまで人間が選べなくなる＝能力の削除になる
+ * （north_star 禁止1）。読めない値は SDK が起動時に弾く。
+ */
+export function resolveCloneModel(env: NodeJS.ProcessEnv = process.env): string {
+  const raw = env[CLONE_MODEL_ENV_KEY];
+  const trimmed = raw === undefined ? '' : raw.trim();
+  return trimmed.length > 0 ? trimmed : CLONE_MODEL;
+}
 
 /** PreCompact で退避したトランスクリプトのうち、蒸留に渡す末尾のサイズ。 */
 const DISTILL_TRANSCRIPT_TAIL_BYTES = 60_000;
@@ -85,6 +113,11 @@ export interface CloneOptions {
   sessionStore?: SessionStore;
   /** 主にテスト用。差し替えると委譲先ごと入れ替えられる。 */
   managers?: ManagerPool;
+  /**
+   * モデル帯の差し替え（`ALTEROID_CLONE_MODEL`）を読む先。主にテスト用で、
+   * 既定は `process.env`。
+   */
+  env?: NodeJS.ProcessEnv;
 }
 
 type Listener = (event: ChatStreamEvent) => void;
@@ -108,6 +141,11 @@ class Clone implements CloneHost {
   readonly #cwd: string | undefined;
   readonly #sessionStore: SessionStore | undefined;
   readonly #managers: ManagerPool;
+  /**
+   * このクローンのモデル帯。本セッションと蒸留のサイドクエリで必ず同じものを
+   * 使う（片方だけ帯が違うと、蒸留＝人格の書き手だけが別の頭になる）。
+   */
+  readonly #model: string;
 
   readonly #inbox = new Inbox();
   readonly #listeners = new Map<string, Set<Listener>>();
@@ -129,11 +167,12 @@ class Clone implements CloneHost {
   #sawInit = false;
 
   constructor(options: CloneOptions) {
-    const { stores, queryFn, cwd, runners, sessionStore, managers } = options;
+    const { stores, queryFn, cwd, runners, sessionStore, managers, env } = options;
     this.#stores = stores;
     this.#queryFn = queryFn ?? query;
     this.#cwd = cwd;
     this.#sessionStore = sessionStore;
+    this.#model = resolveCloneModel(env ?? process.env);
     this.#managers =
       managers ??
       createManagerPool({
@@ -550,7 +589,7 @@ class Clone implements CloneHost {
     this.#injectedMemory = memory;
 
     return {
-      model: CLONE_MODEL,
+      model: this.#model,
       // 組み込みツールは持たせない（人間の写像としての配置）
       tools: [],
       allowedTools: CLONE_ALLOWED_TOOLS,
@@ -635,7 +674,7 @@ class Clone implements CloneHost {
     const side = this.#queryFn({
       prompt,
       options: {
-        model: CLONE_MODEL,
+        model: this.#model,
         tools: [],
         allowedTools: CLONE_ALLOWED_TOOLS,
         mcpServers: {

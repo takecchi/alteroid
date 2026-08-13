@@ -6,12 +6,15 @@ import { pathToFileURL } from 'node:url';
 import { serve } from '@hono/node-server';
 
 import {
+  CLONE_MODEL,
+  CLONE_MODEL_ENV_KEY,
   createClone,
   createLocalRunner,
   createRunnerRegistry,
   createScheduler,
   dailyReportEvent,
   missingDailyReportDates,
+  resolveCloneModel,
   type RunnerClient,
   type Stores,
 } from '@alteroid/core';
@@ -24,6 +27,13 @@ import { buildSchedule, readScheduleConfig } from './schedule.js';
 import { openStorage } from './storage.js';
 
 export { createApp, type AppDeps, type AppType } from './app.js';
+/**
+ * spec 生成専用のスタブで `createApp` を呼び、`/openapi.json` を叩いて JSON を
+ * 得る（`apps/daemon/scripts/write-openapi.mjs` が使う本体）。デーモンを実際に
+ * 起動せずに spec だけ欲しい呼び出し元（生成クライアントのビルドなど）向けに
+ * ここからも引けるようにしておく。
+ */
+export { buildOpenApiDocument } from './openapi.js';
 export { createJournalBus, type JournalBus } from './journal-bus.js';
 export { openStorage, DATABASE_URL_ENV, type Storage } from './storage.js';
 export { createHttpRunner, RunnerHttpError, type HttpRunnerOptions } from './runner-client.js';
@@ -165,6 +175,17 @@ export async function main(): Promise<void> {
   // ローカルで runner を立てていないときだけ、同一プロセスの runner へ落とす
   // （その場合は既知の穴が残る。塞ぐのはコンテナ構成の役目である）。
   const runners = createRunnerRegistry([await openRunner(workspace, storage.withheldEnvKeys)]);
+
+  // 層とモデル帯の対応は設計判断であり、変更には人間の承認が要る（AGENTS.md 地雷5）。
+  // 差し替えられていたら**黙って通さない** — 上位帯から降りたことは人間が意図した
+  // ときだけ起きるべきで、起動ログに出ていなければ誰も気づけない。
+  const cloneModel = resolveCloneModel();
+  if (cloneModel !== CLONE_MODEL) {
+    process.stderr.write(
+      `alteroidd: クローンのモデル帯を ${CLONE_MODEL} から ${cloneModel} へ差し替えています` +
+        `（${CLONE_MODEL_ENV_KEY}）。既定へ戻すにはこの環境変数を外してください\n`,
+    );
+  }
 
   const clone = createClone({
     stores,
