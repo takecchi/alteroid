@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { Stores } from '@alteroid/core';
 
 import { FsTranscriptArchive } from './archive.js';
+import { FsAuthStore } from './auth.js';
 import { FsJobStore } from './jobs.js';
 import { FsJournalStore } from './journal.js';
 import { FsPersonaStore } from './persona.js';
@@ -11,6 +12,7 @@ import { resolvePaths, type AlteroidPaths } from './paths.js';
 import { FsSessionRegistry } from './sessions.js';
 
 export { FsTranscriptArchive } from './archive.js';
+export { FsAuthStore } from './auth.js';
 export { FsJobStore } from './jobs.js';
 export { FsJournalStore } from './journal.js';
 export { FsPersonaStore } from './persona.js';
@@ -27,6 +29,7 @@ export function createFsStores(root?: string): Stores & { paths: AlteroidPaths }
     jobs: new FsJobStore(paths.jobs),
     archive: new FsTranscriptArchive(paths.archive),
     sessions: new FsSessionRegistry(paths.state),
+    auth: new FsAuthStore(paths.auth),
   };
 }
 
@@ -54,6 +57,7 @@ export async function initWorkspace(root?: string): Promise<InitResult> {
     paths.jobs,
     paths.archive,
     paths.state,
+    paths.auth,
   ]) {
     await mkdir(dir, { recursive: true });
   }
@@ -86,6 +90,7 @@ alteroid のクローンの人格データ。**すべて人間が直接読んで
 | \`jobs/\` | ジョブと承認待ちキュー |
 | \`archive/\` | セッションの生ログ（compaction 前に退避したもの） |
 | \`state/\` | デーモンの内部状態（セッション id など。消してもクローンは記憶から戻る） |
+| \`auth/\` | ログインしたアカウントと、alteroid を使ってよいかの許可。**手で編集しない**（許可の付与は \`alteroid access grant\`） |
 
 書き換えるのは \`memory/\` だけでよい。日誌を読んで「それは違う」と伝えれば、
 その否定が次の記憶になる。

@@ -1,4 +1,5 @@
 import {
+  authAccountSchema,
   chatStreamEventSchema,
   createMemoryStores,
   jobStatusSchema,
@@ -61,11 +62,80 @@ export const badRequestResponseSchema = z.union([
 export const healthResponseSchema = z.object({
   ok: z.literal(true),
   pid: z.number().int(),
-  /** 本人確認用トークン（CLI が PID を信用しないため）。 */
-  token: z.string(),
+  /**
+   * 実行環境の持ち主として認識されたか（`Authorization: Bearer <state/daemon.json
+   * の token>` を提示したとき true）。
+   *
+   * **トークンそのものは返さない。** かつてはここに載せていたが、この値は
+   * `access grant` を実行できる資格そのものになったので、無認証で読める応答に
+   * 置けない。CLI は「自分の持っているトークンで operator になれるか」を見て
+   * 本人確認する（PID の再利用検知としても同じ強さがある）。
+   */
+  operator: z.boolean(),
   /** 記憶の置き場（ローカルのパス / PostgreSQL）。接続情報は含めない。 */
   storage: z.string(),
+  /** 認証の状態。CLI がログインの要否と手段を知るために読む。 */
+  auth: z.object({
+    enabled: z.boolean(),
+    providers: z.array(z.object({ id: z.string(), label: z.string(), kind: z.string() })),
+  }),
 });
+
+// ---------------------------------------------------------------------------
+// /auth・/access（ログインとアクセス許可）
+// ---------------------------------------------------------------------------
+
+export const authProvidersResponseSchema = z.object({
+  enabled: z.boolean(),
+  providers: z.array(z.object({ id: z.string(), label: z.string(), kind: z.string() })),
+});
+
+export const loginStartResponseSchema = z.object({
+  requestId: z.string(),
+  /** 人間のブラウザで開く先。 */
+  authorizationUrl: z.string(),
+  /** 引き取り時に提示する秘密。**これを持つ端末だけがトークンを受け取れる。** */
+  claimSecret: z.string(),
+  expiresAt: z.string(),
+});
+
+/** ログイン結果の引き取り。まだ終わっていなければ 202 で `pending` が返る。 */
+export const loginClaimResponseSchema = z.union([
+  z.object({ status: z.literal('pending') }),
+  z.object({
+    status: z.literal('ready'),
+    /** **この1回しか返らない。** ストアには sha256 しか残らない。 */
+    token: z.string(),
+    account: authAccountSchema,
+    /** 許可されていなければ false。ログインできても使えるとは限らない。 */
+    granted: z.boolean(),
+  }),
+]);
+
+/** いま自分が誰として認識されているか。 */
+export const meResponseSchema = z.union([
+  z.object({ kind: z.literal('operator') }),
+  z.object({ kind: z.literal('account'), account: authAccountSchema, granted: z.boolean() }),
+]);
+
+const accountWithIdentitiesSchema = authAccountSchema.extend({
+  granted: z.boolean(),
+  identities: z.array(
+    z.object({
+      provider: z.string(),
+      subject: z.string(),
+      email: z.string().nullable(),
+      emailVerified: z.boolean(),
+      lastLoginAt: z.string(),
+    }),
+  ),
+});
+
+export const accessListResponseSchema = z.object({
+  accounts: z.array(accountWithIdentitiesSchema),
+});
+
+export const accessAccountResponseSchema = z.object({ account: accountWithIdentitiesSchema });
 
 // ---------------------------------------------------------------------------
 // 会話（/conversations）
@@ -330,13 +400,37 @@ export const openApiDocumentation: GenerateSpecOptions['documentation'] = {
     { name: 'managers', description: '委譲先マネージャーの一覧・状態・生ログ・直接の指示/停止' },
     { name: 'runners', description: '委譲先 runner の名簿と、そこへ配る鍵の指紋' },
     { name: 'archive', description: 'セッション生ログ（可観測性の最下段）' },
+    {
+      name: 'auth',
+      description:
+        'ログイン（誰がこの API を叩いているか）。PRD「権限境界」（クローンが記憶を' +
+        '根拠に何を人間へ確認するか）とは別の層で、持つのは許可の2値だけである',
+    },
+    {
+      name: 'access',
+      description:
+        'アクセス許可の付与・剥奪。実行環境の持ち主（状態ファイルを読める者）だけが叩ける',
+    },
   ],
   components: {
-    // 認証はまだ無い（PRD にも未着手）。導入したらここに securityScheme を足す
-    // （例: Bearer トークンなら `{ bearerAuth: { type: 'http', scheme: 'bearer' } }`
-    // とし、各 `describeRoute` に `security: [{ bearerAuth: [] }]` を添える）。
-    securitySchemes: {},
+    securitySchemes: {
+      bearerAuth: {
+        type: 'http',
+        scheme: 'bearer',
+        description:
+          '2種類のトークンが同じ形で通る。①**アクセストークン**（`alt_` で始まる。' +
+          '`alteroid login` で発行し、許可されたアカウントのものだけが通る）。' +
+          '②**実行環境の持ち主のトークン**（`~/.alteroid/state/daemon.json` の ' +
+          '`token`。CLI がこれを使う。ここを読めること自体が境界であり、' +
+          '`/access/*`（許可の付与）はこちらでしか通らない）。\n\n' +
+          '`ALTEROID_AUTH=off`（既定はログイン手段が未設定のとき）では認証を要求しない。',
+      },
+    },
   },
+  // 既定で全経路に認証を要求し、公開してよい経路（/health・/auth/*・spec）だけが
+  // 各 describeRoute で `security: []` を明示して外す。**逆にすると、経路を
+  // 足した人が security を書き忘れたときに黙って穴が開く。**
+  security: [{ bearerAuth: [] }],
 };
 
 // ---------------------------------------------------------------------------
