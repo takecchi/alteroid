@@ -657,6 +657,52 @@ is_railway_host() {
   esac
 }
 
+# そのホストが本当にこの Service へ繋がっているか。
+#
+# **部分一致で見ない。** `grep -F` で JSON を素通しに探すと、`alteroid.example` を
+# 探しているのに `my-alteroid.example` や `alteroid.example.invalid` に当たる。
+# 当たった瞬間、**届かない口を「在る」と誤認して**公開 URL と Google の鍵と
+# 待ち受けを置き、0 で終わる（頼まれた構成と違うのに成功する、の再発である）。
+#
+# 応答の形は Railway 側の都合で変わるので、`domain` / `host` の値と配列の中の
+# 素の文字列を深さに関係なく集め、**正規化して完全一致**で突き合わせる。
+# 読めない応答は「繋がっていない」に倒す（開ける側の判断は安全側へ）。
+domain_attached() { # <JSON> <ホスト>
+  node -e '
+    const normalize = (v) =>
+      String(v)
+        .trim()
+        .toLowerCase()
+        .replace(/^[a-z][a-z0-9+.-]*:\/\//, "") // scheme
+        .replace(/[:/?#].*$/, "")               // port / path / query
+        .replace(/\.$/, "");                    // 末尾のドット（FQDN 表記）
+
+    const found = new Set();
+    const walk = (value, key) => {
+      if (value == null) return;
+      if (typeof value === "string") {
+        // ドメインを表す鍵の値か、配列に並んだ素の文字列だけを見る
+        if (key === null || key === "domain" || key === "host") found.add(normalize(value));
+        return;
+      }
+      if (Array.isArray(value)) {
+        for (const item of value) walk(item, null);
+        return;
+      }
+      if (typeof value === "object") {
+        for (const [k, v] of Object.entries(value)) walk(v, k);
+      }
+    };
+
+    try {
+      walk(JSON.parse(process.argv[1]), null);
+    } catch {
+      process.exit(1);
+    }
+    process.exit(found.has(normalize(process.argv[2])) ? 0 : 1);
+  ' -- "${1:-}" "$2"
+}
+
 PUBLIC_URL=''
 if [ "$EXPOSE_PUBLIC" = 1 ]; then
   step "ドメインを用意する（${APP_SERVICE}）"
@@ -673,7 +719,8 @@ if [ "$EXPOSE_PUBLIC" = 1 ]; then
   if [ -n "$wanted_host" ] && ! is_railway_host "$wanted_host"; then
     # 人間が持ち込んだドメイン。**新しい器に繋がっているかは別の話**なので確かめる。
     # 繋ぐのとDNSを向けるのは人間の作業なので、ここでは代行せず、足りないことを言う
-    if railway domain list --service "$APP_SERVICE" --json 2>/dev/null | grep -qF "$wanted_host"; then
+    if domain_attached \
+      "$(railway domain list --service "$APP_SERVICE" --json 2>/dev/null || true)" "$wanted_host"; then
       PUBLIC_URL="https://$wanted_host"
     else
       setup_failed=1

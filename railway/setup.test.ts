@@ -481,4 +481,65 @@ describe('.env に持ち込みのドメインがあるとき', () => {
     expect(r.vars('id-app').ALTEROID_BIND).toBe('::');
     expect(r.calls.some((c) => c.startsWith('domain --service'))).toBe(false);
   });
+
+  // **似た名前を「在る」と読まない。** JSON を素通しに `grep -F` で探すと
+  // `alteroid.example` が `my-alteroid.example` に当たり、届かない口に対して
+  // 公開 URL と Google の鍵と待ち受けを置いて 0 で終わる
+  it.each([
+    ['前に何か付いている', 'my-alteroid.example'],
+    ['後ろに何か付いている', 'alteroid.example.invalid'],
+  ])('似た名前だけが繋がっているとき（%s）は非0で終わり、鍵を置かない', (_name, attached) => {
+    const r = run(
+      [
+        MINIMAL,
+        'ALTEROID_GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com',
+        'ALTEROID_GOOGLE_CLIENT_SECRET=goog-secret',
+        'ALTEROID_PUBLIC_URL=https://alteroid.example',
+        '',
+      ].join('\n'),
+      { domainList: JSON.stringify([{ domain: attached }]), allowFailure: true },
+    );
+    expect(r.exitCode).not.toBe(0);
+    const app = r.vars('id-app');
+    expect(app).not.toHaveProperty('ALTEROID_PUBLIC_URL');
+    expect(app).not.toHaveProperty('ALTEROID_GOOGLE_CLIENT_ID');
+    expect(app).not.toHaveProperty('ALTEROID_GOOGLE_CLIENT_SECRET');
+    expect(app).not.toHaveProperty('ALTEROID_BIND');
+  });
+
+  it('応答が読めないときは「繋がっていない」に倒す', () => {
+    // 開ける側の判断なので、分からないなら閉じたままにする
+    const r = run(
+      [
+        MINIMAL,
+        'ALTEROID_GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com',
+        'ALTEROID_GOOGLE_CLIENT_SECRET=goog-secret',
+        'ALTEROID_PUBLIC_URL=https://alteroid.example',
+        '',
+      ].join('\n'),
+      { domainList: 'not json', allowFailure: true },
+    );
+    expect(r.exitCode).not.toBe(0);
+    expect(r.vars('id-app')).not.toHaveProperty('ALTEROID_BIND');
+  });
+
+  it('入れ子の応答でも完全一致なら使う（Railway の形が変わっても拾う）', () => {
+    const r = run(
+      [
+        MINIMAL,
+        'ALTEROID_GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com',
+        'ALTEROID_GOOGLE_CLIENT_SECRET=goog-secret',
+        'ALTEROID_PUBLIC_URL=https://alteroid.example',
+        '',
+      ].join('\n'),
+      {
+        domainList: JSON.stringify({
+          serviceDomains: [{ domain: 'test-app.up.railway.app' }],
+          customDomains: [{ domain: 'alteroid.example', id: 'd1' }],
+        }),
+      },
+    );
+    expect(r.exitCode).toBe(0);
+    expect(r.vars('id-app').ALTEROID_PUBLIC_URL).toBe('https://alteroid.example');
+  });
 });
