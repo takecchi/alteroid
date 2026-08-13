@@ -223,6 +223,28 @@ function isDailyReport(entry: JournalEntry): entry is DailyReport {
  * `createApp` の呼び出し時（＝両モジュールの初期化が終わった後）まで実行を
  * 遅らせるので、ここも定数ではなく関数にして遅延させる。
  */
+/**
+ * 本文検査が無い POST（`deliberateClient` のみ）に共通の requestBody。
+ *
+ * **本文は要らないが、`content-type: application/json` は要る。** それを 415 の
+ * description（散文）だけで伝えると、spec から起こした他言語のクライアントは
+ * ヘッダを付けずに叩いて 415 に当たる。機械可読な形で「application/json で
+ * 来い」と言うために、中身を縛らない本文を `required: false` で置いてある。
+ *
+ * **門番を緩める変更ではない。** `deliberateClient` は無改変で、これは spec 側が
+ * 門番の存在を表現していなかったことへの追随である。
+ *
+ * 関数にしてある理由は `noBodyPostResponses` と同じ（モジュールの初期化順）。
+ */
+function noBodyPostRequestBody(description: string) {
+  return {
+    required: false,
+    description,
+    // 中身は縛らない（free-form）。ここで伝えたいのは形ではなく content-type である。
+    content: { 'application/json': { schema: {} } },
+  };
+}
+
 function noBodyPostResponses() {
   return {
     415: {
@@ -344,6 +366,10 @@ export function createApp(deps: AppDeps) {
         tags: ['chat'],
         summary: '会話の終了（蒸留の契機）',
         description: '会話の終了 = 蒸留の契機。CLI が chat を抜けるときに叩く。本文は無い。',
+        requestBody: noBodyPostRequestBody(
+          '本文は要らない。`content-type: application/json` だけが要る（ブラウザの単純' +
+            'リクエストで蒸留ターンを起こされないため）。',
+        ),
         responses: {
           200: {
             description: '蒸留を促した。',
@@ -950,6 +976,12 @@ export function createApp(deps: AppDeps) {
           '他人が形を決めている webhook 用。本文をそのまま payload として運ぶので、送り元を' +
           '改造できなくても届く（GitHub や CI からそのまま叩ける）。JSON として読めない本文は' +
           '文字列のまま渡す。',
+        requestBody: noBodyPostRequestBody(
+          '**本文まるごとが payload になる。** 送り元が形を決めているので中身は縛らない。' +
+            'JSON として読めない本文は文字列のまま渡し、空の本文は空文字列になる。' +
+            '`content-type: application/json` は必要（ブラウザの単純リクエストで判断材料を' +
+            '書き込まれないため）。',
+        ),
         responses: {
           200: {
             description: '受信箱へ積んだ。',
@@ -1004,6 +1036,10 @@ export function createApp(deps: AppDeps) {
         description:
           'これは観測ではなく実行である。起こせばクローンのターンが走り、記憶に基づく委譲や' +
           '外部への操作の判断まで動く。予定はずらさない（余分に1回起こす）。',
+        requestBody: noBodyPostRequestBody(
+          '本文は要らない。`content-type: application/json` だけが要る（ブラウザの単純' +
+            'リクエストで自律ターンを起こされないため）。',
+        ),
         responses: {
           200: {
             description: '起こした。',
@@ -1329,6 +1365,10 @@ export function createApp(deps: AppDeps) {
         tags: ['system'],
         summary: 'デーモンを止める',
         description: '`daemon stop` の受け口。本文は無い。',
+        requestBody: noBodyPostRequestBody(
+          '本文は要らない。`content-type: application/json` だけが要る（ブラウザの単純' +
+            'リクエストでデーモンを止められないため）。',
+        ),
         responses: {
           200: {
             description: '停止を受け付けた（実際の停止は少し遅れる）。',

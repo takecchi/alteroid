@@ -248,6 +248,15 @@
         "tags": ["chat"],
         "summary": "会話の終了（蒸留の契機）",
         "description": "会話の終了 = 蒸留の契機。CLI が chat を抜けるときに叩く。本文は無い。",
+        "requestBody": {
+          "required": false,
+          "description": "本文は要らない。`content-type: application/json` だけが要る（ブラウザの単純リクエストで蒸留ターンを起こされないため）。",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "蒸留を促した。",
@@ -1895,6 +1904,15 @@
         "tags": ["events"],
         "summary": "本文の形を選べない webhook 用の入口",
         "description": "他人が形を決めている webhook 用。本文をそのまま payload として運ぶので、送り元を改造できなくても届く（GitHub や CI からそのまま叩ける）。JSON として読めない本文は文字列のまま渡す。",
+        "requestBody": {
+          "required": false,
+          "description": "**本文まるごとが payload になる。** 送り元が形を決めているので中身は縛らない。JSON として読めない本文は文字列のまま渡し、空の本文は空文字列になる。`content-type: application/json` は必要（ブラウザの単純リクエストで判断材料を書き込まれないため）。",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "受信箱へ積んだ。",
@@ -1991,6 +2009,15 @@
         "tags": ["schedule"],
         "summary": "定期ジョブを今すぐ起こす",
         "description": "これは観測ではなく実行である。起こせばクローンのターンが走り、記憶に基づく委譲や外部への操作の判断まで動く。予定はずらさない（余分に1回起こす）。",
+        "requestBody": {
+          "required": false,
+          "description": "本文は要らない。`content-type: application/json` だけが要る（ブラウザの単純リクエストで自律ターンを起こされないため）。",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "起こした。",
@@ -2859,6 +2886,15 @@
         "tags": ["system"],
         "summary": "デーモンを止める",
         "description": "`daemon stop` の受け口。本文は無い。",
+        "requestBody": {
+          "required": false,
+          "description": "本文は要らない。`content-type: application/json` だけが要る（ブラウザの単純リクエストでデーモンを止められないため）。",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "停止を受け付けた（実際の停止は少し遅れる）。",
