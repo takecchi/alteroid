@@ -544,18 +544,36 @@ class Pool implements ManagerPool {
       await this.#restoring;
       if (this.#stopped) return;
 
-      const runner = await this.#runners.get(runnerId);
+      // 名簿を引けなかったのは一時障害（予約して挑み直す）。**居ないと答えられた
+      // のは別**である — その runner は戻ってこないので、挑み直しても同じ答えしか
+      // 返らない。宛先を失ったことは `list()` の `live: false` で見える。
+      const runner = await this.#runners.get(runnerId).catch(() => {
+        retry = true;
+        return null;
+      });
       if (runner === null) return;
 
       // **台帳を先に、runner を後に読む。** 逆にすると、2つの読みの隙間で起こされた
       // 委譲が「runner に居ないのに台帳には居る」と見えて、走り出したばかりの仕事を
       // 死んだものとして起こし直す。この順なら、隙間で生まれた仕事はそもそも
       // 手元の一覧に入らない。
-      const jobs = await this.#stores.jobs.listJobs();
+      const jobs = await this.#stores.jobs.listJobs().catch(() => {
+        retry = true;
+        return null;
+      });
+      if (jobs === null || this.#stopped) return;
 
       // **聞けなかったときは何もしない。** 応答が無いことを「セッションが無い」と
       // 読むと、生きている仕事を二重に起こす。
-      const states = await runner.list().catch(() => null);
+      //
+      // ただし**黙って引き下がるのは駄目である。** `GET /managers` は resume と
+      // 同じ HTTP 経路なので、器の起動直後・瞬断・一時的な 5xx でこける。SSE が
+      // 既に安定していれば次の名乗りは来ないので、ここで予約せずに帰ると、生死
+      // 確認の段階に同じ恒久停止が残る（台帳は `running`、セッションは不在）。
+      const states = await runner.list().catch(() => {
+        retry = true;
+        return null;
+      });
       if (states === null || this.#stopped) return;
       const alive = new Set(states.map((state) => state.managerId));
 
@@ -610,14 +628,17 @@ class Pool implements ManagerPool {
         }
       }
     } catch {
-      // 台帳や名簿を引けないところで転んでもデーモンごと落とさない。ここは名乗りが
-      // 来れば拾い直せる（`list()` に居ないままなので）。
+      // 想定していないところで転んでもデーモンごと落とさない。**ただし黙って
+      // 終わらない** — 何で転んだか分からないものを「もう挑まない」に倒すと、
+      // 走行中だった仕事が誰にも拾われないまま `running` で残る。
+      retry = true;
     } finally {
       this.#reattaching.delete(runnerId);
-      // 走っている間に届いた名乗りの分を、ここで回す。
+      // うまくいった回で待ち時間を忘れる（次の障害はまた1秒から数える）。
+      if (!retry) this.#reattachDelays.delete(runnerId);
+      // 走っている間に届いた名乗りの分を、ここで回す（予約より即時が優先）。
       if (this.#reattachAgain.delete(runnerId) && !this.#stopped) void this.#reattach(runnerId);
       else if (retry && !this.#stopped) this.#scheduleReattach(runnerId);
-      else this.#reattachDelays.delete(runnerId);
     }
   }
 

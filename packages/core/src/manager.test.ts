@@ -1173,6 +1173,66 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     await s.pool.stop();
   });
 
+  it('生死を聞けなかったときも、次の名乗りを待たずに聞き直す', async () => {
+    // `GET /managers` は resume と同じ HTTP 経路なので、器の起動直後・瞬断・
+    // 一時的な 5xx でこける。**ここで黙って引き下がると、resume の再試行と
+    // 同じ恒久停止が「生死確認の段階」に残る** — SSE は安定しているので次の
+    // 名乗りは来ず、台帳は `running` のままセッションは不在になる。
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    await s.pool.restore();
+    expect(fake.state.resumes).toHaveLength(1);
+
+    // swap 後の最初の `list()` だけ落とす（SSE は繋がったまま）。
+    let asked = 0;
+    fake.runner.list = async () => {
+      asked += 1;
+      if (asked === 1) throw new RunnerHttpError('runner GET /managers が失敗した (503)', 503);
+      return [...fake.state.alive];
+    };
+
+    fake.swap();
+
+    await expect.poll(() => asked, { timeout: 2000 }).toBe(1);
+    expect(fake.state.resumes).toHaveLength(1);
+
+    // 名乗りも `manager_send` も追加せずに、聞き直して resume まで到達する。
+    await expect.poll(() => fake.state.resumes.length, { timeout: 5000 }).toBe(2);
+    expect(fake.state.resumes[1]).toMatchObject({ managerId: 'mgr-running' });
+
+    await s.pool.stop();
+  });
+
+  it('台帳を引けなかったときも、次の名乗りを待たずに引き直す', async () => {
+    // 記憶ストア側の一時障害も同じ予約経路に載せる。ここだけ「黙って終わる」に
+    // すると、同じ恒久停止が別の段階に残る。
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    await s.pool.restore();
+    expect(fake.state.resumes).toHaveLength(1);
+
+    const listJobs = stores.jobs.listJobs.bind(stores.jobs);
+    let reads = 0;
+    stores.jobs.listJobs = async () => {
+      reads += 1;
+      if (reads === 1) throw new Error('台帳が一時的に読めない');
+      return listJobs();
+    };
+
+    fake.swap();
+
+    await expect.poll(() => reads, { timeout: 2000 }).toBe(1);
+    await expect.poll(() => fake.state.resumes.length, { timeout: 5000 }).toBe(2);
+
+    await s.pool.stop();
+  });
+
   it('投げ直しても同じ答えが返る失敗は、無限に再試行せずクローンへ知らせる', async () => {
     // 400 は runner が「その命令は受け取れない」と答えている。同じものを投げ直しても
     // 同じ答えが返るので、黙って `running` のまま置くのでも回し続けるのでもなく、
