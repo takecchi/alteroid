@@ -6,12 +6,15 @@ import { pathToFileURL } from 'node:url';
 import { serve } from '@hono/node-server';
 
 import {
+  CLONE_MODEL,
+  CLONE_MODEL_ENV_KEY,
   createClone,
   createLocalRunner,
   createRunnerRegistry,
   createScheduler,
   dailyReportEvent,
   missingDailyReportDates,
+  resolveCloneModel,
   type RunnerClient,
   type Stores,
 } from '@alteroid/core';
@@ -118,6 +121,17 @@ export async function main(): Promise<void> {
   // ローカルで runner を立てていないときだけ、同一プロセスの runner へ落とす
   // （その場合は既知の穴が残る。塞ぐのはコンテナ構成の役目である）。
   const runners = createRunnerRegistry([await openRunner(workspace, storage.withheldEnvKeys)]);
+
+  // 層とモデル帯の対応は設計判断であり、変更には人間の承認が要る（AGENTS.md 地雷5）。
+  // 差し替えられていたら**黙って通さない** — 上位帯から降りたことは人間が意図した
+  // ときだけ起きるべきで、起動ログに出ていなければ誰も気づけない。
+  const cloneModel = resolveCloneModel();
+  if (cloneModel !== CLONE_MODEL) {
+    process.stderr.write(
+      `alteroidd: クローンのモデル帯を ${CLONE_MODEL} から ${cloneModel} へ差し替えています` +
+        `（${CLONE_MODEL_ENV_KEY}）。既定へ戻すにはこの環境変数を外してください\n`,
+    );
+  }
 
   const clone = createClone({
     stores,

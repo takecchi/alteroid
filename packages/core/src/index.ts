@@ -118,7 +118,13 @@ export {
   qualifiedToolName,
   type ToolContext,
 } from './tools.js';
-export { CLONE_MODEL, createClone, type CloneOptions } from './clone.js';
+export {
+  CLONE_MODEL,
+  CLONE_MODEL_ENV_KEY,
+  createClone,
+  resolveCloneModel,
+  type CloneOptions,
+} from './clone.js';
 
 /** テスト用ユーティリティ（本番の配線には出てこない）。 */
 export { createMemoryStores, humanMessage } from './testing.js';
