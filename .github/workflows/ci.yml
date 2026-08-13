@@ -57,6 +57,11 @@ jobs:
           target: runtime
           load: true
           tags: alteroid:ci
+          # クローンの自己認識に載るリビジョン。**ビルド文脈に `.git` は入れない**
+          # ので、渡さないと「リビジョン不明」の器が焼ける。不明でも壊れないが、
+          # 自分が走っているコミットを言えるかどうかは調べ物の精度に直結する。
+          build-args: |
+            ALTEROID_BUILD_REV=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha
 

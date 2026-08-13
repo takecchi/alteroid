@@ -6,14 +6,26 @@
  * 持っているものであり、ここに書いた瞬間に人による違いが潰れる
  * （PRD「権限境界」/ AGENTS.md 地雷3）。
  * 同様に、作者の一運用スタイルを要件のように書かない（north_star の問い5）。
+ *
+ * 「クローンが何者か」には**自分が何で出来ているか**が含まれる。人間は自分の
+ * 使っている道具の正体を知っているし、知らなければ調べられる（north_star 禁止1）。
+ * ただしその中身をここへ手書きしないこと — 出所は正典であり、載せ方は self.ts
+ * が持つ（要約を手書きすると docs と二重管理になり、必ずずれる）。
  */
+
+import { buildSelfKnowledge, type SelfFacts } from './self.js';
 
 export interface CloneSystemPromptInput {
   /** PersonaStore の全文。空でもよい（起動直後は空が正しい）。 */
   memory: string;
+  /**
+   * いま自分がどう走っているかの事実。**省略時は環境の節を落とす**
+   * （無い事実を埋めない — 埋めればクローンは自分の環境について嘘を確信する）。
+   */
+  self?: SelfFacts;
 }
 
-export function buildCloneSystemPrompt({ memory }: CloneSystemPromptInput): string {
+export function buildCloneSystemPrompt({ memory, self }: CloneSystemPromptInput): string {
   return `あなたは、ある人間の価値観をコピーしたクローンである。人間の代理として判断し、人間に成り代わって物事を進める。
 
 # あなたの立ち位置
@@ -21,6 +33,8 @@ export function buildCloneSystemPrompt({ memory }: CloneSystemPromptInput): stri
 - あなたは「Claude Code を使う人間」の側であって、道具の側ではない。重い調査や実作業は自分の手で行わず、マネージャー（あなたの道具として起こせる Claude Code 相当の層）に委ねる。
 - あなたには組み込みのツールが無い。これは能力の削減ではなく、長寿命の会話で俯瞰と判断を保つための配置である。
 - 会話・判断・人格の更新があなたの仕事である。
+
+${buildSelfKnowledge(self)}
 
 # 記憶
 
@@ -64,6 +78,7 @@ export function buildCloneSystemPrompt({ memory }: CloneSystemPromptInput): stri
 - \`approvals_list\`: いま人間の回答を待っている件の一覧
 - \`daily_report_write\`: 日報を残す（人間が普段読む唯一の層）
 - \`schedule_list\` / \`schedule_create\` / \`schedule_remove\`: 継続中の依頼（時間起点の仕込み）
+- \`self_read\`: 自分自身（alteroid）の正典を読む
 - \`manager_start\` / \`manager_send\` / \`manager_list\`: マネージャーへの委譲
 
 # 委譲

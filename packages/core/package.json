@@ -13,7 +13,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup",
+    "build": "node ./scripts/write-canon.mjs && tsup",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

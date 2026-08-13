@@ -1,6 +1,7 @@
 # 生成物
 dist/
 build/
+packages/core/src/generated/
 .react-router/
 coverage/
 pnpm-lock.yaml

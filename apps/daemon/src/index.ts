@@ -8,6 +8,8 @@ import { serve } from '@hono/node-server';
 import {
   CLONE_MODEL,
   CLONE_MODEL_ENV_KEY,
+  MANAGER_MODEL,
+  WORKER_MODEL,
   createClone,
   createLocalRunner,
   createRunnerRegistry,
@@ -16,6 +18,7 @@ import {
   missingDailyReportDates,
   resolveCloneModel,
   type RunnerClient,
+  type SelfFacts,
   type Stores,
 } from '@alteroid/core';
 
@@ -122,6 +125,20 @@ async function openRunner(workspace: string, withheldEnvKeys: string[]): Promise
 }
 
 /**
+ * 委譲先の器を一行で説明する（クローンの自己認識に載る）。
+ *
+ * **同一プロセスであることを隠さない。** ローカル構成では既知の穴が残っており
+ * （マネージャーが `/proc/1/environ` から記憶ストアの鍵に届く）、それを承知で
+ * 動いているのが事実である。事実を伏せた自己認識は自己認識ではない。
+ */
+function describeRunner(): string {
+  const url = process.env.ALTEROID_RUNNER_URL;
+  return url !== undefined && url.length > 0
+    ? `別プロセスの manager-runner（${url}）。マネージャーはそこで走り、記憶ストアの鍵を持たない`
+    : '同一プロセスの runner（ローカル構成）。マネージャーはデーモンと同じ器で走るので、記憶ストアへの経路が残っている';
+}
+
+/**
  * runner へ繋ぐ。**居なければ、戻ってくるまで待つ。**
  *
  * 待つのは「繋がらない」ときだけである。**方針の誤りは待っても直らない**ので、
@@ -187,6 +204,7 @@ export async function main(): Promise<void> {
   // ローカルで runner を立てていないときだけ、同一プロセスの runner へ落とす
   // （その場合は既知の穴が残る。塞ぐのはコンテナ構成の役目である）。
   const runners = createRunnerRegistry([await openRunner(workspace, storage.withheldEnvKeys)]);
+  const runnerDescription = describeRunner();
 
   // 層とモデル帯の対応は設計判断であり、変更には人間の承認が要る（AGENTS.md 地雷5）。
   // 差し替えられていたら**黙って通さない** — 上位帯から降りたことは人間が意図した
@@ -199,14 +217,41 @@ export async function main(): Promise<void> {
     );
   }
 
+  const port = Number(process.env.ALTEROID_PORT ?? '4517');
+  const hostname = process.env.ALTEROID_BIND || DEFAULT_BIND;
+
+  // 入口の認証。**設定されていなければ従来どおり要求しない** — 境界の導入が
+  // 実質のデグレードにならないようにする（north_star「立ち戻るための問い」）。
+  const authPlan = planAuth(process.env, { port });
+  process.stderr.write(`alteroidd: ${authPlan.description}\n`);
+
+  // クローンが自分自身を把握するための材料。**事実を知っているのはここだけ**なので
+  // ここで組み立てる（core 側で環境変数を読み直すと出所が2つになる）。
+  // 鍵は入れないこと — そのままシステムプロンプトへ載る。
+  const self: SelfFacts = {
+    storage: storage.description,
+    // **パスだけを渡さない。** pg 構成でここに残るのは state だけで記憶ではない
+    // （storage.ts）。「記憶: PostgreSQL」と並べたときに矛盾して見えないようにする。
+    local:
+      storage.kind === 'pg'
+        ? `${paths.root}（デーモンのローカル状態だけ。記憶は上の器にあり、ここには無い）`
+        : `${paths.root}（記憶もここにある。人間が直接開いて書き換える）`,
+    workspace,
+    runner: runnerDescription,
+    // **待ち受けアドレスではなく人間が叩く先を渡す。** `ALTEROID_BIND=0.0.0.0` は
+    // 「どこで待つか」であって入口ではないし、TLS を手前で終端すれば scheme も違う。
+    entrypoint: authPlan.publicBaseUrl,
+    auth: authPlan.description,
+    models: { clone: cloneModel, manager: MANAGER_MODEL, worker: WORKER_MODEL },
+  };
+
   const clone = createClone({
     stores,
     cwd: paths.root,
     runners,
+    self,
     ...(storage.sessionStore === undefined ? {} : { sessionStore: storage.sessionStore }),
   });
-  const port = Number(process.env.ALTEROID_PORT ?? '4517');
-  const hostname = process.env.ALTEROID_BIND || DEFAULT_BIND;
 
   // 起動ごとに作り直す。状態ファイルが残っていても、別プロセスを自分だと
   // 誤認させない（PID の再利用で無関係なプロセスを止めないため）。
@@ -256,11 +301,6 @@ export async function main(): Promise<void> {
       `alteroidd: 次のオリジンからのブラウザ呼び出しを許可します: ${allowedOrigins.join(', ')}\n`,
     );
   }
-
-  // 入口の認証。**設定されていなければ従来どおり要求しない** — 境界の導入が
-  // 実質のデグレードにならないようにする（north_star「立ち戻るための問い」）。
-  const authPlan = planAuth(process.env, { port });
-  process.stderr.write(`alteroidd: ${authPlan.description}\n`);
 
   const app = createApp({
     clone,

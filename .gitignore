@@ -13,6 +13,10 @@ coverage/
 # CI が検出できる場所がそこだからで、そこから機械的に落ちるだけのこれは持たない。
 packages/api-client/src/generated/
 
+# 正典（docs/*.md）を core へ焼き込んだ写し（pnpm build が毎回作る）。
+# **docs 側が唯一の出所**なので、機械的に落ちるだけのこれは持たない。
+packages/core/src/generated/
+
 # env / secrets
 .env
 .env.*

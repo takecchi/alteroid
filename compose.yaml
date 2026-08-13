@@ -162,7 +162,12 @@ services:
   # manager-runner — SDK（マネージャーと作業者）を隔離して走らせる。
   # **ここに記憶ストアの鍵を足さないこと。** 足した瞬間、分離した意味が消える。
   runner:
-    build: .
+    build:
+      context: .
+      # クローンの自己認識に載るリビジョン。空でよい（「不明」と正直に伝わる）。
+      # 渡すなら `.env` に `ALTEROID_BUILD_REV=$(git rev-parse --short HEAD)`。
+      args:
+        ALTEROID_BUILD_REV: ${ALTEROID_BUILD_REV:-}
     # 役を選ぶ。`node` を直に叩かない — このスクリプトが合鍵を sha256 へ畳んで
     # 素の値を環境から落としてから exec する（`docker/alteroid-runner`）。
     command: ['alteroid-runner']
@@ -194,7 +199,10 @@ services:
     restart: unless-stopped
 
   app:
-    build: .
+    build:
+      context: .
+      args:
+        ALTEROID_BUILD_REV: ${ALTEROID_BUILD_REV:-}
     # 役を選ぶ（root で来たら node へ降りる。`docker/alteroidd`）。
     command: ['alteroidd']
     depends_on:
