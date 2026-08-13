@@ -1,8 +1,8 @@
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 
-import { baseUrl, ensureRunning } from './daemon.js';
 import { createClient } from './client.js';
+import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 
 /**
  * `alteroid chat` — クローンとの会話。
@@ -13,9 +13,13 @@ import { createClient } from './client.js';
  * `/manager` `/archive` と一本道で降りられる。
  */
 export async function chatCommand(): Promise<void> {
-  const info = await ensureRunning();
-  const base = baseUrl(info);
-  const client = createClient(base);
+  const target = await resolveTarget();
+  if (target.note !== null) {
+    stdout.write(`${target.note}\n`);
+    return;
+  }
+  const base = target.baseUrl;
+  const client = createClient(base, target.headers);
 
   const rl = createInterface({ input: stdin, output: stdout });
   let conversationId: string | null = null;
@@ -40,7 +44,7 @@ export async function chatCommand(): Promise<void> {
         continue;
       }
 
-      conversationId = await sendMessage(base, line, conversationId);
+      conversationId = await sendMessage(target, line, conversationId);
     }
   } finally {
     rl.close();
@@ -55,18 +59,25 @@ export async function chatCommand(): Promise<void> {
 }
 
 async function sendMessage(
-  base: string,
+  target: Target,
   text: string,
   conversationId: string | null,
 ): Promise<string | null> {
-  const response = await fetch(`${base}/chat`, {
+  // SSE は hono/client ではなく生の fetch で受ける（EventSource は POST も
+  // ヘッダ付与もできない）。認証ヘッダはここにも要る。
+  const response = await fetch(`${target.baseUrl}/chat`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { ...target.headers, 'content-type': 'application/json' },
     body: JSON.stringify({ text, conversationId: conversationId ?? undefined }),
   });
 
   if (!response.ok || !response.body) {
-    stdout.write(`エラー: デーモンが応答しません (${response.status})\n`);
+    const described = describeAuthFailure(response.status, target);
+    stdout.write(
+      described === null
+        ? `エラー: デーモンが応答しません (${response.status})\n`
+        : `${described}\n`,
+    );
     return conversationId;
   }
 

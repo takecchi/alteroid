@@ -20,6 +20,7 @@ import {
 } from '@alteroid/core';
 
 import { createApp } from './app.js';
+import { planAuth } from './auth.js';
 import { createJournalBus } from './journal-bus.js';
 import { createHttpRunner } from './runner-client.js';
 import { clearRuntimeInfo, writeRuntimeInfo } from './runtime.js';
@@ -27,6 +28,17 @@ import { buildSchedule, readScheduleConfig } from './schedule.js';
 import { openStorage } from './storage.js';
 
 export { createApp, type AppDeps, type AppType } from './app.js';
+export {
+  AUTH_ENV,
+  AUTH_WITHHELD_ENV_KEYS,
+  GOOGLE_CLIENT_ID_ENV,
+  GOOGLE_CLIENT_SECRET_ENV,
+  PUBLIC_URL_ENV,
+  TOKEN_TTL_ENV,
+  planAuth,
+  type AuthPlan,
+  type Principal,
+} from './auth.js';
 /**
  * spec 生成専用のスタブで `createApp` を呼び、`/openapi.json` を叩いて JSON を
  * 得る（`apps/daemon/scripts/write-openapi.mjs` が使う本体）。デーモンを実際に
@@ -173,6 +185,11 @@ export async function main(): Promise<void> {
     );
   }
 
+  // 入口の認証。**設定されていなければ従来どおり要求しない** — 境界の導入が
+  // 実質のデグレードにならないようにする（north_star「立ち戻るための問い」）。
+  const authPlan = planAuth(process.env, { port });
+  process.stderr.write(`alteroidd: ${authPlan.description}\n`);
+
   const app = createApp({
     clone,
     stores,
@@ -182,13 +199,18 @@ export async function main(): Promise<void> {
     storage: storage.description,
     runners,
     journalEvents: journalBus,
+    auth: { plan: authPlan },
   });
   // 開けたこと自体は方針の変更であって禁止事項ではない。ただし**黙って**外へ
   // 出さない — ここは叩けばクローンのターンが起きる実行の口である。
   if (hostname !== DEFAULT_BIND && hostname !== 'localhost' && hostname !== '::1') {
     process.stderr.write(
-      `alteroidd: ${hostname} で待ち受けます。この API に認証はありません。` +
-        '手前に境界（リバースプロキシ・トンネル・認証）を置いてください。\n',
+      authPlan.enabled
+        ? `alteroidd: ${hostname} で待ち受けます。認証は有効ですが、` +
+            'TLS は手前の層（リバースプロキシ・トンネル）で終端してください' +
+            '（トークンが平文で流れます）。\n'
+        : `alteroidd: ${hostname} で待ち受けます。この API に認証はありません。` +
+            '手前に境界（リバースプロキシ・トンネル・認証）を置いてください。\n',
     );
   }
 

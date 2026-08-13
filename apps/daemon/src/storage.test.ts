@@ -19,7 +19,12 @@ describe('planStorage', () => {
     const plan = planStorage({});
 
     expect(plan.kind).toBe('fs');
-    expect(plan.withheldEnvKeys).toEqual([]);
+    // fs 構成に記憶ストアの鍵は無いが、ログインの鍵は器を問わず伏せる
+    // （握られれば誰でもトークンを発行でき、API 経由で記憶へ届く）。
+    expect(plan.withheldEnvKeys).toEqual([
+      'ALTEROID_GOOGLE_CLIENT_ID',
+      'ALTEROID_GOOGLE_CLIENT_SECRET',
+    ]);
   });
 
   it('ALTEROID_DATABASE_URL があればクラウド（pg）', () => {

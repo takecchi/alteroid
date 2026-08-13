@@ -1,5 +1,6 @@
 import type { SessionStore } from '@anthropic-ai/claude-agent-sdk';
 
+import type { AuthStore } from './auth.js';
 import type {
   Job,
   JournalEntry,
@@ -106,6 +107,13 @@ export interface Stores {
   schedules: ScheduleStore;
   archive: TranscriptArchive;
   sessions: SessionRegistry;
+  /**
+   * ログインしたアカウントと、alteroid を使ってよいかの2値（`auth.ts`）。
+   *
+   * **これは「誰がこの API に触れるか」の話であって、PRD「権限境界」（クローンが
+   * 記憶を根拠に何を人間へ確認するか）とは別の層である。** 混ぜてはいけない。
+   */
+  auth: AuthStore;
   /**
    * SDK のセッション生ログの預け先（M4 のクラウド構成でだけ付く）。
    *

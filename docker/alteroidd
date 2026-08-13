@@ -1,0 +1,35 @@
+#!/bin/sh
+# alteroidd（デーモン＝クローンと記憶）を起こす。
+#
+# **root で起きたら `node` へ降りる。** 記憶ストアの鍵を持つのはこのプロセスなので、
+# 特権のまま走る理由が無い。
+#
+# なぜ器の側に持たせるのか。プラットフォームによっては実行 UID を環境変数で指定する
+# （Railway の `RAILWAY_RUN_UID`）。runner は子プロセスを別 UID へ降ろすために root が
+# 要るので、そこだけ 0 にすると**人間が置く変数が役ごとに割れる**。「root で来ても
+# 自分で降りる」を器が引き受ければ、同じ変数一式を両方へ配れる。
+#
+# 非 root で起きたときは何もしない（`docker compose` の既定はイメージの `USER node`）。
+set -eu
+
+entry=/app/apps/daemon/dist/index.js
+
+if [ "$(id -u)" = '0' ]; then
+  # **`HOME` も一緒に差し替える。** `setpriv` が変えるのは UID/GID だけで、環境は
+  # root のまま残る。`HOME=/root` を持ったまま降りると、クローンの SDK セッションが
+  # 設定（`~/.claude`）を書けずに落ちる — 「コンテナだからできない」が生まれる
+  # （north_star 禁止1）。runner が子プロセスを降ろすときに `HOME` を渡しているのと
+  # 同じ理由である（`packages/core/src/runner.ts` の `#spawnAsChildUser`）。
+  #
+  # 置き場はイメージの `node` ユーザーに従う（決め打ちにすると、ベースイメージが
+  # 変えたときに黙ってずれる）。
+  HOME="$(getent passwd node | cut -d: -f6)"
+  : "${HOME:=/home/node}"
+  USER=node
+  LOGNAME=node
+  export HOME USER LOGNAME
+
+  exec setpriv --reuid=node --regid=node --init-groups node "$entry" "$@"
+fi
+
+exec node "$entry" "$@"

@@ -3,6 +3,7 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 
 import { PgTranscriptArchive } from './archive.js';
+import { PgAuthStore } from './auth.js';
 import type { Db } from './db.js';
 import { PgJobStore } from './jobs.js';
 import { PgJournalStore } from './journal.js';
@@ -13,6 +14,7 @@ import { PgSessionRegistry } from './sessions.js';
 import { PgSessionStore } from './session-store.js';
 
 export { PgTranscriptArchive } from './archive.js';
+export { PgAuthStore } from './auth.js';
 export { PgJobStore } from './jobs.js';
 export { PgJournalStore } from './journal.js';
 export { PgPersonaStore } from './persona.js';
@@ -68,6 +70,7 @@ export function createPgStoresFromDb(db: Db, close?: () => Promise<void>): PgSto
     schedules: new PgScheduleStore(db),
     archive: new PgTranscriptArchive(db),
     sessions: new PgSessionRegistry(db),
+    auth: new PgAuthStore(db),
     sessionStore: new PgSessionStore(db),
     close: close ?? (async () => undefined),
   };

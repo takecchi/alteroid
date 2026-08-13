@@ -4,8 +4,10 @@ import { stdout } from 'node:process';
 import { initWorkspace } from '@alteroid/storage-fs';
 import { Command } from 'commander';
 
+import { accessGrantCommand, accessListCommand, accessRevokeCommand } from './access.js';
 import { chatCommand } from './chat.js';
 import * as daemon from './daemon.js';
+import { loginCommand, logoutCommand, whoamiCommand } from './login.js';
 import { alteroidRoot } from './paths.js';
 
 /**
@@ -36,6 +38,65 @@ program
   .description('クローンと会話する（デーモンが居なければ起こす）')
   .action(async () => {
     await chatCommand();
+  });
+
+/**
+ * ログイン。**手元のデーモンには不要**（状態ファイルを読める＝実行環境の持ち主
+ * として通る）。要るのは ALTEROID_URL で別のデーモンへ繋ぐときと、
+ * 外部アプリ用のトークンを発行したいときである。
+ */
+program
+  .command('login')
+  .description('ブラウザでログインして、この端末用のアクセストークンを貰う')
+  .option('--provider <id>', 'ログイン手段（既定はデーモンが持つ最初のもの）')
+  .action(async (options: { provider?: string }) => {
+    await loginCommand(options);
+  });
+
+program
+  .command('logout')
+  .description('この端末に保存したアクセストークンを消す')
+  .action(async () => {
+    await logoutCommand();
+  });
+
+program
+  .command('whoami')
+  .description('いま自分がどの資格で繋いでいるかを見る')
+  .action(async () => {
+    await whoamiCommand();
+  });
+
+/**
+ * アクセス許可。**ログインしただけでは alteroid は使えない。**
+ *
+ * 持つのは許可の2値だけで、行為ごとのスコープは作らない — それは PRD「権限境界」が
+ * 禁じている「確認が要る行為の一覧」と同じ形になる。ここが決めるのは入口を通すか
+ * どうかだけで、通った後に何を人間へ確認するかはクローンが記憶で判断し続ける。
+ */
+const accessCommand = program
+  .command('access')
+  .description('誰が alteroid を使えるかを決める（実行環境の持ち主だけが操作できる）');
+
+accessCommand
+  .command('list')
+  .description('ログインしたアカウントと許可の状態を見る')
+  .action(async () => {
+    await accessListCommand();
+  });
+
+accessCommand
+  .command('grant <accountId>')
+  .description('alteroid を使う許可を与える')
+  .action(async (accountId: string) => {
+    await accessGrantCommand(accountId);
+  });
+
+accessCommand
+  .command('revoke <accountId>')
+  .description('alteroid を使う許可を取り消す')
+  .action(async (accountId: string) => {
+    await accessRevokeCommand(accountId);
   });
 
 const daemonCommand = program.command('daemon').description('常駐デーモンの操作');

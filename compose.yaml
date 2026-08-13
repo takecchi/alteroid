@@ -1,18 +1,17 @@
 # ローカルと同じものを、コンテナ + PostgreSQL で常駐させる（roadmap M4）。
 #
-#   claude setup-token          # 長期トークンを取る（人間が一度だけ）
-#   TOKEN=$(openssl rand -hex 32)
-#   cat > .env <<EOF
-#   CLAUDE_CODE_OAUTH_TOKEN=...
-#   POSTGRES_PASSWORD=$(openssl rand -hex 16)
-#   ALTEROID_RUNNER_TOKEN=$TOKEN
-#   ALTEROID_RUNNER_TOKEN_SHA256=$(printf %s "$TOKEN" | shasum -a 256 | cut -d' ' -f1)
-#   EOF
+#   cp .env.example .env        # 3つ埋める（下記）
 #   docker compose up -d
 #   docker compose exec app alteroid chat
 #
+# `.env` に要るのは3つだけである:
+#
+#   CLAUDE_CODE_OAUTH_TOKEN=... # claude setup-token（人間が一度だけ）
+#   ALTEROID_RUNNER_TOKEN=...   # openssl rand -hex 32。**app と runner で同じ値**
+#   POSTGRES_PASSWORD=...       # openssl rand -hex 16
+#
 # マネージャーに「実装して PR を出して」と頼むなら、同じ `.env` に GitHub の鍵と
-# コミットの身元も足す（runner へ渡る。無ければ公開リポジトリの clone だけができる）:
+# コミットの身元も足す（無ければ公開リポジトリの clone だけができる）:
 #
 #   GH_TOKEN=github_pat_...      # fine-grained PAT: Contents RW / Pull requests RW
 #   GIT_AUTHOR_NAME=...
@@ -20,25 +19,46 @@
 #   GIT_COMMITTER_NAME=...
 #   GIT_COMMITTER_EMAIL=...
 #
+# 外から HTTP API を叩かせるなら、Google ログインを有効にする（同じ `.env` へ）。
+# ログインしただけでは使えない — 許可は人間が CLI から与える:
+#
+#   ALTEROID_GOOGLE_CLIENT_ID=...apps.googleusercontent.com
+#   ALTEROID_GOOGLE_CLIENT_SECRET=...
+#   ALTEROID_PUBLIC_URL=https://alteroid.example    # 外から届く起点
+#
+#   docker compose exec app alteroid access list          # 誰がログインしたか
+#   docker compose exec app alteroid access grant <id>    # 使えるようにする
+#
+# Google 側に登録する Redirect URI は `<ALTEROID_PUBLIC_URL>/auth/google/callback`
+# の1本だけでよい。**この2つの鍵は app にだけ渡る**（runner へ降ろすと、その中の
+# マネージャーが鍵を読んで自分でトークンを発行できてしまう）。
+#
 # 通っているかは**マネージャーと同じ主体**で確かめる（root で通っても意味がない）:
 #
 #   docker compose exec -u 1001 runner gh auth status
 #
-
-# runner に渡すのが**ハッシュだけ**なのは、runner の中で走るマネージャーが
-# `/proc/1/environ` を読んでも鍵を作れないようにするためである。
+#
+# ## 環境変数は app と runner で同じでよい（違うのは1つだけ）
+#
+# 下の `x-shared-env` を両方の役へ丸ごと渡している。**役ごとに違うのは
+# `ALTEROID_DATABASE_URL`（記憶ストアの鍵）だけ**で、それは app にしか無い。
+# 使う / 使わないは役が決めればよく、人間が2か所に別々の値を置く必要は無い。
+#
+# **合鍵も「同じ値を置くだけ」である。** runner は起動時（`docker/alteroid-runner`）に
+# sha256 へ畳み、素の値を自分の環境から落としてから node を exec する。だから
+# runner のプロセスに素の鍵は残らない — 守りは1枚も減っていない（下記3枚目）。
 #
 # ## なぜ3つに分かれているか
 #
 # ```
 #   app（デーモン・uid 1000）──── db（PostgreSQL）   ← data ネットワーク
 #     ├ クローン（Fable）                             記憶・日誌・ジョブ・生ログ
-#     └ 記憶ストアの鍵と、runner の合鍵を持つ**唯一の**プロセス
+#     └ 記憶ストアの鍵を持つ**唯一の**プロセス
 #     │  Unix ソケット（共有 volume。mode 0600 / owner uid 1000）
 #     └───────────── runner（root）
 #                      └ マネージャー（Opus）＋作業者（Sonnet）は **uid 1001**
 #                        ├ workspace / MCP 設定 / OAuth トークン
-#                        └ **記憶ストアの鍵も、DB への経路も、制御面の鍵も持たない**
+#                        └ **記憶ストアの鍵も、DB への経路も、素の合鍵も持たない**
 # ```
 #
 # 同じ器で走らせている限り、マネージャーは `/proc/1/environ` からデーモンの環境
@@ -50,13 +70,77 @@
 #
 # 1. runner は TCP を開かない。待ち受けは共有 volume 上の Unix ソケットだけ
 # 2. そのソケットは mode 0600 / owner uid 1000（デーモン）。uid 1001 の子は繋げない
-# 3. runner が持つのは合鍵の sha256 だけ。読めても鍵は作れない
+# 3. runner のプロセスに残るのは合鍵の sha256 だけ。読めても鍵は作れない
 #
 # ネットワークも分けてあるので、runner から db への経路はそもそも存在しない。
 #
 # **待ち受けは 127.0.0.1 のまま、ポートも公開しない。** クローンへ話しかける口は
 # 叩けばターンが起きる実行の口なので、外に出すなら手前に境界（認証・トンネル・
 # リバースプロキシ）を置くのが先である。中から使うなら exec で足りる。
+
+# app と runner で共通の環境変数。**ここに記憶ストアの鍵を足さないこと** —
+# 足した瞬間、runner の中の子プロセス（＝マネージャー）が同じ鍵に届く。
+x-shared-env: &shared-env
+  # 制御面の合鍵。**両方に同じ値を置くだけでよい。** runner は起動時に sha256 へ
+  # 畳んで素の値を落とす（`docker/alteroid-runner`）。
+  ALTEROID_RUNNER_TOKEN: ${ALTEROID_RUNNER_TOKEN:?openssl rand -hex 32 で作って .env に置くこと}
+  # 委譲の宛先（app が読む）と、その待ち受け（runner が読む）。同じ口の裏表なので
+  # 並べて置く。相手側は読まないだけで、害は無い。
+  ALTEROID_RUNNER_URL: unix:/run/alteroid/runner.sock
+  ALTEROID_RUNNER_SOCKET: /run/alteroid/runner.sock
+  # ソケットの持ち主はデーモン（uid 1000）。mode 0600 なので uid 1001 は繋げない。
+  ALTEROID_RUNNER_SOCKET_UID: '1000'
+  ALTEROID_RUNNER_SOCKET_GID: '1000'
+  # 安定した識別子。台帳の `manager_id → runner_id` はこれで引く
+  # （器を作り直しても同じ宛先として戻る）。
+  ALTEROID_RUNNER_ID: ${ALTEROID_RUNNER_ID:-runner-primary}
+  # 認証はサブスクリプションの長期トークン（claude setup-token）。クローンも
+  # マネージャーも SDK セッションなので、両方に要る。
+  CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:?claude setup-token で取得して .env に置くこと}
+  # 自律の既定（日報・発意）は環境変数で開け閉めできる。これは方針であって
+  # 実行回数の制限ではない（north_star 禁止2）。
+  ALTEROID_DAILY_REPORT_AT: ${ALTEROID_DAILY_REPORT_AT:-22:00}
+  ALTEROID_INITIATIVE_EVERY: ${ALTEROID_INITIATIVE_EVERY:-60}
+  TZ: ${TZ:-Asia/Tokyo}
+  # 入口の認証（誰がこの HTTP API を叩いてよいか）。**人間が置くのはここ1か所**で、
+  # **走っている runner には残らない** — `docker/alteroid-runner` が `exec` の前に
+  # 落とす（合鍵を sha256 へ畳むのと同じ形）。
+  #
+  # 落とす理由は合鍵と同じで、UID の分離が崩れた場面で子プロセス（＝マネージャー）が
+  # `/proc/1/environ` から読めてしまうからである。読めた瞬間、自分でアクセストークンを
+  # 発行して API 経由で記憶へ届く。**伏せるのは上＝記憶へ到達する鍵**であって、
+  # 下＝外の世界へ手を伸ばす鍵（`GH_TOKEN`）とは扱いが逆になる。
+  #
+  # 未設定なら認証を要求しない（ポートを公開していない既定の構成では、境界は
+  # 待ち受け先の側にある）。
+  ALTEROID_GOOGLE_CLIENT_ID: ${ALTEROID_GOOGLE_CLIENT_ID:-}
+  ALTEROID_GOOGLE_CLIENT_SECRET: ${ALTEROID_GOOGLE_CLIENT_SECRET:-}
+  # 認証を要求するかは鍵の有無から決まるが、**方針は設定で開けられること**
+  # （north_star 禁止2）。`on` / `off` で明示的に上書きできる。空は「自動」。
+  ALTEROID_AUTH: ${ALTEROID_AUTH:-}
+  # 発行するアクセストークンの寿命（日）。`off` で無期限。空なら既定の 30 日。
+  ALTEROID_ACCESS_TOKEN_TTL_DAYS: ${ALTEROID_ACCESS_TOKEN_TTL_DAYS:-}
+  # ブラウザが戻ってくる先の起点。**外から届く URL を書く**（プロバイダに登録する
+  # Redirect URI は `<これ>/auth/google/callback` の1本だけでよい）。
+  ALTEROID_PUBLIC_URL: ${ALTEROID_PUBLIC_URL:-}
+  # GitHub を触るための鍵と、コミットの身元。**これは下＝外の世界へ手を伸ばす鍵で
+  # あり、渡すのが正しい**（記憶ストアの鍵と逆。伏せると人間が Claude Code でできる
+  # `gh pr create` が層を下りた瞬間にできなくなる＝デグレード。north_star 禁止1）。
+  # クローンも人間と同じく自分の手を持つので、app にも同じものが渡る。
+  #
+  # 無くても壊れない。公開リポジトリの clone は鍵なしで通り、**push と PR 作成に
+  # だけ要る**。`GIT_*` を `git config` ではなく環境変数で渡すのは、器を作り直す
+  # たびに設定が消えるからである。
+  #
+  # **値を書かない行**は「置かれていれば渡す / 無ければ未設定のまま」の意味である。
+  # `${VAR:-}` のように空文字で渡してはいけない（空の `GIT_AUTHOR_NAME` は git を
+  # `empty ident name` で落とす＝未設定より悪い）。
+  GH_TOKEN:
+  GIT_AUTHOR_NAME:
+  GIT_AUTHOR_EMAIL:
+  GIT_COMMITTER_NAME:
+  GIT_COMMITTER_EMAIL:
+
 services:
   db:
     image: postgres:17-alpine
@@ -79,44 +163,13 @@ services:
   # **ここに記憶ストアの鍵を足さないこと。** 足した瞬間、分離した意味が消える。
   runner:
     build: .
-    command: ['node', 'apps/runner/dist/index.js']
+    # 役を選ぶ。`node` を直に叩かない — このスクリプトが合鍵を sha256 へ畳んで
+    # 素の値を環境から落としてから exec する（`docker/alteroid-runner`）。
+    command: ['alteroid-runner']
     # **root で走らせる。** 子プロセス（マネージャーと作業者）を uid 1001 へ降ろす
     # のに特権が要るためで、権限を配るためではない。降りた先の worker は非特権である。
     user: root
-    # **リスト形式で書いている。** `GH_TOKEN` と `GIT_*` は「置かれていなければ
-    # 渡さない」でなければならず、マップ形式の `${VAR:-}` だと未設定を空文字にして
-    # しまう（空の `GIT_AUTHOR_NAME` は git を `empty ident name` で落とす＝未設定より悪い）。
-    # 値なしで名前だけ並べた行は、シェルと `.env` のどちらかにあれば渡り、無ければ
-    # 未設定のまま container へ入る。
-    environment:
-      # 安定した識別子。台帳の `manager_id → runner_id` はこれで引く
-      # （器を作り直しても同じ宛先として戻る）。
-      - ALTEROID_RUNNER_ID=${ALTEROID_RUNNER_ID:-runner-primary}
-      # **TCP を開かない。** 待ち受けは共有 volume の Unix ソケットだけなので、
-      # 同じ器のマネージャーから `curl http://127.0.0.1:...` の宛先が存在しない。
-      - ALTEROID_RUNNER_SOCKET=/run/alteroid/runner.sock
-      # ソケットの持ち主はデーモン（uid 1000）。mode 0600 なので uid 1001 は繋げない。
-      - ALTEROID_RUNNER_SOCKET_UID=1000
-      - ALTEROID_RUNNER_SOCKET_GID=1000
-      # 制御面の合鍵は**ハッシュだけ**。読めても鍵は作れない。
-      - ALTEROID_RUNNER_TOKEN_SHA256=${ALTEROID_RUNNER_TOKEN_SHA256:?openssl rand -hex 32 の sha256 を .env に置くこと}
-      # 認証はサブスクリプションの長期トークン（claude setup-token）。
-      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:?claude setup-token で取得して .env に置くこと}
-      - TZ=${TZ:-Asia/Tokyo}
-      # マネージャーが GitHub を触るための鍵と、コミットの身元。**runner に置くのが
-      # 正しい。** 記憶ストアの鍵（伏せる）と違って、これは**下＝外の世界へ手を伸ばす
-      # 鍵**であり、伏せると人間が Claude Code でできる `gh pr create` が層を下りた
-      # 瞬間にできなくなる（デグレード。north_star 禁止1）。
-      #
-      # 無くても壊れない。公開リポジトリの clone は鍵なしで通り、**push と PR 作成に
-      # だけ要る**。`GIT_*` を `git config` ではなく環境変数で渡すのは、器を作り直す
-      # たびに設定が消えるからである（置き忘れると commit が
-      # `Please tell me who you are` で失敗する）。
-      - GH_TOKEN
-      - GIT_AUTHOR_NAME
-      - GIT_AUTHOR_EMAIL
-      - GIT_COMMITTER_NAME
-      - GIT_COMMITTER_EMAIL
+    environment: *shared-env
     volumes:
       # マネージャーが実際に触るプロジェクト。人間が Claude Code を開く場所と同じ
       # 意味を持つ。**MCP 設定（.mcp.json）もここに置く** — cwd がこの場所なので、
@@ -142,25 +195,18 @@ services:
 
   app:
     build: .
+    # 役を選ぶ（root で来たら node へ降りる。`docker/alteroidd`）。
+    command: ['alteroidd']
     depends_on:
       db:
         condition: service_healthy
       runner:
         condition: service_healthy
     environment:
-      # 記憶・日誌・ジョブ・セッションの置き場。**この鍵はデーモンだけが持つ。**
+      <<: *shared-env
+      # **役ごとに違う唯一の変数。** 記憶・日誌・ジョブ・セッションの置き場であり、
+      # この鍵はデーモンだけが持つ。共通ブロックへ移さないこと。
       ALTEROID_DATABASE_URL: postgres://alteroid:${POSTGRES_PASSWORD}@db:5432/alteroid
-      # 委譲先。固定 URL をコードに埋めず、ここで名簿へ登録する。
-      ALTEROID_RUNNER_URL: unix:/run/alteroid/runner.sock
-      # 制御面の合鍵。**素の値を持つのはデーモンだけ**（runner はハッシュのみ）。
-      ALTEROID_RUNNER_TOKEN: ${ALTEROID_RUNNER_TOKEN:?openssl rand -hex 32 で作って .env に置くこと}
-      # クローン（Fable）も SDK セッションなので、こちらにも認証が要る。
-      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:?claude setup-token で取得して .env に置くこと}
-      # 自律の既定（日報・発意）は環境変数で開け閉めできる。これは方針であって
-      # 実行回数の制限ではない（north_star 禁止2）。
-      ALTEROID_DAILY_REPORT_AT: ${ALTEROID_DAILY_REPORT_AT:-22:00}
-      ALTEROID_INITIATIVE_EVERY: ${ALTEROID_INITIATIVE_EVERY:-60}
-      TZ: ${TZ:-Asia/Tokyo}
     volumes:
       # state（daemon.json）だけ。記憶は PostgreSQL 側にある。
       - state:/data/alteroid
