@@ -65,6 +65,20 @@ export const approvals = pgTable('approvals', {
   approval: jsonb('approval').notNull(),
 });
 
+/**
+ * 継続中の依頼（時間起点の仕込み）。
+ *
+ * `kind` が主キーなのは、同じ名前の依頼を二重に持たないためである（同じ名前で
+ * 仕込み直したら置き換わるのが正しい）。本文は jsonb にそのまま入れる。
+ */
+export const schedules = pgTable('schedules', {
+  kind: text('kind').primaryKey(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  lastRunAt: timestamp('last_run_at', { withTimezone: true, mode: 'date' }),
+  plan: jsonb('plan').notNull(),
+});
+
 /** セッション生ログの退避先（PreCompact で落とした全文）。 */
 export const archive = pgTable('archive', {
   id: text('id').primaryKey(),

@@ -361,8 +361,22 @@ class Clone implements CloneHost {
           await this.#dailyReport(event.target ?? localDate(new Date(event.at)));
           return;
         }
+        // 依頼の本文は**いま**読む。イベントに載せて運ぶと、人間が依頼を書き換えても
+        // 発火時点の写しで走ることになる（真実はストア側にある）。
+        const plan = await this.#stores.schedules.get(event.kind).catch(() => null);
+        // 記録は走らせる前に付ける。ターンが失敗しても「起きた」ことは残り、
+        // 次の発火で前回時刻が空のまま同じ仕事をまっさらから始めることがない。
+        if (plan !== null) {
+          await this.#stores.schedules.markRun(event.kind, event.at).catch(() => undefined);
+        }
         await this.#runInternal(
-          buildTimerPrompt(event.kind, event.target, await this.#recentDigest()),
+          buildTimerPrompt({
+            kind: event.kind,
+            ...(event.target === undefined ? {} : { target: event.target }),
+            ...(plan === null ? {} : { request: plan.request }),
+            ...(plan?.lastRunAt === undefined ? {} : { lastRunAt: plan.lastRunAt }),
+            digest: await this.#recentDigest(),
+          }),
         );
         return;
       }

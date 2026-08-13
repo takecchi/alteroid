@@ -47,6 +47,15 @@ export function buildCloneSystemPrompt({ memory }: CloneSystemPromptInput): stri
 - 人間の回答を待っている件があっても、止まるのは**その件だけ**である。他の仕事は進めてよい。
 - 人間が居ないあいだに決めたことも、必ず \`journal_write\` に残す。人間が後から読んで否定できることが最終承認の実体である。
 
+## 続きのある依頼を受けたら
+
+「定期的に〜しておいて」「これからは〜を見ておいて」のように**その場で終わらない依頼**を受けたら、記憶へ書くだけで済ませずに \`schedule_create\` で時間起点として仕込む。
+
+- 記憶は判断の**根拠**を置く場所であって、時計を持たない。記憶にだけ書いた依頼は、あなたがその時々に思い出せるかどうかに委ねられる。
+- \`schedule_create\` で仕込んだ依頼は、時刻が来れば必ずあなたの受信箱へ届く。届いたときには依頼の本文と前回動いた時刻が一緒に渡る。
+- 依頼の背景・判断の基準（どこまで自分で進めてよいか等）は、これまでどおり記憶へ書く。両方やること。
+- 依頼が済んだ・もう要らないと判断したら \`schedule_remove\` で片付ける。周期が合っていなければ同じ \`kind\` で \`schedule_create\` すれば置き換わる。
+
 # 道具
 
 - \`memory_list\` / \`memory_read\` / \`memory_write\` / \`memory_append\`: 記憶
@@ -54,6 +63,7 @@ export function buildCloneSystemPrompt({ memory }: CloneSystemPromptInput): stri
 - \`ask_human\`: 人間の承認待ちキューに質問を積む
 - \`approvals_list\`: いま人間の回答を待っている件の一覧
 - \`daily_report_write\`: 日報を残す（人間が普段読む唯一の層）
+- \`schedule_list\` / \`schedule_create\` / \`schedule_remove\`: 継続中の依頼（時間起点の仕込み）
 - \`manager_start\` / \`manager_send\` / \`manager_list\`: マネージャーへの委譲
 
 # 委譲
@@ -183,11 +193,58 @@ export function buildExternalEventPrompt({ source, body }: ExternalEventPromptIn
 ${body}`;
 }
 
-/** 日報以外の定期ジョブ（人間が後から仕込んだもの）が来たとき。 */
-export function buildTimerPrompt(kind: string, target: string | undefined, digest: string): string {
-  return `[system] 定期ジョブ ${kind} の時刻になった${target === undefined ? '' : `（対象: ${target}）`}。
+/**
+ * 日報以外の定期ジョブ（クローンか人間が後から仕込んだもの）が来たとき。
+ *
+ * **依頼の本文が分かっているなら、それを渡す。** 「記憶を見て思い出せ」で済ませると、
+ * 頼まれた仕事が思い出せるかどうかの賭けになる（PRD「自律」の起点②が実質
+ * 「運が良ければ動く」に落ちる）。やるかどうか・どうやるかの判断はクローンに残す。
+ */
+export interface TimerPromptInput {
+  kind: string;
+  /** その発火が何を対象にしているか（日報なら対象日）。 */
+  target?: string;
+  /** 継続中の依頼の本文。仕込んだ覚えのない kind なら省略される。 */
+  request?: string;
+  /** 前回この依頼で動いた時刻。 */
+  lastRunAt?: string;
+  digest: string;
+}
 
-この定期ジョブが何のために仕込まれているかは記憶にある。照らして、必要なことをせよ。何もしなくてよいならそう答えよ。
+export function buildTimerPrompt({
+  kind,
+  target,
+  request,
+  lastRunAt,
+  digest,
+}: TimerPromptInput): string {
+  const head = `[system] 定期ジョブ ${kind} の時刻になった${target === undefined ? '' : `（対象: ${target}）`}。`;
+
+  const body =
+    request === undefined
+      ? 'この定期ジョブが何のために仕込まれているかは記憶にある。照らして、必要なことをせよ。何もしなくてよいならそう答えよ。'
+      : [
+          'これは継続中の依頼である。本文はこうなっている。',
+          '',
+          '---',
+          request.trim(),
+          '---',
+          '',
+          `前回この依頼で動いた時刻: ${lastRunAt ?? '（まだ一度も動いていない）'}`,
+          '',
+          'この依頼と記憶にある目的・価値観に照らして、いま何をするかを決めよ。',
+          '',
+          '- 実作業なら `manager_start` で委譲する。',
+          '- **同じ仕事を二重に起こさないこと。** 前回からの続きがあるかを `manager_list` で見てから決める（走行中・返事待ちのものは下の要約にも出ている）。',
+          '- やることが無ければ何もしなくてよい。無理に仕事を作らないこと。',
+          '- この依頼がもう要らない・周期が合っていないと判断したなら、`schedule_remove` や `schedule_create` で自分で直してよい。',
+          '',
+          '聞かずに動いたなら `journal_write` に残せ。',
+        ].join('\n');
+
+  return `${head}
+
+${body}
 
 以下は直近の状況である。
 

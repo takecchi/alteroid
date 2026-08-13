@@ -6,12 +6,14 @@ import type {
   MemoryDocument,
   MemoryDocumentMeta,
   PendingApproval,
+  ScheduledRequest,
 } from './schema.js';
 import type {
   JobStore,
   JournalQuery,
   JournalStore,
   PersonaStore,
+  ScheduleStore,
   SessionRegistry,
   Stores,
   TranscriptArchive,
@@ -26,6 +28,7 @@ export function createMemoryStores(): Stores {
   const entries: JournalEntry[] = [];
   const jobs = new Map<string, Job>();
   const approvals = new Map<string, PendingApproval>();
+  const schedules = new Map<string, ScheduledRequest>();
   const archives = new Map<string, string>();
   let cloneSessionId: string | null = null;
   let counter = 0;
@@ -101,6 +104,26 @@ export function createMemoryStores(): Stores {
     },
   };
 
+  const scheduleStore: ScheduleStore = {
+    async list() {
+      return [...schedules.values()].sort((a, b) => a.kind.localeCompare(b.kind));
+    },
+    async get(kind) {
+      return schedules.get(kind) ?? null;
+    },
+    async put(entry) {
+      schedules.set(entry.kind, entry);
+    },
+    async remove(kind) {
+      schedules.delete(kind);
+    },
+    async markRun(kind, at) {
+      const existing = schedules.get(kind);
+      if (!existing) return;
+      schedules.set(kind, { ...existing, lastRunAt: at, updatedAt: at });
+    },
+  };
+
   const archive: TranscriptArchive = {
     async archive(sessionId, transcript) {
       const id = `${sessionId}-${nextId()}`;
@@ -124,7 +147,7 @@ export function createMemoryStores(): Stores {
     },
   };
 
-  return { persona, journal, jobs: jobStore, archive, sessions };
+  return { persona, journal, jobs: jobStore, schedules: scheduleStore, archive, sessions };
 }
 
 export function humanMessage(text: string, conversationId = 'conv-1'): InboxEvent {

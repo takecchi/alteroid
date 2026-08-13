@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
-import type { InboxEvent } from './schema.js';
-import type { JournalStore } from './store.js';
+import type { InboxEvent, ScheduleSpec, ScheduledRequest } from './schema.js';
+import type { JournalStore, ScheduleStore } from './store.js';
 
 /**
  * スケジューラ — 時間起点のジョブ（PRD「自律」の起点②）。
@@ -32,6 +32,10 @@ export interface ScheduleStatus {
   description: string;
   /** 次の発火時刻（ISO 8601）。 */
   nextAt: string;
+  /** 定期の依頼として仕込まれたものだけ（既定の日報・発意には無い）。 */
+  request?: string;
+  /** 前回この kind で発火した時刻。 */
+  lastRunAt?: string;
 }
 
 export interface Scheduler {
@@ -47,14 +51,28 @@ export interface Scheduler {
   run(kind: string): boolean;
   /** 期限が来たものを起こす。内部タイマーとテストの共通経路。 */
   tick(now?: Date): string[];
+  /**
+   * 永続化された「定期の依頼」を読み直して、仕込みを合わせる。
+   *
+   * **クローンや人間が依頼を足す経路をここへ通す。** スケジューラへ直接 add する
+   * 口を作ると、器（ストア）と仕込み（メモリ）の二重管理になり、デーモンを
+   * 再起動した瞬間に依頼が消える。真実はストア側だけに置く。
+   */
+  refresh(): Promise<void>;
 }
 
 export interface SchedulerOptions {
+  /** 既定で仕込むもの（日報・発意）。設定で外せるが、依頼で置き換わるものではない。 */
   entries: ScheduleEntry[];
   /** 受信箱へ積む口。 */
   post: (event: InboxEvent) => void;
   /** 主にテスト用。 */
   now?: () => Date;
+  /**
+   * 継続中の依頼の置き場。渡さなければ既定の定期ジョブだけが回る
+   * （`refresh()` は何もしない）。
+   */
+  schedules?: ScheduleStore;
 }
 
 /**
@@ -71,26 +89,34 @@ export function createScheduler(options: SchedulerOptions): Scheduler {
 }
 
 class TimerScheduler implements Scheduler {
-  readonly #entries: ScheduleEntry[];
+  /** 既定の仕込み（日報・発意）。 */
+  readonly #base: ScheduleEntry[];
+  /** 継続中の依頼から作った仕込み。ストアを読み直すたびに合わせ直す。 */
+  readonly #requests = new Map<
+    string,
+    { entry: ScheduleEntry; spec: string; plan: ScheduledRequest }
+  >();
   readonly #post: (event: InboxEvent) => void;
   readonly #now: () => Date;
+  readonly #store: ScheduleStore | undefined;
   readonly #due = new Map<string, number>();
 
   #timer: ReturnType<typeof setTimeout> | null = null;
   #started = false;
 
-  constructor({ entries, post, now }: SchedulerOptions) {
-    this.#entries = entries;
+  constructor({ entries, post, now, schedules }: SchedulerOptions) {
+    this.#base = entries;
     this.#post = post;
     this.#now = now ?? (() => new Date());
+    this.#store = schedules;
   }
 
   start(): void {
     if (this.#started) return;
     this.#started = true;
     const now = this.#now();
-    for (const entry of this.#entries) {
-      this.#due.set(entry.kind, entry.nextAt(now).getTime());
+    for (const entry of this.#entries()) {
+      if (!this.#due.has(entry.kind)) this.#due.set(entry.kind, entry.nextAt(now).getTime());
     }
     this.#arm();
   }
@@ -103,23 +129,64 @@ class TimerScheduler implements Scheduler {
 
   list(): ScheduleStatus[] {
     const now = this.#now();
-    return this.#entries.map((entry) => ({
-      kind: entry.kind,
-      description: entry.description,
-      nextAt: new Date(this.#due.get(entry.kind) ?? entry.nextAt(now).getTime()).toISOString(),
-    }));
+    return this.#entries().map((entry) => {
+      const plan = this.#requests.get(entry.kind)?.plan;
+      return {
+        kind: entry.kind,
+        description: entry.description,
+        nextAt: new Date(this.#due.get(entry.kind) ?? entry.nextAt(now).getTime()).toISOString(),
+        ...(plan === undefined ? {} : { request: plan.request }),
+        ...(plan?.lastRunAt === undefined ? {} : { lastRunAt: plan.lastRunAt }),
+      };
+    });
   }
 
   run(kind: string): boolean {
-    const entry = this.#entries.find((candidate) => candidate.kind === kind);
+    const entry = this.#entries().find((candidate) => candidate.kind === kind);
     if (!entry) return false;
     this.#post(entry.event(this.#now()));
     return true;
   }
 
+  async refresh(): Promise<void> {
+    if (this.#store === undefined) return;
+    const plans = await this.#store.list();
+    const now = this.#now();
+    const seen = new Set<string>();
+
+    for (const plan of plans) {
+      // 既定の仕込みと同じ名前は乗っ取らせない（日報を「定期の依頼」で潰せてしまう）
+      if (this.#base.some((entry) => entry.kind === plan.kind)) continue;
+      seen.add(plan.kind);
+      const spec = JSON.stringify(plan.spec);
+      const existing = this.#requests.get(plan.kind);
+      if (existing?.spec === spec) {
+        // 周期が同じなら次の予定はずらさない。lastRunAt だけ新しくする
+        existing.plan = plan;
+        continue;
+      }
+      const entry = scheduledRequestEntry(plan);
+      this.#requests.set(plan.kind, { entry, spec, plan });
+      this.#due.set(plan.kind, entry.nextAt(now).getTime());
+    }
+
+    for (const kind of [...this.#requests.keys()]) {
+      if (seen.has(kind)) continue;
+      this.#requests.delete(kind);
+      this.#due.delete(kind);
+    }
+
+    // 仕込みが増えたなら、次の見張りをその予定に合わせ直す
+    this.#arm();
+  }
+
+  #entries(): ScheduleEntry[] {
+    return [...this.#base, ...[...this.#requests.values()].map((held) => held.entry)];
+  }
+
   tick(now: Date = this.#now()): string[] {
     const fired: string[] = [];
-    for (const entry of this.#entries) {
+    for (const entry of this.#entries()) {
       const due = this.#due.get(entry.kind);
       if (due === undefined || due > now.getTime()) continue;
       // 次の予定を先に決める。イベント投入で例外が出ても、同じ発火を
@@ -141,12 +208,31 @@ class TimerScheduler implements Scheduler {
 
     this.#timer = setTimeout(() => {
       this.#timer = null;
-      try {
-        this.tick();
-      } finally {
-        this.#arm();
-      }
+      void (async () => {
+        try {
+          // 依頼が増減していればこの刻みで拾う。仕込みの真実はストア側にしか無い
+          // ので、ここを通らないと「足したのに起きない」が起きる。
+          await this.#refreshQuietly();
+          this.tick();
+        } finally {
+          this.#arm();
+        }
+      })();
     }, delay);
+  }
+
+  /**
+   * 記憶の器の瞬断で時計を止めない。
+   *
+   * 読めなかったときに既に仕込んである予定を捨てないこと（捨てると、DB が
+   * 一瞬揺れただけで継続中の依頼が黙って消える）。
+   */
+  async #refreshQuietly(): Promise<void> {
+    try {
+      await this.refresh();
+    } catch {
+      // 次の刻みで読み直す
+    }
   }
 }
 
@@ -267,6 +353,69 @@ export function selfInitiativeEntry(options: { everyMinutes: number }): Schedule
         id: randomUUID(),
         at: firedAt.toISOString(),
         reason: '定期 tick: 記憶にある目的から次にやることを決める',
+      };
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 継続中の依頼（クローンと人間が後から仕込む時間起点）
+// ---------------------------------------------------------------------------
+
+/** 既定の仕込みの名前。依頼で乗っ取らせない。 */
+export const RESERVED_SCHEDULE_KINDS: readonly string[] = [DAILY_REPORT_KIND, SELF_INITIATIVE_KIND];
+
+/** 人間が `/schedule` で読む周期の言い方。 */
+export function describeScheduleSpec(spec: ScheduleSpec): string {
+  if (spec.type === 'daily') {
+    const time = parseTimeOfDay(spec.at);
+    const label =
+      time === null
+        ? spec.at
+        : `${`${time.hour}`.padStart(2, '0')}:${`${time.minute}`.padStart(2, '0')}`;
+    return `毎日 ${label}（ローカル時刻）`;
+  }
+  return `${spec.minutes} 分ごと`;
+}
+
+/**
+ * 継続中の依頼1件を仕込みに変える。
+ *
+ * **依頼の本文をイベントに載せない。** 受信箱に載せた瞬間に、それは発火した時点の
+ * 写しになる（人間が依頼を書き換えても古い本文で走る）。運ぶのは `kind` だけで、
+ * 本文はクローンが処理する瞬間にストアから読む。
+ */
+export function scheduledRequestEntry(plan: ScheduledRequest): ScheduleEntry {
+  const description = `${describeScheduleSpec(plan.spec)}: ${plan.request.replace(/\s+/g, ' ').trim()}`;
+
+  const nextAt =
+    plan.spec.type === 'daily'
+      ? (after: Date): Date => {
+          // 読めない時刻で沈黙させない。設定の誤りは 00:00 に寄せて、毎日必ず起こす
+          const at = parseTimeOfDay(plan.spec.type === 'daily' ? plan.spec.at : '00:00') ?? {
+            hour: 0,
+            minute: 0,
+          };
+          const today = atTimeOnDay(after, at);
+          if (today.getTime() > after.getTime()) return today;
+          const tomorrow = new Date(after.getFullYear(), after.getMonth(), after.getDate() + 1);
+          return atTimeOnDay(tomorrow, at);
+        }
+      : (after: Date): Date => {
+          const minutes = plan.spec.type === 'every' ? plan.spec.minutes : 60;
+          return new Date(after.getTime() + Math.max(1, Math.floor(minutes)) * 60_000);
+        };
+
+  return {
+    kind: plan.kind,
+    description,
+    nextAt,
+    event(firedAt) {
+      return {
+        type: 'timer',
+        id: randomUUID(),
+        at: firedAt.toISOString(),
+        kind: plan.kind,
       };
     },
   };

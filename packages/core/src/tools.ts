@@ -4,8 +4,15 @@ import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 
 import type { ManagerPool } from './manager.js';
-import { localDate, localDayRange } from './schedule.js';
-import type { ChatStreamEvent, PendingApproval } from './schema.js';
+import {
+  RESERVED_SCHEDULE_KINDS,
+  describeScheduleSpec,
+  localDate,
+  localDayRange,
+  parseTimeOfDay,
+} from './schedule.js';
+import { scheduleKindSchema, scheduleSpecSchema } from './schema.js';
+import type { ChatStreamEvent, PendingApproval, ScheduleSpec, ScheduledRequest } from './schema.js';
 import type { Stores } from './store.js';
 
 /**
@@ -44,6 +51,9 @@ export const CLONE_TOOL_NAMES = [
   'ask_human',
   'approvals_list',
   'daily_report_write',
+  'schedule_list',
+  'schedule_create',
+  'schedule_remove',
   'manager_start',
   'manager_send',
   'manager_list',
@@ -246,6 +256,125 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
+    // --- 継続中の依頼（時間起点の仕込み） --------------------------------------
+    tool(
+      'schedule_list',
+      [
+        '仕込んである継続中の依頼の一覧。周期と、前回それで動いた時刻が分かる。',
+        '既定の日報・発意 tick はここには出ない（あれは設定で回っているもの）。',
+      ].join(' '),
+      {},
+      async () => {
+        const plans = await stores.schedules.list();
+        if (plans.length === 0) return text('（継続中の依頼は無い）');
+        return text(
+          plans
+            .map((plan) =>
+              [
+                `- ${plan.kind}（${describeScheduleSpec(plan.spec)}）`,
+                `  依頼: ${plan.request}`,
+                `  前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}`,
+              ].join('\n'),
+            )
+            .join('\n'),
+        );
+      },
+    ),
+
+    tool(
+      'schedule_create',
+      [
+        'その場で終わらない依頼を、時間起点として仕込む。',
+        '時刻が来れば必ずあなたの受信箱へ届き、そのとき依頼の本文と前回動いた時刻が一緒に渡る。',
+        '記憶に書くのは判断の根拠であって、記憶は時計を持たない。継続する依頼はここにも置くこと。',
+        '同じ kind で呼べば置き換わる（周期や本文の直しはこれで行う）。',
+      ].join(' '),
+      {
+        kind: z
+          .string()
+          .describe('この依頼の名前（英小文字・数字・. _ -）。後から直す・消すときの識別子'),
+        request: z
+          .string()
+          .describe(
+            '依頼の本文。時刻が来たときのあなたが読んで、そのまま動ける粒度で書く' +
+              '（対象・狙い・どこまでやるか。人間から頼まれた言葉そのものも残すとよい）',
+          ),
+        dailyAt: z
+          .string()
+          .optional()
+          .describe('毎日この時刻に起こす（ローカル時刻の HH:MM）。everyMinutes とどちらか一方'),
+        everyMinutes: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe('この分数ごとに起こす。dailyAt とどちらか一方'),
+      },
+      async ({ kind, request, dailyAt, everyMinutes }) => {
+        const parsedKind = scheduleKindSchema.safeParse(kind);
+        if (!parsedKind.success) {
+          return text(`kind "${kind}" は使えない（英小文字・数字・. _ - のみ、64文字まで）。`);
+        }
+        if (RESERVED_SCHEDULE_KINDS.includes(parsedKind.data)) {
+          return text(
+            `${parsedKind.data} は既定の定期ジョブの名前なので使えない（別の名前を付けること）。`,
+          );
+        }
+        if ((dailyAt === undefined) === (everyMinutes === undefined)) {
+          return text('dailyAt か everyMinutes を、どちらか一方だけ渡すこと。');
+        }
+        if (dailyAt !== undefined && parseTimeOfDay(dailyAt) === null) {
+          return text(`dailyAt "${dailyAt}" は HH:MM として読めない。`);
+        }
+
+        const spec: ScheduleSpec =
+          dailyAt !== undefined
+            ? { type: 'daily', at: dailyAt }
+            : { type: 'every', minutes: everyMinutes ?? 60 };
+        const parsedSpec = scheduleSpecSchema.safeParse(spec);
+        if (!parsedSpec.success) return text(`周期を読めなかった: ${parsedSpec.error.message}`);
+
+        const now = new Date().toISOString();
+        const existing = await stores.schedules.get(parsedKind.data);
+        const plan: ScheduledRequest = {
+          kind: parsedKind.data,
+          spec: parsedSpec.data,
+          request,
+          createdAt: existing?.createdAt ?? now,
+          updatedAt: now,
+          ...(existing?.lastRunAt === undefined ? {} : { lastRunAt: existing.lastRunAt }),
+        };
+        await stores.schedules.put(plan);
+        await stores.journal.append({
+          type: 'decision',
+          decision:
+            `${existing ? '定期の依頼を直した' : '定期の依頼を仕込んだ'}: ` +
+            `${plan.kind}（${describeScheduleSpec(plan.spec)}）: ${request}`,
+          grounds: '継続する依頼を時間起点として持つ判断',
+        });
+        return text(
+          `${plan.kind} を ${describeScheduleSpec(plan.spec)} で仕込んだ。時刻が来たら依頼の本文とともに届く。`,
+        );
+      },
+    ),
+
+    tool(
+      'schedule_remove',
+      '継続中の依頼を片付ける。済んだ依頼・もう要らない依頼はここで外す。',
+      { kind: z.string().describe('schedule_list に出ている kind') },
+      async ({ kind }) => {
+        const existing = await stores.schedules.get(kind);
+        if (!existing) return text(`継続中の依頼 ${kind} は無い。`);
+        await stores.schedules.remove(kind);
+        await stores.journal.append({
+          type: 'decision',
+          decision: `定期の依頼を外した: ${kind}: ${existing.request}`,
+          grounds: 'この依頼はもう要らないという判断',
+        });
+        return text(`${kind} を外した。`);
+      },
+    ),
+
     // --- 委譲 --------------------------------------------------------------
     tool(
       'manager_start',
@@ -351,7 +480,7 @@ export function createCloneMcpServer(context: ToolContext) {
     version: '0.1.0',
     instructions:
       'alteroid のクローン自身の道具。記憶（人間がいつでも読み書きする Markdown）、' +
-      '日誌（追記専用）、人間への確認、マネージャーへの委譲。',
+      '日誌（追記専用）、人間への確認、継続中の依頼（時間起点の仕込み）、マネージャーへの委譲。',
     tools: createCloneTools(context),
   });
 }

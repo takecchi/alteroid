@@ -400,6 +400,55 @@ describe('クローン — 自律（人間以外の起点）', () => {
     await s.clone.stop();
   });
 
+  it('継続中の依頼は、時刻が来たとき本文ごとクローンに渡る（記憶に思い出せるかの賭けにしない）', async () => {
+    const stores = createMemoryStores();
+    await stores.schedules.put({
+      kind: 'issue-round',
+      spec: { type: 'daily', at: '09:00' },
+      request: 'このリポジトリの open issue を見て、着手できるものから実装を進める',
+      createdAt: '2026-08-11T00:00:00.000Z',
+      updatedAt: '2026-08-11T00:00:00.000Z',
+      lastRunAt: '2026-08-11T00:00:00.000Z',
+    });
+
+    const s = setup(() => 'issue を1件拾って委譲した', stores);
+    s.clone.post({
+      type: 'timer',
+      id: 'evt-timer',
+      at: '2026-08-12T00:00:00.000Z',
+      kind: 'issue-round',
+    });
+
+    await expect
+      .poll(() => inputsOf(s)().includes('open issue を見て'), { timeout: 3000 })
+      .toBe(true);
+    // 前回いつ動いたかも渡す（同じ仕事をまっさらから起こさないため）
+    expect(inputsOf(s)()).toContain('2026-08-11T00:00:00.000Z');
+    expect(inputsOf(s)()).toContain('二重に起こさない');
+
+    // 起きたこと自体が記録され、次の発火では「前回」が更新されている
+    await expect
+      .poll(async () => (await stores.schedules.get('issue-round'))?.lastRunAt, { timeout: 3000 })
+      .toBe('2026-08-12T00:00:00.000Z');
+
+    await s.clone.stop();
+  });
+
+  it('仕込んだ覚えのない定期ジョブなら、記憶に照らして判断させる（従来の振る舞い）', async () => {
+    const s = setup(() => '何もしない');
+
+    s.clone.post({
+      type: 'timer',
+      id: 'evt-timer',
+      at: new Date().toISOString(),
+      kind: 'しらない仕込み',
+    });
+
+    await expect.poll(() => inputsOf(s)().includes('記憶にある'), { timeout: 3000 }).toBe(true);
+
+    await s.clone.stop();
+  });
+
   it('人間の回答待ちが溜まっていても、他の仕事は進む（受け入れ基準2）', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putApproval({

@@ -210,6 +210,65 @@ export type JournalEntryInput = DistributiveOmit<JournalEntry, 'id' | 'at'>;
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
 // ---------------------------------------------------------------------------
+// 定期の依頼（時間起点の器）
+// ---------------------------------------------------------------------------
+
+/**
+ * 定期の依頼の名前。`kind` は受信箱の `timer` イベントに載り、人間が
+ * `/schedule` や HTTP から手で起こすときの識別子にもなる。
+ */
+export const scheduleKindSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z0-9][a-z0-9._-]*$/, 'kind は英小文字・数字・. _ - のみ');
+
+/**
+ * 周期。
+ *
+ * **これは方針であって抑止装置ではない**（north_star 禁止2）。「何回まで」を
+ * 表す形をここへ足さないこと。表すのは「いつ起こすか」だけである。
+ */
+export const scheduleSpecSchema = z.discriminatedUnion('type', [
+  /** 毎日この時刻（ローカル時刻）。 */
+  z.object({ type: z.literal('daily'), at: z.string().regex(/^\d{1,2}:\d{2}$/, 'HH:MM で書く') }),
+  /** この分数ごと。 */
+  z.object({ type: z.literal('every'), minutes: z.number().int().min(1) }),
+]);
+
+/**
+ * 継続中の依頼1件（PRD「自律」の起点②を、記憶とは別に器として持つ）。
+ *
+ * **なぜ記憶だけでは足りないか。** 「毎朝 issue を見て進めておいて」は、記憶に
+ * 書けば根拠として残るが、時刻が来たことを誰も教えてくれない。発意 tick で
+ * 思い出せるかはそのときの判断に委ねられ、取りこぼしても誰も気づかない。
+ * ここに置いた依頼は時刻が来れば必ずクローンの受信箱へ届く。
+ *
+ * 逆に、**判断の根拠は依然として記憶側にある**。ここに持つのは「いつ起こすか」と
+ * 「何を頼まれたか」だけで、やるかやらないか・どうやるかはクローンが決める。
+ */
+export const scheduledRequestSchema = z.object({
+  kind: scheduleKindSchema,
+  spec: scheduleSpecSchema,
+  /** 依頼の全文。時刻が来たらそのままクローンへ渡る。 */
+  request: z.string().min(1),
+  createdAt: isoDateTime,
+  updatedAt: isoDateTime,
+  /**
+   * 前回この依頼で動いた時刻。
+   *
+   * 「前にいつ見たか」が分からないと、同じ仕事を毎回まっさらから起こすことになる
+   * （＝同じ issue に何本もマネージャーが立つ）。重複を数の上限で止めるのは
+   * 禁止2に触るので、材料として渡して判断に使わせる。
+   */
+  lastRunAt: isoDateTime.optional(),
+});
+
+export type ScheduleKind = z.infer<typeof scheduleKindSchema>;
+export type ScheduleSpec = z.infer<typeof scheduleSpecSchema>;
+export type ScheduledRequest = z.infer<typeof scheduledRequestSchema>;
+
+// ---------------------------------------------------------------------------
 // ジョブ・承認待ち
 // ---------------------------------------------------------------------------
 

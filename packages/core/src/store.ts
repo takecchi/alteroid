@@ -8,6 +8,7 @@ import type {
   MemoryDocument,
   MemoryDocumentMeta,
   PendingApproval,
+  ScheduledRequest,
 } from './schema.js';
 
 /**
@@ -55,6 +56,27 @@ export interface JobStore {
   putApproval(approval: PendingApproval): Promise<void>;
 }
 
+/**
+ * 継続中の定期の依頼（PRD「自律」の起点②）。
+ *
+ * **人間の依頼のうち「これから先ずっと」の部分を持つ器である。** 会話は消え、
+ * 受信箱は揮発し、記憶は根拠を持つ場所であって時計を持たない。ここが無いと
+ * 「定期的に見ておいて」は次の compaction かデーモン再起動で静かに消える。
+ *
+ * 人間もここを読んで直せること（CLI / HTTP API）が要件である — 人間の制御手段は
+ * 記憶・日誌・境界の3つだが、自分が出した継続の依頼が見えないのは可観測性の穴になる。
+ */
+export interface ScheduleStore {
+  /** kind の昇順。 */
+  list(): Promise<ScheduledRequest[]>;
+  get(kind: string): Promise<ScheduledRequest | null>;
+  /** 同じ kind があれば置き換える（`createdAt` は呼び出し側が引き継ぐ）。 */
+  put(entry: ScheduledRequest): Promise<void>;
+  remove(kind: string): Promise<void>;
+  /** 発火したことを記録する。知らない kind なら何もしない。 */
+  markRun(kind: string, at: string): Promise<void>;
+}
+
 /** セッションの生ログ退避先（PreCompact フックで落とす）。 */
 export interface TranscriptArchive {
   /** 退避したアーカイブのパス（または識別子）を返す。 */
@@ -74,6 +96,14 @@ export interface Stores {
   persona: PersonaStore;
   journal: JournalStore;
   jobs: JobStore;
+  /**
+   * 継続中の定期の依頼。
+   *
+   * **省略可能にしないこと。** 器（fs / pg）が違うだけで上の層が見るものは同じで
+   * ある、が M4 の要件である。ここを任意にすると、片方の器では「定期的にやって」が
+   * 効かないという能力差が生まれる（north_star 禁止1）。
+   */
+  schedules: ScheduleStore;
   archive: TranscriptArchive;
   sessions: SessionRegistry;
   /**

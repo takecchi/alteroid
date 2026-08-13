@@ -19,18 +19,22 @@ export {
   buildSelfInitiativePrompt,
   buildTimerPrompt,
   buildWorkerPrompt,
+  type TimerPromptInput,
 } from './prompt.js';
 export { buildActivityDigest, type DigestWindow } from './digest.js';
 export {
   DAILY_REPORT_KIND,
+  RESERVED_SCHEDULE_KINDS,
   SELF_INITIATIVE_KIND,
   createScheduler,
   dailyReportEntry,
   dailyReportEvent,
+  describeScheduleSpec,
   localDate,
   localDayRange,
   missingDailyReportDates,
   parseTimeOfDay,
+  scheduledRequestEntry,
   selfInitiativeEntry,
   startOfLocalDay,
   type ScheduleEntry,

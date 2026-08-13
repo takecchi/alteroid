@@ -212,6 +212,49 @@ describe('FsJobStore', () => {
   });
 });
 
+describe('FsScheduleStore', () => {
+  const plan = {
+    kind: 'issue-round',
+    spec: { type: 'daily' as const, at: '09:00' },
+    request: 'open issue を見て実装を進める',
+    createdAt: '2026-08-12T00:00:00.000Z',
+    updatedAt: '2026-08-12T00:00:00.000Z',
+  };
+
+  it('仕込んだ依頼は読み戻せる（デーモンを作り直しても残る）', async () => {
+    await stores.schedules.put(plan);
+
+    expect(await stores.schedules.list()).toEqual([plan]);
+    expect((await stores.schedules.get('issue-round'))?.request).toContain('open issue');
+    expect(await stores.schedules.get('しらない')).toBeNull();
+  });
+
+  it('同じ kind は置き換わる', async () => {
+    await stores.schedules.put(plan);
+    await stores.schedules.put({ ...plan, request: '直した依頼' });
+
+    const plans = await stores.schedules.list();
+    expect(plans).toHaveLength(1);
+    expect(plans[0]?.request).toBe('直した依頼');
+  });
+
+  it('発火したことを記録できる。知らない kind では何も起きない', async () => {
+    await stores.schedules.put(plan);
+    await stores.schedules.markRun('issue-round', '2026-08-13T00:00:00.000Z');
+    await stores.schedules.markRun('しらない', '2026-08-13T00:00:00.000Z');
+
+    expect((await stores.schedules.get('issue-round'))?.lastRunAt).toBe('2026-08-13T00:00:00.000Z');
+    expect(await stores.schedules.list()).toHaveLength(1);
+  });
+
+  it('外せる', async () => {
+    await stores.schedules.put(plan);
+    await stores.schedules.remove('issue-round');
+
+    expect(await stores.schedules.list()).toEqual([]);
+  });
+});
+
 describe('FsTranscriptArchive', () => {
   it('退避して読み戻せる', async () => {
     const id = await stores.archive.archive('session-1', '{"a":1}\n');

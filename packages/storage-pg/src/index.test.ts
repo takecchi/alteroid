@@ -250,6 +250,55 @@ describe('PgJobStore', () => {
   });
 });
 
+describe('PgScheduleStore', () => {
+  const plan = {
+    kind: 'issue-round',
+    spec: { type: 'daily' as const, at: '09:00' },
+    request: 'open issue を見て実装を進める',
+    createdAt: '2026-08-12T00:00:00.000Z',
+    updatedAt: '2026-08-12T00:00:00.000Z',
+  };
+
+  it('仕込んだ依頼は読み戻せる（fs 版と同じ振る舞い）', async () => {
+    await stores.schedules.put(plan);
+
+    expect(await stores.schedules.list()).toEqual([plan]);
+    expect((await stores.schedules.get('issue-round'))?.request).toContain('open issue');
+    expect(await stores.schedules.get('しらない')).toBeNull();
+  });
+
+  it('同じ kind は置き換わる', async () => {
+    await stores.schedules.put(plan);
+    await stores.schedules.put({
+      ...plan,
+      request: '直した依頼',
+      spec: { type: 'every', minutes: 30 },
+    });
+
+    const plans = await stores.schedules.list();
+    expect(plans).toHaveLength(1);
+    expect(plans[0]?.request).toBe('直した依頼');
+    expect(plans[0]?.spec).toEqual({ type: 'every', minutes: 30 });
+  });
+
+  it('発火の記録は、クローンが読む本文の側にも入る', async () => {
+    await stores.schedules.put(plan);
+    await stores.schedules.markRun('issue-round', '2026-08-13T00:00:00.000Z');
+    await stores.schedules.markRun('しらない', '2026-08-13T00:00:00.000Z');
+
+    // 列だけ直しても読み出しは jsonb からなので、両方が揃っていること
+    expect((await stores.schedules.get('issue-round'))?.lastRunAt).toBe('2026-08-13T00:00:00.000Z');
+    expect(await stores.schedules.list()).toHaveLength(1);
+  });
+
+  it('外せる', async () => {
+    await stores.schedules.put(plan);
+    await stores.schedules.remove('issue-round');
+
+    expect(await stores.schedules.list()).toEqual([]);
+  });
+});
+
 describe('PgTranscriptArchive', () => {
   it('退避して読み戻せる', async () => {
     const id = await stores.archive.archive('session-1', '{"a":1}\n');

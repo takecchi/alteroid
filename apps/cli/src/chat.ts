@@ -177,7 +177,8 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /archive <id>        生ログの中身
 /approvals           承認待ち（番号付き）
 /answer <番号|id> <回答>  承認待ちに答える（番号は /approvals の並び）
-/schedule            時間起点のジョブと次の発火
+/schedule            時間起点のジョブ・継続中の依頼と次の発火
+/unschedule <kind>   継続中の依頼を外す
 /run <kind>          定期ジョブを今すぐ起こす
 /event <source> <本文>  外部イベントをクローンに届ける
 /quit                終了
@@ -248,7 +249,26 @@ async function runSlashCommand(
       if (entries.length === 0) stdout.write('（定期ジョブは仕込まれていません）\n');
       for (const entry of entries) {
         stdout.write(`  ${entry.kind}  次: ${entry.nextAt}\n      ${entry.description}\n`);
+        // 継続中の依頼だけが持つもの。何を頼まれたままなのかが人間に見えること
+        if (entry.request !== undefined) {
+          stdout.write(`      前回: ${entry.lastRunAt ?? '（まだ一度も動いていません）'}\n`);
+        }
       }
+      return 'ok';
+    }
+
+    case '/unschedule': {
+      const kind = rest[0];
+      if (!kind) {
+        stdout.write('使い方: /unschedule <kind>（/schedule で一覧）\n');
+        return 'ok';
+      }
+      const response = await client.schedule[':kind'].$delete({ param: { kind } });
+      stdout.write(
+        response.ok
+          ? `${kind} を外しました\n`
+          : `${kind} という継続中の依頼はありません（既定の定期ジョブは外せません）\n`,
+      );
       return 'ok';
     }
 

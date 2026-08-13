@@ -39,6 +39,25 @@ describe('活動の要約', () => {
     expect(digest).toContain('main のビルドが落ちた');
   });
 
+  it('継続中の依頼は期間の外でも常に材料に載る（頼まれたままの仕事を忘れないため）', async () => {
+    const stores = createMemoryStores();
+    await stores.schedules.put({
+      kind: 'issue-round',
+      spec: { type: 'daily', at: '09:00' },
+      request: 'open issue を見て実装を進める',
+      // 期間よりずっと前に仕込まれた依頼でも落とさない
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    const digest = await buildActivityDigest(stores, { since: new Date(Date.now() - 60_000) });
+
+    expect(digest).toContain('継続中の依頼');
+    expect(digest).toContain('open issue を見て実装を進める');
+    expect(digest).toContain('毎日 09:00');
+    expect(digest).toContain('まだ一度も動いていない');
+  });
+
   it('走行中のマネージャーと、人間の回答待ちは「いまの状態」として必ず出る', async () => {
     const stores = createMemoryStores();
     const now = new Date().toISOString();

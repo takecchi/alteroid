@@ -105,6 +105,12 @@
   - `ALTEROID_DAILY_REPORT_AT`（`HH:MM` / `off`）、`ALTEROID_INITIATIVE_EVERY`（分 / `off`）、`ALTEROID_REPORT_LOOKBACK_DAYS`（起動時に遡って日報を作る日数、既定 3）
   - これらは**方針**の設定であって、暴走を止めるための回数制限ではない。抑止は実行環境の境界で行う（north_star 禁止2）
 - 待たずに確かめるなら `POST /schedule/:kind/run`（chat では `/run daily_report` / `/run self_initiative`）。`GET /schedule` で次の発火が見える
+- **「定期的に〜しておいて」は記憶だけに書かせない。** 記憶は根拠を置く場所で時計を持たないので、そこにだけ書いた依頼は「発意 tick のときに思い出せるかどうか」の賭けになる。継続する依頼はクローンが `schedule_create`（`kind` ＋ `dailyAt` / `everyMinutes` ＋ 依頼の本文）で仕込み、時刻が来れば必ず受信箱へ届く形にする（`schedule_list` / `schedule_remove` で読む・外す）
+  - 器は `ScheduleStore`（`packages/core/src/store.ts`）。fs では `~/.alteroid/jobs/schedules.json`、pg では `schedules` テーブル。**真実はストア側だけに置く** — スケジューラへ直接足す口を作ると、デーモン再起動で仕込みが消える
+  - スケジューラは `refresh()` でストアを読み直す。内部タイマーが刻むたびに通るので、足した依頼は最大1分で効く。人間が API から足した時とデーモン起動時は明示的に呼んで待たせない
+  - 発火イベントに載るのは `kind` だけである。**依頼の本文をイベントに載せないこと** — 載せた瞬間に発火時点の写しになり、人間が本文を直しても古い依頼で走る
+  - 発火のたびに `lastRunAt` が付き、依頼の一覧と前回時刻は digest（`digest.ts`）にも常に載る。同じ issue に何本もマネージャーが立つのを止めるのはこの材料と `manager_list` であって、**同時数の上限ではない**（north_star 禁止2）
+  - 人間側の口は `GET /schedule`（`request` / `lastRunAt` 付き）・`POST /schedule`・`DELETE /schedule/:kind`、chat では `/schedule` と `/unschedule <kind>`。`daily_report` / `self_initiative` の名前は奪えない（`RESERVED_SCHEDULE_KINDS`）
 - **外部イベントの入口は HTTP の `POST /events`**（`{source, payload}`）。送り元の形を変えられない webhook 用に `POST /events/:source`（本文まるごとが payload）もある。chat からは `/event <source> <本文>`
   - 開いているのは 127.0.0.1 だけ。外から叩かせるならトンネル・リバースプロキシ側に境界を置く（ここで認証を足す前に、それが方針か境界かを考える）
   - **127.0.0.1 で待つことはブラウザからの保護にならない。** 人間が開いた任意のページが単純リクエスト（`text/plain` や form の POST）を投げられ、応答が読めなくても送信は成立する。状態を変える POST を足すときは、`zValidator('json', ...)` を付けるか、本文の無い経路なら `deliberateClient`（`apps/daemon/src/app.ts`）を必ず通すこと — でないと他人がクローンのターンを起こせる。塞ぐのは能力側ではなく実行環境の境界である

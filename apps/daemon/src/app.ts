@@ -9,7 +9,14 @@ import type {
   Scheduler,
   Stores,
 } from '@alteroid/core';
-import { localDayRange, memorySlugSchema, runnerSetCredentialsCommandSchema } from '@alteroid/core';
+import {
+  RESERVED_SCHEDULE_KINDS,
+  localDayRange,
+  memorySlugSchema,
+  runnerSetCredentialsCommandSchema,
+  scheduleKindSchema,
+  scheduleSpecSchema,
+} from '@alteroid/core';
 
 import type { JournalBus } from './journal-bus.js';
 import { zValidator } from '@hono/zod-validator';
@@ -118,6 +125,17 @@ const managerMessageBody = z.object({
   decision: z.enum(['allow', 'deny']).optional(),
 });
 const abortBody = z.object({ reason: z.string().min(1).optional() });
+/**
+ * 継続中の依頼の仕込み（人間の手からも同じことができる口）。
+ *
+ * クローンの `schedule_create` と同じものを人間も置ける。自分が出した「これから
+ * ずっと」の依頼を人間が見て直せないと、可観測性の穴になる。
+ */
+const scheduleBody = z.object({
+  kind: scheduleKindSchema,
+  request: z.string().min(1),
+  spec: scheduleSpecSchema,
+});
 
 interface Conversation {
   conversationId: string;
@@ -540,6 +558,51 @@ export function createApp(deps: AppDeps) {
 
     // --- 時間起点のジョブ ---------------------------------------------------
     .get('/schedule', (c) => c.json({ entries: deps.scheduler?.list() ?? [] }))
+
+    /**
+     * 継続中の依頼を仕込む・直す（同じ kind なら置き換わる）。
+     *
+     * 真実はストア側にあり、スケジューラはそれを読み直すだけである。ここで
+     * スケジューラへ直接足すと、デーモンを再起動した瞬間に消える仕込みができる。
+     */
+    .post('/schedule', zValidator('json', scheduleBody), async (c) => {
+      const { kind, request, spec } = c.req.valid('json');
+      if (RESERVED_SCHEDULE_KINDS.includes(kind)) {
+        return c.json({ error: 'reserved kind' as const }, 409);
+      }
+      const now = new Date().toISOString();
+      const existing = await stores.schedules.get(kind);
+      await stores.schedules.put({
+        kind,
+        spec,
+        request,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+        ...(existing?.lastRunAt === undefined ? {} : { lastRunAt: existing.lastRunAt }),
+      });
+      await stores.journal.append({
+        type: 'decision',
+        decision: `人間が定期の依頼を${existing ? '直した' : '仕込んだ'}: ${kind}: ${request}`,
+        grounds: '人間が直接 API から仕込んだ',
+      });
+      // 次の刻みを待たずに効かせる（人間が仕込んだのに1分間存在しないのは嘘になる）
+      await deps.scheduler?.refresh().catch(() => undefined);
+      return c.json({ ok: true });
+    })
+
+    .delete('/schedule/:kind', deliberateClient, async (c) => {
+      const kind = c.req.param('kind');
+      const existing = await stores.schedules.get(kind);
+      if (!existing) return c.json({ error: 'not found' as const }, 404);
+      await stores.schedules.remove(kind);
+      await stores.journal.append({
+        type: 'decision',
+        decision: `人間が定期の依頼を外した: ${kind}: ${existing.request}`,
+        grounds: '人間が直接 API から外した',
+      });
+      await deps.scheduler?.refresh().catch(() => undefined);
+      return c.json({ ok: true });
+    })
 
     /**
      * 定期ジョブを今すぐ起こす（人間が待たずに確かめるための口）。
