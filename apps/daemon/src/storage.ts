@@ -2,6 +2,7 @@ import { mkdir } from 'node:fs/promises';
 
 import type { SessionStore } from '@anthropic-ai/claude-agent-sdk';
 import type { Stores } from '@alteroid/core';
+import { AUTH_WITHHELD_ENV_KEYS } from './auth.js';
 import {
   createFsStores,
   initWorkspace,
@@ -66,7 +67,13 @@ export function planStorage(env: NodeJS.ProcessEnv = process.env): StoragePlan {
   const databaseUrl = envValue(env, DATABASE_URL_ENV);
 
   if (databaseUrl === undefined) {
-    return { kind: 'fs', root, databaseUrl: undefined, withheldEnvKeys: [], description: '' };
+    return {
+      kind: 'fs',
+      root,
+      databaseUrl: undefined,
+      withheldEnvKeys: [...AUTH_WITHHELD_ENV_KEYS],
+      description: '',
+    };
   }
 
   return {
@@ -74,7 +81,7 @@ export function planStorage(env: NodeJS.ProcessEnv = process.env): StoragePlan {
     root,
     databaseUrl,
     // 記憶へ到達するのに自分が使った鍵。これを配れば境界が消える。
-    withheldEnvKeys: [DATABASE_URL_ENV],
+    withheldEnvKeys: [DATABASE_URL_ENV, ...AUTH_WITHHELD_ENV_KEYS],
     description: `PostgreSQL（${safeTarget(databaseUrl)}）`,
   };
 }

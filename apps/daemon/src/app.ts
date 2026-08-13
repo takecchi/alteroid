@@ -11,12 +11,18 @@ import type {
 } from '@alteroid/core';
 import {
   chatStreamEventSchema,
+  createAuthProviderRegistry,
+  createAuthService,
+  isAccountGranted,
   journalEntrySchema,
   localDayRange,
   memorySlugSchema,
   runnerSetCredentialsCommandSchema,
+  type AuthAccount,
+  type AuthService,
 } from '@alteroid/core';
 
+import { bearerOf, isOperator, type AuthPlan, type AuthVariables } from './auth.js';
 import type { JournalBus } from './journal-bus.js';
 import { Scalar } from '@scalar/hono-api-reference';
 import { Hono } from 'hono';
@@ -26,9 +32,12 @@ import { describeRoute, openAPIRouteHandler, resolver, validator } from 'hono-op
 import { z } from 'zod';
 
 import {
+  accessAccountResponseSchema,
+  accessListResponseSchema,
   approvalsAnswerResponseSchema,
   approvalsResponseSchema,
   archiveListResponseSchema,
+  authProvidersResponseSchema,
   badRequestResponseSchema,
   conversationDetailResponseSchema,
   conversationsResponseSchema,
@@ -36,12 +45,15 @@ import {
   eventAcceptedResponseSchema,
   healthResponseSchema,
   journalListResponseSchema,
+  loginClaimResponseSchema,
+  loginStartResponseSchema,
   managerActionResponseSchema,
   managerDetailResponseSchema,
   managersListResponseSchema,
   memoryDeleteResponseSchema,
   memoryListResponseSchema,
   memoryReadResponseSchema,
+  meResponseSchema,
   okResponseSchema,
   openApiDocumentation,
   openApiExcludePaths,
@@ -105,6 +117,15 @@ export interface AppDeps {
    * いないことを黙って隠さない**ため（テストの HTTP 層検証では省略できる）。
    */
   journalEvents?: Pick<JournalBus, 'subscribe'>;
+  /**
+   * ログインとアクセス許可（`./auth.ts`）。
+   *
+   * 省略すると認証を要求しない（＝この機能が入る前と同じ振る舞い）。**能力を
+   * 削らないための既定**であって、設定していない人の `alteroid chat` が突然
+   * 通らなくなる方が北極星に反する（境界の導入が実質のデグレードになっていないか、
+   * という問い）。
+   */
+  auth?: { plan: AuthPlan; service?: AuthService };
 }
 
 const chatBody = z.object({
@@ -158,6 +179,46 @@ const managerMessageBody = z.object({
   decision: z.enum(['allow', 'deny']).optional(),
 });
 const abortBody = z.object({ reason: z.string().min(1).optional() });
+const loginBody = z.object({
+  provider: z.string().min(1),
+  /** どの端末から始めたか、人間が後から見分けるための覚書。 */
+  label: z.string().max(200).optional(),
+});
+const claimBody = z.object({ claimSecret: z.string().min(1) });
+
+function loginErrorDetail(reason: string): string {
+  switch (reason) {
+    case 'invalid_state':
+      return 'ログイン要求が見つかりません（やり直してください）。';
+    case 'expired':
+      return 'ログイン要求の期限が切れています（やり直してください）。';
+    case 'already_used':
+      return 'このログイン要求は既に使われています。';
+    case 'unknown_provider':
+      return '設定されていないログイン手段です。';
+    default:
+      return 'プロバイダとのトークン交換に失敗しました。';
+  }
+}
+
+/** 日誌に残す人間向けの名前。 */
+function describeAccount(account: AuthAccount): string {
+  const name = account.email ?? account.displayName;
+  return name === null || name === undefined ? account.id : `${name} (${account.id})`;
+}
+
+function claimErrorDetail(reason: string): string {
+  switch (reason) {
+    case 'invalid_secret':
+      return 'claimSecret が違う';
+    case 'expired':
+      return 'ログイン要求の期限が切れている';
+    case 'failed':
+      return 'ログインに失敗している';
+    default:
+      return 'ログイン要求が見つからない（既に引き取り済みの可能性）';
+  }
+}
 
 interface Conversation {
   conversationId: string;
@@ -234,18 +295,162 @@ function noBodyPostResponses() {
   } as const;
 }
 
+/**
+ * 認証を要求しない経路。
+ *
+ * `/health` は CLI が「自分の起こしたデーモンか」を確かめる口で、ログインの前に
+ * 必ず通る（応答に秘密は載っていない）。`/auth/*` はログインそのものの経路なので、
+ * ここを閉じるとログインできない。`/openapi.json` と `/docs` は仕様の公開である。
+ *
+ * **`/auth/me` だけは例外で認証が要る。** 「いま自分が誰か」は認証済みでなければ
+ * 答えようが無い。
+ */
+function isPublicPath(path: string): boolean {
+  if (path === '/health' || path === '/openapi.json' || path === '/docs') return true;
+  if (path === '/auth/me') return false;
+  return path === '/auth' || path.startsWith('/auth/');
+}
+
+/** 一覧・詳細で返すアカウント（identity を畳んで、秘密は載せない）。 */
+async function accountView(
+  stores: Stores,
+  account: AuthAccount,
+): Promise<
+  AuthAccount & {
+    granted: boolean;
+    identities: {
+      provider: string;
+      subject: string;
+      email: string | null;
+      emailVerified: boolean;
+      lastLoginAt: string;
+    }[];
+  }
+> {
+  const identities = await stores.auth.listIdentities(account.id);
+  return {
+    ...account,
+    granted: isAccountGranted(account),
+    identities: identities.map(({ provider, subject, email, emailVerified, lastLoginAt }) => ({
+      provider,
+      subject,
+      email,
+      emailVerified,
+      lastLoginAt,
+    })),
+  };
+}
+
+/** ブラウザに返す終了画面。**ここで alteroid を操作させない**（Web UI は非ゴール）。 */
+function callbackPage(title: string, detail: string): string {
+  const escape = (value: string) =>
+    value.replace(/[&<>"]/g, (ch) =>
+      ch === '&' ? '&amp;' : ch === '<' ? '&lt;' : ch === '>' ? '&gt;' : '&quot;',
+    );
+  return `<!doctype html>
+<html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>alteroid</title>
+<style>
+ body{font-family:system-ui,-apple-system,"Hiragino Kaku Gothic ProN",sans-serif;
+      display:grid;place-items:center;min-height:100vh;margin:0;color:#1a1a1a;background:#fafafa}
+ main{max-width:32rem;padding:2rem;text-align:center}
+ h1{font-size:1.25rem;margin:0 0 .75rem}
+ p{margin:0;color:#555;line-height:1.7}
+</style></head>
+<body><main><h1>${escape(title)}</h1><p>${escape(detail)}</p></main></body></html>`;
+}
+
 export function createApp(deps: AppDeps) {
   const { clone, stores } = deps;
 
-  const app = new Hono()
+  const authPlan: AuthPlan = deps.auth?.plan ?? {
+    enabled: false,
+    providers: [],
+    publicBaseUrl: '',
+    tokenTtlDays: 30,
+    description: '認証は無効（未設定）',
+  };
+  const authService: AuthService =
+    deps.auth?.service ??
+    createAuthService({
+      store: stores.auth,
+      providers: createAuthProviderRegistry(authPlan.providers),
+      tokenTtlDays: authPlan.tokenTtlDays,
+    });
+  const providerList = authPlan.providers.map(({ id, label, kind }) => ({ id, label, kind }));
+  /**
+   * プロバイダへ登録する戻り先。**1プロバイダにつき1本だけ**にしてある。
+   * 用途ごとに URL を増やすと、token 交換時の `redirect_uri` 不一致が起きやすい。
+   */
+  const callbackUrl = (provider: string) => `${authPlan.publicBaseUrl}/auth/${provider}/callback`;
+
+  /**
+   * 入口の門番。
+   *
+   * **通す条件は2つだけである。** ①実行環境の持ち主（状態ファイルの token を
+   * 提示できる）②許可されたアカウントのアクセストークン。行為ごとの許可表は
+   * 持たない — 持った瞬間に PRD「権限境界」が言う「確認が要る行為の一覧」と
+   * 同じ形になり、クローンの判断を設定で置き換えることになる。
+   */
+  const authenticate = createMiddleware<{ Variables: AuthVariables }>(async (c, next) => {
+    if (isOperator(c, deps.token)) {
+      c.set('principal', { kind: 'operator' });
+      await next();
+      return;
+    }
+    if (!authPlan.enabled) {
+      // 認証を設定していない構成では、この機能が入る前とまったく同じに振る舞う。
+      // 守りは待ち受け先（既定 127.0.0.1）と手前に置く境界の側にある。
+      c.set('principal', { kind: 'operator' });
+      await next();
+      return;
+    }
+    if (isPublicPath(c.req.path)) {
+      await next();
+      return;
+    }
+
+    const bearer = bearerOf(c.req.header('authorization'));
+    if (bearer === null) {
+      return c.json({ error: 'ログインが要る（alteroid login）' as const }, 401);
+    }
+    const account = await authService.authenticate(bearer);
+    if (account === null) {
+      return c.json({ error: 'トークンが無効か期限切れ（alteroid login をやり直す）' }, 401);
+    }
+    if (!isAccountGranted(account)) {
+      // ログインは通っているが使う許可が無い。**401 ではなく 403** で返す
+      // （やり直しても解決しない。人間が alteroid access grant を実行する）。
+      return c.json({ error: 'このアカウントには alteroid を使う許可が無い' }, 403);
+    }
+    c.set('principal', { kind: 'account', account });
+    await next();
+  });
+
+  /** 許可の付与・剥奪は実行環境の持ち主だけ（最初の1人を誰が通すかの出口）。 */
+  const requireOperator = createMiddleware<{ Variables: AuthVariables }>(async (c, next) => {
+    if (c.get('principal').kind !== 'operator') {
+      return c.json({ error: '実行環境の持ち主だけが操作できる' as const }, 403);
+    }
+    await next();
+  });
+
+  const app = new Hono<{ Variables: AuthVariables }>()
+    .use('*', authenticate)
+
     .get(
       '/health',
       describeRoute({
         tags: ['system'],
         summary: '死活監視と本人確認',
         description:
-          'デーモンが応答しているかと、その pid・本人確認トークン・記憶の置き場を返す。' +
-          'CLI は pid ではなくこのトークンで「自分が起こしたデーモンか」を確かめる。',
+          'デーモンが応答しているかと、その pid・記憶の置き場・認証の状態を返す。' +
+          '`Authorization: Bearer <state/daemon.json の token>` を添えると `operator` が ' +
+          'true になり、CLI はこれで「自分が起こしたデーモンか」を確かめる（PID は信用しない）。' +
+          '**トークンそのものは返さない** — この値は許可を付与できる資格そのものなので、' +
+          '無認証で読める応答には置けない。',
+        security: [],
         responses: {
           200: {
             description: '応答している。',
@@ -253,7 +458,14 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      (c) => c.json({ ok: true, pid: process.pid, token: deps.token, storage: deps.storage ?? '' }),
+      (c) =>
+        c.json({
+          ok: true,
+          pid: process.pid,
+          operator: isOperator(c, deps.token),
+          storage: deps.storage ?? '',
+          auth: { enabled: authPlan.enabled, providers: providerList },
+        }),
     )
 
     // --- chat（SSE） -------------------------------------------------------
@@ -1320,6 +1532,319 @@ export function createApp(deps: AppDeps) {
         const body = await stores.archive.read(c.req.param('id'));
         if (body === null) return c.json({ error: 'not found' as const }, 404);
         return c.text(body);
+      },
+    )
+
+    // --- ログイン（/auth） --------------------------------------------------
+    //
+    // 経路はデーモンが持つ。ブラウザは**この口へ戻ってくるだけ**で、alteroid を
+    // 操作する画面は無い（Web UI は非ゴール。`gh auth login` と同じ形である）。
+
+    .get(
+      '/auth/providers',
+      describeRoute({
+        tags: ['auth'],
+        summary: '使えるログイン手段の一覧',
+        description:
+          '設定されているログイン手段を返す。`enabled` が false なら認証を要求していない。',
+        security: [],
+        responses: {
+          200: {
+            description: 'ログイン手段の一覧。',
+            content: { 'application/json': { schema: resolver(authProvidersResponseSchema) } },
+          },
+        },
+      }),
+      (c) => c.json({ enabled: authPlan.enabled, providers: providerList }),
+    )
+
+    .post(
+      '/auth/login',
+      describeRoute({
+        tags: ['auth'],
+        summary: 'ログインを始める',
+        description:
+          'ブラウザで開く認可 URL と、結果を引き取るための秘密（`claimSecret`）を返す。' +
+          '**この経路は認証を要求しない** — ログインの前に持っている資格が無いのは当たり前で、' +
+          'ここを閉じると誰も入れない。得られるのはアカウントの作成までで、' +
+          '使う許可は別に人間が与える（`alteroid access grant`）。',
+        security: [],
+        responses: {
+          200: {
+            description: 'ログインを開始した。',
+            content: { 'application/json': { schema: resolver(loginStartResponseSchema) } },
+          },
+          400: {
+            description: '未知のログイン手段、または手段が1つも設定されていない。',
+            content: { 'application/json': { schema: resolver(badRequestResponseSchema) } },
+          },
+        },
+      }),
+      validator('json', loginBody),
+      async (c) => {
+        const { provider, label } = c.req.valid('json');
+        if (authPlan.providers.length === 0) {
+          return c.json({ error: 'ログイン手段が設定されていない' as const }, 400);
+        }
+        const known = authPlan.providers.some((it) => it.id === provider);
+        if (!known) return c.json({ error: `未知のログイン手段: ${provider}` }, 400);
+
+        const started = await authService.startLogin({
+          provider,
+          label: label ?? '',
+          redirectUri: callbackUrl(provider),
+        });
+        return c.json(started);
+      },
+    )
+
+    .get(
+      '/auth/:provider/callback',
+      describeRoute({
+        tags: ['auth'],
+        summary: 'プロバイダからの戻り先',
+        description:
+          'ブラウザがここへ戻ってくる。応答は人間が読む HTML で、端末（CLI）側が ' +
+          '`/auth/login/{requestId}/claim` で結果を引き取る。**トークンはここでは返さない** ' +
+          '— ブラウザの履歴や Referer に鍵を載せないため。',
+        security: [],
+        responses: {
+          200: {
+            description: 'ログインの成否を人間に伝える画面。',
+            content: { 'text/html': { schema: resolver(z.string()) } },
+          },
+        },
+      }),
+      async (c) => {
+        const denied = c.req.query('error');
+        if (denied !== undefined && denied.length > 0) {
+          return c.html(
+            callbackPage('ログインを中止しました', `プロバイダからの応答: ${denied}`),
+            400,
+          );
+        }
+
+        const code = c.req.query('code');
+        const state = c.req.query('state');
+        if (code === undefined || state === undefined) {
+          return c.html(
+            callbackPage('ログインに失敗しました', 'code と state が足りません。'),
+            400,
+          );
+        }
+
+        const result = await authService.completeLogin({ state, code });
+        if (result.status === 'error') {
+          return c.html(
+            callbackPage('ログインに失敗しました', loginErrorDetail(result.reason)),
+            400,
+          );
+        }
+        return c.html(
+          callbackPage(
+            'ログインしました',
+            result.granted
+              ? 'この画面を閉じて端末に戻ってください。'
+              : 'この画面を閉じて端末に戻ってください。なお、このアカウントにはまだ alteroid を使う許可がありません（alteroid access grant で付与します）。',
+          ),
+        );
+      },
+    )
+
+    .post(
+      '/auth/login/:requestId/claim',
+      describeRoute({
+        tags: ['auth'],
+        summary: 'ログイン結果を引き取る',
+        description:
+          'ブラウザ側が終わっていればアクセストークンを返す。**返るのはこの1回だけ**で、' +
+          'ストアには sha256 しか残らない。まだ終わっていなければ 202 と `pending`。',
+        security: [],
+        responses: {
+          200: {
+            description: 'トークンを発行した。',
+            content: { 'application/json': { schema: resolver(loginClaimResponseSchema) } },
+          },
+          202: {
+            description: 'まだブラウザ側が終わっていない。少し待って再試行する。',
+            content: { 'application/json': { schema: resolver(loginClaimResponseSchema) } },
+          },
+          400: {
+            description: '秘密が違う、期限切れ、または既に引き取り済み。',
+            content: { 'application/json': { schema: resolver(badRequestResponseSchema) } },
+          },
+        },
+      }),
+      validator('json', claimBody),
+      async (c) => {
+        const result = await authService.claim({
+          requestId: c.req.param('requestId'),
+          claimSecret: c.req.valid('json').claimSecret,
+        });
+        if (result.status === 'pending') return c.json({ status: 'pending' as const }, 202);
+        if (result.status === 'error')
+          return c.json({ error: claimErrorDetail(result.reason) }, 400);
+        return c.json({
+          status: 'ready' as const,
+          token: result.token,
+          account: result.account,
+          granted: isAccountGranted(result.account),
+        });
+      },
+    )
+
+    .get(
+      '/auth/me',
+      describeRoute({
+        tags: ['auth'],
+        summary: 'いま自分が誰として認識されているか',
+        responses: {
+          200: {
+            description: '認証を通った相手。',
+            content: { 'application/json': { schema: resolver(meResponseSchema) } },
+          },
+          401: {
+            description: '資格が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      (c) => {
+        const principal = c.get('principal');
+        if (principal.kind === 'operator') return c.json({ kind: 'operator' as const });
+        return c.json({
+          kind: 'account' as const,
+          account: principal.account,
+          granted: isAccountGranted(principal.account),
+        });
+      },
+    )
+
+    // --- アクセス許可（/access） --------------------------------------------
+    //
+    // **持つのは許可されているか否かの2値だけ。** 「chat は可・記憶の編集は不可」の
+    // ような行為別のスコープを足したくなったら手を止める — それは PRD「権限境界」が
+    // 禁じている「確認が要る行為の一覧」と同じ形であり、クローンの判断を設定で
+    // 置き換えることになる。
+
+    .get(
+      '/access',
+      describeRoute({
+        tags: ['access'],
+        summary: 'ログインしたアカウントと許可の一覧',
+        description: '実行環境の持ち主だけが読める（メールと identity が並ぶため）。',
+        responses: {
+          200: {
+            description: 'アカウントの一覧。',
+            content: { 'application/json': { schema: resolver(accessListResponseSchema) } },
+          },
+          403: {
+            description: '実行環境の持ち主ではない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      requireOperator,
+      async (c) => {
+        const accounts = await stores.auth.listAccounts();
+        return c.json({
+          accounts: await Promise.all(accounts.map((account) => accountView(stores, account))),
+        });
+      },
+    )
+
+    .post(
+      '/access/:accountId/grant',
+      describeRoute({
+        tags: ['access'],
+        summary: 'alteroid を使う許可を与える',
+        description:
+          'ログインしただけでは使えない。ここで初めて使えるようになる。本文は無い。\n\n' +
+          '**許可できるアカウントは高々1つ。** alteroid は単一の持ち主のものであり、' +
+          'マルチユーザー / チーム利用は非ゴールである（docs/PRD.md「スコープ外」）。' +
+          '既に別のアカウントが許可されていれば 409 を返す — 持ち主を移すなら先に取り消す。',
+        responses: {
+          200: {
+            description: '許可した（既に許可済みでも 200）。',
+            content: { 'application/json': { schema: resolver(accessAccountResponseSchema) } },
+          },
+          403: {
+            description: '実行環境の持ち主ではない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description: '該当するアカウントが無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          409: {
+            description: '既に別のアカウントが許可されている（先に revoke する）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          ...noBodyPostResponses(),
+        },
+      }),
+      requireOperator,
+      deliberateClient,
+      async (c) => {
+        const result = await authService.grant(c.req.param('accountId'), 'operator');
+        if (result.status === 'not_found') return c.json({ error: 'not found' as const }, 404);
+        if (result.status === 'conflict') {
+          return c.json(
+            {
+              error:
+                `既に ${describeAccount(result.owner)} が許可されている。` +
+                'alteroid は単一の持ち主のものなので、許可できるアカウントは1つだけ。' +
+                `移すなら先に取り消す: alteroid access revoke ${result.owner.id}`,
+            },
+            409,
+          );
+        }
+        // 誰を通したかは必ず残す。事後に追えることが「最終承認」の実体である
+        // （PRD「可観測性」）。
+        await stores.journal.append({
+          type: 'decision',
+          decision: `アクセス許可を付与: ${describeAccount(result.account)}`,
+          grounds: '実行環境の持ち主による操作（alteroid access grant）',
+        });
+        return c.json({ account: await accountView(stores, result.account) });
+      },
+    )
+
+    .post(
+      '/access/:accountId/revoke',
+      describeRoute({
+        tags: ['access'],
+        summary: 'alteroid を使う許可を取り消す',
+        description:
+          '発行済みトークンは消さない。**許可はリクエストごとに見ているので、' +
+          'これだけで即座に通らなくなる**（消し忘れたトークンが生き残らない）。本文は無い。',
+        responses: {
+          200: {
+            description: '取り消した（既に未許可でも 200）。',
+            content: { 'application/json': { schema: resolver(accessAccountResponseSchema) } },
+          },
+          403: {
+            description: '実行環境の持ち主ではない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description: '該当するアカウントが無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          ...noBodyPostResponses(),
+        },
+      }),
+      requireOperator,
+      deliberateClient,
+      async (c) => {
+        const account = await authService.revoke(c.req.param('accountId'));
+        if (account === null) return c.json({ error: 'not found' as const }, 404);
+        await stores.journal.append({
+          type: 'decision',
+          decision: `アクセス許可を取り消し: ${describeAccount(account)}`,
+          grounds: '実行環境の持ち主による操作（alteroid access revoke）',
+        });
+        return c.json({ account: await accountView(stores, account) });
       },
     )
 
