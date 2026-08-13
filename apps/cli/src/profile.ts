@@ -185,6 +185,18 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
   });
 
   if (!response.ok) {
+    // **403 の意味が `access` とは違う。** ここは許可の有無ではなく「実行環境の
+    // 持ち主か」を見ている。同じ文言を出すと `access grant` を促してしまい、
+    // 通したところで直らない（許可が持っているのは「使ってよい」の2値だけで、
+    // 実行環境そのものを差し替える資格はそこに含まれない）。
+    if (response.status === 403) {
+      throw new Error(
+        '実行環境プロファイルを触れるのは、その実行環境の持ち主だけです。\n' +
+          'デーモンが動いているのと同じ環境で実行してください:\n' +
+          '  docker compose exec app alteroid profile edit\n' +
+          '（人間が ~/.zshenv を直すのも、その人が持っている箱の上である、という線引きです）',
+      );
+    }
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
     const body = (await response.json().catch(() => ({}))) as {

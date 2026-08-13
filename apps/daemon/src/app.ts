@@ -1516,10 +1516,20 @@ export function createApp(deps: AppDeps) {
     /**
      * 人間が置いた実行環境プロファイル（`.zprofile` 相当）。
      *
-     * **本文を返す。** ここを通れるのは持ち主だけであり、自分が書いたものを
-     * 読み直せないと typo ひとつ直せない。指紋しか返さないのは runner の制御面の
-     * ほうで、あちらは「マネージャーが読めてはいけない」からそうしている
-     * （守っている相手が違う）。
+     * **実行環境の持ち主だけ**（`requireOperator`）。`/access/*` と同じ資格である。
+     *
+     * 単一の持ち主しか許可できない以上、`access grant` 済みのアカウントも同じ人間の
+     * はずだが、**この口だけは「使ってよい」より一段強い**。理由は下の `PUT` にある
+     * とおりで、読み側も同じ扱いにする — 本文には `GH_TOKEN` のような鍵が丸ごと
+     * 入りうるので、`GET` が緩いと `PUT` を締めても意味が無い。
+     *
+     * **本文を返す。** 自分が書いたものを読み直せないと typo ひとつ直せない。
+     * 指紋しか返さないのは runner の制御面のほうで、あちらは「マネージャーが
+     * 読めてはいけない」からそうしている（守っている相手が違う）。
+     *
+     * **デグレードではない。** 人間が `.zshenv` を直すのは、その人が持っている
+     * 箱の上である。ここも同じで、遠隔から直したいなら `access grant` と同じく
+     * `docker compose exec app alteroid profile edit` を通る。
      */
     .get(
       '/profile',
@@ -1534,8 +1544,13 @@ export function createApp(deps: AppDeps) {
             description: 'プロファイルの本文。置かれていなければ空文字。',
             content: { 'application/json': { schema: resolver(profileResponseSchema) } },
           },
+          403: {
+            description: '実行環境の持ち主ではない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
         },
       }),
+      requireOperator,
       async (c) => {
         const stored = await deps.stores.profile.read();
         if (stored === null) return c.json({ script: '' });
@@ -1554,6 +1569,13 @@ export function createApp(deps: AppDeps) {
      * これが無いと、道具の鍵や `PATH` を1つ足すたびに `compose.yaml` を直して
      * 器を焼き直すことになる＝「環境を直す」と「走行中の仕事を失う」が同じ操作に
      * なる。鍵の差し替え（`POST /runners/credentials`）と同じ理由で口を開けてある。
+     *
+     * **実行環境の持ち主だけ**（`requireOperator`）。ここは「alteroid を使ってよい」
+     * より一段強い口である — 受け取った本文はデーモンの `process.env` を土台に
+     * その場で評価されるので、**記憶ストアの鍵を持つプロセスでの任意コマンド実行**
+     * そのものであり、評価中の出力は応答にも返る。`access grant` を通っただけの
+     * アカウントに、実行環境そのものを差し替える資格まで渡さない
+     * （許可が持っているのは「使ってよい」の2値だけである）。
      *
      * **壊れているものは保存もしない。** プロファイルは人間が書いたシェル
      * スクリプトなので、構文を間違えれば読めない。それを保存すると、以後の
@@ -1576,8 +1598,13 @@ export function createApp(deps: AppDeps) {
             description: 'プロファイルが読めなかった（保存していない）。',
             content: { 'application/json': { schema: resolver(profileErrorResponseSchema) } },
           },
+          403: {
+            description: '実行環境の持ち主ではない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
         },
       }),
+      requireOperator,
       validator('json', profileUpdateRequestSchema),
       async (c) => {
         // **入口で形を決める。** 保存・配布・指紋が同じ文字列を見ないと、

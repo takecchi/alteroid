@@ -229,6 +229,40 @@ describe('認証が有効なとき', () => {
     ).toBe(403);
   });
 
+  it('実行環境プロファイルは持ち主だけ（許可された利用者でも 403）', async () => {
+    // **ここは「alteroid を使ってよい」より一段強い口である。**
+    //
+    // `PUT` の本文はデーモンの `process.env` を土台にその場で評価される ＝
+    // 記憶ストアの鍵を持つプロセスでの任意コマンド実行であり、評価中の出力は
+    // 応答にも返る（本文に `env` と1行書けば `ALTEROID_DATABASE_URL` も
+    // 制御面の合鍵も読める）。`GET` も同じ扱いにする — 本文には `GH_TOKEN` の
+    // ような鍵が丸ごと入りうるので、読み側が緩ければ書き側を締めても意味が無い。
+    const claimed = await loginThrough(app);
+    await app.request(`/access/${claimed.account.id}/grant`, {
+      ...post,
+      headers: { ...post.headers, ...OPERATOR },
+    });
+    const auth = { authorization: `Bearer ${claimed.token}` };
+
+    // 許可されている ＝ 記憶には触れる
+    expect((await app.request('/memory', { headers: auth })).status).toBe(200);
+
+    // それでもプロファイルには触れない
+    expect((await app.request('/profile', { headers: auth })).status).toBe(403);
+    expect(
+      (
+        await app.request('/profile', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json', ...auth },
+          body: JSON.stringify({ script: 'env' }),
+        })
+      ).status,
+    ).toBe(403);
+
+    // 実行環境の持ち主は通る（境界を入れて能力を消したのではない）
+    expect((await app.request('/profile', { headers: OPERATOR })).status).toBe(200);
+  });
+
   it('許可できるアカウントは高々1つ（2人目の grant は 409）', async () => {
     const first = await loginThrough(app);
     nextSubject = 'sub-2';

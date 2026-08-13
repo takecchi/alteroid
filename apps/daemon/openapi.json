@@ -2872,6 +2872,22 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "実行環境の持ち主ではない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
           }
         }
       },
@@ -2981,6 +2997,22 @@
                     }
                   },
                   "required": ["error", "detail"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "実行環境の持ち主ではない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
                 }
               }
             }
