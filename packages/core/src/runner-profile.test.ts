@@ -6,17 +6,19 @@ import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-a
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createProfileVessel } from './profile.js';
-import { createRunnerHost, type RunnerHost } from './runner.js';
+import { createRunnerHost, WITHHELD_ENV_KEYS, type RunnerHost } from './runner.js';
 
 /**
  * 実行環境プロファイルが**マネージャーに実際に効く**こと。
  *
  * ここが無いと、「プロファイルを置けた」と「マネージャーの環境が変わった」が
- * 別々のまま通ってしまう。効き方は2経路あり、**片方だけでは足りない**:
+ * 別々のまま通ってしまう。固定するのは2つ:
  *
- * - `BASH_ENV`: Bash 経由のコマンドに、**1コマンドごとに読み直されて**効く
- *   （走行中のマネージャーへ差し替えが届くのはこちら）
- * - 評価済みの env: MCP サーバのように Bash を経由しない子に効く
+ * - **評価済みの env**（本命）。これを継承した先でマネージャーも作業者も
+ *   MCP サーバも走る ＝ これから起こす仕事には即座に効く
+ * - **`BASH_ENV` の所在**。効く場面のための口で、**走行中の仕事への配達を
+ *   ここに期待しない**（`bash -c` では読まれず、SDK の Bash は永続シェルである）。
+ *   走行中へ届くのは `gh` シムがファイルを読み直す経路だけ
  */
 
 interface Started {
@@ -69,7 +71,12 @@ function makeHost(env: NodeJS.ProcessEnv, fake = fakeSdk()): { fake: ReturnType<
     emit: () => undefined,
     queryFn: fake.fn,
     env,
-    profile: createProfileVessel({ path: join(dir, 'profile', 'profile.sh') }),
+    // **本番と同じ形で作る。** 器に伏せる一覧を渡すのを忘れると、`unset` の
+    // 書かれないプロファイルが配られる（そこが検査の対象そのものである）。
+    profile: createProfileVessel({
+      path: join(dir, 'profile', 'profile.sh'),
+      withheldEnvKeys: WITHHELD_ENV_KEYS,
+    }),
   });
   return { fake };
 }
@@ -86,14 +93,14 @@ describe('マネージャーに効く実行環境プロファイル', () => {
 
     // Bash を経由しない子（MCP サーバなど）にも効く
     expect(env.SOME_API_TOKEN).toBe('abc123');
-    // Bash 経由のコマンドには、毎回読み直されて効く
+    // `BASH_ENV` の所在も渡る（効く場面のための口）
     expect(env.BASH_ENV).toBe(join(dir, 'profile', 'profile.sh'));
     // **読み込み済みの印は配らない。** 配ると入れ子ではなく最初のシェルが
     // 読み飛ばし、差し替えが走行中のマネージャーへ届かなくなる。
     expect(env.ALTEROID_PROFILE_SOURCED).toBeUndefined();
   });
 
-  it('器を作り直さずに差し替えられる（走行中の仕事を殺さない）', async () => {
+  it('器を作り直さずに差し替えられる（これから起こす仕事には即座に効く）', async () => {
     const { fake } = makeHost({ PATH: process.env.PATH ?? '' });
 
     await host.setProfile('export SOME_API_TOKEN=old');
@@ -106,8 +113,9 @@ describe('マネージャーに効く実行環境プロファイル', () => {
     await host.start({ managerId: 'mgr-2', request: '新しい環境で走る', cwd: dir });
     expect(fake.started[1]?.options.env?.SOME_API_TOKEN).toBe('new');
 
-    // 既に走っている mgr-1 にも、器（`BASH_ENV` が指すファイル）越しに次の
-    // コマンドから届く。**同じファイルを指したままである**ことが要点。
+    // 器の場所は変わらない。走行中の仕事のうち `gh` / `git` は、この同じ
+    // ファイルを呼び出しのたびに読み直すので新しい本文を拾う（`credentials.ts`
+    // と同じ形）。**それ以外のコマンドには届かない** — そこは次の仕事からになる。
     expect(fake.started[0]?.options.env?.BASH_ENV).toBe(fake.started[1]?.options.env?.BASH_ENV);
   });
 

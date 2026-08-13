@@ -23,15 +23,26 @@ import { dirname } from 'node:path';
  * 差し替える」ための太い口である。効く順序は **credentials → profile** で、
  * プロファイルが後から上書きする（人間が明示的に書いたほうが勝つ）。
  *
- * ## 効き方は3つ。どれも「走行中に届く」ことを壊さない
+ * ## 効き方は3つ。**どこまで届くかは経路ごとに違う**
  *
- * 1. **`BASH_ENV`**（＝`.zshenv` そのもの）。マネージャーが叩くコマンドは
- *    Bash 経由なので、**1コマンドごとにこのファイルが読み直される**。人間が
- *    プロファイルを直せば、走行中のマネージャーにも次のコマンドから届く
- * 2. **SDK 子プロセスの起動時に1度評価して env へ畳む**。MCP サーバは Bash を
- *    経由せず CLI から直に起こされるので、これが無いと MCP の鍵だけが届かない
- *    （＝「MCP の鍵は結局 compose に書く」に逆戻りする）
- * 3. **`gh` のシム**（Dockerfile）が読む。`gh` が Bash を経由せず呼ばれても効く
+ * 1. **SDK 子プロセスの起動時に1度評価して env へ畳む**（本命）。マネージャーも
+ *    作業者も MCP サーバも、この env を継承した先で走る。**これから起こす仕事には
+ *    差し替えが即座に効く**
+ * 2. **`gh` のシム**（Dockerfile）が呼ばれるたびに読む。だから `gh` と、`gh` から
+ *    資格情報を借りる `git` は、**走行中のマネージャーでも次の呼び出しから**
+ *    新しいプロファイルを使う（`credentials.ts` と同じ形）
+ * 3. **`BASH_ENV`**（＝`.zshenv` に当たる口）。効く場面では1コマンドごとに
+ *    読み直される
+ *
+ * **3 に「走行中へ必ず届く」を期待しないこと。** bash が `BASH_ENV` を読むのは
+ * 「スクリプトファイルとして起こされたとき」で、**プログラムから `bash -c` で
+ * 起こされた場合（stdin が端末でない）は読まない**。さらに SDK の Bash ツールは
+ * セッションごとの**永続シェル**なので、仮に読まれてもそのシェルの起動時1回である。
+ *
+ * したがって**走行中の仕事へ確実に届くのは 2 の経路だけ**で、それ以外は
+ * 「次に起こす仕事から効く」が正しい。ここを取り違えると、鍵を差し替えたのに
+ * 効かない相手が居ることに誰も気づけない（`alteroid profile status` は
+ * *器に置かれたか*を見せるのであって、走行中のプロセスの中身は見せない）。
  *
  * ## 器が足しているもの（人間の本文には無い2行）
  *
@@ -39,10 +50,24 @@ import { dirname } from 'node:path';
  *   スクリプトを呼び、そのスクリプトが bash なら、また読み直される。本文が
  *   コマンドを1つでも走らせていたら無限再帰になる。だから読み込み済みの印を
  *   立てて、内側では読まない
+ * - **本文を包む関数**。source されたファイルの中の `return` は「そのファイルの
+ *   読み込みそのもの」から戻るので、本文を直に置くと `[ -f ~/.foo ] || return 0`
+ *   のような普通の早期リターン1つで、後ろに置いた後始末に到達しなくなる。
+ *   関数に閉じ込めて、`return` をその関数からの復帰にする
  * - **伏せる鍵の `unset`**。本文が何を `export` しようと、**上（記憶）へ到達する鍵**
  *   だけは最後に落とす。配る仕組み（プロファイル）が伏せる仕組みを黙って越えない
  *   ようにするためで、`docker/alteroid-runner` が `exec` の前にやっているのと
- *   同じ形である。評価経路（2番）でも Node 側でもう一度落とす（二重の底）
+ *   同じ形である
+ *
+ * ## そして「効いたか」を推測せず実測する
+ *
+ * 後始末が飛ばされうる書き方を**数え上げて弾く形にしない**。数え忘れた1つが
+ * そのまま穴になるからで、実際に `return` を数え忘れている（しかも Node 側で
+ * 差分から落としていたので、**保存時の検査は通るのに `BASH_ENV` 経由では
+ * 漏れている**、という一番たちの悪い壊れ方をした）。
+ *
+ * だから保存する前に**実際に読ませて、伏せる鍵が残っていないかを見る**
+ * （`ProfileEvaluation.leaked`）。残っていれば保存も配布もしない。
  */
 
 /** 読み込み済みの印。**子へ配る env には残さない**（残すと差し替えが届かなくなる）。 */
@@ -121,6 +146,14 @@ export interface ProfileVesselOptions {
 
 export interface ProfileVessel {
   readonly path: string;
+  /**
+   * この器が本文の後で落とすと約束している名前。
+   *
+   * **一覧を二重に持たせないために出している。** 器（`unset` を書く側）と検査
+   * （効いたかを見る側）が別々に一覧を持つと、片方だけ足したときに「すべての
+   * プロファイルが拒否される」か「検査していないつもりの穴」のどちらかになる。
+   */
+  readonly withheldEnvKeys: readonly string[];
   /** いま置いてある本文（人間が直すために要る）。無ければ undefined。 */
   script(): string | undefined;
   /** 置いてあるものの同一性。無ければ undefined。 */
@@ -158,13 +191,27 @@ export function createProfileVessel(options: ProfileVesselOptions): ProfileVesse
   return new Vessel(options);
 }
 
+/** 本文を閉じ込める関数の名前。人間の名前空間と衝突しない形にしてある。 */
+const PROFILE_BODY_FUNCTION = '__alteroid_profile_body';
+
 /**
  * 器へ書く実体を組み立てる。
  *
- * 人間の本文の**前後**に器の行を足す。前に番人、後ろに `unset`。本文を挟む形に
- * するのは、本文が途中で `return` してもよい（＝プロファイルとして普通の書き方）
- * ようにするためではなく、**本文が何をしても最後の `unset` に到達させる**ためで
- * ある。`return` で抜けられると伏せる鍵が残るので、`unset` は番人の外に置く。
+ * **本文は関数の中に閉じ込める。** ここは一度間違えている — 以前は本文をそのまま
+ * `if` の中へ置き、`unset` を `if` の外に出せば「本文が `return` しても到達する」
+ * と書いていた。**間違いである。** source されたファイルの中の `return` は `if`
+ * から抜けるのではなく、**そのファイルの読み込みそのものから戻る**。つまり
+ * `[ -f ~/.foo ] || return 0` のような、プロファイルとしてまったく普通の早期
+ * リターン1つで、末尾の `unset` に到達しなくなる。
+ *
+ * しかも壊れ方が静かだった。評価（`evaluateProfile`）は Node 側でも伏せる鍵を
+ * 落としていたので、**保存時の検査は通る**。実際に効くのは `BASH_ENV` 経由の
+ * 読み込みで、そちらにはその後処理が無い — 検査は「大丈夫」と言い、実物は
+ * 漏れている、という一番たちの悪い形である。
+ *
+ * だから本文を関数にして、`return` を**その関数からの復帰**に閉じ込める。
+ * 位置パラメータ（`$1` `$@`）は関数へそのまま渡すので、本文から見た意味は変わらない。
+ * `export` も `PATH` への追記も関数の中から効く（シェル関数は環境を共有する）。
  */
 export function renderProfileFile(script: string, withheldEnvKeys: readonly string[]): string {
   const lines = [
@@ -176,18 +223,31 @@ export function renderProfileFile(script: string, withheldEnvKeys: readonly stri
     // コマンドを走らせていると、これが無い場合に無限再帰する。
     `  ${PROFILE_SOURCED_ENV_KEY}=1; export ${PROFILE_SOURCED_ENV_KEY}`,
     '',
+    '# 本文は関数の中で走らせる。**`return` をここからの復帰に閉じ込めるため。**',
+    '# 直に置くと、本文の `return` がファイルの読み込みごと終わらせてしまい、',
+    '# 下の `unset` に到達しない（伏せるはずの鍵が残る）。',
+    `${PROFILE_BODY_FUNCTION}() {`,
     '# ここから人間が書いた本文 -------------------------------------------------',
     script.replace(/\s+$/, ''),
     '# ここまで人間が書いた本文 -------------------------------------------------',
-    '',
+    '  :',
+    '}',
+    // 位置パラメータをそのまま渡す（本文から見た `$1` `$@` の意味を変えない）。
+    `${PROFILE_BODY_FUNCTION} "$@"`,
+    `unset -f ${PROFILE_BODY_FUNCTION} 2>/dev/null || true`,
     'fi',
   ];
 
   if (withheldEnvKeys.length > 0) {
     lines.push(
       '',
-      '# 上（記憶）へ到達する鍵は、本文が何をしても最後に落とす。番人の外に置いて',
-      '# あるのは、本文が `return` で抜けてもここへ到達させるためである。',
+      '# 上（記憶）へ到達する鍵は、本文が何をしても最後に落とす。',
+      '#',
+      '# **番人（if）の外に置いてある。** 本文の `return` は関数で閉じてあるので',
+      '# もう素通りされないが、`if` の中で何が起きてもここへ到達させたい。',
+      '# ここが飛ばされていないことは、保存する前に実物を読ませて確かめている',
+      '# （`evaluateProfile` の `leaked`）— 抜け道を数え上げて塞ぐ形にすると、',
+      '# 数え忘れた1つがそのまま穴になるからである。',
       `unset ${withheldEnvKeys.join(' ')}`,
     );
   }
@@ -197,6 +257,9 @@ export function renderProfileFile(script: string, withheldEnvKeys: readonly stri
 
 class Vessel implements ProfileVessel {
   readonly path: string;
+  get withheldEnvKeys(): readonly string[] {
+    return this.#withheld;
+  }
   readonly #reader: { uid: number; gid: number } | undefined;
   readonly #withheld: readonly string[];
   readonly #now: () => Date;
@@ -227,8 +290,10 @@ class Vessel implements ProfileVessel {
     if (this.#held === undefined) return {};
     return {
       [PROFILE_FILE_ENV_KEY]: this.path,
-      // `.zshenv` と同じ効き方。**1コマンドごとに読み直される**ので、走行中の
-      // マネージャーにもプロファイルの差し替えが次のコマンドから届く。
+      // `.zshenv` に当たる口。**効く場面では**1コマンドごとに読み直される。
+      // ただし bash が読むのはスクリプトとして起こされたときで、`bash -c`
+      // （stdin が端末でない）では読まれない。**走行中の仕事への配達をここに
+      // 期待しないこと** — それは `gh` シムの経路が担っている。
       BASH_ENV: this.path,
       // bash 以外（dash / ash）のための同じ意味の変数。害は無い。
       ENV: this.path,
@@ -324,6 +389,18 @@ export interface ProfileEvaluation {
   output: string;
   /** 失敗していれば理由。**成功と区別できる形で返す**（黙って空を返さない）。 */
   error?: string;
+  /**
+   * **器が書いた `unset` を素通りして生き残った、伏せるはずの名前。**
+   *
+   * ここは実測である。「本文にこう書かれていたら危ない」を数え上げて弾く形に
+   * すると、数え忘れた1つがそのまま穴になる（実際に `return` を数え忘れて、
+   * *検査は通るのに実物は漏れている*という一番たちの悪い壊れ方をした）。
+   * だから読み方を推測せず、**実際に読ませて、残っているかを見る**。
+   *
+   * 落とすのは呼び出し側の仕事だが、**落とすだけで済ませないこと** — 落として
+   * 黙ると、`BASH_ENV` 経由（Node のフィルタが無い経路）で漏れ続ける。
+   */
+  leaked: string[];
 }
 
 export interface EvaluateProfileOptions {
@@ -409,6 +486,7 @@ export async function evaluateProfile(options: EvaluateProfileOptions): Promise<
     if (code !== 0) {
       return {
         env: {},
+        leaked: [],
         output: tail(output),
         error:
           code === 97
@@ -420,7 +498,7 @@ export async function evaluateProfile(options: EvaluateProfileOptions): Promise<
     const reason = controller.signal.aborted
       ? `プロファイルの評価が ${String(timeoutMs)}ms 以内に終わらなかった（返ってこないコマンドを書いていないか）`
       : String(error);
-    return { env: {}, output: tail(output), error: reason };
+    return { env: {}, leaked: [], output: tail(output), error: reason };
   } finally {
     clearTimeout(timer);
   }
@@ -429,7 +507,12 @@ export async function evaluateProfile(options: EvaluateProfileOptions): Promise<
   try {
     parsed = JSON.parse(stdout) as Record<string, string>;
   } catch (error) {
-    return { env: {}, output: tail(output), error: `評価結果を読めなかった: ${String(error)}` };
+    return {
+      env: {},
+      leaked: [],
+      output: tail(output),
+      error: `評価結果を読めなかった: ${String(error)}`,
+    };
   }
 
   const diff: Record<string, string> = {};
@@ -438,12 +521,19 @@ export async function evaluateProfile(options: EvaluateProfileOptions): Promise<
     if (baseEnv[key] === value) continue;
     diff[key] = value;
   }
-  // **伏せるのは最後。** 本文が何を `export` しても、上（記憶）へ到達する鍵は
-  // 配らない。器が書いた `unset` と二重にしてあるのは、片方を通り忘れても
-  // 穴にしないためである。
+  // **器が書いた `unset` が本当に効いたかを、ここで実測する。**
+  //
+  // 土台（`baseEnv`）からは既に伏せる鍵が抜いてある。それでも読み終えた環境に
+  // 残っているなら、それは本文が置いて `unset` が届かなかった、ということである。
+  // ここを「黙って落とす」だけにしていたせいで、`BASH_ENV` 経由（Node のフィルタが
+  // 無い経路）では漏れているのに保存時の検査は通る、という状態を作った。
+  const leaked = withheldEnvKeys.filter((key) => parsed[key] !== undefined);
+
+  // **伏せるのは最後。** 実測して弾くのとは別に、ここでも落とす（片方を通り忘れても
+  // 穴にしないため）。
   for (const key of withheldEnvKeys) delete diff[key];
 
-  return { env: diff, output: tail(output) };
+  return { env: diff, leaked, output: tail(output) };
 }
 
 /** 人間が読む窓であって記録ではない。長い出力で日誌を溢れさせない。 */
@@ -490,13 +580,20 @@ export interface ProfileApplierOptions {
   vessel: ProfileVessel;
   /** 評価するときの土台。**実際に配るものと同じ env を渡すこと。** */
   baseEnv: () => NodeJS.ProcessEnv;
+  /**
+   * 検査する名前。**既定は器（`vessel`）が約束している一覧。**
+   * 器が落とさない名前をここだけで要求しても、拒否が増えるだけで穴は塞がらない。
+   */
   withheldEnvKeys?: readonly string[];
   /** 別 UID で読ませるなら渡す。**読む主体を配る先と揃える。** */
   spawnFn?: ProfileSpawn;
 }
 
 export function createProfileApplier(options: ProfileApplierOptions): ProfileApplier {
-  const { vessel, baseEnv, withheldEnvKeys = [], spawnFn } = options;
+  // **既定は器が約束している一覧そのもの。** ここを別々に渡せる形にしたまま
+  // 使うと、器が `unset` を書かない名前を検査だけが要求して、まっとうな
+  // プロファイルが全部拒否される（実際にテストで踏んだ）。
+  const { vessel, baseEnv, withheldEnvKeys = vessel.withheldEnvKeys, spawnFn } = options;
   let applied: Record<string, string> = {};
 
   return {
@@ -524,6 +621,24 @@ export function createProfileApplier(options: ProfileApplierOptions): ProfileApp
         // すべてのコマンドが毎回エラーを吐く環境で走り、原因はどこにも出ない。
         await staged.discard();
         return { ok: false, error: evaluation.error, output: evaluation.output };
+      }
+
+      if (evaluation.leaked.length > 0) {
+        // **器の `unset` を素通りしたものは置かない。**
+        //
+        // 落として配るだけでは足りない。ここで配る env から消しても、実際に効くのは
+        // `BASH_ENV` 経由の読み込みで、そちらに Node のフィルタは無い。置いた時点で
+        // 境界が消えるので、置かずに理由を返す（前のものが残る）。
+        await staged.discard();
+        return {
+          ok: false,
+          error:
+            `プロファイルが ${evaluation.leaked.join(' ')} を残している` +
+            '（上＝記憶へ到達する鍵は、プロファイルからは置けない）。' +
+            '本文の early return やシェル組み込みの再定義で、器が最後に置いている ' +
+            'unset が飛ばされていないか確かめること',
+          output: evaluation.output,
+        };
       }
 
       const fingerprint = await staged.commit();

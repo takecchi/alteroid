@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -34,15 +35,72 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+/**
+ * 実物の bash に `BASH_ENV` として読ませて、1行を出させる。
+ *
+ * **スクリプトファイルとして起こす。** `bash -c` は、stdin が端末でないと
+ * `BASH_ENV` を読まない（Node から起こすと必ずそうなる）。ここで見たいのは
+ * 「読まれたときに後始末が効くか」なので、確実に読まれる形で起こす。
+ */
+function viaBashEnv(dir: string, script: string, profilePath: string): string {
+  const runner = join(dir, `run-${randomUUID().slice(0, 8)}.sh`);
+  writeFileSync(runner, `${script}\n`);
+  return execFileSync('/bin/bash', [runner], {
+    encoding: 'utf8',
+    env: { BASH_ENV: profilePath },
+  }).trim();
+}
+
 describe('器に置く形', () => {
-  it('本文の外側に、再入の番人と伏せる鍵の unset を足す', () => {
+  it('本文を関数に閉じ込め、その呼び出しの後で伏せる鍵を落とす', () => {
     const rendered = renderProfileFile('export FOO=1', ['ALTEROID_DATABASE_URL']);
 
     expect(rendered).toContain('export FOO=1');
     expect(rendered).toContain(PROFILE_SOURCED_ENV_KEY);
-    // **`unset` は番人の外。** 本文が `return` で抜けても必ず到達させる。
-    const guardEnd = rendered.lastIndexOf('fi');
-    expect(rendered.indexOf('unset ALTEROID_DATABASE_URL')).toBeGreaterThan(guardEnd);
+    // 本文 → 関数の呼び出し → `unset` の順に並んでいること。**この順序が要件である。**
+    const body = rendered.indexOf('export FOO=1');
+    const call = rendered.indexOf('__alteroid_profile_body "$@"');
+    const cleanup = rendered.indexOf('unset ALTEROID_DATABASE_URL');
+    expect(body).toBeGreaterThan(-1);
+    expect(call).toBeGreaterThan(body);
+    expect(cleanup).toBeGreaterThan(call);
+  });
+
+  /**
+   * **本文の `return` で後始末を飛ばせないこと。**
+   *
+   * source されたファイルの中の `return` は、`if` から抜けるのではなく
+   * **そのファイルの読み込みそのもの**から戻る。本文を直に置いていた頃は、
+   * `[ -f ~/.foo ] || return 0` のような普通の早期リターン1つで末尾の `unset` に
+   * 到達しなくなり、伏せるはずの鍵が `BASH_ENV` 経由でそのまま残っていた。
+   *
+   * **実物のシェルに読ませて確かめる。** Node 側の評価だけを見ていたせいで、
+   * 「検査は通るのに実物は漏れている」を見逃した（そちらには Node のフィルタが
+   * あり、`BASH_ENV` の経路には無い）。
+   */
+  it('本文の return で、伏せる鍵の unset を飛ばせない', async () => {
+    const path = join(dir, 'profile.sh');
+    const vessel = createProfileVessel({ path, withheldEnvKeys: ['ALTEROID_DATABASE_URL'] });
+    await vessel.set('export ALTEROID_DATABASE_URL=postgres://injected\nreturn 0');
+
+    // ① `BASH_ENV` として読まれた場合
+    expect(viaBashEnv(dir, 'echo "[${ALTEROID_DATABASE_URL:-}]"', path)).toBe('[]');
+    // ② `gh` のシムと評価が通る経路（sh の source）
+    expect(
+      execFileSync('/bin/sh', ['-c', `. "$0"; echo "[\${ALTEROID_DATABASE_URL:-}]"`, path], {
+        encoding: 'utf8',
+        env: {},
+      }).trim(),
+    ).toBe('[]');
+  });
+
+  it('早期リターンは本文の書き方としてそのまま効く（能力は削らない）', async () => {
+    const path = join(dir, 'profile.sh');
+    const vessel = createProfileVessel({ path });
+    await vessel.set('export BEFORE=1\n[ -f /nonexistent ] || return 0\nexport AFTER=1');
+
+    // `return` より前は効き、後は走らない ＝ 人間が普通に期待する挙動
+    expect(viaBashEnv(dir, 'echo "${BEFORE:-none} ${AFTER:-none}"', path)).toBe('1 none');
   });
 
   it('入れ子のシェルで本文を二度読まない（無限再帰しない）', () => {
@@ -70,6 +128,26 @@ describe('評価', () => {
     expect(result.error).toBeUndefined();
     expect(result.env.SOME_API_TOKEN).toBe('abc123');
     expect(result.env.PATH).toBe('/opt/bin:/usr/bin');
+  });
+
+  it('後始末が飛ばされていたら、それを検出して報告する', async () => {
+    // **抜け道を数え上げて弾く形にしない。** 数え忘れた1つがそのまま穴になる
+    // （実際に `return` を数え忘れた）。ここでは「器が `unset` を書かなかった」
+    // 状況をそのまま作り、**実測で気づけること**だけを固定する。
+    const path = join(dir, 'profile.sh');
+    const vessel = createProfileVessel({ path }); // ← withheld を渡さない = unset が出ない
+    await vessel.set('export ALTEROID_DATABASE_URL=postgres://injected');
+
+    const result = await evaluateProfile({
+      path,
+      baseEnv: {},
+      withheldEnvKeys: ['ALTEROID_DATABASE_URL'],
+    });
+
+    expect(result.leaked).toEqual(['ALTEROID_DATABASE_URL']);
+    // 配る env からは落ちている（黙って配らない）。それでも「落としたから良し」に
+    // しないのが要点で、実際に効く BASH_ENV の経路にこのフィルタは無い。
+    expect(result.env.ALTEROID_DATABASE_URL).toBeUndefined();
   });
 
   it('上（記憶）へ到達する鍵は、本文が export しても配らない', async () => {
@@ -145,6 +223,25 @@ describe('置き換え', () => {
     expect(readFileSync(path, 'utf8')).toContain('export OK=1');
     // 仮置きも残さない
     expect(existsSync(`${path}.tmp`)).toBe(false);
+  });
+
+  it('後始末が飛ばされたプロファイルは保存も配布もしない', async () => {
+    const path = join(dir, 'profile.sh');
+    const applier = createProfileApplier({
+      // 器が `unset` を書かない状況（＝後始末が飛ばされたのと同じ結果）を作る
+      vessel: createProfileVessel({ path }),
+      baseEnv: () => ({}),
+      withheldEnvKeys: ['ALTEROID_DATABASE_URL'],
+    });
+
+    await applier.apply('export OK=1');
+    const bad = await applier.apply('export ALTEROID_DATABASE_URL=postgres://injected');
+
+    expect(bad.ok).toBe(false);
+    expect(bad.error).toContain('ALTEROID_DATABASE_URL');
+    // 前のものが残っている ＝ 置いていない
+    expect(applier.env().OK).toBe('1');
+    expect(readFileSync(path, 'utf8')).toContain('export OK=1');
   });
 
   it('空文字で外せる', async () => {

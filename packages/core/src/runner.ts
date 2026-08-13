@@ -189,7 +189,9 @@ class Host implements RunnerHost {
         : createProfileApplier({
             vessel: options.profile,
             baseEnv: () => this.#baseChildEnv(),
-            withheldEnvKeys: this.#withheldEnvKeys,
+            // **器が約束している分だけを検査する**（既定）。Host が env から落とす
+            // 一覧（`#withheldEnvKeys`）とは役割が違う — あちらは配るときの最後の
+            // 一枚で、こちらは「器が書いた `unset` が本当に効いたか」の実測である。
             // 読むのは SDK 子プロセスと同じ主体である。root で読めても意味がない
             // （降りた先では読めないプロファイルを「置けた」と報告することになる）。
             ...(this.#childUser === undefined
@@ -601,10 +603,13 @@ class RunnerSession {
     // **プロファイルは鍵より後。** 人間が明示的に書いたほうが勝つ（`credentials`
     // は1つの鍵を回すための細い口で、こちらは実行環境そのものの宣言である）。
     //
-    // 重ねるのは2つ。評価済みの差分（MCP サーバのように Bash を経由しない子へ
-    // 効かせるため）と、`BASH_ENV` などの所在（走行中のコマンドへ毎回届かせるため）。
-    // 前者だけだと差し替えが走行中のマネージャーに届かず、後者だけだと MCP に
-    // 届かない。**両方要る。**
+    // 重ねるのは2つ。評価済みの差分（**本命**。この env を継承した先で
+    // マネージャーも作業者も MCP サーバも走る）と、`BASH_ENV` などの所在
+    // （効く場面では読み直される口）。
+    //
+    // **走行中の仕事への配達をここに期待しないこと。** 起動時に畳んだ env は
+    // その子の一生分であり、`BASH_ENV` は `bash -c` では読まれない。走行中へ
+    // 届くのは `gh` シムがファイルを読み直す経路だけである（`profile.ts`）。
     Object.assign(env, this.#profileEnv());
     // **伏せるのは最後。** 先に消してから鍵を重ねると、鍵の名前として
     // `ALTEROID_DATABASE_URL` を渡すだけで、伏せたはずの値を注入し直せる。

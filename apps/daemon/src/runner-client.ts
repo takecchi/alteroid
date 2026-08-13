@@ -256,9 +256,10 @@ class HttpRunner implements RunnerClient {
   /**
    * 実行環境プロファイルを差し替える。**器は作り直さない。**
    *
-   * 走行中のマネージャーにも `BASH_ENV` 越しに次のコマンドから届く。runner は
-   * これを自分で取りに行けない（記憶ストアの鍵を持たないため）ので、**繋ぎ直しの
-   * たびに降ろし直すのはデーモンの責任**である。
+   * これから起こす仕事には即座に効く。走行中の仕事へ届くのは `gh` シムが
+   * ファイルを読み直す経路だけである（`profile.ts`）。runner はこれを自分で
+   * 取りに行けない（記憶ストアの鍵を持たないため）ので、**繋ぎ直しのたびに
+   * 降ろし直すのはデーモンの責任**である。
    */
   async setProfile(script: string): Promise<RunnerProfileResult> {
     const response = await this.#call('POST', '/profile', { script });

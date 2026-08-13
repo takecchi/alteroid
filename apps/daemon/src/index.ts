@@ -223,11 +223,20 @@ export async function main(): Promise<void> {
    * にも「自分で端末を叩くとき」にも同じように効くからである。クローンは人間の
    * 写像であって、道具を持たない存在ではない（north_star「適用範囲」）。
    *
-   * 記憶ストアの鍵は落とさない。伏せるのは**下の層へ配らない**ためであって、
-   * 記憶の持ち主から取り上げるためではない。
+   * **プロファイルからは伏せる名前を置かせない。** クローンから記憶ストアの鍵を
+   * 取り上げるという意味ではない — クローンの子は `process.env` からこれまでどおり
+   * 本物の値を受け取る。禁じているのは「プロファイル経由でその名前を*差し替える*」
+   * ことで、ここを開けると、保存の入口（＝ここ）を通ったものがそのまま runner へ
+   * 降り、下の層の境界を上書きできてしまう。
+   *
+   * **保存する前に弾ける唯一の場所でもある。** ここが素通りすると、壊れた
+   * プロファイルが記憶ストアに残り、以後の再接続のたびに配布が失敗し続ける。
    */
   const profile = createProfileApplier({
-    vessel: createProfileVessel({ path: join(paths.state, 'profile.sh') }),
+    vessel: createProfileVessel({
+      path: join(paths.state, 'profile.sh'),
+      withheldEnvKeys: [...WITHHELD_ENV_KEYS, ...storage.withheldEnvKeys],
+    }),
     baseEnv: () => process.env,
   });
 
