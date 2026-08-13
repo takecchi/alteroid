@@ -74,6 +74,19 @@ export function useAuth() {
           };
         }
         if (error instanceof ApiError && error.status === 401) {
+          /**
+           * **ここで捨てる。**
+           *
+           * 401 を「未ログインという正常な状態」として返しているので、
+           * `ApiProvider` の共通ハンドラ（`SWRConfig.onError`）には届かない。
+           * 認証を確かめる主要な経路だけが「401 なら鍵を捨てる」という約束から
+           * 外れると、失効した秘密が保存先に残り続け、読み込み直すたびに同じ鍵を
+           * 出しては 401 を貰うことになる。
+           *
+           * 捨てると鍵が変わるので、このキー自体が引き直される（`credential === null`
+           * の枝に落ちて、`/auth/me` を叩かずに anonymous を返す）。
+           */
+          setCredential(null);
           return { status: 'anonymous', providers, account: null, operator: false };
         }
         throw error;

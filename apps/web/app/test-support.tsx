@@ -103,6 +103,11 @@ export function sse(
 export interface FetchStub {
   /** 実際に叩かれた URL（順番どおり）。 */
   calls: string[];
+  /**
+   * 叩かれた記録。**資格情報を付けているかを確かめる**ために header も控える
+   * （鍵を捨てたはずなのに付け続けていないか、は URL だけでは見えない）。
+   */
+  entries: { url: string; authorization: string | null }[];
   /** 応答の仕方を差し替える（接続先を直したあとの挙動を作るため）。 */
   setRoute(route: Route): void;
 }
@@ -110,11 +115,16 @@ export interface FetchStub {
 /** `globalThis.fetch` を差し替える。後片付けは呼ぶ側（`afterEach`）。 */
 export function stubFetch(initial: Route): FetchStub {
   const calls: string[] = [];
+  const entries: { url: string; authorization: string | null }[] = [];
   let route = initial;
 
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     calls.push(url);
+    // `Request` で来ることも、素の init で来ることもある（SSE は後者）。
+    const headers =
+      input instanceof Request ? input.headers : new Headers(init?.headers ?? undefined);
+    entries.push({ url, authorization: headers.get('authorization') });
     const response = route(url, init);
     if (response === undefined) {
       // 知らない URL は「繋がらない」。握り潰すと、経路の書き忘れが
@@ -126,6 +136,7 @@ export function stubFetch(initial: Route): FetchStub {
 
   return {
     calls,
+    entries,
     setRoute: (next) => {
       route = next;
     },
