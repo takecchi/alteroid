@@ -329,6 +329,42 @@ describe('クローンの道具', () => {
     for (const entry of entries) expect(entry.date).toBe(expected);
   });
 
+  // --- 自分自身 -------------------------------------------------------------
+
+  it('self_read は正典を全文返す（クローンが自分の要件を読める）', async () => {
+    const h = harness();
+
+    const body = await h.call('self_read', { document: 'north_star' });
+
+    expect(body).toContain('docs/north_star.md');
+    expect(body).toContain('デグレード禁止');
+    expect(body).toContain('追加制限禁止');
+  });
+
+  it('self_read は無い名前に、読める名前を添えて答える（黙って空を返さない）', async () => {
+    const h = harness();
+
+    const body = await h.call('self_read', { document: 'agents' });
+
+    expect(body).toContain('north_star');
+    expect(body).toContain('roadmap');
+  });
+
+  /**
+   * 委譲できない内部ターン（蒸留）でも、自分が何者かは読めること。
+   * ここが `managers` の有無に引きずられると、記憶へ移す判断だけが
+   * 自己認識なしで行われる。
+   */
+  it('self_read は委譲できない場面でも使える', async () => {
+    const tools = createCloneTools({ stores: createMemoryStores(), emit: () => undefined });
+    const found = tools.find((entry) => entry.name === 'self_read');
+
+    const result = await found?.handler({ document: 'roadmap' } as never, {});
+    const body = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+
+    expect(body).toContain('docs/roadmap.md');
+  });
+
   it('manager_start は起こして即返り、委譲の判断が日誌に残る', async () => {
     const h = harness();
 

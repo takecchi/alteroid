@@ -31,6 +31,15 @@ COPY apps/cli/package.json apps/cli/
 RUN pnpm install --frozen-lockfile
 
 COPY . .
+
+# クローンの自己認識に載るリビジョン。**`.git` はビルド文脈に入れない**ので
+# （.dockerignore）、ここで渡さない限り「リビジョン不明」になる。不明でも壊れない
+# — クローンには不明と伝わり、最新が要るならリポジトリを見に行く判断ができる。
+# 渡せば、自分が走っているのがどのコミットかまで言えるようになる。
+#   docker build --build-arg ALTEROID_BUILD_REV=$(git rev-parse --short HEAD) .
+ARG ALTEROID_BUILD_REV=""
+ENV ALTEROID_BUILD_REV=$ALTEROID_BUILD_REV
+
 RUN pnpm build
 
 

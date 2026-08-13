@@ -14,6 +14,7 @@ import {
 } from './schedule.js';
 import { scheduleKindSchema, scheduleSpecSchema } from './schema.js';
 import type { ChatStreamEvent, PendingApproval, ScheduleSpec, ScheduledRequest } from './schema.js';
+import { CANON_REVISION, canonDocument, canonNames } from './self.js';
 import type { Stores } from './store.js';
 
 /**
@@ -55,6 +56,7 @@ export const CLONE_TOOL_NAMES = [
   'schedule_list',
   'schedule_create',
   'schedule_remove',
+  'self_read',
   'manager_start',
   'manager_send',
   'manager_list',
@@ -402,6 +404,30 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
+    // --- 自分自身 -----------------------------------------------------------
+    tool(
+      'self_read',
+      [
+        '自分自身（alteroid）の正典を1つ、全文で読む。',
+        '自分が何で出来ているか・何が要件か・どう設計されているか・何が未着手かはここにある。',
+        'ビルド時に焼き込んだ写しなので、実装の最新が要るならマネージャーにリポジトリを読ませること。',
+      ].join(' '),
+      {
+        document: z
+          .string()
+          .describe(`正典の名前。読めるのは ${canonNames().join(' / ')}（上ほど優先順位が高い）`),
+      },
+      async ({ document }) => {
+        const doc = canonDocument(document);
+        if (doc === undefined) {
+          return text(`正典 ${document} は無い。読めるのは ${canonNames().join(' / ')}。`);
+        }
+        return text(
+          `${doc.path}（${CANON_REVISION.length > 0 ? `リビジョン ${CANON_REVISION}` : 'リビジョン不明'} の写し）\n\n${doc.content}`,
+        );
+      },
+    ),
+
     // --- 委譲 --------------------------------------------------------------
     tool(
       'manager_start',
@@ -507,7 +533,8 @@ export function createCloneMcpServer(context: ToolContext) {
     version: '0.1.0',
     instructions:
       'alteroid のクローン自身の道具。記憶（人間がいつでも読み書きする Markdown）、' +
-      '日誌（追記専用）、人間への確認、継続中の依頼（時間起点の仕込み）、マネージャーへの委譲。',
+      '日誌（追記専用）、人間への確認、継続中の依頼（時間起点の仕込み）、' +
+      '自分自身（alteroid）の正典、マネージャーへの委譲。',
     tools: createCloneTools(context),
   });
 }
