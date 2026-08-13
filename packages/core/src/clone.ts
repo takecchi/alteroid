@@ -25,7 +25,7 @@ import {
   buildTimerPrompt,
 } from './prompt.js';
 import { DAILY_REPORT_KIND, localDate, localDayRange } from './schedule.js';
-import type { ChatStreamEvent, InboxEvent, JournalEntryInput } from './schema.js';
+import type { ChatStreamEvent, InboxEvent, JournalEntryInput, ScheduledRequest } from './schema.js';
 import type { Stores } from './store.js';
 import { CLONE_ALLOWED_TOOLS, MCP_SERVER_NAME, createCloneMcpServer } from './tools.js';
 
@@ -58,6 +58,15 @@ const DAILY_REPORT_LOOKUP = 30;
 
 /** 外部イベントの中身をクローンに見せる上限。全文が要るなら送り元で切ること。 */
 const EXTERNAL_PAYLOAD_LIMIT = 8_000;
+
+/**
+ * 発火した定期の依頼を読むときの試行回数と間隔。
+ *
+ * **これは回数制限ではない**（AGENTS.md 地雷2）。器が一瞬揺れただけで1周期ぶんの
+ * 仕事を落とさないための拾い直しであって、仕事の量を絞るものではない。
+ */
+const SCHEDULE_READ_ATTEMPTS = 3;
+const SCHEDULE_READ_RETRY_MS = 200;
 
 export interface CloneOptions {
   stores: Stores;
@@ -363,20 +372,26 @@ class Clone implements CloneHost {
         }
         // 依頼の本文は**いま**読む。イベントに載せて運ぶと、人間が依頼を書き換えても
         // 発火時点の写しで走ることになる（真実はストア側にある）。
-        let plan = null;
-        try {
-          plan = await this.#stores.schedules.get(event.kind);
-        } catch (error) {
-          // 読めないままターンを起こすと、依頼の本文なしで「記憶に照らせ」と言うことに
-          // なる。判断が変わりうるので、握り潰さず記録する（システムの失敗なので
-          // クローンの判断としては残さない）。
+        const found = await this.#scheduledRequestFor(event.kind);
+
+        // **読めなかったときはターンを起こさない。** 本文なしで「記憶に照らせ」と
+        // 言えば、対象も狙いも無い曖昧なターンを1回消費し、しかも `markRun` が
+        // 付かないので「動いた」ようにも見えない。器の瞬断で1周期ぶんの仕事が
+        // 消えるのは、時刻が来れば必ず届くという約束の側が負けている。
+        // 「消された（null）」と「読めなかった」は別物なので分けて扱う。
+        if (found.status === 'unreadable') {
           await this.#journal({
             type: 'exchange',
             with: 'self',
             role: 'outbound',
-            text: `定期の依頼 ${event.kind} を読めなかった: ${String(error)}`,
+            text:
+              `定期の依頼 ${event.kind} を読めなかったので、この発火では動かない` +
+              `（本文なしで曖昧に動かすより、次の発火で読み直す）: ${found.error}`,
           });
+          return;
         }
+
+        const plan = found.plan;
         // 記録は走らせる前に付ける。ターンが失敗しても「起きた」ことは残り、
         // 次の発火で前回時刻が空のまま同じ仕事をまっさらから始めることがない。
         if (plan !== null) {
@@ -453,6 +468,36 @@ class Clone implements CloneHost {
   // -------------------------------------------------------------------------
   // 自律（人間以外の起点の中身）
   // -------------------------------------------------------------------------
+
+  /**
+   * 発火した kind の依頼を読む。
+   *
+   * **「消された」と「読めなかった」を区別する。** 前者は人間が手で仕込んだ kind を
+   * 起こした場合も含むので、本文なしのターン（記憶に照らして判断する）が正しい。
+   * 後者は器の瞬断であって、本文なしで動かす理由にはならない。
+   *
+   * 一瞬の揺れで1周期ぶんの仕事を落とさないよう、この発火の中で読み直す。**回数を
+   * 絞るためではなく取りこぼしを拾うため**であり、諦めた場合も `lastRunAt` を
+   * 進めないので、次の発火で同じ依頼がそのまま来る。
+   */
+  async #scheduledRequestFor(
+    kind: string,
+  ): Promise<
+    { status: 'ok'; plan: ScheduledRequest | null } | { status: 'unreadable'; error: string }
+  > {
+    let last = '';
+    for (let attempt = 0; attempt < SCHEDULE_READ_ATTEMPTS; attempt += 1) {
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, SCHEDULE_READ_RETRY_MS * attempt));
+      }
+      try {
+        return { status: 'ok', plan: await this.#stores.schedules.get(kind) };
+      } catch (error) {
+        last = String(error);
+      }
+    }
+    return { status: 'unreadable', error: last };
+  }
 
   /** 発意・定期ジョブに渡す直近の状況。 */
   async #recentDigest(): Promise<string> {

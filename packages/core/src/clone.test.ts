@@ -434,6 +434,84 @@ describe('クローン — 自律（人間以外の起点）', () => {
     await s.clone.stop();
   });
 
+  it('依頼が読めない発火では、本文なしの曖昧なターンを走らせない（読み直して届く）', async () => {
+    const stores = createMemoryStores();
+    const plan = {
+      kind: 'issue-round',
+      spec: { type: 'daily' as const, at: '09:00' },
+      request: 'このリポジトリの open issue を見て、着手できるものから実装を進める',
+      createdAt: '2026-08-11T00:00:00.000Z',
+      updatedAt: '2026-08-11T00:00:00.000Z',
+    };
+    await stores.schedules.put(plan);
+
+    // 器が一瞬だけ揺れる（pg の瞬断・fs の一時エラー）
+    const real = stores.schedules.get.bind(stores.schedules);
+    let failures = 1;
+    stores.schedules.get = async (kind) => {
+      if (failures > 0) {
+        failures -= 1;
+        throw new Error('DB が揺れた');
+      }
+      return real(kind);
+    };
+
+    const s = setup(() => 'issue を1件拾って委譲した', stores);
+    s.clone.post({
+      type: 'timer',
+      id: 'evt-timer',
+      at: '2026-08-12T00:00:00.000Z',
+      kind: 'issue-round',
+    });
+
+    // 復旧したら本来の依頼が届く（1周期ぶん落とさない）
+    await expect
+      .poll(() => inputsOf(s)().includes('open issue を見て'), { timeout: 3000 })
+      .toBe(true);
+    // 本文なしの曖昧なターンは走っていない
+    expect(inputsOf(s)()).not.toContain('この定期ジョブが何のために仕込まれている');
+
+    await s.clone.stop();
+  });
+
+  it('依頼を読めないままなら、その発火では動かず、前回時刻も進めない', async () => {
+    const stores = createMemoryStores();
+    await stores.schedules.put({
+      kind: 'issue-round',
+      spec: { type: 'daily' as const, at: '09:00' },
+      request: 'open issue を見て実装を進める',
+      createdAt: '2026-08-11T00:00:00.000Z',
+      updatedAt: '2026-08-11T00:00:00.000Z',
+    });
+    stores.schedules.get = () => Promise.reject(new Error('DB が落ちている'));
+
+    const s = setup(() => '動いてしまった', stores);
+    s.clone.post({
+      type: 'timer',
+      id: 'evt-timer',
+      at: '2026-08-12T00:00:00.000Z',
+      kind: 'issue-round',
+    });
+
+    // 読めなかったことは日誌に残る（黙って落とさない）
+    await expect
+      .poll(
+        async () =>
+          ((await stores.journal.list({ types: ['exchange'] })) as { text: string }[]).some(
+            (entry) => entry.text.includes('読めなかった'),
+          ),
+        { timeout: 3000 },
+      )
+      .toBe(true);
+
+    // ターンは1本も走っていない（Fable を曖昧な仕事で消費しない）
+    expect(s.calls).toEqual([]);
+    // 「動いた」ことにもしない。次の発火で同じ依頼がそのまま来る
+    expect((await stores.schedules.list())[0]?.lastRunAt).toBeUndefined();
+
+    await s.clone.stop();
+  });
+
   it('仕込んだ覚えのない定期ジョブなら、記憶に照らして判断させる（従来の振る舞い）', async () => {
     const s = setup(() => '何もしない');
 
