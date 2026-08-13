@@ -47,6 +47,14 @@ const STATEMENTS = [
      approval jsonb not null
    )`,
 
+  `create table if not exists schedules (
+     kind text primary key,
+     created_at timestamptz not null,
+     updated_at timestamptz not null,
+     last_run_at timestamptz,
+     plan jsonb not null
+   )`,
+
   `create table if not exists archive (
      id text primary key,
      session_id text not null,

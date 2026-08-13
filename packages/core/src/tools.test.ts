@@ -96,6 +96,134 @@ describe('クローンの道具', () => {
     expect(entry).toMatchObject({ type: 'memory_update', slug: 'values', cause: 'clone' });
   });
 
+  // --- 継続中の依頼 --------------------------------------------------------
+  // 「定期的に〜しておいて」を、思い出せるかどうかの賭けにしないための器。
+
+  it('schedule_create は継続中の依頼として残り、schedule_list で読める', async () => {
+    const h = harness();
+
+    const created = await h.call('schedule_create', {
+      kind: 'issue-round',
+      request: 'このリポジトリの open issue を見て、着手できるものから実装を進める',
+      dailyAt: '09:00',
+    });
+    expect(created).toContain('毎日 09:00');
+
+    const plans = await h.stores.schedules.list();
+    expect(plans).toHaveLength(1);
+    expect(plans[0]).toMatchObject({
+      kind: 'issue-round',
+      spec: { type: 'daily', at: '09:00' },
+    });
+    expect(await h.call('schedule_list', {})).toContain('open issue');
+
+    // 聞かずに仕込んだことは日誌に残る
+    const [entry] = await h.stores.journal.list({ types: ['decision'] });
+    expect(entry).toMatchObject({ type: 'decision' });
+  });
+
+  it('同じ kind で仕込み直すと置き換わる（前回動いた時刻は保つ）', async () => {
+    const h = harness();
+    await h.call('schedule_create', { kind: 'watch', request: '最初の依頼', everyMinutes: 30 });
+    const first = await h.stores.schedules.get('watch');
+    await h.stores.schedules.claimRun(
+      'watch',
+      first?.updatedAt ?? '',
+      '2026-08-12T00:00:00.000Z',
+      'schedule',
+    );
+    await h.stores.schedules.completeRun('watch', '2026-08-12T00:00:00.000Z', 'schedule');
+
+    await h.call('schedule_create', { kind: 'watch', request: '直した依頼', everyMinutes: 10 });
+
+    const plans = await h.stores.schedules.list();
+    expect(plans).toHaveLength(1);
+    expect(plans[0]).toMatchObject({
+      request: '直した依頼',
+      spec: { type: 'every', minutes: 10 },
+      lastRunAt: '2026-08-12T00:00:00.000Z',
+    });
+  });
+
+  it('cron 式でも仕込める（曜日の指定が要る依頼のため）', async () => {
+    const h = harness();
+
+    const created = await h.call('schedule_create', {
+      kind: 'weekly-review',
+      request: '週次で先週の日報を読み直して、抜けている決めごとを拾う',
+      cron: '0 10 * * 1',
+    });
+    expect(created).toContain('cron: 0 10 * * 1');
+
+    expect((await h.stores.schedules.list())[0]).toMatchObject({
+      spec: { type: 'cron', expression: '0 10 * * 1' },
+    });
+  });
+
+  it('読めない cron 式は仕込まない', async () => {
+    const h = harness();
+
+    const result = await h.call('schedule_create', {
+      kind: 'weekly-review',
+      request: 'x',
+      cron: 'まいしゅう げつようび',
+    });
+
+    expect(result).toContain('cron 式として読めない');
+    expect(await h.stores.schedules.list()).toEqual([]);
+  });
+
+  it('周期の指定は1つだけ。読めない指定は仕込まない', async () => {
+    const h = harness();
+
+    expect(await h.call('schedule_create', { kind: 'a', request: 'x' })).toContain('どれか1つだけ');
+    expect(
+      await h.call('schedule_create', {
+        kind: 'a',
+        request: 'x',
+        dailyAt: '09:00',
+        everyMinutes: 30,
+      }),
+    ).toContain('どれか1つだけ');
+    expect(
+      await h.call('schedule_create', {
+        kind: 'a',
+        request: 'x',
+        dailyAt: '09:00',
+        cron: '0 10 * * 1',
+      }),
+    ).toContain('どれか1つだけ');
+    expect(
+      await h.call('schedule_create', { kind: 'a', request: 'x', dailyAt: '25:00' }),
+    ).toContain('読めない');
+    expect(
+      await h.call('schedule_create', { kind: 'ダメな名前', request: 'x', dailyAt: '09:00' }),
+    ).toContain('使えない');
+    expect(await h.stores.schedules.list()).toEqual([]);
+  });
+
+  it('既定の定期ジョブの名前は奪えない（日報を潰せない）', async () => {
+    const h = harness();
+    const result = await h.call('schedule_create', {
+      kind: 'daily_report',
+      request: '日報を潰す',
+      everyMinutes: 1,
+    });
+    expect(result).toContain('既定の定期ジョブ');
+    expect(await h.stores.schedules.list()).toEqual([]);
+  });
+
+  it('schedule_remove は依頼を片付ける。無い依頼なら何もしない', async () => {
+    const h = harness();
+    await h.call('schedule_create', { kind: 'watch', request: '見張る', everyMinutes: 30 });
+
+    expect(await h.call('schedule_remove', { kind: 'しらない' })).toContain('無い');
+    expect(await h.stores.schedules.list()).toHaveLength(1);
+
+    expect(await h.call('schedule_remove', { kind: 'watch' })).toContain('外した');
+    expect(await h.stores.schedules.list()).toEqual([]);
+  });
+
   it('memory_append は既存の記述を消さない（人間の手書きを守る）', async () => {
     const h = harness();
     await h.stores.persona.write('values', '# 価値観\n\n人間が手で書いた\n');

@@ -10,7 +10,7 @@ import type {
 import { createMemoryStores } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { createApp } from './app.js';
+import { createApp, parseAllowedOrigins } from './app.js';
 import { createJournalBus, type JournalBus } from './journal-bus.js';
 
 /** クローンの代わり。HTTP 層だけを検証する。 */
@@ -106,7 +106,11 @@ function fakeClone() {
 /** スケジューラの代わり。HTTP 層から起こせることだけを見る。 */
 function fakeScheduler() {
   const ran: string[] = [];
+  let refreshed = 0;
   const scheduler: Scheduler = {
+    async refresh() {
+      refreshed += 1;
+    },
     start() {},
     stop() {},
     list() {
@@ -126,7 +130,11 @@ function fakeScheduler() {
       return [];
     },
   };
-  return { scheduler, ran };
+  return {
+    scheduler,
+    ran,
+    refreshCount: () => refreshed,
+  };
 }
 
 let stores: Stores;
@@ -544,6 +552,97 @@ describe('HTTP API', () => {
     expect((await app.request('/schedule/nope/run', post)).status).toBe(404);
   });
 
+  it('人間も継続中の依頼を仕込める。仕込んだら次の刻みを待たずに効く', async () => {
+    const before = schedule.refreshCount();
+    const response = await app.request(
+      '/schedule',
+      json({
+        kind: 'issue-round',
+        request: 'open issue を見て実装を進める',
+        spec: { type: 'daily', at: '09:00' },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await stores.schedules.list()).toMatchObject([
+      { kind: 'issue-round', spec: { type: 'daily', at: '09:00' } },
+    ]);
+    expect(schedule.refreshCount()).toBe(before + 1);
+    // 人間が仕込んだことも日誌に残る（後から辿れること）
+    expect(await stores.journal.list({ types: ['decision'] })).toHaveLength(1);
+  });
+
+  it('読めない時刻は API でも弾く（道具と同じ真実を持つ）', async () => {
+    // 通ると一覧に「毎日 25:99」と出るのに実際は 00:00 に起きる、という
+    // 人間が読んで矛盾する状態が作れてしまう
+    for (const at of ['25:99', '99:00', '9:5', 'あさ']) {
+      const response = await app.request(
+        '/schedule',
+        json({ kind: 'issue-round', request: 'x', spec: { type: 'daily', at } }),
+      );
+      expect(response.status, at).toBe(400);
+    }
+    expect(await stores.schedules.list()).toEqual([]);
+  });
+
+  it('cron 式でも仕込めるが、読めない式は弾く', async () => {
+    const ok = await app.request(
+      '/schedule',
+      json({
+        kind: 'weekly-review',
+        request: '週次レビュー',
+        spec: { type: 'cron', expression: '0 10 * * 1' },
+      }),
+    );
+    expect(ok.status).toBe(200);
+    expect(await stores.schedules.list()).toMatchObject([
+      { spec: { type: 'cron', expression: '0 10 * * 1' } },
+    ]);
+
+    const broken = await app.request(
+      '/schedule',
+      json({
+        kind: 'weekly-review',
+        request: '週次レビュー',
+        spec: { type: 'cron', expression: 'まいしゅう げつようび' },
+      }),
+    );
+    expect(broken.status).toBe(400);
+  });
+
+  it('既定の定期ジョブの名前は API からも奪えない', async () => {
+    const response = await app.request(
+      '/schedule',
+      json({ kind: 'daily_report', request: '日報を潰す', spec: { type: 'every', minutes: 1 } }),
+    );
+
+    expect(response.status).toBe(409);
+    expect(await stores.schedules.list()).toEqual([]);
+  });
+
+  it('継続中の依頼を外せる。無いものは 404', async () => {
+    await stores.schedules.put({
+      kind: 'issue-round',
+      spec: { type: 'daily', at: '09:00' },
+      request: 'open issue を見て実装を進める',
+      createdAt: '2026-08-12T00:00:00.000Z',
+      updatedAt: '2026-08-12T00:00:00.000Z',
+    });
+
+    const removed = await app.request('/schedule/issue-round', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(removed.status).toBe(200);
+    expect(await stores.schedules.list()).toEqual([]);
+
+    const missing = await app.request('/schedule/nope', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(missing.status).toBe(404);
+  });
+
   it('溜まった承認待ちをまとめて片付けられる（1件失敗しても残りは進む）', async () => {
     for (const id of ['ap-1', 'ap-2']) {
       await stores.jobs.putApproval({
@@ -859,5 +958,114 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     expect((await app.request('/memory/missing', { method: 'DELETE' })).status).toBe(404);
     // 形が不正なものは 400（無いのか、そもそも名前として成立しないのかを分ける）
     expect((await app.request('/memory/居ない', { method: 'DELETE' })).status).toBe(400);
+  });
+});
+
+/**
+ * 画面（apps/web）を別オリジンに置けるようにするための境界。
+ *
+ * ここで守っているのは「開けたつもりの範囲」と「実際に通る範囲」を一致させること
+ * である。CORS を雑に開けると `deliberateClient` の前提（preflight が通らない）が
+ * 消え、人間が開いた任意のページからクローンのターンを起こせる状態に戻る。
+ */
+describe('ブラウザからの呼び出しを許すオリジン', () => {
+  const stores = createMemoryStores();
+
+  function appWith(allowedOrigins: string[]) {
+    return createApp({
+      clone: fakeClone().clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      allowedOrigins,
+    });
+  }
+
+  const preflight = (origin: string) => ({
+    method: 'OPTIONS',
+    headers: {
+      origin,
+      'access-control-request-method': 'POST',
+      'access-control-request-headers': 'content-type',
+    },
+  });
+
+  it('既定（列挙なし）では CORS ヘッダを返さない', async () => {
+    // ここが今までの姿勢。既定で1バイトも変わらないことを固定する。
+    const app = appWith([]);
+    const response = await app.request('/health', { headers: { origin: 'https://evil.example' } });
+
+    expect(response.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  it('列挙したオリジンだけを、そのまま返す', async () => {
+    const app = appWith(['https://www.example.com']);
+    const response = await app.request('/health', {
+      headers: { origin: 'https://www.example.com' },
+    });
+
+    expect(response.headers.get('access-control-allow-origin')).toBe('https://www.example.com');
+    // Cookie は運ばせない設計なので、資格情報の許可は返さない。
+    expect(response.headers.get('access-control-allow-credentials')).toBeNull();
+  });
+
+  it('列挙していないオリジンの preflight は通らない', async () => {
+    const app = appWith(['https://www.example.com']);
+    const response = await app.request('/chat', preflight('https://evil.example'));
+
+    // 許可ヘッダが返らない＝ブラウザが本リクエストを送らない。
+    expect(response.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  it('ワイルドカードは返さない（返した瞬間に単純リクエスト対策が無意味になる）', async () => {
+    const app = appWith(['https://www.example.com']);
+    const response = await app.request('/health', {
+      headers: { origin: 'https://www.example.com' },
+    });
+
+    expect(response.headers.get('access-control-allow-origin')).not.toBe('*');
+  });
+
+  it('CORS を開けても、単純リクエストは 415 のまま', async () => {
+    // 許可したオリジンからでも、本文検査の無い POST は content-type を要求する。
+    const app = appWith(['https://www.example.com']);
+    const response = await app.request('/shutdown', {
+      method: 'POST',
+      headers: { origin: 'https://www.example.com', 'content-type': 'text/plain' },
+      body: '',
+    });
+
+    expect(response.status).toBe(415);
+  });
+});
+
+describe('parseAllowedOrigins', () => {
+  it('オリジンだけを受け付ける', () => {
+    expect(parseAllowedOrigins('https://a.example.com,http://127.0.0.1:5173')).toEqual({
+      origins: ['https://a.example.com', 'http://127.0.0.1:5173'],
+      rejected: [],
+    });
+  });
+
+  it('末尾スラッシュは許すが、経路が付いたものは捨てる', () => {
+    const result = parseAllowedOrigins('https://a.example.com/,https://b.example.com/app');
+
+    expect(result.origins).toEqual(['https://a.example.com']);
+    expect(result.rejected).toEqual(['https://b.example.com/app']);
+  });
+
+  it('* と、解釈できない値を捨てる', () => {
+    // ここを通すと「列挙した相手だけ」という保証が消える。
+    const result = parseAllowedOrigins('*,example.com, ,https://ok.example.com');
+
+    expect(result.origins).toEqual(['https://ok.example.com']);
+    expect(result.rejected).toEqual(['*', 'example.com']);
+  });
+
+  it('重複は畳む。未設定は空', () => {
+    expect(parseAllowedOrigins('https://a.example.com,https://a.example.com').origins).toEqual([
+      'https://a.example.com',
+    ]);
+    expect(parseAllowedOrigins(undefined)).toEqual({ origins: [], rejected: [] });
   });
 });

@@ -9,6 +9,7 @@ import { CLONE_MODEL, CLONE_MODEL_ENV_KEY, createClone, resolveCloneModel } from
 import type { CloneHost } from './host.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
+import { createScheduler } from './schedule.js';
 import type { ChatStreamEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores, humanMessage } from './testing.js';
@@ -448,6 +449,520 @@ describe('クローン — 自律（人間以外の起点）', () => {
     const reports = await stores.journal.list({ types: ['daily_report'] });
     expect(reports).toHaveLength(1);
     expect(reports[0]).toMatchObject({ body: 'クローンが道具で書いた日報' });
+
+    await s.clone.stop();
+  });
+
+  it('継続中の依頼は、時刻が来たとき本文ごとクローンに渡る（記憶に思い出せるかの賭けにしない）', async () => {
+    const stores = createMemoryStores();
+    await stores.schedules.put({
+      kind: 'issue-round',
+      spec: { type: 'daily', at: '09:00' },
+      request: 'このリポジトリの open issue を見て、着手できるものから実装を進める',
+      createdAt: '2026-08-11T00:00:00.000Z',
+      updatedAt: '2026-08-11T00:00:00.000Z',
+      lastRunAt: '2026-08-11T00:00:00.000Z',
+    });
+
+    const s = setup(() => 'issue を1件拾って委譲した', stores);
+    s.clone.post({
+      type: 'timer',
+      id: 'evt-timer',
+      at: '2026-08-12T00:00:00.000Z',
+      kind: 'issue-round',
+    });
+
+    await expect
+      .poll(() => inputsOf(s)().includes('open issue を見て'), { timeout: 3000 })
+      .toBe(true);
+    // 前回いつ動いたかも渡す（同じ仕事をまっさらから起こさないため）
+    expect(inputsOf(s)()).toContain('2026-08-11T00:00:00.000Z');
+    expect(inputsOf(s)()).toContain('二重に起こさない');
+
+    // 起きたこと自体が記録され、次の発火では「前回」が更新されている
+    await expect
+      .poll(async () => (await stores.schedules.get('issue-round'))?.lastRunAt, { timeout: 3000 })
+      .toBe('2026-08-12T00:00:00.000Z');
+
+    await s.clone.stop();
+  });
+
+  it('依頼が読めない発火では、本文なしの曖昧なターンを走らせない（読み直して届く）', async () => {
+    const stores = createMemoryStores();
+    const plan = {
+      kind: 'issue-round',
+      spec: { type: 'daily' as const, at: '09:00' },
+      request: 'このリポジトリの open issue を見て、着手できるものから実装を進める',
+      createdAt: '2026-08-11T00:00:00.000Z',
+      updatedAt: '2026-08-11T00:00:00.000Z',
+    };
+    await stores.schedules.put(plan);
+
+    // 器が一瞬だけ揺れる（pg の瞬断・fs の一時エラー）
+    const real = stores.schedules.get.bind(stores.schedules);
+    let failures = 1;
+    stores.schedules.get = async (kind) => {
+      if (failures > 0) {
+        failures -= 1;
+        throw new Error('DB が揺れた');
+      }
+      return real(kind);
+    };
+
+    const s = setup(() => 'issue を1件拾って委譲した', stores);
+    s.clone.post({
+      type: 'timer',
+      id: 'evt-timer',
+      at: '2026-08-12T00:00:00.000Z',
+      kind: 'issue-round',
+    });
+
+    // 復旧したら本来の依頼が届く（1周期ぶん落とさない）
+    await expect
+      .poll(() => inputsOf(s)().includes('open issue を見て'), { timeout: 3000 })
+      .toBe(true);
+    // 本文なしの曖昧なターンは走っていない
+    expect(inputsOf(s)()).not.toContain('この定期ジョブが何のために仕込まれている');
+
+    await s.clone.stop();
+  });
+
+  it('依頼を読めないままなら、その発火では動かず、前回時刻も進めない', async () => {
+    const stores = createMemoryStores();
+    await stores.schedules.put({
+      kind: 'issue-round',
+      spec: { type: 'daily' as const, at: '09:00' },
+      request: 'open issue を見て実装を進める',
+      createdAt: '2026-08-11T00:00:00.000Z',
+      updatedAt: '2026-08-11T00:00:00.000Z',
+    });
+    stores.schedules.get = () => Promise.reject(new Error('DB が落ちている'));
+
+    const s = setup(() => '動いてしまった', stores);
+    s.clone.post({
+      type: 'timer',
+      id: 'evt-timer',
+      at: '2026-08-12T00:00:00.000Z',
+      kind: 'issue-round',
+    });
+
+    // 読めなかったことは日誌に残る（黙って落とさない）
+    await expect
+      .poll(
+        async () =>
+          ((await stores.journal.list({ types: ['exchange'] })) as { text: string }[]).some(
+            (entry) => entry.text.includes('読めなかった'),
+          ),
+        { timeout: 3000 },
+      )
+      .toBe(true);
+
+    // ターンは1本も走っていない（Fable を曖昧な仕事で消費しない）
+    expect(s.calls).toEqual([]);
+    // 「動いた」ことにもしない。次の発火で同じ依頼がそのまま来る
+    expect((await stores.schedules.list())[0]?.lastRunAt).toBeUndefined();
+
+    await s.clone.stop();
+  });
+
+  it('「起きた」を記録できない発火では動かない（動いてから記録できないと二重に走る）', async () => {
+    const stores = createMemoryStores();
+    const plan = {
+      kind: 'issue-round',
+      spec: { type: 'daily' as const, at: '09:00' },
+      request: 'open issue を見て、着手できるものから実装を進める',
+      createdAt: '2026-08-11T00:00:00.000Z',
+      updatedAt: '2026-08-11T00:00:00.000Z',
+    };
+    await stores.schedules.put(plan);
+
+    // 読めるが書けない（DB の一時障害で UPDATE だけ落ちる）を模す
+    const real = stores.schedules.claimRun.bind(stores.schedules);
+    let failing = true;
+    stores.schedules.claimRun = async (kind, expectedUpdatedAt, at, cause) => {
+      if (failing) throw new Error('UPDATE が落ちた');
+      return real(kind, expectedUpdatedAt, at, cause);
+    };
+
+    const s = setup(() => 'issue を1件拾って委譲した', stores);
+    const fire = () => ({
+      type: 'timer' as const,
+      id: `evt-${Math.random()}`,
+      at: '2026-08-12T00:00:00.000Z',
+      kind: 'issue-round',
+    });
+
+    s.clone.post(fire());
+
+    // ① 記録できないあいだは本体ターンを起こさない（PR や外部操作までやらせない）
+    await expect
+      .poll(
+        async () =>
+          ((await stores.journal.list({ types: ['exchange'] })) as { text: string }[]).some(
+            (entry) => entry.text.includes('記録できなかった'),
+          ),
+        { timeout: 3000 },
+      )
+      .toBe(true);
+    expect(s.calls).toEqual([]);
+    expect((await stores.schedules.list())[0]?.lastRunAt).toBeUndefined();
+
+    // ② 復旧すれば、次の発火で依頼の本文つきで動く
+    failing = false;
+    s.clone.post(fire());
+
+    await expect
+      .poll(() => inputsOf(s)().includes('open issue を見て'), { timeout: 3000 })
+      .toBe(true);
+    expect((await stores.schedules.list())[0]?.lastRunAt).toBe('2026-08-12T00:00:00.000Z');
+
+    // ③ 走ったのは1回だけ（再起動相当の拾い直しでも二重に実行しない）
+    const runs = (await stores.journal.list({ types: ['exchange'] })).filter((entry) =>
+      (entry as { text: string }).text.includes('委譲した'),
+    );
+    expect(runs).toHaveLength(1);
+
+    await s.clone.stop();
+  });
+
+  it('記録できなかった発火は、再起動相当の拾い直しでちょうど1回だけ実行される', async () => {
+    const stores = createMemoryStores();
+    await stores.schedules.put({
+      kind: 'watch',
+      spec: { type: 'every' as const, minutes: 60 },
+      request: '見張って進める',
+      // 「落ちている間に過ぎた予定」として拾われる位置に置く
+      createdAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+      updatedAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+    });
+
+    const real = stores.schedules.claimRun.bind(stores.schedules);
+    let failing = true;
+    stores.schedules.claimRun = async (kind, expectedUpdatedAt, at, cause) => {
+      if (failing) throw new Error('UPDATE が落ちた');
+      return real(kind, expectedUpdatedAt, at, cause);
+    };
+
+    const s = setup(() => '進めた', stores);
+    const posted: string[] = [];
+    const scheduler = createScheduler({
+      entries: [],
+      post: (event) => {
+        posted.push(event.type);
+        s.clone.post(event);
+      },
+      schedules: stores.schedules,
+    });
+
+    // 1回目の起動: 過ぎた予定を拾って発火するが、記録できないので動かない
+    await scheduler.refresh();
+    scheduler.start();
+    await expect.poll(() => posted.length >= 1, { timeout: 3000 }).toBe(true);
+    scheduler.stop();
+    await expect
+      .poll(
+        async () =>
+          ((await stores.journal.list({ types: ['exchange'] })) as { text: string }[]).some(
+            (entry) => entry.text.includes('記録できなかった'),
+          ),
+        { timeout: 3000 },
+      )
+      .toBe(true);
+    expect(s.calls).toEqual([]);
+
+    // 2回目の起動（器が直っている）: 同じ予定を拾い直して、今度は動く
+    failing = false;
+    const second = createScheduler({
+      entries: [],
+      post: (event) => s.clone.post(event),
+      schedules: stores.schedules,
+    });
+    await second.refresh();
+    second.start();
+
+    await expect.poll(() => inputsOf(s)().includes('見張って進める'), { timeout: 3000 }).toBe(true);
+    second.stop();
+
+    // 実際に走ったのは1回だけ
+    const runs = (await stores.journal.list({ types: ['exchange'] })).filter(
+      (entry) => (entry as { text: string }).text === '進めた',
+    );
+    expect(runs).toHaveLength(1);
+
+    await s.clone.stop();
+  });
+
+  it('引き受けた直後に落ちた発火は、器を作り直したときに本文つきで配り直される', async () => {
+    const stores = createMemoryStores();
+    const plan = {
+      kind: 'issue-round',
+      spec: { type: 'daily' as const, at: '09:00' },
+      request: 'open issue を見て、着手できるものから実装を進める',
+      createdAt: '2026-08-11T00:00:00.000Z',
+      updatedAt: '2026-08-11T00:00:00.000Z',
+    };
+    await stores.schedules.put(plan);
+
+    // --- 1回目の器: claim できた直後に中断される -------------------------------
+    const crashing = setup(() => '届いていないのに動いた', stores);
+    // 「claim は成功したが、モデルへ渡す前に器が落ちた」を作る
+    const claim = stores.schedules.claimRun.bind(stores.schedules);
+    stores.schedules.claimRun = async (kind, expectedUpdatedAt, at, cause) => {
+      await claim(kind, expectedUpdatedAt, at, cause);
+      throw new Error('器が落ちた');
+    };
+
+    crashing.clone.post({
+      type: 'timer',
+      id: 'evt-crash',
+      at: '2026-08-12T00:00:00.000Z',
+      kind: 'issue-round',
+    });
+
+    await expect
+      .poll(async () => (await stores.schedules.list())[0]?.pendingRun?.at, { timeout: 3000 })
+      .toBe('2026-08-12T00:00:00.000Z');
+    // モデルには何も届いていない
+    expect(crashing.calls).toEqual([]);
+    // 定期の基準は進んでいない（「もう動いた」ことにしない）
+    expect((await stores.schedules.list())[0]?.lastScheduledRunAt).toBeUndefined();
+
+    // --- 2回目の器: 同じ Stores から作り直す -----------------------------------
+    await crashing.clone.stop();
+    stores.schedules.claimRun = claim;
+    const restarted = setup(() => 'issue を1件拾って委譲した', stores);
+    const scheduler = createScheduler({
+      entries: [],
+      post: (event) => restarted.clone.post(event),
+      schedules: stores.schedules,
+    });
+    await scheduler.refresh();
+    scheduler.start();
+
+    // 引き受けたまま終わっていない回が、依頼の本文つきで届く
+    await expect
+      .poll(() => inputsOf(restarted)().includes('open issue を見て'), { timeout: 3000 })
+      .toBe(true);
+    // 走りかけていた可能性は隠さない（二重に手を出す前に確かめさせる）
+    expect(inputsOf(restarted)()).toContain('引き受けたまま終わっていない');
+    // 添えるのは**元の発火時刻**（復旧時刻に置き換えない）
+    expect(inputsOf(restarted)()).toContain('2026-08-12T00:00:00.000Z');
+
+    // 終わったので印は消え、定期の基準が進む
+    await expect
+      .poll(async () => (await stores.schedules.list())[0]?.pendingRun, { timeout: 3000 })
+      .toBeUndefined();
+    expect((await stores.schedules.list())[0]?.lastScheduledRunAt).toBeDefined();
+
+    scheduler.stop();
+    await restarted.clone.stop();
+  });
+
+  it('配り直された発火は、元の時刻・元の理由で確定する', async () => {
+    const stores = createMemoryStores();
+    // 09:10 の手動発火を引き受けたまま落ちた状態
+    await stores.schedules.put({
+      kind: 'issue-round',
+      spec: { type: 'every' as const, minutes: 60 },
+      request: 'open issue を見て実装を進める',
+      createdAt: '2026-08-12T08:00:00.000Z',
+      updatedAt: '2026-08-12T08:00:00.000Z',
+      lastRunAt: '2026-08-12T09:10:00.000Z',
+      pendingRun: { at: '2026-08-12T09:10:00.000Z', cause: 'manual' as const },
+    });
+
+    const s = setup(() => '配り直された分を見た', stores);
+    // スケジューラが配り直す形（元の時刻・元の理由をそのまま運ぶ）
+    s.clone.post({
+      type: 'timer',
+      id: 'evt-resume',
+      at: '2026-08-12T09:10:00.000Z',
+      kind: 'issue-round',
+      cause: 'manual',
+    });
+
+    await expect
+      .poll(async () => (await stores.schedules.list())[0]?.pendingRun, { timeout: 3000 })
+      .toBeUndefined();
+
+    const after = (await stores.schedules.list())[0];
+    // 手で起こした1回だったので、配り直しても定期の基準は動かない
+    expect(after?.lastScheduledRunAt).toBeUndefined();
+    expect(after?.lastRunAt).toBe('2026-08-12T09:10:00.000Z');
+    // 走りかけていたことは元の時刻で伝わる
+    expect(inputsOf(s)()).toContain('2026-08-12T09:10:00.000Z');
+
+    await s.clone.stop();
+  });
+
+  it('手で起こした発火は、観測用の前回時刻だけを進める（定期の基準は動かさない）', async () => {
+    const stores = createMemoryStores();
+    await stores.schedules.put({
+      kind: 'issue-round',
+      spec: { type: 'every' as const, minutes: 60 },
+      request: 'open issue を見て実装を進める',
+      createdAt: '2026-08-12T08:00:00.000Z',
+      updatedAt: '2026-08-12T08:00:00.000Z',
+    });
+
+    const s = setup(() => '手で起こされたので見た', stores);
+    s.clone.post({
+      type: 'timer',
+      id: 'evt-manual',
+      at: '2026-08-12T09:10:00.000Z',
+      kind: 'issue-round',
+      cause: 'manual',
+    });
+
+    await expect
+      .poll(() => inputsOf(s)().includes('open issue を見て'), { timeout: 3000 })
+      .toBe(true);
+
+    const after = (await stores.schedules.list())[0];
+    expect(after?.lastRunAt).toBe('2026-08-12T09:10:00.000Z');
+    // 定期の予定の基準は動かない（次の起動で位相がずれない）
+    expect(after?.lastScheduledRunAt).toBeUndefined();
+
+    await s.clone.stop();
+  });
+
+  it('定期の発火は、観測用と定期の基準の両方を進める', async () => {
+    const stores = createMemoryStores();
+    await stores.schedules.put({
+      kind: 'issue-round',
+      spec: { type: 'every' as const, minutes: 60 },
+      request: 'open issue を見て実装を進める',
+      createdAt: '2026-08-12T08:00:00.000Z',
+      updatedAt: '2026-08-12T08:00:00.000Z',
+    });
+
+    const s = setup(() => '定期で見た', stores);
+    // cause を省略した発火は定期の予定として扱う（schema の既定）
+    s.clone.post({
+      type: 'timer',
+      id: 'evt-schedule',
+      at: '2026-08-12T09:00:00.000Z',
+      kind: 'issue-round',
+    });
+
+    await expect
+      .poll(() => inputsOf(s)().includes('open issue を見て'), { timeout: 3000 })
+      .toBe(true);
+
+    const after = (await stores.schedules.list())[0];
+    expect(after?.lastRunAt).toBe('2026-08-12T09:00:00.000Z');
+    expect(after?.lastScheduledRunAt).toBe('2026-08-12T09:00:00.000Z');
+
+    await s.clone.stop();
+  });
+
+  it('読んでから確定するまでに人間が消したら、取り消された依頼は動かさない', async () => {
+    const stores = createMemoryStores();
+    const plan = {
+      kind: 'issue-round',
+      spec: { type: 'daily' as const, at: '09:00' },
+      request: 'open issue を見て、着手できるものから実装を進める',
+      createdAt: '2026-08-11T00:00:00.000Z',
+      updatedAt: '2026-08-11T00:00:00.000Z',
+    };
+    await stores.schedules.put(plan);
+
+    // 「読んだ直後に人間の DELETE が着地した」を作る
+    const read = stores.schedules.get.bind(stores.schedules);
+    let removeOnce = true;
+    stores.schedules.get = async (kind) => {
+      const found = await read(kind);
+      if (removeOnce && found !== null) {
+        removeOnce = false;
+        await stores.schedules.remove(kind);
+      }
+      return found;
+    };
+
+    const s = setup(() => '消えた依頼で動いてしまった', stores);
+    s.clone.post({
+      type: 'timer',
+      id: 'evt-timer',
+      at: '2026-08-12T00:00:00.000Z',
+      kind: 'issue-round',
+    });
+
+    await expect
+      .poll(
+        async () =>
+          ((await stores.journal.list({ types: ['exchange'] })) as { text: string }[]).some(
+            (entry) => entry.text.includes('人間がこの依頼を消した'),
+          ),
+        { timeout: 3000 },
+      )
+      .toBe(true);
+
+    // 古い本文でも、本文なしの曖昧なターンでも走らせない
+    expect(s.calls).toEqual([]);
+
+    await s.clone.stop();
+  });
+
+  it('読んでから確定するまでに人間が直したら、新しい本文で動く（古い本文では動かない）', async () => {
+    const stores = createMemoryStores();
+    const plan = {
+      kind: 'issue-round',
+      spec: { type: 'daily' as const, at: '09:00' },
+      request: '古い依頼: すべての issue を実装する',
+      createdAt: '2026-08-11T00:00:00.000Z',
+      updatedAt: '2026-08-11T00:00:00.000Z',
+    };
+    await stores.schedules.put(plan);
+
+    // 「読んだ直後に人間の POST が着地した」を作る
+    const read = stores.schedules.get.bind(stores.schedules);
+    let editOnce = true;
+    stores.schedules.get = async (kind) => {
+      const found = await read(kind);
+      if (editOnce && found !== null) {
+        editOnce = false;
+        await stores.schedules.put({
+          ...found,
+          request: '新しい依頼: bug ラベルの issue だけ直す',
+          updatedAt: '2026-08-11T12:00:00.000Z',
+        });
+      }
+      return found;
+    };
+
+    const s = setup(() => 'bug の issue を1件拾った', stores);
+    s.clone.post({
+      type: 'timer',
+      id: 'evt-timer',
+      at: '2026-08-12T00:00:00.000Z',
+      kind: 'issue-round',
+    });
+
+    await expect
+      .poll(() => inputsOf(s)().includes('bug ラベルの issue だけ'), { timeout: 3000 })
+      .toBe(true);
+    // 取り消された本文は渡っていない
+    expect(inputsOf(s)()).not.toContain('すべての issue を実装する');
+    // 発火の跡は新しい版に付く
+    expect((await stores.schedules.list())[0]).toMatchObject({
+      updatedAt: '2026-08-11T12:00:00.000Z',
+      lastRunAt: '2026-08-12T00:00:00.000Z',
+    });
+
+    await s.clone.stop();
+  });
+
+  it('仕込んだ覚えのない定期ジョブなら、記憶に照らして判断させる（従来の振る舞い）', async () => {
+    const s = setup(() => '何もしない');
+
+    s.clone.post({
+      type: 'timer',
+      id: 'evt-timer',
+      at: new Date().toISOString(),
+      kind: 'しらない仕込み',
+    });
+
+    await expect.poll(() => inputsOf(s)().includes('記憶にある'), { timeout: 3000 }).toBe(true);
 
     await s.clone.stop();
   });

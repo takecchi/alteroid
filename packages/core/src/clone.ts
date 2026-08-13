@@ -25,7 +25,7 @@ import {
   buildTimerPrompt,
 } from './prompt.js';
 import { DAILY_REPORT_KIND, localDate, localDayRange } from './schedule.js';
-import type { ChatStreamEvent, InboxEvent, JournalEntryInput } from './schema.js';
+import type { ChatStreamEvent, InboxEvent, JournalEntryInput, ScheduledRequest } from './schema.js';
 import type { Stores } from './store.js';
 import { CLONE_ALLOWED_TOOLS, MCP_SERVER_NAME, createCloneMcpServer } from './tools.js';
 
@@ -86,6 +86,23 @@ const DAILY_REPORT_LOOKUP = 30;
 
 /** 外部イベントの中身をクローンに見せる上限。全文が要るなら送り元で切ること。 */
 const EXTERNAL_PAYLOAD_LIMIT = 8_000;
+
+/**
+ * 継続中の依頼の器に触るときの試行回数と間隔（読み取りと発火の記録の両方）。
+ *
+ * **これは回数制限ではない**（AGENTS.md 地雷2）。器が一瞬揺れただけで1周期ぶんの
+ * 仕事を落とさないための拾い直しであって、仕事の量を絞るものではない。
+ */
+const SCHEDULE_STORE_ATTEMPTS = 3;
+const SCHEDULE_STORE_RETRY_MS = 200;
+
+/**
+ * 版が入れ替わっていたときに読み直す回数。
+ *
+ * 人間が依頼を直した瞬間に発火が重なると1回ずれる。**古い本文で走らないことが最優先**
+ * なので、合わなければ諦めて次の発火に譲る（依頼は消えないし `lastRunAt` も進まない）。
+ */
+const SCHEDULE_CLAIM_ROUNDS = 3;
 
 export interface CloneOptions {
   stores: Stores;
@@ -400,9 +417,46 @@ class Clone implements CloneHost {
           await this.#dailyReport(event.target ?? localDate(new Date(event.at)));
           return;
         }
-        await this.#runInternal(
-          buildTimerPrompt(event.kind, event.target, await this.#recentDigest()),
+        // 依頼の本文は**いま**読み、読んだその版で発火を確定させる。イベントに
+        // 載せて運ぶと、人間が依頼を書き換えても発火時点の写しで走る（真実はストア側）。
+        const claimed = await this.#claimScheduledRun(
+          event.kind,
+          event.at,
+          // 省略時は定期の予定（`schema.ts` の `timer` の既定）
+          event.cause === 'manual' ? 'manual' : 'schedule',
         );
+
+        // **動かさない方を選ぶ場面が3つある。** どれも「時刻が来れば必ず届く」の側を
+        // 1周期遅らせるだけで済むが、走らせてしまうと取り返せない。
+        if (claimed.status !== 'ok' && claimed.status !== 'missing') {
+          await this.#journal({
+            type: 'exchange',
+            with: 'self',
+            role: 'outbound',
+            text: `定期の依頼 ${event.kind} は、この発火では動かない: ${claimed.reason}`,
+          });
+          return;
+        }
+
+        const cause = event.cause === 'manual' ? 'manual' : 'schedule';
+        const plan = claimed.status === 'ok' ? claimed.plan : null;
+        await this.#runInternal(
+          buildTimerPrompt({
+            kind: event.kind,
+            ...(event.target === undefined ? {} : { target: event.target }),
+            ...(plan === null ? {} : { request: plan.request }),
+            ...(plan?.lastRunAt === undefined ? {} : { lastRunAt: plan.lastRunAt }),
+            // 前の発火が終わっていなかったなら、それは器が落ちた跡である。
+            // 走りかけていた可能性があることを隠さない（二重に手を出さないため）。
+            ...(plan?.pendingRun === undefined ? {} : { unfinishedAt: plan.pendingRun.at }),
+            digest: await this.#recentDigest(),
+          }),
+        );
+
+        // **終わったことを記録するのはここ。** claim（引き受けた印）とは別に置く。
+        // ここまで来ないうちに器が落ちたら、印が残っているので配り直される
+        // （日次なら翌日・週次なら翌週まで消える、を作らない）。
+        if (plan !== null) await this.#completeScheduledRun(event.kind, event.at, cause);
         return;
       }
 
@@ -465,6 +519,172 @@ class Clone implements CloneHost {
   // -------------------------------------------------------------------------
   // 自律（人間以外の起点の中身）
   // -------------------------------------------------------------------------
+
+  /**
+   * 発火した kind の依頼を読む。
+   *
+   * **「消された」と「読めなかった」を区別する。** 前者は人間が手で仕込んだ kind を
+   * 起こした場合も含むので、本文なしのターン（記憶に照らして判断する）が正しい。
+   * 後者は器の瞬断であって、本文なしで動かす理由にはならない。
+   *
+   * 一瞬の揺れで1周期ぶんの仕事を落とさないよう、この発火の中で読み直す。**回数を
+   * 絞るためではなく取りこぼしを拾うため**であり、諦めた場合も `lastRunAt` を
+   * 進めないので、次の発火で同じ依頼がそのまま来る。
+   */
+  async #scheduledRequestFor(
+    kind: string,
+  ): Promise<
+    { status: 'ok'; plan: ScheduledRequest | null } | { status: 'unreadable'; error: string }
+  > {
+    let last = '';
+    for (let attempt = 0; attempt < SCHEDULE_STORE_ATTEMPTS; attempt += 1) {
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, SCHEDULE_STORE_RETRY_MS * attempt));
+      }
+      try {
+        return { status: 'ok', plan: await this.#stores.schedules.get(kind) };
+      } catch (error) {
+        last = String(error);
+      }
+    }
+    return { status: 'unreadable', error: last };
+  }
+
+  /**
+   * 「この発火で起きた」をストア側で確定させる。書けたら確定した依頼、書けなければ
+   * 理由を返す（`null` は「同じ版がもう無い」＝消された・書き換わった）。
+   *
+   * 読み取りと同じ理由で、この発火の中で書き直す（器の一瞬の揺れで1周期ぶんの仕事を
+   * 落とさない）。**それでも書けなければ動かない** — 動いた事実が外の世界にだけ残り、
+   * `lastRunAt` が古いままだと、次の起動で「落ちている間に過ぎた予定」として同じ仕事を
+   * もう一度起こす（取り消せない操作の二重実行は、1周期遅れるよりずっと高い）。
+   */
+  async #claimRun(
+    kind: string,
+    expectedUpdatedAt: string,
+    at: string,
+    cause: 'schedule' | 'manual',
+  ): Promise<
+    { status: 'ok'; plan: ScheduledRequest | null } | { status: 'failed'; error: string }
+  > {
+    let last = '';
+    for (let attempt = 0; attempt < SCHEDULE_STORE_ATTEMPTS; attempt += 1) {
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, SCHEDULE_STORE_RETRY_MS * attempt));
+      }
+      try {
+        return {
+          status: 'ok',
+          plan: await this.#stores.schedules.claimRun(kind, expectedUpdatedAt, at, cause),
+        };
+      } catch (error) {
+        last = String(error);
+      }
+    }
+    return { status: 'failed', error: last };
+  }
+
+  /**
+   * 引き受けた発火が終わったことを記録する。
+   *
+   * 書けなくても**ターンはもう走っている**ので、ここで止めるものは無い。印が残るぶん
+   * 次の起動で配り直されるが、それは「消えるより配り直す」を選んだ結果である
+   * （プロンプトには前の発火が終わっていないことを添えるので、二重に手を出す前に
+   * クローンが `manager_list` と日誌を見られる）。
+   */
+  async #completeScheduledRun(
+    kind: string,
+    at: string,
+    cause: 'schedule' | 'manual',
+  ): Promise<void> {
+    let last = '';
+    for (let attempt = 0; attempt < SCHEDULE_STORE_ATTEMPTS; attempt += 1) {
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, SCHEDULE_STORE_RETRY_MS * attempt));
+      }
+      try {
+        await this.#stores.schedules.completeRun(kind, at, cause);
+        return;
+      } catch (error) {
+        last = String(error);
+      }
+    }
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text:
+        `定期の依頼 ${kind} の「終わった」を記録できなかった` +
+        `（引き受けた印が残るので、次の起動で配り直される）: ${last}`,
+    });
+  }
+
+  /**
+   * 発火した kind を「読んで、その版で確定させる」まで通す。
+   *
+   * **読んだ本文で走るなら、走ると決めた時点でその版が生きていることを確かめる。**
+   * 読みと記録が別操作だと、その隙間に人間が消した・直した依頼が古い本文で走る
+   * （消した依頼が外の世界へ手を出したら取り返せない）。確定はストア側の1操作
+   * （`claimRun`）に閉じてあり、ここはその周りの再試行と、版が入れ替わっていたときの
+   * 読み直しだけを持つ。
+   *
+   * 版が入れ替わっていたら**新しい版を読み直して**そちらで確定させる。人間が直した
+   * 直後なら、その新しい依頼で動くのが正しい（古い方で走らないことが最優先）。
+   */
+  async #claimScheduledRun(
+    kind: string,
+    at: string,
+    cause: 'schedule' | 'manual',
+  ): Promise<
+    | { status: 'ok'; plan: ScheduledRequest }
+    /**
+     * そもそも仕込みが無い kind だった（人間が手で `POST /schedule/:kind/run` を
+     * 叩いた等）。本文が無いのは正常なので、記憶に照らして判断させる。
+     */
+    | { status: 'missing' }
+    | { status: 'unreadable' | 'unrecordable' | 'withdrawn' | 'churning'; reason: string }
+  > {
+    // 一度でも依頼を読めていたなら、後から消えたのは「人間が消した」である。
+    // 最初から無いのとは意味が違うので分ける（片方は動かさない、片方は判断させる）。
+    let sawPlan = false;
+
+    for (let round = 0; round < SCHEDULE_CLAIM_ROUNDS; round += 1) {
+      const found = await this.#scheduledRequestFor(kind);
+      if (found.status === 'unreadable') {
+        return {
+          status: 'unreadable',
+          reason:
+            `依頼を読めなかった（本文なしで曖昧に動かすより、次の発火で読み直す）: ` + found.error,
+        };
+      }
+      if (found.plan === null) {
+        return sawPlan
+          ? {
+              status: 'withdrawn',
+              reason: '確定する前に人間がこの依頼を消した（取り消された仕事は動かさない）',
+            }
+          : { status: 'missing' };
+      }
+      sawPlan = true;
+
+      const claimed = await this.#claimRun(kind, found.plan.updatedAt, at, cause);
+      if (claimed.status === 'failed') {
+        return {
+          status: 'unrecordable',
+          reason:
+            `「起きた」を記録できなかった（動いてから記録できないと、次の起動で同じ仕事を` +
+            `もう一度起こす）: ${claimed.error}`,
+        };
+      }
+      // 確定できた。返るのは更新前の姿なので「前回いつ動いたか」も分かる
+      if (claimed.plan !== null) return { status: 'ok', plan: claimed.plan };
+      // 読んでから確定するまでに人間が消した・直した。新しい版で読み直す
+    }
+    return {
+      status: 'churning',
+      reason: '読むたびに依頼が書き換わっている（人間が直している最中なので次の発火に譲る）',
+    };
+  }
 
   /** 発意・定期ジョブに渡す直近の状況。 */
   async #recentDigest(): Promise<string> {
@@ -869,8 +1089,9 @@ function isSameTick(a: InboxEvent, b: InboxEvent): boolean {
   if (a.type !== b.type) return false;
   if (a.type === 'self_initiative') return true;
   if (a.type === 'timer' && b.type === 'timer') {
-    // 対象日が違えば別の仕事（別の日の日報は畳めない）
-    return a.kind === b.kind && a.target === b.target;
+    // 対象日が違えば別の仕事（別の日の日報は畳めない）。手で起こした分と定期の
+    // 発火も別物である（前者は予定をずらさない＝記録先が違う）ので畳まない。
+    return a.kind === b.kind && a.target === b.target && a.cause === b.cause;
   }
   return false;
 }

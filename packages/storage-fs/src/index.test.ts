@@ -220,6 +220,225 @@ describe('FsJobStore', () => {
   });
 });
 
+describe('FsScheduleStore', () => {
+  const plan = {
+    kind: 'issue-round',
+    spec: { type: 'daily' as const, at: '09:00' },
+    request: 'open issue を見て実装を進める',
+    createdAt: '2026-08-12T00:00:00.000Z',
+    updatedAt: '2026-08-12T00:00:00.000Z',
+  };
+
+  it('仕込んだ依頼は読み戻せる（デーモンを作り直しても残る）', async () => {
+    await stores.schedules.put(plan);
+
+    expect(await stores.schedules.list()).toEqual([plan]);
+    expect((await stores.schedules.get('issue-round'))?.request).toContain('open issue');
+    expect(await stores.schedules.get('しらない')).toBeNull();
+  });
+
+  it('同じ kind は置き換わる', async () => {
+    await stores.schedules.put(plan);
+    await stores.schedules.put({ ...plan, request: '直した依頼' });
+
+    const plans = await stores.schedules.list();
+    expect(plans).toHaveLength(1);
+    expect(plans[0]?.request).toBe('直した依頼');
+  });
+
+  it('発火を確定できる。返るのは更新前の姿（前回いつ動いたかが分かる）', async () => {
+    await stores.schedules.put(plan);
+
+    const claimed = await stores.schedules.claimRun(
+      'issue-round',
+      plan.updatedAt,
+      '2026-08-13T00:00:00.000Z',
+      'schedule',
+    );
+
+    expect(claimed?.request).toBe(plan.request);
+    expect(claimed?.lastRunAt).toBeUndefined();
+    expect((await stores.schedules.get('issue-round'))?.lastRunAt).toBe('2026-08-13T00:00:00.000Z');
+    // updatedAt は「依頼が書き換えられた時刻」＝版の識別子なので発火では動かない
+    expect((await stores.schedules.get('issue-round'))?.updatedAt).toBe(plan.updatedAt);
+  });
+
+  it('引き受けた印は完了で消える。印が残っていれば配り直せる', async () => {
+    await stores.schedules.put(plan);
+
+    await stores.schedules.claimRun(
+      'issue-round',
+      plan.updatedAt,
+      '2026-08-13T00:00:00.000Z',
+      'schedule',
+    );
+
+    // claim だけでは定期の基準を進めない（ここで進めると、直後に落ちた回が消える）
+    const claimed = await stores.schedules.get('issue-round');
+    expect(claimed?.pendingRun).toEqual({ at: '2026-08-13T00:00:00.000Z', cause: 'schedule' });
+    expect(claimed?.lastScheduledRunAt).toBeUndefined();
+
+    await stores.schedules.completeRun('issue-round', '2026-08-13T00:00:00.000Z', 'schedule');
+
+    const done = await stores.schedules.get('issue-round');
+    expect(done?.pendingRun).toBeUndefined();
+    expect(done?.lastScheduledRunAt).toBe('2026-08-13T00:00:00.000Z');
+  });
+
+  it('別の発火の完了で、いま引き受けている印を消さない', async () => {
+    await stores.schedules.put(plan);
+    await stores.schedules.claimRun(
+      'issue-round',
+      plan.updatedAt,
+      '2026-08-13T00:00:00.000Z',
+      'schedule',
+    );
+
+    // 前の発火（別の時刻）の完了が遅れて届いた
+    await stores.schedules.completeRun('issue-round', '2026-08-12T00:00:00.000Z', 'schedule');
+
+    const held = await stores.schedules.get('issue-round');
+    expect(held?.pendingRun?.at).toBe('2026-08-13T00:00:00.000Z');
+    expect(held?.lastScheduledRunAt).toBeUndefined();
+  });
+
+  it('手で起こした分は観測用の前回時刻だけを進める（定期の基準は動かさない）', async () => {
+    await stores.schedules.put(plan);
+
+    await stores.schedules.claimRun(
+      'issue-round',
+      plan.updatedAt,
+      '2026-08-13T00:00:00.000Z',
+      'manual',
+    );
+    await stores.schedules.completeRun('issue-round', '2026-08-13T00:00:00.000Z', 'manual');
+
+    const after = await stores.schedules.get('issue-round');
+    expect(after?.lastRunAt).toBe('2026-08-13T00:00:00.000Z');
+    // これを動かすと、再起動した瞬間に定期の予定が手動実行の時刻へずれる
+    expect(after?.lastScheduledRunAt).toBeUndefined();
+  });
+
+  it('消された・書き換わった依頼は確定できない（古い本文で走らせない）', async () => {
+    // 知らない kind
+    expect(
+      await stores.schedules.claimRun(
+        'しらない',
+        plan.updatedAt,
+        '2026-08-13T00:00:00.000Z',
+        'schedule',
+      ),
+    ).toBeNull();
+
+    // 読んだ後に消された
+    await stores.schedules.put(plan);
+    await stores.schedules.remove('issue-round');
+    expect(
+      await stores.schedules.claimRun(
+        'issue-round',
+        plan.updatedAt,
+        '2026-08-13T00:00:00.000Z',
+        'schedule',
+      ),
+    ).toBeNull();
+
+    // 読んだ後に書き換えられた（版が違う）
+    await stores.schedules.put(plan);
+    await stores.schedules.put({
+      ...plan,
+      request: '人間が直した依頼',
+      updatedAt: '2026-08-12T10:00:00.000Z',
+    });
+    expect(
+      await stores.schedules.claimRun(
+        'issue-round',
+        plan.updatedAt,
+        '2026-08-13T00:00:00.000Z',
+        'schedule',
+      ),
+    ).toBeNull();
+    // 記録もされていない（新しい版に古い発火の跡を付けない）
+    expect((await stores.schedules.get('issue-round'))?.lastRunAt).toBeUndefined();
+  });
+
+  it('読んでから確定するまでに remove / put が割り込んでも、古い版では確定しない', async () => {
+    await stores.schedules.put(plan);
+
+    // 「読んだ直後に人間が消した」を、同じ排他区間へ同時に投げて作る
+    const [claimedAfterRemove] = await Promise.all([
+      stores.schedules.claimRun(
+        'issue-round',
+        plan.updatedAt,
+        '2026-08-13T00:00:00.000Z',
+        'schedule',
+      ),
+      stores.schedules.remove('issue-round'),
+    ]);
+    // どちらの順で直列化されても、「消えた後に確定した」ことにはならない
+    if (claimedAfterRemove !== null) {
+      expect(await stores.schedules.get('issue-round')).toBeNull();
+    }
+
+    // 「読んだ直後に人間が直した」も同様に、古い版では確定しない
+    await stores.schedules.put(plan);
+    const edited = { ...plan, request: '直した依頼', updatedAt: '2026-08-12T10:00:00.000Z' };
+    await Promise.all([
+      stores.schedules.put(edited),
+      stores.schedules.claimRun(
+        'issue-round',
+        plan.updatedAt,
+        '2026-08-13T00:00:00.000Z',
+        'schedule',
+      ),
+    ]);
+    const after = await stores.schedules.get('issue-round');
+    expect(after?.request).toBe('直した依頼');
+    expect(after?.lastRunAt).toBeUndefined();
+  });
+
+  it('同時に書いても取りこぼさない（人間の書き換えと発火の確定は並行して来る）', async () => {
+    await stores.schedules.put(plan);
+
+    await Promise.all([
+      stores.schedules.put({ ...plan, kind: 'a', request: 'A の依頼' }),
+      stores.schedules.put({ ...plan, kind: 'b', request: 'B の依頼' }),
+      stores.schedules.claimRun(
+        'issue-round',
+        plan.updatedAt,
+        '2026-08-13T00:00:00.000Z',
+        'schedule',
+      ),
+      stores.schedules.remove('しらない'),
+    ]);
+
+    const plans = await stores.schedules.list();
+    expect(plans.map((entry) => entry.kind)).toEqual(['a', 'b', 'issue-round']);
+    expect((await stores.schedules.get('issue-round'))?.lastRunAt).toBe('2026-08-13T00:00:00.000Z');
+  });
+
+  it('外せる', async () => {
+    await stores.schedules.put(plan);
+    await stores.schedules.remove('issue-round');
+
+    expect(await stores.schedules.list()).toEqual([]);
+  });
+
+  it('読めない中身を「消された」に潰さない（pg 版と同じ振る舞い）', async () => {
+    // 人間が手で直した・古い形が残っている、を模す
+    await initWorkspace(root);
+    await writeFile(
+      join(root, 'jobs', 'schedules.json'),
+      JSON.stringify({ schedules: [{ kind: 'broken' }] }),
+      'utf8',
+    );
+
+    // null / 空配列に潰すと、クローンから見て「消された依頼」と区別が付かず、
+    // 本文なしの曖昧なターンが走る（clone.ts が読取不能を分けている意味が消える）
+    await expect(stores.schedules.get('broken')).rejects.toThrow();
+    await expect(stores.schedules.list()).rejects.toThrow();
+  });
+});
+
 describe('FsTranscriptArchive', () => {
   it('退避して読み戻せる', async () => {
     const id = await stores.archive.archive('session-1', '{"a":1}\n');

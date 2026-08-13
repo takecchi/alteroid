@@ -19,15 +19,15 @@ import {
   type Stores,
 } from '@alteroid/core';
 
-import { createApp } from './app.js';
+import { createApp, parseAllowedOrigins } from './app.js';
 import { planAuth } from './auth.js';
 import { createJournalBus } from './journal-bus.js';
-import { createHttpRunner } from './runner-client.js';
+import { createHttpRunner, RunnerHttpError } from './runner-client.js';
 import { clearRuntimeInfo, writeRuntimeInfo } from './runtime.js';
 import { buildSchedule, readScheduleConfig } from './schedule.js';
 import { openStorage } from './storage.js';
 
-export { createApp, type AppDeps, type AppType } from './app.js';
+export { createApp, parseAllowedOrigins, type AppDeps, type AppType } from './app.js';
 export {
   AUTH_ENV,
   AUTH_WITHHELD_ENV_KEYS,
@@ -48,7 +48,7 @@ export {
 export { buildOpenApiDocument } from './openapi.js';
 export { createJournalBus, type JournalBus } from './journal-bus.js';
 export { openStorage, DATABASE_URL_ENV, type Storage } from './storage.js';
-export { createHttpRunner, type HttpRunnerOptions } from './runner-client.js';
+export { createHttpRunner, RunnerHttpError, type HttpRunnerOptions } from './runner-client.js';
 export {
   buildSchedule,
   readScheduleConfig,
@@ -75,6 +75,25 @@ export {
 const DEFAULT_BIND = '127.0.0.1';
 
 /**
+ * runner が戻ってくるのを待つ上限と、待ち方。
+ *
+ * **同時に再デプロイされた runner を待てないと、デーモンが道連れで落ちる。**
+ * 落ちている間はクローンのターンも `/approvals` への回答も受け付けられないので、
+ * 「人間の不在で止まってよいのは承認待ちの仕事だけ」という前提が崩れる
+ * （PRD「自律」）。器の入れ替えは分単位では終わらない方が珍しいので、そこまでは
+ * 待つ。それを越えても繋がらないなら、黙って上がったふりをせずに落ちる。
+ *
+ * **ここは踏み込みが足りていない。** 待っている間デーモンは待ち受けを開かないが、
+ * chat・日誌・日報・承認への回答は runner に一切依存しない。委譲先が不在なだけで
+ * それらまで止めているのは、「人間の不在で止まってよいのは承認待ちの仕事だけ」
+ * （PRD「自律」）に照らすと弱い。素直な形は「先に listen し、runner へは背景で
+ * 繋ぎ直し続け、委譲だけが一時的に失敗する」である（roadmap M5 で runner の
+ * 登録・生存判定を入れるときに一緒に倒す）。
+ */
+const RUNNER_CONNECT_WINDOW_MS = 120_000;
+const RUNNER_CONNECT_MAX_DELAY_MS = 15_000;
+
+/**
  * 委譲先を開く。
  *
  * `ALTEROID_RUNNER_URL` があれば、そこが manager-runner である（コンテナ構成）。
@@ -93,13 +112,48 @@ async function openRunner(workspace: string, withheldEnvKeys: string[]): Promise
           '（runner の制御面は鍵で守る。runner には sha256 を渡すこと）',
       );
     }
-    return createHttpRunner({ baseUrl: url, token });
+    return connectRunner(url, token);
   }
   return createLocalRunner({
     runnerId: 'runner-local',
     workspacePath: workspace,
     withheldEnvKeys,
   });
+}
+
+/**
+ * runner へ繋ぐ。**居なければ、戻ってくるまで待つ。**
+ *
+ * 待つのは「繋がらない」ときだけである。**方針の誤りは待っても直らない**ので、
+ * 鍵が無いときは上の `openRunner` が、鍵を拒まれたときはここが即座に落とす。
+ * 粘るのは器の入れ替え（デプロイ・再起動）だけを相手にしている。
+ */
+async function connectRunner(baseUrl: string, token: string): Promise<RunnerClient> {
+  const deadline = Date.now() + RUNNER_CONNECT_WINDOW_MS;
+  let delay = 1_000;
+  for (;;) {
+    try {
+      return await createHttpRunner({ baseUrl, token });
+    } catch (error) {
+      // **鍵を拒まれたなら、待っても直らない。** ここで粘ると、設定の誤りが
+      // 「器の入れ替え中かもしれません」という嘘のメッセージで2分間隠れる。
+      if (error instanceof RunnerHttpError && (error.status === 401 || error.status === 403)) {
+        throw new Error(
+          `runner (${baseUrl}) に鍵を拒まれました（${error.status}）。` +
+            'ALTEROID_RUNNER_TOKEN と runner の ALTEROID_RUNNER_TOKEN_SHA256 が揃っているか確かめてください。',
+          { cause: error },
+        );
+      }
+      if (Date.now() >= deadline) throw error;
+      // **黙って待たない。** 上がらない理由を探す人間が最初に見るのはここである。
+      process.stderr.write(
+        `alteroidd: runner (${baseUrl}) に繋がりません。` +
+          `${Math.round(delay / 1000)} 秒後に試し直します: ${String(error)}\n`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      delay = Math.min(delay * 2, RUNNER_CONNECT_MAX_DELAY_MS);
+    }
+  }
 }
 
 /**
@@ -164,6 +218,9 @@ export async function main(): Promise<void> {
   const scheduler = createScheduler({
     entries: buildSchedule(schedule),
     post: (event) => clone.post(event),
+    // 継続中の依頼（クローンか人間が仕込んだもの）。**器を作り直しても残る。**
+    // 「定期的に見ておいて」がデーモン再起動で消えたら、それは自律の穴である。
+    schedules: stores.schedules,
   });
 
   // **受け口を開ける前に**、走行中だったマネージャーを台帳から拾い直す。知らせない
@@ -182,6 +239,24 @@ export async function main(): Promise<void> {
     );
   }
 
+  // 画面（apps/web）を別オリジンに置く配置のための境界設定。既定は空＝今まで通り
+  // CORS ヘッダを返さない。捨てた値は黙って飲み込まない（許可したつもりとの差が
+  // 境界の穴になる）。
+  const { origins: allowedOrigins, rejected } = parseAllowedOrigins(
+    process.env.ALTEROID_ALLOWED_ORIGINS,
+  );
+  for (const value of rejected) {
+    process.stderr.write(
+      `alteroidd: ALTEROID_ALLOWED_ORIGINS の "${value}" を無視しました` +
+        '（scheme://host[:port] の形だけを受け付けます。* と経路付きは不可）\n',
+    );
+  }
+  if (allowedOrigins.length > 0) {
+    process.stderr.write(
+      `alteroidd: 次のオリジンからのブラウザ呼び出しを許可します: ${allowedOrigins.join(', ')}\n`,
+    );
+  }
+
   // 入口の認証。**設定されていなければ従来どおり要求しない** — 境界の導入が
   // 実質のデグレードにならないようにする（north_star「立ち戻るための問い」）。
   const authPlan = planAuth(process.env, { port });
@@ -196,6 +271,7 @@ export async function main(): Promise<void> {
     storage: storage.description,
     runners,
     journalEvents: journalBus,
+    allowedOrigins,
     auth: { plan: authPlan },
   });
   // 開けたこと自体は方針の変更であって禁止事項ではない。ただし**黙って**外へ
@@ -250,7 +326,19 @@ export async function main(): Promise<void> {
   process.on('SIGTERM', () => void shutdown());
   process.on('SIGINT', () => void shutdown());
 
+  // 仕込んであった依頼を先に読み直す。ここを通さないと、前回の会話で仕込んだ
+  // 継続中の依頼が、次の刻み（最大1分）まで存在しないことになる。
+  await scheduler.refresh().catch((error: unknown) => {
+    process.stderr.write(`alteroidd: 継続中の依頼を読み込めませんでした: ${String(error)}\n`);
+  });
   scheduler.start();
+
+  const standing = scheduler.list().filter((entry) => entry.request !== undefined);
+  if (standing.length > 0) {
+    process.stdout.write(
+      `alteroidd: 継続中の依頼: ${standing.map((entry) => entry.kind).join(', ')}\n`,
+    );
+  }
 
   // 締め時刻に自分が動いていなければ、その日の日報は誰も作らない。「日報は毎日
   // 生成される」は要件なので、動いていなかった日の分を起動時に拾い直す。

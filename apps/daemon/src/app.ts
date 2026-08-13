@@ -10,6 +10,7 @@ import type {
   Stores,
 } from '@alteroid/core';
 import {
+  RESERVED_SCHEDULE_KINDS,
   chatStreamEventSchema,
   createAuthProviderRegistry,
   createAuthService,
@@ -18,6 +19,8 @@ import {
   localDayRange,
   memorySlugSchema,
   runnerSetCredentialsCommandSchema,
+  scheduleKindSchema,
+  scheduleSpecSchema,
   type AuthAccount,
   type AuthService,
 } from '@alteroid/core';
@@ -26,6 +29,7 @@ import { bearerOf, isOperator, type AuthPlan, type AuthVariables } from './auth.
 import type { JournalBus } from './journal-bus.js';
 import { Scalar } from '@scalar/hono-api-reference';
 import { Hono } from 'hono';
+import { cors } from 'hono/cors';
 import { createMiddleware } from 'hono/factory';
 import { streamSSE } from 'hono/streaming';
 import { describeRoute, openAPIRouteHandler, resolver, validator } from 'hono-openapi';
@@ -67,9 +71,11 @@ import {
 /**
  * HTTP API（hono）。CLI も外部アプリもここを叩く。
  *
- * インターフェースは CLI と HTTP API のみ（非ゴール: Web UI）。CLI は core を
- * 埋め込まずこの API の薄いクライアントに徹する — でないと chat のたびに脳が
- * 分岐する（docs/architecture.md「脳は1インスタンス」）。
+ * 入口は CLI・HTTP API・Web UI（apps/web）の3つで、**どれも等しくこの API の
+ * 上に乗る**。CLI は core を埋め込まずこの API の薄いクライアントに徹する —
+ * でないと chat のたびに脳が分岐する（docs/architecture.md「脳は1インスタンス」）。
+ * Web UI も同じ理由で、独自の経路をここへ足さない（足したら入口ごとに
+ * できることが変わる）。
  *
  * 可観測性の3層（日報・日誌・セッションログ）はすべてここから読める必要がある
  * （PRD「可観測性」）。M3 で最上段の日報が揃い、3層が全部この API から読める。
@@ -118,6 +124,27 @@ export interface AppDeps {
    */
   journalEvents?: Pick<JournalBus, 'subscribe'>;
   /**
+   * ブラウザから叩いてよいオリジンの**明示列挙**（`ALTEROID_ALLOWED_ORIGINS`）。
+   *
+   * 空（既定）なら CORS ヘッダを一切返さない。**そこが今までの姿勢であり、
+   * 既定では1バイトも変わらない。**
+   *
+   * 画面（apps/web）とデーモンを別オリジンに置く配置があるので必要になった。
+   * ここで守っているものは3つある。
+   *
+   * 1. **ワイルドカードを受け付けない。** 列挙されたオリジンだけを、そのまま
+   *    エコーする。`*` を許すと `deliberateClient` の前提（preflight が通らない）
+   *    が消え、人間が開いた任意のページからクローンのターンを起こせる
+   * 2. **`credentials` を付けない。** Cookie を運ばせない設計なので、
+   *    `Access-Control-Allow-Credentials` は返さない（資格情報はヘッダで運ぶ）
+   * 3. **`allowHeaders` は最小。** `content-type` を通すのは `deliberateClient` が
+   *    それを要求するためで、増やすなら理由が要る
+   *
+   * これは能力の削除ではなく**実行環境の境界の設定**である（north_star 禁止2）。
+   * 開けるかどうかは人間が決め、開けた先は列挙した相手だけに限られる。
+   */
+  allowedOrigins?: readonly string[];
+  /**
    * ログインとアクセス許可（`./auth.ts`）。
    *
    * 省略すると認証を要求しない（＝この機能が入る前と同じ振る舞い）。**能力を
@@ -126,6 +153,45 @@ export interface AppDeps {
    * という問い）。
    */
   auth?: { plan: AuthPlan; service?: AuthService };
+}
+
+/**
+ * `ALTEROID_ALLOWED_ORIGINS` を読む。
+ *
+ * 受け付けるのは `scheme://host[:port]` だけである。**`*` と、経路を含む値と、
+ * 解釈できない値は捨てる**（捨てたことは呼び出し側が警告に出す）。ここを緩めると
+ * 「許可したつもりの範囲」と「実際に通る範囲」がずれ、境界が境界でなくなる。
+ */
+export function parseAllowedOrigins(raw: string | undefined): {
+  origins: string[];
+  rejected: string[];
+} {
+  const origins: string[] = [];
+  const rejected: string[] = [];
+
+  for (const entry of (raw ?? '').split(',')) {
+    const candidate = entry.trim();
+    if (candidate === '') continue;
+
+    let url: URL;
+    try {
+      url = new URL(candidate);
+    } catch {
+      rejected.push(candidate);
+      continue;
+    }
+
+    // `new URL('https://a.example.com/path').origin` は経路を落とすので、
+    // 元の文字列がオリジンそのものだったときだけ通す（打ち間違いを飲み込まない）。
+    const normalized = url.origin;
+    if (normalized === 'null' || candidate.replace(/\/+$/, '') !== normalized) {
+      rejected.push(candidate);
+      continue;
+    }
+    if (!origins.includes(normalized)) origins.push(normalized);
+  }
+
+  return { origins, rejected };
 }
 
 const chatBody = z.object({
@@ -179,6 +245,19 @@ const managerMessageBody = z.object({
   decision: z.enum(['allow', 'deny']).optional(),
 });
 const abortBody = z.object({ reason: z.string().min(1).optional() });
+/**
+ * 継続中の依頼の仕込み（人間の手からも同じことができる口）。
+ *
+ * クローンの `schedule_create` と同じものを人間も置ける。自分が出した「これから
+ * ずっと」の依頼を人間が見て直せないと、可観測性の穴になる（PRD「権限境界」の
+ * 人間の制御手段④）。
+ */
+const scheduleBody = z.object({
+  kind: scheduleKindSchema,
+  request: z.string().min(1),
+  spec: scheduleSpecSchema,
+});
+
 const loginBody = z.object({
   provider: z.string().min(1),
   /** どの端末から始めたか、人間が後から見分けるための覚書。 */
@@ -458,7 +537,33 @@ export function createApp(deps: AppDeps) {
     await next();
   });
 
-  const app = new Hono<{ Variables: AuthVariables }>()
+  const base = new Hono<{ Variables: AuthVariables }>();
+
+  // **CORS は認証より先に登録する。** ブラウザの preflight（OPTIONS）は
+  // `Authorization` を積んで来ないので、門番が先に立つと preflight が 401 になり、
+  // 本リクエストが一度も飛ばない。hono の `cors()` は OPTIONS にその場で答えて
+  // `next()` を呼ばないので、ここに置けば門番も素通りしない。
+  //
+  // 列挙が空なら**何も登録しない** — CORS ヘッダを返さない今までの姿勢のまま。
+  const allowedOrigins = deps.allowedOrigins ?? [];
+  if (allowedOrigins.length > 0) {
+    base.use(
+      '*',
+      cors({
+        // 列挙にあるものだけをそのまま返す。`*` は返さない（`AppDeps` の注記）。
+        origin: (origin) => (allowedOrigins.includes(origin) ? origin : null),
+        allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+        // `content-type` は `deliberateClient` が、`authorization` は門番が要求する。
+        // 後者を落とすと、別オリジンの画面はログイン済みでも何も呼べない。
+        allowHeaders: ['content-type', 'authorization'],
+        // Cookie は運ばせない。資格情報はヘッダで運ぶ（apps/web/app/lib/config.ts）。
+        credentials: false,
+        maxAge: 600,
+      }),
+    );
+  }
+
+  const app = base
     .use('*', authenticate)
 
     .get(
@@ -1232,6 +1337,107 @@ export function createApp(deps: AppDeps) {
         },
       }),
       (c) => c.json({ entries: deps.scheduler?.list() ?? [] }),
+    )
+
+    /**
+     * 継続中の依頼を仕込む・直す（同じ kind なら置き換わる）。
+     *
+     * 真実はストア側にあり、スケジューラはそれを読み直すだけである。ここで
+     * スケジューラへ直接足すと、デーモンを再起動した瞬間に消える仕込みができる。
+     */
+    .post(
+      '/schedule',
+      describeRoute({
+        tags: ['schedule'],
+        summary: '継続中の依頼を仕込む・直す',
+        description:
+          '「定期的に〜しておいて」をクローンの記憶任せにせず、時刻が来れば必ず届く形で置く。' +
+          '同じ kind なら置き換わる（前回動いた時刻は保つ）。真実はストア側にあり、' +
+          'スケジューラはそれを読み直すだけなので、デーモンを作り直しても残る。' +
+          '既定の定期ジョブ（daily_report / self_initiative）の名前は奪えない（→ 409）。',
+        responses: {
+          200: {
+            description: '仕込んだ。次の発火は `GET /schedule` で見える。',
+            content: { 'application/json': { schema: resolver(okResponseSchema) } },
+          },
+          400: {
+            description: '本文が JSON として不正（kind の形・時刻の範囲もここで弾く）。',
+            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+          },
+          409: {
+            description: '既定の定期ジョブの名前。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      validator('json', scheduleBody),
+      async (c) => {
+        const { kind, request, spec } = c.req.valid('json');
+        if (RESERVED_SCHEDULE_KINDS.includes(kind)) {
+          return c.json({ error: 'reserved kind' as const }, 409);
+        }
+        const now = new Date().toISOString();
+        const existing = await stores.schedules.get(kind);
+        await stores.schedules.put({
+          kind,
+          spec,
+          request,
+          createdAt: existing?.createdAt ?? now,
+          updatedAt: now,
+          // **これまでの記録を引き継ぐ。** 落とすと、直した瞬間に定期の基準が消えて
+          // 位相が createdAt から引き直され（＝直後に1回余分に起きる）、引き受けたまま
+          // 終わっていない発火の印も消える（＝その回が失われる）。
+          ...(existing?.lastRunAt === undefined ? {} : { lastRunAt: existing.lastRunAt }),
+          ...(existing?.lastScheduledRunAt === undefined
+            ? {}
+            : { lastScheduledRunAt: existing.lastScheduledRunAt }),
+          ...(existing?.pendingRun === undefined ? {} : { pendingRun: existing.pendingRun }),
+        });
+        await stores.journal.append({
+          type: 'decision',
+          decision: `人間が定期の依頼を${existing ? '直した' : '仕込んだ'}: ${kind}: ${request}`,
+          grounds: '人間が直接 API から仕込んだ',
+        });
+        // 次の刻みを待たずに効かせる（人間が仕込んだのに1分間存在しないのは嘘になる）
+        await deps.scheduler?.refresh().catch(() => undefined);
+        return c.json({ ok: true });
+      },
+    )
+
+    .delete(
+      '/schedule/:kind',
+      describeRoute({
+        tags: ['schedule'],
+        summary: '継続中の依頼を外す',
+        description:
+          '済んだ依頼・もう要らない依頼をここで外す。既定の定期ジョブは仕込みではないので' +
+          'ここでは外せない（間隔と締め時刻はデーモンの設定である）。',
+        responses: {
+          200: {
+            description: '外した。',
+            content: { 'application/json': { schema: resolver(okResponseSchema) } },
+          },
+          404: {
+            description: 'その kind の継続中の依頼が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          ...noBodyPostResponses(),
+        },
+      }),
+      deliberateClient,
+      async (c) => {
+        const kind = c.req.param('kind');
+        const existing = await stores.schedules.get(kind);
+        if (!existing) return c.json({ error: 'not found' as const }, 404);
+        await stores.schedules.remove(kind);
+        await stores.journal.append({
+          type: 'decision',
+          decision: `人間が定期の依頼を外した: ${kind}: ${existing.request}`,
+          grounds: '人間が直接 API から外した',
+        });
+        await deps.scheduler?.refresh().catch(() => undefined);
+        return c.json({ ok: true });
+      },
     )
 
     /**

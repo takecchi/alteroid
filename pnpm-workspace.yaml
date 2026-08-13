@@ -21,6 +21,9 @@ catalog:
   '@hono/zod-validator': ^0.9.0
   zod: ^4.4.3
   commander: ^15.0.0
+  # 継続中の依頼の周期。人間が cron で書けることをこの階層でも書けるようにする。
+  # 依存ゼロ・ESM・型付きなので croner を採った（cron-parser は luxon を連れてくる）
+  croner: ^10.0.1
   # OpenAPI（外から API を記述できるようにするための一式。Issue #20）
   #
   # 生成側は hono-openapi。既存のチェーン記法と `AppType`（CLI の `hc<AppType>` が
@@ -42,6 +45,42 @@ catalog:
   '@types/pg': ^8.21.0
   # pg ドライバのテスト用。実 PostgreSQL をインプロセスで動かす（CI に DB を要求しない）
   '@electric-sql/pglite': ^0.5.4
+  # Web UI（apps/web）。React Router v7 を SPA モード（ssr: false）で使う。
+  #
+  # **SSR を採らないのは配置の自由のため。** デーモンをどこに置き、画面をどこに置くかは
+  # 人によって違う（同一ホスト / api.example.com + www.example.com / 静的ホスティング）。
+  # サーバを持たない静的成果物なら、そのどれにも同じものを置ける。
+  react: ^19.2.8
+  react-dom: ^19.2.8
+  '@types/react': ^19.2.18
+  '@types/react-dom': ^19.2.4
+  react-router: ^7.18.2
+  '@react-router/dev': ^7.18.2
+  # SPA でもビルド時に要る（index.html を書き出す側が実行系を要求する）。
+  # 成果物は静的なので、これが動くのはビルドの中だけ。
+  #
+  # **どちらも `dependencies` に置くこと。** react-router のビルドは
+  # `package.json` の `dependencies` だけを見て実行系を判定し、`isbot` が
+  # 無いと**ビルド中に package.json を書き換えて `pnpm install` を走らせる**。
+  # CI でそれが起きると、成果物の生成が依存関係の書き換えを伴う。
+  '@react-router/node': ^7.18.2
+  isbot: ^5.2.1
+  vite: ^8.2.1
+  tailwindcss: ^4.3.3
+  '@tailwindcss/vite': ^4.3.3
+  # 取得とキャッシュ。SSE で届いた出来事から `mutate` で無効化する使い方をする。
+  # 2.5 系は出たばかりで minimumReleaseAge に引っかかる。**除外リストに足して
+  # 通すのではなく**、枯れている 2.4 系を採る（除外リストは SDK の意図的な固定の
+  # ためのものであって、新しい版を素通しするための場所ではない）
+  # `^` だと 2.5 系まで入ってしまうので `~` で 2.4 系に留める
+  swr: ~2.4.2
+  clsx: ^2.1.1
+  # 画面の回帰テスト（描画して操作する分だけ。DOM が要るファイルにだけ jsdom を指定する）
+  jsdom: ^30.0.1
+  '@testing-library/react': ^16.3.2
+  '@testing-library/dom': ^10.4.1
+  tailwind-merge: ^3.6.0
+  lucide-react: ^1.31.0
 
 minimumReleaseAgeExclude:
   - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.228'
