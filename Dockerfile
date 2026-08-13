@@ -19,6 +19,9 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/core/package.json packages/core/
 COPY packages/storage-fs/package.json packages/storage-fs/
 COPY packages/storage-pg/package.json packages/storage-pg/
+# 外部向けの生成クライアント。この器では使わないが、ワークスペースの一員なので
+# 置かないと `--frozen-lockfile` が「lockfile と合わない」で落ちる
+COPY packages/api-client/package.json packages/api-client/
 COPY apps/daemon/package.json apps/daemon/
 COPY apps/runner/package.json apps/runner/
 COPY apps/cli/package.json apps/cli/
@@ -104,6 +107,9 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/core/package.json packages/core/
 COPY packages/storage-fs/package.json packages/storage-fs/
 COPY packages/storage-pg/package.json packages/storage-pg/
+# 外部向けの生成クライアント。この器では使わないが、ワークスペースの一員なので
+# 置かないと `--frozen-lockfile` が「lockfile と合わない」で落ちる
+COPY packages/api-client/package.json packages/api-client/
 COPY apps/daemon/package.json apps/daemon/
 COPY apps/runner/package.json apps/runner/
 COPY apps/cli/package.json apps/cli/

@@ -21,6 +21,19 @@ jobs:
           restore-keys: ${{ runner.os }}-pnpm-
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+
+      # **コードと OpenAPI spec がずれたまま気づかない状態を作らない。**
+      # spec は経路の zod スキーマから機械生成され、`pnpm build` が毎回書き直す。
+      # つまりここに差分が出るのは「コードを変えたのに commit した spec が古い」
+      # ときだけである。手書きの spec を別に置いて二重管理にしないための検査であり、
+      # 人間に「先に生成コマンドを流す」手順を足さないための場所でもある（Issue #20）。
+      - name: OpenAPI spec がコードと一致しているか
+        run: |
+          git diff --exit-code -- apps/daemon/openapi.json || {
+            echo "::error::apps/daemon/openapi.json が古い。pnpm build して差分をコミットすること" >&2
+            exit 1
+          }
+
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm format:check
