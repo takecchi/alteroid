@@ -53,13 +53,18 @@ describe('tokenSha256Of', () => {
 describe('器の起動スクリプト', () => {
   let dir: string;
 
+  /** 呼ばれたことと、そのときの環境だけを吐く替え玉を置く。 */
+  function fake(name: string, body: string): void {
+    const path = join(dir, name);
+    writeFileSync(path, `#!/bin/sh\n${body}\n`);
+    chmodSync(path, 0o755);
+  }
+
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'alteroid-launch-'));
     // 偽の `node`。**exec された先が何を持っているか**を見たいだけなので、環境を
     // そのまま吐く（本物を起こす必要は無い）。
-    const fake = join(dir, 'node');
-    writeFileSync(fake, '#!/bin/sh\nprintf "%s\\n" "$@"\nenv\n');
-    chmodSync(fake, 0o755);
+    fake('node', 'printf "%s\\n" "$@"\nenv');
   });
 
   afterEach(() => {
@@ -71,6 +76,16 @@ describe('器の起動スクリプト', () => {
       env: { PATH: `${dir}:${process.env.PATH ?? ''}`, ...env },
     });
     return stdout;
+  }
+
+  /**
+   * root で起こされた状況を作る。**特権が要る本物の降格は器（CI の image ジョブ）で
+   * 見る**ので、ここで固定するのは「何を渡して降ろすか」だけである。
+   */
+  function pretendRoot(): void {
+    fake('id', 'echo 0');
+    fake('getent', 'echo "node:x:1000:1000::/home/node:/bin/bash"');
+    fake('setpriv', 'printf "setpriv %s\\n" "$*"\nenv');
   }
 
   it('alteroid-runner: 素の合鍵を sha256 へ畳み、素の値は exec の先へ渡さない', async () => {
@@ -104,5 +119,23 @@ describe('器の起動スクリプト', () => {
   it('alteroidd: 非 root ならそのままデーモンを exec する', async () => {
     const out = await launch('alteroidd', {});
     expect(out.split('\n')[0]).toBe('/app/apps/daemon/dist/index.js');
+  });
+
+  it('alteroidd: root なら node へ降ろす', async () => {
+    pretendRoot();
+    const out = await launch('alteroidd', { HOME: '/root' });
+    expect(out.split('\n')[0]).toBe(
+      'setpriv --reuid=node --regid=node --init-groups node /app/apps/daemon/dist/index.js',
+    );
+  });
+
+  it('alteroidd: 降ろすときは HOME も差し替える（root の home のままだと SDK が設定を書けない）', async () => {
+    pretendRoot();
+    const out = await launch('alteroidd', { HOME: '/root' });
+
+    expect(out).toContain('HOME=/home/node');
+    expect(out.split('\n')).not.toContain('HOME=/root');
+    expect(out).toContain('USER=node');
+    expect(out).toContain('LOGNAME=node');
   });
 });

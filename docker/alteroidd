@@ -15,6 +15,20 @@ set -eu
 entry=/app/apps/daemon/dist/index.js
 
 if [ "$(id -u)" = '0' ]; then
+  # **`HOME` も一緒に差し替える。** `setpriv` が変えるのは UID/GID だけで、環境は
+  # root のまま残る。`HOME=/root` を持ったまま降りると、クローンの SDK セッションが
+  # 設定（`~/.claude`）を書けずに落ちる — 「コンテナだからできない」が生まれる
+  # （north_star 禁止1）。runner が子プロセスを降ろすときに `HOME` を渡しているのと
+  # 同じ理由である（`packages/core/src/runner.ts` の `#spawnAsChildUser`）。
+  #
+  # 置き場はイメージの `node` ユーザーに従う（決め打ちにすると、ベースイメージが
+  # 変えたときに黙ってずれる）。
+  HOME="$(getent passwd node | cut -d: -f6)"
+  : "${HOME:=/home/node}"
+  USER=node
+  LOGNAME=node
+  export HOME USER LOGNAME
+
   exec setpriv --reuid=node --regid=node --init-groups node "$entry" "$@"
 fi
 

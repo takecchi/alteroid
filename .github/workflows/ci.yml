@@ -137,11 +137,27 @@ jobs:
 
       # デーモンは記憶ストアの鍵を持つ。**root で起こされても特権のまま走らない。**
       # （Railway は実行 UID を環境変数で決めるので、root で来る構成がありうる）
-      - name: デーモンは root で起こされても node へ降りるか
+      #
+      # **UID だけを見ても足りない。** `setpriv` は環境を変えないので、`HOME=/root` の
+      # まま降りると uid は正しいのにクローンの SDK セッションが設定を書けずに落ちる
+      # （「コンテナだからできない」＝north_star 禁止1）。降りた先で**実際に書けること**
+      # まで見る。
+      - name: デーモンは root で起こされても node へ降りるか（HOME ごと）
         run: |
           docker run --rm -u 0 alteroid:ci sh -eu -c '
             alteroidd &
+            pid=$!
             sleep 3
-            uid=$(awk "/^Uid:/ {print \$2}" /proc/$!/status)
+
+            uid=$(awk "/^Uid:/ {print \$2}" /proc/$pid/status)
             test "$uid" = 1000 || { echo "root のまま走っている: uid=$uid" >&2; exit 1; }
+
+            # 環境は**同じ主体からしか読めない**（docker の既定に CAP_SYS_PTRACE は
+            # 無いので、root でも降りた先のプロセスは覗けない）。node で読む。
+            home=$(su -s /bin/sh node -c "tr \"\\0\" \"\\n\" < /proc/$pid/environ" | sed -n "s/^HOME=//p")
+            test "$home" = /home/node || { echo "HOME が降りていない: $home" >&2; exit 1; }
+
+            # 降りた先の主体で、その HOME 配下へ実際に書けること
+            su -s /bin/sh node -c "mkdir -p \"$home/.claude\" && touch \"$home/.claude/probe\"" \
+              || { echo "降りた先で HOME へ書けない" >&2; exit 1; }
           '
