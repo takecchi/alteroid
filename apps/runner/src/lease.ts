@@ -171,7 +171,21 @@ export class SessionLease {
         this.#onGraceExceeded();
         return [];
       }
-      if ('error' in outcome) throw outcome.error;
+      if ('error' in outcome) {
+        /**
+         * **畳めなかったことを、畳めたことと同じに扱わない。**
+         *
+         * ここで投げるだけだと、呼び出し元（見張りのタイマー）は握り潰して終わる。
+         * 器は生き続け、再試行のタイマーも張られない。ところが**デーモン側の
+         * 期限は進む** — 申告した `ttl + grace` を過ぎた時点で「もう止まっている
+         * はず」と見なして別の器で開き直す。畳めていない仕事が2か所で走る。
+         *
+         * 返らなかった場合（`overdue`）と同じ扱いにする。畳めた確証が無いなら、
+         * 器ごと降りるのが唯一の安全側である。
+         */
+        this.#onGraceExceeded();
+        throw outcome.error;
+      }
       if (outcome.ids.length > 0) this.#onFenced(outcome.ids);
       return outcome.ids;
     })().finally(() => {

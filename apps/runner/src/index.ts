@@ -9,6 +9,7 @@ import {
   createRunnerHost,
   WITHHELD_ENV_KEYS,
   type RunnerChildUser,
+  type RunnerHost,
 } from '@alteroid/core';
 import { createAdaptorServer } from '@hono/node-server';
 
@@ -104,6 +105,29 @@ export function childUserOf(env: NodeJS.ProcessEnv = process.env): RunnerChildUs
   };
 }
 
+/**
+ * 抱えているセッションを全部畳み、**畳めたことを確かめてから**申告する。
+ *
+ * デーモンはこの申告（と申告した期限）だけを根拠に、別の器で同じ session を
+ * 開き直してよいと判断する。だから**畳めなかったのに畳めたと言わないこと**が、
+ * 「同じ仕事が2か所で走らない」を支える最後の一枚になる。
+ *
+ * 2つを守っている。
+ *
+ * - `stop` の失敗を握り潰さない（握り潰すと、残っている仕事を止まったと申告する）
+ * - 例外が出なくても、**残っていないことで**確かめる。申告の根拠を「呼んだ」では
+ *   なく「居ない」に置く — 呼んだだけでは畳み切れたことにならない
+ */
+export async function fenceSessions(host: Pick<RunnerHost, 'list' | 'stop'>): Promise<string[]> {
+  const ids = host.list().map((state) => state.managerId);
+  for (const id of ids) await host.stop(id);
+  const left = host.list().map((state) => state.managerId);
+  if (left.length > 0) {
+    throw new Error(`畳み切れていないセッションが残っている: ${left.join(', ')}`);
+  }
+  return ids;
+}
+
 export async function main(): Promise<void> {
   const runnerId = runnerIdOf();
   const workspacePath = process.env.ALTEROID_WORKSPACE || process.cwd();
@@ -170,11 +194,7 @@ export async function main(): Promise<void> {
       ? undefined
       : new SessionLease({
           ttlMs: leaseTtlMs,
-          fence: async () => {
-            const ids = host.list().map((state) => state.managerId);
-            for (const id of ids) await host.stop(id).catch(() => undefined);
-            return ids;
-          },
+          fence: () => fenceSessions(host),
           // 畳み終えるまでに要りうる時間を申告する。**デーモンはこれを待ってから
           // 移送する**ので、実際にかかる時間より短く申告しないこと。
           graceMs: leaseGraceMsOf(),
@@ -186,7 +206,7 @@ export async function main(): Promise<void> {
             );
           },
           /**
-           * 猶予の内に畳み終えられなかった。**器ごと降りる。**
+           * 畳めた確証が無い。**器ごと降りる。**（猶予切れと、畳むのに失敗した場合）
            *
            * デーモンはこの時刻を過ぎたことだけを根拠に別の器で開き直すので、ここで
            * 「まだ畳めていません」と粘るのがいちばん危ない（同じ仕事が2か所で走り、
@@ -199,7 +219,8 @@ export async function main(): Promise<void> {
            */
           onGraceExceeded: () => {
             process.stderr.write(
-              'alteroid-runner: 貸し出し期限が切れたのに、猶予の内にマネージャーを畳み終えられませんでした。' +
+              'alteroid-runner: 貸し出し期限が切れたのに、マネージャーを畳み終えられませんでした' +
+                '（猶予切れ、または停止そのものの失敗）。' +
                 'デーモンはこの時刻を過ぎたら別の器で続きを開くので、二重に走らせないために器ごと終了します。\n',
             );
             process.exit(1);

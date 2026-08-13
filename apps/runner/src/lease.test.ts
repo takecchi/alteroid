@@ -206,6 +206,36 @@ describe('SessionLease — 器が自分で降りる', () => {
     expect(exceeded).toBe(1);
   });
 
+  it('畳むのに失敗したら、畳めたことにせず器ごと降りる（fail-closed）', async () => {
+    const time = clock();
+    let exceeded = 0;
+    const fencedIds: string[][] = [];
+
+    const lease = new SessionLease({
+      ttlMs: 30_000,
+      graceMs: 5_000,
+      now: time.now,
+      // 猶予の**内に**、はっきり失敗する（子プロセスの停止が例外になった等）
+      fence: async () => {
+        throw new Error('畳めなかった');
+      },
+      onFenced: (ids) => fencedIds.push(ids),
+      onGraceExceeded: () => {
+        exceeded += 1;
+      },
+    });
+
+    time.advance(30_001);
+    await expect(lease.check()).rejects.toThrow('畳めなかった');
+
+    // **畳めたとは報告しない。** ここで報告すると、止まっていない仕事を
+    // デーモンが「止まった」と読む
+    expect(fencedIds).toEqual([]);
+    // 猶予切れと同じく、器ごと降りる側へ落ちる。返らないより性質が悪いのは
+    // 「失敗したのに生き続ける」ほうで、その間もデーモン側の期限は進む
+    expect(exceeded).toBe(1);
+  });
+
   it('期限は秒で設定でき、off で外せる（外した器は自動移送の対象外になる）', () => {
     expect(leaseTtlMsOf({})).toBe(30_000);
     expect(leaseTtlMsOf({ ALTEROID_RUNNER_LEASE_TTL: '45' })).toBe(45_000);
