@@ -85,6 +85,13 @@ switch (args[0]) {
     break;
   }
   case 'domain':
+    // 新しい Service に繋がっているドメイン（既定は「1つも無い」）
+    if (args[1] === 'list') {
+      out(process.env.FAKE_DOMAIN_LIST ?? '[]');
+      break;
+    }
+    // ドメイン生成が一時的にこける／応答の形が変わる、を再現する
+    if (process.env.FAKE_DOMAIN_FAILS) process.exit(1);
     out({ domain: 'test-app.up.railway.app' });
     break;
   default:
@@ -106,10 +113,22 @@ type Run = {
   upsert: (serviceId: string) => Upsert;
   calls: string[];
   apiLog: string;
+  exitCode: number;
 };
 
-/** `.env` を1つ書いて setup.sh を通し、投げられた入力を返す。 */
-function run(env: string): Run {
+type Options = {
+  /** `railway domain` をこけさせる */
+  domainFails?: boolean;
+  /** 新しい Service に既に繋がっているドメイン（JSON 文字列） */
+  domainList?: string;
+  /** 非0終了を期待する（既定では非0なら stderr 付きで落とす） */
+  allowFailure?: boolean;
+  /** 実行後の `.env` を読みたいとき */
+  onEnvFile?: (path: string) => void;
+};
+
+/** `.env` を1つ書いて setup.sh を通し、投げられた入力と終了状態を返す。 */
+function run(env: string, options: Options = {}): Run {
   const dir = mkdtempSync(join(tmpdir(), 'alteroid-setup-test.'));
   const bin = join(dir, 'bin');
   mkdirSync(bin);
@@ -120,20 +139,36 @@ function run(env: string): Run {
   const envFile = join(dir, '.env');
   writeFileSync(envFile, env);
 
-  execFileSync(
-    'bash',
-    [SETUP, '--yes', '--name', 'test', '--repo', 'takecchi/alteroid', '--branch', 'main'],
-    {
-      env: {
-        ...process.env,
-        PATH: `${bin}:${process.env.PATH ?? ''}`,
-        // **本物の .env を触らせない。** 既定は リポジトリ直下の .env である
-        ALTEROID_ENV_FILE: envFile,
-        FAKE_STATE: dir,
+  let exitCode = 0;
+  try {
+    execFileSync(
+      'bash',
+      [SETUP, '--yes', '--name', 'test', '--repo', 'takecchi/alteroid', '--branch', 'main'],
+      {
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH ?? ''}`,
+          // **本物の .env を触らせない。** 既定は リポジトリ直下の .env である
+          ALTEROID_ENV_FILE: envFile,
+          FAKE_STATE: dir,
+          ...(options.domainFails ? { FAKE_DOMAIN_FAILS: '1' } : {}),
+          ...(options.domainList ? { FAKE_DOMAIN_LIST: options.domainList } : {}),
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
       },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    },
-  );
+    );
+    options.onEnvFile?.(envFile);
+  } catch (e) {
+    options.onEnvFile?.(envFile);
+    const err = e as { status?: number; stderr?: Buffer };
+    exitCode = err.status ?? 1;
+    if (!options.allowFailure) {
+      // 落ちた理由（stderr）を握り潰すと、CI でだけ落ちたときに手掛かりが無くなる
+      throw new Error(`setup.sh が ${exitCode} で終わった\n${err.stderr?.toString() ?? ''}`, {
+        cause: e,
+      });
+    }
+  }
 
   const payloads = readFileSync(join(dir, 'payloads.jsonl'), 'utf8')
     .split('\n')
@@ -151,12 +186,31 @@ function run(env: string): Run {
     vars: (serviceId) => upsert(serviceId).variables,
     calls: readFileSync(join(dir, 'calls.log'), 'utf8').split('\n').filter(Boolean),
     apiLog: readFileSync(join(dir, 'api.log'), 'utf8'),
+    exitCode,
   };
 }
 
 const MINIMAL = ['CLAUDE_CODE_OAUTH_TOKEN=sk-ant-test', 'ALTEROID_RUNNER_TOKEN=deadbeef', ''].join(
   '\n',
 );
+
+describe('シェルスクリプトの書き方', () => {
+  // macOS の bash 3.2 は、変数参照の直後に全角文字が続くとそのバイトを**変数名に
+  // 取り込む**（`"${ENV_FILE}（…"` を `ENV_FILE（` という名前として読む）。`set -u` の
+  // 下では起動直後に unbound variable で死ぬ。日本語のメッセージを書き足すたびに
+  // 踏むので、目で見張るのをやめてここで止める
+  it.each(['setup.sh', 'verify.sh'])('%s: 変数参照の直後に全角文字を置かない', (name) => {
+    const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), name), 'utf8');
+    const offenders = source
+      .split('\n')
+      .map((line, i) => ({ line, no: i + 1 }))
+      // eslint-disable-next-line no-control-regex
+      .filter(({ line }) => /\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7F]/.test(line))
+      .map(({ line, no }) => `${name}:${no}: ${line.trim()}`);
+    // ${VAR} と書けば直る
+    expect(offenders).toEqual([]);
+  });
+});
 
 describe('setup.sh が置く変数の割り振り', () => {
   let r: Run;
@@ -310,5 +364,121 @@ describe('Google ログインを有効にしたとき', () => {
   it('境界の割り振りは Google を有効にしても変わらない', () => {
     expect(r.vars('id-runner')).not.toHaveProperty('ALTEROID_DATABASE_URL');
     expect(r.vars('id-runner').RAILWAY_RUN_UID).toBe('0');
+  });
+
+  it('成功したら 0 で終わる', () => {
+    expect(r.exitCode).toBe(0);
+  });
+});
+
+describe('Google ログインを選んだのにドメインが作れなかったとき', () => {
+  // **黙って「外から叩けない構成」に化けさせない。**
+  // 鍵と待ち受けを置かないのは正しい（境界の無い口を外に出さない）が、正しいがゆえに
+  // 頼まれたものとは別物になる。ここで 0 を返すと、呼んだ側は完了と読み、人間は
+  // 叩けない理由を Google 側の設定に探しに行く
+  let r: Run;
+  beforeAll(() => {
+    r = run(
+      [
+        MINIMAL,
+        'ALTEROID_GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com',
+        'ALTEROID_GOOGLE_CLIENT_SECRET=goog-secret',
+        '',
+      ].join('\n'),
+      { domainFails: true, allowFailure: true },
+    );
+  });
+
+  it('非0で終わる', () => {
+    expect(r.exitCode).not.toBe(0);
+  });
+
+  it('境界の無い口を外に出さない（鍵も待ち受けも置かない）', () => {
+    const app = r.vars('id-app');
+    expect(app).not.toHaveProperty('ALTEROID_GOOGLE_CLIENT_ID');
+    expect(app).not.toHaveProperty('ALTEROID_GOOGLE_CLIENT_SECRET');
+    expect(app).not.toHaveProperty('ALTEROID_PUBLIC_URL');
+    expect(app).not.toHaveProperty('ALTEROID_BIND');
+  });
+
+  it('ここまでに作ったものは壊さない（残りを手で足せる状態で終わる）', () => {
+    // 途中で投げ出すと Service だけ在ってデプロイされていない状態になり、かえって困る
+    expect(r.vars('id-app').ALTEROID_DATABASE_URL).toBe('${{Postgres.DATABASE_URL}}');
+    expect(r.vars('id-runner').RAILWAY_RUN_UID).toBe('0');
+    expect(r.calls.some((c) => c.includes('source connect') && c.includes('--service app'))).toBe(
+      true,
+    );
+  });
+});
+
+describe('.env に前の器の ALTEROID_PUBLIC_URL が残っているとき', () => {
+  // 毎回新しいプロジェクトを作るので、前回書き留めた生成ドメインは別の器のものである。
+  // そのまま信じると、死んだドメインを指す設定と Redirect URI ができる
+  let r: Run;
+  let envAfter = '';
+  beforeAll(() => {
+    r = run(
+      [
+        MINIMAL,
+        'ALTEROID_GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com',
+        'ALTEROID_GOOGLE_CLIENT_SECRET=goog-secret',
+        'ALTEROID_PUBLIC_URL=https://old-project.up.railway.app',
+        '',
+      ].join('\n'),
+      { onEnvFile: (p) => (envAfter = readFileSync(p, 'utf8')) },
+    );
+  });
+
+  it('前の生成ドメインは使わず、作り直した値を置く', () => {
+    expect(r.vars('id-app').ALTEROID_PUBLIC_URL).toBe('https://test-app.up.railway.app');
+    expect(r.calls.some((c) => c.startsWith('domain --service'))).toBe(true);
+  });
+
+  it('.env の古い値も置き直す（次の実行と compose に嘘を残さない）', () => {
+    expect(envAfter).toContain('ALTEROID_PUBLIC_URL=https://test-app.up.railway.app');
+    expect(envAfter).not.toContain('old-project.up.railway.app');
+  });
+
+  it('.env の他の値は壊さない', () => {
+    expect(envAfter).toContain('CLAUDE_CODE_OAUTH_TOKEN=sk-ant-test');
+    expect(envAfter).toContain('ALTEROID_RUNNER_TOKEN=deadbeef');
+    expect(envAfter).toContain('ALTEROID_GOOGLE_CLIENT_SECRET=goog-secret');
+  });
+});
+
+describe('.env に持ち込みのドメインがあるとき', () => {
+  it('新しい Service に繋がっていなければ非0で終わり、鍵を置かない', () => {
+    const r = run(
+      [
+        MINIMAL,
+        'ALTEROID_GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com',
+        'ALTEROID_GOOGLE_CLIENT_SECRET=goog-secret',
+        'ALTEROID_PUBLIC_URL=https://alteroid.example',
+        '',
+      ].join('\n'),
+      { allowFailure: true },
+    );
+    expect(r.exitCode).not.toBe(0);
+    expect(r.vars('id-app')).not.toHaveProperty('ALTEROID_GOOGLE_CLIENT_ID');
+    expect(r.vars('id-app')).not.toHaveProperty('ALTEROID_BIND');
+    // 持ち込みのドメインを勝手に作らない（DNS を向けるのは人間の作業）
+    expect(r.calls.some((c) => c.startsWith('domain alteroid.example'))).toBe(false);
+  });
+
+  it('繋がっていればそれを使う（生成し直さない）', () => {
+    const r = run(
+      [
+        MINIMAL,
+        'ALTEROID_GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com',
+        'ALTEROID_GOOGLE_CLIENT_SECRET=goog-secret',
+        'ALTEROID_PUBLIC_URL=https://alteroid.example',
+        '',
+      ].join('\n'),
+      { domainList: JSON.stringify([{ domain: 'alteroid.example' }]) },
+    );
+    expect(r.exitCode).toBe(0);
+    expect(r.vars('id-app').ALTEROID_PUBLIC_URL).toBe('https://alteroid.example');
+    expect(r.vars('id-app').ALTEROID_BIND).toBe('::');
+    expect(r.calls.some((c) => c.startsWith('domain --service'))).toBe(false);
   });
 });

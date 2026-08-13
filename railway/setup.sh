@@ -241,6 +241,23 @@ persist_env() { # <KEY> <値>
   dim "$key を $(basename "$ENV_FILE") に書き留めた"
 }
 
+# `.env` の値を**置き換える**（`persist_env` は在るものに手を出さない）。
+# 前の器の生成ドメインのように、古いと分かっている値を残さないために使う
+replace_env() { # <KEY> <値>
+  local key="$1" value="$2" tmp
+  if [ ! -f "$ENV_FILE" ] ||
+    ! grep -qE "^[[:space:]]*(export[[:space:]]+)?${key}=" "$ENV_FILE" 2>/dev/null; then
+    persist_env "$key" "$value"
+    return 0
+  fi
+  tmp="$(tmp_file)"
+  grep -vE "^[[:space:]]*(export[[:space:]]+)?${key}=" "$ENV_FILE" >"$tmp" || true
+  printf '%s=%s\n' "$key" "$value" >>"$tmp"
+  # `mv` ではなく中身を流し込む（一時ファイルの 0600 を `.env` に持ち込まない）
+  cat "$tmp" >"$ENV_FILE"
+  dim "$key を $(basename "$ENV_FILE") で置き直した"
+}
+
 # --- railway CLI の薄い包み --------------------------------------------------
 
 # 名前から Service id を引く。**部分一致で拾わない**（`app` と `app-2` を混同しない）
@@ -628,20 +645,59 @@ ok "$RUNNER_SERVICE → $RUNNER_CONFIG"
 
 # --- 6. ドメイン（Google ログインを有効にしたときだけ）----------------------
 
+# **頼まれたものと違うものを作ったなら、そう名乗る。** デプロイの失敗とは別に数える
+# （器は上がっているので `deploy_failed` では言い表せない）
+setup_failed=0
+
+# Railway が生成したドメインか（人間が持ち込んだドメインと扱いが違う）
+is_railway_host() {
+  case "$1" in
+    *.railway.app) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 PUBLIC_URL=''
 if [ "$EXPOSE_PUBLIC" = 1 ]; then
-  step "ドメインを生成する（${APP_SERVICE}）"
-  PUBLIC_URL="$(env_file_get ALTEROID_PUBLIC_URL)"
-  if [ -z "$PUBLIC_URL" ]; then
+  step "ドメインを用意する（${APP_SERVICE}）"
+
+  # **`.env` の値をそのまま信じない。** このスクリプトは毎回新しいプロジェクトを作るので、
+  # 前回の実行で書き留めた生成ドメインは**別の器のもの**である。信じて置くと、
+  # 死んだドメインを指す `ALTEROID_PUBLIC_URL` と、そこへ向いた Redirect URI ができる
+  # （外から叩けないのに設定は完了しているように見える）
+  wanted="$(env_file_get ALTEROID_PUBLIC_URL)"
+  wanted_host="${wanted#http://}"
+  wanted_host="${wanted_host#https://}"
+  wanted_host="${wanted_host%%/*}"
+
+  if [ -n "$wanted_host" ] && ! is_railway_host "$wanted_host"; then
+    # 人間が持ち込んだドメイン。**新しい器に繋がっているかは別の話**なので確かめる。
+    # 繋ぐのとDNSを向けるのは人間の作業なので、ここでは代行せず、足りないことを言う
+    if railway domain list --service "$APP_SERVICE" --json 2>/dev/null | grep -qF "$wanted_host"; then
+      PUBLIC_URL="https://$wanted_host"
+    else
+      setup_failed=1
+      warn "$wanted_host は新しい ${APP_SERVICE} に繋がっていないので、外から叩ける口は作っていない"
+      warn "繋ぐ: railway domain $wanted_host --port $DAEMON_PORT --service ${APP_SERVICE}（DNS も向ける）"
+    fi
+  else
+    if [ -n "$wanted_host" ]; then
+      dim "$(basename "$ENV_FILE") の $wanted_host は前の器のものなので作り直す"
+    fi
     domain_json="$(railway domain --service "$APP_SERVICE" --port "$DAEMON_PORT" --json 2>/dev/null || true)"
     domain="$(json_get "$domain_json" \
       'd.domain || (d.domains && d.domains[0] && (d.domains[0].domain || d.domains[0])) || ""')"
     if [ -n "$domain" ]; then
       PUBLIC_URL="https://${domain#https://}"
-      persist_env ALTEROID_PUBLIC_URL "$PUBLIC_URL"
+      replace_env ALTEROID_PUBLIC_URL "$PUBLIC_URL"
     else
-      warn 'ドメインを生成できなかった。ダッシュボード → Settings → Networking で生成し、'
-      warn "app に ALTEROID_PUBLIC_URL を置き直すこと（それまで認証は有効にならない）"
+      # ここで Google の鍵と `ALTEROID_BIND` を置かないのは正しい（境界の無い口を
+      # 外に出さない）。**正しいがゆえに、頼まれた構成とは別物になる** —
+      # 「外から叩く」を選んだのに 127.0.0.1・認証なしで上がる。黙ると、人間は
+      # 叩けない理由を Google 側の設定に探しに行く
+      setup_failed=1
+      warn 'ドメインを生成できなかったので、外から叩ける口は作っていない'
+      warn '（境界の無い口を外に出さないため、Google の鍵も待ち受けも置いていない）'
     fi
   fi
   [ -n "$PUBLIC_URL" ] && ok "$PUBLIC_URL"
@@ -750,7 +806,7 @@ fi
 
 # --- 9. これから -------------------------------------------------------------
 
-if [ "$deploy_failed" = 1 ]; then
+if [ "$deploy_failed" = 1 ] || [ "$setup_failed" = 1 ]; then
   step '途中まで作った'
 else
   step 'できた'
@@ -761,6 +817,17 @@ if [ "$deploy_failed" = 1 ]; then
   info "  railway logs --service $RUNNER_SERVICE"
   info "  railway logs --service $APP_SERVICE"
   info '症状から引く表は railway/README.md にある'
+fi
+
+if [ "$setup_failed" = 1 ]; then
+  warn '「外から HTTP API を叩く」を選んだが、その構成にはなっていない'
+  info '  待ち受けは 127.0.0.1 のままで、Google ログインは有効になっていない'
+  info '  残りを手でやる（ドメインを作ってから鍵を置く。順番を逆にしない）:'
+  info "    railway domain --service $APP_SERVICE --port $DAEMON_PORT"
+  info "    railway variable set ALTEROID_PUBLIC_URL=https://<生成されたドメイン> --service $APP_SERVICE"
+  info "    railway variable set ALTEROID_BIND=:: ALTEROID_PORT=$DAEMON_PORT --service $APP_SERVICE"
+  info "    railway variable set ALTEROID_GOOGLE_CLIENT_ID=... ALTEROID_GOOGLE_CLIENT_SECRET=... --service $APP_SERVICE"
+  info '  Redirect URI は <ドメイン>/auth/google/callback の1本'
 fi
 
 cat >&2 <<EOS
@@ -805,6 +872,11 @@ fi
 
 printf '\n' >&2
 
-# **上がっていないなら、そう名乗る。** 器と変数だけ作って「できた」と 0 を返すと、
-# 呼んだ側（CI や別のスクリプト）はできたと読む
-exit "$deploy_failed"
+# **上がっていない / 頼まれたものと違うなら、そう名乗る。** 器と変数だけ作って
+# 「できた」と 0 を返すと、呼んだ側（CI や別のスクリプト）はできたと読む。
+# **境界を作れなかったことも 0 で隠さない** — 隠すと、外から叩けない理由を
+# 人間が Google 側の設定に探しに行く（実際に一番時間を食う探し方である）
+if [ "$deploy_failed" = 1 ] || [ "$setup_failed" = 1 ]; then
+  exit 1
+fi
+exit 0
