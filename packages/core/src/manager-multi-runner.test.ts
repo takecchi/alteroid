@@ -251,6 +251,14 @@ function rig(
       if (dead) return null;
       return inner.transcript(managerId);
     },
+    async credentials() {
+      if (dead) throw gone();
+      return inner.credentials();
+    },
+    async setCredentials(credentials) {
+      if (dead) throw gone();
+      return inner.setCredentials(credentials);
+    },
     async close() {
       return inner.close();
     },

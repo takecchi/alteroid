@@ -44,6 +44,12 @@ function fakeClone(stores: Stores) {
     async restore() {
       return [];
     },
+    async rebalance() {
+      return [];
+    },
+    async move(managerId: string) {
+      return { moved: null, detail: `${managerId} は居ない` };
+    },
     async stop() {},
   };
 

@@ -183,6 +183,13 @@ function fakeRunners(): RunnerRegistry {
     async transcript() {
       return null;
     },
+    /** 指紋だけを出す（値は器も API も返さない）。 */
+    async credentials() {
+      return [{ name: 'GH_TOKEN', sha256: '0123456789ab', updatedAt: '2026-08-12T00:00:00.000Z' }];
+    },
+    async setCredentials() {
+      return [{ name: 'GH_TOKEN', sha256: '0123456789ab', updatedAt: '2026-08-12T00:00:00.000Z' }];
+    },
     async close() {},
   } as RunnerClient;
   return createRunnerRegistry([client]);

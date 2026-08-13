@@ -70,6 +70,13 @@ function fakeRunner(runnerId: string, capacity: Partial<RunnerCapacity> = {}): F
     async transcript() {
       return null;
     },
+    /** 鍵は持たない器（指紋も空）。名簿と配置の検証には要らない。 */
+    async credentials() {
+      return [];
+    },
+    async setCredentials() {
+      return [];
+    },
     async close() {},
   };
   return runner;
