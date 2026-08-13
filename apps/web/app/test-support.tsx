@@ -53,17 +53,45 @@ export function json(body: unknown, status = 200): Response {
  * 揃える等）を再現するため。1フレームずつ間を空けないと、React が1回の描画で
  * まとめてしまい、途中で作り直しが起きるかどうかを試験できない。
  */
-export function sse(frames: { event: string; data: unknown }[], delayMs = 5): Response {
+export function sse(
+  frames: { event: string; data: unknown }[],
+  options: {
+    delayMs?: number;
+    /**
+     * 流し終えても閉じない。**まだ考えているクローン**を再現するために要る
+     * （人間が受信をやめる場面は、終わっていないストリームでしか試せない）。
+     */
+    keepOpen?: boolean;
+    /**
+     * 中断の合図。**本物の `fetch` と同じように、中断されたら本文を打ち切る。**
+     * 渡さないと、受信をやめても読み手が待ち続け、実際とは違う筋書きになる。
+     */
+    signal?: AbortSignal | null;
+  } = {},
+): Response {
+  const { delayMs = 5, keepOpen = false, signal } = options;
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
+      let aborted = signal?.aborted === true;
+      const stop = () => {
+        aborted = true;
+        try {
+          controller.error(new DOMException('The operation was aborted.', 'AbortError'));
+        } catch {
+          // 既に閉じている
+        }
+      };
+      signal?.addEventListener('abort', stop, { once: true });
+
       for (const frame of frames) {
         await new Promise((resolve) => setTimeout(resolve, delayMs));
+        if (aborted) return;
         controller.enqueue(
           encoder.encode(`event: ${frame.event}\ndata: ${JSON.stringify(frame.data)}\n\n`),
         );
       }
-      controller.close();
+      if (!keepOpen && !aborted) controller.close();
     },
   });
   return new Response(stream, {

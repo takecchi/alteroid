@@ -122,6 +122,13 @@ export function ChatPane({ routeId }: { routeId: string | undefined }) {
   const streamRef = useRef<{ controller: AbortController; id: string | undefined } | undefined>(
     undefined,
   );
+  /**
+   * いま見えている会話を、受信の途中からも読めるようにしたもの。
+   *
+   * ストリームの後片付けは「**この結果を今の画面へ書いてよいか**」で決まるが、
+   * 判断する時点は非同期の奥なので、閉じ込めた `shownId` は古くなっている。
+   */
+  const shownIdRef = useRef(shownId);
 
   /**
    * 人間が別の会話を選んだときだけ状態を捨てる。
@@ -174,6 +181,7 @@ export function ChatPane({ routeId }: { routeId: string | undefined }) {
    * 画面に出ないまま会話が終わったように見える）。
    */
   useEffect(() => {
+    shownIdRef.current = shownId;
     const stream = streamRef.current;
     if (stream !== undefined && stream.id !== shownId) stream.controller.abort();
   }, [shownId]);
@@ -197,13 +205,25 @@ export function ChatPane({ routeId }: { routeId: string | undefined }) {
         { key: `h-${previous.length}-${text.slice(0, 8)}`, role: 'human', text },
       ]);
 
-      // 止めた後に届いた分を書き込まない（会話を切り替えた先へ前の続きが混ざる）。
-      const stale = () => controller.signal.aborted;
+      /**
+       * このストリームの結果を、いま見えている画面へ書いてよいか。
+       *
+       * **「止まったか」と混ぜてはいけない。** 混ぜると、人間が受信をやめたときに
+       * 進行中の合図（考えている… / 実行中…）を片付ける処理まで飛ばしてしまい、
+       * 入力欄は戻るのに本文にだけ合図が residue として残り続ける。
+       *
+       * - `owns()` — まだこの会話を見ている（別の会話へ移っていない）
+       * - `stopped()` — 人間が受信をやめた
+       */
+      const owns = () => stream.id === shownIdRef.current;
+      const stopped = () => controller.signal.aborted;
+      /** 新しい中身を足してよいのは、見ていて、かつ止めていないときだけ。 */
+      const writable = () => owns() && !stopped();
 
       // クローンの応答は細切れで届く。1行に継ぎ足していく。
       let replyKey: string | undefined;
       const append = (chunk: string) => {
-        if (stale()) return;
+        if (!writable()) return;
         setLines((previous) => {
           const index = previous.findIndex((line) => line.key === replyKey);
           if (index === -1) return previous;
@@ -216,7 +236,7 @@ export function ChatPane({ routeId }: { routeId: string | undefined }) {
       };
 
       const setTransient = (text: string) => {
-        if (stale()) return;
+        if (!writable()) return;
         setLines((previous) => {
           const withoutTransient = previous.filter((line) => line.transient !== true);
           return [
@@ -237,6 +257,9 @@ export function ChatPane({ routeId }: { routeId: string | undefined }) {
               // state を動かす。逆にすると、上の effect がこのストリームを
               // 「前の会話のもの」と見なして止めてしまう。
               stream.id = message.data.conversationId;
+              // ref も同時に進める。effect が回るのは描き直しの後なので、
+              // それを待つと、その隙間に届いた分が `owns()` に弾かれる。
+              shownIdRef.current = stream.id;
               setShownId(stream.id);
               setStartedHere(true);
               // URL は後から追いつかせるだけ。作り直しは起きない（key を付けていない）。
@@ -285,14 +308,18 @@ export function ChatPane({ routeId }: { routeId: string | undefined }) {
       } catch (caught) {
         if (!controller.signal.aborted) setFailure(caught);
       } finally {
-        // 進行中の合図は、まだこの会話を見ているときだけ畳む（切り替えた先の
-        // 内容を触らない）。**`sending` は必ず戻す** — これは会話ではなく
-        // この入力欄の状態なので、戻し忘れると「受信中」のまま二度と打てなくなる。
-        if (!stale()) {
+        // 進行中の合図は、**まだこの会話を見ているなら必ず**畳む。人間が止めた
+        // 場合も畳む対象である（止めた瞬間に「考えている…」で固まらせない）。
+        // 見ていない＝別の会話へ移った場合だけ、向こうの内容を触らない。
+        if (owns()) {
           setLines((previous) => previous.filter((line) => line.transient !== true));
         }
-        setSending(false);
-        if (streamRef.current === stream) streamRef.current = undefined;
+        // 入力欄の状態は会話ではなくこの画面のもの。ただし、切り替えた先で既に
+        // 別の送信が始まっているなら、そちらの「受信中」を消さない。
+        if (streamRef.current === stream) {
+          setSending(false);
+          streamRef.current = undefined;
+        }
       }
     },
     [api, shownId, navigate, sending],

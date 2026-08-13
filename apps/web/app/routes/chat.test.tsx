@@ -79,8 +79,8 @@ async function send(text: string) {
 
 describe('新しい会話', () => {
   it('open で URL が変わっても、受信中のストリームが切れない', async () => {
-    const stub = stubFetch((url) => {
-      if (url.endsWith('/chat')) return sse(STREAM);
+    const stub = stubFetch((url, init) => {
+      if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     });
@@ -104,8 +104,8 @@ describe('新しい会話', () => {
   });
 
   it('受信が終わると入力へ戻る（送信中のままにしない）', async () => {
-    stubFetch((url) => {
-      if (url.endsWith('/chat')) return sse(STREAM);
+    stubFetch((url, init) => {
+      if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     });
@@ -121,10 +121,80 @@ describe('新しい会話', () => {
   });
 });
 
+describe('受信をやめる', () => {
+  /**
+   * 人間が購読だけ止めたとき。
+   *
+   * クローンのターンは止まらないので「やめた」のは受信だけだが、**画面には
+   * 止まったことが見えていなければならない**。進行中の合図が残ると、動いていない
+   * ものを動いているように見せ続けることになる。
+   */
+  it('進行中の合図が消え、それまでの本文は残る', async () => {
+    stubFetch((url, init) => {
+      if (url.endsWith('/chat')) {
+        return sse(
+          [
+            { event: 'open', data: { conversationId: CONVERSATION_ID } },
+            { event: 'text', data: { type: 'text', text: 'ここまでは届いた' } },
+            { event: 'thinking', data: { type: 'thinking' } },
+          ],
+          // まだ考えている（`done` を送らない）
+          { keepOpen: true, signal: init?.signal },
+        );
+      }
+      if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
+      return undefined;
+    });
+
+    renderChat();
+    await send('やあ');
+
+    expect(await screen.findByText('考えている…')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /受信をやめる/ }));
+
+    // ① 進行中の合図が消える
+    await waitFor(() => {
+      expect(screen.queryByText('考えている…')).toBeNull();
+    });
+    // ② 送信できる状態へ戻る
+    expect(screen.getByRole('button', { name: /送る/ })).toBeTruthy();
+    // ③ それまでに届いた本文は残る
+    expect(screen.getByText('ここまでは届いた')).toBeTruthy();
+    expect(screen.getByText('やあ')).toBeTruthy();
+  });
+
+  it('ツール実行中の表示でも同じ', async () => {
+    stubFetch((url, init) => {
+      if (url.endsWith('/chat')) {
+        return sse(
+          [
+            { event: 'open', data: { conversationId: CONVERSATION_ID } },
+            { event: 'tool', data: { type: 'tool', tool: 'manager_start' } },
+          ],
+          { keepOpen: true, signal: init?.signal },
+        );
+      }
+      if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
+      return undefined;
+    });
+
+    renderChat();
+    await send('やあ');
+
+    expect(await screen.findByText(/manager_start を実行中/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /受信をやめる/ }));
+
+    await waitFor(() => {
+      expect(screen.queryByText(/manager_start を実行中/)).toBeNull();
+    });
+    expect(screen.getByRole('button', { name: /送る/ })).toBeTruthy();
+  });
+});
+
 describe('会話の切り替え', () => {
   it('人間が別の会話を選んだら、前の会話の内容を捨てる', async () => {
-    stubFetch((url) => {
-      if (url.endsWith('/chat')) return sse(STREAM);
+    stubFetch((url, init) => {
+      if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
       if (url.includes('/conversations/other')) {
         return json({
           conversationId: 'other',
