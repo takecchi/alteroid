@@ -114,6 +114,9 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
         // **入口で形を決める。** 保存・配布・指紋が同じ文字列を見ないと、置いた
         // 指紋と読んだ指紋が食い違い、届いているかを見る道具が嘘をつく。
         const normalized = normalizeProfileScript(script);
+        // 途中で落ちたときに戻す先。**この列の中でしか更新は起きない**ので、
+        // ここで読んだものが「直前の版」であることが保証されている。
+        const previous = await stores.profile.read();
 
         /**
          * **評価 → 正本へ保存 → 反映、の順に分ける。**
@@ -124,8 +127,15 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
          * という一番たちの悪い分裂である（しかも再起動するとストアの古い値へ戻る）。
          *
          * 正本は記憶ストアで、クローンの器はそこから導かれるもの、という向きに
-         * 揃えておけば、途中で落ちても**古い版で揃っている**か、**次の起動で
-         * 追いつく**かのどちらかになる。分裂したまま残らない。
+         * 揃える。そのうえで、**どの段で落ちても最後には旧版で揃える**:
+         *
+         * - 評価で落ちた: 保存も反映もしない
+         * - 保存で落ちた: 用意したものを捨てる
+         * - 反映で落ちた: 正本を書き戻す（戻せなければ、その事実を理由つきで投げる）
+         *
+         * 「失敗を返したのに、どこか1層だけ新版」を残さないことが要点である。
+         * 残すと、次に runner が名乗った時点で `syncRunner` がそれを配り、
+         * 分裂が黙って広がる。
          */
         const prepared: PreparedProfile | null =
           applier === undefined
@@ -166,7 +176,40 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
         }
 
         // ここから先は「保存できた」が確定している。器へ移す。
-        await prepared?.commit();
+        try {
+          await prepared?.commit();
+        } catch (error) {
+          /**
+           * **正本を書き戻す。**
+           *
+           * ここで戻さないと、失敗を返したのに正本だけが新版という状態が残る。
+           * しかもそれは黙って広がる — 次に runner が名乗れば `syncRunner` が
+           * 正本を読んで新版を配るので、今度は「クローンだけ旧版」という別の
+           * 分裂になる。デーモンを起こし直しても、器の不調が続いていれば収束しない。
+           *
+           * **戻す先は確定している。** 更新はこの列の中でしか起きないので、
+           * 読んだときの本文が「直前の版」であることが保証されている。
+           */
+          await prepared?.discard();
+          try {
+            await stores.profile.write(previous?.script ?? '');
+          } catch (rollbackError) {
+            // **黙って握り潰さない。** ここまで来ると正本＝新版・クローン＝旧版が
+            // 残るので、人間が手で直せるように両方の理由を出す。
+            // `cause` は直近で捕まえたもの（書き戻しの失敗）。反映の失敗は本文に
+            // 残してあるので、どちらも失われない。
+            throw new Error(
+              'プロファイルをクローンへ反映できず、正本を書き戻すこともできなかった' +
+                `（正本だけ新版のまま残っている）: 反映=${String(error)} / 書き戻し=${String(rollbackError)}`,
+              { cause: rollbackError },
+            );
+          }
+          throw new Error(
+            `プロファイルをクローンへ反映できなかったので、正本も元へ戻した: ${String(error)}`,
+            { cause: error },
+          );
+        }
+
         const results = await pushAll(normalized);
 
         return {

@@ -283,6 +283,67 @@ describe('同時に更新されたとき', () => {
     expect(runner.received).toEqual(['export WHICH=OLD\n']);
   });
 
+  it('クローンへ反映できなかったら、正本も元へ戻す', async () => {
+    // **失敗を返したのに、どこか1層だけ新版、を残さない。** 残すと次に runner が
+    // 名乗った時点で `syncRunner` がそれを配り、今度は「クローンだけ旧版」という
+    // 別の分裂になる。器の不調が続いていれば、起こし直しても収束しない。
+    const stores = createMemoryStores();
+    const runner = fakeRunner();
+    const path = join(dir, 'profile.sh');
+    const vessel = createProfileVessel({ path });
+    const real = createProfileApplier({ vessel, baseEnv: () => ({}) });
+
+    // 反映（器への rename）だけが落ちる。評価も保存も通る本文である。
+    let breakCommit = false;
+    const applier: ProfileApplier = {
+      ...real,
+      async prepare(script: string) {
+        const prepared = await real.prepare(script);
+        if (!breakCommit) return prepared;
+        return {
+          ...prepared,
+          commit: async () => {
+            throw new Error('器へ移せなかった');
+          },
+        };
+      },
+    };
+    const service = createProfileService({ stores, applier, runners: registryOf([runner]) });
+
+    await service.apply('export WHICH=OLD');
+    const before = await stores.profile.read();
+
+    breakCommit = true;
+    // **文言ではなく状態を先に見る。** 文言を先に確かめると、補償を外したときに
+    // 「別のエラーで落ちた」としか分からず、何が壊れているのかが出てこない。
+    const failure = await service.apply('export WHICH=NEW').then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(failure).not.toBeNull();
+
+    // ① 正本は旧版に戻っている（更新日時は動くが、本文は直前の版）
+    expect((await stores.profile.read())?.script).toBe(before?.script);
+    // ② クローンの器も旧版のまま
+    expect(readFileSync(path, 'utf8')).toContain('export WHICH=OLD');
+    expect(real.env().WHICH).toBe('OLD');
+    // ③ runner にも新版を配っていない
+    expect(runner.received).toEqual(['export WHICH=OLD\n']);
+
+    // ④ **確定していない版を、後から降ろし直しで配らない。**
+    expect(await service.syncRunner(runner)).toBeNull();
+    expect(runner.received).toEqual(['export WHICH=OLD\n']);
+
+    // ⑥ 何が起きたかが理由として出ている（人間が手で直せるように）
+    expect(String(failure)).toContain('正本も元へ戻した');
+
+    // ⑤ 列は止まっていない
+    breakCommit = false;
+    const next = await service.apply('export WHICH=NEXT');
+    expect(next.stored).toBe(true);
+    expect(runner.received.at(-1)).toBe('export WHICH=NEXT\n');
+  });
+
   it('読めない本文で列が止まらない（次の更新は通る）', async () => {
     const stores = createMemoryStores();
     const service = createProfileService({
