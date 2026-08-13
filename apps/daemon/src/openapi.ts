@@ -357,6 +357,12 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     abort() {
       throw new Error('spec 生成専用のスタブ: マネージャーは止めない');
     },
+    rebalance() {
+      throw new Error('spec 生成専用のスタブ: 委譲は置き直さない');
+    },
+    move() {
+      throw new Error('spec 生成専用のスタブ: 委譲は移さない');
+    },
     list() {
       throw new Error('spec 生成専用のスタブ: マネージャー一覧は持たない');
     },

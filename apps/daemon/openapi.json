@@ -2445,6 +2445,215 @@
         ]
       }
     },
+    "/managers/{id}/move": {
+      "post": {
+        "operationId": "postManagersByIdMove",
+        "tags": ["managers"],
+        "summary": "取り残された委譲を別の器へ移す",
+        "description": "器が落ちただけなら自動で移る。ここを叩くのは、自動の移送が「元の器が止まったと言い切れない」で止まったときである。`force` はその確認の代わりなので、確かめた側だけが立てる（確かめずに立てると同じ仕事が2か所で走る）。",
+        "responses": {
+          "200": {
+            "description": "移送の結果。移せなければ `moved` は null で、理由が `detail` に入る。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "moved": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "managerId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": ["running", "waiting_human", "done", "failed"]
+                            },
+                            "live": {
+                              "type": "boolean"
+                            },
+                            "cwd": {
+                              "type": "string"
+                            },
+                            "request": {
+                              "type": "string"
+                            },
+                            "startedAt": {
+                              "type": "string"
+                            },
+                            "updatedAt": {
+                              "type": "string"
+                            },
+                            "sessionId": {
+                              "type": "string"
+                            },
+                            "lastReport": {
+                              "type": "string"
+                            },
+                            "runnerId": {
+                              "type": "string"
+                            },
+                            "workspace": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "const": "runner-volume"
+                                    },
+                                    "runnerId": {
+                                      "type": "string"
+                                    },
+                                    "path": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["kind", "runnerId", "path"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "const": "shared-volume"
+                                    },
+                                    "path": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["kind", "path"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "const": "git"
+                                    },
+                                    "repository": {
+                                      "type": "string"
+                                    },
+                                    "ref": {
+                                      "type": "string"
+                                    },
+                                    "patchId": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["kind", "repository", "ref"]
+                                }
+                              ]
+                            },
+                            "waiting": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "requestId": {
+                                    "type": "string"
+                                  },
+                                  "summary": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["requestId", "summary"]
+                              }
+                            }
+                          },
+                          "required": [
+                            "managerId",
+                            "status",
+                            "live",
+                            "cwd",
+                            "request",
+                            "startedAt",
+                            "updatedAt",
+                            "waiting"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "detail": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["moved", "detail"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が JSON として不正。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {},
+                    "error": {
+                      "type": "array",
+                      "items": {}
+                    },
+                    "success": {
+                      "type": "boolean",
+                      "const": false
+                    }
+                  },
+                  "required": ["data", "error", "success"]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "content-type が application/json ではない（ブラウザの単純リクエスト対策 — 状態を変える POST は必ずここを通す）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "force": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      }
+    },
     "/managers/{id}/transcript": {
       "get": {
         "operationId": "getManagersByIdTranscript",
@@ -2598,11 +2807,11 @@
       "get": {
         "operationId": "getRunners",
         "tags": ["runners"],
-        "summary": "委譲先 runner の一覧と、配られている鍵の指紋",
-        "description": "指紋を出すのは、人間が置いた鍵とマネージャーが握っている鍵が同じかどうかを確かめる手段が他に無いからである。**値は返らない。**",
+        "summary": "委譲先 runner の名簿（生存・資源）と、配られている鍵の指紋",
+        "description": "何台居て、どれが生きていて、どれだけ余裕があるか。`capacity` は実測であって定員ではない。指紋を出すのは、人間が置いた鍵とマネージャーが握っている鍵が同じかどうかを確かめる手段が他に無いからである。**値は返らない。**",
         "responses": {
           "200": {
-            "description": "runner の一覧。",
+            "description": "runner の名簿。",
             "content": {
               "application/json": {
                 "schema": {
@@ -2617,6 +2826,123 @@
                             "type": "string"
                           },
                           "workspacePath": {
+                            "type": "string"
+                          },
+                          "alive": {
+                            "type": "boolean"
+                          },
+                          "lastSeenAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "misses": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "capacity": {
+                            "type": "object",
+                            "properties": {
+                              "cpuCount": {
+                                "type": "number",
+                                "exclusiveMinimum": 0
+                              },
+                              "load1m": {
+                                "type": "number",
+                                "minimum": 0
+                              },
+                              "totalMemoryBytes": {
+                                "type": "number",
+                                "minimum": 0
+                              },
+                              "freeMemoryBytes": {
+                                "type": "number",
+                                "minimum": 0
+                              },
+                              "activeManagers": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "uptimeSeconds": {
+                                "type": "number",
+                                "minimum": 0
+                              }
+                            },
+                            "required": [
+                              "cpuCount",
+                              "load1m",
+                              "totalMemoryBytes",
+                              "freeMemoryBytes",
+                              "activeManagers",
+                              "uptimeSeconds"
+                            ]
+                          },
+                          "lease": {
+                            "type": "object",
+                            "properties": {
+                              "ttlMs": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "graceMs": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "incarnation": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "required": ["ttlMs"]
+                          },
+                          "incarnation": {
+                            "type": "string"
+                          },
+                          "incarnations": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "incarnation": {
+                                  "type": "string"
+                                },
+                                "lastSeenAt": {
+                                  "type": "string"
+                                },
+                                "lease": {
+                                  "type": "object",
+                                  "properties": {
+                                    "ttlMs": {
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "graceMs": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "incarnation": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "required": ["ttlMs"]
+                                }
+                              },
+                              "required": ["incarnation", "lastSeenAt"]
+                            }
+                          },
+                          "lastError": {
                             "type": "string"
                           },
                           "credentials": {
@@ -2638,7 +2964,14 @@
                             }
                           }
                         },
-                        "required": ["runnerId", "workspacePath", "credentials"]
+                        "required": [
+                          "runnerId",
+                          "workspacePath",
+                          "alive",
+                          "lastSeenAt",
+                          "misses",
+                          "credentials"
+                        ]
                       }
                     }
                   },
