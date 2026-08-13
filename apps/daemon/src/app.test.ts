@@ -491,6 +491,50 @@ describe('HTTP API', () => {
     expect(schedule.ran).toEqual(['daily_report', 'daily_report', 'daily_report']);
   });
 
+  /**
+   * 本文検査つきの経路（`validator('json', ...)`）も、同じ単純リクエストで叩ける
+   * 位置にある。こちらは `deliberateClient` を通っていないので落ち方が違う —
+   * hono の json validator は content-type が application/json でなければ本文を
+   * **読まない**ので、空の入力がスキーマ検査に落ちて 400 になる（415 ではない）。
+   *
+   * 落ち方が違っても守っているものは同じで、**ハンドラまで届かない**ことである。
+   * #22 で検査の実装を `@hono/zod-validator` から hono-openapi の `validator` へ
+   * 差し替えたので、その一線をここで固定しておく（次の差し替えで薄まったら
+   * 気づけるように）。
+   */
+  it('本文検査つきの経路も、ブラウザの単純リクエストでは叩けない', async () => {
+    const cases = [
+      // 他人が判断材料を書き込める
+      { path: '/events', body: '{"source":"github","payload":{"action":"注入"}}' },
+      // 他人がクローンの代わりに承認へ答えられる
+      { path: '/approvals/answer', body: '{"answers":[{"id":"ap-1","answer":"よい"}]}' },
+      { path: '/approvals/ap-1/answer', body: '{"answer":"よい"}' },
+    ];
+
+    for (const { path, body } of cases) {
+      const response = await app.request(path, simpleRequest(body));
+      expect(response.status, path).toBe(400);
+
+      // safelist に見せかけた content-type でも同じ（MIME essence で判定される）
+      for (const contentType of [
+        'text/plain;application/json',
+        'application/x-www-form-urlencoded',
+        'multipart/form-data; boundary=application/json',
+      ]) {
+        const disguised = await app.request(path, {
+          method: 'POST',
+          headers: { 'content-type': contentType },
+          body,
+        });
+        expect(disguised.status, `${path} [${contentType}]`).toBe(400);
+      }
+    }
+
+    // どれもハンドラまで届いていない
+    expect(fake.posted).toEqual([]);
+    expect(fake.answered).toEqual([]);
+  });
+
   it('中身のない通知も受ける（source だけ）', async () => {
     const response = await app.request('/events', json({ source: 'cron' }));
     expect(response.status).toBe(200);

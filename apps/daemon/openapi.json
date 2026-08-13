@@ -294,7 +294,16 @@
         "operationId": "postChatByConversationIdEnd",
         "tags": ["chat"],
         "summary": "会話の終了（蒸留の契機）",
-        "description": "会話の終了 = 蒸留の契機。CLI が chat を抜けるときに叩く。本文は無い。",
+        "description": "会話の終了 = 蒸留の契機。CLI が chat を抜けるときに叩く。運ぶ情報は無い（`{}` を送る）。",
+        "requestBody": {
+          "required": true,
+          "description": "**中身は読まないので `{}` を送ればよい。** 本文そのものではなく `content-type: application/json` が要る（ブラウザの単純リクエストで蒸留ターンを起こされないため）。",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "蒸留を促した。",
@@ -1942,6 +1951,15 @@
         "tags": ["events"],
         "summary": "本文の形を選べない webhook 用の入口",
         "description": "他人が形を決めている webhook 用。本文をそのまま payload として運ぶので、送り元を改造できなくても届く（GitHub や CI からそのまま叩ける）。JSON として読めない本文は文字列のまま渡す。",
+        "requestBody": {
+          "required": true,
+          "description": "**本文まるごとが payload になる。** 送り元が形を決めているので中身は縛らない。JSON として読めない本文は文字列のまま渡す。`content-type: application/json` は必要（ブラウザの単純リクエストで判断材料を書き込まれないため）。サーバは空の本文も受けて空文字列にするが、**spec としては本文を必須にしてある** — 生成クライアントに content-type を必ず付けさせるため（運ぶものが無いなら `{}`）。",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "受信箱へ積んだ。",
@@ -2177,6 +2195,15 @@
         "tags": ["schedule"],
         "summary": "継続中の依頼を外す",
         "description": "済んだ依頼・もう要らない依頼をここで外す。既定の定期ジョブは仕込みではないのでここでは外せない（間隔と締め時刻はデーモンの設定である）。",
+        "requestBody": {
+          "required": true,
+          "description": "**中身は読まないので `{}` を送ればよい。** `DELETE` だが本文が必須なのは、門番（`deliberateClient`）が `content-type: application/json` を要求することをspec の機械可読部で表す手段がこれしか無いからである（`DELETE /managers/{id}` も本文を要求する）。",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "外した。",
@@ -2246,6 +2273,15 @@
         "tags": ["schedule"],
         "summary": "定期ジョブを今すぐ起こす",
         "description": "これは観測ではなく実行である。起こせばクローンのターンが走り、記憶に基づく委譲や外部への操作の判断まで動く。予定はずらさない（余分に1回起こす）。",
+        "requestBody": {
+          "required": true,
+          "description": "**中身は読まないので `{}` を送ればよい。** 本文そのものではなく `content-type: application/json` が要る（ブラウザの単純リクエストで自律ターンを起こされないため）。",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "起こした。",
@@ -3879,7 +3915,16 @@
         "operationId": "postAccessByAccountIdGrant",
         "tags": ["access"],
         "summary": "alteroid を使う許可を与える",
-        "description": "ログインしただけでは使えない。ここで初めて使えるようになる。本文は無い。\n\n**許可できるアカウントは高々1つ。** alteroid は単一の持ち主のものであり、マルチユーザー / チーム利用は非ゴールである（docs/PRD.md「スコープ外」）。既に別のアカウントが許可されていれば 409 を返す — 持ち主を移すなら先に取り消す。",
+        "description": "ログインしただけでは使えない。ここで初めて使えるようになる。運ぶ情報は無い（`{}` を送る）。\n\n**許可できるアカウントは高々1つ。** alteroid は単一の持ち主のものであり、マルチユーザー / チーム利用は非ゴールである（docs/PRD.md「スコープ外」）。既に別のアカウントが許可されていれば 409 を返す — 持ち主を移すなら先に取り消す。",
+        "requestBody": {
+          "required": true,
+          "description": "**中身は読まないので `{}` を送ればよい。** 本文そのものではなく `content-type: application/json` が要る（ブラウザの単純リクエストで持ち主を足されないため）。",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "許可した（既に許可済みでも 200）。",
@@ -4095,7 +4140,16 @@
         "operationId": "postAccessByAccountIdRevoke",
         "tags": ["access"],
         "summary": "alteroid を使う許可を取り消す",
-        "description": "発行済みトークンは消さない。**許可はリクエストごとに見ているので、これだけで即座に通らなくなる**（消し忘れたトークンが生き残らない）。本文は無い。",
+        "description": "発行済みトークンは消さない。**許可はリクエストごとに見ているので、これだけで即座に通らなくなる**（消し忘れたトークンが生き残らない）。運ぶ情報は無い（`{}` を送る）。",
+        "requestBody": {
+          "required": true,
+          "description": "**中身は読まないので `{}` を送ればよい。** 本文そのものではなく `content-type: application/json` が要る（ブラウザの単純リクエストで持ち主の許可を落とされないため）。",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "取り消した（既に未許可でも 200）。",
@@ -4295,7 +4349,16 @@
         "operationId": "postShutdown",
         "tags": ["system"],
         "summary": "デーモンを止める",
-        "description": "`daemon stop` の受け口。本文は無い。",
+        "description": "`daemon stop` の受け口。運ぶ情報は無い（`{}` を送る）。",
+        "requestBody": {
+          "required": true,
+          "description": "**中身は読まないので `{}` を送ればよい。** 本文そのものではなく `content-type: application/json` が要る（ブラウザの単純リクエストでデーモンを止められないため）。",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "停止を受け付けた（実際の停止は少し遅れる）。",
