@@ -246,24 +246,81 @@ describe('FsScheduleStore', () => {
     expect(plans[0]?.request).toBe('直した依頼');
   });
 
-  it('発火したことを記録できる。知らない kind では何も起きない', async () => {
+  it('発火を確定できる。返るのは更新前の姿（前回いつ動いたかが分かる）', async () => {
     await stores.schedules.put(plan);
-    await stores.schedules.markRun('issue-round', '2026-08-13T00:00:00.000Z');
-    await stores.schedules.markRun('しらない', '2026-08-13T00:00:00.000Z');
 
+    const claimed = await stores.schedules.claimRun(
+      'issue-round',
+      plan.updatedAt,
+      '2026-08-13T00:00:00.000Z',
+    );
+
+    expect(claimed?.request).toBe(plan.request);
+    expect(claimed?.lastRunAt).toBeUndefined();
     expect((await stores.schedules.get('issue-round'))?.lastRunAt).toBe('2026-08-13T00:00:00.000Z');
-    // updatedAt は「依頼が書き換えられた時刻」なので発火では動かない
+    // updatedAt は「依頼が書き換えられた時刻」＝版の識別子なので発火では動かない
     expect((await stores.schedules.get('issue-round'))?.updatedAt).toBe(plan.updatedAt);
-    expect(await stores.schedules.list()).toHaveLength(1);
   });
 
-  it('同時に書いても取りこぼさない（発火の記録と人間の書き換えは並行して来る）', async () => {
+  it('消された・書き換わった依頼は確定できない（古い本文で走らせない）', async () => {
+    // 知らない kind
+    expect(
+      await stores.schedules.claimRun('しらない', plan.updatedAt, '2026-08-13T00:00:00.000Z'),
+    ).toBeNull();
+
+    // 読んだ後に消された
+    await stores.schedules.put(plan);
+    await stores.schedules.remove('issue-round');
+    expect(
+      await stores.schedules.claimRun('issue-round', plan.updatedAt, '2026-08-13T00:00:00.000Z'),
+    ).toBeNull();
+
+    // 読んだ後に書き換えられた（版が違う）
+    await stores.schedules.put(plan);
+    await stores.schedules.put({
+      ...plan,
+      request: '人間が直した依頼',
+      updatedAt: '2026-08-12T10:00:00.000Z',
+    });
+    expect(
+      await stores.schedules.claimRun('issue-round', plan.updatedAt, '2026-08-13T00:00:00.000Z'),
+    ).toBeNull();
+    // 記録もされていない（新しい版に古い発火の跡を付けない）
+    expect((await stores.schedules.get('issue-round'))?.lastRunAt).toBeUndefined();
+  });
+
+  it('読んでから確定するまでに remove / put が割り込んでも、古い版では確定しない', async () => {
+    await stores.schedules.put(plan);
+
+    // 「読んだ直後に人間が消した」を、同じ排他区間へ同時に投げて作る
+    const [claimedAfterRemove] = await Promise.all([
+      stores.schedules.claimRun('issue-round', plan.updatedAt, '2026-08-13T00:00:00.000Z'),
+      stores.schedules.remove('issue-round'),
+    ]);
+    // どちらの順で直列化されても、「消えた後に確定した」ことにはならない
+    if (claimedAfterRemove !== null) {
+      expect(await stores.schedules.get('issue-round')).toBeNull();
+    }
+
+    // 「読んだ直後に人間が直した」も同様に、古い版では確定しない
+    await stores.schedules.put(plan);
+    const edited = { ...plan, request: '直した依頼', updatedAt: '2026-08-12T10:00:00.000Z' };
+    await Promise.all([
+      stores.schedules.put(edited),
+      stores.schedules.claimRun('issue-round', plan.updatedAt, '2026-08-13T00:00:00.000Z'),
+    ]);
+    const after = await stores.schedules.get('issue-round');
+    expect(after?.request).toBe('直した依頼');
+    expect(after?.lastRunAt).toBeUndefined();
+  });
+
+  it('同時に書いても取りこぼさない（人間の書き換えと発火の確定は並行して来る）', async () => {
     await stores.schedules.put(plan);
 
     await Promise.all([
       stores.schedules.put({ ...plan, kind: 'a', request: 'A の依頼' }),
       stores.schedules.put({ ...plan, kind: 'b', request: 'B の依頼' }),
-      stores.schedules.markRun('issue-round', '2026-08-13T00:00:00.000Z'),
+      stores.schedules.claimRun('issue-round', plan.updatedAt, '2026-08-13T00:00:00.000Z'),
       stores.schedules.remove('しらない'),
     ]);
 

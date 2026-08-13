@@ -96,6 +96,14 @@ const EXTERNAL_PAYLOAD_LIMIT = 8_000;
 const SCHEDULE_STORE_ATTEMPTS = 3;
 const SCHEDULE_STORE_RETRY_MS = 200;
 
+/**
+ * 版が入れ替わっていたときに読み直す回数。
+ *
+ * 人間が依頼を直した瞬間に発火が重なると1回ずれる。**古い本文で走らないことが最優先**
+ * なので、合わなければ諦めて次の発火に譲る（依頼は消えないし `lastRunAt` も進まない）。
+ */
+const SCHEDULE_CLAIM_ROUNDS = 3;
+
 export interface CloneOptions {
   stores: Stores;
   /** 主にテスト用。既定は SDK の `query`。 */
@@ -409,49 +417,23 @@ class Clone implements CloneHost {
           await this.#dailyReport(event.target ?? localDate(new Date(event.at)));
           return;
         }
-        // 依頼の本文は**いま**読む。イベントに載せて運ぶと、人間が依頼を書き換えても
-        // 発火時点の写しで走ることになる（真実はストア側にある）。
-        const found = await this.#scheduledRequestFor(event.kind);
+        // 依頼の本文は**いま**読み、読んだその版で発火を確定させる。イベントに
+        // 載せて運ぶと、人間が依頼を書き換えても発火時点の写しで走る（真実はストア側）。
+        const claimed = await this.#claimScheduledRun(event.kind, event.at);
 
-        // **読めなかったときはターンを起こさない。** 本文なしで「記憶に照らせ」と
-        // 言えば、対象も狙いも無い曖昧なターンを1回消費し、しかも `markRun` が
-        // 付かないので「動いた」ようにも見えない。器の瞬断で1周期ぶんの仕事が
-        // 消えるのは、時刻が来れば必ず届くという約束の側が負けている。
-        // 「消された（null）」と「読めなかった」は別物なので分けて扱う。
-        if (found.status === 'unreadable') {
+        // **動かさない方を選ぶ場面が3つある。** どれも「時刻が来れば必ず届く」の側を
+        // 1周期遅らせるだけで済むが、走らせてしまうと取り返せない。
+        if (claimed.status !== 'ok' && claimed.status !== 'missing') {
           await this.#journal({
             type: 'exchange',
             with: 'self',
             role: 'outbound',
-            text:
-              `定期の依頼 ${event.kind} を読めなかったので、この発火では動かない` +
-              `（本文なしで曖昧に動かすより、次の発火で読み直す）: ${found.error}`,
+            text: `定期の依頼 ${event.kind} は、この発火では動かない: ${claimed.reason}`,
           });
           return;
         }
 
-        const plan = found.plan;
-        // 記録は走らせる**前**に付ける。ターンが失敗しても「起きた」ことは残り、
-        // 次の発火で前回時刻が空のまま同じ仕事をまっさらから始めることがない。
-        //
-        // **記録できなければ動かない。** 動いてから記録できなかった場合、外の世界には
-        // 結果（PR・外部への操作）が残るのに `lastRunAt` は古いままなので、次の起動で
-        // 「落ちている間に過ぎた予定」と見えて同じ仕事をもう一度起こす。取り消せない
-        // 操作を二重にやる方が、1周期遅れるよりずっと高い。
-        if (plan !== null) {
-          const recorded = await this.#markScheduleRun(event.kind, event.at);
-          if (recorded !== null) {
-            await this.#journal({
-              type: 'exchange',
-              with: 'self',
-              role: 'outbound',
-              text:
-                `定期の依頼 ${event.kind} の「起きた」を記録できなかったので、この発火では動かない` +
-                `（動いてから記録できないと、次の起動で同じ仕事をもう一度起こす）: ${recorded}`,
-            });
-            return;
-          }
-        }
+        const plan = claimed.status === 'ok' ? claimed.plan : null;
         await this.#runInternal(
           buildTimerPrompt({
             kind: event.kind,
@@ -555,27 +537,102 @@ class Clone implements CloneHost {
   }
 
   /**
-   * 「この発火で起きた」を記録する。書けたら null、書けなければ理由を返す。
+   * 「この発火で起きた」をストア側で確定させる。書けたら確定した依頼、書けなければ
+   * 理由を返す（`null` は「同じ版がもう無い」＝消された・書き換わった）。
    *
    * 読み取りと同じ理由で、この発火の中で書き直す（器の一瞬の揺れで1周期ぶんの仕事を
    * 落とさない）。**それでも書けなければ動かない** — 動いた事実が外の世界にだけ残り、
    * `lastRunAt` が古いままだと、次の起動で「落ちている間に過ぎた予定」として同じ仕事を
    * もう一度起こす（取り消せない操作の二重実行は、1周期遅れるよりずっと高い）。
    */
-  async #markScheduleRun(kind: string, at: string): Promise<string | null> {
+  async #claimRun(
+    kind: string,
+    expectedUpdatedAt: string,
+    at: string,
+  ): Promise<
+    { status: 'ok'; plan: ScheduledRequest | null } | { status: 'failed'; error: string }
+  > {
     let last = '';
     for (let attempt = 0; attempt < SCHEDULE_STORE_ATTEMPTS; attempt += 1) {
       if (attempt > 0) {
         await new Promise((resolve) => setTimeout(resolve, SCHEDULE_STORE_RETRY_MS * attempt));
       }
       try {
-        await this.#stores.schedules.markRun(kind, at);
-        return null;
+        return {
+          status: 'ok',
+          plan: await this.#stores.schedules.claimRun(kind, expectedUpdatedAt, at),
+        };
       } catch (error) {
         last = String(error);
       }
     }
-    return last;
+    return { status: 'failed', error: last };
+  }
+
+  /**
+   * 発火した kind を「読んで、その版で確定させる」まで通す。
+   *
+   * **読んだ本文で走るなら、走ると決めた時点でその版が生きていることを確かめる。**
+   * 読みと記録が別操作だと、その隙間に人間が消した・直した依頼が古い本文で走る
+   * （消した依頼が外の世界へ手を出したら取り返せない）。確定はストア側の1操作
+   * （`claimRun`）に閉じてあり、ここはその周りの再試行と、版が入れ替わっていたときの
+   * 読み直しだけを持つ。
+   *
+   * 版が入れ替わっていたら**新しい版を読み直して**そちらで確定させる。人間が直した
+   * 直後なら、その新しい依頼で動くのが正しい（古い方で走らないことが最優先）。
+   */
+  async #claimScheduledRun(
+    kind: string,
+    at: string,
+  ): Promise<
+    | { status: 'ok'; plan: ScheduledRequest }
+    /**
+     * そもそも仕込みが無い kind だった（人間が手で `POST /schedule/:kind/run` を
+     * 叩いた等）。本文が無いのは正常なので、記憶に照らして判断させる。
+     */
+    | { status: 'missing' }
+    | { status: 'unreadable' | 'unrecordable' | 'withdrawn' | 'churning'; reason: string }
+  > {
+    // 一度でも依頼を読めていたなら、後から消えたのは「人間が消した」である。
+    // 最初から無いのとは意味が違うので分ける（片方は動かさない、片方は判断させる）。
+    let sawPlan = false;
+
+    for (let round = 0; round < SCHEDULE_CLAIM_ROUNDS; round += 1) {
+      const found = await this.#scheduledRequestFor(kind);
+      if (found.status === 'unreadable') {
+        return {
+          status: 'unreadable',
+          reason:
+            `依頼を読めなかった（本文なしで曖昧に動かすより、次の発火で読み直す）: ` + found.error,
+        };
+      }
+      if (found.plan === null) {
+        return sawPlan
+          ? {
+              status: 'withdrawn',
+              reason: '確定する前に人間がこの依頼を消した（取り消された仕事は動かさない）',
+            }
+          : { status: 'missing' };
+      }
+      sawPlan = true;
+
+      const claimed = await this.#claimRun(kind, found.plan.updatedAt, at);
+      if (claimed.status === 'failed') {
+        return {
+          status: 'unrecordable',
+          reason:
+            `「起きた」を記録できなかった（動いてから記録できないと、次の起動で同じ仕事を` +
+            `もう一度起こす）: ${claimed.error}`,
+        };
+      }
+      // 確定できた。返るのは更新前の姿なので「前回いつ動いたか」も分かる
+      if (claimed.plan !== null) return { status: 'ok', plan: claimed.plan };
+      // 読んでから確定するまでに人間が消した・直した。新しい版で読み直す
+    }
+    return {
+      status: 'churning',
+      reason: '読むたびに依頼が書き換わっている（人間が直している最中なので次の発火に譲る）',
+    };
   }
 
   /** 発意・定期ジョブに渡す直近の状況。 */

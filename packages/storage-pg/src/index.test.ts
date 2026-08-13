@@ -284,12 +284,47 @@ describe('PgScheduleStore', () => {
 
   it('発火の記録は、クローンが読む本文の側にも入る', async () => {
     await stores.schedules.put(plan);
-    await stores.schedules.markRun('issue-round', '2026-08-13T00:00:00.000Z');
-    await stores.schedules.markRun('しらない', '2026-08-13T00:00:00.000Z');
+    const claimed = await stores.schedules.claimRun(
+      'issue-round',
+      plan.updatedAt,
+      '2026-08-13T00:00:00.000Z',
+    );
 
+    // 返るのは更新前の姿（前回いつ動いたかを呼び出し側が要る）
+    expect(claimed?.request).toBe(plan.request);
+    expect(claimed?.lastRunAt).toBeUndefined();
     // 列だけ直しても読み出しは jsonb からなので、両方が揃っていること
     expect((await stores.schedules.get('issue-round'))?.lastRunAt).toBe('2026-08-13T00:00:00.000Z');
+    expect((await stores.schedules.get('issue-round'))?.updatedAt).toBe(plan.updatedAt);
     expect(await stores.schedules.list()).toHaveLength(1);
+  });
+
+  it('消された・書き換わった依頼は確定できない（条件つき UPDATE）', async () => {
+    // 知らない kind
+    expect(
+      await stores.schedules.claimRun('しらない', plan.updatedAt, '2026-08-13T00:00:00.000Z'),
+    ).toBeNull();
+
+    // 読んだ後に消された
+    await stores.schedules.put(plan);
+    await stores.schedules.remove('issue-round');
+    expect(
+      await stores.schedules.claimRun('issue-round', plan.updatedAt, '2026-08-13T00:00:00.000Z'),
+    ).toBeNull();
+
+    // 読んだ後に書き換えられた（版が違う）
+    await stores.schedules.put(plan);
+    await stores.schedules.put({
+      ...plan,
+      request: '人間が直した依頼',
+      updatedAt: '2026-08-12T10:00:00.000Z',
+    });
+    expect(
+      await stores.schedules.claimRun('issue-round', plan.updatedAt, '2026-08-13T00:00:00.000Z'),
+    ).toBeNull();
+    // 新しい版に古い発火の跡を付けない
+    expect((await stores.schedules.get('issue-round'))?.lastRunAt).toBeUndefined();
+    expect((await stores.schedules.get('issue-round'))?.request).toBe('人間が直した依頼');
   });
 
   it('外せる', async () => {

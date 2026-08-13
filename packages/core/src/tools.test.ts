@@ -125,7 +125,8 @@ describe('クローンの道具', () => {
   it('同じ kind で仕込み直すと置き換わる（前回動いた時刻は保つ）', async () => {
     const h = harness();
     await h.call('schedule_create', { kind: 'watch', request: '最初の依頼', everyMinutes: 30 });
-    await h.stores.schedules.markRun('watch', '2026-08-12T00:00:00.000Z');
+    const first = await h.stores.schedules.get('watch');
+    await h.stores.schedules.claimRun('watch', first?.updatedAt ?? '', '2026-08-12T00:00:00.000Z');
 
     await h.call('schedule_create', { kind: 'watch', request: '直した依頼', everyMinutes: 10 });
 

@@ -87,21 +87,46 @@ export class PgScheduleStore implements ScheduleStore {
   }
 
   /**
-   * 発火の記録。
+   * 発火の確定。**同じ版がまだ在るときだけ記録する。**
    *
-   * jsonb の中も一緒に直す（読み出しは `plan` からなので、列だけ直しても
-   * クローンが見る値は変わらない）。知らない kind なら 0 行更新で何も起きない。
+   * 行を `for update` で押さえてから条件を見るので、読んでから書くまでの隙間に
+   * `remove` / `put` が割り込めない。版の識別子は `updatedAt`（jsonb 側の値で
+   * 突き合わせる。列と jsonb が食い違っていても、クローンが読むのは jsonb である）。
    *
-   * **`updatedAt` は動かさない** — あれは「依頼が最後に書き換えられた時刻」であり、
-   * 発火で上書きすると人間が「この依頼いつ直したか」を追えなくなる。
+   * jsonb の中も一緒に直す（読み出しは `plan` からなので、列だけ直してもクローンが
+   * 見る値は変わらない）。**`updatedAt` は動かさない** — 人間が「この依頼いつ直したか」
+   * を追う手がかりであり、同時に版の識別子でもある。
    */
-  async markRun(kind: string, at: string): Promise<void> {
-    await this.#db
-      .update(schedules)
-      .set({
-        lastRunAt: new Date(at),
-        plan: sql`jsonb_set(${schedules.plan}, '{lastRunAt}', ${JSON.stringify(at)}::jsonb, true)`,
-      })
-      .where(eq(schedules.kind, kind));
+  async claimRun(
+    kind: string,
+    expectedUpdatedAt: string,
+    at: string,
+  ): Promise<ScheduledRequest | null> {
+    return this.#db.transaction(async (tx) => {
+      const rows = await tx
+        .select({ plan: schedules.plan })
+        .from(schedules)
+        .where(eq(schedules.kind, kind))
+        .limit(1)
+        .for('update');
+      const row = rows[0];
+      // 消された。**古い本文で動かさない。**
+      if (row === undefined) return null;
+
+      const plan = parsePlan(kind, row.plan);
+      // 書き換わった。人間の直しを無視して古い本文で動くのが一番まずい。
+      if (plan.updatedAt !== expectedUpdatedAt) return null;
+
+      await tx
+        .update(schedules)
+        .set({
+          lastRunAt: new Date(at),
+          plan: sql`jsonb_set(${schedules.plan}, '{lastRunAt}', ${JSON.stringify(at)}::jsonb, true)`,
+        })
+        .where(eq(schedules.kind, kind));
+
+      // 返すのは更新前の姿（呼び出し側は「前回いつ動いたか」を材料に要る）
+      return plan;
+    });
   }
 }

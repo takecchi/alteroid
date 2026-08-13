@@ -577,11 +577,11 @@ describe('クローン — 自律（人間以外の起点）', () => {
     await stores.schedules.put(plan);
 
     // 読めるが書けない（DB の一時障害で UPDATE だけ落ちる）を模す
-    const real = stores.schedules.markRun.bind(stores.schedules);
+    const real = stores.schedules.claimRun.bind(stores.schedules);
     let failing = true;
-    stores.schedules.markRun = async (kind, at) => {
+    stores.schedules.claimRun = async (kind, expectedUpdatedAt, at) => {
       if (failing) throw new Error('UPDATE が落ちた');
-      return real(kind, at);
+      return real(kind, expectedUpdatedAt, at);
     };
 
     const s = setup(() => 'issue を1件拾って委譲した', stores);
@@ -636,11 +636,11 @@ describe('クローン — 自律（人間以外の起点）', () => {
       updatedAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
     });
 
-    const real = stores.schedules.markRun.bind(stores.schedules);
+    const real = stores.schedules.claimRun.bind(stores.schedules);
     let failing = true;
-    stores.schedules.markRun = async (kind, at) => {
+    stores.schedules.claimRun = async (kind, expectedUpdatedAt, at) => {
       if (failing) throw new Error('UPDATE が落ちた');
-      return real(kind, at);
+      return real(kind, expectedUpdatedAt, at);
     };
 
     const s = setup(() => '進めた', stores);
@@ -688,6 +688,102 @@ describe('クローン — 自律（人間以外の起点）', () => {
       (entry) => (entry as { text: string }).text === '進めた',
     );
     expect(runs).toHaveLength(1);
+
+    await s.clone.stop();
+  });
+
+  it('読んでから確定するまでに人間が消したら、取り消された依頼は動かさない', async () => {
+    const stores = createMemoryStores();
+    const plan = {
+      kind: 'issue-round',
+      spec: { type: 'daily' as const, at: '09:00' },
+      request: 'open issue を見て、着手できるものから実装を進める',
+      createdAt: '2026-08-11T00:00:00.000Z',
+      updatedAt: '2026-08-11T00:00:00.000Z',
+    };
+    await stores.schedules.put(plan);
+
+    // 「読んだ直後に人間の DELETE が着地した」を作る
+    const read = stores.schedules.get.bind(stores.schedules);
+    let removeOnce = true;
+    stores.schedules.get = async (kind) => {
+      const found = await read(kind);
+      if (removeOnce && found !== null) {
+        removeOnce = false;
+        await stores.schedules.remove(kind);
+      }
+      return found;
+    };
+
+    const s = setup(() => '消えた依頼で動いてしまった', stores);
+    s.clone.post({
+      type: 'timer',
+      id: 'evt-timer',
+      at: '2026-08-12T00:00:00.000Z',
+      kind: 'issue-round',
+    });
+
+    await expect
+      .poll(
+        async () =>
+          ((await stores.journal.list({ types: ['exchange'] })) as { text: string }[]).some(
+            (entry) => entry.text.includes('人間がこの依頼を消した'),
+          ),
+        { timeout: 3000 },
+      )
+      .toBe(true);
+
+    // 古い本文でも、本文なしの曖昧なターンでも走らせない
+    expect(s.calls).toEqual([]);
+
+    await s.clone.stop();
+  });
+
+  it('読んでから確定するまでに人間が直したら、新しい本文で動く（古い本文では動かない）', async () => {
+    const stores = createMemoryStores();
+    const plan = {
+      kind: 'issue-round',
+      spec: { type: 'daily' as const, at: '09:00' },
+      request: '古い依頼: すべての issue を実装する',
+      createdAt: '2026-08-11T00:00:00.000Z',
+      updatedAt: '2026-08-11T00:00:00.000Z',
+    };
+    await stores.schedules.put(plan);
+
+    // 「読んだ直後に人間の POST が着地した」を作る
+    const read = stores.schedules.get.bind(stores.schedules);
+    let editOnce = true;
+    stores.schedules.get = async (kind) => {
+      const found = await read(kind);
+      if (editOnce && found !== null) {
+        editOnce = false;
+        await stores.schedules.put({
+          ...found,
+          request: '新しい依頼: bug ラベルの issue だけ直す',
+          updatedAt: '2026-08-11T12:00:00.000Z',
+        });
+      }
+      return found;
+    };
+
+    const s = setup(() => 'bug の issue を1件拾った', stores);
+    s.clone.post({
+      type: 'timer',
+      id: 'evt-timer',
+      at: '2026-08-12T00:00:00.000Z',
+      kind: 'issue-round',
+    });
+
+    await expect
+      .poll(() => inputsOf(s)().includes('bug ラベルの issue だけ'), { timeout: 3000 })
+      .toBe(true);
+    // 取り消された本文は渡っていない
+    expect(inputsOf(s)()).not.toContain('すべての issue を実装する');
+    // 発火の跡は新しい版に付く
+    expect((await stores.schedules.list())[0]).toMatchObject({
+      updatedAt: '2026-08-11T12:00:00.000Z',
+      lastRunAt: '2026-08-12T00:00:00.000Z',
+    });
 
     await s.clone.stop();
   });

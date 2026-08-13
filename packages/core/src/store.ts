@@ -74,8 +74,19 @@ export interface ScheduleStore {
   /** 同じ kind があれば置き換える（`createdAt` は呼び出し側が引き継ぐ）。 */
   put(entry: ScheduledRequest): Promise<void>;
   remove(kind: string): Promise<void>;
-  /** 発火したことを記録する。知らない kind なら何もしない。 */
-  markRun(kind: string, at: string): Promise<void>;
+  /**
+   * 発火を確定させる。**読むことと記録することを1操作に閉じる。**
+   *
+   * `expectedUpdatedAt` と同じ版がまだ在るときだけ `lastRunAt` を付け、**確定した
+   * 依頼（`lastRunAt` を進める前の姿）** を返す。消えていた・書き換わっていたら null。
+   *
+   * **これが2操作に分かれていると、読んでから記録するまでの隙間で人間が消した・
+   * 直した依頼が古い本文で走る。** 「本文は処理する瞬間にストアから読む」という
+   * 約束は、競合したときにこそ効かないと意味がない（消した依頼が外の世界に手を
+   * 出したら取り返せない）。返り値が更新前の姿なのは、呼び出し側が「前回いつ
+   * 動いたか」を材料として要るからである。
+   */
+  claimRun(kind: string, expectedUpdatedAt: string, at: string): Promise<ScheduledRequest | null>;
 }
 
 /** セッションの生ログ退避先（PreCompact フックで落とす）。 */

@@ -124,11 +124,13 @@ export function createMemoryStores(): Stores {
     async remove(kind) {
       schedules.delete(kind);
     },
-    async markRun(kind, at) {
+    async claimRun(kind, expectedUpdatedAt, at) {
       const existing = schedules.get(kind);
-      if (!existing) return;
-      // updatedAt は「依頼が書き換えられた時刻」なので動かさない
+      // 消された・書き換わったなら古い本文で動かさない
+      if (!existing || existing.updatedAt !== expectedUpdatedAt) return null;
+      // updatedAt は「依頼が書き換えられた時刻」＝版の識別子なので動かさない
       schedules.set(kind, { ...existing, lastRunAt: at });
+      return existing;
     },
   };
 

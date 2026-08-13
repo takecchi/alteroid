@@ -317,7 +317,8 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
 
     const before = s.scheduler.list().find((item) => item.kind === 'watch')?.nextAt;
     s.set(at(2026, 8, 12, 8, 20));
-    await s.stores.schedules.markRun('watch', '2026-08-12T08:20:00.000Z');
+    const held = await s.stores.schedules.get('watch');
+    await s.stores.schedules.claimRun('watch', held?.updatedAt ?? '', '2026-08-12T08:20:00.000Z');
     await s.scheduler.refresh();
 
     const after = s.scheduler.list().find((item) => item.kind === 'watch');
