@@ -1702,15 +1702,29 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         const registry = deps.runners;
         if (registry === undefined) return c.json({ runners: [] });
-        const runners = await registry.list();
+        // **名簿に載っている全部を返す**（開けている分だけではない）。上がって
+        // こない runner が一覧から消えるだけだと、人間には「設定し忘れた」のか
+        // 「上がってこない」のかが区別できない。
+        const open = new Map((await registry.list()).map((runner) => [runner.runnerId, runner]));
         return c.json({
           runners: await Promise.all(
-            runners.map(async (runner) => ({
-              runnerId: runner.runnerId,
-              workspacePath: runner.workspacePath,
-              credentials: await runner.credentials().catch(() => []),
-              profile: await runner.profile().catch(() => undefined),
-            })),
+            registry.entries().map(async (entry) => {
+              const runner = entry.runnerId === undefined ? undefined : open.get(entry.runnerId);
+              return {
+                label: entry.label,
+                state: entry.state,
+                since: entry.since,
+                ...(entry.error === undefined ? {} : { error: entry.error }),
+                ...(entry.runnerId === undefined ? {} : { runnerId: entry.runnerId }),
+                ...(entry.workspacePath === undefined
+                  ? {}
+                  : { workspacePath: entry.workspacePath }),
+                // 繋がっていない相手には聞きに行かない（指紋は runner が持つ）。
+                credentials: runner === undefined ? [] : await runner.credentials().catch(() => []),
+                profile:
+                  runner === undefined ? undefined : await runner.profile().catch(() => undefined),
+              };
+            }),
           ),
         });
       },

@@ -2904,6 +2904,19 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "label": {
+                            "type": "string"
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": ["connecting", "connected", "unreachable", "unusable"]
+                          },
+                          "since": {
+                            "type": "string"
+                          },
+                          "error": {
+                            "type": "string"
+                          },
                           "runnerId": {
                             "type": "string"
                           },
@@ -2944,7 +2957,7 @@
                             "required": ["sha256", "bytes", "updatedAt"]
                           }
                         },
-                        "required": ["runnerId", "workspacePath", "credentials"]
+                        "required": ["label", "state", "since", "credentials"]
                       }
                     }
                   },

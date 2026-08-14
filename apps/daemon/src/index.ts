@@ -23,6 +23,7 @@ import {
   resolveCloneModel,
   WITHHELD_ENV_KEYS,
   type RunnerClient,
+  type RunnerSource,
   type SelfFacts,
   type Stores,
 } from '@alteroid/core';
@@ -82,62 +83,95 @@ export {
  */
 const DEFAULT_BIND = '127.0.0.1';
 
-/**
- * runner が戻ってくるのを待つ上限と、待ち方。
- *
- * **同時に再デプロイされた runner を待てないと、デーモンが道連れで落ちる。**
- * 落ちている間はクローンのターンも `/approvals` への回答も受け付けられないので、
- * 「人間の不在で止まってよいのは承認待ちの仕事だけ」という前提が崩れる
- * （PRD「自律」）。器の入れ替えは分単位では終わらない方が珍しいので、そこまでは
- * 待つ。それを越えても繋がらないなら、黙って上がったふりをせずに落ちる。
- *
- * **ここは踏み込みが足りていない。** 待っている間デーモンは待ち受けを開かないが、
- * chat・日誌・日報・承認への回答は runner に一切依存しない。委譲先が不在なだけで
- * それらまで止めているのは、「人間の不在で止まってよいのは承認待ちの仕事だけ」
- * （PRD「自律」）に照らすと弱い。素直な形は「先に listen し、runner へは背景で
- * 繋ぎ直し続け、委譲だけが一時的に失敗する」である（roadmap M5 で runner の
- * 登録・生存判定を入れるときに一緒に倒す）。
- */
-const RUNNER_CONNECT_WINDOW_MS = 120_000;
-const RUNNER_CONNECT_MAX_DELAY_MS = 15_000;
+/** 複数の runner を並べる環境変数（カンマ区切り）。単数形は後方互換で残す。 */
+const RUNNER_URLS_ENV = 'ALTEROID_RUNNER_URLS';
+const RUNNER_URL_ENV = 'ALTEROID_RUNNER_URL';
 
 /**
- * 委譲先を開く。
+ * 起動時の種になる runner の宛先。
  *
- * `ALTEROID_RUNNER_URL` があれば、そこが manager-runner である（コンテナ構成）。
- * 無ければ同一プロセスの runner に落とす — `alteroid chat` を叩くだけで使える
- * というローカルの体験を、分離のために壊さないため。
+ * `ALTEROID_RUNNER_URLS`（カンマ区切り）と `ALTEROID_RUNNER_URL`（単数）の両方を
+ * 読む。**単数形を落とさない** — 既に動いている構成が、名簿を複数化しただけで
+ * 委譲先を失うことになる。空白と重複は落とすが、それ以外は書かれたまま使う。
  */
-async function openRunner(
-  workspace: string,
-  withheldEnvKeys: string[],
-  profilePath: string,
-): Promise<RunnerClient> {
-  const url = process.env.ALTEROID_RUNNER_URL;
-  if (url !== undefined && url.length > 0) {
+export function parseRunnerUrls(env: NodeJS.ProcessEnv): string[] {
+  const raw = [...(env[RUNNER_URLS_ENV] ?? '').split(','), env[RUNNER_URL_ENV] ?? ''];
+  const urls: string[] = [];
+  for (const value of raw) {
+    const url = value.trim();
+    if (url.length === 0 || urls.includes(url)) continue;
+    urls.push(url);
+  }
+  return urls;
+}
+
+/**
+ * 委譲先の**開き方**を並べる。**ここでは1台も開かない。**
+ *
+ * 開くのは名簿の仕事（背景）である。ここが接続を返す形だと、デーモンは runner が
+ * 上がるまで待ち受けを開けず、その間 chat も日誌も承認も止まる — 委譲先が不在な
+ * だけで、runner に一切依存しない経路まで止めていることになる（PRD「自律」）。
+ *
+ * **方針の誤りだけはここで落とす。** 鍵が無いのに URL があるのは待っても直らない
+ * 誤りで、その状態で繋ぐくらいなら起動しない（鍵なしで繋がる制御面は、runner の
+ * 中のマネージャーからも叩ける）。
+ */
+function runnerSeeds(options: {
+  workspace: string;
+  withheldEnvKeys: string[];
+  profilePath: string;
+}): RunnerSource[] {
+  const urls = parseRunnerUrls(process.env);
+  if (urls.length > 0) {
     const token = process.env.ALTEROID_RUNNER_TOKEN;
     if (token === undefined || token.length === 0) {
-      // 鍵なしで繋がる制御面は、runner の中のマネージャーからも叩ける。
-      // **その状態でつなぐくらいなら起動しない。**
       throw new Error(
-        'ALTEROID_RUNNER_URL があるのに ALTEROID_RUNNER_TOKEN が無い' +
+        `${RUNNER_URLS_ENV} / ${RUNNER_URL_ENV} があるのに ALTEROID_RUNNER_TOKEN が無い` +
           '（runner の制御面は鍵で守る。runner には sha256 を渡すこと）',
       );
     }
-    return connectRunner(url, token);
+    return urls.map((url) => ({ label: url, open: () => openHttpRunner(url, token) }));
   }
-  return createLocalRunner({
-    runnerId: 'runner-local',
-    workspacePath: workspace,
-    withheldEnvKeys,
-    // **ローカルでもプロファイルを効かせる。** コンテナ構成でだけ `.zprofile` が
-    // 効く形にすると、器が違うだけでできることが変わる（M4 受け入れ基準1）。
-    // クローン側とは別のファイルにする — こちらには伏せる鍵の `unset` が付く。
-    profile: createProfileVessel({
-      path: profilePath,
-      withheldEnvKeys: [...WITHHELD_ENV_KEYS, ...withheldEnvKeys],
-    }),
-  });
+  return [
+    {
+      label: '同一プロセス',
+      open: async () =>
+        createLocalRunner({
+          runnerId: 'runner-local',
+          workspacePath: options.workspace,
+          withheldEnvKeys: options.withheldEnvKeys,
+          // **ローカルでもプロファイルを効かせる。** コンテナ構成でだけ `.zprofile`
+          // が効く形にすると、器が違うだけでできることが変わる（M4 受け入れ基準1）。
+          // クローン側とは別のファイルにする — こちらには伏せる鍵の `unset` が付く。
+          profile: createProfileVessel({
+            path: options.profilePath,
+            withheldEnvKeys: [...WITHHELD_ENV_KEYS, ...options.withheldEnvKeys],
+          }),
+        }),
+    },
+  ];
+}
+
+/**
+ * HTTP の runner を1回だけ開く。**ここでは粘らない**（挑み直すのは名簿の仕事）。
+ *
+ * 鍵を拒まれたことは**恒久的な失敗のまま持ち上げる**。ここで素の `Error` に
+ * 包み直すと、名簿は「待てば直る」と読んで永久に叩き続け、設定の誤りが
+ * 「なぜか繋がらない」として隠れる（`isRetryableRunnerError`）。
+ */
+async function openHttpRunner(baseUrl: string, token: string): Promise<RunnerClient> {
+  try {
+    return await createHttpRunner({ baseUrl, token });
+  } catch (error) {
+    if (error instanceof RunnerHttpError && (error.status === 401 || error.status === 403)) {
+      throw new RunnerHttpError(
+        `runner (${baseUrl}) に鍵を拒まれた（${error.status}）。` +
+          'ALTEROID_RUNNER_TOKEN と runner の ALTEROID_RUNNER_TOKEN_SHA256 が揃っているか確かめること。',
+        error.status,
+      );
+    }
+    throw error;
+  }
 }
 
 /**
@@ -146,47 +180,16 @@ async function openRunner(
  * **同一プロセスであることを隠さない。** ローカル構成では既知の穴が残っており
  * （マネージャーが `/proc/1/environ` から記憶ストアの鍵に届く）、それを承知で
  * 動いているのが事実である。事実を伏せた自己認識は自己認識ではない。
+ *
+ * **「繋がっている」とも言わない。** 名簿は動的で、ここに並ぶのは宛先であって
+ * 生死ではない（生死は `GET /runners` が返す）。
  */
 function describeRunner(): string {
-  const url = process.env.ALTEROID_RUNNER_URL;
-  return url !== undefined && url.length > 0
-    ? `別プロセスの manager-runner（${url}）。マネージャーはそこで走り、記憶ストアの鍵を持たない`
+  const urls = parseRunnerUrls(process.env);
+  return urls.length > 0
+    ? `別プロセスの manager-runner（${urls.join(', ')}）。マネージャーはそこで走り、記憶ストアの鍵を持たない。` +
+        '繋ぐのは背景なので、上がっていなければ委譲だけが待たされる'
     : '同一プロセスの runner（ローカル構成）。マネージャーはデーモンと同じ器で走るので、記憶ストアへの経路が残っている';
-}
-
-/**
- * runner へ繋ぐ。**居なければ、戻ってくるまで待つ。**
- *
- * 待つのは「繋がらない」ときだけである。**方針の誤りは待っても直らない**ので、
- * 鍵が無いときは上の `openRunner` が、鍵を拒まれたときはここが即座に落とす。
- * 粘るのは器の入れ替え（デプロイ・再起動）だけを相手にしている。
- */
-async function connectRunner(baseUrl: string, token: string): Promise<RunnerClient> {
-  const deadline = Date.now() + RUNNER_CONNECT_WINDOW_MS;
-  let delay = 1_000;
-  for (;;) {
-    try {
-      return await createHttpRunner({ baseUrl, token });
-    } catch (error) {
-      // **鍵を拒まれたなら、待っても直らない。** ここで粘ると、設定の誤りが
-      // 「器の入れ替え中かもしれません」という嘘のメッセージで2分間隠れる。
-      if (error instanceof RunnerHttpError && (error.status === 401 || error.status === 403)) {
-        throw new Error(
-          `runner (${baseUrl}) に鍵を拒まれました（${error.status}）。` +
-            'ALTEROID_RUNNER_TOKEN と runner の ALTEROID_RUNNER_TOKEN_SHA256 が揃っているか確かめてください。',
-          { cause: error },
-        );
-      }
-      if (Date.now() >= deadline) throw error;
-      // **黙って待たない。** 上がらない理由を探す人間が最初に見るのはここである。
-      process.stderr.write(
-        `alteroidd: runner (${baseUrl}) に繋がりません。` +
-          `${Math.round(delay / 1000)} 秒後に試し直します: ${String(error)}\n`,
-      );
-      await new Promise((resolve) => setTimeout(resolve, delay));
-      delay = Math.min(delay * 2, RUNNER_CONNECT_MAX_DELAY_MS);
-    }
-  }
 }
 
 /**
@@ -219,9 +222,33 @@ export async function main(): Promise<void> {
   // マネージャーは `/proc/1/environ` からデーモンの環境変数＝記憶ストアの鍵に届く。
   // ローカルで runner を立てていないときだけ、同一プロセスの runner へ落とす
   // （その場合は既知の穴が残る。塞ぐのはコンテナ構成の役目である）。
-  const runners = createRunnerRegistry([
-    await openRunner(workspace, storage.withheldEnvKeys, join(paths.state, 'runner-profile.sh')),
-  ]);
+  //
+  // **ここでは開かない。** 宛先（開き方）を数えるだけで、繋ぐのは待ち受けを開いた
+  // 後の背景である。開き終わるまで待つ形だと、runner の入れ替えに巻き込まれて
+  // chat も日誌も承認も止まる（PRD「自律」）。
+  const seeds = runnerSeeds({
+    workspace,
+    withheldEnvKeys: storage.withheldEnvKeys,
+    profilePath: join(paths.state, 'runner-profile.sh'),
+  });
+
+  /**
+   * 挑み直しても直らない失敗の行き先。
+   *
+   * **人間（stderr）とクローン（受信箱）の両方へ出す。** 片方だけだと、ログを
+   * 見ていない人間か、事実を知らないクローンのどちらかが取り残される。クローンが
+   * 立ち上がるより先に失敗しうるので、宛先は後から差し替える。
+   */
+  let announce = (text: string): void => {
+    process.stderr.write(`alteroidd: ${text}\n`);
+  };
+  const runners = createRunnerRegistry([], {
+    notify: ({ label, error }) => {
+      announce(
+        `runner (${label}) を開けず、挑み直しても直らない失敗だったので諦めました: ${error}`,
+      );
+    },
+  });
   const runnerDescription = describeRunner();
 
   // 層とモデル帯の対応は設計判断であり、変更には人間の承認が要る（AGENTS.md 地雷5）。
@@ -339,21 +366,43 @@ export async function main(): Promise<void> {
     schedules: stores.schedules,
   });
 
-  // **受け口を開ける前に**、走行中だったマネージャーを台帳から拾い直す。知らせない
-  // と器を作り直した瞬間に走っていた仕事がクローンから見て消えるし（roadmap M4
-  // 受け入れ基準2）、引き取る前に chat を開けると、同じ仕事をクローンが二重に
-  // 起こしうる。
-  const restored = await clone.managers.restore().catch((error: unknown) => {
-    process.stderr.write(`alteroidd: マネージャーの引き継ぎに失敗しました: ${String(error)}\n`);
-    return [];
-  });
-  if (restored.length > 0) {
-    process.stdout.write(
-      `alteroidd: 再起動前のマネージャーを引き継ぎました: ${restored
-        .map((manager) => manager.managerId)
-        .join(', ')}\n`,
-    );
-  }
+  // 挑み直しても直らない失敗は、ここからクローンの受信箱にも入る（次のターンで
+  // 気づける）。日誌にも残るので、後から「いつ繋がらなくなったか」を追える。
+  announce = (text: string): void => {
+    process.stderr.write(`alteroidd: ${text}\n`);
+    clone.post({
+      type: 'external',
+      id: randomUUID(),
+      at: new Date().toISOString(),
+      source: 'runner-registry',
+      payload: { text },
+    });
+  };
+
+  /**
+   * 走行中だったマネージャーを台帳から拾い直す。
+   *
+   * **契機は「runner が開けたとき」である。** 起動時に1度きりだと、runner を待たずに
+   * 立ち上がる構成（＝この PR で入れた形）では、まだ誰も繋がっていない名簿を見て
+   * 「引き取るものは無い」と結論してしまう。runner が上がった瞬間に引き取るのが
+   * 正しい契機で、これは器だけが入れ替わった再デプロイでも同じ形になる。
+   *
+   * 二重に走らないことは `ManagerPool` 側が見ている（`#resumeOnce`）。
+   */
+  const takeOver = async (): Promise<void> => {
+    const restored = await clone.managers.restore().catch((error: unknown) => {
+      process.stderr.write(`alteroidd: マネージャーの引き継ぎに失敗しました: ${String(error)}\n`);
+      return [];
+    });
+    if (restored.length > 0) {
+      process.stdout.write(
+        `alteroidd: 再起動前のマネージャーを引き継ぎました: ${restored
+          .map((manager) => manager.managerId)
+          .join(', ')}\n`,
+      );
+    }
+  };
+  runners.subscribe(() => void takeOver());
 
   // 画面（apps/web）を別オリジンに置く配置のための境界設定。既定は空＝今まで通り
   // CORS ヘッダを返さない。捨てた値は黙って飲み込まない（許可したつもりとの差が
@@ -406,6 +455,19 @@ export async function main(): Promise<void> {
     process.exit(1);
   });
 
+  // **待ち受けを開けてから runner へ繋ぐ。** 逆にすると、runner が上がるまでの間
+  // chat も日誌も日報も承認への回答も受け付けられない。それらは runner に一切
+  // 依存していないので、委譲先の不在に巻き込ませない（PRD「自律」）。
+  //
+  // 名簿は繋がるまで挑み直し続ける。だから、この間に届いた委譲だけが待たされる。
+  for (const seed of seeds) {
+    void runners.register(seed).catch((error: unknown) => {
+      process.stderr.write(
+        `alteroidd: runner (${seed.label}) を名簿に載せられません: ${String(error)}\n`,
+      );
+    });
+  }
+
   let stopping = false;
   async function shutdown(): Promise<void> {
     if (stopping) return;
@@ -415,6 +477,8 @@ export async function main(): Promise<void> {
     // 長引いても、CLI からは「止まった」と見えるようにする。
     scheduler.stop();
     server.close();
+    // 名簿の挑み直しも畳む（止めたはずのデーモンが背景で runner を叩き続けない）。
+    await runners.stop().catch(() => undefined);
     await clearRuntimeInfo(paths.state).catch(() => undefined);
 
     const forced = setTimeout(() => process.exit(0), 30_000);

@@ -173,7 +173,14 @@ class Pool implements ManagerPool {
    * 消える（別の器・別の runner なら結果が変わりうる）。
    */
   readonly #unresumable = new Set<string>();
-  #connected = false;
+  /**
+   * 繋ぎ済み（か、いま繋いでいる最中）の宛先。**旗は宛先ごとに持つ。**
+   *
+   * 弱参照なのは、名簿から外れた runner をここが握り続けないためである。
+   */
+  readonly #connections = new WeakMap<RunnerClient, Promise<void>>();
+  /** 名簿の購読を解く（`stop` で外す。外し忘れると止めたプールが後から動く）。 */
+  readonly #unsubscribe: () => void;
   #stopped = false;
 
   constructor({ stores, post, runners, profile }: ManagerPoolOptions) {
@@ -181,6 +188,12 @@ class Pool implements ManagerPool {
     this.#post = post;
     this.#runners = runners;
     this.#profile = profile;
+    // **後から載った runner に自分から繋ぐ。** 名簿が動的である以上、受け口を開く
+    // 契機を起動時にしか持たないと、後から現れた runner は永久に無言のままになる。
+    this.#unsubscribe = runners.subscribe((runner) => {
+      if (this.#stopped) return;
+      void this.#connectTo(runner).catch(() => undefined);
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -194,6 +207,10 @@ class Pool implements ManagerPool {
     const runner = await this.#runners.select({
       ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
     });
+    // **選んだ相手に繋がっていることを確かめてから起こす。** ここを best-effort に
+    // すると、受け口の開いていない runner でマネージャーが走り出し、報告も許可確認も
+    // 誰にも届かない（黙って止まっているように見える）。
+    await this.#connectTo(runner);
     const managerId = `mgr-${randomUUID().slice(0, 8)}`;
     const cwd = input.cwd ?? runner.workspacePath;
     const at = new Date().toISOString();
@@ -513,6 +530,8 @@ class Pool implements ManagerPool {
 
   async stop(): Promise<void> {
     this.#stopped = true;
+    // 名簿の購読も畳む（載り続ける runner に、止めたプールが繋ぎに行かない）。
+    this.#unsubscribe();
     // 予約してあった取り直しは畳む（止めたはずのプールが後から動かない）。
     for (const timer of this.#reattachTimers.values()) clearTimeout(timer);
     this.#reattachTimers.clear();
@@ -570,17 +589,45 @@ class Pool implements ManagerPool {
     }
   }
 
-  /** イベントの受け口を開く。**繋ぎに行くのはデーモン側**である。 */
+  /**
+   * イベントの受け口を開く。**繋ぎに行くのはデーモン側**である。
+   *
+   * **一度きりにしない。** 名簿は動的で、runner は後から載る（roadmap M5）。
+   * 「もう繋いだ」を1つの旗で持つと、起動時に居た runner にしか繋がらず、後から
+   * 現れた runner の報告も許可確認も永久に届かない。旗は**宛先ごと**に持つ。
+   *
+   * ここで転んだ1台に他を道連れにさせない。**選んだ相手に繋がっているかどうかは
+   * `start` が別に確かめる**（そこは黙って進めない場所である）。
+   */
   async #ensureConnected(): Promise<void> {
-    if (this.#connected || this.#stopped) return;
-    this.#connected = true;
-    for (const runner of await this.#runners.list()) {
+    if (this.#stopped) return;
+    const runners = await this.#runners.list().catch(() => []);
+    await Promise.all(runners.map((runner) => this.#connectTo(runner).catch(() => undefined)));
+  }
+
+  /**
+   * 1台へ繋ぐ。**同じ宛先へ多重に繋ぎに行かない。**
+   *
+   * 契機は3つある（`#ensureConnected` / 名簿の購読 / 委譲の直前）。旗を持たないと、
+   * 同じ runner に SSE が何本も張られ、同じイベントが二重に記録される。
+   *
+   * **失敗は覚えない。** 覚えると、瞬断で1度こけた runner に二度と繋がらなくなる。
+   */
+  #connectTo(runner: RunnerClient): Promise<void> {
+    const already = this.#connections.get(runner);
+    if (already !== undefined) return already;
+    const opening = (async () => {
       await runner.connect((event) => void this.#onEvent(event));
       // **委譲を始める前に環境を整える。** ここを名乗り（`hello`）任せにすると、
       // 最初のマネージャーがプロファイルの届く前に走り出しうる。届いていない
       // ことは本人には見えないので、「たまに鍵が無い」という形で現れる。
       await this.#pushProfile(runner);
-    }
+    })().catch((error: unknown) => {
+      this.#connections.delete(runner);
+      throw error;
+    });
+    this.#connections.set(runner, opening);
+    return opening;
   }
 
   /**
@@ -779,7 +826,15 @@ class Pool implements ManagerPool {
   async #runnerOf(record: ManagerRecord): Promise<RunnerClient | null> {
     const runnerId = record.job.runnerId;
     // 宛先が書かれていない古いジョブは、いまの1台へ寄せる（M4 は単一 runner）。
-    if (runnerId === undefined) return this.#runners.select({}).catch(() => null);
+    //
+    // **ここで `select` を呼ばない。** `select` は繋がるまで待つ（新しい委譲を
+    // 「いま空いていない」で断らないため）が、この経路は起動時の引き取りや
+    // `manager_send` の下にあり、待たせると台帳を読むだけの操作が固まる。
+    // 開いている runner が無いなら「宛先が居ない」と答えるのが正しい。
+    if (runnerId === undefined) {
+      const open = await this.#runners.list().catch(() => []);
+      return open[0] ?? null;
+    }
     return this.#runners.get(runnerId);
   }
 

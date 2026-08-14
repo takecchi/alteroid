@@ -70,6 +70,19 @@ function Account() {
   );
 }
 
+/**
+ * 名簿に載っている状態の見え方。
+ *
+ * **繋がっていないことを隠さない。** 上がってこない runner が一覧から消えるだけだと、
+ * 人間には「設定し忘れた」のか「上がってこない」のかが区別できない。
+ */
+const RUNNER_STATES = {
+  connecting: { label: '接続中', tone: 'neutral' },
+  connected: { label: '接続済み', tone: 'ok' },
+  unreachable: { label: '繋がらない（挑み直し中）', tone: 'warn' },
+  unusable: { label: '使えない（挑み直さない）', tone: 'danger' },
+} as const;
+
 function Runners() {
   const { data, error, isLoading } = useRunners();
   const runners = data?.runners ?? [];
@@ -88,9 +101,21 @@ function Runners() {
       ) : (
         <ul>
           {runners.map((runner) => (
-            <li key={runner.runnerId} className="border-b border-border px-4 py-3 last:border-b-0">
-              <p className="font-mono text-sm">{runner.runnerId}</p>
+            <li key={runner.label} className="border-b border-border px-4 py-3 last:border-b-0">
+              <div className="flex flex-wrap items-center gap-2">
+                {/* 繋がるまで runner_id は分からない。宛先（label）が名簿の鍵である */}
+                <p className="font-mono text-sm">{runner.runnerId ?? runner.label}</p>
+                <Badge tone={RUNNER_STATES[runner.state].tone}>
+                  {RUNNER_STATES[runner.state].label}
+                </Badge>
+              </div>
+              {runner.runnerId === undefined ? null : (
+                <p className="mt-0.5 font-mono text-[11px] text-muted">{runner.label}</p>
+              )}
               <p className="mt-0.5 font-mono text-[11px] text-muted">{runner.workspacePath}</p>
+              {runner.error === undefined ? null : (
+                <p className="mt-1 text-[11px] text-danger">{runner.error}</p>
+              )}
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {runner.credentials.length === 0 ? (
                   <span className="text-[11px] text-muted">渡している鍵は無い</span>

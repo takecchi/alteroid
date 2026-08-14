@@ -283,8 +283,28 @@ export const managerActionResponseSchema = z.object({
 // ---------------------------------------------------------------------------
 
 const runnerSummarySchema = z.object({
-  runnerId: z.string(),
-  workspacePath: z.string(),
+  /**
+   * 人間が見る宛先（URL か「同一プロセス」）。
+   *
+   * **`runnerId` ではなくこれが名簿の鍵である。** `runnerId` は繋がるまで
+   * 分からない（runner が `/health` で名乗る）ので、まだ開けていない1台は
+   * label でしか指せない。
+   */
+  label: z.string(),
+  /**
+   * 生死と接続状態。**「登録されているのに繋がっていない」を表せるようにする。**
+   *
+   * これが無いと、上がってこない runner は一覧から消えるだけになり、人間には
+   * 「設定し忘れた」のか「上がってこない」のかが区別できない。
+   */
+  state: z.enum(['connecting', 'connected', 'unreachable', 'unusable']),
+  /** この状態になった時刻。 */
+  since: z.string(),
+  /** 直近の失敗の一行。**原因を見るための窓であって、値は載らない。** */
+  error: z.string().optional(),
+  /** 繋がるまで分からないので、開けていない間は返らない。 */
+  runnerId: z.string().optional(),
+  workspacePath: z.string().optional(),
   /** 配られている鍵の指紋。**値は返らない。** */
   credentials: z.array(runnerCredentialFingerprintSchema),
   /** 置かれている実行環境プロファイルの指紋。**本文は返らない。** */
