@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { jobStatusSchema } from './schema.js';
+import { usageTotalsSchema } from './usage.js';
 
 /**
  * デーモン ↔ manager-runner の境界（roadmap M4）。
@@ -222,6 +223,27 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     actor: z.string(),
     tool: z.string(),
     input: z.unknown(),
+  }),
+  /**
+   * SDK が報告した消費量の**累積**（`result.modelUsage` の写し）。
+   *
+   * **累積のまま降ろす。差分は runner で作らない。** 理由が2つある。
+   *
+   * - **差分は事実ではなく解釈である。** ここに流すのは事実だけ（このファイルの
+   *   冒頭）で、「前回からいくら増えたか」は前回を覚えている側の話である
+   * - **累積なら再送に耐える。** 器の入れ替えや瞬断で同じイベントが2回届いても、
+   *   受け取った側の増分が 0 になるだけで済む。差分を降ろすと**そのまま二重計上**
+   *   になり、しかも数字は増えるだけなので誰も気づけない
+   *
+   * 台帳へ畳むのはデーモン（`manager.ts` の `#onEvent`）である。runner は記憶
+   * ストアの鍵を持たないので、そもそもここでは書けない。
+   */
+  z.object({
+    type: z.literal('usage'),
+    managerId: z.string(),
+    sessionId: z.string().optional(),
+    /** モデル id → その時点の累積。 */
+    models: z.record(z.string(), usageTotalsSchema),
   }),
   /** SDK のセッション生ログ（SessionStore のミラー）。永続化はデーモンが行う。 */
   z.object({

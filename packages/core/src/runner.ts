@@ -28,6 +28,7 @@ import type {
   RunnerStartCommand,
 } from './runner-protocol.js';
 import type { JobStatus } from './schema.js';
+import type { UsageTotals } from './usage.js';
 
 /**
  * manager-runner — SDK を隔離して走らせる層（roadmap M4）。
@@ -923,8 +924,28 @@ class RunnerSession {
     // **`init` が来たことは「戻れた」ことではない。** 実機では、開きはしたが
     // その回が `error_during_execution` で何も返さずに終わる形も出ている。
     // 手が動く前の結果なし終了は、この resume が効かなかったということである。
-    if (isSuccessResult(message)) this.#progressed = true;
-    else {
+    if (isSuccessResult(message)) {
+      this.#progressed = true;
+      // 消費の累積を降ろす（台帳へ畳むのはデーモン）。
+      //
+      // **成功した result だけを通す。** SDK は
+      // `crash/startup-error results may carry zeroed values` と言っている。
+      // ゼロを「累積が 0 になった」として通すと、受け取った側の基準が下がり、
+      // 次に届いた本物の累積が丸ごと増分になる＝記録済みの分がもう一度積まれる。
+      //
+      // **絞っても取りこぼさない。** 値は累積なので、失敗した回のぶんも次の成功が
+      // 運んでくる。落ちるのは「セッションが失敗で終わったときの最後の1ターン」
+      // だけで、そこで打ち切りなので後続へ波及しない。
+      const models = modelUsageOf(message);
+      if (models !== undefined) {
+        this.#emit({
+          type: 'usage',
+          managerId: this.#id,
+          sessionId: this.#sessionId,
+          models,
+        });
+      }
+    } else {
       const outcome = this.#recoverFromFailedResume(`結果なしで終了: ${resultText(message)}`);
       if (outcome === 'recovered') return;
       // **戻れなかった resume を「1ターン終わった」として報告しない。** ここを
@@ -1230,6 +1251,49 @@ function reportText(said: readonly string[], result: string): string {
 /** 「1ターンを最後まで走り切った」結果か。 */
 function isSuccessResult(message: SDKMessage): boolean {
   return (message as { subtype?: unknown }).subtype === 'success';
+}
+
+/**
+ * `result.modelUsage` をモデル id → 累積の形へ写す。**`result.usage` は使わない。**
+ *
+ * SDK の型コメントがはっきり分けている — `usage` は
+ * **MAIN AGENT LOOP ONLY（Task subagent / sidechain を除く）** で、`modelUsage` が
+ * **「The correct field for token/cost accounting」**（メインループ・Task 作業者・
+ * sidechain・compaction を全部含む）。alteroid は委譲が主役なので、`usage` を採ると
+ * **作業者の消費が丸ごと落ちる**。落ちるのは階層の末端＝いちばん数が多い層である。
+ *
+ * `contextWindow` / `maxOutputTokens` は写さない（モデルの仕様であって消費量では
+ * ないので、台帳に入れると集計で足されうる）。
+ */
+function modelUsageOf(message: SDKMessage): Record<string, UsageTotals> | undefined {
+  const raw = (message as { modelUsage?: unknown }).modelUsage;
+  if (typeof raw !== 'object' || raw === null) return undefined;
+
+  const models: Record<string, UsageTotals> = {};
+  for (const [model, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value !== 'object' || value === null) continue;
+    const usage = value as Record<string, unknown>;
+    models[model] = {
+      inputTokens: tokenCount(usage.inputTokens),
+      outputTokens: tokenCount(usage.outputTokens),
+      cacheReadInputTokens: tokenCount(usage.cacheReadInputTokens),
+      cacheCreationInputTokens: tokenCount(usage.cacheCreationInputTokens),
+      webSearchRequests: tokenCount(usage.webSearchRequests),
+      // SDK 側の綴りは `costUSD`（他のフィールドと違って大文字）。
+      costUsd: usdAmount(usage.costUSD),
+    };
+  }
+  return models;
+}
+
+/** 整数の個数として読む。読めないものは 0（台帳へ NaN を入れない）。 */
+function tokenCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+/** 金額として読む。読めないものは 0。 */
+function usdAmount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
 }
 
 function resultText(message: SDKMessage): string {

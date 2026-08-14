@@ -9,6 +9,14 @@
 export * from './schema.js';
 export * from './store.js';
 /**
+ * 利用状況の台帳（alteroid 自身が使った分）。
+ *
+ * 出所は SDK の `result.modelUsage` であって `usage` ではない（後者はメイン
+ * ループぶんだけで、**作業者の消費が落ちる**）。累積値なので足さずに差分を取る。
+ * 数字を見せる口はすべて `USAGE_ESTIMATE_NOTICE` を一緒に運ぶ。
+ */
+export * from './usage.js';
+/**
  * ログイン（誰がこの API を叩いているか）と、alteroid を使ってよいかの2値。
  *
  * **PRD「権限境界」とは別の層である。** あちらはクローンが記憶を根拠に

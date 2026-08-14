@@ -7,6 +7,7 @@ import type { RunnerClient, RunnerEvent, RunnerRegistry } from './runner-protoco
 import { brief } from './runner.js';
 import type { InboxEvent, Job, JobStatus, JournalEntryInput, WorkspaceLocator } from './schema.js';
 import type { Stores } from './store.js';
+import { usageDate } from './usage.js';
 
 /**
  * 委譲のデーモン側（docs/architecture.md「配線」）。
@@ -1124,6 +1125,47 @@ class Pool implements ManagerPool {
           tool: event.tool,
           input: event.input,
         });
+        return;
+      }
+
+      case 'usage': {
+        // 降りてくるのは累積という事実で、差分にして積むのはここ（runner は
+        // 記憶ストアの鍵を持たないので書けない）。読む→畳む→書くはストアの
+        // 1操作に閉じてある。
+        const at = new Date();
+        let fold;
+        try {
+          fold = await this.#stores.usage.record({
+            managerId: event.managerId,
+            date: usageDate(at),
+            at: at.toISOString(),
+            snapshot: { sessionId: event.sessionId, models: event.models },
+          });
+        } catch {
+          // 台帳に積めないことで仕事は止めない。ただし黙って消さない。
+          await this.#journal({
+            type: 'exchange',
+            with: 'manager',
+            role: 'inbound',
+            text: `[${event.managerId}] 消費を台帳へ記録できなかった（この分は集計に出ない）`,
+          });
+          return;
+        }
+
+        // **数え直しを黙って通さない。** resume や mid-session の `/clear` で
+        // 累積が 0 に戻るのは正常だが、記録がないと後から「なぜ集計が飛んで
+        // いるか」を誰も辿れない（PRD「可観測性」）。
+        if (fold.reset !== undefined) {
+          await this.#journal({
+            type: 'exchange',
+            with: 'manager',
+            role: 'inbound',
+            text:
+              `[${event.managerId}] 消費の累積が数え直された` +
+              `（$${fold.reset.fromCostUsd.toFixed(4)} → $${fold.reset.toCostUsd.toFixed(4)}）。` +
+              'resume か /clear で SDK 側の累積が 0 から始まったため。記録済みの分は保持している。',
+          });
+        }
         return;
       }
 
