@@ -70,13 +70,20 @@ export async function profileStatusCommand(): Promise<void> {
   // いない」のすれ違いが起きて、鍵の権限の問題なのか配布の問題なのかを誰も
   // 切り分けられない（鍵の指紋を出しているのと同じ理由）。
   const { runners } = (await request(target, '/runners')) as {
-    runners: { runnerId: string; profile?: { sha256: string; updatedAt: string } }[];
+    runners: {
+      label: string;
+      state: string;
+      runnerId?: string;
+      profile?: { sha256: string; updatedAt: string };
+    }[];
   };
   for (const runner of runners) {
+    // 繋がるまで runner_id は分からない。宛先（label）なら登録した時点で言える。
+    const name = runner.runnerId ?? runner.label;
     stdout.write(
       runner.profile === undefined
-        ? `  ${runner.runnerId}: プロファイル無し\n`
-        : `  ${runner.runnerId}: sha256 ${runner.profile.sha256} (${runner.profile.updatedAt})\n`,
+        ? `  ${name}: プロファイル無し（${runner.state}）\n`
+        : `  ${name}: sha256 ${runner.profile.sha256} (${runner.profile.updatedAt})\n`,
     );
   }
 }
