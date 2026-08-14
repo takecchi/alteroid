@@ -553,6 +553,12 @@ class Clone implements CloneHost {
     try {
       await this.#ensureQuery();
       this.#pushInput(await this.#withFreshMemory(text));
+      // 入力がモデルへ渡った瞬間から最初の出力までは「考えている」。
+      // **`#ensureQuery` より後で送る** — セッションの起動そのものはまだ考え
+      // 始めていないので、そこで送ると手が動いていないのに考えていると
+      // 言うことになる。`#pushInput` は同期なので、この emit は続く `text`
+      // より必ず先に届く。
+      this.#emit(conversationId, { type: 'thinking' });
     } catch (error) {
       await this.#reportFailure(conversationId, String(error));
       this.#finishTurn();
@@ -1055,6 +1061,17 @@ class Clone implements CloneHost {
             this.#emit(turn?.conversationId ?? null, { type: 'tool', tool: block.name });
           }
         }
+        return;
+      }
+
+      // 道具の結果が返った＝実行は終わり、モデルが次を考え始めた。ここで
+      // 送り直さないと画面は `tool` の合図（「…を実行中…」）のまま止まり、
+      // もう終わっている実行をまだ続いているように見せてしまう。
+      // `tool_result` を含むときだけにしているのは、人間の発言のエコーや
+      // replay（`SDKUserMessageReplay`）を「考え始めた」と読み違えないため。
+      case 'user': {
+        if (!contentBlocks(message.message).some((block) => block.type === 'tool_result')) return;
+        this.#emit(this.#turn?.conversationId ?? null, { type: 'thinking' });
         return;
       }
 

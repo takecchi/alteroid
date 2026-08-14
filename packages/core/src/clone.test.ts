@@ -1177,3 +1177,174 @@ describe('クローン — 壊れ方の回帰', () => {
     await s.clone.stop();
   });
 });
+
+describe('クローン — 考えている合図（thinking）', () => {
+  /**
+   * `fakeSdk` は assistant(text) → result の1本道しか流せず、tool_use /
+   * tool_result を混ぜられない。ここでは呼び出し側が渡した固定のメッセージ列を
+   * そのまま流すだけの専用の偽 SDK をローカルに用意する
+   * （既存の `fakeSdk` の振る舞いは変えない）。
+   *
+   * **1本目の入力にだけ台本を使い、以降は汎用の応答に落ちる。** `clone.stop()` は
+   * 終了前に必ず蒸留の内部ターンをもう1本流す（生存条件）。台本を1本しか
+   * 用意しないテストでその2本目が無応答のままだと `result` が来ず、
+   * `stop()` が永遠に返らなくなる。
+   */
+  function fakeScriptedSdk(turns: SDKMessage[][]) {
+    const calls: FakeCall[] = [];
+    let turnIndex = 0;
+
+    const fn = ((params: { prompt: unknown; options?: Options }) => {
+      const call: FakeCall = { options: params.options ?? {}, inputs: [] };
+      calls.push(call);
+
+      async function* generate(): AsyncGenerator<SDKMessage, void> {
+        yield {
+          type: 'system',
+          subtype: 'init',
+          session_id: 'sess-fake',
+          uuid: 'uuid-init',
+        } as unknown as SDKMessage;
+
+        for await (const message of params.prompt as AsyncIterable<{
+          message: { content: unknown };
+        }>) {
+          call.inputs.push(String(message.message.content));
+          const script = turns[turnIndex] ?? [assistantText('わかった'), resultMessage('わかった')];
+          turnIndex += 1;
+          yield* script;
+        }
+      }
+
+      const generator = generate();
+      return Object.assign(generator, {
+        close: () => undefined,
+        interrupt: async () => undefined,
+      }) as unknown as Query;
+    }) as unknown as typeof sdkQuery;
+
+    return { fn, calls };
+  }
+
+  /** `setup` と同じ配線（本物の SDK やマネージャーを誤って起こさない）だが、queryFn だけ差し替える。 */
+  function setupScripted(turns: SDKMessage[][]): Setup {
+    const { fn, calls } = fakeScriptedSdk(turns);
+    const stores = createMemoryStores();
+    const clone = createClone({
+      stores,
+      queryFn: fn,
+      env: {},
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    const events: ChatStreamEvent[] = [];
+    clone.subscribe('conv-1', (event) => events.push(event));
+    return { clone, stores, calls, events };
+  }
+
+  function assistantText(text: string): SDKMessage {
+    return {
+      type: 'assistant',
+      message: { content: [{ type: 'text', text }] },
+      parent_tool_use_id: null,
+      session_id: 'sess-fake',
+      uuid: 'uuid-assistant-text',
+    } as unknown as SDKMessage;
+  }
+
+  function assistantToolUse(name: string): SDKMessage {
+    return {
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', id: 'tu-1', name, input: {} }] },
+      parent_tool_use_id: null,
+      session_id: 'sess-fake',
+      uuid: 'uuid-assistant-tool',
+    } as unknown as SDKMessage;
+  }
+
+  function userToolResult(): SDKMessage {
+    return {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'tu-1', content: 'ok' }],
+      },
+      parent_tool_use_id: 'tu-1',
+      session_id: 'sess-fake',
+      uuid: 'uuid-user-tool-result',
+    } as unknown as SDKMessage;
+  }
+
+  /** 人間の発言のエコーや replay を模する（`tool_result` を含まない `user` メッセージ）。 */
+  function userEcho(text: string): SDKMessage {
+    return {
+      type: 'user',
+      message: { role: 'user', content: text },
+      parent_tool_use_id: null,
+      session_id: 'sess-fake',
+      uuid: 'uuid-user-echo',
+    } as unknown as SDKMessage;
+  }
+
+  function resultMessage(text: string): SDKMessage {
+    return {
+      type: 'result',
+      subtype: 'success',
+      result: text,
+      session_id: 'sess-fake',
+      uuid: 'uuid-result',
+    } as unknown as SDKMessage;
+  }
+
+  it('人間の発言に thinking が付き、text より先に届く', async () => {
+    const s = setupScripted([[assistantText('こんにちは'), resultMessage('こんにちは')]]);
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const thinkingIndex = s.events.findIndex((event) => event.type === 'thinking');
+    const textIndex = s.events.findIndex((event) => event.type === 'text');
+    expect(thinkingIndex).toBeGreaterThanOrEqual(0);
+    expect(textIndex).toBeGreaterThanOrEqual(0);
+    expect(thinkingIndex).toBeLessThan(textIndex);
+
+    await s.clone.stop();
+  });
+
+  it('道具の結果が返ったら thinking を送り直す（tool の合図で止まらない）', async () => {
+    const s = setupScripted([
+      [assistantToolUse('shell'), userToolResult(), assistantText('できた'), resultMessage('できた')],
+    ]);
+
+    s.clone.post(humanMessage('やって'));
+    await waitForDone(s.events);
+
+    const toolIndex = s.events.findIndex((event) => event.type === 'tool');
+    expect(toolIndex).toBeGreaterThanOrEqual(0);
+
+    const after = s.events.slice(toolIndex + 1);
+    const thinkingAfterToolIndex = after.findIndex((event) => event.type === 'thinking');
+    const textAfterToolIndex = after.findIndex((event) => event.type === 'text');
+    expect(thinkingAfterToolIndex).toBeGreaterThanOrEqual(0);
+    expect(thinkingAfterToolIndex).toBeLessThan(textAfterToolIndex);
+
+    await s.clone.stop();
+  });
+
+  it('tool_result を含まない user メッセージでは thinking を送らない', async () => {
+    const s = setupScripted([
+      [userEcho('やあ'), assistantText('こんにちは'), resultMessage('こんにちは')],
+    ]);
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    // #runTurn が入力を渡した時点の1回だけで、tool_result を含まない
+    // user メッセージ（エコー）からは増えない。
+    const thinkingCount = s.events.filter((event) => event.type === 'thinking').length;
+    expect(thinkingCount).toBe(1);
+
+    await s.clone.stop();
+  });
+});
