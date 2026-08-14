@@ -16,6 +16,7 @@ import {
   profileStatusCommand,
 } from './profile.js';
 import { alteroidRoot } from './paths.js';
+import { usageCommand } from './usage.js';
 
 /**
  * alteroid — デーモンへの薄いクライアント。
@@ -45,6 +46,20 @@ program
   .description('クローンと会話する（デーモンが居なければ起こす）')
   .action(async () => {
     await chatCommand();
+  });
+
+/**
+ * 利用状況（いくら使ったか）。経路は `GET /usage` の1本だけで、chat の
+ * `/usage` と Web UI の画面も同じものを見る（`apps/cli/src/usage.ts`）。
+ */
+program
+  .command('usage')
+  .description('alteroid が使った分（トークンと費用）を見る')
+  .option('--from <date>', 'この日から（YYYY-MM-DD）')
+  .option('--to <date>', 'この日まで（YYYY-MM-DD）')
+  .option('--manager <id>', 'このマネージャーの分だけ')
+  .action(async (options: { from?: string; to?: string; manager?: string }) => {
+    await usageCommand(options);
   });
 
 /**

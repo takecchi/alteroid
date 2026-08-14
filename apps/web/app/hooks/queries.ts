@@ -10,6 +10,12 @@ import useSWR from 'swr';
 import { unwrap, useApi } from '~/lib/api';
 import type { JournalEntry, JournalEntryType } from '~/lib/types';
 
+export interface UsageQuery {
+  from?: string;
+  to?: string;
+  managerId?: string;
+}
+
 export const KEY = {
   health: { type: 'health' } as const,
   managers: { type: 'managers' } as const,
@@ -20,6 +26,7 @@ export const KEY = {
   report: (date: string) => ({ type: 'report', date }) as const,
   journal: (limit: number, types: string) => ({ type: 'journal', limit, types }) as const,
   schedule: { type: 'schedule' } as const,
+  usage: (query: UsageQuery) => ({ type: 'usage', ...query }) as const,
   memory: { type: 'memory' } as const,
   memoryDoc: (slug: string) => ({ type: 'memoryDoc', slug }) as const,
   conversations: (limit: number) => ({ type: 'conversations', limit }) as const,
@@ -107,6 +114,28 @@ export function useSchedule() {
   return useSWR(KEY.schedule, () => api.api.GET('/schedule').then(unwrap), {
     refreshInterval: 30_000,
   });
+}
+
+/**
+ * 利用状況（いくら使ったか）。経路は `GET /usage` の1本だけで、CLI・chat の
+ * `/usage`・クローンの `usage_read` と同じものを見る（`apps/daemon/src/app.ts`
+ * 「経路は1本だけにする」）。
+ */
+export function useUsage(query: UsageQuery = {}) {
+  const api = useApi();
+  return useSWR(KEY.usage(query), ({ from, to, managerId }) =>
+    api.api
+      .GET('/usage', {
+        params: {
+          query: {
+            ...(from === undefined ? {} : { from }),
+            ...(to === undefined ? {} : { to }),
+            ...(managerId === undefined ? {} : { managerId }),
+          },
+        },
+      })
+      .then(unwrap),
+  );
 }
 
 export function useMemoryDocuments() {

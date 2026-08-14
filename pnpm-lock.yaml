@@ -161,6 +161,9 @@ importers:
 
   apps/cli:
     dependencies:
+      '@alteroid/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@alteroid/daemon':
         specifier: workspace:*
         version: link:../daemon
@@ -278,6 +281,9 @@ importers:
       '@alteroid/api-client':
         specifier: workspace:*
         version: link:../../packages/api-client
+      '@alteroid/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@react-router/node':
         specifier: 'catalog:'
         version: 7.18.2(react-router@7.18.2(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(typescript@6.0.3)

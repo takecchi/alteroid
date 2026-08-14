@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+// 再輸出（下）とは別に、この中でも使うので取り込む。
+import { USAGE_ESTIMATE_NOTICE, ZERO_USAGE } from './usage-format.js';
+
 /**
  * Claude の利用状況の台帳（消費した側の記録）。
  *
@@ -44,9 +47,22 @@ import { z } from 'zod';
  * 道具）はすべて {@link USAGE_ESTIMATE_NOTICE} を一緒に運ぶ。
  */
 
-/** 数字を見せるときに必ず添える但し書き。**どの口でも落とさないこと。** */
-export const USAGE_ESTIMATE_NOTICE =
-  'SDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。';
+/**
+ * 表示のための算術と整形は `usage-format.ts` にある。
+ *
+ * **実行時の依存を持たない形で切り出して `@alteroid/core/usage` として出している** —
+ * ブラウザ（apps/web）が `index.ts` 経由で読むと、Node の組み込みと Claude Agent SDK を
+ * 含む core 全体が初期チャンクに入る。ここから再輸出しているので、既存の読み手
+ * （`@alteroid/core`）は何も変えなくてよい。
+ */
+export {
+  USAGE_ESTIMATE_NOTICE,
+  ZERO_USAGE,
+  formatUsd,
+  sumUsageRows,
+  summarizeUsage,
+  usageDate,
+} from './usage-format.js';
 
 const isoDateTime = z.string().datetime({ offset: true });
 
@@ -69,15 +85,6 @@ export const usageTotalsSchema = z.object({
 });
 
 export type UsageTotals = z.infer<typeof usageTotalsSchema>;
-
-export const ZERO_USAGE: UsageTotals = {
-  inputTokens: 0,
-  outputTokens: 0,
-  cacheReadInputTokens: 0,
-  cacheCreationInputTokens: 0,
-  webSearchRequests: 0,
-  costUsd: 0,
-};
 
 /**
  * `result.modelUsage` をそのまま写した、その時点の**累積**。
@@ -340,70 +347,3 @@ export const usageBreakdownSchema = z.object({
 });
 
 export type UsageBreakdown = z.infer<typeof usageBreakdownSchema>;
-
-function groupBy<K extends string>(
-  rows: readonly UsageRow[],
-  key: (row: UsageRow) => string,
-  label: K,
-): Array<{ [P in K]: string } & { totals: UsageTotals }> {
-  const buckets = new Map<string, UsageRow[]>();
-  for (const row of rows) {
-    const id = key(row);
-    const found = buckets.get(id);
-    if (found) found.push(row);
-    else buckets.set(id, [row]);
-  }
-  return [...buckets.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([id, group]) => ({ [label]: id, totals: sumUsageRows(group) })) as Array<
-    { [P in K]: string } & { totals: UsageTotals }
-  >;
-}
-
-/** 行を3軸へ畳む。 */
-export function summarizeUsage(rows: readonly UsageRow[]): UsageBreakdown {
-  return {
-    total: sumUsageRows(rows),
-    byDate: groupBy(rows, (row) => row.date, 'date'),
-    byManager: groupBy(rows, (row) => row.managerId, 'managerId'),
-    byModel: groupBy(rows, (row) => row.model, 'model'),
-  };
-}
-
-/**
- * 金額の表示（USD）。**$1 未満は 4 桁**まで出す。
- *
- * 委譲1本の費用はふつう $1 を大きく下回るので、2 桁に丸めると `$0.00` になって
- * 「使っていない」と読める。**取れている数字を丸めて消さない。**
- */
-export function formatUsd(usd: number): string {
-  return `$${usd < 1 ? usd.toFixed(4) : usd.toFixed(2)}`;
-}
-
-/** 行の合計（モデル横断・日横断）。表示側の算術をここへ寄せる。 */
-export function sumUsageRows(rows: readonly UsageRow[]): UsageTotals {
-  return rows.reduce<UsageTotals>(
-    (sum, row) => ({
-      inputTokens: sum.inputTokens + row.totals.inputTokens,
-      outputTokens: sum.outputTokens + row.totals.outputTokens,
-      cacheReadInputTokens: sum.cacheReadInputTokens + row.totals.cacheReadInputTokens,
-      cacheCreationInputTokens: sum.cacheCreationInputTokens + row.totals.cacheCreationInputTokens,
-      webSearchRequests: sum.webSearchRequests + row.totals.webSearchRequests,
-      costUsd: sum.costUsd + row.totals.costUsd,
-    }),
-    { ...ZERO_USAGE },
-  );
-}
-
-/**
- * ローカル時刻の `YYYY-MM-DD`。
- *
- * **UTC で切らない。** 日報（`ALTEROID_DAILY_REPORT_AT`）がローカル時刻で動くので、
- * ここを UTC にすると「今日いくら使ったか」と日報の「今日」がずれる。
- */
-export function usageDate(at: Date): string {
-  const y = at.getFullYear();
-  const m = `${at.getMonth() + 1}`.padStart(2, '0');
-  const d = `${at.getDate()}`.padStart(2, '0');
-  return `${y}-${m}-${d}`;
-}

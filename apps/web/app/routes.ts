@@ -21,6 +21,7 @@ export default [
     route('memory/:slug', 'routes/memory-detail.tsx'),
     route('approvals', 'routes/approvals.tsx'),
     route('reports/:date?', 'routes/reports.tsx'),
+    route('usage', 'routes/usage.tsx'),
     route('schedule', 'routes/schedule.tsx'),
     route('settings', 'routes/settings.tsx'),
     route('*', 'routes/not-found.tsx'),
