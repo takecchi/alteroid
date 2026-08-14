@@ -6,7 +6,7 @@
  * 画面を作り直すと、その cleanup が同じリクエストを中断し、続く text / done が
  * 二度と届かない — しかも「静かに終わった」ようにしか見えない。
  */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -77,6 +77,16 @@ async function send(text: string) {
   fireEvent.click(screen.getByRole('button', { name: /送る/ }));
 }
 
+/**
+ * この画面には**名前の違う list が2つ**ある（やりとりと会話一覧）。
+ *
+ * 同じ本文が両方に出るのは正しい（送った直後は、サーバの `/conversations` も
+ * 自分の発言を抜粋にする）。だから本文を探すときは、どちらを見ているのかを
+ * 必ず言うこと — 画面全体で探すと、二度当たるか、当たった側を取り違える。
+ */
+const transcript = () => screen.getByRole('list', { name: 'やりとり' });
+const conversationList = () => screen.getByRole('list', { name: '会話' });
+
 describe('新しい会話', () => {
   it('open で URL が変わっても、受信中のストリームが切れない', async () => {
     const stub = stubFetch((url, init) => {
@@ -91,7 +101,9 @@ describe('新しい会話', () => {
     // open の後に届いた分まで、全部同じ画面に残っている
     expect(await screen.findByText(/こんにちは、元気にやっている/)).toBeTruthy();
     // 自分の発言も消えていない
-    expect(screen.getByText('やあ')).toBeTruthy();
+    // **やりとりの中に限って**見る。送信は会話一覧の抜粋にも即座に映るので
+    // （`useRecordOwnMessage`）、画面全体で探すと同じ本文に二度当たる。
+    expect(within(transcript()).getByText('やあ')).toBeTruthy();
 
     // URL は id へ揃っている
     await waitFor(() => {
@@ -118,6 +130,35 @@ describe('新しい会話', () => {
       expect(screen.queryByRole('button', { name: /受信をやめる/ })).toBeNull();
     });
     expect(screen.getByRole('button', { name: /送る/ })).toBeTruthy();
+  });
+
+  /**
+   * 送ったものが**会話一覧に即座に出る**こと。
+   *
+   * 一覧はサーバが日誌を走査して組み立てるので、SSE の往復を待つと目に見えて
+   * 遅い（「送ったのに会話一覧に出てこない」）。だから `open` で会話 id が
+   * 確定した時点で、暫定値を先に入れている（`useRecordOwnMessage`）。
+   *
+   * **ここを固定しておかないと、あの反映が消えても誰も気づけない。**
+   */
+  it('送ると、会話一覧にその抜粋が即座に現れる', async () => {
+    stubFetch((url, init) => {
+      if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
+      // サーバは何も返さない。一覧に出るなら、それは手元で入れた分である。
+      if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
+      return undefined;
+    });
+
+    renderChat();
+    // 一覧が空のまま描かれている（この時点では list ごと出ていない）
+    await screen.findByText('まだ会話がない。');
+
+    await send('やあ');
+
+    // **`<ul>` が出るのを待つ。** 一覧が空のあいだは list ごと描かれないので
+    // （`まだ会話がない。` に差し替わる）、先に掴もうとすると存在しない。
+    await waitFor(() => conversationList());
+    expect(within(conversationList()).getByText('やあ')).toBeTruthy();
   });
 });
 
@@ -160,7 +201,7 @@ describe('受信をやめる', () => {
     expect(screen.getByRole('button', { name: /送る/ })).toBeTruthy();
     // ③ それまでに届いた本文は残る
     expect(screen.getByText('ここまでは届いた')).toBeTruthy();
-    expect(screen.getByText('やあ')).toBeTruthy();
+    expect(within(transcript()).getByText('やあ')).toBeTruthy();
   });
 
   it('ツール実行中の表示でも同じ', async () => {

@@ -16,6 +16,17 @@ export interface UsageQuery {
   managerId?: string;
 }
 
+/**
+ * SWR のキーはオブジェクトなので、`type` を見て束で指す。
+ *
+ * `use-journal-live.ts`（無効化）と `mutations.ts`（自分の送信の即時反映）の
+ * 両方から使うのでここに置く。キーの形を決めているのがこのファイルなので、
+ * その判定もここに置くのが自然（重複させない）。
+ */
+export function isKeyOfType(key: unknown, type: string): boolean {
+  return typeof key === 'object' && key !== null && (key as { type?: unknown }).type === type;
+}
+
 export const KEY = {
   health: { type: 'health' } as const,
   managers: { type: 'managers' } as const,
