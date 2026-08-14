@@ -636,3 +636,92 @@ describe('manager_list は件数が増えても壊れない', () => {
     expect(reply).toContain('mgr-999');
   });
 });
+
+describe('usage_read（人間が見られるものはクローンからも見られる）', () => {
+  const models = {
+    'claude-opus-5': {
+      inputTokens: 10,
+      outputTokens: 100,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      webSearchRequests: 0,
+      costUsd: 2,
+    },
+    'claude-sonnet-5': {
+      inputTokens: 5,
+      outputTokens: 50,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      webSearchRequests: 0,
+      costUsd: 0.0031,
+    },
+  };
+
+  async function spent(h: Harness) {
+    await h.stores.usage.record({
+      managerId: 'mgr-1',
+      date: '2026-08-14',
+      at: '2026-08-14T10:00:00.000Z',
+      snapshot: { models },
+    });
+  }
+
+  it('道具として配られている（クローンから見えないものを作らない）', () => {
+    expect(CLONE_ALLOWED_TOOLS).toContain(qualifiedToolName('usage_read'));
+  });
+
+  it('合計とモデル別を返し、但し書きを必ず添える', async () => {
+    const h = harness();
+    await spent(h);
+
+    const reply = await h.call('usage_read', {});
+
+    expect(reply).toContain('合計 $2.00');
+    expect(reply).toContain('claude-opus-5');
+    expect(reply).toContain('claude-sonnet-5');
+    // **推定であることを落とさない。** 台帳の数字を確定として見せない。
+    expect(reply).toContain('請求明細ではない');
+  });
+
+  it('$1 未満を丸めて 0 にしない（「使っていない」と読めてしまう）', async () => {
+    const h = harness();
+    await spent(h);
+
+    const reply = await h.call('usage_read', { managerId: 'mgr-1' });
+
+    expect(reply).toContain('$0.0031');
+    expect(reply).not.toContain('$0.00\n');
+  });
+
+  it('まだ1件も無ければ「$0」ではなく「記録が無い」と言う', async () => {
+    const h = harness();
+
+    const reply = await h.call('usage_read', {});
+
+    expect(reply).toContain('記録が無い');
+    expect(reply).not.toContain('$0');
+  });
+
+  it('台帳の始点より前を聞かれたら「0」ではなく「記録が無い」と言う', async () => {
+    // 過去分は掘り起こさないと決めた。だから始点を黙って隠さない — 台帳が無かった
+    // 期間を「使っていない期間」に見せると、それは嘘になる。
+    const h = harness();
+    await spent(h);
+
+    const reply = await h.call('usage_read', { from: '2020-01-01' });
+
+    expect(reply).toContain('台帳の始点');
+    expect(reply).toContain('記録が無い');
+  });
+
+  it('その範囲に記録が無いことと、台帳が空であることを混ぜない', async () => {
+    const h = harness();
+    await spent(h);
+
+    const reply = await h.call('usage_read', { from: '2026-09-01', to: '2026-09-30' });
+
+    expect(reply).toContain('その範囲には記録が無い');
+    // 台帳自体は始まっているので、その始点は分かる。
+    expect(reply).toContain('台帳の始点: 2026-08-14');
+  });
+});

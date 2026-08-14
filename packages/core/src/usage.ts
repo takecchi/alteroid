@@ -325,6 +325,61 @@ export const usageAggregateSchema = z.object({
 
 export type UsageAggregate = z.infer<typeof usageAggregateSchema>;
 
+/**
+ * 3軸それぞれの内訳。**4つの口（API / CLI / Web / クローンの道具）が共有する。**
+ *
+ * 各口で足し直すと、どれか1つの丸め方や取りこぼしが他と食い違い、「CLI では
+ * $3 なのに画面では $2.9」という形で信用を失う。算術はここに1つだけ置く。
+ */
+export const usageBreakdownSchema = z.object({
+  total: usageTotalsSchema,
+  byDate: z.array(z.object({ date: usageDateSchema, totals: usageTotalsSchema })),
+  byManager: z.array(z.object({ managerId: z.string(), totals: usageTotalsSchema })),
+  /** どの層（Fable / Opus / Sonnet）で使ったか。 */
+  byModel: z.array(z.object({ model: z.string(), totals: usageTotalsSchema })),
+});
+
+export type UsageBreakdown = z.infer<typeof usageBreakdownSchema>;
+
+function groupBy<K extends string>(
+  rows: readonly UsageRow[],
+  key: (row: UsageRow) => string,
+  label: K,
+): Array<{ [P in K]: string } & { totals: UsageTotals }> {
+  const buckets = new Map<string, UsageRow[]>();
+  for (const row of rows) {
+    const id = key(row);
+    const found = buckets.get(id);
+    if (found) found.push(row);
+    else buckets.set(id, [row]);
+  }
+  return [...buckets.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([id, group]) => ({ [label]: id, totals: sumUsageRows(group) })) as Array<
+    { [P in K]: string } & { totals: UsageTotals }
+  >;
+}
+
+/** 行を3軸へ畳む。 */
+export function summarizeUsage(rows: readonly UsageRow[]): UsageBreakdown {
+  return {
+    total: sumUsageRows(rows),
+    byDate: groupBy(rows, (row) => row.date, 'date'),
+    byManager: groupBy(rows, (row) => row.managerId, 'managerId'),
+    byModel: groupBy(rows, (row) => row.model, 'model'),
+  };
+}
+
+/**
+ * 金額の表示（USD）。**$1 未満は 4 桁**まで出す。
+ *
+ * 委譲1本の費用はふつう $1 を大きく下回るので、2 桁に丸めると `$0.00` になって
+ * 「使っていない」と読める。**取れている数字を丸めて消さない。**
+ */
+export function formatUsd(usd: number): string {
+  return `$${usd < 1 ? usd.toFixed(4) : usd.toFixed(2)}`;
+}
+
 /** 行の合計（モデル横断・日横断）。表示側の算術をここへ寄せる。 */
 export function sumUsageRows(rows: readonly UsageRow[]): UsageTotals {
   return rows.reduce<UsageTotals>(

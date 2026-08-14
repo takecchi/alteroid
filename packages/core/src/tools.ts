@@ -18,6 +18,7 @@ import { scheduleKindSchema, scheduleSpecSchema } from './schema.js';
 import type { ChatStreamEvent, PendingApproval, ScheduleSpec, ScheduledRequest } from './schema.js';
 import { CANON_REVISION, canonDocument, canonNames } from './self.js';
 import type { Stores } from './store.js';
+import { formatUsd, summarizeUsage, type UsageAggregate } from './usage.js';
 
 /**
  * クローンの道具（インプロセス MCP）。
@@ -64,6 +65,7 @@ export const CLONE_TOOL_NAMES = [
   'ask_human',
   'approvals_list',
   'daily_report_write',
+  'usage_read',
   'schedule_list',
   'schedule_create',
   'schedule_remove',
@@ -286,6 +288,40 @@ export function createCloneTools(context: ToolContext) {
           date !== undefined && localDayRange(date) !== null ? date : localDate(new Date());
         await stores.journal.append({ type: 'daily_report', date: target, body });
         return text(`${target} の日報を残した。`);
+      },
+    ),
+
+    // --- 利用状況（いくら使ったか） --------------------------------------------
+    /**
+     * **人間が見られるものは、クローンからも見られること。**
+     *
+     * 人間は `claude.ai/settings/usage` と Web UI で消費を見られる。その写像である
+     * クローンが見られないなら、それは能力の削除である（north_star 禁止1）。
+     *
+     * これは飾りではなく**判断の材料**である。委譲を続けてよいか、重い仕事を
+     * いま投げてよいかは、残りが見えなければ勘で決めるしかない。実際に支出上限へ
+     * 当たって走行中のマネージャーが2本同時に落ちたとき、クローンには事前に
+     * 知る手段が無く、マネージャーの返答から推測するしかなかった。
+     */
+    tool(
+      'usage_read',
+      [
+        'alteroid が使った分（トークンと費用）を台帳から読む。日・マネージャー・モデル別。',
+        '**推定値であり請求明細ではない。**',
+        '記録は台帳を置いた日から始まっているので、それより前は 0 ではなく「記録が無い」と出る。',
+      ].join(' '),
+      {
+        from: z.string().optional().describe('この日から（YYYY-MM-DD）。省略すると台帳の全期間'),
+        to: z.string().optional().describe('この日まで（YYYY-MM-DD）'),
+        managerId: z.string().optional().describe('このマネージャーの分だけ'),
+      },
+      async ({ from, to, managerId }) => {
+        const aggregate = await stores.usage.aggregate({
+          ...(from === undefined ? {} : { from }),
+          ...(to === undefined ? {} : { to }),
+          ...(managerId === undefined ? {} : { managerId }),
+        });
+        return text(renderUsage(aggregate));
       },
     ),
 
@@ -814,6 +850,84 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
   ];
+}
+
+/**
+ * 台帳の集計をクローンが読める形へ。
+ *
+ * **落としたら落としたと言う。** 日数やマネージャーの本数に比例して伸ばすと MCP の
+ * 出力上限を超え、そのときクローンには1文字も届かない（実測 52,997 文字で溢れた）。
+ * だから軸ごとに上限を置くが、**打ち切ったことを必ず書く** — 「全部でこれだけ」と
+ * 読める出力を黙って作ると、それは嘘になる。
+ */
+const USAGE_AXIS_LIMIT = 14;
+
+function renderUsage(aggregate: UsageAggregate): string {
+  const { rows, since, beforeLedger, notice } = aggregate;
+
+  if (since === null) {
+    return [
+      '台帳にはまだ1件も記録が無い。',
+      '（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）',
+    ].join('\n');
+  }
+
+  const summary = summarizeUsage(rows);
+  const lines: string[] = [];
+
+  if (rows.length === 0) {
+    lines.push('その範囲には記録が無い。');
+  } else {
+    lines.push(`合計 ${formatUsd(summary.total.costUsd)}`);
+    lines.push(
+      `  入力 ${summary.total.inputTokens.toLocaleString('en-US')} / ` +
+        `出力 ${summary.total.outputTokens.toLocaleString('en-US')} / ` +
+        `キャッシュ読み ${summary.total.cacheReadInputTokens.toLocaleString('en-US')} / ` +
+        `キャッシュ書き ${summary.total.cacheCreationInputTokens.toLocaleString('en-US')}`,
+    );
+
+    const axis = (
+      title: string,
+      entries: Array<{ label: string; totals: { costUsd: number } }>,
+    ) => {
+      lines.push('', title);
+      for (const entry of entries.slice(0, USAGE_AXIS_LIMIT)) {
+        lines.push(`  ${entry.label}: ${formatUsd(entry.totals.costUsd)}`);
+      }
+      if (entries.length > USAGE_AXIS_LIMIT) {
+        lines.push(`  …（残り ${entries.length - USAGE_AXIS_LIMIT} 件は出していない）`);
+      }
+    };
+
+    // 日別は新しい順（古い日で上限を使い切らせない）。
+    axis(
+      '日別:',
+      [...summary.byDate].reverse().map((e) => ({ label: e.date, totals: e.totals })),
+    );
+    // マネージャー別・モデル別は高い順（どの委譲・どの層が高かったかを先に見せる）。
+    axis(
+      'マネージャー別:',
+      [...summary.byManager]
+        .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
+        .map((e) => ({ label: e.managerId, totals: e.totals })),
+    );
+    axis(
+      'モデル別:',
+      [...summary.byModel]
+        .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
+        .map((e) => ({ label: e.model, totals: e.totals })),
+    );
+  }
+
+  lines.push('', `台帳の始点: ${since}`);
+  if (beforeLedger) {
+    // **0 と言わない。** 台帳が無かった期間を「使っていない期間」と読ませない。
+    lines.push(
+      '照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。',
+    );
+  }
+  lines.push(notice);
+  return lines.join('\n');
 }
 
 export function createCloneMcpServer(context: ToolContext) {

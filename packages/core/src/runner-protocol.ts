@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { jobStatusSchema } from './schema.js';
+import { rateLimitFactsSchema, usageLimitNoticeSchema } from './usage-limits.js';
 import { usageTotalsSchema } from './usage.js';
 
 /**
@@ -244,6 +245,29 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     sessionId: z.string().optional(),
     /** モデル id → その時点の累積。 */
     models: z.record(z.string(), usageTotalsSchema),
+  }),
+  /**
+   * 上限に関する SDK の文言（当たった / 課金枠へ移った / 近づいている / 組織方針）。
+   *
+   * **文言は言い換えずにそのまま運ぶ。** 人間が検索できる形で残らないと、
+   * claude.ai の画面と突き合わせられない。分類だけを添える。
+   */
+  z.object({
+    type: z.literal('usage_notice'),
+    managerId: z.string(),
+    notice: usageLimitNoticeSchema,
+  }),
+  /**
+   * `rate_limit_event` から読めた枠の事実（アカウント単位）。
+   *
+   * **ターンを回している間しか届かない。** だから使い捨ての probe による定期観測と
+   * 併用する（`usage-snapshot.ts`）。こちらは `status` と
+   * `overageDisabledReason` を持っているので、probe では取れないことが分かる。
+   */
+  z.object({
+    type: z.literal('rate_limit'),
+    managerId: z.string(),
+    facts: rateLimitFactsSchema,
   }),
   /** SDK のセッション生ログ（SessionStore のミラー）。永続化はデーモンが行う。 */
   z.object({

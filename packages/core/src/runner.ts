@@ -28,6 +28,7 @@ import type {
   RunnerStartCommand,
 } from './runner-protocol.js';
 import type { JobStatus } from './schema.js';
+import { classifyUsageNotice, toRateLimitFacts } from './usage-limits.js';
 import type { UsageTotals } from './usage.js';
 
 /**
@@ -903,6 +904,35 @@ class RunnerSession {
       return;
     }
 
+    // 枠の事実（アカウント単位）。**ターンの頭ごとに来る**ので、ここが
+    // 走行中の唯一の最新情報になる（使い捨ての probe は idle 用）。
+    if (message.type === 'rate_limit_event') {
+      const facts = toRateLimitFacts((message as { rate_limit_info?: unknown }).rate_limit_info);
+      if (facts !== undefined) {
+        this.#emit({ type: 'rate_limit', managerId: this.#id, facts });
+      }
+      return;
+    }
+
+    // 上限の文言。**API エラーとしては来ない**（SDK のコメント）ので、
+    // 通知・情報メッセージの本文を見るしかない。ここを見ないと「枠を使い切って
+    // 課金枠に移った」＝止まる一歩前を捉えられない。
+    if (message.type === 'system') {
+      const said =
+        message.subtype === 'notification'
+          ? (message as { text?: unknown }).text
+          : message.subtype === 'informational'
+            ? (message as { content?: unknown }).content
+            : undefined;
+      if (typeof said === 'string') {
+        const notice = classifyUsageNotice(said);
+        if (notice !== undefined) {
+          this.#emit({ type: 'usage_notice', managerId: this.#id, notice });
+        }
+      }
+      return;
+    }
+
     // マネージャーが喋った本文を溜めておく。**作業者の本文は混ぜない** —
     // `parent_tool_use_id` が付いているものは Task の中の別の層の発言であって、
     // マネージャーが人間（＝クローン）へ向けて書いたものではない。
@@ -946,6 +976,19 @@ class RunnerSession {
         });
       }
     } else {
+      // **なぜ終わったのかを落とさない。** 実際に支出上限へ当たったとき、
+      // マネージャーは `You've hit your individual spend limit` を返して終わった。
+      // これを「結果なしで終了」だけにすると、上限で止まったのか失敗したのかを
+      // クローンが区別できない — 前者は待つ / 人間に頼む、後者は挑み直す、で
+      // 手が正反対になる。判定は SDK の定数で行う（自前の正規表現は腐る）。
+      for (const candidate of [resultText(message), ...resultErrors(message)]) {
+        const notice = classifyUsageNotice(candidate);
+        if (notice !== undefined) {
+          this.#emit({ type: 'usage_notice', managerId: this.#id, notice });
+          break;
+        }
+      }
+
       const outcome = this.#recoverFromFailedResume(`結果なしで終了: ${resultText(message)}`);
       if (outcome === 'recovered') return;
       // **戻れなかった resume を「1ターン終わった」として報告しない。** ここを
@@ -1284,6 +1327,14 @@ function modelUsageOf(message: SDKMessage): Record<string, UsageTotals> | undefi
     };
   }
   return models;
+}
+
+/** `result.errors[]`（構造を持たない失敗の行）。無ければ空。 */
+function resultErrors(message: SDKMessage): string[] {
+  const errors = (message as { errors?: unknown }).errors;
+  return Array.isArray(errors)
+    ? errors.filter((line): line is string => typeof line === 'string')
+    : [];
 }
 
 /** 整数の個数として読む。読めないものは 0（台帳へ NaN を入れない）。 */

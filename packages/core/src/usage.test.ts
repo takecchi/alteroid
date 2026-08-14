@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   foldUsageSnapshot,
+  formatUsd,
+  summarizeUsage,
   sumUsageRows,
   type UsageBaseline,
   usageDate,
@@ -217,6 +219,73 @@ describe('行の合計', () => {
 
   it('空なら全部ゼロ', () => {
     expect(sumUsageRows([])).toEqual(ZERO_USAGE);
+  });
+});
+
+describe('3軸の内訳', () => {
+  const rows: UsageRow[] = [
+    {
+      date: '2026-08-13',
+      managerId: 'm1',
+      model: 'opus',
+      totals: totals({ costUsd: 1 }),
+      updatedAt: AT,
+    },
+    {
+      date: '2026-08-14',
+      managerId: 'm1',
+      model: 'sonnet',
+      totals: totals({ costUsd: 0.25 }),
+      updatedAt: AT,
+    },
+    {
+      date: '2026-08-14',
+      managerId: 'm2',
+      model: 'opus',
+      totals: totals({ costUsd: 2 }),
+      updatedAt: AT,
+    },
+  ];
+
+  it('日・マネージャー・モデルの3軸すべてで引ける', () => {
+    const summary = summarizeUsage(rows);
+    expect(summary.total.costUsd).toBe(3.25);
+    expect(summary.byDate).toEqual([
+      { date: '2026-08-13', totals: totals({ costUsd: 1 }) },
+      { date: '2026-08-14', totals: totals({ costUsd: 2.25 }) },
+    ]);
+    expect(summary.byManager.map((m) => m.managerId)).toEqual(['m1', 'm2']);
+    expect(summary.byModel).toEqual([
+      { model: 'opus', totals: totals({ costUsd: 3 }) },
+      { model: 'sonnet', totals: totals({ costUsd: 0.25 }) },
+    ]);
+  });
+
+  it('どの軸で足しても合計は同じ（口ごとに食い違わない）', () => {
+    const summary = summarizeUsage(rows);
+    for (const axis of [summary.byDate, summary.byManager, summary.byModel]) {
+      const sum = axis.reduce((acc, entry) => acc + entry.totals.costUsd, 0);
+      expect(sum).toBeCloseTo(summary.total.costUsd, 10);
+    }
+  });
+
+  it('空なら全部空', () => {
+    const summary = summarizeUsage([]);
+    expect(summary.total).toEqual(ZERO_USAGE);
+    expect(summary.byDate).toEqual([]);
+  });
+});
+
+describe('金額の表示', () => {
+  it('$1 未満は 4 桁まで出す（丸めて 0 にしない）', () => {
+    // 委譲1本はふつう $1 を大きく下回る。2桁に丸めると `$0.00` になって
+    // 「使っていない」と読める。
+    expect(formatUsd(0.0031)).toBe('$0.0031');
+    expect(formatUsd(0)).toBe('$0.0000');
+  });
+
+  it('$1 以上は 2 桁', () => {
+    expect(formatUsd(12.3456)).toBe('$12.35');
   });
 });
 
