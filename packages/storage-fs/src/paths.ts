@@ -34,6 +34,14 @@ export interface AlteroidPaths {
    * 載らない。
    */
   profile: string;
+  /**
+   * 利用状況の台帳: JSON（`usage.ts`）。
+   *
+   * `auth/` と同じ理由で `memory/` には置かない — 人間が手で書き換える前提の場所
+   * ではない（増分は `record` を経由してのみ動くべきで、直接編集すると差分の
+   * 基準がずれる）。
+   */
+  usage: string;
 }
 
 export const ALTEROID_HOME_ENV = 'ALTEROID_HOME';
@@ -54,5 +62,6 @@ export function resolvePaths(root: string = defaultRoot()): AlteroidPaths {
     state: join(root, 'state'),
     auth: join(root, 'auth'),
     profile: join(root, 'profile.sh'),
+    usage: join(root, 'usage'),
   };
 }
