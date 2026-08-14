@@ -1746,3 +1746,115 @@ describe('マネージャーの報告を黙って落とさない', () => {
     await s.pool.stop();
   });
 });
+
+/**
+ * **止めたことと、止まったことは別である。**
+ *
+ * `runner.stop()` は該当のセッションが手元に無ければ**黙って何もしない**
+ * （`#sessions.get(id)?.stop()`）。受理だけを見て「止まった」と言うと、走り
+ * 続けているマネージャーを止めたことにしてしまう — 人間もクローンも、止めた
+ * つもりで次の判断へ進む。実際に畳まれたセッションは runner の一覧から消える
+ * （`onClosed`）ので、そこまで見に行く。
+ *
+ * 人間の口（`DELETE /managers/:id`）もクローンの `manager_stop` も、ここを通る。
+ */
+describe('止めた結果を確かめる', () => {
+  const job = {
+    id: 'mgr-stopme',
+    managerId: 'mgr-stopme',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T01:00:00.000Z',
+    status: 'running' as const,
+    summary: '暴走中',
+    request: '延々と直し続けている',
+    cwd: '/work/project',
+    sessionId: 'sess-stopme',
+    runnerId: 'runner-primary',
+  };
+
+  it('セッションが畳まれたら、止まったと言い切る', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job);
+    const fake = swappableRunner();
+    fake.state.alive.push({
+      managerId: job.id,
+      status: 'running',
+      cwd: job.cwd,
+      request: job.request,
+      waiting: [],
+      sessionId: job.sessionId,
+    });
+    // 本物どおり、止めたセッションは一覧から消える。
+    const runner = {
+      ...fake.runner,
+      async stop(managerId: string) {
+        fake.state.alive = fake.state.alive.filter((s) => s.managerId !== managerId);
+      },
+    };
+    const s = setup(undefined, { stores, runner });
+
+    const result = await s.pool.abort(job.id, '暴走したので');
+
+    expect(result.outcome).toBe('stopped');
+    expect(result.sessionGone).toBe(true);
+    expect(result.detail).not.toContain('止まりきっていない');
+    expect((await s.pool.list()).find((m) => m.managerId === job.id)?.status).toBe('done');
+
+    await s.pool.stop();
+  });
+
+  it('セッションが残っていたら、止まったことにしない', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job);
+    // `swappableRunner` の `stop` は何もしない ＝ 受理はするが畳まない器。
+    const fake = swappableRunner();
+    fake.state.alive.push({
+      managerId: job.id,
+      status: 'running',
+      cwd: job.cwd,
+      request: job.request,
+      waiting: [],
+      sessionId: job.sessionId,
+    });
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    const result = await s.pool.abort(job.id);
+
+    // **黙って成功にしない。** 見た結果をそのまま言う。
+    expect(result.sessionGone).toBe(false);
+    expect(result.detail).toContain('止まりきっていない');
+
+    await s.pool.stop();
+  });
+
+  /**
+   * 誰が止めたかは記録に残る。クローンが止めた仕事の日誌に「人間が停止させた」と
+   * 残ると、人間とクローンで見えている経緯が食い違う（止まり方は同じである）。
+   */
+  it('クローンが止めたら、クローンが止めたと残る', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job);
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    await s.pool.abort(job.id, '報告は出たのに終わらない', 'clone');
+
+    const entries = await s.stores.journal.list({ types: ['exchange'] });
+    const stopped = entries.find((entry) => JSON.stringify(entry).includes('（停止）'));
+    expect(JSON.stringify(stopped)).toContain('クローンが停止させた');
+    expect(JSON.stringify(stopped)).not.toContain('人間が停止させた');
+
+    await s.pool.stop();
+  });
+
+  it('居ないマネージャーを止めても、黙って成功にしない', async () => {
+    const s = setup(undefined, { stores: createMemoryStores(), runner: swappableRunner().runner });
+
+    const result = await s.pool.abort('mgr-nope');
+
+    expect(result.outcome).toBe('unknown');
+    expect(result.detail).toContain('mgr-nope');
+
+    await s.pool.stop();
+  });
+});
