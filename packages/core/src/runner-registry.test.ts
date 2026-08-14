@@ -163,8 +163,7 @@ describe('runner の名簿', () => {
       { label: 'http://runner:4518', state: 'unreachable' },
     ]);
 
-    // **`select` は断らずに待つ。** 「いま空いていないから断る」を作ると、それは
-    // 配置ではなく定員である（north_star 禁止2）。
+    // 猶予の内に上がってくれば、そのまま宛先になる（起動直後の数秒をやり過ごす）。
     const runner = await registry.select({});
     expect(runner.runnerId).toBe('runner-slow');
     expect(attempts).toBe(3);
@@ -199,15 +198,46 @@ describe('runner の名簿', () => {
     expect(failures[0]?.label).toBe('http://runner:4518');
     expect(registry.entries()).toMatchObject([{ state: 'unusable' }]);
 
-    // 待っても誰も来ないので、**理由を添えて返す**（黙って待つと設定の誤りが隠れる）。
+    // 待っても誰も来ないので、**猶予も使わずに返す**（黙って待つと設定の誤りが隠れる）。
+    const started = Date.now();
     await expect(registry.select({})).rejects.toThrow(/どれも使えない/);
+    expect(Date.now() - started).toBeLessThan(500);
 
     await registry.stop();
   });
 
-  it('登録が0台のときだけ select は返さない', async () => {
+  /**
+   * **返らないことは「黙って引き下がる」と同じ欠陥である。**
+   *
+   * 繋がるまで待つ形にすると、委譲を呼んだクローンのターンが張り付き、先に listen
+   * した意味が消える（詰まる場所が移るだけになる）。宛先が居ないことは隠さずに言う。
+   */
+  it('繋がっていないときは、猶予を過ぎたら状態を添えて失敗する', async () => {
+    const registry = createRunnerRegistry([], {
+      retryBaseMs: 10_000,
+      retryMaxMs: 10_000,
+      selectWaitMs: 50,
+    });
+    await registry.register({
+      label: 'http://runner:4518',
+      open: () => Promise.reject(new Error('fetch failed')),
+    });
+
+    // 呼んだ側が「少し置いて投げ直す」を選べるだけの材料が要る。
+    await expect(registry.select({})).rejects.toThrow(/http:\/\/runner:4518 は unreachable/);
+    await expect(registry.select({})).rejects.toThrow(/fetch failed/);
+    // **「登録0台」とは別のことを言う**（設定の問題ではないので、対応が変わる）。
+    await expect(registry.select({})).rejects.not.toThrow(/1台も登録されていない/);
+
+    await registry.stop();
+  });
+
+  it('登録が0台のときは、設定の問題として即座に返す', async () => {
     const registry = createRunnerRegistry();
-    await expect(registry.select({})).rejects.toThrow(/登録されていない/);
+    const started = Date.now();
+    // 時間では直らないので、猶予すら使わない。
+    await expect(registry.select({})).rejects.toThrow(/1台も登録されていない/);
+    expect(Date.now() - started).toBeLessThan(500);
     await registry.stop();
   });
 

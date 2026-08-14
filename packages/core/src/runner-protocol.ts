@@ -404,9 +404,23 @@ export interface RunnerRegistry {
   /**
    * 新しい委譲をどの runner に置くか。
    *
-   * **常に返す。** 返さないのは登録が0台のとき（と、登録が全部 `unusable` で
-   * 挑み直す先が無いとき）だけである。まだ繋がっていないなら**繋がるまで待つ** —
-   * ここで「いま空いていないから断る」を作ると、それは定員であって配置ではない。
+   * **必ず返る。** 繋がっていないだけならごく短い猶予のあいだ待つが、それを過ぎたら
+   * **分かる形で失敗する** — どの宛先がいまどの状態かを添えて投げる。呼んだ側
+   * （クローン）はそれを読んで「少し置いて投げ直す」「人間に知らせる」を選べる。
+   *
+   * **返らないのは「黙って引き下がる」と同じ欠陥である。** 繋がるまで待つ形にすると、
+   * 委譲を呼んだクローンのターンがそのまま張り付き、先に listen した意味が消える
+   * （詰まる場所が移るだけになる）。
+   *
+   * **「常に返す」の意味は、定員で拒まないことである。** 接続がまだ無いことを理由に
+   * 失敗するのは定員による拒否ではない。「同時に何本まで」を理由に断ってはいけない
+   * （north_star 禁止2）が、宛先が居ないことは隠さずに言う。
+   *
+   * 失敗は3種類あり、**呼んだ側の対応が変わるので必ず区別する**。
+   *
+   * - 登録が0台 — 設定の問題。時間では直らない
+   * - 登録はあるが、まだどれにも繋がっていない — 時間で解決する可能性がある
+   * - 登録が全部 `unusable` — 挑み直さないので、投げ直しても同じ答えが返る
    */
   select(input: { cwd?: string }): Promise<RunnerClient>;
   /**
@@ -448,6 +462,14 @@ export interface RunnerRegistryOptions {
   /** 挑み直しの間隔（倍々で伸びる）。**回数では諦めない。** 主にテスト用。 */
   retryBaseMs?: number;
   retryMaxMs?: number;
+  /**
+   * `select` が繋がるのを待つ猶予。**主にテスト用で、既定はコードに固定である。**
+   *
+   * **環境変数の設定項目にしないこと。** 数値をつまみとして外へ出すと、そこが
+   * 実質の制限になる（「委譲は N 秒まで」は定員と同じ形をしている）。ここにあるのは
+   * 起動直後の数秒をやり過ごすためだけの猶予で、運用でいじる値ではない。
+   */
+  selectWaitMs?: number;
 }
 
 /**
@@ -458,6 +480,17 @@ export interface RunnerRegistryOptions {
  */
 const REGISTRY_RETRY_BASE_MS = 1_000;
 const REGISTRY_RETRY_MAX_MS = 30_000;
+
+/**
+ * `select` が繋がるのを待つ猶予。**この長さはコードに固定する。**
+ *
+ * 起動直後は名簿がまだ開いている最中なので、そこで即座に失敗させると使いにくい。
+ * かといって待ち続けるのは「黙って引き下がる」と同じ欠陥である（呼んだ側が状況を
+ * 知れない）。数秒だけ待って、あとは**状態を添えて失敗する**。
+ *
+ * **環境変数に出さないこと。** つまみにすると、そこが実質の制限になる。
+ */
+const SELECT_WAIT_MS = 3_000;
 
 /**
  * 動的な名簿（roadmap M5）。
@@ -499,12 +532,14 @@ class Registry implements RunnerRegistry {
   readonly #notify: ((failure: { label: string; error: string }) => void) | undefined;
   readonly #retryBaseMs: number;
   readonly #retryMaxMs: number;
+  readonly #selectWaitMs: number;
   #stopped = false;
 
   constructor(options: RunnerRegistryOptions) {
     this.#notify = options.notify;
     this.#retryBaseMs = options.retryBaseMs ?? REGISTRY_RETRY_BASE_MS;
     this.#retryMaxMs = options.retryMaxMs ?? REGISTRY_RETRY_MAX_MS;
+    this.#selectWaitMs = options.selectWaitMs ?? SELECT_WAIT_MS;
   }
 
   /** 既に開いてある1台を、開き方として載せる（旧来の呼び出しの受け皿）。 */
@@ -584,6 +619,7 @@ class Registry implements RunnerRegistry {
   }
 
   async select(): Promise<RunnerClient> {
+    const until = Date.now() + this.#selectWaitMs;
     for (;;) {
       if (this.#stopped) throw new Error('名簿が停止している');
 
@@ -593,26 +629,56 @@ class Registry implements RunnerRegistry {
       const first = open[0];
       if (first !== undefined) return first;
 
+      // **設定の問題と、時間で解決しうる問題を混ぜない。** 呼んだ側の対応が違う。
       if (this.#entries.size === 0) {
         throw new Error(
-          'manager-runner が登録されていない（ALTEROID_RUNNER_URLS / ALTEROID_RUNNER_URL か同一プロセスの runner が要る）',
+          'manager-runner が1台も登録されていない。' +
+            'これは設定の問題なので、時間を置いても直らない' +
+            '（ALTEROID_RUNNER_URLS / ALTEROID_RUNNER_URL か同一プロセスの runner が要る）。',
         );
       }
 
-      // 挑み直す先が1つも無いなら、待っても誰も来ない。**理由を添えて返す** —
-      // ここで黙って待つと、鍵を間違えた人間が「なぜか委譲が返ってこない」を見る。
+      // 挑み直す先が1つも無いなら、待っても誰も来ない。**理由を添えて即座に返す** —
+      // ここで待つと、鍵を間違えた人間が「なぜか委譲が返ってこない」を見る。
       const pending = [...this.#entries.values()].filter((entry) => entry.state !== 'unusable');
       if (pending.length === 0) {
-        const why = [...this.#entries.values()]
-          .map((entry) => `${entry.source.label}: ${entry.error ?? '理由不明'}`)
-          .join(' / ');
-        throw new Error(`登録されている runner がどれも使えない（${why}）`);
+        throw new Error(
+          `登録されている manager-runner がどれも使えない。挑み直しても同じ答えが返る種類の` +
+            `失敗なので、名簿は挑み直していない: ${this.#describeEntries()}`,
+        );
       }
 
-      // まだ開いている最中（か、挑み直しを待っている）。**待つ。** 「いま空いて
-      // いないから断る」を作らないための一手である。
-      await this.#nextOpen();
+      // まだ開いている最中（か、挑み直しの合間）。**ごく短い猶予だけ待つ。**
+      const remaining = until - Date.now();
+      if (remaining <= 0) throw new Error(this.#notConnectedMessage());
+      const opened = await this.#waitForOpen(remaining);
+      if (opened === null) throw new Error(this.#notConnectedMessage());
     }
+  }
+
+  /**
+   * 「まだ繋がっていない」の言い方。**状態と直近の失敗を必ず添える。**
+   *
+   * 呼んだ側（クローン）がこれを読んで「少し置いて投げ直す」「人間に知らせる」を
+   * 選べるようにするためのものである。「繋がりません」だけでは何も判断できない。
+   */
+  #notConnectedMessage(): string {
+    return (
+      'どの manager-runner にもまだ繋がっていないので、いまは委譲を置けない。' +
+      '名簿は背景で挑み直し続けている（回数では諦めない）ので、少し置いて投げ直せば通ることがある: ' +
+      this.#describeEntries()
+    );
+  }
+
+  /** 名簿の内訳を一行に畳む（宛先・状態・直近の失敗。**値は載せない**）。 */
+  #describeEntries(): string {
+    return [...this.#entries.values()]
+      .map(
+        (entry) =>
+          `${entry.source.label} は ${entry.state}` +
+          `${entry.error === undefined ? '' : `（${entry.error}）`}`,
+      )
+      .join(' / ');
   }
 
   async stop(): Promise<void> {
@@ -690,23 +756,46 @@ class Registry implements RunnerRegistry {
     entry.timer = timer;
   }
 
-  /** 次にどれかが開けるまで待つ。 */
-  #nextOpen(): Promise<RunnerClient> {
-    return new Promise<RunnerClient>((resolve, reject) => {
-      this.#waiting.add({ resolve, reject });
+  /**
+   * 次にどれかが開けるまで、猶予のあいだだけ待つ。時間切れは `null`。
+   *
+   * **待ちを名簿に残したまま帰らない。** 残すと、`stop` のときに誰も見ていない
+   * 拒否が投げられ、時間切れのたびに待ちが積み上がる。
+   */
+  #waitForOpen(ms: number): Promise<RunnerClient | null> {
+    return new Promise<RunnerClient | null>((resolve, reject) => {
+      // 先に宣言しないと待ち手が自分を畳めない（呼ばれるのは必ず設定後である）。
+      // eslint-disable-next-line prefer-const
+      let timer: ReturnType<typeof setTimeout>;
+      const waiter = {
+        resolve: (runner: RunnerClient) => {
+          clearTimeout(timer);
+          this.#waiting.delete(waiter);
+          resolve(runner);
+        },
+        reject: (error: Error) => {
+          clearTimeout(timer);
+          this.#waiting.delete(waiter);
+          reject(error);
+        },
+      };
+      timer = setTimeout(() => {
+        this.#waiting.delete(waiter);
+        resolve(null);
+      }, ms);
+      timer.unref?.();
+      this.#waiting.add(waiter);
     });
   }
 
-  /** 待っている `select` に、もう挑み直す先が無いことを伝える。 */
+  /** 待っている `select` に、もう挑み直す先が無いことを伝える（猶予を待たせない）。 */
   #failIfAllUnusable(): void {
     if (this.#waiting.size === 0) return;
     if ([...this.#entries.values()].some((entry) => entry.state !== 'unusable')) return;
-    const why = [...this.#entries.values()]
-      .map((entry) => `${entry.source.label}: ${entry.error ?? '理由不明'}`)
-      .join(' / ');
-    for (const waiter of this.#waiting) {
-      waiter.reject(new Error(`登録されている runner がどれも使えない（${why}）`));
-    }
+    const message =
+      '登録されている manager-runner がどれも使えない。挑み直しても同じ答えが返る種類の' +
+      `失敗なので、名簿は挑み直していない: ${this.#describeEntries()}`;
+    for (const waiter of [...this.#waiting]) waiter.reject(new Error(message));
     this.#waiting.clear();
   }
 }
