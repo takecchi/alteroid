@@ -127,7 +127,9 @@ export {
   type ManagerPoolOptions,
   type ManagerSendOptions,
   type ManagerSendResult,
+  type ManagerAbortResult,
   type ManagerStartInput,
+  type ManagerStopActor,
   type ManagerSummary,
 } from './manager.js';
 /**

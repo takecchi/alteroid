@@ -50,7 +50,9 @@ function harness(): Harness {
       return { outcome: 'answered', detail: '回答した。' };
     },
     async list() {
-      return running;
+      // 本物の `list()` は毎回作り直した写しを返す（`summaryOf`）。同じ物を返すと、
+      // 呼び手が控えた「前の状態」が後から書き換わってしまう。
+      return running.map((manager) => ({ ...manager }));
     },
     async transcript() {
       return null;
@@ -61,12 +63,13 @@ function harness(): Harness {
     async abort(managerId: string, reason?: string) {
       aborted.push({ managerId, ...(reason === undefined ? {} : { reason }) });
       const found = running.find((manager) => manager.managerId === managerId);
-      if (!found) return { outcome: 'unknown' as const, detail: `${managerId} というマネージャーは居ない。` };
+      if (!found)
+        return { outcome: 'unknown' as const, detail: `${managerId} というマネージャーは居ない。` };
       // 本物と同じところまで動かす（status を畳み、セッションを切る）。ここを
       // 動かさないと「受理した」と「効いた」の差がテストに映らない。
       found.status = 'done';
       found.live = false;
-      return { outcome: 'stopped' as const, detail: '止めた' };
+      return { outcome: 'stopped' as const, detail: '止めた', sessionGone: true };
     },
     async stop() {},
   };

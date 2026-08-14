@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 import { isCronExpression } from './cron.js';
 import { describePage, excerptLine, page } from './excerpt.js';
-import type { ManagerPool } from './manager.js';
+import type { ManagerPool, ManagerSummary } from './manager.js';
 import type { ProfileService } from './profile-service.js';
 import {
   RESERVED_SCHEDULE_KINDS,
@@ -72,6 +72,7 @@ export const CLONE_TOOL_NAMES = [
   'self_read',
   'manager_start',
   'manager_send',
+  'manager_stop',
   'manager_list',
   'manager_report',
 ] as const;
@@ -611,6 +612,91 @@ export function createCloneTools(context: ToolContext) {
           ...(requestId === undefined ? {} : { requestId }),
         });
         return text(result.detail);
+      },
+    ),
+
+    /**
+     * **止める手。**
+     *
+     * 人間は Web UI と CLI から1本ずつ止められる（`DELETE /managers/:id`）。
+     * クローンにそれが無いと、暴走したマネージャーも、報告を出したのに終わらない
+     * マネージャーも、**無応答のまま放置するしか手が無い**（north_star 禁止1:
+     * 能力の削除）。実際にそうなった。
+     *
+     * 通す口は人間と同じ `ManagerPool.abort` である。**クローン用の停止を別に
+     * 作らない** — 挙動が2種類あると、人間とクローンで見えている状態が食い違う。
+     *
+     * これは**クローンの道具**であって、マネージャーには渡らない（この MCP は
+     * クローン側にしか配線が無い）。マネージャーが自分や隣の仕事を止められる
+     * ようになると、M4 の制御面分離が意味を失う。
+     */
+    tool(
+      'manager_stop',
+      [
+        'マネージャーを止める。人間が Web UI から押す停止と同じもので、その1本だけが止まる。',
+        '暴走しているとき、報告を出したのに終わらないとき、依頼自体が要らなくなったときに使う。',
+        '止めたあと本当に止まったかを確かめて返すので、返ってきた状態まで読むこと。',
+      ].join(' '),
+      {
+        managerId: z.string().describe('manager_list に出ている id'),
+        reason: z
+          .string()
+          .optional()
+          .describe('なぜ止めたか。日誌と、その仕事の記録に残る。後から辿れるように書く'),
+      },
+      async ({ managerId, reason }) => {
+        if (!context.managers) return NO_POOL;
+        const pool = context.managers;
+        const find = async (): Promise<ManagerSummary | undefined> =>
+          (await pool.list().catch(() => [])).find((manager) => manager.managerId === managerId);
+
+        // 止める前の状態を控える。**既に終わっていた仕事を止めたときに、それを
+        // そうと言えるようにする**ため（黙って何もしないのが一番悪い）。
+        const before = await find();
+        const result = await pool.abort(managerId, reason, 'clone');
+
+        if (result.outcome === 'unknown') {
+          // **エラーで終わらせず、何が起きているかを言う。**
+          if (!before) {
+            return text(
+              `${managerId} は居ない（id が違うか、台帳からも消えている）。` +
+                'manager_list で今あるものが見える。',
+            );
+          }
+          return text(
+            `${managerId} は止められなかった: ${result.detail}\n` +
+              `台帳では ${before.status} で、このデーモンからは話しかけられない（live: false）。` +
+              '走らせていた器がもう無いので、止める手そのものが残っていない。',
+          );
+        }
+
+        const after = await find();
+        const lines = [`[${managerId}] ${result.detail}`];
+
+        // **「受理した」で終わらせない。** 止めたあとの状態を読み直して返す。
+        if (result.sessionGone === false) {
+          lines.push(
+            `**止まりきっていない。** runner には ${managerId} のセッションがまだ残っている。` +
+              'manager_list で確かめ、残っているならもう一度止めること。',
+          );
+        } else if (result.sessionGone === undefined) {
+          lines.push(
+            '止まったかは**未確認**である（runner に確認が取れなかった）。' +
+              'manager_list で状態を確かめること。',
+          );
+        }
+
+        if (before?.status === 'done') {
+          lines.push(
+            'もともと待機中（done）だった仕事である。走っている手は無く、記録を畳んだだけになる。',
+          );
+        }
+        lines.push(
+          after === undefined
+            ? '一覧からも消えている。'
+            : `いまの状態: ${after.status}${after.live ? '' : '/セッション切断'}。`,
+        );
+        return text(lines.join('\n'));
       },
     ),
 
