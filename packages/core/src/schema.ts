@@ -340,11 +340,18 @@ export type ScheduledRequest = z.infer<typeof scheduledRequestSchema>;
  * - `waiting_human`: 上（クローン、必要なら人間）の返事待ちで、**その仕事だけ**が止まっている
  * - `done`: 直近の依頼を終えて待機中。セッションは生きているので追加指示を送れる
  * - `failed`: セッションが落ちた
+ * - `lost`: **前のセッションへ戻れず、仕事が途中で失われた。** 自動では挑み直さない
  *
  * 「終わったら片付ける」ためのものではない。人間が Claude Code の窓を開いたまま
  * にしておくのと同じで、`done` は死ではなく待機である。
+ *
+ * **`lost` を `done` と一緒にしない。** `done` は「終えて待っている」であり、
+ * 話しかければ続く。`lost` はそのどちらでもない — **その仕事は完了していないのに、
+ * 続ける手立てが無い**。ここを潰すと、失われた仕事が「完了」として片付き、誰も
+ * 起こし直さないまま消える。クローンが「`manager_start` で起こし直す対象」として
+ * 見分けられる形で残すためにある（roadmap M5 受け入れ基準4）。
  */
-export const jobStatusSchema = z.enum(['running', 'waiting_human', 'done', 'failed']);
+export const jobStatusSchema = z.enum(['running', 'waiting_human', 'done', 'failed', 'lost']);
 
 export type JobStatus = z.infer<typeof jobStatusSchema>;
 

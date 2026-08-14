@@ -12,6 +12,9 @@ const STATUS: Record<ManagerStatus, { tone: 'ok' | 'warn' | 'danger' | 'neutral'
     waiting_human: { tone: 'warn', label: '人間待ち' },
     done: { tone: 'neutral', label: '完了' },
     failed: { tone: 'danger', label: '失敗' },
+    // **「完了」の側に寄せない。** 戻れなかった仕事は終わっていない。人間が画面で
+    // 見たときに「起こし直す対象」だと分かる言葉にする。
+    lost: { tone: 'danger', label: '復旧不能' },
   };
 
 export function ManagerStatusBadge({ status }: { status: ManagerStatus }) {
