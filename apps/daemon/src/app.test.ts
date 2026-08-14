@@ -8,7 +8,7 @@ import type {
   Stores,
 } from '@alteroid/core';
 import { createMemoryStores, createProfileService, createRunnerRegistry } from '@alteroid/core';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp, parseAllowedOrigins } from './app.js';
 import { createJournalBus, type JournalBus } from './journal-bus.js';
@@ -1289,5 +1289,53 @@ describe('runner の生死', () => {
     expect(body.runners[0]?.error).toContain('fetch failed');
 
     await registry.stop();
+  });
+
+  /**
+   * 一度は繋がった runner が黙ったことも、ここから見える。
+   *
+   * **`unreachable` と同じ扱いにしない。** あちらは「まだ開けていない」宛先で、
+   * こちらは「開けていた」宛先＝走っていた仕事ごと黙った可能性がある。人間が
+   * 見に来る場所で混ぜると、器を作り直すべきかどうかの判断が付かない。
+   *
+   * 時計は手で進める（30秒を実時間で待つと CI が遅く・不安定になる）。
+   */
+  it('名乗らなくなった runner は lost として並ぶ', async () => {
+    vi.useFakeTimers();
+    try {
+      const registry = createRunnerRegistry();
+      await registry.register({
+        label: 'http://runner:4518',
+        open: async () =>
+          ({
+            ...fakeRunner('runner-primary'),
+            // 器は繋がったまま黙った（電源が抜けた・経路だけが切れた）。
+            ping: () => Promise.reject(new Error('fetch failed')),
+          }) as never,
+      });
+
+      const withRunners = createApp({
+        clone: fake.clone,
+        stores,
+        token: 'test-token',
+        shutdown: () => undefined,
+        runners: registry,
+      });
+
+      // 3回分の名乗りが returns しないところまで進める。
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      const body = (await (await withRunners.request('/runners')).json()) as {
+        runners: { label: string; state: string; runnerId?: string; error?: string }[];
+      };
+      expect(body.runners).toMatchObject([
+        { label: 'http://runner:4518', state: 'lost', runnerId: 'runner-primary' },
+      ]);
+      expect(body.runners[0]?.error).toContain('fetch failed');
+
+      await registry.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

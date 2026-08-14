@@ -98,6 +98,14 @@ class LocalRunner implements RunnerClient {
     }
   }
 
+  /**
+   * 名乗り。**同一プロセスなので、ここが動いている時点で生きている。**
+   *
+   * 叩く先が無いからと省略しない — 省略すると「ローカルでは生死が分からない」
+   * という差が器の違いだけで生まれる（コンテナ構成でだけ効く仕組みを作らない）。
+   */
+  async ping(): Promise<void> {}
+
   async start(command: RunnerStartCommand): Promise<void> {
     await this.#host.start(command);
   }

@@ -250,6 +250,20 @@ export async function main(): Promise<void> {
         `runner (${label}) を開けず、挑み直しても直らない失敗だったので諦めました: ${error}`,
       );
     },
+    /**
+     * 一度は繋がった runner が黙った。**知らせるところまでが今の責任である。**
+     *
+     * ここで走っていた仕事を別の器へ移さないのは、二重実行を止める仕組み
+     * （fencing）がまだ無いからである。先に動かすと、実は生きていた器と移送先とで
+     * 同じマネージャーが2本走る — 黙っているのは器かもしれないし、経路かもしれない。
+     */
+    onLost: ({ label, runnerId, error }) => {
+      announce(
+        `runner (${label}${runnerId === undefined ? '' : ` / ${runnerId}`}) が` +
+          `名乗らなくなりました。新しい委譲の宛先からは外しています` +
+          `（走っていた仕事の移送はまだ行いません）: ${error}`,
+      );
+    },
   });
   const runnerDescription = describeRunner();
 

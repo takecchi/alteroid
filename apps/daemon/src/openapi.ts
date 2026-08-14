@@ -296,8 +296,12 @@ const runnerSummarySchema = z.object({
    *
    * これが無いと、上がってこない runner は一覧から消えるだけになり、人間には
    * 「設定し忘れた」のか「上がってこない」のかが区別できない。
+   *
+   * `lost` = 一度は開けたのに名乗り（`/health`）が返らなくなった。**`unreachable`
+   * とは別物である** — あちらは「まだ開けていない」宛先で抱えている仕事が無く、
+   * こちらは「開けていた」宛先で、走っていた仕事ごと黙った可能性がある。
    */
-  state: z.enum(['connecting', 'connected', 'unreachable', 'unusable']),
+  state: z.enum(['connecting', 'connected', 'unreachable', 'unusable', 'lost']),
   /** この状態になった時刻。 */
   since: z.string(),
   /** 直近の失敗の一行。**原因を見るための窓であって、値は載らない。** */

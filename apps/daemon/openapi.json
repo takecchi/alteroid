@@ -3419,7 +3419,7 @@
                           },
                           "state": {
                             "type": "string",
-                            "enum": ["connecting", "connected", "unreachable", "unusable"]
+                            "enum": ["connecting", "connected", "unreachable", "unusable", "lost"]
                           },
                           "since": {
                             "type": "string"
