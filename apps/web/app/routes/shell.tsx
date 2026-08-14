@@ -14,6 +14,7 @@ import { Navigate, NavLink, Outlet } from 'react-router';
 
 import { ConnectionCard } from '~/components/connection';
 import { Badge, ErrorNote, Spinner } from '~/components/ui';
+import { JournalFeedProvider } from '~/hooks/journal-feed';
 import { useApprovals, useHealth } from '~/hooks/queries';
 import { useAuth } from '~/hooks/use-auth';
 import { useJournalLive, type LiveStatus } from '~/hooks/use-journal-live';
@@ -92,43 +93,47 @@ function AuthedShell() {
   const pending = approvals?.approvals.length ?? 0;
 
   return (
-    <div className="flex min-h-dvh">
-      <nav className="flex w-52 shrink-0 flex-col border-r border-border bg-surface">
-        <div className="px-4 py-4">
-          <p className="font-mono text-sm font-semibold tracking-tight">alteroid</p>
-          <LiveIndicator status={live.status} />
-        </div>
+    // 下の画面へ `live`（`recent` を含む）を配る。SSE の購読はここ1本のまま
+    // （`useJournalLive` を呼んでいるのはこの関数だけ）。
+    <JournalFeedProvider value={live}>
+      <div className="flex min-h-dvh">
+        <nav className="flex w-52 shrink-0 flex-col border-r border-border bg-surface">
+          <div className="px-4 py-4">
+            <p className="font-mono text-sm font-semibold tracking-tight">alteroid</p>
+            <LiveIndicator status={live.status} />
+          </div>
 
-        <ul className="flex-1 px-2">
-          {NAV.map(({ to, label, icon: Icon, end }) => (
-            <li key={to}>
-              <NavLink
-                to={to}
-                end={end}
-                className={({ isActive }) =>
-                  cn(
-                    'mb-0.5 flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors',
-                    isActive
-                      ? 'bg-surface-2 text-fg'
-                      : 'text-muted hover:bg-surface-2 hover:text-fg',
-                  )
-                }
-              >
-                <Icon className="size-4 shrink-0" aria-hidden />
-                <span className="flex-1 truncate">{label}</span>
-                {to === '/approvals' && pending > 0 && <Badge tone="warn">{pending}</Badge>}
-              </NavLink>
-            </li>
-          ))}
-        </ul>
+          <ul className="flex-1 px-2">
+            {NAV.map(({ to, label, icon: Icon, end }) => (
+              <li key={to}>
+                <NavLink
+                  to={to}
+                  end={end}
+                  className={({ isActive }) =>
+                    cn(
+                      'mb-0.5 flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors',
+                      isActive
+                        ? 'bg-surface-2 text-fg'
+                        : 'text-muted hover:bg-surface-2 hover:text-fg',
+                    )
+                  }
+                >
+                  <Icon className="size-4 shrink-0" aria-hidden />
+                  <span className="flex-1 truncate">{label}</span>
+                  {to === '/approvals' && pending > 0 && <Badge tone="warn">{pending}</Badge>}
+                </NavLink>
+              </li>
+            ))}
+          </ul>
 
-        <HealthFooter />
-      </nav>
+          <HealthFooter />
+        </nav>
 
-      <main className="min-w-0 flex-1">
-        <Outlet />
-      </main>
-    </div>
+        <main className="min-w-0 flex-1">
+          <Outlet />
+        </main>
+      </div>
+    </JournalFeedProvider>
   );
 }
 

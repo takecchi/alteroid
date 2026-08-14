@@ -1,16 +1,92 @@
 /**
  * 書き込みの hooks。
  *
- * 楽観更新はしない。**書いた結果は日誌に出る**ので、SSE（`use-journal-live.ts`）が
- * すぐ無効化を回す。画面が先に「できたことにする」と、実際には拒否された操作が
- * 成功したように見える瞬間ができる。ここは正直さを優先する。
+ * **原則、楽観更新はしない。** 書いた結果は日誌に出るので、SSE
+ * （`use-journal-live.ts`）がすぐ無効化を回す。画面が先に「できたことにする」と、
+ * 実際には拒否された操作が成功したように見える瞬間ができる。ここは正直さを優先する。
+ *
+ * **例外は自分のチャット送信（`useRecordOwnMessage`）だけ。** `POST /chat` には
+ * 拒否という概念が無く、受け付ければ必ず `open` イベントで会話が返る。つまり
+ * 「できたことにする」がそのまま「実際にできた」なので、成功に見せても嘘には
+ * ならない。例外にした理由は速さ — 会話一覧はサーバが日誌を走査して組み立てる
+ * ので、SSE の往復を待つと送信のたびに一覧の反映が目に見えて遅れる。
  */
 import { useCallback } from 'react';
 import { useSWRConfig } from 'swr';
 
 import { unwrap, useApi } from '~/lib/api';
+import type { ConversationSummary } from '~/lib/types';
 
-import { KEY } from './queries';
+import { isKeyOfType, KEY } from './queries';
+
+/**
+ * 自分のチャット送信を会話一覧へ即時反映する（唯一の楽観更新。理由は冒頭コメント）。
+ *
+ * API は叩かない — SWR キャッシュを直接書き換えるだけ。`revalidate: false` に
+ * しているのは、この直後に必ず SSE 経由の無効化（`exchange(with:'human')`）が
+ * 届いて正しい値に置き換わるので、ここで追加の往復を足す意味が無いから。
+ *
+ * 書き込む値は全部**暫定**である。`startedAt` / `updatedAt` はクライアントの
+ * 時計（サーバの時計とはずれうる）、`messages` は+1の推測（サーバ側の数え方と
+ * 一致する保証はない）、`preview` は下の `roughPreview` が作る仮の抜粋。どれも
+ * SSE 由来の再取得が届いた瞬間に正しい値へ上書きされる。
+ */
+export function useRecordOwnMessage() {
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    (conversationId: string, text: string) => {
+      const now = new Date().toISOString();
+      const shortened = roughPreview(text);
+      void mutate(
+        (key) => isKeyOfType(key, 'conversations'),
+        (current: { conversations: ConversationSummary[]; scanned: number } | undefined) => {
+          // まだ一度も取得していないキャッシュに勝手に値を作らない。
+          if (current === undefined) return current;
+
+          const index = current.conversations.findIndex(
+            (conversation) => conversation.conversationId === conversationId,
+          );
+
+          if (index === -1) {
+            const inserted: ConversationSummary = {
+              conversationId,
+              startedAt: now,
+              updatedAt: now,
+              messages: 1,
+              preview: shortened,
+            };
+            // `scanned`（日誌をどこまで遡ったか）はここでは動いていないので触らない。
+            // 先頭へ足すだけで末尾は切らない。次の再取得で正しい件数に戻る。
+            return { ...current, conversations: [inserted, ...current.conversations] };
+          }
+
+          const existing = current.conversations[index];
+          if (existing === undefined) return current;
+          const updated: ConversationSummary = {
+            ...existing,
+            updatedAt: now,
+            preview: shortened,
+            messages: existing.messages + 1,
+          };
+          const rest = current.conversations.filter((_, i) => i !== index);
+          return { ...current, conversations: [updated, ...rest] };
+        },
+        { revalidate: false },
+      );
+    },
+    [mutate],
+  );
+}
+
+/**
+ * サーバの `preview()`（`apps/daemon/src/app.ts`）を写した。**二重管理である。**
+ * サーバ側の切り方が変わったらここも手で追随しないと、反映された瞬間に抜粋の
+ * 見た目が飛ぶ（見た目を飛ばさないためだけにここへ写している）。
+ */
+function roughPreview(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length <= 80 ? flat : `${flat.slice(0, 80)}…`;
+}
 
 /** 記憶を書き換える（人間の直接編集）。 */
 export function useSaveMemory() {

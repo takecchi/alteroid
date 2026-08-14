@@ -16,7 +16,7 @@ import { useSWRConfig } from 'swr';
 import { useApiContext } from '~/lib/api';
 import type { JournalEntry } from '~/lib/types';
 
-import { KEY } from './queries';
+import { isKeyOfType, KEY } from './queries';
 
 /** 切れたときに待つ時間。指数で伸ばし、上限で頭打ちにする。 */
 const RETRY_BASE_MS = 1000;
@@ -100,6 +100,8 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
     case 'escalation':
       void mutate((key) => isKeyOfType(key, 'approvals'));
       void mutate(KEY.managers);
+      // マネージャー詳細・生ログも束で落とす。理由は下の `invalidateManagerDetail` に。
+      invalidateManagerDetail(mutate);
       break;
     case 'memory_update':
       void mutate(KEY.memory);
@@ -111,9 +113,13 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
       break;
     case 'tool_use':
       void mutate(KEY.managers);
+      invalidateManagerDetail(mutate);
       break;
     case 'exchange':
-      if (entry.with === 'manager') void mutate(KEY.managers);
+      if (entry.with === 'manager') {
+        void mutate(KEY.managers);
+        invalidateManagerDetail(mutate);
+      }
       if (entry.with === 'human') {
         void mutate((key) => isKeyOfType(key, 'conversations'));
         // **一覧だけでなく本文も落とす。** ここを忘れると、会話の画面を開いた
@@ -127,7 +133,17 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
   }
 }
 
-/** SWR のキーはオブジェクトなので、`type` を見て束で指す。 */
-function isKeyOfType(key: unknown, type: string): boolean {
-  return typeof key === 'object' && key !== null && (key as { type?: unknown }).type === type;
+/**
+ * マネージャー詳細（`KEY.manager(id)`）と生ログ（`KEY.transcript(id)`）を
+ * **id を指定せず束で**落とす。
+ *
+ * `tool_use.actor` は `manager:<id>` / `worker:<id>:<agent>` で id を取り出せるが、
+ * `exchange(with:'manager')` には manager id を持つフィールドが無い。種別によって
+ * 精度が変わる（tool_use だけ id 指定、他は束）形にすると考えることが増えて
+ * 漏れやすい。キャッシュに載っているのは開いている詳細画面の分だけなので、
+ * 束で落としても安い — だから常に束で統一する。
+ */
+function invalidateManagerDetail(mutate: ReturnType<typeof useSWRConfig>['mutate']): void {
+  void mutate((key) => isKeyOfType(key, 'manager'));
+  void mutate((key) => isKeyOfType(key, 'transcript'));
 }

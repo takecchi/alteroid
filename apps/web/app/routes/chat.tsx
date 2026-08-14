@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 
 import { Badge, Button, Card, Empty, ErrorNote, Spinner, Textarea } from '~/components/ui';
-import { useEndConversation } from '~/hooks/mutations';
+import { useEndConversation, useRecordOwnMessage } from '~/hooks/mutations';
 import { useConversation, useConversations } from '~/hooks/queries';
 import { useApi } from '~/lib/api';
 import { cn } from '~/lib/cn';
@@ -62,7 +62,7 @@ function ConversationList({ activeId }: { activeId: string | undefined }) {
         ) : data === undefined || data.conversations.length === 0 ? (
           <Empty>まだ会話がない。</Empty>
         ) : (
-          <ul>
+          <ul aria-label="会話">
             {data.conversations.map((conversation) => (
               <li key={conversation.conversationId}>
                 <Link
@@ -101,6 +101,7 @@ export function ChatPane({ routeId }: { routeId: string | undefined }) {
   const api = useApi();
   const navigate = useNavigate();
   const endConversation = useEndConversation();
+  const recordOwnMessage = useRecordOwnMessage();
 
   /**
    * この画面が見せている会話。
@@ -265,6 +266,10 @@ export function ChatPane({ routeId }: { routeId: string | undefined }) {
               // URL は後から追いつかせるだけ。作り直しは起きない（key を付けていない）。
               void navigate(`/chat/${stream.id}`, { replace: true });
             }
+            // 新規・既存どちらでも、ここで会話 id が確定する。会話一覧が
+            // SSE の往復を待たずに動くよう、暫定値で先に反映しておく
+            // （`useRecordOwnMessage` のコメントに詳細）。
+            recordOwnMessage(message.data.conversationId, text);
             continue;
           }
 
@@ -322,7 +327,7 @@ export function ChatPane({ routeId }: { routeId: string | undefined }) {
         }
       }
     },
-    [api, shownId, navigate, sending],
+    [api, shownId, navigate, sending, recordOwnMessage],
   );
 
   return (
@@ -355,7 +360,7 @@ export function ChatPane({ routeId }: { routeId: string | undefined }) {
             <Empty>目的や価値観を伝えると、クローンはそれを記憶に蒸留して次の判断に使う。</Empty>
           </Card>
         ) : (
-          <ul className="flex flex-col gap-3">
+          <ul aria-label="やりとり" className="flex flex-col gap-3">
             {all.map((line) => (
               <li
                 key={line.key}
