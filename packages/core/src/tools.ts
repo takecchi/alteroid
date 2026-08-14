@@ -18,6 +18,7 @@ import { scheduleKindSchema, scheduleSpecSchema } from './schema.js';
 import type { ChatStreamEvent, PendingApproval, ScheduleSpec, ScheduledRequest } from './schema.js';
 import { CANON_REVISION, canonDocument, canonNames } from './self.js';
 import type { Stores } from './store.js';
+import type { AccountUsageState } from './usage-snapshot.js';
 import { formatUsd, summarizeUsage, type UsageAggregate } from './usage.js';
 
 /**
@@ -49,6 +50,14 @@ export interface ToolContext {
    * （システムプロンプト）で扱い、道具を取り上げて表現しない。
    */
   profile?: ProfileService;
+  /**
+   * アカウント全体の利用状況（claude.ai 側が言っている値）を読む口。
+   *
+   * **人間が `claude.ai/settings/usage` で見られるものである。** クローンが
+   * 見られないのは能力の削除（north_star 禁止1）なので、`usage_read` から同じものを
+   * 返す。無ければ「まだ分からない」と出す — **0 とは言わない。**
+   */
+  accountUsage?: () => AccountUsageState;
 }
 
 export function qualifiedToolName(name: string): string {
@@ -321,7 +330,14 @@ export function createCloneTools(context: ToolContext) {
           ...(to === undefined ? {} : { to }),
           ...(managerId === undefined ? {} : { managerId }),
         });
-        return text(renderUsage(aggregate));
+        return text(
+          [
+            renderAccountUsage(context.accountUsage?.() ?? { state: 'unknown' }),
+            '',
+            '## alteroid が使った分（台帳）',
+            renderUsage(aggregate),
+          ].join('\n'),
+        );
       },
     ),
 
@@ -861,6 +877,84 @@ export function createCloneTools(context: ToolContext) {
  * 読める出力を黙って作ると、それは嘘になる。
  */
 const USAGE_AXIS_LIMIT = 14;
+
+/** 残り時間を d/h/m で。過ぎていたら 0 に丸める（負の残り時間を見せない）。 */
+function untilReset(resetsAt: number, now: number): string {
+  const minutes = Math.max(0, Math.floor((resetsAt - now) / 60_000));
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  if (days > 0) return `あと ${days}日${hours}時間`;
+  if (hours > 0) return `あと ${hours}時間${minutes % 60}分`;
+  return `あと ${minutes}分`;
+}
+
+/**
+ * アカウント全体の残り。
+ *
+ * **取れなかったことを 0 として出さない。** ここが一番嘘をつきやすい場所で、
+ * 「枠 0%」と「枠が取れなかった」を同じ顔で見せると、クローンは残っていない枠を
+ * 残っていると読む（あるいは逆）。状態ごとに文言を分けてある。
+ */
+function renderAccountUsage(state: AccountUsageState): string {
+  const lines = ['## アカウント全体の残り（claude.ai 側の値）'];
+  if (state.state === 'unknown') {
+    lines.push('まだ取りに行っていない（起動直後）。**0 ではなく、分からない。**');
+    return lines.join('\n');
+  }
+  if (state.state === 'failed') {
+    lines.push(`取れなかった: ${state.reason}（${state.at}）。**0 ではなく、分からない。**`);
+    return lines.join('\n');
+  }
+  if (state.state === 'unavailable') {
+    lines.push(`この構成では取れない: ${state.reason}（${state.at}）`);
+    return lines.join('\n');
+  }
+
+  const { usage } = state;
+  const now = Date.parse(usage.at);
+  lines.push(
+    `プラン: ${usage.plan ?? '（取れなかった）'}` +
+      (usage.organization === undefined ? '' : ` / 組織: ${usage.organization}`),
+  );
+
+  if (usage.windows.length === 0) {
+    // **`limitsAvailable` が真でも枠が来ないことがある**（実測）。0% と描かない。
+    lines.push('枠: 取れなかった（向こうが枠を返さなかった。**0% ではない**）');
+  } else {
+    lines.push('枠:');
+    for (const window of usage.windows) {
+      const used =
+        // **付かなかった利用率を 0% と書かない。**
+        window.utilization === undefined ? '使用率は取れなかった' : `${window.utilization}% 使用`;
+      const reset =
+        window.resetsAt === undefined ? '' : ` / ${untilReset(window.resetsAt, now)}でリセット`;
+      lines.push(`  ${window.kind}: ${used}${reset}`);
+    }
+  }
+
+  const extra = usage.extraUsage;
+  if (extra === undefined) {
+    // これが取れれば「上限に当たる前に気づく」が完成する。取れないなら、そう言う。
+    lines.push('支出上限: 取れなかった（**0 ではない**。この情報が無いと残額は分からない）');
+  } else if (!extra.enabled) {
+    lines.push('支出上限: 設定されていない');
+  } else {
+    // **通貨が分からないときは金額として整形しない**（`$` を付けて嘘の単位を名乗らない）。
+    const unit = extra.currency;
+    const amount = (value: number | undefined) =>
+      value === undefined
+        ? '取れなかった'
+        : unit === undefined
+          ? `${value}（単位不明）`
+          : `${value} ${unit}`;
+    lines.push(
+      `支出上限: ${amount(extra.usedCredits)} / ${amount(extra.monthlyLimit)}` +
+        (extra.utilization === undefined ? '' : `（${extra.utilization}% 使用）`),
+    );
+  }
+  lines.push(`観測時刻: ${usage.at}`);
+  return lines.join('\n');
+}
 
 function renderUsage(aggregate: UsageAggregate): string {
   const { rows, since, beforeLedger, notice } = aggregate;

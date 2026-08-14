@@ -58,6 +58,8 @@ export interface UsageProbeOptions {
  * 待ちは abort で解けるようにしておくこと。**決して解決しない Promise にすると、
  * この generator が `.return()` を完了できず、読み終わって離れる側が永久に待つ。**
  */
+// yield が無いことがこの関数の要件そのもの（1つでも送ったら推論が走る）。
+// eslint-disable-next-line require-yield
 export async function* idleUsagePrompt(signal: AbortSignal): AsyncGenerator<SDKUserMessage> {
   await new Promise<void>((resolve) => {
     if (signal.aborted) {

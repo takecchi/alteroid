@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type {
+  AccountUsageState,
   ChatStreamEvent,
   CloneHost,
   JournalEntry,
@@ -21,8 +22,13 @@ import {
   memorySlugSchema,
   fingerprintOf,
   runnerSetCredentialsCommandSchema,
+  accountUsageStateSchema,
   scheduleKindSchema,
   scheduleSpecSchema,
+  summarizeUsage,
+  usageAggregateSchema,
+  usageBreakdownSchema,
+  usageDateSchema,
   type AuthAccount,
   type AuthService,
 } from '@alteroid/core';
@@ -129,6 +135,14 @@ export interface AppDeps {
    * いないことを黙って隠さない**ため（テストの HTTP 層検証では省略できる）。
    */
   journalEvents?: Pick<JournalBus, 'subscribe'>;
+  /**
+   * アカウント全体の利用状況（claude.ai 側の値）を読む口。
+   *
+   * 無ければ `GET /usage` の `account` が `{ state: 'unknown' }` を返す。
+   * **能力を落とすのではなく、配線されていないことを黙って隠さない**ため
+   * （0 を返すと「枠を使っていない」と読める）。
+   */
+  accountUsage?: () => AccountUsageState;
   /**
    * ブラウザから叩いてよいオリジンの**明示列挙**（`ALTEROID_ALLOWED_ORIGINS`）。
    *
@@ -246,6 +260,28 @@ const conversationsQuery = z.object({
 });
 const conversationQuery = z.object({
   scan: z.coerce.number().int().min(1).max(10000).default(2000),
+});
+/**
+ * 利用状況の照会。
+ *
+ * **既定で期間を絞らない。** 絞ると「今日いくら使ったか」を聞いたつもりの人へ
+ * 全期間の合計を返す、という取り違えが起きやすい。呼ぶ側が `from` / `to` を
+ * 明示する形にして、返り値の `byDate` で日別が読めるようにしてある。
+ */
+const usageQuery = z.object({
+  from: usageDateSchema.optional(),
+  to: usageDateSchema.optional(),
+  managerId: z.string().min(1).optional(),
+});
+const usageResponseSchema = usageAggregateSchema.extend({
+  breakdown: usageBreakdownSchema,
+  /**
+   * アカウント全体の残り（claude.ai 側が言っている値）。
+   *
+   * **台帳と足さない。** こちらは向こうが言っている値で、台帳は自分で数えた
+   * 推定値である。`state` が `ok` 以外なら「取れなかった」であって「0」ではない。
+   */
+  account: accountUsageStateSchema,
 });
 const journalStreamQuery = z.object({
   /** カンマ区切りの種別。指定しなければ全部流れる。 */
@@ -1091,6 +1127,56 @@ export function createApp(deps: AppDeps) {
             ...(since === undefined ? {} : { since }),
             ...(types === undefined || types.length === 0 ? {} : { types }),
           }),
+        });
+      },
+    )
+
+    // --- 利用状況（いくら使ったか） --------------------------------------------
+    /**
+     * **経路は1本だけにする。** 画面のために別の口を足すと、その瞬間に
+     * 「CLI ではできないこと」が生まれる（PRD「インターフェース」）。CLI・Web UI・
+     * クローンの道具（`usage_read`）はすべてここを通る。
+     *
+     * **クローンからも同じものが見えること自体が要件である。** 人間が
+     * `claude.ai/settings/usage` を見て、その写像であるクローンが見られないのは
+     * 能力の削除（north_star 禁止1）。
+     */
+    .get(
+      '/usage',
+      describeRoute({
+        tags: ['usage'],
+        summary: '利用状況（alteroid が使った分）',
+        description:
+          'SDK の `result.modelUsage` を積んだ台帳を、日 × マネージャー × モデルで返す。' +
+          '**推定値であり請求明細ではない**（`notice` に同じ但し書きが載る）。' +
+          '台帳の始点は `since`、照会範囲が始点より前にかかっていれば `beforeLedger` が真になる — ' +
+          'そのときは 0 ではなく「記録が無い」と読むこと（過去分の掘り起こしはしていない）。',
+        responses: {
+          200: {
+            description: '台帳の集計。',
+            content: { 'application/json': { schema: resolver(usageResponseSchema) } },
+          },
+          400: {
+            description: 'クエリが不正。',
+            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+          },
+        },
+      }),
+      validator('query', usageQuery),
+      async (c) => {
+        const { from, to, managerId } = c.req.valid('query');
+        const aggregate = await stores.usage.aggregate({
+          ...(from === undefined ? {} : { from }),
+          ...(to === undefined ? {} : { to }),
+          ...(managerId === undefined ? {} : { managerId }),
+        });
+        return c.json({
+          ...aggregate,
+          // 内訳は core の1つの実装で作る（口ごとに足し直すと食い違う）。
+          breakdown: summarizeUsage(aggregate.rows),
+          // **配線されていなければ「まだ分からない」を返す。** 0 や null にすると
+          // 「枠を使っていない」と読める（テストの HTTP 層検証では省略できる）。
+          account: deps.accountUsage?.() ?? { state: 'unknown' as const },
         });
       },
     )
