@@ -8,7 +8,7 @@ import type {
   Query,
   SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   MANAGER_MODEL,
@@ -49,6 +49,8 @@ interface FakeSession {
     signal?: AbortSignal,
     requestId?: string,
   ): Promise<PermissionResult>;
+  /** マネージャーが本文を1つ喋る（人間の画面に出るもの）。 */
+  say(text: string, options?: { parentToolUseId?: string }): Promise<void>;
   /** マネージャー側の1ターンが終わる。 */
   report(text: string): Promise<void>;
   /** PostToolUse フックを鳴らす。 */
@@ -85,6 +87,16 @@ function fakeSdk() {
         } as never);
         if (result === null) throw new Error('canUseTool が null を返した（返事が届かない）');
         return result;
+      },
+      async say(text, sayOptions = {}) {
+        push({
+          type: 'assistant',
+          message: { role: 'assistant', content: [{ type: 'text', text }] },
+          parent_tool_use_id: sayOptions.parentToolUseId ?? null,
+          session_id: 'sess-mgr',
+          uuid: `uuid-say-${text.length}`,
+        } as unknown as SDKMessage);
+        await new Promise((resolve) => setTimeout(resolve, 0));
       },
       async report(text) {
         push({
@@ -1643,6 +1655,93 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
       )
       .toBeDefined();
     expect(s.opened.filter((entry) => entry.resume === undefined)).toHaveLength(0);
+
+    await s.pool.stop();
+  });
+});
+
+/**
+ * 報告の受信経路（クローンは「送られた」ではなく「届いた」ものしか読めない）。
+ *
+ * マネージャーの1ターンの出力は、SDK の `result` 1本では表せない。人間が
+ * Claude Code の画面で読んでいるのは**そのターンに出た本文すべて**であり、
+ * `result` はその最後の一片でしかないことがある（道具を挟むたびに本文は
+ * 切れる）。`result` だけを報告にすると、クローンには末尾だけが届き、
+ * **欠けていることが誰にも見えない**。人間より読めるものが少ない＝デグレード
+ * （north_star 禁止1）であり、断片から全体像を組み立てた誤判断の原因になる。
+ */
+describe('マネージャーの報告を黙って落とさない', () => {
+  it('道具で分断された本文も、6つ出したなら6つとも届く', async () => {
+    const s = setup();
+    await s.pool.start({ request: '6セクションで報告して' });
+    const session = s.sessions[0] as FakeSession;
+
+    // 前半を喋る → 道具を使う → 後半を喋る。SDK の `result` に載るのは
+    // 最後の一片だけ、という実機で起きた形をそのまま作る。
+    await session.say('## 1\n本文1\n\n## 2\n本文2\n\n## 3\n本文3');
+    await session.say('## 4\n本文4\n\n## 5\n本文5\n\n## 6\n本文6');
+    await session.report('## 5\n本文5\n\n## 6\n本文6');
+
+    const reports = await vi.waitFor(() => {
+      const found = s.inbox.filter(
+        (event) => event.type === 'manager_message' && event.kind === 'report',
+      );
+      if (found.length === 0) throw new Error('報告がまだ届いていない');
+      return found;
+    });
+    const delivered = reports.map((event) => (event as { text: string }).text).join('\n');
+
+    for (const section of ['## 1', '## 2', '## 3', '## 4', '## 5', '## 6']) {
+      expect(delivered).toContain(section);
+    }
+
+    await s.pool.stop();
+  });
+
+  it('作業者の本文はマネージャーの報告に混ぜない', async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+    const session = s.sessions[0] as FakeSession;
+
+    await session.say('マネージャーの結論');
+    // 作業者（Task の中）の本文は `parent_tool_use_id` が付く。これは
+    // マネージャーが人間へ向けて喋ったものではない。
+    await session.say('作業者の途中経過', { parentToolUseId: 'tool-1' });
+    await session.report('マネージャーの結論');
+
+    const report = await vi.waitFor(() => {
+      const found = s.inbox.find(
+        (event) => event.type === 'manager_message' && event.kind === 'report',
+      );
+      if (!found) throw new Error('報告がまだ届いていない');
+      return found as { text: string };
+    });
+
+    expect(report.text).toContain('マネージャーの結論');
+    expect(report.text).not.toContain('作業者の途中経過');
+
+    await s.pool.stop();
+  });
+
+  it('前のターンの本文を次のターンの報告へ持ち越さない', async () => {
+    const s = setup();
+    await s.pool.start({ request: '2回に分けて答えて' });
+    const session = s.sessions[0] as FakeSession;
+
+    await session.say('1回目の答え');
+    await session.report('1回目の答え');
+    await session.say('2回目の答え');
+    await session.report('2回目の答え');
+
+    const reports = await vi.waitFor(() => {
+      const found = s.inbox.filter(
+        (event) => event.type === 'manager_message' && event.kind === 'report',
+      );
+      if (found.length < 2) throw new Error('報告がまだ2本届いていない');
+      return found as { text: string }[];
+    });
+
+    expect(reports[reports.length - 1]?.text).not.toContain('1回目の答え');
 
     await s.pool.stop();
   });

@@ -14,6 +14,8 @@ interface Harness {
   started: { request: string; cwd?: string }[];
   /** runner へ降ろされたプロファイルの本文。 */
   distributed: string[];
+  /** 走っていることになっているマネージャー（直接いじって状況を作る）。 */
+  running: ManagerSummary[];
   call(name: string, args: Record<string, unknown>): Promise<string>;
 }
 
@@ -98,6 +100,7 @@ function harness(): Harness {
     sent,
     started,
     distributed,
+    running,
     async call(name, args) {
       const found = tools.find((entry) => entry.name === name);
       if (!found) throw new Error(`ツール ${name} が無い`);
@@ -529,5 +532,73 @@ describe('クローンの道具', () => {
     const result = await found?.handler({ request: 'x' } as never, {});
 
     expect(JSON.stringify(result)).toContain('委譲できない');
+  });
+});
+
+/**
+ * 一覧は**件数が増えても読める**こと。
+ *
+ * 人間は Web UI でマネージャー一覧を見られる。クローンだけが件数の増加で
+ * 見られなくなるなら、それは能力の削除（north_star 禁止1）である。しかも
+ * MCP の出力上限を超えた応答はクローンに1文字も届かない（SDK がファイルへ
+ * 落として「上限超過」だけを返す）ので、**溢れさせた時点で全滅**する。
+ * 抜粋に留め、省いたことを明示し、全文は別の口で取れるようにする。
+ */
+describe('manager_list は件数が増えても壊れない', () => {
+  async function crowded(count: number): Promise<Harness> {
+    const h = harness();
+    for (let index = 0; index < count; index += 1) {
+      await h.call('manager_start', { request: `依頼${index}: ${'あ'.repeat(1500)}` });
+    }
+    for (const summary of h.running) summary.lastReport = `報告: ${'ほ'.repeat(3000)}`;
+    return h;
+  }
+
+  it('マネージャーが増えても既定の出力は上限内に収まる', async () => {
+    const few = await crowded(3);
+    const many = await crowded(120);
+
+    const small = await few.call('manager_list', {});
+    const big = await many.call('manager_list', {});
+
+    // 実測で溢れたのは 52,997 文字。件数に比例して伸びる作りだと、
+    // 何件で壊れるかが運任せになる。
+    expect(big.length).toBeLessThan(12_000);
+    expect(small.length).toBeLessThan(12_000);
+  });
+
+  it('切ったことを黙らない（何文字省いたか・全部で何件かが出力に出る）', async () => {
+    const h = await crowded(120);
+
+    const reply = await h.call('manager_list', {});
+
+    // 本文の抜粋には「省略した分量」が付く
+    expect(reply).toMatch(/省略/);
+    expect(reply).toMatch(/全\s*\d[\d,]*\s*文字/);
+    // 一覧そのものを切ったなら、全体の件数が分かる
+    expect(reply).toContain('120');
+    // 全文への行き先が書いてある
+    expect(reply).toContain('manager_report');
+  });
+
+  it('manager_report は報告の全文を返し、長ければ続きの取り方を示す', async () => {
+    const h = await crowded(2);
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-1' });
+
+    expect(reply).toContain('報告: ほ');
+    // 全文が一度に返らないなら、どこで切れていて続きをどう取るかを必ず言う
+    if (!reply.includes('ほ'.repeat(3000))) {
+      expect(reply).toMatch(/省略|続き/);
+      expect(reply).toMatch(/offset/);
+    }
+  });
+
+  it('居ないマネージャーを聞かれたら黙らずにそう返す', async () => {
+    const h = await crowded(1);
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-999' });
+
+    expect(reply).toContain('mgr-999');
   });
 });

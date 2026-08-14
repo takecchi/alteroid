@@ -1,3 +1,4 @@
+import { excerptLine } from './excerpt.js';
 import { describeScheduleSpec } from './schedule.js';
 import type { JournalEntry } from './schema.js';
 import type { Stores } from './store.js';
@@ -143,7 +144,12 @@ export async function buildActivityDigest(stores: Stores, window: DigestWindow):
   return sections.join('\n');
 }
 
+/**
+ * 一覧に載せるための抜粋。
+ *
+ * **切ったことを黙らない。** 省いた分量が出ていれば、続きが要るかどうかを
+ * 読んだ側が判断できる（報告の全文は `manager_report` で取れる）。
+ */
 function brief(value: string, limit = 200): string {
-  const single = value.replace(/\s+/g, ' ').trim();
-  return single.length > limit ? `${single.slice(0, limit)}…` : single;
+  return excerptLine(value, limit);
 }
