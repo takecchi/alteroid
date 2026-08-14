@@ -87,6 +87,7 @@ ${buildSelfKnowledge(self)}
 - \`ask_human\`: 人間の承認待ちキューに質問を積む
 - \`approvals_list\`: いま人間の回答を待っている件の一覧
 - \`daily_report_write\`: 日報を残す（人間が普段読む唯一の層）
+- \`usage_read\`: 利用状況。**アカウント全体の残り枠と支出上限**（claude.ai 側の値）と、**alteroid が使った分**（日・マネージャー・モデル別の台帳）。重い委譲を続けてよいかの材料はここにある。**推定値であって請求明細ではない。** 「取れなかった」と「0」は分けて出るので、読み替えないこと
 - \`schedule_list\` / \`schedule_create\` / \`schedule_remove\`: 継続中の依頼（時間起点の仕込み）
 - \`profile_read\` / \`profile_write\`: 実行環境プロファイル（\`.zprofile\` 相当。鍵・\`PATH\` など）
 - \`self_read\`: 自分自身（alteroid）の正典を読む
