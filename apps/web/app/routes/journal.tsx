@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import { Page } from '~/components/page';
 import { Badge, Card, Empty, ErrorNote, Spinner } from '~/components/ui';
+import { useJournalFeed } from '~/hooks/journal-feed';
 import { summarizeJournalEntry, useJournal } from '~/hooks/queries';
 import { cn } from '~/lib/cn';
 import { formatDateTime, formatRelative } from '~/lib/format';
@@ -37,6 +38,29 @@ export default function Journal() {
   const [selected, setSelected] = useState<readonly JournalEntryType[]>([]);
   const [limit, setLimit] = useState(100);
   const { data, error, isLoading } = useJournal(limit, selected);
+  // SSE で届いた分（`shell.tsx` が1本だけ張った購読の相乗り）。再取得を待たずに出す。
+  const { recent } = useJournalFeed();
+
+  /**
+   * 履歴（`useJournal`）に `recent` を重ねる。
+   *
+   * - **種別フィルタに従わせる。** `useJournal` はサーバへ絞り込みを投げるが、
+   *   `recent` は絞られていない生の受信なので、ここで同じ条件を掛け直す。
+   *   従わせないと、絞り込んでいるはずの画面に無関係な種別が混ざる。
+   * - **`id` で重複を除く。** 再取得が終わると同じエントリが履歴側にも現れる。
+   * - **`limit`（件数の扱い）にも従わせる。** 重ねた分だけ表示件数が増えてしまうと
+   *   画面が持っている「いま何件見ているか」の意味が崩れる。
+   * - 並びは両方とも新しい順なので、`recent`（つねに履歴より新しい）を先に置けば
+   *   そのまま新しい順になる。
+   */
+  const entries = useMemo(() => {
+    const history = data?.entries ?? [];
+    const filteredRecent =
+      selected.length === 0 ? recent : recent.filter((entry) => selected.includes(entry.type));
+    const historyIds = new Set(history.map((entry) => entry.id));
+    const merged = [...filteredRecent.filter((entry) => !historyIds.has(entry.id)), ...history];
+    return merged.slice(0, limit);
+  }, [data, recent, selected, limit]);
 
   function toggle(type: JournalEntryType) {
     setSelected((previous) =>
@@ -81,11 +105,11 @@ export default function Journal() {
       <Card>
         {isLoading ? (
           <Spinner />
-        ) : data === undefined || data.entries.length === 0 ? (
+        ) : entries.length === 0 ? (
           <Empty>この条件では何も記録されていない。</Empty>
         ) : (
           <ul>
-            {data.entries.map((entry) => (
+            {entries.map((entry) => (
               <li key={entry.id} className="border-b border-border last:border-b-0">
                 <JournalRow entry={entry} />
               </li>
