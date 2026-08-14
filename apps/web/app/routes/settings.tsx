@@ -81,6 +81,9 @@ const RUNNER_STATES = {
   connected: { label: '接続済み', tone: 'ok' },
   unreachable: { label: '繋がらない（挑み直し中）', tone: 'warn' },
   unusable: { label: '使えない（挑み直さない）', tone: 'danger' },
+  // 一度は繋がったのに名乗らなくなった器。**「まだ繋がらない」とは別に見せる** —
+  // こちらは走っていた仕事ごと黙った可能性がある。
+  lost: { label: '名乗らない（落ちた可能性）', tone: 'danger' },
 } as const;
 
 function Runners() {

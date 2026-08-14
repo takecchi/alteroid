@@ -372,6 +372,21 @@ export interface RunnerClient {
   readonly workspacePath: string;
   /** イベントの受け取りを始める。**接続を張るのはデーモン側**である。 */
   connect(onEvent: (event: RunnerEvent) => void): Promise<void>;
+  /**
+   * 生きているかを聞く。**既存の `GET /health` を叩くだけ**で、新しい口は足さない。
+   *
+   * SSE の `hello` は器が礼儀正しく落ちたときにしか届かない。電源が抜けた器も、
+   * ネットワークだけが切れた器も、ストリームは開いたまま何も言わなくなる。
+   * この口は**その沈黙を拾うための補完**であって、`hello` の置き換えではない。
+   *
+   * `signal` は名簿が持つ probe 期限。**返らない1台が名簿全体を止めないため**に、
+   * 期限を過ぎたら名簿の側から中断する（受け取った実装は繋ぎを畳むこと）。
+   *
+   * **省略できる。** 叩く先を持たない実装（同一プロセスなど）まで口を強いると、
+   * 「無いので常に失敗」か「嘘の成功」のどちらかを書くことになる。持たない実装は
+   * 実装しなくてよく、名簿はそれを「叩く必要が無い＝生きている」と読む。
+   */
+  ping?(options?: { signal?: AbortSignal }): Promise<void>;
   start(command: RunnerStartCommand): Promise<void>;
   resume(command: RunnerResumeCommand): Promise<void>;
   send(managerId: string, text: string): Promise<void>;
@@ -440,8 +455,13 @@ export interface RunnerSource {
  * - `connected` — 開けた。委譲を置ける
  * - `unreachable` — 開けなかったが待てば直る種類の失敗。背景で挑み直している
  * - `unusable` — 挑み直しても同じ答えが返る失敗（鍵違い等）。**挑み直さない**
+ * - `lost` — 一度は開けたのに、名乗り（`/health`）が返らなくなった。**委譲は置かない**
+ *
+ * `unreachable` と `lost` は似て見えるが**別物である**。前者は「まだ開けていない」
+ * 宛先で、抱えている仕事は無い。後者は「開けていた」宛先で、**走っていた仕事ごと
+ * 黙った**可能性がある — あとで移送の契機になるのはこちらだけである。
  */
-export type RunnerLiveness = 'connecting' | 'connected' | 'unreachable' | 'unusable';
+export type RunnerLiveness = 'connecting' | 'connected' | 'unreachable' | 'unusable' | 'lost';
 
 /**
  * 名簿の1行。**値は返さない**（鍵の指紋と同じ原則で、ここに出るのは状態だけ）。
@@ -535,6 +555,17 @@ export interface RunnerRegistryOptions {
    * 背景で無限に叩くと設定の誤りが「なぜか繋がらない」として永久に隠れる。
    */
   notify?: (failure: { label: string; error: string }) => void;
+  /**
+   * 一度は開けた runner が黙ったときに、**1回だけ**呼ばれる。
+   *
+   * **状態の再計算ではなく遷移である。** 「いま何秒応答が無いか」を都度数える形だと
+   * *落ちた瞬間*がどこにも現れず、あとで走っていた仕事を別の器へ移す契機が作れない
+   * （roadmap M5 受け入れ基準4）。ここはその瞬間そのものを表す。
+   *
+   * **ここで移送はしない。** 移送は二重実行を止める仕組み（fencing）が入ってからで、
+   * 先に動かすと同じマネージャーが2台で走る。この PR が出すのは知らせだけである。
+   */
+  onLost?: (lost: { label: string; runnerId?: string; error: string }) => void;
   /** 挑み直しの間隔（倍々で伸びる）。**回数では諦めない。** 主にテスト用。 */
   retryBaseMs?: number;
   retryMaxMs?: number;
@@ -569,6 +600,32 @@ const REGISTRY_RETRY_MAX_MS = 30_000;
 const SELECT_WAIT_MS = 3_000;
 
 /**
+ * 名乗りを聞きに行く間隔。**この3つの数値はコードに固定する。**
+ *
+ * **環境変数の設定項目にしないこと。** 「何秒で死んだと見なすか」をつまみとして
+ * 外へ出すと、そこが実質の制限になる（長くすれば落ちた器が宛先のまま残り、
+ * 短くすれば生きている器が落ちたことにされる）。運用でいじる値ではない。
+ */
+const HEARTBEAT_INTERVAL_MS = 10_000;
+
+/**
+ * 黙ったままここまで経ったら「落ちた」と見なす（間隔の3回分）。
+ *
+ * **1回の取りこぼしで動かさない。** 器の再デプロイ中の一瞬や、詰まった1回の応答で
+ * 宛先を失うと、生きている runner から仕事を取り上げることになる。
+ */
+const HEARTBEAT_LOST_MS = 30_000;
+
+/**
+ * 1台に名乗らせるときの期限。
+ *
+ * **返らない1台が名簿全体を止めないため**にある。黙って死んだ器は「拒否する」の
+ * ではなく「何も返さない」ので、期限が無いと probe がそのまま張り付き、
+ * 次の間隔が来ても誰の生死も更新されない。
+ */
+const HEARTBEAT_PROBE_MS = 5_000;
+
+/**
  * 動的な名簿（roadmap M5）。
  *
  * 既に開いてある `RunnerClient` を渡す形も残してある — 既存の呼び出し（テストを
@@ -595,6 +652,21 @@ interface RegistryEntry {
   timer: ReturnType<typeof setTimeout> | null;
   /** 次に待つ時間。開けたら忘れる。 */
   delay: number;
+  /**
+   * 最後に名乗りが返った時刻（ミリ秒）。開けた瞬間を起点にする。
+   *
+   * **経過時間だけで生死を決めない**（それは `alive` の仕事である）。ここにあるのは
+   * 判定の材料であって判定そのものではない。
+   */
+  lastSeen: number;
+  /**
+   * **前回の判定結果。** これと突き合わせて初めて「落ちた瞬間」が観測できる。
+   *
+   * 毎回経過時間を計算し直すだけだと、落ちている間ずっと同じ答えが出るので、
+   * 遷移（生きている → 落ちた）が消える。消えると知らせは何度も出るか一度も
+   * 出ないかのどちらかになり、あとで移送の契機に使えない。
+   */
+  alive: boolean;
 }
 
 class Registry implements RunnerRegistry {
@@ -606,16 +678,26 @@ class Registry implements RunnerRegistry {
     reject: (e: Error) => void;
   }>();
   readonly #notify: ((failure: { label: string; error: string }) => void) | undefined;
+  readonly #onLost:
+    ((lost: { label: string; runnerId?: string; error: string }) => void) | undefined;
   readonly #retryBaseMs: number;
   readonly #retryMaxMs: number;
   readonly #selectWaitMs: number;
+  /** 名乗りを聞きに行く1本。**`stop()` で必ず畳む**（残すとテストがハングする）。 */
+  #heartbeat: ReturnType<typeof setInterval> | null = null;
   #stopped = false;
 
   constructor(options: RunnerRegistryOptions) {
     this.#notify = options.notify;
+    this.#onLost = options.onLost;
     this.#retryBaseMs = options.retryBaseMs ?? REGISTRY_RETRY_BASE_MS;
     this.#retryMaxMs = options.retryMaxMs ?? REGISTRY_RETRY_MAX_MS;
     this.#selectWaitMs = options.selectWaitMs ?? SELECT_WAIT_MS;
+
+    const heartbeat = setInterval(() => this.#beat(), HEARTBEAT_INTERVAL_MS);
+    // 名乗りを聞くことでプロセスの終了を引き延ばさない。
+    heartbeat.unref?.();
+    this.#heartbeat = heartbeat;
   }
 
   /** 既に開いてある1台を、開き方として載せる（旧来の呼び出しの受け皿）。 */
@@ -629,12 +711,21 @@ class Registry implements RunnerRegistry {
       opening: null,
       timer: null,
       delay: this.#retryBaseMs,
+      lastSeen: Date.now(),
+      alive: true,
     });
   }
 
+  /**
+   * いま委譲を置ける1台。**`lost` は並ばない。**
+   *
+   * 落ちたと判定した器を宛先として返すのは「黙って引き下がる」の裏返しで、
+   * 新しい仕事を沈黙へ投げ込むことになる。名簿からは消さない（`entries()` には
+   * 残って人間から見える）が、置き先としては数えない。
+   */
   async list(): Promise<RunnerClient[]> {
     return [...this.#entries.values()].flatMap((entry) =>
-      entry.client === null ? [] : [entry.client],
+      entry.client === null || entry.state === 'lost' ? [] : [entry.client],
     );
   }
 
@@ -679,6 +770,8 @@ class Registry implements RunnerRegistry {
       opening: null,
       timer: null,
       delay: this.#retryBaseMs,
+      lastSeen: Date.now(),
+      alive: true,
     };
     this.#entries.set(source.label, entry);
     await this.#open(entry);
@@ -740,8 +833,9 @@ class Registry implements RunnerRegistry {
    */
   #notConnectedMessage(): string {
     return (
-      'どの manager-runner にもまだ繋がっていないので、いまは委譲を置けない。' +
-      '名簿は背景で挑み直し続けている（回数では諦めない）ので、少し置いて投げ直せば通ることがある: ' +
+      'いま繋がっている manager-runner が無いので、委譲を置けない。' +
+      '名簿は背景で挑み直し・名乗りの確認を続けている（回数では諦めない）ので、' +
+      '少し置いて投げ直せば通ることがある: ' +
       this.#describeEntries()
     );
   }
@@ -759,6 +853,10 @@ class Registry implements RunnerRegistry {
 
   async stop(): Promise<void> {
     this.#stopped = true;
+    // **名乗りを聞く1本を先に畳む。** 畳み残すと、止めたはずの名簿が背景で
+    // runner を叩き続ける（テストならそのままハングする）。
+    if (this.#heartbeat !== null) clearInterval(this.#heartbeat);
+    this.#heartbeat = null;
     for (const entry of this.#entries.values()) {
       if (entry.timer !== null) clearTimeout(entry.timer);
       entry.timer = null;
@@ -790,6 +888,10 @@ class Registry implements RunnerRegistry {
         entry.since = new Date().toISOString();
         delete entry.error;
         entry.delay = this.#retryBaseMs;
+        // 開けた瞬間が生存判定の起点。ここを置き忘れると、開いた直後の1台が
+        // 「30秒黙っていた」ことにされる。
+        entry.lastSeen = Date.now();
+        entry.alive = true;
         for (const subscriber of this.#subscribers) subscriber(client);
         for (const waiter of this.#waiting) waiter.resolve(client);
         this.#waiting.clear();
@@ -830,6 +932,101 @@ class Registry implements RunnerRegistry {
     // 名簿の挑み直しでプロセスの終了を引き延ばさない。
     timer.unref?.();
     entry.timer = timer;
+  }
+
+  // -------------------------------------------------------------------------
+  // 生きているかを聞く（roadmap M5）
+  //
+  // **SSE の `hello` の置き換えではない。** あれは器が礼儀正しく落ちたときにしか
+  // 届かない。電源が抜けた器も、ネットワークだけが切れた器も、ストリームは開いた
+  // まま何も言わなくなる — その沈黙をここで拾う。
+  // -------------------------------------------------------------------------
+
+  /** 名乗りを聞きに行く1周。**全台へ同時に投げる**（順番待ちを作らない）。 */
+  #beat(): void {
+    if (this.#stopped) return;
+    const at = Date.now();
+    for (const entry of [...this.#entries.values()]) {
+      // 開けていない宛先は挑み直しの担当。ここで二重に叩かない。
+      if (entry.client === null) continue;
+      // **待たずに次を投げる。** 直列に回すと、返らない1台の後ろに全台が並び、
+      // 1台の沈黙が名簿全体の生死判定を止める。
+      void this.#probe(entry, at);
+    }
+  }
+
+  /** 1台に名乗らせる。期限を過ぎたら中断して「返らなかった」として扱う。 */
+  async #probe(entry: RegistryEntry, at: number): Promise<void> {
+    const client = entry.client;
+    if (client === null) return;
+
+    let failure: string | null = null;
+    try {
+      await withDeadline(
+        (signal) => client.ping?.({ signal }) ?? Promise.resolve(),
+        HEARTBEAT_PROBE_MS,
+      );
+    } catch (error) {
+      failure = String(error);
+    }
+
+    // 聞いている間に外された / 開き直された / 名簿が止まった。**古い答えで上書きしない。**
+    if (this.#stopped) return;
+    if (this.#entries.get(entry.source.label) !== entry || entry.client !== client) return;
+
+    if (failure === null) {
+      this.#markSeen(entry, at, client);
+      return;
+    }
+    this.#markSilent(entry, at, failure);
+  }
+
+  /**
+   * 名乗りが返った。
+   *
+   * **黙っていた器が戻ってきたら、そう言う。** 状態を `lost` のままにすると、
+   * 生きている runner が宛先から永久に外れる（回復を認めないのは能力の削除である）。
+   */
+  #markSeen(entry: RegistryEntry, at: number, client: RunnerClient): void {
+    entry.lastSeen = at;
+    if (entry.alive) {
+      // 一時的にこけていただけの失敗は、返ってきた時点で窓から下ろす。
+      delete entry.error;
+      return;
+    }
+    entry.alive = true;
+    entry.state = 'connected';
+    entry.since = new Date().toISOString();
+    delete entry.error;
+    // 戻ってきた1台は、いま待っている `select` の宛先になれる。
+    for (const waiter of this.#waiting) waiter.resolve(client);
+    this.#waiting.clear();
+  }
+
+  /**
+   * 名乗りが返らなかった。
+   *
+   * **直近の失敗は必ず残す**（`GET /runners` の窓）。黙って引き下がると、人間には
+   * 「なぜか委譲が届かない」としか見えない。
+   *
+   * 落ちたと決めるのは**遷移**のときだけで、落ちている間ずっと知らせ続けない。
+   */
+  #markSilent(entry: RegistryEntry, at: number, error: string): void {
+    entry.error = error;
+    // 既に落ちたと判定済み。**`onLost` は1回だけ**である。
+    if (!entry.alive) return;
+    // **1回の取りこぼしでは動かさない。** 器の再デプロイ中の一瞬や詰まった1回の
+    // 応答で宛先を失うと、生きている runner から仕事を取り上げることになる。
+    if (at - entry.lastSeen < HEARTBEAT_LOST_MS) return;
+
+    entry.alive = false;
+    entry.state = 'lost';
+    entry.since = new Date().toISOString();
+    this.#onLost?.({
+      label: entry.source.label,
+      ...(entry.client === null ? {} : { runnerId: entry.client.runnerId }),
+      error,
+    });
   }
 
   /**
@@ -874,4 +1071,38 @@ class Registry implements RunnerRegistry {
     for (const waiter of [...this.#waiting]) waiter.reject(new Error(message));
     this.#waiting.clear();
   }
+}
+
+/**
+ * 期限付きで待つ。**期限を過ぎたら中断まで伝える。**
+ *
+ * 競争（`Promise.race`）だけだと、名簿は先へ進めても叩かれた側の繋ぎは開いたまま
+ * 残る。黙って死んだ器を10秒ごとに叩けば、返らない繋ぎが積み上がっていく。
+ * `signal` を渡し、かつ期限で自分も抜ける — **どちらか片方では足りない**
+ * （中断を無視する実装があっても名簿は止まらない、が成り立たなくなる）。
+ */
+function withDeadline(run: (signal: AbortSignal) => Promise<void>, ms: number): Promise<void> {
+  const controller = new AbortController();
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error(`${ms}ms 以内に名乗りが返らなかった`));
+    }, ms);
+    timer.unref?.();
+    const settle = (finish: () => void) => {
+      clearTimeout(timer);
+      finish();
+    };
+    let started: Promise<void>;
+    try {
+      started = run(controller.signal);
+    } catch (error) {
+      settle(() => reject(error instanceof Error ? error : new Error(String(error))));
+      return;
+    }
+    started.then(
+      () => settle(resolve),
+      (error: unknown) => settle(() => reject(error)),
+    );
+  });
 }

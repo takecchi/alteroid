@@ -125,6 +125,21 @@ class HttpRunner implements RunnerClient {
   }
 
   /**
+   * 生きているかを聞く。**既存の `/health` を叩くだけ**で、新しい口は足さない。
+   *
+   * `hello()` と違って**名乗りの中身は取らない**。器が入れ替わって別の runner_id を
+   * 返してきたとき、それは「同じ宛先が生きている」ではなく「走っていた仕事ごと
+   * 入れ替わった」であり、ここで黙って runnerId を書き換えると台帳の鎖
+   * （`manager_id → runner_id`）が音もなく繋ぎ変わる。ここで見るのは生死だけである。
+   *
+   * 本文は読み捨てる（読まずに放ると、10秒ごとに繋ぎが積み上がる）。
+   */
+  async ping(options?: { signal?: AbortSignal }): Promise<void> {
+    const response = await this.#call('GET', '/health', undefined, options?.signal);
+    await response.text().catch(() => '');
+  }
+
+  /**
    * イベントの受け取り。切れたら繋ぎ直す。
    *
    * **繋がっていない間の出来事は runner 側に溜まる**（Outbox）。ここで諦めると、
@@ -290,7 +305,12 @@ class HttpRunner implements RunnerClient {
     this.#controller = null;
   }
 
-  async #call(method: string, path: string, body?: unknown): Promise<Response> {
+  async #call(
+    method: string,
+    path: string,
+    body?: unknown,
+    signal?: AbortSignal,
+  ): Promise<Response> {
     const response = await this.#fetch(`${this.#baseUrl}${path}`, {
       method,
       headers: {
@@ -298,6 +318,8 @@ class HttpRunner implements RunnerClient {
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      // 名簿の probe 期限で中断されたら、繋ぎもそこで畳む（返らない繋ぎを残さない）。
+      ...(signal === undefined ? {} : { signal }),
     });
     if (!response.ok) {
       const detail = await response.text().catch(() => '');

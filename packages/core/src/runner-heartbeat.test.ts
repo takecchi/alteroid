@@ -7,8 +7,6 @@ import type {
   RunnerManagerState,
   RunnerProfileFingerprint,
   RunnerProfileResult,
-  RunnerResumeCommand,
-  RunnerStartCommand,
 } from './runner-protocol.js';
 
 /**
@@ -45,18 +43,19 @@ class FakeRunner implements RunnerClient {
     await new Promise<never>(() => undefined);
   }
 
+  // ここから下は名簿が触らない口。**生死判定の材料にしない**ので空でよい。
   async connect(): Promise<void> {}
-  async start(_command: RunnerStartCommand): Promise<void> {}
-  async resume(_command: RunnerResumeCommand): Promise<void> {}
-  async send(_managerId: string, _text: string): Promise<void> {}
+  async start(): Promise<void> {}
+  async resume(): Promise<void> {}
+  async send(): Promise<void> {}
   async answer(): Promise<boolean> {
     return false;
   }
-  async stop(_managerId: string): Promise<void> {}
+  async stop(): Promise<void> {}
   async list(): Promise<RunnerManagerState[]> {
     return [];
   }
-  async transcript(_managerId: string): Promise<string | null> {
+  async transcript(): Promise<string | null> {
     return null;
   }
   async credentials(): Promise<RunnerCredentialFingerprint[]> {
@@ -68,7 +67,7 @@ class FakeRunner implements RunnerClient {
   async profile(): Promise<RunnerProfileFingerprint | undefined> {
     return undefined;
   }
-  async setProfile(_script: string): Promise<RunnerProfileResult> {
+  async setProfile(): Promise<RunnerProfileResult> {
     return { ok: true };
   }
   async close(): Promise<void> {
