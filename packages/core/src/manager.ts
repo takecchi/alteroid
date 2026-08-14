@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { ProfileService } from './profile-service.js';
+import { createRecentMap, type RecentMap } from './recent.js';
 import { isRetryableRunnerError } from './runner-protocol.js';
 import type { RunnerClient, RunnerEvent, RunnerRegistry } from './runner-protocol.js';
 import { brief } from './runner.js';
@@ -140,7 +141,25 @@ interface ManagerRecord {
   waiting: { requestId: string; summary: string }[];
   /** runner に生きたセッションがあるか。無ければ send のときに resume する。 */
   attached: boolean;
+  /**
+   * **一度でもクローンへ配った確認の id。**
+   *
+   * `waiting` は「いま待っている」ものしか持たない。それだけで重複を見ると、
+   * 解けた後に届いた同じ `ask` が新しい待ちとして積まれ、クローンへ二度目が
+   * 届く。解決という事実は runner とデーモンの**両方**で観測できる必要がある
+   * （片方にしか残らないのが、この不具合の形である）。
+   *
+   * **これは重複の抑止であって、経路の短絡ではない。** ここで答えを決めることは
+   * 一切しない — 知らない確認はこれまでどおり全部クローンへ回る（M4 の制御面分離）。
+   *
+   * 最初の `ask` で作る。像はマネージャーと一緒に消えるので寿命は元から有限で、
+   * 件数の蓋（`ASKED_MEMORY_LIMIT`）は1本が異常に多くの確認を出したときの保険。
+   */
+  asked?: RecentMap<true>;
 }
+
+/** 1マネージャーぶんで覚えておく確認の件数。達したら**黙らずに日誌へ残す**。 */
+const ASKED_MEMORY_LIMIT = 512;
 
 class Pool implements ManagerPool {
   readonly #stores: Stores;
@@ -993,9 +1012,15 @@ class Pool implements ManagerPool {
       }
 
       case 'ask': {
-        if (!record.waiting.some((item) => item.requestId === event.requestId)) {
-          record.waiting.push({ requestId: event.requestId, summary: event.summary });
-        }
+        // **requestId で冪等に。** 同じ確認が二度届いても、待ちを積み直さず、
+        // 日誌にも二度書かず、クローンへも二度配らない。二度目を配ると、答えた
+        // はずの確認がもう一度クローンへ届く（そしてその再送は runner 側で既に
+        // 中断済みなので、答えたときには「待っていない」と返る）。
+        const asked = this.#askedOf(record);
+        if (asked.has(event.requestId)) return;
+        asked.set(event.requestId, true);
+
+        record.waiting.push({ requestId: event.requestId, summary: event.summary });
         record.job.status = 'waiting_human';
         await this.#persist(record);
         await this.#journal({
@@ -1014,6 +1039,18 @@ class Pool implements ManagerPool {
           record.job.status = 'running';
         }
         await this.#persist(record);
+        return;
+      }
+
+      case 'note': {
+        // runner の内側の事実。マネージャーの発言ではないので受信箱へは出さず、
+        // 日誌にだけ残す（`resume_failed` の記録と同じ置き場所）。
+        await this.#journal({
+          type: 'exchange',
+          with: 'manager',
+          role: 'inbound',
+          text: `[${event.managerId}] ${event.text}`,
+        });
         return;
       }
 
@@ -1098,6 +1135,35 @@ class Pool implements ManagerPool {
   // -------------------------------------------------------------------------
   // 台帳と受信箱
   // -------------------------------------------------------------------------
+
+  /**
+   * 配った確認の帳面。無ければここで作る。
+   *
+   * 上限に達したら**黙って忘れない** — 忘れた id の `ask` が再送されると、
+   * それは新しい確認としてもう一度クローンへ回る。日誌に残っていなければ、
+   * 「なぜ同じ確認が二度来たのか」を後から誰も辿れない。
+   */
+  #askedOf(record: ManagerRecord): RecentMap<true> {
+    const existing = record.asked;
+    if (existing !== undefined) return existing;
+    const managerId = record.job.id;
+    const asked = createRecentMap<true>({
+      limit: ASKED_MEMORY_LIMIT,
+      onForget: (ids) => {
+        void this.#journal({
+          type: 'exchange',
+          with: 'manager',
+          role: 'inbound',
+          text:
+            `[${managerId}] 配り終えた確認の記憶が上限（${ASKED_MEMORY_LIMIT}件）に達したので、` +
+            `古い ${ids.length} 件を忘れた: ${ids.join(', ')}。` +
+            'この id の確認が再送されると、新しい確認としてもう一度回る。',
+        });
+      },
+    });
+    record.asked = asked;
+    return asked;
+  }
 
   #choosePending(
     record: ManagerRecord,
