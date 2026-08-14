@@ -7,7 +7,7 @@ import type {
   Scheduler,
   Stores,
 } from '@alteroid/core';
-import { createMemoryStores, createProfileService } from '@alteroid/core';
+import { createMemoryStores, createProfileService, createRunnerRegistry } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp, parseAllowedOrigins } from './app.js';
@@ -1246,5 +1246,48 @@ describe('parseAllowedOrigins', () => {
       'https://a.example.com',
     ]);
     expect(parseAllowedOrigins(undefined)).toEqual({ origins: [], rejected: [] });
+  });
+});
+
+/**
+ * `GET /runners` は runner の一覧であって、**繋がっている runner の一覧ではない。**
+ *
+ * 上がってこない runner が一覧から消えるだけだと、人間には「設定し忘れた」のか
+ * 「上がってこない」のかが区別できない（roadmap M5「runner の登録・生存判定」）。
+ */
+describe('runner の生死', () => {
+  it('繋がっていない runner も、宛先と状態付きで並ぶ', async () => {
+    // 挑み直しの間隔は長めに取る（この検証で見たいのは1回目の失敗の見え方）。
+    const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
+    await registry.register({
+      label: 'http://runner:4518',
+      open: () => Promise.reject(new Error('fetch failed')),
+    });
+    await registry.register({
+      label: '同一プロセス',
+      open: async () => fakeRunner('runner-primary') as never,
+    });
+
+    const withRunners = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      runners: registry,
+    });
+
+    const body = (await (await withRunners.request('/runners')).json()) as {
+      runners: { label: string; state: string; runnerId?: string; error?: string }[];
+    };
+
+    expect(body.runners).toMatchObject([
+      // 繋がっていないので runner_id は無い。**宛先は言える。**
+      { label: 'http://runner:4518', state: 'unreachable' },
+      { label: '同一プロセス', state: 'connected', runnerId: 'runner-primary' },
+    ]);
+    expect(body.runners[0]?.runnerId).toBeUndefined();
+    expect(body.runners[0]?.error).toContain('fetch failed');
+
+    await registry.stop();
   });
 });
