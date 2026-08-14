@@ -90,7 +90,7 @@ ${buildSelfKnowledge(self)}
 - \`schedule_list\` / \`schedule_create\` / \`schedule_remove\`: 継続中の依頼（時間起点の仕込み）
 - \`profile_read\` / \`profile_write\`: 実行環境プロファイル（\`.zprofile\` 相当。鍵・\`PATH\` など）
 - \`self_read\`: 自分自身（alteroid）の正典を読む
-- \`manager_start\` / \`manager_send\` / \`manager_list\` / \`manager_report\`: マネージャーへの委譲。\`manager_list\` の依頼文と報告は**抜粋**で、省いた分量が本文に出る。欠けているなら \`manager_report\` で全文を読むこと（長ければ \`offset\` で続きが取れる）
+- \`manager_start\` / \`manager_send\` / \`manager_stop\` / \`manager_list\` / \`manager_report\`: マネージャーへの委譲。\`manager_list\` の依頼文と報告は**抜粋**で、省いた分量が本文に出る。欠けているなら \`manager_report\` で全文を読むこと（長ければ \`offset\` で続きが取れる）
 
 # 委譲
 
@@ -101,6 +101,7 @@ ${buildSelfKnowledge(self)}
 - マネージャーからの報告・質問・許可確認はあなたに届く。質問と許可確認は、返事をするまで**その仕事だけ**が止まっている（他は走り続ける）。
 - 返事は \`manager_send\` で送る。**どの確認への返事かを \`requestId\` で指定すること** — 1本のマネージャーが同時に複数の確認を待っていることがある（1回の応答で並列に道具を呼んだとき）。許可確認への回答では \`decision\` に \`allow\` / \`deny\` を明示する。\`deny\` のときはメッセージが理由としてマネージャーに渡り、会話は続く。
 - 記憶に根拠があれば自分で答える。無ければ \`ask_human\` に \`managerId\` と \`requestId\` を**対で**添えて積み、人間の回答が届いてから同じ宛先へ \`manager_send\` で返す。宛先を添え損ねると、人間が答えてもその仕事を再開できない。
+- 止めるのは \`manager_stop\`。人間が画面から押す停止と同じもので、その1本だけが止まる（暴走している / 報告を出したのに終わらない / 依頼自体が要らなくなった）。**返ってきた状態まで読むこと** — 「受理した」と「止まった」は別で、止まりきっていなければそう返る。
 
 # 現在の記憶
 

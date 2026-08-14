@@ -74,9 +74,28 @@ export interface ManagerSendOptions {
   requestId?: string;
 }
 
+/**
+ * 誰が止めたか。
+ *
+ * **記録が嘘をつかないためだけのもの**で、止まり方は誰が押しても同じである
+ * （人間の Web UI もクローンの `manager_stop` も、この下は1本の道を通る）。
+ * ここが無いと、クローンが止めた仕事の日誌に「人間が停止させた」と残り、
+ * 人間とクローンで見えている経緯が食い違う。
+ */
+export type ManagerStopActor = 'human' | 'clone';
+
 export interface ManagerAbortResult {
   outcome: 'stopped' | 'unknown';
   detail: string;
+  /**
+   * **止めた結果、本当に止まったか。** runner のセッション一覧から消えたことを
+   * 見に行った結果で、`undefined` は確かめられなかった（runner に訊けなかった）。
+   *
+   * 「停止を受理した」と「止まった」は別の観測である。`runner.stop()` は該当の
+   * セッションが手元に無ければ黙って何もしないので、受理だけを見て「止まった」と
+   * 言うと、走り続けているマネージャーを止めたことにしてしまう。
+   */
+  sessionGone?: boolean;
 }
 
 export interface ManagerPool {
@@ -93,8 +112,13 @@ export interface ManagerPool {
    * 止める手段がクローン経由しか無いと、クローンが取り込み中のときや、そもそも
    * クローンの判断が間違っているときに、人間が手を出せない層ができる。
    * 止めた事実は日誌に残る（見えない層を作らない）。
+   *
+   * **クローンも同じここを通る**（`manager_stop`）。人間に出来てクローンに
+   * 出来ないことを作らない（north_star 禁止1）。違うのは `by` に残る名前だけで、
+   * 止まり方は変えない — 停止が2種類あると、人間とクローンで見えている状態が
+   * 食い違う。
    */
-  abort(managerId: string, reason?: string): Promise<ManagerAbortResult>;
+  abort(managerId: string, reason?: string, by?: ManagerStopActor): Promise<ManagerAbortResult>;
   list(): Promise<ManagerSummary[]>;
   /** manager_id からセッションの生ログへ降りる（可観測性の最下段）。 */
   transcript(managerId: string): Promise<string | null>;
@@ -504,8 +528,14 @@ class Pool implements ManagerPool {
     return resumed;
   }
 
-  async abort(managerId: string, reason?: string): Promise<ManagerAbortResult> {
+  async abort(
+    managerId: string,
+    reason?: string,
+    by: ManagerStopActor = 'human',
+  ): Promise<ManagerAbortResult> {
     await this.#ensureConnected();
+
+    const who = by === 'clone' ? 'クローン' : '人間';
 
     const record = this.#records.get(managerId) ?? (await this.#load(managerId));
     if (!record) {
@@ -521,6 +551,17 @@ class Pool implements ManagerPool {
     }
 
     await runner.stop(managerId);
+
+    // **「受理した」で終わらせない。** `runner.stop()` は該当セッションが手元に
+    // 無ければ黙って何もしない（`#sessions.get(id)?.stop()`）ので、戻り値だけを
+    // 見て「止まった」と言うと、走り続けているものを止めたことにしてしまう。
+    // 実際に畳まれたセッションは runner の一覧から消える（`onClosed`）ので、
+    // そこを見に行く。訊けなかったときは黙って成功にせず undefined のまま返す。
+    const sessionGone = await runner
+      .list()
+      .then((sessions) => !sessions.some((session) => session.managerId === managerId))
+      .catch(() => undefined);
+
     record.waiting = [];
     record.attached = false;
     record.job.status = 'done';
@@ -528,7 +569,14 @@ class Pool implements ManagerPool {
 
     // **止めたことを日誌に残す。** 消えた理由が分からないマネージャーを作らない
     // （PRD「可観測性」）。クローンにも知らせるので、次のターンで気づける。
-    const detail = reason === undefined ? '人間が停止させた。' : `人間が停止させた: ${reason}`;
+    const base = reason === undefined ? `${who}が停止させた。` : `${who}が停止させた: ${reason}`;
+    // 確かめた結果も同じ文に載せる。人間もクローンもこの1文しか見ないことがある。
+    const detail =
+      sessionGone === false
+        ? `${base}（ただし runner には ${managerId} のセッションがまだ残っている。止まりきっていない）`
+        : sessionGone === undefined
+          ? `${base}（runner に確認が取れず、止まったかは未確認）`
+          : base;
     await this.#journal({
       type: 'exchange',
       with: 'manager',
@@ -541,10 +589,10 @@ class Pool implements ManagerPool {
       at: new Date().toISOString(),
       managerId,
       kind: 'report',
-      text: `${managerId} を人間が停止させました。${reason === undefined ? '' : `理由: ${reason}`}`,
+      text: `${managerId} を${who}が停止させました。${reason === undefined ? '' : `理由: ${reason}`}`,
     });
 
-    return { outcome: 'stopped', detail };
+    return { outcome: 'stopped', detail, ...(sessionGone === undefined ? {} : { sessionGone }) };
   }
 
   async stop(): Promise<void> {

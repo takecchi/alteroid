@@ -12,6 +12,8 @@ interface Harness {
   emitted: ChatStreamEvent[];
   sent: { managerId: string; message: string; decision?: string; requestId?: string }[];
   started: { request: string; cwd?: string }[];
+  /** 人間と同じ口（ManagerPool.abort）へ届いた停止。 */
+  aborted: { managerId: string; reason?: string }[];
   /** runner へ降ろされたプロファイルの本文。 */
   distributed: string[];
   /** 走っていることになっているマネージャー（直接いじって状況を作る）。 */
@@ -48,7 +50,9 @@ function harness(): Harness {
       return { outcome: 'answered', detail: '回答した。' };
     },
     async list() {
-      return running;
+      // 本物の `list()` は毎回作り直した写しを返す（`summaryOf`）。同じ物を返すと、
+      // 呼び手が控えた「前の状態」が後から書き換わってしまう。
+      return running.map((manager) => ({ ...manager }));
     },
     async transcript() {
       return null;
@@ -58,7 +62,14 @@ function harness(): Harness {
     },
     async abort(managerId: string, reason?: string) {
       aborted.push({ managerId, ...(reason === undefined ? {} : { reason }) });
-      return { outcome: 'stopped' as const, detail: '止めた' };
+      const found = running.find((manager) => manager.managerId === managerId);
+      if (!found)
+        return { outcome: 'unknown' as const, detail: `${managerId} というマネージャーは居ない。` };
+      // 本物と同じところまで動かす（status を畳み、セッションを切る）。ここを
+      // 動かさないと「受理した」と「効いた」の差がテストに映らない。
+      found.status = 'done';
+      found.live = false;
+      return { outcome: 'stopped' as const, detail: '止めた', sessionGone: true };
     },
     async stop() {},
   };
@@ -99,6 +110,7 @@ function harness(): Harness {
     emitted,
     sent,
     started,
+    aborted,
     distributed,
     running,
     async call(name, args) {
@@ -514,6 +526,28 @@ describe('クローンの道具', () => {
     expect(h.sent).toEqual([
       { managerId: 'mgr-1', message: 'よい', decision: 'allow', requestId: 'req-9' },
     ]);
+  });
+
+  /**
+   * **人間に出来てクローンに出来ないことを作らない**（north_star 禁止1）。
+   *
+   * 停止は Web UI（`DELETE /managers/:id`）にも CLI にもあるのに、クローンの道具
+   * だけに無かった。暴走したマネージャーも、報告を出したのに終わらないマネージャーも、
+   * クローンからは**無応答のまま放置するしか手が無かった**（実際にそうなった）。
+   *
+   * 通す口は人間と同じ `ManagerPool.abort` である。クローン専用の停止を別に作ると、
+   * 人間とクローンで見えている状態が食い違う。
+   */
+  it('manager_stop は人間と同じ口で止め、止まったことを確かめてから返す', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+
+    const reply = await h.call('manager_stop', { managerId: 'mgr-1', reason: '暴走した' });
+
+    expect(h.aborted).toEqual([{ managerId: 'mgr-1', reason: '暴走した' }]);
+    // **「受理した」で終わらせない。** 止めたあとの実際の状態を読み直して返す。
+    expect(reply).toContain('mgr-1');
+    expect(reply).toContain('done');
   });
 
   it('manager_list は状態と返事待ちを返す', async () => {
