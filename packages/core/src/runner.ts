@@ -468,6 +468,15 @@ class RunnerSession {
    * 作り直すと、済んだ作業を記録から二度走らせる。
    */
   #progressed = false;
+  /**
+   * このターンでマネージャーが出した本文（人間が Claude Code の画面で読むもの）。
+   *
+   * **報告を `result` 1本から作らない。** `result` はそのターンの最後の一片で
+   * しかなく、道具を挟むたびに本文は切れる。`result` だけを渡すと、クローンには
+   * 末尾だけが届き、**欠けていることが誰にも見えない**。人間は全部読めるのだから、
+   * 受信側だけが読めないのは能力の削除である（north_star 禁止1）。
+   */
+  #said: string[] = [];
   readonly #inputWaiters = new Set<() => void>();
   #query: Query | null = null;
   #reader: Promise<void> | null = null;
@@ -826,7 +835,23 @@ class RunnerSession {
       return;
     }
 
+    // マネージャーが喋った本文を溜めておく。**作業者の本文は混ぜない** —
+    // `parent_tool_use_id` が付いているものは Task の中の別の層の発言であって、
+    // マネージャーが人間（＝クローン）へ向けて書いたものではない。
+    if (message.type === 'assistant') {
+      if (parentToolUseId(message) === null) {
+        const said = assistantText(message);
+        if (said.length > 0) this.#said.push(said);
+      }
+      return;
+    }
+
     if (message.type !== 'result') return;
+
+    // ターンの区切りで必ず畳む。持ち越すと、前のターンの本文が次の報告に
+    // 混ざって「言っていないことを言った」ことになる。
+    const said = this.#said;
+    this.#said = [];
 
     // **`init` が来たことは「戻れた」ことではない。** 実機では、開きはしたが
     // その回が `error_during_execution` で何も返さずに終わる形も出ている。
@@ -834,7 +859,7 @@ class RunnerSession {
     if (isSuccessResult(message)) this.#progressed = true;
     else if (this.#recoverFromFailedResume(`結果なしで終了: ${resultText(message)}`)) return;
 
-    const text = resultText(message);
+    const text = reportText(said, resultText(message));
     this.#status = this.#pending.length > 0 ? 'waiting_human' : 'done';
     this.#emit({ type: 'report', managerId: this.#id, text, status: this.#status });
   }
@@ -1075,6 +1100,45 @@ function handoffPrompt(input: {
     '--- 失われたセッションの記録（ここまで） ---',
     ...input.carried,
   ].join('\n');
+}
+
+/**
+ * 作業者（Task の中）の発言なら親の道具 id が付く。マネージャー自身の発言は `null`。
+ */
+function parentToolUseId(message: SDKMessage): string | null {
+  const value = (message as { parent_tool_use_id?: unknown }).parent_tool_use_id;
+  return typeof value === 'string' ? value : null;
+}
+
+/** assistant メッセージの本文ブロックを、出た順につないで取り出す。 */
+function assistantText(message: SDKMessage): string {
+  const content = (message as { message?: { content?: unknown } }).message?.content;
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter(
+      (block): block is { type: 'text'; text: string } =>
+        (block as { type?: unknown }).type === 'text' &&
+        typeof (block as { text?: unknown }).text === 'string',
+    )
+    .map((block) => block.text)
+    .join('\n')
+    .trim();
+}
+
+/**
+ * 1ターン分の報告を組み立てる。
+ *
+ * 出た順につなぐ（人間が画面で読んだ順である）。`result` は多くの場合その
+ * 最後の一片なので既に含まれるが、**含まれていないなら落とさずに足す** —
+ * エラー終了の `（結果なしで終了: …）` のように、本文には出ないまま結果だけが
+ * 来ることがあり、そこを黙って捨てると終わり方が分からなくなる。
+ */
+function reportText(said: readonly string[], result: string): string {
+  const body = said.join('\n\n').trim();
+  if (body.length === 0) return result;
+  if (body.includes(result.trim())) return body;
+  return `${body}\n\n${result}`;
 }
 
 /** 「1ターンを最後まで走り切った」結果か。 */

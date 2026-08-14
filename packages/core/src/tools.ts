@@ -4,6 +4,7 @@ import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 
 import { isCronExpression } from './cron.js';
+import { describePage, excerptLine, page } from './excerpt.js';
 import type { ManagerPool } from './manager.js';
 import type { ProfileService } from './profile-service.js';
 import {
@@ -72,7 +73,23 @@ export const CLONE_TOOL_NAMES = [
   'manager_start',
   'manager_send',
   'manager_list',
+  'manager_report',
 ] as const;
+
+/**
+ * 一覧の既定の大きさ。
+ *
+ * **件数に比例して伸びる出力を作らない。** MCP の出力上限を超えた応答は
+ * クローンに1文字も届かず（SDK がファイルへ落とすが、クローンにファイルを
+ * 読む道具は無い）、一覧が丸ごと使えなくなる。実測では 52,997 文字で溢れた。
+ * 人間は Web UI で件数によらず一覧を見られるので、ここが壊れるのは
+ * 能力の削除である（north_star 禁止1）。M5 で runner が増えれば件数も増える。
+ */
+const LIST_REQUEST_EXCERPT = 160;
+const LIST_REPORT_EXCERPT = 240;
+const LIST_BUDGET = 8_000;
+/** 全文を取りに来たときの1回分。続きは `offset` で取れる。 */
+const REPORT_PAGE = 8_000;
 
 /** 自作ツールは確認なしで通す（能力の削除ではなく、道具が道具として使えること）。 */
 export const CLONE_ALLOWED_TOOLS = CLONE_TOOL_NAMES.map(qualifiedToolName);
@@ -599,29 +616,108 @@ export function createCloneTools(context: ToolContext) {
 
     tool(
       'manager_list',
-      'マネージャーの一覧と状態を見る。何が走っていて、何が返事待ちかが分かる。',
+      [
+        'マネージャーの一覧と状態を見る。何が走っていて、何が返事待ちかが分かる。',
+        '依頼文と報告は抜粋なので、全文が要るなら manager_report で取ること。',
+      ].join(' '),
       {},
       async () => {
         if (!context.managers) return NO_POOL;
         const managers = await context.managers.list();
         if (managers.length === 0) return text('（マネージャーは1本も居ない）');
-        return text(
-          managers
-            .map((manager) =>
-              [
-                `- ${manager.managerId} [${manager.status}${manager.live ? '' : '/セッション切断'}]`,
-                `  依頼: ${manager.request}`,
-                `  cwd: ${manager.cwd}`,
-                ...manager.waiting.map(
-                  (item) => `  返事待ち(requestId: ${item.requestId}): ${item.summary}`,
-                ),
-                manager.lastReport === undefined ? null : `  直近の報告: ${manager.lastReport}`,
-              ]
-                .filter((line) => line !== null)
-                .join('\n'),
-            )
-            .join('\n'),
-        );
+
+        // **予算を先に決めて、入るところまで積む。** 件数から出力量を決めると、
+        // 何件で壊れるかが運任せになる。切ったなら必ずそう言う。
+        const lines: string[] = [];
+        let used = 0;
+        let shown = 0;
+        for (const manager of managers) {
+          const entry = [
+            `- ${manager.managerId} [${manager.status}${manager.live ? '' : '/セッション切断'}]`,
+            `  依頼: ${excerptLine(manager.request, LIST_REQUEST_EXCERPT)}`,
+            `  cwd: ${manager.cwd}`,
+            ...manager.waiting.map(
+              (item) => `  返事待ち(requestId: ${item.requestId}): ${item.summary}`,
+            ),
+            manager.lastReport === undefined
+              ? null
+              : `  直近の報告: ${excerptLine(manager.lastReport, LIST_REPORT_EXCERPT)}`,
+          ]
+            .filter((line) => line !== null)
+            .join('\n');
+          if (shown > 0 && used + entry.length > LIST_BUDGET) break;
+          lines.push(entry);
+          used += entry.length;
+          shown += 1;
+        }
+
+        const rest = managers.length - shown;
+        if (rest > 0) {
+          lines.push(
+            `…ほか ${rest} 件は省略（全 ${managers.length} 件）。` +
+              '走っているものから順に出している。',
+          );
+        }
+        lines.push('（依頼と報告は抜粋。全文は manager_report <managerId> で取れる）');
+        return text(lines.join('\n'));
+      },
+    ),
+
+    /**
+     * 一覧を抜粋にした以上、**全文への行き先が要る。**
+     *
+     * 人間は Web UI と `GET /managers/:id/transcript` で全文を読める。クローンに
+     * 同じ手が無いまま抜粋だけにすると、削っただけになる（north_star 禁止1）。
+     * 長ければ切って捨てるのではなく、`offset` で続きを取れる形にする。
+     */
+    tool(
+      'manager_report',
+      [
+        'マネージャーの依頼文・直近の報告を全文で読む。',
+        'manager_list は抜粋なので、欠落に気づいたらここで全部読むこと。',
+        '長い場合は続きの取り方が末尾に出るので、最後まで読み切ること。',
+      ].join(' '),
+      {
+        managerId: z.string().describe('manager_list に出ている id'),
+        part: z
+          .enum(['report', 'request'])
+          .optional()
+          .describe('report=直近の報告（既定） / request=依頼文'),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe('何文字目から読むか。前回の応答が示した続きの位置を渡す'),
+      },
+      async ({ managerId, part = 'report', offset = 0 }) => {
+        if (!context.managers) return NO_POOL;
+        const managers = await context.managers.list();
+        const found = managers.find((manager) => manager.managerId === managerId);
+        if (!found) {
+          return text(
+            `マネージャー ${managerId} は居ない（もう畳まれたか、id が違う）。` +
+              'manager_list で今あるものが見える。',
+          );
+        }
+
+        const body = part === 'request' ? found.request : found.lastReport;
+        if (body === undefined || body.length === 0) {
+          return text(
+            part === 'request'
+              ? `マネージャー ${managerId} の依頼文が記録に無い。`
+              : `マネージャー ${managerId} からの報告はまだ無い（状態: ${found.status}）。`,
+          );
+        }
+
+        const label = part === 'request' ? '依頼文' : '直近の報告';
+        const part1 = page(body, offset, REPORT_PAGE);
+        const head = `マネージャー ${managerId} の${label}（${describePage(part1)}）`;
+        const tail = part1.more
+          ? `\n\n…（ここで切れている。続きは manager_report managerId=${managerId}` +
+            `${part === 'request' ? ' part=request' : ''} offset=${part1.to}）`
+          : '';
+        return text(`${head}\n\n${part1.body}${tail}`);
       },
     ),
   ];

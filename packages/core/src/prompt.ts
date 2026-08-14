@@ -90,7 +90,7 @@ ${buildSelfKnowledge(self)}
 - \`schedule_list\` / \`schedule_create\` / \`schedule_remove\`: 継続中の依頼（時間起点の仕込み）
 - \`profile_read\` / \`profile_write\`: 実行環境プロファイル（\`.zprofile\` 相当。鍵・\`PATH\` など）
 - \`self_read\`: 自分自身（alteroid）の正典を読む
-- \`manager_start\` / \`manager_send\` / \`manager_list\`: マネージャーへの委譲
+- \`manager_start\` / \`manager_send\` / \`manager_list\` / \`manager_report\`: マネージャーへの委譲。\`manager_list\` の依頼文と報告は**抜粋**で、省いた分量が本文に出る。欠けているなら \`manager_report\` で全文を読むこと（長ければ \`offset\` で続きが取れる）
 
 # 委譲
 
