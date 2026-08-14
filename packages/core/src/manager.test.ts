@@ -1397,3 +1397,164 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     await s.pool.stop();
   });
 });
+
+/**
+ * resume を SDK 側に拒まれる runner。
+ *
+ * 実機で起きたのはこれである（`No conversation found with session ID: …`）。
+ * **失敗は `POST /managers/:id/resume` の応答としては返ってこない** — 命令は
+ * 受理され、開いたストリームの側から後で落ちてくる。だから「resume を投げられた」
+ * ことと「続きへ戻れた」ことは別物であり、前者だけを見ている限りこの穴は塞がらない。
+ */
+function resumeRejectingSdk() {
+  const opened: { resume: string | undefined; inputs: string[] }[] = [];
+
+  const fn = ((params: { prompt: unknown; options?: Options }) => {
+    const options = params.options ?? {};
+    const inputs: string[] = [];
+    opened.push({ resume: options.resume, inputs });
+
+    void (async () => {
+      for await (const message of params.prompt as AsyncIterable<{
+        message: { content: unknown };
+      }>) {
+        inputs.push(String(message.message.content));
+      }
+    })();
+
+    async function* generate(): AsyncGenerator<SDKMessage, void> {
+      if (options.resume !== undefined) {
+        // **init すら来ない。** SDK は開いた直後にこれを投げる。
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        throw new Error(
+          'Claude Code returned an error result:\n' +
+            `No conversation found with session ID: ${options.resume}`,
+        );
+      }
+      yield {
+        type: 'system',
+        subtype: 'init',
+        session_id: 'sess-after-fallback',
+        uuid: 'uuid-init',
+      } as unknown as SDKMessage;
+      // 新しいセッションは開いたまま手を動かし続ける
+      await new Promise(() => undefined);
+    }
+
+    const generator = generate();
+    return Object.assign(generator, {
+      close: () => undefined,
+      interrupt: async () => undefined,
+    }) as unknown as Query;
+  }) as unknown as typeof sdkQuery;
+
+  return { fn, opened };
+}
+
+describe('前のセッションへ戻れなかったとき（M4 受け入れ基準2）', () => {
+  const runningJob = {
+    id: 'mgr-lost',
+    managerId: 'mgr-lost',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T01:00:00.000Z',
+    status: 'running' as const,
+    summary: '移行作業',
+    request: 'DB の移行をやって',
+    cwd: '/work/project',
+    sessionId: 'sess-before-restart',
+    projectKey: 'proj-key',
+    lastReport: 'スキーマまで書いた',
+  };
+
+  const savedLog = [
+    { type: 'user', message: { role: 'user', content: 'DB の移行をやって' } },
+    {
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'スキーマまで書いた' }] },
+    },
+  ];
+
+  function setupRejecting(entries: unknown[] | null) {
+    const { fn, opened } = resumeRejectingSdk();
+    const sessionStore = {
+      append: async () => undefined,
+      load: async (key: { projectKey: string; sessionId: string }) =>
+        entries !== null && key.projectKey === 'proj-key' ? entries : null,
+    };
+    const stores = { ...createMemoryStores(), sessionStore };
+    const inbox: InboxEvent[] = [];
+    const runner = createLocalRunner({
+      runnerId: 'runner-test',
+      workspacePath: '/work/project',
+      queryFn: fn,
+      env: { PATH: '/usr/bin' },
+    });
+    const registry = createRunnerRegistry([runner]);
+    const pool = createManagerPool({
+      stores,
+      post: (event) => inbox.push(event),
+      runners: registry,
+      profile: createProfileService({ stores, runners: registry }),
+    });
+    return { pool, stores, inbox, opened };
+  }
+
+  it('session_id で戻れなくても、預かった生ログから続きを起こす', async () => {
+    // **黙って引き下がらない。** 器が落ちたことを理由に仕事を止めてよいのは
+    // 承認待ちのときだけである（PRD「自律」）。session_id が腐っていても、
+    // 生ログはデーモンが預かっているのだから、そこから組み立て直せる。
+    const s = setupRejecting(savedLog);
+    await s.stores.jobs.putJob(runningJob);
+
+    await s.pool.restore();
+
+    // 1本目は resume（拒まれる）、2本目は resume 無しで開き直したもの
+    await expect.poll(() => s.opened.length, { timeout: 2000 }).toBe(2);
+    expect(s.opened[0]?.resume).toBe('sess-before-restart');
+    expect(s.opened[1]?.resume).toBeUndefined();
+
+    // 新しいセッションには、失われたセッションの記録が渡っている
+    await expect
+      .poll(() => (s.opened[1]?.inputs ?? []).join('\n'), { timeout: 2000 })
+      .toContain('スキーマまで書いた');
+    expect((s.opened[1]?.inputs ?? []).join('\n')).toContain('DB の移行をやって');
+
+    // クローンは「前のセッションからは戻れなかった」ことを知る（黙って続けない）
+    const notice = s.inbox.find(
+      (event) => event.type === 'manager_message' && event.text.includes('生ログ'),
+    );
+    expect(notice).toBeDefined();
+
+    await s.pool.stop();
+  });
+
+  it('生ログも無いなら、再試行を打ち切ってクローンへ知らせる', async () => {
+    // 投げ直しても同じ答えしか返らない失敗である。**黙って挑み続けない** —
+    // 同じ session_id の resume が繰り返されると、同じ障害通知が受信箱に積み上がる
+    // だけで、誰も状況を知れないまま台帳の `running` が残る。
+    const s = setupRejecting(null);
+    await s.stores.jobs.putJob(runningJob);
+
+    await s.pool.restore();
+
+    await expect
+      .poll(
+        () =>
+          s.inbox.find(
+            (event) => event.type === 'manager_message' && event.text.includes('戻せなかった'),
+          ),
+        { timeout: 2000 },
+      )
+      .toBeDefined();
+    const notice = s.inbox.find(
+      (event) => event.type === 'manager_message' && event.text.includes('戻せなかった'),
+    ) as { text: string };
+    expect(notice.text).toContain('自動では再試行しない');
+    expect(notice.text).toContain('DB の移行をやって');
+
+    // 生ログが無いのだから、勝手に白紙のセッションを起こさない
+    expect(s.opened.filter((entry) => entry.resume === undefined)).toHaveLength(0);
+
+    await s.pool.stop();
+  });
+});
