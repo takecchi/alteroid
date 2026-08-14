@@ -1314,7 +1314,12 @@ describe('クローン — 考えている合図（thinking）', () => {
 
   it('道具の結果が返ったら thinking を送り直す（tool の合図で止まらない）', async () => {
     const s = setupScripted([
-      [assistantToolUse('shell'), userToolResult(), assistantText('できた'), resultMessage('できた')],
+      [
+        assistantToolUse('shell'),
+        userToolResult(),
+        assistantText('できた'),
+        resultMessage('できた'),
+      ],
     ]);
 
     s.clone.post(humanMessage('やって'));
