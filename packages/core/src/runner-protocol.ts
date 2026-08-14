@@ -986,6 +986,21 @@ class Registry implements RunnerRegistry {
    *
    * **黙っていた器が戻ってきたら、そう言う。** 状態を `lost` のままにすると、
    * 生きている runner が宛先から永久に外れる（回復を認めないのは能力の削除である）。
+   *
+   * **ここで `#subscribers` を呼ばないのは、漏れではなく判断である。** 開けたとき
+   * （`#open`）に呼ぶ側はデーモンで引き取り（`takeOver` → `managers.restore()`）に
+   * 繋がっているが、`lost` → `connected` の回復はその契機にしない。
+   *
+   * 理由は、**ここでは器の入れ替えと単なる回復を区別できない**ことである。`ping` は
+   * 生死だけを見て名乗りの中身（`runner_id`）を読まない — 読んで黙って書き換えると
+   * 台帳の鎖（`manager_id → runner_id`）が音もなく繋ぎ変わるからで、これは意図した
+   * 設計である（`RunnerClient.ping`）。その結果、新しいコンテナが `/health` に応え
+   * 始めたのか、同じ器が戻ってきただけなのかが、この層からは同じに見える。
+   * 区別が付かないまま引き取りを走らせると、**生きている器で走っている仕事を奪いに
+   * 行く**＝同じマネージャーが2台で走る。
+   *
+   * **解決するのは fencing（roadmap M5 PR4）である。** 「引き取ってよいか」を判定
+   * できるようになって初めて、この遷移を契機にできる。それまでは知らせるだけに留める。
    */
   #markSeen(entry: RegistryEntry, at: number, client: RunnerClient): void {
     entry.lastSeen = at;
