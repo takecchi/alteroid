@@ -722,6 +722,13 @@ export function createCloneTools(context: ToolContext) {
             `- ${manager.managerId} [${manager.status}${manager.live ? '' : '/セッション切断'}]`,
             `  依頼: ${excerptLine(manager.request, LIST_REQUEST_EXCERPT)}`,
             `  cwd: ${manager.cwd}`,
+            // **`lost` を状態名だけで済ませない。** 「終わった」と読まれると、
+            // 完了していない仕事がそのまま片付く。何が起きたかと、次に何をすれば
+            // よいかを、この一覧の中で言い切る。
+            manager.status === 'lost'
+              ? '  ⚠ 前のセッションへ戻れず、この仕事は途中で失われている（完了ではない）。' +
+                '続きが要るなら manager_start で起こし直すこと。'
+              : null,
             ...manager.waiting.map(
               (item) => `  返事待ち(requestId: ${item.requestId}): ${item.summary}`,
             ),

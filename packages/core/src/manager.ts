@@ -501,6 +501,12 @@ class Pool implements ManagerPool {
 
       if (job.sessionId === undefined) continue;
 
+      // **戻せないと分かっているものを「居る」ことにしない。** ここで `#records`
+      // へ載せると `list()` が `live: true` で見せ、話しかければ続くように見える
+      // 相手が生まれる（持っているのは腐った session_id だけである）。台帳には
+      // 残るので、クローンからは `lost` として — **起こし直す対象として** 見える。
+      if (job.status === 'lost') continue;
+
       const record: ManagerRecord = { job: { ...job }, waiting: [], attached: false };
       this.#records.set(job.id, record);
 
@@ -514,6 +520,10 @@ class Pool implements ManagerPool {
       const nudge = restartNudge(job.status, 'daemon');
       const ok = await this.#resumeOnce(record, runner, nudge);
       if (!ok) continue;
+      // **受理は「戻れた」ではない。** この `await` の間に「戻れなかった」が確定
+      // していることがある（runner は別プロセスで、失敗は SSE で追いかけてくる）。
+      // ここで無条件に上書きすると、書いたばかりの終端状態が `running` へ巻き戻る。
+      if (record.job.status === 'lost') continue;
       record.job.status = 'running';
       await this.#persist(record);
       await this.#journal({
@@ -800,6 +810,8 @@ class Pool implements ManagerPool {
         try {
           const message = restartNudge(status, 'runner');
           if (!(await this.#resumeOnce(record, runner, message))) continue;
+          // 受理と「戻れた」を取り違えない（`restore` と同じ理由）。
+          if (record.job.status === 'lost') continue;
           record.job.status = 'running';
           await this.#persist(record);
           await this.#journal({
@@ -819,7 +831,10 @@ class Pool implements ManagerPool {
           else {
             // 挑み直さないと決めたので、**ジョブ側に覚える**（runner 単位の `retry`
             // では表せない。同じ runner の別ジョブが予約を積むたびに巻き込まれる）。
+            // 台帳にも書く — 記憶は器と一緒に消えるが、諦めた事実は消えない。
             this.#unresumable.add(job.id);
+            record.job.status = 'lost';
+            await this.#persist(record);
             this.#notifyUnresumable(record, error);
           }
         }
@@ -1158,6 +1173,11 @@ class Pool implements ManagerPool {
         // 人間とクローンの明示的な `manager_send` は塞がない（`#unresumable` は
         // 見られていないし、戻れたら忘れる）。
         this.#unresumable.add(event.managerId);
+        // **諦めをプロセス内の記憶だけに置かない。** `#unresumable` は器と一緒に
+        // 消えるので、それだけだと次のデプロイでまた同じ死体を起こしに行き、また
+        // 失敗し、また忘れる — 長い目で見れば「黙って挑み続けている」のと同じで
+        // ある。台帳を終端状態へ落として、諦めを再起動の向こう側まで持たせる。
+        record.job.status = 'lost';
         record.attached = false;
         await this.#persist(record);
         this.#notifyUnresumable(record, event.reason, 'session');

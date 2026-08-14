@@ -1534,6 +1534,11 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
   function setupRejecting(
     entries: unknown[] | null,
     how: 'no-conversation' | 'error-result' | 'after-work' = 'no-conversation',
+    /**
+     * 同じ台帳を引き継いだ**作り直しのデーモン**を組むときに渡す。プロセス内の
+     * 記憶（`#unresumable`）は引き継がれない — そこが問題の在り処である。
+     */
+    reuse?: Stores,
   ) {
     const { fn, opened } = resumeRejectingSdk(how);
     const sessionStore = {
@@ -1541,7 +1546,7 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
       load: async (key: { projectKey: string; sessionId: string }) =>
         (entries !== null && key.projectKey === 'proj-key' ? entries : null) as never,
     };
-    const stores = { ...createMemoryStores(), sessionStore };
+    const stores = reuse ?? { ...createMemoryStores(), sessionStore };
     const inbox: InboxEvent[] = [];
     const runner = createLocalRunner({
       runnerId: 'runner-test',
@@ -1657,6 +1662,51 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
     expect(s.opened.filter((entry) => entry.resume === undefined)).toHaveLength(0);
 
     await s.pool.stop();
+  });
+
+  it('打ち切ったマネージャーは、デーモンを作り直しても二度と resume されない', async () => {
+    // **「もう戻せない」がプロセス内の記憶（`#unresumable`）にしか無い。** 台帳へ
+    // 残るのは `done`（＝直近の依頼を終えて待機中）である — 結果なしで終わった
+    // resume が、そのまま「1ターン終わった」として報告に化けるからである。
+    //
+    // 器を作り直すと記憶は消え、台帳の `done` だけが残る。クローンから見えるのは
+    // 「待機中で、話しかければ続くマネージャー」であり、実際には腐った session_id
+    // しか無い。デプロイのたびに同じ死体へ話しかけ、同じ失敗の通知が積み上がる。
+    // **戻せなかった仕事が「終わった」に見えるのが最も悪い** — 失われた仕事が
+    // 完了として片付き、誰も起こし直さない。
+    const first = setupRejecting(null, 'error-result');
+    await first.stores.jobs.putJob(runningJob);
+
+    await first.pool.restore();
+    await expect
+      .poll(
+        () =>
+          first.inbox.find(
+            (event) => event.type === 'manager_message' && event.text.includes('戻せなかった'),
+          ),
+        { timeout: 2000 },
+      )
+      .toBeDefined();
+    await first.pool.stop();
+
+    // 台帳が「戻せない」を覚えている。`done`（待機中）でも `running` でもない。
+    const stored = (await first.stores.jobs.listJobs()).find((job) => job.id === 'mgr-lost');
+    expect(stored?.status).toBe('lost');
+
+    // 器を入れ替えたデーモン。プロセス内の記憶は空だが、台帳は引き継いでいる。
+    const second = setupRejecting(null, 'error-result', first.stores);
+
+    expect(await second.pool.restore()).toEqual([]);
+    // resume を投げ直していない（同じ死体をもう一度起こしに行かない）。
+    expect(second.opened).toHaveLength(0);
+    // 同じ通知も積み直さない（一度知らせたことを毎回言い直さない）。
+    expect(second.inbox.filter((event) => event.type === 'manager_message')).toEqual([]);
+
+    // **「終わった」ではない。** クローンが起こし直す対象として見分けられる。
+    const listed = (await second.pool.list()).find((m) => m.managerId === 'mgr-lost');
+    expect(listed).toMatchObject({ status: 'lost', live: false });
+
+    await second.pool.stop();
   });
 });
 

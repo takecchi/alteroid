@@ -2368,7 +2368,7 @@
                           },
                           "status": {
                             "type": "string",
-                            "enum": ["running", "waiting_human", "done", "failed"]
+                            "enum": ["running", "waiting_human", "done", "failed", "lost"]
                           },
                           "live": {
                             "type": "boolean"
@@ -2504,7 +2504,7 @@
                         },
                         "status": {
                           "type": "string",
-                          "enum": ["running", "waiting_human", "done", "failed"]
+                          "enum": ["running", "waiting_human", "done", "failed", "lost"]
                         },
                         "live": {
                           "type": "boolean"

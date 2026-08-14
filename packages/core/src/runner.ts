@@ -787,12 +787,34 @@ class RunnerSession {
       }
       if (this.#stopped || generation !== this.#generation) return;
       // 一度も手が動かないまま閉じたのなら、resume は効かなかった。
-      if (this.#recoverFromFailedResume('セッションが開かないまま閉じた')) return;
-      await this.#finish('done', 'マネージャーのセッションが閉じた。');
+      const closed = 'セッションが開かないまま閉じた';
+      switch (this.#recoverFromFailedResume(closed)) {
+        case 'recovered':
+          return;
+        case 'unresumable':
+          await this.#finish('lost', closed);
+          return;
+        default:
+          await this.#finish('done', 'マネージャーのセッションが閉じた。');
+          return;
+      }
     } catch (error) {
       if (generation !== this.#generation) return;
-      if (!this.#stopped && this.#recoverFromFailedResume(String(error))) return;
-      await this.#finish('failed', `マネージャーのセッションが落ちた: ${String(error)}`);
+      const reason = String(error);
+      if (!this.#stopped) {
+        switch (this.#recoverFromFailedResume(reason)) {
+          case 'recovered':
+            return;
+          // **`failed` にしない。** 「セッションが落ちた」は、話しかければ直るかも
+          // しれない失敗に見える。戻れなかったことが確定しているなら、そう言う。
+          case 'unresumable':
+            await this.#finish('lost', reason);
+            return;
+          default:
+            break;
+        }
+      }
+      await this.#finish('failed', `マネージャーのセッションが落ちた: ${reason}`);
     }
   }
 
@@ -807,17 +829,27 @@ class RunnerSession {
    * 材料まで無いなら止まるしかない。**そのときも黙らない** — 投げ直しても同じ
    * 答えが返る失敗なので、デーモンが自動の挑み直しを打ち切ってクローンへ回す。
    *
-   * 戻り値 `true` は「この経路で引き取った」。呼び出し側は `#finish` しない。
+   * 戻り値:
+   *
+   * - `recovered`: 新しいセッションへ引き継いだ。呼び出し側は `#finish` しない
+   * - `unresumable`: 戻れないと確定した。**呼び出し側はこのセッションを畳む**
+   * - `not-a-resume-failure`: resume の失敗ではない。呼び出し側は普段どおり
+   *
+   * **`unresumable` を `not-a-resume-failure` と同じ戻り値にしない。** 一緒に
+   * すると、戻れなかった resume がそのまま「1ターン終わった」という報告として
+   * 上がり、台帳には `done`（＝待機中。話しかければ続く）が残る。器を作り直すと
+   * プロセス内の諦めは消えるので、腐った session_id しか無いマネージャーが
+   * 「まだ続けられるもの」としてクローンへ見え続ける。
    */
-  #recoverFromFailedResume(reason: string): boolean {
+  #recoverFromFailedResume(reason: string): 'recovered' | 'unresumable' | 'not-a-resume-failure' {
     const attempt = this.#resumeAttempt;
-    if (attempt === null) return false;
+    if (attempt === null) return 'not-a-resume-failure';
     this.#resumeAttempt = null;
 
     // **手が動いた後の失敗は resume の失敗ではない。** そこで作り直すと、既に
     // 済ませた作業（コミットや PR）を記録から二度走らせることになる。判定は
     // `init` が来たかではなく、**このセッションが何かをしたか**で見る。
-    if (this.#progressed) return false;
+    if (this.#progressed) return 'not-a-resume-failure';
 
     const record = renderSessionLog(this.#seed);
     if (record === null) {
@@ -828,7 +860,7 @@ class RunnerSession {
         reason,
         recovered: false,
       });
-      return false;
+      return 'unresumable';
     }
 
     // 前のストリームを畳んでから開く。世代を進めないと、死んだ `#inputStream` が
@@ -860,7 +892,7 @@ class RunnerSession {
     });
     this.push(handoffPrompt({ sessionId: attempt.sessionId, reason, record, carried }));
     this.#open();
-    return true;
+    return 'recovered';
   }
 
   #dispatch(message: SDKMessage): void {
@@ -892,7 +924,19 @@ class RunnerSession {
     // その回が `error_during_execution` で何も返さずに終わる形も出ている。
     // 手が動く前の結果なし終了は、この resume が効かなかったということである。
     if (isSuccessResult(message)) this.#progressed = true;
-    else if (this.#recoverFromFailedResume(`結果なしで終了: ${resultText(message)}`)) return;
+    else {
+      const outcome = this.#recoverFromFailedResume(`結果なしで終了: ${resultText(message)}`);
+      if (outcome === 'recovered') return;
+      // **戻れなかった resume を「1ターン終わった」として報告しない。** ここを
+      // 素通りさせると `report` が上がり、台帳には `done`（＝終えて待機中。
+      // 話しかければ続く）が書かれる。実際には腐った session_id しか無いので、
+      // クローンは「まだ続けられるもの」を見せられ、話しかけるたびに失敗する。
+      // 手が動いていないのだから、ここは畳むのが正しい。
+      if (outcome === 'unresumable') {
+        void this.#finish('lost', `結果なしで終了: ${resultText(message)}`);
+        return;
+      }
+    }
 
     const text = reportText(said, resultText(message));
     this.#status = this.#pending.length > 0 ? 'waiting_human' : 'done';
