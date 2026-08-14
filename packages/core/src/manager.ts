@@ -800,7 +800,11 @@ class Pool implements ManagerPool {
    * ここで人間（とクローン）に見えるようにするのが唯一の出口である
    * （roadmap M5 受け入れ基準4「復旧不能な未永続状態を人間へ明示できる」）。
    */
-  #notifyUnresumable(record: ManagerRecord, error: unknown): void {
+  #notifyUnresumable(
+    record: ManagerRecord,
+    error: unknown,
+    cause: 'runner' | 'session' = 'runner',
+  ): void {
     const { job } = record;
     this.#post({
       type: 'manager_message',
@@ -809,7 +813,10 @@ class Pool implements ManagerPool {
       managerId: job.id,
       kind: 'report',
       text: [
-        'runner の器が作り直されたが、この委譲を前のセッションから戻せなかった。',
+        cause === 'session'
+          ? 'この委譲を前のセッションから戻せなかった（SDK に会話が残っていない）。' +
+            '生ログも預かっていないので、続きの材料が無い。'
+          : 'runner の器が作り直されたが、この委譲を前のセッションから戻せなかった。',
         `理由: ${String(error)}`,
         `依頼: ${job.request ?? job.summary}`,
         `作業ディレクトリ: ${job.cwd ?? '(不明)'}`,
@@ -817,6 +824,38 @@ class Pool implements ManagerPool {
         '',
         '同じ命令を投げ直しても同じ答えが返る種類の失敗なので、自動では再試行しない。' +
           '続きが要るなら `manager_start` で起こし直すこと。',
+      ]
+        .filter((line) => line !== '')
+        .join('\n'),
+    });
+  }
+
+  /**
+   * 生ログから作り直して続けたことをクローンへ知らせる。
+   *
+   * **成功として黙らせない。** 続いてはいるが、続きは前のセッションそのものでは
+   * ない — マネージャーは記録から状況を組み立て直しており、会話の記憶も、
+   * 直前に走らせていた道具の結果も持っていない。それを知らないクローンは、
+   * 「前に渡した細かい指示は効いている」という前提で次を積んでしまう。
+   */
+  #notifyResumeFallback(record: ManagerRecord, sessionId: string, reason: string): void {
+    const { job } = record;
+    this.#post({
+      type: 'manager_message',
+      id: randomUUID(),
+      at: new Date().toISOString(),
+      managerId: job.id,
+      kind: 'report',
+      text: [
+        `前のセッション（${sessionId}）へは戻れなかったので、預かってあった生ログから` +
+          '新しいセッションを起こして続けさせた。',
+        `理由: ${reason}`,
+        `依頼: ${job.request ?? job.summary}`,
+        job.lastReport === undefined ? '' : `直近の報告: ${job.lastReport}`,
+        '',
+        'マネージャーが持っているのは記録から読み取れる範囲だけである。' +
+          '前のセッションで口頭で足した細かい指示は効いていないと考えて、' +
+          '必要なら `manager_send` で言い直すこと。',
       ]
         .filter((line) => line !== '')
         .join('\n'),
@@ -1007,6 +1046,36 @@ class Pool implements ManagerPool {
         } catch {
           // 退避できなくてもマネージャーを止めない
         }
+        return;
+      }
+
+      case 'resume_failed': {
+        // **「resume を投げた」は「戻れた」ではない。** ここが来るということは、
+        // `#resume` が `true` を返した後に SDK が会話を見つけられなかったという
+        // ことである。台帳と受信箱を、実際に起きたことへ揃え直す。
+        await this.#journal({
+          type: 'exchange',
+          with: 'manager',
+          role: 'inbound',
+          text:
+            `[${event.managerId}] 前のセッション（${event.sessionId}）を開き直せなかった: ` +
+            event.reason,
+        });
+        if (event.recovered) {
+          record.job.status = 'running';
+          record.attached = true;
+          await this.#persist(record);
+          this.#notifyResumeFallback(record, event.sessionId, event.reason);
+          return;
+        }
+        // 待っても同じ答えが返る失敗である。**自動の挑み直しはここで打ち切る** —
+        // 続けても同じ障害通知が受信箱に積み上がるだけで、誰も状況を知れない。
+        // 人間とクローンの明示的な `manager_send` は塞がない（`#unresumable` は
+        // 見られていないし、戻れたら忘れる）。
+        this.#unresumable.add(event.managerId);
+        record.attached = false;
+        await this.#persist(record);
+        this.#notifyUnresumable(record, event.reason, 'session');
         return;
       }
 
