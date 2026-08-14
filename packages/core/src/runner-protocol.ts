@@ -234,6 +234,28 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     status: jobStatusSchema,
     reason: z.string(),
   }),
+  /**
+   * 前のセッションを開き直せなかった。
+   *
+   * **`resume` の応答では表せない。** 命令自体は受理され（HTTP 200）、SDK が
+   * 「そんな会話は無い」と答えるのはストリームが開いた後だからである。ここを
+   * 事実として降ろさないと、デーモン側は「戻せた」と思ったまま台帳を `running`
+   * にし、同じ session_id へ何度でも投げ直す（実機で起きたのはこれ）。
+   */
+  z.object({
+    type: z.literal('resume_failed'),
+    managerId: z.string(),
+    /** 開き直せなかった session id。 */
+    sessionId: z.string(),
+    reason: z.string(),
+    /**
+     * 預かった生ログから新しいセッションで組み立て直せたか。
+     *
+     * `false` なら**その仕事は止まっている**。黙って引き下がったことにしないため、
+     * 成否をイベントの側で持つ（受け取ったデーモンが人間とクローンへ出す）。
+     */
+    recovered: z.boolean(),
+  }),
 ]);
 
 export type RunnerEvent = z.infer<typeof runnerEventSchema>;

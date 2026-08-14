@@ -444,7 +444,31 @@ class RunnerSession {
   /** resume のために預かった生ログ（SDK の `SessionStore.load` が返す素材）。 */
   #seed: SessionStoreEntry[] | undefined;
 
-  #inputWaiter: (() => void) | null = null;
+  /**
+   * 投げたが、まだ効いたと確かめられていない resume。
+   *
+   * **「resume を投げた」と「続きへ戻れた」は別物である。** SDK は開いた後に
+   * `No conversation found with session ID: …` を投げてくるので、成否は
+   * `system/init` が来たかどうかで見るしかない（`clone.ts` の `#sawInit` と同じ形）。
+   * 効いたら消す。消えないまま閉じたなら、その resume は効かなかった。
+   */
+  #resumeAttempt: { sessionId: string } | null = null;
+  /**
+   * 開いている入力ストリームの世代。
+   *
+   * resume に失敗して新しいセッションを開くと、前の `#inputStream` がまだ
+   * `#input` を待っている。世代を進めて畳まないと、新しいセッション宛の指示を
+   * 死んだストリームが横取りする。
+   */
+  #generation = 0;
+  /**
+   * このセッションが実際に何かをしたか（道具を使った・確認を出した・結果を返した）。
+   *
+   * 生ログからの作り直しを**手が動く前だけ**に限るための旗である。動いた後で
+   * 作り直すと、済んだ作業を記録から二度走らせる。
+   */
+  #progressed = false;
+  readonly #inputWaiters = new Set<() => void>();
   #query: Query | null = null;
   #reader: Promise<void> | null = null;
   #status: JobStatus = 'running';
@@ -482,6 +506,7 @@ class RunnerSession {
   resume(sessionId: string, entries: unknown[] | undefined, message: string | undefined): void {
     this.#sessionId = sessionId;
     this.#seed = entries as SessionStoreEntry[] | undefined;
+    this.#resumeAttempt = { sessionId };
     if (message !== undefined) this.push(message);
     this.#open(sessionId);
   }
@@ -556,9 +581,10 @@ class RunnerSession {
 
   #open(resume?: string): void {
     if (this.#query) return;
+    const generation = this.#generation;
     const q = this.#queryFn({ prompt: this.#inputStream(), options: this.#buildOptions(resume) });
     this.#query = q;
-    this.#reader = this.#read(q);
+    this.#reader = this.#read(q, generation);
   }
 
   #buildOptions(resume?: string): Options {
@@ -678,14 +704,19 @@ class RunnerSession {
     return env;
   }
 
+  /** 待っているストリームを全部起こす。**1本だけ覚えない** — 世代が重なる。 */
   #wakeInput(): void {
-    const waiter = this.#inputWaiter;
-    this.#inputWaiter = null;
-    waiter?.();
+    const waiters = [...this.#inputWaiters];
+    this.#inputWaiters.clear();
+    for (const waiter of waiters) waiter();
   }
 
   async *#inputStream(): AsyncGenerator<SDKUserMessage> {
+    const generation = this.#generation;
     for (;;) {
+      // **世代の確認を `shift` より先に。** 逆にすると、畳まれる直前の死んだ
+      // ストリームが新しいセッション宛の1通を引き抜いてから終わる。
+      if (generation !== this.#generation) return;
       const next = this.#input.shift();
       if (next !== undefined) {
         yield next;
@@ -693,20 +724,99 @@ class RunnerSession {
       }
       if (this.#stopped) return;
       await new Promise<void>((resolve) => {
-        this.#inputWaiter = resolve;
+        this.#inputWaiters.add(resolve);
       });
     }
   }
 
-  async #read(q: Query): Promise<void> {
+  /**
+   * `generation` は、このストリームが何世代目のものかである。
+   *
+   * **作り直しの後に古い読み手が `#finish` しない**ようにするために持つ。
+   * 引き継ぎで新しいセッションを開くと、畳まれた古いストリームの `for await` が
+   * そこで終わって降りてくるが、それは失敗でも完了でもない。
+   */
+  async #read(q: Query, generation: number): Promise<void> {
     try {
       for await (const message of q) {
         this.#dispatch(message);
       }
-      if (!this.#stopped) await this.#finish('done', 'マネージャーのセッションが閉じた。');
+      if (this.#stopped || generation !== this.#generation) return;
+      // 一度も手が動かないまま閉じたのなら、resume は効かなかった。
+      if (this.#recoverFromFailedResume('セッションが開かないまま閉じた')) return;
+      await this.#finish('done', 'マネージャーのセッションが閉じた。');
     } catch (error) {
+      if (generation !== this.#generation) return;
+      if (!this.#stopped && this.#recoverFromFailedResume(String(error))) return;
       await this.#finish('failed', `マネージャーのセッションが落ちた: ${String(error)}`);
     }
+  }
+
+  /**
+   * 前のセッションへ戻れなかったときの出口。
+   *
+   * **黙って引き下がることも、黙って挑み直すこともしない。** 生ログはデーモンが
+   * 預かっているので、session_id が腐っていても続きの材料はある。新しい
+   * セッションを開いて、そこへ記録ごと引き継がせる（`resume` が拒まれたことは
+   * それ自体を事実として上へ降ろす）。
+   *
+   * 材料まで無いなら止まるしかない。**そのときも黙らない** — 投げ直しても同じ
+   * 答えが返る失敗なので、デーモンが自動の挑み直しを打ち切ってクローンへ回す。
+   *
+   * 戻り値 `true` は「この経路で引き取った」。呼び出し側は `#finish` しない。
+   */
+  #recoverFromFailedResume(reason: string): boolean {
+    const attempt = this.#resumeAttempt;
+    if (attempt === null) return false;
+    this.#resumeAttempt = null;
+
+    // **手が動いた後の失敗は resume の失敗ではない。** そこで作り直すと、既に
+    // 済ませた作業（コミットや PR）を記録から二度走らせることになる。判定は
+    // `init` が来たかではなく、**このセッションが何かをしたか**で見る。
+    if (this.#progressed) return false;
+
+    const record = renderSessionLog(this.#seed);
+    if (record === null) {
+      this.#emit({
+        type: 'resume_failed',
+        managerId: this.#id,
+        sessionId: attempt.sessionId,
+        reason,
+        recovered: false,
+      });
+      return false;
+    }
+
+    // 前のストリームを畳んでから開く。世代を進めないと、死んだ `#inputStream` が
+    // 引き継ぎの一言を横取りする。
+    this.#generation += 1;
+    try {
+      this.#query?.close();
+    } catch {
+      // 既に閉じている
+    }
+    this.#query = null;
+    this.#reader = null;
+    this.#sessionId = undefined;
+    // 新しいセッションは resume しないので、素材は本文へ畳んで渡す。
+    this.#seed = undefined;
+    // **前の器へ向けた入力を捨てない。** 一言も落とさずに引き継ぎへ折り込む
+    // （落とすと、人間やクローンがちょうど送った指示だけが消える）。
+    const carried = this.#input
+      .splice(0)
+      .map((message) => String(message.message.content))
+      .filter((text) => text.length > 0);
+
+    this.#emit({
+      type: 'resume_failed',
+      managerId: this.#id,
+      sessionId: attempt.sessionId,
+      reason,
+      recovered: true,
+    });
+    this.push(handoffPrompt({ sessionId: attempt.sessionId, reason, record, carried }));
+    this.#open();
+    return true;
   }
 
   #dispatch(message: SDKMessage): void {
@@ -717,6 +827,12 @@ class RunnerSession {
     }
 
     if (message.type !== 'result') return;
+
+    // **`init` が来たことは「戻れた」ことではない。** 実機では、開きはしたが
+    // その回が `error_during_execution` で何も返さずに終わる形も出ている。
+    // 手が動く前の結果なし終了は、この resume が効かなかったということである。
+    if (isSuccessResult(message)) this.#progressed = true;
+    else if (this.#recoverFromFailedResume(`結果なしで終了: ${resultText(message)}`)) return;
 
     const text = resultText(message);
     this.#status = this.#pending.length > 0 ? 'waiting_human' : 'done';
@@ -759,6 +875,8 @@ class RunnerSession {
     input: Record<string, unknown>,
     extra: { signal: AbortSignal; requestId?: string; toolUseID?: string },
   ): Promise<PermissionResult> {
+    // 確認を出せている＝セッションは開いて手を動かしている。
+    this.#progressed = true;
     // SDK は同じ確認を再送しうる。id を SDK 側の識別子に揃えて、再送では新しい
     // 待ちを積まずに同じ結果を返す（二重に消費されると片方が永久に返らない）。
     const id = extra.requestId ?? extra.toolUseID ?? randomUUID();
@@ -837,6 +955,8 @@ class RunnerSession {
     };
 
     if (typeof hook.transcript_path === 'string') this.#transcriptPath = hook.transcript_path;
+    // 道具が動いた＝このセッションは生きている（生ログからの作り直しはもうしない）。
+    this.#progressed = true;
 
     this.#emit({
       type: 'tool_use',
@@ -878,6 +998,89 @@ class RunnerSession {
 // ---------------------------------------------------------------------------
 // 小道具
 // ---------------------------------------------------------------------------
+
+/** 引き継ぎに載せる生ログの上限（文字）。溢れたら**古い側**を落とす。 */
+const HANDOFF_LOG_LIMIT = 12_000;
+
+/**
+ * 預かった生ログを、新しいセッションへ渡せる文章に均す。
+ *
+ * SDK の生ログの形（`{ type, message: { role, content } }`）に強く依存しない。
+ * 読めた分だけ返し、1行も読めなければ `null`（＝引き継ぎの材料が無い）と答える。
+ */
+export function renderSessionLog(
+  entries: readonly unknown[] | undefined,
+  limit = HANDOFF_LOG_LIMIT,
+): string | null {
+  if (entries === undefined || entries.length === 0) return null;
+  const lines = entries
+    .map((entry) => renderLogEntry(entry))
+    .filter((line): line is string => line !== null);
+  if (lines.length === 0) return null;
+  const text = lines.join('\n');
+  // 溢れたら**末尾を残す**。直前に何をしていたかのほうが、続きには効く。
+  return text.length > limit ? `（前略）\n${text.slice(text.length - limit)}` : text;
+}
+
+function renderLogEntry(entry: unknown): string | null {
+  const record = entry as { type?: unknown; message?: { role?: unknown; content?: unknown } };
+  const role =
+    typeof record.message?.role === 'string'
+      ? record.message.role
+      : typeof record.type === 'string'
+        ? record.type
+        : null;
+  if (role === null) return null;
+
+  const content = record.message?.content;
+  const text =
+    typeof content === 'string'
+      ? content
+      : Array.isArray(content)
+        ? content
+            .map((part) => renderContentPart(part))
+            .filter((part) => part.length > 0)
+            .join('\n')
+        : '';
+  return text.length === 0 ? null : `${role}: ${text}`;
+}
+
+function renderContentPart(part: unknown): string {
+  const block = part as { type?: unknown; text?: unknown; name?: unknown; input?: unknown };
+  if (typeof block.text === 'string') return block.text;
+  if (block.type === 'tool_use') return `[${String(block.name ?? '道具')} ${brief(block.input)}]`;
+  return '';
+}
+
+/**
+ * 生ログから作り直すときに、新しいセッションの先頭へ置く一言。
+ *
+ * **失敗を伏せない。** 「前のセッションには戻れていない」ことをマネージャー自身に
+ * 伝えないと、記憶にあるはずの文脈を前提に話し始めて、噛み合わないまま進む。
+ */
+function handoffPrompt(input: {
+  sessionId: string;
+  reason: string;
+  record: string;
+  carried: readonly string[];
+}): string {
+  return [
+    `[system] 前のセッション（${input.sessionId}）を開き直せなかった: ${input.reason}`,
+    'このセッションは前の続きではない。以下は失われたセッションの記録である。' +
+      'ここから状況を組み立て直して、作業の続きを進めよ。',
+    '作業ディレクトリの状態は記録と食い違っているかもしれない。' +
+      '同じ結果を期待せず、手元を確かめてから動くこと。',
+    '--- 失われたセッションの記録（ここから） ---',
+    input.record,
+    '--- 失われたセッションの記録（ここまで） ---',
+    ...input.carried,
+  ].join('\n');
+}
+
+/** 「1ターンを最後まで走り切った」結果か。 */
+function isSuccessResult(message: SDKMessage): boolean {
+  return (message as { subtype?: unknown }).subtype === 'success';
+}
 
 function resultText(message: SDKMessage): string {
   const candidate = message as { result?: unknown; subtype?: string };

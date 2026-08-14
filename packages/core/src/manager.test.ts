@@ -1406,7 +1406,16 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
  * 受理され、開いたストリームの側から後で落ちてくる。だから「resume を投げられた」
  * ことと「続きへ戻れた」ことは別物であり、前者だけを見ている限りこの穴は塞がらない。
  */
-function resumeRejectingSdk() {
+function resumeRejectingSdk(
+  /**
+   * 拒まれ方は実機で2種類出ている。
+   *
+   * - `no-conversation`: init すら来ずに落ちる（`No conversation found …`）
+   * - `error-result`: 開きはするが、その回が結果なしで終わる（`error_during_execution`）
+   * - `after-work`: 手が動いた後で落ちる。**これは resume の失敗ではない**
+   */
+  how: 'no-conversation' | 'error-result' | 'after-work' = 'no-conversation',
+) {
   const opened: { resume: string | undefined; inputs: string[] }[] = [];
 
   const fn = ((params: { prompt: unknown; options?: Options }) => {
@@ -1422,8 +1431,10 @@ function resumeRejectingSdk() {
       }
     })();
 
+    let finish: (() => void) | null = null;
+
     async function* generate(): AsyncGenerator<SDKMessage, void> {
-      if (options.resume !== undefined) {
+      if (options.resume !== undefined && how === 'no-conversation') {
         // **init すら来ない。** SDK は開いた直後にこれを投げる。
         await new Promise((resolve) => setTimeout(resolve, 0));
         throw new Error(
@@ -1431,19 +1442,53 @@ function resumeRejectingSdk() {
             `No conversation found with session ID: ${options.resume}`,
         );
       }
+
+      if (options.resume !== undefined) {
+        yield {
+          type: 'system',
+          subtype: 'init',
+          session_id: options.resume,
+          uuid: 'uuid-init',
+        } as unknown as SDKMessage;
+
+        if (how === 'after-work') {
+          // 実際に道具を動かしてから落ちる（済んだ作業がある）。
+          const matchers = options.hooks?.PostToolUse as HookCallbackMatcher[];
+          for (const matcher of matchers) {
+            for (const hook of matcher.hooks) {
+              await hook(
+                { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: {} } as never,
+                undefined,
+                { signal: new AbortController().signal },
+              );
+            }
+          }
+          throw new Error('マネージャーのセッションが途中で落ちた');
+        }
+
+        yield {
+          type: 'result',
+          subtype: 'error_during_execution',
+          session_id: options.resume,
+          uuid: 'uuid-result',
+        } as unknown as SDKMessage;
+        return;
+      }
       yield {
         type: 'system',
         subtype: 'init',
         session_id: 'sess-after-fallback',
         uuid: 'uuid-init',
       } as unknown as SDKMessage;
-      // 新しいセッションは開いたまま手を動かし続ける
-      await new Promise(() => undefined);
+      // 新しいセッションは、閉じられるまで開いたまま手を動かし続ける
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
     }
 
     const generator = generate();
     return Object.assign(generator, {
-      close: () => undefined,
+      close: () => finish?.(),
       interrupt: async () => undefined,
     }) as unknown as Query;
   }) as unknown as typeof sdkQuery;
@@ -1474,12 +1519,15 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
     },
   ];
 
-  function setupRejecting(entries: unknown[] | null) {
-    const { fn, opened } = resumeRejectingSdk();
+  function setupRejecting(
+    entries: unknown[] | null,
+    how: 'no-conversation' | 'error-result' | 'after-work' = 'no-conversation',
+  ) {
+    const { fn, opened } = resumeRejectingSdk(how);
     const sessionStore = {
       append: async () => undefined,
       load: async (key: { projectKey: string; sessionId: string }) =>
-        entries !== null && key.projectKey === 'proj-key' ? entries : null,
+        (entries !== null && key.projectKey === 'proj-key' ? entries : null) as never,
     };
     const stores = { ...createMemoryStores(), sessionStore };
     const inbox: InboxEvent[] = [];
@@ -1553,6 +1601,47 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
     expect(notice.text).toContain('DB の移行をやって');
 
     // 生ログが無いのだから、勝手に白紙のセッションを起こさない
+    expect(s.opened.filter((entry) => entry.resume === undefined)).toHaveLength(0);
+
+    await s.pool.stop();
+  });
+
+  it('開きはしたが結果なしで終わった resume も、戻れなかったものとして扱う', async () => {
+    // もう1つの実機の顔（`error_during_execution`）。**`init` が来たことを
+    // 「戻れた」と読まない** — 開いただけで何も返せていないなら、続きは進まない。
+    const s = setupRejecting(savedLog, 'error-result');
+    await s.stores.jobs.putJob(runningJob);
+
+    await s.pool.restore();
+
+    await expect.poll(() => s.opened.length, { timeout: 2000 }).toBe(2);
+    expect(s.opened[1]?.resume).toBeUndefined();
+    await expect
+      .poll(() => (s.opened[1]?.inputs ?? []).join('\n'), { timeout: 2000 })
+      .toContain('スキーマまで書いた');
+
+    await s.pool.stop();
+  });
+
+  it('手が動いた後に落ちたのなら作り直さない（済んだ作業を二度走らせない）', async () => {
+    // ここを「落ちたら作り直す」に広げると、コミットや PR を出した後の失敗で
+    // 同じ作業を記録から二度走らせることになる。resume の失敗として扱うのは
+    // **このセッションがまだ何もしていないとき**だけである。
+    const s = setupRejecting(savedLog, 'after-work');
+    await s.stores.jobs.putJob(runningJob);
+
+    await s.pool.restore();
+
+    // 落ちたことは伝わるが、白紙から起こし直しはしない
+    await expect
+      .poll(
+        () =>
+          s.inbox.find(
+            (event) => event.type === 'manager_message' && event.text.includes('落ちた'),
+          ),
+        { timeout: 2000 },
+      )
+      .toBeDefined();
     expect(s.opened.filter((entry) => entry.resume === undefined)).toHaveLength(0);
 
     await s.pool.stop();
