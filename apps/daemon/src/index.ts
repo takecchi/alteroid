@@ -4,6 +4,7 @@ import { realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+import { query } from '@anthropic-ai/claude-agent-sdk';
 import { serve } from '@hono/node-server';
 
 import {
@@ -29,6 +30,7 @@ import {
 } from '@alteroid/core';
 
 import { createApp, parseAllowedOrigins } from './app.js';
+import { startUsagePolling } from './usage-poller.js';
 import { planAuth } from './auth.js';
 import { createJournalBus } from './journal-bus.js';
 import { createHttpRunner, RunnerHttpError } from './runner-client.js';
@@ -341,8 +343,23 @@ export async function main(): Promise<void> {
     models: { clone: cloneModel, manager: MANAGER_MODEL, worker: WORKER_MODEL },
   };
 
+  /**
+   * アカウント全体の利用状況（claude.ai 側の値）。
+   *
+   * **使い捨ての probe で読む。実セッションに相乗りしない** — 実測で、ターンを
+   * 回した直後のセッションへ usage 要求を出すと
+   * `ProcessTransport is not ready for writing` で失敗する。マネージャーは常に
+   * ターンを回しているので、相乗りする設計は必ず詰まる。推論は走らないので
+   * トークンは消費しない。
+   *
+   * **未ログインでも止めない。** alteroid は鍵を走行中に回せる設計なので、
+   * 「まだログインしていない」は通常の状態であり、後から鍵が届いたら取れる。
+   */
+  const usagePoller = startUsagePolling({ queryFn: query, cwd: paths.root });
+
   const clone = createClone({
     stores,
+    accountUsage: () => usagePoller.state(),
     cwd: paths.root,
     runners,
     profile,
@@ -431,6 +448,7 @@ export async function main(): Promise<void> {
     storage: storage.description,
     runners,
     journalEvents: journalBus,
+    accountUsage: () => usagePoller.state(),
     allowedOrigins,
     auth: { plan: authPlan },
     profile: profileService,
@@ -476,6 +494,7 @@ export async function main(): Promise<void> {
     // 先に受け口を閉じて runtime 情報を消す。クローンの後片付け（最後の蒸留）が
     // 長引いても、CLI からは「止まった」と見えるようにする。
     scheduler.stop();
+    usagePoller.stop();
     server.close();
     // 名簿の挑み直しも畳む（止めたはずのデーモンが背景で runner を叩き続けない）。
     await runners.stop().catch(() => undefined);

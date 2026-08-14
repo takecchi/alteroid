@@ -31,6 +31,7 @@ import {
 import type { InboxEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
+import type { UsageTotals } from './usage.js';
 
 /**
  * SDK を実際に呼ばずに委譲の配線を検証する。
@@ -876,8 +877,149 @@ function swappableRunner(runnerId = 'runner-primary') {
       session?.waiting.push({ requestId, summary });
       emit?.({ type: 'ask', managerId, requestId, kind: 'permission', summary });
     },
+    /** SDK が報告した消費の**累積**を降ろす（差分にするのはデーモン側）。 */
+    usage(managerId: string, models: Record<string, UsageTotals>, sessionId?: string) {
+      emit?.({ type: 'usage', managerId, sessionId, models });
+    },
   };
 }
+
+describe('消費を台帳へ積む', () => {
+  const runningJob = {
+    id: 'mgr-spend',
+    managerId: 'mgr-spend',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T01:00:00.000Z',
+    status: 'running' as const,
+    summary: '調べもの',
+    request: '調べておいて',
+    cwd: '/work/project',
+    sessionId: 'sess-1',
+    runnerId: 'runner-primary',
+  };
+
+  function usage(over: Partial<UsageTotals>): UsageTotals {
+    return {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      webSearchRequests: 0,
+      costUsd: 0,
+      ...over,
+    };
+  }
+
+  async function totalCostUsd(stores: Stores): Promise<number> {
+    const { rows } = await stores.usage.aggregate({});
+    return rows.reduce((sum, row) => sum + row.totals.costUsd, 0);
+  }
+
+  it('累積が降りてきたら差分だけ積む（同じ累積が2回来ても増えない）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.usage('mgr-spend', { opus: usage({ outputTokens: 100, costUsd: 1 }) }, 'sess-1');
+    await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(1);
+
+    // 累積が伸びた分だけ増える。
+    fake.usage('mgr-spend', { opus: usage({ outputTokens: 250, costUsd: 3 }) }, 'sess-1');
+    await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(3);
+
+    // 同じものが再送されても増えない（イベント再送で二重計上しない）。
+    fake.usage('mgr-spend', { opus: usage({ outputTokens: 250, costUsd: 3 }) }, 'sess-1');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(await totalCostUsd(stores)).toBe(3);
+
+    await s.pool.stop();
+  });
+
+  it('モデル別に分けて積む（どの層が高いかが分かる）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.usage('mgr-spend', {
+      'claude-opus-5': usage({ costUsd: 2 }),
+      'claude-sonnet-5': usage({ costUsd: 0.5 }),
+    });
+    await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(2.5);
+
+    const { rows } = await stores.usage.aggregate({});
+    expect(rows.map((row) => row.model).sort()).toEqual(['claude-opus-5', 'claude-sonnet-5']);
+    expect(rows.every((row) => row.managerId === 'mgr-spend')).toBe(true);
+
+    await s.pool.stop();
+  });
+
+  it('累積が数え直されても記録済みは減らず、数え直したことが日誌に残る', async () => {
+    // resume で SDK 側の累積が 0 から始まる。ここで基準を下げて引き算すると
+    // 記録済みの分が消える（＝消費が減ったように見える）。
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.usage('mgr-spend', { opus: usage({ costUsd: 5 }) }, 'sess-1');
+    await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(5);
+
+    fake.usage('mgr-spend', { opus: usage({ costUsd: 3 }) }, 'sess-1');
+    await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(8);
+
+    const entries = await stores.journal.list({ limit: 50 });
+    const note = entries.find((entry) => 'text' in entry && entry.text.includes('数え直された'));
+    expect(note).toBeDefined();
+
+    await s.pool.stop();
+  });
+
+  it('全部ゼロの累積では記録済みを崩さない（クラッシュの記録に引きずられない）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.usage('mgr-spend', { opus: usage({ costUsd: 5 }) }, 'sess-1');
+    await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(5);
+
+    // ゼロを数え直しとして採用すると、次に届いた本物の $5 が丸ごと増分になる。
+    fake.usage('mgr-spend', { opus: usage({}) }, 'sess-1');
+    fake.usage('mgr-spend', { opus: usage({ costUsd: 5 }) }, 'sess-1');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(await totalCostUsd(stores)).toBe(5);
+
+    await s.pool.stop();
+  });
+
+  it('台帳の始点を持つので「記録が無い期間」を 0 と言わない', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    // まだ1件も無いうちは始点も無い。
+    expect((await stores.usage.aggregate({})).since).toBeNull();
+
+    fake.usage('mgr-spend', { opus: usage({ costUsd: 1 }) });
+    await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(1);
+
+    const aggregate = await stores.usage.aggregate({ from: '2020-01-01' });
+    expect(aggregate.since).not.toBeNull();
+    // 台帳より前にかかる照会は「0」ではなく「記録が無い」と言えること。
+    expect(aggregate.beforeLedger).toBe(true);
+    expect(aggregate.notice).toContain('請求明細ではない');
+
+    await s.pool.stop();
+  });
+});
 
 describe('runner だけが入れ替わったとき（デプロイ）', () => {
   const runningJob = {

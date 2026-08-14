@@ -1,8 +1,11 @@
 import { sql } from 'drizzle-orm';
 import {
+  bigint,
   bigserial,
   boolean,
+  doublePrecision,
   index,
+  integer,
   jsonb,
   pgTable,
   primaryKey,
@@ -219,6 +222,66 @@ export const authAccessTokens = pgTable(
     index('auth_access_tokens_account_idx').on(table.accountId),
   ],
 );
+
+/**
+ * 利用状況の台帳（`usage.ts` の `UsageStore`）。3つに分けている。
+ *
+ * - `usageDaily`: 増分を「日 × マネージャー × モデル」で足し込んだ行。集計の主体
+ * - `usageBaseline`: マネージャー1本ごとの前回累積（差分を取るための基準）
+ * - `usageLedger`: 台帳が記録を始めた時刻。単一行（`id = 'default'`）で持つ —
+ *   `aggregate` が返す `since` の元になる（1件も record していなければ行が無い）
+ */
+export const usageDaily = pgTable(
+  'usage_daily',
+  {
+    date: text('date').notNull(),
+    managerId: text('manager_id').notNull(),
+    model: text('model').notNull(),
+    // トークン数は SDK 側でも巨大になりうるので bigint。`mode: 'number'` で
+    // JS 側は number として扱う（drizzle が mapFromDriverValue で変換する）。
+    inputTokens: bigint('input_tokens', { mode: 'number' }).notNull().default(0),
+    outputTokens: bigint('output_tokens', { mode: 'number' }).notNull().default(0),
+    cacheReadInputTokens: bigint('cache_read_input_tokens', { mode: 'number' })
+      .notNull()
+      .default(0),
+    cacheCreationInputTokens: bigint('cache_creation_input_tokens', { mode: 'number' })
+      .notNull()
+      .default(0),
+    webSearchRequests: bigint('web_search_requests', { mode: 'number' }).notNull().default(0),
+    costUsd: doublePrecision('cost_usd').notNull().default(0),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.date, table.managerId, table.model] }),
+    // pk の先頭が date なので、date だけの絞り込みは pk の索引がそのまま前方一致で
+    // 効く（別に (date) 索引を足すのは冗長）。(manager_id, date) は pk に無い並びで、
+    // 「このマネージャーが期間中いくら使ったか」を date を先に決めずに引く経路になる
+    // ので、こちらだけを足す。
+    index('usage_daily_manager_date_idx').on(table.managerId, table.date),
+  ],
+);
+
+/** マネージャー1本につき1行。前回読んだ累積スナップショット（差分の基準）。 */
+export const usageBaseline = pgTable('usage_baseline', {
+  managerId: text('manager_id').primaryKey(),
+  sessionId: text('session_id'),
+  models: jsonb('models').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  resets: integer('resets').notNull().default(0),
+  lastResetAt: timestamp('last_reset_at', { withTimezone: true, mode: 'date' }),
+});
+
+/**
+ * 台帳が記録を始めた時刻。**単一行**（`id` は常に `'default'`）。
+ *
+ * `aggregate` の `since` はここから返す。行が無ければ「まだ一度も record して
+ * いない」＝ `null`。行があれば、それより前を照会した範囲は「0」ではなく
+ * 「記録が無い」として扱う（`beforeLedger`）。
+ */
+export const usageLedger = pgTable('usage_ledger', {
+  id: text('id').primaryKey(),
+  startedAt: timestamp('started_at', { withTimezone: true, mode: 'date' }).notNull(),
+});
 
 /** 進行中のログイン試行（CLI とブラウザの往復を繋ぐ一時的な行）。 */
 export const authLoginRequests = pgTable(

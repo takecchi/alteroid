@@ -7,6 +7,8 @@ import type { RunnerClient, RunnerEvent, RunnerRegistry } from './runner-protoco
 import { brief } from './runner.js';
 import type { InboxEvent, Job, JobStatus, JournalEntryInput, WorkspaceLocator } from './schema.js';
 import type { Stores } from './store.js';
+import { describeUsageNotice, usageTransitionOf, type RateLimitFacts } from './usage-limits.js';
+import { usageDate } from './usage.js';
 
 /**
  * 委譲のデーモン側（docs/architecture.md「配線」）。
@@ -191,6 +193,20 @@ class Pool implements ManagerPool {
   readonly #runners: RunnerRegistry;
   readonly #profile: ProfileService | undefined;
   readonly #records = new Map<string, ManagerRecord>();
+  /**
+   * 直近の枠の事実（種類ごと）。**アカウント単位なのでマネージャーに紐づけない。**
+   *
+   * 走行中は `rate_limit_event` がターンの頭ごとに来るので、ここが最新になる。
+   * 揮発してよい — デーモンを作り直したら、使い捨ての probe が取り直す。
+   */
+  readonly #rateLimits = new Map<string, RateLimitFacts>();
+  /**
+   * 種類ごとに最後にクローンへ流した上限の文言。
+   *
+   * **同じ知らせで受信箱を埋めないため**にある。通知はターンごとに繰り返し届きうる
+   * ので、そのまま流すと本当に変わった1回が埋もれる。
+   */
+  readonly #usageNotices = new Map<string, string>();
   /** 起動時の引き取りが走っている間だけ立つ。`#reattach` はこれを待つ。 */
   #restoring: Promise<void> | null = null;
   /** 取り直しが走っている runner（同じ runner について重ねない）。 */
@@ -1124,6 +1140,99 @@ class Pool implements ManagerPool {
           tool: event.tool,
           input: event.input,
         });
+        return;
+      }
+
+      case 'usage': {
+        // 降りてくるのは累積という事実で、差分にして積むのはここ（runner は
+        // 記憶ストアの鍵を持たないので書けない）。読む→畳む→書くはストアの
+        // 1操作に閉じてある。
+        const at = new Date();
+        let fold;
+        try {
+          fold = await this.#stores.usage.record({
+            managerId: event.managerId,
+            date: usageDate(at),
+            at: at.toISOString(),
+            snapshot: { sessionId: event.sessionId, models: event.models },
+          });
+        } catch {
+          // 台帳に積めないことで仕事は止めない。ただし黙って消さない。
+          await this.#journal({
+            type: 'exchange',
+            with: 'manager',
+            role: 'inbound',
+            text: `[${event.managerId}] 消費を台帳へ記録できなかった（この分は集計に出ない）`,
+          });
+          return;
+        }
+
+        // **数え直しを黙って通さない。** resume や mid-session の `/clear` で
+        // 累積が 0 に戻るのは正常だが、記録がないと後から「なぜ集計が飛んで
+        // いるか」を誰も辿れない（PRD「可観測性」）。
+        if (fold.reset !== undefined) {
+          await this.#journal({
+            type: 'exchange',
+            with: 'manager',
+            role: 'inbound',
+            text:
+              `[${event.managerId}] 消費の累積が数え直された` +
+              `（$${fold.reset.fromCostUsd.toFixed(4)} → $${fold.reset.toCostUsd.toFixed(4)}）。` +
+              'resume か /clear で SDK 側の累積が 0 から始まったため。記録済みの分は保持している。',
+          });
+        }
+        return;
+      }
+
+      case 'usage_notice': {
+        // **クローンへ知らせる。** ここが「上限に当たる前に気づく」の実体である。
+        // 枠の利用率は「いま重い仕事を投げてよいか」に効くが、この文言は
+        // 「今日もう委譲を続けられるか」に効く。
+        //
+        // **同じ文言で受信箱を埋めない。** 通知はターンごとに繰り返し届きうるので、
+        // そのまま流すとクローンは同じ知らせを何十回も読むことになり、本当に
+        // 変わった1回が埋もれる。
+        const text = describeUsageNotice(event.notice);
+        if (this.#usageNotices.get(event.notice.kind) !== event.notice.text) {
+          this.#usageNotices.set(event.notice.kind, event.notice.text);
+          await this.#journal({
+            type: 'exchange',
+            with: 'manager',
+            role: 'inbound',
+            text: `[${event.managerId}] ${text}`,
+          });
+          this.#emit(event.managerId, 'report', text);
+        }
+        return;
+      }
+
+      case 'rate_limit': {
+        // 枠の事実はアカウント単位なので、マネージャーごとに持たない。
+        // **ターン中しか届かない**ので、走行中はここが最新になる。
+        const transition = usageTransitionOf(
+          this.#rateLimits.get(event.facts.kind ?? ''),
+          event.facts,
+        );
+        this.#rateLimits.set(event.facts.kind ?? '', event.facts);
+        if (transition === undefined) return;
+
+        // 「移った」「追い返された」の**瞬間だけ**を知らせる（状態を毎回流さない）。
+        const reason =
+          event.facts.overageDisabledReason === undefined
+            ? ''
+            : `（課金枠が使えない理由: ${event.facts.overageDisabledReason}）`;
+        const text =
+          transition === 'entered_overage'
+            ? `枠を使い切って課金枠から引き始めた（${event.facts.kind ?? '枠'}）。` +
+              `**まだ動くが、この先で止まる。**${reason}`
+            : `枠から追い返された（${event.facts.kind ?? '枠'}）。この枠ではもう通らない。${reason}`;
+        await this.#journal({
+          type: 'exchange',
+          with: 'manager',
+          role: 'inbound',
+          text: `[${event.managerId}] ${text}`,
+        });
+        this.#emit(event.managerId, 'report', text);
         return;
       }
 

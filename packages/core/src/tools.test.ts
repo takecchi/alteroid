@@ -6,6 +6,7 @@ import type { ChatStreamEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 import { CLONE_ALLOWED_TOOLS, createCloneTools, qualifiedToolName } from './tools.js';
+import type { AccountUsageState } from './usage-snapshot.js';
 
 interface Harness {
   stores: Stores;
@@ -634,5 +635,222 @@ describe('manager_list は件数が増えても壊れない', () => {
     const reply = await h.call('manager_report', { managerId: 'mgr-999' });
 
     expect(reply).toContain('mgr-999');
+  });
+});
+
+describe('usage_read（人間が見られるものはクローンからも見られる）', () => {
+  const models = {
+    'claude-opus-5': {
+      inputTokens: 10,
+      outputTokens: 100,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      webSearchRequests: 0,
+      costUsd: 2,
+    },
+    'claude-sonnet-5': {
+      inputTokens: 5,
+      outputTokens: 50,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      webSearchRequests: 0,
+      costUsd: 0.0031,
+    },
+  };
+
+  async function spent(h: Harness) {
+    await h.stores.usage.record({
+      managerId: 'mgr-1',
+      date: '2026-08-14',
+      at: '2026-08-14T10:00:00.000Z',
+      snapshot: { models },
+    });
+  }
+
+  it('道具として配られている（クローンから見えないものを作らない）', () => {
+    expect(CLONE_ALLOWED_TOOLS).toContain(qualifiedToolName('usage_read'));
+  });
+
+  it('合計とモデル別を返し、但し書きを必ず添える', async () => {
+    const h = harness();
+    await spent(h);
+
+    const reply = await h.call('usage_read', {});
+
+    expect(reply).toContain('合計 $2.00');
+    expect(reply).toContain('claude-opus-5');
+    expect(reply).toContain('claude-sonnet-5');
+    // **推定であることを落とさない。** 台帳の数字を確定として見せない。
+    expect(reply).toContain('請求明細ではない');
+  });
+
+  it('$1 未満を丸めて 0 にしない（「使っていない」と読めてしまう）', async () => {
+    const h = harness();
+    await spent(h);
+
+    const reply = await h.call('usage_read', { managerId: 'mgr-1' });
+
+    expect(reply).toContain('$0.0031');
+    expect(reply).not.toContain('$0.00\n');
+  });
+
+  it('まだ1件も無ければ「$0」ではなく「記録が無い」と言う', async () => {
+    const h = harness();
+
+    const reply = await h.call('usage_read', {});
+
+    expect(reply).toContain('記録が無い');
+    expect(reply).not.toContain('$0');
+  });
+
+  it('台帳の始点より前を聞かれたら「0」ではなく「記録が無い」と言う', async () => {
+    // 過去分は掘り起こさないと決めた。だから始点を黙って隠さない — 台帳が無かった
+    // 期間を「使っていない期間」に見せると、それは嘘になる。
+    const h = harness();
+    await spent(h);
+
+    const reply = await h.call('usage_read', { from: '2020-01-01' });
+
+    expect(reply).toContain('台帳の始点');
+    expect(reply).toContain('記録が無い');
+  });
+
+  it('その範囲に記録が無いことと、台帳が空であることを混ぜない', async () => {
+    const h = harness();
+    await spent(h);
+
+    const reply = await h.call('usage_read', { from: '2026-09-01', to: '2026-09-30' });
+
+    expect(reply).toContain('その範囲には記録が無い');
+    // 台帳自体は始まっているので、その始点は分かる。
+    expect(reply).toContain('台帳の始点: 2026-08-14');
+  });
+});
+
+describe('usage_read はアカウント全体の残りも返す（人間と同じものを見せる）', () => {
+  function withAccount(accountUsage: () => AccountUsageState) {
+    const stores = createMemoryStores();
+    const tools = createCloneTools({ stores, emit: () => undefined, accountUsage });
+    return async (args: Record<string, unknown> = {}) => {
+      const found = tools.find((t) => t.name === 'usage_read');
+      const result = await found!.handler(args as never, {} as never);
+      return result.content.map((part) => ('text' in part ? part.text : '')).join('\n');
+    };
+  }
+
+  it('まだ取っていないときは「0」ではなく「分からない」と言う', async () => {
+    const call = withAccount(() => ({ state: 'unknown' }));
+    const reply = await call();
+    expect(reply).toContain('まだ取りに行っていない');
+    expect(reply).toContain('0 ではなく');
+  });
+
+  it('取れなかったときは理由を出す（0% と描かない）', async () => {
+    const call = withAccount(() => ({
+      state: 'failed',
+      at: '2026-08-14T10:00:00.000Z',
+      reason: '2つの口のどちらも答えなかった',
+    }));
+    const reply = await call();
+    expect(reply).toContain('取れなかった');
+    expect(reply).toContain('0 ではなく');
+    expect(reply).not.toContain('0%');
+  });
+
+  it('この構成では取れないときは、そう言う', async () => {
+    const call = withAccount(() => ({
+      state: 'unavailable',
+      at: '2026-08-14T10:00:00.000Z',
+      reason: 'claude.ai にログインしていない（鍵が届けば取れる）',
+    }));
+    expect(await call()).toContain('ログインしていない');
+  });
+
+  it('枠と支出上限を出す', async () => {
+    const call = withAccount(() => ({
+      state: 'ok',
+      usage: {
+        at: '2026-08-14T10:00:00.000Z',
+        plan: 'Claude Max',
+        limitsAvailable: true,
+        windows: [
+          { kind: 'five_hour', utilization: 42, resetsAt: Date.parse('2026-08-14T13:00:00.000Z') },
+        ],
+        extraUsage: {
+          enabled: true,
+          monthlyLimit: 100,
+          usedCredits: 40,
+          utilization: 40,
+          currency: 'USD',
+        },
+      },
+    }));
+    const reply = await call();
+    expect(reply).toContain('Claude Max');
+    expect(reply).toContain('42% 使用');
+    expect(reply).toContain('40 USD / 100 USD');
+  });
+
+  it('使用率が付かない枠を 0% と書かない', async () => {
+    // `five_hour` には utilization が付かないことがある（実測）。
+    const call = withAccount(() => ({
+      state: 'ok',
+      usage: {
+        at: '2026-08-14T10:00:00.000Z',
+        plan: 'Claude Team',
+        limitsAvailable: true,
+        windows: [{ kind: 'five_hour', resetsAt: Date.parse('2026-08-14T13:00:00.000Z') }],
+      },
+    }));
+    const reply = await call();
+    expect(reply).toContain('使用率は取れなかった');
+    expect(reply).not.toContain('0% 使用');
+  });
+
+  it('枠が来なかったら「0%」ではなく「取れなかった」', async () => {
+    // `rate_limits_available: true` でも `rate_limits: null` があり得る（実測）。
+    const call = withAccount(() => ({
+      state: 'ok',
+      usage: {
+        at: '2026-08-14T10:00:00.000Z',
+        plan: 'Claude Team',
+        limitsAvailable: true,
+        windows: [],
+      },
+    }));
+    const reply = await call();
+    expect(reply).toContain('枠: 取れなかった');
+    expect(reply).toContain('0% ではない');
+  });
+
+  it('支出上限が取れないことを黙らない（残額が分からないと言う）', async () => {
+    const call = withAccount(() => ({
+      state: 'ok',
+      usage: {
+        at: '2026-08-14T10:00:00.000Z',
+        plan: 'Claude Max',
+        limitsAvailable: true,
+        windows: [{ kind: 'five_hour', utilization: 10 }],
+      },
+    }));
+    const reply = await call();
+    expect(reply).toContain('支出上限: 取れなかった');
+    expect(reply).toContain('残額は分からない');
+  });
+
+  it('通貨が分からないときは金額として整形しない（嘘の単位を名乗らない）', async () => {
+    const call = withAccount(() => ({
+      state: 'ok',
+      usage: {
+        at: '2026-08-14T10:00:00.000Z',
+        plan: 'Claude Max',
+        limitsAvailable: true,
+        windows: [],
+        extraUsage: { enabled: true, monthlyLimit: 100, usedCredits: 40, utilization: 40 },
+      },
+    }));
+    const reply = await call();
+    expect(reply).toContain('単位不明');
+    expect(reply).not.toContain('$40');
   });
 });

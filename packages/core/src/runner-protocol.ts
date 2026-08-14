@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
 import { jobStatusSchema } from './schema.js';
+import { rateLimitFactsSchema, usageLimitNoticeSchema } from './usage-limits.js';
+import { usageTotalsSchema } from './usage.js';
 
 /**
  * デーモン ↔ manager-runner の境界（roadmap M4）。
@@ -222,6 +224,50 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     actor: z.string(),
     tool: z.string(),
     input: z.unknown(),
+  }),
+  /**
+   * SDK が報告した消費量の**累積**（`result.modelUsage` の写し）。
+   *
+   * **累積のまま降ろす。差分は runner で作らない。** 理由が2つある。
+   *
+   * - **差分は事実ではなく解釈である。** ここに流すのは事実だけ（このファイルの
+   *   冒頭）で、「前回からいくら増えたか」は前回を覚えている側の話である
+   * - **累積なら再送に耐える。** 器の入れ替えや瞬断で同じイベントが2回届いても、
+   *   受け取った側の増分が 0 になるだけで済む。差分を降ろすと**そのまま二重計上**
+   *   になり、しかも数字は増えるだけなので誰も気づけない
+   *
+   * 台帳へ畳むのはデーモン（`manager.ts` の `#onEvent`）である。runner は記憶
+   * ストアの鍵を持たないので、そもそもここでは書けない。
+   */
+  z.object({
+    type: z.literal('usage'),
+    managerId: z.string(),
+    sessionId: z.string().optional(),
+    /** モデル id → その時点の累積。 */
+    models: z.record(z.string(), usageTotalsSchema),
+  }),
+  /**
+   * 上限に関する SDK の文言（当たった / 課金枠へ移った / 近づいている / 組織方針）。
+   *
+   * **文言は言い換えずにそのまま運ぶ。** 人間が検索できる形で残らないと、
+   * claude.ai の画面と突き合わせられない。分類だけを添える。
+   */
+  z.object({
+    type: z.literal('usage_notice'),
+    managerId: z.string(),
+    notice: usageLimitNoticeSchema,
+  }),
+  /**
+   * `rate_limit_event` から読めた枠の事実（アカウント単位）。
+   *
+   * **ターンを回している間しか届かない。** だから使い捨ての probe による定期観測と
+   * 併用する（`usage-snapshot.ts`）。こちらは `status` と
+   * `overageDisabledReason` を持っているので、probe では取れないことが分かる。
+   */
+  z.object({
+    type: z.literal('rate_limit'),
+    managerId: z.string(),
+    facts: rateLimitFactsSchema,
   }),
   /** SDK のセッション生ログ（SessionStore のミラー）。永続化はデーモンが行う。 */
   z.object({

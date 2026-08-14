@@ -18,6 +18,8 @@ import { scheduleKindSchema, scheduleSpecSchema } from './schema.js';
 import type { ChatStreamEvent, PendingApproval, ScheduleSpec, ScheduledRequest } from './schema.js';
 import { CANON_REVISION, canonDocument, canonNames } from './self.js';
 import type { Stores } from './store.js';
+import type { AccountUsageState } from './usage-snapshot.js';
+import { formatUsd, summarizeUsage, type UsageAggregate } from './usage.js';
 
 /**
  * クローンの道具（インプロセス MCP）。
@@ -48,6 +50,14 @@ export interface ToolContext {
    * （システムプロンプト）で扱い、道具を取り上げて表現しない。
    */
   profile?: ProfileService;
+  /**
+   * アカウント全体の利用状況（claude.ai 側が言っている値）を読む口。
+   *
+   * **人間が `claude.ai/settings/usage` で見られるものである。** クローンが
+   * 見られないのは能力の削除（north_star 禁止1）なので、`usage_read` から同じものを
+   * 返す。無ければ「まだ分からない」と出す — **0 とは言わない。**
+   */
+  accountUsage?: () => AccountUsageState;
 }
 
 export function qualifiedToolName(name: string): string {
@@ -64,6 +74,7 @@ export const CLONE_TOOL_NAMES = [
   'ask_human',
   'approvals_list',
   'daily_report_write',
+  'usage_read',
   'schedule_list',
   'schedule_create',
   'schedule_remove',
@@ -286,6 +297,47 @@ export function createCloneTools(context: ToolContext) {
           date !== undefined && localDayRange(date) !== null ? date : localDate(new Date());
         await stores.journal.append({ type: 'daily_report', date: target, body });
         return text(`${target} の日報を残した。`);
+      },
+    ),
+
+    // --- 利用状況（いくら使ったか） --------------------------------------------
+    /**
+     * **人間が見られるものは、クローンからも見られること。**
+     *
+     * 人間は `claude.ai/settings/usage` と Web UI で消費を見られる。その写像である
+     * クローンが見られないなら、それは能力の削除である（north_star 禁止1）。
+     *
+     * これは飾りではなく**判断の材料**である。委譲を続けてよいか、重い仕事を
+     * いま投げてよいかは、残りが見えなければ勘で決めるしかない。実際に支出上限へ
+     * 当たって走行中のマネージャーが2本同時に落ちたとき、クローンには事前に
+     * 知る手段が無く、マネージャーの返答から推測するしかなかった。
+     */
+    tool(
+      'usage_read',
+      [
+        'alteroid が使った分（トークンと費用）を台帳から読む。日・マネージャー・モデル別。',
+        '**推定値であり請求明細ではない。**',
+        '記録は台帳を置いた日から始まっているので、それより前は 0 ではなく「記録が無い」と出る。',
+      ].join(' '),
+      {
+        from: z.string().optional().describe('この日から（YYYY-MM-DD）。省略すると台帳の全期間'),
+        to: z.string().optional().describe('この日まで（YYYY-MM-DD）'),
+        managerId: z.string().optional().describe('このマネージャーの分だけ'),
+      },
+      async ({ from, to, managerId }) => {
+        const aggregate = await stores.usage.aggregate({
+          ...(from === undefined ? {} : { from }),
+          ...(to === undefined ? {} : { to }),
+          ...(managerId === undefined ? {} : { managerId }),
+        });
+        return text(
+          [
+            renderAccountUsage(context.accountUsage?.() ?? { state: 'unknown' }),
+            '',
+            '## alteroid が使った分（台帳）',
+            renderUsage(aggregate),
+          ].join('\n'),
+        );
       },
     ),
 
@@ -814,6 +866,162 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
   ];
+}
+
+/**
+ * 台帳の集計をクローンが読める形へ。
+ *
+ * **落としたら落としたと言う。** 日数やマネージャーの本数に比例して伸ばすと MCP の
+ * 出力上限を超え、そのときクローンには1文字も届かない（実測 52,997 文字で溢れた）。
+ * だから軸ごとに上限を置くが、**打ち切ったことを必ず書く** — 「全部でこれだけ」と
+ * 読める出力を黙って作ると、それは嘘になる。
+ */
+const USAGE_AXIS_LIMIT = 14;
+
+/** 残り時間を d/h/m で。過ぎていたら 0 に丸める（負の残り時間を見せない）。 */
+function untilReset(resetsAt: number, now: number): string {
+  const minutes = Math.max(0, Math.floor((resetsAt - now) / 60_000));
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  if (days > 0) return `あと ${days}日${hours}時間`;
+  if (hours > 0) return `あと ${hours}時間${minutes % 60}分`;
+  return `あと ${minutes}分`;
+}
+
+/**
+ * アカウント全体の残り。
+ *
+ * **取れなかったことを 0 として出さない。** ここが一番嘘をつきやすい場所で、
+ * 「枠 0%」と「枠が取れなかった」を同じ顔で見せると、クローンは残っていない枠を
+ * 残っていると読む（あるいは逆）。状態ごとに文言を分けてある。
+ */
+function renderAccountUsage(state: AccountUsageState): string {
+  const lines = ['## アカウント全体の残り（claude.ai 側の値）'];
+  if (state.state === 'unknown') {
+    lines.push('まだ取りに行っていない（起動直後）。**0 ではなく、分からない。**');
+    return lines.join('\n');
+  }
+  if (state.state === 'failed') {
+    lines.push(`取れなかった: ${state.reason}（${state.at}）。**0 ではなく、分からない。**`);
+    return lines.join('\n');
+  }
+  if (state.state === 'unavailable') {
+    lines.push(`この構成では取れない: ${state.reason}（${state.at}）`);
+    return lines.join('\n');
+  }
+
+  const { usage } = state;
+  const now = Date.parse(usage.at);
+  lines.push(
+    `プラン: ${usage.plan ?? '（取れなかった）'}` +
+      (usage.organization === undefined ? '' : ` / 組織: ${usage.organization}`),
+  );
+
+  if (usage.windows.length === 0) {
+    // **`limitsAvailable` が真でも枠が来ないことがある**（実測）。0% と描かない。
+    lines.push('枠: 取れなかった（向こうが枠を返さなかった。**0% ではない**）');
+  } else {
+    lines.push('枠:');
+    for (const window of usage.windows) {
+      const used =
+        // **付かなかった利用率を 0% と書かない。**
+        window.utilization === undefined ? '使用率は取れなかった' : `${window.utilization}% 使用`;
+      const reset =
+        window.resetsAt === undefined ? '' : ` / ${untilReset(window.resetsAt, now)}でリセット`;
+      lines.push(`  ${window.kind}: ${used}${reset}`);
+    }
+  }
+
+  const extra = usage.extraUsage;
+  if (extra === undefined) {
+    // これが取れれば「上限に当たる前に気づく」が完成する。取れないなら、そう言う。
+    lines.push('支出上限: 取れなかった（**0 ではない**。この情報が無いと残額は分からない）');
+  } else if (!extra.enabled) {
+    lines.push('支出上限: 設定されていない');
+  } else {
+    // **通貨が分からないときは金額として整形しない**（`$` を付けて嘘の単位を名乗らない）。
+    const unit = extra.currency;
+    const amount = (value: number | undefined) =>
+      value === undefined
+        ? '取れなかった'
+        : unit === undefined
+          ? `${value}（単位不明）`
+          : `${value} ${unit}`;
+    lines.push(
+      `支出上限: ${amount(extra.usedCredits)} / ${amount(extra.monthlyLimit)}` +
+        (extra.utilization === undefined ? '' : `（${extra.utilization}% 使用）`),
+    );
+  }
+  lines.push(`観測時刻: ${usage.at}`);
+  return lines.join('\n');
+}
+
+function renderUsage(aggregate: UsageAggregate): string {
+  const { rows, since, beforeLedger, notice } = aggregate;
+
+  if (since === null) {
+    return [
+      '台帳にはまだ1件も記録が無い。',
+      '（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）',
+    ].join('\n');
+  }
+
+  const summary = summarizeUsage(rows);
+  const lines: string[] = [];
+
+  if (rows.length === 0) {
+    lines.push('その範囲には記録が無い。');
+  } else {
+    lines.push(`合計 ${formatUsd(summary.total.costUsd)}`);
+    lines.push(
+      `  入力 ${summary.total.inputTokens.toLocaleString('en-US')} / ` +
+        `出力 ${summary.total.outputTokens.toLocaleString('en-US')} / ` +
+        `キャッシュ読み ${summary.total.cacheReadInputTokens.toLocaleString('en-US')} / ` +
+        `キャッシュ書き ${summary.total.cacheCreationInputTokens.toLocaleString('en-US')}`,
+    );
+
+    const axis = (
+      title: string,
+      entries: Array<{ label: string; totals: { costUsd: number } }>,
+    ) => {
+      lines.push('', title);
+      for (const entry of entries.slice(0, USAGE_AXIS_LIMIT)) {
+        lines.push(`  ${entry.label}: ${formatUsd(entry.totals.costUsd)}`);
+      }
+      if (entries.length > USAGE_AXIS_LIMIT) {
+        lines.push(`  …（残り ${entries.length - USAGE_AXIS_LIMIT} 件は出していない）`);
+      }
+    };
+
+    // 日別は新しい順（古い日で上限を使い切らせない）。
+    axis(
+      '日別:',
+      [...summary.byDate].reverse().map((e) => ({ label: e.date, totals: e.totals })),
+    );
+    // マネージャー別・モデル別は高い順（どの委譲・どの層が高かったかを先に見せる）。
+    axis(
+      'マネージャー別:',
+      [...summary.byManager]
+        .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
+        .map((e) => ({ label: e.managerId, totals: e.totals })),
+    );
+    axis(
+      'モデル別:',
+      [...summary.byModel]
+        .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
+        .map((e) => ({ label: e.model, totals: e.totals })),
+    );
+  }
+
+  lines.push('', `台帳の始点: ${since}`);
+  if (beforeLedger) {
+    // **0 と言わない。** 台帳が無かった期間を「使っていない期間」と読ませない。
+    lines.push(
+      '照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。',
+    );
+  }
+  lines.push(notice);
+  return lines.join('\n');
 }
 
 export function createCloneMcpServer(context: ToolContext) {

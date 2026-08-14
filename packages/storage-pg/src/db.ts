@@ -15,6 +15,19 @@ export function toIso(value: Date | string): string {
 }
 
 /**
+ * bigint 列を確実に number へ直す。
+ *
+ * `bigint(..., { mode: 'number' })` は drizzle の `mapFromDriverValue` が変換する
+ * が、それは列の型情報を保ったクエリ経路（`select()` / `returning()`）を通した
+ * ときだけである。**素通しで返すと文字列のままになりうる** — そのまま
+ * `sumUsageRows` に渡すと `+` が数値の足し算ではなく文字列連結になる
+ * （`'10' + '20'` は `'1020'`）。読み出しの出口をここに揃えて必ず通す。
+ */
+export function toNumber(value: number | string): number {
+  return typeof value === 'number' ? value : Number(value);
+}
+
+/**
  * NUL 文字（`\u0000`）を落とす。
  *
  * PostgreSQL の `text` と `jsonb` は NUL を含む文字列を**受け付けない**。

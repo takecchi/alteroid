@@ -32,3 +32,11 @@ export type ConversationMessage = ConversationDetail['messages'][number];
 export type RunnerSummary = Ok<paths['/runners']['get']>['runners'][number];
 
 export type Health = Ok<paths['/health']['get']>;
+
+/**
+ * 利用状況。**`rows` / `since` / `beforeLedger` / `notice` を1つも落とさないこと。**
+ * 台帳が無かった期間を 0 に見せない・まだ記録が無いのを $0.00 に見せない、の
+ * どちらも、この3つを画面が読んで初めて言える（`apps/cli/src/usage.ts` と同じ形）。
+ */
+export type UsageAggregate = Ok<paths['/usage']['get']>;
+export type UsageRow = UsageAggregate['rows'][number];

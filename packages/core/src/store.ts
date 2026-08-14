@@ -11,6 +11,13 @@ import type {
   PendingApproval,
   ScheduledRequest,
 } from './schema.js';
+import type {
+  UsageAggregate,
+  UsageBaseline,
+  UsageFold,
+  UsageQuery,
+  UsageSnapshot,
+} from './usage.js';
 
 /**
  * ストアのインターフェース（docs/architecture.md「ストレージ」）。
@@ -151,6 +158,44 @@ export interface ProfileStore {
   revert(previous: EnvProfile | null): Promise<void>;
 }
 
+/**
+ * 利用状況の台帳（`usage.ts`）。
+ *
+ * **持つのはデーモンだけである。** runner に持たせると記憶ストアの鍵が要る
+ * （M4 受け入れ基準3）。runner から降りてくるのは累積スナップショットという
+ * 事実だけで、差分にして積むのはここ。
+ */
+export interface UsageStore {
+  /**
+   * 累積スナップショットを台帳へ畳み込む。
+   *
+   * **読むことと書くことを1操作に閉じること。** 基準を読んでから増分を書くまでの
+   * 隙間で同じマネージャーの次の `result` が届くと、同じ増分が2回積まれる。
+   * pg はトランザクション、fs は1回の書き込みで守る（`auth-service` と同じ作法）。
+   *
+   * 返すのは**実際に積んだ増分**と、数え直しが起きたならその事実。呼び出し側は
+   * それを日誌へ落とす（黙って数え直さない）。
+   */
+  record(input: {
+    managerId: string;
+    /** ローカル時刻の `YYYY-MM-DD`（`usageDate()` で作る）。 */
+    date: string;
+    at: string;
+    snapshot: UsageSnapshot;
+  }): Promise<UsageFold>;
+
+  /**
+   * 期間の集計。日 × マネージャー × モデルの行を返す。
+   *
+   * **`since` を必ず載せること。** 台帳が始まる前を照会されたら 0 ではなく
+   * 「記録が無い」と言えるようにするためである（過去分の掘り起こしはしない）。
+   */
+  aggregate(query: UsageQuery): Promise<UsageAggregate>;
+
+  /** マネージャー1本の現在の基準（前回読んだ累積）。無ければ null。 */
+  baseline(managerId: string): Promise<UsageBaseline | null>;
+}
+
 /** クローンのセッション id を跨いで覚えておくための最小の永続化。 */
 export interface SessionRegistry {
   getCloneSessionId(): Promise<string | null>;
@@ -184,6 +229,14 @@ export interface Stores {
    * あり、用途が増えるたびに実装を直さずに済ませるためにここに置く。
    */
   profile: ProfileStore;
+  /**
+   * 利用状況の台帳。
+   *
+   * **省略可能にしないこと**（`schedules` と同じ理由）。器が違うだけで上の層が
+   * 見るものは同じである、が M4 の要件で、ここを任意にすると「pg では消費が
+   * 見えるが fs では見えない」という能力差が生まれる（north_star 禁止1）。
+   */
+  usage: UsageStore;
   /**
    * SDK のセッション生ログの預け先（M4 のクラウド構成でだけ付く）。
    *

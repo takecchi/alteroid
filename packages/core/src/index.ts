@@ -9,6 +9,61 @@
 export * from './schema.js';
 export * from './store.js';
 /**
+ * 利用状況の台帳（alteroid 自身が使った分）。
+ *
+ * 出所は SDK の `result.modelUsage` であって `usage` ではない（後者はメイン
+ * ループぶんだけで、**作業者の消費が落ちる**）。累積値なので足さずに差分を取る。
+ * 数字を見せる口はすべて `USAGE_ESTIMATE_NOTICE` を一緒に運ぶ。
+ */
+export * from './usage.js';
+/**
+ * アカウント全体の残り（claude.ai 側が言っている値）と、上限に当たった / 当たりそうの検知。
+ *
+ * **台帳とは別物なので足さない。** こちらは向こうが言っている値で、台帳は自分で
+ * 数えた推定値である。取れなかったものを 0 にしないこと（`AccountUsageState` が
+ * 「まだ取っていない / 取れなかった / この構成では取れない」を区別して持つ）。
+ */
+export {
+  ACCOUNT_USAGE_READ_TIMEOUT_MS,
+  accountUsageSchema,
+  accountUsageStateSchema,
+  extraUsageSchema,
+  fetchAccountUsage,
+  hasAccountUsageDetail,
+  isNotLoggedIn,
+  isSubscriptionImpossible,
+  secondsToEpochMs,
+  toAccountUsage,
+  usageWindowKindSchema,
+  usageWindowSchema,
+  type AccountUsage,
+  type AccountUsageState,
+  type ExtraUsage,
+  type UsageWindow,
+  type UsageWindowKind,
+} from './usage-snapshot.js';
+export {
+  USAGE_PROBE_TIMEOUT_MS,
+  idleUsagePrompt,
+  runUsageProbe,
+  settleWithin,
+  type UsageProbeHandle,
+  type UsageProbeOptions,
+  type UsageProbeQuery,
+} from './usage-probe.js';
+export {
+  classifyUsageNotice,
+  describeUsageNotice,
+  rateLimitFactsSchema,
+  toRateLimitFacts,
+  usageLimitKindSchema,
+  usageLimitNoticeSchema,
+  usageTransitionOf,
+  type RateLimitFacts,
+  type UsageLimitKind,
+  type UsageLimitNotice,
+} from './usage-limits.js';
+/**
  * ログイン（誰がこの API を叩いているか）と、alteroid を使ってよいかの2値。
  *
  * **PRD「権限境界」とは別の層である。** あちらはクローンが記憶を根拠に

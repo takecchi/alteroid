@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { buildActivityDigest } from './digest.js';
 import { createMemoryStores } from './testing.js';
+import { usageDate } from './usage.js';
 
 /**
  * 日報と発意 tick の材料。ここに要るのは「全体が見えている」ことだけで、
@@ -96,5 +97,55 @@ describe('活動の要約', () => {
 
     expect(digest).toContain('自分で決めたこと（日誌の decision）: 0 件');
     expect(digest).not.toContain('いま決めた');
+  });
+});
+
+describe('使った分', () => {
+  const models = {
+    'claude-opus-5': {
+      inputTokens: 10,
+      outputTokens: 100,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      webSearchRequests: 0,
+      costUsd: 2,
+    },
+    'claude-sonnet-5': {
+      inputTokens: 5,
+      outputTokens: 50,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      webSearchRequests: 0,
+      costUsd: 0.5,
+    },
+  };
+
+  it('台帳が空なら「0」ではなく「記録が無い」と書く', async () => {
+    const stores = createMemoryStores();
+
+    const digest = await buildActivityDigest(stores, { since: new Date(2026, 7, 14) });
+
+    expect(digest).toContain('## 使った分');
+    expect(digest).toContain('記録が無い');
+    expect(digest).not.toContain('合計: $0');
+  });
+
+  it('モデル別と高かった委譲を出し、但し書きを添える', async () => {
+    // 「どの層が高いか」「どの委譲が高かったか」が委譲の粒度を直す材料になる。
+    const stores = createMemoryStores();
+    const at = new Date(2026, 7, 14, 10, 0);
+    await stores.usage.record({
+      managerId: 'mgr-heavy',
+      date: usageDate(at),
+      at: at.toISOString(),
+      snapshot: { models },
+    });
+
+    const digest = await buildActivityDigest(stores, { since: new Date(2026, 7, 14) });
+
+    expect(digest).toContain('合計: $2.50');
+    expect(digest).toContain('claude-opus-5 $2.00');
+    expect(digest).toContain('mgr-heavy');
+    expect(digest).toContain('請求明細ではない');
   });
 });

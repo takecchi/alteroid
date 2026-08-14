@@ -152,6 +152,40 @@ const STATEMENTS = [
      expires_at timestamptz not null
    )`,
   `create index if not exists auth_login_requests_expires_idx on auth_login_requests (expires_at)`,
+
+  // --- 利用状況の台帳（usage.ts の UsageStore） ---------------------------
+  `create table if not exists usage_daily (
+     date text not null,
+     manager_id text not null,
+     model text not null,
+     input_tokens bigint not null default 0,
+     output_tokens bigint not null default 0,
+     cache_read_input_tokens bigint not null default 0,
+     cache_creation_input_tokens bigint not null default 0,
+     web_search_requests bigint not null default 0,
+     cost_usd double precision not null default 0,
+     updated_at timestamptz not null,
+     primary key (date, manager_id, model)
+   )`,
+  // pk の先頭が date なので、date だけの絞り込みは pk の索引で前方一致が効く
+  // （別に (date) 索引を足すのは冗長）。(manager_id, date) は pk に無い並びなので、
+  // 「このマネージャーが期間中いくら使ったか」を date を先に決めずに引く経路として足す。
+  `create index if not exists usage_daily_manager_date_idx on usage_daily (manager_id, date)`,
+
+  `create table if not exists usage_baseline (
+     manager_id text primary key,
+     session_id text,
+     models jsonb not null,
+     updated_at timestamptz not null,
+     resets integer not null default 0,
+     last_reset_at timestamptz
+   )`,
+
+  // 単一行（id = 'default'）。台帳が記録を始めた時刻。aggregate の since の元。
+  `create table if not exists usage_ledger (
+     id text primary key,
+     started_at timestamptz not null
+   )`,
 ] as const;
 
 export async function migrate(db: Db): Promise<void> {

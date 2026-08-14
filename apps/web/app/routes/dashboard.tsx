@@ -1,3 +1,4 @@
+import { formatUsd, summarizeUsage, usageDate } from '@alteroid/core/usage';
 import { Link } from 'react-router';
 
 import { Page } from '~/components/page';
@@ -8,6 +9,7 @@ import {
   useManagers,
   useReports,
   useSchedule,
+  useUsage,
 } from '~/hooks/queries';
 import { useJournalLive } from '~/hooks/use-journal-live';
 import { formatDateTime, formatRelative } from '~/lib/format';
@@ -27,6 +29,9 @@ export default function Dashboard() {
   const managers = useManagers();
   const schedule = useSchedule();
   const live = useJournalLive();
+  // 「今日」はローカル時刻（日報と同じ区切り）。UTC で切ると日報の「今日」とずれる。
+  const today = usageDate(new Date());
+  const usage = useUsage({ from: today, to: today });
 
   const latestReport = reports.data?.reports[0];
   const pending = approvals.data?.approvals ?? [];
@@ -124,6 +129,37 @@ export default function Dashboard() {
                   </li>
                 ))}
               </ul>
+            )}
+          </Card>
+
+          <Card>
+            <CardHeader
+              title="今日の利用"
+              subtitle="推定値。請求明細ではない"
+              action={
+                <Link to="/usage" className="text-xs text-accent hover:underline">
+                  詳しく見る
+                </Link>
+              }
+            />
+            {usage.error !== undefined ? (
+              <ErrorNote error={usage.error} className="m-4" />
+            ) : usage.isLoading || usage.data === undefined ? (
+              <Spinner />
+            ) : usage.data.since === null ? (
+              // **`$0.00` と出さない。** まだ台帳に1件も無いのを「使っていない」に見せない。
+              <Empty>まだ記録が無い。</Empty>
+            ) : usage.data.beforeLedger && usage.data.rows.length === 0 ? (
+              // **0 と出さない。** 台帳の始点より前を「使っていない」に見せない。
+              <Empty>今日の分はまだ記録が無い（台帳の始点より前）。</Empty>
+            ) : (
+              <div className="px-4 py-3">
+                <p className="text-xl font-semibold">
+                  {formatUsd(summarizeUsage(usage.data.rows).total.costUsd)}
+                </p>
+                {/* 省略・要約しない。数字を出すところには必ず添える。 */}
+                <p className="mt-1 text-[11px] text-muted">{usage.data.notice}</p>
+              </div>
             )}
           </Card>
 

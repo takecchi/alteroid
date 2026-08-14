@@ -31,6 +31,7 @@ import type { ChatStreamEvent, InboxEvent, JournalEntryInput, ScheduledRequest }
 import type { SelfFacts } from './self.js';
 import type { Stores } from './store.js';
 import { CLONE_ALLOWED_TOOLS, MCP_SERVER_NAME, createCloneMcpServer } from './tools.js';
+import type { AccountUsageState } from './usage-snapshot.js';
 
 /**
  * クローン = デーモン内の長寿命 SDK セッション1本（docs/architecture.md）。
@@ -156,6 +157,14 @@ export interface CloneOptions {
    */
   profileService?: ProfileService;
   /**
+   * アカウント全体の利用状況（claude.ai 側の値）を読む口。
+   *
+   * **人間が `claude.ai/settings/usage` で見られるものを、クローンにも渡す。**
+   * 見られないのは能力の削除（north_star 禁止1）であり、しかもこれは飾りではなく
+   * 判断の材料である（重い委譲を続けてよいかは、残りを見ずには決められない）。
+   */
+  accountUsage?: () => AccountUsageState;
+  /**
    * いま自分がどう走っているかの事実（記憶の器・作業ディレクトリ・委譲先・
    * 入口・モデル帯）。システムプロンプトの自己認識の節に載る。
    *
@@ -217,6 +226,7 @@ class Clone implements CloneHost {
   readonly #env: NodeJS.ProcessEnv;
   readonly #profile: ProfileApplier | undefined;
   readonly #profileService: ProfileService | undefined;
+  readonly #accountUsage: (() => AccountUsageState) | undefined;
 
   constructor(options: CloneOptions) {
     const {
@@ -229,6 +239,7 @@ class Clone implements CloneHost {
       env,
       profile,
       profileService,
+      accountUsage,
       self,
     } = options;
     this.#stores = stores;
@@ -239,6 +250,7 @@ class Clone implements CloneHost {
     this.#env = env ?? process.env;
     this.#profile = profile;
     this.#profileService = profileService;
+    this.#accountUsage = accountUsage;
     this.#self = self;
     this.#managers =
       managers ??
@@ -870,6 +882,7 @@ class Clone implements CloneHost {
           emit: (event) => this.#emit(this.#turn?.conversationId ?? null, event),
           managers: this.#managers,
           ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
+          ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
         }),
       },
       systemPrompt: buildCloneSystemPrompt({
@@ -973,6 +986,7 @@ class Clone implements CloneHost {
             // **蒸留のターンでも同じ道具を渡す。** ここだけ欠けていると、
             // 会話の最後に「鍵を実行環境へ移す」をやろうとして失敗する。
             ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
+            ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
           }),
         },
         systemPrompt: buildCloneSystemPrompt({

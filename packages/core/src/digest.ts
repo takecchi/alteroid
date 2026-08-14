@@ -2,6 +2,7 @@ import { excerptLine } from './excerpt.js';
 import { describeScheduleSpec } from './schedule.js';
 import type { JournalEntry } from './schema.js';
 import type { Stores } from './store.js';
+import { formatUsd, summarizeUsage, usageDate } from './usage.js';
 
 /**
  * ある期間に何が起きたかの要約（日報と発意 tick の材料）。
@@ -141,7 +142,78 @@ export async function buildActivityDigest(stores: Stores, window: DigestWindow):
     }
   }
 
+  sections.push('', ...(await usageSection(stores, window.since, until)));
+
   return sections.join('\n');
+}
+
+/**
+ * この期間にいくら使ったか。
+ *
+ * **これは判断の材料である。** 委譲を続けてよいか、重い仕事をいま投げてよいかは、
+ * 使った量が見えなければ勘で決めるしかない。実際に支出上限へ当たって走行中の
+ * マネージャーが2本同時に落ちたことがあり、そのときクローンには事前に知る手段が
+ * 無かった。日報では「どの委譲が高かったか」「どの層（Fable / Opus / Sonnet）が
+ * 高いか」が、委譲の粒度を直す材料になる。
+ *
+ * **取れなかったものを 0 と書かない。** 台帳が無かった期間は「記録が無い」であって
+ * 「使っていない」ではない。
+ */
+async function usageSection(stores: Stores, since: Date, until: Date): Promise<string[]> {
+  let aggregate;
+  try {
+    aggregate = await stores.usage.aggregate({
+      from: usageDate(since),
+      // 上端は含まないので 1ms 引いてから日付にする（境界の日が余分に入らない）。
+      to: usageDate(new Date(until.getTime() - 1)),
+    });
+  } catch {
+    // 台帳が読めないこと自体で digest を落とさない。ただし黙らない。
+    return ['## 使った分', '（台帳を読めなかった。集計は出せない）'];
+  }
+
+  const lines = ['## 使った分'];
+  if (aggregate.since === null) {
+    lines.push('（台帳にまだ記録が無い。この機能を入れる前の分は残っていない）');
+    return lines;
+  }
+
+  const summary = summarizeUsage(aggregate.rows);
+  if (aggregate.rows.length === 0) {
+    lines.push('この期間の記録は無い。');
+  } else {
+    lines.push(`- 合計: ${formatUsd(summary.total.costUsd)}`);
+    lines.push(
+      `- 出力トークン: ${summary.total.outputTokens.toLocaleString('en-US')} / ` +
+        `入力: ${summary.total.inputTokens.toLocaleString('en-US')} / ` +
+        `キャッシュ読み: ${summary.total.cacheReadInputTokens.toLocaleString('en-US')}`,
+    );
+    // 高い順。どの層・どの委譲に効くかを先に見せる。
+    const top = <T extends { totals: { costUsd: number } }>(entries: readonly T[]) =>
+      [...entries].sort((a, b) => b.totals.costUsd - a.totals.costUsd).slice(0, MAX_ITEMS);
+    lines.push(
+      `- モデル別: ${top(summary.byModel)
+        .map((entry) => `${entry.model} ${formatUsd(entry.totals.costUsd)}`)
+        .join(' / ')}`,
+    );
+    lines.push('- 高かった委譲:');
+    for (const entry of top(summary.byManager)) {
+      lines.push(`  - ${entry.managerId}: ${formatUsd(entry.totals.costUsd)}`);
+    }
+    if (summary.byManager.length > MAX_ITEMS) {
+      lines.push(
+        `  - …ほか ${summary.byManager.length - MAX_ITEMS} 本（\`usage_read\` で全部見える）`,
+      );
+    }
+  }
+
+  if (aggregate.beforeLedger) {
+    lines.push(
+      `- この期間の一部は台帳の始点（${aggregate.since}）より前で、**記録が無い**（0 ではない）`,
+    );
+  }
+  lines.push(`- ${aggregate.notice}`);
+  return lines;
 }
 
 /**

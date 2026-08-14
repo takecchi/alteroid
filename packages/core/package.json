@@ -7,6 +7,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./usage": {
+      "types": "./dist/usage-format.d.ts",
+      "import": "./dist/usage-format.js"
     }
   },
   "files": [

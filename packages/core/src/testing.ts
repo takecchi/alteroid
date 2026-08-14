@@ -26,7 +26,16 @@ import type {
   SessionRegistry,
   Stores,
   TranscriptArchive,
+  UsageStore,
 } from './store.js';
+import {
+  foldUsageSnapshot,
+  USAGE_ESTIMATE_NOTICE,
+  usageDate,
+  ZERO_USAGE,
+  type UsageBaseline,
+  type UsageRow,
+} from './usage.js';
 
 /**
  * テスト用のインメモリストア。storage-fs の代わりに core のテストで使う。
@@ -255,6 +264,64 @@ export function createMemoryStores(): Stores {
     },
   };
 
+  /**
+   * 利用状況の台帳（インメモリ）。
+   *
+   * **差分ロジックは本番と共有する** — `foldUsageSnapshot` を呼ぶので、
+   * 「テストの器だけ二重計上しない」というずれ方をしない。
+   */
+  const usageRows = new Map<string, UsageRow>();
+  const usageBaselines = new Map<string, UsageBaseline>();
+  let usageStartedAt: string | null = null;
+
+  const usage: UsageStore = {
+    async record({ managerId, date, at, snapshot }) {
+      const fold = foldUsageSnapshot(usageBaselines.get(managerId) ?? null, snapshot, at);
+      usageBaselines.set(managerId, { ...fold.baseline, managerId });
+      usageStartedAt ??= at;
+      for (const [model, delta] of Object.entries(fold.delta)) {
+        const key = `${date} ${managerId} ${model}`;
+        const before = usageRows.get(key)?.totals ?? ZERO_USAGE;
+        usageRows.set(key, {
+          date,
+          managerId,
+          model,
+          totals: {
+            inputTokens: before.inputTokens + delta.inputTokens,
+            outputTokens: before.outputTokens + delta.outputTokens,
+            cacheReadInputTokens: before.cacheReadInputTokens + delta.cacheReadInputTokens,
+            cacheCreationInputTokens:
+              before.cacheCreationInputTokens + delta.cacheCreationInputTokens,
+            webSearchRequests: before.webSearchRequests + delta.webSearchRequests,
+            costUsd: before.costUsd + delta.costUsd,
+          },
+          updatedAt: at,
+        });
+      }
+      return fold;
+    },
+    async aggregate(query) {
+      const rows = [...usageRows.values()]
+        .filter((row) => (query.from === undefined ? true : row.date >= query.from))
+        .filter((row) => (query.to === undefined ? true : row.date <= query.to))
+        .filter((row) => (query.managerId === undefined ? true : row.managerId === query.managerId))
+        .sort((a, b) => a.date.localeCompare(b.date) || a.managerId.localeCompare(b.managerId));
+      return {
+        rows,
+        since: usageStartedAt,
+        // 台帳が始まる前を照会されたら、0 ではなく「記録が無い」と言えるように。
+        beforeLedger:
+          usageStartedAt !== null &&
+          query.from !== undefined &&
+          query.from < usageDate(new Date(usageStartedAt)),
+        notice: USAGE_ESTIMATE_NOTICE,
+      };
+    },
+    async baseline(managerId) {
+      return usageBaselines.get(managerId) ?? null;
+    },
+  };
+
   return {
     persona,
     journal,
@@ -264,6 +331,7 @@ export function createMemoryStores(): Stores {
     sessions,
     auth,
     profile,
+    usage,
   };
 }
 

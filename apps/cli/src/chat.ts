@@ -3,6 +3,7 @@ import { stdin, stdout } from 'node:process';
 
 import { createClient } from './client.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
+import { renderUsage } from './usage.js';
 
 /**
  * `alteroid chat` — クローンとの会話。
@@ -188,6 +189,7 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /archive <id>        生ログの中身
 /approvals           承認待ち（番号付き）
 /answer <番号|id> <回答>  承認待ちに答える（番号は /approvals の並び）
+/usage [from=YYYY-MM-DD] [to=YYYY-MM-DD] [manager=<id>]  利用状況（いくら使ったか）
 /schedule            時間起点のジョブ・継続中の依頼と次の発火
 /schedule <kind> <HH:MM|30m|cron 0 10 * * 1> <依頼>  継続する依頼を仕込む
 /unschedule <kind>   継続中の依頼を外す
@@ -489,6 +491,24 @@ async function runSlashCommand(
       return 'ok';
     }
 
+    /**
+     * いくら使ったか。**人間が見られるものは、クローンが `usage_read` で見て
+     * いるのと同じもの**（PRD 可観測性・north_star 禁止1）。経路は `GET /usage`
+     * の1本だけで、表示は `usage.ts` の `renderUsage` に寄せてある
+     * （CLI 本体の `alteroid usage` と表示を揃えるため）。
+     */
+    case '/usage': {
+      const filters = parseUsageFilters(rest);
+      const response = await client.usage.$get({ query: filters });
+      if (!response.ok) {
+        stdout.write('利用状況を読めませんでした（from=/to= の日付の形を確かめてください）\n');
+        return 'ok';
+      }
+      const aggregate = await response.json();
+      stdout.write(`${renderUsage(aggregate)}\n`);
+      return 'ok';
+    }
+
     default:
       stdout.write(`不明なコマンド: ${command ?? ''}\n${HELP}`);
       return 'ok';
@@ -532,6 +552,24 @@ function takeWhen(tokens: string[]): { spec: ScheduleSpecInput; request: string 
   if (minutes === null) return null;
   const parsed = Number(minutes[1]);
   return parsed >= 1 ? { spec: { type: 'every', minutes: parsed }, request } : null;
+}
+
+/**
+ * `/usage from=2026-08-01 to=2026-08-14 manager=abc` のような `key=value` を読む。
+ * 順不同・省略可。知らない key は無視する（typo で無言のまま無視されるより、
+ * 全期間を見せて「絞れていない」と気づける形にする）。
+ */
+function parseUsageFilters(tokens: string[]): { from?: string; to?: string; managerId?: string } {
+  const filters: { from?: string; to?: string; managerId?: string } = {};
+  for (const token of tokens) {
+    const [key, ...valueParts] = token.split('=');
+    const value = valueParts.join('=');
+    if (value.length === 0) continue;
+    if (key === 'from') filters.from = value;
+    else if (key === 'to') filters.to = value;
+    else if (key === 'manager') filters.managerId = value;
+  }
+  return filters;
 }
 
 /** 番号（`/approvals` の並び）でも id そのままでも答えられるようにする。 */
