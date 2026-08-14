@@ -207,6 +207,14 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
   }),
   /** 確認が解けた（回答・中断・停止）。デーモン側の待ち行列から外す合図。 */
   z.object({ type: z.literal('settled'), managerId: z.string(), requestId: z.string() }),
+  /**
+   * runner の内側で起きた、記録に残すべき事実。
+   *
+   * マネージャーの発言ではない（`report` と混ぜない）。**runner が何かを落とす
+   * ときの口**である — 上限に達して古い記憶を捨てた、といった事実がどこにも
+   * 残らないと、後から表に出た異常を誰も原因へ辿れない（黙って落とさない）。
+   */
+  z.object({ type: z.literal('note'), managerId: z.string(), text: z.string() }),
   z.object({
     type: z.literal('tool_use'),
     managerId: z.string(),

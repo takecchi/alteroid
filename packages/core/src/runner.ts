@@ -16,6 +16,7 @@ import type {
 
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
 import { createProfileApplier, type ProfileApplier, type ProfileVessel } from './profile.js';
+import { createRecentMap } from './recent.js';
 import { buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
 import type {
   RunnerAnswerCommand,
@@ -394,6 +395,14 @@ class Host implements RunnerHost {
   }
 }
 
+/**
+ * 解決済みの確認を覚えておく件数。**セッション1本ぶんの上限**である。
+ *
+ * 帳面はセッションと一緒に消えるので、寿命は元から有限。ここで件数にも蓋を
+ * するのは、1本が異常に長く走ったときのためで、達したら `note` で上へ言う。
+ */
+const RESOLVED_MEMORY_LIMIT = 512;
+
 /** 返事を待って止まっている1件（許可確認 or 質問）。 */
 interface PendingRequest {
   id: string;
@@ -441,6 +450,32 @@ class RunnerSession {
 
   readonly #input: SDKUserMessage[] = [];
   readonly #pending: PendingRequest[] = [];
+  /**
+   * **解けた確認と、そのときの結果。**
+   *
+   * `#pending` は「いま待っている」ものしか持たない。解けた瞬間に消えるので、
+   * それだけを見て重複を判定すると、**解決後の再送が新しい確認になる** —
+   * クローンへ二度目が届き、その再送は SDK 側で既に中断済みなので即 `settle` し、
+   * デーモンは `waiting` からそれを消す。答えたクローンには「待っていない」と
+   * 返る。「解決した」という事実が runner 側に残っていないことが原因である。
+   *
+   * だから覚える。再送には**同じ結果をそのまま返す**（`ask` は出さない）。
+   * 帳面はセッションと一緒に消え、件数にも上限がある（`RESOLVED_MEMORY_LIMIT`）。
+   */
+  readonly #resolved = createRecentMap<PermissionResult>({
+    limit: RESOLVED_MEMORY_LIMIT,
+    // **忘れたことを黙らない。** 忘れた id の再送はもう一度クローンへ出るので、
+    // ここが記録に無いと「なぜ二度届いたのか」を誰も辿れない。
+    onForget: (ids) =>
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text:
+          `解決済みの確認の記憶が上限（${RESOLVED_MEMORY_LIMIT}件）に達したので、` +
+          `古い ${ids.length} 件を忘れた: ${ids.join(', ')}。` +
+          'この id の確認が SDK から再送されると、新しい確認としてもう一度回る。',
+      }),
+  });
   /** resume のために預かった生ログ（SDK の `SessionStore.load` が返す素材）。 */
   #seed: SessionStoreEntry[] | undefined;
 
@@ -907,6 +942,10 @@ class RunnerSession {
     const id = extra.requestId ?? extra.toolUseID ?? randomUUID();
     const already = this.#pending.find((request) => request.id === id);
     if (already) return already.result;
+    // **解けた後の再送も同じ扱いにする。** ここを `#pending` だけで見ていたのが
+    // 「答えたのに待っていないと言われる」の原因だった（`#resolved` の注記）。
+    const resolved = this.#resolved.get(id);
+    if (resolved !== undefined) return resolved;
 
     const kind = toolName === 'AskUserQuestion' ? 'question' : 'permission';
     const summary =
@@ -918,13 +957,16 @@ class RunnerSession {
     });
 
     const result = answered.then((answer) => {
-      if (kind === 'question') {
-        return { behavior: 'allow' as const, updatedInput: withAnswers(input, answer.message) };
-      }
-      const decision = answer.decision ?? inferDecision(answer.message);
-      return decision === 'allow'
-        ? { behavior: 'allow' as const }
-        : { behavior: 'deny' as const, message: answer.message };
+      const outcome: PermissionResult =
+        kind === 'question'
+          ? { behavior: 'allow', updatedInput: withAnswers(input, answer.message) }
+          : (answer.decision ?? inferDecision(answer.message)) === 'allow'
+            ? { behavior: 'allow' }
+            : { behavior: 'deny', message: answer.message };
+      // **解けたことを覚えるのはここ1箇所。** 回答でも中断でも停止でも、解けた
+      // 事実は同じように残る（経路ごとに覚え忘れる隙を作らない）。
+      this.#resolved.set(id, outcome);
+      return outcome;
     });
 
     let done = false;
