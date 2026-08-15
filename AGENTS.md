@@ -149,7 +149,7 @@
   - マネージャーへ渡す MCP 設定・プロジェクト設定は `workspace/`（＝runner コンテナの `/workspace`）に置く。cwd がそこなので `settingSources: ['project','local']` がそのまま拾う
   - 境界の確認は `docker compose exec runner env | grep ALTEROID_DATABASE_URL`（出ないこと）、`docker compose exec runner tr '\0' '\n' < /proc/1/environ | grep '^ALTEROID_RUNNER_TOKEN='`（出ないこと。sha256 だけが残る）、`docker compose exec runner getent hosts db`（引けないこと）
   - マネージャーに PR を出させるなら `.env` に `GH_TOKEN` と `GIT_AUTHOR_*` / `GIT_COMMITTER_*` を足す（両方へ渡る）。無くても公開リポジトリの clone は通る。手順とスコープは [railway/README.md](./railway/README.md) の「マネージャーに GitHub を渡す」。**`gh` の版は固定していない** — 固定すると人間の手元より古い `gh` を配ることになり、その遅れがデグレードになる
-- ホスティング（Railway）の手順は [railway/README.md](./railway/README.md)。**同じ3つを Service に写すだけだが、境界が2か所ゆるむ**（サービス間でボリュームを共有できないので制御面が TCP になる／`*.railway.internal` がフラットなので runner から db が名前解決できる）。ゆるみの内訳と、それでも残る守りは同文書に書いてある。**Shared Variables に置かないのは `ALTEROID_DATABASE_URL` だけ** — 置いた瞬間に runner へ降りて、残った守りが消える（合鍵は runner 側で畳まれるので共有してよい）
+- ホスティング（Railway）の手順は [railway/README.md](./railway/README.md)。**同じ3つを Service に写すだけだが、境界がいくつかゆるむ**（サービス間でボリュームを共有できないので制御面が TCP になる／`*.railway.internal` がフラットなので runner から db が名前解決でき、**外から叩ける形にすると runner からデーモンへも TCP が届く** — 守っているのはログイン認証だけになる）。**ここに数を書かないこと**（増えるたびに数え直すことになる。数え上げは同文書「先に読む」だけが持つ）。ゆるみの内訳と、それでも残る守りは同文書に書いてある。**Shared Variables に置かないのは `ALTEROID_DATABASE_URL` だけ** — 置いた瞬間に runner へ降りて、残った守りが消える（合鍵は runner 側で畳まれるので共有してよい）
 - pg ドライバのテストは PGlite（インプロセスの実 PostgreSQL）で回る。CI に DB を用意する必要はないが、**偽の DB で代用しない**（SQL と索引と冪等性ごと確かめる意味が消える）
 - デーモン再起動時の引き取りは2通り。**runner が生きていれば繋ぎ直すだけ**（マネージャーは走り続けている）、**runner ごと落ちていれば実際に resume する**（JobStore の `session_id` ＋ 預かった生ログ）。どちらもクローンの受信箱へ知らせる
   - **走行中だったものを「話しかけられるまで止めておく」にしないこと。** 人間の不在で止まってよいのは承認待ちの仕事だけである（PRD「自律」）。待機（`done`）だったものだけが遅延 resume でよい
