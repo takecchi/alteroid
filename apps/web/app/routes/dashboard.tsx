@@ -11,7 +11,7 @@ import {
   useSchedule,
   useUsage,
 } from '~/hooks/queries';
-import { useJournalLive } from '~/hooks/use-journal-live';
+import { useJournalFeed } from '~/hooks/journal-feed';
 import { formatDateTime, formatRelative } from '~/lib/format';
 
 import { ManagerStatusBadge } from './managers';
@@ -28,7 +28,11 @@ export default function Dashboard() {
   const approvals = useApprovals(true);
   const managers = useManagers();
   const schedule = useSchedule();
-  const live = useJournalLive();
+  // **`useJournalLive()` を直に呼ばない。** SSE は `AuthedShell` が1本だけ張る決まりで、
+  // ここが自分で呼ぶとダッシュボードを開いているあいだ2本になる（#27 でそうなっていた。
+  // 意図があった形跡はコメントにも履歴にも無く、`shell.tsx` は最初から「ここで1本だけ
+  // 張る」と書いてあったので、漏れとして context 越しに寄せた）。**戻さないこと。**
+  const live = useJournalFeed();
   // 「今日」はローカル時刻（日報と同じ区切り）。UTC で切ると日報の「今日」とずれる。
   const today = usageDate(new Date());
   const usage = useUsage({ from: today, to: today });
@@ -185,9 +189,13 @@ export default function Dashboard() {
       </div>
 
       <Card className="mt-4">
+        {/*
+          購読は画面ではなく `AuthedShell` が持つので、この画面を開き直しても溜まった
+          ものは消えない。だから「この画面を開いてから」とは書けない。
+        */}
         <CardHeader
           title="いま届いている出来事"
-          subtitle="この画面を開いてから流れてきた日誌"
+          subtitle="接続してから流れてきた日誌"
           action={
             <Link to="/journal" className="text-xs text-accent hover:underline">
               日誌を掘る
