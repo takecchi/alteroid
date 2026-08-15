@@ -26,7 +26,9 @@ import type { JournalEntryInput } from './schema.js';
 export function noteDroppedRecord(what: string, detail: string, error: unknown): void {
   const at = new Date().toISOString();
   const tail = detail === '' ? '' : `（${detail}）`;
-  process.stderr.write(`alteroid: ${at} ${what}を記録できませんでした${tail}: ${reasonOf(error)}\n`);
+  process.stderr.write(
+    `alteroid: ${at} ${what}を記録できませんでした${tail}: ${reasonOf(error)}\n`,
+  );
 }
 
 /**

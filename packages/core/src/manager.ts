@@ -1532,11 +1532,7 @@ class Pool implements ManagerPool {
       // **ただし黙って消さない。** ここが落ちると `status` と `lastReport` が
       // 台帳に載らない。「後から `manager_report` で読めた ⟹ 経路が通っていた」は
       // 成功した場合の話であって、**失敗は台帳にも日誌にも跡を残さない**。
-      noteDroppedRecord(
-        'ジョブ台帳',
-        `job id=${record.job.id} status=${record.job.status}`,
-        error,
-      );
+      noteDroppedRecord('ジョブ台帳', `job id=${record.job.id} status=${record.job.status}`, error);
     }
   }
 

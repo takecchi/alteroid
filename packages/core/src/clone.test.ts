@@ -12,7 +12,12 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import { createScheduler } from './schedule.js';
 import type { ChatStreamEvent } from './schema.js';
 import type { Stores } from './store.js';
-import { captureStderr, createMemoryStores, failingJournalAppend, humanMessage } from './testing.js';
+import {
+  captureStderr,
+  createMemoryStores,
+  failingJournalAppend,
+  humanMessage,
+} from './testing.js';
 
 /**
  * SDK を実際に呼ばずにクローンループを検証する。
