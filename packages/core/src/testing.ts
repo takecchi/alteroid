@@ -351,3 +351,56 @@ export function humanMessage(text: string, conversationId = 'conv-1'): InboxEven
     conversationId,
   };
 }
+
+/**
+ * `process.stderr` へ出た行を集める。
+ *
+ * 記録の書き込みに失敗したときの跡は stderr にしか出ない（本文をログへ
+ * 落とさないため、日誌にもストアにも残せない）。**そこを見る手段が無いと、
+ * 「黙って消える」に戻っていても誰も気づけない。**
+ *
+ * 差し替えは `finally` で必ず戻すこと。戻し忘れると以降のテストの出力が
+ * 丸ごと消え、失敗の理由が読めなくなる。
+ */
+export async function captureStderr(body: () => void | Promise<void>): Promise<string[]> {
+  const lines: string[] = [];
+  const original = process.stderr.write.bind(process.stderr);
+  process.stderr.write = ((chunk: unknown): boolean => {
+    lines.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    await body();
+  } finally {
+    process.stderr.write = original;
+  }
+  return lines;
+}
+
+/**
+ * 特定のストア操作だけを失敗させる。
+ *
+ * 片付けの途中（ストアを閉じた後）に書き込みが落ちる形を、実際に閉じずに
+ * 再現するためのもの。**読みは通す** — 読みまで落とすと、起動そのものが
+ * 失敗して「書けなかったときどうなるか」を見られない。
+ */
+export function failingJournalAppend(stores: Stores, reason: string): Stores {
+  return {
+    ...stores,
+    journal: {
+      ...stores.journal,
+      append: () => Promise.reject(new Error(reason)),
+    },
+  };
+}
+
+/** ジョブ台帳の書き込みだけを失敗させる（読みは通す）。 */
+export function failingJobWrite(stores: Stores, reason: string): Stores {
+  return {
+    ...stores,
+    jobs: {
+      ...stores.jobs,
+      putJob: () => Promise.reject(new Error(reason)),
+    },
+  };
+}

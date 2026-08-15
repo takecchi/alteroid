@@ -21,6 +21,7 @@ import {
   createScheduler,
   dailyReportEvent,
   missingDailyReportDates,
+  reasonOf,
   resolveCloneModel,
   WITHHELD_ENV_KEYS,
   type RunnerClient,
@@ -575,12 +576,24 @@ export async function main(): Promise<void> {
   // 締め時刻に自分が動いていなければ、その日の日報は誰も作らない。「日報は毎日
   // 生成される」は要件なので、動いていなかった日の分を起動時に拾い直す。
   if (schedule.dailyReportAt !== null) {
+    // 日誌を読めないだけで起動は止めない。**ただし黙って飛ばさない** — 黙って
+    // `[]` を返すと「取りこぼしは無かった」と見分けが付かず、日報の欠落だけが
+    // 後に残る（`scheduler.refresh` と同じ扱い）。
+    //
+    // 理由は `reasonOf` を通す。**ここは日誌を読んだ失敗である**ので、素の
+    // `String(error)` を残すと、本文入りの例外を投げるストア実装が現れた日に
+    // ここだけが無防備なまま漏らす（そして誰も気づかない）。
     const missed = await missingDailyReportDates({
       journal: stores.journal,
       at: schedule.dailyReportAt,
       now: new Date(),
       lookbackDays: schedule.reportLookbackDays,
-    }).catch(() => []);
+    }).catch((error: unknown) => {
+      process.stderr.write(
+        `alteroidd: 取りこぼした日報を調べられませんでした（この起動では拾い直しません）: ${reasonOf(error)}\n`,
+      );
+      return [];
+    });
     for (const date of missed) clone.post(dailyReportEvent(date));
     if (missed.length > 0) {
       process.stdout.write(`alteroidd: 取りこぼした日報を作ります: ${missed.join(', ')}\n`);

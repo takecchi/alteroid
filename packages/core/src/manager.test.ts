@@ -30,7 +30,12 @@ import {
 } from './runner-protocol.js';
 import type { InboxEvent } from './schema.js';
 import type { Stores } from './store.js';
-import { createMemoryStores } from './testing.js';
+import {
+  captureStderr,
+  createMemoryStores,
+  failingJobWrite,
+  failingJournalAppend,
+} from './testing.js';
 import type { UsageTotals } from './usage.js';
 
 /**
@@ -2048,5 +2053,33 @@ describe('止めた結果を確かめる', () => {
     expect(result.detail).toContain('mgr-nope');
 
     await s.pool.stop();
+  });
+
+  /**
+   * **書けなくても委譲は止めない。だが跡は残る。**
+   *
+   * ジョブ台帳のほうが効く。「後から `manager_report` で読めた ⟹ 経路が
+   * 通っていた」は成功した場合の話であって、失敗は台帳にも日誌にも跡を
+   * 残さない（＝台帳を判別器に使えない）。
+   *
+   * 跡に本文が乗らないことも一緒に固定する（#52 と同じ形を作らない）。
+   */
+  it('日誌とジョブ台帳が書けなくても委譲は続き、落としたことが stderr に残る（本文は出さない）', async () => {
+    const stores = failingJobWrite(
+      failingJournalAppend(createMemoryStores(), 'storage is closed'),
+      'storage is closed',
+    );
+    const s = setup(undefined, { stores });
+
+    const lines = await captureStderr(async () => {
+      await s.pool.start({ request: '鍵は ghp_000000000000000000000000000000000000 だ' });
+      await s.pool.stop();
+    });
+
+    const text = lines.join('');
+    expect(text).toContain('日誌を記録できませんでした');
+    expect(text).toContain('ジョブ台帳を記録できませんでした');
+    expect(text).toContain('storage is closed');
+    expect(text).not.toContain('ghp_');
   });
 });

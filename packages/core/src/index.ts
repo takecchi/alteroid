@@ -299,5 +299,20 @@ export {
   type CloneOptions,
 } from './clone.js';
 
+/**
+ * 記録を落としたときに stderr へ残す跡。
+ *
+ * **本文を出さないための関門である。** 記録の失敗をログへ出す場所は、層を問わず
+ * ここを通すこと（素の `String(error)` を1か所でも残すと、そこだけ将来のストア
+ * 実装に無防備なまま置き去りになる）。
+ */
+export { journalEntryShape, noteDroppedRecord, reasonOf } from './dropped-record.js';
+
 /** テスト用ユーティリティ（本番の配線には出てこない）。 */
-export { createMemoryStores, humanMessage } from './testing.js';
+export {
+  captureStderr,
+  createMemoryStores,
+  failingJobWrite,
+  failingJournalAppend,
+  humanMessage,
+} from './testing.js';

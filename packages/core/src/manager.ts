@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { journalEntryShape, noteDroppedRecord } from './dropped-record.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap, type RecentMap } from './recent.js';
 import { isRetryableRunnerError } from './runner-protocol.js';
@@ -1302,8 +1303,17 @@ class Pool implements ManagerPool {
         if (store === undefined) return;
         try {
           await store.append(event.key, event.entries as never);
-        } catch {
-          // 生ログを預かれなくてもマネージャーは止めない
+        } catch (error) {
+          // 生ログを預かれなくてもマネージャーは止めない。ただし黙って消さない —
+          // 器を作り直した後に生ログへ降りられないのは可観測性の最下段が抜ける
+          // ことで、預かり損ねたことすら残らないと、後から「無い」のか
+          // 「預かれなかった」のかが分からない。
+          noteDroppedRecord(
+            '生ログのミラー',
+            `managerId=${event.managerId} projectKey=${event.key.projectKey} ` +
+              `sessionId=${event.key.sessionId} entries=${event.entries.length}`,
+            error,
+          );
         }
         return;
       }
@@ -1313,8 +1323,15 @@ class Pool implements ManagerPool {
           const id = await this.#stores.archive.archive(event.managerId, event.body);
           record.job.archiveIds = [...(record.job.archiveIds ?? []), id];
           await this.#persist(record);
-        } catch {
-          // 退避できなくてもマネージャーを止めない
+        } catch (error) {
+          // 退避できなくてもマネージャーを止めない。ただし黙って消さない —
+          // 退避できなかったトランスクリプトは器と一緒に消えるので、
+          // 跡が無いと「そもそも退避しなかった」と区別が付かない。
+          noteDroppedRecord(
+            'トランスクリプトの退避',
+            `managerId=${event.managerId} chars=${event.body.length}`,
+            error,
+          );
         }
         return;
       }
@@ -1510,16 +1527,23 @@ class Pool implements ManagerPool {
     record.job.updatedAt = new Date().toISOString();
     try {
       await this.#stores.jobs.putJob(record.job);
-    } catch {
-      // ジョブ台帳が書けなくてもマネージャーは走らせる
+    } catch (error) {
+      // ジョブ台帳が書けなくてもマネージャーは走らせる。
+      // **ただし黙って消さない。** ここが落ちると `status` と `lastReport` が
+      // 台帳に載らない。「後から `manager_report` で読めた ⟹ 経路が通っていた」は
+      // 成功した場合の話であって、**失敗は台帳にも日誌にも跡を残さない**。
+      noteDroppedRecord('ジョブ台帳', `job id=${record.job.id} status=${record.job.status}`, error);
     }
   }
 
   async #journal(entry: JournalEntryInput): Promise<void> {
     try {
       await this.#stores.journal.append(entry);
-    } catch {
-      // 記録できないこと自体は致命ではない
+    } catch (error) {
+      // 記録できないこと自体は致命ではない。委譲を止める方が高くつく。
+      // **ただし黙って消さない。** 跡がどこにも無いと「日誌に無い」が
+      // 「起きなかった」と読めてしまう（本文を出さない理由は `noteDroppedRecord`）。
+      noteDroppedRecord('日誌', journalEntryShape(entry), error);
     }
   }
 }

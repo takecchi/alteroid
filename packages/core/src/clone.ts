@@ -11,6 +11,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 
 import { buildActivityDigest } from './digest.js';
+import { journalEntryShape, noteDroppedRecord } from './dropped-record.js';
 import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { Inbox } from './inbox.js';
@@ -1115,8 +1116,12 @@ class Clone implements CloneHost {
   async #journal(entry: JournalEntryInput): Promise<void> {
     try {
       await this.#stores.journal.append(entry);
-    } catch {
+    } catch (error) {
       // 記録できないこと自体は致命ではない。文脈を失う方が高くつく。
+      // **ただし黙って消さない。** 跡がどこにも無いと「日誌に無い」が
+      // 「起きなかった」と読めてしまい、日誌を判別器に使った切り分けが
+      // 静かに嘘をつく（本文を出さない理由は `noteDroppedRecord`）。
+      noteDroppedRecord('日誌', journalEntryShape(entry), error);
     }
   }
 
