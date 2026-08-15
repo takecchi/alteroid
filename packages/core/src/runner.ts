@@ -405,6 +405,15 @@ class Host implements RunnerHost {
  */
 const RESOLVED_MEMORY_LIMIT = 512;
 
+/**
+ * 上へ降ろした拒否を覚えておく件数。**セッション1本ぶんの上限**である。
+ *
+ * 同じ拒否は2つの経路で届く（走行中の合図と `result` の記録）ので、`tool_use_id`
+ * で二度目を落とす。帳面はセッションと一緒に消えるので寿命は元から有限で、
+ * 件数の蓋は1本が異常に多く拒否されたときのため。達したら `note` で上へ言う。
+ */
+const DENIED_MEMORY_LIMIT = 512;
+
 /** 返事を待って止まっている1件（許可確認 or 質問）。 */
 interface PendingRequest {
   id: string;
@@ -476,6 +485,28 @@ class RunnerSession {
           `解決済みの確認の記憶が上限（${RESOLVED_MEMORY_LIMIT}件）に達したので、` +
           `古い ${ids.length} 件を忘れた: ${ids.join(', ')}。` +
           'この id の確認が SDK から再送されると、新しい確認としてもう一度回る。',
+      }),
+  });
+  /**
+   * 上へ降ろした拒否の `tool_use_id`。
+   *
+   * 同じ1件が**走行中の合図**（`system/permission_denied`）と**ターン終わりの
+   * 記録**（`result.permission_denials`）の両方に載る。しかも `result` が
+   * 累積かどうかは SDK の型に書かれていない（`modelUsage` には「累積」と明記が
+   * あるが、こちらには無い）ので、**どちらでも壊れないように id で落とす**。
+   */
+  readonly #denied = createRecentMap<true>({
+    limit: DENIED_MEMORY_LIMIT,
+    // **忘れたことを黙らない。** 忘れた id が `result` にもう一度載っていれば、
+    // 同じ拒否が新しい拒否として上がる（デーモン側の件数も二重に増える）。
+    onForget: (ids) =>
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text:
+          `上へ降ろした拒否の記憶が上限（${DENIED_MEMORY_LIMIT}件）に達したので、` +
+          `古い ${ids.length} 件を忘れた: ${ids.join(', ')}。` +
+          'この tool_use_id が result に残っていれば、同じ拒否がもう一度上がる。',
       }),
   });
   /** resume のために預かった生ログ（SDK の `SessionStore.load` が返す素材）。 */
@@ -914,6 +945,20 @@ class RunnerSession {
       return;
     }
 
+    // 確認へ上げずにその場で止められた1件（分類器・deny 規則）。
+    //
+    // **`permissionMode: 'auto'` ではここが唯一の生の合図である。** `canUseTool`
+    // は呼ばれないので、この合図を捨てるとマネージャーや作業者の手が止まったこと
+    // は誰にも見えない。SDK 曰くこれは best-effort（取りこぼしうる）で、
+    // authoritative なのは `result.permission_denials` — だから**両方**読む。
+    if (
+      message.type === 'system' &&
+      (message as { subtype?: unknown }).subtype === 'permission_denied'
+    ) {
+      this.#noteDenial(message, 'live');
+      return;
+    }
+
     // 上限の文言。**API エラーとしては来ない**（SDK のコメント）ので、
     // 通知・情報メッセージの本文を見るしかない。ここを見ないと「枠を使い切って
     // 課金枠に移った」＝止まる一歩前を捉えられない。
@@ -950,6 +995,11 @@ class RunnerSession {
     // 混ざって「言っていないことを言った」ことになる。
     const said = this.#said;
     this.#said = [];
+
+    // **成否で絞らない。** 拒否は成功したターンにも失敗したターンにも載る（型は
+    // `SDKResultSuccess` と `SDKResultError` の両方が持っている）。`usage` と違って
+    // ゼロ埋めで害が出る値ではないので、ここは落とさず全部見る。
+    for (const denial of permissionDenials(message)) this.#noteDenial(denial, 'result');
 
     // **`init` が来たことは「戻れた」ことではない。** 実機では、開きはしたが
     // その回が `error_during_execution` で何も返さずに終わる形も出ている。
@@ -1005,6 +1055,35 @@ class RunnerSession {
     const text = reportText(said, resultText(message));
     this.#status = this.#pending.length > 0 ? 'waiting_human' : 'done';
     this.#emit({ type: 'report', managerId: this.#id, text, status: this.#status });
+  }
+
+  /**
+   * 止められた1件を上へ降ろす（同じ id は一度だけ）。
+   *
+   * **`#progressed` は立てない。** 拒否は「やろうとしたが何も起きなかった」で
+   * あって、手が動いた印ではない。ここで立てると、resume が効かずに終わった回を
+   * 「もう作業した」と誤認して生ログからの作り直しを止めてしまう。
+   */
+  #noteDenial(source: unknown, via: 'live' | 'result'): void {
+    const denial = source as { tool_name?: unknown; tool_use_id?: unknown; tool_input?: unknown };
+    const tool = typeof denial.tool_name === 'string' ? denial.tool_name : '(不明な道具)';
+    const input = denial.tool_input;
+    // id が無ければ道具と入力から作る。**取りこぼすより重複を許す** — 決まった
+    // 形なので、生の合図と result の記録が同じ1件なら普通はここでも一致する。
+    const toolUseId =
+      typeof denial.tool_use_id === 'string' && denial.tool_use_id.length > 0
+        ? denial.tool_use_id
+        : `${tool}:${brief(input, 120)}`;
+    if (this.#denied.has(toolUseId)) return;
+    this.#denied.set(toolUseId, true);
+    this.#emit({
+      type: 'permission_denied',
+      managerId: this.#id,
+      toolUseId,
+      tool,
+      input,
+      via,
+    });
   }
 
   async #finish(status: JobStatus, reason: string): Promise<void> {
@@ -1327,6 +1406,18 @@ function modelUsageOf(message: SDKMessage): Record<string, UsageTotals> | undefi
     };
   }
   return models;
+}
+
+/**
+ * `result.permission_denials[]`（確認へ上げずに止められた道具）。無ければ空。
+ *
+ * SDK 曰くこちらが authoritative な記録である（走行中の合図は取りこぼしうる）。
+ * **累積かどうかは型に書かれていない** ので、二度上げないのは呼び出し側の
+ * `#denied` の仕事にしてある。
+ */
+function permissionDenials(message: SDKMessage): unknown[] {
+  const denials = (message as { permission_denials?: unknown }).permission_denials;
+  return Array.isArray(denials) ? denials.filter((entry) => entry !== null) : [];
 }
 
 /** `result.errors[]`（構造を持たない失敗の行）。無ければ空。 */

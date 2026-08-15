@@ -226,6 +226,36 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     input: z.unknown(),
   }),
   /**
+   * 道具の実行が**確認へ上がらずにその場で止められた**（分類器・deny 規則）。
+   *
+   * `permissionMode: 'auto'` の既定では、SDK が自分で拒否したものは `canUseTool`
+   * （＝クローンへの確認）を通らない。**確認の入り口を閉じた側で何が起きたかを
+   * 見る口がここである** — 無いと「静かになった」と「起きていない」が区別できず、
+   * マネージャーや作業者の手が止まったことにクローンは気づけない（実機で起きた:
+   * 作業者が編集を拒否され、報告してくれなければ誰も知らないままだった）。
+   *
+   * **事実だけを運ぶ。** 「繰り返されているから知らせるべきか」の判断はデーモン側
+   * （`manager.ts`）で、runner は1件ずつそのまま降ろす。
+   */
+  z.object({
+    type: z.literal('permission_denied'),
+    managerId: z.string(),
+    /**
+     * SDK の `tool_use_id`。**同じ拒否を二度上げないための鍵**である（生の合図と
+     * `result` の記録の両方に同じ拒否が載る）。SDK が付けてこなければ runner が
+     * ツール名と入力から作る。
+     */
+    toolUseId: z.string(),
+    tool: z.string(),
+    input: z.unknown(),
+    /**
+     * どちらの経路で気づいたか。`live` は走行中の合図
+     * （`system/permission_denied`）、`result` はターン終わりの記録
+     * （`result.permission_denials`。SDK 曰くこちらが authoritative）。
+     */
+    via: z.enum(['live', 'result']),
+  }),
+  /**
    * SDK が報告した消費量の**累積**（`result.modelUsage` の写し）。
    *
    * **累積のまま降ろす。差分は runner で作らない。** 理由が2つある。

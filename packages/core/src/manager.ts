@@ -182,10 +182,36 @@ interface ManagerRecord {
    * 件数の蓋（`ASKED_MEMORY_LIMIT`）は1本が異常に多くの確認を出したときの保険。
    */
   asked?: RecentMap<true>;
+  /**
+   * **道具ごとの、確認へ上がらず止められた件数。**
+   *
+   * 拒否は正常な運用でも起きるので、1件ずつ受信箱へ流すとクローンの判断が雑音で
+   * 鈍る。**日誌には全部残し、受信箱へは繰り返しの形になったときだけ**上げる
+   * （`shouldEscalateDenial`）。その「繰り返し」を数える状態がここである。
+   *
+   * 寿命と置き場所:
+   *
+   * - **プロセス内のこの像だけに載る**（`Job` には書かない＝ストアへ持ち越さない）
+   * - デーモンを作り直したら**消える**。数え直しから始まる — 拒否が続いていれば
+   *   すぐまた閾値に届くし、止まっていれば黙るのが正しい
+   * - 覚えるのは**道具の名前**で、件数の蓋は `DENIED_TOOL_LIMIT`。溢れたら
+   *   `onForget` が日誌へ残す（黙って数え直さない）
+   */
+  denied?: RecentMap<number>;
 }
 
 /** 1マネージャーぶんで覚えておく確認の件数。達したら**黙らずに日誌へ残す**。 */
 const ASKED_MEMORY_LIMIT = 512;
+
+/**
+ * 1マネージャーぶんで拒否を数える道具の種類。達したら**黙らずに日誌へ残す**。
+ *
+ * 道具の名前の種類なので、実際にはまず届かない（届いたら、それ自体が異常である）。
+ */
+const DENIED_TOOL_LIMIT = 64;
+
+/** 何件目の拒否からクローンへ上げるか。以後は3倍ごと（3, 9, 27, 81…）。 */
+const DENIED_ESCALATE_AT = 3;
 
 class Pool implements ManagerPool {
   readonly #stores: Stores;
@@ -1143,6 +1169,41 @@ class Pool implements ManagerPool {
         return;
       }
 
+      case 'permission_denied': {
+        // **日誌には全部残す。** 確認の入り口を閉じた（`permissionMode: 'auto'`）
+        // 以上、閉じた側で何が起きたかを後から辿れる場所が要る。ここが無いと
+        // 「静かになった」と「起きていない」が区別できない。
+        //
+        // **受信箱へは繰り返しのときだけ。** 拒否は正常な運用でも起きるので、
+        // 1件ずつ流すとクローンの判断が雑音で鈍る（同じ知らせで埋めない、は
+        // `usage_notice` と同じ考え方）。
+        const denied = this.#deniedOf(record);
+        const count = (denied.get(event.tool) ?? 0) + 1;
+        denied.set(event.tool, count);
+
+        await this.#journal({
+          type: 'exchange',
+          with: 'manager',
+          role: 'inbound',
+          text:
+            `[${event.managerId}] ${event.tool} の実行が確認へ上がらずに止められた` +
+            `（このマネージャーで ${count} 件目 / ${event.via === 'live' ? '走行中の合図' : 'result の記録'}）: ` +
+            brief(event.input),
+        });
+
+        if (!shouldEscalateDenial(count)) return;
+        this.#emit(
+          event.managerId,
+          'report',
+          `${event.tool} の実行が確認へ上がらずに止められた（このマネージャーで ${count} 件目）。` +
+            'モデル分類器か deny 規則がその場で拒否しているので、**この確認はクローンには回ってきていない**。' +
+            'マネージャーか作業者の手が止まっている可能性がある。' +
+            `直近の入力: ${brief(event.input)}\n` +
+            '全件は日誌に残っている（`journal_read` で辿れる）。',
+        );
+        return;
+      }
+
       case 'usage': {
         // 降りてくるのは累積という事実で、差分にして積むのはここ（runner は
         // 記憶ストアの鍵を持たないので書けない）。読む→畳む→書くはストアの
@@ -1342,6 +1403,34 @@ class Pool implements ManagerPool {
     return asked;
   }
 
+  /**
+   * 拒否を数える帳面。無ければここで作る。
+   *
+   * 上限に達したら**黙って忘れない** — 忘れた道具の件数は 0 から数え直しになり、
+   * 「もう何十回も止められている」という形が受信箱に出るまでの距離が伸びる。
+   */
+  #deniedOf(record: ManagerRecord): RecentMap<number> {
+    const existing = record.denied;
+    if (existing !== undefined) return existing;
+    const managerId = record.job.id;
+    const denied = createRecentMap<number>({
+      limit: DENIED_TOOL_LIMIT,
+      onForget: (tools) => {
+        void this.#journal({
+          type: 'exchange',
+          with: 'manager',
+          role: 'inbound',
+          text:
+            `[${managerId}] 拒否の件数を覚えている道具が上限（${DENIED_TOOL_LIMIT}種）に達したので、` +
+            `古い ${tools.length} 件を忘れた: ${tools.join(', ')}。` +
+            'この道具が次に止められたら 1 件目から数え直す（日誌には全件残っている）。',
+        });
+      },
+    });
+    record.denied = denied;
+    return denied;
+  }
+
   #choosePending(
     record: ManagerRecord,
     requestId: string | undefined,
@@ -1433,6 +1522,25 @@ class Pool implements ManagerPool {
       // 記録できないこと自体は致命ではない
     }
   }
+}
+
+/**
+ * この件数の拒否をクローンへ上げるか。
+ *
+ * `3, 9, 27, 81…`（3倍ごと）。**上げ続けない**のは、止められ続けている1本が
+ * 受信箱を埋めると、他の判断材料がそれで押し流されるからである。**黙りもしない** —
+ * 続いていれば次の桁で必ずもう一度出る。
+ *
+ * **束ねる単位は道具の名前**である（入力の中身では束ねない）。1文字違う `Edit` を
+ * 別物として数えると、実機で起きた形（同じファイルの編集が何度も拒否される）を
+ * 取り逃す。粗いぶん「別々の対象で1回ずつ拒否された3件」も束ねるが、**それも
+ * 知りたい形**なので意図してこうしてある。
+ */
+function shouldEscalateDenial(count: number): boolean {
+  if (count < DENIED_ESCALATE_AT) return false;
+  let step = DENIED_ESCALATE_AT;
+  while (step < count) step *= 3;
+  return step === count;
 }
 
 /**
