@@ -108,6 +108,7 @@
 - [ ] runner の登録・heartbeat・生存判定
 - [ ] 新規マネージャーの runner 配置（CPU・メモリ・稼働セッション等、**実行環境の資源**を材料にする。固定の `maxManagers` のような人工上限は置かない）
 - [ ] `manager_id → runner_id` に基づく sticky routing
+- [ ] 二重実行を止める fencing（貸し出し期限 lease）。**引き取りと移送の可否を判定できるのはこれが揃ってからである** — 「落ちた」は観測の欠落であって停止の証明ではないので、もう動いていないことを片側だけで言える材料が要る
 - [ ] runner 障害時の session 再開と workspace 復旧
 - [ ] workspace locator の運用選択（runner-volume / 共有 FS / Git 再構築）
 - [ ] Railway の複数 Service、AWS ECS/Fargate 等で runner 数を増減できるデプロイ定義
