@@ -12,7 +12,7 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import { createScheduler } from './schedule.js';
 import type { ChatStreamEvent } from './schema.js';
 import type { Stores } from './store.js';
-import { createMemoryStores, humanMessage } from './testing.js';
+import { captureStderr, createMemoryStores, failingJournalAppend, humanMessage } from './testing.js';
 
 /**
  * SDK を実際に呼ばずにクローンループを検証する。
@@ -1351,5 +1351,39 @@ describe('クローン — 考えている合図（thinking）', () => {
     expect(thinkingCount).toBe(1);
 
     await s.clone.stop();
+  });
+
+  /**
+   * **日誌が書けなくても会話は続く。だが跡は残る。**
+   *
+   * 跡が無いと、日誌は判別器として静かに嘘をつく — 「日誌に無い」が
+   * 「起きなかった」と読めてしまう。しかも一番書けなくなりやすいのは
+   * 片付けの途中（ストアを閉じた後）＝一番調べたい時間帯である。
+   *
+   * 同時に、**跡に本文が乗らないこと**も固定する。ここを緩めると、日誌にすら
+   * 入らなかった秘密がホスティング先のログに出る（#52 と同じ形）。
+   */
+  it('日誌が書けなくても会話は続き、落としたことが stderr に残る（本文は出さない）', async () => {
+    const stores = failingJournalAppend(createMemoryStores(), 'storage is closed');
+    const s = setup(() => 'こんにちは', stores);
+
+    const lines = await captureStderr(async () => {
+      s.clone.post(humanMessage('鍵は ghp_000000000000000000000000000000000000 だ'));
+      await waitForDone(s.events);
+      await s.clone.stop();
+    });
+
+    // 記録できないことでセッションを殺さない（この判断は変えていない）
+    const shown = s.events
+      .filter((event) => event.type === 'text')
+      .map((event) => event.text)
+      .join('');
+    expect(shown).toBe('こんにちは');
+
+    const dropped = lines.filter((line) => line.includes('日誌を記録できませんでした')).join('');
+    expect(dropped).not.toBe('');
+    expect(dropped).toContain('storage is closed');
+    expect(dropped).toContain('exchange');
+    expect(dropped).not.toContain('ghp_');
   });
 });
