@@ -45,10 +45,9 @@ let viewportWidth = DEFAULT_VIEWPORT_WIDTH;
  * 誰も event の中身を読んでいないので通ってしまい、読む相手が現れた日に
  * 「試験の足場だけが嘘をついている」状態になる。
  */
-const mediaChangeListeners = new Set<{
-  query: string;
-  listener: (event: MediaQueryListEvent) => void;
-}>();
+type MediaChangeListener = (event: MediaQueryListEvent) => void;
+
+const mediaChangeListeners = new Set<{ query: string; listener: MediaChangeListener }>();
 
 function evaluateMediaQuery(query: string): boolean {
   const max = /^\(max-width:\s*(\d+)px\)$/.exec(query);
@@ -65,11 +64,11 @@ function createMediaQueryList(query: string): MediaQueryList {
     },
     media: query,
     onchange: null,
-    addEventListener: (type, listener) => {
+    addEventListener: (type: string, listener: MediaChangeListener) => {
       if (type !== 'change') return;
-      mediaChangeListeners.add({ query, listener: listener as (e: MediaQueryListEvent) => void });
+      mediaChangeListeners.add({ query, listener });
     },
-    removeEventListener: (type, listener) => {
+    removeEventListener: (type: string, listener: MediaChangeListener) => {
       if (type !== 'change') return;
       for (const entry of mediaChangeListeners) {
         if (entry.query === query && entry.listener === listener)

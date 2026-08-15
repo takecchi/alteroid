@@ -1,10 +1,12 @@
-import { Plus, Send, Square } from 'lucide-react';
+import { PanelLeft, Plus, Send, Square } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 
+import { Drawer } from '~/components/drawer';
 import { Badge, Button, Card, Empty, ErrorNote, Spinner, Textarea } from '~/components/ui';
 import { useEndConversation, useRecordOwnMessage } from '~/hooks/mutations';
 import { useConversation, useConversations } from '~/hooks/queries';
+import { useIsMobile } from '~/hooks/use-is-mobile';
 import { useApi } from '~/lib/api';
 import { cn } from '~/lib/cn';
 import { formatRelative } from '~/lib/format';
@@ -27,28 +29,75 @@ interface Line {
 export default function Chat({ loaderData }: Route.ComponentProps) {
   const { conversationId } = loaderData;
 
+  /*
+   * 狭い画面では会話一覧も畳む。**shell の nav と2枚重なると本文が残らない** —
+   * 幅 375px で nav 208px ＋ 会話一覧 256px なので、そのままでは足りない。
+   */
+  const isMobile = useIsMobile();
+  const [listOpen, setListOpen] = useState(false);
+  const closeList = () => setListOpen(false);
+
   return (
-    <div className="flex h-dvh">
-      <ConversationList activeId={conversationId} />
+    /*
+     * **`h-dvh` ではなく `h-full`。** 高さの出どころは shell（`AuthedShell`）の
+     * `h-dvh` 1つにまとめてある。ここでも viewport を取ると、狭い画面で上端に
+     * 出す帯のぶんだけ画面からはみ出す（帯は shell が持っていて、この部品からは
+     * 見えない）。
+     */
+    <div className="flex h-full">
+      {isMobile ? (
+        <Drawer open={listOpen} onClose={closeList} label="会話一覧">
+          <ConversationList activeId={conversationId} onNavigate={closeList} />
+        </Drawer>
+      ) : (
+        <ConversationList activeId={conversationId} />
+      )}
       {/*
         **`key` を付けてはいけない。** 新しい会話は受信の途中（`open`）で id が決まり、
         URL をそこへ揃える。`key={conversationId}` にすると、その同期で作り直しが起きて
         受信中のストリームが中断され、続く text / done が画面に出ない。
         会話の切り替えは ChatPane が自分で見分ける。
       */}
-      <ChatPane routeId={conversationId} />
+      <ChatPane
+        routeId={conversationId}
+        onOpenList={isMobile ? () => setListOpen(true) : undefined}
+      />
     </div>
   );
 }
 
-function ConversationList({ activeId }: { activeId: string | undefined }) {
+/**
+ * 会話の一覧。
+ *
+ * **広い画面では脇に、狭い画面ではドロワーの中に、同じものを置く**（`shell.tsx`
+ * の `Nav` と同じ形）。別々に書くと、一覧に何か足したときに片方だけ増える。
+ */
+function ConversationList({
+  activeId,
+  onNavigate,
+}: {
+  activeId: string | undefined;
+  /**
+   * 行き先を押したとき。ドロワーの中では閉じる。
+   *
+   * **`useEffect` で URL の変化を見る形にしていない。** いま開いている会話を
+   * もう一度押すと URL が変わらず、覆ったまま残る。
+   */
+  onNavigate?: (() => void) | undefined;
+}) {
   const { data, error, isLoading } = useConversations(30);
 
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-surface">
+    <aside
+      className={cn(
+        'flex flex-col bg-surface',
+        // ドロワーの中では枠と幅は Drawer 側が持っている。
+        onNavigate === undefined ? 'w-64 shrink-0 border-r border-border' : 'min-h-0 flex-1',
+      )}
+    >
       <div className="flex items-center justify-between border-b border-border px-3 py-3">
         <span className="text-sm font-semibold">会話</span>
-        <Link to="/chat">
+        <Link to="/chat" onClick={onNavigate}>
           <Button size="sm" variant="ghost" aria-label="新しい会話">
             <Plus className="size-4" aria-hidden />
           </Button>
@@ -67,6 +116,7 @@ function ConversationList({ activeId }: { activeId: string | undefined }) {
               <li key={conversation.conversationId}>
                 <Link
                   to={`/chat/${conversation.conversationId}`}
+                  onClick={onNavigate}
                   className={cn(
                     'block border-b border-border px-3 py-2 hover:bg-surface-2',
                     conversation.conversationId === activeId && 'bg-surface-2',
@@ -97,7 +147,14 @@ function ConversationList({ activeId }: { activeId: string | undefined }) {
 }
 
 /** 会話1つ分の画面。**作り直しに弱いので**、回帰テストから直接組み立てられるようにしてある。 */
-export function ChatPane({ routeId }: { routeId: string | undefined }) {
+export function ChatPane({
+  routeId,
+  onOpenList,
+}: {
+  routeId: string | undefined;
+  /** 会話一覧を開く口。狭い画面でドロワーに畳んだときだけ渡ってくる。 */
+  onOpenList?: (() => void) | undefined;
+}) {
   const api = useApi();
   const navigate = useNavigate();
   const endConversation = useEndConversation();
@@ -332,8 +389,18 @@ export function ChatPane({ routeId }: { routeId: string | undefined }) {
 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
-      <header className="flex shrink-0 items-center justify-between gap-4 border-b border-border px-6 py-4">
-        <div className="min-w-0">
+      <header className="flex shrink-0 items-center justify-between gap-4 border-b border-border px-4 py-4 md:px-6">
+        {onOpenList !== undefined && (
+          <button
+            type="button"
+            onClick={onOpenList}
+            aria-label="会話一覧を開く"
+            className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-surface-2 hover:text-fg"
+          >
+            <PanelLeft className="size-5" aria-hidden />
+          </button>
+        )}
+        <div className="min-w-0 flex-1">
           <h1 className="text-base font-semibold">クローンと話す</h1>
           <p className="mt-0.5 truncate font-mono text-[11px] text-muted">
             {shownId ?? '新しい会話'}
@@ -342,6 +409,7 @@ export function ChatPane({ routeId }: { routeId: string | undefined }) {
         {shownId !== undefined && (
           <Button
             size="sm"
+            className="shrink-0"
             onClick={() => {
               void endConversation(shownId).then(() => navigate('/chat'));
             }}
@@ -352,7 +420,7 @@ export function ChatPane({ routeId }: { routeId: string | undefined }) {
         )}
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-6">
         {history.isLoading && shownId !== undefined ? (
           <Spinner label="履歴を読み込み中" />
         ) : all.length === 0 ? (
@@ -387,22 +455,24 @@ export function ChatPane({ routeId }: { routeId: string | undefined }) {
         <div ref={bottomRef} />
       </div>
 
-      <div className="shrink-0 border-t border-border px-6 py-3">
+      <div className="shrink-0 border-t border-border px-4 pt-3 pb-[calc(0.75rem+var(--safe-bottom))] md:px-6">
         <ErrorNote error={failure} className="mb-2" />
         <div className="flex items-end gap-2">
-          <Textarea
-            rows={2}
-            value={draft}
-            disabled={sending}
-            placeholder="クローンに話しかける（⌘/Ctrl + Enter で送信）"
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-                event.preventDefault();
-                void send(draft);
-              }
-            }}
-          />
+          <div className="min-w-0 flex-1">
+            <Textarea
+              rows={2}
+              value={draft}
+              disabled={sending}
+              placeholder="クローンに話しかける（⌘/Ctrl + Enter で送信）"
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+                  event.preventDefault();
+                  void send(draft);
+                }
+              }}
+            />
+          </div>
           {sending ? (
             <Button
               variant="default"
