@@ -6,17 +6,21 @@ import {
   CalendarClock,
   DollarSign,
   LayoutDashboard,
+  Menu,
   MessageSquare,
   Settings,
   Users,
 } from 'lucide-react';
+import { useState } from 'react';
 import { Navigate, NavLink, Outlet } from 'react-router';
 
 import { ConnectionCard } from '~/components/connection';
+import { Drawer } from '~/components/drawer';
 import { Badge, ErrorNote, Spinner } from '~/components/ui';
 import { JournalFeedProvider } from '~/hooks/journal-feed';
 import { useApprovals, useHealth } from '~/hooks/queries';
 import { useAuth } from '~/hooks/use-auth';
+import { useIsMobile } from '~/hooks/use-is-mobile';
 import { useJournalLive, type LiveStatus } from '~/hooks/use-journal-live';
 import { cn } from '~/lib/cn';
 
@@ -92,48 +96,160 @@ function AuthedShell() {
   const { data: approvals } = useApprovals(true);
   const pending = approvals?.approvals.length ?? 0;
 
+  /*
+   * 狭い画面では脇の面を畳む。**畳まないと本文が読めない** — 会話の画面は
+   * これに加えてもう1枚（会話一覧）を脇に置くので、幅 375px では本文の取り分が
+   * 100px あまりしか残らない。
+   */
+  const isMobile = useIsMobile();
+  const [navOpen, setNavOpen] = useState(false);
+  const closeNav = () => setNavOpen(false);
+
+  const nav = (
+    <Nav status={live.status} pending={pending} onNavigate={isMobile ? closeNav : undefined} />
+  );
+
   return (
     // 下の画面へ `live`（`recent` を含む）を配る。SSE の購読はここ1本のまま
     // （`useJournalLive` を呼んでいるのはこの関数だけ）。
     <JournalFeedProvider value={live}>
-      <div className="flex min-h-dvh">
-        <nav className="flex w-52 shrink-0 flex-col border-r border-border bg-surface">
-          <div className="px-4 py-4">
-            <p className="font-mono text-sm font-semibold tracking-tight">alteroid</p>
-            <LiveIndicator status={live.status} />
-          </div>
+      {/*
+        **`min-h-dvh` ではなく `h-dvh`。** 下の画面（`components/page.tsx` と
+        会話の画面）は自分の中で縦に分けて内側だけを流す作りなので、外側の高さが
+        決まっていないと「画面の高さ」を持てない。合わせて `main` を潰れる側
+        （`min-h-0`）にしておく。
+      */}
+      <div className={cn('flex h-dvh', isMobile ? 'flex-col' : 'flex-row')}>
+        {isMobile ? (
+          <>
+            <MobileTopBar
+              status={live.status}
+              pending={pending}
+              onOpenNav={() => setNavOpen(true)}
+            />
+            <Drawer open={navOpen} onClose={closeNav} label="メニュー">
+              {nav}
+            </Drawer>
+          </>
+        ) : (
+          nav
+        )}
 
-          <ul className="flex-1 px-2">
-            {NAV.map(({ to, label, icon: Icon, end }) => (
-              <li key={to}>
-                <NavLink
-                  to={to}
-                  end={end}
-                  className={({ isActive }) =>
-                    cn(
-                      'mb-0.5 flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors',
-                      isActive
-                        ? 'bg-surface-2 text-fg'
-                        : 'text-muted hover:bg-surface-2 hover:text-fg',
-                    )
-                  }
-                >
-                  <Icon className="size-4 shrink-0" aria-hidden />
-                  <span className="flex-1 truncate">{label}</span>
-                  {to === '/approvals' && pending > 0 && <Badge tone="warn">{pending}</Badge>}
-                </NavLink>
-              </li>
-            ))}
-          </ul>
-
-          <HealthFooter />
-        </nav>
-
-        <main className="min-w-0 flex-1">
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col">
           <Outlet />
         </main>
       </div>
     </JournalFeedProvider>
+  );
+}
+
+/**
+ * 行き先の一覧。
+ *
+ * **広い画面では脇に、狭い画面ではドロワーの中に、同じものを置く。** 別々に
+ * 書くと、行き先を1つ足したときに片方だけ増える。
+ */
+function Nav({
+  status,
+  pending,
+  onNavigate,
+}: {
+  status: LiveStatus;
+  pending: number;
+  /**
+   * 行き先を押したとき。ドロワーの中では閉じる。
+   *
+   * **`useLocation` の変化で閉じる形にしていない。** いま居る画面をもう一度
+   * 押したときに URL が変わらず、覆ったまま残る。
+   */
+  onNavigate?: (() => void) | undefined;
+}) {
+  return (
+    <nav
+      className={cn(
+        'flex flex-col bg-surface',
+        // ドロワーの中では枠と幅は Drawer 側が持っている。
+        onNavigate === undefined ? 'w-52 shrink-0 border-r border-border' : 'min-h-0 flex-1',
+      )}
+    >
+      <div className="px-4 py-4">
+        <p className="font-mono text-sm font-semibold tracking-tight">alteroid</p>
+        <LiveIndicator status={status} />
+      </div>
+
+      <ul className="min-h-0 flex-1 overflow-y-auto px-2">
+        {NAV.map(({ to, label, icon: Icon, end }) => (
+          <li key={to}>
+            <NavLink
+              to={to}
+              end={end}
+              onClick={onNavigate}
+              className={({ isActive }) =>
+                cn(
+                  'mb-0.5 flex items-center gap-2 rounded-md px-2 text-sm transition-colors',
+                  // 指で押す先は 44px 以上（WCAG 2.5.5 / Apple HIG の下限）。
+                  onNavigate === undefined ? 'py-1.5' : 'min-h-11',
+                  isActive ? 'bg-surface-2 text-fg' : 'text-muted hover:bg-surface-2 hover:text-fg',
+                )
+              }
+            >
+              <Icon className="size-4 shrink-0" aria-hidden />
+              <span className="flex-1 truncate">{label}</span>
+              {to === '/approvals' && pending > 0 && <Badge tone="warn">{pending}</Badge>}
+            </NavLink>
+          </li>
+        ))}
+      </ul>
+
+      <HealthFooter />
+    </nav>
+  );
+}
+
+/**
+ * 狭い画面の上端。
+ *
+ * **承認待ちの件数をここにも出す。** 脇の面を畳んだ結果、人間を待っている仕事が
+ * どこにも見えなくなるのが一番まずい（自律して動き続ける前提の系なので、待ちが
+ * 溜まっていることに気づけないと止まる）。
+ */
+function MobileTopBar({
+  status,
+  pending,
+  onOpenNav,
+}: {
+  status: LiveStatus;
+  pending: number;
+  onOpenNav: () => void;
+}) {
+  return (
+    <header className="shrink-0 border-b border-border bg-surface pt-[var(--safe-top)]">
+      <div className="flex items-center gap-1 px-2 py-1.5">
+        <button
+          type="button"
+          onClick={onOpenNav}
+          aria-label="メニューを開く"
+          className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-surface-2 hover:text-fg"
+        >
+          <Menu className="size-5" aria-hidden />
+        </button>
+
+        <div className="min-w-0 flex-1">
+          <p className="font-mono text-sm font-semibold tracking-tight">alteroid</p>
+          <LiveIndicator status={status} />
+        </div>
+
+        {pending > 0 && (
+          <NavLink
+            to="/approvals"
+            className="flex min-h-11 shrink-0 items-center px-2"
+            aria-label={`承認待ち ${pending} 件`}
+          >
+            <Badge tone="warn">承認待ち {pending}</Badge>
+          </NavLink>
+        )}
+      </div>
+    </header>
   );
 }
 

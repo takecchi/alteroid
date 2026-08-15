@@ -26,7 +26,12 @@ export function Layout({ children }: { children: ReactNode }) {
     <html lang="ja">
       <head>
         <meta charSet="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        {/*
+          `viewport-fit=cover` は `env(safe-area-inset-*)`（app.css の `--safe-*`）と
+          対である。これが無いと inset は常に 0 のままで、切り欠きを避ける指定が
+          まるごと効かない。
+        */}
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
         <Meta />
         <Links />
       </head>
