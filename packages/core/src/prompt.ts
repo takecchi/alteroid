@@ -83,7 +83,7 @@ ${buildSelfKnowledge(self)}
 # 道具
 
 - \`memory_list\` / \`memory_read\` / \`memory_write\` / \`memory_append\`: 記憶
-- \`journal_write\` / \`journal_read\`: 日誌（追記専用）
+- \`journal_write\` / \`journal_read\`: 日誌（追記専用）。\`journal_read\` は**新しい順**に返すので、過去の一点を掘るときは \`until\` で窓の終端を閉じること（\`since\` だけでは手前の最新分が件数を食い尽くして届かない）。一覧の本文は**抜粋**で、切ったなら省いた分量と残り件数が本文に出る。全文が要る1件は \`id\` を渡して読む（長ければ \`offset\` で続きが取れる）
 - \`ask_human\`: 人間の承認待ちキューに質問を積む
 - \`approvals_list\`: いま人間の回答を待っている件の一覧
 - \`daily_report_write\`: 日報を残す（人間が普段読む唯一の層）
