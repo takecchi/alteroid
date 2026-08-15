@@ -46,7 +46,13 @@ describe('落とした記録の跡', () => {
     const entries: JournalEntryInput[] = [
       { type: 'exchange', with: 'human', role: 'inbound', text: secret },
       { type: 'decision', decision: secret, grounds: secret },
-      { type: 'escalation', question: secret, approvalId: 'ap-1', managerId: 'mgr-1' },
+      {
+        type: 'escalation',
+        question: secret,
+        approvalId: 'ap-1',
+        managerId: 'mgr-1',
+        answer: secret,
+      },
       { type: 'tool_use', actor: 'manager:mgr-1', tool: 'Bash', input: { command: secret } },
       { type: 'memory_update', slug: 'values', cause: 'clone', summary: secret },
       { type: 'daily_report', date: '2026-08-16', body: secret },
@@ -59,6 +65,53 @@ describe('落とした記録の跡', () => {
       // 型は必ず分かる（何を落としたのか辿れないと跡の意味が無い）
       expect(shape, entry.type).toContain(entry.type);
     }
+  });
+
+  /**
+   * **`external_event.source` は「名前」に見えて、外から来る値である。**
+   *
+   * `POST /events/:source` の URL パスセグメントがそのまま入る（`app.ts` の
+   * `source: z.string().min(1)` — 列挙でも長さ上限でもない）。`summary` では
+   * ないから安全、と読むと #52 と同じ形が縮小して残る。
+   */
+  it('external_event の source は外から来る値なので、長さだけにする', () => {
+    const shape = journalEntryShape({
+      type: 'external_event',
+      source: secret,
+      summary: 'なんらかの通知',
+    });
+
+    expect(shape).not.toContain(secret);
+    // 一部でも出さない（先頭64字を切って載せる、も駄目）
+    expect(shape).not.toContain(secret.slice(0, 8));
+    expect(shape).toContain('external_event');
+    expect(shape).toContain(`source.chars=${secret.length}`);
+  });
+
+  /**
+   * 型によって「長さを出す自由文」と「出さない自由文」が混じると、跡の読み方が
+   * 型ごとに変わる。**空だったのか書けなかったのかを、どの型でも同じように
+   * 判別できること。**
+   */
+  it('自由文が2つ以上ある型は、どれの長さかが分かる形で全部出す', () => {
+    expect(journalEntryShape({ type: 'decision', decision: 'あ', grounds: 'いう' })).toBe(
+      'decision decision.chars=1 grounds.chars=2',
+    );
+    expect(
+      journalEntryShape({
+        type: 'escalation',
+        approvalId: 'ap-1',
+        question: 'あ',
+        answer: 'いう',
+      }),
+    ).toBe('escalation approvalId=ap-1 question.chars=1 answer.chars=2');
+    // 未回答なら answer の欄自体が出ない（0 と「まだ無い」を混ぜない）
+    expect(
+      journalEntryShape({ type: 'escalation', approvalId: 'ap-1', question: 'あ' }),
+    ).not.toContain('answer');
+    expect(
+      journalEntryShape({ type: 'memory_update', slug: 'values', cause: 'clone', summary: 'あ' }),
+    ).toContain('chars=1');
   });
 
   it('理由は1行に切る（ドライバが本文を添えて返してくることがある）', async () => {

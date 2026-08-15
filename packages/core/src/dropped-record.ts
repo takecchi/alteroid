@@ -35,9 +35,16 @@ export function noteDroppedRecord(what: string, detail: string, error: unknown):
  * 日誌エントリから、本文を含まない見分けだけを取り出す。
  *
  * 出すのは**書き手（＝この実装）が選んだ列挙値と id** だけである。自由文
- * （`text` / `decision` / `grounds` / `question` / `summary` / `body`）は入れない —
- * 秘密が載りうるのはそこだからである。長さだけは出す（「空だった」と
- * 「書けなかった」の区別が付く）。
+ * （`text` / `decision` / `grounds` / `question` / `answer` / `summary` / `body` /
+ * `input`）は入れない — 秘密が載りうるのはそこだからである。**長さはどの自由文に
+ * ついても出す**（「空だった」と「書けなかった」の区別が付く。型によって出したり
+ * 出さなかったりすると、跡の読み方が型ごとに変わる）。
+ *
+ * **判定は「自由文かどうか」ではなく「値を誰が決めるか」で行うこと。**
+ * `tool_use` の `actor` / `tool` は SDK と runner が確定する値なので載せてよい。
+ * 対して `external_event` の `source` は、**`POST /events/:source` の URL
+ * パスセグメント**である＝外部の送り元が決める値なので、名前に見えても載せない。
+ * ここを「本文（`summary`）ではないから」で通すと、#52 と同じ形が縮小して残る。
  *
  * **本文から id 相当を拾い出さないこと。** `[mgr-xxx]` のような目印は本文の先頭に
  * 入っているが、そこを切り出す規則を1つ認めると「本文は出さない」が
@@ -48,20 +55,23 @@ export function journalEntryShape(entry: JournalEntryInput): string {
     case 'exchange':
       return `exchange with=${tag(entry.with)} role=${tag(entry.role)} ${size(entry.text)}`;
     case 'decision':
-      return `decision ${size(entry.decision)}`;
+      return `decision ${size(entry.decision, 'decision')} ${size(entry.grounds, 'grounds')}`;
     case 'escalation':
       return (
         `escalation approvalId=${tag(entry.approvalId)}` +
-        (entry.managerId === undefined ? '' : ` managerId=${tag(entry.managerId)}`)
+        (entry.managerId === undefined ? '' : ` managerId=${tag(entry.managerId)}`) +
+        ` ${size(entry.question, 'question')}` +
+        (entry.answer === undefined ? '' : ` ${size(entry.answer, 'answer')}`)
       );
     case 'tool_use':
       return `tool_use actor=${tag(entry.actor)} tool=${tag(entry.tool)}`;
     case 'memory_update':
-      return `memory_update slug=${tag(entry.slug)} cause=${tag(entry.cause)}`;
+      return `memory_update slug=${tag(entry.slug)} cause=${tag(entry.cause)} ${size(entry.summary)}`;
     case 'daily_report':
       return `daily_report date=${tag(entry.date)} ${size(entry.body)}`;
+    // `source` は外から来る値なので、名前であっても長さだけにする（上の doc 参照）。
     case 'external_event':
-      return `external_event source=${tag(entry.source)} ${size(entry.summary)}`;
+      return `external_event ${size(entry.source, 'source')} ${size(entry.summary)}`;
   }
 }
 
@@ -78,8 +88,12 @@ const TAG_LIMIT = 64;
  * ストアを一から疑うことしかない。ただしドライバの例外は失敗したクエリの
  * パラメータを添えてくることがある（＝本文が裏口から戻ってくる）ので、
  * **1行目だけ・長さも切る**。
+ *
+ * **記録の失敗をログへ出すところは、すべてここを通すこと。** いま漏れる例外を
+ * 投げるストアが無くても、素の `String(error)` を1か所でも残すと、その1か所だけ
+ * 将来のストア実装に無防備なまま置き去りになる（そして誰も気づかない）。
  */
-function reasonOf(error: unknown): string {
+export function reasonOf(error: unknown): string {
   const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
   return clip(text.split('\n', 1)[0] ?? '', REASON_LIMIT);
 }
@@ -89,8 +103,14 @@ function tag(value: string): string {
   return clip(value.replaceAll(/\s+/gu, ' '), TAG_LIMIT);
 }
 
-function size(text: string): string {
-  return `chars=${text.length}`;
+/**
+ * 自由文の長さだけを出す。
+ *
+ * 名前を付けられるようにしてあるのは、1つの型に自由文が2つ以上あるときに
+ * `chars=0 chars=0` が何と何なのか分からなくなるからである。
+ */
+function size(text: string, name?: string): string {
+  return `${name === undefined ? '' : `${name}.`}chars=${text.length}`;
 }
 
 function clip(text: string, limit: number): string {
