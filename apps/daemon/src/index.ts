@@ -90,6 +90,29 @@ const RUNNER_URLS_ENV = 'ALTEROID_RUNNER_URLS';
 const RUNNER_URL_ENV = 'ALTEROID_RUNNER_URL';
 
 /**
+ * 器がこのプロセスを畳むまでに与える猶予。**ここにあるのは写しである。**
+ *
+ * 正本は `railway/daemon.json` の `drainingSeconds` と `compose.yaml`（`app`）の
+ * `stop_grace_period` で、**どちらも実行中のプロセスからは読めない**（Railway の
+ * deploy 設定も compose の設定も環境変数として降りてこない）。環境変数で渡す形に
+ * すると、猶予そのものと env がずれる二重管理が新しく増えるだけなので、写しを持って
+ * 対応関係をここに書くほうを選んでいる。**あちらを変えるならここも変えること**
+ * （`railway/README.md`「畳む時間を渡す」に逆向きの導線がある）。
+ */
+const SHUTDOWN_GRACE_MS = 60_000;
+
+/**
+ * SIGTERM から、自分で見切りをつけて `exit` するまで。
+ *
+ * **猶予と同着にしないための5秒である。** 猶予が切れる時刻には器の SIGKILL が来る
+ * ので、ここを `SHUTDOWN_GRACE_MS` ちょうどにすると、「行儀よく終われなかったときに
+ * それでも自分の意思で終わる」という最後の口が SIGKILL に負けて消える。**揃えない
+ * こと。** 5秒は `process.exit(0)` が確実に先に走るための余裕であって、片付けに使う
+ * 作業時間ではない。
+ */
+const FORCED_EXIT_MS = SHUTDOWN_GRACE_MS - 5_000;
+
+/**
  * 起動時の種になる runner の宛先。
  *
  * `ALTEROID_RUNNER_URLS`（カンマ区切り）と `ALTEROID_RUNNER_URL`（単数）の両方を
@@ -514,7 +537,7 @@ export async function main(): Promise<void> {
     await runners.stop().catch(() => undefined);
     await clearRuntimeInfo(paths.state).catch(() => undefined);
 
-    const forced = setTimeout(() => process.exit(0), 30_000);
+    const forced = setTimeout(() => process.exit(0), FORCED_EXIT_MS);
     forced.unref();
     try {
       await clone.stop();

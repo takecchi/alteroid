@@ -202,6 +202,8 @@ services:
       timeout: 5s
       retries: 20
     # 走行中のマネージャーを畳み、生ログをデーモンへ渡し切る時間。
+    # **この値を変えるなら `apps/runner/src/index.ts` の強制 exit も見ること。**
+    # あちらは「ここより5秒早く自分で exit する」形で、この数の写しを持っている。
     stop_grace_period: 60s
     networks: [control]
     restart: unless-stopped
@@ -230,6 +232,8 @@ services:
       - control:/run/alteroid
     # 落ちる前の最後の蒸留（クローンのターン1本）が終わるまで待つ。既定の 10 秒だと
     # 途中で SIGKILL され、記憶へ移すはずだったものが消える（蒸留は生存条件）。
+    # **この値を変えるなら `apps/daemon/src/index.ts` の強制 exit も見ること。**
+    # あちらは「ここより5秒早く自分で exit する」形で、この数の写しを持っている。
     stop_grace_period: 60s
     # data で db へ、control で runner へ。**runner は data に居ない**ので、
     # 鍵を手に入れても DB への経路が無い。

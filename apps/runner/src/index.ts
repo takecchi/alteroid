@@ -46,6 +46,33 @@ export function runnerIdOf(env: NodeJS.ProcessEnv = process.env): string {
   return 'runner-primary';
 }
 
+/**
+ * 器がこのプロセスを畳むまでに与える猶予。**ここにあるのは写しである。**
+ *
+ * 正本は `railway/runner.json` の `drainingSeconds` と `compose.yaml`（`runner`）の
+ * `stop_grace_period` で、**どちらも実行中のプロセスからは読めない**（Railway の
+ * deploy 設定も compose の設定も環境変数として降りてこない）。環境変数で渡す形に
+ * すると、猶予そのものと env がずれる二重管理が新しく増えるだけなので、写しを持って
+ * 対応関係をここに書くほうを選んでいる。**あちらを変えるならここも変えること**
+ * （`railway/README.md`「畳む時間を渡す」に逆向きの導線がある）。
+ *
+ * **デーモン側（`apps/daemon/src/index.ts`）と同じ数だが、共有していない。** 猶予は
+ * Service ごとの設定であり、片方だけ延ばしたくなる日がある（runner は生ログを渡し切る
+ * 時間、デーモンは蒸留1本ぶん、と用途が違う）。1つに寄せると、その日に両方が動く。
+ */
+const SHUTDOWN_GRACE_MS = 60_000;
+
+/**
+ * SIGTERM から、自分で見切りをつけて `exit` するまで。
+ *
+ * **猶予と同着にしないための5秒である。** 猶予が切れる時刻には器の SIGKILL が来る
+ * ので、ここを `SHUTDOWN_GRACE_MS` ちょうどにすると、「行儀よく終われなかったときに
+ * それでも自分の意思で終わる」という最後の口が SIGKILL に負けて消える。**揃えない
+ * こと。** 5秒は `process.exit(0)` が確実に先に走るための余裕であって、片付けに使う
+ * 作業時間ではない。
+ */
+const FORCED_EXIT_MS = SHUTDOWN_GRACE_MS - 5_000;
+
 /** 空文字は「未指定」。 */
 function envValue(env: NodeJS.ProcessEnv, key: string): string | undefined {
   const value = env[key];
@@ -219,7 +246,7 @@ export async function main(): Promise<void> {
     if (socketPath !== undefined) rmSync(socketPath, { force: true });
     // 走行中のマネージャーは畳む。生ログはこの中でデーモンへ渡される
     // （渡さずに消えると、manager_id から生ログへ降りる経路が切れる）。
-    const forced = setTimeout(() => process.exit(0), 30_000);
+    const forced = setTimeout(() => process.exit(0), FORCED_EXIT_MS);
     forced.unref();
     await host.shutdown().catch(() => undefined);
     process.exit(0);
