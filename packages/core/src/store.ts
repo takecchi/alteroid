@@ -45,6 +45,15 @@ export interface JournalQuery {
   types?: JournalEntryType[];
   /** ISO 8601。この時刻以降のエントリだけ返す。 */
   since?: string;
+  /**
+   * ISO 8601。この時刻以前のエントリだけ返す。
+   *
+   * **`since` だけでは過去の一区間を取れない。** 返るのは新しい順なので、
+   * 「9時に何があったか」を聞いても手前に積まれた最新のものが `limit` を
+   * 食い尽くし、狙った時刻には決して届かない（実際にそれで届かなかった）。
+   * 窓の終端を閉じられて初めて、過去の一点を掘れる。
+   */
+  until?: string;
 }
 
 /** 日誌 = 追記専用の記録（PRD「可観測性」）。 */
@@ -52,6 +61,14 @@ export interface JournalStore {
   append(entry: JournalEntryInput): Promise<JournalEntry>;
   /** 新しい順に返す。 */
   list(query?: JournalQuery): Promise<JournalEntry[]>;
+  /**
+   * 1件を id で引く。
+   *
+   * **一覧を抜粋にするなら、全文への行き先が要る**（`manager_list` ↔
+   * `manager_report` と同じ形）。無いと、抜粋にした時点で長い記録は
+   * クローンから永久に読めなくなる＝能力の削除（north_star 禁止1）。
+   */
+  get(id: string): Promise<JournalEntry | null>;
 }
 
 /** ジョブと承認待ちキュー。M1 では承認待ちだけを使う。 */

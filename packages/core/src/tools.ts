@@ -14,8 +14,14 @@ import {
   localDayRange,
   parseTimeOfDay,
 } from './schedule.js';
-import { scheduleKindSchema, scheduleSpecSchema } from './schema.js';
-import type { ChatStreamEvent, PendingApproval, ScheduleSpec, ScheduledRequest } from './schema.js';
+import { JOURNAL_ENTRY_TYPES, scheduleKindSchema, scheduleSpecSchema } from './schema.js';
+import type {
+  ChatStreamEvent,
+  JournalEntry,
+  PendingApproval,
+  ScheduleSpec,
+  ScheduledRequest,
+} from './schema.js';
 import { CANON_REVISION, canonDocument, canonNames } from './self.js';
 import type { Stores } from './store.js';
 import type { AccountUsageState } from './usage-snapshot.js';
@@ -102,6 +108,19 @@ const LIST_REPORT_EXCERPT = 240;
 const LIST_BUDGET = 8_000;
 /** 全文を取りに来たときの1回分。続きは `offset` で取れる。 */
 const REPORT_PAGE = 8_000;
+
+/**
+ * 日誌の一覧の予算と、1件ぶんの本文の厚み。
+ *
+ * **`manager_list` とは用途が違う。** あちらは全体の要約だが、日誌は
+ * 「特定の時刻の1行を探す」ために引く。探す側にとって要るのは
+ * *いつ・誰が・どの型か*であって本文の厚みではないので、**本文を薄くして
+ * 件数を残す**側へ倒す。全文が要ると分かった1件は `id` で取りに行く。
+ */
+const JOURNAL_TEXT_EXCERPT = 120;
+const JOURNAL_BUDGET = 8_000;
+/** 日誌1件の全文を取りに来たときの1回分。続きは `offset` で取れる。 */
+const JOURNAL_PAGE = 8_000;
 
 /** 自作ツールは確認なしで通す（能力の削除ではなく、道具が道具として使えること）。 */
 export const CLONE_ALLOWED_TOOLS = CLONE_TOOL_NAMES.map(qualifiedToolName);
@@ -191,14 +210,109 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
+    /**
+     * 日誌を掘る道具。
+     *
+     * **これは「探す」ための口である。** 全文を素で並べていたときは、200 件を
+     * 頼むと 178,524 文字になって MCP の出力上限で丸ごと落ち、クローンには
+     * 1 文字も届かなかった（SDK はファイルへ落とすが、クローンにファイルを
+     * 読む道具は無い）。人間は Web UI と `GET /journal` で日誌を読めるので、
+     * これは能力の削除そのものである（north_star 禁止1）。
+     *
+     * 直し方は `manager_list` ↔ `manager_report` と同じ形にした。
+     * 一覧は**予算を先に決めて入るところまで**積み、本文は抜粋にして
+     * *いつ・誰が・どの型か*と `id` を必ず残す。全文が要る1件は `id` で取る。
+     *
+     * **`until` が無いと過去は掘れない。** 返るのは新しい順なので、`since` だけ
+     * では手前の最新分が `limit` を食い尽くし、狙った時刻には決して届かない。
+     */
     tool(
       'journal_read',
-      '日誌を新しい順に読む。',
-      { limit: z.number().int().min(1).max(200).optional().describe('件数（既定 20）') },
-      async ({ limit }) => {
-        const entries = await stores.journal.list({ limit: limit ?? 20 });
-        if (entries.length === 0) return text('（日誌はまだ空）');
-        return text(entries.map((entry) => JSON.stringify(entry)).join('\n'));
+      [
+        '日誌を新しい順に読む。過去の一点を掘るには since/until で窓を閉じること',
+        '（新しい順に返るので、until を指定しないと最新分しか見えない）。',
+        '一覧の本文は抜粋で、全文が要る1件は id を渡して取る。',
+      ].join(' '),
+      {
+        limit: z.number().int().min(1).max(200).optional().describe('件数（既定 20）'),
+        since: z
+          .string()
+          .optional()
+          .describe('ISO 8601。この時刻以降だけ返す（例 2026-08-15T09:00:00Z）'),
+        until: z
+          .string()
+          .optional()
+          .describe('ISO 8601。この時刻以前だけ返す。過去を掘るときはこれを指定する'),
+        types: z
+          .array(z.enum(JOURNAL_ENTRY_TYPES))
+          .optional()
+          .describe('種別で絞る。省略すると全種別'),
+        id: z
+          .string()
+          .optional()
+          .describe('この1件を全文で読む（一覧に出ている id）。他の条件は無視される'),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe('id で全文を読むとき、何文字目から読むか'),
+      },
+      async ({ limit, since, until, types, id, offset = 0 }) => {
+        // --- 全文モード（1件だけ） ---
+        if (id !== undefined) {
+          const entry = await stores.journal.get(id);
+          if (!entry) return text(`日誌 ${id} は無い（id が違うか、まだ書かれていない）。`);
+          const { head, body } = renderJournalEntry(entry);
+          if (body === '') return text(`${entry.at} ${head}`);
+          const part = page(body, offset, JOURNAL_PAGE);
+          const tail = part.more
+            ? `\n\n…（ここで切れている。続きは journal_read id=${entry.id} offset=${part.to}）`
+            : '';
+          return text(`${entry.at} ${head}（${describePage(part)}）\n\n${part.body}${tail}`);
+        }
+
+        // --- 一覧モード ---
+        const requested = limit ?? 20;
+        const entries = await stores.journal.list({
+          limit: requested,
+          ...(since === undefined ? {} : { since }),
+          ...(until === undefined ? {} : { until }),
+          ...(types === undefined || types.length === 0 ? {} : { types }),
+        });
+        if (entries.length === 0) {
+          return text(
+            since === undefined && until === undefined && types === undefined
+              ? '（日誌はまだ空）'
+              : '（その条件に当たる日誌は無い）',
+          );
+        }
+
+        // **予算を先に決めて、入るところまで積む。** 件数から出力量を決めると、
+        // 何件で壊れるかが運任せになる（それで丸ごと落ちた）。切ったなら必ずそう言う。
+        const lines: string[] = [];
+        let used = 0;
+        let shown = 0;
+        for (const entry of entries) {
+          const { head, body } = renderJournalEntry(entry);
+          const line =
+            `${entry.at} ${head} id=${entry.id}` +
+            (body === '' ? '' : `\n  ${excerptLine(body, JOURNAL_TEXT_EXCERPT)}`);
+          if (shown > 0 && used + line.length > JOURNAL_BUDGET) break;
+          lines.push(line);
+          used += line.length;
+          shown += 1;
+        }
+
+        const rest = entries.length - shown;
+        if (rest > 0) {
+          lines.push(
+            `…ほか ${rest} 件は省略（この条件で ${entries.length} 件あり、新しい順に ${shown} 件だけ出した）。` +
+              'さらに遡るなら until を、狭めるなら since / types を指定すること。',
+          );
+        }
+        lines.push('（本文は抜粋。全文は journal_read id=<id> で取れる）');
+        return text(lines.join('\n'));
       },
     ),
 
@@ -866,6 +980,53 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
   ];
+}
+
+/**
+ * 日誌1件を「見出し」と「本文」に分ける。
+ *
+ * **見出しには、探すのに要るものだけを置く。** 日誌を引くのは特定の1行を
+ * 探すためなので、*いつ・誰が・どの型か*が残っていれば当たりは付けられる。
+ * 本文（長くなりうる側）だけを抜粋の対象にし、見出しは削らない。
+ */
+function renderJournalEntry(entry: JournalEntry): { head: string; body: string } {
+  switch (entry.type) {
+    case 'exchange': {
+      const conversation =
+        entry.conversationId === undefined ? '' : ` conversation=${entry.conversationId}`;
+      return { head: `[exchange ${entry.with}/${entry.role}]${conversation}`, body: entry.text };
+    }
+    case 'decision':
+      return { head: '[decision]', body: `${entry.decision}（根拠: ${entry.grounds}）` };
+    case 'escalation': {
+      const to = entry.managerId === undefined ? '' : ` manager=${entry.managerId}`;
+      const answered = entry.answeredAt === undefined ? '未回答' : `回答済み ${entry.answeredAt}`;
+      return {
+        head: `[escalation approval=${entry.approvalId}${to} ${answered}]`,
+        body: entry.answer === undefined ? entry.question : `${entry.question} → ${entry.answer}`,
+      };
+    }
+    case 'tool_use':
+      return {
+        head: `[tool_use ${entry.actor} ${entry.tool}]`,
+        body: safeJson(entry.input),
+      };
+    case 'memory_update':
+      return { head: `[memory_update ${entry.slug} (${entry.cause})]`, body: entry.summary };
+    case 'daily_report':
+      return { head: `[daily_report ${entry.date}]`, body: entry.body };
+    case 'external_event':
+      return { head: `[external_event ${entry.source}]`, body: entry.summary };
+  }
+}
+
+/** 日誌に入った任意の値を文字列にする（循環参照でも読み手を落とさない）。 */
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
 }
 
 /**

@@ -155,6 +155,23 @@ describe('PgJournalStore', () => {
     expect(await stores.journal.list({ since: '2020-01-01T00:00:00.000Z' })).toHaveLength(1);
   });
 
+  it('until で絞れる（since と組めば過去の一区間だけ取れる）', async () => {
+    await stores.journal.append({ type: 'decision', decision: '今日の分', grounds: 'g' });
+
+    const past = '2020-01-01T00:00:00.000Z';
+    const future = new Date(Date.now() + 60_000).toISOString();
+    expect(await stores.journal.list({ until: past })).toHaveLength(0);
+    expect(await stores.journal.list({ until: future })).toHaveLength(1);
+    expect(await stores.journal.list({ since: past, until: future })).toHaveLength(1);
+  });
+
+  it('id で1件引ける（一覧を抜粋にした先の全文の行き先）', async () => {
+    const entry = await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
+
+    expect(await stores.journal.get(entry.id)).toMatchObject({ id: entry.id, decision: 'd' });
+    expect(await stores.journal.get('no-such-id')).toBeNull();
+  });
+
   it('同じミリ秒に並んでも追記順が保たれる（日報が順番を失わない）', async () => {
     // 直列に積む。`at` で並べ替える実装に退行すると、同一ミリ秒の分が入れ替わる。
     for (let i = 0; i < 20; i += 1) {

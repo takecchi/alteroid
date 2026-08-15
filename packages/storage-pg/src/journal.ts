@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { journalEntrySchema } from '@alteroid/core';
 import type { JournalEntry, JournalEntryInput, JournalQuery, JournalStore } from '@alteroid/core';
-import { and, desc, gte, inArray } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lte } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { stripNulls } from './db.js';
@@ -45,6 +45,7 @@ export class PgJournalStore implements JournalStore {
   async list(query: JournalQuery = {}): Promise<JournalEntry[]> {
     const filters = [
       ...(query.since === undefined ? [] : [gte(journal.at, new Date(query.since))]),
+      ...(query.until === undefined ? [] : [lte(journal.at, new Date(query.until))]),
       ...(query.types === undefined || query.types.length === 0
         ? []
         : [inArray(journal.type, query.types)]),
@@ -64,5 +65,18 @@ export class PgJournalStore implements JournalStore {
       if (parsed.success) found.push(parsed.data);
     }
     return found;
+  }
+
+  /** id で1件引く（`id` は一意索引なので1行で当たる）。 */
+  async get(id: string): Promise<JournalEntry | null> {
+    const rows = await this.#db
+      .select({ entry: journal.entry })
+      .from(journal)
+      .where(eq(journal.id, id))
+      .limit(1);
+    const row = rows[0];
+    if (row === undefined) return null;
+    const parsed = journalEntrySchema.safeParse(row.entry);
+    return parsed.success ? parsed.data : null;
   }
 }
