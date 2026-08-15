@@ -8,6 +8,12 @@ dist/
 coverage/
 *.tsbuildinfo
 
+# pnpm のストア。既定の置き場は「リポジトリが載っているマウント点」なので、
+# リポジトリ自身がマウント点だとここに落ちる（`pnpm store path` で確かめられる）。
+# prettier は既定で .gitignore も読むので、無視していないと `pnpm format:check` が
+# ストアの中身を検査して落ちる ＝ CI（ストアが無い）と手元で同じコマンドが違う結論を出す。
+.pnpm-store/
+
 # OpenAPI spec から起こす型（pnpm build が毎回作る）。
 # **spec（apps/daemon/openapi.json）の方はコミットする** — コードとのずれを
 # CI が検出できる場所がそこだからで、そこから機械的に落ちるだけのこれは持たない。
