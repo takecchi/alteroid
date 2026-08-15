@@ -127,6 +127,36 @@ type Options = {
   onEnvFile?: (path: string) => void;
 };
 
+/**
+ * 子プロセスへ渡す環境変数を**明示的に組み立てる**（呼び出した側のシェルから
+ * 引き継ぐのは `PATH` だけ。bash / node / git / openssl を見つけるため）。
+ *
+ * かつてここは `...process.env` を丸ごと渡していた。setup.sh は
+ * `CLAUDE_CODE_OAUTH_TOKEN` / `ALTEROID_RUNNER_TOKEN` / `GH_TOKEN` を `printenv` で
+ * 読み、`.env` より**優先する**（人間が回すぶんにはこの順序が正しい）。だから
+ * 走らせた人のシェルにその名前が入っていると、`.env` に書いた作り物ではなく
+ * **本物の鍵**がスクリプトへ入り、症状が3つとも違う形で出ていた:
+ *
+ *   1. `GH_TOKEN` — `github_pat_test` と比較して落ち、**差分表示に本物の値が丸ごと出る**。
+ *      テスト出力が残る場所（報告・日誌・CI ログ）で走らせれば、そこに写る
+ *   2. `ALTEROID_RUNNER_TOKEN` — 同じく落ちて、同じく値が出る
+ *   3. `CLAUDE_CODE_OAUTH_TOKEN` — **落ちない。これがいちばん悪い。**「秘密を引数で
+ *      渡さない」が `sk-ant-test` を探すのに、実際に流れたのは本物の値なので、
+ *      何も確かめないまま緑になる（空振りの合格）
+ *
+ * 個別に `unset` するのではなく allowlist にしてあるのは、setup.sh が `printenv` を
+ * 1つ増やしたときに**ここを直さなくても穴が開かない**ようにするためである。
+ * 引き継ぐ名前を足したくなったら、それが `.env` の作り物より強い入力にならないか
+ * （＝走らせる場所で結論が変わらないか）を先に考えること。
+ */
+function childEnv(
+  parent: NodeJS.ProcessEnv,
+  bin: string,
+  extra: Record<string, string>,
+): Record<string, string> {
+  return { PATH: `${bin}:${parent.PATH ?? ''}`, ...extra };
+}
+
 /** `.env` を1つ書いて setup.sh を通し、投げられた入力と終了状態を返す。 */
 function run(env: string, options: Options = {}): Run {
   const dir = mkdtempSync(join(tmpdir(), 'alteroid-setup-test.'));
@@ -145,15 +175,13 @@ function run(env: string, options: Options = {}): Run {
       'bash',
       [SETUP, '--yes', '--name', 'test', '--repo', 'takecchi/alteroid', '--branch', 'main'],
       {
-        env: {
-          ...process.env,
-          PATH: `${bin}:${process.env.PATH ?? ''}`,
+        env: childEnv(process.env, bin, {
           // **本物の .env を触らせない。** 既定は リポジトリ直下の .env である
           ALTEROID_ENV_FILE: envFile,
           FAKE_STATE: dir,
           ...(options.domainFails ? { FAKE_DOMAIN_FAILS: '1' } : {}),
           ...(options.domainList ? { FAKE_DOMAIN_LIST: options.domainList } : {}),
-        },
+        }),
         stdio: ['ignore', 'pipe', 'pipe'],
       },
     );
@@ -209,6 +237,30 @@ describe('シェルスクリプトの書き方', () => {
       .map(({ line, no }) => `${name}:${no}: ${line.trim()}`);
     // ${VAR} と書けば直る
     expect(offenders).toEqual([]);
+  });
+});
+
+describe('テスト自身が setup.sh に渡す環境', () => {
+  // ここが緩むと、下の全部が「走らせた人のシェル次第」になる。しかも緩んだことは
+  // **落ちたときの差分に本物の鍵が出る**か、**空振りで緑になる**かでしか現れない
+  it('親のシェルからは PATH しか渡さない', () => {
+    const env = childEnv(
+      {
+        PATH: '/usr/bin',
+        // 以下はすべて偽物である（本物を書かないこと。落ちれば出力に出る）
+        GH_TOKEN: 'inherited-must-not-reach-setup',
+        CLAUDE_CODE_OAUTH_TOKEN: 'inherited-must-not-reach-setup',
+        ALTEROID_RUNNER_TOKEN: 'inherited-must-not-reach-setup',
+        // 鍵でなくても、これらは投入先の Service 名や偽 CLI の挙動を書き換える
+        ALTEROID_APP_SERVICE: 'renamed',
+        ALTEROID_ENV_FILE: '/somewhere/else/.env',
+        FAKE_DOMAIN_FAILS: '1',
+      },
+      '/tmp/bin',
+      { FAKE_STATE: '/tmp/state' },
+    );
+    expect(Object.keys(env).sort()).toEqual(['FAKE_STATE', 'PATH']);
+    expect(env.PATH).toBe('/tmp/bin:/usr/bin');
   });
 });
 
