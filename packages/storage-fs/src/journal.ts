@@ -46,10 +46,14 @@ export class FsJournalStore implements JournalStore {
     // 件数指定の無い `since` 問い合わせ（日報・要約）は M3 から常時走るため、
     // ここで打ち切らないと日誌全部を毎回読むことになる。
     const sinceDay = query.since?.slice(0, 10);
+    // `until` より新しい日のファイルは開かなくてよい。**`break` ではなく `continue`**
+    // — 走査は新しい日から始まるので、ここで止めると窓そのものへ辿り着けない。
+    const untilDay = query.until?.slice(0, 10);
 
     // 新しい日付のファイルから読み、必要な件数が揃ったら止める
     for (const file of files) {
       if (sinceDay !== undefined && file.slice(0, 10) < sinceDay) break;
+      if (untilDay !== undefined && file.slice(0, 10) > untilDay) continue;
       const raw = await readFile(join(this.#dir, file), 'utf8');
       const lines = raw.split('\n').filter((line) => line.length > 0);
       for (let i = lines.length - 1; i >= 0; i -= 1) {
@@ -57,11 +61,31 @@ export class FsJournalStore implements JournalStore {
         if (!entry) continue;
         if (query.types && !query.types.includes(entry.type)) continue;
         if (query.since && entry.at < query.since) continue;
+        if (query.until && entry.at > query.until) continue;
         found.push(entry);
         if (found.length >= limit) return found;
       }
     }
     return found;
+  }
+
+  /**
+   * id で1件引く。
+   *
+   * 日付を持たない id なので、新しい日から順に開いて突き合わせる。掘るための
+   * 一発引きであって定常経路ではないため、走査の重さは受け入れる（当たれば
+   * その時点で止まる）。
+   */
+  async get(id: string): Promise<JournalEntry | null> {
+    for (const file of await this.#files()) {
+      const raw = await readFile(join(this.#dir, file), 'utf8');
+      const lines = raw.split('\n').filter((line) => line.length > 0);
+      for (let i = lines.length - 1; i >= 0; i -= 1) {
+        const entry = parseLine(lines[i]);
+        if (entry?.id === id) return entry;
+      }
+    }
+    return null;
   }
 
   #file(at: string): string {

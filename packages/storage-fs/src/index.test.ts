@@ -188,6 +188,35 @@ describe('FsJournalStore', () => {
 
     expect(await stores.journal.list()).toHaveLength(20);
   });
+
+  it('until で窓の終端を閉じられる（新しい日のファイルを跨いで過去へ届く）', async () => {
+    await stores.journal.append({ type: 'decision', decision: '今日の分', grounds: 'g' });
+
+    // 過去の1日を手で置く。**新しい日から走査が始まる**ので、`until` で
+    // 打ち切る実装だとここへ辿り着けない（読み飛ばしでなければならない）。
+    const journalDir = join(root, 'journal');
+    await writeFile(
+      join(journalDir, '2020-01-02.jsonl'),
+      `${JSON.stringify({
+        type: 'decision',
+        id: 'old',
+        at: '2020-01-02T00:00:00.000Z',
+        decision: '昔の分',
+        grounds: 'g',
+      })}\n`,
+      'utf8',
+    );
+
+    const entries = await stores.journal.list({ until: '2020-01-03T00:00:00.000Z' });
+    expect(entries.map((entry) => (entry as { decision?: string }).decision)).toEqual(['昔の分']);
+  });
+
+  it('id で1件引ける（一覧を抜粋にした先の全文の行き先）', async () => {
+    const entry = await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
+
+    expect(await stores.journal.get(entry.id)).toMatchObject({ id: entry.id, decision: 'd' });
+    expect(await stores.journal.get('no-such-id')).toBeNull();
+  });
 });
 
 describe('FsJobStore', () => {

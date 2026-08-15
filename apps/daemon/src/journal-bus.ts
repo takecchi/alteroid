@@ -40,6 +40,9 @@ export function createJournalBus(inner: JournalStore): JournalBus {
     list(query?: JournalQuery): Promise<JournalEntry[]> {
       return inner.list(query);
     },
+    get(id: string): Promise<JournalEntry | null> {
+      return inner.get(id);
+    },
   };
 
   return {

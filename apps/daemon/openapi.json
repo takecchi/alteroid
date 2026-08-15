@@ -1136,7 +1136,7 @@
         "operationId": "getJournal",
         "tags": ["journal"],
         "summary": "日誌を読む",
-        "description": "日誌（追記専用の記録）を新しい順に読む。`type` `since` で掘れる。",
+        "description": "日誌（追記専用の記録）を新しい順に読む。`type` `since` `until` で掘れる。",
         "responses": {
           "200": {
             "description": "日誌エントリの一覧（新しい順）。",
@@ -1390,6 +1390,13 @@
           {
             "in": "query",
             "name": "since",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
             "schema": {
               "type": "string"
             }

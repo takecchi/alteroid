@@ -100,7 +100,14 @@ export function createMemoryStores(): Stores {
         const since = query.since;
         found = found.filter((entry) => entry.at >= since);
       }
+      if (query.until !== undefined) {
+        const until = query.until;
+        found = found.filter((entry) => entry.at <= until);
+      }
       return query.limit === undefined ? found : found.slice(0, query.limit);
+    },
+    async get(id: string) {
+      return entries.find((entry) => entry.id === id) ?? null;
     },
   };
 

@@ -289,6 +289,18 @@ describe('HTTP API', () => {
     expect((await future.json()) as { entries: unknown[] }).toMatchObject({ entries: [] });
   });
 
+  it('日誌は until で窓の終端を閉じられる（人間も過去の一区間を取れる）', async () => {
+    await stores.journal.append({ type: 'decision', decision: 'いまの分', grounds: 'g' });
+
+    // 返るのは新しい順なので、終端を閉じられないと過去の一点には届かない。
+    const past = await app.request(`/journal?until=${encodeURIComponent('2020-01-01T00:00:00Z')}`);
+    expect((await past.json()) as { entries: unknown[] }).toMatchObject({ entries: [] });
+
+    const now = await app.request(`/journal?until=${encodeURIComponent('2999-01-01T00:00:00Z')}`);
+    const body = (await now.json()) as { entries: { decision?: string }[] };
+    expect(body.entries.map((entry) => entry.decision)).toContain('いまの分');
+  });
+
   it('承認待ちを読んで答えられる', async () => {
     await stores.jobs.putApproval({
       id: 'ap-1',

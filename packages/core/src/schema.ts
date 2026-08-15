@@ -215,6 +215,28 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
 
 export type JournalEntry = z.infer<typeof journalEntrySchema>;
 export type JournalEntryType = JournalEntry['type'];
+
+/**
+ * 日誌の種別の一覧（絞り込みの選択肢として外へ出す口）。
+ *
+ * **`satisfies Record<JournalEntryType, true>` で縛ってある。** 種別を足して
+ * ここを足し忘れると型で落ちる — 一覧が黙って古びると、増えた種別だけが
+ * 絞り込みから漏れて「あるのに見えない」が静かに生まれる。
+ */
+const journalEntryTypeNames = {
+  exchange: true,
+  decision: true,
+  escalation: true,
+  tool_use: true,
+  memory_update: true,
+  daily_report: true,
+  external_event: true,
+} satisfies Record<JournalEntryType, true>;
+
+export const JOURNAL_ENTRY_TYPES = Object.keys(journalEntryTypeNames) as [
+  JournalEntryType,
+  ...JournalEntryType[],
+];
 /** 追記時に id / at はストアが埋める。 */
 export type JournalEntryInput = DistributiveOmit<JournalEntry, 'id' | 'at'>;
 

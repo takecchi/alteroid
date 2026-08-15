@@ -245,6 +245,13 @@ const journalQuery = z.object({
   limit: z.coerce.number().int().min(1).max(1000).default(50),
   /** ISO 8601。ここより古いエントリまで遡って読むための足がかり。 */
   since: z.string().optional(),
+  /**
+   * ISO 8601。窓の終端。
+   *
+   * **`since` だけでは過去の一区間を取れない。** 新しい順に返すので、手前に
+   * 積まれた最新のものが `limit` を食い尽くし、狙った時刻には届かない。
+   */
+  until: z.string().optional(),
   /** カンマ区切りの日誌エントリ種別。 */
   type: z.string().optional(),
 });
@@ -1104,7 +1111,7 @@ export function createApp(deps: AppDeps) {
       describeRoute({
         tags: ['journal'],
         summary: '日誌を読む',
-        description: '日誌（追記専用の記録）を新しい順に読む。`type` `since` で掘れる。',
+        description: '日誌（追記専用の記録）を新しい順に読む。`type` `since` `until` で掘れる。',
         responses: {
           200: {
             description: '日誌エントリの一覧（新しい順）。',
@@ -1118,13 +1125,14 @@ export function createApp(deps: AppDeps) {
       }),
       validator('query', journalQuery),
       async (c) => {
-        const { limit, since, type } = c.req.valid('query');
+        const { limit, since, until, type } = c.req.valid('query');
         const types = type?.split(',').filter((value) => value.length > 0) as
           JournalEntryType[] | undefined;
         return c.json({
           entries: await stores.journal.list({
             limit,
             ...(since === undefined ? {} : { since }),
+            ...(until === undefined ? {} : { until }),
             ...(types === undefined || types.length === 0 ? {} : { types }),
           }),
         });

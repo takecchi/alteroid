@@ -28,6 +28,9 @@ function fakeJournal(entries: JournalEntry[]): JournalStore {
     async append() {
       throw new Error('このテストでは追記しない');
     },
+    async get(id: string) {
+      return entries.find((entry) => entry.id === id) ?? null;
+    },
     async list(query: JournalQuery = {}) {
       let found = [...entries].sort((a, b) => b.at.localeCompare(a.at));
       if (query.types) found = found.filter((entry) => query.types?.includes(entry.type));
