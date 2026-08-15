@@ -1,16 +1,33 @@
 // @vitest-environment jsdom
 /**
- * ダッシュボードの「今日の利用」カードが、`/usage` 画面・CLI と同じ嘘をつかない
- * 規約を守っていること（`apps/cli/src/usage.ts` の docstring と同じ規約）。
+ * ダッシュボードについて2つ。
+ *
+ * 1. 「今日の利用」カードが、`/usage` 画面・CLI と同じ嘘をつかない規約を守っていること
+ *    （`apps/cli/src/usage.ts` の docstring と同じ規約）
+ * 2. 日誌を `AuthedShell` の購読から context 越しに受け取り、**自分では SSE を張らない**こと
  */
 import { USAGE_ESTIMATE_NOTICE, ZERO_USAGE } from '@alteroid/core/usage';
 import { cleanup, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { json, Providers, sse, stubFetch, storeTestBaseUrl } from '~/test-support';
+import { JournalFeedProvider } from '~/hooks/journal-feed';
+import { summarizeJournalEntry } from '~/hooks/queries';
+import type { JournalLive } from '~/hooks/use-journal-live';
+import type { JournalEntry } from '~/lib/types';
+import { json, Providers, stubFetch, storeTestBaseUrl, type FetchStub } from '~/test-support';
 
 import Dashboard from './dashboard';
+
+const RECENT: JournalEntry = {
+  type: 'decision',
+  id: 'recent-decision',
+  at: '2026-08-14T09:00:00.000Z',
+  decision: 'たった今届いた判断',
+  grounds: '記憶',
+};
+
+const EMPTY_FEED: JournalLive = { status: 'live', recent: [] };
 
 let originalFetch: typeof fetch;
 
@@ -25,16 +42,18 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-function renderDashboard(usageBody: {
-  rows: unknown[];
-  since: string | null;
-  beforeLedger: boolean;
-  notice?: string;
-}) {
-  stubFetch((url) => {
-    if (url.includes('/journal/stream')) {
-      return sse([{ event: 'open', data: { ok: true } }], { keepOpen: true });
-    }
+function renderDashboard(
+  usageBody: {
+    rows: unknown[];
+    since: string | null;
+    beforeLedger: boolean;
+    notice?: string;
+  },
+  live: JournalLive = EMPTY_FEED,
+): FetchStub {
+  // **`/journal/stream` の経路を置いていない。** 置くと購読が増えたことに気づけない
+  // （知らない URL は `stubFetch` が「繋がらない」にするので、張りに行けば必ず出る）。
+  const stub = stubFetch((url) => {
     if (url.includes('/reports')) return json({ reports: [] });
     if (url.includes('/approvals')) return json({ approvals: [] });
     if (url.includes('/managers')) return json({ managers: [] });
@@ -52,11 +71,14 @@ function renderDashboard(usageBody: {
   const router = createMemoryRouter([{ path: '/', Component: Dashboard }], {
     initialEntries: ['/'],
   });
-  return render(
+  render(
     <Providers>
-      <RouterProvider router={router} />
+      <JournalFeedProvider value={live}>
+        <RouterProvider router={router} />
+      </JournalFeedProvider>
     </Providers>,
   );
+  return stub;
 }
 
 describe('ダッシュボードの「今日の利用」', () => {
@@ -91,5 +113,23 @@ describe('ダッシュボードの「今日の利用」', () => {
 
     expect(await screen.findByText('$0.0200')).toBeTruthy();
     expect(screen.getByText(USAGE_ESTIMATE_NOTICE)).toBeTruthy();
+  });
+});
+
+describe('日誌は AuthedShell の購読から受け取る', () => {
+  const USAGE = { rows: [], since: null, beforeLedger: false };
+
+  it('context の recent をそのまま出す', async () => {
+    renderDashboard(USAGE, { status: 'live', recent: [RECENT] });
+
+    expect(await screen.findByText(summarizeJournalEntry(RECENT))).toBeTruthy();
+  });
+
+  it('自分では SSE を張らない（購読は AuthedShell の1本だけ）', async () => {
+    const stub = renderDashboard(USAGE, { status: 'live', recent: [RECENT] });
+
+    // 画面が出揃うまで待ってから見る（描画前に数えると、張っていても空になる）。
+    await screen.findByText(summarizeJournalEntry(RECENT));
+    expect(stub.calls.filter((url) => url.includes('/journal/stream'))).toEqual([]);
   });
 });
