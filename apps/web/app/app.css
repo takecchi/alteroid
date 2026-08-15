@@ -34,6 +34,20 @@
   --danger: oklch(0.68 0.17 25);
   --warn: oklch(0.79 0.14 80);
   --ok: oklch(0.75 0.14 155);
+
+  /*
+   * 切り欠き・ホームインジケータの取り分。**対応していない環境では 0 になる**ので、
+   * 広い画面の見た目は変わらない。
+   *
+   * `env()` が実際に 0 以外を返すのは `viewport-fit=cover`（root.tsx の viewport
+   * meta）と対になっているときだけである。**片方だけ消さないこと** — 消しても
+   * 手元の広い画面では何も起きず、電話で初めて文字がホームインジケータに
+   * かぶって気づくことになる。
+   */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
 }
 
 @layer base {

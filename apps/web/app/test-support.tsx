@@ -21,6 +21,97 @@ if (typeof Element !== 'undefined' && Element.prototype.scrollIntoView === undef
 }
 
 /**
+ * `window.matchMedia` も jsdom には無い。**`useIsMobile`（`useSyncExternalStore` で
+ * `matchMedia('(max-width: 767px)')` を見る）を通る画面を描くと、無いままでは
+ * `window.matchMedia is not a function` で落ちる。** `AuthedShell` を描く既存・将来の
+ * テストを守るため、`scrollIntoView` と同じ方針（製品側を `?.()` で濁さない・
+ * 試験環境の都合はここで埋める）で、**module のトップレベルで無条件に**埋める。
+ * 既定は広い画面（`matches: false` 側）にしてある — 狭い画面のテストだけが
+ * 下の `setViewportWidth` を呼べばよい。
+ *
+ * 対応するのは本アプリが使う `(max-width: Npx)` / `(min-width: Npx)` の2つだけ。
+ * それ以外の書き方が来たら**黙って `false` を返さず投げる** — 静かに素通りさせると、
+ * 対応していないクエリを使うテストが「通ってしまうのに実物は動かない」状態を作る。
+ */
+
+/** 既定の幅（広い画面）。狭い画面を試したテストはここへ戻す。 */
+export const DEFAULT_VIEWPORT_WIDTH = 1280;
+let viewportWidth = DEFAULT_VIEWPORT_WIDTH;
+/**
+ * `matchMedia(...).addEventListener('change', ...)` で登録された分。
+ *
+ * **どのクエリのものかを一緒に覚えておく。** 配る `change` の `matches` を
+ * 本物と同じ値にするために要る。全員に同じ値を配る形にすると、いまは
+ * 誰も event の中身を読んでいないので通ってしまい、読む相手が現れた日に
+ * 「試験の足場だけが嘘をついている」状態になる。
+ */
+type MediaChangeListener = (event: MediaQueryListEvent) => void;
+
+const mediaChangeListeners = new Set<{ query: string; listener: MediaChangeListener }>();
+
+function evaluateMediaQuery(query: string): boolean {
+  const max = /^\(max-width:\s*(\d+)px\)$/.exec(query);
+  if (max !== null) return viewportWidth <= Number(max[1]);
+  const min = /^\(min-width:\s*(\d+)px\)$/.exec(query);
+  if (min !== null) return viewportWidth >= Number(min[1]);
+  throw new Error(`test-support: 対応していない matchMedia クエリ: ${query}`);
+}
+
+function createMediaQueryList(query: string): MediaQueryList {
+  return {
+    get matches() {
+      return evaluateMediaQuery(query);
+    },
+    media: query,
+    onchange: null,
+    addEventListener: (type: string, listener: MediaChangeListener) => {
+      if (type !== 'change') return;
+      mediaChangeListeners.add({ query, listener });
+    },
+    removeEventListener: (type: string, listener: MediaChangeListener) => {
+      if (type !== 'change') return;
+      for (const entry of mediaChangeListeners) {
+        if (entry.query === query && entry.listener === listener)
+          mediaChangeListeners.delete(entry);
+      }
+    },
+    dispatchEvent: () => true,
+    // 使っていない旧 API。呼ばれたら気づけるよう例外にする。
+    addListener: () => {
+      throw new Error('test-support: matchMedia の旧 API（addListener）は埋めていない');
+    },
+    removeListener: () => {
+      throw new Error('test-support: matchMedia の旧 API（removeListener）は埋めていない');
+    },
+  } as MediaQueryList;
+}
+
+if (typeof window !== 'undefined') {
+  window.matchMedia = ((query: string) => createMediaQueryList(query)) as typeof window.matchMedia;
+}
+
+/**
+ * 幅を変えて、以後の `matchMedia` をその幅で評価させる。
+ *
+ * **登録済みのリスナーへ `change` を配る。** `useIsMobile` は
+ * `useSyncExternalStore` で購読しているので、配らないと再評価が走らず
+ * 「回転しても（幅が変わっても）追いつく」ことを試験できない。
+ *
+ * **後始末はテスト側の責務。** このモジュールはテストをまたいで状態
+ * （`viewportWidth`）を持ち越すので、狭い画面にしたテストは `afterEach` で
+ * `setViewportWidth(DEFAULT_VIEWPORT_WIDTH)` を呼んで戻すこと。専用の reset
+ * 関数は用意していない — 「既定へ戻すのに使う値」と「テストが試したい値」を
+ * 同じ1つの関数で表せるので、2本目の口を増やさない。
+ */
+export function setViewportWidth(width: number): void {
+  viewportWidth = width;
+  for (const { query, listener } of mediaChangeListeners) {
+    // 本物と同じく、そのクエリを新しい幅で評価した結果を載せる。
+    listener({ matches: evaluateMediaQuery(query), media: query } as MediaQueryListEvent);
+  }
+}
+
+/**
  * 1つの経路に対する応答。`undefined` を返すと「その URL は知らない」。
  *
  * `Promise` を返せるようにしてあるのは、**まだ返事が来ていない要求**を作るため
