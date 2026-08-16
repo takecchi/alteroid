@@ -1611,6 +1611,20 @@ export function createApp(deps: AppDeps) {
     )
 
     // --- マネージャー（可観測性の中段から下段へ降りる経路） ------------------
+    //
+    // **応答は返す前に宣言したスキーマを通す（`.parse()`）。**
+    //
+    // `describeRoute` の `resolver()` は `openapi.json` を作るだけで、ハンドラが
+    // 実際に何を返したかは見ていない。だから `c.json(await ...list())` は、
+    // `ManagerSummary`（core の TS interface）にフィールドが1つ増えた日に、
+    // spec に書いていないものを黙って外へ出す。「宣言」と「実物」を繋いでいるのが
+    // 人間の注意力しかない状態で、ずれても誰も気づかない。
+    //
+    // `.parse()` を通せば、`z.object` が宣言に無いキーを落とす。以降このスキーマは
+    // 「外へ出るものの定義」であって「外へ出るものの説明」ではない。
+    //
+    // ここで通しているのは `/managers` と `/managers/:id` の2本だけである
+    // （ほかの経路は同じ穴を持ったまま。Issue に上げる）。
     .get(
       '/managers',
       describeRoute({
@@ -1623,7 +1637,8 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      async (c) => c.json({ managers: await clone.managers.list() }),
+      async (c) =>
+        c.json(managersListResponseSchema.parse({ managers: await clone.managers.list() })),
     )
 
     .get(
@@ -1646,7 +1661,7 @@ export function createApp(deps: AppDeps) {
         const id = c.req.param('id');
         const manager = (await clone.managers.list()).find((entry) => entry.managerId === id);
         if (!manager) return c.json({ error: 'not found' as const }, 404);
-        return c.json({ manager });
+        return c.json(managerDetailResponseSchema.parse({ manager }));
       },
     )
 

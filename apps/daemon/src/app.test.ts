@@ -359,6 +359,46 @@ describe('HTTP API', () => {
     expect((await app.request('/managers/nope/transcript')).status).toBe(404);
   });
 
+  /**
+   * **宣言していないものは外へ出ない。**
+   *
+   * `describeRoute` の `resolver()` は `openapi.json` を作るだけで、ハンドラが
+   * 何を返したかは検査しない。なので「スキーマを書いた」だけでは、`ManagerSummary`
+   * にフィールドが1つ増えた日に spec に無いものが黙って外へ出る。
+   *
+   * ここで見るのは**宣言に無いフィールドを混ぜても応答に現れないこと**である。
+   * 応答が spec を通ってから出ていることは、これでしか確かめられない
+   * （宣言どおりのものが出るのを見るだけなら、parse を外しても通ってしまう）。
+   */
+  it('マネージャーの応答は、宣言していないフィールドを外へ出さない', async () => {
+    // core の interface にフィールドが増えた日を再現する。`ManagerSummary` の
+    // 定義を触らずに済むよう、ここでだけ型を外して混ぜる。
+    fake.managerList.push({
+      managerId: 'mgr-leak',
+      status: 'running',
+      live: true,
+      cwd: '/work/project',
+      request: '内部の像が混ざる日',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+      waiting: [],
+      internalNote: 'openapi.json に書いていない内部の像',
+    } as ManagerSummary);
+
+    const list = (await (await app.request('/managers')).json()) as {
+      managers: Record<string, unknown>[];
+    };
+    // 宣言したものは出る（parse が中身を空にしていないこと）。
+    expect(list.managers[0]).toMatchObject({ managerId: 'mgr-leak', cwd: '/work/project' });
+    expect(list.managers[0]).not.toHaveProperty('internalNote');
+
+    const detail = (await (await app.request('/managers/mgr-leak')).json()) as {
+      manager: Record<string, unknown>;
+    };
+    expect(detail.manager).toMatchObject({ managerId: 'mgr-leak' });
+    expect(detail.manager).not.toHaveProperty('internalNote');
+  });
+
   it('日報を読める（可観測性の最上段。普段の接点はほぼこれだけ）', async () => {
     await stores.journal.append({ type: 'daily_report', date: '2026-08-11', body: '昨日の日報' });
     await stores.journal.append({ type: 'daily_report', date: '2026-08-12', body: '今日の日報' });

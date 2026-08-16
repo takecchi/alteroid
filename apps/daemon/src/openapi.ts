@@ -249,6 +249,12 @@ const managerWaitingSchema = z.object({ requestId: z.string(), summary: z.string
 /**
  * `ManagerSummary`（`packages/core/src/manager.ts`）は zod スキーマを持たない
  * プレーンな TS interface なので、ここでだけ zod として書く。
+ *
+ * **書いただけでは効かない。** `describeRoute` の `resolver()` は spec を作るだけで、
+ * ハンドラの `c.json(...)` を検査しない。ここの宣言が実際に外向きの面と一致して
+ * いるのは、`app.ts` の `/managers` と `/managers/:id` が返す前にこのスキーマを
+ * 通している（`.parse()`）からである。通していない経路では、interface に足した
+ * フィールドが spec に無いまま黙って外へ出る。
  */
 export const managerSummarySchema = z.object({
   managerId: z.string(),
