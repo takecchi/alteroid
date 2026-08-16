@@ -741,10 +741,11 @@ describe('デーモン再起動後（M4）', () => {
   });
 
   it('runner が lost と名乗ったセッションを、繋がっているからと live: true にしない', async () => {
-    // 引き取り（`#restoreJobs`）は runner が名乗った状態をそのまま採りつつ
-    // `attached: true` を固定する。runner の側では resume の失敗が確定してから
-    // （`#status = 'lost'`）そのセッションが一覧から消えるまでに実 I/O を挟むので、
-    // その隙間で引き取ると `lost` の像が `attached: true` で立つ。
+    // 引き取り（`#restoreJobs`）は runner が名乗った状態をそのまま採る。runner の
+    // 側では resume の失敗が確定してから（`#status = 'lost'`）そのセッションが
+    // 一覧から消えるまでに実 I/O を挟むので、その隙間で引き取ると `lost` を名乗る
+    // セッションを掴む。その像の `attached` は上流で `false` に倒すようにしたが、
+    // **`live` の判定はそれに依存しない**（下の理由）。
     //
     // **「`lost` と `attached: true` が同時に立つ代入は無い」に寄りかからない。**
     // 代入を全部数え上げて成り立つ不変条件は、次に代入を足した人が黙って壊す。
@@ -827,13 +828,10 @@ describe('デーモン再起動後（M4）', () => {
 
     await s.pool.restore();
 
-    const notice = s.inbox.find(
-      (event) => event.type === 'manager_message' && event.managerId === runningJob.id,
-    );
-    expect(
-      notice === undefined ||
-        !(notice as { text: string }).text.includes('runner の中で走り続けている'),
-    ).toBe(true);
+    const notices = s.inbox
+      .filter((event) => event.type === 'manager_message' && event.managerId === runningJob.id)
+      .map((event) => (event as { text: string }).text);
+    expect(notices.some((text) => text.includes('runner の中で走り続けている'))).toBe(false);
 
     await s.pool.stop();
   });
