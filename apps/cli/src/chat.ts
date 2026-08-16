@@ -570,8 +570,26 @@ export function renderManagerList(managers: ManagerListItem[]): string {
   const lines: string[] = [];
   for (const manager of managers) {
     const live = manager.live ? '' : ' /セッション切断';
-    lines.push(`  ${manager.managerId}  [${manager.status}${live}]  ${manager.request}`);
+    // **依頼文も抜粋にする。** 同じ関数の中で `waiting` と `lastReport` だけを
+    // 畳んでいたので、数千字の依頼が来ると一覧そのものが流れて読めなくなった。
+    lines.push(
+      `  ${manager.managerId}  [${manager.status}${live}]  ${summarizeText(manager.request)}`,
+    );
     lines.push(`      cwd: ${manager.cwd}`);
+    // **`lost` を状態名だけで済ませない。** クローン（`manager_list`）と Web UI には
+    // 但し書きが出るのに、ここだけ `[lost]` としか出ていなかった＝同じ状態を見て
+    // 人間とクローンが違う判断をする形になっていた。
+    //
+    // 言い切れるのは観測した分までである（PR #60）。デーモンが見ているのは
+    // 「前のセッションへ戻れたか」だけで、成果の有無は見ていない — 落ちる直前に
+    // PR をマージまで済ませていた仕事が `lost` になった実例がある。
+    if (manager.status === 'lost') {
+      lines.push(
+        '      ⚠ 前のセッションへ戻れなかった。見ているのは戻れたかどうかだけで、' +
+          '成果がリモート（PR・ブランチ・コミット）まで届いていることがある。' +
+          '起こし直す前にそこを確かめること',
+      );
+    }
     const denied = denialLine(manager.denials);
     if (denied !== null) lines.push(`      ${denied}`);
     for (const item of manager.waiting) {

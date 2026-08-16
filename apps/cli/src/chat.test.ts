@@ -100,4 +100,59 @@ describe('renderManagerList', () => {
     expect(denied).toBeLessThan(clean);
     expect(lines.filter((line) => line.includes('確認へ上がらず止められた'))).toHaveLength(1);
   });
+
+  /**
+   * `lost` の但し書きは、クローンの `manager_list` と Web UI には出ていたのに
+   * CLI にだけ無かった。同じ状態を見て人間とクローンが違う判断をすることになる。
+   */
+  it('lost には但し書きを添える（[lost] の札だけで終わらせない）', () => {
+    const text = renderManagerList([manager({ status: 'lost', live: false })]);
+
+    expect(text).toContain('[lost');
+    expect(text).toContain('⚠');
+    expect(text).toContain('前のセッションへ戻れなかった');
+  });
+
+  /**
+   * PR #60 と同じ線を CLI にも引く。観測しているのは「セッションへ戻れたか」
+   * だけなので、仕事が失われたと断定しない。実際に、落ちる直前に PR をマージ
+   * まで済ませていた仕事が `lost` になった例がある。
+   */
+  it('lost に「仕事が失われた」と書かない（観測の限界と次の一手を出す）', () => {
+    const text = renderManagerList([manager({ status: 'lost', live: false })]);
+
+    // 観測した分（戻れなかった）は言い切り、見ていない分は言い切らない。
+    expect(text).toContain('見ているのは戻れたかどうかだけ');
+    // 次に確かめる先。ここを削ると「戻れなかった」だけが残って断定に読める。
+    expect(text).toContain('リモート');
+    expect(text).toMatch(/PR/);
+  });
+
+  it('lost 以外には但し書きを出さない', () => {
+    for (const status of ['running', 'done', 'failed'] as const) {
+      const text = renderManagerList([manager({ status })]);
+      expect(text).not.toContain('前のセッションへ戻れなかった');
+    }
+  });
+
+  /**
+   * 同じ関数の中で `waiting` と `lastReport` は畳んでいるのに、依頼文だけが
+   * 生のまま出ていた。人間の依頼文は数千字あるので、一覧が流れて読めなくなる。
+   */
+  it('長い依頼文を畳む（一覧が流れない）', () => {
+    const text = renderManagerList([manager({ request: 'あ'.repeat(4000) })]);
+
+    const [header] = text.split('\n');
+    expect(header).toBeDefined();
+    expect(header?.length).toBeLessThan(200);
+    expect(header).toContain('…');
+  });
+
+  it('依頼文の改行で行が増えない（1件が1行から始まる）', () => {
+    const text = renderManagerList([manager({ request: '一行目\n二行目\n三行目' })]);
+
+    expect(text).toContain('一行目 二行目 三行目');
+    // 畳んだ結果が複数行に散らないこと（cwd が2行目に来る）
+    expect(text.split('\n')[1]).toContain('cwd:');
+  });
 });
