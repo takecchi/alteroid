@@ -1480,7 +1480,7 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      (c) => c.json({ entries: deps.scheduler?.list() ?? [] }),
+      (c) => c.json(scheduleListResponseSchema.parse({ entries: deps.scheduler?.list() ?? [] })),
     )
 
     /**
@@ -1544,7 +1544,7 @@ export function createApp(deps: AppDeps) {
         });
         // 次の刻みを待たずに効かせる（人間が仕込んだのに1分間存在しないのは嘘になる）
         await deps.scheduler?.refresh().catch(() => undefined);
-        return c.json({ ok: true });
+        return c.json(okResponseSchema.parse({ ok: true }));
       },
     )
 
@@ -1586,7 +1586,7 @@ export function createApp(deps: AppDeps) {
           grounds: '人間が直接 API から外した',
         });
         await deps.scheduler?.refresh().catch(() => undefined);
-        return c.json({ ok: true });
+        return c.json(okResponseSchema.parse({ ok: true }));
       },
     )
 
@@ -1625,7 +1625,7 @@ export function createApp(deps: AppDeps) {
       (c) => {
         const kind = c.req.param('kind');
         if (deps.scheduler?.run(kind) !== true) return c.json({ error: 'not found' as const }, 404);
-        return c.json({ ok: true });
+        return c.json(okResponseSchema.parse({ ok: true }));
       },
     )
 
@@ -1837,32 +1837,37 @@ export function createApp(deps: AppDeps) {
       }),
       async (c) => {
         const registry = deps.runners;
-        if (registry === undefined) return c.json({ runners: [] });
+        if (registry === undefined) return c.json(runnersListResponseSchema.parse({ runners: [] }));
         // **名簿に載っている全部を返す**（開けている分だけではない）。上がって
         // こない runner が一覧から消えるだけだと、人間には「設定し忘れた」のか
         // 「上がってこない」のかが区別できない。
         const open = new Map((await registry.list()).map((runner) => [runner.runnerId, runner]));
-        return c.json({
-          runners: await Promise.all(
-            registry.entries().map(async (entry) => {
-              const runner = entry.runnerId === undefined ? undefined : open.get(entry.runnerId);
-              return {
-                label: entry.label,
-                state: entry.state,
-                since: entry.since,
-                ...(entry.error === undefined ? {} : { error: entry.error }),
-                ...(entry.runnerId === undefined ? {} : { runnerId: entry.runnerId }),
-                ...(entry.workspacePath === undefined
-                  ? {}
-                  : { workspacePath: entry.workspacePath }),
-                // 繋がっていない相手には聞きに行かない（指紋は runner が持つ）。
-                credentials: runner === undefined ? [] : await runner.credentials().catch(() => []),
-                profile:
-                  runner === undefined ? undefined : await runner.profile().catch(() => undefined),
-              };
-            }),
-          ),
-        });
+        return c.json(
+          runnersListResponseSchema.parse({
+            runners: await Promise.all(
+              registry.entries().map(async (entry) => {
+                const runner = entry.runnerId === undefined ? undefined : open.get(entry.runnerId);
+                return {
+                  label: entry.label,
+                  state: entry.state,
+                  since: entry.since,
+                  ...(entry.error === undefined ? {} : { error: entry.error }),
+                  ...(entry.runnerId === undefined ? {} : { runnerId: entry.runnerId }),
+                  ...(entry.workspacePath === undefined
+                    ? {}
+                    : { workspacePath: entry.workspacePath }),
+                  // 繋がっていない相手には聞きに行かない（指紋は runner が持つ）。
+                  credentials:
+                    runner === undefined ? [] : await runner.credentials().catch(() => []),
+                  profile:
+                    runner === undefined
+                      ? undefined
+                      : await runner.profile().catch(() => undefined),
+                };
+              }),
+            ),
+          }),
+        );
       },
     )
 
@@ -1922,7 +1927,7 @@ export function createApp(deps: AppDeps) {
             }
           }),
         );
-        return c.json({ results });
+        return c.json(runnersCredentialsResponseSchema.parse({ results }));
       },
     )
 
@@ -1968,13 +1973,15 @@ export function createApp(deps: AppDeps) {
       requireOperator,
       async (c) => {
         const stored = await deps.stores.profile.read();
-        if (stored === null) return c.json({ script: '' });
-        return c.json({
-          script: stored.script,
-          updatedAt: stored.updatedAt,
-          sha256: fingerprintOf(stored.script),
-          bytes: Buffer.byteLength(stored.script),
-        });
+        if (stored === null) return c.json(profileResponseSchema.parse({ script: '' }));
+        return c.json(
+          profileResponseSchema.parse({
+            script: stored.script,
+            updatedAt: stored.updatedAt,
+            sha256: fingerprintOf(stored.script),
+            bytes: Buffer.byteLength(stored.script),
+          }),
+        );
       },
     )
 
@@ -2043,14 +2050,16 @@ export function createApp(deps: AppDeps) {
           );
         }
 
-        return c.json({
-          updatedAt: result.updatedAt as string,
-          ...(result.sha256 === undefined
-            ? {}
-            : { sha256: result.sha256, bytes: result.bytes as number }),
-          clone: result.clone,
-          runners: result.runners,
-        });
+        return c.json(
+          profileUpdateResponseSchema.parse({
+            updatedAt: result.updatedAt as string,
+            ...(result.sha256 === undefined
+              ? {}
+              : { sha256: result.sha256, bytes: result.bytes as number }),
+            clone: result.clone,
+            runners: result.runners,
+          }),
+        );
       },
     )
 
@@ -2068,7 +2077,8 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      async (c) => c.json({ entries: await stores.archive.list() }),
+      async (c) =>
+        c.json(archiveListResponseSchema.parse({ entries: await stores.archive.list() })),
     )
 
     .get(
