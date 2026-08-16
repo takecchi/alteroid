@@ -604,21 +604,61 @@ class Clone implements CloneHost {
   /**
    * ターンの失敗を必ずどこかに残す。
    *
-   * 人間が繋がっていれば chat へ流れるが、**内部ターンには聞き手が居ない**。
-   * マネージャーからの確認も蒸留も内部ターンなので、そこで握り潰すと、
-   * 「クローンが黙り、マネージャーが永久に返事を待つ」が無記録で起きる。
+   * 人間が繋がっていれば chat へも流れるが、**流せたことを記録の代わりにしない。**
+   * `#emit` はその会話の購読者が居なければ何もしないので、chat へ流すだけで
+   * 済ませると「人間が発言 → chat を閉じる／切断 → そのターンが例外で失敗」が
+   * どこにも残らない。内部ターン（マネージャーからの確認・蒸留・自律）には
+   * そもそも聞き手が居ないので、握り潰せば「クローンが黙り、マネージャーが
+   * 永久に返事を待つ」が無記録で起きる。**どちらの向きも日誌で受ける。**
+   *
+   * これは消し込みの前提でもある。受信箱のループは例外で終わった合図も
+   * `#forget` するが（`#pump` の `finally`）、その根拠は「失敗が記録されて
+   * いる」ことである。人間の発言だけがその根拠を欠いていた。
+   *
+   * **なぜ日誌か（`Clone#post` の #57 とは選択が違う）。** あちらは同期で
+   * 返り値を持たず、日誌へ書けば fire-and-forget ＝跡が残る前にプロセスが
+   * 消える窓そのものへ賭けることになるので stderr にした。ここは `async` で、
+   * **呼び出し側が全経路で `await` している**（`#pump` の catch / `#runTurn` /
+   * 読み取りループの finally）。しかも `#forget` はこの `await` が返った後の
+   * `finally` で走るので、書き終える前に落ちれば合図は未読のまま残って配り
+   * 直される。跡を残す窓と競合しない以上、stderr へ落とす理由が無い。
+   *
+   * **本文（`message`）を stderr へは出さない。** ここに入るのは呼び出し側3か所
+   * すべてで `String(error)` である。**いま辿れる範囲に、人間の発言そのものを
+   * 載せて戻ってくる経路は無い**（発言を束縛して書くのは `#handle` の
+   * `#journal` だが、あれは自分で握って `noteDroppedRecord` へ落とすので
+   * ここまで投げてこない）。だが `message` は SDK・API・ストアのドライバが
+   * 決める文字列であって**こちらが値を決めていない** — `journalEntryShape` の
+   * 判定基準（「自由文かどうか」ではなく「値を誰が決めるか」）では出せない側で
+   * ある。日誌は持ち主しか読まないが stderr は器の外へ出ていく
+   * （`noteDroppedRecord` の doc）。書けなかったときの跡は `#journal` が
+   * `journalEntryShape` ＝長さだけに畳んで `noteDroppedRecord` へ落とす。
+   * **ここに素の `String(error)` を1行も足さないこと。**
    */
   async #reportFailure(conversationId: string | null, message: string): Promise<void> {
-    if (conversationId !== null) {
-      this.#emit(conversationId, { type: 'error', message });
-      return;
-    }
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text: `内部ターンが失敗した: ${message}`,
-    });
+    // 繋がっている人間には即座に見せる。日誌より先なのは、書き込みを待たせて
+    // 「反応が無い」時間を伸ばさないため。届かなくても下の記録が残る。
+    this.#emit(conversationId, { type: 'error', message });
+
+    // `conversationId` は呼び出し側が構造化フィールドとして持っている値なので
+    // 載せる（#56 の線）。落とすと、失敗がどの会話のものだったかを時刻でしか
+    // 突き合わせられなくなる — 日誌には列があるのに。
+    await this.#journal(
+      conversationId === null
+        ? {
+            type: 'exchange',
+            with: 'self',
+            role: 'outbound',
+            text: `内部ターンが失敗した: ${message}`,
+          }
+        : {
+            type: 'exchange',
+            with: 'human',
+            role: 'outbound',
+            text: `人間との対話ターンが失敗した: ${message}`,
+            conversationId,
+          },
+    );
   }
 
   async #handle(event: InboxEvent): Promise<void> {

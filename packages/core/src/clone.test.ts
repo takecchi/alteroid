@@ -1183,6 +1183,113 @@ describe('クローン — 壊れ方の回帰', () => {
   });
 });
 
+/**
+ * ターンの失敗が、聞き手の有無に関わらず観測できるか。
+ *
+ * **ここが成り立っていることが、受信箱の消し込みの前提である**（#58）。例外で
+ * 終わった合図も `#forget` してよいとしたのは「失敗が記録されているから」で、
+ * `#emit` は購読者が居なければ何もしない以上、chat へ流すだけでは記録に
+ * ならない。7 つある入力経路のうち `human_message` だけがそれで済ませていた。
+ */
+describe('クローン — ターンの失敗の跡', () => {
+  /** 日誌の `exchange` を、判定に使う形だけ取り出す。 */
+  async function exchanges(stores: Stores) {
+    return (await stores.journal.list({ types: ['exchange'] })) as {
+      with: string;
+      role: string;
+      text: string;
+      conversationId?: string;
+    }[];
+  }
+
+  it('人間が chat を閉じた後にターンが失敗しても、日誌に残る（購読者は居ない）', async () => {
+    const stores = createMemoryStores();
+    // `setup` が購読するのは conv-1 だけ。conv-9 には聞き手が一人も居ない
+    // ＝「発言 → chat を閉じる／切断 → そのターンが失敗」と同じ形。
+    const s = setup(undefined, stores, { failWith: 'セッションを起こせない' });
+
+    s.clone.post(humanMessage('やあ', 'conv-9'));
+
+    await expect
+      .poll(
+        async () =>
+          (await exchanges(stores)).some(
+            (entry) => entry.role === 'outbound' && entry.text.includes('失敗した'),
+          ),
+        { timeout: 3000 },
+      )
+      .toBe(true);
+
+    const failure = (await exchanges(stores)).find((entry) => entry.text.includes('失敗した'));
+    expect(failure?.with).toBe('human');
+    // 呼び出し側が構造化フィールドとして持っている値は載せる（#56 の線）。
+    // 落とすと、どの会話の失敗だったかを時刻でしか突き合わせられなくなる。
+    expect(failure?.conversationId).toBe('conv-9');
+    expect(failure?.text).toContain('セッションを起こせない');
+
+    await s.clone.stop();
+  });
+
+  it('購読者が例外を投げても、跡は残る（`#emit` は購読側の失敗を握り潰す）', async () => {
+    const stores = createMemoryStores();
+    const s = setup(undefined, stores, { failWith: '読み取りが即死した' });
+    // 聞き手は「居る」が、受け取れない。`#emit` が握り潰すので、chat へ流した
+    // ことを記録の代わりにしていると、購読者が居ないときと同じ形で消える。
+    s.clone.subscribe('conv-9', () => {
+      throw new Error('購読側が壊れている');
+    });
+
+    s.clone.post(humanMessage('やあ', 'conv-9'));
+
+    await expect
+      .poll(
+        async () =>
+          (await exchanges(stores)).some(
+            (entry) => entry.role === 'outbound' && entry.text.includes('失敗した'),
+          ),
+        { timeout: 3000 },
+      )
+      .toBe(true);
+
+    await s.clone.stop();
+  });
+
+  it('日誌にも書けなければ stderr に1行。ただし本文は出さない', async () => {
+    // `#reportFailure` の `message` は `String(error)` ＝ SDK・API・ストアの
+    // ドライバが決める文字列で、**こちらが値を決めていない**（ドライバは失敗した
+    // クエリのパラメータを添えてくることがある）。そこを素で stderr へ出すと
+    // **日誌にすら入らなかった本文がホスティング先のログには残る**（#52 の逆転）。
+    // ここではその形を、秘密を含む例外で作る。
+    const secret = 'GH_TOKEN=ghp_000000000000000000000000000000000000';
+    const stores = failingJournalAppend(createMemoryStores(), '器が閉じている');
+
+    const lines = await captureStderr(async () => {
+      const s = setup(undefined, stores, { failWith: `クエリが失敗した params=["${secret}"]` });
+      // 失敗が `#reportFailure` まで届いたことは chat 側の `error` で見る
+      // （日誌は落ちるので、そちらでは待てない）。
+      const seen: ChatStreamEvent[] = [];
+      s.clone.subscribe('conv-9', (event) => seen.push(event));
+      s.clone.post(humanMessage('やあ', 'conv-9'));
+      await expect
+        .poll(() => seen.some((event) => event.type === 'error'), { timeout: 3000 })
+        .toBe(true);
+      await s.clone.stop();
+    });
+
+    const outbound = lines.filter(
+      (line) => line.includes('日誌を記録できませんでした') && line.includes('role=outbound'),
+    );
+    expect(outbound).toHaveLength(1);
+    // 理由だけは出す（`reasonOf` を通っている）。
+    expect(outbound[0]).toContain('器が閉じている');
+    // 本文は出さない。長さだけ出す（「空だった」と「書けなかった」が区別できる）。
+    expect(outbound[0]).toMatch(/role=outbound chars=[1-9]\d*/u);
+    expect(lines.join('')).not.toContain(secret);
+    expect(lines.join('')).not.toContain('ghp_');
+    expect(lines.join('')).not.toContain('params=');
+  });
+});
+
 describe('クローン — 考えている合図（thinking）', () => {
   /**
    * `fakeSdk` は assistant(text) → result の1本道しか流せず、tool_use /
