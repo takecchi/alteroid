@@ -83,6 +83,26 @@ export const schedules = pgTable('schedules', {
   plan: jsonb('plan').notNull(),
 });
 
+/**
+ * まだ処理し終えていない受信箱の合図（`store.ts` の `InboxStore`）。
+ *
+ * `id` が主キーなのは、同じ合図が二重に積まれないためである（`put` は同じ id なら
+ * 上書きし、`deliveries` は引き継ぐ）。本文（`InboxEvent`）は jsonb にそのまま入れる
+ * — 記録の意味は fs 版（`inbox.json`）と同じで、器が違うだけである。
+ */
+export const inboxEvents = pgTable(
+  'inbox_events',
+  {
+    id: text('id').primaryKey(),
+    event: jsonb('event').notNull(),
+    /** `post` が受理した時刻。古い順に配るための軸。 */
+    at: timestamp('at', { withTimezone: true, mode: 'date' }).notNull(),
+    /** 何度目の配達か。`claimPending` が読みと同時に進める。 */
+    deliveries: integer('deliveries').notNull().default(0),
+  },
+  (table) => [index('inbox_events_at_idx').on(table.at)],
+);
+
 /** セッション生ログの退避先（PreCompact で落とした全文）。 */
 export const archive = pgTable('archive', {
   id: text('id').primaryKey(),

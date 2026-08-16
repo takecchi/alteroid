@@ -2,6 +2,7 @@ import type { SessionStore } from '@anthropic-ai/claude-agent-sdk';
 
 import type { AuthStore } from './auth.js';
 import type {
+  InboxEvent,
   Job,
   JournalEntry,
   JournalEntryInput,
@@ -131,6 +132,64 @@ export interface ScheduleStore {
   completeRun(kind: string, at: string, cause: 'schedule' | 'manual'): Promise<void>;
 }
 
+/**
+ * まだ処理し終えていない受信箱の合図（PRD「可観測性」/ architecture.md「同時実行モデル」）。
+ *
+ * **受信箱そのものはインメモリでよい。ここが持つのは「まだ終えていない」という事実だけ**
+ * である。デーモンが落ちたとき、`Inbox` の `#queue` に居たものも、`#waiters` へ直接
+ * 渡されて一度も queue を通らなかったものも、同じように消える。消えるのは人間の発言・
+ * webhook・マネージャーの報告＝**判断の材料**であって、失われたことに気づく手段も無い。
+ *
+ * **境界は「`post` が受理した時点」であって「queue に入った時点」ではない。** クローンが
+ * 暇なときに届いた合図は `Inbox#push` の waiter 経路を通って queue を素通りするので、
+ * 「落ちる前に queue を吐き出す」形の永続化はその経路を1件も救わない。
+ *
+ * **消し込みは「処理を終えた時点」である**（取り出した時点ではない）。取り出した時点で
+ * 消すと、処理の途中でプロセスが死んだものが失われる＝いま塞いでいる穴がそのまま残る。
+ * したがって同じ合図が二度処理されうるが、**二度届く（雑音）より消える（判断材料の
+ * 喪失）方が高い**。二度目だと分かる形にすることでこの取引を成立させる（`deliveries`）。
+ *
+ * **本文を持つ。** ここは日誌やジョブ台帳と同じ記憶ストアの中で、本文を持つ器は既に
+ * ある（新しい露出面ではない）。持たなければ拾い直せないので、持たない選択は無い。
+ * ただし**書けなかったときに外へ出す跡には本文を載せない**（`dropped-record.ts`）。
+ */
+export interface InboxStore {
+  /**
+   * 受け取った合図を未読として置く。同じ id なら上書きする（配達回数は保つ）。
+   *
+   * **`post` が受理した順に呼ばれるが、書けた順は保証されない。** 呼び出し側は
+   * 消し込みがこの書き込みを追い越さないようにすること（追い越すと、消したはずの
+   * 合図が後から書かれて永久に配り直される）。
+   */
+  put(event: InboxEvent, at: string): Promise<void>;
+
+  /** 処理を終えた合図を消す。無ければ何もしない。 */
+  remove(id: string): Promise<void>;
+
+  /**
+   * 残っている未読を古い順に返し、**同時に配達回数を1つ進める**。
+   *
+   * **読むことと回数を進めることを1操作に閉じること**（`ScheduleStore.claimRun` と
+   * 同じ作法）。分けると、配り直しの途中で落ちたときに回数が進まず、「何回目の配達か」
+   * が嘘になる。回数はクローンが毒（＝配り直すたびに器ごと落ちる合図）を見分ける
+   * ための唯一の材料なので、**これは実行回数の制限ではない**（AGENTS.md 地雷2）—
+   * 何回目であっても配ることは変わらない。
+   */
+  claimPending(): Promise<PendingInboxEvent[]>;
+}
+
+/** 未読として残っていた合図1件。 */
+export interface PendingInboxEvent {
+  event: InboxEvent;
+  /** `post` が受理した時刻（ISO 8601）。 */
+  at: string;
+  /**
+   * 何度目の配達か。`1` は「初めて配る」＝一度も配られずに器が落ちた。
+   * `2` 以上は「前に配ったが、終える前にまた落ちた」。
+   */
+  deliveries: number;
+}
+
 /** セッションの生ログ退避先（PreCompact フックで落とす）。 */
 export interface TranscriptArchive {
   /** 退避したアーカイブのパス（または識別子）を返す。 */
@@ -232,6 +291,13 @@ export interface Stores {
    * 効かないという能力差が生まれる（north_star 禁止1）。
    */
   schedules: ScheduleStore;
+  /**
+   * まだ処理し終えていない受信箱の合図。
+   *
+   * **省略可能にしないこと**（`schedules` / `usage` と同じ理由）。ここが任意だと、
+   * 片方の器でだけデーモンの死で未読が消えるという能力差が生まれる（north_star 禁止1）。
+   */
+  inbox: InboxStore;
   archive: TranscriptArchive;
   sessions: SessionRegistry;
   /**

@@ -11,7 +11,12 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 
 import { buildActivityDigest } from './digest.js';
-import { journalEntryShape, noteDroppedInboxEvent, noteDroppedRecord } from './dropped-record.js';
+import {
+  inboxEventShape,
+  journalEntryShape,
+  noteDroppedInboxEvent,
+  noteDroppedRecord,
+} from './dropped-record.js';
 import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { Inbox } from './inbox.js';
@@ -30,7 +35,7 @@ import {
 import { DAILY_REPORT_KIND, localDate, localDayRange } from './schedule.js';
 import type { ChatStreamEvent, InboxEvent, JournalEntryInput, ScheduledRequest } from './schema.js';
 import type { SelfFacts } from './self.js';
-import type { Stores } from './store.js';
+import type { PendingInboxEvent, Stores } from './store.js';
 import { CLONE_ALLOWED_TOOLS, MCP_SERVER_NAME, createCloneMcpServer } from './tools.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 
@@ -211,6 +216,28 @@ class Clone implements CloneHost {
   /** 受信箱に積んだイベントの処理完了を待つための約束。 */
   readonly #completions = new Map<string, () => void>();
 
+  /**
+   * 未読として器に置いた合図。id → その書き込みの約束。
+   *
+   * **消し込みがこの書き込みを追い越さないために持つ。** `post` は同期なので
+   * 書き込みは非同期になり、短いターンなら「処理を終えた」が「書けた」より先に
+   * 来る。順序を見ないと、消したはずの合図が後から書かれて永久に配り直される。
+   *
+   * ここに居ないものは器に置いていない合図である（`#postAndWait` の蒸留）。
+   */
+  readonly #unread = new Map<string, Promise<void>>();
+  /** 起動時に拾い直した合図。id → 何度目の配達か。 */
+  readonly #redelivered = new Map<string, PendingInboxEvent>();
+  /**
+   * いま処理している合図が配り直しなら、その断り書き。ターンの本文の先頭に載る。
+   *
+   * **断り書きを起点ごとに配らない。** プロンプトの組み立ては起点の数だけ
+   * （7か所）散っていて、そのうち1か所へ入れ忘れると「二度目だと分からない
+   * 配達」がその起点にだけ生まれる。ターンの入口（`#runTurn`）は1か所しかない
+   * ので、そこに置けば起点を問わず必ず載る。
+   */
+  #redeliveryNotice = '';
+
   /** SDK へ流す入力の待ち行列。 */
   readonly #input: SDKUserMessage[] = [];
   #inputWaiter: (() => void) | null = null;
@@ -292,6 +319,11 @@ class Clone implements CloneHost {
     // 人間の発言・マネージャーからの一件・外部イベントは中身が違うので絶対に畳まない。
     if (isTick(event) && this.#inbox.hasPending((queued) => isSameTick(queued, event))) return;
 
+    // **受理した時点で未読として書き出す。** 境界を「queue に入った時点」に置いては
+    // いけない — クローンが暇なときに届いた合図は `Inbox#push` の waiter 経路を
+    // 通って queue を素通りするので、queue を吐き出す形の永続化はその経路を1件も
+    // 救わない。ここに置けば、どちらの経路でも必ず1度は通る。
+    this.#remember(event);
     this.#inbox.push(event);
   }
 
@@ -385,13 +417,42 @@ class Clone implements CloneHost {
   }
 
   async #pump(): Promise<void> {
+    // 前の器が終えられなかったものを戻す。**始めるだけで、待たない。**
+    //
+    // 待つと2つ壊れる。1つは可用性で、器（PostgreSQL）が詰まっているときに
+    // `claimPending` が返らないと、**受信箱のループそのものが始まらない** —
+    // 人間の発言すら処理できないクローンになる。未読を拾い直せないことと、
+    // 何も受け取れないことは釣り合わない。もう1つは取り出しの間合いで、ここで
+    // 待つと `for await` の最初の `next()`（＝待ち受けの登録）が1周遅れ、起動
+    // 直後に積まれた合図の畳み込み方が変わる（`isTick` の畳み込みは「処理中の
+    // 1件＋待ち行列の1件」を残す形で効いている）。
+    //
+    // 拾い直したものは、戻り次第この同じループへ入る。**待たない以上、失敗は
+    // 自分で受けること** — ここで漏らすと unhandled rejection になり、未読を
+    // 拾い直せなかっただけでデーモンごと落ちる（走行中のマネージャーも巻き添え）。
+    void this.#restoreUnread().catch((error: unknown) => {
+      noteDroppedRecord('未読の読み直し', '', error);
+    });
+
     for await (const event of this.#inbox) {
+      this.#redeliveryNotice = this.#redeliveryNoticeFor(event);
       try {
         await this.#handle(event);
       } catch (error) {
         await this.#reportFailure(this.#conversationOf(event), String(error));
         this.#finishTurn();
       } finally {
+        this.#redeliveryNotice = '';
+        // **終えた時点で消す。取り出した時点ではない。** 取り出した時点で消すと、
+        // 処理の途中でプロセスが死んだものが失われる＝いま塞いでいる穴がそのまま残る。
+        //
+        // **例外で終わったものも消す。** ここへ来ているということは失敗が
+        // `#reportFailure`（＝人間へ流すか日誌へ落とす）に記録されたということで、
+        // 消えたわけではない。残す側を選ぶと、決定的に失敗する合図（形が不正・
+        // 参照先が消えている）が起動のたびに配り直され、そのたびに同じ失敗を
+        // 繰り返してクローンのターンを1本ずつ焼く。**残るのはプロセスが死んだ
+        // ときだけ**、が守るべき唯一の線である。
+        await this.#forget(event);
         const done = this.#completions.get(event.id);
         this.#completions.delete(event.id);
         done?.();
@@ -404,6 +465,140 @@ class Clone implements CloneHost {
 
   #conversationOf(event: InboxEvent): string | null {
     return event.type === 'human_message' ? event.conversationId : null;
+  }
+
+  // -------------------------------------------------------------------------
+  // 未読の永続化（プロセスが死んでも判断の材料を失わない）
+  // -------------------------------------------------------------------------
+
+  /**
+   * 受け取った合図を未読として器に置く。
+   *
+   * **`post` は同期で返り値を持たない**（7種類の起点すべてがそう呼ぶ）ので、書き
+   * 込みは待てない。したがって「受理した」と「書けた」の間には窓が残る。**そこは
+   * 塞げないが、塞げるのは残り全部である** — この直しの前は「受理してから処理を
+   * 終えるまで」丸ごとが失われる窓で、そこにはターン1本ぶん（マネージャーの委譲を
+   * 含めば数分から数十分）が入っていた。
+   *
+   * **失敗しても post を落とさない。** 未読を書けないことでその合図の処理まで
+   * 止めたら、いま直そうとしているものより広い穴になる。跡は stderr へ1行だけ残す
+   * （本文を出さない理由は `dropped-record.ts`。ここへ来る合図には人間の発言・
+   * webhook の本文・マネージャーの報告が入り、報告本文に `GH_TOKEN` が全文で出た
+   * 前例がある）。
+   */
+  #remember(event: InboxEvent): void {
+    this.#unread.set(
+      event.id,
+      this.#stores.inbox.put(event, event.at).catch((error: unknown) => {
+        noteDroppedRecord('未読の合図', inboxEventShape(event), error);
+      }),
+    );
+  }
+
+  /**
+   * 処理を終えた合図を器から消す。
+   *
+   * **書き込みの完了を待ってから消す。** 待たないと、短いターンでは消し込みが
+   * 書き込みを追い越し、消したはずの合図が後から書かれて**起動のたびに永久に
+   * 配り直される**（この直しが一番作りやすい壊れ方である）。
+   */
+  async #forget(event: InboxEvent): Promise<void> {
+    const written = this.#unread.get(event.id);
+    // 器に置いていない合図（`#postAndWait` の蒸留）は消すものが無い。
+    if (written === undefined) return;
+    this.#unread.delete(event.id);
+    this.#redelivered.delete(event.id);
+
+    await written;
+    try {
+      await this.#stores.inbox.remove(event.id);
+    } catch (error) {
+      // 消せなかったものは次の起動で配り直される。**それは設計どおりの側の失敗**
+      // （消えるより配り直す）なので、跡だけ残して進む。
+      noteDroppedRecord('未読の消し込み', inboxEventShape(event), error);
+    }
+  }
+
+  /**
+   * 前の器が終えられなかった合図を受信箱へ戻す。
+   *
+   * **永続化と拾い直しは1つの直しの前半と後半である。** 永続化しても拾い直さな
+   * ければ器の中で腐るだけだし、拾い直しには永続化が要る。片方だけ入れないこと。
+   *
+   * **digest（`digest.ts`）は変えない。** あちらも `done` のマネージャーを拾うが、
+   * 見せるのは 200 字の抜粋・最大15件・24時間の窓であり、**未読かどうかは区別
+   * しない**。ここで戻すのは全文が1ターンとして届く経路なので、両者は競合しない
+   * （digest に載るのは「この期間に何があったか」で、この直しの前から報告の抜粋は
+   * そこに出ていた＝重複が増えるわけではない）。むしろ**「消えたと思ったものが、
+   * 実は 200 字の抜粋として通り過ぎていた」を解くのがこちら側である** — 未読は
+   * 抜粋ではなく全文で、断り書き付きで届く。
+   */
+  async #restoreUnread(): Promise<void> {
+    let pending: PendingInboxEvent[];
+    try {
+      pending = await this.#stores.inbox.claimPending();
+    } catch (error) {
+      // 読めなければ配り直せないが、消してもいないので次の起動で拾い直せる。
+      noteDroppedRecord('未読の読み直し', '', error);
+      return;
+    }
+
+    for (const record of pending) {
+      if (this.#stopped || this.#inbox.closed) return;
+
+      // 人間が後から「なぜ二度来たのか」を追えるようにする。**積む前に書く** —
+      // 後だと、配り直した合図の処理（`#handle` が起点ごとの型で残す本文）より
+      // 後ろに回りうる。**本文は載せない**（同じ本文を二重に持たない）。
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text:
+          `未読のまま残っていた合図を配り直した（${record.deliveries}回目の配達、` +
+          `${record.at} に受け取ったもの）: ${inboxEventShape(record.event)}`,
+      });
+
+      // 日誌を書いているあいだに片付けが始まっていることがある。**積む直前に
+      // もう一度見ること**（`Inbox#push` は閉じた後だと投げる）。消してはいない
+      // ので、積めなかったものは次の起動で拾い直せる。
+      if (this.#stopped || this.#inbox.closed) return;
+
+      this.#redelivered.set(record.event.id, record);
+      // 既に器に在るので書き直さない。**ただし消し込みの対象には入れる**
+      // （入れ忘れると、拾い直したものが処理後も残って毎回配られる）。
+      this.#unread.set(record.event.id, Promise.resolve());
+      // `post` を通さないのは、tick の畳み込みで落ちた行が器に残り続けるからである
+      // （落とした側は誰も消さないので、起動のたびに配られて回数だけが増える）。
+      this.#inbox.push(record.event);
+    }
+  }
+
+  /**
+   * 配り直しの断り書き。初めての配達なら空文字。
+   *
+   * **「二度届く」ことは受け入れるが、「二度目だと分からない」ことは受け入れない。**
+   * 分からなければクローンは同じ報告に二度応答し、そのターンが丸ごと無駄になる
+   * （消費にも直結する）。ここが、消し込みを「終えた時点」に置いた取引の対価である。
+   */
+  #redeliveryNoticeFor(event: InboxEvent): string {
+    const record = this.#redelivered.get(event.id);
+    if (record === undefined) return '';
+
+    return [
+      `[system] **これは配り直しである（${record.deliveries} 回目の配達）。**` +
+        `${record.at} に受け取ったまま、処理を終える前にデーモンが落ちた合図を、起動時に拾い直した。`,
+      '同じ内容に既に応答しているかもしれない。日誌（`journal_read`）と `manager_list` を見て、' +
+        '同じ仕事を二度起こさないこと。',
+      ...(record.deliveries >= 2
+        ? [
+            '**2 回以上配り直している。** この合図を処理するたびに器が落ちている可能性がある。' +
+              '同じやり方をもう一度なぞる前に、なぜ落ちたかを先に見ること。',
+          ]
+        : []),
+      '',
+      '---',
+      '',
+    ].join('\n');
   }
 
   /**
@@ -574,7 +769,8 @@ class Clone implements CloneHost {
 
     try {
       await this.#ensureQuery();
-      this.#pushInput(await this.#withFreshMemory(text));
+      // 配り直しの断り書きは**ここでだけ**載せる（`#redeliveryNotice` の理由）。
+      this.#pushInput(await this.#withFreshMemory(this.#redeliveryNotice + text));
       // 入力がモデルへ渡った瞬間から最初の出力までは「考えている」。
       // **`#ensureQuery` より後で送る** — セッションの起動そのものはまだ考え
       // 始めていないので、そこで送ると手が動いていないのに考えていると

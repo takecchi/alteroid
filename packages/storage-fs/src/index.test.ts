@@ -2,6 +2,7 @@ import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import type { InboxEvent } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createFsStores, initWorkspace } from './index.js';
@@ -465,6 +466,106 @@ describe('FsScheduleStore', () => {
     // 本文なしの曖昧なターンが走る（clone.ts が読取不能を分けている意味が消える）
     await expect(stores.schedules.get('broken')).rejects.toThrow();
     await expect(stores.schedules.list()).rejects.toThrow();
+  });
+});
+
+/**
+ * まだ処理し終えていない受信箱の合図（デーモンが死んでも消えないこと）。
+ *
+ * fs / pg で同じ振る舞いになることを両方で問う（`store.ts`「省略可能にしないこと」）。
+ */
+describe('FsInboxStore', () => {
+  const human = (id: string, at: string, text: string): InboxEvent => ({
+    type: 'human_message',
+    id,
+    at,
+    text,
+    conversationId: 'conv-1',
+  });
+
+  it('put したものが claimPending で古い順に返る', async () => {
+    await stores.inbox.put(
+      human('evt-2', '2026-08-11T00:00:00.000Z', '2件目'),
+      '2026-08-11T00:00:00.000Z',
+    );
+    await stores.inbox.put(
+      human('evt-1', '2026-08-10T00:00:00.000Z', '1件目'),
+      '2026-08-10T00:00:00.000Z',
+    );
+
+    const pending = await stores.inbox.claimPending();
+
+    expect(pending.map((entry) => entry.event.id)).toEqual(['evt-1', 'evt-2']);
+    expect(pending.every((entry) => entry.deliveries === 1)).toBe(true);
+  });
+
+  it('remove したものは返らない。無い id の remove は落ちない', async () => {
+    await stores.inbox.put(
+      human('evt-1', '2026-08-10T00:00:00.000Z', '本文'),
+      '2026-08-10T00:00:00.000Z',
+    );
+    await stores.inbox.remove('evt-1');
+
+    expect(await stores.inbox.claimPending()).toEqual([]);
+    await expect(stores.inbox.remove('しらない')).resolves.toBeUndefined();
+  });
+
+  it('claimPending を2回呼ぶと deliveries が 1 → 2 と進む（消していないものは何度でも返る）', async () => {
+    await stores.inbox.put(
+      human('evt-1', '2026-08-10T00:00:00.000Z', '本文'),
+      '2026-08-10T00:00:00.000Z',
+    );
+
+    const first = await stores.inbox.claimPending();
+    const second = await stores.inbox.claimPending();
+
+    expect(first[0]?.deliveries).toBe(1);
+    expect(second[0]?.deliveries).toBe(2);
+  });
+
+  it('同じ id で put し直しても deliveries が 0 に戻らない（本文だけ差し替わる）', async () => {
+    await stores.inbox.put(
+      human('evt-1', '2026-08-10T00:00:00.000Z', 'もとの本文'),
+      '2026-08-10T00:00:00.000Z',
+    );
+    await stores.inbox.claimPending();
+
+    // 同じ id で置き直す（例えばデーモン再起動直後にもう一度届いた、を模す）
+    await stores.inbox.put(
+      human('evt-1', '2026-08-10T00:00:00.000Z', '直した本文'),
+      '2026-08-10T00:00:00.000Z',
+    );
+    const pending = await stores.inbox.claimPending();
+
+    expect(pending[0]?.deliveries).toBe(2);
+    expect((pending[0]?.event as { text: string }).text).toBe('直した本文');
+  });
+
+  it('本文が欠けずに往復する（human_message の text、external の payload）', async () => {
+    await stores.inbox.put(
+      human('evt-1', '2026-08-10T00:00:00.000Z', '人間の発言'),
+      '2026-08-10T00:00:00.000Z',
+    );
+    await stores.inbox.put(
+      {
+        type: 'external',
+        id: 'evt-2',
+        at: '2026-08-11T00:00:00.000Z',
+        source: 'webhook',
+        payload: { deep: { nested: [1, 2, 3] }, note: '日本語も' },
+      },
+      '2026-08-11T00:00:00.000Z',
+    );
+
+    const pending = await stores.inbox.claimPending();
+    const humanEntry = pending.find((entry) => entry.event.id === 'evt-1');
+    const externalEntry = pending.find((entry) => entry.event.id === 'evt-2');
+
+    expect((humanEntry?.event as { text: string }).text).toBe('人間の発言');
+    expect((externalEntry?.event as { payload: unknown }).payload).toEqual({
+      deep: { nested: [1, 2, 3] },
+      note: '日本語も',
+    });
   });
 });
 
