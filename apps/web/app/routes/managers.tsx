@@ -10,11 +10,19 @@ const STATUS: Record<ManagerStatus, { tone: 'ok' | 'warn' | 'danger' | 'neutral'
   {
     running: { tone: 'ok', label: '実行中' },
     waiting_human: { tone: 'warn', label: '人間待ち' },
-    done: { tone: 'neutral', label: '完了' },
+    // **「完了」と書かない。** `done` はマネージャー自身のターンが終わって待機して
+    // いるだけで、仕事が終わったとは限らない（その下で作業者が走っているかも、
+    // ここからは見えていない）。`schema.ts` の定義も「待機中」である — 画面だけが
+    // 「完了」と言っていた。
+    done: { tone: 'neutral', label: '待機中' },
     failed: { tone: 'danger', label: '失敗' },
-    // **「完了」の側に寄せない。** 戻れなかった仕事は終わっていない。人間が画面で
-    // 見たときに「起こし直す対象」だと分かる言葉にする。
-    lost: { tone: 'danger', label: '復旧不能' },
+    // **「完了」の側に寄せない。** 戻れなかった仕事は `done`（終えて待っている）
+    // ではない。人間が画面で見たときに「起こし直す対象」だと分かる言葉にする。
+    //
+    // **かといって「復旧不能」でもない。** 観測したのは「前のセッションへ戻れ
+    // なかった」ことだけで、成果の有無は見ていない（デーモンは PR もブランチも
+    // 知らない）。落ちる直前にマージまで届いていた仕事がこの札を貼られている。
+    lost: { tone: 'danger', label: 'セッションへ戻れず' },
   };
 
 export function ManagerStatusBadge({ status }: { status: ManagerStatus }) {
@@ -58,6 +66,16 @@ export default function Managers() {
                     {manager.waiting.length > 0 && (
                       <p className="mt-1 text-[11px] text-warn">
                         {manager.waiting.length} 件の確認待ち: {manager.waiting[0]?.summary}
+                      </p>
+                    )}
+                    {/*
+                      札だけでは「で、どうすればいいのか」が伝わらない。クローンは
+                      `manager_list` で同じ案内を受け取る — 人間の画面にだけ無いと、
+                      同じ状態を見て人間とクローンが違う判断をすることになる。
+                    */}
+                    {manager.status === 'lost' && (
+                      <p className="mt-1 text-[11px] text-danger">
+                        前のセッションへ戻れなかっただけで、成果が残っているかは見ていない。起こし直す前にリモート（PR・ブランチ）を確かめること。
                       </p>
                     )}
                   </div>

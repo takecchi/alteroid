@@ -55,6 +55,9 @@ function fakeClone() {
     async list() {
       return managerList;
     },
+    denials() {
+      return [];
+    },
     async transcript(managerId) {
       return transcripts.get(managerId) ?? null;
     },

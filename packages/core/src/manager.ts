@@ -63,6 +63,19 @@ export interface ManagerSummary {
   waiting: { requestId: string; summary: string }[];
 }
 
+/**
+ * 「確認へ上がらずに止められた」件数（道具ごと）。
+ *
+ * **`status` では表せない。** 分類器か deny 規則がその場で拒否したとき、その仕事は
+ * `running` のまま手が止まる — デーモンから見えるのは「拒否があった」という事実
+ * だけで、**それで止まったのかどうかは観測していない**。だから状態の値は増やさず、
+ * 状態に**添える**形で出す（`manager_list`）。
+ */
+export interface ManagerDenial {
+  tool: string;
+  count: number;
+}
+
 export type ManagerDecision = 'allow' | 'deny';
 
 export interface ManagerSendResult {
@@ -123,6 +136,15 @@ export interface ManagerPool {
    */
   abort(managerId: string, reason?: string, by?: ManagerStopActor): Promise<ManagerAbortResult>;
   list(): Promise<ManagerSummary[]>;
+  /**
+   * このマネージャーで拒否された道具と件数を、**古い順**で返す。
+   *
+   * **`ManagerSummary` には載せない。** これはデーモンのプロセス内の像であって、
+   * 台帳にも `GET /managers` の spec にも無い（器を作り直せば数え直しになる）。
+   * 一覧の応答へ混ぜると、`openapi.json` に書いていないものが外へ出る。
+   * 読む口をここに分けておけば、外向きの面はそのままで一覧に添えられる。
+   */
+  denials(managerId: string): ManagerDenial[];
   /** manager_id からセッションの生ログへ降りる（可観測性の最下段）。 */
   transcript(managerId: string): Promise<string | null>;
   /**
@@ -454,6 +476,15 @@ class Pool implements ManagerPool {
       known.set(job.id, summaryOf({ job, waiting: [], attached: false }, false));
     }
     return [...known.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+  }
+
+  denials(managerId: string): ManagerDenial[] {
+    // 台帳へは降りない。**プロセス内の像にしか無い**ので、知らないものは
+    // 「無い」ではなく「数えていない」— どちらも空配列だが、そう読めるように
+    // 一覧側で「デーモンを作り直すと数え直しになる」と添えてある。
+    const denied = this.#records.get(managerId)?.denied;
+    if (denied === undefined) return [];
+    return denied.entries().map(([tool, count]) => ({ tool, count }));
   }
 
   async transcript(managerId: string): Promise<string | null> {
@@ -947,8 +978,14 @@ class Pool implements ManagerPool {
         `作業ディレクトリ: ${job.cwd ?? '(不明)'}`,
         job.lastReport === undefined ? '' : `直近の報告: ${job.lastReport}`,
         '',
+        // **戻れなかったことしか観測していない。** このデーモンは PR もブランチも
+        // 見に行かない（リポジトリの事情はマネージャーの領域である）。だから
+        // 「成果が無い」とは言わず、確かめる先だけを渡す。落ちる直前にマージまで
+        // 済ませていた、が実際に起きている。
         '同じ命令を投げ直しても同じ答えが返る種類の失敗なので、自動では再試行しない。' +
-          '続きが要るなら `manager_start` で起こし直すこと。',
+          'ただし**この失敗は「仕事が終わっていない」ことの証拠ではない** — ' +
+          '落ちる前に成果がリモート（PR・ブランチ・コミット）まで届いていることがある。' +
+          '`manager_start` で起こし直す前に、そこを確かめること。',
       ]
         .filter((line) => line !== '')
         .join('\n'),

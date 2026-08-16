@@ -40,6 +40,32 @@ describe('上限つきの帳面', () => {
     expect(map.has('b')).toBe(false);
   });
 
+  it('中身を古い順で読み出せる（数えた分を表に出せる）', () => {
+    // 読み出す口が無いと、数えていても一覧には出せない。拒否の件数が
+    // `manager_list` に出ないまま日誌だけに溜まっていたのがその形である。
+    const map = createRecentMap<number>({ limit: 3 });
+    map.set('Bash', 1);
+    map.set('Write', 2);
+    map.set('Bash', 5);
+
+    // 触れ直した Bash は新しい側（末尾）へ寄る。一覧は末尾から採るので、
+    // ここが古い順でないと「直近の拒否」が古いものになる。
+    expect(map.entries()).toEqual([
+      ['Write', 2],
+      ['Bash', 5],
+    ]);
+  });
+
+  it('読み出した控えを触っても帳面は動かない', () => {
+    const map = createRecentMap<number>({ limit: 2 });
+    map.set('a', 1);
+
+    map.entries().push(['b', 2]);
+
+    expect(map.size).toBe(1);
+    expect(map.has('b')).toBe(false);
+  });
+
   it('上限が0以下なら作らせない（覚えないのに覚えたつもりになる）', () => {
     expect(() => createRecentMap({ limit: 0 })).toThrow();
     expect(() => createRecentMap({ limit: 1.5 })).toThrow();

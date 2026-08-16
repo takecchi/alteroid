@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ManagerPool, ManagerSummary } from './manager.js';
+import type { ManagerDenial, ManagerPool, ManagerSummary } from './manager.js';
 import { createProfileService } from './profile-service.js';
 import type { ChatStreamEvent } from './schema.js';
 import type { Stores } from './store.js';
@@ -19,6 +19,8 @@ interface Harness {
   distributed: string[];
   /** 走っていることになっているマネージャー（直接いじって状況を作る）。 */
   running: ManagerSummary[];
+  /** 確認へ上がらず止められた道具（manager_id → 古い順）。 */
+  denied: Map<string, ManagerDenial[]>;
   call(name: string, args: Record<string, unknown>): Promise<string>;
 }
 
@@ -29,6 +31,7 @@ function harness(): Harness {
   const started: { request: string; cwd?: string }[] = [];
   const aborted: { managerId: string; reason?: string }[] = [];
   const running: ManagerSummary[] = [];
+  const denied = new Map<string, ManagerDenial[]>();
 
   const managers: ManagerPool = {
     async start(input) {
@@ -54,6 +57,9 @@ function harness(): Harness {
       // 本物の `list()` は毎回作り直した写しを返す（`summaryOf`）。同じ物を返すと、
       // 呼び手が控えた「前の状態」が後から書き換わってしまう。
       return running.map((manager) => ({ ...manager }));
+    },
+    denials(managerId: string) {
+      return denied.get(managerId) ?? [];
     },
     async transcript() {
       return null;
@@ -114,6 +120,7 @@ function harness(): Harness {
     aborted,
     distributed,
     running,
+    denied,
     async call(name, args) {
       const found = tools.find((entry) => entry.name === name);
       if (!found) throw new Error(`ツール ${name} が無い`);
@@ -635,6 +642,146 @@ describe('manager_list は件数が増えても壊れない', () => {
     const reply = await h.call('manager_report', { managerId: 'mgr-999' });
 
     expect(reply).toContain('mgr-999');
+  });
+});
+
+/**
+ * 状態の表示が、**観測していないことまで語らない**こと。
+ *
+ * ここで固定しているのは「何を言うか」ではなく「**何を言わないか**」である。
+ * デーモンが観測できるのは限られている（セッションへ戻れたか / 拒否があったか /
+ * マネージャーのターンが終わったか）のに、文言はその先まで — 仕事が失われた、
+ * 走っている、走っている手は無い — と断定していた。断定は静かに間違う。
+ */
+describe('一覧の文言は、観測した分しか言わない', () => {
+  /**
+   * **実際に起きた誤りをそのまま置いてある。**
+   *
+   * 2026-08-16T03:15 に落ちたマネージャーは、その直前に PR #59 を出し、CI を
+   * 通し、マージまで届いていた。1分半後に器が作り直されて `lost` になり、
+   * 一覧は「この仕事は途中で失われている（完了ではない）」と言った。
+   * デーモンは PR を見ていないのだから、これは観測ではなく推測だった。
+   */
+  it('lost に「完了ではない」と書かない（成果の有無は観測していない）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'PR を出して' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.status = 'lost';
+    target.live = false;
+
+    const reply = await h.call('manager_list', {});
+
+    // 断定へ戻したら、ここで落ちる。
+    expect(reply).not.toContain('途中で失われている');
+    expect(reply).not.toContain('完了ではない');
+    // 観測した分（戻れなかった）は言い切る。
+    expect(reply).toContain('戻れなかった');
+    // **次の一手を渡す。** 「断定をやめる」だけだと、読んだ側は結局
+    // 起こし直すか放置するかを勘で決めることになる。
+    expect(reply).toMatch(/リモート|PR/);
+    expect(reply).toContain('確かめ');
+  });
+
+  /**
+   * **PR #42 の分け方は保つ。** 断定を外したせいで `lost` が `done`（終えて
+   * 待っている）と同じ顔になったら、失われた仕事が黙って片付く方の欠陥へ戻る。
+   */
+  it('lost は done と混ざらない（起こし直す対象として見分けられる）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    await h.call('manager_start', { request: 'B' });
+    const [lost, done] = h.running;
+    if (!lost || !done) throw new Error('準備に失敗');
+    lost.status = 'lost';
+    lost.live = false;
+    done.status = 'done';
+
+    const reply = await h.call('manager_list', {});
+    const lostEntry = reply.slice(reply.indexOf('mgr-1'), reply.indexOf('mgr-2'));
+    const doneEntry = reply.slice(reply.indexOf('mgr-2'));
+
+    expect(lostEntry).toContain('⚠');
+    expect(lostEntry).toContain('manager_start');
+    // done 側には「起こし直せ」の案内が付かない（話しかければ続く）。
+    expect(doneEntry).not.toContain('⚠');
+  });
+
+  /**
+   * **`running` は「動いている」ではない。**
+   *
+   * 分類器か deny 規則がその場で拒否すると、その仕事は `running` のまま手が
+   * 止まる。それが日誌と（繰り返したときだけ）受信箱にしか出ておらず、一覧を
+   * 見ているクローンには「走っている」としか読めなかった。
+   */
+  it('拒否で手が止まっていることが、状態に添えて一覧に出る', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.denied.set('mgr-1', [
+      { tool: 'Bash', count: 4 },
+      { tool: 'Write', count: 1 },
+    ]);
+
+    const reply = await h.call('manager_list', {});
+
+    // 状態の値そのものは動かさない（`openapi.json` の外向きの面を触らない）。
+    expect(reply).toContain('[running]');
+    expect(reply).toContain('Bash 4件');
+    expect(reply).toContain('Write 1件');
+    // **なぜ一覧に出す必要があったのか**まで書く（クローンには回っていない）。
+    expect(reply).toContain('クローンには回ってきていない');
+    expect(reply).toContain('journal_read');
+  });
+
+  it('拒否が無いマネージャーには何も足さない（雑音にしない）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).not.toContain('止められた道具');
+  });
+
+  it('拒否の種類が多くても一覧を食い潰さず、切ったことを言う', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.denied.set(
+      'mgr-1',
+      Array.from({ length: 7 }, (_, index) => ({ tool: `tool-${index}`, count: index + 1 })),
+    );
+
+    const reply = await h.call('manager_list', {});
+
+    // 新しい側（末尾）から3種。
+    expect(reply).toContain('tool-6 7件');
+    expect(reply).toContain('tool-4 5件');
+    expect(reply).not.toContain('tool-3');
+    // 黙って落とさない。
+    expect(reply).toContain('ほか 4 種');
+    expect(reply).toContain('全 28 件');
+  });
+
+  /**
+   * **`done` は「マネージャー自身のターンが終わった」でしかない。**
+   *
+   * その下で作業者が走っているかは、デーモンには見えていない（作業者の生存も
+   * worktree の更新時刻も、ここからは読めない）。「走っている手は無く」は
+   * 観測ではなく推測だった。
+   */
+  it('done を畳んだときに「走っている手は無い」と断定しない', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.status = 'done';
+
+    const reply = await h.call('manager_stop', { managerId: 'mgr-1' });
+
+    expect(reply).toContain('待機中（done）');
+    // 断定へ戻したら、ここで落ちる。
+    expect(reply).not.toContain('走っている手は無く');
+    expect(reply).toContain('作業者');
+    expect(reply).toContain('見えていない');
   });
 });
 

@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 import { isCronExpression } from './cron.js';
 import { describePage, excerptLine, page } from './excerpt.js';
-import type { ManagerPool, ManagerSummary } from './manager.js';
+import type { ManagerDenial, ManagerPool, ManagerSummary } from './manager.js';
 import type { ProfileService } from './profile-service.js';
 import {
   RESERVED_SCHEDULE_KINDS,
@@ -106,6 +106,13 @@ export const CLONE_TOOL_NAMES = [
 const LIST_REQUEST_EXCERPT = 160;
 const LIST_REPORT_EXCERPT = 240;
 const LIST_BUDGET = 8_000;
+/**
+ * 一覧に添える拒否は、**新しい側から**この件数まで。
+ *
+ * 上限で切るのは 1 本の異常が一覧を食い潰さないためだが、**切ったことは必ず
+ * 言う**（`denialLine`）。黙って落とすと「3種類しか止められていない」に見える。
+ */
+const LIST_DENIED_TOOLS = 3;
 /** 全文を取りに来たときの1回分。続きは `offset` で取れる。 */
 const REPORT_PAGE = 8_000;
 
@@ -127,6 +134,34 @@ export const CLONE_ALLOWED_TOOLS = CLONE_TOOL_NAMES.map(qualifiedToolName);
 
 function text(body: string) {
   return { content: [{ type: 'text' as const, text: body }] };
+}
+
+/**
+ * 一覧に添える「確認へ上がらず止められた」件数の行。
+ *
+ * **`status` は「動いている」を意味しない。** 分類器か deny 規則がその場で拒否
+ * すると、その仕事は `running` のまま手が止まる。それが日誌と（繰り返したときだけ）
+ * 受信箱にしか出ていなかったので、一覧を見ているクローンには止まっていることが
+ * 見えなかった。
+ *
+ * **ここでも観測した分しか言わない。** 数えているのは拒否そのものであって、
+ * その結果マネージャーが止まったかどうかは見ていない（動きを見る手がデーモンに
+ * 無い）。数は器を作り直せば消えるので、そのことも書く — 「0 件」を
+ * 「止められていない」と読まれると、作り直し直後がいちばん静かに見える。
+ */
+function denialLine(denials: ManagerDenial[]): string | null {
+  if (denials.length === 0) return null;
+  // 帳面は古い順に積まれている。**新しい側から**採る。
+  const recent = [...denials].reverse();
+  const shown = recent.slice(0, LIST_DENIED_TOOLS);
+  const rest = recent.length - shown.length;
+  const total = denials.reduce((sum, entry) => sum + entry.count, 0);
+  return (
+    `  ⚠ 確認へ上がらず止められた道具: ${shown.map((e) => `${e.tool} ${e.count}件`).join(' / ')}` +
+    (rest > 0 ? `（ほか ${rest} 種、全 ${total} 件）` : '') +
+    '。この確認はクローンには回ってきていないので、手が止まっている可能性がある' +
+    '（全件は journal_read に残っている。件数はデーモンを作り直すと数え直しになる）。'
+  );
 }
 
 const NO_POOL = text(
@@ -853,8 +888,14 @@ export function createCloneTools(context: ToolContext) {
         }
 
         if (before?.status === 'done') {
+          // **`done` は「マネージャー自身のターンが終わって待機中」でしかない。**
+          // その下で作業者が走っているかは、デーモンからは見えていない（作業者の
+          // 生存も worktree の更新時刻も、ここからは読めない）。前の文言は
+          // 「走っている手は無く」と断定していたが、それは観測ではなく推測である。
           lines.push(
-            'もともと待機中（done）だった仕事である。走っている手は無く、記録を畳んだだけになる。',
+            'もともと待機中（done）だった仕事である。マネージャー自身のターンは終わっていたので、' +
+              '畳んだのは記録である。ただし **`done` は「その下で誰も動いていない」ことまでは' +
+              '意味しない** — 作業者が走っているかどうかはデーモンからは見えていない。',
           );
         }
         lines.push(
@@ -870,6 +911,10 @@ export function createCloneTools(context: ToolContext) {
       'manager_list',
       [
         'マネージャーの一覧と状態を見る。何が走っていて、何が返事待ちかが分かる。',
+        // **状態の名前を「観測」より強く読ませない。** running は「走らせた」で
+        // あって「進んでいる」ではなく、done は「マネージャーのターンが終わった」
+        // であって「仕事が終わった」ではない。⚠ の行がその差を埋める。
+        '状態の名前はデーモンが観測できた範囲でしかないので、⚠ の行まで読むこと。',
         '依頼文と報告は抜粋なので、全文が要るなら manager_report で取ること。',
       ].join(' '),
       {},
@@ -891,10 +936,28 @@ export function createCloneTools(context: ToolContext) {
             // **`lost` を状態名だけで済ませない。** 「終わった」と読まれると、
             // 完了していない仕事がそのまま片付く。何が起きたかと、次に何をすれば
             // よいかを、この一覧の中で言い切る。
+            //
+            // **ただし、言い切れるのは観測した分までである。** `lost` が表して
+            // いるのは「前のセッションへ戻れなかった」という**一つの**観測で
+            // あって、成果の有無ではない。デーモンは PR もブランチも見ていない
+            // （リポジトリの事情はマネージャーの領域である）。実際に、落ちる
+            // 直前に PR を出して CI を通しマージまで済ませていた仕事が、その
+            // 1分半後の器の作り直しで `lost` になり、この行が「途中で失われて
+            // いる（完了ではない）」と嘘をついた。
+            //
+            // 断定を外しても `done` とは混ざらない。「戻れなかった」は
+            // 「終えて待っている」ではないからである（PR #42 の分け方は保つ）。
             manager.status === 'lost'
-              ? '  ⚠ 前のセッションへ戻れず、この仕事は途中で失われている（完了ではない）。' +
-                '続きが要るなら manager_start で起こし直すこと。'
+              ? '  ⚠ 前のセッションへ戻れなかった。**戻れたかどうかしか見ていない** — ' +
+                'この仕事が終わっていたかは分からない（成果がリモートの PR・ブランチ・' +
+                'コミットまで届いていることがある）。まずそこを確かめ、続きが要ると' +
+                '判断したときだけ manager_start で起こし直すこと。'
               : null,
+            // **拒否は `status` に映らない。** 分類器か deny 規則がその場で止めた
+            // 仕事は `running` のまま手が動かない。日誌と（繰り返したときだけ）
+            // 受信箱にしか出ないので、一覧を見ているクローンには「走っている」と
+            // しか読めなかった。状態の値は増やさず、状態に添える。
+            denialLine(context.managers?.denials(manager.managerId) ?? []),
             ...manager.waiting.map(
               (item) => `  返事待ち(requestId: ${item.requestId}): ${item.summary}`,
             ),

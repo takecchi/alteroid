@@ -39,6 +39,9 @@ function fakeClone(stores: Stores) {
     async list() {
       return [];
     },
+    denials() {
+      return [];
+    },
     async transcript() {
       return null;
     },

@@ -27,6 +27,7 @@ function stubClone(): CloneHost {
     send: () => Promise.reject(new Error('送らない')),
     abort: () => Promise.reject(new Error('止めない')),
     list: () => Promise.resolve([]),
+    denials: () => [],
     transcript: () => Promise.resolve(null),
     restore: () => Promise.resolve([]),
     stop: () => Promise.resolve(),
