@@ -178,6 +178,7 @@ export {
   WITHHELD_ENV_KEYS,
   createManagerPool,
   type ManagerDecision,
+  type ManagerDenial,
   type ManagerPool,
   type ManagerPoolOptions,
   type ManagerSendOptions,

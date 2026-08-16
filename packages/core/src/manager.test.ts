@@ -1770,6 +1770,43 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
     await s.pool.stop();
   });
 
+  /**
+   * **「戻せなかった」を「成果が無い」と言い換えない。**
+   *
+   * デーモンが観測したのは resume の失敗だけで、PR もブランチも見ていない
+   * （リポジトリの事情はマネージャーの領域であって、デーモンが知るべきもので
+   * はない）。2026-08-16T03:15 に、落ちる直前に PR を出して CI を通しマージ
+   * まで届いていた仕事が、その1分半後の器の作り直しでこの経路を通った。
+   * 知らせが「起こし直せ」で終わると、済んだ仕事をもう一度走らせる。
+   */
+  it('戻せなかった知らせは、成果の有無を断定せずリモートを確かめさせる', async () => {
+    const s = setupRejecting(null);
+    await s.stores.jobs.putJob(runningJob);
+
+    await s.pool.restore();
+
+    await expect
+      .poll(
+        () =>
+          s.inbox.find(
+            (event) => event.type === 'manager_message' && event.text.includes('戻せなかった'),
+          ),
+        { timeout: 2000 },
+      )
+      .toBeDefined();
+    const notice = s.inbox.find(
+      (event) => event.type === 'manager_message' && event.text.includes('戻せなかった'),
+    ) as { text: string };
+
+    // 観測していないことを断定しない。
+    expect(notice.text).toContain('「仕事が終わっていない」ことの証拠ではない');
+    // 次の一手が書いてある（起こし直す前に確かめる先）。
+    expect(notice.text).toMatch(/リモート|PR/);
+    expect(notice.text).toContain('起こし直す前に');
+
+    await s.pool.stop();
+  });
+
   it('開きはしたが結果なしで終わった resume も、戻れなかったものとして扱う', async () => {
     // もう1つの実機の顔（`error_during_execution`）。**`init` が来たことを
     // 「戻れた」と読まない** — 開いただけで何も返せていないなら、続きは進まない。

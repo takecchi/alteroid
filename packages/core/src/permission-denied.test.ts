@@ -287,6 +287,49 @@ describe('確認へ上がらずに止められた実行（permissionMode: auto�
     await s.pool.stop();
   }, 20_000);
 
+  /**
+   * **数えているだけでは表に出ない。**
+   *
+   * 拒否の件数は `ManagerRecord.denied` に積まれていたのに、読み出す口が無く、
+   * 日誌と（繰り返したときだけ）受信箱にしか現れなかった。一覧を見ている
+   * クローンからは `running` としか読めず、**手が止まっていることが見えなかった**。
+   */
+  it('数えた拒否を一覧から読み出せる（status は動かさない）', async () => {
+    const s = open();
+    const { managerId } = await s.pool.start({ request: 'テストを直して' });
+    const session = s.manager.sessions[0];
+    if (!session) throw new Error('マネージャーのセッションが無い');
+
+    expect(s.pool.denials(managerId)).toEqual([]);
+
+    session.push(liveDenial('Edit', 'toolu_1', { file_path: 'a.tsx' }));
+    await tick();
+    session.push(liveDenial('Bash', 'toolu_2', { command: 'git push' }));
+    await tick();
+    session.push(liveDenial('Edit', 'toolu_3', { file_path: 'b.tsx' }));
+    await tick();
+
+    // 古い順（＝一覧は末尾から採る）。Edit は入れ直しで新しい側へ寄る。
+    expect(s.pool.denials(managerId)).toEqual([
+      { tool: 'Bash', count: 1 },
+      { tool: 'Edit', count: 2 },
+    ]);
+
+    // **状態の値は増やさない。** `stalled` を新設すると `openapi.json` の
+    // 外向きの面まで動く。止まっている疑いは状態に**添えて**出す。
+    const listed = (await s.pool.list()).find((entry) => entry.managerId === managerId);
+    expect(listed?.status).toBe('running');
+    // 一覧の応答そのものには載せない（spec に無いものを外へ出さない）。
+    expect(listed).not.toHaveProperty('denials');
+
+    await s.pool.stop();
+  }, 15_000);
+
+  it('知らない manager_id には空を返す（無いものを数えたことにしない）', () => {
+    const s = open();
+    expect(s.pool.denials('mgr-居ない')).toEqual([]);
+  });
+
   it('runner から降ろす出来事が境界のスキーマを通る（HTTP 越しで落ちない）', () => {
     // デーモンと runner の間は JSON である。ここを通らない形で降ろすと、同一
     // プロセスでは届くのにコンテナ構成では消える、という差が生まれる。

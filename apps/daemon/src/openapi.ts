@@ -513,6 +513,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     list() {
       throw new Error('spec 生成専用のスタブ: マネージャー一覧は持たない');
     },
+    denials() {
+      throw new Error('spec 生成専用のスタブ: 拒否は数えていない');
+    },
     transcript() {
       throw new Error('spec 生成専用のスタブ: 生ログは持たない');
     },

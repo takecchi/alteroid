@@ -23,6 +23,14 @@ export interface RecentMap<T> {
   get(id: string): T | undefined;
   set(id: string, value: T): void;
   delete(id: string): boolean;
+  /**
+   * 覚えている分を**古い順**で全部返す（末尾がいちばん新しい）。
+   *
+   * 数えるだけの帳面は、**中身を読み出す口が無いと表に出せない**。実際、拒否の
+   * 件数はここに積まれているのに `manager_list` へ出す手が無く、「手が止まって
+   * いる」が一覧に映らなかった。控えを返すので、呼び手が触っても中は動かない。
+   */
+  entries(): [string, T][];
   readonly size: number;
 }
 
@@ -53,6 +61,7 @@ export function createRecentMap<T>(options: RecentMapOptions): RecentMap<T> {
       if (forgotten.length > 0) onForget?.(forgotten);
     },
     delete: (id) => entries.delete(id),
+    entries: () => [...entries.entries()],
     get size() {
       return entries.size;
     },
