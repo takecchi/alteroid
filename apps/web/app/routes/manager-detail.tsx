@@ -144,7 +144,7 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
             </Card>
           )}
 
-          <SendMessage id={id} />
+          <SendMessage id={id} live={manager.live} sessionId={manager.sessionId} />
           <Transcript id={id} />
         </div>
       )}
@@ -156,8 +156,25 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
  * 繋がっていないことを、**不在ではなく文で**言う。
  *
  * 札（`セッション切断`）だけだと「で、どうなるのか」が分からない。詳細まで
- * 降りてきた人間は「この1本をどうするか」を決めに来ているので、送っても届か
- * ないことと、繋ぎ直しが効けば戻ることまで書く。
+ * 降りてきた人間は「この1本をどうするか」を決めに来ているので、そこから何が
+ * できるのかまで書く。
+ *
+ * **「いま送っても届かない」とは書かない（PR #66 のこの一言が嘘だった）。**
+ * `ManagerPool.send`（`packages/core/src/manager.ts`）は台帳から像を作り直し、
+ * `attached === false` なら `#resumeOnce(record, runner, message)` を呼ぶ —
+ * **送信そのものが引き取り（resume）の契機**であり、送った言葉は resume の
+ * `message` に載って運ばれる。`session_id` を持つ相手なら（`lost` でも）
+ * `delivered` が返り、状態は `running`、`live` は `接続あり` へ戻る。
+ *
+ * **かといって「送れば届く」とも書かない。** resume は失敗しうる（失敗すれば
+ * `resume_failed` から `lost` へ落ちる経路がある）。書けるのは**契機になる**
+ * ところまでで、成否は観測してから言う — PR #66 で潰した「観測していないことを
+ * 断定する」の、ちょうど裏返しである。
+ *
+ * **繋がっていない間、ここに出ている値は台帳に残っている最後の姿である。**
+ * `live: false` は「デーモンのプロセス内にこの像が無い」ことであり（`list()` が
+ * 台帳にしか無いジョブを `summaryOf(record, false)` で作る）、繋ぎ直るまで
+ * 動かない。
  */
 function DisconnectedNote({ live }: { live: boolean }) {
   if (live) return null;
@@ -165,9 +182,18 @@ function DisconnectedNote({ live }: { live: boolean }) {
     <p className="border-t border-border px-4 py-3 text-xs text-danger">
       このデーモンは、このマネージャーの runner と
       <strong className="font-medium">繋がっていない</strong>
-      。いま送っても届かず、状態もこれ以上更新されない。デーモンやマネージャーの再起動後に引き取り（resume）が効けば
+      。ここに出ているのは台帳に残っている最後の姿で、繋ぎ直るまで動かない。ただし
+      <strong className="font-medium">送信は塞いでいない</strong>—
+      下の「話しかける」から送ると、その一言が
+      <strong className="font-medium">引き取り（resume）の契機</strong>
+      になる。戻れれば、送った言葉はそのまま続きの指示として届き
       <strong className="font-medium">接続あり</strong>
-      に戻る。
+      へ戻る。
+      <br />
+      ただし
+      <strong className="font-medium">戻れるとは限らない</strong>
+      。resume に失敗すれば
+      lost（セッションへ戻れず）へ落ちる。戻る先（session_id）を持っていない相手なら、そもそも送信を受け付けない。どちらも理由は送信欄に出る。
     </p>
   );
 }
@@ -303,7 +329,52 @@ function WaitingRow({
   );
 }
 
-function SendMessage({ id }: { id: string }) {
+/** 無効の理由の段落。`aria-describedby` でボタンから名指しするために要る。 */
+const REASON_ID = 'send-message-disabled-reason';
+
+/**
+ * 話しかける口。
+ *
+ * **`live === false` というだけで `disabled` にしないこと。** 繋がっていない
+ * 相手への送信は `ManagerPool.send` の中で引き取り（resume）に化けるので、
+ * ここが人間にとって**自分の言葉で繋ぎ直す唯一の手**である（`DisconnectedNote`
+ * に経緯）。塞ぐのは能力の削除（north_star 禁止1）であり、しかも
+ * `packages/core/src/manager.ts` が
+ * **「人間とクローンの明示的な `manager_send` は塞がない（`#unresumable` は見られ
+ * ていないし、戻れたら忘れる）」**と書いて意図的に開けてある線を、画面側から
+ * 黙って閉じることになる（`#unresumable.add` の直前のコメント。2026-08-16 時点で
+ * `manager.ts:1400` 付近）。
+ *
+ * **止めるのは「戻る先が無い」と分かっている相手だけ**である。`live === false`
+ * かつ `session_id` を持っていないと、`#resume` は `sessionId === undefined` で
+ * 即 `false` を返し、**runner へは何も飛ばない**（`resume` も `send` も呼ばれ
+ * ない。実測で確かめた）。ここだけは押しても何も起きないので止める。
+ *
+ * **`live` だけで判定しないこと。** 分岐しているのは `session_id` の有無であって
+ * 接続の有無ではない。`live === true` なら `session_id` が無くても `runner.send`
+ * で届く（繋がっている相手には resume が要らない）ので、**両方を見る**。
+ *
+ * **停止（`status` で出し分けている）と混ぜないこと。** 止めるのは runner と
+ * 繋がっていなくても意味がある操作で、見ている軸が違う。
+ *
+ * **そして黙って無効にしない。** 押せないのに理由が無いのは、PR #66 で直した
+ * 「`live === false` を札の不在でしか表していない」のと同じ形を、操作の側で
+ * 作り直すことになる。無効にするなら、**なぜ無効かがその場で読める**こと。
+ * 送れる側（繋がっていないが session_id はある）でも同じで、真上の注記が
+ * 「繋がっていない」と言っている下で送信欄が黙っていると、押してよいのかが
+ * 読めない。**どちらの側にも、操作するその場に一行を置く。**
+ */
+function SendMessage({
+  id,
+  live,
+  sessionId,
+}: {
+  id: string;
+  live: boolean;
+  sessionId: string | undefined | null;
+}) {
+  // 戻る先が無い。押しても runner へは何も飛ばない（`#resume` が即 false）。
+  const noWayBack = !live && (sessionId === undefined || sessionId === null);
   const send = useSendManagerMessage();
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
@@ -311,7 +382,8 @@ function SendMessage({ id }: { id: string }) {
   const [failure, setFailure] = useState<unknown>(undefined);
 
   function submit() {
-    if (text.trim() === '') return;
+    // **ボタンの `disabled` だけに頼らない。** Enter でもここへ来る。
+    if (text.trim() === '' || noWayBack) return;
     setBusy(true);
     setFailure(undefined);
     send(id, { text })
@@ -327,7 +399,28 @@ function SendMessage({ id }: { id: string }) {
     <Card>
       <CardHeader title="話しかける" subtitle="走行中のマネージャーに追加の指示を割り込ませる" />
       <div className="px-4 py-3">
+        {noWayBack ? (
+          <p id={REASON_ID} className="mb-2 text-xs text-danger">
+            <strong className="font-medium">送れない</strong>—
+            この仕事は戻る先（session_id）を持っておらず、送っても runner
+            へは何も飛ばない。続きが要るなら
+            <strong className="font-medium">新しく起こし直すこと</strong>。
+          </p>
+        ) : (
+          !live && (
+            <p className="mb-2 text-xs text-danger">
+              この相手とは繋ぎ直せていないが、
+              <strong className="font-medium">送信は止めていない</strong>—
+              送ると引き取り（resume）を試み、戻れればそのまま届く。
+              <strong className="font-medium">戻れなければ理由がここに出る。</strong>
+            </p>
+          )
+        )}
         <div className="flex gap-2">
+          {/*
+            **入力欄までは殺さない。** 書きかけの言葉を取り上げる理由が無いし、
+            起こし直した後にそのまま送れる。止めるのは送信だけでよい。
+          */}
           <Input
             value={text}
             placeholder="追加の指示"
@@ -336,7 +429,19 @@ function SendMessage({ id }: { id: string }) {
               if (event.key === 'Enter') submit();
             }}
           />
-          <Button variant="primary" loading={busy} disabled={text.trim() === ''} onClick={submit}>
+          {/*
+            **理由と結び付ける。** `disabled` だけだと、支援技術には「押せない」
+            としか伝わらず、理由の段落はただ近くにあるだけの文になる。
+            `aria-describedby` で名指ししておけば、読み上げでも「なぜ押せないか」
+            が操作と一緒に届く。
+          */}
+          <Button
+            variant="primary"
+            loading={busy}
+            disabled={text.trim() === '' || noWayBack}
+            {...(noWayBack ? { 'aria-describedby': REASON_ID } : {})}
+            onClick={submit}
+          >
             送る
           </Button>
         </div>
