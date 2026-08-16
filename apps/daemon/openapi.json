@@ -2977,6 +2977,23 @@
                               },
                               "required": ["requestId", "summary"]
                             }
+                          },
+                          "denials": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "tool": {
+                                  "type": "string"
+                                },
+                                "count": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": ["tool", "count"]
+                            }
                           }
                         },
                         "required": [
@@ -3112,6 +3129,23 @@
                               }
                             },
                             "required": ["requestId", "summary"]
+                          }
+                        },
+                        "denials": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "tool": {
+                                "type": "string"
+                              },
+                              "count": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": ["tool", "count"]
                           }
                         }
                       },

@@ -15,6 +15,14 @@ export type JournalEntryType = JournalEntry['type'];
 
 export type ManagerSummary = Ok<paths['/managers']['get']>['managers'][number];
 export type ManagerStatus = ManagerSummary['status'];
+/**
+ * 確認へ上がらず止められた道具と件数。
+ *
+ * **`denials` が無いのと `[]` は別である。** spec 上 optional なのは「拒否を観測
+ * していない」を「0 件だった」と読ませないためで、画面もその区別を潰さない
+ * （無いときは何も描かない）。
+ */
+export type ManagerDenial = NonNullable<ManagerSummary['denials']>[number];
 
 export type PendingApproval = Ok<paths['/approvals']['get']>['approvals'][number];
 

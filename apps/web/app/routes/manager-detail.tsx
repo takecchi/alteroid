@@ -7,6 +7,8 @@ import { useAbortManager, useSendManagerMessage } from '~/hooks/mutations';
 import { useManager, useManagerTranscript } from '~/hooks/queries';
 import { formatDateTime, formatRelative } from '~/lib/format';
 
+import type { ManagerDenial } from '~/lib/types';
+
 import type { Route } from './+types/manager-detail';
 import { ManagerStatusBadge } from './managers';
 
@@ -75,6 +77,16 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
               <dd className="flex items-center gap-2">
                 <ManagerStatusBadge status={manager.status} />
                 {manager.live && <Badge tone="ok">接続あり</Badge>}
+                {/*
+                  **状態の札の隣に並べる。** 拒否は `status` を置き換えない
+                  — 分類器か deny 規則がその場で止めた仕事は「実行中」のまま
+                  手が動かない。札を差し替えると、その事実が消える。
+                */}
+                {denialTotal(manager.denials) > 0 && (
+                  <Badge tone="warn">
+                    ⚠ 確認へ上がらず止められた {denialTotal(manager.denials)} 件
+                  </Badge>
+                )}
               </dd>
               <dt className="text-muted">作業ディレクトリ</dt>
               <dd className="font-mono text-xs break-all">{manager.cwd}</dd>
@@ -100,6 +112,8 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
               )}
             </dl>
           </Card>
+
+          <DenialsCard denials={manager.denials} />
 
           {manager.waiting.length > 0 && (
             <Card>
@@ -129,6 +143,58 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
         </div>
       )}
     </Page>
+  );
+}
+
+/** 拒否の総件数。`undefined`（観測していない）と `[]` はどちらも 0。 */
+function denialTotal(denials: ManagerDenial[] | undefined): number {
+  return (denials ?? []).reduce((sum, entry) => sum + entry.count, 0);
+}
+
+/**
+ * 確認へ上がらずに止められた道具の全件。
+ *
+ * **一覧は新しい側から3種で畳むが、ここは畳まない。** 詳細まで降りてきた人間が
+ * 見に来たのは「何で止まっているのか」そのものだからである。
+ *
+ * **「返事待ち」の上に置く。** どちらも手が止まっている理由だが、返事待ちは人間が
+ * 答えれば動くのに対し、こちらは**そもそも人間にもクローンにも確認が来ていない**。
+ * 気づかなければ永久に止まったままなので、先に目に入る位置へ出す。
+ *
+ * **観測した分しか言わない。** 数えているのは拒否であって、それで止まったかどうか
+ * は見ていない。件数がデーモンのプロセス内にしか無いことも書く — 「0 件」を
+ * 「止められていない」と読まれると、器を作り直した直後がいちばん静かに見える。
+ */
+function DenialsCard({ denials }: { denials: ManagerDenial[] | undefined }) {
+  if (denials === undefined || denials.length === 0) return null;
+  // デーモンは古い順で返す。新しい側から読ませる。
+  const recent = [...denials].reverse();
+  return (
+    <Card>
+      <CardHeader
+        title="確認へ上がらず止められた道具"
+        subtitle="分類器か deny 規則がその場で拒否した。この確認は人間にもクローンにも回ってきていない"
+      />
+      <ul className="px-4 py-3 text-sm">
+        {recent.map((entry) => (
+          <li key={entry.tool} className="flex items-baseline justify-between gap-3 py-0.5">
+            <span className="font-mono text-xs break-all">{entry.tool}</span>
+            <span className="shrink-0 text-warn">{entry.count} 件</span>
+          </li>
+        ))}
+      </ul>
+      <p className="border-t border-border px-4 py-3 text-xs text-muted">
+        止められた事実は数えているが、
+        <strong className="font-medium">それでこの仕事が止まったかどうかは見ていない</strong>
+        （デーモンに動きを見る手が無い）。全件は
+        <Link to="/journal" className="text-accent hover:underline">
+          日誌
+        </Link>
+        に残っている。 この件数はデーモンのプロセス内にしかないので、
+        <strong className="font-medium">器を作り直すと数え直しになる</strong>— 「0
+        件」は「止められていない」ではない。
+      </p>
+    </Card>
   );
 }
 

@@ -2,6 +2,7 @@ import type {
   ChatStreamEvent,
   CloneHost,
   InboxEvent,
+  ManagerDenial,
   ManagerPool,
   ManagerSummary,
   Scheduler,
@@ -26,6 +27,7 @@ function fakeClone() {
   };
 
   const managerList: ManagerSummary[] = [];
+  const managerDenials = new Map<string, ManagerDenial[]>();
   const transcripts = new Map<string, string>();
   const managerSends: { managerId: string; text: string; requestId?: string }[] = [];
   const managerAborts: { managerId: string; reason?: string }[] = [];
@@ -55,8 +57,12 @@ function fakeClone() {
     async list() {
       return managerList;
     },
-    denials() {
-      return [];
+    /**
+     * **固定値を返さない。** ここが常に `[]` を返すスタブのままだと、拒否件数が
+     * 外向きの面に載っているかを見るテストが、何も見ずに通ってしまう。
+     */
+    denials(managerId) {
+      return managerDenials.get(managerId) ?? [];
     },
     async transcript(managerId) {
       return transcripts.get(managerId) ?? null;
@@ -97,6 +103,7 @@ function fakeClone() {
     answered,
     posted,
     managerList,
+    managerDenials,
     transcripts,
     managerSends,
     managerAborts,
@@ -357,6 +364,117 @@ describe('HTTP API', () => {
 
     expect((await app.request('/managers/nope')).status).toBe(404);
     expect((await app.request('/managers/nope/transcript')).status).toBe(404);
+  });
+
+  /**
+   * **宣言していないものは外へ出ない。**
+   *
+   * `describeRoute` の `resolver()` は `openapi.json` を作るだけで、ハンドラが
+   * 何を返したかは検査しない。なので「スキーマを書いた」だけでは、`ManagerSummary`
+   * にフィールドが1つ増えた日に spec に無いものが黙って外へ出る。
+   *
+   * ここで見るのは**宣言に無いフィールドを混ぜても応答に現れないこと**である。
+   * 応答が spec を通ってから出ていることは、これでしか確かめられない
+   * （宣言どおりのものが出るのを見るだけなら、parse を外しても通ってしまう）。
+   */
+  it('マネージャーの応答は、宣言していないフィールドを外へ出さない', async () => {
+    // core の interface にフィールドが増えた日を再現する。`ManagerSummary` の
+    // 定義を触らずに済むよう、ここでだけ型を外して混ぜる。
+    fake.managerList.push({
+      managerId: 'mgr-leak',
+      status: 'running',
+      live: true,
+      cwd: '/work/project',
+      request: '内部の像が混ざる日',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+      waiting: [],
+      internalNote: 'openapi.json に書いていない内部の像',
+    } as ManagerSummary);
+
+    const list = (await (await app.request('/managers')).json()) as {
+      managers: Record<string, unknown>[];
+    };
+    // 宣言したものは出る（parse が中身を空にしていないこと）。
+    expect(list.managers[0]).toMatchObject({ managerId: 'mgr-leak', cwd: '/work/project' });
+    expect(list.managers[0]).not.toHaveProperty('internalNote');
+
+    const detail = (await (await app.request('/managers/mgr-leak')).json()) as {
+      manager: Record<string, unknown>;
+    };
+    expect(detail.manager).toMatchObject({ managerId: 'mgr-leak' });
+    expect(detail.manager).not.toHaveProperty('internalNote');
+  });
+
+  /**
+   * **人間の画面にだけ見えないものを作らない。**
+   *
+   * PR #60 でクローンは `manager_list` から拒否件数を読めるようになったが、
+   * `GET /managers` は「実行中」としか言わないままだった。人間の画面が読むのは
+   * こちらなので、同じ仕事を見て人間とクローンで見えているものが食い違う。
+   *
+   * **状態は置き換えない。** 拒否は `running` に映らない（拒否があったことしか
+   * 観測していない）ので、`status` はそのままにして添える。
+   */
+  it('拒否件数が、状態を置き換えずに一覧と詳細へ載る', async () => {
+    fake.managerList.push({
+      managerId: 'mgr-denied',
+      status: 'running',
+      live: true,
+      cwd: '/work/project',
+      request: '止められている仕事',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+      waiting: [],
+    });
+    fake.managerDenials.set('mgr-denied', [
+      { tool: 'Bash', count: 4 },
+      { tool: 'Write', count: 1 },
+    ]);
+
+    const list = (await (await app.request('/managers')).json()) as {
+      managers: { status: string; denials?: { tool: string; count: number }[] }[];
+    };
+    // 状態の値は動かさない。
+    expect(list.managers[0]?.status).toBe('running');
+    expect(list.managers[0]?.denials).toEqual([
+      { tool: 'Bash', count: 4 },
+      { tool: 'Write', count: 1 },
+    ]);
+
+    const detail = (await (await app.request('/managers/mgr-denied')).json()) as {
+      manager: { status: string; denials?: unknown };
+    };
+    expect(detail.manager.status).toBe('running');
+    expect(detail.manager.denials).toEqual([
+      { tool: 'Bash', count: 4 },
+      { tool: 'Write', count: 1 },
+    ]);
+  });
+
+  /**
+   * **「数えていない」を「0 件だった」に見せない。**
+   *
+   * 拒否の帳面はデーモンのプロセス内にしかなく、器を作り直せば数え直しになる。
+   * 常に `denials: []` を載せると、作り直した直後がいちばん「止められていない」
+   * ように見える。`manager_list` が拒否ゼロの行に何も足さないのと揃える。
+   */
+  it('拒否が無いマネージャーには denials を載せない（0 件を主張しない）', async () => {
+    fake.managerList.push({
+      managerId: 'mgr-quiet',
+      status: 'running',
+      live: true,
+      cwd: '/work/project',
+      request: '止められていない仕事',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+      waiting: [],
+    });
+
+    const list = (await (await app.request('/managers')).json()) as {
+      managers: Record<string, unknown>[];
+    };
+    expect(list.managers[0]).not.toHaveProperty('denials');
   });
 
   it('日報を読める（可観測性の最上段。普段の接点はほぼこれだけ）', async () => {

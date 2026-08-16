@@ -4,7 +4,7 @@ import { Page } from '~/components/page';
 import { Badge, Card, Empty, ErrorNote, Spinner } from '~/components/ui';
 import { useManagers } from '~/hooks/queries';
 import { formatRelative } from '~/lib/format';
-import type { ManagerStatus } from '~/lib/types';
+import type { ManagerDenial, ManagerStatus } from '~/lib/types';
 
 const STATUS: Record<ManagerStatus, { tone: 'ok' | 'warn' | 'danger' | 'neutral'; label: string }> =
   {
@@ -28,6 +28,59 @@ const STATUS: Record<ManagerStatus, { tone: 'ok' | 'warn' | 'danger' | 'neutral'
 export function ManagerStatusBadge({ status }: { status: ManagerStatus }) {
   const view = STATUS[status];
   return <Badge tone={view.tone}>{view.label}</Badge>;
+}
+
+/**
+ * 一覧に添える拒否は、**新しい側から**この件数まで。
+ *
+ * 1本の異常が一覧を食い潰さないためだが、**切ったことは必ず言う**。黙って落とすと
+ * 「3種類しか止められていない」に見える（`manager_list` の `LIST_DENIED_TOOLS` と
+ * 同じ理由・同じ数）。
+ */
+const LIST_DENIED_TOOLS = 3;
+
+/**
+ * 拒否を「新しい側から」畳んだ像。
+ *
+ * デーモンは**古い順**で返す（`ManagerPool.denials()`）。読む側が知りたいのは
+ * いま何で止まっているかなので、末尾から採る。
+ */
+export function summarizeDenials(denials: ManagerDenial[]) {
+  const recent = [...denials].reverse();
+  return {
+    shown: recent.slice(0, LIST_DENIED_TOOLS),
+    rest: Math.max(recent.length - LIST_DENIED_TOOLS, 0),
+    total: denials.reduce((sum, entry) => sum + entry.count, 0),
+  };
+}
+
+/**
+ * 「確認へ上がらず止められた」件数を、**状態に添えて**出す一行。
+ *
+ * **状態を置き換えない。** 分類器か deny 規則がその場で拒否すると、その仕事は
+ * `running`（＝画面では「実行中」）のまま手が止まる。だから札は札のまま残し、
+ * その隣にこれを並べる。
+ *
+ * **これが無いと、人間の画面にだけ見えないものができる。** クローンは同じ状態を
+ * `manager_list` で読み、そこには拒否件数が出ている（PR #60）。人間の画面が
+ * 「実行中」としか言わないと、同じ仕事を見て人間とクローンが違う判断をする
+ * — 北極星 禁止1（デグレード禁止）を、いつもと逆の向きに踏むことになる。
+ *
+ * **ここでも観測した分しか言わない。** 数えているのは拒否そのものであって、それで
+ * 止まったかどうかは見ていない（デーモンに動きを見る手が無い）。だから「止まって
+ * いる」ではなく「止まっている可能性がある」と書く。
+ */
+export function ManagerDenialNote({ denials }: { denials: ManagerDenial[] }) {
+  if (denials.length === 0) return null;
+  const { shown, rest, total } = summarizeDenials(denials);
+  return (
+    <p className="mt-1 text-[11px] text-warn">
+      ⚠ 確認へ上がらず止められた道具:{' '}
+      {shown.map((entry) => `${entry.tool} ${entry.count}件`).join(' / ')}
+      {rest > 0 && `（ほか ${rest} 種、全 ${total} 件）`}
+      。この確認はクローンには回ってきていないので、手が止まっている可能性がある。
+    </p>
+  );
 }
 
 export default function Managers() {
@@ -68,6 +121,11 @@ export default function Managers() {
                         {manager.waiting.length} 件の確認待ち: {manager.waiting[0]?.summary}
                       </p>
                     )}
+                    {/*
+                      拒否は `status` に映らない。札は「実行中」のまま、その隣に
+                      添える（状態を置き換えるものではない）。
+                    */}
+                    <ManagerDenialNote denials={manager.denials ?? []} />
                     {/*
                       札だけでは「で、どうすればいいのか」が伝わらない。クローンは
                       `manager_list` で同じ案内を受け取る — 人間の画面にだけ無いと、

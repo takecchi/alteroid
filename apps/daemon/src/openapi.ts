@@ -247,8 +247,27 @@ export const scheduleListResponseSchema = z.object({ entries: z.array(scheduleSt
 const managerWaitingSchema = z.object({ requestId: z.string(), summary: z.string() });
 
 /**
+ * 確認へ上がらずに止められた道具と、その件数（`ManagerDenial`）。
+ *
+ * `count` は 0 を下回らない（帳面は `0 + 1` から積む）。**宣言できることは宣言する**
+ * — この PR で `.parse()` を通した以上、ここに書いた範囲がそのまま外向きの面の
+ * 定義になる。既定の `z.number().int()` は `minimum: -9007199254740991` を吐くので、
+ * 書かなければ「負でもありうる」と宣言したことになってしまう。
+ */
+const managerDenialSchema = z.object({
+  tool: z.string(),
+  count: z.number().int().nonnegative(),
+});
+
+/**
  * `ManagerSummary`（`packages/core/src/manager.ts`）は zod スキーマを持たない
  * プレーンな TS interface なので、ここでだけ zod として書く。
+ *
+ * **書いただけでは効かない。** `describeRoute` の `resolver()` は spec を作るだけで、
+ * ハンドラの `c.json(...)` を検査しない。ここの宣言が実際に外向きの面と一致して
+ * いるのは、`app.ts` の `/managers` と `/managers/:id` が返す前にこのスキーマを
+ * 通している（`.parse()`）からである。通していない経路では、interface に足した
+ * フィールドが spec に無いまま黙って外へ出る。
  */
 export const managerSummarySchema = z.object({
   managerId: z.string(),
@@ -264,6 +283,23 @@ export const managerSummarySchema = z.object({
   runnerId: z.string().optional(),
   workspace: workspaceLocatorSchema.optional(),
   waiting: z.array(managerWaitingSchema),
+  /**
+   * 確認へ上がらずに止められた道具と件数（**古い順**）。
+   *
+   * **`status` では表せないので、`status` に添える。** 分類器か deny 規則がその場で
+   * 拒否すると、その仕事は `running` のまま手が止まる。デーモンが観測しているのは
+   * 「拒否があった」ことだけで、それで止まったかどうかは見ていない。だから状態の
+   * 値は増やさない（`jobStatusSchema` は触らない）。
+   *
+   * **`ManagerSummary`（core の interface）には無い。** これはデーモンのプロセス内
+   * の像であって台帳には載らないので、`ManagerPool.denials()` という別の口から
+   * 読んで、この外向きの面でだけ合流させる（`app.ts`）。
+   *
+   * **拒否を観測したときだけ載る（`optional`）。** 常に `[]` を載せると「0 件だった」
+   * と読める。器を作り直した直後は数え直しなので、そこがいちばん静かに見えてしまう
+   * — 「数えていない」と「0 件だった」を同じ形にしない。
+   */
+  denials: z.array(managerDenialSchema).optional(),
 });
 
 export const managersListResponseSchema = z.object({
