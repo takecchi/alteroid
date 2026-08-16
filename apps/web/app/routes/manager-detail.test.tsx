@@ -142,3 +142,35 @@ describe('詳細でも、拒否は状態を置き換えずに状態へ添える'
     expect(screen.queryByText(/確認へ上がらず止められた/)).toBeNull();
   });
 });
+
+/**
+ * **`live` は status と別の軸である。** `live && <札>` の形は `live === false` を
+ * 「札が無い」でしか表さず、読む側は「切断されている」と「この画面が接続状態を
+ * 報告していない」を区別できない。だから両側を描く。
+ *
+ * クローンの道具（`packages/core/src/tools.ts`）と CLI（`apps/cli/src/chat.ts`）は
+ * どちらも `[running/セッション切断]` と明示している — Web だけが肯定側しか
+ * 描いていなかった（北極星 禁止1 を逆向きに踏む）。詳細はさらに、札だけでは
+ * 「で、どうなるのか」が伝わらないので、送っても届かないことと繋ぎ直しが効けば
+ * 戻ることまで文で言う。
+ */
+describe('詳細でも、`live` は繋がっていないことを文で言う', () => {
+  it('「走っている扱いだが繋がっていない」でも、実行中の札を残したまま切断と注記を出す', async () => {
+    renderDetail({ ...BASE, status: 'running', live: false });
+
+    // 状態は差し替えない。観測しているのは `running` のままである。
+    expect(await screen.findByText('実行中')).toBeTruthy();
+    expect(screen.getByText('セッション切断')).toBeTruthy();
+    // 札だけでは「で、どうなるのか」が伝わらない。
+    expect(screen.getByText(/いま送っても届かず/)).toBeTruthy();
+  });
+
+  it('繋がっているときは切断の札も注記も出さず、接続ありだけを出す', async () => {
+    renderDetail({ ...BASE, status: 'running', live: true });
+
+    expect(await screen.findByText('実行中')).toBeTruthy();
+    expect(screen.getByText('接続あり')).toBeTruthy();
+    expect(screen.queryByText('セッション切断')).toBeNull();
+    expect(screen.queryByText(/いま送っても届かず/)).toBeNull();
+  });
+});
