@@ -76,6 +76,39 @@ function renderDetail(manager: ManagerSummary) {
   );
 }
 
+/**
+ * **一覧で `lost` を見た人間が、次に開くのがこの画面である。**
+ *
+ * 起こし直すかどうかを決めるのはここなのに、詳細だけが札しか出していなかった
+ * （一覧 `managers.test.tsx`・CLI `chat.test.ts`・クローンの `tools.test.ts` には
+ * 但し書きの網が張ってある）。
+ *
+ * 削ってはいけないのは2つ — **観測しているのは「戻れたか」だけだという限界**と、
+ * **成果がリモートに残っていることがあるという次の一手**である（PR #42 で `lost` を
+ * 分け、PR #60 で断定を外した経緯そのもの）。
+ */
+describe('詳細でも、lost には次の一手を添える', () => {
+  it('「復旧不能」と書かず、観測の限界と確かめる先を出す', async () => {
+    renderDetail({ ...BASE, status: 'lost', live: false });
+
+    expect(await screen.findByText('セッションへ戻れず')).toBeTruthy();
+    // 成果の有無は見ていないのだから、失われたと断定しない。
+    expect(screen.queryByText('復旧不能')).toBeNull();
+    // 観測の限界（これが無いと「終わった」とも「失われた」とも読まれる）。
+    expect(screen.getByText(/戻れたかどうかしか見ていない/)).toBeTruthy();
+    // 次の一手。起こし直す前に見に行く先を名指しする。
+    expect(screen.getByText(/リモート（PR・ブランチ・コミット）を確かめる/)).toBeTruthy();
+  });
+
+  it('lost 以外にはリモート確認の案内を出さない（雑音にしない）', async () => {
+    renderDetail({ ...BASE, status: 'running' });
+
+    expect(await screen.findByText('実行中')).toBeTruthy();
+    expect(screen.queryByText(/戻れたかどうかしか見ていない/)).toBeNull();
+    expect(screen.queryByText(/リモート（PR・ブランチ・コミット）/)).toBeNull();
+  });
+});
+
 describe('詳細でも、拒否は状態を置き換えずに状態へ添える', () => {
   it('「実行中」の札を残したまま、止められた道具を全件出す', async () => {
     renderDetail({
