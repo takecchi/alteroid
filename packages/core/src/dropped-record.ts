@@ -1,4 +1,4 @@
-import type { JournalEntryInput } from './schema.js';
+import type { InboxEvent, JournalEntryInput } from './schema.js';
 
 /**
  * 記録の書き込みに失敗したことを stderr へ1行だけ残す。
@@ -24,11 +24,91 @@ import type { JournalEntryInput } from './schema.js';
  * @param detail 本文を含まない見分け（`journalEntryShape` などで作る）
  */
 export function noteDroppedRecord(what: string, detail: string, error: unknown): void {
-  const at = new Date().toISOString();
   const tail = detail === '' ? '' : `（${detail}）`;
-  process.stderr.write(
-    `alteroid: ${at} ${what}を記録できませんでした${tail}: ${reasonOf(error)}\n`,
-  );
+  note(`${what}を記録できませんでした${tail}: ${reasonOf(error)}`);
+}
+
+/**
+ * 受信箱が閉じた後に届いた合図を捨てたことを、stderr へ1行だけ残す。
+ *
+ * **捨てるのをやめるのではない。跡だけを残す。** `#stopped` は片付け中という
+ * ことで、そこから新しいターンを回す余地は無い（`stop()` の直後に
+ * `storage.close()` → `process.exit(0)` が来る）。処理しようとすると「未読の
+ * 永続化」という別の設計になる。
+ *
+ * **なぜ日誌ではなく stderr か。** `post` は同期で、返り値を持たない。日誌へ
+ * 書くなら fire-and-forget にならざるを得ないが、**捨てが起きる窓（`stop()` →
+ * `storage.close()` → `process.exit(0)`）はその約束が果たされる前にプロセスが
+ * 消える窓そのもの**である。しかもその窓の後半ではストアが既に閉じており、
+ * 日誌への追記は失敗して結局 `noteDroppedRecord` の stderr へ落ちる。**跡を
+ * 残すために、跡が残らないことのある経路を選ばない。** 同期で1行書けば、窓の
+ * どこで捨てても同じ跡になる。
+ *
+ * **日誌の型を足して解かないこと。** 「捨てた」は既存のどの型でもなく、
+ * `journalEntrySchema` を広げると `JOURNAL_ENTRY_TYPES` 経由で `openapi.json`
+ * ＝外向きの API 面が動く。跡を残すためだけに外へ出す面を広げない。
+ *
+ * **見分けは呼び出し側に選ばせない。** ここへ来る合図には人間の発言・webhook の
+ * 本文・マネージャーの報告が入る（報告本文に `GH_TOKEN` が全文で出た前例が
+ * ある。#52）。何を載せてよいかの判断は `inboxEventShape` の1か所に閉じる。
+ */
+export function noteDroppedInboxEvent(event: InboxEvent): void {
+  note(`受信箱を閉じた後に届いた合図を捨てました（${inboxEventShape(event)}）`);
+}
+
+/**
+ * 受信箱の合図から、本文を含まない見分けだけを取り出す。
+ *
+ * **判定の基準は `journalEntryShape` と同じ**（「自由文かどうか」ではなく
+ * 「値を誰が決めるか」）。したがって `external` の `source` は
+ * `POST /events/:source` の URL パスセグメント＝外の送り元が決める値なので、
+ * 名前に見えても長さだけにする。逆に `managerId` / `approvalId` はこちらが
+ * 発行した id、`kind` / `reason`（`distill`）は列挙値なので載せてよい。
+ *
+ * `human_message` の `conversationId` は呼び出し側が指定できる値であり、
+ * `journalEntryShape` の `exchange` も載せていない。**同じ値の扱いを2か所で
+ * 変えないこと。**
+ */
+export function inboxEventShape(event: InboxEvent): string {
+  switch (event.type) {
+    case 'human_message':
+      return `human_message ${size(event.text)}`;
+    case 'human_answer':
+      return `human_answer approvalId=${tag(event.approvalId)} ${size(event.answer, 'answer')}`;
+    case 'distill':
+      return `distill reason=${tag(event.reason)}`;
+    // `kind` は `scheduleKindSchema`（英小文字・数字・. _ - の64字以内）で、
+    // 仕込んだのは持ち主かクローンである。`memory_update` の `slug` と同じ扱い。
+    case 'timer':
+      return (
+        `timer kind=${tag(event.kind)}` +
+        (event.cause === undefined ? '' : ` cause=${tag(event.cause)}`) +
+        (event.target === undefined ? '' : ` target=${tag(event.target)}`)
+      );
+    // `payload` は webhook の本文そのもの。**長さも出さない** — 長さを得るには
+    // 一度 JSON へ畳む必要があり、畳んだ文字列が跡へ載る事故が入りやすい。
+    case 'external':
+      return `external ${size(event.source, 'source')} payload=${event.payload === undefined ? 'none' : 'yes'}`;
+    case 'self_initiative':
+      return `self_initiative ${size(event.reason)}`;
+    case 'manager_message':
+      return (
+        `manager_message managerId=${tag(event.managerId)} kind=${tag(event.kind)}` +
+        (event.requestId === undefined ? '' : ` requestId=${tag(event.requestId)}`) +
+        ` ${size(event.text)}`
+      );
+  }
+}
+
+/**
+ * stderr へ1行書く。
+ *
+ * **時刻は自分で付ける**（ホスティング先が付ける時刻に頼らない。付かない先が
+ * ある）。跡を出す口をここ1本にしてあるのは、本文を出さないという判断が
+ * このファイルの外へ散らないようにするためである。
+ */
+function note(text: string): void {
+  process.stderr.write(`alteroid: ${new Date().toISOString()} ${text}\n`);
 }
 
 /**

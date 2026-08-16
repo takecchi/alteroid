@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { journalEntryShape, noteDroppedRecord } from './dropped-record.js';
-import type { JournalEntryInput } from './schema.js';
+import { inboxEventShape, journalEntryShape, noteDroppedRecord } from './dropped-record.js';
+import type { InboxEvent, JournalEntryInput } from './schema.js';
 import { captureStderr } from './testing.js';
 
 /**
@@ -130,5 +130,96 @@ describe('落とした記録の跡', () => {
     });
 
     expect((lines[0] as string).length).toBeLessThan(400);
+  });
+});
+
+/**
+ * 受信箱が閉じた後に捨てた合図の見分け。
+ *
+ * ここを通る合図は7種類あり、**人間の発言・webhook の本文・マネージャーの報告が
+ * 全部含まれる。** 判定基準は `journalEntryShape` と同じで、「自由文かどうか」
+ * ではなく「値を誰が決めるか」である。
+ */
+describe('捨てた合図の見分け', () => {
+  const secret = 'ghp_000000000000000000000000000000000000';
+  const at = new Date(0).toISOString();
+
+  it('どの起点でも本文が跡に乗らない（7種類すべて）', () => {
+    const events: InboxEvent[] = [
+      { type: 'human_message', id: 'e1', at, text: secret, conversationId: secret },
+      { type: 'human_answer', id: 'e2', at, approvalId: 'ap-1', answer: secret },
+      { type: 'distill', id: 'e3', at, reason: 'shutdown' },
+      { type: 'timer', id: 'e4', at, kind: 'daily_report', target: '2026-08-16' },
+      { type: 'external', id: 'e5', at, source: secret, payload: { body: secret } },
+      { type: 'self_initiative', id: 'e6', at, reason: secret },
+      {
+        type: 'manager_message',
+        id: 'e7',
+        at,
+        managerId: 'mgr-1',
+        kind: 'report',
+        text: secret,
+        requestId: 'req-1',
+      },
+    ];
+
+    // 7種類が同じ1行を通る以上、1つでも漏れれば経路ごと漏れる
+    expect(events).toHaveLength(7);
+    for (const event of events) {
+      const shape = inboxEventShape(event);
+      expect(shape, event.type).not.toContain(secret);
+      // 何を捨てたのか辿れないと跡の意味が無い
+      expect(shape, event.type).toContain(event.type);
+    }
+  });
+
+  /**
+   * **`external` の `source` は「名前」に見えて、外から来る値である。**
+   * `POST /events/:source` の URL パスセグメントがそのまま入る。
+   * `journalEntryShape` の `external_event` とここで判断を変えないこと。
+   */
+  it('external の source は外から来る値なので長さだけ、payload は有無だけ', () => {
+    const shape = inboxEventShape({
+      type: 'external',
+      id: 'e1',
+      at,
+      source: secret,
+      payload: { token: secret },
+    });
+
+    expect(shape).not.toContain(secret);
+    // 一部でも出さない（先頭だけ載せる、も駄目）
+    expect(shape).not.toContain(secret.slice(0, 8));
+    expect(shape).toContain(`source.chars=${secret.length}`);
+    expect(shape).toContain('payload=yes');
+    // 中身が無い通知と区別が付く
+    expect(inboxEventShape({ type: 'external', id: 'e2', at, source: 'github' })).toContain(
+      'payload=none',
+    );
+  });
+
+  it('誰から届いたかは残る（マネージャーの報告を突き合わせるため）', () => {
+    expect(
+      inboxEventShape({
+        type: 'manager_message',
+        id: 'e1',
+        at,
+        managerId: 'mgr-ff1a6c32',
+        kind: 'report',
+        text: 'あ',
+      }),
+    ).toBe('manager_message managerId=mgr-ff1a6c32 kind=report chars=1');
+    // 返事待ちで止まっている1件かどうかも分かる
+    expect(
+      inboxEventShape({
+        type: 'manager_message',
+        id: 'e2',
+        at,
+        managerId: 'mgr-1',
+        kind: 'question',
+        text: 'あ',
+        requestId: 'req-9',
+      }),
+    ).toContain('requestId=req-9');
   });
 });

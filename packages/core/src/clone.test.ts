@@ -1391,4 +1391,47 @@ describe('クローン — 考えている合図（thinking）', () => {
     expect(dropped).toContain('exchange');
     expect(dropped).not.toContain('ghp_');
   });
+
+  /**
+   * **止まった後に届いたものは処理できない。だが跡は残る。**
+   *
+   * `post` は7種類の起点（人間の発言・外部イベント・timer・発意・runner の
+   * 通知・マネージャーの報告/質問/許可確認・人間の承認回答）が通る1本道である。
+   * ここで黙って消えると、「受信箱に積まれたまま死んだ」「閉じた後に届いた」
+   * 「ターンが間に合わなかった」が日誌の上で同じ形になり、切り分けられない。
+   *
+   * 跡が stderr なのは、この窓が `storage.close()` → `process.exit(0)` の窓
+   * そのものだからである（非同期の日誌書き込みは間に合う保証が無い）。
+   * 同時に**跡に本文が乗らないこと**も固定する — 報告本文に `GH_TOKEN` が
+   * 全文で出た前例がある（#52）。
+   */
+  it('止まった後に届いた合図は捨てるが、何を捨てたかが stderr に残る（本文は出さない）', async () => {
+    const s = setup();
+    await s.clone.stop();
+
+    const lines = await captureStderr(() => {
+      s.clone.post(humanMessage('鍵は ghp_000000000000000000000000000000000000 だ'));
+      s.clone.post({
+        type: 'manager_message',
+        id: 'evt-report',
+        at: new Date().toISOString(),
+        managerId: 'mgr-1',
+        kind: 'report',
+        text: 'PR #99 をマージした。鍵は ghp_000000000000000000000000000000000000',
+      });
+    });
+
+    const dropped = lines.filter((line) => line.includes('捨てました'));
+    expect(dropped).toHaveLength(2);
+    expect(dropped[0]).toContain('human_message');
+    // どのマネージャーの、どの種類の一件だったかは残る
+    expect(dropped[1]).toContain('manager_message managerId=mgr-1 kind=report');
+    for (const line of dropped) {
+      expect(line).not.toContain('ghp_');
+      // 「いつ」。ホスティング先の付ける時刻に頼らない
+      expect(line).toMatch(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/u);
+      expect(line.endsWith('\n')).toBe(true);
+      expect(line.trimEnd()).not.toContain('\n');
+    }
+  });
 });
