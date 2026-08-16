@@ -2098,6 +2098,14 @@ export function createApp(deps: AppDeps) {
     //
     // 経路はデーモンが持つ。ブラウザは**この口へ戻ってくるだけ**で、alteroid を
     // 操作する画面は無い（Web UI は非ゴール。`gh auth login` と同じ形である）。
+    //
+    // **規則: 宣言された成功応答（200/202）はすべて宣言スキーマの `.parse()` を
+    // 通す。エラー応答（400/403/404/409）はその場のリテラルなので通さない。**
+    // `/managers` `/managers/:id`（#61）と同じ理由 — `describeRoute` の
+    // `resolver()` は spec を作るだけでハンドラの戻り値を検査しないので、通して
+    // いない経路では宣言に無いフィールドが黙って外へ出る。ここで使う応答スキーマ
+    // （`openapi.ts` の `accountViewSchema` 系）は core の永続化スキーマから
+    // 独立させてあるので、account の行が増えても外へは載らない。
 
     .get(
       '/auth/providers',
@@ -2114,7 +2122,10 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      (c) => c.json({ enabled: authPlan.enabled, providers: providerList }),
+      (c) =>
+        c.json(
+          authProvidersResponseSchema.parse({ enabled: authPlan.enabled, providers: providerList }),
+        ),
     )
 
     .post(
@@ -2153,7 +2164,7 @@ export function createApp(deps: AppDeps) {
           label: label ?? '',
           redirectUri: callbackUrl(provider),
         });
-        return c.json(started);
+        return c.json(loginStartResponseSchema.parse(started));
       },
     )
 
@@ -2240,15 +2251,19 @@ export function createApp(deps: AppDeps) {
           requestId: c.req.param('requestId'),
           claimSecret: c.req.valid('json').claimSecret,
         });
-        if (result.status === 'pending') return c.json({ status: 'pending' as const }, 202);
+        if (result.status === 'pending') {
+          return c.json(loginClaimResponseSchema.parse({ status: 'pending' as const }), 202);
+        }
         if (result.status === 'error')
           return c.json({ error: claimErrorDetail(result.reason) }, 400);
-        return c.json({
-          status: 'ready' as const,
-          token: result.token,
-          account: result.account,
-          granted: isAccountGranted(result.account),
-        });
+        return c.json(
+          loginClaimResponseSchema.parse({
+            status: 'ready' as const,
+            token: result.token,
+            account: result.account,
+            granted: isAccountGranted(result.account),
+          }),
+        );
       },
     )
 
@@ -2270,12 +2285,16 @@ export function createApp(deps: AppDeps) {
       }),
       (c) => {
         const principal = c.get('principal');
-        if (principal.kind === 'operator') return c.json({ kind: 'operator' as const });
-        return c.json({
-          kind: 'account' as const,
-          account: principal.account,
-          granted: isAccountGranted(principal.account),
-        });
+        if (principal.kind === 'operator') {
+          return c.json(meResponseSchema.parse({ kind: 'operator' as const }));
+        }
+        return c.json(
+          meResponseSchema.parse({
+            kind: 'account' as const,
+            account: principal.account,
+            granted: isAccountGranted(principal.account),
+          }),
+        );
       },
     )
 
@@ -2306,9 +2325,11 @@ export function createApp(deps: AppDeps) {
       requireOperator,
       async (c) => {
         const accounts = await stores.auth.listAccounts();
-        return c.json({
-          accounts: await Promise.all(accounts.map((account) => accountView(stores, account))),
-        });
+        return c.json(
+          accessListResponseSchema.parse({
+            accounts: await Promise.all(accounts.map((account) => accountView(stores, account))),
+          }),
+        );
       },
     )
 
@@ -2371,7 +2392,9 @@ export function createApp(deps: AppDeps) {
           decision: `アクセス許可を付与: ${describeAccount(result.account)}`,
           grounds: '実行環境の持ち主による操作（alteroid access grant）',
         });
-        return c.json({ account: await accountView(stores, result.account) });
+        return c.json(
+          accessAccountResponseSchema.parse({ account: await accountView(stores, result.account) }),
+        );
       },
     )
 
@@ -2415,7 +2438,9 @@ export function createApp(deps: AppDeps) {
           decision: `アクセス許可を取り消し: ${describeAccount(account)}`,
           grounds: '実行環境の持ち主による操作（alteroid access revoke）',
         });
-        return c.json({ account: await accountView(stores, account) });
+        return c.json(
+          accessAccountResponseSchema.parse({ account: await accountView(stores, account) }),
+        );
       },
     )
 
