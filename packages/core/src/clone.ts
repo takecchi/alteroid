@@ -11,7 +11,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 
 import { buildActivityDigest } from './digest.js';
-import { journalEntryShape, noteDroppedRecord } from './dropped-record.js';
+import { journalEntryShape, noteDroppedInboxEvent, noteDroppedRecord } from './dropped-record.js';
 import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { Inbox } from './inbox.js';
@@ -275,7 +275,16 @@ class Clone implements CloneHost {
   // -------------------------------------------------------------------------
 
   post(event: InboxEvent): void {
-    if (this.#stopped) return;
+    // 片付け中に届いたものは処理できない（`stop()` の直後に `storage.close()` →
+    // `process.exit(0)` が来る）。**だが黙って消さない** — ここは7種類の起点
+    // すべてが通る1本道で、人間の発言もマネージャーの完了報告もここで消える。
+    // 跡が無いと「受信箱に積まれたまま死んだ」「閉じた後に届いた」「ターンが
+    // 間に合わなかった」が日誌の上で同じ形になり、切り分けられない。
+    // stderr へ同期で書く理由は `noteDroppedInboxEvent`。
+    if (this.#stopped) {
+      noteDroppedInboxEvent(event);
+      return;
+    }
 
     // 同じ合図がまだ読まれないまま積み重なっても、読んだときに見る材料は同じなので
     // 畳む。**これは実行回数の制限ではない**（AGENTS.md 地雷2）— 発火を減らすのでも

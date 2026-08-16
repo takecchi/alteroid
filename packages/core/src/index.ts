@@ -300,13 +300,20 @@ export {
 } from './clone.js';
 
 /**
- * 記録を落としたときに stderr へ残す跡。
+ * 何かを落としたときに stderr へ残す跡（記録の書き込み失敗と、受信箱を閉じた
+ * 後に届いた合図）。
  *
- * **本文を出さないための関門である。** 記録の失敗をログへ出す場所は、層を問わず
- * ここを通すこと（素の `String(error)` を1か所でも残すと、そこだけ将来のストア
- * 実装に無防備なまま置き去りになる）。
+ * **本文を出さないための関門である。** 落としたことをログへ出す場所は、層を問わず
+ * ここを通すこと（素の `String(error)` や本文を1か所でも残すと、そこだけ将来の
+ * ストア実装や新しい起点に無防備なまま置き去りになる）。
  */
-export { journalEntryShape, noteDroppedRecord, reasonOf } from './dropped-record.js';
+export {
+  inboxEventShape,
+  journalEntryShape,
+  noteDroppedInboxEvent,
+  noteDroppedRecord,
+  reasonOf,
+} from './dropped-record.js';
 
 /** テスト用ユーティリティ（本番の配線には出てこない）。 */
 export {
