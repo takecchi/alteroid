@@ -76,7 +76,11 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
               <dt className="text-muted">状態</dt>
               <dd className="flex items-center gap-2">
                 <ManagerStatusBadge status={manager.status} />
-                {manager.live && <Badge tone="ok">接続あり</Badge>}
+                {manager.live ? (
+                  <Badge tone="ok">接続あり</Badge>
+                ) : (
+                  <Badge tone="danger">セッション切断</Badge>
+                )}
                 {/*
                   **状態の札の隣に並べる。** 拒否は `status` を置き換えない
                   — 分類器か deny 規則がその場で止めた仕事は「実行中」のまま
@@ -111,6 +115,7 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
                 </>
               )}
             </dl>
+            <DisconnectedNote live={manager.live} />
             <LostNote status={manager.status} />
           </Card>
 
@@ -144,6 +149,26 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
         </div>
       )}
     </Page>
+  );
+}
+
+/**
+ * 繋がっていないことを、**不在ではなく文で**言う。
+ *
+ * 札（`セッション切断`）だけだと「で、どうなるのか」が分からない。詳細まで
+ * 降りてきた人間は「この1本をどうするか」を決めに来ているので、送っても届か
+ * ないことと、繋ぎ直しが効けば戻ることまで書く。
+ */
+function DisconnectedNote({ live }: { live: boolean }) {
+  if (live) return null;
+  return (
+    <p className="border-t border-border px-4 py-3 text-xs text-danger">
+      このデーモンは、このマネージャーの runner と
+      <strong className="font-medium">繋がっていない</strong>
+      。いま送っても届かず、状態もこれ以上更新されない。デーモンやマネージャーの再起動後に引き取り（resume）が効けば
+      <strong className="font-medium">接続あり</strong>
+      に戻る。
+    </p>
   );
 }
 

@@ -143,8 +143,19 @@ export default function Managers() {
                       `live` はデーモンが今この瞬間その runner と繋がっているか。
                       status と別に出す — 「走っている扱いだが繋がっていない」を
                       隠すと、再起動後の引き取りが効いたのか分からなくなる。
+
+                      `live && <札>` の形は書かない。それだと `live === false`
+                      を「札が無い」でしか表せず、読む側は「切断されている」と
+                      「この画面が接続状態を報告していない」を区別できない。
+                      だから両側を描く。文言はクローンの `manager_list`
+                      （`tools.ts`）と CLI（`chat.ts`）に合わせてある
+                      （どちらも `/セッション切断`）。
                     */}
-                    {manager.live && <p className="text-ok">接続あり</p>}
+                    {manager.live ? (
+                      <p className="text-ok">接続あり</p>
+                    ) : (
+                      <p className="text-danger">セッション切断</p>
+                    )}
                   </div>
                 </Link>
               </li>
