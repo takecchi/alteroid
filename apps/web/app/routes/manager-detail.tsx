@@ -7,7 +7,7 @@ import { useAbortManager, useSendManagerMessage } from '~/hooks/mutations';
 import { useManager, useManagerTranscript } from '~/hooks/queries';
 import { formatDateTime, formatRelative } from '~/lib/format';
 
-import type { ManagerDenial } from '~/lib/types';
+import type { ManagerDenial, ManagerStatus } from '~/lib/types';
 
 import type { Route } from './+types/manager-detail';
 import { ManagerStatusBadge } from './managers';
@@ -111,6 +111,7 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
                 </>
               )}
             </dl>
+            <LostNote status={manager.status} />
           </Card>
 
           <DenialsCard denials={manager.denials} />
@@ -143,6 +144,44 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
         </div>
       )}
     </Page>
+  );
+}
+
+/**
+ * `lost` の札に添える但し書き。
+ *
+ * **一覧で `lost` を見た人間が、次に開くのがこの画面である。** 起こし直すかどうかを
+ * 決めるのはここなのに、この画面だけが札しか出していなかった — 一覧
+ * （`managers.tsx`）にも CLI（`renderManagerList`）にもクローンの `manager_list` にも
+ * 但し書きが出ている。人間の画面にだけ無いと、同じ状態を見て人間とクローンが違う
+ * 判断をする（北極星 禁止1 を逆向きに踏む）。
+ *
+ * **言い切れるのは観測した分までである（PR #60）。** `lost` が表しているのは
+ * 「前のセッションへ戻れなかった」という**一つの**観測であって、成果の有無ではない
+ * — デーモンは PR もブランチも見ていない。落ちる直前に PR を出して CI を通し
+ * マージまで済ませていた仕事が、その1分半後の器の作り直しで `lost` になった実例が
+ * ある。
+ *
+ * **かといって `done` の側へも寄せない（PR #42 の分け方は保つ）。** 「戻れなかった」は
+ * 「終えて待っている」ではない。
+ *
+ * **一覧より長く書いてよい。** ここまで降りてきた人間は、この1本をどうするかを
+ * 決めに来ている。だから確かめる先に、この画面にしか無い「最後の報告」と生ログも
+ * 足してある。
+ */
+function LostNote({ status }: { status: ManagerStatus }) {
+  if (status !== 'lost') return null;
+  return (
+    <p className="border-t border-border px-4 py-3 text-xs text-danger">
+      前のセッションへ戻れなかった。
+      <strong className="font-medium">戻れたかどうかしか見ていない</strong>
+      ので、この仕事が終わっていたかどうかは分からない。落ちる直前に PR を出して CI
+      を通し、マージまで届いていた仕事がこの札を貼られた実例がある。
+      <br />
+      起こし直す前に、まず
+      <strong className="font-medium">リモート（PR・ブランチ・コミット）を確かめること</strong>
+      。どこまで進んでいたかは、下の「最後の報告」とセッションログ（生）にも残っていることがある。続きが要ると判断したときだけ起こし直す。
+    </p>
   );
 }
 
