@@ -192,7 +192,8 @@ function DisconnectedNote({ live }: { live: boolean }) {
       <br />
       ただし
       <strong className="font-medium">戻れるとは限らない</strong>
-      。resume に失敗すれば lost（セッションへ戻れず）へ落ちる。戻る先（session_id）を持っていない相手なら、そもそも送信を受け付けない。どちらも理由は送信欄に出る。
+      。resume に失敗すれば
+      lost（セッションへ戻れず）へ落ちる。戻る先（session_id）を持っていない相手なら、そもそも送信を受け付けない。どちらも理由は送信欄に出る。
     </p>
   );
 }
