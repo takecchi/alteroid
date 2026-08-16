@@ -1,5 +1,4 @@
 import {
-  authAccountSchema,
   createMemoryStores,
   jobStatusSchema,
   journalEntrySchema,
@@ -29,6 +28,12 @@ import { createApp } from './app.js';
  * ドキュメントのスキーマが2つに分かれ、いつか必ずずれる（spec が嘘になる）。
  * core に無いもの（health の応答・会話一覧・マネージャー要約など）だけを
  * ここで新たに zod で書く。
+ *
+ * **例外はアカウント（`accountViewSchema`）である。** core の `authAccountSchema`
+ * は zod スキーマを持つが、あれは fs / pg ドライバが同じ行を保証するための
+ * *永続化*の形であって、*外へ出す*形とは役割が違う。同じものとして扱うと、
+ * 保存側にフィールドが増えた日に宣言の外から黙って公開面へ乗る（`managerSummarySchema`
+ * が `ManagerSummary` を再利用しないのと同じ理由）。
  */
 
 // ---------------------------------------------------------------------------
@@ -85,6 +90,36 @@ export const healthResponseSchema = z.object({
 // /auth・/access（ログインとアクセス許可）
 // ---------------------------------------------------------------------------
 
+/**
+ * `/auth/*` `/access/*` が外へ返すアカウントの形。
+ *
+ * **core の永続化スキーマ（`authAccountSchema`）をそのまま使わない。** あちらは
+ * fs / pg のどちらのドライバでも同じ行を保証するための「保存の形」であって、
+ * 「外へ出す形」とは別物である。account の行にフィールドが1つ増えた日に、それが
+ * 宣言も無いまま自動でここへも乗ってしまうと、`/managers` で塞いだのと同じ穴が
+ * auth 側にだけ残ることになる（`managerSummarySchema` が `ManagerSummary`
+ * 〈core の interface〉から独立して手書きされているのと同じ形にここも揃える）。
+ *
+ * フィールドと制約は現状の `authAccountSchema`（`packages/core/src/auth.ts`）と
+ * 1対1に写してある。**ここがずれると `openapi.json` が動き、`packages/api-client`
+ * 経由で `apps/web` の生成型まで動く** — 増やすときは意図して増やすこと。
+ */
+const isoDateTimeSchema = z.string().datetime({ offset: true });
+
+const accountViewSchema = z.object({
+  id: z.string().min(1),
+  /** 表示用の名前。初回のログイン時にプロバイダから貰ったものを入れる。 */
+  displayName: z.string().nullable(),
+  /** 本人が選んだ連絡先（検証済み）。プロバイダ側の変更で勝手に上書きしない。 */
+  email: z.string().nullable(),
+  createdAt: isoDateTimeSchema,
+  lastLoginAt: isoDateTimeSchema.nullable(),
+  /** 許可の2値。`null` なら未許可＝ログインはできるが alteroid は使えない。 */
+  grantedAt: isoDateTimeSchema.nullable(),
+  /** 誰が許可したか（`operator` = 状態ファイルを読める実行環境の持ち主）。 */
+  grantedBy: z.string().nullable(),
+});
+
 export const authProvidersResponseSchema = z.object({
   enabled: z.boolean(),
   providers: z.array(z.object({ id: z.string(), label: z.string(), kind: z.string() })),
@@ -106,7 +141,7 @@ export const loginClaimResponseSchema = z.union([
     status: z.literal('ready'),
     /** **この1回しか返らない。** ストアには sha256 しか残らない。 */
     token: z.string(),
-    account: authAccountSchema,
+    account: accountViewSchema,
     /** 許可されていなければ false。ログインできても使えるとは限らない。 */
     granted: z.boolean(),
   }),
@@ -115,10 +150,10 @@ export const loginClaimResponseSchema = z.union([
 /** いま自分が誰として認識されているか。 */
 export const meResponseSchema = z.union([
   z.object({ kind: z.literal('operator') }),
-  z.object({ kind: z.literal('account'), account: authAccountSchema, granted: z.boolean() }),
+  z.object({ kind: z.literal('account'), account: accountViewSchema, granted: z.boolean() }),
 ]);
 
-const accountWithIdentitiesSchema = authAccountSchema.extend({
+export const accountWithIdentitiesSchema = accountViewSchema.extend({
   granted: z.boolean(),
   identities: z.array(
     z.object({

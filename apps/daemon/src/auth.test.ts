@@ -1,4 +1,4 @@
-import type { CloneHost, ManagerPool, OAuthProvider, Stores } from '@alteroid/core';
+import type { AuthAccount, CloneHost, ManagerPool, OAuthProvider, Stores } from '@alteroid/core';
 import { createAuthProviderRegistry, createAuthService, createMemoryStores } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -11,6 +11,7 @@ import {
   planAuth,
   type AuthPlan,
 } from './auth.js';
+import { accountWithIdentitiesSchema } from './openapi.js';
 
 /**
  * 入口の認証（「誰がこの API を叩いているか」）。
@@ -63,9 +64,39 @@ const post = { method: 'POST', headers: { 'content-type': 'application/json' } }
 
 let stores: Stores;
 
-function buildApp(plan: Partial<AuthPlan> = {}) {
+/**
+ * `stores.auth` を包み、アカウントを返すメソッドへ宣言に無いフィールドを混ぜる。
+ *
+ * **`listAccounts`（`/access` が読む）と `getAccount`（`authenticate` と `claim` が
+ * ここを通ってアカウントを引く）の2つだけを包む。** `AuthStore` の他のメソッド
+ * （`findAccountByEmail` / `grantExclusive` など）は今回の対象経路
+ * （`/auth/me` `/auth/login/:id/claim` `/access`）がアカウントを読むために通る道
+ * ではないので、包んでも混ざらない。
+ */
+function withLeakedAccountField(auth: Stores['auth']): Stores['auth'] {
+  const leak = (account: AuthAccount): AuthAccount =>
+    ({ ...account, leakedField: 'should-not-escape' }) as AuthAccount;
+  return {
+    ...auth,
+    async listAccounts() {
+      return (await auth.listAccounts()).map(leak);
+    },
+    async getAccount(id) {
+      const account = await auth.getAccount(id);
+      return account === null ? null : leak(account);
+    },
+  };
+}
+
+function buildApp(plan: Partial<AuthPlan> = {}, options: { leakAccountField?: boolean } = {}) {
   stores = createMemoryStores();
   nextSubject = 'sub-1';
+  if (options.leakAccountField === true) {
+    // **`authService` は包んだ後の `stores.auth` から作ること。** そうしないと
+    // `/auth/me` と claim には効かない（authService が別の生の store を握ったまま
+    // になる）。
+    stores = { ...stores, auth: withLeakedAccountField(stores.auth) };
+  }
   const resolved: AuthPlan = {
     enabled: true,
     providers: [FAKE_PROVIDER],
@@ -373,5 +404,95 @@ describe('認証が有効なとき', () => {
     expect(callback.headers.get('content-type')).toContain('text/html');
     expect(html).not.toContain('alt_');
     expect(callback.headers.get('location')).toBeNull();
+  });
+});
+
+/**
+ * `/auth/*` `/access/*` の応答が、宣言（`openapi.ts` のスキーマ）どおりであること。
+ *
+ * `describeRoute` の `resolver()` は `openapi.json` を作るだけでハンドラの戻り値を
+ * 検査しない。だから応答は返す前に必ず宣言スキーマの `.parse()` を通す
+ * （`app.ts` の該当7箇所）。ここではそれが実際に効いていることを、本物のハンドラを
+ * 本物の経路で叩いて確かめる。
+ */
+describe('宣言と実物の一致（/auth・/access）', () => {
+  it('宣言していないフィールドを外へ出さない', async () => {
+    // `stores.auth` がアカウントへ余計なキーを混ぜて返す状態を作る。
+    // **「宣言どおりのものが出る」だけを見ない** — それだけでは `.parse()` を
+    // 外しても通ってしまう。ここでは応答本文のどこにも現れないことを見る。
+    const app = buildApp({}, { leakAccountField: true });
+
+    const claimed = await loginThrough(app);
+    expect(JSON.stringify(claimed)).not.toContain('leakedField');
+
+    // `/auth/me` の account 枝は許可されたアカウントでなければ門番（403）で
+    // 止まり、ハンドラへ届かない。届かせるために先に許可する。
+    await app.request(`/access/${claimed.account.id}/grant`, {
+      ...post,
+      headers: { ...post.headers, ...OPERATOR },
+    });
+
+    const auth = { authorization: `Bearer ${claimed.token}` };
+    const me = await (await app.request('/auth/me', { headers: auth })).json();
+    expect(JSON.stringify(me)).not.toContain('leakedField');
+
+    const access = await (await app.request('/access', { headers: OPERATOR })).json();
+    expect(JSON.stringify(access)).not.toContain('leakedField');
+  });
+
+  it('宣言したフィールドは載る', async () => {
+    // **これは「宣言だけ消す」変異で落ちる歯である。** 前のテストは「余計なものが
+    // 出ないこと」しか見ていないので、宣言ごと削っても気づけない。
+    const app = buildApp();
+    const claimed = await loginThrough(app);
+    await app.request(`/access/${claimed.account.id}/grant`, {
+      ...post,
+      headers: { ...post.headers, ...OPERATOR },
+    });
+
+    const access = (await (await app.request('/access', { headers: OPERATOR })).json()) as {
+      accounts: Record<string, unknown>[];
+    };
+    const account = access.accounts.find((entry) => entry.id === claimed.account.id);
+    expect(account).toBeDefined();
+    expect(account).toHaveProperty('granted', true);
+    expect(account).toHaveProperty('identities');
+    expect(Array.isArray((account as { identities: unknown[] }).identities)).toBe(true);
+    expect(account).toHaveProperty('email');
+    expect(account).toHaveProperty('grantedAt');
+    expect(account).toHaveProperty('grantedBy');
+
+    const auth = { authorization: `Bearer ${claimed.token}` };
+    const me = (await (await app.request('/auth/me', { headers: auth })).json()) as {
+      kind: string;
+      granted: boolean;
+      account: Record<string, unknown>;
+    };
+    expect(me.granted).toBe(true);
+    expect(me.account).toHaveProperty('email');
+    expect(me.account).toHaveProperty('grantedAt');
+  });
+
+  it('応答のキー集合が宣言のキー集合と一致する', async () => {
+    // **これは「`.parse()` を外し、かつ宣言も消す」変異で落ちる歯である。**
+    // `.parse()` があれば宣言に無いキーは落ちるが、`.parse()` ごと外すと
+    // 実物（ドメインの値）のキーがそのまま出る。宣言のキー集合そのものと
+    // 突き合わせて一致を見る。
+    const app = buildApp();
+    const claimed = await loginThrough(app);
+    await app.request(`/access/${claimed.account.id}/grant`, {
+      ...post,
+      headers: { ...post.headers, ...OPERATOR },
+    });
+
+    const access = (await (await app.request('/access', { headers: OPERATOR })).json()) as {
+      accounts: Record<string, unknown>[];
+    };
+    const account = access.accounts.find((entry) => entry.id === claimed.account.id);
+    expect(account).toBeDefined();
+
+    const declaredKeys = Object.keys(accountWithIdentitiesSchema.shape).sort();
+    const actualKeys = Object.keys(account as Record<string, unknown>).sort();
+    expect(actualKeys).toEqual(declaredKeys);
   });
 });
