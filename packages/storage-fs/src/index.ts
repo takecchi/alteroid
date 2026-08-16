@@ -5,6 +5,7 @@ import type { Stores } from '@alteroid/core';
 
 import { FsTranscriptArchive } from './archive.js';
 import { FsAuthStore } from './auth.js';
+import { FsInboxStore } from './inbox.js';
 import { FsJobStore } from './jobs.js';
 import { FsJournalStore } from './journal.js';
 import { FsPersonaStore } from './persona.js';
@@ -16,6 +17,7 @@ import { FsUsageStore } from './usage.js';
 
 export { FsTranscriptArchive } from './archive.js';
 export { FsAuthStore } from './auth.js';
+export { FsInboxStore } from './inbox.js';
 export { FsJobStore } from './jobs.js';
 export { FsJournalStore } from './journal.js';
 export { FsPersonaStore } from './persona.js';
@@ -34,6 +36,7 @@ export function createFsStores(root?: string): Stores & { paths: AlteroidPaths }
     journal: new FsJournalStore(paths.journal),
     jobs: new FsJobStore(paths.jobs),
     schedules: new FsScheduleStore(paths.jobs),
+    inbox: new FsInboxStore(paths.jobs),
     archive: new FsTranscriptArchive(paths.archive),
     sessions: new FsSessionRegistry(paths.state),
     auth: new FsAuthStore(paths.auth),

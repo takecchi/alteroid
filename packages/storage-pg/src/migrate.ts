@@ -55,6 +55,16 @@ const STATEMENTS = [
      plan jsonb not null
    )`,
 
+  // まだ処理し終えていない受信箱の合図（store.ts の InboxStore）。id が主キーなのは
+  // 同じ合図が二重に積まれないためで、deliveries は put で上書きしても引き継がれる。
+  `create table if not exists inbox_events (
+     id text primary key,
+     event jsonb not null,
+     at timestamptz not null,
+     deliveries integer not null default 0
+   )`,
+  `create index if not exists inbox_events_at_idx on inbox_events (at)`,
+
   `create table if not exists archive (
      id text primary key,
      session_id text not null,

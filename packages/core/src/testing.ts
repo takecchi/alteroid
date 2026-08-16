@@ -17,7 +17,9 @@ import type {
 } from './auth.js';
 import type {
   EnvProfile,
+  InboxStore,
   JobStore,
+  PendingInboxEvent,
   JournalQuery,
   JournalStore,
   PersonaStore,
@@ -48,6 +50,7 @@ export function createMemoryStores(): Stores {
   const approvals = new Map<string, PendingApproval>();
   const schedules = new Map<string, ScheduledRequest>();
   const archives = new Map<string, string>();
+  const inboxStore = createMemoryInboxStore();
   let cloneSessionId: string | null = null;
   let envProfile: EnvProfile | null = null;
   let counter = 0;
@@ -334,11 +337,43 @@ export function createMemoryStores(): Stores {
     journal,
     jobs: jobStore,
     schedules: scheduleStore,
+    inbox: inboxStore,
     archive,
     sessions,
     auth,
     profile,
     usage,
+  };
+}
+
+/**
+ * 未読の受信箱をインメモリで持つ器。
+ *
+ * **「プロセスが死ぬ」をテストで再現するための土台**でもある。`Clone` を捨てて
+ * 同じ `Stores` から作り直せば、器だけが入れ替わった再起動と同じ形になる
+ * （ここを `Clone` の内側に持たせると、その再現ができなくなる）。
+ */
+function createMemoryInboxStore(): InboxStore {
+  const unread = new Map<string, PendingInboxEvent>();
+
+  return {
+    async put(event: InboxEvent, at: string): Promise<void> {
+      // 配達回数は保つ（本文だけを差し替える）。
+      const deliveries = unread.get(event.id)?.deliveries ?? 0;
+      unread.set(event.id, { event, at, deliveries });
+    },
+    async remove(id: string): Promise<void> {
+      unread.delete(id);
+    },
+    async claimPending(): Promise<PendingInboxEvent[]> {
+      const rows = [...unread.values()].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+      // 読むことと回数を進めることを1操作に閉じる（`InboxStore.claimPending`）。
+      return rows.map((row) => {
+        const next = { ...row, deliveries: row.deliveries + 1 };
+        unread.set(row.event.id, next);
+        return next;
+      });
+    },
   };
 }
 
@@ -390,6 +425,22 @@ export function failingJournalAppend(stores: Stores, reason: string): Stores {
     journal: {
       ...stores.journal,
       append: () => Promise.reject(new Error(reason)),
+    },
+  };
+}
+
+/**
+ * 未読の書き出しだけを失敗させる（読み直しと消し込みは通す）。
+ *
+ * ここが落ちても `post` は落ちてはいけない — 未読を書けないことでその合図の処理
+ * まで止めたら、いま塞いでいる穴より広い穴になる。跡は stderr にしか出ない。
+ */
+export function failingInboxPut(stores: Stores, reason: string): Stores {
+  return {
+    ...stores,
+    inbox: {
+      ...stores.inbox,
+      put: () => Promise.reject(new Error(reason)),
     },
   };
 }
