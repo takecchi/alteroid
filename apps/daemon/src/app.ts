@@ -6,6 +6,8 @@ import type {
   CloneHost,
   JournalEntry,
   JournalEntryType,
+  ManagerPool,
+  ManagerSummary,
   ProfileService,
   RunnerRegistry,
   Scheduler,
@@ -481,6 +483,23 @@ function isPublicPath(path: string): boolean {
   if (path === '/health' || path === '/openapi.json' || path === '/docs') return true;
   if (path === '/auth/me') return false;
   return path === '/auth' || path.startsWith('/auth/');
+}
+
+/**
+ * 一覧・詳細で返すマネージャー（状態に、確認へ上がらず止められた件数を**添える**）。
+ *
+ * **2つの出どころを外向きの面でだけ合流させる。** 状態は台帳から作った
+ * `ManagerSummary`、拒否はデーモンのプロセス内にしか無い像で、`denials()` という
+ * 別の口から読む（`ManagerPool`）。core の interface へ混ぜないのは、台帳へ持ち
+ * 越さない設計をそのまま保つためである（器を作り直せば数え直しになる）。
+ *
+ * **拒否が無いときはキーごと載せない。** 常に `[]` を載せると「0 件だった」と
+ * 読めるが、デーモンから見えているのは「この器では数えていない」でもありうる。
+ * `manager_list` が拒否ゼロの行に何も足さないのと同じ扱いにする。
+ */
+function managerView(managers: ManagerPool, summary: ManagerSummary) {
+  const denials = managers.denials(summary.managerId);
+  return denials.length === 0 ? summary : { ...summary, denials };
 }
 
 /** 一覧・詳細で返すアカウント（identity を畳んで、秘密は載せない）。 */
@@ -1637,8 +1656,14 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      async (c) =>
-        c.json(managersListResponseSchema.parse({ managers: await clone.managers.list() })),
+      async (c) => {
+        const managers = await clone.managers.list();
+        return c.json(
+          managersListResponseSchema.parse({
+            managers: managers.map((summary) => managerView(clone.managers, summary)),
+          }),
+        );
+      },
     )
 
     .get(
@@ -1661,7 +1686,9 @@ export function createApp(deps: AppDeps) {
         const id = c.req.param('id');
         const manager = (await clone.managers.list()).find((entry) => entry.managerId === id);
         if (!manager) return c.json({ error: 'not found' as const }, 404);
-        return c.json(managerDetailResponseSchema.parse({ manager }));
+        return c.json(
+          managerDetailResponseSchema.parse({ manager: managerView(clone.managers, manager) }),
+        );
       },
     )
 

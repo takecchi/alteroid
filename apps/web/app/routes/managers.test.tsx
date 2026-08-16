@@ -92,3 +92,64 @@ describe('一覧の札は、観測した分しか言わない', () => {
     expect(screen.queryByText(/リモート（PR・ブランチ）/)).toBeNull();
   });
 });
+
+/**
+ * **「クローンに見えて人間に見えない」を作らない。**
+ *
+ * PR #60 でクローンは `manager_list` から拒否件数を読めるようになったが、この画面は
+ * 「実行中」としか言わないままだった。これまで潰してきたのは「人間にできてクローン
+ * にできない」（`manager_stop` が無い等）だったが、同じ線を逆から踏んでいる
+ * — 北極星 禁止1（デグレード禁止）である。
+ *
+ * 対になっているのは `packages/core/src/tools.test.ts`「拒否で手が止まっている
+ * ことが、状態に添えて一覧に出る」。
+ */
+describe('拒否は、状態を置き換えずに状態へ添える', () => {
+  it('「実行中」の札を残したまま、拒否件数を並べて出す', async () => {
+    renderManagers([
+      {
+        ...BASE,
+        status: 'running',
+        denials: [
+          { tool: 'Bash', count: 4 },
+          { tool: 'Write', count: 1 },
+        ],
+      },
+    ]);
+
+    // **札は差し替えない。** 拒否があっても観測しているのは `running` である。
+    expect(await screen.findByText('実行中')).toBeTruthy();
+    expect(screen.getByText(/Bash 4件/)).toBeTruthy();
+    expect(screen.getByText(/Write 1件/)).toBeTruthy();
+    // **なぜ気にする必要があるのか**まで書く（クローンにも回っていない）。
+    expect(screen.getByText(/クローンには回ってきていない/)).toBeTruthy();
+    // 観測していないことを断定しない。
+    expect(screen.queryByText(/手が止まっている。/)).toBeNull();
+  });
+
+  it('拒否の種類が多くても畳んで、切ったことを言う', async () => {
+    renderManagers([
+      {
+        ...BASE,
+        denials: Array.from({ length: 7 }, (_, index) => ({
+          tool: `tool-${index}`,
+          count: index + 1,
+        })),
+      },
+    ]);
+
+    // デーモンは古い順で返す。新しい側（末尾）から3種。
+    expect(await screen.findByText(/tool-6 7件/)).toBeTruthy();
+    expect(screen.getByText(/tool-4 5件/)).toBeTruthy();
+    expect(screen.queryByText(/tool-3/)).toBeNull();
+    // 黙って落とさない。
+    expect(screen.getByText(/ほか 4 種、全 28 件/)).toBeTruthy();
+  });
+
+  it('拒否が無いマネージャーには何も足さない（雑音にしない）', async () => {
+    renderManagers([{ ...BASE, status: 'running' }]);
+
+    expect(await screen.findByText('実行中')).toBeTruthy();
+    expect(screen.queryByText(/確認へ上がらず止められた/)).toBeNull();
+  });
+});
