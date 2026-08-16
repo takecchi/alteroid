@@ -836,6 +836,70 @@ describe('デーモン再起動後（M4）', () => {
     await s.pool.stop();
   });
 
+  it('runner が failed と名乗ったセッションへ send すると resume 経路を通る（届かない runner.send() にしない）', async () => {
+    // `failed` は `lost` と同じ形で畳まれている。`RunnerSession#finish('failed', ...)`
+    // （runner.ts）も `#stopped = true` を先に立ててから一覧に残ったまま実 I/O
+    // （アーカイブ送出）を挟むので、その隙間で引き取ると畳まれたセッションへ
+    // `attached: true` を立てることになる。`lost` 版と同じ実害（届かない
+    // `runner.send()` を届いたことにして `running` へ巻き戻す）が起きるはずが
+    // 無いことを、`runner.resume()`（`#resumeOnce` の経路）が呼ばれたことで見る。
+    // `failed` は「話しかければ直るかもしれない失敗」（runner.ts のコメント）
+    // なので、resume を試みるのが正しい。
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push({
+      managerId: runningJob.id,
+      status: 'failed',
+      cwd: '/work/project',
+      request: 'DB の移行をやって',
+      waiting: [],
+      sessionId: 'sess-before-restart',
+    });
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    await s.pool.restore();
+    const result = await s.pool.send(runningJob.id, '続けて');
+
+    // resume 経路を通った証拠は「resume が増えた」こと（fake の `send` は何も
+    // 記録しないので、その不在ではなく resume の発生そのものを見る）。
+    expect(fake.state.resumes).toHaveLength(1);
+    expect(fake.state.resumes[0]).toMatchObject({
+      managerId: runningJob.id,
+      sessionId: 'sess-before-restart',
+    });
+    expect(result.outcome).toBe('delivered');
+
+    await s.pool.stop();
+  });
+
+  it('runner が failed と名乗ったセッションを引き取っても、「走り続けている」とは知らせない', async () => {
+    // `#notifyRestored(record, 'attached')` は「runner の中で走り続けている」と
+    // 断言する文面を受信箱へ流す。しかし `failed` も `lost` と同じく runner が
+    // 「もう居ない」と名乗った状態そのものなので、この文面は嘘になる。
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push({
+      managerId: runningJob.id,
+      status: 'failed',
+      cwd: '/work/project',
+      request: 'DB の移行をやって',
+      waiting: [],
+      sessionId: 'sess-before-restart',
+    });
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    await s.pool.restore();
+
+    const notices = s.inbox
+      .filter((event) => event.type === 'manager_message' && event.managerId === runningJob.id)
+      .map((event) => (event as { text: string }).text);
+    expect(notices.some((text) => text.includes('runner の中で走り続けている'))).toBe(false);
+
+    await s.pool.stop();
+  });
+
   it('戻る先が無い仕事は、話しかけた後も live: false のままである', async () => {
     // 上の `unknown` は「届かなかった」という**その場の返事**でしかない。届け
     // られなかった相手を一覧が `live: true` で見せ続けるなら、人間もクローンも

@@ -563,17 +563,18 @@ class Pool implements ManagerPool {
 
       const living = alive.get(job.id);
       if (living) {
-        // まだ走っている……とは限らない。**runner が `lost` と名乗ることがある。**
-        // セッションは `#status = 'lost'` を立ててからアーカイブの送出（実 I/O）を
-        // 挟んで一覧から消えるので、その隙間では畳まれたセッションが `lost` のまま
-        // 一覧に載っている。`attached` が言うのは「runner に**生きた**セッションが
-        // あるか」であり、畳まれたセッションへの `push` は黙って捨てられる
-        // （`RunnerSession#push` は `#stopped` を見て何もしない）。
+        // まだ走っている……とは限らない。**runner が `lost` / `failed` と名乗る
+        // ことがある。** どちらも `RunnerSession#finish()` が `#stopped = true` を
+        // 立ててからアーカイブの送出（実 I/O）を挟んで一覧から消えるので、その
+        // 隙間では畳まれたセッションが `lost` / `failed` のまま一覧に載っている。
+        // `attached` が言うのは「runner に**生きた**セッションがあるか」であり、
+        // 畳まれたセッションへの `push` は黙って捨てられる（`RunnerSession#push`
+        // は `#stopped` を見て何もしない）。
         //
         // ここで `true` を固定すると、`send()` が `!record.attached` で resume と
         // send を分けているせいで、**届かない `runner.send()` を届いたことにして**
         // 台帳の終端状態まで `running` へ巻き戻す。像を上流で正す。
-        const attached = living.state.status !== 'lost';
+        const attached = living.state.status !== 'lost' && living.state.status !== 'failed';
         const record: ManagerRecord = {
           job: {
             ...job,
@@ -586,7 +587,7 @@ class Pool implements ManagerPool {
         };
         this.#records.set(job.id, record);
         await this.#persist(record);
-        // 「runner の中で走り続けている」は `lost` には言えない。
+        // 「runner の中で走り続けている」は `lost` にも `failed` にも言えない。
         if (attached) this.#notifyRestored(record, 'attached');
         resumed.push(summaryOf(record, isLive(record)));
         continue;
