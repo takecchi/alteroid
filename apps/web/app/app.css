@@ -1,4 +1,15 @@
 @import 'tailwindcss';
+/*
+ * shadcn の部品が前提にしているもの。**どちらも色を1つも持たない**
+ * （`--color-*` は両方とも 0 件。中身は custom variant / @property / @utility だけ）ので、
+ * 下のパレットには触れない。
+ *
+ * - `shadcn/tailwind.css`: `data-open:` / `data-closed:` などの custom variant。
+ *   sheet の class がこれを前提にしている（無いと出入りの指定が丸ごと落ちる）
+ * - `tw-animate-css`: `animate-in` / `slide-in-from-left-*`（sheet の出入りそのもの）
+ */
+@import 'shadcn/tailwind.css';
+@import 'tw-animate-css';
 
 @custom-variant dark (&:is(.dark *));
 
@@ -20,6 +31,56 @@
   --color-ok: var(--ok);
   --font-mono:
     ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  /*
+   * ここから下は **shadcn の部品が使う名前**で、上の色へ向け直しただけのものである。
+   * 上の名前（`bg` / `surface` / `fg` / `muted` / `accent` …）は1つも消していない
+   * ＝既存の画面の見え方は動かない。消すとそれを使っている全箇所を書き換えることになる。
+   *
+   * **`border` はここに出てこない。** 名前も意味も両側で一致しているので上のものが
+   * そのまま shadcn の `border-border` に効く。**二重定義ではなく共有である**
+   * （「片方が抜けている」と思って足しに来ないこと）。
+   *
+   * ⚠ **`muted` と `accent` は、名前が同じで意味が逆である。**
+   *   - alteroid: `muted` は**文字色**（`text-muted`）、`accent` は**強調色**（`bg-accent` ＋ `text-accent-fg`）
+   *   - shadcn:   どちらも**控えめな面の色**（`bg-muted` / `bg-accent` ＋ `*-foreground`）
+   *
+   *   1つの名前は1つの値しか持てないので、**上の意味を残した**（既存の全箇所が上を
+   *   使っており、動かすと画面全部の差分になる）。shadcn 側は次の形で受けてある:
+   *
+   *   | shadcn が書くもの                | ここでの扱い                                    |
+   *   | -------------------------------- | ----------------------------------------------- |
+   *   | `text-muted-foreground`          | 下の `--color-muted-foreground`（＝ alteroid の `muted`。意味が一致する） |
+   *   | `bg-muted` / `bg-accent`（面）   | **`bg-surface-2` へ書き換える**                 |
+   *   | `text-accent-foreground`         | **`text-fg` へ書き換える**                      |
+   *
+   *   **`shadcn add` で部品を増やしたら、その3つだけ直すこと。** 直さないと、文字色が
+   *   面の色として塗られる（明るい灰色の塊が出る）。`components/shadcn/button.tsx` は
+   *   既にそう直してあり、直した箇所には印を付けてある。
+   *
+   * **`--radius-*` を足していないのも意図的である。** shadcn の init はここへ独自の
+   * 丸めの段を流し込むが、それは `rounded-md` / `rounded-lg` の意味を変える＝既存の
+   * 全画面が動く。shadcn の部品は Tailwind 既定の段のままで問題なく出る。
+   *
+   * ここに無い名前（`chart-*` / `sidebar-*` / `destructive-foreground` …）は、
+   * **それを使う部品を入れるときに足す**。使う相手が居ないうちから並べない。
+   */
+  --color-background: var(--bg);
+  --color-foreground: var(--fg);
+  --color-card: var(--surface);
+  --color-card-foreground: var(--fg);
+  --color-popover: var(--surface);
+  --color-popover-foreground: var(--fg);
+  --color-primary: var(--accent);
+  --color-primary-foreground: var(--accent-fg);
+  --color-secondary: var(--surface-2);
+  --color-secondary-foreground: var(--fg);
+  --color-muted-foreground: var(--muted);
+  --color-destructive: var(--danger);
+  /* 入力欄の枠。alteroid 側は `border-border` を使うので、同じ色を指しておく。 */
+  --color-input: var(--border);
+  /* 焦点の輪。`:focus-visible` の outline（下の @layer base）と同じ色にする。 */
+  --color-ring: var(--accent);
 }
 
 :root {

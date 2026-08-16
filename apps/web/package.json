@@ -12,14 +12,18 @@
     "@alteroid/api-client": "workspace:*",
     "@alteroid/core": "workspace:*",
     "@react-router/node": "catalog:",
+    "class-variance-authority": "catalog:",
     "clsx": "catalog:",
     "isbot": "catalog:",
     "lucide-react": "catalog:",
+    "radix-ui": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
     "react-router": "catalog:",
+    "shadcn": "catalog:",
     "swr": "catalog:",
-    "tailwind-merge": "catalog:"
+    "tailwind-merge": "catalog:",
+    "tw-animate-css": "catalog:"
   },
   "devDependencies": {
     "@react-router/dev": "catalog:",
