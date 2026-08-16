@@ -9,6 +9,13 @@
  * 自前で書き足すには量が多く、しかも「書き忘れても画面上は正常に見える」ものばかり
  * である（マウスで触っているかぎり気づけない）。
  *
+ * **`aria-modal="true"` は付かなくなった。以前は自分で付けていた。** Radix
+ * （`react-dialog@1.1.23`）はこの属性を1箇所も出さず、代わりに**面の外へ
+ * `aria-hidden` を配る**（`aria-hidden` パッケージの `hideOthers`）。読み上げから
+ * 外すという結果は同じで、そちらのほうが強い。**「属性が抜けている」と思って
+ * 手で足しに来ないこと** — Radix が意図して選んでいる側である。実際に外れて
+ * いるかは `drawer.test.tsx` が見ている。
+ *
  * **「閉じているあいだは中身を描かない」は消していない — Radix 側が担保する。**
  * 画面の外へ逃がすだけにすると、見えていないリンクがそのまま Tab の順路に残り、
  * キーボードの焦点がどこにも無いところへ落ちる。Radix は閉じたら中身ごと外す
@@ -52,12 +59,6 @@ export function Drawer({
          */
         showCloseButton={false}
         /*
-         * **`aria-describedby` を明示的に空にする。** Radix は説明文（`Description`）が
-         * 無いと「無いか、明示的に切るか」を警告で促す。ここに出るのは面そのもの
-         * なので説明文は要らない。
-         */
-        aria-describedby={undefined}
-        /*
          * 見え方は以前の drawer のまま。**`w-` だけは `data-[side=left]:` を付けて
          * 上書きする** — sheet 側の幅指定が同じ修飾子付き（`data-[side=left]:w-3/4`）
          * なので、修飾子を揃えないと `cn`（tailwind-merge）が衝突と見なせず、両方
@@ -71,8 +72,9 @@ export function Drawer({
       >
         {/*
           読み上げ用の名前。**`aria-label` ではなく `Title` で与える** — Radix は
-          `Title` を名前の出どころとして扱い、無ければ警告する。見た目には出さない
-          （`sr-only`）ので、以前と同じく面の中身だけが見える。
+          `Title` が在るときだけ `aria-labelledby` をそこへ向ける作りで（`react-dialog`
+          の `titlePresent ? titleId : undefined`）、置かないと面に名前が付かない。
+          見た目には出さない（`sr-only`）ので、以前と同じく中身だけが見える。
         */}
         <SheetTitle className="sr-only">{label}</SheetTitle>
         {children}

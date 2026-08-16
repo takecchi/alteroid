@@ -21,7 +21,7 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default: 'bg-primary text-primary-foreground hover:bg-primary/80',
-        // ←muted（3つとも `bg-muted` からの書き換え）
+        // ←muted（2つとも `bg-muted` からの書き換え。`input` のほうは元から `input`）
         outline:
           'border-border bg-background hover:bg-surface-2 hover:text-foreground aria-expanded:bg-surface-2 aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50',
         secondary:
