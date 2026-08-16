@@ -42,6 +42,10 @@ export interface ManagerSummary {
    *
    * 再起動を跨いで台帳から拾い直した分も `true` になる（宛先の runner が居て、
    * session_id から resume できる）。宛先を失ったものだけが `false`。
+   *
+   * **`status: lost` と `live: true` は両立しない。** `lost` は resume を試して
+   * 前のセッションへ戻れなかったという事実で、戻る先が無いのだから話しかけ
+   * られない。この組を出さないのは `isLive()` の仕事である。
    */
   live: boolean;
   cwd: string;
@@ -362,7 +366,7 @@ class Pool implements ManagerPool {
       role: 'outbound',
       text: `[${managerId}] ${input.request}`,
     });
-    return summaryOf(record);
+    return summaryOf(record, isLive(record));
   }
 
   /**
@@ -472,7 +476,7 @@ class Pool implements ManagerPool {
 
     const known = new Map<string, ManagerSummary>();
     for (const record of this.#records.values()) {
-      known.set(record.job.id, summaryOf(record));
+      known.set(record.job.id, summaryOf(record, isLive(record)));
     }
     // 台帳にしか無い分も見せる（宛先の runner が居ないものは live: false）。
     for (const job of await this.#stores.jobs.listJobs()) {
@@ -573,7 +577,7 @@ class Pool implements ManagerPool {
         this.#records.set(job.id, record);
         await this.#persist(record);
         this.#notifyRestored(record, 'attached');
-        resumed.push(summaryOf(record));
+        resumed.push(summaryOf(record, isLive(record)));
         continue;
       }
 
@@ -611,7 +615,7 @@ class Pool implements ManagerPool {
         text: `[${job.id}] （再起動後の再開）${nudge}`,
       });
       this.#notifyRestored(record, 'resumed');
-      resumed.push(summaryOf(record));
+      resumed.push(summaryOf(record, isLive(record)));
     }
     return resumed;
   }
@@ -1634,7 +1638,35 @@ function restartNudge(status: JobStatus, cause: RestartCause): string {
   return `${head}中断していた作業の続きを進めよ。`;
 }
 
-function summaryOf(record: ManagerRecord, live = true): ManagerSummary {
+/**
+ * プロセス内の像から「このデーモンから話しかけられるか」を出す。
+ *
+ * **像が `#records` に載っていること自体は「話しかけられる」ではない。** 載る
+ * 契機は引き取り（`#restoreJobs`）だけではなく、`send()` / `abort()` /
+ * 届いたイベントが台帳から作る `#load()` もある。そちらは戻れるかを何も
+ * 確かめていないので、載っていることを根拠に `true` と数えると、
+ * `status: lost`（前のセッションへ戻れなかった）と `live: true`（繋がっている）
+ * という両立しない組が出る。
+ */
+function isLive(record: ManagerRecord): boolean {
+  // runner にセッションが居るなら、そのまま送れる。
+  if (record.attached) return true;
+  // 繋がっていない像は「戻せるか」で決まる。`lost` は resume を試して戻れなかった
+  // 事実そのもので、session_id が無いものは戻る先が無い（`send()` はどちらにも
+  // 届けられない）。**どちらなのかは `status` と `sessionId` が別々に持っている**
+  // ので、ここで両者を潰しているわけではない。
+  return record.job.status !== 'lost' && record.job.sessionId !== undefined;
+}
+
+/**
+ * `live` に既定値を置かないのは、**省略した側が黙って「繋がっている」と名乗る**
+ * からである。呼び出しを足す人は `live` のことを考えていないのが普通で、既定が
+ * 肯定側にあると、考えなかったことが「繋がっている」という主張になって外へ出る
+ * （実際に `list()` がそれで嘘をついた）。既定を `false` にすれば害は小さくなるが、
+ * 今度は「繋がっているのに切れて見える」が黙って混ざる。**判断そのものを省略
+ * させない**のが要点なので、引数を必須にして呼ぶ側に必ず書かせる。
+ */
+function summaryOf(record: ManagerRecord, live: boolean): ManagerSummary {
   const { job } = record;
   return {
     managerId: job.id,
