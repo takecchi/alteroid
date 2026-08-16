@@ -1649,13 +1649,20 @@ function restartNudge(status: JobStatus, cause: RestartCause): string {
  * という両立しない組が出る。
  */
 function isLive(record: ManagerRecord): boolean {
+  // **`lost` は何より先に見る。** 「繋がっている（`attached`）なら live」を先に
+  // 置くと、両立しない組を出さないことが「両者が同時に立つ代入が無い」という
+  // 追跡結果に頼ることになる。実際に立つ隙間がある — 起動時の引き取りは runner が
+  // 名乗った状態をそのまま採りつつ `attached: true` を固定する（`#restoreJobs`）
+  // ので、runner の側で resume 失敗が確定してからそのセッションが一覧から消える
+  // までの間に引き取ると、`lost` の像が `attached: true` で立つ。
+  if (record.job.status === 'lost') return false;
   // runner にセッションが居るなら、そのまま送れる。
   if (record.attached) return true;
-  // 繋がっていない像は「戻せるか」で決まる。`lost` は resume を試して戻れなかった
-  // 事実そのもので、session_id が無いものは戻る先が無い（`send()` はどちらにも
-  // 届けられない）。**どちらなのかは `status` と `sessionId` が別々に持っている**
-  // ので、ここで両者を潰しているわけではない。
-  return record.job.status !== 'lost' && record.job.sessionId !== undefined;
+  // 繋がっていない像は「戻せるか」で決まる。session_id が無いものは戻る先が無い。
+  // **「戻れなかった（`lost`）」と「戻る先が無い（session_id なし）」を潰しては
+  // いない** — どちらなのかは `status` と `sessionId` が別々に持ったままで、
+  // `live` が言うのは「話しかけられるか」だけである。
+  return record.job.sessionId !== undefined;
 }
 
 /**

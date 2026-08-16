@@ -740,6 +740,38 @@ describe('デーモン再起動後（M4）', () => {
     await s.pool.stop();
   });
 
+  it('runner が lost と名乗ったセッションを、繋がっているからと live: true にしない', async () => {
+    // 引き取り（`#restoreJobs`）は runner が名乗った状態をそのまま採りつつ
+    // `attached: true` を固定する。runner の側では resume の失敗が確定してから
+    // （`#status = 'lost'`）そのセッションが一覧から消えるまでに実 I/O を挟むので、
+    // その隙間で引き取ると `lost` の像が `attached: true` で立つ。
+    //
+    // **「`lost` と `attached: true` が同時に立つ代入は無い」に寄りかからない。**
+    // 代入を全部数え上げて成り立つ不変条件は、次に代入を足した人が黙って壊す。
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push({
+      managerId: runningJob.id,
+      status: 'lost',
+      cwd: '/work/project',
+      request: 'DB の移行をやって',
+      waiting: [],
+      sessionId: 'sess-before-restart',
+    });
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    const restored = await s.pool.restore();
+    // 繋ぎ直してはいる（引き取りの経路を通ったことを固定する）。
+    expect(restored.map((m) => m.managerId)).toEqual([runningJob.id]);
+    expect(restored[0]?.live).toBe(false);
+
+    const listed = (await s.pool.list()).find((m) => m.managerId === runningJob.id);
+    expect(listed).toMatchObject({ status: 'lost', live: false });
+
+    await s.pool.stop();
+  });
+
   it('戻る先が無い仕事は、話しかけた後も live: false のままである', async () => {
     // 上の `unknown` は「届かなかった」という**その場の返事**でしかない。届け
     // られなかった相手を一覧が `live: true` で見せ続けるなら、人間もクローンも
