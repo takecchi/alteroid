@@ -1,7 +1,9 @@
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 
-import { createClient } from './client.js';
+import type { InferResponseType } from 'hono/client';
+
+import { createClient, type DaemonClient } from './client.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { renderUsage } from './usage.js';
 
@@ -391,17 +393,7 @@ async function runSlashCommand(
         return 'ok';
       }
       const { managers } = await response.json();
-      if (managers.length === 0) stdout.write('（マネージャーは1本も居ません）\n');
-      for (const manager of managers) {
-        const live = manager.live ? '' : ' /セッション切断';
-        stdout.write(`  ${manager.managerId}  [${manager.status}${live}]  ${manager.request}\n`);
-        stdout.write(`      cwd: ${manager.cwd}\n`);
-        for (const item of manager.waiting) {
-          stdout.write(`      返事待ち (${item.requestId}): ${summarizeText(item.summary)}\n`);
-        }
-        if (manager.lastReport)
-          stdout.write(`      直近の報告: ${summarizeText(manager.lastReport)}\n`);
-      }
+      stdout.write(`${renderManagerList(managers)}\n`);
       return 'ok';
     }
 
@@ -517,6 +509,77 @@ async function runSlashCommand(
 
 function writeReport(report: { date: string; body: string }): void {
   stdout.write(`── ${report.date} の日報 ──\n${report.body}\n`);
+}
+
+/** 一覧で拒否を出す道具の種類数（多い分は件数だけ言う）。 */
+const LIST_DENIED_TOOLS = 3;
+
+/**
+ * `GET /managers` が返す1本ぶん。**クライアントが実際に受け取る形**から導く
+ * （core の `ManagerSummary` ではない — 拒否件数はデーモンの外向きの面でだけ
+ * 合流するので、そちらには無い）。
+ */
+type ManagerListItem = InferResponseType<DaemonClient['managers']['$get']>['managers'][number];
+type ManagerDenial = NonNullable<ManagerListItem['denials']>[number];
+
+/**
+ * 状態に添える「確認へ上がらず止められた」件数の一行。
+ *
+ * **状態を置き換えない。** 分類器か deny 規則がその場で拒否すると、その仕事は
+ * `running` のまま手が止まる。札は `[running]` のまま残し、その下に並べる。
+ *
+ * **人間が読む面は3つある。** クローンは `manager_list` で、Web UI は一覧で
+ * 同じものを見ているのに、端末だけが「実行中」としか言わなかった。同じ仕事を
+ * 見て人間とクローンが違う判断をするのは、北極星 禁止1（デグレード禁止）を
+ * いつもと逆の向きに踏むことである。
+ *
+ * **畳み方は他の2面と同じ**（新しい側から3種＋切った分）。デーモンは古い順で
+ * 返すので末尾から採る — 知りたいのはいま何で止まっているかである。
+ *
+ * **拒否が無いときは何も足さない。** `denials` が無いのと `[]` は別で、常に
+ * 何か書くと「0 件だった」と読める。件数はデーモンのプロセス内にしか無く、
+ * 器を作り直せば数え直しなので、作り直した直後がいちばん静かに見える形にしない。
+ *
+ * 端末は1本ぶんに割ける行が少ないので、但し書きは Web UI より短くしてある。
+ * ただし「止まっている**可能性がある**」までは削らない — 数えているのは拒否
+ * そのものであって、それで止まったかどうかはデーモンから見えていない。
+ */
+function denialLine(denials: ManagerDenial[] | undefined): string | null {
+  if (denials === undefined || denials.length === 0) return null;
+  // 帳面は古い順に積まれている。**新しい側から**採る。
+  const recent = [...denials].reverse();
+  const shown = recent.slice(0, LIST_DENIED_TOOLS);
+  const rest = recent.length - shown.length;
+  const total = denials.reduce((sum, entry) => sum + entry.count, 0);
+  return (
+    `⚠ 確認へ上がらず止められた道具: ${shown.map((e) => `${e.tool} ${e.count}件`).join(' / ')}` +
+    (rest > 0 ? `（ほか ${rest} 種、全 ${total} 件）` : '') +
+    '。手が止まっている可能性があります'
+  );
+}
+
+/**
+ * マネージャーの一覧を、人間が読める形へ（`/managers`）。
+ *
+ * 表示を関数に出してあるのは、`renderUsage`（`usage.ts`）と同じ理由 —
+ * 何を出しているかを端末なしで確かめられるようにするためである。
+ */
+export function renderManagerList(managers: ManagerListItem[]): string {
+  if (managers.length === 0) return '（マネージャーは1本も居ません）';
+
+  const lines: string[] = [];
+  for (const manager of managers) {
+    const live = manager.live ? '' : ' /セッション切断';
+    lines.push(`  ${manager.managerId}  [${manager.status}${live}]  ${manager.request}`);
+    lines.push(`      cwd: ${manager.cwd}`);
+    const denied = denialLine(manager.denials);
+    if (denied !== null) lines.push(`      ${denied}`);
+    for (const item of manager.waiting) {
+      lines.push(`      返事待ち (${item.requestId}): ${summarizeText(item.summary)}`);
+    }
+    if (manager.lastReport) lines.push(`      直近の報告: ${summarizeText(manager.lastReport)}`);
+  }
+  return lines.join('\n');
 }
 
 type ScheduleSpecInput =
