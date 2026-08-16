@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import type {
   ChatStreamEvent,
   CloneHost,
@@ -5,14 +9,22 @@ import type {
   ManagerDenial,
   ManagerPool,
   ManagerSummary,
+  ScheduleStatus,
   Scheduler,
   Stores,
 } from '@alteroid/core';
-import { createMemoryStores, createProfileService, createRunnerRegistry } from '@alteroid/core';
+import {
+  createMemoryStores,
+  createProfileApplier,
+  createProfileService,
+  createProfileVessel,
+  createRunnerRegistry,
+} from '@alteroid/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp, parseAllowedOrigins } from './app.js';
 import { createJournalBus, type JournalBus } from './journal-bus.js';
+import { scheduleStatusSchema } from './openapi.js';
 
 /** クローンの代わり。HTTP 層だけを検証する。 */
 function fakeClone() {
@@ -1203,6 +1215,138 @@ describe('実行環境プロファイル', () => {
     expect((await stores.profile.read())?.script).toBe('export GOOD=1');
     // 降ろしてもいない
     expect(runner.received).toEqual([]);
+  });
+});
+
+/**
+ * `PUT /profile` の応答が宣言（`profileUpdateResponseSchema`）どおりであること。
+ *
+ * `result.clone`（`ApplyProfileResult['clone']`、core の `ProfileApplyResult`。
+ * `packages/core/src/profile.ts`）は、置いたものが実際に読めたときに
+ * `profile: ProfileFingerprint` を持つ（`createProfileApplier().prepare()` が
+ * 評価に成功すると必ず付ける）。しかし宣言（`profileUpdateResponseSchema.clone`、
+ * `apps/daemon/src/openapi.ts`）にこのフィールドは無い — `sha256` / `bytes` /
+ * `updatedAt` と完全に冗長なため（どちらも同じ本文から `fingerprintOf` した値）。
+ * `.parse()` を通さなければ、これが黙って応答へ出る。
+ *
+ * **`app.test.ts` 内の `profileService()` ヘルパーはここでは使わない。** あちらの
+ * `prepare()` は `{ ok: true, names: [] }` しか返さず `profile` を一度も生成
+ * しないので、`.parse()` を外してもこのテストは何も検知しない（空撃ち）。
+ * ここでは core の本物（`createProfileApplier` + `createProfileVessel`）を配線し、
+ * 実際にシェルスクリプトを評価させて `clone.profile` を生成させる。
+ */
+describe('宣言と実物の一致（/profile）', () => {
+  function withRealApplier() {
+    const dir = mkdtempSync(join(tmpdir(), 'alteroid-app-profile-'));
+    const vessel = createProfileVessel({ path: join(dir, 'profile.sh') });
+    const applier = createProfileApplier({ vessel, baseEnv: () => ({}) });
+    const profile = createProfileService({ stores, applier });
+    const app = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      profile,
+    });
+    return { app, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  }
+
+  it('宣言していないフィールドを外へ出さない（clone.profile は載らない）', async () => {
+    const { app, cleanup } = withRealApplier();
+    try {
+      const response = await app.request('/profile', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ script: 'export SEE_IT_LEAK=1' }),
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { clone: Record<string, unknown> };
+
+      // **applier がある経路を通っていること。** ここで `clone.ok` が `true` に
+      // なっているのは、本物の `ProfileApplier` がスクリプトを実際に評価して
+      // 通したからである（`profileService()` の空スタブでは `names` すら
+      // 生成されない）。この確認が無いと、下の `not.toHaveProperty` が
+      // 「そもそも clone.profile を生成できていないだけ」で通ってしまう。
+      expect(body.clone.ok).toBe(true);
+      expect(body.clone).not.toHaveProperty('profile');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('宣言したフィールドは載る（parse がぜんぶ落としているのではない）', async () => {
+    const { app, cleanup } = withRealApplier();
+    try {
+      const response = await app.request('/profile', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ script: 'export SEE_IT_LEAK=1' }),
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        sha256?: string;
+        bytes?: number;
+        clone: { ok: boolean; names?: string[] };
+        runners: unknown[];
+      };
+
+      expect(body.sha256).toBeDefined();
+      expect(body.bytes).toBeDefined();
+      expect(body.clone.ok).toBe(true);
+      expect(body.clone.names).toEqual(['SEE_IT_LEAK']);
+      expect(body.runners).toEqual([]);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+/**
+ * `GET /schedule` の応答が宣言（`scheduleListResponseSchema` → `scheduleStatusSchema`）
+ * どおりであること。
+ *
+ * `deps.scheduler?.list()` は core の `Scheduler` 実装が返す `ScheduleStatus[]` を
+ * そのまま渡している。ここに宣言に無いフィールドが増えても `describeRoute` の
+ * `resolver()` は検査しない（spec を作るだけ）。`.parse()` を外すと、
+ * スケジューラが返したものがそのまま応答へ出る。
+ *
+ * **本物のハンドラを本物の経路で叩く。** `fakeScheduler()` を丸ごと差し替えず、
+ * `list()` だけを宣言に無いフィールド混じりの値にすり替えた `Scheduler` を渡す。
+ */
+describe('宣言と実物の一致（/schedule）', () => {
+  it('応答のキー集合が宣言のキー集合と一致する（余分なフィールドは外へ出ない）', async () => {
+    const leakyEntry = {
+      kind: 'daily_report',
+      description: '毎日 22:00（ローカル時刻）にその日の日報をまとめる',
+      nextAt: '2026-08-12T13:00:00.000Z',
+      request: '例の件を毎朝報告して',
+      lastRunAt: '2026-08-11T13:00:00.000Z',
+      // 宣言（scheduleStatusSchema）に無いフィールド。
+      secretDebugField: 'should-not-escape',
+    } as unknown as ScheduleStatus;
+
+    const leakyScheduler: Scheduler = { ...schedule.scheduler, list: () => [leakyEntry] };
+    const withLeak = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      scheduler: leakyScheduler,
+    });
+
+    const response = await withLeak.request('/schedule');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { entries: Record<string, unknown>[] };
+
+    // **「宣言どおりのものが出る」だけを見ない。** それだけでは `.parse()` を
+    // 外しても、たまたま拾った実物のキーが宣言と一致していれば通ってしまう。
+    expect(JSON.stringify(body)).not.toContain('secretDebugField');
+
+    const entry = body.entries[0];
+    expect(entry).toBeDefined();
+    const declaredKeys = Object.keys(scheduleStatusSchema.shape).sort();
+    const actualKeys = Object.keys(entry as Record<string, unknown>).sort();
+    expect(actualKeys).toEqual(declaredKeys);
   });
 });
 
