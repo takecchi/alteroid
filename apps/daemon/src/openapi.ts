@@ -34,6 +34,14 @@ import { createApp } from './app.js';
  * *永続化*の形であって、*外へ出す*形とは役割が違う。同じものとして扱うと、
  * 保存側にフィールドが増えた日に宣言の外から黙って公開面へ乗る（`managerSummarySchema`
  * が `ManagerSummary` を再利用しないのと同じ理由）。
+ *
+ * **上の禁止が守ろうとしていたもの（spec が嘘になる）は、ここでは別の手で
+ * 守られている。** `/auth/*` `/access/*` は応答を返す前に必ずこの宣言の
+ * `.parse()` を通す（`app.ts`）ので、宣言と実物がずれても spec が嘘になることは
+ * なく、**宣言していないものが載らないだけ**である。ずれたときに倒れる向きが
+ * 安全側に固定されている、というのがこの例外の根拠であって、
+ * 「二重管理してよい」という話ではない。**`.parse()` を外すならこの例外も無効に
+ * なる** — そのときは再定義をやめて core のスキーマへ戻すこと。
  */
 
 // ---------------------------------------------------------------------------
@@ -90,6 +98,8 @@ export const healthResponseSchema = z.object({
 // /auth・/access（ログインとアクセス許可）
 // ---------------------------------------------------------------------------
 
+const isoDateTimeSchema = z.string().datetime({ offset: true });
+
 /**
  * `/auth/*` `/access/*` が外へ返すアカウントの形。
  *
@@ -104,8 +114,6 @@ export const healthResponseSchema = z.object({
  * 1対1に写してある。**ここがずれると `openapi.json` が動き、`packages/api-client`
  * 経由で `apps/web` の生成型まで動く** — 増やすときは意図して増やすこと。
  */
-const isoDateTimeSchema = z.string().datetime({ offset: true });
-
 const accountViewSchema = z.object({
   id: z.string().min(1),
   /** 表示用の名前。初回のログイン時にプロバイダから貰ったものを入れる。 */
