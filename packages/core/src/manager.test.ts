@@ -741,10 +741,11 @@ describe('デーモン再起動後（M4）', () => {
   });
 
   it('runner が lost と名乗ったセッションを、繋がっているからと live: true にしない', async () => {
-    // 引き取り（`#restoreJobs`）は runner が名乗った状態をそのまま採りつつ
-    // `attached: true` を固定する。runner の側では resume の失敗が確定してから
-    // （`#status = 'lost'`）そのセッションが一覧から消えるまでに実 I/O を挟むので、
-    // その隙間で引き取ると `lost` の像が `attached: true` で立つ。
+    // 引き取り（`#restoreJobs`）は runner が名乗った状態をそのまま採る。runner の
+    // 側では resume の失敗が確定してから（`#status = 'lost'`）そのセッションが
+    // 一覧から消えるまでに実 I/O を挟むので、その隙間で引き取ると `lost` を名乗る
+    // セッションを掴む。その像の `attached` は上流で `false` に倒すようにしたが、
+    // **`live` の判定はそれに依存しない**（下の理由）。
     //
     // **「`lost` と `attached: true` が同時に立つ代入は無い」に寄りかからない。**
     // 代入を全部数え上げて成り立つ不変条件は、次に代入を足した人が黙って壊す。
@@ -768,6 +769,69 @@ describe('デーモン再起動後（M4）', () => {
 
     const listed = (await s.pool.list()).find((m) => m.managerId === runningJob.id);
     expect(listed).toMatchObject({ status: 'lost', live: false });
+
+    await s.pool.stop();
+  });
+
+  it('runner が lost と名乗ったセッションへ send すると resume 経路を通る（届かない runner.send() にしない）', async () => {
+    // `attached: true` を固定していた頃は、ここで `send()` の `!record.attached` が
+    // 偽になり `runner.send()` が直に呼ばれていた。しかし畳まれたセッションへの
+    // `push` は `RunnerSession#push` が `#stopped` を見て黙って捨てる
+    // （runner.ts）。つまり「届いた」という顔をして実は届いていなかった —
+    // これがこの不具合の実害である。ここでは `runner.resume()`（`#resumeOnce`
+    // の経路）が呼ばれたことを直接見て、そちらへ向いたことを固定する。
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push({
+      managerId: runningJob.id,
+      status: 'lost',
+      cwd: '/work/project',
+      request: 'DB の移行をやって',
+      waiting: [],
+      sessionId: 'sess-before-restart',
+    });
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    await s.pool.restore();
+    const result = await s.pool.send(runningJob.id, '続けて');
+
+    // resume 経路を通った証拠は「resume が増えた」こと（fake の `send` は何も
+    // 記録しないので、その不在ではなく resume の発生そのものを見る）。
+    expect(fake.state.resumes).toHaveLength(1);
+    expect(fake.state.resumes[0]).toMatchObject({
+      managerId: runningJob.id,
+      sessionId: 'sess-before-restart',
+    });
+    expect(result.outcome).toBe('delivered');
+
+    await s.pool.stop();
+  });
+
+  it('runner が lost と名乗ったセッションを引き取っても、「走り続けている」とは知らせない', async () => {
+    // `#notifyRestored(record, 'attached')` は「runner の中で走り続けている」と
+    // 断言する文面を受信箱へ流す。しかし `lost` は runner が「もう居ない」と
+    // 名乗った状態そのものなので、この文面は嘘になる。`attached: true` を固定
+    // していた頃はここが必ず届いていた（前のテストの実害と対になる、報告面の実害）。
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push({
+      managerId: runningJob.id,
+      status: 'lost',
+      cwd: '/work/project',
+      request: 'DB の移行をやって',
+      waiting: [],
+      sessionId: 'sess-before-restart',
+    });
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    await s.pool.restore();
+
+    const notices = s.inbox
+      .filter((event) => event.type === 'manager_message' && event.managerId === runningJob.id)
+      .map((event) => (event as { text: string }).text);
+    expect(notices.some((text) => text.includes('runner の中で走り続けている'))).toBe(false);
 
     await s.pool.stop();
   });
