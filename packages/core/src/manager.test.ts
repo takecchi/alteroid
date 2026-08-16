@@ -740,6 +740,55 @@ describe('デーモン再起動後（M4）', () => {
     await s.pool.stop();
   });
 
+  it('runner が lost と名乗ったセッションを、繋がっているからと live: true にしない', async () => {
+    // 引き取り（`#restoreJobs`）は runner が名乗った状態をそのまま採りつつ
+    // `attached: true` を固定する。runner の側では resume の失敗が確定してから
+    // （`#status = 'lost'`）そのセッションが一覧から消えるまでに実 I/O を挟むので、
+    // その隙間で引き取ると `lost` の像が `attached: true` で立つ。
+    //
+    // **「`lost` と `attached: true` が同時に立つ代入は無い」に寄りかからない。**
+    // 代入を全部数え上げて成り立つ不変条件は、次に代入を足した人が黙って壊す。
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push({
+      managerId: runningJob.id,
+      status: 'lost',
+      cwd: '/work/project',
+      request: 'DB の移行をやって',
+      waiting: [],
+      sessionId: 'sess-before-restart',
+    });
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    const restored = await s.pool.restore();
+    // 繋ぎ直してはいる（引き取りの経路を通ったことを固定する）。
+    expect(restored.map((m) => m.managerId)).toEqual([runningJob.id]);
+    expect(restored[0]?.live).toBe(false);
+
+    const listed = (await s.pool.list()).find((m) => m.managerId === runningJob.id);
+    expect(listed).toMatchObject({ status: 'lost', live: false });
+
+    await s.pool.stop();
+  });
+
+  it('戻る先が無い仕事は、話しかけた後も live: false のままである', async () => {
+    // 上の `unknown` は「届かなかった」という**その場の返事**でしかない。届け
+    // られなかった相手を一覧が `live: true` で見せ続けるなら、人間もクローンも
+    // 送り直す先として選び続ける。**話しかけた後こそ嘘をつかせない。**
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({ ...runningJob, id: 'mgr-nosession', sessionId: undefined });
+    const s = setup(undefined, { stores });
+
+    expect((await s.pool.send('mgr-nosession', 'やあ')).outcome).toBe('unknown');
+
+    const listed = (await s.pool.list()).find((m) => m.managerId === 'mgr-nosession');
+    expect(listed).toMatchObject({ live: false });
+    expect(listed?.sessionId).toBeUndefined();
+
+    await s.pool.stop();
+  });
+
   it('生ログは runner からデーモンへ上がり、そこから降りられる', async () => {
     // **runner は記憶ストアの鍵を持たない。** だから生ログを永続化するのは
     // デーモンであり、runner は預けるだけである。ここが切れると、器を作り直した
@@ -1891,6 +1940,67 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
     expect(listed).toMatchObject({ status: 'lost', live: false });
 
     await second.pool.stop();
+  });
+
+  it('送信に失敗した直後の一覧が、lost を live: true へ格上げしない', async () => {
+    // **人間がこの画面を見るのは、まさに送った直後である**（送ったから状態を
+    // 確かめる）。`send()` は宛先を `#load()` でプロセス内の像へ載せてから resume を
+    // 投げるので、投げた先で失敗しても像は残る。その像を `list()` が既定の
+    // `live: true` で見せると、`status: lost`（前のセッションへ戻れなかった）と
+    // `live: true`（繋がっている）という両立しない組が出る。台帳は正しいまま
+    // なので、**嘘をつくのは一覧だけ**である。
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({ ...runningJob, status: 'lost' });
+    const fake = swappableRunner('runner-test');
+    let attempted = 0;
+    fake.runner.resume = async () => {
+      attempted += 1;
+      // 実機で出たのはこれ（runner の HTTP 経路が 400 を返す）。
+      throw new Error('runner POST /managers/mgr-lost/resume が失敗した (400)');
+    };
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    // 送る前。台帳にしか無いので `live: false`（ここは既に守られている）。
+    expect((await s.pool.list()).find((m) => m.managerId === 'mgr-lost')).toMatchObject({
+      status: 'lost',
+      live: false,
+    });
+
+    await expect(s.pool.send('mgr-lost', '続きをやって')).rejects.toThrow();
+    // **resume まで届いたうえで失敗した**ことを固定する。ここを見ないと、
+    // send() が別の理由で早々に落ちても緑になる。
+    expect(attempted).toBe(1);
+
+    const listed = (await s.pool.list()).find((m) => m.managerId === 'mgr-lost');
+    expect(listed).toMatchObject({ status: 'lost', live: false });
+
+    await s.pool.stop();
+  });
+
+  it('resume の失敗が後から降ってきても、一覧は lost を live: true で見せない', async () => {
+    // 同じ嘘へのもう1本の道。`resume_failed` は**受理された後**に SSE で降りてくる
+    // ので、そのとき像は既に `#records` に居る。ここで `status: lost` /
+    // `attached: false` へ落としても、一覧が像を無条件に `live: true` と数えるなら
+    // 表示は変わらない。**`#load()` を直すだけでは塞がらない**のはこの経路である。
+    const s = setupRejecting(null, 'error-result');
+    await s.stores.jobs.putJob(runningJob);
+
+    await s.pool.restore();
+    await expect
+      .poll(
+        () =>
+          s.inbox.find(
+            (event) => event.type === 'manager_message' && event.text.includes('戻せなかった'),
+          ),
+        { timeout: 2000 },
+      )
+      .toBeDefined();
+
+    // 台帳を落としたのと同じデーモンが、そのまま一覧を出す。
+    const listed = (await s.pool.list()).find((m) => m.managerId === 'mgr-lost');
+    expect(listed).toMatchObject({ status: 'lost', live: false });
+
+    await s.pool.stop();
   });
 });
 
