@@ -190,6 +190,15 @@ describe('受信をやめる', () => {
     renderChat();
     await send('やあ');
 
+    /*
+     * **本文が届くまで待ってから止める。**
+     *
+     * 「考えている…」は送信の瞬間から出ているので、それだけを待って止めると、
+     * この筋書きが要る状態（本文が届いていて、なお進行中）へ入る前に止めてしまう。
+     * ここで待っているのはサーバから来た `thinking`（本文の後に出るのはそれしか
+     * 出どころが無い）で、止める対象を取り違えないための順番でもある。
+     */
+    await screen.findByText('ここまでは届いた');
     expect(await screen.findByText('考えている…')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /受信をやめる/ }));
 
@@ -229,6 +238,94 @@ describe('受信をやめる', () => {
       expect(screen.queryByText(/manager_start を実行中/)).toBeNull();
     });
     expect(screen.getByRole('button', { name: /送る/ })).toBeTruthy();
+  });
+});
+
+/**
+ * 「考えている…」を**いつ出すか**。
+ *
+ * クローンは受信箱を一件ずつ取り出して直列に処理する（`docs/architecture.md` の
+ * 同時実行モデル）。サーバが `thinking` を送るのは自分のターンが始まってからで、
+ * 先客（蒸留・マネージャーとの往復・自律の起点）が走っているあいだは何も来ない。
+ * **待ち時間が長いときこそ来ない。** だから出すかどうかはこの画面の送信状態で決め、
+ * サーバの `thinking` は「実際にターンが始まった」という別の証拠として残す。
+ */
+describe('考えている…の合図', () => {
+  it('サーバがまだ何も言っていなくても、送った瞬間に出る', async () => {
+    stubFetch((url, init) => {
+      if (url.endsWith('/chat')) {
+        // **1フレームも流さない。** 受信箱で順番を待っているクローン、つまり
+        // 「待ち時間が長い」場面そのもの。ここで出るなら、出どころは画面しかない。
+        return sse([], { keepOpen: true, signal: init?.signal });
+      }
+      if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
+      return undefined;
+    });
+
+    renderChat();
+    await send('やあ');
+
+    expect(await screen.findByText('考えている…')).toBeTruthy();
+  });
+
+  it('本文が1文字でも来たら消える（受信はまだ続いている）', async () => {
+    stubFetch((url, init) => {
+      if (url.endsWith('/chat')) {
+        return sse(
+          [
+            { event: 'open', data: { conversationId: CONVERSATION_ID } },
+            { event: 'text', data: { type: 'text', text: 'こ' } },
+          ],
+          // 終わらせない。**消える理由が「本文が来たから」であることを固定する** —
+          // `done` を送ると、終わったから消えたのか本文で消えたのか分からない。
+          { keepOpen: true, signal: init?.signal },
+        );
+      }
+      if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
+      return undefined;
+    });
+
+    renderChat();
+    await send('やあ');
+
+    expect(await screen.findByText('考えている…')).toBeTruthy();
+    await screen.findByText('こ');
+    await waitFor(() => {
+      expect(screen.queryByText('考えている…')).toBeNull();
+    });
+    // まだ受信中である（合図が消えたのは受信が終わったからではない）
+    expect(screen.getByRole('button', { name: /受信をやめる/ })).toBeTruthy();
+  });
+
+  /**
+   * **サーバの `thinking` を受ける経路を消していない**こと。
+   *
+   * 画面側の合図は送信の瞬間の1回きりで、本文が来た時点で畳まれる。だから
+   * **本文の後に出ている「考えている…」は、サーバの `thinking` しか出どころが無い。**
+   * （道具の実行が終わってモデルが考え直すときに来る。ここを落とすと、画面は
+   * 終わった実行を映したまま止まる。）
+   */
+  it('本文の後にサーバの thinking が来たら、また出る', async () => {
+    stubFetch((url, init) => {
+      if (url.endsWith('/chat')) {
+        return sse(
+          [
+            { event: 'open', data: { conversationId: CONVERSATION_ID } },
+            { event: 'text', data: { type: 'text', text: 'ここまでは届いた' } },
+            { event: 'thinking', data: { type: 'thinking' } },
+          ],
+          { keepOpen: true, signal: init?.signal },
+        );
+      }
+      if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
+      return undefined;
+    });
+
+    renderChat();
+    await send('やあ');
+
+    await screen.findByText('ここまでは届いた');
+    expect(await screen.findByText('考えている…')).toBeTruthy();
   });
 });
 
