@@ -9,12 +9,14 @@ import type {
   RunnerClient,
   RunnerCredentialFingerprint,
   RunnerEvent,
+  RunnerPlacementResources,
   RunnerProfileFingerprint,
   RunnerProfileResult,
   RunnerResumeCommand,
   RunnerSetCredentialsCommand,
   RunnerStartCommand,
 } from './runner-protocol.js';
+import { readExecutionResources } from './runner-resources.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 
 /**
@@ -105,6 +107,17 @@ class LocalRunner implements RunnerClient {
    * という差が器の違いだけで生まれる（コンテナ構成でだけ効く仕組みを作らない）。
    */
   async ping(): Promise<void> {}
+
+  /**
+   * 配置の材料。**同じ器の資源をそのまま読む。**
+   *
+   * ローカルは runner が1台しか無いので配置の余地は無いが、`ping` と同じ理由で
+   * 省略しない — 省略すると「ローカルでは資源が見えない」という差が器の違いだけで
+   * 生まれる（コンテナ構成でだけ効く仕組みを作らない）。
+   */
+  async resources(): Promise<RunnerPlacementResources> {
+    return { managers: this.#host.list().length, ...(await readExecutionResources()) };
+  }
 
   async start(command: RunnerStartCommand): Promise<void> {
     await this.#host.start(command);
