@@ -86,6 +86,8 @@ Railway に見せる枝を `main` ではなく **`release/prod`** にする（**
 
 **差分が無くても必ず1行出る**（`=== 反映結果: …`）。出さないと、何も出ていないログを見たときに「差分が無かった」と「ワークフローが壊れて何もしなかった」が区別できない。
 
+**切り替えたあと、最初の反映が実際にデプロイを起こしたかを一度だけ確かめること。** 押しているのは GitHub Actions の `GITHUB_TOKEN` で、**この鍵の push は GitHub Actions のワークフローを起こさない**（GitHub の仕様）。Railway は Actions ではなく GitHub App の webhook で動くので効くはずだが、**ここが違っていた場合の症状は「デプロイが二度と来ない」という沈黙である。** 一度でも Deployments に出れば以後は疑わなくてよい。出ないなら `GITHUB_TOKEN` ではなく PAT を Secrets に置いて押す形へ変える。
+
 `release/prod` への push は `--force-with-lease` である。**`release/prod` はデプロイ専用の枝で、正典は `main`** なので、固有の履歴が無く上書きで壊れるものが無い。平常時に force が要らないことと、それでも要る一点は `.github/scripts/reflect-release-prod.sh` の先頭に書いた。**「force push は危険」と思って直しに来ないこと。**
 
 ### 2. その Service が動かすものが変わったときだけ落とす（`watchPatterns`）
