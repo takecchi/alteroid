@@ -205,6 +205,11 @@ describe('release/prod が remote に無いとき (#1)', () => {
     const s = runScenario('missing');
 
     expect(s.result.exitCode).toBe(0);
+    // **push が起きた側も見る。** 差分なしの検査（#2）は「push.log が無いこと」で
+    // push しなかったと言っているので、**フックが実際に火を噴くことを別の経路で
+    // 確かめないと、あの検査は空振りでも通る**（PUSH_LOG が渡らない・フックに実行
+    // ビットが無い、のどちらでも「無い」になる）。ここが対照実験である。
+    expect(existsSync(join(s.root, 'push.log'))).toBe(true);
     expect(remoteRef(s.originPath, 'refs/heads/release/prod')).toBe(s.mainSha);
 
     const lines = outcomeLines(s.result.stdout);
@@ -237,6 +242,7 @@ describe('release/prod が main の祖先（数コミット遅れ）のとき (#
     const s = runScenario('ancestor');
 
     expect(s.result.exitCode).toBe(0);
+    expect(existsSync(join(s.root, 'push.log'))).toBe(true);
     expect(remoteRef(s.originPath, 'refs/heads/release/prod')).toBe(s.mainSha);
 
     const lines = outcomeLines(s.result.stdout);
@@ -251,6 +257,7 @@ describe('release/prod が main から分岐しているとき (#4)', () => {
     const s = runScenario('diverged');
 
     expect(s.result.exitCode).toBe(0);
+    expect(existsSync(join(s.root, 'push.log'))).toBe(true);
     // --force-with-lease が効いていることの確認：non-fast-forward でも上書きされる
     expect(remoteRef(s.originPath, 'refs/heads/release/prod')).toBe(s.mainSha);
 
