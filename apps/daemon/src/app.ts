@@ -693,11 +693,16 @@ export function createApp(deps: AppDeps) {
         summary: 'クローンと話す（SSE）',
         description:
           '人間の発言をクローンの受信箱へ積み、クローンの応答を SSE で流す。' +
-          '**SSE。** `event:` にイベント名（`open` / `text` / `thinking` / `tool` / ' +
+          '**SSE。** `event:` にイベント名（`open` / `queued` / `text` / `thinking` / `tool` / ' +
           '`ask_human` / `done` / `error`）、`data:` に対応する JSON が入る。`data:` の ' +
           '形は下記スキーマ（`open` は `{conversationId}` のみで別枠、他は ' +
           '`chatStreamEventSchema` の各枝）。人間が chat を閉じてもクローンのターンは' +
-          '走り続ける（人間の不在で止まるのは承認待ちの仕事だけ）。',
+          '走り続ける（人間の不在で止まるのは承認待ちの仕事だけ）。' +
+          '**`queued` と `thinking` は別の状態である。** `queued` は受信箱に積んだ' +
+          '（受理したが順番待ち。先客のターンが走っていれば、ここで数分待つことがある）、' +
+          '`thinking` は入力がモデルへ渡って最初の出力を待っている。前者の後に後者が来る。' +
+          '**発言が日誌に載るのも `queued` の時点である**ので、`GET /conversations` には' +
+          'ターンの順番を待たずに現れる。',
         responses: {
           200: {
             description: 'SSE ストリーム。',

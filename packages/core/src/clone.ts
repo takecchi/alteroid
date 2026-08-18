@@ -226,6 +226,19 @@ class Clone implements CloneHost {
    * ここに居ないものは器に置いていない合図である（`#postAndWait` の蒸留）。
    */
   readonly #unread = new Map<string, Promise<void>>();
+  /**
+   * 受理した瞬間に日誌へ書いた発言。id → その追記の約束。
+   *
+   * **応答がこの追記を追い越さないために持つ。** `post` は同期なので追記は
+   * 非同期になる。日誌の順序は追記した順なので、待たずにターンを走らせると
+   * 短いターンでは応答（`result` の `#journal`）が先に載り、**日誌の上で
+   * クローンが問われる前に答えたことになる**。ここに置いて `#handle` が
+   * 待てば、受理の瞬間に書き始めながら順序は保てる。
+   *
+   * ここに居ないものは受理の瞬間に書いていない合図である（人間の発言以外と、
+   * 起動時に拾い直したもの＝前の器で既に書いてあるもの）。
+   */
+  readonly #recorded = new Map<string, Promise<void>>();
   /** 起動時に拾い直した合図。id → 何度目の配達か。 */
   readonly #redelivered = new Map<string, PendingInboxEvent>();
   /**
@@ -324,6 +337,9 @@ class Clone implements CloneHost {
     // 通って queue を素通りするので、queue を吐き出す形の永続化はその経路を1件も
     // 救わない。ここに置けば、どちらの経路でも必ず1度は通る。
     this.#remember(event);
+    // 受理した瞬間に日誌へ載せて合図を出す。**器へ書くのと同じ場所である**
+    // （`#remember` の隣）。
+    this.#record(event);
     this.#inbox.push(event);
   }
 
@@ -443,6 +459,11 @@ class Clone implements CloneHost {
         this.#finishTurn();
       } finally {
         this.#redeliveryNotice = '';
+        // 受理の瞬間に書いた追記の控えは、待つ相手が居なくなった時点で捨てる。
+        // **例外で終わった経路も通る**ので、ここに置く（`#handle` の中で消すと、
+        // 途中で投げたぶんが残り続ける）。追記そのものは取り消さない — 消すのは
+        // 「もう誰も待たない」という印だけである。
+        this.#recorded.delete(event.id);
         // **終えた時点で消す。取り出した時点ではない。** 取り出した時点で消すと、
         // 処理の途中でプロセスが死んだものが失われる＝いま塞いでいる穴がそのまま残る。
         //
@@ -493,6 +514,51 @@ class Clone implements CloneHost {
         noteDroppedRecord('未読の合図', inboxEventShape(event), error);
       }),
     );
+  }
+
+  /**
+   * 人間の発言を、受理した瞬間に日誌へ残して合図を出す。
+   *
+   * **「一件ずつ判断する」と「発言の記録も一件ずつ待たせる」は別のことである。**
+   * ターンの直列は意図された設計（architecture.md「同時実行モデル」）だが、
+   * 記録をその直列の後ろに置いていたのは帰結であって設計ではなかった。後ろに
+   * 置くと、先客（蒸留・マネージャーとの往復・自律の起点）が走っているあいだ
+   * **日誌にその発言が存在しない** — 日誌から組み立てる `GET /conversations`
+   * にも出ないので、器（端末・タブ・アプリ）を替えた人からは発言そのものが
+   * 消えて見える。「続きから話せること自体が要件」（north_star 禁止1）に
+   * 対して、直列が可視性まで直列にしていた。
+   *
+   * **記録が先、通知は後**（`journal-bus.ts` と同じ順）。日誌へ載れば
+   * `GET /journal/stream` にもそのまま流れるので、**この1か所で「送った本人の
+   * 画面」以外の観測者3種（開き直した人・別端末・API の利用者）が同時に埋まる。**
+   * `queued` はそれに加えて、**まだ順番が来ていない**という日誌に残せない状態
+   * （残すと古くなる）を、いま見ている購読者へ渡すためのものである。
+   *
+   * **失敗しても post を落とさない**（`#remember` と同じ理由）。跡は `#journal`
+   * が `journalEntryShape` へ畳んで stderr へ落とす。
+   *
+   * **人間の発言だけを見る。** 他の6種は起点ごとに違う型で日誌へ残っており
+   * （`manager_message` は `exchange`、`external` は `external_event`、
+   * `timer` は走らせるかどうかを決めた後）、そこは「受け取ったこと」ではなく
+   * 「何をしたか」の記録である。ここへ寄せると意味の違う2つを1つの型に潰す。
+   */
+  #record(event: InboxEvent): void {
+    if (event.type !== 'human_message') return;
+
+    this.#recorded.set(
+      event.id,
+      this.#journal({
+        type: 'exchange',
+        with: 'human',
+        role: 'inbound',
+        text: event.text,
+        conversationId: event.conversationId,
+      }),
+    );
+
+    // 同期で呼ぶ。`post` から見て、この合図は日誌の書き込みを待たずに届く
+    // （待てるのは記録の**順序**だけで、通知を待たせる理由は無い）。
+    this.#emit(event.conversationId, { type: 'queued' });
   }
 
   /**
@@ -547,8 +613,9 @@ class Clone implements CloneHost {
       if (this.#stopped || this.#inbox.closed) return;
 
       // 人間が後から「なぜ二度来たのか」を追えるようにする。**積む前に書く** —
-      // 後だと、配り直した合図の処理（`#handle` が起点ごとの型で残す本文）より
-      // 後ろに回りうる。**本文は載せない**（同じ本文を二重に持たない）。
+      // 後だと、配り直した合図の本文（人間の発言なら下の `#record`、他の起点なら
+      // `#handle` が起点ごとの型で残すもの）より後ろに回りうる。**この行に本文は
+      // 載せない**（載せると、本文を持つ側と二重になる）。
       await this.#journal({
         type: 'exchange',
         with: 'self',
@@ -567,6 +634,13 @@ class Clone implements CloneHost {
       // 既に器に在るので書き直さない。**ただし消し込みの対象には入れる**
       // （入れ忘れると、拾い直したものが処理後も残って毎回配られる）。
       this.#unread.set(record.event.id, Promise.resolve());
+      // **本文は配達のたびに書く。** 受理の瞬間の追記（`#record`）は `post` から
+      // 見て非同期なので、器へ届く前に落ちたかどうかは**ここからは分からない**。
+      // 書かない側を選ぶと、その窓に落ちた発言が日誌から永久に消える（未読の器に
+      // は在るのに、日誌にも `GET /conversations` にも無い）。書く側を選べば重複
+      // しうるが、それは**この直しの前と同じ回数**である（以前も `#handle` が配達
+      // ごとに書いていた）。「消えるより配り直す」の向きを、記録でも揃える。
+      this.#record(record.event);
       // `post` を通さないのは、tick の畳み込みで落ちた行が器に残り続けるからである
       // （落とした側は誰も消さないので、起動のたびに配られて回数だけが増える）。
       this.#inbox.push(record.event);
@@ -664,13 +738,14 @@ class Clone implements CloneHost {
   async #handle(event: InboxEvent): Promise<void> {
     switch (event.type) {
       case 'human_message': {
-        await this.#journal({
-          type: 'exchange',
-          with: 'human',
-          role: 'inbound',
-          text: event.text,
-          conversationId: event.conversationId,
-        });
+        // **ここでは書かない。** 発言は受理した瞬間に `#record` が書いている。
+        // 両方で書くと同じ発言が日誌に二度載る（会話の再構成が二重になる）。
+        //
+        // 待つのは順序のためだけである（`#recorded` の理由）。**書けたかどうかを
+        // 条件にしない** — `#journal` は失敗を自分で握って stderr へ落とすので、
+        // ここへ来る約束は必ず解決する。書けなかったからターンを止める、には
+        // しない（記録できないことより、応答が返らないことの方が高くつく）。
+        await this.#recorded.get(event.id);
         await this.#runTurn(event.conversationId, event.text);
         return;
       }

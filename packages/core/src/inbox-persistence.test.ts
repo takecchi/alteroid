@@ -314,7 +314,56 @@ describe('未読の永続化', () => {
 
     expect(await stores.inbox.claimPending()).toEqual([]);
   });
+
+  /**
+   * 受理の瞬間に書いた発言の本文が、その追記だけ器へ届かないまま落ちても失われないか。
+   *
+   * **`post` は同期なので、追記が届いたかどうかは `post` からは分からない。**
+   * だから配り直しの側でもう一度書く。書かない側を選ぶと、未読の器には在るのに
+   * 日誌にも `GET /conversations` にも無い発言ができる。重複しうる代わりに消えない、
+   * という向きを記録でも揃えている（消し込みが「終えた時点」なのと同じ取引）。
+   */
+  it('配り直しでも発言の本文が日誌に残る（受理の瞬間の追記が落ちていても）', async () => {
+    const stores = createMemoryStores();
+
+    await captureStderr(async () => {
+      // 1つ目の器。受理の瞬間の追記（＝最初の1本）だけを落として、そのまま死ぬ。
+      const dying = bootClone(droppingFirstJournalAppend(stores), 'hang');
+      await idle();
+      dying.clone.post(humanMessage('MSG-BODY', 'conv-1'));
+      await waitFor(() => dying.inputs.length > 0, '発言が処理に入る');
+      // 落ちた側は日誌に何も残していない。
+      expect(await stores.journal.list({ types: ['exchange'] })).toEqual([]);
+
+      // 2つ目の器。記憶ストアだけが生き残っている。
+      const reborn = bootClone(stores);
+      await waitForJournal(stores, 'MSG-BODY');
+      await reborn.clone.stop();
+    });
+  });
 });
+
+/**
+ * 追記の1本目だけを落とす（受理の瞬間の追記が器へ届く前に落ちた形）。
+ *
+ * 全部を落とすと配り直しの側の追記も落ちるので、直したことが見えない。
+ */
+function droppingFirstJournalAppend(stores: Stores): Stores {
+  let first = true;
+  return {
+    ...stores,
+    journal: {
+      ...stores.journal,
+      append(entry) {
+        if (first) {
+          first = false;
+          return Promise.reject(new Error('器が閉じている'));
+        }
+        return stores.journal.append(entry);
+      },
+    },
+  };
+}
 
 async function waitForJournal(stores: Stores, needle: string): Promise<void> {
   const started = Date.now();
