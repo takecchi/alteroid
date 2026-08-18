@@ -574,7 +574,30 @@ class Pool implements ManagerPool {
         // ここで `true` を固定すると、`send()` が `!record.attached` で resume と
         // send を分けているせいで、**届かない `runner.send()` を届いたことにして**
         // 台帳の終端状態まで `running` へ巻き戻す。像を上流で正す。
-        const attached = living.state.status !== 'lost' && living.state.status !== 'failed';
+        //
+        // **`done` も同じ隙間を持つ。しかし名前では見分けられない。** `lost` /
+        // `failed` は `#finish()` を通ったものしか名乗らないが、`'done'` は
+        // `#finish('done', ...)`（＝畳まれた）と、`#finish` を通らずに `#status`
+        // だけを `'done'` にして `#sessions` に生き残る経路（＝1ターン終えて次の
+        // 指示を待っている）の**両方**から付く。この一覧（`RunnerManagerState`）は
+        // どちらの `done` かを区別する材料を持たない — 畳まれた方への `push` は
+        // 上と同じ隙間で黙って捨てられ、待機している方への `push` はそのまま届く。
+        //
+        // 区別できないなら安全側に倒す。**そのためにブラックリストを伸ばさず、
+        // ホワイトリストに変える。** `!== 'lost' && !== 'failed'` へ `&& !== 'done'`
+        // を足す形は、次に状態が増えたとき既定が `attached: true`（危険側）へ倒れる
+        // — 足す人は `attached` のことを考えていないのが普通である（`summaryOf` の
+        // `live` を必須引数にしたのと同じ理由）。生きているとしか読めない状態を
+        // 名指しすれば、未知の状態は既定で `attached: false`（安全側）に落ちる。
+        // 同じホワイトリストは既に `#reattach` と、この下の台帳のみの経路にある。
+        //
+        // **倒した先の代償は無い。** 待機している `done` へは `attached: false`
+        // 経由で resume 扱いになるが、実 runner の `host.resume()` は生きた
+        // セッションを見つけたら `command.message` を `push` して短絡するので、
+        // `runner.send()` が呼ぶ `session.push(text)` と同一の呼び出しになる。
+        // セッションが二重に起こされることはない。
+        const attached =
+          living.state.status === 'running' || living.state.status === 'waiting_human';
         const record: ManagerRecord = {
           job: {
             ...job,

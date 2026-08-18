@@ -900,6 +900,131 @@ describe('デーモン再起動後（M4）', () => {
     await s.pool.stop();
   });
 
+  it('生きたまま待機している done へ send しても、セッションを二重に起こさない', async () => {
+    // `done` は `lost` / `failed` と違って**2箇所から付く**。ここで確かめたいのは
+    // 畳まれた方（`#finish('done', ...)`）ではなく、セッションを `#sessions` に
+    // 生かしたまま `#status` だけを `'done'` にする方（1ターンが終わって次の
+    // 指示を待っている状態）。`swappableRunner` は使わない — あの fake の
+    // `resume` は無条件に alive を1本増やすので、`host.resume()` の短絡
+    // （生きたセッションを見つけたら `push` して return する）を確かめられない。
+    // 実 runner（`setup` の既定 = `createLocalRunner`）で、ホワイトリスト化した
+    // `attached` 判定が「安全側に倒しても届く」ことまで見る。
+    const stores = createMemoryStores();
+    const first = setup(undefined, { stores });
+    const { managerId } = await first.pool.start({ request: '長い仕事' });
+
+    // 1ターン終える。runner 側は `#status` を `'done'` にするが、セッションは
+    // `#sessions` に生きたまま残る（runner.ts の該当分岐）。
+    await (first.sessions[0] as FakeSession).report('ここまでやった');
+    await expect
+      .poll(
+        async () => {
+          const jobs = await stores.jobs.listJobs();
+          return jobs.find((job) => job.id === managerId)?.status;
+        },
+        { timeout: 2000 },
+      )
+      .toBe('done');
+
+    // デーモンだけが再起動した想定。runner は同じものを渡す（生きたまま）。
+    const second = setup(undefined, { stores, runner: first.runner });
+    await second.pool.restore();
+
+    const result = await second.pool.send(managerId, 'まだ続きがある');
+
+    // セッションは増えていない（`host.resume()` が alive を見つけて `push` に
+    // 短絡した証拠。新しいセッションが起きていれば `resume()` が作り直している）。
+    expect(first.sessions).toHaveLength(1);
+    expect(result.outcome).toBe('delivered');
+    // 「resume 経路へ向いた」だけでなく、実際に文言が届いたことまで見る。
+    // ここが「安全側に倒しても実害が無い」の全部である。
+    await expect
+      .poll(() => (first.sessions[0] as FakeSession).inputs, { timeout: 2000 })
+      .toContain('まだ続きがある');
+
+    await second.pool.stop();
+  });
+
+  it('生きたまま待機している done を引き取っても、「走り続けている」とは知らせない', async () => {
+    // 観測された実害そのもの: 通知は「走り続けている」と言うのに、`manager_list`
+    // は `[done]`（待機）を返す。`done` を `attached: true` にしていた頃は、
+    // 畳まれた方の `done`（実は死んでいる）でもこの通知が出ていた。
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push({
+      managerId: runningJob.id,
+      status: 'done',
+      cwd: '/work/project',
+      request: 'DB の移行をやって',
+      waiting: [],
+      sessionId: 'sess-before-restart',
+    });
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    await s.pool.restore();
+
+    const notices = s.inbox
+      .filter((event) => event.type === 'manager_message' && event.managerId === runningJob.id)
+      .map((event) => (event as { text: string }).text);
+    expect(notices.some((text) => text.includes('runner の中で走り続けている'))).toBe(false);
+
+    await s.pool.stop();
+  });
+
+  it('done を安全側に倒しても、一覧の live: true は落ちない', async () => {
+    // `attached: false` にしたことで「話しかけられるのに切れて見える」という
+    // 逆向きの嘘が出ていないかを測る。`isLive()` は `record.job.sessionId` が
+    // あれば `attached` を見ずに `true` を返すので、ここは崩れないはずである。
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push({
+      managerId: runningJob.id,
+      status: 'done',
+      cwd: '/work/project',
+      request: 'DB の移行をやって',
+      waiting: [],
+      sessionId: 'sess-before-restart',
+    });
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    const restored = await s.pool.restore();
+    expect(restored[0]).toMatchObject({ status: 'done', live: true });
+
+    const listed = (await s.pool.list()).find((m) => m.managerId === runningJob.id);
+    expect(listed).toMatchObject({ status: 'done', live: true });
+
+    await s.pool.stop();
+  });
+
+  it('runner が waiting_human と名乗ったセッションは、繋がっているままにする', async () => {
+    // ホワイトリストの肯定側。`running` 側は既存テスト
+    // （'runner に生きているセッションは resume せず、繋ぎ直すだけ'）が持っている
+    // ので、ここでは `waiting_human` を固定する。
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({ ...runningJob, status: 'waiting_human' });
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push({
+      managerId: runningJob.id,
+      status: 'waiting_human',
+      cwd: '/work/project',
+      request: 'DB の移行をやって',
+      waiting: [],
+      sessionId: 'sess-before-restart',
+    });
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    await s.pool.restore();
+
+    const notices = s.inbox
+      .filter((event) => event.type === 'manager_message' && event.managerId === runningJob.id)
+      .map((event) => (event as { text: string }).text);
+    expect(notices.some((text) => text.includes('runner の中で走り続けている'))).toBe(true);
+
+    await s.pool.stop();
+  });
+
   it('戻る先が無い仕事は、話しかけた後も live: false のままである', async () => {
     // 上の `unknown` は「届かなかった」という**その場の返事**でしかない。届け
     // られなかった相手を一覧が `live: true` で見せ続けるなら、人間もクローンも
