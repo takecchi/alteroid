@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 
 import type { RunnerEvent, RunnerHost } from '@alteroid/core';
 import {
+  readExecutionResources,
   runnerAnswerCommandSchema,
   runnerMessageCommandSchema,
   runnerResumeCommandSchema,
@@ -130,13 +131,25 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     .use('/credentials', control)
     .use('/profile', control)
 
-    .get('/health', (c) =>
+    .get('/health', async (c) =>
       c.json({
         ok: true,
         runnerId: host.runnerId,
         workspacePath: host.workspacePath,
         managers: host.list().length,
         pendingEvents: outbox.pending,
+        /**
+         * 実行環境の資源（roadmap M5 PR3）。**「収容能力」ではない。**
+         *
+         * ここに出るのは観測値だけである。「あと何本置けるか」は runner も答えない
+         * — それは定員であって、配置の判断は名簿の側（`select`）にある
+         * （north_star 禁止2 / `runnerExecutionResourcesSchema`）。
+         *
+         * **`os` の値を出さない。** ホストの数を名乗ると、同じホストに並んだ runner が
+         * 全部同じ数を報告し、資源で選んでいるつもりで登録順に選ぶことになる
+         * （実測は `readExecutionResources`）。
+         */
+        resources: await readExecutionResources(),
         /**
          * いま配っている鍵の**指紋だけ**。値は決して出さない。
          *

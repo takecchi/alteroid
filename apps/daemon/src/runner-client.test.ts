@@ -523,3 +523,104 @@ describe('デーモン ↔ manager-runner（HTTP 境界）', () => {
     await host.shutdown();
   });
 });
+
+/**
+ * 配置の材料が HTTP の境界を渡ること（roadmap M5 / PR3）。
+ *
+ * 資源の値そのものは器によって違うので**値では見ない**（cgroup の読み方は
+ * `packages/core/src/runner-resources.test.ts` が押さえている）。ここで見るのは、
+ * **何が渡り、何が渡らないか**である。
+ */
+describe('資源による配置の材料', () => {
+  /** `/health` を好きな形で返す偽 runner（古い器を作るため）。 */
+  function fetchHealth(body: unknown): typeof fetch {
+    return (async () => Response.json(body)) as typeof fetch;
+  }
+
+  it('runner の /health が資源を名乗り、デーモンがそれを採る', async () => {
+    const outbox = new Outbox();
+    const host = createRunnerHost({
+      runnerId: 'runner-primary',
+      workspacePath: '/workspace',
+      emit: (event) => outbox.push(event),
+      queryFn: fakeSdk().fn,
+    });
+    const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn: fetchInto(app),
+    });
+
+    const resources = await client.resources?.();
+
+    // 稼働本数は M4 からある材料（**新しく足したのは CPU とメモリだけ**）。
+    expect(resources?.managers).toBe(0);
+    // **出典を名乗ること**が要点である。cgroup を持たない器でも黙らず、os として答える。
+    expect(resources?.memory?.source).toMatch(/^(cgroup|os)$/);
+    expect(resources?.memory?.limitBytes).toBeGreaterThan(0);
+    expect(resources?.cpu?.cores).toBeGreaterThan(0);
+
+    await host.shutdown();
+  });
+
+  it('資源を返さない古い runner からも稼働本数は渡る（締め出さないための材料）', async () => {
+    const client = await createHttpRunner({
+      baseUrl: 'http://legacy.test',
+      token: TOKEN,
+      fetchFn: fetchHealth({
+        ok: true,
+        runnerId: 'runner-legacy',
+        workspacePath: '/workspace',
+        managers: 3,
+      }),
+    });
+
+    // **配置側はこれを平均で埋めて競わせる**（`chooseByResources`）。ここで
+    // `undefined` を返してしまうと、古い器が自分の抱えている本数でさえ competing
+    // できなくなる。
+    expect(await client.resources?.()).toEqual({ managers: 3 });
+  });
+
+  it('資源の形が壊れていても、読めた材料は落とさない', async () => {
+    const client = await createHttpRunner({
+      baseUrl: 'http://broken.test',
+      token: TOKEN,
+      fetchFn: fetchHealth({
+        ok: true,
+        runnerId: 'runner-broken',
+        workspacePath: '/workspace',
+        managers: 2,
+        resources: { cpu: { cores: 'たくさん' } },
+      }),
+    });
+
+    // 宣言していない形は捨てるが、**まとめて弾かない。** 弾くと、`cpu` が壊れた
+    // だけの器が「何も報告しない器」に見える。
+    expect(await client.resources?.()).toEqual({ managers: 2 });
+  });
+
+  it('resources() は runnerId を採らない（器が入れ替わっても宛先を書き換えない）', async () => {
+    let runnerId = 'runner-primary';
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn: (async () =>
+        Response.json({
+          ok: true,
+          runnerId,
+          workspacePath: '/workspace',
+          managers: 0,
+        })) as typeof fetch,
+    });
+    expect(client.runnerId).toBe('runner-primary');
+
+    // 器が入れ替わって別の runner_id を名乗り始めた。
+    runnerId = 'runner-replaced';
+    await client.resources?.();
+
+    // **黙って繋ぎ変えない。** ここで採ると台帳の鎖（`manager_id → runner_id`）が
+    // 音もなく別の器へ向く（`ping` に書いてある理由と同じである）。
+    expect(client.runnerId).toBe('runner-primary');
+  });
+});

@@ -170,6 +170,60 @@ export const runnerProfileResultSchema = z.object({
 
 export type RunnerProfileResult = z.infer<typeof runnerProfileResultSchema>;
 
+/**
+ * 実行環境の資源。**フィールド名を `capacity` にしないのは意図である。**
+ *
+ * 「収容能力」と読める語をプロトコルに置くと、次に触る人がそれを上限として使い
+ * 始める。`capacity` があれば「capacity を超えたら断る」は自然な実装に見えるが、
+ * それは定員であって能力の削除である（north_star 禁止2 / roadmap M5 の地雷）。
+ * ここにあるのは**いま器がどうなっているか**の観測値だけで、置ける・置けないの
+ * 判断は含まない。
+ *
+ * 材料はそれぞれ**独立して省略できる。** 器によって読めるものが違い（cgroup を
+ * 持たない器、資源を報告しない古い runner）、**報告できないことを理由に宛先から
+ * 外すのはデグレードである**（roadmap M5 受け入れ基準5 — runner 数を増減しても
+ * 能力削減が入らない）。欠けた材料をどう扱うかは配置側にある（`select`）。
+ */
+export const runnerExecutionResourcesSchema = z.object({
+  /**
+   * 使える CPU。**`os.cpus().length` ではない。**
+   *
+   * `os` が返すのはホストのコア数で、cgroup で絞られた器でもホストの数を答える。
+   * 同じホストに並んだ runner が全部同じ数を名乗るので、資源で選んでいるつもりで
+   * 登録順に選んでいるのと変わらなくなる（`readExecutionResources` に実測がある）。
+   * `source` はどちらを読めたかの記録である。
+   */
+  cpu: z.object({ cores: z.number().positive(), source: z.enum(['cgroup', 'os']) }).optional(),
+  /**
+   * メモリ。**`os.totalmem()` ではない**（理由は `cpu` と同じ）。
+   *
+   * `usedBytes` からは**読み捨てできるページキャッシュを引いてある。** 引かないと、
+   * 何もしていない器がファイルを読んだ分だけ「使用中」に見える。
+   */
+  memory: z
+    .object({
+      limitBytes: z.number().positive(),
+      usedBytes: z.number().nonnegative(),
+      source: z.enum(['cgroup', 'os']),
+    })
+    .optional(),
+});
+
+export type RunnerExecutionResources = z.infer<typeof runnerExecutionResourcesSchema>;
+
+/**
+ * 配置の材料。実行環境の資源に、いま抱えているセッション数を足したもの。
+ *
+ * `managers` は M4 から `/health` が返している（**新しく足す材料は CPU とメモリの
+ * 2つだけである**）。これは「新しい1本の取り分」を見るためにあって、「何本まで」を
+ * 決めるためではない。
+ */
+export const runnerPlacementResourcesSchema = runnerExecutionResourcesSchema.extend({
+  managers: z.number().int().nonnegative().optional(),
+});
+
+export type RunnerPlacementResources = z.infer<typeof runnerPlacementResourcesSchema>;
+
 export const runnerAnswerCommandSchema = z.object({
   requestId: z.string().min(1),
   message: z.string(),
@@ -417,6 +471,26 @@ export interface RunnerClient {
    * 実装しなくてよく、名簿はそれを「叩く必要が無い＝生きている」と読む。
    */
   ping?(options?: { signal?: AbortSignal }): Promise<void>;
+  /**
+   * 配置の材料を聞く（roadmap M5 PR3）。**`ping` に相乗りさせない。**
+   *
+   * `ping` は同じ `/health` を叩くが**本文を読み捨てる。** 名乗りの中身
+   * （`runner_id`）を読んで黙って採ると、器が入れ替わったときに台帳の鎖
+   * （`manager_id → runner_id`）が音もなく繋ぎ変わるからで、これは意図した設計で
+   * ある（`ping` の項）。読む物を1つ足せば、いつか読んではいけない物も読む口に
+   * なる — だから資源は別の口で取る。
+   *
+   * ここで採るのは資源だけで、`runnerId` / `workspacePath` は**採らない**
+   * （`credentials()` / `profile()` が同じ口を同じ作法で叩いているのと同じ形）。
+   *
+   * `signal` は名簿が持つ配置の期限。**返らない1台が配置全体を止めないため**に、
+   * 期限を過ぎたら名簿の側から中断する（受け取った実装は繋ぎを畳むこと）。
+   *
+   * **省略できる**（`ping` と同じ理由）。答えられない実装まで口を強いると「嘘の
+   * 報告」を書くことになる。名簿はそれを**報告しない器**として扱い、
+   * **不利にはしない**（`select`）。
+   */
+  resources?(options?: { signal?: AbortSignal }): Promise<RunnerPlacementResources | undefined>;
   start(command: RunnerStartCommand): Promise<void>;
   resume(command: RunnerResumeCommand): Promise<void>;
   send(managerId: string, text: string): Promise<void>;
@@ -656,6 +730,16 @@ const HEARTBEAT_LOST_MS = 30_000;
 const HEARTBEAT_PROBE_MS = 5_000;
 
 /**
+ * 資源を聞くときの期限。
+ *
+ * **環境変数の設定項目にしないこと。** つまみとして外へ出すと、そこが実質の制限に
+ * なる（`SELECT_WAIT_MS` / `HEARTBEAT_*` に3度書いてあるのと同じ論法である）。
+ * これは返らない1台の後ろで委譲を待たせないためだけの期限で、運用でいじる値では
+ * ない。**期限を過ぎた1台は宛先から外れるのではなく、「報告しない器」になる。**
+ */
+const PLACEMENT_PROBE_MS = 2_000;
+
+/**
  * 動的な名簿（roadmap M5）。
  *
  * 既に開いてある `RunnerClient` を渡す形も残してある — 既存の呼び出し（テストを
@@ -822,11 +906,15 @@ class Registry implements RunnerRegistry {
     for (;;) {
       if (this.#stopped) throw new Error('名簿が停止している');
 
-      // **配置の材料は実行環境の資源だけ**である（定員は作らない）。いまは
-      // 開けている先頭を返す。資源を見て選ぶのは runner が報告を始めてからの話。
+      // **配置の材料は実行環境の資源だけ**である（定員は作らない）。
       const open = await this.list();
       const first = open[0];
-      if (first !== undefined) return first;
+      if (first !== undefined) {
+        // 1台しか無いなら聞きに行かない。答えは変わらないのに、委譲を起こす経路へ
+        // 往復1回分の待ちを足すだけである。
+        if (open.length === 1) return first;
+        return await this.#place(open, first);
+      }
 
       // **設定の問題と、時間で解決しうる問題を混ぜない。** 呼んだ側の対応が違う。
       if (this.#entries.size === 0) {
@@ -853,6 +941,31 @@ class Registry implements RunnerRegistry {
       const opened = await this.#waitForOpen(remaining);
       if (opened === null) throw new Error(this.#notConnectedMessage());
     }
+  }
+
+  /**
+   * 開けている中から置き先を決める。**ここで断ることは無い。**
+   *
+   * **全台へ同時に聞く**（順番待ちを作らない）。聞けなかった1台は「報告しない器」に
+   * 落ちるだけで、配置そのものは期限内に終わる — 資源を聞けなかったことを理由に
+   * 宛先から外すと、資源を報告しない器が締め出される（デグレード）。
+   */
+  async #place(open: readonly RunnerClient[], fallback: RunnerClient): Promise<RunnerClient> {
+    const reports = await Promise.all(
+      open.map(async (client) => {
+        try {
+          const resources = await withDeadline(
+            (signal) => client.resources?.({ signal }) ?? Promise.resolve(undefined),
+            PLACEMENT_PROBE_MS,
+            '資源の報告',
+          );
+          return { client, resources };
+        } catch {
+          return { client, resources: undefined };
+        }
+      }),
+    );
+    return chooseByResources(reports) ?? fallback;
   }
 
   /**
@@ -1126,19 +1239,23 @@ class Registry implements RunnerRegistry {
  * `signal` を渡し、かつ期限で自分も抜ける — **どちらか片方では足りない**
  * （中断を無視する実装があっても名簿は止まらない、が成り立たなくなる）。
  */
-function withDeadline(run: (signal: AbortSignal) => Promise<void>, ms: number): Promise<void> {
+function withDeadline<T>(
+  run: (signal: AbortSignal) => Promise<T>,
+  ms: number,
+  what = '名乗り',
+): Promise<T> {
   const controller = new AbortController();
-  return new Promise<void>((resolve, reject) => {
+  return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       controller.abort();
-      reject(new Error(`${ms}ms 以内に名乗りが返らなかった`));
+      reject(new Error(`${ms}ms 以内に${what}が返らなかった`));
     }, ms);
     timer.unref?.();
     const settle = (finish: () => void) => {
       clearTimeout(timer);
       finish();
     };
-    let started: Promise<void>;
+    let started: Promise<T>;
     try {
       started = run(controller.signal);
     } catch (error) {
@@ -1146,8 +1263,75 @@ function withDeadline(run: (signal: AbortSignal) => Promise<void>, ms: number): 
       return;
     }
     started.then(
-      () => settle(resolve),
+      (value) => settle(() => resolve(value)),
       (error: unknown) => settle(() => reject(error)),
     );
   });
+}
+
+/**
+ * 資源から置き先を決める（roadmap M5 PR3）。**必ず1台返る。**
+ *
+ * 点数は「メモリの余り × 新しい1本が受け取る CPU」である。
+ *
+ * - メモリの余り = `(limitBytes - usedBytes) / limitBytes`（0〜1）
+ * - 新しい1本が受け取る CPU = `cores / (managers + 1)`
+ *
+ * **重みを持たないのは意図である。** 掛け算にしてあるので係数が要らず、したがって
+ * 外に出す先も無い。重みを設定項目にすれば、そこが実質の定員つまみになる
+ * （「メモリの重みを上げる」は「メモリが減ったら断る」に化ける）。`SELECT_WAIT_MS` /
+ * `HEARTBEAT_*` に3度書いてあるのと同じ論法である。
+ *
+ * **報告の無い材料は、見えている器の平均で埋める。** 除外すれば資源を報告しない
+ * 古い器が締め出され（roadmap M5 受け入れ基準5 — runner 数を増減しても能力削減が
+ * 入らない。禁止2 の「追加制限」でもある）、最良として扱えば余裕のある新しい器が
+ * 選ばれなくなる。**どちらも欠陥なので、真ん中に置く** — 平均で埋めた器は、自分が
+ * 報告できた材料だけで平均的な器と競う。M4 から `/health` が返している `managers`
+ * は古い器も名乗るので、資源を報告しない器も**自分の抱えている本数では競える。**
+ *
+ * 誰も何も報告しないときは全部の材料が平均に落ち、点数は `1 / (managers + 1)` —
+ * つまり**抱えている本数の少ない方**になる。
+ *
+ * 同点なら登録順の先（`>` で比べている）。**0点でも返る。** 資源を見るのは「どこに
+ * 置くか」を決めるためで、「置けるか」を決めるためではない（north_star 禁止2）。
+ */
+function chooseByResources(
+  reports: readonly { client: RunnerClient; resources: RunnerPlacementResources | undefined }[],
+): RunnerClient | undefined {
+  const rooms = reports.flatMap((r) =>
+    r.resources?.memory ? [memoryRoomOf(r.resources.memory)] : [],
+  );
+  const cores = reports.flatMap((r) => (r.resources?.cpu ? [r.resources.cpu.cores] : []));
+  const held = reports.flatMap((r) =>
+    r.resources?.managers === undefined ? [] : [r.resources.managers],
+  );
+  // 誰も報告しないときの 1 は「点数を素通りさせる値」であって、上限ではない。
+  const meanRoom = mean(rooms) ?? 1;
+  const meanCores = mean(cores) ?? 1;
+  const meanHeld = mean(held) ?? 0;
+
+  let best: RunnerClient | undefined;
+  let bestScore = -Infinity;
+  for (const report of reports) {
+    const room = report.resources?.memory ? memoryRoomOf(report.resources.memory) : meanRoom;
+    const share =
+      (report.resources?.cpu?.cores ?? meanCores) / ((report.resources?.managers ?? meanHeld) + 1);
+    const score = room * share;
+    if (score > bestScore) {
+      bestScore = score;
+      best = report.client;
+    }
+  }
+  return best;
+}
+
+function mean(values: readonly number[]): number | undefined {
+  if (values.length === 0) return undefined;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+/** メモリの余り（0〜1）。**使い切っていても 0 で、負にはしない**（0点でも置き先になる）。 */
+function memoryRoomOf(memory: { limitBytes: number; usedBytes: number }): number {
+  if (!(memory.limitBytes > 0)) return 1;
+  return Math.min(1, Math.max(0, (memory.limitBytes - memory.usedBytes) / memory.limitBytes));
 }

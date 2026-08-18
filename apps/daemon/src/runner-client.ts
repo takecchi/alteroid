@@ -4,6 +4,7 @@ import type {
   RunnerCredentialFingerprint,
   RunnerEvent,
   RunnerManagerState,
+  RunnerPlacementResources,
   RunnerResumeCommand,
   RunnerProfileFingerprint,
   RunnerProfileResult,
@@ -19,7 +20,9 @@ import {
   runnerProfileFingerprintSchema,
   runnerProfileResultSchema,
   runnerEventSchema,
+  runnerExecutionResourcesSchema,
   runnerManagerStateSchema,
+  runnerPlacementResourcesSchema,
 } from '@alteroid/core';
 
 // **失敗の種別は口の定義（`@alteroid/core`）が持つ。** この経路だけの都合にすると、
@@ -69,6 +72,8 @@ interface HealthBody {
   workspacePath?: unknown;
   credentials?: unknown;
   profile?: unknown;
+  managers?: unknown;
+  resources?: unknown;
 }
 
 /** 指紋の配列だけを取り出す（値は runner も返さないし、こちらも持たない）。 */
@@ -137,6 +142,30 @@ class HttpRunner implements RunnerClient {
   async ping(options?: { signal?: AbortSignal }): Promise<void> {
     const response = await this.#call('GET', '/health', undefined, options?.signal);
     await response.text().catch(() => '');
+  }
+  /**
+   * 配置の材料を渡す。**既存の `/health` を叩くだけ**で、新しい口は足さない
+   * （`credentials()` / `profile()` と同じ作法である）。
+   *
+   * `ping()` と違って本文を読むが、**採るのは資源だけである。** `runnerId` /
+   * `workspacePath` はここで採らない — 器が入れ替わったときに台帳の鎖
+   * （`manager_id → runner_id`）が黙って繋ぎ変わるのを避けるためで、`ping()` に
+   * 書いてある理由と同じである。だから資源を `ping()` に相乗りさせず、別の口にした。
+   *
+   * **宣言していない形は捨てる**（zod）。`resources` を返さない古い runner は
+   * `managers` だけを名乗り、**それで不利にはならない**（埋めるのは配置側である）。
+   * 材料は1つずつ検証する — まとめて弾くと、`cpu` の形が崩れただけで `managers` まで
+   * 落ち、資源を報告できる器が「何も報告しない器」に見える。
+   */
+  async resources(options?: { signal?: AbortSignal }): Promise<RunnerPlacementResources> {
+    const response = await this.#call('GET', '/health', undefined, options?.signal);
+    const body = (await response.json()) as HealthBody;
+    const parsed = runnerExecutionResourcesSchema.safeParse(body.resources ?? {});
+    const managers = runnerPlacementResourcesSchema.shape.managers.safeParse(body.managers);
+    return {
+      ...(parsed.success ? parsed.data : {}),
+      ...(managers.success && managers.data !== undefined ? { managers: managers.data } : {}),
+    };
   }
 
   /**

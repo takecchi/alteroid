@@ -256,8 +256,10 @@ export {
   runnerCredentialFingerprintSchema,
   runnerCredentialSchema,
   runnerEventSchema,
+  runnerExecutionResourcesSchema,
   runnerManagerStateSchema,
   runnerMessageCommandSchema,
+  runnerPlacementResourcesSchema,
   runnerProfileFingerprintSchema,
   runnerProfileResultSchema,
   runnerResumeCommandSchema,
@@ -270,8 +272,10 @@ export {
   type RunnerCredentialFingerprint,
   type RunnerEntry,
   type RunnerEvent,
+  type RunnerExecutionResources,
   type RunnerLiveness,
   type RunnerManagerState,
+  type RunnerPlacementResources,
   type RunnerProfileFingerprint,
   type RunnerProfileResult,
   type RunnerRegistry,
@@ -283,6 +287,15 @@ export {
   type RunnerStartCommand,
   type RunnerWaiting,
 } from './runner-protocol.js';
+/**
+ * 実行環境の資源の読み方（cgroup v2）。**`os` モジュールで代用しないこと**
+ * （理由と実測は `runner-resources.ts` にある）。
+ */
+export {
+  CGROUP_ROOT,
+  readExecutionResources,
+  type ExecutionResourcesOptions,
+} from './runner-resources.js';
 export {
   CLONE_ALLOWED_TOOLS,
   CLONE_TOOL_NAMES,
