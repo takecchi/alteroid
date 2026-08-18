@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 
 import { Drawer } from '~/components/drawer';
-import { Badge, Button, Card, Empty, ErrorNote, Spinner, Textarea } from '~/components/ui';
+import { Button, Card, Empty, ErrorNote, Spinner, Textarea } from '~/components/ui';
 import { useEndConversation, useRecordOwnMessage } from '~/hooks/mutations';
 import { useConversation, useConversations } from '~/hooks/queries';
 import { useIsMobile } from '~/hooks/use-is-mobile';
@@ -304,6 +304,28 @@ export function ChatPane({
         });
       };
 
+      /*
+       * **送ると決めた瞬間から「考えている…」を出す。サーバの `thinking` を待たない。**
+       *
+       * 待つと、**待ち時間が長いときにこそ出ない。** クローンは受信箱を一件ずつ
+       * 取り出して直列に処理していて（`docs/architecture.md` の同時実行モデル）、
+       * `thinking` を送るのは自分のターンが**始まってから**である。先客（蒸留・
+       * マネージャーとの往復・自律の起点）が走っているあいだ、こちらの発言は
+       * 受信箱で待つだけなので、サーバからは何も来ない。**その直列は意図された
+       * 設計なので壊さない。** 出せないのは画面の側の都合なので、画面で直す。
+       *
+       * **これは虚偽表示ではない。** ここが主張しているのは「この画面は発言を
+       * 渡して応答を待っている」であって、`sending` が真であるあいだ、それは
+       * 実際に起きている。渡すのに失敗すれば `catch` が `failure` を立て、
+       * `finally` がこの合図を畳む（＝嘘のまま残らない）。
+       *
+       * **サーバの `thinking` を受ける経路（下の `case 'thinking'`）は消さない。**
+       * あちらは「クローンが実際に入力を受け取ってターンを始めた」という別の事実で、
+       * クライアントに言えるのは「送った」までである。2つは別のことを証拠立てて
+       * いるので、片方で片方を置き換えない — 後から来たら上書きされるだけ。
+       */
+      setTransient('考えている…');
+
       try {
         for await (const message of api.chat(
           { text, ...(shownId === undefined ? {} : { conversationId: shownId }) },
@@ -493,10 +515,12 @@ export function ChatPane({
             </Button>
           )}
         </div>
+        {/*
+          進行中かどうかは、やりとりの中の「考えている…」と「受信をやめる」で
+          既に見えている。ここに残すのは**他に書いてある場所が無い事実**だけ。
+        */}
         {sending && (
-          <p className="mt-1.5 text-[11px] text-muted">
-            <Badge tone="accent">受信中</Badge> 画面を閉じてもクローンは考え続ける
-          </p>
+          <p className="mt-1.5 text-[11px] text-muted">画面を閉じてもクローンは考え続ける</p>
         )}
       </div>
     </div>
