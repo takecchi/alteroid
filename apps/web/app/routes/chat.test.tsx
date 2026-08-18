@@ -329,6 +329,64 @@ describe('考えている…の合図', () => {
   });
 });
 
+/**
+ * 「順番を待っている」と「考えている」を1つの表示に潰していないこと。
+ *
+ * 画面が送信の瞬間に出す「考えている…」は、この画面が言える範囲＝「送った」までの
+ * 表示である。サーバの `queued` は**受理したがまだ順番が来ていない**という、より
+ * 正確な事実なので、届いたら差し替える。先客のターンが数分続けば、その数分は
+ * 「考えている」ではない。
+ */
+describe('順番待ちの合図（queued）', () => {
+  it('queued が来たら「順番を待っている…」へ差し替わる', async () => {
+    stubFetch((url, init) => {
+      if (url.endsWith('/chat')) {
+        return sse(
+          [
+            { event: 'open', data: { conversationId: CONVERSATION_ID } },
+            { event: 'queued', data: { type: 'queued' } },
+          ],
+          // 順番待ちのまま終わらせない（先客のターンが走っている状態）。
+          { keepOpen: true, signal: init?.signal },
+        );
+      }
+      if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
+      return undefined;
+    });
+
+    renderChat();
+    await send('やあ');
+
+    expect(await screen.findByText('順番を待っている…')).toBeTruthy();
+  });
+
+  it('順番が来たら「考えている…」へ移る（queued を置き換えるのではなく後に続く）', async () => {
+    stubFetch((url, init) => {
+      if (url.endsWith('/chat')) {
+        return sse(
+          [
+            { event: 'open', data: { conversationId: CONVERSATION_ID } },
+            { event: 'queued', data: { type: 'queued' } },
+            { event: 'thinking', data: { type: 'thinking' } },
+          ],
+          { keepOpen: true, signal: init?.signal },
+        );
+      }
+      if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
+      return undefined;
+    });
+
+    renderChat();
+    await send('やあ');
+
+    expect(await screen.findByText('考えている…')).toBeTruthy();
+    // 順番待ちの表示は残らない（進行中の合図は1つだけ）。
+    await waitFor(() => {
+      expect(screen.queryByText('順番を待っている…')).toBeNull();
+    });
+  });
+});
+
 describe('会話の切り替え', () => {
   it('人間が別の会話を選んだら、前の会話の内容を捨てる', async () => {
     stubFetch((url, init) => {

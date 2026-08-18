@@ -1542,3 +1542,300 @@ describe('クローン — 考えている合図（thinking）', () => {
     }
   });
 });
+
+/**
+ * 人間の発言が日誌へ載る時点と、その瞬間に出す合図。
+ *
+ * **「一件ずつ判断する」と「発言の記録も一件ずつ待たせる」は別のことである。**
+ * ターンの直列は意図された設計（`docs/architecture.md` の同時実行モデル）だが、
+ * 記録をその直列の後ろに置いていたのは帰結であって設計ではなかった。後ろに置くと、
+ * 先客（蒸留・マネージャーとの往復・自律の起点）が走っているあいだ**日誌にその
+ * 発言が存在しない** — 日誌から組み立てる `GET /conversations` にも出ないので、
+ * 器（端末・タブ・アプリ）を替えた人からは発言そのものが消えて見える。
+ *
+ * ここで固定するのは「直列を壊さずに記録だけを前へ出した」ことである。
+ */
+describe('クローン — 発言を受理した瞬間の記録と合図', () => {
+  /**
+   * 1本目のターンを、明示的に解くまで握ったままにする偽 SDK。
+   *
+   * **時間で近似しない。** 「先客のターンが走っているあいだに届いた発言」を
+   * `delayMs` で作ると、遅延の長さと poll の待ち時間の綱引きになる（速い器で通り、
+   * 遅い器で落ちる）。止めたターンを明示的に解く形にすれば、「順番待ちのあいだ」を
+   * 時計から切り離せる。
+   */
+  function fakeGatedSdk() {
+    const calls: FakeCall[] = [];
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    let held = true;
+
+    const fn = ((params: { prompt: unknown; options?: Options }) => {
+      const call: FakeCall = { options: params.options ?? {}, inputs: [] };
+      calls.push(call);
+
+      async function* generate(): AsyncGenerator<SDKMessage, void> {
+        yield {
+          type: 'system',
+          subtype: 'init',
+          session_id: 'sess-fake',
+          uuid: 'uuid-init',
+        } as unknown as SDKMessage;
+
+        for await (const message of params.prompt as AsyncIterable<{
+          message: { content: unknown };
+        }>) {
+          // **本文を控えてから止める。** 止めてから控えると「ターンが始まった」を
+          // テストから観測できず、順番待ちを作れたことが確かめられない。
+          call.inputs.push(String(message.message.content));
+          if (held) await gate;
+          yield {
+            type: 'assistant',
+            message: { content: [{ type: 'text', text: 'ok' }] },
+            parent_tool_use_id: null,
+            session_id: 'sess-fake',
+            uuid: 'uuid-assistant',
+          } as unknown as SDKMessage;
+          yield {
+            type: 'result',
+            subtype: 'success',
+            result: 'ok',
+            session_id: 'sess-fake',
+            uuid: 'uuid-result',
+          } as unknown as SDKMessage;
+        }
+      }
+
+      const generator = generate();
+      return Object.assign(generator, {
+        close: () => undefined,
+        interrupt: async () => undefined,
+      }) as unknown as Query;
+    }) as unknown as typeof sdkQuery;
+
+    return {
+      fn,
+      calls,
+      /** 握っていたターンを解く。以降のターンは止まらない（`stop()` の蒸留が返る）。 */
+      release: () => {
+        held = false;
+        open();
+      },
+    };
+  }
+
+  interface Gated {
+    clone: CloneHost;
+    stores: Stores;
+    calls: FakeCall[];
+    release: () => void;
+  }
+
+  function setupGated(stores: Stores = createMemoryStores()): Gated {
+    const { fn, calls, release } = fakeGatedSdk();
+    const clone = createClone({
+      stores,
+      queryFn: fn,
+      env: {},
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    return { clone, stores, calls, release };
+  }
+
+  /** 先客の内部ターンを走らせたまま止める（＝以後に届く発言は順番待ちになる）。 */
+  async function occupy(gated: Gated): Promise<void> {
+    gated.clone.post({
+      type: 'self_initiative',
+      id: 'evt-busy',
+      at: new Date().toISOString(),
+      reason: '先客のターン',
+    });
+    await expect.poll(() => (gated.calls[0]?.inputs ?? []).length, { timeout: 3000 }).toBe(1);
+  }
+
+  /**
+   * 追記の1本目だけを遅らせる（受理の瞬間の追記だけが遅い形）。
+   *
+   * 全部を等しく遅らせると、受理の瞬間に書き始める側と応答を待ってから書く側の
+   * 差が出ない（どちらも同じだけ遅れて着順は変わらない）。
+   */
+  function delayFirstJournalAppend(stores: Stores, delayMs: number): Stores {
+    let first = true;
+    return {
+      ...stores,
+      journal: {
+        ...stores.journal,
+        async append(entry) {
+          if (first) {
+            first = false;
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+          }
+          return stores.journal.append(entry);
+        },
+      },
+    };
+  }
+
+  async function inboundTexts(stores: Stores): Promise<string[]> {
+    const entries = (await stores.journal.list({ types: ['exchange'] })) as {
+      role: string;
+      text: string;
+    }[];
+    return entries.filter((entry) => entry.role === 'inbound').map((entry) => entry.text);
+  }
+
+  it('順番待ちのあいだに日誌へ載る（ターンが回るのを待たない）', async () => {
+    const gated = setupGated();
+    await occupy(gated);
+
+    gated.clone.post(humanMessage('MSG-WAITING', 'conv-2'));
+
+    // 先客のターンは握ったまま。**ここで載ることがこの直しの主題である。**
+    await expect.poll(() => inboundTexts(gated.stores), { timeout: 3000 }).toContain('MSG-WAITING');
+    // 載ったのは順番が来たからではない（この発言はまだモデルへ渡っていない）。
+    expect(gated.calls[0]?.inputs).toHaveLength(1);
+
+    gated.release();
+    await gated.clone.stop();
+  }, 10_000);
+
+  it('日誌には一度だけ載る（受理の瞬間とターンの入口で二重に書かない）', async () => {
+    const s = setup(() => 'こんにちは');
+
+    s.clone.post(humanMessage('MSG-ONCE'));
+    await waitForDone(s.events);
+
+    expect((await inboundTexts(s.stores)).filter((text) => text === 'MSG-ONCE')).toHaveLength(1);
+
+    await s.clone.stop();
+  });
+
+  it('`queued` は受理したその同期の中で届く（往復を待たない）', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('やあ'));
+    // **`await` を1つも挟まない。** `post` から戻った時点で既に届いていること。
+    expect(s.events).toEqual([{ type: 'queued' }]);
+
+    await waitForDone(s.events);
+    await s.clone.stop();
+  });
+
+  it('順番待ちのあいだ `thinking` は来ない（2つの状態を1つの語に潰していない）', async () => {
+    const gated = setupGated();
+    const events: ChatStreamEvent[] = [];
+    gated.clone.subscribe('conv-2', (event) => events.push(event));
+    await occupy(gated);
+
+    gated.clone.post(humanMessage('MSG-QUEUED', 'conv-2'));
+
+    // 受理はされている（`queued`）。だが誰も考えていない（`thinking` は無い）。
+    expect(events.map((event) => event.type)).toEqual(['queued']);
+
+    gated.release();
+    await gated.clone.stop();
+  }, 10_000);
+
+  it('順番が来たら `thinking` が続く（`queued` を置き換えるのではなく後に来る）', async () => {
+    const s = setup(() => 'こんにちは');
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const types = s.events.map((event) => event.type);
+    expect(types.indexOf('queued')).toBe(0);
+    expect(types.indexOf('thinking')).toBeGreaterThan(0);
+
+    await s.clone.stop();
+  });
+
+  it('追記が遅くても、発言は応答より先に日誌へ載る', async () => {
+    // 待たずにターンを走らせると、短いターンでは応答の追記が先に着き、**日誌の上で
+    // クローンが問われる前に答えたことになる**。追記の順序が会話の順序である
+    // （`GET /conversations` は並べ直さない）ので、ここは着順で守る。
+    const s = setup(() => 'こんにちは', delayFirstJournalAppend(createMemoryStores(), 200));
+
+    s.clone.post(humanMessage('MSG-ORDER'));
+    await waitForDone(s.events);
+
+    // `list` は新しい順。
+    const roles = (
+      (await s.stores.journal.list({ types: ['exchange'] })) as { role: string }[]
+    ).map((entry) => entry.role);
+    expect(roles).toEqual(['outbound', 'inbound']);
+
+    await s.clone.stop();
+  }, 10_000);
+
+  it('2発言が続けて届いても、日誌には受け取った順で載る', async () => {
+    // 追記が `#pump` の中に在ったあいだ、この直列は受信箱のループが与えていた。
+    // 受理の瞬間へ移した以上、**2本の追記が同時に飛ぶ**（`PgJournalStore` は
+    // 自分で直列化していない）。1本目だけを遅くして、着順が入れ替わらないかを見る。
+    const s = setup(() => 'こんにちは', delayFirstJournalAppend(createMemoryStores(), 200));
+
+    s.clone.post(humanMessage('MSG-FIRST', 'conv-1'));
+    s.clone.post(humanMessage('MSG-SECOND', 'conv-1'));
+
+    // `list` は新しい順なので、受け取った順に入っていれば後の発言が先に出る。
+    await expect
+      .poll(() => inboundTexts(s.stores), { timeout: 3000 })
+      .toEqual(['MSG-SECOND', 'MSG-FIRST']);
+
+    await s.clone.stop();
+  }, 10_000);
+
+  it('日誌へ書けなくても応答は返る（記録できないことで応答を止めない）', async () => {
+    const stores = failingJournalAppend(createMemoryStores(), '器が閉じている');
+
+    await captureStderr(async () => {
+      const s = setup(() => 'こんにちは', stores);
+      s.clone.post(humanMessage('やあ'));
+      // 落ちるなら `waitForDone` が投げる。
+      await waitForDone(s.events);
+      expect(s.events.some((event) => event.type === 'done')).toBe(true);
+      await s.clone.stop();
+    });
+  });
+
+  it('ターンが失敗しても、発言そのものは日誌に残る（#59 の保証を落とさない）', async () => {
+    const stores = createMemoryStores();
+    // 聞き手の居ない会話（`setup` が購読するのは conv-1 だけ）で、ターンを失敗させる。
+    const s = setup(undefined, stores, { failWith: 'セッションを起こせない' });
+
+    s.clone.post(humanMessage('MSG-FAILED', 'conv-9'));
+
+    await expect.poll(() => inboundTexts(stores), { timeout: 3000 }).toContain('MSG-FAILED');
+
+    await s.clone.stop();
+  });
+
+  it('人間以外の起点は起点ごとの型のまま（受理の瞬間へ寄せていない）', async () => {
+    const stores = createMemoryStores();
+    const s = setup(() => '見た', stores);
+
+    s.clone.post({
+      type: 'manager_message',
+      id: 'evt-report',
+      at: new Date().toISOString(),
+      managerId: 'mgr-1',
+      kind: 'report',
+      text: 'MSG-REPORT',
+    });
+
+    await expect
+      .poll(
+        async () =>
+          (await stores.journal.list({ types: ['exchange'] })).filter(
+            (entry) => entry.type === 'exchange' && entry.with === 'manager',
+          ).length,
+        { timeout: 3000 },
+      )
+      .toBe(1);
+
+    await s.clone.stop();
+  });
+});

@@ -496,6 +496,20 @@ export type PendingApproval = z.infer<typeof pendingApprovalSchema>;
  */
 export const chatStreamEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('text'), text: z.string() }),
+  /**
+   * 受信箱に積んだ（＝受理したが、まだ順番が来ていない）。
+   *
+   * **`thinking` に潰さないこと。** クローンは受信箱を一件ずつ取り出して直列に
+   * 処理するので（architecture.md「同時実行モデル」）、先客（蒸留・マネージャー
+   * との往復・自律の起点）が走っているあいだ、届いた発言は**受理されているのに
+   * 誰も考えていない**。`thinking` は「入力がモデルへ渡って最初の出力を待って
+   * いる」という別の事実で、`queued` の後に必ず来る（順番が来たとき）。
+   *
+   * 1つの語へ寄せると、待っている理由が「順番待ち」なのか「モデルが考えている」
+   * なのかを見る側から区別できなくなり、**長く待たされたときにこそ嘘になる**
+   * （数分の順番待ちが「考えている」と表示される）。2つの状態には2つの語を置く。
+   */
+  z.object({ type: z.literal('queued') }),
   z.object({ type: z.literal('thinking') }),
   z.object({ type: z.literal('tool'), tool: z.string() }),
   z.object({ type: z.literal('ask_human'), approvalId: z.string(), question: z.string() }),

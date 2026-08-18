@@ -314,7 +314,90 @@ describe('未読の永続化', () => {
 
     expect(await stores.inbox.claimPending()).toEqual([]);
   });
+
+  /**
+   * 配り直しで本文が二度載ること自体を固定する。
+   *
+   * **これは受け入れた側の帰結である。** 消し込みが「終えた時点」なのと同じ取引で、
+   * 「消えるより配り直す」を選んだ結果として重複しうる。**回数はこの直しの前と
+   * 同じ**（以前も `#handle` が配達のたびに書いていた）。ここを「二度載らないよう
+   * 直す」方向へ動かすと、受理の瞬間の追記が器へ届く前に落ちた発言が消える側へ
+   * 倒れる。**どちらの向きを選んだかが読めるように、期待値として残す。**
+   */
+  it('配り直しでは本文が二度載る（消えるより配り直す。回数は直す前と同じ）', async () => {
+    const stores = createMemoryStores();
+
+    // 1つ目の器。追記は成功したが、ターンの途中で死ぬ。
+    const dying = bootClone(stores, 'hang');
+    await idle();
+    dying.clone.post(humanMessage('MSG-TWICE', 'conv-1'));
+    await waitForJournal(stores, 'MSG-TWICE');
+    expect(await inboundCount(stores, 'MSG-TWICE')).toBe(1);
+
+    // 2つ目の器。拾い直した配達で、もう一度書かれる。
+    const reborn = bootClone(stores);
+    await expect.poll(() => inboundCount(stores, 'MSG-TWICE'), { timeout: 3000 }).toBe(2);
+
+    await reborn.clone.stop();
+  });
+
+  /**
+   * 受理の瞬間に書いた発言の本文が、その追記だけ器へ届かないまま落ちても失われないか。
+   *
+   * **`post` は同期なので、追記が届いたかどうかは `post` からは分からない。**
+   * だから配り直しの側でもう一度書く。書かない側を選ぶと、未読の器には在るのに
+   * 日誌にも `GET /conversations` にも無い発言ができる。重複しうる代わりに消えない、
+   * という向きを記録でも揃えている（消し込みが「終えた時点」なのと同じ取引）。
+   */
+  it('配り直しでも発言の本文が日誌に残る（受理の瞬間の追記が落ちていても）', async () => {
+    const stores = createMemoryStores();
+
+    await captureStderr(async () => {
+      // 1つ目の器。受理の瞬間の追記（＝最初の1本）だけを落として、そのまま死ぬ。
+      const dying = bootClone(droppingFirstJournalAppend(stores), 'hang');
+      await idle();
+      dying.clone.post(humanMessage('MSG-BODY', 'conv-1'));
+      await waitFor(() => dying.inputs.length > 0, '発言が処理に入る');
+      // 落ちた側は日誌に何も残していない。
+      expect(await stores.journal.list({ types: ['exchange'] })).toEqual([]);
+
+      // 2つ目の器。記憶ストアだけが生き残っている。
+      const reborn = bootClone(stores);
+      await waitForJournal(stores, 'MSG-BODY');
+      await reborn.clone.stop();
+    });
+  });
 });
+
+/** 同じ本文の inbound が日誌に何本あるか。 */
+async function inboundCount(stores: Stores, text: string): Promise<number> {
+  const entries = await stores.journal.list({ types: ['exchange'] });
+  return entries.filter(
+    (entry) => entry.type === 'exchange' && entry.role === 'inbound' && entry.text === text,
+  ).length;
+}
+
+/**
+ * 追記の1本目だけを落とす（受理の瞬間の追記が器へ届く前に落ちた形）。
+ *
+ * 全部を落とすと配り直しの側の追記も落ちるので、直したことが見えない。
+ */
+function droppingFirstJournalAppend(stores: Stores): Stores {
+  let first = true;
+  return {
+    ...stores,
+    journal: {
+      ...stores.journal,
+      append(entry) {
+        if (first) {
+          first = false;
+          return Promise.reject(new Error('器が閉じている'));
+        }
+        return stores.journal.append(entry);
+      },
+    },
+  };
+}
 
 async function waitForJournal(stores: Stores, needle: string): Promise<void> {
   const started = Date.now();
