@@ -239,6 +239,24 @@ class Clone implements CloneHost {
    * 起動時に拾い直したもの＝前の器で既に書いてあるもの）。
    */
   readonly #recorded = new Map<string, Promise<void>>();
+  /**
+   * 受理の瞬間の追記を、受け取った順に1本ずつ器へ渡すための列。
+   *
+   * **「日誌の追記順がそのまま会話の順序」という不変条件を、器の側に賭けない。**
+   * `GET /conversations` / `GET /conversations/:id` は追記順をそのまま使う（`at` で
+   * 並べ直さないのは、同じミリ秒に並んだ発言の前後が時刻からは決められないから
+   * である）。追記が `#pump` の中に在ったあいだ、その直列は受信箱のループが与えて
+   * いた。受理の瞬間へ移した以上、**同じ会話へ短時間に2発言が届くと2本の追記が
+   * 同時に飛ぶ** — `FsJournalStore` は自分で直列化しているが、`PgJournalStore` は
+   * していない（コネクションプール越しなので、`seq` が呼び出し順と一致する保証が
+   * 無い）。ここで列にすれば、器がどちらでも呼び出し順のまま入る。
+   *
+   * **`PgJournalStore` 側を直列化する形は採らない。** あちらを直列化すると
+   * マネージャーの `tool_use`（量が多い）まで1本の列に並び、日誌の書き込みが
+   * 全体の律速になる。守りたいのは会話の順序であって、日誌の全書き込みの順序では
+   * ない。
+   */
+  #recordChain: Promise<void> = Promise.resolve();
   /** 起動時に拾い直した合図。id → 何度目の配達か。 */
   readonly #redelivered = new Map<string, PendingInboxEvent>();
   /**
@@ -545,8 +563,8 @@ class Clone implements CloneHost {
   #record(event: InboxEvent): void {
     if (event.type !== 'human_message') return;
 
-    this.#recorded.set(
-      event.id,
+    // 前の発言の追記が器へ入ってから次を渡す（`#recordChain` の理由）。
+    const written = this.#recordChain.then(() =>
       this.#journal({
         type: 'exchange',
         with: 'human',
@@ -555,6 +573,11 @@ class Clone implements CloneHost {
         conversationId: event.conversationId,
       }),
     );
+    // 列そのものは失敗で切らない。**1本書けなかったことで以後の発言の記録まで
+    // 止めない**（`#journal` は自分で握るので普通は来ないが、列は器の外の失敗にも
+    // 耐える形で持つ）。待っている側（`#handle`）には元の約束を渡す。
+    this.#recordChain = written.catch(() => undefined);
+    this.#recorded.set(event.id, written);
 
     // 同期で呼ぶ。`post` から見て、この合図は日誌の書き込みを待たずに届く
     // （待てるのは記録の**順序**だけで、通知を待たせる理由は無い）。

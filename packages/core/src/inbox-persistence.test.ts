@@ -316,6 +316,32 @@ describe('未読の永続化', () => {
   });
 
   /**
+   * 配り直しで本文が二度載ること自体を固定する。
+   *
+   * **これは受け入れた側の帰結である。** 消し込みが「終えた時点」なのと同じ取引で、
+   * 「消えるより配り直す」を選んだ結果として重複しうる。**回数はこの直しの前と
+   * 同じ**（以前も `#handle` が配達のたびに書いていた）。ここを「二度載らないよう
+   * 直す」方向へ動かすと、受理の瞬間の追記が器へ届く前に落ちた発言が消える側へ
+   * 倒れる。**どちらの向きを選んだかが読めるように、期待値として残す。**
+   */
+  it('配り直しでは本文が二度載る（消えるより配り直す。回数は直す前と同じ）', async () => {
+    const stores = createMemoryStores();
+
+    // 1つ目の器。追記は成功したが、ターンの途中で死ぬ。
+    const dying = bootClone(stores, 'hang');
+    await idle();
+    dying.clone.post(humanMessage('MSG-TWICE', 'conv-1'));
+    await waitForJournal(stores, 'MSG-TWICE');
+    expect(await inboundCount(stores, 'MSG-TWICE')).toBe(1);
+
+    // 2つ目の器。拾い直した配達で、もう一度書かれる。
+    const reborn = bootClone(stores);
+    await expect.poll(() => inboundCount(stores, 'MSG-TWICE'), { timeout: 3000 }).toBe(2);
+
+    await reborn.clone.stop();
+  });
+
+  /**
    * 受理の瞬間に書いた発言の本文が、その追記だけ器へ届かないまま落ちても失われないか。
    *
    * **`post` は同期なので、追記が届いたかどうかは `post` からは分からない。**
@@ -342,6 +368,14 @@ describe('未読の永続化', () => {
     });
   });
 });
+
+/** 同じ本文の inbound が日誌に何本あるか。 */
+async function inboundCount(stores: Stores, text: string): Promise<number> {
+  const entries = await stores.journal.list({ types: ['exchange'] });
+  return entries.filter(
+    (entry) => entry.type === 'exchange' && entry.role === 'inbound' && entry.text === text,
+  ).length;
+}
 
 /**
  * 追記の1本目だけを落とす（受理の瞬間の追記が器へ届く前に落ちた形）。

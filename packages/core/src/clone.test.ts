@@ -1771,6 +1771,23 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
     await s.clone.stop();
   }, 10_000);
 
+  it('2発言が続けて届いても、日誌には受け取った順で載る', async () => {
+    // 追記が `#pump` の中に在ったあいだ、この直列は受信箱のループが与えていた。
+    // 受理の瞬間へ移した以上、**2本の追記が同時に飛ぶ**（`PgJournalStore` は
+    // 自分で直列化していない）。1本目だけを遅くして、着順が入れ替わらないかを見る。
+    const s = setup(() => 'こんにちは', delayFirstJournalAppend(createMemoryStores(), 200));
+
+    s.clone.post(humanMessage('MSG-FIRST', 'conv-1'));
+    s.clone.post(humanMessage('MSG-SECOND', 'conv-1'));
+
+    // `list` は新しい順なので、受け取った順に入っていれば後の発言が先に出る。
+    await expect
+      .poll(() => inboundTexts(s.stores), { timeout: 3000 })
+      .toEqual(['MSG-SECOND', 'MSG-FIRST']);
+
+    await s.clone.stop();
+  }, 10_000);
+
   it('日誌へ書けなくても応答は返る（記録できないことで応答を止めない）', async () => {
     const stores = failingJournalAppend(createMemoryStores(), '器が閉じている');
 
