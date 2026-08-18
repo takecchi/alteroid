@@ -388,7 +388,7 @@ Railway に alteroid の3 Service（app / runner / PostgreSQL）を用意する�
   -n, --name <名前>       プロジェクト名（既定: alteroid）
   -w, --workspace <名前>  Workspace（複数持っているときだけ要る）
   -r, --repo <owner/repo> GitHub 連携する対象（既定: origin から拾う）
-  -b, --branch <ブランチ> 追いかけるブランチ（既定: origin の既定ブランチ）
+  -b, --branch <ブランチ> 追いかけるブランチ（既定: release/prod）
   -y, --yes               尋ねない（値は .env と既定値から取る）
   -h, --help              これ
 
@@ -456,9 +456,24 @@ if [ -z "$GIT_REPO" ]; then
   GIT_REPO="${GIT_REPO%.git}"
 fi
 if [ -z "$GIT_BRANCH" ]; then
-  GIT_BRANCH="$(git -C "$REPO_ROOT" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || true)"
-  GIT_BRANCH="${GIT_BRANCH#origin/}"
-  : "${GIT_BRANCH:=main}"
+  # **既定は release/prod で、origin の既定ブランチ（＝main）ではない。**
+  # Railway に main を見せると、マージした瞬間にデプロイが走って走行中のマネージャーと
+  # 作業者が畳まれる。それを切り離すために release/prod を置いてある
+  # （.github/workflows/release-prod.yml が6時間ごとに main を写す）。
+  # **ここを main へ戻すと、その形へ戻る**（railway/README.md「デプロイは走行中の
+  # 仕事を畳む操作である」1）。とくに M5 で runner を2台目足すとき、片方だけが main を
+  # 見ていると**そこだけがマージのたびに畳まれる**ので、既定を弱いほうへ倒さないこと。
+  GIT_BRANCH='release/prod'
+  if ! git -C "$REPO_ROOT" ls-remote --exit-code --heads origin "$GIT_BRANCH" >/dev/null 2>&1; then
+    # まだ一度も反映が走っていないリポジトリ。**main へ落とすが黙らない** — この形は
+    # マージした瞬間に落ちるので、気づかないまま常駐させたくない（黙って倒すと、
+    # あとで「なぜマージで死ぬのか」を Railway 側に探しに行くことになる）。
+    GIT_BRANCH="$(git -C "$REPO_ROOT" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+    GIT_BRANCH="${GIT_BRANCH#origin/}"
+    : "${GIT_BRANCH:=main}"
+    warn "origin に release/prod が無いので $GIT_BRANCH に繋ぐ。**マージした瞬間にデプロイが走る形**である"
+    warn "  → Actions の「release/prod へ反映」を一度起こしてから、Settings → Source を release/prod へ向け直すこと"
+  fi
 fi
 
 # --- 1. 人間が埋めるもの ----------------------------------------------------
