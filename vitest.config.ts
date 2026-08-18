@@ -21,6 +21,9 @@ export default defineConfig({
       // railway/ はパッケージではないが、置く変数の割り振り（役ごとにどの鍵が渡るか）は
       // 静かにずれても動作が正常に見えるので、ここで固定する
       'railway/**/*.test.ts',
+      // .github/scripts/ も同じ理由。本物の push が絡むスクリプトは手で確かめにくいので、
+      // ローカルの bare リポジトリで振る舞いを固定する
+      '.github/scripts/**/*.test.ts',
     ],
   },
 });

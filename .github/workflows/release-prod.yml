@@ -1,0 +1,43 @@
+name: release/prod へ反映
+
+# **main へマージしてもデプロイしない。** Railway が見るのは release/prod で、それを
+# 動かすのはここだけである。マージとデプロイを切り離すのがこのワークフローの目的なので、
+# `push: branches: [main]` を足さないこと — 足すと元に戻る（マージした瞬間に走行中の
+# マネージャーと作業者が畳まれる状態へ）。
+on:
+  schedule:
+    # 6時間ごとを目安に。**時刻ぴったりを避けている** — GitHub の cron は混み合う時刻
+    # ほど遅れる（GitHub 自身がそう案内している）。
+    #
+    # **設定どおりには発火しない。** 別のリポジトリでの実測で、30分間隔の設定に対して
+    # 実際の間隔は25〜139分だった。ここも6〜12時間へ伸びうる。**目的は「最低6時間は
+    # 空ける」なので遅れる方向は困らない**が、「6時間ごとに必ず走る」とは読まないこと。
+    # 待てないときは下の workflow_dispatch で起こす。
+    - cron: '17 0,6,12,18 * * *'
+  # 6時間待てない場合の口（本番が壊れている / 直した欠陥をいま確かめたい）。
+  workflow_dispatch:
+
+# release/prod を動かすためだけに要る。他は要らない。
+permissions:
+  contents: write
+
+# 定時実行と手動起動が重なっても、release/prod を2つの実行が同時に動かさない。
+# 走っている方は止めない（途中で切ると push の途中で終わる）。
+concurrency:
+  group: release-prod
+  cancel-in-progress: false
+
+jobs:
+  reflect:
+    runs-on: ubuntu-latest
+    steps:
+      # **浅いままでよい。** 送るオブジェクトは無い（main の先端は remote に既にある
+      # ので、これは ref の書き換えだけである）。浅い clone から ref を push できること、
+      # `--force-with-lease` の期待値が手元に無いオブジェクトでも通ることは実測で確認済み。
+      #
+      # dispatch を別の枝から起こされても押すのは main である（正典は main）。
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: main を release/prod へ反映する
+        run: .github/scripts/reflect-release-prod.sh
