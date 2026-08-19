@@ -34,9 +34,14 @@ import {
 } from './prompt.js';
 import { DAILY_REPORT_KIND, localDate, localDayRange } from './schedule.js';
 import type { ChatStreamEvent, InboxEvent, JournalEntryInput, ScheduledRequest } from './schema.js';
-import type { SelfFacts } from './self.js';
+import type { CloneRuntimeFacts, SelfFacts } from './self.js';
 import type { PendingInboxEvent, Stores } from './store.js';
-import { CLONE_ALLOWED_TOOLS, MCP_SERVER_NAME, createCloneMcpServer } from './tools.js';
+import {
+  CLONE_ALLOWED_TOOLS,
+  MCP_SERVER_NAME,
+  createCloneMcpServer,
+  type ToolContext,
+} from './tools.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 
 /**
@@ -77,9 +82,21 @@ export const CLONE_MODEL_ENV_KEY = 'ALTEROID_CLONE_MODEL';
  * （north_star 禁止1）。読めない値は SDK が起動時に弾く。
  */
 export function resolveCloneModel(env: NodeJS.ProcessEnv = process.env): string {
+  return placedCloneModel(env) ?? CLONE_MODEL;
+}
+
+/**
+ * 人間が実際に値を置いたか（置いていなければ `null`）。
+ *
+ * **{@link resolveCloneModel} と同じ判定を2か所に書かないためにここに居る。**
+ * 置いた値がたまたま既定と同じ（`ALTEROID_CLONE_MODEL=fable`）でも「置いた」で
+ * あり、「既定と違うか」では言い換えられない — `self_status` が返すのは
+ * 「差し替えの承認がここに置かれているか」だからである。
+ */
+export function placedCloneModel(env: NodeJS.ProcessEnv = process.env): string | null {
   const raw = env[CLONE_MODEL_ENV_KEY];
   const trimmed = raw === undefined ? '' : raw.trim();
-  return trimmed.length > 0 ? trimmed : CLONE_MODEL;
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 /** PreCompact で退避したトランスクリプトのうち、蒸留に渡す末尾のサイズ。 */
@@ -180,6 +197,17 @@ export interface CloneOptions {
    * ここで環境変数を読み直すと出所が2つになる。
    */
   self?: SelfFacts;
+  /**
+   * 道具の MCP サーバを組み立てる関数。**主にテスト用。既定は `createCloneMcpServer`。**
+   *
+   * `createSdkMcpServer`（SDK）は道具を MCP の transport の裏へ隠すので、テストから
+   * ハンドラを直接呼べない。ここを差し替えると、渡ってくる `context`（クローンが
+   * 実際に組み立てたものと同一 — `runtime` 含む）を控えたうえで本物の
+   * `createCloneMcpServer(context)` を呼べる。道具の実装もクローンが渡す
+   * `context` も本物のまま、呼び出しの境界だけを覗ける
+   * （`queryFn` と同じ「差し替え可能だが既定は本物」という形）。
+   */
+  mcpServerFactory?: typeof createCloneMcpServer;
 }
 
 type Listener = (event: ChatStreamEvent) => void;
@@ -210,6 +238,26 @@ class Clone implements CloneHost {
   readonly #model: string;
   /** 自己認識の材料。デーモンが組み立てて渡す（テストでは省略される）。 */
   readonly #self: SelfFacts | undefined;
+  /** `#model` が既定（`CLONE_MODEL`）から差し替えられているか（`self_status` の材料）。 */
+  readonly #modelOverridden: boolean;
+  /** 道具の MCP サーバを組み立てる関数。既定は本物、テストでは差し替えられる。 */
+  readonly #mcpServerFactory: typeof createCloneMcpServer;
+
+  // --- `self_status` の材料（SDK が実際に報告してきた値） ---------------------
+  //
+  // **本セッション（`#read`/`#dispatch` を通す方）だけが更新する。** 蒸留の
+  // サイドクエリ（`#distillFromTranscript`）は別の SDK セッションで、その init は
+  // ここへは反映しない（`CloneRuntimeFacts.sessionId` のコメントと同じ理由）。
+  #sdkModel: string | null = null;
+  #effort: string | null = null;
+  #claudeCodeVersion: string | null = null;
+  #apiKeySource: string | null = null;
+  #permissionMode: string | null = null;
+  #mcpServersInfo: Array<{ name: string; status: string }> = [];
+  /** init で報告された、いまの SDK セッション id。`#resumedFrom` とは別（あちらは resume 元）。 */
+  #sdkSessionId: string | null = null;
+  /** `#buildOptions` で組み立てたシステムプロンプトの文字数。セッションの間は固定。 */
+  #systemPromptChars = 0;
 
   readonly #inbox = new Inbox();
   readonly #listeners = new Map<string, Set<Listener>>();
@@ -300,17 +348,21 @@ class Clone implements CloneHost {
       profileService,
       accountUsage,
       self,
+      mcpServerFactory,
     } = options;
     this.#stores = stores;
     this.#queryFn = queryFn ?? query;
     this.#cwd = cwd;
     this.#sessionStore = sessionStore;
-    this.#model = resolveCloneModel(env ?? process.env);
-    this.#env = env ?? process.env;
+    const envSource = env ?? process.env;
+    this.#model = resolveCloneModel(envSource);
+    this.#modelOverridden = placedCloneModel(envSource) !== null;
+    this.#env = envSource;
     this.#profile = profile;
     this.#profileService = profileService;
     this.#accountUsage = accountUsage;
     this.#self = self;
+    this.#mcpServerFactory = mcpServerFactory ?? createCloneMcpServer;
     this.#managers =
       managers ??
       createManagerPool({
@@ -1208,6 +1260,11 @@ class Clone implements CloneHost {
     const resume = await this.#stores.sessions.getCloneSessionId();
     this.#resumedFrom = resume;
     this.#sawInit = false;
+    // **前のセッションで観測した値を持ち越さない。** ここを残すと、新しい
+    // セッションの init が届く前（あるいは届かないまま）に `self_status` が
+    // 前のセッションのモデル id や effort を「いまの値」として返す ＝
+    // 観測していないものを確信することになる（`CloneRuntimeFacts` の約束）。
+    this.#forgetObservedFacts();
 
     const q = this.#queryFn({
       prompt: this.#inputStream(),
@@ -1221,24 +1278,21 @@ class Clone implements CloneHost {
     const memory = await this.#stores.persona.concat();
     this.#injectedMemory = memory;
 
+    const systemPrompt = buildCloneSystemPrompt({
+      memory,
+      ...(this.#self === undefined ? {} : { self: this.#self }),
+    });
+    this.#systemPromptChars = systemPrompt.length;
+
     return {
       model: this.#model,
       // 組み込みツールは持たせない（人間の写像としての配置）
       tools: [],
       allowedTools: CLONE_ALLOWED_TOOLS,
       mcpServers: {
-        [MCP_SERVER_NAME]: createCloneMcpServer({
-          stores: this.#stores,
-          emit: (event) => this.#emit(this.#turn?.conversationId ?? null, event),
-          managers: this.#managers,
-          ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
-          ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
-        }),
+        [MCP_SERVER_NAME]: this.#mcpServerFactory(this.#toolContext()),
       },
-      systemPrompt: buildCloneSystemPrompt({
-        memory,
-        ...(this.#self === undefined ? {} : { self: this.#self }),
-      }),
+      systemPrompt,
       // 人間のプロジェクト設定を持ち込まない。クローンは実プロジェクトの
       // 作業者ではなく、判断する側である（設定の共有は M2 のマネージャー側）。
       settingSources: [],
@@ -1258,8 +1312,130 @@ class Clone implements CloneHost {
             hooks: [(input, _toolUseId, extra) => this.#onPreCompact(input, extra?.signal)],
           },
         ],
+        // `self_status` の effort はここで拾う。
+        //
+        // 1. **`PostToolUse` はツールの実行後に走るので、実行そのものを止められない**
+        //    （`PreToolUse` と違ってここで判断を差し込む余地が無い＝観測専用として
+        //    安全に足せる）。
+        // 2. **`PreCompact` はセッション生涯に対して1本のフックであり、effort は
+        //    載らない**（`BaseHookInput.effort` はツール実行の文脈で発火するフックに
+        //    しか付かない）。だから既存の `PreCompact` はそのままにし、別の枠へ足す。
+        // 3. **クローンは毎ターン MCP の道具を叩く。** `self_status` を呼ぶ時点までに
+        //    別の道具呼び出しが1本挟まっていれば、その回で観測済みになっている。
+        //    **例外はそのセッションで最初の道具呼び出しそのもの** — そのときはまだ
+        //    どの `PostToolUse` も発火しておらず `effort` は `null` のままである
+        //    （`CloneRuntimeFacts.effort` のコメントと同じ）。
+        PostToolUse: [
+          {
+            hooks: [(input) => this.#onPostToolUse(input)],
+          },
+        ],
       },
     };
+  }
+
+  /**
+   * クローンの道具（インプロセス MCP）へ渡す context。本セッションと蒸留の
+   * サイドクエリの両方から呼ぶ（`#distillFromTranscript`）。
+   *
+   * **`runtime` は本セッションの private フィールドを読むだけの薄い closure。**
+   * サイドクエリに渡しても、そちらの init やツール実行は反映されない
+   * （`CloneRuntimeFacts.sessionId` のコメントの理由）。
+   */
+  #toolContext(): ToolContext {
+    return {
+      stores: this.#stores,
+      emit: (event) => this.#emit(this.#turn?.conversationId ?? null, event),
+      managers: this.#managers,
+      ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
+      ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
+      runtime: () => this.#runtimeFacts(),
+    };
+  }
+
+  /** {@link CloneRuntimeFacts} を、いまの private フィールドから組み立てる。 */
+  #runtimeFacts(): CloneRuntimeFacts {
+    return {
+      declaredModel: this.#model,
+      modelOverridden: this.#modelOverridden,
+      modelEnvKey: CLONE_MODEL_ENV_KEY,
+      sdkModel: this.#sdkModel,
+      effort: this.#effort,
+      // alteroid はどこでも `options.effort` を渡していない（SDK の既定に任せている）。
+      requestedEffort: null,
+      claudeCodeVersion: this.#claudeCodeVersion,
+      apiKeySource: this.#apiKeySource,
+      permissionMode: this.#permissionMode,
+      mcpServers: this.#mcpServersInfo,
+      sessionId: this.#sdkSessionId,
+      resumedFrom: this.#resumedFrom,
+      injectedMemoryChars: this.#injectedMemory.length,
+      systemPromptChars: this.#systemPromptChars,
+    };
+  }
+
+  /**
+   * SDK から観測した事実をすべて捨てる（セッションを開き直すとき）。
+   *
+   * **`#sdkModel` と `#effort` を残さないこと。** モデル帯の宣言は変わらなくても、
+   * SDK 側の解決結果はセッションを開き直せば変わりうる（版が上がる／帯の別名が
+   * 別の id を指す）。effort も同じで、次のセッションで観測し直すまでは
+   * 「まだ分からない」が正しい。
+   */
+  #forgetObservedFacts(): void {
+    this.#sdkModel = null;
+    this.#effort = null;
+    this.#claudeCodeVersion = null;
+    this.#apiKeySource = null;
+    this.#permissionMode = null;
+    this.#mcpServersInfo = [];
+    this.#sdkSessionId = null;
+  }
+
+  /**
+   * init で SDK が報告してきた実行時の事実を、`self_status` の材料として控える。
+   *
+   * **`typeof` で検査し、読めない形は `null`（配列は空）のままにする。** 型定義の
+   * 上ではどれも必須フィールドだが、ここで読み違えて例外を投げると本セッションの
+   * 起動そのものが壊れる。読めなかったことは「まだ分からない」として出せば済む
+   * （`describeCloneRuntime` 側の仕事）。
+   */
+  #captureInitFacts(message: SDKMessage): void {
+    const raw = message as unknown as {
+      session_id?: unknown;
+      model?: unknown;
+      claude_code_version?: unknown;
+      apiKeySource?: unknown;
+      permissionMode?: unknown;
+      mcp_servers?: unknown;
+    };
+    this.#sdkSessionId = typeof raw.session_id === 'string' ? raw.session_id : null;
+    this.#sdkModel = typeof raw.model === 'string' ? raw.model : null;
+    this.#claudeCodeVersion =
+      typeof raw.claude_code_version === 'string' ? raw.claude_code_version : null;
+    this.#apiKeySource = typeof raw.apiKeySource === 'string' ? raw.apiKeySource : null;
+    this.#permissionMode = typeof raw.permissionMode === 'string' ? raw.permissionMode : null;
+    this.#mcpServersInfo = Array.isArray(raw.mcp_servers)
+      ? raw.mcp_servers.filter(
+          (entry): entry is { name: string; status: string } =>
+            typeof entry === 'object' &&
+            entry !== null &&
+            typeof (entry as { name?: unknown }).name === 'string' &&
+            typeof (entry as { status?: unknown }).status === 'string',
+        )
+      : [];
+  }
+
+  /**
+   * `PostToolUse` フックから effort の実効値を拾う（`#buildOptions` の hooks コメント参照）。
+   *
+   * **例外を投げないこと。** 投げるとツール実行の後続に影響しうる。読めない形なら
+   * 何もしないだけで、道具の実行そのものは常に続ける。
+   */
+  async #onPostToolUse(input: unknown): Promise<{ continue: true }> {
+    const level = (input as { effort?: { level?: unknown } } | null | undefined)?.effort?.level;
+    if (typeof level === 'string') this.#effort = level;
+    return { continue: true };
   }
 
   /**
@@ -1330,13 +1506,17 @@ class Clone implements CloneHost {
         tools: [],
         allowedTools: CLONE_ALLOWED_TOOLS,
         mcpServers: {
-          [MCP_SERVER_NAME]: createCloneMcpServer({
+          [MCP_SERVER_NAME]: this.#mcpServerFactory({
             stores: this.#stores,
             emit: () => undefined,
             // **蒸留のターンでも同じ道具を渡す。** ここだけ欠けていると、
             // 会話の最後に「鍵を実行環境へ移す」をやろうとして失敗する。
             ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
             ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
+            // **本セッションで観測した値をそのまま渡す。** ここだけ欠けていると、
+            // 蒸留のターンだけ自分のことが分からないクローンになる
+            // （`CloneRuntimeFacts.sessionId` のコメントの理由）。
+            runtime: () => this.#runtimeFacts(),
           }),
         },
         systemPrompt: buildCloneSystemPrompt({
@@ -1393,6 +1573,7 @@ class Clone implements CloneHost {
         if (message.subtype === 'init') {
           this.#sawInit = true;
           await this.#stores.sessions.setCloneSessionId(message.session_id).catch(() => undefined);
+          this.#captureInitFacts(message);
         }
         return;
       }

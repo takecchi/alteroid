@@ -146,7 +146,9 @@ export {
   buildSelfKnowledge,
   canonDocument,
   canonNames,
+  describeCloneRuntime,
   type CanonDocument,
+  type CloneRuntimeFacts,
   type SelfFacts,
 } from './self.js';
 export { CRON_EXPRESSION_MAX, isCronExpression, parseCron, type CronSchedule } from './cron.js';
