@@ -815,6 +815,9 @@ describe('usage_read（人間が見られるものはクローンからも見ら
 
   async function spent(h: Harness) {
     await h.stores.usage.record({
+      layer: 'manager',
+      site: 'session',
+      accumulation: 'cumulative',
       managerId: 'mgr-1',
       date: '2026-08-14',
       at: '2026-08-14T10:00:00.000Z',
@@ -879,6 +882,136 @@ describe('usage_read（人間が見られるものはクローンからも見ら
     expect(reply).toContain('その範囲には記録が無い');
     // 台帳自体は始まっているので、その始点は分かる。
     expect(reply).toContain('台帳の始点: 2026-08-14');
+  });
+});
+
+describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
+  const one = (costUsd: number) => ({
+    'claude-opus-5': {
+      inputTokens: 1,
+      outputTokens: 1,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      webSearchRequests: 0,
+      costUsd,
+    },
+  });
+
+  async function record(
+    h: Harness,
+    over: {
+      layer: 'clone' | 'manager';
+      site: 'session' | 'distill';
+      managerId: string;
+      costUsd: number;
+      date?: string;
+    },
+  ) {
+    await h.stores.usage.record({
+      layer: over.layer,
+      site: over.site,
+      accumulation: over.site === 'distill' ? 'oneshot' : 'cumulative',
+      managerId: over.managerId,
+      date: over.date ?? '2026-08-14',
+      at: '2026-08-14T10:00:00.000Z',
+      snapshot: { models: one(over.costUsd) },
+    });
+  }
+
+  it('層と場所の軸を出す（モデル名では層を見分けられない）', async () => {
+    // 2件とも同じモデル id である。`ALTEROID_CLONE_MODEL` を置けば実際にこうなる。
+    const h = harness();
+    await record(h, { layer: 'manager', site: 'session', managerId: 'mgr-1', costUsd: 2 });
+    await record(h, { layer: 'clone', site: 'distill', managerId: 'clone', costUsd: 0.5 });
+
+    const reply = await h.call('usage_read', {});
+
+    expect(reply).toContain('層別（誰が）:');
+    expect(reply).toContain('場所別（どこで）:');
+    expect(reply).toContain('manager: $2.00');
+    expect(reply).toContain('clone: $0.5000');
+    expect(reply).toContain('distill: $0.5000');
+  });
+
+  it('層で絞れる（4つの口に同じ絞り込みがある）', async () => {
+    const h = harness();
+    await record(h, { layer: 'manager', site: 'session', managerId: 'mgr-1', costUsd: 2 });
+    await record(h, { layer: 'clone', site: 'session', managerId: 'clone', costUsd: 0.5 });
+
+    const onlyClone = await h.call('usage_read', { layer: 'clone' });
+
+    expect(onlyClone).toContain('合計 $0.5000');
+    expect(onlyClone).not.toContain('mgr-1');
+  });
+
+  it('場所で絞れる', async () => {
+    const h = harness();
+    await record(h, { layer: 'clone', site: 'session', managerId: 'clone', costUsd: 2 });
+    await record(h, { layer: 'clone', site: 'distill', managerId: 'clone', costUsd: 0.5 });
+
+    const onlyDistill = await h.call('usage_read', { site: 'distill' });
+
+    expect(onlyDistill).toContain('合計 $0.5000');
+  });
+
+  it('打ち切ったら、続きの取り方をその行に書く（「残り N 件」で終わらせない）', async () => {
+    // **黙って切り捨てない**うえに、**続きへ辿れないことも作らない。**
+    const h = harness();
+    for (let i = 0; i < 20; i += 1) {
+      await record(h, {
+        layer: 'manager',
+        site: 'session',
+        managerId: `mgr-${String(i).padStart(2, '0')}`,
+        costUsd: 20 - i,
+      });
+    }
+
+    const reply = await h.call('usage_read', {});
+
+    expect(reply).toContain('残り 6 件は出していない');
+    expect(reply).toContain('axis="manager", offset=14 で続きが出る');
+  });
+
+  it('axis を指定すると、その軸だけを offset から出す', async () => {
+    const h = harness();
+    for (let i = 0; i < 20; i += 1) {
+      await record(h, {
+        layer: 'manager',
+        site: 'session',
+        managerId: `mgr-${String(i).padStart(2, '0')}`,
+        costUsd: 20 - i,
+      });
+    }
+
+    const reply = await h.call('usage_read', { axis: 'manager', offset: 14 });
+
+    // まとめ表示の先頭14件と続きが重ならない（同じ並びを1か所で決めている）。
+    expect(reply).toContain('mgr-14');
+    expect(reply).toContain('mgr-19');
+    expect(reply).not.toContain('mgr-13');
+    // 他の軸もアカウント全体の残りも出さない（続きを辿るたびに全体が返らない）。
+    expect(reply).not.toContain('日別');
+    expect(reply).not.toContain('アカウント全体の残り');
+  });
+
+  it('offset が範囲外でも黙って空を返さない', async () => {
+    // 空の一覧だけでは「この軸には記録が無い」と「offset が範囲外」を区別できない。
+    const h = harness();
+    await record(h, { layer: 'manager', site: 'session', managerId: 'mgr-1', costUsd: 1 });
+
+    const reply = await h.call('usage_read', { axis: 'manager', offset: 99 });
+
+    expect(reply).toContain('全 1 件で、offset=99 以降は無い');
+  });
+
+  it('層の軸の始点を台帳の始点と混ぜない', async () => {
+    const h = harness();
+    await record(h, { layer: 'manager', site: 'session', managerId: 'mgr-1', costUsd: 1 });
+
+    const reply = await h.call('usage_read', { from: '2020-01-01' });
+
+    expect(reply).toContain('層と場所の軸の始点: 2026-08-14');
+    expect(reply).toContain('既定値であって観測ではない');
   });
 });
 
@@ -1126,6 +1259,9 @@ describe('self_status（いま自分がどう走っているか）', () => {
     };
     const h = harness(() => ({ ...RUNTIME, sdkModel: 'claude-fable-9000' }));
     await h.stores.usage.record({
+      layer: 'manager',
+      site: 'session',
+      accumulation: 'cumulative',
       managerId: 'mgr-7',
       date: '2026-08-14',
       at: '2026-08-14T10:00:00.000Z',
@@ -1143,6 +1279,9 @@ describe('self_status（いま自分がどう走っているか）', () => {
   it('同じモデル id の行が無ければ、そう言う（0 件と嘘をつかない）', async () => {
     const h = harness(() => ({ ...RUNTIME, sdkModel: 'claude-fable-9000' }));
     await h.stores.usage.record({
+      layer: 'manager',
+      site: 'session',
+      accumulation: 'cumulative',
       managerId: 'mgr-1',
       date: '2026-08-14',
       at: '2026-08-14T10:00:00.000Z',

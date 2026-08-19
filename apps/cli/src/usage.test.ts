@@ -13,6 +13,8 @@ function row(over: Partial<UsageRow> & { managerId: string; costUsd: number }): 
   return {
     date: '2026-08-14',
     model: 'claude-opus-4',
+    layer: 'manager',
+    site: 'session',
     updatedAt: '2026-08-14T10:00:00.000Z',
     ...rest,
     totals: { ...ZERO_USAGE, costUsd },
@@ -23,7 +25,9 @@ function aggregate(over: Partial<UsageAggregate>): UsageAggregate {
   return {
     rows: [],
     since: '2026-08-01T00:00:00.000Z',
+    layersSince: '2026-08-01T00:00:00.000Z',
     beforeLedger: false,
+    beforeLayers: false,
     notice: USAGE_ESTIMATE_NOTICE,
     ...over,
   };
@@ -84,5 +88,59 @@ describe('renderUsage', () => {
     expect(text).toContain('マネージャー別:');
     expect(text).toContain('モデル別:');
     expect(text).toContain('合計 $3.00');
+  });
+
+  it('層別（誰が）と場所別（どこで）も出す', () => {
+    // **モデル名では層を見分けられない。** 3行とも同じモデル帯にしてあるのは、
+    // `ALTEROID_CLONE_MODEL` を置いたときに実際に起きる並びだからである。
+    const rows = [
+      row({ managerId: 'clone', model: 'opus', layer: 'clone', site: 'session', costUsd: 1.5 }),
+      row({ managerId: 'clone', model: 'opus', layer: 'clone', site: 'distill', costUsd: 0.5 }),
+      row({ managerId: 'm1', model: 'opus', layer: 'manager', site: 'session', costUsd: 2 }),
+    ];
+    const text = renderUsage(aggregate({ rows }));
+
+    expect(text).toContain('層別（誰が）:');
+    expect(text).toContain('clone: $2.00');
+    expect(text).toContain('manager: $2.00');
+    expect(text).toContain('場所別（どこで）:');
+    expect(text).toContain('session: $3.50');
+    expect(text).toContain('distill: $0.5000');
+  });
+
+  it('層の軸の始点を台帳の始点と混ぜない', () => {
+    // 台帳（#45）より層の軸のほうが後から入った器では、始点が2つある。
+    const text = renderUsage(
+      aggregate({
+        rows: [row({ managerId: 'm1', costUsd: 1 })],
+        since: '2026-08-01T00:00:00.000Z',
+        layersSince: '2026-08-19T00:00:00.000Z',
+      }),
+    );
+
+    expect(text).toContain('台帳の始点: 2026-08-01T00:00:00.000Z');
+    expect(text).toContain('層と場所の軸の始点: 2026-08-19T00:00:00.000Z');
+  });
+
+  it('beforeLayers が真なら、その範囲の層と場所は観測ではないと書く', () => {
+    // ここを黙ると「クローンは使っていなかった」「蒸留は起きていなかった」と読める。
+    const text = renderUsage(
+      aggregate({ rows: [row({ managerId: 'm1', costUsd: 1 })], beforeLayers: true }),
+    );
+
+    expect(text).toContain('既定値であって観測ではない');
+  });
+
+  it('層の軸がまだ1件も無ければ、始点を偽らない', () => {
+    const text = renderUsage(
+      aggregate({
+        rows: [row({ managerId: 'm1', costUsd: 1 })],
+        layersSince: null,
+        beforeLayers: true,
+      }),
+    );
+
+    expect(text).toContain('層と場所の軸はまだ1件も記録していない');
+    expect(text).not.toContain('層と場所の軸の始点: null');
   });
 });

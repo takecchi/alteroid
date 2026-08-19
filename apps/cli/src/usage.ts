@@ -1,6 +1,14 @@
 import { stdout } from 'node:process';
 
-import { formatUsd, summarizeUsage, type UsageAggregate } from '@alteroid/core';
+import {
+  formatUsd,
+  summarizeUsage,
+  usageLayerSchema,
+  usageSiteSchema,
+  type UsageAggregate,
+  type UsageLayer,
+  type UsageSite,
+} from '@alteroid/core';
 
 import { createClient } from './client.js';
 import { resolveTarget } from './target.js';
@@ -20,9 +28,45 @@ export interface UsageOptions {
   from?: string;
   to?: string;
   manager?: string;
+  /**
+   * 誰が（層）・どこで（場所）。**受け口は素の文字列**（コマンドラインから来る）。
+   *
+   * 値の集合は書き写さず、core の `usageLayerSchema` / `usageSiteSchema` に通して
+   * 絞る（{@link narrowUsageAxis}）。**ここに 'clone' | 'manager' と書くと、値が
+   * 増えたときに CLI だけが古くなる。**
+   */
+  layer?: string;
+  site?: string;
+}
+
+/**
+ * `--layer` / `--site` の値を、core の schema で許された値へ絞る。
+ *
+ * **値の集合を CLI に書き写さない。** 持ち主は core の schema1つだけで、ここは
+ * それを通すだけである（値が増えれば自動で追いつく）。許された値の一覧も
+ * `schema.options` から作るので、増えたときに文言だけ古くなることがない。
+ */
+export function narrowUsageAxis<T extends string>(
+  schema: { options: readonly T[]; safeParse: (value: unknown) => { success: boolean; data?: T } },
+  value: string | undefined,
+): { ok: true; value: T | undefined } | { ok: false; allowed: string } {
+  if (value === undefined) return { ok: true, value: undefined };
+  const parsed = schema.safeParse(value);
+  if (!parsed.success) return { ok: false, allowed: schema.options.join(' / ') };
+  return { ok: true, value: parsed.data };
 }
 
 export async function usageCommand(options: UsageOptions): Promise<void> {
+  const layer = narrowUsageAxis<UsageLayer>(usageLayerSchema, options.layer);
+  if (!layer.ok) {
+    stdout.write(`--layer は ${layer.allowed} のどれかを指定してください\n`);
+    return;
+  }
+  const site = narrowUsageAxis<UsageSite>(usageSiteSchema, options.site);
+  if (!site.ok) {
+    stdout.write(`--site は ${site.allowed} のどれかを指定してください\n`);
+    return;
+  }
   const target = await resolveTarget();
   if (target.note !== null) {
     stdout.write(`${target.note}\n`);
@@ -34,6 +78,8 @@ export async function usageCommand(options: UsageOptions): Promise<void> {
       ...(options.from === undefined ? {} : { from: options.from }),
       ...(options.to === undefined ? {} : { to: options.to }),
       ...(options.manager === undefined ? {} : { managerId: options.manager }),
+      ...(layer.value === undefined ? {} : { layer: layer.value }),
+      ...(site.value === undefined ? {} : { site: site.value }),
     },
   });
   if (!response.ok) {
@@ -54,7 +100,7 @@ export async function usageCommand(options: UsageOptions): Promise<void> {
 const AXIS_LIMIT = 20;
 
 export function renderUsage(aggregate: UsageAggregate): string {
-  const { rows, since, beforeLedger, notice } = aggregate;
+  const { rows, since, layersSince, beforeLedger, beforeLayers, notice } = aggregate;
 
   if (since === null) {
     // **`$0.00` と出さない。** まだ台帳に1件も無いのを「使っていない」に見せない。
@@ -110,12 +156,40 @@ export function renderUsage(aggregate: UsageAggregate): string {
         .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
         .map((e) => ({ label: e.model, costUsd: e.totals.costUsd })),
     );
+    // **誰が**・**どこで**。モデル別と別に出す — `ALTEROID_CLONE_MODEL` を置けば
+    // クローンとマネージャーは同じモデル帯に並ぶので、モデル名では層を見分けられない。
+    axis(
+      '層別（誰が）:',
+      [...summary.byLayer]
+        .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
+        .map((e) => ({ label: e.layer, costUsd: e.totals.costUsd })),
+    );
+    axis(
+      '場所別（どこで）:',
+      [...summary.bySite]
+        .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
+        .map((e) => ({ label: e.site, costUsd: e.totals.costUsd })),
+    );
   }
 
   lines.push('', `台帳の始点: ${since}`);
   if (beforeLedger) {
     // **0 と言わない。** 台帳が無かった期間を「使っていない期間」と読ませない。
     lines.push('照会した範囲は台帳の始点より前にかかっている。その分は 0 ではなく「記録が無い」。');
+  }
+  // **層の始点を台帳の始点と混ぜない。** 層の軸のほうが後から入ったので、それより
+  // 前の行の層と場所は既定値であって観測ではない。ここを黙ると「クローンは使って
+  // いなかった」「蒸留は起きていなかった」と読める。
+  lines.push(
+    layersSince === null
+      ? '層と場所の軸はまだ1件も記録していない。'
+      : `層と場所の軸の始点: ${layersSince}`,
+  );
+  if (beforeLayers) {
+    lines.push(
+      '照会した範囲は層と場所の軸の始点より前にかかっている。' +
+        'その分の層と場所は既定値であって観測ではない。',
+    );
   }
   lines.push(notice);
   return lines.join('\n');

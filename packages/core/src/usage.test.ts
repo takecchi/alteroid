@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  foldOneshotUsage,
   foldUsageSnapshot,
+  isSuccessResult,
+  modelUsageOf,
   formatUsd,
   summarizeUsage,
   sumUsageRows,
   type UsageBaseline,
   usageDate,
+  type UsageFold,
   type UsageRow,
   type UsageTotals,
   ZERO_USAGE,
@@ -21,12 +25,30 @@ function totals(over: Partial<UsageTotals>): UsageTotals {
 
 function baseline(models: Record<string, UsageTotals>, over: Partial<UsageBaseline> = {}) {
   return {
+    layer: 'manager',
     managerId: 'm1',
     models,
     updatedAt: AT,
     resets: 0,
     ...over,
   } satisfies UsageBaseline;
+}
+
+/**
+ * 畳んだ結果を次の基準として使う。
+ *
+ * `foldUsageSnapshot` は基準が無いとき `layer` / `managerId` を空で返す契約なので、
+ * 呼び出し側が知っている値をここで入れる（ドライバの `record` と同じ形）。
+ *
+ * **null なら握り潰さずに落とす。** 基準を返さない畳み込みは `oneshot` だけであり、
+ * それを `cumulative` の続きに使うのは「1回で閉じる呼び出しに基準を持たせる」誤りに
+ * あたる。ここで `?? undefined` などに倒すと、その誤りがテストの中で静かに通る。
+ */
+function nextBaseline(fold: UsageFold, over: Partial<UsageBaseline> = {}): UsageBaseline {
+  if (fold.baseline === null) {
+    throw new Error('基準を持たない畳み込み（oneshot）を cumulative の基準に使おうとした');
+  }
+  return { ...fold.baseline, layer: 'manager', managerId: 'm1', ...over };
 }
 
 describe('累積スナップショットを増分へ畳む', () => {
@@ -46,7 +68,7 @@ describe('累積スナップショットを増分へ畳む', () => {
       AT,
     );
     const second = foldUsageSnapshot(
-      { ...first.baseline, managerId: 'm1' },
+      nextBaseline(first),
       { models: { opus: totals({ outputTokens: 250, costUsd: 3 }) } },
       LATER,
     );
@@ -54,7 +76,7 @@ describe('累積スナップショットを増分へ畳む', () => {
 
     // 同じものが再送されても増分は無い（イベント再送に耐える）。
     const again = foldUsageSnapshot(
-      { ...second.baseline, managerId: 'm1' },
+      nextBaseline(second),
       { models: { opus: totals({ outputTokens: 250, costUsd: 3 }) } },
       LATER,
     );
@@ -107,8 +129,8 @@ describe('累積スナップショットを増分へ畳む', () => {
         { models: { opus: totals({ costUsd: 1 }) } },
         LATER,
       );
-      expect(fold.baseline.resets).toBe(3);
-      expect(fold.baseline.lastResetAt).toBe(LATER);
+      expect(nextBaseline(fold).resets).toBe(3);
+      expect(nextBaseline(fold).lastResetAt).toBe(LATER);
     });
 
     it('数え直しが無ければ回数も時刻も動かさない', () => {
@@ -117,8 +139,8 @@ describe('累積スナップショットを増分へ畳む', () => {
         { models: { opus: totals({ costUsd: 2 }) } },
         LATER,
       );
-      expect(fold.baseline.resets).toBe(1);
-      expect(fold.baseline.lastResetAt).toBe(AT);
+      expect(nextBaseline(fold).resets).toBe(1);
+      expect(nextBaseline(fold).lastResetAt).toBe(AT);
     });
 
     it('session id が変わったことも記録に添える（ただし判定には使わない）', () => {
@@ -191,7 +213,7 @@ describe('累積スナップショットを増分へ畳む', () => {
     it('まだ何も記録していなければ、ゼロは普通に通す（基準を作る）', () => {
       const fold = foldUsageSnapshot(null, { models: {} }, AT);
       expect(fold.delta).toEqual({});
-      expect(fold.baseline.models).toEqual({});
+      expect(nextBaseline(fold).models).toEqual({});
     });
   });
 });
@@ -203,6 +225,8 @@ describe('行の合計', () => {
         date: '2026-08-13',
         managerId: 'm1',
         model: 'opus',
+        layer: 'manager',
+        site: 'session',
         totals: totals({ outputTokens: 10, costUsd: 1 }),
         updatedAt: AT,
       },
@@ -210,6 +234,8 @@ describe('行の合計', () => {
         date: '2026-08-14',
         managerId: 'm2',
         model: 'sonnet',
+        layer: 'manager',
+        site: 'session',
         totals: totals({ outputTokens: 5, costUsd: 0.25 }),
         updatedAt: AT,
       },
@@ -228,6 +254,8 @@ describe('3軸の内訳', () => {
       date: '2026-08-13',
       managerId: 'm1',
       model: 'opus',
+      layer: 'manager',
+      site: 'session',
       totals: totals({ costUsd: 1 }),
       updatedAt: AT,
     },
@@ -235,6 +263,8 @@ describe('3軸の内訳', () => {
       date: '2026-08-14',
       managerId: 'm1',
       model: 'sonnet',
+      layer: 'manager',
+      site: 'session',
       totals: totals({ costUsd: 0.25 }),
       updatedAt: AT,
     },
@@ -242,6 +272,8 @@ describe('3軸の内訳', () => {
       date: '2026-08-14',
       managerId: 'm2',
       model: 'opus',
+      layer: 'manager',
+      site: 'session',
       totals: totals({ costUsd: 2 }),
       updatedAt: AT,
     },
@@ -273,6 +305,168 @@ describe('3軸の内訳', () => {
     const summary = summarizeUsage([]);
     expect(summary.total).toEqual(ZERO_USAGE);
     expect(summary.byDate).toEqual([]);
+  });
+});
+
+describe('層と場所の内訳', () => {
+  const rows: UsageRow[] = [
+    // 同じ日・同じ actor・同じモデルでも、層と場所が違えば別の行である。
+    // （`usageRowSchema` の「層と場所を鍵から外さないこと」）
+    {
+      date: '2026-08-14',
+      managerId: 'clone',
+      model: 'opus',
+      layer: 'clone',
+      site: 'session',
+      totals: totals({ costUsd: 1.5 }),
+      updatedAt: AT,
+    },
+    {
+      date: '2026-08-14',
+      managerId: 'clone',
+      model: 'opus',
+      layer: 'clone',
+      site: 'distill',
+      totals: totals({ costUsd: 0.5 }),
+      updatedAt: AT,
+    },
+    {
+      date: '2026-08-14',
+      managerId: 'm1',
+      model: 'opus',
+      layer: 'manager',
+      site: 'session',
+      totals: totals({ costUsd: 2 }),
+      updatedAt: AT,
+    },
+  ];
+
+  it('誰が（層）と どこで（場所）の2軸で引ける', () => {
+    const summary = summarizeUsage(rows);
+    expect(summary.byLayer).toEqual([
+      { layer: 'clone', totals: totals({ costUsd: 2 }) },
+      { layer: 'manager', totals: totals({ costUsd: 2 }) },
+    ]);
+    expect(summary.bySite).toEqual([
+      { site: 'distill', totals: totals({ costUsd: 0.5 }) },
+      { site: 'session', totals: totals({ costUsd: 3.5 }) },
+    ]);
+  });
+
+  it('モデル名では層を見分けられない（だから層の軸が要る）', () => {
+    // 3行とも `opus` である。`ALTEROID_CLONE_MODEL` を置けばクローンとマネージャーは
+    // 同じモデル帯に並ぶので、モデル軸だけでは「誰が使ったか」に答えられない。
+    const summary = summarizeUsage(rows);
+    expect(summary.byModel).toEqual([{ model: 'opus', totals: totals({ costUsd: 4 }) }]);
+    expect(summary.byLayer.map((entry) => entry.layer)).toEqual(['clone', 'manager']);
+  });
+
+  it('記録の無い層・場所を 0 で補わない', () => {
+    // 「使っていない」と「記録が無い」は別である。行に現れなかった値は一覧に出ない。
+    const summary = summarizeUsage(rows.filter((row) => row.layer === 'clone'));
+    expect(summary.byLayer).toEqual([{ layer: 'clone', totals: totals({ costUsd: 2 }) }]);
+    expect(summary.bySite.map((entry) => entry.site)).toEqual(['distill', 'session']);
+
+    const onlySession = summarizeUsage(rows.filter((row) => row.site === 'session'));
+    expect(onlySession.bySite).toEqual([{ site: 'session', totals: totals({ costUsd: 3.5 }) }]);
+  });
+
+  it('層でも場所でも、足し上げれば合計に一致する（口ごとに食い違わない）', () => {
+    const summary = summarizeUsage(rows);
+    for (const axis of [summary.byLayer, summary.bySite]) {
+      const sum = axis.reduce((acc, entry) => acc + entry.totals.costUsd, 0);
+      expect(sum).toBeCloseTo(summary.total.costUsd, 10);
+    }
+  });
+});
+
+describe('1回で閉じる query() の畳み込み（oneshot）', () => {
+  it('基準を持たない（比べる相手がそもそも無い）', () => {
+    const fold = foldOneshotUsage({ models: { opus: totals({ costUsd: 0.05 }) } });
+    expect(fold.baseline).toBeNull();
+    expect(fold.reset).toBeUndefined();
+  });
+
+  it('スナップショットの全量がそのまま増分になる', () => {
+    const fold = foldOneshotUsage({
+      models: { opus: totals({ outputTokens: 120, costUsd: 0.05 }) },
+    });
+    expect(fold.delta).toEqual({ opus: totals({ outputTokens: 120, costUsd: 0.05 }) });
+  });
+
+  it('高くついた回が黙って縮まない（基準との差にしない）', () => {
+    // ここに基準を持たせると壊れ方が片側だけになる — 前回 $0.05 で今回 $0.08 の回は
+    // 差の $0.03 しか積まれず（目減り）、前回 $0.05 で今回 $0.02 の回は減少なので
+    // 数え直しとして全量が積まれる。**高くついた回だけが黙って縮む。**
+    const cheap = foldOneshotUsage({ models: { opus: totals({ costUsd: 0.05 }) } });
+    const expensive = foldOneshotUsage({ models: { opus: totals({ costUsd: 0.08 }) } });
+    expect(cheap.delta).toEqual({ opus: totals({ costUsd: 0.05 }) });
+    expect(expensive.delta).toEqual({ opus: totals({ costUsd: 0.08 }) });
+  });
+
+  it('全部ゼロのモデルは行を作らない（クラッシュのゼロ値）', () => {
+    const fold = foldOneshotUsage({
+      models: { opus: { ...ZERO_USAGE }, sonnet: totals({ costUsd: 0.01 }) },
+    });
+    expect(Object.keys(fold.delta)).toEqual(['sonnet']);
+  });
+});
+
+describe('SDK の result から消費を読む', () => {
+  it('成功した result だけを通す', () => {
+    // SDK: crash/startup-error results may carry zeroed values。ゼロを通すと基準が
+    // 下がり、次に届いた本物の累積が丸ごと増分になる。
+    expect(isSuccessResult({ subtype: 'success' })).toBe(true);
+    expect(isSuccessResult({ subtype: 'error_during_execution' })).toBe(false);
+    expect(isSuccessResult({})).toBe(false);
+  });
+
+  it('modelUsage を読む（result.usage は読まない）', () => {
+    // `usage` は MAIN AGENT LOOP ONLY。これを採ると作業者の消費が丸ごと落ちる。
+    const models = modelUsageOf({
+      usage: { inputTokens: 999, outputTokens: 999 },
+      modelUsage: {
+        'claude-opus-5': {
+          inputTokens: 10,
+          outputTokens: 20,
+          cacheReadInputTokens: 3,
+          cacheCreationInputTokens: 4,
+          webSearchRequests: 1,
+          costUSD: 0.5,
+        },
+      },
+    });
+    expect(models).toEqual({
+      'claude-opus-5': {
+        inputTokens: 10,
+        outputTokens: 20,
+        cacheReadInputTokens: 3,
+        cacheCreationInputTokens: 4,
+        webSearchRequests: 1,
+        costUsd: 0.5,
+      },
+    });
+  });
+
+  it('金額の綴りは costUSD（大文字）である', () => {
+    // ここを取り違えると費用だけが 0 で積まれ、その層が「安い」と読める。
+    const wrong = modelUsageOf({ modelUsage: { opus: { costUsd: 0.5 } } });
+    expect(wrong?.opus?.costUsd).toBe(0);
+    const right = modelUsageOf({ modelUsage: { opus: { costUSD: 0.5 } } });
+    expect(right?.opus?.costUsd).toBe(0.5);
+  });
+
+  it('モデルの仕様（contextWindow / maxOutputTokens）は写さない', () => {
+    // 消費量ではないので、台帳に入れると集計で足されうる。
+    const models = modelUsageOf({
+      modelUsage: { opus: { contextWindow: 200000, maxOutputTokens: 64000, costUSD: 0.1 } },
+    });
+    expect(models?.opus).toEqual({ ...ZERO_USAGE, costUsd: 0.1 });
+  });
+
+  it('modelUsage が無ければ undefined（0 の行を作らない）', () => {
+    expect(modelUsageOf({})).toBeUndefined();
+    expect(modelUsageOf({ modelUsage: null })).toBeUndefined();
   });
 });
 

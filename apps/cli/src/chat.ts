@@ -1,12 +1,18 @@
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 
-import type { Commitment } from '@alteroid/core';
+import {
+  usageLayerSchema,
+  usageSiteSchema,
+  type Commitment,
+  type UsageLayer,
+  type UsageSite,
+} from '@alteroid/core';
 import type { InferResponseType } from 'hono/client';
 
 import { createClient, type DaemonClient } from './client.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
-import { renderUsage } from './usage.js';
+import { narrowUsageAxis, renderUsage } from './usage.js';
 
 /**
  * `alteroid chat` — クローンとの会話。
@@ -605,8 +611,12 @@ export async function runSlashCommand(
      * （CLI 本体の `alteroid usage` と表示を揃えるため）。
      */
     case '/usage': {
-      const filters = parseUsageFilters(rest);
-      const response = await client.usage.$get({ query: filters });
+      const parsed = parseUsageFilters(rest);
+      if (!parsed.ok) {
+        stdout.write(`${parsed.message}\n`);
+        return 'ok';
+      }
+      const response = await client.usage.$get({ query: parsed.filters });
       if (!response.ok) {
         stdout.write('利用状況を読めませんでした（from=/to= の日付の形を確かめてください）\n');
         return 'ok';
@@ -755,17 +765,45 @@ function takeWhen(tokens: string[]): { spec: ScheduleSpecInput; request: string 
  * 順不同・省略可。知らない key は無視する（typo で無言のまま無視されるより、
  * 全期間を見せて「絞れていない」と気づける形にする）。
  */
-function parseUsageFilters(tokens: string[]): { from?: string; to?: string; managerId?: string } {
-  const filters: { from?: string; to?: string; managerId?: string } = {};
+interface UsageFilters {
+  from?: string;
+  to?: string;
+  managerId?: string;
+  layer?: UsageLayer;
+  site?: UsageSite;
+}
+
+type ParsedUsageFilters = { ok: true; filters: UsageFilters } | { ok: false; message: string };
+
+/**
+ * `/usage from=… to=… manager=… layer=… site=…` を解く。
+ *
+ * **層と場所の値の集合は core の schema だけが持つ**（`narrowUsageAxis`）。chat 側に
+ * 書き写すと、値が増えたときにここだけ古くなる。読めない値は 400 を待たずにその場で
+ * 「どれを指定すればよいか」を返す。
+ */
+function parseUsageFilters(tokens: string[]): ParsedUsageFilters {
+  const raw: Record<string, string> = {};
   for (const token of tokens) {
     const [key, ...valueParts] = token.split('=');
     const value = valueParts.join('=');
-    if (value.length === 0) continue;
-    if (key === 'from') filters.from = value;
-    else if (key === 'to') filters.to = value;
-    else if (key === 'manager') filters.managerId = value;
+    if (value.length === 0 || key === undefined) continue;
+    raw[key] = value;
   }
-  return filters;
+  const layer = narrowUsageAxis<UsageLayer>(usageLayerSchema, raw.layer);
+  if (!layer.ok) return { ok: false, message: `layer= は ${layer.allowed} のどれか` };
+  const site = narrowUsageAxis<UsageSite>(usageSiteSchema, raw.site);
+  if (!site.ok) return { ok: false, message: `site= は ${site.allowed} のどれか` };
+  return {
+    ok: true,
+    filters: {
+      ...(raw.from === undefined ? {} : { from: raw.from }),
+      ...(raw.to === undefined ? {} : { to: raw.to }),
+      ...(raw.manager === undefined ? {} : { managerId: raw.manager }),
+      ...(layer.value === undefined ? {} : { layer: layer.value }),
+      ...(site.value === undefined ? {} : { site: site.value }),
+    },
+  };
 }
 
 /** 番号（直前の一覧の並び）でも id そのままでも指せるようにする。 */

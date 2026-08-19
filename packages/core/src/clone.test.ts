@@ -12,6 +12,7 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import { createScheduler } from './schedule.js';
 import type { ChatStreamEvent } from './schema.js';
 import type { Stores } from './store.js';
+import { CLONE_ACTOR_ID } from './usage.js';
 import { createCloneMcpServer, createCloneTools } from './tools.js';
 import type { ToolContext } from './tools.js';
 import {
@@ -34,12 +35,27 @@ interface FakeCall {
 
 function fakeSdk(
   reply: (input: string) => string = () => 'わかった',
-  options: { delayMs?: number; failWith?: string } = {},
+  options: {
+    delayMs?: number;
+    failWith?: string;
+    /**
+     * `result` に載せる `modelUsage`。**`query()` 呼び出しの番号で変える形にして
+     * ある。**
+     *
+     * 固定値を1つ返すスタブにすると、本セッションと蒸留のサイドクエリが同じ値に
+     * なり、「どちらの分がどこへ積まれたか」を問えないまま緑になる（AGENTS.md
+     * 「固定値を返すスタブはテストを緑にしたまま分岐を殺す」）。
+     */
+    modelUsage?: (callIndex: number) => Record<string, unknown> | undefined;
+    /** `result` の `subtype`。既定は `'success'`。 */
+    resultSubtype?: string;
+  } = {},
 ) {
   const calls: FakeCall[] = [];
 
   const fn = ((params: { prompt: unknown; options?: Options }) => {
     const call: FakeCall = { options: params.options ?? {}, inputs: [] };
+    const callIndex = calls.length;
     calls.push(call);
 
     async function* generate(): AsyncGenerator<SDKMessage, void> {
@@ -84,12 +100,14 @@ function fakeSdk(
         session_id: 'sess-fake',
         uuid: 'uuid-assistant',
       } as unknown as SDKMessage;
+      const modelUsage = options.modelUsage?.(callIndex);
       yield {
         type: 'result',
-        subtype: 'success',
+        subtype: options.resultSubtype ?? 'success',
         result: text,
         session_id: 'sess-fake',
         uuid: 'uuid-result',
+        ...(modelUsage === undefined ? {} : { modelUsage }),
       } as unknown as SDKMessage;
     }
 
@@ -113,7 +131,7 @@ interface Setup {
 function setup(
   reply?: (input: string) => string,
   stores: Stores = createMemoryStores(),
-  sdkOptions: { delayMs?: number; failWith?: string } = {},
+  sdkOptions: Parameters<typeof fakeSdk>[1] = {},
   // 既定は空。手元に ALTEROID_CLONE_MODEL が置いてあるかどうかでテストの結果を
   // 変えない（不変条件の検証が環境に左右されたら意味がない）。
   env: NodeJS.ProcessEnv = {},
@@ -2220,6 +2238,178 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
         { timeout: 3000 },
       )
       .toBe(1);
+
+    await s.clone.stop();
+  });
+});
+
+/**
+ * クローン自身の消費を台帳へ載せる。
+ *
+ * **ここが無かったことが依頼の出発点である。** `clone.ts` の `case 'result'` は
+ * 本文を日誌へ書くだけで `modelUsage` を1バイトも読んでいなかった。人間は
+ * `claude.ai/settings/usage` で自分の消費を見られるのだから、その写像である
+ * クローンが自分の分を読めないのは能力の削除である（north_star 禁止1）。
+ */
+describe('クローンの消費が台帳に載る（誰が・どこで）', () => {
+  /** モデル id を1つだけ持つ `modelUsage`。費用だけを動かす。 */
+  function usage(model: string, costUsd: number) {
+    return {
+      [model]: {
+        inputTokens: 10,
+        outputTokens: 20,
+        cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0,
+        webSearchRequests: 0,
+        // SDK 側の綴りは大文字（`costUSD`）。ここを小文字で書くと 0 が積まれる。
+        costUSD: costUsd,
+      },
+    };
+  }
+
+  /** `PreCompact` フックを実際に叩いて蒸留のサイドクエリを走らせる。 */
+  async function firePreCompact(main: FakeCall): Promise<void> {
+    const dir = await mkdtemp(join(tmpdir(), 'alteroid-clone-usage-'));
+    try {
+      const transcriptPath = join(dir, 'transcript.jsonl');
+      await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
+      const hook = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
+      if (hook === undefined) throw new Error('PreCompact フックが登録されていない');
+      await hook({ session_id: 'sess-fake', transcript_path: transcriptPath } as never, undefined, {
+        signal: new AbortController().signal,
+      } as never);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  it('本セッションの分が layer=clone / site=session として載る', async () => {
+    const s = setup(undefined, createMemoryStores(), {
+      modelUsage: () => usage('claude-fable-5', 0.5),
+    });
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const { rows } = await s.stores.usage.aggregate({});
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.layer).toBe('clone');
+    expect(rows[0]?.site).toBe('session');
+    // actor は予約 id。マネージャーの id（`mgr-…`）とは衝突しない。
+    expect(rows[0]?.managerId).toBe(CLONE_ACTOR_ID);
+    expect(CLONE_ACTOR_ID.startsWith('mgr-')).toBe(false);
+    expect(rows[0]?.totals.costUsd).toBe(0.5);
+
+    await s.clone.stop();
+  });
+
+  it('モデル id が opus でも層は clone のままである（モデル名で層を代用していない）', async () => {
+    // **これが依頼の中心にある問題である。** `ALTEROID_CLONE_MODEL=opus` を置くと
+    // クローンとマネージャーは台帳で同じ `model` に並ぶ。モデル名を層の代わりに
+    // 使っていれば、ここでクローンの分が「マネージャーの分」として読める。
+    const s = setup(
+      undefined,
+      createMemoryStores(),
+      { modelUsage: () => usage('claude-opus-5', 3) },
+      { [CLONE_MODEL_ENV_KEY]: 'opus' },
+    );
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const { rows } = await s.stores.usage.aggregate({});
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.model).toBe('claude-opus-5');
+    expect(rows[0]?.layer).toBe('clone');
+
+    await s.clone.stop();
+  });
+
+  it('要約の蒸留の分が site=distill として別に載る（本体の分と混ざらない）', async () => {
+    // 呼び出し 0 が本セッション、呼び出し 1 が蒸留のサイドクエリ。**別の値を
+    // 返す**ことで、どちらの分がどこへ積まれたかを問える。
+    const s = setup(undefined, createMemoryStores(), {
+      modelUsage: (index) =>
+        index === 0 ? usage('claude-fable-5', 1) : usage('claude-fable-5', 0.25),
+    });
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+    await firePreCompact(s.calls[0] as FakeCall);
+
+    const { rows } = await s.stores.usage.aggregate({});
+    expect(rows.map((r) => [r.site, r.totals.costUsd]).sort()).toEqual([
+      ['distill', 0.25],
+      ['session', 1],
+    ]);
+    // どちらもクローンの分である（「誰が」は同じで「どこで」が違う）。
+    expect(rows.every((r) => r.layer === 'clone')).toBe(true);
+    expect(rows.every((r) => r.managerId === CLONE_ACTOR_ID)).toBe(true);
+
+    await s.clone.stop();
+  });
+
+  it('蒸留を2回走らせても、高くついた回が目減りしない（基準を持たない）', async () => {
+    // 蒸留は毎回新しい `query()` で、`result` はその1回の総量そのものである。
+    // 基準を持たせると 2回目は差の $0.03 しか積まれない（$0.08 の回が黙って縮む）。
+    const distillCosts = [0.05, 0.08];
+    let distillIndex = 0;
+    const s = setup(undefined, createMemoryStores(), {
+      modelUsage: (index) => {
+        if (index === 0) return undefined; // 本セッションの分は数えない（この項の対象外）
+        const cost = distillCosts[distillIndex] ?? 0;
+        distillIndex += 1;
+        return usage('claude-fable-5', cost);
+      },
+    });
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+    const main = s.calls[0] as FakeCall;
+    await firePreCompact(main);
+    await firePreCompact(main);
+
+    const { rows } = await s.stores.usage.aggregate({ site: 'distill' });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.totals.costUsd).toBeCloseTo(0.13, 10);
+
+    await s.clone.stop();
+  });
+
+  it('失敗した result は台帳へ入らない（ゼロで基準を下げない）', async () => {
+    // SDK は `crash/startup-error results may carry zeroed values` と言っている。
+    // ゼロを「累積が 0 になった」として通すと基準が下がり、次に届いた本物の累積が
+    // 丸ごと増分になる ＝ 記録済みの分がもう一度積まれる。
+    const s = setup(undefined, createMemoryStores(), {
+      resultSubtype: 'error_during_execution',
+      modelUsage: () => usage('claude-fable-5', 0),
+    });
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const aggregate = await s.stores.usage.aggregate({});
+    expect(aggregate.rows).toEqual([]);
+    // 台帳そのものが始まっていない（1件も record していない）。
+    expect(aggregate.since).toBeNull();
+
+    await s.clone.stop();
+  });
+
+  it('台帳へ積めなくてもターンは止まらない（黙って消さないが、殺しもしない）', async () => {
+    const stores = createMemoryStores();
+    stores.usage.record = () => Promise.reject(new Error('台帳が書けない'));
+
+    const s = setup(undefined, stores, { modelUsage: () => usage('claude-fable-5', 1) });
+
+    const stderr = await captureStderr(async () => {
+      s.clone.post(humanMessage('やあ'));
+      // done が来る＝ターンが完走している
+      await waitForDone(s.events);
+    });
+
+    // 跡は残る（「日誌に無い」が「起きなかった」と読めないように）
+    expect(stderr.join('')).toContain('利用状況の台帳');
 
     await s.clone.stop();
   });

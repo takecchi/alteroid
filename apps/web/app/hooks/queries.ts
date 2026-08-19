@@ -8,12 +8,18 @@
 import useSWR from 'swr';
 
 import { unwrap, useApi } from '~/lib/api';
-import type { JournalEntry, JournalEntryType } from '~/lib/types';
+import type { JournalEntry, JournalEntryType, UsageLayer, UsageSite } from '~/lib/types';
 
 export interface UsageQuery {
   from?: string;
   to?: string;
   managerId?: string;
+  /**
+   * 誰が（層）・どこで（場所）。**4つの口すべてに同じ絞り込みを置く**ため、
+   * 画面にも API・CLI・クローンの道具と同じものがある（PRD「インターフェース」）。
+   */
+  layer?: UsageLayer;
+  site?: UsageSite;
 }
 
 /**
@@ -157,7 +163,7 @@ export function useSchedule() {
  */
 export function useUsage(query: UsageQuery = {}) {
   const api = useApi();
-  return useSWR(KEY.usage(query), ({ from, to, managerId }) =>
+  return useSWR(KEY.usage(query), ({ from, to, managerId, layer, site }) =>
     api.api
       .GET('/usage', {
         params: {
@@ -165,6 +171,8 @@ export function useUsage(query: UsageQuery = {}) {
             ...(from === undefined ? {} : { from }),
             ...(to === undefined ? {} : { to }),
             ...(managerId === undefined ? {} : { managerId }),
+            ...(layer === undefined ? {} : { layer }),
+            ...(site === undefined ? {} : { site }),
           },
         },
       })

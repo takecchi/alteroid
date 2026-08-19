@@ -137,6 +137,23 @@ export function Input({ className, ...props }: React.InputHTMLAttributes<HTMLInp
   );
 }
 
+/**
+ * 選択肢が決まっている絞り込み用。**`Input` と同じ見た目に揃えてある**
+ * （並べたときに片方だけ浮くと、同じ役割のものに見えなくなる）。
+ */
+export function Select({ className, ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <select
+      className={cn(
+        'h-9 w-full rounded-md border border-border bg-bg px-3 text-sm',
+        'focus:outline-none focus-visible:border-accent',
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
 export function Spinner({ label = '読み込み中' }: { label?: string }) {
   return (
     <div className="flex items-center gap-2 p-6 text-sm text-muted">

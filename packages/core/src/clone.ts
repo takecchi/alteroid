@@ -50,6 +50,14 @@ import {
   type ToolContext,
 } from './tools.js';
 import type { AccountUsageState } from './usage-snapshot.js';
+import {
+  CLONE_ACTOR_ID,
+  isSuccessResult,
+  modelUsageOf,
+  usageDate,
+  type UsageSite,
+  type UsageSnapshot,
+} from './usage.js';
 
 /**
  * クローン = デーモン内の長寿命 SDK セッション1本（docs/architecture.md）。
@@ -1674,7 +1682,75 @@ class Clone implements CloneHost {
     });
 
     for await (const message of side) {
-      if (message.type === 'result') break;
+      if (message.type !== 'result') continue;
+      // **このサイドクエリの `result` を読み捨てないこと。** ここが「要約のたびに
+      // 払っている蒸留の費用」の唯一の観測点である。別の `query()` 呼び出しなので
+      // 累積は1回で閉じており（SDK: 「during this query() call」）、値はこの1回の
+      // 総量そのものである ＝ 基準を持たせない（`usage.ts` の `foldOneshotUsage`）。
+      //
+      // **これは「要約そのものの費用」ではない。** 要約を作る推論は本セッションの
+      // `modelUsage` に合算されて分離できない（`usage.ts` の `usageSiteSchema`）。
+      // 混ぜて名乗ると、取れていないものを取れたことにする。
+      await this.#recordUsage(message, 'distill', 'oneshot');
+      break;
+    }
+  }
+
+  /**
+   * `result` に載っている消費を台帳へ積む。
+   *
+   * **モデル id で層を代用しない。** `ALTEROID_CLONE_MODEL` を置けばクローンも
+   * マネージャーと同じ opus で走るので、台帳では同じ `model` に並ぶ。層は
+   * `layer` の列で言う（`usage.ts` の `usageLayerSchema`）。
+   *
+   * **台帳に積めないことでクローンのターンを止めない。ただし黙って消さない**
+   * （`manager.ts` の `case 'usage'` と同じ作法）。
+   */
+  async #recordUsage(
+    message: SDKMessage,
+    site: UsageSite,
+    accumulation: 'cumulative' | 'oneshot',
+  ): Promise<void> {
+    // 成功した result だけを通す。理由は `usage.ts` の `isSuccessResult`。
+    if (!isSuccessResult(message)) return;
+    const models = modelUsageOf(message);
+    if (models === undefined) return;
+
+    const sessionId = (message as { session_id?: unknown }).session_id;
+    const snapshot: UsageSnapshot = {
+      models,
+      ...(typeof sessionId === 'string' ? { sessionId } : {}),
+    };
+
+    const at = new Date();
+    try {
+      const fold = await this.#stores.usage.record({
+        layer: 'clone',
+        site,
+        managerId: CLONE_ACTOR_ID,
+        date: usageDate(at),
+        at: at.toISOString(),
+        snapshot,
+        accumulation,
+      });
+
+      // **数え直しを黙って通さない。** resume や mid-session の `/clear` で累積が
+      // 0 に戻るのは正常だが、記録が無いと後から「なぜ集計が飛んでいるか」を誰も
+      // 辿れない（PRD「可観測性」）。クローンは resume する層なので必ず起きる。
+      if (fold.reset !== undefined) {
+        await this.#journal({
+          type: 'exchange',
+          with: 'self',
+          role: 'outbound',
+          text:
+            `自分の消費の累積が数え直された（${fold.reset.fromCostUsd.toFixed(4)} → ` +
+            `${fold.reset.toCostUsd.toFixed(4)}）。resume か /clear で SDK 側の累積が ` +
+            '0 から始まったため。記録済みの分は保持している。',
+        });
+      }
+    } catch (error) {
+      // 跡がどこにも無いと「日誌に無い」が「起きなかった」と読める。
+      noteDroppedRecord('利用状況の台帳', `layer=clone site=${site}`, error);
     }
   }
 
@@ -1758,6 +1834,13 @@ class Clone implements CloneHost {
       }
 
       case 'result': {
+        // **クローンの消費も台帳へ載せる。** ここを渡していなかったのは設計判断
+        // ではなく抜けで（#45 の本文にも `usage.ts` にも「クローンの分は記録
+        // しない」は無い）、その結果クローンは自分がいくら使ったかを読めなかった。
+        // 人間は `claude.ai/settings/usage` で見られるので、これは能力の削除に
+        // なっていた（north_star 禁止1）。
+        await this.#recordUsage(message, 'session', 'cumulative');
+
         const turn = this.#turn;
         if (turn && turn.text.trim().length > 0) {
           // 内部ターン（蒸留・自律）も必ず残す。見えない層を作らない。

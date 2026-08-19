@@ -299,10 +299,32 @@ export const usageDaily = pgTable(
       .default(0),
     webSearchRequests: bigint('web_search_requests', { mode: 'number' }).notNull().default(0),
     costUsd: doublePrecision('cost_usd').notNull().default(0),
+    /**
+     * **誰が**使ったか（`clone` / `manager`）。既定は `manager` である。
+     *
+     * この列より前に入っていた行はすべてマネージャーの分なので、既定が真になる
+     * （クローンの分は1バイトも記録されていなかった）。**ただしその既定は観測
+     * ではない** — どこからが観測かは `usage_ledger.layered_at` が持つ。
+     */
+    layer: text('layer').notNull().default('manager'),
+    /** **どこで**使ったか（`session` / `distill`）。既定は `session`。 */
+    site: text('site').notNull().default('session'),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
   },
   (table) => [
-    primaryKey({ columns: [table.date, table.managerId, table.model] }),
+    // **主キーではなく一意索引で持つ。** 層と場所は後から足した列で、既にある DB の
+    // 3列 primary key を差し替える必要がある。`create unique index if not exists` は
+    // 2回目以降が本当の no-op になるのに対し、`drop constraint` + `add primary key`
+    // はデーモンが起動するたびに索引を作り直す（毎回 ACCESS EXCLUSIVE を取る）。
+    // 意味は同じである — 5列すべて not null なので、一意索引は主キーと同じ強さで
+    // 重複を拒む。`on conflict` の推論もこの索引が受ける。
+    uniqueIndex('usage_daily_key_idx').on(
+      table.date,
+      table.managerId,
+      table.model,
+      table.layer,
+      table.site,
+    ),
     // pk の先頭が date なので、date だけの絞り込みは pk の索引がそのまま前方一致で
     // 効く（別に (date) 索引を足すのは冗長）。(manager_id, date) は pk に無い並びで、
     // 「このマネージャーが期間中いくら使ったか」を date を先に決めずに引く経路になる
@@ -312,14 +334,29 @@ export const usageDaily = pgTable(
 );
 
 /** マネージャー1本につき1行。前回読んだ累積スナップショット（差分の基準）。 */
-export const usageBaseline = pgTable('usage_baseline', {
-  managerId: text('manager_id').primaryKey(),
-  sessionId: text('session_id'),
-  models: jsonb('models').notNull(),
-  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
-  resets: integer('resets').notNull().default(0),
-  lastResetAt: timestamp('last_reset_at', { withTimezone: true, mode: 'date' }),
-});
+export const usageBaseline = pgTable(
+  'usage_baseline',
+  {
+    managerId: text('manager_id').notNull(),
+    /**
+     * どの層の累積か。既定は `manager`（この列より前の基準はすべてマネージャーの分）。
+     *
+     * **actor の id だけを鍵にしないこと。** 層をまたいで同じ id が来たときに、
+     * 別の累積が1つの基準を共有して差分がまるごと嘘になる。
+     */
+    layer: text('layer').notNull().default('manager'),
+    sessionId: text('session_id'),
+    models: jsonb('models').notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+    resets: integer('resets').notNull().default(0),
+    lastResetAt: timestamp('last_reset_at', { withTimezone: true, mode: 'date' }),
+  },
+  // `usage_daily` と同じ理由で一意索引（migrate.ts の「鍵を差し替える」参照）。
+  // 既定 `'manager'` が入るので、既にある基準はそのまま同じ主体として引ける
+  // （引けなくなると「基準が無い」と読まれ、次の1回で累積の全量が積まれる
+  // ＝ 記録済みの分の二重計上になる）。
+  (table) => [uniqueIndex('usage_baseline_key_idx').on(table.layer, table.managerId)],
+);
 
 /**
  * 台帳が記録を始めた時刻。**単一行**（`id` は常に `'default'`）。
@@ -331,6 +368,15 @@ export const usageBaseline = pgTable('usage_baseline', {
 export const usageLedger = pgTable('usage_ledger', {
   id: text('id').primaryKey(),
   startedAt: timestamp('started_at', { withTimezone: true, mode: 'date' }).notNull(),
+  /**
+   * **層と場所の軸**が記録を始めた時刻。まだ一度も記録していなければ null。
+   *
+   * `started_at` と分けて持つ。台帳（#45）より層の軸のほうが後から入ったので、
+   * その間の行の `layer` / `site` は既定値であって観測ではない。1つにすると、
+   * 層を足す前の期間が「クローンは使っていなかった」「蒸留は起きていなかった」と
+   * 読める（`aggregate` はここから `beforeLayers` を返す）。
+   */
+  layeredAt: timestamp('layered_at', { withTimezone: true, mode: 'date' }),
 });
 
 /** 進行中のログイン試行（CLI とブラウザの往復を繋ぐ一時的な行）。 */

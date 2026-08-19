@@ -42,9 +42,18 @@ export type RunnerSummary = Ok<paths['/runners']['get']>['runners'][number];
 export type Health = Ok<paths['/health']['get']>;
 
 /**
- * 利用状況。**`rows` / `since` / `beforeLedger` / `notice` を1つも落とさないこと。**
- * 台帳が無かった期間を 0 に見せない・まだ記録が無いのを $0.00 に見せない、の
- * どちらも、この3つを画面が読んで初めて言える（`apps/cli/src/usage.ts` と同じ形）。
+ * 利用状況。**`rows` / `since` / `layersSince` / `beforeLedger` / `beforeLayers` /
+ * `notice` を1つも落とさないこと。**
+ *
+ * 台帳が無かった期間を 0 に見せない・まだ記録が無いのを $0.00 に見せない・層と
+ * 場所が既定値でしかない期間を観測に見せない。どれも、これらを画面が読んで初めて
+ * 言える（`apps/cli/src/usage.ts` と同じ形）。
  */
 export type UsageAggregate = Ok<paths['/usage']['get']>;
 export type UsageRow = UsageAggregate['rows'][number];
+/**
+ * 層と場所の値。**API の型から導く**（画面に書き写さない）。
+ * 選択肢の並びは `@alteroid/core/usage` の `USAGE_LAYERS` / `USAGE_SITES` が持つ。
+ */
+export type UsageLayer = UsageRow['layer'];
+export type UsageSite = UsageRow['site'];

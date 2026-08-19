@@ -1,10 +1,10 @@
-import { formatUsd, summarizeUsage } from '@alteroid/core/usage';
+import { formatUsd, summarizeUsage, USAGE_LAYERS, USAGE_SITES } from '@alteroid/core/usage';
 import { useState } from 'react';
 
 import { Page } from '~/components/page';
-import { Badge, Card, CardHeader, Empty, ErrorNote, Input, Spinner } from '~/components/ui';
+import { Badge, Card, CardHeader, Empty, ErrorNote, Input, Select, Spinner } from '~/components/ui';
 import { useUsage, type UsageQuery } from '~/hooks/queries';
-import type { UsageRow } from '~/lib/types';
+import type { UsageLayer, UsageRow, UsageSite } from '~/lib/types';
 
 /**
  * `/usage` — alteroid が使った分（トークンと費用）。
@@ -24,11 +24,15 @@ export default function Usage() {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [managerId, setManagerId] = useState('');
+  const [layer, setLayer] = useState<UsageLayer | ''>('');
+  const [site, setSite] = useState<UsageSite | ''>('');
 
   const query: UsageQuery = {
     ...(from === '' ? {} : { from }),
     ...(to === '' ? {} : { to }),
     ...(managerId === '' ? {} : { managerId }),
+    ...(layer === '' ? {} : { layer }),
+    ...(site === '' ? {} : { site }),
   };
   const { data, error, isLoading } = useUsage(query);
 
@@ -55,6 +59,38 @@ export default function Usage() {
               onChange={(event) => setManagerId(event.target.value)}
             />
           </label>
+          {/*
+            **選択肢は core の一覧から作る**（`USAGE_LAYERS` / `USAGE_SITES`）。
+            画面に値を書き写すと、値が増えたときにここだけ古くなる。
+          */}
+          <label className="flex flex-col gap-1 text-xs text-muted">
+            layer（誰が）
+            <Select
+              value={layer}
+              onChange={(event) => setLayer(event.target.value as UsageLayer | '')}
+            >
+              <option value="">すべて</option>
+              {USAGE_LAYERS.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </Select>
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-muted">
+            site（どこで）
+            <Select
+              value={site}
+              onChange={(event) => setSite(event.target.value as UsageSite | '')}
+            >
+              <option value="">すべて</option>
+              {USAGE_SITES.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </Select>
+          </label>
         </div>
       </Card>
 
@@ -73,7 +109,9 @@ export default function Usage() {
         <UsageBody
           rows={data.rows}
           since={data.since}
+          layersSince={data.layersSince}
           beforeLedger={data.beforeLedger}
+          beforeLayers={data.beforeLayers}
           notice={data.notice}
         />
       )}
@@ -84,12 +122,16 @@ export default function Usage() {
 function UsageBody({
   rows,
   since,
+  layersSince,
   beforeLedger,
+  beforeLayers,
   notice,
 }: {
   rows: readonly UsageRow[];
   since: string;
+  layersSince: string | null;
   beforeLedger: boolean;
+  beforeLayers: boolean;
   notice: string;
 }) {
   const summary = summarizeUsage(rows);
@@ -118,6 +160,16 @@ function UsageBody({
               照会した範囲は台帳の始点より前にかかっている。その分は 0 ではなく「記録が無い」。
             </p>
           )}
+          {beforeLayers && (
+            // **層の始点を台帳の始点と混ぜない。** 層の軸のほうが後から入ったので、
+            // それより前の行の層と場所は既定値であって観測ではない。ここを黙ると
+            // 「クローンは使っていなかった」「蒸留は起きていなかった」と読める。
+            <p className="mt-3 text-xs text-warn">
+              照会した範囲は層と場所の軸の始点
+              {layersSince === null ? '（まだ1件も記録が無い）' : `（${layersSince}）`}
+              より前にかかっている。その分の層と場所は既定値であって観測ではない。
+            </p>
+          )}
         </div>
       </Card>
 
@@ -140,6 +192,23 @@ function UsageBody({
             entries={[...summary.byModel]
               .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
               .map((entry) => ({ label: entry.model, costUsd: entry.totals.costUsd }))}
+          />
+          {/*
+            **モデル別と層別を1つにしない。** `ALTEROID_CLONE_MODEL` を置けば
+            クローンとマネージャーは同じモデル帯に並ぶので、モデル名では
+            「誰が使ったか」に答えられない。
+          */}
+          <AxisCard
+            title="層別（誰が）"
+            entries={[...summary.byLayer]
+              .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
+              .map((entry) => ({ label: entry.layer, costUsd: entry.totals.costUsd }))}
+          />
+          <AxisCard
+            title="場所別（どこで）"
+            entries={[...summary.bySite]
+              .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
+              .map((entry) => ({ label: entry.site, costUsd: entry.totals.costUsd }))}
           />
         </div>
       )}

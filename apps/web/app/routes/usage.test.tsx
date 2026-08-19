@@ -7,7 +7,7 @@
  * （`apps/cli/src/usage.ts` と同じ規約）。
  */
 import { USAGE_ESTIMATE_NOTICE, ZERO_USAGE } from '@alteroid/core/usage';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
@@ -29,12 +29,20 @@ afterEach(() => {
 
 function row(
   costUsd: number,
-  over: Partial<{ date: string; managerId: string; model: string }> = {},
+  over: Partial<{
+    date: string;
+    managerId: string;
+    model: string;
+    layer: string;
+    site: string;
+  }> = {},
 ) {
   return {
     date: '2026-08-14',
     managerId: 'm1',
     model: 'claude-opus-4',
+    layer: 'manager',
+    site: 'session',
     updatedAt: '2026-08-14T10:00:00.000Z',
     ...over,
     totals: { ...ZERO_USAGE, costUsd },
@@ -44,14 +52,36 @@ function row(
 function stubUsage(body: {
   rows: unknown[];
   since: string | null;
+  layersSince?: string | null;
   beforeLedger: boolean;
+  beforeLayers?: boolean;
   notice?: string;
 }) {
   return stubFetch((url) =>
     url.includes('/usage')
-      ? json({ ...body, notice: body.notice ?? USAGE_ESTIMATE_NOTICE, breakdown: null })
+      ? json({
+          ...body,
+          layersSince: body.layersSince === undefined ? body.since : body.layersSince,
+          beforeLayers: body.beforeLayers ?? false,
+          notice: body.notice ?? USAGE_ESTIMATE_NOTICE,
+          breakdown: null,
+        })
       : undefined,
   );
+}
+
+/**
+ * 軸カードの中だけを見る。
+ *
+ * **画面全体から探さない。** 絞り込みの `<option>` にも `clone` / `session` という
+ * 同じ文字列があるので、範囲を絞らないと「カードが消えても option が拾われて通る」
+ * テストになる。
+ */
+function axisCard(title: string): HTMLElement {
+  const heading = screen.getByRole('heading', { name: title });
+  const card = heading.closest('div.rounded-lg');
+  if (card === null) throw new Error(`${title} のカードが見つからない`);
+  return card as HTMLElement;
 }
 
 describe('/usage 画面', () => {
@@ -127,7 +157,13 @@ describe('/usage 画面', () => {
     stubUsage({
       rows: [
         row(1, { managerId: 'm1', model: 'opus', date: '2026-08-13' }),
-        row(2, { managerId: 'm2', model: 'sonnet', date: '2026-08-14' }),
+        row(2, {
+          managerId: 'm2',
+          model: 'sonnet',
+          date: '2026-08-14',
+          layer: 'clone',
+          site: 'distill',
+        }),
       ],
       since: '2026-08-01T00:00:00.000Z',
       beforeLedger: false,
@@ -145,5 +181,92 @@ describe('/usage 画面', () => {
     expect(screen.getByText('モデル別')).toBeTruthy();
     expect(screen.getByText('m1')).toBeTruthy();
     expect(screen.getByText('m2')).toBeTruthy();
+  });
+
+  it('層別（誰が）と場所別（どこで）の内訳も出す', async () => {
+    // **モデル名では層を見分けられない。** 2行とも同じモデル帯にしてあるのは、
+    // `ALTEROID_CLONE_MODEL` を置いたときに実際に起きる並びだからである。
+    stubUsage({
+      rows: [
+        row(1, { managerId: 'm1', model: 'opus', layer: 'manager', site: 'session' }),
+        row(2, { managerId: 'clone', model: 'opus', layer: 'clone', site: 'distill' }),
+      ],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+    });
+
+    render(
+      <Providers>
+        <Usage />
+      </Providers>,
+    );
+
+    await screen.findByRole('heading', { name: '層別（誰が）' });
+    const layers = axisCard('層別（誰が）');
+    expect(within(layers).getByText('clone')).toBeTruthy();
+    expect(within(layers).getByText('manager')).toBeTruthy();
+    expect(within(layers).getByText('$2.00')).toBeTruthy();
+    expect(within(layers).getByText('$1.00')).toBeTruthy();
+    const sites = axisCard('場所別（どこで）');
+    expect(within(sites).getByText('session')).toBeTruthy();
+    expect(within(sites).getByText('distill')).toBeTruthy();
+    // **モデル軸では分けられない。** 同じモデル帯なので1件に畳まれ、$3.00 がまとめて
+    // 出る — 層の軸が無ければ「誰が使ったか」はこの画面から読めない。
+    const models = axisCard('モデル別');
+    expect(within(models).getByText('opus')).toBeTruthy();
+    expect(within(models).getByText('$3.00')).toBeTruthy();
+  });
+
+  it('beforeLayers が真なら、その範囲の層と場所は観測ではないと書く', async () => {
+    stubUsage({
+      rows: [row(1)],
+      since: '2026-08-01T00:00:00.000Z',
+      layersSince: '2026-08-19T00:00:00.000Z',
+      beforeLedger: false,
+      beforeLayers: true,
+    });
+
+    render(
+      <Providers>
+        <Usage />
+      </Providers>,
+    );
+
+    expect(await screen.findByText(/既定値であって観測ではない/)).toBeTruthy();
+    // 層の始点を台帳の始点と混ぜない（2つの始点が別物であることを画面が言う）。
+    expect(screen.getByText(/2026-08-19T00:00:00\.000Z/)).toBeTruthy();
+  });
+
+  it('層と場所で絞り込める（4つの口に同じ絞り込みがある）', async () => {
+    const calls: string[] = [];
+    stubFetch((url) => {
+      if (!url.includes('/usage')) return undefined;
+      calls.push(url);
+      return json({
+        rows: [],
+        since: '2026-08-01T00:00:00.000Z',
+        layersSince: '2026-08-01T00:00:00.000Z',
+        beforeLedger: false,
+        beforeLayers: false,
+        notice: USAGE_ESTIMATE_NOTICE,
+        breakdown: null,
+      });
+    });
+
+    render(
+      <Providers>
+        <Usage />
+      </Providers>,
+    );
+
+    await screen.findByText(/その範囲には記録が無い/);
+    const layerSelect = screen.getByLabelText(/layer/);
+    layerSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    // 選択肢が core の一覧から作られていること（画面に書き写していない）。
+    expect(within(layerSelect).getByText('clone')).toBeTruthy();
+    expect(within(layerSelect).getByText('manager')).toBeTruthy();
+    const siteSelect = screen.getByLabelText(/site/);
+    expect(within(siteSelect).getByText('session')).toBeTruthy();
+    expect(within(siteSelect).getByText('distill')).toBeTruthy();
   });
 });

@@ -243,13 +243,28 @@ async function usageSection(stores: Stores, since: Date, until: Date): Promise<s
         .map((entry) => `${entry.model} ${formatUsd(entry.totals.costUsd)}`)
         .join(' / ')}`,
     );
+    // **誰が**使ったか。モデル別と別に出す — `ALTEROID_CLONE_MODEL` を置けば
+    // クローンとマネージャーは同じモデル帯に並び、モデル名では層を見分けられない。
+    lines.push(
+      `- 層別（誰が）: ${top(summary.byLayer)
+        .map((entry) => `${entry.layer} ${formatUsd(entry.totals.costUsd)}`)
+        .join(' / ')}`,
+    );
+    lines.push(
+      `- 場所別（どこで）: ${top(summary.bySite)
+        .map((entry) => `${entry.site} ${formatUsd(entry.totals.costUsd)}`)
+        .join(' / ')}`,
+    );
     lines.push('- 高かった委譲:');
     for (const entry of top(summary.byManager)) {
       lines.push(`  - ${entry.managerId}: ${formatUsd(entry.totals.costUsd)}`);
     }
     if (summary.byManager.length > MAX_ITEMS) {
+      // **「`usage_read` で全部見える」と書かない。** あちらも軸ごとに打ち切るので
+      // 嘘になる。実際に打てる手（続きを辿る呼び方）をそのまま書く。
       lines.push(
-        `  - …ほか ${summary.byManager.length - MAX_ITEMS} 本（\`usage_read\` で全部見える）`,
+        `  - …ほか ${summary.byManager.length - MAX_ITEMS} 本` +
+          '（`usage_read` に axis="manager", offset=0 を渡すと続きから辿れる）',
       );
     }
   }
@@ -257,6 +272,15 @@ async function usageSection(stores: Stores, since: Date, until: Date): Promise<s
   if (aggregate.beforeLedger) {
     lines.push(
       `- この期間の一部は台帳の始点（${aggregate.since}）より前で、**記録が無い**（0 ではない）`,
+    );
+  }
+  if (aggregate.beforeLayers) {
+    // **層の始点を台帳の始点と混ぜない。** 層の軸のほうが後から入ったので、それより
+    // 前の行の層と場所は既定値であって観測ではない。
+    lines.push(
+      '- この期間の一部は層と場所の軸の始点' +
+        `（${aggregate.layersSince ?? 'まだ1件も記録が無い'}）より前で、` +
+        'その分の層と場所は**既定値であって観測ではない**',
     );
   }
   lines.push(`- ${aggregate.notice}`);

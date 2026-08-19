@@ -30,7 +30,10 @@ import type {
 } from './runner-protocol.js';
 import type { JobStatus } from './schema.js';
 import { classifyUsageNotice, toRateLimitFacts } from './usage-limits.js';
-import type { UsageTotals } from './usage.js';
+// **クローン（`clone.ts`）と同じ実装を呼ぶ。** 層ごとに result の写し取りを
+// 書き分けると、どちらかが SDK の綴りを取り違えたときに片方だけ 0 が積まれ、
+// その差が「その層は安い」と読める（`usage.ts` の `modelUsageOf`）。
+import { isSuccessResult, modelUsageOf } from './usage.js';
 
 /**
  * manager-runner — SDK を隔離して走らせる層（roadmap M4）。
@@ -1424,44 +1427,6 @@ function reportText(said: readonly string[], result: string): string {
   return `${body}\n\n${result}`;
 }
 
-/** 「1ターンを最後まで走り切った」結果か。 */
-function isSuccessResult(message: SDKMessage): boolean {
-  return (message as { subtype?: unknown }).subtype === 'success';
-}
-
-/**
- * `result.modelUsage` をモデル id → 累積の形へ写す。**`result.usage` は使わない。**
- *
- * SDK の型コメントがはっきり分けている — `usage` は
- * **MAIN AGENT LOOP ONLY（Task subagent / sidechain を除く）** で、`modelUsage` が
- * **「The correct field for token/cost accounting」**（メインループ・Task 作業者・
- * sidechain・compaction を全部含む）。alteroid は委譲が主役なので、`usage` を採ると
- * **作業者の消費が丸ごと落ちる**。落ちるのは階層の末端＝いちばん数が多い層である。
- *
- * `contextWindow` / `maxOutputTokens` は写さない（モデルの仕様であって消費量では
- * ないので、台帳に入れると集計で足されうる）。
- */
-function modelUsageOf(message: SDKMessage): Record<string, UsageTotals> | undefined {
-  const raw = (message as { modelUsage?: unknown }).modelUsage;
-  if (typeof raw !== 'object' || raw === null) return undefined;
-
-  const models: Record<string, UsageTotals> = {};
-  for (const [model, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (typeof value !== 'object' || value === null) continue;
-    const usage = value as Record<string, unknown>;
-    models[model] = {
-      inputTokens: tokenCount(usage.inputTokens),
-      outputTokens: tokenCount(usage.outputTokens),
-      cacheReadInputTokens: tokenCount(usage.cacheReadInputTokens),
-      cacheCreationInputTokens: tokenCount(usage.cacheCreationInputTokens),
-      webSearchRequests: tokenCount(usage.webSearchRequests),
-      // SDK 側の綴りは `costUSD`（他のフィールドと違って大文字）。
-      costUsd: usdAmount(usage.costUSD),
-    };
-  }
-  return models;
-}
-
 /**
  * `result.permission_denials[]`（確認へ上げずに止められた道具）。無ければ空。
  *
@@ -1480,16 +1445,6 @@ function resultErrors(message: SDKMessage): string[] {
   return Array.isArray(errors)
     ? errors.filter((line): line is string => typeof line === 'string')
     : [];
-}
-
-/** 整数の個数として読む。読めないものは 0（台帳へ NaN を入れない）。 */
-function tokenCount(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
-}
-
-/** 金額として読む。読めないものは 0。 */
-function usdAmount(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
 }
 
 function resultText(message: SDKMessage): string {

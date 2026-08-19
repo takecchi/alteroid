@@ -1,6 +1,21 @@
 import type { UsageBreakdown, UsageRow, UsageTotals } from './usage.js';
 
 /**
+ * 層（**誰が**）と場所（**どこで**）の取りうる値。**この2本が唯一の一覧である。**
+ *
+ * 意味と「なぜこの値しか無いか」は `usage.ts` の `usageLayerSchema` /
+ * `usageSiteSchema` に書いてある。**値の並びだけをここへ置いてあるのは、
+ * ブラウザ（`apps/web`）が読めるのがこのファイルだけだからである** — 画面が
+ * 絞り込みの選択肢を持つために zod と core 全体を読ませるわけにはいかず、かと
+ * いって画面側に書き写すと、値が増えたときにそこだけ古くなる。
+ *
+ * `usage.ts` の schema はこの2本から作る（`z.enum(USAGE_LAYERS)`）。**だから
+ * ここへ足せば schema も画面も同時に追いつく。**
+ */
+export const USAGE_LAYERS = ['clone', 'manager'] as const;
+export const USAGE_SITES = ['session', 'distill'] as const;
+
+/**
  * 台帳の数字を読める形にするための算術と整形。
  *
  * **実行時の依存を1つも持たない**（型は `usage.ts` から `import type` で取るので
@@ -50,12 +65,17 @@ export function sumUsageRows(rows: readonly UsageRow[]): UsageTotals {
   );
 }
 
-function groupBy<K extends string>(
+// **`V` を `string` へ既定させつつ呼び出し側の戻り値型で推論させる。** `byLayer` /
+// `bySite` は `usageLayerSchema` / `usageSiteSchema` の union 型を保つ必要があり、
+// 常に `string` へ広げると `usageBreakdownSchema` の型と合わなくなる（層/場所の軸を
+// 足したときにここで実際に build が壊れた）。`byDate` / `byManager` / `byModel` は
+// 元々 `string` 相当なので既定のままで壊れない。
+function groupBy<K extends string, V extends string = string>(
   rows: readonly UsageRow[],
-  key: (row: UsageRow) => string,
+  key: (row: UsageRow) => V,
   label: K,
-): Array<{ [P in K]: string } & { totals: UsageTotals }> {
-  const buckets = new Map<string, UsageRow[]>();
+): Array<{ [P in K]: V } & { totals: UsageTotals }> {
+  const buckets = new Map<V, UsageRow[]>();
   for (const row of rows) {
     const id = key(row);
     const found = buckets.get(id);
@@ -65,17 +85,25 @@ function groupBy<K extends string>(
   return [...buckets.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([id, group]) => ({ [label]: id, totals: sumUsageRows(group) })) as Array<
-    { [P in K]: string } & { totals: UsageTotals }
+    { [P in K]: V } & { totals: UsageTotals }
   >;
 }
 
-/** 行を3軸（日 / マネージャー / モデル）へ畳む。 */
+/**
+ * 行を5軸（日 / actor / モデル / 層 / 場所）へ畳む。
+ *
+ * **層と場所を「無い値は 0」で補わないこと。** `groupBy` は行に現れた値だけを
+ * 返す。1件も記録が無い層・場所は一覧に出ない ＝ 「0 使った」ではなく「記録が
+ * 無い」として読める形である（`usage.ts` の `usageLayerSchema` / `usageSiteSchema`）。
+ */
 export function summarizeUsage(rows: readonly UsageRow[]): UsageBreakdown {
   return {
     total: sumUsageRows(rows),
     byDate: groupBy(rows, (row) => row.date, 'date'),
     byManager: groupBy(rows, (row) => row.managerId, 'managerId'),
     byModel: groupBy(rows, (row) => row.model, 'model'),
+    byLayer: groupBy(rows, (row) => row.layer, 'layer'),
+    bySite: groupBy(rows, (row) => row.site, 'site'),
   };
 }
 
