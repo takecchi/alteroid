@@ -58,6 +58,13 @@ import {
   type UsageSite,
   type UsageSnapshot,
 } from './usage.js';
+import {
+  classifyUsageNotice,
+  describeUsageNotice,
+  toRateLimitFacts,
+  type RateLimitFacts,
+  type UsageLimitNotice,
+} from './usage-limits.js';
 
 /**
  * クローン = デーモン内の長寿命 SDK セッション1本（docs/architecture.md）。
@@ -277,6 +284,28 @@ class Clone implements CloneHost {
   readonly #completions = new Map<string, () => void>();
 
   /**
+   * 枠（利用上限）が閉じていると分かっているときの理由。`null` なら閉じていない。
+   *
+   * **タイマーを持たない。** 「枠が開いたか」を無料で知る方法は無い
+   * （`rate_limit_event` はターン中にしか届かない — `usage-snapshot.ts` の
+   * `toAccountUsage` は `status` を書かない）。だから「試すしか無い」を選び、
+   * 試行の契機は**新しい合図が届いたとき**に限る（`post` 参照）。人間の発言が
+   * 最も価値の高い試行で、誰も話しかけなければ `self_initiative`（既定60分
+   * ごと）が自然に試す。
+   */
+  #usageBlocked: UsageLimitNotice | null = null;
+  /**
+   * 枠が閉じていて処理できなかった合図。**FIFO を崩さない。**
+   *
+   * 積む・戻すのどちらも配列の端だけを使う（`push` で足し、`splice(0)` で
+   * 全部を順序どおり取り出す）。ここに居る合図は `#forget` していない
+   * （器＝`stores.inbox` にも未読のまま残っている）ので、途中でプロセスが
+   * 死んでも `#restoreUnread` が拾い直す。この配列はそれとは別に、**同じ
+   * 器の中身をメモリ上でも順序どおり並べておく**ためのものである。
+   */
+  readonly #deferred: InboxEvent[] = [];
+
+  /**
    * 未読として器に置いた合図。id → その書き込みの約束。
    *
    * **消し込みがこの書き込みを追い越さないために持つ。** `post` は同期なので
@@ -437,6 +466,42 @@ class Clone implements CloneHost {
       return;
     }
 
+    // **枠（利用上限）が閉じているなら、新しい合図1件につき試すのは1回だけにする。**
+    //
+    // タイマーを持たない以上（`#usageBlocked` の doc）、「試す」の契機は新しい合図の
+    // 到着そのものである。保持していた合図を FIFO の順のまま受信箱へ戻して解除し、
+    // 先頭（＝最初に保持したもの）だけが `#pump` で実際に投げ直される。戻した先頭が
+    // また枠で落ちれば `#usageBlocked` は再び立ち、残り（この event を含む）は
+    // `#pump` の枠チェックで積み直される（`#pump` のコメント）。**この「1合図につき
+    // 1試行」が費用の設計そのものである** — 保持している間、新しい合図がいくつ届いても
+    // 実際にモデルへ渡るのは常に高々1回に絞られる。
+    //
+    // **`isTick` の畳み込み（次の行）より前に置く。** 畳み込みで捨てられる tick
+    // （＝既に同じ tick が受信箱に居る）でも、ここまでは通した後で return する。
+    // その tick 自体が積まれなくても、**「新しい合図が届いた」という事実そのもの**は
+    // 本物であり（60分ごとの `self_initiative` が実際にもう一度発火した、など）、
+    // 時間が経ったことの合図として試す価値がある。しかも解除そのものはモデルを
+    // 一度も呼ばない（保持分を受信箱へ戻すだけ）ので、畳まれる tick で解除しても
+    // 実行回数の制限（AGENTS.md 地雷2）にはならない — 実際に金を払うかどうかは
+    // 依然として「新しい合図1件につき高々1回」に保たれる。
+    if (this.#usageBlocked !== null) {
+      this.#usageBlocked = null;
+      const held = this.#deferred.splice(0);
+      // 器（`stores.inbox`）には既に未読として残っている（`#pump` が `#forget` を
+      // 呼ばずに保持した）ので、ここでは `#remember` / `#record` / `#commit` を
+      // やり直さない。やり直すと同じ合図の記帳・日誌追記が二重になる
+      // （`#restoreUnread` が起動直後の拾い直しでだけこれをやり直す理由とは違う —
+      // あちらは「書き込みが器へ届く前に落ちた可能性」を消せないための再実行だが、
+      // ここは同一プロセス内でメモリ上に持っていた配列を戻すだけで、その可能性が無い）。
+      for (const restored of held) this.#inbox.push(restored);
+      void this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text: `枠の解除を試す。新しい合図が届いたので、保持していた ${held.length} 件を配り直す。`,
+      });
+    }
+
     // 同じ合図がまだ読まれないまま積み重なっても、読んだときに見る材料は同じなので
     // 畳む。**これは実行回数の制限ではない**（AGENTS.md 地雷2）— 発火を減らすのでも
     // 遅らせるのでもなく、「まだ読んでいない同じ合図」を二度読まないだけである。
@@ -567,6 +632,30 @@ class Clone implements CloneHost {
     });
 
     for await (const event of this.#inbox) {
+      // **枠（利用上限）が閉じている間はターンを回さない（＝金を払わない）。**
+      // `#usageBlocked` はここに来た時点で既に立っている場合と、今回の `#handle`
+      // の中で新しく立つ場合の2通りがある。前者はここで `#handle` を呼ばずに
+      // 短絡し、後者は下の通常経路の `finally` で拾う（`#usageBlocked` が非 null
+      // かどうかだけを見るので、どちらの経路でも同じ扱いになる）。
+      if (this.#usageBlocked !== null) {
+        const notice = this.#usageBlocked;
+        // `error` は終端なので、枠が閉じていること自体（消えない情報）を
+        // **必ず先に**届ける。
+        this.#emit(this.#conversationOf(event), {
+          type: 'usage_limited',
+          message: describeUsageNotice(notice),
+        });
+        // 送り主を待たせない。「失敗した」だけにはしない — 何が起きていて、
+        // 合図がどうなるかまで分かる文言にする（PR #89 の経路をそのまま使う）。
+        await this.#reportFailure(
+          this.#conversationOf(event),
+          '枠が閉じているので、いまは投げていない。合図は保持してある。次に別の合図が' +
+            `届いたとき、保持した分から順に試し直す（${describeUsageNotice(notice)}）`,
+        );
+        await this.#settleInboxEvent(event, true);
+        continue;
+      }
+
       this.#redeliveryNotice = this.#redeliveryNoticeFor(event);
       // **ここは `try` の外である。** 投げれば `for await` ごと抜けて受信箱の
       // ループが死に、クローンは何も受け取れなくなる（`#handle` の失敗とは被害の
@@ -585,33 +674,61 @@ class Clone implements CloneHost {
       } finally {
         this.#redeliveryNotice = '';
         this.#commitmentNotice = '';
-        // 記帳の控えも同じ場所で捨てる。**台帳の行は消さない** — 消すのは「もう
-        // 順序を待つ相手が居ない」という印だけで、閉じられていない未了はそのまま残る
-        // （それがこの器の目的である）。
-        this.#committed.delete(event.id);
-        // 受理の瞬間に書いた追記の控えは、待つ相手が居なくなった時点で捨てる。
-        // **例外で終わった経路も通る**ので、ここに置く（`#handle` の中で消すと、
-        // 途中で投げたぶんが残り続ける）。追記そのものは取り消さない — 消すのは
-        // 「もう誰も待たない」という印だけである。
-        this.#recorded.delete(event.id);
-        // **終えた時点で消す。取り出した時点ではない。** 取り出した時点で消すと、
-        // 処理の途中でプロセスが死んだものが失われる＝いま塞いでいる穴がそのまま残る。
-        //
-        // **例外で終わったものも消す。** ここへ来ているということは失敗が
-        // `#reportFailure`（＝人間へ流すか日誌へ落とす）に記録されたということで、
-        // 消えたわけではない。残す側を選ぶと、決定的に失敗する合図（形が不正・
-        // 参照先が消えている）が起動のたびに配り直され、そのたびに同じ失敗を
-        // 繰り返してクローンのターンを1本ずつ焼く。**残るのはプロセスが死んだ
-        // ときだけ**、が守るべき唯一の線である。
-        await this.#forget(event);
-        const done = this.#completions.get(event.id);
-        this.#completions.delete(event.id);
-        done?.();
+        // **枠のせいで処理できなかったかは、ここで初めて分かることがある。**
+        // `#handle` の中（`#dispatch` の `result` / `rate_limit_event` /
+        // `system` 通知）で今回の合図が枠に当たったと判明したなら、この時点で
+        // `#usageBlocked` が非 null になっている。その場合は `#settleInboxEvent`
+        // に `defer: true` を渡し、`#forget` ではなく `#deferred` へ積む側を選ぶ。
+        await this.#settleInboxEvent(event, this.#usageBlocked !== null);
       }
     }
     // 閉じた後に待っている人を取り残さない
     for (const done of this.#completions.values()) done();
     this.#completions.clear();
+  }
+
+  /**
+   * 合図1件の後始末。**`#pump` の2箇所（枠で最初から回さなかった場合／`#handle`
+   * を通した場合）から呼ぶので1本にまとめてある** — 別々に書くと、台帳の控えを
+   * 外し忘れる・待っている相手を起こし忘れるといった漏れが片方にだけ起きる。
+   *
+   * `defer` が真なら **`#forget` を呼ばない**＝器（`stores.inbox`）にも未読の
+   * まま残す。理由は `#forget` の doc・`#pump` 旧 finally のコメント
+   * （「決定的に失敗する合図を残すと起動のたびに配り直されてクローンのターンを
+   * 焼く」）に対する例外である — **枠は決定的な失敗ではなく、時間で解決する
+   * 失敗である。** 消してしまえば、枠が開いたときにはもう合図そのものが無く、
+   * 仕事が失われる。`#forget` を呼ばない＝未読のままにしておけば、途中で
+   * プロセスが死んでも `#restoreUnread` が次の起動で拾い直す（この機構の
+   * 「保持」がプロセスの生死をまたいで壊れない理由でもある）。
+   */
+  async #settleInboxEvent(event: InboxEvent, defer: boolean): Promise<void> {
+    // 記帳の控えも同じ場所で捨てる。**台帳の行は消さない** — 消すのは「もう
+    // 順序を待つ相手が居ない」という印だけで、閉じられていない未了はそのまま残る
+    // （それがこの器の目的である）。
+    this.#committed.delete(event.id);
+    // 受理の瞬間に書いた追記の控えは、待つ相手が居なくなった時点で捨てる。
+    // **例外で終わった経路も通る**ので、ここに置く（`#handle` の中で消すと、
+    // 途中で投げたぶんが残り続ける）。追記そのものは取り消さない — 消すのは
+    // 「もう誰も待たない」という印だけである。
+    this.#recorded.delete(event.id);
+
+    if (defer) {
+      this.#deferred.push(event);
+    } else {
+      // **終えた時点で消す。取り出した時点ではない。** 取り出した時点で消すと、
+      // 処理の途中でプロセスが死んだものが失われる＝いま塞いでいる穴がそのまま残る。
+      //
+      // **例外で終わったものも消す。** ここへ来ているということは失敗が
+      // `#reportFailure`（＝人間へ流すか日誌へ落とす）に記録されたということで、
+      // 消えたわけではない。残す側を選ぶと、決定的に失敗する合図（形が不正・
+      // 参照先が消えている）が起動のたびに配り直され、そのたびに同じ失敗を
+      // 繰り返してクローンのターンを1本ずつ焼く。**残るのはプロセスが死んだ
+      // ときと、枠で保持したとき（上の `defer` 側）だけ**、が守るべき線である。
+      await this.#forget(event);
+    }
+    const done = this.#completions.get(event.id);
+    this.#completions.delete(event.id);
+    done?.();
   }
 
   #conversationOf(event: InboxEvent): string | null {
@@ -957,6 +1074,45 @@ class Clone implements CloneHost {
             conversationId,
           },
     );
+  }
+
+  /**
+   * 上限の合図を1か所で扱う。**分類ごとの扱いはここでだけ決める** — 3経路
+   * （`rate_limit_event` / `system` の通知・情報メッセージ / 失敗した `result`）
+   * がそれぞれ検知して、ここへ渡す。
+   *
+   * | `kind` | どうするか |
+   * | --- | --- |
+   * | `reached` | **保持して待つ**（この機構の対象）。`#usageBlocked` を立て、
+   *   以降の合図は `#pump` がターンを回さず保持する（保持と解除の本体は
+   *   `#pump` / `post`）。いま処理中の会話には `usage_limited` を届ける —
+   *   呼び出し側がこの直後に `error`（終端）を出すなら、**この `await` を
+   *   先に済ませてから**でなければならない。 |
+   * | `org_policy` | **待たない。** `usage-limits.ts` が「待っても直らないし、
+   *   増やす先も違う」と明記しているので何もしない。従来どおりの失敗として
+   *   扱う（呼び出し側の通常の失敗処理に任せる）。 |
+   * | `transition` / `warning` | **待たない**（まだ動く）。ただし日誌には残す
+   *   — そろそろ止まることが、止まる前に分かるように。 |
+   */
+  async #noteUsageNotice(
+    notice: UsageLimitNotice | undefined,
+    conversationId: string | null,
+  ): Promise<void> {
+    if (notice === undefined || notice.kind === 'org_policy') return;
+
+    // 枠が閉じた（あるいは近づいた）と分かった瞬間に日誌へ1件。**言い換えない**
+    // — `describeUsageNotice` がそのまま人間の検索できる文言を返す。
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text: describeUsageNotice(notice),
+    });
+
+    if (notice.kind !== 'reached') return;
+
+    this.#usageBlocked = notice;
+    this.#emit(conversationId, { type: 'usage_limited', message: describeUsageNotice(notice) });
   }
 
   async #handle(event: InboxEvent): Promise<void> {
@@ -1793,6 +1949,35 @@ class Clone implements CloneHost {
           this.#sawInit = true;
           await this.#stores.sessions.setCloneSessionId(message.session_id).catch(() => undefined);
           this.#captureInitFacts(message);
+          return;
+        }
+
+        // 上限の文言。**API エラーとしては来ない**（SDK のコメント）ので、
+        // 通知・情報メッセージの本文を見るしかない（`runner.ts` の同じ場面と
+        // 同じ理由 — マネージャー側だけがこれを見ていて、クローン側に無いのは
+        // 非対称だった）。
+        const said =
+          message.subtype === 'notification'
+            ? (message as { text?: unknown }).text
+            : message.subtype === 'informational'
+              ? (message as { content?: unknown }).content
+              : undefined;
+        if (typeof said === 'string') {
+          const notice = classifyUsageNotice(said);
+          if (notice !== undefined) await this.#noteUsageNotice(notice, this.#turn?.conversationId ?? null);
+        }
+        return;
+      }
+
+      // 枠の事実（アカウント単位）。**ターンの頭ごとに来る**ので、ここが走行中の
+      // 唯一の最新情報になる（`runner.ts` の同じ場面と同じ理由）。
+      case 'rate_limit_event': {
+        const facts = toRateLimitFacts((message as { rate_limit_info?: unknown }).rate_limit_info);
+        if (facts?.status === 'rejected') {
+          await this.#noteUsageNotice(
+            rejectedRateLimitNotice(facts),
+            this.#turn?.conversationId ?? null,
+          );
         }
         return;
       }
@@ -1865,6 +2050,17 @@ class Clone implements CloneHost {
         // 置く**（マネージャー側にはこの分岐と回帰テストがあり、クローン側だけ
         // 無いのは非対称だった）。
         if (!isSuccessResult(message)) {
+          // **枠（利用上限）の文言を見逃さない。** `resultFailureReason` に渡して
+          // いるのと同じ材料（`subtype` と `result` 本文）を `classifyUsageNotice`
+          // にも通す。`reached` なら以降の合図を保持する側へ切り替わる
+          // （`#noteUsageNotice` が `#usageBlocked` を立てる）。この `await` は
+          // 下の `#reportFailure`（`error` を emit する）より必ず先に終わる —
+          // `usage_limited` は終端ではないので、終端の `error` より先に届いて
+          // いなければならない。
+          await this.#noteUsageNotice(
+            classifyUsageNotice(resultBody(message)),
+            turn?.conversationId ?? null,
+          );
           // 失敗した result では `done` を出さない。`#reportFailure` が出す
           // `{ type: 'error' }` を終端にする（成功したことにしない）。
           await this.#reportFailure(turn?.conversationId ?? null, resultFailureReason(message));
@@ -2091,6 +2287,34 @@ function resultFailureReason(message: SDKMessage): string {
       ? candidate.result
       : '（本文なし）';
   return `結果なしで終了: ${candidate.subtype ?? '(不明)'} / ${body}`;
+}
+
+/**
+ * `result.result`（本文）だけを取り出す。無ければ空文字。
+ *
+ * `resultFailureReason` と同じ材料を見るが、あちらは `subtype` と結合した
+ * 表示用の1行を作る一方、こちらは `classifyUsageNotice` に渡す生の文言が要る
+ * （SDK の上限の文言は `result` にしか乗らない）。
+ */
+function resultBody(message: SDKMessage): string {
+  const candidate = message as { result?: unknown };
+  return typeof candidate.result === 'string' ? candidate.result : '';
+}
+
+/**
+ * `rate_limit_event` の `status: 'rejected'` を上限の合図に仕立てる。
+ *
+ * **文言を捏造しない。** SDK の上限プレフィックス集合に文言を足すのではなく、
+ * `rate_limit_info` が持つ構造化事実（`kind` ＝ `rateLimitType`）をそのまま
+ * 添えるだけにする。`classifyUsageNotice` を通していないので `text` は
+ * 「SDK が出した文言そのまま」ではないが、`status: 'rejected'` 自体が
+ * SDK 側の権威ある値であり、これも自前の正規表現ではない。
+ */
+function rejectedRateLimitNotice(facts: RateLimitFacts): UsageLimitNotice {
+  return {
+    kind: 'reached',
+    text: `rate_limit_event: status=rejected${facts.kind === undefined ? '' : `（kind: ${facts.kind}）`}`,
+  };
 }
 
 /**
