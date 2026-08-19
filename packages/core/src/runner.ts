@@ -15,6 +15,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
+import { placedModelTier, resolveModelTier } from './model-tier.js';
 import { createProfileApplier, type ProfileApplier, type ProfileVessel } from './profile.js';
 import { createRecentMap } from './recent.js';
 import { buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
@@ -51,11 +52,58 @@ import type { UsageTotals } from './usage.js';
  *   経路（`canUseTool` でデーモンへ回す）は残してあり、`default` へ戻せば効く
  */
 
-/** マネージャーのモデル帯。変更には人間の承認が要る（AGENTS.md 地雷5）。 */
+/** マネージャーのモデル帯の既定。変更には人間の承認が要る（AGENTS.md 地雷5）。 */
 export const MANAGER_MODEL = 'opus';
 
-/** 作業者のモデル帯。SDK の既定はマネージャーの継承なので、必ず明示する。 */
+/** 作業者のモデル帯の既定。SDK の既定はマネージャーの継承なので、必ず明示する。 */
 export const WORKER_MODEL = 'sonnet';
+
+/**
+ * マネージャー / 作業者のモデル帯を人間が差し替えるための環境変数。
+ *
+ * **クローン（`ALTEROID_CLONE_MODEL`）と同じ性質のものである** — 設定ではなく
+ * 人間の承認の置き場で、既定は動かさない（`model-tier.ts` に理由がある）。
+ * 3層のうち1層にだけ置き場があるのは非対称で、**「クローンは人間が帯を選べるが
+ * マネージャーは選べない」は人間の側の能力の欠落**になる。
+ *
+ * 読むのは**この層を実際に SDK へ渡す器**、すなわち runner である。デーモンにも
+ * 同じ値が降りるが（`compose.yaml` の `x-shared-env` / Railway の Shared
+ * Variables）、あちらが使うのは自己認識に載せる**宣言**のためだけで、実際に
+ * セッションへ渡っているのはここで解いた値である。
+ */
+export const MANAGER_MODEL_ENV_KEY = 'ALTEROID_MANAGER_MODEL';
+export const WORKER_MODEL_ENV_KEY = 'ALTEROID_WORKER_MODEL';
+
+/** 環境変数を見てマネージャーのモデル帯を決める。空・空白なら既定（`opus`）。 */
+export function resolveManagerModel(env: NodeJS.ProcessEnv = process.env): string {
+  return resolveModelTier(env, MANAGER_MODEL_ENV_KEY, MANAGER_MODEL);
+}
+
+/** 環境変数を見て作業者のモデル帯を決める。空・空白なら既定（`sonnet`）。 */
+export function resolveWorkerModel(env: NodeJS.ProcessEnv = process.env): string {
+  return resolveModelTier(env, WORKER_MODEL_ENV_KEY, WORKER_MODEL);
+}
+
+/**
+ * 人間が実際に値を置いた層だけを並べる（起動時に表へ出すための材料）。
+ *
+ * **「既定と違うもの」ではなく「置かれたもの」を返す。** `ALTEROID_MANAGER_MODEL=opus`
+ * のように既定と同じ値を明示的に置いた場合も含める — ここが答えているのは
+ * 「差し替えの承認がここに置かれているか」であって、値の比較ではない。
+ */
+export function placedManagerModels(
+  env: NodeJS.ProcessEnv = process.env,
+): { key: string; value: string; fallback: string }[] {
+  return (
+    [
+      { key: MANAGER_MODEL_ENV_KEY, fallback: MANAGER_MODEL },
+      { key: WORKER_MODEL_ENV_KEY, fallback: WORKER_MODEL },
+    ] as const
+  ).flatMap(({ key, fallback }) => {
+    const value = placedModelTier(env, key);
+    return value === null ? [] : [{ key, value, fallback }];
+  });
+}
 
 /** 作業者層の本体はこの `agents` 定義1個だけ。独自のワーカープールを作らない。 */
 export const WORKER_AGENT_NAME = 'worker';
@@ -666,7 +714,11 @@ class RunnerSession {
 
   #buildOptions(resume?: string): Options {
     return {
-      model: MANAGER_MODEL,
+      // 既定は `opus`。人間が `ALTEROID_MANAGER_MODEL` に置いていればそれを使う
+      // （設定ではなく承認の置き場。`model-tier.ts`）。**ここが正本である** —
+      // デーモン側の自己認識に出るのは同じ env から解いた宣言であって、
+      // 実際にセッションへ渡っているのはこの値である。
+      model: resolveManagerModel(this.#env),
       // `tools` は渡さない = preset 全部。明示リストで絞らない（AGENTS.md 地雷1）。
       // `maxTurns` も渡さない（地雷2）。
       // 人間が開く Claude Code と同じ既定（Auto）。`canUseTool` は下に残してあり、
@@ -684,7 +736,9 @@ class RunnerSession {
             'コストと文脈のために切り出した実作業の担い手。実装に限らず、調査・下読み・' +
             '外部サービスの確認・レビュー・相談のたたき台づくりまで任せてよい。',
           prompt: buildWorkerPrompt(),
-          model: WORKER_MODEL,
+          // **省略しない。** SDK の既定は親（マネージャー）の継承なので、
+          // 省けばマネージャーを差し替えた人が作業者まで巻き添えで動かすことになる。
+          model: resolveWorkerModel(this.#env),
         },
       },
       cwd: this.#cwd,

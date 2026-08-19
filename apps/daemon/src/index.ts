@@ -10,8 +10,6 @@ import { serve } from '@hono/node-server';
 import {
   CLONE_MODEL,
   CLONE_MODEL_ENV_KEY,
-  MANAGER_MODEL,
-  WORKER_MODEL,
   createClone,
   createLocalRunner,
   createProfileApplier,
@@ -21,8 +19,11 @@ import {
   createScheduler,
   dailyReportEvent,
   missingDailyReportDates,
+  placedManagerModels,
   reasonOf,
   resolveCloneModel,
+  resolveManagerModel,
+  resolveWorkerModel,
   WITHHELD_ENV_KEYS,
   type RunnerClient,
   type RunnerSource,
@@ -303,6 +304,25 @@ export async function main(): Promise<void> {
   }
 
   /**
+   * マネージャーと作業者の帯も同じ扱いで表へ出す。
+   *
+   * **ただし正本はここではない。** この2つを実際に SDK へ渡すのは runner であり
+   * （`packages/core/src/runner.ts` の `#buildOptions`）、こちらが読んでいるのは
+   * 自己認識に載せる**宣言**のためである。両者が一致するのは器の作りによる —
+   * `compose.yaml` の `x-shared-env` と Railway の Shared Variables は app と
+   * runner へ同じ値を渡し、**役ごとに違うのは `ALTEROID_DATABASE_URL` だけ**
+   * という不変条件がある。片方だけに Service 変数で上書きを載せればここは
+   * ずれるので、実際に渡っている値は runner の起動ログで確かめること。
+   */
+  const placedManagerTiers = placedManagerModels();
+  for (const { key, value, fallback } of placedManagerTiers) {
+    process.stderr.write(
+      `alteroidd: ${key} が置かれています（既定 ${fallback} → ${value}）。` +
+        `実際にセッションへ渡すのは runner なので、効いているかは runner の起動ログで確かめてください\n`,
+    );
+  }
+
+  /**
    * 実行環境プロファイル（`.zprofile` 相当）をクローンへ効かせる器。
    *
    * **クローンにも効かせる**のは、人間の `.zshenv` が「Claude Code に頼むとき」
@@ -378,7 +398,9 @@ export async function main(): Promise<void> {
     // 「どこで待つか」であって入口ではないし、TLS を手前で終端すれば scheme も違う。
     entrypoint: authPlan.publicBaseUrl,
     auth: authPlan.description,
-    models: { clone: cloneModel, manager: MANAGER_MODEL, worker: WORKER_MODEL },
+    // 差し替えが置かれていればそれを載せる。**固定値を載せると自己認識が嘘になる**
+    // （人間が帯を動かしたのに、クローンは既定を自分の帯だと思ったまま判断する）。
+    models: { clone: cloneModel, manager: resolveManagerModel(), worker: resolveWorkerModel() },
   };
 
   /**

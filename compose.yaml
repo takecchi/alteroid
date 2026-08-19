@@ -105,6 +105,28 @@ x-shared-env: &shared-env
   # 認証はサブスクリプションの長期トークン（claude setup-token）。クローンも
   # マネージャーも SDK セッションなので、両方に要る。
   CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:?claude setup-token で取得して .env に置くこと}
+  # 層とモデル帯の対応（クローン Fable / マネージャー Opus / 作業者 Sonnet）を
+  # 差し替えるための置き場。**これは設定ではなく、人間の承認の置き場である** —
+  # 対応は設計判断であり、変更には人間の承認が要る（AGENTS.md 地雷5）。費用を詰める
+  # ための旋盤ではないので、既定は動かさない（空のままでよい）。
+  #
+  # **manager / worker を読むのは runner である**（SDK へ `model:` を渡すのはあの器で、
+  # そこが正本になる）。デーモンも同じ値を読むが、使うのは自己認識に載せる**宣言**の
+  # ためだけである。両者が食い違わないのは、この `x-shared-env` が同じ値を両方の役へ
+  # 渡しているから（役ごとに違う唯一の変数は `ALTEROID_DATABASE_URL` である）。
+  #
+  # **ここは「先に実行環境プロファイルを検討する」の例外で、あちらでは解けない。**
+  # 読むのは器（デーモンと runner）自身の `process.env` で、プロファイルが評価される
+  # のはその先の SDK 子プロセスなので届かない。そしてプロファイルは**クローン自身が
+  # `profile_write` で書ける**ので、そこから読めばクローンが自分のモデル帯を黙って
+  # 差し替えられる ＝ 承認が承認でなくなる。
+  #
+  # **`${VAR:-}` の空文字で渡して安全である。** 空・空白のみは「未設定」として既定へ
+  # 落ちる（`packages/core/src/model-tier.ts`）ので、空が未設定より悪くなる `GIT_*` とは
+  # 事情が違う。
+  ALTEROID_CLONE_MODEL: ${ALTEROID_CLONE_MODEL:-}
+  ALTEROID_MANAGER_MODEL: ${ALTEROID_MANAGER_MODEL:-}
+  ALTEROID_WORKER_MODEL: ${ALTEROID_WORKER_MODEL:-}
   # 自律の既定（日報・発意）は環境変数で開け閉めできる。これは方針であって
   # 実行回数の制限ではない（north_star 禁止2）。
   ALTEROID_DAILY_REPORT_AT: ${ALTEROID_DAILY_REPORT_AT:-22:00}

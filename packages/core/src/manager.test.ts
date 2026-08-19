@@ -18,6 +18,13 @@ import {
   createManagerPool,
   type ManagerPool,
 } from './manager.js';
+import {
+  MANAGER_MODEL_ENV_KEY,
+  WORKER_MODEL_ENV_KEY,
+  placedManagerModels,
+  resolveManagerModel,
+  resolveWorkerModel,
+} from './runner.js';
 import { createProfileService } from './profile-service.js';
 import { createLocalRunner } from './runner-local.js';
 import {
@@ -268,6 +275,80 @@ describe('マネージャー', () => {
 
     // Claude Code 既定のシステムプロンプトを置き換えない（置き換え = デグレード）
     expect(options.systemPrompt).toMatchObject({ type: 'preset', preset: 'claude_code' });
+
+    await s.pool.stop();
+  });
+
+  it('モデル帯の既定は環境変数で動かない。空・空白は既定に落ちる', () => {
+    for (const env of [{}, { [MANAGER_MODEL_ENV_KEY]: '' }, { [MANAGER_MODEL_ENV_KEY]: '   ' }]) {
+      expect(resolveManagerModel(env)).toBe(MANAGER_MODEL);
+    }
+    for (const env of [{}, { [WORKER_MODEL_ENV_KEY]: '' }, { [WORKER_MODEL_ENV_KEY]: '   ' }]) {
+      expect(resolveWorkerModel(env)).toBe(WORKER_MODEL);
+    }
+
+    // 空文字が既定へ落ちることは器の都合でもある。compose は `${VAR:-}` で
+    // 渡すので、未設定の変数は空文字として届く。ここを `!== undefined` で見ると
+    // 空文字がそのまま SDK へ流れて起動時に落ちる。
+
+    // 人間が置いた値だけが効く。既知の別名で関門を作らない（SDK が増やした
+    // モデルを人間が選べなくなる＝能力の削除。north_star 禁止1）
+    expect(resolveManagerModel({ [MANAGER_MODEL_ENV_KEY]: 'fable' })).toBe('fable');
+    expect(resolveManagerModel({ [MANAGER_MODEL_ENV_KEY]: '  fable  ' })).toBe('fable');
+    expect(resolveWorkerModel({ [WORKER_MODEL_ENV_KEY]: 'まだ無いモデル' })).toBe('まだ無いモデル');
+  });
+
+  it('置かれたかどうかは、既定と同じ値を置いた場合も「置いた」である', () => {
+    expect(placedManagerModels({})).toEqual([]);
+    expect(placedManagerModels({ [MANAGER_MODEL_ENV_KEY]: '  ' })).toEqual([]);
+
+    // **値の比較で言い換えられない。** ここが答えているのは「差し替えの承認が
+    // 置かれているか」であって「既定と違うか」ではない（起動ログに出す判断の材料）。
+    expect(placedManagerModels({ [MANAGER_MODEL_ENV_KEY]: MANAGER_MODEL })).toEqual([
+      { key: MANAGER_MODEL_ENV_KEY, value: MANAGER_MODEL, fallback: MANAGER_MODEL },
+    ]);
+
+    expect(
+      placedManagerModels({
+        [MANAGER_MODEL_ENV_KEY]: 'fable',
+        [WORKER_MODEL_ENV_KEY]: 'haiku',
+      }),
+    ).toEqual([
+      { key: MANAGER_MODEL_ENV_KEY, value: 'fable', fallback: MANAGER_MODEL },
+      { key: WORKER_MODEL_ENV_KEY, value: 'haiku', fallback: WORKER_MODEL },
+    ]);
+  });
+
+  it('差し替えた帯が、実際に SDK へ渡るマネージャーと作業者の両方に効く', async () => {
+    const s = setup({
+      PATH: '/usr/bin',
+      [MANAGER_MODEL_ENV_KEY]: 'fable',
+      [WORKER_MODEL_ENV_KEY]: 'haiku',
+    });
+    await s.pool.start({ request: 'ログイン周りを直して' });
+
+    const { options } = s.sessions[0] as FakeSession;
+    expect(options.model).toBe('fable');
+
+    const worker = (options.agents ?? {})[WORKER_AGENT_NAME] as AgentDefinition;
+    expect(worker.model).toBe('haiku');
+
+    await s.pool.stop();
+  });
+
+  it('マネージャーだけ差し替えても、作業者は巻き添えで動かない', async () => {
+    // **作業者の `model` を省略すると SDK の既定は親の継承になる。** 省いてあると
+    // マネージャーを差し替えた人が作業者まで一緒に動かすことになり、「切り出した
+    // 実作業だけ安く回す」という階層の意味が消える（north_star の前提）。
+    const s = setup({ PATH: '/usr/bin', [MANAGER_MODEL_ENV_KEY]: 'fable' });
+    await s.pool.start({ request: 'ログイン周りを直して' });
+
+    const { options } = s.sessions[0] as FakeSession;
+    expect(options.model).toBe('fable');
+
+    const worker = (options.agents ?? {})[WORKER_AGENT_NAME] as AgentDefinition;
+    expect(worker.model).toBe(WORKER_MODEL);
+    expect(worker.model).toBe('sonnet');
 
     await s.pool.stop();
   });

@@ -21,6 +21,7 @@ import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { Inbox } from './inbox.js';
 import { createManagerPool, type ManagerPool } from './manager.js';
+import { placedModelTier, resolveModelTier } from './model-tier.js';
 import type { ProfileApplier } from './profile.js';
 import type { ProfileService } from './profile-service.js';
 import type { RunnerRegistry } from './runner-protocol.js';
@@ -77,12 +78,11 @@ export const CLONE_MODEL_ENV_KEY = 'ALTEROID_CLONE_MODEL';
 /**
  * 環境変数を見てクローンのモデル帯を決める。空・空白なら既定（`fable`）。
  *
- * 値は検証しない。既知の別名だけを通す関門を置くと、SDK が新しいモデルを
- * 増やすたびにこちらが追いつくまで人間が選べなくなる＝能力の削除になる
- * （north_star 禁止1）。読めない値は SDK が起動時に弾く。
+ * 判定の本体は `model-tier.ts` にある（マネージャーと作業者も同じ形を使う）。
+ * 値は検証しない — 理由はあちらに書いてある。
  */
 export function resolveCloneModel(env: NodeJS.ProcessEnv = process.env): string {
-  return placedCloneModel(env) ?? CLONE_MODEL;
+  return resolveModelTier(env, CLONE_MODEL_ENV_KEY, CLONE_MODEL);
 }
 
 /**
@@ -94,9 +94,7 @@ export function resolveCloneModel(env: NodeJS.ProcessEnv = process.env): string 
  * 「差し替えの承認がここに置かれているか」だからである。
  */
 export function placedCloneModel(env: NodeJS.ProcessEnv = process.env): string | null {
-  const raw = env[CLONE_MODEL_ENV_KEY];
-  const trimmed = raw === undefined ? '' : raw.trim();
-  return trimmed.length > 0 ? trimmed : null;
+  return placedModelTier(env, CLONE_MODEL_ENV_KEY);
 }
 
 /** PreCompact で退避したトランスクリプトのうち、蒸留に渡す末尾のサイズ。 */
