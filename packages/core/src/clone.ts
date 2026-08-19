@@ -304,6 +304,24 @@ class Clone implements CloneHost {
    * 器の中身をメモリ上でも順序どおり並べておく**ためのものである。
    */
   readonly #deferred: InboxEvent[] = [];
+  /**
+   * 種類（`kind`）ごとに最後に日誌へ書いた上限の文言。
+   *
+   * **同じ知らせで日誌を埋めないためにある。** `reached` は一度立てば `#pump`
+   * がターンを回さなくなるので `rate_limit_event` はもう来ないが、`transition`
+   * / `warning` はまだ動く分類なのでターンが回り続け、`system` 通知が毎ターン
+   * 届く（`usage-limits.ts` の `usageTransitionOf` の doc「毎ターン届く同じ
+   * 事実で受信箱を埋めないこと」と同じ理由）。畳まなければ日誌が同じ文言で
+   * 埋まり、本当に変わった1回が埋もれる。
+   *
+   * **`manager.ts` の `#usageNotices` と同じ形（写しただけで、あちらは変えて
+   * いない）。** マネージャー側にあってクローン側に無いのは非対称だった。
+   * ただし畳むのは**日誌への書き込みだけ**にする — `reached` の `#usageBlocked`
+   * を立てる処理と `usage_limited` の emit はここでは畳まない
+   * （`#noteUsageNotice` 参照）。2件目以降の合図は別の会話から来ているかも
+   * しれず、`usage_limited` まで畳むとその送り主に何も見えなくなる。
+   */
+  readonly #usageNotices = new Map<string, string>();
 
   /**
    * 未読として器に置いた合図。id → その書き込みの約束。
@@ -1093,6 +1111,14 @@ class Clone implements CloneHost {
    *   扱う（呼び出し側の通常の失敗処理に任せる）。 |
    * | `transition` / `warning` | **待たない**（まだ動く）。ただし日誌には残す
    *   — そろそろ止まることが、止まる前に分かるように。 |
+   *
+   * **同じ `kind` で同じ文言が続くなら、日誌への書き込みは畳む**
+   * （`#usageNotices` の doc）。`transition` / `warning` はターンが回り続ける
+   * ので `system` 通知が毎ターン届き、畳まないと同じ知らせで日誌が埋まる。
+   * **畳むのは日誌だけ** — `reached` の `#usageBlocked` を立てる処理と
+   * `usage_limited` の emit は、同じ `kind`・同じ文言が再び来ても毎回行う
+   * （2件目以降の合図は別の会話から来ているかもしれず、emit まで畳むと
+   * その送り主に何も見えなくなる）。
    */
   async #noteUsageNotice(
     notice: UsageLimitNotice | undefined,
@@ -1102,12 +1128,15 @@ class Clone implements CloneHost {
 
     // 枠が閉じた（あるいは近づいた）と分かった瞬間に日誌へ1件。**言い換えない**
     // — `describeUsageNotice` がそのまま人間の検索できる文言を返す。
-    await this.#journal({
-      type: 'exchange',
-      with: 'self',
-      role: 'outbound',
-      text: describeUsageNotice(notice),
-    });
+    if (this.#usageNotices.get(notice.kind) !== notice.text) {
+      this.#usageNotices.set(notice.kind, notice.text);
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text: describeUsageNotice(notice),
+      });
+    }
 
     if (notice.kind !== 'reached') return;
 
@@ -1964,7 +1993,8 @@ class Clone implements CloneHost {
               : undefined;
         if (typeof said === 'string') {
           const notice = classifyUsageNotice(said);
-          if (notice !== undefined) await this.#noteUsageNotice(notice, this.#turn?.conversationId ?? null);
+          if (notice !== undefined)
+            await this.#noteUsageNotice(notice, this.#turn?.conversationId ?? null);
         }
         return;
       }

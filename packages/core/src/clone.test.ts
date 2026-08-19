@@ -2662,9 +2662,7 @@ describe('クローン — 枠（利用上限）が閉じたら保持して次�
     // 同じ理由（固定の spendLimitMessage）で失敗するので枠は閉じたままで、
     // 2本目自身は短絡される。terminal は合計3件になる
     // （1本目の初回失敗・1本目の再試行の失敗・2本目の短絡）。
-    await expect
-      .poll(() => s.events.filter(isTerminal).length === 3, { timeout: 3000 })
-      .toBe(true);
+    await expect.poll(() => s.events.filter(isTerminal).length === 3, { timeout: 3000 }).toBe(true);
     expect(s.events.filter(isTerminal).map((event) => event.type)).toEqual([
       'error',
       'error',
@@ -2694,9 +2692,7 @@ describe('クローン — 枠（利用上限）が閉じたら保持して次�
     await waitForTerminal(s.events);
 
     s.clone.post(humanMessage('二件目')); // 1本目の再試行（turn 1: 失敗）を誘発。2本目自身は短絡される
-    await expect
-      .poll(() => s.events.filter(isTerminal).length === 3, { timeout: 3000 })
-      .toBe(true);
+    await expect.poll(() => s.events.filter(isTerminal).length === 3, { timeout: 3000 }).toBe(true);
 
     s.clone.post(humanMessage('三件目')); // 保持していた[一件目, 二件目]を戻し、三件目も積む
     // 一件目(turn 2) → 二件目(turn 3) → 三件目(turn 4) の順に実際に投げられ、
@@ -2761,9 +2757,7 @@ describe('クローン — 枠（利用上限）が閉じたら保持して次�
     s.clone.post(humanMessage('二件目'));
     // 1本目の再試行（同じ rate_limit_event が毎ターン付くので再び失敗）＋
     // 2本目の短絡で terminal は合計3件になる。
-    await expect
-      .poll(() => s.events.filter(isTerminal).length === 3, { timeout: 3000 })
-      .toBe(true);
+    await expect.poll(() => s.events.filter(isTerminal).length === 3, { timeout: 3000 }).toBe(true);
 
     // 2本目はターンを回さない ＝ rate_limit_event 経路だけでも保持が効いている。
     expect((s.calls[0] as FakeCall).inputs.some((text) => text.includes('二件目'))).toBe(false);
@@ -2785,10 +2779,36 @@ describe('クローン — 枠（利用上限）が閉じたら保持して次�
     expect(s.events.some((e) => e.type === 'usage_limited')).toBe(true);
 
     s.clone.post(humanMessage('二件目'));
-    await expect
-      .poll(() => s.events.filter(isTerminal).length === 3, { timeout: 3000 })
-      .toBe(true);
+    await expect.poll(() => s.events.filter(isTerminal).length === 3, { timeout: 3000 }).toBe(true);
     expect((s.calls[0] as FakeCall).inputs.some((text) => text.includes('二件目'))).toBe(false);
+
+    await s.clone.stop();
+  });
+
+  it('同じ transition の通知が2回届いても、日誌のその行は1件しか増えない', async () => {
+    // `transition` は待たない（まだ動く）分類なので、ターンは毎回 done で
+    // 終わり、`system` の通知は毎ターン繰り返し届く（`usage-limits.ts` の
+    // `usageTransitionOf` の doc「毎ターン届く同じ事実で受信箱を埋めないこと」
+    // と同じ場面）。`#usageNotices` で畳んでいなければ、同じ文言の行が
+    // ターンの数だけ日誌に増える。
+    const transitionMessage = "You're now using extra usage until your limit resets.";
+    const s = setup(undefined, createMemoryStores(), {
+      systemNoticeAt: () => ({ subtype: 'notification', text: transitionMessage }),
+    });
+
+    s.clone.post(humanMessage('一件目'));
+    await waitForDone(s.events);
+
+    s.clone.post(humanMessage('二件目'));
+    await expect
+      .poll(() => s.events.filter((event) => event.type === 'done').length === 2, {
+        timeout: 3000,
+      })
+      .toBe(true);
+
+    const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[];
+    const matching = exchanges.filter((entry) => entry.text.includes(transitionMessage));
+    expect(matching).toHaveLength(1);
 
     await s.clone.stop();
   });
