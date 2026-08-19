@@ -1293,10 +1293,20 @@ class Pool implements ManagerPool {
         let fold;
         try {
           fold = await this.#stores.usage.record({
+            // **モデル id で層を代用しないこと。** マネージャーは opus だが、
+            // `ALTEROID_CLONE_MODEL` を置けばクローンも opus で走る。
+            layer: 'manager',
+            // マネージャーのセッション本体。**その中の作業者（Task subagent）と
+            // compaction 自体の分もここに混ざっている** — SDK の `modelUsage` が
+            // 合算して降ろすので分離できない（`usage.ts` の `usageLayerSchema`）。
+            // **作業者の 0 行を作らないこと**（「使っていない」と読める）。
+            site: 'session',
             managerId: event.managerId,
             date: usageDate(at),
             at: at.toISOString(),
             snapshot: { sessionId: event.sessionId, models: event.models },
+            // streaming-input の長寿命セッションなので、降りてくるのは走行合計。
+            accumulation: 'cumulative',
           });
         } catch {
           // 台帳に積めないことで仕事は止めない。ただし黙って消さない。

@@ -408,6 +408,72 @@ export function foldOneshotUsage(snapshot: UsageSnapshot): UsageFold {
 }
 
 // ---------------------------------------------------------------------------
+// SDK の result から消費を読む
+// ---------------------------------------------------------------------------
+
+/** トークン数として読む。読めないものは 0。 */
+function tokenCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+/** 金額として読む。読めないものは 0。 */
+function usdAmount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/**
+ * 「1ターンを最後まで走り切った」結果か。
+ *
+ * **台帳へ通すのは成功した result だけである。** SDK は
+ * `crash/startup-error results may carry zeroed values` と言っている。ゼロを
+ * 「累積が 0 になった」として通すと基準が下がり、次に届いた本物の累積が丸ごと
+ * 増分になる ＝ 記録済みの分がもう一度積まれる。
+ *
+ * **絞っても取りこぼさない。** 値は累積なので、失敗した回のぶんも次の成功が
+ * 運んでくる。
+ */
+export function isSuccessResult(message: unknown): boolean {
+  return (message as { subtype?: unknown }).subtype === 'success';
+}
+
+/**
+ * `result.modelUsage` をモデル id → 累積の形へ写す。**`result.usage` は使わない。**
+ *
+ * SDK の型コメントがはっきり分けている — `usage` は
+ * **MAIN AGENT LOOP ONLY（Task subagent / sidechain を除く）** で、`modelUsage` が
+ * **「The correct field for token/cost accounting」**（メインループ・Task 作業者・
+ * sidechain・compaction を全部含む）。alteroid は委譲が主役なので、`usage` を採ると
+ * **作業者の消費が丸ごと落ちる**。落ちるのは階層の末端＝いちばん数が多い層である。
+ *
+ * `contextWindow` / `maxOutputTokens` は写さない（モデルの仕様であって消費量では
+ * ないので、台帳に入れると集計で足されうる）。
+ *
+ * **クローン（`clone.ts`）とマネージャー（`runner.ts`）が同じこれを呼ぶ。**
+ * 層ごとに写し取りを書くと、どちらかが SDK の綴り（`costUSD` の大文字）を
+ * 取り違えたときに片方だけ 0 が積まれ、その差は「その層は安い」と読める。
+ */
+export function modelUsageOf(message: unknown): Record<string, UsageTotals> | undefined {
+  const raw = (message as { modelUsage?: unknown }).modelUsage;
+  if (typeof raw !== 'object' || raw === null) return undefined;
+
+  const models: Record<string, UsageTotals> = {};
+  for (const [model, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value !== 'object' || value === null) continue;
+    const usage = value as Record<string, unknown>;
+    models[model] = {
+      inputTokens: tokenCount(usage.inputTokens),
+      outputTokens: tokenCount(usage.outputTokens),
+      cacheReadInputTokens: tokenCount(usage.cacheReadInputTokens),
+      cacheCreationInputTokens: tokenCount(usage.cacheCreationInputTokens),
+      webSearchRequests: tokenCount(usage.webSearchRequests),
+      // SDK 側の綴りは `costUSD`（他のフィールドと違って大文字）。
+      costUsd: usdAmount(usage.costUSD),
+    };
+  }
+  return models;
+}
+
+// ---------------------------------------------------------------------------
 // 台帳の行と問い合わせ
 // ---------------------------------------------------------------------------
 

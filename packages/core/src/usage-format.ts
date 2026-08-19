@@ -50,12 +50,17 @@ export function sumUsageRows(rows: readonly UsageRow[]): UsageTotals {
   );
 }
 
-function groupBy<K extends string>(
+// **`V` を `string` へ既定させつつ呼び出し側の戻り値型で推論させる。** `byLayer` /
+// `bySite` は `usageLayerSchema` / `usageSiteSchema` の union 型を保つ必要があり、
+// 常に `string` へ広げると `usageBreakdownSchema` の型と合わなくなる（層/場所の軸を
+// 足したときにここで実際に build が壊れた）。`byDate` / `byManager` / `byModel` は
+// 元々 `string` 相当なので既定のままで壊れない。
+function groupBy<K extends string, V extends string = string>(
   rows: readonly UsageRow[],
-  key: (row: UsageRow) => string,
+  key: (row: UsageRow) => V,
   label: K,
-): Array<{ [P in K]: string } & { totals: UsageTotals }> {
-  const buckets = new Map<string, UsageRow[]>();
+): Array<{ [P in K]: V } & { totals: UsageTotals }> {
+  const buckets = new Map<V, UsageRow[]>();
   for (const row of rows) {
     const id = key(row);
     const found = buckets.get(id);
@@ -65,7 +70,7 @@ function groupBy<K extends string>(
   return [...buckets.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([id, group]) => ({ [label]: id, totals: sumUsageRows(group) })) as Array<
-    { [P in K]: string } & { totals: UsageTotals }
+    { [P in K]: V } & { totals: UsageTotals }
   >;
 }
 

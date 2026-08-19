@@ -14,6 +14,27 @@ import type { Db } from './db.js';
  * 列を足すときは `alter table ... add column if not exists` をこの配列の末尾へ
  * 加える（既存の DB にも順に当たる）。**既存行の意味を変える変更を黙って混ぜない**
  * — それは記憶の書き換えであり、人間の確認が要る。
+ *
+ * ## 鍵を差し替える
+ *
+ * 主キーを付け替える手がここには無かった（`create table if not exists` の羅列は
+ * 既にあるテーブルに何もしない）。足すときは**主キーではなく一意索引で持つ**こと。
+ *
+ * ```
+ * create table if not exists t ( ... )                        -- primary key を書かない
+ * alter table t add column if not exists c text not null default '…'
+ * create unique index if not exists t_key_idx on t (…, c)     -- 新しい鍵
+ * alter table t drop constraint if exists t_pkey              -- 古い鍵を外す
+ * ```
+ *
+ * **`drop constraint` + `add primary key` で書かないこと。** `add primary key` は
+ * 既に主キーがあると落ちるので必ず drop と対にする形になり、**毎回の起動で索引を
+ * 作り直す**（そのたびに ACCESS EXCLUSIVE を取る）。一意索引なら2回目以降が本当の
+ * no-op になる。not null が全列に付いていれば強さは主キーと同じで、`on conflict` の
+ * 推論も受ける。
+ *
+ * **順序は「列を足す → 新しい鍵 → 古い鍵を外す」。** 逆にすると、古い鍵を外した
+ * 瞬間から新しい鍵ができるまでのあいだ重複を拒めない。
  */
 const STATEMENTS = [
   `create table if not exists memory (
@@ -174,28 +195,63 @@ const STATEMENTS = [
      cache_creation_input_tokens bigint not null default 0,
      web_search_requests bigint not null default 0,
      cost_usd double precision not null default 0,
-     updated_at timestamptz not null,
-     primary key (date, manager_id, model)
+     layer text not null default 'manager',
+     site text not null default 'session',
+     updated_at timestamptz not null
    )`,
-  // pk の先頭が date なので、date だけの絞り込みは pk の索引で前方一致が効く
-  // （別に (date) 索引を足すのは冗長）。(manager_id, date) は pk に無い並びなので、
-  // 「このマネージャーが期間中いくら使ったか」を date を先に決めずに引く経路として足す。
+  // --- 「誰が・どこで」の軸を足す（既にある DB へも順に当たる） ---------------
+  //
+  // **既定は既にある行にとって真である。** この列より前に台帳へ積まれていたのは
+  // マネージャーのセッション本体の分だけで、クローンの分は1バイトも記録されて
+  // いなかった（`clone.ts` が `result.modelUsage` を渡していなかった）。だから
+  // `'manager'` / `'session'` は行の意味を書き換えず、暗黙だったものを明示する。
+  //
+  // **ただしその既定は観測ではない。** どこからが観測かは `usage_ledger.layered_at`
+  // が持ち、`aggregate` が `beforeLayers` として返す。ここを混ぜると「層を足す前の
+  // 期間はクローンが使っていなかった」と読める出力になる。
+  `alter table usage_daily add column if not exists layer text not null default 'manager'`,
+  `alter table usage_daily add column if not exists site text not null default 'session'`,
+  // 新しい鍵。**層と場所を鍵に入れる。** クローンは自分のセッション本体と要約の
+  // 蒸留の両方で使うので、同じ日・同じ actor・同じモデルで意味の違う行が2つ立つ。
+  // 3列の鍵のままだと2行目が拒まれ、`on conflict do update` が先にある行へ増分を
+  // 足し込む — そのとき layer / site は先に入った側の値のまま残り、**出力から
+  // 見分けられない誤帰属**になる。
+  `create unique index if not exists usage_daily_key_idx
+     on usage_daily (date, manager_id, model, layer, site)`,
+  // 古い3列の主キーを外す（新しい鍵を作ったあとに外す。migrate.ts 冒頭の順序）。
+  // 索引としても新しい鍵の前方一致に含まれるので、残しても冗長なだけである。
+  `alter table usage_daily drop constraint if exists usage_daily_pkey`,
+  // 新しい鍵の先頭が date なので、date だけの絞り込みは前方一致が効く（別に
+  // (date) 索引を足すのは冗長）。(manager_id, date) はその並びに無いので、
+  // 「この actor が期間中いくら使ったか」を date を先に決めずに引く経路として足す。
   `create index if not exists usage_daily_manager_date_idx on usage_daily (manager_id, date)`,
 
   `create table if not exists usage_baseline (
-     manager_id text primary key,
+     manager_id text not null,
+     layer text not null default 'manager',
      session_id text,
      models jsonb not null,
      updated_at timestamptz not null,
      resets integer not null default 0,
      last_reset_at timestamptz
    )`,
+  // 累積を持つ主体は「層 × actor」である。**既定 `'manager'` が入ることで、既に
+  // ある基準はそのまま同じ主体として引ける** — 引けなくなると「基準が無い」と
+  // 読まれ、次の1回で累積の全量が増分として積まれる ＝ 記録済みの分の二重計上。
+  `alter table usage_baseline add column if not exists layer text not null default 'manager'`,
+  `create unique index if not exists usage_baseline_key_idx
+     on usage_baseline (layer, manager_id)`,
+  `alter table usage_baseline drop constraint if exists usage_baseline_pkey`,
 
   // 単一行（id = 'default'）。台帳が記録を始めた時刻。aggregate の since の元。
   `create table if not exists usage_ledger (
      id text primary key,
-     started_at timestamptz not null
+     started_at timestamptz not null,
+     layered_at timestamptz
    )`,
+  // 層と場所の軸が記録を始めた時刻。**null を許す** — 台帳が始まっていても層の
+  // 軸はまだ始まっていない、という状態が実際に在る（この移行が当たった直後）。
+  `alter table usage_ledger add column if not exists layered_at timestamptz`,
 
   // --- 引き受けたまま終わっていない仕事（store.ts の CommitmentStore） --------
   // id が主キーなのは open の冪等性を SQL 側で強制するためである。「select して
