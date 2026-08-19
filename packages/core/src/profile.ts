@@ -94,6 +94,13 @@ export const PROFILE_EVAL_TIMEOUT_MS = 10_000;
  *
  * シェルが必ず書き換えるもの（`_` `PWD` `SHLVL`）を差分として拾うと、
  * 「プロファイルが環境を変えた」という報告が毎回嘘になる。
+ *
+ * **この一覧だけに頼らないこと。** 名前を数え上げる形は、数え忘れた1つが
+ * そのまま「プロファイルが置いたことになっている、置いていない変数」になる。
+ * 実際に macOS では CoreFoundation が `__CF_USER_TEXT_ENCODING` を**どの子へも**
+ * 注ぐので、この一覧に無いものが差分へ載っていた（Linux では注がれないので CI では
+ * 出ず、手元でだけ落ちた ＝ たまたま踏まなかっただけである）。だから本線は下の
+ * ベースライン計測（`evaluateProfile`）で、こちらはその後ろの2枚目である。
  */
 const EPHEMERAL_ENV_KEYS = new Set(['_', 'PWD', 'OLDPWD', 'SHLVL', PROFILE_SOURCED_ENV_KEY]);
 
@@ -425,6 +432,23 @@ export interface EvaluateProfileOptions {
  *
  * 本文の標準出力は**捨てずに stderr 側へ寄せる**。捨てると人間が原因を見る窓が
  * 無くなり、混ぜると env の JSON が壊れる。
+ *
+ * ## 差分は `baseEnv` ではなく**実測したベースライン**と比べる
+ *
+ * **器と OS は、本文が何も書かなくても env を増やす。** だから「読み終えた env」を
+ * `baseEnv` と比べると、増えた分がまるごと*プロファイルの仕業*として報告される。
+ * macOS では CoreFoundation が `__CF_USER_TEXT_ENCODING` をどの子へも注ぐので、
+ * `export FOO=1` だけのプロファイルが `names: ['FOO', '__CF_USER_TEXT_ENCODING']`
+ * を返していた。Linux では注がれないため CI は緑で、**手元でだけ落ちる**形だった。
+ *
+ * 直し方として「その名前を捨てる一覧に足す」は採らない。数え忘れた1つがそのまま
+ * 同じ嘘になるし、注ぐ側は OS と shell と node の版で変わるので数え切れない
+ * （このファイルが `leaked` で既に採っている立場と同じである — **読み方を推測せず、
+ * 実際に走らせて見る**）。
+ *
+ * だから**同じ shell・同じ node・同じ env で、本文を読まない1回**を走らせ、
+ * その結果を基準にする。器と OS が勝手に足すものは両側に等しく現れて打ち消え、
+ * 残るのは本文が変えた分だけになる。**名前の一覧を持たずに済む**のが要点である。
  */
 export async function evaluateProfile(options: EvaluateProfileOptions): Promise<ProfileEvaluation> {
   const {
@@ -437,13 +461,12 @@ export async function evaluateProfile(options: EvaluateProfileOptions): Promise<
     nodePath = process.execPath,
   } = options;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  timer.unref?.();
-
-  // `$0` に本文、`$1` に node。`. "$0" >&2` で本文の標準出力を stderr へ寄せる。
-  const program =
-    '. "$0" >&2 || exit 97; exec "$1" -e \'process.stdout.write(JSON.stringify(process.env))\'';
+  // `$1` に node。env をそのまま JSON で吐かせる。
+  const printEnv = '"$1" -e \'process.stdout.write(JSON.stringify(process.env))\'';
+  // `$0` に本文。`. "$0" >&2` で本文の標準出力を stderr へ寄せる。
+  const withProfile = `. "$0" >&2 || exit 97; exec ${printEnv}`;
+  // **本文を読まない同じ1回。** 器と OS が勝手に足すものだけが現れる。
+  const withoutProfile = `exec ${printEnv}`;
 
   // 番人の印は渡さない（渡すと本文が読まれずに素通りする）。
   const env: Record<string, string | undefined> = { ...baseEnv };
@@ -458,67 +481,87 @@ export async function evaluateProfile(options: EvaluateProfileOptions): Promise<
         stdio: ['ignore', 'pipe', 'pipe'],
       }));
 
-  let stdout = '';
-  let output = '';
+  /** 1回起こして env を JSON で受け取る。失敗は理由つきで返す（黙って空を返さない）。 */
+  async function capture(
+    program: string,
+  ): Promise<{ env?: Record<string, string>; output: string; error?: string }> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    timer.unref?.();
 
-  try {
-    const child = spawnChild({
-      command: shell,
-      args: ['-c', program, path, nodePath],
-      env,
-      signal: controller.signal,
-    });
-    child.stdin?.end();
-    child.stdout?.setEncoding('utf8');
-    child.stderr?.setEncoding('utf8');
-    child.stdout?.on('data', (chunk: string) => {
-      stdout += chunk;
-    });
-    child.stderr?.on('data', (chunk: string) => {
-      output += chunk;
-    });
+    let stdout = '';
+    let output = '';
 
-    const code = await new Promise<number | null>((resolve, reject) => {
-      child.once('error', reject);
-      child.once('close', (exitCode) => resolve(exitCode));
-    });
+    try {
+      const child = spawnChild({
+        command: shell,
+        args: ['-c', program, path, nodePath],
+        env,
+        signal: controller.signal,
+      });
+      child.stdin?.end();
+      child.stdout?.setEncoding('utf8');
+      child.stderr?.setEncoding('utf8');
+      child.stdout?.on('data', (chunk: string) => {
+        stdout += chunk;
+      });
+      child.stderr?.on('data', (chunk: string) => {
+        output += chunk;
+      });
 
-    if (code !== 0) {
-      return {
-        env: {},
-        leaked: [],
-        output: tail(output),
-        error:
-          code === 97
-            ? `プロファイルの読み込みが失敗した（${shell} が非 0 で終了）`
-            : `プロファイルの評価が失敗した（終了コード ${String(code)}）`,
-      };
+      const code = await new Promise<number | null>((resolve, reject) => {
+        child.once('error', reject);
+        child.once('close', (exitCode) => resolve(exitCode));
+      });
+
+      if (code !== 0) {
+        return {
+          output: tail(output),
+          error:
+            code === 97
+              ? `プロファイルの読み込みが失敗した（${shell} が非 0 で終了）`
+              : `プロファイルの評価が失敗した（終了コード ${String(code)}）`,
+        };
+      }
+    } catch (error) {
+      const reason = controller.signal.aborted
+        ? `プロファイルの評価が ${String(timeoutMs)}ms 以内に終わらなかった（返ってこないコマンドを書いていないか）`
+        : String(error);
+      return { output: tail(output), error: reason };
+    } finally {
+      clearTimeout(timer);
     }
-  } catch (error) {
-    const reason = controller.signal.aborted
-      ? `プロファイルの評価が ${String(timeoutMs)}ms 以内に終わらなかった（返ってこないコマンドを書いていないか）`
-      : String(error);
-    return { env: {}, leaked: [], output: tail(output), error: reason };
-  } finally {
-    clearTimeout(timer);
+
+    try {
+      return { env: JSON.parse(stdout) as Record<string, string>, output: tail(output) };
+    } catch (error) {
+      return { output: tail(output), error: `評価結果を読めなかった: ${String(error)}` };
+    }
   }
 
-  let parsed: Record<string, string>;
-  try {
-    parsed = JSON.parse(stdout) as Record<string, string>;
-  } catch (error) {
+  // **本文を読む側を先に走らせる。** 逆順にすると、本文の構文エラーを人間へ返す前に
+  // ベースラインの失敗を返してしまい、いちばん多い「書き間違えた」が読めなくなる。
+  const evaluated = await capture(withProfile);
+  if (evaluated.error !== undefined || evaluated.env === undefined) {
     return {
       env: {},
       leaked: [],
-      output: tail(output),
-      error: `評価結果を読めなかった: ${String(error)}`,
+      output: evaluated.output,
+      error: evaluated.error ?? '評価結果を読めなかった',
     };
   }
+  const parsed = evaluated.env;
+
+  // ベースラインが取れなければ `baseEnv` と比べる（＝この直しの前の挙動）。
+  // **本文を読む側が通った後なので、ここが落ちるのは器の異常だけである** — その場合に
+  // 人間のプロファイルを置けなくするより、器と OS が足した分が差分に混じるほうがまだ軽い。
+  const baseline = await capture(withoutProfile);
+  const reference: NodeJS.ProcessEnv = baseline.env ?? baseEnv;
 
   const diff: Record<string, string> = {};
   for (const [key, value] of Object.entries(parsed)) {
     if (EPHEMERAL_ENV_KEYS.has(key)) continue;
-    if (baseEnv[key] === value) continue;
+    if (reference[key] === value) continue;
     diff[key] = value;
   }
   // **器が書いた `unset` が本当に効いたかを、ここで実測する。**
@@ -533,7 +576,9 @@ export async function evaluateProfile(options: EvaluateProfileOptions): Promise<
   // 穴にしないため）。
   for (const key of withheldEnvKeys) delete diff[key];
 
-  return { env: diff, leaked, output: tail(output) };
+  // 人間へ見せる窓は**本文を読んだ側**のもの。ベースラインは本文を読んでいないので
+  // 出力を持たない（混ぜると「プロファイルが出したもの」ではなくなる）。
+  return { env: diff, leaked, output: evaluated.output };
 }
 
 /** 人間が読む窓であって記録ではない。長い出力で日誌を溢れさせない。 */
