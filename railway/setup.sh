@@ -459,7 +459,7 @@ if [ -z "$GIT_BRANCH" ]; then
   # **既定は release/prod で、origin の既定ブランチ（＝main）ではない。**
   # Railway に main を見せると、マージした瞬間にデプロイが走って走行中のマネージャーと
   # 作業者が畳まれる。それを切り離すために release/prod を置いてある
-  # （.github/workflows/release-prod.yml が6時間ごとに main を写す）。
+  # （.github/workflows/release-prod.yml が12時間ごとに main を写す）。
   # **ここを main へ戻すと、その形へ戻る**（railway/README.md「デプロイは走行中の
   # 仕事を畳む操作である」1）。とくに M5 で runner を2台目足すとき、片方だけが main を
   # 見ていると**そこだけがマージのたびに畳まれる**ので、既定を弱いほうへ倒さないこと。
