@@ -2765,6 +2765,36 @@ describe('クローン — 枠（利用上限）が閉じたら保持して次�
     await s.clone.stop();
   });
 
+  it('rate_limit_event で status: rejected が来ても、同じターンの result が成功したら保持されない', async () => {
+    // `rate_limit_info` の `status` は枠1つぶんの状態でしかない
+    // （`rateLimitFactsSchema` — `status` とは別に `overageStatus` /
+    // `usingOverage` / `overageResetsAt` がある）。`five_hour` が `rejected`
+    // でも課金枠（overage）に落ちてターンは成功する組み合わせが構造上あり、
+    // `usage-limits.ts` の `usageTransitionOf` は `entered_overage` として
+    // 名前まで付けている通常の遷移である。この組み合わせで、答えが返って
+    // 終わった合図まで保持・再送されない（＝成功した仕事の二重実行にならない）
+    // ことを確かめる。
+    const s = setup(undefined, createMemoryStores(), {
+      rateLimitEventAt: (turnIndex) =>
+        turnIndex === 0
+          ? { status: 'rejected', rateLimitType: 'five_hour', isUsingOverage: true }
+          : undefined,
+    });
+
+    const event = humanMessage('やあ');
+    s.clone.post(event);
+    await waitForTerminal(s.events);
+    // 検知そのものは起きる（usage_limited は届く）が、ターンは成功して done。
+    expect(s.events.filter(isTerminal).map((e) => e.type)).toEqual(['done']);
+
+    await waitFor(async () => {
+      const pending = await s.stores.inbox.claimPending();
+      return !pending.some((p) => p.event.id === event.id);
+    }, '成功したターンの合図は保持されず forget される');
+
+    await s.clone.stop();
+  });
+
   it('（追加確認）system/notification の上限文言でも枠が閉じたと判定する', async () => {
     // 検知3経路の最後の1つ。必須の6本には無いが、`#dispatch` の `case 'system'`
     // に足した分岐を素通りさせないためにここで直接確かめる。

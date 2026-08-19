@@ -2103,6 +2103,34 @@ class Clone implements CloneHost {
           return;
         }
 
+        // **成功した result は「枠が開いている」ことの権威ある証拠なので、
+        // ここで保持のスイッチを降ろす。** `rate_limit_event.status` は枠
+        // 1つぶんの状態でしかない（`rateLimitFactsSchema` — `status` とは別に
+        // `overageStatus` / `usingOverage` / `overageResetsAt` がある）。
+        // つまり「`five_hour` が `rejected` でも課金枠（overage）に落ちて
+        // ターンは成功する」という組み合わせが構造上ある — `usage-limits.ts`
+        // の `usageTransitionOf` が `entered_overage` と名前まで付けている
+        // **通常の遷移**であって、異常系ではない。
+        //
+        // 直す前は、ターン途中の `rate_limit_event`（`rejected`）で
+        // `#usageBlocked` が立った後、同じターンの `result` が成功しても
+        // それを見ずに `done` を出すだけだった。`#pump` の `finally` は
+        // `#usageBlocked !== null` を見て `defer: true` にする（`#forget` しない）
+        // ので、**答えが返って終わった合図が保持され、次の合図が来たときに
+        // 同じ発言がもう一度処理される**（成功した仕事の二重実行。しかも
+        // 「答えは返ったのに、もう一度同じことをやり出す」という、人間から
+        // 見て最も分かりにくい壊れ方だった）。
+        //
+        // ここで降ろせば、`finally` は `#usageBlocked === null` を見て正しく
+        // `#forget` する。**「試したら通った」を機構が自分で観測して状態を
+        // 戻す**ことにもなり、タイマーを持たない設計（`#usageBlocked` の doc）
+        // とも一貫する — 枠が開いたかを知る唯一の方法は試すことで、成功は
+        // まさにその答えだからである。
+        //
+        // **`#usageNotices`（日誌の畳み込み）は降ろさない。** あれは「同じ
+        // 文言を二度書かない」ためのもので、枠が開いたかどうかとは別の関心
+        // である。
+        this.#usageBlocked = null;
         this.#emit(turn?.conversationId ?? null, { type: 'done' });
         this.#finishTurn();
         return;
