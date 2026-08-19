@@ -49,6 +49,14 @@ function fakeSdk(
     modelUsage?: (callIndex: number) => Record<string, unknown> | undefined;
     /** `result` の `subtype`。既定は `'success'`。 */
     resultSubtype?: string;
+    /**
+     * `result` の本文（`result.result`）。既定は `reply()` の返り値そのまま
+     * （既存の振る舞いを変えない）。支出上限のように、assistant の発言とは別に
+     * `result` だけが理由の本文を運んでくる回を作るためのもの。**固定値を返す
+     * スタブにしない** — 呼ばなければ既定の `text` を素通しするだけで、他の
+     * テストの挙動は1つも変わらない。
+     */
+    resultText?: string;
   } = {},
 ) {
   const calls: FakeCall[] = [];
@@ -104,7 +112,7 @@ function fakeSdk(
       yield {
         type: 'result',
         subtype: options.resultSubtype ?? 'success',
-        result: text,
+        result: options.resultText ?? text,
         session_id: 'sess-fake',
         uuid: 'uuid-result',
         ...(modelUsage === undefined ? {} : { modelUsage }),
@@ -178,6 +186,26 @@ function waitForDone(events: ChatStreamEvent[]): Promise<void> {
       }
     }, 5);
   });
+}
+
+/** ターンの終端（`done` または `error`）。失敗したターンを見るテストで使う。 */
+const isTerminal = (event: ChatStreamEvent): boolean =>
+  event.type === 'done' || event.type === 'error';
+
+/**
+ * ターンの終端（`done` か `error`）が来るまで待つ。**種類は見ない、来たことだけ見る。**
+ *
+ * 失敗したターンを見るテストで `error` だけを待つ形にすると、変異試験（新しい
+ * `if (!isSuccessResult(message)) { ... }` の分岐を消して回すテスト）で
+ * `error` が永久に来ずタイムアウトで落ちる。**タイムアウトは歯があった証拠に
+ * ならない** — 同じホストで別の作業が走っていると負荷だけで同じ落ち方をする
+ * （実測で偽陽性が出ている）。ここでは終端の"有無"だけを待ち、終端の"種類"は
+ * 呼び出し側が `isTerminal` で絞った配列を `toEqual` で比べて確かめる。分岐を
+ * 消した世界でも `done` は同じ速さで来て poll は抜けるが、期待した `['error']`
+ * とは一致せず**アサーション不一致で落ちる**（タイムアウトでは落ちない）。
+ */
+async function waitForTerminal(events: ChatStreamEvent[]): Promise<void> {
+  await expect.poll(() => events.some(isTerminal), { timeout: 3000 }).toBe(true);
 }
 
 describe('クローン', () => {
@@ -2380,18 +2408,111 @@ describe('クローンの消費が台帳に載る（誰が・どこで）', () =
     // SDK は `crash/startup-error results may carry zeroed values` と言っている。
     // ゼロを「累積が 0 になった」として通すと基準が下がり、次に届いた本物の累積が
     // 丸ごと増分になる ＝ 記録済みの分がもう一度積まれる。
+    //
+    // **`waitForDone` から `waitForTerminal` へ変えた経緯。** ここは元々
+    // `waitForDone` で待っていたが、それは「失敗した result でも done が出る」
+    // という当時の欠陥をそのまま仕様として固定していた（`case 'result':` が
+    // 成否を見ずに無条件で `done` を出していたため）。その欠陥を直した結果、
+    // このターンは `done` ではなく `error` で終わるので `waitForDone` は
+    // 3秒でタイムアウトして落ちる。台帳のアサーション（`rows` が空 / `since` が
+    // null）はこのテストが本来保証しているものなので変えていない。
     const s = setup(undefined, createMemoryStores(), {
       resultSubtype: 'error_during_execution',
       modelUsage: () => usage('claude-fable-5', 0),
     });
 
     s.clone.post(humanMessage('やあ'));
-    await waitForDone(s.events);
+    await waitForTerminal(s.events);
+    expect(s.events.filter(isTerminal).map((event) => event.type)).toEqual(['error']);
 
     const aggregate = await s.stores.usage.aggregate({});
     expect(aggregate.rows).toEqual([]);
     // 台帳そのものが始まっていない（1件も record していない）。
     expect(aggregate.since).toBeNull();
+
+    await s.clone.stop();
+  });
+
+  it('失敗した result はターンの失敗として日誌に残る（無記録で消えない）', async () => {
+    // 直す前は、失敗した result でも成否を見ずに `done` を出して `#finishTurn()`
+    // を呼んでいた。`#turn` は既に `null` になった後なので `#reportFailure` が
+    // 一度も呼ばれず、例外も起きないので `#handle` は正常終了し、受信箱の合図は
+    // `#forget` されて消える — 支出上限や実行時エラーでターンが死んでも、日誌に
+    // 何も残らなかった。ここではその「無記録で消える」が直っていることを見る。
+    const s = setup(undefined, createMemoryStores(), {
+      resultSubtype: 'error_during_execution',
+    });
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForTerminal(s.events);
+    expect(s.events.filter(isTerminal).map((event) => event.type)).toEqual(['error']);
+
+    const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as {
+      text: string;
+    }[];
+    expect(exchanges.some((entry) => entry.text.includes('人間との対話ターンが失敗した'))).toBe(
+      true,
+    );
+
+    await s.clone.stop();
+  });
+
+  it('失敗した result で done を出さない（成功したことにしない）', async () => {
+    // `#emit` は `done` と `error` のどちらか一方だけを出す設計である。ここは
+    // 「`error` が来た」だけでなく「`done` は一度も来ていない」までを見る —
+    // 直す前の欠陥はまさに「失敗しても done が出る」ことだったので、`error` の
+    // 有無だけでは同じ欠陥を見落としうる。
+    const s = setup(undefined, createMemoryStores(), {
+      resultSubtype: 'error_during_execution',
+    });
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForTerminal(s.events);
+    expect(s.events.filter(isTerminal).map((event) => event.type)).toEqual(['error']);
+    expect(s.events.some((event) => event.type === 'done')).toBe(false);
+
+    await s.clone.stop();
+  });
+
+  it('失敗した result でもターンは畳まれ、受信箱が止まらない', async () => {
+    // `#finishTurn()` を失敗側で呼び忘れると、その `Turn.resolve` を待っている
+    // `#runTurn`（延いては `#handle` と `#pump` の `for await`）が永久に返らず、
+    // 受信箱のループそのものが次の合図へ進めなくなる。1本目が失敗で終わった後、
+    // 2本目の発言が独立に処理される（＝2本目の error が来る）ことでそれを見る。
+    const s = setup(undefined, createMemoryStores(), {
+      resultSubtype: 'error_during_execution',
+    });
+
+    s.clone.post(humanMessage('1回目'));
+    await waitForTerminal(s.events);
+    expect(s.events.filter(isTerminal).map((event) => event.type)).toEqual(['error']);
+
+    s.clone.post(humanMessage('2回目'));
+    await expect.poll(() => s.events.filter(isTerminal).length === 2, { timeout: 3000 }).toBe(true);
+    expect(s.events.filter(isTerminal).map((event) => event.type)).toEqual(['error', 'error']);
+
+    await s.clone.stop();
+  });
+
+  it('支出上限で終わったとき、その理由が記録に残る', async () => {
+    // 実機で支出上限に当たったとき、SDK は `subtype: 'error_during_execution'` と
+    // 共に `result` へ `You've hit your individual spend limit` を載せて終わる
+    // （`runner.ts` の同じ場面のコメントと同じ実例）。`subtype` だけを見て
+    // 「結果なしで終了: error_during_execution」とだけ記録すると、上限で
+    // 止まったのか単に失敗したのかをクローンが区別できなくなる。
+    const spendLimitMessage = "You've hit your individual spend limit for this account.";
+    const s = setup(undefined, createMemoryStores(), {
+      resultSubtype: 'error_during_execution',
+      resultText: spendLimitMessage,
+    });
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForTerminal(s.events);
+
+    const errorEvent = s.events.find(
+      (event): event is Extract<ChatStreamEvent, { type: 'error' }> => event.type === 'error',
+    );
+    expect(errorEvent?.message).toContain(spendLimitMessage);
 
     await s.clone.stop();
   });

@@ -1852,6 +1852,31 @@ class Clone implements CloneHost {
             ...(turn.conversationId === null ? {} : { conversationId: turn.conversationId }),
           });
         }
+
+        // **成否を見ずに `done` を出していたのがこの穴の本体である。** 直す前は
+        // ここで `result` の成否を一度も見ておらず、`error_during_execution` や
+        // 支出上限でターンが死んでも `{ type: 'done' }` が無条件に出て
+        // `#finishTurn()` が呼ばれていた。`#read()` の `finally` に来た時点で
+        // `this.#turn` は既に `null` なので `#reportFailure` は一度も呼ばれず、
+        // 例外も起きないから `#handle` は正常終了し、受信箱の合図は `#forget`
+        // されて消える — 支出上限でクローンのターンが死んでも、どこにも記録が
+        // 残らなかった。**`runner.ts:1064` の
+        // `if (isSuccessResult(message)) { ... } else { ... }` と同じ分岐をここにも
+        // 置く**（マネージャー側にはこの分岐と回帰テストがあり、クローン側だけ
+        // 無いのは非対称だった）。
+        if (!isSuccessResult(message)) {
+          // 失敗した result では `done` を出さない。`#reportFailure` が出す
+          // `{ type: 'error' }` を終端にする（成功したことにしない）。
+          await this.#reportFailure(turn?.conversationId ?? null, resultFailureReason(message));
+          // 失敗側でも必ず畳む。`#runTurn` は `#finishTurn()` が呼ぶ `turn.resolve()`
+          // だけを待っており（`await done`）、`#handle`（`human_message` の分岐）は
+          // その `#runTurn` を待つ。呼ばなければ `#runTurn` が永久に返らず、それを
+          // 待つ `#handle` も返らず、`#handle` を待つ `#pump` の `for await` が
+          // 次の合図へ進めない ＝ 受信箱ごと止まる。
+          this.#finishTurn();
+          return;
+        }
+
         this.#emit(turn?.conversationId ?? null, { type: 'done' });
         this.#finishTurn();
         return;
@@ -2046,6 +2071,26 @@ function textDelta(event: unknown): string | null {
   if (candidate.type !== 'content_block_delta') return null;
   if (candidate.delta?.type !== 'text_delta') return null;
   return typeof candidate.delta.text === 'string' ? candidate.delta.text : null;
+}
+
+/**
+ * 失敗した result を1行の理由にする。
+ *
+ * **`runner.ts` の `resultText()` と役割は同じだが、共有化はしない** — あちらは
+ * `result` の本文と `subtype` のどちらか一方だけを返す作り（本文があれば本文、
+ * 無ければ `（結果なしで終了: subtype）`）だが、ここは**両方を必ず載せる**。
+ * 支出上限のとき SDK は `subtype: 'error_during_execution'` と
+ * `result: "You've hit your individual spend limit..."` を両方運んでくる。
+ * 片方だけにすると「上限で止まった」と「ただ失敗した」が区別できなくなる
+ * （`runner.ts` の `else` 側のコメントと同じ理由）。5行程度の重複は許容する。
+ */
+function resultFailureReason(message: SDKMessage): string {
+  const candidate = message as { result?: unknown; subtype?: string };
+  const body =
+    typeof candidate.result === 'string' && candidate.result.length > 0
+      ? candidate.result
+      : '（本文なし）';
+  return `結果なしで終了: ${candidate.subtype ?? '(不明)'} / ${body}`;
 }
 
 /**
