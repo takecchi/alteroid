@@ -6,7 +6,13 @@ import type { ChatStreamEvent } from './schema.js';
 import type { CloneRuntimeFacts } from './self.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
-import { CLONE_ALLOWED_TOOLS, createCloneTools, qualifiedToolName } from './tools.js';
+import { buildCloneSystemPrompt } from './prompt.js';
+import {
+  CLONE_ALLOWED_TOOLS,
+  CLONE_TOOL_NAMES,
+  createCloneTools,
+  qualifiedToolName,
+} from './tools.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 
 interface Harness {
@@ -1157,5 +1163,26 @@ describe('self_status（いま自分がどう走っているか）', () => {
     const reply = await h.call('self_status', {});
 
     expect(reply).toContain('同じ行は無い');
+  });
+});
+
+/**
+ * **道具を足したら、システムプロンプトの道具一覧（`prompt.ts` の「# 道具」）にも載せる。**
+ *
+ * 関数呼び出しのスキーマ（`allowedTools`）に載っていれば呼べはするが、クローンが
+ * 「そういう道具がある」と自分で気づく手がかりは一覧にしかない。載せ忘れると、
+ * 能力はあるのに使われない道具ができる（`self_status` を足したときに実際に
+ * 載せ忘れた）。ここは載せ忘れが**静かに通る**形の失敗なので、仕組みで塞ぐ。
+ */
+describe('システムプロンプトの道具一覧', () => {
+  it('CLONE_TOOL_NAMES の全部が載っている（一覧に無い道具を作らない）', () => {
+    const prompt = buildCloneSystemPrompt({ memory: '' });
+    const section = prompt.split('# 道具')[1]?.split('# 委譲')[0];
+    // 節そのものが見つからなければ、下の照合は全部「載っていない」に倒れる。
+    // **その状態を「一覧が空だった」と読み替えないこと**（節の名前を変えたなら
+    // ここも直す、が正しい振る舞いである）。
+    expect(section).toBeDefined();
+    const missing = CLONE_TOOL_NAMES.filter((name) => !(section ?? '').includes(`\`${name}\``));
+    expect(missing).toEqual([]);
   });
 });
