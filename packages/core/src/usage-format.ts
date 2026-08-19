@@ -1,6 +1,21 @@
 import type { UsageBreakdown, UsageRow, UsageTotals } from './usage.js';
 
 /**
+ * 層（**誰が**）と場所（**どこで**）の取りうる値。**この2本が唯一の一覧である。**
+ *
+ * 意味と「なぜこの値しか無いか」は `usage.ts` の `usageLayerSchema` /
+ * `usageSiteSchema` に書いてある。**値の並びだけをここへ置いてあるのは、
+ * ブラウザ（`apps/web`）が読めるのがこのファイルだけだからである** — 画面が
+ * 絞り込みの選択肢を持つために zod と core 全体を読ませるわけにはいかず、かと
+ * いって画面側に書き写すと、値が増えたときにそこだけ古くなる。
+ *
+ * `usage.ts` の schema はこの2本から作る（`z.enum(USAGE_LAYERS)`）。**だから
+ * ここへ足せば schema も画面も同時に追いつく。**
+ */
+export const USAGE_LAYERS = ['clone', 'manager'] as const;
+export const USAGE_SITES = ['session', 'distill'] as const;
+
+/**
  * 台帳の数字を読める形にするための算術と整形。
  *
  * **実行時の依存を1つも持たない**（型は `usage.ts` から `import type` で取るので

@@ -312,7 +312,9 @@ describe('層と場所の軸（誰が・どこで使ったか）', () => {
     const { rows } = await store.aggregate({});
     expect(rows).toHaveLength(2);
     expect(
-      rows.map((r) => ({ layer: r.layer, costUsd: r.totals.costUsd })).sort((a, b) => a.costUsd - b.costUsd),
+      rows
+        .map((r) => ({ layer: r.layer, costUsd: r.totals.costUsd }))
+        .sort((a, b) => a.costUsd - b.costUsd),
     ).toEqual([
       { layer: 'manager', costUsd: 2 },
       { layer: 'clone', costUsd: 5 },

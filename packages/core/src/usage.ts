@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 // 再輸出（下）とは別に、この中でも使うので取り込む。
-import { USAGE_ESTIMATE_NOTICE, ZERO_USAGE } from './usage-format.js';
+import { USAGE_ESTIMATE_NOTICE, USAGE_LAYERS, USAGE_SITES, ZERO_USAGE } from './usage-format.js';
 
 /**
  * Claude の利用状況の台帳（消費した側の記録）。
@@ -108,7 +108,7 @@ export type UsageTotals = z.infer<typeof usageTotalsSchema>;
  * 含む」と書く。`subagent_type` と `message.usage` から自前に数え直す道はあるが、
  * それは `modelUsage` と一致する保証の無い別会計になる（#45 が避けた形）。
  */
-export const usageLayerSchema = z.enum(['clone', 'manager']);
+export const usageLayerSchema = z.enum(USAGE_LAYERS);
 
 export type UsageLayer = z.infer<typeof usageLayerSchema>;
 
@@ -143,7 +143,7 @@ export type UsageLayer = z.infer<typeof usageLayerSchema>;
  * permission classifier, token-count probes) are excluded」と言っている。
  * **台帳の合計は「alteroid が使った分の全部」ではない。**
  */
-export const usageSiteSchema = z.enum(['session', 'distill']);
+export const usageSiteSchema = z.enum(USAGE_SITES);
 
 export type UsageSite = z.infer<typeof usageSiteSchema>;
 
@@ -174,7 +174,6 @@ export const CLONE_ACTOR_ID = 'clone';
 export const usageAccumulationSchema = z.enum(['cumulative', 'oneshot']);
 
 export type UsageAccumulation = z.infer<typeof usageAccumulationSchema>;
-
 
 /**
  * `result.modelUsage` をそのまま写した、その時点の**累積**。

@@ -27,7 +27,15 @@ import { CANON_REVISION, canonDocument, canonNames, describeCloneRuntime } from 
 import type { CloneRuntimeFacts } from './self.js';
 import type { Stores } from './store.js';
 import type { AccountUsageState } from './usage-snapshot.js';
-import { formatUsd, summarizeUsage, type UsageAggregate } from './usage.js';
+import {
+  formatUsd,
+  summarizeUsage,
+  usageLayerSchema,
+  usageSiteSchema,
+  type UsageAggregate,
+  type UsageBreakdown,
+  type UsageTotals,
+} from './usage.js';
 
 /**
  * クローンの道具（インプロセス MCP）。
@@ -488,21 +496,49 @@ export function createCloneTools(context: ToolContext) {
     tool(
       'usage_read',
       [
-        'alteroid が使った分（トークンと費用）を台帳から読む。日・マネージャー・モデル別。',
+        'alteroid が使った分（トークンと費用）を台帳から読む。',
+        '軸は5つ — 日・マネージャー（誰の分か）・モデル・layer（誰が: clone / manager）・site（どこで: session / distill）。',
         '**推定値であり請求明細ではない。**',
         '記録は台帳を置いた日から始まっているので、それより前は 0 ではなく「記録が無い」と出る。',
+        'まとめ表示は軸ごとに打ち切る。続きは axis と offset で辿れる（打ち切りの行にそのまま書いてある）。',
       ].join(' '),
       {
         from: z.string().optional().describe('この日から（YYYY-MM-DD）。省略すると台帳の全期間'),
         to: z.string().optional().describe('この日まで（YYYY-MM-DD）'),
-        managerId: z.string().optional().describe('このマネージャーの分だけ'),
+        managerId: z
+          .string()
+          .optional()
+          .describe('この actor の分だけ（マネージャーの id か "clone"）'),
+        layer: usageLayerSchema.optional().describe('誰が使った分だけ（clone / manager）'),
+        site: usageSiteSchema.optional().describe('どこで使った分だけ（session / distill）'),
+        axis: z
+          .enum(USAGE_AXES)
+          .optional()
+          .describe(
+            'この軸だけを offset から出す（まとめ表示・他の軸・アカウント全体の残りは出ない）',
+          ),
+        offset: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe('axis と一緒に使う。その軸の何件目から出すか'),
       },
-      async ({ from, to, managerId }) => {
+      async ({ from, to, managerId, layer, site, axis, offset }) => {
         const aggregate = await stores.usage.aggregate({
           ...(from === undefined ? {} : { from }),
           ...(to === undefined ? {} : { to }),
           ...(managerId === undefined ? {} : { managerId }),
+          ...(layer === undefined ? {} : { layer }),
+          ...(site === undefined ? {} : { site }),
         });
+        // **軸モードでは「続きの1軸」だけを返す。** アカウント全体の残りもまとめ表示も
+        // 付けない — 続きを辿るほど同じ全体が積み増しで返ってくるのを避けるためである。
+        if (axis !== undefined) {
+          return text(
+            renderUsage(aggregate, { axis, ...(offset === undefined ? {} : { offset }) }),
+          );
+        }
         return text(
           [
             renderAccountUsage(context.accountUsage?.() ?? { state: 'unknown' }),
@@ -1294,6 +1330,62 @@ function safeJson(value: unknown): string {
  */
 const USAGE_AXIS_LIMIT = 14;
 
+/**
+ * 軸の名前。**打ち切りから続きへ辿るための識別子でもある**（`axis` 引数）。
+ *
+ * 「全部出す」は採らない — 出力が伸びるとクローンの入力を毎ターン食う。代わりに
+ * **打ち切りの行がそのまま次に打つ手を書く。**
+ */
+const USAGE_AXES = ['date', 'manager', 'model', 'layer', 'site'] as const;
+type UsageAxis = (typeof USAGE_AXES)[number];
+
+/** `axis` を指定したときに1回で出す件数。 */
+const USAGE_AXIS_PAGE = 100;
+
+const USAGE_AXIS_TITLES: Record<UsageAxis, string> = {
+  date: '日別',
+  manager: 'マネージャー別',
+  model: 'モデル別',
+  layer: '層別（誰が）',
+  site: '場所別（どこで）',
+};
+
+interface UsageAxisEntry {
+  label: string;
+  totals: UsageTotals;
+}
+
+/**
+ * 軸ごとの並びを1か所へ寄せる。**まとめ表示と `axis` モードが同じここを通ること。**
+ *
+ * まとめ表示の先頭 N 件と `axis` モードの `offset=0..N` が同じ並びでなければ、
+ * ページングは取りこぼすか重複する。
+ *
+ * **全順序にする。** 費用の降順だけだと同額のときの順序が `groupBy` の `Map` の
+ * 挿入順に依存する（いまは安定ソートの結果としてラベル昇順に落ちているが、それは
+ * 実装の偶然である）。「費用降順 → ラベル昇順」を約束にすると結果は変わらないまま
+ * ページングの前提が成り立つ。
+ */
+function usageAxisEntries(summary: UsageBreakdown, axis: UsageAxis): UsageAxisEntry[] {
+  const byCost = (entries: UsageAxisEntry[]) =>
+    entries.sort((a, b) => b.totals.costUsd - a.totals.costUsd || a.label.localeCompare(b.label));
+  switch (axis) {
+    case 'date':
+      // 日別は新しい順（古い日で上限を使い切らせない）。日付そのものが全順序である。
+      return summary.byDate
+        .map((entry) => ({ label: entry.date, totals: entry.totals }))
+        .sort((a, b) => b.label.localeCompare(a.label));
+    case 'manager':
+      return byCost(summary.byManager.map((e) => ({ label: e.managerId, totals: e.totals })));
+    case 'model':
+      return byCost(summary.byModel.map((e) => ({ label: e.model, totals: e.totals })));
+    case 'layer':
+      return byCost(summary.byLayer.map((e) => ({ label: e.layer, totals: e.totals })));
+    case 'site':
+      return byCost(summary.bySite.map((e) => ({ label: e.site, totals: e.totals })));
+  }
+}
+
 /** 残り時間を d/h/m で。過ぎていたら 0 に丸める（負の残り時間を見せない）。 */
 function untilReset(resetsAt: number, now: number): string {
   const minutes = Math.max(0, Math.floor((resetsAt - now) / 60_000));
@@ -1372,8 +1464,11 @@ function renderAccountUsage(state: AccountUsageState): string {
   return lines.join('\n');
 }
 
-function renderUsage(aggregate: UsageAggregate): string {
-  const { rows, since, beforeLedger, notice } = aggregate;
+function renderUsage(
+  aggregate: UsageAggregate,
+  view: { axis?: UsageAxis; offset?: number } = {},
+): string {
+  const { rows, since, layersSince, beforeLedger, beforeLayers, notice } = aggregate;
 
   if (since === null) {
     return [
@@ -1385,7 +1480,32 @@ function renderUsage(aggregate: UsageAggregate): string {
   const summary = summarizeUsage(rows);
   const lines: string[] = [];
 
-  if (rows.length === 0) {
+  if (view.axis !== undefined) {
+    // **軸モードは「打ち切りの続き」を取りに来た呼び出しである。** まとめ表示も
+    // 他の軸も出さない — 続きを取るたびに同じ全体が返ってくると、続きを辿るほど
+    // 入力を食うことになる。
+    const axis = view.axis;
+    const offset = view.offset ?? 0;
+    const entries = usageAxisEntries(summary, axis);
+    lines.push(`${USAGE_AXIS_TITLES[axis]}（全 ${entries.length} 件 / offset=${offset}）`);
+    const page = entries.slice(offset, offset + USAGE_AXIS_PAGE);
+    if (page.length === 0) {
+      // **黙って空を返さない。** 空の一覧だけでは「この軸には記録が無い」と
+      // 「offset が範囲外」を区別できない。
+      lines.push(`  （その軸は全 ${entries.length} 件で、offset=${offset} 以降は無い）`);
+    } else {
+      for (const entry of page) {
+        lines.push(`  ${entry.label}: ${formatUsd(entry.totals.costUsd)}`);
+      }
+      const rest = entries.length - (offset + page.length);
+      if (rest > 0) {
+        lines.push(
+          `  …（残り ${rest} 件は出していない。` +
+            `axis="${axis}", offset=${offset + page.length} で続きが出る）`,
+        );
+      }
+    }
+  } else if (rows.length === 0) {
     lines.push('その範囲には記録が無い。');
   } else {
     lines.push(`合計 ${formatUsd(summary.total.costUsd)}`);
@@ -1396,37 +1516,21 @@ function renderUsage(aggregate: UsageAggregate): string {
         `キャッシュ書き ${summary.total.cacheCreationInputTokens.toLocaleString('en-US')}`,
     );
 
-    const axis = (
-      title: string,
-      entries: Array<{ label: string; totals: { costUsd: number } }>,
-    ) => {
-      lines.push('', title);
+    for (const axis of USAGE_AXES) {
+      const entries = usageAxisEntries(summary, axis);
+      lines.push('', `${USAGE_AXIS_TITLES[axis]}:`);
       for (const entry of entries.slice(0, USAGE_AXIS_LIMIT)) {
         lines.push(`  ${entry.label}: ${formatUsd(entry.totals.costUsd)}`);
       }
       if (entries.length > USAGE_AXIS_LIMIT) {
-        lines.push(`  …（残り ${entries.length - USAGE_AXIS_LIMIT} 件は出していない）`);
+        // **打ち切りの行がそのまま次に打つ手を書く。** 「残り N 件」だけでは、
+        // 続きを見る方法が無いのと同じである。
+        lines.push(
+          `  …（残り ${entries.length - USAGE_AXIS_LIMIT} 件は出していない。` +
+            `axis="${axis}", offset=${USAGE_AXIS_LIMIT} で続きが出る）`,
+        );
       }
-    };
-
-    // 日別は新しい順（古い日で上限を使い切らせない）。
-    axis(
-      '日別:',
-      [...summary.byDate].reverse().map((e) => ({ label: e.date, totals: e.totals })),
-    );
-    // マネージャー別・モデル別は高い順（どの委譲・どの層が高かったかを先に見せる）。
-    axis(
-      'マネージャー別:',
-      [...summary.byManager]
-        .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
-        .map((e) => ({ label: e.managerId, totals: e.totals })),
-    );
-    axis(
-      'モデル別:',
-      [...summary.byModel]
-        .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
-        .map((e) => ({ label: e.model, totals: e.totals })),
-    );
+    }
   }
 
   lines.push('', `台帳の始点: ${since}`);
@@ -1434,6 +1538,20 @@ function renderUsage(aggregate: UsageAggregate): string {
     // **0 と言わない。** 台帳が無かった期間を「使っていない期間」と読ませない。
     lines.push(
       '照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。',
+    );
+  }
+  // **層の始点を台帳の始点と混ぜない。** 層の軸は台帳より後から入ったので、それより
+  // 前の行の層と場所は既定値であって観測ではない。
+  lines.push(
+    layersSince === null
+      ? '層と場所の軸はまだ1件も記録していない。'
+      : `層と場所の軸の始点: ${layersSince}`,
+  );
+  if (beforeLayers) {
+    lines.push(
+      '照会した範囲は層と場所の軸の始点より前にかかっている。' +
+        'その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、' +
+        '蒸留が起きていなかった、とは読まないこと）。',
     );
   }
   lines.push(notice);
@@ -1483,15 +1601,20 @@ function renderMemorySize(documents: MemoryDocumentMeta[], totalMemory: string):
 /**
  * SDK が実際に使っているモデル id と、台帳（`usage_read` と同じ器）を突き合わせる。
  *
- * **「あなたの消費が台帳に載っている／載っていない」と書かないこと。** 台帳の軸
- * （日 × マネージャー × モデル）が変わった瞬間にその文は嘘になる。代わりに軸
- * そのもの — 該当するモデル id の行がどの `managerId` にあるか — を構造として出す。
+ * **「あなたの消費が台帳に載っている／載っていない」と書かないこと。** 台帳の軸が
+ * 変わった瞬間にその文は嘘になる。代わりに軸そのもの — 該当するモデル id の行が
+ * どの `managerId` × `layer` × `site` にあるか — を構造として出す。
+ *
+ * **畳む鍵に層と場所を入れる。** `ALTEROID_CLONE_MODEL` を置けばクローンと
+ * マネージャーは同じモデル id に並ぶので、`managerId` だけで畳むと #80 で残った
+ * 「モデル名だけでは自分を見分けられない」がそのまま残る。層を鍵に入れて初めて
+ * 「このモデル id の行のうち、層はこう分かれている」が見える。
  */
 function renderLedgerCrossReference(
   sdkModel: string | null,
   aggregate: UsageAggregate | null,
 ): string {
-  const lines = ['## 台帳との突き合わせ（軸: 日 × マネージャー × モデル）', ''];
+  const lines = ['## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）', ''];
 
   if (sdkModel === null) {
     lines.push('まだ init を観測していないので、SDK のモデル id が分からず突き合わせられない。');
@@ -1508,22 +1631,46 @@ function renderLedgerCrossReference(
     return lines.join('\n');
   }
 
-  // managerId ごとに畳む。**件数（行数）に比例して伸ばさない** — 日別の行数が
-  // 増えても、出す単位は managerId の数までにとどめる。
-  const byManager = new Map<string, number>();
+  // actor × 層 × 場所 ごとに畳む。**件数（行数）に比例して伸ばさない** — 日別の
+  // 行数が増えても、出す単位はこの組み合わせの数までにとどめる。
+  const buckets = new Map<
+    string,
+    { managerId: string; layer: string; site: string; costUsd: number }
+  >();
   for (const row of matches) {
-    byManager.set(row.managerId, (byManager.get(row.managerId) ?? 0) + row.totals.costUsd);
+    const key = `${row.managerId} ${row.layer} ${row.site}`;
+    const found = buckets.get(key);
+    if (found === undefined) {
+      buckets.set(key, {
+        managerId: row.managerId,
+        layer: row.layer,
+        site: row.site,
+        costUsd: row.totals.costUsd,
+      });
+    } else {
+      found.costUsd += row.totals.costUsd;
+    }
   }
-  const managers = [...byManager.entries()].sort((a, b) => b[1] - a[1]);
+  // 費用降順 → 鍵の昇順。同額のときに `Map` の挿入順へ落ちないようにする。
+  const entries = [...buckets.values()].sort(
+    (a, b) =>
+      b.costUsd - a.costUsd ||
+      a.managerId.localeCompare(b.managerId) ||
+      a.layer.localeCompare(b.layer) ||
+      a.site.localeCompare(b.site),
+  );
 
   lines.push(
-    `モデル id ${sdkModel} の行がある managerId（台帳の軸そのもの。行には必ず managerId が付く）:`,
+    `モデル id ${sdkModel} の行の内訳（台帳の軸そのもの。行には必ず actor と層と場所が付く）:`,
   );
-  for (const [managerId, costUsd] of managers.slice(0, USAGE_AXIS_LIMIT)) {
-    lines.push(`  - managerId: "${managerId}" / 合計 ${formatUsd(costUsd)}`);
+  for (const entry of entries.slice(0, USAGE_AXIS_LIMIT)) {
+    lines.push(
+      `  - managerId: "${entry.managerId}" / layer: ${entry.layer} / site: ${entry.site}` +
+        ` / 合計 ${formatUsd(entry.costUsd)}`,
+    );
   }
-  if (managers.length > USAGE_AXIS_LIMIT) {
-    lines.push(`  …（残り ${managers.length - USAGE_AXIS_LIMIT} managerId は出していない）`);
+  if (entries.length > USAGE_AXIS_LIMIT) {
+    lines.push(`  …（残り ${entries.length - USAGE_AXIS_LIMIT} 件は出していない）`);
   }
   return lines.join('\n');
 }

@@ -1427,8 +1427,6 @@ function reportText(said: readonly string[], result: string): string {
   return `${body}\n\n${result}`;
 }
 
-
-
 /**
  * `result.permission_denials[]`（確認へ上げずに止められた道具）。無ければ空。
  *
@@ -1448,7 +1446,6 @@ function resultErrors(message: SDKMessage): string[] {
     ? errors.filter((line): line is string => typeof line === 'string')
     : [];
 }
-
 
 function resultText(message: SDKMessage): string {
   const candidate = message as { result?: unknown; subtype?: string };

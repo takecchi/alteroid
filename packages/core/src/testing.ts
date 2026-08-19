@@ -33,13 +33,53 @@ import type {
   UsageStore,
 } from './store.js';
 import {
+  foldOneshotUsage,
   foldUsageSnapshot,
   USAGE_ESTIMATE_NOTICE,
   usageDate,
   ZERO_USAGE,
   type UsageBaseline,
+  type UsageLayer,
   type UsageRow,
+  type UsageSite,
 } from './usage.js';
+
+/**
+ * 台帳の行の鍵。**層と場所を鍵から外さないこと。**
+ *
+ * クローンは自分のセッション本体と要約の蒸留の両方で使うので、同じ actor・同じ日・
+ * 同じモデルで意味の違う行が2つ立つ。鍵が足りないと増分が先にある行へ足し込まれ、
+ * 層と場所は先に入った側の値のまま残る ＝ 出力から見分けられない誤帰属になる
+ * （`@alteroid/storage-fs` の `rowKey` / pg の一意索引と同じ話）。
+ */
+function usageRowKey(
+  date: string,
+  managerId: string,
+  model: string,
+  layer: UsageLayer,
+  site: UsageSite,
+): string {
+  return `${date} ${managerId} ${model} ${layer} ${site}`;
+}
+
+/** 累積の基準の鍵。**主体は「層 × actor」である**（`usage.ts` の `usageBaselineSchema`）。 */
+function usageBaselineKey(layer: UsageLayer, managerId: string): string {
+  return `${layer} ${managerId}`;
+}
+
+/**
+ * 照会範囲の一部でも始点より前にかかっていたか（台帳の始点にも層の軸の始点にも使う）。
+ *
+ * **ドライバと同じ3分岐にすること。** 一度も記録していなければ始まっている期間が
+ * そもそも無いので常に真、下限の無い照会（`from` 省略）はその前を含みうるので真、
+ * 下限があるときだけ始点の日付と比べる。fs / pg の `isBeforeLedger` と同じ判断で、
+ * 器ごとに置いてあるのも同じ理由である（どちらのドライバの内部実装にも属さない補助）。
+ */
+function isBeforeUsageStart(start: string | null, from: string | undefined): boolean {
+  if (start === null) return true;
+  if (from === undefined) return true;
+  return from < usageDate(new Date(start));
+}
 
 /**
  * テスト用のインメモリストア。storage-fs の代わりに core のテストで使う。
@@ -315,25 +355,53 @@ export function createMemoryStores(): Stores {
   /**
    * 利用状況の台帳（インメモリ）。
    *
-   * **差分ロジックは本番と共有する** — `foldUsageSnapshot` を呼ぶので、
-   * 「テストの器だけ二重計上しない」というずれ方をしない。
+   * **差分ロジックも鍵の作り方もドライバと共有する** — 差分は
+   * `foldUsageSnapshot` / `foldOneshotUsage` を呼び、行の鍵は
+   * 日 × actor × モデル × 層 × 場所、基準の鍵は 層 × actor で作る。ここだけ
+   * 別の算術や別の鍵を持つと、「テストの器では通るのに本物では二重計上する」
+   * というずれ方をする（`@alteroid/storage-fs` の `usage.ts` と同じ形）。
+   *
+   * **`beforeLedger` / `beforeLayers` の真偽もドライバと同じにすること。**
+   * ここが緩いと、テストは緑のまま「記録が無い」と言うべき場面で「0 だった」と
+   * 言う実装を通す — #45 の要件そのものが黙って消える。実際に `from` 省略時の
+   * `beforeLedger` がドライバ（真）と食い違って偽を返していた。
    */
   const usageRows = new Map<string, UsageRow>();
   const usageBaselines = new Map<string, UsageBaseline>();
   let usageStartedAt: string | null = null;
+  let usageLayeredAt: string | null = null;
 
   const usage: UsageStore = {
-    async record({ managerId, date, at, snapshot }) {
-      const fold = foldUsageSnapshot(usageBaselines.get(managerId) ?? null, snapshot, at);
-      usageBaselines.set(managerId, { ...fold.baseline, managerId });
+    async record({ layer, site, managerId, date, at, snapshot, accumulation }) {
+      // 累積の器は `query()` 呼び出しの寿命で閉じる（`usage.ts` の
+      // `usageAccumulationSchema`）。1回で閉じる呼び出しに基準を持たせると、
+      // 前回より高くついた回だけが差に縮んで黙って目減りする。
+      const baseKey = usageBaselineKey(layer, managerId);
+      const baseline = accumulation === 'oneshot' ? null : (usageBaselines.get(baseKey) ?? null);
+      const fold =
+        accumulation === 'oneshot'
+          ? foldOneshotUsage(snapshot)
+          : foldUsageSnapshot(baseline, snapshot, at);
+      // foldUsageSnapshot は基準が無ければ layer / managerId を空で返す
+      // （呼び出し側が知っている値を後から入れる契約 — usage.ts 参照）。
+      const nextBaseline: UsageBaseline | null =
+        fold.baseline === null ? null : { ...fold.baseline, layer, managerId };
+      // `oneshot` は基準を持たない。既にある基準を消しもしない
+      // （同じ主体が cumulative でも記録していることがある）。
+      if (nextBaseline !== null) usageBaselines.set(baseKey, nextBaseline);
       usageStartedAt ??= at;
+      // 層の軸の始点も1度だけ。**`usageStartedAt` と揃えて入れない** — 台帳の
+      // ほうが先に始まっている器では別の時刻になる。
+      usageLayeredAt ??= at;
       for (const [model, delta] of Object.entries(fold.delta)) {
-        const key = `${date} ${managerId} ${model}`;
+        const key = usageRowKey(date, managerId, model, layer, site);
         const before = usageRows.get(key)?.totals ?? ZERO_USAGE;
         usageRows.set(key, {
           date,
           managerId,
           model,
+          layer,
+          site,
           totals: {
             inputTokens: before.inputTokens + delta.inputTokens,
             outputTokens: before.outputTokens + delta.outputTokens,
@@ -346,27 +414,39 @@ export function createMemoryStores(): Stores {
           updatedAt: at,
         });
       }
-      return fold;
+      return { delta: fold.delta, baseline: nextBaseline, reset: fold.reset };
     },
     async aggregate(query) {
       const rows = [...usageRows.values()]
-        .filter((row) => (query.from === undefined ? true : row.date >= query.from))
-        .filter((row) => (query.to === undefined ? true : row.date <= query.to))
-        .filter((row) => (query.managerId === undefined ? true : row.managerId === query.managerId))
-        .sort((a, b) => a.date.localeCompare(b.date) || a.managerId.localeCompare(b.managerId));
+        .filter((row) => {
+          if (query.from !== undefined && row.date < query.from) return false;
+          if (query.to !== undefined && row.date > query.to) return false;
+          if (query.managerId !== undefined && row.managerId !== query.managerId) return false;
+          if (query.layer !== undefined && row.layer !== query.layer) return false;
+          if (query.site !== undefined && row.site !== query.site) return false;
+          return true;
+        })
+        .sort(
+          (a, b) =>
+            a.date.localeCompare(b.date) ||
+            a.managerId.localeCompare(b.managerId) ||
+            a.model.localeCompare(b.model) ||
+            a.layer.localeCompare(b.layer) ||
+            a.site.localeCompare(b.site),
+        );
       return {
         rows,
         since: usageStartedAt,
+        layersSince: usageLayeredAt,
         // 台帳が始まる前を照会されたら、0 ではなく「記録が無い」と言えるように。
-        beforeLedger:
-          usageStartedAt !== null &&
-          query.from !== undefined &&
-          query.from < usageDate(new Date(usageStartedAt)),
+        beforeLedger: isBeforeUsageStart(usageStartedAt, query.from),
+        // 層の軸が始まる前の行の layer / site は既定値であって観測ではない。
+        beforeLayers: isBeforeUsageStart(usageLayeredAt, query.from),
         notice: USAGE_ESTIMATE_NOTICE,
       };
     },
-    async baseline(managerId) {
-      return usageBaselines.get(managerId) ?? null;
+    async baseline(layer, managerId) {
+      return usageBaselines.get(usageBaselineKey(layer, managerId)) ?? null;
     },
   };
 

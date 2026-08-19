@@ -58,9 +58,21 @@ program
   .option('--from <date>', 'この日から（YYYY-MM-DD）')
   .option('--to <date>', 'この日まで（YYYY-MM-DD）')
   .option('--manager <id>', 'このマネージャーの分だけ')
-  .action(async (options: { from?: string; to?: string; manager?: string }) => {
-    await usageCommand(options);
-  });
+  // **誰が・どこで の絞り込みは4つの口すべてに置く。** 片方にだけ足すと、そこに
+  // しかできない分析が生まれる（PRD「インターフェース」）。
+  .option('--layer <layer>', '誰が（clone / manager）')
+  .option('--site <site>', 'どこで（session / distill）')
+  .action(
+    async (options: {
+      from?: string;
+      to?: string;
+      manager?: string;
+      layer?: string;
+      site?: string;
+    }) => {
+      await usageCommand(options);
+    },
+  );
 
 /**
  * ログイン。**手元のデーモンには不要**（状態ファイルを読める＝実行環境の持ち主

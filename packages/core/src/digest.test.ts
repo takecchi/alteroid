@@ -135,6 +135,9 @@ describe('使った分', () => {
     const stores = createMemoryStores();
     const at = new Date(2026, 7, 14, 10, 0);
     await stores.usage.record({
+      layer: 'manager',
+      site: 'session',
+      accumulation: 'cumulative',
       managerId: 'mgr-heavy',
       date: usageDate(at),
       at: at.toISOString(),

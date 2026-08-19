@@ -288,6 +288,58 @@ describe('HTTP API', () => {
     expect(body.entries[0]).toMatchObject({ type: 'decision' });
   });
 
+  it('利用状況を層と場所で絞れる（4つの口に同じ絞り込みがある）', async () => {
+    // **API にだけ無い／API にだけある絞り込みを作らない**（PRD「インターフェース」）。
+    const record = async (layer: 'clone' | 'manager', site: 'session' | 'distill', usd: number) => {
+      await stores.usage.record({
+        layer,
+        site,
+        accumulation: site === 'distill' ? 'oneshot' : 'cumulative',
+        managerId: layer === 'clone' ? 'clone' : 'mgr-1',
+        date: '2026-08-14',
+        at: '2026-08-14T10:00:00.000Z',
+        snapshot: {
+          models: {
+            'claude-opus-5': {
+              inputTokens: 1,
+              outputTokens: 1,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+              webSearchRequests: 0,
+              costUsd: usd,
+            },
+          },
+        },
+      });
+    };
+    await record('manager', 'session', 2);
+    await record('clone', 'distill', 0.5);
+
+    const all = (await (await app.request('/usage')).json()) as {
+      rows: { layer: string; site: string }[];
+      layersSince: string | null;
+      beforeLayers: boolean;
+    };
+    expect(all.rows).toHaveLength(2);
+    expect(all.layersSince).toBe('2026-08-14T10:00:00.000Z');
+
+    const onlyClone = (await (await app.request('/usage?layer=clone')).json()) as {
+      rows: { layer: string; site: string }[];
+    };
+    expect(onlyClone.rows.map((row) => row.layer)).toEqual(['clone']);
+
+    const onlyDistill = (await (await app.request('/usage?site=distill')).json()) as {
+      rows: { site: string }[];
+    };
+    expect(onlyDistill.rows.map((row) => row.site)).toEqual(['distill']);
+  });
+
+  it('読めない層・場所は 400（黙って全件を返さない）', async () => {
+    // 絞ったつもりの照会が全件を返すと、その数字は「絞り込んだ結果」として読まれる。
+    expect((await app.request('/usage?layer=worker')).status).toBe(400);
+    expect((await app.request('/usage?site=compaction')).status).toBe(400);
+  });
+
   it('不正なスラッグへの書き込みは 400（500 にしない）', async () => {
     const response = await app.request('/memory/..%2Fescape', {
       ...json({ content: 'x' }),

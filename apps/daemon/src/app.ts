@@ -31,6 +31,8 @@ import {
   usageAggregateSchema,
   usageBreakdownSchema,
   usageDateSchema,
+  usageLayerSchema,
+  usageSiteSchema,
   type AuthAccount,
   type AuthService,
 } from '@alteroid/core';
@@ -283,6 +285,14 @@ const usageQuery = z.object({
   from: usageDateSchema.optional(),
   to: usageDateSchema.optional(),
   managerId: z.string().min(1).optional(),
+  /**
+   * **誰が**（層）・**どこで**（場所）で絞る。
+   *
+   * **4つの口（API / CLI / Web / クローンの道具）へ同時に置くこと。** 片方にだけ
+   * 足すと、そこにしかできない分析が生まれる（PRD「インターフェース」）。
+   */
+  layer: usageLayerSchema.optional(),
+  site: usageSiteSchema.optional(),
 });
 const usageResponseSchema = usageAggregateSchema.extend({
   breakdown: usageBreakdownSchema,
@@ -1215,7 +1225,10 @@ export function createApp(deps: AppDeps) {
           'SDK の `result.modelUsage` を積んだ台帳を、日 × マネージャー × モデルで返す。' +
           '**推定値であり請求明細ではない**（`notice` に同じ但し書きが載る）。' +
           '台帳の始点は `since`、照会範囲が始点より前にかかっていれば `beforeLedger` が真になる — ' +
-          'そのときは 0 ではなく「記録が無い」と読むこと（過去分の掘り起こしはしていない）。',
+          'そのときは 0 ではなく「記録が無い」と読むこと（過去分の掘り起こしはしていない）。' +
+          '層と場所の軸は台帳より後から入ったので、始点は `layersSince`、' +
+          '照会範囲がそれより前にかかっていれば `beforeLayers` が真になる — ' +
+          'そのときの `layer` / `site` は既定値であって観測ではない。',
         responses: {
           200: {
             description: '台帳の集計。',
@@ -1229,11 +1242,13 @@ export function createApp(deps: AppDeps) {
       }),
       validator('query', usageQuery),
       async (c) => {
-        const { from, to, managerId } = c.req.valid('query');
+        const { from, to, managerId, layer, site } = c.req.valid('query');
         const aggregate = await stores.usage.aggregate({
           ...(from === undefined ? {} : { from }),
           ...(to === undefined ? {} : { to }),
           ...(managerId === undefined ? {} : { managerId }),
+          ...(layer === undefined ? {} : { layer }),
+          ...(site === undefined ? {} : { site }),
         });
         return c.json({
           ...aggregate,
