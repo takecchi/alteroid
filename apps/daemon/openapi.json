@@ -49,6 +49,10 @@
       "description": "時間起点のジョブ（起点②④）の一覧と手動起動"
     },
     {
+      "name": "commitments",
+      "description": "引き受けたまま終わっていない仕事の台帳。クローンの commitment_* と同じものを人間の側からも読み・積み・閉じられる"
+    },
+    {
       "name": "managers",
       "description": "委譲先マネージャーの一覧・状態・生ログ・直接の指示/停止"
     },
@@ -2867,6 +2871,276 @@
             },
             "in": "path",
             "name": "kind",
+            "required": true
+          }
+        ]
+      }
+    },
+    "/commitments": {
+      "get": {
+        "operationId": "getCommitments",
+        "tags": ["commitments"],
+        "summary": "引き受けたまま終わっていない仕事の一覧",
+        "description": "クローンの `commitment_list` と同じものを人間の側から読む。既定は**未了だけ**で、古い順に返る（齢が判断の材料なので、古いものから見せる）。`includeClosed=true` を付けると片付けたものが未了の後ろに新しい順で続く。順序や優先度は器が持たない。",
+        "responses": {
+          "200": {
+            "description": "台帳の中身。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "at": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "origin": {
+                            "type": "string",
+                            "enum": ["human", "manager", "external", "self"]
+                          },
+                          "source": {
+                            "type": "string"
+                          },
+                          "body": {
+                            "type": "string"
+                          },
+                          "closedAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "closedReason": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["id", "at", "origin", "body"]
+                      }
+                    }
+                  },
+                  "required": ["entries"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "クエリが不正（`includeClosed` は `true` / `false` だけ）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {},
+                    "error": {
+                      "type": "array",
+                      "items": {}
+                    },
+                    "success": {
+                      "type": "boolean",
+                      "const": false
+                    }
+                  },
+                  "required": ["data", "error", "success"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "includeClosed",
+            "schema": {
+              "default": "false",
+              "type": "string",
+              "enum": ["true", "false"]
+            }
+          }
+        ]
+      },
+      "post": {
+        "operationId": "postCommitments",
+        "tags": ["commitments"],
+        "summary": "引き受けた仕事として台帳へ積む",
+        "description": "クローンの `commitment_open` と同じものを人間の手から。**積むだけで、クローンのターンは起こさない**（いま考えさせたいなら `POST /chat` か `POST /events`）。`origin` は `human` で固定され、id はここで振る。",
+        "responses": {
+          "200": {
+            "description": "積んだ。返る id が閉じるときの宛先になる。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["ok", "id"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が JSON として不正（`body` は空にできない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {},
+                    "error": {
+                      "type": "array",
+                      "items": {}
+                    },
+                    "success": {
+                      "type": "boolean",
+                      "const": false
+                    }
+                  },
+                  "required": ["data", "error", "success"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "body": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "source": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": ["body"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/commitments/{id}/close": {
+      "post": {
+        "operationId": "postCommitmentsByIdClose",
+        "tags": ["commitments"],
+        "summary": "引き受けた仕事を片付いたことにする",
+        "description": "クローンの `commitment_close` と同じものを人間の手から。**行は消さない** — 消すと「何を片付けたか」が日報の材料から落ちる。`reason` は必須で、人間はこれを読んで後から否定する。",
+        "responses": {
+          "200": {
+            "description": "閉じた。以後は `includeClosed=true` でだけ見える。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": ["ok"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が JSON として不正（`reason` は空にできない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {},
+                    "error": {
+                      "type": "array",
+                      "items": {}
+                    },
+                    "success": {
+                      "type": "boolean",
+                      "const": false
+                    }
+                  },
+                  "required": ["data", "error", "success"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "その id は台帳に無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "既に片付いている（いつ・どう片付けたかを本文に入れて返す）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": ["reason"]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
             "required": true
           }
         ]
