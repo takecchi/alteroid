@@ -96,7 +96,14 @@ export interface SelfFacts {
 export interface CloneRuntimeFacts {
   /** 宣言されたモデル帯（`ALTEROID_CLONE_MODEL` があればその値、無ければ既定）。 */
   declaredModel: string;
-  /** 既定（`CLONE_MODEL`）から差し替えられているか。 */
+  /**
+   * 人間が `ALTEROID_CLONE_MODEL` に値を**置いたか**。
+   *
+   * **「既定と違うか」ではない。** 置いた値がたまたま既定と同じ
+   * （`ALTEROID_CLONE_MODEL=fable`）でも真である — ここが答えるのは
+   * 「差し替えの承認が置かれているか」であって、値の比較ではない
+   * （`clone.ts` の `placedCloneModel`）。
+   */
   modelOverridden: boolean;
   /** 差し替えの置き場（環境変数の名前）。 */
   modelEnvKey: string;
@@ -162,10 +169,14 @@ export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
   return [
     '## いまどう走っているか',
     '',
-    `- 宣言されたモデル帯: ${facts.declaredModel}` +
+    // **「既定と同じ値か」ではなく「置かれているか」を言う。** 人間が
+    // \`ALTEROID_CLONE_MODEL=fable\` を明示的に置いた場合、前者では「既定のまま」と
+    // 嘘になる（承認が置かれている事実が消える）。
+    `- 宣言されたモデル帯: ${facts.declaredModel}（` +
       (facts.modelOverridden
-        ? `（既定から \`${facts.modelEnvKey}\` で差し替え済み）`
-        : '（既定のまま）'),
+        ? `人間が \`${facts.modelEnvKey}\` に置いた値`
+        : `既定。\`${facts.modelEnvKey}\` は置かれていない`) +
+      '）',
     `- SDK が実際に報告したモデル id: ${facts.sdkModel ?? unknownBecause(INIT_NOT_OBSERVED)}`,
     `- effort（実効値）: ${
       facts.effort ??

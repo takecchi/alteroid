@@ -153,15 +153,20 @@ describe('CloneRuntimeFacts の整形 — 観測した値と、取れていな�
     systemPromptChars: 4000,
   };
 
-  it('宣言されたモデル帯と、差し替えの有無を出す', () => {
+  /**
+   * **「置かれているか」で言う。「既定と違うか」ではない。** RUNTIME の
+   * `declaredModel` は既定と同じ `fable` なので、値の比較で言い換えた実装は
+   * `modelOverridden: true` でも「既定のまま」と出て、ここで落ちる。
+   */
+  it('宣言されたモデル帯と、環境変数が置かれているか否かを出す', () => {
     const overridden = describeCloneRuntime({ ...RUNTIME, modelOverridden: true });
     expect(overridden).toContain('宣言されたモデル帯: fable');
-    expect(overridden).toContain('ALTEROID_CLONE_MODEL');
-    expect(overridden).toContain('差し替え済み');
+    expect(overridden).toContain('人間が `ALTEROID_CLONE_MODEL` に置いた値');
+    expect(overridden).not.toContain('は置かれていない');
 
     const notOverridden = describeCloneRuntime({ ...RUNTIME, modelOverridden: false });
-    expect(notOverridden).toContain('既定のまま');
-    expect(notOverridden).not.toContain('差し替え済み');
+    expect(notOverridden).toContain('既定。`ALTEROID_CLONE_MODEL` は置かれていない');
+    expect(notOverridden).not.toContain('に置いた値');
   });
 
   /**

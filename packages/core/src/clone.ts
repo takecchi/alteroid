@@ -82,9 +82,21 @@ export const CLONE_MODEL_ENV_KEY = 'ALTEROID_CLONE_MODEL';
  * （north_star 禁止1）。読めない値は SDK が起動時に弾く。
  */
 export function resolveCloneModel(env: NodeJS.ProcessEnv = process.env): string {
+  return placedCloneModel(env) ?? CLONE_MODEL;
+}
+
+/**
+ * 人間が実際に値を置いたか（置いていなければ `null`）。
+ *
+ * **{@link resolveCloneModel} と同じ判定を2か所に書かないためにここに居る。**
+ * 置いた値がたまたま既定と同じ（`ALTEROID_CLONE_MODEL=fable`）でも「置いた」で
+ * あり、「既定と違うか」では言い換えられない — `self_status` が返すのは
+ * 「差し替えの承認がここに置かれているか」だからである。
+ */
+export function placedCloneModel(env: NodeJS.ProcessEnv = process.env): string | null {
   const raw = env[CLONE_MODEL_ENV_KEY];
   const trimmed = raw === undefined ? '' : raw.trim();
-  return trimmed.length > 0 ? trimmed : CLONE_MODEL;
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 /** PreCompact で退避したトランスクリプトのうち、蒸留に渡す末尾のサイズ。 */
@@ -344,7 +356,7 @@ class Clone implements CloneHost {
     this.#sessionStore = sessionStore;
     const envSource = env ?? process.env;
     this.#model = resolveCloneModel(envSource);
-    this.#modelOverridden = (envSource[CLONE_MODEL_ENV_KEY] ?? '').trim().length > 0;
+    this.#modelOverridden = placedCloneModel(envSource) !== null;
     this.#env = envSource;
     this.#profile = profile;
     this.#profileService = profileService;
@@ -1248,6 +1260,11 @@ class Clone implements CloneHost {
     const resume = await this.#stores.sessions.getCloneSessionId();
     this.#resumedFrom = resume;
     this.#sawInit = false;
+    // **前のセッションで観測した値を持ち越さない。** ここを残すと、新しい
+    // セッションの init が届く前（あるいは届かないまま）に `self_status` が
+    // 前のセッションのモデル id や effort を「いまの値」として返す ＝
+    // 観測していないものを確信することになる（`CloneRuntimeFacts` の約束）。
+    this.#forgetObservedFacts();
 
     const q = this.#queryFn({
       prompt: this.#inputStream(),
@@ -1355,6 +1372,24 @@ class Clone implements CloneHost {
       injectedMemoryChars: this.#injectedMemory.length,
       systemPromptChars: this.#systemPromptChars,
     };
+  }
+
+  /**
+   * SDK から観測した事実をすべて捨てる（セッションを開き直すとき）。
+   *
+   * **`#sdkModel` と `#effort` を残さないこと。** モデル帯の宣言は変わらなくても、
+   * SDK 側の解決結果はセッションを開き直せば変わりうる（版が上がる／帯の別名が
+   * 別の id を指す）。effort も同じで、次のセッションで観測し直すまでは
+   * 「まだ分からない」が正しい。
+   */
+  #forgetObservedFacts(): void {
+    this.#sdkModel = null;
+    this.#effort = null;
+    this.#claudeCodeVersion = null;
+    this.#apiKeySource = null;
+    this.#permissionMode = null;
+    this.#mcpServersInfo = [];
+    this.#sdkSessionId = null;
   }
 
   /**

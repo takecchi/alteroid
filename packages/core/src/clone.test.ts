@@ -413,7 +413,7 @@ describe('クローン — self_status（runtime facts の配線）', () => {
 
     const body = await s.selfStatus();
     expect(body).toContain('宣言されたモデル帯: まだ無いモデル');
-    expect(body).toContain('差し替え済み');
+    expect(body).toContain(`人間が \`${CLONE_MODEL_ENV_KEY}\` に置いた値`);
 
     await s.clone.stop();
   });
@@ -426,8 +426,8 @@ describe('クローン — self_status（runtime facts の配線）', () => {
     const body = await s.selfStatus();
     expect(body).toContain(`宣言されたモデル帯: ${CLONE_MODEL}`);
     expect(CLONE_MODEL).toBe('fable');
-    expect(body).toContain('既定のまま');
-    expect(body).not.toContain('差し替え済み');
+    expect(body).toContain(`既定。\`${CLONE_MODEL_ENV_KEY}\` は置かれていない`);
+    expect(body).not.toContain('に置いた値');
 
     await s.clone.stop();
   });
@@ -568,6 +568,134 @@ describe('クローン — self_status（runtime facts の配線）', () => {
     expect(body).toContain('effort（実効値）: xhigh');
 
     await s.clone.stop();
+  });
+
+  it('既定と同じ値を人間が置いた場合も「置かれている」と出る（値の比較で言い換えていない）', async () => {
+    const s = setupCapturing({ [CLONE_MODEL_ENV_KEY]: CLONE_MODEL });
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const body = await s.selfStatus();
+    expect(body).toContain(`宣言されたモデル帯: ${CLONE_MODEL}`);
+    // 置いた値が既定と同じでも、置かれている事実は消えない
+    expect(body).toContain(`人間が \`${CLONE_MODEL_ENV_KEY}\` に置いた値`);
+    expect(body).not.toContain('は置かれていない');
+
+    await s.clone.stop();
+  });
+
+  /**
+   * **セッションを開き直したら、前のセッションで観測した値は捨てる。**
+   *
+   * 残すと、新しいセッションの init が届く前（あるいは届かないまま）に
+   * `self_status` が前のセッションの値を「いまの値」として返す — 観測していない
+   * ものを確信する形になり、この道具の存在理由そのものが壊れる。
+   *
+   * 1本目のセッションは init（モデル id 付き）を流してから落ち、2本目は
+   * **init を1度も流さない**偽 SDK を使う。持ち越していれば1本目の値が出る。
+   */
+  it('セッションを開き直すと、前のセッションで観測したモデル id と effort を持ち越さない', async () => {
+    let attempt = 0;
+    let captured: ToolContext | undefined;
+    const calls: Options[] = [];
+
+    const fn = ((params: { prompt: unknown; options?: Options }) => {
+      calls.push(params.options ?? {});
+      const round = ++attempt;
+      async function* generate(): AsyncGenerator<SDKMessage, void> {
+        if (round === 1) {
+          yield {
+            type: 'system',
+            subtype: 'init',
+            session_id: 'sess-first',
+            uuid: 'uuid-init',
+            model: 'claude-first-session-model',
+            claude_code_version: '1.1.1-first',
+            apiKeySource: 'user',
+            permissionMode: 'default',
+            mcp_servers: [{ name: 'alteroid', status: 'connected' }],
+          } as unknown as SDKMessage;
+          // 1往復だけ返してからセッションが落ちる（＝ `#query` が捨てられる）。
+          for await (const message of params.prompt as AsyncIterable<unknown>) {
+            void message;
+            yield {
+              type: 'result',
+              subtype: 'success',
+              result: 'わかった',
+              session_id: 'sess-first',
+              uuid: 'uuid-result',
+            } as unknown as SDKMessage;
+            throw new Error('1本目のセッションが落ちた');
+          }
+          return;
+        }
+        // 2本目は init を1度も流さない。**持ち越していればここで1本目の値が出る。**
+        for await (const message of params.prompt as AsyncIterable<unknown>) {
+          void message;
+          yield {
+            type: 'result',
+            subtype: 'success',
+            result: 'わかった',
+            session_id: 'sess-second',
+            uuid: 'uuid-result-2',
+          } as unknown as SDKMessage;
+        }
+      }
+      const generator = generate();
+      return Object.assign(generator, {
+        close: () => undefined,
+        interrupt: async () => undefined,
+      }) as unknown as Query;
+    }) as unknown as typeof sdkQuery;
+
+    const clone = createClone({
+      stores: createMemoryStores(),
+      queryFn: fn,
+      env: {},
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+      mcpServerFactory: (context) => {
+        captured = context;
+        return createCloneMcpServer(context);
+      },
+    });
+    const events: ChatStreamEvent[] = [];
+    clone.subscribe('conv-1', (event) => events.push(event));
+
+    async function selfStatus(): Promise<string> {
+      if (captured === undefined) throw new Error('ToolContext がまだ捕まっていない');
+      const found = createCloneTools(captured).find((entry) => entry.name === 'self_status');
+      if (!found) throw new Error('self_status という道具が無い');
+      const result = await found.handler({} as never, {});
+      return (result.content ?? []).map((part) => ('text' in part ? part.text : '')).join('');
+    }
+
+    // 1本目 — init を観測し、フックで effort も観測させる。
+    clone.post(humanMessage('やあ'));
+    await waitForDone(events);
+    const hook = calls[0]?.hooks?.PostToolUse?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
+    await hook({ effort: { level: 'xhigh' } } as never, undefined, {
+      signal: new AbortController().signal,
+    } as never);
+    const first = await selfStatus();
+    expect(first).toContain('claude-first-session-model');
+    expect(first).toContain('effort（実効値）: xhigh');
+
+    // 2本目 — セッションが落ちたので開き直る（`calls` が2本になるまで待つ）。
+    events.length = 0;
+    clone.post(humanMessage('もう一度'));
+    await expect.poll(() => calls.length, { timeout: 3000 }).toBe(2);
+    await waitForDone(events);
+
+    const second = await selfStatus();
+    expect(second).toContain('SDK が実際に報告したモデル id: まだ分からない');
+    expect(second).not.toContain('claude-first-session-model');
+    expect(second).toContain('effort（実効値）: まだ分からない');
+    expect(second).not.toContain('effort（実効値）: xhigh');
+
+    await clone.stop();
   });
 });
 

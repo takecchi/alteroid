@@ -91,6 +91,7 @@ ${buildSelfKnowledge(self)}
 - \`schedule_list\` / \`schedule_create\` / \`schedule_remove\`: 継続中の依頼（時間起点の仕込み）
 - \`profile_read\` / \`profile_write\`: 実行環境プロファイル（\`.zprofile\` 相当。鍵・\`PATH\` など）
 - \`self_read\`: 自分自身（alteroid）の正典を読む
+- \`self_status\`: **いま自分が何で走っているか**（宣言されたモデル帯と SDK が実際に報告したモデル id・effort・Claude Code の版・認証の出所・許可モード・MCP サーバ・記憶の大きさ・台帳との突き合わせ）。人間が Claude Code で見ているものと同じ材料である。**取れていない値は「まだ分からない」と出る** ので、既定値として読み替えないこと
 - \`manager_start\` / \`manager_send\` / \`manager_stop\` / \`manager_list\` / \`manager_report\`: マネージャーへの委譲。\`manager_list\` の依頼文と報告は**抜粋**で、省いた分量が本文に出る。欠けているなら \`manager_report\` で全文を読むこと（長ければ \`offset\` で続きが取れる）
 
 # 委譲
