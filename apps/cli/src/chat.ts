@@ -1,6 +1,7 @@
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 
+import type { Commitment } from '@alteroid/core';
 import type { InferResponseType } from 'hono/client';
 
 import { createClient, type DaemonClient } from './client.js';
@@ -26,8 +27,8 @@ export async function chatCommand(): Promise<void> {
 
   const rl = createInterface({ input: stdin, output: stdout });
   let conversationId: string | null = null;
-  // 直前に一覧した承認待ち。番号で答えられるようにするため覚えておく。
-  const listed: string[] = [];
+  // 直前に一覧したもの。番号で引けるようにするため覚えておく。
+  const listed: Listed = { approvals: [], commitments: [] };
 
   stdout.write('alteroid chat（Ctrl-D で終了 / /help でコマンド）\n');
 
@@ -42,7 +43,7 @@ export async function chatCommand(): Promise<void> {
       if (line.length === 0) continue;
 
       if (line.startsWith('/')) {
-        const handled = await runSlashCommand(line, client, listed);
+        const handled = await runSlashCommand(line, client, listed, conversationId);
         if (handled === 'quit') break;
         continue;
       }
@@ -191,6 +192,10 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /archive <id>        生ログの中身
 /approvals           承認待ち（番号付き）
 /answer <番号|id> <回答>  承認待ちに答える（番号は /approvals の並び）
+/commitments         引き受けたまま終わっていない仕事（番号付き）
+/commitments all     片付けたものも含めて見る
+/commit <本文>       引き受けたことを台帳へ積む
+/done <番号|id> [理由]  片付けたことを記録する（番号は /commitments の並び）
 /usage [from=YYYY-MM-DD] [to=YYYY-MM-DD] [manager=<id>]  利用状況（いくら使ったか）
 /schedule            時間起点のジョブ・継続中の依頼と次の発火
 /schedule <kind> <HH:MM|30m|cron 0 10 * * 1> <依頼>  継続する依頼を仕込む
@@ -200,10 +205,27 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /quit                終了
 `;
 
-async function runSlashCommand(
+/**
+ * 直前に一覧したものの id を、番号で引けるように覚えておく置き場。
+ *
+ * **承認待ちと台帳で別々に持つ。** 1本にまとめると `/approvals` の直後の
+ * `/done 1` が承認待ちの id を閉じに行く（どちらも「番号で指す一覧」なので、
+ * 混ざったことに人間が気づく手がかりが無い）。
+ */
+export interface Listed {
+  approvals: string[];
+  commitments: string[];
+}
+
+export async function runSlashCommand(
   line: string,
   client: ReturnType<typeof createClient>,
-  listed: string[],
+  listed: Listed,
+  /**
+   * いまの会話 id。台帳へ積むときの「どこから来たか」に使う（`Commitment.source`）。
+   * まだ一言も話していなければ `null` で、そのときは source を付けない。
+   */
+  conversationId: string | null = null,
 ): Promise<'ok' | 'quit'> {
   const [command, ...rest] = line.split(/\s+/);
 
@@ -447,13 +469,13 @@ async function runSlashCommand(
         return 'ok';
       }
       const { approvals } = await response.json();
-      listed.length = 0;
+      listed.approvals.length = 0;
       if (approvals.length === 0) {
         stdout.write('（承認待ちはありません）\n');
         return 'ok';
       }
       approvals.forEach((approval, index) => {
-        listed.push(approval.id);
+        listed.approvals.push(approval.id);
         stdout.write(`  [${index + 1}] ${approval.question}\n`);
         stdout.write(`      id: ${approval.id}  積まれた: ${approval.createdAt}\n`);
         if (approval.jobId) stdout.write(`      マネージャー: ${approval.jobId}\n`);
@@ -470,7 +492,7 @@ async function runSlashCommand(
         stdout.write('使い方: /answer <番号|id> <回答>\n');
         return 'ok';
       }
-      const id = resolveApprovalId(reference, listed);
+      const id = resolveListedId(reference, listed.approvals);
       if (id === null) {
         stdout.write(`[${reference}] は /approvals の一覧にありません\n`);
         return 'ok';
@@ -480,6 +502,99 @@ async function runSlashCommand(
         json: { answer },
       });
       stdout.write(response.ok ? '回答しました\n' : '回答に失敗しました\n');
+      return 'ok';
+    }
+
+    /**
+     * 引き受けたまま終わっていない仕事の台帳（`schema.ts` の `commitmentSchema`）。
+     *
+     * **承認待ちとは別のものである。** あちらは「クローンが人間の答えを待って
+     * 止まっている」で、こちらは「頼まれたことがまだ片付いていない」。止まって
+     * いなくても片付いていない仕事はあるので、片方で他方は代用できない。
+     *
+     * 既定では未了だけを出す。`all` で片付けたものも出すのは、日報の材料に
+     * なるのが「何を片付けたか」の側だからである（器は行を消さない）。
+     */
+    case '/commitments': {
+      const includeClosed = rest[0] === 'all';
+      const response = await client.commitments.$get({
+        query: includeClosed ? { includeClosed: 'true' } : {},
+      });
+      if (!response.ok) {
+        stdout.write('台帳を読めませんでした\n');
+        return 'ok';
+      }
+      const { entries } = await response.json();
+      const { text, ids } = renderCommitments(entries);
+      listed.commitments.length = 0;
+      listed.commitments.push(...ids);
+      stdout.write(`${text}\n`);
+      if (ids.length > 0) {
+        stdout.write('  /done <番号> [理由] で片付けたことを記録できます\n');
+      }
+      return 'ok';
+    }
+
+    /**
+     * 人間の手でも積めるようにする（`/schedule` に仕込む口を置いたのと同じ理由）。
+     *
+     * クローンに頼めばよい、で済ませると「人間は台帳を読めるが書けない」という
+     * 不揃いが残る。しかも積みたい場面はたいてい「いま言ったことを忘れられたら
+     * 困る」ときなので、クローンのターンを1回起こさないと書けないのは重い。
+     */
+    case '/commit': {
+      const body = rest.join(' ');
+      if (body.length === 0) {
+        stdout.write('使い方: /commit <本文>（引き受けたままの仕事として台帳へ積みます）\n');
+        return 'ok';
+      }
+      const response = await client.commitments.$post({
+        json: {
+          body,
+          // どこから来たかは会話 id で表す（`Commitment.source`）。まだ会話が
+          // 始まっていなければ付けない — 嘘の出どころを埋めない。
+          ...(conversationId === null ? {} : { source: conversationId }),
+        },
+      });
+      stdout.write(
+        response.ok
+          ? '台帳に積みました（/commitments で確認できます）\n'
+          : '台帳に積めませんでした\n',
+      );
+      return 'ok';
+    }
+
+    case '/done': {
+      const [reference, ...reasonParts] = rest;
+      if (!reference) {
+        stdout.write('使い方: /done <番号|id> [理由]（番号は /commitments の並び）\n');
+        return 'ok';
+      }
+      const id = resolveListedId(reference, listed.commitments);
+      if (id === null) {
+        stdout.write(`[${reference}] は /commitments の一覧にありません\n`);
+        return 'ok';
+      }
+      const reason = reasonParts.join(' ');
+      const response = await client.commitments[':id'].close.$post({
+        param: { id },
+        json: { reason: reason.length === 0 ? DONE_WITHOUT_REASON : reason },
+      });
+      if (response.ok) {
+        stdout.write('片付いたことを記録しました\n');
+        return 'ok';
+      }
+      // **失敗の理由を1つに畳まない。** 「既に片付いている」と「そんな id は無い」は
+      // 次の一手が違う（前者は何もしなくてよく、後者は一覧を取り直す必要がある）。
+      stdout.write(
+        `${
+          response.status === 409
+            ? 'それは既に片付いています'
+            : response.status === 404
+              ? 'その id は台帳にありません'
+              : `記録できませんでした (${response.status})`
+        }\n`,
+      );
       return 'ok';
     }
 
@@ -653,10 +768,93 @@ function parseUsageFilters(tokens: string[]): { from?: string; to?: string; mana
   return filters;
 }
 
-/** 番号（`/approvals` の並び）でも id そのままでも答えられるようにする。 */
-function resolveApprovalId(reference: string, listed: string[]): string | null {
+/** 番号（直前の一覧の並び）でも id そのままでも指せるようにする。 */
+function resolveListedId(reference: string, listed: string[]): string | null {
   if (/^\d+$/.test(reference)) return listed[Number(reference) - 1] ?? null;
   return reference;
+}
+
+// ---------------------------------------------------------------------------
+// 引き受けたまま終わっていない仕事の台帳
+// ---------------------------------------------------------------------------
+
+/**
+ * `/done` に理由を書かなかったときに残す1行。
+ *
+ * **空文字を送らない。** 器は「どう片付いたか」が残る前提で作ってあり
+ * （`schema.ts` の `closedReason`）、そこが空だと「閉じた」という事実だけが
+ * 残って人間が後から否定できなくなる。理由を書かなかったこと自体は事実なので、
+ * 起きたことだけを書く（片付いた中身を勝手に埋めない）。
+ */
+const DONE_WITHOUT_REASON = '人間が chat の /done で片付けたと記録した（理由は書かれていない）';
+
+const COMMITMENT_ORIGIN_LABEL: Record<Commitment['origin'], string> = {
+  human: '人間',
+  manager: 'マネージャー',
+  external: '外部',
+  self: '自分',
+};
+
+/**
+ * 台帳を、人間が読む形へ（`/commitments`）。
+ *
+ * **番号と id の対応をここで一緒に作って返す。** 表示側と `/done` 側で別々に
+ * 並べ直すと、ずれた瞬間に**人間が見ていないものを閉じる**。番号は片付いたものにも
+ * 振る — 抜け番にすると、人間が数え直して指すことになる。
+ *
+ * 表示を関数に出してあるのは `renderManagerList` / `renderUsage` と同じ理由で、
+ * 何を出しているかを端末なしで確かめられるようにするためである。
+ */
+export function renderCommitments(
+  commitments: Commitment[],
+  now: number = Date.now(),
+): { text: string; ids: string[] } {
+  if (commitments.length === 0) {
+    return { text: '（引き受けたまま終わっていない仕事はありません）', ids: [] };
+  }
+
+  const lines: string[] = [];
+  const ids: string[] = [];
+
+  commitments.forEach((commitment, index) => {
+    ids.push(commitment.id);
+    const closed = commitment.closedAt !== undefined;
+    // **本文は畳む。** 器は全文を持つ（要約を持たせない）ので、切るのは表示側の
+    // 仕事である。畳まないと、数千字の依頼1本で一覧が流れて読めなくなる。
+    lines.push(`  [${index + 1}] ${closed ? '✓ ' : ''}${summarizeText(commitment.body)}`);
+    const from =
+      COMMITMENT_ORIGIN_LABEL[commitment.origin] +
+      (commitment.source === undefined ? '' : `(${commitment.source})`);
+    lines.push(
+      `      id: ${commitment.id}  起点: ${from}  受け取った: ${commitment.at}` +
+        `（${formatElapsed(commitment.at, now)}前）`,
+    );
+    if (closed) {
+      lines.push(
+        `      片付けた: ${commitment.closedAt ?? ''}  ${summarizeText(commitment.closedReason ?? '')}`,
+      );
+    }
+  });
+
+  return { text: lines.join('\n'), ids };
+}
+
+/**
+ * 受け取ってからの経過（＝齢）。
+ *
+ * **台帳は優先度も締切も持たない**（`schema.ts` の `commitmentSchema`）ので、
+ * 人間が急ぎ方を決める材料はこれだけである。ISO の時刻だけを出すと、読むたびに
+ * 引き算をさせることになる。
+ *
+ * 未来の時刻（時計のずれ）は 0 に丸める。ここで負の齢を出しても人間には直せない。
+ */
+function formatElapsed(iso: string, now: number): string {
+  const at = new Date(iso).getTime();
+  if (Number.isNaN(at)) return '不明';
+  const seconds = Math.max(0, Math.round((now - at) / 1000));
+  if (seconds < 3600) return `${Math.round(seconds / 60)}分`;
+  if (seconds < 86_400) return `${Math.round(seconds / 3600)}時間`;
+  return `${Math.round(seconds / 86_400)}日`;
 }
 
 function summarize(entry: Record<string, unknown>): string {

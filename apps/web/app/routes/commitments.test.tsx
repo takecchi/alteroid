@@ -1,0 +1,204 @@
+// @vitest-environment jsdom
+/**
+ * 引き受けたまま終わっていない仕事の台帳（`/commitments` 画面）。
+ *
+ * ここで固定するのは見た目ではなく、**器が持っている意味を画面が落とさない**ことである。
+ *
+ * 1. 起点と齢（`origin` / `at`）を出す — 器は優先度も締切も持たないので、人間が
+ *    急ぎ方を決める材料はこの2つしかない（`packages/core/src/schema.ts`）
+ * 2. 片付けるときに理由を必ず取る — 「閉じた」だけが残ると人間が後から否定できない
+ * 3. 片付いたものを読む手立てがある — 器は行を消さない（日報の材料になる）
+ * 4. CLI（`/commitments` `/commit` `/done`）と同じ経路を叩く — 片方でしかできない
+ *    ことを作らない
+ */
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import type { Commitment } from '@alteroid/core';
+import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
+
+import Commitments from './commitments';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function commitment(over: Partial<Commitment> = {}): Commitment {
+  return {
+    id: 'cmt-1',
+    at: new Date(Date.now() - 3 * DAY_MS).toISOString(),
+    origin: 'human',
+    body: 'ドキュメントの誤りを直す',
+    ...over,
+  };
+}
+
+/**
+ * 実際に飛んだ要求を控える。
+ *
+ * **差し替えではなく素通しの記録である**（`stubFetch` が置いた本物の応答をそのまま
+ * 返す）。`test-support` の `FetchStub` は URL と認証ヘッダしか控えないので、
+ * 「どの本文を送ったか」を見るぶんだけここで足す。**判断は一切していない** ので、
+ * 通ってしまう嘘を挟む余地が無い。
+ */
+function recordRequests(): Request[] {
+  const requests: Request[] = [];
+  const inner = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    if (input instanceof Request) requests.push(input.clone());
+    return inner(input, init);
+  }) as typeof fetch;
+  return requests;
+}
+
+/** `includeClosed=true` を付けたときだけ、片付けたものも返す。 */
+function stubCommitments(open: Commitment[], closed: Commitment[] = []) {
+  return stubFetch((url) => {
+    if (!url.includes('/commitments')) return undefined;
+    // 閉じる経路は本文を読まない（画面も応答の中身を使わない）。
+    if (url.includes('/close')) return json({ ok: true });
+    return json({ entries: url.includes('includeClosed=true') ? [...open, ...closed] : open });
+  });
+}
+
+let originalFetch: typeof fetch;
+
+beforeEach(() => {
+  originalFetch = globalThis.fetch;
+  localStorage.clear();
+  storeTestBaseUrl();
+});
+
+afterEach(() => {
+  cleanup();
+  globalThis.fetch = originalFetch;
+});
+
+function renderPage() {
+  render(
+    <Providers>
+      <Commitments />
+    </Providers>,
+  );
+}
+
+describe('/commitments 画面', () => {
+  /**
+   * 器は優先度も締切も持たない（`commitmentSchema`）。だから「どこから来たか」と
+   * 「どれだけ放置されているか」が落ちると、人間が急ぎ方を決める材料が消える。
+   */
+  it('未了に起点と齢を出す（急ぎ方を決める材料はこの2つしかない）', async () => {
+    stubCommitments([commitment({ origin: 'human', source: 'conv-1' })]);
+    renderPage();
+
+    expect(await screen.findByText('ドキュメントの誤りを直す')).toBeTruthy();
+    expect(screen.getByText(/人間/)).toBeTruthy();
+    expect(screen.getByText(/conv-1/)).toBeTruthy();
+    // 受け取ってから3日。絶対時刻だけだと、読むたびに引き算をさせることになる。
+    expect(screen.getByText('(3日前)')).toBeTruthy();
+  });
+
+  /**
+   * 器は行を消さない（「何を片付けたか」は日報の材料である）。読む手立てが画面に
+   * 無いと、その事実へ人間が到達できない。既定で出さないのは未了が埋もれるため。
+   */
+  it('片付けたものは、押されたときだけ includeClosed=true で取りに行く', async () => {
+    const stub = stubCommitments(
+      [commitment({ id: 'open-1', body: 'まだ終わっていない' })],
+      [
+        commitment({
+          id: 'closed-1',
+          body: 'もう終わった',
+          closedAt: new Date().toISOString(),
+          closedReason: 'PR #99 をマージした',
+        }),
+      ],
+    );
+    renderPage();
+
+    await screen.findByText('まだ終わっていない');
+    expect(screen.queryByText('もう終わった')).toBeNull();
+    expect(stub.calls.some((url) => url.includes('includeClosed=true'))).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: '片付けたものも見る' }));
+
+    expect(await screen.findByText('もう終わった')).toBeTruthy();
+    // 何をもって終わりとしたのか。ここが無いと人間は否定のしようがない。
+    expect(screen.getByText(/PR #99 をマージした/)).toBeTruthy();
+    expect(stub.calls.some((url) => url.includes('includeClosed=true'))).toBe(true);
+    // 未了が消えるわけではない（切り替えは「足して見る」であって「入れ替え」ではない）。
+    expect(screen.getByText('まだ終わっていない')).toBeTruthy();
+  });
+
+  /**
+   * **「閉じた」だけを残さない。** 人間が後から否定できることが最終承認の実体で
+   * あり、何をもって終わりとしたのかが無いと否定のしようがない（north_star）。
+   */
+  it('理由を書かないと片付けられない', async () => {
+    stubCommitments([commitment()]);
+    renderPage();
+
+    await screen.findByText('ドキュメントの誤りを直す');
+    const close = screen.getByRole('button', { name: '片付いた' });
+    expect((close as HTMLButtonElement).disabled).toBe(true);
+
+    // 空白だけでも通さない（見た目上は書いたように見えるので、ここが抜けやすい）。
+    fireEvent.change(screen.getByPlaceholderText(/何をもって片付いたか/), {
+      target: { value: '   ' },
+    });
+    expect((screen.getByRole('button', { name: '片付いた' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+  });
+
+  it('理由を書いて片付けると、その id と理由が閉じる経路へ乗る', async () => {
+    stubCommitments([commitment({ id: 'cmt-42' })]);
+    const requests = recordRequests();
+    renderPage();
+
+    await screen.findByText('ドキュメントの誤りを直す');
+    fireEvent.change(screen.getByPlaceholderText(/何をもって片付いたか/), {
+      target: { value: 'PR #99 をマージした' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '片付いた' }));
+
+    const closed = await waitFor(() => {
+      const found = requests.find((request) => request.url.includes('/commitments/cmt-42/close'));
+      expect(found).toBeDefined();
+      return found!;
+    });
+    expect(closed.method).toBe('POST');
+    expect(JSON.parse(await closed.text())).toEqual({ reason: 'PR #99 をマージした' });
+  });
+
+  /**
+   * **読めるだけにしない。** CLI には `/commit` があるので、ここに積む口が無いと
+   * 「Web ではできないこと」が生まれる（PRD「インターフェース」）。
+   */
+  it('積む口が、本文をそのまま POST /commitments へ送る', async () => {
+    stubCommitments([]);
+    const requests = recordRequests();
+    renderPage();
+
+    await screen.findByText('引き受けたまま終わっていない仕事はない。');
+    fireEvent.change(screen.getByPlaceholderText(/何を引き受けたか/), {
+      target: { value: '週明けに設計を見直す' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '積む' }));
+
+    const posted = await waitFor(() => {
+      const found = requests.find(
+        (request) => request.method === 'POST' && request.url.endsWith('/commitments'),
+      );
+      expect(found).toBeDefined();
+      return found!;
+    });
+    expect(JSON.parse(await posted.text())).toEqual({ body: '週明けに設計を見直す' });
+  });
+
+  it('本文が空のあいだは積めない', async () => {
+    stubCommitments([]);
+    renderPage();
+
+    await screen.findByText('引き受けたまま終わっていない仕事はない。');
+    expect((screen.getByRole('button', { name: '積む' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});

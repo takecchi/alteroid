@@ -208,6 +208,19 @@ export function unwrap<T>(result: { data?: T; error?: unknown; response: Respons
   return result.data;
 }
 
+/**
+ * **成否だけを見る。本文は読まない。**
+ *
+ * `unwrap` は「値が要る」呼び出し用で、本文が空の 200 を失敗として投げてしまう。
+ * 書き込んだ結果を画面が使わない経路（積む・閉じる、のように直後に一覧を取り直す
+ * もの）では、返る形にこちらが縛られる理由が無い。**握り潰さずに投げる**のは
+ * `unwrap` と同じ — 失敗が「静かなだけ」に見えるのが一番まずい。
+ */
+export function expectOk(result: { error?: unknown; response: Response }): void {
+  if (result.error === undefined && result.response.ok) return;
+  throw new ApiError(result.response.status, describeError(result.error, result.response));
+}
+
 function describeError(error: unknown, response: Response): string {
   if (typeof error === 'object' && error !== null) {
     const record = error as Record<string, unknown>;

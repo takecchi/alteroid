@@ -14,7 +14,7 @@
 import { useCallback } from 'react';
 import { useSWRConfig } from 'swr';
 
-import { unwrap, useApi } from '~/lib/api';
+import { expectOk, unwrap, useApi } from '~/lib/api';
 import type { ConversationSummary } from '~/lib/types';
 
 import { isKeyOfType, KEY } from './queries';
@@ -128,6 +128,64 @@ export function useAnswerApproval() {
       await Promise.all([mutate(KEY.approvals(true)), mutate(KEY.approvals(false))]);
     },
     [api, mutate],
+  );
+}
+
+/**
+ * 台帳の両方のキー（未了だけ／片付けたものも）を取り直す。
+ *
+ * **片方だけ回すと、切り替えた先が古いままになる。** 画面は表示の切り替えで
+ * キーを変えるので、いま見ているほうしか回さないと「積んだのに出てこない」が起きる。
+ */
+function useRefreshCommitments() {
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    () => Promise.all([mutate(KEY.commitments(false)), mutate(KEY.commitments(true))]),
+    [mutate],
+  );
+}
+
+/**
+ * 引き受けたことを台帳へ積む。
+ *
+ * **人間の手でも積めるようにしてある**（`/schedule` に仕込む口を置いたのと同じ理由）。
+ * クローンに頼めばよい、で済ませると「人間は台帳を読めるが書けない」という不揃いが
+ * 残る。CLI の `/commit` と同じ経路である。
+ */
+export function usePushCommitment() {
+  const api = useApi();
+  const refresh = useRefreshCommitments();
+  return useCallback(
+    async (body: string) => {
+      // 応答の中身は使わない（積んだ1件は下の取り直しで一覧ごと届く）。
+      expectOk(await api.api.POST('/commitments', { body: { body } }));
+      await refresh();
+    },
+    [api, refresh],
+  );
+}
+
+/**
+ * 片付いたことを記録する。
+ *
+ * **理由を必ず送る。** 器は「どう片付いたか」が残る前提で作ってあり
+ * （`packages/core/src/schema.ts` の `closedReason`）、空だと「閉じた」という事実
+ * だけが残って人間が後から否定できなくなる。空を弾くのは呼ぶ側（画面）の仕事。
+ */
+export function useCloseCommitment() {
+  const api = useApi();
+  const refresh = useRefreshCommitments();
+  return useCallback(
+    async (id: string, reason: string) => {
+      expectOk(
+        await api.api.POST('/commitments/{id}/close', {
+          params: { path: { id } },
+          body: { reason },
+        }),
+      );
+      await refresh();
+    },
+    [api, refresh],
   );
 }
 

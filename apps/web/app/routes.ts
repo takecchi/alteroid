@@ -4,8 +4,8 @@ import { index, layout, route, type RouteConfig } from '@react-router/dev/routes
  * 画面の割り当ては CLI でできることに揃えてある。
  *
  * `alteroid chat` のスラッシュコマンド（`/managers` `/approvals` `/report`
- * `/run` `/event` `/memory`）に対応する場所が全部あること。**片方でしかできない
- * ことを作らない** — 入口が増えただけで能力が変わるのはおかしい。
+ * `/run` `/event` `/memory` `/commitments`）に対応する場所が全部あること。
+ * **片方でしかできないことを作らない** — 入口が増えただけで能力が変わるのはおかしい。
  */
 export default [
   // ログインだけは shell の外（ナビも SSE も、通ってからでないと意味が無い）。
@@ -20,6 +20,7 @@ export default [
     route('memory', 'routes/memory.tsx'),
     route('memory/:slug', 'routes/memory-detail.tsx'),
     route('approvals', 'routes/approvals.tsx'),
+    route('commitments', 'routes/commitments.tsx'),
     route('reports/:date?', 'routes/reports.tsx'),
     route('usage', 'routes/usage.tsx'),
     route('schedule', 'routes/schedule.tsx'),
