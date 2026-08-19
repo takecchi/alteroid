@@ -94,6 +94,9 @@ export const CLONE_TOOL_NAMES = [
   'schedule_list',
   'schedule_create',
   'schedule_remove',
+  'commitment_list',
+  'commitment_open',
+  'commitment_close',
   'profile_read',
   'profile_write',
   'self_read',
@@ -126,6 +129,16 @@ const LIST_BUDGET = 8_000;
 const LIST_DENIED_TOOLS = 3;
 /** 全文を取りに来たときの1回分。続きは `offset` で取れる。 */
 const REPORT_PAGE = 8_000;
+
+/**
+ * 未了の台帳を1回に出す件数と、1件ぶんの本文の厚み。
+ *
+ * **切ったことは必ず言う**（`LIST_DENIED_TOOLS` と同じ理由）。「これで全部だ」と
+ * 読まれた台帳は、載っているのに見えない仕事を作る＝この器が塞ごうとしている穴が
+ * そのまま戻る。
+ */
+const COMMITMENT_LIST_LIMIT = 30;
+const COMMITMENT_BODY_LIMIT = 240;
 
 /**
  * 日誌の一覧の予算と、1件ぶんの本文の厚み。
@@ -643,6 +656,124 @@ export function createCloneTools(context: ToolContext) {
           grounds: 'この依頼はもう要らないという判断',
         });
         return text(`${kind} を外した。`);
+      },
+    ),
+
+    // --- 引き受けたまま終わっていない仕事（未了の台帳） ------------------------
+    //
+    // **これは「やることの一覧」ではない。** 器が持つのは「何を頼まれたか」と
+    // 「まだ片付いていない」の2値だけで、順序も優先度も締切も持たない（PRD「自律」）。
+    // 何を先にやるか、そもそもやるかは毎回クローンが記憶に照らして決める。器がするのは
+    // **忘れさせないこと**だけである。
+    tool(
+      'commitment_list',
+      [
+        '引き受けたまま終わっていない仕事の一覧。古い順に出る。',
+        '人間の依頼・マネージャーからの一件・外部イベントは、届いた時点で自動的にここへ載る。',
+        '**載っているものは、あなたが閉じるまで消えない。**',
+        'どれを先にやるかの順序はここには無い。記憶にある目的と価値観に照らして毎回決め直すこと。',
+      ].join(' '),
+      {
+        includeClosed: z
+          .boolean()
+          .optional()
+          .describe('片付けたものも見る（既定は未了だけ）。何を片付けたかを振り返るとき用'),
+      },
+      async ({ includeClosed }) => {
+        const entries = await stores.commitments.list(
+          includeClosed === true ? { includeClosed: true } : undefined,
+        );
+        if (entries.length === 0) return text('（引き受けたまま終わっていない仕事は無い）');
+        const shown = entries.slice(0, COMMITMENT_LIST_LIMIT);
+        const rest = entries.length - shown.length;
+        return text(
+          [
+            ...shown.map((entry) =>
+              [
+                `- ${entry.id}`,
+                `  受け取った時刻: ${entry.at}（${entry.origin}${entry.source === undefined ? '' : ` / ${entry.source}`}）`,
+                `  ${excerptLine(entry.body, COMMITMENT_BODY_LIMIT)}`,
+                entry.closedAt === undefined
+                  ? '  状態: 未了'
+                  : `  状態: ${entry.closedAt} に片付けた（${excerptLine(entry.closedReason ?? '', 120)}）`,
+              ].join('\n'),
+            ),
+            // 黙って切らない。切ったことが見えないと「これで全部だ」と読まれる。
+            ...(rest > 0 ? [`- …ほか ${rest} 件（多い順ではなく古い順に切っている）`] : []),
+          ].join('\n'),
+        );
+      },
+    ),
+
+    tool(
+      'commitment_open',
+      [
+        '自分で気づいたことを、引き受けた仕事として台帳に載せる。',
+        '人間が「あ、これ直さないと」と思ったときにメモするのと同じもので、',
+        'いま手を付けないなら**必ずここへ置くこと** — 会話の文脈はやがて要約に潰れ、',
+        '記憶は時計を持たないので、そこにだけ置いた宿題は思い出せるかどうかの賭けになる。',
+        '記憶へ書くのは判断の根拠のほうで、両方やってよい。',
+      ].join(' '),
+      {
+        body: z
+          .string()
+          .min(1)
+          .describe(
+            '何を引き受けたか。後日のあなたが読んでそのまま動ける粒度で書く（対象・狙い・どこまでやるか）',
+          ),
+        source: z
+          .string()
+          .optional()
+          .describe('関係する相手や出所（マネージャー id・会話 id など。分かるときだけ）'),
+      },
+      async ({ body, source }) => {
+        const entry = {
+          id: randomUUID(),
+          at: new Date().toISOString(),
+          origin: 'self' as const,
+          ...(source === undefined ? {} : { source }),
+          body,
+        };
+        await stores.commitments.open(entry);
+        // **自分で決めて引き受けたことは日誌に残す。** 聞かずに動いた判断が後から
+        // 否定できることが最終承認の実体である（north_star）。自動で開いたものは
+        // 起点ごとに既に日誌へ載っているので、ここで残すのは `self` のぶんだけ。
+        await stores.journal.append({
+          type: 'decision',
+          decision: `引き受けた仕事として台帳に載せた（${entry.id}）: ${body}`,
+          grounds: '手を付ける前に忘れないため（記憶は時計を持たない）',
+        });
+        return text(`台帳に載せた（${entry.id}）。片付いたら commitment_close で閉じること。`);
+      },
+    ),
+
+    tool(
+      'commitment_close',
+      [
+        '引き受けた仕事が片付いたことを記録する。**返事をしただけでは閉じない。**',
+        '委譲したなら、マネージャーが報告を返して始末がつくまでは開いたままにしておくこと。',
+        'やらないと決めたのなら、それも片付いたうちである（理由にそう書いて閉じる）。',
+      ].join(' '),
+      {
+        id: z.string().describe('commitment_list に出ている id'),
+        reason: z
+          .string()
+          .min(1)
+          .describe(
+            '何をもって片付いたとするか（やったこと、あるいはやらないと決めた理由）。' +
+              '人間はこれを読んで後から否定する',
+          ),
+      },
+      async ({ id, reason }) => {
+        const existing = await stores.commitments.get(id);
+        if (existing === null) return text(`引き受けた仕事 ${id} は台帳に無い。`);
+        if (existing.closedAt !== undefined) {
+          return text(
+            `${id} は既に ${existing.closedAt} に片付けてある（${existing.closedReason ?? ''}）。`,
+          );
+        }
+        await stores.commitments.close(id, new Date().toISOString(), reason);
+        return text(`${id} を片付けた。`);
       },
     ),
 

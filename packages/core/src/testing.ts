@@ -1,4 +1,5 @@
 import type {
+  Commitment,
   InboxEvent,
   Job,
   JournalEntry,
@@ -24,6 +25,7 @@ import type {
   JournalStore,
   PersonaStore,
   ProfileStore,
+  CommitmentStore,
   ScheduleStore,
   SessionRegistry,
   Stores,
@@ -49,6 +51,7 @@ export function createMemoryStores(): Stores {
   const jobs = new Map<string, Job>();
   const approvals = new Map<string, PendingApproval>();
   const schedules = new Map<string, ScheduledRequest>();
+  const commitments = new Map<string, Commitment>();
   const archives = new Map<string, string>();
   const inboxStore = createMemoryInboxStore();
   let cloneSessionId: string | null = null;
@@ -161,6 +164,41 @@ export function createMemoryStores(): Stores {
       const rest = { ...existing };
       delete rest.pendingRun;
       schedules.set(kind, cause === 'schedule' ? { ...rest, lastScheduledRunAt: at } : rest);
+    },
+  };
+
+  /**
+   * 引き受けたまま終わっていない仕事の台帳。
+   *
+   * **`open` の冪等性を本物と同じにしてあること。** ここを「常に上書き」にすると、
+   * 配り直しで閉じた未了が開き直る壊れ方がテストから見えなくなる（本物の器では
+   * 起きるのに、テストは緑のまま通る）。
+   */
+  const commitmentStore: CommitmentStore = {
+    async list(options) {
+      const all = [...commitments.values()];
+      const open = all
+        .filter((entry) => entry.closedAt === undefined)
+        .sort((a, b) => a.at.localeCompare(b.at));
+      if (options?.includeClosed !== true) return open;
+      const closed = all
+        .filter((entry) => entry.closedAt !== undefined)
+        .sort((a, b) => (b.closedAt ?? '').localeCompare(a.closedAt ?? ''));
+      return [...open, ...closed];
+    },
+    async get(id) {
+      return commitments.get(id) ?? null;
+    },
+    async open(entry) {
+      if (commitments.has(entry.id)) return false;
+      commitments.set(entry.id, entry);
+      return true;
+    },
+    async close(id, at, reason) {
+      const existing = commitments.get(id);
+      if (!existing || existing.closedAt !== undefined) return false;
+      commitments.set(id, { ...existing, closedAt: at, closedReason: reason });
+      return true;
     },
   };
 
@@ -337,6 +375,7 @@ export function createMemoryStores(): Stores {
     journal,
     jobs: jobStore,
     schedules: scheduleStore,
+    commitments: commitmentStore,
     inbox: inboxStore,
     archive,
     sessions,

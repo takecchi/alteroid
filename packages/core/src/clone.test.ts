@@ -136,6 +136,16 @@ function setup(
   return { clone, stores, calls, events };
 }
 
+/** 非同期の書き込みが器へ届くまで待つ（`post` は同期で返るので待てない）。 */
+async function waitFor(check: () => Promise<boolean> | boolean, label: string): Promise<void> {
+  const started = Date.now();
+  for (;;) {
+    if (await check()) return;
+    if (Date.now() - started > 3000) throw new Error(`${label} が起きない`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
 /** chat の1往復が終わる（done が届く）まで待つ。 */
 function waitForDone(events: ChatStreamEvent[]): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -280,7 +290,10 @@ describe('クローン', () => {
     await s.clone.endConversation('conv-1');
 
     const inputs = (s.calls[0] as FakeCall).inputs;
-    expect(inputs[0]).toBe('価値観を伝える');
+    // **人間の発言は末尾にそのまま載る。** 断り書き（配り直し・台帳）は前に付くので
+    // 完全一致では見ないが、**後ろを削ったり書き換えたりしていないこと**は
+    // `endsWith` のほうが強く言える（`toContain` だと部分一致で通ってしまう）。
+    expect(inputs[0]?.endsWith('価値観を伝える')).toBe(true);
     expect(inputs[1]).toContain('記憶へ移すべきものがあるか確認せよ');
 
     await s.clone.stop();
@@ -1861,8 +1874,20 @@ describe('クローン — 考えている合図（thinking）', () => {
    * そのものだからである（非同期の日誌書き込みは間に合う保証が無い）。
    * 同時に**跡に本文が乗らないこと**も固定する — 報告本文に `GH_TOKEN` が
    * 全文で出た前例がある（#52）。
+   *
+   * **【経緯・期待値を反転した】** ここは元々「捨てる」ことを仕様として固定して
+   * いた。その根拠は「処理しようとすると『未読の永続化』という別の設計になる」で
+   * あり、当時それは正しかった。**その設計は後から入った**（`#remember` と
+   * `#restoreUnread`）ので、根拠のほうが先に消えていた。片付けの窓に落ちた人間の
+   * 最後の一言は、いちばん気づかれない失われ方をする。
+   *
+   * 上の段落の「ここで黙って消えると〜」以下は**そのまま効いている**（跡を残す
+   * ことと本文を出さないことは何も変わっていない）。増えたのは、跡に加えて
+   * **器にも残す**という保証である。**保証が減っていないこと**を見やすくするため、
+   * 元の検証（跡が2行・本文が出ない・時刻が付く・1行に収まる）は1つも消して
+   * いない。
    */
-  it('止まった後に届いた合図は捨てるが、何を捨てたかが stderr に残る（本文は出さない）', async () => {
+  it('止まった後に届いた合図は器へ残し、何が来たかが stderr に残る（本文は出さない）', async () => {
     const s = setup();
     await s.clone.stop();
 
@@ -1878,7 +1903,7 @@ describe('クローン — 考えている合図（thinking）', () => {
       });
     });
 
-    const dropped = lines.filter((line) => line.includes('捨てました'));
+    const dropped = lines.filter((line) => line.includes('このプロセスでは処理しませんでした'));
     expect(dropped).toHaveLength(2);
     expect(dropped[0]).toContain('human_message');
     // どのマネージャーの、どの種類の一件だったかは残る
@@ -1890,6 +1915,16 @@ describe('クローン — 考えている合図（thinking）', () => {
       expect(line.endsWith('\n')).toBe(true);
       expect(line.trimEnd()).not.toContain('\n');
     }
+
+    // **跡だけでは足りない。** 次の起動で配り直せる形で器に残っていること。
+    // 書き込みは非同期なので、`post` が返った直後には間に合っていない
+    await waitFor(async () => (await s.stores.inbox.claimPending()).length === 2, '未読の書き出し');
+
+    // 引き受けた仕事としても載る（人間の最後の一言が、跡だけになって消えない）
+    const open = await s.stores.commitments.list();
+    expect(open.map((entry) => entry.origin)).toEqual(['human', 'manager']);
+    // 本文は器の中には**入る**（拾い直せなければ意味が無い）。出さないのは stderr の側だけ
+    expect(open[0]?.body).toContain('ghp_');
   });
 });
 

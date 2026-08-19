@@ -6,6 +6,7 @@ import {
   CalendarClock,
   DollarSign,
   LayoutDashboard,
+  ListChecks,
   Menu,
   MessageSquare,
   Settings,
@@ -28,6 +29,10 @@ const NAV = [
   { to: '/', label: 'ダッシュボード', icon: LayoutDashboard, end: true },
   { to: '/chat', label: '会話', icon: MessageSquare, end: false },
   { to: '/approvals', label: '承認待ち', icon: BellRing, end: false },
+  // 承認待ちの隣に置く。**両方とも「人間が片付けるまで残るもの」**だが、承認待ちは
+  // 「クローンが止まっている」で、こちらは「まだ片付いていない」である（止まって
+  // いなくても片付いていない仕事はある）。
+  { to: '/commitments', label: '未了の仕事', icon: ListChecks, end: false },
   { to: '/managers', label: 'マネージャー', icon: Users, end: false },
   { to: '/journal', label: '日誌', icon: Activity, end: false },
   { to: '/reports', label: '日報', icon: BookText, end: false },

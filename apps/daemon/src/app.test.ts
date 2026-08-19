@@ -788,6 +788,144 @@ describe('HTTP API', () => {
     expect(missing.status).toBe(404);
   });
 
+  /**
+   * 台帳（引き受けたまま終わっていない仕事）。クローンは `commitment_*` を持っている
+   * ので、人間の側から読めない・積めない・閉じられないと、頼んだことがどう扱われて
+   * いるかを人間が確かめられない（PRD「可観測性」/「インターフェース」の等価性）。
+   */
+  it('人間が台帳へ積んだものが一覧に出る（origin は human で、id が返る）', async () => {
+    const opened = await app.request(
+      '/commitments',
+      json({ body: 'issue #42 のレビュー指摘を直す', source: 'gh-42' }),
+    );
+
+    expect(opened.status).toBe(200);
+    const { ok, id } = (await opened.json()) as { ok: boolean; id: string };
+    expect(ok).toBe(true);
+    expect(id).not.toBe('');
+
+    const list = await app.request('/commitments');
+    expect(list.status).toBe(200);
+    expect(await list.json()).toMatchObject({
+      entries: [{ id, origin: 'human', source: 'gh-42', body: 'issue #42 のレビュー指摘を直す' }],
+    });
+
+    // 器にも同じものが入っている（応答だけが正しい、という形になっていない）
+    expect(await stores.commitments.list()).toMatchObject([{ id, origin: 'human' }]);
+    // chat の外から積んだものは、日誌に残さなければどこにも跡が無い
+    expect(await stores.journal.list({ types: ['decision'] })).toHaveLength(1);
+  });
+
+  it('積んだ側が自分で選べるのは本文と出所だけ（origin を human 以外にできない）', async () => {
+    // ここを人間に選ばせると、人間が積んだものが `self` を名乗れてしまい、
+    // 「人間との約束か、自分で思い立ったことか」をクローンが区別できなくなる。
+    const response = await app.request(
+      '/commitments',
+      json({ body: '出所を偽る', origin: 'self', id: 'なりすまし' }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await stores.commitments.list()).toMatchObject([{ origin: 'human' }]);
+    expect((await stores.commitments.list())[0]?.id).not.toBe('なりすまし');
+  });
+
+  it('片付けたものは既定の一覧から消え、includeClosed=true でだけ出る', async () => {
+    const opened = await app.request('/commitments', json({ body: '日報の体裁を直す' }));
+    const { id } = (await opened.json()) as { id: string };
+
+    const closed = await app.request(
+      `/commitments/${id}/close`,
+      json({ reason: '直して PR を出した' }),
+    );
+    expect(closed.status).toBe(200);
+
+    expect(await (await app.request('/commitments')).json()).toEqual({ entries: [] });
+    // **`false` が `false` として効く**（`z.coerce.boolean()` だと真になる）
+    expect(await (await app.request('/commitments?includeClosed=false')).json()).toEqual({
+      entries: [],
+    });
+
+    const all = await app.request('/commitments?includeClosed=true');
+    expect(await all.json()).toMatchObject({
+      entries: [{ id, body: '日報の体裁を直す', closedReason: '直して PR を出した' }],
+    });
+    // 行そのものは消えていない（何を片付けたかが日報の材料に残る）
+    expect(await stores.commitments.get(id)).not.toBeNull();
+    // 閉じたことも日誌に残る（積んだ1件と合わせて2本）
+    expect(await stores.journal.list({ types: ['decision'] })).toHaveLength(2);
+  });
+
+  it('読めない includeClosed は弾く（黙って既定へ倒さない）', async () => {
+    expect((await app.request('/commitments?includeClosed=yes')).status).toBe(400);
+    expect((await app.request('/commitments?includeClosed=1')).status).toBe(400);
+  });
+
+  it('無い id を閉じると 404、二度目は 409（いつ・どう片付けたかを本文に入れる）', async () => {
+    expect((await app.request('/commitments/nope/close', json({ reason: 'x' }))).status).toBe(404);
+
+    const opened = await app.request('/commitments', json({ body: '二度閉じの確認' }));
+    const { id } = (await opened.json()) as { id: string };
+
+    expect(
+      (await app.request(`/commitments/${id}/close`, json({ reason: '最初の始末' }))).status,
+    ).toBe(200);
+
+    const again = await app.request(`/commitments/${id}/close`, json({ reason: '後から来た始末' }));
+    expect(again.status).toBe(409);
+    // **最初の理由が残っている。** 上書きされると、人間が読む「何をもって終わりと
+    // したか」が後から来たほうへ静かに入れ替わる
+    expect(((await again.json()) as { error: string }).error).toContain('最初の始末');
+    expect(await stores.commitments.get(id)).toMatchObject({ closedReason: '最初の始末' });
+
+    // 理由の無い close は受け付けない（否定する材料が残らない閉じ方）
+    const openedAgain = await app.request('/commitments', json({ body: '理由なしの確認' }));
+    const other = (await openedAgain.json()) as { id: string };
+    expect((await app.request(`/commitments/${other.id}/close`, json({ reason: '' }))).status).toBe(
+      400,
+    );
+    expect((await stores.commitments.get(other.id))?.closedAt).toBeUndefined();
+  });
+
+  /**
+   * 台帳の口も、人間が開いた任意のページから投げられる位置にある。積まれれば
+   * クローンの次のターンに他人の宿題が載り、閉じられれば人間が頼んだことが
+   * 黙って消える。`validator('json', ...)` を通っているのでハンドラまで届かない。
+   */
+  it('ブラウザの単純リクエストでは台帳を積めない・閉じられない', async () => {
+    await stores.commitments.open({
+      id: 'cm-1',
+      at: '2026-08-12T00:00:00.000Z',
+      origin: 'human',
+      body: '人間が頼んだこと',
+    });
+
+    for (const { path, body } of [
+      { path: '/commitments', body: '{"body":"注入された宿題"}' },
+      { path: '/commitments/cm-1/close', body: '{"reason":"注入"}' },
+    ]) {
+      expect((await app.request(path, simpleRequest(body))).status, path).toBe(400);
+
+      // safelist に見せかけた content-type でも同じ（MIME essence で判定される）
+      for (const contentType of [
+        'text/plain;application/json',
+        'application/x-www-form-urlencoded',
+        'multipart/form-data; boundary=application/json',
+      ]) {
+        const disguised = await app.request(path, {
+          method: 'POST',
+          headers: { 'content-type': contentType },
+          body,
+        });
+        expect(disguised.status, `${path} [${contentType}]`).toBe(400);
+      }
+    }
+
+    // 積まれても閉じられてもいない
+    expect(await stores.commitments.list({ includeClosed: true })).toEqual([
+      { id: 'cm-1', at: '2026-08-12T00:00:00.000Z', origin: 'human', body: '人間が頼んだこと' },
+    ]);
+  });
+
   it('溜まった承認待ちをまとめて片付けられる（1件失敗しても残りは進む）', async () => {
     for (const id of ['ap-1', 'ap-2']) {
       await stores.jobs.putApproval({
@@ -900,6 +1038,8 @@ describe('OpenAPI', () => {
       '/events/{source}',
       '/schedule',
       '/schedule/{kind}/run',
+      '/commitments',
+      '/commitments/{id}/close',
       '/managers',
       '/managers/{id}',
       '/managers/{id}/transcript',

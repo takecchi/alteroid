@@ -34,7 +34,13 @@ import {
   buildTimerPrompt,
 } from './prompt.js';
 import { DAILY_REPORT_KIND, localDate, localDayRange } from './schedule.js';
-import type { ChatStreamEvent, InboxEvent, JournalEntryInput, ScheduledRequest } from './schema.js';
+import type {
+  ChatStreamEvent,
+  Commitment,
+  InboxEvent,
+  JournalEntryInput,
+  ScheduledRequest,
+} from './schema.js';
 import type { CloneRuntimeFacts, SelfFacts } from './self.js';
 import type { PendingInboxEvent, Stores } from './store.js';
 import {
@@ -314,6 +320,23 @@ class Clone implements CloneHost {
    * ので、そこに置けば起点を問わず必ず載る。
    */
   #redeliveryNotice = '';
+  /**
+   * 自動で開いた未了。合図の id → その書き込みの約束。
+   *
+   * **`#unread` と同じ理由で持つ。** `open` は非同期なので、待たずにターンを走らせると
+   * 短いターンでは `commitment_close` が open を追い越し、**クローンが閉じたつもりの
+   * 未了が後から開いて残り続ける**。順序を見るためだけのもので、書けたかどうかは
+   * ターンの条件にしない。
+   */
+  readonly #committed = new Map<string, Promise<void>>();
+  /**
+   * いま処理している合図の未了 id と、台帳の全体像。ターンの本文の先頭に載る。
+   *
+   * **`#redeliveryNotice` と同じ場所に置く理由も同じである。** プロンプトの組み立ては
+   * 起点の数だけ散っていて、どれか1か所へ入れ忘れると「閉じ方の分からない未了」が
+   * その起点にだけ生まれる。ターンの入口は1か所しかない。
+   */
+  #commitmentNotice = '';
 
   /** SDK へ流す入力の待ち行列。 */
   readonly #input: SDKUserMessage[] = [];
@@ -383,13 +406,25 @@ class Clone implements CloneHost {
   // -------------------------------------------------------------------------
 
   post(event: InboxEvent): void {
-    // 片付け中に届いたものは処理できない（`stop()` の直後に `storage.close()` →
-    // `process.exit(0)` が来る）。**だが黙って消さない** — ここは7種類の起点
-    // すべてが通る1本道で、人間の発言もマネージャーの完了報告もここで消える。
-    // 跡が無いと「受信箱に積まれたまま死んだ」「閉じた後に届いた」「ターンが
-    // 間に合わなかった」が日誌の上で同じ形になり、切り分けられない。
-    // stderr へ同期で書く理由は `noteDroppedInboxEvent`。
+    // 片付け中に届いたものは、**このプロセスでは**処理できない（`stop()` の直後に
+    // `storage.close()` → `process.exit(0)` が来る）。だが**次の起動でなら処理できる。**
+    //
+    // かつてここは何もせず捨てていて、その根拠は「処理しようとすると『未読の永続化』
+    // という別の設計になる」だった。**その設計はいま在る**（`#remember` と
+    // `#restoreUnread`）。根拠が消えた以上、捨てる側に留まる理由も無い — 器へ残せば
+    // 次の起動で配り直される。片付けの窓に人間の最後の一言が落ちるのは、いちばん
+    // 気づかれない失われ方である。
+    //
+    // **受信箱へは積まない。** ここから新しいターンを回す余地は無く、積めば
+    // `Inbox#push` が閉じた受信箱に対して投げる。
+    //
+    // **「残した」と言い切らない。** この窓の後半ではストアが既に閉じており、
+    // 書き込みは落ちうる（落ちれば `#remember` / `#commit` が stderr へ跡を残す）。
+    // 跡の文言はそのことを含む — ここで「次の起動へ回した」と断言すると、
+    // 書けなかった回だけ跡が静かに嘘をつく。
     if (this.#stopped) {
+      this.#remember(event);
+      this.#commit(event);
       noteDroppedInboxEvent(event);
       return;
     }
@@ -408,6 +443,11 @@ class Clone implements CloneHost {
     // 受理した瞬間に日誌へ載せて合図を出す。**器へ書くのと同じ場所である**
     // （`#remember` の隣）。
     this.#record(event);
+    // 頼まれたことを未了として開くのも同じ場所である。**ターンの中に置かないこと** —
+    // ターンが例外で落ちた合図は `#forget` されて二度と来ないので（`#pump` の
+    // `finally`）、ターンの中で開く形にすると、いちばん落としてはいけない
+    // 「処理に失敗した依頼」だけが台帳に載らない。
+    this.#commit(event);
     this.#inbox.push(event);
   }
 
@@ -520,6 +560,15 @@ class Clone implements CloneHost {
 
     for await (const event of this.#inbox) {
       this.#redeliveryNotice = this.#redeliveryNoticeFor(event);
+      // **ここは `try` の外である。** 投げれば `for await` ごと抜けて受信箱の
+      // ループが死に、クローンは何も受け取れなくなる（`#handle` の失敗とは被害の
+      // 桁が違う）。中では読み取りの失敗を自分で握っているが、握り漏らしが1つでも
+      // 残ると全部が止まるので、外側にも受けを置く。**断り書きが付かないことより、
+      // ループが止まることの方がずっと高い。**
+      this.#commitmentNotice = await this.#commitmentNoticeFor(event).catch((error: unknown) => {
+        noteDroppedRecord('未了の断り書きの組み立て', inboxEventShape(event), error);
+        return '';
+      });
       try {
         await this.#handle(event);
       } catch (error) {
@@ -527,6 +576,11 @@ class Clone implements CloneHost {
         this.#finishTurn();
       } finally {
         this.#redeliveryNotice = '';
+        this.#commitmentNotice = '';
+        // 記帳の控えも同じ場所で捨てる。**台帳の行は消さない** — 消すのは「もう
+        // 順序を待つ相手が居ない」という印だけで、閉じられていない未了はそのまま残る
+        // （それがこの器の目的である）。
+        this.#committed.delete(event.id);
         // 受理の瞬間に書いた追記の控えは、待つ相手が居なくなった時点で捨てる。
         // **例外で終わった経路も通る**ので、ここに置く（`#handle` の中で消すと、
         // 途中で投げたぶんが残り続ける）。追記そのものは取り消さない — 消すのは
@@ -635,6 +689,90 @@ class Clone implements CloneHost {
   }
 
   /**
+   * 頼まれたことを未了として台帳へ開く。
+   *
+   * **合図の id をそのまま未了の id にする。** 配り直しでも同じ id になるので、
+   * `CommitmentStore.open` の冪等性がそのまま「二度開かない・閉じたものを開き直さない」
+   * になる。別の id を振ると、器が落ちるたびに片付いた依頼が蘇る。
+   *
+   * **開くのは「誰かが渡してきたもの」だけである**（人間の発言・人間の回答・
+   * マネージャーからの一件・外部イベント）。`timer` と `self_initiative` は起こされた
+   * こと自体であって渡されたものではなく、しかも `timer` には既に器がある
+   * （`ScheduledRequest.pendingRun`）。ここで開くと発意 tick のたびに未了が1件増え、
+   * 台帳が数時間で読めなくなる。**クローン自身が気づいたことは `commitment_open` で
+   * 自分で開く** — 人間が「あ、これ直さなきゃ」と思ったときにメモするのと同じ形で、
+   * 器が代わりに決めることではない。
+   *
+   * **失敗しても post を落とさない**（`#remember` と同じ理由。跡は stderr へ1行）。
+   */
+  #commit(event: InboxEvent): void {
+    const entry = commitmentFor(event);
+    if (entry === null) return;
+    this.#committed.set(
+      event.id,
+      this.#stores.commitments.open(entry).then(
+        () => undefined,
+        (error: unknown) => {
+          noteDroppedRecord('未了の記帳', inboxEventShape(event), error);
+        },
+      ),
+    );
+  }
+
+  /**
+   * ターンの本文の先頭に載せる、台帳の断り書き。
+   *
+   * 2つを1つの節で渡す。**この合図に対応する未了の id**（閉じ方が分からなければ
+   * 閉じられない）と、**いま何件が未了で、いちばん古いものがいつのものか**である。
+   *
+   * **件数と齢を毎ターン見せるのは、優先度を決め直させるためである。** 受信箱は
+   * 純粋な先入れ先出しで、器は並べ替えない（並べ替えた瞬間に「何を先にやるか」の
+   * 判断が器へ移る）。代わりに溜まっているものを毎回見せて、順序はクローンが記憶に
+   * 照らして決め直す。**一覧そのものは載せない** — 件数に比例して伸びるものを毎ターン
+   * 積むと、溜まっているときほどターンが重くなる。全文は `commitment_list` で取れる。
+   *
+   * **読めなくても空文字を返してターンを進める。** 台帳が読めないことでターンまで
+   * 止めたら、いま塞いでいる穴より広い穴になる。
+   */
+  async #commitmentNoticeFor(event: InboxEvent): Promise<string> {
+    // 蒸留には載せない。**記憶へ移すためだけの内部ターン**であって、しかも
+    // `stop()` 経由の蒸留はこの直後にプロセスが消える。そこへ「未了が3件ある」と
+    // 渡すのは、畳んでいる最中に新しい仕事を始めさせることでしかない。
+    if (event.type === 'distill') return '';
+
+    // この合図の記帳が済んでから読む（読んだ一覧に自分が居ないことを防ぐ）。
+    await this.#committed.get(event.id);
+
+    let open: Commitment[];
+    try {
+      open = await this.#stores.commitments.list();
+    } catch (error) {
+      noteDroppedRecord('未了の読み出し', inboxEventShape(event), error);
+      return '';
+    }
+
+    const mine = open.find((entry) => entry.id === event.id);
+    const oldest = open[0];
+    const lines = [
+      `[system] 引き受けたまま終わっていない仕事は **${open.length} 件** ある` +
+        (oldest === undefined ? '。' : `（いちばん古いものは ${oldest.at} に受け取ったもの）。`),
+      ...(mine === undefined
+        ? []
+        : [
+            `いま届いたこの一件も台帳に載せた（id: \`${mine.id}\`）。` +
+              '**片付いたら `commitment_close` で閉じること** — 返事をしただけでは閉じない。' +
+              '雑談や、その場で答えて終わる話なら、答えたうえですぐ閉じてよい。',
+          ]),
+      '全文と齢は `commitment_list` で見られる。**どれを先にやるかは、記憶にある目的と価値観に照らして毎回決め直すこと**' +
+        '（台帳は順序を持たない。溜まっている順に片付ける決まりは無い）。',
+      '',
+      '---',
+      '',
+    ];
+    return lines.join('\n');
+  }
+
+  /**
    * 処理を終えた合図を器から消す。
    *
    * **書き込みの完了を待ってから消す。** 待たないと、短いターンでは消し込みが
@@ -714,6 +852,11 @@ class Clone implements CloneHost {
       // しうるが、それは**この直しの前と同じ回数**である（以前も `#handle` が配達
       // ごとに書いていた）。「消えるより配り直す」の向きを、記録でも揃える。
       this.#record(record.event);
+      // **記帳もやり直す。** `open` は冪等なので、前の器で開けていれば何も起きず、
+      // 閉じてあれば閉じたままである。やり直さない側を選ぶと、`post` が受理してから
+      // `open` が器へ届く前に落ちた合図だけが、未読としては残るのに台帳から永久に
+      // 漏れる（そしてその窓は、いちばん落ちやすい起動直後と重なる）。
+      this.#commit(record.event);
       // `post` を通さないのは、tick の畳み込みで落ちた行が器に残り続けるからである
       // （落とした側は誰も消さないので、起動のたびに配られて回数だけが増える）。
       this.#inbox.push(record.event);
@@ -957,8 +1100,10 @@ class Clone implements CloneHost {
 
     try {
       await this.#ensureQuery();
-      // 配り直しの断り書きは**ここでだけ**載せる（`#redeliveryNotice` の理由）。
-      this.#pushInput(await this.#withFreshMemory(this.#redeliveryNotice + text));
+      // 配り直しと台帳の断り書きは**ここでだけ**載せる（`#redeliveryNotice` の理由）。
+      this.#pushInput(
+        await this.#withFreshMemory(this.#redeliveryNotice + this.#commitmentNotice + text),
+      );
       // 入力がモデルへ渡った瞬間から最初の出力までは「考えている」。
       // **`#ensureQuery` より後で送る** — セッションの起動そのものはまだ考え
       // 始めていないので、そこで送ると手が動いていないのに考えていると
@@ -1707,6 +1852,54 @@ function managerPrompt(event: Extract<InboxEvent, { type: 'manager_message' }>):
   ]
     .filter((line) => line !== '')
     .join('\n');
+}
+
+/**
+ * 合図から、台帳へ開く未了を作る。開かないものは `null`。
+ *
+ * **判定の基準は「誰かが渡してきたか」である。** 人間の発言・人間の回答・マネージャー
+ * からの一件・外部イベントは、届いた時点で「始末をつける相手」が居る。時間起点の発火と
+ * 発意 tick は起こされたこと自体であって渡されたものではないので開かない
+ * （`Clone#commit` の doc に理由の全文）。
+ *
+ * **本文は全文を入れる。** 台帳の `body` を要約にすると、頼まれた内容そのものが
+ * 二度と取れなくなる（切るのは表示側の仕事である）。
+ */
+export function commitmentFor(event: InboxEvent): Commitment | null {
+  const base = { id: event.id, at: event.at };
+  switch (event.type) {
+    case 'human_message':
+      return { ...base, origin: 'human', source: event.conversationId, body: event.text };
+    // 人間が承認待ちへ答えた一件。**これも未了である** — 答えを受け取っただけでは
+    // 何も進んでおらず、止まっているマネージャーへ `manager_send` で返して初めて
+    // 仕事が再開する。宛先を添え損ねて再開しなかった前例があり（AGENTS.md「委譲」）、
+    // そのとき人間の側からは「答えたのだから進んでいる」ようにしか見えない。
+    case 'human_answer':
+      return {
+        ...base,
+        origin: 'human',
+        source: event.approvalId,
+        body: `承認待ち ${event.approvalId} への回答: ${event.answer}`,
+      };
+    case 'manager_message':
+      return {
+        ...base,
+        origin: 'manager',
+        source: event.managerId,
+        body: `[${event.kind}] ${event.text}`,
+      };
+    case 'external':
+      return {
+        ...base,
+        origin: 'external',
+        source: event.source,
+        body: renderPayload(event.payload),
+      };
+    case 'timer':
+    case 'self_initiative':
+    case 'distill':
+      return null;
+  }
 }
 
 /**

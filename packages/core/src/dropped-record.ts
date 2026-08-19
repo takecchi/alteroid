@@ -29,12 +29,18 @@ export function noteDroppedRecord(what: string, detail: string, error: unknown):
 }
 
 /**
- * 受信箱が閉じた後に届いた合図を捨てたことを、stderr へ1行だけ残す。
+ * 受信箱が閉じた後に届いた合図を、このプロセスでは処理しなかったことを
+ * stderr へ1行だけ残す。
  *
- * **捨てるのをやめるのではない。跡だけを残す。** `#stopped` は片付け中という
- * ことで、そこから新しいターンを回す余地は無い（`stop()` の直後に
- * `storage.close()` → `process.exit(0)` が来る）。処理しようとすると「未読の
- * 永続化」という別の設計になる。
+ * **「捨てた」とは書かない。** かつてはここで本当に捨てていて、その根拠は
+ * 「処理しようとすると『未読の永続化』という別の設計になる」だった。その設計は
+ * いま在るので、呼び出し側（`Clone#post`）は器へ残してから来る。
+ *
+ * **それでも「残した」とも書かない。** この窓の後半ではストアが既に閉じており、
+ * 書き込みは落ちうる。落ちたことは `noteDroppedRecord` が別の行で言うので、
+ * ここが断言すると**書けなかった回だけ跡が静かに嘘をつく**（1行目は「次の起動へ
+ * 回した」、2行目は「書けなかった」で、後から読む者は前者を信じる）。この行が
+ * 主張するのは**このプロセスでは処理しなかった**という、観測できたことだけである。
  *
  * **なぜ日誌ではなく stderr か。** `post` は同期で、返り値を持たない。日誌へ
  * 書くなら fire-and-forget にならざるを得ないが、**捨てが起きる窓（`stop()` →
@@ -53,7 +59,10 @@ export function noteDroppedRecord(what: string, detail: string, error: unknown):
  * ある。#52）。何を載せてよいかの判断は `inboxEventShape` の1か所に閉じる。
  */
 export function noteDroppedInboxEvent(event: InboxEvent): void {
-  note(`受信箱を閉じた後に届いた合図を捨てました（${inboxEventShape(event)}）`);
+  note(
+    `受信箱を閉じた後に届いた合図はこのプロセスでは処理しませんでした` +
+      `（器へ残せていれば次の起動で配り直されます）: ${inboxEventShape(event)}`,
+  );
 }
 
 /**

@@ -33,6 +33,7 @@ export const KEY = {
   manager: (id: string) => ({ type: 'manager', id }) as const,
   transcript: (id: string) => ({ type: 'transcript', id }) as const,
   approvals: (pending: boolean) => ({ type: 'approvals', pending }) as const,
+  commitments: (includeClosed: boolean) => ({ type: 'commitments', includeClosed }) as const,
   reports: (limit: number) => ({ type: 'reports', limit }) as const,
   report: (date: string) => ({ type: 'report', date }) as const,
   journal: (limit: number, types: string) => ({ type: 'journal', limit, types }) as const,
@@ -90,6 +91,28 @@ export function useApprovals(pending = true) {
   return useSWR(KEY.approvals(pending), ({ pending }) =>
     api.api
       .GET('/approvals', { params: { query: { pending: pending ? 'true' : 'false' } } })
+      .then(unwrap),
+  );
+}
+
+/**
+ * 引き受けたまま終わっていない仕事の台帳。
+ *
+ * **承認待ちとは別のものである。** あちらは「クローンが人間の答えを待って止まって
+ * いる」で、こちらは「頼まれたことがまだ片付いていない」。止まっていなくても
+ * 片付いていない仕事はあるので、片方で他方は代用できない。
+ *
+ * 並びはデーモンが決める（未了が古い順、片付いたものが新しい順で後ろ。
+ * `packages/core/src/store.ts` の `CommitmentStore`）。**画面で並べ直さない** —
+ * 並べ直すと、齢の見え方が CLI・クローンとここで食い違う。
+ */
+export function useCommitments(includeClosed = false) {
+  const api = useApi();
+  return useSWR(KEY.commitments(includeClosed), ({ includeClosed }) =>
+    api.api
+      .GET('/commitments', {
+        params: { query: { includeClosed: includeClosed ? 'true' : 'false' } },
+      })
       .then(unwrap),
   );
 }

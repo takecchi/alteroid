@@ -196,6 +196,20 @@ const STATEMENTS = [
      id text primary key,
      started_at timestamptz not null
    )`,
+
+  // --- 引き受けたまま終わっていない仕事（store.ts の CommitmentStore） --------
+  // id が主キーなのは open の冪等性を SQL 側で強制するためである。「select して
+  // から insert」に割ると同じ id の並行 open が両方すり抜け、片付いた仕事が
+  // 開き直る。主キーがあれば `insert ... on conflict do nothing` の1操作で済む。
+  `create table if not exists commitments (
+     id text primary key,
+     at timestamptz not null,
+     closed_at timestamptz,
+     commitment jsonb not null
+   )`,
+  // 一覧の主経路は「未了だけを古い順」。閉じた行が積もっても効き続けるよう部分索引。
+  `create index if not exists commitments_open_idx
+     on commitments (at) where closed_at is null`,
 ] as const;
 
 export async function migrate(db: Db): Promise<void> {

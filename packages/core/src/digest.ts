@@ -42,6 +42,19 @@ export async function buildActivityDigest(stores: Stores, window: DigestWindow):
   // 継続中の依頼は期間で切らない。「いま何を頼まれたままか」は常に材料である
   // （これが無いと、発意 tick のたびに頼まれた仕事を思い出せるかの賭けになる）。
   const standing = await stores.schedules.list();
+  // 未了も期間で切らない。**切ると、この器の目的そのものが消える** — 24時間の窓で
+  // 切れば、2日前に頼まれてまだ手を付けていない仕事だけが静かに落ちる（それは
+  // いちばん落としてはいけないものである）。
+  const commitments = await stores.commitments.list();
+  // **片付けたものは期間で切る。** 未了と逆で、こちらは「この期間に何を終えたか」
+  // だからである（日報の「今日何をしたか」の材料になる）。切らないと、日報が
+  // 過去に片付けた分を毎日並べ直すことになる。
+  const settled = (await stores.commitments.list({ includeClosed: true })).filter(
+    (entry) =>
+      entry.closedAt !== undefined &&
+      entry.closedAt >= window.since.toISOString() &&
+      entry.closedAt < until.toISOString(),
+  );
 
   const of = <T extends JournalEntry['type']>(type: T) =>
     entries.filter((entry): entry is Extract<JournalEntry, { type: T }> => entry.type === type);
@@ -76,7 +89,29 @@ export async function buildActivityDigest(stores: Stores, window: DigestWindow):
     `- マネージャー・作業者のツール実行: ${toolUses.length} 件`,
     `- いま人間の回答を待っているもの: ${pending.length} 件`,
     `- 継続中の依頼（定期の仕込み）: ${standing.length} 件`,
+    `- 引き受けたまま終わっていない仕事: ${commitments.length} 件`,
+    `- この期間に片付けた仕事: ${settled.length} 件`,
   ];
+
+  if (commitments.length > 0) {
+    sections.push(
+      '',
+      '## 引き受けたまま終わっていない仕事（古い順。片付いたら `commitment_close` で閉じる）',
+      '**順序はここには無い。** どれを先にやるかは記憶にある目的と価値観に照らして決めること。',
+    );
+    for (const entry of commitments.slice(0, MAX_ITEMS)) {
+      sections.push(
+        `- ${entry.id}（${entry.at} / ${entry.origin}${entry.source === undefined ? '' : ` / ${entry.source}`}）` +
+          `\n  ${brief(entry.body)}`,
+      );
+    }
+    // 継続中の依頼と同じ理由で、黙って切らない。
+    if (commitments.length > MAX_ITEMS) {
+      sections.push(
+        `- …ほか ${commitments.length - MAX_ITEMS} 件（\`commitment_list\` で全部見える）`,
+      );
+    }
+  }
 
   if (standing.length > 0) {
     sections.push('', '## 継続中の依頼（時刻が来れば届く。前回からの続きがあるか見ること）');
@@ -90,6 +125,18 @@ export async function buildActivityDigest(stores: Stores, window: DigestWindow):
     // 趣旨なので、切ったことを見せないと「あるのに見えない」になる。
     if (standing.length > MAX_ITEMS) {
       sections.push(`- …ほか ${standing.length - MAX_ITEMS} 件（\`schedule_list\` で全部見える）`);
+    }
+  }
+
+  if (settled.length > 0) {
+    sections.push('', '## この期間に片付けた仕事');
+    for (const entry of settled.slice(0, MAX_ITEMS)) {
+      sections.push(
+        `- ${brief(entry.body, 120)}\n  片付いたとした理由: ${brief(entry.closedReason ?? '', 120)}`,
+      );
+    }
+    if (settled.length > MAX_ITEMS) {
+      sections.push(`- …ほか ${settled.length - MAX_ITEMS} 件`);
     }
   }
 
