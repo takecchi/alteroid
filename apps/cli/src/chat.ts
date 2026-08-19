@@ -122,6 +122,16 @@ async function sendMessage(
         }
         break;
       }
+      case 'usage_limited': {
+        const data = event.json<{ message: string }>();
+        if (data) {
+          stdout.write(`\n  ! ${data.message}\n`);
+          stdout.write(
+            '    （この発言は保持されていて、次に枠が開いたときに配り直されて試し直される）\n',
+          );
+        }
+        break;
+      }
       case 'error': {
         const data = event.json<{ message: string }>();
         stdout.write(`\nエラー: ${data?.message ?? '不明'}\n`);

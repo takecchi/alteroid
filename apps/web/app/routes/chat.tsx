@@ -397,6 +397,38 @@ export function ChatPane({
                 },
               ]);
               break;
+            /*
+             * **枠（利用上限）が閉じていて、この合図はモデルへ一度も渡っていない
+             * ことを画面に残す。** 終端ではない — 直後に必ず `error` が続く
+             * （`schema.ts` の `usage_limited` の doc。送り主を待たせないための
+             * 終端で、枠が閉じたこと自体はターンの失敗とは別の事実）。
+             *
+             * **`setTransient(...)` にしないこと。** transient で出すと、続く
+             * `error` はこの行に触れないが、この `switch` の下にある `case 'done'`
+             * と、ストリーム終了時の `finally` の両方が `line.transient !== true`
+             * で transient な行を残らず消す（filter が2か所ある）。枠が閉じている
+             * ことは「そのとき考え中だった」ような一時的な状態ではなく、人間が
+             * あとから検索して追うべき事実なので、`ask_human` と同じ**残る行**
+             * として積む。
+             *
+             * 文言は要約しない。`event.message`（`describeUsageNotice()` が作った、
+             * SDK 自身の文言をそのまま含む文字列）をそのまま出す — 言い換えると
+             * `usage-limits.ts` が約束している「人間が検索できる形」が崩れる。
+             * 加えて、この発言は**捨てられておらず**次に届く合図（人間の発言・
+             * 自律の発意など）で配り直されて試し直されることを一文添える。ここが
+             * 欠けると、人間が「届いていない」と誤解してもう一度同じ発言を
+             * 送り直してしまう（すでに保持されている分と重複する）。
+             */
+            case 'usage_limited':
+              setLines((previous) => [
+                ...previous.filter((line) => line.transient !== true),
+                {
+                  key: `u-${Date.now()}`,
+                  role: 'system',
+                  text: `${event.message}\n（この発言は保持されていて、次に枠が開いたときに配り直されて試し直される）`,
+                },
+              ]);
+              break;
             case 'error':
               setFailure(new Error(event.message));
               break;

@@ -205,6 +205,19 @@
                       "properties": {
                         "type": {
                           "type": "string",
+                          "const": "usage_limited"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["type", "message"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
                           "const": "tool"
                         },
                         "tool": {

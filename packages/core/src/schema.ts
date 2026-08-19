@@ -583,6 +583,26 @@ export const chatStreamEventSchema = z.discriminatedUnion('type', [
    */
   z.object({ type: z.literal('queued') }),
   z.object({ type: z.literal('thinking') }),
+  /**
+   * 枠（利用上限）が閉じていて、この合図はそもそもモデルへ投げていない。
+   *
+   * **`queued` にも `thinking` にも潰さないこと。** `queued` は「先客が居て
+   * 順番を待っている」で、`thinking` は「モデルが考えている」だが、どちらも
+   * 前提は同じ — **入力はいずれモデルへ渡る**。`usage_limited` はそれが崩れて
+   * いる場面である。枠が閉じているあいだ、届いた合図はモデルへ一度も渡らず、
+   * 保持されたまま次の合図（人間の発言・自律の発意など）を待つ
+   * （`clone.ts` の `#usageBlocked` / `#deferred`）。3つ目の語を置かず
+   * どれかへ寄せると、`queued` の doc と同じ理由で**長く待たされたときにこそ
+   * 嘘になる** — 枠が数時間閉じていても「順番待ち」や「考えている」と表示され
+   * 続け、実際には誰も手をつけていないことが画面から見えなくなる。
+   *
+   * **終端ではない。** 保持したこの合図は、次に別の合図が届いたときに
+   * 配り直されて実際に投げられる。ターンの終端は従来どおり `done` と `error`
+   * だけである（この合図のあとには必ず `error` が続く — 送り主を待たせない
+   * ため、いまは投げられないという結果を終端として返す。ただし枠が閉じたこと
+   * 自体は消えない情報なので、その `error` より必ず先に出す）。
+   */
+  z.object({ type: z.literal('usage_limited'), message: z.string() }),
   z.object({ type: z.literal('tool'), tool: z.string() }),
   z.object({ type: z.literal('ask_human'), approvalId: z.string(), question: z.string() }),
   z.object({ type: z.literal('done') }),

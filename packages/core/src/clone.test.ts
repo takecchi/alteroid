@@ -57,6 +57,29 @@ function fakeSdk(
      * テストの挙動は1つも変わらない。
      */
     resultText?: string;
+    /**
+     * ターン（＝1回の入力。同一セッション内で0始まりの通し番号）ごとに
+     * `resultSubtype` / `resultText` を差し替える。返り値が `undefined` なら
+     * そのターンは `resultSubtype` / `resultText`（省略時は成功）を使う。
+     *
+     * **固定値のスタブにしないための口**（`modelUsage` と同じ理由）。枠の保持と
+     * 解除は「何回目の再試行か」で結果が変わる場面を検証する必要があり、
+     * `resultSubtype` / `resultText` だけでは全ターンが同じ結果に固定される。
+     */
+    resultFor?: (turnIndex: number) => { subtype?: string; text?: string } | undefined;
+    /**
+     * ターンの `assistant` より前に `rate_limit_event` を差し込む。返り値が
+     * `undefined` ならそのターンには出さない。**枠の検知（`rate_limit_event`
+     * 経路）を `result` の文言と独立に検証するための口。**
+     */
+    rateLimitEventAt?: (turnIndex: number) => Record<string, unknown> | undefined;
+    /**
+     * ターンの `assistant` より前に `system`（`notification` / `informational`）
+     * を差し込む。返り値が `undefined` ならそのターンには出さない。
+     */
+    systemNoticeAt?: (
+      turnIndex: number,
+    ) => { subtype: 'notification' | 'informational'; text: string } | undefined;
   } = {},
 ) {
   const calls: FakeCall[] = [];
@@ -86,21 +109,45 @@ function fakeSdk(
       const prompt = params.prompt;
       if (typeof prompt === 'string') {
         call.inputs.push(prompt);
-        yield* turn(reply(prompt));
+        yield* turn(reply(prompt), 0);
         return;
       }
 
+      let turnIndex = 0;
       for await (const message of prompt as AsyncIterable<{ message: { content: unknown } }>) {
         const text = String(message.message.content);
         call.inputs.push(text);
         if (options.delayMs !== undefined) {
           await new Promise((resolve) => setTimeout(resolve, options.delayMs));
         }
-        yield* turn(reply(text));
+        const idx = turnIndex;
+        turnIndex += 1;
+        yield* turn(reply(text), idx);
       }
     }
 
-    function* turn(text: string): Generator<SDKMessage> {
+    function* turn(text: string, turnIndex: number): Generator<SDKMessage> {
+      const rateLimitInfo = options.rateLimitEventAt?.(turnIndex);
+      if (rateLimitInfo !== undefined) {
+        yield {
+          type: 'rate_limit_event',
+          rate_limit_info: rateLimitInfo,
+          session_id: 'sess-fake',
+          uuid: `uuid-ratelimit-${turnIndex}`,
+        } as unknown as SDKMessage;
+      }
+      const systemNotice = options.systemNoticeAt?.(turnIndex);
+      if (systemNotice !== undefined) {
+        yield {
+          type: 'system',
+          subtype: systemNotice.subtype,
+          session_id: 'sess-fake',
+          uuid: `uuid-sysnotice-${turnIndex}`,
+          ...(systemNotice.subtype === 'notification'
+            ? { text: systemNotice.text }
+            : { content: systemNotice.text }),
+        } as unknown as SDKMessage;
+      }
       yield {
         type: 'assistant',
         message: { content: [{ type: 'text', text }] },
@@ -109,10 +156,11 @@ function fakeSdk(
         uuid: 'uuid-assistant',
       } as unknown as SDKMessage;
       const modelUsage = options.modelUsage?.(callIndex);
+      const resultOverride = options.resultFor?.(turnIndex);
       yield {
         type: 'result',
-        subtype: options.resultSubtype ?? 'success',
-        result: options.resultText ?? text,
+        subtype: resultOverride?.subtype ?? options.resultSubtype ?? 'success',
+        result: resultOverride?.text ?? options.resultText ?? text,
         session_id: 'sess-fake',
         uuid: 'uuid-result',
         ...(modelUsage === undefined ? {} : { modelUsage }),
@@ -2531,6 +2579,266 @@ describe('クローンの消費が台帳に載る（誰が・どこで）', () =
 
     // 跡は残る（「日誌に無い」が「起きなかった」と読めないように）
     expect(stderr.join('')).toContain('利用状況の台帳');
+
+    await s.clone.stop();
+  });
+});
+
+/**
+ * 枠（利用上限）に当たったら、合図を捨てずに保持し、次の合図が来たときに
+ * 試し直す（`clone.ts` の `#usageBlocked` / `#deferred`）。
+ *
+ * タイマーは持たない。「試す」の契機は常に**新しい合図の到着**であり、
+ * `post()` が保持していた合図を FIFO の順で受信箱へ戻して解除する。戻した
+ * 先頭が枠でまた落ちれば `#usageBlocked` が再び立ち、残りはまた保持される
+ * （`#pump` の枠チェック）。
+ */
+describe('クローン — 枠（利用上限）が閉じたら保持して次の合図で試す', () => {
+  const spendLimitMessage = "You've hit your individual spend limit for this account.";
+
+  it('枠に当たったとき、usage_limited が error より先に届く', async () => {
+    const s = setup(undefined, createMemoryStores(), {
+      resultSubtype: 'error_during_execution',
+      resultText: spendLimitMessage,
+    });
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForTerminal(s.events);
+
+    const usageLimitedIndex = s.events.findIndex((event) => event.type === 'usage_limited');
+    const errorIndex = s.events.findIndex((event) => event.type === 'error');
+    expect(usageLimitedIndex).toBeGreaterThanOrEqual(0);
+    expect(errorIndex).toBeGreaterThanOrEqual(0);
+    expect(usageLimitedIndex).toBeLessThan(errorIndex);
+
+    const usageLimitedEvent = s.events[usageLimitedIndex] as Extract<
+      ChatStreamEvent,
+      { type: 'usage_limited' }
+    >;
+    expect(usageLimitedEvent.message).toContain(spendLimitMessage);
+
+    await s.clone.stop();
+  });
+
+  it('枠に当たった合図は forget されない（stores.inbox に未読として残る）', async () => {
+    const s = setup(undefined, createMemoryStores(), {
+      resultSubtype: 'error_during_execution',
+      resultText: spendLimitMessage,
+    });
+
+    const event = humanMessage('やあ');
+    s.clone.post(event);
+    await waitForTerminal(s.events);
+
+    // `waitForTerminal` は `error` の到着（`#reportFailure` 内の同期 `#emit`）
+    // だけを見ており、`#pump` の `finally`（`#settleInboxEvent`）はそのあとの
+    // 非同期の続きなので、消えて**いない**ことを確かめるにはそこまで待つ。
+    await waitFor(async () => {
+      const pending = await s.stores.inbox.claimPending();
+      return pending.some((p) => p.event.id === event.id);
+    }, '枠に当たった合図が未読として残る');
+
+    await s.clone.stop();
+  });
+
+  it('枠が閉じている間に届いた2本目は、ターンが回らないのに error で終端する', async () => {
+    const s = setup(undefined, createMemoryStores(), {
+      resultSubtype: 'error_during_execution',
+      resultText: spendLimitMessage,
+    });
+
+    s.clone.post(humanMessage('一件目'));
+    await waitForTerminal(s.events);
+    expect(s.events.filter(isTerminal).map((event) => event.type)).toEqual(['error']);
+
+    await waitFor(async () => {
+      const pending = await s.stores.inbox.claimPending();
+      return pending.length === 1;
+    }, '1本目が未読のまま保持される');
+    const inputsBeforeSecondPost = (s.calls[0] as FakeCall).inputs.length;
+
+    s.clone.post(humanMessage('二件目'));
+    // 2本目の到着は「保持していた1本目の再試行」を1回だけ誘発する。その再試行も
+    // 同じ理由（固定の spendLimitMessage）で失敗するので枠は閉じたままで、
+    // 2本目自身は短絡される。terminal は合計3件になる
+    // （1本目の初回失敗・1本目の再試行の失敗・2本目の短絡）。
+    await expect.poll(() => s.events.filter(isTerminal).length === 3, { timeout: 3000 }).toBe(true);
+    expect(s.events.filter(isTerminal).map((event) => event.type)).toEqual([
+      'error',
+      'error',
+      'error',
+    ]);
+
+    // 2本目自身はターンを回さない ＝ 呼び出し回数（query 呼び出し）も入力も
+    // 2本目の分は増えていない（増えたのは1本目の再試行の1件だけ）。
+    expect(s.calls.length).toBe(1);
+    const inputsAfterSecondPost = (s.calls[0] as FakeCall).inputs.length;
+    expect(inputsAfterSecondPost).toBe(inputsBeforeSecondPost + 1);
+    expect((s.calls[0] as FakeCall).inputs.some((text) => text.includes('二件目'))).toBe(false);
+
+    await s.clone.stop();
+  });
+
+  it('3本目の合図が来たら、保持していた合図が FIFO の順で配り直され、実際に投げられる', async () => {
+    // 最初の2ターン（0, 1回目の入力）だけ失敗させ、3回目以降は通常どおり
+    // 成功させる。**固定値のスタブにしないための `resultFor`**（何回目かで
+    // 挙動を変える）。
+    const s = setup(undefined, createMemoryStores(), {
+      resultFor: (turnIndex) =>
+        turnIndex < 2 ? { subtype: 'error_during_execution', text: spendLimitMessage } : undefined,
+    });
+
+    s.clone.post(humanMessage('一件目')); // turn 0: 失敗
+    await waitForTerminal(s.events);
+
+    s.clone.post(humanMessage('二件目')); // 1本目の再試行（turn 1: 失敗）を誘発。2本目自身は短絡される
+    await expect.poll(() => s.events.filter(isTerminal).length === 3, { timeout: 3000 }).toBe(true);
+
+    s.clone.post(humanMessage('三件目')); // 保持していた[一件目, 二件目]を戻し、三件目も積む
+    // 一件目(turn 2) → 二件目(turn 3) → 三件目(turn 4) の順に実際に投げられ、
+    // 今度はすべて成功する（`done` が3件増える）。
+    await expect
+      .poll(() => s.events.filter((event) => event.type === 'done').length === 3, {
+        timeout: 3000,
+      })
+      .toBe(true);
+
+    // 入力に載ったテキストの出現順で FIFO を確かめる（`redeliveryNotice` /
+    // `commitmentNotice` が前置されるので完全一致ではなく部分一致で見る）。
+    const order = (s.calls[0] as FakeCall).inputs.map((text) => {
+      if (text.includes('一件目')) return '一件目';
+      if (text.includes('二件目')) return '二件目';
+      if (text.includes('三件目')) return '三件目';
+      return '?';
+    });
+    expect(order).toEqual(['一件目', '一件目', '一件目', '二件目', '三件目']);
+
+    await s.clone.stop();
+  });
+
+  it('org_policy では待たない（保持せず、従来どおり失敗として消える）', async () => {
+    // SDK のプレフィックス集合そのもの（自前の文言を作らない）。
+    const orgPolicyMessage = 'This service is disabled for your org by admin decision.';
+    const s = setup(undefined, createMemoryStores(), {
+      resultSubtype: 'error_during_execution',
+      resultText: orgPolicyMessage,
+    });
+
+    const event = humanMessage('やあ');
+    s.clone.post(event);
+    await waitForTerminal(s.events);
+
+    expect(s.events.filter(isTerminal).map((e) => e.type)).toEqual(['error']);
+    // 「待たない」＝ usage_limited を出さない。
+    expect(s.events.some((e) => e.type === 'usage_limited')).toBe(false);
+
+    // 「保持しない」＝ 従来どおり forget されて器から消える。
+    await waitFor(async () => {
+      const pending = await s.stores.inbox.claimPending();
+      return !pending.some((p) => p.event.id === event.id);
+    }, 'org_policy の合図は保持されず forget される');
+
+    await s.clone.stop();
+  });
+
+  it('rate_limit_event の status: rejected でも枠が閉じたと判定する', async () => {
+    // `result` の文言には上限のプレフィックスを一切含めない。届く usage_limited
+    // が rate_limit_event 経路だけで説明できることを確かめるため。
+    const s = setup(undefined, createMemoryStores(), {
+      resultSubtype: 'error_during_execution',
+      resultText: '（結果なし。rate_limit_event だけが上限の理由を運ぶ）',
+      rateLimitEventAt: () => ({ status: 'rejected', rateLimitType: 'five_hour' }),
+    });
+
+    s.clone.post(humanMessage('一件目'));
+    await waitForTerminal(s.events);
+    expect(s.events.some((e) => e.type === 'usage_limited')).toBe(true);
+
+    s.clone.post(humanMessage('二件目'));
+    // 1本目の再試行（同じ rate_limit_event が毎ターン付くので再び失敗）＋
+    // 2本目の短絡で terminal は合計3件になる。
+    await expect.poll(() => s.events.filter(isTerminal).length === 3, { timeout: 3000 }).toBe(true);
+
+    // 2本目はターンを回さない ＝ rate_limit_event 経路だけでも保持が効いている。
+    expect((s.calls[0] as FakeCall).inputs.some((text) => text.includes('二件目'))).toBe(false);
+
+    await s.clone.stop();
+  });
+
+  it('rate_limit_event で status: rejected が来ても、同じターンの result が成功したら保持されない', async () => {
+    // `rate_limit_info` の `status` は枠1つぶんの状態でしかない
+    // （`rateLimitFactsSchema` — `status` とは別に `overageStatus` /
+    // `usingOverage` / `overageResetsAt` がある）。`five_hour` が `rejected`
+    // でも課金枠（overage）に落ちてターンは成功する組み合わせが構造上あり、
+    // `usage-limits.ts` の `usageTransitionOf` は `entered_overage` として
+    // 名前まで付けている通常の遷移である。この組み合わせで、答えが返って
+    // 終わった合図まで保持・再送されない（＝成功した仕事の二重実行にならない）
+    // ことを確かめる。
+    const s = setup(undefined, createMemoryStores(), {
+      rateLimitEventAt: (turnIndex) =>
+        turnIndex === 0
+          ? { status: 'rejected', rateLimitType: 'five_hour', isUsingOverage: true }
+          : undefined,
+    });
+
+    const event = humanMessage('やあ');
+    s.clone.post(event);
+    await waitForTerminal(s.events);
+    // 検知そのものは起きる（usage_limited は届く）が、ターンは成功して done。
+    expect(s.events.filter(isTerminal).map((e) => e.type)).toEqual(['done']);
+
+    await waitFor(async () => {
+      const pending = await s.stores.inbox.claimPending();
+      return !pending.some((p) => p.event.id === event.id);
+    }, '成功したターンの合図は保持されず forget される');
+
+    await s.clone.stop();
+  });
+
+  it('（追加確認）system/notification の上限文言でも枠が閉じたと判定する', async () => {
+    // 検知3経路の最後の1つ。必須の6本には無いが、`#dispatch` の `case 'system'`
+    // に足した分岐を素通りさせないためにここで直接確かめる。
+    const s = setup(undefined, createMemoryStores(), {
+      resultSubtype: 'error_during_execution',
+      resultText: '（結果なし。system 通知だけが上限の理由を運ぶ）',
+      systemNoticeAt: () => ({ subtype: 'notification', text: spendLimitMessage }),
+    });
+
+    s.clone.post(humanMessage('一件目'));
+    await waitForTerminal(s.events);
+    expect(s.events.some((e) => e.type === 'usage_limited')).toBe(true);
+
+    s.clone.post(humanMessage('二件目'));
+    await expect.poll(() => s.events.filter(isTerminal).length === 3, { timeout: 3000 }).toBe(true);
+    expect((s.calls[0] as FakeCall).inputs.some((text) => text.includes('二件目'))).toBe(false);
+
+    await s.clone.stop();
+  });
+
+  it('同じ transition の通知が2回届いても、日誌のその行は1件しか増えない', async () => {
+    // `transition` は待たない（まだ動く）分類なので、ターンは毎回 done で
+    // 終わり、`system` の通知は毎ターン繰り返し届く（`usage-limits.ts` の
+    // `usageTransitionOf` の doc「毎ターン届く同じ事実で受信箱を埋めないこと」
+    // と同じ場面）。`#usageNotices` で畳んでいなければ、同じ文言の行が
+    // ターンの数だけ日誌に増える。
+    const transitionMessage = "You're now using extra usage until your limit resets.";
+    const s = setup(undefined, createMemoryStores(), {
+      systemNoticeAt: () => ({ subtype: 'notification', text: transitionMessage }),
+    });
+
+    s.clone.post(humanMessage('一件目'));
+    await waitForDone(s.events);
+
+    s.clone.post(humanMessage('二件目'));
+    await expect
+      .poll(() => s.events.filter((event) => event.type === 'done').length === 2, {
+        timeout: 3000,
+      })
+      .toBe(true);
+
+    const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[];
+    const matching = exchanges.filter((entry) => entry.text.includes(transitionMessage));
+    expect(matching).toHaveLength(1);
 
     await s.clone.stop();
   });

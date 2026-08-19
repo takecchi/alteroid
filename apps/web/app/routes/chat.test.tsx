@@ -387,6 +387,56 @@ describe('順番待ちの合図（queued）', () => {
   });
 });
 
+/**
+ * 枠（利用上限）が閉じている合図（`usage_limited`）。
+ *
+ * `queued` / `thinking` と違って**進行中の合図（transient）にしていない** —
+ * 直後に必ず `error`（終端）が続く契約で、transient にすると `error` の
+ * `setFailure` 自体はこの行に触れないものの、ストリーム終了時の `finally` が
+ * `line.transient !== true` で transient な行を残らず消してしまい、枠が
+ * 閉じていたという事実が画面から消える。ここでは受信が終わったあと（`finally`
+ * が必ず走ったあと）も本文が残ることを確かめる。
+ */
+describe('枠が閉じている合図（usage_limited）', () => {
+  it('直後に届く error・受信終了後も画面に残る（transient として消えない）', async () => {
+    stubFetch((url, init) => {
+      if (url.endsWith('/chat')) {
+        return sse(
+          [
+            { event: 'open', data: { conversationId: CONVERSATION_ID } },
+            {
+              event: 'usage_limited',
+              data: { type: 'usage_limited', message: '枠が閉じている（テスト用の文言）' },
+            },
+            { event: 'error', data: { type: 'error', message: 'いまは投げられない' } },
+          ],
+          // usage_limited の直後に error で終わる（`done` は来ない契約）。
+          { signal: init?.signal },
+        );
+      }
+      if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
+      return undefined;
+    });
+
+    renderChat();
+    await send('やあ');
+
+    // SDK の文言（event.message）がそのまま残っている。
+    expect(await screen.findByText(/枠が閉じている（テスト用の文言）/)).toBeTruthy();
+    // 保持されていて試し直されることが分かる一文も付いている。
+    expect(await screen.findByText(/配り直されて試し直される/)).toBeTruthy();
+    // 直後の error（終端）も出る。
+    expect(await screen.findByText('いまは投げられない')).toBeTruthy();
+
+    // 受信が終わり、入力欄が戻った（＝ finally の transient 掃除が走った）
+    // あとも、usage_limited の行は消えていない。
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /送る/ })).toBeTruthy();
+    });
+    expect(screen.getByText(/枠が閉じている（テスト用の文言）/)).toBeTruthy();
+  });
+});
+
 describe('会話の切り替え', () => {
   it('人間が別の会話を選んだら、前の会話の内容を捨てる', async () => {
     stubFetch((url, init) => {
