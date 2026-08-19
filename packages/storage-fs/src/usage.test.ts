@@ -1,10 +1,13 @@
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
   USAGE_ESTIMATE_NOTICE,
   ZERO_USAGE,
+  type UsageAccumulation,
+  type UsageLayer,
+  type UsageSite,
   type UsageSnapshot,
   type UsageTotals,
 } from '@alteroid/core';
@@ -29,6 +32,31 @@ function snapshot(models: Record<string, UsageTotals>): UsageSnapshot {
   return { models };
 }
 
+/**
+ * 既存の受け入れ項目は「マネージャーのセッション本体・累積」の場合を問うもので、
+ * その3つを既定として補う薄い包み。**アサーションは1つも変えていない** —
+ * 層と場所が入る前と同じことを、同じ強さで問い続ける。
+ *
+ * 層と場所そのものの保証は下の describe が別に問う（既定に寄りかからないよう、
+ * そちらでは毎回明示的に渡す）。
+ */
+function record(input: {
+  managerId: string;
+  date: string;
+  at: string;
+  snapshot: UsageSnapshot;
+  layer?: UsageLayer;
+  site?: UsageSite;
+  accumulation?: UsageAccumulation;
+}) {
+  return store.record({
+    layer: 'manager',
+    site: 'session',
+    accumulation: 'cumulative',
+    ...input,
+  });
+}
+
 beforeEach(async () => {
   const dir = await mkdtemp(join(tmpdir(), 'alteroid-usage-test-'));
   store = new FsUsageStore(dir);
@@ -41,9 +69,9 @@ describe('FsUsageStore.record', () => {
       date: '2026-08-14',
       snapshot: snapshot({ opus: totals({ outputTokens: 100, costUsd: 1 }) }),
     };
-    await store.record({ ...input, at: '2026-08-14T10:00:00.000Z' });
+    await record({ ...input, at: '2026-08-14T10:00:00.000Z' });
     // 再送（同じ result がもう一度届いた、を模す）
-    await store.record({ ...input, at: '2026-08-14T10:00:05.000Z' });
+    await record({ ...input, at: '2026-08-14T10:00:05.000Z' });
 
     const { rows } = await store.aggregate({});
     expect(rows).toHaveLength(1);
@@ -51,13 +79,13 @@ describe('FsUsageStore.record', () => {
   });
 
   it('累積が増えれば差分だけ足し込む', async () => {
-    await store.record({
+    await record({
       managerId: 'mgr-1',
       date: '2026-08-14',
       at: '2026-08-14T10:00:00.000Z',
       snapshot: snapshot({ opus: totals({ outputTokens: 100, costUsd: 1 }) }),
     });
-    await store.record({
+    await record({
       managerId: 'mgr-1',
       date: '2026-08-14',
       at: '2026-08-14T11:00:00.000Z',
@@ -72,13 +100,13 @@ describe('FsUsageStore.record', () => {
   it('累積が減っても、記録済みの合計は減らない（新しい累積の全量を足す）', async () => {
     // 累積 $5 まで記録済み → resume で 0 に戻り、次に読めた累積が $3。
     // 実際に使った額は $8 なので、台帳の合計も $8 でなければならない。
-    await store.record({
+    await record({
       managerId: 'mgr-1',
       date: '2026-08-14',
       at: '2026-08-14T10:00:00.000Z',
       snapshot: snapshot({ opus: totals({ costUsd: 5 }) }),
     });
-    await store.record({
+    await record({
       managerId: 'mgr-1',
       date: '2026-08-14',
       at: '2026-08-14T11:00:00.000Z',
@@ -90,7 +118,7 @@ describe('FsUsageStore.record', () => {
   });
 
   it('同じ日にモデルをまたいで積んでも別の行になる', async () => {
-    await store.record({
+    await record({
       managerId: 'mgr-1',
       date: '2026-08-14',
       at: '2026-08-14T10:00:00.000Z',
@@ -105,29 +133,29 @@ describe('FsUsageStore.record', () => {
   });
 
   it('基準（baseline）を読み戻せる', async () => {
-    expect(await store.baseline('mgr-1')).toBeNull();
+    expect(await store.baseline('manager', 'mgr-1')).toBeNull();
 
-    await store.record({
+    await record({
       managerId: 'mgr-1',
       date: '2026-08-14',
       at: '2026-08-14T10:00:00.000Z',
       snapshot: { sessionId: 'sess-1', models: { opus: totals({ costUsd: 1 }) } },
     });
 
-    const baseline = await store.baseline('mgr-1');
+    const baseline = await store.baseline('manager', 'mgr-1');
     expect(baseline?.managerId).toBe('mgr-1');
     expect(baseline?.sessionId).toBe('sess-1');
     expect(baseline?.models.opus).toEqual(totals({ costUsd: 1 }));
   });
 
   it('数え直しが起きたら reset を返す（呼び出し側が日誌へ落とす材料）', async () => {
-    await store.record({
+    await record({
       managerId: 'mgr-1',
       date: '2026-08-14',
       at: '2026-08-14T10:00:00.000Z',
       snapshot: snapshot({ opus: totals({ costUsd: 5 }) }),
     });
-    const fold = await store.record({
+    const fold = await record({
       managerId: 'mgr-1',
       date: '2026-08-14',
       at: '2026-08-14T11:00:00.000Z',
@@ -149,19 +177,19 @@ describe('FsUsageStore.aggregate', () => {
   });
 
   it('日・マネージャー・モデルの3軸で引ける', async () => {
-    await store.record({
+    await record({
       managerId: 'mgr-1',
       date: '2026-08-13',
       at: '2026-08-13T10:00:00.000Z',
       snapshot: snapshot({ opus: totals({ costUsd: 1 }) }),
     });
-    await store.record({
+    await record({
       managerId: 'mgr-1',
       date: '2026-08-14',
       at: '2026-08-14T10:00:00.000Z',
       snapshot: snapshot({ opus: totals({ costUsd: 3 }) }),
     });
-    await store.record({
+    await record({
       managerId: 'mgr-2',
       date: '2026-08-14',
       at: '2026-08-14T10:00:00.000Z',
@@ -182,7 +210,7 @@ describe('FsUsageStore.aggregate', () => {
   });
 
   it('台帳の始点より前を照会したら beforeLedger: true になる', async () => {
-    await store.record({
+    await record({
       managerId: 'mgr-1',
       date: '2026-08-14',
       at: '2026-08-14T10:00:00.000Z',
@@ -199,7 +227,7 @@ describe('FsUsageStore.aggregate', () => {
   });
 
   it('下限の無い照会は台帳の前を含みうるので beforeLedger: true', async () => {
-    await store.record({
+    await record({
       managerId: 'mgr-1',
       date: '2026-08-14',
       at: '2026-08-14T10:00:00.000Z',
@@ -217,7 +245,7 @@ describe('FsUsageStore の不変条件（1操作に閉じる）', () => {
     const calls = Array.from({ length: 10 }, (_, i) => i + 1);
     await Promise.all(
       calls.map((i) =>
-        store.record({
+        record({
           managerId: 'mgr-1',
           date: '2026-08-14',
           at: `2026-08-14T10:00:${String(i).padStart(2, '0')}.000Z`,
@@ -231,5 +259,342 @@ describe('FsUsageStore の不変条件（1操作に閉じる）', () => {
     // 累積は単調増加なので、直列化されていれば数え直しは起きず、合計は最大値と一致する。
     expect(rows[0]?.totals.costUsd).toBe(10);
     expect(rows[0]?.totals.outputTokens).toBe(100);
+  });
+});
+
+/**
+ * 「誰が・どこで」の軸。**モデル id で層を代用できないことがここの前提である** —
+ * `ALTEROID_CLONE_MODEL` を置けばクローンもマネージャーも同じ `model` で並ぶ。
+ */
+describe('層と場所の軸（誰が・どこで使ったか）', () => {
+  it('同じ日・同じ actor・同じモデルでも、層が違えば別の行になる', async () => {
+    // 同じ id・同じモデルで層だけが違う2件。層が鍵に入っていなければ、2件目は
+    // 1件目へ足し込まれて1行になり、`layer` は先に入った側の値のまま残る
+    // ＝ 出力から見分けられない誤帰属になる。
+    await record({
+      layer: 'manager',
+      managerId: 'same-id',
+      date: '2026-08-19',
+      at: '2026-08-19T10:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 2 }) }),
+    });
+    await record({
+      layer: 'clone',
+      managerId: 'same-id',
+      date: '2026-08-19',
+      at: '2026-08-19T10:00:01.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 5 }) }),
+    });
+
+    const { rows } = await store.aggregate({});
+    expect(rows).toHaveLength(2);
+    expect(
+      rows.map((r) => ({ layer: r.layer, costUsd: r.totals.costUsd })).sort((a, b) => a.costUsd - b.costUsd),
+    ).toEqual([
+      { layer: 'manager', costUsd: 2 },
+      { layer: 'clone', costUsd: 5 },
+    ]);
+  });
+
+  it('同じ日・同じ actor・同じモデルでも、場所が違えば別の行になる', async () => {
+    // クローンは自分のセッション本体と要約の蒸留の両方で使う。ここが1行に潰れると
+    // 「要約のたびにいくら払っているか」が本体の分に混ざって読めなくなる。
+    await record({
+      layer: 'clone',
+      site: 'session',
+      managerId: 'clone',
+      date: '2026-08-19',
+      at: '2026-08-19T10:00:00.000Z',
+      snapshot: snapshot({ fable: totals({ costUsd: 1 }) }),
+    });
+    await record({
+      layer: 'clone',
+      site: 'distill',
+      accumulation: 'oneshot',
+      managerId: 'clone',
+      date: '2026-08-19',
+      at: '2026-08-19T10:00:01.000Z',
+      snapshot: snapshot({ fable: totals({ costUsd: 0.25 }) }),
+    });
+
+    const { rows } = await store.aggregate({});
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => [r.site, r.totals.costUsd]).sort()).toEqual([
+      ['distill', 0.25],
+      ['session', 1],
+    ]);
+  });
+
+  it('層をまたいだ累積の基準が混ざらない（同じ actor id でも別の主体）', async () => {
+    // 基準の鍵が actor の id だけだと、2つの累積が1つの基準を共有して差分が嘘に
+    // なる。ここでは manager 側の累積が clone 側の差分に効かないことを問う。
+    await record({
+      layer: 'manager',
+      managerId: 'same-id',
+      date: '2026-08-19',
+      at: '2026-08-19T10:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 10 }) }),
+    });
+    // clone 側は初回なので、基準が無い＝全量が増分。manager の $10 を基準として
+    // 引いてしまえば増分は 0 になり、この行は生まれない。
+    await record({
+      layer: 'clone',
+      managerId: 'same-id',
+      date: '2026-08-19',
+      at: '2026-08-19T10:00:01.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 4 }) }),
+    });
+
+    const clone = await store.baseline('clone', 'same-id');
+    const manager = await store.baseline('manager', 'same-id');
+    expect(clone?.models.opus?.costUsd).toBe(4);
+    expect(manager?.models.opus?.costUsd).toBe(10);
+
+    const { rows } = await store.aggregate({ layer: 'clone' });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.totals.costUsd).toBe(4);
+  });
+
+  it('oneshot は基準を持たず、毎回の全量を積む（高くついた回が目減りしない）', async () => {
+    // **これが `foldOneshotUsage` の存在理由の実験である。** 蒸留のサイドクエリは
+    // 毎回新しい `query()` で、その `result` はその1回の総量そのものである。
+    // 基準を持たせると 2回目は差の $0.03 しか積まれず、$0.08 の回が黙って縮む。
+    const distill = {
+      layer: 'clone' as const,
+      site: 'distill' as const,
+      accumulation: 'oneshot' as const,
+      managerId: 'clone',
+      date: '2026-08-19',
+    };
+    await record({
+      ...distill,
+      at: '2026-08-19T10:00:00.000Z',
+      snapshot: snapshot({ fable: totals({ costUsd: 0.05 }) }),
+    });
+    await record({
+      ...distill,
+      at: '2026-08-19T11:00:00.000Z',
+      snapshot: snapshot({ fable: totals({ costUsd: 0.08 }) }),
+    });
+
+    const { rows } = await store.aggregate({ site: 'distill' });
+    expect(rows).toHaveLength(1);
+    // 0.05 + 0.08。基準を持っていれば 0.05 + 0.03 = 0.08 になる。
+    expect(rows[0]?.totals.costUsd).toBeCloseTo(0.13, 10);
+  });
+
+  it('oneshot は基準を書かない（比べる相手がそもそも無い）', async () => {
+    const fold = await record({
+      layer: 'clone',
+      site: 'distill',
+      accumulation: 'oneshot',
+      managerId: 'clone',
+      date: '2026-08-19',
+      at: '2026-08-19T10:00:00.000Z',
+      snapshot: snapshot({ fable: totals({ costUsd: 0.05 }) }),
+    });
+
+    expect(fold.baseline).toBeNull();
+    expect(await store.baseline('clone', 'clone')).toBeNull();
+  });
+
+  it('layer と site で絞り込める', async () => {
+    await record({
+      layer: 'manager',
+      managerId: 'mgr-1',
+      date: '2026-08-19',
+      at: '2026-08-19T10:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 3 }) }),
+    });
+    await record({
+      layer: 'clone',
+      managerId: 'clone',
+      date: '2026-08-19',
+      at: '2026-08-19T10:00:01.000Z',
+      snapshot: snapshot({ fable: totals({ costUsd: 1 }) }),
+    });
+    await record({
+      layer: 'clone',
+      site: 'distill',
+      accumulation: 'oneshot',
+      managerId: 'clone',
+      date: '2026-08-19',
+      at: '2026-08-19T10:00:02.000Z',
+      snapshot: snapshot({ fable: totals({ costUsd: 0.5 }) }),
+    });
+
+    expect((await store.aggregate({ layer: 'clone' })).rows).toHaveLength(2);
+    expect((await store.aggregate({ layer: 'manager' })).rows).toHaveLength(1);
+    expect((await store.aggregate({ site: 'distill' })).rows).toHaveLength(1);
+    const both = await store.aggregate({ layer: 'clone', site: 'session' });
+    expect(both.rows).toHaveLength(1);
+    expect(both.rows[0]?.totals.costUsd).toBe(1);
+  });
+});
+
+describe('層の軸が始まった時刻（既定値と観測を混ぜない）', () => {
+  it('1件も無ければ layersSince は null、beforeLayers は真', async () => {
+    const aggregate = await store.aggregate({});
+    expect(aggregate.layersSince).toBeNull();
+    expect(aggregate.beforeLayers).toBe(true);
+  });
+
+  it('layersSince は最初の record でだけ入り、以後は上書きしない', async () => {
+    await record({
+      managerId: 'mgr-1',
+      date: '2026-08-19',
+      at: '2026-08-19T10:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 1 }) }),
+    });
+    await record({
+      managerId: 'mgr-2',
+      date: '2026-08-20',
+      at: '2026-08-20T10:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 1 }) }),
+    });
+
+    const aggregate = await store.aggregate({});
+    expect(aggregate.layersSince).toBe('2026-08-19T10:00:00.000Z');
+    // 台帳の始点も動いていない（別の値として持っていることの確認）。
+    expect(aggregate.since).toBe('2026-08-19T10:00:00.000Z');
+  });
+
+  it('層の軸の始点より前を照会したら beforeLayers: true になる', async () => {
+    await record({
+      managerId: 'mgr-1',
+      date: '2026-08-19',
+      at: '2026-08-19T10:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 1 }) }),
+    });
+
+    // 始点の当日以降を聞いているので、層の内訳は観測である。
+    expect((await store.aggregate({ from: '2026-08-19' })).beforeLayers).toBe(false);
+    // 前日を含めて聞いているので、その分の層は既定値であって観測ではない。
+    expect((await store.aggregate({ from: '2026-08-18' })).beforeLayers).toBe(true);
+    // 下限の無い照会は常に前を含みうる。
+    expect((await store.aggregate({})).beforeLayers).toBe(true);
+  });
+});
+
+/**
+ * **既にある `usage.json` を読んだときに何が起きるか。**
+ *
+ * pg 側の `alter table … add column … default 'manager'` に対応するのがここである。
+ * 壊れ方は3つあり、どれも出力からは正常に見える —
+ *
+ * 1. **既定無しで読むと台帳が丸ごと読めなくなる**（`usageRowSchema` は層を必須に
+ *    している）＝ 既存の記録が消えたのと同じことになる
+ * 2. **既存の基準が引けなくなる**（鍵が `actor` から `層 × actor` へ変わった）
+ *    → 「基準が無い」と読まれ、次の1回で累積の全量が積まれる ＝ 二重計上
+ * 3. **古い鍵と新しい鍵で同じ論理的な1行が2つに割れる**（合計は合うが一覧に
+ *    同じものが2つ並ぶ）
+ */
+describe('既にある usage.json の読み込み（層の列が無い状態から）', () => {
+  let dir: string;
+
+  /**
+   * 層の列が入る前の鍵の区切り。`usage.ts` の `rowKey` が使っている制御文字で、
+   * ソースに素で書くと読めないので明示的に作る。
+   */
+  const SEP = String.fromCharCode(0);
+
+  /** 層の列が入る前の形の `usage.json` を手で置く。 */
+  async function writeLegacy(): Promise<void> {
+    const legacy = {
+      rows: {
+        // 鍵は `date / actor / model` の3つ組だった。
+        [['2026-08-01', 'mgr-old', 'claude-opus-5'].join(SEP)]: {
+          date: '2026-08-01',
+          managerId: 'mgr-old',
+          model: 'claude-opus-5',
+          totals: totals({ costUsd: 12.5 }),
+          updatedAt: '2026-08-01T10:00:00.000Z',
+        },
+      },
+      // 鍵は actor の id そのものだった。
+      baselines: {
+        'mgr-old': {
+          managerId: 'mgr-old',
+          sessionId: 'sess-old',
+          models: { 'claude-opus-5': totals({ costUsd: 12.5 }) },
+          updatedAt: '2026-08-01T10:00:00.000Z',
+          resets: 0,
+        },
+      },
+      startedAt: '2026-08-01T09:00:00.000Z',
+    };
+    await writeFile(join(dir, 'usage.json'), `${JSON.stringify(legacy, null, 2)}\n`, 'utf8');
+  }
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'alteroid-usage-legacy-'));
+    store = new FsUsageStore(dir);
+    await writeLegacy();
+  });
+
+  it('既にある行を読めて、manager / session になる', async () => {
+    const { rows } = await store.aggregate({});
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.layer).toBe('manager');
+    expect(rows[0]?.site).toBe('session');
+    expect(rows[0]?.totals.costUsd).toBe(12.5);
+  });
+
+  it('既にある基準がそのまま引ける（次の1回で二重計上しない）', async () => {
+    const baseline = await store.baseline('manager', 'mgr-old');
+    expect(baseline?.models['claude-opus-5']?.costUsd).toBe(12.5);
+
+    // 基準が引けなければ全量の $13.0 が積まれ、合計は 25.5 へ跳ねる。
+    await record({
+      managerId: 'mgr-old',
+      date: '2026-08-01',
+      at: '2026-08-19T10:00:00.000Z',
+      snapshot: {
+        sessionId: 'sess-old',
+        models: { 'claude-opus-5': totals({ costUsd: 13 }) },
+      },
+    });
+
+    const { rows } = await store.aggregate({});
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.totals.costUsd).toBeCloseTo(13, 10);
+  });
+
+  it('同じ論理的な1行が古い鍵と新しい鍵で2つに割れない', async () => {
+    // 同じ日・同じ actor・同じモデル・同じ層へ足す。鍵を値から引き直していなければ、
+    // 古い3つ組の鍵と新しい5つ組の鍵で行が2つ並ぶ。
+    await record({
+      managerId: 'mgr-old',
+      date: '2026-08-01',
+      at: '2026-08-19T10:00:00.000Z',
+      snapshot: {
+        sessionId: 'sess-old',
+        models: { 'claude-opus-5': totals({ costUsd: 13 }) },
+      },
+    });
+
+    const { rows } = await store.aggregate({});
+    expect(rows).toHaveLength(1);
+  });
+
+  it('台帳の始点は動かさず、層の軸の始点だけが後から入る', async () => {
+    const before = await store.aggregate({ from: '2026-08-01' });
+    expect(before.since).toBe('2026-08-01T09:00:00.000Z');
+    expect(before.layersSince).toBeNull();
+    expect(before.beforeLayers).toBe(true);
+
+    await record({
+      layer: 'clone',
+      managerId: 'clone',
+      date: '2026-08-19',
+      at: '2026-08-19T10:00:00.000Z',
+      snapshot: snapshot({ fable: totals({ costUsd: 0.5 }) }),
+    });
+
+    const after = await store.aggregate({ from: '2026-08-19' });
+    expect(after.since).toBe('2026-08-01T09:00:00.000Z');
+    expect(after.layersSince).toBe('2026-08-19T10:00:00.000Z');
+    expect(after.beforeLayers).toBe(false);
+    expect((await store.aggregate({ from: '2026-08-01' })).beforeLayers).toBe(true);
   });
 });
