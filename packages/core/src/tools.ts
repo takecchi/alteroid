@@ -768,7 +768,9 @@ export function createCloneTools(context: ToolContext) {
         const existing = await stores.commitments.get(id);
         if (existing === null) return text(`引き受けた仕事 ${id} は台帳に無い。`);
         if (existing.closedAt !== undefined) {
-          return text(`${id} は既に ${existing.closedAt} に片付けてある（${existing.closedReason ?? ''}）。`);
+          return text(
+            `${id} は既に ${existing.closedAt} に片付けてある（${existing.closedReason ?? ''}）。`,
+          );
         }
         await stores.commitments.close(id, new Date().toISOString(), reason);
         return text(`${id} を片付けた。`);

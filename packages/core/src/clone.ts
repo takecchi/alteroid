@@ -1889,7 +1889,12 @@ export function commitmentFor(event: InboxEvent): Commitment | null {
         body: `[${event.kind}] ${event.text}`,
       };
     case 'external':
-      return { ...base, origin: 'external', source: event.source, body: renderPayload(event.payload) };
+      return {
+        ...base,
+        origin: 'external',
+        source: event.source,
+        body: renderPayload(event.payload),
+      };
     case 'timer':
     case 'self_initiative':
     case 'distill':
