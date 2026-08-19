@@ -44,7 +44,7 @@ export default function Dashboard() {
   return (
     <Page title="ダッシュボード" description="いま何が動いていて、何が人間を待っているか">
       <div className="grid gap-4 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
+        <Card className="flex flex-col lg:col-span-2">
           <CardHeader
             title="最新の日報"
             subtitle={latestReport === undefined ? undefined : latestReport.date}
@@ -61,7 +61,20 @@ export default function Dashboard() {
           ) : latestReport === undefined ? (
             <Empty>まだ日報がない。締め時刻を待つか、スケジュールから今すぐ回せる。</Empty>
           ) : (
-            <div className="max-h-96 overflow-y-auto px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap">
+            /*
+              **固定の上限（`max-h-96`）で切らない。** この Card は `lg:col-span-2` で、隣の列
+              （Card 4枚の縦積み）のほうが背が高い。grid の stretch で**枠だけ**が下まで伸び、
+              中身は上端から 24rem で終わるので、下に死んだ余白が残る（人間の言葉で
+              「スクロールエリアが上らへんで終わっている」）。だから上限ではなく
+              「24rem を初期値にして、余っている高さのぶんだけ伸びる」で渡す。
+              枠と中身の下端が揃い、日報が長ければその中でスクロールする。
+
+              **`flex-1` に置き換えないこと。** `flex-basis: 0%` は親の高さが未確定なとき
+              `content` に解決される（CSS Flexbox の規定）ので、日報の全文が grid の行の
+              高さになり、こんどは隣の列の下に同じ余白ができる。`h-96` は絶対長なので
+              そうならない。狭い画面（1列）では伸びる先が無いので、これまでどおり 24rem。
+            */
+            <div className="h-96 min-h-0 grow overflow-y-auto px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap">
               {latestReport.body}
             </div>
           )}
