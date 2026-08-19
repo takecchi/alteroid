@@ -2,10 +2,10 @@ import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { InboxEvent } from '@alteroid/core';
+import type { Commitment, InboxEvent } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { createFsStores, initWorkspace } from './index.js';
+import { CLOSED_HISTORY_LIMIT, createFsStores, initWorkspace } from './index.js';
 
 let root: string;
 let stores: ReturnType<typeof createFsStores>;
@@ -466,6 +466,158 @@ describe('FsScheduleStore', () => {
     // 本文なしの曖昧なターンが走る（clone.ts が読取不能を分けている意味が消える）
     await expect(stores.schedules.get('broken')).rejects.toThrow();
     await expect(stores.schedules.list()).rejects.toThrow();
+  });
+});
+
+/**
+ * 引き受けたまま終わっていない仕事の台帳（`store.ts` の `CommitmentStore`）。
+ *
+ * fs / pg で同じ振る舞いになることを両方で問う（`store.ts`「省略可能にしないこと」）。
+ */
+describe('FsCommitmentStore', () => {
+  const commitment = (id: string, at: string, body: string): Commitment => ({
+    id,
+    at,
+    origin: 'human',
+    source: 'conv-1',
+    body,
+  });
+
+  it('開いた仕事は未了として読み戻せる（デーモンを作り直しても残る）', async () => {
+    await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す'));
+
+    expect(await stores.commitments.list()).toEqual([
+      commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す'),
+    ]);
+    expect((await stores.commitments.get('c-1'))?.body).toBe('PR を出す');
+    expect(await stores.commitments.get('しらない')).toBeNull();
+  });
+
+  it('閉じたものは未了から外れ、includeClosed でだけ読める（行は消さない）', async () => {
+    await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す'));
+
+    expect(await stores.commitments.close('c-1', '2026-08-13T00:00:00.000Z', '#99 で出した')).toBe(
+      true,
+    );
+
+    expect(await stores.commitments.list()).toEqual([]);
+    const all = await stores.commitments.list({ includeClosed: true });
+    expect(all).toHaveLength(1);
+    // 「閉じた」だけを残さない（何をもって終わりとしたかが無いと人間が否定できない）
+    expect(all[0]?.closedAt).toBe('2026-08-13T00:00:00.000Z');
+    expect(all[0]?.closedReason).toBe('#99 で出した');
+  });
+
+  it('同じ id で二度 open しても上書きされない（1回目の本文が残る）', async () => {
+    expect(
+      await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', '最初の依頼')),
+    ).toBe(true);
+
+    // 受信箱の合図は配り直されうるので、同じ id の自動 open は普通に二度来る
+    expect(
+      await stores.commitments.open(commitment('c-1', '2026-08-14T00:00:00.000Z', '別の本文')),
+    ).toBe(false);
+
+    const entry = await stores.commitments.get('c-1');
+    expect(entry?.body).toBe('最初の依頼');
+    expect(entry?.at).toBe('2026-08-12T00:00:00.000Z');
+    expect(await stores.commitments.list()).toHaveLength(1);
+  });
+
+  it('閉じた id を open し直しても開き直らない（片付いた仕事が蘇らない）', async () => {
+    await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す'));
+    await stores.commitments.close('c-1', '2026-08-13T00:00:00.000Z', '#99 で出した');
+
+    // 器が落ちて合図が配り直された、を模す
+    expect(
+      await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す')),
+    ).toBe(false);
+
+    expect(await stores.commitments.list()).toEqual([]);
+    expect((await stores.commitments.get('c-1'))?.closedAt).toBe('2026-08-13T00:00:00.000Z');
+  });
+
+  it('close は二度目に false を返す（二重に「いま片付けた」と報告させない）', async () => {
+    await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す'));
+
+    expect(await stores.commitments.close('c-1', '2026-08-13T00:00:00.000Z', '出した')).toBe(true);
+    expect(await stores.commitments.close('c-1', '2026-08-14T00:00:00.000Z', 'また出した')).toBe(
+      false,
+    );
+
+    // 二度目は記録も動かさない（最初に片付けた事実を書き換えない）
+    const entry = await stores.commitments.get('c-1');
+    expect(entry?.closedAt).toBe('2026-08-13T00:00:00.000Z');
+    expect(entry?.closedReason).toBe('出した');
+  });
+
+  it('存在しない id の close は false（勝手に行を作らない）', async () => {
+    expect(await stores.commitments.close('しらない', '2026-08-13T00:00:00.000Z', '片付けた')).toBe(
+      false,
+    );
+
+    expect(await stores.commitments.list({ includeClosed: true })).toEqual([]);
+  });
+
+  it('未了は古い順に返る（齢が判断の材料なので放置されているものから見せる）', async () => {
+    await stores.commitments.open(commitment('c-new', '2026-08-14T00:00:00.000Z', '新しい'));
+    await stores.commitments.open(commitment('c-old', '2026-08-10T00:00:00.000Z', '古い'));
+    await stores.commitments.open(commitment('c-mid', '2026-08-12T00:00:00.000Z', '中'));
+
+    expect((await stores.commitments.list()).map((entry) => entry.id)).toEqual([
+      'c-old',
+      'c-mid',
+      'c-new',
+    ]);
+  });
+
+  it('閉じたものは未了の後ろに、新しく片付いた順で続く', async () => {
+    await stores.commitments.open(commitment('c-open', '2026-08-14T00:00:00.000Z', 'まだ'));
+    await stores.commitments.open(commitment('c-a', '2026-08-10T00:00:00.000Z', 'A'));
+    await stores.commitments.open(commitment('c-b', '2026-08-11T00:00:00.000Z', 'B'));
+    await stores.commitments.close('c-a', '2026-08-12T00:00:00.000Z', 'A を片付けた');
+    await stores.commitments.close('c-b', '2026-08-13T00:00:00.000Z', 'B を片付けた');
+
+    expect(
+      (await stores.commitments.list({ includeClosed: true })).map((entry) => entry.id),
+    ).toEqual(['c-open', 'c-b', 'c-a']);
+  });
+
+  it('閉じた行は上限で切られるが、未了は件数によらず1件も落ちない', async () => {
+    const overflow = 5;
+    // 未了を先に置く（切り詰めの対象にならないことを、閉じた行が上限を超えた後で見る）
+    for (let index = 0; index < 3; index += 1) {
+      await stores.commitments.open(
+        commitment(`open-${index}`, `2026-08-01T00:00:0${index}.000Z`, `未了 ${index}`),
+      );
+    }
+
+    for (let index = 0; index < CLOSED_HISTORY_LIMIT + overflow; index += 1) {
+      const id = `closed-${String(index).padStart(4, '0')}`;
+      await stores.commitments.open(
+        commitment(id, '2026-08-02T00:00:00.000Z', `片付ける ${index}`),
+      );
+      // closedAt が切り詰めの並び順を決める（古く片付いたものから落ちる）
+      await stores.commitments.close(
+        id,
+        new Date(Date.UTC(2026, 7, 3, 0, 0, 0) + index * 1000).toISOString(),
+        `片付けた ${index}`,
+      );
+    }
+
+    const all = await stores.commitments.list({ includeClosed: true });
+    const open = all.filter((entry) => entry.closedAt === undefined);
+    const closed = all.filter((entry) => entry.closedAt !== undefined);
+
+    // 未了は1件も切らない（切ったらこの器の目的そのものが消える）
+    expect(open.map((entry) => entry.id)).toEqual(['open-0', 'open-1', 'open-2']);
+    expect(closed).toHaveLength(CLOSED_HISTORY_LIMIT);
+    // 落ちるのは古く片付いたものから。新しい側は残る
+    expect(closed.at(0)?.id).toBe(
+      `closed-${String(CLOSED_HISTORY_LIMIT + overflow - 1).padStart(4, '0')}`,
+    );
+    expect(closed.at(-1)?.id).toBe(`closed-${String(overflow).padStart(4, '0')}`);
+    expect(await stores.commitments.get('closed-0000')).toBeNull();
   });
 });
 

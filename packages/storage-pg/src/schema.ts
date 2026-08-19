@@ -84,6 +84,36 @@ export const schedules = pgTable('schedules', {
 });
 
 /**
+ * 引き受けたまま終わっていない仕事の台帳（`store.ts` の `CommitmentStore`）。
+ *
+ * `id` が主キーなのは、**`open` の冪等性をここで強制するため**である。「select して
+ * から insert」に割ると、同じ id の並行 open が両方すり抜けて後の書き込みが先の
+ * 行を上書きする ＝ 一度片付けた仕事が配り直しのたびに開き直る。主キーがあれば
+ * `insert ... on conflict do nothing` の1操作で済み、割り込む隙間そのものが無い。
+ *
+ * 列に出すのは並べ替えと絞り込みに使う `at` / `closed_at` だけで、本体は jsonb に
+ * そのまま入れる（`schedules` と同じ作法）。クローンが読むのは jsonb の側である。
+ */
+export const commitments = pgTable(
+  'commitments',
+  {
+    id: text('id').primaryKey(),
+    /** 引き受けた時刻。未了を古い順に並べる軸（＝齢の出所）。 */
+    at: timestamp('at', { withTimezone: true, mode: 'date' }).notNull(),
+    /** 片付いた時刻。null なら未了。`close` はこの列が null の行だけを更新する。 */
+    closedAt: timestamp('closed_at', { withTimezone: true, mode: 'date' }),
+    commitment: jsonb('commitment').notNull(),
+  },
+  // 一覧の主経路は「未了だけを古い順」なので、部分索引にして片付いた行を載せない
+  // （自動 open は人間の発言のたびに1行増えるため、閉じた行はいずれ大半を占める）。
+  (table) => [
+    index('commitments_open_idx')
+      .on(table.at)
+      .where(sql`closed_at is null`),
+  ],
+);
+
+/**
  * まだ処理し終えていない受信箱の合図（`store.ts` の `InboxStore`）。
  *
  * `id` が主キーなのは、同じ合図が二重に積まれないためである（`put` は同じ id なら

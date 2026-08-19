@@ -1,4 +1,4 @@
-import type { InboxEvent } from '@alteroid/core';
+import type { Commitment, InboxEvent } from '@alteroid/core';
 import { PGlite } from '@electric-sql/pglite';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -440,6 +440,153 @@ describe('PgScheduleStore', () => {
 
     // 「無い」ことだけが null である
     expect(await stores.schedules.get('しらない')).toBeNull();
+  });
+});
+
+/**
+ * 引き受けたまま終わっていない仕事の台帳（fs 版と同じ振る舞いになることを問う）。
+ */
+describe('PgCommitmentStore', () => {
+  const commitment = (id: string, at: string, body: string): Commitment => ({
+    id,
+    at,
+    origin: 'human',
+    source: 'conv-1',
+    body,
+  });
+
+  it('開いた仕事は未了として読み戻せる（fs 版と同じ振る舞い）', async () => {
+    await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す'));
+
+    expect(await stores.commitments.list()).toEqual([
+      commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す'),
+    ]);
+    expect((await stores.commitments.get('c-1'))?.body).toBe('PR を出す');
+    expect(await stores.commitments.get('しらない')).toBeNull();
+  });
+
+  it('閉じたものは未了から外れ、includeClosed でだけ読める（行は消さない）', async () => {
+    await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す'));
+
+    expect(await stores.commitments.close('c-1', '2026-08-13T00:00:00.000Z', '#99 で出した')).toBe(
+      true,
+    );
+
+    expect(await stores.commitments.list()).toEqual([]);
+    const all = await stores.commitments.list({ includeClosed: true });
+    expect(all).toHaveLength(1);
+    // 列だけ直しても読み出しは jsonb からなので、クローンが見る側に入っていること
+    expect(all[0]?.closedAt).toBe('2026-08-13T00:00:00.000Z');
+    expect(all[0]?.closedReason).toBe('#99 で出した');
+  });
+
+  it('同じ id で二度 open しても上書きされない（1回目の本文が残る）', async () => {
+    expect(
+      await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', '最初の依頼')),
+    ).toBe(true);
+
+    // 受信箱の合図は配り直されうるので、同じ id の自動 open は普通に二度来る
+    expect(
+      await stores.commitments.open(commitment('c-1', '2026-08-14T00:00:00.000Z', '別の本文')),
+    ).toBe(false);
+
+    const entry = await stores.commitments.get('c-1');
+    expect(entry?.body).toBe('最初の依頼');
+    expect(entry?.at).toBe('2026-08-12T00:00:00.000Z');
+    expect(await stores.commitments.list()).toHaveLength(1);
+  });
+
+  it('閉じた id を open し直しても開き直らない（片付いた仕事が蘇らない）', async () => {
+    await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す'));
+    await stores.commitments.close('c-1', '2026-08-13T00:00:00.000Z', '#99 で出した');
+
+    // 器が落ちて合図が配り直された、を模す
+    expect(
+      await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す')),
+    ).toBe(false);
+
+    expect(await stores.commitments.list()).toEqual([]);
+    expect((await stores.commitments.get('c-1'))?.closedAt).toBe('2026-08-13T00:00:00.000Z');
+  });
+
+  it('close は二度目に false を返す（二重に「いま片付けた」と報告させない）', async () => {
+    await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す'));
+
+    expect(await stores.commitments.close('c-1', '2026-08-13T00:00:00.000Z', '出した')).toBe(true);
+    expect(await stores.commitments.close('c-1', '2026-08-14T00:00:00.000Z', 'また出した')).toBe(
+      false,
+    );
+
+    // 二度目は記録も動かさない（最初に片付けた事実を書き換えない）
+    const entry = await stores.commitments.get('c-1');
+    expect(entry?.closedAt).toBe('2026-08-13T00:00:00.000Z');
+    expect(entry?.closedReason).toBe('出した');
+  });
+
+  it('存在しない id の close は false（勝手に行を作らない）', async () => {
+    expect(await stores.commitments.close('しらない', '2026-08-13T00:00:00.000Z', '片付けた')).toBe(
+      false,
+    );
+
+    expect(await stores.commitments.list({ includeClosed: true })).toEqual([]);
+  });
+
+  it('未了は古い順に返り、閉じたものは新しく片付いた順で後ろに続く', async () => {
+    await stores.commitments.open(commitment('c-new', '2026-08-14T00:00:00.000Z', '新しい'));
+    await stores.commitments.open(commitment('c-old', '2026-08-10T00:00:00.000Z', '古い'));
+    await stores.commitments.open(commitment('c-a', '2026-08-11T00:00:00.000Z', 'A'));
+    await stores.commitments.open(commitment('c-b', '2026-08-12T00:00:00.000Z', 'B'));
+    await stores.commitments.close('c-a', '2026-08-15T00:00:00.000Z', 'A を片付けた');
+    await stores.commitments.close('c-b', '2026-08-16T00:00:00.000Z', 'B を片付けた');
+
+    expect((await stores.commitments.list()).map((entry) => entry.id)).toEqual(['c-old', 'c-new']);
+    expect(
+      (await stores.commitments.list({ includeClosed: true })).map((entry) => entry.id),
+    ).toEqual(['c-old', 'c-new', 'c-b', 'c-a']);
+  });
+
+  it('同じ id の並行 open は1件しか入らない（読んでから書く形にしていない）', async () => {
+    const results = await Promise.all([
+      stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', '最初の依頼')),
+      stores.commitments.open(commitment('c-1', '2026-08-12T00:00:01.000Z', '二度目')),
+      stores.commitments.open(commitment('c-1', '2026-08-12T00:00:02.000Z', '三度目')),
+    ]);
+
+    // 「いま自分が開いた」と言えるのは1本だけ
+    expect(results.filter(Boolean)).toHaveLength(1);
+    const rows = await stores.commitments.list();
+    expect(rows).toHaveLength(1);
+    // 後から来たものが先の行を上書きしていない（上書きすると片付いた仕事が蘇る）
+    expect(rows[0]?.body).toBe('最初の依頼');
+  });
+
+  it('同じ id の並行 close で true は1回だけ返る', async () => {
+    await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す'));
+
+    const results = await Promise.all([
+      stores.commitments.close('c-1', '2026-08-13T00:00:00.000Z', '1本目'),
+      stores.commitments.close('c-1', '2026-08-13T00:00:01.000Z', '2本目'),
+      stores.commitments.close('c-1', '2026-08-13T00:00:02.000Z', '3本目'),
+    ]);
+
+    expect(results.filter(Boolean)).toHaveLength(1);
+    expect(await stores.commitments.list()).toEqual([]);
+  });
+
+  it('読めない行を「片付いた」に潰さない（fs 版と同じく失敗を表へ出す）', async () => {
+    // 人間が手で直した・古い形が残っている、を模して不正な本体を直接置く
+    await db.execute(
+      sql`insert into commitments (id, at, commitment)
+          values ('broken', now(), '{"id":"broken"}'::jsonb)`,
+    );
+
+    // 黙って飛ばすと未了の一覧からも digest からも消え、クローンは引き受けたことを
+    // 二度と思い出さない（＝この器が塞いでいる穴がそのまま開く）
+    await expect(stores.commitments.get('broken')).rejects.toThrow(/読めない形/);
+    await expect(stores.commitments.list()).rejects.toThrow(/読めない形/);
+
+    // 「無い」ことだけが null である
+    expect(await stores.commitments.get('しらない')).toBeNull();
   });
 });
 
