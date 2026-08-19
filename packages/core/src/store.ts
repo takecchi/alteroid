@@ -2,6 +2,7 @@ import type { SessionStore } from '@anthropic-ai/claude-agent-sdk';
 
 import type { AuthStore } from './auth.js';
 import type {
+  Commitment,
   InboxEvent,
   Job,
   JournalEntry,
@@ -130,6 +131,47 @@ export interface ScheduleStore {
    * 消えている kind、別の発火の印が付いている場合は何もしない。
    */
   completeRun(kind: string, at: string, cause: 'schedule' | 'manual'): Promise<void>;
+}
+
+/**
+ * 引き受けたまま終わっていない仕事の台帳（`schema.ts` の `Commitment`）。
+ *
+ * **受信箱（`InboxStore`）とは守るものが違う。** あちらが持つのは「その合図がまだ
+ * モデルに届いていない」という配達の状態で、ターンが終われば消える。こちらが持つのは
+ * 「頼まれたことがまだ片付いていない」という**仕事の状態**で、ターンが終わっても
+ * 残る。片方でもう片方を代用できないので、両方要る。
+ *
+ * **省略可能にしないこと**（`schedules` / `inbox` と同じ理由）。ここが任意だと、
+ * 片方の器でだけ依頼が黙って消えるという能力差が生まれる（north_star 禁止1）。
+ */
+export interface CommitmentStore {
+  /**
+   * 台帳を返す。**未了は古い順**（齢が判断の材料なので、古いものから見せる）、
+   * 片付いたものは新しい順で未了の後ろに続く。
+   *
+   * `includeClosed` を省いたら未了だけ。
+   */
+  list(options?: { includeClosed?: boolean }): Promise<Commitment[]>;
+
+  get(id: string): Promise<Commitment | null>;
+
+  /**
+   * 未了として開く。**同じ id が既に在れば何もしない**（開いたら `true`）。
+   *
+   * **冪等であることがこの器の要である。** 受信箱の合図は配り直されうるので
+   * （`InboxStore` の取引）、その id をそのまま使う自動 open は同じ id で二度呼ばれる。
+   * 上書きしてしまうと、**一度片付けた仕事が配り直しのたびに開き直る** — 器が落ちる
+   * たびに終わったはずの依頼が蘇り、クローンが同じ仕事を二度起こす。
+   */
+  open(entry: Commitment): Promise<boolean>;
+
+  /**
+   * 片付いたことを記録する。閉じたら `true`、無い id と既に閉じているものは `false`。
+   *
+   * **行は消さない。** 消すと「何を片付けたか」が日報の材料から落ちる。人間が普段
+   * 読むのは日報だけである（PRD「可観測性」）。
+   */
+  close(id: string, at: string, reason: string): Promise<boolean>;
 }
 
 /**
@@ -298,6 +340,13 @@ export interface Stores {
    * 片方の器でだけデーモンの死で未読が消えるという能力差が生まれる（north_star 禁止1）。
    */
   inbox: InboxStore;
+  /**
+   * 引き受けたまま終わっていない仕事の台帳。
+   *
+   * **省略可能にしないこと**（`inbox` と同じ理由）。ここが任意だと、片方の器でだけ
+   * 「その場で着手しなかった依頼が黙って消える」という能力差が生まれる。
+   */
+  commitments: CommitmentStore;
   archive: TranscriptArchive;
   sessions: SessionRegistry;
   /**
