@@ -1,7 +1,7 @@
 /**
  * `.github/scripts/reflect-release-prod.sh` を固定する。
  *
- * 本物の push が GitHub Actions から6時間ごとに起きるスクリプトなので、手で走らせて
+ * 本物の push が GitHub Actions から夜に2回起きるスクリプトなので、手で走らせて
  * 確かめるのは危ない。**偽の git は置かない。** 本物の git と、ローカルの bare
  * リポジトリ（`origin.git`）を使う。ネットワークには一切触らない —
  * ローカルパスは git にとって立派な remote であり、`file://` を挟む必要は無い。
