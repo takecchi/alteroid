@@ -59,12 +59,14 @@ function usageRowKey(
   layer: UsageLayer,
   site: UsageSite,
 ): string {
-  return `${date} ${managerId} ${model} ${layer} ${site}`;
+  // **区切りもドライバと同じ制御文字にする。** 空白にすると、id に空白を含む actor で
+  // この器だけが鍵をぶつける（あるいはぶつけない）＝ 本物と違う結果を静かに返す。
+  return `${date}\u0000${managerId}\u0000${model}\u0000${layer}\u0000${site}`;
 }
 
 /** 累積の基準の鍵。**主体は「層 × actor」である**（`usage.ts` の `usageBaselineSchema`）。 */
 function usageBaselineKey(layer: UsageLayer, managerId: string): string {
-  return `${layer} ${managerId}`;
+  return `${layer}\u0000${managerId}`;
 }
 
 /**
