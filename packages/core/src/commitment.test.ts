@@ -191,7 +191,7 @@ describe('引き受けたまま終わっていない仕事', () => {
     // クローンが道具で閉じたときだけ閉じる
     const tools = createCloneTools({ stores, emit: () => undefined });
     const close = tools.find((entry) => entry.name === 'commitment_close');
-    await close?.handler({ id, reason: '直してマージした' }, {} as never);
+    await close?.handler({ id, reason: '直してマージした' } as never, {} as never);
 
     expect(await stores.commitments.list()).toHaveLength(0);
     const all = await stores.commitments.list({ includeClosed: true });

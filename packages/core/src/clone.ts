@@ -560,7 +560,15 @@ class Clone implements CloneHost {
 
     for await (const event of this.#inbox) {
       this.#redeliveryNotice = this.#redeliveryNoticeFor(event);
-      this.#commitmentNotice = await this.#commitmentNoticeFor(event);
+      // **ここは `try` の外である。** 投げれば `for await` ごと抜けて受信箱の
+      // ループが死に、クローンは何も受け取れなくなる（`#handle` の失敗とは被害の
+      // 桁が違う）。中では読み取りの失敗を自分で握っているが、握り漏らしが1つでも
+      // 残ると全部が止まるので、外側にも受けを置く。**断り書きが付かないことより、
+      // ループが止まることの方がずっと高い。**
+      this.#commitmentNotice = await this.#commitmentNoticeFor(event).catch((error: unknown) => {
+        noteDroppedRecord('未了の断り書きの組み立て', inboxEventShape(event), error);
+        return '';
+      });
       try {
         await this.#handle(event);
       } catch (error) {
