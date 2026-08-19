@@ -130,6 +130,60 @@ describe('評価', () => {
     expect(result.env.PATH).toBe('/opt/bin:/usr/bin');
   });
 
+  /**
+   * **器と OS が勝手に足した env を、プロファイルの仕業として報告しない。**
+   *
+   * macOS では CoreFoundation が `__CF_USER_TEXT_ENCODING` を**どの子へも**注ぐので、
+   * `export SOME_API_TOKEN=...` だけのプロファイルが
+   * `names: ['SOME_API_TOKEN', '__CF_USER_TEXT_ENCODING']` を返していた。
+   * Linux では注がれないため CI は緑で、**手元でだけ落ちる**形だった（＝「たまたま
+   * 踏まなかった」側であって、直っていたわけではない）。
+   *
+   * **ここで OS の注入をあてにしない。** `__CF_USER_TEXT_ENCODING` を直接見る形にすると
+   * Linux では何も起きない ＝ CI に歯が無いままになる。だから env を吐かせる node を
+   * 「先に1つ export してから本物へ渡すラッパ」に差し替えて、**注ぐ側と同じ条件**を
+   * どの OS でも作る。ベースライン計測を外すとこのテストは Linux でも落ちる。
+   */
+  it('器と OS が足した env は差分に混ぜない（本文が置いた分だけを報告する）', async () => {
+    const path = join(dir, 'profile.sh');
+    const vessel = createProfileVessel({ path });
+    await vessel.set('export FROM_PROFILE=1');
+
+    // 本物の node の手前で1つ export する ＝ CoreFoundation が注ぐのと同じ形。
+    // 本文を読む側にも読まない側にも等しく現れるので、打ち消えるのが正しい。
+    const wrapper = join(dir, 'node-with-noise.sh');
+    writeFileSync(
+      wrapper,
+      `#!/bin/sh\nINJECTED_BY_VESSEL=platform-noise; export INJECTED_BY_VESSEL\nexec ${JSON.stringify(process.execPath)} "$@"\n`,
+      { mode: 0o755 },
+    );
+
+    const result = await evaluateProfile({ path, baseEnv: {}, nodePath: wrapper });
+
+    expect(result.error).toBeUndefined();
+    // 本文が置いた分は載る（打ち消しが行きすぎて全部消えたのではない）
+    expect(result.env.FROM_PROFILE).toBe('1');
+    // 器が注いだ分は載らない
+    expect(result.env.INJECTED_BY_VESSEL).toBeUndefined();
+    expect(Object.keys(result.env)).toEqual(['FROM_PROFILE']);
+  });
+
+  /**
+   * 上のテストの**実物での立会人**。macOS でだけ意味を持つ（Linux には注ぐ主体が
+   * 居ないので素通りする）。歯を持っているのは上のラッパ版で、こちらは
+   * 「報告された症状そのもの」を実物で1度押さえておくためにある。
+   */
+  it('macOS が注ぐ __CF_USER_TEXT_ENCODING を差分に混ぜない', async () => {
+    const path = join(dir, 'profile.sh');
+    const vessel = createProfileVessel({ path });
+    await vessel.set('export FROM_PROFILE=1');
+
+    const result = await evaluateProfile({ path, baseEnv: {} });
+
+    expect(result.error).toBeUndefined();
+    expect(Object.keys(result.env)).toEqual(['FROM_PROFILE']);
+  });
+
   it('後始末が飛ばされていたら、それを検出して報告する', async () => {
     // **抜け道を数え上げて弾く形にしない。** 数え忘れた1つがそのまま穴になる
     // （実際に `return` を数え忘れた）。ここでは「器が `unset` を書かなかった」
