@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 
 import { Drawer } from '~/components/drawer';
+import { Markdown } from '~/components/markdown';
 import { Button, Card, Empty, ErrorNote, Spinner, Textarea } from '~/components/ui';
 import { useEndConversation, useRecordOwnMessage } from '~/hooks/mutations';
 import { useConversation, useConversations } from '~/hooks/queries';
@@ -474,14 +475,41 @@ export function ChatPane({
               >
                 <div
                   className={cn(
-                    'max-w-[46rem] rounded-lg px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap',
+                    'min-w-0 max-w-[46rem] rounded-lg px-3 py-2 text-sm leading-relaxed',
+                    // クローンの本文だけ Markdown で描く（下のコメント参照）。
+                    // 人間・システムの行は素のテキストのままなので、これまでどおり
+                    // 改行をそのまま見せる。
+                    line.role !== 'clone' && 'whitespace-pre-wrap',
                     line.role === 'human' && 'bg-accent text-accent-fg',
                     line.role === 'clone' && 'bg-surface',
                     line.role === 'system' && 'bg-transparent text-muted italic',
                   )}
                 >
-                  {line.role === 'clone' && line.text === '' ? (
-                    <span className="text-muted">…</span>
+                  {line.role === 'clone' ? (
+                    line.text === '' ? (
+                      <span className="text-muted">…</span>
+                    ) : (
+                      /*
+                       * **クローンの行だけを Markdown にする。** 人間が打った本文
+                       * （`role === 'human'`）は素のテキストのままにする —
+                       * 自分が書いた文字が勝手に化けないため。
+                       *
+                       * **受信中かどうかを見分ける信号は無い。** `Line` には
+                       * `role` / `text` / `transient` しか無く、`transient` は
+                       * 「考えている…」のような進行中の合図（`role: 'system'`）
+                       * にしか立たない。クローンの返信行（`role: 'clone'`）は
+                       * チャンクが届くたびに `text` を継ぎ足すだけで、「まだ
+                       * 受信中か」を示す専用のフィールドを持たない。信号を
+                       * 新設するには `packages/` や API 側の変更が要るが、
+                       * それは今回の対象外（画面側だけで完結させる）。
+                       *
+                       * だから毎チャンク、届いた分だけの文字列を Markdown として
+                       * パースし直すことになる。**まだ閉じていない ``` や `**`
+                       * が受信の途中では正しく解釈されず、閉じた瞬間に表示が
+                       * 変わって見える揺れが起きうる**（受信が終われば安定する）。
+                       */
+                      <Markdown>{line.text}</Markdown>
+                    )
                   ) : (
                     line.text
                   )}

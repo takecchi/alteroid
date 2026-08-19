@@ -1,5 +1,6 @@
 import { Link } from 'react-router';
 
+import { Markdown } from '~/components/markdown';
 import { Page } from '~/components/page';
 import { Card, Empty, ErrorNote, Spinner } from '~/components/ui';
 import { useReport, useReports } from '~/hooks/queries';
@@ -67,7 +68,7 @@ function ReportBody({ date }: { date: string }) {
   const { data, error, isLoading } = useReport(date);
 
   return (
-    <Card>
+    <Card className="min-w-0">
       <div className="border-b border-border px-4 py-3">
         <h2 className="text-sm font-semibold">{date}</h2>
       </div>
@@ -83,9 +84,9 @@ function ReportBody({ date }: { date: string }) {
             片方だけ出すと「書き換わった」ように見えるので、全部並べる。
           */}
           {data.reports.map((report) => (
-            <article key={report.id} className="px-4 py-3">
+            <article key={report.id} className="min-w-0 px-4 py-3">
               <p className="mb-2 text-[11px] text-muted">{formatDateTime(report.at)}</p>
-              <div className="text-sm leading-relaxed whitespace-pre-wrap">{report.body}</div>
+              <Markdown>{report.body}</Markdown>
             </article>
           ))}
         </div>

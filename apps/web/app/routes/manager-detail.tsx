@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 
+import { Markdown } from '~/components/markdown';
 import { Page } from '~/components/page';
 import { Badge, Button, Card, CardHeader, Empty, ErrorNote, Input, Spinner } from '~/components/ui';
 import { useAbortManager, useSendManagerMessage } from '~/hooks/mutations';
@@ -138,9 +139,11 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
           )}
 
           {manager.lastReport !== undefined && manager.lastReport !== null && (
-            <Card>
+            <Card className="min-w-0">
               <CardHeader title="最後の報告" />
-              <div className="px-4 py-3 text-sm whitespace-pre-wrap">{manager.lastReport}</div>
+              <div className="min-w-0 px-4 py-3">
+                <Markdown>{manager.lastReport}</Markdown>
+              </div>
             </Card>
           )}
 
