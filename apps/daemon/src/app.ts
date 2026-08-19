@@ -53,6 +53,8 @@ import {
   archiveListResponseSchema,
   authProvidersResponseSchema,
   badRequestResponseSchema,
+  commitmentListResponseSchema,
+  commitmentOpenedResponseSchema,
   conversationDetailResponseSchema,
   conversationsResponseSchema,
   errorResponseSchema,
@@ -315,6 +317,37 @@ const scheduleBody = z.object({
   request: z.string().min(1),
   spec: scheduleSpecSchema,
 });
+
+/**
+ * 台帳へ1件積む（クローンの `commitment_open` と同じことを人間の手からも）。
+ *
+ * **人間が頼んだことは chat から自動で載るが、それだけでは片道になる。** 人間が
+ * 後から思い出した宿題や、chat 以外の場（issue・口頭）で決まったことを台帳へ置く手が
+ * 無いと、「クローンは自分で積めるのに人間は積めない」という差が残る。
+ */
+const commitmentBody = z.object({
+  body: z.string().min(1),
+  /** どこから来たか（会話 id・issue 番号など。分かるときだけ）。 */
+  source: z.string().min(1).optional(),
+});
+
+/**
+ * 閉じるときの理由。**空を許さない。**
+ *
+ * 「閉じた」だけを残すと、何をもって終わりとしたのかが残らない。人間が後から否定
+ * できることが最終承認の実体である以上（north_star）、否定する材料の無い閉じ方を
+ * 受け付けてはいけない（`commitmentSchema` の `closedReason` の注記）。
+ */
+const commitmentCloseBody = z.object({ reason: z.string().min(1) });
+
+/**
+ * 片付けたものも返すか。
+ *
+ * **`z.coerce.boolean()` を使わない。** あれは空でない文字列をすべて true にするので、
+ * `?includeClosed=false` が true になる（＝既定は未了だけ、という約束が黙って壊れ、
+ * 一覧が片付いたもので埋まる）。`/approvals` の `pending` と同じ形に揃えてある。
+ */
+const commitmentsQuery = z.object({ includeClosed: z.enum(['true', 'false']).default('false') });
 
 const loginBody = z.object({
   provider: z.string().min(1),
@@ -1630,6 +1663,166 @@ export function createApp(deps: AppDeps) {
       (c) => {
         const kind = c.req.param('kind');
         if (deps.scheduler?.run(kind) !== true) return c.json({ error: 'not found' as const }, 404);
+        return c.json(okResponseSchema.parse({ ok: true }));
+      },
+    )
+
+    // --- 引き受けたまま終わっていない仕事の台帳 ------------------------------
+    //
+    // **クローンが持っている手（`commitment_list` / `commitment_open` /
+    // `commitment_close`）を、人間の側にもそのまま置く。** 片方にしか無いと、
+    // 頼んだことがまだ残っているのか片付いたのかを人間が確かめられず、
+    // 台帳がクローンの内側だけの器になる（PRD「可観測性」）。
+    //
+    // **資格は `/schedule` と同じ（`authenticate` だけ）。`requireOperator` にしない。**
+    // あちらは実行環境そのものを差し替える資格（`/profile` `/access`）であって、
+    // 台帳の読み書きはそこまでの資格ではない。ここを持ち主だけにすると、
+    // 「使ってよい」の2値を通ったアカウントから台帳だけが見えなくなる。
+    //
+    // **これは「やることの一覧」ではない。** 器が持つのは「何を頼まれたか」と
+    // 「まだ片付いていない」の2値だけで、順序も優先度も締切も持たない。だから
+    // 並べ替えや絞り込みの引数をここへ足さないこと（判断がクローンから器へ移る）。
+    .get(
+      '/commitments',
+      describeRoute({
+        tags: ['commitments'],
+        summary: '引き受けたまま終わっていない仕事の一覧',
+        description:
+          'クローンの `commitment_list` と同じものを人間の側から読む。既定は**未了だけ**で、' +
+          '古い順に返る（齢が判断の材料なので、古いものから見せる）。`includeClosed=true` を' +
+          '付けると片付けたものが未了の後ろに新しい順で続く。順序や優先度は器が持たない。',
+        responses: {
+          200: {
+            description: '台帳の中身。',
+            content: { 'application/json': { schema: resolver(commitmentListResponseSchema) } },
+          },
+          400: {
+            description: 'クエリが不正（`includeClosed` は `true` / `false` だけ）。',
+            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+          },
+        },
+      }),
+      validator('query', commitmentsQuery),
+      async (c) => {
+        const entries = await stores.commitments.list(
+          c.req.valid('query').includeClosed === 'true' ? { includeClosed: true } : undefined,
+        );
+        return c.json(commitmentListResponseSchema.parse({ entries }));
+      },
+    )
+
+    /**
+     * 人間が台帳へ1件積む。
+     *
+     * **積むだけで、クローンのターンは起こさない。** ここは器であって仕事の起点では
+     * ないので、いま考えさせたいなら `POST /chat` か `POST /events` を使う（起点を
+     * 増やすと、同じことを2つの経路で起こせる状態になる）。積んだものは次のターンの
+     * 冒頭に件数と齢として載り、`commitment_list` で全文が読める。
+     */
+    .post(
+      '/commitments',
+      describeRoute({
+        tags: ['commitments'],
+        summary: '引き受けた仕事として台帳へ積む',
+        description:
+          'クローンの `commitment_open` と同じものを人間の手から。**積むだけで、' +
+          'クローンのターンは起こさない**（いま考えさせたいなら `POST /chat` か ' +
+          '`POST /events`）。`origin` は `human` で固定され、id はここで振る。',
+        responses: {
+          200: {
+            description: '積んだ。返る id が閉じるときの宛先になる。',
+            content: { 'application/json': { schema: resolver(commitmentOpenedResponseSchema) } },
+          },
+          400: {
+            description: '本文が JSON として不正（`body` は空にできない）。',
+            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+          },
+        },
+      }),
+      validator('json', commitmentBody),
+      async (c) => {
+        const { body, source } = c.req.valid('json');
+        // **`origin` は本文から取らない。** ここを人間に選ばせると、人間が積んだものが
+        // `self` を名乗れてしまい、「これは人間との約束か、自分で思い立ったことか」を
+        // クローンが区別する手立てが消える（`commitmentOriginSchema` の注記）。
+        const entry = {
+          id: randomUUID(),
+          at: new Date().toISOString(),
+          origin: 'human' as const,
+          ...(source === undefined ? {} : { source }),
+          body,
+        };
+        await stores.commitments.open(entry);
+        // 人間が chat の外から積んだものは、日誌に残さなければどこにも跡が無い
+        // （chat 経由の依頼には `exchange` が残るが、この口には対応する発言が無い）。
+        await stores.journal.append({
+          type: 'decision',
+          decision: `人間が引き受けた仕事を台帳へ積んだ（${entry.id}）: ${body}`,
+          grounds: '人間が直接 API から積んだ',
+        });
+        return c.json(commitmentOpenedResponseSchema.parse({ ok: true, id: entry.id }));
+      },
+    )
+
+    /**
+     * 人間が1件を片付ける。
+     *
+     * **先に読んで判断しない。** 「読む → 未了だと分かる → 閉じる」に割ると、同じ id へ
+     * 同時に届いた2つの close が両方とも「まだ未了だ」と読んでから両方書きにいき、
+     * 後から来たほうの理由で上書きされる（＝人間が読む「何をもって終わりとしたか」が
+     * 静かに入れ替わる）。**判定は台帳の1操作（`close`）に任せ**、読むのは 404 と 409 を
+     * 書き分けるためだけにする。
+     */
+    .post(
+      '/commitments/:id/close',
+      describeRoute({
+        tags: ['commitments'],
+        summary: '引き受けた仕事を片付いたことにする',
+        description:
+          'クローンの `commitment_close` と同じものを人間の手から。**行は消さない** — ' +
+          '消すと「何を片付けたか」が日報の材料から落ちる。`reason` は必須で、' +
+          '人間はこれを読んで後から否定する。',
+        responses: {
+          200: {
+            description: '閉じた。以後は `includeClosed=true` でだけ見える。',
+            content: { 'application/json': { schema: resolver(okResponseSchema) } },
+          },
+          400: {
+            description: '本文が JSON として不正（`reason` は空にできない）。',
+            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+          },
+          404: {
+            description: 'その id は台帳に無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          409: {
+            description: '既に片付いている（いつ・どう片付けたかを本文に入れて返す）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      validator('json', commitmentCloseBody),
+      async (c) => {
+        const id = c.req.param('id');
+        const { reason } = c.req.valid('json');
+        if (!(await stores.commitments.close(id, new Date().toISOString(), reason))) {
+          // 閉じられなかった理由は台帳に聞く（無いのか、既に閉じているのか）。
+          const existing = await stores.commitments.get(id);
+          if (existing === null) return c.json({ error: 'not found' as const }, 404);
+          return c.json(
+            {
+              error:
+                `${id} は既に ${existing.closedAt ?? '不明な時刻'} に片付いている` +
+                `（${existing.closedReason ?? '理由の記録なし'}）`,
+            },
+            409,
+          );
+        }
+        await stores.journal.append({
+          type: 'decision',
+          decision: `人間が引き受けた仕事を片付けた（${id}）: ${reason}`,
+          grounds: '人間が直接 API から閉じた',
+        });
         return c.json(okResponseSchema.parse({ ok: true }));
       },
     )

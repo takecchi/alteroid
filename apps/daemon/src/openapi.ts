@@ -1,4 +1,5 @@
 import {
+  commitmentSchema,
   createMemoryStores,
   jobStatusSchema,
   journalEntrySchema,
@@ -291,6 +292,34 @@ export const scheduleStatusSchema = z.object({
 export const scheduleListResponseSchema = z.object({ entries: z.array(scheduleStatusSchema) });
 
 // ---------------------------------------------------------------------------
+// 引き受けたまま終わっていない仕事の台帳（/commitments）
+// ---------------------------------------------------------------------------
+
+/**
+ * 台帳の1件は core の `commitmentSchema` をそのまま外へ出す（`/approvals` と同じ扱い）。
+ *
+ * **外向きの view を別に書かない理由は「伏せるものが1つも無い」ことである。** この器が
+ * 持つのは「何を頼まれたか」と「まだ片付いていない」の2値だけで、鍵も内部の識別子も
+ * 入っていない（`packages/core/src/schema.ts` の `commitmentSchema`）。したがって
+ * core 側にフィールドが増えたときに宣言ごと広がっても、それは**外へ出してよいものが
+ * 増えた**というだけで、伏せていたものが漏れる形にはならない。
+ *
+ * 逆に view を別に書くと、器に持たせた内容と外から読める内容がずれ、**人間が API で
+ * 見た台帳とクローンが `commitment_list` で見る台帳が違う**という形になる。それは
+ * PRD「可観測性」が塞ごうとしているものそのものである。
+ */
+export const commitmentListResponseSchema = z.object({ entries: z.array(commitmentSchema) });
+
+/**
+ * 積んだ1件の id。
+ *
+ * **返さないと閉じられない。** 閉じる口は id を取るので、積んだ側に id を渡さないと
+ * 「人間は積めるが自分で閉じられない」という片道の口になる（一覧を引き直して本文で
+ * 探すしかなくなり、同じ本文が2件あれば当てられない）。
+ */
+export const commitmentOpenedResponseSchema = z.object({ ok: z.literal(true), id: z.string() });
+
+// ---------------------------------------------------------------------------
 // マネージャー（/managers）
 // ---------------------------------------------------------------------------
 
@@ -533,6 +562,12 @@ export const openApiDocumentation: GenerateSpecOptions['documentation'] = {
     { name: 'approvals', description: '承認待ちキュー（`ask_human` の応答口）' },
     { name: 'events', description: '外部イベントの入口（仕事の起点③）' },
     { name: 'schedule', description: '時間起点のジョブ（起点②④）の一覧と手動起動' },
+    {
+      name: 'commitments',
+      description:
+        '引き受けたまま終わっていない仕事の台帳。クローンの commitment_* と同じものを' +
+        '人間の側からも読み・積み・閉じられる',
+    },
     { name: 'managers', description: '委譲先マネージャーの一覧・状態・生ログ・直接の指示/停止' },
     { name: 'runners', description: '委譲先 runner の名簿と、そこへ配る鍵の指紋' },
     { name: 'archive', description: 'セッション生ログ（可観測性の最下段）' },
