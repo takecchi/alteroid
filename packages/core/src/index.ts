@@ -196,7 +196,12 @@ export {
  * 前提にしない（docs/architecture.md「プロセス境界」）。
  */
 export {
+  MANAGER_MODEL_ENV_KEY,
+  WORKER_MODEL_ENV_KEY,
   createRunnerHost,
+  placedManagerModels,
+  resolveManagerModel,
+  resolveWorkerModel,
   type RunnerChildUser,
   type RunnerHost,
   type RunnerHostOptions,
@@ -311,9 +316,11 @@ export {
   CLONE_MODEL,
   CLONE_MODEL_ENV_KEY,
   createClone,
+  placedCloneModel,
   resolveCloneModel,
   type CloneOptions,
 } from './clone.js';
+export { placedModelTier, resolveModelTier } from './model-tier.js';
 
 /**
  * 何かを落としたときに stderr へ残す跡（記録の書き込み失敗と、受信箱を閉じた

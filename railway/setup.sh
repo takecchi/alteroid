@@ -509,6 +509,12 @@ TZ_VALUE="$(env_file_get TZ)"
 : "${TZ_VALUE:=Asia/Tokyo}"
 DAILY_REPORT_AT="$(env_file_get ALTEROID_DAILY_REPORT_AT)"
 INITIATIVE_EVERY="$(env_file_get ALTEROID_INITIATIVE_EVERY)"
+# 層とモデル帯の対応（クローン Fable / マネージャー Opus / 作業者 Sonnet）の差し替え。
+# **これは設定ではなく、人間の承認の置き場である**（変更には人間の承認が要る。
+# AGENTS.md 地雷5）。だから尋ねない — 在れば運ぶだけで、無ければ既定のまま置かない
+CLONE_MODEL="$(env_file_get ALTEROID_CLONE_MODEL)"
+MANAGER_MODEL="$(env_file_get ALTEROID_MANAGER_MODEL)"
+WORKER_MODEL="$(env_file_get ALTEROID_WORKER_MODEL)"
 ALTEROID_RUNNER_ID_VALUE="$(env_file_get ALTEROID_RUNNER_ID)"
 : "${ALTEROID_RUNNER_ID_VALUE:=runner-primary}"
 
@@ -784,6 +790,21 @@ if [ -n "$DAILY_REPORT_AT" ]; then
 fi
 if [ -n "$INITIATIVE_EVERY" ]; then
   shared_pairs+=(ALTEROID_INITIATIVE_EVERY "$INITIATIVE_EVERY")
+fi
+
+# モデル帯の差し替えは**両方へ置くのが正しい**。SDK へ `model:` を渡すのは runner で、
+# そこが正本である。app も同じ値を読むが、使うのは自己認識に載せる**宣言**のためだけ
+# なので、片方にだけ置くと「Opus に委譲している」と宣言しながら別の帯が走る。
+# 置かれていなければ変数そのものを作らない（器は空を「未設定」として読むので害は
+# 無いが、ダッシュボードに承認が置かれているように見える行を残さない）
+if [ -n "$CLONE_MODEL" ]; then
+  shared_pairs+=(ALTEROID_CLONE_MODEL "$CLONE_MODEL")
+fi
+if [ -n "$MANAGER_MODEL" ]; then
+  shared_pairs+=(ALTEROID_MANAGER_MODEL "$MANAGER_MODEL")
+fi
+if [ -n "$WORKER_MODEL" ]; then
+  shared_pairs+=(ALTEROID_WORKER_MODEL "$WORKER_MODEL")
 fi
 
 # 下＝外の世界へ手を伸ばす鍵。**伏せるのは上＝記憶へ到達する鍵だけ**なので、

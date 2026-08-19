@@ -9,6 +9,9 @@ import {
   createProfileVessel,
   createRunnerHost,
   DEFAULT_PROFILE_PATH,
+  placedManagerModels,
+  resolveManagerModel,
+  resolveWorkerModel,
   WITHHELD_ENV_KEYS,
   type RunnerChildUser,
 } from '@alteroid/core';
@@ -255,9 +258,23 @@ export async function main(): Promise<void> {
   process.on('SIGTERM', () => void shutdown());
   process.on('SIGINT', () => void shutdown());
 
+  // 層とモデル帯の対応は設計判断であり、変更には人間の承認が要る（AGENTS.md 地雷5）。
+  // **ここが正本なので、黙って通さない** — 上位帯から降りたことは人間が意図した
+  // ときだけ起きるべきで、起動ログに出ていなければ誰も気づけない。デーモン側にも
+  // 同じ行が出るが、あちらが読んでいるのは自己認識に載せる宣言であって、実際に
+  // SDK セッションへ渡っているのはこのプロセスが解いた値である。
+  for (const { key, value, fallback } of placedManagerModels(process.env)) {
+    process.stderr.write(
+      `alteroid-runner: ${key} が置かれています（既定 ${fallback} → ${value}）。` +
+        `以後この runner が起こすセッションはこの帯で走ります。` +
+        `既定へ戻すにはこの環境変数を外してください\n`,
+    );
+  }
+
   process.stdout.write(
     `alteroid-runner: ${listeningOn} （runner_id: ${runnerId} / 作業: ${workspacePath}` +
-      `${childUser === undefined ? '' : ` / 子プロセス: uid ${childUser.uid}`}）\n`,
+      `${childUser === undefined ? '' : ` / 子プロセス: uid ${childUser.uid}`}` +
+      ` / 帯: ${resolveManagerModel(process.env)} → ${resolveWorkerModel(process.env)}）\n`,
   );
 }
 
