@@ -18,11 +18,13 @@ import { JOURNAL_ENTRY_TYPES, scheduleKindSchema, scheduleSpecSchema } from './s
 import type {
   ChatStreamEvent,
   JournalEntry,
+  MemoryDocumentMeta,
   PendingApproval,
   ScheduleSpec,
   ScheduledRequest,
 } from './schema.js';
-import { CANON_REVISION, canonDocument, canonNames } from './self.js';
+import { CANON_REVISION, canonDocument, canonNames, describeCloneRuntime } from './self.js';
+import type { CloneRuntimeFacts } from './self.js';
 import type { Stores } from './store.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import { formatUsd, summarizeUsage, type UsageAggregate } from './usage.js';
@@ -64,6 +66,14 @@ export interface ToolContext {
    * 返す。無ければ「まだ分からない」と出す — **0 とは言わない。**
    */
   accountUsage?: () => AccountUsageState;
+  /**
+   * いま自分がどう走っているか（`self_status` の材料）。
+   *
+   * **省略できるのはテストのためだけである。** 本番の配線（`clone.ts`）は本セッションと
+   * 蒸留のサイドクエリの両方へ渡す。落とすと、渡し忘れた側だけ `self_status` が
+   * 「この場面では取れない」を返す（例: 蒸留のサイドクエリだけ自分のことが分からない）。
+   */
+  runtime?: () => CloneRuntimeFacts;
 }
 
 export function qualifiedToolName(name: string): string {
@@ -87,6 +97,7 @@ export const CLONE_TOOL_NAMES = [
   'profile_read',
   'profile_write',
   'self_read',
+  'self_status',
   'manager_start',
   'manager_send',
   'manager_stop',
@@ -747,6 +758,56 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
+    /**
+     * **人間は Claude Code で自分の設定（モデル・版・許可モード・MCP 接続）を見られる。**
+     * クローンから見えないなら、その一点で人間の代替になっていない
+     * （north_star 禁止1）。ここは `SelfFacts`（システムプロンプトに焼き込む静的な事実）
+     * とは別物で、SDK が走行中に実際に報告してくる値を返す。
+     *
+     * 整形は `self.ts` の `describeCloneRuntime` に寄せてある（自分自身の事実を1か所に
+     * 集めるため）。ここで組み立てるのは、その場でしか読めない2つだけ — いまの記憶の
+     * 大きさ（会話の途中で書き換わりうる）と、台帳との突き合わせ（SDK モデル id が
+     * 分かって初めて意味を持つ）。
+     */
+    tool(
+      'self_status',
+      [
+        'いま自分が何で走っているかを返す（宣言されたモデル帯・SDK が実際に報告したモデル id・',
+        'effort・Claude Code の版・認証の出所（値ではなく名前）・許可モード・MCP サーバ・',
+        'セッション id・記憶の大きさ・台帳との突き合わせ）。',
+        '**effort はこのセッションで最初の道具呼び出しでは取れない**（前の道具呼び出しの結果として',
+        '観測するため）。モデルが effort に対応していない場合もずっと取れない。',
+        '取れない値は「まだ分からない」と出る（既定値では埋めない）。',
+      ].join(' '),
+      {},
+      async () => {
+        const runtime = context.runtime?.();
+        if (runtime === undefined) {
+          return text(
+            'いまは自分の実行時の事実を読めない場面である（記憶へ移すための内部ターン）。' +
+              '次の会話で呼ぶこと。',
+          );
+        }
+
+        const [documents, totalMemory, aggregate] = await Promise.all([
+          stores.persona.list(),
+          stores.persona.concat(),
+          // モデル id が分かっていなければ、突き合わせる軸そのものが無い。
+          runtime.sdkModel === null ? Promise.resolve(null) : stores.usage.aggregate({}),
+        ]);
+
+        return text(
+          [
+            describeCloneRuntime(runtime),
+            '',
+            renderMemorySize(documents, totalMemory),
+            '',
+            renderLedgerCrossReference(runtime.sdkModel, aggregate),
+          ].join('\n'),
+        );
+      },
+    ),
+
     // --- 委譲 --------------------------------------------------------------
     tool(
       'manager_start',
@@ -1248,6 +1309,94 @@ function renderUsage(aggregate: UsageAggregate): string {
   return lines.join('\n');
 }
 
+/**
+ * 記憶の文書ごとの内訳を出す上限。
+ *
+ * **`memory_list` は件数によらず全件を返す**（persona.list() の meta は軽く、
+ * 実測でも壊れていない）。ただし `self_status` は他の節（実行時の事実・台帳との
+ * 突き合わせ）と同居するので、ここだけは `LIST_BUDGET` と同じ考え方で件数に
+ * 上限を置く。**切ったことは必ず言う。**
+ */
+const SELF_STATUS_MEMORY_DOC_LIMIT = 30;
+
+/**
+ * 記憶の大きさ。
+ *
+ * **「いまの総文字数」と「システムプロンプトへ焼き込んだ時点の文字数」は
+ * ここでは出さない**（後者は `describeCloneRuntime` 側 — `CloneRuntimeFacts` の
+ * 材料であって、記憶ストアを読み直しても変わらない値だからである）。ここが
+ * 出すのは、いま `stores.persona` を読み直した時点の値だけで、会話の途中で
+ * 記憶が書き換わっていれば、その場で変わる。
+ */
+function renderMemorySize(documents: MemoryDocumentMeta[], totalMemory: string): string {
+  const lines = [
+    '## 記憶の大きさ（いま stores.persona を読み直した値）',
+    '',
+    `- 総文字数: ${totalMemory.length.toLocaleString('en-US')} 文字（${documents.length} 文書）`,
+  ];
+  if (documents.length === 0) return lines.join('\n');
+
+  const shown = documents.slice(0, SELF_STATUS_MEMORY_DOC_LIMIT);
+  for (const doc of shown) {
+    lines.push(
+      `  - ${doc.slug}: ${doc.bytes.toLocaleString('en-US')} bytes（更新 ${doc.updatedAt}）`,
+    );
+  }
+  const rest = documents.length - shown.length;
+  if (rest > 0) {
+    lines.push(`  …ほか ${rest} 文書は省略（全 ${documents.length} 文書）。`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * SDK が実際に使っているモデル id と、台帳（`usage_read` と同じ器）を突き合わせる。
+ *
+ * **「あなたの消費が台帳に載っている／載っていない」と書かないこと。** 台帳の軸
+ * （日 × マネージャー × モデル）が変わった瞬間にその文は嘘になる。代わりに軸
+ * そのもの — 該当するモデル id の行がどの `managerId` にあるか — を構造として出す。
+ */
+function renderLedgerCrossReference(
+  sdkModel: string | null,
+  aggregate: UsageAggregate | null,
+): string {
+  const lines = ['## 台帳との突き合わせ（軸: 日 × マネージャー × モデル）', ''];
+
+  if (sdkModel === null) {
+    lines.push('まだ init を観測していないので、SDK のモデル id が分からず突き合わせられない。');
+    return lines.join('\n');
+  }
+  if (aggregate === null || aggregate.since === null) {
+    lines.push(`台帳にはまだ1件も記録が無い（いまのモデル id: ${sdkModel}）。`);
+    return lines.join('\n');
+  }
+
+  const matches = aggregate.rows.filter((row) => row.model === sdkModel);
+  if (matches.length === 0) {
+    lines.push(`モデル id ${sdkModel} と同じ行は無い（台帳の始点: ${aggregate.since}）。`);
+    return lines.join('\n');
+  }
+
+  // managerId ごとに畳む。**件数（行数）に比例して伸ばさない** — 日別の行数が
+  // 増えても、出す単位は managerId の数までにとどめる。
+  const byManager = new Map<string, number>();
+  for (const row of matches) {
+    byManager.set(row.managerId, (byManager.get(row.managerId) ?? 0) + row.totals.costUsd);
+  }
+  const managers = [...byManager.entries()].sort((a, b) => b[1] - a[1]);
+
+  lines.push(
+    `モデル id ${sdkModel} の行がある managerId（台帳の軸そのもの。行には必ず managerId が付く）:`,
+  );
+  for (const [managerId, costUsd] of managers.slice(0, USAGE_AXIS_LIMIT)) {
+    lines.push(`  - managerId: "${managerId}" / 合計 ${formatUsd(costUsd)}`);
+  }
+  if (managers.length > USAGE_AXIS_LIMIT) {
+    lines.push(`  …（残り ${managers.length - USAGE_AXIS_LIMIT} managerId は出していない）`);
+  }
+  return lines.join('\n');
+}
+
 export function createCloneMcpServer(context: ToolContext) {
   return createSdkMcpServer({
     name: MCP_SERVER_NAME,
@@ -1255,7 +1404,8 @@ export function createCloneMcpServer(context: ToolContext) {
     instructions:
       'alteroid のクローン自身の道具。記憶（人間がいつでも読み書きする Markdown）、' +
       '日誌（追記専用）、人間への確認、継続中の依頼（時間起点の仕込み）、' +
-      '実行環境プロファイル（`.zprofile` 相当）、自分自身（alteroid）の正典、マネージャーへの委譲。',
+      '実行環境プロファイル（`.zprofile` 相当）、自分自身（alteroid）の正典と実行時の状態、' +
+      'マネージャーへの委譲。',
     tools: createCloneTools(context),
   });
 }

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { ManagerDenial, ManagerPool, ManagerSummary } from './manager.js';
 import { createProfileService } from './profile-service.js';
 import type { ChatStreamEvent } from './schema.js';
+import type { CloneRuntimeFacts } from './self.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 import { CLONE_ALLOWED_TOOLS, createCloneTools, qualifiedToolName } from './tools.js';
@@ -24,7 +25,7 @@ interface Harness {
   call(name: string, args: Record<string, unknown>): Promise<string>;
 }
 
-function harness(): Harness {
+function harness(runtime?: () => CloneRuntimeFacts): Harness {
   const stores = createMemoryStores();
   const emitted: ChatStreamEvent[] = [];
   const sent: { managerId: string; message: string; decision?: string; requestId?: string }[] = [];
@@ -110,6 +111,7 @@ function harness(): Harness {
     // **本番と同じ1本道を通す。** ここを偽物にすると、直列化も検査も
     // テストの外に出てしまう。
     profile: createProfileService({ stores, runners }),
+    ...(runtime === undefined ? {} : { runtime }),
   });
 
   return {
@@ -999,5 +1001,161 @@ describe('usage_read はアカウント全体の残りも返す（人間と同�
     const reply = await call();
     expect(reply).toContain('単位不明');
     expect(reply).not.toContain('$40');
+  });
+});
+
+/**
+ * `self_status`（いま自分がどう走っているか）。
+ *
+ * **`CloneRuntimeFacts` の整形そのものは self.test.ts が確かめる。** ここで見るのは
+ * tools.ts 側だけの仕事 — その場で読み直す記憶の大きさと、台帳との突き合わせが、
+ * `stores` の実物と正しく噛み合っているか。
+ */
+describe('self_status（いま自分がどう走っているか）', () => {
+  const RUNTIME: CloneRuntimeFacts = {
+    declaredModel: 'fable',
+    modelOverridden: false,
+    modelEnvKey: 'ALTEROID_CLONE_MODEL',
+    sdkModel: null,
+    effort: null,
+    requestedEffort: null,
+    claudeCodeVersion: null,
+    apiKeySource: null,
+    permissionMode: null,
+    mcpServers: [],
+    sessionId: null,
+    resumedFrom: null,
+    // **意図的に、以下で書き込む記憶の総文字数とは違う値にしてある。** 「いまの
+    // 総文字数」と区別できることを見るための固定値であって、実際の構築時の値を
+    // 模したものではない。
+    injectedMemoryChars: 3,
+    systemPromptChars: 999,
+  };
+
+  it('道具として配られている（クローンから見えないものを作らない）', () => {
+    expect(CLONE_ALLOWED_TOOLS).toContain(qualifiedToolName('self_status'));
+  });
+
+  it('runtime を渡していない場面（蒸留のサイドクエリを模した形）では、落ちずに読めないと返す', async () => {
+    const tools = createCloneTools({ stores: createMemoryStores(), emit: () => undefined });
+    const found = tools.find((entry) => entry.name === 'self_status');
+    if (!found) throw new Error('self_status が無い');
+    const result = await found.handler({} as never, {});
+    const body = (result.content ?? []).map((part) => ('text' in part ? part.text : '')).join('');
+    expect(body).toContain('読めない場面');
+  });
+
+  it('記憶の文書数といまの総文字数が出る。焼き込んだ時点の文字数とは別々に出る', async () => {
+    const h = harness(() => RUNTIME);
+    await h.call('memory_write', {
+      slug: 'values',
+      content: '# 価値観\n\n人間が手で書いた方針',
+      summary: '書いた',
+    });
+    await h.call('memory_write', {
+      slug: 'habits',
+      content: '# 習慣\n\n毎朝記憶を見直す',
+      summary: '書いた',
+    });
+    const totalMemory = await h.stores.persona.concat();
+    expect(totalMemory.length).not.toBe(RUNTIME.injectedMemoryChars);
+
+    const reply = await h.call('self_status', {});
+
+    expect(reply).toContain('2 文書');
+    expect(reply).toContain(`${totalMemory.length.toLocaleString('en-US')} 文字`);
+    // 焼き込んだ時点の文字数（固定値 3）が、いまの総文字数とは別の行として出る。
+    expect(reply).toContain('焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 3 文字');
+  });
+
+  it('記憶を書き換えたあとに呼んでも、いまの総文字数は読み直した値が出る', async () => {
+    const h = harness(() => RUNTIME);
+    await h.call('memory_write', { slug: 'values', content: '# 価値観\n\n最初の版', summary: '1' });
+    await h.call('self_status', {}); // 1回目（内容は見ない。副作用が無いことの前提づくり）
+
+    await h.call('memory_write', {
+      slug: 'values',
+      content: '# 価値観\n\n書き換えた後のもっと長い方針の本文',
+      summary: '2',
+    });
+    const totalMemory = await h.stores.persona.concat();
+
+    const reply = await h.call('self_status', {});
+
+    expect(reply).toContain(`${totalMemory.length.toLocaleString('en-US')} 文字`);
+    // 焼き込んだ時点（固定値 3）は書き換えても動かない — 別の軸であることの確認。
+    expect(reply).toContain('組み立てた時点）: 3 文字');
+  });
+
+  it('鍵・トークンの値を出さない（profile_write で置いた値が self_status に出ない）', async () => {
+    const h = harness(() => RUNTIME);
+    await h.call('profile_write', {
+      script: 'export SOME_API_TOKEN=super-secret-value-000',
+      summary: 'トークンを実行環境へ移した',
+    });
+
+    const reply = await h.call('self_status', {});
+
+    expect(reply).not.toContain('super-secret-value-000');
+  });
+
+  it('SDK モデル id がまだ分からなければ、突き合わせをせずそう言う', async () => {
+    const h = harness(() => RUNTIME); // sdkModel: null
+
+    const reply = await h.call('self_status', {});
+
+    expect(reply).toContain('まだ init を観測していない');
+  });
+
+  it('台帳に同じモデル id の行があれば、その managerId が出る（軸: 日 × マネージャー × モデル）', async () => {
+    const models = {
+      'claude-fable-9000': {
+        inputTokens: 1,
+        outputTokens: 1,
+        cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0,
+        webSearchRequests: 0,
+        costUsd: 1.5,
+      },
+    };
+    const h = harness(() => ({ ...RUNTIME, sdkModel: 'claude-fable-9000' }));
+    await h.stores.usage.record({
+      managerId: 'mgr-7',
+      date: '2026-08-14',
+      at: '2026-08-14T10:00:00.000Z',
+      snapshot: { models },
+    });
+
+    const reply = await h.call('self_status', {});
+
+    expect(reply).toContain('claude-fable-9000');
+    expect(reply).toContain('managerId: "mgr-7"');
+    // 「載っている／いない」という断定ではなく、軸（managerId 付きの行）を出す。
+    expect(reply).not.toMatch(/あなたの消費が(台帳に)?載って/);
+  });
+
+  it('同じモデル id の行が無ければ、そう言う（0 件と嘘をつかない）', async () => {
+    const h = harness(() => ({ ...RUNTIME, sdkModel: 'claude-fable-9000' }));
+    await h.stores.usage.record({
+      managerId: 'mgr-1',
+      date: '2026-08-14',
+      at: '2026-08-14T10:00:00.000Z',
+      snapshot: {
+        models: {
+          'claude-other-model': {
+            inputTokens: 1,
+            outputTokens: 1,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            webSearchRequests: 0,
+            costUsd: 1,
+          },
+        },
+      },
+    });
+
+    const reply = await h.call('self_status', {});
+
+    expect(reply).toContain('同じ行は無い');
   });
 });

@@ -7,6 +7,8 @@ import {
   buildSelfKnowledge,
   canonDocument,
   canonNames,
+  describeCloneRuntime,
+  type CloneRuntimeFacts,
   type SelfFacts,
 } from './self.js';
 
@@ -123,5 +125,124 @@ describe('自己認識 — システムプロンプトに載る節', () => {
     const section = buildSelfKnowledge({ ...FACTS, models: { ...FACTS.models, clone: 'opus' } });
 
     expect(section).toContain('クローン / opus');
+  });
+});
+
+/**
+ * `describeCloneRuntime`（`CloneRuntimeFacts` の整形）。
+ *
+ * **`SelfFacts` とは別物であることを確かめる軸が違う。** あちらは「無ければ節を
+ * 落とす」（一括で無い）が、こちらは「フィールドごとに `null` があり得る」ので、
+ * `null` を既定値や宣言値で埋めていないことを1フィールドずつ確かめる。
+ */
+describe('CloneRuntimeFacts の整形 — 観測した値と、取れていない理由だけを出す', () => {
+  const RUNTIME: CloneRuntimeFacts = {
+    declaredModel: 'fable',
+    modelOverridden: false,
+    modelEnvKey: 'ALTEROID_CLONE_MODEL',
+    sdkModel: 'claude-fable-9000-observed',
+    effort: 'xhigh',
+    requestedEffort: null,
+    claudeCodeVersion: '2.1.0',
+    apiKeySource: 'oauth',
+    permissionMode: 'default',
+    mcpServers: [{ name: 'alteroid', status: 'connected' }],
+    sessionId: 'sess-observed',
+    resumedFrom: null,
+    injectedMemoryChars: 120,
+    systemPromptChars: 4000,
+  };
+
+  it('宣言されたモデル帯と、差し替えの有無を出す', () => {
+    const overridden = describeCloneRuntime({ ...RUNTIME, modelOverridden: true });
+    expect(overridden).toContain('宣言されたモデル帯: fable');
+    expect(overridden).toContain('ALTEROID_CLONE_MODEL');
+    expect(overridden).toContain('差し替え済み');
+
+    const notOverridden = describeCloneRuntime({ ...RUNTIME, modelOverridden: false });
+    expect(notOverridden).toContain('既定のまま');
+    expect(notOverridden).not.toContain('差し替え済み');
+  });
+
+  /**
+   * **宣言の値で埋めていないことを、値そのものを変えて区別する。** 宣言帯
+   * （`fable`）とは違う文字列を SDK の観測値に使い、その文字列がそのまま出る
+   * ことを見る。
+   */
+  it('SDK が実際に報告したモデル id は、宣言と違う値でもそのまま出る', () => {
+    const section = describeCloneRuntime(RUNTIME);
+    expect(section).toContain('claude-fable-9000-observed');
+  });
+
+  it('init を観測する前は sdkModel が「まだ分からない」で、宣言帯の値では埋まらない', () => {
+    const section = describeCloneRuntime({ ...RUNTIME, sdkModel: null });
+    expect(section).toContain('まだ分からない');
+    // 「fable」という文字列自体は宣言帯の行にも出るので、SDK 観測の行だけを見る。
+    const sdkLine = section.split('\n').find((line) => line.includes('SDK が実際に報告したモデル'));
+    expect(sdkLine).toBeDefined();
+    expect(sdkLine).not.toContain('fable');
+  });
+
+  it('effort が報告されていれば、その実効値が出る', () => {
+    const section = describeCloneRuntime({ ...RUNTIME, effort: 'xhigh' });
+    expect(section).toContain('xhigh');
+  });
+
+  it('effort が一度も報告されていなければ「まだ分からない」で、既定値では埋めない', () => {
+    const section = describeCloneRuntime({ ...RUNTIME, effort: null });
+    const effortLine = section.split('\n').find((line) => line.includes('effort（実効値）'));
+    expect(effortLine).toContain('まだ分からない');
+    expect(effortLine).not.toMatch(/low|medium|high|xhigh|max/);
+  });
+
+  it('alteroid が明示的に渡した effort が無ければ、そう言う（渡していない、で埋める）', () => {
+    const section = describeCloneRuntime({ ...RUNTIME, requestedEffort: null });
+    expect(section).toContain('渡していない');
+  });
+
+  it('Claude Code の版・認証の出所・許可モード・MCP サーバは、未観測なら埋めない', () => {
+    const section = describeCloneRuntime({
+      ...RUNTIME,
+      claudeCodeVersion: null,
+      apiKeySource: null,
+      permissionMode: null,
+      mcpServers: [],
+    });
+    expect(section).not.toContain('2.1.0');
+    expect(section).not.toContain('oauth');
+    expect(section).not.toContain('default');
+    // 「まだ分からない」が複数箇所に出るので、件数だけ見る（未観測4件 + resume元は別文言）。
+    expect(section.match(/まだ分からない/g)?.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('認証の出所は値ではなく名前だけを出す（鍵そのものを持つ型ではない）', () => {
+    const section = describeCloneRuntime(RUNTIME);
+    expect(section).toContain('認証の出所（値ではなく名前）: oauth');
+  });
+
+  it('セッション id は「本セッションで観測した値」と明記する（蒸留は別セッション）', () => {
+    const section = describeCloneRuntime(RUNTIME);
+    expect(section).toContain('sess-observed');
+    expect(section).toContain('クローン本体のセッション');
+  });
+
+  it('resume 元が無ければ、新規に開いたと分かる言い方をする', () => {
+    const section = describeCloneRuntime({ ...RUNTIME, resumedFrom: null });
+    expect(section).toContain('新規に開いた');
+  });
+
+  it('記憶の文字数は、焼き込んだ時点とシステムプロンプト全体を別々に出す', () => {
+    const section = describeCloneRuntime({
+      ...RUNTIME,
+      injectedMemoryChars: 120,
+      systemPromptChars: 4000,
+    });
+    expect(section).toContain('120');
+    expect(section).toContain('4,000');
+  });
+
+  it('鍵・トークンの値は一切出さない（この型自体が持たない）', () => {
+    const section = describeCloneRuntime(RUNTIME);
+    expect(section).not.toMatch(/ghp_|sk-ant|Bearer /);
   });
 });

@@ -80,6 +80,110 @@ export interface SelfFacts {
 }
 
 /**
+ * いまクローンがどう走っているか — SDK が実際に報告してきた値と、alteroid 側の
+ * 宣言（環境変数・既定）を並べたもの。
+ *
+ * **{@link SelfFacts} とは別物である。** あちらはシステムプロンプトへ焼き込む
+ * 静的な事実で、セッションを組み立てた時点で確定する。こちらは走行中に SDK から
+ * 届く値なので、init が来る前・effort が一度も報告される前は `null` のままである。
+ * **`null` を既定値や宣言値で埋めないこと** — 埋めた瞬間、まだ観測していない値を
+ * 確信することになる（`self_status` の存在理由そのものが壊れる）。
+ *
+ * **鍵を入れないこと。** `apiKeySource` は SDK が返す「出所の名前」だけであって
+ * 値そのものではない。ここに「鍵が設定されているか否か」を足したくなっても、
+ * この型はそれを持たない（`self.ts` 冒頭の約束と同じ理由）。
+ */
+export interface CloneRuntimeFacts {
+  /** 宣言されたモデル帯（`ALTEROID_CLONE_MODEL` があればその値、無ければ既定）。 */
+  declaredModel: string;
+  /** 既定（`CLONE_MODEL`）から差し替えられているか。 */
+  modelOverridden: boolean;
+  /** 差し替えの置き場（環境変数の名前）。 */
+  modelEnvKey: string;
+  /** SDK が init で報告した実際のモデル id。まだ init が来ていなければ `null`。 */
+  sdkModel: string | null;
+  /**
+   * SDK が報告した effort の実効値（フックが運ぶ値）。
+   *
+   * **このセッションで最初の道具呼び出しでは `null` になる**（前の道具呼び出しの
+   * 結果として観測するため）。モデルが effort に対応していなければずっと `null`。
+   */
+  effort: string | null;
+  /** alteroid が `options.effort` を明示的に渡しているか（渡していなければ `null`）。 */
+  requestedEffort: string | null;
+  /** SDK が init で報告した Claude Code の版。まだ init が来ていなければ `null`。 */
+  claudeCodeVersion: string | null;
+  /**
+   * SDK が init で報告した認証の出所（`user` / `oauth` など）。
+   *
+   * **値そのものではない。** `null` は「まだ報告されていない」であって「鍵が無い」
+   * ではない。
+   */
+  apiKeySource: string | null;
+  /** SDK が init で報告した許可モード。`null` なら未報告。 */
+  permissionMode: string | null;
+  /** SDK が init で報告した MCP サーバの名前と状態。 */
+  mcpServers: Array<{ name: string; status: string }>;
+  /**
+   * いまの SDK セッション id。まだ init が来ていなければ `null`。
+   *
+   * **これは本セッション（クローン本体）で観測した値である。** 蒸留のサイド
+   * クエリは別の SDK セッションだが、そちらへ渡す `runtime` もこの値をそのまま
+   * 運ぶ（サイドクエリ自身の init は見ていない）。
+   */
+  sessionId: string | null;
+  /** resume で引き継いだセッション id。新規に開いたなら `null`。 */
+  resumedFrom: string | null;
+  /** システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）。 */
+  injectedMemoryChars: number;
+  /** システムプロンプト全体の文字数（毎ターン払っている入力の土台）。 */
+  systemPromptChars: number;
+}
+
+/** まだ観測していない値の言い方。埋めるのではなく、取れていない理由を言う。 */
+function unknownBecause(reason: string): string {
+  return `まだ分からない（${reason}）`;
+}
+
+const INIT_NOT_OBSERVED = 'init 未観測';
+
+/**
+ * {@link CloneRuntimeFacts} の整形。
+ *
+ * **alteroid の説明文をここに書かない**（モジュール冒頭の約束）。判断や運用
+ * スタイルも書かない。出すのは観測した値と、値が取れていないときの理由だけ。
+ */
+export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
+  const mcpServers =
+    facts.mcpServers.length === 0
+      ? unknownBecause(INIT_NOT_OBSERVED)
+      : facts.mcpServers.map((server) => `${server.name}(${server.status})`).join(', ');
+
+  return [
+    '## いまどう走っているか',
+    '',
+    `- 宣言されたモデル帯: ${facts.declaredModel}` +
+      (facts.modelOverridden
+        ? `（既定から \`${facts.modelEnvKey}\` で差し替え済み）`
+        : '（既定のまま）'),
+    `- SDK が実際に報告したモデル id: ${facts.sdkModel ?? unknownBecause(INIT_NOT_OBSERVED)}`,
+    `- effort（実効値）: ${
+      facts.effort ??
+      unknownBecause('このセッションで最初の道具呼び出しか、モデルが effort に対応していない')
+    }`,
+    `- effort（alteroid が明示的に渡したもの）: ${facts.requestedEffort ?? '渡していない（SDK の既定に任せている）'}`,
+    `- Claude Code の版: ${facts.claudeCodeVersion ?? unknownBecause(INIT_NOT_OBSERVED)}`,
+    `- 認証の出所（値ではなく名前）: ${facts.apiKeySource ?? unknownBecause(INIT_NOT_OBSERVED)}`,
+    `- 許可モード: ${facts.permissionMode ?? unknownBecause(INIT_NOT_OBSERVED)}`,
+    `- MCP サーバ: ${mcpServers}`,
+    `- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: ${facts.sessionId ?? unknownBecause(INIT_NOT_OBSERVED)}`,
+    `- resume 元のセッション id: ${facts.resumedFrom ?? '（新規に開いた。前のセッションを引き継いでいない）'}`,
+    `- システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）: ${facts.injectedMemoryChars.toLocaleString('en-US')} 文字`,
+    `- システムプロンプト全体の文字数（毎ターン払っている入力の土台）: ${facts.systemPromptChars.toLocaleString('en-US')} 文字`,
+  ].join('\n');
+}
+
+/**
  * システムプロンプトへ載せる自己認識の節。
  *
  * `facts` が無いときは実行環境の節を落とす（プロンプト単体のテストや、

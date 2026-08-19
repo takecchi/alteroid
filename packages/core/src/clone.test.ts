@@ -12,6 +12,8 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import { createScheduler } from './schedule.js';
 import type { ChatStreamEvent } from './schema.js';
 import type { Stores } from './store.js';
+import { createCloneMcpServer, createCloneTools } from './tools.js';
+import type { ToolContext } from './tools.js';
 import {
   captureStderr,
   createMemoryStores,
@@ -48,6 +50,13 @@ function fakeSdk(
         subtype: 'init',
         session_id: 'sess-fake',
         uuid: 'uuid-init',
+        // `self_status`（runtime facts）が init から拾うフィールド。実物の SDK が
+        // 返す形に合わせて運ぶ（`clone.ts` の `#captureInitFacts` を実際に通す）。
+        model: 'claude-fake-init-model-xyz',
+        claude_code_version: '9.9.9-fake',
+        apiKeySource: 'user',
+        permissionMode: 'default',
+        mcp_servers: [{ name: 'alteroid', status: 'connected' }],
       } as unknown as SDKMessage;
 
       const prompt = params.prompt;
@@ -344,6 +353,219 @@ describe('クローン', () => {
     // マネージャーとの往復も日誌に残る（見えない層を作らない）
     const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as { with: string }[];
     expect(exchanges.some((entry) => entry.with === 'manager')).toBe(true);
+
+    await s.clone.stop();
+  });
+});
+
+/**
+ * `self_status`（`self.ts` の `CloneRuntimeFacts`）の配線。
+ *
+ * **`createSdkMcpServer` は道具を MCP の transport の裏へ隠すので、テストから
+ * ハンドラを直接呼べない。** `mcpServerFactory`（クローンの `CloneOptions`。
+ * 主にテスト用、既定は `createCloneMcpServer`）でその境界を覗く — 差し替えた
+ * 関数は渡ってきた `context`（クローンが実際に組み立てたもの。`runtime` を含む）
+ * を控えたうえで、本物の `createCloneMcpServer(context)` をそのまま呼ぶ。
+ * 道具の実装もクローンが渡す `context` も本物のまま、呼び出しの境界だけを覗ける。
+ *
+ * `self_status` 自身のハンドラは、控えた `context` から独立に
+ * `createCloneTools(context)` を呼んで取り出す（`tools.test.ts` と同じ形）。
+ */
+describe('クローン — self_status（runtime facts の配線）', () => {
+  function setupCapturing(env: NodeJS.ProcessEnv = {}) {
+    const { fn, calls } = fakeSdk();
+    let captured: ToolContext | undefined;
+    const stores = createMemoryStores();
+    const clone = createClone({
+      stores,
+      queryFn: fn,
+      env,
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+      mcpServerFactory: (context) => {
+        captured = context;
+        return createCloneMcpServer(context);
+      },
+    });
+    const events: ChatStreamEvent[] = [];
+    clone.subscribe('conv-1', (event) => events.push(event));
+
+    return {
+      clone,
+      events,
+      calls,
+      async selfStatus(): Promise<string> {
+        if (captured === undefined) throw new Error('ToolContext がまだ捕まっていない');
+        const tools = createCloneTools(captured);
+        const found = tools.find((entry) => entry.name === 'self_status');
+        if (!found) throw new Error('self_status という道具が無い');
+        const result = await found.handler({} as never, {});
+        return (result.content ?? []).map((part) => ('text' in part ? part.text : '')).join('');
+      },
+    };
+  }
+
+  it('ALTEROID_CLONE_MODEL を置いた偽 env で呼ぶと、declaredModel がその値で出て、差し替え済みと読める', async () => {
+    const s = setupCapturing({ [CLONE_MODEL_ENV_KEY]: 'まだ無いモデル' });
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const body = await s.selfStatus();
+    expect(body).toContain('宣言されたモデル帯: まだ無いモデル');
+    expect(body).toContain('差し替え済み');
+
+    await s.clone.stop();
+  });
+
+  it('env が無ければ declaredModel は既定（fable）で出て、差し替えなしと読める', async () => {
+    const s = setupCapturing({});
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const body = await s.selfStatus();
+    expect(body).toContain(`宣言されたモデル帯: ${CLONE_MODEL}`);
+    expect(CLONE_MODEL).toBe('fable');
+    expect(body).toContain('既定のまま');
+    expect(body).not.toContain('差し替え済み');
+
+    await s.clone.stop();
+  });
+
+  it('偽 SDK が init で報告したモデル id が、宣言した帯とは違う文字列としてそのまま出る', async () => {
+    const s = setupCapturing({ [CLONE_MODEL_ENV_KEY]: 'まだ無いモデル' });
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const body = await s.selfStatus();
+    expect(body).toContain('claude-fake-init-model-xyz');
+    // 宣言した帯の値では埋まっていない（「SDK が実際に報告した」行だけを見る）
+    const sdkLine = body.split('\n').find((line) => line.includes('SDK が実際に報告したモデル'));
+    expect(sdkLine).toBeDefined();
+    expect(sdkLine).not.toContain('まだ無いモデル');
+
+    await s.clone.stop();
+  });
+
+  /**
+   * **init が届く前の窓を、タイミングの賭けではなく実際にゲートで止めて作る。**
+   * `fakeSdk` は init を即座に流すので、ここだけは init の前で止められる専用の
+   * 偽 SDK をローカルに用意する（`#buildOptions` は `#ensureQuery` の中で
+   * 呼ばれるので、context は init 到着より前に控えられる — その順序を利用する）。
+   */
+  it('init を観測する前は sdkModel が「まだ分からない」で、帯の値では埋まらない', async () => {
+    let releaseInit: () => void = () => undefined;
+    const initGate = new Promise<void>((resolve) => {
+      releaseInit = resolve;
+    });
+    let captured: ToolContext | undefined;
+    const stores = createMemoryStores();
+
+    const fn = ((params: { prompt: unknown; options?: Options }) => {
+      async function* generate(): AsyncGenerator<SDKMessage, void> {
+        await initGate;
+        yield {
+          type: 'system',
+          subtype: 'init',
+          session_id: 'sess-gated',
+          uuid: 'uuid-init',
+          model: 'claude-fake-init-model-xyz',
+          claude_code_version: '9.9.9-fake',
+          apiKeySource: 'user',
+          permissionMode: 'default',
+          mcp_servers: [{ name: 'alteroid', status: 'connected' }],
+        } as unknown as SDKMessage;
+
+        for await (const message of params.prompt as AsyncIterable<unknown>) {
+          void message; // 入力の中身は見ない。到着したことだけが要る。
+          yield {
+            type: 'assistant',
+            message: { content: [{ type: 'text', text: 'わかった' }] },
+            parent_tool_use_id: null,
+            session_id: 'sess-gated',
+            uuid: 'uuid-assistant',
+          } as unknown as SDKMessage;
+          yield {
+            type: 'result',
+            subtype: 'success',
+            result: 'わかった',
+            session_id: 'sess-gated',
+            uuid: 'uuid-result',
+          } as unknown as SDKMessage;
+        }
+      }
+      const generator = generate();
+      return Object.assign(generator, {
+        close: () => undefined,
+        interrupt: async () => undefined,
+      }) as unknown as Query;
+    }) as unknown as typeof sdkQuery;
+
+    const clone = createClone({
+      stores,
+      queryFn: fn,
+      env: { [CLONE_MODEL_ENV_KEY]: 'まだ無いモデル' },
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+      mcpServerFactory: (context) => {
+        captured = context;
+        return createCloneMcpServer(context);
+      },
+    });
+    const events: ChatStreamEvent[] = [];
+    clone.subscribe('conv-1', (event) => events.push(event));
+
+    clone.post(humanMessage('やあ'));
+    // `#buildOptions`（→ `mcpServerFactory`）は `#ensureQuery` の中、init が
+    // 届くより前に走る。ここで context が控えられるのを待つ（init はまだ
+    // `initGate` で止めてある）。
+    await expect.poll(() => captured !== undefined, { timeout: 3000 }).toBe(true);
+
+    if (captured === undefined) throw new Error('ToolContext がまだ捕まっていない');
+    const tools = createCloneTools(captured);
+    const found = tools.find((entry) => entry.name === 'self_status');
+    if (!found) throw new Error('self_status という道具が無い');
+    const result = await found.handler({} as never, {});
+    const body = (result.content ?? []).map((part) => ('text' in part ? part.text : '')).join('');
+
+    expect(body).toContain('SDK が実際に報告したモデル id: まだ分からない');
+    expect(body).not.toContain('claude-fake-init-model-xyz');
+
+    releaseInit();
+    await waitForDone(events);
+    await clone.stop();
+  });
+
+  it('effort が一度も報告されていなければ「まだ分からない」で、既定値では埋まらない', async () => {
+    const s = setupCapturing({});
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const body = await s.selfStatus();
+    expect(body).toContain('effort（実効値）: まだ分からない');
+    expect(body).not.toMatch(/効な effort.*(low|medium|high|xhigh|max)/);
+
+    await s.clone.stop();
+  });
+
+  it('PostToolUse フックが effort: xhigh を運ぶと、self_status にその値が出る', async () => {
+    const s = setupCapturing({});
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    // **偽 SDK に本物として登録されたフックを、実際に呼ぶ。** 私有フィールドを
+    // 直接触らない（`options.hooks.PostToolUse[0].hooks[0]` を叩く。既存の
+    // PreCompact フックのテストと同じ形）。
+    const main = s.calls[0];
+    const hook = main?.options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
+    await hook({ effort: { level: 'xhigh' } } as never, undefined, {
+      signal: new AbortController().signal,
+    } as never);
+
+    const body = await s.selfStatus();
+    expect(body).toContain('effort（実効値）: xhigh');
 
     await s.clone.stop();
   });
