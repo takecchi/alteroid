@@ -87,6 +87,96 @@ export const usageTotalsSchema = z.object({
 export type UsageTotals = z.infer<typeof usageTotalsSchema>;
 
 /**
+ * **誰が**使ったか。
+ *
+ * モデル id では層を区別できない。`ALTEROID_CLONE_MODEL` でクローンを opus へ
+ * 上げれば、クローンとマネージャーは台帳上で同じ `model` に並ぶ（いま偶然
+ * fable / opus / sonnet に分かれているだけである）。**だからモデル名を層の
+ * 代わりに使わないこと。**
+ *
+ * ## `worker`（作業者）という値が無い理由
+ *
+ * **取れないので値を作らない。** 作業者はマネージャーのセッションの中の Task
+ * subagent であり、その消費はマネージャーの `result.modelUsage` に合算されて
+ * 降りてくる。SDK の宣言（`sdk.d.ts` の `modelUsage`）が「every model call made
+ * through the query pipeline during this query() call — main loop, **Task
+ * subagents**, sidechains, and internal calls such as compaction」と言っており、
+ * **分けて出す口が無い。**
+ *
+ * ここに `worker` を置いて 0 を積むのが最悪の選択である（「作業者は使って
+ * いない」と読める）。だから値そのものを作らず、`manager` の側に「作業者の分を
+ * 含む」と書く。`subagent_type` と `message.usage` から自前に数え直す道はあるが、
+ * それは `modelUsage` と一致する保証の無い別会計になる（#45 が避けた形）。
+ */
+export const usageLayerSchema = z.enum(['clone', 'manager']);
+
+export type UsageLayer = z.infer<typeof usageLayerSchema>;
+
+/**
+ * **どこで**使ったか。
+ *
+ * - `session` — その層の SDK セッション本体。**そのセッションの compaction 自体の
+ *   費用もここに混ざっている**（分離できない。下記）
+ * - `distill` — 要約に潰される直前に走る蒸留（`clone.ts` の
+ *   `#distillFromTranscript`）。**別の `query()` 呼び出し**なので分離できる
+ *
+ * ## `compaction`（要約そのもの）という値が無い理由
+ *
+ * **取れないので値を作らない。** 上と同じ一文が「internal calls such as
+ * **compaction**」を `modelUsage` に含むと明言していて、分けて出す口が無い。
+ * 合図の側が運ぶのは大きさと回数だけである — `system`/`compact_boundary` の
+ * `compact_metadata` に `trigger` / `pre_tokens` / `post_tokens` / `duration_ms`、
+ * `PreCompactHookInput` に `trigger` / `custom_instructions`、
+ * `PostCompactHookInput` に `trigger` / `compact_summary`。
+ * **トークン単価も費用も1つも載っていない。**
+ *
+ * **`distill` を「要約そのものの費用」と読み替えないこと。** 別物である —
+ * 蒸留は「潰される前に記憶へ移す」ための独立したターンであり、要約を作る推論
+ * そのものではない。混ぜると、取れていないものを取れたことにする。
+ *
+ * `pre_tokens` に単価を掛けて推定する道は採らない（SDK が推定と言っている計算を
+ * 二重に推定し直すことになる。#45 が明示的に捨てた道）。
+ *
+ * ## どの層にも出てこない消費がある
+ *
+ * 同じ一文が「Internal helper calls outside the query pipeline (e.g. the
+ * permission classifier, token-count probes) are excluded」と言っている。
+ * **台帳の合計は「alteroid が使った分の全部」ではない。**
+ */
+export const usageSiteSchema = z.enum(['session', 'distill']);
+
+export type UsageSite = z.infer<typeof usageSiteSchema>;
+
+/**
+ * 台帳でクローンを名指す actor の id。
+ *
+ * 台帳の actor 列は `managerId` という名前のままである（既存の行・API・CLI・
+ * 画面が読んでいる名前を変えるのは別の作業になる）。**名前はマネージャーの
+ * ものだが、意味は「誰の分か」の一般名である** — どの層の分かは `layer` が言う。
+ *
+ * マネージャーの id は `mgr-<8桁>` で作られる（`manager.ts`）ので、この値とは
+ * 衝突しない。**衝突しないことは偶然ではなく、テストで固定してある。**
+ */
+export const CLONE_ACTOR_ID = 'clone';
+
+/**
+ * 累積の器がどこで閉じるか。**`site` から導出しないこと。**
+ *
+ * 累積は SDK の `query()` 呼び出しの寿命で閉じる（`sdk.d.ts`: 「Per-model totals
+ * for every model call ... during this query() call」）。**どこで使ったかでは
+ * 決まらない** — 同じ `site` でも寿命の違う呼び出しはありうる。
+ *
+ * - `cumulative` — streaming-input の長寿命セッション（クローン本体・マネージャー）。
+ *   `result` は「その時点までの走行合計」なので、**基準との差だけ**を積む
+ * - `oneshot` — 1回で閉じる `query()`（蒸留のサイドクエリ）。`result` がその
+ *   呼び出しの総量そのものなので、**基準を持たずそのまま**積む
+ */
+export const usageAccumulationSchema = z.enum(['cumulative', 'oneshot']);
+
+export type UsageAccumulation = z.infer<typeof usageAccumulationSchema>;
+
+
+/**
  * `result.modelUsage` をそのまま写した、その時点の**累積**。
  *
  * **これは事実であって解釈ではない。** runner から降りてくるのはこの形で、差分に
@@ -108,8 +198,19 @@ export const usageSnapshotSchema = z.object({
 
 export type UsageSnapshot = z.infer<typeof usageSnapshotSchema>;
 
-/** 前回読んだ累積（差分を取るための基準）。マネージャー1本につき1つ。 */
+/**
+ * 前回読んだ累積（差分を取るための基準）。**累積を持つ主体1つにつき1つ。**
+ *
+ * 主体は「層 × actor」である（`(layer, managerId)`）。actor の id だけを鍵に
+ * すると、層をまたいで同じ id が来たときに別の累積が1つの基準を共有し、差分が
+ * まるごと嘘になる。いまは `mgr-` と `clone` で衝突しないが、**衝突しないことに
+ * 頼らず鍵の側で閉じる。**
+ *
+ * `oneshot`（蒸留のサイドクエリ）はここに行を持たない — 累積が `query()` 1回で
+ * 閉じるので、比べる相手がそもそも無い。
+ */
 export const usageBaselineSchema = z.object({
+  layer: usageLayerSchema,
   managerId: z.string(),
   sessionId: z.string().optional(),
   models: z.record(z.string(), usageTotalsSchema),
@@ -144,8 +245,10 @@ export type UsageReset = z.infer<typeof usageResetSchema>;
 export interface UsageFold {
   /** 台帳へ加算する増分（モデル id → 増分）。**負にはならない。** */
   delta: Record<string, UsageTotals>;
-  /** 次回の基準。 */
-  baseline: UsageBaseline;
+  /**
+   * 次回の基準。**`oneshot` では null**（累積が1回で閉じるので基準を持たない）。
+   */
+  baseline: UsageBaseline | null;
   /** 数え直しが起きたならその事実。起きていなければ undefined。 */
   reset?: UsageReset;
 }
@@ -257,6 +360,10 @@ export function foldUsageSnapshot(
   return {
     delta,
     baseline: {
+      // layer / managerId は基準が無ければ空で返す。**呼び出し側が知っている値を
+      // 後から入れる契約**である（ストアの record が入れる）。純関数の側で層を
+      // 推測させないためで、推測させると「どの層の基準か」が2か所で決まる。
+      layer: baseline?.layer ?? 'manager',
       managerId: baseline?.managerId ?? '',
       sessionId: snapshot.sessionId ?? baseline?.sessionId,
       models: next,
@@ -276,20 +383,63 @@ export function foldUsageSnapshot(
   };
 }
 
+/**
+ * **1回で閉じる `query()`** の `result` を増分へ畳む。**純関数。**
+ *
+ * 蒸留のサイドクエリ（`clone.ts` の `#distillFromTranscript`）は毎回新しい
+ * `query()` で、`persistSession: false`・resume なしである。SDK の宣言が累積の
+ * 器を「during this query() call」と言っているので、**その `result` はその1回の
+ * 総量そのもの**であり、前回の値との差ではない。
+ *
+ * **ここに基準を持たせてはいけない。** 持たせると壊れ方が片側だけになる —
+ * 前回 $0.05 で今回 $0.08 の回は差の $0.03 しか積まれず（目減り）、前回 $0.05 で
+ * 今回 $0.02 の回は減少なので数え直しとして全量が積まれる。つまり
+ * **高くついた回だけが黙って縮む。** 失敗が成功として観測される形である。
+ *
+ * ゼロの `result`（`crash/startup-error results may carry zeroed values`）は
+ * 0 の行を作らずに落ちる（`isZero` の判定は {@link foldUsageSnapshot} と同じ）。
+ */
+export function foldOneshotUsage(snapshot: UsageSnapshot): UsageFold {
+  const delta: Record<string, UsageTotals> = {};
+  for (const [model, totals] of Object.entries(snapshot.models)) {
+    if (!isZero(totals)) delta[model] = totals;
+  }
+  return { delta, baseline: null };
+}
+
 // ---------------------------------------------------------------------------
 // 台帳の行と問い合わせ
 // ---------------------------------------------------------------------------
 
 /**
- * 台帳の1行。**日 × マネージャー × モデル**の3軸で、増分を足し込んだもの。
+ * 台帳の1行。**日 × actor × モデル × 層 × 場所**の5軸で、増分を足し込んだもの。
  *
- * 3軸とも要る — 「今日いくら使ったか」（日）、「どの委譲が高かったか」
- * （マネージャー）、「どの層が高いか」（モデル = Fable / Opus / Sonnet）。
+ * 5軸とも要る — 「今日いくら使ったか」（日）、「どの委譲が高かったか」（actor）、
+ * 「どのモデル帯か」（モデル）、「**誰が**使ったか」（層）、「**どこで**使ったか」（場所）。
+ *
+ * ## 層と場所を鍵から外さないこと
+ *
+ * 同じ actor が層または場所をまたいで使う。クローンは自分のセッション本体
+ * （`clone` / `session`）と要約の蒸留（`clone` / `distill`）の両方で使うので、
+ * `(date, managerId, model)` だけを鍵にすると**同じ鍵に別の意味の行が2つ立つ。**
+ * そのとき増分は先にある行へ足し込まれ、`layer` / `site` は先に入った側の値の
+ * まま残る ＝ **黙った誤帰属**であり、出力からは正しい行と区別できない。
+ *
+ * ## モデル id を層の代わりに使わないこと
+ *
+ * `ALTEROID_CLONE_MODEL` を置けばクローンとマネージャーは同じ `model` に並ぶ。
+ * いま fable / opus / sonnet に分かれているのは偶然である。
  */
 export const usageRowSchema = z.object({
   date: usageDateSchema,
+  /**
+   * 誰の分か（actor の id）。マネージャーなら `mgr-…`、クローンなら
+   * {@link CLONE_ACTOR_ID}。**列名は `managerId` のままだが意味は一般名である。**
+   */
   managerId: z.string(),
   model: z.string(),
+  layer: usageLayerSchema,
+  site: usageSiteSchema,
   totals: usageTotalsSchema,
   updatedAt: isoDateTime,
 });
@@ -301,8 +451,17 @@ export const usageQuerySchema = z.object({
   from: usageDateSchema.optional(),
   /** この日まで（含む）。 */
   to: usageDateSchema.optional(),
-  /** このマネージャーだけ。 */
+  /** この actor だけ（マネージャーの id か {@link CLONE_ACTOR_ID}）。 */
   managerId: z.string().optional(),
+  /**
+   * この層だけ。
+   *
+   * **絞り込みを4つの口（API / CLI / Web / クローンの道具）に揃えて置くこと。**
+   * 片方にだけ足すと、そこにしかできない分析が生まれる（PRD「インターフェース」）。
+   */
+  layer: usageLayerSchema.optional(),
+  /** この場所だけ。 */
+  site: usageSiteSchema.optional(),
 });
 
 export type UsageQuery = z.infer<typeof usageQuerySchema>;
@@ -320,12 +479,29 @@ export const usageAggregateSchema = z.object({
   /** 台帳が記録を始めた時刻。1件も記録していなければ null。 */
   since: isoDateTime.nullable(),
   /**
+   * **層と場所の軸**が記録を始めた時刻。まだ1件も記録していなければ null。
+   *
+   * `since` とは別に持つ。台帳（#45）より層の軸（この変更）のほうが後から入った
+   * ので、その間の行には `layer='manager'` / `site='session'` が**既定として**
+   * 入っている。それは観測ではない。ここを `since` と1つにすると、層を足す前の
+   * 期間が「クローンは使っていなかった」「蒸留は起きていなかった」と読めてしまう。
+   */
+  layersSince: isoDateTime.nullable(),
+  /**
    * 照会された範囲の一部（または全部）が台帳の始点より前だったか。
    *
    * **真なら「その範囲は 0 ではなく記録が無い」と言うこと。** 数字だけを見せると、
    * 台帳が無かった期間が「使っていない期間」に見える。
    */
   beforeLedger: z.boolean(),
+  /**
+   * 照会された範囲の一部（または全部）が**層の軸**の始点より前だったか。
+   *
+   * **真なら「その範囲の層と場所は既定値であって観測ではない」と言うこと。**
+   * `beforeLedger` と同じ形の但し書きだが、守っているものが違う — あちらは
+   * 「合計が 0 なのか記録が無いのか」、こちらは「層の内訳が本物か既定値か」である。
+   */
+  beforeLayers: z.boolean(),
   /** 数字に必ず添える但し書き。 */
   notice: z.literal(USAGE_ESTIMATE_NOTICE),
 });
@@ -333,7 +509,7 @@ export const usageAggregateSchema = z.object({
 export type UsageAggregate = z.infer<typeof usageAggregateSchema>;
 
 /**
- * 3軸それぞれの内訳。**4つの口（API / CLI / Web / クローンの道具）が共有する。**
+ * 5軸それぞれの内訳。**4つの口（API / CLI / Web / クローンの道具）が共有する。**
  *
  * 各口で足し直すと、どれか1つの丸め方や取りこぼしが他と食い違い、「CLI では
  * $3 なのに画面では $2.9」という形で信用を失う。算術はここに1つだけ置く。
@@ -342,8 +518,22 @@ export const usageBreakdownSchema = z.object({
   total: usageTotalsSchema,
   byDate: z.array(z.object({ date: usageDateSchema, totals: usageTotalsSchema })),
   byManager: z.array(z.object({ managerId: z.string(), totals: usageTotalsSchema })),
-  /** どの層（Fable / Opus / Sonnet）で使ったか。 */
+  /** どのモデル帯（Fable / Opus / Sonnet）で使ったか。 */
   byModel: z.array(z.object({ model: z.string(), totals: usageTotalsSchema })),
+  /**
+   * **誰が**使ったか。
+   *
+   * **出てこない層を 0 で補わない。** 記録が1件も無い層はここに現れない
+   * （`worker` はそもそも値として存在しない — {@link usageLayerSchema}）。
+   */
+  byLayer: z.array(z.object({ layer: usageLayerSchema, totals: usageTotalsSchema })),
+  /**
+   * **どこで**使ったか。
+   *
+   * **出てこない場所を 0 で補わない**（`compaction` はそもそも値として存在しない
+   * — {@link usageSiteSchema}）。
+   */
+  bySite: z.array(z.object({ site: usageSiteSchema, totals: usageTotalsSchema })),
 });
 
 export type UsageBreakdown = z.infer<typeof usageBreakdownSchema>;

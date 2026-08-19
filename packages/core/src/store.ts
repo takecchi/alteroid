@@ -14,10 +14,13 @@ import type {
   ScheduledRequest,
 } from './schema.js';
 import type {
+  UsageAccumulation,
   UsageAggregate,
   UsageBaseline,
   UsageFold,
+  UsageLayer,
   UsageQuery,
+  UsageSite,
   UsageSnapshot,
 } from './usage.js';
 
@@ -295,23 +298,43 @@ export interface UsageStore {
    * それを日誌へ落とす（黙って数え直さない）。
    */
   record(input: {
+    /** **誰が**使ったか。モデル id で代用しないこと（`usage.ts` の `usageLayerSchema`）。 */
+    layer: UsageLayer;
+    /** **どこで**使ったか。 */
+    site: UsageSite;
+    /** 誰の分か（マネージャーの id か `CLONE_ACTOR_ID`）。 */
     managerId: string;
     /** ローカル時刻の `YYYY-MM-DD`（`usageDate()` で作る）。 */
     date: string;
     at: string;
     snapshot: UsageSnapshot;
+    /**
+     * 累積の器がどこで閉じるか。**既定を持たせないこと。**
+     *
+     * 黙って `cumulative` に倒すと、1回で閉じる `query()` の高くついた回だけが
+     * 目減りする（`usage.ts` の {@link foldOneshotUsage}）。呼ぶ側が毎回言う。
+     */
+    accumulation: UsageAccumulation;
   }): Promise<UsageFold>;
 
   /**
-   * 期間の集計。日 × マネージャー × モデルの行を返す。
+   * 期間の集計。日 × actor × モデル × 層 × 場所の行を返す。
    *
    * **`since` を必ず載せること。** 台帳が始まる前を照会されたら 0 ではなく
    * 「記録が無い」と言えるようにするためである（過去分の掘り起こしはしない）。
+   *
+   * **`layersSince` も必ず載せること。** 層の軸は台帳より後から入ったので、
+   * それより前の行の `layer` / `site` は既定値であって観測ではない。
    */
   aggregate(query: UsageQuery): Promise<UsageAggregate>;
 
-  /** マネージャー1本の現在の基準（前回読んだ累積）。無ければ null。 */
-  baseline(managerId: string): Promise<UsageBaseline | null>;
+  /**
+   * 累積を持つ主体1つの現在の基準（前回読んだ累積）。無ければ null。
+   *
+   * **鍵は「層 × actor」である。** actor の id だけで引くと、層をまたいで同じ id が
+   * 来たときに別の累積が1つの基準を共有し、差分がまるごと嘘になる。
+   */
+  baseline(layer: UsageLayer, managerId: string): Promise<UsageBaseline | null>;
 }
 
 /** クローンのセッション id を跨いで覚えておくための最小の永続化。 */

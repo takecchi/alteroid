@@ -69,13 +69,21 @@ function groupBy<K extends string>(
   >;
 }
 
-/** 行を3軸（日 / マネージャー / モデル）へ畳む。 */
+/**
+ * 行を5軸（日 / actor / モデル / 層 / 場所）へ畳む。
+ *
+ * **層と場所を「無い値は 0」で補わないこと。** `groupBy` は行に現れた値だけを
+ * 返す。1件も記録が無い層・場所は一覧に出ない ＝ 「0 使った」ではなく「記録が
+ * 無い」として読める形である（`usage.ts` の `usageLayerSchema` / `usageSiteSchema`）。
+ */
 export function summarizeUsage(rows: readonly UsageRow[]): UsageBreakdown {
   return {
     total: sumUsageRows(rows),
     byDate: groupBy(rows, (row) => row.date, 'date'),
     byManager: groupBy(rows, (row) => row.managerId, 'managerId'),
     byModel: groupBy(rows, (row) => row.model, 'model'),
+    byLayer: groupBy(rows, (row) => row.layer, 'layer'),
+    bySite: groupBy(rows, (row) => row.site, 'site'),
   };
 }
 
