@@ -155,6 +155,40 @@ describe('拒否は、状態を置き換えずに状態へ添える', () => {
 });
 
 /**
+ * **直近の1ターンが「報告」ではなく失敗で終わったことも、状態に映らない。**
+ *
+ * 上限に当たった回もセッションは生きているので `status` は `done`（画面では
+ * 「待機中」）のままである。だから札は札のまま残し、その隣に添える — 拒否
+ * （`denials`）とまったく同じ形の問題である。
+ *
+ * 直す前は `You've hit your org's monthly spend limit …` が `lastReport` に入り、
+ * この画面には「報告が来た」としか出ていなかった（`sdk-failure.ts` の doc）。
+ */
+describe('失敗も、状態を置き換えずに状態へ添える', () => {
+  const FAILURE = { code: 'billing_error', via: 'assistant_error', at: '2026-08-20T10:00:00.000Z' };
+
+  it('「待機中」の札を残したまま、SDK の語で失敗を言う', async () => {
+    renderManagers([{ ...BASE, status: 'done', lastFailure: FAILURE }]);
+
+    // **札は差し替えない。** 観測しているのは `done`（終えて待機中）である。
+    expect(await screen.findByText('待機中')).toBeTruthy();
+    expect(screen.queryByText('失敗')).toBeNull();
+    // SDK の語をそのまま（`billing_error` と `rate_limit` は次の一手が違う）。
+    expect(screen.getByText(/billing_error/)).toBeTruthy();
+    expect(screen.getByText(/assistant_error/)).toBeTruthy();
+    // `status` を倒さなかった理由そのもの。書かないと人間が仕事を閉じる。
+    expect(screen.getByText(/話しかければ続く/)).toBeTruthy();
+  });
+
+  it('失敗していないマネージャーには何も足さない（雑音にしない）', async () => {
+    renderManagers([{ ...BASE, status: 'running' }]);
+
+    expect(await screen.findByText('実行中')).toBeTruthy();
+    expect(screen.queryByText(/報告ではなく失敗/)).toBeNull();
+  });
+});
+
+/**
  * **`live` は status と別の軸である。** `live && <札>` の形は `live === false` を
  * 「札が無い」でしか表さず、読む側は「切断されている」と「この画面が接続状態を
  * 報告していない」を区別できない。だから両側を描く。

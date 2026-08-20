@@ -1590,11 +1590,7 @@ function permissionDenials(message: SDKMessage): unknown[] {
  * 人間が検索できる形で残す）。**途中まで出ていた本文も捨てない** — 上限に
  * 当たるまでに何をやったかは、次に何を頼み直すかを決める材料である。
  */
-function failedReportText(
-  said: readonly string[],
-  failure: SdkFailure,
-  result: string,
-): string {
+function failedReportText(said: readonly string[], failure: SdkFailure, result: string): string {
   const body = failure.text.length > 0 ? failure.text : result;
   const head = `（このターンは応答を返さずに終わった: ${failure.code} / ${failure.via}）\n${body}`;
   const partial = said.join('\n\n').trim();

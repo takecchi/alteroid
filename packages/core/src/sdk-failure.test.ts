@@ -143,7 +143,9 @@ describe('resultFailureOf — result の失敗の印', () => {
       resultFailureOf(result({ subtype: 'error_during_execution', api_error_status: 500 }))?.code,
     ).toBe('error_during_execution/500');
     // 読めない値は添えない（`undefined/NaN` のような無意味な語を作らない）。
-    expect(resultFailureOf(result({ is_error: true, api_error_status: 'x' }))?.code).toBe('success');
+    expect(resultFailureOf(result({ is_error: true, api_error_status: 'x' }))?.code).toBe(
+      'success',
+    );
   });
 
   it('本文が無ければ空文字（`undefined` を文字列化しない）', () => {
@@ -181,9 +183,9 @@ describe('検知に文言を使っていない', () => {
   });
 
   it('印が付いていれば、本文が英語でも日本語でも関係なく失敗（文言に依存しない）', () => {
-    expect(assistantFailureOf(assistant({ error: 'billing_error' }), '内部で何かが壊れた')?.code).toBe(
-      'billing_error',
-    );
+    expect(
+      assistantFailureOf(assistant({ error: 'billing_error' }), '内部で何かが壊れた')?.code,
+    ).toBe('billing_error');
     expect(resultFailureOf(result({ is_error: true, result: '普通の返事' }))?.via).toBe(
       'result_is_error',
     );

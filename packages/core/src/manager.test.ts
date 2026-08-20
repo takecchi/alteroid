@@ -2564,3 +2564,72 @@ describe('止めた結果を確かめる', () => {
     expect(text).not.toContain('ghp_');
   });
 });
+
+/**
+ * **台帳に載っている事実を、一覧が落とさない。**
+ *
+ * `lastFailure`（`schema.ts`）は「直近の1ターンが報告ではなく失敗で終わった」
+ * ことで、人間の面（CLI の `/managers`・Web のマネージャー画面）とクローンが
+ * これを読んで「報告が来た」と区別する。**外へ出るのは `summaryOf` を通った分
+ * だけ**なので、ここが写し忘れると、台帳には載っているのにどの面にも出ない
+ * ——直す前とまったく同じ見え方（`You've hit your org's monthly spend limit …`
+ * が報告として出る）に戻る（`sdk-failure.ts` の doc）。
+ */
+describe('一覧は、直近のターンが失敗で終わったことを落とさない', () => {
+  const failedJob = {
+    id: 'mgr-billing',
+    managerId: 'mgr-billing',
+    createdAt: '2026-08-20T00:00:00.000Z',
+    updatedAt: '2026-08-20T10:00:00.000Z',
+    // **`failed` ではない。** 支出上限に当たった回もセッションは生きているので、
+    // 台帳の状態は `done`（終えて待機中。話しかければ続く）のままである。
+    status: 'done' as const,
+    summary: '調査',
+    request: '調べて',
+    cwd: '/work/project',
+    lastReport: '（このターンは応答を返さずに終わった: billing_error / assistant_error）',
+    lastFailure: {
+      code: 'billing_error',
+      via: 'assistant_error',
+      at: '2026-08-20T10:00:00.000Z',
+    },
+  };
+
+  it('台帳の lastFailure が要約に載る（status は done のまま）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(failedJob);
+    const s = setup(undefined, { stores });
+
+    const listed = (await s.pool.list()).find((m) => m.managerId === 'mgr-billing');
+
+    expect(listed?.lastFailure).toEqual({
+      code: 'billing_error',
+      via: 'assistant_error',
+      at: '2026-08-20T10:00:00.000Z',
+    });
+    // **状態は置き換えない。** ここを `failed` へ倒すと、人間は続けられる仕事を
+    // そこで閉じる（`status` と `lastFailure` を分けた理由そのもの）。
+    expect(listed?.status).toBe('done');
+
+    await s.pool.stop();
+  });
+
+  it('失敗していないマネージャーには lastFailure を作らない（「失敗していない」と「見ていない」を混ぜない）', async () => {
+    const stores = createMemoryStores();
+    // **失敗の印だけを外した同じジョブ**を入れる（`delete` で外すのは、
+    // `exactOptionalPropertyTypes` で `undefined` を代入できないため）。
+    const ok = { ...failedJob, id: 'mgr-ok', managerId: 'mgr-ok' };
+    delete (ok as { lastFailure?: unknown }).lastFailure;
+    await stores.jobs.putJob(ok);
+    const s = setup(undefined, { stores });
+
+    const listed = (await s.pool.list()).find((m) => m.managerId === 'mgr-ok');
+
+    expect(listed).toBeDefined();
+    expect(listed?.lastFailure).toBeUndefined();
+    // キーごと無いこと（`undefined` を入れた形と区別する）。
+    expect(Object.hasOwn(listed as object, 'lastFailure')).toBe(false);
+
+    await s.pool.stop();
+  });
+});

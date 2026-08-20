@@ -288,7 +288,7 @@ export async function runSlashCommand(
       const { reports } = await response.json();
       if (reports.length === 0) stdout.write('（日報はまだありません）\n');
       for (const report of reports) {
-        stdout.write(`  ${report.date}  ${summarizeText(report.body)}\n`);
+        stdout.write(`${renderReportLine(report)}\n`);
       }
       return 'ok';
     }
@@ -679,8 +679,61 @@ export async function runSlashCommand(
   }
 }
 
-function writeReport(report: { date: string; body: string }): void {
-  stdout.write(`── ${report.date} の日報 ──\n${report.body}\n`);
+/**
+ * 日報1件ぶんの表示。
+ *
+ * **日報の行は、日報が書けなかった印であることがある**（`unavailable`。
+ * `packages/core/src/schema.ts` の doc が正本）。**その本文を素で出さないこと** —
+ * 実際に起きた壊れ方は、日報の本文が丸ごと
+ * `You've hit your org's monthly spend limit …` になっていた、というものである。
+ * 見出しを `── <日付> の日報 ──` のまま出すと、人間はエラー文を「クローンが書いた
+ * その日のまとめ」として読む（＝直した穴が人間の面で開き直る）。
+ *
+ * **理由は言い換えずに出す。** SDK の文言のまま置いてあるので、人間がそれで検索
+ * できる（`usage-limits.ts` の「言い換えないこと」と同じ約束）。
+ *
+ * **次にどこを見ればよいかまで書く。** 「作れなかった」で終わると、その日の記録が
+ * 消えたと読める。実際には日誌には全部残っているので、降りる先を名指しする
+ * （PRD「可観測性」の一本道）。
+ *
+ * 表示を関数に出して export してあるのは `renderManagerList` / `renderUsage` と
+ * 同じ理由 — 何を出しているかを端末なしで確かめられるようにするためである。
+ */
+export function renderReport(report: {
+  date: string;
+  body: string;
+  unavailable?: string | undefined;
+}): string {
+  if (report.unavailable !== undefined && report.unavailable !== '') {
+    return (
+      `── ⚠ ${report.date} の日報は作れなかった ──\n` +
+      `理由: ${report.unavailable}\n` +
+      'この日の記録は日誌に残っている（/journal で辿れる）。' +
+      '書けていないだけなので、原因が解ければ /run daily_report で作り直せる\n'
+    );
+  }
+  return `── ${report.date} の日報 ──\n${report.body}\n`;
+}
+
+/**
+ * 一覧（`/reports`）の1行。
+ *
+ * **ここでも本文を素で出さない。** 一覧は日付が並ぶだけの面なので、印の行を
+ * 本文の抜粋で出すと「その日は上限に当たった話が日報に書かれている」と読める。
+ */
+export function renderReportLine(report: {
+  date: string;
+  body: string;
+  unavailable?: string | undefined;
+}): string {
+  if (report.unavailable !== undefined && report.unavailable !== '') {
+    return `  ${report.date}  ⚠ 日報なし（作れなかった。理由: ${summarizeText(report.unavailable)}）`;
+  }
+  return `  ${report.date}  ${summarizeText(report.body)}`;
+}
+
+function writeReport(report: { date: string; body: string; unavailable?: string }): void {
+  stdout.write(renderReport(report));
 }
 
 /** 一覧で拒否を出す道具の種類数（多い分は件数だけ言う）。 */
@@ -731,6 +784,30 @@ function denialLine(denials: ManagerDenial[] | undefined): string | null {
 }
 
 /**
+ * 直近の1ターンが**報告ではなく失敗**で終わったことを、状態に添える一行。
+ *
+ * **`status` を置き換えない。** 支出上限に当たった回もセッションは生きているので
+ * 台帳の `status` は `done`（＝終えて待機中。話しかければ続く）のままである
+ * （`packages/core/src/schema.ts` の `lastFailure` の doc）。札を `failed` へ倒すと
+ * 嘘になり、人間は「もう続けられない」と読んで起こし直す判断を誤る。
+ *
+ * **SDK の語（`code` / `via`）をそのまま出す。** 言い換えると、人間が SDK の型定義や
+ * ログで引ける手がかりが消える。`billing_error` と `rate_limit` は次の一手が違う
+ * （前者は人間が枠を上げる話で、後者は待てば直る）。
+ *
+ * **何をすればよいかまで書く。** 「失敗した」だけだと、この仕事が死んだのか
+ * 話しかければ続くのかが読めない。続けられるという事実そのものが、この
+ * `status` と `lastFailure` を分けた理由である。
+ */
+function failureLine(failure: ManagerListItem['lastFailure']): string | null {
+  if (failure === undefined || failure === null) return null;
+  return (
+    `⚠ 直近のターンは報告ではなく失敗で終わっています: ${failure.code}（${failure.via}, ${failure.at}）` +
+    '。セッションは生きているので、原因が解ければ話しかければ続きます'
+  );
+}
+
+/**
  * マネージャーの一覧を、人間が読める形へ（`/managers`）。
  *
  * 表示を関数に出してあるのは、`renderUsage`（`usage.ts`）と同じ理由 —
@@ -767,7 +844,17 @@ export function renderManagerList(managers: ManagerListItem[]): string {
     for (const item of manager.waiting) {
       lines.push(`      返事待ち (${item.requestId}): ${summarizeText(item.summary)}`);
     }
-    if (manager.lastReport) lines.push(`      直近の報告: ${summarizeText(manager.lastReport)}`);
+    // **失敗は報告の**上**に置く。** 下に置くと、包まれたエラー文（`lastReport`）を
+    // 先に読んでから「実は報告ではない」と分かる順になる。
+    const failed = failureLine(manager.lastFailure);
+    if (failed !== null) lines.push(`      ${failed}`);
+    // **失敗した回は「報告」と呼ばない。** 本文は runner 側で
+    // 「（このターンは応答を返さずに終わった: …）」と包まれているが、見出しが
+    // 「直近の報告」のままだと、人間は包みの内側だけを読んで報告として扱う。
+    if (manager.lastReport) {
+      const label = manager.lastFailure === undefined ? '直近の報告' : '直近のターンの中身';
+      lines.push(`      ${label}: ${summarizeText(manager.lastReport)}`);
+    }
   }
   return lines.join('\n');
 }

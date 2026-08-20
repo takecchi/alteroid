@@ -24,6 +24,10 @@ import { useJournalFeed } from '~/hooks/journal-feed';
 import { formatDateTime, formatRelative } from '~/lib/format';
 
 import { ManagerStatusBadge } from './managers';
+// **表示の正本は `reports.tsx` の側に置く。** 日報の面が2つ（ここと `/reports`）
+// あるので、判定と文言を書き写すと片方だけが古びる（本文がエラー文のまま出る側が
+// 静かに残る）。
+import { isUnavailable, UnavailableNote } from './reports';
 
 /**
  * 概要カードに出す件数。**切ること自体は要件である**（ここは一目で見る場所で、
@@ -94,7 +98,17 @@ export default function Dashboard() {
               そうならない。狭い画面（1列）では伸びる先が無いので、これまでどおり 24rem。
             */
             <div className="h-96 min-h-0 min-w-0 grow overflow-y-auto px-4 py-3">
-              <Markdown>{latestReport.body}</Markdown>
+              {/*
+                **印の付いた行を日報として描かない**（`reports.tsx` の
+                `isUnavailable` / `UnavailableNote` の doc が経緯）。ここは人間が
+                最初に開く面なので、エラー文が「最新の日報」として出ると、
+                塞いだ穴のうち人間に見える側だけがそのまま残る。
+              */}
+              {isUnavailable(latestReport) ? (
+                <UnavailableNote reason={latestReport.unavailable} />
+              ) : (
+                <Markdown>{latestReport.body}</Markdown>
+              )}
             </div>
           )}
         </Card>

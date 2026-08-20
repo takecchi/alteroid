@@ -1,7 +1,14 @@
 import type { Commitment } from '@alteroid/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { renderCommitments, renderManagerList, runSlashCommand, type Listed } from './chat.js';
+import {
+  renderCommitments,
+  renderManagerList,
+  renderReport,
+  renderReportLine,
+  runSlashCommand,
+  type Listed,
+} from './chat.js';
 
 type ManagerListItem = Parameters<typeof renderManagerList>[0][number];
 
@@ -155,6 +162,130 @@ describe('renderManagerList', () => {
     expect(text).toContain('一行目 二行目 三行目');
     // 畳んだ結果が複数行に散らないこと（cwd が2行目に来る）
     expect(text.split('\n')[1]).toContain('cwd:');
+  });
+
+  /**
+   * **直近の1ターンが「報告」ではなく失敗で終わったこと**を、状態に添えて出す。
+   *
+   * 直す前は `You've hit your org's monthly spend limit …` が `lastReport` に
+   * そのまま入り、一覧には「直近の報告」として出ていた（`sdk-failure.ts` の doc）。
+   * 台帳に `lastFailure` が付いた後も、この面が読まなければ人間には
+   * 「報告が来た」としか出ない。
+   */
+  describe('直近のターンが失敗で終わったこと', () => {
+    const FAILURE = {
+      code: 'billing_error',
+      via: 'assistant_error',
+      at: '2026-08-20T10:00:00.000Z',
+    };
+
+    it('SDK の語と時刻を、状態の札を置き換えずに出す', () => {
+      // 上限に当たった回もセッションは生きているので、台帳の status は `done`。
+      const text = renderManagerList([manager({ status: 'done', lastFailure: FAILURE })]);
+
+      // **札は差し替えない**（`failed` へ倒すと「もう続けられない」と読まれる）。
+      expect(text).toContain('[done]');
+      expect(text).toContain('報告ではなく失敗で終わっています');
+      // SDK の語をそのまま。言い換えると人間が引ける手がかりが消える。
+      expect(text).toContain('billing_error');
+      expect(text).toContain('assistant_error');
+      // いつの失敗かが無いと、今も止まっているのか昔一度失敗しただけかが読めない。
+      expect(text).toContain('2026-08-20T10:00:00.000Z');
+      // `status` を `failed` へ倒さなかった理由そのもの。書かないと人間が閉じる。
+      expect(text).toContain('話しかければ続きます');
+    });
+
+    it('失敗で終わった回の本文を「直近の報告」と呼ばない', () => {
+      const text = renderManagerList([
+        manager({
+          status: 'done',
+          lastFailure: FAILURE,
+          lastReport: '（このターンは応答を返さずに終わった: billing_error / assistant_error）',
+        }),
+      ]);
+
+      expect(text).not.toContain('直近の報告');
+      expect(text).toContain('直近のターンの中身');
+    });
+
+    it('失敗の行は報告の本文より上に来る（包みの内側を先に読ませない）', () => {
+      const text = renderManagerList([
+        manager({ status: 'done', lastFailure: FAILURE, lastReport: '包まれた本文' }),
+      ]);
+
+      const failure = text.indexOf('報告ではなく失敗で終わっています');
+      const body = text.indexOf('包まれた本文');
+      expect(failure).toBeGreaterThanOrEqual(0);
+      expect(failure).toBeLessThan(body);
+    });
+
+    it('失敗していない回には何も足さず、報告は報告と呼ぶ', () => {
+      const text = renderManagerList([
+        manager({ status: 'done', lastReport: 'スキーマまで書いた' }),
+      ]);
+
+      expect(text).not.toContain('報告ではなく失敗');
+      expect(text).not.toContain('⚠');
+      expect(text).toContain('直近の報告: スキーマまで書いた');
+    });
+  });
+});
+
+/**
+ * 日報の行は、**日報が書けなかった印**であることがある（`schema.ts` の
+ * `unavailable`）。人間の面でその本文を素で出すと、実際に起きた壊れ方
+ * （日報の本文が丸ごと `You've hit your org's monthly spend limit …` だった）が
+ * そのまま再現する。
+ */
+describe('renderReport / renderReportLine', () => {
+  const REASON = "You've hit your org's monthly spend limit · ask your admin to raise it";
+
+  it('印の付いた行を「その日の日報」として出さない', () => {
+    const text = renderReport({
+      date: '2026-08-20',
+      body: `（この日の日報は作れなかった。日誌から直接辿ること。理由: ${REASON}）`,
+      unavailable: REASON,
+    });
+
+    // 日報の見出しのまま出すと、人間はエラー文をその日のまとめとして読む。
+    expect(text).not.toContain('── 2026-08-20 の日報 ──');
+    expect(text).toContain('日報は作れなかった');
+    // 理由は言い換えない（人間が SDK の文言で検索できること）。
+    expect(text).toContain(REASON);
+    // 「記録ごと消えた」と読まれないように、降りる先を名指しする。
+    expect(text).toContain('/journal');
+    // 書けていないだけなので、本物を作り直す道があることも言う。
+    expect(text).toContain('/run daily_report');
+  });
+
+  it('印が無ければ本文をそのまま日報として出す', () => {
+    const text = renderReport({ date: '2026-08-20', body: '## 今日やったこと\n進捗があった。' });
+
+    expect(text).toContain('── 2026-08-20 の日報 ──');
+    expect(text).toContain('進捗があった。');
+    expect(text).not.toContain('作れなかった');
+  });
+
+  it('一覧の行でも、印の付いた行を本文の抜粋で出さない', () => {
+    const line = renderReportLine({
+      date: '2026-08-20',
+      body: `（この日の日報は作れなかった。日誌から直接辿ること。理由: ${REASON}）`,
+      unavailable: REASON,
+    });
+
+    expect(line).toContain('2026-08-20');
+    expect(line).toContain('日報なし');
+    // 一覧は日付が並ぶだけの面なので、印が無いと「日報がある日」と同じ顔になる。
+    expect(line).toContain('⚠');
+    expect(line).not.toContain('この日の日報は作れなかった。日誌から直接辿ること');
+  });
+
+  it('一覧の行は、印が無ければこれまでどおり本文の抜粋である', () => {
+    const line = renderReportLine({ date: '2026-08-20', body: '進捗があった。' });
+
+    expect(line).toContain('2026-08-20');
+    expect(line).toContain('進捗があった。');
+    expect(line).not.toContain('⚠');
   });
 });
 

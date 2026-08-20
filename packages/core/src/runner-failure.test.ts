@@ -161,7 +161,9 @@ async function reportTexts(inbox: InboxEvent[], expected: number): Promise<strin
       (entry) => entry.type === 'manager_message' && entry.kind === 'report',
     );
     if (found.length < expected) {
-      throw new Error(`報告が ${String(expected)} 本届いていない（いま ${String(found.length)} 本）`);
+      throw new Error(
+        `報告が ${String(expected)} 本届いていない（いま ${String(found.length)} 本）`,
+      );
     }
     return found.map((entry) => (entry as { text: string }).text);
   });

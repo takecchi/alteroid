@@ -54,6 +54,20 @@ export interface ManagerSummary {
   updatedAt: string;
   sessionId?: string;
   lastReport?: string;
+  /**
+   * 直近の1ターンが**報告ではなく失敗**で終わったこと（`jobSchema.lastFailure`）。
+   *
+   * **台帳に載っているのに要約へ載っていなかった。** 台帳（`Job`）は `lastFailure` を
+   * 持つのに、外へ出るのはここを通った分だけなので、人間の面（CLI の `/managers`・
+   * Web のマネージャー画面）には「報告が来た」としか出ていなかった。塞いだ穴が
+   * ここで開き直る — `lastReport` の本文は runner 側で包んであるが、包んだ文字列
+   * だけに頼ると、読む側は本文の先頭を読んで失敗かどうかを判定することになる。
+   *
+   * **`status` と混ぜない。** 支出上限に当たった回もセッションは生きているので
+   * `status` は `done`（＝終えて待機中。話しかければ続く）のままである
+   * （`schema.ts` の `lastFailure` の doc）。
+   */
+  lastFailure?: NonNullable<Job['lastFailure']>;
   /** どの runner で走っているか（`manager_id → runner_id` の対応）。 */
   runnerId?: string;
   workspace?: WorkspaceLocator;
@@ -1745,6 +1759,11 @@ function summaryOf(record: ManagerRecord, live: boolean): ManagerSummary {
     waiting: [...record.waiting],
     ...(job.sessionId === undefined ? {} : { sessionId: job.sessionId }),
     ...(job.lastReport === undefined ? {} : { lastReport: job.lastReport }),
+    // **`lastReport` と同じ行で運ぶ。** 片方だけを載せると、読む側は「報告が来た」
+    // と「エラーで死んだ」を本文の文言で判定するしかなくなる（塞いだ穴がここで
+    // 開き直る）。応答として終わった回では台帳側で消えているので、ここは台帳を
+    // そのまま写すだけでよい。
+    ...(job.lastFailure === undefined ? {} : { lastFailure: job.lastFailure }),
     ...(job.runnerId === undefined ? {} : { runnerId: job.runnerId }),
     ...(job.workspace === undefined ? {} : { workspace: job.workspace }),
   };

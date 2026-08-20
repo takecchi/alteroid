@@ -196,6 +196,64 @@ describe('詳細でも、拒否は状態を置き換えずに状態へ添える'
 });
 
 /**
+ * **直近の1ターンが「報告」ではなく失敗で終わったことも、状態に映らない。**
+ *
+ * 上限に当たった回もセッションは生きているので、台帳の `status` は `done`
+ * （画面では「待機中」）のままである（`schema.ts` の `lastFailure` の doc）。
+ * 一覧（`managers.test.tsx`）と対になっているが、ここには一覧に無いものが2つ
+ * ある — 但し書き（次に何をすればよいか）と、**「最後の報告」カードの見出し**で
+ * ある。後者は、直す前に
+ * `You've hit your org's monthly spend limit …` が「最後の報告」として出ていた
+ * まさにその場所である（`sdk-failure.ts` の doc）。
+ */
+describe('詳細でも、失敗は状態を置き換えずに状態へ添える', () => {
+  const FAILURE = { code: 'billing_error', via: 'assistant_error', at: '2026-08-20T10:00:00.000Z' };
+
+  it('「待機中」の札を残したまま、SDK の語・時刻・次の一手を出す', async () => {
+    renderDetail({ ...BASE, status: 'done', lastFailure: FAILURE });
+
+    // **札は差し替えない。** 観測しているのは `done`（終えて待機中）である。
+    expect(await screen.findByText('待機中')).toBeTruthy();
+    // 状態の隣に、失敗であることを添える。
+    expect(screen.getByText('⚠ 直近のターンは失敗で終わった')).toBeTruthy();
+    // SDK の語をそのまま（言い換えると人間が引ける手がかりが消える）。
+    expect(screen.getByText('billing_error')).toBeTruthy();
+    expect(screen.getByText('assistant_error')).toBeTruthy();
+    // `status` を `failed` へ倒さなかった理由そのもの。
+    expect(screen.getByText('この仕事は死んでいない')).toBeTruthy();
+    // 観測していないことは言い切らない（`code` の意味の解釈はしていない）。
+    expect(screen.getByText('何が起きたかの解釈まではしていない')).toBeTruthy();
+  });
+
+  /**
+   * **ここが発端の穴そのものである。** 本文（`lastReport`）は runner 側で
+   * 「（このターンは応答を返さずに終わった: …）」と包まれているが、見出しが
+   * 「最後の報告」のままだと、人間は包みの内側だけを読んで報告として扱う。
+   */
+  it('失敗で終わった回の本文を「最後の報告」と呼ばない', async () => {
+    renderDetail({
+      ...BASE,
+      status: 'done',
+      lastFailure: FAILURE,
+      lastReport: '（このターンは応答を返さずに終わった: billing_error / assistant_error）',
+    });
+
+    expect(await screen.findByText('待機中')).toBeTruthy();
+    expect(screen.queryByText('最後の報告')).toBeNull();
+    expect(screen.getByText('最後のターンの中身（報告ではない）')).toBeTruthy();
+  });
+
+  it('失敗していない回は「最後の報告」のままで、但し書きも出さない（雑音にしない）', async () => {
+    renderDetail({ ...BASE, status: 'done', lastReport: 'スキーマまで書いた' });
+
+    expect(await screen.findByText('待機中')).toBeTruthy();
+    expect(screen.getByText('最後の報告')).toBeTruthy();
+    expect(screen.queryByText(/報告ではなく失敗で終わっている/)).toBeNull();
+    expect(screen.queryByText('⚠ 直近のターンは失敗で終わった')).toBeNull();
+  });
+});
+
+/**
  * **`live` は status と別の軸である。** `live && <札>` の形は `live === false` を
  * 「札が無い」でしか表さず、読む側は「切断されている」と「この画面が接続状態を
  * 報告していない」を区別できない。だから両側を描く。
