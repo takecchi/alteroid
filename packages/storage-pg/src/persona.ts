@@ -93,14 +93,22 @@ export class PgPersonaStore implements PersonaStore {
     await this.#db.delete(memory).where(eq(memory.slug, this.#slug(slug)));
   }
 
-  async concat(): Promise<string> {
+  /**
+   * 全文書を本文ごと `slug` 昇順で返す。**1クエリで取り切る。**
+   *
+   * `list()` してから slug ごとに `read()` する形にすると、記憶の枚数だけ
+   * クエリが飛ぶ（N+1）。ここはクローンのターンが立つたびに通る経路である。
+   *
+   * 載せ方（見出しを付けて連結する形）は持たない — それは
+   * `renderMemoryDocuments`（`@alteroid/core` の `memory.ts`）の仕事で、
+   * 器ごとに書いた結果 fs / pg / インメモリで食い違ったのがこの分離の理由である。
+   */
+  async documents(): Promise<MemoryDocument[]> {
     const rows = await this.#db
       .select({ slug: memory.slug, content: memory.content, updatedAt: memory.updatedAt })
       .from(memory)
       .orderBy(asc(memory.slug));
-    return rows
-      .map((row) => `<!-- memory: ${row.slug}.md -->\n${row.content.trimEnd()}`)
-      .join('\n\n');
+    return rows.map(toDocument);
   }
 }
 

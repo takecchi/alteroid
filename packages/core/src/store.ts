@@ -42,8 +42,16 @@ export interface PersonaStore {
   /** 末尾に追記。存在しなければ作る。 */
   append(slug: string, content: string): Promise<MemoryDocument>;
   remove(slug: string): Promise<void>;
-  /** 全文書を1つの文字列に連結する（クローンのシステムプロンプトへ載せる用）。 */
-  concat(): Promise<string>;
+  /**
+   * 全文書を本文ごと、`slug` の昇順で返す。
+   *
+   * **かつてここは `concat(): Promise<string>` だった。** 器の側で1つの文字列に
+   * 潰していたので、上の層は「どの文書が変わったか」を問えず、走行中に人間が1行
+   * 直しただけで**記憶の全文をもう一度クローンの文脈へ載せていた**（システム
+   * プロンプトに載っている分と合わせて二重に載る）。載せ方は
+   * `renderMemoryDocuments`（`memory.ts`）が持ち、器は文書を渡すだけにする。
+   */
+  documents(): Promise<MemoryDocument[]>;
 }
 
 export interface JournalQuery {

@@ -1,3 +1,4 @@
+import { renderMemoryDocuments } from '@alteroid/core';
 import type { Commitment, InboxEvent } from '@alteroid/core';
 import { PGlite } from '@electric-sql/pglite';
 import { sql } from 'drizzle-orm';
@@ -82,7 +83,9 @@ describe('PgPersonaStore', () => {
     await stores.persona.write('values', '# 価値観\n\n人間が書き換えた\n');
 
     expect((await stores.persona.read('values'))?.content).toContain('人間が書き換えた');
-    expect(await stores.persona.concat()).toContain('人間が書き換えた');
+    // クローンの文脈へ載る形（documents → renderMemoryDocuments）にも反映されること。
+    // かつては concat() がこの連結まで持っていたが、載せ方は core へ移った。
+    expect(renderMemoryDocuments(await stores.persona.documents())).toContain('人間が書き換えた');
   });
 
   it('append は末尾に足す（fs 版と同じ形）', async () => {
@@ -112,11 +115,20 @@ describe('PgPersonaStore', () => {
     await expect(stores.persona.write('../escape', 'x')).rejects.toThrow(/スラッグ/);
   });
 
-  it('concat は全文書を連結する', async () => {
-    await stores.persona.write('a', '# A\n\nあ\n');
+  it('documents は全文書を本文つき・slug 昇順で返す（fs 版と同じ形）', async () => {
+    // 書いた順を slug の昇順とわざと逆にする。挿入順（＝物理的な行順）で
+    // 通ってしまわないため。
     await stores.persona.write('b', '# B\n\nい\n');
+    await stores.persona.write('a', '# A\n\nあ\n');
 
-    const all = await stores.persona.concat();
+    const docs = await stores.persona.documents();
+
+    // 順序と本文の有無は上の層が依存する点である（クローンは走行中に
+    // 「どの文書が変わったか」を見出しで指す）。
+    expect(docs.map((d) => d.slug)).toEqual(['a', 'b']);
+    expect(docs.map((d) => d.content)).toEqual(['# A\n\nあ\n', '# B\n\nい\n']);
+
+    const all = renderMemoryDocuments(docs);
 
     expect(all).toContain('memory: a.md');
     expect(all).toContain('memory: b.md');
