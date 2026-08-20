@@ -22,6 +22,7 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import { Inbox } from './inbox.js';
 import { createManagerPool, type ManagerPool } from './manager.js';
 import { placedModelTier, resolveModelTier } from './model-tier.js';
+import { resolvePermissionModeFor, type PermissionModeName } from './permission-mode.js';
 import type { ProfileApplier } from './profile.js';
 import type { ProfileService } from './profile-service.js';
 import type { RunnerRegistry } from './runner-protocol.js';
@@ -72,8 +73,13 @@ import {
  * - model の既定は `fable`。役割とモデル帯の対応は設計判断であり、変更には
  *   人間の承認が要る（AGENTS.md 地雷5）。`ALTEROID_CLONE_MODEL` はその
  *   **承認そのもの**であって、AI や実装の都合で動かしてよい旋盤ではない。
- * - `tools: []` で組み込みツールを持たせない。これは人間の写像としての配置で
- *   あってデグレードではない。マネージャー以下へこの理由を流用しないこと。
+ * - **道具は全部渡す。** `tools` を渡さない（preset 一式）＋インプロセス MCP の
+ *   自作ツール＋人間の設定と MCP 連携（`settingSources`）。**「クローンは人間の
+ *   写像だから道具を持たない」は写像として成り立たない** — PC の前の人間は
+ *   Claude Code に頼むだけでなく、自分でも端末を叩きファイルを開く
+ *   （north_star「適用範囲」/ PRD「層ごとの能力」/ AGENTS.md 地雷7）。
+ *   重い調査と実作業を下へ委ねるのは**方針**であって、道具を取り上げて
+ *   実現しない（方針の置き場は `prompt.ts` のシステムプロンプト）。
  * - **ターンの起動口は受信箱ただ1つ。** 人間の発言もタイマーも蒸留も、必ず
  *   受信箱を通って直列に処理される。ここを迂回して直接ターンを起こすと、
  *   走行中のターンを踏み潰してループごと止まる。
@@ -116,6 +122,27 @@ export function resolveCloneModel(env: NodeJS.ProcessEnv = process.env): string 
  */
 export function placedCloneModel(env: NodeJS.ProcessEnv = process.env): string | null {
   return placedModelTier(env, CLONE_MODEL_ENV_KEY);
+}
+
+/**
+ * クローンの権限モードを人間が差し替えるための環境変数。
+ *
+ * **マネージャー（`ALTEROID_MANAGER_PERMISSION_MODE`）と対になっている。**
+ * 片方にしか置き場が無いのは非対称で、「マネージャーは都度確認に締められるが
+ * クローンは締められない」も「クローンだけ緩められない」も、どちらも*人間の側の*
+ * 能力の欠落になる（`MANAGER_MODEL_ENV_KEY` に書いてあるのと同じ理由）。
+ *
+ * **これは能力の制限ではなく実行環境の設定である。** 締めても道具は減らない。
+ * 既定（`auto`）の意味と、`default` に倒したときに何が起きるかは
+ * `permission-mode.ts` に書いてある。
+ */
+export const CLONE_PERMISSION_MODE_ENV_KEY = 'ALTEROID_CLONE_PERMISSION_MODE';
+
+/** 環境変数を見てクローンの権限モードを決める。空・空白なら既定（`auto`）。 */
+export function resolveClonePermissionMode(
+  env: NodeJS.ProcessEnv = process.env,
+): PermissionModeName {
+  return resolvePermissionModeFor(env, CLONE_PERMISSION_MODE_ENV_KEY);
 }
 
 /** PreCompact で退避したトランスクリプトのうち、蒸留に渡す末尾のサイズ。 */
@@ -177,10 +204,17 @@ export interface CloneOptions {
   /** 主にテスト用。差し替えると委譲先ごと入れ替えられる。 */
   managers?: ManagerPool;
   /**
-   * モデル帯の差し替え（`ALTEROID_CLONE_MODEL`）を読む先。主にテスト用で、
+   * モデル帯の差し替え（`ALTEROID_CLONE_MODEL`）と権限モードの差し替え
+   * （`ALTEROID_CLONE_PERMISSION_MODE`）を読む先。主にテスト用で、
    * 既定は `process.env`。
    */
   env?: NodeJS.ProcessEnv;
+  /**
+   * 権限モード。省略すると `env` の `ALTEROID_CLONE_PERMISSION_MODE`、
+   * それも無ければ `auto`（`permission-mode.ts`）。主にテスト用の直渡しで、
+   * runner の `RunnerHostOptions.permissionMode` と同じ形である。
+   */
+  permissionMode?: PermissionModeName;
   /**
    * 実行環境プロファイル（`.zprofile` 相当）。
    *
@@ -259,6 +293,12 @@ class Clone implements CloneHost {
   readonly #self: SelfFacts | undefined;
   /** `#model` が既定（`CLONE_MODEL`）から差し替えられているか（`self_status` の材料）。 */
   readonly #modelOverridden: boolean;
+  /**
+   * SDK へ渡す権限モード。**下の `#observedPermissionMode` とは別物である** —
+   * こちらは「alteroid が何を頼んだか」、あちらは「SDK が init で何を報告したか」。
+   * 片方だけを持つと、頼んだ値が通っていないことに気づけない。
+   */
+  readonly #permissionMode: PermissionModeName;
   /** 道具の MCP サーバを組み立てる関数。既定は本物、テストでは差し替えられる。 */
   readonly #mcpServerFactory: typeof createCloneMcpServer;
 
@@ -271,7 +311,7 @@ class Clone implements CloneHost {
   #effort: string | null = null;
   #claudeCodeVersion: string | null = null;
   #apiKeySource: string | null = null;
-  #permissionMode: string | null = null;
+  #observedPermissionMode: string | null = null;
   #mcpServersInfo: Array<{ name: string; status: string }> = [];
   /** init で報告された、いまの SDK セッション id。`#resumedFrom` とは別（あちらは resume 元）。 */
   #sdkSessionId: string | null = null;
@@ -420,6 +460,7 @@ class Clone implements CloneHost {
       sessionStore,
       managers,
       env,
+      permissionMode,
       profile,
       profileService,
       accountUsage,
@@ -433,6 +474,7 @@ class Clone implements CloneHost {
     const envSource = env ?? process.env;
     this.#model = resolveCloneModel(envSource);
     this.#modelOverridden = placedCloneModel(envSource) !== null;
+    this.#permissionMode = permissionMode ?? resolveClonePermissionMode(envSource);
     this.#env = envSource;
     this.#profile = profile;
     this.#profileService = profileService;
@@ -1622,16 +1664,37 @@ class Clone implements CloneHost {
 
     return {
       model: this.#model,
-      // 組み込みツールは持たせない（人間の写像としての配置）
-      tools: [],
+      // **`tools` を渡さない ＝ preset 一式。** 明示リストで絞れば能力の削除に
+      // なり、それは層を問わず禁じられている（AGENTS.md 地雷1・7 / north_star
+      // 「適用範囲」）。委譲が原則である理由（長寿命セッションの俯瞰と判断を守る）
+      // は方針＝システムプロンプトで表す（`prompt.ts`）。
+      //
+      // **`allowedTools` は「確認なしで通す一覧」であって「使える道具の一覧」では
+      // ない**（SDK: "To restrict which tools are available, use the `tools`
+      // option instead."）。だからここに自作ツールだけを並べても組み込みツールは
+      // 1つも減らない。並べてあるのは、自分の道具が権限の判断に晒されないように
+      // するためである。
       allowedTools: CLONE_ALLOWED_TOOLS,
+      // 人間が開く Claude Code と同じ既定（`auto`）。**`default` のまま道具を渡すと
+      // 「渡したのに使えない」になる** — このセッションには `canUseTool` が無く、
+      // SDK は確認相手が居ないとき `ask` の判断をそのまま拒否で終わらせる。
+      //
+      // **`canUseTool` は繋がない（クローンだけはマネージャーと事情が違う）。**
+      // クローンは長寿命セッション1本で、受信箱のすべてのターンがそこを直列に
+      // 通る。ここで人間の回答を待って止めれば、止まるのは待っている1件ではなく
+      // 全部である（PRD「自律」の「止まるのはその仕事だけ」が壊れる）。確認が
+      // 要ると判断したなら `ask_human` に積んでから手を動かすのが、この層での
+      // 権限境界の表し方である（PRD「権限境界」）。
+      permissionMode: this.#permissionMode,
       mcpServers: {
         [MCP_SERVER_NAME]: this.#mcpServerFactory(this.#toolContext()),
       },
       systemPrompt,
-      // 人間のプロジェクト設定を持ち込まない。クローンは実プロジェクトの
-      // 作業者ではなく、判断する側である（設定の共有は M2 のマネージャー側）。
-      settingSources: [],
+      // **人間が使っているのと同じ設定・同じ `.mcp.json` を読む。** ここを `[]` に
+      // すると、人間が Claude Code で使っている MCP 連携がクローンからは1つも
+      // 見えない ＝ 能力の削除（AGENTS.md 地雷7 の後半 / PRD「業務範囲」の
+      // 「人間が使っている連携が、クローンと作業者からも使えること」）。
+      settingSources: ['user', 'project', 'local'],
       // 人間が置いた実行環境プロファイルを、クローンの手にも効かせる。
       env: this.#childEnv(),
       includePartialMessages: true,
@@ -1648,7 +1711,8 @@ class Clone implements CloneHost {
             hooks: [(input, _toolUseId, extra) => this.#onPreCompact(input, extra?.signal)],
           },
         ],
-        // `self_status` の effort はここで拾う。
+        // `self_status` の effort と、**クローンが自分の手を使った跡**をここで拾う
+        // （後者は `#onPostToolUse` のコメント）。
         //
         // 1. **`PostToolUse` はツールの実行後に走るので、実行そのものを止められない**
         //    （`PreToolUse` と違ってここで判断を差し込む余地が無い＝観測専用として
@@ -1701,7 +1765,8 @@ class Clone implements CloneHost {
       requestedEffort: null,
       claudeCodeVersion: this.#claudeCodeVersion,
       apiKeySource: this.#apiKeySource,
-      permissionMode: this.#permissionMode,
+      permissionMode: this.#observedPermissionMode,
+      requestedPermissionMode: this.#permissionMode,
       mcpServers: this.#mcpServersInfo,
       sessionId: this.#sdkSessionId,
       resumedFrom: this.#resumedFrom,
@@ -1723,7 +1788,7 @@ class Clone implements CloneHost {
     this.#effort = null;
     this.#claudeCodeVersion = null;
     this.#apiKeySource = null;
-    this.#permissionMode = null;
+    this.#observedPermissionMode = null;
     this.#mcpServersInfo = [];
     this.#sdkSessionId = null;
   }
@@ -1750,7 +1815,8 @@ class Clone implements CloneHost {
     this.#claudeCodeVersion =
       typeof raw.claude_code_version === 'string' ? raw.claude_code_version : null;
     this.#apiKeySource = typeof raw.apiKeySource === 'string' ? raw.apiKeySource : null;
-    this.#permissionMode = typeof raw.permissionMode === 'string' ? raw.permissionMode : null;
+    this.#observedPermissionMode =
+      typeof raw.permissionMode === 'string' ? raw.permissionMode : null;
     this.#mcpServersInfo = Array.isArray(raw.mcp_servers)
       ? raw.mcp_servers.filter(
           (entry): entry is { name: string; status: string } =>
@@ -1763,14 +1829,50 @@ class Clone implements CloneHost {
   }
 
   /**
-   * `PostToolUse` フックから effort の実効値を拾う（`#buildOptions` の hooks コメント参照）。
+   * `PostToolUse` フックから effort の実効値と、**自分の手を使った跡**を拾う
+   * （`#buildOptions` の hooks コメント参照）。
+   *
+   * ## なぜ日誌に残すのか
+   *
+   * `docs/architecture.md`「非対称な可視性」が名指しで求めている
+   * — 「**どちらで見たかは日誌に残す。** 委譲が原則である理由（俯瞰と判断を守る）が
+   * 守られているかは、禁止ではなく記録で見る」。道具を渡した以上、記録がここに
+   * 無いと「委譲していない」が誰にも見えなくなり、方針が守られているかを見る手が
+   * 禁止しか残らない。
+   *
+   * ## なぜ自作ツールを除くのか
+   *
+   * 自作ツール（`mcp__alteroid__*`）は**それ自身が跡を残す** — `memory_write` は
+   * `memory_update`、`journal_write` は本文、`manager_start` は台帳と `tool_use`
+   * （マネージャー側の記録）へ落ちる。ここで重ねて書くと、クローンは毎ターン
+   * 数本の道具を叩くので日誌が自分の記録で埋まり、**掘るための層が掘れなくなる**。
+   * 残すのは「委譲せずに自分で手を動かした」という、他のどこにも出ない事実だけで
+   * よい（人間の MCP 連携も preset の道具と同じくここに載る — あちらも
+   * 「自分でブラウザを開いた」側である）。
    *
    * **例外を投げないこと。** 投げるとツール実行の後続に影響しうる。読めない形なら
-   * 何もしないだけで、道具の実行そのものは常に続ける。
+   * 何もしないだけで、道具の実行そのものは常に続ける（日誌の失敗も `#journal` が
+   * 飲み込む）。
    */
   async #onPostToolUse(input: unknown): Promise<{ continue: true }> {
-    const level = (input as { effort?: { level?: unknown } } | null | undefined)?.effort?.level;
+    const raw = input as
+      | { effort?: { level?: unknown }; tool_name?: unknown; tool_input?: unknown }
+      | null
+      | undefined;
+    const level = raw?.effort?.level;
     if (typeof level === 'string') this.#effort = level;
+
+    const tool = raw?.tool_name;
+    if (typeof tool === 'string' && !tool.startsWith(`mcp__${MCP_SERVER_NAME}__`)) {
+      await this.#journal({
+        type: 'tool_use',
+        // 台帳と同じ actor 名を使う（`usage.ts` の `CLONE_ACTOR_ID`）。マネージャーの
+        // `mgr-…` / 作業者の `worker:…` と並んでも衝突しない。
+        actor: CLONE_ACTOR_ID,
+        tool,
+        input: raw?.tool_input,
+      });
+    }
     return { continue: true };
   }
 
@@ -1839,8 +1941,11 @@ class Clone implements CloneHost {
       prompt,
       options: {
         model: this.#model,
-        tools: [],
+        // **本セッションと同じ配置にする。** 片方だけ道具や設定が違うと、
+        // 人格の書き手（蒸留）だけが別の頭になる（モデル帯を揃えているのと
+        // まったく同じ理由）。理由は `#buildOptions` 側に書いてある。
         allowedTools: CLONE_ALLOWED_TOOLS,
+        permissionMode: this.#permissionMode,
         mcpServers: {
           [MCP_SERVER_NAME]: this.#mcpServerFactory({
             stores: this.#stores,
@@ -1859,7 +1964,7 @@ class Clone implements CloneHost {
           memory,
           ...(this.#self === undefined ? {} : { self: this.#self }),
         }),
-        settingSources: [],
+        settingSources: ['user', 'project', 'local'],
         env: this.#childEnv(),
         persistSession: false,
         ...(this.#cwd === undefined ? {} : { cwd: this.#cwd }),

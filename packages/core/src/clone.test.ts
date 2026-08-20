@@ -5,7 +5,14 @@ import { join } from 'node:path';
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
-import { CLONE_MODEL, CLONE_MODEL_ENV_KEY, createClone, resolveCloneModel } from './clone.js';
+import {
+  CLONE_MODEL,
+  CLONE_MODEL_ENV_KEY,
+  CLONE_PERMISSION_MODE_ENV_KEY,
+  createClone,
+  resolveCloneModel,
+  resolveClonePermissionMode,
+} from './clone.js';
 import type { CloneHost } from './host.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -287,15 +294,90 @@ describe('クローン', () => {
     expect(options.model).toBe(CLONE_MODEL);
     expect(CLONE_MODEL).toBe('fable');
     // 組み込みツールは持たせない（人間の写像としての配置）
-    expect(options.tools).toEqual([]);
-    // 自作ツールは確認なしで使える
+    //
+    // ↑ **この期待は #32 で反転した。** 元の文（と実装）は north_star「適用範囲」が
+    // 名指しで否定している推論だった — 人間は道具を持たない存在ではないので、
+    // 「人間の写像だから道具を持たない」は写像として成り立たない。したがって
+    // `tools` は**渡さない**（preset 一式）。マネージャー・作業者と同じ扱いである
+    // （AGENTS.md 地雷1・7 / PRD「層ごとの能力」）。
+    expect(options.tools).toBeUndefined();
+    // 自作ツールは確認なしで使える。**これは使える道具の一覧ではない**（確認を
+    // 省く側の一覧である）。組み込みツールが減っていないことは上で見ている。
     expect(options.allowedTools).toContain('mcp__alteroid__memory_write');
     expect(options.allowedTools).toContain('mcp__alteroid__ask_human');
     expect(options.mcpServers).toHaveProperty('alteroid');
-    // 人間のプロジェクト設定は持ち込まない
-    expect(options.settingSources).toEqual([]);
+    // 人間の設定と MCP 連携をそのまま読む（PRD「業務範囲」）。ここが `[]` だと
+    // 人間が使っている連携がクローンから1つも見えない
+    expect(options.settingSources).toEqual(['user', 'project', 'local']);
+    // 人間が開く Claude Code と同じ既定。`default` だと、答える相手が居ない確認が
+    // そのまま拒否になって「道具を渡したのに使えない」が生まれる
+    expect(options.permissionMode).toBe('auto');
     // ターン数上限で暴走を止めない（AGENTS.md 地雷2）
     expect(options.maxTurns).toBeUndefined();
+
+    await s.clone.stop();
+  });
+
+  it('自分の手で使った道具は日誌に残る（自作ツールは重ねて残さない）', async () => {
+    // docs/architecture.md「非対称な可視性」:「どちらで見たかは日誌に残す。委譲が
+    // 原則である理由が守られているかは、禁止ではなく記録で見る」。道具を渡した以上
+    // （#32）、ここが無いと「委譲していない」を見る手が禁止しか残らない。
+    const s = setup();
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
+
+    await hook(
+      { tool_name: 'Bash', tool_input: { command: 'git log --oneline -3' } } as never,
+      undefined,
+      {} as never,
+    );
+    // 自作ツールはそれ自身が跡を残す（`memory_update` / 日誌の本文 / 台帳）。
+    // ここで重ねると、毎ターン数本叩く道具の記録で日誌が埋まって掘れなくなる。
+    await hook(
+      { tool_name: 'mcp__alteroid__memory_write', tool_input: { slug: 'values' } } as never,
+      undefined,
+      {} as never,
+    );
+
+    const entries = await s.stores.journal.list({ types: ['tool_use'] });
+    expect(entries.map((entry) => (entry as { tool: string }).tool)).toEqual(['Bash']);
+    expect((entries[0] as { actor: string }).actor).toBe(CLONE_ACTOR_ID);
+    expect((entries[0] as { input: unknown }).input).toEqual({
+      command: 'git log --oneline -3',
+    });
+
+    await s.clone.stop();
+  });
+
+  it('権限モードの既定は人間が開く Claude Code と同じ（auto）。置けるのは人間だけ', () => {
+    // `default` のままだと、答える相手が居ない確認（このセッションに `canUseTool`
+    // は無い）がそのまま拒否になり、道具を渡したのに使えない状態になる。
+    expect(resolveClonePermissionMode({})).toBe('auto');
+    expect(resolveClonePermissionMode({ [CLONE_PERMISSION_MODE_ENV_KEY]: '' })).toBe('auto');
+    expect(resolveClonePermissionMode({ [CLONE_PERMISSION_MODE_ENV_KEY]: '   ' })).toBe('auto');
+    // 人間が締めることはできる（実行環境の設定であって能力の制限ではない）
+    expect(resolveClonePermissionMode({ [CLONE_PERMISSION_MODE_ENV_KEY]: '  default  ' })).toBe(
+      'default',
+    );
+    // **綴りの間違いは黙って既定へ倒さない。** 倒すと「都度確認にしたはずなのに
+    // 確認が来ない」ことに人間が気づけない
+    expect(() => resolveClonePermissionMode({ [CLONE_PERMISSION_MODE_ENV_KEY]: 'strict' })).toThrow(
+      /ALTEROID_CLONE_PERMISSION_MODE/,
+    );
+  });
+
+  it('人間が置いた権限モードが実際にセッションへ渡る', async () => {
+    const s = setup(undefined, createMemoryStores(), {}, {
+      [CLONE_PERMISSION_MODE_ENV_KEY]: 'default',
+    });
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    expect((s.calls[0] as FakeCall).options.permissionMode).toBe('default');
 
     await s.clone.stop();
   });
@@ -336,6 +418,12 @@ describe('クローン', () => {
       const side = s.calls.at(-1) as FakeCall;
       expect(side).not.toBe(main);
       expect(side.options.model).toBe('opus');
+      // **道具の配置も揃っていること**（#32）。帯だけ揃えても、片方に道具が無ければ
+      // 人格を書く側だけが別の頭になる（会話の最後に「鍵を実行環境へ移す」を
+      // やろうとして失敗した実例と同じ形）。
+      expect(side.options.tools).toBeUndefined();
+      expect(side.options.settingSources).toEqual(['user', 'project', 'local']);
+      expect(side.options.permissionMode).toBe(main.options.permissionMode);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

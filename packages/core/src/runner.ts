@@ -16,6 +16,12 @@ import type {
 
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
 import { placedModelTier, resolveModelTier } from './model-tier.js';
+import {
+  DEFAULT_PERMISSION_MODE,
+  PERMISSION_MODES,
+  resolvePermissionModeFor,
+  type PermissionModeName,
+} from './permission-mode.js';
 import { createProfileApplier, type ProfileApplier, type ProfileVessel } from './profile.js';
 import { createRecentMap } from './recent.js';
 import { buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
@@ -155,40 +161,23 @@ export interface RunnerChildUser {
  * 人間が Claude Code を開けば `Read` や `grep` でいちいち止まらない。層を下りた
  * 瞬間にそれが止まるなら、それはデグレード（north_star 禁止1）であって仕様ではない。
  * `default` に戻せば従来どおり1件ずつクローンへ確認が回る（配線は残してある）。
+ *
+ * **判定の本体は `permission-mode.ts` にある**（クローンも同じ形を使う。
+ * `model-tier.ts` と同じ理由で、層ごとに書き写さない）。ここに残すのは
+ * 「マネージャーの置き場はこの環境変数である」という対応だけである。
  */
-export const MANAGER_PERMISSION_MODES = [
-  'default',
-  'acceptEdits',
-  'bypassPermissions',
-  'plan',
-  'dontAsk',
-  'auto',
-] as const;
+export const MANAGER_PERMISSION_MODES = PERMISSION_MODES;
 
-export type ManagerPermissionMode = (typeof MANAGER_PERMISSION_MODES)[number];
+export type ManagerPermissionMode = PermissionModeName;
 
-/** 既定の権限モード。ここを `default` に倒すと持ち主が確認で止まり続ける。 */
-export const DEFAULT_PERMISSION_MODE: ManagerPermissionMode = 'auto';
+export { DEFAULT_PERMISSION_MODE };
 
 /** 権限モードを差し替える環境変数（実行環境の設定であって、能力の制限ではない）。 */
 export const PERMISSION_MODE_ENV_KEY = 'ALTEROID_MANAGER_PERMISSION_MODE';
 
-/**
- * `ALTEROID_MANAGER_PERMISSION_MODE` を読む。
- *
- * **不正な値は落とす。** 黙って既定へ倒すと、綴りを間違えた持ち主が「都度確認に
- * したはずなのに確認が来ない」状態に気づけない。
- */
+/** `ALTEROID_MANAGER_PERMISSION_MODE` を読む（不正な値は落とす）。 */
 export function resolvePermissionMode(env: NodeJS.ProcessEnv): ManagerPermissionMode {
-  const given = env[PERMISSION_MODE_ENV_KEY]?.trim();
-  if (given === undefined || given.length === 0) return DEFAULT_PERMISSION_MODE;
-  if ((MANAGER_PERMISSION_MODES as readonly string[]).includes(given)) {
-    return given as ManagerPermissionMode;
-  }
-  throw new Error(
-    `${PERMISSION_MODE_ENV_KEY} の値が不正: ${given}` +
-      `（使えるのは ${MANAGER_PERMISSION_MODES.join(' / ')}。既定は ${DEFAULT_PERMISSION_MODE}）`,
-  );
+  return resolvePermissionModeFor(env, PERMISSION_MODE_ENV_KEY);
 }
 
 export interface RunnerHostOptions {

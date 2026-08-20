@@ -129,6 +129,15 @@ export interface CloneRuntimeFacts {
   apiKeySource: string | null;
   /** SDK が init で報告した許可モード。`null` なら未報告。 */
   permissionMode: string | null;
+  /**
+   * alteroid が `options.permissionMode` に渡した値。
+   *
+   * **上の `permissionMode`（観測）と対で持つ。** `requestedEffort` が `null` なのは
+   * 渡していないからで、こちらは必ず渡している（`clone.ts` の `#permissionMode`）。
+   * 頼んだ値と報告された値が食い違うことはありうるので、片方だけを出すと
+   * 「どちらが効いているのか」を答えられない。
+   */
+  requestedPermissionMode: string;
   /** SDK が init で報告した MCP サーバの名前と状態。 */
   mcpServers: Array<{ name: string; status: string }>;
   /**
@@ -185,7 +194,8 @@ export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
     `- effort（alteroid が明示的に渡したもの）: ${facts.requestedEffort ?? '渡していない（SDK の既定に任せている）'}`,
     `- Claude Code の版: ${facts.claudeCodeVersion ?? unknownBecause(INIT_NOT_OBSERVED)}`,
     `- 認証の出所（値ではなく名前）: ${facts.apiKeySource ?? unknownBecause(INIT_NOT_OBSERVED)}`,
-    `- 許可モード: ${facts.permissionMode ?? unknownBecause(INIT_NOT_OBSERVED)}`,
+    `- 許可モード（SDK が報告した実効値）: ${facts.permissionMode ?? unknownBecause(INIT_NOT_OBSERVED)}`,
+    `- 許可モード（alteroid が渡したもの）: ${facts.requestedPermissionMode}`,
     `- MCP サーバ: ${mcpServers}`,
     `- SDK セッション id（クローン本体のセッションで観測した値。蒸留のサイドクエリは別セッションなのでここには出ない）: ${facts.sessionId ?? unknownBecause(INIT_NOT_OBSERVED)}`,
     `- resume 元のセッション id: ${facts.resumedFrom ?? '（新規に開いた。前のセッションを引き継いでいない）'}`,

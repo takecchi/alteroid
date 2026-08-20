@@ -146,6 +146,7 @@ describe('CloneRuntimeFacts の整形 — 観測した値と、取れていな�
     claudeCodeVersion: '2.1.0',
     apiKeySource: 'oauth',
     permissionMode: 'default',
+    requestedPermissionMode: 'auto',
     mcpServers: [{ name: 'alteroid', status: 'connected' }],
     sessionId: 'sess-observed',
     resumedFrom: null,
@@ -218,6 +219,21 @@ describe('CloneRuntimeFacts の整形 — 観測した値と、取れていな�
     expect(section).not.toContain('default');
     // 「まだ分からない」が複数箇所に出るので、件数だけ見る（未観測4件 + resume元は別文言）。
     expect(section.match(/まだ分からない/g)?.length).toBeGreaterThanOrEqual(4);
+  });
+
+  /**
+   * **観測した許可モードと、alteroid が渡した許可モードを混ぜない。** 道具を持つ
+   * ようになった（#32）以上、「使えるはずの道具が使えない」の切り分けはここから
+   * 始まる。片方だけを出すと、頼んだ値が通っていないことに気づけない。
+   */
+  it('許可モードは「SDK が報告した実効値」と「alteroid が渡したもの」を分けて出す', () => {
+    const section = describeCloneRuntime({
+      ...RUNTIME,
+      permissionMode: 'dontAsk',
+      requestedPermissionMode: 'auto',
+    });
+    expect(section).toContain('許可モード（SDK が報告した実効値）: dontAsk');
+    expect(section).toContain('許可モード（alteroid が渡したもの）: auto');
   });
 
   it('認証の出所は値ではなく名前だけを出す（鍵そのものを持つ型ではない）', () => {

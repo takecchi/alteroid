@@ -315,12 +315,24 @@ export {
 export {
   CLONE_MODEL,
   CLONE_MODEL_ENV_KEY,
+  CLONE_PERMISSION_MODE_ENV_KEY,
   createClone,
   placedCloneModel,
   resolveCloneModel,
+  resolveClonePermissionMode,
   type CloneOptions,
 } from './clone.js';
 export { placedModelTier, resolveModelTier } from './model-tier.js';
+/**
+ * 権限モードの判定（クローンとマネージャーで同じもの）。**能力の制限ではなく
+ * 実行環境の設定である**（`permission-mode.ts` に理由がある）。
+ */
+export {
+  DEFAULT_PERMISSION_MODE,
+  PERMISSION_MODES,
+  resolvePermissionModeFor,
+  type PermissionModeName,
+} from './permission-mode.js';
 
 /**
  * 何かを落としたときに stderr へ残す跡（記録の書き込み失敗と、受信箱を閉じた
