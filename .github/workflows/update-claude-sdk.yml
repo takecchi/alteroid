@@ -12,6 +12,11 @@
 # **人間の承認は外さない。** ここが作るのは PR までで、マージは人間がする。
 # モデル帯の対応（Fable / Opus / Sonnet）を変える変更ではないので、地雷表5行目
 # （「安いモデルに寄せる / 階層を潰す」）には当たらない。
+#
+# **判断は `.github/scripts/` の2本が持つ**（`update-claude-sdk.sh` /
+# `open-claude-sdk-pr.sh`）。ここに直接 bash を書くと、走らせてみるまで確かめられない
+# ものが増える。スクリプトなら vitest から本物の git と偽の `pnpm` / `gh` で回せる
+# （`update-claude-sdk.test.ts`。`reflect-release-prod.sh` と同じ形）。
 name: Claude SDK 更新
 
 on:
@@ -34,12 +39,14 @@ env:
   # 常に同じブランチへ積む。**版ごとに新しいブランチを作らない** — 日次なので、
   # 作れば読まれない PR が毎日1本増えていく。開いている PR は常に高々1本にする。
   SDK_BRANCH: automation/claude-agent-sdk
-  # **`GITHUB_TOKEN` で作った PR は `pull_request` のワークフローを起こさない**
-  # （GitHub の仕様。無限ループ防止）。つまり既定のままだと PR に CI が付かないので、
-  # 下の「検証」で同じ一式（build / typecheck / lint / format:check / test）を
-  # このジョブ自身が回し、結果を PR 本文に書く。人間が PAT（`ALTEROID_PR_TOKEN`）を
-  # 置けば通常どおり CI も走る。**どちらでも検証が0回にならない形にしてある。**
-  GH_TOKEN: ${{ secrets.ALTEROID_PR_TOKEN || secrets.GITHUB_TOKEN }}
+
+# **`GH_TOKEN` をワークフロー全体の `env` に置かない。** 置くと、`pnpm install` /
+# `pnpm update` / `pnpm build` が走っているあいだずっと、書き込み権のあるトークンが
+# プロセス環境に居る。このワークフローが相手にしているのは**公開24時間以内の
+# パッケージ**（`minimumReleaseAgeExclude` で待ちを外している側）であり、その
+# ライフサイクルスクリプトと同じ環境にトークンを置く理由が無い。トークンが要るのは
+# 最後の1ステップだけである。同じ理由で `persist-credentials: false`（既定の
+# `actions/checkout` は資格情報を `.git/config` に平文で残す）。
 
 jobs:
   update:
@@ -47,7 +54,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          token: ${{ secrets.ALTEROID_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          # PR 用ブランチに人間のコミットが積まれていないかを `--not origin/main` で
+          # 見るので、履歴が要る（浅い clone だと祖先関係が引けない）。
+          fetch-depth: 0
+          persist-credentials: false
       # Node と pnpm の版は mise.toml が持つ（CI と同じ）
       - uses: jdx/mise-action@v4
       - id: pnpm-store
@@ -61,143 +71,109 @@ jobs:
 
       - id: update
         name: SDK を最新へ
-        run: |
-          set -euo pipefail
-
-          # catalog の1行が正本（各パッケージは `catalog:` で参照している）。
-          # **見つからなければ落とす** — 空文字を返すと「上がっていない」と
-          # 区別が付かず、静かに何もしない日が続く。
-          read_version() {
-            node -e '
-              const fs = require("fs");
-              const src = fs.readFileSync("pnpm-workspace.yaml", "utf8");
-              const m = src.match(/^\s*.@anthropic-ai\/claude-agent-sdk.:\s*\^?([0-9][^\s#]*)/m);
-              if (!m) {
-                console.error("pnpm-workspace.yaml の catalog に @anthropic-ai/claude-agent-sdk が無い");
-                process.exit(1);
-              }
-              process.stdout.write(m[1]);
-            '
-          }
-
-          # **上げる前に、作業ツリーが clean であることを確かめる。** この後の判定は
-          # 「HEAD との差分」なので、最初から差分があると「上がった」と読める。
-          # checkout 直後なので通常は clean であり、そうでないなら何かが起きている
-          # ＝判定できない状態である。黙ってどちらかへ倒さず落とす。
-          if ! git diff --quiet; then
-            echo "::error::update の前から作業ツリーに差分がある。判定できないので止める" >&2
-            git status --porcelain >&2
-            exit 1
-          fi
-
-          before="$(read_version)"
-          pnpm update --latest --recursive @anthropic-ai/claude-agent-sdk
-          after="$(read_version)"
-
-          # **判定は版の文字列ではなく実際の差分で行う。** catalog が動かなくても
-          # lockfile 側（プラットフォーム別パッケージ・推移依存）が動くことがある。
-          if git diff --quiet -- pnpm-workspace.yaml pnpm-lock.yaml; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "SDK は既に最新（$before）。差分なし。"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "$before → $after"
-          fi
-          echo "before=$before" >> "$GITHUB_OUTPUT"
-          echo "after=$after" >> "$GITHUB_OUTPUT"
+        run: ./.github/scripts/update-claude-sdk.sh
 
       # 上がった版で一式を通す。**落ちても止めない** — 落ちたことは draft の PR として
       # 人間に見せるほうが、失敗した cron の実行として埋もれるより届く。
+      #
+      # **`build` を先頭に置くこと**（ワークスペース間の型解決が各パッケージの `dist/`
+      # に依存するので、build 前の typecheck / test は落ちる）。
       - id: verify
         if: steps.update.outputs.changed == 'true'
         continue-on-error: true
         run: |
           set -uo pipefail
+          # **errexit を明示で切る。** `run:` の既定 shell は `bash -e {0}` で、
+          # `set -uo pipefail` はオプションを足すだけなので `-e` は残る。残したままだと
+          # 集計の途中（`tail | sed`）で落ちた瞬間に `ok=` を書かずに死に、
+          # `continue-on-error` のせいでジョブは緑のまま「検証が薄かった」ように見える。
+          set +e
+          # **作業ツリーの外へ書く。** ここで作るのは検証の記録であって成果物では
+          # ないので、リポジトリの中に落とさない。
+          dir="${RUNNER_TEMP:-/tmp}"
           ok=true
-          : > /tmp/verify.md
+          : >"$dir/verify.md"
           for cmd in build typecheck lint format:check test; do
-            if pnpm "$cmd" 2>&1 | tee "/tmp/verify-${cmd/:/-}.log"; then
-              echo "- \`pnpm $cmd\` — OK" >> /tmp/verify.md
+            log="$dir/verify-${cmd/:/-}.log"
+            if pnpm "$cmd" 2>&1 | tee "$log"; then
+              status='OK'
+              lines=10
             else
               ok=false
-              {
-                echo "- \`pnpm $cmd\` — **失敗**"
-                echo ''
-                echo '  ```'
-                sed 's/^/  /' "/tmp/verify-${cmd/:/-}.log" | tail -30
-                echo '  ```'
-              } >> /tmp/verify.md
+              status='**失敗**'
+              lines=40
             fi
+            # **成功した回も生の出力を載せる。** 「OK」の1行だけにすると、
+            # *何本走ったか*が人間の読む唯一の記録から消える。`pnpm` は script を
+            # 持たないパッケージを黙って飛ばして exit 0 を返すので、「OK」は
+            # 「走った」を意味しない（AGENTS.md 変異試験の歯7と同じ理由）。
+            #
+            # コードブロックは ``` ではなく字下げで作る — ログ自身が ``` を
+            # 含むとフェンスが破れる。
+            {
+              echo "### \`pnpm $cmd\` — $status"
+              echo ''
+              echo "（末尾 $lines 行。先頭側は落としてある。全文は実行ログにある）"
+              echo ''
+              tail -"$lines" "$log" | sed 's/^/    /'
+              echo ''
+            } >>"$dir/verify.md"
           done
-          echo "ok=$ok" >> "$GITHUB_OUTPUT"
-          cat /tmp/verify.md
+          echo "ok=$ok" >>"$GITHUB_OUTPUT"
+          cat "$dir/verify.md"
 
+      # ここだけがトークンを持つ。**`${{ }}` を bash のソースへ直接展開しない** —
+      # 展開されるのは実行前なので、値の中身がそのままコードになる（GitHub が
+      # script injection として名指しで禁じている形）。全部 `env:` で受けて
+      # `"$VAR"` として読む。
       - name: PR を出す
         if: steps.update.outputs.changed == 'true'
+        env:
+          # **`GITHUB_TOKEN` で作った PR は `pull_request` のワークフローを起こさない**
+          # （GitHub の仕様。無限ループ防止）。つまり既定のままだと PR に CI が付かない
+          # ので、上の「検証」で同じ一式をこのジョブ自身が回して結果を本文に書く。
+          # 人間が PAT（`ALTEROID_PR_TOKEN`。fine-grained なら Contents: RW /
+          # Pull requests: RW だけでよい）を置けば通常どおり CI も走る。
+          # **どちらでも検証が0回にならない形にしてある。**
+          GH_TOKEN: ${{ secrets.ALTEROID_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SDK_VERSION: ${{ steps.update.outputs.after }}
+          SDK_VERSION_BEFORE: ${{ steps.update.outputs.before }}
+          SDK_VERIFY_OK: ${{ steps.verify.outputs.ok }}
+          SDK_PR_BODY: ${{ runner.temp }}/body.md
         run: |
           set -euo pipefail
 
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-
-          # **`git add -A` を使わない**（AGENTS.md「リポジトリの約束」）。触ってよいのは
-          # この3つだけで、他に差分が出ていたらそれは想定外である。
-          # `apps/daemon/openapi.json` を含めるのは、`pnpm build` が毎回書き直すため
-          # （SDK 由来で spec が動いた場合、置いていくと CI の一致検査が落ちる）。
-          git checkout -B "$SDK_BRANCH"
-          git add pnpm-workspace.yaml pnpm-lock.yaml apps/daemon/openapi.json
-          # **未追跡は数えない（`--untracked-files=no`）。** 直前の `pnpm build` が
-          # `packages/*/src/generated/` や `apps/web/.react-router/` を作るが、これらは
-          # このリポジトリでは .gitignore にも入っていない（実測）。ここで数えると
-          # 毎回「想定外」で止まる。見たいのは**追跡下のファイルが他にも動いていないか**
-          # だけである。
-          unexpected="$(git status --porcelain --untracked-files=no | grep -v -E '^M  (pnpm-workspace\.yaml|pnpm-lock\.yaml|apps/daemon/openapi\.json)$' || true)"
-          if [ -n "$unexpected" ]; then
-            echo "::error::想定していない差分がある。中身: $unexpected" >&2
-            exit 1
-          fi
-
-          version='${{ steps.update.outputs.after }}'
-          title="chore: @anthropic-ai/claude-agent-sdk を $version へ上げる"
-          git commit -m "$title"
-          # このブランチはこのワークフローだけが書く（人間が積む場所ではない）ので
-          # 上書きしてよい。**他のブランチへ force しないこと。**
-          git push --force origin "$SDK_BRANCH"
+          # `persist-credentials: false` で checkout しているので、push できるのは
+          # ここで資格情報を渡したときだけである（＝ビルド中は誰も push できない）。
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}.git"
 
           # **本文は単引用符で組む。** 二重引用符だと本文中の `…` がコマンド置換として
-          # 実行される（PR 本文にコード片を書く以上、必ず踏む）。
+          # 実行される（PR 本文にコード片を書く以上、必ず踏む）。版のように中身を
+          # 差し込む行だけ `printf` で渡す。
           {
-            echo 'Claude 本体（`@anthropic-ai/claude-agent-sdk`）を'
-            echo '`${{ steps.update.outputs.before }}` → `${{ steps.update.outputs.after }}` へ上げる。'
+            printf 'Claude 本体（`@anthropic-ai/claude-agent-sdk`）を `%s` → `%s` へ更新する。\n' \
+              "$SDK_VERSION_BEFORE" "$SDK_VERSION"
             echo ''
             echo 'この SDK はクローン・マネージャー・作業者が実際に走る実行系であり、'
             echo 'エイリアス（`fable` / `opus` / `sonnet`）から具体のモデル id への対応表も'
             echo 'このバンドルに焼かれている。止めると新しいモデルが層に届かない。'
             echo ''
-            echo '## 検証（このワークフローが実行した生の結果）'
+            if [ "$SDK_VERSION_BEFORE" = "$SDK_VERSION" ]; then
+              echo '**catalog の版は動いていない。** 動いたのは lockfile 側'
+              echo '（プラットフォーム別パッケージか推移依存）だけである。'
+              echo ''
+            fi
+            echo '## 検証（このワークフローが実行した生の出力）'
             echo ''
-            cat /tmp/verify.md
+            cat "${RUNNER_TEMP:-/tmp}/verify.md"
             echo ''
-            echo "実行: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            printf '実行: %s\n' "$RUN_URL"
             echo ''
             echo '**PR に CI が付いていない場合の理由**: `GITHUB_TOKEN` で作った PR は'
             echo '`pull_request` のワークフローを起こさない（GitHub の仕様）。その場合、'
             echo '上の一式はこのワークフロー自身が同じ実行系（mise.toml）で回したものである。'
-          } > /tmp/body.md
+          } >"$SDK_PR_BODY"
 
-          number="$(gh pr list --head "$SDK_BRANCH" --state open --json number --jq '.[0].number // empty')"
-          if [ -z "$number" ]; then
-            # 検証が落ちているものは draft で出す（人間が読める状態にしない）
-            if [ '${{ steps.verify.outputs.ok }}' = 'true' ]; then
-              gh pr create --base main --head "$SDK_BRANCH" --title "$title" --body-file /tmp/body.md
-            else
-              gh pr create --draft --base main --head "$SDK_BRANCH" --title "$title" --body-file /tmp/body.md
-            fi
-          else
-            gh pr edit "$number" --title "$title" --body-file /tmp/body.md
-            if [ '${{ steps.verify.outputs.ok }}' = 'true' ]; then
-              gh pr ready "$number"
-            else
-              gh pr ready --undo "$number"
-            fi
-          fi
+          ./.github/scripts/open-claude-sdk-pr.sh
