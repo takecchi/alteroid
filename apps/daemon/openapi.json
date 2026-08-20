@@ -159,7 +159,7 @@
         "operationId": "postChat",
         "tags": ["chat"],
         "summary": "クローンと話す（SSE）",
-        "description": "人間の発言をクローンの受信箱へ積み、クローンの応答を SSE で流す。**SSE。** `event:` にイベント名（`open` / `queued` / `text` / `thinking` / `tool` / `ask_human` / `done` / `error`）、`data:` に対応する JSON が入る。`data:` の 形は下記スキーマ（`open` は `{conversationId}` のみで別枠、他は `chatStreamEventSchema` の各枝）。人間が chat を閉じてもクローンのターンは走り続ける（人間の不在で止まるのは承認待ちの仕事だけ）。**`queued` と `thinking` は別の状態である。** `queued` は受信箱に積んだ（受理したが順番待ち。先客のターンが走っていれば、ここで数分待つことがある）、`thinking` は入力がモデルへ渡って最初の出力を待っている。前者の後に後者が来る。**発言が日誌に載るのも `queued` の時点である**ので、`GET /conversations` にはターンの順番を待たずに現れる。",
+        "description": "人間の発言をクローンの受信箱へ積み、クローンの応答を SSE で流す。**SSE。** `event:` にイベント名（`open` / `queued` / `text` / `thinking` / `tool` / `ask_human` / `done` / `error`）、`data:` に対応する JSON が入る。`data:` の 形は下記スキーマ（`open` は `{conversationId}` のみで別枠、他は `chatStreamEventSchema` の各枝）。人間が chat を閉じてもクローンのターンは走り続ける（人間の不在で止まるのは承認待ちの仕事だけ）。**`queued` と `thinking` は別の状態である。** `queued` は受信箱に積んだ（受理したが順番待ち。先客のターンが走っていれば、ここで数分待つことがある）、`thinking` は入力がモデルへ渡って最初の出力を待っている。前者の後に後者が来る。**発言が日誌に載るのも `queued` の時点である**ので、`GET /conversations` にはターンの順番を待たずに現れる。**コメント行（`:` で始まる行）の heartbeat が周期的に流れる。SSE の仕様上クライアントは読み捨ててよい**（無音のまま死んだ接続を掃除するための送信でもある）。",
         "responses": {
           "200": {
             "description": "SSE ストリーム。",
@@ -601,7 +601,7 @@
         "operationId": "getJournalStream",
         "tags": ["journal"],
         "summary": "日誌の追記をそのまま流す（SSE）",
-        "description": "日誌に載ったものがそのまま流れる（聞きに行かなくても承認待ちの発生に気づける）。**SSE。** `event:` に日誌エントリ種別（`open` に加え、`exchange` / `decision` / `escalation` / `tool_use` / `memory_update` / `daily_report` / `external_event`）、`data:` に日誌エントリ本体（`open` は `{ok:true}` のみ別枠）。`type` クエリで絞り込めるが、選り分ける表は持たない（絞り込みは呼ぶ側が決める）。",
+        "description": "日誌に載ったものがそのまま流れる（聞きに行かなくても承認待ちの発生に気づける）。**SSE。** `event:` に日誌エントリ種別（`open` に加え、`exchange` / `decision` / `escalation` / `tool_use` / `memory_update` / `daily_report` / `external_event`）、`data:` に日誌エントリ本体（`open` は `{ok:true}` のみ別枠）。`type` クエリで絞り込めるが、選り分ける表は持たない（絞り込みは呼ぶ側が決める）。**コメント行（`:` で始まる行）の heartbeat が周期的に流れる。SSE の仕様上クライアントは読み捨ててよい**（無音のまま死んだ接続を掃除するための送信でもある）。",
         "responses": {
           "200": {
             "description": "SSE ストリーム。",

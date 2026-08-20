@@ -1,0 +1,102 @@
+import type { SSEStreamingApi } from 'hono/streaming';
+
+/**
+ * SSE のコメント行 heartbeat（無音死の掃除）。
+ *
+ * ## なぜコメント行か
+ *
+ * 新しいイベント名は作らない。`event: heartbeat` にすると `data:` が空でも
+ * SSE の1メッセージとして成立してしまい、クライアント側で `JSON.parse('')` を
+ * 踏みうる（実際 `packages/api-client/src/index.ts` の `stream()` は
+ * `data === '' ? undefined : JSON.parse(...)` と書いてあるので踏まないが、
+ * 別のクライアントがそこまで丁寧とは限らない）。SSE の仕様上、`:` で始まる行
+ * （コメント行）はクライアントが**フィールドとして解釈せず捨てる**。既存の3実装
+ * （`apps/cli/src/chat.ts` の `parseSSEChunk`、`packages/api-client/src/sse.ts` の
+ * `parseSseChunk`、それを使う `packages/api-client/src/index.ts` の `stream()`）
+ * は3つとも「フィールド行が1つも無いチャンクは message として yield しない」
+ * 形になっており、コメント行だけのチャンクは黙って読み飛ばされる。
+ *
+ * ## なぜ1回の `write()` で書き切るか
+ *
+ * `SSEStreamingApi#write`（`hono/utils/stream.js` の `StreamingApi#write`）は
+ * 引数の文字列を丸ごと1回だけ `this.writer.write(input)`（`TransformStream` の
+ * writer）に渡す。WHATWG Streams はこの1呼び出しの引数を**1個の chunk**として
+ * 扱い、chunk の内部でバイト単位に分割して他の chunk と混ぜることはない
+ * （`hono/helper/streaming/sse.js` の `writeSSE` も同様に、`sseData` を組み立てて
+ * から `this.write(sseData)` を1回呼ぶだけ）。だから heartbeat が `write()` を
+ * 1回で終える限り、進行中の `writeSSE()` の chunk の**中に割り込んでバイトが
+ * 混ざることはない**——起こりうるのは chunk の**前後関係の入れ替わり**だけで、
+ * これは SSE クライアントにとって普通のことである。
+ *
+ * ## write() は死んだ接続へ書いても「表向きは」何も起こさない
+ *
+ * `StreamingApi#write` は `this.writer.write(input)` を `try { } catch {}` で
+ * 包んでいる（`hono/utils/stream.js`）。**失敗しても例外を投げず、`aborted` /
+ * `closed` のどちらも自分では立てない。** heartbeat がこの `write()` の戻り値
+ * だけを見て「掃除された」と判断することはできない。
+ *
+ * それでも掃除は起きる——ただし別の経路からである。`@hono/node-server`
+ * （`dist/index.mjs` の `writeFromReadableStreamDefaultReader`）は Node の
+ * `http.ServerResponse`（`outgoing`）に `close` / `error` リスナーを張ってあり、
+ * 発火すると内部の `reader.cancel(error)` を呼ぶ。この `reader` は
+ * `SSEStreamingApi#responseReadable` の reader で、その `cancel` コールバック
+ * （`hono/utils/stream.js` の `StreamingApi` コンストラクタ）が `this.abort()` を
+ * 呼び、`aborted = true` を立てて `abortSubscribers`（＝各経路が
+ * `stream.onAbort(...)` で登録したコールバック）を同期的に全部呼ぶ。
+ *
+ * つまり **`aborted` / `closed` が立つのは、書き込みが原因で Node 側の
+ * `outgoing` が `close` / `error` を出したときであって、heartbeat 自身が
+ * それを直接検知するわけではない。** 死んだ接続に何も書かなければ、TCP は
+ * 何も再送しようとせず、OS が異常に気づく機会そのものが無いまま fd が残り
+ * 続ける（これが今回塞ぎたい無音死そのもの）。heartbeat の役目は、この
+ * 「気づく機会」を周期的に作ることである——書いたデータが相手に届かなければ
+ * いずれ TCP の再送が尽きて `outgoing` が `error` を出し、上の経路を通って
+ * `onAbort` が発火し、既存の `finally { unsubscribe() }` が動く。既定では
+ * これに数分〜十数分かかる（OS の再送タイムアウト依存）。TCP keepalive を
+ * 別途入れるならこの経路を代替するのではなく、**アイドル中でも OS が
+ * 相手の生死を確かめにいく**という別の検知経路を足す形になる。
+ *
+ * ## 念のための自衛
+ *
+ * 上の経路が何らかの理由で `aborted` / `closed` を立てても `onAbort` の
+ * 発火に繋がらない場合に備え、heartbeat の tick 自体でもこの2つを見て、
+ * 立っていればタイマーを止めて `wake` を呼ぶ（すでに `finished` / `closed`
+ * 相当の状態なら空振りしても安全 — 呼び出し側の `wake` は `null` なら
+ * 何もしない形で使われている）。**これは主経路の代替ではなく二重化である。**
+ */
+export const DEFAULT_SSE_HEARTBEAT_MS = 15_000;
+
+/**
+ * SSE のコメント行。**改行は `\n\n` で終える** —— コメント行の後ろに空行が
+ * 無いと、直後にバッファされている次のフィールド行と1メッセージに混ざって
+ * 解釈されうる（SSE はメッセージの区切りを空行で決める）。
+ */
+const HEARTBEAT_FRAME = ': hb\n\n';
+
+/**
+ * SSE 経路に heartbeat を仕込む。
+ *
+ * 呼ぶ側は返ってきた stop 関数を**必ず `finally` で呼ぶこと**——呼ばないと、
+ * ストリームが終わった後もタイマーが残る（`write()` 自体は死んだ相手に書いても
+ * 例外を出さないので、残っていても壊れて見えないぶん気づきにくい）。
+ *
+ * `wake` は「ブロックしているメインループを起こす」ためのコールバックで、
+ * 既存の `stream.onAbort(...)` が行っているのと同じ役目を heartbeat 側からも
+ * 呼べるようにするための二重化である（このモジュールの JSDoc の「念のための
+ * 自衛」を参照）。
+ */
+export function startSseHeartbeat(
+  stream: Pick<SSEStreamingApi, 'aborted' | 'closed' | 'write'>,
+  intervalMs: number,
+  wake: () => void,
+): () => void {
+  const timer = setInterval(() => {
+    if (stream.aborted || stream.closed) {
+      clearInterval(timer);
+      wake();
+      return;
+    }
+    void stream.write(HEARTBEAT_FRAME);
+  }, intervalMs);
+  return () => clearInterval(timer);
+}

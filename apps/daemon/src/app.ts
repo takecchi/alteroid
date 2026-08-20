@@ -44,6 +44,7 @@ import {
 
 import { bearerOf, isOperator, type AuthPlan, type AuthVariables } from './auth.js';
 import type { JournalBus } from './journal-bus.js';
+import { DEFAULT_SSE_HEARTBEAT_MS, startSseHeartbeat } from './sse-heartbeat.js';
 import { Scalar } from '@scalar/hono-api-reference';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
@@ -192,6 +193,12 @@ export interface AppDeps {
    * 直列化の意味が消え、同時更新で層ごとに違う本文が残る。
    */
   profile?: ProfileService;
+  /**
+   * SSE のコメント行 heartbeat の間隔（ms）。省略時は `DEFAULT_SSE_HEARTBEAT_MS`
+   * （`./sse-heartbeat.ts`）。**環境変数は増やさない** —— テストで短くする以外に
+   * 差し替える理由が無い設定なので、実行環境プロファイルの対象にもしない。
+   */
+  sseHeartbeatMs?: number;
 }
 
 /**
@@ -636,6 +643,7 @@ async function probe(
 
 export function createApp(deps: AppDeps) {
   const { clone, stores } = deps;
+  const sseHeartbeatMs = deps.sseHeartbeatMs ?? DEFAULT_SSE_HEARTBEAT_MS;
 
   const authPlan: AuthPlan = deps.auth?.plan ?? {
     enabled: false,
@@ -784,7 +792,9 @@ export function createApp(deps: AppDeps) {
           '（受理したが順番待ち。先客のターンが走っていれば、ここで数分待つことがある）、' +
           '`thinking` は入力がモデルへ渡って最初の出力を待っている。前者の後に後者が来る。' +
           '**発言が日誌に載るのも `queued` の時点である**ので、`GET /conversations` には' +
-          'ターンの順番を待たずに現れる。',
+          'ターンの順番を待たずに現れる。**コメント行（`:` で始まる行）の heartbeat が' +
+          '周期的に流れる。SSE の仕様上クライアントは読み捨ててよい**（無音のまま死んだ' +
+          '接続を掃除するための送信でもある）。',
         responses: {
           200: {
             description: 'SSE ストリーム。',
@@ -814,51 +824,66 @@ export function createApp(deps: AppDeps) {
             wake?.();
           });
 
-          // 人間が chat を閉じても、クローンのターンは走り続ける（人間の不在で
-          // 止まるのは承認待ちの仕事だけ）。ここで手放すのは購読だけである。
-          stream.onAbort(() => {
-            finished = true;
-            wake?.();
-          });
-
-          /*
-           * **`open` を書く前に積む。順序に意味がある。**
-           *
-           * `open` は「この呼びの投函はもう済んだ」の合図として読まれる。受信中に
-           * 続けて打った発言を投函だけしたい呼び（Web UI の追送。2本目の購読を
-           * 張ると同じ応答が二度流れるので張らない）は、`open` を見た時点で接続を
-           * 捨てる。**逆順だと、捨てるのが `clone.post` より先になりうる** —
-           * `stream.onAbort` が走った後にここへ来ると、積む前にこの関数から抜ける
-           * 経路が生まれ、発言が黙って消える。
-           *
-           * 積むのを先にしておけば、以後どこで切られても発言は受信箱に在る。
-           * 購読（上の `clone.subscribe`）はさらに手前で張ってあるので、`#record`
-           * が出す `queued` も取りこぼさない。
-           */
-          clone.post({
-            type: 'human_message',
-            id: randomUUID(),
-            at: new Date().toISOString(),
-            text,
-            conversationId,
-          });
-
-          await stream.writeSSE({ event: 'open', data: JSON.stringify({ conversationId }) });
-
+          // **`try` は `subscribe()` の直後から始める。** 以前はここより後ろに
+          // あり、`clone.post` や `open` の書き込みが投げたら購読が漏れていた
+          // （現行の実装では投げないので今は踏まれないが、将来ここに検査や
+          // 変換が増えたときに静かにリークへ転化する）。
           try {
-            for (;;) {
-              if (stream.aborted || stream.closed) break;
-              const event = queue.shift();
-              if (event === undefined) {
-                if (finished) break;
-                await new Promise<void>((resolve) => {
-                  wake = resolve;
-                });
-                wake = null;
-                continue;
+            // 人間が chat を閉じても、クローンのターンは走り続ける（人間の不在で
+            // 止まるのは承認待ちの仕事だけ）。ここで手放すのは購読だけである。
+            stream.onAbort(() => {
+              finished = true;
+              wake?.();
+            });
+
+            // heartbeat は SSE のコメント行を流す（クライアントは読み捨てる）。
+            // 死んだ接続の掃除の契機でもある（詳細は `./sse-heartbeat.ts`）。
+            const stopHeartbeat = startSseHeartbeat(stream, sseHeartbeatMs, () => wake?.());
+
+            try {
+              /*
+               * **`open` を書く前に積む。順序に意味がある。**
+               *
+               * `open` は「この呼びの投函はもう済んだ」の合図として読まれる。受信中に
+               * 続けて打った発言を投函だけしたい呼び（Web UI の追送。2本目の購読を
+               * 張ると同じ応答が二度流れるので張らない）は、`open` を見た時点で接続を
+               * 捨てる。**逆順だと、捨てるのが `clone.post` より先になりうる** —
+               * `stream.onAbort` が走った後にここへ来ると、積む前にこの関数から抜ける
+               * 経路が生まれ、発言が黙って消える。
+               *
+               * 積むのを先にしておけば、以後どこで切られても発言は受信箱に在る。
+               * 購読（上の `clone.subscribe`）はさらに手前で張ってあるので、`#record`
+               * が出す `queued` も取りこぼさない。
+               *
+               * **heartbeat をこれより手前で起こしているのは順序に影響しない** —
+               * heartbeat が書くのはコメント行だけで、`open` の代わりにはならない。
+               */
+              clone.post({
+                type: 'human_message',
+                id: randomUUID(),
+                at: new Date().toISOString(),
+                text,
+                conversationId,
+              });
+
+              await stream.writeSSE({ event: 'open', data: JSON.stringify({ conversationId }) });
+
+              for (;;) {
+                if (stream.aborted || stream.closed) break;
+                const event = queue.shift();
+                if (event === undefined) {
+                  if (finished) break;
+                  await new Promise<void>((resolve) => {
+                    wake = resolve;
+                  });
+                  wake = null;
+                  continue;
+                }
+                await stream.writeSSE({ event: event.type, data: JSON.stringify(event) });
+                if (event.type === 'done' || event.type === 'error') break;
               }
-              await stream.writeSSE({ event: event.type, data: JSON.stringify(event) });
-              if (event.type === 'done' || event.type === 'error') break;
+            } finally {
+              stopHeartbeat();
             }
           } finally {
             unsubscribe();
@@ -1070,7 +1095,9 @@ export function createApp(deps: AppDeps) {
           '**SSE。** `event:` に日誌エントリ種別（`open` に加え、`exchange` / `decision` / ' +
           '`escalation` / `tool_use` / `memory_update` / `daily_report` / ' +
           '`external_event`）、`data:` に日誌エントリ本体（`open` は `{ok:true}` のみ別枠）。' +
-          '`type` クエリで絞り込めるが、選り分ける表は持たない（絞り込みは呼ぶ側が決める）。',
+          '`type` クエリで絞り込めるが、選り分ける表は持たない（絞り込みは呼ぶ側が決める）。' +
+          '**コメント行（`:` で始まる行）の heartbeat が周期的に流れる。SSE の仕様上' +
+          'クライアントは読み捨ててよい**（無音のまま死んだ接続を掃除するための送信でもある）。',
         responses: {
           200: {
             description: 'SSE ストリーム。',
@@ -1107,25 +1134,36 @@ export function createApp(deps: AppDeps) {
             queue.push(entry);
             wake?.();
           });
-          stream.onAbort(() => {
-            closed = true;
-            wake?.();
-          });
 
-          await stream.writeSSE({ event: 'open', data: JSON.stringify({ ok: true }) });
-
+          // **`try` は `subscribe()` の直後から始める。**（`/chat` と同じ理由。
+          // `open` の書き込みが将来投げても、購読が漏れないようにする。）
           try {
-            for (;;) {
-              if (closed || stream.aborted || stream.closed) break;
-              const entry = queue.shift();
-              if (entry === undefined) {
-                await new Promise<void>((resolve) => {
-                  wake = resolve;
-                });
-                wake = null;
-                continue;
+            stream.onAbort(() => {
+              closed = true;
+              wake?.();
+            });
+
+            // heartbeat は SSE のコメント行を流す（クライアントは読み捨てる）。
+            // 死んだ接続の掃除の契機でもある（詳細は `./sse-heartbeat.ts`）。
+            const stopHeartbeat = startSseHeartbeat(stream, sseHeartbeatMs, () => wake?.());
+
+            try {
+              await stream.writeSSE({ event: 'open', data: JSON.stringify({ ok: true }) });
+
+              for (;;) {
+                if (closed || stream.aborted || stream.closed) break;
+                const entry = queue.shift();
+                if (entry === undefined) {
+                  await new Promise<void>((resolve) => {
+                    wake = resolve;
+                  });
+                  wake = null;
+                  continue;
+                }
+                await stream.writeSSE({ event: entry.type, data: JSON.stringify(entry) });
               }
-              await stream.writeSSE({ event: entry.type, data: JSON.stringify(entry) });
+            } finally {
+              stopHeartbeat();
             }
           } finally {
             unsubscribe();
