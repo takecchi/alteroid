@@ -255,16 +255,22 @@ export function ChatPane({
    *
    * 進行中の合図（`transient`）と `system` の行は履歴に相当するものが無いので
    * そのまま残る（`role` が一致しないので照合の対象にならない）。
+   *
+   * **区切りの NUL は `\u0000` のエスケープで書く。生の NUL 文字をソースへ
+   * 置かないこと。** 本文に現れない区切りが要るのは正しいが、生のまま置くと
+   * その1バイトで grep / ripgrep がこのファイルを「バイナリ」と判定して丸ごと
+   * 飛ばす — `chat.tsx` が検索結果から静かに消え、「その実装は無い」と読める
+   * 状態になっていた（実際に一度そう読みかけた）。
    */
   const all = useMemo(() => {
     const remaining = new Map<string, number>();
     for (const line of historyLines) {
-      const key = `${line.role} ${line.text}`;
+      const key = `${line.role}\u0000${line.text}`;
       remaining.set(key, (remaining.get(key) ?? 0) + 1);
     }
     const pending: Line[] = [];
     for (const line of lines) {
-      const key = `${line.role} ${line.text}`;
+      const key = `${line.role}\u0000${line.text}`;
       const count = remaining.get(key) ?? 0;
       // 履歴側に同じものがある＝サーバが既に持っているやりとりなので、手元の
       // 写しは落とす（履歴側の並び順の方が正しい。日誌の時刻で並んでいる）。
