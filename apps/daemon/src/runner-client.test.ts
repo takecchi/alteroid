@@ -817,9 +817,9 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
     await enough;
     await client.close();
 
-    const lines = stderrSpy.mock.calls.map((call) => String(call[0]));
-    const failureLines = lines.filter((line) => line.includes('ストリームが切れました'));
-    const reconnectLines = lines.filter((line) => line.includes('繋ぎ直せた'));
+    const lines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    const failureLines = lines.filter((line: string) => line.includes('ストリームが切れました'));
+    const reconnectLines = lines.filter((line: string) => line.includes('繋ぎ直せた'));
 
     // 1000, 2000, 4000 は間隔が毎回変わるので書く。成功で列がリセットされた
     // 直後の敗北（4敗目、基準の1000へ戻る）は「新しい列の初回」なのでまた書く
@@ -856,8 +856,8 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
     await client.close();
 
     const failureLines = stderrSpy.mock.calls
-      .map((call) => String(call[0]))
-      .filter((line) => line.includes('ストリームが切れました'));
+      .map((call: unknown[]) => String(call[0]))
+      .filter((line: string) => line.includes('ストリームが切れました'));
 
     // 1000/2000/4000/8000/16000/30000 の6行で止まり、7敗目・8敗目（どちらも
     // 30000）では書かない。
