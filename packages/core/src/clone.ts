@@ -608,6 +608,54 @@ class Clone implements CloneHost {
   #turn: Turn | null = null;
   #stopped = false;
   /**
+   * セッション内で「前回の蒸留以降に、蒸留すべき新しいことがあったか」の印。
+   *
+   * **`stop()` が無条件に蒸留を投げていたことの直しである。** `endConversation()`
+   * の直後に器の入れ替えで `stop()` が来ると、`buildDistillPrompt` は
+   * `conversation_end` と `shutdown` を同じ文面へ写すので（`#handle` の
+   * `'distill'` 分岐）、**同一内容の蒸留がフルコストで2回走っていた。**
+   *
+   * - **立てる（`true`）のは `#runTurn` 自身。** ターンが1本走ったこと（受信箱の
+   *   起点を問わない）が「新しいことがあった」の唯一の根拠であり、個々の起点
+   *   ごとに立てる形にすると起点を1つ足すたびに立て忘れが起きる
+   *   （`#redeliveryNotice` と同じ理由でここへ寄せた）。
+   * - **蒸留そのもののターンでは立て直さない。** 立て直すと蒸留のたびに印が
+   *   即座に戻り、`stop()` の判定は永久に「新しいことがある」のままになって
+   *   この直しは何もしないのと同じになる（`#runTurn` の `kind` 引数で見分ける）。
+   * - **下ろすのは蒸留が成功で終わった時点だけ**（`#runInternal` が返す
+   *   `TurnOutcome.status === 'answered'` を `'distill'` 分岐で直接見る）。
+   *   失敗した蒸留（枠で保持された場合を含む）で下ろすと、移せなかった記憶を
+   *   「移した」ことにして記憶を落とす。迷ったら蒸留する側へ倒す
+   *   （AGENTS.md「蒸留は生存条件」）。
+   * - **初期値は `true`。** プロセスを起こした直後・新しいセッションを開いた
+   *   直後は、前のプロセスが shutdown 蒸留を済ませたかをこの層からは知れない。
+   *   知れないものを「済んだ」と仮定すると記憶を落とす側に倒れるので、
+   *   知れないなら蒸留する側を既定にする。
+   * - **回数の上限ではない**（AGENTS.md 地雷2）。「新しいことがあるたびに必ず
+   *   蒸留する」側は締めていない — 締めているのは「同一内容を2回払わない」側
+   *   だけである。
+   *
+   * **プロセス内だけで持つ。** ストアへ持ち越さない — 狙っているのは
+   * `endConversation()` → `stop()` という同一プロセス内の並びであり、持ち越すと
+   * 「済んだと思ったら済んでいなかった」の事故が記憶の喪失として出る経路が
+   * 増える（`pre_compact` の蒸留はこの印を一切触らない。`#distillFromTranscript`
+   * は `#runTurn` を経由しない別の短命セッションだからである）。
+   *
+   * **成否の判定に専用フィールドを持たない。** 初版（PR #119）はここに
+   * `#lastTurnSucceeded` という専用フィールドを持ち、`#dispatch` の成功枝
+   * （`this.#usageBlocked = null` の直後）へ直接立てていた —
+   * 当時の `#runTurn` の戻り値が `Promise<string>` 一本で、失敗しても本文を
+   * 返していたため、成否を運ぶ手段がそこにしか無かったからである。main は
+   * その後 #124（`fix: SDK のエラーを応答として扱うのをやめる`）で `#runTurn` /
+   * `#runInternal` の戻り値を `TurnOutcome`（`'answered' | 'failed'`）へ変えて
+   * おり、`#dailyReport` は既にその戻り値を直接見て成否を判定している
+   * （同ファイル該当箇所）。**同じ形をここでも使う** — 呼び出し元
+   * （`#handle` の `'distill'` 分岐）が `#runInternal` の戻り値を直接見れば
+   * 専用フィールドは不要で、`#dispatch`（#124・#125 が書き換えた領域）を
+   * 一切触らずに済む。
+   */
+  #hasUndistilledActivity = true;
+  /**
    * いまの SDK セッションでクローンが最後に見た記憶。slug → 本文。
    *
    * **全文の1文字列ではなく文書ごとに持つ。** 全文で持って全文と比べていた頃は、
@@ -818,7 +866,11 @@ class Clone implements CloneHost {
     if (this.#stopped) return;
 
     // 落ちる前にもう一度だけ記憶へ移す機会を作る（蒸留は生存条件）。
-    // 既にセッションが無いなら何も起きない。
+    // 既にセッションが無いなら何も起きない。**ここでは無条件に投げる** —
+    // 「前回の蒸留以降に新しいことがあったか」の判定は `#handle` の `'distill'`
+    // 分岐に1本化してある（ターンの起動口を受信箱の1か所に保つ設計と同じ理由。
+    // `#hasUndistilledActivity` の doc）。ここで先に判定すると、判定が2か所に
+    // 散り、`endConversation()` 側だけ判定を足し忘れるような穴が生まれる。
     if (this.#query) {
       await this.#postAndWait({
         type: 'distill',
@@ -1605,9 +1657,33 @@ class Clone implements CloneHost {
       case 'distill': {
         // セッションがまだ無いなら蒸留するものも無い
         if (!this.#query) return;
-        await this.#runInternal(
+        // **前回の蒸留以降に新しいことが無ければ、同一内容の蒸留を重ねて払わない。**
+        // `endConversation()` の直後に `stop()` が来る形（デプロイの夜間再起動が
+        // これに当たる）は、`event.reason` が `conversation_end` でも `shutdown`
+        // でも `buildDistillPrompt` が同じ文面へ写す（すぐ下）ので、間に新しい
+        // ターンが1本も無ければ2回目は文字どおりの重複でしかない
+        // （`#hasUndistilledActivity` の doc）。**取りこぼしより重複を疑うこと** —
+        // 印が立っていれば必ず投げる。
+        if (!this.#hasUndistilledActivity) {
+          await this.#journal({
+            type: 'exchange',
+            with: 'self',
+            role: 'outbound',
+            text:
+              `蒸留（${event.reason}）は見送った。前回の蒸留以降にターンが1本も` +
+              '走っていない（＝内容が変わっていない）ので、同一内容を重ねて払わない。',
+          });
+          return;
+        }
+        const outcome = await this.#runInternal(
           buildDistillPrompt(event.reason === 'shutdown' ? 'conversation_end' : event.reason),
+          'distill',
         );
+        // **成功で終わった蒸留だけが印を下ろす。** 失敗した蒸留（枠で保持
+        // された場合を含む。`outcome.status === 'failed'`）で下ろすと、移せ
+        // なかった記憶を「移した」ことにして記憶を落とす（`#hasUndistilledActivity`
+        // の doc）。
+        if (outcome.status === 'answered') this.#hasUndistilledActivity = false;
         return;
       }
 
@@ -1730,8 +1806,22 @@ class Clone implements CloneHost {
    * **本文だけを返さない。** 直す前は `Promise<string>` で、失敗しても
    * `turn.text` を返していたので、呼び出し側は「クローンが答えた」と
    * 「SDK がエラーを返した」を区別できなかった（`sdk-failure.ts` の doc）。
+   *
+   * **`kind` が `'distill'` のときだけ `#hasUndistilledActivity` を立て直さない。**
+   * 蒸留そのものもここを通る（人間の発言と同じ「1本のターン」であることに
+   * 変わりは無い）が、蒸留のターンで立て直すと印は永久に下りず、`stop()` の
+   * 重複防止は何もしないのと同じになる（`#hasUndistilledActivity` の doc）。
+   * それ以外の全経路（`human_message` / `human_answer` / `manager_message` /
+   * `timer` / `external` / `self_initiative`）は素通しで `kind` を省略し、
+   * 既定の `'normal'` で印を立てる。
    */
-  async #runTurn(conversationId: string | null, text: string): Promise<TurnOutcome> {
+  async #runTurn(
+    conversationId: string | null,
+    text: string,
+    kind: 'normal' | 'distill' = 'normal',
+  ): Promise<TurnOutcome> {
+    if (kind !== 'distill') this.#hasUndistilledActivity = true;
+
     // ターンは **セッションを起こす前に** 登録する。セッションの生成が失敗したり
     // 読み取りが即死したりしても、待っているターンを必ず誰かが解放できるように。
     let turn!: Turn;
@@ -1781,9 +1871,14 @@ class Clone implements CloneHost {
     return { status: 'answered', text: turn.text };
   }
 
-  /** 人間に見せない内部ターン（蒸留・承認回答の反映・人間以外の起点）。 */
-  async #runInternal(text: string): Promise<TurnOutcome> {
-    return this.#runTurn(null, text);
+  /**
+   * 人間に見せない内部ターン（蒸留・承認回答の反映・人間以外の起点）。
+   *
+   * `kind` は `#runTurn` へそのまま渡す。蒸留の呼び出し元だけが `'distill'` を
+   * 渡し、それ以外は省略して既定（`'normal'`）のままにする。
+   */
+  async #runInternal(text: string, kind: 'normal' | 'distill' = 'normal'): Promise<TurnOutcome> {
+    return this.#runTurn(null, text, kind);
   }
 
   // -------------------------------------------------------------------------
