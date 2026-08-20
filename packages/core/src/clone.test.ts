@@ -10,10 +10,12 @@ import {
   CLONE_MODEL_ENV_KEY,
   CLONE_PERMISSION_MODE_ENV_KEY,
   createClone,
+  humanTurnText,
   placedClonePermissionMode,
   resolveCloneModel,
   resolveClonePermissionMode,
 } from './clone.js';
+import type { HumanMessage } from './clone.js';
 import type { CloneHost } from './host.js';
 import { renderMemoryDocuments } from './memory.js';
 import { createLocalRunner } from './runner-local.js';
@@ -3650,5 +3652,214 @@ describe('クローン — 枠が回復した後の返信は、人間の側か�
     expect(brokenNotice).not.toContain('試し直');
     expect(brokenNotice).not.toContain('内部で何かが壊れた');
     await broken.clone.stop();
+  });
+});
+
+/**
+ * 人間は返事を待っているあいだも喋る。
+ *
+ * **ここで守っているのは「まとめること」ではなく「まとめても失われないこと」である。**
+ * 1件ずつ別ターンで読む形は、後で言い直された最初の一言に本気で答えてから、次の
+ * ターンでその仕事をやり直す（費用も二重に払う）。だからまとめる — ただし全文・
+ * 順序・器の未読・台帳の id のどれか1つでも落ちたら、それは「畳んで捨てた」に
+ * なる。この describe はその4つを1本ずつ見ている。
+ */
+describe('クローン — 処理待ちのあいだに積み上がった発言', () => {
+  /** 先客のターンが実際に走り始めるまで待つ（積んだ時点で「処理待ち」だと言えるようにする）。 */
+  const waitForFirstTurn = (s: Setup): Promise<void> =>
+    waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+  /** 積んだ最後の発言が、どのターンかは問わず SDK へ渡るまで待つ。 */
+  const waitForDelivered = (s: Setup, text: string): Promise<void> =>
+    waitFor(() => (s.calls[0]?.inputs ?? []).join('\n').includes(text), `${text} が渡る`);
+
+  /**
+   * まとめた／まとめないの判定は**ターンの本数**で出る。本数を `waitFor` で待つと、
+   * 期待どおりにならない世界（＝変異させた世界）でタイムアウトになり、
+   * **タイムアウトは歯があった証拠にならない**（AGENTS.md）。だから
+   * 「最後の発言が届いた」まで待ってから少し置き、本数は等値で比べる。
+   */
+  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 400));
+
+  it('処理待ちに積み上がった発言は1ターンにまとめて渡る（全文が届いた順に載る）', async () => {
+    const s = setup(() => 'わかった', createMemoryStores(), { delayMs: 250 });
+
+    s.clone.post(humanMessage('一件目'));
+    await waitForFirstTurn(s);
+    s.clone.post(humanMessage('二件目'));
+    s.clone.post(humanMessage('三件目'));
+
+    await waitForDelivered(s, '三件目');
+    await settle();
+
+    // 先客の1本 + 積み上がった2件をまとめた1本 = 2本。**3本ではない**
+    expect(s.calls[0]?.inputs).toHaveLength(2);
+
+    const merged = s.calls[0]?.inputs[1] ?? '';
+    expect(merged).toContain('二件目');
+    expect(merged).toContain('三件目');
+    expect(merged).toContain('**2 件** の発言が届いた');
+    // 届いた順のまま渡す（言い直しを先に読ませない）
+    expect(merged.indexOf('二件目')).toBeLessThan(merged.indexOf('三件目'));
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('1件だけのときは本文に断り書きを足さない（普通の一往復を重くしない）', async () => {
+    const s = setup(() => 'わかった');
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const input = s.calls[0]?.inputs[0] ?? '';
+    expect(input).toContain('やあ');
+    expect(input).not.toContain('の発言が届いた');
+    expect(input).not.toContain('まとめて1つの応答で答えよ');
+
+    await s.clone.stop();
+  });
+
+  it('会話が違う発言はまとめない（別の端末で話している相手の画面に応答を流さない）', async () => {
+    const s = setup(() => 'わかった', createMemoryStores(), { delayMs: 150 });
+
+    s.clone.post(humanMessage('先客', 'conv-1'));
+    await waitForFirstTurn(s);
+    s.clone.post(humanMessage('こちら1', 'conv-1'));
+    s.clone.post(humanMessage('あちら', 'conv-2'));
+    s.clone.post(humanMessage('こちら2', 'conv-1'));
+
+    await waitForDelivered(s, 'こちら2');
+    await settle();
+
+    // 4件が4本のまま走る（会話をまたいで束ねない）
+    expect(s.calls[0]?.inputs).toHaveLength(4);
+    const second = s.calls[0]?.inputs[1] ?? '';
+    expect(second).toContain('こちら1');
+    expect(second).not.toContain('あちら');
+    expect(second).not.toContain('こちら2');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('間に別の起点が挟まったら飛び越えない（受信箱の順序を並べ替えない）', async () => {
+    const s = setup(() => 'わかった', createMemoryStores(), { delayMs: 150 });
+
+    s.clone.post(humanMessage('先客'));
+    await waitForFirstTurn(s);
+    s.clone.post(humanMessage('挟まる前'));
+    s.clone.post({
+      type: 'external',
+      id: 'evt-ext',
+      at: new Date().toISOString(),
+      source: 'webhook',
+      payload: '先に届いた外部イベント',
+    });
+    s.clone.post(humanMessage('挟まった後'));
+
+    await waitForDelivered(s, '挟まった後');
+    await settle();
+
+    const inputs = s.calls[0]?.inputs ?? [];
+    expect(inputs).toHaveLength(4);
+    expect(inputs[1]).toContain('挟まる前');
+    expect(inputs[1]).not.toContain('挟まった後');
+    // 外部イベントが人間の発言に追い越されない
+    expect(inputs[2]).toContain('先に届いた外部イベント');
+    expect(inputs[3]).toContain('挟まった後');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('まとめた分は1件も器に残らない（起動のたびに配り直される形を作らない）', async () => {
+    const stores = createMemoryStores();
+    const s = setup(() => 'わかった', stores, { delayMs: 200 });
+
+    s.clone.post(humanMessage('先客'));
+    await waitForFirstTurn(s);
+    s.clone.post(humanMessage('続き1'));
+    s.clone.post(humanMessage('続き2'));
+
+    await waitForDelivered(s, '続き2');
+    await settle();
+
+    // まとめて読んだ2件のどちらも未読から消えている（1件でも残れば次の起動で配り直される）
+    expect(await stores.inbox.claimPending()).toEqual([]);
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('まとめた件数ぶんの未了 id が断り書きに載る（閉じ方を渡さない未了を作らない）', async () => {
+    const stores = createMemoryStores();
+    const s = setup(() => 'わかった', stores, { delayMs: 200 });
+
+    s.clone.post(humanMessage('先客'));
+    await waitForFirstTurn(s);
+    s.clone.post(humanMessage('続き1'));
+    s.clone.post(humanMessage('続き2'));
+
+    await waitForDelivered(s, '続き2');
+    await settle();
+
+    const merged = s.calls[0]?.inputs[1] ?? '';
+    expect(merged).toContain('2 件も台帳に載せた');
+    // 台帳の id は合図の id そのもの（`commitmentFor`）。2件とも渡す
+    expect(merged).toContain('evt-続き1');
+    expect(merged).toContain('evt-続き2');
+    expect(merged).toContain('閉じるのは id ごとである');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('配り直しの合図はまとめない（何が二度目なのか言えなくなる）', async () => {
+    // 前の器が処理を終えられなかった2件。起動時に拾い直される（`#restoreUnread`）
+    const stores = createMemoryStores();
+    await stores.inbox.put(humanMessage('未読1'), '2026-08-20T10:00:00.000Z');
+    await stores.inbox.put(humanMessage('未読2'), '2026-08-20T10:00:01.000Z');
+
+    const s = setup(() => 'わかった', stores, { delayMs: 200 });
+
+    await waitForDelivered(s, '未読2');
+    await settle();
+
+    const inputs = s.calls[0]?.inputs ?? [];
+    expect(inputs).toHaveLength(2);
+    expect(inputs[0]).toContain('配り直しである');
+    expect(inputs[0]).toContain('未読1');
+    expect(inputs[0]).not.toContain('未読2');
+
+    await s.clone.stop();
+  }, 15_000);
+});
+
+describe('humanTurnText（ターン本文の組み立て）', () => {
+  const message = (text: string, at: string): HumanMessage => ({
+    type: 'human_message',
+    id: `evt-${text}`,
+    at,
+    text,
+    conversationId: 'conv-1',
+  });
+
+  it('1件なら本文そのまま（1文字も足さない）', () => {
+    expect(humanTurnText([message('やあ', '2026-08-20T10:00:00.000Z')])).toBe('やあ');
+  });
+
+  it('複数件は全文を届いた順に並べ、各件の時刻を添える', () => {
+    const text = humanTurnText([
+      message('AAA', '2026-08-20T10:00:00.000Z'),
+      message('BBB', '2026-08-20T10:00:09.000Z'),
+    ]);
+
+    expect(text).toContain('**2 件** の発言が届いた');
+    expect(text).toContain('AAA');
+    expect(text).toContain('BBB');
+    expect(text.indexOf('AAA')).toBeLessThan(text.indexOf('BBB'));
+    // 「3分空けて言い直した」と「続けて3行打った」を読み分ける材料はクローンへ渡す
+    expect(text).toContain('2026-08-20T10:00:00.000Z');
+    expect(text).toContain('2026-08-20T10:00:09.000Z');
+  });
+
+  it('1件も無ければ空文字（呼び出し側が先頭を仮定しない）', () => {
+    expect(humanTurnText([])).toBe('');
   });
 });
