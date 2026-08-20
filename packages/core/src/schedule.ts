@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { parseCron } from './cron.js';
+import { isWrittenDailyReport } from './schema.js';
 import type { InboxEvent, SchedulePhase, ScheduleSpec, ScheduledRequest } from './schema.js';
 import type { JournalStore, ScheduleStore } from './store.js';
 
@@ -768,6 +769,11 @@ export interface MissingDailyReportsInput {
  *
  * **日誌に何も無い日は対象にしない。** 動いていなかった日に空の日報を積むのは、
  * 人間が読む唯一の層をノイズで埋めることにしかならない。
+ *
+ * **「書けなかった」の印が付いた行（`unavailable`）は日報として数えない。**
+ * 数えると、ターンが失敗して印だけが残った日が以後この後追いの対象から永久に
+ * 外れる ＝ その日の本物の日報は二度と書かれない（`schema.ts` の
+ * `isWrittenDailyReport` の doc に経緯）。
  */
 export async function missingDailyReportDates({
   journal,
@@ -785,7 +791,10 @@ export async function missingDailyReportDates({
   const active = new Set<string>();
   for (const entry of entries) {
     if (entry.type === 'daily_report') {
-      reported.add(entry.date);
+      // 印の行は「まだ書けていない」ので数えない。**`continue` は残す** —
+      // 日報の行そのものは「その日に活動があった」証拠には使わない（活動は
+      // 失敗を記録した日誌の行が持っている）。
+      if (isWrittenDailyReport(entry)) reported.add(entry.date);
       continue;
     }
     active.add(localDate(new Date(entry.at)));

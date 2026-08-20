@@ -200,6 +200,31 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     at: isoDateTime,
     date: z.string(),
     body: z.string(),
+    /**
+     * **この行は日報の代わりに置いた印であって、日報ではない。** 入っているのは
+     * 「なぜ書けなかったか」である。
+     *
+     * ## なぜ印が必要か（印が無いと再試行が死ぬ）
+     *
+     * 日報を作るターンが上限で死ぬと、`clone.ts` の `#dailyReport` は本文なしで
+     * 1件書いていた。その1件が**2か所で「日報がある日」として数えられる**:
+     *
+     * - `clone.ts` の `#dailyReport`（同じ日付の日報があれば早期 return）
+     * - `schedule.ts` の `missingDailyReportDates`（起動時の後追いの対象から外す）
+     *
+     * 上限に当たった合図は保持され、枠が開いたら配り直される（`clone.ts` の
+     * `#pump` の `finally`）。**つまり再試行は来る。** ところが来たときには
+     * 代替文の行が既にあるので、どちらの経路も「もう書いた」と判断して
+     * **本物の日報が永久に書かれない**。プレースホルダが再試行を殺していた。
+     *
+     * この印があると、人間には「その日に何かあった」ことが見えたまま、機構は
+     * 「まだ書けていない」と数えられる。**両方を同時に満たす唯一の形**である
+     * （書かなければ人間から消え、印なしで書けば再試行が死ぬ）。
+     *
+     * **`body` を空にして代用しないこと。** 空文字は「書けなかった」と
+     * 「クローンが空文字を書いた」を区別しない。
+     */
+    unavailable: z.string().optional(),
   }),
   z.object({
     type: z.literal('external_event'),
@@ -219,6 +244,28 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
 
 export type JournalEntry = z.infer<typeof journalEntrySchema>;
 export type JournalEntryType = JournalEntry['type'];
+
+export type DailyReport = Extract<JournalEntry, { type: 'daily_report' }>;
+
+/**
+ * 日報の行か（**印の行も含む**）。人間へ出す一覧はこちらを使う — 書けなかった
+ * ことも人間には見えていなければならない。
+ */
+export function isDailyReport(entry: JournalEntry): entry is DailyReport {
+  return entry.type === 'daily_report';
+}
+
+/**
+ * **実際に書かれた**日報か（`unavailable` の印が付いた行を除く）。
+ *
+ * **「その日の日報はもうあるか」を数える側は必ずこちらを使うこと。** 印の行を
+ * 数えてしまうと、後から本物を書き直す道が閉じる（`unavailable` の doc に経緯）。
+ * 数える側は2か所ある — `clone.ts` の `#dailyReport` と `schedule.ts` の
+ * `missingDailyReportDates` で、**片方だけ直すと片方の経路だけが死ぬ**。
+ */
+export function isWrittenDailyReport(entry: JournalEntry): entry is DailyReport {
+  return isDailyReport(entry) && entry.unavailable === undefined;
+}
 
 /**
  * 日誌の種別の一覧（絞り込みの選択肢として外へ出す口）。
