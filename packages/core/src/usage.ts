@@ -346,8 +346,15 @@ function isZero(totals: UsageTotals): boolean {
   );
 }
 
-/** 1つでも動いているモデルがあるか（空の記録と、本当にゼロの記録を区別する）。 */
-function hasAnyUsage(models: Record<string, UsageTotals>): boolean {
+/**
+ * 1つでも動いているモデルがあるか（空の記録と、本当にゼロの記録を区別する）。
+ *
+ * **読む側が2つある。** 台帳へ畳む側（{@link foldUsageSnapshot}）は「ゼロを基準として
+ * 採用しない」ために使い、runner は「ゼロのスナップショットを降ろさない」ために使う
+ * （`runner.ts` の `#flushUsage`）。**同じ述語を2か所に書き写さないこと** — 片方だけ
+ * 直すと、ゼロの扱いが層で食い違う。
+ */
+export function hasAnyUsage(models: Record<string, UsageTotals>): boolean {
   return Object.values(models).some((totals) => !isZero(totals));
 }
 
@@ -487,7 +494,39 @@ export function isSuccessResult(message: unknown): boolean {
  * 取り違えたときに片方だけ 0 が積まれ、その差は「その層は安い」と読める。
  */
 export function modelUsageOf(message: unknown): Record<string, UsageTotals> | undefined {
-  const raw = (message as { modelUsage?: unknown }).modelUsage;
+  return toModelTotals((message as { modelUsage?: unknown }).modelUsage);
+}
+
+/**
+ * control channel の `get_usage` 応答から、**このセッションの累積**を取り出す。
+ *
+ * 出所は `SDKControlGetUsageResponse.session.model_usage`（SDK 0.3.228 の `sdk.d.ts`
+ * で確認）。型は `result.modelUsage` と同じ `Record<string, ModelUsage>` で、
+ * **意味も同じ累積**である。違うのは `result` を待たずに読めることだけで、だから
+ * 「`result` を出さずに死んだセッション」の消費はここからしか取れない
+ * （`runner.ts` の `#flushUsage`）。
+ *
+ * **枠の利用率（`rate_limits`）と混ぜないこと。** 同じ応答に載っているが、あちらは
+ * アカウント全体の話で、台帳（自分が使った分の推定）とは別物である
+ * （`usage-snapshot.ts` が使い捨ての probe から読んでいる）。
+ */
+export function sessionModelUsageOf(response: unknown): Record<string, UsageTotals> | undefined {
+  if (typeof response !== 'object' || response === null) return undefined;
+  const session = (response as { session?: unknown }).session;
+  if (typeof session !== 'object' || session === null) return undefined;
+  return toModelTotals((session as { model_usage?: unknown }).model_usage);
+}
+
+/**
+ * `Record<model, ModelUsage>` を台帳の形へ写す。
+ *
+ * **入口が2つあるので1つに寄せてある。** ターン終わりの `result.modelUsage`
+ * （{@link modelUsageOf}）と、畳む直前に control channel から読む
+ * `session.model_usage`（{@link sessionModelUsageOf}）は同じ `ModelUsage` の写しで
+ * ある。**書き写すと、片方だけ `costUSD` の綴りを直してもう片方が黙って 0 を積む**
+ * という形で壊れる。
+ */
+function toModelTotals(raw: unknown): Record<string, UsageTotals> | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined;
 
   const models: Record<string, UsageTotals> = {};

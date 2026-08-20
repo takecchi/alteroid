@@ -36,10 +36,11 @@ import type {
 } from './runner-protocol.js';
 import type { JobStatus } from './schema.js';
 import { classifyUsageNotice, toRateLimitFacts } from './usage-limits.js';
+import { settleWithin } from './usage-probe.js';
 // **クローン（`clone.ts`）と同じ実装を呼ぶ。** 層ごとに result の写し取りを
 // 書き分けると、どちらかが SDK の綴りを取り違えたときに片方だけ 0 が積まれ、
 // その差が「その層は安い」と読める（`usage.ts` の `modelUsageOf`）。
-import { isSuccessResult, modelUsageOf } from './usage.js';
+import { hasAnyUsage, isSuccessResult, modelUsageOf, sessionModelUsageOf } from './usage.js';
 
 /**
  * manager-runner — SDK を隔離して走らせる層（roadmap M4）。
@@ -454,6 +455,31 @@ const RESOLVED_MEMORY_LIMIT = 512;
  */
 const DENIED_MEMORY_LIMIT = 512;
 
+/**
+ * 畳む直前の累積読み取りに与える締め切り。
+ *
+ * **短くする。** これは観測であって仕事ではないうえ、走っているのは「もう畳むと
+ * 決まった後」である。runner 全体の猶予（`apps/runner/src/index.ts` の
+ * `SHUTDOWN_GRACE_MS`）はセッション全部で分け合うものなので、1本がここで粘ると
+ * 他の本の生ログを渡す時間を食う。**取れなければ取れないままでよい。**
+ *
+ * これは能力の上限ではなく観測の締め切りである（north_star 禁止2 が禁じているのは
+ * 仕事の回数・ターン数の制限であって、best-effort な読み取りの待ち時間ではない）。
+ */
+const SESSION_USAGE_READ_TIMEOUT_MS = 5_000;
+
+/**
+ * control channel の `get_usage` だけを抜き出した顔。
+ *
+ * **省略可能にしてある。** 実験的な口（長い名前のあれ）は SDK 側で改名・削除され
+ * うるので、無くなったときに「取れなかった」へ落ちるだけで済むようにする
+ * （`usage-probe.ts` の `UsageProbeHandle` と同じ判断）。SDK の `Query` 型では
+ * 必須メンバだが、**必須として呼ぶと SDK が1つ改名した瞬間に畳む経路が落ちる。**
+ */
+interface SessionUsageReader {
+  usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: () => Promise<unknown>;
+}
+
 /** 返事を待って止まっている1件（許可確認 or 質問）。 */
 interface PendingRequest {
   id: string;
@@ -677,6 +703,11 @@ class RunnerSession {
   async stop(reason: string): Promise<void> {
     if (this.#stopped) return;
     this.#stopped = true;
+
+    // **器の入れ替えと `manager_stop` はここを通る**（`Host#shutdown` / `Host#stop`
+    // → `stop()`）。`result` を待っていると、この経路で畳まれたぶんは台帳に1行も
+    // 残らない。生ログと同じで、渡し損ねたら二度と取れない。
+    await this.#flushUsage();
 
     // 止まる前に全文を返す。runner のディスクは器と一緒に消えるので、ここで
     // 渡し損ねると manager_id から生ログへ降りる経路が切れる。
@@ -1132,8 +1163,59 @@ class RunnerSession {
     });
   }
 
+  /**
+   * **畳む直前に累積をもう一度読む。** 台帳の穴はここでしか塞げない。
+   *
+   * 台帳へ入るのは `result.modelUsage` だけなので（`#dispatch`）、**`result` を
+   * 1度も出さずに終わったセッションの消費はどこにも載らない。** しかも載らない
+   * だけではなく一覧にも現れないので、「いくら取りこぼしたか」すら分からない。
+   * 実測では、30分走って PR をマージまで運んだ委譲が器の入れ替えで畳まれ、台帳に
+   * 1行も残らなかった（`mgr-eef70c01`）。
+   *
+   * SDK は同じ値を control channel からも出している —
+   * `SDKControlGetUsageResponse.session.model_usage` は `result.modelUsage` と
+   * **同じ型・同じ意味の累積**で、`result` を待たずに読める
+   * （`usage.ts` の `sessionModelUsageOf`）。
+   *
+   * **best-effort である。決して投げず、畳む経路をこれに縛らない。**
+   *
+   * - 実測で、ターンを回している最中の control 要求は
+   *   `ProcessTransport is not ready for writing` で失敗する（`usage-probe.ts` の
+   *   注記4）。**失敗は異常ではなく通常の枝**である。取れなければ取れないまま畳む
+   * - **全部ゼロなら降ろさない。** ゼロは「使っていない」ではなく「読めなかった」で
+   *   ある。降ろすと台帳にゼロだけの基準ができて、**「記録が無い」が「$0.00 使った」に
+   *   化ける**（`foldUsageSnapshot` が守っているのは基準を*下げない*ことで、基準を
+   *   *作らない*ことではない）
+   * - 値は累積なので、この1回が `result` 経由の記録と重なっても増分が 0 になるだけ
+   *   である（`runner-protocol.ts`「累積なら再送に耐える」）
+   */
+  async #flushUsage(): Promise<void> {
+    const handle = this.#query as (Query & SessionUsageReader) | null;
+    const read = handle?.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
+    if (handle === null || typeof read !== 'function') return;
+    let answer: Promise<unknown>;
+    try {
+      answer = read.call(handle);
+    } catch {
+      // 呼んだ瞬間に投げる形（transport が既に閉じている）もある。
+      return;
+    }
+    const models = sessionModelUsageOf(await settleWithin(answer, SESSION_USAGE_READ_TIMEOUT_MS));
+    if (models === undefined || !hasAnyUsage(models)) return;
+    this.#emit({
+      type: 'usage',
+      managerId: this.#id,
+      sessionId: this.#sessionId,
+      models,
+    });
+  }
+
   async #finish(status: JobStatus, reason: string): Promise<void> {
     this.#stopped = true;
+    // **`close()` より先に読む。** 閉じた後の control channel からは何も取れない。
+    // ここを通るのはクラッシュ・`lost`・`failed`、つまり `result` が出ないまま
+    // 終わる経路そのものである。
+    await this.#flushUsage();
     this.#settleAll(reason);
     // 読み取りが終わっても入力側を起こして本体を閉じる。怠ると閉じられない
     // Query と起きない `#inputStream` が残る。
