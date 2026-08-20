@@ -492,10 +492,16 @@ class Pool implements ManagerPool {
     for (const record of this.#records.values()) {
       known.set(record.job.id, summaryOf(record, isLive(record)));
     }
-    // 台帳にしか無い分も見せる（宛先の runner が居ないものは live: false）。
+    // 台帳にしか無い分も見せる。**`live: false` を決め打ちしない。** `#retire`
+    // （終端した委譲を `#records` から外す）が入った後は、「台帳にしか無い」は
+    // 「runner に宛先が無い」の意味とは限らない — `session_id` が残っていれば
+    // `manager_send` で明示的に起こし直せる（`#load()` と同じ判定）。決め打ちで
+    // `false` にすると、外した瞬間に `live: true` だった委譲が `false` へ化ける
+    // ＝完了した委譲について読めていたものが読めなくなる（デグレード）。
     for (const job of await this.#stores.jobs.listJobs()) {
       if (known.has(job.id)) continue;
-      known.set(job.id, summaryOf({ job, waiting: [], attached: false }, false));
+      const fallback: ManagerRecord = { job, waiting: [], attached: false };
+      known.set(job.id, summaryOf(fallback, isLive(fallback)));
     }
     return [...known.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
   }
@@ -707,6 +713,9 @@ class Pool implements ManagerPool {
     record.attached = false;
     record.job.status = 'done';
     await this.#persist(record);
+    // **停止は明示的な終端である。** 台帳には残るので `list()` / `manager_send` は
+    // これまでどおり答えられる（`#retire` の JSDoc）。
+    this.#retire(managerId);
 
     // **止めたことを日誌に残す。** 消えた理由が分からないマネージャーを作らない
     // （PRD「可観測性」）。クローンにも知らせるので、次のターンで気づける。
@@ -967,6 +976,8 @@ class Pool implements ManagerPool {
             record.job.status = 'lost';
             await this.#persist(record);
             this.#notifyUnresumable(record, error);
+            // waiting は上で（resume を挑む前に）既に空にしてある。
+            this.#retire(job.id);
           }
         }
       }
@@ -1530,8 +1541,14 @@ class Pool implements ManagerPool {
         // ある。台帳を終端状態へ落として、諦めを再起動の向こう側まで持たせる。
         record.job.status = 'lost';
         record.attached = false;
+        // **`waiting` は `closed` と揃えて畳む。** 現在の呼び出し元（`send` /
+        // `#reattach` / `#restoreJobs`）はどれも resume を投げる前に `waiting` を
+        // 空にしているので実害は無いはずだが、`#retire` で像ごと消す以上、
+        // 「消える時点で waiting が空である」を代入の数え上げに頼らせない。
+        record.waiting = [];
         await this.#persist(record);
         this.#notifyUnresumable(record, event.reason, 'session');
+        this.#retire(event.managerId);
         return;
       }
 
@@ -1541,6 +1558,9 @@ class Pool implements ManagerPool {
         record.attached = false;
         await this.#persist(record);
         if (event.status === 'failed') this.#emit(event.managerId, 'report', event.reason);
+        // **`closed` は runner 側の `RunnerSession#finish()` を通った印**であり、
+        // done / lost / failed のどれであれ、この委譲はもう走っていない。
+        this.#retire(event.managerId);
         return;
       }
 
@@ -1698,6 +1718,38 @@ class Pool implements ManagerPool {
       // 成功した場合の話であって、**失敗は台帳にも日誌にも跡を残さない**。
       noteDroppedRecord('ジョブ台帳', `job id=${record.job.id} status=${record.job.status}`, error);
     }
+  }
+
+  /**
+   * **本当に終わった**委譲の像を `#records` から外す。
+   *
+   * `ManagerRecord` の JSDoc は「像はマネージャーと一緒に消えるので寿命は元から
+   * 有限」と書いているが、その前提を実装のどこも守っていなかった —
+   * `#records` は委譲1本ごとに1件増え続け、`done` / `lost` / `failed` に着いても
+   * 一度も外れない（実測で6日に58本）。ここが唯一の出口である。
+   *
+   * **呼び方は「上限で古いものを捨てる」ではなく「終端したものを外す」。** 上限を
+   * 持たせると、走行中のマネージャーが増えただけで無関係な1本が押し出される形に
+   * なりうる — それは north_star 禁止2（実行回数・保持数の上限で能力を制限する）
+   * に触れる。ここは**状態遷移だけ**を契機にする。
+   *
+   * **消えるのはプロセス内の像だけ。** `Job` 本体は `#persist()` 済みなので
+   * `JobStore` に残る。`list()` はそこから summary を作り直せる（下記）ので、
+   * 一覧・`manager_report` の機能は落ちない。消えるのは `waiting`（＝もう
+   * 空である前提。呼び出し側が先に畳んでから呼ぶこと）・`asked`・`denied` の
+   * プロセス内だけの帳面である。**`denied` はそもそも起動をまたいで残らない
+   * 設計**（`denied` の JSDoc）なので、ここで早める分は「デーモンを作り直せば
+   * どうせ消える」ものが少し早く消えるだけで、性質は変わらない。
+   *
+   * **`send()` / `abort()` / 届いたイベントは困らない。** どれも
+   * `#records.get(managerId) ?? (await this.#load(managerId))` の形で、居なければ
+   * 台帳から作り直す経路を最初から持っている（`#load()`）。外した直後に
+   * `manager_send` が来ても、`#load()` が同じ形の像を作り直し、`sessionId` が
+   * 残っていれば `lost` / `failed` へ明示的に話しかけて起こし直す経路
+   * （`send()` の `!record.attached` 分岐）はそのまま通る。
+   */
+  #retire(managerId: string): void {
+    this.#records.delete(managerId);
   }
 
   async #journal(entry: JournalEntryInput): Promise<void> {

@@ -35,7 +35,7 @@ import {
   type RunnerManagerState,
   type RunnerResumeCommand,
 } from './runner-protocol.js';
-import type { InboxEvent, JournalEntry } from './schema.js';
+import type { InboxEvent, Job, JournalEntry } from './schema.js';
 import type { Stores } from './store.js';
 import {
   captureStderr,
@@ -1275,6 +1275,26 @@ function swappableRunner(runnerId = 'runner-primary') {
     workerWait(managerId: string, fields: Omit<WorkerWaitEvent, 'type' | 'managerId'>) {
       emit?.({ type: 'worker_wait', managerId, ...fields });
     },
+    /** runner 側でセッションが本当に閉じた（`RunnerSession#finish()` を通った）。 */
+    closed(managerId: string, status: 'done' | 'lost' | 'failed', reason: string) {
+      state.alive = state.alive.filter((s) => s.managerId !== managerId);
+      emit?.({ type: 'closed', managerId, status, reason });
+    },
+    /** 確認へ上げずにその場で止められた（分類器・deny 規則）。 */
+    denied(managerId: string, tool: string) {
+      emit?.({
+        type: 'permission_denied',
+        managerId,
+        toolUseId: `${tool}:test`,
+        tool,
+        input: {},
+        via: 'live',
+      });
+    },
+    /** 前のセッションを開き直せなかった（`recovered: false` なら仕事が止まる）。 */
+    resumeFailed(managerId: string, sessionId: string, reason: string, recovered: boolean) {
+      emit?.({ type: 'resume_failed', managerId, sessionId, reason, recovered });
+    },
   };
 }
 
@@ -1832,22 +1852,37 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     await s.pool.stop();
   });
 
-  it('台帳にしか無い終わった仕事を、取り直しのついでに live へ格上げしない', async () => {
+  it('台帳にしか無い終わった仕事の live は、reattach の巻き添えで変わらない', async () => {
     // ステータス判定より前に `#records` へ載せると、`list()` が終わった仕事まで
-    // `live: true` で見せる。クローンから見て「話しかけられる」のに、送ると必ず
-    // 失敗する相手が生まれる。
+    // `live: true` で見せる、という懸念そのものは正しい。だがここで確かめたいのは
+    // 「`#records` に無いなら常に `live: false`」ではない — その決め打ちは
+    // **`#retire`（終端した委譲を `#records` から外す）が入る前提でしか成り立たない
+    // 話だった。** 当時「台帳にしか無い」に落ちる経路は `session_id` が無い /
+    // `status: 'lost'` のものだけで、どちらも `isLive()` 自身が `false` を返すので
+    // 決め打ちと一致していた。`#retire` を足した後は、**`done` / `failed` で
+    // 終わった委譲も「台帳にしか無い」側へ普通に落ちる**（`session_id` が残って
+    // いれば `manager_send` で明示的に起こし直せる）。決め打ちの `false` のままだと
+    // 「完了した委譲について読めていた `live: true` が、外した瞬間に読めなくなる」
+    // というデグレードになるので、`list()` のフォールバックは `isLive()` で計算し
+    // 直すようにした（本体側の変更）。
+    //
+    // その上でこのテストが元々守っていたもの（`#reattach` の巻き添えで値が動かない
+    // こと）は生きている。`isLive()` は `attached` を見ず `job.sessionId` だけで
+    // 決まるので、reattach が触れなかったこの仕事の `live` は前後で変わらない。
     const stores = createMemoryStores();
     await stores.jobs.putJob({ ...runningJob, id: 'mgr-finished', status: 'done' });
     const fake = swappableRunner();
     const s = setup(undefined, { stores, runner: fake.runner });
 
     // `restore` を通さずに（＝台帳にしか無い状態で）器が入れ替わる。
-    await s.pool.list();
+    const before = (await s.pool.list()).find((m) => m.managerId === 'mgr-finished');
+    expect(before).toMatchObject({ status: 'done', live: true });
     fake.swap();
 
     await expect.poll(() => fake.state.listCalls, { timeout: 2000 }).toBeGreaterThan(0);
     expect(fake.state.resumes).toHaveLength(0);
-    expect((await s.pool.list()).find((m) => m.managerId === 'mgr-finished')?.live).toBe(false);
+    const after = (await s.pool.list()).find((m) => m.managerId === 'mgr-finished');
+    expect(after).toMatchObject({ status: 'done', live: true });
 
     await s.pool.stop();
   });
@@ -2847,6 +2882,221 @@ describe('一覧は、直近のターンが失敗で終わったことを落と�
     expect(listed?.lastFailure).toBeUndefined();
     // キーごと無いこと（`undefined` を入れた形と区別する）。
     expect(Object.hasOwn(listed as object, 'lastFailure')).toBe(false);
+
+    await s.pool.stop();
+  });
+});
+
+/**
+ * `#records`（デーモン側が持つマネージャーの像）の寿命。
+ *
+ * `ManagerRecord` の JSDoc は「像はマネージャーと一緒に消えるので寿命は元から
+ * 有限」と書いているが、`done` / `lost` / `failed` へ着いても外す経路が
+ * 一度も無かった（実測で6日に58本、外れずに増え続ける）。`#retire` がその
+ * 唯一の出口である。
+ *
+ * ここでは `#records` から外れたこと自体を、プロセス内だけに載る帳面
+ * （`denials()`。`Job` 側には無い）が空へ戻ることで観測する — `list()` /
+ * `manager_send` の出力は `#load()` が台帳から作り直すので、外れても外れなくても
+ * 同じに見える（それ自体が受け入れ条件でもある）。
+ */
+describe('#records の寿命（終端で外れる）', () => {
+  function job(id: string, overrides: Partial<Job> = {}): Job {
+    return {
+      id,
+      managerId: id,
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      status: 'running',
+      summary: '長い仕事',
+      request: 'DB の移行をやって',
+      cwd: '/work/project',
+      sessionId: `sess-${id}`,
+      runnerId: 'runner-test',
+      ...overrides,
+    };
+  }
+
+  (['done', 'lost', 'failed'] as const).forEach((status) => {
+    it(`closed（${status}）で #records から外れても、manager_list / manager_report は従来どおり答えられる（受け入れ条件）`, async () => {
+      const id = `mgr-closed-${status}`;
+      const stores = createMemoryStores();
+      await stores.jobs.putJob(job(id));
+      const fake = swappableRunner('runner-test');
+      fake.state.alive.push({
+        managerId: id,
+        status: 'running',
+        cwd: '/work/project',
+        request: 'DB の移行をやって',
+        waiting: [],
+        sessionId: `sess-${id}`,
+      });
+      const s = setup(undefined, { stores, runner: fake.runner });
+      await s.pool.restore();
+
+      // 走行中に拒否が積まれる（`denials()` が非空になる ＝ 像がまだ生きている証拠）。
+      fake.denied(id, 'Bash');
+      expect(s.pool.denials(id)).toEqual([{ tool: 'Bash', count: 1 }]);
+
+      // 本当に閉じる（`RunnerSession#finish()` を通った印）。
+      fake.closed(id, status, `終端: ${status}`);
+
+      // **`#records` から外れたことの外部から見える証拠。** `denied` はプロセス内
+      // だけの帳面で `Job` には書かない（起動をまたいでも残らない設計）ので、
+      // ここが空へ戻ることは「像そのものが消えた」ことを意味する。
+      await expect.poll(() => s.pool.denials(id), { timeout: 2000 }).toEqual([]);
+
+      // **それでも `manager_list` / `manager_report` は答えられる。** `Job` 本体は
+      // 台帳に残るので、`list()` は台帳から summary を作り直す。
+      const listed = (await s.pool.list()).find((m) => m.managerId === id);
+      expect(listed).toBeDefined();
+      expect(listed).toMatchObject({
+        status,
+        request: 'DB の移行をやって',
+        // `lost` だけは「戻れないと確認済み」なので `live: false` が正しい。
+        // `done` / `failed` は `session_id` が残っている限り明示的に起こし直せる
+        // ので `live: true`（`list()` のフォールバックを `isLive()` に直した分）。
+        live: status !== 'lost',
+      });
+
+      const transcript = await s.pool.transcript(id);
+      // 生ログを預かっていない fake runner でも、`transcript()` は「無い」で
+      // 応答できる（`#records` に無いことで例外にならない）ことだけを見る。
+      expect(transcript).toBeNull();
+
+      await s.pool.stop();
+    });
+  });
+
+  it('abort() で外れても、manager_list は従来どおり答えられる', async () => {
+    const id = 'mgr-aborted';
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job(id));
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push({
+      managerId: id,
+      status: 'running',
+      cwd: '/work/project',
+      request: 'DB の移行をやって',
+      waiting: [],
+      sessionId: `sess-${id}`,
+    });
+    const runner = {
+      ...fake.runner,
+      async stop(managerId: string) {
+        fake.state.alive = fake.state.alive.filter((s) => s.managerId !== managerId);
+      },
+    };
+    const s = setup(undefined, { stores, runner });
+    await s.pool.restore();
+
+    fake.denied(id, 'Edit');
+    expect(s.pool.denials(id)).toEqual([{ tool: 'Edit', count: 1 }]);
+
+    await s.pool.abort(id, '暴走したので');
+
+    expect(s.pool.denials(id)).toEqual([]);
+    const listed = (await s.pool.list()).find((m) => m.managerId === id);
+    expect(listed).toMatchObject({ status: 'done' });
+
+    await s.pool.stop();
+  });
+
+  it('resume_failed で lost になって外れても、manager_send で明示的に起こし直せる（送信の経路が壊れない）', async () => {
+    // 「lost へ明示的に話しかけて起こし直す経路」（`resume_failed` のコメント）が
+    // `#retire` の後でも通ることを見る。`#load()` が台帳から像を作り直し、
+    // `!record.attached` の分岐が resume を投げる。
+    const id = 'mgr-resume-failed-lost';
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job(id));
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push({
+      managerId: id,
+      status: 'running',
+      cwd: '/work/project',
+      request: 'DB の移行をやって',
+      waiting: [],
+      sessionId: `sess-${id}`,
+    });
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.denied(id, 'Bash');
+    expect(s.pool.denials(id)).toEqual([{ tool: 'Bash', count: 1 }]);
+
+    fake.resumeFailed(id, `sess-${id}`, '開き直せなかった', false);
+    await expect
+      .poll(async () => (await stores.jobs.listJobs()).find((j) => j.id === id)?.status, {
+        timeout: 2000,
+      })
+      .toBe('lost');
+    expect(s.pool.denials(id)).toEqual([]);
+
+    const result = await s.pool.send(id, '続けて');
+    expect(fake.state.resumes).toHaveLength(1);
+    expect(fake.state.resumes[0]).toMatchObject({ managerId: id, sessionId: `sess-${id}` });
+    expect(result.outcome).toBe('delivered');
+
+    await s.pool.stop();
+  });
+
+  it('reattach（runner 入れ替え）で挑み直しを諦めて lost になっても外れる', async () => {
+    // `#reattach` 側のもう1つの `lost` 化経路（`isRetryableRunnerError` が偽の
+    // resume 失敗）。ここも `#retire` の対象であることを確かめる。
+    const id = 'mgr-reattach-giveup';
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job(id));
+    const fake = swappableRunner('runner-test');
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.denied(id, 'Bash');
+    expect(s.pool.denials(id)).toEqual([{ tool: 'Bash', count: 1 }]);
+
+    fake.runner.resume = async () => {
+      throw new RunnerHttpError('runner POST resume が失敗した (400)', 400);
+    };
+    fake.swap();
+
+    await expect
+      .poll(async () => (await stores.jobs.listJobs()).find((j) => j.id === id)?.status, {
+        timeout: 2000,
+      })
+      .toBe('lost');
+    await expect.poll(() => s.pool.denials(id), { timeout: 2000 }).toEqual([]);
+
+    await s.pool.stop();
+  });
+
+  it('確認待ちが残っていても、閉じた（closed）後の /answer は宙に浮かず「解けない」と返る', async () => {
+    // 落とし穴1: 外した瞬間に、未解決の確認が残っているマネージャーへの
+    // `/answer` が通らなくなる形が無いか。`case 'closed'` は `#retire` の前から
+    // `record.waiting = []` を持ってから畳んでいる（`resume_failed` の `lost` 化
+    // 経路にも同じ形を足した）ので、答えは「待っていない」という明確な結果に
+    // なる（宙に浮いて黙って捨てられることはない）。
+    const id = 'mgr-ask-then-closed';
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job(id, { status: 'waiting_human' }));
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push({
+      managerId: id,
+      status: 'waiting_human',
+      cwd: '/work/project',
+      request: 'DB の移行をやって',
+      waiting: [{ requestId: 'req-9', summary: '許可して' }],
+      sessionId: `sess-${id}`,
+    });
+    const s = setup(undefined, { stores, runner: fake.runner });
+    // `restore()` が runner の `alive` から `waiting` をそのまま引き取る
+    // （`waiting_human` はホワイトリストに載っているので `attached: true`）。
+    await s.pool.restore();
+
+    // クローンが答える前に runner 側でセッションが閉じた。
+    fake.closed(id, 'lost', 'セッションが落ちた');
+
+    const result = await s.pool.send(id, '許可する', { requestId: 'req-9' });
+    expect(result.outcome).toBe('unknown');
+    expect(result.detail).toContain('待っていない');
 
     await s.pool.stop();
   });
