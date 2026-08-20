@@ -84,6 +84,24 @@ export const schedules = pgTable('schedules', {
 });
 
 /**
+ * 既定の仕込み（日報・発意 tick）の位相。
+ *
+ * **`schedules` と同じ表に入れないのは意図である。** あちらは人間とクローンが読み書き
+ * する「継続中の依頼」で、`schedule_list` はその `list()` を直に読む。既定の仕込みを
+ * 行として混ぜると、クローンからは依頼に見えて `schedule_remove` で消せてしまう
+ * （`schedulePhaseSchema` に同じことを書いてある）。
+ *
+ * 持つのは「前回いつ動いたか」だけで、本文も周期も無い。**これが無いと器を作り直す
+ * たびに位相が捨てられ、周期より短い間隔で再デプロイが続くと発意 tick が一度も
+ * 発火しない。**
+ */
+export const schedulePhases = pgTable('schedule_phases', {
+  kind: text('kind').primaryKey(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  phase: jsonb('phase').notNull(),
+});
+
+/**
  * 引き受けたまま終わっていない仕事の台帳（`store.ts` の `CommitmentStore`）。
  *
  * `id` が主キーなのは、**`open` の冪等性をここで強制するため**である。「select して

@@ -7,8 +7,10 @@ import type {
   MemoryDocument,
   MemoryDocumentMeta,
   PendingApproval,
+  SchedulePhase,
   ScheduledRequest,
 } from './schema.js';
+import { schedulePhaseSchema } from './schema.js';
 import type {
   AccessTokenRecord,
   AuthAccount,
@@ -93,6 +95,7 @@ export function createMemoryStores(): Stores {
   const jobs = new Map<string, Job>();
   const approvals = new Map<string, PendingApproval>();
   const schedules = new Map<string, ScheduledRequest>();
+  const schedulePhases = new Map<string, SchedulePhase>();
   const commitments = new Map<string, Commitment>();
   const archives = new Map<string, string>();
   const inboxStore = createMemoryInboxStore();
@@ -206,6 +209,14 @@ export function createMemoryStores(): Stores {
       const rest = { ...existing };
       delete rest.pendingRun;
       schedules.set(kind, cause === 'schedule' ? { ...rest, lastScheduledRunAt: at } : rest);
+    },
+    async getPhase(kind) {
+      return schedulePhases.get(kind) ?? null;
+    },
+    async putPhase(phase) {
+      // **本物と同じく parse を通す。** 通さないと、この足場でだけ通る形の位相を
+      // 書いたテストが緑になり、fs / pg では落ちる（動くのに嘘をつくスタブ）。
+      schedulePhases.set(phase.kind, schedulePhaseSchema.parse(phase));
     },
   };
 

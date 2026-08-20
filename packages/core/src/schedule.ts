@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { parseCron } from './cron.js';
-import type { InboxEvent, ScheduleSpec, ScheduledRequest } from './schema.js';
+import type { InboxEvent, SchedulePhase, ScheduleSpec, ScheduledRequest } from './schema.js';
 import type { JournalStore, ScheduleStore } from './store.js';
 
 /**
@@ -26,6 +26,18 @@ export interface ScheduleEntry {
   nextAt(after: Date): Date;
   /** 発火時に受信箱へ積むイベント。 */
   event(at: Date): InboxEvent;
+  /**
+   * 落ちていた間に過ぎた予定を、起き直したときに1回だけ拾うか（省略時は拾う）。
+   *
+   * **`daily_report` だけが `false` である。** あちらの拾い直しは
+   * `missingDailyReportDates`（このファイルの末尾。`apps/daemon/src/index.ts` が起動時に
+   * 呼ぶ）が既に持っていて、**日誌に記録がある日だけ**を対象にしている。ここでも拾うと
+   * 拾い直しの経路が2つになり、同じ日の日報が二重に立つ。
+   *
+   * **これは「起こさない」の設定ではない。** 過ぎていた分を今すぐ拾うかどうかだけで、
+   * 次の予定は変わらない（回数を絞る類の抑止ではない — AGENTS.md 地雷2）。
+   */
+  catchUpMissed?: boolean;
 }
 
 export interface ScheduleStatus {
@@ -60,6 +72,15 @@ export interface Scheduler {
    * 再起動した瞬間に依頼が消える。真実はストア側だけに置く。
    */
   refresh(): Promise<void>;
+  /**
+   * 位相の保存が終わるまで待つ。
+   *
+   * `tick()` / `run()` は同期だが、既定の仕込みの位相はストアへ書く（＝非同期）。
+   * **この seam が無いと「位相が保存されたか」をテストから確かめられない**
+   * （テストが書けない構造は、テストが無いのと同じである）。挙動は変えないので、
+   * 呼ばなくても時計は同じように回る。
+   */
+  settled(): Promise<void>;
 }
 
 export interface SchedulerOptions {
@@ -71,9 +92,20 @@ export interface SchedulerOptions {
   now?: () => Date;
   /**
    * 継続中の依頼の置き場。渡さなければ既定の定期ジョブだけが回る
-   * （`refresh()` は何もしない）。
+   * （`refresh()` は何もしない）。**既定の仕込みの位相もここに置く**ので、渡さない
+   * 構成では位相が引き継がれない（＝再起動のたびに `now + 周期` へ戻る）。
    */
   schedules?: ScheduleStore;
+  /**
+   * 位相を読めなかった・保存できなかったことを外へ出す口。
+   *
+   * **黙って落とさない。** 落ちても時計は止まらず、影響は「その回をもう一度起こす／
+   * 位相を1周期ぶん引き継げない」だけだが、出さないと `putPhase` が永久に失敗して
+   * いても誰も気づかない（`grep -c` の 0 が2つの意味を持つのと同じ形）。
+   * 省略時は stderr へ出す — **何もしない既定を置くと、渡し忘れた呼び出し側が
+   * 静かに失敗する道具に戻る。**
+   */
+  onError?: (message: string) => void;
 }
 
 /**
@@ -84,6 +116,30 @@ export interface SchedulerOptions {
  * （常駐は自律の前提なので、そこで止まるのは要件違反になる）。
  */
 const MAX_SLEEP_MS = 60_000;
+
+/**
+ * 錨（前回それで動いた時刻）から数えた次の予定。**現在時刻を基準にしない。**
+ *
+ * - 過ぎているなら「いま」（落ちていた間に取りこぼした分を**1回だけ**拾う。
+ *   溜まった回数ぶん撃たない）
+ * - まだなら本来の予定。ただし `nextAt(now)` より後ろにはしない — 時計のずれや
+ *   人為的に未来の日付が入った場合に永久に沈黙しないため（黙って止まるより遅れて
+ *   起きる方がよい）
+ *
+ * **継続中の依頼（`#firstDue`）と既定の仕込み（`#seedBase`）で同じ算術を使うために
+ * 切り出してある。** 2箇所に書くと片方だけ直され、「依頼では拾えるのに既定では
+ * 拾えない」が戻る（それがこの関数が生まれた原因の欠陥である）。
+ *
+ * 拾うかどうかの判断（`catchUpMissed`）は entry 側が持つ。
+ */
+function dueFromSeed(entry: ScheduleEntry, seed: Date, now: Date): Date {
+  const fromSeed = entry.nextAt(seed);
+  if (fromSeed.getTime() <= now.getTime()) {
+    // 拾い直しを別の経路が持っている場合（日報）は、ここでは撃たない。
+    return entry.catchUpMissed === false ? entry.nextAt(now) : now;
+  }
+  return new Date(Math.min(fromSeed.getTime(), entry.nextAt(now).getTime()));
+}
 
 export function createScheduler(options: SchedulerOptions): Scheduler {
   return new TimerScheduler(options);
@@ -114,12 +170,35 @@ class TimerScheduler implements Scheduler {
    * 二重の仕事になる）。
    */
   readonly #redelivered = new Map<string, string>();
+  readonly #onError: (message: string) => void;
+  /**
+   * 既定の仕込みの位相（ストアから読んだもの＋この器で進めた分）。
+   *
+   * 継続中の依頼はここに載せない（あちらの位相は `#requests` の `plan` が持つ）。
+   */
+  readonly #phases = new Map<string, SchedulePhase>();
+  /**
+   * 位相をストアから読み終えた既定の仕込み。**2度読まない。**
+   *
+   * `#reconcile()` はタイマーの刻みごとに走る（`#refreshQuietly`）。毎回読み直すと、
+   * **その刻みで進めた `#due` を古い位相で巻き戻す** ＝ 同じ回を刻みごとに撃ち続ける。
+   * 読めなかったときは印を付けないので、次の刻みでもう一度試す（瞬断で位相を
+   * 永久に捨てない）。
+   */
+  readonly #seeded = new Set<string>();
+  /** 位相の書き込み。**直列**に流す（同じ kind の前後関係が入れ替わらないように）。 */
+  #writes: Promise<void> = Promise.resolve();
 
-  constructor({ entries, post, now, schedules }: SchedulerOptions) {
+  constructor({ entries, post, now, schedules, onError }: SchedulerOptions) {
     this.#base = entries;
     this.#post = post;
     this.#now = now ?? (() => new Date());
     this.#store = schedules;
+    this.#onError =
+      onError ??
+      ((message): void => {
+        process.stderr.write(`alteroid: ${message}\n`);
+      });
   }
 
   start(): void {
@@ -142,12 +221,15 @@ class TimerScheduler implements Scheduler {
     const now = this.#now();
     return this.#entries().map((entry) => {
       const plan = this.#requests.get(entry.kind)?.plan;
+      // 既定の仕込みの前回時刻は位相が持つ（依頼のものは `plan` 側）。**ここが
+      // 空のままだと、再起動のたびに「まだ一度も動いていない」に見える。**
+      const lastRunAt = plan?.lastRunAt ?? this.#phases.get(entry.kind)?.lastRunAt;
       return {
         kind: entry.kind,
         description: entry.description,
         nextAt: new Date(this.#due.get(entry.kind) ?? entry.nextAt(now).getTime()).toISOString(),
         ...(plan === undefined ? {} : { request: plan.request }),
-        ...(plan?.lastRunAt === undefined ? {} : { lastRunAt: plan.lastRunAt }),
+        ...(lastRunAt === undefined ? {} : { lastRunAt }),
       };
     });
   }
@@ -155,12 +237,30 @@ class TimerScheduler implements Scheduler {
   run(kind: string): boolean {
     const entry = this.#entries().find((candidate) => candidate.kind === kind);
     if (!entry) return false;
-    const event = entry.event(this.#now());
+    const now = this.#now();
+    const event = entry.event(now);
+    // 手で起こした1回は観測用の時刻だけ動かす（定期の予定の基準は動かさない）。
+    this.#recordPhase(entry, now, 'manual');
     // **手で起こしたことを運ぶ。** 予定をずらさないのはここのメモリ上だけでは足りず、
     // 受け取った側が「定期の予定の基準」を手動実行の時刻へ動かさないことまで要る
     // （動かすと、次にデーモンを作り直した瞬間に位相がずれる）。
     this.#post(event.type === 'timer' ? { ...event, cause: 'manual' } : event);
     return true;
+  }
+
+  /**
+   * 保存中の書き込みが終わるまで待つ。
+   *
+   * 待っている間に新しい書き込みが積まれることがあるので、**増えなくなるまで**待つ。
+   * 最後の1本だけ待つ形にすると、`tick()` を2回続けたテストが1本目だけを見て通る。
+   */
+  async settled(): Promise<void> {
+    let chain = this.#writes;
+    for (;;) {
+      await chain;
+      if (this.#writes === chain) return;
+      chain = this.#writes;
+    }
   }
 
   /**
@@ -178,6 +278,8 @@ class TimerScheduler implements Scheduler {
 
   async #reconcile(): Promise<void> {
     if (this.#store === undefined) return;
+    // 既定の仕込みの位相を先に引き継ぐ（依頼の読み込みが落ちても位相は入る）。
+    await this.#seedBase();
     const plans = await this.#store.list();
     const now = this.#now();
     const seen = new Set<string>();
@@ -237,13 +339,81 @@ class TimerScheduler implements Scheduler {
     const seed = new Date(plan.lastScheduledRunAt ?? plan.createdAt);
     if (Number.isNaN(seed.getTime())) return entry.nextAt(now);
 
-    const fromSeed = entry.nextAt(seed);
-    // 過ぎている = 落ちていた間に取りこぼした
-    if (fromSeed.getTime() <= now.getTime()) return now;
-    // まだ来ていない = 本来の予定をそのまま守る。ただし、時計のずれや人為的に
-    // 未来の日付が入った場合に永久に沈黙しないよう、現在時刻から数えた次より
-    // 後ろにはしない（黙って止まるより遅れて起きる方がよい）。
-    return new Date(Math.min(fromSeed.getTime(), entry.nextAt(now).getTime()));
+    return dueFromSeed(entry, seed, now);
+  }
+
+  /**
+   * 既定の仕込み（日報・発意 tick）の位相を、器を作り直しても引き継ぐ。
+   *
+   * `start()` は既定の仕込みへ `now + 周期` を置くだけなので、これが無いと
+   * **再起動のたびに位相が捨てられる**（周期より短い間隔で器が入れ替わっていれば
+   * 一度も発火しない）。継続中の依頼について `#firstDue` が塞いでいる穴と同じもので、
+   * 既定の2件だけがストアに何も持っていなかったために残っていた。
+   *
+   * **1度読んだら読み直さない。** 理由は `#seeded` に書いてある。
+   */
+  async #seedBase(): Promise<void> {
+    const store = this.#store;
+    if (store === undefined) return;
+    for (const entry of this.#base) {
+      if (this.#seeded.has(entry.kind)) continue;
+      let phase: SchedulePhase | null;
+      try {
+        phase = await store.getPhase(entry.kind);
+      } catch (error) {
+        // 印を付けないので次の刻みでもう一度試す。**黙って諦めない。**
+        this.#onError(
+          `定期ジョブ ${entry.kind} の位相を読めなかった（次の刻みで読み直す）: ${String(error)}`,
+        );
+        continue;
+      }
+      this.#seeded.add(entry.kind);
+      if (phase === null) continue;
+      this.#phases.set(entry.kind, phase);
+      // 一度も定期で動いていないなら、位相は無いのと同じ（`start()` に任せる）。
+      if (phase.lastScheduledRunAt === undefined) continue;
+      const seed = new Date(phase.lastScheduledRunAt);
+      if (Number.isNaN(seed.getTime())) continue;
+      this.#due.set(entry.kind, dueFromSeed(entry, seed, this.#now()).getTime());
+    }
+  }
+
+  /**
+   * 既定の仕込みの位相を進める。**継続中の依頼には触らない**（あちらの位相は
+   * `claimRun` / `completeRun` がストア側で持っている）。
+   *
+   * `cause === 'manual'` では `lastScheduledRunAt` を動かさない（`run()` の
+   * 「定期の予定はずらさない」契約。混ぜると手動実行のたびに位相が動く）。
+   *
+   * **依頼側より弱いことを承知で発火の瞬間に進める。** 既定の仕込みには引き受けの印
+   * （`pendingRun`）が無いので、「引き受けたが終わっていない」を表せない。したがって
+   * 発火の直後に器が落ちると、**その1回は配り直されない**（1回少ない側へ倒れる）。
+   * ここを「完了時に進める」へ変えると、逆に完了を記録できないまま落ちた回が刻みごとに
+   * 撃たれ続ける（受け取る側から見て二重の仕事になる）。**強い側に見せないこと。**
+   */
+  #recordPhase(entry: ScheduleEntry, at: Date, cause: 'schedule' | 'manual'): void {
+    const store = this.#store;
+    if (store === undefined) return;
+    if (!this.#base.some((base) => base.kind === entry.kind)) return;
+
+    const stamp = at.toISOString();
+    const carried = this.#phases.get(entry.kind)?.lastScheduledRunAt;
+    const scheduled = cause === 'schedule' ? stamp : carried;
+    const phase: SchedulePhase = {
+      kind: entry.kind,
+      lastRunAt: stamp,
+      ...(scheduled === undefined ? {} : { lastScheduledRunAt: scheduled }),
+    };
+    this.#phases.set(entry.kind, phase);
+    this.#writes = this.#writes.then(async () => {
+      try {
+        await store.putPhase(phase);
+      } catch (error) {
+        this.#onError(
+          `定期ジョブ ${entry.kind} の位相を保存できなかった（この回を次の起動でもう一度起こす側に倒れる）: ${String(error)}`,
+        );
+      }
+    });
   }
 
   #entries(): ScheduleEntry[] {
@@ -282,6 +452,9 @@ class TimerScheduler implements Scheduler {
       // 取りこぼしなく繰り返し続ける（＝暴走する）ことがないように。
       this.#due.set(entry.kind, entry.nextAt(now).getTime());
       fired.push(entry.kind);
+      // 位相も post の前に進める（`#due` と同じ理由）。既定の仕込みだけが対象で、
+      // 失敗しても時計は止まらない（`#recordPhase` に倒れる向きを書いてある）。
+      this.#recordPhase(entry, now, 'schedule');
       this.#post(entry.event(now));
     }
     return fired;
@@ -422,6 +595,11 @@ export function dailyReportEntry(options: { at: TimeOfDay }): ScheduleEntry {
   return {
     kind: DAILY_REPORT_KIND,
     description: `毎日 ${label}（ローカル時刻）にその日の日報をまとめる`,
+    // **拾い直しはここではやらない。** 締め時刻を過ぎた日の後追いは
+    // `missingDailyReportDates` が持っていて、**日誌に記録がある日だけ**を対象に
+    // している（動いていなかった日に空の日報を積まないため）。両方で拾うと同じ日の
+    // 日報が二重に立つ ＝ 人間が読む唯一の層が汚れる。
+    catchUpMissed: false,
     nextAt(after) {
       const today = atTimeOnDay(after, at);
       if (today.getTime() > after.getTime()) return today;

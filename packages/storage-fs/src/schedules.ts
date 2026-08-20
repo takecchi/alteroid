@@ -1,12 +1,20 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { scheduledRequestSchema } from '@alteroid/core';
-import type { ScheduleStore, ScheduledRequest } from '@alteroid/core';
+import { schedulePhaseSchema, scheduledRequestSchema } from '@alteroid/core';
+import type { SchedulePhase, ScheduleStore, ScheduledRequest } from '@alteroid/core';
 import { z } from 'zod';
 
 const fileSchema = z.object({
   schedules: z.array(scheduledRequestSchema).default([]),
+  /**
+   * 既定の仕込み（日報・発意 tick）の位相。**依頼ではない**ので `list()` には出ない。
+   *
+   * 同じファイルに置いてあるのは、`#update` の排他区間を1本に保つためである
+   * （別ファイルにすると鎖が2本になり、片方だけ直列化されている状態が生まれる）。
+   * 既定 `[]` なので、この列が無い古いファイルもそのまま読める。
+   */
+  phases: z.array(schedulePhaseSchema).default([]),
 });
 
 type ScheduleFile = z.infer<typeof fileSchema>;
@@ -36,8 +44,11 @@ export class FsScheduleStore implements ScheduleStore {
   }
 
   async put(entry: ScheduledRequest): Promise<void> {
+    // **`...file` を落とさないこと。** 同じファイルに位相も入っているので、
+    // 書き換える列だけを差し替える（`{ schedules: ... }` だけを返すと位相が消える）。
     await this.#update((file) => ({
       next: {
+        ...file,
         schedules: [
           ...file.schedules.filter((existing) => existing.kind !== entry.kind),
           scheduledRequestSchema.parse(entry),
@@ -49,7 +60,24 @@ export class FsScheduleStore implements ScheduleStore {
 
   async remove(kind: string): Promise<void> {
     await this.#update((file) => ({
-      next: { schedules: file.schedules.filter((existing) => existing.kind !== kind) },
+      next: { ...file, schedules: file.schedules.filter((existing) => existing.kind !== kind) },
+      result: undefined,
+    }));
+  }
+
+  async getPhase(kind: string): Promise<SchedulePhase | null> {
+    return (await this.#read()).phases.find((phase) => phase.kind === kind) ?? null;
+  }
+
+  async putPhase(phase: SchedulePhase): Promise<void> {
+    await this.#update((file) => ({
+      next: {
+        ...file,
+        phases: [
+          ...file.phases.filter((existing) => existing.kind !== phase.kind),
+          schedulePhaseSchema.parse(phase),
+        ],
+      },
       result: undefined,
     }));
   }
@@ -75,6 +103,7 @@ export class FsScheduleStore implements ScheduleStore {
       }
       return {
         next: {
+          ...file,
           schedules: file.schedules.map((entry) =>
             entry.kind === kind
               ? // 引き受けた印と観測用の時刻だけ。定期の基準は `completeRun` で進める
@@ -92,6 +121,7 @@ export class FsScheduleStore implements ScheduleStore {
   async completeRun(kind: string, at: string, cause: 'schedule' | 'manual'): Promise<void> {
     await this.#update((file) => ({
       next: {
+        ...file,
         schedules: file.schedules.map((entry) => {
           // 別の発火の印が付いているなら触らない（後から来た発火のものを消さない）
           if (entry.kind !== kind || entry.pendingRun?.at !== at) return entry;
@@ -110,7 +140,7 @@ export class FsScheduleStore implements ScheduleStore {
       const raw = await readFile(this.#path, 'utf8');
       return fileSchema.parse(JSON.parse(raw));
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { schedules: [] };
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { schedules: [], phases: [] };
       throw error;
     }
   }

@@ -36,6 +36,18 @@ describe('migrate', () => {
 
     expect((await stores.persona.read('values'))?.content).toContain('価値観');
   });
+
+  it('既にある DB へ当て直しても、記録済みの位相を消さない', async () => {
+    await stores.schedules.putPhase({
+      kind: 'self_initiative',
+      lastScheduledRunAt: '2026-08-12T01:00:00.000Z',
+    });
+    await migrate(db);
+
+    expect((await stores.schedules.getPhase('self_initiative'))?.lastScheduledRunAt).toBe(
+      '2026-08-12T01:00:00.000Z',
+    );
+  });
 });
 
 describe('seedPgWorkspace', () => {
@@ -277,6 +289,62 @@ describe('PgScheduleStore', () => {
     createdAt: '2026-08-12T00:00:00.000Z',
     updatedAt: '2026-08-12T00:00:00.000Z',
   };
+
+  it('既定の仕込みの位相は読み戻せる（fs 版と同じ振る舞い）', async () => {
+    await stores.schedules.putPhase({
+      kind: 'self_initiative',
+      lastRunAt: '2026-08-12T01:00:00.000Z',
+      lastScheduledRunAt: '2026-08-12T01:00:00.000Z',
+    });
+
+    expect(await stores.schedules.getPhase('self_initiative')).toEqual({
+      kind: 'self_initiative',
+      lastRunAt: '2026-08-12T01:00:00.000Z',
+      lastScheduledRunAt: '2026-08-12T01:00:00.000Z',
+    });
+    expect(await stores.schedules.getPhase('daily_report')).toBeNull();
+  });
+
+  it('位相は継続中の依頼の一覧に現れない（クローンから消せる依頼に化けない）', async () => {
+    await stores.schedules.putPhase({
+      kind: 'self_initiative',
+      lastScheduledRunAt: '2026-08-12T01:00:00.000Z',
+    });
+
+    expect(await stores.schedules.list()).toEqual([]);
+    expect(await stores.schedules.get('self_initiative')).toBeNull();
+  });
+
+  it('同じ kind の位相は置き換わる（別表なので依頼とは干渉しない）', async () => {
+    await stores.schedules.put(plan);
+    await stores.schedules.putPhase({
+      kind: 'self_initiative',
+      lastScheduledRunAt: '2026-08-12T01:00:00.000Z',
+    });
+    await stores.schedules.putPhase({
+      kind: 'self_initiative',
+      lastScheduledRunAt: '2026-08-12T02:00:00.000Z',
+    });
+    await stores.schedules.remove('issue-round');
+
+    expect((await stores.schedules.getPhase('self_initiative'))?.lastScheduledRunAt).toBe(
+      '2026-08-12T02:00:00.000Z',
+    );
+  });
+
+  it('読めない形の位相は投げる（「まだ動いていない」と混ぜない）', async () => {
+    await stores.schedules.putPhase({
+      kind: 'self_initiative',
+      lastScheduledRunAt: '2026-08-12T01:00:00.000Z',
+    });
+    await db.execute(
+      sql`update schedule_phases set phase = '{"kind":"self_initiative","lastScheduledRunAt":"きのう"}'::jsonb where kind = 'self_initiative'`,
+    );
+
+    await expect(stores.schedules.getPhase('self_initiative')).rejects.toThrow(
+      /読めない形で入っている/,
+    );
+  });
 
   it('仕込んだ依頼は読み戻せる（fs 版と同じ振る舞い）', async () => {
     await stores.schedules.put(plan);
