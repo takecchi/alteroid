@@ -90,6 +90,20 @@ describe('枠（利用上限）で待たされた発言の返信は、同じタ�
      */
     let retried = false;
 
+    /**
+     * 再試行の返信が日誌へ載ったという合図を流す許可。**順序を時計で作らない。**
+     *
+     * 以前は `delayMs: 150` で「`/chat` の往復が終わってから」を作っていたが、
+     * それは待つ相手が 150ms 以内に終わるという賭けである。追い越されると
+     * 無効化は `retried` を立てる前に届き、取り直した履歴に返信が無いまま
+     * 二度目の無効化も来ないので、下の `waitFor` が 3 秒待って落ちる。
+     * `retried` を倒した後にテストが開ける形にする。
+     */
+    let releaseRetryNotice: () => void = () => {};
+    const retryNoticeReleased = new Promise<void>((resolve) => {
+      releaseRetryNotice = resolve;
+    });
+
     const route: Route = (url, init) => {
       if (url.endsWith('/journal/stream')) {
         return sse(
@@ -108,10 +122,12 @@ describe('枠（利用上限）で待たされた発言の返信は、同じタ�
                 text: DELAYED_REPLY,
                 conversationId: CONVERSATION_ID,
               },
+              // `/chat` の往復が終わり、サーバ側で再試行が済んだ体になってから
+              // 届かせる（上の `releaseRetryNotice` の doc）。
+              after: retryNoticeReleased,
             },
           ],
-          // `/chat` の往復（既定 delayMs=5）が終わってから届かせる。
-          { keepOpen: true, delayMs: 150, signal: init?.signal },
+          { keepOpen: true, signal: init?.signal },
         );
       }
       if (url.endsWith('/chat')) {
@@ -153,13 +169,24 @@ describe('枠（利用上限）で待たされた発言の返信は、同じタ�
     renderChat('/chat');
     await send('待たされる発言');
 
-    // 枠に当たったことは画面に出ている（`usage_limited` の行）。
-    await screen.findByText(new RegExp('利用上限に当たった'));
+    // 枠に当たったことは画面に出ている（`usage_limited` の**行**）。
+    //
+    // **やりとりの中に限って探す。** 同じ文言は直後の `error` 枠で
+    // `ErrorNote`（入力欄の上。`chat.tsx` の `<ErrorNote error={failure}>`）にも
+    // 出るので、画面全体から素の `findByText` で探すと、両方描かれた時点で
+    // 「複数見つかった」で落ちる — CI で落ちたのはこれである。ここで確かめたいの
+    // は**残る行**として積まれたこと（`chat.tsx` の `case 'usage_limited'` の doc
+    // 「`ask_human` と同じ残る行として積む」）なので、探す先を絞るのが正しい。
+    await within(transcript()).findByText(new RegExp('利用上限に当たった'));
+    // 終端の `error` も届いて `ErrorNote` に出る（同じ文言が2か所に出ることは
+    // 仕様である。上のスコープはそれを避けるためであって、片方を消さない）。
+    await screen.findByRole('alert');
     // この時点では返信は無い。
     expect(within(transcript()).queryAllByText(DELAYED_REPLY)).toHaveLength(0);
 
     // ここから先はサーバ側の出来事（枠が開いて再試行が成功した）。
     retried = true;
+    releaseRetryNotice();
 
     // **画面には何も触らない。** 遅れて届いた `exchange` が無効化を起こし、
     // 履歴が取り直されて返信が出る、までを待つ。
