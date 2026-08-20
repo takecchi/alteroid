@@ -151,9 +151,25 @@ export function json(body: unknown, status = 200): Response {
  * `delayMs` を入れているのは、**受信の途中で起きること**（`open` を受けて URL を
  * 揃える等）を再現するため。1フレームずつ間を空けないと、React が1回の描画で
  * まとめてしまい、途中で作り直しが起きるかどうかを試験できない。
+ *
+ * **「別の経路が終わってから届かせる」を `delayMs` で作らないこと。** それは
+ * 時計への賭けであって順序の指定ではない — 待つ相手（画面の往復・SWR の再取得）
+ * が遅い実行環境では追い越され、テストが**筋書きの前で**落ちる（実際に CI で
+ * 2本落ちた）。順序が要るときは枠ごとの `after` に待つものを渡す。
  */
 export function sse(
-  frames: { event: string; data: unknown }[],
+  frames: {
+    event: string;
+    data: unknown;
+    /**
+     * この枠を流す前に待つもの。**テスト側が解決する**ので、届く順序が実行環境
+     * の速さから切り離される（`delayMs` と違って追い越されない）。
+     *
+     * 中断（`signal`）が来たらこの待ちも打ち切る — 解決されないまま
+     * `keepOpen` の枠を待ち続けると、後片付けの済んだテストの中に居残る。
+     */
+    after?: PromiseLike<unknown>;
+  }[],
   options: {
     delayMs?: number;
     /**
@@ -183,7 +199,19 @@ export function sse(
       };
       signal?.addEventListener('abort', stop, { once: true });
 
+      // 中断されたことを `await` の相手にできる形で持つ（`after` の待ちを
+      // 打ち切るために要る）。中断が来なければ解決しない。
+      const abortedPromise = new Promise<void>((resolve) => {
+        if (signal === null || signal === undefined) return;
+        if (signal.aborted) resolve();
+        else signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+
       for (const frame of frames) {
+        if (frame.after !== undefined) {
+          await Promise.race([frame.after, abortedPromise]);
+          if (aborted) return;
+        }
         await new Promise((resolve) => setTimeout(resolve, delayMs));
         if (aborted) return;
         controller.enqueue(

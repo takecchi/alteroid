@@ -108,6 +108,22 @@ async function setUpExistingConversationWithLiveInvalidation(): Promise<{
 }> {
   let afterSend = false;
 
+  /**
+   * 無効化の合図（`exchange`）を流す許可。**この順序を時計で作らない。**
+   *
+   * ここで要るのは「送受信が終わり、サーバ側が発言と返信を日誌へ載せた体に
+   * なった**後**で無効化が届く」ことである。以前は `delayMs: 120` で待って
+   * いたが、それは待つ相手（`/chat` の往復と再描画）が 120ms 以内に終わると
+   * いう賭けで、CI の実行環境では追い越された — 無効化が先に届くと再取得は
+   * `afterSend` を立てる前に済んでしまい、下の「再取得が起きたこと」を確かめる
+   * 番人が永久に満たされずタイムアウトする（それが CI の
+   * `expected 2 to be greater than 2`）。テスト側が明示的に開ける。
+   */
+  let releaseInvalidation: () => void = () => {};
+  const invalidationReleased = new Promise<void>((resolve) => {
+    releaseInvalidation = resolve;
+  });
+
   const route: Route = (url, init) => {
     // `AuthedShell` と同じ経路。ここが本題（`exchange(with:'human')` を
     // 届けて `conversation` バケットを無効化させる）。
@@ -126,11 +142,11 @@ async function setUpExistingConversationWithLiveInvalidation(): Promise<{
               text: '追加の発言',
               conversationId: CONVERSATION_ID,
             },
+            // `/chat` 側の送受信が終わり、サーバ側の状態を倒したあとで届かせる。
+            after: invalidationReleased,
           },
         ],
-        // `/chat` 側の送受信（既定 delayMs=5）が確実に終わったあとに届くよう、
-        // 大きめの間隔を空ける。
-        { keepOpen: true, delayMs: 120, signal: init?.signal },
+        { keepOpen: true, signal: init?.signal },
       );
     }
     if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
@@ -188,6 +204,9 @@ async function setUpExistingConversationWithLiveInvalidation(): Promise<{
   // SSE の応答終了より前後どちらでも先に日誌へ載っている）。
   afterSend = true;
   const detailFetchesBefore = detailFetchCount();
+
+  // ここまで整ってから無効化を届かせる（上の `releaseInvalidation` の doc）。
+  releaseInvalidation();
 
   // `journal/stream` の `exchange(with:'human')` が届き、`conversation`
   // バケットが無効化されて再取得されるまで待つ（`use-journal-live.ts` の
