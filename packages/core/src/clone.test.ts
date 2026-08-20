@@ -75,7 +75,22 @@ function fakeSdk(
      * 解除は「何回目の再試行か」で結果が変わる場面を検証する必要があり、
      * `resultSubtype` / `resultText` だけでは全ターンが同じ結果に固定される。
      */
-    resultFor?: (turnIndex: number) => { subtype?: string; text?: string } | undefined;
+    resultFor?: (
+      turnIndex: number,
+    ) => { subtype?: string; text?: string; isError?: boolean } | undefined;
+    /**
+     * そのターンの `assistant` メッセージに SDK の失敗の印
+     * （`SDKAssistantMessage.error`）を載せ、本文を差し替える。
+     *
+     * **これが実機で起きた形である。** 支出上限の文言は `result` ではなく
+     * `assistant` メッセージの text ブロックとして届き、`error: 'billing_error'`
+     * が付いていた（`sdk-failure.ts` の doc）。この口が無いと、その経路を
+     * 1本も通せない ＝ 実際に起きた壊れ方を再現できない。
+     *
+     * **固定値のスタブにしない**（`modelUsage` / `resultFor` と同じ理由）。
+     * 呼ばなければ既存の振る舞いは1つも変わらない。
+     */
+    assistantErrorAt?: (turnIndex: number) => { error: string; text: string } | undefined;
     /**
      * ターンの `assistant` より前に `rate_limit_event` を差し込む。返り値が
      * `undefined` ならそのターンには出さない。**枠の検知（`rate_limit_event`
@@ -169,12 +184,16 @@ function fakeSdk(
         } as unknown as SDKMessage;
       }
       for (const message of options.beforeAssistant?.(callIndex) ?? []) yield message;
+      // 失敗の印が付く回は、本文もその印のもの（上限の文言など）に差し替わる。
+      // **無印の本文と両方を流さない** — 実機では印付きの1本だけが来る。
+      const assistantError = options.assistantErrorAt?.(turnIndex);
       yield {
         type: 'assistant',
-        message: { content: [{ type: 'text', text }] },
+        message: { content: [{ type: 'text', text: assistantError?.text ?? text }] },
         parent_tool_use_id: null,
         session_id: 'sess-fake',
         uuid: 'uuid-assistant',
+        ...(assistantError === undefined ? {} : { error: assistantError.error }),
       } as unknown as SDKMessage;
       const modelUsage = options.modelUsage?.(callIndex);
       const resultOverride = options.resultFor?.(turnIndex);
@@ -185,6 +204,7 @@ function fakeSdk(
         result: resultOverride?.text ?? options.resultText ?? text,
         session_id: 'sess-fake',
         uuid: 'uuid-result',
+        ...(resultOverride?.isError === undefined ? {} : { is_error: resultOverride.isError }),
         ...(modelUsage === undefined ? {} : { modelUsage }),
         ...(denials === undefined ? {} : { permission_denials: denials }),
       } as unknown as SDKMessage;
@@ -3678,5 +3698,234 @@ describe('クローン — 枠が回復した後の返信は、人間の側か�
     expect(brokenNotice).not.toContain('試し直');
     expect(brokenNotice).not.toContain('内部で何かが壊れた');
     await broken.clone.stop();
+  });
+});
+
+/**
+ * **エラーが「応答」として保存される穴**（この改修の本体）。
+ *
+ * 実際に起きた壊れ方は、日報の本文が丸ごとこれになっていた、というものである。
+ *
+ * ```
+ * You've hit your org's monthly spend limit · ask your admin to raise it at claude.ai/settings/usage?from=cc_cli_limit_message
+ * ```
+ *
+ * 経路は3つ重なっていた（`sdk-failure.ts` の doc）。
+ *
+ * 1. `assistant.error`（SDK が「これは応答ではない」と付ける印）を1度も見ておらず、
+ *    text ブロックを無条件に `turn.text` へ足していた
+ * 2. `isSuccessResult` が `subtype === 'success'` だけを見ており、`is_error: true`
+ *    を成功として通していた
+ * 3. `#runTurn` の戻り値が `string` 一本で成否を運ばず、日報はそれを本文にした
+ *
+ * **さらに、失敗したときに書かれた1件が再試行を殺していた** — 上限の合図は保持
+ * されて配り直されるのに、その1件があるせいで `#dailyReport` の早期 return と
+ * `missingDailyReportDates` の両方が「もう書いた」と判断する。
+ *
+ * だからここで見るのは4つである。
+ *
+ * - エラーの文言が日報の本文にならないこと
+ * - **枠で保持している回は日報の行を1つも書かないこと**（再試行を殺さない）
+ * - 枠ではない失敗では `unavailable` の印付きで書き、印の行は「日報がある」と
+ *   数えないこと
+ * - `assistant.error` / `is_error` のどちらの経路でも、本文が応答にならないこと
+ */
+describe('クローン — SDK のエラーを応答として扱わない（日報がエラー文になる穴）', () => {
+  /** 実機で観測された文言そのまま（`USAGE_LIMIT_ERROR_PREFIXES` の1つめに当たる）。 */
+  const orgSpendLimit =
+    "You've hit your org's monthly spend limit · ask your admin to raise it at claude.ai/settings/usage?from=cc_cli_limit_message";
+
+  function postDailyReport(clone: CloneHost, date: string): void {
+    clone.post({
+      type: 'timer',
+      id: `evt-timer-${date}`,
+      at: new Date().toISOString(),
+      kind: 'daily_report',
+      target: date,
+    });
+  }
+
+  const reportsOf = async (stores: Stores) =>
+    (await stores.journal.list({ types: ['daily_report'] })) as {
+      type: 'daily_report';
+      date: string;
+      body: string;
+      unavailable?: string;
+    }[];
+
+  it('assistant.error が付いた本文は日報にならず、枠で保持している回は日報の行を1つも書かない', async () => {
+    // 実機の形: 上限の文言は `assistant` メッセージとして届き、`error` が付く。
+    // `result` は `subtype: 'success'` で返る（`is_error` も立たない）ので、
+    // **印を見ないと成功と区別が付かない**回である。
+    const s = setup(() => 'ここは日報の本文になってはいけない', createMemoryStores(), {
+      assistantErrorAt: () => ({ error: 'billing_error', text: orgSpendLimit }),
+    });
+
+    postDailyReport(s.clone, '2026-08-19');
+
+    // ターンが畳まれたことを、失敗の記録で確かめる（`#reportFailure` の内部ターン側）。
+    await waitFor(async () => {
+      const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as {
+        with: string;
+        text: string;
+      }[];
+      return exchanges.some(
+        (entry) => entry.with === 'self' && entry.text.startsWith('内部ターンが失敗した'),
+      );
+    }, '日報のターンが失敗として記録される');
+
+    // **枠で保持しているので、日報の行は1件も無い。** ここに印だけでも書くと、
+    // 配り直しで走り直したときに早期 return して本物が永久に書かれない。
+    expect(await reportsOf(s.stores)).toHaveLength(0);
+
+    // 失敗の記録には SDK の文言がそのまま残る（人間が検索できる形）。
+    const failures = (
+      (await s.stores.journal.list({ types: ['exchange'] })) as { with: string; text: string }[]
+    ).filter((entry) => entry.text.startsWith('内部ターンが失敗した'));
+    expect(failures[0]?.text).toContain(orgSpendLimit);
+    expect(failures[0]?.text).toContain('billing_error');
+    // どの印で分かったかも残す（次に掘り始める位置が違う）。
+    expect(failures[0]?.text).toContain('assistant_error');
+
+    // 上限として分類され、保持へ切り替わっている（枠の知らせが日誌にある）。
+    const notices = (
+      (await s.stores.journal.list({ types: ['exchange'] })) as { with: string; text: string }[]
+    ).filter((entry) => entry.text.startsWith('利用上限に当たった'));
+    expect(notices).toHaveLength(1);
+    expect(notices[0]?.text).toContain(orgSpendLimit);
+
+    await s.clone.stop();
+  });
+
+  it('subtype:success でも is_error が立っていれば応答として扱わない', async () => {
+    // `isSuccessResult`（台帳の問い）は `subtype === 'success'` だけを見るので、
+    // この回を成功として通す。**応答の問いは `isAnsweredResult` が答える。**
+    const s = setup(() => 'これも日報の本文になってはいけない', createMemoryStores(), {
+      resultFor: () => ({ subtype: 'success', text: orgSpendLimit, isError: true }),
+    });
+
+    postDailyReport(s.clone, '2026-08-19');
+
+    await waitFor(async () => {
+      const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as {
+        with: string;
+        text: string;
+      }[];
+      return exchanges.some(
+        (entry) => entry.with === 'self' && entry.text.startsWith('内部ターンが失敗した'),
+      );
+    }, '日報のターンが失敗として記録される');
+
+    // 枠として分類されるので保持側。日報は書かれない。
+    expect(await reportsOf(s.stores)).toHaveLength(0);
+
+    const failures = (
+      (await s.stores.journal.list({ types: ['exchange'] })) as { with: string; text: string }[]
+    ).filter((entry) => entry.text.startsWith('内部ターンが失敗した'));
+    // `subtype` が `success` のまま失敗した回だと分かる形で残っていること。
+    expect(failures[0]?.text).toContain('result_is_error');
+
+    await s.clone.stop();
+  });
+
+  it('枠ではない失敗では unavailable の印付きで書き、印の行は「日報がある」と数えない', async () => {
+    const stores = createMemoryStores();
+    const s = setup(() => '部分的に出ていた本文', stores, {
+      // 枠ではない失敗（`classifyUsageNotice` に当たらない文言）。**保持しない**
+      // ので、日報が無い日を作らないために印付きの行を書く側になる。
+      resultFor: () => ({ subtype: 'error_during_execution', text: '内部で何かが壊れた' }),
+    });
+
+    postDailyReport(s.clone, '2026-08-19');
+
+    await waitFor(async () => (await reportsOf(stores)).length === 1, '印付きの行が書かれる');
+    const placeholder = (await reportsOf(stores))[0];
+    // **本文がエラー文そのものになっていない**（ここが直った点）。
+    expect(placeholder?.body).not.toBe('内部で何かが壊れた');
+    expect(placeholder?.body).toContain('作れなかった');
+    // 理由は落とさない（人間が掘るときの手がかり）。
+    expect(placeholder?.unavailable).toContain('内部で何かが壊れた');
+    await s.clone.stop();
+
+    // 同じ日をもう一度締める。**印の行は「日報がある」と数えないので、本物が書ける。**
+    const again = setup(() => '今日はログイン周りを直した。保留は無い。', stores);
+    postDailyReport(again.clone, '2026-08-19');
+    await waitFor(async () => {
+      const reports = await reportsOf(stores);
+      return reports.some((entry) => entry.unavailable === undefined);
+    }, '後から本物の日報が書ける');
+
+    const written = (await reportsOf(stores)).filter((entry) => entry.unavailable === undefined);
+    expect(written).toHaveLength(1);
+    expect(written[0]?.body).toContain('ログイン周り');
+    await again.clone.stop();
+  });
+
+  it('本物の日報が既にある日は、失敗しても印の行を足さない', async () => {
+    const stores = createMemoryStores();
+    await stores.journal.append({
+      type: 'daily_report',
+      date: '2026-08-19',
+      body: 'クローンが道具で書いた日報',
+    });
+
+    // 道具で書いた**後に**ターンが失敗した回（`daily_report_write` は成功した
+    // のに result が失敗で返る、はありうる）。印を足すと、人間が読む唯一の層に
+    // 「作れなかった」が並んで見える。
+    const s = setup(() => '書いておいた', stores, {
+      resultFor: () => ({ subtype: 'error_during_execution', text: '内部で何かが壊れた' }),
+    });
+    postDailyReport(s.clone, '2026-08-19');
+
+    await waitFor(async () => {
+      const exchanges = (await stores.journal.list({ types: ['exchange'] })) as {
+        with: string;
+        text: string;
+      }[];
+      return exchanges.some(
+        (entry) => entry.with === 'self' && entry.text.startsWith('内部ターンが失敗した'),
+      );
+    }, 'ターンが失敗として記録される');
+
+    const reports = await reportsOf(stores);
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.unavailable).toBeUndefined();
+    await s.clone.stop();
+  });
+
+  it('成功したターンでは印を付けない（この機構が普段の日報を壊していないこと）', async () => {
+    const s = setup(() => '今日はログイン周りを直した。保留は無い。');
+    postDailyReport(s.clone, '2026-08-19');
+
+    await waitFor(async () => (await reportsOf(s.stores)).length === 1, '日報が書かれる');
+    const report = (await reportsOf(s.stores))[0];
+    expect(report?.unavailable).toBeUndefined();
+    expect(report?.body).toContain('ログイン周り');
+    await s.clone.stop();
+  });
+
+  it('組織方針で止められた回も日誌に残る（待たないが、記録はする）', async () => {
+    // `ORG_POLICY_LIMIT_PREFIXES` の文言。**利用上限とは別**で、待っても直らない。
+    // 直す前はここで早期 return していたので、日誌に1行も残らなかった。
+    const orgPolicy = 'This service is disabled for your organization';
+    const s = setup(() => 'なにか', createMemoryStores(), {
+      resultFor: () => ({ subtype: 'error_during_execution', text: orgPolicy }),
+    });
+
+    s.clone.post(humanMessage('一件目'));
+
+    await waitFor(async () => {
+      const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as {
+        text: string;
+      }[];
+      return exchanges.some((entry) => entry.text.startsWith('組織の方針で止められている'));
+    }, '組織方針の知らせが日誌に残る');
+
+    // **待たない**（保持しない）ことは変えていない。枠として保持していたら、
+    // 人間の発言が未読のまま溜まり続ける。
+    const notices = s.events.filter((event) => event.type === 'usage_limited');
+    expect(notices).toHaveLength(0);
+
+    await s.clone.stop();
   });
 });

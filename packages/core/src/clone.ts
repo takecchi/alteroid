@@ -79,7 +79,6 @@ import {
 } from './usage-limits.js';
 import {
   assistantFailureOf,
-  isAnsweredResult,
   resultErrorLines,
   resultFailureOf,
   type SdkFailure,
