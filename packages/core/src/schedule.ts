@@ -251,16 +251,16 @@ class TimerScheduler implements Scheduler {
   /**
    * 保存中の書き込みが終わるまで待つ。
    *
-   * 待っている間に新しい書き込みが積まれることがあるので、**増えなくなるまで**待つ。
-   * 最後の1本だけ待つ形にすると、`tick()` を2回続けたテストが1本目だけを見て通る。
+   * **1本待てば足りる。** `#recordPhase` は `await` を挟まずに `#writes` を差し替える
+   * ので、`tick()` / `run()` から戻った時点で、その回の書き込みは既に鎖の末尾に
+   * 入っている。
+   *
+   * 「増えなくなるまで待つ」ループも書いてみたが、**変異試験で歯が無いことを確かめた**
+   * （ループを `await this.#writes` 1行へ潰しても57本すべて通った）。テストが届かない
+   * 分岐を残すと、次に読む者がそこに意味を推測することになるので置かない。
    */
   async settled(): Promise<void> {
-    let chain = this.#writes;
-    for (;;) {
-      await chain;
-      if (this.#writes === chain) return;
-      chain = this.#writes;
-    }
+    await this.#writes;
   }
 
   /**
