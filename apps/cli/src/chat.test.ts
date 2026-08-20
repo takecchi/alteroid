@@ -182,7 +182,15 @@ function commitment(over: Partial<Commitment> = {}): Commitment {
  * 経路と応答の形が実在することを保証しているのは**型検査のほう**である。ここで
  * 固定するのは「どの経路へ、どんな引数で行くか」だけ。
  */
-function stubClient(options: { commitments?: Commitment[]; closeStatus?: number } = {}) {
+function stubClient(
+  options: {
+    commitments?: Commitment[];
+    closeStatus?: number;
+    /** `DELETE /managers/:id` の応答。既定は「止めた」。 */
+    abortStatus?: number;
+    abortBody?: unknown;
+  } = {},
+) {
   const calls: { route: string; args: unknown }[] = [];
   const reply = (status: number, body: unknown) => ({
     ok: status >= 200 && status < 300,
@@ -191,6 +199,19 @@ function stubClient(options: { commitments?: Commitment[]; closeStatus?: number 
   });
 
   const client = {
+    managers: {
+      ':id': {
+        $delete: (args: unknown) => {
+          calls.push({ route: 'DELETE /managers/:id', args });
+          return Promise.resolve(
+            reply(
+              options.abortStatus ?? 200,
+              options.abortBody ?? { outcome: 'stopped', detail: 'mgr-1 を止めた' },
+            ),
+          );
+        },
+      },
+    },
     commitments: {
       $get: (args: unknown) => {
         calls.push({ route: 'GET /commitments', args });
@@ -441,5 +462,81 @@ describe('chat の台帳コマンド', () => {
     expect(text).toContain('/commitments');
     expect(text).toContain('/commit ');
     expect(text).toContain('/done ');
+  });
+});
+
+/**
+ * 委譲を**止める**手が CLI にもあること。
+ *
+ * PRD「インターフェース」は3面（CLI・HTTP API・Web UI）で同じことができると
+ * 書いており、起こせることの列挙に「委譲の停止」がある。読めるのに止められない面が
+ * あると、その面の人間は器ごと落とすしかなくなる — **関係の無い仕事まで道連れに
+ * なる**ので、それは代替手段ではない（`DELETE /managers/:id` の description が
+ * 書いている、この口の存在理由そのもの）。
+ */
+describe('chat の /stop', () => {
+  it('id を指定すると、その1本だけを止める', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand('/stop mgr-1', client, emptyListed());
+
+    expect(calls).toEqual([
+      { route: 'DELETE /managers/:id', args: { param: { id: 'mgr-1' }, json: {} } },
+    ]);
+    // 器の応答をそのまま出す（「止めた」と言い換えない）。
+    expect(read()).toContain('stopped: mgr-1 を止めた');
+  });
+
+  it('理由を書けば、そのまま送る（日誌に「なぜ」が残る）', async () => {
+    captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand('/stop mgr-1 同じ issue に2本立っている', client, emptyListed());
+
+    expect(calls[0]?.args).toEqual({
+      param: { id: 'mgr-1' },
+      json: { reason: '同じ issue に2本立っている' },
+    });
+  });
+
+  it('理由を書かなければ、空文字を送らない（書き忘れと区別が付かなくなる）', async () => {
+    captureStdout();
+    const { calls, client } = stubClient();
+
+    // 余分な空白だけを渡しても、`reason` は付かない。
+    await runSlashCommand('/stop mgr-1    ', client, emptyListed());
+
+    expect(calls[0]?.args).toEqual({ param: { id: 'mgr-1' }, json: {} });
+  });
+
+  it('id が無ければ何も送らず、使い方を出す', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand('/stop', client, emptyListed());
+
+    expect(calls).toEqual([]);
+    expect(read()).toContain('使い方: /stop');
+  });
+
+  it('居ないマネージャーなら、止めたとは言わない', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({ abortStatus: 404, abortBody: { error: 'そんな id は無い' } });
+
+    await runSlashCommand('/stop mgr-none', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain('見つかりませんでした');
+    expect(text).not.toContain('stopped');
+  });
+
+  it('/help に載っている（隠れた口を作らない）', async () => {
+    const read = captureStdout();
+    const { client } = stubClient();
+
+    await runSlashCommand('/help', client, emptyListed());
+
+    expect(read()).toContain('/stop ');
   });
 });
