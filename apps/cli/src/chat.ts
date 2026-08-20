@@ -211,6 +211,9 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /archive <id>        生ログの中身
 /approvals           承認待ち（番号付き）
 /answer <番号|id> <回答>  承認待ちに答える（番号は /approvals の並び）
+/answers <番号|id> <回答> [<番号|id> <回答> ...]  溜まった承認待ちにまとめて答える
+                     （回答は1語。複数語なら "..." で囲む。1件が駄目でも残りは進み、
+                      結果は id ごとに出る）
 /commitments         引き受けたまま終わっていない仕事（番号付き）
 /commitments all     片付けたものも含めて見る
 /commit <本文>       引き受けたことを台帳へ積む
@@ -677,6 +680,66 @@ export async function runSlashCommand(
     }
 
     /**
+     * 溜まった承認待ちにまとめて答える（`POST /approvals/answer`）。
+     *
+     * **`/answer` は変えない。** あれは「番号|id と、残り全部を1つの自由文として
+     * 答える」形で、複数件を1行に混ぜようとすると自由文とどこで区切るかが
+     * 決められない（引用符を要求すると今の使い方を壊す）。だから複数件は
+     * 別コマンドにして、**各件の回答は1語（複数語なら引用符で囲む）** という
+     * 別の約束にする。/answer の自由文はそのまま残る。
+     *
+     * **1件飛ばせる**（対象の番号を書かなければ良い）・**途中でやめられる**
+     * （書いた分だけで Enter を押せば良い）ので、一覧を全部読んで一括で allow
+     * するしかない、という形にはならない。
+     */
+    case '/answers': {
+      // `line` は先頭で `/\s+/` 分割済みだが、それでは引用符の中の空白が
+      // 保てない。引用符を活かすため、コマンド名の後ろの生の文字列から読み直す。
+      const argsText = line.replace(/^\S+\s*/, '');
+      const tokens = tokenizeQuoted(argsText);
+      const pairs = parseAnswerPairs(tokens);
+      if (pairs === null) {
+        stdout.write(
+          '使い方: /answers <番号|id> <回答> [<番号|id> <回答> ...]' +
+            '（回答は1語。複数語なら "..." で囲む）\n',
+        );
+        return 'ok';
+      }
+
+      const requests: { id: string; answer: string }[] = [];
+      for (const pair of pairs) {
+        const id = resolveListedId(pair.reference, listed.approvals);
+        if (id === null) {
+          stdout.write(`  [${pair.reference}] は /approvals の一覧にありません（飛ばしました）\n`);
+          continue;
+        }
+        requests.push({ id, answer: pair.answer });
+      }
+
+      if (requests.length === 0) {
+        stdout.write('送れる回答がありませんでした\n');
+        return 'ok';
+      }
+
+      const response = await client.approvals.answer.$post({ json: { answers: requests } });
+      if (!response.ok) {
+        stdout.write('まとめて答えられませんでした（サーバ側の検査に落ちました）\n');
+        return 'ok';
+      }
+      // **成功件数だけを言わない。** 1件が駄目でも残りは進む設計なので、
+      // どの id が通らなかったかを人間が見られること。
+      const { results } = await response.json();
+      for (const result of results) {
+        stdout.write(
+          result.ok
+            ? `  [${result.id}] 回答しました\n`
+            : `  [${result.id}] 回答に失敗: ${result.error ?? '不明'}\n`,
+        );
+      }
+      return 'ok';
+    }
+
+    /**
      * 引き受けたまま終わっていない仕事の台帳（`schema.ts` の `commitmentSchema`）。
      *
      * **承認待ちとは別のものである。** あちらは「クローンが人間の答えを待って
@@ -1074,6 +1137,47 @@ function parseUsageFilters(tokens: string[]): ParsedUsageFilters {
 function resolveListedId(reference: string, listed: string[]): string | null {
   if (/^\d+$/.test(reference)) return listed[Number(reference) - 1] ?? null;
   return reference;
+}
+
+/**
+ * 引用符（`"..."` / `'...'`）を1トークンとして保つ簡易トークナイザ。
+ *
+ * `/answers` の各回答は1語だが、複数語にしたいときだけ引用符で囲めるように
+ * するための道具。`line.split(/\s+/)` では引用符の中の空白ごと割れてしまう
+ * ので、コマンド本体は `/answers` の処理でだけこちらを使う（他のコマンドの
+ * 単純な空白分割は変えない）。
+ */
+function tokenizeQuoted(text: string): string[] {
+  const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  const tokens: string[] = [];
+  for (const match of text.matchAll(pattern)) {
+    tokens.push(match[1] ?? match[2] ?? match[3] ?? '');
+  }
+  return tokens;
+}
+
+/** `/answers` の1件ぶん — どの承認待ちに、何を答えるか。 */
+interface AnswerPair {
+  reference: string;
+  answer: string;
+}
+
+/**
+ * `/answers` のトークン列を (番号|id, 回答) の対へ読む。
+ *
+ * トークン数が偶数でない・答えが空、のどちらかがあれば全体を不正として
+ * `null` を返す（一部だけ解釈して送ると、書いたつもりの件が黙って落ちる）。
+ */
+function parseAnswerPairs(tokens: string[]): AnswerPair[] | null {
+  if (tokens.length === 0 || tokens.length % 2 !== 0) return null;
+  const pairs: AnswerPair[] = [];
+  for (let i = 0; i < tokens.length; i += 2) {
+    const reference = tokens[i];
+    const answer = tokens[i + 1];
+    if (reference === undefined || answer === undefined || answer.length === 0) return null;
+    pairs.push({ reference, answer });
+  }
+  return pairs;
 }
 
 // ---------------------------------------------------------------------------

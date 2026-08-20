@@ -26,6 +26,15 @@ export type ManagerDenial = NonNullable<ManagerSummary['denials']>[number];
 
 export type PendingApproval = Ok<paths['/approvals']['get']>['approvals'][number];
 
+/**
+ * まとめて答えたときの1件ぶんの結果（`POST /approvals/answer`）。
+ *
+ * **1件が駄目でも残りは進む設計なので、`ok` を畳んで成功件数だけにしない。**
+ * どの id が通らなかったかが見えないと、まとめて送った瞬間に取りこぼしが
+ * 静かに起きる。
+ */
+export type ApprovalAnswerResult = Ok<paths['/approvals/answer']['post']>['results'][number];
+
 export type DailyReport = Ok<paths['/reports']['get']>['reports'][number];
 
 export type ScheduleEntry = Ok<paths['/schedule']['get']>['entries'][number];
