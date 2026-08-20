@@ -117,6 +117,18 @@ function fakeSdk(
     beforeAssistant?: (callIndex: number) => SDKMessage[];
     /** `result` に載せる `permission_denials`（authoritative な側の記録）。 */
     permissionDenials?: (callIndex: number) => unknown[] | undefined;
+    /**
+     * 指定した番号のターンを出し終えたところで、**セッションそのものを終わらせる**
+     * （generator を `return` する）。
+     *
+     * **`failWith` では代用できない。** あちらは init すら出さずに投げるので、
+     * 「ターンは1本走った、そのあとセッションが死んだ」という状態が作れない。
+     * ここが要るのは、`clone.ts` の読み取りループの `finally` が `#query = null`
+     * にする経路を通したいときである — `#query` が null だと `stop()` は蒸留を
+     * 挟まず、**`await` を1つも通さずに `#inbox.close()` まで進む。** それが
+     * 「受信箱が閉じた後に `#pump` の先頭へ来る」順序を作る唯一の手である。
+     */
+    endSessionAfterTurn?: number;
   } = {},
 ) {
   const calls: FakeCall[] = [];
@@ -160,6 +172,9 @@ function fakeSdk(
         const idx = turnIndex;
         turnIndex += 1;
         yield* turn(reply(text), idx);
+        // セッションを終わらせる（`endSessionAfterTurn` の doc）。既定
+        // （`undefined`）では番号が一致しないので、他のテストの挙動は変わらない。
+        if (options.endSessionAfterTurn === idx) return;
       }
     }
 
@@ -3747,6 +3762,61 @@ describe('クローン — 枠（利用上限）が閉じたら保持して次�
     expect(merged.indexOf('二件目')).toBeLessThan(merged.indexOf('三件目'));
 
     await s.clone.stop();
+  });
+
+  /**
+   * **解除を `#pump` へ移したことで新しく開いた口を塞いでいるのがこの本である。**
+   *
+   * 解除が `post()` に在ったあいだ、閉じた受信箱へ戻してしまう心配は無かった —
+   * `post()` は先頭で `#stopped` を見て return するからである。`#pump` の先頭へ
+   * 移すと、そのガードが効かない側へ出る: `stop()` は `#inbox.close()` を呼ぶが、
+   * `for await` は待ち行列に残った分を吐き出しながら回り続けるので、**閉じた後に
+   * 解除の地点へ来る**ことがありうる。`Inbox#unshift` は閉じた受信箱では投げ、
+   * そこは `try` の外なので、投げれば受信箱のループごと死ぬ（`#pump` は `void`
+   * で起こしてあるので unhandled rejection ＝ デーモンごと落ちうる。走行中の
+   * マネージャーも巻き添えになる）。
+   *
+   * **この順序は `#query === null` でなければ作れない。** `stop()` は `#query` が
+   * 在れば蒸留を `await` するので、その間に `#pump` が先頭へ到達して印を消費して
+   * しまう。枠に当たった直後にセッションが終わる台本（`endSessionAfterTurn`）で
+   * `#query` を null にすると、`stop()` は `await` を1つも通さずに `#inbox.close()`
+   * まで進む。
+   *
+   * **落ち方について正直に言う。** ガードを外すとこの本は
+   * 「unhandled rejection ＋ 待ちのタイムアウト」で落ちる。**アサーションの不一致
+   * ではない**（AGENTS.md「タイムアウトは歯があった証拠にならない」）。それでも
+   * 付ける理由は、unhandled rejection が汎用のタイムアウトとは違って**原因を
+   * 名指しする**特定の信号だからである。
+   */
+  it('受信箱が閉じた後に解除の印が残っていても、受信箱のループを殺さない', async () => {
+    const s = setup(undefined, createMemoryStores(), {
+      resultSubtype: 'error_during_execution',
+      resultText: spendLimitMessage,
+      // 1本目のターンを出し終えたらセッションを終わらせる ＝ `#query` が null。
+      endSessionAfterTurn: 0,
+    });
+
+    const first = humanMessage('一件目');
+    s.clone.post(first);
+    await waitForTerminal(s.events);
+    // 保持されたこと（＝`#deferred` へ積み終わったこと）を器の側で待つ。
+    await waitFor(async () => {
+      const pending = await s.stores.inbox.claimPending();
+      return pending.some((p) => p.event.id === first.id);
+    }, '一件目が未読として保持される');
+    const terminalsBefore = s.events.filter(isTerminal).length;
+
+    // 印を立てて（`post`）、`#pump` が先頭へ戻る前に閉じる（`stop`）。
+    const second = humanMessage('二件目');
+    s.clone.post(second);
+    await s.clone.stop();
+
+    // **解除しなかったほうの被害は無い。** 二件目には「枠で保持した」終端が届き、
+    await s.waitForEvents((events) => events.filter(isTerminal).length === terminalsBefore + 1);
+    // どちらの合図も器に未読のまま残る（次の起動で `#restoreUnread` が拾い直す。
+    // この機構が生死をまたげる理由がそれである）。
+    const pending = await s.stores.inbox.claimPending();
+    expect(pending.map((p) => p.event.id).sort()).toEqual([first.id, second.id].sort());
   });
 
   it('org_policy では待たない（保持せず、従来どおり失敗として消える）', async () => {
