@@ -487,10 +487,10 @@
         "operationId": "getConversationsById",
         "tags": ["conversations"],
         "summary": "1つの会話の中身（古い順）",
-        "description": "1つの会話の中身（古い順）。器を替えても続きから話せるための口。",
+        "description": "1つの会話の中身（古い順）。器を替えても続きから話せるための口。**黙って打ち切らない** — `scanned` でどこまで遡ったか、`reachedStart` で窓が日誌の先頭に届いたかを返す。`404` は `reachedStart` が真のときだけ返る（「無い」と「遡り切れていない」を同じ応答にしないため）。",
         "responses": {
           "200": {
-            "description": "会話の中身。",
+            "description": "会話の中身。`reachedStart` が偽なら、窓の外に続きが残っている可能性がある。`messages` が空でこれが偽の場合は「無い」ではなく**判定できない**。",
             "content": {
               "application/json": {
                 "schema": {
@@ -520,9 +520,17 @@
                         },
                         "required": ["id", "at", "role", "text"]
                       }
+                    },
+                    "scanned": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reachedStart": {
+                      "type": "boolean"
                     }
                   },
-                  "required": ["conversationId", "messages"]
+                  "required": ["conversationId", "messages", "scanned", "reachedStart"]
                 }
               }
             }
@@ -550,7 +558,7 @@
             }
           },
           "404": {
-            "description": "該当する会話が無い（内部ターン `self` は含まれない）。",
+            "description": "該当する会話が無い（内部ターン `self` は含まれない）。**遡り切れた場合だけ** — 窓の外かもしれないときは 200 で `reachedStart: false` を返す。",
             "content": {
               "application/json": {
                 "schema": {

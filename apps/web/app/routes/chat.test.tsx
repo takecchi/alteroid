@@ -500,3 +500,62 @@ describe('会話の切り替え', () => {
     });
   });
 });
+
+/**
+ * サーバは日誌の新しい方から `scan` 件しか見ない（`GET /conversations/:id`）。
+ * だから**出ている分が全部とは限らない。**
+ *
+ * ここが無いと、古い会話を開いた人間には「これで全部」に見える。とくに中身が
+ * 空だったときは、下の `Empty`（「目的や価値観を伝えると…」）が出るので
+ * **「まだ何も話していない」と読める** — 実際には遡り切れていないだけである。
+ */
+describe('遡り切れていないことを言う', () => {
+  const MESSAGE = { id: 'm1', at: '2026-08-13T00:00:00Z', role: 'inbound', text: '古い発言' };
+
+  function stubDetail(detail: unknown) {
+    return stubFetch((url, init) => {
+      if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
+      if (url.includes(`/conversations/${CONVERSATION_ID}`)) return json(detail);
+      if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
+      return undefined;
+    });
+  }
+
+  it('窓が先頭に届いていなければ、遡った件数を添えてそう書く', async () => {
+    stubDetail({
+      conversationId: CONVERSATION_ID,
+      messages: [MESSAGE],
+      scanned: 2000,
+      reachedStart: false,
+    });
+    renderChat(`/chat/${CONVERSATION_ID}`);
+
+    expect(await screen.findByText(/日誌を 2000 件遡ったが、先頭には届いていない/)).toBeTruthy();
+    expect(screen.getByText('古い発言')).toBeTruthy();
+  });
+
+  it('中身が空のときも「無い」とは書かず、判定できないことを書く', async () => {
+    stubDetail({
+      conversationId: CONVERSATION_ID,
+      messages: [],
+      scanned: 2000,
+      reachedStart: false,
+    });
+    renderChat(`/chat/${CONVERSATION_ID}`);
+
+    expect(await screen.findByText(/先頭には届いていない/)).toBeTruthy();
+  });
+
+  it('窓が先頭に届いていれば、但し書きは出さない', async () => {
+    stubDetail({
+      conversationId: CONVERSATION_ID,
+      messages: [MESSAGE],
+      scanned: 3,
+      reachedStart: true,
+    });
+    renderChat(`/chat/${CONVERSATION_ID}`);
+
+    expect(await screen.findByText('古い発言')).toBeTruthy();
+    expect(screen.queryByText(/先頭には届いていない/)).toBeNull();
+  });
+});

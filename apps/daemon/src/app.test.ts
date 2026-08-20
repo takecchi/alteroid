@@ -1174,6 +1174,57 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     ]);
   });
 
+  /**
+   * **「無い」と「遡り切れていない」を同じ応答にしない。**
+   *
+   * この口は日誌の新しい方から `scan` 件しか見ない。一律 404 にしていたので、
+   * 窓より古い会話が「そんな会話は無い」として返っていた（消えた会話と、まだ
+   * 見ていない会話が呼ぶ側から区別できない）。判定できないという3つ目の状態を
+   * 持たないと、判定できない場合が黙ってどちらかへ倒れる。
+   */
+  it('遡り切れていれば「無い」と言ってよい（scanned と reachedStart を添える）', async () => {
+    await exchange('conv-a', 'inbound', 'ひとつめ');
+
+    const response = await app.request('/conversations/conv-a');
+    const body = (await response.json()) as { scanned: number; reachedStart: boolean };
+
+    expect(response.status).toBe(200);
+    // 日誌の exchange は1件だけ＝既定の scan（2000）に届かない＝先頭まで見た
+    expect(body).toMatchObject({ scanned: 1, reachedStart: true });
+    expect((await app.request('/conversations/does-not-exist')).status).toBe(404);
+  });
+
+  it('遡り切れていなければ 404 を返さず、判定できないことを返す', async () => {
+    // 古い会話を先に積み、そのあと新しい会話で窓を埋める
+    await exchange('conv-old', 'inbound', '古い発言');
+    await exchange('conv-new', 'inbound', '新しい発言1');
+    await exchange('conv-new', 'inbound', '新しい発言2');
+
+    // 窓は新しい2件（conv-new）だけ。conv-old はその外にある
+    const response = await app.request('/conversations/conv-old?scan=2');
+    const body = (await response.json()) as {
+      messages: unknown[];
+      scanned: number;
+      reachedStart: boolean;
+    };
+
+    // **404 ではない。** 無いのではなく、この窓では言えないだけである
+    expect(response.status).toBe(200);
+    expect(body.messages).toEqual([]);
+    expect(body.reachedStart).toBe(false);
+    expect(body.scanned).toBe(2);
+
+    // 窓を広げれば見える（＝「無い」が誤りだったことの裏返し）
+    const wider = await app.request('/conversations/conv-old?scan=10');
+    const widerBody = (await wider.json()) as {
+      messages: { text: string }[];
+      reachedStart: boolean;
+    };
+    expect(wider.status).toBe(200);
+    expect(widerBody.messages.map((m) => m.text)).toEqual(['古い発言']);
+    expect(widerBody.reachedStart).toBe(true);
+  });
+
   it('内部ターン（self）は会話に混ざらない', async () => {
     await stores.journal.append({
       type: 'exchange',
