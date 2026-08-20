@@ -585,7 +585,24 @@ class RunnerSession {
           'この tool_use_id が result に残っていれば、同じ拒否がもう一度上がる。',
       }),
   });
-  /** resume のために預かった生ログ（SDK の `SessionStore.load` が返す素材）。 */
+  /**
+   * resume のために預かった生ログ（SDK の `SessionStore.load` が返す素材）。
+   *
+   * **正常フローでは `#markProgressed` が解放する。** `#sessionStore().load()`
+   * が読むのは SDK がセッションを開く最初の1回だけで、それは `#progressed` が
+   * 立つ（道具を使った・確認を出した・結果を返した）よりも必ず先に済んでいる
+   * ── モデルが手を動かすには、動かす前にセッションが開いていないといけない。
+   * だから `#progressed` が立った時点で `load()` はもう `#seed` を読み終えており、
+   * 二度と呼ばれない。
+   *
+   * **`system/init` が来た時点では解放しない。** `init` は「開いた」ことしか
+   * 示さず、`#recoverFromFailedResume` が resume の成否を判定するのに使う基準は
+   * `#progressed`（「続けられた」）であって `init` の有無ではない
+   * （`#recoverFromFailedResume` のコメント参照）。`init` の直後・何も手が動く
+   * 前に接続が切れる形は「resume が効かなかった」として扱われ、そのときの
+   * 回復（`renderSessionLog(this.#seed)`）にはまだ `#seed` が要る。ここで
+   * 解放すると、その回復だけが静かに材料を失う。
+   */
   #seed: SessionStoreEntry[] | undefined;
 
   /**
@@ -610,6 +627,12 @@ class RunnerSession {
    *
    * 生ログからの作り直しを**手が動く前だけ**に限るための旗である。動いた後で
    * 作り直すと、済んだ作業を記録から二度走らせる。
+   *
+   * **一度立てたら二度と下ろさない。** `#recoverFromFailedResume` は
+   * `if (this.#progressed) return 'not-a-resume-failure';` でここが立っていれば
+   * `#seed` を読む前に抜けるので、これが立った時点で `#seed` はこの先この
+   * インスタンスの寿命が尽きるまで二度と読まれないことが確定する
+   * （`#markProgressed` 参照）。
    */
   #progressed = false;
   /**
@@ -1026,6 +1049,19 @@ class RunnerSession {
   }
 
   /**
+   * `#progressed` を立てる唯一の口。**必ずここを通す** — 直接
+   * `this.#progressed = true` を書くと、`#seed` の解放を足し忘れる経路が生まれる。
+   *
+   * 立てると同時に `#seed` を解放する。安全な理由は `#seed` のフィールド
+   * コメントを参照。既に立っている（＝既に解放済み）なら何もしない。
+   */
+  #markProgressed(): void {
+    if (this.#progressed) return;
+    this.#progressed = true;
+    this.#seed = undefined;
+  }
+
+  /**
    * 前のセッションへ戻れなかったときの出口。
    *
    * **黙って引き下がることも、黙って挑み直すこともしない。** 生ログはデーモンが
@@ -1303,7 +1339,7 @@ class RunnerSession {
     // その回が `error_during_execution` で何も返さずに終わる形も出ている。
     // 手が動く前の結果なし終了は、この resume が効かなかったということである。
     if (isSuccessResult(message)) {
-      this.#progressed = true;
+      this.#markProgressed();
       // 消費の累積を降ろす（台帳へ畳むのはデーモン）。
       //
       // **成功した result だけを通す。** SDK は
@@ -1590,7 +1626,7 @@ class RunnerSession {
     extra: { signal: AbortSignal; requestId?: string; toolUseID?: string },
   ): Promise<PermissionResult> {
     // 確認を出せている＝セッションは開いて手を動かしている。
-    this.#progressed = true;
+    this.#markProgressed();
     // SDK は同じ確認を再送しうる。id を SDK 側の識別子に揃えて、再送では新しい
     // 待ちを積まずに同じ結果を返す（二重に消費されると片方が永久に返らない）。
     const id = extra.requestId ?? extra.toolUseID ?? randomUUID();
@@ -1677,7 +1713,7 @@ class RunnerSession {
 
     if (typeof hook.transcript_path === 'string') this.#transcriptPath = hook.transcript_path;
     // 道具が動いた＝このセッションは生きている（生ログからの作り直しはもうしない）。
-    this.#progressed = true;
+    this.#markProgressed();
 
     // **`worker_wait.toolless` の材料。** マネージャー自身の道具だけを数える
     // （`hook.agent_id` が付いているものは作業者の分なので混ぜない）。
