@@ -247,6 +247,64 @@ export function useRunSchedule() {
   );
 }
 
+/**
+ * 継続する依頼を仕込む（起点②を人間の手から置く）。
+ *
+ * **「今すぐ回す」と同じ画面に置くが、別の操作である。** あちらは既定で回っている
+ * ものを待たずに確かめる口で、こちらは**依頼そのものを増やす**。CLI（`/schedule
+ * <kind> <周期> <依頼>`）とクローンの道具（`schedule_create`）にはあって、画面にだけ
+ * 無かった — 自分が出した「これからずっと」の依頼を人間が置けないと、PRD
+ * 「インターフェース」が言う3面の等価性が崩れる。
+ *
+ * **周期の形は API の型そのままを受ける。** 画面で `daily` / `every` / `cron` を
+ * 組み直すと、値が増えたときにここだけ古くなる。
+ */
+export function useCreateSchedule() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (body: {
+      kind: string;
+      request: string;
+      spec:
+        | { type: 'daily'; at: string }
+        | { type: 'every'; minutes: number }
+        | { type: 'cron'; expression: string };
+    }) => {
+      const created = await api.api.POST('/schedule', { body }).then(unwrap);
+      await mutate(KEY.schedule);
+      return created;
+    },
+    [api, mutate],
+  );
+}
+
+/**
+ * 継続中の依頼を外す。
+ *
+ * **既定の定期ジョブ（日報・発意 tick）は外せない**（デーモンが `RESERVED_SCHEDULE_KINDS`
+ * で守っている）。画面側でボタンを隠して表現しないこと — 隠すと「なぜ押せないか」が
+ * 消える。押せて、断られた理由がその場に出るほうが読める。
+ */
+export function useRemoveSchedule() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (kind: string) => {
+      // `body: {}` は `useRunSchedule` と同じ理由。**中身は読まれない** —
+      // 本文が必須なのは、門番（`deliberateClient`）が `content-type:
+      // application/json` を要求することを spec の機械可読部で表す手段が
+      // これしか無いからである（`DELETE /schedule/{kind}` の requestBody に
+      // その旨が書いてある）。
+      await api.api
+        .DELETE('/schedule/{kind}', { params: { path: { kind } }, body: {} })
+        .then(unwrap);
+      await mutate(KEY.schedule);
+    },
+    [api, mutate],
+  );
+}
+
 /** 外部イベントを流し込む（起点③を手で起こす）。 */
 export function usePostEvent() {
   const api = useApi();
