@@ -428,6 +428,9 @@ describe('クローン', () => {
       // やろうとして失敗した実例と同じ形）。
       expect(side.options.tools).toBeUndefined();
       expect(side.options.settingSources).toEqual(['user', 'project', 'local']);
+      // **`toBe(main…)` だけにしないこと。** 両方 `undefined` でも等しくなるので、
+      // 「どちらにも渡していない」が「揃っている」として通ってしまう。
+      expect(side.options.permissionMode).toBe('auto');
       expect(side.options.permissionMode).toBe(main.options.permissionMode);
     } finally {
       await rm(dir, { recursive: true, force: true });
