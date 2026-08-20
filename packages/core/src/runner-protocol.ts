@@ -472,6 +472,37 @@ export interface RunnerClient {
    */
   ping?(options?: { signal?: AbortSignal }): Promise<void>;
   /**
+   * 名乗りの中身を**読むが採らない**口（roadmap M5 PR4 の判定材料）。
+   *
+   * **`ping` の代わりに叩く。** 同じ `GET /health` なので生死は等しく分かる。
+   * 新しい口も足していない（`resources()` / `credentials()` / `profile()` と同じ
+   * 作法である）。
+   *
+   * ## なぜ「読むが採らない」なのか
+   *
+   * `ping` が本文を読まないのは、**器が入れ替わったときに `runnerId` を黙って
+   * 書き換えると台帳の鎖（`manager_id → runner_id`）が音もなく繋ぎ変わる**からで、
+   * その判断は正しい。ただしその副作用として、名簿は**器の入れ替えと単なる回復を
+   * 区別できなくなっていた**（`#markSeen` に書いてある blocker そのもの）。
+   *
+   * だからここが返すものは**判定の材料であって、採用する値ではない。** 名簿は
+   * `runnerId` を上書きせず、`instanceId` が変わったことを**知らせるだけ**である。
+   * 「黙って採る」ことが危険だったのであって、「見る」ことが危険だったのではない。
+   *
+   * ## `instanceId` は起動ごとに変わる
+   *
+   * **安定していてはいけない。** `runnerId` は宛先の名前（安定）で、こちらは
+   * 「いまその名前に応えているプロセスがどれか」である。器を作り直せば変わる、が
+   * この値の唯一の役目である。
+   *
+   * **省略できる**（`ping` と同じ理由）。答えない実装・古い runner は
+   * `instanceId` を持たないので、名簿は入れ替えを**判定しない**（「入れ替わって
+   * いない」と読まないこと）。
+   */
+  identity?(options?: {
+    signal?: AbortSignal;
+  }): Promise<{ runnerId?: string; instanceId?: string } | undefined>;
+  /**
    * 配置の材料を聞く（roadmap M5 PR3）。**`ping` に相乗りさせない。**
    *
    * `ping` は同じ `/health` を叩くが**本文を読み捨てる。** 名乗りの中身
@@ -670,6 +701,32 @@ export interface RunnerRegistryOptions {
    * 先に動かすと同じマネージャーが2台で走る。この PR が出すのは知らせだけである。
    */
   onLost?: (lost: { label: string; runnerId?: string; error: string }) => void;
+  /**
+   * 同じ宛先に、**別のプロセスが応え始めた**ときに呼ばれる（roadmap M5 PR4）。
+   *
+   * **これは `onLost` では拾えない。** 器が入れ替わっても `/health` は応え続ける
+   * ので、生死の判定からは何も起きていないように見える（＝黙って入れ替わる）。
+   * roadmap 受け入れ基準6 が「一度開いた宛先が黙って入れ替わった場合は今も
+   * 引き取りが走らない」と書いているのがこの状態で、その**判定材料が無い**ことが
+   * 直接の原因だった。
+   *
+   * **ここで引き取り（`takeOver` → `managers.restore()`）はしない。** 入れ替えが
+   * 見えるようになっても、「もう動いていない」ことの証明にはまだ足りない —
+   * ネットワークだけが分かれた場合、古いプロセスは別のところで走り続けていて
+   * 同じ宛先に新しいプロセスが応えうる。**貸し出し期限（lease）が揃って初めて
+   * 引き取りの契機にできる。** この口が出すのは知らせだけである。
+   *
+   * **「1回だけ」は保証しない**（`onLost` とは違う）。入れ替わるたびに呼ばれる。
+   */
+  onSwap?: (swap: {
+    label: string;
+    /** 台帳の鎖に使っている宛先の名前。**書き換えていない値である。** */
+    runnerId?: string;
+    /** 前に応えていたプロセス。 */
+    before: string;
+    /** いま応えているプロセス。 */
+    after: string;
+  }) => void;
   /** 挑み直しの間隔（倍々で伸びる）。**回数では諦めない。** 主にテスト用。 */
   retryBaseMs?: number;
   retryMaxMs?: number;
@@ -781,6 +838,14 @@ interface RegistryEntry {
    * 出ないかのどちらかになり、あとで移送の契機に使えない。
    */
   alive: boolean;
+  /**
+   * 最後に名乗ったプロセスの識別子（`identity()` が返す `instanceId`）。
+   *
+   * **`alive` と同じ形の「前回の値」である。** これと突き合わせて初めて
+   * 「入れ替わった瞬間」が観測できる。持たない runner では `undefined` のままで、
+   * そのときは**判定しない**（「入れ替わっていない」と読まないこと）。
+   */
+  instanceId?: string;
 }
 
 class Registry implements RunnerRegistry {
@@ -794,6 +859,9 @@ class Registry implements RunnerRegistry {
   readonly #notify: ((failure: { label: string; error: string }) => void) | undefined;
   readonly #onLost:
     ((lost: { label: string; runnerId?: string; error: string }) => void) | undefined;
+  readonly #onSwap:
+    | ((swap: { label: string; runnerId?: string; before: string; after: string }) => void)
+    | undefined;
   readonly #retryBaseMs: number;
   readonly #retryMaxMs: number;
   readonly #selectWaitMs: number;
@@ -804,6 +872,7 @@ class Registry implements RunnerRegistry {
   constructor(options: RunnerRegistryOptions) {
     this.#notify = options.notify;
     this.#onLost = options.onLost;
+    this.#onSwap = options.onSwap;
     this.#retryBaseMs = options.retryBaseMs ?? REGISTRY_RETRY_BASE_MS;
     this.#retryMaxMs = options.retryMaxMs ?? REGISTRY_RETRY_MAX_MS;
     this.#selectWaitMs = options.selectWaitMs ?? SELECT_WAIT_MS;
@@ -1104,9 +1173,20 @@ class Registry implements RunnerRegistry {
     if (client === null) return;
 
     let failure: string | null = null;
+    let identity: { runnerId?: string; instanceId?: string } | undefined;
     try {
-      await withDeadline(
-        (signal) => client.ping?.({ signal }) ?? Promise.resolve(),
+      /*
+       * **`identity()` があればそちらを叩く。** 同じ `GET /health` なので生死は
+       * 等しく分かり、往復は増えない。読むのは名乗りの中身だが、**採らない**
+       * （`#markSeen` が `runnerId` を書き換えないことで守っている）。
+       *
+       * 両方叩かないのは、10秒ごとに全台へ2往復を投げることになるからである。
+       */
+      identity = await withDeadline(
+        (signal) =>
+          client.identity !== undefined
+            ? client.identity({ signal })
+            : (client.ping?.({ signal }) ?? Promise.resolve()).then(() => undefined),
         HEARTBEAT_PROBE_MS,
       );
     } catch (error) {
@@ -1118,7 +1198,7 @@ class Registry implements RunnerRegistry {
     if (this.#entries.get(entry.source.label) !== entry || entry.client !== client) return;
 
     if (failure === null) {
-      this.#markSeen(entry, at, client);
+      this.#markSeen(entry, at, client, identity);
       return;
     }
     this.#markSilent(entry, at, failure);
@@ -1144,9 +1224,45 @@ class Registry implements RunnerRegistry {
    *
    * **解決するのは fencing（roadmap M5 PR4）である。** 「引き取ってよいか」を判定
    * できるようになって初めて、この遷移を契機にできる。それまでは知らせるだけに留める。
+   *
+   * ## 区別だけは付くようになった（それでも引き取りは走らせない）
+   *
+   * `identity()` を持つ runner については、**入れ替わったこと自体は分かる**
+   * （`instanceId` が変わる）。上の「区別できない」はその材料が無かったという話で、
+   * いまは `#onSwap` で知らせている。
+   *
+   * **それでも引き取りの契機にはしない。** 入れ替えが見えることと「もう動いて
+   * いない」ことは別である — ネットワークだけが分かれた場合、古いプロセスは別の
+   * ところで走り続けていて、同じ宛先に新しいプロセスが応えうる。片側だけで
+   * 「もう動いていない」と言うには貸し出し期限（lease）が要る。
+   *
+   * **`runnerId` は絶対に採らない。** 採れば台帳の鎖が音もなく繋ぎ変わる（`ping` の
+   * 項に書いてある元の理由）。ここで見るのは「変わったか」だけで、値は使わない。
    */
-  #markSeen(entry: RegistryEntry, at: number, client: RunnerClient): void {
+  #markSeen(
+    entry: RegistryEntry,
+    at: number,
+    client: RunnerClient,
+    identity?: { runnerId?: string; instanceId?: string },
+  ): void {
     entry.lastSeen = at;
+
+    const instanceId = identity?.instanceId;
+    if (instanceId !== undefined && instanceId.length > 0) {
+      const before = entry.instanceId;
+      // **初めて聞いた分は入れ替えではない。** 覚えるだけ（覚える前に知らせると、
+      // デーモンが起きた直後に必ず1回「入れ替わった」が出る）。
+      entry.instanceId = instanceId;
+      if (before !== undefined && before !== instanceId) {
+        this.#onSwap?.({
+          label: entry.source.label,
+          // **書き換えていない値をそのまま渡す。** 台帳の鎖はこの名前で繋がっている。
+          ...(entry.client === null ? {} : { runnerId: entry.client.runnerId }),
+          before,
+          after: instanceId,
+        });
+      }
+    }
     if (entry.alive) {
       // 一時的にこけていただけの失敗は、返ってきた時点で窓から下ろす。
       delete entry.error;

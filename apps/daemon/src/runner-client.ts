@@ -69,6 +69,7 @@ export async function createHttpRunner(options: HttpRunnerOptions): Promise<Runn
 
 interface HealthBody {
   runnerId?: unknown;
+  instanceId?: unknown;
   workspacePath?: unknown;
   credentials?: unknown;
   profile?: unknown;
@@ -142,6 +143,33 @@ class HttpRunner implements RunnerClient {
   async ping(options?: { signal?: AbortSignal }): Promise<void> {
     const response = await this.#call('GET', '/health', undefined, options?.signal);
     await response.text().catch(() => '');
+  }
+
+  /**
+   * 名乗りの中身を**読むが採らない**（roadmap M5 PR4 の判定材料）。
+   *
+   * 叩く先は `ping()` と同じ `GET /health` で、新しい口は足していない。違うのは
+   * 本文を読むことだけである。**それでも `this.runnerId` / `this.workspacePath` は
+   * 書き換えない** — 書き換えれば台帳の鎖（`manager_id → runner_id`）が音もなく
+   * 繋ぎ変わる（`ping()` の項に書いてある元の理由）。ここが返すのは判定の材料で
+   * あって、採用する値ではない。
+   *
+   * **`instanceId` を返さない runner とも繋がる。** そのときは `undefined` のままで、
+   * 名簿は入れ替えを判定しない（「入れ替わっていない」とは読まない）。
+   */
+  async identity(options?: {
+    signal?: AbortSignal;
+  }): Promise<{ runnerId?: string; instanceId?: string } | undefined> {
+    const response = await this.#call('GET', '/health', undefined, options?.signal);
+    const body = (await response.json()) as HealthBody;
+    return {
+      ...(typeof body.runnerId === 'string' && body.runnerId.length > 0
+        ? { runnerId: body.runnerId }
+        : {}),
+      ...(typeof body.instanceId === 'string' && body.instanceId.length > 0
+        ? { instanceId: body.instanceId }
+        : {}),
+    };
   }
   /**
    * 配置の材料を渡す。**既存の `/health` を叩くだけ**で、新しい口は足さない

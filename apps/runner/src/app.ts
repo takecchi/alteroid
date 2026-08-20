@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 
 import type { RunnerEvent, RunnerHost } from '@alteroid/core';
 import {
@@ -104,6 +104,15 @@ export class Outbox {
   }
 }
 
+/**
+ * このプロセスの識別子。**モジュールの読み込みで1回だけ作る。**
+ *
+ * `createRunnerApp` の中で作らないのは、テストが同じプロセスで app を作り直す
+ * ことがあり、そのたびに変わると「器が入れ替わった」と読めてしまうからである。
+ * 表しているのは**プロセスの同一性**であって app の同一性ではない。
+ */
+const INSTANCE_ID = randomUUID();
+
 export function createRunnerApp(deps: RunnerAppDeps) {
   const { host, outbox } = deps;
 
@@ -135,6 +144,22 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       c.json({
         ok: true,
         runnerId: host.runnerId,
+        /**
+         * **いまこの名前に応えているプロセスがどれか**（roadmap M5 PR4 の判定材料）。
+         *
+         * `runnerId` は宛先の名前で、器を作り直しても同じである（台帳の鎖
+         * `manager_id → runner_id` がそれで繋がっている）。だからこの値だけでは
+         * 「新しいコンテナが応え始めた」ことを誰も観測できず、名簿は器の入れ替えと
+         * 単なる回復を区別できなかった（roadmap 受け入れ基準6）。
+         *
+         * **安定させないこと。** ここは起動ごとに変わることが唯一の役目である
+         * （`runnerId` の別名を作るのではない）。ファイルや環境変数から読んで
+         * 引き継ぐ形にした瞬間、入れ替えが見えなくなる。
+         *
+         * **秘密ではない。** 制御面の内側だけに出る値だが、伏せる理由も無い
+         * （持っていても何もできない乱数である）。
+         */
+        instanceId: INSTANCE_ID,
         workspacePath: host.workspacePath,
         managers: host.list().length,
         pendingEvents: outbox.pending,
