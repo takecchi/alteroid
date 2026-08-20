@@ -61,6 +61,38 @@ describe('Inbox', () => {
     expect(seen).toEqual(['evt-a', 'evt-b']);
   });
 
+  it('unshift は先頭へ、渡した順のまま戻す（push では到着順が崩れる）', async () => {
+    const inbox = new Inbox();
+    inbox.push(humanMessage('新しく届いた'));
+
+    // 「もっと早く届いていた」2件を戻す。**末尾ではなく先頭へ入る**のが要点。
+    inbox.unshift([humanMessage('古い1'), humanMessage('古い2')]);
+    inbox.close();
+
+    const seen: string[] = [];
+    for await (const event of inbox) seen.push(event.id);
+    expect(seen).toEqual(['evt-古い1', 'evt-古い2', 'evt-新しく届いた']);
+  });
+
+  it('unshift は待っている取り出しも起こす（積んだのに誰も起きない、を作らない）', async () => {
+    const inbox = new Inbox();
+    // 先に待たせておく（`#pump` が暇なときと同じ形）。
+    const pending = inbox.next();
+
+    inbox.unshift([humanMessage('a'), humanMessage('b')]);
+
+    // 待っていた側には先頭が渡り、残りは待ち行列に並ぶ（順序は崩れない）。
+    expect((await pending)?.id).toBe('evt-a');
+    expect((await inbox.next())?.id).toBe('evt-b');
+  });
+
+  it('unshift は閉じた受信箱では投げる（push と同じ扱い）', () => {
+    const inbox = new Inbox();
+    inbox.close();
+
+    expect(() => inbox.unshift([humanMessage('a')])).toThrow('受信箱は既に閉じている');
+  });
+
   it('まだ読まれていないイベントを覗ける（同じ合図の重複判定に使う）', async () => {
     const inbox = new Inbox();
     inbox.push(humanMessage('a'));

@@ -3216,13 +3216,32 @@ describe('クローンの消費が台帳に載る（誰が・どこで）', () =
  * 枠（利用上限）に当たったら、合図を捨てずに保持し、次の合図が来たときに
  * 試し直す（`clone.ts` の `#usageBlocked` / `#deferred`）。
  *
- * タイマーは持たない。「試す」の契機は常に**新しい合図の到着**であり、
- * `post()` が保持していた合図を FIFO の順で受信箱へ戻して解除する。戻した
- * 先頭が枠でまた落ちれば `#usageBlocked` が再び立ち、残りはまた保持される
- * （`#pump` の枠チェック）。
+ * タイマーは持たない。「試す」の契機は常に**新しい合図の到着**である。`post()`
+ * は解除の印を立てるだけで、保持していた合図を FIFO の順で受信箱へ戻すのは
+ * `#pump` の先頭である（**そこへ寄せてあるのが競合を塞いでいる本体** —
+ * 下の「終端を出した直後…」／「短絡した合図の後始末の直前に…」の2本が、
+ * 寄せる前に何が失われていたかを名指しで踏む）。戻した先頭が枠でまた落ちれば
+ * `#usageBlocked` が再び立ち、残りはまた保持される（`#pump` の枠チェック）。
  */
 describe('クローン — 枠（利用上限）が閉じたら保持して次の合図で試す', () => {
   const spendLimitMessage = "You've hit your individual spend limit for this account.";
+
+  /**
+   * 実際に SDK へ投げられた入力を「何件目か」の並びへ畳む。**FIFO を見るための
+   * 目である。**
+   *
+   * 完全一致では見ない — `redeliveryNotice` / `commitmentNotice` が本文の前に
+   * 付くので、部分一致で畳む。どれにも当たらない入力は `'?'` にして**捨てない**
+   * （落とすと、余計な入力が1件混ざったことが並びから消える）。
+   */
+  function labelOrder(call: FakeCall): string[] {
+    return call.inputs.map((text) => {
+      for (const label of ['一件目', '二件目', '三件目']) {
+        if (text.includes(label)) return label;
+      }
+      return '?';
+    });
+  }
 
   it('枠に当たったとき、usage_limited が error より先に届く', async () => {
     const s = setup(undefined, createMemoryStores(), {
@@ -3328,50 +3347,187 @@ describe('クローン — 枠（利用上限）が閉じたら保持して次�
 
     s.clone.post(humanMessage('二件目')); // 1本目の再試行（turn 1: 失敗）を誘発。2本目自身は短絡される
     //
-    // **ここは `s.waitForEvents` へ変えていない。意図的に `expect.poll` のまま
-    // 残す。** 変えてみたところ、このすぐ後の `post('三件目')` が高い確率で
-    // 二件目を迷子にすることが分かった（実測）。
+    // **この待ちだけは、以前は `expect.poll` のまま残されていた。** 決定的な待ちへ
+    // 変えると直後の `post('三件目')` が二件目を迷子にする、というのが理由で、
+    // それは**テストの問題ではなく production 側の競合**だった（`post()` が
+    // その場で `#usageBlocked` を降ろし、まだ `#deferred` へ積まれていない
+    // 合図を取り残していた）。`expect.poll` のポーリング間隔がその後始末を
+    // 待つ時間を偶然与えていたので、穴が隠れていただけである。
     //
-    // 原因: `s.waitForEvents` は `events` へ push された**その場**で resolve
-    // する。だが「terminal が3件になった」（＝二件目の `error` が `#emit`
-    // された）時点では、`#pump` の `finally` にある `#settleInboxEvent`
-    // （二件目を `#deferred` へ積む後始末）はまだ**非同期の続き**として
-    // 走っている最中で、終わっていないことがある
-    // （`枠に当たった合図は forget されない` のコメントと同じ理由）。
-    // その一瞬に `post('三件目')` が `#usageBlocked` を降ろして
-    // `this.#deferred.splice(0)` を読むと、二件目がまだ `#deferred` に
-    // 居ないまま素通りされる。`stores.inbox`（永続化された「未読」）は
-    // 二件目をずっと pending のまま持ち続けるが、in-memory の `#deferred`
-    // には二度と載らないので、二件目は**このプロセスが生きている間
-    // 二度と処理されない**まま迷子になる（`done` が3件に届かず、この直後の
-    // 待ちが永久にハングする形で発覚した）。
-    //
-    // `expect.poll` はポーリング間隔（既定内で数回まわる）が、たまたまこの
-    // `#settleInboxEvent` の後始末を待つ時間を与えていたので、この隙間が
-    // 隠れていた。**これは production 側（`clone.ts` の `post()` と
-    // `#settleInboxEvent`/`#deferred` の間の競合）の潜在的な穴であって、
-    // この便の範囲（web のテストと2つの同便項目）を超える** — 直すなら
-    // `#deferred` への反映と `#usageBlocked` の解除の順序を production
-    // コードごと見直す必要があり、ここでは「決定的な待ちへ変える」を
-    // 無理に適用せず、`expect.poll` のまま残すことにした。
-    await expect.poll(() => s.events.filter(isTerminal).length === 3, { timeout: 3000 }).toBe(true);
+    // 競合は `clone.ts` の `#pump` 先頭（解除をそこへ寄せた）で塞いであり、
+    // 隙間そのものを名指しで踏む本が2本ある（下の「終端を出した直後…」／
+    // 「短絡した合図の後始末の直前に…」）。**塞いだので、ここもポーリングを
+    // 使わない形へ揃えられる。**
+    await s.waitForEvents((events) => events.filter(isTerminal).length === 3);
 
     s.clone.post(humanMessage('三件目')); // 保持していた[一件目, 二件目]を戻し、三件目も積む
     // 一件目(turn 2) → 二件目(turn 3) → 三件目(turn 4) の順に実際に投げられ、
-    // 今度はすべて成功する（`done` が3件増える）。この2つ目の待ちは、この後
-    // さらに `post()` を呼ぶことが無い（`order` の読み取りだけ）ので、
-    // `s.waitForEvents` に変えても上のような迷子は起きない。
+    // 今度はすべて成功する（`done` が3件増える）。
     await s.waitForEvents((events) => events.filter((event) => event.type === 'done').length === 3);
 
-    // 入力に載ったテキストの出現順で FIFO を確かめる（`redeliveryNotice` /
-    // `commitmentNotice` が前置されるので完全一致ではなく部分一致で見る）。
-    const order = (s.calls[0] as FakeCall).inputs.map((text) => {
-      if (text.includes('一件目')) return '一件目';
-      if (text.includes('二件目')) return '二件目';
-      if (text.includes('三件目')) return '三件目';
-      return '?';
+    // 入力に載ったテキストの出現順で FIFO を確かめる（`labelOrder` の doc）。
+    expect(labelOrder(s.calls[0] as FakeCall)).toEqual([
+      '一件目',
+      '一件目',
+      '一件目',
+      '二件目',
+      '三件目',
+    ]);
+
+    await s.clone.stop();
+  });
+
+  /**
+   * ## 割り込む一点を、待ちの速さではなく `#emit` の同期性で名指しする
+   *
+   * 下の2本は「終端（`error`）は出したが、その合図の後始末
+   * （`#settleInboxEvent`）はまだ走っていない」という**一点**に `post()` を
+   * 差し込む。`#emit` は購読者の callback を同期で呼ぶので、callback の中で
+   * `post()` を呼べばその一点に必ず入る。
+   *
+   * **`await` を挟んだ待ちの後に `post()` する形では、この窓に入れるかどうかが
+   * ホストの速さで変わる**（＝踏めた回だけ壊れ、踏まなかった回は緑になる）。
+   * 実際に PR #110 は、`expect.poll` のポーリング間隔が偶然この後始末を待って
+   * いたおかげでこの穴を見ずに済んでいた。ここでは**タイミングに一切頼らずに
+   * 毎回踏む**ので、直っていなければ必ず落ちる。
+   *
+   * **どちらの本も、直す前の世界でも「待ち」は必ず抜ける形にしてある** —
+   * 落ちるのは `toEqual` の不一致であって、待ちのタイムアウトではない
+   * （AGENTS.md「タイムアウトは歯があった証拠にならない」）。
+   */
+  it('終端を出した直後（後始末の前）に次の合図が届いても、枠で保持した合図は消えない', async () => {
+    // 1ターン目（一件目の初回）だけ枠で失敗させ、以降は成功させる。
+    const s = setup(undefined, createMemoryStores(), {
+      resultFor: (turnIndex) =>
+        turnIndex < 1 ? { subtype: 'error_during_execution', text: spendLimitMessage } : undefined,
     });
-    expect(order).toEqual(['一件目', '一件目', '一件目', '二件目', '三件目']);
+
+    // 一件目の `error` を emit している最中に二件目を post する（上の doc）。
+    let injected = false;
+    const unsubscribe = s.clone.subscribe('conv-1', (event) => {
+      if (event.type !== 'error' || injected) return;
+      injected = true;
+      s.clone.post(humanMessage('二件目'));
+    });
+
+    s.clone.post(humanMessage('一件目'));
+
+    // **入力が2件になること自体は、直る前も後も起きる** — 直す前は
+    // [一件目, 二件目]（一件目が `#forget` されて消え、二件目だけが走る）、
+    // 直した後は [一件目, 一件目]（保持した一件目が先に配り直される）。
+    // だからこの待ちはどちらの世界でも抜け、下の `toEqual` で落ちる。
+    // `s.calls[0]` は `query()` が呼ばれるまで `undefined` である（`post` は同期で
+    // 返るので、待ちの初回は必ずその前に走る）。**`?.` で受けること** — 素で
+    // 読むと待ちの中で TypeError になり、「歯が無い」ではなく「テストが壊れた」で
+    // 落ちる。
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) >= 2, '2件目の入力が投げられる');
+    // 直す前の壊れ方: `post()` がその場で `#usageBlocked` を降ろしていたので、
+    // `#pump` の `finally` が読む時点では `null` ＝ `defer: false` になり、
+    // **枠で失敗しただけの一件目が `#forget` される**（器からも消えるので
+    // 再起動でも戻らない ＝ 人間の発言が黙って失われる）。
+    //
+    // **先頭2件だけを見る（`slice`）。** 待ちが抜けた時点で3件目が既に投げられて
+    // いることがあり、配列まるごとの一致で見ると**直っているのに落ちる**
+    // （実測でそうなった）。見たいのは「2件目に何が投げられたか」なので、
+    // 直す前の世界との違い（`二件目` か `一件目` か）はこの先頭2件で決まる。
+    expect(labelOrder(s.calls[0] as FakeCall).slice(0, 2)).toEqual(['一件目', '一件目']);
+
+    // 保持した一件目が消えていない ＝ 両方に返る（二件目は一件目の後）。
+    await s.waitForEvents((events) => events.filter((event) => event.type === 'done').length === 2);
+    expect(labelOrder(s.calls[0] as FakeCall)).toEqual(['一件目', '一件目', '二件目']);
+
+    unsubscribe();
+    await s.clone.stop();
+  });
+
+  it('短絡した合図の後始末の直前に3本目が届いても、2本目は迷子にならず FIFO を保つ', async () => {
+    const s = setup(undefined, createMemoryStores(), {
+      resultFor: (turnIndex) =>
+        turnIndex < 2 ? { subtype: 'error_during_execution', text: spendLimitMessage } : undefined,
+    });
+
+    s.clone.post(humanMessage('一件目')); // turn 0: 失敗 → 保持（terminal 1件目）
+    await waitForTerminal(s.events);
+
+    // 三件目を撃つのは**二件目の短絡の `error`**（terminal 3件目）である。
+    // 一件目の再試行の失敗（terminal 2件目）ではない — 件数で名指しするので、
+    // どの `error` に入ったかがホストの速さで変わらない。
+    let injected = false;
+    const unsubscribe = s.clone.subscribe('conv-1', (event) => {
+      if (event.type !== 'error' || injected) return;
+      if (s.events.filter(isTerminal).length < 3) return;
+      injected = true;
+      s.clone.post(humanMessage('三件目'));
+    });
+
+    s.clone.post(humanMessage('二件目')); // 一件目の再試行（turn 1: 失敗）＋二件目の短絡
+
+    // **入力が4件になること自体は、直る前も後も起きる** — 直す前は
+    // [一件目, 一件目, 一件目, 三件目]（二件目が `#deferred` に取り残されて
+    // このプロセスでは二度と処理されない）、直した後は
+    // [一件目, 一件目, 一件目, 二件目]。
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) >= 4, '4件目の入力が投げられる');
+    // **先頭4件だけを見る**（上の本と同じ理由。5件目が既に投げられていることが
+    // あり、配列まるごとの一致では直っているのに落ちる）。
+    expect(labelOrder(s.calls[0] as FakeCall).slice(0, 4)).toEqual([
+      '一件目',
+      '一件目',
+      '一件目',
+      '二件目',
+    ]);
+
+    // 三件目まで含めて FIFO（到着順）で全部に返る。
+    await s.waitForEvents((events) => events.filter((event) => event.type === 'done').length === 3);
+    expect(labelOrder(s.calls[0] as FakeCall)).toEqual([
+      '一件目',
+      '一件目',
+      '一件目',
+      '二件目',
+      '三件目',
+    ]);
+
+    unsubscribe();
+    await s.clone.stop();
+  });
+
+  it('枠が閉じている間に2件が続けて届いても、配り直しは到着順のまま（待ち行列を追い越さない）', async () => {
+    // 1ターン目（一件目の初回）だけ枠で失敗させる。
+    const s = setup(undefined, createMemoryStores(), {
+      resultFor: (turnIndex) =>
+        turnIndex < 1 ? { subtype: 'error_during_execution', text: spendLimitMessage } : undefined,
+    });
+
+    s.clone.post(humanMessage('一件目')); // turn 0: 失敗 → 保持
+    await waitForTerminal(s.events);
+
+    // **続けて2件 post する。** 1件目の `post` は待っている `#pump` へ直接渡り、
+    // 2件目は待ち行列に並ぶ（`Inbox#push` の waiter 経路）。つまり解除の時点で
+    // **待ち行列には既に別の合図が居る** — 保持していた分を `push`（末尾）で
+    // 戻すと、あとから届いた三件目に追い越される。`Inbox#unshift`（先頭へ戻す）
+    // でなければ到着順が崩れる、というのがこの本の見ている歯である。
+    s.clone.post(humanMessage('二件目'));
+    s.clone.post(humanMessage('三件目'));
+
+    // **2件目に何が投げられるかで決まる。** 先頭へ戻していれば保持していた
+    // 一件目の再試行、末尾へ積んでいれば追い越した三件目になる。**どちらの
+    // 世界でも入力は2件以上になる**ので、この待ちはタイムアウトせず、下の
+    // `toEqual` が落ちる（AGENTS.md「タイムアウトは歯があった証拠にならない」）。
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) >= 2, '2件目の入力が投げられる');
+    expect(labelOrder(s.calls[0] as FakeCall).slice(0, 2)).toEqual(['一件目', '一件目']);
+
+    // 二件目と三件目は**1ターンにまとめて**読まれる（#123 のまとめ読み。連続する
+    // 同じ会話の人間の発言なので `drainWhile` が両方取る）。保持していた一件目は
+    // `#heldForUsage` で対象外なので、まとめられずに単独で先に読まれる。
+    // ＝ ターンは「一件目(初回) → 一件目(再試行) → 二件目＋三件目」の3本。
+    await s.waitForEvents((events) => events.filter((event) => event.type === 'done').length === 2);
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    expect(labelOrder(s.calls[0] as FakeCall)).toEqual(['一件目', '一件目', '二件目']);
+    // 3本目のターンに両方の本文が、到着順で載っている（`labelOrder` は最初に
+    // 当たった1つを返すので、まとめられた側はここで別に見る）。
+    const merged = inputs[2] ?? '';
+    expect(merged).toContain('二件目');
+    expect(merged).toContain('三件目');
+    expect(merged.indexOf('二件目')).toBeLessThan(merged.indexOf('三件目'));
 
     await s.clone.stop();
   });
