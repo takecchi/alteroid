@@ -112,8 +112,14 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
       void mutate(KEY.report(entry.date));
       break;
     case 'tool_use':
-      void mutate(KEY.managers);
-      invalidateManagerDetail(mutate);
+      // **クローン自身の手の分では落とさない。** 道具はクローンにも全部あり
+      // （#32）、その実行も同じ `tool_use` として届く。マネージャーが1つも
+      // 動いていないのに `/managers` と開いている詳細・生ログを取り直すと、
+      // クローンが自分で作業しているあいだ画面が再取得を続けることになる。
+      if (!isCloneActor(entry.actor)) {
+        void mutate(KEY.managers);
+        invalidateManagerDetail(mutate);
+      }
       break;
     case 'exchange':
       if (entry.with === 'manager') {
@@ -143,6 +149,19 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
  * 漏れやすい。キャッシュに載っているのは開いている詳細画面の分だけなので、
  * 束で落としても安い — だから常に束で統一する。
  */
+/**
+ * その `tool_use` がクローン自身の手か（`clone` / `clone:sub:<agent>` /
+ * `clone:distill`）。
+ *
+ * **判定の正本は `@alteroid/core` の `isCloneActor` である。** ここに写しがあるのは
+ * 画面のバンドルへ core の実行時コード（zod・`node:*` を引く）を持ち込まないため
+ * だけで、判断を分けたいからではない。**枝を増やすときは両方直すこと** — core 側の
+ * docstring にも同じことが書いてある。
+ */
+function isCloneActor(actor: string): boolean {
+  return actor === 'clone' || actor.startsWith('clone:');
+}
+
 function invalidateManagerDetail(mutate: ReturnType<typeof useSWRConfig>['mutate']): void {
   void mutate((key) => isKeyOfType(key, 'manager'));
   void mutate((key) => isKeyOfType(key, 'transcript'));

@@ -40,6 +40,37 @@ describe('活動の要約', () => {
     expect(digest).toContain('main のビルドが落ちた');
   });
 
+  /**
+   * ツール実行を層で分ける（#32）。
+   *
+   * クローンも道具を全部持つので、自分の手の実行が同じ日誌へ落ちる。1つの数に
+   * まとめると「委譲した量」として読める数が自分の手の量で膨らみ、**この digest を
+   * 読んで委譲を決めるクローン自身と、日報を読む人間の両方が誤る。**
+   */
+  it('ツール実行は「マネージャー・作業者」と「自分の手」を分けて数える', async () => {
+    const stores = createMemoryStores();
+    for (const actor of ['clone', 'clone:sub:general-purpose', 'clone:distill']) {
+      await stores.journal.append({ type: 'tool_use', actor, tool: 'Bash', input: {} });
+    }
+    await stores.journal.append({
+      type: 'tool_use',
+      actor: 'manager:mgr-1234abcd',
+      tool: 'Edit',
+      input: {},
+    });
+    await stores.journal.append({
+      type: 'tool_use',
+      actor: 'worker:mgr-1234abcd:worker',
+      tool: 'Read',
+      input: {},
+    });
+
+    const digest = await buildActivityDigest(stores, { since: new Date(Date.now() - 60_000) });
+
+    expect(digest).toContain('マネージャー・作業者のツール実行: 2 件');
+    expect(digest).toContain('あなた自身が手を動かした回数（委譲せずに使った道具）: 3 件');
+  });
+
   it('継続中の依頼は期間の外でも常に材料に載る（頼まれたままの仕事を忘れないため）', async () => {
     const stores = createMemoryStores();
     await stores.schedules.put({

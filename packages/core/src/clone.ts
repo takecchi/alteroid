@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type {
   Options,
+  PostToolUseHookInput,
   Query,
   SDKMessage,
   SDKUserMessage,
@@ -23,6 +24,11 @@ import { Inbox } from './inbox.js';
 import { createManagerPool, type ManagerPool } from './manager.js';
 import { renderMemoryDocuments } from './memory.js';
 import { placedModelTier, resolveModelTier } from './model-tier.js';
+import {
+  placedPermissionMode,
+  resolvePermissionModeFor,
+  type PermissionModeName,
+} from './permission-mode.js';
 import type { ProfileApplier } from './profile.js';
 import type { ProfileService } from './profile-service.js';
 import type { RunnerRegistry } from './runner-protocol.js';
@@ -54,6 +60,8 @@ import {
 import type { AccountUsageState } from './usage-snapshot.js';
 import {
   CLONE_ACTOR_ID,
+  CLONE_DISTILL_ACTOR_ID,
+  CLONE_SUB_ACTOR_PREFIX,
   isSuccessResult,
   modelUsageOf,
   usageDate,
@@ -74,8 +82,13 @@ import {
  * - model の既定は `fable`。役割とモデル帯の対応は設計判断であり、変更には
  *   人間の承認が要る（AGENTS.md 地雷5）。`ALTEROID_CLONE_MODEL` はその
  *   **承認そのもの**であって、AI や実装の都合で動かしてよい旋盤ではない。
- * - `tools: []` で組み込みツールを持たせない。これは人間の写像としての配置で
- *   あってデグレードではない。マネージャー以下へこの理由を流用しないこと。
+ * - **道具は全部渡す。** `tools` を渡さない（preset 一式）＋インプロセス MCP の
+ *   自作ツール＋人間の設定と MCP 連携（`settingSources`）。**「クローンは人間の
+ *   写像だから道具を持たない」は写像として成り立たない** — PC の前の人間は
+ *   Claude Code に頼むだけでなく、自分でも端末を叩きファイルを開く
+ *   （north_star「適用範囲」/ PRD「層ごとの能力」/ AGENTS.md 地雷7）。
+ *   重い調査と実作業を下へ委ねるのは**方針**であって、道具を取り上げて
+ *   実現しない（方針の置き場は `prompt.ts` のシステムプロンプト）。
  * - **ターンの起動口は受信箱ただ1つ。** 人間の発言もタイマーも蒸留も、必ず
  *   受信箱を通って直列に処理される。ここを迂回して直接ターンを起こすと、
  *   走行中のターンを踏み潰してループごと止まる。
@@ -120,6 +133,39 @@ export function placedCloneModel(env: NodeJS.ProcessEnv = process.env): string |
   return placedModelTier(env, CLONE_MODEL_ENV_KEY);
 }
 
+/**
+ * クローンの権限モードを人間が差し替えるための環境変数。
+ *
+ * **マネージャー（`ALTEROID_MANAGER_PERMISSION_MODE`）と対になっている。**
+ * 片方にしか置き場が無いのは非対称で、「マネージャーは都度確認に締められるが
+ * クローンは締められない」も「クローンだけ緩められない」も、どちらも*人間の側の*
+ * 能力の欠落になる（`MANAGER_MODEL_ENV_KEY` に書いてあるのと同じ理由）。
+ *
+ * **これは能力の制限ではなく実行環境の設定である。** 締めても道具は減らない。
+ * 既定（`auto`）の意味と、`default` に倒したときに何が起きるかは
+ * `permission-mode.ts` に書いてある。
+ */
+export const CLONE_PERMISSION_MODE_ENV_KEY = 'ALTEROID_CLONE_PERMISSION_MODE';
+
+/** 環境変数を見てクローンの権限モードを決める。空・空白なら既定（`auto`）。 */
+export function resolveClonePermissionMode(
+  env: NodeJS.ProcessEnv = process.env,
+): PermissionModeName {
+  return resolvePermissionModeFor(env, CLONE_PERMISSION_MODE_ENV_KEY);
+}
+
+/**
+ * 人間がクローンの権限モードを置いたか（置いていなければ `null`）。
+ *
+ * **起動時に表へ出すために要る。** モデル帯と同じで、既定から動いていることが
+ * 黙って効いている状態を作らない（`placedCloneModel` と同じ理由）。締める側の
+ * 差し替えは「道具が使えない」として現れるので、告知が無いと原因を探す手が
+ * `self_status` だけになる。
+ */
+export function placedClonePermissionMode(env: NodeJS.ProcessEnv = process.env): string | null {
+  return placedPermissionMode(env, CLONE_PERMISSION_MODE_ENV_KEY);
+}
+
 /** PreCompact で退避したトランスクリプトのうち、蒸留に渡す末尾のサイズ。 */
 const DISTILL_TRANSCRIPT_TAIL_BYTES = 60_000;
 
@@ -134,6 +180,15 @@ const DAILY_REPORT_LOOKUP = 30;
 
 /** 外部イベントの中身をクローンに見せる上限。全文が要るなら送り元で切ること。 */
 const EXTERNAL_PAYLOAD_LIMIT = 8_000;
+
+/**
+ * 観測できなかった名前の言い方。
+ *
+ * **空文字や省略で表さない。** 読めなかったことを黙って落とすと、監査の穴が
+ * 「何も起きなかった」と同じ見え方になる（`runner.ts` の `'(不明)'` と同じ作法）。
+ */
+const UNKNOWN_TOOL_NAME = '(不明な道具)';
+const UNKNOWN_AGENT_TYPE = '(不明)';
 
 /**
  * 継続中の依頼の器に触るときの試行回数と間隔（読み取りと発火の記録の両方）。
@@ -193,10 +248,17 @@ export interface CloneOptions {
   /** 主にテスト用。差し替えると委譲先ごと入れ替えられる。 */
   managers?: ManagerPool;
   /**
-   * モデル帯の差し替え（`ALTEROID_CLONE_MODEL`）を読む先。主にテスト用で、
+   * モデル帯の差し替え（`ALTEROID_CLONE_MODEL`）と権限モードの差し替え
+   * （`ALTEROID_CLONE_PERMISSION_MODE`）を読む先。主にテスト用で、
    * 既定は `process.env`。
    */
   env?: NodeJS.ProcessEnv;
+  /**
+   * 権限モード。省略すると `env` の `ALTEROID_CLONE_PERMISSION_MODE`、
+   * それも無ければ `auto`（`permission-mode.ts`）。主にテスト用の直渡しで、
+   * runner の `RunnerHostOptions.permissionMode` と同じ形である。
+   */
+  permissionMode?: PermissionModeName;
   /**
    * 実行環境プロファイル（`.zprofile` 相当）。
    *
@@ -275,6 +337,12 @@ class Clone implements CloneHost {
   readonly #self: SelfFacts | undefined;
   /** `#model` が既定（`CLONE_MODEL`）から差し替えられているか（`self_status` の材料）。 */
   readonly #modelOverridden: boolean;
+  /**
+   * SDK へ渡す権限モード。**下の `#observedPermissionMode` とは別物である** —
+   * こちらは「alteroid が何を頼んだか」、あちらは「SDK が init で何を報告したか」。
+   * 片方だけを持つと、頼んだ値が通っていないことに気づけない。
+   */
+  readonly #permissionMode: PermissionModeName;
   /** 道具の MCP サーバを組み立てる関数。既定は本物、テストでは差し替えられる。 */
   readonly #mcpServerFactory: typeof createCloneMcpServer;
 
@@ -287,10 +355,17 @@ class Clone implements CloneHost {
   #effort: string | null = null;
   #claudeCodeVersion: string | null = null;
   #apiKeySource: string | null = null;
-  #permissionMode: string | null = null;
+  #observedPermissionMode: string | null = null;
   #mcpServersInfo: Array<{ name: string; status: string }> = [];
   /** init で報告された、いまの SDK セッション id。`#resumedFrom` とは別（あちらは resume 元）。 */
   #sdkSessionId: string | null = null;
+  /**
+   * 既に日誌へ残した拒否の `tool_use_id`。
+   *
+   * 生の合図と `result` の記録は同じ1件を2回運んでくるので、ここで畳む。
+   * **器を作り直せば消える**（＝件数の集計には使えない。集計は日誌が持つ）。
+   */
+  readonly #deniedToolUses = new Set<string>();
   /** `#buildOptions` で組み立てたシステムプロンプトの文字数。セッションの間は固定。 */
   #systemPromptChars = 0;
   /**
@@ -463,6 +538,7 @@ class Clone implements CloneHost {
       sessionStore,
       managers,
       env,
+      permissionMode,
       profile,
       profileService,
       accountUsage,
@@ -476,6 +552,7 @@ class Clone implements CloneHost {
     const envSource = env ?? process.env;
     this.#model = resolveCloneModel(envSource);
     this.#modelOverridden = placedCloneModel(envSource) !== null;
+    this.#permissionMode = permissionMode ?? resolveClonePermissionMode(envSource);
     this.#env = envSource;
     this.#profile = profile;
     this.#profileService = profileService;
@@ -1709,16 +1786,37 @@ class Clone implements CloneHost {
 
     return {
       model: this.#model,
-      // 組み込みツールは持たせない（人間の写像としての配置）
-      tools: [],
+      // **`tools` を渡さない ＝ preset 一式。** 明示リストで絞れば能力の削除に
+      // なり、それは層を問わず禁じられている（AGENTS.md 地雷1・7 / north_star
+      // 「適用範囲」）。委譲が原則である理由（長寿命セッションの俯瞰と判断を守る）
+      // は方針＝システムプロンプトで表す（`prompt.ts`）。
+      //
+      // **`allowedTools` は「確認なしで通す一覧」であって「使える道具の一覧」では
+      // ない**（SDK: "To restrict which tools are available, use the `tools`
+      // option instead."）。だからここに自作ツールだけを並べても組み込みツールは
+      // 1つも減らない。並べてあるのは、自分の道具が権限の判断に晒されないように
+      // するためである。
       allowedTools: CLONE_ALLOWED_TOOLS,
+      // 人間が開く Claude Code と同じ既定（`auto`）。**`default` のまま道具を渡すと
+      // 「渡したのに使えない」になる** — このセッションには `canUseTool` が無く、
+      // SDK は確認相手が居ないとき `ask` の判断をそのまま拒否で終わらせる。
+      //
+      // **`canUseTool` は繋がない（クローンだけはマネージャーと事情が違う）。**
+      // クローンは長寿命セッション1本で、受信箱のすべてのターンがそこを直列に
+      // 通る。ここで人間の回答を待って止めれば、止まるのは待っている1件ではなく
+      // 全部である（PRD「自律」の「止まるのはその仕事だけ」が壊れる）。確認が
+      // 要ると判断したなら `ask_human` に積んでから手を動かすのが、この層での
+      // 権限境界の表し方である（PRD「権限境界」）。
+      permissionMode: this.#permissionMode,
       mcpServers: {
         [MCP_SERVER_NAME]: this.#mcpServerFactory(this.#toolContext()),
       },
       systemPrompt,
-      // 人間のプロジェクト設定を持ち込まない。クローンは実プロジェクトの
-      // 作業者ではなく、判断する側である（設定の共有は M2 のマネージャー側）。
-      settingSources: [],
+      // **人間が使っているのと同じ設定・同じ `.mcp.json` を読む。** ここを `[]` に
+      // すると、人間が Claude Code で使っている MCP 連携がクローンからは1つも
+      // 見えない ＝ 能力の削除（AGENTS.md 地雷7 の後半 / PRD「業務範囲」の
+      // 「人間が使っている連携が、クローンと作業者からも使えること」）。
+      settingSources: ['user', 'project', 'local'],
       // 人間が置いた実行環境プロファイルを、クローンの手にも効かせる。
       env: this.#childEnv(),
       includePartialMessages: true,
@@ -1735,7 +1833,8 @@ class Clone implements CloneHost {
             hooks: [(input, _toolUseId, extra) => this.#onPreCompact(input, extra?.signal)],
           },
         ],
-        // `self_status` の effort はここで拾う。
+        // `self_status` の effort と、**クローンが自分の手を使った跡**をここで拾う
+        // （後者は `#onPostToolUse` のコメント）。
         //
         // 1. **`PostToolUse` はツールの実行後に走るので、実行そのものを止められない**
         //    （`PreToolUse` と違ってここで判断を差し込む余地が無い＝観測専用として
@@ -1788,7 +1887,8 @@ class Clone implements CloneHost {
       requestedEffort: null,
       claudeCodeVersion: this.#claudeCodeVersion,
       apiKeySource: this.#apiKeySource,
-      permissionMode: this.#permissionMode,
+      permissionMode: this.#observedPermissionMode,
+      requestedPermissionMode: this.#permissionMode,
       mcpServers: this.#mcpServersInfo,
       sessionId: this.#sdkSessionId,
       resumedFrom: this.#resumedFrom,
@@ -1810,7 +1910,7 @@ class Clone implements CloneHost {
     this.#effort = null;
     this.#claudeCodeVersion = null;
     this.#apiKeySource = null;
-    this.#permissionMode = null;
+    this.#observedPermissionMode = null;
     this.#mcpServersInfo = [];
     this.#sdkSessionId = null;
   }
@@ -1837,7 +1937,8 @@ class Clone implements CloneHost {
     this.#claudeCodeVersion =
       typeof raw.claude_code_version === 'string' ? raw.claude_code_version : null;
     this.#apiKeySource = typeof raw.apiKeySource === 'string' ? raw.apiKeySource : null;
-    this.#permissionMode = typeof raw.permissionMode === 'string' ? raw.permissionMode : null;
+    this.#observedPermissionMode =
+      typeof raw.permissionMode === 'string' ? raw.permissionMode : null;
     this.#mcpServersInfo = Array.isArray(raw.mcp_servers)
       ? raw.mcp_servers.filter(
           (entry): entry is { name: string; status: string } =>
@@ -1850,15 +1951,111 @@ class Clone implements CloneHost {
   }
 
   /**
-   * `PostToolUse` フックから effort の実効値を拾う（`#buildOptions` の hooks コメント参照）。
+   * `PostToolUse` フックから effort の実効値と、**自分の手を使った跡**を拾う
+   * （`#buildOptions` の hooks コメント参照）。
+   *
+   * ## なぜ日誌に残すのか
+   *
+   * `docs/architecture.md`「非対称な可視性」が名指しで求めている
+   * — 「**どちらで見たかは日誌に残す。** 委譲が原則である理由（俯瞰と判断を守る）が
+   * 守られているかは、禁止ではなく記録で見る」。道具を渡した以上、記録がここに
+   * 無いと「委譲していない」が誰にも見えなくなり、方針が守られているかを見る手が
+   * 禁止しか残らない。
+   *
+   * ## なぜ自作ツールを除くのか
+   *
+   * 自作ツール（`mcp__alteroid__*`）は**それ自身が跡を残す** — `memory_write` は
+   * `memory_update`、`journal_write` は本文、`manager_start` は台帳と `tool_use`
+   * （マネージャー側の記録）へ落ちる。ここで重ねて書くと、クローンは毎ターン
+   * 数本の道具を叩くので日誌が自分の記録で埋まり、**掘るための層が掘れなくなる**。
+   * 残すのは「委譲せずに自分で手を動かした」という、他のどこにも出ない事実だけで
+   * よい（人間の MCP 連携も preset の道具と同じくここに載る — あちらも
+   * 「自分でブラウザを開いた」側である）。
    *
    * **例外を投げないこと。** 投げるとツール実行の後続に影響しうる。読めない形なら
-   * 何もしないだけで、道具の実行そのものは常に続ける。
+   * 何もしないだけで、道具の実行そのものは常に続ける（日誌の失敗も `#journal` が
+   * 飲み込む）。
    */
   async #onPostToolUse(input: unknown): Promise<{ continue: true }> {
-    const level = (input as { effort?: { level?: unknown } } | null | undefined)?.effort?.level;
+    // **`PostToolUseHookInput` の形として読む**（SDK の型。フィールド名の綴りを
+    // ここで自前に決めない）。`unknown` から入るのはフックの引数が SDK 側で
+    // 広い型になっているためで、読めない形でも投げないための検査は下でやる。
+    const raw = input as Partial<PostToolUseHookInput> | null | undefined;
+    const level = raw?.effort?.level;
     if (typeof level === 'string') this.#effort = level;
+
+    await this.#journalToolUse(raw, CLONE_ACTOR_ID);
     return { continue: true };
+  }
+
+  /**
+   * 蒸留のサイドクエリでの道具実行を日誌へ残す。
+   *
+   * **本セッションと同じ関数を通す。** 道具の配置を揃えたのだから記録も揃える
+   * （片方だけ記録が無いと「蒸留のターンで何をしたか」がどこにも残らない）。
+   * 違うのは actor だけで、**effort はここでは拾わない** — あちらは別セッション
+   * なので、その値を本セッションの観測として持つと嘘になる。
+   */
+  async #onDistillToolUse(input: unknown): Promise<{ continue: true }> {
+    await this.#journalToolUse(
+      input as Partial<PostToolUseHookInput> | null | undefined,
+      CLONE_DISTILL_ACTOR_ID,
+    );
+    return { continue: true };
+  }
+
+  /** `PostToolUse` の合図1件を日誌へ落とす（自作ツールは除く）。 */
+  async #journalToolUse(
+    raw: Partial<PostToolUseHookInput> | null | undefined,
+    mainThreadActor: string,
+  ): Promise<void> {
+    // 自作ツールは除く（上のコメント）。**`tool_name` が読めなかったときは
+    // 落とさずに `(不明な道具)` で残す** — 除外の判定に使う名前が読めないなら、それは
+    // 「自作ツールだった」ではなく「観測できなかった」である。黙って消すと、
+    // 監査の穴がいちばん静かな形（何も起きなかったように見える）で空く。
+    const tool = typeof raw?.tool_name === 'string' ? raw.tool_name : UNKNOWN_TOOL_NAME;
+    if (tool.startsWith(`mcp__${MCP_SERVER_NAME}__`)) return;
+    await this.#journal({
+      type: 'tool_use',
+      actor: cloneToolActor(raw, mainThreadActor),
+      tool,
+      input: raw?.tool_input,
+    });
+  }
+
+  /**
+   * 確認へ上がらずに止められた1件を日誌へ残す。
+   *
+   * **生の合図（`system/permission_denied`）と `result.permission_denials` の
+   * 両方から呼ばれる。** 前者は best-effort で取りこぼしうるが速く、後者は
+   * authoritative だがターンの終わりにしか来ない。だから両方読み、`tool_use_id`
+   * で二重書きを防ぐ（`runner.ts` の `#noteDenial` と同じ形）。
+   *
+   * **`tool_use` としては記録しない。** 拒否は「道具を使った」ではないので、
+   * 混ぜると `digest` の「自分で手を動かした回数」が使えていない回数まで数える。
+   */
+  async #noteDenial(source: unknown, via: 'live' | 'result'): Promise<void> {
+    const denial = source as
+      { tool_name?: unknown; tool_use_id?: unknown; decision_reason?: unknown } | null | undefined;
+    const tool = typeof denial?.tool_name === 'string' ? denial.tool_name : UNKNOWN_TOOL_NAME;
+    // id が無ければ道具の名前で代用する。**取りこぼすより重複を許す。**
+    const toolUseId =
+      typeof denial?.tool_use_id === 'string' && denial.tool_use_id.length > 0
+        ? denial.tool_use_id
+        : `${tool}:${via}`;
+    if (this.#deniedToolUses.has(toolUseId)) return;
+    this.#deniedToolUses.add(toolUseId);
+
+    const why = typeof denial?.decision_reason === 'string' ? `（${denial.decision_reason}）` : '';
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'inbound',
+      text:
+        `${tool} の実行が、確認へ上がらずに止められた${why}。` +
+        `許可モードは ${this.#permissionMode} で、この層に確認を回す相手は居ない` +
+        `（合図の出所: ${via}）。`,
+    });
   }
 
   /**
@@ -1928,8 +2125,11 @@ class Clone implements CloneHost {
       prompt,
       options: {
         model: this.#model,
-        tools: [],
+        // **本セッションと同じ配置にする。** 片方だけ道具や設定が違うと、
+        // 人格の書き手（蒸留）だけが別の頭になる（モデル帯を揃えているのと
+        // まったく同じ理由）。理由は `#buildOptions` 側に書いてある。
         allowedTools: CLONE_ALLOWED_TOOLS,
+        permissionMode: this.#permissionMode,
         mcpServers: {
           [MCP_SERVER_NAME]: this.#mcpServerFactory({
             stores: this.#stores,
@@ -1948,10 +2148,18 @@ class Clone implements CloneHost {
           memory,
           ...(this.#self === undefined ? {} : { self: this.#self }),
         }),
-        settingSources: [],
+        settingSources: ['user', 'project', 'local'],
         env: this.#childEnv(),
         persistSession: false,
         ...(this.#cwd === undefined ? {} : { cwd: this.#cwd }),
+        // **監査もこちら側に要る。** 道具と許可モードを本セッションと揃えた以上、
+        // 記録だけ片方に無ければ「蒸留のターンで何をしたか」がどこにも残らない
+        // （docs/architecture.md「PostToolUse フックで全ツール実行を日誌に記録」）。
+        // **effort の観測はここでは意味を持たない**（別セッションの値なので
+        // `#effort` を汚さないよう、日誌だけを書く枝を通す）。
+        hooks: {
+          PostToolUse: [{ hooks: [(input) => this.#onDistillToolUse(input)] }],
+        },
       },
     });
 
@@ -2073,7 +2281,18 @@ class Clone implements CloneHost {
           this.#captureInitFacts(message);
           return;
         }
-
+        // 確認へ上げずにその場で止められた1件（分類器・deny 規則・モード）。
+        //
+        // **`permissionMode: 'auto'` で `canUseTool` を繋いでいない以上、拒否は
+        // 普通に起きる**（そのうえ `settingSources` で人間の deny 規則も読む）。
+        // ここを捨てると、クローンの手が止められたことが日誌のどこにも出ない ＝
+        // 「静かになった」と「起きていない」が区別できなくなる（`runner.ts` の
+        // 同じ箇所と同じ理由。あちらは受信箱にも出すが、こちらは**自分が**
+        // ツール結果でエラーを読むので、要るのは後から辿れる記録だけである）。
+        if ((message as { subtype?: unknown }).subtype === 'permission_denied') {
+          await this.#noteDenial(message, 'live');
+          return;
+        }
         // 上限の文言。**API エラーとしては来ない**（SDK のコメント）ので、
         // 通知・情報メッセージの本文を見るしかない（`runner.ts` の同じ場面と
         // 同じ理由 — マネージャー側だけがこれを見ていて、クローン側に無いのは
@@ -2148,6 +2367,14 @@ class Clone implements CloneHost {
         // 人間は `claude.ai/settings/usage` で見られるので、これは能力の削除に
         // なっていた（north_star 禁止1）。
         await this.#recordUsage(message, 'session', 'cumulative');
+
+        // **生の合図と `result` の両方を読む。** SDK は前者を best-effort と言い、
+        // 「authoritative なのは `result.permission_denials`」と言っている。
+        // **成否で絞らない** — 拒否は成功したターンにも失敗したターンにも載る
+        // （`runner.ts` の同じ箇所と同じ判断）。二重に書かないのは `#deniedToolUses`。
+        for (const denial of permissionDenialsOf(message)) {
+          await this.#noteDenial(denial, 'result');
+        }
 
         const turn = this.#turn;
         if (turn && turn.text.trim().length > 0) {
@@ -2408,6 +2635,33 @@ function contentBlocks(message: unknown): Block[] {
   const content = (message as { content?: unknown }).content;
   if (typeof content === 'string') return [{ type: 'text', text: content }];
   return Array.isArray(content) ? (content as Block[]) : [];
+}
+
+/**
+ * どの層の手だったかを `PostToolUse` の合図から決める。
+ *
+ * **`agent_id` で見る**（SDK: "Use this field (not agent_type) to distinguish
+ * subagent calls from main-thread calls"）。クローンは preset 一式を持つので
+ * `Task` も持っており、サブエージェントの中の道具実行もこのフックを通って来る。
+ * ここを分けないと「クローンが自分で叩いた回数」がサブエージェントの分だけ
+ * 膨らみ、**日誌が答えるべき問い（自分でやったのか委ねたのか）に嘘の数を返す。**
+ */
+function cloneToolActor(
+  hook: { agent_id?: unknown; agent_type?: unknown } | null | undefined,
+  mainThreadActor: string,
+): string {
+  if (typeof hook?.agent_id !== 'string' || hook.agent_id.length === 0) return mainThreadActor;
+  const type =
+    typeof hook.agent_type === 'string' && hook.agent_type.length > 0
+      ? hook.agent_type
+      : UNKNOWN_AGENT_TYPE;
+  return `${CLONE_SUB_ACTOR_PREFIX}${type}`;
+}
+
+/** `result` に載っている拒否の記録（authoritative な側）。無ければ空。 */
+function permissionDenialsOf(message: SDKMessage): unknown[] {
+  const denials = (message as { permission_denials?: unknown }).permission_denials;
+  return Array.isArray(denials) ? denials.filter((entry) => entry !== null) : [];
 }
 
 function textDelta(event: unknown): string | null {

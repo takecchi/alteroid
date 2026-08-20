@@ -1162,6 +1162,7 @@ describe('self_status（いま自分がどう走っているか）', () => {
     claudeCodeVersion: null,
     apiKeySource: null,
     permissionMode: null,
+    requestedPermissionMode: 'auto',
     mcpServers: [],
     sessionId: null,
     resumedFrom: null,

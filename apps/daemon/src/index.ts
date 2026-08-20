@@ -10,6 +10,8 @@ import { serve } from '@hono/node-server';
 import {
   CLONE_MODEL,
   CLONE_MODEL_ENV_KEY,
+  CLONE_PERMISSION_MODE_ENV_KEY,
+  DEFAULT_PERMISSION_MODE,
   createClone,
   createLocalRunner,
   createProfileApplier,
@@ -19,6 +21,7 @@ import {
   createScheduler,
   dailyReportEvent,
   missingDailyReportDates,
+  placedClonePermissionMode,
   placedManagerModels,
   reasonOf,
   resolveCloneModel,
@@ -304,6 +307,24 @@ export async function main(): Promise<void> {
   }
 
   /**
+   * クローンの権限モードの差し替えも表へ出す。
+   *
+   * **能力の制限ではなく実行環境の設定である**（`permission-mode.ts`）。それでも
+   * 黙らせない理由は帯と同じで、締める側へ倒した効果は「道具が使えない」という
+   * 分かりにくい形で出るからである。**値が読めない綴りでもそのまま出す** —
+   * この直後の `createClone` が理由つきで落とすので、その前に何が置かれていたかを
+   * 見せておく（落ちた後のログだけでは、置いた本人が綴りを疑えない）。
+   */
+  const placedClonePermission = placedClonePermissionMode();
+  if (placedClonePermission !== null) {
+    process.stderr.write(
+      `alteroidd: ${CLONE_PERMISSION_MODE_ENV_KEY} が置かれています` +
+        `（既定 ${DEFAULT_PERMISSION_MODE} → ${placedClonePermission}）。` +
+        `これは実行環境の設定であって、クローンの道具を減らすものではありません\n`,
+    );
+  }
+
+  /**
    * マネージャーと作業者の帯も同じ扱いで表へ出す。
    *
    * **ただし正本はここではない。** この2つを実際に SDK へ渡すのは runner であり
@@ -393,6 +414,9 @@ export async function main(): Promise<void> {
         ? `${paths.root}（デーモンのローカル状態だけ。記憶は上の器にあり、ここには無い）`
         : `${paths.root}（記憶もここにある。人間が直接開いて書き換える）`,
     workspace,
+    // **クローン自身の cwd は workspace とは別に渡す。** クローンへ渡している
+    // `cwd`（下の createClone）と同じ値でなければ、自己認識が嘘になる。
+    cwd: paths.root,
     runner: runnerDescription,
     // **待ち受けアドレスではなく人間が叩く先を渡す。** `ALTEROID_BIND=0.0.0.0` は
     // 「どこで待つか」であって入口ではないし、TLS を手前で終端すれば scheme も違う。

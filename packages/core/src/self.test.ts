@@ -16,6 +16,7 @@ const FACTS: SelfFacts = {
   storage: 'PostgreSQL（db:5432/alteroid）',
   local: '/data/alteroid（デーモンのローカル状態だけ。記憶は上の器にあり、ここには無い）',
   workspace: '/workspace',
+  cwd: '/data/alteroid',
   runner: '別プロセスの manager-runner（http://runner:4518）',
   entrypoint: 'https://alteroid.example',
   auth: '認証は有効。ログイン手段: google',
@@ -76,6 +77,26 @@ describe('自己認識 — システムプロンプトに載る節', () => {
     expect(section).toContain('/workspace');
     expect(section).toContain('http://runner:4518');
     expect(section).toContain('認証は有効');
+  });
+
+  /**
+   * **自分の手が立つ場所を、委譲先の作業場所と混ぜない。**
+   *
+   * 道具を全部持つようになった（#32）ので、相対パスの基準が分からないことが実害に
+   * なった。ここが `workspace` だけだと、クローンは「ワークスペースに居るつもり」で
+   * `ls` や `Read` を撃つ（構成によっては、その場所はこの器から見えない）。
+   */
+  it('自分の作業ディレクトリと、マネージャーの作業場所を区別して載せる', () => {
+    const section = buildSelfKnowledge({ ...FACTS, cwd: '/data/alteroid' });
+
+    const own = section.split('\n').find((line) => line.includes('あなた自身の作業ディレクトリ'));
+    expect(own).toContain('/data/alteroid');
+    const manager = section
+      .split('\n')
+      .find((line) => line.includes('マネージャーの既定の作業ディレクトリ'));
+    expect(manager).toContain('/workspace');
+    // 「あなたの器から見えるとは限らない」ことまで書く（見えると確信させない）
+    expect(manager).toContain('見えるとは限らない');
   });
 
   /**
@@ -146,6 +167,7 @@ describe('CloneRuntimeFacts の整形 — 観測した値と、取れていな�
     claudeCodeVersion: '2.1.0',
     apiKeySource: 'oauth',
     permissionMode: 'default',
+    requestedPermissionMode: 'auto',
     mcpServers: [{ name: 'alteroid', status: 'connected' }],
     sessionId: 'sess-observed',
     resumedFrom: null,
@@ -218,6 +240,21 @@ describe('CloneRuntimeFacts の整形 — 観測した値と、取れていな�
     expect(section).not.toContain('default');
     // 「まだ分からない」が複数箇所に出るので、件数だけ見る（未観測4件 + resume元は別文言）。
     expect(section.match(/まだ分からない/g)?.length).toBeGreaterThanOrEqual(4);
+  });
+
+  /**
+   * **観測した許可モードと、alteroid が渡した許可モードを混ぜない。** 道具を持つ
+   * ようになった（#32）以上、「使えるはずの道具が使えない」の切り分けはここから
+   * 始まる。片方だけを出すと、頼んだ値が通っていないことに気づけない。
+   */
+  it('許可モードは「SDK が報告した実効値」と「alteroid が渡したもの」を分けて出す', () => {
+    const section = describeCloneRuntime({
+      ...RUNTIME,
+      permissionMode: 'dontAsk',
+      requestedPermissionMode: 'auto',
+    });
+    expect(section).toContain('許可モード（SDK が報告した実効値）: dontAsk');
+    expect(section).toContain('許可モード（alteroid が渡したもの）: auto');
   });
 
   it('認証の出所は値ではなく名前だけを出す（鍵そのものを持つ型ではない）', () => {
