@@ -405,6 +405,20 @@ class Clone implements CloneHost {
    */
   readonly #deferred: InboxEvent[] = [];
   /**
+   * 一度でも枠で保持した合図の id。**まとめ読み（`#mergedHumanBatch`）から外すため**
+   * だけに持つ。
+   *
+   * 枠が閉じている間の再試行は「新しい合図1件につき高々1回」に絞ってある（`post` の
+   * 解除の doc）。保持していた発言を、解除の契機になった新しい発言と1ターンに束ねると、
+   * **その1回が何件ぶんの仕事なのかが変わる** — 束ねた回が再び枠に当たれば、新しい
+   * 発言も一緒に保持へ戻り、人間は自分の発言が受け取られたのかどうかを（保持の断り書き
+   * すら受け取れずに）判断できなくなる。費用の設計に触るので、ここは分けたままにする。
+   *
+   * `#deferred` そのものではなく別に持つのは、`#deferred` が解除のたびに空になる
+   * （＝受信箱へ戻した時点で「保持していた」ことが消える）ためである。
+   */
+  readonly #heldForUsage = new Set<string>();
+  /**
    * 種類（`kind`）ごとに最後に日誌へ書いた上限の文言。
    *
    * **同じ知らせで日誌を埋めないためにある。** `reached` は一度立てば `#pump`
@@ -645,6 +659,11 @@ class Clone implements CloneHost {
     // 畳む。**これは実行回数の制限ではない**（AGENTS.md 地雷2）— 発火を減らすのでも
     // 遅らせるのでもなく、「まだ読んでいない同じ合図」を二度読まないだけである。
     // 人間の発言・マネージャーからの一件・外部イベントは中身が違うので絶対に畳まない。
+    //
+    // **「畳む」と「まとめて読む」を混同しないこと。** ここで畳んだ tick は捨てられて
+    // 器からも消える。処理待ちのあいだに積み上がった人間の発言を1ターンで読む機構
+    // （`#mergedHumanBatch`）は**捨てない** — 全文が届いた順に渡り、合図は件数ぶん
+    // 器に残り、後始末も件数ぶん通る。だからそちらはこの `return` の側に足さないこと。
     if (isTick(event) && this.#inbox.hasPending((queued) => isSameTick(queued, event))) return;
 
     // **受理した時点で未読として書き出す。** 境界を「queue に入った時点」に置いては
@@ -795,18 +814,24 @@ class Clone implements CloneHost {
         continue;
       }
 
+      // 処理待ちのあいだに積み上がった**続きの発言**を、ここで一緒に取り出す
+      // （`#mergedHumanBatch`）。`null` なら今までどおりこの1件だけを読む。
+      const merged = this.#mergedHumanBatch(event);
+      const batch: InboxEvent[] = merged ?? [event];
+
       this.#redeliveryNotice = this.#redeliveryNoticeFor(event);
       // **ここは `try` の外である。** 投げれば `for await` ごと抜けて受信箱の
       // ループが死に、クローンは何も受け取れなくなる（`#handle` の失敗とは被害の
       // 桁が違う）。中では読み取りの失敗を自分で握っているが、握り漏らしが1つでも
       // 残ると全部が止まるので、外側にも受けを置く。**断り書きが付かないことより、
       // ループが止まることの方がずっと高い。**
-      this.#commitmentNotice = await this.#commitmentNoticeFor(event).catch((error: unknown) => {
+      this.#commitmentNotice = await this.#commitmentNoticeFor(batch).catch((error: unknown) => {
         noteDroppedRecord('未了の断り書きの組み立て', inboxEventShape(event), error);
         return '';
       });
       try {
-        await this.#handle(event);
+        if (merged === null) await this.#handle(event);
+        else await this.#runHumanTurn(merged);
       } catch (error) {
         await this.#reportFailure(this.#conversationOf(event), String(error));
         this.#finishTurn();
@@ -818,12 +843,96 @@ class Clone implements CloneHost {
         // `system` 通知）で今回の合図が枠に当たったと判明したなら、この時点で
         // `#usageBlocked` が非 null になっている。その場合は `#settleInboxEvent`
         // に `defer: true` を渡し、`#forget` ではなく `#deferred` へ積む側を選ぶ。
-        await this.#settleInboxEvent(event, this.#usageBlocked !== null);
+        //
+        // **まとめて読んだ分は1件も飛ばさずここを通す。** 通し忘れた合図は器
+        // （`stores.inbox`）に未読のまま残り、**起動のたびに永久に配り直される**
+        // （`#forget` の doc）。判定（`#usageBlocked`）は先に1度だけ取る —
+        // 後始末の途中で変わる値ではないが、件ごとに読み直す形にすると
+        // 「同じ1ターンの分が、半分は消えて半分は保持される」を作れる形が残る。
+        const defer = this.#usageBlocked !== null;
+        for (const held of batch) await this.#settleInboxEvent(held, defer);
       }
     }
     // 閉じた後に待っている人を取り残さない
     for (const done of this.#completions.values()) done();
     this.#completions.clear();
+  }
+
+  /**
+   * 取り出した合図と一緒に1ターンで読む発言を決める。まとめないなら `null`。
+   *
+   * **人間は返事を待っているあいだも喋る。** 先客（走行中のターン・蒸留・
+   * マネージャーとの往復）が居るあいだに積み上がった発言を1件ずつ別のターンで
+   * 読むと、クローンは「あとで言い直された最初の一言」に本気で答え、次のターンで
+   * その仕事をやり直す。人間が Claude Code に立て続けに3行打ったときに起きるのは
+   * それではない — **溜まった分をまとめて読んでから答えるのが等価な振る舞い**である。
+   *
+   * **これは畳み込み（`post` の `isTick`）ではない。** あちらは「読む前の同じ合図を
+   * 二度読まない」＝**捨てる**。こちらは1文字も捨てず、全文を届いた順に1つの本文へ
+   * 並べる（`humanTurnText`）。合図そのものも捨てないので、器の未読・台帳・日誌は
+   * 件数ぶん残り、後始末（`#settleInboxEvent`）も件数ぶん通る。
+   *
+   * 3つは**まとめない**。
+   *
+   * - **人間の発言以外。** タイマー・外部イベント・マネージャーからの一件・蒸留・
+   *   承認の回答は、それぞれ起点ごとのプロンプトを持つ別の仕事である
+   * - **会話が違う発言。** 応答の宛先（`#emit` は会話単位）が1つに決まらない。
+   *   別のタブ・別の端末で話している相手の画面に、こちらの応答が流れる
+   * - **配り直しの合図**（`#redelivered`）。「これは配り直しである（N 回目）」は
+   *   合図1件ごとの断り書きで、初回配達のものと混ぜると何が二度目なのか言えなくなる
+   * - **枠で保持した合図**（`#heldForUsage`）。再試行は「新しい合図1件につき高々1回」
+   *   に絞ってあり、束ねるとその1回が何件ぶんの仕事なのかが変わる
+   */
+  #mergedHumanBatch(event: InboxEvent): HumanMessage[] | null {
+    if (event.type !== 'human_message') return null;
+    if (!this.#mergeable(event)) return null;
+
+    // **先頭から連続している分だけ**である（`Inbox#drainWhile`）。間に別の起点が
+    // 挟まっていたらそこで止まる — 飛び越えて集めると、後から届いた発言を先に
+    // 読むことになり、受信箱が順序を並べ替えないという設計が崩れる。
+    const rest = this.#inbox.drainWhile(
+      (queued) =>
+        queued.type === 'human_message' &&
+        queued.conversationId === event.conversationId &&
+        this.#mergeable(queued),
+    );
+    // **1件だけなら `null` を返す**（`#handle` の通常経路をそのまま通す）。まとめる
+    // 側へ寄せると、いちばん多い「1件だけ」の本文に断り書きが載る形が作れてしまう。
+    if (rest.length === 0) return null;
+    return [event, ...rest.filter(isHumanMessage)];
+  }
+
+  /**
+   * その合図を他の発言と1ターンにまとめてよいか。
+   *
+   * **一度でも「1件として扱う」と決めた合図は、まとめる側へ戻さない。** 配り直し
+   * （`#redelivered`）も枠での保持（`#heldForUsage`）も、合図1件ごとの断り書きと
+   * 1件ごとの試行回数に意味があり、束ねるとその意味が言えなくなる。
+   */
+  #mergeable(event: InboxEvent): boolean {
+    return !this.#redelivered.has(event.id) && !this.#heldForUsage.has(event.id);
+  }
+
+  /**
+   * 人間の発言を1ターンとして通す。**1件でも複数件でも同じ道を通す。**
+   *
+   * 分けて書くと、片方にだけ `#recorded` の待ちが入る・片方だけ会話 id の取り方が
+   * 違う、といった食い違いが静かに入る（どちらも人間からは見えない形で壊れる）。
+   */
+  async #runHumanTurn(events: HumanMessage[]): Promise<void> {
+    // **ここでは書かない。** 発言は受理した瞬間に `#record` が書いている。
+    // 両方で書くと同じ発言が日誌に二度載る（会話の再構成が二重になる）。
+    //
+    // 待つのは順序のためだけである（`#recorded` の理由）。**まとめた分は全部待つ** —
+    // 1件でも飛ばすと、その発言だけが日誌で自分への応答より後ろに回りうる。
+    // **書けたかどうかを条件にしない** — `#journal` は失敗を自分で握って stderr へ
+    // 落とすので、ここへ来る約束は必ず解決する。書けなかったからターンを止める、には
+    // しない（記録できないことより、応答が返らないことの方が高くつく）。
+    for (const event of events) await this.#recorded.get(event.id);
+
+    const head = events[0];
+    if (head === undefined) return;
+    await this.#runTurn(head.conversationId, humanTurnText(events));
   }
 
   /**
@@ -853,6 +962,10 @@ class Clone implements CloneHost {
 
     if (defer) {
       this.#deferred.push(event);
+      // 保持したことを覚えておく（`#heldForUsage` の doc）。**印を消すのは
+      // `#forget` と同じ側である** — 保持している間に消すと、解除で戻ってきた
+      // 合図が「初めて届いたもの」に見えてまとめ読みの対象へ戻る。
+      this.#heldForUsage.add(event.id);
     } else {
       // **終えた時点で消す。取り出した時点ではない。** 取り出した時点で消すと、
       // 処理の途中でプロセスが死んだものが失われる＝いま塞いでいる穴がそのまま残る。
@@ -863,6 +976,7 @@ class Clone implements CloneHost {
       // 参照先が消えている）が起動のたびに配り直され、そのたびに同じ失敗を
       // 繰り返してクローンのターンを1本ずつ焼く。**残るのはプロセスが死んだ
       // ときと、枠で保持したとき（上の `defer` 側）だけ**、が守るべき線である。
+      this.#heldForUsage.delete(event.id);
       await this.#forget(event);
     }
     const done = this.#completions.get(event.id);
@@ -998,14 +1112,19 @@ class Clone implements CloneHost {
    * **読めなくても空文字を返してターンを進める。** 台帳が読めないことでターンまで
    * 止めたら、いま塞いでいる穴より広い穴になる。
    */
-  async #commitmentNoticeFor(event: InboxEvent): Promise<string> {
+  async #commitmentNoticeFor(events: InboxEvent[]): Promise<string> {
+    const event = events[0];
+    if (event === undefined) return '';
+
     // 蒸留には載せない。**記憶へ移すためだけの内部ターン**であって、しかも
     // `stop()` 経由の蒸留はこの直後にプロセスが消える。そこへ「未了が3件ある」と
     // 渡すのは、畳んでいる最中に新しい仕事を始めさせることでしかない。
     if (event.type === 'distill') return '';
 
     // この合図の記帳が済んでから読む（読んだ一覧に自分が居ないことを防ぐ）。
-    await this.#committed.get(event.id);
+    // **まとめて読む分は全部待つ** — 1件でも飛ばすと、そのぶんだけが一覧に
+    // 間に合わず、閉じ方（id）を渡せない未了が黙って混じる。
+    for (const pending of events) await this.#committed.get(pending.id);
 
     let open: Commitment[];
     try {
@@ -1015,15 +1134,22 @@ class Clone implements CloneHost {
       return '';
     }
 
-    const mine = open.find((entry) => entry.id === event.id);
+    // **まとめた件数ぶん台帳に載っている**（記帳は `post` が合図ごとに行う）。
+    // 1件しか渡さないと、残りは id を渡されないまま未了として溜まる。
+    const ids = new Set(events.map((pending) => pending.id));
+    const mine = open.filter((entry) => ids.has(entry.id));
+    const idList = mine.map((entry) => `\`${entry.id}\``).join(', ');
     const oldest = open[0];
     const lines = [
       `[system] 引き受けたまま終わっていない仕事は **${open.length} 件** ある` +
         (oldest === undefined ? '。' : `（いちばん古いものは ${oldest.at} に受け取ったもの）。`),
-      ...(mine === undefined
+      ...(mine.length === 0
         ? []
         : [
-            `いま届いたこの一件も台帳に載せた（id: \`${mine.id}\`）。` +
+            (mine.length === 1
+              ? `いま届いたこの一件も台帳に載せた（id: ${idList}）。`
+              : `いま届いたこの ${mine.length} 件も台帳に載せた（id: ${idList}）。` +
+                '**まとめて1つの応答で答えても、閉じるのは id ごとである。**') +
               '**片付いたら `commitment_close` で閉じること** — 返事をしただけでは閉じない。' +
               '雑談や、その場で答えて終わる話なら、答えたうえですぐ閉じてよい。',
           ]),
@@ -1306,15 +1432,9 @@ class Clone implements CloneHost {
   async #handle(event: InboxEvent): Promise<void> {
     switch (event.type) {
       case 'human_message': {
-        // **ここでは書かない。** 発言は受理した瞬間に `#record` が書いている。
-        // 両方で書くと同じ発言が日誌に二度載る（会話の再構成が二重になる）。
-        //
-        // 待つのは順序のためだけである（`#recorded` の理由）。**書けたかどうかを
-        // 条件にしない** — `#journal` は失敗を自分で握って stderr へ落とすので、
-        // ここへ来る約束は必ず解決する。書けなかったからターンを止める、には
-        // しない（記録できないことより、応答が返らないことの方が高くつく）。
-        await this.#recorded.get(event.id);
-        await this.#runTurn(event.conversationId, event.text);
+        // 1件だけの経路。**まとめて読む経路（`#runHumanTurn`）と同じ関数を通す** —
+        // 理由と、ここで日誌へ書かない理由はそちらの doc にある。
+        await this.#runHumanTurn([event]);
         return;
       }
 
@@ -2529,6 +2649,44 @@ class Clone implements CloneHost {
       }
     }
   }
+}
+
+/** 人間の発言1件。 */
+export type HumanMessage = Extract<InboxEvent, { type: 'human_message' }>;
+
+function isHumanMessage(event: InboxEvent): event is HumanMessage {
+  return event.type === 'human_message';
+}
+
+/**
+ * 人間の発言をターン1本の本文にする。
+ *
+ * **1件なら本文そのままである。** 断り書きを足さない — いちばん多いのがこの形で、
+ * ここに `[system]` の節を載せると、普通の一往復のたびに読ませるものが増える。
+ *
+ * 複数件になるのは、先客が居るあいだに人間が喋り続けたときである（`#mergedHumanBatch`）。
+ * そのとき渡すのは**全文を届いた順に並べたもの**で、要約も間引きもしない。
+ *
+ * **時刻を各件に添える。** 「3分空けて言い直した」と「続けて3行打った」は別の
+ * 出来事で、後者なら最後の一行だけが本題のことがある。判断の材料はクローンに渡し、
+ * どう読むかはこちらで決めない（プロンプトで「最後のものを優先せよ」とは書かない —
+ * 前の依頼を取り消したのか、条件を足したのかは本文だけが持っている）。
+ */
+export function humanTurnText(events: HumanMessage[]): string {
+  const head = events[0];
+  if (head === undefined) return '';
+  if (events.length === 1) return head.text;
+
+  return [
+    `[system] 前のターンを処理しているあいだに、人間から続けて **${events.length} 件** の発言が届いた。` +
+      '届いた順に全文を渡す（要約していない）。',
+    '**まとめて1つの応答で答えよ。** 1件目に答えたうえで、後の発言が' +
+      'それを言い直している・取り消している・条件を足していることがある。**最後まで読んでから答えること。**',
+    '',
+    '---',
+    '',
+    ...events.map((event, index) => `**(${index + 1}) ${event.at}**\n\n${event.text}\n`),
+  ].join('\n');
 }
 
 /**
