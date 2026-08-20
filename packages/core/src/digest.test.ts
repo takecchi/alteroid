@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildActivityDigest } from './digest.js';
+import { buildActivityDigest, MAX_ITEMS } from './digest.js';
 import { createMemoryStores } from './testing.js';
 import { usageDate } from './usage.js';
 
@@ -97,6 +97,134 @@ describe('活動の要約', () => {
 
     expect(digest).toContain('自分で決めたこと（日誌の decision）: 0 件');
     expect(digest).not.toContain('いま決めた');
+  });
+});
+
+/**
+ * **上限で切ること自体は要件である。** 件数に比例して伸びる材料は、MCP の出力上限を
+ * 超えると1文字も届かない。ここで守るのは「切ったことが出力から消えない」ことだけで
+ * ある — 消えると、クローンの手元に残るのは「これで全部だ」と読める一覧になり、
+ * 続きを掘るという判断そのものが起きなくなる。
+ */
+describe('上限で切ったことを黙らない', () => {
+  const since = () => new Date(Date.now() - 60_000);
+
+  it('マネージャー節（この節が黙って切れていた）', async () => {
+    const stores = createMemoryStores();
+    const now = new Date().toISOString();
+    for (let i = 0; i < MAX_ITEMS + 3; i += 1) {
+      await stores.jobs.putJob({
+        id: `mgr-${i}`,
+        createdAt: now,
+        updatedAt: now,
+        status: 'done',
+        summary: `仕事 ${i}`,
+        request: `仕事 ${i}`,
+      });
+    }
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    expect(digest).toContain(`マネージャーへの委譲（この期間に動いたもの）: ${MAX_ITEMS + 3} 本`);
+    expect(digest).toContain('…ほか 3 件');
+    expect(digest).toContain('manager_list');
+  });
+
+  /**
+   * 切る順序も保証の対象である。digest の材料は `listJobs()` で、順序は器ごとに
+   * 違う（pg は `createdAt` 昇順・fs は最終更新順・memory は挿入順）。この節が
+   * 走行中と返事待ちを**期間の外からでも**拾っているのは「いまの状態」を渡すため
+   * なので、上限で切るときにそれが古い `done` に押し出されると器の目的が消える。
+   */
+  it('切るときは走行中・返事待ちを先に残す（古い done に押し出させない）', async () => {
+    const stores = createMemoryStores();
+    const inWindow = new Date().toISOString();
+    for (let i = 0; i < MAX_ITEMS; i += 1) {
+      await stores.jobs.putJob({
+        id: `done-${i}`,
+        createdAt: inWindow,
+        updatedAt: inWindow,
+        status: 'done',
+        summary: `片付いた ${i}`,
+      });
+    }
+    // 期間の外で始まって、いまも走っている1本。**これが落ちてはならない。**
+    await stores.jobs.putJob({
+      id: 'mgr-running',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      status: 'running',
+      summary: '本番の移行作業',
+    });
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    expect(digest).toContain('mgr-running');
+    expect(digest).toContain('…ほか 1 件');
+  });
+
+  it('人間の回答待ち節', async () => {
+    const stores = createMemoryStores();
+    const now = new Date().toISOString();
+    for (let i = 0; i < MAX_ITEMS + 1; i += 1) {
+      await stores.jobs.putApproval({
+        id: `ap-${i}`,
+        createdAt: now,
+        question: `確認 ${i}`,
+      });
+    }
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    expect(digest).toContain('…ほか 1 件');
+    // 打ち切らない道具なので、ここだけは「全部見える」と書ける。
+    expect(digest).toContain('approvals_list');
+  });
+
+  // 日誌から作る節。**どれも同じ形で黙って切れていた**ので、節ごとに1本立てる
+  // （1つのテストにまとめると、最初の1件で止まって残りが測れない）。
+  const journalSections = [
+    {
+      name: '聞かずに決めたこと',
+      entry: (i: number) =>
+        ({ type: 'decision', decision: `決めた ${i}`, grounds: '記憶' }) as const,
+      types: 'types=["decision"]',
+    },
+    {
+      name: 'エスカレーション',
+      entry: (i: number) =>
+        ({ type: 'escalation', question: `聞いた ${i}`, approvalId: `ap-${i}` }) as const,
+      types: 'types=["escalation"]',
+    },
+    {
+      name: '記憶の更新',
+      entry: (i: number) =>
+        ({
+          type: 'memory_update',
+          slug: 'values',
+          cause: 'clone',
+          summary: `直した ${i}`,
+        }) as const,
+      types: 'types=["memory_update"]',
+    },
+    {
+      name: '届いた外部イベント',
+      entry: (i: number) =>
+        ({ type: 'external_event', source: 'ci', summary: `届いた ${i}` }) as const,
+      types: 'types=["external_event"]',
+    },
+  ];
+
+  it.each(journalSections)('$name 節', async ({ entry, types }) => {
+    const stores = createMemoryStores();
+    for (let i = 0; i < MAX_ITEMS + 2; i += 1) await stores.journal.append(entry(i));
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    expect(digest).toContain('…ほか 2 件');
+    // **行き先は「打ち切る道具」であることまで書く。** `journal_read` も予算で
+    // 切るので、「全部見える」と書けば嘘になる。
+    expect(digest).toContain(types);
   });
 });
 
