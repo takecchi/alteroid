@@ -624,3 +624,70 @@ describe('資源による配置の材料', () => {
     expect(client.runnerId).toBe('runner-primary');
   });
 });
+
+/**
+ * 器の入れ替えの判定材料（roadmap M5 PR4）。
+ *
+ * **本物の runner の `/health` を通して確かめる。** ここで偽の応答を組み立てると、
+ * runner が実際に `instanceId` を名乗っていることを1つも確かめられない
+ * （名簿側の判定は `packages/core/src/runner-swap.test.ts` が持つ）。
+ */
+describe('器の入れ替えの判定材料', () => {
+  const cleanups: (() => Promise<void> | void)[] = [];
+
+  afterEach(async () => {
+    for (const cleanup of cleanups.splice(0)) await cleanup();
+  });
+
+  it('runner の /health が instanceId を名乗り、identity() がそれを読む', async () => {
+    const outbox = new Outbox();
+    const host = createRunnerHost({
+      runnerId: 'runner-primary',
+      workspacePath: '/workspace',
+      emit: (event) => outbox.push(event),
+      queryFn: fakeSdk().fn,
+    });
+    const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn: fetchInto(app),
+    });
+    cleanups.push(() => client.close());
+
+    const identity = await client.identity?.();
+
+    expect(identity?.runnerId).toBe('runner-primary');
+    // **名乗っていること自体が要件である**（無いと名簿は入れ替えを判定できない）。
+    expect(typeof identity?.instanceId).toBe('string');
+    expect(identity?.instanceId?.length ?? 0).toBeGreaterThan(0);
+
+    // **同じプロセスの間は変わらない。** 呼ぶたびに変わる値だと、毎回の名乗りが
+    // 「入れ替わった」に見える（判定が常に真になって使い物にならない）。
+    const again = await client.identity?.();
+    expect(again?.instanceId).toBe(identity?.instanceId);
+  });
+
+  it('identity() は runnerId を採らない（読むが書き換えない）', async () => {
+    let runnerId = 'runner-primary';
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn: (async () =>
+        Response.json({
+          ok: true,
+          runnerId,
+          instanceId: 'boot-1',
+          workspacePath: '/workspace',
+        })) as typeof fetch,
+    });
+    expect(client.runnerId).toBe('runner-primary');
+
+    runnerId = 'runner-replaced';
+    const identity = await client.identity?.();
+
+    // 読んだ値は返すが、**自分の宛先は書き換えない**（`resources()` と同じ線）。
+    expect(identity?.runnerId).toBe('runner-replaced');
+    expect(client.runnerId).toBe('runner-primary');
+  });
+});
