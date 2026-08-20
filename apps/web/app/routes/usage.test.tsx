@@ -56,15 +56,27 @@ function stubUsage(body: {
   beforeLedger: boolean;
   beforeLayers?: boolean;
   notice?: string;
+  /**
+   * アカウント全体の残り。**既定は `unknown`（まだ取りに行っていない）。**
+   *
+   * 応答から落とすと「返さないデーモンに繋がっている」の分岐に入るので、
+   * それを見たいテストだけが `null` を渡す（`account` を省く）。
+   */
+  account?: unknown;
 }) {
+  // **`account` は spread から外して組み立てる。** `...body` に混ぜると、
+  // 「応答に無い」を作るために `null` を渡した場合、その `null` が応答へ残る
+  // （「無い」と「null が入っている」は別物である）。
+  const { account, ...rest } = body;
   return stubFetch((url) =>
     url.includes('/usage')
       ? json({
-          ...body,
+          ...rest,
           layersSince: body.layersSince === undefined ? body.since : body.layersSince,
           beforeLayers: body.beforeLayers ?? false,
           notice: body.notice ?? USAGE_ESTIMATE_NOTICE,
           breakdown: null,
+          ...(account === null ? {} : { account: account ?? { state: 'unknown' } }),
         })
       : undefined,
   );
@@ -268,5 +280,115 @@ describe('/usage 画面', () => {
     const siteSelect = screen.getByLabelText(/site/);
     expect(within(siteSelect).getByText('session')).toBeTruthy();
     expect(within(siteSelect).getByText('distill')).toBeTruthy();
+  });
+});
+
+/**
+ * アカウント全体の残り（claude.ai 側の値）を、**この画面にも出す。**
+ *
+ * `GET /usage` は最初からこれを返していたのに、人間が読む2面（CLI・この画面）は
+ * どちらも捨てていた。読んでいたのはクローンの `usage_read` だけで、クローンに
+ * 見えているものが人間に見えない状態だった（north_star 禁止1）。
+ *
+ * 文言そのものの試験は core（`describeAccountUsage`）が持つ。ここで見るのは
+ * 「この画面に出ていること」と「取れなかったものを 0 と描かないこと」。
+ */
+describe('/usage 画面のアカウント全体の残り', () => {
+  it('台帳がまだ空でも出る（台帳が空なことと、枠が分からないことは別）', async () => {
+    stubUsage({ rows: [], since: null, beforeLedger: false, account: { state: 'unknown' } });
+
+    render(
+      <Providers>
+        <Usage />
+      </Providers>,
+    );
+
+    expect(await screen.findByRole('heading', { name: /アカウント全体の残り/ })).toBeTruthy();
+    expect(screen.getByText(/まだ取りに行っていない/)).toBeTruthy();
+    expect(screen.getByText(/0 ではなく、分からない/)).toBeTruthy();
+    /*
+     * **画面も Markdown を解釈しない。強調記号を素で出さない。**
+     *
+     * この確認をここへ置いてあるのは、**この状態の文言だけが `**` を含む**ため
+     * である。枠が取れている fixture（下のテスト）には `**` が1つも無いので、
+     * そちらへ置くと「落ちない見張り」になる（変異試験で実際に空振りした）。
+     */
+    expect(screen.queryByText(/\*\*/)).toBeNull();
+  });
+
+  it('枠と支出上限が出る', async () => {
+    stubUsage({
+      rows: [row(1)],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+      account: {
+        state: 'ok',
+        usage: {
+          at: '2026-08-14T10:00:00.000Z',
+          plan: 'Claude Max',
+          limitsAvailable: true,
+          windows: [{ kind: 'five_hour', utilization: 42 }],
+          extraUsage: {
+            enabled: true,
+            monthlyLimit: 100,
+            usedCredits: 40,
+            utilization: 40,
+            currency: 'USD',
+          },
+        },
+      },
+    });
+
+    render(
+      <Providers>
+        <Usage />
+      </Providers>,
+    );
+
+    expect(await screen.findByText(/Claude Max/)).toBeTruthy();
+    expect(screen.getByText(/42% 使用/)).toBeTruthy();
+    expect(screen.getByText('支出上限: 40 USD / 100 USD（40% 使用）')).toBeTruthy();
+  });
+
+  it('取れなかったときに 0% と描かない', async () => {
+    stubUsage({
+      rows: [row(1)],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+      account: {
+        state: 'failed',
+        at: '2026-08-14T10:00:00.000Z',
+        reason: '2つの口のどちらも答えなかった',
+      },
+    });
+
+    render(
+      <Providers>
+        <Usage />
+      </Providers>,
+    );
+
+    expect(await screen.findByText(/取れなかった/)).toBeTruthy();
+    expect(screen.queryByText(/0% 使用/)).toBeNull();
+  });
+
+  it('応答に入っていなければ、白い画面にせず「返さないデーモン」と言う', async () => {
+    // 画面（Vercel）とデーモンは別々に配れるので、繋ぎ先が古いことは起こりうる。
+    stubUsage({
+      rows: [row(1)],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+      account: null,
+    });
+
+    render(
+      <Providers>
+        <Usage />
+      </Providers>,
+    );
+
+    expect(await screen.findByText(/返さないデーモンに繋がっている/)).toBeTruthy();
+    // 台帳側は変わらず描けている（表示1枚のために画面全体を落とさない）。
+    expect(screen.getByRole('heading', { name: '合計' })).toBeTruthy();
   });
 });

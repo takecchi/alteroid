@@ -57,3 +57,11 @@ export type UsageRow = UsageAggregate['rows'][number];
  */
 export type UsageLayer = UsageRow['layer'];
 export type UsageSite = UsageRow['site'];
+/**
+ * アカウント全体の残り（claude.ai 側の値）。**台帳と混ぜない。**
+ *
+ * `state` が `ok` 以外は「取れなかった」であって「0」ではない。その区別は
+ * この型が持っている（`unknown` / `failed` / `unavailable` / `ok` の4つ）ので、
+ * 画面で `null` へ潰さないこと。
+ */
+export type AccountUsageState = UsageAggregate['account'];

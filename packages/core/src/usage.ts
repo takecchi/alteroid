@@ -56,8 +56,10 @@ import { USAGE_ESTIMATE_NOTICE, USAGE_LAYERS, USAGE_SITES, ZERO_USAGE } from './
  * （`@alteroid/core`）は何も変えなくてよい。
  */
 export {
+  ACCOUNT_USAGE_TITLE,
   USAGE_ESTIMATE_NOTICE,
   ZERO_USAGE,
+  describeAccountUsage,
   formatUsd,
   sumUsageRows,
   summarizeUsage,

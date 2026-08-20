@@ -1,3 +1,4 @@
+import type { AccountUsageState } from './usage-snapshot.js';
 import type { UsageBreakdown, UsageRow, UsageTotals } from './usage.js';
 
 /**
@@ -128,4 +129,134 @@ export function usageDate(at: Date): string {
   const m = `${at.getMonth() + 1}`.padStart(2, '0');
   const d = `${at.getDate()}`.padStart(2, '0');
   return `${y}-${m}-${d}`;
+}
+
+// ---------------------------------------------------------------------------
+// アカウント全体の残り（claude.ai 側の値）
+// ---------------------------------------------------------------------------
+
+/**
+ * 見出し。**面ごとに言い換えないこと** — 同じものを見ていると分かる必要がある。
+ *
+ * 「（claude.ai 側の値）」を落とさないのは、これが台帳（自分で数えた推定値）とは
+ * 別物だからである。並べて置くので、どちらの数字かが題から読めないと足し合わせて
+ * しまう。
+ */
+export const ACCOUNT_USAGE_TITLE = 'アカウント全体の残り（claude.ai 側の値）';
+
+/** 残り時間を d/h/m で。過ぎていたら 0 に丸める（負の残り時間を見せない）。 */
+function untilReset(resetsAt: number, now: number): string {
+  const minutes = Math.max(0, Math.floor((resetsAt - now) / 60_000));
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  if (days > 0) return `あと ${days}日${hours}時間`;
+  if (hours > 0) return `あと ${hours}時間${minutes % 60}分`;
+  return `あと ${minutes}分`;
+}
+
+/**
+ * アカウント全体の残りを人間・クローンが読む行へ。**見出しは含めない。**
+ *
+ * **取れなかったことを 0 として出さない。** ここが一番嘘をつきやすい場所で、
+ * 「枠 0%」と「枠が取れなかった」を同じ顔で見せると、読む側は残っていない枠を
+ * 残っていると読む（あるいは逆）。状態ごとに文言を分けてある。
+ *
+ * **文言をここ1つに持つ理由。** この値を読む口は4つある（クローンの `usage_read` /
+ * CLI の `alteroid usage` と `/usage` / Web の `/usage` 画面）。面ごとに書くと、
+ * 「取れなかった」の言い方が面ごとに違い、**片方だけが 0 と描く**日が来る。
+ * ここは4つの口が同じ事実を同じ言葉で言うための1箇所である。
+ *
+ * `emphasis` は Markdown の強調（`**`）を残すかどうか。読む先が Markdown を
+ * 解釈しない面（端末・素のテキスト）では落とす。**落とすのは飾りだけで、
+ * 文そのものは同じものが出る。**
+ */
+export function describeAccountUsage(
+  state: AccountUsageState | undefined,
+  { emphasis = true }: { emphasis?: boolean } = {},
+): string[] {
+  const plain = (line: string) => (emphasis ? line : line.replaceAll('**', ''));
+
+  /*
+   * **応答に入っていなかった場合を、状態の1つとして持つ。**
+   *
+   * `GET /usage` の spec では必須だが、**画面とデーモンは別々に配れる**
+   * （`apps/web` は Vercel、宛先は `VITE_ALTEROID_API_URL` / 設定画面で決まる）。
+   * だから「この項目を返さないデーモン」に繋がることは実際に起こりうる。
+   *
+   * ここで `unknown`（まだ取りに行っていない）へ寄せないこと — それは
+   * **こちらが取りに行っていない**という別の事実で、嘘になる。落ちるのも駄目で、
+   * 表示1枚のために画面全体が白くなる。
+   */
+  if (state === undefined) {
+    return [
+      plain(
+        'この応答にアカウント全体の残りが入っていない（返さないデーモンに繋がっている）。' +
+          '**0 ではなく、分からない。**',
+      ),
+    ];
+  }
+
+  if (state.state === 'unknown') {
+    return [plain('まだ取りに行っていない（起動直後）。**0 ではなく、分からない。**')];
+  }
+  if (state.state === 'failed') {
+    return [plain(`取れなかった: ${state.reason}（${state.at}）。**0 ではなく、分からない。**`)];
+  }
+  if (state.state === 'unavailable') {
+    return [plain(`この構成では取れない: ${state.reason}（${state.at}）`)];
+  }
+
+  const { usage } = state;
+  /*
+   * **残り時間の基準は観測時刻である**（`Date.now()` ではない）。
+   *
+   * スナップショットは取った瞬間の値で、そこに書かれたリセット時刻との差が
+   * 「あと何分」である。いまの時計から引くと、古いスナップショットほど残りが
+   * 短く見え、**取り直していないことが「枠が尽きかけている」に化ける。**
+   */
+  const now = Date.parse(usage.at);
+  const lines: string[] = [];
+
+  lines.push(
+    `プラン: ${usage.plan ?? '（取れなかった）'}` +
+      (usage.organization === undefined ? '' : ` / 組織: ${usage.organization}`),
+  );
+
+  if (usage.windows.length === 0) {
+    // **`limitsAvailable` が真でも枠が来ないことがある**（実測）。0% と描かない。
+    lines.push(plain('枠: 取れなかった（向こうが枠を返さなかった。**0% ではない**）'));
+  } else {
+    lines.push('枠:');
+    for (const window of usage.windows) {
+      const used =
+        // **付かなかった利用率を 0% と書かない。**
+        window.utilization === undefined ? '使用率は取れなかった' : `${window.utilization}% 使用`;
+      const reset =
+        window.resetsAt === undefined ? '' : ` / ${untilReset(window.resetsAt, now)}でリセット`;
+      lines.push(`  ${window.kind}: ${used}${reset}`);
+    }
+  }
+
+  const extra = usage.extraUsage;
+  if (extra === undefined) {
+    // これが取れれば「上限に当たる前に気づく」が完成する。取れないなら、そう言う。
+    lines.push(plain('支出上限: 取れなかった（**0 ではない**。この情報が無いと残額は分からない）'));
+  } else if (!extra.enabled) {
+    lines.push('支出上限: 設定されていない');
+  } else {
+    // **通貨が分からないときは金額として整形しない**（`$` を付けて嘘の単位を名乗らない）。
+    const unit = extra.currency;
+    const amount = (value: number | undefined) =>
+      value === undefined
+        ? '取れなかった'
+        : unit === undefined
+          ? `${value}（単位不明）`
+          : `${value} ${unit}`;
+    lines.push(
+      `支出上限: ${amount(extra.usedCredits)} / ${amount(extra.monthlyLimit)}` +
+        (extra.utilization === undefined ? '' : `（${extra.utilization}% 使用）`),
+    );
+  }
+  lines.push(`観測時刻: ${usage.at}`);
+  return lines;
 }

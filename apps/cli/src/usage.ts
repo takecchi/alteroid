@@ -1,10 +1,13 @@
 import { stdout } from 'node:process';
 
 import {
+  ACCOUNT_USAGE_TITLE,
+  describeAccountUsage,
   formatUsd,
   summarizeUsage,
   usageLayerSchema,
   usageSiteSchema,
+  type AccountUsageState,
   type UsageAggregate,
   type UsageLayer,
   type UsageSite,
@@ -99,8 +102,35 @@ export async function usageCommand(options: UsageOptions): Promise<void> {
  */
 const AXIS_LIMIT = 20;
 
-export function renderUsage(aggregate: UsageAggregate): string {
-  const { rows, since, layersSince, beforeLedger, beforeLayers, notice } = aggregate;
+/**
+ * `GET /usage` の応答そのまま。
+ *
+ * **`account` を `?:`（省略可能）にしない。** 省略できる形にすると、渡し忘れた口が
+ * 黙って「アカウント全体の残り」を落とす — まさにそれが起きていた欠陥である。
+ * キーを必須にしておけば、口を増やしたときに渡し忘れがコンパイルで止まる。
+ *
+ * 値のほうは `undefined` を許す。**「この項目を返さないデーモンに繋がっている」は
+ * 実際に起こりうる状態**で（CLI は `ALTEROID_URL` で別のデーモンへ繋げる）、
+ * それは `unknown`（まだ取りに行っていない）とは別の事実である。どう言うかは
+ * `describeAccountUsage` が1箇所で持つ。
+ */
+export interface UsageView extends UsageAggregate {
+  account: AccountUsageState | undefined;
+}
+
+export function renderUsage(view: UsageView): string {
+  const { rows, since, layersSince, beforeLedger, beforeLayers, notice, account } = view;
+
+  /**
+   * アカウント全体の残り。**台帳がまだ空の経路にも同じものを付ける** — 台帳が
+   * 空であることと、アカウントの枠が分からないことは別の事実である。
+   */
+  const accountLines = () => [
+    '',
+    `${ACCOUNT_USAGE_TITLE}:`,
+    // 端末は Markdown を解釈しないので強調は落とす（文そのものは4つの口で同じ）。
+    ...describeAccountUsage(account, { emphasis: false }).map((line) => `  ${line}`),
+  ];
 
   if (since === null) {
     // **`$0.00` と出さない。** まだ台帳に1件も無いのを「使っていない」に見せない。
@@ -109,6 +139,7 @@ export function renderUsage(aggregate: UsageAggregate): string {
       '（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）',
       '',
       notice,
+      ...accountLines(),
     ].join('\n');
   }
 
@@ -192,5 +223,20 @@ export function renderUsage(aggregate: UsageAggregate): string {
     );
   }
   lines.push(notice);
+
+  /*
+   * **アカウント全体の残りを、台帳と並べて必ず出す。**
+   *
+   * `GET /usage` はこれを最初から返していたのに、人間が読む2面（CLI・Web）は
+   * どちらも捨てていた。読んでいたのはクローンの `usage_read` だけで、
+   * 「クローンには見えているものが人間には見えない」状態だった（north_star 禁止1
+   * の形）。枠で待たされた発言を直したところ（#92）で、その枠の残りが人間から
+   * 見えないのは筋が通らない。
+   *
+   * **台帳の下に、区切って置く。** 混ぜて足せる並びにしないこと（一方は自分で
+   * 数えた推定値、もう一方は向こうが言っている値で、一致する保証がない）。
+   */
+  lines.push(...accountLines());
+
   return lines.join('\n');
 }

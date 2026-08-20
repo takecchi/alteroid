@@ -1,12 +1,7 @@
-import {
-  USAGE_ESTIMATE_NOTICE,
-  ZERO_USAGE,
-  type UsageAggregate,
-  type UsageRow,
-} from '@alteroid/core';
+import { USAGE_ESTIMATE_NOTICE, ZERO_USAGE, type UsageRow } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
-import { renderUsage } from './usage.js';
+import { renderUsage, type UsageView } from './usage.js';
 
 function row(over: Partial<UsageRow> & { managerId: string; costUsd: number }): UsageRow {
   const { costUsd, ...rest } = over;
@@ -21,7 +16,14 @@ function row(over: Partial<UsageRow> & { managerId: string; costUsd: number }): 
   };
 }
 
-function aggregate(over: Partial<UsageAggregate>): UsageAggregate {
+/**
+ * `GET /usage` の応答。
+ *
+ * **`account`（アカウント全体の残り）を既定で `unknown` にしてある。** ここを
+ * 省略できる形にすると、渡し忘れた口が黙って落とせてしまう — それが実際に起きて
+ * いた欠陥である（読んでいたのはクローンの `usage_read` だけだった）。
+ */
+function aggregate(over: Partial<UsageView>): UsageView {
   return {
     rows: [],
     since: '2026-08-01T00:00:00.000Z',
@@ -29,6 +31,7 @@ function aggregate(over: Partial<UsageAggregate>): UsageAggregate {
     beforeLedger: false,
     beforeLayers: false,
     notice: USAGE_ESTIMATE_NOTICE,
+    account: { state: 'unknown' },
     ...over,
   };
 }
@@ -142,5 +145,71 @@ describe('renderUsage', () => {
 
     expect(text).toContain('層と場所の軸はまだ1件も記録していない');
     expect(text).not.toContain('層と場所の軸の始点: null');
+  });
+});
+
+/**
+ * アカウント全体の残り（claude.ai 側の値）を、**人間の面にも出す。**
+ *
+ * `GET /usage` は最初からこれを返していたが、読んでいたのはクローンの
+ * `usage_read` だけだった。クローンに見えているものが人間に見えないのは能力の
+ * 差である（north_star 禁止1）。
+ *
+ * ここで見るのは「出ていること」と「取れなかったものを 0 と書かないこと」。
+ * 文言そのものの試験は core（`describeAccountUsage`）が持つ。
+ */
+describe('renderUsage はアカウント全体の残りも出す', () => {
+  it('台帳に記録があるときに出る', () => {
+    const text = renderUsage(
+      aggregate({
+        rows: [row({ managerId: 'm1', costUsd: 1 })],
+        account: {
+          state: 'ok',
+          usage: {
+            at: '2026-08-14T10:00:00.000Z',
+            plan: 'Claude Max',
+            limitsAvailable: true,
+            windows: [
+              {
+                kind: 'five_hour',
+                utilization: 42,
+                resetsAt: Date.parse('2026-08-14T13:00:00.000Z'),
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(text).toContain('アカウント全体の残り（claude.ai 側の値）');
+    expect(text).toContain('Claude Max');
+    expect(text).toContain('42% 使用');
+    // 端末は Markdown を解釈しないので、強調記号を素で出さない。
+    expect(text).not.toContain('**');
+  });
+
+  it('台帳がまだ空でも出る（台帳が空なことと、枠が分からないことは別）', () => {
+    const text = renderUsage(aggregate({ since: null, account: { state: 'unknown' } }));
+
+    expect(text).toContain('アカウント全体の残り（claude.ai 側の値）');
+    expect(text).toContain('まだ取りに行っていない');
+    expect(text).toContain('0 ではなく、分からない');
+  });
+
+  it('取れなかったときに 0 と書かない', () => {
+    const text = renderUsage(
+      aggregate({
+        rows: [row({ managerId: 'm1', costUsd: 1 })],
+        account: {
+          state: 'failed',
+          at: '2026-08-14T10:00:00.000Z',
+          reason: '2つの口のどちらも答えなかった',
+        },
+      }),
+    );
+
+    expect(text).toContain('取れなかった');
+    expect(text).toContain('0 ではなく、分からない');
+    expect(text).not.toContain('0% 使用');
   });
 });

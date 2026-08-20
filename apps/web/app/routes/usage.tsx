@@ -1,10 +1,17 @@
-import { formatUsd, summarizeUsage, USAGE_LAYERS, USAGE_SITES } from '@alteroid/core/usage';
+import {
+  ACCOUNT_USAGE_TITLE,
+  describeAccountUsage,
+  formatUsd,
+  summarizeUsage,
+  USAGE_LAYERS,
+  USAGE_SITES,
+} from '@alteroid/core/usage';
 import { useState } from 'react';
 
 import { Page } from '~/components/page';
 import { Badge, Card, CardHeader, Empty, ErrorNote, Input, Select, Spinner } from '~/components/ui';
 import { useUsage, type UsageQuery } from '~/hooks/queries';
-import type { UsageLayer, UsageRow, UsageSite } from '~/lib/types';
+import type { AccountUsageState, UsageLayer, UsageRow, UsageSite } from '~/lib/types';
 
 /**
  * `/usage` — alteroid が使った分（トークンと費用）。
@@ -98,24 +105,64 @@ export default function Usage() {
 
       {isLoading ? (
         <Spinner />
-      ) : data === undefined ? null : data.since === null ? (
-        // **`$0.00` と出さない。** まだ台帳に1件も無いのを「使っていない」に見せない。
-        <Card>
-          <Empty>
-            台帳にはまだ1件も記録が無い。（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）
-          </Empty>
-        </Card>
-      ) : (
-        <UsageBody
-          rows={data.rows}
-          since={data.since}
-          layersSince={data.layersSince}
-          beforeLedger={data.beforeLedger}
-          beforeLayers={data.beforeLayers}
-          notice={data.notice}
-        />
+      ) : data === undefined ? null : (
+        <div className="flex flex-col gap-4">
+          {/*
+            **アカウント全体の残りは、台帳が空でも出す。** 台帳が空であることと、
+            アカウントの枠が分からないことは別の事実である（片方を理由にもう片方を
+            隠すと、枠の状態が画面から消える）。
+          */}
+          <AccountCard account={data.account} />
+          {data.since === null ? (
+            // **`$0.00` と出さない。** まだ台帳に1件も無いのを「使っていない」に見せない。
+            <Card>
+              <Empty>
+                台帳にはまだ1件も記録が無い。（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）
+              </Empty>
+            </Card>
+          ) : (
+            <UsageBody
+              rows={data.rows}
+              since={data.since}
+              layersSince={data.layersSince}
+              beforeLedger={data.beforeLedger}
+              beforeLayers={data.beforeLayers}
+              notice={data.notice}
+            />
+          )}
+        </div>
       )}
     </Page>
+  );
+}
+
+/**
+ * アカウント全体の残り（claude.ai 側の値）。
+ *
+ * **文言を画面で書き直さない。** 同じ値を読む口は4つある（クローンの `usage_read` /
+ * CLI の `alteroid usage` と `/usage` / この画面）。面ごとに書くと「取れなかった」の
+ * 言い方が分かれ、いつか片方だけが 0 と描く。だから core の
+ * `describeAccountUsage` が出した行をそのまま並べる（Markdown は解釈しないので
+ * 強調だけ落とす）。
+ *
+ * **台帳のカードと同じ見た目に混ぜないこと。** 一方は自分で数えた推定値、もう一方は
+ * 向こうが言っている値で、一致する保証がない。題で区別が付くようにしてある。
+ */
+function AccountCard({ account }: { account: AccountUsageState | undefined }) {
+  return (
+    <Card>
+      <CardHeader
+        title={ACCOUNT_USAGE_TITLE}
+        subtitle="台帳（alteroid が使った分）とは別物。足さない"
+      />
+      <ul className="flex flex-col gap-0.5 px-4 py-3">
+        {describeAccountUsage(account, { emphasis: false }).map((line, index) => (
+          <li key={`${index}-${line}`} className="font-mono text-[11px] whitespace-pre text-muted">
+            {line}
+          </li>
+        ))}
+      </ul>
+    </Card>
   );
 }
 
