@@ -1187,6 +1187,30 @@ class Clone implements CloneHost {
    * （`noteDroppedRecord` の doc）。書けなかったときの跡は `#journal` が
    * `journalEntryShape` ＝長さだけに畳んで `noteDroppedRecord` へ落とす。
    * **ここに素の `String(error)` を1行も足さないこと。**
+   *
+   * ## 失敗の記録は `with: 'self'` へ置く（#92）
+   *
+   * 直す前は、会話のある失敗を `with: 'human'` / `role: 'outbound'` で書いていた。
+   * `GET /conversations/:id` は `with === 'human'` だけで絞って `role` をそのまま
+   * 返すので、**失敗の記録が「クローンの返信」として会話に並んでいた** — 人間が
+   * 見たのがこれである（利用上限に当たった状態で話しかけると、SDK の英語の文言
+   * だけが返信として出る）。`message` の中身は SDK・API・ストアのドライバが決める
+   * 文字列で、**人間へ向けた発言ではない。**
+   *
+   * だから記録は `self`（人間に見せない側）へ移す。**`conversationId` は落とさない**
+   * ので、どの会話の失敗かは日誌の列でそのまま辿れる（#56 の線）。#89 が塞いだ
+   * 「失敗がどこにも残らない」は記録が残ることで満たされていて、**どの `with` で
+   * 残すかとは無関係である**（`with` を変えても、テキストの前置きは変えていない —
+   * 既存の回帰テストが見ているのはそこである）。
+   *
+   * ## 代わりに、人間には人間の言葉で1行返す
+   *
+   * `self` へ移しただけだと、会話の画面を後から開いた人間には**自分の発言だけが
+   * あって返信が無い**状態になる。沈黙は「まだ考えている」と見分けられないので、
+   * 生の文言を含まない1行を `with: 'human'` で残す。**枠（利用上限）で保持して
+   * いる場合はそう言う** — 人間の要望は「あとで良いのでちゃんと返信してほしい」で
+   * あって待つこと自体は受け入れられている。待てば返るのか、もう返らないのかが
+   * 会話から読めなければ、その要望は満たせない。
    */
   async #reportFailure(conversationId: string | null, message: string): Promise<void> {
     // 繋がっている人間には即座に見せる。日誌より先なのは、書き込みを待たせて
@@ -1196,22 +1220,36 @@ class Clone implements CloneHost {
     // `conversationId` は呼び出し側が構造化フィールドとして持っている値なので
     // 載せる（#56 の線）。落とすと、失敗がどの会話のものだったかを時刻でしか
     // 突き合わせられなくなる — 日誌には列があるのに。
-    await this.#journal(
-      conversationId === null
-        ? {
-            type: 'exchange',
-            with: 'self',
-            role: 'outbound',
-            text: `内部ターンが失敗した: ${message}`,
-          }
-        : {
-            type: 'exchange',
-            with: 'human',
-            role: 'outbound',
-            text: `人間との対話ターンが失敗した: ${message}`,
-            conversationId,
-          },
-    );
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text:
+        conversationId === null
+          ? `内部ターンが失敗した: ${message}`
+          : `人間との対話ターンが失敗した: ${message}`,
+      ...(conversationId === null ? {} : { conversationId }),
+    });
+
+    if (conversationId === null) return;
+
+    // **枠で保持しているかは `#usageBlocked` を見て決める。** ここへ来る前に
+    // `#noteUsageNotice` が立てている（枠を検知する3経路はいずれもこの
+    // `#reportFailure` より先に `await` してある。`#pump` の枠チェックの分岐は
+    // 既に立っているものを読んでいる）ので、文言の分岐をこの1か所に置ける —
+    // 呼び出し側ごとに書き分けると、経路が増えたときに「枠なのに枠と言わない」
+    // 失敗が静かに混ざる。
+    await this.#journal({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text:
+        this.#usageBlocked === null
+          ? 'この発言には返せなかった（ターンが失敗した）。失敗の理由は日誌に残してある。'
+          : 'いま利用上限に当たっているので、この発言にはまだ返せない。' +
+            '発言は捨てずに保持していて、枠が開いたら試し直して返信する。',
+      conversationId,
+    });
   }
 
   /**

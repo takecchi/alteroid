@@ -2208,12 +2208,37 @@ describe('クローン — ターンの失敗の跡', () => {
       )
       .toBe(true);
 
-    const failure = (await exchanges(stores)).find((entry) => entry.text.includes('失敗した'));
-    expect(failure?.with).toBe('human');
+    /*
+     * **`with` の期待値を `human` から `self` へ反転させた（#92）。**
+     *
+     * 元の期待値は現行の欠陥を仕様として固定していた — `with: 'human'` /
+     * `role: 'outbound'` で書くと `GET /conversations/:id`（`with === 'human'`
+     * だけで絞る）をそのまま通り、**SDK の生の文言が「クローンの返信」として
+     * 会話に並ぶ**。人間が「英語の文言だけが返信される」と訴えたのがこれである。
+     *
+     * **保証は弱くなっていない。** このテストが守っているのは「購読者が居なくても
+     * 失敗が日誌に残る」ことと「`conversationId` が載る」ことで、どちらも下で
+     * そのまま見ている。加えて `with` を絞って**特定の1件**を掴むようにしたので
+     * （元は `text.includes('失敗した')` の最初の1件で、人間へ返す1行と
+     * 区別できていなかった）、生の理由がどちらに載るかまで固定できている。
+     */
+    const all = await exchanges(stores);
+    const failure = all.find(
+      (entry) => entry.with === 'self' && entry.text.startsWith('人間との対話ターンが失敗した'),
+    );
+    expect(failure).toBeDefined();
     // 呼び出し側が構造化フィールドとして持っている値は載せる（#56 の線）。
     // 落とすと、どの会話の失敗だったかを時刻でしか突き合わせられなくなる。
     expect(failure?.conversationId).toBe('conv-9');
     expect(failure?.text).toContain('セッションを起こせない');
+
+    // 人間の側には、生の文言を含まない1行が返っている（沈黙にしない）。
+    const toHuman = all.filter(
+      (entry) => entry.with === 'human' && entry.role === 'outbound' && entry.text !== 'やあ',
+    );
+    expect(toHuman).toHaveLength(1);
+    expect(toHuman[0]?.conversationId).toBe('conv-9');
+    expect(toHuman[0]?.text).not.toContain('セッションを起こせない');
 
     await s.clone.stop();
   });
@@ -2267,11 +2292,22 @@ describe('クローン — ターンの失敗の跡', () => {
     const outbound = lines.filter(
       (line) => line.includes('日誌を記録できませんでした') && line.includes('role=outbound'),
     );
-    expect(outbound).toHaveLength(1);
-    // 理由だけは出す（`reasonOf` を通っている）。
-    expect(outbound[0]).toContain('器が閉じている');
-    // 本文は出さない。長さだけ出す（「空だった」と「書けなかった」が区別できる）。
-    expect(outbound[0]).toMatch(/role=outbound chars=[1-9]\d*/u);
+    /*
+     * **件数を1から2へ変えた（#92）。** 会話のある失敗は日誌へ2件書く —
+     * 生の理由（`with: 'self'`）と、人間へ返す1行（`with: 'human'`）である
+     * （`#reportFailure` の doc）。器が閉じていればどちらも落ちるので跡も2行出る。
+     *
+     * **保証は弱くなっていない。** 守っているのは「跡は出る」「本文は出さない」で、
+     * 下の3つ（理由・長さの形・秘密を含まないこと）を**全行に**課している
+     * （元は `outbound[0]` だけを見ていたので、2行目が本文を漏らしても通った）。
+     */
+    expect(outbound).toHaveLength(2);
+    for (const line of outbound) {
+      // 理由だけは出す（`reasonOf` を通っている）。
+      expect(line).toContain('器が閉じている');
+      // 本文は出さない。長さだけ出す（「空だった」と「書けなかった」が区別できる）。
+      expect(line).toMatch(/role=outbound chars=[1-9]\d*/u);
+    }
     expect(lines.join('')).not.toContain(secret);
     expect(lines.join('')).not.toContain('ghp_');
     expect(lines.join('')).not.toContain('params=');
@@ -3470,15 +3506,24 @@ describe('クローン — 枠が回復した後の返信は、人間の側か�
     // （calls[0] の入力数が2件目に増える＝再試行が起きた証拠）。
     await waitFor(async () => (calls[0]?.inputs.length ?? 0) >= 2, '1本目の再試行が実行される');
     // 再試行そのものが成功したこと（done で終わる）も別途確かめる（副読）。
+    //
+    // **「失敗の記録ではない outbound」では足りない。** 枠で保持していることを
+    // 人間へ返す1行（`#reportFailure`）も同じ `with: 'human'` / `outbound` /
+    // `conv-1` で載るので、否定形の条件だと再試行を待たずに満たされてしまう。
+    // 偽の SDK の返信は常に `わかった` なので**その本文を数える** — 1本目でも
+    // assistant の本文は流れて日誌に載る（`clone.ts` の journal 書き込みは
+    // result の成否より前）ので、**2件目が出た＝再試行の返信が載った**である。
     await waitFor(async () => {
       const exchanges = await stores.journal.list({ types: ['exchange'] });
-      return exchanges.some(
-        (entry) =>
-          entry.type === 'exchange' &&
-          entry.with === 'human' &&
-          entry.role === 'outbound' &&
-          entry.conversationId === 'conv-1' &&
-          !entry.text.startsWith('人間との対話ターンが失敗した'),
+      return (
+        exchanges.filter(
+          (entry) =>
+            entry.type === 'exchange' &&
+            entry.with === 'human' &&
+            entry.role === 'outbound' &&
+            entry.conversationId === 'conv-1' &&
+            entry.text === 'わかった',
+        ).length >= 2
       );
     }, '再試行が成功した記録が日誌に残る');
 
@@ -3543,6 +3588,10 @@ describe('クローン — 枠が回復した後の返信は、人間の側か�
     const after = await matchingOutbound();
     const newest = after.find((entry) => !before.some((existing) => existing.id === entry.id));
     expect(newest).toBeDefined();
+    // **増えた1件が再試行の返信そのものであること**まで見る（否定形だと、枠で
+    // 保持していることを人間へ返す1行でも通ってしまう）。偽の SDK の返信は
+    // 常に `わかった` である。
+    expect(newest?.text).toBe('わかった');
     expect(newest?.text.startsWith('人間との対話ターンが失敗した')).toBe(false);
 
     await clone.stop();
