@@ -621,6 +621,14 @@ export interface RunnerRegistry {
    * - 登録が0台 — 設定の問題。時間では直らない
    * - 登録はあるが、まだどれにも繋がっていない — 時間で解決する可能性がある
    * - 登録が全部 `unusable` — 挑み直さないので、投げ直しても同じ答えが返る
+   *
+   * **`cwd` はまだ置き先の材料になっていない。** 渡すと `Registry` は受け取るが読まない
+   * （実装側の `select` にも同じ注意書きがある）。**「渡しているから効いている」と
+   * 読まないこと** — 材料にできるのは workspace がどこにあるかを決めてからで、それは
+   * roadmap M5 の「workspace locator の運用選択」である。いま全台が同じ `workspacePath`
+   * （`/workspace`）を名乗り、実体だけが別のボリュームなので、パスの一致では
+   * どの器のものか区別が付かない。**区別が付かないまま突き合わせる実装を入れると、
+   * 効いていない照合を「効いている」と読める形で残すことになる。**
    */
   select(input: { cwd?: string }): Promise<RunnerClient>;
   /**
@@ -901,6 +909,18 @@ class Registry implements RunnerRegistry {
     await entry.client?.close().catch(() => undefined);
   }
 
+  /**
+   * **引数を受け取らないのは意図である。** `RunnerRegistry#select` は `{ cwd? }` を
+   * 渡せる形で宣言してあり、`ManagerPool#start` は実際に渡している（`manager.ts`）。
+   * ここで受け取っていないので、**その `cwd` はこの実装に届いていない。**
+   *
+   * 引数だけ受けて捨てる形にしないのは、受けてあると「読んでいるが効かなかった」に
+   * 見え、届いていないこと自体が消えるからである。仮引数が無ければ、呼び出し側から
+   * 辿った者がここで必ず気づく。
+   *
+   * 材料にできるようになるのは roadmap M5 の「workspace locator の運用選択」の後である
+   * （宣言側の注意書きに理由を書いた）。
+   */
   async select(): Promise<RunnerClient> {
     const until = Date.now() + this.#selectWaitMs;
     for (;;) {
