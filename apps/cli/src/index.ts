@@ -6,6 +6,7 @@ import { Command } from 'commander';
 
 import { accessGrantCommand, accessListCommand, accessRevokeCommand } from './access.js';
 import { chatCommand } from './chat.js';
+import { conversationsListCommand, conversationsShowCommand } from './conversations.js';
 import * as daemon from './daemon.js';
 import { loginCommand, logoutCommand, whoamiCommand } from './login.js';
 import {
@@ -53,6 +54,38 @@ program
   .description('クローンと会話する（デーモンが居なければ起こす）')
   .action(async () => {
     await chatCommand();
+  });
+
+/**
+ * 会話（chat の履歴）。**読めるだけの面を作らない、が今回はその逆を直す。**
+ *
+ * `POST /chat` の SSE は流すだけで、後から読み直す口が無かった。Web
+ * （`apps/web/app/routes/chat.tsx` / `apps/web/app/hooks/queries.ts`）は
+ * `GET /conversations` と `GET /conversations/{id}` の両方を使っているのに、
+ * CLI からは0件だった。docs/PRD.md「インターフェース」は3面で同じことができると
+ * 書いており、これはその等価性が崩れていたバグである（north_star 禁止1）。
+ *
+ * 形は `alteroid memory`（一覧して、id で1件読む）に合わせてある。
+ */
+const conversationsCommand = program
+  .command('conversations')
+  .description('会話（chat の履歴）を読む（器を替えても続きから話せるための口）');
+
+conversationsCommand
+  .command('list')
+  .description('会話の一覧（新しい順）')
+  .option('--limit <n>', '返す最大件数（デーモンの既定 20、最大 200）')
+  .option('--scan <n>', '日誌をどこまで遡って集計するか（デーモンの既定 2000、最大 10000）')
+  .action(async (options: { limit?: string; scan?: string }) => {
+    await conversationsListCommand(options);
+  });
+
+conversationsCommand
+  .command('show <id>')
+  .description('1つの会話の中身（古い順）')
+  .option('--scan <n>', '日誌をどこまで遡って探すか（デーモンの既定 2000、最大 10000）')
+  .action(async (id: string, options: { scan?: string }) => {
+    await conversationsShowCommand(id, options);
   });
 
 /**

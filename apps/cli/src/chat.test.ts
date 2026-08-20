@@ -313,6 +313,21 @@ function commitment(over: Partial<Commitment> = {}): Commitment {
  * 経路と応答の形が実在することを保証しているのは**型検査のほう**である。ここで
  * 固定するのは「どの経路へ、どんな引数で行くか」だけ。
  */
+interface ConversationSummaryLike {
+  conversationId: string;
+  startedAt: string;
+  updatedAt: string;
+  messages: number;
+  preview: string;
+}
+
+interface ConversationMessageLike {
+  id: string;
+  at: string;
+  role: 'inbound' | 'outbound';
+  text: string;
+}
+
 function stubClient(
   options: {
     commitments?: Commitment[];
@@ -320,6 +335,18 @@ function stubClient(
     /** `DELETE /managers/:id` の応答。既定は「止めた」。 */
     abortStatus?: number;
     abortBody?: unknown;
+    /** `GET /conversations` の応答。 */
+    conversations?: ConversationSummaryLike[];
+    conversationsScanned?: number;
+    conversationsStatus?: number;
+    /** `GET /conversations/:id` の応答。 */
+    conversationDetailStatus?: number;
+    conversationDetailBody?: {
+      conversationId: string;
+      messages: ConversationMessageLike[];
+      scanned: number;
+      reachedStart: boolean;
+    };
   } = {},
 ) {
   const calls: { route: string; args: unknown }[] = [];
@@ -361,13 +388,41 @@ function stubClient(
         },
       },
     },
+    conversations: {
+      $get: (args: unknown) => {
+        calls.push({ route: 'GET /conversations', args });
+        return Promise.resolve(
+          reply(options.conversationsStatus ?? 200, {
+            conversations: options.conversations ?? [],
+            scanned: options.conversationsScanned ?? 0,
+          }),
+        );
+      },
+      ':id': {
+        $get: (args: unknown) => {
+          calls.push({ route: 'GET /conversations/:id', args });
+          const param = (args as { param: { id: string } }).param;
+          return Promise.resolve(
+            reply(
+              options.conversationDetailStatus ?? 200,
+              options.conversationDetailBody ?? {
+                conversationId: param.id,
+                messages: [],
+                scanned: 0,
+                reachedStart: true,
+              },
+            ),
+          );
+        },
+      },
+    },
   };
 
   return { calls, client: client as unknown as Parameters<typeof runSlashCommand>[1] };
 }
 
 function emptyListed(): Listed {
-  return { approvals: [], commitments: [] };
+  return { approvals: [], commitments: [], conversations: [] };
 }
 
 /** 端末へ書いたものを集める。後始末は `afterEach` の `restoreAllMocks`。 */
@@ -575,7 +630,7 @@ describe('chat の台帳コマンド', () => {
   it('/done は承認待ちの番号を掴まない（覚え場所が別であること）', async () => {
     const read = captureStdout();
     const { calls, client } = stubClient();
-    const listed: Listed = { approvals: ['approval-1'], commitments: [] };
+    const listed: Listed = { approvals: ['approval-1'], commitments: [], conversations: [] };
 
     await runSlashCommand('/done 1', client, listed);
 
@@ -669,5 +724,189 @@ describe('chat の /stop', () => {
     await runSlashCommand('/help', client, emptyListed());
 
     expect(read()).toContain('/stop ');
+  });
+});
+
+/**
+ * chat から会話の履歴へ到達できること（`GET /conversations` /
+ * `GET /conversations/:id`）。Web はどちらも使っているのに、CLI からは
+ * 0件だった（`apps/cli/src` に `conversations` という文字列が無かった）。
+ *
+ * **黙って打ち切らないこと自体を確かめる。** `scanned` は常に出す必要があり、
+ * `reachedStart` が偽なら「無い」ではなく「判定できない」と言う必要がある。
+ */
+describe('chat の /conversations と /conversation', () => {
+  it('/conversations は一覧と、遡った件数（scanned）を出す', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient({
+      conversations: [
+        {
+          conversationId: 'conv-1',
+          startedAt: '2026-08-16T10:00:00.000Z',
+          updatedAt: '2026-08-16T10:05:00.000Z',
+          messages: 4,
+          preview: '設計の相談',
+        },
+      ],
+      conversationsScanned: 137,
+    });
+
+    await runSlashCommand('/conversations', client, emptyListed());
+
+    expect(calls).toEqual([{ route: 'GET /conversations', args: { query: {} } }]);
+    const text = read();
+    expect(text).toContain('conv-1');
+    expect(text).toContain('設計の相談');
+    // scanned が無いと、返ってきた件数が「これで全部」に見えてしまう。
+    expect(text).toContain('137');
+    expect(text).toContain('/conversation <番号|id>');
+  });
+
+  it('/conversations は空でも、そう言う（黙って何も出さない形にしない）', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({ conversations: [] });
+
+    await runSlashCommand('/conversations', client, emptyListed());
+
+    expect(read()).toContain('会話はまだありません');
+  });
+
+  it('/conversation は番号を id へ引き直す（/conversations の並びと同じ列で覚える）', async () => {
+    captureStdout();
+    const { calls, client } = stubClient({
+      conversations: [
+        {
+          conversationId: 'conv-a',
+          startedAt: '2026-08-16T10:00:00.000Z',
+          updatedAt: '2026-08-16T10:05:00.000Z',
+          messages: 1,
+          preview: '1本目',
+        },
+        {
+          conversationId: 'conv-b',
+          startedAt: '2026-08-17T10:00:00.000Z',
+          updatedAt: '2026-08-17T10:05:00.000Z',
+          messages: 1,
+          preview: '2本目',
+        },
+      ],
+    });
+    const listed = emptyListed();
+
+    await runSlashCommand('/conversations', client, listed);
+    await runSlashCommand('/conversation 2', client, listed);
+
+    const detail = calls.find((call) => call.route === 'GET /conversations/:id');
+    expect(detail).toBeDefined();
+    expect((detail?.args as { param: { id: string } }).param).toEqual({ id: 'conv-b' });
+  });
+
+  /**
+   * 承認待ち・台帳の番号を会話の番号として引かないこと（`Listed` を別フィールド
+   * に分けた理由そのもの — 混ざると人間が見ていないものを読みに行く）。
+   */
+  it('/conversation は承認待ち・台帳の番号を掴まない（覚え場所が別であること）', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient();
+    const listed: Listed = {
+      approvals: ['approval-1'],
+      commitments: ['cmt-1'],
+      conversations: [],
+    };
+
+    await runSlashCommand('/conversation 1', client, listed);
+
+    expect(calls).toEqual([]);
+    expect(read()).toContain('/conversations の一覧にありません');
+  });
+
+  it('/conversation は id をそのまま指せる（番号を経由しなくてよい）', async () => {
+    captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand('/conversation conv-xyz', client, emptyListed());
+
+    const detail = calls.find((call) => call.route === 'GET /conversations/:id');
+    expect((detail?.args as { param: { id: string } }).param).toEqual({ id: 'conv-xyz' });
+  });
+
+  it('/conversation は発言を古い順に出し、先頭まで届いたかを言う', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      conversationDetailBody: {
+        conversationId: 'conv-1',
+        messages: [
+          { id: 'm1', at: '2026-08-16T10:00:00.000Z', role: 'inbound', text: '設計どうする？' },
+          { id: 'm2', at: '2026-08-16T10:01:00.000Z', role: 'outbound', text: 'こう考えている' },
+        ],
+        scanned: 42,
+        reachedStart: true,
+      },
+    });
+
+    await runSlashCommand('/conversation conv-1', client, emptyListed());
+
+    const text = read();
+    const human = text.indexOf('設計どうする？');
+    const clone = text.indexOf('こう考えている');
+    expect(human).toBeGreaterThanOrEqual(0);
+    expect(human).toBeLessThan(clone);
+    expect(text).toContain('42');
+    expect(text).toContain('先頭まで届きました');
+  });
+
+  /**
+   * **「無い」と「判定できない」を混ぜない。** `messages` が空でも `reachedStart`
+   * が偽なら、それは発言が無かったのではなく窓の外にあるかもしれない、である。
+   */
+  it('/conversation は reachedStart が偽なら「無い」と言わず、判定できないと言う', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      conversationDetailBody: {
+        conversationId: 'conv-1',
+        messages: [],
+        scanned: 2000,
+        reachedStart: false,
+      },
+    });
+
+    await runSlashCommand('/conversation conv-1', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain('判定できません');
+    expect(text).not.toContain('発言はありません');
+  });
+
+  it('/conversation は 404（遡り切れたうえで無い）なら、そう言う', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      conversationDetailStatus: 404,
+      conversationDetailBody: undefined,
+    });
+
+    await runSlashCommand('/conversation conv-missing', client, emptyListed());
+
+    expect(read()).toContain('そんな会話はありません: conv-missing');
+  });
+
+  it('/conversation は id が無ければ使い方を出す', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand('/conversation', client, emptyListed());
+
+    expect(calls).toEqual([]);
+    expect(read()).toContain('使い方: /conversation');
+  });
+
+  it('/help に両方載っている（入口の等価性）', async () => {
+    const read = captureStdout();
+    const { client } = stubClient();
+
+    await runSlashCommand('/help', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain('/conversations');
+    expect(text).toContain('/conversation <番号|id>');
   });
 });

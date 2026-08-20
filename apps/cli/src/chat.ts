@@ -34,7 +34,7 @@ export async function chatCommand(): Promise<void> {
   const rl = createInterface({ input: stdin, output: stdout });
   let conversationId: string | null = null;
   // 直前に一覧したもの。番号で引けるようにするため覚えておく。
-  const listed: Listed = { approvals: [], commitments: [] };
+  const listed: Listed = { approvals: [], commitments: [], conversations: [] };
 
   stdout.write('alteroid chat（Ctrl-D で終了 / /help でコマンド）\n');
 
@@ -202,6 +202,8 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /memory              記憶の一覧
 /memory <slug>       記憶の中身（書き換えは alteroid memory edit <slug>）
 /journal [件数]      日誌（新しい順）
+/conversations       会話の一覧（新しい順、番号付き）
+/conversation <番号|id>  その会話の中身（古い順。番号は /conversations の並び）
 /managers            マネージャーの一覧と状態
 /manager <id>        そのマネージャーのセッション生ログ
 /stop <id> [理由]    その仕事だけをやめさせる（止めた事実は日誌に残る）
@@ -225,13 +227,15 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /**
  * 直前に一覧したものの id を、番号で引けるように覚えておく置き場。
  *
- * **承認待ちと台帳で別々に持つ。** 1本にまとめると `/approvals` の直後の
- * `/done 1` が承認待ちの id を閉じに行く（どちらも「番号で指す一覧」なので、
- * 混ざったことに人間が気づく手がかりが無い）。
+ * **承認待ち・台帳・会話で別々に持つ。** 1本にまとめると `/approvals` の直後の
+ * `/done 1` が承認待ちの id を閉じに行く（どれも「番号で指す一覧」なので、
+ * 混ざったことに人間が気づく手がかりが無い）。会話を足すときも既存のフィールドへ
+ * 相乗りさせず、独立したフィールド（`conversations`）にしてある。
  */
 export interface Listed {
   approvals: string[];
   commitments: string[];
+  conversations: string[];
 }
 
 export async function runSlashCommand(
@@ -422,6 +426,88 @@ export async function runSlashCommand(
       for (const entry of entries) {
         stdout.write(`  ${entry.at}  [${entry.type}] ${summarize(entry)}\n`);
       }
+      return 'ok';
+    }
+
+    /**
+     * 会話の一覧。**`POST /chat` の SSE は流すだけで、後から読み直す口が
+     * chat スラッシュコマンドの側には無かった**（CLI サブコマンドは
+     * `alteroid conversations list` / `show` にある）。器（端末・タブ・アプリ）を
+     * 替えても続きから話せることは PRD「インターフェース」の等価性そのもの。
+     *
+     * **`scanned` を必ず出す。** 日誌から組み立てているので、遡り切れていない
+     * ことがある（黙って打ち切らない — #108 / #109 と同じ理由）。
+     */
+    case '/conversations': {
+      const response = await client.conversations.$get({ query: {} });
+      if (!response.ok) {
+        stdout.write('会話の一覧を読めませんでした\n');
+        return 'ok';
+      }
+      const { conversations, scanned } = await response.json();
+      listed.conversations.length = 0;
+      if (conversations.length === 0) {
+        stdout.write('（会話はまだありません）\n');
+        return 'ok';
+      }
+      conversations.forEach((conversation, index) => {
+        listed.conversations.push(conversation.conversationId);
+        stdout.write(
+          `  [${index + 1}] ${conversation.conversationId}  更新: ${conversation.updatedAt}` +
+            `  (${conversation.messages}件)\n`,
+        );
+        stdout.write(`      ${conversation.preview}\n`);
+      });
+      stdout.write(
+        `  （日誌を新しい方から ${scanned} 件見て集計した。これより古い会話は窓の外に` +
+          '残っているかもしれません — 判定できません）\n',
+      );
+      stdout.write('  /conversation <番号|id> で中身を読めます\n');
+      return 'ok';
+    }
+
+    case '/conversation': {
+      const reference = rest[0];
+      if (!reference) {
+        stdout.write('使い方: /conversation <番号|id>（番号は /conversations の並び）\n');
+        return 'ok';
+      }
+      const id = resolveListedId(reference, listed.conversations);
+      if (id === null) {
+        stdout.write(`[${reference}] は /conversations の一覧にありません\n`);
+        return 'ok';
+      }
+      const response = await client.conversations[':id'].$get({ param: { id }, query: {} });
+      if (response.status === 404) {
+        // **遡り切れた場合だけ 404**（デーモン側の約束）。判定できないときは
+        // 200 に空の `messages` と `reachedStart: false` が来る。
+        stdout.write(`そんな会話はありません: ${id}\n`);
+        return 'ok';
+      }
+      if (!response.ok) {
+        stdout.write('会話を読めませんでした\n');
+        return 'ok';
+      }
+      const { messages, scanned, reachedStart } = await response.json();
+      if (messages.length === 0) {
+        stdout.write(
+          reachedStart
+            ? '（発言はありません）\n'
+            : '（この窓には発言が見つかりませんでした。窓の外に残っているかもしれません' +
+                '（判定できません） — /conversation はいまのところ既定の窓しか見ません）\n',
+        );
+      } else {
+        for (const message of messages) {
+          const speaker = message.role === 'inbound' ? '人間' : 'クローン';
+          stdout.write(`  [${message.at}] ${speaker}: ${message.text}\n`);
+        }
+      }
+      stdout.write(
+        reachedStart
+          ? `  （日誌を ${scanned} 件遡り、この会話の先頭まで届きました）\n`
+          : `  （日誌を ${scanned} 件遡りましたが先頭には届いていません。これより古い発言が` +
+              '残っているかもしれません — alteroid conversations show --scan で広げられます）\n',
+      );
       return 'ok';
     }
 
