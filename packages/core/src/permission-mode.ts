@@ -45,10 +45,7 @@ export const DEFAULT_PERMISSION_MODE: PermissionModeName = 'auto';
  * のとは逆である — あちらは SDK が増やしたモデル名を人間が選べる必要があるが、
  * ここは SDK 側の閉じた列挙で、増えたらこちらも足すことになる）。
  */
-export function resolvePermissionModeFor(
-  env: NodeJS.ProcessEnv,
-  key: string,
-): PermissionModeName {
+export function resolvePermissionModeFor(env: NodeJS.ProcessEnv, key: string): PermissionModeName {
   const given = env[key]?.trim();
   if (given === undefined || given.length === 0) return DEFAULT_PERMISSION_MODE;
   if ((PERMISSION_MODES as readonly string[]).includes(given)) {

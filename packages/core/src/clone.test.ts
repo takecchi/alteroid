@@ -370,9 +370,14 @@ describe('クローン', () => {
   });
 
   it('人間が置いた権限モードが実際にセッションへ渡る', async () => {
-    const s = setup(undefined, createMemoryStores(), {}, {
-      [CLONE_PERMISSION_MODE_ENV_KEY]: 'default',
-    });
+    const s = setup(
+      undefined,
+      createMemoryStores(),
+      {},
+      {
+        [CLONE_PERMISSION_MODE_ENV_KEY]: 'default',
+      },
+    );
 
     s.clone.post(humanMessage('やあ'));
     await waitForDone(s.events);
