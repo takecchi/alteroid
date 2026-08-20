@@ -3513,19 +3513,39 @@ describe('クローン — 枠が回復した後の返信は、人間の側か�
     // 偽の SDK の返信は常に `わかった` なので**その本文を数える** — 1本目でも
     // assistant の本文は流れて日誌に載る（`clone.ts` の journal 書き込みは
     // result の成否より前）ので、**2件目が出た＝再試行の返信が載った**である。
+    //
+    // ---- 追記（SDK のエラーを応答として扱うのをやめた改修） ----
+    // 上の「1本目でも assistant の本文が**そのまま**日誌に載る」は、もう成り立た
+    // ない。失敗したターンの本文には印が付く（`clone.ts` の `result` の分岐。
+    // 無印で残すと、日誌が digest を通って翌日の日報の材料になるときに
+    // 「クローンがそう言った」として効いてしまう）。
+    //
+    // **これは保証を弱める変更ではない。** 印が付くことで、素の `わかった` は
+    // **再試行の返信ただ1件だけ**になる — 直す前の `>= 2` は「1本目の分と合わせて
+    // 2件」という数え方だったので、1本目の本文が混ざる余地があった。いまは
+    // 1件でも「再試行の返信が載った」を一意に指す。**そのうえで、1本目の本文に
+    // 印が付いていることも同じ待ちの中で確かめる**（片方だけを見ると、印を
+    // 付ける実装が消えても緑のままになる）。
     await waitFor(async () => {
       const exchanges = await stores.journal.list({ types: ['exchange'] });
-      return (
-        exchanges.filter(
-          (entry) =>
-            entry.type === 'exchange' &&
-            entry.with === 'human' &&
-            entry.role === 'outbound' &&
-            entry.conversationId === 'conv-1' &&
-            entry.text === 'わかった',
-        ).length >= 2
+      const outbound = exchanges.filter(
+        (entry) =>
+          entry.type === 'exchange' &&
+          entry.with === 'human' &&
+          entry.role === 'outbound' &&
+          entry.conversationId === 'conv-1',
       );
-    }, '再試行が成功した記録が日誌に残る');
+      const retried = outbound.filter(
+        (entry) => entry.type === 'exchange' && entry.text === 'わかった',
+      );
+      const marked = outbound.filter(
+        (entry) =>
+          entry.type === 'exchange' &&
+          entry.text.startsWith('（このターンは失敗して終わった') &&
+          entry.text.includes('わかった'),
+      );
+      return retried.length === 1 && marked.length === 1;
+    }, '再試行が成功した記録が日誌に残る（1本目の本文には失敗の印が付く）');
 
     // 症状B(a): 元の接続には、この再試行の成功（text/done）が一切届いていない
     // — 購読は1本目自身の error で既に外れている。**これは「あるべき」を示す
@@ -3610,7 +3630,15 @@ describe('クローン — 枠が回復した後の返信は、人間の側か�
    * 片方だけが緑のまま「常に同じ文言を返す」実装を通してしまう）。
    */
   it('人間へ返す1行は、枠で保持しているときだけ「あとで試し直す」と言う', async () => {
-    /** 会話に残った、クローンからの1行（assistant の本文 `わかった` は除く）。 */
+    /**
+     * 会話に残った、クローンからの1行（assistant の本文 `わかった` は除く）。
+     *
+     * **除外は `includes` で行う**（元は `!== 'わかった'` だった）。失敗した
+     * ターンの本文には印が付くので（`clone.ts` の `result` の分岐）、完全一致で
+     * 除くと `（このターンは失敗して終わった…）\nわかった` が「クローンからの
+     * 1行」に混ざり、**このヘルパが数える対象が2件になって条件が永久に満たされ
+     * なくなる**。ここで見たいのは `#reportFailure` が人間へ返す1行だけである。
+     */
     const noticesFor = async (stores: Stores) =>
       (await stores.journal.list({ types: ['exchange'] }))
         .filter(
@@ -3619,7 +3647,7 @@ describe('クローン — 枠が回復した後の返信は、人間の側か�
             entry.with === 'human' &&
             entry.role === 'outbound' &&
             entry.conversationId === 'conv-1' &&
-            entry.text !== 'わかった',
+            !entry.text.includes('わかった'),
         )
         .map((entry) => (entry.type === 'exchange' ? entry.text : ''));
 

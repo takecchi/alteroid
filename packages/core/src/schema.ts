@@ -625,6 +625,28 @@ export const jobSchema = z.object({
   archiveIds: z.array(z.string()).optional(),
   /** 直近の報告。一覧でクローンが状況を掴むためのもの。 */
   lastReport: z.string().optional(),
+  /**
+   * 直近の報告が**報告ではなく失敗**だったこと（SDK が「これは応答ではない」と
+   * 言った回）。応答として終わった回では消える。
+   *
+   * **`status` では表せない。** あちらは仕事の状態（`done` は「終えて待機中。
+   * 話しかければ続く」）で、ここは**直近の1ターンがどう終わったか**である。
+   * 支出上限に当たった回はセッション自体は生きているので、`status` を `failed`
+   * へ倒すと嘘になる（クローンは話しかけ直せる）。
+   *
+   * **これが無いと、人間の一覧に「報告が来た」としか出ない。** 直す前は
+   * `You've hit your org's monthly spend limit …` が `lastReport` にそのまま入り、
+   * マネージャーが何か報告してきたように見えていた（`sdk-failure.ts` の doc）。
+   */
+  lastFailure: z
+    .object({
+      /** SDK の語そのまま（`billing_error` / `error_during_execution` など）。 */
+      code: z.string(),
+      /** どの印で分かったか（`sdk-failure.ts` の `SdkFailureVia`）。 */
+      via: z.string(),
+      at: isoDateTime,
+    })
+    .optional(),
 });
 
 export type Job = z.infer<typeof jobSchema>;

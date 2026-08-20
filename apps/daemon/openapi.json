@@ -776,6 +776,9 @@
                         },
                         "body": {
                           "type": "string"
+                        },
+                        "unavailable": {
+                          "type": "string"
                         }
                       },
                       "required": ["type", "id", "at", "date", "body"]
@@ -1350,6 +1353,9 @@
                                 "type": "string"
                               },
                               "body": {
+                                "type": "string"
+                              },
+                              "unavailable": {
                                 "type": "string"
                               }
                             },
@@ -2158,6 +2164,9 @@
                           },
                           "body": {
                             "type": "string"
+                          },
+                          "unavailable": {
+                            "type": "string"
                           }
                         },
                         "required": ["type", "id", "at", "date", "body"]
@@ -2240,6 +2249,9 @@
                             "type": "string"
                           },
                           "body": {
+                            "type": "string"
+                          },
+                          "unavailable": {
                             "type": "string"
                           }
                         },

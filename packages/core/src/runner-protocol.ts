@@ -253,6 +253,28 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     managerId: z.string(),
     text: z.string(),
     status: jobStatusSchema,
+    /**
+     * **このターンが「報告」ではなく失敗で終わったこと。**
+     *
+     * 直す前は成否によらず報告が上がっていたので、支出上限の英語文言が
+     * そのまま「マネージャーの報告」として台帳（`lastReport`）・日誌・
+     * クローンの受信箱へ流れていた（`sdk-failure.ts` の doc）。
+     *
+     * **`status` では表せない。** あちらは仕事の状態（`done` は「終えて待機中。
+     * 話しかければ続く」）で、ここは**その1ターンがどう終わったか**である。
+     * 上限に当たった回はセッション自体は生きているので `status` を `failed` へ
+     * 倒すと嘘になる（クローンは話しかけ直せる）。
+     *
+     * `code` は SDK の語そのまま（`billing_error` / `error_during_execution` /
+     * `success/429` など）、`via` はどの印で分かったか。**言い換えない** —
+     * 次に同じことが起きたときの掘り始めの位置が違う。
+     */
+    failure: z
+      .object({
+        code: z.string(),
+        via: z.string(),
+      })
+      .optional(),
   }),
   z.object({
     type: z.literal('ask'),

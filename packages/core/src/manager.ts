@@ -1186,6 +1186,20 @@ class Pool implements ManagerPool {
       case 'report': {
         record.job.lastReport = event.text;
         record.job.status = event.status;
+        // **失敗として終わった回は台帳にもそう残す。** 本文（`event.text`）は
+        // runner 側で既に包まれているが、包んだ文字列だけに頼ると、一覧を出す側は
+        // 「報告が来た」と「エラーで死んだ」を本文の先頭を読んで判定することに
+        // なる（＝ 表示のたびに文言の判定が要る）。
+        //
+        // **応答として終わった回では消す。** 残すと、いま生きているマネージャーに
+        // 過去の失敗が貼り付いたままになる（`lastReport` と同じで「直近」の意味を
+        // 守る）。`delete` にしているのは、`undefined` を入れると
+        // `exactOptionalPropertyTypes` で通らないため。
+        if (event.failure === undefined) {
+          delete record.job.lastFailure;
+        } else {
+          record.job.lastFailure = { ...event.failure, at: new Date().toISOString() };
+        }
         await this.#persist(record);
         await this.#journal({
           type: 'exchange',

@@ -19,6 +19,7 @@ import {
   createAuthProviderRegistry,
   createAuthService,
   isAccountGranted,
+  isDailyReport,
   journalEntrySchema,
   localDayRange,
   memorySlugSchema,
@@ -448,11 +449,11 @@ function mimeEssence(contentType: string | undefined): string {
   return (contentType ?? '').split(';', 1)[0]?.trim().toLowerCase() ?? '';
 }
 
-type DailyReport = Extract<JournalEntry, { type: 'daily_report' }>;
-
-function isDailyReport(entry: JournalEntry): entry is DailyReport {
-  return entry.type === 'daily_report';
-}
+// **`isDailyReport` は `@alteroid/core` の1本を使う**（ここに写しを持たない）。
+// 日報の行には「書けなかった」の印（`unavailable`）が付くことがあり、**数える側と
+// 出す側で扱いが違う** — 出す側（この経路）は印の行も出し、数える側
+// （`clone.ts` / `schedule.ts`）は数えない。判定が3か所に散ると、その違いが
+// どこか1か所で静かに逆になる。
 
 /**
  * 本文検査が無い POST / DELETE（`deliberateClient` のみ）に共通の requestBody。
