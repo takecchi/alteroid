@@ -91,6 +91,23 @@ describe('新しい会話', () => {
   it('open で URL が変わっても、受信中のストリームが切れない', async () => {
     const stub = stubFetch((url, init) => {
       if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
+      // **サーバは既に同じやりとりを持っている体にする。** 人間の発言は受理した
+      // 時点で日誌へ載り（`clone.ts` の `#record`）、返信もターンの終わりに載る
+      // ので、履歴を読み直せば同じ2件が返ってくるのが実物の姿である。
+      if (url.includes(`/conversations/${CONVERSATION_ID}`)) {
+        return json({
+          conversationId: CONVERSATION_ID,
+          messages: [
+            { id: 'm1', at: '2026-08-20T00:00:00Z', role: 'inbound', text: 'やあ' },
+            {
+              id: 'm2',
+              at: '2026-08-20T00:00:01Z',
+              role: 'outbound',
+              text: 'こんにちは、元気にやっている。',
+            },
+          ],
+        });
+      }
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     });
@@ -112,7 +129,26 @@ describe('新しい会話', () => {
 
     // **履歴を読み直していない。** この画面で始めた会話は手元の内容が全文なので、
     // 日誌から再構成したものを重ねると同じ発言が二重に出る。
-    expect(stub.calls.some((url) => url.includes(`/conversations/${CONVERSATION_ID}`))).toBe(false);
+    //
+    // ↑ **期待値を反転させた（#92）。** この「読み直さない」は、同時に
+    // 「サーバ側で後から進んだぶんをこの画面は永久に受け取らない」ことでもあった
+    // — 枠（利用上限）で保持された発言の返信が、同じタブに居続ける限り出ない。
+    // 人間の「あとで良いのでちゃんと返信してほしい」が満たされない経路がここで、
+    // 現行の欠陥を仕様として固定していたのがこの1行である。
+    //
+    // **保証は弱くなっていない。** このテストが守っているのは「二重に出ない」
+    // ことであって「読み直さない」ことではない。読み直したうえで二重に出ない
+    // ことを、下の2つで直接見ている（`getByText` は2件当たると投げるので、
+    // 上の2つのアサーションも二重描画では落ちる）。
+    await waitFor(() => {
+      expect(stub.calls.some((url) => url.includes(`/conversations/${CONVERSATION_ID}`))).toBe(
+        true,
+      );
+    });
+    await waitFor(() => {
+      expect(within(transcript()).getAllByText('やあ')).toHaveLength(1);
+      expect(within(transcript()).getAllByText(/こんにちは、元気にやっている/)).toHaveLength(1);
+    });
   });
 
   it('受信が終わると入力へ戻る（送信中のままにしない）', async () => {

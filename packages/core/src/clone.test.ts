@@ -2208,12 +2208,37 @@ describe('クローン — ターンの失敗の跡', () => {
       )
       .toBe(true);
 
-    const failure = (await exchanges(stores)).find((entry) => entry.text.includes('失敗した'));
-    expect(failure?.with).toBe('human');
+    /*
+     * **`with` の期待値を `human` から `self` へ反転させた（#92）。**
+     *
+     * 元の期待値は現行の欠陥を仕様として固定していた — `with: 'human'` /
+     * `role: 'outbound'` で書くと `GET /conversations/:id`（`with === 'human'`
+     * だけで絞る）をそのまま通り、**SDK の生の文言が「クローンの返信」として
+     * 会話に並ぶ**。人間が「英語の文言だけが返信される」と訴えたのがこれである。
+     *
+     * **保証は弱くなっていない。** このテストが守っているのは「購読者が居なくても
+     * 失敗が日誌に残る」ことと「`conversationId` が載る」ことで、どちらも下で
+     * そのまま見ている。加えて `with` を絞って**特定の1件**を掴むようにしたので
+     * （元は `text.includes('失敗した')` の最初の1件で、人間へ返す1行と
+     * 区別できていなかった）、生の理由がどちらに載るかまで固定できている。
+     */
+    const all = await exchanges(stores);
+    const failure = all.find(
+      (entry) => entry.with === 'self' && entry.text.startsWith('人間との対話ターンが失敗した'),
+    );
+    expect(failure).toBeDefined();
     // 呼び出し側が構造化フィールドとして持っている値は載せる（#56 の線）。
     // 落とすと、どの会話の失敗だったかを時刻でしか突き合わせられなくなる。
     expect(failure?.conversationId).toBe('conv-9');
     expect(failure?.text).toContain('セッションを起こせない');
+
+    // 人間の側には、生の文言を含まない1行が返っている（沈黙にしない）。
+    const toHuman = all.filter(
+      (entry) => entry.with === 'human' && entry.role === 'outbound' && entry.text !== 'やあ',
+    );
+    expect(toHuman).toHaveLength(1);
+    expect(toHuman[0]?.conversationId).toBe('conv-9');
+    expect(toHuman[0]?.text).not.toContain('セッションを起こせない');
 
     await s.clone.stop();
   });
@@ -2267,11 +2292,22 @@ describe('クローン — ターンの失敗の跡', () => {
     const outbound = lines.filter(
       (line) => line.includes('日誌を記録できませんでした') && line.includes('role=outbound'),
     );
-    expect(outbound).toHaveLength(1);
-    // 理由だけは出す（`reasonOf` を通っている）。
-    expect(outbound[0]).toContain('器が閉じている');
-    // 本文は出さない。長さだけ出す（「空だった」と「書けなかった」が区別できる）。
-    expect(outbound[0]).toMatch(/role=outbound chars=[1-9]\d*/u);
+    /*
+     * **件数を1から2へ変えた（#92）。** 会話のある失敗は日誌へ2件書く —
+     * 生の理由（`with: 'self'`）と、人間へ返す1行（`with: 'human'`）である
+     * （`#reportFailure` の doc）。器が閉じていればどちらも落ちるので跡も2行出る。
+     *
+     * **保証は弱くなっていない。** 守っているのは「跡は出る」「本文は出さない」で、
+     * 下の3つ（理由・長さの形・秘密を含まないこと）を**全行に**課している
+     * （元は `outbound[0]` だけを見ていたので、2行目が本文を漏らしても通った）。
+     */
+    expect(outbound).toHaveLength(2);
+    for (const line of outbound) {
+      // 理由だけは出す（`reasonOf` を通っている）。
+      expect(line).toContain('器が閉じている');
+      // 本文は出さない。長さだけ出す（「空だった」と「書けなかった」が区別できる）。
+      expect(line).toMatch(/role=outbound chars=[1-9]\d*/u);
+    }
     expect(lines.join('')).not.toContain(secret);
     expect(lines.join('')).not.toContain('ghp_');
     expect(lines.join('')).not.toContain('params=');
@@ -3372,5 +3408,247 @@ describe('クローン — 枠（利用上限）が閉じたら保持して次�
     expect(matching).toHaveLength(1);
 
     await s.clone.stop();
+  });
+});
+
+/**
+ * 症状B（人間の報告）: 「利用上限に当たった状態で話しかけると、枠が回復した
+ * 後も、待たされていた発言への返信が届かない」を直接確かめる。
+ *
+ * 上のブロック（FIFO の配り直し）が確かめているのは「保持と再投入がクローンの
+ * 内部で動くか」であって、「人間の側から見えるか」ではない。既存のその
+ * ブロックは `setup()` の張りっぱなしの購読（ファイル冒頭 `clone.subscribe`）を
+ * 使っており、`apps/daemon/src/app.ts` の `POST /chat`（:772-811）が
+ * `done` / `error` を見た時点で `unsubscribe()` する現物の振る舞いを再現して
+ * いない。ここではその振る舞いを持つ聞き手を自分で用意する。
+ *
+ * **人間の要望はリアルタイム性ではない**（「あとで良いのでちゃんと返信して
+ * ほしい」が本旨。マネージャーからの追加指示）。SSE を張りっぱなしにする形が
+ * 正解ではないので、ここで測るのは「その場で観測できるか」と「後から見つけら
+ * れる形（日誌）で残るか」という別々の2つの事実であり、どちらかが正しい・
+ * 間違っているという話ではない。
+ */
+describe('クローン — 枠が回復した後の返信は、人間の側から観測できるか（症状B）', () => {
+  const spendLimitMessage = "You've hit your individual spend limit for this account.";
+
+  /**
+   * `setup()` は張りっぱなしの購読を1本持つ（ファイル冒頭）。ここではそれを
+   * 使わず、購読者を自分で選べる素の clone を組み立てる。
+   */
+  function setupBareClone(sdkOptions: Parameters<typeof fakeSdk>[1] = {}): {
+    clone: CloneHost;
+    stores: Stores;
+    calls: FakeCall[];
+  } {
+    const stores = createMemoryStores();
+    const { fn, calls } = fakeSdk(undefined, sdkOptions);
+    const clone = createClone({
+      stores,
+      queryFn: fn,
+      env: {},
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    return { clone, stores, calls };
+  }
+
+  /**
+   * `apps/daemon/src/app.ts` の `POST /chat` と同じ振る舞いの聞き手
+   * （:772 で subscribe、:774/:808 で `done`/`error` を終端と見て、
+   * :811 の `finally` で unsubscribe する）。**張りっぱなしにしないことが
+   * 要点** — 実物の SSE 購読はここで終わる。
+   */
+  function subscribeLikeChatEndpoint(clone: CloneHost, conversationId: string): ChatStreamEvent[] {
+    const events: ChatStreamEvent[] = [];
+    const unsubscribe = clone.subscribe(conversationId, (event) => {
+      events.push(event);
+      if (event.type === 'done' || event.type === 'error') unsubscribe();
+    });
+    return events;
+  }
+
+  it('(a) 元の接続（done/error で外れる、実物の SSE と同じ聞き手）には、保持していた合図の再試行が成功しても届かない', async () => {
+    const { clone, stores, calls } = setupBareClone({
+      resultFor: (turnIndex) =>
+        turnIndex === 0
+          ? { subtype: 'error_during_execution', text: spendLimitMessage }
+          : undefined,
+    });
+
+    // 1本目: 枠に当たる。app.ts の POST /chat と同じ聞き手を張ってから post する
+    // （app.ts も :772 の subscribe を :787 の post より先に行う）。
+    const firstConnection = subscribeLikeChatEndpoint(clone, 'conv-1');
+    clone.post(humanMessage('一件目'));
+    await waitForTerminal(firstConnection);
+    expect(firstConnection.filter(isTerminal).map((event) => event.type)).toEqual(['error']);
+    // ここで購読は既に外れている（`subscribeLikeChatEndpoint` が error を見て
+    // 自分で unsubscribe した）。
+
+    await waitFor(async () => {
+      const pending = await stores.inbox.claimPending();
+      return pending.length === 1;
+    }, '1本目が未読のまま保持される');
+
+    // 枠が回復した後の「試す契機」は、人間が chat を開いていなくても来る
+    // （自律 tick・マネージャーからの報告・外部イベントなど、`post()` を呼ぶ
+    // ものなら何でもよい — `clone.ts:505` の解除チェックは合図の種類を見ない）。
+    // ここでは conv-1 に紐付かない `timer` 合図を使い、「1本目の接続がまだ
+    // 生きている」という都合の良い前提を置かないことを明示する。
+    clone.post({
+      type: 'timer',
+      id: 'evt-trigger',
+      at: new Date().toISOString(),
+      kind: 'self_initiative_tick',
+    });
+
+    // 保持していた1本目の再試行が実際に SDK へ投げられるまで待つ
+    // （calls[0] の入力数が2件目に増える＝再試行が起きた証拠）。
+    await waitFor(async () => (calls[0]?.inputs.length ?? 0) >= 2, '1本目の再試行が実行される');
+    // 再試行そのものが成功したこと（done で終わる）も別途確かめる（副読）。
+    //
+    // **「失敗の記録ではない outbound」では足りない。** 枠で保持していることを
+    // 人間へ返す1行（`#reportFailure`）も同じ `with: 'human'` / `outbound` /
+    // `conv-1` で載るので、否定形の条件だと再試行を待たずに満たされてしまう。
+    // 偽の SDK の返信は常に `わかった` なので**その本文を数える** — 1本目でも
+    // assistant の本文は流れて日誌に載る（`clone.ts` の journal 書き込みは
+    // result の成否より前）ので、**2件目が出た＝再試行の返信が載った**である。
+    await waitFor(async () => {
+      const exchanges = await stores.journal.list({ types: ['exchange'] });
+      return (
+        exchanges.filter(
+          (entry) =>
+            entry.type === 'exchange' &&
+            entry.with === 'human' &&
+            entry.role === 'outbound' &&
+            entry.conversationId === 'conv-1' &&
+            entry.text === 'わかった',
+        ).length >= 2
+      );
+    }, '再試行が成功した記録が日誌に残る');
+
+    // 症状B(a): 元の接続には、この再試行の成功（text/done）が一切届いていない
+    // — 購読は1本目自身の error で既に外れている。**これは「あるべき」を示す
+    // アサーションではない**（マネージャーの指示どおり、SSE を張りっぱなしに
+    // する形は正解ではないため）。観測された事実として記録する。
+    // 1本目自身の queued/thinking/text/usage_limited/error のあとは何も増えて
+    // いないこと＝再試行の分（2周目の queued 以降）が一切届いていないこと。
+    expect(firstConnection.some((event) => event.type === 'done')).toBe(false);
+    expect(firstConnection.filter(isTerminal)).toHaveLength(1);
+    expect(firstConnection.filter((event) => event.type === 'usage_limited')).toHaveLength(1);
+
+    await clone.stop();
+  });
+
+  it('(b) 保持していた合図の再試行が成功すると、日誌には with:human / role:outbound / 同じ conversationId の記録が残る', async () => {
+    const { clone, stores } = setupBareClone({
+      resultFor: (turnIndex) =>
+        turnIndex === 0
+          ? { subtype: 'error_during_execution', text: spendLimitMessage }
+          : undefined,
+    });
+
+    const isMatchingOutboundExchange = (
+      entry: Awaited<ReturnType<Stores['journal']['list']>>[number],
+    ): entry is Extract<
+      Awaited<ReturnType<Stores['journal']['list']>>[number],
+      { type: 'exchange' }
+    > =>
+      entry.type === 'exchange' &&
+      entry.with === 'human' &&
+      entry.role === 'outbound' &&
+      entry.conversationId === 'conv-1';
+
+    const matchingOutbound = async () =>
+      (await stores.journal.list({ types: ['exchange'] })).filter(isMatchingOutboundExchange);
+
+    const firstConnection = subscribeLikeChatEndpoint(clone, 'conv-1');
+    clone.post(humanMessage('一件目'));
+    await waitForTerminal(firstConnection);
+
+    const before = await matchingOutbound();
+    const beforeCount = before.length;
+
+    clone.post({
+      type: 'timer',
+      id: 'evt-trigger',
+      at: new Date().toISOString(),
+      kind: 'self_initiative_tick',
+    });
+
+    // 症状B(b): 再試行が成功すると、日誌には新しい outbound の記録が増える
+    // （`#emit` の購読者の有無とは無関係に、`clone.ts:2062` の journal 書き込みは
+    // 常に走る）。**これは実際にありうる真の観測**であって、(a) と対になる
+    // 別の事実である。
+    await waitFor(
+      async () => (await matchingOutbound()).length > beforeCount,
+      '保持していた1本目の再試行の返信が日誌に残る',
+    );
+
+    const after = await matchingOutbound();
+    const newest = after.find((entry) => !before.some((existing) => existing.id === entry.id));
+    expect(newest).toBeDefined();
+    // **増えた1件が再試行の返信そのものであること**まで見る（否定形だと、枠で
+    // 保持していることを人間へ返す1行でも通ってしまう）。偽の SDK の返信は
+    // 常に `わかった` である。
+    expect(newest?.text).toBe('わかった');
+    expect(newest?.text.startsWith('人間との対話ターンが失敗した')).toBe(false);
+
+    await clone.stop();
+  });
+
+  /**
+   * 人間へ返す1行を、**枠のときとそれ以外で言い分けているか**。
+   *
+   * 人間の要望は「あとで良いのでちゃんと返信してほしい」である。だから会話に
+   * 残る1行は「待てば返る」と「もう返らない」を区別していなければならない —
+   * どちらも「失敗した」で済ませると、人間は待つべきかもう一度送るべきかを
+   * 会話から決められない（送り直すと、保持されている分と重複する）。
+   *
+   * **`#reportFailure` の分岐（`#usageBlocked === null`）に歯を当てるのが目的**
+   * なので、枠の場合と枠でない場合を1本の中で対にして見る（別々の it にすると、
+   * 片方だけが緑のまま「常に同じ文言を返す」実装を通してしまう）。
+   */
+  it('人間へ返す1行は、枠で保持しているときだけ「あとで試し直す」と言う', async () => {
+    /** 会話に残った、クローンからの1行（assistant の本文 `わかった` は除く）。 */
+    const noticesFor = async (stores: Stores) =>
+      (await stores.journal.list({ types: ['exchange'] }))
+        .filter(
+          (entry) =>
+            entry.type === 'exchange' &&
+            entry.with === 'human' &&
+            entry.role === 'outbound' &&
+            entry.conversationId === 'conv-1' &&
+            entry.text !== 'わかった',
+        )
+        .map((entry) => (entry.type === 'exchange' ? entry.text : ''));
+
+    // 枠に当たった場合。
+    const limited = setupBareClone({
+      resultFor: () => ({ subtype: 'error_during_execution', text: spendLimitMessage }),
+    });
+    limited.clone.post(humanMessage('一件目'));
+    await waitFor(async () => (await noticesFor(limited.stores)).length === 1, '枠の1行が残る');
+    const limitedNotice = (await noticesFor(limited.stores))[0] ?? '';
+    expect(limitedNotice).toContain('利用上限');
+    expect(limitedNotice).toContain('試し直');
+    // 生の文言（英語）は人間へ返す1行には載せない。
+    expect(limitedNotice).not.toContain(spendLimitMessage);
+    await limited.clone.stop();
+
+    // 枠ではない失敗の場合。**待てば返るとは言わない。**
+    const broken = setupBareClone({
+      resultFor: () => ({ subtype: 'error_during_execution', text: '内部で何かが壊れた' }),
+    });
+    broken.clone.post(humanMessage('一件目'));
+    await waitFor(
+      async () => (await noticesFor(broken.stores)).length === 1,
+      '枠でない失敗の1行が残る',
+    );
+    const brokenNotice = (await noticesFor(broken.stores))[0] ?? '';
+    expect(brokenNotice).toContain('返せなかった');
+    expect(brokenNotice).not.toContain('試し直');
+    expect(brokenNotice).not.toContain('内部で何かが壊れた');
+    await broken.clone.stop();
   });
 });

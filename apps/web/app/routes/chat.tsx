@@ -169,8 +169,6 @@ export function ChatPane({
    * 区別できなくなる。
    */
   const [shownId, setShownId] = useState(routeId);
-  /** この画面で始めた会話か。始めたなら手元の `lines` が全文なので履歴を読まない。 */
-  const [startedHere, setStartedHere] = useState(false);
   const [lines, setLines] = useState<Line[]>([]);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
@@ -206,14 +204,26 @@ export function ChatPane({
     // URL が自分の採番に追いついただけなら、捨てるものは何も無い。
     if (routeId !== shownId) {
       setShownId(routeId);
-      setStartedHere(false);
       setLines([]);
       setFailure(undefined);
     }
   }
 
-  // この画面で始めた会話なら、日誌から再構成した履歴を重ねない（二重に出る）。
-  const history = useConversation(startedHere ? null : (shownId ?? null));
+  /*
+   * **この画面で始めた会話でも履歴を読む（#92 で変えた）。**
+   *
+   * 直す前は `startedHere` を立てて `useConversation(null)` にしていた
+   * （手元の `lines` が全文だから重ねると二重に出る、という理由）。だがそれは
+   * 「サーバ側で後から進んだぶんを、この画面は永久に受け取らない」ことでもあった。
+   * 枠（利用上限）で保持された発言は、枠が開いてから再試行されて返信が日誌へ載る
+   * — その返信は `use-journal-live.ts` の無効化を経てここへ届くはずだったが、
+   * **購読していない画面には無効化が効かない。** 同じタブに居続ける限り、遅れた
+   * 返信は出ないままだった（人間の「あとで良いのでちゃんと返信してほしい」が
+   * 満たされていなかった経路がここである）。
+   *
+   * 二重描画は購読をやめることではなく、下の `all` の重ね合わせで防ぐ。
+   */
+  const history = useConversation(shownId ?? null);
 
   // 履歴（日誌から再構成されたもの）＋この画面で流れてきた分。
   const historyLines = useMemo<Line[]>(
@@ -226,7 +236,46 @@ export function ChatPane({
     [history.data],
   );
 
-  const all = useMemo(() => [...historyLines, ...lines], [historyLines, lines]);
+  /*
+   * 履歴（サーバが日誌から再構成したもの）と、この画面で流れてきた分を重ねる。
+   *
+   * **同じやりとりが両側に載る。** 人間の発言は受理した時点で日誌へ載り
+   * （`clone.ts` の `#record`）、クローンの返信もターンの終わりに載る。一方この
+   * 画面は送った発言と届いた本文を手元の `lines` にも積んでいるので、履歴を
+   * 読み直した瞬間に同じものが2つになる。だから**重ねる時に消す。**
+   *
+   * 突き合わせるのは `role` と本文の組で、**同じ本文が複数あっても1件ずつしか
+   * 消さない**（多重集合の照合）。「ok」を2回送ったのに履歴側が1件しか返して
+   * いないなら、手元の2件目は残す — 集合として引くと、繰り返した発言が黙って
+   * 1件に潰れる。
+   *
+   * **id では突き合わせられない。** 履歴側の `key` は日誌の id、手元は
+   * `h-<index>-…` / `c-<時刻>` で、同じやりとりに同じ id が付く経路が無い
+   * （手元で採番した時点ではサーバの id を知らない）。
+   *
+   * 進行中の合図（`transient`）と `system` の行は履歴に相当するものが無いので
+   * そのまま残る（`role` が一致しないので照合の対象にならない）。
+   */
+  const all = useMemo(() => {
+    const remaining = new Map<string, number>();
+    for (const line of historyLines) {
+      const key = `${line.role} ${line.text}`;
+      remaining.set(key, (remaining.get(key) ?? 0) + 1);
+    }
+    const pending: Line[] = [];
+    for (const line of lines) {
+      const key = `${line.role} ${line.text}`;
+      const count = remaining.get(key) ?? 0;
+      // 履歴側に同じものがある＝サーバが既に持っているやりとりなので、手元の
+      // 写しは落とす（履歴側の並び順の方が正しい。日誌の時刻で並んでいる）。
+      if (count > 0) {
+        remaining.set(key, count - 1);
+        continue;
+      }
+      pending.push(line);
+    }
+    return [...historyLines, ...pending];
+  }, [historyLines, lines]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: 'end' });
@@ -347,7 +396,6 @@ export function ChatPane({
               // それを待つと、その隙間に届いた分が `owns()` に弾かれる。
               shownIdRef.current = stream.id;
               setShownId(stream.id);
-              setStartedHere(true);
               // URL は後から追いつかせるだけ。作り直しは起きない（key を付けていない）。
               void navigate(`/chat/${stream.id}`, { replace: true });
             }
@@ -492,7 +540,13 @@ export function ChatPane({
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-6">
-        {history.isLoading && shownId !== undefined ? (
+        {/*
+          **読み込み中の表示は、見せるものが何も無いときだけ。** この画面で始めた
+          会話でも履歴を読むようになったので（上の `useConversation` のコメント）、
+          `open` の直後に履歴の取得が始まる。手元に流れてきた分があるのに
+          スピナーへ差し替えると、受信中の本文が一度消えてから戻ることになる。
+        */}
+        {history.isLoading && shownId !== undefined && lines.length === 0 ? (
           <Spinner label="履歴を読み込み中" />
         ) : all.length === 0 ? (
           <Card>
