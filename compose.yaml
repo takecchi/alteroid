@@ -129,8 +129,13 @@ x-shared-env: &shared-env
   ALTEROID_WORKER_MODEL: ${ALTEROID_WORKER_MODEL:-}
   # 自律の既定（日報・発意）は環境変数で開け閉めできる。これは方針であって
   # 実行回数の制限ではない（north_star 禁止2）。
+  # **フォールバック値はコード側の既定（`apps/daemon/src/schedule.ts` の
+  # `DEFAULT_INITIATIVE_EVERY_MINUTES`。理由はそちらの JSDoc）と必ず揃えること** —
+  # ここで別の値に固定すると、このデーモンは常に環境変数を受け取る形になるので、
+  # コード側の既定は compose 経由の起動では一度も使われず、直したつもりの既定が
+  # 静かに無効になる。
   ALTEROID_DAILY_REPORT_AT: ${ALTEROID_DAILY_REPORT_AT:-22:00}
-  ALTEROID_INITIATIVE_EVERY: ${ALTEROID_INITIATIVE_EVERY:-60}
+  ALTEROID_INITIATIVE_EVERY: ${ALTEROID_INITIATIVE_EVERY:-55}
   TZ: ${TZ:-Asia/Tokyo}
   # 入口の認証（誰がこの HTTP API を叩いてよいか）。**人間が置くのはここ1か所**で、
   # **走っている runner には残らない** — `docker/alteroid-runner` が `exec` の前に
