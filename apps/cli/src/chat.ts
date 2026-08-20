@@ -204,6 +204,7 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /journal [件数]      日誌（新しい順）
 /managers            マネージャーの一覧と状態
 /manager <id>        そのマネージャーのセッション生ログ
+/stop <id> [理由]    その仕事だけをやめさせる（止めた事実は日誌に残る）
 /archive             セッションの生ログ一覧
 /archive <id>        生ログの中身
 /approvals           承認待ち（番号付き）
@@ -432,6 +433,42 @@ export async function runSlashCommand(
       }
       const { managers } = await response.json();
       stdout.write(`${renderManagerList(managers)}\n`);
+      return 'ok';
+    }
+
+    /**
+     * この仕事だけをやめさせる。
+     *
+     * **`/managers` で状態を読めるのに、止める手が CLI に無かった。** 画面
+     * （`apps/web/app/routes/manager-detail.tsx`）にはあり、PRD「インターフェース」は
+     * 3面で同じことができると書いている（起こせることの列挙に「委譲の停止」がある）。
+     * 読めるだけで手が出せない面があると、その面の人間は器ごと落とすしかなくなり、
+     * 関係の無い仕事まで道連れになる（それがこの口の存在理由そのものである）。
+     *
+     * **理由を書ける形にしてある。** 止めた事実は日誌に残るので、そこに「なぜ」が
+     * 無いと、後から見た人間（とクローン）が判断を再構成できない。
+     */
+    case '/stop': {
+      const id = rest[0];
+      if (!id) {
+        stdout.write('使い方: /stop <manager_id> [理由]\n');
+        return 'ok';
+      }
+      const reason = rest.slice(1).join(' ').trim();
+      const response = await client.managers[':id'].$delete({
+        param: { id },
+        // 空文字を送らない（`reason` は `min(1)`）。**書かなかったことを空文字で
+        // 埋めると、日誌に「理由：（空）」が残って、書き忘れと区別が付かない。**
+        json: reason === '' ? {} : { reason },
+      });
+      if (!response.ok) {
+        stdout.write(`そのマネージャーは見つかりませんでした: ${id}\n`);
+        return 'ok';
+      }
+      // **応答をそのまま出す。** 「止めた」と言い換えると、器の側が別の結果
+      // （既に終わっていた等）を返しても同じ顔になる。
+      const { outcome, detail } = await response.json();
+      stdout.write(`${outcome}: ${detail}\n`);
       return 'ok';
     }
 
