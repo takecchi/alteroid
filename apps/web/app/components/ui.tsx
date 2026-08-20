@@ -194,3 +194,21 @@ export function ErrorNote({ error, className }: { error: unknown; className?: st
 export function Row({ className, children }: { className?: string; children: ReactNode }) {
   return <li className={cn('border-b border-border last:border-b-0', className)}>{children}</li>;
 }
+
+/**
+ * 打ち切ったことを言う一行。**切るなら、切ったと分かる形で切る。**
+ *
+ * 黙って切り捨てると「全部でこれだけ」と読める出力になる。読む側はその嘘を自分では
+ * 直せない — 隣に一覧へのリンクがあっても、**そこを押す理由が出力から消えている。**
+ *
+ * `total` が `shown` 以下なら**何も描かない。** 常に出る但し書きは、出ていることが
+ * 情報にならない（「残り 0 件」は「取れない軸に 0 の行を作る」と同じ形である）。
+ */
+export function TruncationNote({ shown, total }: { shown: number; total: number }) {
+  if (total <= shown) return null;
+  return (
+    <p className="border-t border-border px-4 py-2 text-[11px] text-muted">
+      …残り {total - shown} 件は出していない
+    </p>
+  );
+}

@@ -3,7 +3,15 @@ import { Link } from 'react-router';
 
 import { Markdown } from '~/components/markdown';
 import { Page } from '~/components/page';
-import { Badge, Card, CardHeader, Empty, ErrorNote, Spinner } from '~/components/ui';
+import {
+  Badge,
+  Card,
+  CardHeader,
+  Empty,
+  ErrorNote,
+  Spinner,
+  TruncationNote,
+} from '~/components/ui';
 import {
   summarizeJournalEntry,
   useApprovals,
@@ -16,6 +24,16 @@ import { useJournalFeed } from '~/hooks/journal-feed';
 import { formatDateTime, formatRelative } from '~/lib/format';
 
 import { ManagerStatusBadge } from './managers';
+
+/**
+ * 概要カードに出す件数。**切ること自体は要件である**（ここは一目で見る場所で、
+ * 全件はそれぞれの一覧が持つ）。要件でないのは**切ったことが消えること**なので、
+ * 定数は `TruncationNote` と必ず対で使う。数字を直接 `slice` に書かないのは、
+ * 但し書き側と食い違った瞬間に嘘の件数が出るためである。
+ */
+const APPROVAL_LIMIT = 5;
+const MANAGER_LIMIT = 5;
+const LIVE_LIMIT = 30;
 
 /**
  * 普段の接点。
@@ -99,21 +117,24 @@ export default function Dashboard() {
             ) : pending.length === 0 ? (
               <Empty>なし。</Empty>
             ) : (
-              <ul>
-                {pending.slice(0, 5).map((approval) => (
-                  <li
-                    key={approval.id}
-                    className="border-b border-border px-4 py-2 last:border-b-0"
-                  >
-                    <Link to="/approvals" className="block text-sm hover:text-accent">
-                      <span className="line-clamp-2">{approval.question}</span>
-                      <span className="mt-0.5 block text-[11px] text-muted">
-                        {formatRelative(approval.createdAt)}
-                      </span>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
+              <>
+                <ul>
+                  {pending.slice(0, APPROVAL_LIMIT).map((approval) => (
+                    <li
+                      key={approval.id}
+                      className="border-b border-border px-4 py-2 last:border-b-0"
+                    >
+                      <Link to="/approvals" className="block text-sm hover:text-accent">
+                        <span className="line-clamp-2">{approval.question}</span>
+                        <span className="mt-0.5 block text-[11px] text-muted">
+                          {formatRelative(approval.createdAt)}
+                        </span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+                <TruncationNote shown={APPROVAL_LIMIT} total={pending.length} />
+              </>
             )}
           </Card>
 
@@ -131,22 +152,25 @@ export default function Dashboard() {
             ) : running.length === 0 ? (
               <Empty>いま走っているものはない。</Empty>
             ) : (
-              <ul>
-                {running.slice(0, 5).map((manager) => (
-                  <li
-                    key={manager.managerId}
-                    className="border-b border-border px-4 py-2 last:border-b-0"
-                  >
-                    <Link
-                      to={`/managers/${manager.managerId}`}
-                      className="flex items-center gap-2 text-sm hover:text-accent"
+              <>
+                <ul>
+                  {running.slice(0, MANAGER_LIMIT).map((manager) => (
+                    <li
+                      key={manager.managerId}
+                      className="border-b border-border px-4 py-2 last:border-b-0"
                     >
-                      <ManagerStatusBadge status={manager.status} />
-                      <span className="min-w-0 flex-1 truncate">{manager.request}</span>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
+                      <Link
+                        to={`/managers/${manager.managerId}`}
+                        className="flex items-center gap-2 text-sm hover:text-accent"
+                      >
+                        <ManagerStatusBadge status={manager.status} />
+                        <span className="min-w-0 flex-1 truncate">{manager.request}</span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+                <TruncationNote shown={MANAGER_LIMIT} total={running.length} />
+              </>
             )}
           </Card>
 
@@ -219,22 +243,32 @@ export default function Dashboard() {
         {live.recent.length === 0 ? (
           <Empty>まだ何も届いていない。</Empty>
         ) : (
-          <ul className="max-h-72 overflow-y-auto">
-            {live.recent.slice(0, 30).map((entry) => (
-              <li
-                key={entry.id}
-                className="flex gap-3 border-b border-border px-4 py-2 text-sm last:border-b-0"
-              >
-                <span className="shrink-0 font-mono text-[11px] text-muted">
-                  {formatDateTime(entry.at)}
-                </span>
-                <Badge>{entry.type}</Badge>
-                <span className="min-w-0 flex-1 truncate text-muted">
-                  {summarizeJournalEntry(entry)}
-                </span>
-              </li>
-            ))}
-          </ul>
+          <>
+            {/*
+              ここで言えるのは「届いた分のうち何件を出していないか」までである。
+              購読側（`use-journal-live.ts` の `RECENT_LIMIT`）はさらに古い分を
+              落としているので、**この但し書きは「流れた全部」の残数ではない。**
+              そちらまで数えるには購読側が落とした事実を返す必要があり、ここでは
+              数えられない（`/journal` に全部残っている旨は上のリンクが担う）。
+            */}
+            <ul className="max-h-72 overflow-y-auto">
+              {live.recent.slice(0, LIVE_LIMIT).map((entry) => (
+                <li
+                  key={entry.id}
+                  className="flex gap-3 border-b border-border px-4 py-2 text-sm last:border-b-0"
+                >
+                  <span className="shrink-0 font-mono text-[11px] text-muted">
+                    {formatDateTime(entry.at)}
+                  </span>
+                  <Badge>{entry.type}</Badge>
+                  <span className="min-w-0 flex-1 truncate text-muted">
+                    {summarizeJournalEntry(entry)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <TruncationNote shown={LIVE_LIMIT} total={live.recent.length} />
+          </>
         )}
       </Card>
     </Page>

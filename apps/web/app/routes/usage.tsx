@@ -2,7 +2,17 @@ import { formatUsd, summarizeUsage, USAGE_LAYERS, USAGE_SITES } from '@alteroid/
 import { useState } from 'react';
 
 import { Page } from '~/components/page';
-import { Badge, Card, CardHeader, Empty, ErrorNote, Input, Select, Spinner } from '~/components/ui';
+import {
+  Badge,
+  Card,
+  CardHeader,
+  Empty,
+  ErrorNote,
+  Input,
+  Select,
+  Spinner,
+  TruncationNote,
+} from '~/components/ui';
 import { useUsage, type UsageQuery } from '~/hooks/queries';
 import type { UsageLayer, UsageRow, UsageSite } from '~/lib/types';
 
@@ -248,12 +258,13 @@ function AxisCard({
           ))}
         </ul>
       )}
-      {entries.length > AXIS_LIMIT && (
-        // **打ち切ったら必ずそう書く。** 黙って切り捨てると「全部でこれだけ」と読める出力が嘘になる。
-        <p className="border-t border-border px-4 py-2 text-[11px] text-muted">
-          …残り {entries.length - AXIS_LIMIT} 件は出していない
-        </p>
-      )}
+      {/*
+        **打ち切ったら必ずそう書く。** 黙って切り捨てると「全部でこれだけ」と読める
+        出力が嘘になる。文言と判定は `TruncationNote` が1つ持つ（ここに直接書いて
+        いたものを移した）— 面ごとに書き分けると、片方だけ直したときに「同じ切り方
+        なのに片方だけ黙る」が生まれる。
+      */}
+      <TruncationNote shown={AXIS_LIMIT} total={entries.length} />
     </Card>
   );
 }

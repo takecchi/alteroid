@@ -53,13 +53,16 @@ function renderDashboard(
   // 既定は空のまま（既存のテストは全部これで、最新の日報カードを一度も
   // 描画経路に乗せていない）。「最新の日報」のテストだけがここへ渡す。
   reports: Array<{ type: 'daily_report'; id: string; at: string; date: string; body: string }> = [],
+  // 概要カードが打ち切る側の分岐へ入れるための材料。既定は空なので、
+  // 既存のテストは1つも振る舞いが変わらない。
+  lists: { approvals?: unknown[]; managers?: unknown[] } = {},
 ): FetchStub {
   // **`/journal/stream` の経路を置いていない。** 置くと購読が増えたことに気づけない
   // （知らない URL は `stubFetch` が「繋がらない」にするので、張りに行けば必ず出る）。
   const stub = stubFetch((url) => {
     if (url.includes('/reports')) return json({ reports });
-    if (url.includes('/approvals')) return json({ approvals: [] });
-    if (url.includes('/managers')) return json({ managers: [] });
+    if (url.includes('/approvals')) return json({ approvals: lists.approvals ?? [] });
+    if (url.includes('/managers')) return json({ managers: lists.managers ?? [] });
     if (url.includes('/schedule')) return json({ entries: [] });
     if (url.includes('/usage')) {
       return json({
@@ -146,6 +149,81 @@ describe('「最新の日報」', () => {
 
     expect(await screen.findByRole('heading', { name: '今日やったこと' })).toBeTruthy();
     expect(screen.getByText('進捗があった。')).toBeTruthy();
+  });
+});
+
+/**
+ * 概要カードは全件を出さない（それは要件である）。**要件でないのは、切ったことが
+ * 出力から消えることである。**
+ *
+ * 保証しているのは2方向で、片方だけでは足りない。
+ *
+ * - 上限を越えたら残数が出る — 出ないと「全部でこれだけ」と読める
+ * - **ちょうど上限のときは出ない** — 常に出る但し書きは、出ていることが情報に
+ *   ならない（「残り 0 件」を作ると、取れない軸に 0 の行を作るのと同じになる）
+ */
+describe('概要カードが打ち切ったことを言う', () => {
+  const USAGE = { rows: [], since: null, beforeLedger: false };
+
+  const approval = (n: number) => ({
+    id: `approval-${n}`,
+    createdAt: '2026-08-14T09:00:00.000Z',
+    question: `質問 ${n}`,
+  });
+
+  const manager = (n: number) => ({
+    managerId: `mgr-${n}`,
+    status: 'running',
+    live: true,
+    cwd: '/workspace',
+    request: `依頼 ${n}`,
+    startedAt: '2026-08-14T09:00:00.000Z',
+    updatedAt: '2026-08-14T09:00:00.000Z',
+  });
+
+  const decision = (n: number): JournalEntry => ({
+    type: 'decision',
+    id: `decision-${n}`,
+    at: '2026-08-14T09:00:00.000Z',
+    decision: `判断 ${n}`,
+    grounds: '記憶',
+  });
+
+  it('承認待ちが上限を越えたら、出していない件数を言う', async () => {
+    const approvals = Array.from({ length: 8 }, (_, i) => approval(i));
+    renderDashboard(USAGE, EMPTY_FEED, [], { approvals });
+
+    // 上限は5なので、出るのは残り3件。
+    expect(await screen.findByText(/残り 3 件は出していない/)).toBeTruthy();
+    expect(screen.getByText('質問 0')).toBeTruthy();
+    expect(screen.queryByText('質問 5')).toBeNull();
+  });
+
+  it('承認待ちがちょうど上限なら、但し書きを出さない', async () => {
+    const approvals = Array.from({ length: 5 }, (_, i) => approval(i));
+    renderDashboard(USAGE, EMPTY_FEED, [], { approvals });
+
+    expect(await screen.findByText('質問 4')).toBeTruthy();
+    expect(screen.queryByText(/件は出していない/)).toBeNull();
+  });
+
+  it('稼働中のマネージャーが上限を越えたら、出していない件数を言う', async () => {
+    const managers = Array.from({ length: 7 }, (_, i) => manager(i));
+    renderDashboard(USAGE, EMPTY_FEED, [], { managers });
+
+    expect(await screen.findByText(/残り 2 件は出していない/)).toBeTruthy();
+    expect(screen.getByText('依頼 0')).toBeTruthy();
+    expect(screen.queryByText('依頼 5')).toBeNull();
+  });
+
+  it('届いている出来事が上限を越えたら、出していない件数を言う', async () => {
+    const recent = Array.from({ length: 32 }, (_, i) => decision(i));
+    renderDashboard(USAGE, { status: 'live', recent }, [], {});
+
+    // 上限は30なので、出るのは残り2件。
+    expect(await screen.findByText(/残り 2 件は出していない/)).toBeTruthy();
+    expect(screen.getByText(summarizeJournalEntry(decision(0)))).toBeTruthy();
+    expect(screen.queryByText(summarizeJournalEntry(decision(31)))).toBeNull();
   });
 });
 
