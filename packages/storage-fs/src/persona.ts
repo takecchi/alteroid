@@ -102,15 +102,23 @@ export class FsPersonaStore implements PersonaStore {
     await rm(this.#path(slug), { force: true });
   }
 
-  async concat(): Promise<string> {
+  /**
+   * 全文書を本文ごと `slug` 昇順で返す（`list()` がその順で並べる）。
+   *
+   * **1つの文字列へ潰さない。** 見出しを付けて連結するのは
+   * `renderMemoryDocuments`（`@alteroid/core` の `memory.ts`）の仕事であって、
+   * 器の仕事ではない。かつてここが `concat()` として載せ方まで持っていたため、
+   * fs / pg / インメモリで形が食い違った。
+   */
+  async documents(): Promise<MemoryDocument[]> {
     const metas = await this.list();
-    const parts: string[] = [];
+    const docs: MemoryDocument[] = [];
     for (const meta of metas) {
       const doc = await this.read(meta.slug);
       if (!doc) continue;
-      parts.push(`<!-- memory: ${doc.slug}.md -->\n${doc.content.trimEnd()}`);
+      docs.push(doc);
     }
-    return parts.join('\n\n');
+    return docs;
   }
 }
 

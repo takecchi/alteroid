@@ -2,6 +2,7 @@ import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { renderMemoryDocuments } from '@alteroid/core';
 import type { Commitment, InboxEvent } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -61,7 +62,9 @@ describe('FsPersonaStore', () => {
     await writeFile(join(root, 'memory', 'values.md'), '# 価値観\n\n人間が書き換えた\n', 'utf8');
 
     expect((await stores.persona.read('values'))?.content).toContain('人間が書き換えた');
-    expect(await stores.persona.concat()).toContain('人間が書き換えた');
+    // クローンの文脈へ載る形（documents → renderMemoryDocuments）にも反映されること。
+    // かつては concat() がこの連結まで持っていたが、載せ方は core へ移った。
+    expect(renderMemoryDocuments(await stores.persona.documents())).toContain('人間が書き換えた');
   });
 
   it('append は末尾に足す', async () => {
@@ -102,11 +105,19 @@ describe('FsPersonaStore', () => {
     await expect(stores.persona.write('../escape', 'x')).rejects.toThrow(/スラッグ/);
   });
 
-  it('concat は全文書を連結する', async () => {
-    await stores.persona.write('a', '# A\n\nあ\n');
+  it('documents は全文書を本文つき・slug 昇順で返す（載せ方は core が決める）', async () => {
+    // 書いた順を slug の昇順とわざと逆にする。挿入順で通ってしまわないため。
     await stores.persona.write('b', '# B\n\nい\n');
+    await stores.persona.write('a', '# A\n\nあ\n');
 
-    const all = await stores.persona.concat();
+    const docs = await stores.persona.documents();
+
+    // 順序と本文の有無は上の層が依存する点である（クローンは走行中に
+    // 「どの文書が変わったか」を見出しで指す）。
+    expect(docs.map((d) => d.slug)).toEqual(['a', 'b']);
+    expect(docs.map((d) => d.content)).toEqual(['# A\n\nあ\n', '# B\n\nい\n']);
+
+    const all = renderMemoryDocuments(docs);
 
     expect(all).toContain('memory: a.md');
     expect(all).toContain('memory: b.md');

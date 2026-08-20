@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import { CLONE_MODEL, CLONE_MODEL_ENV_KEY, createClone, resolveCloneModel } from './clone.js';
 import type { CloneHost } from './host.js';
+import { renderMemoryDocuments } from './memory.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createScheduler } from './schedule.js';
@@ -403,10 +404,9 @@ describe('クローン', () => {
  * `createCloneTools(context)` を呼んで取り出す（`tools.test.ts` と同じ形）。
  */
 describe('クローン — self_status（runtime facts の配線）', () => {
-  function setupCapturing(env: NodeJS.ProcessEnv = {}) {
+  function setupCapturing(env: NodeJS.ProcessEnv = {}, stores: Stores = createMemoryStores()) {
     const { fn, calls } = fakeSdk();
     let captured: ToolContext | undefined;
-    const stores = createMemoryStores();
     const clone = createClone({
       stores,
       queryFn: fn,
@@ -727,6 +727,42 @@ describe('クローン — self_status（runtime facts の配線）', () => {
     expect(second).not.toContain('effort（実効値）: xhigh');
 
     await clone.stop();
+  });
+
+  /**
+   * `injectedMemoryChars` が名乗っているのは**「このセッションを組み立てた時点」**の
+   * 文字数である。
+   *
+   * かつてこの値は、載せ直しの控え（記憶の全文を持っていたフィールド）の長さを
+   * そのまま返していた。載せ直しが起きるとその控えが更新されるので、**走行中に
+   * 人間が記憶を直すと、この行だけが黙って「いまの総文字数」に化けていた**
+   * （そう名乗っていないのに）。`tools.test.ts` は固定値を渡すので、この配線の
+   * ずれはクローン側から見ないと出ない。
+   */
+  it('焼き込んだ記憶の文字数は、走行中に人間が記憶を直しても動かない', async () => {
+    const stores = createMemoryStores();
+    await stores.persona.write('values', `# 価値観\n\n${'あ'.repeat(50)}\n`);
+    const s = setupCapturing({}, stores);
+
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    const baked = renderMemoryDocuments(await stores.persona.documents()).length;
+    const line = `焼き込んだ記憶の文字数（このセッションを組み立てた時点）: ${baked.toLocaleString('en-US')} 文字`;
+    expect(await s.selfStatus()).toContain(line);
+
+    // 人間が記憶を大きく書き換える（載せ直しが起きる量にする）
+    await stores.persona.write('values', `# 価値観\n\n${'い'.repeat(5000)}\n`);
+    const events: ChatStreamEvent[] = [];
+    s.clone.subscribe('conv-2', (event) => events.push(event));
+    s.clone.post(humanMessage('2回目', 'conv-2'));
+    await waitForDone(events);
+    // 載せ直しが実際に起きたことを確かめてから、動いていないことを見る
+    expect((s.calls[0] as FakeCall).inputs[1] ?? '').toContain('記憶が更新された');
+
+    expect(await s.selfStatus()).toContain(line);
+
+    await s.clone.stop();
   });
 });
 
@@ -1559,6 +1595,234 @@ describe('クローン — 壊れ方の回帰', () => {
       answer?: string;
     }[];
     expect(escalations.some((entry) => entry.answer === 'よい')).toBe(true);
+
+    await s.clone.stop();
+  });
+});
+
+/**
+ * 記憶が**二重に文脈へ載らない**こと。
+ *
+ * 記憶はセッションを組み立てた時点でシステムプロンプトへ焼き込まれる。走行中の
+ * 手編集を届けるための載せ直し（`#withFreshMemory`）は、かつて**記憶の全文**を
+ * 本文の前に置いていた。つまり1つの文書の1行を直すだけで、変わっていない文書まで
+ * 含めた全文が2つ目の写しとして文脈に入り、しかもそれは会話の履歴に残るので
+ * 直すたびに増え、resume でも運ばれていた。
+ *
+ * ここで固定するのは3つである。
+ *
+ * 1. 変わった文書だけが載る（＝変わっていない文書は二重に載らない）
+ * 2. 何も変わっていなければ何も足さない
+ * 3. resume では全文を載せ直さず、正本がシステムプロンプト側だと断るだけにする
+ *
+ * **受け入れ基準3（人間の手編集が次の会話に反映される）を弱めていないこと**は、
+ * 上の「走行中に人間が記憶を書き換えたら、次のターンで載せ直す」がそのまま
+ * 見ている（あちらは触っていない）。
+ */
+describe('クローン — 記憶を二重に載せない', () => {
+  /** その名のとおり、載せ直しの中に本文が出てきてはいけない文書。 */
+  const UNCHANGED_BODY = 'HABIT-BODY-MUST-NOT-BE-RESENT';
+
+  async function twoDocumentStores(): Promise<Stores> {
+    const stores = createMemoryStores();
+    await stores.persona.write('values', '# 価値観\n\nOLD-VALUE\n');
+    await stores.persona.write('habits', `# 習慣\n\n${UNCHANGED_BODY}\n`);
+    return stores;
+  }
+
+  /** 2ターン目を同じセッションへ流し、その入力を返す。 */
+  async function secondTurn(s: Setup): Promise<string> {
+    const events: ChatStreamEvent[] = [];
+    s.clone.subscribe('conv-2', (event) => events.push(event));
+    s.clone.post(humanMessage('2回目', 'conv-2'));
+    await waitForDone(events);
+    return (s.calls[0] as FakeCall).inputs[1] ?? '';
+  }
+
+  it('1つの文書を直しても、変わっていない文書の本文は載せ直さない', async () => {
+    const stores = await twoDocumentStores();
+    const s = setup(undefined, stores);
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    await stores.persona.write('values', '# 価値観\n\nNEW-VALUE\n');
+    const second = await secondTurn(s);
+
+    // 直した文書は、どの文書かを指せる見出しつきで載る
+    expect(second).toContain('<!-- memory: values.md -->');
+    expect(second).toContain('NEW-VALUE');
+    // **これが本題。** 触っていない文書の本文は2つ目の写しにならない
+    expect(second).not.toContain(UNCHANGED_BODY);
+    expect(second).not.toContain('<!-- memory: habits.md -->');
+    // 絞ったのは載せ直しの側だけである。システムプロンプトには両方載ったまま
+    const systemPrompt = String((s.calls[0] as FakeCall).options.systemPrompt);
+    expect(systemPrompt).toContain(UNCHANGED_BODY);
+    expect(systemPrompt).toContain('<!-- memory: habits.md -->');
+
+    await s.clone.stop();
+  });
+
+  it('記憶が何も変わっていなければ、ターンの本文に何も足さない', async () => {
+    const stores = await twoDocumentStores();
+    const s = setup(undefined, stores);
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    const second = await secondTurn(s);
+
+    expect(second).not.toContain('記憶が更新された');
+    expect(second).not.toContain('<!-- memory:');
+    expect(second).not.toContain('OLD-VALUE');
+    // 本文そのものは削られていない（断り書きが前に付く経路があるので末尾で見る）
+    expect(second.endsWith('2回目')).toBe(true);
+
+    await s.clone.stop();
+  });
+
+  it('セッションを組み立てた最初のターンでは、焼き込んだ記憶を載せ直さない', async () => {
+    const stores = await twoDocumentStores();
+    const s = setup(undefined, stores);
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    const first = (s.calls[0] as FakeCall).inputs[0] ?? '';
+    expect(first).not.toContain('記憶が更新された');
+    expect(first).not.toContain('OLD-VALUE');
+    expect(first).not.toContain(UNCHANGED_BODY);
+    // 焼き込み自体は起きている（載せ直しが要らないのは、そちらに載っているから）
+    expect(String((s.calls[0] as FakeCall).options.systemPrompt)).toContain('OLD-VALUE');
+
+    await s.clone.stop();
+  });
+
+  it('記憶を消したら、消えたことを名前で伝える（本文を載せ直さない）', async () => {
+    const stores = await twoDocumentStores();
+    const s = setup(undefined, stores);
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    await stores.persona.remove('habits');
+    const second = await secondTurn(s);
+
+    expect(second).toContain('削除された記憶: habits.md');
+    // 消した文書の本文を載せるのは「消したのに文脈には居る」という一番まぎらわしい状態
+    expect(second).not.toContain(UNCHANGED_BODY);
+    // 残っている文書は変わっていないので、こちらも載せ直さない
+    expect(second).not.toContain('OLD-VALUE');
+
+    await s.clone.stop();
+  });
+
+  it('記憶が全部消えたら、空になったと伝える', async () => {
+    const stores = await twoDocumentStores();
+    const s = setup(undefined, stores);
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    await stores.persona.remove('values');
+    await stores.persona.remove('habits');
+    const second = await secondTurn(s);
+
+    expect(second).toContain('（記憶は空になった）');
+    expect(second).toContain('削除された記憶:');
+    expect(second).toContain('values.md');
+    expect(second).toContain('habits.md');
+
+    await s.clone.stop();
+  });
+
+  /**
+   * **ここが resume の側の穴だった。**
+   *
+   * 前のセッションが載せ直した塊は、履歴として残る。それは
+   * 「以降はこちらが現在の記憶である」と名乗る形で、しかもシステムプロンプトより
+   * **後ろ**に並ぶ。デーモンが落ちている間に人間が記憶を直していた場合、正本
+   * （新しいシステムプロンプト）のほうが新しいのに、古い写しが最後の言葉になる。
+   */
+  it('resume した最初のターンでは、正本がシステムプロンプト側だと断る（全文を載せ直さない）', async () => {
+    const stores = createMemoryStores();
+    await stores.persona.write('values', '# 価値観\n\nV1-OLD\n');
+
+    const first = setup(undefined, stores);
+    first.clone.post(humanMessage('1回目'));
+    await waitForDone(first.events);
+    // 前のセッションで載せ直しが起きた状態を、実際に人間の手編集で作る
+    await stores.persona.write('values', '# 価値観\n\nV2-MID\n');
+    const events: ChatStreamEvent[] = [];
+    first.clone.subscribe('conv-2', (event) => events.push(event));
+    first.clone.post(humanMessage('2回目', 'conv-2'));
+    await waitForDone(events);
+    expect((first.calls[0] as FakeCall).inputs[1] ?? '').toContain('V2-MID');
+    await first.clone.stop();
+
+    // デーモンが落ちている間に、人間がもう一度直す
+    await stores.persona.write('values', '# 価値観\n\nV3-NEWEST\n');
+
+    const second = setup(undefined, stores);
+    second.clone.post(humanMessage('また来た'));
+    await waitForDone(second.events);
+
+    const call = second.calls[0] as FakeCall;
+    expect(call.options.resume).toBe('sess-fake');
+    const input = call.inputs[0] ?? '';
+    expect(input).toContain('現在の記憶');
+    expect(input).toContain('システムプロンプト');
+    // **全文を載せ直して上書きしない。** それはいま塞いでいる二重載せそのものである
+    expect(input).not.toContain('V3-NEWEST');
+    expect(input).not.toContain('<!-- memory: values.md -->');
+    // 正本の側には最新が載っている
+    expect(String(call.options.systemPrompt)).toContain('V3-NEWEST');
+    expect(String(call.options.systemPrompt)).not.toContain('V2-MID');
+
+    await second.clone.stop();
+  });
+
+  it('resume の断りは最初のターンだけで、以降のターンには付かない', async () => {
+    const stores = createMemoryStores();
+    await stores.persona.write('values', '# 価値観\n\nV1\n');
+
+    const first = setup(undefined, stores);
+    first.clone.post(humanMessage('1回目'));
+    await waitForDone(first.events);
+    await first.clone.stop();
+
+    const second = setup(undefined, stores);
+    second.clone.post(humanMessage('また来た'));
+    await waitForDone(second.events);
+    expect((second.calls[0] as FakeCall).inputs[0] ?? '').toContain('resume');
+
+    const third = await secondTurn(second);
+    expect(third).not.toContain('resume');
+
+    await second.clone.stop();
+  });
+
+  it('新規に開いたセッションでは resume の断りを出さない（起きていないことを言わない）', async () => {
+    const stores = await twoDocumentStores();
+    const s = setup(undefined, stores);
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    expect((s.calls[0] as FakeCall).options.resume).toBeUndefined();
+    expect((s.calls[0] as FakeCall).inputs[0] ?? '').not.toContain('resume');
+
+    await s.clone.stop();
+  });
+
+  it('内部ターン（蒸留）にも同じ絞り込みが効く（起点ごとに違う載せ方をしない）', async () => {
+    const stores = await twoDocumentStores();
+    const s = setup(undefined, stores);
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    await stores.persona.write('values', '# 価値観\n\nNEW-VALUE\n');
+    await s.clone.endConversation('conv-1');
+
+    // 蒸留の内部ターンが同じセッションへ流れる（`#runInternal`）
+    const distill = (s.calls[0] as FakeCall).inputs[1] ?? '';
+    expect(distill).toContain('記憶へ移すべきものがあるか確認せよ');
+    expect(distill).toContain('NEW-VALUE');
+    expect(distill).not.toContain(UNCHANGED_BODY);
 
     await s.clone.stop();
   });

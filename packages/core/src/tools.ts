@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { isCronExpression } from './cron.js';
 import { describePage, excerptLine, page } from './excerpt.js';
 import type { ManagerDenial, ManagerPool, ManagerSummary } from './manager.js';
+import { renderMemoryDocuments } from './memory.js';
 import type { ProfileService } from './profile-service.js';
 import {
   RESERVED_SCHEDULE_KINDS,
@@ -956,9 +957,9 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        const [documents, totalMemory, aggregate] = await Promise.all([
+        const [documents, memoryDocuments, aggregate] = await Promise.all([
           stores.persona.list(),
-          stores.persona.concat(),
+          stores.persona.documents(),
           // モデル id が分かっていなければ、突き合わせる軸そのものが無い。
           runtime.sdkModel === null ? Promise.resolve(null) : stores.usage.aggregate({}),
         ]);
@@ -967,7 +968,9 @@ export function createCloneTools(context: ToolContext) {
           [
             describeCloneRuntime(runtime),
             '',
-            renderMemorySize(documents, totalMemory),
+            // **クローンの文脈へ実際に載る形で数える。** 本文だけを足すと、見出しの
+            // ぶんだけ本当より少ない数を「いまの総文字数」として名乗ることになる。
+            renderMemorySize(documents, renderMemoryDocuments(memoryDocuments)),
             '',
             renderLedgerCrossReference(runtime.sdkModel, aggregate),
           ].join('\n'),

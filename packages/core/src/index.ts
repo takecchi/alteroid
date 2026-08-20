@@ -122,6 +122,11 @@ export {
 } from './auth-service.js';
 export type { CloneHost } from './host.js';
 export { Inbox } from './inbox.js';
+/**
+ * 記憶をクローンの文脈へ載せる形。**器（storage-fs / storage-pg）もここを使う** —
+ * 器ごとに書いた結果、実際に食い違ったことがある（`memory.ts` の冒頭）。
+ */
+export { renderMemoryDocument, renderMemoryDocuments, type MemoryPart } from './memory.js';
 export type { CloneSystemPromptInput } from './prompt.js';
 export {
   buildCloneSystemPrompt,

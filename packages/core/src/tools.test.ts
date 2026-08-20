@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ManagerDenial, ManagerPool, ManagerSummary } from './manager.js';
+import { renderMemoryDocuments } from './memory.js';
 import { createProfileService } from './profile-service.js';
 import type { ChatStreamEvent } from './schema.js';
 import type { CloneRuntimeFacts } from './self.js';
@@ -1196,7 +1197,7 @@ describe('self_status（いま自分がどう走っているか）', () => {
       content: '# 習慣\n\n毎朝記憶を見直す',
       summary: '書いた',
     });
-    const totalMemory = await h.stores.persona.concat();
+    const totalMemory = renderMemoryDocuments(await h.stores.persona.documents());
     expect(totalMemory.length).not.toBe(RUNTIME.injectedMemoryChars);
 
     const reply = await h.call('self_status', {});
@@ -1217,7 +1218,7 @@ describe('self_status（いま自分がどう走っているか）', () => {
       content: '# 価値観\n\n書き換えた後のもっと長い方針の本文',
       summary: '2',
     });
-    const totalMemory = await h.stores.persona.concat();
+    const totalMemory = renderMemoryDocuments(await h.stores.persona.documents());
 
     const reply = await h.call('self_status', {});
 

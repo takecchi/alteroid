@@ -128,10 +128,19 @@ export function createMemoryStores(): Stores {
     async remove(slug) {
       documents.delete(slug);
     },
-    async concat() {
-      return (await persona.list())
-        .map((meta) => documents.get(meta.slug)?.content ?? '')
-        .join('\n\n');
+    // **`slug` 昇順で、本文ごと返す。** ここが本物（fs / pg）と同じ順序・同じ中身で
+    // ないと、上の層の「どの文書が変わったか」がテストでは確かめられない。
+    // かつてここは `concat()` で、しかも本物と違って `<!-- memory: slug.md -->` の
+    // 見出しを付けていなかった（AGENTS.md「固定値を返すスタブはテストを緑にしたまま
+    // 分岐を殺す」の一例。載せ方が core へ移ったので、この食い違いは構造的に消えた）。
+    async documents() {
+      const metas = await persona.list();
+      const found: MemoryDocument[] = [];
+      for (const meta of metas) {
+        const doc = documents.get(meta.slug);
+        if (doc) found.push(doc);
+      }
+      return found;
     },
   };
 

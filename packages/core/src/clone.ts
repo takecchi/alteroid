@@ -21,6 +21,7 @@ import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { Inbox } from './inbox.js';
 import { createManagerPool, type ManagerPool } from './manager.js';
+import { renderMemoryDocuments } from './memory.js';
 import { placedModelTier, resolveModelTier } from './model-tier.js';
 import type { ProfileApplier } from './profile.js';
 import type { ProfileService } from './profile-service.js';
@@ -39,6 +40,7 @@ import type {
   Commitment,
   InboxEvent,
   JournalEntryInput,
+  MemoryDocument,
   ScheduledRequest,
 } from './schema.js';
 import type { CloneRuntimeFacts, SelfFacts } from './self.js';
@@ -142,6 +144,20 @@ const SCHEDULE_STORE_RETRY_MS = 200;
  * なので、合わなければ諦めて次の発火に譲る（依頼は消えないし `lastRunAt` も進まない）。
  */
 const SCHEDULE_CLAIM_ROUNDS = 3;
+
+/**
+ * resume したセッションの最初のターンで1度だけ添える断り（`#resumedHistoryHasMemory`）。
+ *
+ * **記憶の全文を載せ直して上書きしないこと。** それはいま塞いでいる二重載せを
+ * 自分でやることであり、しかも履歴の写しは resume のたびに増えていく。正本が
+ * どちらかを言うだけなら、記憶がどれだけ大きくてもこの数行で済む。
+ */
+const RESUMED_MEMORY_NOTICE =
+  '[system] このセッションは前のセッションを引き継いで（resume して）開いたものである。' +
+  '**現在の記憶は、システムプロンプトの「現在の記憶」に載っているものである。** ' +
+  'この下より前の会話に「記憶が更新された」として載っている塊は、それより古い可能性がある' +
+  '（デーモンが落ちている間に人間が直していれば、正本のほうが新しい）。食い違ったら' +
+  'システムプロンプト側を採ること。確かめたければ `memory_read` で読み直せる。';
 
 export interface CloneOptions {
   stores: Stores;
@@ -270,6 +286,14 @@ class Clone implements CloneHost {
   #sdkSessionId: string | null = null;
   /** `#buildOptions` で組み立てたシステムプロンプトの文字数。セッションの間は固定。 */
   #systemPromptChars = 0;
+  /**
+   * システムプロンプトへ焼き込んだ記憶の文字数。**セッションの間は固定。**
+   *
+   * `#memoryOnRecord` の合計で代用しないこと — あちらは走行中に人間が記憶を直せば
+   * 動く。`CloneRuntimeFacts.injectedMemoryChars` が名乗っているのは「このセッション
+   * を組み立てた時点」の値であり、動く数を渡せばその場で嘘になる。
+   */
+  #promptMemoryChars = 0;
 
   readonly #inbox = new Inbox();
   readonly #listeners = new Map<string, Set<Listener>>();
@@ -354,8 +378,27 @@ class Clone implements CloneHost {
   #reader: Promise<void> | null = null;
   #turn: Turn | null = null;
   #stopped = false;
-  /** いまの SDK セッションに載せた記憶。人間の手編集を拾い直すために持つ。 */
-  #injectedMemory = '';
+  /**
+   * いまの SDK セッションでクローンが最後に見た記憶。slug → 本文。
+   *
+   * **全文の1文字列ではなく文書ごとに持つ。** 全文で持って全文と比べていた頃は、
+   * 人間が1つの文書の1行を直しただけで**記憶の全文をもう一度クローンの文脈へ
+   * 載せていた** — システムプロンプトに焼き込んだ分と合わせて二重に載り、しかも
+   * 直すたびに写しが増えた（会話の履歴に残るので、resume でも運ばれる）。
+   * 文書ごとに持てば、載せ直すのは実際に変わった文書だけで済む。
+   */
+  readonly #memoryOnRecord = new Map<string, string>();
+  /**
+   * resume で起こしたセッションかどうか（最初のターンで1度だけ断るために持つ）。
+   *
+   * **履歴には前のセッションで載せ直した記憶の写しが残っている。** それは
+   * 「以降はこれが現在の記憶である」と名乗る形で、しかもシステムプロンプトより
+   * **後ろ**に並ぶ。デーモンが落ちている間に人間が記憶を直していた場合、正本
+   * （システムプロンプト）のほうが新しいのに、古い写しが最後の言葉として残る。
+   * 全文を載せ直して上書きするのではなく、**どちらが正本かを1文で断る**
+   * （載せ直せば、いま塞いでいる二重載せを自分でやることになる）。
+   */
+  #resumedHistoryHasMemory = false;
   /** resume を試みた session id。init が来る前に落ちたら捨てる。 */
   #resumedFrom: string | null = null;
   #sawInit = false;
@@ -1349,22 +1392,56 @@ class Clone implements CloneHost {
   /**
    * システムプロンプトはセッション開始時に固定されるので、走行中に人間が記憶を
    * 書き換えても届かない。ターンごとに差分を見て、変わっていたら本文の前に
-   * 現在の記憶を載せ直す（受け入れ基準3: 手編集が次の会話に反映されること）。
+   * 載せ直す（受け入れ基準3: 手編集が次の会話に反映されること）。
+   *
+   * **載せ直すのは実際に変わった文書だけである。** 記憶はもうシステムプロンプトに
+   * 全文が載っており、そこへ全文をもう一度置けば、変わっていない文書まで二重に
+   * 文脈へ載る。しかも載せ直した塊は会話の履歴として残るので、直すたびに写しが
+   * 増え、resume でもそのまま運ばれる。「どの文書か」を指せる形（`slug.md` の
+   * 見出し。システムプロンプトに載っているものと同じ見出しである）で差分だけを
+   * 渡し、載っていない文書は変わっていないと明示する。
+   *
+   * **削除は名前だけで伝える。** 消えた文書の本文を載せ直す意味は無く、載せれば
+   * 「消したのに文脈には居る」という一番まぎらわしい状態になる。
    */
   async #withFreshMemory(text: string): Promise<string> {
-    let memory: string;
+    let documents: MemoryDocument[];
     try {
-      memory = await this.#stores.persona.concat();
+      documents = await this.#stores.persona.documents();
     } catch {
+      // 記憶が読めないことでターンまで止めない。**ただし `#memoryOnRecord` も
+      // 触らない** — 触れば「載せた」ことになり、次のターンで差分が消える。
       return text;
     }
-    if (memory === this.#injectedMemory) return text;
-    this.#injectedMemory = memory;
+
+    const changed = documents.filter((doc) => this.#memoryOnRecord.get(doc.slug) !== doc.content);
+    const present = new Set(documents.map((doc) => doc.slug));
+    const removed = [...this.#memoryOnRecord.keys()].filter((slug) => !present.has(slug));
+
+    // resume の断りは、載せ直すものが無くても1度だけ出す（それが目的である）。
+    const resumeNotice = this.#resumedHistoryHasMemory ? RESUMED_MEMORY_NOTICE : null;
+    this.#resumedHistoryHasMemory = false;
+
+    if (changed.length === 0 && removed.length === 0) {
+      return resumeNotice === null ? text : [resumeNotice, '', '---', '', text].join('\n');
+    }
+
+    this.#memoryOnRecord.clear();
+    for (const doc of documents) this.#memoryOnRecord.set(doc.slug, doc.content);
+
+    const head =
+      '[system] 記憶が更新された（人間が直接書き換えたか、あなた自身が更新した）。' +
+      '**変わった文書だけを載せる。ここに出ていない文書は変わっていない**' +
+      '（システムプロンプトに載っているものが現在の内容である）。';
 
     return [
-      '[system] 記憶が更新された（人間が直接書き換えたか、あなた自身が更新した）。以降はこちらが現在の記憶である。',
-      '',
-      memory.trim().length > 0 ? memory : '（記憶は空）',
+      ...(resumeNotice === null ? [] : [resumeNotice, '']),
+      head,
+      ...(changed.length === 0 ? [] : ['', renderMemoryDocuments(changed)]),
+      ...(removed.length === 0
+        ? []
+        : ['', `削除された記憶: ${removed.map((slug) => `${slug}.md`).join(' / ')}`]),
+      ...(documents.length === 0 ? ['', '（記憶は空になった）'] : []),
       '',
       '---',
       '',
@@ -1426,14 +1503,24 @@ class Clone implements CloneHost {
   }
 
   async #buildOptions(resume: string | null): Promise<Options> {
-    const memory = await this.#stores.persona.concat();
-    this.#injectedMemory = memory;
+    const documents = await this.#stores.persona.documents();
+    const memory = renderMemoryDocuments(documents);
+
+    // **焼き込んだ内容をそのまま「クローンが見たもの」として控える。** ここを
+    // 控え損ねると、最初のターンでいきなり全文が載せ直される（システムプロンプト
+    // と合わせて二重に載る）。読み直して比べるのではなく、載せた値を控えること —
+    // 読み直すと、この行までの間に人間が直した場合に差分を見失う。
+    this.#memoryOnRecord.clear();
+    for (const doc of documents) this.#memoryOnRecord.set(doc.slug, doc.content);
+    // 履歴に前のセッションの載せ直しが残っているのは resume のときだけである。
+    this.#resumedHistoryHasMemory = resume !== null;
 
     const systemPrompt = buildCloneSystemPrompt({
       memory,
       ...(this.#self === undefined ? {} : { self: this.#self }),
     });
     this.#systemPromptChars = systemPrompt.length;
+    this.#promptMemoryChars = memory.length;
 
     return {
       model: this.#model,
@@ -1520,7 +1607,7 @@ class Clone implements CloneHost {
       mcpServers: this.#mcpServersInfo,
       sessionId: this.#sdkSessionId,
       resumedFrom: this.#resumedFrom,
-      injectedMemoryChars: this.#injectedMemory.length,
+      injectedMemoryChars: this.#promptMemoryChars,
       systemPromptChars: this.#systemPromptChars,
     };
   }
@@ -1640,7 +1727,9 @@ class Clone implements CloneHost {
    * 道具（記憶・日誌）は同じインプロセス MCP を渡すので、書き込み先は同じ。
    */
   async #distillFromTranscript(transcriptTail: string): Promise<void> {
-    const memory = await this.#stores.persona.concat();
+    // ここは**別の短命セッション**なので、載せ直しの控え（`#memoryOnRecord`）は
+    // 触らない。触ると本セッションの差分が消える。
+    const memory = renderMemoryDocuments(await this.#stores.persona.documents());
 
     const prompt = [
       buildDistillPrompt('pre_compact'),
@@ -1781,7 +1870,11 @@ class Clone implements CloneHost {
         }
         this.#finishTurn();
         this.#query = null;
-        this.#injectedMemory = '';
+        // 次のセッションは `#buildOptions` が控え直す。ここで空にしておかないと、
+        // 前のセッションで見せた分を「もう見せた」と数えたまま新しいシステム
+        // プロンプトを組むことになる（実際には焼き込み直すので嘘にはならないが、
+        // 控えの出所が2か所になる）。
+        this.#memoryOnRecord.clear();
       }
     }
   }
