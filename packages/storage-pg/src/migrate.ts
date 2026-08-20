@@ -76,6 +76,16 @@ const STATEMENTS = [
      plan jsonb not null
    )`,
 
+  // 既定の仕込み（日報・発意 tick）の位相。**`schedules` とは別の表である**
+  // （理由は schema.ts の `schedulePhases`）。既にある DB へ当たっても、この表が
+  // 無い状態は「まだ一度も位相を記録していない」＝ 初回起動と同じに読めるので、
+  // 既存行の意味を書き換えない。
+  `create table if not exists schedule_phases (
+     kind text primary key,
+     updated_at timestamptz not null default now(),
+     phase jsonb not null
+   )`,
+
   // まだ処理し終えていない受信箱の合図（store.ts の InboxStore）。id が主キーなのは
   // 同じ合図が二重に積まれないためで、deliveries は put で上書きしても引き継がれる。
   `create table if not exists inbox_events (

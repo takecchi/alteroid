@@ -259,6 +259,68 @@ describe('FsScheduleStore', () => {
     updatedAt: '2026-08-12T00:00:00.000Z',
   };
 
+  it('既定の仕込みの位相は読み戻せる（器を作り直しても発意 tick の位相が残る）', async () => {
+    await stores.schedules.putPhase({
+      kind: 'self_initiative',
+      lastRunAt: '2026-08-12T01:00:00.000Z',
+      lastScheduledRunAt: '2026-08-12T01:00:00.000Z',
+    });
+
+    expect(await stores.schedules.getPhase('self_initiative')).toEqual({
+      kind: 'self_initiative',
+      lastRunAt: '2026-08-12T01:00:00.000Z',
+      lastScheduledRunAt: '2026-08-12T01:00:00.000Z',
+    });
+    expect(await stores.schedules.getPhase('daily_report')).toBeNull();
+  });
+
+  it('位相は継続中の依頼の一覧に現れない（クローンから消せる依頼に化けない）', async () => {
+    await stores.schedules.putPhase({
+      kind: 'self_initiative',
+      lastScheduledRunAt: '2026-08-12T01:00:00.000Z',
+    });
+
+    // `schedule_list` はこの `list()` を直に読み、「既定の日報・発意 tick はここには
+    // 出ない」と約束している。混ざると `schedule_remove` で消せてしまう。
+    expect(await stores.schedules.list()).toEqual([]);
+    expect(await stores.schedules.get('self_initiative')).toBeNull();
+  });
+
+  it('依頼を足しても外しても位相は消えない（同じファイルに同居している）', async () => {
+    await stores.schedules.putPhase({
+      kind: 'self_initiative',
+      lastScheduledRunAt: '2026-08-12T01:00:00.000Z',
+    });
+    await stores.schedules.put(plan);
+    await stores.schedules.claimRun(
+      'issue-round',
+      plan.updatedAt,
+      '2026-08-13T00:00:00.000Z',
+      'schedule',
+    );
+    await stores.schedules.completeRun('issue-round', '2026-08-13T00:00:00.000Z', 'schedule');
+    await stores.schedules.remove('issue-round');
+
+    expect((await stores.schedules.getPhase('self_initiative'))?.lastScheduledRunAt).toBe(
+      '2026-08-12T01:00:00.000Z',
+    );
+  });
+
+  it('同じ kind の位相は置き換わる', async () => {
+    await stores.schedules.putPhase({
+      kind: 'self_initiative',
+      lastScheduledRunAt: '2026-08-12T01:00:00.000Z',
+    });
+    await stores.schedules.putPhase({
+      kind: 'self_initiative',
+      lastScheduledRunAt: '2026-08-12T02:00:00.000Z',
+    });
+
+    expect((await stores.schedules.getPhase('self_initiative'))?.lastScheduledRunAt).toBe(
+      '2026-08-12T02:00:00.000Z',
+    );
+  });
+
   it('仕込んだ依頼は読み戻せる（デーモンを作り直しても残る）', async () => {
     await stores.schedules.put(plan);
 

@@ -133,6 +133,8 @@ function fakeScheduler() {
     async refresh() {
       refreshed += 1;
     },
+    // 位相の保存は HTTP 層から観測しない（ここで見るのは「起こせるか」だけ）。
+    async settled() {},
     start() {},
     stop() {},
     list() {

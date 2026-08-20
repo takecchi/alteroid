@@ -13,7 +13,7 @@ import {
   selfInitiativeEntry,
 } from './schedule.js';
 import type { InboxEvent, JournalEntry, ScheduledRequest } from './schema.js';
-import type { JournalQuery, JournalStore } from './store.js';
+import type { JournalQuery, JournalStore, ScheduleStore } from './store.js';
 import { createMemoryStores } from './testing.js';
 
 /**
@@ -196,6 +196,274 @@ describe('スケジューラ', () => {
     ]);
 
     s.scheduler.stop();
+  });
+});
+
+/**
+ * 既定の仕込み（日報・発意 tick）の位相。
+ *
+ * ここで守るのは「器を作り直しても発意 tick の位相が失われない」ことである。
+ * 位相が失われると、**周期より短い間隔で再デプロイが続くと一度も発火しない**
+ * （継続中の依頼については `#firstDue` が塞いでいた穴で、既定の2件だけが
+ * ストアに何も持っていなかったために残っていた）。
+ */
+describe('既定の仕込みの位相', () => {
+  function setup(now: Date, options: { store?: ScheduleStore } = {}) {
+    let clock = now;
+    const posted: InboxEvent[] = [];
+    const errors: string[] = [];
+    const store = options.store ?? createMemoryStores().schedules;
+    const scheduler = createScheduler({
+      entries: [
+        dailyReportEntry({ at: { hour: 22, minute: 0 } }),
+        selfInitiativeEntry({ everyMinutes: 60 }),
+      ],
+      post: (event) => posted.push(event),
+      now: () => clock,
+      schedules: store,
+      onError: (message) => errors.push(message),
+    });
+    return { posted, errors, scheduler, store, set: (value: Date) => (clock = value) };
+  }
+
+  function nextOf(scheduler: { list: () => { kind: string; nextAt: string }[] }, kind: string) {
+    return scheduler.list().find((item) => item.kind === kind)?.nextAt;
+  }
+
+  it('落ちていた間に過ぎた発意 tick を、起き直したときに1回だけ拾う', async () => {
+    const store = createMemoryStores().schedules;
+    await store.putPhase({
+      kind: SELF_INITIATIVE_KIND,
+      lastScheduledRunAt: at(2026, 8, 12, 10, 0).toISOString(),
+    });
+
+    const s = setup(at(2026, 8, 12, 12, 30), { store });
+    await s.scheduler.refresh();
+    s.scheduler.start();
+
+    expect(s.scheduler.tick(at(2026, 8, 12, 12, 30))).toEqual([SELF_INITIATIVE_KIND]);
+    // まとめ撃ちしない（2時間半ぶん溜まっていても1回）
+    expect(s.scheduler.tick(at(2026, 8, 12, 12, 31))).toEqual([]);
+
+    s.scheduler.stop();
+  });
+
+  it('周期が過ぎていなければ、再起動しても本来の予定を守る（now + 周期へずれない）', async () => {
+    const store = createMemoryStores().schedules;
+    await store.putPhase({
+      kind: SELF_INITIATIVE_KIND,
+      lastScheduledRunAt: at(2026, 8, 12, 10, 0).toISOString(),
+    });
+
+    // 10:30 に起き直した。**位相を捨てると次回が 11:30 になる（これが欠陥だった）。**
+    const s = setup(at(2026, 8, 12, 10, 30), { store });
+    await s.scheduler.refresh();
+    s.scheduler.start();
+
+    expect(nextOf(s.scheduler, SELF_INITIATIVE_KIND)).toBe(at(2026, 8, 12, 11, 0).toISOString());
+    expect(s.scheduler.tick(at(2026, 8, 12, 11, 0))).toEqual([SELF_INITIATIVE_KIND]);
+
+    s.scheduler.stop();
+  });
+
+  it('周期より短い間隔で何度起き直しても、本来の期限にちょうど1回発火する', async () => {
+    const store = createMemoryStores().schedules;
+    await store.putPhase({
+      kind: SELF_INITIATIVE_KIND,
+      lastScheduledRunAt: at(2026, 8, 12, 10, 0).toISOString(),
+    });
+
+    // 10:20 / 10:40 / 10:55 と3回作り直された（デプロイが続いた）
+    for (const minute of [20, 40, 55]) {
+      const s = setup(at(2026, 8, 12, 10, minute), { store });
+      await s.scheduler.refresh();
+      s.scheduler.start();
+      expect(s.scheduler.tick(at(2026, 8, 12, 10, minute))).toEqual([]);
+      s.scheduler.stop();
+    }
+
+    const last = setup(at(2026, 8, 12, 10, 59), { store });
+    await last.scheduler.refresh();
+    last.scheduler.start();
+    expect(last.scheduler.tick(at(2026, 8, 12, 11, 0))).toEqual([SELF_INITIATIVE_KIND]);
+    last.scheduler.stop();
+  });
+
+  it('発火で位相が保存され、次の器がそれを引き継ぐ', async () => {
+    const store = createMemoryStores().schedules;
+    const first = setup(at(2026, 8, 12, 10, 0), { store });
+    await first.scheduler.refresh();
+    first.scheduler.start();
+    expect(first.scheduler.tick(at(2026, 8, 12, 11, 0))).toEqual([SELF_INITIATIVE_KIND]);
+    await first.scheduler.settled();
+    first.scheduler.stop();
+
+    expect(await store.getPhase(SELF_INITIATIVE_KIND)).toEqual({
+      kind: SELF_INITIATIVE_KIND,
+      lastRunAt: at(2026, 8, 12, 11, 0).toISOString(),
+      lastScheduledRunAt: at(2026, 8, 12, 11, 0).toISOString(),
+    });
+
+    // 11:30 に作り直した器は、12:00（= 11:00 + 60分）を次回にする
+    const second = setup(at(2026, 8, 12, 11, 30), { store });
+    await second.scheduler.refresh();
+    second.scheduler.start();
+    expect(nextOf(second.scheduler, SELF_INITIATIVE_KIND)).toBe(
+      at(2026, 8, 12, 12, 0).toISOString(),
+    );
+    second.scheduler.stop();
+  });
+
+  it('前回動いた時刻が一覧に出る（再起動しても「まだ一度も動いていない」に見えない）', async () => {
+    const store = createMemoryStores().schedules;
+    await store.putPhase({
+      kind: SELF_INITIATIVE_KIND,
+      lastRunAt: at(2026, 8, 12, 10, 0).toISOString(),
+      lastScheduledRunAt: at(2026, 8, 12, 10, 0).toISOString(),
+    });
+
+    const s = setup(at(2026, 8, 12, 10, 30), { store });
+    await s.scheduler.refresh();
+    s.scheduler.start();
+
+    expect(s.scheduler.list().find((item) => item.kind === SELF_INITIATIVE_KIND)?.lastRunAt).toBe(
+      at(2026, 8, 12, 10, 0).toISOString(),
+    );
+
+    s.scheduler.stop();
+  });
+
+  it('手で起こしても定期の基準は動かない（位相がずれない）', async () => {
+    const store = createMemoryStores().schedules;
+    await store.putPhase({
+      kind: SELF_INITIATIVE_KIND,
+      lastScheduledRunAt: at(2026, 8, 12, 10, 0).toISOString(),
+    });
+
+    const s = setup(at(2026, 8, 12, 10, 30), { store });
+    await s.scheduler.refresh();
+    s.scheduler.start();
+    expect(s.scheduler.run(SELF_INITIATIVE_KIND)).toBe(true);
+    await s.scheduler.settled();
+
+    expect(await store.getPhase(SELF_INITIATIVE_KIND)).toEqual({
+      kind: SELF_INITIATIVE_KIND,
+      // 観測用は動く
+      lastRunAt: at(2026, 8, 12, 10, 30).toISOString(),
+      // 定期の基準は動かない
+      lastScheduledRunAt: at(2026, 8, 12, 10, 0).toISOString(),
+    });
+    expect(nextOf(s.scheduler, SELF_INITIATIVE_KIND)).toBe(at(2026, 8, 12, 11, 0).toISOString());
+
+    s.scheduler.stop();
+  });
+
+  it('日報は位相が過ぎていても起き直しで即時発火しない（拾い直しの経路を2つにしない）', async () => {
+    const store = createMemoryStores().schedules;
+    await store.putPhase({
+      kind: DAILY_REPORT_KIND,
+      lastScheduledRunAt: at(2026, 8, 12, 22, 0).toISOString(),
+    });
+
+    // 2日ぶん落ちていた。**日報の後追いは missingDailyReportDates が持っている。**
+    const s = setup(at(2026, 8, 14, 10, 0), { store });
+    await s.scheduler.refresh();
+    s.scheduler.start();
+
+    expect(nextOf(s.scheduler, DAILY_REPORT_KIND)).toBe(at(2026, 8, 14, 22, 0).toISOString());
+    expect(s.scheduler.tick(at(2026, 8, 14, 10, 0))).not.toContain(DAILY_REPORT_KIND);
+
+    s.scheduler.stop();
+  });
+
+  it('位相を保存できなくても時計は止まらず、理由が外へ出る', async () => {
+    const store = createMemoryStores().schedules;
+    store.putPhase = async () => {
+      throw new Error('台帳が書けない');
+    };
+
+    const s = setup(at(2026, 8, 12, 10, 0), { store });
+    await s.scheduler.refresh();
+    s.scheduler.start();
+    expect(s.scheduler.tick(at(2026, 8, 12, 11, 0))).toEqual([SELF_INITIATIVE_KIND]);
+    await s.scheduler.settled();
+
+    expect(s.posted).toHaveLength(1);
+    expect(s.errors).toHaveLength(1);
+    expect(s.errors[0]).toContain(SELF_INITIATIVE_KIND);
+    expect(s.errors[0]).toContain('台帳が書けない');
+
+    s.scheduler.stop();
+  });
+
+  it('位相が保存できなかった後に読み直しても、同じ回を撃ち直さない', async () => {
+    const store = createMemoryStores().schedules;
+    await store.putPhase({
+      kind: SELF_INITIATIVE_KIND,
+      lastScheduledRunAt: at(2026, 8, 12, 10, 0).toISOString(),
+    });
+    // 保存が落ちるので、ストアの位相は 10:00 のまま古い
+    store.putPhase = async () => {
+      throw new Error('台帳が書けない');
+    };
+
+    const s = setup(at(2026, 8, 12, 10, 30), { store });
+    await s.scheduler.refresh();
+    s.scheduler.start();
+    expect(s.scheduler.tick(at(2026, 8, 12, 11, 0))).toEqual([SELF_INITIATIVE_KIND]);
+    await s.scheduler.settled();
+
+    // 刻みごとの読み直し（`#refreshQuietly` と同じ経路）。**ここで位相を読み直すと、
+    // 古い 10:00 から数えて「もう過ぎている」と判定し、同じ回を撃ち続ける。**
+    await s.scheduler.refresh();
+    expect(s.scheduler.tick(at(2026, 8, 12, 11, 1))).toEqual([]);
+    expect(s.posted).toHaveLength(1);
+
+    s.scheduler.stop();
+  });
+
+  it('位相が読めなくても時計は止まらず、次の読み直しで拾える', async () => {
+    const store = createMemoryStores().schedules;
+    await store.putPhase({
+      kind: SELF_INITIATIVE_KIND,
+      lastScheduledRunAt: at(2026, 8, 12, 10, 0).toISOString(),
+    });
+    const real = store.getPhase.bind(store);
+    let failures = 2;
+    store.getPhase = async (kind) => {
+      if (failures > 0) {
+        failures -= 1;
+        throw new Error('DB が揺れた');
+      }
+      return real(kind);
+    };
+
+    const s = setup(at(2026, 8, 12, 10, 30), { store });
+    await s.scheduler.refresh();
+    s.scheduler.start();
+    // 読めなかったので位相は入っていない（既定の `now + 周期` のまま）
+    expect(nextOf(s.scheduler, SELF_INITIATIVE_KIND)).toBe(at(2026, 8, 12, 11, 30).toISOString());
+    expect(s.errors[0]).toContain('位相を読めなかった');
+
+    // 次の読み直しで拾い直す（一度の瞬断で位相を永久に捨てない）
+    await s.scheduler.refresh();
+    expect(nextOf(s.scheduler, SELF_INITIATIVE_KIND)).toBe(at(2026, 8, 12, 11, 0).toISOString());
+
+    s.scheduler.stop();
+  });
+
+  it('ストアを渡していなければ位相は使わない（既定の仕込みは今までどおり回る）', () => {
+    let clock = at(2026, 8, 12, 10, 0);
+    const posted: InboxEvent[] = [];
+    const scheduler = createScheduler({
+      entries: [selfInitiativeEntry({ everyMinutes: 60 })],
+      post: (event) => posted.push(event),
+      now: () => clock,
+    });
+    scheduler.start();
+    clock = at(2026, 8, 12, 11, 0);
+    expect(scheduler.tick()).toEqual([SELF_INITIATIVE_KIND]);
+    scheduler.stop();
   });
 });
 

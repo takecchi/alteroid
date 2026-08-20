@@ -11,6 +11,7 @@ import type {
   MemoryDocument,
   MemoryDocumentMeta,
   PendingApproval,
+  SchedulePhase,
   ScheduledRequest,
 } from './schema.js';
 import type {
@@ -134,6 +135,18 @@ export interface ScheduleStore {
    * 消えている kind、別の発火の印が付いている場合は何もしない。
    */
   completeRun(kind: string, at: string, cause: 'schedule' | 'manual'): Promise<void>;
+
+  /**
+   * 既定の仕込み（日報・発意 tick）の位相を読む。無ければ null。
+   *
+   * **依頼（`list()` / `get()`）とは別の器である。** 理由は `schedulePhaseSchema` に
+   * 書いてある（1つにまとめると、既定の仕込みがクローンから継続中の依頼に見えて
+   * `schedule_remove` で消せる）。**だから `list()` にこれを混ぜないこと。**
+   */
+  getPhase(kind: string): Promise<SchedulePhase | null>;
+
+  /** 同じ kind があれば置き換える。 */
+  putPhase(phase: SchedulePhase): Promise<void>;
 }
 
 /**

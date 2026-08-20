@@ -351,6 +351,48 @@ export type ScheduleKind = z.infer<typeof scheduleKindSchema>;
 export type ScheduleSpec = z.infer<typeof scheduleSpecSchema>;
 export type ScheduledRequest = z.infer<typeof scheduledRequestSchema>;
 
+/**
+ * 既定の仕込み（日報・発意 tick）の位相。
+ *
+ * **これは「依頼」ではない。** 継続中の依頼（`ScheduledRequest`）は人間かクローンが
+ * 書いた本文と周期を持ち、`schedule_list` / `GET /schedule` に現れて外せるものである。
+ * こちらが持つのは「前回いつ動いたか」だけで、本文も周期も持たない（周期は環境変数、
+ * やることを決めるのはクローンである）。
+ *
+ * **同じ行として持たないのは、既定の仕込みがクローンから「継続中の依頼」に見えて
+ * `schedule_remove` で消せてしまうからである。** `tools.ts` の `schedule_list` は
+ * ストアの `list()` を直に読み、説明文で「既定の日報・発意 tick はここには出ない」と
+ * 約束している。器を1つにまとめると、その約束が静かに破れる。
+ *
+ * **これが無いと、器を作り直すたびに位相が捨てられる。** `schedule.ts` の `start()` は
+ * 既定の仕込みへ `now + 周期` を置くだけなので、周期より短い間隔で再デプロイが続けば
+ * 発意 tick は**一度も発火しない**（継続中の依頼について `#firstDue` が書いている穴と
+ * まったく同じもの。実測: 2026-08-19 の本番の再デプロイで、動いていた発意 tick の
+ * 次回が1時間先へずれた）。
+ */
+export const schedulePhaseSchema = z.object({
+  kind: z.string().min(1),
+  /**
+   * 前回**定期の予定で**発火した時刻。次の予定を数える基準。
+   *
+   * `ScheduledRequest` の同名フィールドと同じ役だが、あちらは「引き受けた印
+   * （`pendingRun`）を消すとき」に進む。こちらは**発火の瞬間**に進む — 既定の仕込みには
+   * 引き受けの印が無いため。失敗の向きが違うので、同じものとして読まないこと
+   * （`schedule.ts` の `#recordPhase` にその差を書いてある）。
+   */
+  lastScheduledRunAt: isoDateTime.optional(),
+  /**
+   * 手で起こした分も動く観測用の時刻。
+   *
+   * 分けてあるのは `ScheduledRequest` と同じ理由である（手で起こした1回で位相を
+   * 動かさない）。人間が `/run self_initiative` を叩くたびに定期の予定がずれるのは、
+   * `Scheduler.run` の「予定に代えて割り込むのではなく、余分に1回起こす」に反する。
+   */
+  lastRunAt: isoDateTime.optional(),
+});
+
+export type SchedulePhase = z.infer<typeof schedulePhaseSchema>;
+
 // ---------------------------------------------------------------------------
 // 引き受けたまま終わっていない仕事（未了の器）
 // ---------------------------------------------------------------------------

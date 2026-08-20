@@ -1,10 +1,10 @@
-import { scheduledRequestSchema } from '@alteroid/core';
-import type { ScheduleStore, ScheduledRequest } from '@alteroid/core';
+import { schedulePhaseSchema, scheduledRequestSchema } from '@alteroid/core';
+import type { SchedulePhase, ScheduleStore, ScheduledRequest } from '@alteroid/core';
 import { and, asc, eq, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { stripNulls } from './db.js';
-import { schedules } from './schema.js';
+import { schedulePhases, schedules } from './schema.js';
 
 /**
  * 行が読めなければ落とさずに投げる。
@@ -145,5 +145,36 @@ export class PgScheduleStore implements ScheduleStore {
       .where(
         and(eq(schedules.kind, kind), sql`${schedules.plan} -> 'pendingRun' ->> 'at' = ${at}`),
       );
+  }
+
+  /**
+   * 既定の仕込みの位相。**読めない行は投げる**（`parsePlan` と同じ理由 — 黙って
+   * `null` を返すと「まだ一度も動いていない」と区別が付かず、位相が静かに捨てられる）。
+   */
+  async getPhase(kind: string): Promise<SchedulePhase | null> {
+    const rows = await this.#db
+      .select({ phase: schedulePhases.phase })
+      .from(schedulePhases)
+      .where(eq(schedulePhases.kind, kind))
+      .limit(1);
+    const row = rows[0];
+    if (row === undefined) return null;
+    const parsed = schedulePhaseSchema.safeParse(row.phase);
+    if (parsed.success) return parsed.data;
+    throw new Error(
+      `定期ジョブ ${kind} の位相が読めない形で入っている（まだ動いていないのではない）: ${parsed.error.message}`,
+    );
+  }
+
+  async putPhase(phase: SchedulePhase): Promise<void> {
+    const value = schedulePhaseSchema.parse(phase);
+    const updatedAt = new Date(value.lastRunAt ?? value.lastScheduledRunAt ?? Date.now());
+    await this.#db
+      .insert(schedulePhases)
+      .values({ kind: value.kind, updatedAt, phase: value })
+      .onConflictDoUpdate({
+        target: schedulePhases.kind,
+        set: { updatedAt, phase: value },
+      });
   }
 }
