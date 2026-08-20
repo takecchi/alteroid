@@ -200,7 +200,7 @@ function parseSSEChunk(chunk: string): SSEEvent | null {
 const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-MM-DD）
 /reports [件数]       日報の一覧
 /memory              記憶の一覧
-/memory <slug>       記憶の中身
+/memory <slug>       記憶の中身（書き換えは alteroid memory edit <slug>）
 /journal [件数]      日誌（新しい順）
 /managers            マネージャーの一覧と状態
 /manager <id>        そのマネージャーのセッション生ログ

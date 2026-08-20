@@ -9,6 +9,13 @@ import { chatCommand } from './chat.js';
 import * as daemon from './daemon.js';
 import { loginCommand, logoutCommand, whoamiCommand } from './login.js';
 import {
+  memoryEditCommand,
+  memoryListCommand,
+  memoryRemoveCommand,
+  memorySetCommand,
+  memoryShowCommand,
+} from './memory.js';
+import {
   profileClearCommand,
   profileEditCommand,
   profileSetCommand,
@@ -131,6 +138,56 @@ accessCommand
   .description('alteroid を使う許可を取り消す')
   .action(async (accountId: string) => {
     await accessRevokeCommand(accountId);
+  });
+
+/**
+ * 記憶（人格）。**読めるだけの面を作らない。**
+ *
+ * PRD「インターフェース」は3面で同じことができると書いており、起こせることの
+ * 列挙に「記憶の書き換え」がある。ここが無かったので、CLI からは `chat` の
+ * `/memory` で読むことしかできなかった。
+ *
+ * **これは M1 受け入れ基準3（人間が記憶を手で書き換えられる）を器に依存させない
+ * ためでもある。** ローカルの fs 構成なら Markdown を直に開けるが、pg 構成や
+ * コンテナの向こうではそれができない — 器を替えると受け入れ基準が満たせなく
+ * なるのは、そのまま能力の削除である。
+ */
+const memoryCommand = program.command('memory').description('記憶（人格）を読む・書き換える・消す');
+
+memoryCommand
+  .command('list')
+  .description('記憶の一覧（slug と題）')
+  .action(async () => {
+    await memoryListCommand();
+  });
+
+memoryCommand
+  .command('show <slug>')
+  .description('記憶の本文を出す')
+  .action(async (slug: string) => {
+    await memoryShowCommand(slug);
+  });
+
+memoryCommand
+  .command('edit <slug>')
+  .description('$EDITOR で開いて書き換える（無い slug なら新しく作る）')
+  .action(async (slug: string) => {
+    await memoryEditCommand(slug);
+  });
+
+memoryCommand
+  .command('set <slug>')
+  .description('ファイル（または標準入力）の内容で丸ごと置き換える')
+  .option('-f, --file <path>', '読み込むファイル（省略か - で標準入力）')
+  .action(async (slug: string, options: { file?: string }) => {
+    await memorySetCommand(slug, options);
+  });
+
+memoryCommand
+  .command('remove <slug>')
+  .description('記憶を1つ消す（消した事実は日誌に残る）')
+  .action(async (slug: string) => {
+    await memoryRemoveCommand(slug);
   });
 
 /**
