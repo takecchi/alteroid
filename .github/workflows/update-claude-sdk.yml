@@ -1,0 +1,203 @@
+# Claude 本体（`@anthropic-ai/claude-agent-sdk`）の版を毎日見に行き、上がっていたら
+# PR を出す。
+#
+# **なぜ機械に見させるか。** この SDK はクローン・マネージャー・作業者が実際に走る
+# 実行系そのもので、エイリアス（`fable` / `opus` / `sonnet`）から具体のモデル id へ
+# の対応表もこのバンドルの中に焼かれている。つまり**版を止めると、新しいモデルが
+# 出ても層が届かなくなる**。lockfile で固定するのは再現性のために正しいが、固定した
+# まま誰も上げない状態は「人間の手元の Claude Code より古いものを配る」ことであり、
+# それはデグレードである（north_star 禁止1。Dockerfile で `gh` の版を固定しない
+# のと同じ理由）。実測では 0.3.228（2026-08-11 公開）のまま8日・9版ぶん止まっていた。
+#
+# **人間の承認は外さない。** ここが作るのは PR までで、マージは人間がする。
+# モデル帯の対応（Fable / Opus / Sonnet）を変える変更ではないので、地雷表5行目
+# （「安いモデルに寄せる / 階層を潰す」）には当たらない。
+name: Claude SDK 更新
+
+on:
+  schedule:
+    # 07:00 JST。**GitHub の cron は指定時刻ちょうどには発火しない**（遅れる）ので、
+    # 時刻そのものに意味を持たせないこと。SDK はほぼ毎日出るため周期は日次で採る。
+    - cron: '0 22 * * *'
+  workflow_dispatch:
+
+# 走行が重なると同じブランチを両側から書く。順番に回す（前を殺さない）。
+concurrency:
+  group: update-claude-sdk
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  # 常に同じブランチへ積む。**版ごとに新しいブランチを作らない** — 日次なので、
+  # 作れば読まれない PR が毎日1本増えていく。開いている PR は常に高々1本にする。
+  SDK_BRANCH: automation/claude-agent-sdk
+  # **`GITHUB_TOKEN` で作った PR は `pull_request` のワークフローを起こさない**
+  # （GitHub の仕様。無限ループ防止）。つまり既定のままだと PR に CI が付かないので、
+  # 下の「検証」で同じ一式（build / typecheck / lint / format:check / test）を
+  # このジョブ自身が回し、結果を PR 本文に書く。人間が PAT（`ALTEROID_PR_TOKEN`）を
+  # 置けば通常どおり CI も走る。**どちらでも検証が0回にならない形にしてある。**
+  GH_TOKEN: ${{ secrets.ALTEROID_PR_TOKEN || secrets.GITHUB_TOKEN }}
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.ALTEROID_PR_TOKEN || secrets.GITHUB_TOKEN }}
+      # Node と pnpm の版は mise.toml が持つ（CI と同じ）
+      - uses: jdx/mise-action@v4
+      - id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-
+      - run: pnpm install --frozen-lockfile
+
+      - id: update
+        name: SDK を最新へ
+        run: |
+          set -euo pipefail
+
+          # catalog の1行が正本（各パッケージは `catalog:` で参照している）。
+          # **見つからなければ落とす** — 空文字を返すと「上がっていない」と
+          # 区別が付かず、静かに何もしない日が続く。
+          read_version() {
+            node -e '
+              const fs = require("fs");
+              const src = fs.readFileSync("pnpm-workspace.yaml", "utf8");
+              const m = src.match(/^\s*.@anthropic-ai\/claude-agent-sdk.:\s*\^?([0-9][^\s#]*)/m);
+              if (!m) {
+                console.error("pnpm-workspace.yaml の catalog に @anthropic-ai/claude-agent-sdk が無い");
+                process.exit(1);
+              }
+              process.stdout.write(m[1]);
+            '
+          }
+
+          # **上げる前に、作業ツリーが clean であることを確かめる。** この後の判定は
+          # 「HEAD との差分」なので、最初から差分があると「上がった」と読める。
+          # checkout 直後なので通常は clean であり、そうでないなら何かが起きている
+          # ＝判定できない状態である。黙ってどちらかへ倒さず落とす。
+          if ! git diff --quiet; then
+            echo "::error::update の前から作業ツリーに差分がある。判定できないので止める" >&2
+            git status --porcelain >&2
+            exit 1
+          fi
+
+          before="$(read_version)"
+          pnpm update --latest --recursive @anthropic-ai/claude-agent-sdk
+          after="$(read_version)"
+
+          # **判定は版の文字列ではなく実際の差分で行う。** catalog が動かなくても
+          # lockfile 側（プラットフォーム別パッケージ・推移依存）が動くことがある。
+          if git diff --quiet -- pnpm-workspace.yaml pnpm-lock.yaml; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "SDK は既に最新（$before）。差分なし。"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "$before → $after"
+          fi
+          echo "before=$before" >> "$GITHUB_OUTPUT"
+          echo "after=$after" >> "$GITHUB_OUTPUT"
+
+      # 上がった版で一式を通す。**落ちても止めない** — 落ちたことは draft の PR として
+      # 人間に見せるほうが、失敗した cron の実行として埋もれるより届く。
+      - id: verify
+        if: steps.update.outputs.changed == 'true'
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          ok=true
+          : > /tmp/verify.md
+          for cmd in build typecheck lint format:check test; do
+            if pnpm "$cmd" 2>&1 | tee "/tmp/verify-${cmd/:/-}.log"; then
+              echo "- \`pnpm $cmd\` — OK" >> /tmp/verify.md
+            else
+              ok=false
+              {
+                echo "- \`pnpm $cmd\` — **失敗**"
+                echo ''
+                echo '  ```'
+                sed 's/^/  /' "/tmp/verify-${cmd/:/-}.log" | tail -30
+                echo '  ```'
+              } >> /tmp/verify.md
+            fi
+          done
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
+          cat /tmp/verify.md
+
+      - name: PR を出す
+        if: steps.update.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          # **`git add -A` を使わない**（AGENTS.md「リポジトリの約束」）。触ってよいのは
+          # この3つだけで、他に差分が出ていたらそれは想定外である。
+          # `apps/daemon/openapi.json` を含めるのは、`pnpm build` が毎回書き直すため
+          # （SDK 由来で spec が動いた場合、置いていくと CI の一致検査が落ちる）。
+          git checkout -B "$SDK_BRANCH"
+          git add pnpm-workspace.yaml pnpm-lock.yaml apps/daemon/openapi.json
+          # **未追跡は数えない（`--untracked-files=no`）。** 直前の `pnpm build` が
+          # `packages/*/src/generated/` や `apps/web/.react-router/` を作るが、これらは
+          # このリポジトリでは .gitignore にも入っていない（実測）。ここで数えると
+          # 毎回「想定外」で止まる。見たいのは**追跡下のファイルが他にも動いていないか**
+          # だけである。
+          unexpected="$(git status --porcelain --untracked-files=no | grep -v -E '^M  (pnpm-workspace\.yaml|pnpm-lock\.yaml|apps/daemon/openapi\.json)$' || true)"
+          if [ -n "$unexpected" ]; then
+            echo "::error::想定していない差分がある。中身: $unexpected" >&2
+            exit 1
+          fi
+
+          version='${{ steps.update.outputs.after }}'
+          title="chore: @anthropic-ai/claude-agent-sdk を $version へ上げる"
+          git commit -m "$title"
+          # このブランチはこのワークフローだけが書く（人間が積む場所ではない）ので
+          # 上書きしてよい。**他のブランチへ force しないこと。**
+          git push --force origin "$SDK_BRANCH"
+
+          # **本文は単引用符で組む。** 二重引用符だと本文中の `…` がコマンド置換として
+          # 実行される（PR 本文にコード片を書く以上、必ず踏む）。
+          {
+            echo 'Claude 本体（`@anthropic-ai/claude-agent-sdk`）を'
+            echo '`${{ steps.update.outputs.before }}` → `${{ steps.update.outputs.after }}` へ上げる。'
+            echo ''
+            echo 'この SDK はクローン・マネージャー・作業者が実際に走る実行系であり、'
+            echo 'エイリアス（`fable` / `opus` / `sonnet`）から具体のモデル id への対応表も'
+            echo 'このバンドルに焼かれている。止めると新しいモデルが層に届かない。'
+            echo ''
+            echo '## 検証（このワークフローが実行した生の結果）'
+            echo ''
+            cat /tmp/verify.md
+            echo ''
+            echo "実行: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo ''
+            echo '**PR に CI が付いていない場合の理由**: `GITHUB_TOKEN` で作った PR は'
+            echo '`pull_request` のワークフローを起こさない（GitHub の仕様）。その場合、'
+            echo '上の一式はこのワークフロー自身が同じ実行系（mise.toml）で回したものである。'
+          } > /tmp/body.md
+
+          number="$(gh pr list --head "$SDK_BRANCH" --state open --json number --jq '.[0].number // empty')"
+          if [ -z "$number" ]; then
+            # 検証が落ちているものは draft で出す（人間が読める状態にしない）
+            if [ '${{ steps.verify.outputs.ok }}' = 'true' ]; then
+              gh pr create --base main --head "$SDK_BRANCH" --title "$title" --body-file /tmp/body.md
+            else
+              gh pr create --draft --base main --head "$SDK_BRANCH" --title "$title" --body-file /tmp/body.md
+            fi
+          else
+            gh pr edit "$number" --title "$title" --body-file /tmp/body.md
+            if [ '${{ steps.verify.outputs.ok }}' = 'true' ]; then
+              gh pr ready "$number"
+            else
+              gh pr ready --undo "$number"
+            fi
+          fi
