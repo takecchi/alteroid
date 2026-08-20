@@ -389,8 +389,9 @@ class Clone implements CloneHost {
    * （`rate_limit_event` はターン中にしか届かない — `usage-snapshot.ts` の
    * `toAccountUsage` は `status` を書かない）。だから「試すしか無い」を選び、
    * 試行の契機は**新しい合図が届いたとき**に限る（`post` 参照）。人間の発言が
-   * 最も価値の高い試行で、誰も話しかけなければ `self_initiative`（既定60分
-   * ごと）が自然に試す。
+   * 最も価値の高い試行で、誰も話しかけなければ `self_initiative`（既定間隔ごと。
+   * 値は `apps/daemon/src/schedule.ts` の `DEFAULT_INITIATIVE_EVERY_MINUTES`）が
+   * 自然に試す。
    */
   #usageBlocked: UsageLimitNotice | null = null;
   /**
@@ -617,7 +618,7 @@ class Clone implements CloneHost {
     // **`isTick` の畳み込み（次の行）より前に置く。** 畳み込みで捨てられる tick
     // （＝既に同じ tick が受信箱に居る）でも、ここまでは通した後で return する。
     // その tick 自体が積まれなくても、**「新しい合図が届いた」という事実そのもの**は
-    // 本物であり（60分ごとの `self_initiative` が実際にもう一度発火した、など）、
+    // 本物であり（既定間隔ごとの `self_initiative` が実際にもう一度発火した、など）、
     // 時間が経ったことの合図として試す価値がある。しかも解除そのものはモデルを
     // 一度も呼ばない（保持分を受信箱へ戻すだけ）ので、畳まれる tick で解除しても
     // 実行回数の制限（AGENTS.md 地雷2）にはならない — 実際に金を払うかどうかは

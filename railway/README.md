@@ -255,7 +255,7 @@ Config as Code のパスは Root Directory を見ないので、**リポジト�
 | 変数                        | 値       |
 | --------------------------- | -------- |
 | `ALTEROID_DAILY_REPORT_AT`  | `22:00`  |
-| `ALTEROID_INITIATIVE_EVERY` | `60`     |
+| `ALTEROID_INITIATIVE_EVERY` | `55`     |
 | `ALTEROID_CLONE_MODEL`      | `fable`  |
 | `ALTEROID_MANAGER_MODEL`    | `opus`   |
 | `ALTEROID_WORKER_MODEL`     | `sonnet` |
