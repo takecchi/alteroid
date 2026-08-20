@@ -50,11 +50,14 @@ function renderDashboard(
     notice?: string;
   },
   live: JournalLive = EMPTY_FEED,
+  // 既定は空のまま（既存のテストは全部これで、最新の日報カードを一度も
+  // 描画経路に乗せていない）。「最新の日報」のテストだけがここへ渡す。
+  reports: Array<{ type: 'daily_report'; id: string; at: string; date: string; body: string }> = [],
 ): FetchStub {
   // **`/journal/stream` の経路を置いていない。** 置くと購読が増えたことに気づけない
   // （知らない URL は `stubFetch` が「繋がらない」にするので、張りに行けば必ず出る）。
   const stub = stubFetch((url) => {
-    if (url.includes('/reports')) return json({ reports: [] });
+    if (url.includes('/reports')) return json({ reports });
     if (url.includes('/approvals')) return json({ approvals: [] });
     if (url.includes('/managers')) return json({ managers: [] });
     if (url.includes('/schedule')) return json({ entries: [] });
@@ -113,6 +116,36 @@ describe('ダッシュボードの「今日の利用」', () => {
 
     expect(await screen.findByText('$0.0200')).toBeTruthy();
     expect(screen.getByText(USAGE_ESTIMATE_NOTICE)).toBeTruthy();
+  });
+});
+
+/**
+ * 「最新の日報」カードが本文を実際に描く経路を1度は通す。
+ *
+ * これまでの `renderDashboard` は `/reports` を常に空で固定していたので、
+ * このカードは `Empty` の分岐しか通ったことが無かった。**Markdown 化した
+ * こと自体を保証するテストではない**（それは `markdown.test.tsx` の仕事）
+ * — ここが保証するのは「日報の本文がこのカードの描画経路へ実際に渡る」
+ * ことだけ。見出し記法（`## 見出し`）を混ぜているのは、素通しの
+ * `whitespace-pre-wrap` の文字列表示のままでは無いこと（＝描画経路を
+ * 通したのが `report.body` の生文字列比較ではないこと）を区別するため。
+ */
+describe('「最新の日報」', () => {
+  const USAGE = { rows: [], since: null, beforeLedger: false };
+
+  it('日報の本文が Markdown の描画経路を通って出る', async () => {
+    renderDashboard(USAGE, EMPTY_FEED, [
+      {
+        type: 'daily_report',
+        id: 'r1',
+        at: '2026-08-14T22:00:00.000Z',
+        date: '2026-08-14',
+        body: '## 今日やったこと\n\n進捗があった。',
+      },
+    ]);
+
+    expect(await screen.findByRole('heading', { name: '今日やったこと' })).toBeTruthy();
+    expect(screen.getByText('進捗があった。')).toBeTruthy();
   });
 });
 

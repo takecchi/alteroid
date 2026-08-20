@@ -1,6 +1,7 @@
 import { formatUsd, summarizeUsage, usageDate } from '@alteroid/core/usage';
 import { Link } from 'react-router';
 
+import { Markdown } from '~/components/markdown';
 import { Page } from '~/components/page';
 import { Badge, Card, CardHeader, Empty, ErrorNote, Spinner } from '~/components/ui';
 import {
@@ -44,7 +45,7 @@ export default function Dashboard() {
   return (
     <Page title="ダッシュボード" description="いま何が動いていて、何が人間を待っているか">
       <div className="grid gap-4 lg:grid-cols-3">
-        <Card className="flex flex-col lg:col-span-2">
+        <Card className="flex min-w-0 flex-col lg:col-span-2">
           <CardHeader
             title="最新の日報"
             subtitle={latestReport === undefined ? undefined : latestReport.date}
@@ -74,8 +75,8 @@ export default function Dashboard() {
               高さになり、こんどは隣の列の下に同じ余白ができる。`h-96` は絶対長なので
               そうならない。狭い画面（1列）では伸びる先が無いので、これまでどおり 24rem。
             */
-            <div className="h-96 min-h-0 grow overflow-y-auto px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap">
-              {latestReport.body}
+            <div className="h-96 min-h-0 min-w-0 grow overflow-y-auto px-4 py-3">
+              <Markdown>{latestReport.body}</Markdown>
             </div>
           )}
         </Card>
