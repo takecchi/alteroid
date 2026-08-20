@@ -3238,12 +3238,36 @@ describe('クローンの消費が台帳に載る（誰が・どこで）', () =
       s.clone.post(humanMessage('やあ'));
       // done が来る＝ターンが完走している
       await waitForDone(s.events);
+      // **`stop()` も捕獲の内側で呼ぶ。** 外に置くと、`stop()` が積む片付けの蒸留
+      // （`reason: 'shutdown'`）が**本セッションの2本目のターン**を起こし、その
+      // `result` の台帳書き込みが同じ理由で失敗して、**生の stderr へ1行漏れる**
+      // （`captureStderr` は `finally` で `process.stderr.write` を戻すので、その
+      // 1ms 後の排出は素の stderr へ出る）。実測: 単体・`-t` 単発・フルスイートの
+      // どれでも毎回1行。**フルスイートでだけ出るのではない。**
+      //
+      // 漏れが実害になるのは、その行が製品コードが本番で出すのと同じ前半
+      // （`利用状況の台帳を記録できませんでした（layer=clone site=...）`）を持ち、
+      // しかも `process.stderr.write` を直に呼ぶので vitest の「どのテストの出力か」
+      // の前置きが付かないためである。緑の実行で毎回1行出続ければ、読み手はその
+      // 文言を既知のノイズとして飛ばす訓練を受ける。
+      //
+      // 同じ `captureStderr` を使う兄弟の2本（`日誌にも書けなければ stderr に1行`
+      // ／`storage is closed` を見る本）は、はじめから `stop()` を内側に置いて
+      // いて漏れていない。**ここだけが外に出ていた。**
+      await s.clone.stop();
     });
 
     // 跡は残る（「日誌に無い」が「起きなかった」と読めないように）
     expect(stderr.join('')).toContain('利用状況の台帳');
 
-    await s.clone.stop();
+    // **件数まで見る。** `toContain` だけだと、人間のターンの分1件で満たされて
+    // しまうので、**片付けの蒸留ターンで台帳の失敗が報告されなくなっても落ちない**
+    // （そこは「たまたま出ていた」だけだった）。2件の出どころは、人間の発言の
+    // ターンと、`stop()` が積む片付けの蒸留ターンである。`modelUsage` は
+    // `callIndex` を見ないのでどちらの `result` にも usage が載り、どちらの
+    // 書き込みもこのテストのスタブが reject する。
+    const ledgerLines = stderr.filter((line) => line.includes('利用状況の台帳'));
+    expect(ledgerLines).toHaveLength(2);
   });
 });
 
