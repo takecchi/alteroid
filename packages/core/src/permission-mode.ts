@@ -38,6 +38,22 @@ export type PermissionModeName = (typeof PERMISSION_MODES)[number];
 export const DEFAULT_PERMISSION_MODE: PermissionModeName = 'auto';
 
 /**
+ * 人間が実際に値を置いたか（置いていなければ `null`）。
+ *
+ * **「既定と違うか」ではない**（`model-tier.ts` の `placedModelTier` と同じ含み）。
+ * 置いた値がたまたま既定と同じでも「置いた」である — 起動時に表へ出すのは
+ * 「差し替えが置かれている」という事実であって、値の比較ではない。
+ *
+ * **不正な値でも `null` にしない。** ここは告知のための観測なので、綴りを
+ * 間違えた値もそのまま返す（弾くのは {@link resolvePermissionModeFor}）。
+ */
+export function placedPermissionMode(env: NodeJS.ProcessEnv, key: string): string | null {
+  const raw = env[key];
+  const trimmed = raw === undefined ? '' : raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
  * 環境変数を見て権限モードを決める。空・空白なら既定。
  *
  * **不正な値は落とす。** 黙って既定へ倒すと、綴りを間違えた持ち主が「都度確認に

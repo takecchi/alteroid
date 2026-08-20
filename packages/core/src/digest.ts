@@ -2,7 +2,7 @@ import { excerptLine } from './excerpt.js';
 import { describeScheduleSpec } from './schedule.js';
 import type { JournalEntry } from './schema.js';
 import type { Stores } from './store.js';
-import { formatUsd, summarizeUsage, usageDate } from './usage.js';
+import { formatUsd, isCloneActor, summarizeUsage, usageDate } from './usage.js';
 
 /**
  * ある期間に何が起きたかの要約（日報と発意 tick の材料）。
@@ -67,7 +67,18 @@ export async function buildActivityDigest(stores: Stores, window: DigestWindow):
   const escalations = of('escalation');
   const memoryUpdates = of('memory_update');
   const externals = of('external_event');
+  /**
+   * ツール実行は**層で分ける**。
+   *
+   * クローンが自分の手で使った道具も同じ日誌へ落ちるようになった（#32）ので、
+   * 1つの数にまとめると「委譲した量」として読める数がクローン自身の手の量で
+   * 膨らむ（AGENTS.md「消費の層をモデル名で見分けるな ＝ 層は層の列で言う」と
+   * 同じ話で、ここでの層の列は `actor` である）。**この数は digest を読む
+   * クローン自身と日報の材料になるので、混ぜると委譲の判断がそのまま狂う。**
+   */
   const toolUses = of('tool_use');
+  const cloneToolUses = toolUses.filter((entry) => isCloneActor(entry.actor));
+  const delegatedToolUses = toolUses.filter((entry) => !isCloneActor(entry.actor));
 
   // 走行中・返事待ちは期間の外で始まったものも「いまの状態」として要る
   const managers = jobs.filter(
@@ -86,7 +97,8 @@ export async function buildActivityDigest(stores: Stores, window: DigestWindow):
     `- エスカレーション: ${escalations.length} 件`,
     `- 記憶の更新: ${memoryUpdates.length} 件`,
     `- 外部イベント: ${externals.length} 件`,
-    `- マネージャー・作業者のツール実行: ${toolUses.length} 件`,
+    `- マネージャー・作業者のツール実行: ${delegatedToolUses.length} 件`,
+    `- あなた自身が手を動かした回数（委譲せずに使った道具）: ${cloneToolUses.length} 件`,
     `- いま人間の回答を待っているもの: ${pending.length} 件`,
     `- 継続中の依頼（定期の仕込み）: ${standing.length} 件`,
     `- 引き受けたまま終わっていない仕事: ${commitments.length} 件`,

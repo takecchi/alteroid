@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  CLONE_ACTOR_ID,
+  CLONE_DISTILL_ACTOR_ID,
+  CLONE_SUB_ACTOR_PREFIX,
+  isCloneActor,
   foldOneshotUsage,
   foldUsageSnapshot,
   isSuccessResult,
@@ -492,5 +496,37 @@ describe('日付の切り方', () => {
 
   it('月日は 0 埋めする', () => {
     expect(usageDate(new Date(2026, 0, 5, 12, 0))).toBe('2026-01-05');
+  });
+});
+
+/**
+ * 日誌の `tool_use.actor` が「クローン自身の手」かどうかの判定。
+ *
+ * **判定をここ1本に閉じてあることが要点である。** クローンも道具を全部持つように
+ * なった（#32）ので、この判定は digest（委譲の判断材料）・日報・Web UI の
+ * 再取得の3か所が読む。層の枝が増えたときに `=== 'clone'` と書き写した箇所が
+ * あると、その箇所だけ新しい枝を「委譲した量」の側へ落とす。
+ */
+describe('クローンの手かどうか（actor の判定）', () => {
+  it('クローンの3つの枝はすべて「自分の手」である', () => {
+    expect(isCloneActor(CLONE_ACTOR_ID)).toBe(true);
+    expect(isCloneActor(`${CLONE_SUB_ACTOR_PREFIX}general-purpose`)).toBe(true);
+    expect(isCloneActor(CLONE_DISTILL_ACTOR_ID)).toBe(true);
+  });
+
+  it('マネージャーと作業者は「自分の手」ではない', () => {
+    expect(isCloneActor('manager:mgr-1234abcd')).toBe(false);
+    expect(isCloneActor('worker:mgr-1234abcd:worker')).toBe(false);
+    // 台帳側の actor（`mgr-…`）も混ざらない
+    expect(isCloneActor('mgr-1234abcd')).toBe(false);
+  });
+
+  /**
+   * **前方一致は `clone:` まで含めて見る。** `clones-r-us` のような名前を
+   * クローン扱いしないこと（区切りを含めずに `startsWith('clone')` で書くと通る）。
+   */
+  it('名前が clone で始まるだけの別物を拾わない', () => {
+    expect(isCloneActor('clones-r-us')).toBe(false);
+    expect(isCloneActor('cloneish')).toBe(false);
   });
 });

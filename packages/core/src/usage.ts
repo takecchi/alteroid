@@ -160,6 +160,41 @@ export type UsageSite = z.infer<typeof usageSiteSchema>;
 export const CLONE_ACTOR_ID = 'clone';
 
 /**
+ * クローンが**自分の道具の中で起こしたサブエージェント**を名指す接頭辞。
+ *
+ * クローンは preset 一式を持つので `Task` も持っている（#32）。その中の道具実行は
+ * クローンの手ではあるが「クローン自身が直接叩いた」ではないので、
+ * `clone:sub:<agent>` として区別する（runner が `manager:<id>` と
+ * `worker:<id>:<agent>` を分けているのとまったく同じ理由 — 分けないと
+ * 「自分でやったのか委ねたのか」の問いに嘘の数が返る）。
+ *
+ * **これは委譲（マネージャー）とは別物である。** マネージャーへ出した仕事は
+ * `manager:<id>` / `worker:<id>:<agent>` で載る。
+ */
+export const CLONE_SUB_ACTOR_PREFIX = `${CLONE_ACTOR_ID}:sub:`;
+
+/**
+ * 蒸留のサイドクエリ（要約に潰される直前の内部ターン）で動いた手。
+ *
+ * 本セッションと**別の SDK セッション**なので分けて名乗る。混ぜると
+ * 「会話の中で自分で動いた」と「記憶へ移すために動いた」が同じ数になる。
+ */
+export const CLONE_DISTILL_ACTOR_ID = `${CLONE_ACTOR_ID}:distill`;
+
+/**
+ * 日誌の `tool_use.actor` が「クローン自身の手」を指しているか。
+ *
+ * **前方一致で判定する。** いま `clone` / `clone:sub:<agent>` / `clone:distill` の
+ * 3種類があり、どれもマネージャー（`manager:<id>` / `worker:<id>:<agent>`）とは
+ * 接頭辞で分かれる。**`=== CLONE_ACTOR_ID` で書かないこと** — 増えた枝が
+ * 「委譲した量」の側へ落ちて、委譲の判断に使う数が静かにずれる。ここを1本に
+ * してあるのは、枝を足すたびに全呼び出し元を直す必要が無いようにするためである。
+ */
+export function isCloneActor(actor: string): boolean {
+  return actor === CLONE_ACTOR_ID || actor.startsWith(`${CLONE_ACTOR_ID}:`);
+}
+
+/**
  * 累積の器がどこで閉じるか。**`site` から導出しないこと。**
  *
  * 累積は SDK の `query()` 呼び出しの寿命で閉じる（`sdk.d.ts`: 「Per-model totals

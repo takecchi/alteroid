@@ -174,8 +174,12 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     id: z.string(),
     at: isoDateTime,
     /**
-     * 実行した層。`manager:<id>` / `worker:<id>:<agent>` の形で入る。
-     * マネージャーと作業者の全ツール実行がここに落ちる（監査）。
+     * 実行した層。`manager:<id>` / `worker:<id>:<agent>` /
+     * `clone`（クローン自身の手）/ `clone:sub:<agent>`（クローンが起こした
+     * サブエージェント）の形で入る。**全層の全ツール実行がここに落ちる（監査）。**
+     *
+     * **層をここで数え上げないこと。** 判定は `isCloneActor`（`usage.ts`）に1本だけ
+     * あり、`=== 'clone'` と書き写すとサブエージェントぶんが委譲した量の側へ落ちる。
      */
     actor: z.string(),
     tool: z.string(),

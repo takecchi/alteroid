@@ -10,6 +10,7 @@ import {
   CLONE_MODEL_ENV_KEY,
   CLONE_PERMISSION_MODE_ENV_KEY,
   createClone,
+  placedClonePermissionMode,
   resolveCloneModel,
   resolveClonePermissionMode,
 } from './clone.js';
@@ -19,7 +20,7 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import { createScheduler } from './schedule.js';
 import type { ChatStreamEvent } from './schema.js';
 import type { Stores } from './store.js';
-import { CLONE_ACTOR_ID } from './usage.js';
+import { CLONE_ACTOR_ID, isCloneActor } from './usage.js';
 import { createCloneMcpServer, createCloneTools } from './tools.js';
 import type { ToolContext } from './tools.js';
 import {
@@ -87,6 +88,17 @@ function fakeSdk(
     systemNoticeAt?: (
       turnIndex: number,
     ) => { subtype: 'notification' | 'informational'; text: string } | undefined;
+    /**
+     * ターンの中で `assistant` の前に差し込む生の合図（`system/permission_denied`
+     * など）。**`result` の直前ではなく前に置く** — 実物もその順で来る。
+     *
+     * **`systemNoticeAt` と役割が違う。** あちらは `notification` /
+     * `informational` 専用の砂糖で、こちらは任意の形（拒否のように `tool_name` /
+     * `tool_use_id` を持つもの）を通すための生の口である。
+     */
+    beforeAssistant?: (callIndex: number) => SDKMessage[];
+    /** `result` に載せる `permission_denials`（authoritative な側の記録）。 */
+    permissionDenials?: (callIndex: number) => unknown[] | undefined;
   } = {},
 ) {
   const calls: FakeCall[] = [];
@@ -155,6 +167,7 @@ function fakeSdk(
             : { content: systemNotice.text }),
         } as unknown as SDKMessage;
       }
+      for (const message of options.beforeAssistant?.(callIndex) ?? []) yield message;
       yield {
         type: 'assistant',
         message: { content: [{ type: 'text', text }] },
@@ -164,6 +177,7 @@ function fakeSdk(
       } as unknown as SDKMessage;
       const modelUsage = options.modelUsage?.(callIndex);
       const resultOverride = options.resultFor?.(turnIndex);
+      const denials = options.permissionDenials?.(callIndex);
       yield {
         type: 'result',
         subtype: resultOverride?.subtype ?? options.resultSubtype ?? 'success',
@@ -171,6 +185,7 @@ function fakeSdk(
         session_id: 'sess-fake',
         uuid: 'uuid-result',
         ...(modelUsage === undefined ? {} : { modelUsage }),
+        ...(denials === undefined ? {} : { permission_denials: denials }),
       } as unknown as SDKMessage;
     }
 
@@ -352,6 +367,151 @@ describe('クローン', () => {
     await s.clone.stop();
   });
 
+  it('サブエージェントの中の道具実行は、自分で叩いた分と区別して残る', async () => {
+    // クローンは preset 一式を持つので `Task` も持っている。ここを分けないと
+    // 「自分でやったのか委ねたのか」の問いに嘘の数が返る（runner が
+    // `manager:<id>` と `worker:<id>:<agent>` を分けているのと同じ理由）。
+    const s = setup();
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
+
+    await hook(
+      { tool_name: 'Read', tool_input: { file_path: '/a' } } as never,
+      undefined,
+      {} as never,
+    );
+    await hook(
+      {
+        tool_name: 'Grep',
+        tool_input: { pattern: 'x' },
+        // SDK: 「Use this field (not agent_type) to distinguish subagent calls」
+        agent_id: 'sub-1',
+        agent_type: 'general-purpose',
+      } as never,
+      undefined,
+      {} as never,
+    );
+    // **`agent_type` が読めなくても、サブエージェント側であることは落とさない。**
+    await hook(
+      { tool_name: 'Glob', tool_input: {}, agent_id: 'sub-2' } as never,
+      undefined,
+      {} as never,
+    );
+
+    const entries = await s.stores.journal.list({ types: ['tool_use'] });
+    const byTool = new Map(
+      entries.map((entry) => [
+        (entry as { tool: string }).tool,
+        (entry as { actor: string }).actor,
+      ]),
+    );
+    expect(byTool.get('Read')).toBe(CLONE_ACTOR_ID);
+    expect(byTool.get('Grep')).toBe('clone:sub:general-purpose');
+    expect(byTool.get('Glob')).toBe('clone:sub:(不明)');
+    // どれもクローンの手として数えられる（digest の分類が拾えること）
+    for (const actor of byTool.values()) expect(isCloneActor(actor)).toBe(true);
+
+    await s.clone.stop();
+  });
+
+  it('道具の名前が読めなくても、記録を落とさない（監査の穴を静かに空けない）', async () => {
+    const s = setup();
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
+    // 名前が読めないなら「自作ツールだった」ではなく「観測できなかった」である。
+    await hook({ tool_input: { any: 1 } } as never, undefined, {} as never);
+
+    const entries = await s.stores.journal.list({ types: ['tool_use'] });
+    expect(entries.map((entry) => (entry as { tool: string }).tool)).toEqual(['(不明な道具)']);
+
+    await s.clone.stop();
+  });
+
+  it('蒸留のサイドクエリの道具実行も日誌に残る（別セッションだと分かる形で）', async () => {
+    const s = setup();
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const main = s.calls[0] as FakeCall;
+    const dir = await mkdtemp(join(tmpdir(), 'alteroid-distill-audit-'));
+    try {
+      const transcriptPath = join(dir, 'transcript.jsonl');
+      await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
+      const preCompact = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
+      if (preCompact === undefined) throw new Error('PreCompact フックが登録されていない');
+      await preCompact(
+        { session_id: 'sess-fake', transcript_path: transcriptPath } as never,
+        undefined,
+        { signal: new AbortController().signal } as never,
+      );
+
+      const side = s.calls.at(-1) as FakeCall;
+      expect(side).not.toBe(main);
+      // **道具と許可モードを揃えたのだから、記録も揃っていること。**
+      const hook = side.options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+      if (hook === undefined) throw new Error('蒸留側に PostToolUse フックが無い');
+      await hook(
+        { tool_name: 'Write', tool_input: { file_path: '/a' } } as never,
+        undefined,
+        {} as never,
+      );
+
+      const entries = await s.stores.journal.list({ types: ['tool_use'] });
+      const write = entries.find((entry) => (entry as { tool: string }).tool === 'Write');
+      expect((write as { actor: string } | undefined)?.actor).toBe('clone:distill');
+      expect(isCloneActor('clone:distill')).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+
+    await s.clone.stop();
+  });
+
+  it('確認へ上がらず止められた道具は日誌に残る。生の合図と result で二重に書かない', async () => {
+    // `permissionMode: 'auto'` ＋ `canUseTool` 無しなので拒否は普通に起きる。
+    // ここを捨てると「静かになった」と「起きていない」が区別できなくなる。
+    //
+    // **生の合図と `result` の両方に同じ1件を載せる。** SDK は前者を best-effort、
+    // 後者を authoritative と言っているので実装は両方読む ＝ 二重に書かないことも
+    // 一緒に確かめないと、日誌が同じ拒否で2倍に膨らむ。
+    const denial = { tool_name: 'Bash', tool_use_id: 'tu-1', tool_input: { command: 'git push' } };
+    const s = setup(undefined, createMemoryStores(), {
+      beforeAssistant: () => [
+        {
+          type: 'system',
+          subtype: 'permission_denied',
+          ...denial,
+          decision_reason: '分類器が止めた',
+        } as unknown as SDKMessage,
+      ],
+      permissionDenials: () => [denial],
+    });
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const denied = (await s.stores.journal.list({ types: ['exchange'] })).filter((entry) =>
+      (entry as { text: string }).text.includes('確認へ上がらずに止められた'),
+    );
+    expect(denied.length).toBe(1);
+    const text = (denied[0] as { text: string }).text;
+    expect(text).toContain('Bash');
+    expect(text).toContain('分類器が止めた');
+    // 許可モードも添える（「なぜ確認が来ないのか」を後から読む人のために）
+    expect(text).toContain('auto');
+    // **拒否は `tool_use` として数えない** — 使えていない回数を「自分で手を動かした
+    // 回数」に混ぜると、digest の材料がそのまま狂う。
+    expect(await s.stores.journal.list({ types: ['tool_use'] })).toEqual([]);
+
+    await s.clone.stop();
+  });
+
   it('権限モードの既定は人間が開く Claude Code と同じ（auto）。置けるのは人間だけ', () => {
     // `default` のままだと、答える相手が居ない確認（このセッションに `canUseTool`
     // は無い）がそのまま拒否になり、道具を渡したのに使えない状態になる。
@@ -367,6 +527,17 @@ describe('クローン', () => {
     expect(() => resolveClonePermissionMode({ [CLONE_PERMISSION_MODE_ENV_KEY]: 'strict' })).toThrow(
       /ALTEROID_CLONE_PERMISSION_MODE/,
     );
+  });
+
+  it('置かれたかどうかは「既定と違うか」では言い換えられない（起動時の告知の材料）', () => {
+    // モデル帯（`placedCloneModel`）と同じ含み。`auto` を明示的に置いた人にも
+    // 「置かれている」と言えなければ、告知は事実を言っていない。
+    expect(placedClonePermissionMode({})).toBeNull();
+    expect(placedClonePermissionMode({ [CLONE_PERMISSION_MODE_ENV_KEY]: '  ' })).toBeNull();
+    expect(placedClonePermissionMode({ [CLONE_PERMISSION_MODE_ENV_KEY]: ' auto ' })).toBe('auto');
+    // **綴りを間違えた値も返す。** 告知は落ちる前に出るので、ここで潰すと
+    // 「何を置いたせいで落ちたか」が本人に見えない
+    expect(placedClonePermissionMode({ [CLONE_PERMISSION_MODE_ENV_KEY]: 'strict' })).toBe('strict');
   });
 
   it('人間が置いた権限モードが実際にセッションへ渡る', async () => {

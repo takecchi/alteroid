@@ -318,6 +318,7 @@ export {
   CLONE_PERMISSION_MODE_ENV_KEY,
   createClone,
   placedCloneModel,
+  placedClonePermissionMode,
   resolveCloneModel,
   resolveClonePermissionMode,
   type CloneOptions,
@@ -330,6 +331,7 @@ export { placedModelTier, resolveModelTier } from './model-tier.js';
 export {
   DEFAULT_PERMISSION_MODE,
   PERMISSION_MODES,
+  placedPermissionMode,
   resolvePermissionModeFor,
   type PermissionModeName,
 } from './permission-mode.js';

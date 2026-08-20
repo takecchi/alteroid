@@ -110,6 +110,53 @@ describe('マネージャー詳細と生ログの無効化', () => {
     });
   });
 
+  /**
+   * クローンにも道具が全部ある（#32）ので、`tool_use` は**マネージャー発とは
+   * 限らない**。クローンが自分で作業しているあいだ画面が再取得を続けると、
+   * 何も動いていないマネージャーの一覧・詳細・生ログを取り直し続けることになる。
+   */
+  it('クローン自身の手の tool_use では manager も transcript も落とさない', async () => {
+    const stub = renderProbe([
+      { event: 'open', data: { ok: true } },
+      {
+        event: 'tool_use',
+        data: {
+          type: 'tool_use',
+          id: 'e1c',
+          at: '2026-08-20T00:00:00.000Z',
+          actor: 'clone',
+          tool: 'Bash',
+          input: { command: 'git log --oneline -3' },
+        },
+      },
+      {
+        event: 'tool_use',
+        data: {
+          type: 'tool_use',
+          id: 'e2c',
+          at: '2026-08-20T00:00:01.000Z',
+          // クローンが起こしたサブエージェントの分も同じ扱いである
+          actor: 'clone:sub:general-purpose',
+          tool: 'Read',
+          input: { file_path: '/tmp/a' },
+        },
+      },
+    ]);
+
+    await screen.findByText(MANAGER_ID);
+    const before = countsOf(stub);
+
+    // **「増えないこと」は待って確かめる。** 直後に見るだけでは、まだ届いて
+    // いないだけの状態を「増えなかった」と読んでしまう。
+    await waitFor(() => {
+      expect(stub.calls.filter((url) => url.endsWith('/journal/stream')).length).toBeGreaterThan(0);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const after = countsOf(stub);
+    expect(after.manager).toBe(before.manager);
+    expect(after.transcript).toBe(before.transcript);
+  });
+
   it('exchange(with: manager) が届くと manager と transcript を束で落とす（manager id を持たなくても）', async () => {
     const stub = renderProbe([
       { event: 'open', data: { ok: true } },
