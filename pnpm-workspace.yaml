@@ -15,7 +15,7 @@ catalog:
   prettier: ^3.9.6
   # CI の実行系（Node 22）に合わせる
   '@types/node': ^22.20.1
-  '@anthropic-ai/claude-agent-sdk': ^0.3.228
+  '@anthropic-ai/claude-agent-sdk': ^0.3.237
   hono: ^4.13.1
   '@hono/node-server': ^2.1.0
   '@hono/zod-validator': ^0.9.0
@@ -70,8 +70,9 @@ catalog:
   '@tailwindcss/vite': ^4.3.3
   # 取得とキャッシュ。SSE で届いた出来事から `mutate` で無効化する使い方をする。
   # 2.5 系は出たばかりで minimumReleaseAge に引っかかる。**除外リストに足して
-  # 通すのではなく**、枯れている 2.4 系を採る（除外リストは SDK の意図的な固定の
-  # ためのものであって、新しい版を素通しするための場所ではない）
+  # 通すのではなく**、枯れている 2.4 系を採る（除外リストは Claude 本体＝SDK を
+  # 遅らせないためのものであって、一般の依存の新しい版を素通しするための場所では
+  # ない。理由はファイル末尾の注記）
   # `^` だと 2.5 系まで入ってしまうので `~` で 2.4 系に留める
   swr: ~2.4.2
   clsx: ^2.1.1
@@ -126,13 +127,22 @@ catalog:
   # 版が固定されるので `npx shadcn@latest`（毎回違う版が降ってくる）を避けられる。
   shadcn: ^4.18.0
 
+# **Claude 本体（SDK）だけは、公開直後でも取りに行く。**
+#
+# pnpm 11 の既定は `minimumReleaseAge: 1440` — 公開から24時間経っていない版は
+# 解決しない。一般の依存にはこの待ちが防御として効くが、SDK にかけると
+# 「人間の手元の Claude Code より古いものをクローンとマネージャーに配る」ことに
+# なり、その遅れがそのままデグレードになる（Dockerfile で `gh` の版を固定しない
+# のと同じ理由）。SDK は毎日のように出るので、24時間の待ちは実質「常に1版古い」
+# を意味する。
+#
+# **版番号を書かないこと。** `@0.3.228` の形は「その版だけを除外する」意味なので
+# （pnpm の `parseVersionPolicyRule`）、上げるたびに9行を手で書き直す必要があり、
+# 書き直し忘れた回だけ静かに24時間待たされる。名前パターン1本なら書き直す場所が
+# 無い。pnpm は `*` を含む名前パターンを受け付ける（版を併記したときだけ
+# `NAME_PATTERN_IN_VERSION_UNION` で拒否する）ので、この1行で本体と
+# プラットフォーム別パッケージ8つの全部に効く。
+#
+# 版そのものを上げるのは `.github/workflows/update-claude-sdk.yml`（毎日）。
 minimumReleaseAgeExclude:
-  - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.228'
-  - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.228'
-  - '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.228'
-  - '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.228'
-  - '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.228'
-  - '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.228'
-  - '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.228'
-  - '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.228'
-  - '@anthropic-ai/claude-agent-sdk@0.3.228'
+  - '@anthropic-ai/claude-agent-sdk*'
