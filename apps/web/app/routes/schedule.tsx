@@ -9,23 +9,33 @@ import {
   Empty,
   ErrorNote,
   Input,
+  Select,
   Spinner,
   Textarea,
 } from '~/components/ui';
-import { usePostEvent, useRunSchedule } from '~/hooks/mutations';
+import {
+  useCreateSchedule,
+  usePostEvent,
+  useRemoveSchedule,
+  useRunSchedule,
+} from '~/hooks/mutations';
 import { useSchedule } from '~/hooks/queries';
 import { formatDateTime, formatRelative } from '~/lib/format';
 
 /**
  * 仕事の起点のうち、時間（②）と外部イベント（③）を人間から起こす画面。
  *
- * **これは「止まっているものを動かす」ボタンではない。** 日報も発意 tick も既定で
- * 回っている。ここにあるのは、待たずに確かめるための口である。
+ * **「今すぐ回す」と「仕込む」は別の操作である。** 前者は既定で回っているものを
+ * 待たずに確かめる口で、日報も発意 tick も放っておいても動く。後者は**依頼そのものを
+ * 増やす**もので、CLI（`/schedule <kind> <周期> <依頼>`）とクローンの道具
+ * （`schedule_create`）にはあったのに、この画面にだけ無かった。
  */
 export default function Schedule() {
   const { data, error, isLoading } = useSchedule();
   const runSchedule = useRunSchedule();
+  const removeSchedule = useRemoveSchedule();
   const [running, setRunning] = useState<string | undefined>(undefined);
+  const [removing, setRemoving] = useState<string | undefined>(undefined);
   const [failure, setFailure] = useState<unknown>(undefined);
 
   return (
@@ -48,6 +58,28 @@ export default function Schedule() {
                 <div className="min-w-0 flex-1">
                   <p className="text-sm">{entry.description}</p>
                   <p className="mt-0.5 font-mono text-[11px] text-muted">{entry.kind}</p>
+                  {/*
+                    **継続中の依頼だけが持つもの。** `request` があるかどうかが
+                    「人間かクローンが仕込んだ依頼」と「既定の仕込み（日報・発意
+                    tick）」の境目である（既定のほうは本文も周期も持たない）。
+
+                    `lastRunAt` を出すのは、**仕込んだのに発火していないことに
+                    気づけるようにする**ためである。次回時刻だけを見せると、
+                    一度も動いていない仕込みが「これから動く」と同じ顔で並ぶ
+                    （#96 が直した「器の入れ替えで位相が失われる」がまさにこの
+                    形で、CLI では前から見えていた）。
+                  */}
+                  {entry.request !== undefined && (
+                    <>
+                      <p className="mt-1 text-xs break-words text-muted">{entry.request}</p>
+                      <p className="mt-0.5 text-[11px] text-muted">
+                        前回:{' '}
+                        {entry.lastRunAt === undefined
+                          ? 'まだ一度も動いていない'
+                          : formatDateTime(entry.lastRunAt)}
+                      </p>
+                    </>
+                  )}
                 </div>
                 <div className="shrink-0 text-right text-[11px] text-muted">
                   <p>{formatDateTime(entry.nextAt)}</p>
@@ -66,14 +98,166 @@ export default function Schedule() {
                 >
                   今すぐ回す
                 </Button>
+                {/*
+                  **既定の仕込みには外すボタンを出さない。** デーモンが名前を
+                  守っている（`RESERVED_SCHEDULE_KINDS`）ので押しても断られる。
+                  ただし**黙って消さない** — 代わりに「既定（外せない）」と書く。
+                  ボタンだけ消すと、押せない理由が画面から消える。
+                */}
+                {entry.request === undefined ? (
+                  <span className="shrink-0 text-[11px] text-muted">既定（外せない）</span>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    loading={removing === entry.kind}
+                    onClick={() => {
+                      setRemoving(entry.kind);
+                      setFailure(undefined);
+                      removeSchedule(entry.kind)
+                        .catch(setFailure)
+                        .finally(() => setRemoving(undefined));
+                    }}
+                  >
+                    外す
+                  </Button>
+                )}
               </li>
             ))}
           </ul>
         )}
       </Card>
 
+      <ScheduleForm />
       <EventForm />
     </Page>
+  );
+}
+
+/**
+ * 継続する依頼を仕込む。
+ *
+ * **記憶に書くだけでは足りない**（PRD「自律」）。記憶は時計を持たないので、そこに
+ * だけ書いた依頼は「発意 tick のときに思い出せるかどうかの賭け」になる。ここに置いた
+ * 依頼は時刻が来れば必ずクローンの受信箱へ届く。
+ *
+ * **周期の3つを画面から落とさない。** 曜日や月の指定は cron でしか書けず、
+ * 「毎日起きて曜日を見て何もしない」で代用すると7回に6回はターンを空焼きする
+ * （`scheduleSpecSchema` の cron のコメント）。だから `daily` / `every` / `cron` の
+ * 3つとも置く。
+ */
+function ScheduleForm() {
+  const createSchedule = useCreateSchedule();
+  const [kind, setKind] = useState('');
+  const [request, setRequest] = useState('');
+  const [type, setType] = useState<'daily' | 'every' | 'cron'>('daily');
+  const [at, setAt] = useState('09:00');
+  const [minutes, setMinutes] = useState('30');
+  const [expression, setExpression] = useState('0 10 * * 1');
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string | undefined>(undefined);
+  const [failure, setFailure] = useState<unknown>(undefined);
+
+  const ready = kind.trim() !== '' && request.trim() !== '';
+
+  function submit() {
+    if (!ready) return;
+    setBusy(true);
+    setFailure(undefined);
+    setDone(undefined);
+
+    /*
+     * **形は API の型のまま組む。** ここで検査を足さないのは、`scheduleSpecSchema`
+     * が時刻の範囲も cron 式が読めるかどうかも見ているからである（読めない式を
+     * 保存できると、一覧に出るのに発火しない仕込みが作れる）。画面でも同じ検査を
+     * 書くと、片方だけ直したときに**画面は通すのにデーモンが弾く**（あるいはその逆）が
+     * 生まれる。断られた理由はそのまま出す。
+     */
+    const spec =
+      type === 'daily'
+        ? ({ type: 'daily', at } as const)
+        : type === 'every'
+          ? ({ type: 'every', minutes: Number(minutes) } as const)
+          : ({ type: 'cron', expression } as const);
+
+    createSchedule({ kind: kind.trim(), request: request.trim(), spec })
+      .then(() => {
+        setDone(kind.trim());
+        setRequest('');
+        setKind('');
+      })
+      .catch(setFailure)
+      .finally(() => setBusy(false));
+  }
+
+  return (
+    <Card className="mb-4">
+      <CardHeader
+        title="継続する依頼を仕込む"
+        subtitle="時刻が来れば必ず届く（記憶に書くだけでは、思い出せるかどうかの賭けになる）"
+      />
+      <div className="flex flex-col gap-2 px-4 py-3">
+        <Input
+          value={kind}
+          placeholder="kind（英小文字・数字・. _ -。例: morning-issues）"
+          onChange={(event) => setKind(event.target.value)}
+        />
+        <div className="flex flex-wrap items-center gap-2">
+          <Select
+            aria-label="周期"
+            value={type}
+            className="w-auto"
+            onChange={(event) => setType(event.target.value as 'daily' | 'every' | 'cron')}
+          >
+            <option value="daily">毎日この時刻</option>
+            <option value="every">この分数ごと</option>
+            <option value="cron">cron 式</option>
+          </Select>
+          {type === 'daily' && (
+            <Input
+              aria-label="時刻"
+              className="w-32"
+              value={at}
+              placeholder="HH:MM"
+              onChange={(event) => setAt(event.target.value)}
+            />
+          )}
+          {type === 'every' && (
+            <Input
+              aria-label="分"
+              className="w-24"
+              value={minutes}
+              inputMode="numeric"
+              onChange={(event) => setMinutes(event.target.value)}
+            />
+          )}
+          {type === 'cron' && (
+            <Input
+              aria-label="cron 式"
+              className="w-56 font-mono"
+              value={expression}
+              placeholder="0 10 * * 1"
+              onChange={(event) => setExpression(event.target.value)}
+            />
+          )}
+        </div>
+        <Textarea
+          rows={3}
+          value={request}
+          placeholder="依頼の本文（時刻が来たらそのままクローンへ渡る）"
+          onChange={(event) => setRequest(event.target.value)}
+        />
+        <div className="flex items-center gap-2">
+          <Button variant="primary" loading={busy} disabled={!ready} onClick={submit}>
+            仕込む
+          </Button>
+          {done !== undefined && (
+            <span className="font-mono text-[11px] text-muted">仕込んだ: {done}</span>
+          )}
+        </div>
+        <ErrorNote error={failure} />
+      </div>
+    </Card>
   );
 }
 
