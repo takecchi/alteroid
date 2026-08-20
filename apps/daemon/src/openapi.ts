@@ -218,6 +218,22 @@ const conversationMessageSchema = z.object({
 export const conversationDetailResponseSchema = z.object({
   conversationId: z.string(),
   messages: z.array(conversationMessageSchema),
+  /**
+   * 日誌を何件遡ったか。**一覧（`scanned`）と同じ意味で、詳細にも要る** — この口も
+   * 新しい方から `scan` 件しか見ないので、ここが無いと「この会話はこれで全部」と
+   * 読める応答になる。
+   */
+  scanned: z.number().int(),
+  /**
+   * 遡った窓が日誌の先頭に届いたか。**`messages` が空のときの意味がこれで変わる。**
+   *
+   * - `true` — ここに無いものは無い（`404` を返してよい状態）
+   * - `false` — **無いとは言えていない。** 窓の外に続きが残っている可能性がある
+   *
+   * 「無い」と「判定できない」を2値へ潰さないために持っている（潰すと、判定できない
+   * 場合が黙ってどちらかへ倒れる）。`scan` を増やせば窓は広がる。
+   */
+  reachedStart: z.boolean(),
 });
 
 // ---------------------------------------------------------------------------

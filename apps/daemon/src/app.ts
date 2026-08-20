@@ -922,10 +922,16 @@ export function createApp(deps: AppDeps) {
       describeRoute({
         tags: ['conversations'],
         summary: '1つの会話の中身（古い順）',
-        description: '1つの会話の中身（古い順）。器を替えても続きから話せるための口。',
+        description:
+          '1つの会話の中身（古い順）。器を替えても続きから話せるための口。' +
+          '**黙って打ち切らない** — `scanned` でどこまで遡ったか、`reachedStart` で' +
+          '窓が日誌の先頭に届いたかを返す。`404` は `reachedStart` が真のときだけ' +
+          '返る（「無い」と「遡り切れていない」を同じ応答にしないため）。',
         responses: {
           200: {
-            description: '会話の中身。',
+            description:
+              '会話の中身。`reachedStart` が偽なら、窓の外に続きが残っている可能性がある。' +
+              '`messages` が空でこれが偽の場合は「無い」ではなく**判定できない**。',
             content: {
               'application/json': { schema: resolver(conversationDetailResponseSchema) },
             },
@@ -935,7 +941,9 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
           },
           404: {
-            description: '該当する会話が無い（内部ターン `self` は含まれない）。',
+            description:
+              '該当する会話が無い（内部ターン `self` は含まれない）。**遡り切れた場合だけ** — ' +
+              '窓の外かもしれないときは 200 で `reachedStart: false` を返す。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
@@ -962,8 +970,31 @@ export function createApp(deps: AppDeps) {
             };
           });
 
-        if (messages.length === 0) return c.json({ error: 'not found' as const }, 404);
-        return c.json({ conversationId: id, messages });
+        /*
+         * **窓が日誌の先頭に届いたかを、返す件数から言う。**
+         *
+         * ストアは新しい順に最大 `limit` 件返すので、返ってきた数が頼んだ数に
+         * 届かなければ、それ以上は無い＝先頭まで見た、と言える。ちょうど同数の
+         * ときは**まだあるかもしれない**ので届いていない側へ倒す（安全側）。
+         * 全件がぴったり `scan` 件だった場合に「判定できない」と答えるのは、
+         * 実際には見切っているのに保守的に言いすぎるだけで、逆はやらない。
+         */
+        const reachedStart = entries.length < scan;
+
+        /*
+         * **「無い」と「遡り切れていない」を同じ応答にしない。**
+         *
+         * ここを一律 404 にしていたので、`scan` の窓より古い会話が「そんな会話は
+         * 無い」として返っていた。呼ぶ側から見ると、消えた会話と、まだ見ていない
+         * 会話が区別できない（判定できないことが出力から消えていた）。
+         *
+         * 遡り切れているなら「無い」と言ってよい。切れていないなら、空の結果に
+         * `reachedStart: false` を添えて返し、判定は呼ぶ側へ渡す。
+         */
+        if (messages.length === 0 && reachedStart) {
+          return c.json({ error: 'not found' as const }, 404);
+        }
+        return c.json({ conversationId: id, messages, scanned: entries.length, reachedStart });
       },
     )
 
