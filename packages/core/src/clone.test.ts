@@ -3596,4 +3596,59 @@ describe('クローン — 枠が回復した後の返信は、人間の側か�
 
     await clone.stop();
   });
+
+  /**
+   * 人間へ返す1行を、**枠のときとそれ以外で言い分けているか**。
+   *
+   * 人間の要望は「あとで良いのでちゃんと返信してほしい」である。だから会話に
+   * 残る1行は「待てば返る」と「もう返らない」を区別していなければならない —
+   * どちらも「失敗した」で済ませると、人間は待つべきかもう一度送るべきかを
+   * 会話から決められない（送り直すと、保持されている分と重複する）。
+   *
+   * **`#reportFailure` の分岐（`#usageBlocked === null`）に歯を当てるのが目的**
+   * なので、枠の場合と枠でない場合を1本の中で対にして見る（別々の it にすると、
+   * 片方だけが緑のまま「常に同じ文言を返す」実装を通してしまう）。
+   */
+  it('人間へ返す1行は、枠で保持しているときだけ「あとで試し直す」と言う', async () => {
+    /** 会話に残った、クローンからの1行（assistant の本文 `わかった` は除く）。 */
+    const noticesFor = async (stores: Stores) =>
+      (await stores.journal.list({ types: ['exchange'] }))
+        .filter(
+          (entry) =>
+            entry.type === 'exchange' &&
+            entry.with === 'human' &&
+            entry.role === 'outbound' &&
+            entry.conversationId === 'conv-1' &&
+            entry.text !== 'わかった',
+        )
+        .map((entry) => (entry.type === 'exchange' ? entry.text : ''));
+
+    // 枠に当たった場合。
+    const limited = setupBareClone({
+      resultFor: () => ({ subtype: 'error_during_execution', text: spendLimitMessage }),
+    });
+    limited.clone.post(humanMessage('一件目'));
+    await waitFor(async () => (await noticesFor(limited.stores)).length === 1, '枠の1行が残る');
+    const limitedNotice = (await noticesFor(limited.stores))[0] ?? '';
+    expect(limitedNotice).toContain('利用上限');
+    expect(limitedNotice).toContain('試し直');
+    // 生の文言（英語）は人間へ返す1行には載せない。
+    expect(limitedNotice).not.toContain(spendLimitMessage);
+    await limited.clone.stop();
+
+    // 枠ではない失敗の場合。**待てば返るとは言わない。**
+    const broken = setupBareClone({
+      resultFor: () => ({ subtype: 'error_during_execution', text: '内部で何かが壊れた' }),
+    });
+    broken.clone.post(humanMessage('一件目'));
+    await waitFor(
+      async () => (await noticesFor(broken.stores)).length === 1,
+      '枠でない失敗の1行が残る',
+    );
+    const brokenNotice = (await noticesFor(broken.stores))[0] ?? '';
+    expect(brokenNotice).toContain('返せなかった');
+    expect(brokenNotice).not.toContain('試し直');
+    expect(brokenNotice).not.toContain('内部で何かが壊れた');
+    await broken.clone.stop();
+  });
 });
