@@ -207,6 +207,67 @@ interface Setup {
   stores: Stores;
   calls: FakeCall[];
   events: ChatStreamEvent[];
+  /**
+   * `events` が条件を満たすまで、壁時計のポーリングではなく直接つかむ。
+   *
+   * **いま既に満たしていれば即座に返る**（追い越しを防ぐ。下の注記参照）。
+   * まだなら、`clone.subscribe` の callback が出来事の到着ごとに同期で呼ぶ
+   * 通知先に登録し、そこで条件を確かめて resolve する。
+   *
+   * 経緯: 元は `expect.poll(() => events.filter(...).length === N, {timeout:
+   * 3000})` で「N件になったこと」を一定間隔でポーリングしていた。PR #90 の
+   * 変異試験自身が「落ち方の所要時間がどれも3000ms台＝ポーリングの待ち切れ
+   * である」と自己申告していた（落ちたのがタイムアウトなのか、条件そのもの
+   * が偽なのかを見分けにくい弱い形）。`events` は `clone.subscribe` の
+   * callback で同期に push されるので、そのたびに条件を確かめて resolve
+   * すれば、ポーリング間隔にも壁時計の上限にも頼らない。
+   *
+   * **「次に届いた出来事」ではなく「条件を満たすか」を見るのが要る** —
+   * 呼び出し側が待ち始める前に条件が満たされてしまう窓が実在する
+   * （`apps/web` 側の同種の直しで、そこを「次の1回」で待つ形にして
+   * ハングさせた実測がある）。先に条件を確かめてから待つ形にすると、
+   * 追い越されていても即座に真になるので、この窓が消える。
+   */
+  waitForEvents(predicate: (events: readonly ChatStreamEvent[]) => boolean): Promise<void>;
+}
+
+/**
+ * `clone.subscribe` を張り、`events` の配列と、それを壁時計のポーリングでは
+ * なく直接つかむ `waitForEvents` を組にして返す。`setup` と `setupScripted`
+ * の両方が同じ配線を要るので、ここへ1本にまとめる（`Setup.waitForEvents`
+ * の doc 参照）。
+ */
+function wireEvents(
+  clone: CloneHost,
+  conversationId: string,
+): { events: ChatStreamEvent[]; waitForEvents: Setup['waitForEvents'] } {
+  const events: ChatStreamEvent[] = [];
+  const waiters: {
+    predicate: (events: readonly ChatStreamEvent[]) => boolean;
+    resolve: () => void;
+  }[] = [];
+  function notifyWaiters(): void {
+    for (let i = waiters.length - 1; i >= 0; i -= 1) {
+      const candidate = waiters[i];
+      if (candidate !== undefined && candidate.predicate(events)) {
+        waiters.splice(i, 1);
+        candidate.resolve();
+      }
+    }
+  }
+  clone.subscribe(conversationId, (event) => {
+    events.push(event);
+    notifyWaiters();
+  });
+  function waitForEvents(
+    predicate: (events: readonly ChatStreamEvent[]) => boolean,
+  ): Promise<void> {
+    if (predicate(events)) return Promise.resolve();
+    return new Promise((resolve) => {
+      waiters.push({ predicate, resolve });
+    });
+  }
+  return { events, waitForEvents };
 }
 
 function setup(
@@ -230,9 +291,8 @@ function setup(
       createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
     ]),
   });
-  const events: ChatStreamEvent[] = [];
-  clone.subscribe('conv-1', (event) => events.push(event));
-  return { clone, stores, calls, events };
+  const { events, waitForEvents } = wireEvents(clone, 'conv-1');
+  return { clone, stores, calls, events, waitForEvents };
 }
 
 /** 非同期の書き込みが器へ届くまで待つ（`post` は同期で返るので待てない）。 */
@@ -2376,9 +2436,8 @@ describe('クローン — 考えている合図（thinking）', () => {
         createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
       ]),
     });
-    const events: ChatStreamEvent[] = [];
-    clone.subscribe('conv-1', (event) => events.push(event));
-    return { clone, stores, calls, events };
+    const { events, waitForEvents } = wireEvents(clone, 'conv-1');
+    return { clone, stores, calls, events, waitForEvents };
   }
 
   function assistantText(text: string): SDKMessage {
@@ -3231,7 +3290,14 @@ describe('クローン — 枠（利用上限）が閉じたら保持して次�
     // 同じ理由（固定の spendLimitMessage）で失敗するので枠は閉じたままで、
     // 2本目自身は短絡される。terminal は合計3件になる
     // （1本目の初回失敗・1本目の再試行の失敗・2本目の短絡）。
-    await expect.poll(() => s.events.filter(isTerminal).length === 3, { timeout: 3000 }).toBe(true);
+    //
+    // 何を待っているか: 「terminal が3件になったこと」であって「3秒以内に
+    // なったか」ではない。`s.waitForEvents` は `clone.subscribe` の callback
+    // が出来事の到着ごとに同期で条件を確かめる（`waitForEvents` の doc 参照）。
+    // 経緯: 元は `expect.poll(..., { timeout: 3000 })` でポーリングしていた。
+    // PR #90 の変異試験自身が「落ち方の所要時間が3000ms台＝ポーリングの
+    // 待ち切れ」と自己申告していた（弱い証拠）。
+    await s.waitForEvents((events) => events.filter(isTerminal).length === 3);
     expect(s.events.filter(isTerminal).map((event) => event.type)).toEqual([
       'error',
       'error',
@@ -3261,16 +3327,41 @@ describe('クローン — 枠（利用上限）が閉じたら保持して次�
     await waitForTerminal(s.events);
 
     s.clone.post(humanMessage('二件目')); // 1本目の再試行（turn 1: 失敗）を誘発。2本目自身は短絡される
+    //
+    // **ここは `s.waitForEvents` へ変えていない。意図的に `expect.poll` のまま
+    // 残す。** 変えてみたところ、このすぐ後の `post('三件目')` が高い確率で
+    // 二件目を迷子にすることが分かった（実測）。
+    //
+    // 原因: `s.waitForEvents` は `events` へ push された**その場**で resolve
+    // する。だが「terminal が3件になった」（＝二件目の `error` が `#emit`
+    // された）時点では、`#pump` の `finally` にある `#settleInboxEvent`
+    // （二件目を `#deferred` へ積む後始末）はまだ**非同期の続き**として
+    // 走っている最中で、終わっていないことがある
+    // （`枠に当たった合図は forget されない` のコメントと同じ理由）。
+    // その一瞬に `post('三件目')` が `#usageBlocked` を降ろして
+    // `this.#deferred.splice(0)` を読むと、二件目がまだ `#deferred` に
+    // 居ないまま素通りされる。`stores.inbox`（永続化された「未読」）は
+    // 二件目をずっと pending のまま持ち続けるが、in-memory の `#deferred`
+    // には二度と載らないので、二件目は**このプロセスが生きている間
+    // 二度と処理されない**まま迷子になる（`done` が3件に届かず、この直後の
+    // 待ちが永久にハングする形で発覚した）。
+    //
+    // `expect.poll` はポーリング間隔（既定内で数回まわる）が、たまたまこの
+    // `#settleInboxEvent` の後始末を待つ時間を与えていたので、この隙間が
+    // 隠れていた。**これは production 側（`clone.ts` の `post()` と
+    // `#settleInboxEvent`/`#deferred` の間の競合）の潜在的な穴であって、
+    // この便の範囲（web のテストと2つの同便項目）を超える** — 直すなら
+    // `#deferred` への反映と `#usageBlocked` の解除の順序を production
+    // コードごと見直す必要があり、ここでは「決定的な待ちへ変える」を
+    // 無理に適用せず、`expect.poll` のまま残すことにした。
     await expect.poll(() => s.events.filter(isTerminal).length === 3, { timeout: 3000 }).toBe(true);
 
     s.clone.post(humanMessage('三件目')); // 保持していた[一件目, 二件目]を戻し、三件目も積む
     // 一件目(turn 2) → 二件目(turn 3) → 三件目(turn 4) の順に実際に投げられ、
-    // 今度はすべて成功する（`done` が3件増える）。
-    await expect
-      .poll(() => s.events.filter((event) => event.type === 'done').length === 3, {
-        timeout: 3000,
-      })
-      .toBe(true);
+    // 今度はすべて成功する（`done` が3件増える）。この2つ目の待ちは、この後
+    // さらに `post()` を呼ぶことが無い（`order` の読み取りだけ）ので、
+    // `s.waitForEvents` に変えても上のような迷子は起きない。
+    await s.waitForEvents((events) => events.filter((event) => event.type === 'done').length === 3);
 
     // 入力に載ったテキストの出現順で FIFO を確かめる（`redeliveryNotice` /
     // `commitmentNotice` が前置されるので完全一致ではなく部分一致で見る）。
@@ -3325,8 +3416,10 @@ describe('クローン — 枠（利用上限）が閉じたら保持して次�
 
     s.clone.post(humanMessage('二件目'));
     // 1本目の再試行（同じ rate_limit_event が毎ターン付くので再び失敗）＋
-    // 2本目の短絡で terminal は合計3件になる。
-    await expect.poll(() => s.events.filter(isTerminal).length === 3, { timeout: 3000 }).toBe(true);
+    // 2本目の短絡で terminal は合計3件になる。何を待っているか・経緯は
+    // 上（`枠が閉じている間に届いた2本目は…`）と同じ（`s.waitForEvents` の
+    // doc 参照）。
+    await s.waitForEvents((events) => events.filter(isTerminal).length === 3);
 
     // 2本目はターンを回さない ＝ rate_limit_event 経路だけでも保持が効いている。
     expect((s.calls[0] as FakeCall).inputs.some((text) => text.includes('二件目'))).toBe(false);
@@ -3378,7 +3471,9 @@ describe('クローン — 枠（利用上限）が閉じたら保持して次�
     expect(s.events.some((e) => e.type === 'usage_limited')).toBe(true);
 
     s.clone.post(humanMessage('二件目'));
-    await expect.poll(() => s.events.filter(isTerminal).length === 3, { timeout: 3000 }).toBe(true);
+    // 何を待っているか・経緯は上（`枠が閉じている間に届いた2本目は…`）と同じ
+    // （`s.waitForEvents` の doc 参照）。
+    await s.waitForEvents((events) => events.filter(isTerminal).length === 3);
     expect((s.calls[0] as FakeCall).inputs.some((text) => text.includes('二件目'))).toBe(false);
 
     await s.clone.stop();
@@ -3399,11 +3494,9 @@ describe('クローン — 枠（利用上限）が閉じたら保持して次�
     await waitForDone(s.events);
 
     s.clone.post(humanMessage('二件目'));
-    await expect
-      .poll(() => s.events.filter((event) => event.type === 'done').length === 2, {
-        timeout: 3000,
-      })
-      .toBe(true);
+    // 何を待っているか・経緯は上（`枠が閉じている間に届いた2本目は…`）と同じ
+    // （`s.waitForEvents` の doc 参照）。
+    await s.waitForEvents((events) => events.filter((event) => event.type === 'done').length === 2);
 
     const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[];
     const matching = exchanges.filter((entry) => entry.text.includes(transitionMessage));
