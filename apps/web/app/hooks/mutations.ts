@@ -143,7 +143,9 @@ export function useAnswerApprovals() {
   const { mutate } = useSWRConfig();
   return useCallback(
     async (answers: { id: string; answer: string }[]) => {
-      const { results } = await api.api.POST('/approvals/answer', { body: { answers } }).then(unwrap);
+      const { results } = await api.api
+        .POST('/approvals/answer', { body: { answers } })
+        .then(unwrap);
       await Promise.all([mutate(KEY.approvals(true)), mutate(KEY.approvals(false))]);
       return results;
     },

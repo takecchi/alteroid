@@ -48,7 +48,8 @@ export default function Approvals() {
   // 今読み込めている未回答の一覧に実在するものだけを対象にする。別経路で
   // 先に片付いた下書きを、まとめ送信の対象へ混ぜないため。
   const unansweredIds = useMemo(
-    () => new Set((data?.approvals ?? []).filter((approval) => !isAnswered(approval)).map((a) => a.id)),
+    () =>
+      new Set((data?.approvals ?? []).filter((approval) => !isAnswered(approval)).map((a) => a.id)),
     [data],
   );
   const pendingDrafts = Object.entries(drafts).filter(
@@ -60,9 +61,7 @@ export default function Approvals() {
     setBulkBusy(true);
     setBulkFailure(undefined);
     try {
-      const results = await answerApprovals(
-        pendingDrafts.map(([id, answer]) => ({ id, answer })),
-      );
+      const results = await answerApprovals(pendingDrafts.map(([id, answer]) => ({ id, answer })));
       const nextErrors: Record<string, string> = {};
       for (const result of results) {
         if (result.ok) {
