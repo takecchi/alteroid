@@ -1132,7 +1132,12 @@ describe('manager_transcript（生ログへ降りる）', () => {
   it('切ったことが呼び手に届く', async () => {
     const h = harness();
     await h.call('manager_start', { request: '調べて' });
-    h.setTranscript('mgr-1', 'x'.repeat(9_000));
+    const body = 'x'.repeat(9_000);
+    h.setTranscript('mgr-1', body);
+    // **`lastReport` にも同じ内容を置いておく。** この保証（切ったら黙らない）は
+    // 「本文がどこから来たか」（それは別の歯が守る）とは独立に測りたいので、
+    // 本文の出所を差し替える変異が紛れ込んでも実害が出ないようにしてある。
+    for (const summary of h.running) summary.lastReport = body;
 
     const reply = await h.call('manager_transcript', { managerId: 'mgr-1' });
 
@@ -1150,6 +1155,8 @@ describe('manager_transcript（生ログへ降りる）', () => {
     // なる（tail を黙らせる変異が offset のテストまで巻き込んで倒す）。
     const body = `${'a'.repeat(8_000)}TAIL-MARK`;
     h.setTranscript('mgr-1', body);
+    // 同じ理由で lastReport にも同じ内容を置く（上のテストのコメント参照）。
+    for (const summary of h.running) summary.lastReport = body;
 
     const first = await h.call('manager_transcript', { managerId: 'mgr-1' });
     expect(first).not.toContain('TAIL-MARK');
