@@ -3124,14 +3124,41 @@ describe('止めたマネージャーの後続イベント（R4）', () => {
    * 書かれないその変異のもとでタイムアウトし、**保証2は壊れていないのに
    * テストだけが落ちる**——保証1と保証2がまた1つに戻ってしまう。
    *
-   * **だから保証2のテストは日誌を見ずに待つ。** 固定の実時間（`setTimeout`）で
-   * fire-and-forget の完了を待つのは、この同じファイルの他の「これ以上増えない
-   * ことを確かめる」テスト（`totalCostUsd` 系の待ち）と同じ形である。ここで
-   * 増える／動くはずの値が無い（何も起きないことを確かめたい）ので、増える値を
-   * 待つ `expect.poll` は使えない。
+   * **元は固定の実時間（`setTimeout(resolve, 100)`）で fire-and-forget の
+   * 完了を待っていた。これに欠陥があった。** 器が混んでいる CI（runner は
+   * UTC・共有）では、100ms のうちに `#onEvent` の処理が終わらないことがある。
+   * そのとき「まだ処理されていない（inbox がまだ増えていないだけ）」を
+   * 「クローンへ回らなかった（保証2が成立している）」と読んでしまう——
+   * ガードを無効化する変異Aを当てても、処理が固定時間内に終わらなければ
+   * テストは黙って通る＝歯が消える（`AGENTS.md`「静かに失敗する道具」の
+   * 「失敗が成功として観測される」形そのもの）。
+   *
+   * **直し方は「日誌が書かれるまで、ただし上限つきで待つ」こと。** 正常時は
+   * 日誌にその文字列が現れた時点で待ちを終えるので速く、取りこぼしが無い。
+   * **上限まで現れなくても、この待ちのほうを失敗させない。** `#journal(...)`
+   * を壊す変異（保証1を壊す変異B）を当てたときは、日誌には最後まで何も
+   * 書かれないので、この待ちは上限まで律儀に待ってから黙って抜ける。その
+   * 結果、保証2のテストは（日誌の中身を見ずに）inbox / status のアサーション
+   * まで進み、変異Bのもとでも通る——落ちる集合が保証1側とちょうど分かれた
+   * ままになる。**この「上限で抜けても失敗させない」という一見奇妙な仕様
+   * こそが、保証1と保証2の分離を保つ本体である。** 次に読む者がここへ
+   * `expect`（「タイムアウトしたら失敗させたい」という自然な直感）を足すと、
+   * その分離がまた壊れる——足したくなったら、まずこのコメントとセットで
+   * `journalHas` との役割の違いを読み直すこと。
    */
-  async function settle() {
-    await new Promise((resolve) => setTimeout(resolve, 100));
+  async function settleAfterJournal(
+    s: Setup,
+    needle: string,
+    types: JournalEntry['type'][],
+    timeoutMs = 500,
+  ) {
+    const start = Date.now();
+    for (;;) {
+      const entries = await s.stores.journal.list({ types });
+      if (entries.some((entry) => JSON.stringify(entry).includes(needle))) return;
+      if (Date.now() - start >= timeoutMs) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
   }
 
   /**
@@ -3167,7 +3194,7 @@ describe('止めたマネージャーの後続イベント（R4）', () => {
     const postedBefore = s.inbox.length;
 
     fake.report(job.id, '止めたはずなのに報告してきた', 'done');
-    await settle();
+    await settleAfterJournal(s, '止めたはずなのに報告してきた', ['exchange']);
 
     // クローンの受信箱（inbox）へは1件も増えていない。
     expect(s.inbox.length).toBe(postedBefore);
@@ -3194,7 +3221,7 @@ describe('止めたマネージャーの後続イベント（R4）', () => {
     const postedBefore = s.inbox.length;
 
     fake.ask(job.id, 'req-after-stop', '止めたはずなのに確認を求めてきた');
-    await settle();
+    await settleAfterJournal(s, '止めたはずなのに確認を求めてきた', ['escalation']);
 
     expect(s.inbox.length).toBe(postedBefore);
     const listed = (await s.pool.list()).find((m) => m.managerId === job.id);
