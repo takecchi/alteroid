@@ -32,6 +32,7 @@ import {
 } from './permission-mode.js';
 import type { ProfileApplier } from './profile.js';
 import type { ProfileService } from './profile-service.js';
+import { createRecentMap } from './recent.js';
 import type { RunnerRegistry } from './runner-protocol.js';
 import {
   buildCloneSystemPrompt,
@@ -190,6 +191,15 @@ const EXTERNAL_PAYLOAD_LIMIT = 8_000;
  */
 const UNKNOWN_TOOL_NAME = '(不明な道具)';
 const UNKNOWN_AGENT_TYPE = '(不明)';
+
+/**
+ * 二重書き込み防止のために覚えておく拒否 `tool_use_id` の件数。
+ *
+ * `runner.ts` の `DENIED_MEMORY_LIMIT`（同じ役目・同じ値）に揃える。長く走る
+ * セッションでメモリが伸び続けないための蓋であって、回数制限ではない
+ * （AGENTS.md 地雷2）。溢れたら `#deniedToolUses` の `onForget` が日誌へ残す。
+ */
+const DENIED_TOOL_USE_MEMORY_LIMIT = 512;
 
 /**
  * 継続中の依頼の器に触るときの試行回数と間隔（読み取りと発火の記録の両方）。
@@ -410,8 +420,28 @@ class Clone implements CloneHost {
    *
    * 生の合図と `result` の記録は同じ1件を2回運んでくるので、ここで畳む。
    * **器を作り直せば消える**（＝件数の集計には使えない。集計は日誌が持つ）。
+   *
+   * 無制限には覚えない（長く走る1本のセッションでメモリが伸び続ける）。
+   * `runner.ts` の `#denied`（同じ役目 — 二重書き込み防止の id 帳面）と同じく
+   * `createRecentMap` に揃える。**上限に達したら黙って忘れない** — 忘れた id が
+   * `result.permission_denials` にもう一度載れば、同じ拒否がもう一度日誌へ載る
+   * （`runner.ts` の `#denied` の `onForget` が明示している代償と同じ形）。
    */
-  readonly #deniedToolUses = new Set<string>();
+  readonly #deniedToolUses = createRecentMap<true>({
+    limit: DENIED_TOOL_USE_MEMORY_LIMIT,
+    onForget: (ids) => {
+      void this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'inbound',
+        text:
+          `二重書き込み防止のために覚えている拒否の記憶が上限` +
+          `（${DENIED_TOOL_USE_MEMORY_LIMIT}件）に達したので、古い ${ids.length} 件を忘れた: ` +
+          `${ids.join(', ')}。この tool_use_id の拒否が生の合図と result の両方から` +
+          '再び届くと、同じ拒否がもう一度日誌に載る。',
+      });
+    },
+  });
   /** `#buildOptions` で組み立てたシステムプロンプトの文字数。セッションの間は固定。 */
   #systemPromptChars = 0;
   /**
@@ -2357,7 +2387,7 @@ class Clone implements CloneHost {
         ? denial.tool_use_id
         : `${tool}:${via}`;
     if (this.#deniedToolUses.has(toolUseId)) return;
-    this.#deniedToolUses.add(toolUseId);
+    this.#deniedToolUses.set(toolUseId, true);
 
     const why = typeof denial?.decision_reason === 'string' ? `（${denial.decision_reason}）` : '';
     await this.#journal({
