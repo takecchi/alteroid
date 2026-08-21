@@ -28,7 +28,7 @@
  * `session.push()` で返る — **マネージャーのターンを待つ口は1つも無い。**
  * handler の中で待つのは高々2つで、どちらも runner 側で期限が付いている:
  * プロファイルの評価（`@alteroid/core` の `PROFILE_EVAL_TIMEOUT_MS`）と、`stop` の枠の書き出し。
- * ここはその両方を大きく上回る側に置く（`deadline.test.ts` が関係を検査する）。
+ * ここはその両方を大きく上回る側に置く（`runner-deadline.test.ts` が関係を検査する）。
  *
  * 名簿は30秒黙った器を既に「落ちた」と見なしているので、その2倍を待って
  * なお返らないなら、それは「遅い」ではなく「返っていない」である。
@@ -99,18 +99,27 @@ export async function settleWithinDeadline<T>(
   onLateSettle?: LateSettleListener<T>,
 ): Promise<Settled<T>> {
   let expired = false;
+  /**
+   * 応答が返った瞬間に埋まる。**「まだ返っていない」を await 越しに推測しない**
+   * ためにある — 推測すると、期限と応答が同じ回で揃ったときに**両方**が起きる
+   * （呼ぶ側へ応答を渡しつつ「遅れて返った」とも言う）。HTTP ではそれが本文の
+   * 二重読みになる（受け口が読み捨てた本文を、呼ぶ側がもう一度読もうとする）。
+   */
+  let arrived: Settled<T> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   // **先に「遅れて返ってきたとき」の受け口を繋いでおく。** 期限側が勝ったあとに
   // 繋ぐと、その間に返った1件を落とす。
   const watched = promise.then(
     (value): Settled<T> => {
+      arrived = { outcome: 'settled', value };
       if (expired) onLateSettle?.({ ok: true, value });
-      return { outcome: 'settled', value };
+      return arrived;
     },
     (error): Settled<T> => {
+      arrived = { outcome: 'failed', error };
       if (expired) onLateSettle?.({ ok: false, error });
-      return { outcome: 'failed', error };
+      return arrived;
     },
   );
 
@@ -122,11 +131,16 @@ export async function settleWithinDeadline<T>(
 
   try {
     const result = await Promise.race([watched, expiry]);
+    if (result.outcome !== 'unknown') return result;
     // **「不明」を先に主張しない。** タイマーと応答が同じ回で揃ったときに、
     // 返っていた応答を捨てて「不明」と言うのが、この計器がいちばん嘘をつく形である。
-    if (result.outcome !== 'unknown') return result;
+    if (arrived !== undefined) return arrived;
+    // **ここから下に await を挟まないこと。** 挟むと「返っていない」を確かめた
+    // 後・印を付ける前に応答が返れる隙ができ、呼ぶ側へ応答を渡しながら
+    // 「遅れて返った」とも言う（＝本文が二重に読まれる）。単一スレッドの
+    // 直列実行そのものが、この隙が無いことの根拠である。
     expired = true;
-    return await Promise.race([watched, Promise.resolve(result)]);
+    return result;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
