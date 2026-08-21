@@ -319,11 +319,11 @@ describe('クローンが記憶を根拠に、人間を経由せず答える経�
     });
 
     // --- ① ask_human を経由していない証拠: 承認待ちキューが1件も増えていない ---
+    // 承認待ちキュー（jobs.putApproval）へ積むのは `ask_human` だけである。
+    // `escalation` 型の日誌は `manager.ts` が ask/answer のたびに機械的に書く
+    // （どちらの経路でも書かれるので、ここでは経路の判定材料にしない）。
     const approvals = await stores.jobs.listApprovals({ pendingOnly: true });
     expect(approvals).toHaveLength(0);
-    // ask_human が書く日誌の型（escalation）も1件も無い。
-    const escalations = await stores.journal.list({ types: ['escalation'] });
-    expect(escalations).toHaveLength(0);
 
     // --- ② 判断が journal_write で日誌（decision）に残っている ---------------
     const decisions = (await stores.journal.list({ types: ['decision'] })) as {
