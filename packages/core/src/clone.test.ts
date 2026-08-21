@@ -1299,12 +1299,22 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
 
   /**
    * `setup` と同じ配線（本物の SDK やマネージャーを誤って起こさない）だが、
-   * `queryFn` を `fakeGatedSdk` に差し替え、`mcpServerFactory` で本物の
-   * `ToolContext` を控える（`setupCapturing` と同じ形）。
+   * `queryFn` を `fakeGatedSdk` に差し替え、`mcpServerFactory` の中で
+   * **本物の配線と同じタイミングで一度だけ** `createCloneTools` を呼んで
+   * 道具の配列を控える。
+   *
+   * **`callTool` のたびに `createCloneTools` を呼び直さないこと。** 本番では
+   * `createCloneTools` はセッションを組むとき（`mcpServerFactory` 呼び出し時）
+   * に一度だけ呼ばれ、以後のターンはすべて同じ道具の配列を使い回す
+   * （`createCloneMcpServer` の中）。呼び直す形でテストを書くと、
+   * 「`createCloneTools` の呼び出し時に1回だけ評価する」変異
+   * （`memoryCause` をハンドラの外で先に確定させる形）と「道具の実行時に
+   * 毎回評価する」正しい実装が、テストからは区別できなくなる — 呼び直す
+   * たびに変異後のコードも新しく評価し直されてしまうため。
    */
   function setupGated() {
     const { fn, calls, release } = fakeGatedSdk();
-    let captured: ToolContext | undefined;
+    let tools: ReturnType<typeof createCloneTools> | undefined;
     const stores = createMemoryStores();
     const clone = createClone({
       stores,
@@ -1314,7 +1324,7 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
         createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
       ]),
       mcpServerFactory: (context) => {
-        captured = context;
+        tools = createCloneTools(context);
         return createCloneMcpServer(context);
       },
     });
@@ -1326,20 +1336,20 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
       events,
       waitForEvents,
       release,
-      context(): ToolContext {
-        if (captured === undefined) throw new Error('ToolContext がまだ捕まっていない');
-        return captured;
+      tools(): ReturnType<typeof createCloneTools> {
+        if (tools === undefined) throw new Error('道具の配列がまだ作られていない');
+        return tools;
       },
     };
   }
 
-  /** 控えた context から道具を1本取り出し、ハンドラを直接呼ぶ。 */
+  /** 控えた道具の配列から1本取り出し、ハンドラを直接呼ぶ。 */
   async function callTool(
-    context: ToolContext,
+    tools: ReturnType<typeof createCloneTools>,
     name: string,
     args: Record<string, unknown>,
   ): Promise<void> {
-    const found = createCloneTools(context).find((entry) => entry.name === name);
+    const found = tools.find((entry) => entry.name === name);
     if (!found) throw new Error(`${name} という道具が無い`);
     await found.handler(args as never, {} as never);
   }
@@ -1361,7 +1371,7 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
     // 見分け方は文面（`buildDistillPrompt` が書く固定の呼びかけ）。
     expect(s.calls[0]?.inputs[1]).toContain('記憶へ移すべきものがあるか確認せよ');
 
-    await callTool(s.context(), 'memory_write', {
+    await callTool(s.tools(), 'memory_write', {
       slug: 'values',
       content: '# 価値観\n\n蒸留が書いた\n',
       summary: '蒸留の書き込みテスト（T1）',
@@ -1384,7 +1394,7 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
     s.clone.post(humanMessage('やあ'));
     await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '通常ターンの入力');
 
-    await callTool(s.context(), 'memory_write', {
+    await callTool(s.tools(), 'memory_write', {
       slug: 'values',
       content: '# 価値観\n\n通常ターンが書いた\n',
       summary: '通常ターンの書き込みテスト（T2）',
@@ -1407,7 +1417,10 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
 
   it('T3: pre_compact のサイドクエリが書いた記憶は cause: distill になる', async () => {
     const { fn, calls } = fakeSdk();
-    const contexts: ToolContext[] = [];
+    // **ここも `mcpServerFactory` の呼び出し時に一度だけ `createCloneTools` を
+    // 呼ぶ**（`setupGated` の doc と同じ理由。本セッションとサイドクエリで
+    // それぞれ1回ずつ呼ばれるので、道具の配列も2本控わる）。
+    const toolsLists: ReturnType<typeof createCloneTools>[] = [];
     const stores = createMemoryStores();
     const clone = createClone({
       stores,
@@ -1417,7 +1430,7 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
         createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
       ]),
       mcpServerFactory: (context) => {
-        contexts.push(context);
+        toolsLists.push(createCloneTools(context));
         return createCloneMcpServer(context);
       },
     });
@@ -1444,11 +1457,11 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
 
     // `mcpServerFactory` は本セッションの初期化で1回、サイドクエリでもう1回呼ばれる。
     // **サイドクエリで控えた側（2回目）を使う**（依頼書の指示どおり）。
-    expect(contexts.length).toBe(2);
-    const sideContext = contexts[1];
-    if (sideContext === undefined) throw new Error('サイドクエリの context が控えられていない');
+    expect(toolsLists.length).toBe(2);
+    const sideTools = toolsLists[1];
+    if (sideTools === undefined) throw new Error('サイドクエリの道具の配列が控えられていない');
 
-    await callTool(sideContext, 'memory_write', {
+    await callTool(sideTools, 'memory_write', {
       slug: 'values',
       content: '# 価値観\n\nサイドクエリが書いた\n',
       summary: 'サイドクエリの書き込みテスト（T3）',
@@ -1471,7 +1484,7 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
     const endPromise = s.clone.endConversation('conv-1');
     await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 2, '蒸留ターンの入力');
 
-    await callTool(s.context(), 'memory_append', {
+    await callTool(s.tools(), 'memory_append', {
       slug: 'values',
       content: '追記した学び\n',
       summary: '蒸留の追記テスト（T4）',
