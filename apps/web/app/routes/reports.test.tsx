@@ -238,6 +238,52 @@ describe('日報', () => {
     expect(screen.queryByText(/作れなかった/)).toBeNull();
   });
 
+  /**
+   * **並びはデーモンが持つ。この画面では並べ直さない。**
+   *
+   * 人間の申告は「日報の並び順が変。上が新しくて下が古くなるべき」だった。原因は
+   * 日誌の並び（書いた順）が素通しされていたことで、直したのは
+   * `apps/daemon/src/reports.ts`（日付の新しい順）である。**ここで並べ直すと
+   * 「最新の日報」が CLI・クローンとこの画面で食い違う。**
+   *
+   * だからこのテストは**古い順の応答**（`date` も `at` も昇順）を与え、画面が
+   * それをそのまま描くことを見る。**期待値が「古い順」なのは意図である** —
+   * 日付でも書いた時刻でも並べ直した瞬間にここが落ちる（どちらか片方の昇順に
+   * しておくと、もう片方で並べ直す実装を取り逃す）。落ちたときに直す先は
+   * この画面ではなく、デーモンの並びである。
+   */
+  it('一覧はデーモンが返した順のまま描く（画面で並べ直さない）', async () => {
+    stubFetch((url) => {
+      const reports = [
+        {
+          type: 'daily_report',
+          id: 'r-old',
+          at: '2026-08-19T22:00:00.000Z',
+          date: '2026-08-19',
+          body: '古い日付',
+        },
+        {
+          type: 'daily_report',
+          id: 'r-new',
+          at: '2026-08-21T22:00:00.000Z',
+          date: '2026-08-21',
+          body: '新しい日付',
+        },
+      ];
+      if (url.includes('/reports')) return json({ reports });
+      return undefined;
+    });
+
+    renderReports();
+
+    await screen.findByText('2026-08-19 07:00');
+    const order = screen
+      .getAllByRole('link')
+      .map((link) => link.getAttribute('href'))
+      .filter((href): href is string => href !== null && href.startsWith('/reports/'));
+    expect(order).toEqual(['/reports/2026-08-19/r-old', '/reports/2026-08-21/r-new']);
+  });
+
   /*
     ここから3本、b69dca5（「日報の一覧を日時で1件ずつ並べ、選んだ1件だけを出す」）
     が直した「同じ日に複数あると見分けが付かず、選んでも2件同時に開く」を

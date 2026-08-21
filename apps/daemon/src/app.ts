@@ -86,6 +86,7 @@ import {
   scheduleListResponseSchema,
   validationErrorResponseSchema,
 } from './openapi.js';
+import { compareDailyReportsNewestFirst, listDailyReports } from './reports.js';
 
 /**
  * HTTP API（hono）。CLI も外部アプリもここを叩く。
@@ -1301,10 +1302,11 @@ export function createApp(deps: AppDeps) {
       describeRoute({
         tags: ['reports'],
         summary: '日報の一覧',
-        description: '日報（可観測性の最上段）を新しい順に読む。',
+        description:
+          '日報（可観測性の最上段）を**日付の新しい順**に読む（同じ日に複数あれば書いた時刻の新しい方が先）。日誌の並び（書いた順）とは一致しない — 遡り生成では前の日ぶんの日報が今日書かれる（`reports.ts`）。',
         responses: {
           200: {
-            description: '日報の一覧（新しい順）。',
+            description: '日報の一覧（日付の新しい順）。',
             content: { 'application/json': { schema: resolver(reportsResponseSchema) } },
           },
           400: {
@@ -1315,11 +1317,11 @@ export function createApp(deps: AppDeps) {
       }),
       validator('query', reportsQuery),
       async (c) => {
-        const entries = await stores.journal.list({
-          types: ['daily_report'],
-          limit: c.req.valid('query').limit,
-        });
-        return c.json({ reports: entries.filter(isDailyReport) });
+        // **並べ直しはここが持つ**（`reports.ts`）。日誌の並びは書いた順なので、
+        // そのまま返すと遡り生成の日報が新しい日の上に来る。画面や CLI の側で
+        // 並べ直すと「最新の日報」が口ごとに食い違う。
+        const reports = await listDailyReports(stores.journal, c.req.valid('query').limit);
+        return c.json({ reports });
       },
     )
 
@@ -1353,7 +1355,13 @@ export function createApp(deps: AppDeps) {
           types: ['daily_report'],
           since: range.since.toISOString(),
         });
-        const reports = entries.filter(isDailyReport).filter((entry) => entry.date === date);
+        // 同じ日に複数あるとき（締めと遡り生成）は書いた時刻の新しい方を先に出す。
+        // 日誌の並びが既にそうなっているが、**一覧（`/reports`）と同じ比較で並べる** —
+        // 画面は「その日の先頭」を既定で開くので、口ごとに違うと開くものが変わる。
+        const reports = entries
+          .filter(isDailyReport)
+          .filter((entry) => entry.date === date)
+          .sort(compareDailyReportsNewestFirst);
         if (reports.length === 0) return c.json({ error: 'not found' as const }, 404);
         return c.json({ reports });
       },

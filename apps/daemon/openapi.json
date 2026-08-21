@@ -2519,10 +2519,10 @@
         "operationId": "getReports",
         "tags": ["reports"],
         "summary": "日報の一覧",
-        "description": "日報（可観測性の最上段）を新しい順に読む。",
+        "description": "日報（可観測性の最上段）を**日付の新しい順**に読む（同じ日に複数あれば書いた時刻の新しい方が先）。日誌の並び（書いた順）とは一致しない — 遡り生成では前の日ぶんの日報が今日書かれる（`reports.ts`）。",
         "responses": {
           "200": {
-            "description": "日報の一覧（新しい順）。",
+            "description": "日報の一覧（日付の新しい順）。",
             "content": {
               "application/json": {
                 "schema": {
