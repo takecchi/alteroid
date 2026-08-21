@@ -298,6 +298,16 @@ describe('HTTP API', () => {
     expect(entries[0]).toMatchObject({ cause: 'human', slug: 'values' });
   });
 
+  it('人間の書き換え（PUT）にも action: "write" が構造として載る', async () => {
+    await app.request('/memory/values', {
+      ...json({ content: '本文' }),
+      method: 'PUT',
+    });
+
+    const entries = await stores.journal.list({ types: ['memory_update'] });
+    expect(entries[0]).toMatchObject({ action: 'write' });
+  });
+
   it('存在しない記憶は 404', async () => {
     expect((await app.request('/memory/nope')).status).toBe(404);
   });
@@ -1542,6 +1552,15 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     expect(await stores.persona.read('habits')).toBeNull();
     const journal = await stores.journal.list({ types: ['memory_update'] });
     expect(journal[0]).toMatchObject({ slug: 'habits', cause: 'human' });
+  });
+
+  it('人間の口（DELETE /memory/:slug）にも action: "remove" が構造として載る', async () => {
+    await stores.persona.write('habits', '朝は不機嫌');
+
+    await app.request('/memory/habits', { method: 'DELETE' });
+
+    const journal = await stores.journal.list({ types: ['memory_update'] });
+    expect(journal[0]).toMatchObject({ action: 'remove' });
   });
 
   it('無い記憶を消しても、消えたことにしない', async () => {

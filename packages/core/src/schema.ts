@@ -197,6 +197,17 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     slug: memorySlugSchema,
     /** 蒸留・人間の直接編集・クローンの書き込みのどれか */
     cause: z.enum(['distill', 'clone', 'human']),
+    /**
+     * 「書いた」か「消した」かの機械可読な区別。
+     *
+     * **`optional` にしてあるのは、既存の日誌エントリを1件も壊さないため。**
+     * これが無いエントリは「この区別が導入される前の古いエントリ」を意味する
+     * （PR #144 と同じ形 — 機械可読な面が持たない区別を自由文の `summary` だけに
+     * 持たせると、日誌を辿って「消した記録」を数えたい側が文言に一致させる
+     * しかなくなる）。**`summary` の自由文は削らない**（人が読む説明を減らす
+     * ことと機械可読な区別を足すことは別である）。
+     */
+    action: z.enum(['write', 'append', 'remove']).optional(),
     summary: z.string(),
   }),
   z.object({

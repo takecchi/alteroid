@@ -155,7 +155,11 @@ export function journalEntryShape(entry: JournalEntryInput): string {
     case 'tool_use':
       return `tool_use actor=${tag(entry.actor)} tool=${tag(entry.tool)}`;
     case 'memory_update':
-      return `memory_update slug=${tag(entry.slug)} cause=${tag(entry.cause)} ${size(entry.summary)}`;
+      return (
+        `memory_update slug=${tag(entry.slug)} cause=${tag(entry.cause)}` +
+        (entry.action === undefined ? '' : ` action=${tag(entry.action)}`) +
+        ` ${size(entry.summary)}`
+      );
     case 'daily_report':
       return `daily_report date=${tag(entry.date)} ${size(entry.body)}`;
     // `source` は外から来る値なので、名前であっても長さだけにする（上の doc 参照）。

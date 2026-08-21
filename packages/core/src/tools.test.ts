@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { ManagerDenial, ManagerPool, ManagerSummary, RunnerFleetOverview } from './manager.js';
 import { renderMemoryDocuments } from './memory.js';
 import { createProfileService } from './profile-service.js';
-import type { ChatStreamEvent } from './schema.js';
+import { journalEntrySchema, type ChatStreamEvent } from './schema.js';
 import type { CloneRuntimeFacts } from './self.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
@@ -45,6 +45,11 @@ interface Harness {
   setAutoRunnerId(runnerId: string | undefined): void;
   /** `runner_list` が読む `ManagerPool.runners()` の返り値を差し替える。 */
   setRunnersOverview(overview: RunnerFleetOverview): void;
+  /**
+   * `manager_transcript` が読む `ManagerPool.transcript()` の返り値を差し替える。
+   * 設定しなければ既定で `null`（3段のどこにも無い、を模している）。
+   */
+  setTranscript(managerId: string, body: string | null): void;
   /** `runners()` に渡された引数（`fingerprints` を渡したかどうかの検査用）。 */
   runnersCalls: { fingerprints?: boolean }[];
   call(name: string, args: Record<string, unknown>): Promise<string>;
@@ -65,6 +70,7 @@ function harness(runtime?: () => CloneRuntimeFacts): Harness {
   let autoRunnerId: string | undefined = 'runner-test';
   let runnersOverview: RunnerFleetOverview = { runners: [], unassigned: [] };
   const runnersCalls: { fingerprints?: boolean }[] = [];
+  const transcripts = new Map<string, string>();
 
   const managers: ManagerPool = {
     async start(input) {
@@ -100,8 +106,8 @@ function harness(runtime?: () => CloneRuntimeFacts): Harness {
     denials(managerId: string) {
       return denied.get(managerId) ?? [];
     },
-    async transcript() {
-      return null;
+    async transcript(managerId: string) {
+      return transcripts.get(managerId) ?? null;
     },
     async restore() {
       return [];
@@ -192,6 +198,10 @@ function harness(runtime?: () => CloneRuntimeFacts): Harness {
     setRunnersOverview(overview) {
       runnersOverview = overview;
     },
+    setTranscript(managerId, body) {
+      if (body === null) transcripts.delete(managerId);
+      else transcripts.set(managerId, body);
+    },
     runnersCalls,
     async call(name, args) {
       const found = tools.find((entry) => entry.name === name);
@@ -222,6 +232,15 @@ describe('クローンの道具', () => {
     expect((await h.stores.persona.read('values'))?.content).toContain('速さより正しさ');
     const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
     expect(entry).toMatchObject({ type: 'memory_update', slug: 'values', cause: 'clone' });
+  });
+
+  it('memory_write の日誌には action: "write" が構造として載る（文言だけに頼らない）', async () => {
+    const h = harness();
+
+    await h.call('memory_write', { slug: 'values', content: '本文', summary: '書いた' });
+
+    const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
+    expect(entry).toMatchObject({ action: 'write' });
   });
 
   /**
@@ -450,6 +469,77 @@ describe('クローンの道具', () => {
     const content = (await h.stores.persona.read('values'))?.content ?? '';
     expect(content).toContain('人間が手で書いた');
     expect(content).toContain('クローンが足した学び');
+  });
+
+  it('memory_append の日誌には action: "append" が構造として載る', async () => {
+    const h = harness();
+
+    await h.call('memory_append', { slug: 'values', content: '追記', summary: '追記した' });
+
+    const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
+    expect(entry).toMatchObject({ action: 'append' });
+  });
+
+  /**
+   * `memory_delete` — 記憶の文書ごと消す口。
+   *
+   * `schedule_remove` は在るのに削除だけが欠けていた非対称を塞ぐ
+   * （north_star 禁止1）。保証ごとに `it()` を割る。
+   */
+  describe('memory_delete（記憶の文書を消す）', () => {
+    it('文書ごと消える（memory_list から消える。本文が空になるだけではない）', async () => {
+      const h = harness();
+      await h.stores.persona.write('temp-note', '# 一時的なメモ\n\n本文');
+
+      await h.call('memory_delete', { slug: 'temp-note', summary: 'もう要らない' });
+
+      expect(await h.stores.persona.read('temp-note')).toBeNull();
+      const list = await h.stores.persona.list();
+      expect(list.some((doc) => doc.slug === 'temp-note')).toBe(false);
+    });
+
+    it('存在しないスラッグは黙って成功しない', async () => {
+      const h = harness();
+
+      const reply = await h.call('memory_delete', { slug: 'nope', summary: '消したつもり' });
+
+      expect(reply).toContain('存在しない');
+      // 消したつもりで何も消えていない、を作らない — 何も変わっていないと言い切る。
+      expect(reply).toMatch(/消えない|変わっていない/);
+    });
+
+    it('削除が日誌に残る（slug と消す直前の文字数）', async () => {
+      const h = harness();
+      const body = '# メモ\n\n' + 'あ'.repeat(42);
+      await h.stores.persona.write('temp-note', body);
+
+      await h.call('memory_delete', { slug: 'temp-note', summary: '片付け' });
+
+      const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
+      expect(entry).toMatchObject({ type: 'memory_update', slug: 'temp-note' });
+      expect((entry as { summary: string }).summary).toContain(String(body.length));
+    });
+
+    it('削除の日誌に本文が写っていない', async () => {
+      const h = harness();
+      const secretBody = '# メモ\n\n他人に見せたくない値: SECRET-XYZ-999';
+      await h.stores.persona.write('temp-note', secretBody);
+
+      await h.call('memory_delete', { slug: 'temp-note', summary: '片付け' });
+
+      const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
+      expect((entry as { summary: string }).summary).not.toContain('SECRET-XYZ-999');
+    });
+
+    it('action: "remove" が構造として載る（文言だけに頼らない）', async () => {
+      const h = harness();
+      await h.stores.persona.write('temp-note', '本文');
+
+      await h.call('memory_delete', { slug: 'temp-note', summary: '片付け' });
+
+      const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
+      expect(entry).toMatchObject({ action: 'remove' });
+    });
   });
 
   it('journal_write は判断を日誌に残す（聞かずに実行した判断の記録）', async () => {
@@ -1015,6 +1105,91 @@ describe('manager_list は件数が増えても壊れない', () => {
     const reply = await h.call('manager_report', { managerId: 'mgr-999' });
 
     expect(reply).toContain('mgr-999');
+  });
+});
+
+/**
+ * `manager_transcript` — 可観測性の最下段（セッションそのものの生ログ）。
+ *
+ * **`manager_report` に `part: 'transcript'` を足す形にしなかった理由**は
+ * 実装側のコメントに書いた（`null` の意味が違う・大きさの桁が違う・契約が
+ * 2つになる）。ここではその実物を保証ごとに1本ずつ確かめる。
+ */
+describe('manager_transcript（生ログへ降りる）', () => {
+  it('生ログの全文へ降りられる（lastReport の抜粋ではなく transcript() の中身が返る）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    for (const summary of h.running)
+      summary.lastReport = '要約された最終報告（これは生ログではない）';
+    h.setTranscript('mgr-1', '{"type":"user","text":"生ログにしか無い中身"}');
+
+    const reply = await h.call('manager_transcript', { managerId: 'mgr-1' });
+
+    expect(reply).toContain('生ログにしか無い中身');
+    expect(reply).not.toContain('要約された最終報告');
+  });
+
+  it('切ったことが呼び手に届く', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    const body = 'x'.repeat(9_000);
+    h.setTranscript('mgr-1', body);
+    // **`lastReport` にも同じ内容を置いておく。** この保証（切ったら黙らない）は
+    // 「本文がどこから来たか」（それは別の歯が守る）とは独立に測りたいので、
+    // 本文の出所を差し替える変異が紛れ込んでも実害が出ないようにしてある。
+    for (const summary of h.running) summary.lastReport = body;
+
+    const reply = await h.call('manager_transcript', { managerId: 'mgr-1' });
+
+    expect(reply).toMatch(/省略|文字目/);
+    expect(reply).toContain('ここで切れている');
+    expect(reply).toContain('offset');
+  });
+
+  it('offset で続きが取れる', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    // **`offset` の指定は 8,000（`TRANSCRIPT_PAGE`）を直接使う。** 前の応答の
+    // 「続きの取り方」の文言から offset を抜き出す形にすると、この保証が
+    // tail の文言（テスト2が守る対象）に依存してしまい、2つの歯が分離しなく
+    // なる（tail を黙らせる変異が offset のテストまで巻き込んで倒す）。
+    const body = `${'a'.repeat(8_000)}TAIL-MARK`;
+    h.setTranscript('mgr-1', body);
+    // 同じ理由で lastReport にも同じ内容を置く（上のテストのコメント参照）。
+    for (const summary of h.running) summary.lastReport = body;
+
+    const first = await h.call('manager_transcript', { managerId: 'mgr-1' });
+    expect(first).not.toContain('TAIL-MARK');
+
+    const second = await h.call('manager_transcript', {
+      managerId: 'mgr-1',
+      offset: 8_000,
+    });
+    expect(second).toContain('TAIL-MARK');
+  });
+
+  it('3段のどこにも無いとき「無い」と言う（黙って空を返さない）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    // setTranscript しない＝走行中の runner・退避済みアーカイブ・預かった
+    // セッションの生ログ、3段のどこにも無い状態を模す。
+
+    const reply = await h.call('manager_transcript', { managerId: 'mgr-1' });
+
+    expect(reply.length).toBeGreaterThan(0);
+    expect(reply).toContain('無い');
+    expect(reply).toMatch(/runner/);
+    expect(reply).toMatch(/アーカイブ/);
+  });
+
+  it('manager_report の出力から生ログへの降り方が読める', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    for (const summary of h.running) summary.lastReport = '短い報告';
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-1' });
+
+    expect(reply).toContain('manager_transcript');
   });
 });
 
@@ -1668,6 +1843,50 @@ describe('self_status（いま自分がどう走っているか）', () => {
     const reply = await h.call('self_status', {});
 
     expect(reply).toContain('同じ行は無い');
+  });
+});
+
+/**
+ * `journalEntrySchema` の `memory_update.action` は **optional** で足した。
+ *
+ * 「書いた」と「消した」の区別がこれまで `summary` の自由文にしか無かった
+ * （PR #144 で潰したのと同じ形の欠陥）ので機械可読な区別を足すが、optional に
+ * したのは既存の日誌エントリを1件も壊さないためである。ここではその意味
+ * そのもの——`action` の無いエントリが今も通ること——を固定する。
+ */
+describe('journalEntrySchema の memory_update（action の後方互換）', () => {
+  it('action の無い既存エントリ（action 導入前の形）が今も通る', () => {
+    const legacy = {
+      type: 'memory_update' as const,
+      id: 'j-1',
+      at: '2026-08-01T00:00:00.000Z',
+      slug: 'values',
+      cause: 'human' as const,
+      summary: '古い形式のエントリ（action フィールドが無い）',
+    };
+
+    const result = journalEntrySchema.safeParse(legacy);
+
+    expect(result.success).toBe(true);
+  });
+
+  it('action を付けたエントリも通り、値がそのまま読める', () => {
+    const withAction = {
+      type: 'memory_update' as const,
+      id: 'j-2',
+      at: '2026-08-01T00:00:00.000Z',
+      slug: 'values',
+      cause: 'clone' as const,
+      action: 'remove' as const,
+      summary: '削除の記録',
+    };
+
+    const result = journalEntrySchema.safeParse(withAction);
+
+    expect(result.success).toBe(true);
+    if (result.success && result.data.type === 'memory_update') {
+      expect(result.data.action).toBe('remove');
+    }
   });
 });
 

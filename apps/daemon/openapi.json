@@ -750,6 +750,10 @@
                           "type": "string",
                           "enum": ["distill", "clone", "human"]
                         },
+                        "action": {
+                          "type": "string",
+                          "enum": ["write", "append", "remove"]
+                        },
                         "summary": {
                           "type": "string"
                         }
@@ -1516,6 +1520,10 @@
                               "cause": {
                                 "type": "string",
                                 "enum": ["distill", "clone", "human"]
+                              },
+                              "action": {
+                                "type": "string",
+                                "enum": ["write", "append", "remove"]
                               },
                               "summary": {
                                 "type": "string"

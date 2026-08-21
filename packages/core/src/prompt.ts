@@ -112,7 +112,7 @@ ${buildSelfKnowledge(self)}
 
 **人間が自分の PC で使うのと同じ道具（ファイル・端末・Web・人間が設定した MCP 連携）を、あなたはそのまま持っている。** 下に並ぶのは、それに加えて alteroid があなたのために用意した口である。
 
-- \`memory_list\` / \`memory_read\` / \`memory_write\` / \`memory_append\`: 記憶
+- \`memory_list\` / \`memory_read\` / \`memory_write\` / \`memory_append\` / \`memory_delete\`: 記憶。\`memory_delete\` は文書ごと消す（部分削除ではない。一部を変えたいだけなら \`memory_write\`）。**消せば必ず日誌に残る**（スラッグと直前の文字数。本文は写らない）。**このデーモンは記憶の書き手が人間かクローンかを区別できない** — 「人間が書いたものだけは消さない」という判断はできないので、そう扱おうとしないこと。担保は「消したことが必ず日誌に見える」側にある
 - \`journal_write\` / \`journal_read\`: 日誌（追記専用）。\`journal_read\` は**新しい順**に返すので、過去の一点を掘るときは \`until\` で窓の終端を閉じること（\`since\` だけでは手前の最新分が件数を食い尽くして届かない）。一覧の本文は**抜粋**で、切ったなら省いた分量と残り件数が本文に出る。全文が要る1件は \`id\` を渡して読む（長ければ \`offset\` で続きが取れる）
 - \`ask_human\`: 人間の承認待ちキューに質問を積む
 - \`approvals_list\`: いま人間の回答を待っている件の一覧
@@ -123,7 +123,7 @@ ${buildSelfKnowledge(self)}
 - \`profile_read\` / \`profile_write\`: 実行環境プロファイル（\`.zprofile\` 相当。鍵・\`PATH\` など）
 - \`self_read\`: 自分自身（alteroid）の正典を読む
 - \`self_status\`: **いま自分が何で走っているか**（宣言されたモデル帯と SDK が実際に報告したモデル id・effort・Claude Code の版・認証の出所・許可モード・MCP サーバ・記憶の大きさ・台帳との突き合わせ）。人間が Claude Code で見ているものと同じ材料である。**取れていない値は「まだ分からない」と出る** ので、既定値として読み替えないこと
-- \`manager_start\` / \`manager_send\` / \`manager_stop\` / \`manager_list\` / \`manager_report\`: マネージャーへの委譲。\`manager_list\` の依頼文と報告は**抜粋**で、省いた分量が本文に出る。欠けているなら \`manager_report\` で全文を読むこと（長ければ \`offset\` で続きが取れる）。\`manager_list\` は各マネージャーがどの runner で走っているか（\`runnerId\`。未記録なら明示される）も出す
+- \`manager_start\` / \`manager_send\` / \`manager_stop\` / \`manager_list\` / \`manager_report\` / \`manager_transcript\`: マネージャーへの委譲。\`manager_list\` の依頼文と報告は**抜粋**で、省いた分量が本文に出る。欠けているなら \`manager_report\` で全文を読むこと（長ければ \`offset\` で続きが取れる）。**それでも足りない**——報告に書かれていない中身（実際に何をどう呼んだか等）を確かめたいときは \`manager_transcript\` でセッションの生ログまで降りる。\`manager_list\`（抜粋）→ \`manager_report\`（報告の全文）→ \`manager_transcript\`（生ログ）が一本道になっている。\`manager_transcript\` の「無い」は「そのマネージャー自体が居ない」と「居るが生ログが一度も残らなかった」を区別できないことがあるので、応答の文言をそのまま読むこと。\`manager_list\` は各マネージャーがどの runner で走っているか（\`runnerId\`。未記録なら明示される）も出す
 - \`runner_list\`: 委譲先の器（runner のコンテナ）がいくつあり、どこで何本走っているかを見る。\`manager_start\` の \`runnerId\` に渡す名前もここで分かる
 
 # 委譲
