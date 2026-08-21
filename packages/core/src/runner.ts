@@ -14,6 +14,7 @@ import type {
   SessionStoreEntry,
 } from '@anthropic-ai/claude-agent-sdk';
 
+import { buildManagerSessionOptions } from './claude-provider.js';
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
 import { placedModelTier, resolveModelTier } from './model-tier.js';
 import {
@@ -736,37 +737,26 @@ class RunnerSession {
   }
 
   #buildOptions(resume?: string): Options {
-    return {
+    return buildManagerSessionOptions({
       // 既定は `opus`。人間が `ALTEROID_MANAGER_MODEL` に置いていればそれを使う
       // （設定ではなく承認の置き場。`model-tier.ts`）。**ここが正本である** —
       // デーモン側の自己認識に出るのは同じ env から解いた宣言であって、
       // 実際にセッションへ渡っているのはこの値である。
       model: resolveManagerModel(this.#env),
-      // `tools` は渡さない = preset 全部。明示リストで絞らない（AGENTS.md 地雷1）。
-      // `maxTurns` も渡さない（地雷2）。
       // 人間が開く Claude Code と同じ既定（Auto）。`canUseTool` は下に残してあり、
       // `default` へ戻せば1件ずつクローンへ確認が回る。
       permissionMode: this.#permissionMode,
-      systemPrompt: {
-        type: 'preset',
-        preset: 'claude_code',
-        append: buildManagerSystemPrompt({ managerId: this.#id, workerName: WORKER_AGENT_NAME }),
-      },
+      systemPromptAppend: buildManagerSystemPrompt({
+        managerId: this.#id,
+        workerName: WORKER_AGENT_NAME,
+      }),
       // 作業者層の本体はこの1個だけ。`tools` を書かない = 親の全ツールを継承。
-      agents: {
-        [WORKER_AGENT_NAME]: {
-          description:
-            'コストと文脈のために切り出した実作業の担い手。実装に限らず、調査・下読み・' +
-            '外部サービスの確認・レビュー・相談のたたき台づくりまで任せてよい。',
-          prompt: buildWorkerPrompt(),
-          // **省略しない。** SDK の既定は親（マネージャー）の継承なので、
-          // 省けばマネージャーを差し替えた人が作業者まで巻き添えで動かすことになる。
-          model: resolveWorkerModel(this.#env),
-        },
-      },
+      workerAgentName: WORKER_AGENT_NAME,
+      workerPrompt: buildWorkerPrompt(),
+      // **省略しない。** SDK の既定は親（マネージャー）の継承なので、
+      // 省けばマネージャーを差し替えた人が作業者まで巻き添えで動かすことになる。
+      workerModel: resolveWorkerModel(this.#env),
       cwd: this.#cwd,
-      // 人間が使っているのと同じ設定・同じ .mcp.json を渡す（下向きは同じものが見える）
-      settingSources: ['user', 'project', 'local'],
       env: this.#childEnv(),
       // 生ログはデーモンへ預ける。runner は永続化の器を持たない（記憶ストアの
       // 鍵を runner に置かないため）。
@@ -778,11 +768,9 @@ class RunnerSession {
         ? {}
         : { spawnClaudeCodeProcess: (options) => this.#spawnAsChildUser(options) }),
       canUseTool: (toolName, input, extra) => this.#onPermission(toolName, input, extra),
-      hooks: {
-        PostToolUse: [{ hooks: [(input) => this.#onPostToolUse(input)] }],
-        PreCompact: [{ hooks: [(input) => this.#onPreCompact(input)] }],
-      },
-    };
+      onPostToolUse: (input) => this.#onPostToolUse(input),
+      onPreCompact: (input) => this.#onPreCompact(input),
+    });
   }
 
   /**
