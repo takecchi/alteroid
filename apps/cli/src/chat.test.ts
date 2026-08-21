@@ -916,6 +916,10 @@ describe('chat の /conversations と /conversation', () => {
     const text = read();
     expect(text).toContain('判定できません');
     expect(text).not.toContain('発言はありません');
+    // **打ち切られているなら、広げる手の在り処を示す。** 文言だけでなく
+    // `--scan` とサブコマンド名（`alteroid conversations show`）が実際に
+    // 出ることまで見る — でないと在り処が消えても緑のまま通ってしまう。
+    expect(text).toContain('alteroid conversations show --scan');
   });
 
   it('/conversation は 404（遡り切れたうえで無い）なら、そう言う', async () => {
