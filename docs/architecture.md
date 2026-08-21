@@ -436,7 +436,9 @@ packages/api-client  生成 spec から起こした外部向けクライアン�
 | M5 | 複数 manager-runner と水平スケール — runner の登録・生存判定・配置、runner 障害時の再開 |
 | M6 | Web UI — React Router v7 の SPA（`apps/web`）。CLI と等価な入口を API の上に用意する |
 
-各フェーズの成果物・受け入れ基準・地雷は [roadmap.md](./roadmap.md) に展開してある。実装はそちらに従う。
+**未完のフェーズ**の成果物・受け入れ基準・地雷は [roadmap.md](./roadmap.md) に展開してある。実装はそちらに従う。
+
+**済んだフェーズの分は roadmap から削除された**（2026-08-21、人間の判断 — 開発当初のもので殆どがノイズになっていたため）。**上の表はスコープの索引として残してあるが、受け入れ基準の逐語はもう roadmap に無い。** 当時の記述を読むなら `git show 7046e2c:docs/roadmap.md` である。
 
 ## 未解決事項
 
