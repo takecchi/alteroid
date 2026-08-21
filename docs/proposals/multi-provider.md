@@ -326,6 +326,41 @@ alteroid 側が自分で `spawn` するので、`uid` を指定するだけで�
 
 ---
 
+## 4-B. 実装の進捗（この PR で入ったもの）
+
+依頼者の承認（2026-08-21）を受けて、**P1 の一部**を実装した。**provider は Claude だけのままで、
+挙動は1文字も変えていない。**
+
+| 入ったもの | 中身 |
+| --- | --- |
+| `packages/core/src/agent-session-options.test.ts` | 特性試験。SDK へ渡す `Options` を固定する。**「無いこと」の固定が本題**（`tools` / `maxTurns` を渡さない、クローンには `canUseTool` を繋がない） |
+| `packages/core/src/agent-ports.ts` | provider 非依存の語彙。`AgentCapabilities` の10個が「どの要件を担っているか」を JSDoc に持つ。SDK を import しない（番人テストで固定） |
+| `packages/core/src/claude-provider.ts` | `Options` を組み立てるのはここだけ。3か所（クローン本体・蒸留・マネージャー）から移した |
+
+**入っていないもの**（次の単位。§5 の P1 の残り以降）:
+
+- **読み側の中立化**（provider のメッセージ → `AgentEvent` → 共通の畳み込み）。`clone.ts` /
+  `runner.ts` はいまも `SDKMessage` を直接ディスパッチしている。ここを分けないと2つ目の
+  provider は載らない
+- **`AgentAdapter.open()`**。中立の `AgentRunRequest` を作るには、クローンの道具（インプロセス
+  MCP）の外出しが要る（P5）。いま無理に中立の顔を被せると、SDK 型が `agent-ports.ts` へ
+  漏れて番人テストが落ちるか、`queryFn` と同じものを別名で作るだけになる
+- **§3-B の「要件を担う capability を欠く provider を既定にできない」の強制**。語彙
+  （`missingRequirementCapabilities`）は入ったが、選択の経路がまだ無い（provider が1つなので
+  選択そのものが無い）
+- **§3-D の台帳の「取れない」状態**。provider が1つで、その provider は消費を報告するので、
+  いま入れても検証できる状態が作れない
+
+### 正典（`docs/`）に §7 の文言を入れなかった理由
+
+依頼者は「基準は Claude Code のまま、provider は方針として足す」を選び、実装の承認も出した。
+それでも §7 の文言を正典へ移すのは**次の provider が載ってからにした**。
+
+理由は1つ。いま「provider は差し替えられる」と PRD に書くと、**docs が要求していることを
+コードが満たしていない状態**になる。`AGENTS.md` は「これらの文書とコードが矛盾したら、バグなのは
+コードである」と定めているので、それは自分で自分にバグを1件作る操作である。**語彙だけが先に
+入っている状態は、要件ではなく準備として正しく読める。**
+
 ## 5. 段階分け（提案）
 
 **依頼者が「全部の層」を選んでいるので、最終形は境界①②の両方である。** ただし順序には
