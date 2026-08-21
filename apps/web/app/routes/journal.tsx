@@ -9,23 +9,15 @@ import { formatDateTime, formatRelative } from '~/lib/format';
 import type { JournalEntry, JournalEntryType } from '~/lib/types';
 
 /**
- * 種別は spec の union と一致していること。
+ * 種別ごとの見た目の強さ。**`Record<JournalEntryType, ...>` で縛ってあるので、
+ * 種別を足してここを足し忘れると型で落ちる**（`schema.ts` の
+ * `journalEntryTypeNames` が `satisfies Record<JournalEntryType, true>` で
+ * 縛っているのと同じ作法）。
  *
- * ここを固定リストで持つのは表示順のためだけで、**絞り込みはサーバに投げる**
- * （`GET /journal?type=`）。画面側で捨てると「出していないだけ」の層ができる。
+ * 下の `TYPES`（絞り込みチップの表示順）はここから導出する — **正本は1つ
+ * だけ**にして、`TONE` にだけ足して `TYPES` を足し忘れる形（＝チップに
+ * 出ない種別ができる）を構造的に無くす。
  */
-const TYPES: readonly JournalEntryType[] = [
-  'exchange',
-  'decision',
-  'escalation',
-  'tool_use',
-  'memory_update',
-  'daily_report',
-  'external_event',
-  'worker_wait',
-  'turn_usage',
-];
-
 const TONE: Record<JournalEntryType, 'neutral' | 'ok' | 'warn' | 'danger' | 'accent'> = {
   exchange: 'neutral',
   decision: 'accent',
@@ -37,6 +29,24 @@ const TONE: Record<JournalEntryType, 'neutral' | 'ok' | 'warn' | 'danger' | 'acc
   worker_wait: 'neutral',
   turn_usage: 'neutral',
 };
+
+/**
+ * 絞り込みチップに出す種別の一覧。**`TONE` から `Object.keys` で起こす** —
+ * `schema.ts` が `journalEntryTypeNames`（`satisfies Record<JournalEntryType,
+ * true>`）から `JOURNAL_ENTRY_TYPES` を同じ形で起こしているのに倣っただけで、
+ * ここだけの新しい発明ではない。
+ *
+ * **画面側で絞り込みを持たない理由は変わっていない** — ここを固定リストで
+ * 持つのは表示順のためだけで、**絞り込みはサーバに投げる**（`GET
+ * /journal?type=`）。画面側で捨てると「出していないだけ」の層ができる。
+ *
+ * **表示順は `TONE` の宣言順が正本になった。** `Object.keys` は文字列キーの
+ * 宣言順を保つ（ECMA-262 の仕様）ので、`TONE` の宣言順を変えるとチップの
+ * 表示順もそのまま変わる（並び順を変える意図があるときは `TONE` の宣言順を
+ * 変えること）。導出前の固定リストと `TONE` はここに来るまで宣言順が
+ * 一致していたので、この変更で表示順は1文字も変わっていない。
+ */
+const TYPES = Object.keys(TONE) as [JournalEntryType, ...JournalEntryType[]];
 
 export default function Journal() {
   const [selected, setSelected] = useState<readonly JournalEntryType[]>([]);
