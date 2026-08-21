@@ -54,6 +54,28 @@ export interface RunnerUnknownReport {
 }
 
 /**
+ * 挑み直しの間隔の既定値（基準・上限）。
+ *
+ * **正本は `packages/core/src/runner-protocol.ts` の `REGISTRY_RETRY_BASE_MS` /
+ * `REGISTRY_RETRY_MAX_MS`（名簿側の再接続）である。** あちらは export されて
+ * いないので値だけをこちらへ写している — import できる関係ではなく、**形を
+ * 揃えているだけ**である。名簿側とこの口は層が違うだけで、あるべき挙動
+ * （待てば直るので回数では諦めず、間隔だけを伸ばして頭打ちにする）は同じ。
+ */
+const RUNNER_STREAM_RETRY_BASE_MS = 1_000;
+const RUNNER_STREAM_RETRY_MAX_MS = 30_000;
+
+/** `setTimeout` を `unref` して待つ（既定の `sleepFn`）。 */
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    // 名簿側の #scheduleOpen と同じ理由: 挑み直しの待ちで、止めたはずの
+    // デーモンの終了を引き延ばさない。
+    timer.unref?.();
+  });
+}
+
+/**
  * manager-runner への HTTP の口（roadmap M4）。
  *
  * **繋ぎに行くのはこちら（デーモン）だけである。** runner はデーモンの所在も鍵も
@@ -74,8 +96,27 @@ export interface HttpRunnerOptions {
   token: string;
   /** 主にテスト用。既定はグローバルの `fetch`（Unix ソケットなら node:http）。 */
   fetchFn?: typeof fetch;
-  /** ストリームが切れたときに待つミリ秒。 */
+  /**
+   * ストリームが切れたときに待つ**基準**のミリ秒（既定 1000）。
+   *
+   * **名前は変えていないが意味は変わっている。** 以前は毎回この値を固定で
+   * 待っていたが、いまは失敗するたびに倍々に伸びる列の出発点（＝基準）で
+   * あり、繋ぎ直せたらここへ戻る。上限は `retryMaxDelayMs`。
+   */
   retryDelayMs?: number;
+  /**
+   * バックオフの上限ミリ秒（既定 30000。`packages/core` の名簿側と同じ値）。
+   *
+   * **回数では諦めない。** 上限は「秒間に何度も叩かない」ための頭打ちであって、
+   * 挑み直しをやめる制限ではない（諦めた先に残るのは、宛先を失ったまま誰にも
+   * 知らされないデーモンである）。
+   */
+  retryMaxDelayMs?: number;
+  /**
+   * 挑み直しの待ちを差し替える口。**主にテスト用**（`fetchFn` と同じ作法）。
+   * 既定は `setTimeout`（`unref` 済み）で実際に待つ。
+   */
+  sleepFn?: (ms: number) => Promise<void>;
   /**
    * 制御面の応答を待つ期限（既定 {@link RUNNER_CALL_DEADLINE_MS}）。**主にテスト用。**
    *
@@ -187,11 +228,19 @@ class HttpRunner implements RunnerClient {
   readonly #socketPath: string | null;
   readonly #token: string;
   readonly #fetch: typeof fetch;
-  readonly #retryDelayMs: number;
+  readonly #retryBaseMs: number;
+  readonly #retryMaxMs: number;
+  readonly #sleepFn: (ms: number) => Promise<void>;
   readonly #deadlineMs: number;
   readonly #onUnknown: ((report: RunnerUnknownReport) => void) | undefined;
   #controller: AbortController | null = null;
   #closed = false;
+  /** 次に失敗したときに待つ長さ。失敗のたびに倍々に伸び、成功で基準へ戻る。 */
+  #nextDelayMs: number;
+  /** 直前の接続が失敗していて、まだ繋ぎ直せていないか。 */
+  #backingOff = false;
+  /** 直前に stderr へ書いた待ち時間。同じ値のときは書き直さない。 */
+  #lastLoggedDelayMs: number | null = null;
 
   constructor(options: HttpRunnerOptions) {
     this.#socketPath = socketPathOf(options.baseUrl);
@@ -200,7 +249,10 @@ class HttpRunner implements RunnerClient {
       this.#socketPath === null ? options.baseUrl.replace(/\/$/, '') : 'http://runner';
     this.#token = options.token;
     this.#fetch = options.fetchFn ?? ((input, init) => this.#send(input, init));
-    this.#retryDelayMs = options.retryDelayMs ?? 1000;
+    this.#retryBaseMs = options.retryDelayMs ?? RUNNER_STREAM_RETRY_BASE_MS;
+    this.#retryMaxMs = options.retryMaxDelayMs ?? RUNNER_STREAM_RETRY_MAX_MS;
+    this.#sleepFn = options.sleepFn ?? defaultSleep;
+    this.#nextDelayMs = this.#retryBaseMs;
     this.#deadlineMs = options.deadlineMs ?? RUNNER_CALL_DEADLINE_MS;
     this.#onUnknown = options.onUnknown;
   }
@@ -304,16 +356,58 @@ class HttpRunner implements RunnerClient {
     void this.#pump(onEvent);
   }
 
+  /**
+   * 切れたら挑み直す。**間隔は固定ではなく、失敗が続くほど倍々に伸びて
+   * `retryMaxMs` で頭打ちになる**（`packages/core` の名簿側の再接続と同じ形）。
+   *
+   * **リセットの契機は「読み切れた（例外なく終わった）」時点である。** 「繋がった
+   * 時点」（`#stream()` が応答を受け取った直後）にしなかったのは意図的で、
+   * 開いた直後に毎回すぐ死ぬ相手を相手にしたとき、繋がった瞬間にリセットする
+   * 形だと失敗のたびに基準へ戻ってしまい、指数バックオフが一度も進まない
+   * （`packages/core` の `#open` はまさに「繋がった」時点でリセットしており、
+   * ここではその弱さを引き継がない形を選んでいる）。読み切れた＝一度は健全に
+   * 届いた、を基準にすることで、開いてすぐ壊れる相手にもバックオフが効く。
+   *
+   * ログは**初回と、待ち時間が変わったときだけ**書く（同じ行を毎回吐かない）。
+   * 加えて、**繋ぎ直せたときに1行書く** — 沈黙だけでは「直った」のか「諦めた」
+   * のか読めないので、諦めていないことを見えるようにする。
+   */
   async #pump(onEvent: (event: RunnerEvent) => void): Promise<void> {
     while (!this.#closed) {
+      let failed = false;
+      let failure: unknown;
       try {
         await this.#stream(onEvent);
       } catch (error) {
         if (this.#closed) return;
-        process.stderr.write(`alteroidd: runner のストリームが切れました: ${String(error)}\n`);
+        failed = true;
+        failure = error;
       }
       if (this.#closed) return;
-      await new Promise((resolve) => setTimeout(resolve, this.#retryDelayMs));
+
+      if (!failed && this.#backingOff) {
+        process.stderr.write(`alteroidd: runner のストリームに繋ぎ直せた\n`);
+        this.#backingOff = false;
+      }
+
+      const waitMs = failed ? this.#nextDelayMs : this.#retryBaseMs;
+
+      if (failed) {
+        this.#backingOff = true;
+        if (this.#lastLoggedDelayMs !== waitMs) {
+          process.stderr.write(
+            `alteroidd: runner のストリームが切れました: ${String(failure)}（次は${waitMs}ms後に再試行）\n`,
+          );
+          this.#lastLoggedDelayMs = waitMs;
+        }
+      } else {
+        this.#lastLoggedDelayMs = null;
+      }
+
+      // 次に使う値を決める。失敗なら倍々に伸ばして頭打ち、成功なら基準へ戻す。
+      this.#nextDelayMs = failed ? Math.min(waitMs * 2, this.#retryMaxMs) : this.#retryBaseMs;
+
+      await this.#sleepFn(waitMs);
     }
   }
 

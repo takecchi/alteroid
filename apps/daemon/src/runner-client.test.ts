@@ -19,7 +19,7 @@ import {
   type Stores,
 } from '@alteroid/core';
 import { createRunnerApp, Outbox } from '@alteroid/runner';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createHash } from 'node:crypto';
 
@@ -689,5 +689,200 @@ describe('器の入れ替えの判定材料', () => {
     // 読んだ値は返すが、**自分の宛先は書き換えない**（`resources()` と同じ線）。
     expect(identity?.runnerId).toBe('runner-replaced');
     expect(client.runnerId).toBe('runner-primary');
+  });
+});
+
+/**
+ * 死んだ runner への SSE 再接続のバックオフ。
+ *
+ * `sleepFn` を差し替えて、実時間を待たずに決定的に測る（`fetchFn` と同じ作法）。
+ * `/health` は `hello()` が繋ぐ時に一度読むので常に応答する形にし、`/events` への
+ * 応答だけを制御する。
+ */
+describe('死んだ runner への SSE 再接続（バックオフ）', () => {
+  // **常に stderr を黙らせる。** 内容を見る必要がないテストでも実際の stderr へ
+  // 書かれるのはノイズなので、この describe の全テストで抑える。内容を見る
+  // テストは `stderrSpy` を直接読む。
+  let stderrSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  });
+  afterEach(() => {
+    stderrSpy.mockRestore();
+  });
+
+  function pathOf(input: string | URL | Request): string {
+    return new URL(typeof input === 'string' ? input : input.toString()).pathname;
+  }
+
+  /** `/events` へ行くたびに `outcome()` を呼び、`'fail'` なら 503、`'ok'` なら即座に閉じる健全なストリームを返す。 */
+  function fetchEvents(outcome: (callIndex: number) => 'fail' | 'ok'): {
+    fetchFn: typeof fetch;
+    eventsCalls: () => number;
+  } {
+    let calls = 0;
+    const fetchFn = (async (input: string | URL | Request) => {
+      const path = pathOf(input);
+      if (path === '/health') {
+        return Response.json({ runnerId: 'runner-flaky', workspacePath: '/workspace' });
+      }
+      if (path === '/events') {
+        const result = outcome(calls);
+        calls += 1;
+        if (result === 'fail') return new Response(null, { status: 503 });
+        // 健全な接続: 何も流さず、すぐに読み切れる形で閉じる。
+        return new Response(new ReadableStream({ start: (controller) => controller.close() }), {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        });
+      }
+      throw new Error(`想定していない path: ${path}`);
+    }) as typeof fetch;
+    return { fetchFn, eventsCalls: () => calls };
+  }
+
+  it('待ちが 1000→2000→4000→8000→16000→30000→30000… と伸びて頭打ちになる', async () => {
+    const { fetchFn } = fetchEvents(() => 'fail');
+    const waits: number[] = [];
+    let notifyEnough: () => void = () => undefined;
+    const enough = new Promise<void>((resolve) => {
+      notifyEnough = resolve;
+    });
+    const sleepFn = async (ms: number): Promise<void> => {
+      waits.push(ms);
+      if (waits.length >= 8) notifyEnough();
+    };
+
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn,
+      sleepFn,
+    });
+    await client.connect(() => undefined);
+    await enough;
+    await client.close();
+
+    expect(waits.slice(0, 8)).toEqual([1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000]);
+  });
+
+  it('繋ぎ直せたら基準へ戻る', async () => {
+    // 1敗目→2敗目→成功（すぐ閉じる）→3敗目、の順で応答する。
+    const { fetchFn } = fetchEvents((i) => (i < 2 ? 'fail' : i === 2 ? 'ok' : 'fail'));
+    const waits: number[] = [];
+    let notifyEnough: () => void = () => undefined;
+    const enough = new Promise<void>((resolve) => {
+      notifyEnough = resolve;
+    });
+    const sleepFn = async (ms: number): Promise<void> => {
+      waits.push(ms);
+      if (waits.length >= 4) notifyEnough();
+    };
+
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn,
+      sleepFn,
+    });
+    await client.connect(() => undefined);
+    await enough;
+    await client.close();
+
+    // 1000(1敗目) → 2000(2敗目) → 1000(成功で基準へ戻る) → 1000(3敗目、伸びた列を引き継がない)
+    expect(waits.slice(0, 4)).toEqual([1000, 2000, 1000, 1000]);
+  });
+
+  it('stderr は初回と間隔が変わったときだけ書き、繋ぎ直せたときは1行書く', async () => {
+    // 3敗 → 成功 → 1敗、の順。3敗目は初回・2回目と違う間隔なのでその都度書き、
+    // 成功で「繋ぎ直せた」を1行、直後の敗北は基準(1000)からまた書く。
+    const { fetchFn } = fetchEvents((i) => (i < 3 ? 'fail' : i === 3 ? 'ok' : 'fail'));
+    const waits: number[] = [];
+    let notifyEnough: () => void = () => undefined;
+    const enough = new Promise<void>((resolve) => {
+      notifyEnough = resolve;
+    });
+    const sleepFn = async (ms: number): Promise<void> => {
+      waits.push(ms);
+      if (waits.length >= 5) notifyEnough();
+    };
+
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn,
+      sleepFn,
+    });
+    await client.connect(() => undefined);
+    await enough;
+    await client.close();
+
+    const lines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    const failureLines = lines.filter((line: string) => line.includes('ストリームが切れました'));
+    const reconnectLines = lines.filter((line: string) => line.includes('繋ぎ直せた'));
+
+    // 1000, 2000, 4000 は間隔が毎回変わるので書く。成功で列がリセットされた
+    // 直後の敗北（4敗目、基準の1000へ戻る）は「新しい列の初回」なのでまた書く
+    // — 黙るのは同じ値が続くときだけである。
+    expect(failureLines).toHaveLength(4);
+    expect(failureLines[0]).toContain('次は1000ms後に再試行');
+    expect(failureLines[1]).toContain('次は2000ms後に再試行');
+    expect(failureLines[2]).toContain('次は4000ms後に再試行');
+    expect(failureLines[3]).toContain('次は1000ms後に再試行');
+    // 繋ぎ直せた行は1回だけ。
+    expect(reconnectLines).toHaveLength(1);
+  });
+
+  it('待ちが変わらない間は stderr を書き直さない（頭打ち後は黙る）', async () => {
+    const { fetchFn } = fetchEvents(() => 'fail');
+    const waits: number[] = [];
+    let notifyEnough: () => void = () => undefined;
+    const enough = new Promise<void>((resolve) => {
+      notifyEnough = resolve;
+    });
+    const sleepFn = async (ms: number): Promise<void> => {
+      waits.push(ms);
+      if (waits.length >= 8) notifyEnough();
+    };
+
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn,
+      sleepFn,
+    });
+    await client.connect(() => undefined);
+    await enough;
+    await client.close();
+
+    const failureLines = stderrSpy.mock.calls
+      .map((call: unknown[]) => String(call[0]))
+      .filter((line: string) => line.includes('ストリームが切れました'));
+
+    // 1000/2000/4000/8000/16000/30000 の6行で止まり、7敗目・8敗目（どちらも
+    // 30000）では書かない。
+    expect(failureLines).toHaveLength(6);
+  });
+
+  it('close() の後は挑み直さない（既存の保証がバックオフでも残る）', async () => {
+    const { fetchFn, eventsCalls } = fetchEvents(() => 'fail');
+    const clientHolder: { current?: { close(): Promise<void> } } = {};
+    const sleepFn = async (): Promise<void> => {
+      // 失敗の直後、待っている間にデーモンが閉じたとする。
+      await clientHolder.current?.close();
+    };
+
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn,
+      sleepFn,
+    });
+    clientHolder.current = client;
+    await client.connect(() => undefined);
+
+    // ループが1周し、close() 後にもう一度 /events を叩いていないかを確かめる。
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(eventsCalls()).toBe(1);
   });
 });
