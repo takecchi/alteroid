@@ -11,6 +11,7 @@ import type {
   SessionStore,
 } from '@anthropic-ai/claude-agent-sdk';
 
+import { buildCloneDistillOptions, buildCloneSessionOptions } from './claude-provider.js';
 import { buildActivityDigest } from './digest.js';
 import {
   inboxEventShape,
@@ -53,12 +54,7 @@ import type {
 } from './schema.js';
 import type { CloneRuntimeFacts, SelfFacts } from './self.js';
 import type { PendingInboxEvent, Stores } from './store.js';
-import {
-  CLONE_ALLOWED_TOOLS,
-  MCP_SERVER_NAME,
-  createCloneMcpServer,
-  type ToolContext,
-} from './tools.js';
+import { MCP_SERVER_NAME, createCloneMcpServer, type ToolContext } from './tools.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import {
   CLONE_ACTOR_ID,
@@ -176,9 +172,6 @@ export function placedClonePermissionMode(env: NodeJS.ProcessEnv = process.env):
 
 /** PreCompact で退避したトランスクリプトのうち、蒸留に渡す末尾のサイズ。 */
 const DISTILL_TRANSCRIPT_TAIL_BYTES = 60_000;
-
-/** PreCompact フック内の蒸留に許す時間（秒）。超えたら compaction を待たせない。 */
-const PRE_COMPACT_HOOK_TIMEOUT_SECONDS = 120;
 
 /** 発意 tick と定期ジョブに渡す「直近」の幅。 */
 const RECENT_DIGEST_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -2148,76 +2141,32 @@ class Clone implements CloneHost {
     this.#systemPromptChars = systemPrompt.length;
     this.#promptMemoryChars = memory.length;
 
-    return {
+    return buildCloneSessionOptions({
       model: this.#model,
-      // **`tools` を渡さない ＝ preset 一式。** 明示リストで絞れば能力の削除に
-      // なり、それは層を問わず禁じられている（AGENTS.md 地雷1・7 / north_star
-      // 「適用範囲」）。委譲が原則である理由（長寿命セッションの俯瞰と判断を守る）
-      // は方針＝システムプロンプトで表す（`prompt.ts`）。
-      //
-      // **`allowedTools` は「確認なしで通す一覧」であって「使える道具の一覧」では
-      // ない**（SDK: "To restrict which tools are available, use the `tools`
-      // option instead."）。だからここに自作ツールだけを並べても組み込みツールは
-      // 1つも減らない。並べてあるのは、自分の道具が権限の判断に晒されないように
-      // するためである。
-      allowedTools: CLONE_ALLOWED_TOOLS,
-      // 人間が開く Claude Code と同じ既定（`auto`）。**`default` のまま道具を渡すと
-      // 「渡したのに使えない」になる** — このセッションには `canUseTool` が無く、
-      // SDK は確認相手が居ないとき `ask` の判断をそのまま拒否で終わらせる。
-      //
-      // **`canUseTool` は繋がない（クローンだけはマネージャーと事情が違う）。**
-      // クローンは長寿命セッション1本で、受信箱のすべてのターンがそこを直列に
-      // 通る。ここで人間の回答を待って止めれば、止まるのは待っている1件ではなく
-      // 全部である（PRD「自律」の「止まるのはその仕事だけ」が壊れる）。確認が
-      // 要ると判断したなら `ask_human` に積んでから手を動かすのが、この層での
-      // 権限境界の表し方である（PRD「権限境界」）。
       permissionMode: this.#permissionMode,
-      mcpServers: {
-        [MCP_SERVER_NAME]: this.#mcpServerFactory(this.#toolContext()),
-      },
+      mcpServer: this.#mcpServerFactory(this.#toolContext()),
       systemPrompt,
-      // **人間が使っているのと同じ設定・同じ `.mcp.json` を読む。** ここを `[]` に
-      // すると、人間が Claude Code で使っている MCP 連携がクローンからは1つも
-      // 見えない ＝ 能力の削除（AGENTS.md 地雷7 の後半 / PRD「業務範囲」の
-      // 「人間が使っている連携が、クローンと作業者からも使えること」）。
-      settingSources: ['user', 'project', 'local'],
-      // 人間が置いた実行環境プロファイルを、クローンの手にも効かせる。
       env: this.#childEnv(),
-      includePartialMessages: true,
       ...(this.#cwd === undefined ? {} : { cwd: this.#cwd }),
-      ...(resume === null ? {} : { resume }),
-      // セッションの生ログも記憶ストアと同じ PostgreSQL へ（M4）。器を作り直しても
-      // resume の素材が残る。**同一性はそれでも記憶に宿る** — ここが空でも、
-      // 記憶と日誌が同じならクローンは同じクローンである。
+      resume,
       ...(this.#sessionStore === undefined ? {} : { sessionStore: this.#sessionStore }),
-      hooks: {
-        PreCompact: [
-          {
-            timeout: PRE_COMPACT_HOOK_TIMEOUT_SECONDS,
-            hooks: [(input, _toolUseId, extra) => this.#onPreCompact(input, extra?.signal)],
-          },
-        ],
-        // `self_status` の effort と、**クローンが自分の手を使った跡**をここで拾う
-        // （後者は `#onPostToolUse` のコメント）。
-        //
-        // 1. **`PostToolUse` はツールの実行後に走るので、実行そのものを止められない**
-        //    （`PreToolUse` と違ってここで判断を差し込む余地が無い＝観測専用として
-        //    安全に足せる）。
-        // 2. **`PreCompact` はセッション生涯に対して1本のフックであり、effort は
-        //    載らない**（`BaseHookInput.effort` はツール実行の文脈で発火するフックに
-        //    しか付かない）。だから既存の `PreCompact` はそのままにし、別の枠へ足す。
-        // 3. **クローンは毎ターン MCP の道具を叩く。** `self_status` を呼ぶ時点までに
-        //    別の道具呼び出しが1本挟まっていれば、その回で観測済みになっている。
-        //    **例外はそのセッションで最初の道具呼び出しそのもの** — そのときはまだ
-        //    どの `PostToolUse` も発火しておらず `effort` は `null` のままである
-        //    （`CloneRuntimeFacts.effort` のコメントと同じ）。
-        PostToolUse: [
-          {
-            hooks: [(input) => this.#onPostToolUse(input)],
-          },
-        ],
-      },
-    };
+      onPreCompact: (input, _toolUseId, extra) => this.#onPreCompact(input, extra?.signal),
+      // `self_status` の effort と、**クローンが自分の手を使った跡**をここで拾う
+      // （後者は `#onPostToolUse` のコメント）。
+      //
+      // 1. **`PostToolUse` はツールの実行後に走るので、実行そのものを止められない**
+      //    （`PreToolUse` と違ってここで判断を差し込む余地が無い＝観測専用として
+      //    安全に足せる）。
+      // 2. **`PreCompact` はセッション生涯に対して1本のフックであり、effort は
+      //    載らない**（`BaseHookInput.effort` はツール実行の文脈で発火するフックに
+      //    しか付かない）。だから既存の `PreCompact` はそのままにし、別の枠へ足す。
+      // 3. **クローンは毎ターン MCP の道具を叩く。** `self_status` を呼ぶ時点までに
+      //    別の道具呼び出しが1本挟まっていれば、その回で観測済みになっている。
+      //    **例外はそのセッションで最初の道具呼び出しそのもの** — そのときはまだ
+      //    どの `PostToolUse` も発火しておらず `effort` は `null` のままである
+      //    （`CloneRuntimeFacts.effort` のコメントと同じ）。
+      onPostToolUse: (input) => this.#onPostToolUse(input),
+    });
   }
 
   /**
@@ -2487,44 +2436,30 @@ class Clone implements CloneHost {
 
     const side = this.#queryFn({
       prompt,
-      options: {
+      options: buildCloneDistillOptions({
         model: this.#model,
-        // **本セッションと同じ配置にする。** 片方だけ道具や設定が違うと、
-        // 人格の書き手（蒸留）だけが別の頭になる（モデル帯を揃えているのと
-        // まったく同じ理由）。理由は `#buildOptions` 側に書いてある。
-        allowedTools: CLONE_ALLOWED_TOOLS,
         permissionMode: this.#permissionMode,
-        mcpServers: {
-          [MCP_SERVER_NAME]: this.#mcpServerFactory({
-            stores: this.#stores,
-            emit: () => undefined,
-            // **蒸留のターンでも同じ道具を渡す。** ここだけ欠けていると、
-            // 会話の最後に「鍵を実行環境へ移す」をやろうとして失敗する。
-            ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
-            ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
-            // **本セッションで観測した値をそのまま渡す。** ここだけ欠けていると、
-            // 蒸留のターンだけ自分のことが分からないクローンになる
-            // （`CloneRuntimeFacts.sessionId` のコメントの理由）。
-            runtime: () => this.#runtimeFacts(),
-          }),
-        },
+        // **蒸留のターンでも同じ道具を渡す。** ここだけ欠けていると、
+        // 会話の最後に「鍵を実行環境へ移す」をやろうとして失敗する。
+        //
+        // **本セッションで観測した値をそのまま渡す。** ここだけ欠けていると、
+        // 蒸留のターンだけ自分のことが分からないクローンになる
+        // （`CloneRuntimeFacts.sessionId` のコメントの理由）。
+        mcpServer: this.#mcpServerFactory({
+          stores: this.#stores,
+          emit: () => undefined,
+          ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
+          ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
+          runtime: () => this.#runtimeFacts(),
+        }),
         systemPrompt: buildCloneSystemPrompt({
           memory,
           ...(this.#self === undefined ? {} : { self: this.#self }),
         }),
-        settingSources: ['user', 'project', 'local'],
         env: this.#childEnv(),
-        persistSession: false,
         ...(this.#cwd === undefined ? {} : { cwd: this.#cwd }),
-        // **監査もこちら側に要る。** 道具と許可モードを本セッションと揃えた以上、
-        // 記録だけ片方に無ければ「蒸留のターンで何をしたか」がどこにも残らない
-        // （docs/architecture.md「PostToolUse フックで全ツール実行を日誌に記録」）。
-        // **effort の観測はここでは意味を持たない**（別セッションの値なので
-        // `#effort` を汚さないよう、日誌だけを書く枝を通す）。
-        hooks: {
-          PostToolUse: [{ hooks: [(input) => this.#onDistillToolUse(input)] }],
-        },
-      },
+        onPostToolUse: (input) => this.#onDistillToolUse(input),
+      }),
     });
 
     for await (const message of side) {

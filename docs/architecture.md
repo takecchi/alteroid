@@ -53,6 +53,11 @@
 - **マネージャーと作業者は実装物ではない。** どちらも実体は Claude Code そのものであり、alteroid が書くのは配線（起こす・話しかける・クローンへ回す・日誌に落とす）だけである
   - **作業者層の本体は `agents` 定義1個**（`model: 'sonnet'`、`tools` 省略）とマネージャーのシステムプロンプトに書く委譲の指針のみ。作業者用の独自機構（ワーカープール・キュー・独自プロトコル）を作らない。エスカレーションはサブエージェントの結果が親に返る SDK の挙動そのもの
   - この定義を省いて SDK の既定に頼ってはいけない。組み込みサブエージェントは**親のモデルを継承**するため、作業者が Opus で走ってコストが倍になり、固定のモデル対応が SDK の既定値変更で勝手に壊れる床に乗る（2026-08 調査: サブエージェントの既定モデルをセッション全体で指定するオプションは存在せず、`agents` の個別指定が唯一の方法）
+- **「実体は Claude Code そのもの」は既定の構成についてである。** provider を差し替えれば、その層の実体はその provider の harness になる（要件は PRD「provider」）。**それでも alteroid が書く配線は変わらない** — 変わらないのは、境界を**1ターンぶんのストリーム**に引いてあるからである
+  - **SDK の `query()` の署名を共通 IF にしないこと。** `AsyncIterable<SDKUserMessage>` + `Options` + `canUseTool` + control request は Claude 固有の制御モデルであり、これを IF にすると全 provider にその模倣を強いる（`queryFn` はテスト用の差し替え口として残す。provider の境界ではない）
+  - 中立の語彙は `packages/core/src/agent-ports.ts`、`Options` の組み立ては `packages/core/src/claude-provider.ts` に閉じる。**前者から SDK を import しない**（番人テストで固定してある）
+  - 「要件を担う能力」の機械可読な一覧は `agent-ports.ts` の `REQUIREMENT_BEARING_CAPABILITIES` が持つ。**要件の出所は PRD であって、こちらは写しである**（増減は PRD 側で決まる）
+  - **境界は2つ要る。** マネージャーと作業者は1ターンぶんのストリームで足りるが、**クローンは自作の道具をインプロセス MCP（SDK の機能）で持っている**ので、道具を stdio MCP サーバへ外へ出すまで中立の口を作れない。無理に中立の顔を被せると SDK の型が `agent-ports.ts` へ漏れ、`queryFn` を別名で作り直すだけになる
 
 ## プロセス境界 — なぜ manager-runner を分けるか
 
