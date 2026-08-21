@@ -5,14 +5,14 @@ import { Page } from '~/components/page';
 import { Card, Empty, ErrorNote, Spinner } from '~/components/ui';
 import { useReport, useReports } from '~/hooks/queries';
 import { cn } from '~/lib/cn';
-import { formatDateTime } from '~/lib/format';
+import { formatDateTime, formatTime } from '~/lib/format';
 
 import type { DailyReport } from '~/lib/types';
 
 import type { Route } from './+types/reports';
 
 export function clientLoader({ params }: Route.ClientLoaderArgs) {
-  return { date: params.date };
+  return { date: params.date, reportId: params.reportId };
 }
 
 /**
@@ -75,13 +75,41 @@ export function UnavailableNote({ reason }: { reason: string }) {
   );
 }
 
+/**
+ * 一覧に並べる1行の見出し。
+ *
+ * **日の部分は `report.date` から出し、`at` から導かないこと。** この2つは同じ日
+ * とは限らない — 日報が複数ある日を作っている経路そのものが「起動時の遡り生成」
+ * （`schedule.ts` の `missingDailyReportDates` → `clone.ts` の `#dailyReport`）で、
+ * そこでは**前日ぶんの日報が今日書かれる**。`at`（書いた時刻）を整形すると、
+ * 2026-08-20 の日報が `08/21 …` と出て、隣に並ぶ 2026-08-21 の日報と同じ日付に
+ * 見える。**人間が困っていた「見分けが付かない」がそのまま戻る。**
+ *
+ * だから日は `date`（その日報が何日について書かれたか）、時刻は `at`（いつ書か
+ * れたか）で、2つは別の軸として並べる。
+ */
+function reportLabel(report: DailyReport): string {
+  return `${report.date} ${formatTime(report.at)}`;
+}
+
 export default function Reports({ loaderData }: Route.ComponentProps) {
-  const { date } = loaderData;
+  const { date, reportId } = loaderData;
   const list = useReports(60);
 
   const reports = list.data?.reports ?? [];
   // 日付の指定が無ければ最新を出す。空の画面から始めない。
-  const selected = date ?? reports[0]?.date;
+  const selectedDate = date ?? reports[0]?.date;
+  /*
+    **選択は日付では定まらない。** 同じ日に複数あるので、`date` だけで選ぶと
+    その日の全部が「選択中」になり、本文にも全部が並ぶ（人間からの申告そのもの）。
+    選ぶ単位は `id` である。
+
+    指定が無いとき（`/reports` や `/reports/<日付>` を直に開いたとき）は、その日の
+    先頭を選ぶ — 一覧は新しい順なので「その日の最後に書かれたもの」になる。
+    `selectedDate` が一覧の窓（60件）の外なら見つからず `undefined` になるが、
+    そのときは本文側が取得した中の先頭に落ちる。
+  */
+  const selectedId = reportId ?? reports.find((report) => report.date === selectedDate)?.id;
 
   return (
     <Page title="日報" description="普段の接点はほぼこれだけでよい。掘りたくなったら日誌へ降りる">
@@ -95,21 +123,26 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
             <Empty>まだ無い。</Empty>
           ) : (
             <ul>
-              {reports.map((report) => (
+              {reports.map((report, index) => (
                 <li key={report.id}>
                   <Link
-                    to={`/reports/${report.date}`}
+                    to={`/reports/${report.date}/${encodeURIComponent(report.id)}`}
                     className={cn(
-                      'block border-b border-border px-4 py-2 text-sm hover:bg-surface-2',
-                      report.date === selected && 'bg-surface-2 text-accent',
+                      'block px-4 py-2 text-sm hover:bg-surface-2',
+                      /*
+                        **罫線は日付の変わり目にだけ引く。** 同じ日のものが1つの塊に
+                        見えるので、時刻だけが違う行が並んでいることが形から分かる
+                        （1日1件の日は今までと同じ見え方になる）。
+                      */
+                      reports[index + 1]?.date !== report.date && 'border-b border-border',
+                      report.id === selectedId && 'bg-surface-2 text-accent',
                     )}
                   >
-                    {report.date}
+                    {reportLabel(report)}
                     {/*
-                      **印の付いた日は、開く前に分かる形にする。** 一覧では日付しか
-                      並ばないので、印を出さないと「日報がある日」と同じ顔になり、
-                      人間は開くまで気づけない（本文がエラー文だった穴と同じ形が、
-                      一覧の側に残る）。
+                      **印の付いた行は、開く前に分かる形にする。** 印を出さないと
+                      「日報がある行」と同じ顔になり、人間は開くまで気づけない
+                      （本文がエラー文だった穴と同じ形が、一覧の側に残る）。
                     */}
                     {isUnavailable(report) && (
                       <span className="ml-1 text-danger" title="この日の日報は作れなかった">
@@ -123,50 +156,68 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
           )}
         </Card>
 
-        {selected === undefined ? (
+        {selectedDate === undefined ? (
           <Card>
             <Empty>
               日報が1件も無い。クローンが締め時刻にまとめる（スケジュールから今すぐ回せる）。
             </Empty>
           </Card>
         ) : (
-          <ReportBody date={selected} />
+          <ReportBody date={selectedDate} reportId={selectedId} />
         )}
       </div>
     </Page>
   );
 }
 
-function ReportBody({ date }: { date: string }) {
+function ReportBody({ date, reportId }: { date: string; reportId: string | undefined }) {
   const { data, error, isLoading } = useReport(date);
+
+  const reports = data?.reports ?? [];
+  /*
+    **1件だけ出す。**
+
+    以前はここでその日の全部を縦に並べていた。理由は「片方だけ出すと『書き換わった』
+    ように見える」というもので、同じ日に複数あること自体は正しい（起動時の遡り生成と、
+    その日の締め）。**ところが実際に人間が困ったのは逆だった** — 一覧が日付しか出して
+    いなかったので同じ日の項目が見分けられず、どれを選んでも2件が同時に開いて読みにく
+    かった。
+
+    **もう片方が消えたわけではない。** 一覧が日時で1行ずつ並ぶようになったので、
+    その隣の行から開ける。「全部並べる」が守っていた「隠さない」は一覧の側が持つ。
+
+    `reportId` が古い URL などで見つからないときは、その日の先頭に落とす（空の画面を
+    出すより、その日の日報を出すほうが人間の役に立つ）。
+  */
+  const report = reports.find((entry) => entry.id === reportId) ?? reports[0];
 
   return (
     <Card className="min-w-0">
       <div className="border-b border-border px-4 py-3">
-        <h2 className="text-sm font-semibold">{date}</h2>
+        <h2 className="text-sm font-semibold">
+          {report === undefined ? date : reportLabel(report)}
+        </h2>
       </div>
       <ErrorNote error={error} className="m-4" />
       {isLoading ? (
         <Spinner />
-      ) : data === undefined || data.reports.length === 0 ? (
+      ) : report === undefined ? (
         <Empty>この日の日報は無い。</Empty>
       ) : (
-        <div className="flex flex-col divide-y divide-border">
+        <article className="min-w-0 px-4 py-3">
           {/*
-            同じ日に複数あることがある（起動時の遡り生成と、その日の締め）。
-            片方だけ出すと「書き換わった」ように見えるので、全部並べる。
+            **「書かれたのは」を省かないこと。** 見出しは「何日ぶんの日報か」
+            （`date`）で、ここは「いつ書かれたか」（`at`）である。遡り生成では
+            この2つの日が食い違う（前日ぶんが翌日に書かれる）ので、裸の時刻を
+            置くと見出しと矛盾しているように見える。
           */}
-          {data.reports.map((report) => (
-            <article key={report.id} className="min-w-0 px-4 py-3">
-              <p className="mb-2 text-[11px] text-muted">{formatDateTime(report.at)}</p>
-              {isUnavailable(report) ? (
-                <UnavailableNote reason={report.unavailable} />
-              ) : (
-                <Markdown>{report.body}</Markdown>
-              )}
-            </article>
-          ))}
-        </div>
+          <p className="mb-2 text-[11px] text-muted">書かれたのは {formatDateTime(report.at)}</p>
+          {isUnavailable(report) ? (
+            <UnavailableNote reason={report.unavailable} />
+          ) : (
+            <Markdown>{report.body}</Markdown>
+          )}
+        </article>
       )}
     </Card>
   );
