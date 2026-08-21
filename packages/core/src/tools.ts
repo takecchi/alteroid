@@ -101,6 +101,7 @@ export const CLONE_TOOL_NAMES = [
   'memory_read',
   'memory_write',
   'memory_append',
+  'memory_delete',
   'journal_write',
   'journal_read',
   'ask_human',
@@ -122,6 +123,7 @@ export const CLONE_TOOL_NAMES = [
   'manager_stop',
   'manager_list',
   'manager_report',
+  'manager_transcript',
   'runner_list',
 ] as const;
 
@@ -148,6 +150,19 @@ const LIST_BUDGET = 8_000;
 const LIST_DENIED_TOOLS = 3;
 /** 全文を取りに来たときの1回分。続きは `offset` で取れる。 */
 const REPORT_PAGE = 8_000;
+
+/**
+ * `manager_transcript`（生ログ）の1回分。
+ *
+ * **`REPORT_PAGE` と同じ値だが、同じ定数を使い回さない。** 意味が違う
+ * （こちらはセッションの生ログ、あちらは報告の全文）ので、片方だけを
+ * 直したくなったときに一緒に動いてしまわないよう定数を分けてある。
+ * 値をそろえた理由は同じ根拠 — MCP の出力上限より十分小さい安全域である
+ * （実測でこの上限に溢れた記録は上の `LIST_BUDGET` の doc と同じ形。
+ * 生ログは報告よりさらに大きくなりうる＝MB 級もあるので、ここを緩める
+ * 方向には倒さないこと）。
+ */
+const TRANSCRIPT_PAGE = 8_000;
 
 /**
  * 未了の台帳を1回に出す件数と、1件ぶんの本文の厚み。
@@ -257,7 +272,13 @@ export function createCloneTools(context: ToolContext) {
       },
       async ({ slug, content, summary }) => {
         await stores.persona.write(slug, content);
-        await stores.journal.append({ type: 'memory_update', slug, cause: 'clone', summary });
+        await stores.journal.append({
+          type: 'memory_update',
+          slug,
+          cause: 'clone',
+          action: 'write',
+          summary,
+        });
         return text(`記憶 ${slug} を更新した。`);
       },
     ),
@@ -272,8 +293,74 @@ export function createCloneTools(context: ToolContext) {
       },
       async ({ slug, content, summary }) => {
         await stores.persona.append(slug, content);
-        await stores.journal.append({ type: 'memory_update', slug, cause: 'clone', summary });
+        await stores.journal.append({
+          type: 'memory_update',
+          slug,
+          cause: 'clone',
+          action: 'append',
+          summary,
+        });
         return text(`記憶 ${slug} に追記した。`);
+      },
+    ),
+
+    /**
+     * 記憶の文書ごと消す口。
+     *
+     * **人間の側には既に在る**（CLI の `alteroid memory remove <slug>`、
+     * HTTP の `DELETE /memory/:slug`、`PersonaStore.remove`）。クローンの道具には
+     * `memory_list` / `read` / `write` / `append` の4本しか無く、削除だけが
+     * 欠けていた——`schedule_remove` は在るのにここだけ非対称（north_star 禁止1）。
+     *
+     * **部分削除の引数は作らない。** 文書の一部を消したいなら `memory_write` の
+     * 全文置換で足りる。ここは「文書そのものを無くす」ためだけの口である。
+     *
+     * **存在しないスラッグを黙って成功にしない。** `PersonaStore.remove` は
+     * ストア層では冪等（無ければ何もしないで返る）だが、それをそのまま道具の
+     * 応答にすると「消したつもりで何も消えていない」を作る。`DELETE /memory/:slug`
+     * と同じく、まず `read()` で在るかを確かめ、無ければ 404 相当の返事をする。
+     *
+     * **本文は日誌へ写さない。** 残すのはスラッグと消す直前の文字数だけ
+     * （AGENTS.md「秘密の扱い」— 記憶の中身を別の場所へ増やさない）。
+     *
+     * **「人間が書いた文書かクローンが書いた文書か」はここでは判別できない。**
+     * `memoryDocumentMetaSchema` / `memoryDocumentSchema`
+     * （`slug` / `title` / `updatedAt` / `bytes` / `content`）にも
+     * `storage-pg` の `memory` テーブル（`slug` / `content` / `updated_at`）にも
+     * 書き手を記録する列が無く、`storage-fs` は人間が `~/.alteroid/memory/*.md` を
+     * 直接開いて書き換えられること自体が要件（提供価値1）で、その経路は日誌に
+     * 一切痕跡を残さない。**だから「人間のものは消さない」を機構では守れない
+     * ——次にここを読んで書き手で判別するガードを足そうとしても、守れない規則を
+     * 実装しないこと。** 担保は逆側（消したことが必ず日誌へ残る側）に置いてある。
+     */
+    tool(
+      'memory_delete',
+      [
+        '記憶の文書を1つ、文書ごと消す（部分削除ではない。一部を変えたいだけなら memory_write を使う）。',
+        '無いスラッグを渡しても成功にはならず、そう返る。',
+        '消した事実は日誌に残る（スラッグと直前の文字数のみ。本文は残らない）。',
+        '**このデーモンは記憶の書き手（人間かクローンか）を区別できない** —',
+        'この道具でも「人間が書いたものだけ避ける」ような判断はできない。',
+      ].join(' '),
+      {
+        slug: z.string().describe('記憶のスラッグ（拡張子なし）'),
+        summary: z.string().describe('なぜ消したかの一行要約（日誌に残る。本文は残らない）'),
+      },
+      async ({ slug, summary }) => {
+        const existing = await stores.persona.read(slug);
+        if (existing === null) {
+          return text(`記憶 ${slug} は存在しない（消せない。何も変わっていない）。`);
+        }
+        await stores.persona.remove(slug);
+        await stores.journal.append({
+          type: 'memory_update',
+          slug,
+          cause: 'clone',
+          action: 'remove',
+          // 本文は残さず、直前の文字数だけ残す。何を消したかは summary が持つ。
+          summary: `${summary}（削除直前 ${existing.content.length} 文字）`,
+        });
+        return text(`記憶 ${slug} を消した（削除直前 ${existing.content.length} 文字）。`);
       },
     ),
 
@@ -1275,6 +1362,7 @@ export function createCloneTools(context: ToolContext) {
         'マネージャーの依頼文・直近の報告を全文で読む。',
         'manager_list は抜粋なので、欠落に気づいたらここで全部読むこと。',
         '長い場合は続きの取り方が末尾に出るので、最後まで読み切ること。',
+        'それでも足りない（報告に書かれていない中身を確かめたい）ときは manager_transcript で生ログまで降りられる。',
       ].join(' '),
       {
         managerId: z.string().describe('manager_list に出ている id'),
@@ -1315,6 +1403,77 @@ export function createCloneTools(context: ToolContext) {
         const tail = part1.more
           ? `\n\n…（ここで切れている。続きは manager_report managerId=${managerId}` +
             `${part === 'request' ? ' part=request' : ''} offset=${part1.to}）`
+          : '';
+        // **一本道であることを、道具の出力自身が案内する**（docs/PRD.md「セッション
+        // ログの層」— 日報だけで暮らせるが、掘れば生ログまで一本道で降りられること）。
+        // ここに載る `lastReport` は報告の全文であって、セッションの生ログではない。
+        // それでも足りないときの次の一手を、切れていない場合にも常に添える。
+        const footer = '\n\n（さらに掘るなら manager_transcript managerId=' + managerId + ' で生ログへ）';
+        return text(`${head}\n\n${part1.body}${tail}${footer}`);
+      },
+    ),
+
+    /**
+     * 可観測性の最下段 — マネージャーのセッションそのものの生ログ。
+     *
+     * **`manager_report` に `part: 'transcript'` を足す形にはしていない。**
+     * 理由は3つ:
+     * (a) `null` の意味が違う — `manager_report` の「無い」は「報告がまだ無い」
+     *     だが、生ログの「無い」は `ManagerPool.transcript()` の3段
+     *     （走行中の runner のディスク／退避済みアーカイブ／預かった生セッション）
+     *     すべてに無かったことである。
+     * (b) 大きさの桁が違う — 報告は KB オーダーだが、生ログは MB になりうる
+     *     （`TRANSCRIPT_PAGE` の doc）。
+     * (c) 1つの道具の説明文に2つの契約を載せることになり、読む側が
+     *     どちらの「無い」を見ているか分からなくなる。
+     *
+     * 人間の口（`GET /managers/:id/transcript`）はここでは変えない。**そちらは
+     * 無加工の全文を返す**（切り詰め・ページングなし）——人間はブラウザ・
+     * curl・エディタでいくらでも大きい応答を扱えるので、そこは人間側の等価性の
+     * 基準のまま保つ。クローンの文脈には MCP の出力上限があるので、こちらだけ
+     * ページングする（`manager_report` と同じ形）。
+     */
+    tool(
+      'manager_transcript',
+      [
+        'マネージャーのセッションそのものの生ログを読む（JSONL、1行1イベント）。',
+        'manager_report の報告は要約された最終報告でしかない——それでも足りないとき、',
+        '実際に何が起きたか（どの道具をどう呼んだか等）を確かめるにはここまで降りる。',
+        '走行中なら runner のディスクから、畳まれていれば退避済みアーカイブから、',
+        'それも無ければ預かったセッションの生ログから返る（3段のどこかにあれば返る）。',
+        '長ければ続きの取り方が末尾に出るので、最後まで読み切ること。',
+      ].join(' '),
+      {
+        managerId: z.string().describe('manager_list に出ている id'),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe('何文字目から読むか。前回の応答が示した続きの位置を渡す'),
+      },
+      async ({ managerId, offset = 0 }) => {
+        if (!context.managers) return NO_POOL;
+        const body = await context.managers.transcript(managerId);
+        if (body === null) {
+          // **`transcript()` の `null` は2つの意味を畳んでいる** — 「そのマネージャー
+          // 自体が台帳に居ない」か、「居るが3段のどこにも生ログが無い」か。
+          // `ManagerPool.transcript()` の実装（`manager.ts`）はこの2つを区別する
+          // 値を返してこないので、ここでも区別できない。**畳んでいることを隠さず、
+          // そう書く。**
+          return text(
+            `マネージャー ${managerId} の生ログは無い。走行中の runner のディスク・` +
+              '退避済みアーカイブ・預かったセッションの生ログ、3段のどこにも見当たらなかった。' +
+              `（${managerId} という id 自体が台帳に無い場合と、id はあるが生ログが` +
+              '一度も残らなかった場合のどちらも、この応答だけでは区別できない。' +
+              'manager_list に出ているかで id の実在は別途確かめられる。）',
+          );
+        }
+
+        const part1 = page(body, offset, TRANSCRIPT_PAGE);
+        const head = `マネージャー ${managerId} の生ログ（${describePage(part1)}）`;
+        const tail = part1.more
+          ? `\n\n…（ここで切れている。続きは manager_transcript managerId=${managerId} offset=${part1.to}）`
           : '';
         return text(`${head}\n\n${part1.body}${tail}`);
       },

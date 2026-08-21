@@ -1150,6 +1150,7 @@ export function createApp(deps: AppDeps) {
           type: 'memory_update',
           slug,
           cause: 'human',
+          action: 'write',
           summary: 'HTTP API 経由で人間が記憶を書き換えた',
         });
         return c.json({ document: doc });
@@ -1198,6 +1199,7 @@ export function createApp(deps: AppDeps) {
           type: 'memory_update',
           slug,
           cause: 'human',
+          action: 'remove',
           summary: 'HTTP API 経由で人間が記憶を削除した',
         });
         return c.json({ ok: true, slug });
