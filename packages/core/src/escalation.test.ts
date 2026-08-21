@@ -248,3 +248,97 @@ describe('エスカレーション（受け入れ基準2）', () => {
     await pool.stop();
   });
 });
+
+describe('クローンが記憶を根拠に、人間を経由せず答える経路（ask_human を通らない manager_send）', () => {
+  /**
+   * ⭐ このテストが固定しているのは「経路の処理」であって、モデルの判定そのものではない。
+   *
+   * `clone.ts` の `managerPrompt()` は、マネージャーからの質問・許可確認をモデルへ
+   * 渡すとき「記憶に根拠があるなら自分で決めて `manager_send` で返し、その判断を
+   * `journal_write` に残せ。根拠が無いなら `ask_human` に積め」という**指示文**を
+   * 渡す。これはコード側の分岐ではなくモデルへの依頼であり、`manager_send`
+   * （`tools.ts`）は `ask_human` を経由せずに直接呼べる（ゲートされていない）。
+   *
+   * 上の「エスカレーション（受け入れ基準2）」は根拠が無い側（2件とも `ask_human`
+   * へ回す）だけを固定していて、**人間を迂回してクローンが自分で答える経路**を
+   * 通すテストが1本も無かった。ここが埋める箇所である。このテストが固定するのは:
+   *
+   * 1. `ask_human` を呼ばずに `manager_send` で回答できる
+   * 2. その判断が `journal_write` で日誌（`decision`）に残る
+   * 3. 承認待ちキュー（`listApprovals`）には何も積まれない（`ask_human` を経て
+   *    いないことの裏）
+   * 4. マネージャー側の返事待ちが実際に解ける（回答が届く）
+   *
+   * という一連をコードが正しく扱えること、**それだけ**である。
+   *
+   * ⭐ 固定していないこと — ここで `manager_send` と `journal_write` を呼んでいる
+   * のは**テストの作者**であり、モデルではない。偽 SDK には「根拠があるかどうか」
+   * を判定する能力が無いので、その判定を代わりに手順としてスクリプトしているに
+   * すぎない。M2 受け入れ基準3（「記憶に根拠がある確認はクローンが人間に聞かずに
+   * 返している」）が言っているのは*モデルがそう判断すること*であり、それは
+   * このテストでは原理的に確かめられない。**このテストが緑であることを
+   * 「受け入れ基準3を満たした」の根拠にしないこと。**
+   */
+  it('ask_human を経由せず manager_send で返すと、日誌に残り、承認待ちは増えず、マネージャーへ届く', async () => {
+    const stores = createMemoryStores();
+    const manager = fakeManagerSdk();
+    const inbox: InboxEvent[] = [];
+    const pool = createManagerPool({
+      stores,
+      post: (event) => inbox.push(event),
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: manager.fn, env: {} }),
+      ]),
+    });
+    const hands = handsOf(stores, pool);
+
+    const { managerId } = await pool.start({ request: '1件確認してくる仕事' });
+    const session = manager.sessions[0];
+    if (!session) throw new Error('マネージャーのセッションが無い');
+
+    // マネージャーが1件の許可確認を上げる。
+    const pending = session.ask('Bash', 'req-self');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const asked = inbox.filter((event) => event.type === 'manager_message');
+    expect(asked).toHaveLength(1);
+
+    // --- クローンは ask_human を呼ばず、記憶に根拠があるとして自分で答える -----
+    const reply = await hands.call('manager_send', {
+      managerId,
+      requestId: 'req-self',
+      message: '過去に同種の許可を出している前例があるので進めてよい',
+      decision: 'allow',
+    });
+    expect(reply).toContain('回答した');
+
+    // managerPrompt() の指示どおり、その判断を journal_write で日誌に残す。
+    await hands.call('journal_write', {
+      decision: `マネージャー ${managerId} の req-self へ、人間に聞かずに allow で答えた`,
+      grounds: '記憶に同種の許可を出した前例がある',
+    });
+
+    // --- ① ask_human を経由していない証拠: 承認待ちキューが1件も増えていない ---
+    // 承認待ちキュー（jobs.putApproval）へ積むのは `ask_human` だけである。
+    // `escalation` 型の日誌は `manager.ts` が ask/answer のたびに機械的に書く
+    // （どちらの経路でも書かれるので、ここでは経路の判定材料にしない）。
+    const approvals = await stores.jobs.listApprovals({ pendingOnly: true });
+    expect(approvals).toHaveLength(0);
+
+    // --- ② 判断が journal_write で日誌（decision）に残っている ---------------
+    const decisions = (await stores.journal.list({ types: ['decision'] })) as {
+      type: 'decision';
+      decision: string;
+      grounds: string;
+    }[];
+    const found = decisions.find((d) => d.decision.includes('req-self'));
+    expect(found).toBeDefined();
+    expect(found?.grounds).toBe('記憶に同種の許可を出した前例がある');
+
+    // --- ③ マネージャー側に実際に届いている（止まっていた返事待ちが解ける） ---
+    expect(await pending).toEqual({ behavior: 'allow' });
+    expect((await pool.list()).find((m) => m.managerId === managerId)?.waiting).toEqual([]);
+
+    await pool.stop();
+  });
+});
