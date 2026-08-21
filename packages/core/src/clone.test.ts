@@ -3233,6 +3233,203 @@ describe('クローンの消費が台帳に載る（誰が・どこで）', () =
 });
 
 /**
+ * `UsageFold.delta`（ターン1回ぶんの増分）は台帳へ積むだけで捨てていた。
+ * 台帳は日 × actor × モデル × 層 × 場所に畳むので、「そのターンがいくらだったか」
+ * は台帳のどこにも残らない。ここは `#recordUsage` が `turn_usage` として
+ * 日誌へ残すことを見る（`manager.ts` の `case 'usage'` にも対になる形を足した
+ * — 片方だけだと非対称が残る）。
+ */
+describe('クローン — ターン1回ぶんの増分を turn_usage として日誌に残す', () => {
+  /** `costUsd` に加え cache read/write も動かせる `modelUsage` の素材。 */
+  function usageOf(
+    model: string,
+    fields: {
+      cacheReadInputTokens?: number;
+      cacheCreationInputTokens?: number;
+      costUsd?: number;
+    },
+  ) {
+    return {
+      [model]: {
+        inputTokens: 10,
+        outputTokens: 20,
+        cacheReadInputTokens: fields.cacheReadInputTokens ?? 0,
+        cacheCreationInputTokens: fields.cacheCreationInputTokens ?? 0,
+        webSearchRequests: 0,
+        // SDK 側の綴りは大文字（`costUSD`）。
+        costUSD: fields.costUsd ?? 0,
+      },
+    };
+  }
+
+  it('cacheReadInputTokens / cacheCreationInputTokens / costUsd が潰されずに日誌へ入る', async () => {
+    const s = setup(undefined, createMemoryStores(), {
+      modelUsage: () =>
+        usageOf('claude-fable-5', {
+          costUsd: 0.5,
+          cacheReadInputTokens: 120,
+          cacheCreationInputTokens: 40,
+        }),
+    });
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const entries = await s.stores.journal.list({ types: ['turn_usage'] });
+    expect(entries).toHaveLength(1);
+    const entry = entries[0];
+    if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
+    expect(entry.layer).toBe('clone');
+    expect(entry.site).toBe('session');
+    expect(entry.managerId).toBe(CLONE_ACTOR_ID);
+    // **合計に潰していないこと** — read と write が別々に残っている。
+    expect(entry.models['claude-fable-5']).toEqual({
+      inputTokens: 10,
+      outputTokens: 20,
+      cacheReadInputTokens: 120,
+      cacheCreationInputTokens: 40,
+      webSearchRequests: 0,
+      costUsd: 0.5,
+    });
+    expect(entry.reset).toBeUndefined();
+
+    await s.clone.stop();
+  });
+
+  it('増分が空の回（同じ累積が2ターン続く）は turn_usage の行を書かない', async () => {
+    // 同一セッション内の2ターン目。`modelUsage` は同じ値を返し続けるので、
+    // 2回目の累積は1回目と変わらない ＝ 増分ゼロ。
+    const s = setup(undefined, createMemoryStores(), {
+      modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
+    });
+
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    s.clone.post(humanMessage('2回目'));
+    await expect
+      .poll(() => s.events.filter((event) => event.type === 'done').length === 2, {
+        timeout: 3000,
+      })
+      .toBe(true);
+
+    const entries = await s.stores.journal.list({ types: ['turn_usage'] });
+    // **「行が無い」＝増分ゼロであって、そのターンが無料だったわけではない**
+    // （このテストでは実際に増分がゼロなので1件のまま増えない、が正しい）。
+    expect(entries).toHaveLength(1);
+
+    await s.clone.stop();
+  });
+
+  it('累積が数え直された回は turn_usage に reset が付く（models は差分ではなく新しい累積の先頭）', async () => {
+    let turnCount = 0;
+    const s = setup(undefined, createMemoryStores(), {
+      modelUsage: () => {
+        turnCount += 1;
+        return turnCount === 1
+          ? usageOf('claude-fable-5', { costUsd: 5 })
+          : usageOf('claude-fable-5', { costUsd: 3 });
+      },
+    });
+
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    // resume / /clear で SDK 側の累積が 0 から始まり、次に読めた値が 3 だった形。
+    s.clone.post(humanMessage('2回目'));
+    await expect
+      .poll(() => s.events.filter((event) => event.type === 'done').length === 2, {
+        timeout: 3000,
+      })
+      .toBe(true);
+
+    const all = await s.stores.journal.list({ limit: 50 });
+    // **既存の1行（`exchange with=self`）は従来どおり出る**（あちらを壊していない）。
+    const note = all.find(
+      (entry) => entry.type === 'exchange' && entry.text.includes('数え直された'),
+    );
+    expect(note).toBeDefined();
+
+    const turnUsageEntries = all.filter((entry) => entry.type === 'turn_usage');
+    expect(turnUsageEntries).toHaveLength(2);
+    const resetEntry = turnUsageEntries.find(
+      (entry) => entry.type === 'turn_usage' && entry.reset !== undefined,
+    );
+    if (resetEntry?.type !== 'turn_usage') throw new Error('reset 付きの turn_usage が無い');
+    expect(resetEntry.reset).toEqual({ fromCostUsd: 5, toCostUsd: 3 });
+    expect(resetEntry.models['claude-fable-5']?.costUsd).toBe(3);
+
+    await s.clone.stop();
+  });
+
+  it('台帳へ積めなければ turn_usage も書かれない（黙って消さないが、殺しもしない）', async () => {
+    const stores = createMemoryStores();
+    stores.usage.record = () => Promise.reject(new Error('台帳が書けない'));
+
+    const s = setup(undefined, stores, {
+      modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
+    });
+
+    const stderr = await captureStderr(async () => {
+      s.clone.post(humanMessage('やあ'));
+      await waitForDone(s.events);
+    });
+
+    expect(stderr.join('')).toContain('利用状況の台帳');
+    const entries = await s.stores.journal.list({ types: ['turn_usage'] });
+    expect(entries).toHaveLength(0);
+
+    await s.clone.stop();
+  });
+
+  it('失敗したターン（isSuccessResult が偽）は turn_usage の行を書かず、消費は次の成功したターンへ合算される', async () => {
+    // `#recordUsage` は `isSuccessResult` が偽の result を早期 return で捨てる
+    // （`schema.ts` の `turn_usage.models` の doc「## これは『このターンの消費』
+    // ではなく『前回成功した result からの増分』である」）。1ターン目は失敗、
+    // 2ターン目は成功で、SDK側の累積は両方を含む形（$5）を返す ——
+    // 失敗ターンの分（$2）は消えるのではなく、2ターン目の増分へ合算されて
+    // 現れることを見る。
+    let modelUsageCalls = 0;
+    const s = setup(undefined, createMemoryStores(), {
+      resultFor: (turnIndex) =>
+        turnIndex === 0 ? { subtype: 'error_during_execution' } : undefined,
+      modelUsage: () => {
+        modelUsageCalls += 1;
+        return modelUsageCalls === 1
+          ? usageOf('claude-fable-5', { costUsd: 2 })
+          : usageOf('claude-fable-5', { costUsd: 5 });
+      },
+    });
+
+    s.clone.post(humanMessage('1回目'));
+    await waitForTerminal(s.events);
+    expect(s.events.filter(isTerminal).map((event) => event.type)).toEqual(['error']);
+
+    // **失敗ターンは行を1件も作らない。**
+    const afterFirst = await s.stores.journal.list({ types: ['turn_usage'] });
+    expect(afterFirst).toHaveLength(0);
+
+    s.clone.post(humanMessage('2回目'));
+    await expect
+      .poll(() => s.events.filter((event) => event.type === 'done').length === 1, {
+        timeout: 3000,
+      })
+      .toBe(true);
+
+    const afterSecond = await s.stores.journal.list({ types: ['turn_usage'] });
+    expect(afterSecond).toHaveLength(1);
+    const entry = afterSecond[0];
+    if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
+    // **失敗ターンの分（$2）は消えたのではなく、2ターン目の増分（$5）へ
+    // 合算されて現れている**（基準は失敗ターンで更新されていないので、
+    // 2ターン目の差分は 5 - 0 = 5 になる）。
+    expect(entry.models['claude-fable-5']?.costUsd).toBe(5);
+
+    await s.clone.stop();
+  });
+});
+
+/**
  * 枠（利用上限）に当たったら、合図を捨てずに保持し、次の合図が来たときに
  * 試し直す（`clone.ts` の `#usageBlocked` / `#deferred`）。
  *

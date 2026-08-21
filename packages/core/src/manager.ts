@@ -1368,6 +1368,31 @@ class Pool implements ManagerPool {
           return;
         }
 
+        // **ターン1回ぶんの増分を日誌へ残す。** 台帳は日 × actor × モデル ×
+        // 層 × 場所に畳むので、このターンがいくらだったかは台帳のどこにも
+        // 残らない（`schema.ts` の `turn_usage` の doc）。**両層（クローンと
+        // マネージャー）に入れる** — 片方だけだと非対称が残る（`clone.ts` の
+        // `#recordUsage` と同じ形をここにも置く）。
+        //
+        // 増分が空の回は行を書かない（取れない軸に0の行を作らない。
+        // `foldUsageSnapshot` は増えていないモデルの行を `delta` に作らない
+        // ので、キーが1つも無ければ増分ゼロが確定する）。
+        if (Object.keys(fold.delta).length > 0) {
+          await this.#journal({
+            type: 'turn_usage',
+            layer: 'manager',
+            site: 'session',
+            managerId: event.managerId,
+            ...(event.sessionId === undefined ? {} : { sessionId: event.sessionId }),
+            models: fold.delta,
+            ...(fold.reset === undefined
+              ? {}
+              : {
+                  reset: { fromCostUsd: fold.reset.fromCostUsd, toCostUsd: fold.reset.toCostUsd },
+                }),
+          });
+        }
+
         // **数え直しを黙って通さない。** resume や mid-session の `/clear` で
         // 累積が 0 に戻るのは正常だが、記録がないと後から「なぜ集計が飛んで
         // いるか」を誰も辿れない（PRD「可観測性」）。

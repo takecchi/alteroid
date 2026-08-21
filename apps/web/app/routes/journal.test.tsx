@@ -65,6 +65,25 @@ const WORKER_WAIT: JournalEntry = {
   settled: true,
 };
 
+const TURN_USAGE: JournalEntry = {
+  type: 'turn_usage',
+  id: 'tu-1',
+  at: '2026-08-20T22:20:00.000Z',
+  layer: 'clone',
+  site: 'session',
+  managerId: 'clone',
+  models: {
+    'claude-fable-5': {
+      inputTokens: 10,
+      outputTokens: 20,
+      cacheReadInputTokens: 120,
+      cacheCreationInputTokens: 40,
+      webSearchRequests: 0,
+      costUsd: 0.5,
+    },
+  },
+};
+
 function renderJournal(live: JournalLive) {
   return render(
     <Providers>
@@ -215,5 +234,36 @@ describe('worker_wait — 種別フィルタと1行の文言', () => {
       expect(screen.queryByText(summarizeJournalEntry(HISTORY_ONLY))).toBeNull();
     });
     expect(screen.getByText(summarizeJournalEntry(WORKER_WAIT))).toBeTruthy();
+  });
+});
+
+/**
+ * **キャッシュの書き直しが目で分かる文言であること**（`summarizeJournalEntry`
+ * の doc — read/write を潰すと測る意味が消える）と、他の種別と同じ絞り込み
+ * 経路（`GET /journal?type=`）に乗っていること。
+ */
+describe('turn_usage — 種別フィルタと1行の文言', () => {
+  it('1行は cache read/write を潰さない文言で、絞り込みボタンでも選べる', async () => {
+    stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      const type = new URL(url).searchParams.get('type');
+      if (type === 'turn_usage') return json({ entries: [TURN_USAGE], scanned: 1 });
+      return json({ entries: [HISTORY_ONLY, TURN_USAGE], scanned: 2 });
+    });
+
+    renderJournal({ status: 'live', recent: [] });
+
+    await screen.findByText(summarizeJournalEntry(HISTORY_ONLY));
+    const row = screen.getByText(summarizeJournalEntry(TURN_USAGE));
+    expect(row).toBeTruthy();
+    expect(row.textContent).toContain('read=120');
+    expect(row.textContent).toContain('write=40');
+
+    fireEvent.click(screen.getByRole('button', { name: 'turn_usage' }));
+
+    await waitFor(() => {
+      expect(screen.queryByText(summarizeJournalEntry(HISTORY_ONLY))).toBeNull();
+    });
+    expect(screen.getByText(summarizeJournalEntry(TURN_USAGE))).toBeTruthy();
   });
 });

@@ -23,6 +23,7 @@ const TYPES: readonly JournalEntryType[] = [
   'daily_report',
   'external_event',
   'worker_wait',
+  'turn_usage',
 ];
 
 const TONE: Record<JournalEntryType, 'neutral' | 'ok' | 'warn' | 'danger' | 'accent'> = {
@@ -34,6 +35,7 @@ const TONE: Record<JournalEntryType, 'neutral' | 'ok' | 'warn' | 'danger' | 'acc
   daily_report: 'accent',
   external_event: 'warn',
   worker_wait: 'neutral',
+  turn_usage: 'neutral',
 };
 
 export default function Journal() {

@@ -1344,6 +1344,36 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
           '。',
       };
     }
+    case 'turn_usage': {
+      // **キャッシュの書き直しを目で分かる形にする**（潰すと測る意味が消える。
+      // PR「なぜ台帳ではなく日誌なのか」）。数え直しの印は一覧の head にも
+      // 出す — 印の行を一覧から隠さない（`worker_wait` の `settled: false` の
+      // 扱いと同じ考え方）。
+      const modelLines = Object.entries(entry.models)
+        .map(([model, totals]) => {
+          const cache =
+            totals.cacheReadInputTokens === 0 && totals.cacheCreationInputTokens === 0
+              ? ''
+              : ` cache(read=${totals.cacheReadInputTokens} write=${totals.cacheCreationInputTokens})`;
+          return (
+            `${model}: ${formatUsd(totals.costUsd)}${cache} ` +
+            `in=${totals.inputTokens} out=${totals.outputTokens}`
+          );
+        })
+        .join('\n');
+      const resetLine =
+        entry.reset === undefined
+          ? ''
+          : `\n⚠ 数え直しを挟んだ回（${formatUsd(entry.reset.fromCostUsd)} → ` +
+            `${formatUsd(entry.reset.toCostUsd)}）。models は差分ではなく新しい累積の先頭 — ` +
+            '他の行と足し合わせると二重に数える。';
+      return {
+        head:
+          `[turn_usage ${entry.layer}/${entry.site} ${entry.managerId}]` +
+          (entry.reset === undefined ? '' : ' ⚠reset'),
+        body: `${modelLines}${resetLine}`,
+      };
+    }
   }
 }
 
