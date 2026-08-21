@@ -38,13 +38,49 @@ const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url));
 const UPDATE_SCRIPT = join(SCRIPTS_DIR, 'update-claude-sdk.sh');
 const PR_SCRIPT = join(SCRIPTS_DIR, 'open-claude-sdk-pr.sh');
 
-/** この環境にグローバル設定が無いので、テスト側の git 操作には明示で渡す。
+/** この環境にグローバル設定（`~/.gitconfig`）が無い前提で、テスト側の git 操作には
+ * `-c user.email=...` / `-c user.name=...` を明示で渡している。
  * スクリプト自身（open-claude-sdk-pr.sh）は commit 前に自分で
  * `git config user.name/email` を設定するので、スクリプト実行そのものには不要。 */
 const GIT_IDENTITY = ['-c', 'user.email=sdk-test@example.com', '-c', 'user.name=SDK Test'];
 
+/** git の author/committer identity を決める環境変数。**`-c user.email=...` /
+ * `-c user.name=...` より優先順位が高い**（git のドキュメント通り、
+ * `GIT_AUTHOR_*` / `GIT_COMMITTER_*` env は `-c` 経由の `user.*` config を上書きする）。
+ *
+ * この器では `GIT_AUTHOR_EMAIL` などが既に設定されており（人間のコミッター用途）、
+ * `execFileSync` へ `env` を明示しないと Node が親（このテストプロセス）の
+ * `process.env` をそのまま子へ継承する。その結果、`-c user.email=...` で
+ * 意図した identity が握りつぶされ、`pushExistingBranch` が「bot」「human」を
+ * 指定したつもりの commit がどちらも別の1つの identity になってしまい、
+ * force push 前の「bot 以外のコミットが無いか」チェックのテストが環境依存で
+ * 壊れていた（`GIT_AUTHOR_EMAIL` 未設定の器だけで通っていた）。
+ *
+ * 対策はテスト側で明示的に隔離すること。器の環境変数そのものは変えない
+ * （それは実行環境の持ち主が置いたものである）。ここで4つの env を落として、
+ * どの器で走っても `-c user.email=...` が唯一の情報源になる形にする。 */
+const GIT_IDENTITY_ENV_KEYS = [
+  'GIT_AUTHOR_NAME',
+  'GIT_AUTHOR_EMAIL',
+  'GIT_COMMITTER_NAME',
+  'GIT_COMMITTER_EMAIL',
+] as const;
+
+/** `process.env` から git identity 系の env を落としたコピーを返す。
+ * `-c user.email=...` / `-c user.name=...` による明示指定だけが effective に
+ * なるようにするための隔離で、この4つ以外の env（PATH など）はそのまま通す。 */
+function gitIsolatedEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const key of GIT_IDENTITY_ENV_KEYS) delete env[key];
+  return env;
+}
+
 function git(cwd: string, args: string[]): string {
-  return execFileSync('git', [...GIT_IDENTITY, ...args], { cwd, encoding: 'utf8' });
+  return execFileSync('git', [...GIT_IDENTITY, ...args], {
+    cwd,
+    encoding: 'utf8',
+    env: gitIsolatedEnv(),
+  });
 }
 
 type Result = { exitCode: number; stdout: string; stderr: string };
@@ -491,9 +527,13 @@ fi
       "catalog:\n  '@anthropic-ai/claude-agent-sdk': ^0.3.238\n",
     );
     const identity = ['-c', `user.email=${authorEmail}`, '-c', `user.name=${authorName}`];
-    execFileSync('git', [...identity, 'add', '.'], { cwd: seedPath });
+    // **`env: gitIsolatedEnv()` が要る。** `GIT_AUTHOR_EMAIL` 等が既に環境にあると
+    // 上の `-c user.email=...` より優先されてしまい、"bot" のつもりで積んだ
+    // コミットが実際には環境変数の author になる（`gitIsolatedEnv` のコメント参照）。
+    execFileSync('git', [...identity, 'add', '.'], { cwd: seedPath, env: gitIsolatedEnv() });
     execFileSync('git', [...identity, 'commit', '-q', '-m', 'existing branch commit'], {
       cwd: seedPath,
+      env: gitIsolatedEnv(),
     });
     git(seedPath, ['push', '-q', 'origin', `${BRANCH}:refs/heads/${BRANCH}`]);
     git(seedPath, ['checkout', '-q', 'main']);
