@@ -93,6 +93,35 @@ export interface HttpRunnerOptions {
   onUnknown?: (report: RunnerUnknownReport) => void;
 }
 
+/**
+ * 「不明」を日誌の1行にする。**この行を読む人はこの PR を読んでいない。**
+ *
+ * だから**言えること／言えないことを行の中に書く。** 期限切れは「失敗した」でも
+ * 「runner が死んだ」でもないので、そう読めない文にしないと、読んだ側が勝手に
+ * 断定へ畳む（再送すれば二重に実行され、引き取らせれば同じマネージャーが2台で
+ * 走る）。
+ *
+ * **後から解けたことも同じ形で残す。** 「不明」だけが残って解決が残らないと、
+ * 日誌を辿った人は永久に不明のままだと読む。
+ */
+export function describeRunnerUnknown(report: RunnerUnknownReport): string {
+  const where = `${report.method} ${report.path}`;
+  const waited = `${String(report.waitedMs)}ms`;
+  if (report.phase === 'late') {
+    return report.ok === true
+      ? `runner の ${where} が、期限（${waited}）を過ぎてから成功で返った。` +
+          '**不明は解けた**（あの操作は届いていて、応答だけが遅れていた）。'
+      : `runner の ${where} が、期限（${waited}）を過ぎてから失敗で返った: ${String(report.error)}。` +
+          '**不明は解けた**（届いたかどうかはこの失敗の中身で決まる）。';
+  }
+  return (
+    `runner の ${where} が ${waited} 以内に応答を返さなかった。**言えるのはそれだけである** — ` +
+    '届いたかどうかは分かっていない。失敗とは限らないので同じ操作を送り直すと二重に実行され、' +
+    'runner が死んだとも限らないので別の runner へ引き取らせると同じマネージャーが2台で走る。' +
+    '待つのをやめただけで、runner 側の実行は止めていない（遅れて返ってきたらこの日誌に続きが載る）。'
+  );
+}
+
 /** `unix:/path/to.sock` を取り出す（無ければ TCP）。 */
 function socketPathOf(baseUrl: string): string | null {
   const match = /^unix:(?:\/\/)?(.+)$/.exec(baseUrl);

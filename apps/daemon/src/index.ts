@@ -38,7 +38,12 @@ import { createApp, parseAllowedOrigins } from './app.js';
 import { startUsagePolling } from './usage-poller.js';
 import { planAuth } from './auth.js';
 import { createJournalBus } from './journal-bus.js';
-import { createHttpRunner, RunnerHttpError } from './runner-client.js';
+import {
+  createHttpRunner,
+  describeRunnerUnknown,
+  RunnerHttpError,
+  type RunnerUnknownReport,
+} from './runner-client.js';
 import { clearRuntimeInfo, writeRuntimeInfo } from './runtime.js';
 import { buildSchedule, readScheduleConfig } from './schedule.js';
 import { openStorage } from './storage.js';
@@ -64,7 +69,15 @@ export {
 export { buildOpenApiDocument } from './openapi.js';
 export { createJournalBus, type JournalBus } from './journal-bus.js';
 export { openStorage, DATABASE_URL_ENV, type Storage } from './storage.js';
-export { createHttpRunner, RunnerHttpError, type HttpRunnerOptions } from './runner-client.js';
+export {
+  createHttpRunner,
+  describeRunnerUnknown,
+  RUNNER_CALL_DEADLINE_MS,
+  RunnerHttpError,
+  RunnerUnknownError,
+  type HttpRunnerOptions,
+  type RunnerUnknownReport,
+} from './runner-client.js';
 export {
   buildSchedule,
   readScheduleConfig,
@@ -150,6 +163,11 @@ function runnerSeeds(options: {
   workspace: string;
   withheldEnvKeys: string[];
   profilePath: string;
+  /**
+   * 「期限内に応答が返らなかった」の受け口。**日誌へ落とすのはここより上**である
+   * （`main()` が `stores.journal` を持っている）。
+   */
+  onRunnerUnknown: (report: RunnerUnknownReport) => void;
 }): RunnerSource[] {
   const urls = parseRunnerUrls(process.env);
   if (urls.length > 0) {
@@ -160,7 +178,10 @@ function runnerSeeds(options: {
           '（runner の制御面は鍵で守る。runner には sha256 を渡すこと）',
       );
     }
-    return urls.map((url) => ({ label: url, open: () => openHttpRunner(url, token) }));
+    return urls.map((url) => ({
+      label: url,
+      open: () => openHttpRunner(url, token, options.onRunnerUnknown),
+    }));
   }
   return [
     {
@@ -189,9 +210,13 @@ function runnerSeeds(options: {
  * 包み直すと、名簿は「待てば直る」と読んで永久に叩き続け、設定の誤りが
  * 「なぜか繋がらない」として隠れる（`isRetryableRunnerError`）。
  */
-async function openHttpRunner(baseUrl: string, token: string): Promise<RunnerClient> {
+async function openHttpRunner(
+  baseUrl: string,
+  token: string,
+  onUnknown: (report: RunnerUnknownReport) => void,
+): Promise<RunnerClient> {
   try {
-    return await createHttpRunner({ baseUrl, token });
+    return await createHttpRunner({ baseUrl, token, onUnknown });
   } catch (error) {
     if (error instanceof RunnerHttpError && (error.status === 401 || error.status === 403)) {
       throw new RunnerHttpError(
@@ -256,10 +281,36 @@ export async function main(): Promise<void> {
   // **ここでは開かない。** 宛先（開き方）を数えるだけで、繋ぐのは待ち受けを開いた
   // 後の背景である。開き終わるまで待つ形だと、runner の入れ替えに巻き込まれて
   // chat も日誌も承認も止まる（PRD「自律」）。
+  /**
+   * 「不明」を日誌へ落とす。**ここを繋がないと期限を付けた意味が無い。**
+   *
+   * ファイルの中で正しく分類できても、クローンの受信箱に「まだ走っている」しか
+   * 出ないなら、クローンは永久に待つ（＝直したことにならない）。日誌はクローンが
+   * `journal_read` で読む既存の経路で、`apps/daemon` から書けるのもここだけである。
+   * **新しい通知の仕組みは足さない** — 同じ契約が2つになる。
+   *
+   * `external_event` にするのは、これが**デーモンから見た外側の観測**だからである
+   * （マネージャーとのやり取りではない）。マネージャーの id は文面に載る。
+   *
+   * **記録の失敗でデーモンを止めない。** 落ちたときだけ stderr に出す — 日誌が
+   * 書けなかったことまで黙って消えると、「不明」が二重に消える。
+   */
+  const reportRunnerUnknown = (report: RunnerUnknownReport): void => {
+    void stores.journal
+      .append({ type: 'external_event', source: 'runner', summary: describeRunnerUnknown(report) })
+      .catch((error: unknown) => {
+        process.stderr.write(
+          `alteroidd: runner の期限切れを日誌へ残せませんでした: ${String(error)}\n` +
+            `  ${describeRunnerUnknown(report)}\n`,
+        );
+      });
+  };
+
   const seeds = runnerSeeds({
     workspace,
     withheldEnvKeys: storage.withheldEnvKeys,
     profilePath: join(paths.state, 'runner-profile.sh'),
+    onRunnerUnknown: reportRunnerUnknown,
   });
 
   /**
