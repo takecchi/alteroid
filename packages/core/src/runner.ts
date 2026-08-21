@@ -35,6 +35,15 @@ import type {
   RunnerStartCommand,
 } from './runner-protocol.js';
 import type { JobStatus } from './schema.js';
+// **クローン（`clone.ts`）と同じ判定を呼ぶ。** 「これは応答ではない」の見分けを
+// 層ごとに書くと、片方だけが SDK の印を見落として非対称になる（実際に
+// `result.errors[]` はここにしか無く、クローン側は読んでいなかった）。
+import {
+  assistantFailureOf,
+  resultErrorLines,
+  resultFailureOf,
+  type SdkFailure,
+} from './sdk-failure.js';
 import { classifyUsageNotice, toRateLimitFacts } from './usage-limits.js';
 import { settleWithin } from './usage-probe.js';
 // **クローン（`clone.ts`）と同じ実装を呼ぶ。** 層ごとに result の写し取りを
@@ -611,6 +620,14 @@ class RunnerSession {
    * 受信側だけが読めないのは能力の削除である（north_star 禁止1）。
    */
   #said: string[] = [];
+  /**
+   * このターンで SDK が「これは応答ではない」と印を付けたメッセージ
+   * （`assistant.error`）。
+   *
+   * **`#said` と同じ区切りで畳む。** 持ち越すと、次のターンが成功しても失敗として
+   * 報告されることになる。
+   */
+  #rejected: SdkFailure | null = null;
   readonly #inputWaiters = new Set<() => void>();
   #query: Query | null = null;
   #reader: Promise<void> | null = null;
@@ -1061,6 +1078,16 @@ class RunnerSession {
     if (message.type === 'assistant') {
       if (parentToolUseId(message) === null) {
         const said = assistantText(message);
+        // **SDK が「これは応答ではない」と印を付けたメッセージは報告に混ぜない。**
+        // 支出上限（`billing_error`）・枠（`rate_limit`）・認証の失敗はここへ来る。
+        // 直す前はこの印を1度も見ておらず、上限の英語文言がそのまま
+        // 「マネージャーの報告」として台帳・日誌・クローンの受信箱へ流れていた
+        // （`sdk-failure.ts` の doc。クローン側の穴と同じ形である）。
+        const rejected = assistantFailureOf(message, said);
+        if (rejected !== undefined) {
+          this.#rejected = rejected;
+          return;
+        }
         if (said.length > 0) this.#said.push(said);
       }
       return;
@@ -1072,11 +1099,25 @@ class RunnerSession {
     // 混ざって「言っていないことを言った」ことになる。
     const said = this.#said;
     this.#said = [];
+    // **印も同じ区切りで畳む。** 持ち越すと、次のターンが成功しても失敗として
+    // 報告されることになる（`#said` を持ち越してはいけないのと同じ理由）。
+    const rejected = this.#rejected;
+    this.#rejected = null;
 
     // **成否で絞らない。** 拒否は成功したターンにも失敗したターンにも載る（型は
     // `SDKResultSuccess` と `SDKResultError` の両方が持っている）。`usage` と違って
     // ゼロ埋めで害が出る値ではないので、ここは落とさず全部見る。
     for (const denial of permissionDenials(message)) this.#noteDenial(denial, 'result');
+
+    // **SDK が「応答ではない」と言っている印**（`assistant.error` /
+    // `result.subtype` / `subtype: 'success'` なのに `is_error`）。
+    //
+    // **`isSuccessResult` はこれを兼ねられない。** あちらは台帳の問い
+    // （この累積を通してよいか）で `subtype === 'success'` だけを見るので、
+    // `is_error: true` の result を成功として通す（`sdk-failure.ts` の表）。
+    // 下の `#progressed` と `usage` は従来どおり `isSuccessResult` のままにして
+    // あり、変えたのは**報告の扱い**だけである。
+    const failure = resultFailureOf(message) ?? rejected ?? undefined;
 
     // **`init` が来たことは「戻れた」ことではない。** 実機では、開きはしたが
     // その回が `error_during_execution` で何も返さずに終わる形も出ている。
@@ -1102,20 +1143,30 @@ class RunnerSession {
           models,
         });
       }
-    } else {
-      // **なぜ終わったのかを落とさない。** 実際に支出上限へ当たったとき、
-      // マネージャーは `You've hit your individual spend limit` を返して終わった。
-      // これを「結果なしで終了」だけにすると、上限で止まったのか失敗したのかを
-      // クローンが区別できない — 前者は待つ / 人間に頼む、後者は挑み直す、で
-      // 手が正反対になる。判定は SDK の定数で行う（自前の正規表現は腐る）。
-      for (const candidate of [resultText(message), ...resultErrors(message)]) {
+    }
+
+    // **なぜ終わったのかを落とさない。** 実際に支出上限へ当たったとき、
+    // マネージャーは `You've hit your individual spend limit` を返して終わった。
+    // これを「結果なしで終了」だけにすると、上限で止まったのか失敗したのかを
+    // クローンが区別できない — 前者は待つ / 人間に頼む、後者は挑み直す、で
+    // 手が正反対になる。判定は SDK の定数で行う（自前の正規表現は腐る）。
+    //
+    // **成否の分岐の外に出してある。** `assistant.error` で止まった回は `result` が
+    // 成功で返ってくることがあり、`else` の中に置くとその回だけ検知できない。
+    // 分類にかけるのは**SDK が失敗として出した文言だけ**である（マネージャーが
+    // 書いた本文 `said` は通さない — `classifyUsageNotice` は部分一致なので、
+    // 「上限に当たった」と報告に書いた瞬間に上限と誤判定する）。
+    if (failure !== undefined) {
+      for (const candidate of [failure.text, resultText(message), ...resultErrorLines(message)]) {
         const notice = classifyUsageNotice(candidate);
         if (notice !== undefined) {
           this.#emit({ type: 'usage_notice', managerId: this.#id, notice });
           break;
         }
       }
+    }
 
+    if (!isSuccessResult(message)) {
       const outcome = this.#recoverFromFailedResume(`結果なしで終了: ${resultText(message)}`);
       if (outcome === 'recovered') return;
       // **戻れなかった resume を「1ターン終わった」として報告しない。** ここを
@@ -1129,9 +1180,27 @@ class RunnerSession {
       }
     }
 
-    const text = reportText(said, resultText(message));
+    // **失敗した回の報告に、失敗であることを載せる。** 直す前は成否によらず
+    // `reportText(said, resultText(message))` を上げていたので、上限の英語文言が
+    // そのまま「マネージャーの報告」として台帳（`lastReport`）・日誌・クローンの
+    // 受信箱へ流れていた。クローンから見て「報告が来た」と「エラーで死んだ」が
+    // 区別できない ＝ クローン側で塞いだのと同じ穴がここに残っていた。
+    //
+    // **本文（`text`）の側でも包む。** 構造化した `failure` だけに頼ると、それを
+    // 見ていない読み手（台帳の `lastReport` を出す画面・日誌を読む人間）には
+    // 依然としてエラー文が報告として見える。
+    const text =
+      failure === undefined
+        ? reportText(said, resultText(message))
+        : failedReportText(said, failure, resultText(message));
     this.#status = this.#pending.length > 0 ? 'waiting_human' : 'done';
-    this.#emit({ type: 'report', managerId: this.#id, text, status: this.#status });
+    this.#emit({
+      type: 'report',
+      managerId: this.#id,
+      text,
+      status: this.#status,
+      ...(failure === undefined ? {} : { failure: { code: failure.code, via: failure.via } }),
+    });
   }
 
   /**
@@ -1510,12 +1579,22 @@ function permissionDenials(message: SDKMessage): unknown[] {
   return Array.isArray(denials) ? denials.filter((entry) => entry !== null) : [];
 }
 
-/** `result.errors[]`（構造を持たない失敗の行）。無ければ空。 */
-function resultErrors(message: SDKMessage): string[] {
-  const errors = (message as { errors?: unknown }).errors;
-  return Array.isArray(errors)
-    ? errors.filter((line): line is string => typeof line === 'string')
-    : [];
+/**
+ * 失敗で終わったターンの報告本文。
+ *
+ * **本文の先頭で「応答ではない」と言い切る。** 直す前は成否によらず
+ * `reportText` を通していたので、支出上限の英語文言が「マネージャーの報告」
+ * としてそのまま台帳と日誌とクローンの受信箱へ入った。
+ *
+ * **SDK の文言は言い換えず、そのまま残す**（`usage-limits.ts` の約束と同じ。
+ * 人間が検索できる形で残す）。**途中まで出ていた本文も捨てない** — 上限に
+ * 当たるまでに何をやったかは、次に何を頼み直すかを決める材料である。
+ */
+function failedReportText(said: readonly string[], failure: SdkFailure, result: string): string {
+  const body = failure.text.length > 0 ? failure.text : result;
+  const head = `（このターンは応答を返さずに終わった: ${failure.code} / ${failure.via}）\n${body}`;
+  const partial = said.join('\n\n').trim();
+  return partial.length === 0 ? head : `${head}\n\n（失敗する前に出ていた本文）\n${partial}`;
 }
 
 function resultText(message: SDKMessage): string {

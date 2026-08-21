@@ -543,6 +543,83 @@ describe('HTTP API', () => {
     expect(list.managers[0]).not.toHaveProperty('denials');
   });
 
+  /**
+   * **人間の面が読む値は、この経路を通った分だけである。**
+   *
+   * `lastFailure`（`schema.ts`）は「直近の1ターンが報告ではなく失敗で終わった」
+   * ことで、これが無いと人間の画面には「報告が来た」としか出ない — 直す前は
+   * `You've hit your org's monthly spend limit …` が最後の報告としてそのまま
+   * 出ていた（`packages/core/src/sdk-failure.ts` の doc）。
+   *
+   * **宣言していないものは外へ出ない**のがこの面の規約なので（真上の
+   * 「宣言していないフィールドを外へ出さない」）、`managerSummarySchema` から
+   * `lastFailure` が落ちると、`ManagerSummary` に値があっても**黙って消える**。
+   * それは CLI・Web の両方が同時に盲目になる形で、画面のテストでは捕まらない。
+   *
+   * **状態は置き換えない。** 支出上限に当たった回もセッションは生きているので
+   * `status` は `done`（終えて待機中）のままである。
+   */
+  it('直近のターンの失敗が、状態を置き換えずに一覧と詳細へ載る', async () => {
+    fake.managerList.push({
+      managerId: 'mgr-billing',
+      status: 'done',
+      live: true,
+      cwd: '/work/project',
+      request: '調べて',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+      waiting: [],
+      lastReport: '（このターンは応答を返さずに終わった: billing_error / assistant_error）',
+      lastFailure: {
+        code: 'billing_error',
+        via: 'assistant_error',
+        at: '2026-01-01T00:01:00.000Z',
+      },
+    });
+
+    const list = (await (await app.request('/managers')).json()) as {
+      managers: { status: string; lastFailure?: unknown }[];
+    };
+    // 状態の値は動かさない（`failed` へ倒すと「もう続けられない」と読まれる）。
+    expect(list.managers[0]?.status).toBe('done');
+    expect(list.managers[0]?.lastFailure).toEqual({
+      code: 'billing_error',
+      via: 'assistant_error',
+      at: '2026-01-01T00:01:00.000Z',
+    });
+
+    const detail = (await (await app.request('/managers/mgr-billing')).json()) as {
+      manager: { status: string; lastFailure?: unknown };
+    };
+    expect(detail.manager.status).toBe('done');
+    expect(detail.manager.lastFailure).toEqual({
+      code: 'billing_error',
+      via: 'assistant_error',
+      at: '2026-01-01T00:01:00.000Z',
+    });
+  });
+
+  /** 失敗していない回に空の値を載せない（「失敗していない」と「見ていない」を混ぜない）。 */
+  it('失敗していないマネージャーには lastFailure を載せない', async () => {
+    fake.managerList.push({
+      managerId: 'mgr-fine',
+      status: 'done',
+      live: true,
+      cwd: '/work/project',
+      request: '調べて',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+      waiting: [],
+      lastReport: '調べ終わった',
+    });
+
+    const list = (await (await app.request('/managers')).json()) as {
+      managers: Record<string, unknown>[];
+    };
+    expect(list.managers[0]).toMatchObject({ lastReport: '調べ終わった' });
+    expect(list.managers[0]).not.toHaveProperty('lastFailure');
+  });
+
   it('日報を読める（可観測性の最上段。普段の接点はほぼこれだけ）', async () => {
     await stores.journal.append({ type: 'daily_report', date: '2026-08-11', body: '昨日の日報' });
     await stores.journal.append({ type: 'daily_report', date: '2026-08-12', body: '今日の日報' });

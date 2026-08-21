@@ -52,7 +52,16 @@ function renderDashboard(
   live: JournalLive = EMPTY_FEED,
   // 既定は空のまま（既存のテストは全部これで、最新の日報カードを一度も
   // 描画経路に乗せていない）。「最新の日報」のテストだけがここへ渡す。
-  reports: Array<{ type: 'daily_report'; id: string; at: string; date: string; body: string }> = [],
+  // `unavailable` は「日報が書けなかった印」（`schema.ts`）。既定では付けないので、
+  // 既存のテストは1つも振る舞いが変わらない。
+  reports: Array<{
+    type: 'daily_report';
+    id: string;
+    at: string;
+    date: string;
+    body: string;
+    unavailable?: string;
+  }> = [],
   // 概要カードが打ち切る側の分岐へ入れるための材料。既定は空なので、
   // 既存のテストは1つも振る舞いが変わらない。
   lists: { approvals?: unknown[]; managers?: unknown[] } = {},
@@ -149,6 +158,34 @@ describe('「最新の日報」', () => {
 
     expect(await screen.findByRole('heading', { name: '今日やったこと' })).toBeTruthy();
     expect(screen.getByText('進捗があった。')).toBeTruthy();
+  });
+
+  /**
+   * **「日報が書けなかった」印の行を「最新の日報」として描かないこと。**
+   *
+   * ここは人間が最初に開く面である。発端の壊れ方（日報の本文が丸ごと
+   * `You've hit your org's monthly spend limit …`）が最も目に付く形で残るのは
+   * このカードなので、`/reports` と別に歯を置く（判定と文言は `reports.tsx` の
+   * 1本を共有しているが、**このカードがそれを呼んでいるか**は別の事実である）。
+   */
+  it('日報が作れなかった日は、印として出す（本文を日報として描かない）', async () => {
+    const reason = "You've hit your org's monthly spend limit · ask your admin to raise it";
+    renderDashboard(USAGE, EMPTY_FEED, [
+      {
+        type: 'daily_report',
+        id: 'r1',
+        at: '2026-08-20T22:00:00.000Z',
+        date: '2026-08-20',
+        // 見出し記法を混ぜてある。Markdown の経路へ流れたら見出しになるので、
+        // 日報として描いていないことを区別できる。
+        body: `## ${reason}`,
+        unavailable: reason,
+      },
+    ]);
+
+    expect(await screen.findByText('この日の日報は作れなかった')).toBeTruthy();
+    expect(screen.getByText(reason)).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: reason })).toBeNull();
   });
 });
 

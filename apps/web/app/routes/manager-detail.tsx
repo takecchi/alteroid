@@ -8,7 +8,7 @@ import { useAbortManager, useSendManagerMessage } from '~/hooks/mutations';
 import { useManager, useManagerTranscript } from '~/hooks/queries';
 import { formatDateTime, formatRelative } from '~/lib/format';
 
-import type { ManagerDenial, ManagerStatus } from '~/lib/types';
+import type { ManagerDenial, ManagerStatus, ManagerSummary } from '~/lib/types';
 
 import type { Route } from './+types/manager-detail';
 import { ManagerStatusBadge } from './managers';
@@ -92,6 +92,14 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
                     ⚠ 確認へ上がらず止められた {denialTotal(manager.denials)} 件
                   </Badge>
                 )}
+                {/*
+                  **ここも札を差し替えない。** 上限に当たった回も `status` は
+                  `done`（終えて待機中）のままである — 直近の1ターンがどう終わった
+                  かは、状態とは別の軸である（`schema.ts` の `lastFailure`）。
+                */}
+                {manager.lastFailure !== undefined && manager.lastFailure !== null && (
+                  <Badge tone="danger">⚠ 直近のターンは失敗で終わった</Badge>
+                )}
               </dd>
               <dt className="text-muted">作業ディレクトリ</dt>
               <dd className="font-mono text-xs break-all">{manager.cwd}</dd>
@@ -118,6 +126,7 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
             </dl>
             <DisconnectedNote live={manager.live} />
             <LostNote status={manager.status} />
+            <FailureNote failure={manager.lastFailure} />
           </Card>
 
           <DenialsCard denials={manager.denials} />
@@ -140,7 +149,25 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
 
           {manager.lastReport !== undefined && manager.lastReport !== null && (
             <Card className="min-w-0">
-              <CardHeader title="最後の報告" />
+              {/*
+                **失敗で終わった回を「報告」と呼ばない。** 本文は runner 側で
+                「（このターンは応答を返さずに終わった: …）」と包まれているが、
+                見出しが「最後の報告」のままだと、人間は包みの内側だけを読んで
+                報告として扱う（それが `You've hit your org's monthly spend
+                limit …` を報告として読ませていた形そのものである）。
+              */}
+              <CardHeader
+                title={
+                  manager.lastFailure === undefined || manager.lastFailure === null
+                    ? '最後の報告'
+                    : '最後のターンの中身（報告ではない）'
+                }
+                subtitle={
+                  manager.lastFailure === undefined || manager.lastFailure === null
+                    ? undefined
+                    : 'SDK が「これは応答ではない」と言った回。以下はマネージャーのまとめではなく、失敗の中身である'
+                }
+              />
               <div className="min-w-0 px-4 py-3">
                 <Markdown>{manager.lastReport}</Markdown>
               </div>
@@ -235,6 +262,46 @@ function LostNote({ status }: { status: ManagerStatus }) {
       起こし直す前に、まず
       <strong className="font-medium">リモート（PR・ブランチ・コミット）を確かめること</strong>
       。どこまで進んでいたかは、下の「最後の報告」とセッションログ（生）にも残っていることがある。続きが要ると判断したときだけ起こし直す。
+    </p>
+  );
+}
+
+/**
+ * 直近の1ターンが**報告ではなく失敗**で終わったことに添える但し書き。
+ *
+ * **一覧（`managers.tsx`）より長く書いてよい。** ここまで降りてきた人間は、この1本を
+ * どうするか（待つ・話しかけ直す・人間側で枠を上げる）を決めに来ている。
+ *
+ * 削ってはいけないのは3つ。
+ *
+ * 1. **SDK の語（`code` / `via`）そのまま** — `billing_error` と `rate_limit` は次の
+ *    一手が違う（前者は人間が枠を上げる話、後者は待てば直る）。言い換えると、人間が
+ *    SDK の型定義やログで引ける手がかりが消える
+ * 2. **いつの失敗か（`at`）** — 「直近」がいつなのかが無いと、今も止まっているのか
+ *    ずっと前に一度失敗しただけなのかが読めない
+ * 3. **セッションは生きている** — これが `status` を `failed` へ倒さなかった理由
+ *    そのものである（`schema.ts` の `lastFailure` の doc）。書かないと、人間は
+ *    続けられる仕事を閉じる
+ *
+ * **「上限に当たった」と決めつけないこと。** 観測しているのは「SDK が応答ではないと
+ * 言った」ことと、その `code` だけである。`code` の意味の解釈は SDK 側が持っている。
+ */
+function FailureNote({ failure }: { failure: ManagerSummary['lastFailure'] | undefined }) {
+  if (failure === undefined || failure === null) return null;
+  return (
+    <p className="border-t border-border px-4 py-3 text-xs text-danger">
+      直近のターンは
+      <strong className="font-medium">報告ではなく失敗で終わっている</strong>—{' '}
+      <code className="font-mono">{failure.code}</code>（印の出どころ:{' '}
+      <code className="font-mono">{failure.via}</code>、{formatDateTime(failure.at)}）。
+      <br />
+      <strong className="font-medium">この仕事は死んでいない</strong>
+      。セッションは生きているので、原因が解ければ下の「話しかける」から続けられる（だから状態は
+      <strong className="font-medium">失敗ではなく待機中</strong>
+      のままである）。
+      <strong className="font-medium">何が起きたかの解釈まではしていない</strong>— 観測したのは「SDK
+      がこれは応答ではないと言った」ことと、この
+      <code className="font-mono">code</code> だけである。
     </p>
   );
 }

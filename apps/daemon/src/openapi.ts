@@ -1,6 +1,7 @@
 import {
   commitmentSchema,
   createMemoryStores,
+  jobSchema,
   jobStatusSchema,
   journalEntrySchema,
   memoryDocumentMetaSchema,
@@ -375,6 +376,22 @@ export const managerSummarySchema = z.object({
   updatedAt: z.string(),
   sessionId: z.string().optional(),
   lastReport: z.string().optional(),
+  /**
+   * 直近の1ターンが**報告ではなく失敗**で終わったこと。
+   *
+   * **`jobSchema` の枝をそのまま借りる（ここで書き直さない）。** これは台帳の値を
+   * `summaryOf`（`packages/core/src/manager.ts`）が写しているだけなので、ここに
+   * 手書きの写しを置くと、`code` / `via` / `at` のどれかが片方だけ増えた日に
+   * spec が黙って古びる。このファイルの冒頭の約束（core が zod を持つものは
+   * 再定義しない）どおりの扱いである。
+   *
+   * **`status` とは別の軸なので、`status` を置き換えない。** 支出上限に当たった回も
+   * セッションは生きており `done`（終えて待機中）のままである。
+   *
+   * **失敗した回だけ載る（`optional`）。** 応答として終わった回に空の値を載せると、
+   * 「失敗していない」と「この器では見ていない」が同じ形になる。
+   */
+  lastFailure: jobSchema.shape.lastFailure,
   runnerId: z.string().optional(),
   workspace: workspaceLocatorSchema.optional(),
   waiting: z.array(managerWaitingSchema),

@@ -63,6 +63,14 @@ export {
   type UsageLimitKind,
   type UsageLimitNotice,
 } from './usage-limits.js';
+export {
+  assistantFailureOf,
+  isAnsweredResult,
+  resultErrorLines,
+  resultFailureOf,
+  type SdkFailure,
+  type SdkFailureVia,
+} from './sdk-failure.js';
 /**
  * ログイン（誰がこの API を叩いているか）と、alteroid を使ってよいかの2値。
  *
