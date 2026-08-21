@@ -5,6 +5,30 @@ on:
     branches: [main]
   pull_request:
 
+# **同じ PR に続けて push したとき、古い実行を残さない。** 後から押した commit の
+# 結果しか見ないのに、前の実行は最後まで runner を占有する。並行して PR を抱えている
+# ときはその占有がそのまま他の PR の待ち時間になる。
+#
+# **キーは「何の実行か」で分ける。**
+#
+# - `github.head_ref` は pull_request のときだけ値が入る（PR の元ブランチ名）。
+#   つまり**同じ PR の実行だけが同じ群に入り、新しい方が古い方を消す**
+# - push（main）では `head_ref` が空なので `github.run_id` に落ちる。これは実行ごとに
+#   必ず違うので、**main の実行はどれも群を共有せず、キャンセルされない**。main の
+#   各 commit は release/prod へ写る候補そのもので、「この commit で緑だった」の記録が
+#   後続の push で消えると、どの commit まで確かめたかが言えなくなる
+#
+# **`github.ref` で書かないこと。** pull_request の `github.ref` は `refs/pull/<n>/merge`
+# で PR ごとに違うので PR 側は同じように効くが、push 側まで1つの群（`refs/heads/main`）に
+# まとまる。`cancel-in-progress: true` と併せると**上の main の性質が消える**。
+#
+# 走行中を切るのは PR の CI だけである。release/prod（`cancel-in-progress: false`）と
+# 逆にしてあるのは、あちらが途中で切れると push の途中で終わるからで、こちらは
+# 読み取りと検査しかしないので途中で切れても外に影響が残らない。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   ci:
     runs-on: ubuntu-latest
