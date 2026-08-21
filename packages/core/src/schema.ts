@@ -240,6 +240,30 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      */
     summary: z.string(),
   }),
+  /**
+   * 委譲1区間ぶんの集計。**フィールドの意味と doc は `runner-protocol.ts` の
+   * `worker_wait` イベントに書いてある（二重管理を避けるためここには書き写さ
+   * ない）。** `id` / `at` はストア側が埋める（`at` は区間が閉じた時刻、
+   * `openedAt` が開いた時刻なので、区間の長さも後から出せる）。
+   */
+  z.object({
+    type: z.literal('worker_wait'),
+    id: z.string(),
+    at: isoDateTime,
+    openedAt: isoDateTime,
+    tasks: z.number().int().nonnegative(),
+    turns: z.number().int().nonnegative(),
+    byCause: z.object({
+      input: z.number().int().nonnegative(),
+      notification: z.number().int().nonnegative(),
+      continuation: z.number().int().nonnegative(),
+    }),
+    toolless: z.number().int().nonnegative(),
+    notifications: z.number().int().nonnegative(),
+    submits: z.number().int().nonnegative(),
+    sources: z.record(z.string(), z.number().int().nonnegative()).optional(),
+    settled: z.boolean(),
+  }),
 ]);
 
 export type JournalEntry = z.infer<typeof journalEntrySchema>;
@@ -282,6 +306,7 @@ const journalEntryTypeNames = {
   memory_update: true,
   daily_report: true,
   external_event: true,
+  worker_wait: true,
 } satisfies Record<JournalEntryType, true>;
 
 export const JOURNAL_ENTRY_TYPES = Object.keys(journalEntryTypeNames) as [

@@ -1327,6 +1327,23 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
       return { head: `[daily_report ${entry.date}]`, body: entry.body };
     case 'external_event':
       return { head: `[external_event ${entry.source}]`, body: entry.summary };
+    case 'worker_wait': {
+      const cause = entry.byCause;
+      return {
+        head: `[worker_wait tasks=${entry.tasks} turns=${entry.turns} settled=${entry.settled}]`,
+        body:
+          `作業者 ${entry.tasks} 体を待つあいだに ${entry.turns} ターン` +
+          `（通知 ${cause.notification} / 自己継続 ${cause.continuation} / 話しかけ ${cause.input}）。` +
+          `うち ${entry.toolless} ターンは道具を1つも動かしていない。` +
+          `UserPromptSubmit の発火は ${entry.submits} 回` +
+          (entry.sources === undefined
+            ? '（source は取れていない）'
+            : `（内訳: ${Object.entries(entry.sources)
+                .map(([source, count]) => `${source}=${count}`)
+                .join(', ')}）`) +
+          '。',
+      };
+    }
   }
 }
 

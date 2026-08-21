@@ -1313,6 +1313,27 @@ class Pool implements ManagerPool {
         return;
       }
 
+      case 'worker_wait': {
+        // **日誌に閉じる。** 台帳（`Job` / `ManagerSummary`）には足さない —
+        // 集計は「何を契機にターンが回ったか」を後から掘るためのもので、
+        // いま生きているマネージャーの状態を表す値ではない（`runner-protocol.ts`
+        // の doc）。クローンの受信箱へも出さない（1区間ごとに割り込むほどの
+        // 事実ではなく、掘りたければ `journal_read` で辿れる）。
+        await this.#journal({
+          type: 'worker_wait',
+          openedAt: event.openedAt,
+          tasks: event.tasks,
+          turns: event.turns,
+          byCause: event.byCause,
+          toolless: event.toolless,
+          notifications: event.notifications,
+          submits: event.submits,
+          ...(event.sources === undefined ? {} : { sources: event.sources }),
+          settled: event.settled,
+        });
+        return;
+      }
+
       case 'usage': {
         // 降りてくるのは累積という事実で、差分にして積むのはここ（runner は
         // 記憶ストアの鍵を持たないので書けない）。読む→畳む→書くはストアの

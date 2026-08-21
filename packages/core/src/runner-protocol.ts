@@ -4,6 +4,9 @@ import { jobStatusSchema } from './schema.js';
 import { rateLimitFactsSchema, usageLimitNoticeSchema } from './usage-limits.js';
 import { usageTotalsSchema } from './usage.js';
 
+/** ISO8601 の日時（offset 必須）。`schema.ts` の同名の private const と同じ形。 */
+const isoDateTime = z.string().datetime({ offset: true });
+
 /**
  * デーモン ↔ manager-runner の境界（roadmap M4）。
  *
@@ -275,6 +278,83 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
         via: z.string(),
       })
       .optional(),
+  }),
+  /**
+   * 委譲1区間ぶんの集計（マネージャーが作業者を投げてから、全員が完了通知を
+   * 返し終えるまで）。**1ターン1行ではなく、この区間1行にしてある。**
+   *
+   * `result` は既に1ターン1件の `report` を上げており、日誌には
+   * `exchange with=manager` として残る。**ターンの回数と時刻は既に日誌にある。**
+   * 足りないのは「何を契機にそのターンが回ったか」だけなので、1ターン1行を
+   * 新設すると日誌でいちばん書き込みの多い経路を二重にすることになる。
+   * 集計は整数のカウンタなので構造的に無界にならない（`digest.ts` のような
+   * 打ち切り・`omitted()` は要らない）。
+   *
+   * **落とした先。** 「どの作業者だったか」は載せていない — 作業者ごとの
+   * 実行は `tool_use` の日誌（`actor=worker:<id>:<agent>`）に全部ある。
+   */
+  z.object({
+    type: z.literal('worker_wait'),
+    managerId: z.string(),
+    /** 区間が開いた時刻（最初の `task_started` で `#openTasks` が 0→1 になった瞬間）。 */
+    openedAt: isoDateTime,
+    /**
+     * この区間で始まった委譲（Task）の件数。`task_started` の件数そのもので、
+     * `skip_transcript: true` の ambient/housekeeping task も間引かずに含む。
+     */
+    tasks: z.number().int().nonnegative(),
+    /** この区間の間にマネージャーのセッションが回った `result` の回数。 */
+    turns: z.number().int().nonnegative(),
+    /**
+     * ターンが回った契機。**3つの合計は必ず `turns` と一致する**（排他で1件だけ
+     * 数えるため）。
+     */
+    byCause: z.object({
+      /** そのターンの間に、クローン・人間からの入力を1件以上消費した。 */
+      input: z.number().int().nonnegative(),
+      /** 入力は無いが、作業者の完了通知（`task_notification`）を1件以上受けた。 */
+      notification: z.number().int().nonnegative(),
+      /**
+       * **入力も完了通知も無いのに回ったターン。** マネージャーに選択権が無い
+       * ターンであり、SDK/CLI 側の自己継続である — alteroid はこの部分の
+       * コードを1行も持たない。ここが支配的なら、プロンプトへ「待て」を
+       * 1文足しても何も変わらない（対策がプラセボになる）。
+       */
+      continuation: z.number().int().nonnegative(),
+    }),
+    /**
+     * 道具を1つも動かさなかったターンの数。事故のときの「残り5体を待ちます」
+     * だけのターンがこれにあたる。マネージャー自身の道具だけを見る（作業者の
+     * 道具は数えない — 混ぜると「マネージャーは何もしていない」が消える）。
+     */
+    toolless: z.number().int().nonnegative(),
+    /** この区間で受けた `task_notification` の総数（`tasks` と同じか、それ以下）。 */
+    notifications: z.number().int().nonnegative(),
+    /**
+     * この区間で `UserPromptSubmit` がマネージャー自身に発火した回数。
+     *
+     * **`turns` と食い違うこと自体が観測である。** 一致すれば「`result` は
+     * ターンごとに1回出る」という仮説を支持し、食い違えば「SDK 側の自己継続は
+     * `UserPromptSubmit` を伴わない」等の可能性を示す。どちらの仮説でも
+     * 読める形にしてある。
+     */
+    submits: z.number().int().nonnegative(),
+    /**
+     * `UserPromptSubmit` の `source` ごとの内訳。**取れた分だけ載せる。**
+     *
+     * SDK はいまのところ「Anthropic 内部のセッションでしか付かない見込みの
+     * 試験中のフィールド」と言っており、外部のペイロードには付かない見込み
+     * である。1件も取れなければ**フィールドごと省く**（`{}` を置かない） —
+     * 取れない軸に0の行を作らない（AGENTS.md 地雷）。
+     */
+    sources: z.record(z.string(), z.number().int().nonnegative()).optional(),
+    /**
+     * 区間が閉じる前にセッションが畳まれた（`#finish` / `stop` / 引き継ぎ）。
+     *
+     * **`false` は数え漏れではなく、閉じなかったという事実である。** 最後まで
+     * 完了通知を受け切れなかった区間を、黙って捨てずに報告する。
+     */
+    settled: z.boolean(),
   }),
   z.object({
     type: z.literal('ask'),

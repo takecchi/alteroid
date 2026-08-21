@@ -51,6 +51,20 @@ const RECENT_ESCALATION: JournalEntry = {
   approvalId: 'approval-x',
 };
 
+const WORKER_WAIT: JournalEntry = {
+  type: 'worker_wait',
+  id: 'ww-1',
+  at: '2026-08-20T22:10:00.000Z',
+  openedAt: '2026-08-20T21:30:00.000Z',
+  tasks: 5,
+  turns: 41,
+  byCause: { input: 1, notification: 3, continuation: 37 },
+  toolless: 38,
+  notifications: 3,
+  submits: 0,
+  settled: true,
+};
+
 function renderJournal(live: JournalLive) {
   return render(
     <Providers>
@@ -170,5 +184,36 @@ describe('recent を履歴に重ねる', () => {
     });
     expect(screen.getByText(summarizeJournalEntry(SHARED))).toBeTruthy();
     expect(screen.getByText(summarizeJournalEntry(RECENT_EXCHANGE))).toBeTruthy();
+  });
+});
+
+/**
+ * **空回りが目で分かる文言であること**（`summarizeJournalEntry` の doc）と、
+ * 他の種別と同じ絞り込み経路（`GET /journal?type=`）に乗っていること。
+ */
+describe('worker_wait — 種別フィルタと1行の文言', () => {
+  it('1行は空回りが目で分かる文言で、絞り込みボタンでも選べる', async () => {
+    stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      const type = new URL(url).searchParams.get('type');
+      if (type === 'worker_wait') return json({ entries: [WORKER_WAIT], scanned: 1 });
+      return json({ entries: [HISTORY_ONLY, WORKER_WAIT], scanned: 2 });
+    });
+
+    renderJournal({ status: 'live', recent: [] });
+
+    await screen.findByText(summarizeJournalEntry(HISTORY_ONLY));
+    const row = screen.getByText(summarizeJournalEntry(WORKER_WAIT));
+    expect(row).toBeTruthy();
+    expect(row.textContent).toContain('作業者 5 体を待つあいだに 41 ターン');
+    expect(row.textContent).toContain('自己継続 37');
+    expect(row.textContent).toContain('道具を1つも動かしていない');
+
+    fireEvent.click(screen.getByRole('button', { name: 'worker_wait' }));
+
+    await waitFor(() => {
+      expect(screen.queryByText(summarizeJournalEntry(HISTORY_ONLY))).toBeNull();
+    });
+    expect(screen.getByText(summarizeJournalEntry(WORKER_WAIT))).toBeTruthy();
   });
 });
