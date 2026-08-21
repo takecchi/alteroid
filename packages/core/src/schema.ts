@@ -280,10 +280,25 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
    * この行1件が何を言えて何を言えないかだけである — 日誌を読む者はこの PR を
    * 読んでいない。
    *
-   * - 増分が空（`delta` が `{}`）のターンは行を書かない（`clone.ts` の
-   *   `#recordUsage` / `manager.ts` の `case 'usage'`）。**「行が無い」は
-   *   「そのターンが無料だった」ではない** — 台帳へ積めなかった（記録の失敗）
-   *   場合も行が無い。台帳へ積めなかった事実自体は別途 `exchange` として残る。
+   * ## 「行が無い」理由は3つある。取り違えないこと
+   *
+   * 1. **増分が空**（`delta` が `{}`）。同じ累積の再送などで実際に増分が
+   *    無かった回（`clone.ts` の `#recordUsage` / `manager.ts` の
+   *    `case 'usage'` が書かない）。
+   * 2. **台帳へ積めなかった**（記録の失敗）。**跡の残り方は層で違う** —
+   *    マネージャー層は `case 'usage'` の `catch` が `exchange with=manager`
+   *    として日誌に残す。**クローン層は違う。** `noteDroppedRecord`
+   *    （`dropped-record.ts`）は意図的に日誌ではなく stderr にしか残さない
+   *    （あちらの doc — ストアが閉じている窓で日誌へ書こうとしても同じ理由で
+   *    落ちるため）。**つまりクローン層でこの回が起きると、日誌には
+   *    `turn_usage` も `exchange` も1行も残らない。** 日誌だけではこの回を
+   *    見分けられない（範囲外。PR 本文）。
+   * 3. **ターンが失敗して終わった**（`isSuccessResult` が偽）。`models` の
+   *    doc を見よ — これが最も誤読を招きやすい形である。
+   *
+   * これで全て。`#recordUsage` の早期 return（1・3）と `case 'usage'` の
+   * `try`/`catch`（2）を読めば数え上げが閉じる。
+   *
    * - `id` / `at` はストアが埋める（他の型と同じ）。
    */
   z.object({
@@ -312,6 +327,25 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * 分離できない。逆に permission classifier / token-count probe のような、
      * **台帳のどの層にも出てこない消費もある**（同 doc）。
      *
+     * ## これは「このターンの消費」ではなく「前回成功した result からの増分」である
+     *
+     * `#recordUsage` と `case 'usage'` はどちらも `isSuccessResult(message)`
+     * が偽の result を無条件に捨てる（`runner.ts` の既存コメント —
+     * 「絞っても取りこぼさない。値は累積なので、失敗した回のぶんも次の成功が
+     * 運んでくる」）。**これは台帳（合計）については正しいが、1ターン1行の
+     * 増分にとっては意味が変わる** — 失敗して終わったターン（上限に当たって
+     * 落ちた回を含む）は行を1件も作らず、**その消費は次に成功したターンの
+     * `models` へ合算されて現れる。**
+     *
+     * つまり `turn_usage` の1行が高いのを見たとき、それは「そのターンだけが
+     * 高かった」ではなく「直前に失敗したターンが無かったか」を確かめないと
+     * 判断できない。突き合わせ先は日誌の `exchange`（クローン層は
+     * `with: 'self'` / `with: 'human'` で `#reportFailure` が書く。マネージャー
+     * 層は `with: 'manager'` に加え `ManagerSummary.lastFailure` — 報告の本文
+     * だけでは失敗と判定できない回があるため）。**この注意は下の `reset` の
+     * 注意と同じ種類である。** どちらも「この行の `models` を素朴に合計すると
+     * 間違える」という形をしている。
+     *
      * `cacheReadInputTokens` と `cacheCreationInputTokens` を分けたまま持つ
      * ことで、「キャッシュの書き直しに払っているのか」が推測ではなく事実として
      * 分かる。ここを合計に潰すと、その区別が消える。
@@ -324,7 +358,8 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * **これが付いた行の `models` は差分ではなく、新しい累積の先頭である**
      * （`usage.ts` の `foldUsageSnapshot` — 「数え直しを検知したときの増分は
      * スナップショットの全量」）。他の行と同じ扱いで合計へ足すと、記録済みの
-     * 分を二重に数える。
+     * 分を二重に数える。**`models` の doc の「前回成功した result からの増分」
+     * の注意と同じ種類 — どちらも素朴に合計すると間違える。**
      *
      * **付いていないことは「数え直しが起きなかった」ではない。** 検知は
      * `usage.ts` の `detectReset` の2条件（モデルの値が減った／基準にあった
