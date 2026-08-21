@@ -34,7 +34,7 @@ export async function chatCommand(): Promise<void> {
   const rl = createInterface({ input: stdin, output: stdout });
   let conversationId: string | null = null;
   // 直前に一覧したもの。番号で引けるようにするため覚えておく。
-  const listed: Listed = { approvals: [], commitments: [] };
+  const listed: Listed = { approvals: [], commitments: [], conversations: [] };
 
   stdout.write('alteroid chat（Ctrl-D で終了 / /help でコマンド）\n');
 
@@ -202,6 +202,8 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /memory              記憶の一覧
 /memory <slug>       記憶の中身（書き換えは alteroid memory edit <slug>）
 /journal [件数]      日誌（新しい順）
+/conversations [limit=<N>] [scan=<N>]  会話の一覧（新しい順、番号付き）
+/conversation <番号|id> [scan=<N>]  その会話の中身（古い順。番号は /conversations の並び）
 /managers            マネージャーの一覧と状態
 /manager <id>        そのマネージャーのセッション生ログ
 /stop <id> [理由]    その仕事だけをやめさせる（止めた事実は日誌に残る）
@@ -225,13 +227,15 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /**
  * 直前に一覧したものの id を、番号で引けるように覚えておく置き場。
  *
- * **承認待ちと台帳で別々に持つ。** 1本にまとめると `/approvals` の直後の
- * `/done 1` が承認待ちの id を閉じに行く（どちらも「番号で指す一覧」なので、
- * 混ざったことに人間が気づく手がかりが無い）。
+ * **承認待ち・台帳・会話で別々に持つ。** 1本にまとめると `/approvals` の直後の
+ * `/done 1` が承認待ちの id を閉じに行く（どれも「番号で指す一覧」なので、
+ * 混ざったことに人間が気づく手がかりが無い）。会話を足すときも既存のフィールドへ
+ * 相乗りさせず、独立したフィールド（`conversations`）にしてある。
  */
 export interface Listed {
   approvals: string[];
   commitments: string[];
+  conversations: string[];
 }
 
 export async function runSlashCommand(
@@ -422,6 +426,120 @@ export async function runSlashCommand(
       for (const entry of entries) {
         stdout.write(`  ${entry.at}  [${entry.type}] ${summarize(entry)}\n`);
       }
+      return 'ok';
+    }
+
+    /**
+     * 会話の一覧。**`POST /chat` の SSE は流すだけで、後から読み直す口が
+     * chat スラッシュコマンドの側には無かった**（CLI サブコマンドは
+     * `alteroid conversations list` / `show` にある）。器（端末・タブ・アプリ）を
+     * 替えても続きから話せることは PRD「インターフェース」の等価性そのもの。
+     *
+     * **`scanned` を必ず出す。** 日誌から組み立てているので、遡り切れていない
+     * ことがある（黙って打ち切らない — #108 / #109 と同じ理由）。
+     *
+     * **`limit=` / `scan=` で窓を広げられる**（`/usage from=… to=…` と同じ
+     * `key=value` の慣習。`parseUsageFilters` 参照）。既定は変えていない —
+     * 何も指定しなければ従来どおりデーモンの既定（`limit=20` `scan=2000`
+     * 相当）のままで、既定の重さを全員に配ってはいない。
+     */
+    case '/conversations': {
+      const raw = parseKeyValueTokens(rest);
+      const query = {
+        ...(raw.limit === undefined ? {} : { limit: raw.limit }),
+        ...(raw.scan === undefined ? {} : { scan: raw.scan }),
+      };
+      const response = await client.conversations.$get({ query });
+      if (!response.ok) {
+        stdout.write('会話の一覧を読めませんでした（limit= / scan= の値を確かめてください）\n');
+        return 'ok';
+      }
+      const { conversations, scanned } = await response.json();
+      listed.conversations.length = 0;
+      if (conversations.length === 0) {
+        stdout.write('（会話はまだありません）\n');
+      } else {
+        conversations.forEach((conversation, index) => {
+          listed.conversations.push(conversation.conversationId);
+          stdout.write(
+            `  [${index + 1}] ${conversation.conversationId}  更新: ${conversation.updatedAt}` +
+              `  (${conversation.messages}件)\n`,
+          );
+          stdout.write(`      ${conversation.preview}\n`);
+        });
+      }
+      // **0件でも scanned を出す。** ここで打ち切ると、0件が「本当に無い」の
+      // か「窓の外に残っている（判定できない）」のかを人間が区別できなくなる
+      // （#108 / #109 が塞いだ「黙って打ち切る」の再導入）。サブコマンド面
+      // （`conversations.ts` の `renderConversationsList`）と同じ形にしてある。
+      //
+      // **打ち切られているかもしれないなら、広げる手の在り処を示す。** chat
+      // 自身も `/conversations scan=<N>` で広げられるが、それでも「これで
+      // 全部」ではない（`scan` を増やしても遡り切ったとは限らない）ので、
+      // 手の在り処自体は常に示す。手を隠すと、人間は「広げる必要があるかも
+      // しれない」ことにすら気づけなくなる。
+      stdout.write(
+        `  （日誌を新しい方から ${scanned} 件見て集計した。これより古い会話は窓の外に` +
+          '残っているかもしれません — 判定できません。さらに見るには ' +
+          '`/conversations scan=<N>`（表示件数を増やすには limit=<N>。' +
+          'alteroid conversations list --scan / --limit でも同じことができます）\n',
+      );
+      if (conversations.length > 0) {
+        stdout.write('  /conversation <番号|id> で中身を読めます\n');
+      }
+      return 'ok';
+    }
+
+    case '/conversation': {
+      const reference = rest[0];
+      if (!reference) {
+        stdout.write(
+          '使い方: /conversation <番号|id> [scan=<N>]（番号は /conversations の並び）\n',
+        );
+        return 'ok';
+      }
+      const id = resolveListedId(reference, listed.conversations);
+      if (id === null) {
+        stdout.write(`[${reference}] は /conversations の一覧にありません\n`);
+        return 'ok';
+      }
+      // **`scan=` で窓を広げられる**（`/conversations` と同じ `key=value` の
+      // 慣習）。`limit` はこの経路には無い（1件の中身を読むだけで件数の
+      // 絞り込みが要らない）。
+      const rawQuery = parseKeyValueTokens(rest.slice(1));
+      const query = rawQuery.scan === undefined ? {} : { scan: rawQuery.scan };
+      const response = await client.conversations[':id'].$get({ param: { id }, query });
+      if (response.status === 404) {
+        // **遡り切れた場合だけ 404**（デーモン側の約束）。判定できないときは
+        // 200 に空の `messages` と `reachedStart: false` が来る。
+        stdout.write(`そんな会話はありません: ${id}\n`);
+        return 'ok';
+      }
+      if (!response.ok) {
+        stdout.write('会話を読めませんでした（scan= の値を確かめてください）\n');
+        return 'ok';
+      }
+      const { messages, scanned, reachedStart } = await response.json();
+      if (messages.length === 0) {
+        stdout.write(
+          reachedStart
+            ? '（発言はありません）\n'
+            : '（この窓には発言が見つかりませんでした。窓の外に残っているかもしれません' +
+                '（判定できません） — /conversation <番号|id> scan=<N> で広げられます）\n',
+        );
+      } else {
+        for (const message of messages) {
+          const speaker = message.role === 'inbound' ? '人間' : 'クローン';
+          stdout.write(`  [${message.at}] ${speaker}: ${message.text}\n`);
+        }
+      }
+      stdout.write(
+        reachedStart
+          ? `  （日誌を ${scanned} 件遡り、この会話の先頭まで届きました）\n`
+          : `  （日誌を ${scanned} 件遡りましたが先頭には届いていません。これより古い発言が` +
+              '残っているかもしれません — /conversation <番号|id> scan=<N>（または ' +
+              'alteroid conversations show --scan）で広げられます）\n',
+      );
       return 'ok';
     }
 
@@ -910,13 +1028,13 @@ interface UsageFilters {
 type ParsedUsageFilters = { ok: true; filters: UsageFilters } | { ok: false; message: string };
 
 /**
- * `/usage from=… to=… manager=… layer=… site=…` を解く。
+ * `key=value` トークン列を Record へ。`=` が無い・値が空のトークンは無視する。
  *
- * **層と場所の値の集合は core の schema だけが持つ**（`narrowUsageAxis`）。chat 側に
- * 書き写すと、値が増えたときにここだけ古くなる。読めない値は 400 を待たずにその場で
- * 「どれを指定すればよいか」を返す。
+ * `/usage from=… to=…`（`parseUsageFilters`）と `/conversations limit=… scan=…`
+ * `/conversation <id> scan=…` が共有する慣習。窓を広げる知識（何が読めない値
+ * かの判定）は呼び出し側が持つ — ここは字面を割るだけ。
  */
-function parseUsageFilters(tokens: string[]): ParsedUsageFilters {
+function parseKeyValueTokens(tokens: string[]): Record<string, string> {
   const raw: Record<string, string> = {};
   for (const token of tokens) {
     const [key, ...valueParts] = token.split('=');
@@ -924,6 +1042,18 @@ function parseUsageFilters(tokens: string[]): ParsedUsageFilters {
     if (value.length === 0 || key === undefined) continue;
     raw[key] = value;
   }
+  return raw;
+}
+
+/**
+ * `/usage from=… to=… manager=… layer=… site=…` を解く。
+ *
+ * **層と場所の値の集合は core の schema だけが持つ**（`narrowUsageAxis`）。chat 側に
+ * 書き写すと、値が増えたときにここだけ古くなる。読めない値は 400 を待たずにその場で
+ * 「どれを指定すればよいか」を返す。
+ */
+function parseUsageFilters(tokens: string[]): ParsedUsageFilters {
+  const raw = parseKeyValueTokens(tokens);
   const layer = narrowUsageAxis<UsageLayer>(usageLayerSchema, raw.layer);
   if (!layer.ok) return { ok: false, message: `layer= は ${layer.allowed} のどれか` };
   const site = narrowUsageAxis<UsageSite>(usageSiteSchema, raw.site);
