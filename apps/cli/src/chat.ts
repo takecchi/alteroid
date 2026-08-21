@@ -448,21 +448,27 @@ export async function runSlashCommand(
       listed.conversations.length = 0;
       if (conversations.length === 0) {
         stdout.write('（会話はまだありません）\n');
-        return 'ok';
+      } else {
+        conversations.forEach((conversation, index) => {
+          listed.conversations.push(conversation.conversationId);
+          stdout.write(
+            `  [${index + 1}] ${conversation.conversationId}  更新: ${conversation.updatedAt}` +
+              `  (${conversation.messages}件)\n`,
+          );
+          stdout.write(`      ${conversation.preview}\n`);
+        });
       }
-      conversations.forEach((conversation, index) => {
-        listed.conversations.push(conversation.conversationId);
-        stdout.write(
-          `  [${index + 1}] ${conversation.conversationId}  更新: ${conversation.updatedAt}` +
-            `  (${conversation.messages}件)\n`,
-        );
-        stdout.write(`      ${conversation.preview}\n`);
-      });
+      // **0件でも scanned を出す。** ここで打ち切ると、0件が「本当に無い」の
+      // か「窓の外に残っている（判定できない）」のかを人間が区別できなくなる
+      // （#108 / #109 が塞いだ「黙って打ち切る」の再導入）。サブコマンド面
+      // （`conversations.ts` の `renderConversationsList`）と同じ形にしてある。
       stdout.write(
         `  （日誌を新しい方から ${scanned} 件見て集計した。これより古い会話は窓の外に` +
           '残っているかもしれません — 判定できません）\n',
       );
-      stdout.write('  /conversation <番号|id> で中身を読めます\n');
+      if (conversations.length > 0) {
+        stdout.write('  /conversation <番号|id> で中身を読めます\n');
+      }
       return 'ok';
     }
 

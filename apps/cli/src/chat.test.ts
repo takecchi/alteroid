@@ -764,11 +764,19 @@ describe('chat の /conversations と /conversation', () => {
 
   it('/conversations は空でも、そう言う（黙って何も出さない形にしない）', async () => {
     const read = captureStdout();
-    const { client } = stubClient({ conversations: [] });
+    const { client } = stubClient({ conversations: [], conversationsScanned: 5000 });
 
     await runSlashCommand('/conversations', client, emptyListed());
 
-    expect(read()).toContain('会話はまだありません');
+    const text = read();
+    expect(text).toContain('会話はまだありません');
+    // **0件でも scanned を出す。** ここで打ち切ると「本当に無い」のか「窓の外に
+    // 残っている（判定できない）」のかが人間から区別できなくなる（#108 / #109
+    // が塞いだ「黙って打ち切る」の再導入）。サブコマンド面（`conversations.ts`
+    // の `renderConversationsList`）は0件でも scanned を出しており、chat 側
+    // だけ省くと同じ CLI の中に非対称ができる。
+    expect(text).toContain('5000');
+    expect(text).toContain('判定できません');
   });
 
   it('/conversation は番号を id へ引き直す（/conversations の並びと同じ列で覚える）', async () => {
