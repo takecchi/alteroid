@@ -136,6 +136,46 @@ describe('落とした記録の跡', () => {
     expect(shape).toBe('worker_wait tasks=5 turns=41 toolless=38 settled=false');
   });
 
+  /**
+   * `turn_usage` も自由文を持たない。`models` の内訳（トークン数・costUsd）は
+   * SDK が数え上げた数値であって自由文ではないので、モデル id ごとの件数だけ
+   * 載せる（`worker_wait` と同じ判定基準 — 「自由文かどうか」ではなく
+   * 「値を誰が決めるか」）。
+   */
+  it('turn_usage は models の中身を出さず、件数と reset の有無だけを載せる', () => {
+    const shape = journalEntryShape({
+      type: 'turn_usage',
+      layer: 'clone',
+      site: 'session',
+      managerId: 'clone',
+      models: {
+        'claude-fable-5': {
+          inputTokens: 10,
+          outputTokens: 20,
+          cacheReadInputTokens: 100,
+          cacheCreationInputTokens: 5,
+          webSearchRequests: 0,
+          costUsd: 1.2345,
+        },
+      },
+    });
+
+    expect(shape).toBe('turn_usage layer=clone site=session managerId=clone models=1');
+    expect(shape).not.toContain('1.2345');
+
+    const withReset = journalEntryShape({
+      type: 'turn_usage',
+      layer: 'manager',
+      site: 'session',
+      managerId: 'mgr-1',
+      models: {},
+      reset: { fromCostUsd: 5, toCostUsd: 3 },
+    });
+    expect(withReset).toBe(
+      'turn_usage layer=manager site=session managerId=mgr-1 models=0 reset=yes',
+    );
+  });
+
   it('理由は1行に切る（ドライバが本文を添えて返してくることがある）', async () => {
     const lines = await captureStderr(() => {
       noteDroppedRecord('日誌', '', new Error(`connection lost\nDETAIL: 送った本文 ${secret}`));

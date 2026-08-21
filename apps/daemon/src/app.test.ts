@@ -388,6 +388,38 @@ describe('HTTP API', () => {
     expect(body.entries[0]).toMatchObject({ type: 'worker_wait', tasks: 2, turns: 5 });
   });
 
+  it('GET /journal?type=turn_usage が通る（新しい種別も既存の絞り込み経路に乗る）', async () => {
+    await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
+    await stores.journal.append({
+      type: 'turn_usage',
+      layer: 'manager',
+      site: 'session',
+      managerId: 'mgr-1',
+      models: {
+        opus: {
+          inputTokens: 10,
+          outputTokens: 20,
+          cacheReadInputTokens: 100,
+          cacheCreationInputTokens: 30,
+          webSearchRequests: 0,
+          costUsd: 1.5,
+        },
+      },
+    });
+
+    const filtered = await app.request('/journal?type=turn_usage');
+    expect(filtered.status).toBe(200);
+    const body = (await filtered.json()) as {
+      entries: { type: string; layer: string; models: Record<string, unknown> }[];
+    };
+    expect(body.entries).toHaveLength(1);
+    expect(body.entries[0]).toMatchObject({ type: 'turn_usage', layer: 'manager' });
+    expect(body.entries[0]?.models.opus).toMatchObject({
+      cacheReadInputTokens: 100,
+      cacheCreationInputTokens: 30,
+    });
+  });
+
   it('日誌は until で窓の終端を閉じられる（人間も過去の一区間を取れる）', async () => {
     await stores.journal.append({ type: 'decision', decision: 'いまの分', grounds: 'g' });
 

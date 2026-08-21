@@ -188,4 +188,32 @@ describe('journal_read', () => {
     expect(reply).toContain('話しかけ 1');
     expect(reply).toContain('38 ターンは道具を1つも動かしていない');
   });
+
+  it('turn_usage は cache read/write が潰されずに1行として出て、reset の印は隠れない', async () => {
+    const stores = createMemoryStores();
+    await stores.journal.append({
+      type: 'turn_usage',
+      layer: 'clone',
+      site: 'session',
+      managerId: 'clone',
+      models: {
+        'claude-fable-5': {
+          inputTokens: 10,
+          outputTokens: 20,
+          cacheReadInputTokens: 120,
+          cacheCreationInputTokens: 40,
+          webSearchRequests: 0,
+          costUsd: 0.5,
+        },
+      },
+      reset: { fromCostUsd: 5, toCostUsd: 3 },
+    });
+    const call = tools(stores);
+
+    const reply = await call('journal_read', { types: ['turn_usage'] });
+    expect(reply).toContain('read=120');
+    expect(reply).toContain('write=40');
+    expect(reply).toContain('⚠reset');
+    expect(reply).toContain('数え直しを挟んだ回');
+  });
 });

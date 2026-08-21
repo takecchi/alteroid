@@ -35,7 +35,7 @@ import {
   type RunnerManagerState,
   type RunnerResumeCommand,
 } from './runner-protocol.js';
-import type { InboxEvent } from './schema.js';
+import type { InboxEvent, JournalEntry } from './schema.js';
 import type { Stores } from './store.js';
 import {
   captureStderr,
@@ -1410,6 +1410,130 @@ describe('消費を台帳へ積む', () => {
     // 台帳より前にかかる照会は「0」ではなく「記録が無い」と言えること。
     expect(aggregate.beforeLedger).toBe(true);
     expect(aggregate.notice).toContain('請求明細ではない');
+
+    await s.pool.stop();
+  });
+
+  /**
+   * `fold.delta`（ターン1回ぶんの増分）は台帳へ積むだけで捨てていた。
+   * ここは日誌に `turn_usage` として残ることを見る（`clone.ts` と対になる形を
+   * `manager.ts` の `case 'usage'` にも入れた — 片方だけだと非対称が残る）。
+   */
+  it('1ターンの増分が cache read/write を保持したまま turn_usage として日誌に残る', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.usage(
+      'mgr-spend',
+      { opus: usage({ cacheReadInputTokens: 100, cacheCreationInputTokens: 30, costUsd: 1 }) },
+      'sess-1',
+    );
+    await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(1);
+
+    const entries = await stores.journal.list({ types: ['turn_usage'] });
+    expect(entries).toHaveLength(1);
+    const entry = entries[0];
+    if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
+    expect(entry.layer).toBe('manager');
+    expect(entry.site).toBe('session');
+    expect(entry.managerId).toBe('mgr-spend');
+    expect(entry.sessionId).toBe('sess-1');
+    // **合計に潰していないこと** — read と write が別々に残っている。
+    expect(entry.models.opus).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadInputTokens: 100,
+      cacheCreationInputTokens: 30,
+      webSearchRequests: 0,
+      costUsd: 1,
+    });
+    expect(entry.reset).toBeUndefined();
+
+    await s.pool.stop();
+  });
+
+  it('増分が空の回（同じ累積の再送）は turn_usage の行を書かない', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.usage('mgr-spend', { opus: usage({ costUsd: 1 }) }, 'sess-1');
+    await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(1);
+
+    // 同じ累積が再送される（イベント再送）＝増分ゼロ。
+    fake.usage('mgr-spend', { opus: usage({ costUsd: 1 }) }, 'sess-1');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const entries = await stores.journal.list({ types: ['turn_usage'] });
+    // **「行が無い」＝増分ゼロであって、そのターンが無料だったわけではない**
+    // （このテストでは実際に増分がゼロなので1件のまま増えない、が正しい）。
+    expect(entries).toHaveLength(1);
+
+    await s.pool.stop();
+  });
+
+  it('累積が数え直された回は turn_usage に reset が付き、既存の数え直し通知（exchange）も従来どおり出る', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.usage('mgr-spend', { opus: usage({ costUsd: 5 }) }, 'sess-1');
+    await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(5);
+
+    // resume で SDK 側の累積が 0 から始まり、次に読めた値が 3 だった形。
+    fake.usage('mgr-spend', { opus: usage({ costUsd: 3 }) }, 'sess-1');
+    await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(8);
+
+    // **既存の1行（`exchange`）は従来どおり出る**（あちらを壊していない）。
+    const all = await stores.journal.list({ limit: 50 });
+    const note = all.find((entry) => 'text' in entry && entry.text.includes('数え直された'));
+    expect(note).toBeDefined();
+
+    const turnUsageEntries = all.filter(
+      (entry): entry is Extract<JournalEntry, { type: 'turn_usage' }> =>
+        entry.type === 'turn_usage',
+    );
+    expect(turnUsageEntries).toHaveLength(2);
+    const resetEntry = turnUsageEntries.find((entry) => entry.reset !== undefined);
+    if (resetEntry === undefined) throw new Error('reset 付きの turn_usage が無い');
+    expect(resetEntry.reset).toEqual({ fromCostUsd: 5, toCostUsd: 3 });
+    // **models は差分ではなく新しい累積の先頭**（3 であって -2 ではない）。
+    expect(resetEntry.models.opus?.costUsd).toBe(3);
+
+    await s.pool.stop();
+  });
+
+  it('台帳へ積めなくても仕事は止まらず、跡が残る（turn_usage は書かれない）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    stores.usage.record = () => Promise.reject(new Error('台帳が書けない'));
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.usage('mgr-spend', { opus: usage({ costUsd: 1 }) }, 'sess-1');
+
+    await expect
+      .poll(
+        async () => {
+          const entries = await stores.journal.list({ limit: 50 });
+          return entries.some(
+            (entry) => 'text' in entry && entry.text.includes('消費を台帳へ記録できなかった'),
+          );
+        },
+        { timeout: 2000 },
+      )
+      .toBe(true);
+
+    const turnUsage = await stores.journal.list({ types: ['turn_usage'] });
+    expect(turnUsage).toHaveLength(0);
 
     await s.pool.stop();
   });
