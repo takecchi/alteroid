@@ -4,6 +4,9 @@ import { jobStatusSchema } from './schema.js';
 import { rateLimitFactsSchema, usageLimitNoticeSchema } from './usage-limits.js';
 import { usageTotalsSchema } from './usage.js';
 
+/** ISO8601 の日時（offset 必須）。`schema.ts` の同名の private const と同じ形。 */
+const isoDateTime = z.string().datetime({ offset: true });
+
 /**
  * デーモン ↔ manager-runner の境界（roadmap M4）。
  *
@@ -275,6 +278,140 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
         via: z.string(),
       })
       .optional(),
+  }),
+  /**
+   * 委譲1区間ぶんの集計（マネージャーが作業者を投げてから、全員が完了通知を
+   * 返し終えるまで）。**1ターン1行ではなく、この区間1行にしてある。**
+   *
+   * `result` は既に1ターン1件の `report` を上げており、日誌には
+   * `exchange with=manager` として残る。**ターンの回数と時刻は既に日誌にある。**
+   * 足りないのは「何を契機にそのターンが回ったか」だけなので、1ターン1行を
+   * 新設すると日誌でいちばん書き込みの多い経路を二重にすることになる。
+   * 集計は整数のカウンタなので構造的に無界にならない（`digest.ts` のような
+   * 打ち切り・`omitted()` は要らない）。
+   *
+   * **落とした先。** 「どの作業者だったか」は載せていない — 作業者ごとの
+   * 実行は `tool_use` の日誌（`actor=worker:<id>:<agent>`）に全部ある。
+   *
+   * **各フィールドの doc にある「例:」は、対応する実在のテスト名
+   * （`runner-wakeup.test.ts` の `it(...)` の文言）を必ず伴わせる。** テストの
+   * 無い例は、実装が変わったときに黙って嘘になる（テストなら落ちる）。ここの
+   * `settled` の doc は一度、直したコードと矛盾する古い読み方を書いたまま
+   * レビューを通ってしまった箇所である（この PR 自身の履歴に残っている）。
+   */
+  z.object({
+    type: z.literal('worker_wait'),
+    managerId: z.string(),
+    /** 区間が開いた時刻（最初の `task_started` で `#openTasks` が 0→1 になった瞬間）。 */
+    openedAt: isoDateTime,
+    /**
+     * この区間で始まった委譲（Task）の件数。`task_started` の**件数**であって
+     * 作業者の**人数**ではない — 同じ `task_id` が二度来れば二度数える。
+     * `skip_transcript: true` の ambient/housekeeping task も間引かずに含む。
+     */
+    tasks: z.number().int().nonnegative(),
+    /** この区間の間にマネージャーのセッションが回った `result` の回数。 */
+    turns: z.number().int().nonnegative(),
+    /**
+     * ターンが回った契機。**3つの合計は必ず `turns` と一致する**（排他で1件だけ
+     * 数えるため）。
+     */
+    byCause: z.object({
+      /** そのターンの間に、クローン・人間からの入力を1件以上消費した。 */
+      input: z.number().int().nonnegative(),
+      /**
+       * 入力は無いが、作業者の完了通知（`task_notification`）を1件以上受けた。
+       *
+       * **「通知の直後に回ったターン」であって、「その通知が原因でターンが
+       * 回った」ことの証明ではない。** 同時に起きただけの可能性（別の理由で
+       * 回ったターンに、たまたま通知が重なった）は排除していない。
+       */
+      notification: z.number().int().nonnegative(),
+      /**
+       * 入力も完了通知も無いのに回ったターン。**これは消去法で出している値
+       * である。** 「入力を消費していない、かつ完了通知も受けていない」を
+       * 満たしたターンが全部ここへ落ちる。だから**分類の漏れ（まだ誰も
+       * 知らない第4の契機、こちらが読み落としているメッセージ種別）があれば、
+       * それも黙ってここへ流れ込む。**「SDK/CLI 側の自己継続である」は
+       * *解釈*であって*観測*ではない — alteroid はこの部分のコードを1行も
+       * 持たないので直接確かめる手段が無い。ここが支配的なら、プロンプトへ
+       * 「待て」を1文足しても何も変わらない可能性が高い（が、それも解釈である）。
+       */
+      continuation: z.number().int().nonnegative(),
+    }),
+    /**
+     * 道具を1つも動かさなかったターンの数。事故のときの「残り5体を待ちます」
+     * だけのターンがこれにあたる。マネージャー自身の道具だけを見る（作業者の
+     * 道具は数えない — 混ぜると「マネージャーは何もしていない」が消える）。
+     *
+     * **言っているのは「マネージャー自身の `PostToolUse` が発火しなかった」
+     * ことだけである。** 「何も考えなかった」でも「何も出力しなかった」でも
+     * ない — 本文だけ書いて終わったターン（`#said` へ積んだが道具は使わな
+     * かった回）もここに入る（例: `runner-wakeup.test.ts` の「本文だけを
+     * 話して道具を使わなかったターンも toolless に数える」）。
+     */
+    toolless: z.number().int().nonnegative(),
+    /**
+     * この区間で受けた `task_notification` の総数。
+     *
+     * **`tasks` 以下とは限らない。** 対応する `task_started` を観測していない
+     * 通知（`#onTaskNotification` の `had === false` の経路。本来起きない想定
+     * だが防御的に数える）も含めているので、`tasks` より大きくなりうる（例:
+     * `runner-wakeup.test.ts` の「対応する task_started が無い
+     * task_notification も notifications に数え、tasks を超えうる」）。
+     */
+    notifications: z.number().int().nonnegative(),
+    /**
+     * この区間で `UserPromptSubmit` がマネージャー自身に発火した回数。
+     *
+     * **`turns` と食い違うこと自体が観測である。** 一致すれば「`result` は
+     * ターンごとに1回出る」という仮説を支持し、食い違えば「SDK 側の自己継続は
+     * `UserPromptSubmit` を伴わない」等の可能性を示す。どちらの仮説でも
+     * 読める形にしてある。**ただし食い違いの「原因」までは言っていない** —
+     * `result` が出ない自己継続・hook が発火しない経路・作業者判定
+     * （`agent_id`）の取りこぼし、のどれで起きても同じ食い違いとして見える。
+     */
+    submits: z.number().int().nonnegative(),
+    /**
+     * `UserPromptSubmit` の `source` ごとの内訳。**取れた分だけ載せる。**
+     *
+     * SDK はいまのところ「Anthropic 内部のセッションでしか付かない見込みの
+     * 試験中のフィールド」と言っており、外部のペイロードには付かない見込み
+     * である。1件も取れなければ**フィールドごと省く**（`{}` を置かない） —
+     * 取れない軸に0の行を作らない（AGENTS.md 地雷）。
+     */
+    sources: z.record(z.string(), z.number().int().nonnegative()).optional(),
+    /**
+     * 区間が閉じる前にセッションが畳まれた（`#finish` / `stop` / 引き継ぎ）。
+     *
+     * **観測しているのは「`#openTasks` が空になったことをこのセッションが
+     * 観測できたか」である。** `#finish` / `stop` / 引き継ぎのどの経路でも、
+     * 閉じる瞬間の `#openTasks.size === 0` をそのまま使う（呼び出し側は
+     * 真偽値を渡さない）。
+     *
+     * **`false` の意味: 区間が閉じた瞬間に、まだ完了通知を返していない委譲が
+     * 1件以上あった。** 経路は `#finish` / `stop` / 引き継ぎのどれか（例:
+     * `runner-wakeup.test.ts` の「task_started が2件で task_notification が
+     * 1件だけの状態でセッションが畳まれたら settled: false が上がる（区間が
+     * 開いたまま消えない）」）。
+     *
+     * **`false` は「通知が失われた」ことを意味しない。** 通知がまだ届いて
+     * いなかっただけかもしれないし、作業者は仕事を終えていて通知だけが
+     * 間に合わなかったのかもしれない。alteroid が観測したのは「閉じた時点
+     * では届いていなかった」ことだけである。
+     *
+     * **`true` でも `turns` が最後の1回を含まないことがある** — 最後の完了
+     * 通知の後、`result` が来ないまま畳まれた場合である。この場合
+     * `#openTasks` は空（＝ `settled: true`）だが、その回のターンの契機は
+     * `byCause` に反映されない。`submits` との突き合わせで気づける形にして
+     * ある（`turns` より `submits` が多ければ、`result` を伴わないまま
+     * 消費された発火があったことになる。例: `runner-wakeup.test.ts` の
+     * 「全員から完了通知を受け切った直後に result なしで畳まれても settled:
+     * true が上がる」）。
+     *
+     * 数え漏れではなく、区間が閉じた瞬間に何を観測できたかという事実である。
+     */
+    settled: z.boolean(),
   }),
   z.object({
     type: z.literal('ask'),

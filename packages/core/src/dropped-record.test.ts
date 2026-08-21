@@ -114,6 +114,28 @@ describe('落とした記録の跡', () => {
     ).toContain('chars=1');
   });
 
+  /**
+   * `worker_wait` は自由文を1つも持たない — 全フィールドが runner 自身の
+   * 数え上げ（整数・真偽値）である。値を決めるのは runner であって外の世界
+   * ではないので、`tool_use` の `actor`/`tool` と同じ判定で数値をそのまま
+   * 載せてよい（`size()` へ逃がす必要が無い）。
+   */
+  it('worker_wait は自由文が無いので数値をそのまま載せる', () => {
+    const shape = journalEntryShape({
+      type: 'worker_wait',
+      openedAt: '2026-08-20T00:00:00.000Z',
+      tasks: 5,
+      turns: 41,
+      byCause: { input: 1, notification: 3, continuation: 37 },
+      toolless: 38,
+      notifications: 3,
+      submits: 0,
+      settled: false,
+    });
+
+    expect(shape).toBe('worker_wait tasks=5 turns=41 toolless=38 settled=false');
+  });
+
   it('理由は1行に切る（ドライバが本文を添えて返してくることがある）', async () => {
     const lines = await captureStderr(() => {
       noteDroppedRecord('日誌', '', new Error(`connection lost\nDETAIL: 送った本文 ${secret}`));

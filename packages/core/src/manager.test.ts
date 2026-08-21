@@ -45,6 +45,8 @@ import {
 } from './testing.js';
 import type { UsageTotals } from './usage.js';
 
+type WorkerWaitEvent = Extract<RunnerEvent, { type: 'worker_wait' }>;
+
 /**
  * SDK を実際に呼ばずに委譲の配線を検証する。
  *
@@ -1269,6 +1271,10 @@ function swappableRunner(runnerId = 'runner-primary') {
     usage(managerId: string, models: Record<string, UsageTotals>, sessionId?: string) {
       emit?.({ type: 'usage', managerId, sessionId, models });
     },
+    /** 委譲1区間ぶんの集計を降ろす（runner 側の集計は `runner-wakeup.test.ts` が別に固定する）。 */
+    workerWait(managerId: string, fields: Omit<WorkerWaitEvent, 'type' | 'managerId'>) {
+      emit?.({ type: 'worker_wait', managerId, ...fields });
+    },
   };
 }
 
@@ -1404,6 +1410,94 @@ describe('消費を台帳へ積む', () => {
     // 台帳より前にかかる照会は「0」ではなく「記録が無い」と言えること。
     expect(aggregate.beforeLedger).toBe(true);
     expect(aggregate.notice).toContain('請求明細ではない');
+
+    await s.pool.stop();
+  });
+});
+
+describe('worker_wait — 委譲1区間ぶんの集計を日誌に残す', () => {
+  const runningJob = {
+    id: 'mgr-wait',
+    managerId: 'mgr-wait',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T01:00:00.000Z',
+    status: 'running' as const,
+    summary: '調べもの',
+    request: '調べておいて',
+    cwd: '/work/project',
+    sessionId: 'sess-1',
+    runnerId: 'runner-primary',
+  };
+
+  it('runner から降りた worker_wait は日誌に1件だけ入る（台帳には足さない）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.workerWait('mgr-wait', {
+      openedAt: '2026-08-20T00:00:00.000Z',
+      tasks: 5,
+      turns: 41,
+      byCause: { input: 1, notification: 3, continuation: 37 },
+      toolless: 38,
+      notifications: 3,
+      submits: 0,
+      settled: true,
+    });
+
+    const entries = await vi.waitFor(async () => {
+      const found = await stores.journal.list({ types: ['worker_wait'] });
+      if (found.length === 0) throw new Error('worker_wait がまだ日誌に無い');
+      return found;
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      type: 'worker_wait',
+      tasks: 5,
+      turns: 41,
+      byCause: { input: 1, notification: 3, continuation: 37 },
+      toolless: 38,
+      settled: true,
+    });
+    // sources を渡していなければ日誌にもフィールドごと現れない
+    // （取れない軸に0の行を作らない）。
+    expect(entries[0]).not.toHaveProperty('sources');
+
+    // 台帳（`ManagerSummary`）には足さない。
+    const summary = (await s.pool.list()).find((job) => job.managerId === 'mgr-wait');
+    expect(summary).not.toHaveProperty('workerWait');
+    expect(JSON.stringify(summary)).not.toContain('worker_wait');
+
+    await s.pool.stop();
+  });
+
+  it('sources を渡していれば日誌にもそのまま残る', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.workerWait('mgr-wait', {
+      openedAt: '2026-08-20T00:00:00.000Z',
+      tasks: 1,
+      turns: 1,
+      byCause: { input: 0, notification: 1, continuation: 0 },
+      toolless: 1,
+      notifications: 1,
+      submits: 1,
+      sources: { system: 1 },
+      settled: true,
+    });
+
+    const entries = await vi.waitFor(async () => {
+      const found = await stores.journal.list({ types: ['worker_wait'] });
+      if (found.length === 0) throw new Error('worker_wait がまだ日誌に無い');
+      return found;
+    });
+    expect(entries[0]).toMatchObject({ sources: { system: 1 } });
 
     await s.pool.stop();
   });

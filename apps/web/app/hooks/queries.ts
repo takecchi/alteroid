@@ -237,5 +237,14 @@ export function summarizeJournalEntry(entry: JournalEntry): string {
         : `⚠ ${entry.date} の日報は作れなかった: ${entry.unavailable}`;
     case 'external_event':
       return `${entry.source}: ${entry.summary}`;
+    case 'worker_wait': {
+      const cause = entry.byCause;
+      return (
+        `作業者 ${entry.tasks} 体を待つあいだに ${entry.turns} ターン` +
+        `（通知 ${cause.notification} / 自己継続 ${cause.continuation} / 話しかけ ${cause.input}）。` +
+        `うち ${entry.toolless} ターンは道具を1つも動かしていない` +
+        (entry.settled ? '' : '（区間は閉じずに終わった）')
+      );
+    }
   }
 }

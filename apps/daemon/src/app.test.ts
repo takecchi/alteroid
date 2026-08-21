@@ -365,6 +365,29 @@ describe('HTTP API', () => {
     expect((await future.json()) as { entries: unknown[] }).toMatchObject({ entries: [] });
   });
 
+  it('GET /journal?type=worker_wait が通る（新しい種別も既存の絞り込み経路に乗る）', async () => {
+    await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
+    await stores.journal.append({
+      type: 'worker_wait',
+      openedAt: '2026-08-20T21:30:00.000Z',
+      tasks: 2,
+      turns: 5,
+      byCause: { input: 0, notification: 1, continuation: 4 },
+      toolless: 4,
+      notifications: 1,
+      submits: 0,
+      settled: true,
+    });
+
+    const filtered = await app.request('/journal?type=worker_wait');
+    expect(filtered.status).toBe(200);
+    const body = (await filtered.json()) as {
+      entries: { type: string; tasks: number; turns: number }[];
+    };
+    expect(body.entries).toHaveLength(1);
+    expect(body.entries[0]).toMatchObject({ type: 'worker_wait', tasks: 2, turns: 5 });
+  });
+
   it('日誌は until で窓の終端を閉じられる（人間も過去の一区間を取れる）', async () => {
     await stores.journal.append({ type: 'decision', decision: 'いまの分', grounds: 'g' });
 

@@ -165,4 +165,27 @@ describe('journal_read', () => {
     await stores.journal.append({ type: 'decision', decision: '何か', grounds: '記憶' });
     expect(await call('journal_read', { types: ['daily_report'] })).toContain('当たる日誌は無い');
   });
+
+  it('worker_wait は空回りが目で分かる1行として出る', async () => {
+    const stores = createMemoryStores();
+    await stores.journal.append({
+      type: 'worker_wait',
+      openedAt: '2026-08-20T00:00:00.000Z',
+      tasks: 3,
+      turns: 41,
+      byCause: { input: 1, notification: 3, continuation: 37 },
+      toolless: 38,
+      notifications: 3,
+      submits: 0,
+      settled: true,
+    });
+    const call = tools(stores);
+
+    const reply = await call('journal_read', { types: ['worker_wait'] });
+    expect(reply).toContain('作業者 3 体を待つあいだに 41 ターン');
+    expect(reply).toContain('通知 3');
+    expect(reply).toContain('自己継続 37');
+    expect(reply).toContain('話しかけ 1');
+    expect(reply).toContain('38 ターンは道具を1つも動かしていない');
+  });
 });
