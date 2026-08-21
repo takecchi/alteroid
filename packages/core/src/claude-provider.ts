@@ -110,6 +110,11 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
     // 見えない ＝ 能力の削除（AGENTS.md 地雷7 の後半 / PRD「業務範囲」の
     // 「人間が使っている連携が、クローンと作業者からも使えること」）。
     settingSources: ['user', 'project', 'local'],
+    // 参照系は `.claude/skills/` に置いてある（AGENTS.md「書く先を決める」）。
+    // **`'all'` を明示する。** 省くと SDK 側は何も設定せず CLI の既定に委ねる
+    // ことになり、器によって引けるものが変わる。**名前の列挙で絞らないのは
+    // 地雷1と同じ理由**で、スキルが増えたときに自動で追いつかせるためである。
+    skills: 'all',
     // 人間が置いた実行環境プロファイルを、クローンの手にも効かせる。
     env,
     includePartialMessages: true,
@@ -179,6 +184,8 @@ export function buildCloneDistillOptions(request: CloneDistillOptionsRequest): O
     },
     systemPrompt,
     settingSources: ['user', 'project', 'local'],
+    // 蒸留のターンも同じものを引ける（本セッションと道具を揃えてある）。
+    skills: 'all',
     env,
     persistSession: false,
     ...(cwd === undefined ? {} : { cwd }),
@@ -273,6 +280,17 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     cwd,
     // 人間が使っているのと同じ設定・同じ .mcp.json を渡す（下向きは同じものが見える）
     settingSources: ['user', 'project', 'local'],
+    // 参照系は `.claude/skills/` に置いてある（AGENTS.md「書く先を決める」）。
+    // **`'all'` を明示する。** 省くと SDK 側は何も設定せず CLI の既定に委ねる
+    // ことになり、器によって引けるものが変わる。名前の列挙で絞らないのは
+    // 地雷1と同じ理由で、スキルが増えたときに自動で追いつかせるためである。
+    //
+    // **上の `agents`（作業者）側には `skills` を書かない。**
+    // `AgentDefinition.skills` は `'all'` を受けず名前の配列しか取れないので、
+    // 書けば「明示リストで絞る」（地雷1）になり、スキルが増えても追いつかない。
+    // しかもあちらは *preload* なので、書いた分だけ作業者の文脈へ先に載る
+    // ＝ 畳んだ意味が消える。
+    skills: 'all',
     env,
     // 生ログはデーモンへ預ける。runner は永続化の器を持たない（記憶ストアの
     // 鍵を runner に置かないため）。
