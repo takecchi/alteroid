@@ -232,9 +232,15 @@ describe('制御面の境界', () => {
     await expect(fetch(`http://127.0.0.1:${TCP_PORT}/managers`)).rejects.toThrow();
   });
 
-  it('ソケットの権限は所有者だけ（別 UID の子プロセスは繋げない）', async () => {
+  it('ソケットの権限は所有者だけ（0600）', async () => {
     const { statSync } = await import('node:fs');
-    // 0600。UID を分けたコンテナでは、これが「繋げない」を意味する。
+    // ここで確かめられるのは mode ビットだけである。**別 UID から実際に繋げない
+    // ことは、この in-process のテストでは確かめられない**（vitest プロセスは
+    // 非 root で CAP_SETUID を持たず、`pnpm test` が走るどちらの環境（ローカル・
+    // CI の `ci` ジョブ）でも別 UID の子プロセスを起こせない）。**実物の検査は
+    // `.github/workflows/ci.yml` の `image` ジョブに在る**（UID を実際に分けた
+    // 2プロセスを器の中で走らせ、docs/architecture.md「制御面の保護」2枚目を
+    // 直接見る）。
     expect(statSync(socketPath).mode & 0o777).toBe(0o600);
   });
 });
