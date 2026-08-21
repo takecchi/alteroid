@@ -285,14 +285,20 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
    * 1. **増分が空**（`delta` が `{}`）。同じ累積の再送などで実際に増分が
    *    無かった回（`clone.ts` の `#recordUsage` / `manager.ts` の
    *    `case 'usage'` が書かない）。
-   * 2. **台帳へ積めなかった**（記録の失敗）。**跡の残り方は層で違う** —
+   * 2. **台帳へ積めなかった**（記録の失敗）。**両層とも日誌に跡が残る**
+   *    （非対称を事実として書いたのは #131、解消したのは #133。経緯は
+   *    #133 の PR 本文にある） —
    *    マネージャー層は `case 'usage'` の `catch` が `exchange with=manager`
-   *    として日誌に残す。**クローン層は違う。** `noteDroppedRecord`
-   *    （`dropped-record.ts`）は意図的に日誌ではなく stderr にしか残さない
-   *    （あちらの doc — ストアが閉じている窓で日誌へ書こうとしても同じ理由で
-   *    落ちるため）。**つまりクローン層でこの回が起きると、日誌には
-   *    `turn_usage` も `exchange` も1行も残らない。** 日誌だけではこの回を
-   *    見分けられない（範囲外。PR 本文）。
+   *    として日誌に残し、クローン層は `#recordUsage` の `catch` が
+   *    `exchange with=self` として日誌に残す（どちらも文言は
+   *    「消費を台帳へ記録できなかった（この分は集計に出ない）」で揃えてある）。
+   *    クローン層は stderr（`noteDroppedRecord`）も併せて残す — 台帳の
+   *    失敗そのものを名指しする跡は stderr 側にしか無い（日誌への追記も
+   *    失敗した場合、`exchange` の行自体も書かれず、`#journal` のフォール
+   *    バックが別の文言で stderr に残るため）。**つまりこの2番の回でも、
+   *    日誌への追記そのものがさらに失敗した稀な場合を除き、`turn_usage` は
+   *    無いが `exchange with=self`（クローン層）／`with=manager`
+   *    （マネージャー層）は残る。**
    * 3. **ターンが失敗して終わった**（`isSuccessResult` が偽）。`models` の
    *    doc を見よ — これが最も誤読を招きやすい形である。
    *
