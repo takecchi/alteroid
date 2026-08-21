@@ -299,7 +299,8 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     /** 区間が開いた時刻（最初の `task_started` で `#openTasks` が 0→1 になった瞬間）。 */
     openedAt: isoDateTime,
     /**
-     * この区間で始まった委譲（Task）の件数。`task_started` の件数そのもので、
+     * この区間で始まった委譲（Task）の件数。`task_started` の**件数**であって
+     * 作業者の**人数**ではない — 同じ `task_id` が二度来れば二度数える。
      * `skip_transcript: true` の ambient/housekeeping task も間引かずに含む。
      */
     tasks: z.number().int().nonnegative(),
@@ -312,13 +313,23 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     byCause: z.object({
       /** そのターンの間に、クローン・人間からの入力を1件以上消費した。 */
       input: z.number().int().nonnegative(),
-      /** 入力は無いが、作業者の完了通知（`task_notification`）を1件以上受けた。 */
+      /**
+       * 入力は無いが、作業者の完了通知（`task_notification`）を1件以上受けた。
+       *
+       * **「通知の直後に回ったターン」であって、「その通知が原因でターンが
+       * 回った」ことの証明ではない。** 同時に起きただけの可能性（別の理由で
+       * 回ったターンに、たまたま通知が重なった）は排除していない。
+       */
       notification: z.number().int().nonnegative(),
       /**
-       * **入力も完了通知も無いのに回ったターン。** マネージャーに選択権が無い
-       * ターンであり、SDK/CLI 側の自己継続である — alteroid はこの部分の
-       * コードを1行も持たない。ここが支配的なら、プロンプトへ「待て」を
-       * 1文足しても何も変わらない（対策がプラセボになる）。
+       * 入力も完了通知も無いのに回ったターン。**これは消去法で出している値
+       * である。** 「入力を消費していない、かつ完了通知も受けていない」を
+       * 満たしたターンが全部ここへ落ちる。だから**分類の漏れ（まだ誰も
+       * 知らない第4の契機、こちらが読み落としているメッセージ種別）があれば、
+       * それも黙ってここへ流れ込む。**「SDK/CLI 側の自己継続である」は
+       * *解釈*であって*観測*ではない — alteroid はこの部分のコードを1行も
+       * 持たないので直接確かめる手段が無い。ここが支配的なら、プロンプトへ
+       * 「待て」を1文足しても何も変わらない可能性が高い（が、それも解釈である）。
        */
       continuation: z.number().int().nonnegative(),
     }),
@@ -326,9 +337,20 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * 道具を1つも動かさなかったターンの数。事故のときの「残り5体を待ちます」
      * だけのターンがこれにあたる。マネージャー自身の道具だけを見る（作業者の
      * 道具は数えない — 混ぜると「マネージャーは何もしていない」が消える）。
+     *
+     * **言っているのは「マネージャー自身の `PostToolUse` が発火しなかった」
+     * ことだけである。** 「何も考えなかった」でも「何も出力しなかった」でも
+     * ない — 本文だけ書いて終わったターン（`#said` へ積んだが道具は使わな
+     * かった回）もここに入る。
      */
     toolless: z.number().int().nonnegative(),
-    /** この区間で受けた `task_notification` の総数（`tasks` と同じか、それ以下）。 */
+    /**
+     * この区間で受けた `task_notification` の総数。
+     *
+     * **`tasks` 以下とは限らない。** 対応する `task_started` を観測していない
+     * 通知（`#onTaskNotification` の `had === false` の経路。本来起きない想定
+     * だが防御的に数える）も含めているので、`tasks` より大きくなりうる。
+     */
     notifications: z.number().int().nonnegative(),
     /**
      * この区間で `UserPromptSubmit` がマネージャー自身に発火した回数。
@@ -336,7 +358,9 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * **`turns` と食い違うこと自体が観測である。** 一致すれば「`result` は
      * ターンごとに1回出る」という仮説を支持し、食い違えば「SDK 側の自己継続は
      * `UserPromptSubmit` を伴わない」等の可能性を示す。どちらの仮説でも
-     * 読める形にしてある。
+     * 読める形にしてある。**ただし食い違いの「原因」までは言っていない** —
+     * `result` が出ない自己継続・hook が発火しない経路・作業者判定
+     * （`agent_id`）の取りこぼし、のどれで起きても同じ食い違いとして見える。
      */
     submits: z.number().int().nonnegative(),
     /**
@@ -351,8 +375,25 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     /**
      * 区間が閉じる前にセッションが畳まれた（`#finish` / `stop` / 引き継ぎ）。
      *
-     * **`false` は数え漏れではなく、閉じなかったという事実である。** 最後まで
-     * 完了通知を受け切れなかった区間を、黙って捨てずに報告する。
+     * **観測しているのは「`#openTasks` が空になったことをこのセッションが
+     * 観測できたか」である。** `#finish` / `stop` / 引き継ぎのどの経路でも、
+     * 閉じる瞬間の `#openTasks.size === 0` をそのまま使う（呼び出し側は
+     * 真偽値を渡さない）。
+     *
+     * **`false` は「完了通知を受け切れなかった」と断定していない。** 「受け
+     * 切ったことをこのセッションが確認する前に区間が閉じた」も同じ `false`
+     * に入る（例: 全員から通知を受けた直後、次の `result` が来ないまま
+     * セッションが落ちた場合。この回は実際には受け切っているが、`result` を
+     * 待つ前に畳まれれば `#openTasks` を読む機会自体が来ない）。
+     *
+     * **`true` でも `turns` が最後の1回を含まないことがある** — 最後の完了
+     * 通知の後、`result` が来ないまま畳まれた場合である。この場合
+     * `#openTasks` は空（＝ `settled: true`）だが、その回のターンの契機は
+     * `byCause` に反映されない。`submits` との突き合わせで気づける形にして
+     * ある（`turns` より `submits` が多ければ、`result` を伴わないまま
+     * 消費された発火があったことになる）。
+     *
+     * 数え漏れではなく、区間が閉じた瞬間に何を観測できたかという事実である。
      */
     settled: z.boolean(),
   }),

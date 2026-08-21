@@ -366,6 +366,39 @@ describe('worker_wait — 委譲1区間ぶんの契機の集計', () => {
     expect(event.settled).toBe(false);
   });
 
+  /**
+   * **これが `settled` の修正の本体である。** 全員から完了通知を受け切った
+   * *直後*に、次の `result` が来ないままセッションが畳まれた場合、`settled`
+   * は呼び出し側が渡す固定値ではなく `#openTasks` の状態から導かれるので
+   * `true` になる（`#closeWorkerWaitWindow` の doc）。直す前はこの経路も
+   * `false` 固定だった — 「最後の完了通知の後、SDK はマネージャーを起こすのか」
+   * という、このPRが答えたい問いのど真ん中で、当たりの仮説（起こさない）の
+   * ときに限って全区間へ偽の「受け切れなかった」印が付いていた。
+   */
+  it('全員から完了通知を受け切った直後に result なしで畳まれても settled: true が上がる', async () => {
+    const s = setup();
+    const session = await startPrimed(s.host, s.sessions);
+
+    await session.taskStarted('task-1');
+    await session.taskNotification('task-1'); // 全員から受け切った（#openTasks は空）
+
+    // その直後に result を出さずにセッションが畳まれる。
+    session.endStream();
+
+    const [event] = await vi.waitFor(() => {
+      const found = workerWaitEvents(s.events);
+      if (found.length === 0) throw new Error('worker_wait がまだ上がっていない');
+      return found;
+    });
+    expect(event).toBeDefined();
+    if (event === undefined) return;
+    expect(event.tasks).toBe(1);
+    expect(event.settled).toBe(true);
+    // 最後の通知を契機に回るはずだったターンの result が来ていないので、
+    // turns にはまだ反映されていない（`settled: true` の doc に明記した特性）。
+    expect(event.turns).toBe(0);
+  });
+
   it('window が開いていないあいだの result は worker_wait を1件も生まない', async () => {
     const s = setup();
     const session = await startPrimed(s.host, s.sessions);

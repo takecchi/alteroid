@@ -808,8 +808,9 @@ class RunnerSession {
 
     // **`worker_wait` も同じ理由で取りこぼさない。** この経路は `#finish` を
     // 通らないので、ここで閉じないと開いたままの区間が黙って消える
-    // （`#finish` の doc と同じ判断）。
-    this.#closeWorkerWaitWindow(false);
+    // （`#finish` の doc と同じ判断）。`settled` は渡さない — 中で
+    // `#openTasks` の状態から導く（`#closeWorkerWaitWindow` の doc）。
+    this.#closeWorkerWaitWindow();
 
     // 止まる前に全文を返す。runner のディスクは器と一緒に消えるので、ここで
     // 渡し損ねると manager_id から生ログへ降りる経路が切れる。
@@ -1072,12 +1073,19 @@ class RunnerSession {
     // **委譲の区間を持ち越さない。** 新しいセッション（か、この後の終了）は
     // 前のセッションが開いていた作業者の `task_id` を一切知らない。持ち越すと
     // 二度と来ない `task_notification` を待ち続けて区間が永久に閉じない。
-    // ここで開いていれば `settled: false` として畳む（`#finish` と同じ理由。
-    // `recovered` で終わる経路には `#finish` を通らないので、ここで閉じないと
-    // 一生閉じない）。`unresumable` で終わる経路は直後に呼ばれる `#finish` が
-    // 同じ関数を呼ぶが、既に閉じているので二重には emit しない。
+    // ここで開いていれば畳む（`#finish` と同じ理由。`recovered` で終わる経路には
+    // `#finish` を通らないので、ここで閉じないと一生閉じない）。`unresumable` で
+    // 終わる経路は直後に呼ばれる `#finish` が同じ関数を呼ぶが、既に閉じている
+    // ので二重には emit しない。
+    //
+    // **`close()` を先に、`clear()` を後に。** `#closeWorkerWaitWindow` は
+    // `settled` を「その時点の `#openTasks` が空か」から導く。先に `clear()`
+    // すると、`task-2` が開いたまま resume に失敗した回まで「全員から完了通知を
+    // 受け切った」（`settled: true`）に化ける — 開いたままの委譲を握り潰して
+    // 帳消しにする形になり、`settled: false` の意味（受け切る前に畳まれた）が
+    // 崩れる。先に読ませてから、読み終わった後で捨てる。
+    this.#closeWorkerWaitWindow();
     this.#openTasks.clear();
-    this.#closeWorkerWaitWindow(false);
 
     const record = renderSessionLog(this.#seed);
     if (record === null) {
@@ -1282,8 +1290,10 @@ class RunnerSession {
       }
       // **最後の完了通知そのものを契機に回ったこのターンを数え終えてから閉じる。**
       // `#openTasks` が空になった瞬間に閉じないのはこのためである
-      // （`#windowClosing` の doc）。
-      if (this.#windowClosing) this.#closeWorkerWaitWindow(true);
+      // （`#windowClosing` の doc）。`settled` は渡さない — この時点で
+      // `#openTasks` は必ず空なので（`#windowClosing` はそのときにしか立たない）、
+      // 中で導く `settled` は自動的に `true` になる。
+      if (this.#windowClosing) this.#closeWorkerWaitWindow();
     }
 
     // **成否で絞らない。** 拒否は成功したターンにも失敗したターンにも載る（型は
@@ -1433,12 +1443,24 @@ class RunnerSession {
    * **`#window` が null なら何もしない。** `#finish` / `stop` / 引き継ぎの
    * どこから呼んでも安全に重ねられるようにするための無害化である。
    *
+   * **`settled` は引数で受け取らず、ここで `#openTasks` の状態から導く。**
+   * 呼び出し側に真偽値を持たせると、`#finish` / `stop` / 引き継ぎの3経路が
+   * 固定で `false` を渡すことになり、**「委譲した作業者全員から完了通知を
+   * 受け切った直後に、次の `result` が来ないままセッションが畳まれた」場合まで
+   * `false`（＝受け切れなかった）と偽って報告する。** これはこの PR が答えたい
+   * 問い（最後の完了通知の後、SDK はマネージャーを起こすのか）のど真ん中で
+   * 起きる — 「起こさない」という当たりの仮説が成り立つ場合に限って、**全区間
+   * に偽の印が付く**ことになる。`#openTasks.size === 0` は「呼ばれた時点で
+   * 委譲した全員から通知を受け切っているか」をそのまま表すので、これを直接
+   * 使う（呼び出し側の意図の言い換えを挟まない）。
+   *
    * `sources` は**取れた分だけ載せる**。`#submitSources` が1件も無ければ
    * フィールドごと省く — 取れない軸に0の行を作らない（AGENTS.md 地雷）。
    */
-  #closeWorkerWaitWindow(settled: boolean): void {
+  #closeWorkerWaitWindow(): void {
     const window = this.#window;
     if (window === null) return;
+    const settled = this.#openTasks.size === 0;
     this.#window = null;
     this.#windowClosing = false;
     const sources = Object.fromEntries(window.sources);
@@ -1540,9 +1562,11 @@ class RunnerSession {
     // 終わる経路そのものである。
     await this.#flushUsage();
     // **取りこぼしを作らない。** window が開いたまま（か閉じ待ちのまま）
-    // 畳まれるなら、`settled: false` を付けて降ろしてから閉じる。数え漏れ
-    // ではなく、閉じなかったという事実そのものである。
-    this.#closeWorkerWaitWindow(false);
+    // 畳まれるなら降ろしてから閉じる。`settled` は渡さない — その時点の
+    // `#openTasks` から導く（`#closeWorkerWaitWindow` の doc）。委譲した全員
+    // から通知を受け切っていたのに `result` が来ないまま閉じた回は
+    // `settled: true` になる（`turns` が最後の1回を含まないだけである）。
+    this.#closeWorkerWaitWindow();
     this.#settleAll(reason);
     // 読み取りが終わっても入力側を起こして本体を閉じる。怠ると閉じられない
     // Query と起きない `#inputStream` が残る。
