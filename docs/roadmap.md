@@ -12,7 +12,7 @@
 
 **ゴール**: 空でもビルド・テスト・型チェックが回る骨格。
 
-- [x] pnpm workspaces（`packages/core`, `packages/storage-fs`, `packages/storage-pg`（空スタブ）, `apps/daemon`, `apps/cli`）
+- [x] pnpm workspaces（`packages/core`, `packages/storage-fs`, `packages/storage-pg`（M0 時点では空スタブ。**M4 でフル実装済み** — 下の M4 参照）, `apps/daemon`, `apps/cli`）
 - [x] TypeScript strict / ESM 統一、ビルドは tsup
 - [x] vitest / eslint + prettier
 - [x] GitHub Actions: install → typecheck → lint → test
@@ -25,7 +25,7 @@
 **ゴール**: 常駐デーモン内のクローンと会話でき、価値観が蒸留されて Markdown 記憶に残り、人間がそれを直接編集できる。
 
 - [x] `core`: ストア IF（PersonaStore / JournalStore / JobStore）と型付きメッセージ（エスカレーション・日誌・受信箱イベント）の zod スキーマ
-- [x] `core`: クローンループ — SDK `query()`、model `fable`、`tools: []`、インプロセス MCP（`memory_*` / `journal_*` / `ask_human`。`manager_*` は M2 までスタブ）
+- [x] `core`: クローンループ — SDK `query()`、model `fable`、**`tools` を渡さない**（preset 一式。ここに `tools: []` と書いてあったのは正典が名指しで否定している配置で、#94 が実装を直した）、インプロセス MCP（`memory_*` / `journal_*` / `ask_human`。`manager_*` は M2 までスタブ）
 - [x] `core`: **受信箱を M1 から作る**。この時点で届くのは人間の発言だけだが、構造はイベント駆動にしておく（chat 専用の作りにすると M3 で自律に化けられない — AGENTS.md 地雷4）
 - [x] `storage-fs`: 記憶 = Markdown、日誌 = JSONL、ジョブ = JSON（`~/.alteroid/`）
 - [x] `apps/daemon`: hono で chat(SSE)・journal 閲覧・記憶閲覧。クローンは常に1インスタンス
@@ -69,6 +69,7 @@
 - [x] クローンの発意: 記憶にある目的から次にやることを決める定期 tick
 - [x] 承認待ちキューの運用完成: 溜まった保留を人間が chat / API でまとめて処理できる
 - [x] 継続する依頼の器（ScheduleStore）: 「定期的に〜しておいて」を記憶とは別に持ち、時刻が来たら必ず届く。周期は cron で書ける（人間が cron でできる指定に負けない）。クローンの道具と人間の CLI / HTTP API の両方から足せて外せる
+- [x] 引き受けた仕事の器（CommitmentStore）: 単発の依頼・人間の回答・マネージャーからの一件が、着手されないまま静かに消える経路を塞ぐ。ScheduleStore が「時刻が来たら必ず届く」を持つのと対に、こちらは「**引き受けたまま終わっていない**もの」を残す（`architecture.md` の寿命モデルは記憶・日誌・ScheduleStore と並べてこの4つだけを一生モノと呼んでいる）。クローンの道具は `commitment_open` / `commitment_list` / `commitment_close`
 
 **受け入れ基準**:
 1. 人間が一切入力しない状態で、時間起点とクローンの発意からジョブが起きて完了する
@@ -90,6 +91,12 @@
 - [x] Dockerfile + docker compose（daemon + manager-runner + postgres の3コンテナ）。認証は `CLAUDE_CODE_OAUTH_TOKEN`（`claude setup-token`）をシークレット注入
 - [x] **制御面の分離**: runner API はマネージャーから叩けない（TCP を開かず Unix ソケットのみ、ソケットはデーモン UID の 0600、合鍵は runner にハッシュだけ、SDK 子プロセスは別 UID）。マネージャーが自分の許可確認に自分で答えられないことを実際の子プロセスから検証する
 - [x] 記憶ストア認証情報の分離を検証: runner と子プロセスに DB 接続情報が**無く**、runner から DB への経路も**無い**こと
+
+**⚠ 直上2項目が成立するのは compose 構成である。Railway で公開する構成では、実行環境の性質でここの守りが構造的にゆるむ。**
+
+- **これは受け入れた劣化であって、設計の意図ではない**（`architecture.md` の原文のまま。2026-08-14 の人間の判断）。**「Railway では劣化する」だけを読んで「劣化してよい」と読まないこと。**
+- **何を諦めたかを書いておく。**「経路が無い」は多層防御の1枚だった — 経路が無ければ、認証に穴が空いても記憶へは届かない。公開構成ではその1枚が抜けて**認証だけが砦になる。** 受け入れ基準3の「runner から Persona 用 DB へ接続できない」は、compose の「経路が構造的に無い」から「資格情報を配っていないだけ」へ一段弱まる。受け入れ基準4（自分宛の許可確認に自分で答えられない）は、制御面が Unix ソケットから TCP になることで守りの一部が消え、残ったもので支えている
+- **ゆるみの内訳と、それでも残る守りは [railway/README.md](../railway/README.md)「先に読む」が持つ。数はそこにしか書かない**（ここにも書くと、増えるたびに両方を数え直すことになって片方だけ古びる。`AGENTS.md`「クラウド構成」も同じ約束を置いている）
 
 **受け入れ基準**:
 1. `docker compose up -d` + トークン注入で起動し、M1〜M3 の受け入れ基準が同じように通る（MCP・許可確認・監査・生ログ経路が分離後も落ちない）
