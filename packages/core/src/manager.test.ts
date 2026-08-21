@@ -3896,16 +3896,33 @@ describe('runner の指名（Pool.start の runnerId）', () => {
 
 describe('runner の一覧（ManagerPool.runners）', () => {
   it('器ごとの本数を返す（デーモンの台帳から見た数）', async () => {
+    // **台帳へ直接3本を仕込む。** `pool.start({ runnerId })`（指名）を使って本数の
+    // 内訳を作ると、この歯が指名の正しさ（別の保証）と結合してしまう——指名側の
+    // 変異でこのテストまで巻き添えで落ち、どちらの歯が壊れたか区別できなくなる。
+    // 数え方だけを見るために、台帳（`Job.runnerId`）を直に置く。
     const a = new FakePoolRunner('runner-a', { managers: 0 });
     const b = new FakePoolRunner('runner-b', { managers: 0 });
     const stores = createMemoryStores();
+    const at = new Date().toISOString();
+    for (const [id, runnerId] of [
+      ['mgr-1', 'runner-a'],
+      ['mgr-2', 'runner-a'],
+      ['mgr-3', 'runner-b'],
+    ] as const) {
+      await stores.jobs.putJob({
+        id,
+        managerId: id,
+        createdAt: at,
+        updatedAt: at,
+        status: 'running',
+        summary: id,
+        request: id,
+        cwd: '/work/project',
+        runnerId,
+      });
+    }
     const registry = createRunnerRegistry([a, b]);
     const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
-
-    // 2本を runner-a、1本を runner-b へ指名して置く。
-    await pool.start({ request: '1本目', runnerId: 'runner-a' });
-    await pool.start({ request: '2本目', runnerId: 'runner-a' });
-    await pool.start({ request: '3本目', runnerId: 'runner-b' });
 
     const overview: RunnerFleetOverview = await pool.runners();
 
