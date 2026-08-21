@@ -118,8 +118,26 @@ export interface ManagerSendOptions {
  */
 export type ManagerStopActor = 'human' | 'clone';
 
+/**
+ * 「止めた」を4値で言う（PR #137 で持ち込んだ「成功 / 明確な失敗 / 不明」の語彙に、
+ * ここでは「そのものが居ない」を足したもの）。
+ *
+ * **以前は `'stopped' | 'unknown'` の2値で、`sessionGone` という別のフィールドに
+ * 実際の判定を逃がしていた。** `sessionGone: false`（＝止まっていないと確かめた）
+ * でも `outcome` は必ず `'stopped'` になっていたので、HTTP 応答・クローンの道具・
+ * CLI・Web はどれも `outcome` だけを見ると「止まった」という嘘を受け取っていた
+ * （`sessionGone` は `ManagerAbortResult` にしか載らず、`app.ts` の JSON 応答には
+ * 出ていなかった）。ここで判定そのものを `outcome` に持ち上げる。
+ *
+ * | 値 | 意味 | 台帳への書き込み | HTTP |
+ * | --- | --- | --- | --- |
+ * | `'stopped'` | `sessionGone === true`。止まったと確かめた | `status: 'stopped'` へ、`waiting`/`attached` を畳んで `#retire` | 200 |
+ * | `'not_stopped'` | `sessionGone === false`。**止まっていないと確かめた**（明確な失敗） | 何も書かない | 200 |
+ * | `'unknown'` | 確かめられなかった（`runner.list()` が答えない／`runner.stop()` が期限切れ） | 何も書かない | 200 |
+ * | `'absent'` | そのマネージャーが居ない／runner が居ない（旧 `'unknown'` の改名） | — | 404 |
+ */
 export interface ManagerAbortResult {
-  outcome: 'stopped' | 'unknown';
+  outcome: 'stopped' | 'not_stopped' | 'unknown' | 'absent';
   detail: string;
   /**
    * **止めた結果、本当に止まったか。** runner のセッション一覧から消えたことを
@@ -128,6 +146,11 @@ export interface ManagerAbortResult {
    * 「停止を受理した」と「止まった」は別の観測である。`runner.stop()` は該当の
    * セッションが手元に無ければ黙って何もしないので、受理だけを見て「止まった」と
    * 言うと、走り続けているマネージャーを止めたことにしてしまう。
+   *
+   * **`outcome` と重複しているように見えるが、外向きの面（HTTP・道具）が読むのは
+   * `outcome` の方である。** ここは `outcome` を導いた根拠として残す（`true` ⟺
+   * `'stopped'`、`false` ⟺ `'not_stopped'`、`undefined` ⟺ `'unknown'` /
+   * `'absent'`）。
    */
   sessionGone?: boolean;
 }
@@ -686,63 +709,100 @@ class Pool implements ManagerPool {
 
     const record = this.#records.get(managerId) ?? (await this.#load(managerId));
     if (!record) {
-      return { outcome: 'unknown', detail: `${managerId} というマネージャーは居ない。` };
+      return { outcome: 'absent', detail: `${managerId} というマネージャーは居ない。` };
     }
 
     const runner = await this.#runnerOf(record);
     if (!runner) {
       return {
-        outcome: 'unknown',
+        outcome: 'absent',
         detail: `${managerId} を走らせていた runner（${record.job.runnerId ?? '不明'}）が居ない。`,
       };
     }
 
-    await runner.stop(managerId);
+    // **`runner.stop()` が投げても、ここで abort() ごと reject させない。** HTTP
+    // 越しの runner では期限切れ（`RunnerUnknownError`）や明確な失敗（接続拒否等）
+    // が投げられる（`runner-client.ts` の `#call`）。投げたまま素通しすると、日誌の
+    // 1行も、クローンへの通知も、状態の更新も、何も残らずに `DELETE /managers/:id`
+    // が 500 になる — **「止めた事実は日誌に残る」という約束がいちばん要る場面で
+    // 消える**。捕まえて、権威は下の `sessionGone` の探りに置く（stop の RPC が
+    // 返らなくても、届いていて実際に止まっていることがある）。
+    let stopError: unknown;
+    try {
+      await runner.stop(managerId);
+    } catch (error) {
+      stopError = error;
+    }
 
     // **「受理した」で終わらせない。** `runner.stop()` は該当セッションが手元に
     // 無ければ黙って何もしない（`#sessions.get(id)?.stop()`）ので、戻り値だけを
     // 見て「止まった」と言うと、走り続けているものを止めたことにしてしまう。
     // 実際に畳まれたセッションは runner の一覧から消える（`onClosed`）ので、
     // そこを見に行く。訊けなかったときは黙って成功にせず undefined のまま返す。
+    // **`stop()` が例外を投げていても、この探りは必ず行う** — 探りが「消えた」と
+    // 答えるなら、stop の RPC が不明のままでも止まったと言い切ってよい。
     const sessionGone = await runner
       .list()
       .then((sessions) => !sessions.some((session) => session.managerId === managerId))
       .catch(() => undefined);
 
-    record.waiting = [];
-    record.attached = false;
-    record.job.status = 'done';
-    await this.#persist(record);
-    // **停止は明示的な終端である。** 台帳には残るので `list()` / `manager_send` は
-    // これまでどおり答えられる（`#retire` の JSDoc）。
-    this.#retire(managerId);
+    const outcome: 'stopped' | 'not_stopped' | 'unknown' =
+      sessionGone === true ? 'stopped' : sessionGone === false ? 'not_stopped' : 'unknown';
+
+    if (outcome === 'stopped') {
+      record.waiting = [];
+      record.attached = false;
+      record.job.status = 'stopped';
+      await this.#persist(record);
+      // **停止は明示的な終端である。** 台帳には残るので `list()` / `manager_send` は
+      // これまでどおり答えられる（`#retire` の JSDoc）。
+      this.#retire(managerId);
+    }
+    // **`outcome` が `'not_stopped'` / `'unknown'` のときは台帳を1文字も書かない。**
+    // 生きている（かもしれない）マネージャーの `waiting`（未回答の許可確認）を
+    // 畳まない、確かめられていない状態を確定させない — 「止めた」と機械可読な形で
+    // 言えるのは、実際に止まったと確かめたときだけである。
 
     // **止めたことを日誌に残す。** 消えた理由が分からないマネージャーを作らない
     // （PRD「可観測性」）。クローンにも知らせるので、次のターンで気づける。
-    const base = reason === undefined ? `${who}が停止させた。` : `${who}が停止させた: ${reason}`;
-    // 確かめた結果も同じ文に載せる。人間もクローンもこの1文しか見ないことがある。
+    const stopErrorNote =
+      stopError === undefined
+        ? ''
+        : `（runner.stop() が例外を投げた: ${stopError instanceof Error ? stopError.message : String(stopError)}）`;
+    const attemptedBase =
+      reason === undefined ? `${who}が停止を試みた。` : `${who}が停止を試みた: ${reason}`;
+    const stoppedBase = reason === undefined ? `${who}が停止させた。` : `${who}が停止させた: ${reason}`;
     const detail =
-      sessionGone === false
-        ? `${base}（ただし runner には ${managerId} のセッションがまだ残っている。止まりきっていない）`
-        : sessionGone === undefined
-          ? `${base}（runner に確認が取れず、止まったかは未確認）`
-          : base;
+      outcome === 'stopped'
+        ? `${stoppedBase}${stopErrorNote}`
+        : outcome === 'not_stopped'
+          ? `${attemptedBase}runner には ${managerId} のセッションがまだ残っている。止まっていない。${stopErrorNote}`
+          : `${attemptedBase}runner に確認が取れず、止まったかは未確認。${stopErrorNote}`;
     await this.#journal({
       type: 'exchange',
       with: 'manager',
       role: 'outbound',
-      text: `[${managerId}] （停止）${detail}`,
+      text: `[${managerId}] （停止 ${outcome}）${detail}`,
     });
+    // **outcome ごとに言い分ける。** 止まっていない・不明のときまで「停止させ
+    // ました」と言うと、クローンは止まったつもりで次の判断へ進む（R1 の再発）。
+    const messageText =
+      outcome === 'stopped'
+        ? `${managerId} を${who}が停止させました。${reason === undefined ? '' : `理由: ${reason}`}`
+        : outcome === 'not_stopped'
+          ? `${managerId} を${who}が止めようとしましたが、まだ止まっていません` +
+            `（runner にセッションが残っています）。`
+          : `${managerId} を${who}が止めようとしましたが、止まったかどうか確認が取れませんでした。`;
     this.#post({
       type: 'manager_message',
       id: randomUUID(),
       at: new Date().toISOString(),
       managerId,
       kind: 'report',
-      text: `${managerId} を${who}が停止させました。${reason === undefined ? '' : `理由: ${reason}`}`,
+      text: messageText,
     });
 
-    return { outcome: 'stopped', detail, ...(sessionGone === undefined ? {} : { sessionGone }) };
+    return { outcome, detail, ...(sessionGone === undefined ? {} : { sessionGone }) };
   }
 
   async stop(): Promise<void> {
@@ -1209,6 +1269,20 @@ class Pool implements ManagerPool {
       }
 
       case 'report': {
+        // **止めたマネージャーを、後から届く出来事で甦らせない。** `abort()` が
+        // `#retire()` しても、`#onEvent` は台帳から像を作り直す（`#load()`）ので、
+        // 止めた後に届く `report` を無条件に処理すると `record.job.status` を
+        // `stopped` から上書きし、`#emit()` でクローンのターンを起こしてしまう
+        // （R4）。日誌にだけは残す — 捨てると「黙って失われる」を作る。
+        if (record.job.status === 'stopped') {
+          await this.#journal({
+            type: 'exchange',
+            with: 'manager',
+            role: 'inbound',
+            text: `[${event.managerId}] （停止済みのため受信箱へは回さない）${event.text}`,
+          });
+          return;
+        }
         record.job.lastReport = event.text;
         record.job.status = event.status;
         // **失敗として終わった回は台帳にもそう残す。** 本文（`event.text`）は
@@ -1237,6 +1311,19 @@ class Pool implements ManagerPool {
       }
 
       case 'ask': {
+        // **止めたマネージャーの確認要求を待ちへ積まない。** `report` と同じ理由
+        // （R4）——`#retire()` の後も `#load()` が像を作り直すので、ここで無条件に
+        // 積むと `waiting` / `status` を `stopped` から動かし、クローンへも
+        // `#emit()` してしまう。日誌にだけは残す。
+        if (record.job.status === 'stopped') {
+          await this.#journal({
+            type: 'escalation',
+            question: event.summary,
+            approvalId: event.requestId,
+            managerId: event.managerId,
+          });
+          return;
+        }
         // **requestId で冪等に。** 同じ確認が二度届いても、待ちを積み直さず、
         // 日誌にも二度書かず、クローンへも二度配らない。二度目を配ると、答えた
         // はずの確認がもう一度クローンへ届く（そしてその再送は runner 側で既に
@@ -1553,6 +1640,25 @@ class Pool implements ManagerPool {
       }
 
       case 'closed': {
+        // **既に止めたマネージャーの `closed` で status を巻き戻さない（R4）。**
+        // `abort()` が `stopped` に確定させたあとで runner 側の
+        // `RunnerSession#finish()` が遅れて届くことがある。ここで無条件に
+        // `event.status`（`done` / `lost` / `failed`）へ上書きすると終端が甦り、
+        // `status === 'failed'` の枝がクローンへ `#emit()` してしまう。日誌には
+        // 残す——`#retire()` は abort() が既に済ませているので、ここではもう一度
+        // 呼ばない（呼んでも `#records.delete` は冪等だが、意味の無い呼び出しを
+        // 増やさない）。
+        if (record.job.status === 'stopped') {
+          await this.#journal({
+            type: 'exchange',
+            with: 'manager',
+            role: 'inbound',
+            text:
+              `[${event.managerId}] （停止済みのため無視）runner 側の終了イベント` +
+              `（status=${event.status}）を受け取った: ${event.reason}`,
+          });
+          return;
+        }
         record.job.status = event.status;
         record.waiting = [];
         record.attached = false;
@@ -1826,7 +1932,26 @@ function isLive(record: ManagerRecord): boolean {
   // 名乗った状態をそのまま採りつつ `attached: true` を固定する（`#restoreJobs`）
   // ので、runner の側で resume 失敗が確定してからそのセッションが一覧から消える
   // までの間に引き取ると、`lost` の像が `attached: true` で立つ。
-  if (record.job.status === 'lost') return false;
+  // **`stopped` も `lost` と同じ列に置く。** どちらも「戻せるか」を実際に確かめた
+  // 結果として付く終端で、当て推量ではない — `lost` は resume を試して戻れな
+  // かったという事実、`stopped` は `abort()` が `runner.list()` を探ってセッション
+  // が消えたことを確かめた事実である。`abort()` は `job.sessionId` 自体は消さない
+  // ので（消す積極的な理由が無い限り、消せる情報は残す）、下の `sessionId` 分岐
+  // だけに任せると停止後も古い `sessionId` が生きていて `live: true` に化ける。
+  //
+  // **これは「ブラックリストを伸ばす」ことにはしていない。** ここで名指しして
+  // いるのは「デーモン自身が既に確かめて確定させた終端状態」の列挙であって、
+  // `#restoreJobs` の `attached` 判定（未知の将来の状態を安全側＝`false` に倒す
+  // ホワイトリスト）とは問いが違う——あちらは「まだ確かめていない runner 由来の
+  // 状態をどう解釈するか」、ここは「デーモン自身が既に確定させた2つの状態を
+  // 上書きさせない」という話である。将来 `lost` / `stopped` 以外の終端状態が
+  // 増えても、この関数の既定（`attached` → `sessionId` の順で見る）は変わらない
+  // ——増えた状態をここに足し忘れても、危険側（`true`）に化けるとは限らない
+  // （`attached` は新しい状態では通常 `false` に倒れているはずである）ので、
+  // 未対応のまま放置しても即座に嘘をつくわけではない。ただし将来この関数を
+  // 触る人は、新しい終端状態が「戻せないと確定している」ものなら、ここに
+  // 足すのが正しい。
+  if (record.job.status === 'lost' || record.job.status === 'stopped') return false;
   // runner にセッションが居るなら、そのまま送れる。
   if (record.attached) return true;
   // 繋がっていない像は「戻せるか」で決まる。session_id が無いものは戻る先が無い。

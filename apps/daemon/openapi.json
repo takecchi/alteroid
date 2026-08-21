@@ -3746,7 +3746,14 @@
                           },
                           "status": {
                             "type": "string",
-                            "enum": ["running", "waiting_human", "done", "failed", "lost"]
+                            "enum": [
+                              "running",
+                              "waiting_human",
+                              "done",
+                              "failed",
+                              "lost",
+                              "stopped"
+                            ]
                           },
                           "live": {
                             "type": "boolean"
@@ -3916,7 +3923,7 @@
                         },
                         "status": {
                           "type": "string",
-                          "enum": ["running", "waiting_human", "done", "failed", "lost"]
+                          "enum": ["running", "waiting_human", "done", "failed", "lost", "stopped"]
                         },
                         "live": {
                           "type": "boolean"
@@ -4096,7 +4103,7 @@
         "description": "暴走を止める手段が「器ごと落とす」しか無いと、関係の無い仕事まで道連れになる。この口は1本だけを止める。止めた事実は日誌に残る。",
         "responses": {
           "200": {
-            "description": "止めた。",
+            "description": "止める指示は処理できた。`outcome` を読むこと — `stopped`（止まったと確かめた）/ `not_stopped`（止まっていないと確かめた）/ `unknown`（確かめられなかった）のどれかで、止まったと機械可読に言えるのは `stopped` のときだけである。",
             "content": {
               "application/json": {
                 "schema": {
@@ -4104,7 +4111,7 @@
                   "properties": {
                     "outcome": {
                       "type": "string",
-                      "enum": ["answered", "delivered", "stopped"]
+                      "enum": ["answered", "delivered", "stopped", "not_stopped", "unknown"]
                     },
                     "detail": {
                       "type": "string"
@@ -4138,7 +4145,7 @@
             }
           },
           "404": {
-            "description": "該当するマネージャーが無い。",
+            "description": "該当するマネージャー（`absent`）が無い。",
             "content": {
               "application/json": {
                 "schema": {
@@ -4244,7 +4251,7 @@
                   "properties": {
                     "outcome": {
                       "type": "string",
-                      "enum": ["answered", "delivered", "stopped"]
+                      "enum": ["answered", "delivered", "stopped", "not_stopped", "unknown"]
                     },
                     "detail": {
                       "type": "string"

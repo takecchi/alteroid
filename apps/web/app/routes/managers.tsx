@@ -23,6 +23,12 @@ const STATUS: Record<ManagerStatus, { tone: 'ok' | 'warn' | 'danger' | 'neutral'
     // なかった」ことだけで、成果の有無は見ていない（デーモンは PR もブランチも
     // 知らない）。落ちる直前にマージまで届いていた仕事がこの札を貼られている。
     lost: { tone: 'danger', label: 'セッションへ戻れず' },
+    // **`done`（待機中）と混ぜない。** `done` は自分から手を離しただけで話しかけ
+    // れば続くが、`stopped` は外から止められ、runner のセッション一覧から実際に
+    // 消えたことを確かめた終端である（`schema.ts` の `jobStatusSchema` の doc）。
+    // 「完了」と読ませないのは `done` と同じ理由——ただし `done` 以上に、これは
+    // もう話しかけても続かない。
+    stopped: { tone: 'neutral', label: '停止済み' },
   };
 
 export function ManagerStatusBadge({ status }: { status: ManagerStatus }) {

@@ -1103,7 +1103,10 @@ export function createCloneTools(context: ToolContext) {
         const before = await find();
         const result = await pool.abort(managerId, reason, 'clone');
 
-        if (result.outcome === 'unknown') {
+        // **outcome ごとに言い分ける。** 以前は `outcome` が常に `'stopped'` で、
+        // 止まっていない・不明なときも「止めた」と機械可読な形で答えていた
+        // （R1）。ここで4値をそのまま文言に写す。
+        if (result.outcome === 'absent') {
           // **エラーで終わらせず、何が起きているかを言う。**
           if (!before) {
             return text(
@@ -1119,20 +1122,29 @@ export function createCloneTools(context: ToolContext) {
         }
 
         const after = await find();
-        const lines = [`[${managerId}] ${result.detail}`];
 
-        // **「受理した」で終わらせない。** 止めたあとの状態を読み直して返す。
-        if (result.sessionGone === false) {
-          lines.push(
-            `**止まりきっていない。** runner には ${managerId} のセッションがまだ残っている。` +
-              'manager_list で確かめ、残っているならもう一度止めること。',
+        if (result.outcome === 'not_stopped') {
+          // **止まっていないと確かめた（明確な失敗）。「止めた」と言わない。**
+          return text(
+            `[${managerId}] ${result.detail}\n` +
+              `**止まっていない。** runner には ${managerId} のセッションがまだ残っている。` +
+              `いまの状態: ${after === undefined ? '一覧から消えている' : `${after.status}${after.live ? '' : '/セッション切断'}`}。` +
+              ' manager_list で確かめ、必要ならもう一度止めること。',
           );
-        } else if (result.sessionGone === undefined) {
-          lines.push(
-            '止まったかは**未確認**である（runner に確認が取れなかった）。' +
+        }
+
+        if (result.outcome === 'unknown') {
+          // **確かめられなかった（不明）。「止めた」とも「止まっていない」とも
+          // 言い切らない。**
+          return text(
+            `[${managerId}] ${result.detail}\n` +
+              '止まったかは**未確認**である（runner に確認が取れなかった）。' +
               'manager_list で状態を確かめること。',
           );
         }
+
+        // ここに来るのは outcome === 'stopped'（sessionGone === true を確かめた）。
+        const lines = [`[${managerId}] ${result.detail}`];
 
         if (before?.status === 'done') {
           // **`done` は「マネージャー自身のターンが終わって待機中」でしかない。**

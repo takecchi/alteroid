@@ -421,8 +421,18 @@ export const managersListResponseSchema = z.object({
 export const managerDetailResponseSchema = z.object({ manager: managerSummarySchema });
 
 export const managerActionResponseSchema = z.object({
-  /** `answered` = 止まっていた確認を解いた / `delivered` = 追加指示として届けた / `stopped` = 止めた。 */
-  outcome: z.enum(['answered', 'delivered', 'stopped']),
+  /**
+   * `answered` = 止まっていた確認を解いた（`POST .../messages`）。
+   * `delivered` = 追加指示として届けた（同上）。
+   * `stopped` = 止まったと確かめた（`DELETE /managers/:id`。`sessionGone === true`）。
+   * `not_stopped` = **止まっていないと確かめた**（同上。`sessionGone === false`。
+   * 明確な失敗であって「止めた」ではない）。
+   * `unknown` = 確かめられなかった（同上。runner に確認が取れなかった）。
+   *
+   * **居ない（`absent`）はここに出ない。** その場合は 404 で `errorResponseSchema`
+   * を返すので、この形には乗らない（`ManagerAbortResult` の doc）。
+   */
+  outcome: z.enum(['answered', 'delivered', 'stopped', 'not_stopped', 'unknown']),
   detail: z.string(),
 });
 
