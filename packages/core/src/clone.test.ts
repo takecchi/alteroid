@@ -1354,6 +1354,11 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
   function fakeGatedSdk() {
     const calls: FakeCall[] = [];
     const gates = new Map<string, () => void>();
+    // 素通しスイッチ。`true` にした後に届く入力はゲートへ登録せず、その場で
+    // 先へ進む（誰も `release` を呼ばなくても対応する `result` まで進む）。
+    // 片付け（`stop()` など）を、本番の重複防止（`#hasUndistilledActivity`）の
+    // 挙動——見送られるか、もう1本ターンが増えるか——に依存させないための道具。
+    let passThrough = false;
 
     const fn = ((params: { prompt: unknown; options?: Options }) => {
       const call: FakeCall = { options: params.options ?? {}, inputs: [] };
@@ -1377,9 +1382,12 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
           const key = `${callIndex}:${turnIndex}`;
           // **ここで止める。** 解放されるまで、このターンは「走っている最中」
           // のままである（`this.#turn` が立ち、`kind` が確定している）。
-          await new Promise<void>((resolve) => {
-            gates.set(key, resolve);
-          });
+          // ただし素通しスイッチが入っていれば待たずに先へ進む。
+          if (!passThrough) {
+            await new Promise<void>((resolve) => {
+              gates.set(key, resolve);
+            });
+          }
           yield {
             type: 'assistant',
             message: { content: [{ type: 'text', text: 'わかった' }] },
@@ -1416,6 +1424,15 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
         gates.delete(key);
         resolve();
       },
+      /**
+       * 以後届く入力はゲートで待たず素通しする。**片付けの直前に呼ぶこと。**
+       * これを呼んだ後は、本番の重複防止が「見送る」か「もう1本ターンを
+       * 増やす」かのどちらであっても、そのターンはゲートに引っかからず
+       * 進むので、片付けが本番の別の機能の挙動へ依存しなくなる。
+       */
+      openGate(): void {
+        passThrough = true;
+      },
     };
   }
 
@@ -1435,7 +1452,7 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
    * たびに変異後のコードも新しく評価し直されてしまうため。
    */
   function setupGated() {
-    const { fn, calls, release } = fakeGatedSdk();
+    const { fn, calls, release, openGate } = fakeGatedSdk();
     let tools: ReturnType<typeof createCloneTools> | undefined;
     const stores = createMemoryStores();
     const clone = createClone({
@@ -1458,6 +1475,7 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
       events,
       waitForEvents,
       release,
+      openGate,
       tools(): ReturnType<typeof createCloneTools> {
         if (tools === undefined) throw new Error('道具の配列がまだ作られていない');
         return tools;
@@ -1505,8 +1523,11 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
     const entries = await s.stores.journal.list({ types: ['memory_update'] });
     expect(entries.at(-1)).toMatchObject({ cause: 'distill' });
 
-    // この時点で `#hasUndistilledActivity` は蒸留成功で下りているので、
-    // `stop()` の shutdown 蒸留は重複として見送られる（新しい入力は増えない）。
+    // 片付け。`stop()` が shutdown 蒸留をもう1本走らせるかどうか
+    // （＝重複防止 `#hasUndistilledActivity` が下りているか）に依存しない
+    // よう、以後の入力はゲートで待たず素通しにする。見送られて新しい
+    // ターンが増えなくても、増えても、どちらでも `stop()` は返る。
+    s.openGate();
     await s.clone.stop();
   });
 
@@ -1618,6 +1639,8 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
     const entries = await s.stores.journal.list({ types: ['memory_update'] });
     expect(entries.at(-1)).toMatchObject({ cause: 'distill', action: 'append' });
 
+    // 片付け。T1 と同じ理由で、以後の入力はゲートで待たず素通しにする。
+    s.openGate();
     await s.clone.stop();
   });
 });
