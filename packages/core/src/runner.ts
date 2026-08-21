@@ -1373,7 +1373,11 @@ class RunnerSession {
     // 書いた本文 `said` は通さない — `classifyUsageNotice` は部分一致なので、
     // 「上限に当たった」と報告に書いた瞬間に上限と誤判定する）。
     if (failure !== undefined) {
-      for (const candidate of [failure.text, resultText(message), ...resultErrorLines(message)]) {
+      for (const candidate of [
+        failure.text,
+        resultText(message).text,
+        ...resultErrorLines(message),
+      ]) {
         const notice = classifyUsageNotice(candidate);
         if (notice !== undefined) {
           this.#emit({ type: 'usage_notice', managerId: this.#id, notice });
@@ -1383,7 +1387,7 @@ class RunnerSession {
     }
 
     if (!isSuccessResult(message)) {
-      const outcome = this.#recoverFromFailedResume(`結果なしで終了: ${resultText(message)}`);
+      const outcome = this.#recoverFromFailedResume(`結果なしで終了: ${resultText(message).text}`);
       if (outcome === 'recovered') return;
       // **戻れなかった resume を「1ターン終わった」として報告しない。** ここを
       // 素通りさせると `report` が上がり、台帳には `done`（＝終えて待機中。
@@ -1391,7 +1395,7 @@ class RunnerSession {
       // クローンは「まだ続けられるもの」を見せられ、話しかけるたびに失敗する。
       // 手が動いていないのだから、ここは畳むのが正しい。
       if (outcome === 'unresumable') {
-        void this.#finish('lost', `結果なしで終了: ${resultText(message)}`);
+        void this.#finish('lost', `結果なしで終了: ${resultText(message).text}`);
         return;
       }
     }
@@ -1405,17 +1409,23 @@ class RunnerSession {
     // **本文（`text`）の側でも包む。** 構造化した `failure` だけに頼ると、それを
     // 見ていない読み手（台帳の `lastReport` を出す画面・日誌を読む人間）には
     // 依然としてエラー文が報告として見える。
-    const text =
+    //
+    // **失敗で終わった回は `contentless` に含めない。** `failedReportText` は
+    // 必ず本文を作るし、上限に当たった事実はクローンが知る必要がある
+    // （このターン限りは待つ／挑み直すの判断材料）ので、`failure !== undefined`
+    // の枝では `reportText` そのものを呼ばない。
+    const outcome =
       failure === undefined
         ? reportText(said, resultText(message))
-        : failedReportText(said, failure, resultText(message));
+        : { text: failedReportText(said, failure, resultText(message).text), contentless: false };
     this.#status = this.#pending.length > 0 ? 'waiting_human' : 'done';
     this.#emit({
       type: 'report',
       managerId: this.#id,
-      text,
+      text: outcome.text,
       status: this.#status,
       ...(failure === undefined ? {} : { failure: { code: failure.code, via: failure.via } }),
+      ...(outcome.contentless ? { contentless: true } : {}),
     });
   }
 
@@ -1900,12 +1910,24 @@ function assistantText(message: SDKMessage): string {
  * 最後の一片なので既に含まれるが、**含まれていないなら落とさずに足す** —
  * エラー終了の `（結果なしで終了: …）` のように、本文には出ないまま結果だけが
  * 来ることがあり、そこを黙って捨てると終わり方が分からなくなる。
+ *
+ * **`contentless` は「クローンを起こしてよいか」を運ぶ構造化された印であって、
+ * 文言の判定ではない。** `result.empty` は `resultText()` が「SDK 自身の
+ * `result` にも文字が無かった」と確定させた事実で、ここではそれに
+ * `said`（そのターンでマネージャーが実際に喋った本文）が空だったかどうかを
+ * 掛け合わせるだけである。**`（報告なし）` という文字列に一致させていない** —
+ * だからマネージャーが本文として本当に `（報告なし）` と書いた回は、
+ * `body` が非空になるので `contentless: false` のまま素通りする
+ * （`sdk-failure.ts` の「文言で検知しない」を報告の畳み込みにも揃えた形）。
  */
-function reportText(said: readonly string[], result: string): string {
+function reportText(
+  said: readonly string[],
+  result: { text: string; empty: boolean },
+): { text: string; contentless: boolean } {
   const body = said.join('\n\n').trim();
-  if (body.length === 0) return result;
-  if (body.includes(result.trim())) return body;
-  return `${body}\n\n${result}`;
+  if (body.length === 0) return { text: result.text, contentless: result.empty };
+  if (body.includes(result.text.trim())) return { text: body, contentless: false };
+  return { text: `${body}\n\n${result.text}`, contentless: false };
 }
 
 /**
@@ -1938,13 +1960,25 @@ function failedReportText(said: readonly string[], failure: SdkFailure, result: 
   return partial.length === 0 ? head : `${head}\n\n（失敗する前に出ていた本文）\n${partial}`;
 }
 
-function resultText(message: SDKMessage): string {
+/**
+ * SDK の `result` から本文を取り出す。
+ *
+ * **`empty` は「文字が1つも無かった」という構造的な事実であって、
+ * 返す文字列（`（報告なし）` 等）そのものではない。** `reportText()` が
+ * `contentless` を組み立てるときに見るのはこの `empty` だけで、返り値の
+ * `text` は出力にそのまま使われる従来どおりの文言である
+ * （`AGENTS.md`「テストが書けない構造は、テストが無いのと同じ」への対応 —
+ * 文字列を変えずに構造だけを添える）。
+ */
+function resultText(message: SDKMessage): { text: string; empty: boolean } {
   const candidate = message as { result?: unknown; subtype?: string };
-  if (typeof candidate.result === 'string' && candidate.result.length > 0) return candidate.result;
-  if (candidate.subtype !== undefined && candidate.subtype !== 'success') {
-    return `（結果なしで終了: ${candidate.subtype}）`;
+  if (typeof candidate.result === 'string' && candidate.result.length > 0) {
+    return { text: candidate.result, empty: false };
   }
-  return '（報告なし）';
+  if (candidate.subtype !== undefined && candidate.subtype !== 'success') {
+    return { text: `（結果なしで終了: ${candidate.subtype}）`, empty: false };
+  }
+  return { text: '（報告なし）', empty: true };
 }
 
 /** `AskUserQuestion` の回答は「質問文 → 回答」の対応で返す（SDK の入力形）。 */

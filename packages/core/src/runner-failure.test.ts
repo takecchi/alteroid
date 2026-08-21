@@ -277,3 +277,35 @@ describe('マネージャーの報告 — SDK のエラーを報告として扱�
     await s.pool.stop();
   });
 });
+
+/**
+ * **失敗で終わった回は「中身が無い」に畳まれない（`runner-contentless.test.ts`
+ * が runner の生イベントで固定する保証を、デーモンを経由した見え方でも固定する）。**
+ *
+ * `said`（実際に喋った本文）も SDK の `result` も空という、単独なら
+ * `contentless: true` になる条件が揃っていても、`failure` が付く回は
+ * `failedReportText()` が必ず本文を作るので `contentless` は立たない
+ * （`runner-protocol.ts` の doc）。ここが誤って畳まれると、支出上限や
+ * エラーで死んだ回がクローンに一切知らされなくなる — 待つ／挑み直すの
+ * 判断材料が消える。
+ */
+describe('失敗で終わった回は畳まれない', () => {
+  it('本文が丸ごと空（said も result も空）でも、失敗した回はクローンへ届く', async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+    const session = await vi.waitFor(() => {
+      const found = s.sessions[0];
+      if (!found) throw new Error('セッションがまだ開いていない');
+      return found;
+    });
+
+    // `say()` を1度も呼ばない。`is_error` だけを立てて、result も空にする。
+    await session.finish('', { isError: true });
+
+    const texts = await reportTexts(s.inbox, 1);
+    expect(texts[0]).toContain('応答を返さずに終わった');
+    expect(texts[0]).toContain('result_is_error');
+
+    await s.pool.stop();
+  });
+});

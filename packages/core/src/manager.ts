@@ -1310,6 +1310,16 @@ class Pool implements ManagerPool {
           role: 'inbound',
           text: `[${event.managerId}] ${event.text}`,
         });
+        // **中身の無い報告は、記録は残すがクローンのターンを起こさない。**
+        // `event.contentless` は `runner.ts` の `resultText()` / `reportText()`
+        // が「SDK の `result` にも `said`（実際に喋った本文）にも文字が無かった」
+        // と確定させたときだけ立つ構造化された印で、`event.text` の中身
+        // （`'（報告なし）'` という文字列）を見て判定してはいない
+        // （`runner-protocol.ts` の `contentless` の doc）。台帳（`lastReport`）
+        // と日誌には上と同じくこれまでどおり残っている — 捨てると「黙って
+        // 失われる」を作る（R4 のすぐ上の条件とは別の理由でここに置く。
+        // R4 は「止めた後」、こちらは「止めていないが中身が無い」）。
+        if (event.contentless === true) return;
         this.#emit(event.managerId, 'report', event.text);
         return;
       }
