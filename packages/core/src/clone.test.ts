@@ -3412,13 +3412,16 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
     const stderr = await captureStderr(async () => {
       s.clone.post(humanMessage('やあ'));
       await waitForDone(s.events);
+      // **`stop()` も捕獲の内側で呼ぶ。** 理由はすぐ上の兄弟
+      // （`台帳へ積めなくてもターンは止まらない`）と同じで、外に置くと `stop()` が
+      // 積む片付けの蒸留ターンの台帳失敗が**生の stderr へ漏れる**。
+      // `turn_usage` が0件であることも、片付けのターンまで含めて見るほうが強い。
+      await s.clone.stop();
     });
 
     expect(stderr.join('')).toContain('利用状況の台帳');
     const entries = await s.stores.journal.list({ types: ['turn_usage'] });
     expect(entries).toHaveLength(0);
-
-    await s.clone.stop();
   });
 
   it('失敗したターン（isSuccessResult が偽）は turn_usage の行を書かず、消費は次の成功したターンへ合算される', async () => {
