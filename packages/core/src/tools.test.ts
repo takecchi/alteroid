@@ -1144,17 +1144,19 @@ describe('manager_transcript（生ログへ降りる）', () => {
   it('offset で続きが取れる', async () => {
     const h = harness();
     await h.call('manager_start', { request: '調べて' });
+    // **`offset` の指定は 8,000（`TRANSCRIPT_PAGE`）を直接使う。** 前の応答の
+    // 「続きの取り方」の文言から offset を抜き出す形にすると、この保証が
+    // tail の文言（テスト2が守る対象）に依存してしまい、2つの歯が分離しなく
+    // なる（tail を黙らせる変異が offset のテストまで巻き込んで倒す）。
     const body = `${'a'.repeat(8_000)}TAIL-MARK`;
     h.setTranscript('mgr-1', body);
 
     const first = await h.call('manager_transcript', { managerId: 'mgr-1' });
     expect(first).not.toContain('TAIL-MARK');
-    const match = /offset=(\d+)/.exec(first);
-    expect(match).not.toBeNull();
 
     const second = await h.call('manager_transcript', {
       managerId: 'mgr-1',
-      offset: Number(match?.[1]),
+      offset: 8_000,
     });
     expect(second).toContain('TAIL-MARK');
   });
