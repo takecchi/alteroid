@@ -246,5 +246,22 @@ export function summarizeJournalEntry(entry: JournalEntry): string {
         (entry.settled ? '' : '（区間は閉じずに終わった）')
       );
     }
+    case 'turn_usage': {
+      // **キャッシュの書き直しを潰さない**（read/write を分けたまま見せる。
+      // 潰すと「キャッシュ書き直しに払っているか」が推測に戻る）。数え直しの
+      // 印は隠さない — 印の行を一覧から見えなくすると誤読を招く。
+      const models = Object.entries(entry.models);
+      const totalCost = models.reduce((sum, [, totals]) => sum + totals.costUsd, 0);
+      const cacheWrite = models.reduce(
+        (sum, [, totals]) => sum + totals.cacheCreationInputTokens,
+        0,
+      );
+      const cacheRead = models.reduce((sum, [, totals]) => sum + totals.cacheReadInputTokens, 0);
+      return (
+        `[${entry.layer}/${entry.site}] ${entry.managerId} 1ターン $${totalCost.toFixed(4)}` +
+        `（cache read=${cacheRead} write=${cacheWrite}）` +
+        (entry.reset === undefined ? '' : ' ⚠ 数え直しを挟んだ回（models は差分ではない）')
+      );
+    }
   }
 }

@@ -2515,6 +2515,31 @@ class Clone implements CloneHost {
         accumulation,
       });
 
+      // **ターン1回ぶんの増分を日誌へ残す。** 台帳は日 × actor × モデル ×
+      // 層 × 場所に畳むので、このターンがいくらだったかは台帳のどこにも
+      // 残らない（`schema.ts` の `turn_usage` の doc）。
+      //
+      // **増分が空の回は行を書かない**（`hasAnyUsage` と同じ判定を
+      // `fold.delta` に直接当てる — `foldUsageSnapshot` / `foldOneshotUsage`
+      // は増えていないモデルの行を作らないので、キーが1つも無ければ「この
+      // 回は増分ゼロだった」で確定する）。取れない軸に0の行を作らない
+      // （AGENTS.md 地雷表）。
+      if (Object.keys(fold.delta).length > 0) {
+        await this.#journal({
+          type: 'turn_usage',
+          layer: 'clone',
+          site,
+          managerId: CLONE_ACTOR_ID,
+          ...(typeof sessionId === 'string' ? { sessionId } : {}),
+          models: fold.delta,
+          ...(fold.reset === undefined
+            ? {}
+            : {
+                reset: { fromCostUsd: fold.reset.fromCostUsd, toCostUsd: fold.reset.toCostUsd },
+              }),
+        });
+      }
+
       // **数え直しを黙って通さない。** resume や mid-session の `/clear` で累積が
       // 0 に戻るのは正常だが、記録が無いと後から「なぜ集計が飛んでいるか」を誰も
       // 辿れない（PRD「可観測性」）。クローンは resume する層なので必ず起きる。

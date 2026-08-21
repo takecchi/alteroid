@@ -170,6 +170,20 @@ export function journalEntryShape(entry: JournalEntryInput): string {
         `worker_wait tasks=${entry.tasks} turns=${entry.turns} ` +
         `toolless=${entry.toolless} settled=${entry.settled}`
       );
+    // `layer` / `site` は列挙値、`managerId` はこちらが発行した id、`sessionId`
+    // は SDK が決める値だが id である（`worker_wait` と同じ判定基準）。
+    // **`models` の内訳（トークン数・costUsd）は SDK が数え上げた数値であって
+    // 自由文ではないので、モデル id ごとの件数だけ載せる** — キーであるモデル
+    // id は列挙に近い固定の語彙（`claude-opus-5` 等）であり、値は数値なので
+    // 自由文を経由して秘密が混ざる経路が無い。それでも中身の数値までは
+    // 載せない（跡はここまでで十分 — どのモデルで何件かが分かれば、ストアが
+    // 書ける状態に戻してから読める）。
+    case 'turn_usage':
+      return (
+        `turn_usage layer=${tag(entry.layer)} site=${tag(entry.site)} ` +
+        `managerId=${tag(entry.managerId)} models=${Object.keys(entry.models).length}` +
+        (entry.reset === undefined ? '' : ' reset=yes')
+      );
   }
 }
 

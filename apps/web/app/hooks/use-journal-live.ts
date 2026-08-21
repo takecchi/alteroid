@@ -142,6 +142,11 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
     // `#onEvent` の doc を参照）。
     case 'worker_wait':
       break;
+    // **`worker_wait` と同じ理由で落とす先が無い。** 台帳のページ（利用状況の
+    // 集計）はターン単位ではなく日単位で読むので、`turn_usage` の到着ごとに
+    // 取り直す必要はない。
+    case 'turn_usage':
+      break;
   }
 }
 

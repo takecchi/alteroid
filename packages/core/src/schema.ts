@@ -1,6 +1,11 @@
 import { z } from 'zod';
 
 import { CRON_EXPRESSION_MAX, isCronExpression } from './cron.js';
+// `usage.ts` はこちら（`schema.js`）を import していない（確認済み。下記
+// `turn_usage` の doc）ので循環しない。日誌の `turn_usage.layer` / `.site` /
+// `.models` は台帳（`UsageStore`）の同名の列と**同じ値**であるべきなので、
+// 書き写して2つの定義を持たず、ここから読む。
+import { usageLayerSchema, usageSiteSchema, usageTotalsSchema } from './usage.js';
 
 /**
  * 型付きメッセージのスキーマ（docs/architecture.md「配線」）。
@@ -264,6 +269,76 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     sources: z.record(z.string(), z.number().int().nonnegative()).optional(),
     settled: z.boolean(),
   }),
+  /**
+   * **ターン1回ぶんの消費の増分**（`usage.ts` の `UsageFold.delta`）。
+   *
+   * 台帳（`UsageStore`）は日 × actor × モデル × 層 × 場所の5軸に畳むので、
+   * 「今日いくら使ったか」は言えるが「**どのターンが高かったか**」は言えない
+   * （台帳の行は日単位でしか閉じない）。ここへ1ターン1行で残す。
+   *
+   * **なぜ台帳の軸を増やさずに日誌へ置いたかは PR 本文にある。** ここに書くのは
+   * この行1件が何を言えて何を言えないかだけである — 日誌を読む者はこの PR を
+   * 読んでいない。
+   *
+   * - 増分が空（`delta` が `{}`）のターンは行を書かない（`clone.ts` の
+   *   `#recordUsage` / `manager.ts` の `case 'usage'`）。**「行が無い」は
+   *   「そのターンが無料だった」ではない** — 台帳へ積めなかった（記録の失敗）
+   *   場合も行が無い。台帳へ積めなかった事実自体は別途 `exchange` として残る。
+   * - `id` / `at` はストアが埋める（他の型と同じ）。
+   */
+  z.object({
+    type: z.literal('turn_usage'),
+    id: z.string(),
+    at: isoDateTime,
+    /** どの層か。台帳と同じ語を使う（モデル id で代用しない。`usage.ts` の `usageLayerSchema`）。 */
+    layer: usageLayerSchema,
+    /**
+     * どの `query()` 呼び出しか。**起点（`cause`）とは別の軸である。** 発意
+     * tick を契機に回ったターンも、人間との会話のターンも、同じ
+     * `site: 'session'` に入る。「どの起点が高かったか」を言うには別の軸が
+     * 要るが、この PR では足していない（測って要るかを判断する。PR 本文）。
+     */
+    site: usageSiteSchema,
+    /** 誰の分か（マネージャーの id か `CLONE_ACTOR_ID`）。台帳の `managerId` と同じ値。 */
+    managerId: z.string(),
+    /** SDK のセッション id（取れたときだけ）。生ログへ降りる鍵。 */
+    sessionId: z.string().optional(),
+    /**
+     * モデル別の増分。**合計に潰さないこと。**
+     *
+     * **これはそのターンの「請求額」ではない。** `usage.ts` の
+     * `usageSiteSchema` の doc（「## どの層にも出てこない消費がある」）が言う
+     * とおり、`modelUsage` には compaction など内部の呼び出しが混ざっており
+     * 分離できない。逆に permission classifier / token-count probe のような、
+     * **台帳のどの層にも出てこない消費もある**（同 doc）。
+     *
+     * `cacheReadInputTokens` と `cacheCreationInputTokens` を分けたまま持つ
+     * ことで、「キャッシュの書き直しに払っているのか」が推測ではなく事実として
+     * 分かる。ここを合計に潰すと、その区別が消える。
+     */
+    models: z.record(z.string(), usageTotalsSchema),
+    /**
+     * 数え直し（resume / `/clear` で SDK 側の累積が0から始まった）を挟んだ
+     * ターンの印。
+     *
+     * **これが付いた行の `models` は差分ではなく、新しい累積の先頭である**
+     * （`usage.ts` の `foldUsageSnapshot` — 「数え直しを検知したときの増分は
+     * スナップショットの全量」）。他の行と同じ扱いで合計へ足すと、記録済みの
+     * 分を二重に数える。
+     *
+     * **付いていないことは「数え直しが起きなかった」ではない。** 検知は
+     * `usage.ts` の `detectReset` の2条件（モデルの値が減った／基準にあった
+     * モデルが消えた）に基づく判定であって、この2条件に当たらない数え直しは
+     * 検出されない。「このターンでは検出されなかった」であって「起きなかった」
+     * ではない。
+     */
+    reset: z
+      .object({
+        fromCostUsd: z.number().nonnegative(),
+        toCostUsd: z.number().nonnegative(),
+      })
+      .optional(),
+  }),
 ]);
 
 export type JournalEntry = z.infer<typeof journalEntrySchema>;
@@ -307,6 +382,7 @@ const journalEntryTypeNames = {
   daily_report: true,
   external_event: true,
   worker_wait: true,
+  turn_usage: true,
 } satisfies Record<JournalEntryType, true>;
 
 export const JOURNAL_ENTRY_TYPES = Object.keys(journalEntryTypeNames) as [
