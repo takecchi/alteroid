@@ -215,3 +215,40 @@ jobs:
             su -s /bin/sh node -c "mkdir -p \"$home/.claude\" && touch \"$home/.claude/probe\"" \
               || { echo "降りた先で HOME へ書けない" >&2; exit 1; }
           '
+
+      # **別 UID の子プロセスは runner の制御面ソケットへ繋げないことを実物で見る。**
+      # `apps/runner/src/boundary.test.ts`（vitest）はこれを in-process では確かめ
+      # られない — vitest プロセスは非 root で `CAP_SETUID` を持たず、`pnpm test` が
+      # 走るどの環境でも別 UID の子プロセスを起こせない。ここでは器そのものの中で
+      # UID を実際に分けた2プロセスを走らせ、docs/architecture.md「制御面の保護」
+      # 2枚目（ソケットは mode 0600・所有者は uid 1000 のデーモン。別 UID の uid 1001
+      # ＝マネージャー子プロセスの主体は connect できない）を直接見る。
+      - name: 別 UID の子プロセスは runner の制御面ソケットへ繋げないか
+        run: |
+          docker run --rm -u 0 \
+            -e ALTEROID_RUNNER_TOKEN=raw-secret \
+            -e ALTEROID_RUNNER_SOCKET=/run/alteroid/runner.sock \
+            -e ALTEROID_RUNNER_SOCKET_UID=1000 \
+            -e ALTEROID_RUNNER_SOCKET_GID=1000 \
+            alteroid:ci sh -eu -c '
+              mkdir -p /run/alteroid
+              alteroid-runner &
+              sleep 3
+
+              # まず所有者（デーモン役・uid 1000 = node）からは繋がることを見る。
+              # ここが繋がっていなければ、下の「別 UID から繋がらない」が
+              # 「ソケットが誰からも繋がらない壊れ方」なのか「別 UID からだけ
+              # 繋がらない」なのか見分けが付かない。
+              su -s /bin/sh node -c \
+                "curl -fsS --unix-socket /run/alteroid/runner.sock http://runner/livez" \
+                >/dev/null \
+                || { echo "所有者(uid 1000)からも繋がらない（前提が壊れている）" >&2; exit 1; }
+
+              # 別 UID（worker・uid 1001 = マネージャー子プロセスの主体）からは
+              # そもそも繋がらないこと。
+              su -s /bin/sh worker -c \
+                "curl -fsS --unix-socket /run/alteroid/runner.sock http://runner/livez" \
+                >/dev/null \
+                && { echo "別 UID(uid 1001)から繋がってしまった" >&2; exit 1; }
+              exit 0
+            '
