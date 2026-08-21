@@ -328,6 +328,10 @@ interface ConversationMessageLike {
   text: string;
 }
 
+interface AnswersRequest {
+  answers: { id: string; answer: string }[];
+}
+
 function stubClient(
   options: {
     commitments?: Commitment[];
@@ -347,6 +351,15 @@ function stubClient(
       scanned: number;
       reachedStart: boolean;
     };
+    /** `POST /approvals/answer` の応答コード。既定は 200。 */
+    approvalsAnswerStatus?: number;
+    /**
+     * `POST /approvals/answer` が返す `results` を、送った `answers` から作る。
+     * 既定は全件 `ok: true`（1件ごとの失敗を試すテストはここを渡す）。
+     */
+    approvalsAnswerResults?: (
+      answers: { id: string; answer: string }[],
+    ) => { id: string; ok: boolean; error?: string }[];
   } = {},
 ) {
   const calls: { route: string; args: unknown }[] = [];
@@ -416,9 +429,26 @@ function stubClient(
         },
       },
     },
+    approvals: {
+      answer: {
+        $post: (args: { json: AnswersRequest }) => {
+          calls.push({ route: 'POST /approvals/answer', args });
+          const results = (options.approvalsAnswerResults ?? defaultAnswerResults)(
+            args.json.answers,
+          );
+          return Promise.resolve(reply(options.approvalsAnswerStatus ?? 200, { results }));
+        },
+      },
+    },
   };
 
   return { calls, client: client as unknown as Parameters<typeof runSlashCommand>[1] };
+}
+
+function defaultAnswerResults(
+  answers: { id: string; answer: string }[],
+): { id: string; ok: boolean; error?: string }[] {
+  return answers.map((entry) => ({ id: entry.id, ok: true }));
 }
 
 function emptyListed(): Listed {
@@ -648,6 +678,123 @@ describe('chat の台帳コマンド', () => {
     expect(text).toContain('/commitments');
     expect(text).toContain('/commit ');
     expect(text).toContain('/done ');
+  });
+});
+
+/**
+ * 溜まった承認待ちをまとめて答える（`POST /approvals/answer`）。
+ *
+ * `docs/roadmap.md` M3「溜まった保留を人間が chat / API でまとめて処理できる」の
+ * 未達を塞ぐ。**`/answer`（1件・自由文）は変えない。** ここで固定するのは
+ * `/answers`（複数件）が (1) 1回の呼びでまとめて送ること、(2) 1件を飛ばせる
+ * こと、(3) 途中でやめられる（書いた分だけ送れる）こと、(4) 1件が駄目でも
+ * 残りが進み、その失敗が id ごとに見えること、である。
+ */
+describe('chat の /answers（まとめて答える）', () => {
+  function listedApprovals(ids: string[]): Listed {
+    return { approvals: ids, commitments: [], conversations: [] };
+  }
+
+  it('複数件を1回の POST /approvals/answer にまとめて送る', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient();
+    const listed = listedApprovals(['approval-1', 'approval-2']);
+
+    await runSlashCommand('/answers 1 allow 2 "駄目。理由は後で書く"', client, listed);
+
+    const answerCalls = calls.filter((call) => call.route === 'POST /approvals/answer');
+    expect(answerCalls).toHaveLength(1);
+    const sent = (answerCalls[0]?.args as { json: AnswersRequest }).json.answers;
+    expect(sent).toEqual([
+      { id: 'approval-1', answer: 'allow' },
+      { id: 'approval-2', answer: '駄目。理由は後で書く' },
+    ]);
+    const text = read();
+    expect(text).toContain('[approval-1] 回答しました');
+    expect(text).toContain('[approval-2] 回答しました');
+  });
+
+  /** 番号を書かなければ、その件は送られない（1件飛ばせる）。 */
+  it('一覧の一部だけを番号で指せる（残りを飛ばせる）', async () => {
+    const { calls, client } = stubClient();
+    const listed = listedApprovals(['approval-1', 'approval-2', 'approval-3']);
+
+    await runSlashCommand('/answers 2 allow', client, listed);
+
+    const sent = (calls[0]?.args as { json: AnswersRequest }).json.answers;
+    expect(sent).toEqual([{ id: 'approval-2', answer: 'allow' }]);
+  });
+
+  /** 一覧に無い番号は、その件だけ飛ばして残りは送る（全体を止めない）。 */
+  it('一覧にない番号は飛ばす。残りは送る', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient();
+    const listed = listedApprovals(['approval-1']);
+
+    await runSlashCommand('/answers 9 allow 1 deny', client, listed);
+
+    const sent = (calls[0]?.args as { json: AnswersRequest }).json.answers;
+    expect(sent).toEqual([{ id: 'approval-1', answer: 'deny' }]);
+    expect(read()).toContain('[9] は /approvals の一覧にありません');
+  });
+
+  /**
+   * **成功件数だけを言わない。** 1件が駄目でも残りは進む設計なので、
+   * どの id が通らなかったかが人間から見えなければ、まとめて処理した瞬間に
+   * 取りこぼしが静かに起きる。
+   */
+  it('1件が失敗しても残りは進み、失敗した id が分かる', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      approvalsAnswerResults: (answers) =>
+        answers.map((entry) =>
+          entry.id === 'approval-2'
+            ? { id: entry.id, ok: false, error: 'already answered' }
+            : { id: entry.id, ok: true },
+        ),
+    });
+    const listed = listedApprovals(['approval-1', 'approval-2']);
+
+    await runSlashCommand('/answers 1 allow 2 deny', client, listed);
+
+    const text = read();
+    expect(text).toContain('[approval-1] 回答しました');
+    expect(text).toContain('[approval-2] 回答に失敗: already answered');
+  });
+
+  /** 引数が無ければ何も送らず、使い方を示す。 */
+  it('引数が無ければ何も送らない', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand('/answers', client, listedApprovals(['approval-1']));
+
+    expect(calls).toEqual([]);
+    expect(read()).toContain('使い方: /answers');
+  });
+
+  /** 番号と回答が対になっていない（片方だけ余る）ときは、全体を送らない。 */
+  it('対になっていない入力は何も送らない（一部だけ解釈しない）', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand(
+      '/answers 1 allow 2',
+      client,
+      listedApprovals(['approval-1', 'approval-2']),
+    );
+
+    expect(calls).toEqual([]);
+    expect(read()).toContain('使い方: /answers');
+  });
+
+  it('/help に /answers が載っている', async () => {
+    const read = captureStdout();
+    const { client } = stubClient();
+
+    await runSlashCommand('/help', client, emptyListed());
+
+    expect(read()).toContain('/answers');
   });
 });
 

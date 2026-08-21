@@ -132,6 +132,28 @@ export function useAnswerApproval() {
 }
 
 /**
+ * 溜まった承認待ちに、まとめて答える（`POST /approvals/answer`）。
+ *
+ * **1件が駄目でも残りは進む。** サーバは `answers` と同じ順で `results` を返す
+ * ので、そのまま呼び出し側へ渡す — ここで成功件数へ畳むと、どの id が通らな
+ * かったかが画面から見えなくなる。
+ */
+export function useAnswerApprovals() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (answers: { id: string; answer: string }[]) => {
+      const { results } = await api.api
+        .POST('/approvals/answer', { body: { answers } })
+        .then(unwrap);
+      await Promise.all([mutate(KEY.approvals(true)), mutate(KEY.approvals(false))]);
+      return results;
+    },
+    [api, mutate],
+  );
+}
+
+/**
  * 台帳の両方のキー（未了だけ／片付けたものも）を取り直す。
  *
  * **片方だけ回すと、切り替えた先が古いままになる。** 画面は表示の切り替えで
