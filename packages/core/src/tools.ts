@@ -1374,9 +1374,12 @@ export function createCloneTools(context: ToolContext) {
         for (const runner of overview.runners) {
           lines.push(
             `- ${runner.label} [${runner.state}]` +
-              (runner.runnerId === undefined ? '（runnerId は未確定。まだ名乗っていない）' : ` runnerId=${runner.runnerId}`),
+              (runner.runnerId === undefined
+                ? '（runnerId は未確定。まだ名乗っていない）'
+                : ` runnerId=${runner.runnerId}`),
           );
-          if (runner.workspacePath !== undefined) lines.push(`  workspace: ${runner.workspacePath}`);
+          if (runner.workspacePath !== undefined)
+            lines.push(`  workspace: ${runner.workspacePath}`);
           if (runner.error !== undefined) lines.push(`  直近の失敗: ${runner.error}`);
           lines.push(
             runner.managers.length === 0

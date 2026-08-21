@@ -1,11 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type {
-  ManagerDenial,
-  ManagerPool,
-  ManagerSummary,
-  RunnerFleetOverview,
-} from './manager.js';
+import type { ManagerDenial, ManagerPool, ManagerSummary, RunnerFleetOverview } from './manager.js';
 import { renderMemoryDocuments } from './memory.js';
 import { createProfileService } from './profile-service.js';
 import type { ChatStreamEvent } from './schema.js';

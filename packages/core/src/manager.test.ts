@@ -3936,7 +3936,9 @@ describe('runner の一覧（ManagerPool.runners）', () => {
 
     const overview = await pool.runners();
 
-    expect(overview.runners).toMatchObject([{ label: 'http://runner:later', state: 'unreachable' }]);
+    expect(overview.runners).toMatchObject([
+      { label: 'http://runner:later', state: 'unreachable' },
+    ]);
 
     await pool.stop();
     await registry.stop();

@@ -645,7 +645,9 @@ class Pool implements ManagerPool {
 
     // 指紋は明示的に頼まれたときだけ聞きに行く（開けている器にしか聞けない）。
     const open = options.fingerprints
-      ? new Map((await this.#runners.list().catch(() => [])).map((runner) => [runner.runnerId, runner]))
+      ? new Map(
+          (await this.#runners.list().catch(() => [])).map((runner) => [runner.runnerId, runner]),
+        )
       : undefined;
 
     const runners = await Promise.all(
