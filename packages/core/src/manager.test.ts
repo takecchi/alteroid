@@ -848,6 +848,42 @@ describe('デーモン再起動後（M4）', () => {
     await s.pool.stop();
   });
 
+  /**
+   * **`stopped` でも、明示的な `manager_send` は続きへ戻せる。**
+   *
+   * `schema.ts` の `jobStatusSchema` の doc は以前「話しかけても続かない」と
+   * 書いていたが、これは誤りだった（2026-08-22 訂正）。`abort()` は
+   * `job.sessionId` を消さない——デーモンが**自動では**起こし直さない（直前の
+   * テスト）のと、人間・クローンが明示的に送ったときに戻せるかは別の話である。
+   * `send()` は `record.attached` を見て `!record.attached` なら `#resumeOnce`
+   * （`lost` / `failed` と同じ経路）へ入るので、`stopped` もここを通って続く。
+   * ここを塞ぐと、人間が Claude Code のセッションを止めても `--resume` で戻せる
+   * 能力を、この階層だけ持たないことになる（`docs/north_star.md` 禁止2・
+   * 追加制限禁止）。
+   */
+  it('stopped の仕事でも、明示的な manager_send なら resume 経路を通って続く', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({ ...runningJob, id: 'mgr-stopped-send', status: 'stopped' });
+    const s = setup(undefined, { stores });
+
+    // 自動では拾い直さない（直前のテストと同じ確認。ここまでは同じ振る舞い）。
+    expect(await s.pool.restore()).toEqual([]);
+    expect(s.sessions).toHaveLength(0);
+
+    const result = await s.pool.send('mgr-stopped-send', 'まだ続きがある');
+
+    // session_id から resume 経路を通り、実際に SDK セッションが起きている。
+    expect(result.outcome).toBe('delivered');
+    expect(s.sessions).toHaveLength(1);
+    expect((s.sessions[0] as FakeSession).options.resume).toBe('sess-before-restart');
+
+    // 台帳も `running` へ戻る（`stopped` に固定されたままにはならない）。
+    const listed = (await s.pool.list()).find((m) => m.managerId === 'mgr-stopped-send');
+    expect(listed?.status).toBe('running');
+
+    await s.pool.stop();
+  });
+
   it('runner が lost と名乗ったセッションを、繋がっているからと live: true にしない', async () => {
     // 引き取り（`#restoreJobs`）は runner が名乗った状態をそのまま採る。runner の
     // 側では resume の失敗が確定してから（`#status = 'lost'`）そのセッションが
@@ -2773,12 +2809,27 @@ describe('止めた結果を確かめる', () => {
     await s.pool.stop();
   });
 
-  it('セッションが残っていたら、止まったことにしない', async () => {
+  /**
+   * **未回答の待ちがある状態で止めてみる。** `not_stopped` は「確かめられて
+   * いない」ではなく「止まっていないと確かめた」明確な失敗なので、生きている
+   * かもしれないマネージャーの状態を1文字も畳んではいけない——`waiting`（未回答
+   * の許可確認）が消えないことまで確かめる。
+   *
+   * **2026-08-22 に2本へ割った（変異試験で分離を確認）。** 元は1本の `it()` で
+   * 「`outcome` の正しさ」と「台帳を1文字も書かない」の両方を順に assert して
+   * いた。変異試験でこの2つを別々に壊すと（1: `outcome` を常に `'stopped'` に
+   * 固定する／2: `outcome === 'stopped'` の台帳書き込みガードを外す）、
+   * **どちらの変異でも同じ1本が落ちた**——`outcome` を常に `'stopped'` にすると
+   * ガードの条件も常に真になり台帳まで書き換わるので、1つの変異が両方の保証を
+   * 一緒に壊してしまい、テストの落ち方だけでは「どちらの保証が壊れたか」が
+   * 見分けられなかった。`outcome` の正しさ（何を確かめたか）と、台帳を書かない
+   * こと（確かめられていないものへの副作用が無いか）は別の保証なので、
+   * `abort()` は fire-and-forget な後続処理を持たず全部 `await` 済みで返る
+   * （`#onEvent` の R4 系と違って完了待ちの同期が要らない）ことを使い、
+   * 単純に2つの `it()` へ分けた。アサーションは1つも削っていない。
+   */
+  async function abortWithLiveSession() {
     const stores = createMemoryStores();
-    // **未回答の待ちがある状態で止めてみる。** `not_stopped` は「確かめられて
-    // いない」ではなく「止まっていないと確かめた」明確な失敗なので、生きている
-    // かもしれないマネージャーの状態を1文字も畳んではいけない——`waiting`（未回答
-    // の許可確認）が消えないことまで確かめる。
     await stores.jobs.putJob({ ...job, status: 'waiting_human' });
     // `swappableRunner` の `stop` は何もしない ＝ 受理はするが畳まない器。
     const fake = swappableRunner();
@@ -2792,13 +2843,23 @@ describe('止めた結果を確かめる', () => {
     });
     const s = setup(undefined, { stores, runner: fake.runner });
     await s.pool.restore();
-
     const result = await s.pool.abort(job.id);
+    return { s, result };
+  }
+
+  it('セッションが残っていたら、止まったことにしない（outcome の正しさ）', async () => {
+    const { s, result } = await abortWithLiveSession();
 
     // **黙って成功にしない。** 見た結果をそのまま言う。
     expect(result.outcome).toBe('not_stopped');
     expect(result.sessionGone).toBe(false);
     expect(result.detail).toContain('止まっていない');
+
+    await s.pool.stop();
+  });
+
+  it('セッションが残っていたら、台帳を1文字も書かない', async () => {
+    const { s } = await abortWithLiveSession();
 
     // **台帳を1文字も書かない。** status も waiting も、止める前のままである。
     const listed = (await s.pool.list()).find((m) => m.managerId === job.id);
@@ -2854,7 +2915,25 @@ describe('止めた結果を確かめる', () => {
    * ここでは `runner.list()` の探りも届かないケースを固定する——権威を置く先
    * （`sessionGone`）自体が確かめられないので `'unknown'` が正しい。
    */
-  it('runner.stop() が投げても abort() は投げない（探りも届かなければ unknown）', async () => {
+  /**
+   * **2026-08-22 に3本へ割った。** 元は1本の `it()` で「`outcome` を `'unknown'`
+   * で言い切る」「例外を握り潰さない（日誌に残る）」「台帳を1文字も書かない」の
+   * 3つを順に assert していた。「セッションが残っていたら」の変異試験（上）で、
+   * `outcome` を常に `'stopped'` にする変異（変異1）と台帳の書き込みガード
+   * （`if (outcome === 'stopped')`）を外す変異（変異2）を当てたところ、**この
+   * テストも同じ形で複数の変異にまたがって落ちた**（変異1はこのテストの
+   * `outcome` の行と `status` の行の両方を、変異2は `status` の行だけを壊す）。
+   * `status` の書き込みは `outcome === 'stopped'` の分岐の中にあるので、
+   * `outcome` を壊す変異は必然的に `status` の保証も一緒に壊す——これは
+   * テストの粒度の問題ではなく実装の構造そのもの（`status` の正しさが
+   * `outcome` の正しさに依存する）なので、これ以上は分けても分離しきれない。
+   * それでも「日誌に握り潰さず残ること」は `outcome` にも `status` の書き込み
+   * 分岐にも依存しない独立した保証なので、ここだけは完全に分離できる——
+   * 割ることで、少なくとも変異2（台帳ガード外し）が `outcome` の保証と日誌の
+   * 保証のどちらにも触れないことが見えるようになる。アサーションは1つも
+   * 削っていない。
+   */
+  async function abortWithUnreachableProbe() {
     const stores = createMemoryStores();
     await stores.jobs.putJob(job);
     const fake = swappableRunner();
@@ -2868,17 +2947,34 @@ describe('止めた結果を確かめる', () => {
       },
     };
     const s = setup(undefined, { stores, runner });
-
     const result = await s.pool.abort(job.id);
+    return { s, result };
+  }
+
+  it('runner.stop() が投げても abort() は投げない（探りも届かなければ unknown で言い切る）', async () => {
+    const { s, result } = await abortWithUnreachableProbe();
 
     expect(result.outcome).toBe('unknown');
     expect(result.sessionGone).toBeUndefined();
-    // **握り潰さない。** 捕まえた例外の中身が detail と日誌の両方に残る。
     expect(result.detail).toContain('期限切れ（テスト）');
+
+    await s.pool.stop();
+  });
+
+  it('runner.stop() が投げても、捕まえた例外を握り潰さず日誌に残す', async () => {
+    const { s } = await abortWithUnreachableProbe();
+
     const entries = await s.stores.journal.list({ types: ['exchange'] });
     const line = entries.find((entry) => JSON.stringify(entry).includes(job.id));
     expect(line).toBeDefined();
     expect(JSON.stringify(line)).toContain('期限切れ（テスト）');
+
+    await s.pool.stop();
+  });
+
+  it('runner.stop() が投げても探りが unknown なら、台帳を1文字も書かない', async () => {
+    const { s } = await abortWithUnreachableProbe();
+
     // **状態は動かさない。** 確かめられていない以上、書く材料が無い。
     const listed = (await s.pool.list()).find((m) => m.managerId === job.id);
     expect(listed?.status).toBe('running');
@@ -3014,14 +3110,65 @@ describe('止めたマネージャーの後続イベント（R4）', () => {
       .toBe(true);
   }
 
-  it('report イベントは日誌には載るが、クローンへは回らず status も動かない', async () => {
+  /**
+   * **`#onEvent` の中で `await` を挟まずに済む「処理が終わった」の合図が無い。**
+   *
+   * `journalHas`（上）は「日誌にその文字列が現れる」ことを待つので、日誌への
+   * 書き込みが実際に起きる保証だけを使える。しかし下のガードのうち「journal
+   * 呼び出しだけを消す変異」（保証1＝日誌に残ることを壊す変異）を当てると、
+   * ガード自身の分岐（`if (status === 'stopped') { ...; return; }`）は残った
+   * ままなので、この変異のもとでも `#onEvent` は正しく早期リターンし、
+   * inbox / status は一切動かない——つまり保証2（クローンへ回らない・status が
+   * 動かない）は**その変異のもとでも成立している**。だから保証2のテストが
+   * `journalHas` を「処理が終わった合図」として待ってしまうと、日誌には何も
+   * 書かれないその変異のもとでタイムアウトし、**保証2は壊れていないのに
+   * テストだけが落ちる**——保証1と保証2がまた1つに戻ってしまう。
+   *
+   * **だから保証2のテストは日誌を見ずに待つ。** 固定の実時間（`setTimeout`）で
+   * fire-and-forget の完了を待つのは、この同じファイルの他の「これ以上増えない
+   * ことを確かめる」テスト（`totalCostUsd` 系の待ち）と同じ形である。ここで
+   * 増える／動くはずの値が無い（何も起きないことを確かめたい）ので、増える値を
+   * 待つ `expect.poll` は使えない。
+   */
+  async function settle() {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  /**
+   * **`report` のテストは、ここから2本に割ってある（2026-08-22）。**
+   *
+   * 元は1本の `it()` で「日誌には残る」「クローンへは回らず status も動かない」
+   * を順に assert していた。変異試験で次の2つを別々に壊すと:
+   *
+   * - 変異A: ガード（`if (record.job.status === 'stopped') {...}`）を丸ごと外す
+   * - 変異B: ガードは残したまま、その中の `await this.#journal(...)` だけを消す
+   *
+   * **どちらの変異でも、落ちたテストは同じ1本だった**（変異Aは
+   * `s.inbox.length` の行で、変異Bは `journalHas` の行で落ち、その先には
+   * 進まない）。vitest は最初に失敗した assertion で止まるので、テスト名の
+   * 粒度だけでは「日誌に残る」と「クローンを起こさない」のどちらの保証が
+   * 壊れたのかが区別できない。1つの `it()` の中に2つの保証を重ねて書いていた
+   * ことが原因なので、保証ごとに `it()` を分けた。アサーションは1つも
+   * 削っていない。
+   */
+  it('report イベントは日誌には残る（捨てない）', async () => {
+    const { s, fake } = await stopped();
+
+    fake.report(job.id, '止めたはずなのに報告してきた', 'done');
+
+    // 日誌には残っている（捨てない）。
+    await journalHas(s, '止めたはずなのに報告してきた', ['exchange']);
+
+    await s.pool.stop();
+  });
+
+  it('report イベントはクローンへは回らず、status も動かない', async () => {
     const { s, fake } = await stopped();
     const postedBefore = s.inbox.length;
 
     fake.report(job.id, '止めたはずなのに報告してきた', 'done');
+    await settle();
 
-    // 日誌には残っている（捨てない）。処理が終わったことの証拠でもある。
-    await journalHas(s, '止めたはずなのに報告してきた', ['exchange']);
     // クローンの受信箱（inbox）へは1件も増えていない。
     expect(s.inbox.length).toBe(postedBefore);
     // status は stopped から動かない。
@@ -3031,13 +3178,24 @@ describe('止めたマネージャーの後続イベント（R4）', () => {
     await s.pool.stop();
   });
 
-  it('ask イベントは日誌には載るが、クローンへは回らず waiting も積まれない', async () => {
+  /** `ask` も `report` と同じ形（日誌＋受信箱＋waiting を1本で見ていた）なので、同じ理由で割る。 */
+  it('ask イベントは日誌には残る（捨てない）', async () => {
     const { s, fake } = await stopped();
-    const postedBefore = s.inbox.length;
 
     fake.ask(job.id, 'req-after-stop', '止めたはずなのに確認を求めてきた');
 
     await journalHas(s, '止めたはずなのに確認を求めてきた', ['escalation']);
+
+    await s.pool.stop();
+  });
+
+  it('ask イベントはクローンへは回らず、waiting も積まれない', async () => {
+    const { s, fake } = await stopped();
+    const postedBefore = s.inbox.length;
+
+    fake.ask(job.id, 'req-after-stop', '止めたはずなのに確認を求めてきた');
+    await settle();
+
     expect(s.inbox.length).toBe(postedBefore);
     const listed = (await s.pool.list()).find((m) => m.managerId === job.id);
     expect(listed?.status).toBe('stopped');
@@ -3056,6 +3214,77 @@ describe('止めたマネージャーの後続イベント（R4）', () => {
     expect(s.inbox.length).toBe(postedBefore);
     const listed = (await s.pool.list()).find((m) => m.managerId === job.id);
     expect(listed?.status).toBe('stopped');
+
+    await s.pool.stop();
+  });
+
+  /**
+   * `resume_failed` は `report` / `ask` / `closed` と同じ形の後続イベントである
+   * （直前に投げていた自動再開の結果が、止めた後に遅れて届く）。ここも同じ理由で
+   * 畳む。`event.recovered` の真偽どちらでも（`running` へ書く枝・`lost` へ書く枝
+   * どちらでも）status を動かさないことを両方固定する。
+   */
+  it('resume_failed（recovered: false）イベントは日誌には載るが、クローンへは回らず status も動かない', async () => {
+    const { s, fake } = await stopped();
+    const postedBefore = s.inbox.length;
+
+    fake.resumeFailed(job.id, job.sessionId, '止めたはずなのに開き直せなかったと言ってきた', false);
+
+    await journalHas(s, '止めたはずなのに開き直せなかったと言ってきた', ['exchange']);
+    expect(s.inbox.length).toBe(postedBefore);
+    const listed = (await s.pool.list()).find((m) => m.managerId === job.id);
+    expect(listed?.status).toBe('stopped');
+
+    await s.pool.stop();
+  });
+
+  it('resume_failed（recovered: true）イベントも日誌には載るが、クローンへは回らず status も動かない', async () => {
+    const { s, fake } = await stopped();
+    const postedBefore = s.inbox.length;
+
+    fake.resumeFailed(job.id, job.sessionId, '止めたはずなのに生ログから続けたと言ってきた', true);
+
+    await journalHas(s, '止めたはずなのに生ログから続けたと言ってきた', ['exchange']);
+    expect(s.inbox.length).toBe(postedBefore);
+    const listed = (await s.pool.list()).find((m) => m.managerId === job.id);
+    expect(listed?.status).toBe('stopped');
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **このガードは、明示的な `manager_send` で起こし直す能力を塞がない。**
+   *
+   * `send()` は resume が受理された時点で `record.job.status` を先に `'running'`
+   * へ書く（`send()` 本体）。だから `resume_failed` がその後に届いても、この時点
+   * では `record.job.status` は既に `'stopped'` ではなく、上の新しいガードには
+   * 掛からない——`resume_failed` 本来の分岐（`event.recovered` の真偽で
+   * `running` / `lost` を書き分ける）がそのまま働く。ここでは `recovered: false`
+   * を届けて `lost` へ落ちることを確かめる——ガードに飲まれて `stopped` の
+   * ままだったら、この分岐は起きない。
+   */
+  it('明示的な manager_send で起こした後の resume_failed は、新しいガードに塞がれず従来どおり処理される', async () => {
+    const { s, fake } = await stopped();
+
+    // stopped から明示的に送る。session_id は残っているので resume 経路を通り、
+    // 受理された時点で status は 'running' へ戻る（`schema.ts` の
+    // `jobStatusSchema` の doc・2026-08-22 訂正）。
+    const sendResult = await s.pool.send(job.id, 'まだ続きがある');
+    expect(sendResult.outcome).toBe('delivered');
+    const afterSend = (await s.pool.list()).find((m) => m.managerId === job.id);
+    expect(afterSend?.status).toBe('running');
+
+    // その resume が SDK 側では見つからなかった、と後から同じ runner から届く
+    // （`fake` は `stopped()` が組んだ、この pool に繋がっている runner その
+    // ものである）。`recovered: false` なので、塞がれていなければ `lost` へ
+    // 落ちる——新しいガードに飲まれて `running` のままなら、この分岐は起きない。
+    fake.resumeFailed(job.id, job.sessionId, '結局戻れていなかった', false);
+
+    await expect
+      .poll(async () => (await s.pool.list()).find((m) => m.managerId === job.id)?.status, {
+        timeout: 2000,
+      })
+      .toBe('lost');
 
     await s.pool.stop();
   });

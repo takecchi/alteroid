@@ -783,7 +783,10 @@ class Pool implements ManagerPool {
       type: 'exchange',
       with: 'manager',
       role: 'outbound',
-      text: `[${managerId}] （停止）${detail}`,
+      // **`（停止）` はそのまま残す**（既存テストがこの文字列を固定している）。
+      // `[outcome=...]` は同じ行に足すだけ——`outcome` を文の解釈なしに grep で
+      // 数えられるようにする（「止まらなかった試み」を辿る側のため）。
+      text: `[${managerId}] （停止）[outcome=${outcome}] ${detail}`,
     });
     // **outcome ごとに言い分ける。** 止まっていない・不明のときまで「停止させ
     // ました」と言うと、クローンは止まったつもりで次の判断へ進む（R1 の再発）。
@@ -1510,6 +1513,19 @@ class Pool implements ManagerPool {
       }
 
       case 'usage_notice': {
+        // **ここは `report` / `ask` / `closed` / `resume_failed` と違い、`stopped`
+        // ガードを意図的に足していない。** あの4つが運ぶのは**このマネージャー
+        // の**仕事の出来事（報告・確認・終了・再開の成否）で、そのマネージャーを
+        // 止めた後は捨てて（＝日誌にだけ残して）よい——ターン自体がもう無いから
+        // である。対して `usage_notice` / `rate_limit` が運ぶのは**アカウント
+        // 単位の枠の事実**（「枠を使い切って課金枠から引き始めた」「枠から追い
+        // 返された」）であり、`event.managerId` はどのターンでそれに気づいたかの
+        // 印にすぎない。この事実は該当マネージャーを止めても消えない（他の
+        // マネージャーも同じ枠を使っている）ので、ここで畳むと**クローンが知る
+        // べき本物の情報を「止めたマネージャーの後始末」と誤って一緒に捨てる**
+        // ことになる。だから `stopped` かどうかに関わらず、いつもどおりクローン
+        // へ知らせる。
+        //
         // **クローンへ知らせる。** ここが「上限に当たる前に気づく」の実体である。
         // 枠の利用率は「いま重い仕事を投げてよいか」に効くが、この文言は
         // 「今日もう委譲を続けられるか」に効く。
@@ -1532,6 +1548,11 @@ class Pool implements ManagerPool {
       }
 
       case 'rate_limit': {
+        // **ここも `stopped` ガードを意図的に足していない。** 理由は `usage_notice`
+        // の冒頭のコメントと同じ——運んでいるのはこのマネージャーの仕事ではなく
+        // アカウント単位の枠の事実なので、止めたマネージャー経由で届いたからと
+        // いって畳まない。
+        //
         // 枠の事実はアカウント単位なので、マネージャーごとに持たない。
         // **ターン中しか届かない**ので、走行中はここが最新になる。
         const transition = usageTransitionOf(
@@ -1600,6 +1621,35 @@ class Pool implements ManagerPool {
       }
 
       case 'resume_failed': {
+        // **止めたマネージャーの resume_failed で status を巻き戻さない・クローンを
+        // 起こさない（R4）。** `abort()` が `stopped` を確定させた後で、直前に
+        // 投げていた resume（`#restoreJobs` / `#reattach` の自動再開）の結果が
+        // 遅れて届くことがある。無条件に処理すると、下の分岐が
+        // `record.job.status` を `running`（`event.recovered` のとき）か
+        // `'lost'`（それ以外）へ書き換え、`#notifyResumeFallback` /
+        // `#notifyUnresumable` で `#post()` してしまう——`report` / `ask` /
+        // `closed` と同じ形で終端が甦る。日誌にだけは残す。
+        //
+        // **明示的な `manager_send` で起こし直した場合はここに掛からない。**
+        // `send()` は `#resumeOnce` を呼んで resume が受理された後、
+        // 同じ呼び出しの中で `record.job.status = 'running'` を先に書く
+        // （`send()` 本体）。この `resume_failed` は SDK 側の検証が終わってから
+        // 別経路（SSE）で遅れて届くので、その頃には status は既に `'stopped'`
+        // ではない——つまり `stopped` から人間・クローンが明示的に戻す能力
+        // （`schema.ts` の `jobStatusSchema` の doc）は、このガードで塞がれない
+        // （`manager.test.ts` の「止めたマネージャーの後続イベント（R4）」で
+        // 固定してある）。
+        if (record.job.status === 'stopped') {
+          await this.#journal({
+            type: 'exchange',
+            with: 'manager',
+            role: 'inbound',
+            text:
+              `[${event.managerId}] （停止済みのため無視）前のセッション` +
+              `（${event.sessionId}）を開き直せなかった: ${event.reason}`,
+          });
+          return;
+        }
         // **「resume を投げた」は「戻れた」ではない。** ここが来るということは、
         // `#resume` が `true` を返した後に SDK が会話を見つけられなかったという
         // ことである。台帳と受信箱を、実際に起きたことへ揃え直す。
