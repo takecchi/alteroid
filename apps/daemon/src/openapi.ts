@@ -680,6 +680,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     denials() {
       throw new Error('spec 生成専用のスタブ: 拒否は数えていない');
     },
+    runners() {
+      throw new Error('spec 生成専用のスタブ: 器の一覧は持たない');
+    },
     transcript() {
       throw new Error('spec 生成専用のスタブ: 生ログは持たない');
     },

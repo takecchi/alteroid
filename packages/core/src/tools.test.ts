@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ManagerDenial, ManagerPool, ManagerSummary } from './manager.js';
+import type {
+  ManagerDenial,
+  ManagerPool,
+  ManagerSummary,
+  RunnerFleetOverview,
+} from './manager.js';
 import { renderMemoryDocuments } from './memory.js';
 import { createProfileService } from './profile-service.js';
 import type { ChatStreamEvent } from './schema.js';
@@ -20,7 +25,7 @@ interface Harness {
   stores: Stores;
   emitted: ChatStreamEvent[];
   sent: { managerId: string; message: string; decision?: string; requestId?: string }[];
-  started: { request: string; cwd?: string }[];
+  started: { request: string; cwd?: string; runnerId?: string }[];
   /** 人間と同じ口（ManagerPool.abort）へ届いた停止。 */
   aborted: { managerId: string; reason?: string }[];
   /** runner へ降ろされたプロファイルの本文。 */
@@ -37,6 +42,16 @@ interface Harness {
    * （status を畳む・セッションを切る）を**しない**——それが outcome の意味である。
    */
   setAbortOutcome(outcome: 'stopped' | 'not_stopped' | 'unknown', sessionGone?: boolean): void;
+  /**
+   * `manager_start` の指名が無いとき、`Pool.start()` が返す `runnerId`
+   * （自動配置が選んだ器）を差し替える。`undefined` にすると「未記録」の文言を
+   * 見るための状態を作れる。
+   */
+  setAutoRunnerId(runnerId: string | undefined): void;
+  /** `runner_list` が読む `ManagerPool.runners()` の返り値を差し替える。 */
+  setRunnersOverview(overview: RunnerFleetOverview): void;
+  /** `runners()` に渡された引数（`fingerprints` を渡したかどうかの検査用）。 */
+  runnersCalls: { fingerprints?: boolean }[];
   call(name: string, args: Record<string, unknown>): Promise<string>;
 }
 
@@ -44,12 +59,17 @@ function harness(runtime?: () => CloneRuntimeFacts): Harness {
   const stores = createMemoryStores();
   const emitted: ChatStreamEvent[] = [];
   const sent: { managerId: string; message: string; decision?: string; requestId?: string }[] = [];
-  const started: { request: string; cwd?: string }[] = [];
+  const started: { request: string; cwd?: string; runnerId?: string }[] = [];
   const aborted: { managerId: string; reason?: string }[] = [];
   const running: ManagerSummary[] = [];
   const denied = new Map<string, ManagerDenial[]>();
   let abortOutcome: 'stopped' | 'not_stopped' | 'unknown' = 'stopped';
   let abortSessionGone: boolean | undefined = true;
+  // **指名しなかったときに Pool.start() が返す runnerId。** 本物は資源で選んだ
+  // 器の runnerId を返す——ここでは差し替え可能な既定値でそれを真似る。
+  let autoRunnerId: string | undefined = 'runner-test';
+  let runnersOverview: RunnerFleetOverview = { runners: [], unassigned: [] };
+  const runnersCalls: { fingerprints?: boolean }[] = [];
 
   const managers: ManagerPool = {
     async start(input) {
@@ -63,6 +83,12 @@ function harness(runtime?: () => CloneRuntimeFacts): Harness {
         startedAt: '2026-01-01T00:00:00.000Z',
         updatedAt: '2026-01-01T00:00:00.000Z',
         waiting: [],
+        // **指名があればそれを、無ければ自動配置の代わりの既定値を返す。** 本物
+        // （`Pool.start`）は常に実際に走った器の runnerId を返す——指名の有無を
+        // 問わない、がここで固定したい形である。
+        ...((input.runnerId ?? autoRunnerId) === undefined
+          ? {}
+          : { runnerId: input.runnerId ?? autoRunnerId }),
       };
       running.push(summary);
       return summary;
@@ -108,6 +134,10 @@ function harness(runtime?: () => CloneRuntimeFacts): Harness {
               : '止まったかは未確認',
         ...(abortSessionGone === undefined ? {} : { sessionGone: abortSessionGone }),
       };
+    },
+    async runners(options = {}) {
+      runnersCalls.push(options);
+      return runnersOverview;
     },
     async stop() {},
   };
@@ -161,6 +191,13 @@ function harness(runtime?: () => CloneRuntimeFacts): Harness {
         sessionGone ??
         (outcome === 'stopped' ? true : outcome === 'not_stopped' ? false : undefined);
     },
+    setAutoRunnerId(runnerId) {
+      autoRunnerId = runnerId;
+    },
+    setRunnersOverview(overview) {
+      runnersOverview = overview;
+    },
+    runnersCalls,
     async call(name, args) {
       const found = tools.find((entry) => entry.name === name);
       if (!found) throw new Error(`ツール ${name} が無い`);
@@ -561,6 +598,44 @@ describe('クローンの道具', () => {
     expect(entry).toMatchObject({ decision: expect.stringContaining('mgr-1') });
   });
 
+  /**
+   * 置き先の指名（`runnerId`）。**これは配置の指名であって本数の制限ではない**
+   * ——ここで固定したいのは、道具からプールへ指名がそのまま渡ることと、
+   * 実際に走った器（`started.runnerId`）が指名の有無を問わず返り値へ載ること。
+   * 指名そのものの成否判定（名簿に無い・使えない・重複）は `Registry#select`
+   * の責務であって、ここでは配線だけを見る（`runner-select.test.ts` が本体）。
+   */
+  it('manager_start に runnerId を渡すと、そのまま ManagerPool.start へ指名として届く', async () => {
+    const h = harness();
+
+    const reply = await h.call('manager_start', {
+      request: 'この器で頼む',
+      runnerId: 'runner-b',
+    });
+
+    expect(h.started).toEqual([{ request: 'この器で頼む', runnerId: 'runner-b' }]);
+    // **指名した名前がそのまま返る。** 指名が効いたかをクローンが確かめる材料。
+    expect(reply).toContain('runner-b');
+  });
+
+  it('manager_start は runnerId を指名しなくても、実際に走った runner を返す', async () => {
+    const h = harness();
+    h.setAutoRunnerId('runner-auto-placed');
+
+    const reply = await h.call('manager_start', { request: '自動配置に任せる' });
+
+    expect(reply).toContain('runner-auto-placed');
+  });
+
+  it('runnerId が取れないときは空欄にせず「未記録」と言う', async () => {
+    const h = harness();
+    h.setAutoRunnerId(undefined);
+
+    const reply = await h.call('manager_start', { request: '記録が無い場合' });
+
+    expect(reply).toContain('未記録');
+  });
+
   it('manager_send は decision と requestId を添えて、宛先を指して答えられる', async () => {
     const h = harness();
 
@@ -641,6 +716,19 @@ describe('クローンの道具', () => {
     expect(reply).toContain('running');
   });
 
+  it('manager_list は runnerId を出す（未記録なら空欄にせずそう言う）', async () => {
+    const h = harness();
+    h.setAutoRunnerId('runner-shown');
+    await h.call('manager_start', { request: 'A' });
+    h.setAutoRunnerId(undefined);
+    await h.call('manager_start', { request: 'B' });
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('runner-shown');
+    expect(reply).toContain('未記録');
+  });
+
   it('委譲先が無い場面（蒸留の内部ターン）は、黙らずにそう返す', async () => {
     const stores = createMemoryStores();
     const tools = createCloneTools({ stores, emit: () => undefined });
@@ -648,6 +736,222 @@ describe('クローンの道具', () => {
     const result = await found?.handler({ request: 'x' } as never, {});
 
     expect(JSON.stringify(result)).toContain('委譲できない');
+  });
+});
+
+/**
+ * `runner_list`——「コンテナがいくつあって、どこで何をいくつ動かしているかを
+ * クローンが把握できるようにする」の「見る」側。
+ *
+ * `ManagerPool.runners()` 自体の数え方（本数・unassigned への分離）の固定は
+ * `manager.test.ts` に置く。ここで固定したいのは、その結果をクローンへ返す
+ * **文言**の側——5値を畳んでいないか、既定で指紋を出していないか、1台のときに
+ * 「分散していない」と読める1行があるか、である。
+ */
+describe('runner_list（器の一覧）', () => {
+  it('登録が0台のときも「0台である」と言う（空の出力にしない）', async () => {
+    const h = harness();
+    h.setRunnersOverview({ runners: [], unassigned: [] });
+
+    const reply = await h.call('runner_list', {});
+
+    expect(reply).toContain('0台');
+  });
+
+  it('器が1台のときは「分散していない」と読める1行が入る', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-only',
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-only',
+          managers: [],
+        },
+      ],
+      unassigned: [],
+    });
+
+    const reply = await h.call('runner_list', {});
+
+    expect(reply).toContain('1台のみ');
+    expect(reply).toContain('分散していない');
+  });
+
+  it('器が複数台のときも形が崩れない（分散していないとは言わない）', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-a',
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-a',
+          managers: [{ managerId: 'mgr-1', status: 'running' }],
+        },
+        {
+          label: 'runner-b',
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-b',
+          managers: [],
+        },
+      ],
+      unassigned: [],
+    });
+
+    const reply = await h.call('runner_list', {});
+
+    expect(reply).toContain('runner-a');
+    expect(reply).toContain('runner-b');
+    expect(reply).not.toContain('分散していない');
+  });
+
+  it('state の5値をそのまま出す（connected へ畳まない）', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'a',
+          state: 'connecting',
+          since: '2026-01-01T00:00:00.000Z',
+          managers: [],
+        },
+        { label: 'b', state: 'unreachable', since: '2026-01-01T00:00:00.000Z', managers: [] },
+        { label: 'c', state: 'unusable', since: '2026-01-01T00:00:00.000Z', managers: [] },
+        {
+          label: 'd',
+          state: 'lost',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-d',
+          managers: [],
+        },
+        {
+          label: 'e',
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-e',
+          managers: [],
+        },
+      ],
+      unassigned: [],
+    });
+
+    const reply = await h.call('runner_list', {});
+
+    for (const state of ['connecting', 'unreachable', 'unusable', 'lost', 'connected']) {
+      expect(reply).toContain(`[${state}]`);
+    }
+  });
+
+  it('器ごとのマネージャー本数を出す', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-a',
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-a',
+          managers: [
+            { managerId: 'mgr-1', status: 'running' },
+            { managerId: 'mgr-2', status: 'done' },
+          ],
+        },
+      ],
+      unassigned: [],
+    });
+
+    const reply = await h.call('runner_list', {});
+
+    expect(reply).toContain('mgr-1');
+    expect(reply).toContain('mgr-2');
+    expect(reply).toContain('(2)');
+  });
+
+  it('runnerId の無いマネージャーを、どの器にも混ぜず別枠で出す', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-a',
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-a',
+          managers: [],
+        },
+      ],
+      unassigned: [{ managerId: 'mgr-legacy', status: 'done' }],
+    });
+
+    const reply = await h.call('runner_list', {});
+
+    // **runner-a の内訳（マネージャー: 無し）に紛れ込んでいない。**
+    expect(reply).toContain('どの器か分からない');
+    expect(reply).toContain('mgr-legacy');
+  });
+
+  /**
+   * 指紋（鍵・プロファイルの sha256）は**既定で出さない**。
+   *
+   * この歯は「出ない」ことの歯なので、まず検出器が非0を出せることを示す
+   * （変異試験の要求：意図的に出す実装にしたら落ちる形になっていること）。
+   * その確認は、次の「引数を渡せば指紋が出る」テストが兼ねる——同じ
+   * `setRunnersOverview` の入力に対して、引数の有無だけで出力が変わることを
+   * 2本のテストの対で示す。
+   */
+  it('引数を渡さなければ指紋を出さない（既定で文脈へ載せない）', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-a',
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-a',
+          managers: [],
+          credentials: [
+            { name: 'GITHUB_TOKEN', sha256: 'deadbeef0000', updatedAt: '2026-01-01T00:00:00.000Z' },
+          ],
+          profile: { sha256: 'cafef00dbabe', bytes: 12, updatedAt: '2026-01-01T00:00:00.000Z' },
+        },
+      ],
+      unassigned: [],
+    });
+
+    const reply = await h.call('runner_list', {});
+
+    expect(reply).not.toContain('deadbeef0000');
+    expect(reply).not.toContain('cafef00dbabe');
+    // **道具からプールへは何も渡らない**（既定）。
+    expect(h.runnersCalls).toEqual([{}]);
+  });
+
+  it('fingerprints: true を渡すと指紋が出る（方針は設定で開けられる）', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-a',
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-a',
+          managers: [],
+          credentials: [
+            { name: 'GITHUB_TOKEN', sha256: 'deadbeef0000', updatedAt: '2026-01-01T00:00:00.000Z' },
+          ],
+          profile: { sha256: 'cafef00dbabe', bytes: 12, updatedAt: '2026-01-01T00:00:00.000Z' },
+        },
+      ],
+      unassigned: [],
+    });
+
+    const reply = await h.call('runner_list', { fingerprints: true });
+
+    expect(reply).toContain('deadbeef0000');
+    expect(reply).toContain('cafef00dbabe');
+    expect(h.runnersCalls).toEqual([{ fingerprints: true }]);
   });
 });
 

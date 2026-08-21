@@ -122,6 +122,7 @@ export const CLONE_TOOL_NAMES = [
   'manager_stop',
   'manager_list',
   'manager_report',
+  'runner_list',
 ] as const;
 
 /**
@@ -1010,20 +1011,33 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe('作業ディレクトリ（実プロジェクトの場所）。省略時はデーモンの既定'),
+        runnerId: z
+          .string()
+          .optional()
+          .describe(
+            '置き先の器を名指しで指名する（runner_list / manager_list が出す runnerId）。' +
+              'これは配置の指名であって本数の制限ではない——省略すれば資源による自動配置。' +
+              '指名した器が名簿に無い・使えない・名前が重複のときは失敗し、他の器へは' +
+              '自動で落とさない（返ってきた文言をそのまま読むこと）。',
+          ),
       },
-      async ({ request, cwd }) => {
+      async ({ request, cwd, runnerId }) => {
         if (!context.managers) return NO_POOL;
         const started = await context.managers.start({
           request,
           ...(cwd === undefined ? {} : { cwd }),
+          ...(runnerId === undefined ? {} : { runnerId }),
         });
         await stores.journal.append({
           type: 'decision',
-          decision: `マネージャー ${started.managerId} を起こした（cwd: ${started.cwd}）: ${request}`,
+          decision:
+            `マネージャー ${started.managerId} を起こした（cwd: ${started.cwd}` +
+            `${runnerId === undefined ? '' : `, 指名: runnerId=${runnerId}`}）: ${request}`,
           grounds: '委譲の判断',
         });
         return text(
-          `マネージャー ${started.managerId} を起こした（cwd: ${started.cwd}）。` +
+          `マネージャー ${started.managerId} を起こした（cwd: ${started.cwd}、` +
+            `runner: ${started.runnerId ?? '未記録'}）。` +
             '報告・質問は後から受信箱に届く。',
         );
       },
@@ -1190,6 +1204,10 @@ export function createCloneTools(context: ToolContext) {
         for (const manager of managers) {
           const entry = [
             `- ${manager.managerId} [${manager.status}${manager.live ? '' : '/セッション切断'}]`,
+            // **runnerId は空欄にしない。** 取れていないことを「未記録」という
+            // 文字列で読める形にする（AGENTS.md「取れない軸に0の行を作らない」と
+            // 同じ理由——空欄だと「取れていない」のか「読み忘れ」なのか区別できない）。
+            `  runner: ${manager.runnerId ?? '未記録'}`,
             `  依頼: ${excerptLine(manager.request, LIST_REQUEST_EXCERPT)}`,
             `  cwd: ${manager.cwd}`,
             // **`lost` を状態名だけで済ませない。** 「終わった」と読まれると、
@@ -1299,6 +1317,98 @@ export function createCloneTools(context: ToolContext) {
             `${part === 'request' ? ' part=request' : ''} offset=${part1.to}）`
           : '';
         return text(`${head}\n\n${part1.body}${tail}`);
+      },
+    ),
+
+    /**
+     * 器（runner）の一覧。**「増えた器をクローンが使えるようになるための前提」
+     * の「見る」側。**
+     *
+     * 人間は増えていく runner のコンテナがいくつあり、それぞれで何本走っているかを
+     * 意識できる立場にいる（設定・デプロイの画面から）。クローンにその同じ材料が
+     * 無いと、`manager_start` に `runnerId` を渡す判断そのものができない
+     * （north_star 禁止1）。
+     */
+    tool(
+      'runner_list',
+      [
+        '委譲先の器（runner のコンテナ）がいくつあり、それぞれで何本のマネージャーが' +
+          '走っているかを見る。manager_start の runnerId に渡す名前もここで分かる。',
+        'ここで数えている本数はデーモンの台帳から見た数である。新しいマネージャーを' +
+          'どこへ置くか（資源による自動配置）の判断が使う本数は runner 自身が /health で' +
+          '名乗る別の値で、この一覧とはずれうる——混ぜて配置の判断を予測しないこと。',
+        'state は5値（connecting/connected/unreachable/unusable/lost）のまま出る。' +
+          'unreachable（まだ開けていない）と lost（開けていたのに黙った）は別物である。',
+      ].join(' '),
+      {
+        fingerprints: z
+          .boolean()
+          .optional()
+          .describe(
+            '鍵とプロファイルの指紋（sha256）まで出すか。既定は出さない——' +
+              '要らないものを文脈へ載せない側に倒してある。人間は Web UI の設定画面で' +
+              '常に見られるので、必要になったらここを true にして開くこと。',
+          ),
+      },
+      async ({ fingerprints }) => {
+        if (!context.managers) return NO_POOL;
+        const overview = await context.managers.runners(
+          fingerprints === undefined ? {} : { fingerprints },
+        );
+
+        if (overview.runners.length === 0) {
+          return text(
+            '登録されている runner は0台である（設定に ALTEROID_RUNNER_URLS 等が無いか、' +
+              'まだ配線されていない）。',
+          );
+        }
+
+        const lines: string[] = [
+          // **1台のときにそう言う。** 言わないと「分散していない」ことが読み取れず、
+          // 複数台に散っていると誤読されうる（依頼者からの明示要求）。
+          overview.runners.length === 1
+            ? 'runner は1台のみ登録されている（分散していない）。'
+            : `runner は${overview.runners.length}台登録されている。`,
+        ];
+
+        for (const runner of overview.runners) {
+          lines.push(
+            `- ${runner.label} [${runner.state}]` +
+              (runner.runnerId === undefined ? '（runnerId は未確定。まだ名乗っていない）' : ` runnerId=${runner.runnerId}`),
+          );
+          if (runner.workspacePath !== undefined) lines.push(`  workspace: ${runner.workspacePath}`);
+          if (runner.error !== undefined) lines.push(`  直近の失敗: ${runner.error}`);
+          lines.push(
+            runner.managers.length === 0
+              ? '  マネージャー: 無し'
+              : `  マネージャー(${runner.managers.length}): ` +
+                  runner.managers.map((m) => `${m.managerId}[${m.status}]`).join(', '),
+          );
+          // **表示そのものを引数で二重に締める。** 値を取ってくるかどうかは
+          // `ManagerPool.runners()` 側（`options.fingerprints`）が決めるが、ここでも
+          // `fingerprints === true` のときしか出さない——どちらか片方が緩んでも
+          // 既定で漏れない（多重防御。値そのものは sha256 のままで、素の鍵は運ばない）。
+          if (fingerprints === true && runner.credentials !== undefined) {
+            lines.push(
+              runner.credentials.length === 0
+                ? '  鍵: 無し'
+                : `  鍵の指紋: ${runner.credentials.map((c) => `${c.name}=${c.sha256}`).join(', ')}`,
+            );
+          }
+          if (fingerprints === true && runner.profile !== undefined) {
+            lines.push(`  プロファイルの指紋: ${runner.profile.sha256}`);
+          }
+        }
+
+        if (overview.unassigned.length > 0) {
+          lines.push(
+            `どの器か分からない: ${overview.unassigned.length}件（` +
+              overview.unassigned.map((m) => `${m.managerId}[${m.status}]`).join(', ') +
+              '）。runnerId が記録されていない古いマネージャーで、どの器の内訳にも混ぜていない。',
+          );
+        }
+
+        return text(lines.join('\n'));
       },
     ),
   ];

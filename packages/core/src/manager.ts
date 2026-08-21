@@ -4,7 +4,14 @@ import { journalEntryShape, noteDroppedRecord } from './dropped-record.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap, type RecentMap } from './recent.js';
 import { isRetryableRunnerError } from './runner-protocol.js';
-import type { RunnerClient, RunnerEvent, RunnerRegistry } from './runner-protocol.js';
+import type {
+  RunnerClient,
+  RunnerCredentialFingerprint,
+  RunnerEvent,
+  RunnerLiveness,
+  RunnerProfileFingerprint,
+  RunnerRegistry,
+} from './runner-protocol.js';
 import { brief } from './runner.js';
 import type { InboxEvent, Job, JobStatus, JournalEntryInput, WorkspaceLocator } from './schema.js';
 import type { Stores } from './store.js';
@@ -32,6 +39,15 @@ export interface ManagerStartInput {
   request: string;
   /** 実プロジェクトの作業ディレクトリ。人間が Claude Code を開く場所と同じ。 */
   cwd?: string;
+  /**
+   * 置き先の指名（`runner_list` / `manager_list` が出す `runnerId`）。
+   *
+   * **これは配置の指名であって、本数の制限ではない。** 省略すれば、いままでどおり
+   * 資源による自動配置（`RunnerRegistry#select` の `#place`）が選ぶ。指名した場合は
+   * その器が開けていて使えるときだけそこへ置き、名簿に無い・使えない・名前が
+   * 重複のいずれでも**自動配置へは落とさない**（`RunnerRegistry#select` の doc）。
+   */
+  runnerId?: string;
 }
 
 export interface ManagerSummary {
@@ -92,6 +108,51 @@ export interface ManagerSummary {
 export interface ManagerDenial {
   tool: string;
   count: number;
+}
+
+/**
+ * 器（runner）1台の様子と、そこに紐づくマネージャー（`runner_list` の材料）。
+ *
+ * `label` / `state` / `since` / `error?` / `runnerId?` / `workspacePath?` は
+ * `RunnerEntry`（`runner-protocol.ts`）と同じ形をそのまま写す。**`state` は
+ * 5値のまま渡し、`connected` へ畳まない**——`unreachable` / `unusable` / `lost` の
+ * 違いは、クローンが「これ以上起こさない」を判断する材料そのものである。
+ */
+export interface RunnerOverview {
+  label: string;
+  state: RunnerLiveness;
+  since: string;
+  error?: string;
+  runnerId?: string;
+  workspacePath?: string;
+  /**
+   * この器に紐づくマネージャー（`ManagerSummary.runnerId` が一致した分）。
+   *
+   * **ここで数えている本数はデーモンの台帳から見た数である。** 新しいマネージャー
+   * をどこへ置くかの判断（資源による自動配置 `chooseByResources`）が使っている
+   * 本数は、runner 自身が `/health` で名乗る別の値（`RunnerPlacementResources.
+   * managers`）で、**この一覧とは別物であり、ずれうる。** 混ぜて「配置はこの数を
+   * 見て決めている」と読まないこと。
+   */
+  managers: { managerId: string; status: JobStatus }[];
+  /** 配られている鍵の指紋。`fingerprints: true` を渡したときだけ載る（値は sha256）。 */
+  credentials?: RunnerCredentialFingerprint[];
+  /** 置かれている実行環境プロファイルの指紋。`fingerprints: true` を渡したときだけ載る。 */
+  profile?: RunnerProfileFingerprint;
+}
+
+/** `runner_list` が返す全体像。 */
+export interface RunnerFleetOverview {
+  runners: RunnerOverview[];
+  /**
+   * `runnerId` が付いていないマネージャー（宛先の runner が記録されていない）。
+   *
+   * **どの器の内訳にも混ぜず、0 に畳まず、この別枠へ出す**
+   * （AGENTS.md「取れない軸に 0 の行を作らない」がこの形）。混ぜれば、たまたま
+   * 記録の無いマネージャーの分だけどこかの器の本数が水増しされる。捨てれば、
+   * 「マネージャーは全部どこかの器に居る」という誤った前提を実装が持つことになる。
+   */
+  unassigned: { managerId: string; status: JobStatus }[];
 }
 
 export type ManagerDecision = 'allow' | 'deny';
@@ -190,6 +251,29 @@ export interface ManagerPool {
    * 宣言しなければ出ない。宣言した上で、この口から読んで合流させている。
    */
   denials(managerId: string): ManagerDenial[];
+  /**
+   * 器（runner）の一覧と、器ごとに何本のマネージャーが走っているか（`runner_list`）。
+   *
+   * **`ToolContext` に `RunnerRegistry` を足すのではなく、ここへ置く。** 器ごとの
+   * 本数を数えるには名簿（`RunnerRegistry#entries`）とマネージャー台帳
+   * （`list()`）の**両方**が要り、`ManagerPool` はその両方を既に持っている
+   * 唯一の場所である——数え上げの持ち主を1か所にする（AGENTS.md「リポジトリの
+   * 約束」）。`ToolContext.managers` は既に配線済みなので、`clone.ts` の配線を
+   * 増やさずに済むという利点もある。`manager_stop` が `pool.abort()` を直接
+   * 呼ぶのと同じ作法である。
+   *
+   * **`resources()` は呼ばない。** この一覧のためにネットワーク往復を足さない
+   * ——ここで数える本数は台帳から見えている分であって、配置が使う本数
+   * （`RunnerPlacementResources.managers`）とは別物である（`RunnerOverview` の doc）。
+   *
+   * `fingerprints: true` を渡すと、開けている器について鍵とプロファイルの
+   * 指紋も添える。**既定では出さない**——クローンの判断で「要らないものを文脈へ
+   * 載せない」側に倒す。それでも出せる口を残すのは、north_star 禁止2 が
+   * 「制限は方針で表し、方針は設定で開けられなければならない」と要求している
+   * からである。人間は Web UI（`GET /runners`）で常に見られるので、クローンだけ
+   * 永久に見えない形にはしない。
+   */
+  runners(options?: { fingerprints?: boolean }): Promise<RunnerFleetOverview>;
   /** manager_id からセッションの生ログへ降りる（可観測性の最下段）。 */
   transcript(managerId: string): Promise<string | null>;
   /**
@@ -359,6 +443,7 @@ class Pool implements ManagerPool {
 
     const runner = await this.#runners.select({
       ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
+      ...(input.runnerId === undefined ? {} : { runnerId: input.runnerId }),
     });
     // **選んだ相手に繋がっていることを確かめてから起こす。** ここを best-effort に
     // すると、受け口の開いていない runner でマネージャーが走り出し、報告も許可確認も
@@ -536,6 +621,60 @@ class Pool implements ManagerPool {
     const denied = this.#records.get(managerId)?.denied;
     if (denied === undefined) return [];
     return denied.entries().map(([tool, count]) => ({ tool, count }));
+  }
+
+  async runners(options: { fingerprints?: boolean } = {}): Promise<RunnerFleetOverview> {
+    // `list()` が台帳とプロセス内の像を合流させ、`#ensureConnected` も済ませる。
+    const managers = await this.list();
+    const entries = this.#runners.entries();
+
+    // **`runnerId` が無い分は、どの器にも混ぜず別枠へ。** 0 に畳むと「記録が無い
+    // マネージャーは存在しない」と読める（AGENTS.md「取れない軸に0の行を作らない」）。
+    const byRunner = new Map<string, { managerId: string; status: JobStatus }[]>();
+    const unassigned: { managerId: string; status: JobStatus }[] = [];
+    for (const manager of managers) {
+      const item = { managerId: manager.managerId, status: manager.status };
+      if (manager.runnerId === undefined) {
+        unassigned.push(item);
+        continue;
+      }
+      const bucket = byRunner.get(manager.runnerId);
+      if (bucket) bucket.push(item);
+      else byRunner.set(manager.runnerId, [item]);
+    }
+
+    // 指紋は明示的に頼まれたときだけ聞きに行く（開けている器にしか聞けない）。
+    const open = options.fingerprints
+      ? new Map((await this.#runners.list().catch(() => [])).map((runner) => [runner.runnerId, runner]))
+      : undefined;
+
+    const runners = await Promise.all(
+      entries.map(async (entry) => {
+        const client = entry.runnerId === undefined ? undefined : open?.get(entry.runnerId);
+        const [credentials, profile] =
+          client === undefined
+            ? [undefined, undefined]
+            : await Promise.all([
+                client.credentials().catch(() => undefined),
+                client.profile().catch(() => undefined),
+              ]);
+
+        const overview: RunnerOverview = {
+          label: entry.label,
+          state: entry.state,
+          since: entry.since,
+          ...(entry.error === undefined ? {} : { error: entry.error }),
+          ...(entry.runnerId === undefined ? {} : { runnerId: entry.runnerId }),
+          ...(entry.workspacePath === undefined ? {} : { workspacePath: entry.workspacePath }),
+          managers: entry.runnerId === undefined ? [] : (byRunner.get(entry.runnerId) ?? []),
+          ...(credentials === undefined ? {} : { credentials }),
+          ...(profile === undefined ? {} : { profile }),
+        };
+        return overview;
+      }),
+    );
+
+    return { runners, unassigned };
   }
 
   async transcript(managerId: string): Promise<string | null> {
