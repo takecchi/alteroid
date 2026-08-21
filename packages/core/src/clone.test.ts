@@ -3427,6 +3427,72 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
 
     await s.clone.stop();
   });
+
+  /**
+   * **非対称の解消。** `manager.ts` の `case 'usage'` の `catch` は台帳の
+   * 記録が失敗すると `exchange with=manager` を日誌へ書くが、クローン層の
+   * `#recordUsage` は `noteDroppedRecord` で stderr にしか跡を残していな
+   * かった。台帳の記録が落ちたクローンのターンは、日誌に `turn_usage` も
+   * `exchange` も1行も残らなかった（`schema.ts` の `turn_usage` の doc
+   * 「行が無い理由は3つある」の2番）。ここでは `#recordUsage` の `catch` が
+   * `#journal` を1回だけ呼び直すようになったことを見る（新しい仕組みは
+   * 作っていない — `#journal` が既に持つ「best-effort・stderr フォール
+   * バック・throw しない」の契約に乗るだけである）。
+   */
+  it('台帳へ積めなければ、日誌に exchange with=self が1件残る（非対称の解消）', async () => {
+    const stores = createMemoryStores();
+    stores.usage.record = () => Promise.reject(new Error('台帳が書けない'));
+
+    const s = setup(undefined, stores, {
+      modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
+    });
+
+    s.clone.post(humanMessage('やあ'));
+    // 台帳が落ちてもターンは正常に畳まれる（既存の振る舞いを壊していない）。
+    await waitForDone(s.events);
+
+    const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as {
+      with: string;
+      role: string;
+      text: string;
+    }[];
+    const dropped = exchanges.find(
+      (entry) => entry.with === 'self' && entry.text.includes('消費を台帳へ記録できなかった'),
+    );
+    expect(dropped).toBeDefined();
+    // マネージャー層（`manager.ts` の同じ catch）と文言を揃えてある。
+    expect(dropped?.text).toContain('消費を台帳へ記録できなかった（この分は集計に出ない）');
+    // クローン層には複数マネージャーのような区別が無い代わりに、呼び出し
+    // 文脈を区別する軸である `site` をタグとして前置する。
+    expect(dropped?.text).toContain('site=session');
+
+    await s.clone.stop();
+  });
+
+  it('台帳の記録も日誌への追記も両方失敗しても、throw が外へ出ずターンが畳まれる', async () => {
+    const stores = createMemoryStores();
+    stores.usage.record = () => Promise.reject(new Error('台帳が書けない'));
+    stores.journal.append = () => Promise.reject(new Error('日誌も書けない'));
+
+    const s = setup(undefined, stores, {
+      modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
+    });
+
+    const stderr = await captureStderr(async () => {
+      s.clone.post(humanMessage('やあ'));
+      // done が来る＝ターンが完走している（`#journal` の内側の catch へ
+      // 吸収され、`#recordUsage` の外へ例外が漏れていない）。
+      await waitForDone(s.events);
+    });
+
+    // 台帳の失敗そのものを名指しする跡は stderr に残る。
+    expect(stderr.join('')).toContain('利用状況の台帳');
+    // 日誌への追記そのものも失敗したので、`#journal` 自身のフォールバックで
+    // もう1行 stderr に残る（`noteDroppedRecord('日誌', ...)`）。
+    expect(stderr.join('')).toContain('日誌を記録できませんでした');
+
+    await s.clone.stop();
+  });
 });
 
 /**
