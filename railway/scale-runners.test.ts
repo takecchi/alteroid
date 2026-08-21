@@ -283,6 +283,47 @@ describe('もう3台あるとき（回し直し）', () => {
   });
 });
 
+describe('置いた宛先の変数参照が解決されなかったとき', () => {
+  // **置いたのは `${{…}}` の参照で、解決するのは Railway である。** Service 名に
+  // ハイフンが入る（`runner-2`）ので、解決される保証は我々の側に無い。解決されなければ
+  // デーモンはその文字列をホスト名として引きに行き、名簿は繋がらない相手へ永久に挑み
+  // 続ける（回数では諦めない）。**症状は「増やしたのに委譲が来ない」という沈黙**なので、
+  // 置いた側が検算しないと、器のログを追う作業になる
+  const attached = [
+    ...EXISTING,
+    { id: 'id-runner-2', name: 'runner-2', source: { repo: 'takecchi/alteroid', image: null } },
+    { id: 'id-runner-3', name: 'runner-3', source: { repo: 'takecchi/alteroid', image: null } },
+  ];
+  // 読み返しても `${{` が残っている（Railway が解決していない）状態
+  const unresolved = {
+    ALTEROID_RUNNER_URLS: [
+      'http://${{runner.RAILWAY_PRIVATE_DOMAIN}}:4518',
+      'http://${{runner-2.RAILWAY_PRIVATE_DOMAIN}}:4518',
+      'http://${{runner-3.RAILWAY_PRIVATE_DOMAIN}}:4518',
+    ].join(','),
+  };
+
+  let r: Run;
+  beforeAll(() => {
+    r = run({ total: 3, services: attached, appVars: unresolved, allowFailure: true });
+  });
+
+  it('非0で終わり、app を上げ直さない（届かない宛先で器を入れ替えない）', () => {
+    expect(r.exitCode).not.toBe(0);
+    expect(r.calls.some((c) => c.includes('redeploy'))).toBe(false);
+  });
+
+  it('直し方（解決済みのホスト名を直に置く）を出す', () => {
+    expect(r.stderr).toContain('解決されていない');
+    expect(r.stderr).toContain('RAILWAY_PRIVATE_DOMAIN');
+  });
+
+  it('未解決の値を「もう教えてある」と読まない', () => {
+    // 台数だけ数えると3つに見えるので、ここが緩むと**壊れた状態で 0 を返す**
+    expect(r.calls.some((c) => c.includes('VariableCollectionUpsert'))).toBe(true);
+  });
+});
+
 describe('--dry-run', () => {
   it('何も作らず、何をするかだけ出す', () => {
     const r = run({ total: 3, args: ['--dry-run'] });

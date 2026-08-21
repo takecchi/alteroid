@@ -140,9 +140,7 @@ EOF
   else
     # 一覧が読めない（リンクしていない等）。**黙って1台にしない**
     RUNNER_SERVICES=("$RUNNER_SERVICE")
-    printf '    %s!%s Service の一覧が読めないので %s だけを見る\n' \
-      "$C_YELLOW" "$C_RESET" "$RUNNER_SERVICE"
-    WARNED=$((WARNED + 1))
+    warn "Service の一覧が読めないので ${RUNNER_SERVICE} だけを見る（他の台は確かめていない）"
   fi
 fi
 

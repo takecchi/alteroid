@@ -388,7 +388,11 @@ if node -e '
     .filter((s) => s.length > 0);
   const enough = current.length === total;
   const mentioned = names.every((n) => current.some((url) => url.includes(`${n}.`)));
-  process.exit(enough && mentioned ? 0 : 1);
+  // **未解決の参照を「教えてある」と読まない。** `railway variable list` は `${{…}}` を
+  // 展開して返すので、ここに `${{` が残っているなら Railway が解決できていない
+  // （＝デーモンはその文字列をホスト名として引きに行き、永久に繋がらない）
+  const unresolved = current.some((url) => url.includes("${{"));
+  process.exit(enough && mentioned && !unresolved ? 0 : 1);
 ' -- "$APP_VARS" "$TOTAL" "${NEW_NAMES[@]:-}" 2>/dev/null; then
   ok "$APP_SERVICE は既に ${TOTAL} 台を宛先にしている（触らない＝上げ直さない）"
   step 'できた（変えるものが無かった）'
@@ -397,6 +401,34 @@ fi
 
 put_variables "$APP_ID" ALTEROID_RUNNER_URLS "$RUNNER_URLS"
 ok "ALTEROID_RUNNER_URLS=$RUNNER_URLS"
+
+# **置いたら検算する。** 置いたのは `${{…}}` の参照で、解決するのは Railway である。
+# Service 名にハイフンが入る（`runner-2`）ので、**参照が解決される保証は我々の側に無い**。
+# 解決されなければデーモンはその文字列をホスト名として引きに行き、名簿は繋がらない
+# 相手へ永久に挑み続ける（回数では諦めない）。**症状は「増やしたのに委譲が来ない」
+# という沈黙**なので、ここで見ないと器のログを追う作業になる。
+#
+# 実測（2026-08-21）: `runner-2` / `runner-3` のハイフン入りの参照は解決された。
+# **それでもこの検算を置いてある** — 通ったのは「たまたま踏まなかった」側であって、
+# 仕組みで保証されたのではない（Railway の解決規則は我々が決めていない）。
+APP_VARS_AFTER="$(railway variable list --service "$APP_SERVICE" --json 2>/dev/null || true)"
+resolved="$(json_get "$APP_VARS_AFTER" 'd.ALTEROID_RUNNER_URLS || ""')"
+case "$resolved" in
+  '')
+    # 読めないだけなので止めない。**確かめられなかったことは黙らない**
+    warn '置いた宛先を読み返せなかった（解決されたかは確かめていない）'
+    info "  railway variable list --service $APP_SERVICE --json で ALTEROID_RUNNER_URLS を見る"
+    ;;
+  *'${{'*)
+    die "置いた宛先の変数参照が解決されていない: ${resolved}
+    Railway が \${{<Service名>.RAILWAY_PRIVATE_DOMAIN}} を解決できていない（Service 名の形か、名前の食い違い）。
+    このままだとデーモンはこの文字列をホスト名として引きに行き、名簿は永久に繋がらない。
+    解決済みのホスト名を直に置くこと（各 runner の RAILWAY_PRIVATE_DOMAIN の値）:
+      railway variable list --service ${RUNNER_SERVICE}-2 --json | node -e '…RAILWAY_PRIVATE_DOMAIN…'
+      railway variable set ALTEROID_RUNNER_URLS=http://…:$RUNNER_PORT,… --service $APP_SERVICE"
+    ;;
+  *) ok "宛先は解決されている: $resolved" ;;
+esac
 
 # 置いただけでは走っているデーモンに届かない（`skipDeploys: true` で置いている）。
 # **届かないまま「増えた」と名乗らない**
