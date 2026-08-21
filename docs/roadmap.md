@@ -114,7 +114,7 @@
 
 - [x] runner の登録・heartbeat・生存判定
 - [x] 新規マネージャーの runner 配置（CPU・メモリ・稼働セッション等、**実行環境の資源**を材料にする。固定の `maxManagers` のような人工上限は置かない）
-- [ ] `manager_id → runner_id` に基づく sticky routing
+- [ ] `manager_id → runner_id` に基づく sticky routing — **機構は実装済みで、足りないのはテストである。** `packages/core/src/manager.ts:1084-1097` の `#runnerOf` が保存済みの `runnerId` を `RunnerRegistry#get` で解決し、`runnerId` が未定義のときだけ先頭の runner へ落ちる（**割り当て先を無視するフォールバックはしない**。見つからなければ `null` を返し、`send` / `abort` / `transcript` / `restore` はどれも別の runner へ回さない）。**それでもチェックを付けていないのは、2台以上を同時に登録した状態で `manager_send` が割り当て先へ届くことを確かめるテストが無いからである**（受け入れ基準2 の字義。実在する `manager.test.ts` の「別の runner のジョブには手を出さない」は 1台しか登録していないので、`get()` が必ず `null` になる経路を通っている。`createRunnerRegistry([...])` を走査した範囲では、2台を同時に生かすテストは1本も無い）。あわせて `Registry#get` は `runnerId` の**線形一致**なので、**同じ `runner_id` を名乗る2台が並ぶと先に見つかった方を返す**（#106 の申し送り。これを片側だけで判定できるようにするのが下の fencing である）
 - [ ] 二重実行を止める fencing（貸し出し期限 lease）。**引き取りと移送の可否を判定できるのはこれが揃ってからである** — 「落ちた」は観測の欠落であって停止の証明ではないので、もう動いていないことを片側だけで言える材料が要る
 - [ ] runner 障害時の session 再開と workspace 復旧
 - [ ] workspace locator の運用選択（runner-volume / 共有 FS / Git 再構築）
