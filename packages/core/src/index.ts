@@ -202,6 +202,8 @@ export {
   type ManagerStartInput,
   type ManagerStopActor,
   type ManagerSummary,
+  type RunnerFleetOverview,
+  type RunnerOverview,
 } from './manager.js';
 /**
  * manager-runner 側（SDK を隔離して走らせる層）と、その境界。

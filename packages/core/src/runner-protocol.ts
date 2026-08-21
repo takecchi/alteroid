@@ -871,8 +871,28 @@ export interface RunnerRegistry {
    * （`/workspace`）を名乗り、実体だけが別のボリュームなので、パスの一致では
    * どの器のものか区別が付かない。**区別が付かないまま突き合わせる実装を入れると、
    * 効いていない照合を「効いている」と読める形で残すことになる。**
+   *
+   * **`runnerId` は指名（クローンが置き先を選ぶ口）として読む。** `cwd` とは扱いが
+   * 違う——こちらは実装（`Registry#select`）が実際に読み、資源による自動配置
+   * （`#place` / `chooseByResources`）を通さずにその器へ置く。**これは配置の指名で
+   * あって、本数の制限ではない。** 名指しされた器が開けていて使えるかを確かめる
+   * だけで、「同時に何本まで」という上限をここで作らない（north_star 禁止2。
+   * このファイル冒頭の `runnerExecutionResourcesSchema` が `capacity` という語を
+   * 避けた理由・上の「`select` に人工的な上限を入れないこと」と同じ論法である）。
+   *
+   * 指名したときの失敗も3種類あり、**どれでも自動配置へは落とさない**（落とすと、
+   * クローンの判断が見えないまま自動配置に覆される）。
+   *
+   * - 名簿のどの器の `runnerId` とも一致しない（ただし `runnerId` は開けてから
+   *   しか分からないので、まだ一度も開けていない器があるときは「分からないだけ
+   *   かもしれない」と言う——「名簿に無い」と断定しない）
+   * - 一致する器はあるが `connected` ではない（state と直近の失敗を添えて言う）
+   * - 一致する器が複数開けている（`Registry#get` は線形一致で先に見つかった方を
+   *   返す実装なので、指名しても片方に固定できない。roadmap M5 PR4（fencing）待ちの
+   *   既知のギャップが、指名を足したことで「クローンの判断が黙って別の器へ向く」形で
+   *   表に出る——`docs/roadmap.md` の申し送りそのもの）
    */
-  select(input: { cwd?: string }): Promise<RunnerClient>;
+  select(input: { cwd?: string; runnerId?: string }): Promise<RunnerClient>;
   /**
    * 名簿に載せる。**開き終わるのを待たずに載る。**
    *
@@ -1190,18 +1210,25 @@ class Registry implements RunnerRegistry {
   }
 
   /**
-   * **引数を受け取らないのは意図である。** `RunnerRegistry#select` は `{ cwd? }` を
-   * 渡せる形で宣言してあり、`ManagerPool#start` は実際に渡している（`manager.ts`）。
-   * ここで受け取っていないので、**その `cwd` はこの実装に届いていない。**
+   * **`cwd` は今も読まない。`runnerId` は読む。** `RunnerRegistry#select` は
+   * `{ cwd?; runnerId? }` を渡せる形で宣言してあり、`ManagerPool#start` は `cwd` を
+   * 実際に渡している（`manager.ts`）。だが下の仮引数の分解には `runnerId` しか
+   * 含めていないので、**`cwd` はこの実装に届いていない。**
    *
-   * 引数だけ受けて捨てる形にしないのは、受けてあると「読んでいるが効かなかった」に
-   * 見え、届いていないこと自体が消えるからである。仮引数が無ければ、呼び出し側から
-   * 辿った者がここで必ず気づく。
+   * `cwd` を引数だけ受けて捨てる形にしないのは、受けてあると「読んでいるが効かな
+   * かった」に見え、届いていないこと自体が消えるからである。仮引数を作らなければ、
+   * 呼び出し側から辿った者がここで必ず気づく。`cwd` が材料にできるようになるのは
+   * roadmap M5 の「workspace locator の運用選択」の後である（宣言側の注意書きに
+   * 理由を書いた）。
    *
-   * 材料にできるようになるのは roadmap M5 の「workspace locator の運用選択」の後である
-   * （宣言側の注意書きに理由を書いた）。
+   * **`runnerId` は指名として読む。** 名指しされた器が開けていて使えるなら、点数
+   * 計算（`#place`）を通さずそこへ置く。**これは配置の指名であって、本数の制限では
+   * ない**（north_star 禁止2。宣言側の doc と同じ論法）。失敗の3種類とその文言は
+   * `#selectByName` に持たせてある——どの失敗でも自動配置へは落とさない。
    */
-  async select(): Promise<RunnerClient> {
+  async select({ runnerId }: { cwd?: string; runnerId?: string } = {}): Promise<RunnerClient> {
+    if (runnerId !== undefined) return this.#selectByName(runnerId);
+
     const until = Date.now() + this.#selectWaitMs;
     for (;;) {
       if (this.#stopped) throw new Error('名簿が停止している');
@@ -1241,6 +1268,80 @@ class Registry implements RunnerRegistry {
       const opened = await this.#waitForOpen(remaining);
       if (opened === null) throw new Error(this.#notConnectedMessage());
     }
+  }
+
+  /**
+   * 指名（`runnerId`）で置き先を選ぶ（クローンが器を選ぶ口）。
+   *
+   * **これは配置の指名であって、本数の制限ではない。** 名指しされた器が使えるかを
+   * 確かめるだけで、「同時に何本まで」という上限をここで作らない（north_star
+   * 禁止2。`select` 宣言側の doc・`runnerExecutionResourcesSchema` が `capacity`
+   * という語を避けた理由と同じ論法）。
+   *
+   * **待たない。** 資源が無いときの `select` はごく短い猶予（`#selectWaitMs`）だけ
+   * 待つが、名前の解決は「いつか開けば分かる」という性質のものではなく、待っても
+   * 名乗っていない器の正体は変わらない。呼んだ側（クローン）が「少し置いて
+   * 投げ直す」を選べるように、状態をそのまま返す。
+   *
+   * 失敗は3種類あり、**どれでも自動配置（`#place`）へは絶対に落とさない。** 落とすと
+   * クローンが指名した判断が見えないまま自動配置に上書きされる——「指名したのに
+   * 別の器で走った」という、観測されない不一致を作ることになる。
+   *
+   * - 名簿のどの器の `runnerId` とも一致しない。ただし `runnerId` は**開けてから
+   *   しか分からない**ので、まだ一度も開けていない器（`unusable` 以外で
+   *   `client === null` の分）が残っているなら、「無い」と断定せず「まだ分からない
+   *   だけかもしれない」と言う
+   * - 一致する器はあるが `state !== 'connected'`（`lost` 等）。state と直近の失敗を
+   *   添えて言う
+   * - 一致する器が複数開けている。**`Registry#get` は `#entries` を線形一致で
+   *   走査し先に見つかった方を返す実装なので、指名しても片方に固定できない**
+   *   （`docs/roadmap.md` M5 の申し送り、`get()` の doc に同じ注意がある）。
+   *   fencing（roadmap M5 PR4）が無いいまは、これを「一意でない」として拒むのが
+   *   誤った器を黙って選ぶよりましである
+   */
+  #selectByName(runnerId: string): RunnerClient {
+    const matches = [...this.#entries.values()].filter(
+      (entry) => entry.client?.runnerId === runnerId,
+    );
+
+    if (matches.length > 1) {
+      throw new Error(
+        `runnerId=${runnerId} を名乗る器が ${matches.length} 台開けている（名前が一意でない）。` +
+          'Registry#get は線形一致で先に見つかった方を返す実装なので、指名しても片方には' +
+          '固定できない（roadmap M5 PR4 の fencing 待ちの既知のギャップ）: ' +
+          matches.map((entry) => `${entry.source.label}(${entry.state})`).join(' / '),
+      );
+    }
+
+    const match = matches[0];
+    if (match === undefined) {
+      // **まだ開けていない器（`client === null`）が残っているかを見る。** `unusable`
+      // は挑み直さないと決めた器なので、これ以上分かるようにはならない——除外する。
+      const stillUnknown = [...this.#entries.values()].some(
+        (entry) => entry.client === null && entry.state !== 'unusable',
+      );
+      throw new Error(
+        `runnerId=${runnerId} という名前は名簿のどの器の runnerId とも一致しない。` +
+          (stillUnknown
+            ? 'ただし、まだ一度も開けていないので runnerId が分からない器が残っている' +
+              '（開けば一致するかもしれない、「無い」とは断定できない）: '
+            : '登録されている器はすべて開き終わっており、それでも一致しなかった: ') +
+          this.#describeEntries(),
+      );
+    }
+
+    if (match.state !== 'connected') {
+      throw new Error(
+        `runnerId=${runnerId}（${match.source.label}）は名簿にあるが使えない` +
+          `（state: ${match.state}${match.error === undefined ? '' : ` / ${match.error}`}）。` +
+          '他の器へは自動で落とさない——指名は指名のまま失敗する。',
+      );
+    }
+
+    const client = match.client;
+    // 上のフィルタ（`entry.client?.runnerId === runnerId`）を通った時点で non-null。
+    if (client === null) throw new Error(`runnerId=${runnerId} の内部整合性エラー`);
+    return client;
   }
 
   /**

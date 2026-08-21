@@ -17,6 +17,7 @@ import {
   WITHHELD_ENV_KEYS,
   createManagerPool,
   type ManagerPool,
+  type RunnerFleetOverview,
 } from './manager.js';
 import {
   MANAGER_MODEL_ENV_KEY,
@@ -31,8 +32,12 @@ import {
   createRunnerRegistry,
   RunnerHttpError,
   type RunnerClient,
+  type RunnerCredentialFingerprint,
   type RunnerEvent,
   type RunnerManagerState,
+  type RunnerPlacementResources,
+  type RunnerProfileFingerprint,
+  type RunnerProfileResult,
   type RunnerResumeCommand,
 } from './runner-protocol.js';
 import type { InboxEvent, Job, JobStatus, JournalEntry } from './schema.js';
@@ -3750,5 +3755,288 @@ describe('#records の寿命（終端で外れる）', () => {
     expect(result.detail).toContain('待っていない');
 
     await s.pool.stop();
+  });
+});
+
+/**
+ * runner の指名（`ManagerStartInput.runnerId`）と一覧（`ManagerPool.runners()`）。
+ *
+ * roadmap の依頼「コンテナがいくつあって、どこで何をいくつ動かしているかを
+ * クローンが把握できるようにする」＋「manager を立てるときにどちらのコンテナで
+ * 作業するかをクローンの判断で選べるようにする」の、`ManagerPool` 層での固定。
+ *
+ * SDK は握らない——`Pool.start()` は `runner.start(command)` を呼ぶだけで完結する
+ * ので、`RunnerClient` を直接実装した軽い偽物で足りる（`runner-placement.test.ts`
+ * と同じ作法）。
+ */
+class FakePoolRunner implements RunnerClient {
+  readonly runnerId: string;
+  readonly workspacePath = '/work/project';
+  report: RunnerPlacementResources | undefined;
+  started: string[] = [];
+  /** 呼ばれた回数。**`resources()` は呼ばれないことを確かめるために数える。** */
+  resourcesCalls = 0;
+  credentialsCalls = 0;
+  profileCalls = 0;
+  fakeCredentials: RunnerCredentialFingerprint[] = [];
+  fakeProfile: RunnerProfileFingerprint | undefined;
+
+  constructor(runnerId: string, report?: RunnerPlacementResources) {
+    this.runnerId = runnerId;
+    this.report = report;
+  }
+
+  async resources(): Promise<RunnerPlacementResources | undefined> {
+    this.resourcesCalls += 1;
+    return this.report;
+  }
+  async connect(): Promise<void> {}
+  async start(command: { managerId: string }): Promise<void> {
+    this.started.push(command.managerId);
+  }
+  async resume(): Promise<void> {}
+  async send(): Promise<void> {}
+  async answer(): Promise<boolean> {
+    return false;
+  }
+  async stop(): Promise<void> {}
+  async list(): Promise<RunnerManagerState[]> {
+    return [];
+  }
+  async transcript(): Promise<string | null> {
+    return null;
+  }
+  async credentials(): Promise<RunnerCredentialFingerprint[]> {
+    this.credentialsCalls += 1;
+    return this.fakeCredentials;
+  }
+  async setCredentials(): Promise<RunnerCredentialFingerprint[]> {
+    return [];
+  }
+  async profile(): Promise<RunnerProfileFingerprint | undefined> {
+    this.profileCalls += 1;
+    return this.fakeProfile;
+  }
+  async setProfile(): Promise<RunnerProfileResult> {
+    return { ok: true };
+  }
+  async close(): Promise<void> {}
+}
+
+describe('runner の指名（Pool.start の runnerId）', () => {
+  it('runnerId を指名すると、その runner が起こされる（自動配置の点数計算を通していない）', async () => {
+    // 点数だけを見れば roomy が勝つ構図——それでも tight を名指ししたら tight に
+    // 置かれることを確かめる（自動配置の点数計算を通していない証拠）。
+    const roomy = new FakePoolRunner('runner-roomy', {
+      memory: { limitBytes: 32_000_000_000, usedBytes: 1_000_000_000, source: 'cgroup' },
+      managers: 0,
+    });
+    const tight = new FakePoolRunner('runner-tight', {
+      memory: { limitBytes: 32_000_000_000, usedBytes: 30_000_000_000, source: 'cgroup' },
+      managers: 4,
+    });
+    const stores = createMemoryStores();
+    const registry = createRunnerRegistry([roomy, tight]);
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    const summary = await pool.start({ request: '指名した器で頼む', runnerId: 'runner-tight' });
+
+    // **ここで見るのは「指名が効いたか」だけ。** 返り値の runnerId が実際の選択と
+    // 一致するかは別の保証（次の describe）なので、ここでは混ぜない。
+    expect(tight.started).toEqual([summary.managerId]);
+    expect(roomy.started).toEqual([]);
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  it('指名しなくても、資源で選ばれた runner が起こされる（自動配置は変えていない）', async () => {
+    const busy = new FakePoolRunner('runner-busy', { managers: 9 });
+    const idle = new FakePoolRunner('runner-idle', { managers: 0 });
+    const stores = createMemoryStores();
+    const registry = createRunnerRegistry([busy, idle]);
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    await pool.start({ request: '自動配置に任せる' });
+
+    expect(idle.started).toHaveLength(1);
+    expect(busy.started).toEqual([]);
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  /**
+   * **返ってくる `runnerId` は、実際に `start()` を受け取った器と一致する。**
+   *
+   * 期待値を固定文字列にしないのが要点——「指名が正しく効いたか」
+   * （上のテスト）とは別の保証であることを、判定そのものの作り方で切り離す。
+   * ここで見たいのは「実際に走った器と、名乗る値が食い違っていないか」だけ
+   * なので、期待値も実測（`.started` にどちらが積まれたか）から作る。これで
+   * 「入力をそのまま書き戻す」「常に決め打ちの名前を返す」のどちらの変異でも
+   * 実際に走った器と食い違えば落ちる。
+   */
+  it('指名の有無によらず、返ってくる runnerId は実際に start() を受け取った器と一致する', async () => {
+    const busy = new FakePoolRunner('runner-busy', { managers: 9 });
+    const idle = new FakePoolRunner('runner-idle', { managers: 0 });
+    const stores = createMemoryStores();
+    const registry = createRunnerRegistry([busy, idle]);
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    const summary = await pool.start({ request: '自動配置に任せる' });
+
+    const actual = [busy, idle].find((runner) => runner.started.includes(summary.managerId));
+    expect(actual).toBeDefined();
+    expect(summary.runnerId).toBe(actual?.runnerId);
+
+    await pool.stop();
+    await registry.stop();
+  });
+});
+
+describe('runner の一覧（ManagerPool.runners）', () => {
+  it('器ごとの本数を返す（デーモンの台帳から見た数）', async () => {
+    // **台帳へ直接3本を仕込む。** `pool.start({ runnerId })`（指名）を使って本数の
+    // 内訳を作ると、この歯が指名の正しさ（別の保証）と結合してしまう——指名側の
+    // 変異でこのテストまで巻き添えで落ち、どちらの歯が壊れたか区別できなくなる。
+    // 数え方だけを見るために、台帳（`Job.runnerId`）を直に置く。
+    const a = new FakePoolRunner('runner-a', { managers: 0 });
+    const b = new FakePoolRunner('runner-b', { managers: 0 });
+    const stores = createMemoryStores();
+    const at = new Date().toISOString();
+    for (const [id, runnerId] of [
+      ['mgr-1', 'runner-a'],
+      ['mgr-2', 'runner-a'],
+      ['mgr-3', 'runner-b'],
+    ] as const) {
+      await stores.jobs.putJob({
+        id,
+        managerId: id,
+        createdAt: at,
+        updatedAt: at,
+        status: 'running',
+        summary: id,
+        request: id,
+        cwd: '/work/project',
+        runnerId,
+      });
+    }
+    const registry = createRunnerRegistry([a, b]);
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    const overview: RunnerFleetOverview = await pool.runners();
+
+    const byLabel = new Map(overview.runners.map((r) => [r.label, r]));
+    expect(byLabel.get('runner-a')?.managers).toHaveLength(2);
+    expect(byLabel.get('runner-b')?.managers).toHaveLength(1);
+    expect(overview.unassigned).toEqual([]);
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  it('runnerId の無いマネージャーを、どの器にも混ぜず unassigned 別枠へ出す', async () => {
+    const stores = createMemoryStores();
+    // **`runnerId` を書かない古いジョブを台帳に直接置く。** `manager_id → runner_id`
+    // を記録する前の世代を模す（`Job.runnerId` は optional）。
+    const at = new Date().toISOString();
+    await stores.jobs.putJob({
+      id: 'mgr-legacy',
+      managerId: 'mgr-legacy',
+      createdAt: at,
+      updatedAt: at,
+      status: 'done',
+      summary: '記録の無い古い仕事',
+      request: '記録の無い古い仕事',
+      cwd: '/work/project',
+    });
+    const only = new FakePoolRunner('runner-only', { managers: 0 });
+    const registry = createRunnerRegistry([only]);
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    const overview = await pool.runners();
+
+    // **0 に畳まれていない。** `runner-only` の内訳には現れず、別枠に1件として出る。
+    expect(overview.runners.find((r) => r.label === 'runner-only')?.managers).toEqual([]);
+    expect(overview.unassigned).toEqual([{ managerId: 'mgr-legacy', status: 'done' }]);
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  it('state は5値のまま渡す（connected へ畳まない）', async () => {
+    // まだ開けていない（開けなかった）1台は `unreachable`。`connected` へ畳んで
+    // いれば、クローンは「使える」と誤読する。
+    const registry = createRunnerRegistry([], { retryBaseMs: 5, retryMaxMs: 5 });
+    await registry.register({
+      label: 'http://runner:later',
+      open: () => Promise.reject(new Error('fetch failed')),
+    });
+    const stores = createMemoryStores();
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    const overview = await pool.runners();
+
+    expect(overview.runners).toMatchObject([
+      { label: 'http://runner:later', state: 'unreachable' },
+    ]);
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  it('resources() は呼ばない（この一覧のために配置の往復を足さない）', async () => {
+    const a = new FakePoolRunner('runner-a', { managers: 0 });
+    const stores = createMemoryStores();
+    const registry = createRunnerRegistry([a]);
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    await pool.runners();
+    await pool.runners({ fingerprints: true });
+
+    expect(a.resourcesCalls).toBe(0);
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  it('fingerprints を渡さなければ credentials()/profile() を呼ばず、指紋を載せない', async () => {
+    const a = new FakePoolRunner('runner-a');
+    a.fakeCredentials = [
+      { name: 'GITHUB_TOKEN', sha256: 'deadbeef0000', updatedAt: '2026-01-01T00:00:00.000Z' },
+    ];
+    a.fakeProfile = { sha256: 'cafef00dbabe', bytes: 3, updatedAt: '2026-01-01T00:00:00.000Z' };
+    const stores = createMemoryStores();
+    const registry = createRunnerRegistry([a]);
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    const overview = await pool.runners();
+
+    expect(a.credentialsCalls).toBe(0);
+    expect(a.profileCalls).toBe(0);
+    expect(overview.runners[0]?.credentials).toBeUndefined();
+    expect(overview.runners[0]?.profile).toBeUndefined();
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  it('fingerprints: true を渡すと、開いている器の鍵とプロファイルの指紋を添える', async () => {
+    const a = new FakePoolRunner('runner-a');
+    a.fakeCredentials = [
+      { name: 'GITHUB_TOKEN', sha256: 'deadbeef0000', updatedAt: '2026-01-01T00:00:00.000Z' },
+    ];
+    a.fakeProfile = { sha256: 'cafef00dbabe', bytes: 3, updatedAt: '2026-01-01T00:00:00.000Z' };
+    const stores = createMemoryStores();
+    const registry = createRunnerRegistry([a]);
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    const overview = await pool.runners({ fingerprints: true });
+
+    expect(overview.runners[0]?.credentials).toEqual(a.fakeCredentials);
+    expect(overview.runners[0]?.profile).toEqual(a.fakeProfile);
+
+    await pool.stop();
+    await registry.stop();
   });
 });
