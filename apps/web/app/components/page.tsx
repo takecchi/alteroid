@@ -2,6 +2,15 @@ import type { ReactNode } from 'react';
 
 import { cn } from '~/lib/cn';
 
+/**
+ * 画面の枠（見出しの帯＋スクロールする本文）。
+ *
+ * **`description` は画面の見出しに添える固定の一文である。** 可変長の本文
+ * （依頼の全文・報告・ログ）をここへ渡さないこと — header は `shrink-0` なので、
+ * 渡した文字数のぶんだけ本文の領域が縦に潰れる。実際に `manager-detail` が
+ * `manager.request` をそのまま渡していて、長い依頼では状態カードが画面に入らな
+ * かった。**本文は `children` 側へ置けば、伸びるのはスクロールできる側になる。**
+ */
 export function Page({
   title,
   description,
@@ -25,7 +34,15 @@ export function Page({
       <header className="flex shrink-0 items-start justify-between gap-4 border-b border-border px-4 py-4 md:px-6">
         <div className="min-w-0">
           <h1 className="text-base font-semibold">{title}</h1>
-          {description !== undefined && <p className="mt-0.5 text-xs text-muted">{description}</p>}
+          {/*
+            **上限は歯止めであって、置き場を認めるものではない**（真上の doc）。
+            それでも長いものが渡ったときに本文を全部押し出さないよう、伸びる先を
+            この中のスクロールへ閉じ込める。**文字は1つも捨てない** — `line-clamp`
+            で切ると、header に収まっているように見えたまま読めない部分ができる。
+          */}
+          {description !== undefined && (
+            <p className="mt-0.5 max-h-16 overflow-y-auto text-xs text-muted">{description}</p>
+          )}
         </div>
         {action !== undefined && <div className="shrink-0">{action}</div>}
       </header>
