@@ -41,6 +41,7 @@ import { createJournalBus } from './journal-bus.js';
 import {
   createHttpRunner,
   describeRunnerUnknown,
+  managerIdOfRunnerPath,
   RunnerHttpError,
   type RunnerUnknownReport,
 } from './runner-client.js';
@@ -72,6 +73,7 @@ export { openStorage, DATABASE_URL_ENV, type Storage } from './storage.js';
 export {
   createHttpRunner,
   describeRunnerUnknown,
+  managerIdOfRunnerPath,
   RUNNER_CALL_DEADLINE_MS,
   RunnerHttpError,
   RunnerUnknownError,
@@ -292,10 +294,21 @@ export async function main(): Promise<void> {
    * `external_event` にするのは、これが**デーモンから見た外側の観測**だからである
    * （マネージャーとのやり取りではない）。マネージャーの id は文面に載る。
    *
+   * **載せるのはマネージャー1本を指す不明だけである。** 器の生死や設定の押し込みの
+   * 不明は既に別の経路が持っており（名簿の生存判定・`GET /runners`・`Pool.abort` の
+   * 「止まったかは未確認」）、そこを日誌へも流すと同じ契約が2つになる。**加えて、
+   * 黙って死んだ器へ挑み直すたびに1行増える** — 名簿の再挑戦は上限を持たない
+   * （持たせない）ので、`journal_read` の窓が同じ行で埋まり、本物の記録が押し出される。
+   * 残らないわけではない: 日誌へ載せないぶんは stderr（`daemon.log`）に出る。
+   *
    * **記録の失敗でデーモンを止めない。** 落ちたときだけ stderr に出す — 日誌が
    * 書けなかったことまで黙って消えると、「不明」が二重に消える。
    */
   const reportRunnerUnknown = (report: RunnerUnknownReport): void => {
+    if (managerIdOfRunnerPath(report.path) === undefined) {
+      process.stderr.write(`alteroidd: ${describeRunnerUnknown(report)}\n`);
+      return;
+    }
     void stores.journal
       .append({ type: 'external_event', source: 'runner', summary: describeRunnerUnknown(report) })
       .catch((error: unknown) => {

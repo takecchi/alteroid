@@ -94,6 +94,28 @@ export interface HttpRunnerOptions {
 }
 
 /**
+ * 期限切れの宛先がマネージャー1本を指しているか（指しているならその id）。
+ *
+ * **日誌へ載せるかどうかの分かれ目である。** マネージャー宛の操作（`send` /
+ * `stop` / `answer` / `resume` / `transcript`）の不明は、クローンの委譲そのものの
+ * 話なので日誌へ残す。器の生死や設定の押し込み（`/health` / `/credentials` /
+ * `/profile` / `GET /managers`）は**既に別の経路が持っている** — 名簿の生存判定と
+ * `GET /runners`、`Pool.abort` の `sessionGone === undefined`（「止まったかは未確認」）
+ * である。そこを日誌へも流すと**同じ契約が2つになる**うえ、黙って死んだ器へ挑み
+ * 直すたびに1行増えて、`journal_read` の窓から本物の記録を押し出す。
+ */
+export function managerIdOfRunnerPath(path: string): string | undefined {
+  const match = /^\/managers\/([^/?]+)/.exec(path);
+  if (match?.[1] === undefined) return undefined;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    // 壊れた符号化でも宛先の判定だけはできる（素のまま返す）
+    return match[1];
+  }
+}
+
+/**
  * 「不明」を日誌の1行にする。**この行を読む人はこの PR を読んでいない。**
  *
  * だから**言えること／言えないことを行の中に書く。** 期限切れは「失敗した」でも
@@ -105,17 +127,21 @@ export interface HttpRunnerOptions {
  * 日誌を辿った人は永久に不明のままだと読む。
  */
 export function describeRunnerUnknown(report: RunnerUnknownReport): string {
+  const managerId = managerIdOfRunnerPath(report.path);
+  // 委譲1本の話なら id を前置する。日誌の他の行（`manager.ts` の `#journal`）と
+  // 同じ形にしておくと、マネージャーの記録を追う grep が1本で済む。
+  const head = managerId === undefined ? '' : `[${managerId}] `;
   const where = `${report.method} ${report.path}`;
   const waited = `${String(report.waitedMs)}ms`;
   if (report.phase === 'late') {
     return report.ok === true
-      ? `runner の ${where} が、期限（${waited}）を過ぎてから成功で返った。` +
+      ? `${head}runner の ${where} が、期限（${waited}）を過ぎてから成功で返った。` +
           '**不明は解けた**（あの操作は届いていて、応答だけが遅れていた）。'
-      : `runner の ${where} が、期限（${waited}）を過ぎてから失敗で返った: ${String(report.error)}。` +
+      : `${head}runner の ${where} が、期限（${waited}）を過ぎてから失敗で返った: ${String(report.error)}。` +
           '**不明は解けた**（届いたかどうかはこの失敗の中身で決まる）。';
   }
   return (
-    `runner の ${where} が ${waited} 以内に応答を返さなかった。**言えるのはそれだけである** — ` +
+    `${head}runner の ${where} が ${waited} 以内に応答を返さなかった。**言えるのはそれだけである** — ` +
     '届いたかどうかは分かっていない。失敗とは限らないので同じ操作を送り直すと二重に実行され、' +
     'runner が死んだとも限らないので別の runner へ引き取らせると同じマネージャーが2台で走る。' +
     '待つのをやめただけで、runner 側の実行は止めていない（遅れて返ってきたらこの日誌に続きが載る）。'

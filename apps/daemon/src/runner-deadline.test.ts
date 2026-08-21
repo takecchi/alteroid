@@ -2,7 +2,12 @@ import { PROFILE_EVAL_TIMEOUT_MS } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
 import { RUNNER_CALL_DEADLINE_MS, RunnerUnknownError, settleWithinDeadline } from './deadline.js';
-import { createHttpRunner, describeRunnerUnknown, RunnerHttpError } from './runner-client.js';
+import {
+  createHttpRunner,
+  describeRunnerUnknown,
+  managerIdOfRunnerPath,
+  RunnerHttpError,
+} from './runner-client.js';
 import type { RunnerUnknownReport } from './runner-client.js';
 
 /**
@@ -329,5 +334,44 @@ describe('日誌へ残る文面', () => {
     });
 
     expect(line).toContain('不明は解けた');
+  });
+});
+
+describe('日誌へ載せる宛先の切り分け', () => {
+  /**
+   * **マネージャー1本を指す不明だけを日誌へ載せる。**
+   *
+   * 器の生死は名簿と `GET /runners` が既に持っており、`stop` の確かめ損ねは
+   * `Pool.abort` の「止まったかは未確認」が既に持っている。そこを日誌へも流すと
+   * 同じ契約が2つになるうえ、**黙って死んだ器へ挑み直すたびに1行増える**
+   * （名簿の再挑戦は上限を持たない）ので、`journal_read` の窓が同じ行で埋まる。
+   */
+  it('マネージャー宛の経路は id を返す', () => {
+    expect(managerIdOfRunnerPath('/managers/mgr-1/messages')).toBe('mgr-1');
+    expect(managerIdOfRunnerPath('/managers/mgr-1/answers')).toBe('mgr-1');
+    expect(managerIdOfRunnerPath('/managers/mgr-1/resume')).toBe('mgr-1');
+    expect(managerIdOfRunnerPath('/managers/mgr-1/transcript')).toBe('mgr-1');
+    expect(managerIdOfRunnerPath('/managers/mgr-1')).toBe('mgr-1');
+    // 符号化された id も戻す（`encodeURIComponent` で組み立てている）
+    expect(managerIdOfRunnerPath('/managers/mgr%2F1/messages')).toBe('mgr/1');
+  });
+
+  it('器や設定の経路は id を返さない（＝日誌へ載せない側）', () => {
+    expect(managerIdOfRunnerPath('/managers')).toBeUndefined();
+    expect(managerIdOfRunnerPath('/health')).toBeUndefined();
+    expect(managerIdOfRunnerPath('/credentials')).toBeUndefined();
+    expect(managerIdOfRunnerPath('/profile')).toBeUndefined();
+    expect(managerIdOfRunnerPath('/events')).toBeUndefined();
+  });
+
+  /** 日誌の他の行（`manager.ts` の `#journal`）と同じ形にして、grep を1本で済ませる。 */
+  it('マネージャー宛の文面は id を前置する', () => {
+    const line = describeRunnerUnknown({
+      method: 'POST',
+      path: '/managers/mgr-4/messages',
+      waitedMs: 60_000,
+      phase: 'expired',
+    });
+    expect(line.startsWith('[mgr-4] ')).toBe(true);
   });
 });
