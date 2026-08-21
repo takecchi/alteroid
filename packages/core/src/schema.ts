@@ -195,7 +195,30 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     id: z.string(),
     at: isoDateTime,
     slug: memorySlugSchema,
-    /** 蒸留・人間の直接編集・クローンの書き込みのどれか */
+    /**
+     * 蒸留・人間の直接編集・クローンの書き込みのどれか。
+     *
+     * - **`'distill'`** — 蒸留のターンが書いた。**本セッションの蒸留ターン
+     *   （`conversation_end` / `shutdown`）と `pre_compact` のサイドクエリの
+     *   両方を含む**（`clone.ts` の `#toolContext` / `#distillFromTranscript`
+     *   の `memoryCause`）。
+     * - **`'clone'`** — **本セッションのクローンが書いた**（蒸留のターンでは
+     *   ない、人間の発言などに応じた通常のターン）。**この配線が入る前は
+     *   「クローン層が書いた」の意味で蒸留も含んでいた。** `optional` にした
+     *   `action` と同じ形の理由で、**既存のエントリは書き換えていない** —
+     *   だからこの配線より前の `cause: 'clone'` エントリは、蒸留か通常の
+     *   ターンかの区別を持たない。
+     * - **`'human'`** — 人間が API / CLI から直接書いた。書いているのは
+     *   `app.ts` の `PUT` / `DELETE /memory/:slug` の2箇所だけである。
+     *
+     * **この `cause: 'distill'` は台帳（`usage.ts`）の `site: 'distill'` と
+     * 同じ軸ではない。** `site` は `query()` 呼び出しごとの軸で、
+     * `usageSiteSchema` の doc が明言しているとおり `pre_compact` の
+     * サイドクエリだけを指す（本セッションの蒸留ターンの消費は `site:
+     * 'session'` に合算されて分離できない）。`cause` は本セッションの蒸留
+     * ターンも含むので、**この2つを突き合わせて数えても一致しない**
+     * （片方が壊れているわけではない）。
+     */
     cause: z.enum(['distill', 'clone', 'human']),
     /**
      * 「書いた」か「消した」かの機械可読な区別。

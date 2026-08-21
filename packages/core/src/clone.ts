@@ -343,6 +343,16 @@ interface Turn {
    */
   failure: string | null;
   resolve: () => void;
+  /**
+   * このターンが蒸留のターンか、通常のターンか。`#runTurn` の `kind` 引数を
+   * そのまま載せる。
+   *
+   * **`#toolContext()` の `memoryCause` がこれを読む。** 道具（`memory_write` /
+   * `memory_append` / `memory_delete`）が書く日誌の `cause` を、いま走っている
+   * ターンの種類から導くためのもの — 呼び手（モデル）に申告させない
+   * （書き忘れ・書き間違いがそのまま計器の値になるのを避ける）。
+   */
+  kind: 'normal' | 'distill';
 }
 
 /**
@@ -1833,6 +1843,7 @@ class Clone implements CloneHost {
         rejected: null,
         failure: null,
         resolve,
+        kind,
       };
       this.#turn = turn;
     });
@@ -2295,12 +2306,42 @@ class Clone implements CloneHost {
   }
 
   /**
-   * クローンの道具（インプロセス MCP）へ渡す context。本セッションと蒸留の
-   * サイドクエリの両方から呼ぶ（`#distillFromTranscript`）。
+   * クローンの道具（インプロセス MCP）へ渡す context。**本セッション
+   * （`#sessionOptions`）だけが呼ぶ。**
+   *
+   * **蒸留のサイドクエリ（`#distillFromTranscript`）はここを経由しない。**
+   * 同じ形の context を、自分のインラインのオブジェクトリテラルとして
+   * 別に組んでいる。**これは意図した設計であって、直し忘れではない** —
+   * 統合すると振る舞いが変わってしまう点が2つある:
+   *
+   * - **`emit`** — 本セッションは実物の `this.#emit` を渡すが、サイドクエリは
+   *   `() => undefined`（捨てる）。サイドクエリは `pre_compact` フックから走り、
+   *   人間の会話に紐づいていない。しかも**本セッションのターンと同時に
+   *   走りうる**ので、実物の `emit` を渡すとサイドクエリの出来事が人間の
+   *   chat へ漏れる。
+   * - **`managers`** — サイドクエリには渡さない。`ToolContext.managers` の
+   *   doc が既に明言している通り、「省略できるのは蒸留用の短命セッションの
+   *   ためで、そこではマネージャーを起こさない（記憶へ移すだけの内部
+   *   ターン）」。
+   *
+   * **だから2つを1本の関数へ寄せない。** 寄せると上の2点の意図的な違いを
+   * 表現できなくなる（`emit` を実物にしてしまう／`managers` を渡してしまう）。
+   *
+   * **この結果、`ToolContext` に新しい口を1つ足すときは、ここと
+   * `#distillFromTranscript` のインラインのリテラルの2か所へ手で足す必要が
+   * ある。** これがまさに「片方へ渡し忘れる」穴の形である — `runtime` が
+   * まさにそれで、片方に足し忘れるとその場面だけ `self_status` が「取れない」
+   * を返す。`memoryCause` にも同じ注意を書いてある
+   * （`ToolContext.memoryCause` の doc）。
    *
    * **`runtime` は本セッションの private フィールドを読むだけの薄い closure。**
    * サイドクエリに渡しても、そちらの init やツール実行は反映されない
    * （`CloneRuntimeFacts.sessionId` のコメントの理由）。
+   *
+   * **`memoryCause` も同じ形の薄い closure。** ここが読むのは `this.#turn?.kind`
+   * だけで、`#distillFromTranscript` 側は自分のインライン context に
+   * `memoryCause: () => 'distill'` を固定で持たせている（あちらは常に
+   * 蒸留のターンなので、`#turn` を読む必要が無い）。
    */
   #toolContext(): ToolContext {
     return {
@@ -2310,6 +2351,7 @@ class Clone implements CloneHost {
       ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
       ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
       runtime: () => this.#runtimeFacts(),
+      memoryCause: () => (this.#turn?.kind === 'distill' ? 'distill' : 'clone'),
     };
   }
 
@@ -2576,6 +2618,11 @@ class Clone implements CloneHost {
           ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
           ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
           runtime: () => this.#runtimeFacts(),
+          // このサイドクエリ自体が常に蒸留のターンなので、`#turn` を読む必要は
+          // 無い（`#toolContext()` の doc）。**ここを削ると `memoryCause` は
+          // 既定の `'clone'` に落ち、蒸留が書いた記憶なのに `cause: 'clone'`
+          // と名乗る**（`ToolContext.memoryCause` の doc の「渡し忘れ」）。
+          memoryCause: () => 'distill',
         }),
         systemPrompt: buildCloneSystemPrompt({
           memory,
