@@ -1328,9 +1328,21 @@ function swappableRunner(runnerId = 'runner-primary') {
       session?.waiting.push({ requestId, summary });
       emit?.({ type: 'ask', managerId, requestId, kind: 'permission', summary });
     },
-    /** マネージャーの1ターンが終わって報告が上がる。 */
-    report(managerId: string, text: string, status: JobStatus = 'done') {
-      emit?.({ type: 'report', managerId, text, status });
+    /**
+     * マネージャーの1ターンが終わって報告が上がる。
+     *
+     * `fields` は `contentless` / `failure` を差し込むための口
+     * （`runner-protocol.ts` の `report` イベントの doc）。**固定値のスタブに
+     * しない** — 渡さなければ両方省略される既存の振る舞いのままなので、他の
+     * テストの挙動は1つも変わらない。
+     */
+    report(
+      managerId: string,
+      text: string,
+      status: JobStatus = 'done',
+      fields: { contentless?: true; failure?: { code: string; via: string } } = {},
+    ) {
+      emit?.({ type: 'report', managerId, text, status, ...fields });
     },
     /** SDK が報告した消費の**累積**を降ろす（差分にするのはデーモン側）。 */
     usage(managerId: string, models: Record<string, UsageTotals>, sessionId?: string) {
@@ -3312,6 +3324,142 @@ describe('止めたマネージャーの後続イベント（R4）', () => {
         timeout: 2000,
       })
       .toBe('lost');
+
+    await s.pool.stop();
+  });
+});
+
+/**
+ * **中身の無い報告は、記録は残すがクローンのターンを起こさない。**
+ *
+ * `runner.ts` の `resultText()` / `reportText()` が「SDK の `result` にも
+ * `said`（そのターンで実際に喋った本文）にも文字が無かった」と確定させた
+ * ときだけ `report` イベントに `contentless: true` が立つ
+ * （`runner-protocol.ts` の doc）。`manager.ts` の `case 'report'` はこれを見て
+ * `#emit()`（クローンの受信箱へ積む経路）だけをスキップし、台帳・日誌は
+ * これまでどおり書く。捨てると「黙って失われる」を作るので、捨てない。
+ *
+ * **「クローンを起こさない」と「記録に残る」は別々の歯にしてある。** 1本目
+ * （inbox が増えない）は `manager.ts` が `contentless` を無視する変異で
+ * 落ちるが、台帳・日誌を消す変異では落ちない。2本目（台帳・日誌に残る）は
+ * その逆で、1本目の変異では落ちない。
+ *
+ * **文言では判定していない。** `contentless` は構造化された印であって
+ * `event.text === '（報告なし）'` という文字列一致ではない（`sdk-failure.ts`
+ * の「検知は構造化された印だけで行う」と同じ形）。3本目がこれを固定する —
+ * マネージャーが `say()` で本当に「（報告なし）」と喋った回は `said` が
+ * 非空になるので `contentless` が立たず、文言が同じでもクローンへ届く。
+ */
+describe('中身の無い報告は、記録は残すがクローンを起こさない', () => {
+  /** 台帳の1件を直接読む（`runner-failure.test.ts` の `jobOf` と同じ理由 —一覧は写し忘れうる）。 */
+  async function jobOf(s: Setup, managerId: string) {
+    return (await s.stores.jobs.listJobs()).find((job) => job.id === managerId);
+  }
+
+  /**
+   * 日誌に載ったことを「`#onEvent` の処理が（`#emit` の分岐まで）終わった」の
+   * 合図にする。R4 のテスト（`journalHas`）と同じ理由 — `#onEvent` は
+   * fire-and-forget（`void`）で走るので、発火直後は書き込みがまだ終わって
+   * いないことがある。日誌への書き込みは `#emit` を呼ぶかどうかの分岐の
+   * 直前なので、これが見えた時点で分岐は（同期的に）通り終えている。
+   */
+  async function journalHasText(s: Setup, needle: string): Promise<void> {
+    await vi.waitFor(async () => {
+      const entries = await s.stores.journal.list({ types: ['exchange'] });
+      if (!entries.some((entry) => JSON.stringify(entry).includes(needle))) {
+        throw new Error('日誌にまだ載っていない');
+      }
+    });
+  }
+
+  it('本文が1文字も無い報告では、クローンの受信箱（inbox）が増えない', async () => {
+    const s = setup();
+    const started = await s.pool.start({ request: '調べて' });
+    const session = s.sessions[0] as FakeSession;
+    const before = s.inbox.length;
+
+    // `say()` を1度も呼ばない ＝ said は空。SDK の result も空文字列 ＝
+    // resultText() が「（報告なし）」を作り empty:true になる。
+    await session.report('');
+
+    // **完了の合図は `lastReport`（台帳）にする。日誌ではない。** ここは
+    // 「クローンを起こさない」だけを固定したいテストなので、待ち方そのものが
+    // `#journal` に依存すると、`#journal` を消す変異（次のテストが検出すべき
+    // もの）でこのテストまで一緒にタイムアウトで落ちてしまう —
+    // 「クローンを起こさない」と「記録に残る」を別々の歯にする、という要件に
+    // 反する。`record.job.lastReport` は `#journal` より前に書かれる
+    // （`manager.ts` の `case 'report'`）ので、これを待てば1と2の変異を
+    // 混同しない。
+    await vi.waitFor(async () => {
+      const job = await jobOf(s, started.managerId);
+      if (job?.lastReport !== '（報告なし）') throw new Error('台帳がまだ更新されていない');
+    });
+
+    expect(s.inbox.length).toBe(before);
+
+    await s.pool.stop();
+  });
+
+  it('同じ回は台帳（lastReport）と日誌には残っている', async () => {
+    const s = setup();
+    const started = await s.pool.start({ request: '調べて' });
+    const session = s.sessions[0] as FakeSession;
+
+    await session.report('');
+    await journalHasText(s, '（報告なし）');
+
+    const job = await jobOf(s, started.managerId);
+    expect(job?.lastReport).toBe('（報告なし）');
+
+    const entries = await s.stores.journal.list({ types: ['exchange'] });
+    expect(entries.some((entry) => JSON.stringify(entry).includes('（報告なし）'))).toBe(true);
+
+    await s.pool.stop();
+  });
+
+  it('マネージャーが本当に「（報告なし）」と報告した回は、文言が同じでもクローンへ届く', async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+    const session = s.sessions[0] as FakeSession;
+    const before = s.inbox.length;
+
+    // said（実際に喋った本文）に '（報告なし）' そのものが入る形を作る。
+    // 中身が無い場合とまったく同じ文字列が本文になるが、`said` が非空
+    // なので contentless は立たない。
+    await session.say('（報告なし）');
+    await session.report('（報告なし）');
+
+    const report = await vi.waitFor(() => {
+      const found = s.inbox.find(
+        (event) => event.type === 'manager_message' && event.kind === 'report',
+      );
+      if (!found) throw new Error('報告がまだ届いていない');
+      return found as { text: string };
+    });
+    expect(report.text).toContain('（報告なし）');
+    expect(s.inbox.length).toBe(before + 1);
+
+    await s.pool.stop();
+  });
+
+  it('中身のある報告はこれまでどおりクローンへ届く（回帰）', async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+    const session = s.sessions[0] as FakeSession;
+    const before = s.inbox.length;
+
+    await session.say('中身のある報告');
+    await session.report('中身のある報告');
+
+    const report = await vi.waitFor(() => {
+      const found = s.inbox.find(
+        (event) => event.type === 'manager_message' && event.kind === 'report',
+      );
+      if (!found) throw new Error('報告がまだ届いていない');
+      return found as { text: string };
+    });
+    expect(report.text).toContain('中身のある報告');
+    expect(s.inbox.length).toBe(before + 1);
 
     await s.pool.stop();
   });
