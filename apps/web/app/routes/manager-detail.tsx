@@ -17,6 +17,18 @@ export function clientLoader({ params }: Route.ClientLoaderArgs) {
   return { id: params.id };
 }
 
+/**
+ * header に添える一文。
+ *
+ * **ここに依頼の全文（`manager.request`）を渡さない。** `Page` の header は
+ * `shrink-0` なので、渡した文字数のぶんだけ header が縦に伸び、その下の本文
+ * （状態・返事待ち・最後の報告）が画面の外へ押し出される。実際に「本文が長いと
+ * header が大きく content が見えない」という報告が出た場所である。**他の画面の
+ * `description` はすべて固定の一文**で、可変長の本文が入っているのはここだけ
+ * だった。依頼そのものは本文側の `RequestCard` が全文を持つ。
+ */
+const PAGE_DESCRIPTION = 'この仕事1本の状態と、走行中に割り込む口。依頼の全文は下';
+
 export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
   const { id } = loaderData;
   const { data, error, isLoading } = useManager(id);
@@ -38,7 +50,7 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
           <span className="font-mono text-sm">{id}</span>
         </span>
       }
-      description={manager?.request}
+      description={PAGE_DESCRIPTION}
       action={
         manager !== undefined &&
         (manager.status === 'running' || manager.status === 'waiting_human') ? (
@@ -71,6 +83,8 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
         </Card>
       ) : (
         <div className="flex flex-col gap-4">
+          <RequestCard request={manager.request} />
+
           <Card>
             <CardHeader title="状態" />
             <dl className="grid grid-cols-[8rem_1fr] gap-y-1.5 px-4 py-3 text-sm">
@@ -179,6 +193,41 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
         </div>
       )}
     </Page>
+  );
+}
+
+/**
+ * この仕事へ渡した依頼の全文。
+ *
+ * **header ではなく本文に置く。** 以前はこれを `Page` の `description` へ渡して
+ * いた。header は `shrink-0`（`components/page.tsx`）なので、依頼が長いぶんだけ
+ * header が縦に伸び、スクロールできる本文の領域がそのぶん潰れる — 長い依頼では
+ * 状態カードすら画面に入らなくなっていた。**本文側に置けば、伸びるのは
+ * スクロールできる側になる。**
+ *
+ * **要約も切り詰めもしない。** 一覧（`managers.tsx`）とダッシュボードは
+ * `truncate` で1行に畳んでいるが、詳細まで降りてきた人間が読みに来るのは
+ * 「何を頼まれた仕事なのか」そのものである。長いときは**消さずにこのカードの
+ * 中でスクロールさせる** — 上限で切ると、下のカード（状態・返事待ち・最後の報告）を
+ * 押し出す側の問題に戻る。
+ *
+ * **改行はそのまま出す（`whitespace-pre-wrap`）。** 依頼は箇条書きや手順で書かれる
+ * ことが多く、潰すと読めない。Markdown として解釈はしない — ここに出したいのは
+ * クローンが渡した文字列そのものであって、その整形結果ではない。
+ */
+function RequestCard({ request }: { request: string }) {
+  return (
+    <Card className="min-w-0">
+      <CardHeader title="依頼" subtitle="この仕事を起こしたときに渡した指示（全文）" />
+      {/*
+        **`max-h` はここ（本文の側）に置く。** 依頼だけが長い場合に、この
+        カードの中をスクロールさせて他のカードを押し出さないための上限である。
+        文字は1つも捨てていない。
+      */}
+      <div className="max-h-72 min-w-0 overflow-y-auto px-4 py-3">
+        <p className="text-sm break-words whitespace-pre-wrap">{request}</p>
+      </div>
+    </Card>
   );
 }
 

@@ -129,6 +129,47 @@ function renderDetailWithMessages(
 }
 
 /**
+ * **依頼の全文は header ではなく本文に出る。**
+ *
+ * かつてこの画面は `manager.request` を `Page` の `description`（header）へ
+ * そのまま渡していた。header は `shrink-0`（`components/page.tsx`）なので、依頼が
+ * 長いぶんだけ header が縦に伸び、スクロールできる本文の領域が潰れる — 長い依頼
+ * では状態カードすら画面に入らず、人間から「header が大きくて content が見え
+ * ない」という報告が出た。
+ *
+ * **jsdom にはレイアウトが無いので「高さ」は測れない。** だから測るのは高さでは
+ * なく**どちらの側に置かれているか**である。header に入っていない・本文に全文が
+ * ある、の2つで、`description` へ戻す変異と本文で切り詰める変異の両方が落ちる。
+ */
+describe('依頼の全文は header ではなく本文に置く', () => {
+  const LONG = [
+    '依頼の1行目',
+    ...Array.from({ length: 40 }, (_, index) => `手順 ${index + 1}: ${'あ'.repeat(60)}`),
+  ].join('\n');
+
+  it('本文に全文があり、header には依頼が入っていない', async () => {
+    renderDetail({ ...BASE, request: LONG });
+
+    // 本文側に全文がある。**既定の normalizer は改行を潰すので通さない** —
+    // 潰すと「改行を捨てる変異」が見えなくなる。
+    const body = await screen.findByText(LONG, { normalizer: (text) => text });
+    // 1文字も捨てていない（`slice` で切り詰める変異はここで落ちる）。
+    expect(body.textContent).toBe(LONG);
+    // 置かれているのは本文側である。
+    expect(body.closest('header')).toBeNull();
+    // カードの見出しも出ている（何のカードなのかが分かる）。
+    expect(screen.getByText('依頼')).toBeTruthy();
+
+    const header = document.querySelector('header');
+    expect(header).not.toBeNull();
+    // `description={manager.request}` へ戻す変異は、ここで落ちる。
+    expect(header?.textContent ?? '').not.toContain('手順 40:');
+    // header 側の一文は残っている（依頼がどこにあるかを人間に渡す）。
+    expect(header?.textContent ?? '').toContain('依頼の全文は下');
+  });
+});
+
+/**
  * **一覧で `lost` を見た人間が、次に開くのがこの画面である。**
  *
  * 起こし直すかどうかを決めるのはここなのに、詳細だけが札しか出していなかった
