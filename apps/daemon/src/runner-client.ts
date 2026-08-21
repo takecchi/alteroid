@@ -14,6 +14,8 @@ import type {
 import { request as httpRequest } from 'node:http';
 import { Readable } from 'node:stream';
 
+import { RUNNER_CALL_DEADLINE_MS, RunnerUnknownError, settleWithinDeadline } from './deadline.js';
+
 import {
   RunnerHttpError,
   runnerCredentialFingerprintSchema,
@@ -28,6 +30,28 @@ import {
 // **失敗の種別は口の定義（`@alteroid/core`）が持つ。** この経路だけの都合にすると、
 // 同じ判断をインプロセスの runner 側で作り直すことになる。
 export { RunnerHttpError } from '@alteroid/core';
+export { RUNNER_CALL_DEADLINE_MS, RunnerUnknownError } from './deadline.js';
+
+/**
+ * 「期限内に応答が返らなかった」ことの報告。**日誌へ届けるためだけにある。**
+ *
+ * ここで分類を終わらせないこと。**この報告が言えるのは「返らなかった」だけ**で、
+ * 失敗も死亡も「届かなかった」も言えない（{@link RunnerUnknownError}）。
+ */
+export interface RunnerUnknownReport {
+  method: string;
+  path: string;
+  waitedMs: number;
+  /**
+   * `expired` = 期限が切れた（＝不明になった）。
+   * `late` = 不明と言ったあとで**遅れて応答が返ってきた**（＝不明が解けた）。
+   */
+  phase: 'expired' | 'late';
+  /** `late` のときだけ: 遅れて返ってきた応答が成功だったか。 */
+  ok?: boolean;
+  /** `late` で失敗だったときの中身。 */
+  error?: unknown;
+}
 
 /**
  * manager-runner への HTTP の口（roadmap M4）。
@@ -52,6 +76,76 @@ export interface HttpRunnerOptions {
   fetchFn?: typeof fetch;
   /** ストリームが切れたときに待つミリ秒。 */
   retryDelayMs?: number;
+  /**
+   * 制御面の応答を待つ期限（既定 {@link RUNNER_CALL_DEADLINE_MS}）。**主にテスト用。**
+   *
+   * 運用でここを縮めないこと。**期限は「返らない」を掴むためのもので、「遅い」を
+   * 打ち切るためのものではない**（`deadline.ts` の doc）。
+   */
+  deadlineMs?: number;
+  /**
+   * 期限が切れたこと（と、そのあと遅れて返ってきたこと）の受け口。
+   *
+   * **ここを繋がないと「不明」が誰にも届かない。** デーモンは日誌へ落とす
+   * （`index.ts`）。runner-client 自身は日誌を知らない — 誰に知らせるかを選ぶのは
+   * 上の層の仕事である。
+   */
+  onUnknown?: (report: RunnerUnknownReport) => void;
+}
+
+/**
+ * 期限切れの宛先がマネージャー1本を指しているか（指しているならその id）。
+ *
+ * **日誌へ載せるかどうかの分かれ目である。** マネージャー宛の操作（`send` /
+ * `stop` / `answer` / `resume` / `transcript`）の不明は、クローンの委譲そのものの
+ * 話なので日誌へ残す。器の生死や設定の押し込み（`/health` / `/credentials` /
+ * `/profile` / `GET /managers`）は**既に別の経路が持っている** — 名簿の生存判定と
+ * `GET /runners`、`Pool.abort` の `sessionGone === undefined`（「止まったかは未確認」）
+ * である。そこを日誌へも流すと**同じ契約が2つになる**うえ、黙って死んだ器へ挑み
+ * 直すたびに1行増えて、`journal_read` の窓から本物の記録を押し出す。
+ */
+export function managerIdOfRunnerPath(path: string): string | undefined {
+  const match = /^\/managers\/([^/?]+)/.exec(path);
+  if (match?.[1] === undefined) return undefined;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    // 壊れた符号化でも宛先の判定だけはできる（素のまま返す）
+    return match[1];
+  }
+}
+
+/**
+ * 「不明」を日誌の1行にする。**この行を読む人はこの PR を読んでいない。**
+ *
+ * だから**言えること／言えないことを行の中に書く。** 期限切れは「失敗した」でも
+ * 「runner が死んだ」でもないので、そう読めない文にしないと、読んだ側が勝手に
+ * 断定へ畳む（再送すれば二重に実行され、引き取らせれば同じマネージャーが2台で
+ * 走る）。
+ *
+ * **後から解けたことも同じ形で残す。** 「不明」だけが残って解決が残らないと、
+ * 日誌を辿った人は永久に不明のままだと読む。
+ */
+export function describeRunnerUnknown(report: RunnerUnknownReport): string {
+  const managerId = managerIdOfRunnerPath(report.path);
+  // 委譲1本の話なら id を前置する。日誌の他の行（`manager.ts` の `#journal`）と
+  // 同じ形にしておくと、マネージャーの記録を追う grep が1本で済む。
+  const head = managerId === undefined ? '' : `[${managerId}] `;
+  const where = `${report.method} ${report.path}`;
+  const waited = `${String(report.waitedMs)}ms`;
+  if (report.phase === 'late') {
+    return report.ok === true
+      ? `${head}runner の ${where} が、期限（${waited}）を過ぎてから成功で返った。` +
+          '**不明は解けた**（あの操作は届いていて、応答だけが遅れていた）。'
+      : `${head}runner の ${where} が、期限（${waited}）を過ぎてから失敗で返った: ${String(report.error)}。` +
+          '**不明は解けた**（届いたかどうかはこの失敗の中身で決まる）。';
+  }
+  return (
+    `${head}runner の ${where} が ${waited} 以内に応答を返さなかった。**言えるのはそれだけである** — ` +
+    '届いたかどうかは分かっていない。失敗とは限らないので同じ操作を送り直すと二重に実行され、' +
+    'runner が死んだとも限らないので別の runner へ引き取らせると同じマネージャーが2台で走る。' +
+    '待つのをやめただけで、runner 側の実行は止めていない（遅れて返ってきたらこの日誌に続きが載る）。'
+  );
 }
 
 /** `unix:/path/to.sock` を取り出す（無ければ TCP）。 */
@@ -94,6 +188,8 @@ class HttpRunner implements RunnerClient {
   readonly #token: string;
   readonly #fetch: typeof fetch;
   readonly #retryDelayMs: number;
+  readonly #deadlineMs: number;
+  readonly #onUnknown: ((report: RunnerUnknownReport) => void) | undefined;
   #controller: AbortController | null = null;
   #closed = false;
 
@@ -105,6 +201,8 @@ class HttpRunner implements RunnerClient {
     this.#token = options.token;
     this.#fetch = options.fetchFn ?? ((input, init) => this.#send(input, init));
     this.#retryDelayMs = options.retryDelayMs ?? 1000;
+    this.#deadlineMs = options.deadlineMs ?? RUNNER_CALL_DEADLINE_MS;
+    this.#onUnknown = options.onUnknown;
   }
 
   /**
@@ -262,8 +360,21 @@ class HttpRunner implements RunnerClient {
     }
   }
 
+  /**
+   * マネージャーを起こす。**この1つだけ期限を付けていない。**
+   *
+   * 付けると、期限切れ（＝不明）が呼ぶ側で**確定的な失敗**に化ける。
+   * `packages/core/src/manager.ts` の `Pool.start` は `runner.start()` が投げたら
+   * `#records.delete(managerId)` して投げ直す実装で、`#persist` はその後にあるから
+   * 台帳にも1行も残らない。`Pool.list()` は `#records` と台帳しか見ない（runner へは
+   * 訊かない）ので、**runner 側で走り出していても `manager_list` から消える** —
+   * 止める手も残らない。「黙って失われる」であり、無期限に待つより悪い。
+   *
+   * 直すには呼ぶ側（`packages/core`）が「不明」を運べる必要がある。ここに期限だけを
+   * 先に足すと、その日まで消える委譲が出る。**だから待つ方を選んでいる。**
+   */
   async start(command: RunnerStartCommand): Promise<void> {
-    await this.#call('POST', '/managers', command);
+    await this.#callWithoutDeadline('POST', '/managers', command);
   }
 
   async resume(command: RunnerResumeCommand): Promise<void> {
@@ -339,13 +450,19 @@ class HttpRunner implements RunnerClient {
     return parsed.success ? parsed.data : { ok: false, error: 'runner の応答を読めなかった' };
   }
 
+  /**
+   * 走行中セッションの生ログ。**取れなければ `null`**（呼ぶ側は退避済みへ降りる）。
+   *
+   * 期限切れもここでは `null` になる。**`null` は「無い」ではなく「取れなかった」**で、
+   * それはこの口が前からそう答えている（404 も接続断も `null` である）。期限切れが
+   * 潰れないよう、不明そのものは `onUnknown` から日誌へ出る。
+   */
   async transcript(managerId: string): Promise<string | null> {
     try {
-      const response = await this.#fetch(
-        `${this.#baseUrl}/managers/${encodeURIComponent(managerId)}/transcript`,
-        { headers: { authorization: `Bearer ${this.#token}` } },
+      const response = await this.#call(
+        'GET',
+        `/managers/${encodeURIComponent(managerId)}/transcript`,
       );
-      if (!response.ok) return null;
       return await response.text();
     } catch {
       return null;
@@ -362,7 +479,54 @@ class HttpRunner implements RunnerClient {
     this.#controller = null;
   }
 
+  /**
+   * 期限付きで叩く。**この経路を通る限り、応答を無期限に待つことは無い。**
+   *
+   * 期限が切れたら {@link RunnerUnknownError} を投げる。**投げるのは「返らなかった」
+   * であって「失敗した」ではない** — `RunnerHttpError` の系列にわざと乗せていない
+   * （あちらは status を持つ＝相手が答えた証拠である）。
+   *
+   * **相手は止めない。** ここで `AbortController` を作らないのは意図で、期限は
+   * 待つのをやめるためだけにある（`deadline.ts`）。だから投げた要求はそのまま走り、
+   * 遅れて返ってきたら `late` として報告する（本文は読み捨てて繋ぎを畳む）。
+   *
+   * **諦める回数の上限は持たない。** ここが決めるのは「いつ不明と言うか」だけで、
+   * 挑み直すかどうかは呼ぶ側（名簿・クローン）が決める。
+   */
   async #call(
+    method: string,
+    path: string,
+    body?: unknown,
+    signal?: AbortSignal,
+  ): Promise<Response> {
+    const waitedMs = this.#deadlineMs;
+    const settled = await settleWithinDeadline(
+      this.#callWithoutDeadline(method, path, body, signal),
+      waitedMs,
+      (late) => {
+        // 遅れて返ってきた本文は読み捨てる（読まずに放ると繋ぎが積み上がる）。
+        if (late.ok) void late.value.text().catch(() => '');
+        this.#onUnknown?.({
+          method,
+          path,
+          waitedMs,
+          phase: 'late',
+          ok: late.ok,
+          ...(late.ok ? {} : { error: late.error }),
+        });
+      },
+    );
+    if (settled.outcome === 'settled') return settled.value;
+    if (settled.outcome === 'failed') throw settled.error;
+    this.#onUnknown?.({ method, path, waitedMs, phase: 'expired' });
+    throw new RunnerUnknownError({ method, path, waitedMs });
+  }
+
+  /**
+   * 期限を付けずに叩く。**呼んでよいのは `start()` だけである**（その理由は
+   * `start()` の doc）。増やすときは「期限切れが呼ぶ側で何に化けるか」を先に見る。
+   */
+  async #callWithoutDeadline(
     method: string,
     path: string,
     body?: unknown,
