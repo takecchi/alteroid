@@ -26,14 +26,22 @@ afterEach(() => {
 });
 
 // framework mode の `loaderData` を手で与える（`chat.test.tsx` と同じやり方）。
+//
+// `reportId` は b69dca5 で `clientLoader` の戻りに増えた（ルートが
+// `reports/:date?` → `reports/:date?/:reportId?` になったのに追随）。
 const ReportsRoute = Reports as unknown as (props: {
-  loaderData: { date: string | undefined };
+  loaderData: { date: string | undefined; reportId: string | undefined };
 }) => React.ReactElement;
 
-function renderReports() {
+function renderReports(loaderData: { date?: string; reportId?: string } = {}) {
   const router = createMemoryRouter(
     [
-      { path: '/reports', Component: () => <ReportsRoute loaderData={{ date: undefined }} /> },
+      {
+        path: '/reports',
+        Component: () => (
+          <ReportsRoute loaderData={{ date: loaderData.date, reportId: loaderData.reportId }} />
+        ),
+      },
       // 印の行が出す `Link`（日誌・スケジュール）の行き先。描くだけで踏まない。
       { path: '/journal', Component: () => null },
       { path: '/schedule', Component: () => null },
@@ -159,6 +167,10 @@ describe('日報', () => {
 
     renderReports();
 
+    // b69dca5 で見出しが `report.date` 単体から `` `${report.date} ${formatTime(report.at)}` ``
+    // （`reportLabel()`）に変わった。この正規表現は部分一致なので当たり続ける
+    // （期待値は緩めていない — 実際に `2026-08-20 07:00` に対して一致することを
+    // このテストの実行そのもので確かめている）。
     const marked = await screen.findByRole('link', { name: /2026-08-20/ });
     expect(marked.textContent).toContain('⚠');
     // 書けた日には付けない（付けたら印が意味を失う）。
@@ -184,5 +196,90 @@ describe('日報', () => {
 
     expect(await screen.findByText('進捗があった。')).toBeTruthy();
     expect(screen.queryByText(/作れなかった/)).toBeNull();
+  });
+
+  /*
+    ここから3本、b69dca5（「日報の一覧を日時で1件ずつ並べ、選んだ1件だけを出す」）
+    が直した「同じ日に複数あると見分けが付かず、選んでも2件同時に開く」を
+    固定するテストである。
+
+    同じ日に2件できる経路は「起動時の遡り生成」（`schedule.ts` の
+    `missingDailyReportDates` → `clone.ts` の `#dailyReport`）で、前日ぶんの
+    日報が翌日に書かれる。それを再現するため、`date` は同じ '2026-08-20' で、
+    `at` は一方だけ翌日（`2026-08-21T…Z`）にしてある。`reportLabel()` が
+    `at` ではなく `date` を見出しの日の軸に取っていることは、この2件が両方
+    '2026-08-20' の見出しで出ることそのもので確かめられる（`formatDateTime(at)`
+    を使っていれば、遡り生成の側が `08/21` に化けて隣の日と区別できなくなる）。
+  */
+  const closeEntry = {
+    type: 'daily_report',
+    id: 'r-close',
+    at: '2026-08-20T22:00:00.000Z', // JST 07:00（翌日）＝ その日の締め
+    date: '2026-08-20',
+    body: '## 締めの見出し\n\n締め本文だけの目印。',
+  };
+  const catchupEntry = {
+    type: 'daily_report',
+    id: 'r-catchup',
+    at: '2026-08-21T00:30:00.000Z', // JST 09:30（翌日）＝ 起動時の遡り生成
+    date: '2026-08-20',
+    body: '## 遡り生成の見出し\n\n遡り生成本文だけの目印。',
+  };
+
+  function stubSameDayReports() {
+    // 一覧（limit 付きの `/reports`）も、その日の詳細（`/reports/2026-08-20`）も、
+    // 実物と同じくその日の全件を返す（本文側で1件だけに絞るのが今回の直しの要）。
+    const reports = [catchupEntry, closeEntry];
+    return stubFetch((url) => {
+      if (url.endsWith('/reports') || url.includes('/reports?')) return json({ reports });
+      if (url.includes('/reports/2026-08-20')) return json({ reports });
+      return undefined;
+    });
+  }
+
+  it('同じ日に2件あっても、一覧では時刻違いの別々の行として並ぶ', async () => {
+    stubSameDayReports();
+
+    renderReports();
+
+    // 見出しは「日付＋時刻」。日付だけなら2件とも `2026-08-20` で区別できない。
+    expect(await screen.findByRole('link', { name: '2026-08-20 09:30' })).toBeTruthy();
+    expect(await screen.findByRole('link', { name: '2026-08-20 07:00' })).toBeTruthy();
+  });
+
+  it('reportId で1件を指定すると、選択の見た目が付くリンクはちょうど1つになる', async () => {
+    stubSameDayReports();
+
+    renderReports({ date: '2026-08-20', reportId: 'r-close' });
+
+    // 両方の行が描かれるまで待つ（先に findAllByRole を打つと、fetch が
+    // 返る前の空の一覧で判定してしまいうる）。
+    await screen.findByRole('link', { name: '2026-08-20 09:30' });
+    const links = screen.getAllByRole('link');
+    const selected = links.filter(
+      (link) => link.className.includes('bg-surface-2') && link.className.includes('text-accent'),
+    );
+
+    // 前は `report.date === selected` で選んでいたので、同じ日の2件が両方
+    // 選択中になっていた（人間の申告そのもの）。いまは `id` で選ぶので1つだけ。
+    expect(selected).toHaveLength(1);
+    expect(selected[0]?.textContent).toContain('2026-08-20 07:00');
+  });
+
+  /**
+   * ⭐ この3本の中で最重要。「本文が1件だけ出る」ことは、選ばれた側が出る
+   * ことだけでは確かめられない — もう片方が画面から消えていることまで
+   * assert しないと、以前の「その日の全件を縦に並べる」実装でも通ってしまう。
+   */
+  it('本文にも選んだ1件だけが描かれ、同じ日のもう片方の本文は出ない', async () => {
+    stubSameDayReports();
+
+    renderReports({ date: '2026-08-20', reportId: 'r-close' });
+
+    expect(await screen.findByText('締め本文だけの目印。')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: '締めの見出し' })).toBeTruthy();
+    // **同じ日のもう片方は、データとしては取得しているが本文には描かれない。**
+    expect(screen.queryByText('遡り生成本文だけの目印。')).toBeNull();
+    expect(screen.queryByRole('heading', { name: '遡り生成の見出し' })).toBeNull();
   });
 });

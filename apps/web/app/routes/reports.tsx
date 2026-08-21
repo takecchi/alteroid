@@ -194,7 +194,9 @@ function ReportBody({ date, reportId }: { date: string; reportId: string | undef
   return (
     <Card className="min-w-0">
       <div className="border-b border-border px-4 py-3">
-        <h2 className="text-sm font-semibold">{report === undefined ? date : reportLabel(report)}</h2>
+        <h2 className="text-sm font-semibold">
+          {report === undefined ? date : reportLabel(report)}
+        </h2>
       </div>
       <ErrorNote error={error} className="m-4" />
       {isLoading ? (
