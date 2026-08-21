@@ -96,6 +96,11 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
   const { date, reportId } = loaderData;
   const list = useReports(60);
 
+  /*
+    **並べ直さない。** 並びはデーモンが決める（`apps/daemon/src/reports.ts` が
+    日付の新しい順・同じ日は書いた時刻の新しい順に返す）。ここで並べ直すと、
+    「最新の日報」が CLI・クローンとこの画面で食い違う。
+  */
   const reports = list.data?.reports ?? [];
   // 日付の指定が無ければ最新を出す。空の画面から始めない。
   const selectedDate = date ?? reports[0]?.date;
@@ -105,7 +110,10 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
     選ぶ単位は `id` である。
 
     指定が無いとき（`/reports` や `/reports/<日付>` を直に開いたとき）は、その日の
-    先頭を選ぶ — 一覧は新しい順なので「その日の最後に書かれたもの」になる。
+    先頭を選ぶ — 一覧は日付の新しい順・同じ日は書いた時刻の新しい順なので
+    「その日の最後に書かれたもの」になる（並びはデーモンが決める。
+    `apps/daemon/src/reports.ts`。**ここで並べ直さないこと** — 並べ直すと
+    「最新の日報」が CLI とここで食い違う）。
     `selectedDate` が一覧の窓（60件）の外なら見つからず `undefined` になるが、
     そのときは本文側が取得した中の先頭に落ちる。
   */
@@ -133,6 +141,11 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
                         **罫線は日付の変わり目にだけ引く。** 同じ日のものが1つの塊に
                         見えるので、時刻だけが違う行が並んでいることが形から分かる
                         （1日1件の日は今までと同じ見え方になる）。
+
+                        **これは「同じ日の行が隣り合っている」ことに乗っている。**
+                        並びが書いた順だった間は隣り合う保証が無く、遡り生成の日報が
+                        別の日付を挟んで離れると、同じ日に何本も罫線が引かれた。
+                        保証は `apps/daemon/src/reports.ts` が持つ（日付の新しい順）。
                       */
                       reports[index + 1]?.date !== report.date && 'border-b border-border',
                       report.id === selectedId && 'bg-surface-2 text-accent',

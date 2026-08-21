@@ -722,6 +722,33 @@ describe('HTTP API', () => {
     expect((await app.request('/reports/2026%2F08%2F10')).status).toBe(400);
   });
 
+  /**
+   * ⭐ 上の1本は「追記した順の逆」でも通る（08-11 → 08-12 の順に積んでいるので、
+   * 書いた順と日付順が一致している）。**実際に人間が見た壊れ方はここにある** —
+   * 起動時の遡り生成では前の日ぶんの日報が今日書かれるので、**最後に書かれた行が
+   * いちばん古い日付**になる。その状態で書いた順に返すと、一覧の先頭が古い日付に
+   * なる（「WebUI の日報の並び順が変」という申告そのもの）。
+   *
+   * 並びの規則そのものの検査は `reports.test.ts` にある。ここで見るのは
+   * **HTTP の口がその規則を通っていること**（`/reports` が日誌の並びを素通しして
+   * いないこと）だけである。
+   */
+  it('遡り生成で後から書かれた古い日付の日報を、一覧の先頭に出さない', async () => {
+    // 追記の順＝書いた順。日付の順とは逆にする（後追いが最後に走った状態）。
+    await stores.journal.append({ type: 'daily_report', date: '2026-08-21', body: '08-21' });
+    await stores.journal.append({ type: 'daily_report', date: '2026-08-19', body: '08-19' });
+
+    const list = await app.request('/reports?limit=7');
+    const body = (await list.json()) as { reports: { date: string }[] };
+    expect(body.reports.map((report) => report.date)).toEqual(['2026-08-21', '2026-08-19']);
+
+    // `limit=1` は「最新の日報」を出す口（ダッシュボードの1枚と CLI の `/report`）。
+    // 最後に書かれた行ではなく、日付がいちばん新しい日報でなければならない。
+    const latest = await app.request('/reports?limit=1');
+    const latestBody = (await latest.json()) as { reports: { date: string }[] };
+    expect(latestBody.reports.map((report) => report.date)).toEqual(['2026-08-21']);
+  });
+
   it('外部イベントを受けてクローンの受信箱へ積む（起点③）', async () => {
     const response = await app.request('/events', json({ source: 'ci', payload: { ok: false } }));
 
