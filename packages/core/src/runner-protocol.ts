@@ -292,6 +292,12 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
    *
    * **落とした先。** 「どの作業者だったか」は載せていない — 作業者ごとの
    * 実行は `tool_use` の日誌（`actor=worker:<id>:<agent>`）に全部ある。
+   *
+   * **各フィールドの doc にある「例:」は、対応する実在のテスト名
+   * （`runner-wakeup.test.ts` の `it(...)` の文言）を必ず伴わせる。** テストの
+   * 無い例は、実装が変わったときに黙って嘘になる（テストなら落ちる）。ここの
+   * `settled` の doc は一度、直したコードと矛盾する古い読み方を書いたまま
+   * レビューを通ってしまった箇所である（この PR 自身の履歴に残っている）。
    */
   z.object({
     type: z.literal('worker_wait'),
@@ -341,7 +347,8 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * **言っているのは「マネージャー自身の `PostToolUse` が発火しなかった」
      * ことだけである。** 「何も考えなかった」でも「何も出力しなかった」でも
      * ない — 本文だけ書いて終わったターン（`#said` へ積んだが道具は使わな
-     * かった回）もここに入る。
+     * かった回）もここに入る（例: `runner-wakeup.test.ts` の「本文だけを
+     * 話して道具を使わなかったターンも toolless に数える」）。
      */
     toolless: z.number().int().nonnegative(),
     /**
@@ -349,7 +356,9 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      *
      * **`tasks` 以下とは限らない。** 対応する `task_started` を観測していない
      * 通知（`#onTaskNotification` の `had === false` の経路。本来起きない想定
-     * だが防御的に数える）も含めているので、`tasks` より大きくなりうる。
+     * だが防御的に数える）も含めているので、`tasks` より大きくなりうる（例:
+     * `runner-wakeup.test.ts` の「対応する task_started が無い
+     * task_notification も notifications に数え、tasks を超えうる」）。
      */
     notifications: z.number().int().nonnegative(),
     /**
@@ -380,18 +389,25 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * 閉じる瞬間の `#openTasks.size === 0` をそのまま使う（呼び出し側は
      * 真偽値を渡さない）。
      *
-     * **`false` は「完了通知を受け切れなかった」と断定していない。** 「受け
-     * 切ったことをこのセッションが確認する前に区間が閉じた」も同じ `false`
-     * に入る（例: 全員から通知を受けた直後、次の `result` が来ないまま
-     * セッションが落ちた場合。この回は実際には受け切っているが、`result` を
-     * 待つ前に畳まれれば `#openTasks` を読む機会自体が来ない）。
+     * **`false` の意味: 区間が閉じた瞬間に、まだ完了通知を返していない委譲が
+     * 1件以上あった。** 経路は `#finish` / `stop` / 引き継ぎのどれか（例:
+     * `runner-wakeup.test.ts` の「task_started が2件で task_notification が
+     * 1件だけの状態でセッションが畳まれたら settled: false が上がる（区間が
+     * 開いたまま消えない）」）。
+     *
+     * **`false` は「通知が失われた」ことを意味しない。** 通知がまだ届いて
+     * いなかっただけかもしれないし、作業者は仕事を終えていて通知だけが
+     * 間に合わなかったのかもしれない。alteroid が観測したのは「閉じた時点
+     * では届いていなかった」ことだけである。
      *
      * **`true` でも `turns` が最後の1回を含まないことがある** — 最後の完了
      * 通知の後、`result` が来ないまま畳まれた場合である。この場合
      * `#openTasks` は空（＝ `settled: true`）だが、その回のターンの契機は
      * `byCause` に反映されない。`submits` との突き合わせで気づける形にして
      * ある（`turns` より `submits` が多ければ、`result` を伴わないまま
-     * 消費された発火があったことになる）。
+     * 消費された発火があったことになる。例: `runner-wakeup.test.ts` の
+     * 「全員から完了通知を受け切った直後に result なしで畳まれても settled:
+     * true が上がる」）。
      *
      * 数え漏れではなく、区間が閉じた瞬間に何を観測できたかという事実である。
      */

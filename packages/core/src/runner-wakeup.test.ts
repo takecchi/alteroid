@@ -343,6 +343,33 @@ describe('worker_wait — 委譲1区間ぶんの契機の集計', () => {
     expect(event.toolless).toBe(2);
   });
 
+  /**
+   * `toolless` の doc の「本文だけ書いて終わったターンもここに入る」を
+   * 固定する（`worker_wait` の doc 参照）。`say()` は `#toolsSinceResult` に
+   * 触らないので、道具を使わず本文だけ返したターンも toolless に数えるはず
+   * である。
+   */
+  it('本文だけを話して道具を使わなかったターンも toolless に数える', async () => {
+    const s = setup();
+    const session = await startPrimed(s.host, s.sessions);
+
+    await session.taskStarted('task-1');
+    await session.say('調べてみたが、まだ結論は出ていない');
+    await session.finish('本文だけ返した回');
+    await session.taskNotification('task-1');
+    await session.finish('完了通知の回');
+
+    const [event] = await vi.waitFor(() => {
+      const found = workerWaitEvents(s.events);
+      if (found.length === 0) throw new Error('worker_wait がまだ上がっていない');
+      return found;
+    });
+    expect(event).toBeDefined();
+    if (event === undefined) return;
+    expect(event.turns).toBe(2);
+    expect(event.toolless).toBe(2);
+  });
+
   it('task_started が2件で task_notification が1件だけの状態でセッションが畳まれたら settled: false が上がる（区間が開いたまま消えない）', async () => {
     const s = setup();
     const session = await startPrimed(s.host, s.sessions);
@@ -397,6 +424,35 @@ describe('worker_wait — 委譲1区間ぶんの契機の集計', () => {
     // 最後の通知を契機に回るはずだったターンの result が来ていないので、
     // turns にはまだ反映されていない（`settled: true` の doc に明記した特性）。
     expect(event.turns).toBe(0);
+  });
+
+  /**
+   * `notifications` の doc の「対応する `task_started` を観測していない
+   * 通知も含めているので、`tasks` より大きくなりうる」を固定する
+   * （`worker_wait` の doc 参照）。本来 SDK は不整合な `task_notification`
+   * を送らない想定だが、`#onTaskNotification` の防御的な経路（`had ===
+   * false`）を通ったものも同じ `#notificationsSinceResult` へ積む。
+   */
+  it('対応する task_started が無い task_notification も notifications に数え、tasks を超えうる', async () => {
+    const s = setup();
+    const session = await startPrimed(s.host, s.sessions);
+
+    await session.taskStarted('task-1');
+    await session.taskNotification('task-1'); // 正規の完了通知（tasks=1 を閉じる）
+    await session.taskNotification('ghost-task'); // 対応する task_started が無い（防御的な経路）
+    await session.finish('完了通知2件を契機に回った回');
+
+    const [event] = await vi.waitFor(() => {
+      const found = workerWaitEvents(s.events);
+      if (found.length === 0) throw new Error('worker_wait がまだ上がっていない');
+      return found;
+    });
+    expect(event).toBeDefined();
+    if (event === undefined) return;
+    expect(event.tasks).toBe(1);
+    expect(event.notifications).toBe(2);
+    expect(event.notifications).toBeGreaterThan(event.tasks);
+    expect(event.settled).toBe(true);
   });
 
   it('window が開いていないあいだの result は worker_wait を1件も生まない', async () => {
