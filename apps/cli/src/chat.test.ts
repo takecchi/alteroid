@@ -692,7 +692,7 @@ describe('chat の台帳コマンド', () => {
  */
 describe('chat の /answers（まとめて答える）', () => {
   function listedApprovals(ids: string[]): Listed {
-    return { approvals: ids, commitments: [] };
+    return { approvals: ids, commitments: [], conversations: [] };
   }
 
   it('複数件を1回の POST /approvals/answer にまとめて送る', async () => {
