@@ -23,6 +23,16 @@ const STATUS: Record<ManagerStatus, { tone: 'ok' | 'warn' | 'danger' | 'neutral'
     // なかった」ことだけで、成果の有無は見ていない（デーモンは PR もブランチも
     // 知らない）。落ちる直前にマージまで届いていた仕事がこの札を貼られている。
     lost: { tone: 'danger', label: 'セッションへ戻れず' },
+    // **`done`（待機中）と混ぜない。** `done` は自分から手を離しただけで話しかけ
+    // れば続くが、`stopped` は外から止められ、runner のセッション一覧から実際に
+    // 消えたことを確かめた終端である（`schema.ts` の `jobStatusSchema` の doc）。
+    // 「完了」と読ませないのは `done` と同じ理由。
+    //
+    // **「話しかけても続かない」ではない（2026-08-22 訂正）。** デーモンは自動では
+    // 起こし直さないが、`session_id` は残っているので、人間・クローンが明示的に
+    // 続きを送れば `lost` と同じく戻る（`schema.ts` の `jobStatusSchema` の doc）。
+    // ここの画面はその「デーモンが勝手には起こさない」側だけを表す。
+    stopped: { tone: 'neutral', label: '停止済み' },
   };
 
 export function ManagerStatusBadge({ status }: { status: ManagerStatus }) {

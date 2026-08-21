@@ -671,6 +671,16 @@ export type Commitment = z.infer<typeof commitmentSchema>;
  *   追加指示を送れる。その下で作業者が走っているかまでは見ていない
  * - `failed`: セッションが落ちた
  * - `lost`: **前のセッションへ戻れなかった。** 自動では挑み直さない
+ * - `stopped`: **明示的に止められ、runner のセッション一覧から消えたことを確かめた
+ *   終端。** ただし「話しかけても続かない」は誤りだった（2026-08-22 訂正）——
+ *   デーモンが**自動では**起こし直さないだけである（`restore()` / `#reattach()`
+ *   のホワイトリストは `running` / `waiting_human` のみで `stopped` を含まない。
+ *   `manager.ts`）。`abort()` は `job.sessionId` を消さないので、**人間・クローン
+ *   の明示的な `manager_send` なら続きへ戻せる**（`lost` と同じ扱い。`send()` が
+ *   `record.attached === false` を見て resume を投げ、戻れたら `status` を
+ *   `running` へ書き戻す）。ここを本当に「続かない」にすると、人間が止めた
+ *   Claude Code のセッションを `--resume` で戻せる能力を消すことになり、
+ *   `docs/north_star.md` の禁止2（追加制限禁止）に触れる
  *
  * 「終わったら片付ける」ためのものではない。人間が Claude Code の窓を開いたまま
  * にしておくのと同じで、`done` は死ではなく待機である。
@@ -690,8 +700,21 @@ export type Commitment = z.infer<typeof commitmentSchema>;
  * ことだけで、デーモンは PR もブランチも見に行かない（リポジトリの事情は
  * マネージャーの領域である）。落ちる直前にマージまで済ませていた仕事が `lost` に
  * なった例が実際にある。**起こし直すかどうかは、リモートを確かめてから決める。**
+ *
+ * **`stopped` を `done` と一緒にしない。** どちらも「セッションは生きているように
+ * 見えるかもしれない」状態だが、`done` は**自分から手を離しただけ**（待てば/話し
+ * かければ続く）で、`stopped` は**外から止められ、実際に runner から消えたことを
+ * 確かめた**終端である。ここを混ぜると、止めたはずのマネージャーが「待機中」と
+ * 見えて話しかけられる相手が残る（`manager.ts` の `abort()` の doc）。
  */
-export const jobStatusSchema = z.enum(['running', 'waiting_human', 'done', 'failed', 'lost']);
+export const jobStatusSchema = z.enum([
+  'running',
+  'waiting_human',
+  'done',
+  'failed',
+  'lost',
+  'stopped',
+]);
 
 export type JobStatus = z.infer<typeof jobStatusSchema>;
 

@@ -29,6 +29,14 @@ interface Harness {
   running: ManagerSummary[];
   /** 確認へ上がらず止められた道具（manager_id → 古い順）。 */
   denied: Map<string, ManagerDenial[]>;
+  /**
+   * `abort()` が返す outcome を差し替える（既定は `'stopped'`）。
+   *
+   * `manager_stop` の文言が outcome ごとに分かれることを見るためのもので、
+   * `'not_stopped'` / `'unknown'` のときは「本物と同じところまで動かす」
+   * （status を畳む・セッションを切る）を**しない**——それが outcome の意味である。
+   */
+  setAbortOutcome(outcome: 'stopped' | 'not_stopped' | 'unknown', sessionGone?: boolean): void;
   call(name: string, args: Record<string, unknown>): Promise<string>;
 }
 
@@ -40,6 +48,8 @@ function harness(runtime?: () => CloneRuntimeFacts): Harness {
   const aborted: { managerId: string; reason?: string }[] = [];
   const running: ManagerSummary[] = [];
   const denied = new Map<string, ManagerDenial[]>();
+  let abortOutcome: 'stopped' | 'not_stopped' | 'unknown' = 'stopped';
+  let abortSessionGone: boolean | undefined = true;
 
   const managers: ManagerPool = {
     async start(input) {
@@ -79,12 +89,25 @@ function harness(runtime?: () => CloneRuntimeFacts): Harness {
       aborted.push({ managerId, ...(reason === undefined ? {} : { reason }) });
       const found = running.find((manager) => manager.managerId === managerId);
       if (!found)
-        return { outcome: 'unknown' as const, detail: `${managerId} というマネージャーは居ない。` };
-      // 本物と同じところまで動かす（status を畳み、セッションを切る）。ここを
-      // 動かさないと「受理した」と「効いた」の差がテストに映らない。
-      found.status = 'done';
-      found.live = false;
-      return { outcome: 'stopped' as const, detail: '止めた', sessionGone: true };
+        return { outcome: 'absent' as const, detail: `${managerId} というマネージャーは居ない。` };
+      if (abortOutcome === 'stopped') {
+        // 本物と同じところまで動かす（status を畳み、セッションを切る）。ここを
+        // 動かさないと「受理した」と「効いた」の差がテストに映らない。
+        found.status = 'stopped';
+        found.live = false;
+      }
+      // `not_stopped` / `unknown` は「台帳を1文字も書かない」が本物の挙動なので、
+      // ここでも `found` を触らない。
+      return {
+        outcome: abortOutcome,
+        detail:
+          abortOutcome === 'stopped'
+            ? '止めた'
+            : abortOutcome === 'not_stopped'
+              ? 'まだ止まっていない'
+              : '止まったかは未確認',
+        ...(abortSessionGone === undefined ? {} : { sessionGone: abortSessionGone }),
+      };
     },
     async stop() {},
   };
@@ -130,6 +153,14 @@ function harness(runtime?: () => CloneRuntimeFacts): Harness {
     distributed,
     running,
     denied,
+    setAbortOutcome(outcome, sessionGone) {
+      abortOutcome = outcome;
+      // 省略時は outcome から自然に決まる値を補う（`stopped` ⟺ `true`、
+      // `not_stopped` ⟺ `false`、`unknown` ⟺ `undefined`）。
+      abortSessionGone =
+        sessionGone ??
+        (outcome === 'stopped' ? true : outcome === 'not_stopped' ? false : undefined);
+    },
     async call(name, args) {
       const found = tools.find((entry) => entry.name === name);
       if (!found) throw new Error(`ツール ${name} が無い`);
@@ -564,7 +595,41 @@ describe('クローンの道具', () => {
     expect(h.aborted).toEqual([{ managerId: 'mgr-1', reason: '暴走した' }]);
     // **「受理した」で終わらせない。** 止めたあとの実際の状態を読み直して返す。
     expect(reply).toContain('mgr-1');
-    expect(reply).toContain('done');
+    // **2026-08-21 に反転。** 直す前は `sessionGone === true`（止まったと確かめた）
+    // でも台帳の `status` を `'done'`（＝終えて待機中）に書いていた（R2）。いまは
+    // `'stopped'` という専用の終端状態を持つので、ここを反転する（PR「『止めた』を、
+    // 止まったと確かめたときだけそう言う」の3点セット）。
+    expect(reply).toContain('stopped');
+  });
+
+  it('manager_stop は not_stopped のとき「止めた」と言わない', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.setAbortOutcome('not_stopped');
+
+    const reply = await h.call('manager_stop', { managerId: 'mgr-1', reason: '暴走した' });
+
+    expect(reply).toContain('止まっていない');
+    // 台帳は書いていないので、まだ running のまま見える。
+    expect(reply).toContain('running');
+  });
+
+  it('manager_stop は unknown のとき「止めた」とも「止まっていない」とも言い切らない', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.setAbortOutcome('unknown');
+
+    const reply = await h.call('manager_stop', { managerId: 'mgr-1', reason: '暴走した' });
+
+    expect(reply).toContain('未確認');
+  });
+
+  it('manager_stop は absent のとき居ないと言う', async () => {
+    const h = harness();
+
+    const reply = await h.call('manager_stop', { managerId: 'mgr-nope' });
+
+    expect(reply).toContain('居ない');
   });
 
   it('manager_list は状態と返事待ちを返す', async () => {

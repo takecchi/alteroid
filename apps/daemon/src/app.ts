@@ -2031,7 +2031,10 @@ export function createApp(deps: AppDeps) {
           'この口は1本だけを止める。止めた事実は日誌に残る。',
         responses: {
           200: {
-            description: '止めた。',
+            description:
+              '止める指示は処理できた。`outcome` を読むこと — `stopped`（止まったと確かめた）/ ' +
+              '`not_stopped`（止まっていないと確かめた）/ `unknown`（確かめられなかった）のどれかで、' +
+              '止まったと機械可読に言えるのは `stopped` のときだけである。',
             content: { 'application/json': { schema: resolver(managerActionResponseSchema) } },
           },
           400: {
@@ -2039,7 +2042,7 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
           },
           404: {
-            description: '該当するマネージャーが無い。',
+            description: '該当するマネージャー（`absent`）が無い。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
@@ -2051,7 +2054,10 @@ export function createApp(deps: AppDeps) {
           c.req.param('id'),
           ...(reason === undefined ? [] : ([reason] as const)),
         );
-        if (result.outcome === 'unknown') return c.json({ error: result.detail }, 404);
+        // **`'absent'` だけが 404。** `'not_stopped'` / `'unknown'` は「そのものは
+        // 居るが、止まった/止まっていない/確かめられなかった」という観測結果で
+        // あって、リクエスト自体は正しく処理できている（200 で `outcome` を返す）。
+        if (result.outcome === 'absent') return c.json({ error: result.detail }, 404);
         return c.json({ outcome: result.outcome, detail: result.detail });
       },
     )

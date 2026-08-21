@@ -137,10 +137,26 @@ describe('renderManagerList', () => {
   });
 
   it('lost 以外には但し書きを出さない', () => {
-    for (const status of ['running', 'done', 'failed'] as const) {
+    for (const status of ['running', 'done', 'failed', 'stopped'] as const) {
       const text = renderManagerList([manager({ status })]);
       expect(text).not.toContain('前のセッションへ戻れなかった');
     }
+  });
+
+  /**
+   * **`stopped` は `done` に潰れない。** `manager_stop` / `DELETE /managers/:id`
+   * が返す `outcome` は3種類に分かれたが、いったん `status: 'stopped'` として
+   * 台帳に残った後は、この一覧が読む状態も別物のまま出なければならない
+   * （`done` は待機、`stopped` は外から止められた終端）。
+   */
+  it('stopped は done に潰れず、そのまま状態名で出る', () => {
+    const stopped = renderManagerList([manager({ status: 'stopped', live: false })]);
+    const done = renderManagerList([manager({ status: 'done' })]);
+
+    expect(stopped).toContain('[stopped');
+    expect(stopped).not.toContain('[done');
+    expect(done).toContain('[done');
+    expect(done).not.toContain('[stopped');
   });
 
   /**
