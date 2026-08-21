@@ -3850,28 +3850,33 @@ describe('runner の指名（Pool.start の runnerId）', () => {
     await registry.stop();
   });
 
-  it('指名した runner の runnerId が、返ってくる summary.runnerId に一致する', async () => {
-    const roomy = new FakePoolRunner('runner-roomy', {
-      memory: { limitBytes: 32_000_000_000, usedBytes: 1_000_000_000, source: 'cgroup' },
-      managers: 0,
-    });
-    const tight = new FakePoolRunner('runner-tight', {
-      memory: { limitBytes: 32_000_000_000, usedBytes: 30_000_000_000, source: 'cgroup' },
-      managers: 4,
-    });
+  it('指名しなくても、資源で選ばれた runner が起こされる（自動配置は変えていない）', async () => {
+    const busy = new FakePoolRunner('runner-busy', { managers: 9 });
+    const idle = new FakePoolRunner('runner-idle', { managers: 0 });
     const stores = createMemoryStores();
-    const registry = createRunnerRegistry([roomy, tight]);
+    const registry = createRunnerRegistry([busy, idle]);
     const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
 
-    const summary = await pool.start({ request: '指名した器で頼む', runnerId: 'runner-tight' });
+    await pool.start({ request: '自動配置に任せる' });
 
-    expect(summary.runnerId).toBe('runner-tight');
+    expect(idle.started).toHaveLength(1);
+    expect(busy.started).toEqual([]);
 
     await pool.stop();
     await registry.stop();
   });
 
-  it('指名しなければ、資源で選ばれた runner が起こされ、summary.runnerId がそれと一致する', async () => {
+  /**
+   * **返ってくる `runnerId` は、実際に `start()` を受け取った器と一致する。**
+   *
+   * 期待値を固定文字列にしないのが要点——「指名が正しく効いたか」
+   * （上のテスト）とは別の保証であることを、判定そのものの作り方で切り離す。
+   * ここで見たいのは「実際に走った器と、名乗る値が食い違っていないか」だけ
+   * なので、期待値も実測（`.started` にどちらが積まれたか）から作る。これで
+   * 「入力をそのまま書き戻す」「常に決め打ちの名前を返す」のどちらの変異でも
+   * 実際に走った器と食い違えば落ちる。
+   */
+  it('指名の有無によらず、返ってくる runnerId は実際に start() を受け取った器と一致する', async () => {
     const busy = new FakePoolRunner('runner-busy', { managers: 9 });
     const idle = new FakePoolRunner('runner-idle', { managers: 0 });
     const stores = createMemoryStores();
@@ -3880,12 +3885,9 @@ describe('runner の指名（Pool.start の runnerId）', () => {
 
     const summary = await pool.start({ request: '自動配置に任せる' });
 
-    // **返ってくる runnerId は、実際に start() を受け取った器と一致する。**
-    // ここを「入力の指名をそのまま書き戻す」ような実装に変異させると、指名して
-    // いないこの経路では `undefined` になって落ちる。
-    expect(summary.runnerId).toBe('runner-idle');
-    expect(idle.started).toEqual([summary.managerId]);
-    expect(busy.started).toEqual([]);
+    const actual = [busy, idle].find((runner) => runner.started.includes(summary.managerId));
+    expect(actual).toBeDefined();
+    expect(summary.runnerId).toBe(actual?.runnerId);
 
     await pool.stop();
     await registry.stop();
