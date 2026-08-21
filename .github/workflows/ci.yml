@@ -246,7 +246,7 @@ jobs:
 
               # 別 UID（worker・uid 1001 = マネージャー子プロセスの主体）からは
               # そもそも繋がらないこと。
-              su -s /bin/sh worker -c \
+              su -s /bin/sh node -c \
                 "curl -fsS --unix-socket /run/alteroid/runner.sock http://runner/livez" \
                 >/dev/null \
                 && { echo "別 UID(uid 1001)から繋がってしまった" >&2; exit 1; }
