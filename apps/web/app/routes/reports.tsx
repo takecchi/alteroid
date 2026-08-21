@@ -205,8 +205,13 @@ function ReportBody({ date, reportId }: { date: string; reportId: string | undef
         <Empty>この日の日報は無い。</Empty>
       ) : (
         <article className="min-w-0 px-4 py-3">
-          {/* 見出しは「何日ぶんか」、ここは「いつ書かれたか」。 */}
-          <p className="mb-2 text-[11px] text-muted">{formatDateTime(report.at)}</p>
+          {/*
+            **「書かれたのは」を省かないこと。** 見出しは「何日ぶんの日報か」
+            （`date`）で、ここは「いつ書かれたか」（`at`）である。遡り生成では
+            この2つの日が食い違う（前日ぶんが翌日に書かれる）ので、裸の時刻を
+            置くと見出しと矛盾しているように見える。
+          */}
+          <p className="mb-2 text-[11px] text-muted">書かれたのは {formatDateTime(report.at)}</p>
           {isUnavailable(report) ? (
             <UnavailableNote reason={report.unavailable} />
           ) : (

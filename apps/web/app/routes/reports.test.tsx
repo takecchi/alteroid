@@ -255,10 +255,15 @@ describe('日報', () => {
     // 両方の行が描かれるまで待つ（先に findAllByRole を打つと、fetch が
     // 返る前の空の一覧で判定してしまいうる）。
     await screen.findByRole('link', { name: '2026-08-20 09:30' });
+    // **クラス名は token で見ること。** `includes('bg-surface-2')` は全リンクが
+    // 持つ `hover:bg-surface-2` にも当たるので、部分一致だと「選択の見た目」を
+    // 数えているつもりで全リンクを数えることになる（この判定が空回りしても
+    // `text-accent` の側で1件に絞れてしまうため、緑のまま気づけない）。
     const links = screen.getAllByRole('link');
-    const selected = links.filter(
-      (link) => link.className.includes('bg-surface-2') && link.className.includes('text-accent'),
-    );
+    const selected = links.filter((link) => {
+      const tokens = link.className.split(/\s+/);
+      return tokens.includes('bg-surface-2') && tokens.includes('text-accent');
+    });
 
     // 前は `report.date === selected` で選んでいたので、同じ日の2件が両方
     // 選択中になっていた（人間の申告そのもの）。いまは `id` で選ぶので1つだけ。
