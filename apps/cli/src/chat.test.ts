@@ -760,6 +760,9 @@ describe('chat の /conversations と /conversation', () => {
     // scanned が無いと、返ってきた件数が「これで全部」に見えてしまう。
     expect(text).toContain('137');
     expect(text).toContain('/conversation <番号|id>');
+    // 打ち切られているかもしれないなら、広げる手の在り処（サブコマンド面）を示す。
+    expect(text).toContain('alteroid conversations list --scan');
+    expect(text).toContain('--limit');
   });
 
   it('/conversations は空でも、そう言う（黙って何も出さない形にしない）', async () => {
@@ -777,6 +780,36 @@ describe('chat の /conversations と /conversation', () => {
     // だけ省くと同じ CLI の中に非対称ができる。
     expect(text).toContain('5000');
     expect(text).toContain('判定できません');
+    // **0件のときも、広げる手の在り処を示す。** 手そのものは chat に無くて
+    // よいが、在り処が分からないと、人間は広げる必要があることにすら気づけない。
+    expect(text).toContain('alteroid conversations list --scan');
+  });
+
+  /**
+   * **chat からも窓を広げられる。** `/usage from=… to=…` と同じ `key=value` の
+   * 形（`parseUsageFilters` と同じ慣習）で `limit=` / `scan=` を渡せるように
+   * してある。サブコマンド面（`alteroid conversations list --limit --scan`）の
+   * 下位互換ではなく、chat からも同じクエリへ届く。
+   */
+  it('/conversations は limit= / scan= を渡すと、そのままクエリへ乗る', async () => {
+    captureStdout();
+    const { calls, client } = stubClient({ conversations: [], conversationsScanned: 0 });
+
+    await runSlashCommand('/conversations limit=5 scan=9000', client, emptyListed());
+
+    expect(calls).toEqual([
+      { route: 'GET /conversations', args: { query: { limit: '5', scan: '9000' } } },
+    ]);
+  });
+
+  it('/conversation は scan= を渡すと、そのままクエリへ乗る', async () => {
+    captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand('/conversation conv-xyz scan=9000', client, emptyListed());
+
+    const detail = calls.find((call) => call.route === 'GET /conversations/:id');
+    expect(detail?.args).toEqual({ param: { id: 'conv-xyz' }, query: { scan: '9000' } });
   });
 
   it('/conversation は番号を id へ引き直す（/conversations の並びと同じ列で覚える）', async () => {
