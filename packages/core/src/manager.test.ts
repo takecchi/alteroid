@@ -3824,7 +3824,7 @@ class FakePoolRunner implements RunnerClient {
 }
 
 describe('runner の指名（Pool.start の runnerId）', () => {
-  it('runnerId を指名すると、その runner が起こされ、summary.runnerId も一致する', async () => {
+  it('runnerId を指名すると、その runner が起こされる（自動配置の点数計算を通していない）', async () => {
     // 点数だけを見れば roomy が勝つ構図——それでも tight を名指ししたら tight に
     // 置かれることを確かめる（自動配置の点数計算を通していない証拠）。
     const roomy = new FakePoolRunner('runner-roomy', {
@@ -3841,9 +3841,31 @@ describe('runner の指名（Pool.start の runnerId）', () => {
 
     const summary = await pool.start({ request: '指名した器で頼む', runnerId: 'runner-tight' });
 
-    expect(summary.runnerId).toBe('runner-tight');
+    // **ここで見るのは「指名が効いたか」だけ。** 返り値の runnerId が実際の選択と
+    // 一致するかは別の保証（次の describe）なので、ここでは混ぜない。
     expect(tight.started).toEqual([summary.managerId]);
     expect(roomy.started).toEqual([]);
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  it('指名した runner の runnerId が、返ってくる summary.runnerId に一致する', async () => {
+    const roomy = new FakePoolRunner('runner-roomy', {
+      memory: { limitBytes: 32_000_000_000, usedBytes: 1_000_000_000, source: 'cgroup' },
+      managers: 0,
+    });
+    const tight = new FakePoolRunner('runner-tight', {
+      memory: { limitBytes: 32_000_000_000, usedBytes: 30_000_000_000, source: 'cgroup' },
+      managers: 4,
+    });
+    const stores = createMemoryStores();
+    const registry = createRunnerRegistry([roomy, tight]);
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    const summary = await pool.start({ request: '指名した器で頼む', runnerId: 'runner-tight' });
+
+    expect(summary.runnerId).toBe('runner-tight');
 
     await pool.stop();
     await registry.stop();
