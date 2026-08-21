@@ -831,6 +831,120 @@ describe('クローン', () => {
 });
 
 /**
+ * shutdown 蒸留が conversation_end 蒸留と重複して走るのを防ぐ直し（`d247074`）の歯。
+ *
+ * PR #119 の残作業 — 実装（`#hasUndistilledActivity` と、`#handle` の `'distill'`
+ * 分岐が前回の蒸留成功以降にターンが1本も無ければ見送る判定）に、これまで
+ * テストが1本も無かった。
+ *
+ * **「起きなかったこと」は見送り自身が能動的に書く合図（日誌の `exchange`。
+ * `with: 'self'` / `role: 'outbound'` / 本文に「蒸留（<reason>）は見送った」を
+ * 含む）で見る。** `await` が返った時点でこの行は確定済みであり、タイムアウトで
+ * 「来なかったから見送ったはず」と読むのは `waitForTerminal` の doc が明記して
+ * いるとおり歯があった証拠にならない（別の負荷で `done` そのものが遅れても
+ * 同じ見え方になる）。
+ */
+describe('クローン — shutdown 蒸留の重複防止', () => {
+  /** `buildDistillPrompt` が書く固定の呼びかけ。蒸留ターンかどうかの見分け方。 */
+  const DISTILL_MARKER = '記憶へ移すべきものがあるか確認せよ';
+
+  /** 見送りの日誌（`type: 'exchange'` / `with: 'self'` / `role: 'outbound'`）だけを拾う。 */
+  async function skippedDistillEntries(
+    stores: Stores,
+  ): Promise<{ text: string; with: string; role: string }[]> {
+    const entries = (await stores.journal.list({ types: ['exchange'] })) as {
+      text: string;
+      with: string;
+      role: string;
+    }[];
+    return entries.filter(
+      (entry) =>
+        entry.with === 'self' && entry.role === 'outbound' && entry.text.includes('は見送った'),
+    );
+  }
+
+  it('A: endConversation の直後に stop() が来ても、蒸留は1回しか走らない', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('価値観を伝える'));
+    await waitForDone(s.events);
+    await s.clone.endConversation('conv-1');
+    await s.clone.stop();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    const distillPrompts = inputs.filter((input) => input.includes(DISTILL_MARKER));
+    expect(distillPrompts.length).toBe(1);
+
+    const skipped = await skippedDistillEntries(s.stores);
+    expect(skipped.length).toBe(1);
+    expect(skipped[0]?.text).toContain('蒸留（shutdown）は見送った');
+  });
+
+  it('B: 蒸留の後に新しいターンが1本でも走れば、続く stop() の蒸留は見送らない（取りこぼさない）', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('価値観を伝える'));
+    await waitForDone(s.events);
+    await s.clone.endConversation('conv-1');
+
+    // 別の会話で通常ターンをもう1本。`s.events` は conv-1 専用の購読なので、
+    // conv-2 用の購読をここで別に張って「その通常ターンが終わったこと」を
+    // 直接待つ（既存の `wireEvents` をそのまま使い回す — 新しい足場は作らない）。
+    const other = wireEvents(s.clone, 'conv-2');
+    s.clone.post(humanMessage('別件です', 'conv-2'));
+    await waitForDone(other.events);
+
+    await s.clone.stop();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    const distillPrompts = inputs.filter((input) => input.includes(DISTILL_MARKER));
+    expect(distillPrompts.length).toBe(2);
+    expect(await skippedDistillEntries(s.stores)).toEqual([]);
+  });
+
+  it('C: 蒸留が失敗して終わったら印を下ろさない（次の機会にもう一度試す）', async () => {
+    const s = setup(undefined, createMemoryStores(), {
+      // ターン0＝人間の発言、ターン1＝endConversation の蒸留。**蒸留のターンだけ**
+      // を失敗させる。`error_during_execution` は枠の保持にはならない分類
+      // （`classifyUsageNotice` は SDK が失敗として出した文言だけを見るので、
+      // 既定の応答文言のままなら `#usageBlocked` は立たない）。
+      resultFor: (turnIndex) =>
+        turnIndex === 1 ? { subtype: 'error_during_execution', isError: true } : undefined,
+    });
+
+    s.clone.post(humanMessage('価値観を伝える'));
+    await waitForDone(s.events);
+    await s.clone.endConversation('conv-1');
+    await s.clone.stop();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    const distillPrompts = inputs.filter((input) => input.includes(DISTILL_MARKER));
+    // 失敗した蒸留は印を下ろさないので、stop() の蒸留は見送られず、もう一度走る。
+    expect(distillPrompts.length).toBe(2);
+    expect(await skippedDistillEntries(s.stores)).toEqual([]);
+  });
+
+  it('D: 最初の会話終了では、蒸留が見送られずにちゃんと走る（重複防止が正常な経路を殺していない）', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('価値観を伝える'));
+    await waitForDone(s.events);
+    await s.clone.endConversation('conv-1');
+
+    // **ここでアサーションを済ませる。** この時点で `endConversation` の蒸留は
+    // 成功しており印は下りているので、この後 `stop()` を呼ぶと、その shutdown
+    // 蒸留は「正しく」見送られる（歯Aの管轄）。`stop()` の後で「見送りが無い」を
+    // 検査すると、この歯が自分の生んだ見送りエントリで落ちる。
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    const distillPrompts = inputs.filter((input) => input.includes(DISTILL_MARKER));
+    expect(distillPrompts.length).toBe(1);
+    expect(await skippedDistillEntries(s.stores)).toEqual([]);
+
+    await s.clone.stop();
+  });
+});
+
+/**
  * `self_status`（`self.ts` の `CloneRuntimeFacts`）の配線。
  *
  * **`createSdkMcpServer` は道具を MCP の transport の裏へ隠すので、テストから
