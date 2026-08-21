@@ -286,7 +286,8 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
    *    無かった回（`clone.ts` の `#recordUsage` / `manager.ts` の
    *    `case 'usage'` が書かない）。
    * 2. **台帳へ積めなかった**（記録の失敗）。**両層とも日誌に跡が残る**
-   *    （層でここが非対称だった時期があり、当時の PR 本文に経緯がある） —
+   *    （非対称を事実として書いたのは #131、解消したのは #133。経緯は
+   *    #133 の PR 本文にある） —
    *    マネージャー層は `case 'usage'` の `catch` が `exchange with=manager`
    *    として日誌に残し、クローン層は `#recordUsage` の `catch` が
    *    `exchange with=self` として日誌に残す（どちらも文言は
