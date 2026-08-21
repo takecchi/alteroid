@@ -6,11 +6,51 @@
  */
 import { cleanup, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import Reports from './reports';
+
+/*
+  **時間帯を固定するのはテストの側だけである。表示は固定しない。**
+
+  この画面の時刻は `app/lib/format.ts` の `Intl.DateTimeFormat` で出る。あれは
+  ロケールだけを固定し、**時間帯は閲覧者の端末に任せている** — 人間は JST で
+  読むので、それが正しい振る舞いである。表示を UTC 固定にするような直し方は
+  「テストを通すために人間の読みやすさを削る」側なので採らない。
+
+  一方でテストは、時刻の文字列を期待値に持つ。**器の時間帯に任せると、期待値が
+  「その器ではこうだから」に化ける。** 実際に落ちた — この器の `TZ` は
+  Asia/Tokyo だが、**CI の runner は UTC である**（`.github/workflows/ci.yml` に
+  `TZ` の指定は無い）。同じ `at` が手元で '09:30'、CI で '00:30' になり、
+  **手元だけ緑**になっていた。
+
+  **直し方は「期待値を器に合わせる」ではなく「注入する側を自分で用意する」である。**
+  期待値を '00:30' に書き換えると、こんどは JST の器で落ちる — どちらの器でも
+  落ちない形にはならない。だからここで時間帯そのものを固定し、**JST の器でも
+  UTC の器でも同じ1つの期待値で通る**ようにしてある。
+
+  **`vi.hoisted` でなければならない。** `~/lib/format` はモジュールの読み込み時に
+  `Intl.DateTimeFormat` を作る。`process.env.TZ` の変更が効くのは**変更より後に
+  作られた instance だけ**なので（実測で両方向を確認した）、固定は import の
+  評価より前に走らなければならない。`vi.hoisted` はまさにそこへ持ち上げられる。
+  素の代入を本文に書くと、ESM の import が先に評価されて**静かに効かなくなる**。
+
+  戻すのは、同じ worker プロセスを次のテストファイルが再利用するからである
+  （vitest は隔離しても process は使い回す）。ここの固定を他のファイルへ
+  漏らさない。
+*/
+const tzBeforeThisFile = vi.hoisted(() => {
+  const before = process.env.TZ;
+  process.env.TZ = 'Asia/Tokyo';
+  return before;
+});
+
+afterAll(() => {
+  if (tzBeforeThisFile === undefined) delete process.env.TZ;
+  else process.env.TZ = tzBeforeThisFile;
+});
 
 let originalFetch: typeof fetch;
 
@@ -206,22 +246,19 @@ describe('日報', () => {
     同じ日に2件できる経路は「起動時の遡り生成」（`schedule.ts` の
     `missingDailyReportDates` → `clone.ts` の `#dailyReport`）で、前日ぶんの
     日報が翌日に書かれる。それを再現するため、`date` は同じ '2026-08-20' で、
-    `at` は一方だけ翌日（`2026-08-21T…Z`）にしてある。`reportLabel()` が
-    `at` ではなく `date` を見出しの日の軸に取っていることは、この2件が両方
-    '2026-08-20' の見出しで出ることそのもので確かめられる（`formatDateTime(at)`
-    を使っていれば、遡り生成の側が `08/21` に化けて隣の日と区別できなくなる）。
+    `at` は一方だけ翌日（`2026-08-21T…Z`）にしてある。
   */
   const closeEntry = {
     type: 'daily_report',
     id: 'r-close',
-    at: '2026-08-20T22:00:00.000Z', // JST 07:00（翌日）＝ その日の締め
+    at: '2026-08-20T22:00:00.000Z', // JST 07:00 ＝ その日の締め
     date: '2026-08-20',
     body: '## 締めの見出し\n\n締め本文だけの目印。',
   };
   const catchupEntry = {
     type: 'daily_report',
     id: 'r-catchup',
-    at: '2026-08-21T00:30:00.000Z', // JST 09:30（翌日）＝ 起動時の遡り生成
+    at: '2026-08-21T00:30:00.000Z', // JST 09:30 ＝ 起動時の遡り生成（前日ぶんが翌日に書かれる）
     date: '2026-08-20',
     body: '## 遡り生成の見出し\n\n遡り生成本文だけの目印。',
   };
@@ -237,14 +274,33 @@ describe('日報', () => {
     });
   }
 
+  /**
+   * 一覧の行を `id` で引く。
+   *
+   * **見出しの文字列で引かないこと。** 見出しは表示の結果であって、この関数が
+   * 引きたいのは「どの日報の行か」である。`href` は `id` そのものを持つので、
+   * 表示の整形が変わってもここは動かない。
+   */
+  function rowFor(id: string): HTMLElement {
+    const row = screen
+      .getAllByRole('link')
+      .find((link) => link.getAttribute('href') === `/reports/2026-08-20/${id}`);
+    if (row === undefined) throw new Error(`一覧に ${id} の行が無い`);
+    return row;
+  }
+
   it('同じ日に2件あっても、一覧では時刻違いの別々の行として並ぶ', async () => {
     stubSameDayReports();
 
     renderReports();
 
-    // 見出しは「日付＋時刻」。日付だけなら2件とも `2026-08-20` で区別できない。
-    expect(await screen.findByRole('link', { name: '2026-08-20 09:30' })).toBeTruthy();
-    expect(await screen.findByRole('link', { name: '2026-08-20 07:00' })).toBeTruthy();
+    // 2件が別々の行として並ぶまで待つ。
+    await screen.findByText('2026-08-20 09:30');
+
+    // 日の軸は `report.date` である。`formatDateTime(at)` を使っていれば、遡り生成の
+    // 側が '08/21' に化けてここが落ちる（＝症状が戻ったことを検知する）。
+    expect(rowFor('r-catchup').textContent).toBe('2026-08-20 09:30');
+    expect(rowFor('r-close').textContent).toBe('2026-08-20 07:00');
   });
 
   it('reportId で1件を指定すると、選択の見た目が付くリンクはちょうど1つになる', async () => {
@@ -252,15 +308,15 @@ describe('日報', () => {
 
     renderReports({ date: '2026-08-20', reportId: 'r-close' });
 
-    // 両方の行が描かれるまで待つ（先に findAllByRole を打つと、fetch が
+    // 両方の行が描かれるまで待つ（先に getAllByRole を打つと、fetch が
     // 返る前の空の一覧で判定してしまいうる）。
-    await screen.findByRole('link', { name: '2026-08-20 09:30' });
+    await screen.findByText('2026-08-20 09:30');
+
     // **クラス名は token で見ること。** `includes('bg-surface-2')` は全リンクが
     // 持つ `hover:bg-surface-2` にも当たるので、部分一致だと「選択の見た目」を
     // 数えているつもりで全リンクを数えることになる（この判定が空回りしても
     // `text-accent` の側で1件に絞れてしまうため、緑のまま気づけない）。
-    const links = screen.getAllByRole('link');
-    const selected = links.filter((link) => {
+    const selected = screen.getAllByRole('link').filter((link) => {
       const tokens = link.className.split(/\s+/);
       return tokens.includes('bg-surface-2') && tokens.includes('text-accent');
     });
@@ -268,7 +324,8 @@ describe('日報', () => {
     // 前は `report.date === selected` で選んでいたので、同じ日の2件が両方
     // 選択中になっていた（人間の申告そのもの）。いまは `id` で選ぶので1つだけ。
     expect(selected).toHaveLength(1);
-    expect(selected[0]?.textContent).toContain('2026-08-20 07:00');
+    // **選ばれたのがどれかは `href` で見る**（`id` が選択の単位そのものなので）。
+    expect(selected[0]).toBe(rowFor('r-close'));
   });
 
   /**
