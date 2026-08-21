@@ -1119,7 +1119,8 @@ describe('manager_transcript（生ログへ降りる）', () => {
   it('生ログの全文へ降りられる（lastReport の抜粋ではなく transcript() の中身が返る）', async () => {
     const h = harness();
     await h.call('manager_start', { request: '調べて' });
-    for (const summary of h.running) summary.lastReport = '要約された最終報告（これは生ログではない）';
+    for (const summary of h.running)
+      summary.lastReport = '要約された最終報告（これは生ログではない）';
     h.setTranscript('mgr-1', '{"type":"user","text":"生ログにしか無い中身"}');
 
     const reply = await h.call('manager_transcript', { managerId: 'mgr-1' });

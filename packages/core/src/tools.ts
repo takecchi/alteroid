@@ -1408,7 +1408,8 @@ export function createCloneTools(context: ToolContext) {
         // ログの層」— 日報だけで暮らせるが、掘れば生ログまで一本道で降りられること）。
         // ここに載る `lastReport` は報告の全文であって、セッションの生ログではない。
         // それでも足りないときの次の一手を、切れていない場合にも常に添える。
-        const footer = '\n\n（さらに掘るなら manager_transcript managerId=' + managerId + ' で生ログへ）';
+        const footer =
+          '\n\n（さらに掘るなら manager_transcript managerId=' + managerId + ' で生ログへ）';
         return text(`${head}\n\n${part1.body}${tail}${footer}`);
       },
     ),
