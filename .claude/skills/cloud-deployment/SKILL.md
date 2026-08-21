@@ -16,6 +16,7 @@ description: クラウド構成（docker compose、PostgreSQL、daemon / manager
     - 確認は `apps/runner/src/boundary.test.ts`（実際に子プロセスを起こして全経路を叩く）と、コンテナでは `docker compose exec -u 1001 runner curl --unix-socket ...`（繋がらないこと）
   - runner を立てていないローカルでは同一プロセスの runner に落ちる（`ALTEROID_RUNNER_URL` が無いとき）。**そのときは既知の穴が残る** — 塞ぐのはコンテナ構成の役目で、ツール削除ではない
   - 委譲の宛先は `RunnerRegistry` 越しに決める。固定 URL も runner のローカルパスもデーモンに書かない（M5 で runner が増える）
+  - **Railway 側は runner を増やせる**（`railway/setup.sh --runners N` / `railway/add-runner.sh`）。**台数を数えている持ち主は Railway の Config as Code である** — `/railway/runner.json` を指している Service が runner で、`verify.sh` もそこから引く。手順とゆるみは [railway/README.md](./railway/README.md)「runner を増やす / 減らす」。**ここにも他の文書にも台数を書かないこと**
 - 記憶の置き場は `ALTEROID_DATABASE_URL` の有無だけで決まる（無ければローカルの fs）。**器が違うだけで、上の層が見るものは同じ**。切り替えでできなくなることを作らない
   - 起動時にスキーマを自分で用意する（`packages/storage-pg/src/migrate.ts`）。「先にマイグレーションを流す」という人間の手順を足さないこと
   - `state/daemon.json`（CLI がデーモンを見つける手段）は pg 構成でもローカルに残る。記憶ではない

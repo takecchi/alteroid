@@ -15,13 +15,25 @@
 # - `railway ssh` はサービスの実行 UID とは無関係に root で入る。root のまま叩いた
 #   401 は「マネージャーから叩けない」の証拠にならないので、必ず `su` で降りる
 #
+# **runner は台数ぶん見る。** 見る相手は名前の付け方ではなく **Config as Code が
+# `/railway/runner.json` を指しているか**で決める（`add-runner.sh` と同じ持ち主）。
+# 1台だけ見て「境界は立っている」と名乗ると、**後から足した1台が確かめられていない
+# ことが出力から消える**。名簿を引けなかったときは、そう書いて `!` を1つ立てる。
+#
 # **能力が落ちていないことも確かめる**（境界を入れた側が示す義務。north_star
 # 「立ち戻るための問い」最終項）。危なそうな名前を全部消す方向へ倒れると、
 # それはデグレードであってセキュリティではない。
 set -euo pipefail
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly REPO_ROOT
+
+# 色・JSON・名簿の引き方は setup.sh / add-runner.sh と共有する
+# shellcheck source=railway/lib.sh
+. "$REPO_ROOT/railway/lib.sh"
+
 APP_SERVICE="${ALTEROID_APP_SERVICE:-app}"
-RUNNER_SERVICE="${ALTEROID_RUNNER_SERVICE:-runner}"
+RUNNER_SERVICES=()
 
 usage() {
   cat <<'EOS'
@@ -30,7 +42,7 @@ Railway に上がった alteroid の境界と能力を確かめる。
   ./railway/verify.sh [オプション]
 
   -a, --app <名前>     daemon の Service 名（既定: app）
-  -r, --runner <名前>  runner の Service 名（既定: runner）
+  -r, --runner <名前>  runner の Service 名（**繰り返せる**。既定: Config as Code から引く）
   -h, --help           これ
 
 先に railway link でプロジェクトへ紐づいていること（setup.sh は紐づけて終わる）。
@@ -44,7 +56,7 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     -r | --runner)
-      RUNNER_SERVICE="${2:-}"
+      RUNNER_SERVICES+=("${2:-}")
       shift 2
       ;;
     -h | --help)
@@ -58,17 +70,11 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-if [ -t 1 ]; then
-  C_RESET=$'\033[0m' C_BOLD=$'\033[1m' C_DIM=$'\033[2m'
-  C_RED=$'\033[31m' C_GREEN=$'\033[32m' C_YELLOW=$'\033[33m' C_BLUE=$'\033[34m'
-else
-  C_RESET='' C_BOLD='' C_DIM='' C_RED='' C_GREEN='' C_YELLOW='' C_BLUE=''
-fi
-readonly C_RESET C_BOLD C_DIM C_RED C_GREEN C_YELLOW C_BLUE
-
 FAILED=0
 WARNED=0
 
+# **出力は stdout へ**（lib.sh の同名関数は stderr へ出す。ここは読むための出力なので
+# 上書きする）。数え上げは下の FAILED / WARNED が持つ
 step() { printf '\n%s==>%s %s%s%s\n' "$C_BLUE" "$C_RESET" "$C_BOLD" "$*" "$C_RESET"; }
 dim() { printf '    %s%s%s\n' "$C_DIM" "$*" "$C_RESET"; }
 pass() { printf '    %s✓%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
@@ -91,6 +97,29 @@ field() { # <出力> <キー>
   printf '%s\n' "$1" | sed -n "s/^$2=//p" | tail -n1
 }
 
+# --- 見る相手を決める（役は Config as Code が持つ）---------------------------
+
+if [ "${#RUNNER_SERVICES[@]}" -eq 0 ]; then
+  step 'runner の名簿を引く'
+  discovered=''
+  if resolve_project; then
+    discovered="$(services_with_config "$RUNNER_CONFIG")"
+  fi
+  while IFS= read -r name; do
+    [ -n "$name" ] && RUNNER_SERVICES+=("$name")
+  done <<EOF
+$discovered
+EOF
+  if [ "${#RUNNER_SERVICES[@]}" -eq 0 ]; then
+    # **「1台だった」と「引けなかった」を同じ顔にしない。** 引けなかったのに
+    # 既定の1台だけ見て緑を返すと、足した台が確かめられていないことが消える
+    RUNNER_SERVICES=("${ALTEROID_RUNNER_SERVICE:-runner}")
+    warn "名簿を引けなかったので既定の1台だけ見る（${RUNNER_SERVICES[0]}）。railway link と Config as Code を見る"
+  else
+    pass "runner ${#RUNNER_SERVICES[@]} 台: ${RUNNER_SERVICES[*]}"
+  fi
+fi
+
 # --- runner の中を見る -------------------------------------------------------
 
 # **すべて1回の ssh で済ませる。** 何度も入り直すと、器が入れ替わる瞬間に
@@ -108,6 +137,9 @@ has ALTEROID_RUNNER_TOKEN_SHA256 && echo sha256=present      || echo sha256=abse
 has ALTEROID_GOOGLE_CLIENT_SECRET && echo google=present     || echo google=absent
 has GH_TOKEN                     && echo gh_token=present    || echo gh_token=absent
 
+# **走っているプロセスが名乗る id を見る**（変数一覧ではなく）。器の既定は runner-primary
+echo "runner_id=$(e | sed -n 's/^ALTEROID_RUNNER_ID=//p' | tail -n1)"
+
 # マネージャーと同じ主体（uid 1001）から制御面を叩く。root で通っても意味がない
 echo "control=$(su -s /bin/sh worker -c "curl -s -o /dev/null -w %{http_code} http://127.0.0.1:$port/managers" 2>/dev/null || echo err)"
 echo "livez=$(su -s /bin/sh worker -c "curl -s http://127.0.0.1:$port/livez" 2>/dev/null || echo err)"
@@ -122,15 +154,21 @@ fi
 PROBE
 )"
 
-step "runner の中を見る（${RUNNER_SERVICE}）"
-dim '見るのは env ではなく /proc/1/environ。叩くのは root ではなく uid 1001'
+# 台ごとの runner_id を溜める（重複の検出に使う。持ち主はこの1か所）
+SEEN_IDS=''
 
-runner_out="$(railway ssh --service "$RUNNER_SERVICE" -- sh -c "$runner_probe" 2>/dev/null || true)"
+for runner_service in "${RUNNER_SERVICES[@]}"; do
+  step "runner の中を見る（${runner_service}）"
+  dim '見るのは env ではなく /proc/1/environ。叩くのは root ではなく uid 1001'
 
-if [ -z "$runner_out" ]; then
-  fail "runner に入れなかった（上がっていない / 再起動を繰り返している）"
-  dim "railway logs --service $RUNNER_SERVICE"
-else
+  runner_out="$(railway ssh --service "$runner_service" -- sh -c "$runner_probe" 2>/dev/null || true)"
+
+  if [ -z "$runner_out" ]; then
+    fail "runner に入れなかった（上がっていない / 再起動を繰り返している）"
+    dim "railway logs --service $runner_service"
+    continue
+  fi
+
   case "$(field "$runner_out" db_key)" in
     absent) pass '記憶ストアの鍵が無い（ALTEROID_DATABASE_URL）' ;;
     *) fail '!! 記憶ストアの鍵がある。runner の中のマネージャーが記憶へ届く' ;;
@@ -155,6 +193,18 @@ else
     *) fail '!! ALTEROID_GOOGLE_CLIENT_SECRET が残っている。自分でトークンを発行できる' ;;
   esac
 
+  # **同じ runner_id を名乗る2台が並ぶと、`RunnerRegistry#get` は先に見つかった方を
+  # 返す**（線形一致。docs/roadmap.md M5、#106 の申し送り）。委譲した先とは別の器へ
+  # `manager_send` が届き、しかも届いているように見える — 気づく場所がここしか無い
+  runner_id="$(field "$runner_out" runner_id)"
+  : "${runner_id:=runner-primary}"
+  if printf '%s\n' "$SEEN_IDS" | grep -qxF "$runner_id"; then
+    fail "!! runner_id ${runner_id} を2台が名乗っている。委譲した先とは別の器へ命令が届く"
+  else
+    pass "runner_id は ${runner_id}（他の台とぶつかっていない）"
+  fi
+  SEEN_IDS="$(printf '%s\n%s' "$SEEN_IDS" "$runner_id")"
+
   control="$(field "$runner_out" control)"
   case "$control" in
     401 | 403) pass "uid 1001 から制御面は ${control}（自分宛の許可確認に自分で答えられない）" ;;
@@ -175,7 +225,7 @@ else
 
   # --- 能力（落ちていないことの確認）---
   gh_expected=''
-  if railway variable list --service "$RUNNER_SERVICE" --json 2>/dev/null |
+  if railway variable list --service "$runner_service" --json 2>/dev/null |
     node -e '
       let s = ""; process.stdin.on("data", c => (s += c)).on("end", () => {
         try { process.exit(Object.keys(JSON.parse(s)).includes("GH_TOKEN") ? 0 : 1); }
@@ -200,7 +250,7 @@ else
       fi
       ;;
   esac
-fi
+done
 
 # --- app の中を見る ----------------------------------------------------------
 
@@ -209,6 +259,8 @@ app_probe="$(
 set -u
 port="${ALTEROID_PORT:-4517}"
 echo "health=$(curl -s "http://127.0.0.1:$port/health" 2>/dev/null || echo err)"
+# 起動時の種。**台数はここで数える**（名簿そのものは /runners が持つが、そちらは認証が要る）
+echo "seeds=$(printf '%s,%s' "${ALTEROID_RUNNER_URLS:-}" "${ALTEROID_RUNNER_URL:-}" | tr ',' '\n' | sed '/^$/d' | sort -u | wc -l | tr -d ' ')"
 PROBE
 )"
 
@@ -241,6 +293,23 @@ else
       ;;
     *) dim '入口の認証は無効（待ち受けが 127.0.0.1 なら、境界は待ち受け先の側にある）' ;;
   esac
+
+  # **足した runner が「走っている app」に届いているか。** 変数を置いただけでは
+  # 走っているデーモンには入らない（器の環境変数は起動時に決まる）ので、
+  # ここがずれていたら app の再デプロイが済んでいない
+  seeds="$(field "$app_out" seeds)"
+  case "$seeds" in
+    '' | *[!0-9]*) warn "app の委譲先の数が読めなかった（seeds=${seeds:-（空）}）" ;;
+    *)
+      if [ "$seeds" -eq "${#RUNNER_SERVICES[@]}" ]; then
+        pass "app は runner を ${seeds} 台知っている（見た台数と同じ）"
+      elif [ "$seeds" -lt "${#RUNNER_SERVICES[@]}" ]; then
+        fail "app が知っている委譲先は ${seeds} 台だが、runner は ${#RUNNER_SERVICES[@]} 台ある。app の再デプロイが済んでいない（railway service redeploy --service $APP_SERVICE --yes）"
+      else
+        warn "app が知っている委譲先は ${seeds} 台で、見た runner（${#RUNNER_SERVICES[@]} 台）より多い。消した Service が名簿に残っていないか見る"
+      fi
+      ;;
+  esac
 fi
 
 # --- まとめ ------------------------------------------------------------------
@@ -256,7 +325,8 @@ fi
 if [ "$WARNED" -gt 0 ]; then
   printf '    %s通った（確かめられなかったものが %d 件）%s\n' "$C_YELLOW" "$WARNED" "$C_RESET"
 else
-  printf '    %s境界は立っていて、能力は落ちていない%s\n' "$C_GREEN" "$C_RESET"
+  printf '    %s境界は立っていて、能力は落ちていない（runner %d 台）%s\n' \
+    "$C_GREEN" "${#RUNNER_SERVICES[@]}" "$C_RESET"
 fi
 
 cat <<EOS
@@ -269,4 +339,5 @@ cat <<EOS
 
     - 許可確認がクローン経由で /approvals に届き、/answer でその仕事だけが再開すること
     - app を再デプロイしても同じ人格で応答し、走行中だったマネージャーを把握していること
+    - runner が2台以上あるなら、委譲が両方へ配られること（GET /runners と /managers）
 EOS

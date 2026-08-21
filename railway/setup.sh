@@ -49,120 +49,20 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly REPO_ROOT
 readonly ENV_FILE="${ALTEROID_ENV_FILE:-$REPO_ROOT/.env}"
 
+# 出力・JSON・対話・railway CLI の包み・runner の名簿は `add-runner.sh` と共有する。
+# **写して持たない** — 器の不変条件（`replace: false` / `skipDeploys: true` / 完全一致で
+# Service を引く / 役は Config as Code で決まる）は、写した片方だけが古びても動いて
+# 見えるからである
+# shellcheck source=railway/lib.sh
+. "$REPO_ROOT/railway/lib.sh"
+
 # 役の既定。README の表と1対1で対応する
 readonly APP_SERVICE="${ALTEROID_APP_SERVICE:-app}"
 readonly RUNNER_SERVICE="${ALTEROID_RUNNER_SERVICE:-runner}"
-readonly APP_CONFIG='/railway/daemon.json'
-readonly RUNNER_CONFIG='/railway/runner.json'
-readonly RUNNER_PORT='4518'
-readonly DAEMON_PORT='4517'
+readonly RUNNER_PORT="$RUNNER_PORT_DEFAULT"
+readonly DAEMON_PORT="$DAEMON_PORT_DEFAULT"
 
 ASSUME_YES=0
-
-# --- 出力（**すべて stderr へ**）--------------------------------------------
-#
-# 値を返す関数を `$(…)` で受けるので、進捗を stdout に出すと値に混ざる。
-# 混ざったことは「変数が設定されているのに効かない」という形でしか現れず、
-# 見つけるのに時間がかかる。だから最初から分けておく。
-
-if [ -t 2 ]; then
-  C_RESET=$'\033[0m' C_BOLD=$'\033[1m' C_DIM=$'\033[2m'
-  C_RED=$'\033[31m' C_GREEN=$'\033[32m' C_YELLOW=$'\033[33m' C_BLUE=$'\033[34m'
-else
-  C_RESET='' C_BOLD='' C_DIM='' C_RED='' C_GREEN='' C_YELLOW='' C_BLUE=''
-fi
-readonly C_RESET C_BOLD C_DIM C_RED C_GREEN C_YELLOW C_BLUE
-
-step() { printf '\n%s==>%s %s%s%s\n' "$C_BLUE" "$C_RESET" "$C_BOLD" "$*" "$C_RESET" >&2; }
-info() { printf '    %s\n' "$*" >&2; }
-dim() { printf '    %s%s%s\n' "$C_DIM" "$*" "$C_RESET" >&2; }
-ok() { printf '    %s✓%s %s\n' "$C_GREEN" "$C_RESET" "$*" >&2; }
-warn() { printf '    %s!%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
-die() {
-  printf '\n%serror%s %s\n' "$C_RED" "$C_RESET" "$*" >&2
-  exit 1
-}
-
-# --- 秘密を含む一時ファイル ------------------------------------------------
-
-# **最初に1つ作る。** 遅延生成にすると `$(tmp_file)` の中＝サブシェルで
-# `TMP_DIR` を代入することになり、親には残らない。すると片付ける相手を親が
-# 知らないまま終わり、**秘密を書いたファイルが消えずに残る**（実際に残った）。
-TMP_DIR="$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/alteroid-railway.XXXXXX")"
-readonly TMP_DIR
-
-# **必ず 0 で返す。** EXIT トラップの最後のコマンドの終了状態が、そのまま
-# スクリプトの終了状態になる。片付けるものが無いだけで「失敗した」と名乗ると、
-# 呼んだ側（CI や別のスクリプト）が成功を失敗と読む
-# shellcheck disable=SC2329 # trap から呼ばれる
-cleanup() {
-  rm -rf "$TMP_DIR"
-  return 0
-}
-trap cleanup EXIT INT TERM
-
-tmp_file() { mktemp "$TMP_DIR/part.XXXXXX"; }
-
-# --- JSON（node は本リポジトリの前提なので在る）-----------------------------
-
-# KEY VALUE KEY VALUE … を JSON オブジェクトへ。値に何が入っていても argv 経由なので壊れない
-json_object() {
-  node -e '
-    const a = process.argv.slice(1), o = {};
-    for (let i = 0; i < a.length; i += 2) o[a[i]] = a[i + 1];
-    process.stdout.write(JSON.stringify(o));
-  ' -- "$@"
-}
-
-# JSON 文字列から式で1つ取り出す。**壊れた入力でも失敗しない**（空文字を返す）。
-# ここで die すると、Railway 側の一時的な応答の乱れがそのまま中断になる
-json_get() {
-  node -e '
-    try {
-      const d = JSON.parse(process.argv[1]);
-      const v = new Function("d", "return (" + process.argv[2] + ")")(d);
-      process.stdout.write(v == null ? "" : String(v));
-    } catch { process.stdout.write(""); }
-  ' -- "${1:-}" "$2"
-}
-
-# --- 対話 -------------------------------------------------------------------
-
-ask() { # <質問> [既定値]
-  local prompt="$1" default="${2:-}" answer=''
-  if [ "$ASSUME_YES" = 1 ]; then
-    printf '%s' "$default"
-    return 0
-  fi
-  if [ -n "$default" ]; then
-    read -r -p "    $prompt [$default]: " answer </dev/tty || true
-  else
-    read -r -p "    $prompt: " answer </dev/tty || true
-  fi
-  printf '%s' "${answer:-$default}"
-}
-
-ask_secret() { # <質問>
-  local prompt="$1" answer=''
-  read -r -s -p "    $prompt: " answer </dev/tty || true
-  printf '\n' >&2
-  printf '%s' "$answer"
-}
-
-ask_yes_no() { # <質問> <yes|no>
-  local prompt="$1" default="${2:-no}" answer='' hint='[y/N]'
-  if [ "$ASSUME_YES" = 1 ]; then
-    [ "$default" = yes ]
-    return
-  fi
-  [ "$default" = yes ] && hint='[Y/n]'
-  read -r -p "    $prompt $hint: " answer </dev/tty || true
-  answer="${answer:-$default}"
-  case "$answer" in
-    y | Y | yes | YES | Yes) return 0 ;;
-    *) return 1 ;;
-  esac
-}
 
 # --- .env -------------------------------------------------------------------
 
@@ -258,15 +158,7 @@ replace_env() { # <KEY> <値>
   dim "$key を $(basename "$ENV_FILE") で置き直した"
 }
 
-# --- railway CLI の薄い包み --------------------------------------------------
-
-# 名前から Service id を引く。**部分一致で拾わない**（`app` と `app-2` を混同しない）
-service_id() { # <名前>
-  local list name_json
-  list="$(railway service list --json 2>/dev/null || true)"
-  name_json="$(node -e 'process.stdout.write(JSON.stringify(process.argv[1]))' -- "$1")"
-  json_get "$list" "(d.find(s => s.name === $name_json) || {}).id"
-}
+# --- railway CLI の薄い包み（共通のものは lib.sh）----------------------------
 
 # PostgreSQL の Service 名は Railway が決める（テンプレート由来。既定 `Postgres`）。
 # **決め打ちにしない** — 変数参照 `\${{名前.DATABASE_URL}}` がその名前に依存する
@@ -282,106 +174,17 @@ postgres_service_name() {
   printf '%s' "$name"
 }
 
-# 変数をまとめて置く。1回の mutation なので途中で半分だけ適用されない
-put_variables() { # <serviceId> <KEY> <VALUE> …
-  local service="$1"
-  shift
-  local vars payload file
-  vars="$(json_object "$@")"
-  payload="$(node -e '
-    const [projectId, environmentId, serviceId, variables] = process.argv.slice(1);
-    process.stdout.write(JSON.stringify({
-      input: {
-        projectId, environmentId, serviceId,
-        variables: JSON.parse(variables),
-        // 追記であって置き換えではない（Railway が注入する変数を消さない）
-        replace: false,
-        // 置いた瞬間にデプロイを走らせない。順番はこちらで決める
-        skipDeploys: true,
-      },
-    }));
-  ' -- "$PROJECT_ID" "$ENVIRONMENT_ID" "$service" "$vars")"
-  # 秘密を引数で渡さない（プロセス一覧に出る）。ファイルは 0600 の一時ディレクトリの中
-  file="$(tmp_file)"
-  printf '%s' "$payload" >"$file"
-  # shellcheck disable=SC2016 # GraphQL の $input はシェルに展開させない
-  railway api 'mutation($input: VariableCollectionUpsertInput!) { variableCollectionUpsert(input: $input) }' \
-    --variables "@$file" --compact >/dev/null
-}
-
-# Config as Code のパスを指す。**ダッシュボードで人間が選ぶ唯一の設定**がこれで、
-# 忘れると `startCommand` が無いので役が決まらない（同じイメージから2役を出している）。
-# CLI に口が無いので GraphQL を直に叩く
-set_config_file() { # <serviceId> <パス>
-  # shellcheck disable=SC2016 # GraphQL の変数はシェルに展開させない
-  railway api 'mutation($serviceId: String!, $environmentId: String, $input: ServiceInstanceUpdateInput!) {
-                 serviceInstanceUpdate(serviceId: $serviceId, environmentId: $environmentId, input: $input)
-               }' \
-    --raw-var "serviceId=$1" \
-    --raw-var "environmentId=$ENVIRONMENT_ID" \
-    --var "input=$(json_object railwayConfigFile "$2")" \
-    --compact >/dev/null
-}
-
-deployment_status() { # <Service名>
-  local list
-  list="$(railway deployment list --service "$1" --limit 1 --json 2>/dev/null || true)"
-  json_get "$list" '((Array.isArray(d) ? d[0] : (d.deployments || [])[0]) || {}).status'
-}
-
-# **source を繋いだだけでデプロイが始まるとは決めつけない。**
-# Railway 側の挙動で、始まることも始まらないこともある。始まらないまま待ち続けると
-# 「30分待ったのに何も起きない」になるので、現れなければこちらから起こす
-ensure_deploy() { # <Service名>
-  local service="$1" waited=0
-  while [ "$waited" -lt 60 ]; do
-    [ -n "$(deployment_status "$service")" ] && return 0
-    sleep 5
-    waited=$((waited + 5))
-  done
-  dim "$service: デプロイが自動で始まらなかったので、こちらから起こす"
-  railway service redeploy --service "$service" --from-source --yes >/dev/null 2>&1 ||
-    railway up --service "$service" --detach >/dev/null 2>&1 ||
-    return 1
-}
-
-# 最新デプロイが終わるまで待つ。**回数では諦めない**が、無限には待たない
-wait_for_deploy() { # <Service名> [制限秒]
-  local service="$1" limit="${2:-1800}" waited=0 interval=10 status=''
-  info "デプロイを待つ（${service}。ビルドから10分ほど）"
-  while [ "$waited" -lt "$limit" ]; do
-    status="$(deployment_status "$service")"
-    case "$status" in
-      SUCCESS)
-        printf '\n' >&2
-        ok "$service: 上がった"
-        return 0
-        ;;
-      FAILED | CRASHED | REMOVED | SKIPPED)
-        printf '\n' >&2
-        warn "$service: ${status}。ログ: railway logs --service $service"
-        return 1
-        ;;
-    esac
-    sleep "$interval"
-    waited=$((waited + interval))
-    printf '    %s… %s (%ds)%s\r' "$C_DIM" "${status:-待機}" "$waited" "$C_RESET" >&2
-  done
-  printf '\n' >&2
-  warn "$service: ${limit}秒では終わらなかった。railway logs --service $service を見る"
-  return 1
-}
-
 # --- 引数 -------------------------------------------------------------------
 
 PROJECT_NAME=''
 WORKSPACE=''
 GIT_REPO=''
 GIT_BRANCH=''
+RUNNER_COUNT=1
 
 usage() {
   cat <<'EOS'
-Railway に alteroid の3 Service（app / runner / PostgreSQL）を用意する。
+Railway に alteroid を用意する（app / runner ×N / PostgreSQL）。
 
   ./railway/setup.sh [オプション]
 
@@ -389,11 +192,15 @@ Railway に alteroid の3 Service（app / runner / PostgreSQL）を用意する�
   -w, --workspace <名前>  Workspace（複数持っているときだけ要る）
   -r, --repo <owner/repo> GitHub 連携する対象（既定: origin から拾う）
   -b, --branch <ブランチ> 追いかけるブランチ（既定: release/prod）
+  -R, --runners <N>       runner の台数（既定: 1）。2 以上なら runner-2, runner-3 …
   -y, --yes               尋ねない（値は .env と既定値から取る）
   -h, --help              これ
 
 人間が埋めるものは compose と同じ .env に集まる。無いものは尋ね、
 合鍵は作って書き留める。既存のプロジェクトには触らず、毎回新しく作る。
+
+**後から足すならこちらは使わない**（既存には触らないので作り直しになる）。
+台数を増やすのは ./railway/add-runner.sh である。
 EOS
 }
 
@@ -401,6 +208,10 @@ while [ $# -gt 0 ]; do
   case "$1" in
     -n | --name)
       PROJECT_NAME="${2:-}"
+      shift 2
+      ;;
+    -R | --runners)
+      RUNNER_COUNT="${2:-}"
       shift 2
       ;;
     -w | --workspace)
@@ -430,6 +241,13 @@ done
 if [ "$ASSUME_YES" != 1 ] && [ ! -e /dev/tty ]; then
   die '端末が無い。値を .env に置いて --yes で回すこと'
 fi
+
+# **台数は先に検算する。** `runners` に数でないものが来ると、後の for が回らないまま
+# 「app だけ在って委譲先が無い」構成が 0 で終わる（頼まれたものと違うのに成功する）
+case "$RUNNER_COUNT" in
+  '' | *[!0-9]*) die "--runners は正の整数（受け取った: ${RUNNER_COUNT:-（空）}）" ;;
+esac
+[ "$RUNNER_COUNT" -ge 1 ] || die '--runners は 1 以上（runner が0台だと委譲先が無い）'
 
 # --- 0. 道具と資格 ----------------------------------------------------------
 
@@ -518,6 +336,41 @@ WORKER_MODEL="$(env_file_get ALTEROID_WORKER_MODEL)"
 ALTEROID_RUNNER_ID_VALUE="$(env_file_get ALTEROID_RUNNER_ID)"
 : "${ALTEROID_RUNNER_ID_VALUE:=runner-primary}"
 
+# --- runner の名前と runner_id（台数ぶん）------------------------------------
+#
+# **`runner_id` は Service ごとに違う値でなければならない。** 台帳の
+# `manager_id → runner_id` を引く鍵であり、`RunnerRegistry#get` は線形一致なので、
+# **同じ id を名乗る2台が並ぶと先に見つかった方が返る**（docs/roadmap.md M5、#106 の
+# 申し送り）。委譲した先とは別の器へ `manager_send` が届く形になり、しかも「届いて
+# いる」ように見える。だから id は台数ぶん作り、**app には置かない**（app は読まない。
+# 1つだけ置くと「2台居るのに id は1つ」という嘘が変数一覧に残る）。
+#
+# 1台目だけ `.env` の値（既定 `runner-primary`）を使うのは、**既に動いている構成の
+# 宛先を変えないため**である。ここを `runner-1` に揃えると、台帳に残った
+# `runner-primary` を誰も名乗らなくなり、走行中だった仕事の引き取り先が消える。
+RUNNER_SERVICES=()
+RUNNER_IDS=()
+n=1
+while [ "$n" -le "$RUNNER_COUNT" ]; do
+  if [ "$n" = 1 ]; then
+    RUNNER_SERVICES+=("$RUNNER_SERVICE")
+    RUNNER_IDS+=("$ALTEROID_RUNNER_ID_VALUE")
+  else
+    RUNNER_SERVICES+=("${RUNNER_SERVICE}-${n}")
+    RUNNER_IDS+=("${RUNNER_SERVICE}-${n}")
+  fi
+  n=$((n + 1))
+done
+
+# 委譲の宛先。**複数台は `ALTEROID_RUNNER_URLS`（カンマ区切り）で渡す。**
+# 単数形も併せて置く — 既に動いている構成が、名簿を複数化しただけで委譲先を失わない
+# ようにするため（`parseRunnerUrls` は両方を読み、空白と重複を落とす）
+RUNNER_URLS=''
+for service in "${RUNNER_SERVICES[@]}"; do
+  [ -z "$RUNNER_URLS" ] || RUNNER_URLS="${RUNNER_URLS},"
+  RUNNER_URLS="${RUNNER_URLS}$(runner_url_for "$service" "$RUNNER_PORT")"
+done
+
 # --- 2. 任意の連携を尋ねる --------------------------------------------------
 
 step '任意の連携'
@@ -598,7 +451,9 @@ step '作るもの'
 
 info "プロジェクト    ${PROJECT_NAME}（新しく作る。既存には触らない）"
 info "Service         ${APP_SERVICE}（${APP_CONFIG}）"
-info "                ${RUNNER_SERVICE}（${RUNNER_CONFIG}）"
+for i in "${!RUNNER_SERVICES[@]}"; do
+  info "                ${RUNNER_SERVICES[$i]}（${RUNNER_CONFIG} / runner_id=${RUNNER_IDS[$i]}）"
+done
 info "                PostgreSQL"
 info "GitHub          ${GIT_REPO:-（連携しない。ローカルから上げる）}${GIT_REPO:+ / $GIT_BRANCH}"
 if [ -n "$GH_TOKEN_VALUE" ]; then
@@ -627,11 +482,8 @@ else
   railway init --name "$PROJECT_NAME" >/dev/null
 fi
 
-PROJECT_ID="$(json_get "$(railway status --json 2>/dev/null || true)" 'd.id')"
-[ -n "$PROJECT_ID" ] || die 'プロジェクト id が取れない。railway status を見る'
-ENVIRONMENT_ID="$(json_get "$(railway environment list --json 2>/dev/null || true)" \
-  '((d.environments || []).find(e => e.isLinked) || (d.environments || [])[0] || {}).id')"
-[ -n "$ENVIRONMENT_ID" ] || die '環境 id が取れない。railway environment list を見る'
+resolve_project ||
+  die 'プロジェクト / 環境の id が取れない。railway status と railway environment list を見る'
 ok "$PROJECT_NAME ($PROJECT_ID)"
 
 step 'PostgreSQL を足す'
@@ -640,29 +492,38 @@ PG_NAME="$(postgres_service_name)"
 [ -n "$PG_NAME" ] || die 'PostgreSQL の Service 名が取れない。railway service list を見る'
 ok "$PG_NAME"
 
-# --- 5. 2つの Service ------------------------------------------------------
+# --- 5. Service（app と runner ×N）-----------------------------------------
 #
 # **順番に意味がある。** repo を繋いだ瞬間にデプロイが走りうるので、変数と
 # Config as Code を先に置く。でないと初回が必ず失敗し、ログが赤で埋まる
 
-step "Service を作る（$APP_SERVICE / ${RUNNER_SERVICE}）"
+step "Service を作る（$APP_SERVICE / ${RUNNER_SERVICES[*]}）"
 # `--service` を必ず明示する。`add` は作った Service を手元のリンクに結ぶので、
 # 省くと後の操作が「最後に作ったもの」へ黙って向く
 railway add --service "$APP_SERVICE" >/dev/null
-railway add --service "$RUNNER_SERVICE" >/dev/null
+for service in "${RUNNER_SERVICES[@]}"; do
+  railway add --service "$service" >/dev/null
+done
 
 APP_ID="$(service_id "$APP_SERVICE")"
-RUNNER_SVC_ID="$(service_id "$RUNNER_SERVICE")"
 [ -n "$APP_ID" ] || die "$APP_SERVICE の id が取れない"
-[ -n "$RUNNER_SVC_ID" ] || die "$RUNNER_SERVICE の id が取れない"
 ok "$APP_SERVICE ($APP_ID)"
-ok "$RUNNER_SERVICE ($RUNNER_SVC_ID)"
+
+RUNNER_SVC_IDS=()
+for service in "${RUNNER_SERVICES[@]}"; do
+  id="$(service_id "$service")"
+  [ -n "$id" ] || die "$service の id が取れない"
+  RUNNER_SVC_IDS+=("$id")
+  ok "$service ($id)"
+done
 
 step 'Config as Code を指す'
 set_config_file "$APP_ID" "$APP_CONFIG"
-set_config_file "$RUNNER_SVC_ID" "$RUNNER_CONFIG"
 ok "$APP_SERVICE → $APP_CONFIG"
-ok "$RUNNER_SERVICE → $RUNNER_CONFIG"
+for i in "${!RUNNER_SERVICES[@]}"; do
+  set_config_file "${RUNNER_SVC_IDS[$i]}" "$RUNNER_CONFIG"
+  ok "${RUNNER_SERVICES[$i]} → $RUNNER_CONFIG"
+done
 
 # --- 6. ドメイン（Google ログインを有効にしたときだけ）----------------------
 
@@ -779,10 +640,12 @@ step '変数を置く'
 shared_pairs=(
   ALTEROID_RUNNER_TOKEN "$RUNNER_TOKEN"
   CLAUDE_CODE_OAUTH_TOKEN "$CLAUDE_TOKEN"
-  ALTEROID_RUNNER_URL "http://\${{$RUNNER_SERVICE.RAILWAY_PRIVATE_DOMAIN}}:$RUNNER_PORT"
+  # 単数形（1台目）と複数形（全台）の両方を置く。**単数形を落とさない** — 既に
+  # 動いている構成が、名簿を複数化しただけで委譲先を失うことになる
+  ALTEROID_RUNNER_URL "$(runner_url_for "$RUNNER_SERVICE" "$RUNNER_PORT")"
+  ALTEROID_RUNNER_URLS "$RUNNER_URLS"
   ALTEROID_RUNNER_BIND '::'
   ALTEROID_RUNNER_PORT "$RUNNER_PORT"
-  ALTEROID_RUNNER_ID "$ALTEROID_RUNNER_ID_VALUE"
   TZ "$TZ_VALUE"
 )
 if [ -n "$DAILY_REPORT_AT" ]; then
@@ -836,28 +699,55 @@ if [ "$EXPOSE_PUBLIC" = 1 ] && [ -n "$PUBLIC_URL" ]; then
   )
 fi
 
-# runner にだけ置くもの。子プロセスを uid 1001 へ降ろすのに特権が要る
-runner_pairs=("${shared_pairs[@]}" RAILWAY_RUN_UID 0)
-
+# runner にだけ置くもの。子プロセスを uid 1001 へ降ろすのに特権が要る。
+# **`ALTEROID_RUNNER_ID` は台ごとに違う**（同じ id を名乗る2台が並ぶと、`manager_send`
+# が委譲先とは別の器へ届く。上の「runner の名前と runner_id」を見る）
 put_variables "$APP_ID" "${app_pairs[@]}"
 ok "$APP_SERVICE: $((${#app_pairs[@]} / 2)) 個（記憶ストアの鍵はここだけ）"
-put_variables "$RUNNER_SVC_ID" "${runner_pairs[@]}"
-ok "$RUNNER_SERVICE: $((${#runner_pairs[@]} / 2)) 個（記憶ストアの鍵は無い）"
+for i in "${!RUNNER_SERVICES[@]}"; do
+  runner_pairs=(
+    "${shared_pairs[@]}"
+    RAILWAY_RUN_UID 0
+    ALTEROID_RUNNER_ID "${RUNNER_IDS[$i]}"
+  )
+  put_variables "${RUNNER_SVC_IDS[$i]}" "${runner_pairs[@]}"
+  ok "${RUNNER_SERVICES[$i]}: $((${#runner_pairs[@]} / 2)) 個（記憶ストアの鍵は無い / runner_id=${RUNNER_IDS[$i]}）"
+done
 
 # --- 8. デプロイ（runner を先に）--------------------------------------------
 
 deploy_failed=0
 
+# **runner を全部先に上げ、app は最後。** daemon は起動時に runner の `/health` へ
+# 名乗りを聞きに行く（繋がらなければ最大2分待ち直すので順番を外しても収束するが、
+# 順番どおりなら待たずに上がる）
+connect_source() { # <Service名>
+  railway service source connect --repo "$GIT_REPO" --branch "$GIT_BRANCH" --service "$1" >/dev/null 2>&1
+}
+
 if [ -n "$GIT_REPO" ]; then
   step "GitHub を繋ぐ（$GIT_REPO / ${GIT_BRANCH}）"
   dim 'runner を先に上げる。daemon は起動時に runner の /health へ名乗りを聞きに行く'
 
-  if railway service source connect --repo "$GIT_REPO" --branch "$GIT_BRANCH" --service "$RUNNER_SERVICE" >/dev/null 2>&1; then
-    ok "$RUNNER_SERVICE ← $GIT_REPO"
-    ensure_deploy "$RUNNER_SERVICE" || deploy_failed=1
-    wait_for_deploy "$RUNNER_SERVICE" || deploy_failed=1
+  # 1台目に失敗したら Railway の GitHub App が見えていない（＝残りも同じ）ので、
+  # 全部ローカルから上げる形へ落ちる。2台目以降の失敗は、その1台だけの話である
+  if connect_source "${RUNNER_SERVICES[0]}"; then
+    ok "${RUNNER_SERVICES[0]} ← $GIT_REPO"
+    ensure_deploy "${RUNNER_SERVICES[0]}" || deploy_failed=1
+    wait_for_deploy "${RUNNER_SERVICES[0]}" || deploy_failed=1
 
-    if railway service source connect --repo "$GIT_REPO" --branch "$GIT_BRANCH" --service "$APP_SERVICE" >/dev/null 2>&1; then
+    for service in "${RUNNER_SERVICES[@]:1}"; do
+      if connect_source "$service"; then
+        ok "$service ← $GIT_REPO"
+        ensure_deploy "$service" || deploy_failed=1
+        wait_for_deploy "$service" || deploy_failed=1
+      else
+        warn "$service の GitHub 連携に失敗した（この1台だけ繋がっていない）"
+        deploy_failed=1
+      fi
+    done
+
+    if connect_source "$APP_SERVICE"; then
       ok "$APP_SERVICE ← $GIT_REPO"
       ensure_deploy "$APP_SERVICE" || deploy_failed=1
       wait_for_deploy "$APP_SERVICE" || deploy_failed=1
@@ -868,7 +758,9 @@ if [ -n "$GIT_REPO" ]; then
   else
     warn "GitHub 連携に失敗した（Railway の GitHub App が $GIT_REPO を見えていない）"
     info 'ダッシュボード → 各 Service → Settings → Source で繋ぐか、ローカルから上げる:'
-    info "  railway up --service $RUNNER_SERVICE --detach"
+    for service in "${RUNNER_SERVICES[@]}"; do
+      info "  railway up --service $service --detach"
+    done
     info "  railway up --service $APP_SERVICE --detach"
     GIT_REPO=''
   fi
@@ -877,13 +769,19 @@ fi
 if [ -z "$GIT_REPO" ]; then
   step 'ローカルから上げる'
   dim 'GitHub 連携が無いので、push では自動デプロイされない（watchPatterns も効かない）'
-  if ask_yes_no "いま上げますか？（$RUNNER_SERVICE → $APP_SERVICE の順）" yes; then
-    railway up --service "$RUNNER_SERVICE" --detach >/dev/null || deploy_failed=1
-    wait_for_deploy "$RUNNER_SERVICE" || deploy_failed=1
+  if ask_yes_no "いま上げますか？（${RUNNER_SERVICES[*]} → $APP_SERVICE の順）" yes; then
+    for service in "${RUNNER_SERVICES[@]}"; do
+      railway up --service "$service" --detach >/dev/null || deploy_failed=1
+      wait_for_deploy "$service" || deploy_failed=1
+    done
     railway up --service "$APP_SERVICE" --detach >/dev/null || deploy_failed=1
     wait_for_deploy "$APP_SERVICE" || deploy_failed=1
   else
-    info "後で: railway up --service $RUNNER_SERVICE --detach && railway up --service $APP_SERVICE --detach"
+    info '後で:'
+    for service in "${RUNNER_SERVICES[@]}"; do
+      info "  railway up --service $service --detach"
+    done
+    info "  railway up --service $APP_SERVICE --detach"
   fi
 fi
 
@@ -897,7 +795,9 @@ fi
 
 if [ "$deploy_failed" = 1 ]; then
   warn 'デプロイのどれかが終わっていない。まずログを見る'
-  info "  railway logs --service $RUNNER_SERVICE"
+  for service in "${RUNNER_SERVICES[@]}"; do
+    info "  railway logs --service $service"
+  done
   info "  railway logs --service $APP_SERVICE"
   info '症状から引く表は railway/README.md にある'
 fi
@@ -923,6 +823,10 @@ cat >&2 <<EOS
     境界と能力を確かめる（境界を入れた側が示す義務）:
 
       ./railway/verify.sh
+
+    runner を後から足す（作り直さずに1台増える）:
+
+      ./railway/add-runner.sh
 EOS
 
 if [ "$EXPOSE_PUBLIC" = 1 ] && [ -n "$PUBLIC_URL" ]; then
