@@ -2,119 +2,19 @@
  * `railway/setup.sh` が置く変数の**割り振り**を固定する。
  *
  * ここで見ているのは「Railway に繋がるか」ではない（それは人間が一度やれば分かる）。
- * **役ごとにどの鍵が渡るか**である。ここが静かにずれると、3コンテナに割った意味が
+ * **役ごとにどの鍵が渡るか**である。ここが静かにずれると、コンテナに割った意味が
  * 消えるのに、動作は正常に見える — つまり気づく場所が他に無い。
  *
  * 偽の `railway` を PATH の先に置いて、スクリプトが投げたはずの GraphQL の入力を
- * 拾って突き合わせる。ネットワークにも本物の Railway にも触らない。
+ * 拾って突き合わせる。ネットワークにも本物の Railway にも触らない
+ * （偽 CLI と足場は `railway/cli-stub.ts`。**`scale-runners.sh` のテストと共有する**）。
  */
-import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { beforeAll, describe, expect, it } from 'vitest';
 
-const SETUP = join(dirname(fileURLToPath(import.meta.url)), 'setup.sh');
-
-/**
- * 偽の railway CLI。呼ばれ方を記録し、もっともらしい JSON を返すだけ。
- *
- * **`api` に来た `--variables @path` の中身を保存する**のが本題で、そこに
- * 「どの Service へ何を置こうとしたか」が全部入っている。
- */
-const FAKE_CLI = `#!/usr/bin/env node
-const fs = require('fs');
-const path = require('path');
-const T = process.env.FAKE_STATE;
-const args = process.argv.slice(2);
-const at = (f) => path.join(T, f);
-fs.appendFileSync(at('calls.log'), args.join(' ') + '\\n');
-
-const services = () => {
-  try {
-    return JSON.parse(fs.readFileSync(at('services.json'), 'utf8'));
-  } catch {
-    return [];
-  }
-};
-const out = (o) => process.stdout.write(typeof o === 'string' ? o : JSON.stringify(o));
-const flag = (n) => {
-  const i = args.indexOf(n);
-  return i >= 0 ? args[i + 1] : undefined;
-};
-
-switch (args[0]) {
-  case '--version':
-    out('railway 5.38.0\\n');
-    break;
-  case 'whoami':
-    out('tester\\n');
-    break;
-  case 'init':
-    break;
-  case 'status':
-    out({ id: 'proj-1', name: 'test' });
-    break;
-  case 'environment':
-    out({ environments: [{ id: 'env-1', name: 'production', isLinked: true }] });
-    break;
-  case 'add': {
-    const s = services();
-    if (args.includes('--database')) {
-      // Railway はテンプレート由来の名前を付ける（--service を見ない）
-      s.push({ id: 'id-Postgres', name: 'Postgres', source: { repo: null, image: 'postgres-ssl:18' } });
-    } else if (args.includes('--service')) {
-      const n = flag('--service');
-      s.push({ id: 'id-' + n, name: n, source: { repo: null, image: null } });
-    }
-    fs.writeFileSync(at('services.json'), JSON.stringify(s));
-    break;
-  }
-  case 'service':
-    if (args[1] === 'list') out(services());
-    break;
-  case 'deployment':
-    out([{ id: 'dep-1', status: 'SUCCESS' }]);
-    break;
-  case 'api': {
-    const v = args.find((a) => a.startsWith('@'));
-    if (v) fs.appendFileSync(at('payloads.jsonl'), fs.readFileSync(v.slice(1), 'utf8') + '\\n');
-    fs.appendFileSync(at('api.log'), args.join(' ') + '\\n');
-    out({ data: { ok: true } });
-    break;
-  }
-  case 'domain':
-    // 新しい Service に繋がっているドメイン（既定は「1つも無い」）
-    if (args[1] === 'list') {
-      out(process.env.FAKE_DOMAIN_LIST ?? '[]');
-      break;
-    }
-    // ドメイン生成が一時的にこける／応答の形が変わる、を再現する
-    if (process.env.FAKE_DOMAIN_FAILS) process.exit(1);
-    out({ domain: 'test-app.up.railway.app' });
-    break;
-  default:
-    out({});
-}
-`;
-
-type Upsert = {
-  projectId: string;
-  environmentId: string;
-  serviceId: string;
-  variables: Record<string, string>;
-  replace: boolean;
-  skipDeploys: boolean;
-};
-
-type Run = {
-  vars: (serviceId: string) => Record<string, string>;
-  upsert: (serviceId: string) => Upsert;
-  calls: string[];
-  apiLog: string;
-  exitCode: number;
-};
+import { childEnv, RAILWAY_DIR, type Run, runScript } from './cli-stub.js';
 
 type Options = {
   /** `railway domain` をこけさせる */
@@ -125,97 +25,32 @@ type Options = {
   allowFailure?: boolean;
   /** 実行後の `.env` を読みたいとき */
   onEnvFile?: (path: string) => void;
+  /** runner の台数（`-c`）。既定は渡さない＝1台 */
+  runners?: number;
 };
-
-/**
- * 子プロセスへ渡す環境変数を**明示的に組み立てる**（呼び出した側のシェルから
- * 引き継ぐのは `PATH` だけ。bash / node / git / openssl を見つけるため）。
- *
- * かつてここは `...process.env` を丸ごと渡していた。setup.sh は
- * `CLAUDE_CODE_OAUTH_TOKEN` / `ALTEROID_RUNNER_TOKEN` / `GH_TOKEN` を `printenv` で
- * 読み、`.env` より**優先する**（人間が回すぶんにはこの順序が正しい）。だから
- * 走らせた人のシェルにその名前が入っていると、`.env` に書いた作り物ではなく
- * **本物の鍵**がスクリプトへ入り、症状が3つとも違う形で出ていた:
- *
- *   1. `GH_TOKEN` — `github_pat_test` と比較して落ち、**差分表示に本物の値が丸ごと出る**。
- *      テスト出力が残る場所（報告・日誌・CI ログ）で走らせれば、そこに写る
- *   2. `ALTEROID_RUNNER_TOKEN` — 同じく落ちて、同じく値が出る
- *   3. `CLAUDE_CODE_OAUTH_TOKEN` — **落ちない。これがいちばん悪い。**「秘密を引数で
- *      渡さない」が `sk-ant-test` を探すのに、実際に流れたのは本物の値なので、
- *      何も確かめないまま緑になる（空振りの合格）
- *
- * 個別に `unset` するのではなく allowlist にしてあるのは、setup.sh が `printenv` を
- * 1つ増やしたときに**ここを直さなくても穴が開かない**ようにするためである。
- * 引き継ぐ名前を足したくなったら、それが `.env` の作り物より強い入力にならないか
- * （＝走らせる場所で結論が変わらないか）を先に考えること。
- */
-function childEnv(
-  parent: NodeJS.ProcessEnv,
-  bin: string,
-  extra: Record<string, string>,
-): Record<string, string> {
-  return { PATH: `${bin}:${parent.PATH ?? ''}`, ...extra };
-}
 
 /** `.env` を1つ書いて setup.sh を通し、投げられた入力と終了状態を返す。 */
 function run(env: string, options: Options = {}): Run {
-  const dir = mkdtempSync(join(tmpdir(), 'alteroid-setup-test.'));
-  const bin = join(dir, 'bin');
-  mkdirSync(bin);
-  const cli = join(bin, 'railway');
-  writeFileSync(cli, FAKE_CLI);
-  chmodSync(cli, 0o755);
-
-  const envFile = join(dir, '.env');
-  writeFileSync(envFile, env);
-
-  let exitCode = 0;
-  try {
-    execFileSync(
-      'bash',
-      [SETUP, '--yes', '--name', 'test', '--repo', 'takecchi/alteroid', '--branch', 'main'],
-      {
-        env: childEnv(process.env, bin, {
-          // **本物の .env を触らせない。** 既定は リポジトリ直下の .env である
-          ALTEROID_ENV_FILE: envFile,
-          FAKE_STATE: dir,
-          ...(options.domainFails ? { FAKE_DOMAIN_FAILS: '1' } : {}),
-          ...(options.domainList ? { FAKE_DOMAIN_LIST: options.domainList } : {}),
-        }),
-        stdio: ['ignore', 'pipe', 'pipe'],
-      },
-    );
-    options.onEnvFile?.(envFile);
-  } catch (e) {
-    options.onEnvFile?.(envFile);
-    const err = e as { status?: number; stderr?: Buffer };
-    exitCode = err.status ?? 1;
-    if (!options.allowFailure) {
-      // 落ちた理由（stderr）を握り潰すと、CI でだけ落ちたときに手掛かりが無くなる
-      throw new Error(`setup.sh が ${exitCode} で終わった\n${err.stderr?.toString() ?? ''}`, {
-        cause: e,
-      });
-    }
-  }
-
-  const payloads = readFileSync(join(dir, 'payloads.jsonl'), 'utf8')
-    .split('\n')
-    .filter(Boolean)
-    .map((l) => (JSON.parse(l) as { input: Upsert }).input);
-
-  const upsert = (serviceId: string): Upsert => {
-    const found = payloads.find((p) => p.serviceId === serviceId);
-    if (!found) throw new Error(`${serviceId} への変数の投入が無い`);
-    return found;
-  };
-
-  return {
-    upsert,
-    vars: (serviceId) => upsert(serviceId).variables,
-    calls: readFileSync(join(dir, 'calls.log'), 'utf8').split('\n').filter(Boolean),
-    apiLog: readFileSync(join(dir, 'api.log'), 'utf8'),
-    exitCode,
-  };
+  return runScript({
+    script: 'setup.sh',
+    args: [
+      '--yes',
+      '--name',
+      'test',
+      '--repo',
+      'takecchi/alteroid',
+      '--branch',
+      'main',
+      ...(options.runners === undefined ? [] : ['--runners', String(options.runners)]),
+    ],
+    envFile: env,
+    extraEnv: {
+      ...(options.domainFails ? { FAKE_DOMAIN_FAILS: '1' } : {}),
+      ...(options.domainList ? { FAKE_DOMAIN_LIST: options.domainList } : {}),
+    },
+    allowFailure: options.allowFailure,
+    onEnvFile: options.onEnvFile,
+  });
 }
 
 const MINIMAL = ['CLAUDE_CODE_OAUTH_TOKEN=sk-ant-test', 'ALTEROID_RUNNER_TOKEN=deadbeef', ''].join(
@@ -223,12 +58,22 @@ const MINIMAL = ['CLAUDE_CODE_OAUTH_TOKEN=sk-ant-test', 'ALTEROID_RUNNER_TOKEN=d
 );
 
 describe('シェルスクリプトの書き方', () => {
+  // **数え上げの持ち主は `railway/` そのものである。** 名前を書き並べると、
+  // スクリプトを1つ足した回だけ静かに素通りする（実際 lib.sh と scale-runners.sh を
+  // 足したとき、この行を直さなければ2本が見張りの外に出ていた）
+  const scripts = readdirSync(RAILWAY_DIR).filter((f) => f.endsWith('.sh'));
+
+  it('数えるスクリプトが1本も無い、にならない', () => {
+    // 上の filter が空を返しても `it.each` は「0件成功」で緑になる（空振りの合格）
+    expect(scripts.length).toBeGreaterThanOrEqual(4);
+  });
+
   // macOS の bash 3.2 は、変数参照の直後に全角文字が続くとそのバイトを**変数名に
   // 取り込む**（`"${ENV_FILE}（…"` を `ENV_FILE（` という名前として読む）。`set -u` の
   // 下では起動直後に unbound variable で死ぬ。日本語のメッセージを書き足すたびに
   // 踏むので、目で見張るのをやめてここで止める
-  it.each(['setup.sh', 'verify.sh'])('%s: 変数参照の直後に全角文字を置かない', (name) => {
-    const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), name), 'utf8');
+  it.each(scripts)('%s: 変数参照の直後に全角文字を置かない', (name) => {
+    const source = readFileSync(join(RAILWAY_DIR, name), 'utf8');
     const offenders = source
       .split('\n')
       .map((line, i) => ({ line, no: i + 1 }))
@@ -340,6 +185,88 @@ describe('setup.sh が置く変数の割り振り', () => {
   it('秘密を引数で渡さない（プロセス一覧に出る）', () => {
     expect(r.apiLog).not.toContain('sk-ant-test');
     expect(r.apiLog).not.toContain('github_pat_test');
+  });
+});
+
+describe('runner を3台で作るとき（-c 3）', () => {
+  let r: Run;
+  beforeAll(() => {
+    r = run([MINIMAL, 'GH_TOKEN=github_pat_test', ''].join('\n'), { runners: 3 });
+  });
+
+  it('runner_id が台ごとに違う', () => {
+    // **同じ id が2台に載ると sticky routing が黙って壊れる。**
+    // 台帳の `manager_id → runner_id` を引く `RunnerRegistry#get` は線形一致で
+    // 先に見つかった方を返すので、`manager_send` が別の器へ届く（`select({runnerId})`
+    // だけは「一意でない」と拒むが、send / abort / transcript / restore は get を通る）。
+    // 名簿は重複を検出しないので、症状は「たまに噛み合わない」だけになる
+    const ids = ['id-runner', 'id-runner-2', 'id-runner-3'].map(
+      (id) => r.vars(id).ALTEROID_RUNNER_ID,
+    );
+    expect(ids).toEqual(['runner-primary', 'runner-2', 'runner-3']);
+    expect(new Set(ids).size).toBe(3);
+  });
+
+  it('1台目の名前は変えない（台帳が指しているのはこれである）', () => {
+    // Service 名 `runner` / runner_id `runner-primary` は既に動いているものの名前で、
+    // 変えると走行中のマネージャーへの経路が切れる
+    expect(r.vars('id-runner').ALTEROID_RUNNER_ID).toBe('runner-primary');
+  });
+
+  it('委譲の宛先は3台ぶん並び、単数形は置かない', () => {
+    const app = r.vars('id-app');
+    expect(app.ALTEROID_RUNNER_URLS).toBe(
+      [
+        'http://${{runner.RAILWAY_PRIVATE_DOMAIN}}:4518',
+        'http://${{runner-2.RAILWAY_PRIVATE_DOMAIN}}:4518',
+        'http://${{runner-3.RAILWAY_PRIVATE_DOMAIN}}:4518',
+      ].join(','),
+    );
+    // 同じことを言う変数を2つ置かない（デーモンは両方読むので害は無いが、
+    // 2か所あると片方だけ直した回に食い違う）
+    expect(app).not.toHaveProperty('ALTEROID_RUNNER_URL');
+  });
+
+  it('app には runner_id を置かない（どの1台か書けない）', () => {
+    expect(r.vars('id-app')).not.toHaveProperty('ALTEROID_RUNNER_ID');
+  });
+
+  it('境界の割り振りは台数が増えても変わらない', () => {
+    for (const id of ['id-runner', 'id-runner-2', 'id-runner-3']) {
+      // 記憶ストアの鍵は1台にも渡らない
+      expect(r.vars(id)).not.toHaveProperty('ALTEROID_DATABASE_URL');
+      // 子プロセスを uid 1001 へ降ろすのに特権が要る
+      expect(r.vars(id).RAILWAY_RUN_UID).toBe('0');
+      // 合鍵は全台で同じ（食い違うと 401 で unusable になる）
+      expect(r.vars(id).ALTEROID_RUNNER_TOKEN).toBe('deadbeef');
+      // 下＝外の世界へ手を伸ばす鍵は伏せない
+      expect(r.vars(id).GH_TOKEN).toBe('github_pat_test');
+    }
+    expect(r.vars('id-app')).not.toHaveProperty('RAILWAY_RUN_UID');
+  });
+
+  it('3台とも Config as Code を指す（指さないと役が決まらない）', () => {
+    // 同じイメージから2役を出しているので、これが無い Service は startCommand を持たない
+    const configured = r.calls.filter((c) => c.startsWith('api mutation($serviceId'));
+    expect(configured).toHaveLength(4); // app + runner × 3
+  });
+
+  it('3台とも app より先に繋ぐ', () => {
+    // 1台でも後回しにすると、デーモンが起きたときその宛先だけ不在から始まる
+    const at = (name: string): number =>
+      r.calls.findIndex((c) => c.includes('source connect') && c.includes(`--service ${name}`));
+    const app = at('app');
+    for (const name of ['runner', 'runner-2', 'runner-3']) {
+      expect(at(name)).toBeGreaterThanOrEqual(0);
+      expect(at(name)).toBeLessThan(app);
+    }
+  });
+
+  it('台数が0や文字では作らない', () => {
+    for (const bad of ['0', 'two', '-1']) {
+      const bogus = run(MINIMAL, { runners: bad as unknown as number, allowFailure: true });
+      expect(bogus.exitCode).not.toBe(0);
+    }
   });
 });
 
