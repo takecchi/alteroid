@@ -43,6 +43,9 @@ function fakeClone() {
   const transcripts = new Map<string, string>();
   const managerSends: { managerId: string; text: string; requestId?: string }[] = [];
   const managerAborts: { managerId: string; reason?: string }[] = [];
+  // `DELETE /managers/:id` が outcome ごとに正しい HTTP ステータスを写すことを見る
+  // ためのノブ。既定は従来どおり `'stopped'`（居れば必ず止まる）。
+  let abortOutcome: 'stopped' | 'not_stopped' | 'unknown' = 'stopped';
 
   const managers: ManagerPool = {
     async start() {
@@ -61,10 +64,19 @@ function fakeClone() {
     },
     async abort(managerId, reason) {
       if (!managerList.some((entry) => entry.managerId === managerId)) {
-        return { outcome: 'unknown' as const, detail: `${managerId} は居ない` };
+        // **2026-08-21 に改名。** 「居ない」は `'unknown'`（確かめられなかった）と
+        // 紛れる別の観測なので `'absent'` に改名した（`manager.ts` の
+        // `ManagerAbortResult` の doc）。
+        return { outcome: 'absent' as const, detail: `${managerId} は居ない` };
       }
       managerAborts.push({ managerId, ...(reason === undefined ? {} : { reason }) });
-      return { outcome: 'stopped' as const, detail: '止めた' };
+      const detail =
+        abortOutcome === 'stopped'
+          ? '止めた'
+          : abortOutcome === 'not_stopped'
+            ? 'まだ止まっていない'
+            : '止まったかは未確認';
+      return { outcome: abortOutcome, detail };
     },
     async list() {
       return managerList;
@@ -119,6 +131,9 @@ function fakeClone() {
     transcripts,
     managerSends,
     managerAborts,
+    setAbortOutcome(outcome: 'stopped' | 'not_stopped' | 'unknown') {
+      abortOutcome = outcome;
+    },
     setReply(events: ChatStreamEvent[]) {
       reply = events;
     },
@@ -1463,6 +1478,53 @@ describe('会話・出来事・マネージャーへの手出し', () => {
 
     expect(response.status).toBe(200);
     expect(fake.managerAborts).toEqual([{ managerId: 'mgr-1', reason: '方針が変わった' }]);
+  });
+
+  /**
+   * **`not_stopped` / `unknown` は 200 のまま、`outcome` で言い分ける。**
+   *
+   * どちらも「そのマネージャーは居る」ことは確かなので、リクエスト自体は正しく
+   * 処理できている——404 にすると「居ない」と紛れる。404 は `absent` だけである。
+   */
+  it('止まっていない・確かめられなかったときも 200 で outcome を返す（404 にしない）', async () => {
+    fake.managerList.push({
+      managerId: 'mgr-1',
+      status: 'running',
+      live: true,
+      cwd: '/work',
+      request: '暴走中',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      waiting: [],
+    });
+
+    fake.setAbortOutcome('not_stopped');
+    const notStopped = await app.request('/managers/mgr-1', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(notStopped.status).toBe(200);
+    expect(await notStopped.json()).toMatchObject({ outcome: 'not_stopped' });
+
+    fake.setAbortOutcome('unknown');
+    const unknown = await app.request('/managers/mgr-1', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(unknown.status).toBe(200);
+    expect(await unknown.json()).toMatchObject({ outcome: 'unknown' });
+  });
+
+  it('居ないマネージャーを止めようとすると 404（absent）', async () => {
+    const response = await app.request('/managers/mgr-none', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    expect(response.status).toBe(404);
   });
 
   it('記憶は消せるし、消したことは日誌に残る', async () => {

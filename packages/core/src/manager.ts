@@ -771,7 +771,8 @@ class Pool implements ManagerPool {
         : `（runner.stop() が例外を投げた: ${stopError instanceof Error ? stopError.message : String(stopError)}）`;
     const attemptedBase =
       reason === undefined ? `${who}が停止を試みた。` : `${who}が停止を試みた: ${reason}`;
-    const stoppedBase = reason === undefined ? `${who}が停止させた。` : `${who}が停止させた: ${reason}`;
+    const stoppedBase =
+      reason === undefined ? `${who}が停止させた。` : `${who}が停止させた: ${reason}`;
     const detail =
       outcome === 'stopped'
         ? `${stoppedBase}${stopErrorNote}`
@@ -782,7 +783,7 @@ class Pool implements ManagerPool {
       type: 'exchange',
       with: 'manager',
       role: 'outbound',
-      text: `[${managerId}] （停止 ${outcome}）${detail}`,
+      text: `[${managerId}] （停止）${detail}`,
     });
     // **outcome ごとに言い分ける。** 止まっていない・不明のときまで「停止させ
     // ました」と言うと、クローンは止まったつもりで次の判断へ進む（R1 の再発）。

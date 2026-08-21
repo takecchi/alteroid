@@ -91,6 +91,23 @@ describe('一覧の札は、観測した分しか言わない', () => {
     expect(await screen.findByText('実行中')).toBeTruthy();
     expect(screen.queryByText(/リモート（PR・ブランチ）/)).toBeNull();
   });
+
+  /**
+   * **`stopped` は `done`（待機中）に潰れない。**
+   *
+   * `done` は自分から手を離しただけで話しかければ続くが、`stopped` は外から
+   * 止められ、runner のセッション一覧から実際に消えたことを確かめた終端である
+   * （`schema.ts` の `jobStatusSchema` の doc）。同じ札を貼ると、止めたはずの
+   * マネージャーが「待機中」に見えて、話しかけられる相手が残っているように
+   * 読める。
+   */
+  it('stopped を done（待機中）と混ぜない', async () => {
+    renderManagers([{ ...BASE, status: 'stopped', live: false }]);
+
+    expect(await screen.findByText('停止済み')).toBeTruthy();
+    expect(screen.queryByText('待機中')).toBeNull();
+    expect(screen.queryByText('完了')).toBeNull();
+  });
 });
 
 /**
