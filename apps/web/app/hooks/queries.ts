@@ -228,8 +228,23 @@ export function summarizeJournalEntry(entry: JournalEntry): string {
     case 'memory_update':
       return `記憶 ${entry.slug} を更新（${entry.cause}）: ${entry.summary}`;
     case 'daily_report':
-      return `${entry.date} の日報`;
+      // **印の付いた行を「日報」と呼ばない**（`schema.ts` の `unavailable` の doc）。
+      // 日誌の一覧は日報の有無を人間が拾い読みする面でもあるので、ここが
+      // 「2026-08-20 の日報」としか言わないと、書けなかった日が書けた日と同じ顔で
+      // 並ぶ。理由まで出すのは日報の面の仕事なので、ここでは印だけを言う。
+      return entry.unavailable === undefined
+        ? `${entry.date} の日報`
+        : `⚠ ${entry.date} の日報は作れなかった: ${entry.unavailable}`;
     case 'external_event':
       return `${entry.source}: ${entry.summary}`;
+    case 'worker_wait': {
+      const cause = entry.byCause;
+      return (
+        `作業者 ${entry.tasks} 体を待つあいだに ${entry.turns} ターン` +
+        `（通知 ${cause.notification} / 自己継続 ${cause.continuation} / 話しかけ ${cause.input}）。` +
+        `うち ${entry.toolless} ターンは道具を1つも動かしていない` +
+        (entry.settled ? '' : '（区間は閉じずに終わった）')
+      );
+    }
   }
 }

@@ -45,6 +45,8 @@ import {
 } from './testing.js';
 import type { UsageTotals } from './usage.js';
 
+type WorkerWaitEvent = Extract<RunnerEvent, { type: 'worker_wait' }>;
+
 /**
  * SDK を実際に呼ばずに委譲の配線を検証する。
  *
@@ -1269,6 +1271,10 @@ function swappableRunner(runnerId = 'runner-primary') {
     usage(managerId: string, models: Record<string, UsageTotals>, sessionId?: string) {
       emit?.({ type: 'usage', managerId, sessionId, models });
     },
+    /** 委譲1区間ぶんの集計を降ろす（runner 側の集計は `runner-wakeup.test.ts` が別に固定する）。 */
+    workerWait(managerId: string, fields: Omit<WorkerWaitEvent, 'type' | 'managerId'>) {
+      emit?.({ type: 'worker_wait', managerId, ...fields });
+    },
   };
 }
 
@@ -1404,6 +1410,94 @@ describe('消費を台帳へ積む', () => {
     // 台帳より前にかかる照会は「0」ではなく「記録が無い」と言えること。
     expect(aggregate.beforeLedger).toBe(true);
     expect(aggregate.notice).toContain('請求明細ではない');
+
+    await s.pool.stop();
+  });
+});
+
+describe('worker_wait — 委譲1区間ぶんの集計を日誌に残す', () => {
+  const runningJob = {
+    id: 'mgr-wait',
+    managerId: 'mgr-wait',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T01:00:00.000Z',
+    status: 'running' as const,
+    summary: '調べもの',
+    request: '調べておいて',
+    cwd: '/work/project',
+    sessionId: 'sess-1',
+    runnerId: 'runner-primary',
+  };
+
+  it('runner から降りた worker_wait は日誌に1件だけ入る（台帳には足さない）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.workerWait('mgr-wait', {
+      openedAt: '2026-08-20T00:00:00.000Z',
+      tasks: 5,
+      turns: 41,
+      byCause: { input: 1, notification: 3, continuation: 37 },
+      toolless: 38,
+      notifications: 3,
+      submits: 0,
+      settled: true,
+    });
+
+    const entries = await vi.waitFor(async () => {
+      const found = await stores.journal.list({ types: ['worker_wait'] });
+      if (found.length === 0) throw new Error('worker_wait がまだ日誌に無い');
+      return found;
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      type: 'worker_wait',
+      tasks: 5,
+      turns: 41,
+      byCause: { input: 1, notification: 3, continuation: 37 },
+      toolless: 38,
+      settled: true,
+    });
+    // sources を渡していなければ日誌にもフィールドごと現れない
+    // （取れない軸に0の行を作らない）。
+    expect(entries[0]).not.toHaveProperty('sources');
+
+    // 台帳（`ManagerSummary`）には足さない。
+    const summary = (await s.pool.list()).find((job) => job.managerId === 'mgr-wait');
+    expect(summary).not.toHaveProperty('workerWait');
+    expect(JSON.stringify(summary)).not.toContain('worker_wait');
+
+    await s.pool.stop();
+  });
+
+  it('sources を渡していれば日誌にもそのまま残る', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.workerWait('mgr-wait', {
+      openedAt: '2026-08-20T00:00:00.000Z',
+      tasks: 1,
+      turns: 1,
+      byCause: { input: 0, notification: 1, continuation: 0 },
+      toolless: 1,
+      notifications: 1,
+      submits: 1,
+      sources: { system: 1 },
+      settled: true,
+    });
+
+    const entries = await vi.waitFor(async () => {
+      const found = await stores.journal.list({ types: ['worker_wait'] });
+      if (found.length === 0) throw new Error('worker_wait がまだ日誌に無い');
+      return found;
+    });
+    expect(entries[0]).toMatchObject({ sources: { system: 1 } });
 
     await s.pool.stop();
   });
@@ -2562,5 +2656,74 @@ describe('止めた結果を確かめる', () => {
     expect(text).toContain('ジョブ台帳を記録できませんでした');
     expect(text).toContain('storage is closed');
     expect(text).not.toContain('ghp_');
+  });
+});
+
+/**
+ * **台帳に載っている事実を、一覧が落とさない。**
+ *
+ * `lastFailure`（`schema.ts`）は「直近の1ターンが報告ではなく失敗で終わった」
+ * ことで、人間の面（CLI の `/managers`・Web のマネージャー画面）とクローンが
+ * これを読んで「報告が来た」と区別する。**外へ出るのは `summaryOf` を通った分
+ * だけ**なので、ここが写し忘れると、台帳には載っているのにどの面にも出ない
+ * ——直す前とまったく同じ見え方（`You've hit your org's monthly spend limit …`
+ * が報告として出る）に戻る（`sdk-failure.ts` の doc）。
+ */
+describe('一覧は、直近のターンが失敗で終わったことを落とさない', () => {
+  const failedJob = {
+    id: 'mgr-billing',
+    managerId: 'mgr-billing',
+    createdAt: '2026-08-20T00:00:00.000Z',
+    updatedAt: '2026-08-20T10:00:00.000Z',
+    // **`failed` ではない。** 支出上限に当たった回もセッションは生きているので、
+    // 台帳の状態は `done`（終えて待機中。話しかければ続く）のままである。
+    status: 'done' as const,
+    summary: '調査',
+    request: '調べて',
+    cwd: '/work/project',
+    lastReport: '（このターンは応答を返さずに終わった: billing_error / assistant_error）',
+    lastFailure: {
+      code: 'billing_error',
+      via: 'assistant_error',
+      at: '2026-08-20T10:00:00.000Z',
+    },
+  };
+
+  it('台帳の lastFailure が要約に載る（status は done のまま）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(failedJob);
+    const s = setup(undefined, { stores });
+
+    const listed = (await s.pool.list()).find((m) => m.managerId === 'mgr-billing');
+
+    expect(listed?.lastFailure).toEqual({
+      code: 'billing_error',
+      via: 'assistant_error',
+      at: '2026-08-20T10:00:00.000Z',
+    });
+    // **状態は置き換えない。** ここを `failed` へ倒すと、人間は続けられる仕事を
+    // そこで閉じる（`status` と `lastFailure` を分けた理由そのもの）。
+    expect(listed?.status).toBe('done');
+
+    await s.pool.stop();
+  });
+
+  it('失敗していないマネージャーには lastFailure を作らない（「失敗していない」と「見ていない」を混ぜない）', async () => {
+    const stores = createMemoryStores();
+    // **失敗の印だけを外した同じジョブ**を入れる（`delete` で外すのは、
+    // `exactOptionalPropertyTypes` で `undefined` を代入できないため）。
+    const ok = { ...failedJob, id: 'mgr-ok', managerId: 'mgr-ok' };
+    delete (ok as { lastFailure?: unknown }).lastFailure;
+    await stores.jobs.putJob(ok);
+    const s = setup(undefined, { stores });
+
+    const listed = (await s.pool.list()).find((m) => m.managerId === 'mgr-ok');
+
+    expect(listed).toBeDefined();
+    expect(listed?.lastFailure).toBeUndefined();
+    // キーごと無いこと（`undefined` を入れた形と区別する）。
+    expect(Object.hasOwn(listed as object, 'lastFailure')).toBe(false);
+
+    await s.pool.stop();
   });
 });

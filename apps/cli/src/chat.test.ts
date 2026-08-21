@@ -1,7 +1,14 @@
 import type { Commitment } from '@alteroid/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { renderCommitments, renderManagerList, runSlashCommand, type Listed } from './chat.js';
+import {
+  renderCommitments,
+  renderManagerList,
+  renderReport,
+  renderReportLine,
+  runSlashCommand,
+  type Listed,
+} from './chat.js';
 
 type ManagerListItem = Parameters<typeof renderManagerList>[0][number];
 
@@ -156,6 +163,130 @@ describe('renderManagerList', () => {
     // 畳んだ結果が複数行に散らないこと（cwd が2行目に来る）
     expect(text.split('\n')[1]).toContain('cwd:');
   });
+
+  /**
+   * **直近の1ターンが「報告」ではなく失敗で終わったこと**を、状態に添えて出す。
+   *
+   * 直す前は `You've hit your org's monthly spend limit …` が `lastReport` に
+   * そのまま入り、一覧には「直近の報告」として出ていた（`sdk-failure.ts` の doc）。
+   * 台帳に `lastFailure` が付いた後も、この面が読まなければ人間には
+   * 「報告が来た」としか出ない。
+   */
+  describe('直近のターンが失敗で終わったこと', () => {
+    const FAILURE = {
+      code: 'billing_error',
+      via: 'assistant_error',
+      at: '2026-08-20T10:00:00.000Z',
+    };
+
+    it('SDK の語と時刻を、状態の札を置き換えずに出す', () => {
+      // 上限に当たった回もセッションは生きているので、台帳の status は `done`。
+      const text = renderManagerList([manager({ status: 'done', lastFailure: FAILURE })]);
+
+      // **札は差し替えない**（`failed` へ倒すと「もう続けられない」と読まれる）。
+      expect(text).toContain('[done]');
+      expect(text).toContain('報告ではなく失敗で終わっています');
+      // SDK の語をそのまま。言い換えると人間が引ける手がかりが消える。
+      expect(text).toContain('billing_error');
+      expect(text).toContain('assistant_error');
+      // いつの失敗かが無いと、今も止まっているのか昔一度失敗しただけかが読めない。
+      expect(text).toContain('2026-08-20T10:00:00.000Z');
+      // `status` を `failed` へ倒さなかった理由そのもの。書かないと人間が閉じる。
+      expect(text).toContain('話しかければ続きます');
+    });
+
+    it('失敗で終わった回の本文を「直近の報告」と呼ばない', () => {
+      const text = renderManagerList([
+        manager({
+          status: 'done',
+          lastFailure: FAILURE,
+          lastReport: '（このターンは応答を返さずに終わった: billing_error / assistant_error）',
+        }),
+      ]);
+
+      expect(text).not.toContain('直近の報告');
+      expect(text).toContain('直近のターンの中身');
+    });
+
+    it('失敗の行は報告の本文より上に来る（包みの内側を先に読ませない）', () => {
+      const text = renderManagerList([
+        manager({ status: 'done', lastFailure: FAILURE, lastReport: '包まれた本文' }),
+      ]);
+
+      const failure = text.indexOf('報告ではなく失敗で終わっています');
+      const body = text.indexOf('包まれた本文');
+      expect(failure).toBeGreaterThanOrEqual(0);
+      expect(failure).toBeLessThan(body);
+    });
+
+    it('失敗していない回には何も足さず、報告は報告と呼ぶ', () => {
+      const text = renderManagerList([
+        manager({ status: 'done', lastReport: 'スキーマまで書いた' }),
+      ]);
+
+      expect(text).not.toContain('報告ではなく失敗');
+      expect(text).not.toContain('⚠');
+      expect(text).toContain('直近の報告: スキーマまで書いた');
+    });
+  });
+});
+
+/**
+ * 日報の行は、**日報が書けなかった印**であることがある（`schema.ts` の
+ * `unavailable`）。人間の面でその本文を素で出すと、実際に起きた壊れ方
+ * （日報の本文が丸ごと `You've hit your org's monthly spend limit …` だった）が
+ * そのまま再現する。
+ */
+describe('renderReport / renderReportLine', () => {
+  const REASON = "You've hit your org's monthly spend limit · ask your admin to raise it";
+
+  it('印の付いた行を「その日の日報」として出さない', () => {
+    const text = renderReport({
+      date: '2026-08-20',
+      body: `（この日の日報は作れなかった。日誌から直接辿ること。理由: ${REASON}）`,
+      unavailable: REASON,
+    });
+
+    // 日報の見出しのまま出すと、人間はエラー文をその日のまとめとして読む。
+    expect(text).not.toContain('── 2026-08-20 の日報 ──');
+    expect(text).toContain('日報は作れなかった');
+    // 理由は言い換えない（人間が SDK の文言で検索できること）。
+    expect(text).toContain(REASON);
+    // 「記録ごと消えた」と読まれないように、降りる先を名指しする。
+    expect(text).toContain('/journal');
+    // 書けていないだけなので、本物を作り直す道があることも言う。
+    expect(text).toContain('/run daily_report');
+  });
+
+  it('印が無ければ本文をそのまま日報として出す', () => {
+    const text = renderReport({ date: '2026-08-20', body: '## 今日やったこと\n進捗があった。' });
+
+    expect(text).toContain('── 2026-08-20 の日報 ──');
+    expect(text).toContain('進捗があった。');
+    expect(text).not.toContain('作れなかった');
+  });
+
+  it('一覧の行でも、印の付いた行を本文の抜粋で出さない', () => {
+    const line = renderReportLine({
+      date: '2026-08-20',
+      body: `（この日の日報は作れなかった。日誌から直接辿ること。理由: ${REASON}）`,
+      unavailable: REASON,
+    });
+
+    expect(line).toContain('2026-08-20');
+    expect(line).toContain('日報なし');
+    // 一覧は日付が並ぶだけの面なので、印が無いと「日報がある日」と同じ顔になる。
+    expect(line).toContain('⚠');
+    expect(line).not.toContain('この日の日報は作れなかった。日誌から直接辿ること');
+  });
+
+  it('一覧の行は、印が無ければこれまでどおり本文の抜粋である', () => {
+    const line = renderReportLine({ date: '2026-08-20', body: '進捗があった。' });
+
+    expect(line).toContain('2026-08-20');
+    expect(line).toContain('進捗があった。');
+    expect(line).not.toContain('⚠');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -182,6 +313,25 @@ function commitment(over: Partial<Commitment> = {}): Commitment {
  * 経路と応答の形が実在することを保証しているのは**型検査のほう**である。ここで
  * 固定するのは「どの経路へ、どんな引数で行くか」だけ。
  */
+interface ConversationSummaryLike {
+  conversationId: string;
+  startedAt: string;
+  updatedAt: string;
+  messages: number;
+  preview: string;
+}
+
+interface ConversationMessageLike {
+  id: string;
+  at: string;
+  role: 'inbound' | 'outbound';
+  text: string;
+}
+
+interface AnswersRequest {
+  answers: { id: string; answer: string }[];
+}
+
 function stubClient(
   options: {
     commitments?: Commitment[];
@@ -189,6 +339,27 @@ function stubClient(
     /** `DELETE /managers/:id` の応答。既定は「止めた」。 */
     abortStatus?: number;
     abortBody?: unknown;
+    /** `GET /conversations` の応答。 */
+    conversations?: ConversationSummaryLike[];
+    conversationsScanned?: number;
+    conversationsStatus?: number;
+    /** `GET /conversations/:id` の応答。 */
+    conversationDetailStatus?: number;
+    conversationDetailBody?: {
+      conversationId: string;
+      messages: ConversationMessageLike[];
+      scanned: number;
+      reachedStart: boolean;
+    };
+    /** `POST /approvals/answer` の応答コード。既定は 200。 */
+    approvalsAnswerStatus?: number;
+    /**
+     * `POST /approvals/answer` が返す `results` を、送った `answers` から作る。
+     * 既定は全件 `ok: true`（1件ごとの失敗を試すテストはここを渡す）。
+     */
+    approvalsAnswerResults?: (
+      answers: { id: string; answer: string }[],
+    ) => { id: string; ok: boolean; error?: string }[];
   } = {},
 ) {
   const calls: { route: string; args: unknown }[] = [];
@@ -230,13 +401,58 @@ function stubClient(
         },
       },
     },
+    conversations: {
+      $get: (args: unknown) => {
+        calls.push({ route: 'GET /conversations', args });
+        return Promise.resolve(
+          reply(options.conversationsStatus ?? 200, {
+            conversations: options.conversations ?? [],
+            scanned: options.conversationsScanned ?? 0,
+          }),
+        );
+      },
+      ':id': {
+        $get: (args: unknown) => {
+          calls.push({ route: 'GET /conversations/:id', args });
+          const param = (args as { param: { id: string } }).param;
+          return Promise.resolve(
+            reply(
+              options.conversationDetailStatus ?? 200,
+              options.conversationDetailBody ?? {
+                conversationId: param.id,
+                messages: [],
+                scanned: 0,
+                reachedStart: true,
+              },
+            ),
+          );
+        },
+      },
+    },
+    approvals: {
+      answer: {
+        $post: (args: { json: AnswersRequest }) => {
+          calls.push({ route: 'POST /approvals/answer', args });
+          const results = (options.approvalsAnswerResults ?? defaultAnswerResults)(
+            args.json.answers,
+          );
+          return Promise.resolve(reply(options.approvalsAnswerStatus ?? 200, { results }));
+        },
+      },
+    },
   };
 
   return { calls, client: client as unknown as Parameters<typeof runSlashCommand>[1] };
 }
 
+function defaultAnswerResults(
+  answers: { id: string; answer: string }[],
+): { id: string; ok: boolean; error?: string }[] {
+  return answers.map((entry) => ({ id: entry.id, ok: true }));
+}
+
 function emptyListed(): Listed {
-  return { approvals: [], commitments: [] };
+  return { approvals: [], commitments: [], conversations: [] };
 }
 
 /** 端末へ書いたものを集める。後始末は `afterEach` の `restoreAllMocks`。 */
@@ -444,7 +660,7 @@ describe('chat の台帳コマンド', () => {
   it('/done は承認待ちの番号を掴まない（覚え場所が別であること）', async () => {
     const read = captureStdout();
     const { calls, client } = stubClient();
-    const listed: Listed = { approvals: ['approval-1'], commitments: [] };
+    const listed: Listed = { approvals: ['approval-1'], commitments: [], conversations: [] };
 
     await runSlashCommand('/done 1', client, listed);
 
@@ -462,6 +678,123 @@ describe('chat の台帳コマンド', () => {
     expect(text).toContain('/commitments');
     expect(text).toContain('/commit ');
     expect(text).toContain('/done ');
+  });
+});
+
+/**
+ * 溜まった承認待ちをまとめて答える（`POST /approvals/answer`）。
+ *
+ * `docs/roadmap.md` M3「溜まった保留を人間が chat / API でまとめて処理できる」の
+ * 未達を塞ぐ。**`/answer`（1件・自由文）は変えない。** ここで固定するのは
+ * `/answers`（複数件）が (1) 1回の呼びでまとめて送ること、(2) 1件を飛ばせる
+ * こと、(3) 途中でやめられる（書いた分だけ送れる）こと、(4) 1件が駄目でも
+ * 残りが進み、その失敗が id ごとに見えること、である。
+ */
+describe('chat の /answers（まとめて答える）', () => {
+  function listedApprovals(ids: string[]): Listed {
+    return { approvals: ids, commitments: [], conversations: [] };
+  }
+
+  it('複数件を1回の POST /approvals/answer にまとめて送る', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient();
+    const listed = listedApprovals(['approval-1', 'approval-2']);
+
+    await runSlashCommand('/answers 1 allow 2 "駄目。理由は後で書く"', client, listed);
+
+    const answerCalls = calls.filter((call) => call.route === 'POST /approvals/answer');
+    expect(answerCalls).toHaveLength(1);
+    const sent = (answerCalls[0]?.args as { json: AnswersRequest }).json.answers;
+    expect(sent).toEqual([
+      { id: 'approval-1', answer: 'allow' },
+      { id: 'approval-2', answer: '駄目。理由は後で書く' },
+    ]);
+    const text = read();
+    expect(text).toContain('[approval-1] 回答しました');
+    expect(text).toContain('[approval-2] 回答しました');
+  });
+
+  /** 番号を書かなければ、その件は送られない（1件飛ばせる）。 */
+  it('一覧の一部だけを番号で指せる（残りを飛ばせる）', async () => {
+    const { calls, client } = stubClient();
+    const listed = listedApprovals(['approval-1', 'approval-2', 'approval-3']);
+
+    await runSlashCommand('/answers 2 allow', client, listed);
+
+    const sent = (calls[0]?.args as { json: AnswersRequest }).json.answers;
+    expect(sent).toEqual([{ id: 'approval-2', answer: 'allow' }]);
+  });
+
+  /** 一覧に無い番号は、その件だけ飛ばして残りは送る（全体を止めない）。 */
+  it('一覧にない番号は飛ばす。残りは送る', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient();
+    const listed = listedApprovals(['approval-1']);
+
+    await runSlashCommand('/answers 9 allow 1 deny', client, listed);
+
+    const sent = (calls[0]?.args as { json: AnswersRequest }).json.answers;
+    expect(sent).toEqual([{ id: 'approval-1', answer: 'deny' }]);
+    expect(read()).toContain('[9] は /approvals の一覧にありません');
+  });
+
+  /**
+   * **成功件数だけを言わない。** 1件が駄目でも残りは進む設計なので、
+   * どの id が通らなかったかが人間から見えなければ、まとめて処理した瞬間に
+   * 取りこぼしが静かに起きる。
+   */
+  it('1件が失敗しても残りは進み、失敗した id が分かる', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      approvalsAnswerResults: (answers) =>
+        answers.map((entry) =>
+          entry.id === 'approval-2'
+            ? { id: entry.id, ok: false, error: 'already answered' }
+            : { id: entry.id, ok: true },
+        ),
+    });
+    const listed = listedApprovals(['approval-1', 'approval-2']);
+
+    await runSlashCommand('/answers 1 allow 2 deny', client, listed);
+
+    const text = read();
+    expect(text).toContain('[approval-1] 回答しました');
+    expect(text).toContain('[approval-2] 回答に失敗: already answered');
+  });
+
+  /** 引数が無ければ何も送らず、使い方を示す。 */
+  it('引数が無ければ何も送らない', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand('/answers', client, listedApprovals(['approval-1']));
+
+    expect(calls).toEqual([]);
+    expect(read()).toContain('使い方: /answers');
+  });
+
+  /** 番号と回答が対になっていない（片方だけ余る）ときは、全体を送らない。 */
+  it('対になっていない入力は何も送らない（一部だけ解釈しない）', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand(
+      '/answers 1 allow 2',
+      client,
+      listedApprovals(['approval-1', 'approval-2']),
+    );
+
+    expect(calls).toEqual([]);
+    expect(read()).toContain('使い方: /answers');
+  });
+
+  it('/help に /answers が載っている', async () => {
+    const read = captureStdout();
+    const { client } = stubClient();
+
+    await runSlashCommand('/help', client, emptyListed());
+
+    expect(read()).toContain('/answers');
   });
 });
 
@@ -538,5 +871,234 @@ describe('chat の /stop', () => {
     await runSlashCommand('/help', client, emptyListed());
 
     expect(read()).toContain('/stop ');
+  });
+});
+
+/**
+ * chat から会話の履歴へ到達できること（`GET /conversations` /
+ * `GET /conversations/:id`）。Web はどちらも使っているのに、CLI からは
+ * 0件だった（`apps/cli/src` に `conversations` という文字列が無かった）。
+ *
+ * **黙って打ち切らないこと自体を確かめる。** `scanned` は常に出す必要があり、
+ * `reachedStart` が偽なら「無い」ではなく「判定できない」と言う必要がある。
+ */
+describe('chat の /conversations と /conversation', () => {
+  it('/conversations は一覧と、遡った件数（scanned）を出す', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient({
+      conversations: [
+        {
+          conversationId: 'conv-1',
+          startedAt: '2026-08-16T10:00:00.000Z',
+          updatedAt: '2026-08-16T10:05:00.000Z',
+          messages: 4,
+          preview: '設計の相談',
+        },
+      ],
+      conversationsScanned: 137,
+    });
+
+    await runSlashCommand('/conversations', client, emptyListed());
+
+    expect(calls).toEqual([{ route: 'GET /conversations', args: { query: {} } }]);
+    const text = read();
+    expect(text).toContain('conv-1');
+    expect(text).toContain('設計の相談');
+    // scanned が無いと、返ってきた件数が「これで全部」に見えてしまう。
+    expect(text).toContain('137');
+    expect(text).toContain('/conversation <番号|id>');
+    // 打ち切られているかもしれないなら、広げる手の在り処（サブコマンド面）を示す。
+    expect(text).toContain('alteroid conversations list --scan');
+    expect(text).toContain('--limit');
+  });
+
+  it('/conversations は空でも、そう言う（黙って何も出さない形にしない）', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({ conversations: [], conversationsScanned: 5000 });
+
+    await runSlashCommand('/conversations', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain('会話はまだありません');
+    // **0件でも scanned を出す。** ここで打ち切ると「本当に無い」のか「窓の外に
+    // 残っている（判定できない）」のかが人間から区別できなくなる（#108 / #109
+    // が塞いだ「黙って打ち切る」の再導入）。サブコマンド面（`conversations.ts`
+    // の `renderConversationsList`）は0件でも scanned を出しており、chat 側
+    // だけ省くと同じ CLI の中に非対称ができる。
+    expect(text).toContain('5000');
+    expect(text).toContain('判定できません');
+    // **0件のときも、広げる手の在り処を示す。** 手そのものは chat に無くて
+    // よいが、在り処が分からないと、人間は広げる必要があることにすら気づけない。
+    expect(text).toContain('alteroid conversations list --scan');
+  });
+
+  /**
+   * **chat からも窓を広げられる。** `/usage from=… to=…` と同じ `key=value` の
+   * 形（`parseUsageFilters` と同じ慣習）で `limit=` / `scan=` を渡せるように
+   * してある。サブコマンド面（`alteroid conversations list --limit --scan`）の
+   * 下位互換ではなく、chat からも同じクエリへ届く。
+   */
+  it('/conversations は limit= / scan= を渡すと、そのままクエリへ乗る', async () => {
+    captureStdout();
+    const { calls, client } = stubClient({ conversations: [], conversationsScanned: 0 });
+
+    await runSlashCommand('/conversations limit=5 scan=9000', client, emptyListed());
+
+    expect(calls).toEqual([
+      { route: 'GET /conversations', args: { query: { limit: '5', scan: '9000' } } },
+    ]);
+  });
+
+  it('/conversation は scan= を渡すと、そのままクエリへ乗る', async () => {
+    captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand('/conversation conv-xyz scan=9000', client, emptyListed());
+
+    const detail = calls.find((call) => call.route === 'GET /conversations/:id');
+    expect(detail?.args).toEqual({ param: { id: 'conv-xyz' }, query: { scan: '9000' } });
+  });
+
+  it('/conversation は番号を id へ引き直す（/conversations の並びと同じ列で覚える）', async () => {
+    captureStdout();
+    const { calls, client } = stubClient({
+      conversations: [
+        {
+          conversationId: 'conv-a',
+          startedAt: '2026-08-16T10:00:00.000Z',
+          updatedAt: '2026-08-16T10:05:00.000Z',
+          messages: 1,
+          preview: '1本目',
+        },
+        {
+          conversationId: 'conv-b',
+          startedAt: '2026-08-17T10:00:00.000Z',
+          updatedAt: '2026-08-17T10:05:00.000Z',
+          messages: 1,
+          preview: '2本目',
+        },
+      ],
+    });
+    const listed = emptyListed();
+
+    await runSlashCommand('/conversations', client, listed);
+    await runSlashCommand('/conversation 2', client, listed);
+
+    const detail = calls.find((call) => call.route === 'GET /conversations/:id');
+    expect(detail).toBeDefined();
+    expect((detail?.args as { param: { id: string } }).param).toEqual({ id: 'conv-b' });
+  });
+
+  /**
+   * 承認待ち・台帳の番号を会話の番号として引かないこと（`Listed` を別フィールド
+   * に分けた理由そのもの — 混ざると人間が見ていないものを読みに行く）。
+   */
+  it('/conversation は承認待ち・台帳の番号を掴まない（覚え場所が別であること）', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient();
+    const listed: Listed = {
+      approvals: ['approval-1'],
+      commitments: ['cmt-1'],
+      conversations: [],
+    };
+
+    await runSlashCommand('/conversation 1', client, listed);
+
+    expect(calls).toEqual([]);
+    expect(read()).toContain('/conversations の一覧にありません');
+  });
+
+  it('/conversation は id をそのまま指せる（番号を経由しなくてよい）', async () => {
+    captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand('/conversation conv-xyz', client, emptyListed());
+
+    const detail = calls.find((call) => call.route === 'GET /conversations/:id');
+    expect((detail?.args as { param: { id: string } }).param).toEqual({ id: 'conv-xyz' });
+  });
+
+  it('/conversation は発言を古い順に出し、先頭まで届いたかを言う', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      conversationDetailBody: {
+        conversationId: 'conv-1',
+        messages: [
+          { id: 'm1', at: '2026-08-16T10:00:00.000Z', role: 'inbound', text: '設計どうする？' },
+          { id: 'm2', at: '2026-08-16T10:01:00.000Z', role: 'outbound', text: 'こう考えている' },
+        ],
+        scanned: 42,
+        reachedStart: true,
+      },
+    });
+
+    await runSlashCommand('/conversation conv-1', client, emptyListed());
+
+    const text = read();
+    const human = text.indexOf('設計どうする？');
+    const clone = text.indexOf('こう考えている');
+    expect(human).toBeGreaterThanOrEqual(0);
+    expect(human).toBeLessThan(clone);
+    expect(text).toContain('42');
+    expect(text).toContain('先頭まで届きました');
+  });
+
+  /**
+   * **「無い」と「判定できない」を混ぜない。** `messages` が空でも `reachedStart`
+   * が偽なら、それは発言が無かったのではなく窓の外にあるかもしれない、である。
+   */
+  it('/conversation は reachedStart が偽なら「無い」と言わず、判定できないと言う', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      conversationDetailBody: {
+        conversationId: 'conv-1',
+        messages: [],
+        scanned: 2000,
+        reachedStart: false,
+      },
+    });
+
+    await runSlashCommand('/conversation conv-1', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain('判定できません');
+    expect(text).not.toContain('発言はありません');
+    // **打ち切られているなら、広げる手の在り処を示す。** 文言だけでなく
+    // `--scan` とサブコマンド名（`alteroid conversations show`）が実際に
+    // 出ることまで見る — でないと在り処が消えても緑のまま通ってしまう。
+    expect(text).toContain('alteroid conversations show --scan');
+  });
+
+  it('/conversation は 404（遡り切れたうえで無い）なら、そう言う', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      conversationDetailStatus: 404,
+      conversationDetailBody: undefined,
+    });
+
+    await runSlashCommand('/conversation conv-missing', client, emptyListed());
+
+    expect(read()).toContain('そんな会話はありません: conv-missing');
+  });
+
+  it('/conversation は id が無ければ使い方を出す', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand('/conversation', client, emptyListed());
+
+    expect(calls).toEqual([]);
+    expect(read()).toContain('使い方: /conversation');
+  });
+
+  it('/help に両方載っている（入口の等価性）', async () => {
+    const read = captureStdout();
+    const { client } = stubClient();
+
+    await runSlashCommand('/help', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain('/conversations');
+    expect(text).toContain('/conversation <番号|id>');
   });
 });

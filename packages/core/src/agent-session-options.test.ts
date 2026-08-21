@@ -257,6 +257,11 @@ describe('マネージャー（runner）へ渡す Options', () => {
     expect(typeof options.canUseTool).toBe('function');
     expect(options.hooks?.PostToolUse).toHaveLength(1);
     expect(options.hooks?.PreCompact).toHaveLength(1);
+    // `UserPromptSubmit` は観測専用（`worker_wait`。#129 で入った）。**ここで
+    // 固定するのは、これが「渡さなくても動く」種類のフックだからである** —
+    // 落ちても機能は壊れず、消えるのは観測だけなので、気づく契機がここにしか
+    // 無い（PRD「可観測性」）。
+    expect(options.hooks?.UserPromptSubmit).toHaveLength(1);
     expect(options.sessionStore).toBeDefined();
     // childUser を渡していないので spawnClaudeCodeProcess は渡らない。
     expect(options.spawnClaudeCodeProcess).toBeUndefined();

@@ -34,7 +34,7 @@ export async function chatCommand(): Promise<void> {
   const rl = createInterface({ input: stdin, output: stdout });
   let conversationId: string | null = null;
   // 直前に一覧したもの。番号で引けるようにするため覚えておく。
-  const listed: Listed = { approvals: [], commitments: [] };
+  const listed: Listed = { approvals: [], commitments: [], conversations: [] };
 
   stdout.write('alteroid chat（Ctrl-D で終了 / /help でコマンド）\n');
 
@@ -202,6 +202,8 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /memory              記憶の一覧
 /memory <slug>       記憶の中身（書き換えは alteroid memory edit <slug>）
 /journal [件数]      日誌（新しい順）
+/conversations [limit=<N>] [scan=<N>]  会話の一覧（新しい順、番号付き）
+/conversation <番号|id> [scan=<N>]  その会話の中身（古い順。番号は /conversations の並び）
 /managers            マネージャーの一覧と状態
 /manager <id>        そのマネージャーのセッション生ログ
 /stop <id> [理由]    その仕事だけをやめさせる（止めた事実は日誌に残る）
@@ -209,6 +211,9 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /archive <id>        生ログの中身
 /approvals           承認待ち（番号付き）
 /answer <番号|id> <回答>  承認待ちに答える（番号は /approvals の並び）
+/answers <番号|id> <回答> [<番号|id> <回答> ...]  溜まった承認待ちにまとめて答える
+                     （回答は1語。複数語なら "..." で囲む。1件が駄目でも残りは進み、
+                      結果は id ごとに出る）
 /commitments         引き受けたまま終わっていない仕事（番号付き）
 /commitments all     片付けたものも含めて見る
 /commit <本文>       引き受けたことを台帳へ積む
@@ -225,13 +230,15 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /**
  * 直前に一覧したものの id を、番号で引けるように覚えておく置き場。
  *
- * **承認待ちと台帳で別々に持つ。** 1本にまとめると `/approvals` の直後の
- * `/done 1` が承認待ちの id を閉じに行く（どちらも「番号で指す一覧」なので、
- * 混ざったことに人間が気づく手がかりが無い）。
+ * **承認待ち・台帳・会話で別々に持つ。** 1本にまとめると `/approvals` の直後の
+ * `/done 1` が承認待ちの id を閉じに行く（どれも「番号で指す一覧」なので、
+ * 混ざったことに人間が気づく手がかりが無い）。会話を足すときも既存のフィールドへ
+ * 相乗りさせず、独立したフィールド（`conversations`）にしてある。
  */
 export interface Listed {
   approvals: string[];
   commitments: string[];
+  conversations: string[];
 }
 
 export async function runSlashCommand(
@@ -288,7 +295,7 @@ export async function runSlashCommand(
       const { reports } = await response.json();
       if (reports.length === 0) stdout.write('（日報はまだありません）\n');
       for (const report of reports) {
-        stdout.write(`  ${report.date}  ${summarizeText(report.body)}\n`);
+        stdout.write(`${renderReportLine(report)}\n`);
       }
       return 'ok';
     }
@@ -422,6 +429,120 @@ export async function runSlashCommand(
       for (const entry of entries) {
         stdout.write(`  ${entry.at}  [${entry.type}] ${summarize(entry)}\n`);
       }
+      return 'ok';
+    }
+
+    /**
+     * 会話の一覧。**`POST /chat` の SSE は流すだけで、後から読み直す口が
+     * chat スラッシュコマンドの側には無かった**（CLI サブコマンドは
+     * `alteroid conversations list` / `show` にある）。器（端末・タブ・アプリ）を
+     * 替えても続きから話せることは PRD「インターフェース」の等価性そのもの。
+     *
+     * **`scanned` を必ず出す。** 日誌から組み立てているので、遡り切れていない
+     * ことがある（黙って打ち切らない — #108 / #109 と同じ理由）。
+     *
+     * **`limit=` / `scan=` で窓を広げられる**（`/usage from=… to=…` と同じ
+     * `key=value` の慣習。`parseUsageFilters` 参照）。既定は変えていない —
+     * 何も指定しなければ従来どおりデーモンの既定（`limit=20` `scan=2000`
+     * 相当）のままで、既定の重さを全員に配ってはいない。
+     */
+    case '/conversations': {
+      const raw = parseKeyValueTokens(rest);
+      const query = {
+        ...(raw.limit === undefined ? {} : { limit: raw.limit }),
+        ...(raw.scan === undefined ? {} : { scan: raw.scan }),
+      };
+      const response = await client.conversations.$get({ query });
+      if (!response.ok) {
+        stdout.write('会話の一覧を読めませんでした（limit= / scan= の値を確かめてください）\n');
+        return 'ok';
+      }
+      const { conversations, scanned } = await response.json();
+      listed.conversations.length = 0;
+      if (conversations.length === 0) {
+        stdout.write('（会話はまだありません）\n');
+      } else {
+        conversations.forEach((conversation, index) => {
+          listed.conversations.push(conversation.conversationId);
+          stdout.write(
+            `  [${index + 1}] ${conversation.conversationId}  更新: ${conversation.updatedAt}` +
+              `  (${conversation.messages}件)\n`,
+          );
+          stdout.write(`      ${conversation.preview}\n`);
+        });
+      }
+      // **0件でも scanned を出す。** ここで打ち切ると、0件が「本当に無い」の
+      // か「窓の外に残っている（判定できない）」のかを人間が区別できなくなる
+      // （#108 / #109 が塞いだ「黙って打ち切る」の再導入）。サブコマンド面
+      // （`conversations.ts` の `renderConversationsList`）と同じ形にしてある。
+      //
+      // **打ち切られているかもしれないなら、広げる手の在り処を示す。** chat
+      // 自身も `/conversations scan=<N>` で広げられるが、それでも「これで
+      // 全部」ではない（`scan` を増やしても遡り切ったとは限らない）ので、
+      // 手の在り処自体は常に示す。手を隠すと、人間は「広げる必要があるかも
+      // しれない」ことにすら気づけなくなる。
+      stdout.write(
+        `  （日誌を新しい方から ${scanned} 件見て集計した。これより古い会話は窓の外に` +
+          '残っているかもしれません — 判定できません。さらに見るには ' +
+          '`/conversations scan=<N>`（表示件数を増やすには limit=<N>。' +
+          'alteroid conversations list --scan / --limit でも同じことができます）\n',
+      );
+      if (conversations.length > 0) {
+        stdout.write('  /conversation <番号|id> で中身を読めます\n');
+      }
+      return 'ok';
+    }
+
+    case '/conversation': {
+      const reference = rest[0];
+      if (!reference) {
+        stdout.write(
+          '使い方: /conversation <番号|id> [scan=<N>]（番号は /conversations の並び）\n',
+        );
+        return 'ok';
+      }
+      const id = resolveListedId(reference, listed.conversations);
+      if (id === null) {
+        stdout.write(`[${reference}] は /conversations の一覧にありません\n`);
+        return 'ok';
+      }
+      // **`scan=` で窓を広げられる**（`/conversations` と同じ `key=value` の
+      // 慣習）。`limit` はこの経路には無い（1件の中身を読むだけで件数の
+      // 絞り込みが要らない）。
+      const rawQuery = parseKeyValueTokens(rest.slice(1));
+      const query = rawQuery.scan === undefined ? {} : { scan: rawQuery.scan };
+      const response = await client.conversations[':id'].$get({ param: { id }, query });
+      if (response.status === 404) {
+        // **遡り切れた場合だけ 404**（デーモン側の約束）。判定できないときは
+        // 200 に空の `messages` と `reachedStart: false` が来る。
+        stdout.write(`そんな会話はありません: ${id}\n`);
+        return 'ok';
+      }
+      if (!response.ok) {
+        stdout.write('会話を読めませんでした（scan= の値を確かめてください）\n');
+        return 'ok';
+      }
+      const { messages, scanned, reachedStart } = await response.json();
+      if (messages.length === 0) {
+        stdout.write(
+          reachedStart
+            ? '（発言はありません）\n'
+            : '（この窓には発言が見つかりませんでした。窓の外に残っているかもしれません' +
+                '（判定できません） — /conversation <番号|id> scan=<N> で広げられます）\n',
+        );
+      } else {
+        for (const message of messages) {
+          const speaker = message.role === 'inbound' ? '人間' : 'クローン';
+          stdout.write(`  [${message.at}] ${speaker}: ${message.text}\n`);
+        }
+      }
+      stdout.write(
+        reachedStart
+          ? `  （日誌を ${scanned} 件遡り、この会話の先頭まで届きました）\n`
+          : `  （日誌を ${scanned} 件遡りましたが先頭には届いていません。これより古い発言が` +
+              '残っているかもしれません — /conversation <番号|id> scan=<N>（または ' +
+              'alteroid conversations show --scan）で広げられます）\n',
+      );
       return 'ok';
     }
 
@@ -559,6 +680,66 @@ export async function runSlashCommand(
     }
 
     /**
+     * 溜まった承認待ちにまとめて答える（`POST /approvals/answer`）。
+     *
+     * **`/answer` は変えない。** あれは「番号|id と、残り全部を1つの自由文として
+     * 答える」形で、複数件を1行に混ぜようとすると自由文とどこで区切るかが
+     * 決められない（引用符を要求すると今の使い方を壊す）。だから複数件は
+     * 別コマンドにして、**各件の回答は1語（複数語なら引用符で囲む）** という
+     * 別の約束にする。/answer の自由文はそのまま残る。
+     *
+     * **1件飛ばせる**（対象の番号を書かなければ良い）・**途中でやめられる**
+     * （書いた分だけで Enter を押せば良い）ので、一覧を全部読んで一括で allow
+     * するしかない、という形にはならない。
+     */
+    case '/answers': {
+      // `line` は先頭で `/\s+/` 分割済みだが、それでは引用符の中の空白が
+      // 保てない。引用符を活かすため、コマンド名の後ろの生の文字列から読み直す。
+      const argsText = line.replace(/^\S+\s*/, '');
+      const tokens = tokenizeQuoted(argsText);
+      const pairs = parseAnswerPairs(tokens);
+      if (pairs === null) {
+        stdout.write(
+          '使い方: /answers <番号|id> <回答> [<番号|id> <回答> ...]' +
+            '（回答は1語。複数語なら "..." で囲む）\n',
+        );
+        return 'ok';
+      }
+
+      const requests: { id: string; answer: string }[] = [];
+      for (const pair of pairs) {
+        const id = resolveListedId(pair.reference, listed.approvals);
+        if (id === null) {
+          stdout.write(`  [${pair.reference}] は /approvals の一覧にありません（飛ばしました）\n`);
+          continue;
+        }
+        requests.push({ id, answer: pair.answer });
+      }
+
+      if (requests.length === 0) {
+        stdout.write('送れる回答がありませんでした\n');
+        return 'ok';
+      }
+
+      const response = await client.approvals.answer.$post({ json: { answers: requests } });
+      if (!response.ok) {
+        stdout.write('まとめて答えられませんでした（サーバ側の検査に落ちました）\n');
+        return 'ok';
+      }
+      // **成功件数だけを言わない。** 1件が駄目でも残りは進む設計なので、
+      // どの id が通らなかったかを人間が見られること。
+      const { results } = await response.json();
+      for (const result of results) {
+        stdout.write(
+          result.ok
+            ? `  [${result.id}] 回答しました\n`
+            : `  [${result.id}] 回答に失敗: ${result.error ?? '不明'}\n`,
+        );
+      }
+      return 'ok';
+    }
+
+    /**
      * 引き受けたまま終わっていない仕事の台帳（`schema.ts` の `commitmentSchema`）。
      *
      * **承認待ちとは別のものである。** あちらは「クローンが人間の答えを待って
@@ -679,8 +860,61 @@ export async function runSlashCommand(
   }
 }
 
-function writeReport(report: { date: string; body: string }): void {
-  stdout.write(`── ${report.date} の日報 ──\n${report.body}\n`);
+/**
+ * 日報1件ぶんの表示。
+ *
+ * **日報の行は、日報が書けなかった印であることがある**（`unavailable`。
+ * `packages/core/src/schema.ts` の doc が正本）。**その本文を素で出さないこと** —
+ * 実際に起きた壊れ方は、日報の本文が丸ごと
+ * `You've hit your org's monthly spend limit …` になっていた、というものである。
+ * 見出しを `── <日付> の日報 ──` のまま出すと、人間はエラー文を「クローンが書いた
+ * その日のまとめ」として読む（＝直した穴が人間の面で開き直る）。
+ *
+ * **理由は言い換えずに出す。** SDK の文言のまま置いてあるので、人間がそれで検索
+ * できる（`usage-limits.ts` の「言い換えないこと」と同じ約束）。
+ *
+ * **次にどこを見ればよいかまで書く。** 「作れなかった」で終わると、その日の記録が
+ * 消えたと読める。実際には日誌には全部残っているので、降りる先を名指しする
+ * （PRD「可観測性」の一本道）。
+ *
+ * 表示を関数に出して export してあるのは `renderManagerList` / `renderUsage` と
+ * 同じ理由 — 何を出しているかを端末なしで確かめられるようにするためである。
+ */
+export function renderReport(report: {
+  date: string;
+  body: string;
+  unavailable?: string | undefined;
+}): string {
+  if (report.unavailable !== undefined && report.unavailable !== '') {
+    return (
+      `── ⚠ ${report.date} の日報は作れなかった ──\n` +
+      `理由: ${report.unavailable}\n` +
+      'この日の記録は日誌に残っている（/journal で辿れる）。' +
+      '書けていないだけなので、原因が解ければ /run daily_report で作り直せる\n'
+    );
+  }
+  return `── ${report.date} の日報 ──\n${report.body}\n`;
+}
+
+/**
+ * 一覧（`/reports`）の1行。
+ *
+ * **ここでも本文を素で出さない。** 一覧は日付が並ぶだけの面なので、印の行を
+ * 本文の抜粋で出すと「その日は上限に当たった話が日報に書かれている」と読める。
+ */
+export function renderReportLine(report: {
+  date: string;
+  body: string;
+  unavailable?: string | undefined;
+}): string {
+  if (report.unavailable !== undefined && report.unavailable !== '') {
+    return `  ${report.date}  ⚠ 日報なし（作れなかった。理由: ${summarizeText(report.unavailable)}）`;
+  }
+  return `  ${report.date}  ${summarizeText(report.body)}`;
+}
+
+function writeReport(report: { date: string; body: string; unavailable?: string }): void {
+  stdout.write(renderReport(report));
 }
 
 /** 一覧で拒否を出す道具の種類数（多い分は件数だけ言う）。 */
@@ -731,6 +965,30 @@ function denialLine(denials: ManagerDenial[] | undefined): string | null {
 }
 
 /**
+ * 直近の1ターンが**報告ではなく失敗**で終わったことを、状態に添える一行。
+ *
+ * **`status` を置き換えない。** 支出上限に当たった回もセッションは生きているので
+ * 台帳の `status` は `done`（＝終えて待機中。話しかければ続く）のままである
+ * （`packages/core/src/schema.ts` の `lastFailure` の doc）。札を `failed` へ倒すと
+ * 嘘になり、人間は「もう続けられない」と読んで起こし直す判断を誤る。
+ *
+ * **SDK の語（`code` / `via`）をそのまま出す。** 言い換えると、人間が SDK の型定義や
+ * ログで引ける手がかりが消える。`billing_error` と `rate_limit` は次の一手が違う
+ * （前者は人間が枠を上げる話で、後者は待てば直る）。
+ *
+ * **何をすればよいかまで書く。** 「失敗した」だけだと、この仕事が死んだのか
+ * 話しかければ続くのかが読めない。続けられるという事実そのものが、この
+ * `status` と `lastFailure` を分けた理由である。
+ */
+function failureLine(failure: ManagerListItem['lastFailure']): string | null {
+  if (failure === undefined || failure === null) return null;
+  return (
+    `⚠ 直近のターンは報告ではなく失敗で終わっています: ${failure.code}（${failure.via}, ${failure.at}）` +
+    '。セッションは生きているので、原因が解ければ話しかければ続きます'
+  );
+}
+
+/**
  * マネージャーの一覧を、人間が読める形へ（`/managers`）。
  *
  * 表示を関数に出してあるのは、`renderUsage`（`usage.ts`）と同じ理由 —
@@ -767,7 +1025,17 @@ export function renderManagerList(managers: ManagerListItem[]): string {
     for (const item of manager.waiting) {
       lines.push(`      返事待ち (${item.requestId}): ${summarizeText(item.summary)}`);
     }
-    if (manager.lastReport) lines.push(`      直近の報告: ${summarizeText(manager.lastReport)}`);
+    // **失敗は報告の**上**に置く。** 下に置くと、包まれたエラー文（`lastReport`）を
+    // 先に読んでから「実は報告ではない」と分かる順になる。
+    const failed = failureLine(manager.lastFailure);
+    if (failed !== null) lines.push(`      ${failed}`);
+    // **失敗した回は「報告」と呼ばない。** 本文は runner 側で
+    // 「（このターンは応答を返さずに終わった: …）」と包まれているが、見出しが
+    // 「直近の報告」のままだと、人間は包みの内側だけを読んで報告として扱う。
+    if (manager.lastReport) {
+      const label = manager.lastFailure === undefined ? '直近の報告' : '直近のターンの中身';
+      lines.push(`      ${label}: ${summarizeText(manager.lastReport)}`);
+    }
   }
   return lines.join('\n');
 }
@@ -823,13 +1091,13 @@ interface UsageFilters {
 type ParsedUsageFilters = { ok: true; filters: UsageFilters } | { ok: false; message: string };
 
 /**
- * `/usage from=… to=… manager=… layer=… site=…` を解く。
+ * `key=value` トークン列を Record へ。`=` が無い・値が空のトークンは無視する。
  *
- * **層と場所の値の集合は core の schema だけが持つ**（`narrowUsageAxis`）。chat 側に
- * 書き写すと、値が増えたときにここだけ古くなる。読めない値は 400 を待たずにその場で
- * 「どれを指定すればよいか」を返す。
+ * `/usage from=… to=…`（`parseUsageFilters`）と `/conversations limit=… scan=…`
+ * `/conversation <id> scan=…` が共有する慣習。窓を広げる知識（何が読めない値
+ * かの判定）は呼び出し側が持つ — ここは字面を割るだけ。
  */
-function parseUsageFilters(tokens: string[]): ParsedUsageFilters {
+function parseKeyValueTokens(tokens: string[]): Record<string, string> {
   const raw: Record<string, string> = {};
   for (const token of tokens) {
     const [key, ...valueParts] = token.split('=');
@@ -837,6 +1105,18 @@ function parseUsageFilters(tokens: string[]): ParsedUsageFilters {
     if (value.length === 0 || key === undefined) continue;
     raw[key] = value;
   }
+  return raw;
+}
+
+/**
+ * `/usage from=… to=… manager=… layer=… site=…` を解く。
+ *
+ * **層と場所の値の集合は core の schema だけが持つ**（`narrowUsageAxis`）。chat 側に
+ * 書き写すと、値が増えたときにここだけ古くなる。読めない値は 400 を待たずにその場で
+ * 「どれを指定すればよいか」を返す。
+ */
+function parseUsageFilters(tokens: string[]): ParsedUsageFilters {
+  const raw = parseKeyValueTokens(tokens);
   const layer = narrowUsageAxis<UsageLayer>(usageLayerSchema, raw.layer);
   if (!layer.ok) return { ok: false, message: `layer= は ${layer.allowed} のどれか` };
   const site = narrowUsageAxis<UsageSite>(usageSiteSchema, raw.site);
@@ -857,6 +1137,47 @@ function parseUsageFilters(tokens: string[]): ParsedUsageFilters {
 function resolveListedId(reference: string, listed: string[]): string | null {
   if (/^\d+$/.test(reference)) return listed[Number(reference) - 1] ?? null;
   return reference;
+}
+
+/**
+ * 引用符（`"..."` / `'...'`）を1トークンとして保つ簡易トークナイザ。
+ *
+ * `/answers` の各回答は1語だが、複数語にしたいときだけ引用符で囲めるように
+ * するための道具。`line.split(/\s+/)` では引用符の中の空白ごと割れてしまう
+ * ので、コマンド本体は `/answers` の処理でだけこちらを使う（他のコマンドの
+ * 単純な空白分割は変えない）。
+ */
+function tokenizeQuoted(text: string): string[] {
+  const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  const tokens: string[] = [];
+  for (const match of text.matchAll(pattern)) {
+    tokens.push(match[1] ?? match[2] ?? match[3] ?? '');
+  }
+  return tokens;
+}
+
+/** `/answers` の1件ぶん — どの承認待ちに、何を答えるか。 */
+interface AnswerPair {
+  reference: string;
+  answer: string;
+}
+
+/**
+ * `/answers` のトークン列を (番号|id, 回答) の対へ読む。
+ *
+ * トークン数が偶数でない・答えが空、のどちらかがあれば全体を不正として
+ * `null` を返す（一部だけ解釈して送ると、書いたつもりの件が黙って落ちる）。
+ */
+function parseAnswerPairs(tokens: string[]): AnswerPair[] | null {
+  if (tokens.length === 0 || tokens.length % 2 !== 0) return null;
+  const pairs: AnswerPair[] = [];
+  for (let i = 0; i < tokens.length; i += 2) {
+    const reference = tokens[i];
+    const answer = tokens[i + 1];
+    if (reference === undefined || answer === undefined || answer.length === 0) return null;
+    pairs.push({ reference, answer });
+  }
+  return pairs;
 }
 
 // ---------------------------------------------------------------------------

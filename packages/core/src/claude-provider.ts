@@ -213,6 +213,13 @@ export interface ManagerSessionOptionsRequest {
   canUseTool: CanUseTool;
   onPostToolUse: HookCallback;
   onPreCompact: HookCallback;
+  /**
+   * ターンの開始を数える観測専用のフック（`worker_wait`）。
+   *
+   * **optional にしない。** 省略できる形にすると、provider を足す側が「渡さない」
+   * ことで観測を静かに落とせる（可観測性は要件である。PRD「可観測性」）。
+   */
+  onUserPromptSubmit: HookCallback;
 }
 
 /** マネージャーへ渡す `Options`。組み立ての知識は `runner.ts` の旧 `#buildOptions` から移した。 */
@@ -232,6 +239,7 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     canUseTool,
     onPostToolUse,
     onPreCompact,
+    onUserPromptSubmit,
   } = request;
 
   return {
@@ -277,6 +285,9 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     hooks: {
       PostToolUse: [{ hooks: [onPostToolUse] }],
       PreCompact: [{ hooks: [onPreCompact] }],
+      // **観測専用**（`worker_wait`）。`{ continue: true }` を返すだけで何も
+      // ブロックしない。理由は `runner.ts` の `#onUserPromptSubmit` の doc を見よ。
+      UserPromptSubmit: [{ hooks: [onUserPromptSubmit] }],
     },
   };
 }

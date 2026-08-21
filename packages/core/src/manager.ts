@@ -54,6 +54,20 @@ export interface ManagerSummary {
   updatedAt: string;
   sessionId?: string;
   lastReport?: string;
+  /**
+   * 直近の1ターンが**報告ではなく失敗**で終わったこと（`jobSchema.lastFailure`）。
+   *
+   * **台帳に載っているのに要約へ載っていなかった。** 台帳（`Job`）は `lastFailure` を
+   * 持つのに、外へ出るのはここを通った分だけなので、人間の面（CLI の `/managers`・
+   * Web のマネージャー画面）には「報告が来た」としか出ていなかった。塞いだ穴が
+   * ここで開き直る — `lastReport` の本文は runner 側で包んであるが、包んだ文字列
+   * だけに頼ると、読む側は本文の先頭を読んで失敗かどうかを判定することになる。
+   *
+   * **`status` と混ぜない。** 支出上限に当たった回もセッションは生きているので
+   * `status` は `done`（＝終えて待機中。話しかければ続く）のままである
+   * （`schema.ts` の `lastFailure` の doc）。
+   */
+  lastFailure?: NonNullable<Job['lastFailure']>;
   /** どの runner で走っているか（`manager_id → runner_id` の対応）。 */
   runnerId?: string;
   workspace?: WorkspaceLocator;
@@ -1186,6 +1200,20 @@ class Pool implements ManagerPool {
       case 'report': {
         record.job.lastReport = event.text;
         record.job.status = event.status;
+        // **失敗として終わった回は台帳にもそう残す。** 本文（`event.text`）は
+        // runner 側で既に包まれているが、包んだ文字列だけに頼ると、一覧を出す側は
+        // 「報告が来た」と「エラーで死んだ」を本文の先頭を読んで判定することに
+        // なる（＝ 表示のたびに文言の判定が要る）。
+        //
+        // **応答として終わった回では消す。** 残すと、いま生きているマネージャーに
+        // 過去の失敗が貼り付いたままになる（`lastReport` と同じで「直近」の意味を
+        // 守る）。`delete` にしているのは、`undefined` を入れると
+        // `exactOptionalPropertyTypes` で通らないため。
+        if (event.failure === undefined) {
+          delete record.job.lastFailure;
+        } else {
+          record.job.lastFailure = { ...event.failure, at: new Date().toISOString() };
+        }
         await this.#persist(record);
         await this.#journal({
           type: 'exchange',
@@ -1282,6 +1310,27 @@ class Pool implements ManagerPool {
             `直近の入力: ${brief(event.input)}\n` +
             '全件は日誌に残っている（`journal_read` で辿れる）。',
         );
+        return;
+      }
+
+      case 'worker_wait': {
+        // **日誌に閉じる。** 台帳（`Job` / `ManagerSummary`）には足さない —
+        // 集計は「何を契機にターンが回ったか」を後から掘るためのもので、
+        // いま生きているマネージャーの状態を表す値ではない（`runner-protocol.ts`
+        // の doc）。クローンの受信箱へも出さない（1区間ごとに割り込むほどの
+        // 事実ではなく、掘りたければ `journal_read` で辿れる）。
+        await this.#journal({
+          type: 'worker_wait',
+          openedAt: event.openedAt,
+          tasks: event.tasks,
+          turns: event.turns,
+          byCause: event.byCause,
+          toolless: event.toolless,
+          notifications: event.notifications,
+          submits: event.submits,
+          ...(event.sources === undefined ? {} : { sources: event.sources }),
+          settled: event.settled,
+        });
         return;
       }
 
@@ -1731,6 +1780,11 @@ function summaryOf(record: ManagerRecord, live: boolean): ManagerSummary {
     waiting: [...record.waiting],
     ...(job.sessionId === undefined ? {} : { sessionId: job.sessionId }),
     ...(job.lastReport === undefined ? {} : { lastReport: job.lastReport }),
+    // **`lastReport` と同じ行で運ぶ。** 片方だけを載せると、読む側は「報告が来た」
+    // と「エラーで死んだ」を本文の文言で判定するしかなくなる（塞いだ穴がここで
+    // 開き直る）。応答として終わった回では台帳側で消えているので、ここは台帳を
+    // そのまま写すだけでよい。
+    ...(job.lastFailure === undefined ? {} : { lastFailure: job.lastFailure }),
     ...(job.runnerId === undefined ? {} : { runnerId: job.runnerId }),
     ...(job.workspace === undefined ? {} : { workspace: job.workspace }),
   };

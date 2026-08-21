@@ -136,6 +136,12 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
     case 'external_event':
     case 'decision':
       break;
+    // **キャッシュを落とす先が無い。** 日誌一覧（冒頭の `journal` の束）は
+    // 既に落としているので十分 — この種別専用の画面・SWR キーは無い
+    // （台帳 / `ManagerSummary` へは意図的に足していない。`manager.ts` の
+    // `#onEvent` の doc を参照）。
+    case 'worker_wait':
+      break;
   }
 }
 

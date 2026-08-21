@@ -161,6 +161,15 @@ export function journalEntryShape(entry: JournalEntryInput): string {
     // `source` は外から来る値なので、名前であっても長さだけにする（上の doc 参照）。
     case 'external_event':
       return `external_event ${size(entry.source, 'source')} ${size(entry.summary)}`;
+    // **全フィールドが runner 自身の数え上げ（整数・列挙値）で、自由文が1つも
+    // 無い。** 値を決めるのは runner であって外の世界ではないので、`size()` へ
+    // 逃がさず数値をそのまま載せてよい（`tool_use` の `actor`/`tool` と同じ判定
+    // 基準 — 「自由文かどうか」ではなく「値を誰が決めるか」）。
+    case 'worker_wait':
+      return (
+        `worker_wait tasks=${entry.tasks} turns=${entry.turns} ` +
+        `toolless=${entry.toolless} settled=${entry.settled}`
+      );
   }
 }
 

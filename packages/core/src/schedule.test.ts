@@ -1296,4 +1296,34 @@ describe('取りこぼした日報', () => {
       }),
     ).resolves.toEqual(['2026-08-12']);
   });
+
+  /**
+   * **「書けなかった」の印が付いた行を日報として数えると、後追いが死ぬ。**
+   *
+   * 上限でターンが死んだ日には `unavailable` の印が付いた行だけが残る
+   * （`schema.ts` の doc）。それを日報として数えると、その日は以後この後追いの
+   * 対象から永久に外れ、**本物の日報は二度と書かれない**。
+   */
+  it('unavailable の印が付いた行は日報として数えない（後追いの対象に残す）', async () => {
+    const placeholder = (date: string, when: Date): JournalEntry => ({
+      type: 'daily_report',
+      id: `placeholder-${date}`,
+      at: when.toISOString(),
+      date,
+      body: '（この日の日報は作れなかった。日誌から直接辿ること。理由: …）',
+      unavailable: '結果なしで終了: error_during_execution（result_subtype） / 内部で何かが壊れた',
+    });
+
+    const journal = fakeJournal([
+      entry('decision', at(2026, 8, 10, 15, 0)),
+      entry('decision', at(2026, 8, 11, 15, 0)),
+      // 10日は印だけ（＝まだ書けていない）、11日は本物。
+      placeholder('2026-08-10', at(2026, 8, 10, 22, 0)),
+      report('2026-08-11', at(2026, 8, 11, 22, 0)),
+    ]);
+
+    await expect(
+      missingDailyReportDates({ journal, at: cutoff, now: at(2026, 8, 12, 9, 0), lookbackDays: 3 }),
+    ).resolves.toEqual(['2026-08-10']);
+  });
 });

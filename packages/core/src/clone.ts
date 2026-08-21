@@ -42,10 +42,12 @@ import {
   buildTimerPrompt,
 } from './prompt.js';
 import { DAILY_REPORT_KIND, localDate, localDayRange } from './schedule.js';
+import { isDailyReport, isWrittenDailyReport } from './schema.js';
 import type {
   ChatStreamEvent,
   Commitment,
   InboxEvent,
+  JournalEntry,
   JournalEntryInput,
   MemoryDocument,
   ScheduledRequest,
@@ -71,6 +73,12 @@ import {
   type RateLimitFacts,
   type UsageLimitNotice,
 } from './usage-limits.js';
+import {
+  assistantFailureOf,
+  resultErrorLines,
+  resultFailureOf,
+  type SdkFailure,
+} from './sdk-failure.js';
 
 /**
  * クローン = デーモン内の長寿命 SDK セッション1本（docs/architecture.md）。
@@ -308,8 +316,53 @@ interface Turn {
   text: string;
   /** 逐次配信（stream_event）で本文を流したか。流していなければ完成品を流す。 */
   streamed: boolean;
+  /**
+   * SDK が「これは応答ではない」と印を付けたメッセージ（`assistant.error`）。
+   *
+   * **本文は `text` へ入れず、ここへ置く。** 直す前は `assistant` の text ブロックを
+   * 無条件に `text` へ足していたので、支出上限の文言がそのまま「クローンの応答」に
+   * なり、日報の本文にまでなった（`sdk-failure.ts` の doc）。
+   */
+  rejected: SdkFailure | null;
+  /**
+   * 失敗として畳んだ理由（`#reportFailure` が立てる）。
+   *
+   * **`#runTurn` の戻り値をこれで分岐させる。** 直す前の戻り値は `string` 一本で、
+   * 失敗しても `text`（部分出力か空文字）を返していた ＝ 呼び出し側は成否を
+   * 知る手段が無かった。
+   */
+  failure: string | null;
   resolve: () => void;
 }
+
+/**
+ * ターン1本の結果。**「文字列」ではなく「状態」で返す。**
+ *
+ * 直す前は `Promise<string>` で、失敗したターンでも本文（部分出力か空文字）が
+ * 返っていた。呼び出し側（日報）は成否を判別できないので、**エラーの文言を
+ * 応答として保存してしまう**。型で分けておけば、次に戻り値を使う者も同じ穴を
+ * 踏めない。
+ */
+type TurnOutcome =
+  | { status: 'answered'; text: string }
+  | {
+      status: 'failed';
+      reason: string;
+      /**
+       * 枠（利用上限）で保持しているか。真なら**この合図は捨てられておらず、
+       * 枠が開いたら配り直される**（`#pump` の `finally` が `defer` する）ので、
+       * 呼び出し側は「もう書いた」という痕跡を残してはいけない。
+       *
+       * **同名の `Clone#heldForUsage`（`Set<string>`）とは別物である。**
+       * あちらは「どの合図を保持したか」を id で覚えて断り書きを1回に絞る器で、
+       * ここは「いま返しているこの1ターンが保持されたか」の真偽値。どちらも
+       * 同じ事実（枠で保持した）を指すので名前は揃えてあるが、**取り違えると
+       * 意味が反転する** — あちらは配り直しの後も id が残る（消すのは成功した
+       * とき）ので、`has()` を真偽値として使うと「もう保持は解けているのに
+       * 保持中」と読める。
+       */
+      heldForUsage: boolean;
+    };
 
 export function createClone(options: CloneOptions): CloneHost {
   return new Clone(options);
@@ -1405,6 +1458,17 @@ class Clone implements CloneHost {
    * 会話から読めなければ、その要望は満たせない。
    */
   async #reportFailure(conversationId: string | null, message: string): Promise<void> {
+    // **走っているターンに失敗の印を残す。** `#runTurn` の戻り値をこれで分岐させる
+    // （`TurnOutcome`）。ここに置いてあるのは、失敗を畳む経路が4つある（セッションの
+    // 起動失敗 / 読み取りループの例外 / 失敗した `result` / `#handle` の例外）ため —
+    // 呼び出し側ごとに印を立てると、経路が増えたときに**印の無い失敗**が静かに
+    // 混ざり、それは「成功して空文字を返した」と区別できない。
+    //
+    // **`#finishTurn()` より必ず先に呼ばれる**（全4経路でこの順序）。逆にすると
+    // `this.#turn` は既に `null` で、印はどこにも残らない。
+    const running = this.#turn;
+    if (running !== null) running.failure = message;
+
     // 繋がっている人間には即座に見せる。日誌より先なのは、書き込みを待たせて
     // 「反応が無い」時間を伸ばさないため。届かなくても下の記録が残る。
     this.#emit(conversationId, { type: 'error', message });
@@ -1457,9 +1521,13 @@ class Clone implements CloneHost {
    *   `usage_limited` を届ける —
    *   呼び出し側がこの直後に `error`（終端）を出すなら、**この `await` を
    *   先に済ませてから**でなければならない。 |
-   * | `org_policy` | **待たない。** `usage-limits.ts` が「待っても直らないし、
-   *   増やす先も違う」と明記しているので何もしない。従来どおりの失敗として
-   *   扱う（呼び出し側の通常の失敗処理に任せる）。 |
+   * | `org_policy` | **待たないが、記録は残す。** `usage-limits.ts` が「待っても
+   *   直らないし、増やす先も違う」と明記しているので保持はしない（従来どおりの
+   *   失敗として呼び出し側の通常の失敗処理に任せる）。**ただし日誌には書く** —
+   *   直す前はここで早期 return して日誌にも残さなかったので、
+   *   `This service is disabled for your org` で止まったことがどこにも出ず、
+   *   「ただ失敗した」と区別できなかった。**「待たない」は設計判断だが、
+   *   「記録しない」はどこにも書かれていない。** |
    * | `transition` / `warning` | **待たない**（まだ動く）。ただし日誌には残す
    *   — そろそろ止まることが、止まる前に分かるように。 |
    *
@@ -1475,7 +1543,7 @@ class Clone implements CloneHost {
     notice: UsageLimitNotice | undefined,
     conversationId: string | null,
   ): Promise<void> {
-    if (notice === undefined || notice.kind === 'org_policy') return;
+    if (notice === undefined) return;
 
     // 枠が閉じた（あるいは近づいた）と分かった瞬間に日誌へ1件。**言い換えない**
     // — `describeUsageNotice` がそのまま人間の検索できる文言を返す。
@@ -1626,13 +1694,26 @@ class Clone implements CloneHost {
   // ターンの実行
   // -------------------------------------------------------------------------
 
-  /** 応答の本文を返す（内部ターンの結果を取りこぼさないため）。 */
-  async #runTurn(conversationId: string | null, text: string): Promise<string> {
+  /**
+   * ターンを1本回して**結果の状態**を返す（`TurnOutcome`）。
+   *
+   * **本文だけを返さない。** 直す前は `Promise<string>` で、失敗しても
+   * `turn.text` を返していたので、呼び出し側は「クローンが答えた」と
+   * 「SDK がエラーを返した」を区別できなかった（`sdk-failure.ts` の doc）。
+   */
+  async #runTurn(conversationId: string | null, text: string): Promise<TurnOutcome> {
     // ターンは **セッションを起こす前に** 登録する。セッションの生成が失敗したり
     // 読み取りが即死したりしても、待っているターンを必ず誰かが解放できるように。
     let turn!: Turn;
     const done = new Promise<void>((resolve) => {
-      turn = { conversationId, text: '', streamed: false, resolve };
+      turn = {
+        conversationId,
+        text: '',
+        streamed: false,
+        rejected: null,
+        failure: null,
+        resolve,
+      };
       this.#turn = turn;
     });
 
@@ -1654,11 +1735,24 @@ class Clone implements CloneHost {
     }
 
     await done;
-    return turn.text;
+
+    // **失敗の印を先に見る。** 本文が部分的に出ていても、失敗したターンの本文は
+    // 応答ではない（`daily_report` はまさにそれを本文として保存していた）。
+    if (turn.failure !== null) {
+      return {
+        status: 'failed',
+        reason: turn.failure,
+        // 保持しているかは `#usageBlocked` が持つ。**`#pump` の `finally` が
+        // `defer` を決めるのに使うのと同じ値を読む** — 別の判定を書くと、
+        // 「保持したのに呼び出し側は保持していないと思っている」がありうる。
+        heldForUsage: this.#usageBlocked !== null,
+      };
+    }
+    return { status: 'answered', text: turn.text };
   }
 
   /** 人間に見せない内部ターン（蒸留・承認回答の反映・人間以外の起点）。 */
-  async #runInternal(text: string): Promise<string> {
+  async #runInternal(text: string): Promise<TurnOutcome> {
     return this.#runTurn(null, text);
   }
 
@@ -1849,6 +1943,17 @@ class Clone implements CloneHost {
    * クローンに `daily_report_write` で書かせるが、**書かれなかった日を作らない**。
    * 道具を呼び忘れたらその応答をそのまま日報にする。ここで穴が開くと、人間が
    * 見ようとしたときに見えないという、要件上バグとして扱う状態になる。
+   *
+   * ## **ターンが失敗したときの応答を日報にしないこと**
+   *
+   * 実際に起きた壊れ方は、日報の本文が丸ごと
+   * `You've hit your org's monthly spend limit · ask your admin to raise it at …`
+   * になっていた、というものである。直す前の `#runInternal` は戻り値が `string`
+   * 一本で成否を運ばなかったので、ここは**エラーの文言を日報として保存した**。
+   *
+   * いまは `TurnOutcome` を見る。失敗したときに書くのは
+   * `unavailable`（`schema.ts` の doc）の印が付いた行だけで、**本文は日報では
+   * ないと分かる形にする**。
    */
   async #dailyReport(date: string): Promise<void> {
     const range = localDayRange(date);
@@ -1859,19 +1964,46 @@ class Clone implements CloneHost {
             (error: unknown) => `（この日の記録をまとめられなかった: ${String(error)}）`,
           );
 
-    const answer = await this.#runInternal(buildDailyReportPrompt({ date, digest }));
+    const outcome = await this.#runInternal(buildDailyReportPrompt({ date, digest }));
 
-    const written = await this.#stores.journal
+    // **枠で保持しているなら、痕跡を1つも残さずに引き下がる。** この合図は
+    // 捨てられておらず（`#pump` の `finally` が `defer` する）、枠が開いたら
+    // 配り直されてこの関数がもう一度走る。ここで印だけでも書いてしまうと、
+    // 下の早期 return と `missingDailyReportDates`（`schedule.ts`）の両方が
+    // 「もう書いた」と判断して、**本物の日報が永久に書かれない**。
+    if (outcome.status === 'failed' && outcome.heldForUsage) return;
+
+    const written: JournalEntry[] = await this.#stores.journal
       .list({ types: ['daily_report'], limit: DAILY_REPORT_LOOKUP })
       .catch(() => []);
-    if (written.some((entry) => entry.type === 'daily_report' && entry.date === date)) return;
+    const existing = written.filter(isDailyReport).filter((entry) => entry.date === date);
+    // **印の付いた行は「日報がある」と数えない**（`schema.ts` の `unavailable` の
+    // doc）。数えると、後から本物を書き直す道が閉じる。
+    if (existing.some(isWrittenDailyReport)) return;
+
+    if (outcome.status === 'failed') {
+      // 印は1日1件でよい。**積むと人間が読む唯一の層が「作れなかった」で埋まる。**
+      // 失敗が続いた回数は日誌（`#reportFailure`）に全部残っているので、ここで
+      // 数える必要は無い。
+      if (existing.length > 0) return;
+      await this.#journal({
+        type: 'daily_report',
+        date,
+        // **SDK の文言をそのまま残す**（人間が検索できる形。`usage-limits.ts` の
+        // 「言い換えないこと」と同じ約束）。ただし日報の本文としてではなく、
+        // 書けなかった理由として置く。
+        body: `（この日の日報は作れなかった。日誌から直接辿ること。理由: ${outcome.reason}）`,
+        unavailable: outcome.reason,
+      });
+      return;
+    }
 
     await this.#journal({
       type: 'daily_report',
       date,
       body:
-        answer.trim().length > 0
-          ? answer
+        outcome.text.trim().length > 0
+          ? outcome.text
           : '（クローンがこの日の日報を残さなかった。日誌から直接辿ること。）',
     });
   }
@@ -2502,6 +2634,24 @@ class Clone implements CloneHost {
 
       case 'assistant': {
         const turn = this.#turn;
+        const said = assistantTextOf(message.message);
+
+        // **SDK が「これは応答ではない」と印を付けたメッセージは、応答として
+        // 扱わない。** 支出上限（`billing_error`）・枠（`rate_limit`）・認証の失敗は
+        // ここへ来る。直す前はこの印を1度も見ておらず、text ブロックを無条件に
+        // `turn.text` へ足していたので、`You've hit your org's monthly spend limit …`
+        // がそのままクローンの応答になり、日報の本文にまでなった。
+        //
+        // **本文は捨てず `turn.rejected` へ置く**（`resultFailureOf` と同じ材料として
+        // `classifyUsageNotice` へ渡る）。人間へ `text` として流さないのは、
+        // 「返答が来た」と見えてしまうからである — 終端は `result` の分岐が出す
+        // `usage_limited` / `error` に任せる。
+        const rejected = assistantFailureOf(message, said);
+        if (rejected !== undefined) {
+          if (turn) turn.rejected = rejected;
+          return;
+        }
+
         for (const block of contentBlocks(message.message)) {
           if (block.type === 'text' && typeof block.text === 'string') {
             if (turn) turn.text += block.text;
@@ -2544,13 +2694,26 @@ class Clone implements CloneHost {
         }
 
         const turn = this.#turn;
+        // 失敗の印は日誌へ書く前に決める（下の分岐と同じ材料を使う）。**本文を
+        // 「クローンの発言」として無印で残せるかどうかがこれで変わる。**
+        const failure = resultFailureOf(message) ?? turn?.rejected ?? undefined;
+
         if (turn && turn.text.trim().length > 0) {
           // 内部ターン（蒸留・自律）も必ず残す。見えない層を作らない。
+          //
+          // **失敗したターンの本文には印を付ける。** 本文を捨てないのは、人間は
+          // それを画面で現に見ている（逐次配信）ので、履歴から消すと見たものが
+          // 探せなくなるからである。**無印で残さないのは、日誌が digest を通って
+          // 次の日報の材料になるからである** — 印が無いと「クローンがそう言った」
+          // として翌日の日報に効いてしまう。
           await this.#journal({
             type: 'exchange',
             with: turn.conversationId === null ? 'self' : 'human',
             role: 'outbound',
-            text: turn.text,
+            text:
+              failure === undefined
+                ? turn.text
+                : `（このターンは失敗して終わった。以下は失敗する前に出ていた本文である）\n${turn.text}`,
             ...(turn.conversationId === null ? {} : { conversationId: turn.conversationId }),
           });
         }
@@ -2566,21 +2729,46 @@ class Clone implements CloneHost {
         // `if (isSuccessResult(message)) { ... } else { ... }` と同じ分岐をここにも
         // 置く**（マネージャー側にはこの分岐と回帰テストがあり、クローン側だけ
         // 無いのは非対称だった）。
-        if (!isSuccessResult(message)) {
-          // **枠（利用上限）の文言を見逃さない。** `resultFailureReason` に渡して
-          // いるのと同じ材料（`subtype` と `result` 本文）を `classifyUsageNotice`
-          // にも通す。`reached` なら以降の合図を保持する側へ切り替わる
-          // （`#noteUsageNotice` が `#usageBlocked` を立てる）。この `await` は
-          // 下の `#reportFailure`（`error` を emit する）より必ず先に終わる —
-          // `usage_limited` は終端ではないので、終端の `error` より先に届いて
-          // いなければならない。
-          await this.#noteUsageNotice(
-            classifyUsageNotice(resultBody(message)),
-            turn?.conversationId ?? null,
-          );
+        //
+        // **判定は `isAnsweredResult` である（`isSuccessResult` ではない）。**
+        // `subtype: 'success'` かつ `is_error: true` という組み合わせが SDK の型に
+        // あり（`SDKResultSuccess.is_error`）、`isSuccessResult` はそれを成功として
+        // 通す — 台帳の問い（累積を通してよいか）と応答の問い（答えとして扱って
+        // よいか）が違うからである（`sdk-failure.ts` の表）。`#recordUsage` は
+        // 上で `isSuccessResult` のまま通してあり、こちらだけを厳しくしている。
+        //
+        // **`turn.rejected` も見る**（`failure` は上で決めてある）。`assistant.error`
+        // が付いたメッセージが来たターンは、たとえ `result` が綺麗な成功で返って
+        // きても応答として扱わない。
+        if (failure !== undefined) {
+          // **枠（利用上限）の文言を見逃さない。** 分類にかけるのは
+          // **「SDK が失敗として出した文言」だけ**である — `assistant.error` の
+          // 本文・`result.result`・`result.errors[]` の3つ。`classifyUsageNotice` は
+          // 部分一致なので、クローンが書いた本文（`turn.text`）をここへ通すと
+          // 「上限に当たったと日報に書いた瞬間に上限と誤判定する」自家中毒に
+          // なる（`sdk-failure.ts` の doc の順序）。
+          //
+          // `errors[]` を混ぜたのは `runner.ts:1111` に揃えるためで、直す前は
+          // クローン側だけがこれを読んでいなかった。
+          //
+          // `reached` なら以降の合図を保持する側へ切り替わる（`#noteUsageNotice` が
+          // `#usageBlocked` を立てる）。この `await` は下の `#reportFailure`
+          // （`error` を emit する）より必ず先に終わる — `usage_limited` は終端では
+          // ないので、終端の `error` より先に届いていなければならない。
+          for (const candidate of [
+            failure.text,
+            resultBody(message),
+            ...resultErrorLines(message),
+          ]) {
+            const notice = classifyUsageNotice(candidate);
+            if (notice !== undefined) {
+              await this.#noteUsageNotice(notice, turn?.conversationId ?? null);
+              break;
+            }
+          }
           // 失敗した result では `done` を出さない。`#reportFailure` が出す
           // `{ type: 'error' }` を終端にする（成功したことにしない）。
-          await this.#reportFailure(turn?.conversationId ?? null, resultFailureReason(message));
+          await this.#reportFailure(turn?.conversationId ?? null, failureReason(failure, message));
           // 失敗側でも必ず畳む。`#runTurn` は `#finishTurn()` が呼ぶ `turn.resolve()`
           // だけを待っており（`await done`）、`#handle`（`human_message` の分岐）は
           // その `#runTurn` を待つ。呼ばなければ `#runTurn` が永久に返らず、それを
@@ -2843,6 +3031,21 @@ function contentBlocks(message: unknown): Block[] {
 }
 
 /**
+ * assistant メッセージの text ブロックを1本に繋いだもの。
+ *
+ * **失敗の印が付いたメッセージの本文を取り出すためにある**（`sdk-failure.ts` の
+ * `assistantFailureOf` へ渡す材料）。応答の積み上げ側（`#dispatch` の `assistant`）が
+ * ブロックごとに `emit` するのと役割が違うので、そちらは書き換えていない。
+ */
+function assistantTextOf(message: unknown): string {
+  let text = '';
+  for (const block of contentBlocks(message)) {
+    if (block.type === 'text' && typeof block.text === 'string') text += block.text;
+  }
+  return text;
+}
+
+/**
  * どの層の手だったかを `PostToolUse` の合図から決める。
  *
  * **`agent_id` で見る**（SDK: "Use this field (not agent_type) to distinguish
@@ -2880,7 +3083,7 @@ function textDelta(event: unknown): string | null {
 }
 
 /**
- * 失敗した result を1行の理由にする。
+ * 失敗を1行の理由にする。
  *
  * **`runner.ts` の `resultText()` と役割は同じだが、共有化はしない** — あちらは
  * `result` の本文と `subtype` のどちらか一方だけを返す作り（本文があれば本文、
@@ -2889,14 +3092,19 @@ function textDelta(event: unknown): string | null {
  * `result: "You've hit your individual spend limit..."` を両方運んでくる。
  * 片方だけにすると「上限で止まった」と「ただ失敗した」が区別できなくなる
  * （`runner.ts` の `else` 側のコメントと同じ理由）。5行程度の重複は許容する。
+ *
+ * **印の出どころ（`via`）も載せる。** `assistant.error` で止まったのか、
+ * `result.subtype` が失敗だったのか、`subtype: 'success'` なのに `is_error` が
+ * 立っていたのかは、**次に同じことが起きたときの掘り始めの位置が違う**。
  */
-function resultFailureReason(message: SDKMessage): string {
-  const candidate = message as { result?: unknown; subtype?: string };
+function failureReason(failure: SdkFailure, message: SDKMessage): string {
   const body =
-    typeof candidate.result === 'string' && candidate.result.length > 0
-      ? candidate.result
-      : '（本文なし）';
-  return `結果なしで終了: ${candidate.subtype ?? '(不明)'} / ${body}`;
+    failure.text.length > 0
+      ? failure.text
+      : resultBody(message).length > 0
+        ? resultBody(message)
+        : (resultErrorLines(message)[0] ?? '（本文なし）');
+  return `結果なしで終了: ${failure.code}（${failure.via}） / ${body}`;
 }
 
 /**

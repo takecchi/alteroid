@@ -4,7 +4,7 @@ import { Page } from '~/components/page';
 import { Badge, Card, Empty, ErrorNote, Spinner } from '~/components/ui';
 import { useManagers } from '~/hooks/queries';
 import { formatRelative } from '~/lib/format';
-import type { ManagerDenial, ManagerStatus } from '~/lib/types';
+import type { ManagerDenial, ManagerStatus, ManagerSummary } from '~/lib/types';
 
 const STATUS: Record<ManagerStatus, { tone: 'ok' | 'warn' | 'danger' | 'neutral'; label: string }> =
   {
@@ -83,6 +83,36 @@ export function ManagerDenialNote({ denials }: { denials: ManagerDenial[] }) {
   );
 }
 
+/**
+ * 直近の1ターンが**報告ではなく失敗**で終わったことを、**状態に添えて**出す一行。
+ *
+ * **状態の札を置き換えない。** 支出上限に当たった回もセッションは生きているので、
+ * 台帳の `status` は `done`（＝画面では「待機中」）のままである
+ * （`packages/core/src/schema.ts` の `lastFailure` の doc）。札を「失敗」へ倒すと
+ * 嘘になり、人間は続けられる仕事をそこで閉じる。
+ *
+ * **これが無いと、人間の画面には「報告が来た」としか出ない。** 直す前は
+ * `You've hit your org's monthly spend limit …` が最後の報告としてそのまま出て
+ * いた（`packages/core/src/sdk-failure.ts` の doc）。本文の側は runner が包んで
+ * あるが、包みだけに頼ると読む側は本文の先頭を読んで判定することになる。
+ *
+ * **SDK の語（`code` / `via`）をそのまま出す。** 言い換えると人間が SDK の型定義や
+ * ログで引ける手がかりが消える。`billing_error` と `rate_limit` は次の一手が違う。
+ */
+export function ManagerFailureNote({
+  failure,
+}: {
+  failure: ManagerSummary['lastFailure'] | undefined;
+}) {
+  if (failure === undefined || failure === null) return null;
+  return (
+    <p className="mt-1 text-[11px] text-danger">
+      ⚠ 直近のターンは報告ではなく失敗で終わっている: {failure.code}（{failure.via}）
+      。セッションは生きているので、原因が解ければ話しかければ続く。
+    </p>
+  );
+}
+
 export default function Managers() {
   const { data, error, isLoading } = useManagers();
   const managers = data?.managers ?? [];
@@ -126,6 +156,11 @@ export default function Managers() {
                       添える（状態を置き換えるものではない）。
                     */}
                     <ManagerDenialNote denials={manager.denials ?? []} />
+                    {/*
+                      失敗も `status` に映らない（上限に当たった回も `done` の
+                      まま）。札はそのまま残し、その隣に添える。
+                    */}
+                    <ManagerFailureNote failure={manager.lastFailure} />
                     {/*
                       札だけでは「で、どうすればいいのか」が伝わらない。クローンは
                       `manager_list` で同じ案内を受け取る — 人間の画面にだけ無いと、
