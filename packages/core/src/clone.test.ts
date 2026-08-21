@@ -831,6 +831,120 @@ describe('クローン', () => {
 });
 
 /**
+ * shutdown 蒸留が conversation_end 蒸留と重複して走るのを防ぐ直し（`d247074`）の歯。
+ *
+ * PR #119 の残作業 — 実装（`#hasUndistilledActivity` と、`#handle` の `'distill'`
+ * 分岐が前回の蒸留成功以降にターンが1本も無ければ見送る判定）に、これまで
+ * テストが1本も無かった。
+ *
+ * **「起きなかったこと」は見送り自身が能動的に書く合図（日誌の `exchange`。
+ * `with: 'self'` / `role: 'outbound'` / 本文に「蒸留（<reason>）は見送った」を
+ * 含む）で見る。** `await` が返った時点でこの行は確定済みであり、タイムアウトで
+ * 「来なかったから見送ったはず」と読むのは `waitForTerminal` の doc が明記して
+ * いるとおり歯があった証拠にならない（別の負荷で `done` そのものが遅れても
+ * 同じ見え方になる）。
+ */
+describe('クローン — shutdown 蒸留の重複防止', () => {
+  /** `buildDistillPrompt` が書く固定の呼びかけ。蒸留ターンかどうかの見分け方。 */
+  const DISTILL_MARKER = '記憶へ移すべきものがあるか確認せよ';
+
+  /** 見送りの日誌（`type: 'exchange'` / `with: 'self'` / `role: 'outbound'`）だけを拾う。 */
+  async function skippedDistillEntries(
+    stores: Stores,
+  ): Promise<{ text: string; with: string; role: string }[]> {
+    const entries = (await stores.journal.list({ types: ['exchange'] })) as {
+      text: string;
+      with: string;
+      role: string;
+    }[];
+    return entries.filter(
+      (entry) =>
+        entry.with === 'self' && entry.role === 'outbound' && entry.text.includes('は見送った'),
+    );
+  }
+
+  it('A: endConversation の直後に stop() が来ても、蒸留は1回しか走らない', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('価値観を伝える'));
+    await waitForDone(s.events);
+    await s.clone.endConversation('conv-1');
+    await s.clone.stop();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    const distillPrompts = inputs.filter((input) => input.includes(DISTILL_MARKER));
+    expect(distillPrompts.length).toBe(1);
+
+    const skipped = await skippedDistillEntries(s.stores);
+    expect(skipped.length).toBe(1);
+    expect(skipped[0]?.text).toContain('蒸留（shutdown）は見送った');
+  });
+
+  it('B: 蒸留の後に新しいターンが1本でも走れば、続く stop() の蒸留は見送らない（取りこぼさない）', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('価値観を伝える'));
+    await waitForDone(s.events);
+    await s.clone.endConversation('conv-1');
+
+    // 別の会話で通常ターンをもう1本。`s.events` は conv-1 専用の購読なので、
+    // conv-2 用の購読をここで別に張って「その通常ターンが終わったこと」を
+    // 直接待つ（既存の `wireEvents` をそのまま使い回す — 新しい足場は作らない）。
+    const other = wireEvents(s.clone, 'conv-2');
+    s.clone.post(humanMessage('別件です', 'conv-2'));
+    await waitForDone(other.events);
+
+    await s.clone.stop();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    const distillPrompts = inputs.filter((input) => input.includes(DISTILL_MARKER));
+    expect(distillPrompts.length).toBe(2);
+    expect(await skippedDistillEntries(s.stores)).toEqual([]);
+  });
+
+  it('C: 蒸留が失敗して終わったら印を下ろさない（次の機会にもう一度試す）', async () => {
+    const s = setup(undefined, createMemoryStores(), {
+      // ターン0＝人間の発言、ターン1＝endConversation の蒸留。**蒸留のターンだけ**
+      // を失敗させる。`error_during_execution` は枠の保持にはならない分類
+      // （`classifyUsageNotice` は SDK が失敗として出した文言だけを見るので、
+      // 既定の応答文言のままなら `#usageBlocked` は立たない）。
+      resultFor: (turnIndex) =>
+        turnIndex === 1 ? { subtype: 'error_during_execution', isError: true } : undefined,
+    });
+
+    s.clone.post(humanMessage('価値観を伝える'));
+    await waitForDone(s.events);
+    await s.clone.endConversation('conv-1');
+    await s.clone.stop();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    const distillPrompts = inputs.filter((input) => input.includes(DISTILL_MARKER));
+    // 失敗した蒸留は印を下ろさないので、stop() の蒸留は見送られず、もう一度走る。
+    expect(distillPrompts.length).toBe(2);
+    expect(await skippedDistillEntries(s.stores)).toEqual([]);
+  });
+
+  it('D: 最初の会話終了では、蒸留が見送られずにちゃんと走る（重複防止が正常な経路を殺していない）', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('価値観を伝える'));
+    await waitForDone(s.events);
+    await s.clone.endConversation('conv-1');
+
+    // **ここでアサーションを済ませる。** この時点で `endConversation` の蒸留は
+    // 成功しており印は下りているので、この後 `stop()` を呼ぶと、その shutdown
+    // 蒸留は「正しく」見送られる（歯Aの管轄）。`stop()` の後で「見送りが無い」を
+    // 検査すると、この歯が自分の生んだ見送りエントリで落ちる。
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    const distillPrompts = inputs.filter((input) => input.includes(DISTILL_MARKER));
+    expect(distillPrompts.length).toBe(1);
+    expect(await skippedDistillEntries(s.stores)).toEqual([]);
+
+    await s.clone.stop();
+  });
+});
+
+/**
  * `self_status`（`self.ts` の `CloneRuntimeFacts`）の配線。
  *
  * **`createSdkMcpServer` は道具を MCP の transport の裏へ隠すので、テストから
@@ -1202,6 +1316,331 @@ describe('クローン — self_status（runtime facts の配線）', () => {
 
     expect(await s.selfStatus()).toContain(line);
 
+    await s.clone.stop();
+  });
+});
+
+/**
+ * `memory_update.cause` の配線 — 蒸留のターンが書いた記憶と、通常のターンが
+ * 書いた記憶を、日誌の上で区別できるか。
+ *
+ * enum に `'distill'` があっても、それを書く本番コードが1つも無ければ、
+ * 絞り込んだ側には常に `'clone'` が返り、蒸留は記憶を書いていないと読める。
+ * `AGENTS.md`「踏みやすい地雷」の**「取れない軸に 0 の行を作る」**（＝「使って
+ * いない」と読める／取れないことが出力から消える）と同じ形だが、**ここは
+ * それより一段悪い — 軸は取れる**（実行文脈から導ける）**のに、取れるものに
+ * ついて嘘の 0 を出していた。** しかも `cause` の enum は
+ * `apps/daemon/openapi.json` に載っている公開の契約なので、その 0 は外へ
+ * 出ていた。
+ *
+ * **`docs/PRD.md`「provider が持たない能力を、持っているように見せない」は
+ * ここの根拠ではない。** あちらは provider の能力（許可確認を上げられない
+ * provider に「それらしい確認」を出す形）についての要件であって、字義が違う。
+ */
+describe('クローン — memory_update の cause 配線（蒸留と通常ターンの区別）', () => {
+  /**
+   * 各ターンの入力が届いた直後、外から解放するまで待つ偽 SDK。
+   *
+   * **`fakeSdk` では代用できない** — あちらの `reply` は同期関数で `await` を
+   * 挟めない。ここでは「入力が届いた（＝ `Clone#turn` が立ち、`kind` が確定
+   * した）」瞬間と「結果を返す」瞬間のあいだへ、外から割り込む窓を作る。
+   * 窓の中で道具のハンドラを直接呼べば、「そのターンが走っている最中に
+   * 書いた記憶」の `cause` を確かめられる。
+   *
+   * **ターンの外で呼ぶと意味を失う** — `#turn` は `#finishTurn()` でターンの
+   * 終わりに `null` へ戻るので、外側で呼ぶと `memoryCause` は既定の `'clone'`
+   * に落ち、「蒸留ターンが走っている最中に書いた」という条件を確かめられない。
+   */
+  function fakeGatedSdk() {
+    const calls: FakeCall[] = [];
+    const gates = new Map<string, () => void>();
+    // 素通しスイッチ。`true` にした後に届く入力はゲートへ登録せず、その場で
+    // 先へ進む（誰も `release` を呼ばなくても対応する `result` まで進む）。
+    // 片付け（`stop()` など）を、本番の重複防止（`#hasUndistilledActivity`）の
+    // 挙動——見送られるか、もう1本ターンが増えるか——に依存させないための道具。
+    let passThrough = false;
+
+    const fn = ((params: { prompt: unknown; options?: Options }) => {
+      const call: FakeCall = { options: params.options ?? {}, inputs: [] };
+      const callIndex = calls.length;
+      calls.push(call);
+
+      async function* generate(): AsyncGenerator<SDKMessage, void> {
+        yield {
+          type: 'system',
+          subtype: 'init',
+          session_id: 'sess-fake',
+          uuid: 'uuid-init',
+        } as unknown as SDKMessage;
+
+        let turnIndex = 0;
+        for await (const message of params.prompt as AsyncIterable<{
+          message: { content: unknown };
+        }>) {
+          const text = String(message.message.content);
+          call.inputs.push(text);
+          const key = `${callIndex}:${turnIndex}`;
+          // **ここで止める。** 解放されるまで、このターンは「走っている最中」
+          // のままである（`this.#turn` が立ち、`kind` が確定している）。
+          // ただし素通しスイッチが入っていれば待たずに先へ進む。
+          if (!passThrough) {
+            await new Promise<void>((resolve) => {
+              gates.set(key, resolve);
+            });
+          }
+          yield {
+            type: 'assistant',
+            message: { content: [{ type: 'text', text: 'わかった' }] },
+            parent_tool_use_id: null,
+            session_id: 'sess-fake',
+            uuid: `uuid-assistant-${key}`,
+          } as unknown as SDKMessage;
+          yield {
+            type: 'result',
+            subtype: 'success',
+            result: 'わかった',
+            session_id: 'sess-fake',
+            uuid: `uuid-result-${key}`,
+          } as unknown as SDKMessage;
+          turnIndex += 1;
+        }
+      }
+
+      const generator = generate();
+      return Object.assign(generator, {
+        close: () => undefined,
+        interrupt: async () => undefined,
+      }) as unknown as Query;
+    }) as unknown as typeof sdkQuery;
+
+    return {
+      fn,
+      calls,
+      /** 指定したターンの窓を解放する（まだ届いていなければ例外で落ちる）。 */
+      release(callIndex: number, turnIndex: number): void {
+        const key = `${callIndex}:${turnIndex}`;
+        const resolve = gates.get(key);
+        if (resolve === undefined) throw new Error(`ゲート ${key} がまだ無い`);
+        gates.delete(key);
+        resolve();
+      },
+      /**
+       * 以後届く入力はゲートで待たず素通しする。**片付けの直前に呼ぶこと。**
+       * これを呼んだ後は、本番の重複防止が「見送る」か「もう1本ターンを
+       * 増やす」かのどちらであっても、そのターンはゲートに引っかからず
+       * 進むので、片付けが本番の別の機能の挙動へ依存しなくなる。
+       */
+      openGate(): void {
+        passThrough = true;
+      },
+    };
+  }
+
+  /**
+   * `setup` と同じ配線（本物の SDK やマネージャーを誤って起こさない）だが、
+   * `queryFn` を `fakeGatedSdk` に差し替え、`mcpServerFactory` の中で
+   * **本物の配線と同じタイミングで一度だけ** `createCloneTools` を呼んで
+   * 道具の配列を控える。
+   *
+   * **`callTool` のたびに `createCloneTools` を呼び直さないこと。** 本番では
+   * `createCloneTools` はセッションを組むとき（`mcpServerFactory` 呼び出し時）
+   * に一度だけ呼ばれ、以後のターンはすべて同じ道具の配列を使い回す
+   * （`createCloneMcpServer` の中）。呼び直す形でテストを書くと、
+   * 「`createCloneTools` の呼び出し時に1回だけ評価する」変異
+   * （`memoryCause` をハンドラの外で先に確定させる形）と「道具の実行時に
+   * 毎回評価する」正しい実装が、テストからは区別できなくなる — 呼び直す
+   * たびに変異後のコードも新しく評価し直されてしまうため。
+   */
+  function setupGated() {
+    const { fn, calls, release, openGate } = fakeGatedSdk();
+    let tools: ReturnType<typeof createCloneTools> | undefined;
+    const stores = createMemoryStores();
+    const clone = createClone({
+      stores,
+      queryFn: fn,
+      env: {},
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+      mcpServerFactory: (context) => {
+        tools = createCloneTools(context);
+        return createCloneMcpServer(context);
+      },
+    });
+    const { events, waitForEvents } = wireEvents(clone, 'conv-1');
+    return {
+      clone,
+      stores,
+      calls,
+      events,
+      waitForEvents,
+      release,
+      openGate,
+      tools(): ReturnType<typeof createCloneTools> {
+        if (tools === undefined) throw new Error('道具の配列がまだ作られていない');
+        return tools;
+      },
+    };
+  }
+
+  /** 控えた道具の配列から1本取り出し、ハンドラを直接呼ぶ。 */
+  async function callTool(
+    tools: ReturnType<typeof createCloneTools>,
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<void> {
+    const found = tools.find((entry) => entry.name === name);
+    if (!found) throw new Error(`${name} という道具が無い`);
+    await found.handler(args as never, {} as never);
+  }
+
+  it('T1: 本セッションの蒸留ターンが書いた記憶は cause: distill になる', async () => {
+    const s = setupGated();
+
+    // 1本目 — 通常ターンをまず1本通し、セッションを確立する
+    // （`endConversation` は `this.#query` が無ければ何もしない）。
+    s.clone.post(humanMessage('やあ'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '1本目の入力');
+    s.release(0, 0);
+    await waitForDone(s.events);
+
+    // 2本目 — 会話終了で促される蒸留ターン。`endConversation` は完了を待つので
+    // await せず、ターンが走っている最中に道具を呼んでから解放する。
+    const endPromise = s.clone.endConversation('conv-1');
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 2, '蒸留ターンの入力');
+    // 見分け方は文面（`buildDistillPrompt` が書く固定の呼びかけ）。
+    expect(s.calls[0]?.inputs[1]).toContain('記憶へ移すべきものがあるか確認せよ');
+
+    await callTool(s.tools(), 'memory_write', {
+      slug: 'values',
+      content: '# 価値観\n\n蒸留が書いた\n',
+      summary: '蒸留の書き込みテスト（T1）',
+    });
+
+    s.release(0, 1);
+    await endPromise;
+
+    const entries = await s.stores.journal.list({ types: ['memory_update'] });
+    expect(entries.at(-1)).toMatchObject({ cause: 'distill' });
+
+    // 片付け。`stop()` が shutdown 蒸留をもう1本走らせるかどうか
+    // （＝重複防止 `#hasUndistilledActivity` が下りているか）に依存しない
+    // よう、以後の入力はゲートで待たず素通しにする。見送られて新しい
+    // ターンが増えなくても、増えても、どちらでも `stop()` は返る。
+    s.openGate();
+    await s.clone.stop();
+  });
+
+  it('T2: 本セッションの通常ターン（人間の発言）が書いた記憶は cause: clone のまま', async () => {
+    const s = setupGated();
+
+    s.clone.post(humanMessage('やあ'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '通常ターンの入力');
+
+    await callTool(s.tools(), 'memory_write', {
+      slug: 'values',
+      content: '# 価値観\n\n通常ターンが書いた\n',
+      summary: '通常ターンの書き込みテスト（T2）',
+    });
+
+    s.release(0, 0);
+    await waitForDone(s.events);
+
+    const entries = await s.stores.journal.list({ types: ['memory_update'] });
+    expect(entries.at(-1)).toMatchObject({ cause: 'clone' });
+
+    // ここでは `#hasUndistilledActivity` がまだ立っているので、`stop()` は
+    // shutdown 蒸留をもう1本走らせる。そのターンも解放してやる必要がある
+    // （解放しないと `stop()` が `#reader` の完了待ちで戻らない）。
+    const stopPromise = s.clone.stop();
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 2, 'shutdown 蒸留の入力');
+    s.release(0, 1);
+    await stopPromise;
+  });
+
+  it('T3: pre_compact のサイドクエリが書いた記憶は cause: distill になる', async () => {
+    const { fn, calls } = fakeSdk();
+    // **ここも `mcpServerFactory` の呼び出し時に一度だけ `createCloneTools` を
+    // 呼ぶ**（`setupGated` の doc と同じ理由。本セッションとサイドクエリで
+    // それぞれ1回ずつ呼ばれるので、道具の配列も2本控わる）。
+    const toolsLists: ReturnType<typeof createCloneTools>[] = [];
+    const stores = createMemoryStores();
+    const clone = createClone({
+      stores,
+      queryFn: fn,
+      env: {},
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+      mcpServerFactory: (context) => {
+        toolsLists.push(createCloneTools(context));
+        return createCloneMcpServer(context);
+      },
+    });
+    const { events } = wireEvents(clone, 'conv-1');
+
+    clone.post(humanMessage('やあ'));
+    await waitForDone(events);
+
+    const main = calls[0] as FakeCall;
+    const dir = await mkdtemp(join(tmpdir(), 'alteroid-distill-cause-'));
+    try {
+      const transcriptPath = join(dir, 'transcript.jsonl');
+      await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
+      const preCompact = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
+      if (preCompact === undefined) throw new Error('PreCompact フックが登録されていない');
+      await preCompact(
+        { session_id: 'sess-fake', transcript_path: transcriptPath } as never,
+        undefined,
+        { signal: new AbortController().signal } as never,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+
+    // `mcpServerFactory` は本セッションの初期化で1回、サイドクエリでもう1回呼ばれる。
+    // **サイドクエリで控えた側（2回目）を使う**（依頼書の指示どおり）。
+    expect(toolsLists.length).toBe(2);
+    const sideTools = toolsLists[1];
+    if (sideTools === undefined) throw new Error('サイドクエリの道具の配列が控えられていない');
+
+    await callTool(sideTools, 'memory_write', {
+      slug: 'values',
+      content: '# 価値観\n\nサイドクエリが書いた\n',
+      summary: 'サイドクエリの書き込みテスト（T3）',
+    });
+
+    const entries = await stores.journal.list({ types: ['memory_update'] });
+    expect(entries.at(-1)).toMatchObject({ cause: 'distill' });
+
+    await clone.stop();
+  });
+
+  it('T4: 蒸留が追記すると、cause: distill と action: append の両方が出る', async () => {
+    const s = setupGated();
+
+    s.clone.post(humanMessage('やあ'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '1本目の入力');
+    s.release(0, 0);
+    await waitForDone(s.events);
+
+    const endPromise = s.clone.endConversation('conv-1');
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 2, '蒸留ターンの入力');
+
+    await callTool(s.tools(), 'memory_append', {
+      slug: 'values',
+      content: '追記した学び\n',
+      summary: '蒸留の追記テスト（T4）',
+    });
+
+    s.release(0, 1);
+    await endPromise;
+
+    const entries = await s.stores.journal.list({ types: ['memory_update'] });
+    expect(entries.at(-1)).toMatchObject({ cause: 'distill', action: 'append' });
+
+    // 片付け。T1 と同じ理由で、以後の入力はゲートで待たず素通しにする。
+    s.openGate();
     await s.clone.stop();
   });
 });

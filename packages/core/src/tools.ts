@@ -90,6 +90,25 @@ export interface ToolContext {
    * 「この場面では取れない」を返す（例: 蒸留のサイドクエリだけ自分のことが分からない）。
    */
   runtime?: () => CloneRuntimeFacts;
+  /**
+   * この道具を通した記憶の書き換えが、日誌の `memory_update.cause` でどう名乗るか。
+   *
+   * **省略時は `'clone'`。** クローンの道具は人間の口ではないので、ここから
+   * `'human'` は出ない（`'human'` を書くのは `app.ts` の `PUT` / `DELETE /memory/:slug`
+   * の2箇所だけである）。
+   *
+   * **省略できるのはテストのためだけである。** 本番の配線（`clone.ts`）は
+   * 本セッション（`#toolContext`）と蒸留のサイドクエリ（`#distillFromTranscript`
+   * のインライン context）の両方へ渡す。片方へ渡し忘れると、渡し忘れた側は
+   * 黙って既定の `'clone'` に落ちる ＝ 蒸留が書いた記憶なのに `cause: 'clone'`
+   * と名乗ることになる（`runtime` と同じ「渡し忘れた側だけ静かに壊れる」形）。
+   *
+   * **ターンごとに変わる値なので、道具の実行時（ハンドラの中）で呼ぶこと。**
+   * `createCloneTools` の呼び出し時に1回だけ評価すると、本セッションの MCP
+   * サーバはセッションごとに1回しか組まれないため、セッション中ずっと最初の
+   * ターンの種類のまま固定されてしまう。
+   */
+  memoryCause?: () => 'distill' | 'clone';
 }
 
 export function qualifiedToolName(name: string): string {
@@ -237,6 +256,12 @@ const NO_POOL = text(
 /** ツール定義そのもの。MCP の配線を通さずに単体テストできるよう分けてある。 */
 export function createCloneTools(context: ToolContext) {
   const { stores } = context;
+  // **ここで1回だけ解決しない。** `memoryCause` はターンごとに変わりうる値
+  // なので、この関数の実行時（＝ MCP サーバを組む時）に確定させると、
+  // セッション中ずっと最初のターンの種類に固定されてしまう
+  // （`ToolContext.memoryCause` の doc）。3箇所の道具ハンドラの中で
+  // その都度呼ぶ。
+  const memoryCause = context.memoryCause ?? ((): 'distill' | 'clone' => 'clone');
 
   return [
     // --- 記憶 -----------------------------------------------------------
@@ -275,7 +300,7 @@ export function createCloneTools(context: ToolContext) {
         await stores.journal.append({
           type: 'memory_update',
           slug,
-          cause: 'clone',
+          cause: memoryCause(),
           action: 'write',
           summary,
         });
@@ -296,7 +321,7 @@ export function createCloneTools(context: ToolContext) {
         await stores.journal.append({
           type: 'memory_update',
           slug,
-          cause: 'clone',
+          cause: memoryCause(),
           action: 'append',
           summary,
         });
@@ -355,7 +380,7 @@ export function createCloneTools(context: ToolContext) {
         await stores.journal.append({
           type: 'memory_update',
           slug,
-          cause: 'clone',
+          cause: memoryCause(),
           action: 'remove',
           // 本文は残さず、直前の文字数だけ残す。何を消したかは summary が持つ。
           summary: `${summary}（削除直前 ${existing.content.length} 文字）`,
