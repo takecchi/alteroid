@@ -1,5 +1,3 @@
-import { PROFILE_EVAL_TIMEOUT_MS } from '@alteroid/core';
-
 /**
  * 「期限内に応答が返らなかった」を、成功でも失敗でもない**第3の状態**として持つ。
  *
@@ -29,7 +27,7 @@ import { PROFILE_EVAL_TIMEOUT_MS } from '@alteroid/core';
  * `host.start()`（`session.begin()` を蹴るだけ）で返り、`POST .../messages` は
  * `session.push()` で返る — **マネージャーのターンを待つ口は1つも無い。**
  * handler の中で待つのは高々2つで、どちらも runner 側で期限が付いている:
- * プロファイルの評価（{@link PROFILE_EVAL_TIMEOUT_MS}）と、`stop` の枠の書き出し。
+ * プロファイルの評価（`@alteroid/core` の `PROFILE_EVAL_TIMEOUT_MS`）と、`stop` の枠の書き出し。
  * ここはその両方を大きく上回る側に置く（`deadline.test.ts` が関係を検査する）。
  *
  * 名簿は30秒黙った器を既に「落ちた」と見なしているので、その2倍を待って
