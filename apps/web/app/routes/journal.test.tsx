@@ -5,6 +5,7 @@
  * `AuthedShell` が1本だけ張った購読の結果を context 越しに受け取るだけで、
  * `Journal` 自身は `useJournalLive()` を呼ばない（呼んだら購読が増えてしまう）。
  */
+import { JOURNAL_ENTRY_TYPES } from '@alteroid/core';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -147,6 +148,39 @@ describe('日誌の1行は、日報が書けなかった日を日報と呼ばな
     // 通ることになって何も保証しない（同語反復になる）。
     expect(await screen.findByText(`⚠ 2026-08-20 の日報は作れなかった: ${REASON}`)).toBeTruthy();
     expect(screen.getByText('2026-08-19 の日報')).toBeTruthy();
+  });
+});
+
+/**
+ * **絞り込みチップが日誌の全種別を尽くしていること。**
+ *
+ * `journal.tsx` の `TYPES`（チップの表示順）は `TONE` から `Object.keys` で
+ * 導出している。ここでは黒箱（画面に実際に出るボタン）として、種別の正本
+ * である `@alteroid/core` の `JOURNAL_ENTRY_TYPES` と同じ集合であることを
+ * 固定する — `TYPES` はモジュール内部の定数で `journal.tsx` から export
+ * していないので、内部の配列を直接読むのではなく画面の出力で確かめる。
+ *
+ * **これは実行時に測れる保証である。** `invalidate()` 側の `never` 縛りは
+ * 型検査でしか効かず、ここのテストでは測れない（型検査が落ちることは
+ * `pnpm typecheck` を使った変異試験で別途示す。PR 本文を参照）。
+ */
+describe('絞り込みチップが日誌の全種別を尽くす', () => {
+  it('JOURNAL_ENTRY_TYPES の全種別ぶんのチップが、他のボタンを増やさずに出る', async () => {
+    stubFetch((url) => {
+      if (url.includes('/journal')) return json({ entries: [], scanned: 0 });
+      return undefined;
+    });
+
+    renderJournal({ status: 'live', recent: [] });
+    await screen.findByText('日誌');
+
+    for (const type of JOURNAL_ENTRY_TYPES) {
+      expect(screen.getByRole('button', { name: type })).toBeTruthy();
+    }
+    // 種別チップの総数が JOURNAL_ENTRY_TYPES の件数と一致する（多すぎても
+    // 少なすぎても落ちる）。選択が無い間は「すべて解除」ボタンは出ないので、
+    // ここで見えているボタンは種別チップだけである。
+    expect(screen.getAllByRole('button')).toHaveLength(JOURNAL_ENTRY_TYPES.length);
   });
 });
 

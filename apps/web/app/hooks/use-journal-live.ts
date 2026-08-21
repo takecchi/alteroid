@@ -91,7 +91,25 @@ export function useJournalLive(): JournalLive {
   return { status, recent };
 }
 
-/** 届いた出来事に対応するキャッシュだけを落とす。 */
+/**
+ * 届いた出来事に対応するキャッシュだけを落とす。
+ *
+ * **`default` の `never` 縛りで網羅性を型に縛ってある。** `schema.ts` の
+ * `journalEntryTypeNames`（`satisfies Record<JournalEntryType, true>`）と
+ * 同じ発想 — 種別を足してここへ分岐を足し忘れると、`default` の
+ * `const exhaustive: never = entry;` が型エラーになる。
+ *
+ * **なぜ縛りが要ったか。** この関数は戻り値を返さない（`void`）。
+ * `tools.ts` の `renderJournalEntry` や `queries.ts` の
+ * `summarizeJournalEntry`、`dropped-record.ts` の `journalEntryShape` は
+ * いずれも戻り値を持つ関数で、case を1つ落とすと「関数の終わりに
+ * return が無い（戻り値型に `undefined` を含まない）」で型検査が自然に
+ * 落ちる。**しかし TypeScript は switch 文そのものの網羅性を検査しない**
+ * ので、`void` を返すここではその安全網が働かず、種別を足して分岐を
+ * 忘れても型では気づけなかった（実際、`worker_wait` を足したときは
+ * 明示的に `case 'worker_wait': break;` を書いて対応していたが、この
+ * switch 自体は次に種別が増えても黙って通っていた）。
+ */
 function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>['mutate']): void {
   // 日誌一覧は limit / type ごとにキーが違うので、type で束ねて全部落とす。
   void mutate((key) => isKeyOfType(key, 'journal'));
@@ -147,6 +165,27 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
     // 取り直す必要はない。
     case 'turn_usage':
       break;
+    default: {
+      // 網羅性チェック本体。ここへ来る値があれば、上の case が
+      // `JournalEntryType` の全種別を尽くしていない（型エラーになる）。
+      //
+      // **実行時には何もしない。投げないこと。** この関数は SSE の
+      // `for await` の中から呼ばれ、その外側の `catch` は「接続失敗も切断も
+      // 同じ扱い」で再接続へ落ちる（`connect()`）。だから1件の未知の種別で
+      // 投げると、線は生きているのに購読が切れ、`offline` 表示のまま指数
+      // バックオフで繋ぎ直し続けることになる — **このファイルの冒頭が塞いだ
+      // はずの「画面が静かなだけに見える（実際には死んでいる）」そのもの**で
+      // ある。しかも起きる条件は「デーモンが新しい種別を流し、古い bundle を
+      // 開いたままのブラウザがそれを受ける」で、器と画面は別に更新されるので
+      // 普通に起こる。
+      //
+      // 落とす先が無いだけなので、何もしないのが正しい（日誌一覧の無効化は
+      // この switch の手前で既に済んでいる）。**型で気づける形は残したまま、
+      // 実行時の被害だけを消す**のがここの狙いである。
+      const exhaustive: never = entry;
+      void exhaustive;
+      break;
+    }
   }
 }
 
