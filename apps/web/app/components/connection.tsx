@@ -67,8 +67,12 @@ export function ConnectionCard({ compact = false }: { compact?: boolean }) {
         {health.data !== undefined && (
           <dl className="grid grid-cols-[6rem_1fr] gap-y-1 text-sm">
             <dt className="text-muted">記憶</dt>
-            <dd className="font-mono text-xs">{health.data.storage}</dd>
+            <dd className="font-mono text-xs break-all">{health.data.storage}</dd>
             <dt className="text-muted">pid</dt>
+            {/* pid は `z.number().int()`（apps/daemon/src/openapi.ts）＝ process.pid。
+                有界の小さい整数（Linux の pid_max は既定で7桁までしか無い）なので、
+                このセクションの幅で折り返しが要る長さにはならない。break-all は
+                意図して付けていない。 */}
             <dd className="font-mono text-xs">{health.data.pid}</dd>
           </dl>
         )}

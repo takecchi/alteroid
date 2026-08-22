@@ -147,7 +147,7 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
       </div>
 
       {/* 本文は器が全文を持つ（要約を持たせない）。畳まずにそのまま出す。 */}
-      <p className="text-sm leading-relaxed whitespace-pre-wrap">{commitment.body}</p>
+      <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">{commitment.body}</p>
 
       <div className="mt-2 flex items-center gap-2">
         <Input
@@ -190,9 +190,9 @@ function ClosedRow({ commitment }: { commitment: Commitment }) {
           {formatDateTime(commitment.at)} → {formatDateTime(commitment.closedAt ?? '')}
         </span>
       </div>
-      <p className="text-sm leading-relaxed whitespace-pre-wrap">{commitment.body}</p>
+      <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">{commitment.body}</p>
       {commitment.closedReason !== undefined && commitment.closedReason !== null && (
-        <p className="mt-1 text-xs">
+        <p className="mt-1 text-xs break-words">
           <span className="mr-2 text-[11px]">どう片付いたか</span>
           {commitment.closedReason}
         </p>

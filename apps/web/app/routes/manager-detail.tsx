@@ -159,7 +159,7 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
               {manager.runnerId !== undefined && manager.runnerId !== null && (
                 <>
                   <dt className="text-muted">runner</dt>
-                  <dd className="font-mono text-xs">{manager.runnerId}</dd>
+                  <dd className="font-mono text-xs break-all">{manager.runnerId}</dd>
                 </>
               )}
               {manager.sessionId !== undefined && manager.sessionId !== null && (
