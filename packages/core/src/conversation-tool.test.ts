@@ -188,9 +188,95 @@ describe('conversation_read — 予算を超えたら省略した件数を言う
     expect(reply).toContain('[msg-59]');
     expect(reply).not.toContain('[msg-0]');
     expect(reply).toContain('古い側');
-    // 続きの取り方が「効かないほう」を案内していないこと
-    expect(reply).toContain('until');
-    expect(reply).not.toContain('さらに遡るなら scan を増やすこと');
+    // 続きの取り方が「効かないほう」を案内していないこと。
+    // **`not.toContain` で書かないこと。** 以前ここは
+    // `not.toContain('さらに遡るなら scan を増やすこと')` だったが、その文言は
+    // リポジトリのどこにも無いので、どんな実装でも通る（歯が無い）。
+    // 落とすのは古い側なので、効く手は until であって scan ではない。
+    expect(reply).toContain('until で窓を古い方へずらすこと');
+    expect(reply).not.toMatch(/scan を増や(せば|して)/);
+  });
+});
+
+/**
+ * **`since` を渡されたとき「無い」と言い切らない。**
+ *
+ * ストアは `since` を LIMIT より先に効かせるので、件数が `scan` に届かないことは
+ * 「日誌の先頭まで見た」を意味しない。ここを混ぜると、`since` より古い側に実在する
+ * 発言について「無い」と報告してしまう — 観測の欠落を存在の否定として出す形で、
+ * この道具が塞いでいる欠陥そのものである。
+ */
+describe('conversation_read — since で窓を切ったら「先頭に届いた」と言わない', () => {
+  it('since より古い側に在る発言を「無い」と言わず、判定できないと言う', async () => {
+    const stores = createMemoryStores();
+    // since より古い側に、探す語を実際に置く。
+    await humanTurn(stores, 'conv-old', '独自の合言葉デプロイの件', '古い側の返答');
+    const call = tools(stores);
+
+    const reply = await call('conversation_read', {
+      q: 'デプロイ',
+      since: '2099-01-01T00:00:00.000Z',
+    });
+
+    // 「無い」と言い切らない（実際には since より古い側に在る）。
+    expect(reply).not.toContain('に当たる発言は無い');
+    expect(reply).toContain('判定できない');
+    // 「先頭に届いている」と嘘をつかない。
+    expect(reply).not.toContain('先頭に届いている');
+    // 効く手（since を動かす）を案内する。
+    expect(reply).toContain('since');
+  });
+
+  it('since が無ければ従来どおり「先頭に届いている」と言える', async () => {
+    const stores = createMemoryStores();
+    await humanTurn(stores, 'conv-1', '質問', '返答');
+    const call = tools(stores);
+
+    const reply = await call('conversation_read', { q: '当たらない語' });
+
+    expect(reply).toContain('先頭に届いている');
+    expect(reply).toContain('に当たる発言は無い');
+  });
+});
+
+/**
+ * **一覧が `limit` で切れたことを黙らない。**
+ *
+ * 削る段は2つ（`limit` と予算）あり、`slice` の後の件数だけを数えると
+ * `limit` で消えた分が出力のどこにも現れない。「20 件出して、日誌の先頭に
+ * 届いている」と読める応答のまま、残りが消える。
+ */
+describe('conversation_read — 一覧が limit で切れたら、その件数と効く手を言う', () => {
+  it('limit で落ちた会話の件数が本文に出て、limit を増やせと案内する', async () => {
+    const stores = createMemoryStores();
+    // 予算には収まる短さで、limit（既定 20）を超える数の会話を積む。
+    for (let i = 0; i < 30; i += 1) {
+      await humanTurn(stores, `conv-${i}`, `短い質問${i}`, `短い返答${i}`);
+    }
+    const call = tools(stores);
+
+    const reply = await call('conversation_read', {});
+
+    // 30 件のうち 20 件だけ出したこと、残り 10 件が在ることの両方が出る。
+    expect(reply).toContain('10 件');
+    expect(reply).toContain('30 件');
+    expect(reply).toContain('limit を増やせば出る');
+    // 予算で切れたときの（ここでは効かない）案内を混ぜない。
+    expect(reply).not.toContain('limit を増やしても出てこない');
+  });
+
+  it('limit に収まっているときは、余計な省略の注記を出さない', async () => {
+    const stores = createMemoryStores();
+    for (let i = 0; i < 3; i += 1) {
+      await humanTurn(stores, `conv-${i}`, `短い質問${i}`, `短い返答${i}`);
+    }
+    const call = tools(stores);
+
+    const reply = await call('conversation_read', {});
+
+    expect(reply).not.toContain('件は省略');
+    expect(reply).not.toContain('で出していない');
+    expect(reply).toContain('先頭に届いている');
   });
 });
 

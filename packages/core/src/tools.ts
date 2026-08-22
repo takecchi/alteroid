@@ -1903,12 +1903,27 @@ export function createCloneTools(context: ToolContext) {
           ...(since === undefined ? {} : { since }),
           ...(until === undefined ? {} : { until }),
         });
-        const reached = reachedStart(entries.length, scanLimit);
+        // **`since` を渡されたら「先頭に届いた」とは言えない。**
+        //
+        // `reachedStart` が答えるのは「ストアが行を出し切ったか」だけである。
+        // ところが `since` は LIMIT より先に効く（fs / pg / memory とも
+        // WHERE → LIMIT の順。`storage-pg/src/journal.ts` は `where()` の後に
+        // `.limit()` を呼ぶ）ので、件数が `scan` に届かないのは
+        // 「日誌の先頭まで見た」ではなく「`since` より新しい範囲を出し切った」
+        // でしかない。**ここを混ぜると「無い」と言い切ってしまう** —
+        // 実際には `since` より古い側に在りうるのに、下の分岐が
+        // 「当たる発言は無い」を選ぶ。これはこの道具が塞いでいる欠陥
+        // （観測の欠落を「無い」と報告する形）そのものである。
+        const exhausted = reachedStart(entries.length, scanLimit);
+        const reached = exhausted && since === undefined;
         const scanNote =
           `（日誌を ${entries.length} 件遡った。` +
           (reached
             ? '先頭に届いている）'
-            : 'この窓より古いものは見ていない。scan を増やすか until で窓をずらすこと）');
+            : exhausted
+              ? `since=${since} より新しい範囲は出し切ったが、それより古い側は見ていない。` +
+                'since を外すか古い方へずらすこと）'
+              : 'この窓より古いものは見ていない。scan を増やすか until で窓をずらすこと）');
 
         // --- 会話の中身（conversationId 指定、古い順） ---
         if (conversationId !== undefined) {
@@ -1986,7 +2001,15 @@ export function createCloneTools(context: ToolContext) {
         // どうかは誰が喋ったかで変わらない（片方だけで数えると、あるはずの会話が
         // 一覧から消える）ので無視するのが正しいが、**渡した側から見ると絞れた一覧に
         // 見える。** 渡されたのに使わなかったなら、そう言う。
-        const conversations = collectConversations(entries).slice(0, limit ?? 20);
+        // **`limit` で落ちた分も数に入れる。** 削るのは2段（`limit` と予算）で、
+        // 効く手が違う — `limit` は増やせば出るが、予算で切れているなら増やした分は
+        // そのまま省略へ回る。**`slice` の後の件数だけを見ると、`limit` で消えた分が
+        // 出力のどこにも現れない**（`omitted` は予算の切り口しか数えない）ので、
+        // 「20 件出して、日誌の先頭に届いている」と読める応答のまま 80 件が消える。
+        const allConversations = collectConversations(entries);
+        const listLimit = limit ?? 20;
+        const conversations = allConversations.slice(0, listLimit);
+        const hiddenByLimit = allConversations.length - conversations.length;
         if (conversations.length === 0) {
           return text(
             (reached ? '会話はまだ無い。' : 'この窓には無い（判定できない）。') + `\n${scanNote}`,
@@ -1998,11 +2021,23 @@ export function createCloneTools(context: ToolContext) {
             `（${conversation.messages} 件）\n  ${conversation.preview}`,
         );
         const { shown, omitted } = packBudget(lines, CONVERSATION_LIST_BUDGET);
+        // **どちらの段で切れたかで、勧める手を変える。** 混ぜると効かない手を
+        // 案内することになる（予算で切れているのに「limit を増やせ」と言う、など）。
         if (omitted > 0) {
+          // 予算が縛っている。ここまで来ると `limit` を増やしても省略へ回るだけなので、
+          // `limit` で落ちた分も合わせて「古い側」として1つの数で言う。
           shown.push(
-            `…ほか ${omitted} 件は省略（${lines.length} 件のうち新しい順に ${shown.length} 件だけ出した）。` +
+            `…ほか ${omitted + hiddenByLimit} 件は省略（この窓に ${allConversations.length} 件あり、` +
+              `新しい順に ${shown.length} 件だけ出した）。` +
               '省いたのは**古い側**である。limit を増やしても出てこない（予算のほうで切れているので、' +
               '増やした分がそのまま省略へ回る）ので、until で窓を古い方へずらすこと。',
+          );
+        } else if (hiddenByLimit > 0) {
+          // 予算にはまだ余りがあり、縛っているのは `limit` である。こちらは増やせば出る。
+          shown.push(
+            `…ほか ${hiddenByLimit} 件は limit=${listLimit} で出していない（この窓に ` +
+              `${allConversations.length} 件あり、新しい順に ${shown.length} 件だけ出した）。` +
+              '出していないのは**古い側**である。予算にはまだ余りがあるので、limit を増やせば出る。',
           );
         }
         shown.push('（各会話の中身は conversation_read conversationId=<id> で古い順に読める）');
