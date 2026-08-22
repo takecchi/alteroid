@@ -314,7 +314,10 @@ function AxisCard({
               key={entry.label}
               className="flex items-center justify-between gap-2 border-b border-border px-4 py-2 text-sm last:border-b-0"
             >
-              <span className="min-w-0 truncate font-mono text-[11px] text-muted">
+              <span
+                className="min-w-0 truncate font-mono text-[11px] text-muted"
+                title={entry.label}
+              >
                 {entry.label}
               </span>
               <span className="shrink-0">{formatUsd(entry.costUsd)}</span>

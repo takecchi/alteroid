@@ -220,7 +220,14 @@ export default function Dashboard() {
           </Card>
 
           <Card>
-            <CardHeader title="次の自動実行" />
+            <CardHeader
+              title="次の自動実行"
+              action={
+                <Link to="/schedule" className="text-xs text-accent hover:underline">
+                  詳しく見る
+                </Link>
+              }
+            />
             {schedule.data === undefined ? (
               <Empty>—</Empty>
             ) : (
@@ -230,7 +237,9 @@ export default function Dashboard() {
                     key={entry.kind}
                     className="flex items-center justify-between gap-2 border-b border-border px-4 py-2 text-sm last:border-b-0"
                   >
-                    <span className="min-w-0 truncate text-muted">{entry.description}</span>
+                    <span className="min-w-0 truncate text-muted" title={entry.description}>
+                      {entry.description}
+                    </span>
                     <Badge tone="accent">{formatRelative(entry.nextAt)}</Badge>
                   </li>
                 ))}
