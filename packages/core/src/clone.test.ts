@@ -5695,3 +5695,221 @@ describe('humanTurnText（ターン本文の組み立て）', () => {
     expect(humanTurnText([])).toBe('');
   });
 });
+
+describe('クローン — 人間が待っている合図を待ち行列の先頭側へ入れる', () => {
+  /**
+   * `setup()`（`Setup`）は `CloneOptions.humanPriority` を渡す口を持たないので、
+   * ここでは `createClone` を直接呼ぶ（`setupCapturing` などファイル内の既存の
+   * 特設セットアップと同じ形）。`humanPriority` は環境変数を経由せず直渡しする
+   * （`permissionMode` の直渡し実測は無いが、コンストラクタは
+   * `humanPriority ?? resolveCloneHumanPriority(envSource)` で `false` を
+   * nullish coalescing が通すので、直渡しした `false` がそのまま効く）。
+   */
+  function setupWithHumanPriority(
+    humanPriority: boolean,
+    reply: (input: string) => string = () => 'わかった',
+    sdkOptions: Parameters<typeof fakeSdk>[1] = {},
+  ): Setup {
+    const stores = createMemoryStores();
+    const { fn, calls } = fakeSdk(reply, sdkOptions);
+    const clone = createClone({
+      stores,
+      queryFn: fn,
+      env: {},
+      humanPriority,
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    const { events, waitForEvents } = wireEvents(clone, 'conv-1');
+    return { clone, stores, calls, events, waitForEvents };
+  }
+
+  /** 先客のターンが実際に走り始めるまで待つ（積んだ時点で「処理待ち」だと言えるようにする）。 */
+  const waitForFirstTurn = (s: Setup): Promise<void> =>
+    waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+  /**
+   * 渡した目印が全部、実際にモデルへ渡った入力のどこかに現れるまで待つ。
+   *
+   * **順序では待たない。** 「N番目に来た」を条件にすると、割り込みが起きない
+   * 壊れ方（＝人間が最後に読まれる）でもタイムアウトせずに済んでしまい、歯が
+   * 「揃って届いたこと」しか測らなくなる（測りたいのは順序そのもの）。ここでは
+   * 「全部届いたか」だけを見て、届いた順序はテスト本体が `findIndex` で確かめる。
+   */
+  const waitForAllDelivered = (s: Setup, markers: readonly string[]): Promise<void> =>
+    waitFor(
+      () => markers.every((marker) => (s.calls[0]?.inputs ?? []).join('\n').includes(marker)),
+      `${markers.join(' / ')} が全部届く`,
+    );
+
+  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 400));
+
+  const managerMessage = (id: string, managerId: string, text: string): InboxEvent => ({
+    type: 'manager_message',
+    id,
+    at: new Date().toISOString(),
+    managerId,
+    kind: 'report',
+    text,
+  });
+
+  const timerEvent = (id: string, kind: string): InboxEvent => ({
+    type: 'timer',
+    id,
+    at: new Date().toISOString(),
+    kind,
+  });
+
+  // --- 目印（マーカー）の作り方 -------------------------------------------
+  //
+  // **単純な部分文字列一致だと誤検出する。** タイマー・発意 tick のターンは
+  // `#recentDigest` を積むので、**まだ実際には読まれていない、他の待ち行列上の
+  // 合図の本文（`text`）まで、そのターンの中に「引き受けたまま終わっていない
+  // 仕事」の一覧としてそのまま引用される**（`commitment_list` と同じ台帳を見る
+  // ため）。実測: `manager_message` C を投げる前に `timer` B のターンが走ると、
+  // B のターンの digest 節に C の `text` がそのまま載り、`text.includes(...)`
+  // で C の目印を探すと**C 自身のターンより前に**当たってしまい、順序の検証が
+  // 壊れる（本当は正しい実装なのに歯が誤って落ちる／誤って通る）。
+  //
+  // 対策は、**そのイベント自身が処理されているときにしか現れない複合文字列**を
+  // 目印にすること。
+  // - `manager_message`: 本物のターンは `managerPrompt` の
+  //   `マネージャー ${managerId} から届いた。（報告）\n\n${text}` という並びで
+  //   しか現れない。digest の引用は `- evt-x（... / manager / ...）\n  [report]
+  //   ${text}` という別の並びなので、「から届いた」を含めれば衝突しない。
+  // - `timer`: `定期ジョブ ${kind} の時刻になった` は、そのタイマー自身が
+  //   処理されたときにしか現れない（**タイマーは台帳に開かないので、他の
+  //   ターンの digest にタイマーが載ることはそもそも無い** — `commitFor` の
+  //   doc）。
+  // - `human_message`（単発）: 本物のターンの本文は `humanTurnText([event])`
+  //   ＝ `text` そのもので、直前には `#commitmentNotice` の区切り `\n\n---\n`
+  //   が必ず付く（合図を1件でも受理していれば起こる）。digest の引用は
+  //   `\n  ${text}`（2スペース区切り）であって `---\n` ではないので、
+  //   `---\n${text}` を目印にすれば衝突しない。
+  const managerMarker = (managerId: string, text: string): string =>
+    `マネージャー ${managerId} から届いた。（報告）\n\n${text}`;
+  const timerMarker = (kind: string): string => `定期ジョブ ${kind} の時刻になった`;
+  const humanMarker = (text: string): string => `---\n${text}`;
+
+  it('人間の発言は、先に積まれていた人間以外を追い越して先に読まれる', async () => {
+    const s = setupWithHumanPriority(true, () => 'わかった', { delayMs: 150 });
+
+    // クローンがターンを回している最中（先客）に、待ち行列へ積む。
+    s.clone.post(humanMessage('先客'));
+    await waitForFirstTurn(s);
+
+    s.clone.post(managerMessage('evt-mgr-a', 'mgr-a', 'マネージャーAの報告'));
+    s.clone.post(managerMessage('evt-mgr-b', 'mgr-b', 'マネージャーBの報告'));
+    s.clone.post(timerEvent('evt-timer-c', 'timer-c-kind'));
+    s.clone.post(humanMessage('人間の発言だ'));
+
+    const markerHuman = humanMarker('人間の発言だ');
+    const markerMgrA = managerMarker('mgr-a', 'マネージャーAの報告');
+    const markerMgrB = managerMarker('mgr-b', 'マネージャーBの報告');
+    const markerTimer = timerMarker('timer-c-kind');
+
+    await waitForAllDelivered(s, [markerHuman, markerMgrA, markerMgrB, markerTimer]);
+    await settle();
+
+    const inputs = s.calls[0]?.inputs ?? [];
+    const idxHuman = inputs.findIndex((text) => text.includes(markerHuman));
+    const idxMgrA = inputs.findIndex((text) => text.includes(markerMgrA));
+    const idxMgrB = inputs.findIndex((text) => text.includes(markerMgrB));
+    const idxTimer = inputs.findIndex((text) => text.includes(markerTimer));
+
+    // 全部実際に届いている（見つからない＝-1 を「先」と誤読しない）
+    expect(idxHuman).toBeGreaterThan(-1);
+    expect(idxMgrA).toBeGreaterThan(-1);
+    expect(idxMgrB).toBeGreaterThan(-1);
+    expect(idxTimer).toBeGreaterThan(-1);
+
+    // 待ち行列に積まれていた3件の人間以外より、人間の発言が先に読まれる
+    expect(idxHuman).toBeLessThan(idxMgrA);
+    expect(idxHuman).toBeLessThan(idxMgrB);
+    expect(idxHuman).toBeLessThan(idxTimer);
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('人間を挟んでも、人間以外は1件も消えず、人間以外どうしの到着順も保たれる', async () => {
+    const s = setupWithHumanPriority(true, () => 'わかった', { delayMs: 150 });
+
+    s.clone.post(humanMessage('先客'));
+    await waitForFirstTurn(s);
+
+    // 人間以外A → 人間以外B → （人間を挟む）→ 人間以外C
+    s.clone.post(managerMessage('evt-a', 'mgr-a', '非人間A'));
+    s.clone.post(timerEvent('evt-b', '非人間B'));
+    s.clone.post(humanMessage('割り込む人間'));
+    s.clone.post(managerMessage('evt-c', 'mgr-c', '非人間C'));
+
+    const markerA = managerMarker('mgr-a', '非人間A');
+    const markerB = timerMarker('非人間B');
+    const markerC = managerMarker('mgr-c', '非人間C');
+    const markerHuman = humanMarker('割り込む人間');
+
+    await waitForAllDelivered(s, [markerA, markerB, markerC, markerHuman]);
+    await settle();
+
+    const inputs = s.calls[0]?.inputs ?? [];
+    const idxA = inputs.findIndex((text) => text.includes(markerA));
+    const idxB = inputs.findIndex((text) => text.includes(markerB));
+    const idxC = inputs.findIndex((text) => text.includes(markerC));
+    const idxHuman = inputs.findIndex((text) => text.includes(markerHuman));
+
+    // (a) 人間以外は3件とも処理される（1件も消えない）
+    expect(idxA).toBeGreaterThan(-1);
+    expect(idxB).toBeGreaterThan(-1);
+    expect(idxC).toBeGreaterThan(-1);
+
+    // (b) 人間以外どうしの到着順（A → B → C）は保たれる
+    expect(idxA).toBeLessThan(idxB);
+    expect(idxB).toBeLessThan(idxC);
+
+    // (c) 人間の発言はそれらより先に読まれる
+    expect(idxHuman).toBeGreaterThan(-1);
+    expect(idxHuman).toBeLessThan(idxA);
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('切ると純粋な先入れ先出しに戻る', async () => {
+    const s = setupWithHumanPriority(false, () => 'わかった', { delayMs: 150 });
+
+    s.clone.post(humanMessage('先客'));
+    await waitForFirstTurn(s);
+
+    // 歯1と同じ並びで post する（人間以外2件 + timer 1件 → 人間の発言）
+    s.clone.post(managerMessage('evt-mgr-a', 'mgr-a', 'マネージャーAの報告'));
+    s.clone.post(managerMessage('evt-mgr-b', 'mgr-b', 'マネージャーBの報告'));
+    s.clone.post(timerEvent('evt-timer-c', 'timer-c-kind'));
+    s.clone.post(humanMessage('人間の発言だ'));
+
+    const markerHuman = humanMarker('人間の発言だ');
+    const markerMgrA = managerMarker('mgr-a', 'マネージャーAの報告');
+    const markerMgrB = managerMarker('mgr-b', 'マネージャーBの報告');
+    const markerTimer = timerMarker('timer-c-kind');
+
+    await waitForAllDelivered(s, [markerHuman, markerMgrA, markerMgrB, markerTimer]);
+    await settle();
+
+    const inputs = s.calls[0]?.inputs ?? [];
+    const idxHuman = inputs.findIndex((text) => text.includes(markerHuman));
+    const idxMgrA = inputs.findIndex((text) => text.includes(markerMgrA));
+    const idxMgrB = inputs.findIndex((text) => text.includes(markerMgrB));
+    const idxTimer = inputs.findIndex((text) => text.includes(markerTimer));
+
+    expect(idxHuman).toBeGreaterThan(-1);
+    expect(idxMgrA).toBeGreaterThan(-1);
+    expect(idxMgrB).toBeGreaterThan(-1);
+    expect(idxTimer).toBeGreaterThan(-1);
+
+    // 切ってあるので到着順のまま。人間の発言は最後に読まれる（追い越さない）
+    expect(idxMgrA).toBeLessThan(idxMgrB);
+    expect(idxMgrB).toBeLessThan(idxTimer);
+    expect(idxTimer).toBeLessThan(idxHuman);
+
+    await s.clone.stop();
+  }, 15_000);
+});
