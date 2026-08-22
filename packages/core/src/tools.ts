@@ -12,7 +12,7 @@ import {
   toMessage,
 } from './conversation.js';
 import { isCronExpression } from './cron.js';
-import { describePage, excerptLine, page, renderListing } from './excerpt.js';
+import { describePage, excerptLine, page, renderListing, renderListingFromEnd } from './excerpt.js';
 import type { ManagerDenial, ManagerPool, ManagerSummary } from './manager.js';
 import {
   assertNeverMemoryProtectionStatus,
@@ -1951,18 +1951,21 @@ export function createCloneTools(context: ToolContext) {
           // **会話は新しい側から積む。** 表示は古い順のままだが、予算で切れるときに
           // 落とすのは古い側である（会話を開く動機はたいてい直近の続きを思い出すこと
           // で、人が chat の履歴を開くと末尾が見えているのと同じ形にしてある）。
-          const { shown, omitted } = packBudgetFromEnd(lines, CONVERSATION_LIST_BUDGET);
-          if (omitted > 0) {
-            // **どちら側を落としたかを言う。** 「N 件省略」だけだと、続きの取り方を
-            // 間違える（ここで `scan` を増やしても、落ちているのは古い側なので出てこない）。
-            shown.unshift(
-              `…この会話の**古い側** ${omitted} 件は省略（この窓に ${lines.length} 件あり、` +
-                `新しい側から ${shown.length} 件だけ出した）。古い側を見るには until で窓を古い方へずらすこと。`,
-            );
-          }
-          shown.push('（本文は抜粋。全文は conversation_read id=<id> で取れる）');
-          shown.push(scanNote);
-          return text(shown.join('\n'));
+          // 積む形そのものは `renderListingFromEnd` が持つ（一覧ごとに手で書かない）。
+          return text(
+            [
+              renderListingFromEnd(lines, {
+                budget: CONVERSATION_LIST_BUDGET,
+                // **どちら側を落としたかを言う。** 「N 件省略」だけだと、続きの取り方を
+                // 間違える（ここで `scan` を増やしても、落ちているのは古い側なので出てこない）。
+                omitted: ({ rest, shown, total }) =>
+                  `…この会話の**古い側** ${rest} 件は省略（この窓に ${total} 件あり、` +
+                  `新しい側から ${shown} 件だけ出した）。古い側を見るには until で窓を古い方へずらすこと。`,
+              }),
+              '（本文は抜粋。全文は conversation_read id=<id> で取れる）',
+              scanNote,
+            ].join('\n'),
+          );
         }
 
         // --- 語で探す（q だけ、新しい順） ---
@@ -1982,17 +1985,20 @@ export function createCloneTools(context: ToolContext) {
               ` conversation=${message.conversationId ?? '(無し)'}\n` +
               `  ${excerptLine(message.text, CONVERSATION_EXCHANGE_EXCERPT)}`,
           );
-          const { shown, omitted } = packBudget(lines, CONVERSATION_LIST_BUDGET);
-          if (omitted > 0) {
-            shown.push(
-              `…ほか ${omitted} 件は省略（"${q}" に ${lines.length} 件当たり、新しい順に ${shown.length} 件だけ出した）。` +
-                '省いたのは**古い側**である。scan を増やしても出てこない（当たりが増えるだけで、' +
-                '切られる側は変わらない）ので、until で窓を古い方へずらすこと。',
-            );
-          }
-          shown.push('（本文は抜粋。全文は conversation_read id=<id> で取れる）');
-          shown.push(scanNote);
-          return text(shown.join('\n'));
+          // 積む形そのものは `renderListing` が持つ（一覧ごとに手で書かない）。
+          return text(
+            [
+              renderListing(lines, {
+                budget: CONVERSATION_LIST_BUDGET,
+                omitted: ({ rest, shown, total }) =>
+                  `…ほか ${rest} 件は省略（"${q}" に ${total} 件当たり、新しい順に ${shown} 件だけ出した）。` +
+                  '省いたのは**古い側**である。scan を増やしても出てこない（当たりが増えるだけで、' +
+                  '切られる側は変わらない）ので、until で窓を古い方へずらすこと。',
+              }),
+              '（本文は抜粋。全文は conversation_read id=<id> で取れる）',
+              scanNote,
+            ].join('\n'),
+          );
         }
 
         // --- 会話の一覧（新しい順） ---
@@ -2020,36 +2026,50 @@ export function createCloneTools(context: ToolContext) {
             `${conversation.conversationId} ${conversation.startedAt}〜${conversation.updatedAt}` +
             `（${conversation.messages} 件）\n  ${conversation.preview}`,
         );
-        const { shown, omitted } = packBudget(lines, CONVERSATION_LIST_BUDGET);
         // **どちらの段で切れたかで、勧める手を変える。** 混ぜると効かない手を
         // 案内することになる（予算で切れているのに「limit を増やせ」と言う、など）。
-        if (omitted > 0) {
+        // 予算の側で切れたかどうかは `renderListing` しか知らないので、
+        // 断り書きが出たことをここで受け取る。
+        let cutByBudget = false;
+        // 積む形そのものは `renderListing` が持つ（一覧ごとに手で書かない）。
+        const body = renderListing(lines, {
+          budget: CONVERSATION_LIST_BUDGET,
           // 予算が縛っている。ここまで来ると `limit` を増やしても省略へ回るだけなので、
           // `limit` で落ちた分も合わせて「古い側」として1つの数で言う。
-          shown.push(
-            `…ほか ${omitted + hiddenByLimit} 件は省略（この窓に ${allConversations.length} 件あり、` +
-              `新しい順に ${shown.length} 件だけ出した）。` +
+          omitted: ({ rest, shown }) => {
+            cutByBudget = true;
+            return (
+              `…ほか ${rest + hiddenByLimit} 件は省略（この窓に ${allConversations.length} 件あり、` +
+              `新しい順に ${shown} 件だけ出した）。` +
               '省いたのは**古い側**である。limit を増やしても出てこない（予算のほうで切れているので、' +
-              '増やした分がそのまま省略へ回る）ので、until で窓を古い方へずらすこと。',
-          );
-        } else if (hiddenByLimit > 0) {
+              '増やした分がそのまま省略へ回る）ので、until で窓を古い方へずらすこと。'
+            );
+          },
+        });
+        const notes: string[] = [];
+        if (!cutByBudget && hiddenByLimit > 0) {
           // 予算にはまだ余りがあり、縛っているのは `limit` である。こちらは増やせば出る。
-          shown.push(
-            `…ほか ${hiddenByLimit} 件は limit=${listLimit} で出していない（この窓に ` +
-              `${allConversations.length} 件あり、新しい順に ${shown.length} 件だけ出した）。` +
-              '出していないのは**古い側**である。予算にはまだ余りがあるので、limit を増やせば出る。',
+          // **言い方は既存の一覧に寄せる（`…ほか N 件は省略`）。** 総当たりの歯が
+          // 「切った」と読む語彙はそこに揃えてあり、ここへ新しい言い方を足すのは
+          // 「その言い方も契約に入れる」という判断であって、通し方の調整ではない。
+          // 予算の側と区別が要るのは**語ではなく勧める手**なので、そちらで分ける。
+          notes.push(
+            `…ほか ${hiddenByLimit} 件は省略（この窓に ${allConversations.length} 件あり、` +
+              `新しい順に ${conversations.length} 件だけ出した）。` +
+              '省いたのは**古い側**で、切ったのは limit=' +
+              `${listLimit} である。予算にはまだ余りがあるので、limit を増やせば出る。`,
           );
         }
-        shown.push('（各会話の中身は conversation_read conversationId=<id> で古い順に読める）');
+        notes.push('（各会話の中身は conversation_read conversationId=<id> で古い順に読める）');
         if (speaker !== 'both') {
-          shown.push(
+          notes.push(
             `（speaker=${speaker} はこの一覧には効いていない。会話が在るかどうかは誰が喋ったかで` +
               '変わらないので、一覧は絞らずに出している。話者で絞るのは conversationId か q の' +
               'ときである）',
           );
         }
-        shown.push(scanNote);
-        return text(shown.join('\n'));
+        notes.push(scanNote);
+        return text([body, ...notes].join('\n'));
       },
     ),
 
@@ -2291,36 +2311,6 @@ export function createCloneTools(context: ToolContext) {
 /** 会話の発言の `role` を人が読める形にする（`conversation_read` 専用）。 */
 function roleLabel(role: 'inbound' | 'outbound'): string {
   return role === 'inbound' ? '人間' : 'クローン';
-}
-
-/**
- * 予算を先に決めて、入るところまで積む（`journal_read` の一覧ループと同じ形）。
- *
- * **件数から出力量を決めない。** 1件目は予算を超えていても必ず積む（0件のまま
- * 返すよりは、超過してでも1件は届けるほうがよい）。`conversation_read` の3つの
- * 一覧モード（会話の中身・語で探す・会話の一覧）で共通に使う。
- */
-function packBudget(lines: string[], budget: number): { shown: string[]; omitted: number } {
-  const shown: string[] = [];
-  let used = 0;
-  for (const line of lines) {
-    if (shown.length > 0 && used + line.length > budget) break;
-    shown.push(line);
-    used += line.length;
-  }
-  return { shown, omitted: lines.length - shown.length };
-}
-
-/**
- * 末尾から積む（並びは元のまま返す）。
- *
- * **切る側を選べるようにするためだけの別入口である。** 古い順に並んだ会話を
- * 先頭から積むと、予算で落ちるのは直近の発言になる — 会話を開く動機はたいてい
- * 「さっきの続き」なので、そこが消えるのは一番効く場所が消えることである。
- */
-function packBudgetFromEnd(lines: string[], budget: number): { shown: string[]; omitted: number } {
-  const { shown, omitted } = packBudget([...lines].reverse(), budget);
-  return { shown: shown.reverse(), omitted };
 }
 
 /**

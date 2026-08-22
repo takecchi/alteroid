@@ -105,6 +105,46 @@ export function renderListing(
   return lines.join('\n');
 }
 
+/**
+ * `renderListing` の**末尾を残す**版。落とすのは古い側（先頭）である。
+ *
+ * **並びが時系列で、続きを読む動機が「直近」にある一覧のためのものである。**
+ * 会話を開くのはたいてい「さっきの続き」を思い出すためで、人が chat の履歴を
+ * 開くと末尾が見えているのと同じ形になる。ここで先頭を残すと、いちばん要る
+ * 直近の発言だけが消えたうえ、断り書きも「もっと遡れ」と逆向きの続きの
+ * 取り方を案内することになる。
+ *
+ * **断り書きは先頭へ置く。** 落ちているのは古い側なので、穴が空いている場所は
+ * 一覧の先頭である。末尾に置くと、読み手は「この下にまだある」と読む。
+ *
+ * `renderListing` と対にしてここへ置いてあるのは、**方向が違うだけの予算の
+ * ループを、道具の側に手で書かせないため**である（それが3回踏んだ形である。
+ * `renderListing` の doc を見ること）。
+ */
+export function renderListingFromEnd(
+  items: readonly string[],
+  { budget, omitted }: ListingBudget,
+): string {
+  const lines: string[] = [];
+  let used = 0;
+  // 末尾から詰める。`renderListing` と同じく、1件だけで予算を超えるなら切って出す。
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index]!;
+    if (lines.length === 0) {
+      const tail = item.length > budget ? excerpt(item, budget) : item;
+      lines.unshift(tail);
+      used += tail.length;
+      continue;
+    }
+    if (used + item.length > budget) break;
+    lines.unshift(item);
+    used += item.length;
+  }
+  const rest = items.length - lines.length;
+  if (rest > 0) lines.unshift(omitted({ rest, shown: lines.length, total: items.length }));
+  return lines.join('\n');
+}
+
 export function page(text: string, offset: number, limit: number): Page {
   const from = Math.max(0, Math.min(Math.trunc(offset), text.length));
   const body = text.slice(from, from + limit);

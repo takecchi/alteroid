@@ -275,7 +275,7 @@ describe('conversation_read — 一覧が limit で切れたら、その件数�
     const reply = await call('conversation_read', {});
 
     expect(reply).not.toContain('件は省略');
-    expect(reply).not.toContain('で出していない');
+    expect(reply).not.toContain('limit を増やせば出る');
     expect(reply).toContain('先頭に届いている');
   });
 });

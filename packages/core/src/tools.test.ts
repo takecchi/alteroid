@@ -2408,6 +2408,32 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
      */
     { label: 'journal_read（limit 最大）', name: 'journal_read', args: { limit: 200 } },
     { label: 'usage_read', name: 'usage_read', args: {} },
+    /*
+     * **`conversation_read` は3つの一覧モードを持ち、予算の切り口が別々である。**
+     *
+     * 引数なし＝会話の一覧、`conversationId`＝その会話の中身（末尾から積む）、
+     * `q`＝語で探す（先頭から積む）。**積む向きが違うので、1つ測っても他の2つは
+     * 何も測れていない**（中身モードだけが `renderListingFromEnd` を通る）。
+     * `id` モードは一覧ではないので、下の「詳細側」の試験が持つ。
+     */
+    { label: 'conversation_read（会話の一覧）', name: 'conversation_read', args: {} },
+    /*
+     * 一覧の既定は 20 件なので、`limit` を広げた呼びも測る（`journal_read` と
+     * 同じ理由 — 既定だけだと予算が拘束条件にならないことがある）。
+     */
+    {
+      label: 'conversation_read（会話の一覧・limit 最大）',
+      name: 'conversation_read',
+      args: { limit: 200 },
+    },
+    {
+      // **長く続いた会話を指す**（`conv-0000` のような2発言の会話では予算が
+      // 拘束条件にならず、この一覧については何も測れない。`flooded()` を見ること）。
+      label: 'conversation_read（会話の中身）',
+      name: 'conversation_read',
+      args: { conversationId: 'conv-long' },
+    },
+    { label: 'conversation_read（語で探す）', name: 'conversation_read', args: { q: '発言' } },
   ];
 
   /**
@@ -2479,6 +2505,35 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       );
       // 日誌（journal_read）
       await h.call('journal_write', { type: 'decision', decision: `決めた${pad}: ${long}` });
+      // 人間との会話（conversation_read の3モード）。
+      // **ここを積み忘れると、`conversation_read` は「会話はまだ無い」で短く返り、
+      // 上限の試験を「そもそも短かった」で通ってしまう**（この器を1つにしてある
+      // 理由そのもの）。会話ごとに2発言積んで、一覧・中身・語検索の全部を太らせる。
+      await h.stores.journal.append({
+        type: 'exchange',
+        with: 'human',
+        role: 'inbound',
+        text: `人間の発言${pad}: ${long}`,
+        conversationId: `conv-${pad}`,
+      });
+      await h.stores.journal.append({
+        type: 'exchange',
+        with: 'human',
+        role: 'outbound',
+        text: `クローンの返答${pad}: ${long}`,
+        conversationId: `conv-${pad}`,
+      });
+      // **1本だけ、長く続いた会話を作る。** 会話ごとに2発言では「中身」モードの
+      // 予算が一度も拘束条件にならず、`renderListingFromEnd` については何も
+      // 測れていない状態で歯が通る（`runner_list` を 12 台から 120 台へ増やした
+      // のと同じ形。変異を当てて確かめた — 2発言のままだと予算を外す変異が生き残る）。
+      await h.stores.journal.append({
+        type: 'exchange',
+        with: 'human',
+        role: 'inbound',
+        text: `長い会話の発言${pad}: ${long}`,
+        conversationId: 'conv-long',
+      });
       // 使用量の台帳（usage_read）— 委譲別の軸が件数で伸びる
       await h.stores.usage.record({
         layer: 'manager',
