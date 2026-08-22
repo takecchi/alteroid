@@ -104,7 +104,11 @@ const RUNNER_STATES = {
  */
 function Credentials({ runner }: { runner: RunnerSummary }) {
   if (runner.credentialsProbe.status === 'unheard') {
-    return <span className="text-[11px] text-muted">鍵は確かめていない（繋がっていないので聞いていない）</span>;
+    return (
+      <span className="text-[11px] text-muted">
+        鍵は確かめていない（繋がっていないので聞いていない）
+      </span>
+    );
   }
   if (runner.credentialsProbe.status === 'failed') {
     return (
