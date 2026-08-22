@@ -18,6 +18,7 @@ import type {
 import {
   createManagerPool,
   createMemoryStores,
+  createPermissionService,
   createProfileApplier,
   createProfileService,
   createProfileVessel,
@@ -30,7 +31,7 @@ import { createJournalBus, type JournalBus } from './journal-bus.js';
 import { scheduleStatusSchema } from './openapi.js';
 
 /** クローンの代わり。HTTP 層だけを検証する。 */
-function fakeClone() {
+function fakeClone(stores: Stores) {
   const listeners = new Map<string, Set<(event: ChatStreamEvent) => void>>();
   const ended: string[] = [];
   const answered: { id: string; answer: string }[] = [];
@@ -135,6 +136,13 @@ function fakeClone() {
     async applyPermissions() {
       appliedPermissions += 1;
     },
+    // **実物の `PermissionService` を通す。** ここを偽物に差し替えると、HTTP の口が
+    // 日誌へ残すことも走行中へ流し込むことも、この試験からは見えなくなる（実物の
+    // 3段はあちらが直列に持っている）。クローンの道具もまったく同じ1本を通る。
+    permissions: createPermissionService({
+      stores,
+      apply: () => clone.applyPermissions(),
+    }),
     async stop() {},
   };
 
@@ -205,7 +213,7 @@ beforeEach(() => {
   const base = createMemoryStores();
   journalBus = createJournalBus(base.journal);
   stores = { ...base, journal: journalBus.journal };
-  fake = fakeClone();
+  fake = fakeClone(stores);
   schedule = fakeScheduler();
   shutdowns = 0;
   app = createApp({
@@ -2133,7 +2141,7 @@ describe('ブラウザからの呼び出しを許すオリジン', () => {
 
   function appWith(allowedOrigins: string[]) {
     return createApp({
-      clone: fakeClone().clone,
+      clone: fakeClone(stores).clone,
       stores,
       token: 'test-token',
       shutdown: () => undefined,
@@ -2485,7 +2493,7 @@ describe('DELETE /managers/:id と実物の ManagerPool（absent と unreachable
       runners: registry,
       profile: createProfileService({ stores: realStores, runners: registry }),
     });
-    const base = fakeClone();
+    const base = fakeClone(realStores);
     const realApp = createApp({
       clone: { ...base.clone, managers: pool },
       stores: realStores,

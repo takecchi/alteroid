@@ -1,4 +1,5 @@
 import type { ManagerPool } from './manager.js';
+import type { PermissionService } from './permission-service.js';
 import type { ChatStreamEvent, InboxEvent } from './schema.js';
 
 /**
@@ -24,13 +25,28 @@ export interface CloneHost {
   answerApproval(approvalId: string, answer: string): Promise<void>;
 
   /**
-   * 人間が開けた実行許可を、走行中のセッションへ流し込み直す。
+   * 台帳にある実行許可を、走行中のセッションへ流し込み直す（**投影そのもの**）。
    *
-   * **台帳を書き換えた側が必ず呼ぶこと。** 呼ばないと、人間が許可を足しても
-   * 次にセッションが開くまで（＝数時間後か数日後）効かない。取り消しも同じで、
-   * 呼ばなければ**消したのに効き続ける**。
+   * **台帳を書き換える経路がここを直接呼ばないこと。** 書き換えは
+   * {@link permissions} を通す — あちらは「台帳へ書く → 日誌へ残す → ここを呼ぶ」を
+   * 直列の1区間として行う。ここだけを呼ぶ形にすると、人間の口とクローンの道具が
+   * 別々に読んで別々に流し込み、**取り消したはずの規則が生き返る**
+   * （`permission-service.ts` の冒頭の図）。
+   *
+   * ここが呼ばれないと、許可を足しても次にセッションが開くまで（＝数時間後か数日後）
+   * 効かない。取り消しも同じで、呼ばなければ**消したのに効き続ける**。
    */
   applyPermissions(): Promise<void>;
+
+  /**
+   * 実行許可の台帳を読み書きする1本道（{@link PermissionService}）。
+   *
+   * **人間の口（`POST` / `DELETE /permissions`）とクローンの道具
+   * （`permission_grant` / `permission_revoke`）は、同じこの1本を通る。**
+   * 別々に書くと、片方だけが日誌へ残す・片方だけが流し込む、という食い違いが
+   * 静かに生まれる（`profile-service.ts` と同じ理由）。
+   */
+  readonly permissions: PermissionService;
 
   /**
    * 委譲先の一覧と生ログ。HTTP 層はここから可観測性の下2層へ降りる。

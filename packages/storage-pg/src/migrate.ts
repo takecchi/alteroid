@@ -108,7 +108,7 @@ const STATEMENTS = [
      value text
    )`,
 
-  // --- 人間が開けた実行許可（store.ts の PermissionStore） ---------------------
+  // --- 開いている実行許可（store.ts の PermissionStore） ---------------------
   // 一意なのは id ではなく rule である。同じ規則が2行あると、人間が1行消しても
   // 規則は効いたままになり「消したのに効き続ける」＝ 増やす口だけが片道で開く。
   // 重複の禁止を SQL 側へ置けば `insert ... on conflict do nothing` の1操作で

@@ -3735,7 +3735,7 @@
       "get": {
         "operationId": "getPermissions",
         "tags": ["permissions"],
-        "summary": "人間が開けた実行許可の一覧",
+        "summary": "開いている実行許可の一覧",
         "description": "いま効いている許可の**全量**。件数で切らない（切れば効いている許可が一覧から消える）。取り消しはここで返る `id` を使う。",
         "responses": {
           "200": {
@@ -3880,7 +3880,7 @@
         "description": "**行を消し、走行中のクローンのセッションからもその場で外す。**増やす口だけあって消す口が無いのは片道の権限なので、ここは最初から在る。いつ誰が外したかは日誌に残る。",
         "responses": {
           "200": {
-            "description": "取り消した。以後この規則は効かない。",
+            "description": "取り消した。以後この規則は効かない（走行中のセッションから外し損ねたときだけ warning が付き、そのときは次にセッションが開くまで効き続ける）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -3889,6 +3889,9 @@
                     "ok": {
                       "type": "boolean",
                       "const": true
+                    },
+                    "warning": {
+                      "type": "string"
                     }
                   },
                   "required": ["ok"]

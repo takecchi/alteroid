@@ -342,7 +342,7 @@ export const commitmentOpenedResponseSchema = z.object({ ok: z.literal(true), id
 // ---------------------------------------------------------------------------
 
 /**
- * 人間が開けた実行許可の全量。
+ * 開いている実行許可の全量。
  *
  * **件数で切らない。** ここに並ぶ行はすべて「いま効いている許可」なので、切れば
  * 効いている許可が一覧から消える ＝ 人間が何を許したのか読めなくなる。
@@ -365,6 +365,21 @@ export const permissionGrantedResponseSchema = z.object({
    * **無いことは「効く」を意味しない。** 言えるのは「当たったなら効かない見込み」
    * までである（見分けは SDK 実装の写しであって正本ではない）。
    */
+  warning: z.string().optional(),
+});
+
+/**
+ * 取り消した合図。
+ *
+ * **`okResponseSchema` を使い回さないのは `warning` のためである。** 台帳からは消えた
+ * のに走行中のクローンのセッションから外し損ねたとき、**その規則は次にセッションが
+ * 開くまで効き続ける。** それを `{ ok: true }` だけで返すと、いちばん危ない片道
+ * （消したのに効いている）が呼び出し側から見えない。**日誌にも残すが、日誌は掘りに
+ * 行かないと読まれない。**
+ */
+export const permissionRevokedResponseSchema = z.object({
+  ok: z.literal(true),
+  /** 走行中のセッションから外せなかったときだけ。**無ければ外れている。** */
   warning: z.string().optional(),
 });
 
@@ -867,6 +882,17 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     },
     applyPermissions() {
       throw new Error('spec 生成専用のスタブ: 許可は流し込まない');
+    },
+    permissions: {
+      list() {
+        throw new Error('spec 生成専用のスタブ: 許可の台帳は持たない');
+      },
+      grant() {
+        throw new Error('spec 生成専用のスタブ: 許可は開けない');
+      },
+      revoke() {
+        throw new Error('spec 生成専用のスタブ: 許可は外さない');
+      },
     },
     answerApproval() {
       throw new Error('spec 生成専用のスタブ');

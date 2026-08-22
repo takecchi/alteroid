@@ -23,7 +23,7 @@ function parsePermission(id: string, value: unknown): PermissionRule {
 }
 
 /**
- * 人間が開けた実行許可の台帳。
+ * 開いている実行許可の台帳。
  *
  * fs 版と同じ IF を満たすための別の器であって、器の違いで能力差を作らない
  * （クラウドでだけ許可を開けられない、が起きない）。

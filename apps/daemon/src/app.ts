@@ -80,6 +80,7 @@ import {
   okResponseSchema,
   permissionGrantedResponseSchema,
   permissionListResponseSchema,
+  permissionRevokedResponseSchema,
   openApiDocumentation,
   openApiExcludePaths,
   profileErrorResponseSchema,
@@ -366,62 +367,6 @@ const commitmentCloseBody = z.object({ reason: z.string().min(1) });
  * 一覧が片付いたもので埋まる）。`/approvals` の `pending` と同じ形に揃えてある。
  */
 const commitmentsQuery = z.object({ includeClosed: z.enum(['true', 'false']).default('false') });
-
-/**
- * `auto` が照合の前に候補から外す Bash 規則を見分ける（**助言であって判定ではない**）。
- *
- * 出荷されている判定実装を静的に読んだ結果（2026-08-22 観測、
- * `claude-agent-sdk-linux-x64@0.3.239` の `BOe` / `N1t` / `B4n`）、`permissionMode`
- * が `auto` のとき、**インタプリタ・遠隔実行系の Bash allow 規則は照合される前に
- * allow の候補から除外される。** 除外された規則は一致しようがないので、
- * **人間は許可したつもりで一度も効かない。**
- *
- * **⚠️ この一覧は向こうの実装の写しであって、正本ではない。**
- * 向こうが増やせばここは黙って古くなる（この repo の「固定した数は固定した瞬間から
- * 腐り、腐ったことは読む側からは分からない」と同じ形）。だから:
- *
- * - **止めない。** 助言を返すだけで、許可そのものは通す（不変条件1 — ここに
- *   「何が通るか」を決める表を持たない。持った瞬間に権限の一覧になる）
- * - **「当たらなかった＝効く」と言わない。** 言えるのは「当たったなら効かない見込み」
- *   までである。設定 `autoMode.classifyAllShell` が真なら **Bash の allow 規則は
- *   全部**除外されるが、デーモンからその設定は読んでいないので、ここでは判定できない
- * - 積み上がってからの検出は別に在る（`clone.ts` の `#noteDenial`）。**こちらは
- *   足す瞬間に言うためのもので、両方要る**
- */
-const AUTO_EXCLUDED_BASH_HEADS = [
-  'python',
-  'python3',
-  'node',
-  'ruby',
-  'perl',
-  'php',
-  'ssh',
-  'scp',
-  'kubectl',
-  'docker',
-  'eval',
-  'sh',
-  'bash',
-  'zsh',
-];
-
-/**
- * 足そうとしている規則が `auto` で黙って効かない見込みなら、その旨の1行。
- * 当たらなければ `null`（**「効く」の意味ではない**。上の doc）。
- */
-export function autoModeWarningFor(rule: string): string | null {
-  const match = /^Bash\((.*)\)$/.exec(rule.trim());
-  if (match === null) return null;
-  const head = (match[1] ?? '').trim().split(/[\s:]/)[0]?.toLowerCase() ?? '';
-  if (head.length === 0) return null;
-  if (!AUTO_EXCLUDED_BASH_HEADS.includes(head)) return null;
-  return (
-    `⚠️ この規則は permissionMode が auto のとき、照合される前に候補から外される見込み` +
-    `（${head} はインタプリタ・遠隔実行系として除外される）。` +
-    `許可しても一度も効かない可能性が高い。` +
-    `**この見分けは SDK 実装の写し（2026-08-22 観測）であって正本ではない。**`
-  );
-}
 
 /**
  * 許す規則1本。
@@ -2028,7 +1973,7 @@ export function createApp(deps: AppDeps) {
       '/permissions',
       describeRoute({
         tags: ['permissions'],
-        summary: '人間が開けた実行許可の一覧',
+        summary: '開いている実行許可の一覧',
         description:
           'いま効いている許可の**全量**。件数で切らない（切れば効いている許可が' +
           '一覧から消える）。取り消しはここで返る `id` を使う。',
@@ -2083,40 +2028,42 @@ export function createApp(deps: AppDeps) {
         // `Bash` で読んで `curl` で叩ける。固定すると、クローンが足したものまで
         // 「人間が足した」と記録されてしまう。**観測できたものだけを書く**
         // （`permissionRuleSchema.grantedBy` の doc）。
+        //
+        // **クローンが自分の道具（`permission_grant`）で開けた分は、ここを通らずに
+        // `clone` と記録される。** 混ざらないので、一覧を見れば人間の分と分けて読める。
         const principal = c.get('principal');
-        const entry = {
-          id: randomUUID(),
+        // **台帳を直に書かない。** 書く・日誌へ残す・走行中へ流し込むの3段は
+        // `PermissionService` が直列にやる（クローンの道具とまったく同じ1本道を通る）。
+        const outcome = await clone.permissions.grant({
           rule,
-          grantedAt: new Date().toISOString(),
-          grantedBy: principal.kind === 'operator' ? 'operator' : `account:${principal.account.id}`,
+          grantedBy:
+            principal.kind === 'operator' ? 'operator' : `account:${principal.account.id}`,
           ...(note === undefined ? {} : { note }),
-        };
+          // **「人間が」と書かない。** 書けるのは提示された資格までである
+          grounds: `${principal.kind === 'operator' ? 'operator' : `account:${principal.account.id}`} の資格で HTTP から許可を開けた`,
+        });
         // **重ねない。** 同じ規則が2行あると、人間が1行消しても規則は効いたままになり
         // 「消したのに効き続ける」＝ 増やす口だけが片道で開く形になる。
-        if (!(await stores.permissions.grant(entry))) {
+        if (!outcome.ok) {
           return c.json({ error: `${rule} は既に許してある` }, 409);
         }
-        // **記録に残らない許可は、許可として成立していない。** 人間が後から読んで
-        // 否定できることが最終承認の実体である（north_star）。
-        // **足す瞬間に言う。** 積み上がってから検出するより安い（`autoModeWarningFor`）。
-        const warning = autoModeWarningFor(rule);
-        await stores.journal.append({
-          type: 'decision',
-          decision:
-            `実行許可を開けた（${entry.id}）: ${rule}` +
-            `${note === undefined ? '' : `（${note}）`}` +
-            `${warning === null ? '' : ` ${warning}`}`,
-          // **「人間が」と書かない。** 書けるのは提示された資格までである
-          grounds: `${entry.grantedBy} の資格で HTTP から許可を開けた`,
-        });
-        // **台帳を書き換えたら必ず流し込む。** 呼ばないと次にセッションが開くまで
-        // （＝数時間後か数日後）効かない。
-        await clone.applyPermissions();
+        // **流し込みに失敗しても 200 で返す（台帳には入っている）。** ここを失敗に
+        // 倒すと、人間は同じ規則をもう一度足しに来て 409 に当たり、「何をしても
+        // 開かない」ように見える。代わりに、効いていないことを警告として必ず言う。
+        const warning = [
+          outcome.warning,
+          outcome.applyError === undefined
+            ? undefined
+            : `⚠️ 台帳には入ったが、走行中のクローンのセッションへは流し込めなかった` +
+              `（次にセッションが開けば効く）: ${outcome.applyError}`,
+        ]
+          .filter((line) => line !== undefined)
+          .join(' ');
         return c.json(
           permissionGrantedResponseSchema.parse({
             ok: true,
-            id: entry.id,
-            ...(warning === null ? {} : { warning }),
+            id: outcome.entry.id,
+            ...(warning.length === 0 ? {} : { warning }),
           }),
         );
       },
@@ -2133,8 +2080,10 @@ export function createApp(deps: AppDeps) {
           'いつ誰が外したかは日誌に残る。',
         responses: {
           200: {
-            description: '取り消した。以後この規則は効かない。',
-            content: { 'application/json': { schema: resolver(okResponseSchema) } },
+            description:
+              '取り消した。以後この規則は効かない（走行中のセッションから外し損ねたときだけ warning が付き、' +
+              'そのときは次にセッションが開くまで効き続ける）。',
+            content: { 'application/json': { schema: resolver(permissionRevokedResponseSchema) } },
           },
           404: {
             description: 'その id は台帳に無い。',
@@ -2144,20 +2093,27 @@ export function createApp(deps: AppDeps) {
       }),
       async (c) => {
         const id = c.req.param('id');
-        // 消す前に読む。**日誌に「何を」外したかを残すためである** — id だけ残しても、
-        // 行が消えた後では何の規則だったか誰にも辿れない。
-        const existing = await stores.permissions.get(id);
-        if (!(await stores.permissions.revoke(id))) {
-          return c.json({ error: 'not found' as const }, 404);
-        }
-        await stores.journal.append({
-          type: 'decision',
-          decision: `実行許可を取り消した（${id}）: ${existing?.rule ?? '規則の記録なし'}`,
+        // 消す・日誌へ残す・走行中から外す、の3段は `PermissionService` が直列にやる
+        // （何を外したかを日誌へ残すために、消す前に行を読むのもあちらの責務）。
+        const outcome = await clone.permissions.revoke(id, {
+          revokedBy: c.get('principal').kind === 'operator' ? 'operator' : 'account',
           grounds: `${c.get('principal').kind === 'operator' ? 'operator' : 'account'} の資格で HTTP から取り消した`,
         });
-        // **消したら実際に効かなくなること。** 全量を送り直すので、減った規則はここで消える。
-        await clone.applyPermissions();
-        return c.json(okResponseSchema.parse({ ok: true }));
+        if (!outcome.ok) {
+          return c.json({ error: 'not found' as const }, 404);
+        }
+        return c.json(
+          permissionRevokedResponseSchema.parse({
+            ok: true,
+            ...(outcome.applyError === undefined
+              ? {}
+              : {
+                  warning:
+                    `⚠️ 台帳からは消えたが、走行中のクローンのセッションからは外せなかった。` +
+                    `**次にセッションが開くまで効き続ける**: ${outcome.applyError}`,
+                }),
+          }),
+        );
       },
     )
 

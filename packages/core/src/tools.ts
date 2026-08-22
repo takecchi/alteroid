@@ -7,6 +7,7 @@ import { isCronExpression } from './cron.js';
 import { describePage, excerptLine, page } from './excerpt.js';
 import type { ManagerDenial, ManagerPool, ManagerSummary } from './manager.js';
 import { renderMemoryDocuments } from './memory.js';
+import type { PermissionService } from './permission-service.js';
 import type { ProfileService } from './profile-service.js';
 import {
   RESERVED_SCHEDULE_KINDS,
@@ -76,6 +77,19 @@ export interface ToolContext {
    */
   profile?: ProfileService;
   /**
+   * 実行許可の台帳を読み書きする1本道（`PermissionService`）。
+   *
+   * **人間の代わりに、クローン自身が許可を開けるための口である**（人間の決定、
+   * 2026-08-22。逐語は `design-notes/dynamic-permissions.md` の §12）。判断の基準は
+   * 記憶に根拠があるかで、それは PRD「権限境界」がもともと言っていることである
+   * — 変わったのは「下の層（器の許可規則）にもその判断が届くようになった」点だけ。
+   *
+   * **省略できるのは蒸留用の短命セッションのためである**（`managers` と同じ）。
+   * 記憶へ移すためだけの内部ターンから器の許可が動くと、人間との会話の外で
+   * 許可が増えることになる。省略された場面では道具がその旨を返す（黙って落とさない）。
+   */
+  permissions?: PermissionService;
+  /**
    * アカウント全体の利用状況（claude.ai 側が言っている値）を読む口。
    *
    * **人間が `claude.ai/settings/usage` で見られるものである。** クローンが
@@ -134,6 +148,9 @@ export const CLONE_TOOL_NAMES = [
   'commitment_list',
   'commitment_open',
   'commitment_close',
+  'permission_list',
+  'permission_grant',
+  'permission_revoke',
   'profile_read',
   'profile_write',
   'self_read',
@@ -941,6 +958,168 @@ export function createCloneTools(context: ToolContext) {
         }
         await stores.commitments.close(id, new Date().toISOString(), reason);
         return text(`${id} を片付けた。`);
+      },
+    ),
+
+    // --- 実行許可（あなたが「常に許可」を押す手） ---------------------------
+    //
+    // **人間の代わりに、クローン自身が許可を開ける。** これは人間の決定である
+    // （2026-08-22。逐語は `design-notes/dynamic-permissions.md` §12）。第一段では
+    // 書き口を人間の HTTP だけに置いていたが、その形は PRD「権限境界」と噛み合って
+    // いなかった — **判断の基準は「記憶に根拠があるか」であり、それを判断するのは
+    // クローンだからである。**
+    //
+    // ここが直すのは下の層（器の許可規則）だけで、上の層（何を人間に確認するか）は
+    // 何も変わらない。クローンは相変わらず記憶から判断し、根拠が無ければ `ask_human`
+    // で聞く。**変わったのは、判断した結果を器に効かせる手が無かったこと**である
+    // （人間が自分の PC で一度「常に許可」を押すのに当たる操作。north_star 禁止1）。
+    //
+    // **担保は禁止ではなく記録の側にある。** 開けた・外した・その根拠は必ず日誌に残り、
+    // 人間はいつでも一覧を見て外せる（「最終承認＝人間が後から読んで否定できること」）。
+    tool(
+      'permission_list',
+      [
+        'いまあなたに開いている実行許可（器の許可規則）の一覧。',
+        'ここに在るものは、確認なしで通る。**規則が無くても通る道具は多い**',
+        '（既定の許可モードでは分類器がその場で判断するので、この一覧は「必ず通る分」だけである）。',
+        '許可を開ける前と、止められた原因を疑うときに、まずここを見ること。',
+      ].join(' '),
+      {},
+      async () => {
+        const entries = await stores.permissions.list();
+        if (entries.length === 0) {
+          return text('（開いている実行許可は無い。それでも多くの道具は分類器の判断で通る）');
+        }
+        return text(
+          entries
+            .map(
+              (entry) =>
+                `- ${entry.rule}\n  id: ${entry.id}（${entry.grantedAt} / ${entry.grantedBy}）` +
+                `${entry.note === undefined ? '' : `\n  ${entry.note}`}`,
+            )
+            .join('\n'),
+        );
+      },
+    ),
+
+    /**
+     * **クローンが自分で許可を開ける口。**
+     *
+     * ⚠️ **これは「クローンが自分の権限を自分で広げられる」という意味である。**
+     * 人間がそう決めた（`design-notes/dynamic-permissions.md` §12 に逐語がある）。
+     * 次にここを読んで「危ないから人間の承認を挟もう」と戻さないこと — 戻すと、
+     * クローンが記憶に根拠を見つけて下した判断を、価値観を1つも知らない分類器が
+     * 覆したままになる（それが直そうとしていた壊れ方である）。
+     *
+     * **代わりに置いてあるものが3つある。** 弱めるならこちらを厚くする側で:
+     *
+     * 1. **根拠を必ず言わせる**（`grounds` は必須）。日誌の `grounds` に入る
+     * 2. **`grantedBy` は `'clone'` 固定。** ここから `'human'` や資格の名前は出ない
+     *    （`memory_*` の `cause` と同じ作法）。**人間が開けた分と混ざらないこと自体が、
+     *    第一段より観測が良くなっている点である** — それまでクローンが `Bash` から
+     *    `curl` で叩いた分は `operator` と記録され、人間と区別が付かなかった
+     * 3. **取り消しは対称に在る**（`permission_revoke`。人間の口からも外せる）
+     */
+    tool(
+      'permission_grant',
+      [
+        '実行許可を1件開ける。**人間が自分の PC で「常に許可」を押すのに当たる操作を、',
+        'あなたが人間の代わりに行う。**（人間の決定。あなたは人間の代理である）',
+        '判断の基準はいつもと同じ — **記憶に根拠があるか。**',
+        '根拠があれば自分で開けてよい。無ければ開けずに ask_human で聞くこと。',
+        '⚠️ **規則は見た目より広い。** 照合はコマンド文字列の前方一致で、',
+        '規則で許可が確定した呼び出しは分類器も安全性検査も通らない —',
+        '`Bash(gh pr merge:*)` を開けることは、`gh pr merge ` で始まる任意の長さの命令の',
+        '中身の検査を丸ごと外すことでもある。取り返しのつかない行為ほど、狭い規則にするか、',
+        '根拠の確かさを上げること。',
+        '開けたことと根拠は必ず日誌に残り、人間はいつでも外せる。',
+      ].join(' '),
+      {
+        rule: z
+          .string()
+          .min(1)
+          .describe(
+            'SDK の許可規則そのもの（`Bash(gh pr merge:*)` / `WebFetch` など）。' +
+              '括弧なしの素の道具名は「その道具を丸ごと無条件で許す」という意味になる',
+          ),
+        grounds: z
+          .string()
+          .min(1)
+          .describe(
+            '**記憶のどこに根拠があるか**（人間とのどのやり取りで、これはやってよいと分かっているか）。' +
+              '日誌に残り、人間はこれを読んで後から否定する。' +
+              '「便利だから」「止められたから」は根拠ではない',
+          ),
+        note: z
+          .string()
+          .optional()
+          .describe('台帳の行に残す一行（何のために開けたか）。人間が一覧で読む'),
+      },
+      async ({ rule, grounds, note }) => {
+        if (context.permissions === undefined) {
+          return text(
+            'いまは実行許可を開けられない場面である（記憶へ移すための内部ターン）。' +
+              '次の会話で開けること。',
+          );
+        }
+        const outcome = await context.permissions.grant({
+          rule,
+          grounds,
+          ...(note === undefined ? {} : { note }),
+          // **本文から取らない。** 呼び手に名乗らせると、名乗りたい名前を名乗れる
+          // （`memory_*` の `cause` と同じ作法）。この道具から出るのは `clone` だけである。
+          grantedBy: 'clone',
+        });
+        if (!outcome.ok) {
+          return text(`${rule} は既に開いている（重ねない。permission_list で確かめること）。`);
+        }
+        return text(
+          [
+            `実行許可を開けた（${outcome.entry.id}）: ${rule}`,
+            'これから呼ぶぶんは確認なしで通る。要らなくなったら permission_revoke で外すこと。',
+            outcome.warning ?? null,
+            outcome.applyError === undefined
+              ? null
+              : `⚠️ 台帳には入ったが、走行中のこのセッションへは流し込めなかった` +
+                `（次にセッションが開けば効く）: ${outcome.applyError}`,
+          ]
+            .filter((line) => line !== null)
+            .join('\n'),
+        );
+      },
+    ),
+
+    tool(
+      'permission_revoke',
+      [
+        '実行許可を1件取り消す。**開ける口だけあって外す口が無いのは片道の権限である。**',
+        '一度きりのために開けたもの、広すぎたと後から思ったものは自分で外すこと。',
+        '外したことも日誌に残る。',
+      ].join(' '),
+      {
+        id: z.string().describe('permission_list に出ている id'),
+        grounds: z.string().min(1).describe('なぜ外すか（日誌に残る）'),
+      },
+      async ({ id, grounds }) => {
+        if (context.permissions === undefined) {
+          return text(
+            'いまは実行許可を外せない場面である（記憶へ移すための内部ターン）。' +
+              '次の会話で外すこと。',
+          );
+        }
+        const outcome = await context.permissions.revoke(id, { revokedBy: 'clone', grounds });
+        if (!outcome.ok) return text(`実行許可 ${id} は台帳に無い（何も変わっていない）。`);
+        return text(
+          [
+            `実行許可を取り消した（${id}）: ${outcome.entry?.rule ?? '規則の記録なし'}`,
+            outcome.applyError === undefined
+              ? null
+              : `⚠️ 台帳からは消えたが、走行中のこのセッションからは外せなかった` +
+                `（次にセッションが開くまで効き続ける）: ${outcome.applyError}`,
+          ]
+            .filter((line) => line !== null)
+            .join('\n'),
+        );
       },
     ),
 

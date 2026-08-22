@@ -61,7 +61,7 @@ export interface CloneSessionOptionsRequest {
   onPreCompact: HookCallback;
   onPostToolUse: HookCallback;
   /**
-   * 人間が開けた実行許可（`PermissionStore` の全量。規則の文字列そのもの）。
+   * 開いている実行許可（`PermissionStore` の全量。規則の文字列そのもの）。
    *
    * **ここに来るのは `allow` だけである。** 台帳が `allow` しか持たないので
    * （`permissionRuleSchema` の不変条件1）、ここへ deny が混ざる経路は無い。
@@ -101,7 +101,7 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
     // 1つも減らない。並べてあるのは、自分の道具が権限の判断に晒されないように
     // するためである。
     //
-    // **ここへ人間が開けた分を足す**（`allowRules`）。足す先が `allowedTools` なのは、
+    // **ここへ台帳の分を足す**（`allowRules`）。足す先が `allowedTools` なのは、
     // 既定の `auto` では SDK のモデル分類器がその場で拒否を決め `canUseTool` が
     // 呼ばれないからで、**確認を回す先を作っても発火しない**。通す方法は「確認なしで
     // 通す一覧」に載せることだけである。**これは能力の調整ではなく、人間が自分の PC で

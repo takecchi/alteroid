@@ -12,7 +12,7 @@ const fileSchema = z.object({
 type PermissionFile = z.infer<typeof fileSchema>;
 
 /**
- * 人間が開けた実行許可の台帳 = 1枚の JSON。
+ * 開いている実行許可の台帳 = 1枚の JSON。
  *
  * **上限を持たない**（`commitments.json` の `CLOSED_HISTORY_LIMIT` に当たるものが
  * 無い）。あちらは片付いた行＝履歴を切っているが、こちらに並ぶ行は**すべていま

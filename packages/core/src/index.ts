@@ -296,6 +296,16 @@ export {
   type StagedProfile,
 } from './profile.js';
 export {
+  autoModeWarningFor,
+  createPermissionService,
+  type PermissionGrantOutcome,
+  type PermissionGrantRequest,
+  type PermissionRevokeOutcome,
+  type PermissionRevokeRequest,
+  type PermissionService,
+  type PermissionServiceOptions,
+} from './permission-service.js';
+export {
   createProfileService,
   type ApplyProfileResult,
   type ProfileService,

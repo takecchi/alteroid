@@ -11,7 +11,7 @@ import type { AddressInfo } from 'node:net';
 
 import { serve, type ServerType } from '@hono/node-server';
 import type { ChatStreamEvent, CloneHost, ManagerPool, Stores } from '@alteroid/core';
-import { createMemoryStores } from '@alteroid/core';
+import { createMemoryStores, createPermissionService } from '@alteroid/core';
 import { createApp, createJournalBus } from '@alteroid/daemon';
 import createClient from 'openapi-fetch';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -105,6 +105,7 @@ function fakeClone(stores: Stores) {
     },
     // この試験は HTTP の口の形だけを見る（流し込みそのものは daemon 側で見る）。
     async applyPermissions() {},
+    permissions: createPermissionService({ stores, apply: async () => {} }),
     async stop() {},
   };
 

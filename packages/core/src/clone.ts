@@ -30,6 +30,7 @@ import {
   resolvePermissionModeFor,
   type PermissionModeName,
 } from './permission-mode.js';
+import { createPermissionService, type PermissionService } from './permission-service.js';
 import type { ProfileApplier } from './profile.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap } from './recent.js';
@@ -699,6 +700,14 @@ class Clone implements CloneHost {
   readonly #profile: ProfileApplier | undefined;
   readonly #profileService: ProfileService | undefined;
   readonly #accountUsage: (() => AccountUsageState) | undefined;
+  /**
+   * 実行許可の1本道（人間の HTTP の口と、クローン自身の道具の両方がここを通る）。
+   *
+   * **ここで組むのは、`apply` の宛先が自分だからである。** 外から渡す形にすると、
+   * デーモンの配線が「クローンを組む前に、クローンを指す関数を用意する」という順序に
+   * なる（そして渡し忘れれば、人間の口とクローンの道具が別々の列を持つ）。
+   */
+  readonly #permissions: PermissionService;
 
   constructor(options: CloneOptions) {
     const {
@@ -730,6 +739,10 @@ class Clone implements CloneHost {
     this.#accountUsage = accountUsage;
     this.#self = self;
     this.#mcpServerFactory = mcpServerFactory ?? createCloneMcpServer;
+    this.#permissions = createPermissionService({
+      stores,
+      apply: () => this.applyPermissions(),
+    });
     this.#managers =
       managers ??
       createManagerPool({
@@ -745,6 +758,16 @@ class Clone implements CloneHost {
   /** デーモンの HTTP 層から一覧・生ログへ降りるための口。 */
   get managers(): ManagerPool {
     return this.#managers;
+  }
+
+  /**
+   * 実行許可の台帳を書き換える唯一の口（人間の HTTP もクローンの道具もここを通る）。
+   *
+   * **`stores.permissions` を直接触らないこと。** 台帳へ書くだけでは日誌にも残らず、
+   * 走行中のセッションへも流れない（`PermissionService` の doc）。
+   */
+  get permissions(): PermissionService {
+    return this.#permissions;
   }
 
   // -------------------------------------------------------------------------
@@ -2326,7 +2349,7 @@ class Clone implements CloneHost {
   }
 
   /**
-   * 人間が開けた実行許可を、**走行中のセッションへ**流し込む。
+   * 開いている実行許可を、**走行中のセッションへ**流し込む。
    *
    * **セッションを開き直さない。** クローンは長寿命セッション1本なので、次に開くのは
    * 数時間後か数日後である。そこまで効かないなら「PR とマージが要らなくなった」代わりに
@@ -2368,7 +2391,7 @@ class Clone implements CloneHost {
     this.#systemPromptChars = systemPrompt.length;
     this.#promptMemoryChars = memory.length;
 
-    // 人間が開けた実行許可の全量。**セッションを開くたびに読み直す** — 器を作り直しても
+    // 開いている実行許可の全量。**セッションを開くたびに読み直す** — 器を作り直しても
     // 台帳（DB）が正本なので許可は残る。走行中に増えた分は `applyPermissions` が別に流す。
     const allowRules = (await this.#stores.permissions.list()).map((entry) => entry.rule);
 
@@ -2444,6 +2467,9 @@ class Clone implements CloneHost {
       stores: this.#stores,
       emit: (event) => this.#emit(this.#turn?.conversationId ?? null, event),
       managers: this.#managers,
+      // **実行許可を開ける手。** 本セッションにだけ渡す（蒸留のサイドクエリには
+      // 渡さない ＝ 記憶へ移すためだけの内部ターンから器の許可が動かない）。
+      permissions: this.#permissions,
       ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
       ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
       runtime: () => this.#runtimeFacts(),
@@ -2665,8 +2691,12 @@ class Clone implements CloneHost {
     const granted = await this.#grantedRulesFor(tool);
     const alreadyGranted =
       granted.length === 0
-        ? ''
-        : ` ⚠️ この道具には人間が開けた許可が既に在る（${granted.join(' / ')}）。` +
+        ? // **開ける手が在ることを、止められた記録の隣に書く。** 台帳へ書く口を
+          // 持っているのに気づかなければ、持っていないのと同じである（人間の決定
+          // により、開けるかどうかを判断するのはクローン自身になった）。
+          ` この道具について開いている許可はまだ無い。**記憶に根拠があるなら permission_grant で自分で開けてよい**` +
+          `（人間の代わりに判断する。根拠が無ければ開けずに ask_human で聞くこと）。`
+        : ` ⚠️ この道具には開いている許可が既に在る（${granted.join(' / ')}）。` +
           `**それでも止められたということは、原因は許可の一覧ではない**（拒否の原因が許可の層に` +
           `無いか、auto がこの規則を照合の前に外している）。許可を増やす方向へ探しに行かないこと。`;
 
@@ -2682,7 +2712,7 @@ class Clone implements CloneHost {
   }
 
   /**
-   * その道具について、人間が既に開けている許可規則。
+   * その道具について、いま開いている許可規則（**人間が開けた分も、自分で開けた分も**）。
    *
    * **照合は道具の名前までしか見ない。** 規則の中身（`Bash(gh pr merge:*)` の括弧の
    * 中）を器が解釈し始めると、それは「何が広くて何が狭いか」の表になり、`allow` だけの

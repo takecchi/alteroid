@@ -266,7 +266,7 @@ export interface TranscriptArchive {
 }
 
 /**
- * 人間が開けた実行許可の台帳（`schema.ts` の {@link PermissionRule}）。
+ * 開いている実行許可の台帳（`schema.ts` の {@link PermissionRule}）。
  *
  * **`allow` しか持たない。** `deny` / `ask` を足すメソッドをここへ生やさないこと
  * （理由は `permissionRuleSchema` の doc。正典の地雷そのものになる）。
@@ -428,7 +428,7 @@ export interface Stores {
    */
   commitments: CommitmentStore;
   /**
-   * 人間が開けた実行許可の台帳（{@link PermissionStore}）。
+   * 開いている実行許可の台帳（{@link PermissionStore}）。
    *
    * **省略可能にしないこと**（`commitments` と同じ理由）。
    */
