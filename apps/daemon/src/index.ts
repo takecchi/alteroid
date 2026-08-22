@@ -137,6 +137,32 @@ const SHUTDOWN_GRACE_MS = 60_000;
 const FORCED_EXIT_MS = SHUTDOWN_GRACE_MS - 5_000;
 
 /**
+ * TCP keepalive の初回プローブまでの待ち時間（ms）。
+ *
+ * **`server.timeout`（Node の socket アイドルタイムアウト）は入れない。** あれは
+ * 「無通信で `timeout` ms」を見るが、`write()` を呼ぶたびに（相手に届いたかどうかは
+ * 関係なく）タイマーがリセットされる（実測: ローカルの `net` サーバで `setTimeout(1000)`
+ * を張り、400ms ごとに `write()` し続けると `timeout` は発火せず、書き込みを止めた
+ * 約800ms後に発火した——ちょうど最後の書き込みから1000msの近傍である）。
+ * SSE の heartbeat（`./sse-heartbeat.ts`）と組み合わせると**発火しない設定**になり、
+ * heartbeat が無い経路（将来増えるなら）では逆に「イベントが来ないだけの健全な
+ * 長時間接続」を時間で切ってしまう。掃除したいのは**死んだ接続**であって
+ * **静かな接続**ではない——静かなことを理由に切るのは、長時間つないでおく能力を
+ * 削ることになる（north_star 禁止2）。
+ *
+ * 代わりに **TCP keepalive** を使う。こちらは OS が相手に生死を確かめにいく
+ * （プローブに応答が無ければ OS 自身が接続を諦める）ので、アプリが書き込んで
+ * いない間も効く。**ただし検知にかかる時間は OS の設定に依存し、Node からは
+ * `initialDelay`（最初のプローブまでの待ち）しか制御できない** ——
+ * プローブの間隔・回数（Linux の `tcp_keepalive_intvl` / `tcp_keepalive_probes`）は
+ * カーネル側の設定で、コンテナ環境では触れないこともある。「無音死を確実に
+ * N 秒で検知する」とは言えない——言えるのは「検知される経路が生まれる」までである。
+ * fd の枯渇を防ぐという今回の目的には、既定（Linux で probes=9, intvl=75s なら
+ * この待ち時間 + 十数分程度）でも十分間に合う。
+ */
+const TCP_KEEPALIVE_DELAY_MS = 30_000;
+
+/**
  * 起動時の種になる runner の宛先。
  *
  * `ALTEROID_RUNNER_URLS`（カンマ区切り）と `ALTEROID_RUNNER_URL`（単数）の両方を
@@ -718,6 +744,12 @@ export async function main(): Promise<void> {
   }
 
   const server = serve({ fetch: app.fetch, port, hostname });
+
+  // TCP keepalive（`TCP_KEEPALIVE_DELAY_MS` の JSDoc に理由）。`serve()` は素の
+  // `http.Server` を返すので、標準の `connection` イベントへ直接差し込める。
+  server.on('connection', (socket) => {
+    socket.setKeepAlive(true, TCP_KEEPALIVE_DELAY_MS);
+  });
 
   server.on('error', (error: unknown) => {
     process.stderr.write(`alteroidd: 待ち受けに失敗しました (port ${port}): ${String(error)}\n`);

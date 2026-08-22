@@ -146,7 +146,7 @@ async function sendMessage(
   return nextConversationId;
 }
 
-interface SSEEvent {
+export interface SSEEvent {
   name: string;
   data: string;
   json<T>(): T | null;
@@ -173,7 +173,19 @@ async function* readSSE(body: ReadableStream<Uint8Array>): AsyncGenerator<SSEEve
   }
 }
 
-function parseSSEChunk(chunk: string): SSEEvent | null {
+/**
+ * SSE の1フレーム（空行までの塊）を読む。**`null` は「読み飛ばす」の意味である。**
+ *
+ * `event:` / `data:` 以外の行は無視するので、コメント行（`:` 始まり。デーモンが
+ * 無音死の掃除のために周期的に流す heartbeat）だけの塊は `data:` が1本も無く、
+ * ここで `null` になって `readSSE` から yield されない。
+ *
+ * **export しているのは試験のためである**（`./chat.test.ts`）。デーモン側の
+ * heartbeat が `alteroid chat` を壊さないことは、実装を読めば分かるが読むだけでは
+ * 固定されない —— 誰かがこの関数を「未知の行はエラーにしよう」と直した日に、
+ * 落ちるのは CLI の実行時であって型検査ではない。挙動は1文字も変えていない。
+ */
+export function parseSSEChunk(chunk: string): SSEEvent | null {
   let name = 'message';
   const dataLines: string[] = [];
 

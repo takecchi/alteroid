@@ -309,6 +309,100 @@ describe('HTTP API', () => {
     expect((await app.request('/chat', json({ text: '' }))).status).toBe(400);
   });
 
+  /**
+   * **クローンが黙っているあいだも、SSE には何かが流れる。**
+   *
+   * ここで見たいのは「TCP が切れずデータも流れない切断」を掃除する契機が
+   * サーバ側に在ることで、その契機が heartbeat の書き込みそのものである
+   * （`./sse-heartbeat.ts` の JSDoc）。**掃除が起きたことはここでは見ていない**
+   * —— 掃除は Node の `outgoing` の `close` / `error` を経由する経路で、
+   * `app.request()`（実際の socket を持たない）では再現できない。**見ているのは
+   * 「無音のときに書き込みが発生するか」までである。**
+   *
+   * クローンの返答は `done` を出さない形にしてストリームを開いたままにする
+   * （`done` / `error` でループが抜けるので、既定の返答だと heartbeat の前に
+   * 終わってしまう）。
+   */
+  it('/chat はクローンが黙っていても heartbeat のコメント行を流す', async () => {
+    fake.setReply([{ type: 'text', text: 'やあ' }]);
+    const beating = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => (shutdowns += 1),
+      scheduler: schedule.scheduler,
+      journalEvents: journalBus,
+      sseHeartbeatMs: 5,
+    });
+
+    const response = await beating.request('/chat', json({ text: 'やあ' }));
+    const body = response.body;
+    if (body === null) throw new Error('SSE の応答に本文が無い');
+
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let seen = '';
+    while (!seen.includes(': hb')) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      seen += decoder.decode(value, { stream: true });
+    }
+
+    // heartbeat が来ている。そして既存のフレームを壊していない
+    expect(seen).toContain(': hb');
+    expect(seen).toContain('event: open');
+    expect(seen).toContain('event: text');
+    // **コメント行が他のフレームへ食い込んでいない。** 1回の `write()` で
+    // 書き切っているので、`data:` の途中に `: hb` が挟まることはない
+    expect(seen).not.toMatch(/data:[^\n]*: hb/);
+
+    await reader.cancel();
+  });
+
+  /**
+   * **上の試験に歯が在ることの裏取り（陰性対照）。**
+   *
+   * 間隔を十分長くすれば、同じ読み方をしても `: hb` は来ない。これが無いと、
+   * 「`: hb` を含む」は他の何か（たとえばフレームの区切り方）を拾っただけでも
+   * 通ってしまう。
+   */
+  it('間隔より短いあいだは heartbeat は流れない（上の試験が周期を見ている証拠）', async () => {
+    fake.setReply([{ type: 'text', text: 'やあ' }]);
+    const quiet = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => (shutdowns += 1),
+      scheduler: schedule.scheduler,
+      journalEvents: journalBus,
+      sseHeartbeatMs: 60_000,
+    });
+
+    const response = await quiet.request('/chat', json({ text: 'やあ' }));
+    const body = response.body;
+    if (body === null) throw new Error('SSE の応答に本文が無い');
+
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let seen = '';
+    // `text` まで読んだら、その後100msぶん待って何も来ないことを見る
+    while (!seen.includes('event: text')) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      seen += decoder.decode(value, { stream: true });
+    }
+
+    const next = await Promise.race([
+      reader.read().then(({ value }) => decoder.decode(value)),
+      new Promise<'まだ何も来ていない'>((resolve) =>
+        setTimeout(() => resolve('まだ何も来ていない'), 100),
+      ),
+    ]);
+    expect(next).toBe('まだ何も来ていない');
+
+    await reader.cancel();
+  });
+
   it('会話終了で蒸留が促される', async () => {
     const response = await app.request('/chat/conv-x/end', post);
 
@@ -1528,6 +1622,45 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     expect(frame).toContain('escalation');
     expect(frame).toContain('消してよいか');
     expect(frame).not.toContain('流れてはいけない');
+    await reader.cancel();
+  });
+
+  /**
+   * **日誌に何も載らないあいだも heartbeat が流れる。**
+   *
+   * `/journal/stream` は `/chat` と違って**そもそも長時間無音が普通**である
+   * （承認待ちが出るまで何も起きない）。だから無音死がいちばん出るのはこの経路で、
+   * `apps/web` がこの口で自前の再接続を持っているのもそれが理由だった
+   * （`apps/web/app/hooks/use-journal-live.ts` の冒頭コメント）。
+   */
+  it('日誌が無音でも heartbeat のコメント行が流れる（承認待ちを待つ長時間接続）', async () => {
+    const beating = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => (shutdowns += 1),
+      scheduler: schedule.scheduler,
+      journalEvents: journalBus,
+      sseHeartbeatMs: 5,
+    });
+
+    const response = await beating.request('/journal/stream');
+    expect(response.status).toBe(200);
+
+    const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+    const decoder = new TextDecoder();
+    let seen = '';
+    // **日誌へは1件も追記しない。** それでも読めるものが来ることを見る
+    while (!seen.includes(': hb')) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      seen += decoder.decode(value, { stream: true });
+    }
+
+    expect(seen).toContain(': hb');
+    // 最初のフレームは open のまま（heartbeat が先に割り込んでいない）
+    expect(seen.indexOf('event: open')).toBeLessThan(seen.indexOf(': hb'));
+
     await reader.cancel();
   });
 
