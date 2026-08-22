@@ -237,6 +237,15 @@ const TRANSCRIPT_PAGE = 8_000;
  */
 const COMMITMENT_LIST_BUDGET = 8_000;
 const COMMITMENT_BODY_LIMIT = 240;
+/**
+ * 台帳1件の全文を取りに来たときの1回分。続きは `offset` で取れる。
+ *
+ * **`body` は要約を禁じられた欄である**（`schema.ts` の逐語: 「要約にしないこと。
+ * 一覧で切るのは表示側の仕事で、器が要約を持つと『頼まれた内容そのもの』が二度と
+ * 取れなくなる」）。つまりここは構造的に長くなりうるので、切って捨てず
+ * `page()` で分けて渡す。
+ */
+const COMMITMENT_PAGE = 8_000;
 
 /**
  * 一覧の先頭行に置く、出所の札。
@@ -942,6 +951,19 @@ export function createCloneTools(context: ToolContext) {
             // 作成と一致する。** それは軸が無いのではなく「まだ一度も変わって
             // いない」という観測そのものなので、値を作らずに `createdAt` を出す
             // （下の断り書きの行で、読み手にもそう読める形にしてある）。
+            //
+            // **⚠️ この `??` の左枝は、いまは到達しない。消さないこと。** 一覧は
+            // `listApprovals({ pendingOnly: true })` をハードコードで呼び、fs /
+            // pg / インメモリの3実装すべてが `answeredAt === undefined`（pg は
+            // `isNull`）で絞る。**つまり歯で固定できない** — この `??` を
+            // `approval.createdAt` に潰す変異は、どのテストにも捕まらずに生き残る。
+            // それでも残してあるのは、**将来 `pendingOnly` を外したときに
+            // 「更新」が黙って嘘になるのを防ぐため**である（答えが付いた件が
+            // 一覧に出るようになった瞬間、更新が回答時刻ではなく作成時刻を
+            // 指す）。「死んでいるコード」と「将来のために置いてあるもの」は、
+            // 書いていなければ区別が付かない。
+            // 根拠は3実装のソースと呼び出し元1箇所の網羅（2026-08-22T15:58Z 観測）
+            // であって、実行時カバレッジでは確かめていない。
             `  作成: ${approval.createdAt} / 更新: ${approval.answeredAt ?? approval.createdAt}`,
             `  ${excerptLine(approval.question, APPROVAL_QUESTION_EXCERPT)}`,
             approval.jobId === undefined
@@ -1251,14 +1273,63 @@ export function createCloneTools(context: ToolContext) {
         '人間の依頼・マネージャーからの一件・外部イベントは、届いた時点で自動的にここへ載る。',
         '**載っているものは、あなたが閉じるまで消えない。**',
         'どれを先にやるかの順序はここには無い。記憶にある目的と価値観に照らして毎回決め直すこと。',
+        '1件の全文（依頼本文と、片付けたならその理由）が要るなら id を渡す。片付いた件も id で読める。',
       ].join(' '),
       {
+        id: z
+          .string()
+          .optional()
+          .describe(
+            'この1件を全文で読む（一覧に出ている id）。片付いた件も読める。他の条件は無視される',
+          ),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe('id で全文を読むとき、何文字目から読むか'),
         includeClosed: z
           .boolean()
           .optional()
           .describe('片付けたものも見る（既定は未了だけ）。何を片付けたかを振り返るとき用'),
       },
-      async ({ includeClosed }) => {
+      async ({ id, offset = 0, includeClosed }) => {
+        // --- 全文モード（1件だけ） ---
+        if (id !== undefined) {
+          // **片付いた件も読める。`includeClosed` は要求しない。** id で名指し
+          // している以上、その1件を見たいことは明らかである。そして読みたいのは
+          // **むしろ片付いた側**である——`closedReason` は `schema.ts` が逐語で
+          // 「『閉じた』だけを残さない。人間が後から否定できることが最終承認の
+          // 実体であり、何をもって終わりとしたのかが無いと否定のしようがない」と
+          // 書いている欄で、**一覧では120字の抜粋で止まる。** 全文へ降りる口が
+          // 無ければ、その設計は抜粋の分しか生きていない（#218）。
+          const entry = await stores.commitments.get(id);
+          // **黙って空を返さない。** 「無い」と「読めない」を混ぜると、id の
+          // 打ち間違いが「その仕事は存在しなかった」として片付く。
+          if (!entry) return text(`引き受けた仕事 ${id} は無い（id が違う）。`);
+          const head = [
+            `${entry.id} ${commitmentOriginBadge(entry)}`,
+            `作成: ${entry.at} / 更新: ${entry.closedAt ?? entry.at}`,
+            entry.closedAt === undefined ? '状態: 未了' : `状態: ${entry.closedAt} に片付けた`,
+          ].join('\n');
+          // **片付けた理由を本文より先に置く。** `body` は長くなりうるので、
+          // 後ろに置くと `page()` の2ページ目へ落ちて、**いちばん要る1行が
+          // 最初の呼びで出てこない。** 読み順としては逆だが、切れる側に
+          // 落ちてよい欄ではない。
+          const body = [
+            ...(entry.closedAt === undefined
+              ? []
+              : [`片付けたとした理由: ${entry.closedReason ?? '（理由の記録なし）'}`]),
+            `依頼（全文）: ${entry.body}`,
+          ].join('\n\n');
+          const part = page(body, offset, COMMITMENT_PAGE);
+          const tail = part.more
+            ? `\n\n…（ここで切れている。続きは commitment_list id=${entry.id} offset=${part.to}）`
+            : '';
+          return text(`${head}（${describePage(part)}）\n\n${part.body}${tail}`);
+        }
+
+        // --- 一覧モード ---
         const entries = await stores.commitments.list(
           includeClosed === true ? { includeClosed: true } : undefined,
         );
@@ -1279,10 +1350,11 @@ export function createCloneTools(context: ToolContext) {
           [
             renderListing(items, {
               budget: COMMITMENT_LIST_BUDGET,
-              // **続きの取り方を案内しないこと。** 他の一覧と違い、この台帳には
-              // 詳細へ降りる道具（`commitment_list id=<id>` のようなもの）が
-              // 無い。無い口を案内すると嘘になる（`.claude/skills/listing-and-detail/SKILL.md`
-              // 「いま揃っていないもの」に記録済みの既知の穴）。
+              // **続きの取り方を案内する（#218 で口ができた）。** かつてここには
+              // 「この台帳には詳細へ降りる道具が無いので案内すると嘘になる」と
+              // 書いてあった。`commitment_list id=<id>` を足したので、いまは
+              // 案内できる。**案内する口が実在することは歯で固定してある**
+              // （導線が空振りする形は、無い口を案内するのと同じだけ嘘である）。
               // **`includeClosed` のときは「未了は」と言わないこと。** `total` には
               // 片付いたものも含まれるので、そのまま「未了は N 件」と言うと片付いた
               // 分まで未了として数えた嘘になる（数が大きく出る方向の嘘）。
@@ -1291,8 +1363,9 @@ export function createCloneTools(context: ToolContext) {
                   includeClosed === true
                     ? `片付けた分を含めて ${total} 件あり`
                     : `未了は ${total} 件あり`
-                }、古い順に ${shown} 件だけ出した）。`,
+                }、古い順に ${shown} 件だけ出した。落ちた分も含め、1件の全文は commitment_list id=<id> で取れる）。`,
             }),
+            '（本文は240字の抜粋。1件の全文は commitment_list id=<id> で取れる。片付いた件も読める）',
             '（更新＝この1件が最後に変わった時刻。まだ片付けていなければ、受け取った時刻と同じ）',
           ].join('\n'),
         );

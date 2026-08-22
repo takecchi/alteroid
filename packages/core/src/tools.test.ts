@@ -3027,3 +3027,193 @@ describe('commitment_list / approvals_list に札と作成・更新を足す（#
     expect(reply).toContain('更新＝この1件が最後に変わった時刻');
   });
 });
+
+/**
+ * #218（`commitment_list` に詳細の口が無い）。
+ *
+ * **一覧を抜粋にしたなら、同じ PR で全文の口を用意すること**が
+ * `.claude/skills/listing-and-detail/SKILL.md`「3. 詳細の口」の要求である。
+ * 人間は Web UI（`apps/web/app/routes/commitments.tsx`）で `closedReason` を
+ * 全文で読めるのに、クローンは一覧の120字抜粋で止まっていた——**同じものを
+ * 人間だけが全部読める形は能力の削除である**（north_star 禁止1）。
+ *
+ * 形は「1つの道具＋引数でモード切替」（`approvals_list id=<id>` と同型）。
+ * 道具を1本増やさないので `CLONE_TOOL_NAMES` と外向きの面は変わらない。
+ */
+describe('commitment_list id=<id> で1件の全文が取れる（#218）', () => {
+  it('片付いた1件を id で読むと closedReason が全文で出る（一覧は120字で止まる）', async () => {
+    // **これがこの PR の本体である。** `closedReason` の doc は逐語で
+    // 「『閉じた』だけを残さない。人間が後から否定できることが最終承認の実体で
+    // あり、何をもって終わりとしたのかが無いと否定のしようがない」と言う。
+    // 抜粋しか読めないなら、その設計は抜粋の分しか生きていない。
+    const h = harness();
+    // 一覧側の抜粋（120字）より確実に長く、末尾に目印を置く。
+    const reason = `頭${'り'.repeat(300)}尻`;
+    await h.stores.commitments.open({
+      id: 'c-closed',
+      at: '2026-05-01T00:00:00.000Z',
+      origin: 'human',
+      source: 'conv-7',
+      body: '本番リリースを確認する',
+    });
+    await h.stores.commitments.close('c-closed', '2026-05-02T00:00:00.000Z', reason);
+
+    const listing = await h.call('commitment_list', { includeClosed: true });
+    const detail = await h.call('commitment_list', { id: 'c-closed' });
+
+    // 一覧は抜粋（末尾まで出ない）。
+    expect(listing).not.toContain('尻');
+    // 詳細は末尾まで出る。
+    expect(detail).toContain('尻');
+    expect(detail).toContain(reason);
+    expect(detail).toContain('2026-05-02T00:00:00.000Z');
+  });
+
+  it('未了の1件を id で読むと本文が全文で出る（一覧は240字で止まる）', async () => {
+    const h = harness();
+    const body = `頭${'ほ'.repeat(600)}尻`;
+    await h.stores.commitments.open({
+      id: 'c-open',
+      at: '2026-05-03T00:00:00.000Z',
+      origin: 'self',
+      body,
+    });
+
+    const listing = await h.call('commitment_list', {});
+    const detail = await h.call('commitment_list', { id: 'c-open' });
+
+    expect(listing).not.toContain('尻');
+    expect(detail).toContain(body);
+    expect(detail).toContain('状態: 未了');
+  });
+
+  it('id で名指しすれば includeClosed 無しでも片付いた件が読める', async () => {
+    // **追加の引数を要求しない。** id で名指ししている以上、その1件を見たい
+    // ことは明らかである。`includeClosed` を要ると、いちばん読みたい側
+    // （片付いた件の理由）が二段構えになる。
+    const h = harness();
+    await h.stores.commitments.open({
+      id: 'c-done',
+      at: '2026-05-04T00:00:00.000Z',
+      origin: 'manager',
+      body: '報告を受けた件',
+    });
+    await h.stores.commitments.close('c-done', '2026-05-05T00:00:00.000Z', '差し戻して直した');
+
+    // 一覧の既定（未了だけ）からは消えている。
+    expect(await h.call('commitment_list', {})).not.toContain('c-done');
+    // それでも id では読める。
+    const detail = await h.call('commitment_list', { id: 'c-done' });
+    expect(detail).toContain('差し戻して直した');
+  });
+
+  it('無い id は「無い」と分かる形で返る（黙って空を返さない）', async () => {
+    const h = harness();
+    await h.stores.commitments.open({
+      id: 'c-real',
+      at: '2026-05-06T00:00:00.000Z',
+      origin: 'self',
+      body: '実在する件',
+    });
+
+    const reply = await h.call('commitment_list', { id: 'c-typo' });
+
+    expect(reply).toContain('c-typo');
+    expect(reply).toContain('無い');
+    // 実在する件の本文を混ぜて返さない（一覧へフォールバックしていない）。
+    expect(reply).not.toContain('実在する件');
+  });
+
+  it('片付けた理由は、本文が1ページを超えても最初の呼びで出る', async () => {
+    // **`body` は要約を禁じられた欄なので構造的に長くなりうる。** 理由を本文の
+    // 後ろに置くと `page()` の2ページ目へ落ちて、いちばん要る1行が最初の呼びで
+    // 出てこない。**この歯は「読み順どおりに並べ替える」変更を落とす。**
+    const h = harness();
+    await h.stores.commitments.open({
+      id: 'c-huge',
+      at: '2026-05-07T00:00:00.000Z',
+      origin: 'external',
+      body: 'ぬ'.repeat(20_000),
+    });
+    await h.stores.commitments.close('c-huge', '2026-05-08T00:00:00.000Z', '外部側で解決した');
+
+    const first = await h.call('commitment_list', { id: 'c-huge' });
+
+    // 1ページ目に理由が在る（offset を送らずに読める）。
+    expect(first).toContain('外部側で解決した');
+    // そして本文は切れていて、続きの取り方が出ている。
+    expect(first).toContain('ここで切れている');
+    expect(first).toContain('offset');
+  });
+
+  it('全文が長ければ offset で続きが取れる（切って捨てていない）', async () => {
+    const h = harness();
+    await h.stores.commitments.open({
+      id: 'c-long',
+      at: '2026-05-09T00:00:00.000Z',
+      origin: 'self',
+      body: `頭${'ら'.repeat(20_000)}尻`,
+    });
+
+    const first = await h.call('commitment_list', { id: 'c-long' });
+    const offset = Number(/offset=(\d+)/.exec(first)?.[1]);
+    expect(Number.isFinite(offset)).toBe(true);
+
+    // **末尾へ到達できること。** 1回で届かないだけで、全部は届く。
+    let reply = first;
+    let cursor = offset;
+    for (let guard = 0; guard < 10 && !reply.includes('尻'); guard += 1) {
+      reply = await h.call('commitment_list', { id: 'c-long', offset: cursor });
+      cursor = Number(/offset=(\d+)/.exec(reply)?.[1] ?? cursor);
+    }
+    expect(reply).toContain('尻');
+  });
+
+  it('一覧が案内する導線は空振りしない（案内どおり呼ぶと全文が返る）', async () => {
+    // **無い口を案内するのと、案内した口が空振りするのは、同じだけ嘘である。**
+    // 一覧に出ている id をそのまま案内どおりの形で渡して、実際に全文が返ること
+    // を見る（別の PR で「日誌に残らない型に journal_read を案内する」形が
+    // 入りかけた——案内の文字列だけを見る歯では捕まらない）。
+    const h = harness();
+    await h.stores.commitments.open({
+      id: 'c-guided',
+      at: '2026-05-10T00:00:00.000Z',
+      origin: 'human',
+      source: 'conv-1',
+      body: `頭${'わ'.repeat(600)}尻`,
+    });
+
+    const listing = await h.call('commitment_list', {});
+
+    // 一覧が「commitment_list id=<id> で取れる」と案内していること。
+    expect(listing).toContain('commitment_list id=<id>');
+    // 一覧に出ている id を拾い、案内どおりに呼ぶ。
+    const id = /^- (\S+) /m.exec(listing)?.[1];
+    expect(id).toBe('c-guided');
+    const detail = await h.call('commitment_list', { id: id as string });
+    expect(detail).toContain('尻');
+  });
+
+  it('詳細の口ができても、一覧の既定は未了だけのまま', async () => {
+    // 回帰の歯。モード切替を足したときに `list()` の既定を触っていないこと。
+    const h = harness();
+    await h.stores.commitments.open({
+      id: 'c-still-open',
+      at: '2026-05-11T00:00:00.000Z',
+      origin: 'self',
+      body: '未了のまま',
+    });
+    await h.stores.commitments.open({
+      id: 'c-already-closed',
+      at: '2026-05-12T00:00:00.000Z',
+      origin: 'self',
+      body: '片付いた',
+    });
+    await h.stores.commitments.close('c-already-closed', '2026-05-13T00:00:00.000Z', '済み');
+
+    const listing = await h.call('commitment_list', {});
+
+    expect(listing).toContain('c-still-open');
+    expect(listing).not.toContain('c-already-closed');
+  });
+});
