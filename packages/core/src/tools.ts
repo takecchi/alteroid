@@ -1812,6 +1812,9 @@ export function createCloneTools(context: ToolContext) {
         '人間自身の発言だけを見るなら speaker: "human" を指定する',
         '（既定 both は人間とクローンの両方の発言を含む）。',
         '一覧の本文は抜粋で、全文が要る1件は id を渡して取る。',
+        '**ここに出ないもの**: 承認への回答（ask_human の答え）は日誌の escalation にしか無いので',
+        'journal_read types=["escalation"] で読むこと。人間がマネージャーへ直接話しかけた発言も',
+        'ここには出ない（日誌には with:"manager" として載り、あなた自身の指示と同じ形になる）。',
       ].join(' '),
       {
         conversationId: z
@@ -1927,11 +1930,16 @@ export function createCloneTools(context: ToolContext) {
               `${message.at} [${roleLabel(message.role)}] id=${message.id}\n` +
               `  ${excerptLine(message.text, CONVERSATION_EXCHANGE_EXCERPT)}`,
           );
-          const { shown, omitted } = packBudget(lines, CONVERSATION_LIST_BUDGET);
+          // **会話は新しい側から積む。** 表示は古い順のままだが、予算で切れるときに
+          // 落とすのは古い側である（会話を開く動機はたいてい直近の続きを思い出すこと
+          // で、人が chat の履歴を開くと末尾が見えているのと同じ形にしてある）。
+          const { shown, omitted } = packBudgetFromEnd(lines, CONVERSATION_LIST_BUDGET);
           if (omitted > 0) {
-            shown.push(
-              `…ほか ${omitted} 件は省略（この会話に ${lines.length} 件あり、古い順に ${shown.length} 件だけ出した）。` +
-                'さらに遡るなら scan を増やすこと。',
+            // **どちら側を落としたかを言う。** 「N 件省略」だけだと、続きの取り方を
+            // 間違える（ここで `scan` を増やしても、落ちているのは古い側なので出てこない）。
+            shown.unshift(
+              `…この会話の**古い側** ${omitted} 件は省略（この窓に ${lines.length} 件あり、` +
+                `新しい側から ${shown.length} 件だけ出した）。古い側を見るには until で窓を古い方へずらすこと。`,
             );
           }
           shown.push('（本文は抜粋。全文は conversation_read id=<id> で取れる）');
@@ -1960,7 +1968,8 @@ export function createCloneTools(context: ToolContext) {
           if (omitted > 0) {
             shown.push(
               `…ほか ${omitted} 件は省略（"${q}" に ${lines.length} 件当たり、新しい順に ${shown.length} 件だけ出した）。` +
-                'さらに遡るなら scan を増やすか、狭めるなら since で窓を切ること。',
+                '省いたのは**古い側**である。scan を増やしても出てこない（当たりが増えるだけで、' +
+                '切られる側は変わらない）ので、until で窓を古い方へずらすこと。',
             );
           }
           shown.push('（本文は抜粋。全文は conversation_read id=<id> で取れる）');
@@ -1984,7 +1993,8 @@ export function createCloneTools(context: ToolContext) {
         if (omitted > 0) {
           shown.push(
             `…ほか ${omitted} 件は省略（${lines.length} 件のうち新しい順に ${shown.length} 件だけ出した）。` +
-              'さらに見るなら limit を増やすこと。',
+              '省いたのは**古い側**である。limit を増やしても出てこない（予算のほうで切れているので、' +
+              '増やした分がそのまま省略へ回る）ので、until で窓を古い方へずらすこと。',
           );
         }
         shown.push('（各会話の中身は conversation_read conversationId=<id> で古い順に読める）');
@@ -2249,6 +2259,18 @@ function packBudget(lines: string[], budget: number): { shown: string[]; omitted
     used += line.length;
   }
   return { shown, omitted: lines.length - shown.length };
+}
+
+/**
+ * 末尾から積む（並びは元のまま返す）。
+ *
+ * **切る側を選べるようにするためだけの別入口である。** 古い順に並んだ会話を
+ * 先頭から積むと、予算で落ちるのは直近の発言になる — 会話を開く動機はたいてい
+ * 「さっきの続き」なので、そこが消えるのは一番効く場所が消えることである。
+ */
+function packBudgetFromEnd(lines: string[], budget: number): { shown: string[]; omitted: number } {
+  const { shown, omitted } = packBudget([...lines].reverse(), budget);
+  return { shown: shown.reverse(), omitted };
 }
 
 /**

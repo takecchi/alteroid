@@ -163,6 +163,35 @@ describe('conversation_read — 予算を超えたら省略した件数を言う
     expect(reply).toContain('件は省略');
     expect(reply).toContain('conversation_read id=');
   });
+
+  /**
+   * **切る側を間違えない。** 会話を開く動機はたいてい「さっきの続き」なので、
+   * 予算で落とすのは古い側でなければならない。ここが逆だと、いちばん要る直近の
+   * 発言だけが消えたうえ、注記も「もっと遡れ」と逆向きの続きの取り方を案内する。
+   */
+  it('会話の中身は新しい側を残し、落としたのが古い側であることを言う', async () => {
+    const stores = createMemoryStores();
+    for (let i = 0; i < 60; i += 1) {
+      await stores.journal.append({
+        type: 'exchange',
+        with: 'human',
+        role: 'inbound',
+        text: `[msg-${i}] ${'長い発言本文。'.repeat(40)}`,
+        conversationId: 'conv-big',
+      });
+    }
+    const call = tools(stores);
+
+    const reply = await call('conversation_read', { conversationId: 'conv-big' });
+
+    // いちばん新しい発言は残り、いちばん古い発言が落ちている
+    expect(reply).toContain('[msg-59]');
+    expect(reply).not.toContain('[msg-0]');
+    expect(reply).toContain('古い側');
+    // 続きの取り方が「効かないほう」を案内していないこと
+    expect(reply).toContain('until');
+    expect(reply).not.toContain('さらに遡るなら scan を増やすこと');
+  });
 });
 
 describe('conversation_read — id + offset で全文を続きから読む', () => {
