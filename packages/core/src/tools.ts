@@ -12,7 +12,14 @@ import {
   toMessage,
 } from './conversation.js';
 import { isCronExpression } from './cron.js';
-import { describePage, excerptLine, page, renderListing, renderListingFromEnd } from './excerpt.js';
+import {
+  describePage,
+  excerpt,
+  excerptLine,
+  page,
+  renderListing,
+  renderListingFromEnd,
+} from './excerpt.js';
 import type { ManagerDenial, ManagerPool, ManagerSummary } from './manager.js';
 import {
   assertNeverMemoryProtectionStatus,
@@ -30,6 +37,7 @@ import {
 import { JOURNAL_ENTRY_TYPES, scheduleKindSchema, scheduleSpecSchema } from './schema.js';
 import type {
   ChatStreamEvent,
+  CommitmentOrigin,
   JournalEntry,
   MemoryDocumentMeta,
   MemoryProtectionStatus,
@@ -231,6 +239,37 @@ const COMMITMENT_LIST_BUDGET = 8_000;
 const COMMITMENT_BODY_LIMIT = 240;
 
 /**
+ * 一覧の先頭行に置く、出所の札。
+ *
+ * この型に title は無いので、**出所と種別**を読める形にしたものを「名前」の
+ * 代わりにする。一覧を目で走らせるとき最初に知りたいのがそれだからである
+ * （人間が頼んだ件なのか、自分で気づいた宿題なのか）。
+ *
+ * **本文（`body`）の先頭 n 文字を札にしないこと** — それは
+ * `COMMITMENT_BODY_LIMIT` の抜粋が既に出しているもので、欄が1つ増えただけで
+ * 情報は増えない。
+ *
+ * **`origin` の生の値（`human` / `self` …）はこの札に畳んである。**
+ * 札と `origin` は1対1で、この表がその対応そのものである。かつては
+ * `受け取った時刻: <at>（<origin> / <source>）` の行が同じものを併記して
+ * いたが、札・作成・更新の3つを足すと同じ出所が1件に3回出るので、その行は
+ * `作成: … / 更新: …`（`manager_list` / `schedule_list` と同じ形）へ
+ * 置き換えた。**絞り込みの引数は `origin` を取らない**ので、生の値が消えても
+ * 到達できなくなるものは無い。
+ */
+const COMMITMENT_ORIGIN_LABEL: Record<CommitmentOrigin, string> = {
+  human: '人間の依頼',
+  manager: 'マネージャーの報告',
+  external: '外部イベント',
+  self: '自分で気づいた宿題',
+};
+
+function commitmentOriginBadge(entry: { origin: CommitmentOrigin; source?: string }): string {
+  const label = COMMITMENT_ORIGIN_LABEL[entry.origin];
+  return entry.source === undefined ? `[${label}]` : `[${label} / ${entry.source}]`;
+}
+
+/**
  * 日誌の一覧の予算と、1件ぶんの本文の厚み。
  *
  * **`manager_list` とは用途が違う。** あちらは全体の要約だが、日誌は
@@ -254,6 +293,31 @@ const APPROVAL_LIST_BUDGET = 8_000;
 const APPROVAL_QUESTION_EXCERPT = 200;
 /** 承認待ち1件の全文を取りに来たときの1回分。続きは `offset` で取れる。 */
 const APPROVAL_PAGE = 8_000;
+
+/**
+ * 一覧の先頭行に置く「名前」＝質問の1行目の長さ。
+ *
+ * **承認待ちには質問文以外に札の材料が無い。** だから札は概要（下の
+ * `APPROVAL_QUESTION_EXCERPT` の抜粋）と重なりうる——質問が1行なら
+ * ほぼ同じものが2度出る。**それを承知で採っている**: `id` だけの先頭行より、
+ * 一覧を目で走らせるときに効くほうを採った。
+ *
+ * **改行までで切る。** `excerptLine` は改行を空白へ潰して1行にするので、
+ * そのまま通すと2行目以降の文字が札へ混ざる（「本番へ出してよいか」の隣に
+ * 「影響範囲: 全ユーザー」が並ぶ）。札だけは改行の手前で切ってから詰める。
+ */
+const APPROVAL_TITLE_EXCERPT = 60;
+
+function approvalTitle(question: string): string {
+  const firstLine = (question.split('\n', 1)[0] ?? '').trim();
+  // 1行目が空（質問が改行で始まる）なら札が消えるので、そのときだけ
+  // 全体を潰した抜粋へ落とす。**空の札を出さない**——空欄は「名前が無い」のか
+  // 「取り忘れ」なのか区別できない（AGENTS.md「取れない軸に0の行を作らない」）。
+  return excerpt(
+    firstLine === '' ? question.replace(/\s+/g, ' ').trim() : firstLine,
+    APPROVAL_TITLE_EXCERPT,
+  );
+}
 
 /**
  * 継続中の依頼の一覧の予算と、1件ぶんの依頼本文の厚み。
@@ -873,8 +937,13 @@ export function createCloneTools(context: ToolContext) {
         if (pending.length === 0) return text('（人間の回答待ちは無い）');
         const items = pending.map((approval) =>
           [
-            `- ${approval.id}（${approval.createdAt}）` +
-              excerptLine(approval.question, APPROVAL_QUESTION_EXCERPT),
+            `- ${approval.id} ${approvalTitle(approval.question)}`,
+            // **この一覧は回答待ちだけを出すので `answeredAt` は常に無く、更新は
+            // 作成と一致する。** それは軸が無いのではなく「まだ一度も変わって
+            // いない」という観測そのものなので、値を作らずに `createdAt` を出す
+            // （下の断り書きの行で、読み手にもそう読める形にしてある）。
+            `  作成: ${approval.createdAt} / 更新: ${approval.answeredAt ?? approval.createdAt}`,
+            `  ${excerptLine(approval.question, APPROVAL_QUESTION_EXCERPT)}`,
             approval.jobId === undefined
               ? null
               : `  宛先: managerId: "${approval.jobId}"` +
@@ -891,6 +960,7 @@ export function createCloneTools(context: ToolContext) {
                 `…ほか ${rest} 件は省略（回答待ちは ${total} 件あり、古い順に ${shown} 件だけ出した）。`,
             }),
             '（質問は抜粋。全文は approvals_list id=<id> で取れる）',
+            '（更新＝この1件が最後に変わった時刻。回答待ちだけを出す一覧なので、常に作成と同じになる）',
           ].join('\n'),
         );
       },
@@ -1195,8 +1265,10 @@ export function createCloneTools(context: ToolContext) {
         if (entries.length === 0) return text('（引き受けたまま終わっていない仕事は無い）');
         const items = entries.map((entry) =>
           [
-            `- ${entry.id}`,
-            `  受け取った時刻: ${entry.at}（${entry.origin}${entry.source === undefined ? '' : ` / ${entry.source}`}）`,
+            `- ${entry.id} ${commitmentOriginBadge(entry)}`,
+            // 作成＝受け取った時刻、更新＝片付けた時刻（まだなら受け取った時刻）。
+            // 出所と `source` は先頭行の札が持つので、ここでは繰り返さない。
+            `  作成: ${entry.at} / 更新: ${entry.closedAt ?? entry.at}`,
             `  ${excerptLine(entry.body, COMMITMENT_BODY_LIMIT)}`,
             entry.closedAt === undefined
               ? '  状態: 未了'
@@ -1204,22 +1276,25 @@ export function createCloneTools(context: ToolContext) {
           ].join('\n'),
         );
         return text(
-          renderListing(items, {
-            budget: COMMITMENT_LIST_BUDGET,
-            // **続きの取り方を案内しないこと。** 他の一覧と違い、この台帳には
-            // 詳細へ降りる道具（`commitment_list id=<id>` のようなもの）が
-            // 無い。無い口を案内すると嘘になる（`.claude/skills/listing-and-detail/SKILL.md`
-            // 「いま揃っていないもの」に記録済みの既知の穴）。
-            // **`includeClosed` のときは「未了は」と言わないこと。** `total` には
-            // 片付いたものも含まれるので、そのまま「未了は N 件」と言うと片付いた
-            // 分まで未了として数えた嘘になる（数が大きく出る方向の嘘）。
-            omitted: ({ rest, shown, total }) =>
-              `…ほか ${rest} 件は省略（${
-                includeClosed === true
-                  ? `片付けた分を含めて ${total} 件あり`
-                  : `未了は ${total} 件あり`
-              }、古い順に ${shown} 件だけ出した）。`,
-          }),
+          [
+            renderListing(items, {
+              budget: COMMITMENT_LIST_BUDGET,
+              // **続きの取り方を案内しないこと。** 他の一覧と違い、この台帳には
+              // 詳細へ降りる道具（`commitment_list id=<id>` のようなもの）が
+              // 無い。無い口を案内すると嘘になる（`.claude/skills/listing-and-detail/SKILL.md`
+              // 「いま揃っていないもの」に記録済みの既知の穴）。
+              // **`includeClosed` のときは「未了は」と言わないこと。** `total` には
+              // 片付いたものも含まれるので、そのまま「未了は N 件」と言うと片付いた
+              // 分まで未了として数えた嘘になる（数が大きく出る方向の嘘）。
+              omitted: ({ rest, shown, total }) =>
+                `…ほか ${rest} 件は省略（${
+                  includeClosed === true
+                    ? `片付けた分を含めて ${total} 件あり`
+                    : `未了は ${total} 件あり`
+                }、古い順に ${shown} 件だけ出した）。`,
+            }),
+            '（更新＝この1件が最後に変わった時刻。まだ片付けていなければ、受け取った時刻と同じ）',
+          ].join('\n'),
         );
       },
     ),
