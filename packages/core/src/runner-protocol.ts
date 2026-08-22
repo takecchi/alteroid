@@ -570,7 +570,24 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      */
     toolUseId: z.string(),
     tool: z.string(),
-    input: z.unknown(),
+    /**
+     * **`.optional()` は冗長ではない。** 走行中の合図（SDK の
+     * `SDKPermissionDeniedMessage`）には `tool_input` フィールドそのものが
+     * 無い（`tool_name` / `tool_use_id` / `message` / `uuid` / `session_id` と
+     * 任意の3つだけ）。だから `via: 'live'` のとき `#noteDenial`（`runner.ts`）
+     * が読む `denial.tool_input` は必ず `undefined` になり、`JSON.stringify`
+     * （`apps/runner/src/app.ts`）は値が `undefined` のキーを丸ごと落とす —
+     * HTTP 境界の向こうでは `input` というキー自体が存在しない。
+     *
+     * **zod 4 では `z.unknown()` はキーの不在を許さない**（zod 3 と違う点）。
+     * `input` を必須のままにすると、この形は `safeParse` で
+     * `invalid_type: expected "nonoptional", received "undefined"` として
+     * 落ち、live の拒否がデーモンに一切届かない。しかも `#denied`
+     * （`tool_use_id` による重複排除）が既に立っているので、ターン終わりの
+     * authoritative な記録（`via: 'result'`）の再送も止まり、拒否が完全に
+     * 失われる。それを防ぐための `.optional()` である。
+     */
+    input: z.unknown().optional(),
     /**
      * どちらの経路で気づいたか。`live` は走行中の合図
      * （`system/permission_denied`）、`result` はターン終わりの記録
