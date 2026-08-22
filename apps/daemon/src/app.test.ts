@@ -2145,6 +2145,124 @@ describe('runner の生死', () => {
       vi.useRealTimers();
     }
   });
+
+  /**
+   * 【A-1】繋がっていない runner は、聞いたことにしない。
+   *
+   * 指紋は runner が持つので、繋がっていない相手には聞きに行かない
+   * （`app.ts` の `probe()`）。名簿に登録はあるが一度も開けていない runner が
+   * `credentialsProbe` / `profileProbe` を `'unheard'` と言い、`credentials` は
+   * 空配列のままであることを見る——ここで `'failed'` や `'asked'` に化けると、
+   * 「確かめられなかった」が「叩いた」に見えてしまう。
+   */
+  it('繋がっていない runner は、聞いたことにしない', async () => {
+    const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
+    await registry.register({
+      label: 'http://runner-unreachable:4518',
+      open: () => Promise.reject(new Error('fetch failed')),
+    });
+
+    const withRunners = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      runners: registry,
+    });
+
+    const body = (await (await withRunners.request('/runners')).json()) as {
+      runners: {
+        label: string;
+        credentials: unknown[];
+        credentialsProbe: { status: string };
+        profileProbe: { status: string };
+      }[];
+    };
+
+    expect(body.runners[0]?.credentialsProbe).toEqual({ status: 'unheard' });
+    expect(body.runners[0]?.profileProbe).toEqual({ status: 'unheard' });
+    expect(body.runners[0]?.credentials).toEqual([]);
+
+    await registry.stop();
+  });
+
+  /** 【A-2】叩いて失敗したら、失敗として残る。 */
+  it('叩いて失敗したら、失敗として残る', async () => {
+    const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
+    await registry.register({
+      label: 'http://runner-failing:4518',
+      open: async () =>
+        ({
+          ...fakeRunner('runner-failing'),
+          credentials: () => Promise.reject(new Error('credentials RPC が落ちた')),
+          profile: () => Promise.reject(new Error('profile RPC が落ちた')),
+        }) as never,
+    });
+
+    const withRunners = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      runners: registry,
+    });
+
+    const body = (await (await withRunners.request('/runners')).json()) as {
+      runners: {
+        label: string;
+        credentials: unknown[];
+        credentialsProbe: { status: string; error?: string };
+        profileProbe: { status: string; error?: string };
+      }[];
+    };
+
+    expect(body.runners[0]?.credentialsProbe.status).toBe('failed');
+    expect(body.runners[0]?.credentialsProbe.error).toBeTruthy();
+    expect(body.runners[0]?.profileProbe.status).toBe('failed');
+    expect(body.runners[0]?.profileProbe.error).toBeTruthy();
+    expect(body.runners[0]?.credentials).toEqual([]);
+
+    await registry.stop();
+  });
+
+  /**
+   * 【A-3】要である。叩いて0件なら、0件だと言う。
+   *
+   * これが無いと、実装が常に `unheard` / `failed` を返す方向へ倒れても緑のまま
+   * になる。繋がって `credentials()` が `[]`・`profile()` が `undefined` を
+   * 返す（＝聞けたうえで中身が無かった）runner を見て、両方の probe が
+   * `'asked'` になることを確かめる——両方向を測るための1本である。
+   */
+  it('叩いて0件なら、0件だと言う', async () => {
+    const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
+    await registry.register({
+      label: 'http://runner-empty:4518',
+      open: async () => fakeRunner('runner-empty') as never,
+    });
+
+    const withRunners = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      runners: registry,
+    });
+
+    const body = (await (await withRunners.request('/runners')).json()) as {
+      runners: {
+        label: string;
+        credentials: unknown[];
+        credentialsProbe: { status: string };
+        profileProbe: { status: string };
+      }[];
+    };
+
+    expect(body.runners[0]?.credentialsProbe).toEqual({ status: 'asked' });
+    expect(body.runners[0]?.profileProbe).toEqual({ status: 'asked' });
+    expect(body.runners[0]?.credentials).toEqual([]);
+
+    await registry.stop();
+  });
 });
 
 /**
