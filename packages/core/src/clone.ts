@@ -663,6 +663,20 @@ class Clone implements CloneHost {
   /** 起動時に拾い直した合図。id → 何度目の配達か。 */
   readonly #redelivered = new Map<string, PendingInboxEvent>();
   /**
+   * 拾い直した合図のうち、クローンが既に `commitment_close` で片付け済みのもの。
+   * id → 台帳の記録（`closedAt` が立っている）。
+   *
+   * **`#redelivered` と対で持つ。** あちらは「二度目だと分かる」ための印、
+   * こちらは「本文を短くしてよい」ための印で、`#forget`（消し込み）で一緒に
+   * 消す。ここに載っているかどうかは `#restoreUnread` が `stores.commitments`
+   * を引いて決める — **決めるのはそこだけ**（`#handle` の側では引き直さない）。
+   *
+   * **載っていない合図は、これまでどおり全文で配る。** `commitments.get` が
+   * 投げたときも載せない（安全側は「全文で配る」— 雑音であって喪失ではない側
+   * へ倒す。`#restoreUnread` の catch を見よ）。
+   */
+  readonly #redeliveredClosed = new Map<string, Commitment>();
+  /**
    * いま処理している合図が配り直しなら、その断り書き。ターンの本文の先頭に載る。
    *
    * **断り書きを起点ごとに配らない。** プロンプトの組み立ては起点の数だけ
@@ -1237,8 +1251,14 @@ class Clone implements CloneHost {
    *
    * 分けて書くと、片方にだけ `#recorded` の待ちが入る・片方だけ会話 id の取り方が
    * 違う、といった食い違いが静かに入る（どちらも人間からは見えない形で壊れる）。
+   *
+   * @param closedNotice 片付け済みの配り直しの断り書き。付いていれば、組み立てた
+   *   本文（`humanTurnText`）の代わりにこちらを使う。**日誌への追記は変えない** —
+   *   `#recorded` の待ちはこの下でも通常どおり行う。`#mergeable` が配り直した
+   *   合図をまとめ読みから外しているので、これが付くのは常に `events.length === 1`
+   *   である。
    */
-  async #runHumanTurn(events: HumanMessage[]): Promise<void> {
+  async #runHumanTurn(events: HumanMessage[], closedNotice: string | null = null): Promise<void> {
     // **ここでは書かない。** 発言は受理した瞬間に `#record` が書いている。
     // 両方で書くと同じ発言が日誌に二度載る（会話の再構成が二重になる）。
     //
@@ -1251,7 +1271,7 @@ class Clone implements CloneHost {
 
     const head = events[0];
     if (head === undefined) return;
-    await this.#runTurn(head.conversationId, humanTurnText(events));
+    await this.#runTurn(head.conversationId, closedNotice ?? humanTurnText(events));
   }
 
   /**
@@ -1562,6 +1582,7 @@ class Clone implements CloneHost {
     if (written === undefined) return;
     this.#unread.delete(event.id);
     this.#redelivered.delete(event.id);
+    this.#redeliveredClosed.delete(event.id);
 
     await written;
     try {
@@ -1618,6 +1639,27 @@ class Clone implements CloneHost {
       // ので、積めなかったものは次の起動で拾い直せる。
       if (this.#stopped || this.#inbox.closed) return;
 
+      // **クローンが既に片付けているかを見る。** 台帳の id は合図の id その
+      // ものである（`commitmentFor`）ので、`event.id` でそのまま引ける。
+      // `commitmentFor` が `null` を返す型（`timer` / `self_initiative` /
+      // `distill`）は台帳に載らない＝引く意味が無いので、そもそも呼ばない。
+      if (commitmentFor(record.event) !== null) {
+        try {
+          const commitment = await this.#stores.commitments.get(record.event.id);
+          // **`closedAt` が立っているものだけ短縮の対象にする。** 未了はここでは
+          // 何もしない（`#redeliveredClosed` に載らない）ので、後段は変わらず
+          // 全文で配る — 1文字も変えない。
+          if (commitment !== null && commitment.closedAt !== undefined) {
+            this.#redeliveredClosed.set(record.event.id, commitment);
+          }
+        } catch (error) {
+          // **読めなければ「閉じていない」として扱う＝全文で配る。** ここで
+          // ターンを止めない。安全側は「全文で配る」— 雑音であって喪失ではない
+          // 側へ倒す。
+          noteDroppedRecord('配り直しの片付き確認', inboxEventShape(record.event), error);
+        }
+      }
+
       this.#redelivered.set(record.event.id, record);
       // 既に器に在るので書き直さない。**ただし消し込みの対象には入れる**
       // （入れ忘れると、拾い直したものが処理後も残って毎回配られる）。
@@ -1666,6 +1708,25 @@ class Clone implements CloneHost {
       '---',
       '',
     ].join('\n');
+  }
+
+  /**
+   * 片付け済みの配り直しなら、本文の代わりに配る断り書き。片付いていなければ
+   * `null`（呼び出し側は全文をそのまま使う）。
+   *
+   * **`#redeliveryNoticeFor` とは別物。** あちらは全ての配り直しに付く定型の
+   * 1文で、本文は変えない。こちらは「片付け済み」の配り直しにだけ掛かり、
+   * 本文そのものを短い断り書きへ置き換える（`closedRedeliveryNotice`）。
+   *
+   * **判定は `#restoreUnread` が済ませてある。** ここでは `stores.commitments`
+   * を引き直さない — 引き直すと「配り直した後、ターンが実際に読まれるまでの
+   * 間にクローン自身がこの合図を閉じた」ような場合にも短縮が掛かってしまい、
+   * 「配り直した時点では未了だった」という事実が消える。
+   */
+  #closedRedeliveryNoticeFor(event: InboxEvent): string | null {
+    const commitment = this.#redeliveredClosed.get(event.id);
+    if (commitment === undefined) return null;
+    return closedRedeliveryNotice(event, commitment);
   }
 
   /**
@@ -1837,7 +1898,9 @@ class Clone implements CloneHost {
       case 'human_message': {
         // 1件だけの経路。**まとめて読む経路（`#runHumanTurn`）と同じ関数を通す** —
         // 理由と、ここで日誌へ書かない理由はそちらの doc にある。
-        await this.#runHumanTurn([event]);
+        // 片付け済みの配り直しなら、本文の代わりに断り書きを渡す
+        // （`#closedRedeliveryNoticeFor` の doc）。
+        await this.#runHumanTurn([event], this.#closedRedeliveryNoticeFor(event));
         return;
       }
 
@@ -1875,6 +1938,16 @@ class Clone implements CloneHost {
       }
 
       case 'human_answer': {
+        // 片付け済みの配り直しなら、承認待ちを読み直さず断り書きだけで済ませる
+        // （`#closedRedeliveryNoticeFor` の doc。全文の取り方は `approvals_list`
+        // — この分岐は元々 `#journal` を呼ばないので、日誌にはこの回答の全文が
+        // 無い）。
+        const closedNotice = this.#closedRedeliveryNoticeFor(event);
+        if (closedNotice !== null) {
+          await this.#runInternal(closedNotice);
+          return;
+        }
+
         const approval = await this.#stores.jobs.getApproval(event.approvalId);
         const question = approval?.question ?? '(不明な質問)';
         // 宛先は managerId と requestId の対で戻す。requestId を落とすと、
@@ -1896,12 +1969,27 @@ class Clone implements CloneHost {
       }
 
       case 'manager_message': {
+        // **日誌の書き込みは変えない。** 片付け済みの配り直しでも全文をここへ
+        // 書く（`#restoreUnread` の「本文は配達のたびに書く」と同じ理由 —
+        // 読む側にとってはこの1回が「全文の取り方」の在り処になる）。短くする
+        // のは `#runInternal` へ渡す本文だけ。
         await this.#journal({
           type: 'exchange',
           with: 'manager',
           role: 'inbound',
           text: `[${event.managerId}/${event.kind}] ${event.text}`,
         });
+        const closedNotice = this.#closedRedeliveryNoticeFor(event);
+        if (closedNotice !== null) {
+          // 片付け済みの配り直しなら、`waiting` の生死を確かめるまでもなく
+          // 短い断り書きで済ませる（`#closedRedeliveryNoticeFor` の doc）。
+          // これから答えさせる文言（`managerPrompt` の 'live'/'settled' 分岐）
+          // 自体を出さないので、liveness の判定と両立できないという構造ではない
+          // ——単に、片付いているものには liveness を問わないだけである。
+          await this.#runInternal(closedNotice);
+          return;
+        }
+
         // `report` は判定の対象外（`confirmationLiveness` の doc）。
         // `'unknown'` を渡しても `managerPrompt` はその分岐を読まない。
         const liveness: ConfirmationLiveness =
@@ -1967,12 +2055,16 @@ class Clone implements CloneHost {
 
       case 'external': {
         const body = renderPayload(event.payload);
+        // **日誌の書き込みは変えない**（`manager_message` と同じ理由）。
         await this.#journal({
           type: 'external_event',
           source: event.source,
           summary: body,
         });
-        await this.#runInternal(buildExternalEventPrompt({ source: event.source, body }));
+        await this.#runInternal(
+          this.#closedRedeliveryNoticeFor(event) ??
+            buildExternalEventPrompt({ source: event.source, body }),
+        );
         return;
       }
 
@@ -3441,6 +3533,93 @@ function managerPrompt(
   ]
     .filter((line) => line !== '')
     .join('\n');
+}
+
+/**
+ * 片付け済みの合図が配り直されたときの断り書き。本文の全文の代わりに配る。
+ *
+ * **依頼者の条件（1つでも欠けたら能力の欠落）を全部入れる**:
+ * (1) 再起動後の配り直しであること (2) どの合図か（`inboxEventShape` を流用
+ * — 既にこの用途で使われている本文を含まない見分け） (3) いつ受け取ったか
+ * (4) クローンが既に閉じていること・閉じた時刻・`closedReason`（在れば）
+ * (5) 全文の取り方 — 具体的な id か検索の手掛かり（`retrievalHintFor`）。
+ *
+ * **「全文は省略した」とだけ書かない。** 取り方が無い断り書きは、依頼者が
+ * 明示的に禁止した形である。
+ */
+export function closedRedeliveryNotice(event: InboxEvent, commitment: Commitment): string {
+  const closedReason =
+    commitment.closedReason === undefined || commitment.closedReason === ''
+      ? ''
+      : `\n閉じた理由: ${commitment.closedReason}`;
+
+  return [
+    '[system] **これは再起動後の配り直しである。クローンは既にこの合図を片付けている。**',
+    `合図: ${inboxEventShape(event)}`,
+    `受け取った時刻: ${event.at}`,
+    `片付けた時刻（commitment_close）: ${commitment.closedAt}${closedReason}`,
+    '',
+    '**本文は全文ではなく、この断り書きに縮めて配っている。** 片付け済みだと分かって' +
+      'いるものを、再起動のたびに全文で読み直す費用を払わないためである。',
+    retrievalHintFor(event),
+    '',
+    '片付け済みなので、あらためて手を動かす必要は無い。閉じた判断を思い出せず、' +
+      '正しかったか確かめたいときだけ、上の手順で全文を読み直すこと。',
+  ].join('\n');
+}
+
+/**
+ * 全文の取り方（`closedRedeliveryNotice` の (5)）。**型ごとに違う。**
+ *
+ * `human_message` / `manager_message` / `external` は、この合図が処理される
+ * たびに全文が日誌へ書かれる（`human_message` は `Clone#record`、他の2つは
+ * `#handle` の型ごとの `#journal` 呼び出し。どちらも配り直しのこの回でも
+ * 変わらず書く — `#restoreUnread` / `#handle` の当該コメントを見よ）ので
+ * `journal_read` で取れる。
+ *
+ * **`human_answer` だけは違う。** `#handle` の `human_answer` 分岐は
+ * `#journal` を一度も呼ばない（回答は日誌ではなく承認待ちの器へ残る。
+ * `answerApproval` が `stores.jobs.putApproval` へ書く）。ここを
+ * `journal_read` と書くと、取り方が分かる体裁のまま実際には取れない指示に
+ * なる（依頼者の禁止「取り方が分からない形にしないこと」に触れる）。全文は
+ * `approvals_list id=<approvalId>` から取る — `tools.ts` の `approvals_list`
+ * の doc「答えが付いた件も読める」がその根拠。
+ */
+function retrievalHintFor(event: InboxEvent): string {
+  switch (event.type) {
+    case 'human_answer':
+      return (
+        `全文の取り方: \`approvals_list\` に \`id: "${event.approvalId}"\` を渡す` +
+        '（質問と回答の全文が返る。答えが付いた件も読める）。'
+      );
+    case 'external':
+      return (
+        `全文の取り方: \`journal_read\` に \`types: ["external_event"]\` と ` +
+        `\`since: "${event.at}"\` を渡して絞り込む（source: ${event.source} の合図が処理される` +
+        'たびに、この型で全文が日誌へ書かれる。この配り直しでも直前に書いている）。'
+      );
+    case 'human_message':
+      return (
+        `全文の取り方: \`journal_read\` に \`types: ["exchange"]\` と ` +
+        `\`since: "${event.at}"\` を渡して絞り込む（会話 id: ${event.conversationId}。この合図が` +
+        '配られるたびに、受理の瞬間の追記として全文が日誌へ書かれる。この配り直しでも既に書いて' +
+        'ある）。'
+      );
+    case 'manager_message':
+      return (
+        `全文の取り方: \`journal_read\` に \`types: ["exchange"]\` と ` +
+        `\`since: "${event.at}"\` を渡して絞り込む（マネージャー ${event.managerId} からの` +
+        `${event.kind} が処理されるたびに、"[${event.managerId}/${event.kind}] " で始まる全文が` +
+        '日誌へ書かれる。この配り直しでも直前に書いている）。'
+      );
+    // 台帳に載らない型（`commitmentFor` が `null` を返す）。`closedRedeliveryNotice`
+    // はここへは来ない — `#redeliveredClosed` に載る id は必ず `commitmentFor` が
+    // 非 null を返した合図の id である（`#restoreUnread` の doc）。
+    case 'timer':
+    case 'self_initiative':
+    case 'distill':
+      return '';
+  }
 }
 
 /**

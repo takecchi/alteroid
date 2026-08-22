@@ -1,7 +1,7 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
-import { commitmentFor, createClone } from './clone.js';
+import { closedRedeliveryNotice, commitmentFor, createClone } from './clone.js';
 import { buildActivityDigest } from './digest.js';
 import type { CloneHost } from './host.js';
 import { renderMemoryDocuments } from './memory.js';
@@ -420,5 +420,161 @@ describe('未了の見え方', () => {
     expect(prompt).toContain('委譲しただけでは閉じない');
     // 順序の判断はクローンに残る（PRD「自律」: 器は「やることの一覧」を持たない）
     expect(prompt).toContain('どれを先にやるかは台帳に書いていない');
+  });
+});
+
+/**
+ * `closedRedeliveryNotice`（片付け済みの配り直しの断り書き）の単体テスト。
+ *
+ * **狙いは「本文を全文渡さずに、依頼者の5条件を全部満たすか」だけを見ること。**
+ * `#restoreUnread` / `#handle` に全部を通す統合テストは `inbox-persistence.test.ts`
+ * に別で置く（このファイルは純粋関数だけを速く・精密に見る）。
+ */
+describe('closedRedeliveryNotice（片付け済みの配り直しの断り書き）', () => {
+  const BODY_HUMAN = 'これは長い依頼の本文で、二度も全文で焼いてはいけないもの';
+  const BODY_MGR = 'これはマネージャーからの長い報告の本文';
+  const BODY_ANSWER = '承認待ちへの、他人に見せてよいわけではない回答の本文';
+
+  it('human_message: 全部の条件（配り直し・どの合図か・受け取り時刻・閉じた時刻と理由・取り方）を満たし、本文そのものは載せない', () => {
+    const event: InboxEvent = {
+      type: 'human_message',
+      id: 'e-human',
+      at: '2026-08-01T00:00:00.000Z',
+      text: BODY_HUMAN,
+      conversationId: 'conv-9',
+    };
+    const commitment: Commitment = {
+      id: 'e-human',
+      at: event.at,
+      origin: 'human',
+      source: 'conv-9',
+      body: BODY_HUMAN,
+      closedAt: '2026-08-02T00:00:00.000Z',
+      closedReason: 'もう対応済みだった',
+    };
+
+    const notice = closedRedeliveryNotice(event, commitment);
+
+    // (1) 再起動後の配り直しであること
+    expect(notice).toContain('再起動後の配り直しである');
+    // (2) どの合図か（`inboxEventShape` を流用。本文そのものではなく見分け）
+    expect(notice).toContain('human_message');
+    // (3) いつ受け取ったか
+    expect(notice).toContain(event.at);
+    // (4) 既に閉じていること・閉じた時刻・closedReason
+    expect(notice).toContain('片付けた時刻');
+    expect(notice).toContain(commitment.closedAt);
+    expect(notice).toContain('もう対応済みだった');
+    // (5) 全文の取り方（具体的な手掛かり）
+    expect(notice).toContain('journal_read');
+    expect(notice).toContain('conv-9');
+    // 本文そのものは1文字も載らない
+    expect(notice).not.toContain(BODY_HUMAN);
+  });
+
+  it('manager_message: どの合図かに managerId / kind が入り、全文の取り方は journal_read（本文の先頭パターン付き）', () => {
+    const event: InboxEvent = {
+      type: 'manager_message',
+      id: 'e-mgr',
+      at: '2026-08-01T00:00:00.000Z',
+      managerId: 'mgr-7',
+      kind: 'report',
+      text: BODY_MGR,
+    };
+    const commitment: Commitment = {
+      id: 'e-mgr',
+      at: event.at,
+      origin: 'manager',
+      source: 'mgr-7',
+      body: `[report] ${BODY_MGR}`,
+      closedAt: '2026-08-02T00:00:00.000Z',
+      closedReason: '対応不要と判断した',
+    };
+
+    const notice = closedRedeliveryNotice(event, commitment);
+
+    expect(notice).toContain('mgr-7');
+    expect(notice).toContain('journal_read');
+    expect(notice).toContain('[mgr-7/report]');
+    expect(notice).not.toContain(BODY_MGR);
+  });
+
+  it('external: どの合図かに source が入り、全文の取り方は journal_read（external_event 型）', () => {
+    const event: InboxEvent = {
+      type: 'external',
+      id: 'e-ext',
+      at: '2026-08-01T00:00:00.000Z',
+      source: 'github',
+      payload: { action: 'closed' },
+    };
+    const commitment: Commitment = {
+      id: 'e-ext',
+      at: event.at,
+      origin: 'external',
+      source: 'github',
+      body: 'CI failed',
+      closedAt: '2026-08-02T00:00:00.000Z',
+    };
+
+    const notice = closedRedeliveryNotice(event, commitment);
+
+    expect(notice).toContain('github');
+    expect(notice).toContain('journal_read');
+    expect(notice).toContain('external_event');
+  });
+
+  it('human_answer: 全文は journal_read ではなく approvals_list（id 付き）— この型は日誌に本文を書かないため', () => {
+    const event: InboxEvent = {
+      type: 'human_answer',
+      id: 'e-answer',
+      at: '2026-08-01T00:00:00.000Z',
+      approvalId: 'apv-42',
+      answer: BODY_ANSWER,
+    };
+    const commitment: Commitment = {
+      id: 'e-answer',
+      at: event.at,
+      origin: 'human',
+      source: 'apv-42',
+      body: `承認待ち apv-42 への回答: ${BODY_ANSWER}`,
+      closedAt: '2026-08-02T00:00:00.000Z',
+    };
+
+    const notice = closedRedeliveryNotice(event, commitment);
+
+    // **ここが本題。** `#handle` の `human_answer` 分岐は `#journal` を呼ばない
+    // ので、`journal_read` を案内すると取れない指示になる（禁止事項）。
+    expect(notice).toContain('approvals_list');
+    expect(notice).toContain('apv-42');
+    expect(notice).not.toContain('journal_read');
+    expect(notice).not.toContain(BODY_ANSWER);
+  });
+
+  it('closedReason が無くても、「取り方が分からない」形にはならない（他の4条件は満たしたまま）', () => {
+    const event: InboxEvent = {
+      type: 'manager_message',
+      id: 'e-mgr-2',
+      at: '2026-08-01T00:00:00.000Z',
+      managerId: 'mgr-1',
+      kind: 'question',
+      text: BODY_MGR,
+    };
+    const commitment: Commitment = {
+      id: 'e-mgr-2',
+      at: event.at,
+      origin: 'manager',
+      source: 'mgr-1',
+      body: `[question] ${BODY_MGR}`,
+      closedAt: '2026-08-02T00:00:00.000Z',
+      // closedReason は付けない
+    };
+
+    const notice = closedRedeliveryNotice(event, commitment);
+
+    expect(notice).toContain('再起動後の配り直しである');
+    expect(notice).toContain(commitment.closedAt);
+    expect(notice).toContain('journal_read');
+    // 「全文は省略した」とだけ言って終わっていない（依頼者の禁止）。
+    expect(notice).not.toMatch(/全文は省略した。?$/m);
   });
 });
