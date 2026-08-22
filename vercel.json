@@ -1,20 +1,4 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }],
-  "git": {
-    "deploymentEnabled": {
-      "release/prod": true,
-      "main": true,
-      "feat/*": false,
-      "fix/*": false,
-      "docs/*": false,
-      "test/*": false,
-      "chore/*": false,
-      "refactor/*": false,
-      "perf/*": false,
-      "ci/*": false,
-      "automation/*": false,
-      "codiva/*": false
-    }
-  }
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
 }
