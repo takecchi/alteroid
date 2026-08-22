@@ -4264,3 +4264,92 @@ describe('生ログを読み出せなかったとき（「無い」と畳まな�
     await s.registry.stop();
   });
 });
+
+/**
+ * `abort()` が「宛先が名簿に開いていない」を `'absent'`（HTTP 404 相当）へ畳まなく
+ * なったことを固定する。旧実装はこの経路で `outcome: 'absent'` を返し、`app.ts` が
+ * それをそのまま 404 にしていた。しかしここまで来ているということは `#load` が
+ * 台帳から像を作れた＝**このマネージャーは存在する。** 宛先がいま開いていない
+ * だけで、そこには `unreachable`（まだ開けていない。再試行は予約済み）が含まれる
+ * ——一時的な状態を「そんなものは無い」という機械可読な終端で答えていた
+ * （`ManagerAbortResult` の doc、`abort()` 本体のコメント）。
+ *
+ * **2本を別々の `it()` にする。** 片方（宛先が開いていない）だけだと、
+ * 「`abort()` は何を渡しても `unknown` を返す」という壊れた形へ倒れても
+ * 気づけない——もう片方（台帳に本当に居ない）が、その劣化を検知する側である。
+ *
+ * **足場は上の `describe('宛先が名簿に開いていないときに返す言葉', ...)` 内の
+ * `poolWithClosedRegistry` と同じ組み方だが、そこを直接呼ばない。** 定義がその
+ * `describe` のコールバック内（ブロックスコープ）に閉じていて、ここから参照
+ * できないため——かつ、その `describe` は別 PR の歯なので中身は1バイトも変えない。
+ * ここでは同じ形を独自に組む。
+ */
+describe('abort() は宛先が名簿に開いていないことを absent と言わない', () => {
+  const runningAway = {
+    id: 'mgr-running-away',
+    managerId: 'mgr-running-away',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T01:00:00.000Z',
+    status: 'running' as const,
+    summary: '長い移行作業',
+    request: 'DB の移行をやって',
+    cwd: '/work/project',
+    runnerId: 'runner-primary',
+    sessionId: 'sess-before-swap',
+  };
+
+  /**
+   * 台帳にジョブを1本置き、名簿には**開けない宛先だけ**を登録する。
+   * `register()` は `#open()` を `await` するので、戻った時点で状態は
+   * `unreachable` に確定している（`entry.client` は `null` のまま）。
+   */
+  async function poolWithUnreachableRunnerAndJob() {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningAway);
+    const registry = createRunnerRegistry([], { notify: () => undefined });
+    await registry.register({
+      label: 'http://runner:4518',
+      open: async () => {
+        throw new Error('まだ上がっていない');
+      },
+    });
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: registry,
+      profile: createProfileService({ stores, runners: registry }),
+    });
+    return { pool, registry };
+  }
+
+  it('宛先が名簿に開いていないときは、居ないと言わない', async () => {
+    const { pool, registry } = await poolWithUnreachableRunnerAndJob();
+
+    const result = await pool.abort('mgr-running-away');
+
+    expect(result.outcome).toBe('unknown');
+    // 名簿の状態（5値）がそのまま載っている。畳んで捨てていない。
+    expect(result.detail).toContain('unreachable');
+    // **「マネージャーは居ない」という断定（`absent` の文言）を含まない。**
+    // ここが以前の `${managerId} というマネージャーは居ない。` へ逆戻りして
+    // いないことの検査。
+    expect(result.detail).not.toContain('というマネージャーは居ない');
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  it('台帳に居ないものは、いままでどおり absent', async () => {
+    const { pool, registry } = await poolWithUnreachableRunnerAndJob();
+
+    // **これが逆向きに嘘をつく計器になっていないことの側である。** 消さないこと
+    // ——上のテストだけだと「abort は何でも unknown と言う」という劣化を検知
+    // できない。台帳に本当に居ないものは、これまでどおり absent（404 相当）。
+    const result = await pool.abort('mgr-does-not-exist');
+
+    expect(result.outcome).toBe('absent');
+
+    await pool.stop();
+    await registry.stop();
+  });
+});
