@@ -566,6 +566,88 @@ curl -s -H "authorization: Bearer $(node -e 'console.log(JSON.parse(require("fs"
 
 ---
 
+## 器を止める・記憶を落とす
+
+**どちらも人間が言ったときだけ行う操作である。** 常駐は自律の前提なので（「既知のざらつき」3・4）、ここは平常運転の手順ではない。**止めている間、自律の起点②〜④（発意 tick・スケジュール・外部イベント）は1つも動かない**（起点の内訳は `.claude/skills/autonomy-triggers/`）。
+
+### 「一時停止」という操作は無い（あるのは「最新デプロイを外す」）
+
+Railway に「コンテナを止めて、あとで同じものを起こす」口は無い。あるのは2つで、**性質が違う。**
+
+| やり方                          | 何が起きるか                                                                                                         |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `railway down -s <名前>`        | **その Service の最新デプロイを外す**（コンテナが消え、compute の課金も止まる）。`latestDeployment` が `null` になる |
+| App Sleep（`sleepApplication`） | 無通信で寝て HTTP で起きる。**有効にしないこと**（「既知のざらつき」3。寝ると起点②〜④が止まる）                      |
+
+**`railway down` のあと `railway redeploy` は使えない。** 最新のデプロイが無くなるので `No deployment found for service` で断られる（実測 2026-08-22T11:54:52Z）。戻すのは `railway redeploy -s <名前> --from-source` で、これは**戻す瞬間の `release/prod` の先端をビルドし直す**という意味である。
+
+**⚠️ だから「止めて戻す」は「同じものが戻る」ではない。** 止めている間に夜の反映（「デプロイは走行中の仕事を畳む操作である」1）が走っていれば、戻るのは別のコミットである。同じものを戻したいなら**外す前に `meta.commitHash` を控えて、戻したあとで突き合わせる**。外したデプロイも履歴として残るので、後からでも読める:
+
+```bash
+railway api 'query { deployment(id: "<外したデプロイのID>") { status meta } }'
+```
+
+止める順と戻す順は**逆**である。
+
+- **止める: `app` → `runner`**。DB へ書くのはデーモンだけなので、先に止めれば書き込みの隙が無くなる
+- **戻す: `runner` → `app`**。デーモンは runner を最大2分待ってからでないと待ち受けを開かない（「既知のざらつき」2）
+
+`railway down` は1台あたり1分前後かかり、**成功しても何も出力しない。** 終わったかは出力ではなく `latestDeployment` が `null` になったことで見る（`railway api` の一括問い合わせが速い）。
+
+### 記憶を落とす（DB リセット）
+
+**スキーマを戻すために何もしなくてよい。** デーモンは起動時に `packages/storage-pg/src/migrate.ts` を通し、DDL は全部 `if not exists` である（＝「先にマイグレーションを流す」という手順は存在しない。`.claude/skills/cloud-deployment/`）。**落としてから app を上げ直せば、空のスキーマが自動で張り直る。**
+
+範囲は2つあり、**違うのは「ログインをやり直すか」だけである。**
+
+| 範囲       | やり方                                                | 代償                                                                                                    |
+| ---------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| 全部       | `drop schema public cascade; create schema public;`   | `auth_accounts` も消えるので、**Web UI から再ログイン → `alteroid access grant <id>` のやり直しが要る** |
+| 認証を残す | `auth_*` 以外を `truncate … restart identity cascade` | 無し（発行済みトークンも許可もそのまま効く）                                                            |
+
+**`Postgres` の Service は止めない。** 落とすのは中身であって器ではない（volume も消さない）。
+
+```bash
+# 1. 書く側を全部止める（app が先）
+railway down -s app -y
+for s in runner runner-2 runner-3; do railway down -s "$s" -y; done
+
+# 2. 誰も繋いでいないことを見てから落とす（認証を残す側）
+railway ssh --service Postgres 'psql \
+  -c "select count(*) from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid();" \
+  -c "truncate table approvals, archive, commitments, daemon_state, env_profile, inbox_events, jobs, journal, memory, schedule_phases, schedules, session_entries, sessions, usage_baseline, usage_daily, usage_ledger restart identity cascade;"'
+
+# 3. 戻す（runner が先）
+for s in runner runner-2 runner-3; do railway redeploy -s "$s" --from-source -y; done
+railway redeploy -s app --from-source -y
+```
+
+**⚠️ 2 の表の名前を書き並べる形は、テーブルが増えた回だけ静かに漏れる。** 漏れても `truncate` は成功するので、**残った表は「消したつもり」のまま残る。** 全部消してよいなら `drop schema public cascade` を使うこと（数え上げが要らない）。認証だけ残すなら、消す前に**残らないはずの表を引いて突き合わせる**:
+
+```bash
+railway ssh --service Postgres 'psql -c "select tablename from pg_tables where schemaname = current_schema() and tablename not like '"'"'auth_%'"'"' order by tablename;"'
+```
+
+**消えるもののうち忘れやすいのは3つ。** どれも `memory`（記憶）とは別の軸である。
+
+- **`daemon_state.clone_session_id`** — クローンが続けているセッションの id。消すとクローンは**新しいセッションから始まる**（会話の続きが切れる。記憶を残しても切れる）
+- **`commitments`** — 引き受けたまま終わっていない仕事。消すと**やり残しを誰も思い出さない**
+- **`env_profile`** — 実行環境プロファイル（`.zprofile` 相当。`.claude/skills/env-profile/`）。**人間が手で書いたもの**なので、消す前に `alteroid profile show` を控える
+
+そして器を止める操作そのものの代償も残る — **走行中のマネージャーは畳まれ、`/workspace` の未 push の変更は消える**（「先に読む」3）。
+
+### 戻ったことを確かめる
+
+```bash
+./railway/verify.sh                                   # 境界と名簿（全台）
+railway ssh --service app 'alteroid access list'      # 許可が残っているか（認証を残した場合）
+railway ssh --service Postgres 'psql -c "\dt"'        # 表が張り直っているか
+```
+
+**`\dt` が20表を返すことは「デーモンが上がった」ことの観測でもある**（張るのは起動時の `migrate` だけなので）。逆に、表が無いまま app が `SUCCESS` なら、上がったのはコンテナであってデーモンではない。
+
+---
+
 ## 症状から引く
 
 | 症状                                                             | 原因                                                                                                                                                                                                                                                                                             |
