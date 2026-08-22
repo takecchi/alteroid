@@ -49,6 +49,62 @@ export interface Page {
   more: boolean;
 }
 
+/**
+ * 一覧を予算で積む。**切ったら、切った件数と続きの取り方を必ず出す。**
+ *
+ * ここに切り出してあるのは、**各一覧の実装の側に予算のループを手で書く形を
+ * やめるため**である。`digest.ts` の冒頭が記録しているとおり、後から足した節が
+ * 黙って切れていたのは「その行が各節の実装の側にあって、書き忘れても何も
+ * 落ちなかったから」だった。同じ形が道具の側にもあり、`manager_list` /
+ * `journal_read` が塞がれたあとも `approvals_list` / `schedule_list` /
+ * `runner_list` は無上限のまま残っていた。**1か所に寄せれば、寄せ忘れは
+ * 一覧の総当たり試験が拾える。**
+ *
+ * 予算の意味は「出力全体の文字数」であって件数ではない。件数から出力量を
+ * 決めると、何件で壊れるかが運任せになる（それで一覧が丸ごと落ちた実績が
+ * `manager_list` にある）。
+ */
+export interface ListingBudget {
+  /** 本体（省略の断り書きを除く）の文字数の上限。 */
+  budget: number;
+  /**
+   * 切ったときに最後へ足す1行。**続きの取り方をここで書く。**
+   *
+   * `shown` 件を出し、`rest` 件を省き、全部で `total` 件あった。
+   */
+  omitted: (part: { rest: number; shown: number; total: number }) => string;
+}
+
+/**
+ * 予算に入るところまで `items` を積み、入らなかった分を断り書きにする。
+ *
+ * **1件だけで予算を超える場合は、その1件を `excerpt` で切る。** 落とすと
+ * 「何も出ない一覧」になり、丸ごと出すと予算そのものが意味を失う——どちらも
+ * 「上限がある」と言えなくなる。切った跡は `excerpt` が付ける。
+ */
+export function renderListing(
+  items: readonly string[],
+  { budget, omitted }: ListingBudget,
+): string {
+  const lines: string[] = [];
+  let used = 0;
+  for (const item of items) {
+    if (lines.length === 0) {
+      // 先頭の1件は必ず出す。ただし予算を超えるなら切って出す。
+      const head = item.length > budget ? excerpt(item, budget) : item;
+      lines.push(head);
+      used += head.length;
+      continue;
+    }
+    if (used + item.length > budget) break;
+    lines.push(item);
+    used += item.length;
+  }
+  const rest = items.length - lines.length;
+  if (rest > 0) lines.push(omitted({ rest, shown: lines.length, total: items.length }));
+  return lines.join('\n');
+}
+
 export function page(text: string, offset: number, limit: number): Page {
   const from = Math.max(0, Math.min(Math.trunc(offset), text.length));
   const body = text.slice(from, from + limit);
