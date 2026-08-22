@@ -137,6 +137,23 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
                   <dd className="font-mono text-xs break-all">{manager.sessionId}</dd>
                 </>
               )}
+              {/*
+                貸し出し（どのプロセスが握っているか）。**判定は書かない** — 引き取って
+                よいかは時刻で変わるので（`packages/core/src/lease.ts`）、画面に焼くと
+                読んだ瞬間から古びる。ここに出すのは材料だけである。
+
+                材料が見えないと、引き取りが動かないのを見た人間は「忘れている」と
+                「まだ握られていて待っている」を区別できない。
+              */}
+              {manager.lease !== undefined && manager.lease !== null && (
+                <>
+                  <dt className="text-muted">貸し出し</dt>
+                  <dd className="font-mono text-xs break-all">
+                    {manager.lease.instanceId ?? 'プロセスは未名乗り'} / 世代 {manager.lease.fence}
+                    （生存確認 {formatDateTime(manager.lease.seenAt)}）
+                  </dd>
+                </>
+              )}
             </dl>
             <DisconnectedNote live={manager.live} />
             <LostNote status={manager.status} />

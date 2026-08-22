@@ -194,14 +194,22 @@ describe('judgeLease', () => {
   /**
    * **壊れた時刻で「まだ握られている」と言わない。** 言うと、直せる者が居ないまま
    * その委譲が永久に引き取れなくなる（時刻を直せるのは書いた側だけである）。
+   *
+   * **同時に「もう動いていないと言える」とも言わない。** `expired` はその主張だが、
+   * 読めない時刻からその主張は出てこない。引き取りは許し、奪っていないとは言わない
+   * ——`undecidable` がその形である（この2つは両立する）。
    */
-  it('seenAt が読めない値なら、期限が過ぎたものとして扱う', () => {
+  it('seenAt が読めない値なら、引き取りは許すが「失効した」とは言わない', () => {
     const verdict = judgeLease({
       lease: { ...leaseAt(), seenAt: 'いつか' } as JobLease,
       now: T0,
       answering: { runnerId: 'runner-primary', instanceId: 'boot-2', instanceSince: T0 },
     });
-    expect(verdict).toMatchObject({ kind: 'expired', because: 'ttl' });
+    expect(verdict.kind).toBe('undecidable');
+    expect(mayClaim(verdict)).toBe(true);
+    // 報告が「失効したと言える」と断言しない（判定できないことが出力に残る）。
+    expect(describeVerdict(verdict)).toContain('判定できない');
+    expect(describeVerdict(verdict)).not.toContain('失効した');
   });
 });
 

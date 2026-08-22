@@ -97,6 +97,16 @@ export interface ManagerSummary {
   runnerId?: string;
   workspace?: WorkspaceLocator;
   /**
+   * 貸し出し（`jobSchema.lease`）— **その宛先のどのプロセスが、いつまで握ると
+   * 約束したか**（M5 PR4）。
+   *
+   * **判定は載せない。** 引き取ってよいかは時刻で答えが変わる（`judgeLease`）ので、
+   * 一覧に焼くと読んだ瞬間から古びる。ここに出すのは材料だけで、判定は読む側が
+   * その時刻で行う。**材料が出ていないと、引き取りが動かないのを見た人間とクローンは
+   * 「忘れている」と「まだ握られていて待っている」を区別できない。**
+   */
+  lease?: NonNullable<Job['lease']>;
+  /**
    * 返事待ちで止まっている件。
    *
    * **1本のマネージャーが同時に複数を待つことがある。** 1回のアシスタント応答で
@@ -1309,10 +1319,33 @@ class Pool implements ManagerPool {
         // 並んでいた仕事が誰にも拾われないまま `running` として残る。
         try {
           const message = restartNudge(status, 'runner');
+          // 断りが「新しく起きたこと」かを、挑む前の状態で覚えておく（下の日誌の条件）。
+          const refusedBefore = record.leaseRefusal !== undefined;
           if (!(await this.#resumeOnce(record, runner, message))) {
             // **貸し出し期限で断られたのは「まだ」である。** 予約して挑み直す
             // （`retry` を立てれば、この関数の `finally` が梯子へ載せる）。
-            if (record.leaseRefusal !== undefined) retry = true;
+            if (record.leaseRefusal !== undefined) {
+              retry = true;
+              /*
+               * **待っていることを日誌に残す（この経路が本番である）。**
+               *
+               * 器の入れ替えで走るのはここであって `#restoreJobs` ではない
+               * （あちらは像に載っている委譲を先頭で見送る）。ここに何も書かないと、
+               * 「待っている」と「忘れている」が記録から区別できなくなる。
+               *
+               * **遷移のときだけ書く**（`onLost` が1回だけ知らせるのと同じ形）。
+               * 梯子は最大30秒間隔で挑み直すので、毎回書くと1回の入れ替えで同じ行が
+               * 何本も積まれ、日誌を読む側（クローンの日報・digest）で本当に1回だけ
+               * 起きたことが埋もれる。
+               */
+              if (!refusedBefore) {
+                await this.#journal({
+                  type: 'decision',
+                  decision: `[${job.id}] 引き取りを見送った（貸し出し期限。期限が切れたら自動で挑み直す）`,
+                  grounds: record.leaseRefusal.detail,
+                });
+              }
+            }
             continue;
           }
           // 受理と「戻れた」を取り違えない（`restore` と同じ理由）。
@@ -2535,5 +2568,17 @@ function summaryOf(record: ManagerRecord, live: boolean): ManagerSummary {
     ...(job.lastFailure === undefined ? {} : { lastFailure: job.lastFailure }),
     ...(job.runnerId === undefined ? {} : { runnerId: job.runnerId }),
     ...(job.workspace === undefined ? {} : { workspace: job.workspace }),
+    /*
+     * **貸し出しを台帳のまま写す**（M5 PR4）。
+     *
+     * `runnerId` が「どの宛先か」で、こちらは「その宛先の**どのプロセス**が、いつまで
+     * 握っていると約束したか」である。これが外に出ていないと、引き取りが動かないのを
+     * 見た人間とクローンは「忘れている」と「まだ握られていて待っている」を区別できず、
+     * **待てば済む委譲を起こし直して同じ仕事を2本にする。**
+     *
+     * 判定そのものは出さない（`judgeLease` は時刻で答えが変わるので、一覧に焼くと
+     * 読んだ瞬間から古びる）。**出すのは材料だけで、判定は読む側がその時刻でやる。**
+     */
+    ...(job.lease === undefined ? {} : { lease: job.lease }),
   };
 }

@@ -394,6 +394,17 @@ export const managerSummarySchema = z.object({
   lastFailure: jobSchema.shape.lastFailure,
   runnerId: z.string().optional(),
   workspace: workspaceLocatorSchema.optional(),
+  /**
+   * 貸し出し（M5 PR4）— **その宛先のどのプロセスが、いつまで握ると約束したか。**
+   *
+   * `lastFailure` と同じく**`jobSchema` の枝をそのまま借りる**（ここで手書きの写しを
+   * 置くと、欄が片方だけ増えた日に spec が黙って古びる）。
+   *
+   * **判定（引き取ってよいか）は載せない。** 答えは時刻で変わるので
+   * （`packages/core/src/lease.ts` の `judgeLease`）、応答に焼くと読んだ瞬間から
+   * 古びる。出すのは材料だけである。
+   */
+  lease: jobSchema.shape.lease,
   waiting: z.array(managerWaitingSchema),
   /**
    * 確認へ上がらずに止められた道具と件数（**古い順**）。

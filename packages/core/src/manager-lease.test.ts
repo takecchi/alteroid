@@ -312,9 +312,18 @@ describe('引き取りの関門（貸し出し期限）', () => {
     // **奪う操作は出さない。** 台帳が書けないまま走らせると、次の契機が同じ委譲を
     // 無条件で奪える状態（貸し出しの記録が無い）になる。
     expect(h.runner.resumes).toEqual([]);
-    // 台帳の貸し出しは前の持ち主のまま（書けなかったのだから当然だが、**像の側も
-    // 巻き戻していること**をここで固定する。像だけ進むと、次の判定が嘘の材料で走る）。
+    // 台帳の貸し出しは前の持ち主のまま（書けなかったのだから当然である）。
     expect((await jobOf(h.stores))?.lease).toMatchObject({ instanceId: 'boot-1', fence: 4 });
+    /*
+     * **像の側も巻き戻っていること。**
+     *
+     * ここを台帳（`jobOf`）だけで見ると、`putJob` が投げている以上どうやっても
+     * 前の値のままなので**巻き戻しの実装を削っても緑になる**（実際に一度そういう
+     * 検査になっていた）。像が進んだままだと、次の判定は「持ち主は自分（boot-2）」
+     * という嘘の材料で走る — だから外から見える形（`list()`）で押さえる。
+     */
+    const summary = (await h.pool.list()).find((manager) => manager.managerId === 'mgr-1');
+    expect(summary?.lease).toMatchObject({ instanceId: 'boot-1', fence: 4 });
 
     await h.close();
   });
@@ -340,6 +349,49 @@ describe('引き取りの関門（貸し出し期限）', () => {
     const delivered = await h.pool.send('mgr-1', '続けて');
     expect(delivered.outcome).toBe('delivered');
     expect(h.runner.resumes).toHaveLength(1);
+
+    await h.close();
+  });
+
+  /**
+   * **器の入れ替えで実際に走るのはこの経路である。**
+   *
+   * `restore()` は像に載っている委譲を先頭で見送る（`#records.has` で `continue`）ので、
+   * 入れ替えの前から走っていた委譲を拾うのは runner の名乗り（`hello`）を契機にした
+   * 取り直しの側である。**ここに記録が無いと、「待っている」と「忘れている」が
+   * 記録から区別できない**（`railway/README.md` がそう約束している）。
+   */
+  it('取り直しの経路でも、待っていることを日誌に残す（遷移のときだけ）', async () => {
+    const h = await harnessOf();
+    await h.stores.jobs.putJob(runningJob(leaseHeldBy('boot-1')));
+
+    /*
+     * **受け口が張られていることを先に確かめる。**
+     *
+     * デーモンが `connect()` を呼ぶ契機は名簿の購読か `#ensureConnected` で、
+     * この足場では名簿へ登録した後にプールを作っているので前者は起きない。
+     * `list()` が後者を通す。**ここを確かめずに `emit?.()` を書くと、受け口が
+     * 無いときにテストが黙って何もせず緑になる**（実際に一度そうなった）。
+     */
+    await h.pool.list();
+    expect(h.runner.emit).toBeTypeOf('function');
+
+    // 器が入れ替わって名乗り直した（新しい器にはこの委譲のセッションが無い）。
+    h.runner.emit?.({ type: 'hello', runnerId: 'runner-primary' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(h.runner.resumes).toEqual([]);
+    const decisions = (await h.journal()).filter((entry) => entry.type === 'decision');
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]?.type === 'decision' && decisions[0].decision).toContain(
+      '引き取りを見送った',
+    );
+
+    // **同じ待ちで日誌を埋めない。** 梯子は挑み直し続けるので、毎回書くと1回の
+    // 入れ替えで同じ行が何本も積まれ、本当に1回だけ起きたことが埋もれる。
+    h.runner.emit?.({ type: 'hello', runnerId: 'runner-primary' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect((await h.journal()).filter((entry) => entry.type === 'decision')).toHaveLength(1);
 
     await h.close();
   });

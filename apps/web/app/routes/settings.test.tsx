@@ -67,7 +67,15 @@ describe('runner の札は、いま応えているプロセスを出す', () => 
     renderSettings([{ ...BASE, instanceId: 'boot-2', instanceSince: '2026-08-22T03:04:00.000Z' }]);
 
     const line = await screen.findByText(/プロセス: boot-2/);
-    expect(line.textContent).toContain('から');
+    /*
+     * **時刻が整形されて出ていることまで見る。** `toContain('から')` だけだと、
+     * 整形が壊れても（空文字・`Invalid Date`）緑になる。
+     *
+     * 見るのは日付だけである — **時分は器の時間帯で変わる**（手元は JST、CI の
+     * runner は UTC で9時間ずれる。AGENTS.md「時刻の扱い」）。この試料
+     * （03:04Z ＝ JST 12:04）はどちらでも同じ日に落ちるので、日付なら固定できる。
+     */
+    expect(line.textContent).toMatch(/08\/22.*から/);
   });
 
   /**
