@@ -103,8 +103,11 @@ export function createMemoryStores(): Stores {
   // 列と同じ形——書き手は書けず、write() が新旧の description を比べて進める。
   const describedAt = new Map<string, string>();
   // 記憶の `createdAt`。fs の `.index.json` / pg の `created_at` 列と同じ形
-  // ——素の optional。「unknown」という値をここへ書き込まない。値が無いこと
-  // 自体が「日誌に根拠が無い」を表す（`read()` / `list()` が組み立てる）。
+  // ——素の optional。「unknown」という値をここへ書き込まない。値が無いのは
+  // (1) この配線より前に作られ (2) 日誌にも根拠が無い、両方を満たす昔の行
+  // だけである（`read()` / `list()` が組み立てる）。値が入る経路は2つ——
+  // `write()` がその場で立てる（第一の出所）か、`markCreatedAt`（backfill）
+  // が日誌から埋めるかのどちらか。
   const createdAtStore = new Map<string, string>();
   const entries: JournalEntry[] = [];
   const jobs = new Map<string, Job>();
@@ -166,7 +169,12 @@ export function createMemoryStores(): Stores {
       // **write() と append()（下）の唯一の通り道。** fs / pg と同じく、誰が
       // 書いたかを問わずここでハッシュ・describedAt を更新する。human 印には
       // 触らない。describedAt は書き手が書けない（`nextDescribedAt` の doc）。
-      // `createdAt` にも触らない——backfill（`markCreatedAt`）だけが書く。
+      // **`createdAt` は本物（fs / pg）と同じく、この書き込みが文書を作った
+      // ときだけ立てる。** `before === undefined`（＝この slug の実体が
+      // 無かった）かつ、まだ値を持っていないときだけ set する——一度立てたら
+      // 二度と触らない一度きりの確定（`markCreatedAt` による backfill は昔の
+      // 行の後始末で、ここでは何もしない）。
+      if (before === undefined && !createdAtStore.has(slug)) createdAtStore.set(slug, updatedAt);
       const next = nextDescribedAt({
         priorContent: before?.content ?? null,
         nextContent: content,

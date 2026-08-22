@@ -158,6 +158,14 @@ export type MemoryDescriptionFreshness = z.infer<typeof memoryDescriptionFreshne
  * 理由が定数なら、値として持たせる意味は薄く、ここに書けば足りる。
  * 「揃えるために、とりあえず `reason` を付ける」はしないこと——様式を
  * 揃えることと理由を持たせることは別である。
+ *
+ * **`known` になる経路は2つある（記憶の `createdAt` 対応）。** (1) 作成
+ * そのものを観測した書き込み経路（第一の出所。ストアが書き込みの瞬間に
+ * 直接 `createdAt` を立てる） (2) この配線より前に作られた行を、日誌の
+ * 最初の `action:'write'` から埋める backfill（`markCreatedAt` の doc）。
+ * 新しく書かれる記憶は必ず (1) で `known` になるので、**上の「理由は1つ」は
+ * 変わらない**——`unknown` が起こりうるのは、この配線より前に作られ、かつ
+ * 日誌にも根拠が無い昔の行に限られる、というだけである。
  */
 export const memoryCreatedAtSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('known'), at: isoDateTime }),
@@ -175,12 +183,21 @@ export const memoryDocumentMetaSchema = z.object({
   title: z.string(),
   updatedAt: isoDateTime,
   /**
-   * 作成時刻。日誌に根拠（最初の `memory_update` の `action:'write'`）が
-   * 在れば `{ kind: 'known', at }`、無ければ `{ kind: 'unknown' }`。
+   * 作成時刻。根拠は2つある——(1) 作成そのものを観測した書き込み経路
+   * （第一の出所。`packages/storage-fs/src/persona.ts` の `#writeNow` /
+   * `packages/storage-pg/src/persona.ts` の `write` と `append`）、
+   * (2) この配線より前に作られた行は、日誌の最初の `memory_update`
+   * （`action:'write'`）から埋める backfill（`markCreatedAt` の doc）。
+   * どちらも無ければ `{ kind: 'unknown' }`。
    *
-   * **`mtime` にも `birthtime` にも由来しない。** ファイルシステムの時刻は
-   * overlayfs 等で信頼できないので、根拠は常に日誌だけに置く
-   * （`memoryCreatedAtSchema` の doc）。
+   * **`mtime` にも `birthtime` にも由来しない——これはいまも禁止である。**
+   * 禁じているのは「作成を観測していない文書について FS の時刻から作成時刻を
+   * 捏造すること」であって、fs の `#writeNow` が使う `written.updatedAt` は
+   * これに当たらない——**作成そのものを観測している経路の中で、その書き込み
+   * 自身が刻んだ時刻を使っている**だけである。同じ関数の中の `describedAt` が
+   * 精度差で `stale` に化けるのを避けるために同じ時刻を使う先例になっている
+   * （理由は `#writeNow` の既存コメントに逐語で在る）。**この結果、新規作成
+   * された文書では「作成」と「更新」が必ず同じ時刻になる。**
    */
   createdAt: memoryCreatedAtSchema,
   bytes: z.number().int().nonnegative(),

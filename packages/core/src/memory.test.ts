@@ -151,7 +151,11 @@ describe('MemoryCreatedAt の網羅性', () => {
 });
 
 /**
- * `deriveMemoryCreatedAtFromJournal` — 記憶の `createdAt` の唯一の根拠。
+ * `deriveMemoryCreatedAtFromJournal` — 記憶の `createdAt` の根拠のひとつ。
+ *
+ * **唯一の根拠ではない。** 第一の出所は書き込み経路自身（fs の `#writeNow` /
+ * pg の `write` と `append`）で、これはその配線より前に作られた行を埋める
+ * backfill（`markCreatedAt`）が使う導出関数である（記憶の `createdAt` 対応）。
  *
  * `deriveHumanTouchedAtFromJournal` と対になるが見るものが逆——あちらは
  * `cause:'human'` に絞って**最後**（新しいほう）を残すのに対し、こちらは

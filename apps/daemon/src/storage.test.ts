@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -142,8 +142,32 @@ describe('openStorage', () => {
    * 記憶の `createdAt` の backfill。**`backfillMemoryHumanTouch` の歯と対の
    * 形にしてある**——同じくデーモン再起動を挟んで、日誌にはあるが派生値に
    * まだ無い状況を再現する。
+   *
+   * **この配線（記憶の `createdAt` 対応）より前は、`persona.write()` は
+   * `createdAt` に一切触れなかった**——backfill だけがこの派生値を動かして
+   * いたので、このファイルの下のほうのテストはどれも「まず write() で作り、
+   * まだ unknown なことを確かめ、再起動を挟んで known になることを確かめる」
+   * という形をしていた。**いまは違う。** `write()` / `append()` 自身が新規
+   * 作成の瞬間に `createdAt` を立てる（`packages/storage-fs/src/persona.ts`
+   * の `#writeNow` の doc）ので、**backfill を確かめたいテストは、write()
+   * が先に立ててしまわないよう、索引の無い生ファイル（backfill 前の昔の
+   * 記憶を模す）を直接置く**（`storage-fs` / `storage-pg` のテストと同じ
+   * 手口）。
    */
   describe('createdAt の backfill', () => {
+    it('起動後に作った記憶が、再起動を挟まずその場で known を持つ（この配線の本体）', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
+
+      const storage = await openStorage({ ALTEROID_HOME: root });
+
+      const written = await storage.stores.persona.write('today', '# 今日\n\n新しく作った記憶\n');
+
+      expect(written.createdAt.kind).toBe('known');
+      expect((await storage.stores.persona.read('today'))?.createdAt).toEqual(written.createdAt);
+
+      await storage.close();
+    });
+
     it('起動時に日誌の最初の write を createdAt として backfill する（新しいほうが採られないこと）', async () => {
       const root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
 
@@ -155,7 +179,12 @@ describe('openStorage', () => {
       try {
         // --- 1回目の起動 -----------------------------------------------------
         const first = await openStorage({ ALTEROID_HOME: root });
-        await first.stores.persona.write('habits', '# 習慣\n\n最初の版\n');
+        // **store を経由せず、索引の無い生ファイルとして置く。** write() 自身が
+        // この PR で新規作成時に createdAt を立てるようになったため、
+        // persona.write() で作ると backfill を待たずに known になってしまい、
+        // ここで確かめたい「backfill が日誌の最初の write を採用すること」が
+        // 隠れる（backfill 前の昔の記憶を模す）。
+        await writeFile(join(root, 'memory', 'habits.md'), '# 習慣\n\n最初の版\n', 'utf8');
         vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
         const firstWrite = await first.stores.journal.append({
           type: 'memory_update',
@@ -194,30 +223,75 @@ describe('openStorage', () => {
       }
     });
 
-    it('日誌に根拠が無い文書は unknown のまま（ファイルの mtime を使わない）', async () => {
+    it('write() が立てた createdAt は、日誌に根拠が無くても再起動をまたいで保持される', async () => {
+      // **この it() はこの PR で反転した。** 以前はここで「日誌に根拠が無い
+      // 文書は unknown のまま（ファイルの mtime を使わない）」を確かめて
+      // いた——persona.write() 自体は journal を書かないので、journal に
+      // action:'write' が無い文書は backfill の対象にならず、再起動しても
+      // unknown のまま、という旧仕様（backfill だけが createdAt の出所
+      // だった時代）の裏返しである。**いまは write() 自身が作成そのものを
+      // 観測して createdAt を立てるので、日誌の記録に一切頼らず、再起動を
+      // またいでも known のままである。**
       const root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
 
       const first = await openStorage({ ALTEROID_HOME: root });
       // memory_update を1件も残さずに書く（`persona.write` 自体は journal を
       // 書かない——journal へ積むのは `app.ts` のハンドラの仕事なので、ここは
       // 「日誌に根拠が無い」状況をそのまま作れる）。
-      await first.stores.persona.write('mystery', '# 謎\n\n根拠の無い記憶\n');
+      const written = await first.stores.persona.write('mystery', '# 謎\n\n根拠の無い記憶\n');
+      expect(written.createdAt.kind).toBe('known');
       await first.close();
 
       const second = await openStorage({ ALTEROID_HOME: root });
 
-      expect((await second.stores.persona.read('mystery'))?.createdAt).toEqual({
-        kind: 'unknown',
-      });
+      expect((await second.stores.persona.read('mystery'))?.createdAt).toEqual(written.createdAt);
 
       await second.close();
+    });
+
+    it('書き込み経路で既に埋まった createdAt を、次の起動の backfill が上書きしない', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
+
+      // journal.append の at を明示的に古くするため、時計を止める
+      // （上の「新しいほうが採られない」テストと同じ手口）。
+      vi.useFakeTimers();
+      try {
+        const first = await openStorage({ ALTEROID_HOME: root });
+        const written = await first.stores.persona.write('habits', '# 習慣\n');
+        expect(written.createdAt.kind).toBe('known');
+        await first.close();
+
+        // 再起動の前に、この記憶よりずっと古い write を日誌へ積む——
+        // backfill が createdAt の第一の出所であれば、これで巻き戻って見える
+        // はずだが、いまは書き込み経路が既に確定させているので、backfill は
+        // 何もしない（既に値が入っている slug には触らない。絶対条件2）。
+        vi.setSystemTime(new Date('2000-01-01T00:00:00.000Z'));
+        const second = await openStorage({ ALTEROID_HOME: root });
+        await second.stores.journal.append({
+          type: 'memory_update',
+          slug: 'habits',
+          cause: 'clone',
+          action: 'write',
+          summary: 'あとから発覚した、もっと古い write を模す',
+        });
+        await second.close();
+
+        const third = await openStorage({ ALTEROID_HOME: root });
+        expect((await third.stores.persona.read('habits'))?.createdAt).toEqual(written.createdAt);
+
+        await third.close();
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('backfill は冪等——2回目の再起動でも既に埋まった createdAt を書き換えない（絶対条件2・4）', async () => {
       const root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
 
       const first = await openStorage({ ALTEROID_HOME: root });
-      await first.stores.persona.write('habits', '# 習慣\n');
+      // 索引の無い生ファイルとして置く（backfill 単体の冪等性を確かめたい
+      // ので、write() に createdAt を先に立てさせない）。
+      await writeFile(join(root, 'memory', 'habits.md'), '# 習慣\n', 'utf8');
       await first.stores.journal.append({
         type: 'memory_update',
         slug: 'habits',
@@ -260,9 +334,13 @@ describe('openStorage', () => {
       const root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
 
       const first = await openStorage({ ALTEROID_HOME: root });
-      await first.stores.persona.write(
-        'runbook',
-        ['---', 'description: 手順', '---', '# 手順書', '', '本文'].join('\n'),
+      // 索引の無い生ファイルとして置く（上と同じ理由——write() が
+      // createdAt を先に立ててしまうと、backfill 単体の「未書き換え」を
+      // 確かめられない）。
+      await writeFile(
+        join(root, 'memory', 'runbook.md'),
+        ['---', 'description: 手順', '---', '# 手順書', '', '本文', ''].join('\n'),
+        'utf8',
       );
       await first.stores.persona.markHumanTouched('runbook', '2020-01-01T00:00:00.000Z');
       await first.stores.journal.append({

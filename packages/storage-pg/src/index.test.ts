@@ -52,6 +52,10 @@ describe('migrate', () => {
 
   it('created_at 列の追加は加算のみ・冪等（記憶の絶対条件6）——値を消さず二度通しても壊れない', async () => {
     await stores.persona.write('values', '# 価値観\n');
+    // write() 自身が新規作成時に created_at を入れるようになったため
+    // （記憶の createdAt 対応）、markCreatedAt が実際に値を立てる場面を
+    // 見るには、一度 null に戻してから呼ぶ必要がある。
+    await db.execute(sql`update memory set created_at = null where slug = 'values'`);
     await stores.persona.markCreatedAt('values', '2026-01-02T03:04:05.000Z');
 
     await migrate(db);
@@ -282,22 +286,88 @@ describe('PgPersonaStore', () => {
   });
 
   /**
-   * `createdAt`（`created_at` 列。記憶の絶対条件）。**列の値は `markCreatedAt`
-   * からしか動かない**——journal からの導出は `apps/daemon/src/storage.ts` の
-   * 起動時 backfill の仕事で、ここは `PersonaStore` 単体の振る舞いだけを見る。
-   * fs 版と同じ契約を、pg（PGlite）に対しても確かめる。
+   * `createdAt`（`created_at` 列。記憶の絶対条件）。
+   *
+   * **この配線（記憶の `createdAt` 対応）より前は、列の値は `markCreatedAt`
+   * からしか動かなかった**——journal からの導出は `apps/daemon/src/storage.ts`
+   * の起動時 backfill の仕事で、ここは `PersonaStore` 単体の振る舞いだけを
+   * 見ていた。**いまは違う。** `write()` / `append()` 自身が、insert（＝新規
+   * 作成）のときだけ `created_at` を入れる（`onConflictDoUpdate` の `set` には
+   * 含めないので、更新では既存の値が保たれる）。`markCreatedAt` はこの配線
+   * より前に作られた行を埋める後始末に降格しており、**このファイルの下の
+   * ほうのテスト（`markCreatedAt` 単体の振る舞い）は、write() が既に
+   * `created_at` を入れてしまわないよう、書いた直後に生 SQL で列を null に
+   * 戻して backfill 前の昔の行を模す**（`db.execute(sql\`update memory set
+   * created_at = null ...\`)`、上の protectionStatus の外部編集テストと
+   * 同じ「store を経由しない直接 UPDATE」の手口）。fs 版と同じ契約を、
+   * pg（PGlite）に対しても確かめる。
    */
   describe('createdAt（作成時刻の派生値）', () => {
-    it('markCreatedAt を呼んでいなければ unknown（mtime を使わない——pg にそもそも mtime は無い）', async () => {
-      await stores.persona.write('values', '# 価値観\n');
+    it('write() は新規作成のとき、backfill を通さずその場で created_at を known にする（updatedAt と一致）', async () => {
+      // **この it() はこの PR で反転した。** 以前はここで「markCreatedAt を
+      // 呼んでいなければ unknown（mtime を使わない——pg にそもそも mtime は
+      // 無い）」を確かめていた——write() は created_at に一切触れず、
+      // backfill だけが埋める、という旧仕様の裏返しである。**いまは write()
+      // 自身が insert のときだけ created_at を入れるので、新規作成した文書は
+      // markCreatedAt を待たずその場で known になる。**
+      const doc = await stores.persona.write('values', '# 価値観\n');
 
-      const doc = await stores.persona.read('values');
+      const read = await stores.persona.read('values');
 
-      expect(doc?.createdAt).toEqual({ kind: 'unknown' });
+      expect(read?.createdAt).toEqual({ kind: 'known', at: doc.updatedAt });
+      expect(read?.createdAt).toEqual({ kind: 'known', at: read?.updatedAt });
+    });
+
+    it('既存の文書を更新しても created_at は変わらない（updatedAt は進む）', async () => {
+      const first = await stores.persona.write('values', '# 価値観\n');
+      // 同一ミリ秒で2回書くと updatedAt が区別できないことがあるので、
+      // 確実に時刻を進める（fs 版と同じ手口）。
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const second = await stores.persona.write('values', '# 価値観\n\n書き直した\n');
+
+      expect(second.createdAt).toEqual(first.createdAt);
+      expect(second.updatedAt).not.toBe(first.updatedAt);
+      expect((await stores.persona.read('values'))?.createdAt).toEqual(first.createdAt);
+    });
+
+    it('append() が文書を新規作成したときも created_at が付く', async () => {
+      const doc = await stores.persona.append('notes', '最初のメモ');
+
+      expect(doc.createdAt).toEqual({ kind: 'known', at: doc.updatedAt });
+      expect((await stores.persona.read('notes'))?.createdAt).toEqual(doc.createdAt);
+    });
+
+    it('append() が既存の文書へ追記したときは created_at が変わらない', async () => {
+      const first = await stores.persona.write('notes', '# ノート\n');
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const second = await stores.persona.append('notes', '追記した行');
+
+      expect(second.createdAt).toEqual(first.createdAt);
+      expect(second.updatedAt).not.toBe(first.updatedAt);
+      expect((await stores.persona.read('notes'))?.createdAt).toEqual(first.createdAt);
+    });
+
+    it('削除して同じ slug を作り直すと、新しい created_at になる', async () => {
+      const first = await stores.persona.write('values', '# 価値観\n');
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      await stores.persona.remove('values');
+      const second = await stores.persona.write('values', '# 価値観\n\n書き直した\n');
+
+      expect(second.createdAt.kind).toBe('known');
+      expect(second.createdAt).not.toEqual(first.createdAt);
+      expect((await stores.persona.read('values'))?.createdAt).toEqual(second.createdAt);
     });
 
     it('markCreatedAt を呼んだ文書は known になる（read() にも list() にも出る）', async () => {
+      // write() ではなく、created_at を null に戻した行として用意する。
+      // write() 自身が新規作成時に created_at を入れるようになったため、
+      // そのままだと markCreatedAt を待たずに既に known になってしまい、
+      // ここで確かめたい「markCreatedAt 単体の効果」が隠れる。
       await stores.persona.write('values', '# 価値観\n');
+      await db.execute(sql`update memory set created_at = null where slug = 'values'`);
 
       await stores.persona.markCreatedAt('values', '2026-01-02T03:04:05.000Z');
 
@@ -311,6 +381,7 @@ describe('PgPersonaStore', () => {
 
     it('markCreatedAt は一度きりの確定——2回目は無視される（冪等・絶対条件2）', async () => {
       await stores.persona.write('values', '# 価値観\n');
+      await db.execute(sql`update memory set created_at = null where slug = 'values'`);
 
       const first = await stores.persona.markCreatedAt('values', '2026-01-02T03:04:05.000Z');
       const second = await stores.persona.markCreatedAt('values', '2020-01-01T00:00:00.000Z');
@@ -325,6 +396,7 @@ describe('PgPersonaStore', () => {
 
     it('同じ引数で2回走らせても結果は変わらない（backfill の再実行を模す）', async () => {
       await stores.persona.write('values', '# 価値観\n');
+      await db.execute(sql`update memory set created_at = null where slug = 'values'`);
 
       await stores.persona.markCreatedAt('values', '2026-01-02T03:04:05.000Z');
       await stores.persona.markCreatedAt('values', '2026-01-02T03:04:05.000Z');
@@ -352,6 +424,9 @@ describe('PgPersonaStore', () => {
         'runbook',
         ['---', 'description: 手順', '---', '# 手順書', '', '本文'].join('\n'),
       );
+      // write() が入れた created_at を null に戻し、markCreatedAt 単体の
+      // 効果を確かめられる状態にする（上のテストと同じ理由）。
+      await db.execute(sql`update memory set created_at = null where slug = 'runbook'`);
       await stores.persona.markHumanTouched('runbook', '2020-01-01T00:00:00.000Z');
       const before = await stores.persona.read('runbook');
       const beforeProtection = await stores.persona.protectionStatus('runbook');

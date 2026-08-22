@@ -344,22 +344,79 @@ describe('FsPersonaStore', () => {
   });
 
   /**
-   * `createdAt`（記憶の絶対条件）。**索引の値は `markCreatedAt` からしか
-   * 動かない**——journal からの導出（`deriveMemoryCreatedAtFromJournal`）は
-   * `apps/daemon/src/storage.ts` の起動時 backfill の仕事で、ここは
-   * `PersonaStore` 単体の振る舞いだけを見る。
+   * `createdAt`（記憶の絶対条件）。
+   *
+   * **この配線（記憶の `createdAt` 対応）より前は、索引の値は `markCreatedAt`
+   * からしか動かなかった**——journal からの導出
+   * （`deriveMemoryCreatedAtFromJournal`）は `apps/daemon/src/storage.ts` の
+   * 起動時 backfill の仕事で、ここは `PersonaStore` 単体の振る舞いだけを
+   * 見ていた。**いまは違う。** `write()` / `append()` 自身が、その書き込みが
+   * 文書を作った瞬間（`before === null`）を観測して `createdAt` を直接
+   * 立てる（`#writeNow` の doc）。`markCreatedAt` はこの配線より前に作られた
+   * 行を埋める後始末に降格しており、**このファイルの下のほうのテスト
+   * （`markCreatedAt` 単体の振る舞い）は、write() が既に createdAt を
+   * 立ててしまわないよう、索引の無い生ファイル（backfill 前の昔の記憶を
+   * 模す）を直接置いて確かめる。**
    */
   describe('createdAt（作成時刻の派生値）', () => {
-    it('markCreatedAt を呼んでいなければ unknown（mtime を使わない）', async () => {
-      await stores.persona.write('values', '# 価値観\n');
+    it('write() は新規作成のとき、backfill を通さずその場で createdAt を known にする（updatedAt と一致）', async () => {
+      // **この it() はこの PR で反転した。** 以前はここで「markCreatedAt を
+      // 呼んでいなければ unknown（mtime を使わない）」を確かめていた——write()
+      // は createdAt に一切触れず、backfill だけが埋める、という旧仕様の
+      // 裏返しである。**いまは write() 自身が作成そのものを観測する経路に
+      // なったので、新規作成した文書は markCreatedAt を待たずその場で known
+      // になる。** mtime を使わない、という主張自体は変わっていない——
+      // ここで使っているのは「この書き込みが刻んだ `updatedAt`」であって、
+      // ファイルシステムの `stat().mtime` を後から読み直したものではない
+      // （`memoryDocumentMetaSchema.createdAt` の doc）。
+      const doc = await stores.persona.write('values', '# 価値観\n');
 
-      const doc = await stores.persona.read('values');
+      const read = await stores.persona.read('values');
 
-      expect(doc?.createdAt).toEqual({ kind: 'unknown' });
+      expect(read?.createdAt).toEqual({ kind: 'known', at: doc.updatedAt });
+      expect(read?.createdAt).toEqual({ kind: 'known', at: read?.updatedAt });
+    });
+
+    it('既存の文書を更新しても createdAt は変わらない（updatedAt は進む）', async () => {
+      const first = await stores.persona.write('values', '# 価値観\n');
+      // ファイルシステムの mtime 分解能に負けないよう、確実に時刻を進める
+      // （このファイルの describedAt のテストと同じ手口）。
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const second = await stores.persona.write('values', '# 価値観\n\n書き直した\n');
+
+      expect(second.createdAt).toEqual(first.createdAt);
+      expect(second.updatedAt).not.toBe(first.updatedAt);
+      expect((await stores.persona.read('values'))?.createdAt).toEqual(first.createdAt);
+    });
+
+    it('append() が文書を新規作成したときも createdAt が付く', async () => {
+      const doc = await stores.persona.append('notes', '最初のメモ');
+
+      expect(doc.createdAt).toEqual({ kind: 'known', at: doc.updatedAt });
+      expect((await stores.persona.read('notes'))?.createdAt).toEqual(doc.createdAt);
+    });
+
+    it('append() が既存の文書へ追記したときは createdAt が変わらない', async () => {
+      const first = await stores.persona.write('notes', '# ノート\n');
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const second = await stores.persona.append('notes', '追記した行');
+
+      expect(second.createdAt).toEqual(first.createdAt);
+      expect(second.updatedAt).not.toBe(first.updatedAt);
+      expect((await stores.persona.read('notes'))?.createdAt).toEqual(first.createdAt);
     });
 
     it('markCreatedAt を呼んだ文書は known になる（read() にも list() にも出る）', async () => {
-      await stores.persona.write('values', '# 価値観\n');
+      // **write() ではなく、索引の無い生ファイルとして用意する。** write() 自身が
+      // 新規作成時に createdAt を立てるようになったため、persona.write() で
+      // 作ると markCreatedAt を待たずに既に known になってしまい、ここで
+      // 確かめたい「markCreatedAt 単体の効果」が隠れる。索引の無い生ファイル
+      // （backfill 前の昔の記憶を模す。「組み直しが日誌に残る」と同じ手口）を
+      // 直接置くことで、markCreatedAt が実際に反映を作る場面を再現する。
+      await mkdir(join(root, 'memory'), { recursive: true });
+      await writeFile(join(root, 'memory', 'values.md'), '# 価値観\n', 'utf8');
 
       await stores.persona.markCreatedAt('values', '2026-01-02T03:04:05.000Z');
 
@@ -372,7 +429,9 @@ describe('FsPersonaStore', () => {
     });
 
     it('markCreatedAt は一度きりの確定——2回目は無視される（冪等・絶対条件2）', async () => {
-      await stores.persona.write('values', '# 価値観\n');
+      // 上のテストと同じ理由で、write() ではなく索引の無い生ファイルを直接置く。
+      await mkdir(join(root, 'memory'), { recursive: true });
+      await writeFile(join(root, 'memory', 'values.md'), '# 価値観\n', 'utf8');
 
       const first = await stores.persona.markCreatedAt('values', '2026-01-02T03:04:05.000Z');
       const second = await stores.persona.markCreatedAt('values', '2020-01-01T00:00:00.000Z');
@@ -387,7 +446,9 @@ describe('FsPersonaStore', () => {
     });
 
     it('同じ引数で2回走らせても結果は変わらない（backfill の再実行を模す）', async () => {
-      await stores.persona.write('values', '# 価値観\n');
+      // 上のテストと同じ理由で、write() ではなく索引の無い生ファイルを直接置く。
+      await mkdir(join(root, 'memory'), { recursive: true });
+      await writeFile(join(root, 'memory', 'values.md'), '# 価値観\n', 'utf8');
 
       await stores.persona.markCreatedAt('values', '2026-01-02T03:04:05.000Z');
       await stores.persona.markCreatedAt('values', '2026-01-02T03:04:05.000Z');
@@ -406,15 +467,23 @@ describe('FsPersonaStore', () => {
       expect(await stores.persona.list()).toEqual([]);
     });
 
-    it('remove() で createdAt も一緒に消える（実体の無い印を残さない）', async () => {
-      await stores.persona.write('values', '# 価値観\n');
-      await stores.persona.markCreatedAt('values', '2026-01-02T03:04:05.000Z');
+    it('削除して同じ slug を作り直すと、新しい createdAt になる', async () => {
+      // **この it() はこの PR で反転した。** 以前はここで「remove() で
+      // createdAt も一緒に消える」——削除後に同じ slug へ書き直しても
+      // markCreatedAt を呼ばない限り unknown のまま、を確かめていた。
+      // **いまは write() 自身が作成を観測するので、削除後の書き直しは
+      // それ自体が新しい作成であり、その場で新しい known な createdAt が付く**
+      // ——`remove()` が索引エントリ（＝古い createdAt）ごと消すことの帰結が、
+      // 「印が蘇らない」から「新しい印が生まれる」に変わった。
+      const first = await stores.persona.write('values', '# 価値観\n');
+      await new Promise((resolve) => setTimeout(resolve, 10));
 
       await stores.persona.remove('values');
-      await stores.persona.write('values', '# 価値観\n\n書き直した\n');
+      const second = await stores.persona.write('values', '# 価値観\n\n書き直した\n');
 
-      // 削除後に同じ slug へ新しく書いても、古い印は蘇らない。
-      expect((await stores.persona.read('values'))?.createdAt).toEqual({ kind: 'unknown' });
+      expect(second.createdAt.kind).toBe('known');
+      expect(second.createdAt).not.toEqual(first.createdAt);
+      expect((await stores.persona.read('values'))?.createdAt).toEqual(second.createdAt);
     });
 
     /**
@@ -423,9 +492,14 @@ describe('FsPersonaStore', () => {
      * （`humanTouchedAt` 由来）・`description` を走行前後で突き合わせる。
      */
     it('markCreatedAt は createdAt 以外を1つも書き換えない', async () => {
-      await stores.persona.write(
-        'runbook',
-        ['---', 'description: 手順', '---', '# 手順書', '', '本文'].join('\n'),
+      // 上と同じ理由で、write() ではなく索引の無い生ファイルを直接置く
+      // （markCreatedAt 単体の効果を確かめたいので、write() に createdAt を
+      // 先に立てさせない）。
+      await mkdir(join(root, 'memory'), { recursive: true });
+      await writeFile(
+        join(root, 'memory', 'runbook.md'),
+        ['---', 'description: 手順', '---', '# 手順書', '', '本文', ''].join('\n'),
+        'utf8',
       );
       await stores.persona.markHumanTouched('runbook', '2020-01-01T00:00:00.000Z');
       const before = await stores.persona.read('runbook');

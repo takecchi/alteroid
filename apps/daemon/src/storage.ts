@@ -137,6 +137,16 @@ async function backfillMemoryHumanTouch(stores: Stores): Promise<void> {
  * 手本である**——同じ場所（記憶ストアを開いた直後、クローンのセッションが
  * 立ち上がる前）で、同じ形（日誌を舐めて derive → 器へ反映）で走る。
  *
+ * **これは `createdAt` の第一の出所ではない。** 第一の出所は書き込み経路
+ * そのもの（`packages/storage-fs/src/persona.ts` の `#writeNow` /
+ * `packages/storage-pg/src/persona.ts` の `write` と `append`）——記憶を
+ * 作る瞬間、作成時刻はストア自身が直接知っているので、そこで確定させる。
+ * **ここが担うのは、その配線より前に作られた行（書き込み経路がまだ見て
+ * いない昔の記憶）を日誌から埋める後始末だけである。** この配線が入って
+ * 以降に新しく作られる記憶にとって、`markCreatedAt` は通常何もしない
+ * （書き込み経路で既に値が入っているため、絶対条件2「値が無いときだけ」に
+ * 当たらない）。
+ *
  * **バックフィルは `created_at` を埋める以外のことを一切しない**（記憶の
  * 絶対条件1）。触るのは `PersonaStore.markCreatedAt` を通した `created_at`
  * 列 / `.index.json` の `createdAt` フィールドだけで、本文・`updatedAt`・

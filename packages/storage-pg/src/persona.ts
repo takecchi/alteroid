@@ -80,12 +80,15 @@ export class PgPersonaStore implements PersonaStore {
     // ——別途 SELECT する（fs 版の `#writeNow` が先に `read()` するのと同じ形）。
     const prior = await this.#readPrior(key);
     const body = stripNulls(ensureTrailingNewline(content));
+    const now = new Date();
     const rows = await this.#db
       .insert(memory)
-      .values({ slug: key, content: body, updatedAt: new Date() })
+      // **新規作成のときだけ `created_at` が入る。** conflict 側（＝更新）の
+      // `set` には含めないので、既存行の `created_at` は NULL でも保たれる。
+      .values({ slug: key, content: body, updatedAt: now, createdAt: now })
       .onConflictDoUpdate({
         target: memory.slug,
-        set: { content: body, updatedAt: new Date() },
+        set: { content: body, updatedAt: now },
       })
       .returning({
         slug: memory.slug,
@@ -163,9 +166,12 @@ export class PgPersonaStore implements PersonaStore {
     const key = this.#slug(slug);
     const prior = await this.#readPrior(key);
     const body = stripNulls(ensureTrailingNewline(content));
+    const now = new Date();
     const rows = await this.#db
       .insert(memory)
-      .values({ slug: key, content: body, updatedAt: new Date() })
+      // **新規作成のときだけ `created_at` が入る。** conflict 側（＝更新）の
+      // `set` には含めないので、既存行の `created_at` は NULL でも保たれる。
+      .values({ slug: key, content: body, updatedAt: now, createdAt: now })
       .onConflictDoUpdate({
         target: memory.slug,
         set: {
@@ -173,7 +179,7 @@ export class PgPersonaStore implements PersonaStore {
             when right(${memory.content}, 1) = E'\n' then ${memory.content} || E'\n' || ${body}
             else ${memory.content} || E'\n\n' || ${body}
           end`,
-          updatedAt: new Date(),
+          updatedAt: now,
         },
       })
       .returning({

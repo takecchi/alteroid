@@ -66,15 +66,23 @@ export const memory = pgTable('memory', {
    */
   describedAt: timestamp('described_at', { withTimezone: true, mode: 'date' }),
   /**
-   * その slug の最初の `memory_update`（`action:'write'`）の時刻。**#173 が
-   * 置いた列の隣へ追記で足す**（同じ約束）。
+   * この slug が作られた時刻。**#173 が置いた列の隣へ追記で足す**（同じ約束）。
+   *
+   * **値が入る経路は2つ。** (1) 第一の出所は `persona.ts` の `write` /
+   * `append` 自身——`insert().values({ ..., createdAt: now })` で、新規作成
+   * （insert）のときだけ入る。`onConflictDoUpdate` の `set` にはこの列を
+   * 含めないので、更新（conflict）のときは既存の値がそのまま保たれる。
+   * (2) この配線より前に作られた行は `markCreatedAt`（デーモン起動時の
+   * backfill）が日誌の最初の `memory_update`（`action:'write'`）から埋める。
    *
    * **`humanTouchedAt` と完全に同じ形——素の nullable。**`unknown` という値を
-   * ここへ書き込まない。無いこと自体が「日誌に根拠が無い」を表す
+   * ここへ書き込まない。無いこと自体が「(1)(2) どちらの根拠も無い」を表す
    * （`@alteroid/core` の `memoryCreatedAtSchema` の doc）。
    *
    * **`humanTouchedAt` の単調非減少とも違う——一度きりの確定値。** `persona.ts`
-   * の `markCreatedAt` が「既に値が入っていれば何もしない」で冪等を保証する。
+   * の `markCreatedAt` が `isNull` を条件にした `UPDATE` で「既に値が入って
+   * いれば何もしない」を保証し、`write` / `append` は `onConflictDoUpdate` の
+   * `set` にこの列を含めないことで同じ約束を守る。
    */
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }),
 });
