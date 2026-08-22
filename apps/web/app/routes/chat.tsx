@@ -147,6 +147,43 @@ function ConversationList({
   );
 }
 
+/**
+ * 走っているストリーム1本ぶん。
+ *
+ * `opened` を持つのは**追送**（受信中に続けて打った発言）のためである。追送は
+ * 自分では購読を張らず、走っているこのストリームへ応答を流させるので、投函先の
+ * 会話 id が要る。新しい会話では id が `open` まで決まらないので、約束として持つ。
+ */
+interface Stream {
+  controller: AbortController;
+  /** このストリームが**どの会話のものか**。`open` で確定したらここも移す。 */
+  id: string | undefined;
+  /** 会話 id が確定したら解決する。確定しないまま終わったら reject する。 */
+  opened: Promise<string>;
+  settleOpen: (conversationId: string) => void;
+  failOpen: (reason: unknown) => void;
+}
+
+function createStream(controller: AbortController, id: string | undefined): Stream {
+  let settleOpen: (conversationId: string) => void = () => {};
+  let failOpen: (reason: unknown) => void = () => {};
+  const opened = new Promise<string>((resolve, reject) => {
+    settleOpen = resolve;
+    failOpen = reject;
+  });
+  /*
+   * **読み手が居なくても reject する約束なので、ここで受けておく。** 追送が
+   * 一度も無ければ `opened` を待つ者は居ないが、ストリームが `open` を見ないまま
+   * 終われば下の `failOpen` は呼ばれる。受け手の無い reject は unhandled rejection
+   * になり、テストでは実行そのものを落とす。
+   */
+  opened.catch(() => {});
+  const stream: Stream = { controller, id, opened, settleOpen, failOpen };
+  // 既存の会話なら id は最初から分かっている。追送を `open` まで待たせない。
+  if (id !== undefined) settleOpen(id);
+  return stream;
+}
+
 /** 会話1つ分の画面。**作り直しに弱いので**、回帰テストから直接組み立てられるようにしてある。 */
 export function ChatPane({
   routeId,
@@ -175,10 +212,8 @@ export function ChatPane({
   const [failure, setFailure] = useState<unknown>(undefined);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
-  /** 走っているストリームと、それが**どの会話のものか**。 */
-  const streamRef = useRef<{ controller: AbortController; id: string | undefined } | undefined>(
-    undefined,
-  );
+  /** 走っているストリーム。無ければ `undefined`。 */
+  const streamRef = useRef<Stream | undefined>(undefined);
   /**
    * いま見えている会話を、受信の途中からも読めるようにしたもの。
    *
@@ -303,21 +338,85 @@ export function ChatPane({
   // 画面を離れたら読むのをやめる（クローンのターンは止まらない。購読を外すだけ）。
   useEffect(() => () => streamRef.current?.controller.abort(), []);
 
+  /** 打った本文を画面へ積む。送信の入口が2つ（新規・追送）あるので1本にしてある。 */
+  const showOwnLine = useCallback((text: string) => {
+    setLines((previous) => [
+      ...previous,
+      { key: `h-${previous.length}-${text.slice(0, 8)}`, role: 'human', text },
+    ]);
+  }, []);
+
+  /**
+   * **受信中に続けて打った発言を、購読を張らずに投函だけする。**
+   *
+   * ここが無いと、人間は返事が返るまで次を打てない（入力欄を閉じるしかない）。
+   * だが**サーバは、順番待ちのあいだに積み上がった同じ会話の発言を1ターンに
+   * まとめて読む**（`packages/core/src/clone.ts` の `#mergedHumanBatch` /
+   * `humanTurnText`）。人間が Claude Code に立て続けに3行打ったときと同じ振る舞い
+   * がサーバ側には既にあり、**それを引き出せないのは画面の側の都合だけ**だった。
+   *
+   * **2本目の SSE を張らないのが要点である。** `POST /chat` は投函と購読が一体で、
+   * 購読は会話単位（`clone.subscribe`）なので、2本張ると同じ応答が両方に流れて
+   * 画面に二度出る。かといって走っている方を止めて張り替えると、止めてから
+   * 繋がるまでの隙間に届いた分を取りこぼす。**だから追送は `open` を見た時点で
+   * 接続を捨てる** — サーバは `open` を書く前に受信箱へ積んでいる（`app.ts` の
+   * `POST /chat`。この順序はあちらのコメントが理由ごと持っている）ので、
+   * `open` が届いた＝投函は済んだ、と言い切れる。応答は走っている方に流れてくる。
+   */
+  const followUp = useCallback(
+    async (text: string, running: Stream) => {
+      setFailure(undefined);
+      setDraft('');
+      showOwnLine(text);
+
+      try {
+        // 新しい会話は `open` まで id が決まらない。決まるまで待ってから投函する
+        // （id 無しで送ると、続きのつもりの発言が別の会話として立つ）。
+        const conversationId = await running.opened;
+        const controller = new AbortController();
+        try {
+          for await (const message of api.chat(
+            { text, conversationId },
+            {
+              signal: controller.signal,
+            },
+          )) {
+            if (message.event === 'open') break;
+          }
+        } finally {
+          // `break` でも generator は畳まれるが、本文の読み取りを確実に閉じる。
+          controller.abort();
+        }
+        recordOwnMessage(conversationId, text);
+      } catch (caught) {
+        setFailure(caught);
+      }
+    },
+    [api, recordOwnMessage, showOwnLine],
+  );
+
   const send = useCallback(
     async (text: string) => {
-      if (text.trim() === '' || sending) return;
+      if (text.trim() === '') return;
+
+      /*
+       * **走っているストリームがあるなら、張り替えずに投函だけする。**
+       * `sending` で弾いていた頃は、ここが「返事が返るまで次を打てない」の実体
+       * だった（`followUp` の doc に理由）。
+       */
+      const running = streamRef.current;
+      if (running !== undefined) {
+        await followUp(text, running);
+        return;
+      }
 
       const controller = new AbortController();
-      // このストリームが属する会話。`open` で確定したらここも移す。
-      const stream = { controller, id: shownId };
+      const stream = createStream(controller, shownId);
       streamRef.current = stream;
       setSending(true);
       setFailure(undefined);
       setDraft('');
-      setLines((previous) => [
-        ...previous,
-        { key: `h-${previous.length}-${text.slice(0, 8)}`, role: 'human', text },
-      ]);
+      showOwnLine(text);
 
       /**
        * このストリームの結果を、いま見えている画面へ書いてよいか。
@@ -409,6 +508,9 @@ export function ChatPane({
             // SSE の往復を待たずに動くよう、暫定値で先に反映しておく
             // （`useRecordOwnMessage` のコメントに詳細）。
             recordOwnMessage(message.data.conversationId, text);
+            // 追送（`followUp`）は投函先の id をここから受け取る。既に確定して
+            // いれば二度目は無視される（`Promise` の resolve は1回きり）。
+            stream.settleOpen(message.data.conversationId);
             continue;
           }
 
@@ -495,6 +597,10 @@ export function ChatPane({
       } catch (caught) {
         if (!controller.signal.aborted) setFailure(caught);
       } finally {
+        // `open` を一度も見ないまま終わったなら、追送は投函先を持てない。
+        // 待たせたままにすると、続けて打った発言が永久に返ってこない
+        // （既に確定していれば、この reject は無視される）。
+        stream.failOpen(new Error('会話が始まらないまま接続が終わったので、続きを送れなかった'));
         // 進行中の合図は、**まだこの会話を見ているなら必ず**畳む。人間が止めた
         // 場合も畳む対象である（止めた瞬間に「考えている…」で固まらせない）。
         // 見ていない＝別の会話へ移った場合だけ、向こうの内容を触らない。
@@ -509,7 +615,7 @@ export function ChatPane({
         }
       }
     },
-    [api, shownId, navigate, sending, recordOwnMessage],
+    [api, shownId, navigate, recordOwnMessage, showOwnLine, followUp],
   );
 
   return (
@@ -632,10 +738,14 @@ export function ChatPane({
         <ErrorNote error={failure} className="mb-2" />
         <div className="flex items-end gap-2">
           <div className="min-w-0 flex-1">
+            {/*
+              **受信中も打てる。** 塞ぐと、順番待ちのあいだに言い足したいことが
+              あっても待つしかなく、サーバ側にある「まとめて1ターンで読む」機構
+              （`followUp` の doc）へ一度も届かない。
+            */}
             <Textarea
               rows={2}
               value={draft}
-              disabled={sending}
               placeholder="クローンに話しかける（⌘/Ctrl + Enter で送信）"
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={(event) => {
@@ -646,7 +756,12 @@ export function ChatPane({
               }}
             />
           </div>
-          {sending ? (
+          {/*
+            **「受信をやめる」は「送る」の代わりではない。** 並べて出す —
+            受信中でも続けて送れるので、送る口を消してしまうと、追送するには
+            いったん受信を捨てるしかなくなる（捨てているあいだに届いた応答は画面に出ない）。
+          */}
+          {sending && (
             <Button
               variant="default"
               onClick={() => streamRef.current?.controller.abort()}
@@ -655,23 +770,20 @@ export function ChatPane({
               <Square className="size-3.5" aria-hidden />
               受信をやめる
             </Button>
-          ) : (
-            <Button
-              variant="primary"
-              disabled={draft.trim() === ''}
-              onClick={() => void send(draft)}
-            >
-              <Send className="size-3.5" aria-hidden />
-              送る
-            </Button>
           )}
+          <Button variant="primary" disabled={draft.trim() === ''} onClick={() => void send(draft)}>
+            <Send className="size-3.5" aria-hidden />
+            送る
+          </Button>
         </div>
         {/*
           進行中かどうかは、やりとりの中の「考えている…」と「受信をやめる」で
           既に見えている。ここに残すのは**他に書いてある場所が無い事実**だけ。
         */}
         {sending && (
-          <p className="mt-1.5 text-[11px] text-muted">画面を閉じてもクローンは考え続ける</p>
+          <p className="mt-1.5 text-[11px] text-muted">
+            画面を閉じてもクローンは考え続ける。順番待ちのあいだに続けて送った分は、まとめて1つの応答になる
+          </p>
         )}
       </div>
     </div>

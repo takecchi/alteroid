@@ -269,6 +269,40 @@ describe('HTTP API', () => {
     expect(fake.posted[0]).toMatchObject({ conversationId: 'conv-x' });
   });
 
+  /**
+   * **`open` が届いた時点で、発言はもう受信箱に在る。**
+   *
+   * Web UI の追送（受信中に続けて打った発言）は、2本目の購読を張らないために
+   * `open` を見た時点で接続を捨てる（`apps/web/app/routes/chat.tsx` の `followUp`）。
+   * その判断が成り立つのは、投函が `open` より前に済んでいるからである。
+   *
+   * **この試験は、いまの実装の2つの順序を見分けられない。** `await
+   * stream.writeSSE(open)` の直後に同期で `clone.post` を呼ぶ形（元の順序）でも、
+   * 読み手が `open` を受け取るころには post は済んでいるので通る（実測でも通った）。
+   * ここが捕まえるのは、**投函と `open` のあいだに本物の待ちが入る変更**である
+   * — 積むのを await の後ろへ動かした瞬間に落ちる。
+   */
+  it('/chat は `open` を書く前に受信箱へ積む（追送が open を投函の合図に使える）', async () => {
+    const response = await app.request('/chat', json({ text: 'やあ' }));
+    const body = response.body;
+    if (body === null) throw new Error('SSE の応答に本文が無い');
+
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let seen = '';
+    while (!seen.includes('event: open')) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      seen += decoder.decode(value, { stream: true });
+    }
+    // 読み終える前に見る。**全部読んでから見ると順序の情報が消える。**
+    expect(seen).toContain('event: open');
+    expect(fake.posted).toHaveLength(1);
+    expect(fake.posted[0]).toMatchObject({ type: 'human_message', text: 'やあ' });
+
+    await reader.cancel();
+  });
+
   it('/chat は空文字を拒む', async () => {
     expect((await app.request('/chat', json({ text: '' }))).status).toBe(400);
   });
