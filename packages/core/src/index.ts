@@ -54,6 +54,7 @@ export {
 export {
   classifyUsageNotice,
   describeUsageNotice,
+  mergeRateLimitFacts,
   rateLimitFactsSchema,
   toRateLimitFacts,
   usageLimitKindSchema,
