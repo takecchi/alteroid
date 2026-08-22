@@ -391,4 +391,44 @@ describe('/usage 画面のアカウント全体の残り', () => {
     // 台帳側は変わらず描けている（表示1枚のために画面全体を落とさない）。
     expect(screen.getByRole('heading', { name: '合計' })).toBeTruthy();
   });
+
+  /**
+   * **これは「はみ出しが直った」の試験ではない。**
+   *
+   * jsdom はレイアウトを持たないので（`offsetWidth` / `scrollWidth` /
+   * `getBoundingClientRect()` はどれも 0 を返す）、実際に折り返しているかは
+   * ここでは測れない。そもそも画面の試験は `root.tsx` を経由しないため、
+   * **実行中に Tailwind の CSS ルールは1つも存在しない。**
+   *
+   * だからここで固定できるのは「その指定が書かれていること」までである。
+   * 実機で崩れていないことは、見た人間しか言えない。
+   *
+   * それでも置くのは、`whitespace-pre` へ戻す変更を黙って通さないためである。
+   * 見た目の差は誰も測れないので、戻っても気づく契機が他に無い。
+   *
+   * **`toContain('whitespace-pre')` では見分けられない**（`whitespace-pre-wrap`
+   * にも当たる）。クラス名をトークンに割ってから見る。
+   */
+  it('行は折り返す指定で描かれる（whitespace-pre のままにしない）', async () => {
+    stubUsage({
+      rows: [row(1)],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+      account: null,
+    });
+
+    render(
+      <Providers>
+        <Usage />
+      </Providers>,
+    );
+
+    const line = await screen.findByText(/返さないデーモンに繋がっている/);
+    const tokens = line.className.split(/\s+/);
+    expect(tokens).toContain('whitespace-pre-wrap');
+    // 折り返さない指定が残っていないこと。
+    expect(tokens).not.toContain('whitespace-pre');
+    // 空白を持たない値（reason・ISO 文字列）の受け。
+    expect(tokens).toContain('break-words');
+  });
 });
