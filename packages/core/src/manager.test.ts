@@ -7,6 +7,7 @@ import type {
   PermissionResult,
   Query,
   SDKMessage,
+  SessionStoreEntry,
 } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -4155,5 +4156,111 @@ describe('宛先が名簿に開いていないときに返す言葉', () => {
     expect(result.detail).not.toContain('名簿');
 
     await s.pool.stop();
+  });
+});
+
+/**
+ * 生ログを引きに行って失敗したときの扱い（`ManagerPool#loadSession`）。
+ *
+ * **ここは `catch` で `null` を返していた。** 呼び出し側からは「預かっていない」
+ * と見分けが付かず、下流はそれを恒久の結論に変える —— `#resume` が材料無しで
+ * resume を投げ、runner が `resume_failed{recovered:false}` を返し、デーモンが
+ * `lost` を確定させて `#unresumable` へ積む。**記憶ストアが一瞬読めなかっただけで
+ * 委譲が終端する。**
+ *
+ * **書く側（`case 'mirror'`）は同じ区別を守っている**（`noteDroppedRecord`）。
+ * 読む側だけが破っていた。
+ *
+ * **2本を別々の `it()` で測る。** 片方だけだと逆向きの嘘（本当に預かっていない
+ * ものまで「読めなかった」に倒す計器）に気づけない。vitest は最初の失敗で止まるので、
+ * 同居させると後ろが一度も走らない。
+ */
+describe('生ログを読み出せなかったとき（「無い」と畳まない）', () => {
+  const job = {
+    id: 'mgr-unreadable',
+    managerId: 'mgr-unreadable',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T01:00:00.000Z',
+    status: 'running' as const,
+    summary: '移行作業',
+    request: 'DB の移行をやって',
+    cwd: '/work/project',
+    runnerId: 'runner-primary',
+    sessionId: 'sess-before-swap',
+    projectKey: 'proj-key',
+  };
+
+  /** `load` の振る舞いだけを差し替えたプールを組む。 */
+  async function poolWithSessionStore(load: () => Promise<SessionStoreEntry[] | null>) {
+    const stores = {
+      ...createMemoryStores(),
+      sessionStore: { append: async () => undefined, load },
+    };
+    await stores.jobs.putJob(job);
+    const fake = swappableRunner();
+    const inbox: InboxEvent[] = [];
+    const registry = createRunnerRegistry([fake.runner]);
+    const pool = createManagerPool({
+      stores,
+      post: (event: InboxEvent) => inbox.push(event),
+      runners: registry,
+      profile: createProfileService({ stores, runners: registry }),
+    });
+    return { pool, stores, fake, inbox, registry };
+  }
+
+  const statusOf = async (stores: Stores) =>
+    (await stores.jobs.listJobs()).find((j) => j.id === job.id)?.status;
+
+  it('引きに行って失敗したら、失敗として残す（跡を出し、材料無しで resume を投げず、恒久に落とさない）', async () => {
+    const s = await poolWithSessionStore(async () => {
+      throw new Error('記憶ストアがいま読めない');
+    });
+
+    let result: Awaited<ReturnType<ManagerPool['send']>> | undefined;
+    const lines = await captureStderr(async () => {
+      result = await s.pool.send(job.id, '続きをやって');
+    });
+
+    // ① 跡が残る。**書く側（noteDroppedRecord）と対になる。**
+    expect(lines.join('')).toContain('預かってある生ログを読み出せませんでした');
+
+    // ② 材料無しで resume を投げない。**これが lost を作っていた当のものである。**
+    expect(s.fake.state.resumes).toHaveLength(0);
+
+    // ③ 恒久に落とさない。台帳は走行中のまま（`lost` にしない）。
+    expect(await statusOf(s.stores)).toBe('running');
+
+    // ④ 返す言葉が「無い」と言わない。**起こし直せ、という誤った行動も指示しない。**
+    expect(result?.outcome).toBe('unknown');
+    expect(result?.detail).toContain('引きに行って失敗した');
+    expect(result?.detail).not.toContain('新しく起こし直すこと');
+
+    await s.pool.stop();
+    await s.registry.stop();
+  });
+
+  it('本当に預かっていないときは、いままでどおり resume を投げ、戻れなければ lost で終える', async () => {
+    // **逆向きに倒していないことの側。** 「読めなかった」を作った代わりに、
+    // 本当に材料が無い委譲まで走行中のまま放置すると、今度は誰も起こし直さない
+    // （`lost` は「起こし直す対象」として見分けるためにある。`schema.ts`）。
+    const s = await poolWithSessionStore(async () => null);
+
+    const lines = await captureStderr(async () => {
+      await s.pool.send(job.id, '続きをやって');
+    });
+
+    // 跡は出ない（読めている。材料が無いだけである）。
+    expect(lines.join('')).not.toContain('読み出せませんでした');
+    // resume は投げる（材料が無くても、SDK 側に会話が残っていれば戻れる）。
+    expect(s.fake.state.resumes).toHaveLength(1);
+    expect(s.fake.state.resumes[0]?.entries).toBeUndefined();
+
+    // runner が「戻れなかった」と答えたら、いままでどおり lost で終える。
+    s.fake.resumeFailed(job.id, 'sess-before-swap', 'SDK に会話が残っていない', false);
+    await expect.poll(() => statusOf(s.stores), { timeout: 2000 }).toBe('lost');
+
+    await s.pool.stop();
+    await s.registry.stop();
   });
 });

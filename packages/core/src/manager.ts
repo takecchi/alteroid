@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { journalEntryShape, noteDroppedRecord } from './dropped-record.js';
+import { journalEntryShape, noteDroppedRecord, noteUnreadableRecord } from './dropped-record.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap, type RecentMap } from './recent.js';
 import { describeRunnerEntries, isRetryableRunnerError } from './runner-protocol.js';
@@ -313,6 +313,46 @@ export function createManagerPool(options: ManagerPoolOptions): ManagerPool {
 const REATTACH_RETRY_BASE_MS = 1_000;
 const REATTACH_RETRY_MAX_MS = 30_000;
 
+/**
+ * 預かってある生ログを引いた結果。
+ *
+ * **`unknown[] | null` にしない。** `null` にすると「預かっていない」と
+ * 「読みに行って失敗した」が同じ値になり、呼び出し側は前者としてしか読めない。
+ * 実際にそうなっていて、**一時的に読めなかっただけの委譲が `lost` で終端し、
+ * クローンには「生ログも預かっていないので、続きの材料が無い」という存在の否定が
+ * 届いていた。**
+ *
+ * **書く側は既にこの区別を守っている。** `case 'mirror'` は `append` が失敗
+ * したとき `noteDroppedRecord` で跡を残す —「預かり損ねたことすら残らないと、
+ * 後から『無い』のか『預かれなかった』のかが分からない」。**読む側にだけそれが
+ * 無かった。**
+ */
+type SessionMaterial =
+  | { kind: 'loaded'; entries: unknown[] }
+  /** 預かっていない（store が無い / `projectKey` が無い / 引いたが空だった）。 */
+  | { kind: 'absent' }
+  /** **引きに行って失敗した。** 待てば直りうるので、恒久の結論に変えない。 */
+  | { kind: 'unreadable' };
+
+/**
+ * resume を投げた結果。
+ *
+ * **`boolean` にしない。** `false` は「戻る先が無い（`session_id` が無い）」の
+ * 意味で使われていて、`send()` はそれを「新しく起こし直すこと」と報告する。
+ * **読めなかっただけのときに同じ言葉を出すと、一時を恒久として報告したうえに、
+ * 誤った行動まで指示することになる**（起こし直せば、続きは失われる）。
+ * **呼ぶ側に区別させる** — 既定を持たせて省略させないのは `summaryOf` の
+ * `live` と同じ論法である。
+ */
+type ResumeOutcome =
+  | 'resumed'
+  /** 戻る先が無い（`session_id` を持っていない）。**恒久である。** */
+  | 'no-session'
+  /** 生ログを引きに行って失敗した。**恒久ではない。** */
+  | 'unreadable'
+  /** 別の契機が同じ session を取り直している最中。**恒久ではない。** */
+  | 'busy';
+
 /** デーモン側が持つ1マネージャーの像（正本は JobStore）。 */
 interface ManagerRecord {
   job: Job;
@@ -561,17 +601,11 @@ class Pool implements ManagerPool {
       // 器の入れ替えで取り直している最中に重ねない（同じ session を二本起こす）。
       // **「戻れない」とは別の理由なので、別のことを言う。**
       if (this.#resuming.has(managerId)) {
-        return {
-          outcome: 'unknown',
-          detail: `${managerId} は器の入れ替えから取り直している最中である。少し置いてから送り直すこと。`,
-        };
+        return { outcome: 'unknown', detail: resumeFailureDetail(managerId, 'busy') };
       }
       const resumed = await this.#resumeOnce(record, runner, message);
-      if (!resumed) {
-        return {
-          outcome: 'unknown',
-          detail: `${managerId} は session_id を持っておらず、続きへ戻れない。新しく起こし直すこと。`,
-        };
+      if (resumed !== 'resumed') {
+        return { outcome: 'unknown', detail: resumeFailureDetail(managerId, resumed) };
       }
     } else {
       await runner.send(managerId, message);
@@ -815,7 +849,7 @@ class Pool implements ManagerPool {
 
       const nudge = restartNudge(job.status, 'daemon');
       const ok = await this.#resumeOnce(record, runner, nudge);
-      if (!ok) continue;
+      if (ok !== 'resumed') continue;
       // **受理は「戻れた」ではない。** この `await` の間に「戻れなかった」が確定
       // していることがある（runner は別プロセスで、失敗は SSE で追いかけてくる）。
       // ここで無条件に上書きすると、書いたばかりの終端状態が `running` へ巻き戻る。
@@ -1149,7 +1183,17 @@ class Pool implements ManagerPool {
         // 並んでいた仕事が誰にも拾われないまま `running` として残る。
         try {
           const message = restartNudge(status, 'runner');
-          if (!(await this.#resumeOnce(record, runner, message))) continue;
+          const outcome = await this.#resumeOnce(record, runner, message);
+          // **引けなかっただけなら諦めない。** 予約して挑み直す（`retry` は runner
+          // 単位の予約であって、`#unresumable` のようにこのジョブを恒久に降ろす
+          // ものではない）。ここを `continue` だけで済ませると、次の名乗り
+          // （`hello`）まで誰もこの委譲を拾わない——`hello` は SSE が繋がった
+          // ときにしか来ないので、永久に来ないことがある。
+          if (outcome === 'unreadable') {
+            retry = true;
+            continue;
+          }
+          if (outcome !== 'resumed') continue;
           // 受理と「戻れた」を取り違えない（`restore` と同じ理由）。
           if (record.job.status === 'lost') continue;
           record.job.status = 'running';
@@ -1369,9 +1413,9 @@ class Pool implements ManagerPool {
     record: ManagerRecord,
     runner: RunnerClient,
     message: string | undefined,
-  ): Promise<boolean> {
+  ): Promise<ResumeOutcome> {
     const id = record.job.id;
-    if (this.#resuming.has(id)) return false;
+    if (this.#resuming.has(id)) return 'busy';
     this.#resuming.add(id);
     try {
       return await this.#resume(record, runner, message);
@@ -1384,13 +1428,21 @@ class Pool implements ManagerPool {
     record: ManagerRecord,
     runner: RunnerClient,
     message: string | undefined,
-  ): Promise<boolean> {
+  ): Promise<ResumeOutcome> {
     const { sessionId, cwd, request, projectKey } = record.job;
-    if (sessionId === undefined) return false;
+    if (sessionId === undefined) return 'no-session';
 
     // 生ログを渡して materialize させる。runner のディスクに残っている前提を
     // 置かない（器は作り直される）。
-    const entries = await this.#loadSession(projectKey, sessionId);
+    const material = await this.#loadSession(projectKey, sessionId);
+
+    // **引けなかったものを「無い」として先へ進めない。** 材料無しで resume を
+    // 投げると、runner は `renderSessionLog` が `null` を返す枝へ入り
+    // （`runner.ts` の `#recoverFromFailedResume`）、`resume_failed` の
+    // `recovered: false` が返ってくる。受けた側はそれを `lost` に確定させ
+    // `#unresumable` へ積む——**一時的に DB が読めなかっただけで、委譲が恒久に
+    // 終端する。** 引けなかったことは引けなかったこととして返す。
+    if (material.kind === 'unreadable') return 'unreadable';
 
     await runner.resume({
       managerId: record.job.id,
@@ -1398,28 +1450,53 @@ class Pool implements ManagerPool {
       cwd: cwd ?? runner.workspacePath,
       request: request ?? record.job.summary,
       ...(message === undefined ? {} : { message }),
-      ...(entries === null ? {} : { entries }),
+      ...(material.kind === 'loaded' ? { entries: material.entries } : {}),
     });
     record.attached = true;
     record.job.runnerId = runner.runnerId;
     // 戻れたなら諦めを忘れる（人間やクローンが起こし直した後も自動で拾える）。
     this.#unresumable.delete(record.job.id);
-    return true;
+    return 'resumed';
   }
 
-  async #loadSession(projectKey: string | undefined, sessionId: string): Promise<unknown[] | null> {
+  /**
+   * 預かってある生ログを引く。**「無い」と「読めなかった」を分けて返す。**
+   *
+   * ここは `catch` で `null` を返していた。呼び出し側から見ると預かっていない
+   * のと見分けが付かず、下流はそれを恒久の結論へ変える（`#resume` の doc）。
+   * **書く側（`case 'mirror'`）が守っている線を、読む側だけが破っていた。**
+   *
+   * **跡を残すのも書く側と揃える。** 黙って握り潰すのをやめるのではなく、
+   * stderr に1行だけ残す（`noteUnreadableRecord`）——読めなかったことが
+   * どこにも残らないと、後から「無い」のか「読めなかった」のかを誰も言えない。
+   * **本文は出さない**（`noteDroppedRecord` と同じ理由。#52）。
+   */
+  async #loadSession(projectKey: string | undefined, sessionId: string): Promise<SessionMaterial> {
     const store = this.#stores.sessionStore;
-    if (store === undefined || projectKey === undefined) return null;
+    if (store === undefined || projectKey === undefined) return { kind: 'absent' };
     try {
-      return await store.load({ projectKey, sessionId });
-    } catch {
-      return null;
+      const entries = await store.load({ projectKey, sessionId });
+      // **空と不在を分けない。** どちらも「渡せる材料が無い」であり、引けては
+      // いるので待っても変わらない。分けるのは「引けなかった」だけである。
+      if (entries === null || entries.length === 0) return { kind: 'absent' };
+      return { kind: 'loaded', entries };
+    } catch (error) {
+      noteUnreadableRecord(
+        '預かってある生ログ',
+        `projectKey=${projectKey} sessionId=${sessionId}`,
+        error,
+      );
+      return { kind: 'unreadable' };
     }
   }
 
   async #fromSessionStore(job: Job): Promise<string | null> {
-    const entries = await this.#loadSession(job.projectKey, job.sessionId ?? '');
-    if (entries === null || entries.length === 0) return null;
+    const material = await this.#loadSession(job.projectKey, job.sessionId ?? '');
+    // **読めなかった回に「記録が無い」と答えない。** ここは `transcript()` の
+    // 最後の砦で、`null` は呼び出し側で「見せるものが無い」になる。跡は
+    // `#loadSession` が stderr に残しているので、少なくとも後から区別できる。
+    if (material.kind !== 'loaded') return null;
+    const { entries } = material;
     // 生ログの形（1行1 JSON）のまま返す。読む側は runner 由来と区別しなくてよい。
     return `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`;
   }
@@ -2142,6 +2219,44 @@ function shouldEscalateDenial(count: number): boolean {
  * デーモンだけなら作業ディレクトリはそのまま残っている。runner ごとなら、
  * 器に永続化が無ければコミット前の変更は消えている。
  */
+/**
+ * resume が `'resumed'` にならなかったときに `manager_send` が返す1行。
+ *
+ * **種類ごとに違うことを言う。** ここは全部を「`session_id` を持っておらず、
+ * 続きへ戻れない。新しく起こし直すこと。」と言っていた——**引きに行って失敗した
+ * だけのときにもそう言っていた**ので、読んだ側は恒久の結論を持ち帰り、しかも
+ * 「起こし直せ」という誤った行動を指示されていた（起こし直せば続きは失われる）。
+ *
+ * **恒久と一時を混ぜない。** `no-session` だけが恒久で、`unreadable` と
+ * `busy` は待てば直りうる。この区別は `RunnerRegistry#select` の doc が
+ * 「呼んだ側の対応が変わるので必ず区別する」と書いているものと同じ形である。
+ *
+ * **言い方の持ち主を1つにする。** `send()` は `#resuming` を事前にも見るので、
+ * 同じ「取り直している最中」を2箇所で書くと、片方だけが直る形になる。
+ */
+function resumeFailureDetail(
+  managerId: string,
+  outcome: Exclude<ResumeOutcome, 'resumed'>,
+): string {
+  switch (outcome) {
+    case 'no-session':
+      return `${managerId} は session_id を持っておらず、続きへ戻れない。新しく起こし直すこと。`;
+    case 'unreadable':
+      return (
+        `${managerId} の続きに要る生ログを、いま読み出せなかった。` +
+        '預かっていないのではなく、引きに行って失敗した（跡はデーモンの stderr にある）。' +
+        '待てば直る種類の失敗なので、少し置いてから送り直すこと。' +
+        '起こし直すと続きは失われるので、ここで起こし直さないこと。'
+      );
+    case 'busy':
+      return `${managerId} は器の入れ替えから取り直している最中である。少し置いてから送り直すこと。`;
+    default: {
+      const exhaustive: never = outcome;
+      throw new Error(`未知の resume の結果: ${JSON.stringify(exhaustive)}`);
+    }
+  }
+}
+
 type RestartCause = 'daemon' | 'runner';
 
 /** 再起動後に流す一言。**開き直すだけでは仕事は進まない。** */
