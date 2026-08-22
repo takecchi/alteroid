@@ -774,8 +774,28 @@ class Pool implements ManagerPool {
       string,
       { runner: RunnerClient; state: Awaited<ReturnType<RunnerClient['list']>>[number] }
     >();
+    // **生死を聞けなかった器を覚えておく。** 応答が無いことを「セッションが無い」と
+    // 読むと、**生きている仕事を二重に起こす** — 下の `alive` に載らなかったジョブは
+    // `running` / `waiting_human` なら実際に resume されるので、実は走り続けていた
+    // マネージャーが2本になる（`gh pr create` のような取り返しのつかない操作が二度
+    // 走る。roadmap M5 が fencing を移送より先に置いている理由そのもの）。
+    //
+    // **同じ歯止めは `#reattach` に逐語で在る**（「聞けなかったときは何もしない。
+    // 応答が無いことを『セッションが無い』と読むと、生きている仕事を二重に起こす」）。
+    // 同じクラスの同じ危険に対して、片方にだけ置かれていた。
+    const unheard = new Set<string>();
     for (const runner of await this.#runners.list()) {
-      for (const state of await runner.list().catch(() => [])) {
+      const states = await runner.list().catch((error: unknown) => {
+        unheard.add(runner.runnerId);
+        // **黙って引き下がらない。** 聞けなかったことが跡に残らないと、後から
+        // 「セッションが無かった」のか「聞けなかった」のかを誰も言えない
+        // （`noteUnreadableRecord` の doc と同じ理由。読み出しの失敗を、無いことと
+        // 畳まないための跡である）。
+        noteUnreadableRecord('runner のセッション一覧', `runnerId=${runner.runnerId}`, error);
+        return null;
+      });
+      if (states === null) continue;
+      for (const state of states) {
         alive.set(state.managerId, { runner, state });
       }
     }
@@ -838,6 +858,16 @@ class Pool implements ManagerPool {
         resumed.push(summaryOf(record, isLive(record)));
         continue;
       }
+
+      // **聞けなかった器のジョブは、ここでは触らない。** 「`alive` に居ない」は
+      // 「セッションが無い」ではなく「**確かめられなかった**」である。宛先が
+      // 書かれていないジョブは、どの器に居たのかをこの情報だけでは決められない
+      // ので、聞けなかった器が1台でもあれば同じ扱いにする（安全側）。
+      //
+      // **`#records` へ載せる前に抜ける。** 載せずに帰れば、次の `restore()`
+      // （runner が開くたびに `takeOver` から呼ばれる）が `#records.has` で
+      // 弾かれずにもう一度拾い直す。**諦めではなく先送りである。**
+      if (unheard.size > 0 && (job.runnerId === undefined || unheard.has(job.runnerId))) continue;
 
       if (job.sessionId === undefined) continue;
 
