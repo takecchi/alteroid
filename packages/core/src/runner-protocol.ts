@@ -571,7 +571,28 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     /** `manager:<id>` / `worker:<id>:<agent>`。 */
     actor: z.string(),
     tool: z.string(),
-    input: z.unknown(),
+    /**
+     * **`.optional()` は冗長ではない。** `PostToolUse` フック（`runner.ts` の
+     * `#onPostToolUse`）が受け取る `hook.tool_input` は、SDK 側の事情で
+     * 無いことがある。無ければこの欄は `undefined` になり、`JSON.stringify`
+     * （HTTP でこのイベントを runner からデーモンへ渡す側）は値が `undefined`
+     * の欄をキーごと落とす — 境界の向こうでは `input` というキー自体が
+     * 存在しない。
+     *
+     * **zod 4 では `z.unknown()` はキーの不在を許さない**（zod 3 と違う点）。
+     * `input` を必須のままにすると、この形は `runnerEventSchema` の
+     * `safeParse` で落ち、`tool_use` イベントがまるごとデーモンに届かない
+     * （`permission_denied` の `input` で先に踏んだのと同じ形。Issue #223）。
+     *
+     * **2箇所同時でなければならない。** ここを緩めるだけだと、`undefined` の
+     * `input` が `manager.ts` の `case 'tool_use'` を素通りして日誌へ運ばれる。
+     * 日誌側の `schema.ts` の `tool_use` エントリも `input: z.unknown()` の
+     * ままだと、こちらは jsonb / JSON 行として直列化されるときに同じ理由で
+     * キーが落ち、読み出しの `safeParse` が失敗してその行が跡形もなく消える
+     * （Issue #224）。この境界（`schema.ts` 側）も同じ PR で `.optional()`
+     * にしてあるので、必須の欄へ `undefined` が届く経路はどこにも開いていない。
+     */
+    input: z.unknown().optional(),
   }),
   /**
    * 道具の実行が**確認へ上がらずにその場で止められた**（分類器・deny 規則）。

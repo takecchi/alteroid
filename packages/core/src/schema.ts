@@ -392,7 +392,34 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      */
     actor: z.string(),
     tool: z.string(),
-    input: z.unknown(),
+    /**
+     * **`.optional()` は冗長ではない。** この日誌エントリの `input` は
+     * `runner-protocol.ts` の `tool_use` イベント（`event.input`）をそのまま
+     * `manager.ts` の `case 'tool_use'` が運んでくる。その `input` は
+     * `undefined` でありうる（`runner.ts` の `#onPostToolUse` — SDK の
+     * `PostToolUse` フックに `tool_input` が無いことがある）。ここが必須の
+     * ままだと、境界を越えて許した `undefined` が今度はここで撥ねられる。
+     *
+     * **書き込み時の `parse`（`storage-fs` / `storage-pg` の `append`）は
+     * 通る。** 渡すオブジェクトは `input` というキーを値 `undefined` として
+     * 持っており、zod は「キーが在って値が `undefined`」を通す。**壊れるのは
+     * 読み出しである。** 日誌は jsonb（`storage-pg`）/ JSON 行
+     * （`storage-fs`）として直列化して保存する。`JSON.stringify` は値が
+     * `undefined` のキーを丸ごと落とすので、保存された実体には `input` と
+     * いうキー自体が無い。読み出し時に `journalEntrySchema.safeParse` へ
+     * それを通すと（`storage-fs/src/journal.ts` の `parseLine`、
+     * `storage-pg/src/journal.ts`）、**zod 4 は `z.unknown()` に対して
+     * キーの不在を許さない**（zod 3 と違う点）ので `invalid_type` として
+     * 落ち、**その日誌の行が跡形もなく消える**（読めないだけでなく
+     * `list()` の結果から丸ごと抜け落ちる。Issue #224）。
+     *
+     * **`runner-protocol.ts` 側の同名の欄と2箇所同時に緩めてある。** 片方
+     * だけだと、境界の反対側で必須のままの欄が `undefined` を撥ねるか、
+     * ここを通り抜けた `undefined` が直列化でキーごと消えて上と同じ形で
+     * 日誌の行を失う。**`.optional()` は受理する形を広げるだけで、
+     * `input` を持つ既存の形はそのまま通り続ける（保証は弱くならない）。**
+     */
+    input: z.unknown().optional(),
   }),
   z.object({
     type: z.literal('memory_update'),
