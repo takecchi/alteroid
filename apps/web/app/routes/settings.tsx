@@ -2,6 +2,7 @@ import { ConnectionCard } from '~/components/connection';
 import { Page } from '~/components/page';
 import { Badge, Button, Card, CardHeader, Empty, ErrorNote, Spinner } from '~/components/ui';
 import { useRunners } from '~/hooks/queries';
+import { formatDateTime } from '~/lib/format';
 import { useAuth } from '~/hooks/use-auth';
 
 export default function Settings() {
@@ -116,6 +117,24 @@ function Runners() {
                 <p className="mt-0.5 font-mono text-[11px] text-muted">{runner.label}</p>
               )}
               <p className="mt-0.5 font-mono text-[11px] text-muted">{runner.workspacePath}</p>
+              {/*
+                いまその宛先に応えているプロセス。**`runnerId` は器を作り直しても同じ**
+                なので、名前だけでは「さっき仕事を渡した相手と同じか」が分からない。
+                入れ替わっていれば、そこで走っていた委譲は失われている可能性がある。
+
+                **名乗らないことを黙らせない。** 出さないと、人間からは
+                「入れ替わっていない」と「判定できない」が同じに見える（クローンは
+                `runner_list` で同じものを見ている。片方だけが見える形を作らない）。
+              */}
+              <p className="mt-0.5 font-mono text-[11px] text-muted">
+                {runner.instanceId === undefined
+                  ? 'プロセス: 名乗っていない（入れ替わりを判定できない）'
+                  : `プロセス: ${runner.instanceId}${
+                      runner.instanceSince === undefined
+                        ? ''
+                        : `（${formatDateTime(runner.instanceSince)} から）`
+                    }`}
+              </p>
               {runner.error === undefined ? null : (
                 <p className="mt-1 text-[11px] text-danger">{runner.error}</p>
               )}

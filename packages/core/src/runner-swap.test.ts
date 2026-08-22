@@ -116,13 +116,24 @@ describe('器の入れ替えを見分ける', () => {
     const registry = createRunnerRegistry([], { onSwap: (event) => swaps.push(event) });
     await registry.register({ label: 'http://runner:4518', open: async () => runner });
 
-    // 1回目は覚えるだけ。**ここで知らせると、起きた直後に必ず1回出る。**
+    /*
+     * **開けた瞬間には叩かない。** いま応えているプロセスは `hello()` が既に読んだ
+     * 応答から採るので、往復は増えない（`#open` の doc / `RunnerClient.instanceId`）。
+     *
+     * **採った1回目では知らせない** — 初めて聞いた分は入れ替えではないので覚える
+     * だけである（ここで知らせると、起きた直後に必ず1回出る）。
+     */
+    expect(runner.probes).toBe(0);
+    expect(swaps).toEqual([]);
+
+    // ハートビートは**1周に1回だけ**叩く（生死と名乗りで2往復投げない）。
     await vi.advanceTimersByTimeAsync(10_000);
     expect(runner.probes).toBe(1);
     expect(swaps).toEqual([]);
 
     // 同じプロセスが応え続けている間は何も起きない。
     await vi.advanceTimersByTimeAsync(10_000);
+    expect(runner.probes).toBe(2);
     expect(swaps).toEqual([]);
 
     // 器が入れ替わった（新しいコンテナが同じ宛先に応え始めた）。
@@ -137,6 +148,35 @@ describe('器の入れ替えを見分ける', () => {
         after: 'boot-2',
       },
     ]);
+
+    await registry.stop();
+  });
+
+  /**
+   * **知らせは遷移で、名簿は状態である。** `onSwap` を見落とした後・デーモン自身が
+   * 再起動した後に「いまどのプロセスが応えているのか」を確かめる口が無いと、
+   * 引き取りの判定（`lease.ts`）が正しいかを誰も検算できない。
+   */
+  it('いま応えているプロセスと、それを初めて見た時刻が名簿の状態として出る', async () => {
+    const runner = new IdentifyingRunner('runner-a', 'boot-1');
+    const registry = createRunnerRegistry([]);
+    await registry.register({ label: 'http://runner:4518', open: async () => runner });
+
+    const opened = registry.entries()[0];
+    expect(opened?.instanceId).toBe('boot-1');
+    const firstSeen = opened?.instanceSince;
+    expect(firstSeen).toEqual(expect.any(String));
+
+    // **同じ相手なら「初めて見た時刻」は動かさない**（動かすと、入れ替わりの猶予が
+    // ハートビートごとに先送りされ、引き取れる時刻が永久に来ない）。
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(registry.entries()[0]?.instanceSince).toBe(firstSeen);
+
+    runner.instanceId = 'boot-2';
+    await vi.advanceTimersByTimeAsync(10_000);
+    const swapped = registry.entries()[0];
+    expect(swapped?.instanceId).toBe('boot-2');
+    expect(Date.parse(swapped?.instanceSince ?? '')).toBeGreaterThan(Date.parse(firstSeen ?? ''));
 
     await registry.stop();
   });
@@ -220,6 +260,7 @@ describe('器の入れ替えを見分ける', () => {
 
     await vi.advanceTimersByTimeAsync(30_000);
 
+    // ハートビート3周ぶん（開けるときは `hello()` の応答から採るので増えない）。
     expect(runner.probes).toBe(3);
     expect(swaps).toEqual([]);
 

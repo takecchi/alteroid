@@ -16,7 +16,7 @@ import type {
 import { createRunnerHost, type RunnerHost } from '@alteroid/core';
 import { createAdaptorServer } from '@hono/node-server';
 import type { ServerType } from '@hono/node-server';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
 
@@ -242,5 +242,157 @@ describe('制御面の境界', () => {
     // 2プロセスを器の中で走らせ、docs/architecture.md「制御面の保護」2枚目を
     // 直接見る）。
     expect(statSync(socketPath).mode & 0o777).toBe(0o600);
+  });
+});
+
+/**
+ * fencing（世代番号）と自己失効の HTTP 面（roadmap M5 PR4）。
+ *
+ * **実ソケットは要らない。** ここで見たいのは Hono のルーティング・ミドルウェアの
+ * 挙動（ステータスコード・`control` ミドルウェアが接触を記録するか）であって、
+ * OS のソケット層は上の `beforeEach` の分で既に確かめてある。`app.request()`
+ * （daemon 側の `auth.test.ts` などと同じ Hono のテスト用口）で直接叩く。
+ *
+ * 純粋な判定ロジック（世代の比較・自己失効の材料）は `packages/core/src/
+ * runner-fence.test.ts` が固定する。ここで固定するのは**この境界だけが持つ変換**
+ * ——`RunnerFenceError` → 409、`control` ミドルウェア → `noteDaemonContact()`。
+ */
+describe('世代（fencing token）と自己失効', () => {
+  const AUTH = { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' };
+
+  it('古い世代の resume は 409 になる（Hono の既定 500 に落とさない）', async () => {
+    const fake = fakeSdk();
+    const outbox = new Outbox();
+    const testHost = createRunnerHost({
+      runnerId: 'runner-primary',
+      workspacePath: '/work/project',
+      emit: (event) => outbox.push(event),
+      queryFn: fake.fn,
+      env: { PATH: process.env.PATH ?? '' },
+    });
+    const app = createRunnerApp({ host: testHost, outbox, tokenSha256: TOKEN_SHA256 });
+
+    const started = await app.request('/managers', {
+      method: 'POST',
+      headers: AUTH,
+      body: JSON.stringify({
+        managerId: 'mgr-1',
+        request: '調べて',
+        cwd: '/work/project',
+        lease: { fence: 5, ttlMs: 60_000 },
+      }),
+    });
+    expect(started.status).toBe(200);
+
+    const resumed = await app.request('/managers/mgr-1/resume', {
+      method: 'POST',
+      headers: AUTH,
+      body: JSON.stringify({
+        managerId: 'mgr-1',
+        sessionId: 'sess-old',
+        cwd: '/work/project',
+        request: '再開して',
+        lease: { fence: 3, ttlMs: 60_000 },
+      }),
+    });
+
+    expect(resumed.status).toBe(409);
+    expect(await resumed.json()).toMatchObject({ error: 'fenced', expected: 5, given: 3 });
+    // 拒まれた側は走り続けている（`runner-fence.test.ts` が中身を固定する）。
+    expect(testHost.list()).toHaveLength(1);
+
+    await testHost.shutdown().catch(() => undefined);
+  });
+
+  describe('自己失効の時計', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('`/livez`（無認証）を叩いても期限は延びない', async () => {
+      const fake = fakeSdk();
+      const outbox = new Outbox();
+      const testHost = createRunnerHost({
+        runnerId: 'runner-primary',
+        workspacePath: '/work/project',
+        emit: (event) => outbox.push(event),
+        queryFn: fake.fn,
+        env: { PATH: process.env.PATH ?? '' },
+        enforceLease: true,
+      });
+      const app = createRunnerApp({ host: testHost, outbox, tokenSha256: TOKEN_SHA256 });
+
+      await app.request('/managers', {
+        method: 'POST',
+        headers: AUTH,
+        body: JSON.stringify({
+          managerId: 'mgr-1',
+          request: '調べて',
+          cwd: '/work/project',
+          lease: { fence: 1, ttlMs: 20_000 },
+        }),
+      });
+
+      // 見張りの1周目（10秒）。まだ期限（20秒）には届かない。
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(testHost.list()).toHaveLength(1);
+
+      // 無認証の `/livez` を何度叩いても、貸し出し期限の時計は進まない
+      // （進んでしまうと、誰でも期限を延ばせることになる）。
+      await app.request('/livez');
+      await app.request('/livez');
+
+      // 見張りの2周目（合計20秒）。`/livez` は効いていないので期限切れになる。
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(testHost.list()).toHaveLength(0);
+
+      await testHost.shutdown().catch(() => undefined);
+    });
+
+    it('認証済みの制御面の呼び（`GET /health`）は接触として記録され、期限を延ばす', async () => {
+      const fake = fakeSdk();
+      const outbox = new Outbox();
+      const testHost = createRunnerHost({
+        runnerId: 'runner-primary',
+        workspacePath: '/work/project',
+        emit: (event) => outbox.push(event),
+        queryFn: fake.fn,
+        env: { PATH: process.env.PATH ?? '' },
+        enforceLease: true,
+      });
+      const app = createRunnerApp({ host: testHost, outbox, tokenSha256: TOKEN_SHA256 });
+
+      await app.request('/managers', {
+        method: 'POST',
+        headers: AUTH,
+        body: JSON.stringify({
+          managerId: 'mgr-1',
+          request: '調べて',
+          cwd: '/work/project',
+          lease: { fence: 1, ttlMs: 20_000 },
+        }),
+      });
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(testHost.list()).toHaveLength(1);
+
+      // 認証済みの呼び。**これで接触の時計が進む。**
+      const health = await app.request('/health', { headers: AUTH });
+      expect(health.status).toBe(200);
+
+      // 起動時点からは20秒を過ぎるが、接触からはまだ10秒。畳まれない。
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(testHost.list()).toHaveLength(1);
+
+      // 接触から20秒経った。ここで期限が切れる。
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(testHost.list()).toHaveLength(0);
+
+      await testHost.shutdown().catch(() => undefined);
+    });
   });
 });

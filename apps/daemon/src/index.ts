@@ -336,6 +336,14 @@ export async function main(): Promise<void> {
   let announce = (text: string): void => {
     process.stderr.write(`alteroidd: ${text}\n`);
   };
+  /**
+   * 器の入れ替えを見たときに引き取りを起こす口。**宛先は後から差し替える。**
+   *
+   * `announce` と同じ形にしてある（クローンが立ち上がるより先に名簿が動きうる）。
+   * 直に `takeOver` を呼ぶ形にすると、まだ初期化されていない `const` を触る経路が
+   * 残る — 起きるのは稀な順序のときだけなので、**起きたときにしか分からない**。
+   */
+  let takeOverOnSwap: (runnerId?: string) => void = () => {};
   const runners = createRunnerRegistry([], {
     notify: ({ label, error }) => {
       announce(
@@ -364,22 +372,38 @@ export async function main(): Promise<void> {
      * **黙って入れ替わっていた**（roadmap 受け入れ基準6 の「一度開いた宛先が黙って
      * 入れ替わった場合」）。
      *
-     * **ここでも引き取りはしない。** 入れ替わったことが見えても「古いプロセスが
-     * もう動いていない」ことの証明にはならない（経路だけが分かれていれば、古い側は
-     * 別のところで走り続けている）。だから知らせるところまでが今の責任である。
+     * **ここを引き取りの契機にする（roadmap 受け入れ基準6）。**
+     *
+     * 以前は知らせるだけだった。「入れ替わったことが見える」と「古いプロセスがもう
+     * 動いていない」は別で、後者を言う材料が無かったからである。いまは貸し出し期限
+     * （`packages/core/src/lease.ts`）がその材料を持つので、**引き取りそのものを
+     * ここから起こしてよい** — 奪ってよいかの判定は `ManagerPool` の関門
+     * （`#claimForResume`）が持っていて、まだ持ち主が握っている委譲は**この呼びでは
+     * 起こされずに挑み直しの梯子へ載る。**
+     *
+     * つまりここが約束するのは「引き取りを試みる」までで、「引き取れた」ではない。
+     * **その線を知らせの文言でも崩さないこと。**
+     *
+     * **起こす口は2つあり、どちらか片方では足りない。**
+     *
+     * - `reattachRunner(runnerId)` — 走行中だった委譲（デーモンの像に載っている分）。
+     *   **入れ替えで拾いたいのは主にこちらである**
+     * - `takeOver()`（`restore()`） — 台帳にしか無い委譲。像に載っている分はあちらの
+     *   先頭で見送られるので、**`restore()` だけに繋いだ版は1本も拾えなかった**
      *
      * **知らせる相手は人間とクローンの両方。** 入れ替わった器の中で走っていた
-     * マネージャーは消えているので、クローンが `manager_list` を見て起こし直す
-     * 判断ができる。ログだけに出すと、その判断材料がクローンへ届かない。
+     * マネージャーは消えている可能性があるので、クローンが `manager_list` を見て
+     * 判断できるようにする。ログだけに出すと、その判断材料がクローンへ届かない。
      */
     onSwap: ({ label, runnerId, before, after }) => {
       announce(
         `runner (${label}${runnerId === undefined ? '' : ` / ${runnerId}`}) に` +
           `別のプロセスが応え始めました（器の入れ替え）。` +
-          `そこで走っていた委譲は失われている可能性があります` +
-          `（引き取りはまだ行いません。manager_list で状態を確かめてください）: ` +
+          `そこで走っていた委譲の引き取りを試みます` +
+          `（貸し出し期限が切れていない委譲は、切れてから自動で引き取ります）: ` +
           `${before} → ${after}`,
       );
+      takeOverOnSwap(runnerId);
     },
   });
   const runnerDescription = describeRunner();
@@ -600,6 +624,25 @@ export async function main(): Promise<void> {
     }
   };
   runners.subscribe(() => void takeOver());
+  /*
+   * 器の入れ替えも契機にする（`onSwap`）。**2つとも起こす** — 走行中だった委譲は
+   * `reattachRunner`、台帳にしか無い委譲は `restore()` が拾う（片方だけでは片側が
+   * 落ちる。`onSwap` の doc）。
+   *
+   * **同時に2本走らないことは `ManagerPool` 側が見ている**（`restore()` は列に並べ、
+   * 取り直しは runner ごとに1本＋予約に畳む）。こちらで数を絞ると、絞った回に現れた
+   * 委譲が拾われない。
+   */
+  takeOverOnSwap = (runnerId) => {
+    if (runnerId !== undefined) {
+      void clone.managers.reattachRunner(runnerId).catch((error: unknown) => {
+        process.stderr.write(
+          `alteroidd: 入れ替わった runner (${runnerId}) の取り直しに失敗しました: ${String(error)}\n`,
+        );
+      });
+    }
+    void takeOver();
+  };
 
   // 画面（apps/web）を別オリジンに置く配置のための境界設定。既定は空＝今まで通り
   // CORS ヘッダを返さない。捨てた値は黙って飲み込まない（許可したつもりとの差が

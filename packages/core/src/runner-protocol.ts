@@ -52,11 +52,33 @@ export type RunnerManagerState = z.infer<typeof runnerManagerStateSchema>;
 // デーモン → runner（命令）
 // ---------------------------------------------------------------------------
 
+/**
+ * 貸し出し期限（lease）の世代番号（fencing token）と、貸し出し先が自分で畳むまでの
+ * 猶予（roadmap M5 PR4）。**任意である。**
+ *
+ * **省略できる。** 名乗らない（＝この口を知らない）古いデーモンとも繋がるため —
+ * 無ければ runner は今までどおり動く（`packages/core/src/runner-local.ts` のような、
+ * lease を一切知らない既存の呼び出しを1つも壊さない）。
+ *
+ * runner（`runner.ts` の `Host`）はセッションごとに最後に受け取った `fence` を覚え、
+ * それより古い世代の命令を拒む（`RunnerFenceError`）。`ttlMs` は自己失効
+ * （`RunnerHostOptions.enforceLease`）が使う — デーモンと連絡が取れないまま
+ * この猶予を過ぎたら、runner は自分でこのセッションを畳む。
+ */
+export const runnerLeaseSchema = z.object({
+  fence: z.number().int().nonnegative(),
+  ttlMs: z.number().int().positive(),
+});
+
+export type RunnerLease = z.infer<typeof runnerLeaseSchema>;
+
 export const runnerStartCommandSchema = z.object({
   managerId: z.string().min(1),
   request: z.string().min(1),
   /** 実プロジェクトの作業ディレクトリ（runner から見たパス）。 */
   cwd: z.string().min(1),
+  /** **新しいセッションなので、runner は世代を覚えるだけ**（拒む判定はしない）。 */
+  lease: runnerLeaseSchema.optional(),
 });
 
 export type RunnerStartCommand = z.infer<typeof runnerStartCommandSchema>;
@@ -76,10 +98,28 @@ export const runnerResumeCommandSchema = z.object({
   /** resume 直後に流す一言。省略すると開くだけで手は動かない。 */
   message: z.string().optional(),
   entries: z.array(z.unknown()).optional(),
+  /**
+   * **ここが fencing の主戦場である。** 走っているセッションへ resume が来たとき
+   * （器の入れ替え後、旧い器から遅れて届いた命令など）、runner は覚えている世代と
+   * 比べる。古ければ `RunnerFenceError` を投げて**このセッションには一切触れない**。
+   */
+  lease: runnerLeaseSchema.optional(),
 });
 
 export type RunnerResumeCommand = z.infer<typeof runnerResumeCommandSchema>;
 
+/**
+ * **`lease` を持たせない。** これは既に開いている（＝ `start` / `resume` を通って
+ * 世代の検査を済ませた）セッションへ届く命令であって、世代を新しく主張する側では
+ * ない。世代で締め出されたプロセスのセッションは、そのプロセス自身が自己失効
+ * （`RunnerHostOptions.enforceLease`）で畳むので、この口に世代の検査を重ねる
+ * 必要が無い。
+ *
+ * 検査の口を `start` / `resume` の2つに絞ることで、`RunnerClient.send` / `answer`
+ * の署名（`(managerId, text)` / `(managerId, answer)`）を変えずに済む —
+ * 命令の意味が変わらないところに新しい任意フィールドを増やさない、というだけの
+ * 選択である。
+ */
 export const runnerMessageCommandSchema = z.object({ text: z.string().min(1) });
 
 /**
@@ -228,6 +268,11 @@ export const runnerPlacementResourcesSchema = runnerExecutionResourcesSchema.ext
 
 export type RunnerPlacementResources = z.infer<typeof runnerPlacementResourcesSchema>;
 
+/**
+ * **`lease` を持たせない。** `runnerMessageCommandSchema` と同じ理由（あのコメントを
+ * 参照）——確認の返事は既に開いているセッション宛の命令であって、世代を新しく
+ * 主張する側ではない。
+ */
 export const runnerAnswerCommandSchema = z.object({
   requestId: z.string().min(1),
   message: z.string(),
@@ -595,6 +640,33 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     managerId: z.string(),
     status: jobStatusSchema,
     reason: z.string(),
+    /**
+     * **貸し出し期限の自己失効（roadmap M5 PR4）で畳まれたことの構造化された印。
+     * 文言では判定しない。**
+     *
+     * `reason` は人間が読む一文（「デーモンと連絡が取れないので貸し出し期限が
+     * 切れた（自己失効）。」を必ず含む）だが、そこへの文字列一致で判定させると、
+     * マネージャーが偶然同じ文言を報告に書いた回まで巻き込む——`report` の
+     * `failure` / `contentless` が「検知は構造化された印だけで行う」としている
+     * のと同じ作法（`sdk-failure.ts` の doc）。
+     *
+     * **`status` はそれでも `lost` のままである。** `lost`（戻れないと確定した）
+     * は runner から見た事実として正しい——このプロセスではもう続けられない。
+     * ただし自己失効は「持ち主を失った」わけではなく、生ログさえあれば**別の
+     * 器から続けられる**。台帳側（`manager.ts`）がこの印を見て、`status` を
+     * 動かさずに貸し出し（`lease`）だけ返し、引き取り直せるようにする——
+     * `lost` かつ `selfFenced` が立たない回（resume 不能で `#recoverFromFailedResume`
+     * が `unresumable` を返した回）とはここで区別できる。
+     *
+     * **`z.literal(true).optional()` にしてあるのは、無いことを「自己失効では
+     * ない」の既定値にするため。** 既存の `closed` イベント（このフィールドを
+     * 送らない runner）を1つも壊さない。
+     *
+     * 立つのは `RunnerSession#selfFence` を通った1経路だけである。**`stop()`
+     * （デーモンからの明示停止・器の `shutdown()`）や、resume 不能で `#finish`
+     * へ落ちる経路には立たない**（`runner-fence.test.ts` が固定する）。
+     */
+    selfFenced: z.literal(true).optional(),
   }),
   /**
    * 前のセッションを開き直せなかった。
@@ -645,6 +717,40 @@ export class RunnerHttpError extends Error {
 }
 
 /**
+ * `start` / `resume` の `lease.fence` が、runner（`runner.ts` の `Host`）が
+ * セッションごとに覚えている世代より古かった（roadmap M5 PR4 の fencing）。
+ *
+ * **投げた側（`Host#resume` / `Host#start`）はこのセッションに一切触れない。**
+ * 遅れて届いた古い世代の命令はここで止め、走っているセッションの状態
+ * （入力・確認待ち・生ログ）は1文字も変えない。`expected` / `given` を持たせるのは、
+ * デーモン側が「なぜ拒まれたか」を人間へそのまま出せるようにするためである。
+ *
+ * `apps/runner/src/app.ts` はこれを **409** で返す。**500 にしないこと** —
+ * `isRetryableRunnerError` は 5xx を「待てば直る」に分類するので、500 のままだと
+ * 古い世代の命令が新しい命令へ置き換わらずに延々と挑み直される。409 は
+ * 「同じものを投げ直しても同じ答えが返る」側（4xx）として読める。
+ */
+export class RunnerFenceError extends Error {
+  readonly managerId: string;
+  /** runner がいま覚えている世代。 */
+  readonly expected: number;
+  /** 命令に載っていた世代。`expected` より古い。 */
+  readonly given: number;
+
+  constructor(input: { managerId: string; expected: number; given: number }) {
+    super(
+      `manager_id=${input.managerId} の命令が古い世代を名乗っている` +
+        `（runner が覚えている世代=${input.expected}, 受け取った世代=${input.given}）。` +
+        'このセッションには一切触れていない。',
+    );
+    this.name = 'RunnerFenceError';
+    this.managerId = input.managerId;
+    this.expected = input.expected;
+    this.given = input.given;
+  }
+}
+
+/**
  * もう一度投げてよい失敗か。
  *
  * **status が分からない失敗は「待てば直る」側に寄せる。** 経路が切れた
@@ -654,6 +760,22 @@ export class RunnerHttpError extends Error {
  * 逆に 4xx は runner が「その命令は受け取れない」と答えているので、同じものを
  * 投げ直しても同じ答えが返る（混雑を表す 408 / 429 だけは別）。
  */
+/**
+ * **世代で拒まれた**（runner が「その命令はもっと古い世代のものだ」と答えた）。
+ *
+ * デーモン側から見ると `RunnerHttpError` の 409 として届く（runner 側の
+ * `RunnerFenceError` は器の中の型なので、HTTP を跨いだ先には状態番号しか残らない）。
+ *
+ * **これを「戻せなかった」と同じ扱いにしないこと。** 409 が返るのは、その委譲を
+ * **自分より新しい世代の誰かが握っている**ときである — つまりそのセッションは
+ * 生きていて、誰かが動かしている。ここで台帳を `lost` にして像から外すと、
+ * 「戻せなかった」と読んだクローンが**新しく起こし直して二重実行になる**
+ * （fencing が防ごうとしているものそのものへ、fencing の失敗経路から到達する）。
+ */
+export function isFencedRunnerError(error: unknown): boolean {
+  return error instanceof RunnerHttpError && error.status === 409;
+}
+
 export function isRetryableRunnerError(error: unknown): boolean {
   if (!(error instanceof RunnerHttpError)) return true;
   if (error.status === 408 || error.status === 429) return true;
@@ -693,6 +815,24 @@ export interface RunnerClient {
    * 実装していなければ `unheard` のまま）に委ねる。
    */
   readonly revision?: RunnerRevisionReport;
+  /**
+   * **いまこの宛先に応えているプロセス**（同じ `hello()` の応答に載っている
+   * `instanceId`。roadmap M5 PR4）。
+   *
+   * `revision` と**まったく同じ作法**である — 接続した瞬間に一度だけ読む値で、
+   * 新しい口も新しい呼び出しも増やしていない（`hello()` が既に読んでいる応答から
+   * 拾うだけ）。heartbeat での更新は `identity()` の役目である。
+   *
+   * **これが接続の瞬間に要る理由。** `#open()` の直後に走るのはデーモンの引き取り
+   * （`takeOver` / `reattachRunner`）で、そこでは貸し出し期限の判定（`lease.ts`）が
+   * この値を材料にする。heartbeat の1周（最大 `HEARTBEAT_INTERVAL_MS`）を待つと、
+   * **開け直しのたびに「判定材料が無い」状態で引き取りが走る窓**ができる — それは
+   * 生きている器の仕事を奪いうる側である。
+   *
+   * **省略できる。** 名乗らない実装（`LocalRunner`）・古い runner では無い。無いことを
+   * 「入れ替わっていない」と読まないこと（`judgeLease` は `undecidable` へ倒れる）。
+   */
+  readonly instanceId?: string;
   /** イベントの受け取りを始める。**接続を張るのはデーモン側**である。 */
   connect(onEvent: (event: RunnerEvent) => void): Promise<void>;
   /**
@@ -908,11 +1048,36 @@ export interface RunnerEntry {
   /** この状態になった時刻。 */
   since: string;
   /**
+   * **いまこの宛先に応えているプロセス**（`identity()` が返す `instanceId`）。
+   *
+   * `runnerId` が「どの宛先か」で、こちらは「その宛先のどのプロセスか」である。
+   * **名乗らない runner では無い**（`identity()` を持たない実装・古い器）。無いことを
+   * 「入れ替わっていない」と読まないこと。
+   *
+   * ## 遷移だけでなく状態としても出す理由
+   *
+   * 入れ替わった瞬間は `onSwap` で知らせている（#115）が、それは**遷移の知らせ**で
+   * あって、後から「いまどのプロセスが応えているのか」を確かめる口ではなかった。
+   * 知らせを見落とした後、あるいはデーモン自身が再起動した後は、誰も検算できない。
+   * 引き取りの可否（`lease.ts`）はこの値と次の `instanceSince` を材料にするので、
+   * **判定に使う値が人間からも見えていないと、判定が正しいかを誰も確かめられない。**
+   */
+  instanceId?: string;
+  /**
+   * **そのプロセスを最初に見た時刻。** 入れ替わるたびに更新される。
+   *
+   * 「入れ替えを観測した時刻」ではなく「いまの相手を初めて見た時刻」である。
+   * デーモンが再起動した直後は入れ替えの瞬間を知らないので、**自分が初めて見た
+   * 時刻から数える**（知らない時刻を過去に見積もると、まだ畳まれていない器の仕事を
+   * 奪いに行く。`lease.ts` の `LEASE_DRAIN_MS` の項）。
+   */
+  instanceSince?: string;
+  /**
    * runner が名乗った版（roadmap M5 相当。「自分がどのコミットで走っているか」）。
    *
    * **常に3値のどれかで、省略されない。** 一度も名乗りを聞けていない間は
    * `{ status: 'unheard' }` のままで、`unknown`（訊けたが runner が知らない）
-   * とは区別される。`instanceId` と同じく `identity()` の heartbeat で更新する。
+   * とは区別される。上の `instanceId` と同じく `identity()` の heartbeat で更新する。
    * **`state` が `'lost'` でも古い値が残ることがある**（`RunnerRevisionStatus`
    * の doc）。
    */
@@ -1177,6 +1342,15 @@ interface RegistryEntry {
    */
   instanceId?: string;
   /**
+   * `instanceId` を**初めて見た時刻**（入れ替わるたびに置き直す）。
+   *
+   * 引き取りの可否がこの時刻から猶予を数える（`lease.ts`）。**入れ替えの瞬間では
+   * なく「自分が初めて見た時刻」である**ことが要点で、デーモンが再起動した直後は
+   * 入れ替えの瞬間を知らないから、知らないものを過去に見積もらないためにこの形に
+   * してある。
+   */
+  instanceSince?: string;
+  /**
    * 最後に聞けた版の状態（`RunnerEntry.revision` と同じ形）。
    *
    * **`instanceId` と違って「前回との比較」はしない。** 版の入れ替え自体は
@@ -1292,6 +1466,11 @@ class Registry implements RunnerRegistry {
         ? {}
         : { runnerId: entry.client.runnerId, workspacePath: entry.client.workspacePath }),
       ...(entry.error === undefined ? {} : { error: entry.error }),
+      // **開けていなくても、最後に名乗ったプロセスは出す。** 黙った器について
+      // 「どのプロセスが最後に応えていたか」は、戻ってきたときに同じ器かを
+      // 突き合わせる材料である（消すと、黙っている間だけ判定材料が消える）。
+      ...(entry.instanceId === undefined ? {} : { instanceId: entry.instanceId }),
+      ...(entry.instanceSince === undefined ? {} : { instanceSince: entry.instanceSince }),
     }));
   }
 
@@ -1556,17 +1735,30 @@ class Registry implements RunnerRegistry {
         // 「30秒黙っていた」ことにされる。
         entry.lastSeen = Date.now();
         entry.alive = true;
-        // **`hello()` で既に読んでいた版を、ここで採る。** 新しい呼び出しは
-        // 増やさない——identity() の heartbeat（最大 `HEARTBEAT_INTERVAL_MS`
-        // 後）を待たずに、繋がった瞬間から版が分かる runner はそう見える
-        // （`RunnerRevisionStatus` の doc「2. state: connected でも unheard
-        // のことがある」の窓を、報告できる runner については塞ぐ）。
-        // 省略している runner（`LocalRunner` 等）は `client.revision` が
-        // `undefined` なので、ここでは触らず `register()` / `adopt()` の
-        // 初期値（`unheard`）のまま残る。
-        if (client.revision !== undefined) {
-          entry.revision = client.revision;
-        }
+        /*
+         * **`hello()` で既に読んでいた名乗りを、ここで採る（新しい呼び出しは増やさない）。**
+         *
+         * 拾うのは2つで、どちらも同じ応答（`GET /health`）に載っている。
+         *
+         * - **版**（`revision`）— identity() の heartbeat（最大
+         *   `HEARTBEAT_INTERVAL_MS` 後）を待たずに、繋がった瞬間から版が分かる
+         *   runner はそう見える（`RunnerRevisionStatus` の doc「2. state:
+         *   connected でも unheard のことがある」の窓を、報告できる runner に
+         *   ついては塞ぐ）
+         * - **いま応えているプロセス**（`instanceId`。roadmap M5 PR4）— 直後の
+         *   `#subscribers` はデーモンの引き取りで、そこでは貸し出し期限の判定
+         *   （`lease.ts`）がこの値を材料にする。heartbeat の1周を待つと、
+         *   **開け直しのたびに「判定材料が無い」状態で引き取りが走る窓**ができる
+         *   — それは生きている器の仕事を奪いうる側である
+         *
+         * **省略している runner（`LocalRunner` 等）では両方 `undefined`** なので、
+         * ここでは何も触らず初期値（版は `unheard`、プロセスは無し）のまま残る。
+         * 無いことを「変わっていない」と読まないこと。
+         */
+        this.#noteInstance(entry, entry.lastSeen, {
+          ...(client.instanceId === undefined ? {} : { instanceId: client.instanceId }),
+          ...(client.revision === undefined ? {} : { revision: client.revision }),
+        });
         for (const subscriber of this.#subscribers) subscriber(client);
         for (const waiter of this.#waiting) waiter.resolve(client);
         this.#waiting.clear();
@@ -1710,33 +1902,9 @@ class Registry implements RunnerRegistry {
     identity?: { runnerId?: string; instanceId?: string; revision?: RunnerRevisionReport },
   ): void {
     entry.lastSeen = at;
-
-    // **`identity.revision` があれば、その値をそのまま覚える。** `instanceId` と
-    // 違って前回との比較はしない — 版の入れ替え自体は `instanceId` の変化で既に
-    // 検出できているので、ここは最後に聞けた値を持つだけでよい。`identity` 自体が
-    // 無い（`identity()` を持たない runner／`ping` だけの旧来経路）ときは触らず、
-    // `{ status: 'unheard' }` のままにする——「訊けたが分からない」（`unknown`）
-    // と混同しない。
-    if (identity?.revision !== undefined) {
-      entry.revision = identity.revision;
-    }
-
-    const instanceId = identity?.instanceId;
-    if (instanceId !== undefined && instanceId.length > 0) {
-      const before = entry.instanceId;
-      // **初めて聞いた分は入れ替えではない。** 覚えるだけ（覚える前に知らせると、
-      // デーモンが起きた直後に必ず1回「入れ替わった」が出る）。
-      entry.instanceId = instanceId;
-      if (before !== undefined && before !== instanceId) {
-        this.#onSwap?.({
-          label: entry.source.label,
-          // **書き換えていない値をそのまま渡す。** 台帳の鎖はこの名前で繋がっている。
-          ...(entry.client === null ? {} : { runnerId: entry.client.runnerId }),
-          before,
-          after: instanceId,
-        });
-      }
-    }
+    // 名乗りの中身（いま応えているプロセスと、その版）を覚えるのは1本に寄せてある
+    // （開けた瞬間の探りと、この heartbeat の両方から同じ判定を通すため）。
+    this.#noteInstance(entry, at, identity);
     if (entry.alive) {
       // 一時的にこけていただけの失敗は、返ってきた時点で窓から下ろす。
       delete entry.error;
@@ -1749,6 +1917,59 @@ class Registry implements RunnerRegistry {
     // 戻ってきた1台は、いま待っている `select` の宛先になれる。
     for (const waiter of this.#waiting) waiter.resolve(client);
     this.#waiting.clear();
+  }
+
+  /**
+   * 名乗りの中身から「**いまその名前に応えているプロセス**」を覚える。
+   *
+   * **採るのは `instanceId` だけで、`runnerId` は絶対に採らない。** 採れば台帳の鎖
+   * （`manager_id → runner_id`）が音もなく繋ぎ変わる（`RunnerClient.ping` の項）。
+   *
+   * 開けた直後（`#open`）とハートビート（`#markSeen`）の両方から呼ぶ。**同じ判定を
+   * 2箇所に書かないための1本**であって、呼ばれる契機の違いは覚える時刻にしか出ない。
+   */
+  #noteInstance(
+    entry: RegistryEntry,
+    at: number,
+    identity:
+      { runnerId?: string; instanceId?: string; revision?: RunnerRevisionReport } | undefined,
+  ): void {
+    /*
+     * **版は「最後に聞けた値」をそのまま覚える。** `instanceId` と違って前回との
+     * 比較はしない — 版の入れ替え自体は `instanceId` の変化で既に検出できているので、
+     * ここは持つだけでよい。
+     *
+     * **`identity` 自体が無い（`identity()` を持たない runner／`ping` だけの旧来
+     * 経路）ときは触らない。** `{ status: 'unheard' }` のまま残す — 「訊けたが
+     * 分からない」（`unknown`）と混同しない。
+     *
+     * **`instanceId` を名乗らない相手でも版だけは覚える**ので、この判定は下の
+     * 早期 return より前にある（下は「入れ替わりを判定できない」ための return で
+     * あって、「何も覚えない」ための return ではない）。
+     */
+    if (identity?.revision !== undefined) {
+      entry.revision = identity.revision;
+    }
+
+    const instanceId = identity?.instanceId;
+    if (instanceId === undefined || instanceId.length === 0) return;
+    const before = entry.instanceId;
+    // **初めて聞いた分は入れ替えではない。** 覚えるだけ（覚える前に知らせると、
+    // デーモンが起きた直後に必ず1回「入れ替わった」が出る）。
+    entry.instanceId = instanceId;
+    // 「いまの相手を初めて見た時刻」。**同じ相手なら動かさない**（動かすと、
+    // 入れ替わりの猶予がハートビートごとに先送りされ、期限が永久に来ない）。
+    if (before !== instanceId || entry.instanceSince === undefined) {
+      entry.instanceSince = new Date(at).toISOString();
+    }
+    if (before === undefined || before === instanceId) return;
+    this.#onSwap?.({
+      label: entry.source.label,
+      // **書き換えていない値をそのまま渡す。** 台帳の鎖はこの名前で繋がっている。
+      ...(entry.client === null ? {} : { runnerId: entry.client.runnerId }),
+      before,
+      after: instanceId,
+    });
   }
 
   /**

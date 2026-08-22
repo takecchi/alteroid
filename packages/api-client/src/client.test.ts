@@ -53,6 +53,8 @@ function fakeClone(stores: Stores) {
     async restore() {
       return [];
     },
+    // この試験は HTTP の口の形だけを見る（引き取りの契機は触らない）。
+    async reattachRunner() {},
     async stop() {},
   };
 

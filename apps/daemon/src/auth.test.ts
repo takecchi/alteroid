@@ -35,6 +35,7 @@ function stubClone(): CloneHost {
       Promise.resolve({ runners: [], unassigned: [], daemonRevision: { status: 'unknown' } }),
     transcript: () => Promise.resolve(null),
     restore: () => Promise.resolve([]),
+    reattachRunner: () => Promise.resolve(),
     stop: () => Promise.resolve(),
   };
   return {

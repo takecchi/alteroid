@@ -4,6 +4,7 @@ import type { BuildRevision, RunnerEvent, RunnerHost } from '@alteroid/core';
 import {
   readExecutionResources,
   resolveBuildRevision,
+  RunnerFenceError,
   runnerAnswerCommandSchema,
   runnerMessageCommandSchema,
   runnerResumeCommandSchema,
@@ -148,6 +149,14 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     if (!matches(c.req.header('authorization'), deps.tokenSha256)) {
       return c.json({ error: 'unauthorized' as const }, 401);
     }
+    /**
+     * **認証を通った呼びだけが貸し出し期限の時計を進める。**
+     *
+     * `/livez` はここを通らない（無認証）。認証前にここへ置くと、誰でも
+     * `GET /livez` を叩くだけで貸し出し期限を延ばせてしまい、自己失効
+     * （`RunnerHostOptions.enforceLease`）がまるごと機能しなくなる。
+     */
+    host.noteDaemonContact();
     await next();
   });
 
@@ -311,7 +320,25 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       if (command.managerId !== c.req.param('id')) {
         return c.json({ error: 'manager_id が経路と本文で食い違っている' as const }, 400);
       }
-      await host.resume(command);
+      try {
+        await host.resume(command);
+      } catch (error) {
+        /*
+         * **世代が古い resume は 409、Hono の既定 500 に落とさない。**
+         *
+         * `isRetryableRunnerError`（`runner-protocol.ts`）は 5xx を「待てば直る」に
+         * 分類する。500 のままだと、遅れて届いた古い世代の命令が「一時的な失敗」と
+         * 誤解され、デーモン側の再試行が同じ古い命令を延々と投げ直す——本来は
+         * 「同じものを投げ直しても同じ答えが返る」側（4xx）である。
+         */
+        if (error instanceof RunnerFenceError) {
+          return c.json(
+            { error: 'fenced' as const, expected: error.expected, given: error.given },
+            409,
+          );
+        }
+        throw error;
+      }
       return c.json({ ok: true });
     })
 

@@ -249,6 +249,15 @@ class HttpRunner implements RunnerClient {
    * 参照。
    */
   revision?: RunnerRevisionReport;
+  /**
+   * `hello()` が読んだ「いま応えているプロセス」。**`revision` と同じ応答から拾う
+   * だけで、新しい往復は増やさない**（roadmap M5 PR4）。
+   *
+   * 接続の瞬間から名簿がこの値を持つので、直後に走る引き取りが**判定材料を持たない
+   * まま動く窓**が無くなる（`RunnerClient.instanceId` の doc）。名乗らない runner では
+   * `undefined` のまま。
+   */
+  instanceId?: string;
   readonly #baseUrl: string;
   readonly #socketPath: string | null;
   readonly #token: string;
@@ -310,6 +319,11 @@ class HttpRunner implements RunnerClient {
     // 「訊けたが分からない」と「そもそも報告する口が無い」が区別できなくなる。
     if (body.revision !== undefined) {
       this.revision = revisionReportOf(body.revision);
+    }
+    // **同じ応答から `instanceId` も拾う。** 空文字は「名乗っていない」と同じ扱いに
+    // する（名乗らない runner との区別が無いので、値として持たない）。
+    if (typeof body.instanceId === 'string' && body.instanceId.length > 0) {
+      this.instanceId = body.instanceId;
     }
   }
 

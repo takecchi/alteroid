@@ -1565,6 +1565,22 @@ export function createCloneTools(context: ToolContext) {
           );
           if (runner.workspacePath !== undefined)
             lines.push(`  workspace: ${runner.workspacePath}`);
+          /*
+           * **いまその名前に応えているプロセスと、それを見始めた時刻。**
+           *
+           * `runnerId` は器を作り直しても同じなので、名前だけでは「自分が委譲を
+           * 置いた器がまだ同じプロセスか」が言えない。入れ替わっていれば、そこで
+           * 走っていた委譲は失われている可能性がある — その判断材料である。
+           *
+           * **名乗らないことを黙らせない。** 出さないと、クローンからは
+           * 「入れ替わっていない」と「判定できない」が同じに見える。
+           */
+          lines.push(
+            runner.instanceId === undefined
+              ? '  応えているプロセス: 名乗っていない（この器では入れ替わりを判定できない）'
+              : `  応えているプロセス: ${runner.instanceId}` +
+                  (runner.instanceSince === undefined ? '' : `（${runner.instanceSince} から）`),
+          );
           if (runner.error !== undefined) lines.push(`  直近の失敗: ${runner.error}`);
           lines.push(
             runner.managers.length === 0

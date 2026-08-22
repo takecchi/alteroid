@@ -394,6 +394,17 @@ export const managerSummarySchema = z.object({
   lastFailure: jobSchema.shape.lastFailure,
   runnerId: z.string().optional(),
   workspace: workspaceLocatorSchema.optional(),
+  /**
+   * 貸し出し（M5 PR4）— **その宛先のどのプロセスが、いつまで握ると約束したか。**
+   *
+   * `lastFailure` と同じく**`jobSchema` の枝をそのまま借りる**（ここで手書きの写しを
+   * 置くと、欄が片方だけ増えた日に spec が黙って古びる）。
+   *
+   * **判定（引き取ってよいか）は載せない。** 答えは時刻で変わるので
+   * （`packages/core/src/lease.ts` の `judgeLease`）、応答に焼くと読んだ瞬間から
+   * 古びる。出すのは材料だけである。
+   */
+  lease: jobSchema.shape.lease,
   waiting: z.array(managerWaitingSchema),
   /**
    * 確認へ上がらずに止められた道具と件数（**古い順**）。
@@ -505,6 +516,23 @@ const runnerSummarySchema = z.object({
   /** 繋がるまで分からないので、開けていない間は返らない。 */
   runnerId: z.string().optional(),
   workspacePath: z.string().optional(),
+  /**
+   * **いまこの宛先に応えているプロセス**（runner が起動ごとに作る識別子）。
+   *
+   * `runnerId` は宛先の名前で、器を作り直しても同じである。だから名前だけでは
+   * 「いまその名前に応えているのが、さっき仕事を渡した相手と同じか」が言えない。
+   *
+   * **入れ替わった瞬間の知らせ（`onSwap`）とは別の口である。** あちらは遷移で、
+   * ここは状態である。知らせを見落とした後・デーモン自身が再起動した後に
+   * 「いまどのプロセスが応えているのか」を確かめる口が他に無いと、引き取りの判定
+   * （`packages/core/src/lease.ts`）が正しいかを誰も検算できない。
+   *
+   * **名乗らない runner では返らない**（`identity()` を持たない実装・古い器）。
+   * 無いことを「入れ替わっていない」と読まないこと。
+   */
+  instanceId: z.string().optional(),
+  /** そのプロセスを**デーモンが初めて見た時刻**。引き取りの猶予はここから数える。 */
+  instanceSince: z.string().optional(),
   /** 配られている鍵の指紋。**値は返らない。** */
   credentials: z.array(runnerCredentialFingerprintSchema),
   /** 置かれている実行環境プロファイルの指紋。**本文は返らない。** */
@@ -739,6 +767,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     },
     restore() {
       throw new Error('spec 生成専用のスタブ: 引き継ぎはしない');
+    },
+    reattachRunner() {
+      throw new Error('spec 生成専用のスタブ: 取り直しはしない');
     },
     stop() {
       throw new Error('spec 生成専用のスタブ');

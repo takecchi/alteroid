@@ -2127,6 +2127,13 @@ export function createApp(deps: AppDeps) {
                   ...(entry.workspacePath === undefined
                     ? {}
                     : { workspacePath: entry.workspacePath }),
+                  // **繋がっていない相手のぶんも出す。** 黙った器について「最後に
+                  // どのプロセスが応えていたか」は、戻ってきたときに同じ器かを
+                  // 突き合わせる材料である（消すと、黙っている間だけ材料が消える）。
+                  ...(entry.instanceId === undefined ? {} : { instanceId: entry.instanceId }),
+                  ...(entry.instanceSince === undefined
+                    ? {}
+                    : { instanceSince: entry.instanceSince }),
                   // 繋がっていない相手には聞きに行かない（指紋は runner が持つ）。
                   credentials:
                     runner === undefined ? [] : await runner.credentials().catch(() => []),

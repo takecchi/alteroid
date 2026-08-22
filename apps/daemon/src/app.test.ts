@@ -103,6 +103,8 @@ function fakeClone() {
     async restore() {
       return [];
     },
+    // HTTP 境界の検証では触らない（引き取りの契機はデーモンの配線側にある）。
+    async reattachRunner() {},
     async stop() {},
   };
 
