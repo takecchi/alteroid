@@ -451,6 +451,22 @@ describe('クローンの道具', () => {
     expect(entry).toMatchObject({ type: 'decision' });
   });
 
+  it('schedule_list の一覧は作成時刻と更新時刻を出す', async () => {
+    const h = harness();
+    await h.stores.schedules.put({
+      kind: 'watch',
+      spec: { type: 'daily', at: '09:00' },
+      request: 'いつもの見回り',
+      createdAt: '2026-01-02T03:04:05.000Z',
+      updatedAt: '2026-03-04T05:06:07.000Z',
+    });
+
+    const reply = await h.call('schedule_list', {});
+
+    expect(reply).toContain('作成: 2026-01-02T03:04:05.000Z');
+    expect(reply).toContain('更新: 2026-03-04T05:06:07.000Z');
+  });
+
   it('同じ kind で仕込み直すと置き換わる（前回動いた時刻は保つ）', async () => {
     const h = harness();
     await h.call('schedule_create', { kind: 'watch', request: '最初の依頼', everyMinutes: 30 });
@@ -1133,6 +1149,20 @@ describe('クローンの道具', () => {
 
     expect(reply).toContain('runner-shown');
     expect(reply).toContain('未記録');
+  });
+
+  it('manager_list は作成時刻と更新時刻を出す', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.startedAt = '2026-01-02T03:04:05.000Z';
+    target.updatedAt = '2026-03-04T05:06:07.000Z';
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('作成: 2026-01-02T03:04:05.000Z');
+    expect(reply).toContain('更新: 2026-03-04T05:06:07.000Z');
   });
 
   it('委譲先が無い場面（蒸留の内部ターン）は、黙らずにそう返す', async () => {
