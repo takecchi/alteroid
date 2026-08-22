@@ -170,6 +170,39 @@ describe('作業ツリーの指示文書への到達経路', () => {
 });
 
 /**
+ * `cwd` が自分専用ではないという事実を告げていることを守るテスト。
+ *
+ * **上の「所在」と同じ理由で、消えても赤くならない形である。** この1行を消しても
+ * 型は通り、`Options` も `agents` 定義も変わらない。そして実行時にも見えない —
+ * 器に自分しか居ない回は今までどおり動くので、**壊れたことは「他人の器を壊した」
+ * 側にしか出ない**（しかも壊した本人ではなく、相手の `eslint` / `format:check` が
+ * 落ちる形で出る。`AGENTS.md`「自分が走っている器」）。
+ *
+ * **告げる先はここしか無い。** マネージャーの `cwd` は `ALTEROID_WORKSPACE` で、
+ * 器の共有という事実は `AGENTS.md` に書いてあるが、**それを読めるのは作業ツリーを
+ * 作った後**である。置き場所を決める時点では到達経路が1つも無い。
+ *
+ * 文言そのものではなく、**事実を告げていること**と、**置き場所を指図していないこと**の
+ * 両方に歯を当てる（後者が消えると、alteroid 専用の運用スタイルがプロンプトへ入る）。
+ */
+describe('器が共有であることの告知', () => {
+  it('マネージャーに、`cwd` が自分専用ではないという事実を告げている', () => {
+    const prompt = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
+    expect(prompt).toContain('他のマネージャーと共有');
+    expect(prompt).toContain('あなた専用のディレクトリではない');
+  });
+
+  it('置き場所は指図していない（alteroid 専用の記述にしない）', () => {
+    // マネージャーは人間の任意のプロジェクトを触るので、`/tmp` や `/workspace` の
+    // ような具体のパスは書けない。書くのは事実だけで、どこへ clone するかの判断は
+    // 読み手に残す（north_star の「一運用スタイルを要件のように書かない」）。
+    const prompt = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
+    expect(prompt).not.toContain('/tmp');
+    expect(prompt).not.toContain('/workspace');
+  });
+});
+
+/**
  * branded type（4-14）— `renderMemoryDocuments` を通さずに `buildCloneSystemPrompt`
  * へ記憶を渡す経路を `tsc` で塞ぐ。
  *
