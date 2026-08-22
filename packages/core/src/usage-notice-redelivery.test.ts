@@ -226,10 +226,13 @@ describe('枠の知らせ — 二重に配らない歯', () => {
     await s.session.notify(FIVE_HOUR_LIMIT);
     await s.session.notify(SPEND_LIMIT);
 
-    await vi.waitFor(async () => {
-      expect(
-        (await journalTexts(s.stores, '配達済みの知らせなので受信箱へは回さない')).length,
-      ).toBe(3);
+    // **「まだ届いていないだけ」と区別する。** 後から必ず配られるものを1本挟み、
+    // それが届いたことをもって「上の3件の判定は済んだ」とする。**日誌の行数を
+    // barrier に使わない** — 使うと、この歯が「畳んだことを記録に残す」歯
+    // （下の describe）と同じ行で落ちるようになり、2本に分けた意味が消える。
+    await s.session.rateLimit({ rateLimitType: 'five_hour', status: 'rejected' });
+    await vi.waitFor(() => {
+      expect(countReports(s.inbox, '枠から追い返された')).toBe(1);
     });
     expect(countReports(s.inbox, '利用上限に当たった')).toBe(2);
 
