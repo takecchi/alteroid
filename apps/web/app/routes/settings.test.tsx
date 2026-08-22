@@ -1,15 +1,25 @@
 // @vitest-environment jsdom
 /**
- * 設定画面の runner の札 — **「いま応えているプロセス」を人間にも見せる。**
+ * 設定画面の runner の札。**2つの主題が同居している。**
  *
- * `runnerId` は宛先の名前で、器を作り直しても同じである。だから名前だけでは
- * 「さっき仕事を渡した相手と同じプロセスか」が分からない。**同じ状態をクローンは
- * `runner_list` で読み、人間はこの画面で読む**ので、片方だけに出す形を作らない
- * （PRD「インターフェース」— 片方でしかできないことを作らない）。
+ * 1. **「いま応えているプロセス」を人間にも見せる**（`instanceId`）。`runnerId` は
+ *    宛先の名前で、器を作り直しても同じである。だから名前だけでは「さっき仕事を
+ *    渡した相手と同じプロセスか」が分からない。**同じ状態をクローンは
+ *    `runner_list` で読み、人間はこの画面で読む**ので、片方だけに出す形を作らない
+ *    （PRD「インターフェース」— 片方でしかできないことを作らない）。
+ *    そして**名乗らない器についてそう言う**ことがもう一方の歯である。黙ると、人間からは
+ *    「入れ替わっていない」と「判定できない」が同じに見える（`packages/core/src/lease.ts`
+ *    の `undecidable` を出力から消さない、と同じ判断）。
  *
- * そして**名乗らない器についてそう言う**ことがもう一方の歯である。黙ると、人間からは
- * 「入れ替わっていない」と「判定できない」が同じに見える（`packages/core/src/lease.ts`
- * の `undecidable` を出力から消さない、と同じ判断）。
+ * 2. **「渡している鍵」欄が、`credentialsProbe` の3状態を混ぜずに出す。**
+ *    `GET /runners` は「繋がっていないので叩いていない」（`unheard`）／「叩いたが
+ *    失敗した」（`failed`）／「叩いて0件だった」（`asked` かつ `credentials: []`）を
+ *    別の値として返す（`apps/daemon/src/openapi.ts` の `runnerProbeSchema`）。
+ *    この画面（`settings.tsx` の `Credentials`）がそれを読み分けずに
+ *    `credentials.length === 0` だけで「渡している鍵は無い」と断定すると、
+ *    確かめられなかったことが確かめた結果として人間に届く。
+ *
+ * **どちらも「判定できないことを、判定した結果として出さない」という同じ形である。**
  */
 import { cleanup, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
@@ -27,6 +37,11 @@ const BASE: RunnerSummary = {
   runnerId: 'runner-primary',
   workspacePath: '/workspace',
   credentials: [],
+  // 指紋を聞きに行けたか。**省略できない欄なので、既定は「聞けた」に置く** —
+  // `instanceId` 側の試験はここを対象にしていないので、そちらの結果を
+  // 鍵欄の状態が動かさないようにする。
+  credentialsProbe: { status: 'asked' },
+  profileProbe: { status: 'asked' },
   // 版の名乗りはこの試験の対象ではない（`instanceId` の見え方だけを見る）。
   // **省略できない欄なので、聞けていない状態を明示して置く。**
   revision: { status: 'unheard' },
@@ -89,5 +104,48 @@ describe('runner の札は、いま応えているプロセスを出す', () => 
     renderSettings([BASE]);
 
     expect(await screen.findByText(/名乗っていない（入れ替わりを判定できない）/)).toBeTruthy();
+  });
+});
+
+describe('runner の鍵欄は、聞けた分しか言わない', () => {
+  /**
+   * 【B-1】聞いていないときは「無い」と言わない。
+   *
+   * `credentialsProbe.status === 'unheard'` は「繋がっていないので聞いていない」で
+   * あって「鍵が配られていない」ではない。`credentials` はどちらの場合も `[]` に
+   * なるので、この行を見ずに `credentials.length === 0` だけで判定する実装は
+   * ここで「渡している鍵は無い」と誤って言う。
+   */
+  it('聞いていないときは『無い』と言わない', async () => {
+    renderSettings([{ ...BASE, credentials: [], credentialsProbe: { status: 'unheard' } }]);
+
+    expect(await screen.findByText(/確かめていない/)).toBeTruthy();
+    expect(screen.queryByText('渡している鍵は無い')).toBeNull();
+  });
+
+  /** 【B-2】失敗したときは理由が出る。 */
+  it('失敗したときは理由が出る', async () => {
+    renderSettings([
+      {
+        ...BASE,
+        credentials: [],
+        credentialsProbe: { status: 'failed', error: 'ECONNRESET: 途中で切れた' },
+      },
+    ]);
+
+    expect(await screen.findByText(/ECONNRESET: 途中で切れた/)).toBeTruthy();
+    expect(screen.queryByText('渡している鍵は無い')).toBeNull();
+  });
+
+  /**
+   * 【B-3】要である。聞いて0件なら「無い」と言う。
+   *
+   * これが無いと、画面が常に「確かめていない」と言う方向へ倒れても緑のまま
+   * になる。`asked` かつ空配列という「聞けたうえで0件だった」場合を単独で見る。
+   */
+  it('聞いて0件なら『無い』と言う', async () => {
+    renderSettings([{ ...BASE, credentials: [], credentialsProbe: { status: 'asked' } }]);
+
+    expect(await screen.findByText('渡している鍵は無い')).toBeTruthy();
   });
 });
