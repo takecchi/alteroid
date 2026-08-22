@@ -380,11 +380,14 @@ export {
 export {
   CLONE_MODEL,
   CLONE_MODEL_ENV_KEY,
+  CLONE_HUMAN_PRIORITY_ENV_KEY,
   CLONE_PERMISSION_MODE_ENV_KEY,
   createClone,
   placedCloneModel,
   placedClonePermissionMode,
   resolveCloneModel,
+  isHumanOriginated,
+  resolveCloneHumanPriority,
   resolveClonePermissionMode,
   type CloneOptions,
 } from './clone.js';

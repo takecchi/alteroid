@@ -55,14 +55,49 @@ export class Inbox {
     }
   }
 
-  push(event: InboxEvent): void {
+  /**
+   * イベントを積む。**既定は末尾**（純粋な先入れ先出し）。
+   *
+   * ## `insertAfterLast` — 割り込ませる口
+   *
+   * 渡すと、**その述語に最後に一致した要素の直後**へ入れる。1つも一致しなければ
+   * **先頭**へ入れる。省略すれば末尾で、これまでと1文字も変わらない。
+   *
+   * **「誰が割り込んでよいか」はここに持たない。** 述語を受け取るだけにしてある
+   * ので、この器は「人間」も「マネージャー」も知らない。判断は呼び出し側
+   * （`Clone#post`）が持つ — 器が起点の種類を知り始めると、**優先順位の方針が
+   * 器の中へ散る**（`hasPending` / `drainWhile` を述語で受けているのと同じ理由）。
+   *
+   * **この形が「人間どうしは FIFO」を同時に満たす。** 述語を「人間起点か」に
+   * すると、新しい人間の発言は**既に並んでいる人間の後ろ**へ入る（追い越さない）
+   * 一方、人間より後ろに居る人間以外は全部飛び越す。**2つの規則を1つの操作で
+   * 表しているので、片方だけ実装される形が作れない。**
+   *
+   * **待ち手が居るときは順序の話にならない。** 待ち行列が空だから待っているので、
+   * そのまま渡す（＝クローンが暇なときは、この口は何もしない）。
+   */
+  push(event: InboxEvent, insertAfterLast?: (queued: InboxEvent) => boolean): void {
     if (this.#closed) throw new Error('受信箱は既に閉じている');
     const waiter = this.#waiters.shift();
     if (waiter) {
       waiter(event);
       return;
     }
-    this.#queue.push(event);
+    if (insertAfterLast === undefined) {
+      this.#queue.push(event);
+      return;
+    }
+    // **後ろから探す。** 「最後に一致したものの直後」なので、前から探して
+    // 数えるより、末尾から最初の一致を見つけるほうが同じ答えを短く出せる。
+    let at = 0;
+    for (let i = this.#queue.length - 1; i >= 0; i--) {
+      const queued = this.#queue[i];
+      if (queued !== undefined && insertAfterLast(queued)) {
+        at = i + 1;
+        break;
+      }
+    }
+    this.#queue.splice(at, 0, event);
   }
 
   /**
