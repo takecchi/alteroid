@@ -557,7 +557,9 @@ export function createCloneTools(context: ToolContext) {
       'memory_list',
       [
         '記憶の文書一覧を返す。中身は返さない。',
-        '各行は `[premise|fact] slug: title (updatedAt) — 要旨` の形。',
+        '各行は `[premise|fact] slug: title (作成: createdAt / 更新: updatedAt) — 要旨` の形。',
+        '作成は書き込まれた瞬間にその場で分かる。「不明」と出るのは、この配線より前に作られ、',
+        '日誌にも根拠（最初の書き込み）が無い古い記憶だけである（ファイルの mtime は使わない）。',
         'premise はプロンプトへ全文が焼き込まれている。fact は目次の1行だけがプロンプトに載るので、',
         '中身が要るなら memory_read で開くこと。要旨の前に付く印（⚠古い要旨 / ？鮮度不明）は',
         'description が最後の本文変更より前に書かれた可能性があることを示す（本文と合っている保証ではない）。',
@@ -576,6 +578,7 @@ export function createCloneTools(context: ToolContext) {
               descriptionFreshness: doc.descriptionFreshness,
               parent: doc.parent,
               updatedAt: doc.updatedAt,
+              createdAt: doc.createdAt,
             })),
           ),
         );

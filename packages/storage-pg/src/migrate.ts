@@ -290,6 +290,13 @@ const STATEMENTS = [
   // ——`resolveMemoryDescriptionFreshness` はこれを `unknown`（fresh にも
   // stale にも畳まない）として扱う。安全な既定である。
   `alter table memory add column if not exists described_at timestamptz`,
+
+  // --- 記憶の作成時刻（createdAt） --------------------------------------------
+  // 上の列の隣へ追記で足す。**既存行にとって null は「まだ backfill が見て
+  // いない」または「見たが日誌に根拠が無かった」のどちらかで、読み出し側は
+  // どちらも区別せず `{ kind: 'unknown' }` として扱う（`schema.ts` の
+  // `memory.createdAt` の doc）。安全な既定である——値を作らない。
+  `alter table memory add column if not exists created_at timestamptz`,
 ] as const;
 
 export async function migrate(db: Db): Promise<void> {

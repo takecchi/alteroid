@@ -8,6 +8,7 @@ import {
 } from '@alteroid/core';
 import type {
   JournalStore,
+  MemoryCreatedAt,
   MemoryDocument,
   MemoryDocumentMeta,
   MemoryProtectionStatus,
@@ -49,6 +50,7 @@ export class PgPersonaStore implements PersonaStore {
         content: memory.content,
         updatedAt: memory.updatedAt,
         describedAt: memory.describedAt,
+        createdAt: memory.createdAt,
       })
       .from(memory)
       .orderBy(asc(memory.slug));
@@ -62,6 +64,7 @@ export class PgPersonaStore implements PersonaStore {
         content: memory.content,
         updatedAt: memory.updatedAt,
         describedAt: memory.describedAt,
+        createdAt: memory.createdAt,
       })
       .from(memory)
       .where(eq(memory.slug, this.#slug(slug)))
@@ -77,14 +80,22 @@ export class PgPersonaStore implements PersonaStore {
     // ——別途 SELECT する（fs 版の `#writeNow` が先に `read()` するのと同じ形）。
     const prior = await this.#readPrior(key);
     const body = stripNulls(ensureTrailingNewline(content));
+    const now = new Date();
     const rows = await this.#db
       .insert(memory)
-      .values({ slug: key, content: body, updatedAt: new Date() })
+      // **新規作成のときだけ `created_at` が入る。** conflict 側（＝更新）の
+      // `set` には含めないので、既存行の `created_at` は NULL でも保たれる。
+      .values({ slug: key, content: body, updatedAt: now, createdAt: now })
       .onConflictDoUpdate({
         target: memory.slug,
-        set: { content: body, updatedAt: new Date() },
+        set: { content: body, updatedAt: now },
       })
-      .returning({ slug: memory.slug, content: memory.content, updatedAt: memory.updatedAt });
+      .returning({
+        slug: memory.slug,
+        content: memory.content,
+        updatedAt: memory.updatedAt,
+        createdAt: memory.createdAt,
+      });
     const row = rows[0];
     if (row === undefined) throw new Error(`記憶の書き込みに失敗: ${slug}`);
     const describedAt = await this.#updateDerived(key, prior, row);
@@ -155,9 +166,12 @@ export class PgPersonaStore implements PersonaStore {
     const key = this.#slug(slug);
     const prior = await this.#readPrior(key);
     const body = stripNulls(ensureTrailingNewline(content));
+    const now = new Date();
     const rows = await this.#db
       .insert(memory)
-      .values({ slug: key, content: body, updatedAt: new Date() })
+      // **新規作成のときだけ `created_at` が入る。** conflict 側（＝更新）の
+      // `set` には含めないので、既存行の `created_at` は NULL でも保たれる。
+      .values({ slug: key, content: body, updatedAt: now, createdAt: now })
       .onConflictDoUpdate({
         target: memory.slug,
         set: {
@@ -165,10 +179,15 @@ export class PgPersonaStore implements PersonaStore {
             when right(${memory.content}, 1) = E'\n' then ${memory.content} || E'\n' || ${body}
             else ${memory.content} || E'\n\n' || ${body}
           end`,
-          updatedAt: new Date(),
+          updatedAt: now,
         },
       })
-      .returning({ slug: memory.slug, content: memory.content, updatedAt: memory.updatedAt });
+      .returning({
+        slug: memory.slug,
+        content: memory.content,
+        updatedAt: memory.updatedAt,
+        createdAt: memory.createdAt,
+      });
     const row = rows[0];
     if (row === undefined) throw new Error(`記憶の追記に失敗: ${slug}`);
     const describedAt = await this.#updateDerived(key, prior, row);
@@ -268,6 +287,22 @@ export class PgPersonaStore implements PersonaStore {
       );
   }
 
+  async markCreatedAt(slug: string, at: string): Promise<boolean> {
+    const key = this.#slug(slug);
+    const when = new Date(at);
+    // `markHumanTouched` と同じく、行が既に在るときだけ更新し新しい行は作らない。
+    // **単調非減少ではなく一度きりの確定**——`created_at` が既に埋まっている行は
+    // `isNull` に当たらず 0 行更新になる（絶対条件2「埋めるのは値が無いときだけ」
+    // が、この WHERE 句そのもので冪等になる）。**`returning` で実際に動いた行数を
+    // 数える**——backfill が「何件埋めたか」を観測するのに要る（絶対条件5）。
+    const updated = await this.#db
+      .update(memory)
+      .set({ createdAt: when })
+      .where(and(eq(memory.slug, key), isNull(memory.createdAt)))
+      .returning({ slug: memory.slug });
+    return updated.length > 0;
+  }
+
   /**
    * 全文書を本文ごと `slug` 昇順で返す。**1クエリで取り切る。**
    *
@@ -285,6 +320,7 @@ export class PgPersonaStore implements PersonaStore {
         content: memory.content,
         updatedAt: memory.updatedAt,
         describedAt: memory.describedAt,
+        createdAt: memory.createdAt,
       })
       .from(memory)
       .orderBy(asc(memory.slug));
@@ -297,6 +333,7 @@ interface MemoryRow {
   content: string;
   updatedAt: Date | string;
   describedAt: Date | string | null;
+  createdAt: Date | string | null;
 }
 
 function toDocument(row: MemoryRow): MemoryDocument {
@@ -310,6 +347,7 @@ function toDocument(row: MemoryRow): MemoryDocument {
     slug: row.slug,
     title: titleOf(row.content, row.slug),
     updatedAt,
+    createdAt: toMemoryCreatedAt(row.createdAt),
     bytes: Buffer.byteLength(row.content, 'utf8'),
     content: row.content,
     frontmatter: derived.frontmatter,
@@ -320,11 +358,17 @@ function toDocument(row: MemoryRow): MemoryDocument {
   };
 }
 
+/** 行の生の値（nullable）を `MemoryCreatedAt`（2値）へ組み立てる。 */
+function toMemoryCreatedAt(at: Date | string | null): MemoryCreatedAt {
+  return at === null ? { kind: 'unknown' } : { kind: 'known', at: toIso(at) };
+}
+
 function stripContent(doc: MemoryDocument): MemoryDocumentMeta {
   return {
     slug: doc.slug,
     title: doc.title,
     updatedAt: doc.updatedAt,
+    createdAt: doc.createdAt,
     bytes: doc.bytes,
     frontmatter: doc.frontmatter,
     kind: doc.kind,

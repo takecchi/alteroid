@@ -20,6 +20,7 @@
 
 import { excerptLine, renderListing } from './excerpt.js';
 import type {
+  MemoryCreatedAt,
   MemoryDescriptionFreshness,
   MemoryDocKind,
   MemoryFrontmatterState,
@@ -133,6 +134,43 @@ export async function deriveHumanTouchedAtFromJournal(
     if (entry.cause !== 'human') continue;
     if (entry.action === 'remove') continue;
     if (!result.has(entry.slug)) result.set(entry.slug, entry.at);
+  }
+  return result;
+}
+
+/**
+ * 日誌全体から、slug ごとの「最初に `action:'write'` で書かれた時刻」を導出する
+ * （記憶の `createdAt` の唯一の根拠）。
+ *
+ * **`deriveHumanTouchedAtFromJournal` と対になるが、見るものも残し方も逆**
+ * である。あちらは `cause:'human'` に絞って**新しいほう**（最後に人間が
+ * 書いた時刻）を残す。こちらは `cause` を問わず `action:'write'` だけに絞って
+ * **古いほう**（最初に書かれた時刻）を残す——`journal.list()` は新しい順に
+ * 返るので、`if (!result.has(...))` で先着（＝新しいほう）を残すのではなく
+ * **毎回上書きする**ことで、ループが終わった時点で最も古いエントリが残る
+ * ようにしてある。
+ *
+ * **`action:'append'` と、区別が導入される前の古いエントリ（`action` が
+ * `undefined`）は対象にしない。** `append` は「存在しなければ作る」ので
+ * 理屈上は初回作成でもありうるが、`action:'write'` という狭い基準に絞る
+ * ——広げて誤って早い時刻を拾うより、根拠が無ければ `unknown` に倒す
+ * （記憶の絶対条件4）ほうを優先した。**`action:'remove'` も対象外**
+ * （削除は作成ではない）。
+ *
+ * 呼ぶのは2か所——`apps/daemon/src/storage.ts` の起動時 backfill と、
+ * `deriveHumanTouchedAtFromJournal` と同様に将来ストア側で組み直しが要る
+ * ようになったとき。基準がここ以外にも散ると、片方だけ直して残りが古い
+ * 基準のまま、という穴ができるので実装はここに1本化する。
+ */
+export async function deriveMemoryCreatedAtFromJournal(
+  journal: Pick<JournalStore, 'list'>,
+): Promise<Map<string, string>> {
+  const entries = await journal.list({ types: ['memory_update'] });
+  const result = new Map<string, string>();
+  for (const entry of entries) {
+    if (entry.type !== 'memory_update') continue;
+    if (entry.action !== 'write') continue;
+    result.set(entry.slug, entry.at);
   }
   return result;
 }
@@ -487,6 +525,30 @@ function flattenMemoryToc(roots: readonly ResolvedTocNode[]): ResolvedTocNode[] 
 }
 
 /**
+ * `MemoryCreatedAt` の2状態の網羅性を型で強制する
+ * （`assertNeverMemoryProtectionStatus` と同じ形）。
+ */
+export function assertNeverMemoryCreatedAt(createdAt: never): never {
+  throw new Error(`未知の記憶作成時刻の状態: ${JSON.stringify(createdAt)}`);
+}
+
+/**
+ * `createdAt` を一覧の1行に出す形にする。**根拠が無ければ「不明」と明言する**
+ * ——値を持たないことを空文字で隠さない（`memoryFreshnessMarker` の
+ * `unknown` 分岐と同じ判断: 分からないことを一覧の上でも言葉にする）。
+ */
+function formatMemoryCreatedAt(createdAt: MemoryCreatedAt): string {
+  switch (createdAt.kind) {
+    case 'known':
+      return createdAt.at;
+    case 'unknown':
+      return '不明';
+    default:
+      return assertNeverMemoryCreatedAt(createdAt);
+  }
+}
+
+/**
  * 印は要旨の**前**に置く——左から読んで必ず当たる形にする（4-1）。
  *
  * **代理指標であることをここにも書く**（`MemoryDescriptionFreshness` の doc
@@ -614,6 +676,7 @@ export interface MemoryListingEntry {
   descriptionFreshness: MemoryDescriptionFreshness;
   parent: string | undefined;
   updatedAt: string;
+  createdAt: MemoryCreatedAt;
 }
 
 /**
@@ -654,7 +717,14 @@ export function renderMemoryListing(entries: readonly MemoryListingEntry[]): str
     const meta = bySlug.get(node.entry.slug);
     const indent = '  '.repeat(node.depth);
     const kindTag = meta === undefined ? '' : `[${meta.kind}] `;
-    const updatedAt = meta === undefined ? '' : ` (${meta.updatedAt})`;
+    // ラベルの語彙・順序（`作成: … / 更新: …`）は `manager_list` / `schedule_list`
+    // に既に在るもの（`tools.ts`）と揃えてある——同じ人間の依頼（id + 名前 + 概要 +
+    // updated_at + created_at）に対する3本目の一覧なので、ここだけ違う言い方を
+    // 発明しない。
+    const updatedAt =
+      meta === undefined
+        ? ''
+        : ` (作成: ${formatMemoryCreatedAt(meta.createdAt)} / 更新: ${meta.updatedAt})`;
     const descriptor =
       node.entry.description === undefined
         ? ''

@@ -136,10 +136,12 @@ export { Inbox } from './inbox.js';
  * 器ごとに書いた結果、実際に食い違ったことがある（`memory.ts` の冒頭）。
  */
 export {
+  assertNeverMemoryCreatedAt,
   assertNeverMemoryDescriptionFreshness,
   assertNeverMemoryFrontmatterState,
   assertNeverMemoryProtectionStatus,
   deriveHumanTouchedAtFromJournal,
+  deriveMemoryCreatedAtFromJournal,
   deriveMemoryFrontmatter,
   describeMemoryProtectionStatus,
   memoryProtectionAllowsFullReplace,

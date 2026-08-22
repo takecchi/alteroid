@@ -125,6 +125,54 @@ export const memoryDescriptionFreshnessSchema = z.discriminatedUnion('kind', [
 ]);
 export type MemoryDescriptionFreshness = z.infer<typeof memoryDescriptionFreshnessSchema>;
 
+/**
+ * 作成時刻が判明しているかどうか（2値。畳まない）。
+ *
+ * **`optional` にしない。** `optional` だと「まだ実装が計算していない」と
+ * 「根拠（日誌）が無いので分からない」が同じ `undefined` の形に潰れる。
+ * 後者は情報であって欠落ではないので、`{ kind: 'unknown' }` という明示的な
+ * 値として持つ——語彙は `MemoryDescriptionFreshness` の `unknown` 分岐
+ * （`memory.ts` の `descriptionFreshness ?? { kind: 'unknown' }`）と同じもの
+ * を流用しており、新しい表現は発明していない。
+ *
+ * **なぜ `MemoryProtectionStatus`（3状態）に揃えなかったか。** 最初の設計案
+ * では「`humanTouchedAt` と同じ3値にする」という指示だったが、調べると
+ * `humanTouchedAt` 自体はストア層では常に `optional` / nullable の**2状態**
+ * でしかなく（`packages/storage-fs/src/persona.ts` の `MemoryIndexEntry.humanTouchedAt`、
+ * `packages/storage-pg/src/schema.ts` の `humanTouchedAt` 列、どちらも素の
+ * optional / nullable）、3状態（`human` / `clone-only` / `unknown`）は
+ * `PersonaStore.protectionStatus()` が**読み出しのたびに2本の独立した生信号**
+ * （`humanTouchedAt` の有無 ＋ `contentSha256` が現在の本文と一致するか）を
+ * 合成して作る**護り専用の派生値**だった。`createdAt` にはこの2本目の信号
+ * （外部編集の検出）に相当するものが無く、「日誌に根拠があるか無いか」の
+ * 1本の信号しか持たないので、素直な形は2状態になる。3つ目の状態を無理に
+ * 作らないこと——それは「取れない軸に値を作る」ことになる（AGENTS.md
+ * 「踏みやすい地雷」）。
+ *
+ * **`unknown` に `reason` を持たせなかった理由。** 同日の #216
+ * （`workspaceLocatorSchema`）は `{ kind: 'unknown', reason }` という形を
+ * 足しているが、これは意図して真似ていない——**あちらは「分からない理由が
+ * 場合によって違いうる」から `reason` を持つ**（実行環境がボリュームの
+ * 有無を報告しない、等）。**記憶の `createdAt` が分からない理由は1つしか
+ * ない**——「日誌にその slug の `memory_update`（`action:'write'`）が無い」。
+ * 理由が定数なら、値として持たせる意味は薄く、ここに書けば足りる。
+ * 「揃えるために、とりあえず `reason` を付ける」はしないこと——様式を
+ * 揃えることと理由を持たせることは別である。
+ *
+ * **`known` になる経路は2つある（記憶の `createdAt` 対応）。** (1) 作成
+ * そのものを観測した書き込み経路（第一の出所。ストアが書き込みの瞬間に
+ * 直接 `createdAt` を立てる） (2) この配線より前に作られた行を、日誌の
+ * 最初の `action:'write'` から埋める backfill（`markCreatedAt` の doc）。
+ * 新しく書かれる記憶は必ず (1) で `known` になるので、**上の「理由は1つ」は
+ * 変わらない**——`unknown` が起こりうるのは、この配線より前に作られ、かつ
+ * 日誌にも根拠が無い昔の行に限られる、というだけである。
+ */
+export const memoryCreatedAtSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('known'), at: isoDateTime }),
+  z.object({ kind: z.literal('unknown') }),
+]);
+export type MemoryCreatedAt = z.infer<typeof memoryCreatedAtSchema>;
+
 export const memoryDocumentMetaSchema = z.object({
   slug: memorySlugSchema,
   /**
@@ -134,6 +182,24 @@ export const memoryDocumentMetaSchema = z.object({
    */
   title: z.string(),
   updatedAt: isoDateTime,
+  /**
+   * 作成時刻。根拠は2つある——(1) 作成そのものを観測した書き込み経路
+   * （第一の出所。`packages/storage-fs/src/persona.ts` の `#writeNow` /
+   * `packages/storage-pg/src/persona.ts` の `write` と `append`）、
+   * (2) この配線より前に作られた行は、日誌の最初の `memory_update`
+   * （`action:'write'`）から埋める backfill（`markCreatedAt` の doc）。
+   * どちらも無ければ `{ kind: 'unknown' }`。
+   *
+   * **`mtime` にも `birthtime` にも由来しない——これはいまも禁止である。**
+   * 禁じているのは「作成を観測していない文書について FS の時刻から作成時刻を
+   * 捏造すること」であって、fs の `#writeNow` が使う `written.updatedAt` は
+   * これに当たらない——**作成そのものを観測している経路の中で、その書き込み
+   * 自身が刻んだ時刻を使っている**だけである。同じ関数の中の `describedAt` が
+   * 精度差で `stale` に化けるのを避けるために同じ時刻を使う先例になっている
+   * （理由は `#writeNow` の既存コメントに逐語で在る）。**この結果、新規作成
+   * された文書では「作成」と「更新」が必ず同じ時刻になる。**
+   */
+  createdAt: memoryCreatedAtSchema,
   bytes: z.number().int().nonnegative(),
   /** frontmatter の解釈状態そのもの（3値）。 */
   frontmatter: memoryFrontmatterStateSchema,
