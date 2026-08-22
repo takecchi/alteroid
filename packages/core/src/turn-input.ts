@@ -14,14 +14,45 @@ import type { JournalEntryInput } from './schema.js';
  * | 経路 | 書くもの | 理由 |
  * | --- | --- | --- |
  * | 人間の回答（`human_answer`） | **全文** | 入力そのものがそのターンにしか無い |
- * | `distill` / `timer` / `self_initiative` / `daily_report` | **形＋材料の id ＋ `chars=N`** | 中身は `digest` ＝**この日誌の既存の記録の寄せ集め**だから |
+ * | `distill` / `timer` / `self_initiative` / `daily_report` | **形＋材料の id ＋ `chars=N`** | 中身は `digest` ＝**既存の記録（日誌と台帳）の寄せ集め**だから |
  *
- * **digest の全文を日誌へ書かないのは、日誌が自分自身を再帰的に太らせるからで
- * ある。** digest は日誌・台帳・承認待ちから組み直したもので、材料は必ず日誌の
- * 中に在る（マネージャーの `直近の報告:` も `manager.ts` が受信時に
- * `exchange with=manager role=inbound` として全文を書いている）。**だから形と
- * 材料の id と長さだけを残せば、そのターンへ何が入ったかは後から組み直せる。**
- * 逆に全文を写すと、次の digest がそれを含む日誌からまた作られる。
+ * **形と材料の id と長さだけを残せば、そのターンへ何が入ったかは後から組み直せる。**
+ * digest は日誌・台帳・承認待ち・継続中の依頼・消費から組み直したもので、材料は
+ * どれも器の側に在る（マネージャーの `直近の報告:` の元は、`manager.ts` が受信の
+ * 瞬間に `exchange with=manager role=inbound` として書いた全文である）。
+ *
+ * ### ⚠️ 「日誌が自分自身を再帰的に太らせるから」ではない（引き直して確かめた）
+ *
+ * この doc は一度そう書いていたが、**その再帰は起きない。** `digest.ts` は
+ * `journal.list` で全件を取るものの、`exchange` については
+ * `with === 'human' && role === 'inbound'` に絞ったうえで**件数しか使っていない**
+ * （`humanTurns.length`）。**`with: 'self'` の行は digest に本文でも件数でも
+ * 入らない**ので、ここへ何を書いても次の digest はそれを読まない。日誌が自動で
+ * プロンプトへ戻る他の口も無い（`tools.ts` の `journal_read` はクローンが明示的に
+ * 呼ぶ道具、`schedule.ts` は `daily_report` 型だけ、`memory.ts` は
+ * `memory_update` 型だけ、`apps/daemon/src/app.ts` の会話2口は `conversation.ts`
+ * の `humanExchanges` が `with === 'human'` で落とす）。
+ *
+ * ### 成り立つ理由は2つ
+ *
+ * 1. **まるごと重複だから。** 上のとおり材料は器に在るので、写した分は二重に持つ
+ *    だけである。量は 1 回あたり digest 1本ぶん（実測で 1,800 字前後）で、発意
+ *    tick は既定 55 分ごと（`DEFAULT_INITIATIVE_EVERY_MINUTES`）、ほかに定期
+ *    ジョブと日報がある。**再構成できるものを二重に持たない。**
+ * 2. **外から来た文字列の写しを増やさないため。** digest の `直近の報告:` は
+ *    マネージャーの報告＝**外の世界から拾ってきた任意の文字列**の抜粋である
+ *    （報告経路に `GH_TOKEN` が全文で出た前例がある。#52）。写しを増やすと、
+ *    消す必要が出たときに消す先が増える。
+ *
+ * ### 理由にならないので書かない: 会話の走査窓
+ *
+ * `GET /conversations` と `GET /conversations/:id` は
+ * `journal.list({ limit: scan, types: ['exchange'] })` ＝**件数**で窓を切ってから
+ * `with === 'human'` に絞る（`app.ts`。`scan` の既定は 2000）。だから
+ * `with: 'self'` の行はこの窓を確かに食う — **が、食う量は行数で決まり、1行の
+ * 長さには依らない。** そして行数はこの改修で増える側であり（それが #243 の趣旨
+ * である）、本文を形だけにしても1件も減らない。**この費用は、形にしたことで
+ * 避けられたのではなく、払うと決めたものである。**
  *
  * ## 判断はここ1か所に閉じる
  *
@@ -106,7 +137,7 @@ export function turnInputEntry(input: TurnInput): JournalEntryInput {
  */
 const DIGEST_NOTE =
   '（本文は digest ＝この日誌・台帳・承認待ちの記録を寄せ直したものなので、ここへは写さない。' +
-  '材料は同じ日誌の中に在る）';
+  '材料はそれぞれの器に在る）';
 
 /** 日誌の1行にする。**`ターンの入力:` で始める**（後から grep で全部拾えるように）。 */
 function describeTurnInput(input: TurnInput): string {
@@ -119,7 +150,11 @@ function describeTurnInput(input: TurnInput): string {
     // **全文を写す。** 人間の回答は、そのターンへ入った形（質問・回答・宛先を
     // 1本にしたもの）としてはここにしか無い。回答そのものは承認待ちの器
     // （`approvals_list`）と `escalation` の行にも在るが、**どのターンへ何が
-    // 入ったか**はそちらからは出てこない。
+    // 入ったか**はそちらからは出てこない — `Clone#answerApproval` が書く
+    // `escalation` は `question` / `approvalId` / `answeredAt` / `answer` の4つ
+    // だけで、**宛先（`managerId` / `requestId`）も `[system]` の前置きも入らない。
+    // `at` も受理の瞬間であって、この合図が配られてターンが回った時刻ではない**
+    // （配り直しなら器の入れ替えを跨いで離れる）。
     case 'human_answer':
       return (
         `ターンの入力: human_answer approvalId=${tag(input.approvalId)}` +
