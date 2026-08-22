@@ -26,7 +26,20 @@ import { CANON_REVISION, CANON_REVISION_SOURCE } from './generated/canon.js';
  */
 export type RevisionSource = 'build' | 'workspace' | 'env' | 'platform';
 
-/** いま走っているプロセスの版。全項目が揃うか、全項目が `null` かのどちらかである。 */
+/**
+ * いま走っているプロセスの版。
+ *
+ * **不変条件: `commit` と `short` は必ず揃って `null` になるか、揃って値を持つ。**
+ * ただし `source` はそれとは独立に `null` になりうる——`commit`/`short` が値を
+ * 持っていても `source` だけ `null` という組み合わせが実際に起きる（優先順位1
+ * の焼き込み分岐で、`baked.revision` は非空なのに `baked.source` が `'build'` /
+ * `'workspace'` のどちらでもないとき）。**「commit が在れば source も必ず在る」
+ * とは読まないこと。** いまの `write-canon.mjs` は `''` / `'build'` /
+ * `'workspace'` しか書かないのでこの組み合わせには実際には到達しないが、
+ * `resolveBuildRevision` の実装は到達を許している——**返る値は正直**（「sha は
+ * 分かるが出所の分類は分からない」）で、doc がそれより強い制限を書くと、次に
+ * 読む人は「doc が嘘だ」と実装のほうを直しに行く。
+ */
 export interface BuildRevision {
   /**
    * フル sha（40桁）。取れなければ `null`。
@@ -53,10 +66,20 @@ interface BakedCanonRevision {
 /**
  * 実際にビルドで焼かれた値。**本番コードはこの既定値だけを使う。**
  *
- * `resolveBuildRevision` の第2引数は、テストが `vi.mock` に頼らずに「焼き込みが
- * 無かったら」を再現するためだけに存在する（このリポジトリは `vi.mock` より
- * 実引数の差し替えを好む — `packages/core/src/runner-registry.test.ts` 冒頭の
- * コメント参照）。渡さなければ常にこれが使われる。
+ * `resolveBuildRevision` の第2引数（`baked`）は、テストが `vi.mock` に頼らずに
+ * 「焼き込みが無かったら」を再現するためだけに存在する（このリポジトリは
+ * `vi.mock` より実引数の差し替えを好む — `packages/core/src/runner-registry.test.ts`
+ * 冒頭のコメント参照）。渡さなければ常にこれが使われる。
+ *
+ * **この第2引数は焼き込みが無かった場合を再現するためだけに在る。本番の経路は
+ * どこからも渡さない。**（これは「渡してよい設定」ではない。渡す実装が現れたら、
+ * それは本番の形が変わったということである。）
+ *
+ * **内部に閉じていない。** `resolveBuildRevision` は `packages/core/src/index.ts`
+ * から export されているので、この第2引数は `@alteroid/core` の**公開 API**に
+ * 含まれる（`private: true` で npm へは publish されないが、ワークスペース内の
+ * daemon / runner / cli / storage-* からは見える範囲）。呼び出し側で `baked` を
+ * 渡すコードが増えたら、それはこの契約が破られたサインである。
  */
 const REAL_BAKED_REVISION: BakedCanonRevision = {
   revision: CANON_REVISION,
@@ -87,6 +110,9 @@ function shortOf(commit: string): string {
  * **環境変数は呼び出し時に読む**（モジュール読み込み時に固定しない）。凍らせると
  * テストで差し替えられず、`Dockerfile` の ARG が実際に効いたかどうかも実行時に
  * しか分からない値（`RAILWAY_GIT_COMMIT_SHA` 等）を読み違える。
+ *
+ * `baked`（第2引数）の効力の範囲は `REAL_BAKED_REVISION` の doc を見ること
+ * ——テスト専用で、本番の経路はどこからも渡さない。
  */
 export function resolveBuildRevision(
   env: NodeJS.ProcessEnv = process.env,

@@ -52,6 +52,14 @@ export interface RunnerAppDeps {
    * ら `/health` が null をそのまま返すか」を確かめるには、実行中のプロセスの
    * 焼き込み状態とは独立に差し替えられる口が要る。本番の起動経路
    * （`apps/runner/src/index.ts`）はこの引数を渡さない。
+   *
+   * **この項目は焼き込みが無かった場合を再現するためだけに在る。本番の経路は
+   * どこからも渡さない。**（これは「渡してよい設定」ではない。渡す実装が現れたら、
+   * それは本番の形が変わったということである。）
+   *
+   * **内部に閉じていない。** `RunnerAppDeps` は `apps/runner/src/index.ts` から
+   * export されている（`@alteroid/runner` の公開面）ので、この項目もワークスペース
+   * 内の daemon 等から見える（`private: true` で npm へは publish されない）。
    */
   revision?: BuildRevision;
 }
