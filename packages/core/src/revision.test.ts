@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
 import { describe, expect, it } from 'vitest';
 
 import { describeBuildRevision, reportRunnerRevision, resolveBuildRevision } from './revision.js';
@@ -138,5 +141,39 @@ describe('reportRunnerRevision', () => {
       short: expect.any(String),
       source: 'build',
     });
+  });
+});
+
+/**
+ * `@alteroid/core` が `private: true` のままであることを固定する。
+ *
+ * **崩れる条件が1つある。** `private` を外して publish 対象にした日、
+ * `resolveBuildRevision` の第2引数（`baked`。テスト専用で、本番の経路は
+ * どこからも渡さない口）は本物の公開 API になる——package.json の
+ * `exports` が `./dist/index.js` を指すので、`private` が付いている限りは
+ * npm へ publish されず、この引数を見るのはワークスペース内のコードだけに
+ * 留まる。`private` を外す人はふつう `revision.ts` を読まないので、この
+ * 境界が壊れたことに誰も気づけない。**
+ *
+ * `@alteroid/core` を publish 対象にすると、`resolveBuildRevision` の第2引数
+ * （テスト用の口）が公開 API になる。publish するなら、先にあの引数を
+ * 包み直すこと。
+ *
+ * `package.json` はテストファイルからの相対パスで読む（cwd に依存させない
+ * ——この器はシェルの cwd が `/workspace` へ戻ることがある。
+ * `packages/core/scripts/write-canon.mjs` の `import.meta.url` 基準の解決と
+ * 同じ作法）。
+ */
+describe('@alteroid/core は private のままである', () => {
+  it('package.json の private が true である（外れたら baked 引数を包み直すこと）', () => {
+    const packageJsonPath = fileURLToPath(new URL('../package.json', import.meta.url));
+    const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { private?: unknown };
+
+    expect(
+      pkg.private,
+      '@alteroid/core を publish 対象にすると、resolveBuildRevision の第2引数' +
+        '（テスト用の口）が公開 API になる。publish するなら、先にあの引数を' +
+        '包み直すこと。',
+    ).toBe(true);
   });
 });
