@@ -4527,6 +4527,43 @@ describe('クローン — 枠で保持している間、中身を持たない�
     return exchanges.filter((entry) => entry.text.includes('畳んだ')).length;
   }
 
+  /**
+   * 解除の試行が `expected` 回に達するまで待つ。**歯3 専用。**
+   *
+   * ## この待ちが言えないこと（計器の側に貼る）
+   *
+   * **「起きなかった（実装の退行）」と「器が遅すぎた（飽和）」を区別できない。**
+   * どちらも同じタイムアウトで出る。**赤を見たら、実装の退行を探しに行く前に
+   * 器の負荷を疑うこと** — 他の歯（歯1・歯2）はアサーションの不一致で数十 ms
+   * のうちに落ちるので、**そちらが緑のままここだけが数秒かけて落ちているなら、
+   * 退行の可能性が高い。逆に全体が遅いなら飽和を先に疑う。**
+   *
+   * この器は混むと vitest の fork pool ごと落ちることがある（`AGENTS.md`
+   * 「自分が走っている器」）ので、**待ちは負荷に耐える側へ倒してある**
+   * （共有の `waitFor` の 3 秒ではなく下の予算）。それでも足りない可能性は
+   * 消せないので、消せないことを上に書いてある。
+   *
+   * `it()` 側にも明示のタイムアウトを付けてあること。**vitest の既定は 5 秒**で、
+   * 付けないとこの待ちより先にそちらが当たり、**理由の書かれていない汎用の
+   * タイムアウト**に化ける（＝ここに書いた断り書きが読まれない）。
+   */
+  const RELEASE_WAIT_BUDGET_MS = 15_000;
+  async function waitForReleaseAttempts(s: Setup, expected: number, what: string): Promise<void> {
+    const started = Date.now();
+    for (;;) {
+      const seen = await releaseAttemptCount(s);
+      if (seen === expected) return;
+      if (Date.now() - started > RELEASE_WAIT_BUDGET_MS) {
+        throw new Error(
+          `${what}: 解除の試行が ${expected} 回になるのを ${RELEASE_WAIT_BUDGET_MS}ms 待ったが ${seen} 回のままだった。` +
+            'この歯は「起きなかった（退行）」と「器が遅すぎた（飽和）」を区別できない。' +
+            '他の歯（歯1・歯2）が緑でここだけ落ちているなら退行を、全体が遅いなら器の飽和を先に疑うこと。',
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+
   /** 「枠の解除を試す」旨の日誌の行数（＝解除を試した回数そのもの）。 */
   async function releaseAttemptCount(s: Setup): Promise<number> {
     const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[];
@@ -4861,10 +4898,7 @@ describe('クローン — 枠で保持している間、中身を持たない�
       at: new Date().toISOString(),
       reason: '1本目',
     });
-    await waitFor(
-      async () => (await releaseAttemptCount(s)) === 1,
-      '1件目の tick が単独で解除を1回起こす',
-    );
+    await waitForReleaseAttempts(s, 1, '1件目の tick');
 
     // 2件目の tick。ここでは既に `#deferred` に1件目（self_initiative）が
     // 保持されているので `#foldsIntoHeldTick` が真になり、この合図自体は
@@ -4895,9 +4929,10 @@ describe('クローン — 枠で保持している間、中身を持たない�
     // 測定であって、事故ではない。** AGENTS.md「タイムアウトは歯があった証拠に
     // ならない」は、**測っているものと無関係な待ちで落ちる形**を戒めたもので
     // あり、これはそれではない。
-    await waitFor(
-      async () => (await releaseAttemptCount(s)) === 2,
-      '2件目の tick が単独で解除を1回起こす（畳まれても回数は減らない）',
+    await waitForReleaseAttempts(
+      s,
+      2,
+      '2件目の tick（畳まれても回数は減らない — この待ちが歯の本体）',
     );
 
     // 3件目の tick。同様に畳まれるが、解除の試行はまた1回増える。
@@ -4907,10 +4942,7 @@ describe('クローン — 枠で保持している間、中身を持たない�
       at: new Date().toISOString(),
       reason: '3本目',
     });
-    await waitFor(
-      async () => (await releaseAttemptCount(s)) === 3,
-      '3件目の tick が単独で解除を1回起こす（畳まれても回数は減らない）',
-    );
+    await waitForReleaseAttempts(s, 3, '3件目の tick（畳まれても回数は減らない）');
 
     // (1) 実際にモデルへ渡った回数。起点＋3回の再試行＝4回。全件が「起点」の
     // 本文を運んでいる（再試行は本文を変えない）。
@@ -4937,7 +4969,11 @@ describe('クローン — 枠で保持している間、中身を持たない�
     expect(putCallCountFor('evt-si-3')).toBe(1);
 
     await s.clone.stop();
-  });
+    // **明示のタイムアウト。** 上の `waitForReleaseAttempts` の予算より必ず大きく
+    // すること — vitest の既定は 5 秒なので、付けないとこちらが先に当たり、
+    // あの断り書き（「退行か飽和かを区別できない」）が読まれないまま
+    // 汎用のタイムアウトに化ける。
+  }, 30_000);
 });
 
 /**
