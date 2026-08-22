@@ -1812,9 +1812,12 @@ export function createCloneTools(context: ToolContext) {
         '人間自身の発言だけを見るなら speaker: "human" を指定する',
         '（既定 both は人間とクローンの両方の発言を含む）。',
         '一覧の本文は抜粋で、全文が要る1件は id を渡して取る。',
-        '**ここに出ないもの**: 承認への回答（ask_human の答え）は日誌の escalation にしか無いので',
-        'journal_read types=["escalation"] で読むこと。人間がマネージャーへ直接話しかけた発言も',
-        'ここには出ない（日誌には with:"manager" として載り、あなた自身の指示と同じ形になる）。',
+        '**ここに出ないもの**（知らずに引くと「無かった」と読むので、先に言う）:',
+        '① **ask_human への人間の回答は、この道具では出ない。**',
+        '回答の本文は日誌の escalation にしか無いので journal_read types=["escalation"] で読むこと',
+        '（approvals_list では出ない。あれは**まだ答えが来ていない件**だけを出す口で、答えの本文を持たない）。',
+        '② 人間がマネージャーへ直接話しかけた発言も出ない',
+        '（日誌には with:"manager" として載り、あなた自身の指示と見分けが付かない）。',
       ].join(' '),
       {
         conversationId: z

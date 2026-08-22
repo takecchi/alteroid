@@ -335,3 +335,27 @@ describe('conversation_read — 会話の一覧', () => {
     expect(reply).toContain('conversation_read conversationId=');
   });
 });
+
+/**
+ * **「何が出ないか」を説明文から消させない。**
+ *
+ * この道具を引く場面のかなりの割合が「人間が自分の質問に何と答えたか」だが、
+ * `ask_human` への回答は `exchange` にならず日誌の `escalation` にしか残らない
+ * （`clone.ts` の `#record` が `human_answer` を素通りさせる）。**出ないことを
+ * 知らずに引くと「無かった」と読む**ので、説明文に名指しで書いてある。ここは
+ * 文面の細部ではなく「この2つが名指しされていること」だけを固定する。
+ */
+describe('conversation_read — 出ないものを説明文が名指ししている', () => {
+  it('ask_human の回答が出ないことと、その行き先が書いてある', () => {
+    const found = createCloneTools({
+      stores: createMemoryStores(),
+      emit: () => undefined,
+    }).find((entry) => entry.name === 'conversation_read');
+    if (!found) throw new Error('道具 conversation_read が無い');
+
+    expect(found.description).toContain('ask_human');
+    // 行き先は `escalation`。**`approvals_list` は未回答だけを出す口なので答えを持たない。**
+    expect(found.description).toContain('escalation');
+    expect(found.description).toContain('approvals_list では出ない');
+  });
+});
