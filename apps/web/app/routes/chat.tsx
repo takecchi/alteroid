@@ -764,20 +764,33 @@ export function ChatPane({
             **「受信をやめる」は「送る」の代わりではない。** 並べて出す —
             受信中でも続けて送れるので、送る口を消してしまうと、追送するには
             いったん受信を捨てるしかなくなる（捨てているあいだに届いた応答は画面に出ない）。
+
+            **狭い画面ではラベルだけ畳み、アイコンは常に出す**（`hidden md:inline`）。
+            2つ並ぶと入力欄と幅を取り合うため、本3 で `h-11` になったこのボタンは
+            アイコン化しないと狭い画面で収まらない。`aria-label` は明示する —
+            ラベルの `<span>` を隠しても中の文字は DOM から消えないので付けなくても
+            アクセシブルネームは保たれるが、実機（Tailwind が効く環境）で見出しの
+            文字が本当に消えたときに備え、頼らない形にしてある。
           */}
           {sending && (
             <Button
               variant="default"
               onClick={() => streamRef.current?.controller.abort()}
               title="読むのをやめる。クローンのターンは止まらない"
+              aria-label="受信をやめる"
             >
               <Square className="size-3.5" aria-hidden />
-              受信をやめる
+              <span className="hidden md:inline">受信をやめる</span>
             </Button>
           )}
-          <Button variant="primary" disabled={draft.trim() === ''} onClick={() => void send(draft)}>
+          <Button
+            variant="primary"
+            disabled={draft.trim() === ''}
+            onClick={() => void send(draft)}
+            aria-label="送る"
+          >
             <Send className="size-3.5" aria-hidden />
-            送る
+            <span className="hidden md:inline">送る</span>
           </Button>
         </div>
         {/*
