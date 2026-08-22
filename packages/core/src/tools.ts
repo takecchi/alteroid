@@ -1579,9 +1579,7 @@ export function createCloneTools(context: ToolContext) {
             runner.instanceId === undefined
               ? '  応えているプロセス: 名乗っていない（この器では入れ替わりを判定できない）'
               : `  応えているプロセス: ${runner.instanceId}` +
-                  (runner.instanceSince === undefined
-                    ? ''
-                    : `（${runner.instanceSince} から）`),
+                  (runner.instanceSince === undefined ? '' : `（${runner.instanceSince} から）`),
           );
           if (runner.error !== undefined) lines.push(`  直近の失敗: ${runner.error}`);
           lines.push(

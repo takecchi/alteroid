@@ -64,9 +64,7 @@ function renderSettings(runners: RunnerSummary[]) {
 
 describe('runner の札は、いま応えているプロセスを出す', () => {
   it('名乗っているプロセスと、それを見始めた時刻を出す', async () => {
-    renderSettings([
-      { ...BASE, instanceId: 'boot-2', instanceSince: '2026-08-22T03:04:00.000Z' },
-    ]);
+    renderSettings([{ ...BASE, instanceId: 'boot-2', instanceSince: '2026-08-22T03:04:00.000Z' }]);
 
     const line = await screen.findByText(/プロセス: boot-2/);
     expect(line.textContent).toContain('から');

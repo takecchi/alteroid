@@ -4384,6 +4384,12 @@
                           "workspacePath": {
                             "type": "string"
                           },
+                          "instanceId": {
+                            "type": "string"
+                          },
+                          "instanceSince": {
+                            "type": "string"
+                          },
                           "credentials": {
                             "type": "array",
                             "items": {
