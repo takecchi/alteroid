@@ -181,6 +181,15 @@ describe('renderManagerList', () => {
     expect(text.split('\n')[1]).toContain('cwd:');
   });
 
+  /** `GET /managers` が既に持っていた値を出すだけ（#208 でクローン側は既出）。 */
+  it('作成と更新を出す（別の値で、取り違えでも落ちる形にする）', () => {
+    const text = renderManagerList([
+      manager({ startedAt: '2026-08-16T10:00:00.000Z', updatedAt: '2026-08-17T09:30:00.000Z' }),
+    ]);
+
+    expect(text).toContain('作成: 2026-08-16T10:00:00.000Z  更新: 2026-08-17T09:30:00.000Z');
+  });
+
   /**
    * **直近の1ターンが「報告」ではなく失敗で終わったこと**を、状態に添えて出す。
    *
@@ -349,6 +358,27 @@ interface AnswersRequest {
   answers: { id: string; answer: string }[];
 }
 
+/** `GET /approvals` が返す1件の形（`pendingApprovalSchema`）。 */
+interface ApprovalLike {
+  id: string;
+  createdAt: string;
+  question: string;
+  context?: string;
+  jobId?: string;
+  answeredAt?: string;
+}
+
+/** `GET /schedule` が返す1件の形（`scheduleStatusSchema`）。 */
+interface ScheduleEntryLike {
+  kind: string;
+  description: string;
+  nextAt: string;
+  request?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  lastRunAt?: string;
+}
+
 function stubClient(
   options: {
     commitments?: Commitment[];
@@ -377,6 +407,10 @@ function stubClient(
     approvalsAnswerResults?: (
       answers: { id: string; answer: string }[],
     ) => { id: string; ok: boolean; error?: string }[];
+    /** `GET /approvals` が返す一覧。既定は空。 */
+    approvals?: ApprovalLike[];
+    /** `GET /schedule` が返す一覧。既定は空。 */
+    scheduleEntries?: ScheduleEntryLike[];
   } = {},
 ) {
   const calls: { route: string; args: unknown }[] = [];
@@ -447,6 +481,10 @@ function stubClient(
       },
     },
     approvals: {
+      $get: (args: unknown) => {
+        calls.push({ route: 'GET /approvals', args });
+        return Promise.resolve(reply(200, { approvals: options.approvals ?? [] }));
+      },
       answer: {
         $post: (args: { json: AnswersRequest }) => {
           calls.push({ route: 'POST /approvals/answer', args });
@@ -455,6 +493,12 @@ function stubClient(
           );
           return Promise.resolve(reply(options.approvalsAnswerStatus ?? 200, { results }));
         },
+      },
+    },
+    schedule: {
+      $get: (args: unknown) => {
+        calls.push({ route: 'GET /schedule', args });
+        return Promise.resolve(reply(200, { entries: options.scheduleEntries ?? [] }));
       },
     },
   };
@@ -540,6 +584,42 @@ describe('renderCommitments', () => {
     expect(header).toBeDefined();
     expect(header?.length).toBeLessThan(200);
     expect(header).toContain('…');
+  });
+
+  /**
+   * 5項目のうちの「作成」。未了なら作成と更新は一致する。
+   * `at` / `closedAt` / `NOW` を別々の日付にして、取り違えでも落ちる形にする。
+   */
+  it('未了の1件は作成と更新に同じ受け取り時刻を出す（齢の表示も残る）', () => {
+    const { text } = renderCommitments([commitment({ at: '2026-08-10T00:00:00.000Z' })], NOW);
+
+    expect(text).toContain('作成: 2026-08-10T00:00:00.000Z');
+    expect(text).toContain('更新: 2026-08-10T00:00:00.000Z');
+    // 齢の表示（（N前）は残っていること — ISO を足しても消えるものではない。
+    expect(text).toMatch(/（\d+日前）/);
+  });
+
+  /**
+   * 片付いた1件は「更新」に closedAt を出し、受け取り時刻（at）を出さない。
+   * 3つの時刻（at / closedAt / NOW）をすべて別の日付にしておく——
+   * `at` に取り違えても、`NOW` を出しても、この形なら落ちる。
+   */
+  it('片付いた1件は更新に closedAt を出す（受け取り時刻に取り違えない）', () => {
+    const { text } = renderCommitments(
+      [
+        commitment({
+          at: '2026-08-10T00:00:00.000Z',
+          closedAt: '2026-08-15T00:00:00.000Z',
+          closedReason: 'x',
+        }),
+      ],
+      NOW,
+    );
+
+    expect(text).toContain('作成: 2026-08-10T00:00:00.000Z');
+    expect(text).toContain('更新: 2026-08-15T00:00:00.000Z');
+    expect(text).not.toContain('更新: 2026-08-10T00:00:00.000Z');
+    expect(text).not.toContain(`更新: ${new Date(NOW).toISOString()}`);
   });
 
   it('空なら、そう言う（黙って何も出さない形にしない）', () => {
@@ -812,6 +892,124 @@ describe('chat の /answers（まとめて答える）', () => {
     await runSlashCommand('/help', client, emptyListed());
 
     expect(read()).toContain('/answers');
+  });
+});
+
+/**
+ * `/approvals` の一覧（PR #235）。
+ *
+ * 札は質問の1行目だけにしてある——改行を含む質問を全文そのまま先頭行へ出すと
+ * `[1] ` の行が途中で折れ、番号と質問の対応が崩れる（クローン側は #215 で
+ * 1行目を札にしてある）。**残りの行は落とさない**（CLI は人間へ返す口なので、
+ * 切れば能力を削る）。
+ */
+describe('chat の /approvals（一覧）', () => {
+  it('先頭行（[1] の行）には質問の1行目だけが乗り、2行目以降は落とさず続く', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      approvals: [
+        {
+          id: 'appr-1',
+          createdAt: '2026-08-16T10:00:00.000Z',
+          question: '1行目の質問です\n2行目の補足です\n3行目の補足です',
+        },
+      ],
+    });
+
+    await runSlashCommand('/approvals', client, emptyListed());
+
+    const text = read();
+    const lines = text.split('\n');
+    const header = lines.find((line) => line.startsWith('  [1] '));
+    // 先頭行は1行目だけ（2行目・3行目が混ざって折れていない）。
+    expect(header).toBe('  [1] 1行目の質問です');
+    // **札の下へインデントして続いていること。** `text.split('\n')` は元の質問に
+    // 埋め込まれた改行もそのまま行に割るので、`toContain('2行目の補足です')` だけでは
+    // 「全文を先頭行へ出した（インデントなし）」場合と区別できない
+    // （実際、当てた変異でこの弱い形の assertion は通り抜けた）。**インデント込みの
+    // 行そのもの**を見て、初めて「札の下へ続けた」ことを保証できる。
+    expect(lines).toContain('      2行目の補足です');
+    expect(lines).toContain('      3行目の補足です');
+    // 能力を削っていないこと——2行目・3行目は出力のどこかに残っている。
+    expect(text).toContain('2行目の補足です');
+    expect(text).toContain('3行目の補足です');
+  });
+
+  it('作成と更新を出す（未回答なら更新は作成に一致、回答済みなら answeredAt）', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      approvals: [
+        { id: 'appr-open', createdAt: '2026-08-16T10:00:00.000Z', question: '未回答の質問' },
+        {
+          id: 'appr-answered',
+          createdAt: '2026-08-14T00:00:00.000Z',
+          answeredAt: '2026-08-15T00:00:00.000Z',
+          question: '回答済みの質問',
+        },
+      ],
+    });
+
+    await runSlashCommand('/approvals', client, emptyListed());
+
+    const text = read();
+    // 未回答: 更新は作成に一致。
+    expect(text).toContain(
+      'id: appr-open  作成: 2026-08-16T10:00:00.000Z' + '  更新: 2026-08-16T10:00:00.000Z',
+    );
+    // 回答済み: 更新は answeredAt。作成（createdAt）には取り違えない。
+    expect(text).toContain(
+      'id: appr-answered  作成: 2026-08-14T00:00:00.000Z' + '  更新: 2026-08-15T00:00:00.000Z',
+    );
+    expect(text).not.toContain(
+      'id: appr-answered  作成: 2026-08-14T00:00:00.000Z' + '  更新: 2026-08-14T00:00:00.000Z',
+    );
+  });
+});
+
+/**
+ * `/schedule`（継続中の依頼の一覧、PR #235）。
+ *
+ * 既定の仕込み（日報・発意 tick）は「作成という出来事が存在しない」ので、
+ * `createdAt` が無い。**空欄や `undefined` にしないこと**——探しに行く人が出る。
+ */
+describe('chat の /schedule', () => {
+  it('仕込まれた依頼は概要と作成・更新を出す', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      scheduleEntries: [
+        {
+          kind: 'follow-up',
+          description: '継続中の依頼',
+          nextAt: '2026-08-20T00:00:00.000Z',
+          request: 'PR #99 の続きを見る',
+          createdAt: '2026-08-15T00:00:00.000Z',
+          updatedAt: '2026-08-16T00:00:00.000Z',
+        },
+      ],
+    });
+
+    await runSlashCommand('/schedule', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain('依頼: PR #99 の続きを見る');
+    expect(text).toContain('作成: 2026-08-15T00:00:00.000Z  更新: 2026-08-16T00:00:00.000Z');
+  });
+
+  it('既定の仕込み（createdAt が無い）は「無し」と言葉で出す（undefined を出さない）', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      scheduleEntries: [
+        { kind: 'daily-report', description: '日報', nextAt: '2026-08-20T00:00:00.000Z' },
+      ],
+    });
+
+    await runSlashCommand('/schedule', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain(
+      '作成・更新: 無し（コードに書かれた既定の仕込みで、仕込まれた記録がありません）',
+    );
+    expect(text).not.toContain('undefined');
   });
 });
 

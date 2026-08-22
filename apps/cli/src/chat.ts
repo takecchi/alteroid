@@ -354,6 +354,19 @@ export async function runSlashCommand(
         stdout.write(`  ${entry.kind}  次: ${entry.nextAt}\n      ${entry.description}\n`);
         // 継続中の依頼だけが持つもの。何を頼まれたままなのかが人間に見えること
         if (entry.request !== undefined) {
+          // **概要（何を頼まれたままなのか）。** ここが出ていなかったので、
+          // 人間は kind と次の発火時刻しか見えていなかった。
+          stdout.write(`      依頼: ${summarizeText(entry.request)}\n`);
+        }
+        // **「無い」を黙らせない。** 既定の日報・発意はコードに書かれた既定で、
+        // 仕込まれたレコードではないので**作成という出来事が存在しない**。
+        // 空欄や `—` にすると「取れなかった」と読まれる（探しに行く人が出る）。
+        stdout.write(
+          entry.createdAt === undefined
+            ? '      作成・更新: 無し（コードに書かれた既定の仕込みで、仕込まれた記録がありません）\n'
+            : `      作成: ${entry.createdAt}  更新: ${entry.updatedAt ?? entry.createdAt}\n`,
+        );
+        if (entry.request !== undefined) {
           stdout.write(`      前回: ${entry.lastRunAt ?? '（まだ一度も動いていません）'}\n`);
         }
       }
@@ -662,8 +675,19 @@ export async function runSlashCommand(
       }
       approvals.forEach((approval, index) => {
         listed.approvals.push(approval.id);
-        stdout.write(`  [${index + 1}] ${approval.question}\n`);
-        stdout.write(`      id: ${approval.id}  積まれた: ${approval.createdAt}\n`);
+        // **札は質問の1行目。** 全文をそのまま先頭行へ出していたので、改行を
+        // 含む質問では `[1] ` の行が途中で折れて、番号と質問の対応が崩れていた
+        // （クローン側は #215 で1行目を札にしてある）。
+        //
+        // **残りの行は落とさない。** CLI は人間へ返す口なので、切れば能力を削る
+        // （north_star 禁止1）。札の下へそのまま続ける。
+        const [head, ...restLines] = approval.question.split('\n');
+        stdout.write(`  [${index + 1}] ${head ?? ''}\n`);
+        for (const line of restLines) stdout.write(`      ${line}\n`);
+        stdout.write(
+          `      id: ${approval.id}  作成: ${approval.createdAt}` +
+            `  更新: ${approval.answeredAt ?? approval.createdAt}\n`,
+        );
         if (approval.jobId) stdout.write(`      マネージャー: ${approval.jobId}\n`);
         if (approval.context) stdout.write(`      背景: ${summarizeText(approval.context)}\n`);
       });
@@ -1018,6 +1042,9 @@ export function renderManagerList(managers: ManagerListItem[]): string {
       `  ${manager.managerId}  [${manager.status}${live}]  ${summarizeText(manager.request)}`,
     );
     lines.push(`      cwd: ${manager.cwd}`);
+    // **作成と更新。** 値は `GET /managers` が既に返していて、ここが出して
+    // いなかっただけである（クローンの `manager_list` には #208 から出ている）。
+    lines.push(`      作成: ${manager.startedAt}  更新: ${manager.updatedAt}`);
     // **`lost` を状態名だけで済ませない。** クローン（`manager_list`）と Web UI には
     // 但し書きが出るのに、ここだけ `[lost]` としか出ていなかった＝同じ状態を見て
     // 人間とクローンが違う判断をする形になっていた。
@@ -1243,9 +1270,13 @@ export function renderCommitments(
     const from =
       COMMITMENT_ORIGIN_LABEL[commitment.origin] +
       (commitment.source === undefined ? '' : `(${commitment.source})`);
+    // **5項目を揃える**（人間の依頼: id + 名前 + 概要 + updated_at + created_at）。
+    // 名前は「起点」、概要は上の本文の抜粋、作成は受け取った時刻、更新は
+    // 片付けた時刻（まだなら受け取った時刻）。**齢の表示は残す** — 人間が
+    // 一覧を読むときに効くのはそこで、ISO を足したから要らなくなるものではない。
     lines.push(
-      `      id: ${commitment.id}  起点: ${from}  受け取った: ${commitment.at}` +
-        `（${formatElapsed(commitment.at, now)}前）`,
+      `      id: ${commitment.id}  起点: ${from}  作成: ${commitment.at}` +
+        `（${formatElapsed(commitment.at, now)}前）  更新: ${commitment.closedAt ?? commitment.at}`,
     );
     if (closed) {
       lines.push(

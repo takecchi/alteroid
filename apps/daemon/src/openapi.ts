@@ -302,6 +302,20 @@ export const scheduleStatusSchema = z.object({
    * ここが出ているものは `DELETE /schedule/:kind` で外せる。
    */
   request: z.string().optional(),
+  /**
+   * 仕込まれた時刻 / 最後に仕込み直された時刻（ISO 8601）。
+   *
+   * **`request` と同じく、仕込まれたものだけが持つ。** 既定の日報・発意には
+   * 無い——「分からない」のではなく、**コードに書かれた既定なので作成という
+   * 出来事が存在しない。** `unknown` を入れないこと（あれは「在るはずだが
+   * 根拠が無い」を表す値である）。
+   *
+   * **加算のみの変更である**（#235）。既存の欄は1つも変えていないので、
+   * いまの消費側は壊れない。CLI がこれを出せなかったのは、**API が返して
+   * いなかったから**である（`docs/PRD.md`「片方でしかできないことを作らない」）。
+   */
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
   /** 前回この kind で発火した時刻（ISO 8601）。一度も動いていなければ無い。 */
   lastRunAt: z.string().optional(),
 });

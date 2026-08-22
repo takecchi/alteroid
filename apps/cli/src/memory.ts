@@ -32,6 +32,27 @@ interface MemorySummary {
   kind: 'premise' | 'fact';
   description?: string;
   descriptionFreshness: { kind: 'fresh' | 'stale' | 'unknown' | 'absent' };
+  /** 最後に本文が変わった時刻。 */
+  updatedAt: string;
+  /**
+   * 作成時刻。**根拠が無ければ `unknown`。**
+   *
+   * `GET /memory` は #220 からこの2状態で返す（日誌に最初の書き込みが無ければ
+   * `unknown`。ファイルの mtime は使わない）。**空欄にしないこと** — 空欄だと
+   * 「取れていない」のか「読み忘れ」なのか区別できない。
+   */
+  createdAt: { kind: 'known'; at: string } | { kind: 'unknown' };
+}
+
+/**
+ * 作成時刻を1行に出す形。**根拠が無ければ「不明」と明言する。**
+ *
+ * クローンの `memory_list`（`packages/core/src/memory.ts` の
+ * `formatMemoryCreatedAt`）と同じ言葉にしてある。**片方だけ空欄にすると、
+ * 人間とクローンが同じ記憶を見て違う判断をする。**
+ */
+function formatCreatedAt(createdAt: MemorySummary['createdAt']): string {
+  return createdAt.kind === 'known' ? createdAt.at : '不明';
 }
 
 export async function memoryListCommand(): Promise<void> {
@@ -53,7 +74,12 @@ export async function memoryListCommand(): Promise<void> {
   for (const doc of documents) {
     const marker = freshnessMarker(doc.descriptionFreshness.kind);
     const desc = doc.description === undefined ? '' : ` — ${marker}${doc.description}`;
-    stdout.write(`  [${doc.kind}] ${doc.slug}  — ${doc.title}${desc}\n`);
+    // 5項目: slug（id）/ title（名前）/ description（概要）/ 作成 / 更新。
+    // 括弧の中の形は `memory_list` に揃えてある。
+    stdout.write(
+      `  [${doc.kind}] ${doc.slug}  — ${doc.title}` +
+        ` (作成: ${formatCreatedAt(doc.createdAt)} / 更新: ${doc.updatedAt})${desc}\n`,
+    );
   }
 }
 
