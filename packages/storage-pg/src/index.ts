@@ -5,6 +5,7 @@ import { Pool } from 'pg';
 import { PgTranscriptArchive } from './archive.js';
 import { PgAuthStore } from './auth.js';
 import { PgCommitmentStore } from './commitments.js';
+import { PgPermissionStore } from './permissions.js';
 import type { Db } from './db.js';
 import { PgInboxStore } from './inbox.js';
 import { PgJobStore } from './jobs.js';
@@ -20,6 +21,7 @@ import { PgUsageStore } from './usage.js';
 export { PgTranscriptArchive } from './archive.js';
 export { PgAuthStore } from './auth.js';
 export { PgCommitmentStore } from './commitments.js';
+export { PgPermissionStore } from './permissions.js';
 export { PgInboxStore } from './inbox.js';
 export { PgJobStore } from './jobs.js';
 export { PgJournalStore } from './journal.js';
@@ -77,6 +79,7 @@ export function createPgStoresFromDb(db: Db, close?: () => Promise<void>): PgSto
     jobs: new PgJobStore(db),
     schedules: new PgScheduleStore(db),
     commitments: new PgCommitmentStore(db),
+    permissions: new PgPermissionStore(db),
     inbox: new PgInboxStore(db),
     archive: new PgTranscriptArchive(db),
     sessions: new PgSessionRegistry(db),

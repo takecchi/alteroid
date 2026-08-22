@@ -9,6 +9,7 @@ import { FsCommitmentStore } from './commitments.js';
 import { FsInboxStore } from './inbox.js';
 import { FsJobStore } from './jobs.js';
 import { FsJournalStore } from './journal.js';
+import { FsPermissionStore } from './permissions.js';
 import { FsPersonaStore } from './persona.js';
 import { FsProfileStore } from './profile.js';
 import { resolvePaths, type AlteroidPaths } from './paths.js';
@@ -22,6 +23,7 @@ export { CLOSED_HISTORY_LIMIT, FsCommitmentStore } from './commitments.js';
 export { FsInboxStore } from './inbox.js';
 export { FsJobStore } from './jobs.js';
 export { FsJournalStore } from './journal.js';
+export { FsPermissionStore } from './permissions.js';
 export { FsPersonaStore } from './persona.js';
 export { FsProfileStore } from './profile.js';
 export { FsScheduleStore } from './schedules.js';
@@ -39,6 +41,7 @@ export function createFsStores(root?: string): Stores & { paths: AlteroidPaths }
     jobs: new FsJobStore(paths.jobs),
     schedules: new FsScheduleStore(paths.jobs),
     commitments: new FsCommitmentStore(paths.jobs),
+    permissions: new FsPermissionStore(paths.jobs),
     inbox: new FsInboxStore(paths.jobs),
     archive: new FsTranscriptArchive(paths.archive),
     sessions: new FsSessionRegistry(paths.state),

@@ -108,6 +108,21 @@ const STATEMENTS = [
      value text
    )`,
 
+  // --- 人間が開けた実行許可（store.ts の PermissionStore） ---------------------
+  // 一意なのは id ではなく rule である。同じ規則が2行あると、人間が1行消しても
+  // 規則は効いたままになり「消したのに効き続ける」＝ 増やす口だけが片道で開く。
+  // 重複の禁止を SQL 側へ置けば `insert ... on conflict do nothing` の1操作で
+  // 判定ごと済み、割り込む隙間が無い。
+  //
+  // **deny / ask の列を足さないこと。ここは allow だけの台帳である。**
+  // **「どの層に効くか」の列も足さないこと** — すぐ下の env_profile が、まさに
+  // その形が権限の一覧へ化けると警告している。
+  `create table if not exists permissions (
+     id text primary key,
+     rule text not null unique,
+     granted_at timestamptz not null,
+     permission jsonb not null
+   )`,
   // 実行環境プロファイル（\`.zprofile\` 相当）。**高々1行**である。
   // 用途ごとに行を増やす形にしないのは、増やせる形にした瞬間に「どの行が
   // どの層に効くか」の対応表が生まれ、それが権限の一覧に化けるからである。

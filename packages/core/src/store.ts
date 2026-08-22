@@ -3,6 +3,7 @@ import type { SessionStore } from '@anthropic-ai/claude-agent-sdk';
 import type { AuthStore } from './auth.js';
 import type {
   Commitment,
+  PermissionRule,
   InboxEvent,
   Job,
   JournalEntry,
@@ -265,6 +266,41 @@ export interface TranscriptArchive {
 }
 
 /**
+ * 人間が開けた実行許可の台帳（`schema.ts` の {@link PermissionRule}）。
+ *
+ * **`allow` しか持たない。** `deny` / `ask` を足すメソッドをここへ生やさないこと
+ * （理由は `permissionRuleSchema` の doc。正典の地雷そのものになる）。
+ *
+ * **省略可能にしないこと**（`commitments` と同じ理由）。ここが任意だと、片方の器
+ * でだけ「人間が許可を開けられない」という能力差が生まれる（north_star 禁止1）。
+ */
+export interface PermissionStore {
+  /** 全件を、許可した順（古い順）で返す。**件数で切らない。** */
+  list(): Promise<PermissionRule[]>;
+
+  get(id: string): Promise<PermissionRule | null>;
+
+  /**
+   * 1件許す。**同じ `rule` が既に在れば何もしない**（許したら `true`）。
+   *
+   * **重複を作らないことが「消せること」の前提である。** 同じ規則が2行あると、
+   * 人間が1行消しても規則は効いたままになり、**消したのに効き続ける**という
+   * 一番まずい形になる（増やす口だけが片道で開く）。だから重ねない。
+   */
+  grant(entry: PermissionRule): Promise<boolean>;
+
+  /**
+   * 1件取り消す。取り消したら `true`、無い id は `false`。
+   *
+   * **ここは `commitments` と違い、行を消す。** 台帳に残った行は「いま効いている
+   * 許可」そのものなので、閉じた印を付けて残す形にすると、効いていない規則が
+   * 一覧に並ぶ ＝ 何が効いているのか読めなくなる。**消えた記録は日誌が持つ**
+   * （追記専用なので、いつ誰が外したかはそちらに残る）。
+   */
+  revoke(id: string): Promise<boolean>;
+}
+
+/**
  * 実行環境プロファイル（人間の `.zprofile` / `.zshenv` に当たるもの）。
  *
  * **記憶ではない。** 人格は記憶（Markdown）に宿るのであって、鍵や `PATH` の話は
@@ -391,6 +427,12 @@ export interface Stores {
    * 「その場で着手しなかった依頼が黙って消える」という能力差が生まれる。
    */
   commitments: CommitmentStore;
+  /**
+   * 人間が開けた実行許可の台帳（{@link PermissionStore}）。
+   *
+   * **省略可能にしないこと**（`commitments` と同じ理由）。
+   */
+  permissions: PermissionStore;
   archive: TranscriptArchive;
   sessions: SessionRegistry;
   /**

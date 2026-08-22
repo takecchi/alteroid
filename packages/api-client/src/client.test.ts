@@ -103,6 +103,8 @@ function fakeClone(stores: Stores) {
         });
       }
     },
+    // この試験は HTTP の口の形だけを見る（流し込みそのものは daemon 側で見る）。
+    async applyPermissions() {},
     async stop() {},
   };
 

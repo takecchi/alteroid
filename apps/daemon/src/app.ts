@@ -78,6 +78,8 @@ import {
   memoryReadResponseSchema,
   meResponseSchema,
   okResponseSchema,
+  permissionGrantedResponseSchema,
+  permissionListResponseSchema,
   openApiDocumentation,
   openApiExcludePaths,
   profileErrorResponseSchema,
@@ -364,6 +366,21 @@ const commitmentCloseBody = z.object({ reason: z.string().min(1) });
  * 一覧が片付いたもので埋まる）。`/approvals` の `pending` と同じ形に揃えてある。
  */
 const commitmentsQuery = z.object({ includeClosed: z.enum(['true', 'false']).default('false') });
+
+/**
+ * 許す規則1本。
+ *
+ * **器はこの文字列の中身を解釈しない。** 何が広くて何が狭いかを判定する表をここに
+ * 持つと、それ自体が「行為の一覧」になる（`permissionRuleSchema` の不変条件1）。
+ * 人間が書いた文字列をそのまま台帳へ入れる。
+ *
+ * **`deny` / `ask` を受ける口を足さないこと。** ここは `allow` だけの入口である。
+ */
+const permissionGrantBody = z.object({
+  rule: z.string().min(1),
+  /** なぜ許したか。**任意だが、書いておくと人間が後から否定できる。** */
+  note: z.string().min(1).optional(),
+});
 
 const loginBody = z.object({
   provider: z.string().min(1),
@@ -1931,6 +1948,143 @@ export function createApp(deps: AppDeps) {
           decision: `人間が引き受けた仕事を片付けた（${id}）: ${reason}`,
           grounds: '人間が直接 API から閉じた',
         });
+        return c.json(okResponseSchema.parse({ ok: true }));
+      },
+    )
+
+    // --- 実行許可（人間が「常に許可」を押すのに当たる口） --------------------
+    //
+    // **なぜ HTTP に口が要るか。** 既定の `permissionMode: 'auto'` では SDK のモデル
+    // 分類器がその場で拒否を決め、`canUseTool` は呼ばれない。だからクローンが記憶に
+    // 根拠を見つけて「やってよい」と判断しても、価値観を1つも知らない分類器がその手前で
+    // 落とす。**人間が自分の PC で Claude Code を開けば一度「常に許可」を押せば以後
+    // 通るのに、クローンにはその操作が存在しなかった**（north_star 禁止1）。ここはその
+    // 「一度押す」を作る口である。
+    //
+    // **ここは `allow` だけを扱う。** `deny` / `ask` の口を足さないこと — AGENTS.md の
+    // 地雷表が禁じているのは「確認が要る行為の一覧」＝ そちら側で、足した瞬間に
+    // 権限境界が設定へ化ける（`permissionRuleSchema` の不変条件1）。
+    //
+    // **⚠️ ここが直すのは「許可が原因の拒否」だけである。** 規則はコマンド文字列に
+    // 照合されるので、命令の形が悪くて弾かれたものは規則を足しても次も弾かれる。
+    // その取り違えは `clone.ts` の `#noteDenial` が検出して日誌で目立たせる。
+    .get(
+      '/permissions',
+      describeRoute({
+        tags: ['permissions'],
+        summary: '人間が開けた実行許可の一覧',
+        description:
+          'いま効いている許可の**全量**。件数で切らない（切れば効いている許可が' +
+          '一覧から消える）。取り消しはここで返る `id` を使う。',
+        responses: {
+          200: {
+            description: '許した順（古い順）。',
+            content: { 'application/json': { schema: resolver(permissionListResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        return c.json(
+          permissionListResponseSchema.parse({ entries: await stores.permissions.list() }),
+        );
+      },
+    )
+
+    .post(
+      '/permissions',
+      describeRoute({
+        tags: ['permissions'],
+        summary: '実行許可を1件開ける',
+        description:
+          '規則を1本足し、**走行中のクローンのセッションへその場で効かせる**' +
+          '（次にセッションが開くのを待たない）。`rule` は SDK の許可規則そのもの' +
+          '（`Bash(gh pr merge:*)` など）。同じ規則が既に在れば 409。',
+        responses: {
+          200: {
+            description: '許した。返る id が取り消すときの宛先になる。',
+            content: {
+              'application/json': { schema: resolver(permissionGrantedResponseSchema) },
+            },
+          },
+          400: {
+            description: '本文が JSON として不正（`rule` は空にできない）。',
+            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+          },
+          409: {
+            description: 'その規則は既に許してある（重ねると取り消しが効かなくなる）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      validator('json', permissionGrantBody),
+      async (c) => {
+        const { rule, note } = c.req.valid('json');
+        const entry = {
+          id: randomUUID(),
+          rule,
+          grantedAt: new Date().toISOString(),
+          // **本文から取らない**（`POST /commitments` の `origin` と同じ理由）。
+          // ここを呼び出し側に選ばせると、クローンが自分の名前以外を名乗って
+          // 許可を足したように見せられる。
+          grantedBy: 'human' as const,
+          ...(note === undefined ? {} : { note }),
+        };
+        // **重ねない。** 同じ規則が2行あると、人間が1行消しても規則は効いたままになり
+        // 「消したのに効き続ける」＝ 増やす口だけが片道で開く形になる。
+        if (!(await stores.permissions.grant(entry))) {
+          return c.json({ error: `${rule} は既に許してある` }, 409);
+        }
+        // **記録に残らない許可は、許可として成立していない。** 人間が後から読んで
+        // 否定できることが最終承認の実体である（north_star）。
+        await stores.journal.append({
+          type: 'decision',
+          decision:
+            `人間が実行許可を開けた（${entry.id}）: ${rule}` +
+            `${note === undefined ? '' : `（${note}）`}`,
+          grounds: '人間が直接 API から許可を開けた',
+        });
+        // **台帳を書き換えたら必ず流し込む。** 呼ばないと次にセッションが開くまで
+        // （＝数時間後か数日後）効かない。
+        await clone.applyPermissions();
+        return c.json(permissionGrantedResponseSchema.parse({ ok: true, id: entry.id }));
+      },
+    )
+
+    .delete(
+      '/permissions/:id',
+      describeRoute({
+        tags: ['permissions'],
+        summary: '実行許可を1件取り消す',
+        description:
+          '**行を消し、走行中のクローンのセッションからもその場で外す。**' +
+          '増やす口だけあって消す口が無いのは片道の権限なので、ここは最初から在る。' +
+          'いつ誰が外したかは日誌に残る。',
+        responses: {
+          200: {
+            description: '取り消した。以後この規則は効かない。',
+            content: { 'application/json': { schema: resolver(okResponseSchema) } },
+          },
+          404: {
+            description: 'その id は台帳に無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        const id = c.req.param('id');
+        // 消す前に読む。**日誌に「何を」外したかを残すためである** — id だけ残しても、
+        // 行が消えた後では何の規則だったか誰にも辿れない。
+        const existing = await stores.permissions.get(id);
+        if (!(await stores.permissions.revoke(id))) {
+          return c.json({ error: 'not found' as const }, 404);
+        }
+        await stores.journal.append({
+          type: 'decision',
+          decision: `人間が実行許可を取り消した（${id}）: ${existing?.rule ?? '規則の記録なし'}`,
+          grounds: '人間が直接 API から取り消した',
+        });
+        // **消したら実際に効かなくなること。** 全量を送り直すので、減った規則はここで消える。
+        await clone.applyPermissions();
         return c.json(okResponseSchema.parse({ ok: true }));
       },
     )

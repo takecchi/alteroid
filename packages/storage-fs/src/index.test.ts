@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { renderMemoryDocuments } from '@alteroid/core';
-import type { Commitment, InboxEvent } from '@alteroid/core';
+import type { Commitment, InboxEvent, PermissionRule } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { CLOSED_HISTORY_LIMIT, createFsStores, initWorkspace } from './index.js';
@@ -1153,3 +1153,84 @@ describe('AuthStore', () => {
 function neverIssued(): never {
   throw new Error('引き取れないはずの要求でトークンを作ろうとした');
 }
+
+/**
+ * 人間が開けた実行許可の台帳（`store.ts` の `PermissionStore`）。
+ *
+ * fs / pg で同じ振る舞いになることを両方で問う（`store.ts`「省略可能にしないこと」）。
+ */
+describe('FsPermissionStore', () => {
+  const rule = (id: string, value: string, grantedAt: string): PermissionRule => ({
+    id,
+    rule: value,
+    grantedAt,
+    grantedBy: 'human',
+  });
+
+  it('許した規則は読み戻せる（器を作り直しても残る）', async () => {
+    await stores.permissions.grant(rule('p-1', 'Bash(gh pr merge:*)', '2026-08-12T00:00:00.000Z'));
+
+    expect(await stores.permissions.list()).toEqual([
+      rule('p-1', 'Bash(gh pr merge:*)', '2026-08-12T00:00:00.000Z'),
+    ]);
+    expect((await stores.permissions.get('p-1'))?.rule).toBe('Bash(gh pr merge:*)');
+    expect(await stores.permissions.get('しらない')).toBeNull();
+  });
+
+  it('一覧は許した順（古い順）に返る', async () => {
+    await stores.permissions.grant(rule('p-2', 'WebFetch', '2026-08-14T00:00:00.000Z'));
+    await stores.permissions.grant(rule('p-1', 'Bash(gh:*)', '2026-08-12T00:00:00.000Z'));
+
+    expect((await stores.permissions.list()).map((entry) => entry.id)).toEqual(['p-1', 'p-2']);
+  });
+
+  /**
+   * **これが「消せること」の前提である。**
+   *
+   * 同じ規則が2行あると、人間が1行取り消しても規則は効いたままになる ＝
+   * 「消したのに効き続ける」。増やす口だけが片道で開く形で、あとから直すのが難しい。
+   */
+  it('同じ規則を二度許しても2行にならない（id が違っても重ねない）', async () => {
+    expect(
+      await stores.permissions.grant(
+        rule('p-1', 'Bash(gh pr merge:*)', '2026-08-12T00:00:00.000Z'),
+      ),
+    ).toBe(true);
+
+    expect(
+      await stores.permissions.grant(
+        rule('p-2', 'Bash(gh pr merge:*)', '2026-08-14T00:00:00.000Z'),
+      ),
+    ).toBe(false);
+
+    const all = await stores.permissions.list();
+    expect(all).toHaveLength(1);
+    // 残るのは先に許した1行（後から来たものが上書きしない）
+    expect(all[0]?.id).toBe('p-1');
+  });
+
+  /**
+   * **取り消しは行を消す**（`commitments` と作法が違う）。
+   *
+   * 台帳に並ぶ行は「いま効いている許可」そのものなので、閉じた印を付けて残す形にすると
+   * 効いていない規則が一覧に並び、何が効いているのか読めなくなる。消えた記録は日誌側にある。
+   */
+  it('取り消すと行が消え、同じ規則をもう一度許せる', async () => {
+    await stores.permissions.grant(rule('p-1', 'Bash(gh pr merge:*)', '2026-08-12T00:00:00.000Z'));
+
+    expect(await stores.permissions.revoke('p-1')).toBe(true);
+    expect(await stores.permissions.list()).toEqual([]);
+    expect(await stores.permissions.get('p-1')).toBeNull();
+
+    // 取り消した規則は、あとからもう一度許せる（重複の禁止が居座らない）
+    expect(
+      await stores.permissions.grant(
+        rule('p-3', 'Bash(gh pr merge:*)', '2026-08-15T00:00:00.000Z'),
+      ),
+    ).toBe(true);
+  });
+
+  it('無い id の取り消しは false（「いま自分が消した」と誤って報告しない）', async () => {
+    expect(await stores.permissions.revoke('しらない')).toBe(false);
+  });
+});

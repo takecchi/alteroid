@@ -60,6 +60,16 @@ export interface CloneSessionOptionsRequest {
   sessionStore?: SessionStore;
   onPreCompact: HookCallback;
   onPostToolUse: HookCallback;
+  /**
+   * 人間が開けた実行許可（`PermissionStore` の全量。規則の文字列そのもの）。
+   *
+   * **ここに来るのは `allow` だけである。** 台帳が `allow` しか持たないので
+   * （`permissionRuleSchema` の不変条件1）、ここへ deny が混ざる経路は無い。
+   *
+   * **省略時は空。** 呼び出し側が渡し忘れると「人間が許可を開けたのに効かない」
+   * という静かな壊れ方をするので、渡すのは `clone.ts` の `#buildOptions` の責務である。
+   */
+  allowRules?: readonly string[];
 }
 
 /** クローン本セッションへ渡す `Options`。組み立ての知識は `clone.ts` の旧 `#buildOptions` から移した。 */
@@ -75,6 +85,7 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
     sessionStore,
     onPreCompact,
     onPostToolUse,
+    allowRules = [],
   } = request;
 
   return {
@@ -89,7 +100,19 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
     // option instead."）。だからここに自作ツールだけを並べても組み込みツールは
     // 1つも減らない。並べてあるのは、自分の道具が権限の判断に晒されないように
     // するためである。
-    allowedTools: CLONE_ALLOWED_TOOLS,
+    //
+    // **ここへ人間が開けた分を足す**（`allowRules`）。足す先が `allowedTools` なのは、
+    // 既定の `auto` では SDK のモデル分類器がその場で拒否を決め `canUseTool` が
+    // 呼ばれないからで、**確認を回す先を作っても発火しない**。通す方法は「確認なしで
+    // 通す一覧」に載せることだけである。**これは能力の調整ではなく、人間が自分の PC で
+    // 「常に許可」を押すのに当たる操作をクローンにも持たせることである**（north_star
+    // 禁止1。押す口が無いこと自体がデグレードだった）。
+    //
+    // **走行中に増えた分はここには載らない。** セッションを開くとき1回しか組まれない
+    // ので、そちらは `Query.applyFlagSettings` で別に流し込む（`clone.ts` の
+    // `applyPermissions`）。**両方要る** — こちらが無いと器を作り直したときに許可が
+    // 消え、あちらが無いと次にセッションが開くまで効かない。
+    allowedTools: [...CLONE_ALLOWED_TOOLS, ...allowRules],
     // 人間が開く Claude Code と同じ既定（`auto`）。**`default` のまま道具を渡すと
     // 「渡したのに使えない」になる** — このセッションには `canUseTool` が無く、
     // SDK は確認相手が居ないとき `ask` の判断をそのまま拒否で終わらせる。

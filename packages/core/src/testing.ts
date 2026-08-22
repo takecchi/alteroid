@@ -1,5 +1,6 @@
 import type {
   Commitment,
+  PermissionRule,
   InboxEvent,
   Job,
   JournalEntry,
@@ -28,6 +29,7 @@ import type {
   PersonaStore,
   ProfileStore,
   CommitmentStore,
+  PermissionStore,
   ScheduleStore,
   SessionRegistry,
   Stores,
@@ -97,6 +99,7 @@ export function createMemoryStores(): Stores {
   const schedules = new Map<string, ScheduledRequest>();
   const schedulePhases = new Map<string, SchedulePhase>();
   const commitments = new Map<string, Commitment>();
+  const permissions = new Map<string, PermissionRule>();
   const archives = new Map<string, string>();
   const inboxStore = createMemoryInboxStore();
   let cloneSessionId: string | null = null;
@@ -261,6 +264,30 @@ export function createMemoryStores(): Stores {
       if (!existing || existing.closedAt !== undefined) return false;
       commitments.set(id, { ...existing, closedAt: at, closedReason: reason });
       return true;
+    },
+  };
+
+  /**
+   * 人間が開けた実行許可の台帳（インメモリ）。
+   *
+   * **重複を `rule` で弾くこと**（fs / pg と同じ）。ここだけ id で弾く形にすると、
+   * 「同じ規則が2行あると取り消しが効かない」という本番の不変条件がテストから
+   * 見えなくなる（器の違いで保証が変わる）。
+   */
+  const permissionStore: PermissionStore = {
+    async list() {
+      return [...permissions.values()].sort((a, b) => a.grantedAt.localeCompare(b.grantedAt));
+    },
+    async get(id) {
+      return permissions.get(id) ?? null;
+    },
+    async grant(entry) {
+      if ([...permissions.values()].some((existing) => existing.rule === entry.rule)) return false;
+      permissions.set(entry.id, entry);
+      return true;
+    },
+    async revoke(id) {
+      return permissions.delete(id);
     },
   };
 
@@ -478,6 +505,7 @@ export function createMemoryStores(): Stores {
     jobs: jobStore,
     schedules: scheduleStore,
     commitments: commitmentStore,
+    permissions: permissionStore,
     inbox: inboxStore,
     archive,
     sessions,

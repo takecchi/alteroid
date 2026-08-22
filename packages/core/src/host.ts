@@ -24,6 +24,15 @@ export interface CloneHost {
   answerApproval(approvalId: string, answer: string): Promise<void>;
 
   /**
+   * 人間が開けた実行許可を、走行中のセッションへ流し込み直す。
+   *
+   * **台帳を書き換えた側が必ず呼ぶこと。** 呼ばないと、人間が許可を足しても
+   * 次にセッションが開くまで（＝数時間後か数日後）効かない。取り消しも同じで、
+   * 呼ばなければ**消したのに効き続ける**。
+   */
+  applyPermissions(): Promise<void>;
+
+  /**
    * 委譲先の一覧と生ログ。HTTP 層はここから可観測性の下2層へ降りる。
    * 起こすのはクローンだけである（人間が直接マネージャーを起こす口は作らない）。
    */

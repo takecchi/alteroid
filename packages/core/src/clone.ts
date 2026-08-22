@@ -2325,6 +2325,29 @@ class Clone implements CloneHost {
     this.#reader = this.#read(q);
   }
 
+  /**
+   * 人間が開けた実行許可を、**走行中のセッションへ**流し込む。
+   *
+   * **セッションを開き直さない。** クローンは長寿命セッション1本なので、次に開くのは
+   * 数時間後か数日後である。そこまで効かないなら「PR とマージが要らなくなった」代わりに
+   * 「セッションの開き直しが要る」が残るだけで、人間が急いでいる中身が満たされない。
+   *
+   * **常に全量を送ること。差分を送らないこと。** SDK は「a second call with
+   * `{permissions: {...}}` replaces the entire `permissions` object from a prior call」
+   * と言っている ＝ 後から送ったものが前を丸ごと置き換える。だから全量を送る形にすれば
+   * **取り消しがそのまま効く**（減らした規則は次の呼び出しで消える）。差分を送る形にすると
+   * 増やす口だけが効いて消す口が効かない ＝ 片道の権限になる。
+   *
+   * **セッションがまだ無いときは何もしない。** 次に開くときに `#buildOptions` が
+   * 台帳を読み直すので、取りこぼしにはならない。
+   */
+  async applyPermissions(): Promise<void> {
+    const query = this.#query;
+    if (query === null) return;
+    const allow = (await this.#stores.permissions.list()).map((entry) => entry.rule);
+    await query.applyFlagSettings({ permissions: { allow } });
+  }
+
   async #buildOptions(resume: string | null): Promise<Options> {
     const documents = await this.#stores.persona.documents();
     const memory = renderMemoryDocuments(documents);
@@ -2345,9 +2368,14 @@ class Clone implements CloneHost {
     this.#systemPromptChars = systemPrompt.length;
     this.#promptMemoryChars = memory.length;
 
+    // 人間が開けた実行許可の全量。**セッションを開くたびに読み直す** — 器を作り直しても
+    // 台帳（DB）が正本なので許可は残る。走行中に増えた分は `applyPermissions` が別に流す。
+    const allowRules = (await this.#stores.permissions.list()).map((entry) => entry.rule);
+
     return buildCloneSessionOptions({
       model: this.#model,
       permissionMode: this.#permissionMode,
+      allowRules,
       mcpServer: this.#mcpServerFactory(this.#toolContext()),
       systemPrompt,
       env: this.#childEnv(),
@@ -2588,7 +2616,15 @@ class Clone implements CloneHost {
    */
   async #noteDenial(source: unknown, via: 'live' | 'result'): Promise<void> {
     const denial = source as
-      { tool_name?: unknown; tool_use_id?: unknown; decision_reason?: unknown } | null | undefined;
+      | {
+          tool_name?: unknown;
+          tool_use_id?: unknown;
+          decision_reason?: unknown;
+          decision_reason_type?: unknown;
+          message?: unknown;
+        }
+      | null
+      | undefined;
     const tool = typeof denial?.tool_name === 'string' ? denial.tool_name : UNKNOWN_TOOL_NAME;
     // id が無ければ道具の名前で代用する。**取りこぼすより重複を許す。**
     const toolUseId =
@@ -2599,6 +2635,41 @@ class Clone implements CloneHost {
     this.#deniedToolUses.set(toolUseId, true);
 
     const why = typeof denial?.decision_reason === 'string' ? `（${denial.decision_reason}）` : '';
+    // **止めた主体まで残す。** SDK は `decision_reason_type`（'classifier' / 'rule' /
+    // 'mode' / 'asyncAgent'）と、モデルへ返した拒否文（`message`）も渡している。
+    // これを捨てると「誰が止めたか」が届いているのに日誌から読めず、**許可が原因の
+    // 拒否と、そうでない拒否が区別できない。**
+    const byWhom =
+      typeof denial?.decision_reason_type === 'string'
+        ? ` 止めた主体: ${denial.decision_reason_type}。`
+        : '';
+    const told =
+      typeof denial?.message === 'string' && denial.message.length > 0
+        ? ` モデルへ返された文言: ${denial.message}`
+        : '';
+
+    // **既に許可済みの道具が止められたなら、原因は許可の一覧ではない。**
+    //
+    // これが要るのは、この器が「効かない許可を積み上げる装置」になりうるからである。
+    // 効かない形が2つ在る:
+    //
+    // 1. **拒否の原因がそもそも許可の層でない**（命令そのものが失敗した等）
+    // 2. **`auto` が、足した規則を照合の前に候補から外している** — 出荷実装を静的に
+    //    読んだ結果、インタプリタ・遠隔実行系（`python` / `node` / `ssh` /
+    //    `kubectl exec` など）の Bash allow 規則は `auto` では除外され、設定
+    //    `autoMode.classifyAllShell` が真なら Bash の allow 規則は全部除外される。
+    //    **人間は許可したつもりで、一度も効かない。**
+    //
+    // 放っておくと「許可が足りないと読む → 人間が足す → それでも通らない → 誰も原因に
+    // 近づかない」になる。**防げないので、積み上がったことが見えるようにする。**
+    const granted = await this.#grantedRulesFor(tool);
+    const alreadyGranted =
+      granted.length === 0
+        ? ''
+        : ` ⚠️ この道具には人間が開けた許可が既に在る（${granted.join(' / ')}）。` +
+          `**それでも止められたということは、原因は許可の一覧ではない**（拒否の原因が許可の層に` +
+          `無いか、auto がこの規則を照合の前に外している）。許可を増やす方向へ探しに行かないこと。`;
+
     await this.#journal({
       type: 'exchange',
       with: 'self',
@@ -2606,8 +2677,32 @@ class Clone implements CloneHost {
       text:
         `${tool} の実行が、確認へ上がらずに止められた${why}。` +
         `許可モードは ${this.#permissionMode} で、この層に確認を回す相手は居ない` +
-        `（合図の出所: ${via}）。`,
+        `（合図の出所: ${via}）。${byWhom}${told}${alreadyGranted}`,
     });
+  }
+
+  /**
+   * その道具について、人間が既に開けている許可規則。
+   *
+   * **照合は道具の名前までしか見ない。** 規則の中身（`Bash(gh pr merge:*)` の括弧の
+   * 中）を器が解釈し始めると、それは「何が広くて何が狭いか」の表になり、`allow` だけの
+   * 台帳という約束が崩れる（`permissionRuleSchema` の不変条件1）。**ここで要るのは
+   * 「この道具について人間は何か許したか」までで、十分である** — 許したのに止められた
+   * のなら、規則に一致していないか、原因が許可でないかのどちらかで、**どちらであっても
+   * 「許可を増やす」は答えではない。**
+   *
+   * **台帳が読めなくても拒否の記録を落とさない。** ここで投げると、拒否そのものが
+   * 日誌に残らなくなる（観測のために足したものが観測を殺す）。
+   */
+  async #grantedRulesFor(tool: string): Promise<string[]> {
+    try {
+      const rules = await this.#stores.permissions.list();
+      return rules
+        .map((entry) => entry.rule)
+        .filter((rule) => rule === tool || rule.startsWith(`${tool}(`));
+    } catch {
+      return [];
+    }
   }
 
   /**

@@ -7,6 +7,7 @@ import {
   memoryDocumentMetaSchema,
   memoryDocumentSchema,
   pendingApprovalSchema,
+  permissionRuleSchema,
   runnerCredentialFingerprintSchema,
   runnerProfileFingerprintSchema,
   workspaceLocatorSchema,
@@ -335,6 +336,27 @@ export const commitmentListResponseSchema = z.object({ entries: z.array(commitme
  * 探すしかなくなり、同じ本文が2件あれば当てられない）。
  */
 export const commitmentOpenedResponseSchema = z.object({ ok: z.literal(true), id: z.string() });
+
+// ---------------------------------------------------------------------------
+// 実行許可（/permissions）
+// ---------------------------------------------------------------------------
+
+/**
+ * 人間が開けた実行許可の全量。
+ *
+ * **件数で切らない。** ここに並ぶ行はすべて「いま効いている許可」なので、切れば
+ * 効いている許可が一覧から消える ＝ 人間が何を許したのか読めなくなる。
+ */
+export const permissionListResponseSchema = z.object({ entries: z.array(permissionRuleSchema) });
+
+/**
+ * 許した1件の id。
+ *
+ * **返さないと取り消せない。** 取り消す口は id を取るので、許した側に id を渡さないと
+ * 「人間は増やせるが自分では消せない」＝ 片道の権限になる（`commitmentOpenedResponseSchema`
+ * と同じ理由）。
+ */
+export const permissionGrantedResponseSchema = z.object({ ok: z.literal(true), id: z.string() });
 
 // ---------------------------------------------------------------------------
 // マネージャー（/managers）
@@ -832,6 +854,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     },
     endConversation() {
       throw new Error('spec 生成専用のスタブ');
+    },
+    applyPermissions() {
+      throw new Error('spec 生成専用のスタブ: 許可は流し込まない');
     },
     answerApproval() {
       throw new Error('spec 生成専用のスタブ');

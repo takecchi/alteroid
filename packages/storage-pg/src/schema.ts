@@ -132,6 +132,31 @@ export const commitments = pgTable(
 );
 
 /**
+ * 人間が開けた実行許可（`store.ts` の `PermissionStore`）。
+ *
+ * **一意なのは `id` ではなく `rule` である。** 同じ規則が2行あると、人間が1行
+ * 消しても規則は効いたままになり「消したのに効き続ける」＝ 増やす口だけが片道で
+ * 開く形になる。だから重複の禁止を SQL 側へ置き、`insert ... on conflict do nothing`
+ * の1操作で判定ごと済ませる（`commitments` の主キーと同じ理由づけの、別の鍵）。
+ *
+ * **`deny` / `ask` の列を足さないこと。** ここは `allow` だけの台帳である
+ * （`permissionRuleSchema` の不変条件1）。**そして「どの層に効くか」の列も足さない**
+ * — それはすぐ下の `env_profile` の DDL コメントが名指しで警告している形である
+ * （不変条件2）。
+ *
+ * 列に出すのは並べ替えと一意性に使う `granted_at` / `rule` だけで、本体は jsonb に
+ * そのまま入れる（`commitments` と同じ作法）。
+ */
+export const permissions = pgTable('permissions', {
+  id: text('id').primaryKey(),
+  /** SDK の許可規則そのもの。**ここが一意鍵である**（重複を作らない）。 */
+  rule: text('rule').notNull().unique(),
+  /** 許した時刻。一覧を古い順に並べる軸。 */
+  grantedAt: timestamp('granted_at', { withTimezone: true, mode: 'date' }).notNull(),
+  permission: jsonb('permission').notNull(),
+});
+
+/**
  * まだ処理し終えていない受信箱の合図（`store.ts` の `InboxStore`）。
  *
  * `id` が主キーなのは、同じ合図が二重に積まれないためである（`put` は同じ id なら

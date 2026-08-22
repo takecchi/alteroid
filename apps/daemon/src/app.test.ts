@@ -35,6 +35,9 @@ function fakeClone() {
   const ended: string[] = [];
   const answered: { id: string; answer: string }[] = [];
   const posted: InboxEvent[] = [];
+  // **走行中のセッションへ流し込み直したか。** 台帳を書き換えたのに呼ばれていなければ、
+  // 人間が許可を足しても次にセッションが開くまで効かない（＝取り消しも効かない）。
+  let appliedPermissions = 0;
   let reply: ChatStreamEvent[] = [{ type: 'text', text: 'やあ' }, { type: 'done' }];
 
   const emit = (conversationId: string, event: ChatStreamEvent) => {
@@ -129,6 +132,9 @@ function fakeClone() {
     async answerApproval(id, answer) {
       answered.push({ id, answer });
     },
+    async applyPermissions() {
+      appliedPermissions += 1;
+    },
     async stop() {},
   };
 
@@ -142,6 +148,7 @@ function fakeClone() {
     transcripts,
     managerSends,
     managerAborts,
+    appliedPermissions: () => appliedPermissions,
     setAbortOutcome(outcome: 'stopped' | 'not_stopped' | 'unknown') {
       abortOutcome = outcome;
     },
@@ -1207,6 +1214,134 @@ describe('HTTP API', () => {
     expect(await stores.commitments.list({ includeClosed: true })).toEqual([
       { id: 'cm-1', at: '2026-08-12T00:00:00.000Z', origin: 'human', body: '人間が頼んだこと' },
     ]);
+  });
+
+  // --- 実行許可（/permissions） -------------------------------------------
+
+  /**
+   * **人間が「常に許可」を押すのに当たる操作。**
+   *
+   * 既定の `permissionMode: 'auto'` では SDK のモデル分類器がその場で拒否を決め
+   * `canUseTool` は呼ばれないので、確認を回す先を作っても発火しない。通す方法は
+   * 「確認なしで通す一覧」に載せることだけで、その一覧を人間が編集できる口がここである。
+   */
+  it('許可を1件開けると、台帳に残り、走行中のセッションへ流し込まれる', async () => {
+    const before = fake.appliedPermissions();
+
+    const response = await app.request(
+      '/permissions',
+      json({ rule: 'Bash(gh pr merge:*)', note: '#182 の発端' }),
+    );
+
+    expect(response.status).toBe(200);
+    const { id } = (await response.json()) as { id: string };
+    expect(await stores.permissions.list()).toMatchObject([
+      { id, rule: 'Bash(gh pr merge:*)', grantedBy: 'human', note: '#182 の発端' },
+    ]);
+
+    // **流し込まないと、次にセッションが開くまで（数時間後か数日後）効かない。**
+    expect(fake.appliedPermissions()).toBe(before + 1);
+  });
+
+  /**
+   * **記録に残らない許可は、許可として成立していない。**
+   *
+   * 人間が後から読んで否定できることが最終承認の実体である（north_star）。
+   */
+  it('開けたことも取り消したことも日誌に残る', async () => {
+    const opened = await app.request('/permissions', json({ rule: 'WebFetch', note: '調べもの' }));
+    const { id } = (await opened.json()) as { id: string };
+    expect((await app.request(`/permissions/${id}`, { method: 'DELETE' })).status).toBe(200);
+
+    const decisions = (await stores.journal.list())
+      .filter((entry) => entry.type === 'decision')
+      .map((entry) => (entry as { decision: string }).decision);
+
+    expect(
+      decisions.some((text) => text.includes('実行許可を開けた') && text.includes('WebFetch')),
+    ).toBe(true);
+    // **取り消しの記録に「何を」外したかが要る。** id だけでは、行が消えた後に辿れない
+    expect(
+      decisions.some((text) => text.includes('実行許可を取り消した') && text.includes('WebFetch')),
+    ).toBe(true);
+  });
+
+  /**
+   * **増やす口だけあって消す口が無いのは片道の権限である。**
+   *
+   * そして消した結果が走行中のセッションへ流れないと、「消したのに効き続ける」になる。
+   */
+  it('取り消すと一覧から消え、走行中のセッションへも流し込み直される', async () => {
+    const opened = await app.request('/permissions', json({ rule: 'Bash(gh:*)' }));
+    const { id } = (await opened.json()) as { id: string };
+    const before = fake.appliedPermissions();
+
+    expect((await app.request(`/permissions/${id}`, { method: 'DELETE' })).status).toBe(200);
+
+    expect(await (await app.request('/permissions')).json()).toEqual({ entries: [] });
+    expect(fake.appliedPermissions()).toBe(before + 1);
+  });
+
+  /**
+   * **重ねると取り消しが効かなくなる。** 同じ規則が2行あると、人間が1行消しても
+   * 規則は効いたままになる。だから2行目を作らせない。
+   */
+  it('同じ規則を二度開けると 409（重ねない）', async () => {
+    expect((await app.request('/permissions', json({ rule: 'WebFetch' }))).status).toBe(200);
+
+    const again = await app.request('/permissions', json({ rule: 'WebFetch' }));
+    expect(again.status).toBe(409);
+    expect(await stores.permissions.list()).toHaveLength(1);
+  });
+
+  it('無い id の取り消しは 404', async () => {
+    expect((await app.request('/permissions/しらない', { method: 'DELETE' })).status).toBe(404);
+  });
+
+  it('空の規則は受け付けない', async () => {
+    expect((await app.request('/permissions', json({ rule: '' }))).status).toBe(400);
+    expect(await stores.permissions.list()).toEqual([]);
+  });
+
+  /**
+   * **`grantedBy` を本文から取らない**（`POST /commitments` の `origin` と同じ理由）。
+   *
+   * ここを呼び出し側に選ばせると、クローンが人間以外を名乗って許可を足したように
+   * 見せられる ＝「誰の承認で増えたか」が記録として信用できなくなる。
+   */
+  it('grantedBy は本文から取らない（human で固定）', async () => {
+    const response = await app.request(
+      '/permissions',
+      json({ rule: 'WebFetch', grantedBy: 'clone' }),
+    );
+
+    expect(response.status).toBe(200);
+    expect((await stores.permissions.list())[0]?.grantedBy).toBe('human');
+  });
+
+  /**
+   * 許可の口も、人間が開いた任意のページから投げられる位置にある。通れば
+   * **クローンの実行許可が第三者に開けられる**ので、`validator('json', ...)` の
+   * 手前で落ちることを台帳の口と同じ形で問う。
+   */
+  it('ブラウザの単純リクエストでは許可を開けられない', async () => {
+    const body = '{"rule":"Bash(*)"}';
+    expect((await app.request('/permissions', simpleRequest(body))).status).toBe(400);
+
+    for (const contentType of [
+      'text/plain;application/json',
+      'application/x-www-form-urlencoded',
+      'multipart/form-data; boundary=application/json',
+    ]) {
+      const disguised = await app.request('/permissions', {
+        method: 'POST',
+        headers: { 'content-type': contentType },
+        body,
+      });
+      expect(disguised.status, contentType).toBe(400);
+    }
+
+    expect(await stores.permissions.list()).toEqual([]);
   });
 
   it('溜まった承認待ちをまとめて片付けられる（1件失敗しても残りは進む）', async () => {

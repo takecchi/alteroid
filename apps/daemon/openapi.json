@@ -3731,6 +3731,197 @@
         ]
       }
     },
+    "/permissions": {
+      "get": {
+        "operationId": "getPermissions",
+        "tags": ["permissions"],
+        "summary": "人間が開けた実行許可の一覧",
+        "description": "いま効いている許可の**全量**。件数で切らない（切れば効いている許可が一覧から消える）。取り消しはここで返る `id` を使う。",
+        "responses": {
+          "200": {
+            "description": "許した順（古い順）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "rule": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "grantedAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "grantedBy": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "note": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["id", "rule", "grantedAt", "grantedBy"]
+                      }
+                    }
+                  },
+                  "required": ["entries"]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "postPermissions",
+        "tags": ["permissions"],
+        "summary": "実行許可を1件開ける",
+        "description": "規則を1本足し、**走行中のクローンのセッションへその場で効かせる**（次にセッションが開くのを待たない）。`rule` は SDK の許可規則そのもの（`Bash(gh pr merge:*)` など）。同じ規則が既に在れば 409。",
+        "responses": {
+          "200": {
+            "description": "許した。返る id が取り消すときの宛先になる。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["ok", "id"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が JSON として不正（`rule` は空にできない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {},
+                    "error": {
+                      "type": "array",
+                      "items": {}
+                    },
+                    "success": {
+                      "type": "boolean",
+                      "const": false
+                    }
+                  },
+                  "required": ["data", "error", "success"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "その規則は既に許してある（重ねると取り消しが効かなくなる）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "rule": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "note": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": ["rule"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/permissions/{id}": {
+      "delete": {
+        "operationId": "deletePermissionsById",
+        "tags": ["permissions"],
+        "summary": "実行許可を1件取り消す",
+        "description": "**行を消し、走行中のクローンのセッションからもその場で外す。**増やす口だけあって消す口が無いのは片道の権限なので、ここは最初から在る。いつ誰が外したかは日誌に残る。",
+        "responses": {
+          "200": {
+            "description": "取り消した。以後この規則は効かない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": ["ok"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "その id は台帳に無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      }
+    },
     "/managers": {
       "get": {
         "operationId": "getManagers",

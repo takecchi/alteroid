@@ -151,6 +151,55 @@ describe('クローン本セッションへ渡す Options', () => {
     await clone.stop();
   });
 
+  /**
+   * 人間が開けた実行許可が、セッションを開くときに載ること。
+   *
+   * **`allowedTools` へ載せるのは能力の調整ではない。** 既定の `auto` では SDK の
+   * モデル分類器がその場で拒否を決め `canUseTool` は呼ばれないので、確認を回す先を
+   * 作っても発火しない。通す方法は「確認なしで通す一覧」に載せることだけで、これは
+   * 人間が自分の PC で「常に許可」を押すのに当たる（north_star 禁止1）。
+   */
+  it('人間が開けた実行許可が allowedTools に載る（自作ツールは減らない）', async () => {
+    const { fn, calls } = fakeCloneSdk();
+    const stores = createMemoryStores();
+    await stores.permissions.grant({
+      id: 'p-1',
+      rule: 'Bash(gh pr merge:*)',
+      grantedAt: '2026-08-22T00:00:00.000Z',
+      grantedBy: 'human',
+    });
+    const clone = createClone({ stores, queryFn: fn, env: {} });
+
+    clone.post(humanMessage('やあ'));
+    await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
+
+    const { options } = calls[0] as { options: Options };
+
+    // 台帳の分が足されている
+    expect(options.allowedTools).toContain('Bash(gh pr merge:*)');
+    // **自作ツールは1つも減らない。** ここが減ると、クローンの道具が権限の判断に晒される
+    expect(options.allowedTools).toEqual([...CLONE_ALLOWED_TOOLS, 'Bash(gh pr merge:*)']);
+
+    await clone.stop();
+  });
+
+  /**
+   * 台帳が空でも、既定の配置が変わらないこと。
+   *
+   * **これが崩れると、台帳を入れたこと自体が既存の振る舞いを動かしたことになる。**
+   */
+  it('台帳が空なら allowedTools は自作ツールだけ（既定を動かさない）', async () => {
+    const { fn, calls } = fakeCloneSdk();
+    const clone = createClone({ stores: createMemoryStores(), queryFn: fn, env: {} });
+
+    clone.post(humanMessage('やあ'));
+    await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
+
+    expect((calls[0] as { options: Options }).options.allowedTools).toEqual(CLONE_ALLOWED_TOOLS);
+
+    await clone.stop();
+  });
+
   it('ALTEROID_CLONE_MODEL を置くとモデル帯が差し替わる', async () => {
     const { fn, calls } = fakeCloneSdk();
     const stores = createMemoryStores();
