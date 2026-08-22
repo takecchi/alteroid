@@ -3583,6 +3583,12 @@
                           "request": {
                             "type": "string"
                           },
+                          "createdAt": {
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "type": "string"
+                          },
                           "lastRunAt": {
                             "type": "string"
                           }

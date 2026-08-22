@@ -50,6 +50,23 @@ export interface ScheduleStatus {
   request?: string;
   /** 前回この kind で発火した時刻。 */
   lastRunAt?: string;
+  /**
+   * 仕込まれた時刻。**`request` と同じく、仕込まれたものだけが持つ。**
+   *
+   * **既定の日報・発意 tick には無い。それは「分からない」ではなく「無い」で
+   * ある** — あれはコードに書かれた既定であって、誰かがいつか作ったレコード
+   * ではないので、**作成という出来事そのものが存在しない。**
+   *
+   * だからここに `unknown` を入れないこと。`unknown`（記憶の `createdAt` が
+   * 使っている形）は「**在るはずだが根拠が無い**」を表す値で、入れれば
+   * **探しに行く人が出る。**
+   *
+   * **表示の側では「無い」と読める形にすること**（黙って行が短くなるだけに
+   * しない。取れないことが出力から消えるのと同じ形になる）。
+   */
+  createdAt?: string;
+  /** 最後に仕込み直された時刻。`createdAt` と同じく、仕込まれたものだけが持つ。 */
+  updatedAt?: string;
 }
 
 export interface Scheduler {
@@ -229,7 +246,9 @@ class TimerScheduler implements Scheduler {
         kind: entry.kind,
         description: entry.description,
         nextAt: new Date(this.#due.get(entry.kind) ?? entry.nextAt(now).getTime()).toISOString(),
-        ...(plan === undefined ? {} : { request: plan.request }),
+        ...(plan === undefined
+          ? {}
+          : { request: plan.request, createdAt: plan.createdAt, updatedAt: plan.updatedAt }),
         ...(lastRunAt === undefined ? {} : { lastRunAt }),
       };
     });

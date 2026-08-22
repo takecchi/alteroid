@@ -354,6 +354,19 @@ export async function runSlashCommand(
         stdout.write(`  ${entry.kind}  次: ${entry.nextAt}\n      ${entry.description}\n`);
         // 継続中の依頼だけが持つもの。何を頼まれたままなのかが人間に見えること
         if (entry.request !== undefined) {
+          // **概要（何を頼まれたままなのか）。** ここが出ていなかったので、
+          // 人間は kind と次の発火時刻しか見えていなかった。
+          stdout.write(`      依頼: ${summarizeText(entry.request)}\n`);
+        }
+        // **「無い」を黙らせない。** 既定の日報・発意はコードに書かれた既定で、
+        // 仕込まれたレコードではないので**作成という出来事が存在しない**。
+        // 空欄や `—` にすると「取れなかった」と読まれる（探しに行く人が出る）。
+        stdout.write(
+          entry.createdAt === undefined
+            ? '      作成・更新: 無し（コードに書かれた既定の仕込みで、仕込まれた記録がありません）\n'
+            : `      作成: ${entry.createdAt}  更新: ${entry.updatedAt ?? entry.createdAt}\n`,
+        );
+        if (entry.request !== undefined) {
           stdout.write(`      前回: ${entry.lastRunAt ?? '（まだ一度も動いていません）'}\n`);
         }
       }
