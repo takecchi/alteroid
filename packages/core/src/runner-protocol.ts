@@ -26,6 +26,31 @@ const isoDateTime = z.string().datetime({ offset: true });
  *
  * だからイベントは「デーモンが開いたストリームを runner が流れ落とす」形にしてある。
  * 逆向きのコールバック URL を足さないこと。
+ *
+ * **この境界を跨ぐと `undefined` の意味が変わる。実測（#223）:**
+ *
+ * ```
+ * key 無し                 : false   ← 実機（JSON を通った後）
+ * key 有り value=undefined : true    ← 同一プロセスのテスト
+ * ```
+ *
+ * **同一プロセスのテストは、この境界の壊れ方を再現しない。** `JSON.stringify`
+ * は値が `undefined` のキーを丸ごと落とすので、実機（`apps/runner/src/app.ts`
+ * が HTTP で送り出し、デーモン側が `JSON.parse` で受け取る）では**キーが
+ * 存在しない**形になる。同一プロセスで組み立てたオブジェクト（`{ input:
+ * undefined }` のようなもの）は**キーが残る**ので、zod 4 の必須欄
+ * （`z.unknown()` / `z.string()` を `.optional()` なしで書いた欄）でも
+ * `safeParse` を通ってしまう ── テストだけが緑で、実機だけが壊れる。
+ *
+ * だから**この境界の回帰テストは、必ず `JSON.parse(JSON.stringify(...))` を
+ * 通すか、HTTP 境界を実際に越える `apps/daemon` 側で書くこと**。同一プロセス
+ * のテスト（例: `runner-local.ts` を使うもの）だけでは、この境界がまさに
+ * 壊れる形を守れない。
+ *
+ * 実例が #223 である。走行中の合図（`system/permission_denied`）の `via:
+ * 'live'` では `tool_input` が SDK 側に存在せず、`input` を必須のままにして
+ * いたため、この形の拒否が**8日間、デーモンへ一切届かなかった**。同一プロセス
+ * のテストは（`input` がキーとして残っていたので）その間ずっと緑のままだった。
  */
 
 /** 1つの確認（許可確認 / 質問）。runner 側で1件だけが返事を待って止まる。 */
@@ -586,6 +611,13 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * （`tool_use_id` による重複排除）が既に立っているので、ターン終わりの
      * authoritative な記録（`via: 'result'`）の再送も止まり、拒否が完全に
      * 失われる。それを防ぐための `.optional()` である。
+     *
+     * **`via: 'live'` では今後も入らない。** 「何を実行しようとしたか」が
+     * 要るなら、この境界の外に別の道がある — `PermissionDenied` フックは
+     * `tool_input` を持つ（守備範囲・発火条件はこの PR では未確認。Issue
+     * #226 を見ること）。**この欄へ後から詰めようとしないこと** — SDK の
+     * 走行中の合図に無い値を runner 側で埋めれば、それは推測であって事実では
+     * ない（このファイル冒頭のとおり、ここは事実だけを運ぶ場所である）。
      */
     input: z.unknown().optional(),
     /**
@@ -594,6 +626,40 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * （`result.permission_denials`。SDK 曰くこちらが authoritative）。
      */
     via: z.enum(['live', 'result']),
+    /**
+     * なぜ止められたかの人が読める一文（SDK の `decision_reason`）。
+     *
+     * **`.optional()` は `input` と同じ理由である。** 値が無い回にキーごと落ち
+     * （`JSON.stringify` は `undefined` のキーを丸ごと落とす）、zod 4 の
+     * `z.string()`（必須）はキーの不在を許さない。ここを必須にすると、値が無い
+     * 回の `permission_denied` が丸ごと `safeParse` に落ち、しかも `#denied`
+     * （`runner.ts` の重複排除）は既に立っているので `result` 側の再送も
+     * 起きない — #223 と同じ形の穴を自分で開けることになる。
+     *
+     * **`via: 'result'` では必ず欠ける。** `result.permission_denials`
+     * （`SDKPermissionDenial`）は `tool_name` / `tool_use_id` / `tool_input`
+     * の3つしか持たず、理由の欄が無い。理由が付くのは `via: 'live'` の
+     * ときだけである。
+     */
+    reason: z.string().optional(),
+    /**
+     * `reason` の分類（SDK の `decision_reason_type`。例:
+     * `'classifier'` / `'asyncAgent'` / `'mode'` / `'rule'`）。
+     *
+     * **`reason` の文字列を解釈して分類し直さないこと。** 分類が要るなら
+     * こちらの種別で判定する（`reason` は人間向けの一文で、言い回しは
+     * SDK の版で変わりうる。文字列一致に頼らず種別で判定できる形に寄せるのは
+     * このリポジトリが繰り返し選んでいる形である）。`.optional()` の理由は
+     * `reason` と同じ。
+     */
+    reasonType: z.string().optional(),
+    /**
+     * モデルへ実際に返された拒否文（SDK の `message`）。
+     *
+     * `reason` は人間向け、こちらはモデルが tool_result として受け取った文言
+     * そのもの。`.optional()` の理由は `reason` と同じ。
+     */
+    message: z.string().optional(),
   }),
   /**
    * SDK が報告した消費量の**累積**（`result.modelUsage` の写し）。

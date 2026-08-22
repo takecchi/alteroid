@@ -2222,6 +2222,17 @@ class Pool implements ManagerPool {
         const count = (denied.get(event.tool) ?? 0) + 1;
         denied.set(event.tool, count);
 
+        // 理由・分類・モデルへの拒否文は3つとも `via: 'result'` では必ず欠け、
+        // `via: 'live'` でも SDK が付けてこなければ欠ける
+        // （`runner-protocol.ts` の doc）。**欠けているものは作り物を出さず、
+        // そのキーごと省く。**
+        const denialDetails = [
+          event.reasonType === undefined ? undefined : `分類: ${event.reasonType}`,
+          event.reason === undefined ? undefined : `理由: ${event.reason}`,
+          event.message === undefined ? undefined : `モデルへの拒否文: ${event.message}`,
+        ].filter((line): line is string => line !== undefined);
+        const denialSuffix = denialDetails.length > 0 ? ` [${denialDetails.join(' / ')}]` : '';
+
         await this.#journal({
           type: 'exchange',
           with: 'manager',
@@ -2229,7 +2240,7 @@ class Pool implements ManagerPool {
           text:
             `[${event.managerId}] ${event.tool} の実行が確認へ上がらずに止められた` +
             `（このマネージャーで ${count} 件目 / ${event.via === 'live' ? '走行中の合図' : 'result の記録'}）: ` +
-            brief(event.input),
+            `${brief(event.input)}${denialSuffix}`,
         });
 
         if (!shouldEscalateDenial(count)) return;
@@ -2239,7 +2250,7 @@ class Pool implements ManagerPool {
           `${event.tool} の実行が確認へ上がらずに止められた（このマネージャーで ${count} 件目）。` +
             'モデル分類器か deny 規則がその場で拒否しているので、**この確認はクローンには回ってきていない**。' +
             'マネージャーか作業者の手が止まっている可能性がある。' +
-            `直近の入力: ${brief(event.input)}\n` +
+            `直近の入力: ${brief(event.input)}${denialSuffix}\n` +
             '全件は日誌に残っている（`journal_read` で辿れる）。',
         );
         return;

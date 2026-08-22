@@ -409,6 +409,65 @@ describe('確認へ上がらずに止められた実行（permissionMode: auto�
     expect(parsed.success).toBe(true);
   });
 
+  /**
+   * `reason` / `reasonType` / `message`（SDK の `decision_reason` /
+   * `decision_reason_type` / `message`）も `input` と同じ理由で `.optional()`
+   * である。**この3欄が無い回（`via: 'result'` は必ずこれ）でもキーが無いまま
+   * 境界のスキーマを通ること**を、`input` のときと同じ形で固定する。
+   */
+  it('理由・分類・拒否文の3欄が無くても境界のスキーマを通る（`via: result` の形）', () => {
+    const parsed = runnerEventSchema.safeParse(
+      JSON.parse(
+        JSON.stringify({
+          type: 'permission_denied',
+          managerId: 'mgr-1',
+          toolUseId: 'toolu_1',
+          tool: 'Edit',
+          input: { file_path: 'a.tsx' },
+          via: 'result',
+          // reason / reasonType / message を渡していない。
+        }),
+      ),
+    );
+    expect(parsed.success).toBe(true);
+  });
+
+  /** 3欄が揃っている回（`via: 'live'`）でも境界のスキーマを通り、値が保たれる。 */
+  it('理由・分類・拒否文の3欄が揃っていても境界のスキーマを通り、値が保たれる', () => {
+    const parsed = runnerEventSchema.safeParse(
+      JSON.parse(
+        JSON.stringify({
+          type: 'permission_denied',
+          managerId: 'mgr-1',
+          toolUseId: 'toolu_1',
+          tool: 'Edit',
+          via: 'live',
+          reason: 'この編集は許可されていないパスに触れている',
+          reasonType: 'rule',
+          message: 'Edit was denied by a deny rule',
+        }),
+      ),
+    );
+    expect(parsed.success).toBe(true);
+    if (parsed.success && parsed.data.type === 'permission_denied') {
+      expect(parsed.data.reason).toBe('この編集は許可されていないパスに触れている');
+      expect(parsed.data.reasonType).toBe('rule');
+      expect(parsed.data.message).toBe('Edit was denied by a deny rule');
+    }
+  });
+
+  /**
+   * **このテストは同一プロセス（`createLocalRunner`）なので JSON 境界を越えない。**
+   * `createLocalRunner`（`runner-local.ts`）は `RunnerHost` を直接持つだけで、
+   * `apps/runner` の HTTP アプリも `JSON.stringify` / `JSON.parse` も一度も
+   * 経由しない。だから `input` のキーが `undefined` として残ったまま
+   * `#noteDenial`（`runner.ts`）から `#emit` へ渡っても、ここでは壊れない
+   * （オブジェクトのキーがそのまま残るので、zod の必須欄でも通ってしまう）。
+   *
+   * **境界の回帰は `apps/daemon` 側の同名のテストが持つ**
+   * （`apps/daemon/src/permission-denied.test.ts`。本物の HTTP を hono の
+   * app へ通す）。ここが緑でも、境界越えの保証にはならない。
+   */
   it('`tool_input` を持たない走行中の合図でも、拒否がクローンの日誌まで届く', async () => {
     const s = open();
     const { managerId } = await s.pool.start({ request: 'web の画面を直して' });
