@@ -207,14 +207,45 @@ const JOURNAL_BUDGET = 8_000;
 const JOURNAL_PAGE = 8_000;
 
 /**
+ * クローンのマージを確認なしで通す（`Bash` の中の1つの形だけ）。
+ *
+ * **ここに在る唯一の組み込みツールである。** 下の doc が言うとおり、この一覧は
+ * 「自分の道具が権限の判断に晒されないようにする」ためのもので、素性としては
+ * 自作ツールだけが並ぶ場所だった。**だから、なぜこれが1つだけ在るのかを書く。**
+ *
+ * **効くのは権限モードが `default` に締められたときだけである。** 既定は `auto`
+ * （`permission-mode.ts` の `DEFAULT_PERMISSION_MODE`）で、そのあいだ `Bash` は
+ * この一覧に無くても通る。**いま何かが直るわけではない。**
+ *
+ * **そして、これは元の失敗を防がない。** クローンが `gh pr merge` で弾かれたのは
+ * **巨大なヒアドキュメント（命令の形）**が原因であって、行為が禁じられていたから
+ * ではない。素直な形にすれば通る。**「この規則が在るから大丈夫」と読まないこと。**
+ *
+ * **ここに `Bash` を足してよい場所だ、とは読まないこと。** 足す条件は2つ揃った
+ * ときだけである — ①**行為が特定できるほど狭い**（`gh pr merge` は取り返しの
+ * つかない操作だが、形が1つしかない）②**人間が名指しで決めた**。広い形
+ * （`Bash(gh *)` のような）を足すのは、確認を省くことではなく確認を消すことで
+ * あって、別の判断が要る。
+ */
+const CLONE_ALLOWED_BASH = ['Bash(gh pr merge:*)'] as const;
+
+/**
  * 自作ツールは確認なしで通す（能力の削除ではなく、道具が道具として使えること）。
  *
  * **これは「使える道具の一覧」ではない。** `allowedTools` は確認を省く側の一覧で
  * あって、ここに無い道具が使えなくなるわけではない（SDK: "To restrict which tools
  * are available, use the `tools` option instead."）。ここへ組み込みツールを
- * 書き足す／ここから消すことで、クローンの能力を調整しようとしないこと。
+ * 書き足す／ここから消すことで、**クローンの能力を調整しようとしないこと**。
+ *
+ * **上の `CLONE_ALLOWED_BASH` はこの禁止に反しない。** 禁じているのは「書き足す
+ * ことで*能力を調整*しようとすること」であって、確認を省くこと自体はこの一覧の
+ * 用途そのものである。組み込みツールは `tools` を渡していない以上ここに何を書いても
+ * 1つも減らないので、**能力は動いていない**（`claude-provider.ts` の同じ doc）。
  */
-export const CLONE_ALLOWED_TOOLS = CLONE_TOOL_NAMES.map(qualifiedToolName);
+export const CLONE_ALLOWED_TOOLS = [
+  ...CLONE_TOOL_NAMES.map(qualifiedToolName),
+  ...CLONE_ALLOWED_BASH,
+];
 
 function text(body: string) {
   return { content: [{ type: 'text' as const, text: body }] };

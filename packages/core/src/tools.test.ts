@@ -226,6 +226,27 @@ describe('クローンの道具', () => {
     expect(CLONE_ALLOWED_TOOLS).toContain('mcp__alteroid__memory_write');
   });
 
+  /**
+   * **人間の決定**（「器の許可規則に `gh pr merge` を通す」）。
+   *
+   * 効くのは権限モードが `default` に締められたときだけで、既定の `auto` では
+   * この一覧に無くても通る。**それでも歯を打つのは、消えたことに気づくためである**
+   * — 「一覧に在るから大丈夫」と読まれる規則が、黙って消えるほうが害が大きい。
+   */
+  it('gh pr merge は確認なしで通す一覧に在る', () => {
+    expect(CLONE_ALLOWED_TOOLS).toContain('Bash(gh pr merge:*)');
+  });
+
+  /**
+   * **広げていないことも測る。** `toContain` だけだと、あとから
+   * `Bash(gh *)` や `Bash(*)` を足しても落ちない — 確認を*省く*のと
+   * 確認を*消す*のは別の判断である（`CLONE_ALLOWED_BASH` の doc）。
+   */
+  it('通しているのは gh pr merge の1つだけで、Bash を広く開けていない', () => {
+    const bash = CLONE_ALLOWED_TOOLS.filter((name) => name.startsWith('Bash('));
+    expect(bash).toEqual(['Bash(gh pr merge:*)']);
+  });
+
   it('memory_write は記憶を更新し、日誌に memory_update を残す', async () => {
     const h = harness();
 
