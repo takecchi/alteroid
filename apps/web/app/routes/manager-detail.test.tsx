@@ -14,7 +14,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { ManagerSummary } from '~/lib/types';
+import type { ManagerStatus, ManagerSummary } from '~/lib/types';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import type { Route } from './+types/manager-detail';
@@ -436,5 +436,169 @@ describe('詳細でも、`live` は繋がっていないことを文で言うが
     //    そもそも呼ばれないはずだが、飛んでいないことを直接確かめる）。
     fireEvent.click(button);
     expect(sent.length).toBe(0);
+  });
+});
+
+/**
+ * **停止は status で出し分けない。**
+ *
+ * かつてこの画面は「停止する」を `running` / `waiting_human` のときだけ描いて
+ * いた。**絞っていたのは画面だけだった** — CLI の `/stop`（`apps/cli/src/chat.ts`）
+ * は id をそのまま `DELETE` へ渡すだけで status を見ず、デーモン
+ * （`apps/daemon/src/app.ts` の `.delete('/managers/:id')`）も `ManagerPool.abort`
+ * （`packages/core/src/manager.ts`）も、台帳に居ない（`absent`）以外では弾かない。
+ * **同じ行為が入口によってできたりできなかったりしていた**（`docs/PRD.md`
+ * 「入口の等価性」は「委譲の停止」を名指しで挙げている。北極星の禁止1）。
+ *
+ * とくに `done` である。**`done` は死ではなく待機で**（`schema.ts` の
+ * `jobStatusSchema` の doc、この画面の札も「待機中」）、セッションは生きている。
+ * 待機したまま残っているものを畳む手が、Web にだけ無かった。
+ *
+ * **測るのは「ボタンが出ること」ではなく「停止の行為が届くこと」である。**
+ * 描画だけを見ると、ボタンを描いたまま `onClick` を殺す変異が生き残る。だから
+ * `DELETE` が実際に飛んだことを **method 込みで**確かめ、さらに完了後の遷移
+ * （`/managers` へ戻る）まで見る。
+ */
+describe('停止は status で出し分けない', () => {
+  /**
+   * **この `Record` が数え上げの持ち主である。**
+   *
+   * 画面の側は状態を1つも数え上げない（数え上げると、状態が増えた日に黙って
+   * 新しい状態を締め出す）。**代わりに数え上げをここへ置く** — `ManagerStatus`
+   * に値が増えたら、この定義が**コンパイルで落ちる**。落ちた人は「増えた状態を
+   * 停止できるか」を一度は考えることになる。
+   *
+   * だから `as const` の配列や `string[]` へ緩めないこと。緩めた瞬間、増えた
+   * 状態は誰にも気づかれずに試験の外へ出る。
+   */
+  const EVERY_STATUS: Record<ManagerStatus, true> = {
+    running: true,
+    waiting_human: true,
+    done: true,
+    failed: true,
+    lost: true,
+    stopped: true,
+  };
+  const ALL_STATUSES = Object.keys(EVERY_STATUS) as ManagerStatus[];
+
+  /**
+   * `renderDetail` の停止版。
+   *
+   * **`stubFetch` は使えない。** 停止の `DELETE` と詳細の `GET` は**同じ URL**
+   * （`/managers/:id`）なので、URL だけでは見分けられない。`stubFetch` の
+   * `Route` が受け取る第2引数は openapi-fetch の呼び方（`fetch(request, ext)`）
+   * では常に `undefined` になり `method` が読めない — `renderDetailWithMessages`
+   * の doc に同じ罠が書いてある。ここでは `Request` 本体から `method` を読む。
+   */
+  function renderDetailWithAbort(manager: ManagerSummary) {
+    const sent: { url: string; method: string; body: string }[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      const { url, method } = request;
+      if (method === 'DELETE' && url.endsWith(`/managers/${manager.managerId}`)) {
+        sent.push({ url, method, body: await request.text() });
+        return json({ outcome: 'stopped', detail: '止めた。' });
+      }
+      if (url.includes(`/managers/${manager.managerId}`)) return json({ manager });
+      throw new TypeError(`Failed to fetch: ${url}`);
+    }) as typeof fetch;
+    const router = createMemoryRouter(
+      [
+        { path: '/managers/:id', Component: () => <Harness id={manager.managerId} /> },
+        // 停止が通ると一覧へ戻る。**行き先に印を置く** — ここまで来たことが
+        // 「停止の行為が最後まで届いた」ことの証拠になる。
+        { path: '/managers', Component: () => <p>マネージャー一覧</p> },
+        { path: '/journal', Component: () => null },
+      ],
+      { initialEntries: [`/managers/${manager.managerId}`] },
+    );
+    render(
+      <Providers>
+        <RouterProvider router={router} />
+      </Providers>,
+    );
+    return { sent };
+  }
+
+  /**
+   * **`done` だけを別の `it` にしてある。**
+   *
+   * 下の全状態版と重なるが、重ねる価値がある — 塞がれていたのはここで、
+   * `done` だけを条件へ書き戻す変異は「全状態版が落ちたから」では原因が
+   * 分からない。落ちるテストの名前がそのまま欠陥の名前になる形にする。
+   */
+  it('done（待機中）のマネージャーへ、停止の行為が届く', async () => {
+    const { sent } = renderDetailWithAbort({ ...BASE, status: 'done' });
+
+    expect(await screen.findByText('待機中')).toBeTruthy();
+
+    const button = screen.getByRole('button', { name: '停止する' });
+    // 描いたうえで、押せる（`disabled` で塞ぐ形へ逃げていない）。
+    expect(button.hasAttribute('disabled')).toBe(false);
+    fireEvent.click(button);
+
+    // 行為が最後まで届いた（一覧へ戻っている）。
+    expect(await screen.findByText('マネージャー一覧')).toBeTruthy();
+    // API に実際に届いた。**method まで見る** — URL は GET と同じである。
+    expect(sent.length).toBe(1);
+    expect(sent[0]?.method).toBe('DELETE');
+    expect(sent[0]?.url.endsWith('/managers/mgr-1')).toBe(true);
+    // 本文が要る（サーバ側に json バリデータが付いており、空だと 400 になる）。
+    expect(sent[0]?.body).toContain('人間が画面から停止した');
+  });
+
+  /**
+   * **どの状態でも届く。** 上の `Record` が数え上げの持ち主なので、状態が増えれば
+   * ここは自動で増える（増やせなければコンパイルが落ちる）。
+   */
+  it.each(ALL_STATUSES)('%s のマネージャーへも、停止の行為が届く', async (status) => {
+    const { sent } = renderDetailWithAbort({ ...BASE, status });
+
+    const button = await screen.findByRole('button', { name: '停止する' });
+    expect(button.hasAttribute('disabled')).toBe(false);
+    fireEvent.click(button);
+
+    expect(await screen.findByText('マネージャー一覧')).toBeTruthy();
+    expect(sent.map((entry) => entry.method)).toEqual(['DELETE']);
+  });
+
+  /**
+   * **止まらなかったことは、ボタンを消さずに理由で出す。**
+   *
+   * 「押せないなら隠す」へ倒すと、**できないことと「この画面が扱っていないこと」を
+   * 人間が区別できない。** 非表示は非対称を隠すだけで、直したことにならない。
+   */
+  it('停止が失敗しても、ボタンは残り、理由が出る', async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      const { url, method } = request;
+      if (method === 'DELETE' && url.endsWith('/managers/mgr-1')) {
+        return json({ error: 'mgr-1 というマネージャーは居ない。' }, 404);
+      }
+      if (url.includes('/managers/mgr-1')) return json({ manager: { ...BASE, status: 'done' } });
+      throw new TypeError(`Failed to fetch: ${url}`);
+    }) as typeof fetch;
+    const router = createMemoryRouter(
+      [
+        { path: '/managers/:id', Component: () => <Harness id="mgr-1" /> },
+        { path: '/managers', Component: () => <p>マネージャー一覧</p> },
+        { path: '/journal', Component: () => null },
+      ],
+      { initialEntries: ['/managers/mgr-1'] },
+    );
+    render(
+      <Providers>
+        <RouterProvider router={router} />
+      </Providers>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '停止する' }));
+
+    // 理由が画面に出る。
+    expect(await screen.findByText(/マネージャーは居ない/)).toBeTruthy();
+    // 一覧へは飛ばない（止まっていないのだから、止まったように見せない）。
+    expect(screen.queryByText('マネージャー一覧')).toBeNull();
+    // **ボタンは消えない。** もう一度押せる。
+    expect(screen.getByRole('button', { name: '停止する' })).toBeTruthy();
   });
 });
