@@ -4482,6 +4482,290 @@ describe('クローン — 枠（利用上限）が閉じたら保持して次�
 });
 
 /**
+ * `#settleInboxEvent` に足した「枠で保持している間、中身を持たない合図
+ * （`isTick`）で在庫を作らない」の3本（`clone.ts` の `#foldsIntoHeldTick` /
+ * `#noteFoldedTick` / `#deferred` / `isTick` / `isSameTick`）。
+ *
+ * 上の「枠が閉じたら保持して次の合図で試す」ブロックが確かめているのは FIFO・
+ * 再試行そのものであり、ここで確かめるのは**その保持の中身が増え続けないこと**
+ * （歯1・2）と、**畳んでも再試行の回数そのものは1回も減らないこと**（歯3）で
+ * ある。3本とも `self_initiative` / `timer` 起点のターンは `ChatStreamEvent` を
+ * 1件も出さない（`#conversationOf` が `human_message` 以外に `null` を返し、
+ * `#emit` が `null` で即 return する）ので、`waitForTerminal` はここでは使えない。
+ * 待つのは `stores.inbox.claimPending()` の中身か `calls[0].inputs.length`。
+ */
+describe('クローン — 枠で保持している間、中身を持たない合図で在庫を作らない', () => {
+  const spendLimitMessage = "You've hit your individual spend limit for this account.";
+
+  /** 「畳んだ」旨の日誌の行数。 */
+  async function foldedNoteCount(s: Setup): Promise<number> {
+    const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[];
+    return exchanges.filter((entry) => entry.text.includes('畳んだ')).length;
+  }
+
+  /** 「枠の解除を試す」旨の日誌の行数（＝解除を試した回数そのもの）。 */
+  async function releaseAttemptCount(s: Setup): Promise<number> {
+    const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[];
+    return exchanges.filter((entry) => entry.text.includes('枠の解除を試す')).length;
+  }
+
+  it('歯1: 発意 tick を続けて送っても、保持する在庫は1件のまま増えない', async () => {
+    const s = setup(undefined, createMemoryStores(), {
+      resultSubtype: 'error_during_execution',
+      resultText: spendLimitMessage,
+    });
+
+    const origin = humanMessage('起点');
+    s.clone.post(origin);
+    await waitForTerminal(s.events);
+    // 既存テスト（「枠に当たった合図は forget されない」）と同じ待ち方 — 起点が
+    // 未読として保持し終わるまで待つ。
+    await waitFor(async () => {
+      const pending = await s.stores.inbox.claimPending();
+      return pending.some((p) => p.event.id === origin.id);
+    }, '起点が未読として保持される');
+
+    // 1本目: まだ何も保持していないので畳めない（`#deferred` に self_initiative
+    // が無い）。実際にモデルへ渡る「起点」の再試行を1回誘発して、初めて
+    // `#deferred` に self_initiative が1件乗る。
+    s.clone.post({
+      type: 'self_initiative',
+      id: 'evt-si-1',
+      at: new Date().toISOString(),
+      reason: '1本目',
+    });
+    await waitFor(
+      async () => (s.calls[0]?.inputs.length ?? 0) >= 2,
+      '1本目が誘発した再試行が投げられる',
+    );
+
+    // 2本目: 既に保持している self_initiative（1本目）へ畳まれる。畳まれた分は
+    // `#forget` されて器の未読からも消える。
+    s.clone.post({
+      type: 'self_initiative',
+      id: 'evt-si-2',
+      at: new Date().toISOString(),
+      reason: '2本目',
+    });
+    await waitFor(async () => (await foldedNoteCount(s)) === 1, '2本目が畳まれる');
+
+    // 3本目も同様に畳まれる。
+    s.clone.post({
+      type: 'self_initiative',
+      id: 'evt-si-3',
+      at: new Date().toISOString(),
+      reason: '3本目',
+    });
+    await waitFor(async () => (await foldedNoteCount(s)) === 2, '3本目が畳まれる');
+
+    const pending = await s.stores.inbox.claimPending();
+    const selfInitiatives = pending.filter((p) => p.event.type === 'self_initiative');
+    // 在庫は1件だけ（3回届いたのに増えていない）。
+    expect(selfInitiatives).toHaveLength(1);
+    // 動いていないのは**先に保持していた側**（1本目）である。畳むのは新しく
+    // 届いた方だけで、既に保持している側は触らない。
+    expect(selfInitiatives[0]?.event.id).toBe('evt-si-1');
+    // 畳んだ跡が2件、日誌に残る（2本目・3本目のぶん）。
+    expect(await foldedNoteCount(s)).toBe(2);
+    // 起点（人間の発言）は畳み込みの対象外なので、未読のまま残っている。
+    expect(pending.some((p) => p.event.id === origin.id)).toBe(true);
+
+    await s.clone.stop();
+  });
+
+  it('歯2: 中身を持つ合図・別の日のタイマーは畳まれず、枠が開けば到着順に処理される', async () => {
+    // 枠を「途中までは閉じたまま、合図で明示的に開けるまでは開かない」形にする
+    // ための可変フラグ。再試行が何回起きるかを数えずに済ませるための口
+    // （`resultFor` は毎ターン呼ばれるので、フラグを見るだけで済む）。
+    let releaseGateOpen = false;
+    const s = setup(undefined, createMemoryStores(), {
+      resultFor: () =>
+        releaseGateOpen
+          ? undefined
+          : { subtype: 'error_during_execution', text: spendLimitMessage },
+    });
+
+    const origin = humanMessage('起点');
+    s.clone.post(origin);
+    await waitForTerminal(s.events);
+    await waitFor(async () => {
+      const pending = await s.stores.inbox.claimPending();
+      return pending.some((p) => p.event.id === origin.id);
+    }, '起点が未読として保持される');
+
+    // **畳まれてはいけない**もの4種。1件ずつ post し、前の分が誘発した「起点」の
+    // 再試行が実際に投げられたことを待ってから次を送る。
+    const second = humanMessage('二件目');
+    s.clone.post(second);
+    await waitFor(async () => (s.calls[0]?.inputs.length ?? 0) >= 2, '二件目が誘発した再試行');
+
+    const manager = {
+      type: 'manager_message' as const,
+      id: 'evt-manager',
+      at: new Date().toISOString(),
+      managerId: 'mgr-1',
+      kind: 'report' as const,
+      text: 'マネージャーからの一件（目印テキスト）',
+    };
+    s.clone.post(manager);
+    await waitFor(
+      async () => (s.calls[0]?.inputs.length ?? 0) >= 3,
+      'manager_message が誘発した再試行',
+    );
+
+    const timerA = {
+      type: 'timer' as const,
+      id: 'evt-timer-a',
+      at: new Date().toISOString(),
+      kind: 'custom-check',
+      target: '2026-08-20',
+    };
+    s.clone.post(timerA);
+    await waitFor(
+      async () => (s.calls[0]?.inputs.length ?? 0) >= 4,
+      'timer(08-20) が誘発した再試行',
+    );
+
+    // kind / cause は同じで target だけが違う ＝ 別の日 ＝ 別の仕事（`isSameTick`
+    // の doc）なので、timerA が保持中でも畳まれてはいけない。
+    const timerB = {
+      type: 'timer' as const,
+      id: 'evt-timer-b',
+      at: new Date().toISOString(),
+      kind: 'custom-check',
+      target: '2026-08-21',
+    };
+    s.clone.post(timerB);
+    await waitFor(
+      async () => (s.calls[0]?.inputs.length ?? 0) >= 5,
+      'timer(08-21) が誘発した再試行',
+    );
+
+    // ここまでの5件（起点＋畳まれてはいけない4件）は、すべて未読として保持
+    // されている。1件も畳まれていない。
+    const heldIds = [origin.id, second.id, manager.id, timerA.id, timerB.id];
+    const pendingBeforeOpen = await s.stores.inbox.claimPending();
+    for (const id of heldIds) {
+      expect(pendingBeforeOpen.some((p) => p.event.id === id)).toBe(true);
+    }
+    expect(await foldedNoteCount(s)).toBe(0);
+
+    // 枠を開けて、続きの合図（トリガー）を送る。これで保持していた分から順に
+    // 配り直され、実際に成功して処理される。
+    releaseGateOpen = true;
+    const trigger = humanMessage('トリガー');
+    s.clone.post(trigger);
+    // 起点・二件目・トリガーの3件だけが人間の発言（chat の宛先を持つ）なので、
+    // `done` は3件。manager_message / timer は宛先が無い内部ターンなので
+    // `ChatStreamEvent` を出さない（このブロックの doc）。
+    await s.waitForEvents((events) => events.filter((event) => event.type === 'done').length === 3);
+
+    // 到着順のまま処理されたことを、`calls[0].inputs` に載った本文の出現順で
+    // 確かめる（`labelOrder` と同じ考え方。ここは型が混ざるので専用の目印で見る）。
+    //
+    // **単なる部分一致では見られない。** `#recentDigest`（tick 系のプロンプトに
+    // 載る「引き受けたまま終わっていない仕事」一覧）は、その時点で台帳に載って
+    // いる全件を列挙する。`post()` は同期でその場で台帳へ載せる（`#commit` の
+    // doc）ので、**まだ自分の番が来ていない合図でも、後から届いた分の digest には
+    // 先に載る**（実測: `トリガー` は一覧の最後に post するが、その digest 一覧
+    // 自体は timerA/timerB の番でもう出現していた）。だから「その合図**自身**の
+    // ターン本文」に固有の並び（`commitmentNoticeFor` が本文の直前に必ず挟む
+    // `\n\n---\n` の直後）で狙う — digest の列挙側にはこの並びが出ない
+    // （`- evt-x（...）\n  本文` という別の形である）。
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    const firstIndexOf = (marker: string) => inputs.findIndex((text) => text.includes(marker));
+    const order = {
+      二件目: firstIndexOf('\n\n---\n二件目'),
+      manager: firstIndexOf('（報告）\n\nマネージャーからの一件（目印テキスト）'),
+      timerA: firstIndexOf('対象: 2026-08-20'),
+      timerB: firstIndexOf('対象: 2026-08-21'),
+      トリガー: firstIndexOf('\n\n---\nトリガー'),
+    };
+    for (const [label, index] of Object.entries(order)) {
+      expect(index, `${label} が calls[0].inputs に見つからない`).toBeGreaterThanOrEqual(0);
+    }
+    expect(order.二件目).toBeLessThan(order.manager);
+    expect(order.manager).toBeLessThan(order.timerA);
+    expect(order.timerA).toBeLessThan(order.timerB);
+    expect(order.timerB).toBeLessThan(order.トリガー);
+
+    await s.clone.stop();
+  });
+
+  /**
+   * ## 歯3 が守っているもの
+   *
+   * `#foldsIntoHeldTick` による畳み込みを `post()` 側（受信箱へ積む前）に移すと、
+   * 畳まれた tick は受信箱へ何も積まない ＝ `#pump` の `for await` が次の要素を
+   * 受け取れず、`#releaseRequested` の印を見に来る機会そのものが無くなる。
+   * tick（`self_initiative` / `timer`）は「枠が開いたかを試す」ための**唯一の
+   * 定期的な契機**なので、そうなった瞬間、枠が実際には開いているのに誰も
+   * 気づかず再試行が静かに止まる — 費用は増えないが、仕事も二度と進まない。
+   *
+   * 実装（`clone.ts` の `#settleInboxEvent` 内）はこれを避け、畳み込みを
+   * **受信箱から取り出した後**（＝解除の印は必ず処理済み）に置いている。だから
+   * 「畳まれた」こと自体は歯1で確かめた在庫の話とは別に、**畳まれてもなお
+   * 解除の試行そのものは1回も減っていない**ことを、ここで別に確かめる。
+   *
+   * 見るのは2つ — (1) 実際にモデルへ渡った回数（`calls[0].inputs`）が
+   * 「起点の初回1回 + tick 3回それぞれが誘発した起点の再試行3回」の**4回**で
+   * あること、(2) 日誌の「枠の解除を試す」行が3件（tick 1回につき1回、
+   * 畳まれた分も含めて減っていない）であること。もし畳み込みを `post()` 側へ
+   * 移す形に戻すと、2本目・3本目の self_initiative は受信箱へ一切積まれなく
+   * なるので、この2つの数はどちらも「4」「3」から減る（＝この歯は必ず落ちる）。
+   */
+  it('歯3: 発意 tick を畳んでも、枠が開いたかを試した回数は3回のまま減らない', async () => {
+    const s = setup(undefined, createMemoryStores(), {
+      resultSubtype: 'error_during_execution',
+      resultText: spendLimitMessage,
+    });
+
+    const origin = humanMessage('起点');
+    s.clone.post(origin);
+    await waitForTerminal(s.events);
+    await waitFor(async () => {
+      const pending = await s.stores.inbox.claimPending();
+      return pending.some((p) => p.event.id === origin.id);
+    }, '起点が未読として保持される');
+
+    s.clone.post({
+      type: 'self_initiative',
+      id: 'evt-si-1',
+      at: new Date().toISOString(),
+      reason: '1本目',
+    });
+    await waitFor(async () => (s.calls[0]?.inputs.length ?? 0) >= 2, '1本目が誘発した再試行');
+
+    s.clone.post({
+      type: 'self_initiative',
+      id: 'evt-si-2',
+      at: new Date().toISOString(),
+      reason: '2本目',
+    });
+    await waitFor(async () => (await foldedNoteCount(s)) === 1, '2本目が畳まれる');
+
+    s.clone.post({
+      type: 'self_initiative',
+      id: 'evt-si-3',
+      at: new Date().toISOString(),
+      reason: '3本目',
+    });
+    await waitFor(async () => (await foldedNoteCount(s)) === 2, '3本目が畳まれる');
+
+    // (1) 実際にモデルへ渡った回数 = 起点の初回 + tick 3回ぶんの再試行 = 4回。
+    // 全件が「起点」の本文を運んでいる（再試行は本文を変えない）。
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    expect(inputs).toHaveLength(4);
+    expect(inputs.every((text) => text.includes('起点'))).toBe(true);
+
+    // (2) 解除を試した回数そのもの（tick 1回につき1回、畳まれた分も含む）。
+    expect(await releaseAttemptCount(s)).toBe(3);
+
+    await s.clone.stop();
+  });
+});
+
+/**
  * 症状B（人間の報告）: 「利用上限に当たった状態で話しかけると、枠が回復した
  * 後も、待たされていた発言への返信が届かない」を直接確かめる。
  *
