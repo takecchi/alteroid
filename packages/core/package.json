@@ -11,6 +11,10 @@
     "./usage": {
       "types": "./dist/usage-format.d.ts",
       "import": "./dist/usage-format.js"
+    },
+    "./revision": {
+      "types": "./dist/revision-format.d.ts",
+      "import": "./dist/revision-format.js"
     }
   },
   "files": [

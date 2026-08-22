@@ -1,3 +1,10 @@
+// **版の言い方は core の1本を通す**（`@alteroid/core/revision`）。ここに文言を
+// 書き写すと、状態が増えたときに画面だけが古くなる——とくに `unknown`（器が自分の
+// 版を知らない）と `unheard`（名乗りをまだ聞けていない）の区別が画面で消えると、
+// 人間は疑う先を取り違える。**ブラウザが読めるのは subpath の側だけである**
+// （`revision.ts` は焼き込んだ正典と zod を読むので初期チャンクへ入れられない）。
+import { describeRevisionStatus } from '@alteroid/core/revision';
+
 import { ConnectionCard } from '~/components/connection';
 import { Page } from '~/components/page';
 import { Badge, Button, Card, CardHeader, Empty, ErrorNote, Spinner } from '~/components/ui';
@@ -132,6 +139,7 @@ function Credentials({ runner }: { runner: RunnerSummary }) {
 function Runners() {
   const { data, error, isLoading } = useRunners();
   const runners = data?.runners ?? [];
+  const daemonRevision = data?.daemonRevision;
 
   return (
     <Card>
@@ -140,6 +148,26 @@ function Runners() {
         subtitle="マネージャーが実際に走る器。鍵は指紋だけが見える（値は返らない）"
       />
       <ErrorNote error={error} className="m-4" />
+      {/*
+       * **デーモン自身の版を、runner の版と同じカードに並べる。** 別の場所に出すと
+       * 人間が手で突き合わせることになり、突き合わせ忘れがそのまま見逃しになる。
+       * デーモンと runner は別々にデプロイされるので、同じ main から起こしていても
+       * 別のコミットで走る窓が実際に在る。
+       *
+       * **runner が0台でも出す。** 0台は「まだ配線されていない」状態、つまり版を
+       * 確かめたい状態そのものなので、ここで落とすとその状態でだけ答えが消える。
+       */}
+      {daemonRevision === undefined ? null : (
+        <div className="border-b border-border px-4 py-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="font-mono text-sm">デーモン</p>
+            <Badge tone="accent">この画面が見ているプロセス</Badge>
+          </div>
+          <p className="mt-0.5 font-mono text-[11px] break-all text-muted">
+            版: {describeRevisionStatus(daemonRevision)}
+          </p>
+        </div>
+      )}
       {isLoading ? (
         <Spinner />
       ) : runners.length === 0 ? (
@@ -176,6 +204,20 @@ function Runners() {
                         ? ''
                         : `（${formatDateTime(runner.instanceSince)} から）`
                     }`}
+              </p>
+              {/*
+                **版は「どのプロセスか」の隣に置く。** この2つは別の問いに答える —
+                `instanceId` は「さっき仕事を渡した相手と同じプロセスか」、版は
+                「そのプロセスがどのコミットのコードで走っているか」である。器を
+                作り直さずにデプロイし直せば `instanceId` は変わって版も変わり、
+                器だけ再起動すれば `instanceId` だけが変わる。**並べて置かないと、
+                人間はどちらか片方でもう片方を推測する。**
+
+                そして `known` は「最後に聞けた名乗り」であって「いま走っている版」
+                ではないので、state から離すと落ちた器の古い値が現役の版として読まれる。
+              */}
+              <p className="mt-0.5 font-mono text-[11px] break-all text-muted">
+                版: {describeRevisionStatus(runner.revision)}
               </p>
               {runner.error === undefined ? null : (
                 <p className="mt-1 text-[11px] text-danger">{runner.error}</p>

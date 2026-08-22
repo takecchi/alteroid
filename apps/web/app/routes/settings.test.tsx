@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * 設定画面の runner の札。**2つの主題が同居している。**
+ * 設定画面の runner の札。**3つの主題が同居している。**
  *
  * 1. **「いま応えているプロセス」を人間にも見せる**（`instanceId`）。`runnerId` は
  *    宛先の名前で、器を作り直しても同じである。だから名前だけでは「さっき仕事を
@@ -19,13 +19,21 @@
  *    `credentials.length === 0` だけで「渡している鍵は無い」と断定すると、
  *    確かめられなかったことが確かめた結果として人間に届く。
  *
- * **どちらも「判定できないことを、判定した結果として出さない」という同じ形である。**
+ * 3. **「版」欄（コミット sha）が、デーモンと runner の両方について出る。**
+ *    `instanceId` が答えるのは「同じプロセスか」、版が答えるのは「そのプロセスが
+ *    どのコミットのコードで走っているか」で、別の問いである
+ *    （`packages/core/src/tools.test.ts` の「デーモンの版と runner の版を、同じ出力に
+ *    並べて出す」と対になっている）。要点は「不明」（器が自分の版を知らない）と
+ *    「未確認」（名乗りをまだ聞けていない）を畳まないことで、畳んだ画面でも
+ *    「版が出ている」ようには見える。
+ *
+ * **3つとも「判定できないことを、判定した結果として出さない」という同じ形である。**
  */
 import { cleanup, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { RunnerSummary } from '~/lib/types';
+import type { DaemonRevision, RunnerSummary } from '~/lib/types';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import Settings from './settings';
@@ -47,6 +55,15 @@ const BASE: RunnerSummary = {
   revision: { status: 'unheard' },
 };
 
+/**
+ * デーモン自身の版の既定。
+ *
+ * **`instanceId` の試験でも省略しない。** `GET /runners` の応答に必ず入る欄なので、
+ * ここを省ける形にすると「画面が読んでいない」と「デーモンが返していない」が
+ * 試料の側で混ざる。
+ */
+const DAEMON_UNKNOWN: DaemonRevision = { status: 'unknown' };
+
 let originalFetch: typeof fetch;
 
 beforeEach(() => {
@@ -60,9 +77,18 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-function renderSettings(runners: RunnerSummary[]) {
+/**
+ * `GET /runners` の応答の形。**生成 spec から導出する**（`lib/types.ts` の約束）。
+ * 手で書いた形にすると、経路が変わってもこのテストだけが古いまま通る。
+ */
+interface RunnersResponse {
+  runners: RunnerSummary[];
+  daemonRevision: DaemonRevision;
+}
+
+function renderSettings(response: RunnersResponse) {
   stubFetch((url) => {
-    if (url.includes('/runners')) return json({ runners });
+    if (url.includes('/runners')) return json(response);
     // 他の口（認証・接続の札）はこの試験の対象ではない。**握り潰さず**、
     // 空の応答を返して runner の札だけを見る。
     if (url.includes('/auth/providers')) return json({ providers: [] });
@@ -82,7 +108,10 @@ function renderSettings(runners: RunnerSummary[]) {
 
 describe('runner の札は、いま応えているプロセスを出す', () => {
   it('名乗っているプロセスと、それを見始めた時刻を出す', async () => {
-    renderSettings([{ ...BASE, instanceId: 'boot-2', instanceSince: '2026-08-22T03:04:00.000Z' }]);
+    renderSettings({
+      runners: [{ ...BASE, instanceId: 'boot-2', instanceSince: '2026-08-22T03:04:00.000Z' }],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
 
     const line = await screen.findByText(/プロセス: boot-2/);
     /*
@@ -101,9 +130,83 @@ describe('runner の札は、いま応えているプロセスを出す', () => 
    * いない」と読むしかなくなる（実際には判定材料が無いだけである）。
    */
   it('名乗らない器では「判定できない」と書く', async () => {
-    renderSettings([BASE]);
+    renderSettings({ runners: [BASE], daemonRevision: DAEMON_UNKNOWN });
 
     expect(await screen.findByText(/名乗っていない（入れ替わりを判定できない）/)).toBeTruthy();
+  });
+});
+
+const KNOWN_DAEMON: DaemonRevision = {
+  status: 'known',
+  commit: 'b'.repeat(40),
+  short: 'b'.repeat(12),
+  source: 'build',
+};
+
+describe('版の表示 — 人間もクローンと同じ材料を読める', () => {
+  /**
+   * **デーモンと runner の版が同じカードに並ぶ。** 別の場所に出すと人間が手で
+   * 突き合わせることになり、突き合わせ忘れがそのまま見逃しになる。2つの Service は
+   * 別々にデプロイされるので、ずれている窓が実際に在る。
+   */
+  it('デーモンの版と runner の版を、同じ画面に並べて出す', async () => {
+    renderSettings({
+      runners: [
+        {
+          ...BASE,
+          revision: {
+            status: 'known',
+            commit: 'a'.repeat(40),
+            short: 'a'.repeat(12),
+            source: 'platform',
+          },
+        },
+      ],
+      daemonRevision: KNOWN_DAEMON,
+    });
+
+    // フル sha を出す（短縮だけだと `gh api .../compare` へ貼れない）。
+    expect(await screen.findByText(new RegExp('a'.repeat(40)))).toBeTruthy();
+    expect(screen.getByText(new RegExp('b'.repeat(40)))).toBeTruthy();
+  });
+
+  /**
+   * **0台のときこそ版が要る。** 0台は「まだ配線されていない」状態、つまり版を
+   * 確かめたい状態そのものである。ここで落とすと、その状態でだけ答えが消える。
+   */
+  it('runner が0台でも、デーモンの版は出す', async () => {
+    renderSettings({ runners: [], daemonRevision: KNOWN_DAEMON });
+
+    expect(await screen.findByText(new RegExp('b'.repeat(40)))).toBeTruthy();
+  });
+
+  /**
+   * **`unknown` と `unheard` を同じ言葉に畳まない。** 前者は器の設定を疑う側、
+   * 後者は登録とネットワークを疑う側で、次の手が違う。畳んだ画面でも「版が出て
+   * いる」ようには見えるので、区別が消えたことは眺めていても分からない。
+   */
+  it('版の「不明」と「未確認」を、別の言葉で出す', async () => {
+    renderSettings({
+      runners: [
+        { ...BASE, label: 'runner-knows-nothing', revision: { status: 'unknown' } },
+        { ...BASE, label: 'runner-silent', state: 'unreachable', revision: { status: 'unheard' } },
+      ],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+
+    expect(await screen.findByText(/未確認/)).toBeTruthy();
+    expect(screen.getAllByText(/不明/).length).toBeGreaterThan(0);
+  });
+
+  /**
+   * **取れていない版を、それらしい sha で埋めない。** ハイフンやゼロ埋めを出すと、
+   * 人間は「版が取れている」と読む。
+   */
+  it('版が取れていないとき、sha らしきものを作らない', async () => {
+    renderSettings({ runners: [], daemonRevision: DAEMON_UNKNOWN });
+
+    const line = await screen.findByText(/^版: /);
+    expect(line.textContent).not.toMatch(/[0-9a-f]{7,}/);
   });
 });
 
@@ -117,7 +220,10 @@ describe('runner の鍵欄は、聞けた分しか言わない', () => {
    * ここで「渡している鍵は無い」と誤って言う。
    */
   it('聞いていないときは『無い』と言わない', async () => {
-    renderSettings([{ ...BASE, credentials: [], credentialsProbe: { status: 'unheard' } }]);
+    renderSettings({
+      runners: [{ ...BASE, credentials: [], credentialsProbe: { status: 'unheard' } }],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
 
     expect(await screen.findByText(/確かめていない/)).toBeTruthy();
     expect(screen.queryByText('渡している鍵は無い')).toBeNull();
@@ -125,13 +231,16 @@ describe('runner の鍵欄は、聞けた分しか言わない', () => {
 
   /** 【B-2】失敗したときは理由が出る。 */
   it('失敗したときは理由が出る', async () => {
-    renderSettings([
-      {
-        ...BASE,
-        credentials: [],
-        credentialsProbe: { status: 'failed', error: 'ECONNRESET: 途中で切れた' },
-      },
-    ]);
+    renderSettings({
+      runners: [
+        {
+          ...BASE,
+          credentials: [],
+          credentialsProbe: { status: 'failed', error: 'ECONNRESET: 途中で切れた' },
+        },
+      ],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
 
     expect(await screen.findByText(/ECONNRESET: 途中で切れた/)).toBeTruthy();
     expect(screen.queryByText('渡している鍵は無い')).toBeNull();
@@ -144,7 +253,10 @@ describe('runner の鍵欄は、聞けた分しか言わない', () => {
    * になる。`asked` かつ空配列という「聞けたうえで0件だった」場合を単独で見る。
    */
   it('聞いて0件なら『無い』と言う', async () => {
-    renderSettings([{ ...BASE, credentials: [], credentialsProbe: { status: 'asked' } }]);
+    renderSettings({
+      runners: [{ ...BASE, credentials: [], credentialsProbe: { status: 'asked' } }],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
 
     expect(await screen.findByText('渡している鍵は無い')).toBeTruthy();
   });

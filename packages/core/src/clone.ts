@@ -53,6 +53,7 @@ import type {
   MemoryDocument,
   ScheduledRequest,
 } from './schema.js';
+import { resolveBuildRevision } from './revision.js';
 import type { CloneRuntimeFacts, SelfFacts } from './self.js';
 import type { PendingInboxEvent, Stores } from './store.js';
 import { MCP_SERVER_NAME, createCloneMcpServer, type ToolContext } from './tools.js';
@@ -2425,6 +2426,10 @@ class Clone implements CloneHost {
   /** {@link CloneRuntimeFacts} を、いまの private フィールドから組み立てる。 */
   #runtimeFacts(): CloneRuntimeFacts {
     return {
+      // **呼ぶたびに解決する（構築時に凍らせない）。** `resolveBuildRevision` は
+      // 実行時の環境変数まで見るので、凍らせるとその経路が「起動時に在ったか」
+      // しか答えられなくなる（`revision.ts`「環境変数は呼び出し時に読む」）。
+      revision: resolveBuildRevision(),
       declaredModel: this.#model,
       modelOverridden: this.#modelOverridden,
       modelEnvKey: CLONE_MODEL_ENV_KEY,

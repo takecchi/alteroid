@@ -24,6 +24,7 @@ import {
   profileStatusCommand,
 } from './profile.js';
 import { alteroidRoot } from './paths.js';
+import { runnersCommand } from './runners.js';
 import { usageCommand } from './usage.js';
 
 /**
@@ -113,6 +114,20 @@ program
       await usageCommand(options);
     },
   );
+
+/**
+ * 委譲先の器と、**いま走っているコードの版**。
+ *
+ * 経路は `GET /runners` の1本だけで、Web UI の設定画面とクローンの `runner_list` も
+ * 同じものを見る。**版を読む口が Web とクローンにしか無い状態を残さない**
+ * （PRD「インターフェース」— 片方でしかできないことを作らない）。
+ */
+program
+  .command('runners')
+  .description('委譲先の器と、デーモン / runner がいま走っている版を見る')
+  .action(async () => {
+    await runnersCommand();
+  });
 
 /**
  * ログイン。**手元のデーモンには不要**（状態ファイルを読める＝実行環境の持ち主

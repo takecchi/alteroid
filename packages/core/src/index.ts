@@ -171,6 +171,7 @@ export {
 export {
   resolveBuildRevision,
   describeBuildRevision,
+  describeRevisionStatus,
   reportRunnerRevision,
   buildRevisionSchema,
   type BuildRevision,

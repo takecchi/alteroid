@@ -47,6 +47,14 @@ export type ConversationDetail = Ok<paths['/conversations/{id}']['get']>;
 export type ConversationMessage = ConversationDetail['messages'][number];
 
 export type RunnerSummary = Ok<paths['/runners']['get']>['runners'][number];
+/**
+ * デーモン自身の版。**runner の版（`RunnerSummary['revision']`）とは状態の数が違う。**
+ *
+ * こちらは2値（`known` / `unknown`）で、`unheard`（名乗りをまだ聞けていない）が
+ * 無い——自分のことなので訊きに行く経路がそもそも無い
+ * （`packages/core/src/manager.ts` の `RunnerFleetOverview.daemonRevision`）。
+ */
+export type DaemonRevision = Ok<paths['/runners']['get']>['daemonRevision'];
 
 export type Health = Ok<paths['/health']['get']>;
 
