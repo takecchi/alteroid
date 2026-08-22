@@ -234,3 +234,49 @@ describe('/approvals 画面のまとめ送信', () => {
     expect(screen.queryByRole('button', { name: 'まとめて送る' })).toBeNull();
   });
 });
+
+/**
+ * 折り返しの付け忘れ（本2）。
+ *
+ * `question` / `answer` は自由文（`z.string()`、長さ・空白の制約なし）で、
+ * URL のような空白を持たない長い一続きの文字列が来ても吹き出さないよう
+ * `break-words` を持つ必要がある。`question` は既に `whitespace-pre-wrap`
+ * を持っていたが `break-words` が無く、`answer` はクラス自体が無かった。
+ *
+ * **⚠️ これは「はみ出しが直った」ことの試験ではない。** jsdom はレイアウトを
+ * 持たない（`offsetWidth` / `scrollWidth` / `getBoundingClientRect()` は
+ * すべて 0）ので、固定できるのは「そのクラス名が書かれていること」までである。
+ * それでも置くのは、戻す変更（`break-words` を消す）を黙って通さないため。
+ */
+describe('折り返しの付け忘れ（本2）', () => {
+  it('設問（question）に break-words が付いている', async () => {
+    stubApprovals([approval({ id: 'a-1', question: '質問1' })]);
+    renderPage();
+
+    const question = await screen.findByText('質問1');
+    const tokens = question.className.split(/\s+/);
+    expect(tokens).toContain('break-words');
+    // 改行を保つ既存の指定も壊していないこと。
+    expect(tokens).toContain('whitespace-pre-wrap');
+  });
+
+  it('回答済みの回答（answer）に break-words が付いている', async () => {
+    stubApprovals([
+      approval({
+        id: 'a-1',
+        question: '質問1',
+        answeredAt: '2026-08-19T11:00:00.000Z',
+        answer: '許可する',
+      }),
+    ]);
+    renderPage();
+
+    // `answer` は「回答」という見出しラベルの隣に素のテキストで置かれているので、
+    // ラベル側から `<p>` 本体（クラスの持ち主）を辿る。
+    const label = await screen.findByText('回答');
+    const wrapper = label.closest('p');
+    expect(wrapper).not.toBeNull();
+    const tokens = wrapper!.className.split(/\s+/);
+    expect(tokens).toContain('break-words');
+  });
+});

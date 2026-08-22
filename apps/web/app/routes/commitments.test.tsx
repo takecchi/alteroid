@@ -202,3 +202,73 @@ describe('/commitments 画面', () => {
     expect((screen.getByRole('button', { name: '積む' }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
+
+/**
+ * 折り返しの付け忘れ（本2）。
+ *
+ * `body` / `closedReason` は自由文（`z.string()`、長さ・空白の制約なし）で、
+ * 空白を持たない長い一続きの文字列が来ても吹き出さないよう `break-words` を
+ * 持つ必要がある。`body` は既に `whitespace-pre-wrap` を持っていたが
+ * `break-words` が無く、`closedReason` はクラス自体が無かった。
+ *
+ * **⚠️ これは「はみ出しが直った」ことの試験ではない。** jsdom はレイアウトを
+ * 持たないので、固定できるのは「そのクラス名が書かれていること」までである。
+ * それでも置くのは、戻す変更（`break-words` を消す）を黙って通さないため。
+ */
+describe('折り返しの付け忘れ（本2）', () => {
+  it('未了の本文（body）に break-words が付いている', async () => {
+    stubCommitments([commitment({ body: '未了の本文' })]);
+    renderPage();
+
+    const body = await screen.findByText('未了の本文');
+    const tokens = body.className.split(/\s+/);
+    expect(tokens).toContain('break-words');
+    expect(tokens).toContain('whitespace-pre-wrap');
+  });
+
+  it('片付いた行の本文（body）にも break-words が付いている', async () => {
+    stubCommitments(
+      [commitment({ id: 'open-1', body: 'まだ終わっていない' })],
+      [
+        commitment({
+          id: 'closed-1',
+          body: '片付いた本文',
+          closedAt: new Date().toISOString(),
+          closedReason: '理由の本文',
+        }),
+      ],
+    );
+    renderPage();
+
+    await screen.findByText('まだ終わっていない');
+    fireEvent.click(screen.getByRole('button', { name: '片付けたものも見る' }));
+
+    const body = await screen.findByText('片付いた本文');
+    expect(body.className.split(/\s+/)).toContain('break-words');
+  });
+
+  it('closedReason に break-words が付いている', async () => {
+    stubCommitments(
+      [commitment({ id: 'open-1', body: 'まだ終わっていない' })],
+      [
+        commitment({
+          id: 'closed-1',
+          body: '片付いた本文',
+          closedAt: new Date().toISOString(),
+          closedReason: '理由の本文',
+        }),
+      ],
+    );
+    renderPage();
+
+    await screen.findByText('まだ終わっていない');
+    fireEvent.click(screen.getByRole('button', { name: '片付けたものも見る' }));
+
+    // `closedReason` は「どう片付いたか」という見出しラベルの隣に素のテキストで
+    // 置かれているので、ラベル側から `<p>` 本体（クラスの持ち主）を辿る。
+    const label = await screen.findByText('どう片付いたか');
+    const wrapper = label.closest('p');
+    expect(wrapper).not.toBeNull();
+    expect(wrapper!.className.split(/\s+/)).toContain('break-words');
+  });
+});
