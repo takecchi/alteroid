@@ -3,6 +3,14 @@ import { randomUUID } from 'node:crypto';
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 
+import {
+  bySpeaker,
+  collectConversations,
+  humanExchanges,
+  reachedStart,
+  searchExchanges,
+  toMessage,
+} from './conversation.js';
 import { isCronExpression } from './cron.js';
 import { describePage, excerptLine, page, renderListing } from './excerpt.js';
 import type { ManagerDenial, ManagerPool, ManagerSummary } from './manager.js';
@@ -129,6 +137,7 @@ export const CLONE_TOOL_NAMES = [
   'memory_delete',
   'journal_write',
   'journal_read',
+  'conversation_read',
   'ask_human',
   'approvals_list',
   'daily_report_write',
@@ -269,6 +278,19 @@ const MEMORY_PAGE = 8_000;
 const CANON_PAGE = 8_000;
 /** プロファイル本文を取りに来たときの1回分。続きは `offset` で取れる。 */
 const PROFILE_PAGE = 8_000;
+
+/**
+ * `conversation_read` 専用の抜粋長・予算・ページ幅。
+ *
+ * **`JOURNAL_*` を使い回さない。** 値は同じでも意味が違う — こちらは「会話の
+ * 1発言」を単位にした抜粋・予算であって、`journal_read` の「日誌の1行」とは
+ * 探す対象そのものが違う（`TRANSCRIPT_PAGE` の doc と同じ判断）。片方だけ
+ * 直したくなったときに一緒に動かないよう定数を分けてある。
+ */
+const CONVERSATION_EXCHANGE_EXCERPT = 200;
+const CONVERSATION_LIST_BUDGET = 8_000;
+/** 発言1件の全文を取りに来たときの1回分。続きは `offset` で取れる。 */
+const CONVERSATION_PAGE = 8_000;
 
 /**
  * 自作ツールは確認なしで通す（能力の削除ではなく、道具が道具として使えること）。
@@ -1766,6 +1788,212 @@ export function createCloneTools(context: ToolContext) {
     ),
 
     /**
+     * 人間との会話を、日誌から読み返す道具。
+     *
+     * **逐語はもう日誌に残っている。読む口が無かっただけである**（`conversation.ts`
+     * の冒頭）。`journal_read` は `types` でしか絞れないので `exchange` に絞っても
+     * manager / self との往復に埋もれ、人間の発言は窓の外へ押し出されて見えなく
+     * なる。ここでは `with: 'human'` の exchange だけを会話へ畳み直し、
+     * `speaker: 'human'` で人間自身の発言だけに絞れるようにする——要約に潰された
+     * 後でも、逐語はここから読み返せる。
+     *
+     * **形は `journal_read` をそのまま踏襲する。新しい契約を作らない。** `id` で
+     * 1件の全文、それ以外は予算を先に決めて入るところまで積む一覧。切ったら
+     * 必ず言い、遡った件数と先頭に届いたかを必ず出す（`app.ts` の `/conversations`
+     * と同じ判断——遡り切れていない窓で「無い」と言い切らない）。
+     */
+    tool(
+      'conversation_read',
+      [
+        '人間との会話を日誌から読み返す。要約に潰された後でも逐語はここに残っている。',
+        'conversationId を指定するとその会話の中身を古い順に読める。',
+        'q だけを指定すると窓の中を語で探す（新しい順）。',
+        '何も指定しなければ会話の一覧（新しい順）。',
+        '人間自身の発言だけを見るなら speaker: "human" を指定する',
+        '（既定 both は人間とクローンの両方の発言を含む）。',
+        '一覧の本文は抜粋で、全文が要る1件は id を渡して取る。',
+      ].join(' '),
+      {
+        conversationId: z
+          .string()
+          .optional()
+          .describe('この会話の中身を古い順に読む（一覧に出ている conversationId）'),
+        q: z
+          .string()
+          .optional()
+          .describe('語で探す（大文字小文字を区別しない部分一致）。conversationId と併用できる'),
+        speaker: z
+          .enum(['human', 'clone', 'both'])
+          .optional()
+          .describe('既定 both。human で人間自身の発言だけ（clone はクローンの返答だけ）'),
+        since: z
+          .string()
+          .optional()
+          .describe('ISO 8601。この時刻以降だけ返す（例 2026-08-15T09:00:00Z）'),
+        until: z
+          .string()
+          .optional()
+          .describe('ISO 8601。この時刻以前だけ返す。過去を掘るときはこれを指定する'),
+        scan: z
+          .number()
+          .int()
+          .min(1)
+          .max(10_000)
+          .optional()
+          .describe('日誌を何件遡るか（既定 2000）。遡り切れたかは応答の注記で分かる'),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(200)
+          .optional()
+          .describe('一覧モードで返す会話の本数（既定 20）。conversationId / q のときは効かない'),
+        id: z
+          .string()
+          .optional()
+          .describe('この発言1件を全文で読む（一覧に出ている id）。他の条件は無視される'),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe('id で全文を読むとき、何文字目から読むか'),
+      },
+      async ({
+        conversationId,
+        q,
+        speaker = 'both',
+        since,
+        until,
+        scan,
+        limit,
+        id,
+        offset = 0,
+      }) => {
+        // --- 全文モード（発言1件） ---
+        if (id !== undefined) {
+          const entry = await stores.journal.get(id);
+          if (!entry) return text(`発言 ${id} は無い（id が違うか、まだ書かれていない）。`);
+          if (entry.type !== 'exchange' || entry.with !== 'human') {
+            return text(
+              `${id} は会話の発言ではない。日誌の中身を見るなら journal_read id=${id} を使うこと。`,
+            );
+          }
+          const part = page(entry.text, offset, CONVERSATION_PAGE);
+          const tail = part.more
+            ? `\n\n…（ここで切れている。続きは conversation_read id=${entry.id} offset=${part.to}）`
+            : '';
+          return text(
+            `${entry.at} [${roleLabel(entry.role)}] id=${entry.id}（${describePage(part)}）` +
+              `\n\n${part.body}${tail}`,
+          );
+        }
+
+        // --- ここから一覧系。まず窓を取り、遡った件数と先頭到達を毎回言う ---
+        const scanLimit = scan ?? 2000;
+        const entries = await stores.journal.list({
+          limit: scanLimit,
+          types: ['exchange'],
+          ...(since === undefined ? {} : { since }),
+          ...(until === undefined ? {} : { until }),
+        });
+        const reached = reachedStart(entries.length, scanLimit);
+        const scanNote =
+          `（日誌を ${entries.length} 件遡った。` +
+          (reached
+            ? '先頭に届いている）'
+            : 'この窓より古いものは見ていない。scan を増やすか until で窓をずらすこと）');
+
+        // --- 会話の中身（conversationId 指定、古い順） ---
+        if (conversationId !== undefined) {
+          const exchanges = bySpeaker(
+            humanExchanges(entries).filter((entry) => entry.conversationId === conversationId),
+            speaker,
+          );
+          const matched = (
+            q === undefined ? exchanges.map(toMessage) : searchExchanges(exchanges, q)
+          )
+            .slice()
+            .reverse(); // 新しい順で来た窓を、会話としては古い順に直す
+          if (matched.length === 0) {
+            return text(
+              (reached
+                ? `会話 ${conversationId} に当たる発言は無い。`
+                : `会話 ${conversationId} は、この窓には無い（判定できない）。`) + `\n${scanNote}`,
+            );
+          }
+          const lines = matched.map(
+            (message) =>
+              `${message.at} [${roleLabel(message.role)}] id=${message.id}\n` +
+              `  ${excerptLine(message.text, CONVERSATION_EXCHANGE_EXCERPT)}`,
+          );
+          const { shown, omitted } = packBudget(lines, CONVERSATION_LIST_BUDGET);
+          if (omitted > 0) {
+            shown.push(
+              `…ほか ${omitted} 件は省略（この会話に ${lines.length} 件あり、古い順に ${shown.length} 件だけ出した）。` +
+                'さらに遡るなら scan を増やすこと。',
+            );
+          }
+          shown.push('（本文は抜粋。全文は conversation_read id=<id> で取れる）');
+          shown.push(scanNote);
+          return text(shown.join('\n'));
+        }
+
+        // --- 語で探す（q だけ、新しい順） ---
+        if (q !== undefined) {
+          const exchanges = bySpeaker(humanExchanges(entries), speaker);
+          const matched = searchExchanges(exchanges, q);
+          if (matched.length === 0) {
+            return text(
+              (reached
+                ? `"${q}" に当たる発言は無い。`
+                : `"${q}" は、この窓には無い（判定できない）。`) + `\n${scanNote}`,
+            );
+          }
+          const lines = matched.map(
+            (message) =>
+              `${message.at} [${roleLabel(message.role)}] id=${message.id}` +
+              ` conversation=${message.conversationId ?? '(無し)'}\n` +
+              `  ${excerptLine(message.text, CONVERSATION_EXCHANGE_EXCERPT)}`,
+          );
+          const { shown, omitted } = packBudget(lines, CONVERSATION_LIST_BUDGET);
+          if (omitted > 0) {
+            shown.push(
+              `…ほか ${omitted} 件は省略（"${q}" に ${lines.length} 件当たり、新しい順に ${shown.length} 件だけ出した）。` +
+                'さらに遡るなら scan を増やすか、狭めるなら since で窓を切ること。',
+            );
+          }
+          shown.push('（本文は抜粋。全文は conversation_read id=<id> で取れる）');
+          shown.push(scanNote);
+          return text(shown.join('\n'));
+        }
+
+        // --- 会話の一覧（新しい順） ---
+        const conversations = collectConversations(entries).slice(0, limit ?? 20);
+        if (conversations.length === 0) {
+          return text(
+            (reached ? '会話はまだ無い。' : 'この窓には無い（判定できない）。') + `\n${scanNote}`,
+          );
+        }
+        const lines = conversations.map(
+          (conversation) =>
+            `${conversation.conversationId} ${conversation.startedAt}〜${conversation.updatedAt}` +
+            `（${conversation.messages} 件）\n  ${conversation.preview}`,
+        );
+        const { shown, omitted } = packBudget(lines, CONVERSATION_LIST_BUDGET);
+        if (omitted > 0) {
+          shown.push(
+            `…ほか ${omitted} 件は省略（${lines.length} 件のうち新しい順に ${shown.length} 件だけ出した）。` +
+              'さらに見るなら limit を増やすこと。',
+          );
+        }
+        shown.push('（各会話の中身は conversation_read conversationId=<id> で古い順に読める）');
+        shown.push(scanNote);
+        return text(shown.join('\n'));
+      },
+    ),
+
+    /**
      * 可観測性の最下段 — マネージャーのセッションそのものの生ログ。
      *
      * **`manager_report` に `part: 'transcript'` を足す形にはしていない。**
@@ -1998,6 +2226,29 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
   ];
+}
+
+/** 会話の発言の `role` を人が読める形にする（`conversation_read` 専用）。 */
+function roleLabel(role: 'inbound' | 'outbound'): string {
+  return role === 'inbound' ? '人間' : 'クローン';
+}
+
+/**
+ * 予算を先に決めて、入るところまで積む（`journal_read` の一覧ループと同じ形）。
+ *
+ * **件数から出力量を決めない。** 1件目は予算を超えていても必ず積む（0件のまま
+ * 返すよりは、超過してでも1件は届けるほうがよい）。`conversation_read` の3つの
+ * 一覧モード（会話の中身・語で探す・会話の一覧）で共通に使う。
+ */
+function packBudget(lines: string[], budget: number): { shown: string[]; omitted: number } {
+  const shown: string[] = [];
+  let used = 0;
+  for (const line of lines) {
+    if (shown.length > 0 && used + line.length > budget) break;
+    shown.push(line);
+    used += line.length;
+  }
+  return { shown, omitted: lines.length - shown.length };
 }
 
 /**
