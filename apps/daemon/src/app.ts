@@ -786,8 +786,20 @@ export function createApp(deps: AppDeps) {
             wake?.();
           });
 
-          await stream.writeSSE({ event: 'open', data: JSON.stringify({ conversationId }) });
-
+          /*
+           * **`open` を書く前に積む。順序に意味がある。**
+           *
+           * `open` は「この呼びの投函はもう済んだ」の合図として読まれる。受信中に
+           * 続けて打った発言を投函だけしたい呼び（Web UI の追送。2本目の購読を
+           * 張ると同じ応答が二度流れるので張らない）は、`open` を見た時点で接続を
+           * 捨てる。**逆順だと、捨てるのが `clone.post` より先になりうる** —
+           * `stream.onAbort` が走った後にここへ来ると、積む前にこの関数から抜ける
+           * 経路が生まれ、発言が黙って消える。
+           *
+           * 積むのを先にしておけば、以後どこで切られても発言は受信箱に在る。
+           * 購読（上の `clone.subscribe`）はさらに手前で張ってあるので、`#record`
+           * が出す `queued` も取りこぼさない。
+           */
           clone.post({
             type: 'human_message',
             id: randomUUID(),
@@ -795,6 +807,8 @@ export function createApp(deps: AppDeps) {
             text,
             conversationId,
           });
+
+          await stream.writeSSE({ event: 'open', data: JSON.stringify({ conversationId }) });
 
           try {
             for (;;) {
