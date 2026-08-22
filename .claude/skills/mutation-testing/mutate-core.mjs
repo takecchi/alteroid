@@ -17,6 +17,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -106,8 +107,7 @@ export const FORBIDDEN_IN_JUDGEMENT = [
 
 export const JUDGEMENT = {
   DETECTED: 'M1: 検出 — この歯はこの変異を捕まえた',
-  SURVIVED:
-    'M2: 生存 — この歯はこの変異を検出できない\n次にやること: 歯を強める。緩めるのではない',
+  SURVIVED: 'M2: 生存 — この歯はこの変異を検出できない\n次にやること: 歯を強める。緩めるのではない',
   UNKNOWN: 'M3: 不明 — 変異が成果物へ届いていない（生存ではない）',
 };
 
@@ -259,14 +259,18 @@ export function applyMutation(spec) {
   // 6. 印を置く。**変異を書き込む前である。** ここが手順の要点で、7と入れ替えない。
   const marker = buildMarker(spec, { headBefore, md5Pre, backupPath, original });
   writeMarkerFile(marker);
-  log(`[6] 印を設置した: ${path.relative(ROOT, MARKER_PATH)}（原文 ${original.length} 文字を埋め込み済み）`);
+  log(
+    `[6] 印を設置した: ${path.relative(ROOT, MARKER_PATH)}（原文 ${original.length} 文字を埋め込み済み）`,
+  );
 
   // 7. 変異を書き込む。md5Post !== md5Pre を要求する（歯5: 当て忘れの検出）。
   const mutated = replaceAllLiteral(original, spec.from, spec.to);
   writeRepoFile(spec.file, mutated);
   const md5Post = md5(mutated);
   if (md5Post === md5Pre) {
-    throw new HarnessError(`[7] 歯5 違反: 変異前後の md5 が同一 (${md5Post})。当て忘れの疑いがある。`);
+    throw new HarnessError(
+      `[7] 歯5 違反: 変異前後の md5 が同一 (${md5Post})。当て忘れの疑いがある。`,
+    );
   }
   log(`[7] 変異を書き込んだ: md5Post=${md5Post}（md5Pre と異なる: 確認済み）`);
 
@@ -341,8 +345,7 @@ export function testsRanCleanly(testResult) {
 
 export function testsAllPassed(testResult) {
   if (!testsRanCleanly(testResult)) return null; // 判定できない
-  const noFailures =
-    !/failed/i.test(testResult.filesLine) && !/failed/i.test(testResult.testsLine);
+  const noFailures = !/failed/i.test(testResult.filesLine) && !/failed/i.test(testResult.testsLine);
   const hasPassed = /passed/.test(testResult.filesLine) && /passed/.test(testResult.testsLine);
   return noFailures && hasPassed;
 }

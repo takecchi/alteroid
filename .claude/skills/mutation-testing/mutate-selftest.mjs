@@ -148,9 +148,7 @@ function scenarioBackupCorruption() {
 // 跨がない。だからこの demo では build/artifact 検査は「対象外」になる
 // （本番でパッケージ境界を跨ぐ変異には spec.target を必ず設定すること）。
 function scenarioWeakTooth() {
-  section(
-    'selftest: 2. 歯が弱い（apps/cli/src/conversations.ts の renderConversationDetail）',
-  );
+  section('selftest: 2. 歯が弱い（apps/cli/src/conversations.ts の renderConversationDetail）');
   requireNoMarker('weak-tooth');
 
   const spec = {
@@ -257,7 +255,11 @@ describe('強い歯（selftest）', () => {
       }
       log('');
       log(`判定 (${label}): ${judgement}`);
-      outcomes[label] = { judgement, testsLine: testResult.testsLine, filesLine: testResult.filesLine };
+      outcomes[label] = {
+        judgement,
+        testsLine: testResult.testsLine,
+        filesLine: testResult.filesLine,
+      };
       restoreMutation();
     } finally {
       fs.rmSync(absPath(testRel), { force: true });
@@ -290,7 +292,9 @@ function scenarioInterrupted() {
     target: null,
   };
 
-  log('-- 3a. 変異を当てる。ここで「セッションが終わった」ことにする（この先の build/test/restore を単に呼ばない） --');
+  log(
+    '-- 3a. 変異を当てる。ここで「セッションが終わった」ことにする（この先の build/test/restore を単に呼ばない） --',
+  );
   const ctx = applyMutation(spec);
 
   const markerPresent = markerExists();
@@ -298,11 +302,25 @@ function scenarioInterrupted() {
   log(`ファイルは変異したままか: ${readRepoFile(FIXTURE_REL).includes('LINE-TWO-INTERRUPTED')}`);
 
   log('');
-  log('-- 3b. 次に来た人の視点: 実プロセスとして `mutate.mjs status` を呼ぶ（kill はしていない。単に別の起動） --');
-  const statusResult = execFileSync('node', [path.join(ROOT, '.claude/skills/mutation-testing/mutate.mjs'), 'status'], {
-    cwd: ROOT,
-    encoding: 'utf8',
-  }).toString();
+  log(
+    '-- 3b. 次に来た人の視点: 実プロセスとして `mutate.mjs status` を呼ぶ（kill はしていない。単に別の起動） --',
+  );
+  // status は印がある間 exit 2 を返す（想定どおりの非0）。execFileSync は非0を
+  // 例外で表すので、ここでは正しく拾って中身を読む。
+  let statusResult;
+  let statusExitCode;
+  try {
+    statusResult = execFileSync(
+      'node',
+      [path.join(ROOT, '.claude/skills/mutation-testing/mutate.mjs'), 'status'],
+      { cwd: ROOT, encoding: 'utf8' },
+    ).toString();
+    statusExitCode = 0;
+  } catch (err) {
+    statusResult = err.stdout?.toString() ?? '';
+    statusExitCode = err.status;
+  }
+  log(`status の exit code: ${statusExitCode}`);
   log(statusResult);
 
   log('');
@@ -421,7 +439,9 @@ function scenarioDelivery() {
   const distAfterMutationNoBuild = fs.existsSync(distAbs) ? fs.readFileSync(distAbs, 'utf8') : '';
   const deliveredBeforeBuild = distAfterMutationNoBuild.includes('SELFTEST_MUTATED');
   log(`build 前（ソースは変異済み）の dist に含まれるか: ${deliveredBeforeBuild}`);
-  log('この時点で参照できる「直近の build の exit code」は、前回 (baseline 相当) の 0 のままである。');
+  log(
+    'この時点で参照できる「直近の build の exit code」は、前回 (baseline 相当) の 0 のままである。',
+  );
 
   log('');
   log('-- 4d. build する --');
@@ -435,7 +455,9 @@ function scenarioDelivery() {
   );
 
   log('');
-  log('-- 4e. 復元し、dist も build し直して現物と一致させる（後始末。restore 自体は歯4/12まで） --');
+  log(
+    '-- 4e. 復元し、dist も build し直して現物と一致させる（後始末。restore 自体は歯4/12まで） --',
+  );
   restoreMutation();
   const rebuild = buildAndCheckArtifact({ ...spec, artifact: undefined });
   log(`後始末の build exit code: ${rebuild.buildExitCode}`);

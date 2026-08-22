@@ -23,6 +23,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 
 import {
   HarnessError,
@@ -42,7 +44,7 @@ import {
 } from './mutate-core.mjs';
 import { runSelftestScenario, SELFTEST_SCENARIOS } from './mutate-selftest.mjs';
 
-const __filename = new URL(import.meta.url).pathname;
+const __filename = fileURLToPath(import.meta.url);
 
 function cmdStatus() {
   checkJudgementVocabulary();
@@ -69,7 +71,9 @@ function cmdStatus() {
   log(`セッション: ${marker.sessionId ?? '(不明)'} / pid=${marker.pid ?? '(不明)'}`);
   log(`控え: ${marker.backupPath}`);
   log(`md5Pre: ${marker.md5Pre}`);
-  log(`印内の原文の自己整合性: ${selfConsistent ? '一致（信頼できる）' : '不一致（印自体が壊れている疑い）'}`);
+  log(
+    `印内の原文の自己整合性: ${selfConsistent ? '一致（信頼できる）' : '不一致（印自体が壊れている疑い）'}`,
+  );
   log('');
   log('ハーネスを使わない復元手順:');
   log(`  $ ${marker.manualRestore.command}`);
