@@ -56,23 +56,35 @@ function titleOf(markdown, fallback) {
 }
 
 /**
- * 焼き込んだ時点のリビジョン。
+ * 焼き込んだ時点のリビジョンと、その出所。
  *
- * **分からないことを隠さない。** イメージのビルドでは `.git` が無いので空になる。
+ * **分からないことを隠さない。** イメージのビルドでは `.git` が無いので
+ * （`.dockerignore`）、`ALTEROID_BUILD_REV` を渡さない限り両方とも空になる。
  * 空のときクローンには「リビジョンは不明」と伝わり、コードの最新が要る場面で
  * リポジトリを見に行く判断ができる。ここで嘘の値を埋めると、その判断が狂う。
+ *
+ * **フル sha を返す。** 短縮 sha だけだと、依頼者が `gh api .../compare` で
+ * 「main から何コミット遅れているか」を突き合わせる材料にならない。表示用の
+ * 短縮は読む側（`packages/core/src/revision.ts` の `describeBuildRevision`）が
+ * 別に作る。
+ *
+ * **出所も一緒に運ぶ。** `'build'` は `ALTEROID_BUILD_REV`（人間 / CI が明示的に
+ * 渡した値）、`'workspace'` はビルド時の git 作業ツリーから拾った値、`''` は
+ * どちらも取れなかったことを意味する。値だけでは「本当にこのイメージの中身の
+ * sha か、単にビルド環境に置いてあった値か」が読む側から区別できない。
  */
 function revision() {
   const fromEnv = (process.env.ALTEROID_BUILD_REV ?? '').trim();
-  if (fromEnv.length > 0) return fromEnv;
+  if (fromEnv.length > 0) return { value: fromEnv, source: 'build' };
   try {
-    return execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
+    const value = execFileSync('git', ['rev-parse', 'HEAD'], {
       cwd: repoRoot,
       stdio: ['ignore', 'pipe', 'ignore'],
       encoding: 'utf8',
     }).trim();
+    return { value, source: 'workspace' };
   } catch {
-    return '';
+    return { value: '', source: '' };
   }
 }
 
@@ -110,6 +122,8 @@ for (const entry of CANON) {
   });
 }
 
+const rev = revision();
+
 const banner = [
   '// 生成物 — 手で書き換えない（次のビルドで消える）。',
   '// 出所は docs/*.md（正典）。作るのは packages/core/scripts/write-canon.mjs。',
@@ -131,8 +145,11 @@ const banner = [
   '/** 優先順位の順（上が勝つ）。 */',
   `export const CANON_DOCUMENTS: CanonDocument[] = ${JSON.stringify(documents, null, 2)};`,
   '',
-  '/** 焼き込んだ時点のリビジョン。分からなければ空文字。 */',
-  `export const CANON_REVISION = ${JSON.stringify(revision())};`,
+  '/** 焼き込んだ時点のリビジョン（フル sha）。分からなければ空文字。 */',
+  `export const CANON_REVISION = ${JSON.stringify(rev.value)};`,
+  '',
+  "/** `CANON_REVISION` の出所（'build' / 'workspace' / ''）。実行時の解決は `packages/core/src/revision.ts` が持つ。 */",
+  `export const CANON_REVISION_SOURCE = ${JSON.stringify(rev.source)};`,
   '',
 ].join('\n');
 

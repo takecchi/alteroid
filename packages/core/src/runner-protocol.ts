@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { type RunnerRevisionReport } from './revision.js';
 import { jobStatusSchema } from './schema.js';
 import { rateLimitFactsSchema, usageLimitNoticeSchema } from './usage-limits.js';
 import { usageTotalsSchema } from './usage.js';
@@ -471,11 +472,23 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     submits: z.number().int().nonnegative(),
     /**
      * `UserPromptSubmit` の `source` ごとの内訳。**取れた分だけ載せる。**
+     * 1件も取れなければ**フィールドごと省く**（`{}` を置かない） — 取れない軸に
+     * 0の行を作らない（AGENTS.md 地雷）。
      *
-     * SDK はいまのところ「Anthropic 内部のセッションでしか付かない見込みの
-     * 試験中のフィールド」と言っており、外部のペイロードには付かない見込み
-     * である。1件も取れなければ**フィールドごと省く**（`{}` を置かない） —
-     * 取れない軸に0の行を作らない（AGENTS.md 地雷）。
+     * **この行を読む人へ。** SDK（0.3.239 の `UserPromptSubmitHookInput.source`）
+     * は `'system'` を「他の機械が起こしたターン（peer/channel messages・
+     * task notifications・auto-continuation）」と定義している。つまり
+     * `sources: { system: N }` の N は「機械に起こされたターン」の数であって、
+     * **その内訳（通知なのか SDK の自己継続なのか）ではない** — そこは同じ
+     * `'system'` に畳まれていて割れない。`byCause.notification` /
+     * `byCause.continuation` のほうは alteroid 側の推定であり、`sources` の
+     * `'system'` はその**上位集合を SDK 側から数えた別の観測**である。
+     * **両者が食い違うこと自体が観測になる**（片方だけを信じないこと）。
+     *
+     * **`sources` が無いことは「機械に起こされていない」ではない。** 同じ
+     * JSDoc は「Payloads may omit it while the field rolls out」と言っており、
+     * 付かない回が今も在る。0.3.237 まではもっと強く「外部のペイロードには
+     * 付かない」と書かれていた（経緯は `runner.ts` の `#submitSources` の doc）。
      */
     sources: z.record(z.string(), z.number().int().nonnegative()).optional(),
     /**
@@ -787,6 +800,39 @@ export interface RunnerClient {
   readonly runnerId: string;
   /** この runner の既定の作業ディレクトリ（workspace locator の path になる）。 */
   readonly workspacePath: string;
+  /**
+   * 名乗りの中身（`runnerId` / `workspacePath` と同じ応答 = `hello()` が読む
+   * `GET /health`）に含まれていた版。**接続した瞬間に一度だけ読む値であって、
+   * heartbeat では更新しない**——それは `identity()` の役目である。新しい口も
+   * 新しい呼び出しも増やしていない（`hello()` が既に読んでいる応答の中から、
+   * 今まで捨てていた1フィールドを拾うだけ）。
+   *
+   * **省略できる。** 答えない実装・古い runner（`/health` に `revision` を
+   * 持たない）はこの項目自体を持たない。そのときは `#open()` が触らないので
+   * 名簿は初期値の `unheard` のまま——「版を名乗った上で分からない」
+   * （`unknown`）と混同しない。`LocalRunner`（同一プロセス構成）はこの項目を
+   * 実装しないので、常にこの経路を通らず `identity()` の heartbeat（それも
+   * 実装していなければ `unheard` のまま）に委ねる。
+   */
+  readonly revision?: RunnerRevisionReport;
+  /**
+   * **いまこの宛先に応えているプロセス**（同じ `hello()` の応答に載っている
+   * `instanceId`。roadmap M5 PR4）。
+   *
+   * `revision` と**まったく同じ作法**である — 接続した瞬間に一度だけ読む値で、
+   * 新しい口も新しい呼び出しも増やしていない（`hello()` が既に読んでいる応答から
+   * 拾うだけ）。heartbeat での更新は `identity()` の役目である。
+   *
+   * **これが接続の瞬間に要る理由。** `#open()` の直後に走るのはデーモンの引き取り
+   * （`takeOver` / `reattachRunner`）で、そこでは貸し出し期限の判定（`lease.ts`）が
+   * この値を材料にする。heartbeat の1周（最大 `HEARTBEAT_INTERVAL_MS`）を待つと、
+   * **開け直しのたびに「判定材料が無い」状態で引き取りが走る窓**ができる — それは
+   * 生きている器の仕事を奪いうる側である。
+   *
+   * **省略できる。** 名乗らない実装（`LocalRunner`）・古い runner では無い。無いことを
+   * 「入れ替わっていない」と読まないこと（`judgeLease` は `undecidable` へ倒れる）。
+   */
+  readonly instanceId?: string;
   /** イベントの受け取りを始める。**接続を張るのはデーモン側**である。 */
   connect(onEvent: (event: RunnerEvent) => void): Promise<void>;
   /**
@@ -831,10 +877,20 @@ export interface RunnerClient {
    * **省略できる**（`ping` と同じ理由）。答えない実装・古い runner は
    * `instanceId` を持たないので、名簿は入れ替えを**判定しない**（「入れ替わって
    * いない」と読まないこと）。
+   *
+   * ## `revision` — runner が名乗る自分の版（コミット sha）
+   *
+   * デーモンと runner は別 Service で別々にデプロイされるので、別コミットで
+   * 走る窓ができうる。`known`（版が取れた）と `unknown`（応答はあったが runner
+   * 自身が自分の版を知らない）の2値のみを返す — **「そもそも訊けていない」は
+   * ここでは表せない**（応答が無かったこと自体はこの口の外、名簿の側で分かる）。
+   * `instanceId` と同じく省略できる。
    */
   identity?(options?: {
     signal?: AbortSignal;
-  }): Promise<{ runnerId?: string; instanceId?: string } | undefined>;
+  }): Promise<
+    { runnerId?: string; instanceId?: string; revision?: RunnerRevisionReport } | undefined
+  >;
   /**
    * 配置の材料を聞く（roadmap M5 PR3）。**`ping` に相乗りさせない。**
    *
@@ -932,6 +988,49 @@ export interface RunnerSource {
 export type RunnerLiveness = 'connecting' | 'connected' | 'unreachable' | 'unusable' | 'lost';
 
 /**
+ * runner 1台についての版の状態。`RunnerRevisionReport`（`known` / `unknown`）に
+ * **`unheard`（名乗り自体をまだ一度も聞いていない）を足したもの**である。
+ *
+ * この3つ目は `identity()` の応答からは作れない — 応答そのものが一度も返って
+ * いないことは、応答の中身を見る関数の外（名簿）でしか分からない。**`unknown` と
+ * `unheard` を混同しないこと** — 前者は「繋がって名乗ったが版を知らない」、後者は
+ * 「名乗りをまだ一度も聞けていない」で、対処が違う（前者は runner 自体の設定を
+ * 疑う、後者はネットワーク・登録を疑う）。
+ *
+ * **`unheard` に `RunnerLiveness['unreachable']` と同じ語を使わなかった理由。**
+ * 主語が違う——`RunnerLiveness.unreachable` は「宛先（宛先URL）が開けない」で
+ * あり、こちらは「名乗り（`/health` の応答）を聞けていない」である。同じ語を
+ * 別の主語へ使うと、読み手は2つを同じ意味として重ねて読む。
+ *
+ * **`RunnerLiveness` から導出できない。** 一見 `state === 'connected'` なら
+ * `known`/`unknown`、それ以外なら `unheard` で足りそうに見えるが、実際には
+ * 両方向にずれる（実測は `runner-swap.test.ts` / `apps/daemon/src/app.test.ts`
+ * の「runner の版」系）。
+ *
+ * 1. **`state: 'lost'` でも `known` が残る。** `#markSilent`（このファイル内）は
+ *    `state` を `'lost'` にするとき**それまでに学習した情報を捨てない**
+ *    （`entry.client` も `entry.revision` もそのまま残る）。黙る直前に聞いた
+ *    名乗りが、黙った後も見え続ける
+ * 2. **`state: 'connected'` でも `unheard` のことがある——ただし版を名乗らない
+ *    runner に限る。** `#open()` は `hello()` が既に読んでいた
+ *    `RunnerClient.revision`（`runnerId` / `workspacePath` と同じ応答）を接続
+ *    した瞬間に採るので、版を報告できる runner はここで `known` / `unknown`
+ *    へ動く——`identity()` の最初の heartbeat（`HEARTBEAT_INTERVAL_MS` 後）を
+ *    待たない。**`revision` を実装しない runner（`LocalRunner` 等）だけが
+ *    `unheard` のまま残る**——`#open()` は `client.revision === undefined` の
+ *    ときは触らないので、`register()` / `adopt()` の初期値が heartbeat の
+ *    1周目まで見え続ける
+ *
+ * だから版の状態は生死とは別の契約として持つ。
+ *
+ * **`known` は「最後に聞いた名乗り」であって「いま走っている版」ではない。**
+ * `state` が `'lost'` のとき、この値は黙る前のものである。単独で読まず `state`
+ * と併せて読むこと（当たりのときだけ正しく、外れのときに黙って古い値を返す
+ * 計器にしないための注記）。
+ */
+export type RunnerRevisionStatus = RunnerRevisionReport | { status: 'unheard' };
+
+/**
  * 名簿の1行。**値は返さない**（鍵の指紋と同じ原則で、ここに出るのは状態だけ）。
  *
  * `runnerId` と `workspacePath` が省略されうるのは、**繋がるまで分からない**から
@@ -973,6 +1072,16 @@ export interface RunnerEntry {
    * 奪いに行く。`lease.ts` の `LEASE_DRAIN_MS` の項）。
    */
   instanceSince?: string;
+  /**
+   * runner が名乗った版（roadmap M5 相当。「自分がどのコミットで走っているか」）。
+   *
+   * **常に3値のどれかで、省略されない。** 一度も名乗りを聞けていない間は
+   * `{ status: 'unheard' }` のままで、`unknown`（訊けたが runner が知らない）
+   * とは区別される。上の `instanceId` と同じく `identity()` の heartbeat で更新する。
+   * **`state` が `'lost'` でも古い値が残ることがある**（`RunnerRevisionStatus`
+   * の doc）。
+   */
+  revision: RunnerRevisionStatus;
 }
 
 /**
@@ -1241,6 +1350,38 @@ interface RegistryEntry {
    * してある。
    */
   instanceSince?: string;
+  /**
+   * 最後に聞けた版の状態（`RunnerEntry.revision` と同じ形）。
+   *
+   * **`instanceId` と違って「前回との比較」はしない。** 版の入れ替え自体は
+   * `instanceId` の変化で既に検出できているので、ここは単に「最後に聞けた値」を
+   * 持つだけでよい。名乗りを一度も聞けていない間は `{ status: 'unheard' }`
+   * のまま — 応答が来て初めて `known` / `unknown` へ動く。**`state` が `'lost'`
+   * になっても、ここは戻さない**（`#markSilent` は学習済みの情報を捨てない）。
+   */
+  revision: RunnerRevisionStatus;
+}
+
+/**
+ * 名簿の内訳を一行に畳む（宛先・状態・直近の失敗。**値は載せない**）。
+ *
+ * **持ち主を1つにするために外へ出してある。** 宛先が引けなかったことを報告する
+ * 場所は名簿の中だけではない（`ManagerPool#send` にもある）。同じものを両方で
+ * 組み立てると、**片方だけが 5値を畳んだ形へ倒れても誰も気づけない** — 実際に
+ * `send()` の側は状態を1つも見ずに「移送が要る」と恒久の結論を返していた。
+ *
+ * **`state` を `connected` へ畳まない。** 「まだ開けていない」と「待っても同じ
+ * 答えが返る」の違いが、読む側が待つか起こし直すかを決める材料そのものである
+ * （`RunnerRegistry#select` の doc が数え上げている3種類がこれである）。
+ */
+export function describeRunnerEntries(entries: RunnerEntry[]): string {
+  return entries
+    .map(
+      (entry) =>
+        `${entry.label} は ${entry.state}` +
+        `${entry.error === undefined ? '' : `（${entry.error}）`}`,
+    )
+    .join(' / ');
 }
 
 class Registry implements RunnerRegistry {
@@ -1291,6 +1432,7 @@ class Registry implements RunnerRegistry {
       delay: this.#retryBaseMs,
       lastSeen: Date.now(),
       alive: true,
+      revision: { status: 'unheard' },
     });
   }
 
@@ -1319,6 +1461,7 @@ class Registry implements RunnerRegistry {
       label: entry.source.label,
       state: entry.state,
       since: entry.since,
+      revision: entry.revision,
       ...(entry.client === null
         ? {}
         : { runnerId: entry.client.runnerId, workspacePath: entry.client.workspacePath }),
@@ -1355,6 +1498,7 @@ class Registry implements RunnerRegistry {
       delay: this.#retryBaseMs,
       lastSeen: Date.now(),
       alive: true,
+      revision: { status: 'unheard' },
     };
     this.#entries.set(source.label, entry);
     await this.#open(entry);
@@ -1547,13 +1691,7 @@ class Registry implements RunnerRegistry {
 
   /** 名簿の内訳を一行に畳む（宛先・状態・直近の失敗。**値は載せない**）。 */
   #describeEntries(): string {
-    return [...this.#entries.values()]
-      .map(
-        (entry) =>
-          `${entry.source.label} は ${entry.state}` +
-          `${entry.error === undefined ? '' : `（${entry.error}）`}`,
-      )
-      .join(' / ');
+    return describeRunnerEntries(this.entries());
   }
 
   async stop(): Promise<void> {
@@ -1598,26 +1736,29 @@ class Registry implements RunnerRegistry {
         entry.lastSeen = Date.now();
         entry.alive = true;
         /*
-         * **引き取りが走る前に、いま応えているのが誰かを聞いておく。**
+         * **`hello()` で既に読んでいた名乗りを、ここで採る（新しい呼び出しは増やさない）。**
          *
-         * 直後の `#subscribers` はデーモンの引き取り（`takeOver`）で、そこでは
-         * 貸し出し期限の判定（`lease.ts`）が `instanceId` を材料にする。ここで
-         * 聞かずにハートビートの1周（10秒）を待つと、**開け直しのたびに「判定材料が
-         * 無い」状態で引き取りが走る** — それは生きている器の仕事を奪いうる側である。
+         * 拾うのは2つで、どちらも同じ応答（`GET /health`）に載っている。
          *
-         * 失敗は握り潰す（生死は `hello` で既に分かっている）。**聞けなかったことは
-         * 「入れ替わっていない」ではない** — 覚えないだけなので、判定は
-         * 「判定できない」へ倒れる。
+         * - **版**（`revision`）— identity() の heartbeat（最大
+         *   `HEARTBEAT_INTERVAL_MS` 後）を待たずに、繋がった瞬間から版が分かる
+         *   runner はそう見える（`RunnerRevisionStatus` の doc「2. state:
+         *   connected でも unheard のことがある」の窓を、報告できる runner に
+         *   ついては塞ぐ）
+         * - **いま応えているプロセス**（`instanceId`。roadmap M5 PR4）— 直後の
+         *   `#subscribers` はデーモンの引き取りで、そこでは貸し出し期限の判定
+         *   （`lease.ts`）がこの値を材料にする。heartbeat の1周を待つと、
+         *   **開け直しのたびに「判定材料が無い」状態で引き取りが走る窓**ができる
+         *   — それは生きている器の仕事を奪いうる側である
+         *
+         * **省略している runner（`LocalRunner` 等）では両方 `undefined`** なので、
+         * ここでは何も触らず初期値（版は `unheard`、プロセスは無し）のまま残る。
+         * 無いことを「変わっていない」と読まないこと。
          */
-        const probeIdentity = client.identity?.bind(client);
-        if (probeIdentity !== undefined) {
-          const identity = await withDeadline(
-            (signal) => probeIdentity({ signal }),
-            HEARTBEAT_PROBE_MS,
-          ).catch(() => undefined);
-          if (this.#stopped || this.#entries.get(entry.source.label) !== entry) return;
-          if (entry.client === client) this.#noteInstance(entry, Date.now(), identity);
-        }
+        this.#noteInstance(entry, entry.lastSeen, {
+          ...(client.instanceId === undefined ? {} : { instanceId: client.instanceId }),
+          ...(client.revision === undefined ? {} : { revision: client.revision }),
+        });
         for (const subscriber of this.#subscribers) subscriber(client);
         for (const waiter of this.#waiting) waiter.resolve(client);
         this.#waiting.clear();
@@ -1687,7 +1828,8 @@ class Registry implements RunnerRegistry {
     if (client === null) return;
 
     let failure: string | null = null;
-    let identity: { runnerId?: string; instanceId?: string } | undefined;
+    let identity:
+      { runnerId?: string; instanceId?: string; revision?: RunnerRevisionReport } | undefined;
     try {
       /*
        * **`identity()` があればそちらを叩く。** 同じ `GET /health` なので生死は
@@ -1757,9 +1899,11 @@ class Registry implements RunnerRegistry {
     entry: RegistryEntry,
     at: number,
     client: RunnerClient,
-    identity?: { runnerId?: string; instanceId?: string },
+    identity?: { runnerId?: string; instanceId?: string; revision?: RunnerRevisionReport },
   ): void {
     entry.lastSeen = at;
+    // 名乗りの中身（いま応えているプロセスと、その版）を覚えるのは1本に寄せてある
+    // （開けた瞬間の探りと、この heartbeat の両方から同じ判定を通すため）。
     this.#noteInstance(entry, at, identity);
     if (entry.alive) {
       // 一時的にこけていただけの失敗は、返ってきた時点で窓から下ろす。
@@ -1787,8 +1931,26 @@ class Registry implements RunnerRegistry {
   #noteInstance(
     entry: RegistryEntry,
     at: number,
-    identity: { runnerId?: string; instanceId?: string } | undefined,
+    identity:
+      { runnerId?: string; instanceId?: string; revision?: RunnerRevisionReport } | undefined,
   ): void {
+    /*
+     * **版は「最後に聞けた値」をそのまま覚える。** `instanceId` と違って前回との
+     * 比較はしない — 版の入れ替え自体は `instanceId` の変化で既に検出できているので、
+     * ここは持つだけでよい。
+     *
+     * **`identity` 自体が無い（`identity()` を持たない runner／`ping` だけの旧来
+     * 経路）ときは触らない。** `{ status: 'unheard' }` のまま残す — 「訊けたが
+     * 分からない」（`unknown`）と混同しない。
+     *
+     * **`instanceId` を名乗らない相手でも版だけは覚える**ので、この判定は下の
+     * 早期 return より前にある（下は「入れ替わりを判定できない」ための return で
+     * あって、「何も覚えない」ための return ではない）。
+     */
+    if (identity?.revision !== undefined) {
+      entry.revision = identity.revision;
+    }
+
     const instanceId = identity?.instanceId;
     if (instanceId === undefined || instanceId.length === 0) return;
     const before = entry.instanceId;

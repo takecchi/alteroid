@@ -8,6 +8,7 @@ import type {
   RunnerResumeCommand,
   RunnerProfileFingerprint,
   RunnerProfileResult,
+  RunnerRevisionReport,
   RunnerSetCredentialsCommand,
   RunnerStartCommand,
 } from '@alteroid/core';
@@ -18,6 +19,8 @@ import { RUNNER_CALL_DEADLINE_MS, RunnerUnknownError, settleWithinDeadline } fro
 
 import {
   RunnerHttpError,
+  buildRevisionSchema,
+  reportRunnerRevision,
   runnerCredentialFingerprintSchema,
   runnerProfileFingerprintSchema,
   runnerProfileResultSchema,
@@ -210,6 +213,21 @@ interface HealthBody {
   profile?: unknown;
   managers?: unknown;
   resources?: unknown;
+  revision?: unknown;
+}
+
+/**
+ * `/health` の `revision` を `RunnerRevisionReport` へ畳む。
+ *
+ * **形が壊れていても `unknown` に倒す。** ネットワーク越しの入力（runner の版・
+ * 改造された応答）を信用しない側なので、`.safeParse` に落ちても投げない —
+ * 「訊けたが分からない」と同じ扱いにする。`revision` フィールド自体が無い
+ * 古い runner（この機能より前の版）も同じ経路を通る。
+ */
+function revisionReportOf(value: unknown): RunnerRevisionReport {
+  const parsed = buildRevisionSchema.safeParse(value);
+  if (!parsed.success) return { status: 'unknown' };
+  return reportRunnerRevision(parsed.data);
 }
 
 /** 指紋の配列だけを取り出す（値は runner も返さないし、こちらも持たない）。 */
@@ -224,6 +242,22 @@ function fingerprintsOf(value: unknown): RunnerCredentialFingerprint[] {
 class HttpRunner implements RunnerClient {
   runnerId = 'runner-primary';
   workspacePath = '';
+  /**
+   * `hello()` が読んだ版。**`runnerId` / `workspacePath` と同じ応答から拾う
+   * だけで、新しい往復は増やさない。** `body.revision` フィールド自体が無い
+   * （古い runner）間は `undefined` のまま——`RunnerClient.revision` の doc
+   * 参照。
+   */
+  revision?: RunnerRevisionReport;
+  /**
+   * `hello()` が読んだ「いま応えているプロセス」。**`revision` と同じ応答から拾う
+   * だけで、新しい往復は増やさない**（roadmap M5 PR4）。
+   *
+   * 接続の瞬間から名簿がこの値を持つので、直後に走る引き取りが**判定材料を持たない
+   * まま動く窓**が無くなる（`RunnerClient.instanceId` の doc）。名乗らない runner では
+   * `undefined` のまま。
+   */
+  instanceId?: string;
   readonly #baseUrl: string;
   readonly #socketPath: string | null;
   readonly #token: string;
@@ -278,6 +312,19 @@ class HttpRunner implements RunnerClient {
       this.runnerId = body.runnerId;
     }
     if (typeof body.workspacePath === 'string') this.workspacePath = body.workspacePath;
+    // **`revision` フィールド自体が無ければ触らない**（`undefined` のまま）。
+    // 古い runner（この機能より前の版）は「まだ何も言っていない」として扱い、
+    // 名簿は `unheard` のまま保つ——`revisionReportOf(undefined)` を無条件で
+    // 呼ぶと、フィールド不在の runner まで `unknown` へ倒れてしまい、
+    // 「訊けたが分からない」と「そもそも報告する口が無い」が区別できなくなる。
+    if (body.revision !== undefined) {
+      this.revision = revisionReportOf(body.revision);
+    }
+    // **同じ応答から `instanceId` も拾う。** 空文字は「名乗っていない」と同じ扱いに
+    // する（名乗らない runner との区別が無いので、値として持たない）。
+    if (typeof body.instanceId === 'string' && body.instanceId.length > 0) {
+      this.instanceId = body.instanceId;
+    }
   }
 
   /**
@@ -306,10 +353,17 @@ class HttpRunner implements RunnerClient {
    *
    * **`instanceId` を返さない runner とも繋がる。** そのときは `undefined` のままで、
    * 名簿は入れ替えを判定しない（「入れ替わっていない」とは読まない）。
+   *
+   * **`revision` は常に返す（`known` か `unknown`）。** `instanceId` と違って
+   * 省略できる情報ではない ——「応答は返ってきたのに版の状態が分からない」を
+   * 作らないことで、名簿の側は「一度も名乗りを聞けていない」（`unheard`）と
+   * 混同せずに済む。
    */
   async identity(options?: {
     signal?: AbortSignal;
-  }): Promise<{ runnerId?: string; instanceId?: string } | undefined> {
+  }): Promise<
+    { runnerId?: string; instanceId?: string; revision: RunnerRevisionReport } | undefined
+  > {
     const response = await this.#call('GET', '/health', undefined, options?.signal);
     const body = (await response.json()) as HealthBody;
     return {
@@ -319,6 +373,7 @@ class HttpRunner implements RunnerClient {
       ...(typeof body.instanceId === 'string' && body.instanceId.length > 0
         ? { instanceId: body.instanceId }
         : {}),
+      revision: revisionReportOf(body.revision),
     };
   }
   /**

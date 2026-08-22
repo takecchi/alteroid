@@ -7,6 +7,7 @@ import type {
   PermissionResult,
   Query,
   SDKMessage,
+  SessionStoreEntry,
 } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -4038,5 +4039,525 @@ describe('runner の一覧（ManagerPool.runners）', () => {
 
     await pool.stop();
     await registry.stop();
+  });
+});
+
+/**
+ * 宛先を引けなかったときに返す言葉（`ManagerPool` の `#runnerNotOpenDetail`。
+ * `send()` と `abort()` の両方がこれを呼ぶ）。
+ *
+ * **測るのは「言葉が、コードの観測と食い違っていないか」だけである。**
+ * `RunnerRegistry#get()` が `null` を返すのは `entry.client` が無いときで、そこには
+ * **まだ開けていない**（`unreachable`。再試行は予約済み）が含まれる。それをここは
+ * 「別の runner で続きを起こすには workspace の移送が要る」という**恒久の言葉**で
+ * 返していた——待てば直る状態を、待っても直らない状態の言葉で報告していた形である。
+ *
+ * **3つを別々の `it()` で測る。** vitest は最初の失敗で止まるので、1本に同居させると
+ * 後ろの検査が一度も走らないまま緑になる（同居していれば、`unusable` の側を消す変異が
+ * 素通りしていた）。
+ *
+ * **能力の話ではない。** `manager_send` は塞いでいないので、宛先が開いていれば
+ * 従来どおり届く——それを4本目で押さえる（一律にこの言葉へ倒していないこと）。
+ */
+describe('宛先が名簿に開いていないときに返す言葉', () => {
+  const away = {
+    id: 'mgr-away',
+    managerId: 'mgr-away',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T01:00:00.000Z',
+    status: 'done' as const,
+    summary: '移行作業',
+    request: 'DB の移行をやって',
+    cwd: '/work/project',
+    runnerId: 'runner-primary',
+    sessionId: 'sess-before-swap',
+  };
+
+  /**
+   * 開けない宛先だけが載っている名簿でプールを組む。
+   *
+   * `register()` は `#open()` を `await` するので、戻った時点で状態は確定している
+   * （`isRetryableRunnerError` が真なら `unreachable`、偽なら `unusable`）。
+   * **`entry.client` は `null` のまま**なので `get()` は `null` を返し、
+   * `#runnerOf` がこの経路に落ちる。
+   */
+  async function poolWithClosedRegistry(open: () => Promise<RunnerClient>) {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(away);
+    const registry = createRunnerRegistry([], { notify: () => undefined });
+    await registry.register({ label: 'http://runner:4518', open });
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: registry,
+      profile: createProfileService({ stores, runners: registry }),
+    });
+    return { pool, registry };
+  }
+
+  it('まだ開けていない宛先は、まだ開けていないと言う（unreachable を畳まない）', async () => {
+    // status を持たない失敗は「待てば直る」側（`isRetryableRunnerError`）。
+    const s = await poolWithClosedRegistry(async () => {
+      throw new Error('まだ上がっていない');
+    });
+
+    const result = await s.pool.send('mgr-away', '続きをやって');
+
+    expect(result.outcome).toBe('unknown');
+    // 名簿の状態がそのまま出ている。**5値を `connected` へ畳まない。**
+    expect(result.detail).toContain('unreachable');
+
+    await s.pool.stop();
+    await s.registry.stop();
+  });
+
+  it('待っても直らない宛先は、そう言う（unusable と unreachable を混ぜない）', async () => {
+    // 4xx は runner が「その命令は受け取れない」と答えている＝挑み直さない側。
+    const s = await poolWithClosedRegistry(async () => {
+      throw new RunnerHttpError('鍵が違う', 403);
+    });
+
+    const result = await s.pool.send('mgr-away', '続きをやって');
+
+    expect(result.outcome).toBe('unknown');
+    expect(result.detail).toContain('unusable');
+    // **同じ言葉で両方を言わない。** ここが混ざると、読む側は待つか起こし直すかを
+    // 決められない（`RunnerRegistry#select` の doc が数え上げている区別そのもの）。
+    expect(result.detail).not.toContain('unreachable');
+
+    await s.pool.stop();
+    await s.registry.stop();
+  });
+
+  it('恒久の断定をしない（判定できないことを言わない）', async () => {
+    const s = await poolWithClosedRegistry(async () => {
+      throw new Error('まだ上がっていない');
+    });
+
+    const result = await s.pool.send('mgr-away', '続きをやって');
+
+    // ここが観測しているのは「いま開いた宛先が無い」ことだけで、移送が要るかどうかは
+    // 判定していない。**読んだ側が恒久の結論を持ち帰る形にしない。**
+    expect(result.detail).not.toContain('移送');
+    expect(result.detail).toContain('戻せないことの証明ではない');
+
+    await s.pool.stop();
+    await s.registry.stop();
+  });
+
+  it('宛先が開いていれば、いままでどおり届く（一律にこの言葉へ倒していない）', async () => {
+    // **能力を削っていないことの側。** 文言を直すだけの変更なので、送れる相手は
+    // 1件も変わらない。
+    const s = setup();
+    const { managerId } = await s.pool.start({ request: '長い仕事' });
+
+    const result = await s.pool.send(managerId, 'まだ続きがある');
+
+    expect(result.outcome).toBe('delivered');
+    expect(result.detail).not.toContain('名簿');
+
+    await s.pool.stop();
+  });
+});
+
+/**
+ * 生ログを引きに行って失敗したときの扱い（`ManagerPool#loadSession`）。
+ *
+ * **ここは `catch` で `null` を返していた。** 呼び出し側からは「預かっていない」
+ * と見分けが付かず、下流はそれを恒久の結論に変える —— `#resume` が材料無しで
+ * resume を投げ、runner が `resume_failed{recovered:false}` を返し、デーモンが
+ * `lost` を確定させて `#unresumable` へ積む。**記憶ストアが一瞬読めなかっただけで
+ * 委譲が終端する。**
+ *
+ * **書く側（`case 'mirror'`）は同じ区別を守っている**（`noteDroppedRecord`）。
+ * 読む側だけが破っていた。
+ *
+ * **2本を別々の `it()` で測る。** 片方だけだと逆向きの嘘（本当に預かっていない
+ * ものまで「読めなかった」に倒す計器）に気づけない。vitest は最初の失敗で止まるので、
+ * 同居させると後ろが一度も走らない。
+ */
+describe('生ログを読み出せなかったとき（「無い」と畳まない）', () => {
+  const job = {
+    id: 'mgr-unreadable',
+    managerId: 'mgr-unreadable',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T01:00:00.000Z',
+    status: 'running' as const,
+    summary: '移行作業',
+    request: 'DB の移行をやって',
+    cwd: '/work/project',
+    runnerId: 'runner-primary',
+    sessionId: 'sess-before-swap',
+    projectKey: 'proj-key',
+  };
+
+  /** `load` の振る舞いだけを差し替えたプールを組む。 */
+  async function poolWithSessionStore(load: () => Promise<SessionStoreEntry[] | null>) {
+    const stores = {
+      ...createMemoryStores(),
+      sessionStore: { append: async () => undefined, load },
+    };
+    await stores.jobs.putJob(job);
+    const fake = swappableRunner();
+    const inbox: InboxEvent[] = [];
+    const registry = createRunnerRegistry([fake.runner]);
+    const pool = createManagerPool({
+      stores,
+      post: (event: InboxEvent) => inbox.push(event),
+      runners: registry,
+      profile: createProfileService({ stores, runners: registry }),
+    });
+    return { pool, stores, fake, inbox, registry };
+  }
+
+  const statusOf = async (stores: Stores) =>
+    (await stores.jobs.listJobs()).find((j) => j.id === job.id)?.status;
+
+  it('引きに行って失敗したら、失敗として残す（跡を出し、材料無しで resume を投げず、恒久に落とさない）', async () => {
+    const s = await poolWithSessionStore(async () => {
+      throw new Error('記憶ストアがいま読めない');
+    });
+
+    let result: Awaited<ReturnType<ManagerPool['send']>> | undefined;
+    const lines = await captureStderr(async () => {
+      result = await s.pool.send(job.id, '続きをやって');
+    });
+
+    // ① 跡が残る。**書く側（noteDroppedRecord）と対になる。**
+    expect(lines.join('')).toContain('預かってある生ログを読み出せませんでした');
+
+    // ② 材料無しで resume を投げない。**これが lost を作っていた当のものである。**
+    expect(s.fake.state.resumes).toHaveLength(0);
+
+    // ③ 恒久に落とさない。台帳は走行中のまま（`lost` にしない）。
+    expect(await statusOf(s.stores)).toBe('running');
+
+    // ④ 返す言葉が「無い」と言わない。**起こし直せ、という誤った行動も指示しない。**
+    expect(result?.outcome).toBe('unknown');
+    expect(result?.detail).toContain('引きに行って失敗した');
+    expect(result?.detail).not.toContain('新しく起こし直すこと');
+
+    await s.pool.stop();
+    await s.registry.stop();
+  });
+
+  it('本当に預かっていないときは、いままでどおり resume を投げ、戻れなければ lost で終える', async () => {
+    // **逆向きに倒していないことの側。** 「読めなかった」を作った代わりに、
+    // 本当に材料が無い委譲まで走行中のまま放置すると、今度は誰も起こし直さない
+    // （`lost` は「起こし直す対象」として見分けるためにある。`schema.ts`）。
+    const s = await poolWithSessionStore(async () => null);
+
+    const lines = await captureStderr(async () => {
+      await s.pool.send(job.id, '続きをやって');
+    });
+
+    // 跡は出ない（読めている。材料が無いだけである）。
+    expect(lines.join('')).not.toContain('読み出せませんでした');
+    // resume は投げる（材料が無くても、SDK 側に会話が残っていれば戻れる）。
+    expect(s.fake.state.resumes).toHaveLength(1);
+    expect(s.fake.state.resumes[0]?.entries).toBeUndefined();
+
+    // runner が「戻れなかった」と答えたら、いままでどおり lost で終える。
+    s.fake.resumeFailed(job.id, 'sess-before-swap', 'SDK に会話が残っていない', false);
+    await expect.poll(() => statusOf(s.stores), { timeout: 2000 }).toBe('lost');
+
+    await s.pool.stop();
+    await s.registry.stop();
+  });
+});
+
+/**
+ * `abort()` が「宛先が名簿に開いていない」を `'absent'`（HTTP 404 相当）へ畳まなく
+ * なったことを固定する。旧実装はこの経路で `outcome: 'absent'` を返し、`app.ts` が
+ * それをそのまま 404 にしていた。しかしここまで来ているということは `#load` が
+ * 台帳から像を作れた＝**このマネージャーは存在する。** 宛先がいま開いていない
+ * だけで、そこには `unreachable`（まだ開けていない。再試行は予約済み）が含まれる
+ * ——一時的な状態を「そんなものは無い」という機械可読な終端で答えていた
+ * （`ManagerAbortResult` の doc、`abort()` 本体のコメント）。
+ *
+ * **2本を別々の `it()` にする。** 片方（宛先が開いていない）だけだと、
+ * 「`abort()` は何を渡しても `unknown` を返す」という壊れた形へ倒れても
+ * 気づけない——もう片方（台帳に本当に居ない）が、その劣化を検知する側である。
+ *
+ * **足場は上の `describe('宛先が名簿に開いていないときに返す言葉', ...)` 内の
+ * `poolWithClosedRegistry` と同じ組み方だが、そこを直接呼ばない。** 定義がその
+ * `describe` のコールバック内（ブロックスコープ）に閉じていて、ここから参照
+ * できないため——かつ、その `describe` は別 PR の歯なので中身は1バイトも変えない。
+ * ここでは同じ形を独自に組む。
+ */
+describe('abort() は宛先が名簿に開いていないことを absent と言わない', () => {
+  const runningAway = {
+    id: 'mgr-running-away',
+    managerId: 'mgr-running-away',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T01:00:00.000Z',
+    status: 'running' as const,
+    summary: '長い移行作業',
+    request: 'DB の移行をやって',
+    cwd: '/work/project',
+    runnerId: 'runner-primary',
+    sessionId: 'sess-before-swap',
+  };
+
+  /**
+   * 台帳にジョブを1本置き、名簿には**開けない宛先だけ**を登録する。
+   * `register()` は `#open()` を `await` するので、戻った時点で状態は
+   * `unreachable` に確定している（`entry.client` は `null` のまま）。
+   */
+  async function poolWithUnreachableRunnerAndJob() {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningAway);
+    const registry = createRunnerRegistry([], { notify: () => undefined });
+    await registry.register({
+      label: 'http://runner:4518',
+      open: async () => {
+        throw new Error('まだ上がっていない');
+      },
+    });
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: registry,
+      profile: createProfileService({ stores, runners: registry }),
+    });
+    return { pool, registry };
+  }
+
+  it('宛先が名簿に開いていないときは、居ないと言わない', async () => {
+    const { pool, registry } = await poolWithUnreachableRunnerAndJob();
+
+    const result = await pool.abort('mgr-running-away');
+
+    expect(result.outcome).toBe('unknown');
+    // 名簿の状態（5値）がそのまま載っている。畳んで捨てていない。
+    expect(result.detail).toContain('unreachable');
+    // **「マネージャーは居ない」という断定（`absent` の文言）を含まない。**
+    // ここが以前の `${managerId} というマネージャーは居ない。` へ逆戻りして
+    // いないことの検査。
+    expect(result.detail).not.toContain('というマネージャーは居ない');
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  /**
+   * **`unusable`（待っても直らない）でも同じ枝を通り、しかも畳まれないこと。**
+   *
+   * この PR は「一時（`unreachable`）と恒久（台帳に居ない）を畳むな」を潰して
+   * いる。**その隣に別の畳みが残っていると同じ形が再発する** — `unusable` は
+   * 4xx 由来（runner が「その命令は受け取れない」と答えている）なので、
+   * `unreachable`（待てば直る。再試行は予約済み）と畳まれると**意味が逆になる**。
+   *
+   * 構造上は同じ枝を通るはずである（`runner-protocol.ts` の `#open()` の catch
+   * 節で `entry.client = null` は `isRetryableRunnerError` による分岐の**手前**に
+   * 置かれている）。**が、それは読みであって観測ではないので、ここで測る。**
+   */
+  it('待っても直らない宛先（unusable）でも、居ないとは言わず、状態も畳まない', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningAway);
+    const registry = createRunnerRegistry([], { notify: () => undefined });
+    // 4xx は「挑み直しても同じ答えが返る」側（`isRetryableRunnerError` が偽）。
+    await registry.register({
+      label: 'http://runner:4518',
+      open: async () => {
+        throw new RunnerHttpError('鍵が違う', 403);
+      },
+    });
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: registry,
+      profile: createProfileService({ stores, runners: registry }),
+    });
+
+    const result = await pool.abort('mgr-running-away');
+
+    expect(result.outcome).toBe('unknown');
+    expect(result.detail).toContain('unusable');
+    // **待てば直る側と混ぜない。** ここが混ざると、読む側は待つか諦めるかを
+    // 決められない（意味が逆になる）。
+    expect(result.detail).not.toContain('unreachable');
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  it('台帳に居ないものは、いままでどおり absent', async () => {
+    const { pool, registry } = await poolWithUnreachableRunnerAndJob();
+
+    // **これが逆向きに嘘をつく計器になっていないことの側である。** 消さないこと
+    // ——上のテストだけだと「abort は何でも unknown と言う」という劣化を検知
+    // できない。台帳に本当に居ないものは、これまでどおり absent（404 相当）。
+    const result = await pool.abort('mgr-does-not-exist');
+
+    expect(result.outcome).toBe('absent');
+
+    await pool.stop();
+    await registry.stop();
+  });
+});
+
+/**
+ * 起動時の生存判定で、**runner に聞けなかったことを「セッションが無い」と読まない**
+ * （`ManagerPool#restoreJobs`）。
+ *
+ * ここは `runner.list().catch(() => [])` だった。`alive` に載らなかったジョブは
+ * `running` / `waiting_human` なら実際に resume されるので、**runner に聞けな
+ * かっただけで、走り続けているマネージャーがもう1本起こされる。**
+ *
+ * **同じ歯止めは `#reattach` に逐語で在った**（「聞けなかったときは何もしない。
+ * 応答が無いことを『セッションが無い』と読むと、生きている仕事を二重に起こす」）。
+ * 同じクラス・同じ RPC・同じ危険で、片方にだけ置かれていた。
+ *
+ * **3本を別々の `it()` で測る。** vitest は最初の失敗で止まるので、同居させると
+ * 後ろが一度も走らない。**それぞれが単独で守るものを doc に書く。**
+ */
+describe('起動時の生存判定で、聞けなかったことを「居ない」と読まない', () => {
+  const onA = {
+    id: 'mgr-on-a',
+    managerId: 'mgr-on-a',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T01:00:00.000Z',
+    status: 'running' as const,
+    summary: '長い移行作業',
+    request: 'DB の移行をやって',
+    cwd: '/work/project',
+    runnerId: 'runner-a',
+    sessionId: 'sess-a',
+  };
+
+  function poolWith(runners: RunnerClient[], jobs: Job[]) {
+    const stores = createMemoryStores();
+    const registry = createRunnerRegistry(runners);
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: registry,
+      profile: createProfileService({ stores, runners: registry }),
+    });
+    return {
+      stores,
+      registry,
+      pool,
+      seed: async () => {
+        for (const job of jobs) await stores.jobs.putJob(job);
+      },
+    };
+  }
+
+  /**
+   * **この歯が単独で守るもの**: 聞けなかった器のジョブを resume しないこと。
+   * これが落ちると、生きているマネージャーが二重に起こされる（この PR の主題）。
+   */
+  it('聞けなかった器のジョブは resume せず、台帳も動かさない', async () => {
+    const fake = swappableRunner('runner-a');
+    fake.runner.list = async () => {
+      throw new Error('runner が応答しない');
+    };
+    const s = poolWith([fake.runner], [onA]);
+    await s.seed();
+
+    await s.pool.restore();
+
+    // 二重に起こしていない。
+    expect(fake.state.resumes).toHaveLength(0);
+    // 台帳は走行中のまま（終端へも落としていない）。
+    const job = (await s.stores.jobs.listJobs()).find((j) => j.id === 'mgr-on-a');
+    expect(job?.status).toBe('running');
+
+    await s.pool.stop();
+    await s.registry.stop();
+  });
+
+  /**
+   * **この歯が単独で守るもの**: 聞けなかったことが跡に残ること。
+   * 上の歯だけだと「黙って飛ばす」実装でも緑になり、後から「セッションが無かった」
+   * のか「聞けなかった」のかを誰も言えない。
+   */
+  it('聞けなかったことが跡に残る', async () => {
+    const fake = swappableRunner('runner-a');
+    fake.runner.list = async () => {
+      throw new Error('runner が応答しない');
+    };
+    const s = poolWith([fake.runner], [onA]);
+    await s.seed();
+
+    const lines = await captureStderr(async () => {
+      await s.pool.restore();
+    });
+
+    expect(lines.join('')).toContain('runner のセッション一覧を読み出せませんでした');
+    expect(lines.join('')).toContain('runner-a');
+
+    await s.pool.stop();
+    await s.registry.stop();
+  });
+
+  /**
+   * **この歯が単独で守るもの**: 飛ばしたことが**先送りであって取りこぼしではない**こと。
+   *
+   * 「聞けなかったら起こさない」に倒すと、今度は逆側の「黙って失われる」を作る —
+   * runner が答えられない間ずっと飛ばし続け、誰も拾い直さないまま台帳に
+   * `running` が残る、という形である。**そうなっていないことを測る。**
+   *
+   * 仕組みは「`#records` へ載せる前に抜ける」こと。載せずに帰れば次の
+   * `restore()` が `#records.has` で弾かれずにもう一度拾う。`restore()` は
+   * runner が開くたびに `takeOver`（`apps/daemon/src/index.ts`）から呼ばれる。
+   *
+   * **ガードを `#records.set` の後ろへ動かすと、この歯だけが落ちる。**
+   */
+  it('聞けなかったのは先送りであって、取りこぼしではない（次に答えたら起こし直す）', async () => {
+    const fake = swappableRunner('runner-a');
+    let asked = 0;
+    fake.runner.list = async () => {
+      asked += 1;
+      if (asked === 1) throw new Error('runner が応答しない');
+      return [...fake.state.alive];
+    };
+    const s = poolWith([fake.runner], [onA]);
+    await s.seed();
+
+    // 1回目は聞けないので起こさない。
+    await s.pool.restore();
+    expect(fake.state.resumes).toHaveLength(0);
+
+    // 2回目（runner が開き直って `takeOver` が走った形）。**ここで拾い直す。**
+    await s.pool.restore();
+    expect(fake.state.resumes.map((r) => r.managerId)).toEqual(['mgr-on-a']);
+
+    await s.pool.stop();
+    await s.registry.stop();
+  });
+
+  /**
+   * **この歯が単独で守るもの**: 巻き添えにしないこと。
+   * 上の2本だけだと「1台でも聞けなければ全部飛ばす」という一律の実装でも緑になる。
+   * **答えた器のジョブは、いままでどおり起こし直す。**
+   */
+  it('答えた器のジョブは巻き添えにしない（一律に飛ばしていない）', async () => {
+    const a = swappableRunner('runner-a');
+    a.runner.list = async () => {
+      throw new Error('runner が応答しない');
+    };
+    const b = swappableRunner('runner-b');
+    const onB = {
+      ...onA,
+      id: 'mgr-on-b',
+      managerId: 'mgr-on-b',
+      runnerId: 'runner-b',
+      sessionId: 'sess-b',
+    };
+    const s = poolWith([a.runner, b.runner], [onA, onB]);
+    await s.seed();
+
+    await s.pool.restore();
+
+    // 聞けなかった器の分は起こさない。
+    expect(a.state.resumes).toHaveLength(0);
+    // 答えた器の分は、いままでどおり起こす。
+    expect(b.state.resumes.map((r) => r.managerId)).toEqual(['mgr-on-b']);
+
+    await s.pool.stop();
+    await s.registry.stop();
   });
 });

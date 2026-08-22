@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { journalEntryShape, noteDroppedRecord } from './dropped-record.js';
+import { journalEntryShape, noteDroppedRecord, noteUnreadableRecord } from './dropped-record.js';
 import {
   LEASE_TTL_MS,
   describeVerdict,
@@ -13,7 +13,13 @@ import {
 } from './lease.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap, type RecentMap } from './recent.js';
-import { isFencedRunnerError, isRetryableRunnerError } from './runner-protocol.js';
+import { reportRunnerRevision, resolveBuildRevision } from './revision.js';
+import type { RunnerRevisionReport } from './revision.js';
+import {
+  describeRunnerEntries,
+  isFencedRunnerError,
+  isRetryableRunnerError,
+} from './runner-protocol.js';
 import type {
   RunnerClient,
   RunnerCredentialFingerprint,
@@ -21,6 +27,7 @@ import type {
   RunnerLiveness,
   RunnerProfileFingerprint,
   RunnerRegistry,
+  RunnerRevisionStatus,
 } from './runner-protocol.js';
 import { brief } from './runner.js';
 import type { InboxEvent, Job, JobStatus, JournalEntryInput, WorkspaceLocator } from './schema.js';
@@ -172,6 +179,19 @@ export interface RunnerOverview {
   credentials?: RunnerCredentialFingerprint[];
   /** 置かれている実行環境プロファイルの指紋。`fingerprints: true` を渡したときだけ載る。 */
   profile?: RunnerProfileFingerprint;
+  /**
+   * runner が名乗った版（コミット sha）。**3状態を区別する**
+   * （`RunnerRevisionStatus`）——`known`（版が取れた）/ `unknown`（名乗ったが
+   * runner が自分の版を知らない）/ `unheard`（名乗り自体をまだ聞けていない）。
+   *
+   * **`state`（`RunnerLiveness`）から導けない。** `state: 'lost'` でも直前の
+   * `known` な版がそのまま残ることがある（`RunnerRevisionStatus` の doc）。
+   *
+   * **ここで新たに runner を叩かない。** `RunnerRegistry#entries()` が
+   * heartbeat で既に拾っている値をそのまま出す——`fingerprints` のように
+   * 「未接続」と「頼んで失敗」が同じ空の形へ潰れる穴を、ここでは増やさない。
+   */
+  revision: RunnerRevisionStatus;
 }
 
 /** `runner_list` が返す全体像。 */
@@ -186,6 +206,16 @@ export interface RunnerFleetOverview {
    * 「マネージャーは全部どこかの器に居る」という誤った前提を実装が持つことになる。
    */
   unassigned: { managerId: string; status: JobStatus }[];
+  /**
+   * **デーモン自身の版。** `runners[].revision` と1回の読みで比較できるように、
+   * 同じ応答の外側へ並べて出す——別々の場所に出すと、依頼者が手で突き合わせる
+   * ことになり、突き合わせ忘れがそのまま見逃しになる。
+   *
+   * 自分のことなので取りに行く必要が無く（`resolveBuildRevision()` を直に呼ぶ）、
+   * `known` / `unknown` の2状態で足りる（`unheard` は「自分の名乗りを自分が
+   * 聞けていない」が意味を持たないので無い）。
+   */
+  daemonRevision: RunnerRevisionReport;
 }
 
 export type ManagerDecision = 'allow' | 'deny';
@@ -227,8 +257,18 @@ export type ManagerStopActor = 'human' | 'clone';
  * | --- | --- | --- | --- |
  * | `'stopped'` | `sessionGone === true`。止まったと確かめた | `status: 'stopped'` へ、`waiting`/`attached` を畳んで `#retire` | 200 |
  * | `'not_stopped'` | `sessionGone === false`。**止まっていないと確かめた**（明確な失敗） | 何も書かない | 200 |
- * | `'unknown'` | 確かめられなかった（`runner.list()` が答えない／`runner.stop()` が期限切れ） | 何も書かない | 200 |
- * | `'absent'` | そのマネージャーが居ない／runner が居ない（旧 `'unknown'` の改名） | — | 404 |
+ * | `'unknown'` | 確かめられなかった（`runner.list()` が答えない／`runner.stop()` が期限切れ／**宛先の runner が名簿に開いていない**） | 何も書かない | 200 |
+ * | `'absent'` | **そのマネージャーが台帳に居ない。** 旧 `'unknown'` の改名 | — | 404 |
+ *
+ * **`'absent'` は「宛先の runner が居ない」を含んでいた。** その2つは別である —
+ * 台帳に居ないマネージャーは存在しないが、**宛先が開いていないだけのマネージャーは
+ * 存在する。** しかも「開いていない」は `unreachable`（まだ開けていない。再試行は
+ * 予約済み）を含むので、**待てば直る状態を 404 という機械可読な終端で返していた。**
+ * 404 は人間もクローンも CLI も Web も「そんなものは無い」としてしか読めず、
+ * **文言と違って読み手の解釈で救われない。**
+ *
+ * `'unknown'`（そのものは居るが確かめられなかった → 200）が、この場合のために
+ * 既に在る。新しい値は足していない。
  */
 export interface ManagerAbortResult {
   outcome: 'stopped' | 'not_stopped' | 'unknown' | 'absent';
@@ -372,6 +412,54 @@ export function createManagerPool(options: ManagerPoolOptions): ManagerPool {
  */
 const REATTACH_RETRY_BASE_MS = 1_000;
 const REATTACH_RETRY_MAX_MS = 30_000;
+
+/**
+ * 預かってある生ログを引いた結果。
+ *
+ * **`unknown[] | null` にしない。** `null` にすると「預かっていない」と
+ * 「読みに行って失敗した」が同じ値になり、呼び出し側は前者としてしか読めない。
+ * 実際にそうなっていて、**一時的に読めなかっただけの委譲が `lost` で終端し、
+ * クローンには「生ログも預かっていないので、続きの材料が無い」という存在の否定が
+ * 届いていた。**
+ *
+ * **書く側は既にこの区別を守っている。** `case 'mirror'` は `append` が失敗
+ * したとき `noteDroppedRecord` で跡を残す —「預かり損ねたことすら残らないと、
+ * 後から『無い』のか『預かれなかった』のかが分からない」。**読む側にだけそれが
+ * 無かった。**
+ */
+type SessionMaterial =
+  | { kind: 'loaded'; entries: unknown[] }
+  /** 預かっていない（store が無い / `projectKey` が無い / 引いたが空だった）。 */
+  | { kind: 'absent' }
+  /** **引きに行って失敗した。** 待てば直りうるので、恒久の結論に変えない。 */
+  | { kind: 'unreadable' };
+
+/**
+ * resume を投げた結果。
+ *
+ * **`boolean` にしない。** `false` は「戻る先が無い（`session_id` が無い）」の
+ * 意味で使われていて、`send()` はそれを「新しく起こし直すこと」と報告する。
+ * **読めなかっただけのときに同じ言葉を出すと、一時を恒久として報告したうえに、
+ * 誤った行動まで指示することになる**（起こし直せば、続きは失われる）。
+ * **呼ぶ側に区別させる** — 既定を持たせて省略させないのは `summaryOf` の
+ * `live` と同じ論法である。
+ */
+type ResumeOutcome =
+  | 'resumed'
+  /** 戻る先が無い（`session_id` を持っていない）。**恒久である。** */
+  | 'no-session'
+  /** 生ログを引きに行って失敗した。**恒久ではない。** */
+  | 'unreadable'
+  /** 別の契機が同じ session を取り直している最中。**恒久ではない。** */
+  | 'busy'
+  /**
+   * **まだ前の器が握っている**（貸し出し期限が切れていない。M5 PR4）。**恒久ではない。**
+   *
+   * `no-session` と混ぜてはいけない — あちらは起こし直すしかないが、こちらは
+   * **待てば通る。** 同じ文言にすると、クローンは待てば済む委譲を新しく起こし直し、
+   * **同じ仕事が2本になる**（貸し出し期限が防ごうとしているものそのもの）。
+   */
+  | 'held-by-lease';
 
 /** デーモン側が持つ1マネージャーの像（正本は JobStore）。 */
 interface ManagerRecord {
@@ -630,12 +718,7 @@ class Pool implements ManagerPool {
 
     const runner = await this.#runnerOf(record);
     if (!runner) {
-      return {
-        outcome: 'unknown',
-        detail:
-          `${managerId} を走らせていた runner（${record.job.runnerId ?? '不明'}）が居ない。` +
-          '別の runner で続きを起こすには workspace の移送が要る。',
-      };
+      return { outcome: 'unknown', detail: this.#runnerNotOpenDetail(record) };
     }
 
     const { decision, requestId } = options;
@@ -684,32 +767,18 @@ class Pool implements ManagerPool {
       // 器の入れ替えで取り直している最中に重ねない（同じ session を二本起こす）。
       // **「戻れない」とは別の理由なので、別のことを言う。**
       if (this.#resuming.has(managerId)) {
-        return {
-          outcome: 'unknown',
-          detail: `${managerId} は器の入れ替えから取り直している最中である。少し置いてから送り直すこと。`,
-        };
+        return { outcome: 'unknown', detail: resumeFailureDetail(managerId, 'busy') };
       }
       const resumed = await this.#resumeOnce(record, runner, message);
-      if (!resumed) {
+      if (resumed !== 'resumed') {
         /*
-         * **「戻れない」と「まだ戻さない」を同じ文で言わない。**
-         *
-         * 前者は起こし直すしかないが、後者（貸し出し期限が切れていない）は待てば
-         * 通る。同じ文言にすると、クローンは待てば済む委譲を新しく起こし直し、
-         * **同じ仕事が2本になる**（この関門が防ごうとしているものそのもの）。
+         * **言い方の持ち主は `resumeFailureDetail` 1つである。** 貸し出し期限で
+         * 断られた回だけは、期限の根拠（誰が握っていて、いつから引き取れるか）が
+         * 判定側にしか無いので、その1行を渡して言わせる。
          */
-        const refusal = record.leaseRefusal;
-        if (refusal !== undefined) {
-          return {
-            outcome: 'unknown',
-            detail:
-              `${managerId} はまだ前の器が握っている（貸し出し期限）。**新しく起こし直さないこと** — ` +
-              `期限が切れれば自動で引き取る: ${refusal.detail}`,
-          };
-        }
         return {
           outcome: 'unknown',
-          detail: `${managerId} は session_id を持っておらず、続きへ戻れない。新しく起こし直すこと。`,
+          detail: resumeFailureDetail(managerId, resumed, record.leaseRefusal?.detail),
         };
       }
     } else {
@@ -807,12 +876,19 @@ class Pool implements ManagerPool {
           managers: entry.runnerId === undefined ? [] : (byRunner.get(entry.runnerId) ?? []),
           ...(credentials === undefined ? {} : { credentials }),
           ...(profile === undefined ? {} : { profile }),
+          revision: entry.revision,
         };
         return overview;
       }),
     );
 
-    return { runners, unassigned };
+    // デーモン自身の版。**自分のことなので取りに行く必要が無い**——runner のように
+    // ネットワーク越しに訊く経路が無く、`resolveBuildRevision()` を直に呼べば
+    // 済む（`known` / `unknown` の2状態。取れなかったときはプレースホルダでは
+    // なく `unknown` として出る）。
+    const daemonRevision = reportRunnerRevision(resolveBuildRevision());
+
+    return { runners, unassigned, daemonRevision };
   }
 
   async transcript(managerId: string): Promise<string | null> {
@@ -897,8 +973,28 @@ class Pool implements ManagerPool {
       string,
       { runner: RunnerClient; state: Awaited<ReturnType<RunnerClient['list']>>[number] }
     >();
+    // **生死を聞けなかった器を覚えておく。** 応答が無いことを「セッションが無い」と
+    // 読むと、**生きている仕事を二重に起こす** — 下の `alive` に載らなかったジョブは
+    // `running` / `waiting_human` なら実際に resume されるので、実は走り続けていた
+    // マネージャーが2本になる（`gh pr create` のような取り返しのつかない操作が二度
+    // 走る。roadmap M5 が fencing を移送より先に置いている理由そのもの）。
+    //
+    // **同じ歯止めは `#reattach` に逐語で在る**（「聞けなかったときは何もしない。
+    // 応答が無いことを『セッションが無い』と読むと、生きている仕事を二重に起こす」）。
+    // 同じクラスの同じ危険に対して、片方にだけ置かれていた。
+    const unheard = new Set<string>();
     for (const runner of await this.#runners.list()) {
-      for (const state of await runner.list().catch(() => [])) {
+      const states = await runner.list().catch((error: unknown) => {
+        unheard.add(runner.runnerId);
+        // **黙って引き下がらない。** 聞けなかったことが跡に残らないと、後から
+        // 「セッションが無かった」のか「聞けなかった」のかを誰も言えない
+        // （`noteUnreadableRecord` の doc と同じ理由。読み出しの失敗を、無いことと
+        // 畳まないための跡である）。
+        noteUnreadableRecord('runner のセッション一覧', `runnerId=${runner.runnerId}`, error);
+        return null;
+      });
+      if (states === null) continue;
+      for (const state of states) {
         alive.set(state.managerId, { runner, state });
       }
     }
@@ -962,6 +1058,16 @@ class Pool implements ManagerPool {
         continue;
       }
 
+      // **聞けなかった器のジョブは、ここでは触らない。** 「`alive` に居ない」は
+      // 「セッションが無い」ではなく「**確かめられなかった**」である。宛先が
+      // 書かれていないジョブは、どの器に居たのかをこの情報だけでは決められない
+      // ので、聞けなかった器が1台でもあれば同じ扱いにする（安全側）。
+      //
+      // **`#records` へ載せる前に抜ける。** 載せずに帰れば、次の `restore()`
+      // （runner が開くたびに `takeOver` から呼ばれる）が `#records.has` で
+      // 弾かれずにもう一度拾い直す。**諦めではなく先送りである。**
+      if (unheard.size > 0 && (job.runnerId === undefined || unheard.has(job.runnerId))) continue;
+
       if (job.sessionId === undefined) continue;
 
       // **戻せないと分かっているものを「居る」ことにしない。** ここで `#records`
@@ -982,21 +1088,23 @@ class Pool implements ManagerPool {
 
       const nudge = restartNudge(job.status, 'daemon');
       const ok = await this.#resumeOnce(record, runner, nudge);
-      if (!ok) {
+      if (ok !== 'resumed') {
         /*
          * **貸し出し期限で断られたのは「まだ」である。** 引き取りの契機は「runner が
          * 開けたとき」しか無いので、ここで黙って諦めると次の契機が永久に来ない
          * （台帳では走っているのに誰も走っていない仕事が残る）。挑み直しの梯子へ
          * 載せる — 梯子は間隔を伸ばすが**回数では諦めない**（`#scheduleReattach`）。
+         *
+         * 他の理由（`no-session` / `unreadable` / `busy`）はここでは何もしない
+         * （それぞれ別の経路が持っている）。
          */
-        const refusal = record.leaseRefusal;
-        if (refusal !== undefined) {
+        if (ok === 'held-by-lease') {
           // **判断として残す。** 「何もしなかった」は日誌から消えやすいが、
           // 引き取らなかったことは判断であって欠落ではない（根拠も一緒に残す）。
           await this.#journal({
             type: 'decision',
             decision: `[${job.id}] 引き取りを見送った（貸し出し期限。期限が切れたら自動で挑み直す）`,
-            grounds: refusal.detail,
+            grounds: record.leaseRefusal?.detail ?? '（根拠を取れなかった）',
           });
           this.#scheduleReattach(runner.runnerId);
         }
@@ -1036,10 +1144,16 @@ class Pool implements ManagerPool {
 
     const runner = await this.#runnerOf(record);
     if (!runner) {
-      return {
-        outcome: 'absent',
-        detail: `${managerId} を走らせていた runner（${record.job.runnerId ?? '不明'}）が居ない。`,
-      };
+      // **台帳に居ないのと同じ答えを返さない。** ここまで来ているということは
+      // `#load` が台帳から像を作れた＝**このマネージャーは存在する**。宛先が
+      // いま開いていないだけで、その中には `unreachable`（まだ開けていない。
+      // 再試行は予約済み）が含まれる。`'absent'` を返すと `app.ts` が 404 に
+      // するので、**一時的な状態が「そんなものは無い」という機械可読な終端に
+      // なる**（`ManagerAbortResult` の doc）。
+      //
+      // **言い方は `send()` と同じものを使う。** 同じ観測に2つの言い方を
+      // 持たせると、片方だけが直る形になる。
+      return { outcome: 'unknown', detail: this.#runnerNotOpenDetail(record) };
     }
 
     // **`runner.stop()` が投げても、ここで abort() ごと reject させない。** HTTP
@@ -1355,33 +1469,41 @@ class Pool implements ManagerPool {
           const message = restartNudge(status, 'runner');
           // 断りが「新しく起きたこと」かを、挑む前の状態で覚えておく（下の日誌の条件）。
           const refusedBefore = record.leaseRefusal !== undefined;
-          if (!(await this.#resumeOnce(record, runner, message))) {
-            // **貸し出し期限で断られたのは「まだ」である。** 予約して挑み直す
-            // （`retry` を立てれば、この関数の `finally` が梯子へ載せる）。
-            if (record.leaseRefusal !== undefined) {
-              retry = true;
-              /*
-               * **待っていることを日誌に残す（この経路が本番である）。**
-               *
-               * 器の入れ替えで走るのはここであって `#restoreJobs` ではない
-               * （あちらは像に載っている委譲を先頭で見送る）。ここに何も書かないと、
-               * 「待っている」と「忘れている」が記録から区別できなくなる。
-               *
-               * **遷移のときだけ書く**（`onLost` が1回だけ知らせるのと同じ形）。
-               * 梯子は最大30秒間隔で挑み直すので、毎回書くと1回の入れ替えで同じ行が
-               * 何本も積まれ、日誌を読む側（クローンの日報・digest）で本当に1回だけ
-               * 起きたことが埋もれる。
-               */
-              if (!refusedBefore) {
-                await this.#journal({
-                  type: 'decision',
-                  decision: `[${job.id}] 引き取りを見送った（貸し出し期限。期限が切れたら自動で挑み直す）`,
-                  grounds: record.leaseRefusal.detail,
-                });
-              }
+          const outcome = await this.#resumeOnce(record, runner, message);
+          // **引けなかっただけなら諦めない。** 予約して挑み直す（`retry` は runner
+          // 単位の予約であって、`#unresumable` のようにこのジョブを恒久に降ろす
+          // ものではない）。ここを `continue` だけで済ませると、次の名乗り
+          // （`hello`）まで誰もこの委譲を拾わない——`hello` は SSE が繋がった
+          // ときにしか来ないので、永久に来ないことがある。
+          if (outcome === 'unreadable') {
+            retry = true;
+            continue;
+          }
+          if (outcome === 'held-by-lease') {
+            // **貸し出し期限で断られたのも「まだ」である。** 同じく予約して挑み直す。
+            retry = true;
+            /*
+             * **待っていることを日誌に残す（この経路が本番である）。**
+             *
+             * 器の入れ替えで走るのはここであって `#restoreJobs` ではない
+             * （あちらは像に載っている委譲を先頭で見送る）。ここに何も書かないと、
+             * 「待っている」と「忘れている」が記録から区別できなくなる。
+             *
+             * **遷移のときだけ書く**（`onLost` が1回だけ知らせるのと同じ形）。
+             * 梯子は最大30秒間隔で挑み直すので、毎回書くと1回の入れ替えで同じ行が
+             * 何本も積まれ、日誌を読む側（クローンの日報・digest）で本当に1回だけ
+             * 起きたことが埋もれる。
+             */
+            if (!refusedBefore) {
+              await this.#journal({
+                type: 'decision',
+                decision: `[${job.id}] 引き取りを見送った（貸し出し期限。期限が切れたら自動で挑み直す）`,
+                grounds: record.leaseRefusal?.detail ?? '（根拠を取れなかった）',
+              });
             }
             continue;
           }
+          if (outcome !== 'resumed') continue;
           // 受理と「戻れた」を取り違えない（`restore` と同じ理由）。
           if (record.job.status === 'lost') continue;
           record.job.status = 'running';
@@ -1555,6 +1677,63 @@ class Pool implements ManagerPool {
     });
   }
 
+  /**
+   * 宛先を引けなかったときに返す1行。
+   *
+   * **名前に `absent` を使わない。** このファイルでは `'absent'` が
+   * `ManagerAbortResult` の値（＝**そのマネージャーが台帳に居ない**。HTTP 404）
+   * として意味を持っている。ここが答えているのは「宛先の runner がいま名簿に
+   * 開いていない」であって**別の観測**なので、名前で寄せると、この関数を呼ぶ側が
+   * まさに畳んではいけない2つを畳む向きへ押される（`abort()` は実際にそう
+   * 畳んでいた）。
+   *
+   * **観測しているのは「いま名簿に開いた宛先が無い」ことだけである。** ここは
+   * 「別の runner で続きを起こすには workspace の移送が要る」と**恒久の話**を
+   * していたが、そう言える材料はここに無い。`RunnerRegistry#get()` が `null` を
+   * 返すのは `entry.client` が無いときで、そこには**まだ開けていない**
+   * （`connecting` / `unreachable`。再試行は予約済み）が含まれる — つまり
+   * **待てば直る状態を、待っても直らない状態の言葉で報告していた**。
+   *
+   * **文言の誤りは、状態の誤りより直りにくい。** 読んだ側は「この宛先はもう
+   * 戻せない」という結論を持ち帰り、その結論はデーモンのどこにも残らないので、
+   * 後から名簿が `connected` へ戻っても訂正が届かない。**判定できないものは
+   * 言わない**（AGENTS.md「取れない軸に 0 の行を作らない」）。
+   *
+   * 代わりに**名簿の状態を5値のまま添える。** `connected` へ畳まないのは
+   * `RunnerOverview` と同じ理由で、「まだ開けていない」と「待っても同じ答えが
+   * 返る」の違いが、読む側が待つか起こし直すかを決める材料そのものだからである
+   * （`RunnerRegistry#select` の doc が「呼んだ側の対応が変わるので必ず区別する」
+   * として3種類を数え上げている。**`select` はそれを守っていて、ここだけが
+   * 守っていなかった**）。
+   *
+   * **畳み方は新しく作らない。** 同じことを名簿の側が既に持っている
+   * （`describeRunnerEntries`）ので、そちらを呼ぶ。両方で組み立てると、片方だけが
+   * 畳んだ形へ倒れても誰も気づけない。**値の意味もここに書き写さない** — 持ち主は
+   * `runner_list` の説明であり、写せば必ずずれる。
+   *
+   * **宛先1台に絞れない。** `RunnerEntry` が `runnerId` を載せるのは
+   * `entry.client` があるときだけで（`runner-protocol.ts` の `entries()`）、
+   * ここはまさにそれが無い場合である。**引けない対応付けを推測で埋めない**ので、
+   * 名簿はそのまま見せて、絞り込みは読む側に任せる。
+   */
+  #runnerNotOpenDetail(record: ManagerRecord): string {
+    const entries = this.#runners.entries();
+    const runnerId = record.job.runnerId;
+    const head =
+      runnerId === undefined
+        ? `${record.job.id} には宛先の runner が記録されておらず、いま開いている runner も無い。`
+        : `${record.job.id} の宛先（runner ${runnerId}）は、いま名簿に開いていない。`;
+    const fleet =
+      entries.length === 0
+        ? '名簿には runner が1台も登録されていない（時間では直らない）。'
+        : `名簿: ${describeRunnerEntries(entries)}。`;
+    return (
+      `${head}${fleet}` +
+      'これは「いま開いた宛先が無い」という観測であって、戻せないことの証明ではない。' +
+      '状態の読み方と、待つか起こし直すかの判断材料は runner_list が持つ。'
+    );
+  }
+
   async #runnerOf(record: ManagerRecord): Promise<RunnerClient | null> {
     const runnerId = record.job.runnerId;
     // 宛先が書かれていない古いジョブは、いまの1台へ寄せる（M4 は単一 runner）。
@@ -1582,22 +1761,18 @@ class Pool implements ManagerPool {
     record: ManagerRecord,
     runner: RunnerClient,
     message: string | undefined,
-  ): Promise<boolean> {
+  ): Promise<ResumeOutcome> {
     const id = record.job.id;
-    if (this.#resuming.has(id)) {
-      /*
-       * 別の契機が取り直している最中。**貸し出しの断りを残さない。**
-       *
-       * 残すと、呼び手（`send()`）が `false` の理由を「まだ前の器が握っている＝
-       * 待てば通る」と読む。ここで起きているのは別のこと（同じ委譲を二重に起こさない
-       * ための短絡）で、**言い分けを間違えると呼び手の次の一手が変わる。**
-       *
-       * **この分岐はテストで踏めていない**（`send()` は呼ぶ前に同じ旗を見るので、
-       * ここへ来るには2つの契機の競合が要る）。根拠は分岐の目視だけである。
-       */
-      delete record.leaseRefusal;
-      return false;
-    }
+    /*
+     * 別の契機が取り直している最中。**理由は返り値で運ぶ**（`ResumeOutcome`）。
+     *
+     * かつてこの分岐は真偽値を返していたので、呼び手は「なぜ `false` なのか」を
+     * `record.leaseRefusal`（貸し出しの断り）から推測するしかなく、**残っていた断りを
+     * 読んで「待てば通る」と誤って言う**形になりえた。理由が型で運ばれるようになった
+     * ので、その取り違えは構造ごと消えている（言い方の持ち主は
+     * `resumeFailureDetail` 1つである）。
+     */
+    if (this.#resuming.has(id)) return 'busy';
     this.#resuming.add(id);
     try {
       return await this.#resume(record, runner, message);
@@ -1731,17 +1906,25 @@ class Pool implements ManagerPool {
     record: ManagerRecord,
     runner: RunnerClient,
     message: string | undefined,
-  ): Promise<boolean> {
+  ): Promise<ResumeOutcome> {
     const { sessionId, cwd, request, projectKey } = record.job;
-    if (sessionId === undefined) return false;
+    if (sessionId === undefined) return 'no-session';
 
     // **貸し出しの関門はここ1つ。** 通らなければ resume そのものを出さない
     // （生きている器で走っている仕事を奪いに行かない）。
-    if (!(await this.#claimForResume(record, runner))) return false;
+    if (!(await this.#claimForResume(record, runner))) return 'held-by-lease';
 
     // 生ログを渡して materialize させる。runner のディスクに残っている前提を
     // 置かない（器は作り直される）。
-    const entries = await this.#loadSession(projectKey, sessionId);
+    const material = await this.#loadSession(projectKey, sessionId);
+
+    // **引けなかったものを「無い」として先へ進めない。** 材料無しで resume を
+    // 投げると、runner は `renderSessionLog` が `null` を返す枝へ入り
+    // （`runner.ts` の `#recoverFromFailedResume`）、`resume_failed` の
+    // `recovered: false` が返ってくる。受けた側はそれを `lost` に確定させ
+    // `#unresumable` へ積む——**一時的に DB が読めなかっただけで、委譲が恒久に
+    // 終端する。** 引けなかったことは引けなかったこととして返す。
+    if (material.kind === 'unreadable') return 'unreadable';
 
     await runner.resume({
       managerId: record.job.id,
@@ -1749,7 +1932,7 @@ class Pool implements ManagerPool {
       cwd: cwd ?? runner.workspacePath,
       request: request ?? record.job.summary,
       ...(message === undefined ? {} : { message }),
-      ...(entries === null ? {} : { entries }),
+      ...(material.kind === 'loaded' ? { entries: material.entries } : {}),
       // **世代と猶予を渡す。** これで runner は古い世代の命令を拒み、連絡が
       // 取れなくなったら自分でこのセッションを畳める（`lease.ts` の doc）。
       ...(record.job.lease === undefined
@@ -1760,22 +1943,47 @@ class Pool implements ManagerPool {
     record.job.runnerId = runner.runnerId;
     // 戻れたなら諦めを忘れる（人間やクローンが起こし直した後も自動で拾える）。
     this.#unresumable.delete(record.job.id);
-    return true;
+    return 'resumed';
   }
 
-  async #loadSession(projectKey: string | undefined, sessionId: string): Promise<unknown[] | null> {
+  /**
+   * 預かってある生ログを引く。**「無い」と「読めなかった」を分けて返す。**
+   *
+   * ここは `catch` で `null` を返していた。呼び出し側から見ると預かっていない
+   * のと見分けが付かず、下流はそれを恒久の結論へ変える（`#resume` の doc）。
+   * **書く側（`case 'mirror'`）が守っている線を、読む側だけが破っていた。**
+   *
+   * **跡を残すのも書く側と揃える。** 黙って握り潰すのをやめるのではなく、
+   * stderr に1行だけ残す（`noteUnreadableRecord`）——読めなかったことが
+   * どこにも残らないと、後から「無い」のか「読めなかった」のかを誰も言えない。
+   * **本文は出さない**（`noteDroppedRecord` と同じ理由。#52）。
+   */
+  async #loadSession(projectKey: string | undefined, sessionId: string): Promise<SessionMaterial> {
     const store = this.#stores.sessionStore;
-    if (store === undefined || projectKey === undefined) return null;
+    if (store === undefined || projectKey === undefined) return { kind: 'absent' };
     try {
-      return await store.load({ projectKey, sessionId });
-    } catch {
-      return null;
+      const entries = await store.load({ projectKey, sessionId });
+      // **空と不在を分けない。** どちらも「渡せる材料が無い」であり、引けては
+      // いるので待っても変わらない。分けるのは「引けなかった」だけである。
+      if (entries === null || entries.length === 0) return { kind: 'absent' };
+      return { kind: 'loaded', entries };
+    } catch (error) {
+      noteUnreadableRecord(
+        '預かってある生ログ',
+        `projectKey=${projectKey} sessionId=${sessionId}`,
+        error,
+      );
+      return { kind: 'unreadable' };
     }
   }
 
   async #fromSessionStore(job: Job): Promise<string | null> {
-    const entries = await this.#loadSession(job.projectKey, job.sessionId ?? '');
-    if (entries === null || entries.length === 0) return null;
+    const material = await this.#loadSession(job.projectKey, job.sessionId ?? '');
+    // **読めなかった回に「記録が無い」と答えない。** ここは `transcript()` の
+    // 最後の砦で、`null` は呼び出し側で「見せるものが無い」になる。跡は
+    // `#loadSession` が stderr に残しているので、少なくとも後から区別できる。
+    if (material.kind !== 'loaded') return null;
+    const { entries } = material;
     // 生ログの形（1行1 JSON）のまま返す。読む側は runner 由来と区別しなくてよい。
     return `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`;
   }
@@ -2577,6 +2785,57 @@ function shouldEscalateDenial(count: number): boolean {
  * デーモンだけなら作業ディレクトリはそのまま残っている。runner ごとなら、
  * 器に永続化が無ければコミット前の変更は消えている。
  */
+/**
+ * resume が `'resumed'` にならなかったときに `manager_send` が返す1行。
+ *
+ * **種類ごとに違うことを言う。** ここは全部を「`session_id` を持っておらず、
+ * 続きへ戻れない。新しく起こし直すこと。」と言っていた——**引きに行って失敗した
+ * だけのときにもそう言っていた**ので、読んだ側は恒久の結論を持ち帰り、しかも
+ * 「起こし直せ」という誤った行動を指示されていた（起こし直せば続きは失われる）。
+ *
+ * **恒久と一時を混ぜない。** `no-session` だけが恒久で、`unreadable` と
+ * `busy` は待てば直りうる。この区別は `RunnerRegistry#select` の doc が
+ * 「呼んだ側の対応が変わるので必ず区別する」と書いているものと同じ形である。
+ *
+ * **言い方の持ち主を1つにする。** `send()` は `#resuming` を事前にも見るので、
+ * 同じ「取り直している最中」を2箇所で書くと、片方だけが直る形になる。
+ */
+function resumeFailureDetail(
+  managerId: string,
+  outcome: Exclude<ResumeOutcome, 'resumed'>,
+  /**
+   * 貸し出し期限で断られたときの根拠（誰が握っていて、いつから引き取れるか）。
+   *
+   * **判定側にしか無い情報なので渡してもらう**（`judgeLease` の答えを
+   * `describeVerdict` が1行にしたもの）。取れなかったことを黙って埋めない。
+   */
+  leaseDetail?: string,
+): string {
+  switch (outcome) {
+    case 'held-by-lease':
+      return (
+        `${managerId} はまだ前の器が握っている（貸し出し期限）。**新しく起こし直さないこと** — ` +
+        `起こし直すと同じ仕事が2本になる。期限が切れれば自動で引き取る: ` +
+        `${leaseDetail ?? '（根拠を取れなかった）'}`
+      );
+    case 'no-session':
+      return `${managerId} は session_id を持っておらず、続きへ戻れない。新しく起こし直すこと。`;
+    case 'unreadable':
+      return (
+        `${managerId} の続きに要る生ログを、いま読み出せなかった。` +
+        '預かっていないのではなく、引きに行って失敗した（跡はデーモンの stderr にある）。' +
+        '待てば直る種類の失敗なので、少し置いてから送り直すこと。' +
+        '起こし直すと続きは失われるので、ここで起こし直さないこと。'
+      );
+    case 'busy':
+      return `${managerId} は器の入れ替えから取り直している最中である。少し置いてから送り直すこと。`;
+    default: {
+      const exhaustive: never = outcome;
+      throw new Error(`未知の resume の結果: ${JSON.stringify(exhaustive)}`);
+    }
+  }
+}
+
 type RestartCause = 'daemon' | 'runner';
 
 /** 再起動後に流す一言。**開き直すだけでは仕事は進まない。** */

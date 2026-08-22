@@ -37,6 +37,12 @@ class IdentifyingRunner implements RunnerClient {
   instanceId: string | undefined;
   /** 名乗る `runnerId`。**採られないことを見る**ために差し替えられるようにしてある。 */
   claimedRunnerId: string;
+  /**
+   * 名乗る版。既定は無し（従来どおり `revision` を返さない runner を再現する）。
+   * `connected` は `identity()` を一度も呼んだことを保証しない、という歯
+   * （下の「一度も probe されていない」describe）のためだけに足した。
+   */
+  revision: { status: 'known'; commit: string; short: string; source: 'build' } | undefined;
 
   constructor(runnerId: string, instanceId: string | undefined) {
     this.runnerId = runnerId;
@@ -44,11 +50,14 @@ class IdentifyingRunner implements RunnerClient {
     this.instanceId = instanceId;
   }
 
-  async identity(): Promise<{ runnerId?: string; instanceId?: string } | undefined> {
+  async identity(): Promise<
+    { runnerId?: string; instanceId?: string; revision?: IdentifyingRunner['revision'] } | undefined
+  > {
     this.probes += 1;
     return {
       runnerId: this.claimedRunnerId,
       ...(this.instanceId === undefined ? {} : { instanceId: this.instanceId }),
+      ...(this.revision === undefined ? {} : { revision: this.revision }),
     };
   }
 
@@ -108,24 +117,23 @@ describe('器の入れ替えを見分ける', () => {
     await registry.register({ label: 'http://runner:4518', open: async () => runner });
 
     /*
-     * **開けた瞬間に1回聞く。** 直後に走る引き取り（デーモンの `takeOver`）が
-     * 貸し出し期限の判定に `instanceId` を使うので、ハートビートの1周を待つと
-     * 「判定材料が無いまま引き取る」窓が10秒できる（`#open` の doc）。
+     * **開けた瞬間には叩かない。** いま応えているプロセスは `hello()` が既に読んだ
+     * 応答から採るので、往復は増えない（`#open` の doc / `RunnerClient.instanceId`）。
      *
-     * **この1回では知らせない** — 初めて聞いた分は入れ替えではないので覚えるだけ
-     * である（ここで知らせると、起きた直後に必ず1回出る）。
+     * **採った1回目では知らせない** — 初めて聞いた分は入れ替えではないので覚える
+     * だけである（ここで知らせると、起きた直後に必ず1回出る）。
      */
-    expect(runner.probes).toBe(1);
+    expect(runner.probes).toBe(0);
     expect(swaps).toEqual([]);
 
-    // 1周ぶん進めても、叩くのは**1周に1回だけ**（生死と名乗りで2往復投げない）。
+    // ハートビートは**1周に1回だけ**叩く（生死と名乗りで2往復投げない）。
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(runner.probes).toBe(2);
+    expect(runner.probes).toBe(1);
     expect(swaps).toEqual([]);
 
     // 同じプロセスが応え続けている間は何も起きない。
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(runner.probes).toBe(3);
+    expect(runner.probes).toBe(2);
     expect(swaps).toEqual([]);
 
     // 器が入れ替わった（新しいコンテナが同じ宛先に応え始めた）。
@@ -252,9 +260,80 @@ describe('器の入れ替えを見分ける', () => {
 
     await vi.advanceTimersByTimeAsync(30_000);
 
-    // 開けた瞬間の1回 + ハートビート3周（`identity()` を持つ相手なので開くときも聞く）。
-    expect(runner.probes).toBe(4);
+    // ハートビート3周ぶん（開けるときは `hello()` の応答から採るので増えない）。
+    expect(runner.probes).toBe(3);
     expect(swaps).toEqual([]);
+
+    await registry.stop();
+  });
+
+  /**
+   * **`state: 'connected'` は「版が分かっている」を保証しない——版を名乗らない
+   * runner に限って。**
+   *
+   * `#open()`（`runner-protocol.ts`）は `entry.source.open()` が解決した直後、
+   * `client.revision`（`hello()` 相当——`runnerId` / `workspacePath` と同じ
+   * 応答から拾う値）が在ればそれを採るので、**版を報告できる runner は繋がった
+   * 瞬間から `known` / `unknown` に見える**（`identity()` の最初の heartbeat を
+   * 待たない）。
+   *
+   * **`revision` を実装しない runner（`IdentifyingRunner` の既定・実物では
+   * `LocalRunner`）だけが `unheard` のまま残る。** `identity()` すら版を
+   * 返さない（`this.revision` を設定していない）ので、`state: 'connected'` に
+   * なった後、heartbeat が1周してもなお `unheard` が動かないことまでここで
+   * 固定する——「繋がった瞬間の窓」ではなく「版を名乗る手段を持たない runner
+   * の恒常的な姿」であることを示す。
+   */
+  it('版を名乗らない runner（LocalRunner 相当）は connected でも unheard のまま——heartbeat が回っても動かない', async () => {
+    // `IdentifyingRunner` の既定では `revision` を設定しない——`hello()` に
+    // 相当する値も `identity()` が返す値も、どちらも無い runner を表す。
+    const runner = new IdentifyingRunner('runner-fresh', 'boot-1');
+    const registry = createRunnerRegistry();
+    await registry.register({ label: 'http://runner-fresh:4518', open: async () => runner });
+
+    // **接続直後。** heartbeat を一切進めていない状態でも unheard。
+    expect(runner.probes).toBe(0);
+    expect(registry.entries()).toMatchObject([
+      { label: 'http://runner-fresh:4518', state: 'connected', revision: { status: 'unheard' } },
+    ]);
+
+    // **heartbeat を1周させても変わらない。** `identity()` 自体は呼ばれる
+    // （`probes` が増える）が、`this.revision` を設定していないので
+    // `identity()` の応答に `revision` が乗らず、`#markSeen` は何も更新しない。
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(runner.probes).toBe(1);
+    expect(registry.entries()).toMatchObject([
+      { label: 'http://runner-fresh:4518', revision: { status: 'unheard' } },
+    ]);
+
+    await registry.stop();
+  });
+
+  /**
+   * **窓が塞がっている側の証拠。** 上のテストと対になる——`revision` を実装
+   * する runner は、heartbeat を待たずに `known` として見える。
+   */
+  it('版を名乗る runner は、接続した瞬間（heartbeat 前）から known として見える', async () => {
+    const runner = new IdentifyingRunner('runner-fresh', 'boot-1');
+    runner.revision = {
+      status: 'known',
+      commit: 'c'.repeat(40),
+      short: 'c'.repeat(12),
+      source: 'build',
+    };
+    const registry = createRunnerRegistry();
+    await registry.register({ label: 'http://runner-fresh:4518', open: async () => runner });
+
+    // **heartbeat を一切進めていない。** それでも known——`#open()` が
+    // `hello()` 相当の応答から直接採ったからである。
+    expect(runner.probes).toBe(0);
+    expect(registry.entries()).toMatchObject([
+      {
+        label: 'http://runner-fresh:4518',
+        state: 'connected',
+        revision: { status: 'known', commit: 'c'.repeat(40) },
+      },
+    ]);
 
     await registry.stop();
   });

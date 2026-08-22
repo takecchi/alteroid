@@ -27,6 +27,9 @@ const BASE: RunnerSummary = {
   runnerId: 'runner-primary',
   workspacePath: '/workspace',
   credentials: [],
+  // 版の名乗りはこの試験の対象ではない（`instanceId` の見え方だけを見る）。
+  // **省略できない欄なので、聞けていない状態を明示して置く。**
+  revision: { status: 'unheard' },
 };
 
 let originalFetch: typeof fetch;

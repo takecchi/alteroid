@@ -68,7 +68,11 @@ function harness(runtime?: () => CloneRuntimeFacts): Harness {
   // **指名しなかったときに Pool.start() が返す runnerId。** 本物は資源で選んだ
   // 器の runnerId を返す——ここでは差し替え可能な既定値でそれを真似る。
   let autoRunnerId: string | undefined = 'runner-test';
-  let runnersOverview: RunnerFleetOverview = { runners: [], unassigned: [] };
+  let runnersOverview: RunnerFleetOverview = {
+    runners: [],
+    unassigned: [],
+    daemonRevision: { status: 'unknown' },
+  };
   const runnersCalls: { fingerprints?: boolean }[] = [];
   const transcripts = new Map<string, string>();
 
@@ -838,7 +842,7 @@ describe('クローンの道具', () => {
 describe('runner_list（器の一覧）', () => {
   it('登録が0台のときも「0台である」と言う（空の出力にしない）', async () => {
     const h = harness();
-    h.setRunnersOverview({ runners: [], unassigned: [] });
+    h.setRunnersOverview({ runners: [], unassigned: [], daemonRevision: { status: 'unknown' } });
 
     const reply = await h.call('runner_list', {});
 
@@ -851,6 +855,7 @@ describe('runner_list（器の一覧）', () => {
       runners: [
         {
           label: 'runner-only',
+          revision: { status: 'unheard' },
           state: 'connected',
           since: '2026-01-01T00:00:00.000Z',
           runnerId: 'runner-only',
@@ -858,6 +863,7 @@ describe('runner_list（器の一覧）', () => {
         },
       ],
       unassigned: [],
+      daemonRevision: { status: 'unknown' },
     });
 
     const reply = await h.call('runner_list', {});
@@ -872,6 +878,7 @@ describe('runner_list（器の一覧）', () => {
       runners: [
         {
           label: 'runner-a',
+          revision: { status: 'unheard' },
           state: 'connected',
           since: '2026-01-01T00:00:00.000Z',
           runnerId: 'runner-a',
@@ -879,6 +886,7 @@ describe('runner_list（器の一覧）', () => {
         },
         {
           label: 'runner-b',
+          revision: { status: 'unheard' },
           state: 'connected',
           since: '2026-01-01T00:00:00.000Z',
           runnerId: 'runner-b',
@@ -886,6 +894,7 @@ describe('runner_list（器の一覧）', () => {
         },
       ],
       unassigned: [],
+      daemonRevision: { status: 'unknown' },
     });
 
     const reply = await h.call('runner_list', {});
@@ -901,14 +910,28 @@ describe('runner_list（器の一覧）', () => {
       runners: [
         {
           label: 'a',
+          revision: { status: 'unheard' },
           state: 'connecting',
           since: '2026-01-01T00:00:00.000Z',
           managers: [],
         },
-        { label: 'b', state: 'unreachable', since: '2026-01-01T00:00:00.000Z', managers: [] },
-        { label: 'c', state: 'unusable', since: '2026-01-01T00:00:00.000Z', managers: [] },
+        {
+          label: 'b',
+          revision: { status: 'unheard' },
+          state: 'unreachable',
+          since: '2026-01-01T00:00:00.000Z',
+          managers: [],
+        },
+        {
+          label: 'c',
+          revision: { status: 'unheard' },
+          state: 'unusable',
+          since: '2026-01-01T00:00:00.000Z',
+          managers: [],
+        },
         {
           label: 'd',
+          revision: { status: 'unheard' },
           state: 'lost',
           since: '2026-01-01T00:00:00.000Z',
           runnerId: 'runner-d',
@@ -916,6 +939,7 @@ describe('runner_list（器の一覧）', () => {
         },
         {
           label: 'e',
+          revision: { status: 'unheard' },
           state: 'connected',
           since: '2026-01-01T00:00:00.000Z',
           runnerId: 'runner-e',
@@ -923,6 +947,7 @@ describe('runner_list（器の一覧）', () => {
         },
       ],
       unassigned: [],
+      daemonRevision: { status: 'unknown' },
     });
 
     const reply = await h.call('runner_list', {});
@@ -938,6 +963,7 @@ describe('runner_list（器の一覧）', () => {
       runners: [
         {
           label: 'runner-a',
+          revision: { status: 'unheard' },
           state: 'connected',
           since: '2026-01-01T00:00:00.000Z',
           runnerId: 'runner-a',
@@ -948,6 +974,7 @@ describe('runner_list（器の一覧）', () => {
         },
       ],
       unassigned: [],
+      daemonRevision: { status: 'unknown' },
     });
 
     const reply = await h.call('runner_list', {});
@@ -963,6 +990,7 @@ describe('runner_list（器の一覧）', () => {
       runners: [
         {
           label: 'runner-a',
+          revision: { status: 'unheard' },
           state: 'connected',
           since: '2026-01-01T00:00:00.000Z',
           runnerId: 'runner-a',
@@ -970,6 +998,7 @@ describe('runner_list（器の一覧）', () => {
         },
       ],
       unassigned: [{ managerId: 'mgr-legacy', status: 'done' }],
+      daemonRevision: { status: 'unknown' },
     });
 
     const reply = await h.call('runner_list', {});
@@ -994,6 +1023,7 @@ describe('runner_list（器の一覧）', () => {
       runners: [
         {
           label: 'runner-a',
+          revision: { status: 'unheard' },
           state: 'connected',
           since: '2026-01-01T00:00:00.000Z',
           runnerId: 'runner-a',
@@ -1005,6 +1035,7 @@ describe('runner_list（器の一覧）', () => {
         },
       ],
       unassigned: [],
+      daemonRevision: { status: 'unknown' },
     });
 
     const reply = await h.call('runner_list', {});
@@ -1021,6 +1052,7 @@ describe('runner_list（器の一覧）', () => {
       runners: [
         {
           label: 'runner-a',
+          revision: { status: 'unheard' },
           state: 'connected',
           since: '2026-01-01T00:00:00.000Z',
           runnerId: 'runner-a',
@@ -1032,6 +1064,7 @@ describe('runner_list（器の一覧）', () => {
         },
       ],
       unassigned: [],
+      daemonRevision: { status: 'unknown' },
     });
 
     const reply = await h.call('runner_list', { fingerprints: true });

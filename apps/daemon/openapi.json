@@ -4496,13 +4496,91 @@
                               }
                             },
                             "required": ["sha256", "bytes", "updatedAt"]
+                          },
+                          "revision": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "const": "known"
+                                  },
+                                  "commit": {
+                                    "type": "string"
+                                  },
+                                  "short": {
+                                    "type": "string"
+                                  },
+                                  "source": {
+                                    "type": "string",
+                                    "enum": ["build", "workspace", "env", "platform"]
+                                  }
+                                },
+                                "required": ["status", "commit", "short", "source"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "const": "unknown"
+                                  }
+                                },
+                                "required": ["status"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "const": "unheard"
+                                  }
+                                },
+                                "required": ["status"]
+                              }
+                            ]
                           }
                         },
-                        "required": ["label", "state", "since", "credentials"]
+                        "required": ["label", "state", "since", "credentials", "revision"]
                       }
+                    },
+                    "daemonRevision": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "const": "known"
+                            },
+                            "commit": {
+                              "type": "string"
+                            },
+                            "short": {
+                              "type": "string"
+                            },
+                            "source": {
+                              "type": "string",
+                              "enum": ["build", "workspace", "env", "platform"]
+                            }
+                          },
+                          "required": ["status", "commit", "short", "source"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "const": "unknown"
+                            }
+                          },
+                          "required": ["status"]
+                        }
+                      ]
                     }
                   },
-                  "required": ["runners"]
+                  "required": ["runners", "daemonRevision"]
                 }
               }
             }

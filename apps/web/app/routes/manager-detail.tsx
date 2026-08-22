@@ -52,8 +52,39 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
       }
       description={PAGE_DESCRIPTION}
       action={
-        manager !== undefined &&
-        (manager.status === 'running' || manager.status === 'waiting_human') ? (
+        /*
+          **状態で出し分けない。** ここはかつて `running` / `waiting_human` の
+          ときだけ停止ボタンを描いていたが、絞っていたのは画面だけだった —
+          CLI の `/stop`（`apps/cli/src/chat.ts`）は id を受け取ってそのまま
+          `DELETE` を投げるだけで status を見ないし、デーモン
+          （`apps/daemon/src/app.ts` の `.delete('/managers/:id')`）も
+          `ManagerPool.abort`（`packages/core/src/manager.ts`）も、台帳に
+          居ない（`absent`）以外では弾かない。**同じ行為が入口によって
+          できたりできなかったりしていた**（PRD「入口の等価性」は「委譲の停止」を
+          名指しで挙げている。北極星の禁止1）。
+
+          **揃える方向は「できる側」である。** CLI から能力を削れば対称には
+          なるが、それは禁止2 に触れる。
+
+          **`done` を止めたい場面は実在する。** `done` は「死んだ」ではなく
+          「終えて待機」で（`schema.ts` の `jobStatusSchema`、この画面の札も
+          「待機中」）、セッションは生きている。待機したまま残っているものを
+          畳む手が、Web にだけ無かった。
+
+          **状態を列挙する形へ戻さないこと。** 状態は増えうるので、
+          `status === X || status === Y` の形は増えた日に黙って新しい状態を
+          締め出す（増えたことはこの行からは分からない）。**ここは1つも
+          数え上げない**ことでそれを避けている。
+
+          **押せない理由があるときは、非表示ではなく理由で出す。** 停止が
+          通らなかった応答は `failure` に入り、下の `ErrorNote` に出る。
+          ボタンを消すと、できないことと「この画面が扱っていないこと」を
+          人間が区別できない。
+
+          残っている `manager !== undefined` は**状態のガードではなく存在の
+          ガード**である（読み込み中はまだ何も描けない）。
+        */
+        manager !== undefined ? (
           <Button
             variant="danger"
             size="sm"

@@ -29,6 +29,30 @@ export function noteDroppedRecord(what: string, detail: string, error: unknown):
 }
 
 /**
+ * 記録の**読み出し**に失敗したことを stderr へ1行だけ残す。
+ *
+ * **書けなかった側（`noteDroppedRecord`）と対になる。** あちらの理由がそのまま
+ * こちらにも効く —「跡がどこにも無いと、**『無い』が『通らなかった』と読める**」。
+ * 読み出しではその取り違えがもう一段悪くなる: 読めなかったことが跡に残らないと、
+ * 呼び出し側は**預かっていない**と読み、下流はそれを**恒久の結論**（終端状態・
+ * 自動再試行の打ち切り・存在の否定を含む文言）に変える。
+ *
+ * **`noteDroppedRecord` を流用しないのは、あれが「記録できませんでした」と
+ * 書くからである。** 読み出しの失敗にその文を当てると、跡そのものが何が起きたかを
+ * 取り違えさせる（この関数が防ごうとしているものと同じ形になる）。
+ *
+ * **本文は出さない。** 理由は `noteDroppedRecord` と同じで、ここへ渡ってくる
+ * 記録には外の世界から拾ってきた任意の文字列が入る（#52）。
+ *
+ * @param what 何を読み出し損ねたか（固定文言。呼び出し側が書く）
+ * @param detail 本文を含まない見分け
+ */
+export function noteUnreadableRecord(what: string, detail: string, error: unknown): void {
+  const tail = detail === '' ? '' : `（${detail}）`;
+  note(`${what}を読み出せませんでした${tail}: ${reasonOf(error)}`);
+}
+
+/**
  * 受信箱が閉じた後に届いた合図を、このプロセスでは処理しなかったことを
  * stderr へ1行だけ残す。
  *

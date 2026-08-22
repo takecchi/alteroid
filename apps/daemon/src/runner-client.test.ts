@@ -668,6 +668,42 @@ describe('器の入れ替えの判定材料', () => {
     expect(again?.instanceId).toBe(identity?.instanceId);
   });
 
+  /**
+   * **接続の瞬間から名簿が持てること。**
+   *
+   * 名簿はこの値を `hello()` の応答から採る（`Registry#open`）。ここが取れていないと、
+   * 開けた直後に走る引き取りが**判定材料を持たないまま**動く窓ができる — それは
+   * 生きている器の仕事を奪いうる側である。
+   *
+   * **往復を増やしていないことも一緒に見る。** 開くときに `identity()` を別に叩く
+   * 形にすると、`hello()` と合わせて2往復になる（`runner-swap.test.ts` が
+   * 「開けた瞬間には叩かない」を固定しているのと対になっている）。
+   */
+  it('hello() が /health の instanceId を拾う（新しい往復を増やさない）', async () => {
+    let calls = 0;
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn: (async () => {
+        calls += 1;
+        return Response.json({
+          ok: true,
+          runnerId: 'runner-primary',
+          instanceId: 'boot-7',
+          workspacePath: '/workspace',
+          managers: 0,
+          pendingEvents: 0,
+          credentials: [],
+        });
+      }) as unknown as typeof fetch,
+    });
+    cleanups.push(() => client.close());
+
+    expect(client.instanceId).toBe('boot-7');
+    // `createHttpRunner` が通すのは `hello()` の1回だけである。
+    expect(calls).toBe(1);
+  });
+
   it('identity() は runnerId を採らない（読むが書き換えない）', async () => {
     let runnerId = 'runner-primary';
     const client = await createHttpRunner({
@@ -689,6 +725,69 @@ describe('器の入れ替えの判定材料', () => {
     // 読んだ値は返すが、**自分の宛先は書き換えない**（`resources()` と同じ線）。
     expect(identity?.runnerId).toBe('runner-replaced');
     expect(client.runnerId).toBe('runner-primary');
+  });
+});
+
+/**
+ * `hello()` が拾う版（roadmap M5 相当。「connected なのに unheard」の窓を
+ * 塞ぐ側）。
+ *
+ * **`identity()` の heartbeat とは別の経路である。** `createHttpRunner()` は
+ * 内部で `hello()` を呼んでから返る（`runnerId` / `workspacePath` を確かめる
+ * のと同じタイミング）ので、繋がった時点で `client.revision` が既に埋まって
+ * いることを確かめる——`identity()` を1回も呼ばずに、である。
+ *
+ * **本物の runner の `/health` を通して確かめる。** 名簿側が実際にこれを
+ * 拾って `entry.revision` を早める判定は `packages/core/src/runner-swap.test.ts`
+ * が持つ。
+ */
+describe('hello() が拾う版', () => {
+  const cleanups: (() => Promise<void> | void)[] = [];
+
+  afterEach(async () => {
+    for (const cleanup of cleanups.splice(0)) await cleanup();
+  });
+
+  it('接続した時点（identity() を呼ぶ前）で revision が埋まっている', async () => {
+    const outbox = new Outbox();
+    const host = createRunnerHost({
+      runnerId: 'runner-primary',
+      workspacePath: '/workspace',
+      emit: (event) => outbox.push(event),
+      queryFn: fakeSdk().fn,
+    });
+    const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn: fetchInto(app),
+    });
+    cleanups.push(() => client.close());
+
+    // **`identity()` を一度も呼んでいない。** それでも revision は埋まって
+    // いる——`hello()`（`createHttpRunner` 内部）が既に読んでいるからである。
+    // このテスト環境では `pnpm build` 済みなので CANON_REVISION が焼かれて
+    // おり、runner の /health は known を返す（`known` 固定にしない——焼き
+    // 込み状態に依存するので `status` の型だけを見る）。
+    expect(client.revision).toBeDefined();
+    expect(['known', 'unknown']).toContain(client.revision?.status);
+  });
+
+  it('/health に revision フィールドが無い古い runner では、revision は undefined のまま（プレースホルダにしない）', async () => {
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn: (async () =>
+        Response.json({
+          ok: true,
+          runnerId: 'runner-old',
+          workspacePath: '/workspace',
+          // revision フィールド自体を持たない（この機能より前の runner を模す）。
+        })) as typeof fetch,
+    });
+    cleanups.push(() => client.close());
+
+    expect(client.revision).toBeUndefined();
   });
 });
 

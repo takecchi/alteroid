@@ -21,7 +21,7 @@ import { renderMemoryDocuments } from './memory.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createScheduler } from './schedule.js';
-import type { ChatStreamEvent } from './schema.js';
+import type { ChatStreamEvent, InboxEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { CLONE_ACTOR_ID, isCloneActor } from './usage.js';
 import { createCloneMcpServer, createCloneTools } from './tools.js';
@@ -4479,6 +4479,501 @@ describe('クローン — 枠（利用上限）が閉じたら保持して次�
 
     await s.clone.stop();
   });
+});
+
+/**
+ * `#settleInboxEvent` に足した「枠で保持している間、中身を持たない合図
+ * （`isTick`）で在庫を作らない」の3本（`clone.ts` の `#foldsIntoHeldTick` /
+ * `#noteFoldedTick` / `#deferred` / `isTick` / `isSameTick`）。
+ *
+ * 上の「枠が閉じたら保持して次の合図で試す」ブロックが確かめているのは FIFO・
+ * 再試行そのものであり、ここで確かめるのは**その保持の中身が増え続けないこと**
+ * （歯1・2）と、**畳んでも再試行の回数そのものは1回も減らないこと**（歯3）で
+ * ある。3本とも `self_initiative` / `timer` 起点のターンは `ChatStreamEvent` を
+ * 1件も出さない（`#conversationOf` が `human_message` 以外に `null` を返し、
+ * `#emit` が `null` で即 return する）ので、`waitForTerminal` はここでは使えない。
+ *
+ * **歯1 の同期は「tick 自身の跡」を待たない。** かつては「畳んだ」旨の
+ * 日誌行が出るのを待っていたが、畳み込みを殺す変異（`#foldsIntoHeldTick` を
+ * `return false` にする）でも、畳み込みを `post()` 側へ動かす変異（畳まれた
+ * tick が受信箱へ一切積まれなくなる）でも、その日誌行は永久に出ない —
+ * どちらも**アサーション不一致ではなくタイムアウトで落ちる**形になってしまい、
+ * 「タイムアウトは歯があった証拠にならない」に反する。代わりに `postTickThenPacer`
+ * （下）で「tick を post した直後に、畳み込みの対象外である人間の発言
+ * （pacer）を post し、その pacer 自身の終端が来るまで待つ」形にする。
+ * 受信箱は直列 FIFO で、`#pump` の `for await` は1件の後始末
+ * （`#settleInboxEvent` を含む）が完全に終わってから次を取り出すので、pacer
+ * 自身の終端が観測できた時点で、直前に積んだ tick の後始末は必ず完了して
+ * いる。**tick が畳まれたか保持されたかに関わらず**pacer は必ず受信箱を
+ * 通って終端まで届くので、この待ちはどの変異が当たっていても必ず抜ける。
+ * 歯2はこの変更の対象外（`calls[0].inputs.length` を直接見る既存の形のまま）。
+ *
+ * **歯3 は `postTickThenPacer` を使わない（過去に使っていたが、それ自体が
+ * 歯3を測れなくしていたため外した）。** 歯3が測りたいのは「tick が**単独で**
+ * 解除を1回起こすこと」であり、pacer（人間の発言）は畳み込みの対象外なので
+ * それ自身の `post()` が必ず解除を1回起こしてしまう。畳み込みを `post()` 側へ
+ * 戻す変異（tick が受信箱へ一切積まれなくなる）が当たっても、pacer 自身の
+ * 解除が測定対象の代わりに数を稼いでしまい、期待する回数と実際の回数が
+ * 偶然一致して歯が落ちない（実測でこの変異は歯3を生き残らせた）。歯3では
+ * 代わりに `releaseAttemptCount`（日誌の「枠の解除を試す」行数）だけを見て
+ * 同期する — 詳しい理由は歯3のテスト本体のコメントを見よ。
+ */
+describe('クローン — 枠で保持している間、中身を持たない合図で在庫を作らない', () => {
+  const spendLimitMessage = "You've hit your individual spend limit for this account.";
+
+  /** 「畳んだ」旨の日誌の行数。 */
+  async function foldedNoteCount(s: Setup): Promise<number> {
+    const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[];
+    return exchanges.filter((entry) => entry.text.includes('畳んだ')).length;
+  }
+
+  /**
+   * 解除の試行が `expected` 回に達するまで待つ。**歯3 専用。**
+   *
+   * ## この待ちが言えないこと（計器の側に貼る）
+   *
+   * **「起きなかった（実装の退行）」と「器が遅すぎた（飽和）」を区別できない。**
+   * どちらも同じタイムアウトで出る。**赤を見たら、実装の退行を探しに行く前に
+   * 器の負荷を疑うこと** — 他の歯（歯1・歯2）はアサーションの不一致で数十 ms
+   * のうちに落ちるので、**そちらが緑のままここだけが数秒かけて落ちているなら、
+   * 退行の可能性が高い。逆に全体が遅いなら飽和を先に疑う。**
+   *
+   * この器は混むと vitest の fork pool ごと落ちることがある（`AGENTS.md`
+   * 「自分が走っている器」）ので、**待ちは負荷に耐える側へ倒してある**
+   * （共有の `waitFor` の 3 秒ではなく下の予算）。それでも足りない可能性は
+   * 消せないので、消せないことを上に書いてある。
+   *
+   * `it()` 側にも明示のタイムアウトを付けてあること。**vitest の既定は 5 秒**で、
+   * 付けないとこの待ちより先にそちらが当たり、**理由の書かれていない汎用の
+   * タイムアウト**に化ける（＝ここに書いた断り書きが読まれない）。
+   */
+  const RELEASE_WAIT_BUDGET_MS = 15_000;
+  async function waitForReleaseAttempts(s: Setup, expected: number, what: string): Promise<void> {
+    const started = Date.now();
+    for (;;) {
+      const seen = await releaseAttemptCount(s);
+      if (seen === expected) return;
+      if (Date.now() - started > RELEASE_WAIT_BUDGET_MS) {
+        throw new Error(
+          `${what}: 解除の試行が ${expected} 回になるのを ${RELEASE_WAIT_BUDGET_MS}ms 待ったが ${seen} 回のままだった。` +
+            'この歯は「起きなかった（退行）」と「器が遅すぎた（飽和）」を区別できない。' +
+            '他の歯（歯1・歯2）が緑でここだけ落ちているなら退行を、全体が遅いなら器の飽和を先に疑うこと。',
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+
+  /** 「枠の解除を試す」旨の日誌の行数（＝解除を試した回数そのもの）。 */
+  async function releaseAttemptCount(s: Setup): Promise<number> {
+    const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as { text: string }[];
+    return exchanges.filter((entry) => entry.text.includes('枠の解除を試す')).length;
+  }
+
+  /**
+   * `stores.inbox.put` の呼び出し回数を合図 id ごとに数える薄いラッパー。
+   *
+   * `#remember`（`clone.ts`）は `post()` の中で「受理した時点」に呼ばれ、
+   * `#foldsIntoHeldTick` の判定より**前**にある。だから畳まれる側の tick でも、
+   * 畳み込みが `#settleInboxEvent`（受信箱から取り出した後）で起きている限り
+   * 必ず一度は `put` が呼ばれる。**畳み込みを `post()` 側（受信箱へ積む前）へ
+   * 動かす変異が当たると、畳まれる側の tick はここが 0 のまま残る** — 歯1 の
+   * `foldedNoteCount`（日誌の跡）とは別の観測点（器への書き出しそのもの）で、
+   * 同じ「畳み込みが正しい場所で起きているか」を確かめる。
+   */
+  function withInboxPutSpy(stores: Stores): {
+    stores: Stores;
+    putCallCountFor: (id: string) => number;
+  } {
+    const counts = new Map<string, number>();
+    const original = stores.inbox;
+    const spiedInbox: Stores['inbox'] = {
+      ...original,
+      async put(event, at) {
+        counts.set(event.id, (counts.get(event.id) ?? 0) + 1);
+        return original.put(event, at);
+      },
+    };
+    return {
+      stores: { ...stores, inbox: spiedInbox },
+      putCallCountFor: (id) => counts.get(id) ?? 0,
+    };
+  }
+
+  /**
+   * ある conversation の終端（`done` か `error`）が来るまで待つ。`s.events`
+   * （`wireEvents`）は `conv-1` にしか張っていないので、pacer 専用の
+   * conversation で終端を見るにはここで別に購読を張る必要がある。
+   */
+  function waitForTerminalOn(clone: CloneHost, conversationId: string): Promise<void> {
+    return new Promise((resolve) => {
+      const unsubscribe = clone.subscribe(conversationId, (event) => {
+        if (event.type === 'done' || event.type === 'error') {
+          unsubscribe();
+          resolve();
+        }
+      });
+    });
+  }
+
+  /**
+   * tick を1件 post した直後に、専用の conversation を持つ人間の発言
+   * （pacer）を1件 post し、その pacer 自身の終端（`done`/`error`）が来る
+   * まで待つ。
+   *
+   * **同期の根拠はファイル冒頭の doc comment を参照。** ここでは繰り返さない
+   * — 要は「pacer は畳み込みの対象外なので必ず受信箱を通り、直列 FIFO の
+   * 性質上、pacer の終端が来た時点で直前の tick の後始末は必ず終わっている」
+   * という一点である。**tick 自身の跡（畳んだ日誌・在庫の中身）はここでは
+   * 一切見ない。**
+   *
+   * pacer の conversation id は呼び出しごとに変える — 起点や他の pacer の
+   * 終端と混ざらないようにするため（`conv-1` を共有すると「何件目の終端か」
+   * を数える形になり、脆くなる）。
+   */
+  async function postTickThenPacer(
+    clone: CloneHost,
+    tick: InboxEvent,
+    pacerConversationId: string,
+  ): Promise<void> {
+    const terminal = waitForTerminalOn(clone, pacerConversationId);
+    clone.post(tick);
+    clone.post(humanMessage(`pacer(${pacerConversationId})`, pacerConversationId));
+    await terminal;
+  }
+
+  // **この歯は2つの要求を同時に見ている。** (1) 在庫が増えないこと
+  // （`selfInitiatives` が1件のまま — M1「畳み込みを殺す」・M2「何でも畳む」が
+  // 壊す）と、(2) 畳んだ跡が日誌に残ること（`foldedNoteCount` — M3「畳み込みを
+  // `post()` 側へ戻す」が壊す。`post()` 側で畳むと `#noteFoldedTick` を通らない）。
+  // **だから3つの変異全部でこの歯が落ちる。** どちらも本物の要求なのでアサー
+  // ションは1つも削らない — 「なぜ全部の変異で落ちるのか」を次に読む者が
+  // 疑わずに済むように、ここへ明記しておく。
+  it('歯1: 発意 tick を続けて送っても、保持する在庫は1件のまま増えない', async () => {
+    const s = setup(undefined, createMemoryStores(), {
+      resultSubtype: 'error_during_execution',
+      resultText: spendLimitMessage,
+    });
+
+    const origin = humanMessage('起点');
+    s.clone.post(origin);
+    await waitForTerminal(s.events);
+    // 既存テスト（「枠に当たった合図は forget されない」）と同じ待ち方 — 起点が
+    // 未読として保持し終わるまで待つ。
+    await waitFor(async () => {
+      const pending = await s.stores.inbox.claimPending();
+      return pending.some((p) => p.event.id === origin.id);
+    }, '起点が未読として保持される');
+
+    // 1本目: まだ何も保持していないので畳めない（`#deferred` に self_initiative
+    // が無い）。実際にモデルへ渡る「起点」の再試行を1回誘発して、初めて
+    // `#deferred` に self_initiative が1件乗る。同期は tick 自身の跡ではなく
+    // pacer（人間の発言）の終端を待つ（`postTickThenPacer` の doc）。
+    await postTickThenPacer(
+      s.clone,
+      { type: 'self_initiative', id: 'evt-si-1', at: new Date().toISOString(), reason: '1本目' },
+      'conv-pacer-1',
+    );
+
+    // 2本目: 既に保持している self_initiative（1本目）へ畳まれる（はず）。
+    // 畳まれた分は `#forget` されて器の未読からも消える。
+    await postTickThenPacer(
+      s.clone,
+      { type: 'self_initiative', id: 'evt-si-2', at: new Date().toISOString(), reason: '2本目' },
+      'conv-pacer-2',
+    );
+
+    // 3本目も同様に畳まれる（はず）。
+    await postTickThenPacer(
+      s.clone,
+      { type: 'self_initiative', id: 'evt-si-3', at: new Date().toISOString(), reason: '3本目' },
+      'conv-pacer-3',
+    );
+
+    const pending = await s.stores.inbox.claimPending();
+    const selfInitiatives = pending.filter((p) => p.event.type === 'self_initiative');
+    // 在庫は1件だけ（3回届いたのに増えていない）。
+    //
+    // **「1件」が言えるのは、1件ずつ順番に送った場合に限る。** 極端に詰めて送ると
+    // 2件になりうる — 畳み込みの相手は `#deferred` に**入った後**の合図なので、
+    // 受信箱から取り出されてから `#settleInboxEvent` が積むまでの間に次が届くと、
+    // その1件は畳む相手を見つけられない（`#pump` の「`isTick` の畳み込みは
+    // 『処理中の1件＋待ち行列の1件』を残す形で効いている」と同じ形の下限である）。
+    // **実世界の tick は既定で55分間隔**（`apps/daemon/src/schedule.ts` の
+    // `DEFAULT_INITIATIVE_EVERY_MINUTES`）なのでこの形で書いてある。
+    //
+    // **だから「2件になった」を回帰と読まないこと。** 詰めて送れば起きる正常な
+    // 下限であって、在庫が青天井に増える（直す前は3回で3件だった）のとは別物である。
+    expect(selfInitiatives).toHaveLength(1);
+    // 動いていないのは**先に保持していた側**（1本目）である。畳むのは新しく
+    // 届いた方だけで、既に保持している側は触らない。
+    expect(selfInitiatives[0]?.event.id).toBe('evt-si-1');
+    // 畳んだ跡が2件、日誌に残る（2本目・3本目のぶん）。
+    expect(await foldedNoteCount(s)).toBe(2);
+    // 起点（人間の発言）は畳み込みの対象外なので、未読のまま残っている。
+    expect(pending.some((p) => p.event.id === origin.id)).toBe(true);
+
+    await s.clone.stop();
+  });
+
+  it('歯2: 中身を持つ合図・別の日のタイマーは畳まれず、枠が開けば到着順に処理される', async () => {
+    // 枠を「途中までは閉じたまま、合図で明示的に開けるまでは開かない」形にする
+    // ための可変フラグ。再試行が何回起きるかを数えずに済ませるための口
+    // （`resultFor` は毎ターン呼ばれるので、フラグを見るだけで済む）。
+    let releaseGateOpen = false;
+    const s = setup(undefined, createMemoryStores(), {
+      resultFor: () =>
+        releaseGateOpen
+          ? undefined
+          : { subtype: 'error_during_execution', text: spendLimitMessage },
+    });
+
+    const origin = humanMessage('起点');
+    s.clone.post(origin);
+    await waitForTerminal(s.events);
+    await waitFor(async () => {
+      const pending = await s.stores.inbox.claimPending();
+      return pending.some((p) => p.event.id === origin.id);
+    }, '起点が未読として保持される');
+
+    // **畳まれてはいけない**もの4種。1件ずつ post し、前の分が誘発した「起点」の
+    // 再試行が実際に投げられたことを待ってから次を送る。
+    const second = humanMessage('二件目');
+    s.clone.post(second);
+    await waitFor(async () => (s.calls[0]?.inputs.length ?? 0) >= 2, '二件目が誘発した再試行');
+
+    const manager = {
+      type: 'manager_message' as const,
+      id: 'evt-manager',
+      at: new Date().toISOString(),
+      managerId: 'mgr-1',
+      kind: 'report' as const,
+      text: 'マネージャーからの一件（目印テキスト）',
+    };
+    s.clone.post(manager);
+    await waitFor(
+      async () => (s.calls[0]?.inputs.length ?? 0) >= 3,
+      'manager_message が誘発した再試行',
+    );
+
+    const timerA = {
+      type: 'timer' as const,
+      id: 'evt-timer-a',
+      at: new Date().toISOString(),
+      kind: 'custom-check',
+      target: '2026-08-20',
+    };
+    s.clone.post(timerA);
+    await waitFor(
+      async () => (s.calls[0]?.inputs.length ?? 0) >= 4,
+      'timer(08-20) が誘発した再試行',
+    );
+
+    // kind / cause は同じで target だけが違う ＝ 別の日 ＝ 別の仕事（`isSameTick`
+    // の doc）なので、timerA が保持中でも畳まれてはいけない。
+    const timerB = {
+      type: 'timer' as const,
+      id: 'evt-timer-b',
+      at: new Date().toISOString(),
+      kind: 'custom-check',
+      target: '2026-08-21',
+    };
+    s.clone.post(timerB);
+    await waitFor(
+      async () => (s.calls[0]?.inputs.length ?? 0) >= 5,
+      'timer(08-21) が誘発した再試行',
+    );
+
+    // ここまでの5件（起点＋畳まれてはいけない4件）は、すべて未読として保持
+    // されている。1件も畳まれていない。
+    const heldIds = [origin.id, second.id, manager.id, timerA.id, timerB.id];
+    const pendingBeforeOpen = await s.stores.inbox.claimPending();
+    for (const id of heldIds) {
+      expect(pendingBeforeOpen.some((p) => p.event.id === id)).toBe(true);
+    }
+    expect(await foldedNoteCount(s)).toBe(0);
+
+    // 枠を開けて、続きの合図（トリガー）を送る。これで保持していた分から順に
+    // 配り直され、実際に成功して処理される。
+    releaseGateOpen = true;
+    const trigger = humanMessage('トリガー');
+    s.clone.post(trigger);
+    // 起点・二件目・トリガーの3件だけが人間の発言（chat の宛先を持つ）なので、
+    // `done` は3件。manager_message / timer は宛先が無い内部ターンなので
+    // `ChatStreamEvent` を出さない（このブロックの doc）。
+    await s.waitForEvents((events) => events.filter((event) => event.type === 'done').length === 3);
+
+    // 到着順のまま処理されたことを、`calls[0].inputs` に載った本文の出現順で
+    // 確かめる（`labelOrder` と同じ考え方。ここは型が混ざるので専用の目印で見る）。
+    //
+    // **単なる部分一致では見られない。** `#recentDigest`（tick 系のプロンプトに
+    // 載る「引き受けたまま終わっていない仕事」一覧）は、その時点で台帳に載って
+    // いる全件を列挙する。`post()` は同期でその場で台帳へ載せる（`#commit` の
+    // doc）ので、**まだ自分の番が来ていない合図でも、後から届いた分の digest には
+    // 先に載る**（実測: `トリガー` は一覧の最後に post するが、その digest 一覧
+    // 自体は timerA/timerB の番でもう出現していた）。だから「その合図**自身**の
+    // ターン本文」に固有の並び（`commitmentNoticeFor` が本文の直前に必ず挟む
+    // `\n\n---\n` の直後）で狙う — digest の列挙側にはこの並びが出ない
+    // （`- evt-x（...）\n  本文` という別の形である）。
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    const firstIndexOf = (marker: string) => inputs.findIndex((text) => text.includes(marker));
+    const order = {
+      二件目: firstIndexOf('\n\n---\n二件目'),
+      manager: firstIndexOf('（報告）\n\nマネージャーからの一件（目印テキスト）'),
+      timerA: firstIndexOf('対象: 2026-08-20'),
+      timerB: firstIndexOf('対象: 2026-08-21'),
+      トリガー: firstIndexOf('\n\n---\nトリガー'),
+    };
+    for (const [label, index] of Object.entries(order)) {
+      expect(index, `${label} が calls[0].inputs に見つからない`).toBeGreaterThanOrEqual(0);
+    }
+    expect(order.二件目).toBeLessThan(order.manager);
+    expect(order.manager).toBeLessThan(order.timerA);
+    expect(order.timerA).toBeLessThan(order.timerB);
+    expect(order.timerB).toBeLessThan(order.トリガー);
+
+    await s.clone.stop();
+  });
+
+  /**
+   * ## 歯3 が守っているもの
+   *
+   * `#foldsIntoHeldTick` による畳み込みを `post()` 側（受信箱へ積む前）に移すと、
+   * 畳まれた tick は受信箱へ何も積まない ＝ `#pump` の `for await` が次の要素を
+   * 受け取れず、`#releaseRequested` の印を見に来る機会そのものが無くなる。
+   * tick（`self_initiative` / `timer`）は「枠が開いたかを試す」ための**唯一の
+   * 定期的な契機**なので、そうなった瞬間、枠が実際には開いているのに誰も
+   * 気づかず再試行が静かに止まる — 費用は増えないが、仕事も二度と進まない。
+   *
+   * 実装（`clone.ts` の `#settleInboxEvent` 内）はこれを避け、畳み込みを
+   * **受信箱から取り出した後**（＝解除の印は必ず処理済み）に置いている。だから
+   * 「畳まれた」こと自体は歯1で確かめた在庫の話とは別に、**畳まれてもなお
+   * 解除の試行そのものは1回も減っていない**ことを、ここで別に確かめる。
+   *
+   * 見るのは2つ — (1) 実際にモデルへ渡った回数（`calls[0].inputs`）、
+   * (2) 日誌の「枠の解除を試す」行数（＝解除を試した回数そのもの、畳まれた
+   * 分も含めて減っていないか）。この歯は「畳んだ跡」（`foldedNoteCount`）を
+   * 1つも見ない — 見るのは解除の回数と実際の再試行回数だけである（畳んだ跡の
+   * 記録は歯1の役割）。
+   *
+   * **ここでは `postTickThenPacer`（pacer 同期）を使わない。過去に使っていて、
+   * それ自体がこの歯を測れなくしていたと判明したため外した。** 測りたいのは
+   * 「tick が**単独で**解除を1回起こすこと」である。`#releaseRequested` は
+   * 真偽値であってカウンタではない（`post()` が立てるのは印だけで、何回届いた
+   * かは覚えない）。pacer（人間の発言）は畳み込みの対象外なので、pacer 自身の
+   * `post()` も枠が閉じていれば必ず解除の印を立てる。つまり:
+   *
+   * - 正しい実装: tick が受信箱を通って解除の印を立てる → 解除1回
+   * - 畳み込みを `post()` 側へ戻す変異: tick は畳まれて受信箱へ一切積まれず
+   *   解除の印を立てない。**しかし直後の pacer が同じ印を立ててしまい**、
+   *   結局どちらも解除1回になる — **回数が一致してしまい、歯は落ちない**
+   *   （実測: この形の歯3はこの変異を生き延びた）。
+   *
+   * だから同期には、解除を起こしうる別の合図（pacer を含む）を一切混ぜない。
+   * 代わりに tick を1件ずつ post し、その都度 `releaseAttemptCount` が
+   * 1つずつ増えるのを直接待つ。
+   */
+  it('歯3: 発意 tick を畳んでも、枠が開いたかを試した回数は3回のまま減らない', async () => {
+    const { stores, putCallCountFor } = withInboxPutSpy(createMemoryStores());
+    const s = setup(undefined, stores, {
+      resultSubtype: 'error_during_execution',
+      resultText: spendLimitMessage,
+    });
+
+    const origin = humanMessage('起点');
+    s.clone.post(origin);
+    await waitForTerminal(s.events);
+    await waitFor(async () => {
+      const pending = await s.stores.inbox.claimPending();
+      return pending.some((p) => p.event.id === origin.id);
+    }, '起点が未読として保持される');
+
+    // 1件目の tick。この時点で `#deferred` に self_initiative は無いので
+    // 畳まれる相手が居ない。届いたこと自体が `#releaseRequested` を立て、
+    // `#pump` が次にこれを取り出した時点で解除を1回試す（保持していた起点を
+    // 配り直し、その再試行がまた枠に当たって保持し直す）。
+    s.clone.post({
+      type: 'self_initiative',
+      id: 'evt-si-1',
+      at: new Date().toISOString(),
+      reason: '1本目',
+    });
+    await waitForReleaseAttempts(s, 1, '1件目の tick');
+
+    // 2件目の tick。ここでは既に `#deferred` に1件目（self_initiative）が
+    // 保持されているので `#foldsIntoHeldTick` が真になり、この合図自体は
+    // `#settleInboxEvent` で畳まれて捨てられる（在庫が増えないことは歯1の
+    // 役割）。**畳み込みは受信箱から取り出した後で起きるので、届いた事実は
+    // 必ず一度受信箱を通り、`#releaseRequested` を立てる。だから畳まれても
+    // 解除の試行そのものは1回も減らない** — これがこの歯の本体である。
+    s.clone.post({
+      type: 'self_initiative',
+      id: 'evt-si-2',
+      at: new Date().toISOString(),
+      reason: '2本目',
+    });
+    // **この待ちが歯の本体である。**
+    //
+    // 退行する（畳み込みを `post()` 側へ戻す＝上の doc の M3）と、この2件目の
+    // tick は `post()` の時点で捨てられ、受信箱へ一切積まれない。積まれなければ
+    // `#releaseRequested` を立てる機会そのものが無く、解除は起きない ＝ この
+    // 待ちはタイムアウトで抜ける。
+    //
+    // **これは前回の壊れ方（postTickThenPacer を歯3にも使っていた版）とは別物
+    // である。** 前回は「畳んだ跡が日誌に出るのを待つ」形で同期していたため、
+    // **歯が測っているものとは無関係な理由で**、アサーションに到達する前に
+    // タイムアウトしていた（＝タイムアウトが測定の代わりになっていなかった）。
+    // **ここでのタイムアウトは、測っている当のものが起きなかったことそのもので
+    // ある** — 「tick が単独で解除を起こす」の否定は「何も起きない」であり、
+    // 何も起きないことは待つ以外に観測できない。**だからこのタイムアウトは
+    // 測定であって、事故ではない。** AGENTS.md「タイムアウトは歯があった証拠に
+    // ならない」は、**測っているものと無関係な待ちで落ちる形**を戒めたもので
+    // あり、これはそれではない。
+    await waitForReleaseAttempts(
+      s,
+      2,
+      '2件目の tick（畳まれても回数は減らない — この待ちが歯の本体）',
+    );
+
+    // 3件目の tick。同様に畳まれるが、解除の試行はまた1回増える。
+    s.clone.post({
+      type: 'self_initiative',
+      id: 'evt-si-3',
+      at: new Date().toISOString(),
+      reason: '3本目',
+    });
+    await waitForReleaseAttempts(s, 3, '3件目の tick（畳まれても回数は減らない）');
+
+    // (1) 実際にモデルへ渡った回数。起点＋3回の再試行＝4回。全件が「起点」の
+    // 本文を運んでいる（再試行は本文を変えない）。
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    expect(inputs.every((text) => text.includes('起点'))).toBe(true);
+    expect(inputs).toHaveLength(4);
+
+    // (2) 解除を試した回数そのもの。
+    expect(await releaseAttemptCount(s)).toBe(3);
+
+    // (3) 畳まれた分も含めて、tick はすべて一度は器へ書き出されている
+    // （`withInboxPutSpy` の doc）。**畳み込みが `#settleInboxEvent` に在る
+    // ＝ 合図が器へ書かれた後に畳む**ということなので、畳んだ側が `#forget`
+    // で消しに行く必要がある、という実装の形がここに出ている。
+    //
+    // **この観測点も、畳み込みを `post()` 側へ動かす変異を捕まえる。**
+    // `post()` の畳み込みは `#remember`（＝器への書き出し）より**前**に
+    // return するので、2件目・3件目は器へ1度も書かれず 0 になる。
+    // ただし実際にその変異を当てたときに落ちるのは (2) の待ちのほうで
+    // （`releaseAttemptCount` が 2 にならずタイムアウトする）、ここまで
+    // 到達しない。**「捕まえる観測点」と「実際に落ちる観測点」は別である。**
+    expect(putCallCountFor('evt-si-1')).toBe(1);
+    expect(putCallCountFor('evt-si-2')).toBe(1);
+    expect(putCallCountFor('evt-si-3')).toBe(1);
+
+    await s.clone.stop();
+    // **明示のタイムアウト。** 上の `waitForReleaseAttempts` の予算より必ず大きく
+    // すること — vitest の既定は 5 秒なので、付けないとこちらが先に当たり、
+    // あの断り書き（「退行か飽和かを区別できない」）が読まれないまま
+    // 汎用のタイムアウトに化ける。
+  }, 30_000);
 });
 
 /**
