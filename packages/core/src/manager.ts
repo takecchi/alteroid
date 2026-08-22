@@ -1,6 +1,15 @@
 import { randomUUID } from 'node:crypto';
 
 import { journalEntryShape, noteDroppedRecord } from './dropped-record.js';
+import {
+  LEASE_TTL_MS,
+  describeVerdict,
+  grantLease,
+  judgeLease,
+  mayClaim,
+  touchLease,
+  type LeaseSighting,
+} from './lease.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap, type RecentMap } from './recent.js';
 import { isRetryableRunnerError } from './runner-protocol.js';
@@ -125,6 +134,19 @@ export interface RunnerOverview {
   error?: string;
   runnerId?: string;
   workspacePath?: string;
+  /**
+   * **いまこの宛先に応えているプロセス**（`RunnerEntry.instanceId` の写し）。
+   *
+   * `runnerId` は器を作り直しても同じなので、名前だけでは「さっき仕事を渡した
+   * 相手と同じプロセスか」が言えない。クローンはこれを見て、**自分が起こした委譲が
+   * 載っていた器がまだ同じプロセスかを確かめられる**（入れ替わっていれば、そこで
+   * 走っていた委譲は失われている可能性がある）。
+   *
+   * **名乗らない runner では無い。** 無いことを「入れ替わっていない」と読まないこと。
+   */
+  instanceId?: string;
+  /** そのプロセスをデーモンが**初めて見た時刻**。引き取りの猶予はここから数える。 */
+  instanceSince?: string;
   /**
    * この器に紐づくマネージャー（`ManagerSummary.runnerId` が一致した分）。
    *
@@ -297,6 +319,20 @@ export interface ManagerPoolOptions {
    * 入れないと、更新の最中に古い本文を読んで新しい本文を上書きする。
    */
   profile?: ProfileService;
+  /**
+   * いまの時刻（既定は `Date.now`）。**貸し出し期限の判定のために口を開けてある。**
+   *
+   * 期限は時刻そのものが答えを決めるので、渡せない形だと「猶予の中では奪わない」を
+   * 確かめる試験が書けない（テストが書けない構造は、テストが無いのと同じである）。
+   */
+  now?: () => number;
+  /**
+   * 貸し出しの猶予（既定 `LEASE_TTL_MS`）。runner はこの長さで自己失効する。
+   *
+   * **能力の上限ではない**（north_star 禁止2 が禁じているのは仕事の回数・ターン数の
+   * 制限であって、二重実行を止めるための期限ではない）。
+   */
+  leaseTtlMs?: number;
 }
 
 export function createManagerPool(options: ManagerPoolOptions): ManagerPool {
@@ -350,6 +386,18 @@ interface ManagerRecord {
    *   `onForget` が日誌へ残す（黙って数え直さない）
    */
   denied?: RecentMap<number>;
+  /**
+   * **貸し出し期限を理由に引き取りを断った直近の1件**（M5 PR4）。
+   *
+   * 断ったことを呼び出し側へ返すためだけの覚えである。`#resume` の返り値は真偽値で、
+   * それだけだと「session_id が無い」と「まだ持ち主が握っている」が同じ `false` に
+   * なる — 前者は起こし直すしかないが、後者は**待てば通る**ので、報告を読む側の
+   * 次の一手が変わる（AGENTS.md「判定できないという3つ目の状態を持つ」）。
+   *
+   * プロセス内の像にしか置かない（台帳には書かない）。断った事実そのものは日誌と
+   * 受信箱に残るので、ここは次の一手を決めるための一時的な材料である。
+   */
+  leaseRefusal?: { detail: string; claimableAt?: number };
 }
 
 /** 1マネージャーぶんで覚えておく確認の件数。達したら**黙らずに日誌へ残す**。 */
@@ -372,6 +420,16 @@ class Pool implements ManagerPool {
   readonly #profile: ProfileService | undefined;
   readonly #records = new Map<string, ManagerRecord>();
   /**
+   * いまの時刻。**器の時計を直に読まない**（テストが判定の時刻を持てるようにする）。
+   *
+   * 貸し出し期限の判定は時刻そのものが答えを決めるので、時計を渡せない形にすると
+   * 「猶予の中では奪わない」を確かめる試験が書けない — テストが書けない構造は、
+   * テストが無いのと同じである。
+   */
+  readonly #now: () => number;
+  /** 貸し出しの猶予。runner へ渡し、runner はこの長さで自己失効する。 */
+  readonly #leaseTtlMs: number;
+  /**
    * 直近の枠の事実（種類ごと）。**アカウント単位なのでマネージャーに紐づけない。**
    *
    * 走行中は `rate_limit_event` がターンの頭ごとに来るので、ここが最新になる。
@@ -387,6 +445,13 @@ class Pool implements ManagerPool {
   readonly #usageNotices = new Map<string, string>();
   /** 起動時の引き取りが走っている間だけ立つ。`#reattach` はこれを待つ。 */
   #restoring: Promise<void> | null = null;
+  /**
+   * 引き取りを1本ずつに並べる列（`restore()` が重なったときの順番待ち）。
+   *
+   * **落とさずに待たせる。** 「走っているから今回は要らない」と捨てると、捨てた回に
+   * しか現れなかった委譲（直前に台帳へ書かれた分）が誰にも拾われない。
+   */
+  #restoreQueue: Promise<void> = Promise.resolve();
   /** 取り直しが走っている runner（同じ runner について重ねない）。 */
   readonly #reattaching = new Set<string>();
   /** 取り直し中に届いた名乗り。**捨てずに、終わってからもう一度回す。** */
@@ -420,11 +485,13 @@ class Pool implements ManagerPool {
   readonly #unsubscribe: () => void;
   #stopped = false;
 
-  constructor({ stores, post, runners, profile }: ManagerPoolOptions) {
+  constructor({ stores, post, runners, profile, now, leaseTtlMs }: ManagerPoolOptions) {
     this.#stores = stores;
     this.#post = post;
     this.#runners = runners;
     this.#profile = profile;
+    this.#now = now ?? (() => Date.now());
+    this.#leaseTtlMs = leaseTtlMs ?? LEASE_TTL_MS;
     // **後から載った runner に自分から繋ぐ。** 名簿が動的である以上、受け口を開く
     // 契機を起動時にしか持たないと、後から現れた runner は永久に無言のままになる。
     this.#unsubscribe = runners.subscribe((runner) => {
@@ -451,7 +518,28 @@ class Pool implements ManagerPool {
     await this.#connectTo(runner);
     const managerId = `mgr-${randomUUID().slice(0, 8)}`;
     const cwd = input.cwd ?? runner.workspacePath;
-    const at = new Date().toISOString();
+    const now = this.#now();
+    const at = new Date(now).toISOString();
+
+    /*
+     * **新しい委譲の貸し出しは、関門を通さずに立てる。**
+     *
+     * `#claimForResume` が守っているのは「他のプロセスが握っている仕事を奪わない」
+     * ことで、この `managerId` はいま作った乱数なので握っている者が存在しない。
+     * 台帳へ書けたことも条件にしない — 新規の委譲は台帳が書けなくても走らせる、
+     * という既存の判断（`#persist`）をここで覆さない（奪う操作ではないので、
+     * 書けないことで危うくなるものが無い）。
+     */
+    const lease = grantLease({
+      previous: undefined,
+      runnerId: runner.runnerId,
+      ...(() => {
+        const seen = this.#sighting(runner.runnerId);
+        return seen.instanceId === undefined ? {} : { instanceId: seen.instanceId };
+      })(),
+      now,
+      ttlMs: this.#leaseTtlMs,
+    });
 
     const record: ManagerRecord = {
       job: {
@@ -465,6 +553,7 @@ class Pool implements ManagerPool {
         cwd,
         runnerId: runner.runnerId,
         workspace: { kind: 'runner-volume', runnerId: runner.runnerId, path: cwd },
+        lease,
       },
       waiting: [],
       attached: true,
@@ -473,7 +562,12 @@ class Pool implements ManagerPool {
 
     // 委譲はノンブロッキング。起こして即返し、クローンは次の判断へ移る。
     try {
-      await runner.start({ managerId, request: input.request, cwd });
+      await runner.start({
+        managerId,
+        request: input.request,
+        cwd,
+        lease: { fence: lease.fence, ttlMs: lease.ttlMs },
+      });
     } catch (error) {
       // 起こせなかったものを一覧に残さない。残すと「走っている」と見えるのに、
       // 誰も読まない相手へクローンが指示を送り続けることになる。
@@ -573,6 +667,22 @@ class Pool implements ManagerPool {
       }
       const resumed = await this.#resumeOnce(record, runner, message);
       if (!resumed) {
+        /*
+         * **「戻れない」と「まだ戻さない」を同じ文で言わない。**
+         *
+         * 前者は起こし直すしかないが、後者（貸し出し期限が切れていない）は待てば
+         * 通る。同じ文言にすると、クローンは待てば済む委譲を新しく起こし直し、
+         * **同じ仕事が2本になる**（この関門が防ごうとしているものそのもの）。
+         */
+        const refusal = record.leaseRefusal;
+        if (refusal !== undefined) {
+          return {
+            outcome: 'unknown',
+            detail:
+              `${managerId} はまだ前の器が握っている（貸し出し期限）。**新しく起こし直さないこと** — ` +
+              `期限が切れれば自動で引き取る: ${refusal.detail}`,
+          };
+        }
         return {
           outcome: 'unknown',
           detail: `${managerId} は session_id を持っておらず、続きへ戻れない。新しく起こし直すこと。`,
@@ -668,6 +778,8 @@ class Pool implements ManagerPool {
           ...(entry.error === undefined ? {} : { error: entry.error }),
           ...(entry.runnerId === undefined ? {} : { runnerId: entry.runnerId }),
           ...(entry.workspacePath === undefined ? {} : { workspacePath: entry.workspacePath }),
+          ...(entry.instanceId === undefined ? {} : { instanceId: entry.instanceId }),
+          ...(entry.instanceSince === undefined ? {} : { instanceSince: entry.instanceSince }),
           managers: entry.runnerId === undefined ? [] : (byRunner.get(entry.runnerId) ?? []),
           ...(credentials === undefined ? {} : { credentials }),
           ...(profile === undefined ? {} : { profile }),
@@ -711,6 +823,26 @@ class Pool implements ManagerPool {
    * 仕事が止まらないという要件（PRD「自律」）に反する。
    */
   async restore(): Promise<ManagerSummary[]> {
+    /*
+     * **同時に2本走らせない（列に並べる）。**
+     *
+     * 呼ぶ契機が「runner が開けたとき」だけだった頃は重なりにくかったが、器の
+     * 入れ替えも契機になった（`onSwap`）ので、短い間に何度も呼ばれうる。`#restoring`
+     * は1本ぶんの旗しか持てないので、重ねると**後から来た方が旗を上書きし、
+     * `#reattach` が「引き取りは終わった」と読んで同時に走る** — 同じ仕事を二本
+     * 起こす経路がそこで開く。
+     *
+     * 待たせるだけで、落とさない（後から来た呼びも必ず1周する）。
+     */
+    const run = this.#restoreQueue.then(() => this.#restoreExclusive());
+    this.#restoreQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  async #restoreExclusive(): Promise<ManagerSummary[]> {
     // **走っていることを、await を挟む前に立てる。** 同一プロセスの runner は
     // `connect()` の中で同期的に名乗るので、ここで立てそこねると `#reattach` が
     // 引き取りと同時に走り、同じ仕事を二重に起こす。
@@ -820,7 +952,26 @@ class Pool implements ManagerPool {
 
       const nudge = restartNudge(job.status, 'daemon');
       const ok = await this.#resumeOnce(record, runner, nudge);
-      if (!ok) continue;
+      if (!ok) {
+        /*
+         * **貸し出し期限で断られたのは「まだ」である。** 引き取りの契機は「runner が
+         * 開けたとき」しか無いので、ここで黙って諦めると次の契機が永久に来ない
+         * （台帳では走っているのに誰も走っていない仕事が残る）。挑み直しの梯子へ
+         * 載せる — 梯子は間隔を伸ばすが**回数では諦めない**（`#scheduleReattach`）。
+         */
+        const refusal = record.leaseRefusal;
+        if (refusal !== undefined) {
+          // **判断として残す。** 「何もしなかった」は日誌から消えやすいが、
+          // 引き取らなかったことは判断であって欠落ではない（根拠も一緒に残す）。
+          await this.#journal({
+            type: 'decision',
+            decision: `[${job.id}] 引き取りを見送った（貸し出し期限。期限が切れたら自動で挑み直す）`,
+            grounds: refusal.detail,
+          });
+          this.#scheduleReattach(runner.runnerId);
+        }
+        continue;
+      }
       // **受理は「戻れた」ではない。** この `await` の間に「戻れなかった」が確定
       // していることがある（runner は別プロセスで、失敗は SSE で追いかけてくる）。
       // ここで無条件に上書きすると、書いたばかりの終端状態が `running` へ巻き戻る。
@@ -894,6 +1045,10 @@ class Pool implements ManagerPool {
       record.waiting = [];
       record.attached = false;
       record.job.status = 'stopped';
+      // **止まったと確かめた回だけ貸し出しを返す。** `not_stopped` / `unknown` では
+      // 台帳を1文字も書かないのと同じ理由で、ここでも返さない（確かめていない停止で
+      // 貸し出しを返すと、まだ走っているセッションを別の器が引き取れてしまう）。
+      delete record.job.lease;
       await this.#persist(record);
       // **停止は明示的な終端である。** 台帳には残るので `list()` / `manager_send` は
       // これまでどおり答えられる（`#retire` の JSDoc）。
@@ -1154,7 +1309,12 @@ class Pool implements ManagerPool {
         // 並んでいた仕事が誰にも拾われないまま `running` として残る。
         try {
           const message = restartNudge(status, 'runner');
-          if (!(await this.#resumeOnce(record, runner, message))) continue;
+          if (!(await this.#resumeOnce(record, runner, message))) {
+            // **貸し出し期限で断られたのは「まだ」である。** 予約して挑み直す
+            // （`retry` を立てれば、この関数の `finally` が梯子へ載せる）。
+            if (record.leaseRefusal !== undefined) retry = true;
+            continue;
+          }
           // 受理と「戻れた」を取り違えない（`restore` と同じ理由）。
           if (record.job.status === 'lost') continue;
           record.job.status = 'running';
@@ -1335,6 +1495,102 @@ class Pool implements ManagerPool {
     }
   }
 
+  /**
+   * 名簿から「**いまその宛先に応えているプロセス**」を引く（貸し出し判定の材料）。
+   *
+   * **同じ名前を名乗る器が2台開いているときは、名乗りを採らない。** `RunnerEntry` は
+   * label ごとなので同じ `runnerId` の行が2つ並びうる。そのとき「どちらの
+   * `instanceId` と突き合わせるか」を決める材料はここに無く、片方を選べば
+   * **話しかける相手（`Registry#get` の線形一致）と判定した相手が食い違いうる** —
+   * 食い違ったまま `same-holder` と答えるのが一番危ない（奪っていないつもりで奪う）。
+   * だから判定材料を返さず、判定は `undecidable` へ倒す（roadmap M5 PR4 の申し送り
+   * 「同じ `runner_id` を名乗る2台」は、ここでも解けていない）。
+   */
+  #sighting(runnerId: string): LeaseSighting {
+    const matches = this.#runners.entries().filter((entry) => entry.runnerId === runnerId);
+    const only = matches.length === 1 ? matches[0] : undefined;
+    if (only === undefined) return { runnerId };
+    const since = only.instanceSince === undefined ? NaN : Date.parse(only.instanceSince);
+    return {
+      runnerId,
+      ...(only.instanceId === undefined ? {} : { instanceId: only.instanceId }),
+      ...(Number.isNaN(since) ? {} : { instanceSince: since }),
+    };
+  }
+
+  /**
+   * 引き取り（と繋ぎ直し）の**唯一の関門**。貸し出しを見て、進んでよいかを決める。
+   *
+   * ## なぜ resume の中に置くか
+   *
+   * 引き取りの契機は3つある（起動時の `restore` / runner の `hello` による
+   * `#reattach` / クローンの `manager_send`）。関門を契機ごとに置くと、**足し忘れた
+   * 契機だけが素通しになる** — そしてどれが抜けているかは、二重実行が起きるまで
+   * 誰にも見えない。`#resume` は3つとも必ず通る唯一の場所である。
+   *
+   * ## 断ったら「まだ」と言う（「駄目」ではない）
+   *
+   * 断るのは「持ち主がまだ握っている」ときだけで、それは待てば通る。呼び出し側は
+   * 挑み直しの梯子（`#scheduleReattach`）へ載せる — **回数で諦めない**（諦めた先に
+   * 残るのは、台帳では走っているのに誰も走っていない仕事である）。
+   */
+  async #claimForResume(record: ManagerRecord, runner: RunnerClient): Promise<boolean> {
+    const now = this.#now();
+    const verdict = judgeLease({
+      lease: record.job.lease,
+      now,
+      answering: this.#sighting(runner.runnerId),
+    });
+
+    if (!mayClaim(verdict)) {
+      record.leaseRefusal = {
+        detail: describeVerdict(verdict),
+        ...(verdict.kind === 'held' ? { claimableAt: verdict.claimableAt } : {}),
+      };
+      return false;
+    }
+    delete record.leaseRefusal;
+
+    // 持ち主が自分（同じプロセス）なら、奪う話ではない。**世代を進めない** —
+    // 進めると台帳の世代が runner の持つ世代より新しくなり、次の命令が拒まれる。
+    if (verdict.kind === 'same-holder') {
+      record.job.lease = touchLease(verdict.lease, now);
+      return true;
+    }
+
+    const sighting = this.#sighting(runner.runnerId);
+    const next = grantLease({
+      previous: record.job.lease,
+      runnerId: runner.runnerId,
+      ...(sighting.instanceId === undefined ? {} : { instanceId: sighting.instanceId }),
+      now,
+      ttlMs: this.#leaseTtlMs,
+    });
+
+    /*
+     * **書けたことを条件にする**（ここだけ `#persist` の best-effort に乗せない）。
+     *
+     * 貸し出しが台帳に載っていないと、次の引き取りは「貸し出しの記録が無い」＝
+     * 誰も握っていないと読む。つまり**書けないまま走らせると、次の契機が同じ委譲を
+     * 無条件で奪える状態**を作る。台帳が書けないことは委譲を止める理由にならない
+     * （それが `#persist` の判断である）が、**奪う操作だけは書けたことを条件に
+     * する**——`clone.ts` の「それでも書けなければ動かない」と同じ側に倒す。
+     */
+    const before = record.job.lease;
+    record.job.lease = next;
+    try {
+      record.job.updatedAt = new Date(now).toISOString();
+      await this.#stores.jobs.putJob(record.job);
+    } catch (error) {
+      record.job.lease = before;
+      record.leaseRefusal = {
+        detail: `貸し出しを台帳へ書けなかったので引き取らない（書けないまま走らせると、次の契機が同じ委譲を無条件で奪える）: ${String(error)}`,
+      };
+      return false;
+    }
+    return true;
+  }
+
   async #resume(
     record: ManagerRecord,
     runner: RunnerClient,
@@ -1342,6 +1598,10 @@ class Pool implements ManagerPool {
   ): Promise<boolean> {
     const { sessionId, cwd, request, projectKey } = record.job;
     if (sessionId === undefined) return false;
+
+    // **貸し出しの関門はここ1つ。** 通らなければ resume そのものを出さない
+    // （生きている器で走っている仕事を奪いに行かない）。
+    if (!(await this.#claimForResume(record, runner))) return false;
 
     // 生ログを渡して materialize させる。runner のディスクに残っている前提を
     // 置かない（器は作り直される）。
@@ -1354,6 +1614,11 @@ class Pool implements ManagerPool {
       request: request ?? record.job.summary,
       ...(message === undefined ? {} : { message }),
       ...(entries === null ? {} : { entries }),
+      // **世代と猶予を渡す。** これで runner は古い世代の命令を拒み、連絡が
+      // 取れなくなったら自分でこのセッションを畳める（`lease.ts` の doc）。
+      ...(record.job.lease === undefined
+        ? {}
+        : { lease: { fence: record.job.lease.fence, ttlMs: record.job.lease.ttlMs } }),
     });
     record.attached = true;
     record.job.runnerId = runner.runnerId;
@@ -1864,6 +2129,14 @@ class Pool implements ManagerPool {
         record.job.status = event.status;
         record.waiting = [];
         record.attached = false;
+        /*
+         * **貸し出しを返す。** `closed` は runner 側の `RunnerSession#finish()` を
+         * 通った印なので、この委譲がもう走っていないことを**持ち主自身が言っている**
+         * — 期限を待つ理由がここには無い（期限は「言ってもらえなかったとき」のための
+         * ものである）。返さないと、器が行儀よく畳まれた後の引き取りが猶予のぶんだけ
+         * 遅れる（能力を落とさずに済む場所で落とさない）。
+         */
+        delete record.job.lease;
         await this.#persist(record);
         if (event.status === 'failed') this.#emit(event.managerId, 'report', event.reason);
         // **`closed` は runner 側の `RunnerSession#finish()` を通った印**であり、
@@ -2016,7 +2289,25 @@ class Pool implements ManagerPool {
   }
 
   async #persist(record: ManagerRecord): Promise<void> {
-    record.job.updatedAt = new Date().toISOString();
+    record.job.updatedAt = new Date(this.#now()).toISOString();
+    /*
+     * **生存を確かめた時刻を、書くついでに進める（世代は進めない）。**
+     *
+     * 別のタイマーを立てないのは、立てれば「委譲1本につき1本のタイマー」が増える
+     * うえに、進める条件（同じプロセスがまだ応えているか）を2箇所で判定することに
+     * なるからである。台帳へ書く契機は委譲が動くたびに来るので、動いている委譲の
+     * 期限はここで十分に前へ進む。
+     *
+     * **応えているプロセスが違うなら進めない。** 進めると、入れ替わった器の貸し出しが
+     * 生き続け、引き取れる時刻が永久に来ない。
+     */
+    const lease = record.job.lease;
+    if (lease !== undefined) {
+      const seen = this.#sighting(lease.runnerId);
+      if (seen.instanceId !== undefined && seen.instanceId === lease.instanceId) {
+        record.job.lease = touchLease(lease, this.#now());
+      }
+    }
     try {
       await this.#stores.jobs.putJob(record.job);
     } catch (error) {

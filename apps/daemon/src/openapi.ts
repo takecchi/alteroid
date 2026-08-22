@@ -467,6 +467,23 @@ const runnerSummarySchema = z.object({
   /** 繋がるまで分からないので、開けていない間は返らない。 */
   runnerId: z.string().optional(),
   workspacePath: z.string().optional(),
+  /**
+   * **いまこの宛先に応えているプロセス**（runner が起動ごとに作る識別子）。
+   *
+   * `runnerId` は宛先の名前で、器を作り直しても同じである。だから名前だけでは
+   * 「いまその名前に応えているのが、さっき仕事を渡した相手と同じか」が言えない。
+   *
+   * **入れ替わった瞬間の知らせ（`onSwap`）とは別の口である。** あちらは遷移で、
+   * ここは状態である。知らせを見落とした後・デーモン自身が再起動した後に
+   * 「いまどのプロセスが応えているのか」を確かめる口が他に無いと、引き取りの判定
+   * （`packages/core/src/lease.ts`）が正しいかを誰も検算できない。
+   *
+   * **名乗らない runner では返らない**（`identity()` を持たない実装・古い器）。
+   * 無いことを「入れ替わっていない」と読まないこと。
+   */
+  instanceId: z.string().optional(),
+  /** そのプロセスを**デーモンが初めて見た時刻**。引き取りの猶予はここから数える。 */
+  instanceSince: z.string().optional(),
   /** 配られている鍵の指紋。**値は返らない。** */
   credentials: z.array(runnerCredentialFingerprintSchema),
   /** 置かれている実行環境プロファイルの指紋。**本文は返らない。** */
