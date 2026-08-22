@@ -1114,6 +1114,13 @@ class Clone implements CloneHost {
 
       // 処理待ちのあいだに積み上がった**続きの発言**を、ここで一緒に取り出す
       // （`#mergedHumanBatch`）。`null` なら今までどおりこの1件だけを読む。
+      //
+      // **ここで言う「積み上がった続きの発言」は、かつては到着順で連続して
+      // いたものだけを指していた。** いまは人間優先（`CLONE_HUMAN_PRIORITY_ENV_KEY`）
+      // により、人間が待っている発言は待ち行列の人間の最後尾へ入り直すので、
+      // 到着順では間に人間以外が挟まっていた発言どうしが、並べ替えられた結果
+      // として連続することもある（`#mergedHumanBatch` 本体の doc「並びは到着順
+      // とは限らない」）。書かないと、この一文が黙って偽になる。
       const merged = this.#mergedHumanBatch(event);
       const batch: InboxEvent[] = merged ?? [event];
 

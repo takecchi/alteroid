@@ -4531,9 +4531,48 @@ describe('クローン — 枠（利用上限）が閉じたら保持して次�
  * 偶然一致して歯が落ちない（実測でこの変異は歯3を生き残らせた）。歯3では
  * 代わりに `releaseAttemptCount`（日誌の「枠の解除を試す」行数）だけを見て
  * 同期する — 詳しい理由は歯3のテスト本体のコメントを見よ。
+ *
+ * **⚠️ この3本は `humanPriority: false`（人間優先を切った状態）に固定してある。**
+ * `postTickThenPacer`（pacer 同期）も歯3の `releaseAttemptCount` 直接待ちも、
+ * 「tick を post した直後に別の合図を post すれば、待ち行列上でも tick が先・
+ * 後続が後という順序のまま処理される」という FIFO の歩調取りを前提にしている。
+ * 人間優先（既定で有効。`CLONE_HUMAN_PRIORITY_ENV_KEY`）が入ると、pacer 自身が
+ * 人間の発言なので待ち行列の人間の最後尾へ割り込みうる — 前提が崩れる（実測:
+ * `humanPriority` を既定のまま歯1を走らせると `selfInitiatives` が1件のはずが
+ * 2件になって落ちる）。**これらが測っているのは「FIFO の下での畳み込み」であって、
+ * 「人間優先が有効なままでの畳み込み」ではない。人間優先が有効なままでの畳み込みは
+ * 別の歯（`人間優先が有効なままでも、保持中の tick は畳まれて在庫が増えない`）が
+ * 測る。**
  */
 describe('クローン — 枠で保持している間、中身を持たない合図で在庫を作らない', () => {
   const spendLimitMessage = "You've hit your individual spend limit for this account.";
+
+  /**
+   * `humanPriority: false` に固定したセットアップ。**このブロックの3本
+   * （歯1・2・3）専用。** 上のブロック doc の「⚠️」の理由により、FIFO の
+   * 歩調取り（`postTickThenPacer` / `releaseAttemptCount` 直接待ち）はこの前提
+   * が崩れると測れなくなる。`setup()`（ファイル冒頭）は `env` を渡す口しか
+   * 持たないので、ここでは `setupWithHumanPriority`（ファイル末尾）と同じ形で
+   * `createClone` を直接呼び、`CloneOptions.humanPriority` を直渡しする。
+   */
+  function setupFixedFifo(
+    reply?: (input: string) => string,
+    stores: Stores = createMemoryStores(),
+    sdkOptions: Parameters<typeof fakeSdk>[1] = {},
+  ): Setup {
+    const { fn, calls } = fakeSdk(reply, sdkOptions);
+    const clone = createClone({
+      stores,
+      queryFn: fn,
+      env: {},
+      humanPriority: false,
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    const { events, waitForEvents } = wireEvents(clone, 'conv-1');
+    return { clone, stores, calls, events, waitForEvents };
+  }
 
   /** 「畳んだ」旨の日誌の行数。 */
   async function foldedNoteCount(s: Setup): Promise<number> {
@@ -4542,7 +4581,9 @@ describe('クローン — 枠で保持している間、中身を持たない�
   }
 
   /**
-   * 解除の試行が `expected` 回に達するまで待つ。**歯3 専用。**
+   * 解除の試行が `expected` 回に達するまで待つ。**当初は歯3専用だったが、
+   * 「人間優先が有効なままでも、保持中の tick は畳まれて在庫が増えない」
+   * （後述）も同じ待ちを使う。**
    *
    * ## この待ちが言えないこと（計器の側に貼る）
    *
@@ -4572,6 +4613,33 @@ describe('クローン — 枠で保持している間、中身を持たない�
           `${what}: 解除の試行が ${expected} 回になるのを ${RELEASE_WAIT_BUDGET_MS}ms 待ったが ${seen} 回のままだった。` +
             'この歯は「起きなかった（退行）」と「器が遅すぎた（飽和）」を区別できない。' +
             '他の歯（歯1・歯2）が緑でここだけ落ちているなら退行を、全体が遅いなら器の飽和を先に疑うこと。',
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+
+  /**
+   * 解除の試行が `baseline` より増えるまで待つ。**目標を固定値にできない歯用**
+   * （「人間優先が有効なままでも、保持中の tick は畳まれて在庫が増えない」）。
+   * 人間の発言も枠の解除を誘発しうる（`post()` の `#releaseRequested` は起点の
+   * 種類を問わない）ので、そのぶんの回数を歯の側で先読みできない。**予算・
+   * 断り書きの理由は `waitForReleaseAttempts` と同じなのでそちらを見よ。**
+   */
+  async function waitForReleaseAttemptsAbove(
+    s: Setup,
+    baseline: number,
+    what: string,
+  ): Promise<void> {
+    const started = Date.now();
+    for (;;) {
+      const seen = await releaseAttemptCount(s);
+      if (seen > baseline) return;
+      if (Date.now() - started > RELEASE_WAIT_BUDGET_MS) {
+        throw new Error(
+          `${what}: 解除の試行が ${baseline} 回より増えるのを ${RELEASE_WAIT_BUDGET_MS}ms 待ったが ${seen} 回のままだった。` +
+            'この歯は「起きなかった（退行）」と「器が遅すぎた（飽和）」を区別できない。' +
+            '他の歯が緑でここだけ落ちているなら退行を、全体が遅いなら器の飽和を先に疑うこと。',
         );
       }
       await new Promise((resolve) => setTimeout(resolve, 5));
@@ -4664,7 +4732,7 @@ describe('クローン — 枠で保持している間、中身を持たない�
   // ションは1つも削らない — 「なぜ全部の変異で落ちるのか」を次に読む者が
   // 疑わずに済むように、ここへ明記しておく。
   it('歯1: 発意 tick を続けて送っても、保持する在庫は1件のまま増えない', async () => {
-    const s = setup(undefined, createMemoryStores(), {
+    const s = setupFixedFifo(undefined, createMemoryStores(), {
       resultSubtype: 'error_during_execution',
       resultText: spendLimitMessage,
     });
@@ -4735,7 +4803,7 @@ describe('クローン — 枠で保持している間、中身を持たない�
     // ための可変フラグ。再試行が何回起きるかを数えずに済ませるための口
     // （`resultFor` は毎ターン呼ばれるので、フラグを見るだけで済む）。
     let releaseGateOpen = false;
-    const s = setup(undefined, createMemoryStores(), {
+    const s = setupFixedFifo(undefined, createMemoryStores(), {
       resultFor: () =>
         releaseGateOpen
           ? undefined
@@ -4889,7 +4957,7 @@ describe('クローン — 枠で保持している間、中身を持たない�
    */
   it('歯3: 発意 tick を畳んでも、枠が開いたかを試した回数は3回のまま減らない', async () => {
     const { stores, putCallCountFor } = withInboxPutSpy(createMemoryStores());
-    const s = setup(undefined, stores, {
+    const s = setupFixedFifo(undefined, stores, {
       resultSubtype: 'error_during_execution',
       resultText: spendLimitMessage,
     });
@@ -4987,6 +5055,122 @@ describe('クローン — 枠で保持している間、中身を持たない�
     // すること — vitest の既定は 5 秒なので、付けないとこちらが先に当たり、
     // あの断り書き（「退行か飽和かを区別できない」）が読まれないまま
     // 汎用のタイムアウトに化ける。
+  }, 30_000);
+
+  /**
+   * ## この歯が守っているもの
+   *
+   * 上の3本（歯1・2・3）は `humanPriority: false` に固定してある（このブロック
+   * doc の「⚠️」）。**それだけだと、実際に出荷される設定（`humanPriority: true`
+   * が既定）について畳み込みを測る歯が1本も無くなる** — そこが壊れても緑の
+   * ままになる。ここではその穴を埋める。
+   *
+   * 足場に `postTickThenPacer` は使えない。人間優先の下では pacer（人間の
+   * 発言）が待ち行列上で tick を追い越しうるので、「pacer の終端＝直前の tick
+   * の後始末が完了している」という FIFO 前提が成り立たない。代わりに歯3と
+   * 同じ形 — `releaseAttemptCount`（日誌の「枠の解除を試す」行数）を直接
+   * 待つ — を使う。
+   *
+   * **単に `humanPriority: true` を渡すだけの歯にしないため、1件目の tick を
+   * 保持させた後、実際に「もう1件人間の発言を挟む」場面を通す。** この post は
+   * `Clone#post` の `this.#humanPriority && isHumanOriginated(event) ? …` の
+   * 分岐を毎回、真の側（`isHumanOriginated` を `Inbox#push` へ渡す側）で通る
+   * — `humanPriority: false` にすればここは必ず `undefined` になる。**その
+   * 人間の発言そのものが「新しい合図」として枠の解除をもう1回誘発しうる**
+   * （`post()` の `#releaseRequested` は起点の種類を問わない）ので、2件目の
+   * tick を送った後の `releaseAttemptCount` を固定値ではなく「人間の発言を
+   * 挟んだ時点の値より増えていること」で待つ（固定値にすると、人間の発言が
+   * 誘発する解除の回数が変わっただけで歯が壊れたことになり、測りたいもの —
+   * 畳み込みそのもの — とは無関係な理由で落ちる）。
+   *
+   * **⚠️ この歯が示さないこと。** ここで人間の発言を挟む時点では `#pump` は
+   * 必ず待ち手（`Inbox` の `#waiters`）が居る状態まで進んでいる（`releaseAttemptCount`
+   * を直接待つ設計そのものが、待ち行列が捌け切るまで待つ形だからである）。
+   * `Inbox#push` は待ち手が居ればそのまま渡す（＝クローンが暇なとき、割り込む
+   * 相手が待ち行列に居ない）ので、**この歯だけでは `insertAfterLast` による
+   * 待ち行列上の並べ替えそのもの（人間以外を実際に飛び越す分岐）は踏まない。**
+   * 実測: この `it` は `humanPriority: true` を `false` に変えても、他の
+   * assert を1つも変えずに緑のまま通る（畳み込みの成否は「`#deferred` に
+   * 同種の tick が既に居るか」だけで決まり、その周りに何が・どの順で
+   * 積まれたかには依らないため）。**並べ替えそのもの（人間が人間以外を
+   * 飛び越す・人間以外どうしは飛び越さない）は上の
+   * `describe('クローン — 人間が待っている合図を待ち行列の先頭側へ入れる', ...)`
+   * が別に測っている。ここが測るのは「その並べ替え機構を有効にしたままでも、
+   * tick の畳み込みは壊れない」という、両者の非干渉である。**
+   *
+   * 見るのは歯1と同じ2点 — (1) 未読の `self_initiative` が1件だけ（畳んでも
+   * 在庫が増えない）、(2) 畳んだ跡の日誌が1件（畳み込みが実際に起きた証拠）。
+   */
+  it('人間優先が有効なままでも、保持中の tick は畳まれて在庫が増えない', async () => {
+    const s = setup(
+      undefined,
+      createMemoryStores(),
+      { resultSubtype: 'error_during_execution', resultText: spendLimitMessage },
+      // 人間優先は既定で有効（`resolveCloneHumanPriority({}) === true`）。
+      // ここでは明示的に渡し、この歯が `humanPriority: true` の下で測っている
+      // ことを自明にする。
+      { ALTEROID_CLONE_HUMAN_PRIORITY: 'true' },
+    );
+
+    const origin = humanMessage('起点');
+    s.clone.post(origin);
+    await waitForTerminal(s.events);
+    await waitFor(async () => {
+      const pending = await s.stores.inbox.claimPending();
+      return pending.some((p) => p.event.id === origin.id);
+    }, '起点が未読として保持される');
+
+    // 1件目の tick。まだ `#deferred` に self_initiative は無いので畳めない。
+    // 届いたこと自体が枠の解除を1回誘発する（歯3と同じ理由）。
+    s.clone.post({
+      type: 'self_initiative',
+      id: 'evt-si-1',
+      at: new Date().toISOString(),
+      reason: '1本目',
+    });
+    await waitForReleaseAttempts(s, 1, '1件目の tick');
+    const attemptsAfterTick1 = await releaseAttemptCount(s);
+
+    // 枠で保持している最中に、もう1件人間が発言する（`humanPriority: true` の
+    // 分岐を実際に通す一手。上の doc の「⚠️」に、ここが示すこと・示さない
+    // ことの線引きがある）。人間優先下でも枠のロジック（保持・未読）は
+    // 変わらないことをここで確かめる。
+    const second = humanMessage('もう一件');
+    s.clone.post(second);
+    await waitFor(async () => {
+      const pending = await s.stores.inbox.claimPending();
+      return pending.some((p) => p.event.id === second.id);
+    }, '2件目の人間の発言が未読として保持される');
+
+    // 2件目の tick。既に `#deferred` に1件目（self_initiative）が保持されて
+    // いるので畳まれる（はず）。解除の試行そのものは1回も減らない —
+    // **ただし目標値は固定しない。** 直前の人間の発言（`second`）自体も
+    // 枠の解除をもう1回誘発しうる（上の doc）ので、「2件目の tick を送る前の
+    // 値より増えている」ことだけを待つ。
+    s.clone.post({
+      type: 'self_initiative',
+      id: 'evt-si-2',
+      at: new Date().toISOString(),
+      reason: '2本目',
+    });
+    await waitForReleaseAttemptsAbove(
+      s,
+      attemptsAfterTick1,
+      '2件目の tick が枠の解除をもう一度誘発する（人間優先が有効でも回数は減らない）',
+    );
+
+    const pending = await s.stores.inbox.claimPending();
+    const selfInitiatives = pending.filter((p) => p.event.type === 'self_initiative');
+    // 未読の self_initiative は1件だけ（人間優先が有効でも在庫は増えない）。
+    expect(selfInitiatives).toHaveLength(1);
+    expect(selfInitiatives[0]?.event.id).toBe('evt-si-1');
+    // 畳んだ跡が日誌に1件だけ残る（2本目のぶん）。
+    expect(await foldedNoteCount(s)).toBe(1);
+    // 人間の発言（起点・2件目）は畳み込みの対象外なので、両方とも未読のまま。
+    expect(pending.some((p) => p.event.id === origin.id)).toBe(true);
+    expect(pending.some((p) => p.event.id === second.id)).toBe(true);
+
+    await s.clone.stop();
   }, 30_000);
 });
 
@@ -5575,7 +5759,17 @@ describe('クローン — 処理待ちのあいだに積み上がった発言',
     await s.clone.stop();
   }, 15_000);
 
-  it('間に別の起点が挟まったら飛び越えない（受信箱の順序を並べ替えない）', async () => {
+  // **この歯はかつて「間に別の起点が挟まったら飛び越えない（受信箱の順序を
+  // 並べ替えない）」という名前で、飛び越えないことを保証していた。** 人間から
+  // 「優先度を人間 > マネージャーにできますか？ 割り込んでもいいので人間への
+  // 回答を優先するようにしてほしい」（2026-08-22 JST、逐語）という要望を受け、
+  // `CLONE_HUMAN_PRIORITY_ENV_KEY`（既定で有効）により**人間の発言だけ**が
+  // 待ち行列上で人間以外を飛び越すようになった。飛び越すのは人間どうしの中で
+  // 最後尾へ、であって人間以外は互いに追い越さない — この歯はいま真になった
+  // その形（人間以外どうしの非喪失・順序保存）を測る。人間が飛び越す場面は
+  // 上の `describe('クローン — 人間が待っている合図を待ち行列の先頭側へ入れる', ...)`
+  // が別に測っている。
+  it('人間以外どうしは、間に別の起点が挟まっても飛び越えない', async () => {
     const s = setup(() => 'わかった', createMemoryStores(), { delayMs: 150 });
 
     s.clone.post(humanMessage('先客'));
@@ -5594,12 +5788,23 @@ describe('クローン — 処理待ちのあいだに積み上がった発言',
     await settle();
 
     const inputs = s.calls[0]?.inputs ?? [];
-    expect(inputs).toHaveLength(4);
+    // **実測で決めた期待値（2026-08-22 観測）。** 「挟まった後」は待ち行列上、
+    // 到着順ではなく人間の最後尾（＝「挟まる前」の直後）へ入り直すので、external
+    // を飛び越えて「挟まる前」に連続する。連続した人間の発言2件は
+    // `#mergedHumanBatch` により1ターンにまとめられる（まとめられること自体は
+    // 依頼者が受け入れ済み）。だから本数は「先客」＋「人間2件の合流ターン」＋
+    // 「external」の3本になる（4本ではない）。
+    expect(inputs).toHaveLength(3);
+    // 人間2件が1ターンにまとまる。
     expect(inputs[1]).toContain('挟まる前');
-    expect(inputs[1]).not.toContain('挟まった後');
+    expect(inputs[1]).toContain('挟まった後');
+    // まとめても本文中の順序は到着順のまま（言い直しを先に読ませない）。
+    const merged = inputs[1] ?? '';
+    expect(merged.indexOf('挟まる前')).toBeLessThan(merged.indexOf('挟まった後'));
     // 外部イベントが人間の発言に追い越されない
+    // だった。いまは人間が飛び越す（人間の決定。逐語は `CLONE_HUMAN_PRIORITY_ENV_KEY`）。
+    // その結果、external は人間2件がまとまった後（3本目）に置かれる。
     expect(inputs[2]).toContain('先に届いた外部イベント');
-    expect(inputs[3]).toContain('挟まった後');
 
     await s.clone.stop();
   }, 15_000);
