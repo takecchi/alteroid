@@ -293,7 +293,12 @@ describe('judgeLease > 併存（同じ runnerId を名乗る器が2台以上）'
       now: T0 + 1_000,
       answering: { runnerId: 'runner-primary', duplicates: 2 },
     });
-    expect(verdict).toEqual({ kind: 'ambiguous', lease, duplicates: 2 });
+    expect(verdict).toEqual({
+      kind: 'ambiguous',
+      lease,
+      runnerId: 'runner-primary',
+      duplicates: 2,
+    });
     expect(mayClaim(verdict)).toBe(false);
     // **時間では解けない。** `held` と違って claimableAt を持たない。
     expect(verdict).not.toHaveProperty('claimableAt');
@@ -330,6 +335,37 @@ describe('judgeLease > 併存（同じ runnerId を名乗る器が2台以上）'
     expect(verdict.kind).toBe('ambiguous');
     expect(verdict.kind).not.toBe('expired');
     expect(mayClaim(verdict)).toBe(false);
+  });
+
+  /**
+   * **`describeVerdict` は `answering` 側の名前を報告する。`lease.runnerId` では
+   * ない。**
+   *
+   * この判定（`ambiguous`）は `judgeLease` の中で
+   * `lease.runnerId !== answering.runnerId` の枝より**前**に置いてある。だから
+   * 台帳の貸し出しが別の宛先（`runner-2`）を指していて、いま実際に併存している
+   * のは別の宛先（`runner-primary`）、という状態が作れる。この状態で
+   * `verdict.lease.runnerId` を報告すると、**重複していない `runner-2` を名指し**
+   * してしまい、読んだ人間は `runner-2` の設定を見に行って何も見つけられない
+   * （重複しているのは `runner-primary` の側である）。
+   */
+  it('台帳と応答の宛先が食い違っていても、報告するのは実際に併存している側の名前である', () => {
+    const lease = leaseAt({ runnerId: 'runner-2' });
+    const verdict = judgeLease({
+      lease,
+      now: T0 + 1_000,
+      answering: { runnerId: 'runner-primary', duplicates: 2 },
+    });
+    expect(verdict).toEqual({
+      kind: 'ambiguous',
+      lease,
+      runnerId: 'runner-primary',
+      duplicates: 2,
+    });
+    const description = describeVerdict(verdict);
+    expect(description).toContain('runner-primary');
+    // **台帳側（重複していない方）を名指ししないこと。**
+    expect(description).not.toContain('runner-2');
   });
 
   it('unheld は併存でも従来どおり通る（残る穴。#200「6. 塞げない部分」）', () => {

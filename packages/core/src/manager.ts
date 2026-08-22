@@ -2901,12 +2901,6 @@ function shouldEscalateDenial(count: number): boolean {
 }
 
 /**
- * 何が作り直されたか。**マネージャーから見える景色が違う。**
- *
- * デーモンだけなら作業ディレクトリはそのまま残っている。runner ごとなら、
- * 器に永続化が無ければコミット前の変更は消えている。
- */
-/**
  * 貸し出し期限で引き取りを見送ったことを日誌へ残す1行。
  *
  * **`#restoreJobs`（起動時の引き取り）と `#reattach`（runner 入れ替え後の取り
@@ -2928,6 +2922,12 @@ function leaseRefusalDecision(jobId: string, claimableAt: number | undefined): s
   return `[${jobId}] 引き取りを見送った（貸し出しの関門。${resolution}）`;
 }
 
+/**
+ * 何が作り直されたか。**マネージャーから見える景色が違う。**
+ *
+ * デーモンだけなら作業ディレクトリはそのまま残っている。runner ごとなら、
+ * 器に永続化が無ければコミット前の変更は消えている。
+ */
 /**
  * resume が `'resumed'` にならなかったときに `manager_send` が返す1行。
  *
