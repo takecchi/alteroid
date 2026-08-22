@@ -151,7 +151,8 @@ describe('広い画面（1280px）', () => {
  */
 describe('サイドバーの記憶ストレージ説明', () => {
   it('truncate で切られていても title で全文が引ける', async () => {
-    const longStorage = 'PostgreSQL（a-very-long-masked-connection-target-that-will-not-fit-in-w-52）';
+    const longStorage =
+      'PostgreSQL（a-very-long-masked-connection-target-that-will-not-fit-in-w-52）';
     setViewportWidth(DEFAULT_VIEWPORT_WIDTH);
     stubAuthedShell();
     // `stubAuthedShell` の既定の `HEALTH` は短い値なので、この試験だけ差し替える。
