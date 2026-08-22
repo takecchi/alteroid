@@ -2,7 +2,14 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import type {
+  query as sdkQuery,
+  CanUseTool,
+  Options,
+  PermissionResult,
+  Query,
+  SDKMessage,
+} from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -19,6 +26,7 @@ import {
 } from './clone.js';
 import type { HumanMessage } from './clone.js';
 import type { CloneHost } from './host.js';
+import type { ManagerPool } from './manager.js';
 import { renderMemoryDocuments } from './memory.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -829,6 +837,368 @@ describe('クローン', () => {
     expect(exchanges.some((entry) => entry.with === 'manager')).toBe(true);
 
     await s.clone.stop();
+  });
+});
+
+/**
+ * マネージャーからの質問・許可確認が、答え直す必要の無いものとして再提示される
+ * バグ（クローンが解決済みの確認へ二重に答え、`manager_send` が「その確認は
+ * 待っていない」と弾く）の直し。
+ *
+ * 実測（2026-08-22）: 解決済みの確認が「まだ止まっている」としてクローンへ再提示
+ * され、クローンが騙されて同じ requestId へ二重に回答した。原因は `managerPrompt()`
+ * が `InboxEvent` だけを見る純関数で、その確認がいまも `ManagerPool` の `waiting`
+ * に載っているかを1度も確かめていなかったこと。
+ *
+ * ここで固定するのは3つ:
+ * 1. いま実際に待っている確認は、従来の文言（「返事をするまで…止まっている」）で
+ *    届く（生きている確認）
+ * 2. `waiting` から消えた確認は、その文言では届かない（＝答え直せと言わない）
+ * 3. `managers.list()` が投げても、ターンは落ちず、従来の文言のままで届く
+ *    （確かめられなかった側は安全側＝雑音へ倒す。喪失させない）
+ *
+ * ⚠️ **この直しは「解決済みなら必ず正しい文言が出る」ことまでは保証しない。**
+ * `manager.ts` の `send()`（`manager_send` の実体）は `runner.answer()` が成功
+ * しても `record.waiting` を同期では書き換えない。`waiting` からその requestId が
+ * 消えるのは、あとから非同期で届く別種の `RunnerEvent`（`'settled'`。
+ * `manager.ts` の `#onEvent` 内）のハンドラだけである。**答えた直後・
+ * `'settled'` が処理を終える前の窓で合図が配られると、`waiting` にはまだ
+ * 載っているので、この直しを入れても従来どおり「まだ止まっている」の文言が出る。**
+ * 安全側（雑音）へ倒れているので方針には反しないが、「もう完全に守られている」
+ * とは読まないこと。ここを完全に閉じるには回答の受理そのものを冪等にする必要が
+ * あり、この直しの範囲外である。
+ */
+describe('クローン — マネージャーの確認がいまも待たれているかを確かめてから文言を出す', () => {
+  /**
+   * `escalation.test.ts` の `fakeManagerSdk()` と同じ形。委譲先（マネージャー）の
+   * SDK を模し、`canUseTool` 経由で許可確認を1件降ろせるようにする。
+   *
+   * ここで模すのはモデルの手（どの道具をどう呼ぶか）だけで、道具の実体・
+   * ジョブ台帳・受信箱・マネージャー側の待ち（`ManagerPool`）はすべて本物を通す
+   * ——だから `waiting` へ実際に積まれ、実際に消える。
+   */
+  function fakeManagerSdk() {
+    const sessions: {
+      options: Options;
+      ask: (tool: string, id: string) => Promise<PermissionResult>;
+    }[] = [];
+
+    const fn = ((params: { prompt: unknown; options?: Options }) => {
+      const options = params.options ?? {};
+
+      sessions.push({
+        options,
+        ask(tool, id) {
+          const canUseTool = options.canUseTool as CanUseTool;
+          return canUseTool(tool, { command: `${tool}:${id}` }, {
+            signal: new AbortController().signal,
+            requestId: id,
+            toolUseID: id,
+          } as never) as Promise<PermissionResult>;
+        },
+      });
+
+      let finish: (() => void) | null = null;
+
+      async function* generate(): AsyncGenerator<SDKMessage, void> {
+        yield {
+          type: 'system',
+          subtype: 'init',
+          session_id: 'sess-mgr',
+          uuid: 'uuid-init',
+        } as unknown as SDKMessage;
+        await new Promise<void>((resolve) => {
+          finish = resolve;
+        });
+      }
+
+      return Object.assign(generate(), {
+        close: () => finish?.(),
+        interrupt: async () => undefined,
+      }) as unknown as Query;
+    }) as unknown as typeof sdkQuery;
+
+    return { fn, sessions };
+  }
+
+  /**
+   * クローン本体（`s.clone`）とマネージャーのプール（`s.clone.managers`）を、
+   * 委譲先の SDK を差し込んだ状態で1つに束ねる。`setup()` を使わないのは、
+   * `setup()` の runner が `ask()`（`canUseTool` を叩く口）を持たない別種の
+   * 偽 SDK に固定されているため。
+   */
+  function setupWithManager(reply?: (input: string) => string) {
+    const manager = fakeManagerSdk();
+    const { fn, calls } = fakeSdk(reply);
+    const clone = createClone({
+      stores: createMemoryStores(),
+      queryFn: fn,
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: manager.fn, env: {} }),
+      ]),
+    });
+    return { clone, manager, calls };
+  }
+
+  it('待っている確認は、いまの文言（返事をするまで…止まっている）で届く', async () => {
+    const { clone, manager, calls } = setupWithManager();
+
+    const { managerId } = await clone.managers.start({ request: '1件確認する仕事' });
+    const session = manager.sessions[0];
+    if (!session) throw new Error('マネージャーのセッションが無い');
+
+    // 生きている確認（`waiting` に積まれたまま）を作る。
+    void session.ask('Bash', 'req-live');
+
+    const inputs = () => (calls[0] as FakeCall).inputs;
+    const text = await expect
+      .poll(() => inputs().find((input) => input.includes('req-live')), { timeout: 3000 })
+      .toBeTruthy()
+      .then(() => inputs().find((input) => input.includes('req-live')) ?? '');
+
+    expect(text).toContain(`返事をするまで ${managerId} のこの1件だけが止まっている`);
+    expect(text).toContain('manager_send');
+    expect(text).toContain('ask_human');
+    expect(text).not.toContain('もう待たれていない');
+
+    await clone.stop();
+  });
+
+  it('waiting から消えた確認は、その文言では届かない（答え直せと言わない）', async () => {
+    const { clone, manager, calls } = setupWithManager();
+
+    const { managerId } = await clone.managers.start({ request: '1件確認する仕事' });
+    const session = manager.sessions[0];
+    if (!session) throw new Error('マネージャーのセッションが無い');
+
+    // 一度は生きている確認として届く。
+    const pending = session.ask('Bash', 'req-settled');
+    const inputs = () => (calls[0] as FakeCall).inputs;
+    await expect
+      .poll(() => inputs().some((input) => input.includes('req-settled')), { timeout: 3000 })
+      .toBe(true);
+
+    // 本物の応答経路（`manager.ts` の `send()`）で解く。runner 側の
+    // `canUseTool` が解決し、`'settled'` RunnerEvent を経て `waiting` から
+    // 消えるところまで、本物の機構をそのまま通す。
+    const sendResult = await clone.managers.send(managerId, 'それでよい', {
+      requestId: 'req-settled',
+      decision: 'allow',
+    });
+    expect(sendResult.outcome).toBe('answered');
+    expect(await pending).toEqual({ behavior: 'allow' });
+
+    // `waiting` から実際に消えたことを確認する（この直しが効く前提）。
+    await expect
+      .poll(
+        async () =>
+          (await clone.managers.list())
+            .find((m) => m.managerId === managerId)
+            ?.waiting.map((w) => w.requestId),
+        { timeout: 3000 },
+      )
+      .toEqual([]);
+
+    // ここからが本題 — **解決済みの確認が、再送のように同じ requestId で
+    // もう一度届く**（実測されたバグの形。`ManagerPool#emit` が毎回新しい
+    // event.id を発行する経路なので、`id` だけ変えて模す）。
+    clone.post({
+      type: 'manager_message',
+      id: 'evt-redelivered',
+      at: new Date().toISOString(),
+      managerId,
+      kind: 'permission',
+      text: 'Bash の実行許可: req-settled（再送）',
+      requestId: 'req-settled',
+    });
+
+    const redelivered = await expect
+      .poll(() => inputs().find((input) => input.includes('再送')), { timeout: 3000 })
+      .toBeTruthy()
+      .then(() => inputs().find((input) => input.includes('再送')) ?? '');
+
+    // 「答え直せ」という指示が1文字も無いこと。
+    expect(redelivered).not.toContain('返事をするまで');
+    expect(redelivered).not.toContain('manager_send');
+    expect(redelivered).not.toContain('ask_human');
+    expect(redelivered).toContain('もう待たれていない');
+
+    await clone.stop();
+  });
+
+  /**
+   * 変異試験で見つかった穴の埋め合わせ（このテストが無いと、`confirmationLiveness`
+   * の `summaries.find((entry) => entry.managerId === managerId)` を
+   * `find((entry) => true)` へ変異させても151本が全通過し、生存した）。
+   *
+   * 上の2本（生きている確認／消えた確認）はどちらもマネージャーが1体しか
+   * 走っていない。`managerId` で絞らずに `list()` の先頭要素を拾っても、
+   * 候補が1件しか無ければ偶然当たってしまい、絞り込みそのものは測れない。
+   *
+   * ここでは2体のマネージャーを走らせ、**同じ requestId 文字列**を使って
+   * 「mgr-A の確認は解決済み・mgr-B の確認は生きている」という組を作る。
+   * `list()` は `startedAt` の降順で返す（`manager.ts` の `list()`）ので、
+   * 後から始めた mgr-B が並びの先頭に来る——`managerId` を見ずに先頭を拾う
+   * 実装なら、mgr-A への再送を mgr-B の「生きている」で答えてしまう。
+   */
+  it('別のマネージャーの生きている確認と混ざらない（managerId で絞り込む）', async () => {
+    const { clone, manager, calls } = setupWithManager();
+
+    // mgr-A — 先に始め、確認を1件解いておく（waiting から消える）。
+    const { managerId: managerA } = await clone.managers.start({ request: 'A の仕事' });
+    const sessionA = manager.sessions[0];
+    if (!sessionA) throw new Error('mgr-A のセッションが無い');
+    const pendingA = sessionA.ask('Bash', 'req-shared');
+    const inputs = () => (calls[0] as FakeCall).inputs;
+    await expect
+      .poll(() => inputs().some((input) => input.includes('req-shared')), { timeout: 3000 })
+      .toBe(true);
+    const sendResult = await clone.managers.send(managerA, 'それでよい', {
+      requestId: 'req-shared',
+      decision: 'allow',
+    });
+    expect(sendResult.outcome).toBe('answered');
+    expect(await pendingA).toEqual({ behavior: 'allow' });
+    await expect
+      .poll(
+        async () =>
+          (await clone.managers.list())
+            .find((m) => m.managerId === managerA)
+            ?.waiting.map((w) => w.requestId),
+        { timeout: 3000 },
+      )
+      .toEqual([]);
+
+    // mgr-B — 後から始め、**同じ requestId 文字列**で確認を出したまま
+    // （waiting に残る＝生きている）。
+    const { managerId: managerB } = await clone.managers.start({ request: 'B の仕事' });
+    const sessionB = manager.sessions[1];
+    if (!sessionB) throw new Error('mgr-B のセッションが無い');
+    void sessionB.ask('Bash', 'req-shared');
+    await expect
+      .poll(
+        async () =>
+          (await clone.managers.list())
+            .find((m) => m.managerId === managerB)
+            ?.waiting.map((w) => w.requestId),
+        { timeout: 3000 },
+      )
+      .toEqual(['req-shared']);
+    // 並び順の前提（後から始めた mgr-B が先頭）を自分で確かめる。
+    const order = (await clone.managers.list()).map((m) => m.managerId);
+    expect(order[0]).toBe(managerB);
+
+    // ここからが本題 — **解決済みの mgr-A の確認**が、同じ requestId で
+    // もう一度届く。生きているのは mgr-B の同名確認だけである。
+    clone.post({
+      type: 'manager_message',
+      id: 'evt-cross-manager',
+      at: new Date().toISOString(),
+      managerId: managerA,
+      kind: 'permission',
+      text: 'Bash の実行許可: req-shared（mgr-A への再送）',
+      requestId: 'req-shared',
+    });
+
+    const redelivered = await expect
+      .poll(() => inputs().find((input) => input.includes('mgr-A への再送')), { timeout: 3000 })
+      .toBeTruthy()
+      .then(() => inputs().find((input) => input.includes('mgr-A への再送')) ?? '');
+
+    // mgr-B の生存に引きずられず、mgr-A の確認として「もう待たれていない」。
+    expect(redelivered).toContain('もう待たれていない');
+    expect(redelivered).not.toContain('返事をするまで');
+
+    await clone.stop();
+  });
+
+  it('managers.list() が投げても、ターンは落ちず、いまの文言のまま届く', async () => {
+    const { fn, calls } = fakeSdk();
+    // `list()` だけ必ず投げる、それ以外は呼ばれない前提のスタブ。
+    // ManagerPool の全メソッドを実装するが、このテストで使うのは `list` だけ。
+    const throwingPool: ManagerPool = {
+      start: () => {
+        throw new Error('not implemented');
+      },
+      send: () => {
+        throw new Error('not implemented');
+      },
+      abort: () => {
+        throw new Error('not implemented');
+      },
+      list: () => {
+        throw new Error('list() が壊れている（実測を模す）');
+      },
+      denials: () => [],
+      runners: () => {
+        throw new Error('not implemented');
+      },
+      transcript: () => {
+        throw new Error('not implemented');
+      },
+      restore: () => Promise.resolve([]),
+      reattachRunner: () => Promise.resolve(),
+      stop: () => Promise.resolve(),
+    };
+
+    const clone = createClone({
+      stores: createMemoryStores(),
+      queryFn: fn,
+      managers: throwingPool,
+    });
+
+    clone.post({
+      type: 'manager_message',
+      id: 'evt-permission-unknown',
+      at: new Date().toISOString(),
+      managerId: 'mgr-unknown',
+      kind: 'permission',
+      text: 'Bash の実行許可: 確かめられない',
+      requestId: 'req-unknown',
+    });
+
+    const inputs = () => (calls[0] as FakeCall).inputs;
+    // **ターンが落ちずに進むこと自体が主張である。** list() が投げたまま
+    // ターンが止まれば、この poll はタイムアウトで落ちる。
+    const text = await expect
+      .poll(() => inputs().find((input) => input.includes('確かめられない')), { timeout: 3000 })
+      .toBeTruthy()
+      .then(() => inputs().find((input) => input.includes('確かめられない')) ?? '');
+
+    // 確かめられなかった側は安全側（いまの文言のまま）へ倒す。
+    expect(text).toContain('返事をするまで mgr-unknown のこの1件だけが止まっている');
+    expect(text).toContain('manager_send');
+    expect(text).not.toContain('もう待たれていない');
+
+    await clone.stop();
+  });
+
+  it('report の文言は変わらない（kind !== question/permission は判定しない）', async () => {
+    const { clone, calls } = setupWithManager();
+
+    clone.post({
+      type: 'manager_message',
+      id: 'evt-report-unchanged',
+      at: new Date().toISOString(),
+      managerId: 'mgr-report',
+      kind: 'report',
+      text: '直しました（報告のみ）',
+    });
+
+    const inputs = () => (calls[0] as FakeCall).inputs;
+    const text = await expect
+      .poll(() => inputs().find((input) => input.includes('直しました（報告のみ）')), {
+        timeout: 3000,
+      })
+      .toBeTruthy()
+      .then(() => inputs().find((input) => input.includes('直しました（報告のみ）')) ?? '');
+
+    expect(text).toContain('（報告）');
+    expect(text).toContain('続きが要るなら `manager_send` で指示を出し');
+    expect(text).not.toContain('止まっている');
+    expect(text).not.toContain('もう待たれていない');
+
+    await clone.stop();
   });
 });
 

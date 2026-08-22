@@ -22,7 +22,7 @@ import {
 import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { Inbox } from './inbox.js';
-import { createManagerPool, type ManagerPool } from './manager.js';
+import { createManagerPool, type ManagerPool, type ManagerSummary } from './manager.js';
 import { renderMemoryDocuments } from './memory.js';
 import { placedModelTier, resolveModelTier } from './model-tier.js';
 import {
@@ -1902,7 +1902,14 @@ class Clone implements CloneHost {
           role: 'inbound',
           text: `[${event.managerId}/${event.kind}] ${event.text}`,
         });
-        await this.#runInternal(managerPrompt(event));
+        // `report` は判定の対象外（`confirmationLiveness` の doc）。
+        // `'unknown'` を渡しても `managerPrompt` はその分岐を読まない。
+        const liveness: ConfirmationLiveness =
+          (event.kind === 'question' || event.kind === 'permission') &&
+          event.requestId !== undefined
+            ? await confirmationLiveness(this.#managers, event.managerId, event.requestId)
+            : 'unknown';
+        await this.#runInternal(managerPrompt(event, liveness));
         return;
       }
 
@@ -3316,13 +3323,74 @@ export function humanTurnText(events: HumanMessage[]): string {
 }
 
 /**
+ * 質問・許可確認が、いまも `ManagerPool` の `waiting` で待たれているかの3値。
+ *
+ * 2値にしない（`AGENTS.md`「静かに失敗する道具」— 判定できない場合がどちらかへ
+ * 黙って倒れる）。**`'unknown'` は安全側（雑音）へ倒すためのものであって、
+ * 「待っている」の言い換えではない** — `managerPrompt` はこれを `'live'` と
+ * 同じ扱いにするが、根拠が無いことは呼び出し元がここで確定させる。
+ */
+type ConfirmationLiveness = 'live' | 'settled' | 'unknown';
+
+/**
+ * `event`（質問・許可確認）が、いまも `managers.list()` の `waiting` に載って
+ * いるかを確かめる。
+ *
+ * **配り直し（`#redelivered`）に限定しない。** 実測された再送は
+ * `ManagerPool#emit`（`manager.ts`）が初回配達と同じ経路（毎回新しい
+ * `event.id` を発行する）で届き、`#redelivered` の判定には乗らない。限定すると
+ * この実例を取りこぼす——だから `manager_message` を受け取るたびに、ここで
+ * 毎回確かめる。
+ *
+ * **競合の心配は無い。** `manager.ts` の `ask` 分岐は `record.waiting.push(...)`
+ * → `#persist` → 日誌 → `#emit()` の順で動くので、**初回配達の時点で
+ * `waiting` には既に載っている。** 「生きている確認を死んだと誤判定する」窓は
+ * 無い。
+ *
+ * ⚠️ **ただし「答えたのに、まだ `waiting` に載っている」窓はある。** `manager.ts`
+ * の `send()`（`manager_send` の実体）は `runner.answer()` が成功しても
+ * `record.waiting` を同期では書き換えない。`waiting` からその requestId が
+ * 消えるのは、あとから非同期で届く別種の `RunnerEvent`（`'settled'`）の
+ * ハンドラだけである。**その窓の中で合図が配られると、ここは `'live'` を返し、
+ * 従来どおり「まだ止まっている」の文言が出る。** 安全側（雑音）へ倒れている
+ * ので方針には反しないが、「解決済みなら必ず正しい文言が出る」の保証では
+ * ない——回答の受理そのものを冪等にしない限り、この窓は残る。
+ *
+ * **`event.managerId` に対応する要素が `list()` に無いときも `'unknown'`。**
+ * 本物の配達では `#emit` の前に必ず `#persist` が通るので実際には起きないが
+ * （委譲の記録が無いのに合図だけ届くことは無い）、起きたとしても「待たれて
+ * いない」と決め打たず、確かめられなかった側へ倒す。
+ */
+async function confirmationLiveness(
+  managers: ManagerPool,
+  managerId: string,
+  requestId: string,
+): Promise<ConfirmationLiveness> {
+  let summaries: ManagerSummary[];
+  try {
+    summaries = await managers.list();
+  } catch {
+    return 'unknown';
+  }
+  const summary = summaries.find((entry) => entry.managerId === managerId);
+  if (summary === undefined) return 'unknown';
+  return summary.waiting.some((item) => item.requestId === requestId) ? 'live' : 'settled';
+}
+
+/**
  * マネージャーからの一件をクローンの言葉に直す。
  *
  * ここに「何なら答えてよいか」の一覧を書かないこと。答えるか人間に回すかの線引きは
  * クローンが記憶として持っているものであり、書いた瞬間に人による違いが潰れる
  * （PRD「権限境界」/ AGENTS.md 地雷3）。
+ *
+ * `liveness` は `kind` が `question` / `permission` のときだけ意味を持つ
+ * （`confirmationLiveness` の doc）。`report` では読まない。
  */
-function managerPrompt(event: Extract<InboxEvent, { type: 'manager_message' }>): string {
+function managerPrompt(
+  event: Extract<InboxEvent, { type: 'manager_message' }>,
+  liveness: ConfirmationLiveness,
+): string {
   const head = `[system] マネージャー ${event.managerId} から届いた。`;
 
   if (event.kind === 'report') {
@@ -3337,6 +3405,22 @@ function managerPrompt(event: Extract<InboxEvent, { type: 'manager_message' }>):
   }
 
   const label = event.kind === 'question' ? '質問' : '実行の許可確認';
+
+  // **もう待たれていない確認は、答え直せと言わない。** 台帳が既に解決済みだと
+  // 知っているものを「まだ止まっている」と偽ると、クローンが同じ requestId へ
+  // 二重に答え、`manager_send` が「その確認は待っていない」と弾く（実測の
+  // バグそのもの）。`liveness === 'unknown'` はここへは来ない——確かめられな
+  // かった側は下の「生きている」と同じ文言（安全側＝雑音）へ倒す。
+  if (liveness === 'settled') {
+    return [
+      `${head}（${label}）`,
+      '',
+      event.text,
+      '',
+      'この確認はもう待たれていない（既に解決したか、マネージャーが終わっている）。答え直す必要は無い。',
+    ].join('\n');
+  }
+
   // 宛先には requestId まで書く。同じマネージャーが同時に複数を待つことがあり
   // （1応答で並列に呼ばれた道具）、宛先を欠いた回答は宛先を推測できない。
   const to =
