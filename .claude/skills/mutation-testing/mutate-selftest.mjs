@@ -38,6 +38,7 @@ export const SELFTEST_SCENARIOS = [
   'interrupted',
   'interrupted-wrong-order',
   'delivery',
+  'judgement-id-integrity',
   'all',
 ];
 
@@ -248,15 +249,23 @@ describe('強い歯（selftest）', () => {
       log(testResult.raw);
       log('--- test 生ログ ここまで ---');
       let judgement;
+      let judgementError = null;
       try {
-        judgement = judge(artifactResult, testResult);
+        judgement = judge(thisSpec, artifactResult, testResult);
       } catch (err) {
-        judgement = `判定を出せない: ${err.message}`;
+        judgementError = err.message;
       }
       log('');
-      log(`判定 (${label}): ${judgement}`);
+      log(
+        `判定 (${label}): ${judgementError ? `判定を出せない: ${judgementError}` : judgement.text}`,
+      );
       outcomes[label] = {
-        judgement,
+        category: judgementError ? null : judgement.category,
+        judgement: judgementError ? `判定を出せない: ${judgementError}` : judgement.text,
+        // 判定行に thisSpec.id が正しく載っているかを、選び取りではなく
+        // 文字列としてここで確かめる。id の取り違えを機械的に捕まえる口
+        // （この確認自体は「歯が弱い」自己検証とは別の、ハーネス自身の回帰確認）。
+        judgementMentionsCorrectId: judgementError ? null : judgement.text.includes(thisSpec.id),
         testsLine: testResult.testsLine,
         filesLine: testResult.filesLine,
       };
@@ -456,11 +465,13 @@ function scenarioDelivery() {
 
   log('');
   log(
-    '-- 4e. 復元し、dist も build し直して現物と一致させる（後始末。restore 自体は歯4/12まで） --',
+    '-- 4e. 復元する。dist の再 build は restoreMutation 自身が後始末として行う（手動では呼ばない） --',
   );
-  restoreMutation();
-  const rebuild = buildAndCheckArtifact({ ...spec, artifact: undefined });
-  log(`後始末の build exit code: ${rebuild.buildExitCode}`);
+  const { rebuildExitCode } = restoreMutation();
+  log(`restoreMutation が自動で行った後始末の build exit code: ${rebuildExitCode}`);
+  const distAfterRestore = fs.readFileSync(distAbs, 'utf8');
+  const distMatchesRestoredSource = !distAfterRestore.includes('SELFTEST_MUTATED');
+  log(`後始末後、dist に変異が残っていないか（残っていないはず）: ${distMatchesRestoredSource}`);
 
   return {
     scenario: 'delivery',
@@ -468,6 +479,109 @@ function scenarioDelivery() {
     deliveredAfterBuild: artifactResult.artifactState === 'delivered',
     buildExitCodeBeforeBuild: 0,
     buildExitCodeAfterBuild: artifactResult.buildExitCode,
+    postRestoreRebuildExitCode: rebuildExitCode,
+    distCleanAfterRestore: distMatchesRestoredSource,
+  };
+}
+
+// ── 5. 判定行の id 取り違えを検出する確認 ───────────────────────────
+//
+// マネージャーが実測で見つけた欠陥（判定行が固定の `M1:`/`M2:`/`M3:` を焼き込み、
+// 変異の実際の id と無関係な種別番号を名乗っていた）の回帰確認。
+//
+// `M4` は生存想定・`M6` は検出想定にしてある（マネージャーの実測がこの2つの
+// 番号を例に挙げたのに合わせた。番号そのものに意味は無い）。判定行が
+// `spec.id` を正しく名乗っていることを確認し、さらに「旧実装（id を無視して
+// 固定の M1/M2/M3 を返す版）を模した関数」でも同じ確認を通し、**旧実装では
+// この確認が通らないこと**（＝この選択が実際に取り違えを捕まえる形になって
+// いること）を示す。
+function scenarioJudgementIdIntegrity() {
+  section('selftest: 5. 判定行の id 取り違えを検出する確認（マネージャーの実測の回帰確認）');
+  requireNoMarker('judgement-id-integrity');
+  ensureFixtureClean();
+
+  // M4: どこからも参照されない固定ファイルを変異させる → 生存想定。
+  const survivingSpec = {
+    id: 'M4',
+    file: FIXTURE_REL,
+    from: 'LINE-TWO',
+    to: 'LINE-TWO-M4',
+    expect: 1,
+    target: null,
+    testFilter: 'apps/cli/src/conversations',
+  };
+  // M6: 既存の実テスト（conversations.test.ts の
+  // `expect(read()).toContain('会話はまだありません')`）が捕まえる実在の文言を
+  // 変異させる → 検出想定。
+  const detectedSpec = {
+    id: 'M6',
+    file: 'apps/cli/src/conversations.ts',
+    from: '会話はまだありません。',
+    to: 'M6_MUTATED。',
+    expect: 1,
+    target: null,
+    testFilter: 'apps/cli/src/conversations',
+  };
+
+  const results = {};
+  for (const spec of [survivingSpec, detectedSpec]) {
+    log('');
+    log(`== spec.id=${spec.id} を通す（testFilter=${spec.testFilter}） ==`);
+    applyMutation(spec);
+    const artifactResult = buildAndCheckArtifact(spec);
+    const testResult = runTests([spec.testFilter]);
+    log('--- test 生ログ ここから ---');
+    log(testResult.raw);
+    log('--- test 生ログ ここまで ---');
+    let judgement;
+    try {
+      judgement = judge(spec, artifactResult, testResult);
+    } catch (err) {
+      restoreMutation();
+      throw new HarnessError(`spec.id=${spec.id} の判定に失敗した: ${err.message}`);
+    }
+    log(`判定行: ${judgement.text}`);
+    const mentionsOwnId = judgement.text.includes(spec.id);
+    log(`判定行が spec.id (${spec.id}) を正しく名乗っているか: ${mentionsOwnId}`);
+    restoreMutation();
+    if (!mentionsOwnId) {
+      // この確認自体が回帰を検出する口である。ここで投げれば selftest 全体が
+      // 非0で終わり、取り違えが起きていることが exit code からも分かる。
+      throw new HarnessError(
+        `判定行が spec.id を名乗っていない（id 取り違えの回帰）: ${judgement.text}`,
+      );
+    }
+    results[spec.id] = { category: judgement.category, text: judgement.text, mentionsOwnId };
+  }
+
+  log('');
+  log('-- 対照: 旧実装（id を無視して固定の M1/M2/M3 を返す版）を模した関数でも同じ確認を通す --');
+  // マネージャーが実測した、修正前の実装をそのまま模したもの。spec.id を
+  // 一切受け取らない。`mutate-core.mjs` 本体は書き換えない — ここだけの対照。
+  function oldBuggyFormatJudgement(category) {
+    if (category === '生存') return 'M2: 生存 — この歯はこの変異を検出できない';
+    if (category === '検出') return 'M1: 検出 — この歯はこの変異を捕まえた';
+    return 'M3: 不明 — 変異が成果物へ届いていない（生存ではない）';
+  }
+  const oldTextForM4 = oldBuggyFormatJudgement(results.M4.category);
+  const oldTextForM6 = oldBuggyFormatJudgement(results.M6.category);
+  const oldWouldMentionM4 = oldTextForM4.includes('M4');
+  const oldWouldMentionM6 = oldTextForM6.includes('M6');
+  log(`旧実装が M4 を名乗るか: ${oldWouldMentionM4}（旧実装が返す文言: "${oldTextForM4}"）`);
+  log(`旧実装が M6 を名乗るか: ${oldWouldMentionM6}（旧実装が返す文言: "${oldTextForM6}"）`);
+  log(
+    `つまり、この確認を旧実装に対して行っていたら: ${
+      !oldWouldMentionM4 || !oldWouldMentionM6
+        ? '落ちていた（取り違えを捕まえる）'
+        : '通っていた（捕まえない）'
+    }`,
+  );
+
+  return {
+    scenario: 'judgement-id-integrity',
+    M4: results.M4,
+    M6: results.M6,
+    oldImplementationWouldHaveFailedThisCheck: !oldWouldMentionM4 || !oldWouldMentionM6,
   };
 }
 
@@ -477,6 +591,7 @@ const SCENARIO_FNS = {
   interrupted: scenarioInterrupted,
   'interrupted-wrong-order': scenarioInterruptedWrongOrder,
   delivery: scenarioDelivery,
+  'judgement-id-integrity': scenarioJudgementIdIntegrity,
 };
 
 export function runSelftestScenario(scenario) {

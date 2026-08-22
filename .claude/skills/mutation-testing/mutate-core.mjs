@@ -90,9 +90,17 @@ export function replaceAllLiteral(haystack, from, to) {
 
 // ── 判定の語彙 ──────────────────────────────────────────────────────
 //
-// **歯7の裏面**: 判定行（M1/M2/M3）と生ログ（vitest の生出力）は別区画に出す。
-// 生ログには当然 `Tests N passed` のような文言が乗るが、それは加工前の証跡で
-// あって判定ではない。禁止語チェックは判定行の側にだけ掛ける。
+// **歯7の裏面**: 判定行（検出/生存/不明）と生ログ（vitest の生出力）は別区画に
+// 出す。生ログには当然 `Tests N passed` のような文言が乗るが、それは加工前の
+// 証跡であって判定ではない。禁止語チェックは判定行の側にだけ掛ける。
+//
+// **判定行に固定の `M1:`/`M2:`/`M3:` を焼き込まない。** かつてはこの3つを
+// 判定の種別そのものとして固定文字列に埋め込んでいたが、変異の spec 自身が
+// `id: 'M4'` のような名前を持てる（`SKILL.md` の解説表が `M1..M6` を変異の
+// 名前として使っている）ため、「種別としての M2」と「変異としての M4」が
+// 衝突し、判定行が実際の変異と無関係な番号を名乗る欠陥があった
+// （実測で確認・修正。マネージャーからの差し戻し）。判定行には常に
+// `spec.id` を差し込み、種別は日本語の語（検出/生存/不明）そのもので表す。
 export const FORBIDDEN_IN_JUDGEMENT = [
   '合格',
   'OK',
@@ -105,24 +113,69 @@ export const FORBIDDEN_IN_JUDGEMENT = [
   '✓',
 ];
 
-export const JUDGEMENT = {
-  DETECTED: 'M1: 検出 — この歯はこの変異を捕まえた',
-  SURVIVED: 'M2: 生存 — この歯はこの変異を検出できない\n次にやること: 歯を強める。緩めるのではない',
-  UNKNOWN: 'M3: 不明 — 変異が成果物へ届いていない（生存ではない）',
+/** 判定の種別ごとの文面テンプレート。`mutationId` を差し込んで完成させる。 */
+const JUDGEMENT_TEMPLATES = {
+  検出: (mutationId) => `変異 ${mutationId}: 検出 — この歯はこの変異を捕まえた`,
+  生存: (mutationId) =>
+    `変異 ${mutationId}: 生存 — この歯はこの変異を検出できない\n次にやること: 歯を強める。緩めるのではない`,
+  不明: (mutationId) => `変異 ${mutationId}: 不明 — 変異が成果物へ届いていない（生存ではない）`,
 };
 
-/** ハーネス自身の判定語彙に禁止語が混ざっていないかを検査する口。 */
+function assertNoForbiddenWords(text, contextLabel) {
+  for (const word of FORBIDDEN_IN_JUDGEMENT) {
+    if (text.includes(word)) {
+      throw new HarnessError(`${contextLabel} に禁止語 "${word}" が混ざっている: ${text}`);
+    }
+  }
+}
+
+/**
+ * ハーネス自身の判定語彙に禁止語が混ざっていないかを検査する口。
+ *
+ * ここで検査するのはテンプレートそのもの（サンプル id `<id>` で埋めたもの）。
+ * **これは起動時の安い自己検査であって、実際に判定を出すときの検査ではない。**
+ * 変異の id 自体に禁止語が混ざっている可能性は、id を差し込んだ「後」の文言を
+ * 検査する `formatJudgement` の側が見る（`judge` を呼ぶたびに毎回効く）。
+ * 定義（テンプレート）だけ検査して整形後を素通りする形にしない。
+ */
 export function checkJudgementVocabulary() {
   const problems = [];
-  for (const [name, text] of Object.entries(JUDGEMENT)) {
-    for (const word of FORBIDDEN_IN_JUDGEMENT) {
-      if (text.includes(word)) problems.push(`${name} に禁止語 "${word}" が混ざっている: ${text}`);
+  for (const [name, template] of Object.entries(JUDGEMENT_TEMPLATES)) {
+    const sample = template('<id>');
+    try {
+      assertNoForbiddenWords(sample, `JUDGEMENT_TEMPLATES.${name}`);
+    } catch (err) {
+      problems.push(err.message);
     }
   }
   if (problems.length > 0) {
     throw new HarnessError(`判定語彙の自己検査に失敗:\n${problems.join('\n')}`);
   }
-  return { ok: true, checked: Object.keys(JUDGEMENT) };
+  return { ok: true, checked: Object.keys(JUDGEMENT_TEMPLATES) };
+}
+
+/** 種別 + 変異 id から判定行を組み立てる。整形後の文言にも禁止語検査を掛ける。 */
+export function formatJudgement(category, mutationId) {
+  const template = JUDGEMENT_TEMPLATES[category];
+  if (!template) throw new HarnessError(`未知の判定種別: ${category}`);
+  const text = template(mutationId);
+  assertNoForbiddenWords(text, `judge(${mutationId})`);
+  return text;
+}
+
+/** 生存/検出/不明のどれかを、成果物検査とテスト結果から決める（id とは無関係）。 */
+export function decideJudgementCategory(artifactResult, testResult) {
+  if (artifactResult.artifactState === 'undelivered') {
+    return '不明';
+  }
+  if (!testsRanCleanly(testResult)) {
+    throw new HarnessError(
+      'テストの集計行（Test Files / Tests）が見つからない。' +
+        '「落ちた」のか「1本も走らなかった」のか区別できないので判定を出さない。',
+    );
+  }
+  const allPassed = testsAllPassed(testResult);
+  return allPassed ? '生存' : '検出';
 }
 
 // ── 印 ──────────────────────────────────────────────────────────────
@@ -177,6 +230,8 @@ function buildMarker(spec, ctx) {
     file: spec.file,
     from: spec.from,
     to: spec.to,
+    // 復元後の後始末（dist の再 build）に要る。`target` が無ければ後始末も無い。
+    target: spec.target ?? null,
     startedAt: nowIso(),
     sessionId: process.env.CLAUDE_SESSION_ID ?? process.env.ALTEROID_SESSION_ID ?? null,
     pid: process.pid,
@@ -350,19 +405,19 @@ export function testsAllPassed(testResult) {
   return noFailures && hasPassed;
 }
 
-/** 手順11: 判定を出す。生存を「合格」と読める語で書かない。 */
-export function judge(artifactResult, testResult) {
-  if (artifactResult.artifactState === 'undelivered') {
-    return JUDGEMENT.UNKNOWN;
-  }
-  if (!testsRanCleanly(testResult)) {
-    throw new HarnessError(
-      'テストの集計行（Test Files / Tests）が見つからない。' +
-        '「落ちた」のか「1本も走らなかった」のか区別できないので判定を出さない。',
-    );
-  }
-  const allPassed = testsAllPassed(testResult);
-  return allPassed ? JUDGEMENT.SURVIVED : JUDGEMENT.DETECTED;
+/**
+ * 手順11: 判定を出す。生存を「合格」と読める語で書かない。
+ *
+ * **`spec` を受け取り、`spec.id` を判定行へ差し込む。** 種別の決定
+ * （`decideJudgementCategory`）と id の差し込み（`formatJudgement`）を分けて
+ * あるのは、`cmdRun` のまとめが「種別」だけを欲しがる場面と、人間が読む
+ * 判定行が「id + 種別」を欲しがる場面の両方があるため。戻り値は
+ * `{ category, text }` — `category` は `'検出' | '生存' | '不明'`。
+ */
+export function judge(spec, artifactResult, testResult) {
+  const category = decideJudgementCategory(artifactResult, testResult);
+  const text = formatJudgement(category, spec.id);
+  return { category, text };
 }
 
 /**
@@ -461,5 +516,25 @@ export function restoreMutation(opts = {}) {
   // 残る（手動復元・`--restore-from-marker` に要る）。
   if (backupReadable) fs.rmSync(backupAbs, { force: true });
 
-  return { marker, restoredFrom };
+  // **後始末（手順1〜13には無い工程。番号は振らない）。** 手順8〜9は build 済みの
+  // `dist` を検査するが、手順12はソースだけを書き戻すので、ここで再 build しない
+  // 限り `dist` に変異が残ったまま次の作業者へ渡る——このハーネスが潰そうとして
+  // いる「静かに壊れたツリー」そのものである。`SKILL.md` に理由を残してある。
+  // `apply`/`restore` を手で段階実行したときも、`run` を通したときも、
+  // `restoreMutation` を呼べば必ずここを通るので、この後始末を忘れる経路は無い。
+  const rebuildExitCode = rebuildIfTargeted(marker.target);
+
+  return { marker, restoredFrom, rebuildExitCode };
+}
+
+function rebuildIfTargeted(target) {
+  if (!target) return null;
+  log(`[後始末] dist を再 build する（--filter ${target}）`);
+  const result = spawnSync('pnpm', ['--filter', target, 'build'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    maxBuffer: 200 * 1024 * 1024,
+  });
+  log(`[後始末] build exit=${result.status}`);
+  return result.status;
 }

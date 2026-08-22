@@ -162,7 +162,7 @@ function runOneMutation(spec) {
 
   let artifactResult;
   let testResult;
-  let judgement;
+  let judgement; // { category, text } | undefined
   let judgeError = null;
   try {
     artifactResult = buildAndCheckArtifact(spec);
@@ -170,7 +170,7 @@ function runOneMutation(spec) {
     log('--- test 生ログ ここから ---');
     log(testResult.raw);
     log('--- test 生ログ ここまで ---');
-    judgement = judge(artifactResult, testResult);
+    judgement = judge(spec, artifactResult, testResult);
   } catch (err) {
     judgeError = err.message;
   }
@@ -179,7 +179,7 @@ function runOneMutation(spec) {
   if (judgeError) {
     log(`判定を出せない: ${judgeError}`);
   } else {
-    log(judgement);
+    log(judgement.text);
   }
 
   section(`変異 ${spec.id}: 復元`);
@@ -191,7 +191,15 @@ function runOneMutation(spec) {
     throw err;
   }
 
-  return { id: spec.id, outcome: judgeError ? 'judge-error' : 'judged', judgement, judgeError };
+  // **まとめ行は「種別」を持つ** — `judged` のような中身の無い語ではなく、
+  // 実際の判定（検出/生存/不明）そのものを出す。id とは別軸なので、
+  // まとめ側で id と種別を並べて出せば、判定行と食い違えばすぐ分かる。
+  return {
+    id: spec.id,
+    outcome: judgeError ? 'judge-error' : judgement.category,
+    judgementText: judgeError ? null : judgement.text,
+    judgeError,
+  };
 }
 
 function cmdRun(args) {
@@ -214,7 +222,7 @@ function cmdRun(args) {
   }
 
   section('run: まとめ');
-  for (const r of results) log(`${r.id}: ${r.outcome}`);
+  for (const r of results) log(`変異 ${r.id}: ${r.outcome}`);
 }
 
 function cmdSelftest(args) {
