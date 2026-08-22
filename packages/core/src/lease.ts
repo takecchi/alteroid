@@ -102,6 +102,14 @@ export interface LeaseSighting {
 export type LeaseVerdict =
   /** 貸し出しの記録が無い。引き取ってよい（この欄より前に作られたジョブを含む）。 */
   | { kind: 'unheld' }
+  /**
+   * 持ち主が**自分で返した**（`releasedAt`）。引き取ってよい。
+   *
+   * `unheld` と進み方は同じだが、**言えることが違う** — こちらは「そのセッションは
+   * 終わったと持ち主が言った」で、あちらは「記録が無い」である。世代（`fence`）は
+   * 残っているので、貸し直しは数え直しではなく続きになる。
+   */
+  | { kind: 'released'; lease: JobLease }
   /** いま応えているプロセスが持ち主。**奪う話ではなく繋ぎ直しである。** */
   | { kind: 'same-holder'; lease: JobLease }
   /** もう動いていないと言える。`because` はどちらの材料で言えたか。 */
@@ -132,6 +140,9 @@ export function judgeLease(input: {
 }): LeaseVerdict {
   const { lease, now, answering } = input;
   if (lease === undefined) return { kind: 'unheld' };
+  // 持ち主が返している。**期限を待つ理由が無い**（期限は「言ってもらえなかった
+  // とき」のためのものである）。世代はこの記録に残っているので、貸し直しは続きになる。
+  if (lease.releasedAt !== undefined) return { kind: 'released', lease };
 
   const seenAt = Date.parse(lease.seenAt);
   /*
@@ -163,15 +174,66 @@ export function judgeLease(input: {
       : { kind: 'held', claimableAt: ttlDeadline, lease };
   }
 
-  // どちらかが名乗らない。**「入れ替わっていない」と読まないこと。**
+  /*
+   * 貸したときの持ち主が名乗っていなかった（＝貸した瞬間に名簿がまだ `instanceId` を
+   * 知らなかった。開けた直後に名乗りの探りが落ちるとこうなる）。
+   *
+   * **それでも時刻で言えることがある。** いま応えているプロセスを**貸す前から**
+   * 見ているなら、貸した相手はこのプロセスである（台帳へ書くのはデーモン1つだけで、
+   * 貸した先はそのとき話していた相手だから）。逆に**貸した後に現れた**プロセスなら、
+   * 相手は入れ替わっている — 名前を突き合わせられないだけで、入れ替わったこと自体は
+   * 分かる。ここを一律に「判定できない」へ倒すと、**その委譲は以後ずっと無防備に
+   * なり、器が入れ替わっても猶予を1秒も待たずに引き取られる。**
+   */
+  if (lease.instanceId === undefined && answering.instanceId !== undefined) {
+    const since = answering.instanceSince;
+    const granted = Date.parse(lease.grantedAt);
+    if (since === undefined || Number.isNaN(granted)) return { kind: 'undecidable', lease };
+    if (since <= granted) return { kind: 'same-holder', lease };
+    // 貸した後に現れたプロセス。**入れ替わったものとして猶予を数える**（下の枝と同じ）。
+    return decideAfterSwap({ lease, now, answering, ttlDeadline });
+  }
+
+  // いま応えている側が名乗らない。**「入れ替わっていない」と読まないこと。**
   if (lease.instanceId === undefined || answering.instanceId === undefined) {
     return { kind: 'undecidable', lease };
   }
 
   if (lease.instanceId === answering.instanceId) return { kind: 'same-holder', lease };
 
-  // 同じ宛先に別のプロセスが応えている。古い方は、器が畳んだか（`drained`）、
-  // 自分で失効したか（`ttl`）のどちらか早い方で「もう動いていない」と言える。
+  return decideAfterSwap({ lease, now, answering, ttlDeadline });
+}
+
+/**
+ * **同じ宛先に別のプロセスが応えている**ときの判定（入れ替えの後）。
+ *
+ * 古い方は、器が畳んだか（`drained`）、自分で失効したか（`ttl`）のどちらか早い方で
+ * 「もう動いていない」と言える。
+ *
+ * ## ⚠️ `drained` は器との約束に乗っている（独立な材料ではない）
+ *
+ * `drained` が成り立つのは、**器が入れ替えのときに古いプロセスを畳む構成**に限る
+ * （Railway の `drainingSeconds` / compose の `stop_grace_period`。加えて runner 自身が
+ * SIGTERM から55秒で自分に見切りをつける）。この repo の本番はその構成であり、
+ * `LEASE_DRAIN_MS` はその設定値の写しである。
+ *
+ * **だから「2つの材料の早い方」は、器がその約束を守る限りでしか健全でない。** 器が
+ * 古いプロセスを畳まない構成（経路の付け替えなど）では、`drained` の側が
+ * `ttl`（自己失効）を追い越して先に成立し、**その差のあいだ二重実行が起きうる。**
+ * 早い方を採るのは、本番の構成でその約束が実際に効いていることを根拠にした選択で
+ * あって、両方が独立に十分だからではない。**約束が変わったらここも変えること。**
+ *
+ * この選択の代わりに「両方を待つ（遅い方）」にすると、通常の再デプロイのたびに
+ * 引き取りが自己失効の猶予（既定10分）まで遅れる — そちらは「畳まれた器の仕事を
+ * 10分放置する」ことを常に払う形なので採らなかった。
+ */
+function decideAfterSwap(input: {
+  lease: JobLease;
+  now: number;
+  answering: LeaseSighting;
+  ttlDeadline: number;
+}): LeaseVerdict {
+  const { lease, now, answering, ttlDeadline } = input;
   const drainDeadline = (answering.instanceSince ?? now) + LEASE_DRAIN_MS + LEASE_MARGIN_MS;
   if (now >= drainDeadline) return { kind: 'expired', because: 'drained', lease };
   if (now >= ttlDeadline) return { kind: 'expired', because: 'ttl', lease };
@@ -183,6 +245,11 @@ export function judgeLease(input: {
  *
  * 進めないと、引き取りの後に遅れて届いた古い命令を runner が見分けられない
  * （`fence` は runner 側で「これより古い命令は拒む」に使われる）。
+ *
+ * **返却済みの貸し出しからも進める（数え直さない）。** 返却は `releasedAt` を立てる
+ * だけで `previous` は残るので、ここが自然に単調になる。消して数え直す形にすると、
+ * 返却の知らせが遅れて届いた場合に runner が覚えている世代より小さい世代を渡し、
+ * 生きているマネージャーへの命令が拒まれ続ける（`schema.ts` の `fence` の項）。
  */
 export function grantLease(input: {
   previous: JobLease | undefined;
@@ -200,6 +267,17 @@ export function grantLease(input: {
     seenAt: at,
     ttlMs: input.ttlMs ?? LEASE_TTL_MS,
   };
+}
+
+/**
+ * **返す**（もう握っていない）。世代は残す。
+ *
+ * 呼ぶのは「そのセッションは終わった」と言える契機だけである — 持ち主自身の
+ * `closed`、または止まったと**確かめた**停止。確かめていない停止で返すと、まだ
+ * 走っているセッションを別の器が期限を待たずに引き取れる。
+ */
+export function releaseLease(lease: JobLease, now: number): JobLease {
+  return { ...lease, releasedAt: new Date(now).toISOString() };
 }
 
 /**
@@ -222,6 +300,8 @@ export function describeVerdict(verdict: LeaseVerdict): string {
   switch (verdict.kind) {
     case 'unheld':
       return '貸し出しの記録が無い（この欄より前の委譲か、まだ貸し出していない）';
+    case 'released':
+      return `持ち主が返している（そのセッションは終わったと本人が言った。返却=${verdict.lease.releasedAt ?? '不明'} / 世代=${verdict.lease.fence}）`;
     case 'same-holder':
       return `いま応えているプロセスが持ち主である（instanceId=${verdict.lease.instanceId ?? '未名乗り'} / 世代=${verdict.lease.fence}）。奪ってはいない`;
     case 'expired':

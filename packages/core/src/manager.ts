@@ -7,12 +7,13 @@ import {
   grantLease,
   judgeLease,
   mayClaim,
+  releaseLease,
   touchLease,
   type LeaseSighting,
 } from './lease.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap, type RecentMap } from './recent.js';
-import { isRetryableRunnerError } from './runner-protocol.js';
+import { isFencedRunnerError, isRetryableRunnerError } from './runner-protocol.js';
 import type {
   RunnerClient,
   RunnerCredentialFingerprint,
@@ -313,6 +314,19 @@ export interface ManagerPool {
    * 戻り値は「中断されていて実際に resume した」分。
    */
   restore(): Promise<ManagerSummary[]>;
+  /**
+   * **その宛先の器が入れ替わったので、走っていた委譲を取り直す**（M5 PR4）。
+   *
+   * `restore()` とは拾う対象が違う。あちらは**台帳にしか無い**委譲（`#records` に
+   * 像が無いもの）を拾う口で、走行中だった委譲は先頭で見送る。器が入れ替わったときに
+   * 拾いたいのは**まさにその走行中だった分**なので、`restore()` を呼んでも1本も
+   * 拾えない（`onSwap` を `restore()` だけに繋いだ版が実際にそうだった）。
+   *
+   * **引き取ってよいかの判定はこの先の関門（貸し出し期限）が持つ。** ここが約束
+   * するのは「取り直しを試みる」までで、まだ持ち主が握っている委譲は挑み直しの梯子へ
+   * 載るだけである。
+   */
+  reattachRunner(runnerId: string): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -852,6 +866,12 @@ class Pool implements ManagerPool {
     return run;
   }
 
+  async reattachRunner(runnerId: string): Promise<void> {
+    // 中身は runner の名乗り（`hello`）と同じ1本である。**契機が増えても経路は
+    // 増やさない** — 増やすと「どちらの経路で拾われたか」で振る舞いが変わりうる。
+    await this.#reattach(runnerId);
+  }
+
   async #restoreExclusive(): Promise<ManagerSummary[]> {
     // **走っていることを、await を挟む前に立てる。** 同一プロセスの runner は
     // `connect()` の中で同期的に名乗るので、ここで立てそこねると `#reattach` が
@@ -1055,10 +1075,24 @@ class Pool implements ManagerPool {
       record.waiting = [];
       record.attached = false;
       record.job.status = 'stopped';
-      // **止まったと確かめた回だけ貸し出しを返す。** `not_stopped` / `unknown` では
-      // 台帳を1文字も書かないのと同じ理由で、ここでも返さない（確かめていない停止で
-      // 貸し出しを返すと、まだ走っているセッションを別の器が引き取れてしまう）。
-      delete record.job.lease;
+      /*
+       * **止まったと確かめた回だけ貸し出しを返す。** `not_stopped` / `unknown` では
+       * 台帳を1文字も書かないのと同じ理由で、ここでも返さない（確かめていない停止で
+       * 貸し出しを返すと、まだ走っているセッションを別の器が引き取れてしまう）。
+       *
+       * **⚠️ さらに「誰に確かめたか」を見る。** 止まったの判定は `#runnerOf` が引いた
+       * 宛先に `list()` を聞き直して出しているが、`Registry#get` は同じ名前を名乗る器が
+       * 2台あれば先に見つかった方を返す（線形一致）。**持ち主でない器に聞いて「無い」と
+       * 言われただけ**の場合に貸し出しを返すと、走り続けている委譲を「止めた」と記録した
+       * うえで、唯一の防御まで外すことになる。だから持ち主が応えていると言えるときだけ
+       * 返す（判定できないときは返さない — 期限が来れば引き取れる）。
+       */
+      const holder = record.job.lease;
+      if (holder !== undefined) {
+        const seen = this.#sighting(holder.runnerId);
+        const sameHolder = holder.instanceId !== undefined && seen.instanceId === holder.instanceId;
+        if (sameHolder) record.job.lease = releaseLease(holder, this.#now());
+      }
       await this.#persist(record);
       // **停止は明示的な終端である。** 台帳には残るので `list()` / `manager_send` は
       // これまでどおり答えられる（`#retire` の JSDoc）。
@@ -1365,7 +1399,38 @@ class Pool implements ManagerPool {
           // 一時的にこけた場合（起動直後・瞬断・5xx）、次の名乗りは永久に来ないので、
           // 台帳が `running` のまま誰も走っていない仕事が残る — この経路が塞ごうと
           // していた穴と同じ形である。だから**自分で予約する**。
-          if (isRetryableRunnerError(error)) retry = true;
+          if (isFencedRunnerError(error)) {
+            /*
+             * **世代で拒まれた（409）。これは「戻せなかった」ではない。**
+             *
+             * runner が持っている世代のほうが新しい＝この委譲は**自分より新しい世代の
+             * 誰かが握っている**（そのセッションは生きていて、動かしている者が居る）。
+             * ここを下の枝（`lost` にして像から外す）へ落とすと、クローンが「戻せな
+             * かった」と読んで新しく起こし直し、**fencing の失敗経路から二重実行へ
+             * 到達する。**
+             *
+             * だから状態は動かさず、挑み直しもしない（同じ世代で投げ直しても同じ答えが
+             * 返る）。**その代わり必ず知らせる** — 単一のデーモンで起きたなら、それは
+             * 台帳の書き込みが落ちたか、もう1つのデーモンが走っているかのどちらかで、
+             * どちらも人間が知る必要がある。
+             */
+            await this.#journal({
+              type: 'decision',
+              decision: `[${job.id}] 取り直しを止めた（runner がより新しい世代を持っている＝別の誰かが握っている）`,
+              grounds: String(error),
+            });
+            this.#post({
+              type: 'manager_message',
+              id: randomUUID(),
+              at: new Date(this.#now()).toISOString(),
+              managerId: job.id,
+              kind: 'report',
+              text:
+                `${job.id} の取り直しが世代で拒まれました（409）。この委譲は**自分より新しい世代の誰かが握っています**。` +
+                `終わったとは限らないので、**新しく起こし直さないでください** — ` +
+                `台帳の貸し出しと runner の世代が食い違っています（デーモンが2つ走っているか、貸し出しの書き込みが落ちた可能性）。人間へ相談すること: ${String(error)}`,
+            });
+          } else if (isRetryableRunnerError(error)) retry = true;
           else {
             // 挑み直さないと決めたので、**ジョブ側に覚える**（runner 単位の `retry`
             // では表せない。同じ runner の別ジョブが予約を積むたびに巻き込まれる）。
@@ -1623,17 +1688,42 @@ class Pool implements ManagerPool {
      * する**——`clone.ts` の「それでも書けなければ動かない」と同じ側に倒す。
      */
     const before = record.job.lease;
+    const beforeUpdatedAt = record.job.updatedAt;
     record.job.lease = next;
     try {
       record.job.updatedAt = new Date(now).toISOString();
       await this.#stores.jobs.putJob(record.job);
     } catch (error) {
+      // **像を書く前の姿へ戻す。** 貸し出しだけ戻して `updatedAt` を進めたままにすると、
+      // 次に書けた回の台帳が「この時刻に何かを書いた」と言うのに中身が伴わない。
       record.job.lease = before;
+      record.job.updatedAt = beforeUpdatedAt;
       record.leaseRefusal = {
         detail: `貸し出しを台帳へ書けなかったので引き取らない（書けないまま走らせると、次の契機が同じ委譲を無条件で奪える）: ${String(error)}`,
       };
       return false;
     }
+
+    /*
+     * **奪った回を記録する。** ここを書かないと、引き取りの記録は「見送った」側だけに
+     * なり、**実際に奪った回と、その根拠が日誌のどこにも残らない。**
+     *
+     * とくに大事なのは2つの区別である:
+     *
+     * - `expired: 'drained'` — 器が古いプロセスを畳んだ**という約束**を根拠に奪った
+     *   （約束が守られない構成では、この根拠は成り立たない。`decideAfterSwap` の doc）
+     * - `undecidable` — 判定材料が無いまま奪った。**「奪っていない」とは言えていない**
+     *
+     * 両方とも「たまたま踏まなかった」側に落ちうるので、根拠つきで残す
+     * （AGENTS.md「報告の形」）。
+     */
+    await this.#journal({
+      type: 'decision',
+      decision:
+        `[${record.job.id}] 引き取った（貸し出しを世代 ${next.fence} で貸し直した` +
+        `${next.instanceId === undefined ? '。応えているプロセスは未名乗り' : ` / instanceId=${next.instanceId}`}）`,
+      grounds: describeVerdict(verdict),
+    });
     return true;
   }
 
@@ -2189,7 +2279,11 @@ class Pool implements ManagerPool {
         if (event.selfFenced === true) {
           record.waiting = [];
           record.attached = false;
-          delete record.job.lease;
+          // **返すのは印を立てることで、消すことではない**（世代を残す。`lease.ts` の
+          // `releaseLease` / `schema.ts` の `fence` の項）。
+          if (record.job.lease !== undefined) {
+            record.job.lease = releaseLease(record.job.lease, this.#now());
+          }
           await this.#persist(record);
           await this.#journal({
             type: 'exchange',
@@ -2221,8 +2315,14 @@ class Pool implements ManagerPool {
          * — 期限を待つ理由がここには無い（期限は「言ってもらえなかったとき」のための
          * ものである）。返さないと、器が行儀よく畳まれた後の引き取りが猶予のぶんだけ
          * 遅れる（能力を落とさずに済む場所で落とさない）。
+         *
+         * **消さずに印を立てる。** 消すと世代（`fence`）まで消え、返却の知らせが遅れて
+         * 届いた場合に runner が覚えている世代より小さい世代を渡すことになる
+         * （＝生きているセッションへの命令が拒まれ続ける。`schema.ts` の `fence` の項）。
          */
-        delete record.job.lease;
+        if (record.job.lease !== undefined) {
+          record.job.lease = releaseLease(record.job.lease, this.#now());
+        }
         await this.#persist(record);
         if (event.status === 'failed') this.#emit(event.managerId, 'report', event.reason);
         // **`closed` は runner 側の `RunnerSession#finish()` を通った印**であり、
@@ -2388,7 +2488,10 @@ class Pool implements ManagerPool {
      * 生き続け、引き取れる時刻が永久に来ない。
      */
     const lease = record.job.lease;
-    if (lease !== undefined) {
+    // **返した貸し出しは進めない。** 進めると「返してある」のに期限が動き続け、
+    // 記録として何を意味するのかが分からなくなる（引き取りの判定には効かないが、
+    // 後から読む側は「まだ握っている」と読む）。
+    if (lease !== undefined && lease.releasedAt === undefined) {
       const seen = this.#sighting(lease.runnerId);
       if (seen.instanceId !== undefined && seen.instanceId === lease.instanceId) {
         record.job.lease = touchLease(lease, this.#now());

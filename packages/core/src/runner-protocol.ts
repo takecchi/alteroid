@@ -747,6 +747,22 @@ export class RunnerFenceError extends Error {
  * 逆に 4xx は runner が「その命令は受け取れない」と答えているので、同じものを
  * 投げ直しても同じ答えが返る（混雑を表す 408 / 429 だけは別）。
  */
+/**
+ * **世代で拒まれた**（runner が「その命令はもっと古い世代のものだ」と答えた）。
+ *
+ * デーモン側から見ると `RunnerHttpError` の 409 として届く（runner 側の
+ * `RunnerFenceError` は器の中の型なので、HTTP を跨いだ先には状態番号しか残らない）。
+ *
+ * **これを「戻せなかった」と同じ扱いにしないこと。** 409 が返るのは、その委譲を
+ * **自分より新しい世代の誰かが握っている**ときである — つまりそのセッションは
+ * 生きていて、誰かが動かしている。ここで台帳を `lost` にして像から外すと、
+ * 「戻せなかった」と読んだクローンが**新しく起こし直して二重実行になる**
+ * （fencing が防ごうとしているものそのものへ、fencing の失敗経路から到達する）。
+ */
+export function isFencedRunnerError(error: unknown): boolean {
+  return error instanceof RunnerHttpError && error.status === 409;
+}
+
 export function isRetryableRunnerError(error: unknown): boolean {
   if (!(error instanceof RunnerHttpError)) return true;
   if (error.status === 408 || error.status === 429) return true;

@@ -217,6 +217,7 @@ export {
   grantLease,
   judgeLease,
   mayClaim,
+  releaseLease,
   touchLease,
   type LeaseSighting,
   type LeaseVerdict,
@@ -288,6 +289,7 @@ export {
 } from './profile-service.js';
 export {
   createRunnerRegistry,
+  isFencedRunnerError,
   isRetryableRunnerError,
   RunnerFenceError,
   RunnerHttpError,

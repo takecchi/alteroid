@@ -383,15 +383,33 @@ class Host implements RunnerHost {
    */
   #checkLeaseExpiry(): void {
     const now = Date.now();
-    for (const session of [...this.#sessions.values()]) {
+    for (const [managerId, session] of [...this.#sessions.entries()]) {
       const ttlMs = session.leaseTtlMs;
       if (ttlMs === undefined) continue;
       if (now - this.#lastDaemonContact < ttlMs) continue;
-      void session.selfFence(
-        'デーモンと連絡が取れないので貸し出し期限が切れた（自己失効）。' +
-          `最後に接触があったのは ${new Date(this.#lastDaemonContact).toISOString()}、` +
-          `約束していた貸し出し期限は ${ttlMs}ms。`,
-      );
+      void session
+        .selfFence(
+          'デーモンと連絡が取れないので貸し出し期限が切れた（自己失効）。' +
+            `最後に接触があったのは ${new Date(this.#lastDaemonContact).toISOString()}、` +
+            `約束していた貸し出し期限は ${ttlMs}ms。`,
+        )
+        /*
+         * **畳むのに失敗したことを黙って落とさない。**
+         *
+         * `selfFence` → `#finish` は生ログの退避（実 I/O）を挟むので落ちうる。ここは
+         * `setInterval` のコールバックなので、握らないと unhandled rejection になって
+         * **器のログにしか出ない**（デーモンには何も届かない）。しかも落ちた場合は
+         * セッションが畳まれていない可能性があり、**引き取る側は「相手は自分で畳んだ」
+         * という前提で期限を数えている** — つまりここは前提が崩れた瞬間そのものなので、
+         * 上へ言うのが唯一の出口である。
+         */
+        .catch((error: unknown) => {
+          this.#emit({
+            type: 'note',
+            managerId,
+            text: `貸し出し期限の自己失効に失敗した（このセッションは畳まれていない可能性がある）: ${String(error)}`,
+          });
+        });
     }
   }
 

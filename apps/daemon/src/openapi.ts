@@ -717,6 +717,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     restore() {
       throw new Error('spec 生成専用のスタブ: 引き継ぎはしない');
     },
+    reattachRunner() {
+      throw new Error('spec 生成専用のスタブ: 取り直しはしない');
+    },
     stop() {
       throw new Error('spec 生成専用のスタブ');
     },

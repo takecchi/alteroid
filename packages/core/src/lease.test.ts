@@ -48,6 +48,71 @@ describe('judgeLease', () => {
     expect(mayClaim(verdict)).toBe(true);
   });
 
+  /**
+   * **返却は「終わったと本人が言った」ことである。** 期限は「言ってもらえなかった
+   * とき」のためのものなので、返っているなら待つ理由が無い。
+   */
+  it('持ち主が返している貸し出しは、期限を待たずに引き取れる（世代は残る）', () => {
+    const lease = leaseAt({ releasedAt: new Date(T0).toISOString() });
+    const verdict = judgeLease({
+      lease,
+      now: T0 + 1_000,
+      // 別のプロセスが応えていても関係ない（返っているので奪う相手が居ない）。
+      answering: { runnerId: 'runner-primary', instanceId: 'boot-9', instanceSince: T0 + 500 },
+    });
+    expect(verdict).toEqual({ kind: 'released', lease });
+    expect(mayClaim(verdict)).toBe(true);
+    // **世代は残っている。** 貸し直しは数え直しではなく続きになる（`schema.ts` の
+    // `fence` の項 — 数え直すと、遅れて届いた返却の後に生きているセッションへ
+    // 小さい世代を渡して拒まれ続ける）。
+    expect(grantLease({ previous: lease, runnerId: 'runner-primary', now: T0 + 2_000 }).fence).toBe(
+      lease.fence + 1,
+    );
+  });
+
+  /**
+   * **名乗る前に貸した委譲を、永久に無防備にしない。**
+   *
+   * 名簿が `instanceId` を知る前に貸すことがある（開けた直後の名乗りの探りが落ちた
+   * 回）。名前を突き合わせられないからといって一律に「判定できない」へ倒すと、その
+   * 委譲は器が入れ替わっても猶予を1秒も待たずに引き取られる。**時刻で言えることは
+   * 言う。**
+   */
+  it('持ち主が名乗っていなくても、貸す前から居るプロセスなら持ち主だと言える', () => {
+    const lease = leaseAt({ instanceId: undefined });
+    const verdict = judgeLease({
+      lease,
+      now: T0 + 5_000,
+      // 貸した時刻（T0）より前から見ているプロセス。
+      answering: { runnerId: 'runner-primary', instanceId: 'boot-1', instanceSince: T0 - 60_000 },
+    });
+    expect(verdict).toEqual({ kind: 'same-holder', lease });
+  });
+
+  it('持ち主が名乗っていなくて、貸した後に現れたプロセスなら入れ替えとして猶予を数える', () => {
+    const lease = leaseAt({ instanceId: undefined });
+    const appeared = T0 + 1_000;
+    const verdict = judgeLease({
+      lease,
+      now: appeared + 1_000,
+      answering: { runnerId: 'runner-primary', instanceId: 'boot-2', instanceSince: appeared },
+    });
+    expect(verdict.kind).toBe('held');
+    if (verdict.kind === 'held') {
+      expect(verdict.claimableAt).toBe(appeared + LEASE_DRAIN_MS + LEASE_MARGIN_MS);
+    }
+  });
+
+  it('持ち主が名乗っておらず、いまの相手をいつから見ているかも分からなければ判定しない', () => {
+    const verdict = judgeLease({
+      lease: leaseAt({ instanceId: undefined }),
+      now: T0 + 1_000,
+      answering: { runnerId: 'runner-primary', instanceId: 'boot-2' },
+    });
+    expect(verdict.kind).toBe('undecidable');
+    expect(mayClaim(verdict)).toBe(true);
+  });
+
   it('いま応えているプロセスが持ち主なら「奪う話ではない」と答える（繋ぎ直し）', () => {
     const lease = leaseAt();
     const verdict = judgeLease({

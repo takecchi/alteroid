@@ -4,6 +4,7 @@ import { LEASE_DRAIN_MS, LEASE_MARGIN_MS } from './lease.js';
 import { createManagerPool, type ManagerPool } from './manager.js';
 import {
   createRunnerRegistry,
+  RunnerHttpError,
   type RunnerClient,
   type RunnerCredentialFingerprint,
   type RunnerEvent,
@@ -13,7 +14,7 @@ import {
   type RunnerRegistry,
   type RunnerResumeCommand,
 } from './runner-protocol.js';
-import type { Job, JobLease, JournalEntry } from './schema.js';
+import type { InboxEvent, Job, JobLease, JournalEntry } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 
@@ -50,6 +51,8 @@ class LeasedRunner implements RunnerClient {
   readonly stops: string[] = [];
   /** いまこの宛先に応えているプロセス（`/health` の `instanceId` に相当）。 */
   instanceId: string | undefined = 'boot-2';
+  /** 次の resume で投げる失敗（世代で拒む 409 を作るため）。 */
+  resumeFailure: unknown;
 
   async identity(): Promise<{ runnerId?: string; instanceId?: string } | undefined> {
     return {
@@ -77,6 +80,7 @@ class LeasedRunner implements RunnerClient {
   }
   async start(): Promise<void> {}
   async resume(command: RunnerResumeCommand): Promise<void> {
+    if (this.resumeFailure !== undefined) throw this.resumeFailure;
     this.resumes.push(command);
     this.hold(command.managerId);
   }
@@ -118,12 +122,17 @@ interface Harness {
   advance: (ms: number) => void;
   /** ここから先の台帳への書き込みを失敗させる（**読みは通る**）。 */
   breakWrites: (reason: string) => void;
+  /** クローンの受信箱へ流れた分（黙って止めないことを確かめるため）。 */
+  inbox: InboxEvent[];
   journal: () => Promise<JournalEntry[]>;
   close: () => Promise<void>;
 }
 
-async function harnessOf(): Promise<Harness> {
+async function harnessOf(options: { silent?: boolean } = {}): Promise<Harness> {
   const runner = new LeasedRunner();
+  // **名乗らせないなら登録の前に決める。** 名簿は開けた瞬間に名乗りを聞くので、
+  // 後から消しても「最後に名乗った値」が残る（＝判定材料が消えない）。
+  if (options.silent === true) runner.instanceId = undefined;
   const registry = createRunnerRegistry();
   await registry.register({ label: 'http://runner:4518', open: async () => runner });
   const base = createMemoryStores();
@@ -146,9 +155,10 @@ async function harnessOf(): Promise<Harness> {
   };
   // 名簿は器の時計で `instanceSince` を刻むので、判定の時計もそこから始める。
   let clock = Date.now();
+  const inbox: InboxEvent[] = [];
   const pool = createManagerPool({
     stores,
-    post: () => undefined,
+    post: (event) => inbox.push(event),
     runners: registry,
     now: () => clock,
   });
@@ -163,6 +173,7 @@ async function harnessOf(): Promise<Harness> {
     breakWrites: (reason) => {
       writeFailure = reason;
     },
+    inbox,
     journal: async () => base.journal.list({ limit: 100 }),
     close: async () => {
       await pool.stop();
@@ -189,7 +200,11 @@ function runningJob(lease: JobLease | undefined): Job {
   };
 }
 
-function leaseHeldBy(instanceId: string | undefined, fence = 4): JobLease {
+function leaseHeldBy(
+  instanceId: string | undefined,
+  fence = 4,
+  overrides: Partial<JobLease> = {},
+): JobLease {
   return {
     runnerId: 'runner-primary',
     ...(instanceId === undefined ? {} : { instanceId }),
@@ -197,6 +212,7 @@ function leaseHeldBy(instanceId: string | undefined, fence = 4): JobLease {
     grantedAt: new Date(Date.now() - 2_000).toISOString(),
     seenAt: new Date(Date.now() - 1_000).toISOString(),
     ttlMs: 10 * 60_000,
+    ...overrides,
   };
 }
 
@@ -281,15 +297,59 @@ describe('引き取りの関門（貸し出し期限）', () => {
     await h.close();
   });
 
-  it('持ち主が名乗っていなかったジョブは判定できないので引き取る（奪っていないとは言わない）', async () => {
+  /**
+   * **持ち主が名乗っていなかった貸し出しでも、時刻で言えることがある。**
+   *
+   * 名簿が `instanceId` を知る前に貸した委譲（開けた直後の名乗りの探りが落ちるとこう
+   * なる）は、名前を突き合わせられない。それを一律に「判定できない」へ倒すと、**その
+   * 委譲は以後ずっと無防備になり、器が入れ替わっても猶予を1秒も待たずに引き取られる。**
+   *
+   * いま応えているプロセスを**貸す前から**見ているなら、貸した相手はそのプロセスで
+   * ある（台帳へ書くのはデーモン1つだけなので）。
+   */
+  it('名乗っていなかった貸し出しでも、貸す前から居るプロセスなら繋ぎ直しとして扱う', async () => {
     const h = await harnessOf();
+    // いま応えているプロセス（登録時に観測）より**後**に貸した、という形にする。
+    const grantedAt = new Date(Date.now() + 1_000).toISOString();
+    await h.stores.jobs.putJob(
+      runningJob(leaseHeldBy(undefined, 2, { grantedAt, seenAt: grantedAt })),
+    );
+
+    await h.pool.restore();
+
+    expect(h.runner.resumes).toHaveLength(1);
+    // **繋ぎ直しなので世代を進めない**（進めると runner が持つ世代より新しくなる）。
+    expect(h.runner.resumes[0]?.lease).toMatchObject({ fence: 2 });
+
+    await h.close();
+  });
+
+  it('名乗っていなかった貸し出しで、貸した後に現れたプロセスなら入れ替えとして猶予を待つ', async () => {
+    const h = await harnessOf();
+    // 貸した時刻はこの器を見始めるより前（`leaseHeldBy` の既定は 2 秒前）。
     await h.stores.jobs.putJob(runningJob(leaseHeldBy(undefined, 2)));
+
+    await h.pool.restore();
+    expect(h.runner.resumes).toEqual([]);
+
+    // 猶予を過ぎれば引き取る（見捨てない）。
+    h.advance(LEASE_DRAIN_MS + LEASE_MARGIN_MS + 1_000);
+    await h.pool.reattachRunner('runner-primary');
+    expect(h.runner.resumes).toHaveLength(1);
+    expect((await jobOf(h.stores))?.lease).toMatchObject({ fence: 3, instanceId: 'boot-2' });
+
+    await h.close();
+  });
+
+  it('いま応えている側が名乗らないときは判定しない（それでも引き取る）', async () => {
+    const h = await harnessOf({ silent: true });
+    await h.stores.jobs.putJob(runningJob(leaseHeldBy('boot-1', 2)));
 
     await h.pool.restore();
 
     expect(h.runner.resumes).toHaveLength(1);
     // 引き取ったので世代は進む（次に古い世代の命令が来たら runner が拒める）。
-    expect((await jobOf(h.stores))?.lease).toMatchObject({ fence: 3, instanceId: 'boot-2' });
+    expect((await jobOf(h.stores))?.lease).toMatchObject({ fence: 3 });
 
     await h.close();
   });
@@ -397,6 +457,39 @@ describe('引き取りの関門（貸し出し期限）', () => {
   });
 
   /**
+   * **世代で拒まれた（409）を「戻せなかった」と同じ扱いにしない。**
+   *
+   * 409 が返るのは、その委譲を**自分より新しい世代の誰かが握っている**ときである
+   * （＝そのセッションは生きていて、動かしている者が居る）。ここで台帳を `lost` に
+   * して像から外すと、「戻せなかった」と読んだクローンが新しく起こし直し、
+   * **fencing の失敗経路から二重実行へ到達する。**
+   */
+  it('世代で拒まれたら、台帳を lost にせず「起こし直すな」と知らせる', async () => {
+    const h = await harnessOf();
+    await h.stores.jobs.putJob(runningJob(leaseHeldBy('boot-2', 3)));
+    h.runner.resumeFailure = new RunnerHttpError('resume が世代で拒まれた', 409);
+
+    await h.pool.reattachRunner('runner-primary');
+
+    // **終端にしない。** 走り続けているセッションの記録を殺さない。
+    const summary = (await h.pool.list()).find((manager) => manager.managerId === 'mgr-1');
+    expect(summary?.status).toBe('running');
+    expect((await jobOf(h.stores))?.status).toBe('running');
+    // **黙らない。** クローンには「起こし直すな」まで届く。
+    const told = h.inbox
+      .map((event) => (event.type === 'manager_message' ? event.text : ''))
+      .join('\n');
+    expect(told).toContain('新しく起こし直さないでください');
+    expect(told).not.toContain('戻せなかった');
+    const decided = (await h.journal()).filter((entry) => entry.type === 'decision');
+    expect(
+      decided.map((entry) => (entry.type === 'decision' ? entry.decision : '')).join('\n'),
+    ).toContain('取り直しを止めた');
+
+    await h.close();
+  });
+
+  /**
    * **自己失効は「終わった」ではない。**
    *
    * runner が「デーモンと連絡が取れない」と言って自分で畳んだとき、そのプロセスからは
@@ -424,8 +517,14 @@ describe('引き取りの関門（貸し出し期限）', () => {
     const after = await jobOf(h.stores);
     // **状態は動かさない**（`lost` にすると自動の引き取りが二度と触らない）。
     expect(after?.status).toBe('running');
-    // **貸し出しは返す**（次の引き取りが猶予を待たない）。
-    expect(after?.lease).toBeUndefined();
+    /*
+     * **貸し出しは返す**（次の引き取りが猶予を待たない）。**消さずに印を立てる** —
+     * 消すと世代（fence）まで消え、返却の知らせが遅れて届いた場合に runner が
+     * 覚えている世代より小さい世代を渡すことになる（＝生きているセッションへの命令が
+     * 拒まれ続ける）。
+     */
+    expect(after?.lease?.releasedAt).toEqual(expect.any(String));
+    expect(after?.lease?.fence).toBe(3);
     // クローンへ黙っていない。
     const told = (await h.journal()).map((entry) =>
       entry.type === 'exchange' ? entry.text : entry.type,
@@ -456,7 +555,10 @@ describe('引き取りの関門（貸し出し期限）', () => {
 
     const result = await h.pool.abort('mgr-1', '確かめるため', 'clone');
     expect(result.outcome).toBe('stopped');
-    expect((await jobOf(h.stores))?.lease).toBeUndefined();
+    // 返却は印であって消去ではない（世代を残す）。
+    const stopped = (await jobOf(h.stores))?.lease;
+    expect(stopped?.releasedAt).toEqual(expect.any(String));
+    expect(stopped?.fence).toBe(9);
 
     await h.close();
   });
