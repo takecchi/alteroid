@@ -96,6 +96,15 @@ export interface LeaseSighting {
    * 仕事を奪いに行く）。
    */
   instanceSince?: number;
+  /**
+   * **同じ `runnerId` を名乗る器が2台以上開いているときの台数。** 1台のときは
+   * 入らない。
+   *
+   * 名簿は `label` ごとに行を持つので、同じ名前の行が2つ並びうる
+   * （`RunnerRegistry` の `#entries`）。そのときは「どちらの instanceId と
+   * 突き合わせるか」を決める材料が無い（#200）。
+   */
+  duplicates?: number;
 }
 
 /** 引き取ってよいかの答え。**「分からない」を2値へ潰さない。** */
@@ -122,11 +131,75 @@ export type LeaseVerdict =
    * **引き取ってよい**（名乗らない runner のジョブを永久に引き取れなくしないため）。
    * ただし「奪っていない」ことは言えていない。
    */
-  | { kind: 'undecidable'; lease: JobLease };
+  | { kind: 'undecidable'; lease: JobLease }
+  /**
+   * **同じ `runnerId` を名乗る器が2台以上開いている。宛先が一意でない**（#200）。
+   *
+   * ## `undecidable` とは別である
+   *
+   * `undecidable` は「判定材料が無い」（分からない）。こちらは**「宛先が一意で
+   * ないと分かっている」**（分かっている）。同じ「判定できない」でも中身が逆で、
+   * 前者は危険の証拠ではないが、後者はそれ自体が危険の証拠である。1つの答えへ
+   * 畳むと、`undecidable` を許す理由（名乗らない runner を締め出さない）が
+   * こちらの危険まで一緒に通してしまう。
+   *
+   * ## 引き取らない
+   *
+   * 名簿（`RunnerRegistry#get`）は線形一致で先に見つかった方を**黙って**返す
+   * ので、貸し出しを判定した相手（この answering）と、実際に話しかける相手が
+   * 食い違いうる。`manager.ts` の `#sighting` の doc が名指ししているとおり、
+   * **食い違ったまま `same-holder` と答えて奪ったことにする**のが一番危ない
+   * 形である。
+   *
+   * ## 時間では解けない
+   *
+   * `held` と違って `claimableAt` を持たない。`held` は「いつか時間で解ける」
+   * を約束できるが、併存は**人間が `ALTEROID_RUNNER_ID` を直すまで**解けない
+   * — 待っても宛先の一意性は自然には戻らない。時刻を返すと、待てば通ると
+   * 誤って伝えることになる。
+   *
+   * ## `runnerId` は `lease.runnerId` ではない
+   *
+   * ここに持つ `runnerId` は **`answering.runnerId`**（いま重複して問い合わせて
+   * いる宛先）である。**`lease.runnerId`（台帳の貸し出しが指している宛先）とは
+   * 限らない** — この判定は `judgeLease` の中で
+   * `lease.runnerId !== answering.runnerId` の枝より**前**に置いてある（台帳が
+   * 食い違う別の宛先を指している状態でも、併存はその手前で先に成り立つ）。
+   * `describeVerdict` が `lease.runnerId` を名指しすると、両者が食い違う場合に
+   * **重複していない方の名前**を報告してしまい、読んだ人間はそちらの設定を
+   * 見に行って何も見つけられない（`resumeFailureDetail` を直したのと同じ種類の、
+   * 読み手が誤った行動を取る嘘である）。
+   */
+  | { kind: 'ambiguous'; lease: JobLease; runnerId: string; duplicates: number };
 
-/** 引き取り（または繋ぎ直し）に進んでよい判定か。 */
+/**
+ * 引き取り（または繋ぎ直し）に進んでよい判定か。
+ *
+ * **ホワイトリストである。ブラックリストにしないこと。** かつては
+ * `verdict.kind !== 'held'` だった — この形は、`LeaseVerdict` に判定を1つ
+ * 足すたびに、その新しい判定の既定を「引き取ってよい」（危険側）にする。
+ * `ambiguous` が生まれる前の穴はまさにこの形だった: 併存は `undecidable` に
+ * 畳まれ、`undecidable` は「引き取ってよい」だったので、`ambiguous` という
+ * 判定が無いあいだは危険側が既定になっていた。
+ *
+ * **許す側を名指しする。** 名指ししなかった（＝未知の）判定は自動で `false`
+ * （断る）に落ちる。同じ理由・同じ形の先例が `manager.ts` の `#restoreJobs`
+ * にある（`attached = status === 'running' || status === 'waiting_human'`。
+ * 「生きているとしか読めない状態を名指しすれば、未知の状態は既定で安全側に
+ * 落ちる」）。
+ *
+ * **非対称だから安全側へ倒す。** 引き取りを断っても、断られた側は挑み直しの
+ * 梯子（回数では諦めない）で回復できる。誤って許して二重に走らせると、
+ * `gh pr create` のような操作が二度走り、取り返しがつかない。
+ */
 export function mayClaim(verdict: LeaseVerdict): boolean {
-  return verdict.kind !== 'held';
+  return (
+    verdict.kind === 'unheld' ||
+    verdict.kind === 'released' ||
+    verdict.kind === 'same-holder' ||
+    verdict.kind === 'expired' ||
+    verdict.kind === 'undecidable'
+  );
 }
 
 /**
@@ -143,6 +216,55 @@ export function judgeLease(input: {
   // 持ち主が返している。**期限を待つ理由が無い**（期限は「言ってもらえなかった
   // とき」のためのものである）。世代はこの記録に残っているので、貸し直しは続きになる。
   if (lease.releasedAt !== undefined) return { kind: 'released', lease };
+
+  /*
+   * **併存（同じ `runnerId` を名乗る器が2台以上）は、ここで即答する。**
+   *
+   * ## 「入れ替え」と「併存」は違う
+   *
+   * 入れ替えは**1行**（同じ `label`）の `instanceId` が変わること。併存は
+   * **同じ `runnerId` の行が2つ**並ぶこと。前者は「その宛先の裏の器が入れ替
+   * わった」と言えるが、後者はどちらの器も入れ替わっていない — 2台とも
+   * 生きたまま並んでいる。
+   *
+   * ## だから併存を `decideAfterSwap` へ流してはいけない
+   *
+   * この下（`lease.instanceId !== answering.instanceId` の枝）は
+   * `decideAfterSwap` を呼び、`answering.instanceSince` から畳む猶予を数えて
+   * `expired: 'drained'` を出す。あれの前提は「器が入れ替えのときに古い
+   * プロセスを畳む」ことだが、**併存ではその前提が最初から成り立っていない**
+   * （どちらの器も入れ替わっていない。ただ2台とも生きている）。ここを
+   * `decideAfterSwap` に流すと、猶予を過ぎた瞬間に**もう一方が現に動いた
+   * ままなのに「奪ってよい」となり、記録には「もう動いていないと言えた」
+   * という嘘が残る**。
+   *
+   * ## `unheld` / `released` より後に置く理由
+   *
+   * あの2つは「いま応えているプロセス」（`answering`）を一切見ずに台帳
+   * だけで言えるので、宛先が一意でなくても意味が変わらない。**これより下は
+   * 全部 `answering` を見る**ので、宛先が一意でなければ全部が不健全になる
+   * — だからここで打ち切る。
+   *
+   * ## 残る穴 — `unheld` は併存でも通る
+   *
+   * この判定より前の `unheld`（貸し出しの記録が無い委譲）は併存でも変わらず
+   * 引き取れる。この欄より前に作られた委譲が走っていれば、併存下でその
+   * 2本目が起きうる。締め出すと「この欄より前の委譲を締め出さない」という
+   * `unheld` 自身の既存の約束を壊すので、ここでは塞がない（#200 の設計提案
+   * 「6. 塞げない部分」）。
+   */
+  if (answering.duplicates !== undefined && answering.duplicates > 1) {
+    // **`lease.runnerId` ではなく `answering.runnerId` を持たせる。** この判定は
+    // `lease.runnerId !== answering.runnerId` の枝（下）より前に在るので、台帳が
+    // 別の宛先を指している状態でも先に成り立つ。`lease.runnerId` を持たせると、
+    // 重複していない方の名前を「重複している」と報告することになる。
+    return {
+      kind: 'ambiguous',
+      lease,
+      runnerId: answering.runnerId,
+      duplicates: answering.duplicates,
+    };
+  }
 
   const seenAt = Date.parse(lease.seenAt);
   /*
@@ -312,5 +434,17 @@ export function describeVerdict(verdict: LeaseVerdict): string {
       return `まだ持ち主が握っている（instanceId=${verdict.lease.instanceId ?? '未名乗り'} / 引き取れるのは ${new Date(verdict.claimableAt).toISOString()} 以降）`;
     case 'undecidable':
       return `入れ替わったかを**判定できない**（どちらかが instanceId を名乗らない）。引き取るが、生きている器の仕事を奪っていないことは確かめられていない`;
+    case 'ambiguous':
+      // **`verdict.runnerId`（＝ answering 側）を使う。`verdict.lease.runnerId` では
+      // ない** — 台帳の貸し出しが別の宛先を指している状態では両者が食い違い、
+      // `lease.runnerId` を出すと重複していない方の名前を報告してしまう
+      // （`LeaseVerdict` の `ambiguous` の doc）。
+      return (
+        `runnerId=${verdict.runnerId} を名乗る器が ${verdict.duplicates} 台開いている（名前が一意でない）。` +
+        'どちらが持ち主か決められない（名簿は線形一致で先に見つかった方を黙って返すので、判定した相手と話す相手が食い違いうる）。' +
+        '**引き取らない。** 時間では解けない — このまま待っても宛先の一意性は自然には戻らない。' +
+        '直し方: 器ごとに違う ALTEROID_RUNNER_ID を設定すること（既定は runner-primary なので、2台目の置き忘れで重なる）。' +
+        'Railway なら ./railway/scale-runners.sh が id を振る。直れば自動で引き取る'
+      );
   }
 }
