@@ -2642,11 +2642,25 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
   );
 
   /**
-   * **5項目（id + 名前 + 概要 + 作成 + 更新）が出ているか。**
+   * **P1 と P2 は別の性質であって、1つに畳まない。**
    *
    * 人間の依頼の逐語:「一覧系ツールは最低でも id + 名前 + 概要 + updated_at +
-   * created_at が欲しい」。#208 / #215 で手で揃えたが、**手で書いている限り、次に
-   * 一覧を足す人が落としても何も落ちない。**
+   * created_at が欲しい」。**これが P1 である。** #208 / #215 で手で揃えたが、
+   * **手で書いている限り、次に一覧を足す人が落としても何も落ちない。**
+   *
+   * | | 中身 | 出所 |
+   * | --- | --- | --- |
+   * | **P1** | 5つの値（id / 名前 / 概要 / 作成 / 更新）が出ているか | 人間の依頼そのもの |
+   * | **P2** | 4つの一覧（`renderListingEntry` を通るもの）と同じ3行ブロックの並びか | #231 が別に足した目標 |
+   *
+   * **旧版はこの2つを1つの `it.each` に畳んでいた**（`作成/更新は2行目・
+   * 概要は3行目` という**位置固定**の正規表現で P1 を測っていた）。
+   * `memory_list` は #220 で P1 の5項目を全部出すようになったが、
+   * **P2 の形（階層をインデントで表す1行1件の木）ではない**ため、旧版の
+   * 位置固定の歯では「5項目は出ているのに落ちる」という誤検出になっていた
+   * （実測: `AssertionError: expected '- [fact] doc-0001: 題0001 (作成:
+   * 2026-08…' to match /^ {2}…/ 更新: \d{4}-…/`）。**満たしているものを
+   * 未達に見せる歯は、それ自体が欠陥である。**
    *
    * **この歯は「どの口を通ったか」を見ない。出力に5項目が在るかを見る。**
    * `renderListingEntry`（型で5つを必須にした口）は `renderListing` を塞がないので、
@@ -2656,16 +2670,14 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
    * 集合は `SWEPT`（`CLONE_TOOL_NAMES` から `_list` を機械的に集めたもの）を使う。
    * **表を手で書かない** — 名前の表を持つと、次の人がそこへ足し忘れる。
    */
-  const FIVE_FIELD_EXCLUDED = new Map<string, string>([
-    [
-      'memory_list',
-      // **順番待ちであって、移し忘れではない。** #220（記憶に createdAt を持たせ
-      // memory_list に出す）がまだ open の draft で、同じ行を書き換えている。
-      // 軸そのものは在る（`updatedAt` は既に出ている）ので、#220 が入れば移せる。
-      // ついでに、あちらは階層をインデントで表す1行1件の木で、ブロック型の一覧とは
-      // 形が違う——移すときはそこも設計する。
-      '#220 待ち（同じ行を書き換えている draft が open）。軸は在る',
-    ],
+
+  /**
+   * **軸そのものが未決で、P1 を測ること自体ができないもの。**
+   *
+   * 散文の理由を書くのはここまでにする——下の自己測定の歯が、この除外が
+   * まだ正しいこと（＝いまも P1 を満たしていないこと）を毎回測り直す。
+   */
+  const AXIS_UNDECIDED = new Map<string, string>([
     [
       'runner_list',
       // **こちらは時間では解決しない。判断が要る。** #211 — 器は永続化層を持たず
@@ -2681,21 +2693,152 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       '#211 待ち（作成の軸そのものが未決。unknown で埋めない）',
     ],
   ]);
-  const FIVE_FIELD_SWEPT = SWEPT.filter((name) => !FIVE_FIELD_EXCLUDED.has(name));
 
-  it('5項目の網が空にならず、除外は実在する道具を指している', () => {
+  /**
+   * **P1（5項目）は満たすが、P2（4一覧と同じ3行ブロック）の形は違うことが
+   * 設計であるもの。**
+   *
+   * `memory_list` がこれである。5項目は出ている（#220 で着地済み。実測:
+   * `- [fact] doc-a: 題A (作成: 2026-08-01T09:00:00.000Z / 更新:
+   * 2026-08-20T10:00:00.000Z) — これは要旨である`）。**揃っていないのは
+   * P2 の位置だけ**——`memory_list` は階層をインデントで表す1行1件の木で、
+   * 共通の口（`renderListingEntry` の3行ブロック）へ寄せると親子関係を
+   * 表す手段（インデント）が無くなる。揃えるのではなく能力を削ることに
+   * なるので、寄せない。
+   */
+  const SHAPE_DIFFERENT = new Map<string, string>([
+    [
+      'memory_list',
+      '形が違うことが設計（P1 は満たす）。階層をインデントで表す1行1件の木なので、' +
+        '4つの一覧と同じ3行ブロックへ寄せると親子関係を表す手段が消える。' +
+        '#220（記憶に createdAt を持たせ memory_list に出す）は既にマージ済みで、' +
+        '「#220 待ち」という理由はもう書けない',
+    ],
+  ]);
+
+  /** P1（5項目）を測る対象。軸が未決のものだけを外す——`memory_list` は含む。 */
+  const FIVE_FIELD_SWEPT = SWEPT.filter((name) => !AXIS_UNDECIDED.has(name));
+  /** P2（4一覧と同じ3行ブロック）を測る対象。形が違うことが設計のものも外す。 */
+  const STRICT_SHAPE_SWEPT = FIVE_FIELD_SWEPT.filter((name) => !SHAPE_DIFFERENT.has(name));
+
+  it('P1/P2 それぞれの網が空にならず、除外は実在する道具を指している', () => {
     // **除外の綴りが違えば、除外は効かないまま「除外したつもり」になる。**
-    for (const name of FIVE_FIELD_EXCLUDED.keys()) expect(SWEPT).toContain(name);
+    for (const name of AXIS_UNDECIDED.keys()) expect(SWEPT).toContain(name);
+    for (const name of SHAPE_DIFFERENT.keys()) expect(SWEPT).toContain(name);
     // 掃き出しが空だと `it.each` は0件で「通った」ように見える。
-    expect(FIVE_FIELD_SWEPT.length).toBeGreaterThanOrEqual(4);
+    expect(FIVE_FIELD_SWEPT.length).toBeGreaterThanOrEqual(5);
     expect(FIVE_FIELD_SWEPT).toContain('approvals_list');
     expect(FIVE_FIELD_SWEPT).toContain('schedule_list');
     expect(FIVE_FIELD_SWEPT).toContain('commitment_list');
     expect(FIVE_FIELD_SWEPT).toContain('manager_list');
+    // **`memory_list` は P1 の網に入る——除外していない。**
+    expect(FIVE_FIELD_SWEPT).toContain('memory_list');
+    expect(STRICT_SHAPE_SWEPT.length).toBeGreaterThanOrEqual(4);
+    expect(STRICT_SHAPE_SWEPT).toContain('approvals_list');
+    expect(STRICT_SHAPE_SWEPT).toContain('schedule_list');
+    expect(STRICT_SHAPE_SWEPT).toContain('commitment_list');
+    expect(STRICT_SHAPE_SWEPT).toContain('manager_list');
+    expect(STRICT_SHAPE_SWEPT).not.toContain('memory_list');
+    expect(STRICT_SHAPE_SWEPT).not.toContain('runner_list');
   });
 
+  /**
+   * **1件（entry）の切り出し方。** `- ` で始まる行（先頭の空白は許す——
+   * `memory_list` の子は `  - ` とインデントされる）から、次の entry の
+   * 直前までを1件とする。省略の断り書き（`…ほか N 件は省略`）は `- ` で
+   * 始まらないので、entry には数えない（直前の最後の entry の末尾に付くだけ
+   * で、判定には影響しない）。
+   */
+  function splitListingEntries(reply: string): string[] {
+    const lines = reply.split('\n');
+    const starts: number[] = [];
+    lines.forEach((line, index) => {
+      if (/^\s*-\s\S/.test(line)) starts.push(index);
+    });
+    return starts.map((start, i) => {
+      const end = i + 1 < starts.length ? starts[i + 1]! : lines.length;
+      return lines.slice(start, end).join('\n');
+    });
+  }
+
+  const CREATED_AT_PATTERN = /作成: (?:\d{4}-\d{2}-\d{2}T[\d:.]+Z|不明)/;
+  const UPDATED_AT_PATTERN = /更新: \d{4}-\d{2}-\d{2}T[\d:.]+Z/;
+  // id + 名前。位置は固定しない——P2（3行ブロック）は改行の直後、P1
+  // （`memory_list`、1行1件の木）は同じ行の中に概要まで続く。どちらも
+  // 「- 」の直後に、別々の非空テキストが2つ以上並ぶ、という点は共通。
+  const ID_AND_NAME_PATTERN = /^\s*-\s+\S+\s+\S/;
+  // `作成: … / 更新: …` を1つのまとまりとして取り除くための正規表現
+  // （`renderListingEntry` と `renderMemoryListing` はどちらもこの1文の形で書く）。
+  const TIMESTAMP_PAIR_PATTERN =
+    /作成: (?:\d{4}-\d{2}-\d{2}T[\d:.]+Z|不明) \/ 更新: \d{4}-\d{2}-\d{2}T[\d:.]+Z/;
+
+  /**
+   * **概要が在るか。** 作成/更新のペアを取り除いたうえで、
+   * (a) 1行目より後ろに何か書いてある行が残っているか（P2: 3行目の概要）、
+   * (b) 1行目の中に `—`（概要の区切り）に続く非空のテキストがあるか
+   *     （P1: `memory_list` は同じ行に `— <概要>` で続ける）
+   * のどちらかで判定する。**タイトルを取り除いていないので、この判定は
+   * 「概要が丸ごと消えた」ことを両方の形で検出できる**——下の
+   * 「`memory_list` で概要が無い記憶は、概要の不在として検出される」で、
+   * frontmatter に `description` が無い記憶を実際に作って確かめてある
+   * （`— …` が現れず正しく落ちる）。ただし片方の形の中で「タイトルの
+   * 一部を残し概要だけ削る」ような変異までは分離できない（タイトルと
+   * 概要が同じ行に同居する P1 の構造上の限界。詳細は PR 本文）。
+   */
+  function hasSummaryBeyondTimestamps(entry: string): boolean {
+    const withoutTimestamps = entry.replace(TIMESTAMP_PAIR_PATTERN, '');
+    const lines = withoutTimestamps.split('\n');
+    const hasSummaryLine = lines.slice(1).some((line) => line.trim().length > 0);
+    const hasInlineSummary = /—\s*\S/.test(lines[0] ?? '');
+    return hasSummaryLine || hasInlineSummary;
+  }
+
+  /** P1（5項目）の違反を全部返す。空配列なら満たしている。 */
+  function fiveFieldViolations(entry: string): string[] {
+    const violations: string[] = [];
+    const firstLine = entry.split('\n')[0] ?? '';
+    if (!CREATED_AT_PATTERN.test(entry)) violations.push('作成 が無い');
+    if (!UPDATED_AT_PATTERN.test(entry)) violations.push('更新 が無い');
+    if (!ID_AND_NAME_PATTERN.test(firstLine)) violations.push('id + 名前 が先頭行に無い');
+    if (!hasSummaryBeyondTimestamps(entry))
+      violations.push('概要 が無い（作成/更新を除いても本文が残らない）');
+    return violations;
+  }
+
+  /**
+   * P2（4一覧と同じ3行ブロック）の厳密な形。**旧版の位置固定の正規表現を
+   * そのまま残す**——弱めていない。
+   */
+  function matchesStrictBlockShape(entry: string): boolean {
+    const lines = entry.split('\n');
+    if (!/^- \S+ \S/.test(lines[0] ?? '')) return false;
+    if (
+      !/^ {2}作成: \d{4}-\d{2}-\d{2}T[\d:.]+Z \/ 更新: \d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(
+        lines[1] ?? '',
+      )
+    )
+      return false;
+    if (!/^ {2}\S/.test(lines[2] ?? '')) return false;
+    return true;
+  }
+
   it.each(FIVE_FIELD_SWEPT)(
-    '%s — どの1件も id + 名前 / 作成 + 更新 / 概要 を決まった順で出す',
+    '%s — どの1件も id + 名前 / 作成 + 更新 / 概要 を出す（形は問わない。P1）',
+    async (name) => {
+      const h = await flooded(60);
+
+      const reply = await h.call(name, {});
+      const entries = splitListingEntries(reply);
+      expect(entries.length).toBeGreaterThan(0);
+
+      for (const entry of entries) {
+        expect(fiveFieldViolations(entry)).toEqual([]);
+      }
+    },
+  );
+
+  it.each(STRICT_SHAPE_SWEPT)(
+    '%s — どの1件も id + 名前 / 作成 + 更新 / 概要 を決まった順で出す（P2）',
     async (name) => {
       const h = await flooded(60);
 
@@ -2721,6 +2864,47 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     },
   );
 
+  /**
+   * **除外そのものを測る歯。** 散文の理由は書いた時点で凍る——実際に
+   * 「#220 待ち」という `memory_list` の除外理由は、#220 がマージされた
+   * 瞬間に嘘になり、何も落ちなかった。だから除外を自己測定にする:
+   *
+   * - `AXIS_UNDECIDED` の各件は、**いまも P1 を満たさないこと。** 満たす
+   *   ようになったら、この歯が赤くなって「除外を外せ」と言う
+   * - `SHAPE_DIFFERENT` の各件は、**P1 を満たし、かつ P2 を満たさないこと。**
+   *   形を寄せたら P2 側の assert が赤くなって除外を外させる
+   */
+  it.each([...AXIS_UNDECIDED.keys()])(
+    '%s は除外の理由どおり、いまも P1 を満たさない（満たしたら除外を外す番）',
+    async (name) => {
+      const h = await flooded(60);
+      const reply = await h.call(name, {});
+      const entries = splitListingEntries(reply);
+      expect(entries.length).toBeGreaterThan(0);
+
+      const anyViolation = entries.some((entry) => fiveFieldViolations(entry).length > 0);
+      expect(anyViolation).toBe(true);
+    },
+  );
+
+  it.each([...SHAPE_DIFFERENT.keys()])(
+    '%s は P1 を満たし、P2 は満たさない（形が違うのは設計であることの実測）',
+    async (name) => {
+      const h = await flooded(60);
+      const reply = await h.call(name, {});
+      const entries = splitListingEntries(reply);
+      expect(entries.length).toBeGreaterThan(0);
+
+      // P1: 満たす。
+      for (const entry of entries) {
+        expect(fiveFieldViolations(entry)).toEqual([]);
+      }
+      // P2: 満たさない（少なくとも1件は厳密な3行ブロックの形にならない）。
+      const anyShapeMismatch = entries.some((entry) => !matchesStrictBlockShape(entry));
+      expect(anyShapeMismatch).toBe(true);
+    },
+  );
+
   it('積んだ器が本当に溢れる量を持っている（上限を外すと落ちること）', async () => {
     const h = await flooded(60);
 
@@ -2730,6 +2914,35 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     const approvals = await h.stores.jobs.listApprovals({ pendingOnly: true });
     const raw = approvals.map((a) => a.question).join('\n');
     expect(raw.length).toBeGreaterThan(OUTPUT_CAP * 4);
+  });
+
+  /**
+   * **概要の判定が「何か書いてあるか」だけの緩い歯になっていないことの確認。**
+   *
+   * `hasSummaryBeyondTimestamps` はタイトルを取り除かずに判定するので、
+   * `memory_list` の1行1件という形の中で「タイトルの残り香」を概要と
+   * 誤認しないかを、概要が本当に無い記憶（frontmatter に `description` が
+   * 無い）で確かめる。
+   */
+  it('memory_list で概要が無い記憶は、概要の不在として検出される（歯が緩んでいないことの確認）', async () => {
+    const h = harness();
+    await h.stores.persona.write(
+      'doc-a',
+      '---\ndescription: これは要旨である\ntype: fact\n---\n# 題A\n\n本文A',
+    );
+    // frontmatter に description を持たない記憶。
+    await h.stores.persona.write('doc-b', '---\ntype: premise\n---\n# 題B\n\n本文B');
+
+    const reply = await h.call('memory_list', {});
+    const entries = splitListingEntries(reply);
+    expect(entries.length).toBe(2);
+
+    const withDescription = entries.find((entry) => entry.includes('doc-a'))!;
+    const withoutDescription = entries.find((entry) => entry.includes('doc-b'))!;
+    expect(fiveFieldViolations(withDescription)).toEqual([]);
+    expect(fiveFieldViolations(withoutDescription)).toContain(
+      '概要 が無い（作成/更新を除いても本文が残らない）',
+    );
   });
 });
 
