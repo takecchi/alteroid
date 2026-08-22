@@ -2801,3 +2801,85 @@ describe('一覧を抜粋にしたものには、全文の行き先がある', (
     expect(reply).toContain('全文置換');
   });
 });
+
+describe('commitment_list を文字数の予算へ寄せる（潜在バグの修正）', () => {
+  it('commitment_list は件数ではなく文字数の予算で切る（30件を下回っていても長い本文なら切れる）', async () => {
+    // **回帰の歯。** かつては `COMMITMENT_LIST_LIMIT = 30` という件数の
+    // 上限で切っていたので、30件を下回るここでは全件がそのまま出てしまい
+    // 一覧レベルの「省略」の合図は出なかった。いまは `COMMITMENT_LIST_BUDGET`
+    // （文字数）で切るので、件数が30を下回っていても長い本文が積み重なれば
+    // 切れる。この歯は「件数の上限に戻す」変異を落とす。
+    //
+    // **足場は十分に大きくすること。** 薄い足場だと予算が拘束条件にならず、
+    // 変異が生き残る（`.claude/skills/listing-and-detail/SKILL.md` の
+    // `runner_list` の例と同じ形）。1件500字の本文を25件（かつての件数
+    // 上限30を下回る数）積んでも、実測で切れることを確かめてある。
+    const h = harness();
+    const long = 'あ'.repeat(500);
+    for (let index = 0; index < 25; index += 1) {
+      await h.call('commitment_open', { body: `約束${String(index).padStart(3, '0')}: ${long}` });
+    }
+
+    const reply = await h.call('commitment_list', {});
+
+    // **`/省略/` だけでは弱い。** 1件の本文（500字超）は `COMMITMENT_BODY_LIMIT`
+    // （240字）の抜粋でも「…（270 文字省略。全 510 文字）」のように「省略」を
+    // 含む——これは一覧レベルの打ち切りとは無関係に、本文が長いだけで
+    // 毎回出る。予算で列自体が切れたことを見るには、一覧の断り書きの形
+    // （`…ほか N 件は省略`）で狙う必要がある。実際にこの弱い形で変異試験を
+    // 通したところ、予算判定そのものを外す変異（budget を巨大な値にする）が
+    // 生き残った——「1件の本文が長い」ことと「一覧が予算で切れた」ことは
+    // 別の観測で、前者だけを見ても後者は測れない。
+    expect(reply).toMatch(/…ほか \d+ 件は省略/);
+    // 25件全部を対象に打ち切ったことも見る（一部だけを積んで拾えた偶然ではない）。
+    expect(reply).toContain('未了は 25 件あり');
+    // 25件ぶんの本文（1件あたり500字超）を全部出せば優に12,000字を超える。
+    // 予算（8,000）＋断り書きぶんの余裕を見ても、それよりは十分小さい。
+    expect(reply.length).toBeLessThan(9_000);
+  });
+
+  it('commitment_list は includeClosed:true でも、省略の断り書きで片付いた分を未了と偽らない', async () => {
+    // **回帰の歯。** `total`（全件数）をそのまま「未了は N 件」と言うと、
+    // `includeClosed: true` のときは片付いた分まで未了として数えた嘘に
+    // なる（数が大きく出る方向の嘘）。open と closed を両方積み、予算で
+    // 切れるところまで足場を大きくする（切れなければ `omitted` は呼ばれない
+    // ので、何も測れない——実測で total=30・shown=23 まで切れることを
+    // 確かめてある）。
+    const h = harness();
+    const long = 'あ'.repeat(500);
+    const openCount = 15;
+    const closedCount = 15;
+    for (let index = 0; index < openCount; index += 1) {
+      await h.stores.commitments.open({
+        id: `open-${index}`,
+        at: `2026-01-01T00:00:${String(index).padStart(2, '0')}.000Z`,
+        origin: 'self',
+        body: `未了${String(index).padStart(3, '0')}: ${long}`,
+      });
+    }
+    for (let index = 0; index < closedCount; index += 1) {
+      const id = `closed-${index}`;
+      await h.stores.commitments.open({
+        id,
+        at: `2026-01-02T00:00:${String(index).padStart(2, '0')}.000Z`,
+        origin: 'self',
+        body: `片付いた${String(index).padStart(3, '0')}: ${long}`,
+      });
+      await h.stores.commitments.close(
+        id,
+        `2026-01-03T00:00:${String(index).padStart(2, '0')}.000Z`,
+        '対応済み',
+      );
+    }
+    const total = openCount + closedCount;
+
+    const reply = await h.call('commitment_list', { includeClosed: true });
+
+    // 予算で実際に切れたこと（そうでなければ omitted は呼ばれておらず、
+    // 下の2本の assert はどちらも何も測っていない）。
+    expect(reply).toMatch(/…ほか \d+ 件は省略/);
+    // 片付いた分を含めた総数を「未了は」と偽らずに言う。
+    expect(reply).toContain(`片付けた分を含めて ${total} 件あり`);
+    expect(reply).not.toContain(`未了は ${total} 件あり`);
+  });
+});
