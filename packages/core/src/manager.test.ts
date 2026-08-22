@@ -55,6 +55,18 @@ import type { UsageTotals } from './usage.js';
 type WorkerWaitEvent = Extract<RunnerEvent, { type: 'worker_wait' }>;
 
 /**
+ * #252 の「知らせは全文を埋め込まない」試験だけが使う、末尾専用の目印。
+ *
+ * `.repeat()` で作った巨大な依頼文・報告は同じ語の繰り返しなので、末尾から
+ * 適当に切り出しても、抜粋が残す先頭部分に**同じ文字列が偶然含まれる**
+ * （このテストを書く過程で実際に起きた——`not.toContain` が意図せず先頭一致で
+ * 落ちた）。切り詰めの外にしか存在しない一意な文字列を末尾へ足すことで、
+ * 「本当に末尾（＝切り詰められた側）が含まれていないか」だけを見る。
+ */
+const REQUEST_TAIL_MARKER = 'REQUEST-TAIL-MARKER-9f3c2a91';
+const REPORT_TAIL_MARKER = 'REPORT-TAIL-MARKER-7e1b44de';
+
+/**
  * SDK を実際に呼ばずに委譲の配線を検証する。
  *
  * ここで固定したいのは北極星に由来する不変条件（モデル帯・`tools` を渡さないこと・
@@ -794,7 +806,14 @@ describe('デーモン再起動後（M4）', () => {
     // クローンが「続きがある」ことを知る経路は受信箱ただ1つ
     const notice = s.inbox.find((event) => event.type === 'manager_message');
     expect(notice).toMatchObject({ managerId: 'mgr-old', kind: 'report' });
-    expect((notice as { text: string }).text).toContain('DB の移行をやって');
+    // **#252（2026-08-23 反転）: 依頼文はもう埋め込まない。** クローン自身が書いた
+    // 依頼文を、状態が変わっただけの知らせに全文で送り返す理由が無い（読みたければ
+    // `manager_report ... part=request`）。かつてここは「依頼文が入っている」ことを
+    // 固定していたが、それ自体が #252 の欠陥だった。
+    expect((notice as { text: string }).text).not.toContain('DB の移行をやって');
+    expect((notice as { text: string }).text).toContain('manager_report managerId=mgr-old');
+    // 直近の報告は短いので抜粋してもそのまま全文が残る（切り詰めの確認は
+    // 「知らせは全文を埋め込まない（#252）」の巨大な報告のテストが別に持つ）。
     expect((notice as { text: string }).text).toContain('スキーマまで書いた');
 
     // 一覧では走行中に戻っている（止まったまま live: true に見せない）
@@ -802,6 +821,56 @@ describe('デーモン再起動後（M4）', () => {
     // resume 後のセッション id は SDK が返す新しいもので上書きされる
     // （次の再起動でもそこから戻れるように、台帳は常に最新の id を持つ）。
     expect(listed).toMatchObject({ live: true, status: 'running', runnerId: 'runner-test' });
+
+    await s.pool.stop();
+  });
+
+  /**
+   * #252: `#notifyRestored` は「デーモンが再起動した」という**事実の知らせ**でしか
+   * ない。依頼文（クローン自身が書いたもの）を送り返す理由は無く、直近の報告も
+   * 全文を持つ必要は無い——中身はいつでも `manager_report` で読める。
+   *
+   * **末尾の断片で判定する。** 抜粋は先頭を残す仕様（`excerpt.ts`）なので、先頭が
+   * 一致するだけの判定では「全文の先頭だけ切って残りは埋め込んだまま」でも
+   * 素通りしてしまう。
+   */
+  it('#252: 依頼文・直近の報告が巨大でも、知らせは全文を埋め込まない', async () => {
+    // **末尾だけに現れる目印を混ぜる。** 本文が同じ語の繰り返しだと、抜粋が
+    // 残す先頭部分にも「末尾と同じ文字列」が偶然含まれてしまい、末尾の断片で
+    // 判定したつもりが先頭一致と区別できなくなる（このテストを書く過程で実際に
+    // 一度それで落ちた）。抜粋に絶対に現れない一意な目印を末尾へ置く。
+    const hugeRequest = 'これは巨大な依頼文である。'.repeat(300) + REQUEST_TAIL_MARKER;
+    const hugeReport = 'これは巨大な直近の報告である。'.repeat(300) + REPORT_TAIL_MARKER;
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({ ...runningJob, request: hugeRequest, lastReport: hugeReport });
+    const s = setup(undefined, { stores });
+
+    await s.pool.restore();
+
+    const notice = s.inbox.find((event) => event.type === 'manager_message') as {
+      text: string;
+    };
+    expect(notice).toBeDefined();
+
+    const requestTail = REQUEST_TAIL_MARKER;
+    const reportTail = REPORT_TAIL_MARKER;
+    // 全文はもちろん、末尾だけでも含まれない（先頭一致では見えない切り詰めを見る）。
+    expect(notice.text).not.toContain(hugeRequest);
+    expect(notice.text).not.toContain(hugeReport);
+    expect(notice.text).not.toContain(requestTail);
+    expect(notice.text).not.toContain(reportTail);
+
+    // 本文の長さに上限がある（依頼文・報告よりも十分小さい）。
+    expect(notice.text.length).toBeLessThan(1000);
+    expect(notice.text.length).toBeLessThan(hugeRequest.length);
+    expect(notice.text.length).toBeLessThan(hugeReport.length);
+
+    // 続きの取り方が manager_report と id 付きで名指しされている。
+    expect(notice.text).toContain(`manager_report managerId=${runningJob.id}`);
+    expect(notice.text).toContain('part=request');
+
+    // 省いた分量の断り書きが出ている（excerpt.ts の流儀）。
+    expect(notice.text).toContain('文字省略');
 
     await s.pool.stop();
   });
@@ -2502,6 +2571,53 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
     await s.pool.stop();
   });
 
+  /**
+   * #252: `#notifyResumeFallback` も「生ログから作り直して続けた」という**事実の
+   * 知らせ**でしかない。依頼文・直近の報告を全文で持たせる理由が無い。
+   */
+  it('#252: 依頼文・直近の報告が巨大でも、生ログからの知らせは全文を埋め込まない', async () => {
+    // **末尾だけに現れる目印を混ぜる。** 本文が同じ語の繰り返しだと、抜粋が
+    // 残す先頭部分にも「末尾と同じ文字列」が偶然含まれてしまい、末尾の断片で
+    // 判定したつもりが先頭一致と区別できなくなる（このテストを書く過程で実際に
+    // 一度それで落ちた）。抜粋に絶対に現れない一意な目印を末尾へ置く。
+    const hugeRequest = 'これは巨大な依頼文である。'.repeat(300) + REQUEST_TAIL_MARKER;
+    const hugeReport = 'これは巨大な直近の報告である。'.repeat(300) + REPORT_TAIL_MARKER;
+    const s = setupRejecting(savedLog);
+    await s.stores.jobs.putJob({ ...runningJob, request: hugeRequest, lastReport: hugeReport });
+
+    await s.pool.restore();
+
+    await expect
+      .poll(
+        () =>
+          s.inbox.find(
+            (event) => event.type === 'manager_message' && event.text.includes('生ログ'),
+          ),
+        { timeout: 2000 },
+      )
+      .toBeDefined();
+    const notice = s.inbox.find(
+      (event) => event.type === 'manager_message' && event.text.includes('生ログ'),
+    ) as { text: string };
+
+    const requestTail = REQUEST_TAIL_MARKER;
+    const reportTail = REPORT_TAIL_MARKER;
+    expect(notice.text).not.toContain(hugeRequest);
+    expect(notice.text).not.toContain(hugeReport);
+    expect(notice.text).not.toContain(requestTail);
+    expect(notice.text).not.toContain(reportTail);
+
+    expect(notice.text.length).toBeLessThan(1000);
+    expect(notice.text.length).toBeLessThan(hugeRequest.length);
+    expect(notice.text.length).toBeLessThan(hugeReport.length);
+
+    expect(notice.text).toContain(`manager_report managerId=${runningJob.id}`);
+    expect(notice.text).toContain('part=request');
+    expect(notice.text).toContain('文字省略');
+
+    await s.pool.stop();
+  });
+
   it('生ログも無いなら、再試行を打ち切ってクローンへ知らせる', async () => {
     // 投げ直しても同じ答えしか返らない失敗である。**黙って挑み続けない** —
     // 同じ session_id の resume が繰り返されると、同じ障害通知が受信箱に積み上がる
@@ -2524,10 +2640,60 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
       (event) => event.type === 'manager_message' && event.text.includes('戻せなかった'),
     ) as { text: string };
     expect(notice.text).toContain('自動では再試行しない');
-    expect(notice.text).toContain('DB の移行をやって');
+    // **#252（2026-08-23 反転）: 依頼文はもう埋め込まない。** 送り返す理由が無い
+    // 依頼文の代わりに、`manager_report ... part=request` への案内が残る。
+    expect(notice.text).not.toContain('DB の移行をやって');
+    expect(notice.text).toContain('manager_report managerId=mgr-lost');
 
     // 生ログが無いのだから、勝手に白紙のセッションを起こさない
     expect(s.opened.filter((entry) => entry.resume === undefined)).toHaveLength(0);
+
+    await s.pool.stop();
+  });
+
+  /**
+   * #252: `#notifyUnresumable` も「前のセッションから戻せなかった」という**事実の
+   * 知らせ**でしかない。依頼文・直近の報告を全文で持たせる理由が無い。
+   */
+  it('#252: 依頼文・直近の報告が巨大でも、戻せなかった知らせは全文を埋め込まない', async () => {
+    // **末尾だけに現れる目印を混ぜる。** 本文が同じ語の繰り返しだと、抜粋が
+    // 残す先頭部分にも「末尾と同じ文字列」が偶然含まれてしまい、末尾の断片で
+    // 判定したつもりが先頭一致と区別できなくなる（このテストを書く過程で実際に
+    // 一度それで落ちた）。抜粋に絶対に現れない一意な目印を末尾へ置く。
+    const hugeRequest = 'これは巨大な依頼文である。'.repeat(300) + REQUEST_TAIL_MARKER;
+    const hugeReport = 'これは巨大な直近の報告である。'.repeat(300) + REPORT_TAIL_MARKER;
+    const s = setupRejecting(null);
+    await s.stores.jobs.putJob({ ...runningJob, request: hugeRequest, lastReport: hugeReport });
+
+    await s.pool.restore();
+
+    await expect
+      .poll(
+        () =>
+          s.inbox.find(
+            (event) => event.type === 'manager_message' && event.text.includes('戻せなかった'),
+          ),
+        { timeout: 2000 },
+      )
+      .toBeDefined();
+    const notice = s.inbox.find(
+      (event) => event.type === 'manager_message' && event.text.includes('戻せなかった'),
+    ) as { text: string };
+
+    const requestTail = REQUEST_TAIL_MARKER;
+    const reportTail = REPORT_TAIL_MARKER;
+    expect(notice.text).not.toContain(hugeRequest);
+    expect(notice.text).not.toContain(hugeReport);
+    expect(notice.text).not.toContain(requestTail);
+    expect(notice.text).not.toContain(reportTail);
+
+    expect(notice.text.length).toBeLessThan(1000);
+    expect(notice.text.length).toBeLessThan(hugeRequest.length);
+    expect(notice.text.length).toBeLessThan(hugeReport.length);
+
+    expect(notice.text).toContain(`manager_report managerId=${runningJob.id}`);
+    expect(notice.text).toContain('part=request');
+    expect(notice.text).toContain('文字省略');
 
     await s.pool.stop();
   });
