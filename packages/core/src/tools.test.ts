@@ -2641,6 +2641,86 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     },
   );
 
+  /**
+   * **5項目（id + 名前 + 概要 + 作成 + 更新）が出ているか。**
+   *
+   * 人間の依頼の逐語:「一覧系ツールは最低でも id + 名前 + 概要 + updated_at +
+   * created_at が欲しい」。#208 / #215 で手で揃えたが、**手で書いている限り、次に
+   * 一覧を足す人が落としても何も落ちない。**
+   *
+   * **この歯は「どの口を通ったか」を見ない。出力に5項目が在るかを見る。**
+   * `renderListingEntry`（型で5つを必須にした口）は `renderListing` を塞がないので、
+   * 低レベルの口を直接呼んで手で組めば型は素通りできる——**それでもこの歯は捕まる。**
+   * 機構ではなく性質を測っているからである。
+   *
+   * 集合は `SWEPT`（`CLONE_TOOL_NAMES` から `_list` を機械的に集めたもの）を使う。
+   * **表を手で書かない** — 名前の表を持つと、次の人がそこへ足し忘れる。
+   */
+  const FIVE_FIELD_EXCLUDED = new Map<string, string>([
+    [
+      'memory_list',
+      // **順番待ちであって、移し忘れではない。** #220（記憶に createdAt を持たせ
+      // memory_list に出す）がまだ open の draft で、同じ行を書き換えている。
+      // 軸そのものは在る（`updatedAt` は既に出ている）ので、#220 が入れば移せる。
+      // ついでに、あちらは階層をインデントで表す1行1件の木で、ブロック型の一覧とは
+      // 形が違う——移すときはそこも設計する。
+      '#220 待ち（同じ行を書き換えている draft が open）。軸は在る',
+    ],
+    [
+      'runner_list',
+      // **こちらは時間では解決しない。判断が要る。** #211 — 器は永続化層を持たず
+      // （名簿は `runner-protocol.ts` の `Registry` が持つインメモリの Map で、
+      // デーモンを再起動すれば全部消える）、`since` は「この状態になった時刻」で
+      // **状態が変わるたびに更新される**（= created_at ではない）。そして
+      // 「作成時刻」が (a) 器の定義が置かれた時刻 (b) いまの接続が確立した時刻 の
+      // どちらを指すのかが**決まっていない。**
+      //
+      // **`unknown` で埋めないこと。** `unknown` は「在るはずだが根拠が無い」を
+      // 表す値である。ここは**そもそも何を作成時刻と呼ぶかが未決**で、前者は
+      // 決めれば答えが出るが後者は決めても出ない。**混ぜると、未決が不明に化ける。**
+      '#211 待ち（作成の軸そのものが未決。unknown で埋めない）',
+    ],
+  ]);
+  const FIVE_FIELD_SWEPT = SWEPT.filter((name) => !FIVE_FIELD_EXCLUDED.has(name));
+
+  it('5項目の網が空にならず、除外は実在する道具を指している', () => {
+    // **除外の綴りが違えば、除外は効かないまま「除外したつもり」になる。**
+    for (const name of FIVE_FIELD_EXCLUDED.keys()) expect(SWEPT).toContain(name);
+    // 掃き出しが空だと `it.each` は0件で「通った」ように見える。
+    expect(FIVE_FIELD_SWEPT.length).toBeGreaterThanOrEqual(4);
+    expect(FIVE_FIELD_SWEPT).toContain('approvals_list');
+    expect(FIVE_FIELD_SWEPT).toContain('schedule_list');
+    expect(FIVE_FIELD_SWEPT).toContain('commitment_list');
+    expect(FIVE_FIELD_SWEPT).toContain('manager_list');
+  });
+
+  it.each(FIVE_FIELD_SWEPT)(
+    '%s — どの1件も id + 名前 / 作成 + 更新 / 概要 を決まった順で出す',
+    async (name) => {
+      const h = await flooded(60);
+
+      const reply = await h.call(name, {});
+      const lines = reply.split('\n');
+      // 省略の断り書きは `- ` で始まらない（`renderListing` がそのまま積む）ので、
+      // `- ` で始まる行は必ず1件の先頭行である。
+      const heads = lines.filter((line) => line.startsWith('- '));
+      expect(heads.length).toBeGreaterThan(0);
+
+      for (const [index, line] of lines.entries()) {
+        if (!line.startsWith('- ')) continue;
+        // id と名前。**名前が空だと `- <id> ` で終わるので \\S を要求する。**
+        expect(line).toMatch(/^- \S+ \S/);
+        // 作成と更新は必ず2行目、必ずこの並び。**位置まで固定する** —
+        // どこかに在ればよいことにすると、一覧ごとにばらばらな位置へ戻る。
+        expect(lines[index + 1]).toMatch(
+          /^ {2}作成: \d{4}-\d{2}-\d{2}T[\d:.]+Z \/ 更新: \d{4}-\d{2}-\d{2}T[\d:.]+Z$/,
+        );
+        // 概要は3行目。空行でないこと。
+        expect(lines[index + 2]).toMatch(/^ {2}\S/);
+      }
+    },
+  );
+
   it('積んだ器が本当に溢れる量を持っている（上限を外すと落ちること）', async () => {
     const h = await flooded(60);
 

@@ -6,6 +6,7 @@ import {
   excerptLine,
   page,
   renderListing,
+  renderListingEntry,
   renderListingFromEnd,
 } from './excerpt.js';
 
@@ -155,5 +156,53 @@ describe('page / describePage（全文を分けて渡す）', () => {
 
     expect(part.body).toBe('');
     expect(part.more).toBe(false);
+  });
+});
+
+/**
+ * #231。**5項目を型で必須にした口。**
+ *
+ * 型が守るのは「呼び手が5つとも渡したか」だけで、**出力に出ているか**は
+ * `tools.test.ts` の総当たり（「どの1件も id + 名前 / 作成 + 更新 / 概要 を
+ * 決まった順で出す」）が見る。ここで測るのは**組み方そのもの**である。
+ */
+describe('renderListingEntry（実体の一覧の1件を決まった順で組む）', () => {
+  const base = {
+    id: 'x-1',
+    title: '[札]',
+    summary: '要旨の行',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-02T00:00:00.000Z',
+  };
+
+  it('id と名前・作成と更新・概要を、この順で組む', () => {
+    // **4つの日付を別々にしてある**ので、作成と更新を取り違えても落ちる。
+    expect(renderListingEntry(base)).toBe(
+      [
+        '- x-1 [札]',
+        '  作成: 2026-01-01T00:00:00.000Z / 更新: 2026-01-02T00:00:00.000Z',
+        '  要旨の行',
+      ].join('\n'),
+    );
+  });
+
+  it('extra はそのまま概要の後ろへ続く（整形しない）', () => {
+    // この関数は `extra` を整形しない。何を出すかは一覧ごとに違うので、
+    // ここで畳むと嘘になる（呼び手が `  ` で始める約束）。
+    const out = renderListingEntry({ ...base, extra: ['  状態: 未了', '  宛先: mgr-1'] });
+
+    expect(out.split('\n').slice(3)).toEqual(['  状態: 未了', '  宛先: mgr-1']);
+  });
+
+  it('extra の null は落とす（条件つきの行をそのまま並べられる）', () => {
+    // **先頭でも末尾でもない位置に null を置く** — 端だけ落とす実装でも通る形に
+    // しないため。
+    const out = renderListingEntry({ ...base, extra: ['  先頭', null, '  末尾'] });
+
+    expect(out.split('\n').slice(3)).toEqual(['  先頭', '  末尾']);
+  });
+
+  it('extra が無ければ3行だけになる', () => {
+    expect(renderListingEntry(base).split('\n')).toHaveLength(3);
   });
 });

@@ -18,6 +18,7 @@ import {
   excerptLine,
   page,
   renderListing,
+  renderListingEntry,
   renderListingFromEnd,
 } from './excerpt.js';
 import type { ManagerDenial, ManagerPool, ManagerSummary } from './manager.js';
@@ -948,8 +949,9 @@ export function createCloneTools(context: ToolContext) {
         const pending = await stores.jobs.listApprovals({ pendingOnly: true });
         if (pending.length === 0) return text('（人間の回答待ちは無い）');
         const items = pending.map((approval) =>
-          [
-            `- ${approval.id} ${approvalTitle(approval.question)}`,
+          renderListingEntry({
+            id: approval.id,
+            title: approvalTitle(approval.question),
             // **この一覧は回答待ちだけを出すので `answeredAt` は常に無く、更新は
             // 作成と一致する。** それは軸が無いのではなく「まだ一度も変わって
             // いない」という観測そのものなので、値を作らずに `createdAt` を出す
@@ -967,15 +969,16 @@ export function createCloneTools(context: ToolContext) {
             // 書いていなければ区別が付かない。
             // 根拠は3実装のソースと呼び出し元1箇所の網羅（2026-08-22T15:58Z 観測）
             // であって、実行時カバレッジでは確かめていない。
-            `  作成: ${approval.createdAt} / 更新: ${approval.answeredAt ?? approval.createdAt}`,
-            `  ${excerptLine(approval.question, APPROVAL_QUESTION_EXCERPT)}`,
-            approval.jobId === undefined
-              ? null
-              : `  宛先: managerId: "${approval.jobId}"` +
-                (approval.requestId === undefined ? '' : `, requestId: "${approval.requestId}"`),
-          ]
-            .filter((line) => line !== null)
-            .join('\n'),
+            createdAt: approval.createdAt,
+            updatedAt: approval.answeredAt ?? approval.createdAt,
+            summary: excerptLine(approval.question, APPROVAL_QUESTION_EXCERPT),
+            extra: [
+              approval.jobId === undefined
+                ? null
+                : `  宛先: managerId: "${approval.jobId}"` +
+                  (approval.requestId === undefined ? '' : `, requestId: "${approval.requestId}"`),
+            ],
+          }),
         );
         return text(
           [
@@ -1123,12 +1126,17 @@ export function createCloneTools(context: ToolContext) {
         const plans = await stores.schedules.list();
         if (plans.length === 0) return text('（継続中の依頼は無い）');
         const items = plans.map((plan) =>
-          [
-            `- ${plan.kind}（${describeScheduleSpec(plan.spec)}）`,
-            `  依頼: ${excerptLine(plan.request, SCHEDULE_REQUEST_EXCERPT)}`,
-            `  作成: ${plan.createdAt} / 更新: ${plan.updatedAt}`,
-            `  前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}`,
-          ].join('\n'),
+          renderListingEntry({
+            // **この一覧の id は `kind` である。** 継続中の依頼は kind ごとに
+            // 高々1本なので、kind がそのまま鍵になる（`schedule_list kind=<kind>`
+            // で全文が取れる）。
+            id: plan.kind,
+            title: describeScheduleSpec(plan.spec),
+            createdAt: plan.createdAt,
+            updatedAt: plan.updatedAt,
+            summary: `依頼: ${excerptLine(plan.request, SCHEDULE_REQUEST_EXCERPT)}`,
+            extra: [`  前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}`],
+          }),
         );
         return text(
           [
@@ -1338,16 +1346,20 @@ export function createCloneTools(context: ToolContext) {
         );
         if (entries.length === 0) return text('（引き受けたまま終わっていない仕事は無い）');
         const items = entries.map((entry) =>
-          [
-            `- ${entry.id} ${commitmentOriginBadge(entry)}`,
+          renderListingEntry({
+            id: entry.id,
+            // 出所と `source` は先頭行の札が持つので、他の行では繰り返さない。
+            title: commitmentOriginBadge(entry),
             // 作成＝受け取った時刻、更新＝片付けた時刻（まだなら受け取った時刻）。
-            // 出所と `source` は先頭行の札が持つので、ここでは繰り返さない。
-            `  作成: ${entry.at} / 更新: ${entry.closedAt ?? entry.at}`,
-            `  ${excerptLine(entry.body, COMMITMENT_BODY_LIMIT)}`,
-            entry.closedAt === undefined
-              ? '  状態: 未了'
-              : `  状態: ${entry.closedAt} に片付けた（${excerptLine(entry.closedReason ?? '', 120)}）`,
-          ].join('\n'),
+            createdAt: entry.at,
+            updatedAt: entry.closedAt ?? entry.at,
+            summary: excerptLine(entry.body, COMMITMENT_BODY_LIMIT),
+            extra: [
+              entry.closedAt === undefined
+                ? '  状態: 未了'
+                : `  状態: ${entry.closedAt} に片付けた（${excerptLine(entry.closedReason ?? '', 120)}）`,
+            ],
+          }),
         );
         return text(
           [
@@ -1836,55 +1848,57 @@ export function createCloneTools(context: ToolContext) {
         // 何件で壊れるかが運任せになる。切ったなら必ずそう言う。
         // 積む形そのものは `renderListing` が持つ（一覧ごとに手で書かない）。
         const items = managers.map((manager) =>
-          [
-            `- ${manager.managerId} [${manager.status}${manager.live ? '' : '/セッション切断'}]`,
-            // **runnerId は空欄にしない。** 取れていないことを「未記録」という
-            // 文字列で読める形にする（AGENTS.md「取れない軸に0の行を作らない」と
-            // 同じ理由——空欄だと「取れていない」のか「読み忘れ」なのか区別できない）。
-            `  runner: ${manager.runnerId ?? '未記録'}`,
-            `  依頼: ${excerptLine(manager.request, LIST_REQUEST_EXCERPT)}`,
-            `  cwd: ${manager.cwd}`,
-            `  作成: ${manager.startedAt} / 更新: ${manager.updatedAt}`,
-            // **`lost` を状態名だけで済ませない。** 「終わった」と読まれると、
-            // 完了していない仕事がそのまま片付く。何が起きたかと、次に何をすれば
-            // よいかを、この一覧の中で言い切る。
-            //
-            // **ただし、言い切れるのは観測した分までである。** `lost` が表して
-            // いるのは「前のセッションへ戻れなかった」という**一つの**観測で
-            // あって、成果の有無ではない。デーモンは PR もブランチも見ていない
-            // （リポジトリの事情はマネージャーの領域である）。実際に、落ちる
-            // 直前に PR を出して CI を通しマージまで済ませていた仕事が、その
-            // 1分半後の器の作り直しで `lost` になり、この行が「途中で失われて
-            // いる（完了ではない）」と嘘をついた。
-            //
-            // 断定を外しても `done` とは混ざらない。「戻れなかった」は
-            // 「終えて待っている」ではないからである（PR #42 の分け方は保つ）。
-            manager.status === 'lost'
-              ? '  ⚠ 前のセッションへ戻れなかった。**戻れたかどうかしか見ていない** — ' +
-                'この仕事が終わっていたかは分からない（成果がリモートの PR・ブランチ・' +
-                'コミットまで届いていることがある）。まずそこを確かめ、続きが要ると' +
-                '判断したときだけ manager_start で起こし直すこと。'
-              : null,
-            // **拒否は `status` に映らない。** 分類器か deny 規則がその場で止めた
-            // 仕事は `running` のまま手が動かない。日誌と（繰り返したときだけ）
-            // 受信箱にしか出ないので、一覧を見ているクローンには「走っている」と
-            // しか読めなかった。状態の値は増やさず、状態に添える。
-            denialLine(context.managers?.denials(manager.managerId) ?? []),
-            // **待ちの要約も抜粋を通す。** runner 側の `brief(input, 200)` が実質の
-            // キャップになっていたが、`AskUserQuestion` の経路（`describeQuestions`）は
-            // 質問文を `join(' / ')` で連ねてそのキャップを通らない。ここを通して
-            // おけば、上流のどの経路から来ても一覧は伸びない。
-            ...manager.waiting.map(
-              (item) =>
-                `  返事待ち(requestId: ${item.requestId}): ` +
-                excerptLine(item.summary, LIST_WAITING_EXCERPT),
-            ),
-            manager.lastReport === undefined
-              ? null
-              : `  直近の報告: ${excerptLine(manager.lastReport, LIST_REPORT_EXCERPT)}`,
-          ]
-            .filter((line) => line !== null)
-            .join('\n'),
+          renderListingEntry({
+            id: manager.managerId,
+            title: `[${manager.status}${manager.live ? '' : '/セッション切断'}]`,
+            createdAt: manager.startedAt,
+            updatedAt: manager.updatedAt,
+            summary: `依頼: ${excerptLine(manager.request, LIST_REQUEST_EXCERPT)}`,
+            extra: [
+              // **runnerId は空欄にしない。** 取れていないことを「未記録」という
+              // 文字列で読める形にする（AGENTS.md「取れない軸に0の行を作らない」と
+              // 同じ理由——空欄だと「取れていない」のか「読み忘れ」なのか区別できない）。
+              `  runner: ${manager.runnerId ?? '未記録'}`,
+              `  cwd: ${manager.cwd}`,
+              // **`lost` を状態名だけで済ませない。** 「終わった」と読まれると、
+              // 完了していない仕事がそのまま片付く。何が起きたかと、次に何をすれば
+              // よいかを、この一覧の中で言い切る。
+              //
+              // **ただし、言い切れるのは観測した分までである。** `lost` が表して
+              // いるのは「前のセッションへ戻れなかった」という**一つの**観測で
+              // あって、成果の有無ではない。デーモンは PR もブランチも見ていない
+              // （リポジトリの事情はマネージャーの領域である）。実際に、落ちる
+              // 直前に PR を出して CI を通しマージまで済ませていた仕事が、その
+              // 1分半後の器の作り直しで `lost` になり、この行が「途中で失われて
+              // いる（完了ではない）」と嘘をついた。
+              //
+              // 断定を外しても `done` とは混ざらない。「戻れなかった」は
+              // 「終えて待っている」ではないからである（PR #42 の分け方は保つ）。
+              manager.status === 'lost'
+                ? '  ⚠ 前のセッションへ戻れなかった。**戻れたかどうかしか見ていない** — ' +
+                  'この仕事が終わっていたかは分からない（成果がリモートの PR・ブランチ・' +
+                  'コミットまで届いていることがある）。まずそこを確かめ、続きが要ると' +
+                  '判断したときだけ manager_start で起こし直すこと。'
+                : null,
+              // **拒否は `status` に映らない。** 分類器か deny 規則がその場で止めた
+              // 仕事は `running` のまま手が動かない。日誌と（繰り返したときだけ）
+              // 受信箱にしか出ないので、一覧を見ているクローンには「走っている」と
+              // しか読めなかった。状態の値は増やさず、状態に添える。
+              denialLine(context.managers?.denials(manager.managerId) ?? []),
+              // **待ちの要約も抜粋を通す。** runner 側の `brief(input, 200)` が実質の
+              // キャップになっていたが、`AskUserQuestion` の経路（`describeQuestions`）は
+              // 質問文を `join(' / ')` で連ねてそのキャップを通らない。ここを通して
+              // おけば、上流のどの経路から来ても一覧は伸びない。
+              ...manager.waiting.map(
+                (item) =>
+                  `  返事待ち(requestId: ${item.requestId}): ` +
+                  excerptLine(item.summary, LIST_WAITING_EXCERPT),
+              ),
+              manager.lastReport === undefined
+                ? null
+                : `  直近の報告: ${excerptLine(manager.lastReport, LIST_REPORT_EXCERPT)}`,
+            ],
+          }),
         );
         return text(
           [
