@@ -84,8 +84,12 @@ export function renderConversationsList(
     lines.push('会話はまだありません。');
   } else {
     conversations.forEach((conversation, index) => {
+      // **作成（`startedAt`）を足す。** 値は `GET /conversations` が元から
+      // 返していて（`ConversationSummary` にも在る）、ここが出していな
+      // かっただけである（#214）。
       lines.push(
-        `  [${index + 1}] ${conversation.conversationId}  更新: ${conversation.updatedAt}` +
+        `  [${index + 1}] ${conversation.conversationId}` +
+          `  作成: ${conversation.startedAt}  更新: ${conversation.updatedAt}` +
           `  (${conversation.messages}件)`,
       );
       lines.push(`      ${conversation.preview}`);
