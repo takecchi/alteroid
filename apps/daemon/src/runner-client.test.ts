@@ -45,6 +45,12 @@ interface FakeSession {
   ask(toolName: string, requestId: string): Promise<PermissionResult>;
   report(text: string): Promise<void>;
   usedTool(tool: string): Promise<void>;
+  /**
+   * `PostToolUse` フックが実機で送ってくることのある形（`tool_input` という
+   * キー自体が無い）を模す。`usedTool` は常に `tool_input: { a: 1 }` を渡すので、
+   * この形は再現できない（#223 と同じ理由の回帰）。
+   */
+  usedToolWithoutInput(tool: string): Promise<void>;
   mirror(projectKey: string, entries: SessionStoreEntry[]): Promise<void>;
 }
 
@@ -94,6 +100,18 @@ function fakeSdk(sessionId = 'sess-1') {
               undefined,
               { signal: new AbortController().signal },
             );
+          }
+        }
+      },
+      async usedToolWithoutInput(tool) {
+        const matchers = options.hooks?.PostToolUse as HookCallbackMatcher[];
+        for (const matcher of matchers) {
+          for (const hook of matcher.hooks) {
+            // `tool_input` というキー自体を持たない（実機の SDK が送ってくることの
+            // ある形）。手で `undefined` を代入するのではなく、キーを書かない。
+            await hook({ hook_event_name: 'PostToolUse', tool_name: tool } as never, undefined, {
+              signal: new AbortController().signal,
+            });
           }
         }
       },
@@ -294,6 +312,42 @@ describe('デーモン ↔ manager-runner（HTTP 境界）', () => {
       .poll(() => r.inbox.some((event) => event.type === 'manager_message'), { timeout: 2000 })
       .toBe(true);
     expect((await r.pool.list())[0]?.lastReport).toBe('直した');
+  });
+
+  /**
+   * **回帰: `tool_input` を持たない `PostToolUse` イベントが、HTTP 境界を越えて
+   * 捨てられる（#223 と同じ形。`tool_use` の `input` 版）。**
+   *
+   * `permission_denied` の `input` で先に踏んだ形が、`tool_use` イベントにも
+   * ある。`hook.tool_input` が無い（＝ `undefined`）とき、`runner.ts` の
+   * `#onPostToolUse` が作る `tool_use` イベントの `input` も `undefined` に
+   * なる。HTTP でこのイベントを runner からデーモンへ渡す側は `JSON.stringify`
+   * を通すので、値が `undefined` の欄はキーごと落ちる——境界の向こうでは
+   * `input` というキー自体が存在しない。`runnerEventSchema` の `tool_use` の
+   * `input` が必須のままだと（zod 4 は `z.unknown()` に対してキーの不在を
+   * 許さない）、`safeParse` が落ちてこのイベントがまるごとデーモンに届かず、
+   * **その1回のツール実行の監査が跡形もなく消える。**
+   */
+  it('`tool_input` の無い PostToolUse イベントでも、境界越しに監査が届く（回帰）', async () => {
+    const r = await open();
+    const { managerId } = await r.pool.start({ request: '直して' });
+    await expect.poll(() => r.sessions.length, { timeout: 2000 }).toBe(1);
+
+    await (r.sessions[0] as FakeSession).usedToolWithoutInput('Bash');
+
+    await expect
+      .poll(async () => (await r.stores.journal.list({ types: ['tool_use'] })).length, {
+        timeout: 2000,
+      })
+      .toBe(1);
+    const [tool] = (await r.stores.journal.list({ types: ['tool_use'] })) as {
+      actor: string;
+      tool: string;
+      input?: unknown;
+    }[];
+    expect(tool?.actor).toBe(`manager:${managerId}`);
+    expect(tool?.tool).toBe('Bash');
+    expect(tool?.input).toBeUndefined();
   });
 
   it('生ログは runner から上がってデーモンが預かる（可観測性の最下段）', async () => {

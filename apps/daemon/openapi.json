@@ -723,7 +723,7 @@
                         },
                         "input": {}
                       },
-                      "required": ["type", "id", "at", "actor", "tool", "input"]
+                      "required": ["type", "id", "at", "actor", "tool"]
                     },
                     {
                       "type": "object",
@@ -1911,7 +1911,7 @@
                               },
                               "input": {}
                             },
-                            "required": ["type", "id", "at", "actor", "tool", "input"]
+                            "required": ["type", "id", "at", "actor", "tool"]
                           },
                           {
                             "type": "object",
