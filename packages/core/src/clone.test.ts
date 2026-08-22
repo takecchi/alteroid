@@ -6139,46 +6139,78 @@ describe('クローン — 人間が待っている合図を待ち行列の先�
   }, 15_000);
 
   /**
-   * **人間どうしは追い越さない。** 割り込むのは「人間 対 それ以外」の1段だけで、
-   * 人間の発言の中では到着順が保たれる（`Inbox#push` の `insertAfterLast` が
-   * 「最後に一致した要素の**直後**」へ入れるため）。
+   * **人間どうしは送信順のまま。追い越さない。** 割り込むのは「人間 対 それ以外」の
+   * 1段だけで、人間の発言の中では送った順が保たれる（`Inbox#push` の
+   * `insertAfterLast` が「最後に一致した要素の**直後**」へ入れるため）。
+   *
+   * **人間優先が壊しうるものの中で、これは壊してはいけない側である。**
+   *
+   * **人間が名指しで聞いた性質である**（2026-08-22 JST、逐語）:
+   *
+   * > 人間が4回割り込んだ際には、**ちゃんと送信順**（当たり前だが、早い方が優先
+   * > される）**に割り込まれるようになっていますか？**
+   *
+   * **だから4件で、しかもクローン全体を通して測る**（`post` から流して、実際に
+   * SDK へ渡った並びを見る）。`Inbox` を直接動かす測定では「並べ替えの機構は
+   * 送信順を保つ」までしか言えず、**人間が聞いているのは自分の体験のほう**である。
    *
    * **この歯が無いと、実装を「常に先頭へ入れる」に変えても誰も気づかない。**
    * 実測（変異試験 N2、2026-08-22）: `insertAfterLast` の探索を捨てて常に先頭へ
-   * 入れる変異を当てたとき、**上の3本はどれも落ちなかった。** 人間が人間以外より
-   * 前に出ることは変わらないので、順序の歯は素通りする。**落ちたのは無関係な
-   * 既存テスト1本だけだった。**
+   * 入れる変異を当てたとき、**順序の歯3本はどれも落ちなかった。** 人間が人間以外
+   * より前に出ることは変わらないので素通りする。**落ちたのは無関係な既存テスト
+   * 1本だけだった。** ＝ **設計としては保たれていたが、測る歯は1本も無かった。**
    */
-  it('人間どうしは追い越さない（到着順のまま。割り込むのは人間以外に対してだけ）', async () => {
+  it('人間が続けて割り込んでも、人間どうしは送信順のまま（早い方が先）', async () => {
     const s = setupWithHumanPriority(true, () => 'わかった', { delayMs: 150 });
 
     s.clone.post(humanMessage('先客'));
     await waitForFirstTurn(s);
 
-    // 人間A → 人間以外 → 人間B の順に届く。A と B のあいだに人間以外が挟まる。
-    s.clone.post(humanMessage('人間A'));
+    // 人間4件のあいだに人間以外を挟む（挟まっても人間どうしの順は変わらない）。
+    s.clone.post(humanMessage('人間1'));
     s.clone.post(managerMessage('evt-mgr', 'mgr-x', 'マネージャーの報告'));
-    s.clone.post(humanMessage('人間B'));
+    s.clone.post(humanMessage('人間2'));
+    s.clone.post(humanMessage('人間3'));
+    s.clone.post(timerEvent('evt-timer', 'timer-kind'));
+    s.clone.post(humanMessage('人間4'));
 
     const markerMgr = managerMarker('mgr-x', 'マネージャーの報告');
-    await waitForAllDelivered(s, ['人間A', '人間B', markerMgr]);
+    const markerTimer = timerMarker('timer-kind');
+    await waitForAllDelivered(s, ['人間1', '人間4', markerMgr, markerTimer]);
     await settle();
 
-    // **A と B は隣り合うので1ターンにまとめられる**（`#mergedHumanBatch`）。
-    // まとまっても、まとまらなくても、**本文の並びで到着順を見る**。
+    // **4件は隣り合うので1ターンにまとめられる**（`#mergedHumanBatch`）。
+    // まとまっても、まとまらなくても、**本文の並びで送信順を見る**。
+    //
+    // **目印は本文にしか現れない形にする。** 生の `人間1` で探すと、台帳の断り書き
+    // に載る id 一覧に当たる。**あの一覧は実際の並び順と無関係に安定した順で出るので、
+    // 順序を壊しても検出できない** — 実測（2026-08-22）: 変異 N2「常に先頭へ入れる」
+    // を当てたとき、生の目印だとこの歯は**緑のまま通り**、本文だけを見る形に直したら
+    // `expected 897 to be less than 858` で落ちた。まとめた本文は `humanTurnText` が
+    // `` **(n) <at>**\n\n<text> `` の形で並べるので、`**\n\n` を前置きにする。
     const joined = (s.calls[0]?.inputs ?? []).join('\n');
-    const idxA = joined.indexOf('人間A');
-    const idxB = joined.indexOf('人間B');
+    const idxOf = (text: string): number => joined.indexOf(`**\n\n${text}`);
+    const i1 = idxOf('人間1');
+    const i2 = idxOf('人間2');
+    const i3 = idxOf('人間3');
+    const i4 = idxOf('人間4');
     const idxMgr = joined.indexOf(markerMgr);
+    const idxTimer = joined.indexOf(markerTimer);
 
-    expect(idxA).toBeGreaterThan(-1);
-    expect(idxB).toBeGreaterThan(-1);
+    expect(i1, '人間1 が本文に見つからない').toBeGreaterThan(-1);
+    expect(i2, '人間2 が本文に見つからない').toBeGreaterThan(-1);
+    expect(i3, '人間3 が本文に見つからない').toBeGreaterThan(-1);
+    expect(i4, '人間4 が本文に見つからない').toBeGreaterThan(-1);
     expect(idxMgr).toBeGreaterThan(-1);
+    expect(idxTimer).toBeGreaterThan(-1);
 
-    // 人間どうしは到着順（A → B）。**ここが「常に先頭へ入れる」で反転する。**
-    expect(idxA).toBeLessThan(idxB);
-    // そのうえで、2件とも人間以外より前に出ている。
-    expect(idxB).toBeLessThan(idxMgr);
+    // **送信順（1 → 2 → 3 → 4）。ここが「常に先頭へ入れる」で反転する。**
+    expect(i1).toBeLessThan(i2);
+    expect(i2).toBeLessThan(i3);
+    expect(i3).toBeLessThan(i4);
+    // そのうえで、4件とも人間以外より前に出ている。
+    expect(i4).toBeLessThan(idxMgr);
+    expect(i4).toBeLessThan(idxTimer);
 
     await s.clone.stop();
   }, 15_000);
@@ -6195,6 +6227,12 @@ describe('クローン — 人間が待っている合図を待ち行列の先�
  * 速さで決まるようになり、有界性の根拠が消える。**
  *
  * ## この集合は畳み込みの前提でもある（守っているものが2つある）
+ *
+ * **⚠️ この2つ目は、設計時に意図したものではない。** 人間優先を入れる過程で
+ * 「出荷される設定を測る歯が無くなる」を塞ごうとして、初めて見つかった。
+ * **だからここには「なぜそう決めたか」の記録が無い** — 探しても出てこないのは
+ * 記録漏れではなく、**誰も一度も決めていない**からである。**暗黙の前提がほかにも
+ * 在りうると疑うこと。**
  *
  * **tick（`timer` / `self_initiative`）を `true` にすると、tick どうしが並べ替わり
  * うるようになり、畳み込み（`#foldsIntoHeldTick`）が黙って効かなくなる** —
