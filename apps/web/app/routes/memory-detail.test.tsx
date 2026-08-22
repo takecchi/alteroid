@@ -102,6 +102,17 @@ describe('既定タブ', () => {
     expect(screen.queryByRole('textbox')).toBeNull();
   });
 
+  it('記憶は在るが本文が空のときも編集タブが既定（読むものが無い）', async () => {
+    // 空の記憶は API として正当に作れる（`app.ts` の `memoryBody` に
+    // `.min(1)` が無い）。プレビューが既定のままだと真っ白な画面が開く。
+    renderDetail('empty', docRoute({ ...DOC, slug: 'empty', content: '' }));
+
+    const textarea = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
+    expect(textarea.value).toBe('');
+    // タブ自体は両方出ている（プレビューへ行けなくなったのではない）。
+    expect(screen.getByRole('tab', { name: 'プレビュー' })).toBeTruthy();
+  });
+
   it('記憶が無い（404）ときは編集タブが既定', async () => {
     renderDetail('new-memo', (url) =>
       url.includes('/memory/new-memo') ? json({ error: 'not found' }, 404) : undefined,

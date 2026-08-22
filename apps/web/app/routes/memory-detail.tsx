@@ -50,11 +50,17 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
   /**
    * `undefined` は「まだ人間がタブに触っていない」— `draft` と同じ作法。
    *
-   * データが届く前に既定タブを確定させない。届いたら、記憶が在ればプレビュー、
-   * 404（これから書く記憶）なら編集を既定にする。
+   * データが届く前に既定タブを確定させない。届いたら、**読むものが在れば
+   * プレビュー、無ければ編集**を既定にする。
+   *
+   * 「無い」は2つある。404（これから書く記憶）と、**在るが本文が空**である。
+   * 後者は実在しうる状態で、`PUT /memory/:slug` の body スキーマは
+   * `z.object({ content: z.string() })`（`apps/daemon/src/app.ts`）— 隣の
+   * `answerBody` と違って `.min(1)` が無いので、空の記憶は API として正当に
+   * 作れる。**この2つを分けると、プレビューが真っ白な画面が既定で開く。**
    */
   const [tab, setTab] = useState<string | undefined>(undefined);
-  const activeTab = tab ?? (missing ? 'edit' : 'preview');
+  const activeTab = tab ?? (missing || loaded.trim() === '' ? 'edit' : 'preview');
 
   function save() {
     if (draft === undefined) return;
