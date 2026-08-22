@@ -440,6 +440,44 @@ export const managerActionResponseSchema = z.object({
 // runner の名簿と鍵（/runners）— core の runnerCredentialFingerprintSchema を使う
 // ---------------------------------------------------------------------------
 
+/**
+ * runner が名乗った版（コミット sha）。**3状態を区別する。**
+ *
+ * - `known` — 版が返ってきた
+ * - `unknown` — 名乗った（`/health` が応答した）が、器自身が自分の版を知らない
+ * - `unheard` — 名乗り自体をまだ一度も聞けていない（未接続・`/health` を
+ *   一度も読めていない）
+ *
+ * **`unknown` と `unheard` を1つに畳まない。** 前者は runner 自体の設定を
+ * 疑う材料、後者はネットワーク・登録を疑う材料であり、対処が違う
+ * （core の `RunnerRevisionStatus` の doc）。**`RunnerLiveness`（`state`）の
+ * `unreachable` とは主語が違う**（あちらは宛先が開けない、こちらは名乗りが
+ * 聞けない）ので、あえて同じ語を避けている。**`state` から導出もできない**
+ * ——`state: 'lost'` でも直前に聞いた `known` な版がそのまま残ることがある
+ * （`RunnerRevisionStatus` の doc）。
+ */
+const runnerRevisionKnownSchema = z.object({
+  status: z.literal('known'),
+  commit: z.string(),
+  short: z.string(),
+  source: z.enum(['build', 'workspace', 'env', 'platform']),
+});
+const runnerRevisionUnknownSchema = z.object({ status: z.literal('unknown') });
+const runnerRevisionStatusSchema = z.discriminatedUnion('status', [
+  runnerRevisionKnownSchema,
+  runnerRevisionUnknownSchema,
+  z.object({ status: z.literal('unheard') }),
+]);
+
+/**
+ * デーモン自身の版。**`unheard` は無い**（自分の名乗りを自分が聞けないという
+ * 状態は意味を持たない）——`known` / `unknown` の2状態で足りる。
+ */
+const daemonRevisionSchema = z.discriminatedUnion('status', [
+  runnerRevisionKnownSchema,
+  runnerRevisionUnknownSchema,
+]);
+
 const runnerSummarySchema = z.object({
   /**
    * 人間が見る宛先（URL か「同一プロセス」）。
@@ -471,9 +509,22 @@ const runnerSummarySchema = z.object({
   credentials: z.array(runnerCredentialFingerprintSchema),
   /** 置かれている実行環境プロファイルの指紋。**本文は返らない。** */
   profile: runnerProfileFingerprintSchema.optional(),
+  /**
+   * runner が名乗った版。**名簿に既にある値をそのまま出す**（ここで新たに
+   * runner を叩かない）。
+   */
+  revision: runnerRevisionStatusSchema,
 });
 
-export const runnersListResponseSchema = z.object({ runners: z.array(runnerSummarySchema) });
+export const runnersListResponseSchema = z.object({
+  runners: z.array(runnerSummarySchema),
+  /**
+   * デーモン自身の版。**runner の版と1回の読みで比較できるように、同じ応答の
+   * 外側へ並べて出す。** 別々の場所に出すと依頼者が手で突き合わせることになり、
+   * 突き合わせ忘れがそのまま見逃しになる。
+   */
+  daemonRevision: daemonRevisionSchema,
+});
 
 export const runnersCredentialsResponseSchema = z.object({
   results: z.array(

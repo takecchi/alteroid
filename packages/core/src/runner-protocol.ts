@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { type RunnerRevisionReport } from './revision.js';
 import { jobStatusSchema } from './schema.js';
 import { rateLimitFactsSchema, usageLimitNoticeSchema } from './usage-limits.js';
 import { usageTotalsSchema } from './usage.js';
@@ -721,10 +722,20 @@ export interface RunnerClient {
    * **省略できる**（`ping` と同じ理由）。答えない実装・古い runner は
    * `instanceId` を持たないので、名簿は入れ替えを**判定しない**（「入れ替わって
    * いない」と読まないこと）。
+   *
+   * ## `revision` — runner が名乗る自分の版（コミット sha）
+   *
+   * デーモンと runner は別 Service で別々にデプロイされるので、別コミットで
+   * 走る窓ができうる。`known`（版が取れた）と `unknown`（応答はあったが runner
+   * 自身が自分の版を知らない）の2値のみを返す — **「そもそも訊けていない」は
+   * ここでは表せない**（応答が無かったこと自体はこの口の外、名簿の側で分かる）。
+   * `instanceId` と同じく省略できる。
    */
   identity?(options?: {
     signal?: AbortSignal;
-  }): Promise<{ runnerId?: string; instanceId?: string } | undefined>;
+  }): Promise<
+    { runnerId?: string; instanceId?: string; revision?: RunnerRevisionReport } | undefined
+  >;
   /**
    * 配置の材料を聞く（roadmap M5 PR3）。**`ping` に相乗りさせない。**
    *
@@ -822,6 +833,35 @@ export interface RunnerSource {
 export type RunnerLiveness = 'connecting' | 'connected' | 'unreachable' | 'unusable' | 'lost';
 
 /**
+ * runner 1台についての版の状態。`RunnerRevisionReport`（`known` / `unknown`）に
+ * **`unheard`（名乗り自体をまだ一度も聞いていない）を足したもの**である。
+ *
+ * この3つ目は `identity()` の応答からは作れない — 応答そのものが一度も返って
+ * いないことは、応答の中身を見る関数の外（名簿）でしか分からない。**`unknown` と
+ * `unheard` を混同しないこと** — 前者は「繋がって名乗ったが版を知らない」、後者は
+ * 「名乗りをまだ一度も聞けていない」で、対処が違う（前者は runner 自体の設定を
+ * 疑う、後者はネットワーク・登録を疑う）。
+ *
+ * **`unheard` に `RunnerLiveness['unreachable']` と同じ語を使わなかった理由。**
+ * 主語が違う——`RunnerLiveness.unreachable` は「宛先（宛先URL）が開けない」で
+ * あり、こちらは「名乗り（`/health` の応答）を聞けていない」である。同じ語を
+ * 別の主語へ使うと、読み手は2つを同じ意味として重ねて読む。
+ *
+ * **`RunnerLiveness` から導出できない。** 一見 `state === 'connected'` なら
+ * `known`/`unknown`、それ以外なら `unheard` で足りそうに見えるが、
+ * `#markSilent`（このファイル内）は `state` を `'lost'` にするとき**それまでに
+ * 学習した情報を捨てない**（`entry.client` も `entry.revision` もそのまま残る）。
+ * つまり **`state: 'lost'` でありながら版は `known`（黙る直前に聞いた名乗り）と
+ * いう組み合わせが実際に起きる。** だから版の状態は生死とは別の契約として持つ。
+ *
+ * **`known` は「最後に聞いた名乗り」であって「いま走っている版」ではない。**
+ * `state` が `'lost'` のとき、この値は黙る前のものである。単独で読まず `state`
+ * と併せて読むこと（当たりのときだけ正しく、外れのときに黙って古い値を返す
+ * 計器にしないための注記）。
+ */
+export type RunnerRevisionStatus = RunnerRevisionReport | { status: 'unheard' };
+
+/**
  * 名簿の1行。**値は返さない**（鍵の指紋と同じ原則で、ここに出るのは状態だけ）。
  *
  * `runnerId` と `workspacePath` が省略されうるのは、**繋がるまで分からない**から
@@ -838,6 +878,16 @@ export interface RunnerEntry {
   error?: string;
   /** この状態になった時刻。 */
   since: string;
+  /**
+   * runner が名乗った版（roadmap M5 相当。「自分がどのコミットで走っているか」）。
+   *
+   * **常に3値のどれかで、省略されない。** 一度も名乗りを聞けていない間は
+   * `{ status: 'unheard' }` のままで、`unknown`（訊けたが runner が知らない）
+   * とは区別される。`instanceId` と同じく `identity()` の heartbeat で更新する。
+   * **`state` が `'lost'` でも古い値が残ることがある**（`RunnerRevisionStatus`
+   * の doc）。
+   */
+  revision: RunnerRevisionStatus;
 }
 
 /**
@@ -1097,6 +1147,16 @@ interface RegistryEntry {
    * そのときは**判定しない**（「入れ替わっていない」と読まないこと）。
    */
   instanceId?: string;
+  /**
+   * 最後に聞けた版の状態（`RunnerEntry.revision` と同じ形）。
+   *
+   * **`instanceId` と違って「前回との比較」はしない。** 版の入れ替え自体は
+   * `instanceId` の変化で既に検出できているので、ここは単に「最後に聞けた値」を
+   * 持つだけでよい。名乗りを一度も聞けていない間は `{ status: 'unheard' }`
+   * のまま — 応答が来て初めて `known` / `unknown` へ動く。**`state` が `'lost'`
+   * になっても、ここは戻さない**（`#markSilent` は学習済みの情報を捨てない）。
+   */
+  revision: RunnerRevisionStatus;
 }
 
 /**
@@ -1169,6 +1229,7 @@ class Registry implements RunnerRegistry {
       delay: this.#retryBaseMs,
       lastSeen: Date.now(),
       alive: true,
+      revision: { status: 'unheard' },
     });
   }
 
@@ -1197,6 +1258,7 @@ class Registry implements RunnerRegistry {
       label: entry.source.label,
       state: entry.state,
       since: entry.since,
+      revision: entry.revision,
       ...(entry.client === null
         ? {}
         : { runnerId: entry.client.runnerId, workspacePath: entry.client.workspacePath }),
@@ -1228,6 +1290,7 @@ class Registry implements RunnerRegistry {
       delay: this.#retryBaseMs,
       lastSeen: Date.now(),
       alive: true,
+      revision: { status: 'unheard' },
     };
     this.#entries.set(source.label, entry);
     await this.#open(entry);
@@ -1533,7 +1596,8 @@ class Registry implements RunnerRegistry {
     if (client === null) return;
 
     let failure: string | null = null;
-    let identity: { runnerId?: string; instanceId?: string } | undefined;
+    let identity:
+      { runnerId?: string; instanceId?: string; revision?: RunnerRevisionReport } | undefined;
     try {
       /*
        * **`identity()` があればそちらを叩く。** 同じ `GET /health` なので生死は
@@ -1603,9 +1667,19 @@ class Registry implements RunnerRegistry {
     entry: RegistryEntry,
     at: number,
     client: RunnerClient,
-    identity?: { runnerId?: string; instanceId?: string },
+    identity?: { runnerId?: string; instanceId?: string; revision?: RunnerRevisionReport },
   ): void {
     entry.lastSeen = at;
+
+    // **`identity.revision` があれば、その値をそのまま覚える。** `instanceId` と
+    // 違って前回との比較はしない — 版の入れ替え自体は `instanceId` の変化で既に
+    // 検出できているので、ここは最後に聞けた値を持つだけでよい。`identity` 自体が
+    // 無い（`identity()` を持たない runner／`ping` だけの旧来経路）ときは触らず、
+    // `{ status: 'unheard' }` のままにする——「訊けたが分からない」（`unknown`）
+    // と混同しない。
+    if (identity?.revision !== undefined) {
+      entry.revision = identity.revision;
+    }
 
     const instanceId = identity?.instanceId;
     if (instanceId !== undefined && instanceId.length > 0) {

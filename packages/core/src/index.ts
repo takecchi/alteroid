@@ -171,8 +171,11 @@ export {
 export {
   resolveBuildRevision,
   describeBuildRevision,
+  reportRunnerRevision,
+  buildRevisionSchema,
   type BuildRevision,
   type RevisionSource,
+  type RunnerRevisionReport,
 } from './revision.js';
 export { CRON_EXPRESSION_MAX, isCronExpression, parseCron, type CronSchedule } from './cron.js';
 export {
@@ -312,6 +315,7 @@ export {
   type RunnerProfileResult,
   type RunnerRegistry,
   type RunnerRegistryOptions,
+  type RunnerRevisionStatus,
   type RunnerSource,
   type RunnerResumeCommand,
   type RunnerSetCredentialsCommand,

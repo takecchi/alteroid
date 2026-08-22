@@ -1,8 +1,9 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 
-import type { RunnerEvent, RunnerHost } from '@alteroid/core';
+import type { BuildRevision, RunnerEvent, RunnerHost } from '@alteroid/core';
 import {
   readExecutionResources,
+  resolveBuildRevision,
   runnerAnswerCommandSchema,
   runnerMessageCommandSchema,
   runnerResumeCommandSchema,
@@ -43,6 +44,16 @@ export interface RunnerAppDeps {
    * 境界」）。マネージャーの道具は1つも減っていない。
    */
   tokenSha256: string;
+  /**
+   * 自分の版。**既定は `resolveBuildRevision()`（実際にビルドで焼かれた値）。**
+   *
+   * 渡すのはテストだけである——このプロセスが実際に何で焼かれたかは
+   * `CANON_REVISION`（ビルド時に固定）に支配されるので、「焼き込みが無かった
+   * ら `/health` が null をそのまま返すか」を確かめるには、実行中のプロセスの
+   * 焼き込み状態とは独立に差し替えられる口が要る。本番の起動経路
+   * （`apps/runner/src/index.ts`）はこの引数を渡さない。
+   */
+  revision?: BuildRevision;
 }
 
 const AUTH_SCHEME = /^Bearer\s+(.+)$/i;
@@ -115,6 +126,9 @@ const INSTANCE_ID = randomUUID();
 
 export function createRunnerApp(deps: RunnerAppDeps) {
   const { host, outbox } = deps;
+  // **プロセスの生存期間ぶん1回だけ解決する**（`INSTANCE_ID` と同じ理由——
+  // 焼き込み・実行時の環境変数はどちらもプロセスの寿命の間に変わらない）。
+  const revision = deps.revision ?? resolveBuildRevision();
 
   /**
    * 制御面の門番。**runner の中から叩けても、鍵が無ければ通らない。**
@@ -185,6 +199,20 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         credentials: host.credentials(),
         /** 置いてある実行環境プロファイルの**指紋だけ**。本文は出さない。 */
         profile: host.profile(),
+        /**
+         * 自分がどのコミットで走っているか。
+         *
+         * **デーモンと runner は別 Service で別々にビルド・デプロイされる**
+         * （`railway/daemon.json` / `railway/runner.json`）。同じ `main` から
+         * 起こしていても、デプロイのタイミングがずれれば別コミットで走る窓が
+         * できる——その窓でだけ壊れるものは、両者が自分の版を名乗れて初めて
+         * 見つかる。デーモンはこれを heartbeat（`identity()`）で拾い、名簿の
+         * `RunnerEntry.revision` へ運ぶ（`packages/core/src/runner-protocol.ts`）。
+         *
+         * **取れなければ全項目 `null`。** プレースホルダは作らない
+         * （`resolveBuildRevision` の doc）。
+         */
+        revision,
       }),
     )
 

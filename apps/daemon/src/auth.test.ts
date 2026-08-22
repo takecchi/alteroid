@@ -31,7 +31,8 @@ function stubClone(): CloneHost {
     denials: () => [],
     // 認証境界の検証では触らない（`GET /runners` は `deps.runners` を直に読み、
     // ここは経由しない）。型を満たすだけの空スタブで足りる。
-    runners: () => Promise.resolve({ runners: [], unassigned: [] }),
+    runners: () =>
+      Promise.resolve({ runners: [], unassigned: [], daemonRevision: { status: 'unknown' } }),
     transcript: () => Promise.resolve(null),
     restore: () => Promise.resolve([]),
     stop: () => Promise.resolve(),

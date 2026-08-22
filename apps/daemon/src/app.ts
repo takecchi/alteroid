@@ -24,6 +24,8 @@ import {
   localDayRange,
   memorySlugSchema,
   fingerprintOf,
+  reportRunnerRevision,
+  resolveBuildRevision,
   runnerSetCredentialsCommandSchema,
   accountUsageStateSchema,
   scheduleKindSchema,
@@ -2097,8 +2099,16 @@ export function createApp(deps: AppDeps) {
         },
       }),
       async (c) => {
+        // デーモン自身の版。**自分のことなので取りに行く必要が無い**
+        // （`resolveBuildRevision()` を直に呼ぶ。`known` / `unknown` の2状態）。
+        // runner の一覧が空でも、この値だけは常に出す——「自分がどの版で
+        // 走っているか」は runner の登録有無と無関係な事実である。
+        const daemonRevision = reportRunnerRevision(resolveBuildRevision());
+
         const registry = deps.runners;
-        if (registry === undefined) return c.json(runnersListResponseSchema.parse({ runners: [] }));
+        if (registry === undefined) {
+          return c.json(runnersListResponseSchema.parse({ runners: [], daemonRevision }));
+        }
         // **名簿に載っている全部を返す**（開けている分だけではない）。上がって
         // こない runner が一覧から消えるだけだと、人間には「設定し忘れた」のか
         // 「上がってこない」のかが区別できない。
@@ -2124,9 +2134,14 @@ export function createApp(deps: AppDeps) {
                     runner === undefined
                       ? undefined
                       : await runner.profile().catch(() => undefined),
+                  // **名簿に既にある値をそのまま出す**（heartbeat が拾った分）。
+                  // ここで新たに runner を叩かない——`fingerprints` と同じ「未接続
+                  // ／頼んで失敗／頼んでいない」が潰れる穴を増やさないため。
+                  revision: entry.revision,
                 };
               }),
             ),
+            daemonRevision,
           }),
         );
       },

@@ -12,6 +12,8 @@
  * 「不明」に倒す。
  */
 
+import { z } from 'zod';
+
 import { CANON_REVISION, CANON_REVISION_SOURCE } from './generated/canon.js';
 
 /**
@@ -26,7 +28,16 @@ export type RevisionSource = 'build' | 'workspace' | 'env' | 'platform';
 
 /** いま走っているプロセスの版。全項目が揃うか、全項目が `null` かのどちらかである。 */
 export interface BuildRevision {
-  /** フル sha（40桁）。取れなければ `null`。 */
+  /**
+   * フル sha（40桁）。取れなければ `null`。
+   *
+   * コミット sha は**秘密ではない**（公開リポジトリを指すポインタである）ので、
+   * 伏せない。**この判断は「このリポジトリが公開である」という前提に乗っている。
+   * 非公開になったら成り立たない。**（いまこの値が出るのは認証の内側だけ
+   * ——`GET /runners` は認証必須、runner の `/health` は制御面の合鍵の内側
+   * ——なので、この判断が実際に効いている場面は無い。**前提が変わったときに
+   * 読む場所として置いてある。**）
+   */
   commit: string | null;
   /** 表示用の短縮。取れなければ `null`。 */
   short: string | null;
@@ -120,4 +131,48 @@ export function describeBuildRevision(rev: BuildRevision): string {
     return 'リビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）';
   }
   return `リビジョン: ${rev.short}（${SOURCE_LABEL[rev.source]}、フル ${rev.commit}）`;
+}
+
+/**
+ * `BuildRevision` の wire 形（`GET /health` が返す JSON の中身）。
+ *
+ * **信用しない側から使う。** runner が返した JSON はネットワーク越しの入力であり、
+ * 形が壊れていても（版違いの runner・改造された応答）落ちずに扱えること。
+ * `.safeParse` に通す側（`apps/daemon/src/runner-client.ts`）が使う。
+ */
+export const buildRevisionSchema = z.object({
+  commit: z.string().min(1).nullable(),
+  short: z.string().min(1).nullable(),
+  source: z.enum(['build', 'workspace', 'env', 'platform']).nullable(),
+});
+
+/**
+ * runner 1台についての版の報告。**器から返ってきた応答の中身だけを表す。**
+ *
+ * - `known` — 版が返ってきた
+ * - `unknown` — 器には繋がった（`/health` が応答した）が、器自身が自分の版を
+ *   知らない（`resolveBuildRevision` が全部 `null` を返した、または `revision`
+ *   フィールド自体を持たない古い runner）
+ *
+ * **「そもそも訊けていない」はここには無い。** それは応答の中身ではなく
+ * 「応答が無かった」ことなので、この型の外（呼び出し側 — 名簿を持つ
+ * `runner-protocol.ts` の `RunnerRevisionStatus`）でしか判定できない。
+ */
+export type RunnerRevisionReport =
+  | { status: 'known'; commit: string; short: string; source: RevisionSource }
+  | { status: 'unknown' };
+
+/**
+ * `BuildRevision` を `RunnerRevisionReport` へ畳む。
+ *
+ * **`unheard`（名乗りをまだ聞けていない）はここでは作れない。** 引数は「応答が
+ * 返ってきた」ことが前提の値なので、応答そのものが無かったことはこの関数の外
+ * （`packages/core/src/runner-protocol.ts` の `RunnerRevisionStatus`）でしか
+ * 分からない。
+ */
+export function reportRunnerRevision(rev: BuildRevision): RunnerRevisionReport {
+  if (rev.commit === null || rev.short === null || rev.source === null) {
+    return { status: 'unknown' };
+  }
+  return { status: 'known', commit: rev.commit, short: rev.short, source: rev.source };
 }
