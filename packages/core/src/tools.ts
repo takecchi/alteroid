@@ -207,13 +207,27 @@ const REPORT_PAGE = 8_000;
 const TRANSCRIPT_PAGE = 8_000;
 
 /**
- * 未了の台帳を1回に出す件数と、1件ぶんの本文の厚み。
+ * 未了の台帳の一覧の予算と、1件ぶんの本文の厚み。
+ *
+ * **件数の上限（かつての `COMMITMENT_LIST_LIMIT = 30`）は潜在的なバグだった。**
+ * 他の一覧（`approvals_list` / `schedule_list` / `runner_list` など）はどれも
+ * 文字数の予算（`renderListing`）で切っているのに、ここだけ件数で切っていた。
+ * `.claude/skills/listing-and-detail/SKILL.md` が警告している「件数の上限
+ * だけでは足りない。何件で壊れるかが運任せになる」がそのまま起きる形で、
+ * 実際に#215で1件に欄を2つ足したところ、30件×新しい欄の厚みで出力が
+ * `OUTPUT_CAP`（12,000）を実測12,065文字で超えた（総当たりの歯「一覧は
+ * 例外なく件数で壊れない」が捕まえた）。**このPRは欄を1つも足さない** —
+ * 土台だけを他の一覧と同じ文字数の予算へ先に寄せておく。次に誰かが1件に
+ * 欄を足しても、もうここでは壊れない。
+ *
+ * **`COMMITMENT_LIST_LIMIT` は消した。** 文字数の予算がある以上、件数の
+ * 上限を並べて持つ理由が無い（`approvals_list` 等も件数の上限は持たない）。
  *
  * **切ったことは必ず言う**（`LIST_DENIED_TOOLS` と同じ理由）。「これで全部だ」と
  * 読まれた台帳は、載っているのに見えない仕事を作る＝この器が塞ごうとしている穴が
  * そのまま戻る。
  */
-const COMMITMENT_LIST_LIMIT = 30;
+const COMMITMENT_LIST_BUDGET = 8_000;
 const COMMITMENT_BODY_LIMIT = 240;
 
 /**
@@ -1179,23 +1193,26 @@ export function createCloneTools(context: ToolContext) {
           includeClosed === true ? { includeClosed: true } : undefined,
         );
         if (entries.length === 0) return text('（引き受けたまま終わっていない仕事は無い）');
-        const shown = entries.slice(0, COMMITMENT_LIST_LIMIT);
-        const rest = entries.length - shown.length;
-        return text(
+        const items = entries.map((entry) =>
           [
-            ...shown.map((entry) =>
-              [
-                `- ${entry.id}`,
-                `  受け取った時刻: ${entry.at}（${entry.origin}${entry.source === undefined ? '' : ` / ${entry.source}`}）`,
-                `  ${excerptLine(entry.body, COMMITMENT_BODY_LIMIT)}`,
-                entry.closedAt === undefined
-                  ? '  状態: 未了'
-                  : `  状態: ${entry.closedAt} に片付けた（${excerptLine(entry.closedReason ?? '', 120)}）`,
-              ].join('\n'),
-            ),
-            // 黙って切らない。切ったことが見えないと「これで全部だ」と読まれる。
-            ...(rest > 0 ? [`- …ほか ${rest} 件（多い順ではなく古い順に切っている）`] : []),
+            `- ${entry.id}`,
+            `  受け取った時刻: ${entry.at}（${entry.origin}${entry.source === undefined ? '' : ` / ${entry.source}`}）`,
+            `  ${excerptLine(entry.body, COMMITMENT_BODY_LIMIT)}`,
+            entry.closedAt === undefined
+              ? '  状態: 未了'
+              : `  状態: ${entry.closedAt} に片付けた（${excerptLine(entry.closedReason ?? '', 120)}）`,
           ].join('\n'),
+        );
+        return text(
+          renderListing(items, {
+            budget: COMMITMENT_LIST_BUDGET,
+            // **続きの取り方を案内しないこと。** 他の一覧と違い、この台帳には
+            // 詳細へ降りる道具（`commitment_list id=<id>` のようなもの）が
+            // 無い。無い口を案内すると嘘になる（`.claude/skills/listing-and-detail/SKILL.md`
+            // 「いま揃っていないもの」に記録済みの既知の穴）。
+            omitted: ({ rest, shown, total }) =>
+              `…ほか ${rest} 件は省略（未了は ${total} 件あり、古い順に ${shown} 件だけ出した）。`,
+          }),
         );
       },
     ),

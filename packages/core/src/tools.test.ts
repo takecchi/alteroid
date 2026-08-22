@@ -2801,3 +2801,30 @@ describe('一覧を抜粋にしたものには、全文の行き先がある', (
     expect(reply).toContain('全文置換');
   });
 });
+
+describe('commitment_list を文字数の予算へ寄せる（潜在バグの修正）', () => {
+  it('commitment_list は件数ではなく文字数の予算で切る（30件を下回っていても長い本文なら切れる）', async () => {
+    // **回帰の歯。** かつては `COMMITMENT_LIST_LIMIT = 30` という件数の
+    // 上限で切っていたので、30件を下回るここでは全件がそのまま出てしまい
+    // 「省略」の合図は出なかった。いまは `COMMITMENT_LIST_BUDGET`（文字数）
+    // で切るので、件数が30を下回っていても長い本文が積み重なれば切れる。
+    // この歯は「件数の上限に戻す」変異を落とす。
+    //
+    // **足場は十分に大きくすること。** 薄い足場だと予算が拘束条件にならず、
+    // 変異が生き残る（`.claude/skills/listing-and-detail/SKILL.md` の
+    // `runner_list` の例と同じ形）。1件500字の本文を25件（かつての件数
+    // 上限30を下回る数）積んでも、実測で切れることを確かめてある。
+    const h = harness();
+    const long = 'あ'.repeat(500);
+    for (let index = 0; index < 25; index += 1) {
+      await h.call('commitment_open', { body: `約束${String(index).padStart(3, '0')}: ${long}` });
+    }
+
+    const reply = await h.call('commitment_list', {});
+
+    expect(reply).toMatch(/省略/);
+    // 25件ぶんの本文（1件あたり500字超）を全部出せば優に12,000字を超える。
+    // 予算（8,000）＋断り書きぶんの余裕を見ても、それよりは十分小さい。
+    expect(reply.length).toBeLessThan(9_000);
+  });
+});
