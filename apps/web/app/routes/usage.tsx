@@ -166,8 +166,25 @@ function AccountCard({ account }: { account: AccountUsageState | undefined }) {
         subtitle="台帳（alteroid が使った分）とは別物。足さない"
       />
       <ul className="flex flex-col gap-0.5 px-4 py-3">
+        {/*
+          **`whitespace-pre` にしない（折り返さない指定になる）。** ここに並ぶ行には
+          「この応答にアカウント全体の残りが入っていない（返さないデーモンに繋がって
+          いる）。0 ではなく、分からない。」のような日本語の自由文が混ざるので、
+          折り返さないとカードの外まで伸びる。
+
+          **`pre-wrap` は `pre` と同じく連続空白と改行を保つ**ので、枠の行の
+          先頭2スペースの字下げ（`usage-format.ts` の `  ${window.kind}: …`）は
+          そのまま残る。**1文字も省略しない** — 切るのではなく折り返す。
+
+          `break-words` は、空白を持たないまま長くなりうる値（`failed` / `unavailable`
+          の `reason`、`観測時刻` の ISO 文字列）の受けである。`reports.tsx` の
+          `UnavailableNote` と同じ組み合わせ。
+        */}
         {describeAccountUsage(account, { emphasis: false }).map((line, index) => (
-          <li key={`${index}-${line}`} className="font-mono text-[11px] whitespace-pre text-muted">
+          <li
+            key={`${index}-${line}`}
+            className="font-mono text-[11px] break-words whitespace-pre-wrap text-muted"
+          >
             {line}
           </li>
         ))}
