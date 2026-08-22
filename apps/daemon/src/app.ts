@@ -17,8 +17,11 @@ import type {
 import {
   RESERVED_SCHEDULE_KINDS,
   chatStreamEventSchema,
+  collectConversations,
+  conversationMessages,
   createAuthProviderRegistry,
   createAuthService,
+  reachedStart,
   isAccountGranted,
   isDailyReport,
   journalEntrySchema,
@@ -411,20 +414,6 @@ function claimErrorDetail(reason: string): string {
     default:
       return 'ログイン要求が見つからない（既に引き取り済みの可能性）';
   }
-}
-
-interface Conversation {
-  conversationId: string;
-  startedAt: string;
-  updatedAt: string;
-  messages: number;
-  preview: string;
-}
-
-/** 一覧に出す短い抜粋。全文は `GET /conversations/:id` にある。 */
-function preview(text: string): string {
-  const flat = text.replace(/\s+/g, ' ').trim();
-  return flat.length <= 80 ? flat : `${flat.slice(0, 80)}…`;
 }
 
 /**
@@ -956,38 +945,18 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         const { limit, scan } = c.req.valid('query');
         const entries = await stores.journal.list({ limit: scan, types: ['exchange'] });
-        const conversations = new Map<string, Conversation>();
 
         /**
-         * 日誌は新しい順。**その順序をそのまま会話の順序にする。**
+         * 畳み直しの規則そのものは `@alteroid/core` の `conversation.ts` が持つ。
          *
-         * `at` で並べ直さないのは、同じミリ秒に並んだ発言の前後が時刻からは
-         * 決められないからである。追記専用の記録が持っている順序のほうが、
-         * 後から組み立てた順序より正しい。
+         * **こことクローンの道具（`conversation_read`）で同じ関数を呼ぶ。** 規則を
+         * 両側に写すと、片方を直してもう片方を忘れたときに「人間には見えるが
+         * クローンには見えない」がまた1つ増える — それは、その道具を足す動機に
+         * なった欠陥そのものである。日誌の順序をそのまま会話の順序にする理由
+         * （同じミリ秒の前後は時刻からは決められない）も、移設先に書いてある。
          */
-        for (const entry of entries) {
-          if (entry.type !== 'exchange' || entry.with !== 'human') continue;
-          const id = entry.conversationId;
-          if (id === undefined) continue;
-          const found = conversations.get(id);
-          if (found === undefined) {
-            // 最初に出会うのが最新の発言（＝この会話の updatedAt と抜粋）
-            conversations.set(id, {
-              conversationId: id,
-              startedAt: entry.at,
-              updatedAt: entry.at,
-              messages: 1,
-              preview: preview(entry.text),
-            });
-            continue;
-          }
-          // 以降は古い方へ遡るので、開始時刻だけを更新していく
-          found.startedAt = entry.at;
-          found.messages += 1;
-        }
-
         return c.json({
-          conversations: [...conversations.values()].slice(0, limit),
+          conversations: collectConversations(entries).slice(0, limit),
           /** 遡った範囲。ここより古い会話は出てこない（`scan` を増やせば見える）。 */
           scanned: entries.length,
         });
@@ -1031,22 +1000,21 @@ export function createApp(deps: AppDeps) {
         const id = c.req.param('id');
         const { scan } = c.req.valid('query');
         const entries = await stores.journal.list({ limit: scan, types: ['exchange'] });
-        const messages = entries
-          .filter(
-            (entry) =>
-              entry.type === 'exchange' && entry.with === 'human' && entry.conversationId === id,
-          )
-          .reverse()
-          .map((entry) => {
-            const exchange = entry as Extract<JournalEntry, { type: 'exchange' }>;
-            return {
-              id: exchange.id,
-              at: exchange.at,
-              /** `inbound` = 人間の発言 / `outbound` = クローンの返答。 */
-              role: exchange.role,
-              text: exchange.text,
-            };
-          });
+        /**
+         * 絞り込みと並べ直しは `@alteroid/core` の `conversationMessages` が持つ
+         * （クローンの `conversation_read` と同じ関数である。上の一覧と同じ理由）。
+         *
+         * **応答に載せる項目はここで選び直す。** 共有の型は `conversationId` も
+         * 持っているが、この口の応答スキーマ（`conversationMessageSchema`）は
+         * 4項目だけなので、**移設で応答が1項目増えることのないよう**明示して写す。
+         */
+        const messages = conversationMessages(entries, id).map((message) => ({
+          id: message.id,
+          at: message.at,
+          /** `inbound` = 人間の発言 / `outbound` = クローンの返答。 */
+          role: message.role,
+          text: message.text,
+        }));
 
         /*
          * **窓が日誌の先頭に届いたかを、返す件数から言う。**
@@ -1056,8 +1024,10 @@ export function createApp(deps: AppDeps) {
          * ときは**まだあるかもしれない**ので届いていない側へ倒す（安全側）。
          * 全件がぴったり `scan` 件だった場合に「判定できない」と答えるのは、
          * 実際には見切っているのに保守的に言いすぎるだけで、逆はやらない。
+         *
+         * 判定そのものは `reachedStart`（`@alteroid/core`）が持つ。
          */
-        const reachedStart = entries.length < scan;
+        const reached = reachedStart(entries.length, scan);
 
         /*
          * **「無い」と「遡り切れていない」を同じ応答にしない。**
@@ -1069,10 +1039,15 @@ export function createApp(deps: AppDeps) {
          * 遡り切れているなら「無い」と言ってよい。切れていないなら、空の結果に
          * `reachedStart: false` を添えて返し、判定は呼ぶ側へ渡す。
          */
-        if (messages.length === 0 && reachedStart) {
+        if (messages.length === 0 && reached) {
           return c.json({ error: 'not found' as const }, 404);
         }
-        return c.json({ conversationId: id, messages, scanned: entries.length, reachedStart });
+        return c.json({
+          conversationId: id,
+          messages,
+          scanned: entries.length,
+          reachedStart: reached,
+        });
       },
     )
 

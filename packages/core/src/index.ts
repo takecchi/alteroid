@@ -169,6 +169,28 @@ export {
 } from './prompt.js';
 export { buildActivityDigest, type DigestWindow } from './digest.js';
 /**
+ * 日誌を人間との会話へ畳み直す規則。
+ *
+ * **人間の口（`GET /conversations`）とクローンの道具（`conversation_read`）が
+ * 同じ規則を使うために出してある。** 片方だけに実装を持たせると、直したほうと
+ * 忘れたほうで見えるものがずれる — それは、この規則を足す動機になった欠陥
+ * （層ごとに見えるものが違う）を新しく1つ作ることである。
+ */
+export {
+  CONVERSATION_PREVIEW,
+  bySpeaker,
+  collectConversations,
+  conversationMessages,
+  humanExchanges,
+  preview,
+  reachedStart,
+  searchExchanges,
+  toMessage,
+  type ConversationMessage,
+  type ConversationSummary,
+  type Exchange,
+} from './conversation.js';
+/**
  * クローンの自己認識。正典（`docs/*.md`）の全文はビルド時に焼き込まれる
  * （`scripts/write-canon.mjs`）。要約を手書きしないこと — docs と二重管理になる。
  */

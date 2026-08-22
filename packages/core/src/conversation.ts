@@ -12,14 +12,27 @@
  * （`app.ts` の `/conversations` が持っている規則と同じものである）。
  */
 
-import { excerptLine } from './excerpt.js';
 import type { JournalEntry } from './schema.js';
 
 /** 日誌の `exchange` 1件。 */
 export type Exchange = Extract<JournalEntry, { type: 'exchange' }>;
 
-/** 一覧に出す短い抜粋の長さ（`app.ts` の `preview` と同じ 80 文字）。 */
+/** 一覧に出す短い抜粋の長さ。 */
 export const CONVERSATION_PREVIEW = 80;
+
+/**
+ * 一覧に出す短い抜粋。全文は会話の中身のほうにある。
+ *
+ * **`excerpt.ts` の `excerptLine` を使っていない。** あちらは省いた分量を必ず本文へ
+ * 書くが、ここは `GET /conversations` の `preview` としてそのまま人間の画面と CLI に
+ * 出ている値なので、**挙動を変えないためにこの形のまま持ってきた**（`app.ts` から
+ * 移設しただけで、1文字も変えていない）。省いた分量を言わない点は `excerpt.ts` の
+ * 立てている線と食い違うが、直すなら人間側の表示の変更として別に諮ること。
+ */
+export function preview(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length <= CONVERSATION_PREVIEW ? flat : `${flat.slice(0, CONVERSATION_PREVIEW)}…`;
+}
 
 export interface ConversationSummary {
   conversationId: string;
@@ -81,7 +94,7 @@ export function collectConversations(entries: JournalEntry[]): ConversationSumma
         startedAt: entry.at,
         updatedAt: entry.at,
         messages: 1,
-        preview: excerptLine(entry.text, CONVERSATION_PREVIEW),
+        preview: preview(entry.text),
       });
       continue;
     }
