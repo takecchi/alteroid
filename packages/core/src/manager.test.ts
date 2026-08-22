@@ -42,6 +42,7 @@ import {
   type RunnerResumeCommand,
 } from './runner-protocol.js';
 import type { InboxEvent, Job, JobStatus, JournalEntry } from './schema.js';
+import { workspaceLocatorSchema } from './schema.js';
 import type { Stores } from './store.js';
 import {
   captureStderr,
@@ -531,6 +532,34 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
+  it('「永続性は確かめられなかった」が外向きの要約まで届く（黙って落とさない）', async () => {
+    const s = setup();
+    const { managerId } = await s.pool.start({ request: '直して' });
+
+    const summary = (await s.pool.list()).find((m) => m.managerId === managerId);
+
+    // **欄ごと消さない。** 消すと外からは「何も書かれていない」のと同じに見え、
+    // 「取れなかった」という観測がそこで消える（AGENTS.md の地雷表と同じ形）。
+    expect(summary?.workspace).toBeDefined();
+    expect(summary?.workspace?.kind).toBe('unknown');
+    // 値自身が理由を名乗る（読む側が「なぜ分からないか」を追加で引かなくてよい）。
+    expect((summary?.workspace as { reason?: string } | undefined)?.reason ?? '').not.toBe('');
+
+    await s.pool.stop();
+  });
+
+  it('過去に書かれた runner-volume の行は、そのまま読める（遡って直さない）', () => {
+    // **既存の行は書き換えない**のがこのプロジェクトの方針なので、古い値は残る。
+    // 残る以上、読めなくなってはいけない（読めなくすると台帳が壊れる）。
+    const legacy = workspaceLocatorSchema.safeParse({
+      kind: 'runner-volume',
+      runnerId: 'runner-old',
+      path: '/workspace',
+    });
+
+    expect(legacy.success).toBe(true);
+  });
+
   it('manager_id → runner_id → session_id → workspace が JobStore に残る（resume の足がかり）', async () => {
     const s = setup();
     const { managerId } = await s.pool.start({ request: '直して' });
@@ -547,8 +576,22 @@ describe('マネージャー', () => {
       // 宛先（どの runner か）と workspace の所在まで残す。ここが欠けると、
       // runner が増えた瞬間に manager_send の宛先が決まらない。
       runnerId: 'runner-test',
-      workspace: { kind: 'runner-volume', runnerId: 'runner-test', path: '/work/project' },
+      // **永続性は断定しない。** どこに在るか（`runnerId` / `path`）は言えるが、
+      // その器の workspace が入れ替えを跨いで残るかはデーモンからは分からない。
+      workspace: {
+        kind: 'unknown',
+        runnerId: 'runner-test',
+        path: '/work/project',
+        reason: expect.stringContaining('確かめられない') as unknown as string,
+      },
     });
+
+    // **確かめていない永続性を名乗らない。** ここが `runner-volume` に戻ると、
+    // ボリュームを付けない構成（`railway/README.md`「workspace は毎デプロイで
+    // 消える」）で台帳が偽になり、しかも「復旧できる」と信じる方向へ嘘をつく。
+    expect(job?.workspace?.kind).not.toBe('runner-volume');
+    // 理由の無い「分からない」は値と同じなので、空を許さない。
+    expect((job?.workspace as { reason?: string } | undefined)?.reason ?? '').not.toBe('');
 
     // **runner のローカルパスは台帳に持たない。** 生ログへは runner の API か、
     // 預かったアーカイブ／セッションから降りる（デーモンは runner の中を仮定しない）。

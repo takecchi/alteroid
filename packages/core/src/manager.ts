@@ -711,7 +711,19 @@ class Pool implements ManagerPool {
         request: input.request,
         cwd,
         runnerId: runner.runnerId,
-        workspace: { kind: 'runner-volume', runnerId: runner.runnerId, path: cwd },
+        // **確かめずに `runner-volume` と書かない。** デーモンからは、この器の
+        // `/workspace` がボリュームなのか毎デプロイで消えるのかを知る手段が無い
+        // （名乗りはパスしか運ばない）。断定すると台帳が**存在しない永続性**を
+        // 主張し、しかも「復旧できる」と信じる方向へ嘘をつく。分からないのは
+        // 永続性だけなので、`runnerId` と `path` は落とさない。
+        workspace: {
+          kind: 'unknown',
+          runnerId: runner.runnerId,
+          path: cwd,
+          reason:
+            '器の workspace がボリュームかどうかを runner が名乗らないので、' +
+            '入れ替えを跨いで残るかを確かめられない（roadmap M5「workspace locator の運用選択」）。',
+        },
         lease,
       },
       waiting: [],
@@ -3039,6 +3051,12 @@ function summaryOf(record: ManagerRecord, live: boolean): ManagerSummary {
     // そのまま写すだけでよい。
     ...(job.lastFailure === undefined ? {} : { lastFailure: job.lastFailure }),
     ...(job.runnerId === undefined ? {} : { runnerId: job.runnerId }),
+    /*
+     * **`unknown` を黙って落とさない。** 台帳が「永続性を確かめられなかった」と
+     * 言っているとき、欄ごと消すと外からは**何も書かれていない**のと同じに見え、
+     * 「取れなかった」という観測がそこで消える（AGENTS.md の地雷表と同じ形）。
+     * 変種をそのまま写せば、値自身が `kind: 'unknown'` と `reason` で名乗る。
+     */
     ...(job.workspace === undefined ? {} : { workspace: job.workspace }),
     /*
      * **貸し出しを台帳のまま写す**（M5 PR4）。
