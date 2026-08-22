@@ -51,11 +51,33 @@ export type RunnerManagerState = z.infer<typeof runnerManagerStateSchema>;
 // デーモン → runner（命令）
 // ---------------------------------------------------------------------------
 
+/**
+ * 貸し出し期限（lease）の世代番号（fencing token）と、貸し出し先が自分で畳むまでの
+ * 猶予（roadmap M5 PR4）。**任意である。**
+ *
+ * **省略できる。** 名乗らない（＝この口を知らない）古いデーモンとも繋がるため —
+ * 無ければ runner は今までどおり動く（`packages/core/src/runner-local.ts` のような、
+ * lease を一切知らない既存の呼び出しを1つも壊さない）。
+ *
+ * runner（`runner.ts` の `Host`）はセッションごとに最後に受け取った `fence` を覚え、
+ * それより古い世代の命令を拒む（`RunnerFenceError`）。`ttlMs` は自己失効
+ * （`RunnerHostOptions.enforceLease`）が使う — デーモンと連絡が取れないまま
+ * この猶予を過ぎたら、runner は自分でこのセッションを畳む。
+ */
+export const runnerLeaseSchema = z.object({
+  fence: z.number().int().nonnegative(),
+  ttlMs: z.number().int().positive(),
+});
+
+export type RunnerLease = z.infer<typeof runnerLeaseSchema>;
+
 export const runnerStartCommandSchema = z.object({
   managerId: z.string().min(1),
   request: z.string().min(1),
   /** 実プロジェクトの作業ディレクトリ（runner から見たパス）。 */
   cwd: z.string().min(1),
+  /** **新しいセッションなので、runner は世代を覚えるだけ**（拒む判定はしない）。 */
+  lease: runnerLeaseSchema.optional(),
 });
 
 export type RunnerStartCommand = z.infer<typeof runnerStartCommandSchema>;
@@ -75,10 +97,28 @@ export const runnerResumeCommandSchema = z.object({
   /** resume 直後に流す一言。省略すると開くだけで手は動かない。 */
   message: z.string().optional(),
   entries: z.array(z.unknown()).optional(),
+  /**
+   * **ここが fencing の主戦場である。** 走っているセッションへ resume が来たとき
+   * （器の入れ替え後、旧い器から遅れて届いた命令など）、runner は覚えている世代と
+   * 比べる。古ければ `RunnerFenceError` を投げて**このセッションには一切触れない**。
+   */
+  lease: runnerLeaseSchema.optional(),
 });
 
 export type RunnerResumeCommand = z.infer<typeof runnerResumeCommandSchema>;
 
+/**
+ * **`lease` を持たせない。** これは既に開いている（＝ `start` / `resume` を通って
+ * 世代の検査を済ませた）セッションへ届く命令であって、世代を新しく主張する側では
+ * ない。世代で締め出されたプロセスのセッションは、そのプロセス自身が自己失効
+ * （`RunnerHostOptions.enforceLease`）で畳むので、この口に世代の検査を重ねる
+ * 必要が無い。
+ *
+ * 検査の口を `start` / `resume` の2つに絞ることで、`RunnerClient.send` / `answer`
+ * の署名（`(managerId, text)` / `(managerId, answer)`）を変えずに済む —
+ * 命令の意味が変わらないところに新しい任意フィールドを増やさない、というだけの
+ * 選択である。
+ */
 export const runnerMessageCommandSchema = z.object({ text: z.string().min(1) });
 
 /**
@@ -227,6 +267,11 @@ export const runnerPlacementResourcesSchema = runnerExecutionResourcesSchema.ext
 
 export type RunnerPlacementResources = z.infer<typeof runnerPlacementResourcesSchema>;
 
+/**
+ * **`lease` を持たせない。** `runnerMessageCommandSchema` と同じ理由（あのコメントを
+ * 参照）——確認の返事は既に開いているセッション宛の命令であって、世代を新しく
+ * 主張する側ではない。
+ */
 export const runnerAnswerCommandSchema = z.object({
   requestId: z.string().min(1),
   message: z.string(),
@@ -582,6 +627,33 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     managerId: z.string(),
     status: jobStatusSchema,
     reason: z.string(),
+    /**
+     * **貸し出し期限の自己失効（roadmap M5 PR4）で畳まれたことの構造化された印。
+     * 文言では判定しない。**
+     *
+     * `reason` は人間が読む一文（「デーモンと連絡が取れないので貸し出し期限が
+     * 切れた（自己失効）。」を必ず含む）だが、そこへの文字列一致で判定させると、
+     * マネージャーが偶然同じ文言を報告に書いた回まで巻き込む——`report` の
+     * `failure` / `contentless` が「検知は構造化された印だけで行う」としている
+     * のと同じ作法（`sdk-failure.ts` の doc）。
+     *
+     * **`status` はそれでも `lost` のままである。** `lost`（戻れないと確定した）
+     * は runner から見た事実として正しい——このプロセスではもう続けられない。
+     * ただし自己失効は「持ち主を失った」わけではなく、生ログさえあれば**別の
+     * 器から続けられる**。台帳側（`manager.ts`）がこの印を見て、`status` を
+     * 動かさずに貸し出し（`lease`）だけ返し、引き取り直せるようにする——
+     * `lost` かつ `selfFenced` が立たない回（resume 不能で `#recoverFromFailedResume`
+     * が `unresumable` を返した回）とはここで区別できる。
+     *
+     * **`z.literal(true).optional()` にしてあるのは、無いことを「自己失効では
+     * ない」の既定値にするため。** 既存の `closed` イベント（このフィールドを
+     * 送らない runner）を1つも壊さない。
+     *
+     * 立つのは `RunnerSession#selfFence` を通った1経路だけである。**`stop()`
+     * （デーモンからの明示停止・器の `shutdown()`）や、resume 不能で `#finish`
+     * へ落ちる経路には立たない**（`runner-fence.test.ts` が固定する）。
+     */
+    selfFenced: z.literal(true).optional(),
   }),
   /**
    * 前のセッションを開き直せなかった。
@@ -628,6 +700,40 @@ export class RunnerHttpError extends Error {
     super(message);
     this.name = 'RunnerHttpError';
     this.status = status;
+  }
+}
+
+/**
+ * `start` / `resume` の `lease.fence` が、runner（`runner.ts` の `Host`）が
+ * セッションごとに覚えている世代より古かった（roadmap M5 PR4 の fencing）。
+ *
+ * **投げた側（`Host#resume` / `Host#start`）はこのセッションに一切触れない。**
+ * 遅れて届いた古い世代の命令はここで止め、走っているセッションの状態
+ * （入力・確認待ち・生ログ）は1文字も変えない。`expected` / `given` を持たせるのは、
+ * デーモン側が「なぜ拒まれたか」を人間へそのまま出せるようにするためである。
+ *
+ * `apps/runner/src/app.ts` はこれを **409** で返す。**500 にしないこと** —
+ * `isRetryableRunnerError` は 5xx を「待てば直る」に分類するので、500 のままだと
+ * 古い世代の命令が新しい命令へ置き換わらずに延々と挑み直される。409 は
+ * 「同じものを投げ直しても同じ答えが返る」側（4xx）として読める。
+ */
+export class RunnerFenceError extends Error {
+  readonly managerId: string;
+  /** runner がいま覚えている世代。 */
+  readonly expected: number;
+  /** 命令に載っていた世代。`expected` より古い。 */
+  readonly given: number;
+
+  constructor(input: { managerId: string; expected: number; given: number }) {
+    super(
+      `manager_id=${input.managerId} の命令が古い世代を名乗っている` +
+        `（runner が覚えている世代=${input.expected}, 受け取った世代=${input.given}）。` +
+        'このセッションには一切触れていない。',
+    );
+    this.name = 'RunnerFenceError';
+    this.managerId = input.managerId;
+    this.expected = input.expected;
+    this.given = input.given;
   }
 }
 

@@ -26,9 +26,11 @@ import {
 import { createProfileApplier, type ProfileApplier, type ProfileVessel } from './profile.js';
 import { createRecentMap } from './recent.js';
 import { buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
+import { RunnerFenceError } from './runner-protocol.js';
 import type {
   RunnerAnswerCommand,
   RunnerEvent,
+  RunnerLease,
   RunnerManagerState,
   RunnerProfileFingerprint,
   RunnerProfileResult,
@@ -191,6 +193,16 @@ export function resolvePermissionMode(env: NodeJS.ProcessEnv): ManagerPermission
   return resolvePermissionModeFor(env, PERMISSION_MODE_ENV_KEY);
 }
 
+/**
+ * 貸し出し期限の自己失効を見張る間隔（roadmap M5 PR4）。
+ *
+ * **環境変数の設定項目にしないこと。** `runner-protocol.ts` の `HEARTBEAT_INTERVAL_MS`
+ * などと同じ論法 — つまみとして外へ出すと、そこが実質の運用パラメータになる。
+ * `lease.ts` の `LEASE_TTL_MS`（既定10分）に対して十分に細かく見張れる長さであれば
+ * よく、厳密さは要らない（見張りが1周遅れても、次の周で必ず気づく）。
+ */
+const LEASE_WATCH_INTERVAL_MS = 10_000;
+
 export interface RunnerHostOptions {
   /** 安定した識別子。デーモンが `manager_id → runner_id` を台帳に残す。 */
   runnerId: string;
@@ -228,6 +240,24 @@ export interface RunnerHostOptions {
    * しないこと** — 読みに行けるということは鍵があるということである。
    */
   profile?: ProfileVessel;
+  /**
+   * 貸し出し期限（lease）の自己失効を有効にする（roadmap M5 PR4）。**既定は
+   * false。**
+   *
+   * `true` のとき、`lease` を伴って起こされたセッションは、`noteDaemonContact()`
+   * が最後に呼ばれてから `lease.ttlMs` を過ぎたら自分で畳む
+   * （`RunnerSession#selfFence`）。これが lease の歯である — デーモンと連絡が
+   * 取れなくなった runner がこの猶予を過ぎても居座ると、「もう動いていない」を
+   * 引き取る側が片側だけで言えなくなる（`lease.ts` の doc）。
+   *
+   * **既定を false にしてある理由。** 同一プロセスの `runner-local` では
+   * 「デーモンだけが消える」ことが構造的に起こり得ない（デーモンと runner が
+   * 同じプロセスなので、デーモンが死ねば runner も一緒に死ぬ）。既定で有効にすると、
+   * HTTP の接触という概念そのものが無い構成で走っているセッションを理由なく畳む
+   * ことになる。**コンテナで走る器（`apps/runner/src/index.ts`）だけが `true` を
+   * 渡す。**
+   */
+  enforceLease?: boolean;
 }
 
 export interface RunnerHost {
@@ -242,6 +272,7 @@ export interface RunnerHost {
   /** 実行環境プロファイルを差し替える。**置く前に評価して、結果を返す。** */
   setProfile(script: string): Promise<RunnerProfileResult>;
   start(command: RunnerStartCommand): Promise<void>;
+  /** `RunnerFenceError` を投げうる（世代が古い。呼び出し側は 409 へ変換すること）。 */
   resume(command: RunnerResumeCommand): Promise<void>;
   send(managerId: string, text: string): Promise<boolean>;
   answer(managerId: string, answer: RunnerAnswerCommand): Promise<boolean>;
@@ -250,6 +281,15 @@ export interface RunnerHost {
   transcript(managerId: string): Promise<string | null>;
   /** 全セッションを畳む。プロセスが消えるときだけ呼ぶ。 */
   shutdown(): Promise<void>;
+  /**
+   * デーモンから制御面への接触があったことを知らせる（貸し出し期限の自己失効の
+   * 時計を進める）。
+   *
+   * **呼ぶのは認証済みの制御面の呼びだけにすること。** `apps/runner/src/app.ts`
+   * の `/livez` は無認証なので、そこから呼ぶと誰でも貸し出し期限を延ばせてしまう
+   * （＝自己失効が機能しなくなる）。
+   */
+  noteDaemonContact(): void;
 }
 
 export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
@@ -277,6 +317,18 @@ class Host implements RunnerHost {
    */
   readonly #profile: ProfileApplier | undefined;
   readonly #sessions = new Map<string, RunnerSession>();
+  readonly #enforceLease: boolean;
+  /**
+   * 制御面（認証済みの呼び）から最後に接触があった時刻。
+   *
+   * **起動直後は「今」を起点にする。** 何も知らない時刻をゼロや過去に見積もると、
+   * デーモンが1度も繋いでいない起動直後のセッションまで即座に自己失効しうる
+   * （`lease.ts` の `instanceSince` と同じ「知らない時刻を過去に見積もらない」
+   * という判断）。
+   */
+  #lastDaemonContact = Date.now();
+  /** 貸し出し期限の自己失効を見張る1本。**`shutdown()` で必ず畳む。** */
+  #leaseWatcher: ReturnType<typeof setInterval> | null = null;
 
   constructor(options: RunnerHostOptions) {
     this.runnerId = options.runnerId;
@@ -288,6 +340,14 @@ class Host implements RunnerHost {
     this.#childUser = options.childUser;
     this.#credentials = options.credentials;
     this.#permissionMode = options.permissionMode ?? resolvePermissionMode(this.#env);
+    this.#enforceLease = options.enforceLease ?? false;
+    if (this.#enforceLease) {
+      const watcher = setInterval(() => this.#checkLeaseExpiry(), LEASE_WATCH_INTERVAL_MS);
+      // 見張りでプロセスの終了を引き延ばさない（このリポジトリの既存のタイマーが
+      // 全部そうしている）。
+      watcher.unref?.();
+      this.#leaseWatcher = watcher;
+    }
     this.#profile =
       options.profile === undefined
         ? undefined
@@ -307,6 +367,32 @@ class Host implements RunnerHost {
 
   credentials(): CredentialFingerprint[] {
     return this.#credentials?.fingerprints() ?? [];
+  }
+
+  /** 制御面から接触があった。貸し出し期限の自己失効の時計を進める。 */
+  noteDaemonContact(): void {
+    this.#lastDaemonContact = Date.now();
+  }
+
+  /**
+   * 貸し出し期限が切れたセッションを自分で畳む（roadmap M5 PR4 の自己失効）。
+   *
+   * **`lease` を伴わずに起こされたセッションは見ない**（`leaseTtlMs` が
+   * `undefined`）。`enforceLease` が有効でも、世代の約束をしていないセッションを
+   * 理由なく畳まない。
+   */
+  #checkLeaseExpiry(): void {
+    const now = Date.now();
+    for (const session of [...this.#sessions.values()]) {
+      const ttlMs = session.leaseTtlMs;
+      if (ttlMs === undefined) continue;
+      if (now - this.#lastDaemonContact < ttlMs) continue;
+      void session.selfFence(
+        'デーモンと連絡が取れないので貸し出し期限が切れた（自己失効）。' +
+          `最後に接触があったのは ${new Date(this.#lastDaemonContact).toISOString()}、` +
+          `約束していた貸し出し期限は ${ttlMs}ms。`,
+      );
+    }
   }
 
   async setCredentials(entries: readonly CredentialEntry[]): Promise<CredentialFingerprint[]> {
@@ -391,6 +477,10 @@ class Host implements RunnerHost {
     }
     const session = this.#create(command.managerId, command.request, command.cwd);
     try {
+      // **新しいセッションなので拒む判定は起きない。** `checkFence` は
+      // 「まだ世代を覚えていない」ときは無条件に覚えるだけである
+      // （`RunnerSession#checkFence` の doc）。
+      session.checkFence(command.lease);
       session.begin(command.request);
     } catch (error) {
       this.#sessions.delete(command.managerId);
@@ -399,19 +489,29 @@ class Host implements RunnerHost {
   }
 
   /**
-   * 中断されたセッションの続きへ戻す。
+   * 中断されたセッションの続きへ戻す。**`RunnerFenceError` を投げうる。**
    *
    * 既に同じ manager が走っているなら（デーモンだけが再起動した場合）、何もせず
    * 追加の一言だけを流す。**走っているものを resume で作り直さない** — 手を
    * 動かしている最中のマネージャーを二重に起こすことになる。
+   *
+   * **世代の検査はこの短絡の手前に置く。** 古い世代の resume が来たら
+   * `checkFence` が投げ、その時点でまだ何もしていない（`push` を呼ぶ前）ので、
+   * 走っているセッションは1文字も影響を受けない。新しい世代なら世代だけ
+   * 覚え直し、同じ短絡（作り直さずに一言だけ流す）へそのまま合流する。
    */
   async resume(command: RunnerResumeCommand): Promise<void> {
     const alive = this.#sessions.get(command.managerId);
     if (alive) {
+      alive.checkFence(command.lease);
       if (command.message !== undefined) alive.push(command.message);
       return;
     }
     const session = this.#create(command.managerId, command.request, command.cwd);
+    // **この Host インスタンスにとっては初めて見るセッション**（器の入れ替え・
+    // デーモンの再起動後の resume）なので、比べる前の世代が無い。拒む判定は
+    // 起きず、覚えるだけになる（`start` と同じ形）。
+    session.checkFence(command.lease);
     session.resume(command.sessionId, command.entries, command.message);
   }
 
@@ -441,6 +541,12 @@ class Host implements RunnerHost {
   }
 
   async shutdown(): Promise<void> {
+    // **見張りを先に畳む。** 畳み残すと、この後 `#sessions.clear()` で空になった
+    // 名簿を、止まったはずの見張りが叩き続ける（名簿は空なので実害は無いが、
+    // テストならタイマーが残ってハングする — `runner-protocol.ts` の `Registry#stop`
+    // と同じ理由）。
+    if (this.#leaseWatcher !== null) clearInterval(this.#leaseWatcher);
+    this.#leaseWatcher = null;
     await Promise.all(
       [...this.#sessions.values()].map((session) => session.stop('runner が停止した。')),
     );
@@ -725,6 +831,23 @@ class RunnerSession {
   #sessionId: string | undefined;
   #transcriptPath: string | undefined;
   #stopped = false;
+  /**
+   * 最後に受け取った世代番号（fencing token）。
+   *
+   * **`undefined` は「まだ lease を伴わずに起こされた」ことを表す。** そのときは
+   * 判定しない（`lease.ts` の `undecidable` と同じ形 — 材料が無いことを
+   * 「古くない」と読まない。ただし判定しない以上、拒む理由も無いので実質は
+   * 「常に受ける」になる）。名乗らない古いデーモンとも繋がるための任意フィールドと
+   * 対になっている（`runnerLeaseSchema` の doc）。
+   */
+  #fence: number | undefined;
+  /**
+   * いまの貸し出し期限（ミリ秒）。`Host` の自己失効の見張りが読む。
+   *
+   * **lease を伴わずに起こされたセッションは `undefined` のまま。** 自己失効は
+   * 期限を約束されたセッションだけに効く（`RunnerHostOptions.enforceLease` の doc）。
+   */
+  #leaseTtlMs: number | undefined;
 
   constructor(options: RunnerSessionOptions) {
     this.#id = options.managerId;
@@ -739,6 +862,41 @@ class RunnerSession {
     this.#permissionMode = options.permissionMode;
     this.#profileEnv = options.profileEnv;
     this.#onClosed = options.onClosed;
+  }
+
+  /** 見張り（`Host#checkLeaseExpiry`）が読む、いまの貸し出し期限。 */
+  get leaseTtlMs(): number | undefined {
+    return this.#leaseTtlMs;
+  }
+
+  /**
+   * 世代番号（fencing token）を検査し、覚える（roadmap M5 PR4）。
+   *
+   * **`lease` が無ければ何もしない。** 任意フィールドなので、名乗らない古い
+   * デーモンから来た命令は今までどおり素通しする。
+   *
+   * まだ世代を覚えていない（`#fence === undefined`）なら、これは `start` か、
+   * この `Host` インスタンスにとって初めて見る `resume`（器の入れ替え・デーモンの
+   * 再起動後）である。比べる前の世代が無いので、拒む判定は起きず**覚えるだけ**
+   * になる。
+   *
+   * 既に覚えている世代より**古ければ** `RunnerFenceError` を投げる。**投げる前に
+   * 何も書き換えない**ので、走っているセッションはこの呼び出しで1文字も影響を
+   * 受けない。**同じ値は再送として受ける**（更新も拒否もしない）。**新しい値**は
+   * ここで覚え直すだけで、セッションを作り直す判断はここには無い
+   * （`Host#resume` が呼び出し元で、既にセッションを作り直さない短絡を持っている）。
+   */
+  checkFence(lease: RunnerLease | undefined): void {
+    if (lease === undefined) return;
+    if (this.#fence !== undefined && lease.fence < this.#fence) {
+      throw new RunnerFenceError({
+        managerId: this.#id,
+        expected: this.#fence,
+        given: lease.fence,
+      });
+    }
+    this.#fence = lease.fence;
+    this.#leaseTtlMs = lease.ttlMs;
   }
 
   begin(request: string): void {
@@ -848,6 +1006,34 @@ class RunnerSession {
     }
     await this.#reader?.catch(() => undefined);
     this.#onClosed();
+  }
+
+  /**
+   * 貸し出し期限の自己失効（roadmap M5 PR4）。**`stop()` とは別の経路である。**
+   *
+   * `stop()`（デーモンからの明示停止・器の shutdown）は `closed` イベントを
+   * 出さない — 呼んだ側（デーモン）は自分が起こした結果を `runner.list()` で
+   * 確かめられるので、知らせは要らない（`manager.ts#abort` が `sessionGone` を
+   * 自分で探りに行く形と対になっている）。**自己失効はランナー自身の判断**なので、
+   * デーモンはこれを知る手段が `closed` イベントしかない。だから `stop()` ではなく
+   * `#finish()` を通す。
+   *
+   * **status は `lost` にする。** 「戻れないと確定した」という既存の意味
+   * （`#recoverFromFailedResume` が resume 不能を `lost` にしているのと同じ）に、
+   * 「このプロセスからはこれ以上続けられない、が持ち主を失ったわけではない」
+   * という自己失効の性質が最も近い。
+   *
+   * **ただし `lost` だけでは、自己失効と resume 不能を区別できない。** どちらも
+   * 「このプロセスではもう続けられない」だが、前者は生ログさえあれば別の器から
+   * 続けられる（持ち主を失っていない）のに対し、後者は材料そのものが無い。
+   * そこで `closed` に構造化された印 `selfFenced: true` を立てる
+   * （`runnerEventSchema` の `closed` の doc）。**文言（`reason`）では判定させない**
+   * ——台帳側（`manager.ts`）がこの印だけを見て、`status` を動かさずに貸し出し
+   * （`lease`）を返し、引き取り直せるようにする。
+   */
+  async selfFence(reason: string): Promise<void> {
+    if (this.#stopped) return;
+    await this.#finish('lost', reason, { selfFenced: true });
   }
 
   // -------------------------------------------------------------------------
@@ -1589,7 +1775,19 @@ class RunnerSession {
     });
   }
 
-  async #finish(status: JobStatus, reason: string): Promise<void> {
+  /**
+   * `selfFenced` は `RunnerSession#selfFence` からだけ渡す。
+   *
+   * **他の呼び出し元（resume 不能・クラッシュ）は渡さない**——渡さなければ
+   * `runnerEventSchema` の `closed.selfFenced` は既定で undefined になり、
+   * デーモン側の判定（自己失効なら `lease` だけ返す）は自己失効の1経路にしか
+   * 効かない（`runner-protocol.ts` の `closed` の doc）。
+   */
+  async #finish(
+    status: JobStatus,
+    reason: string,
+    options: { selfFenced?: true } = {},
+  ): Promise<void> {
     this.#stopped = true;
     // **`close()` より先に読む。** 閉じた後の control channel からは何も取れない。
     // ここを通るのはクラッシュ・`lost`・`failed`、つまり `result` が出ないまま
@@ -1612,7 +1810,13 @@ class RunnerSession {
     }
     this.#status = status;
     await this.#shipArchive();
-    this.#emit({ type: 'closed', managerId: this.#id, status, reason });
+    this.#emit({
+      type: 'closed',
+      managerId: this.#id,
+      status,
+      reason,
+      ...(options.selfFenced === undefined ? {} : { selfFenced: options.selfFenced }),
+    });
     this.#onClosed();
   }
 
