@@ -4482,6 +4482,43 @@
                               "required": ["name", "sha256", "updatedAt"]
                             }
                           },
+                          "credentialsProbe": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "const": "asked"
+                                  }
+                                },
+                                "required": ["status"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "const": "unheard"
+                                  }
+                                },
+                                "required": ["status"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "const": "failed"
+                                  },
+                                  "error": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["status", "error"]
+                              }
+                            ]
+                          },
                           "profile": {
                             "type": "object",
                             "properties": {
@@ -4496,6 +4533,43 @@
                               }
                             },
                             "required": ["sha256", "bytes", "updatedAt"]
+                          },
+                          "profileProbe": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "const": "asked"
+                                  }
+                                },
+                                "required": ["status"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "const": "unheard"
+                                  }
+                                },
+                                "required": ["status"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "const": "failed"
+                                  },
+                                  "error": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["status", "error"]
+                              }
+                            ]
                           },
                           "revision": {
                             "oneOf": [
@@ -4542,7 +4616,15 @@
                             ]
                           }
                         },
-                        "required": ["label", "state", "since", "credentials", "revision"]
+                        "required": [
+                          "label",
+                          "state",
+                          "since",
+                          "credentials",
+                          "credentialsProbe",
+                          "profileProbe",
+                          "revision"
+                        ]
                       }
                     },
                     "daemonRevision": {
