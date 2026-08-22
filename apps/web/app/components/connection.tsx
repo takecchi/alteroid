@@ -65,10 +65,15 @@ export function ConnectionCard({ compact = false }: { compact?: boolean }) {
         <ErrorNote error={health.error} />
 
         {health.data !== undefined && (
-          <dl className="grid grid-cols-[6rem_1fr] gap-y-1 text-sm">
-            <dt className="text-muted">記憶</dt>
+          {/*
+              **`sm:`（640px）未満は1列に積む。** 理由・`dt` の `mt-3 first:mt-0`
+              の意味は `manager-detail.tsx` の同型の `dl` に書いたコメントと同じ
+              （ここも6remなのでなお余裕がある）。
+            */}
+          <dl className="grid grid-cols-1 gap-y-1 text-sm sm:grid-cols-[6rem_1fr]">
+            <dt className="mt-3 text-muted first:mt-0 sm:mt-0">記憶</dt>
             <dd className="font-mono text-xs break-all">{health.data.storage}</dd>
-            <dt className="text-muted">pid</dt>
+            <dt className="mt-3 text-muted first:mt-0 sm:mt-0">pid</dt>
             {/* pid は `z.number().int()`（apps/daemon/src/openapi.ts）＝ process.pid。
                 有界の小さい整数（Linux の pid_max は既定で7桁までしか無い）なので、
                 このセクションの幅で折り返しが要る長さにはならない。break-all は

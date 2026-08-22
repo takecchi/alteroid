@@ -118,8 +118,23 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
 
           <Card>
             <CardHeader title="状態" />
-            <dl className="grid grid-cols-[8rem_1fr] gap-y-1.5 px-4 py-3 text-sm">
-              <dt className="text-muted">状態</dt>
+            {/*
+              **375px でもラベル列（8rem=128px）に取り分を持っていかれないよう、
+              `sm:`（640px）未満は1列に積む。** `sm:` を選んだ理由: `reports.tsx`
+              の `lg:grid-cols-[16rem_1fr]` は16remがlg(1024px)の1/4を占める
+              太い列だからその境目を選んでいるが、ここは最大でも8rem(128px)＝
+              sm(640px)の20%に過ぎず、`md:`/`lg:` まで待つ理由が無い。
+
+              **積んだとき `dt`→`dd` が交互に並ぶので、`gap-y-1.5` だけでは
+              「どの `dd` がどの `dt` のものか」が読めなくなる**（同じ間隔が
+              対になる行にも次の組にも掛かる）。対策として `dt` に
+              `mt-3 first:mt-0` を足す — 対になる `dd` との間隔は据え置きの
+              `gap-y-1.5` のまま、次の組が始まる前にだけ余分な間隔が入るので、
+              組の境目が間隔の差で分かるようにした（`sm:` 以上では `sm:mt-0`
+              で打ち消し、2列表示の見た目は変えていない）。
+            */}
+            <dl className="grid grid-cols-1 gap-y-1.5 px-4 py-3 text-sm sm:grid-cols-[8rem_1fr]">
+              <dt className="mt-3 text-muted first:mt-0 sm:mt-0">状態</dt>
               <dd className="flex items-center gap-2">
                 <ManagerStatusBadge status={manager.status} />
                 {manager.live ? (
@@ -146,25 +161,25 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
                   <Badge tone="danger">⚠ 直近のターンは失敗で終わった</Badge>
                 )}
               </dd>
-              <dt className="text-muted">作業ディレクトリ</dt>
+              <dt className="mt-3 text-muted first:mt-0 sm:mt-0">作業ディレクトリ</dt>
               <dd className="font-mono text-xs break-all">{manager.cwd}</dd>
-              <dt className="text-muted">開始</dt>
+              <dt className="mt-3 text-muted first:mt-0 sm:mt-0">開始</dt>
               <dd>
                 {formatDateTime(manager.startedAt)}（{formatRelative(manager.startedAt)}）
               </dd>
-              <dt className="text-muted">更新</dt>
+              <dt className="mt-3 text-muted first:mt-0 sm:mt-0">更新</dt>
               <dd>
                 {formatDateTime(manager.updatedAt)}（{formatRelative(manager.updatedAt)}）
               </dd>
               {manager.runnerId !== undefined && manager.runnerId !== null && (
                 <>
-                  <dt className="text-muted">runner</dt>
+                  <dt className="mt-3 text-muted first:mt-0 sm:mt-0">runner</dt>
                   <dd className="font-mono text-xs break-all">{manager.runnerId}</dd>
                 </>
               )}
               {manager.sessionId !== undefined && manager.sessionId !== null && (
                 <>
-                  <dt className="text-muted">セッション</dt>
+                  <dt className="mt-3 text-muted first:mt-0 sm:mt-0">セッション</dt>
                   <dd className="font-mono text-xs break-all">{manager.sessionId}</dd>
                 </>
               )}
@@ -178,7 +193,7 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
               */}
               {manager.lease !== undefined && manager.lease !== null && (
                 <>
-                  <dt className="text-muted">貸し出し</dt>
+                  <dt className="mt-3 text-muted first:mt-0 sm:mt-0">貸し出し</dt>
                   <dd className="font-mono text-xs break-all">
                     {manager.lease.instanceId ?? 'プロセスは未名乗り'} / 世代 {manager.lease.fence}
                     （生存確認 {formatDateTime(manager.lease.seenAt)}）
