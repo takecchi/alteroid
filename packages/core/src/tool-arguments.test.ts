@@ -142,15 +142,15 @@ describe('クローンの道具に渡した引数は、長さと位置によら�
 
   it('長い値がどの位置にあっても、後ろの引数まで1文字も欠けずに届く（memory_append）', async () => {
     // 3引数の道具では、長い値を**先頭・真ん中・最後**の全部の位置に置く。
+    // **`slug` には長い値を置けない。** `memorySlugSchema`（`schema.ts:25-29`）が
+    // 128 文字までと決めているので、先頭の位置は「規約上いちばん長い slug」で当てる
+    // ——ここだけは「長い」の桁が違うことを承知のうえで書いている。
+    const LONGEST_SLUG = 'a'.repeat(128);
     const cases: { label: string; slug: string; content: string; summary: string }[] = [
       { label: '短→短→長', slug: 'probe', content: SHORT, summary: LONG },
-      { label: '短→長→短', slug: 'probe', content: LONG, summary: SHORT },
-      {
-        label: '長→短→短',
-        slug: LONG.slice(0, 60).replace(/[^a-z0-9_-]/gi, '-'),
-        content: SHORT,
-        summary: LONG,
-      },
+      { label: '短→長→短（クローンが踏んだ形）', slug: 'probe', content: LONG, summary: SHORT },
+      { label: '短→長→長', slug: 'probe', content: LONG, summary: LONG },
+      { label: '最長 slug→長→短', slug: LONGEST_SLUG, content: LONG, summary: SHORT },
     ];
 
     for (const { label, slug, content, summary } of cases) {
@@ -166,6 +166,40 @@ describe('クローンの道具に渡した引数は、長さと位置によら�
       const entries = await stores.journal.list({ limit: 10 });
       const written = entries.find((entry) => entry.type === 'memory_update');
       expect(written?.type === 'memory_update' ? written.summary : undefined).toBe(summary);
+    }
+  });
+
+  /**
+   * 長さの閾値と、直列化を壊しうる文字の両方に当てる。
+   *
+   * **「長い引数の後ろが落ちる」を疑うなら、長さだけを疑ってはいけない。**
+   * 制御文字・引用符・バックスラッシュ・波括弧・絵文字（サロゲートペア）・
+   * 全角は、どれも「JSON にすると1文字が1文字でなくなる」側の文字である。
+   * 混ぜたうえで桁を上げていき、**どの桁でも後続の引数が欠けない**ことを見る。
+   */
+  it('長さの閾値は無い（10万字＋制御文字を混ぜても後続の引数は欠けない）', async () => {
+    const specials =
+      String.fromCharCode(10, 13, 9, 34, 92, 123, 125, 91, 93, 58, 44) + ' \u{1F642}〒ｱあa1';
+
+    for (const size of [1_000, 10_000, 100_000]) {
+      const value = specials.repeat(Math.ceil(size / specials.length)).slice(0, size);
+      const stores = createMemoryStores();
+      const rpc = await connect(stores);
+      const result = await callTool(rpc, 'memory_append', {
+        slug: 'probe',
+        content: value,
+        summary: SHORT,
+      });
+
+      expect(result.isError, `${size}字: 呼び出しが失敗した（${result.text}）`).toBe(false);
+      const doc = await stores.persona.read('probe');
+      expect(doc?.content, `${size}字: 本文が届いていない`).toBe(value);
+      const entries = await stores.journal.list({ limit: 10 });
+      const written = entries.find((entry) => entry.type === 'memory_update');
+      expect(
+        written?.type === 'memory_update' ? written.summary : undefined,
+        `${size}字: 後続の summary が届いていない`,
+      ).toBe(SHORT);
     }
   });
 
