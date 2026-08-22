@@ -235,6 +235,12 @@ function buildMarker(spec, ctx) {
     // （内容までは確認できないことを後始末の側で明示する）。
     target: spec.target ?? null,
     artifact: spec.artifact ?? null,
+    // 印がどの段階で止まったかを持つ。「ソースが変異したまま」と「ソースは
+    // 復元済みで dist の確認が取れていない」は別の状態であり、status は
+    // これに応じて違う説明を出す（同じ「印が残っている」でも次にやることが
+    // 違う）。旧い印（このフィールドが無い）は 'source-mutated' とみなす
+    // （後方互換。status 側で `marker.stage ?? 'source-mutated'` にする）。
+    stage: 'source-mutated',
     startedAt: nowIso(),
     sessionId: process.env.CLAUDE_SESSION_ID ?? process.env.ALTEROID_SESSION_ID ?? null,
     pid: process.pid,
@@ -508,6 +514,13 @@ export function restoreMutation(opts = {}) {
     throw new HarnessError(`[12d] HEAD が変わっている (${marker.headBefore} → ${headAfter})`);
   }
   log(`[12d] HEAD 一致: ${headAfter}`);
+
+  // **ソース側の復元がここまでで完了した。** これ以降で後始末（dist）が
+  // 失敗しても、次に来た人へは「ソースが変異したまま」ではなく「ソースは
+  // 復元済みで dist の確認が取れていない」と伝える必要がある。印を
+  // 書き換えて、その事実を先にディスクへ残す（この後 rebuildAndVerify が
+  // 例外を投げても、この書き換えは既に効いている）。
+  writeMarkerFile({ ...marker, stage: 'dist-unverified' });
 
   // **後始末（手順1〜13には無い工程。番号は振らない）。** 手順8〜9は build 済みの
   // `dist` を検査するが、この時点まではソースだけを書き戻した状態なので、

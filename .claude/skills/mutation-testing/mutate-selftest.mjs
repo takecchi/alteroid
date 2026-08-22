@@ -660,6 +660,21 @@ function scenarioRebuildFailure() {
   log(statusOut);
   const statusReportedProblem = /変異が当たったまま/.test(statusOut);
 
+  // **段階の区別が出ているかを確かめる。** マネージャーの2回目の実測: 後始末が
+  // 落ちた時点でソース（git 管理下）は既に復元済みなのに、直さないと
+  // `status` は「ソースが変異したまま」という説明（cp/md5sum を主経路とする
+  // 手順）を出していた。次に来た人がその手順どおり cp して md5 が一致する
+  // のを見ると「直った」と誤解し、dist の変異が残ったまま印を消しかねない。
+  // ここでは、実際に dist だけが問題である段階では「ソースは既に復元済み」
+  // と明示され、cp を主経路として出していないことを確認する。
+  const statusMentionsDistStage = /ソース（git 管理下）は既に復元済みである/.test(statusOut);
+  const statusShowsCpAsPrimary =
+    /ハーネスを使わない復元手順:/.test(statusOut) && /\$ cp '/.test(statusOut);
+  log(
+    `status が「ソースは復元済み・dist 未確認」の段階だと明示しているか: ${statusMentionsDistStage}`,
+  );
+  log(`status が cp 手順を主経路として出しているか（出ていないはず）: ${statusShowsCpAsPrimary}`);
+
   log('');
   log('-- 6d. 擬似 pnpm を片付け、本物の pnpm で復元する --');
   fs.rmSync(fakeBinDir, { recursive: true, force: true });
@@ -670,6 +685,14 @@ function scenarioRebuildFailure() {
     .includes('REBUILDCHECK_MUTATED');
   const gitStatusAfter = gitStatusPorcelainFor(spec.file);
 
+  // ツリーは既にクリーンな状態まで戻したので、ここで投げても安全である。
+  if (!statusMentionsDistStage || statusShowsCpAsPrimary) {
+    throw new HarnessError(
+      'status が段階を正しく伝えていない（ソースは復元済み・dist 未確認、のはずなのに cp を' +
+        '主経路として出す、または段階の明示が無い）。マネージャーの2回目の実測が再現した。',
+    );
+  }
+
   return {
     scenario: 'rebuild-failure',
     restoreExitCodeWasNonZero: restoreResult.status !== 0,
@@ -677,6 +700,8 @@ function scenarioRebuildFailure() {
     statusExitCodeAfterFailedRebuild: statusExit,
     statusReportedProblemAfterFailedRebuild: statusReportedProblem,
     distStillHadMutationRightAfterFailedRebuild: distStillHasMutation,
+    statusMentionsDistStage,
+    statusShowsCpAsPrimary,
     finalCleanupOk: finalRestore.rebuildCheck.ok,
     distCleanAfterRealRestore,
     gitCleanAfterRealRestore: gitStatusAfter.trim() === '',

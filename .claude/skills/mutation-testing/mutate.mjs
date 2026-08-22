@@ -61,6 +61,16 @@ function cmdStatus() {
     log(err.message);
     process.exit(2);
   }
+
+  // **段階に応じて説明を変える。** 「ソースが変異したまま」（stage:
+  // 'source-mutated'。旧い印にはこのフィールドが無いので、その場合もここに
+  // 倒す — 後方互換）と「ソースは復元済みで dist の確認が取れていない」
+  // （stage: 'dist-unverified'）は別の状態であり、次にやることが違う。
+  // 同じ「印が残っている」でも、後者で cp/md5sum を主経路として出すと、
+  // 次に来た人はソースの復元をやり直し、md5 が一致するのを見て「直った」と
+  // 誤解する — 実際に残っているのは dist であって、cp では直らない。
+  const stage = marker.stage ?? 'source-mutated';
+
   log('⚠ このツリーには変異が当たったままである。');
   log('');
   log(`ファイル: ${marker.file}`);
@@ -75,15 +85,42 @@ function cmdStatus() {
     `印内の原文の自己整合性: ${selfConsistent ? '一致（信頼できる）' : '不一致（印自体が壊れている疑い）'}`,
   );
   log('');
-  log('ハーネスを使わない復元手順:');
-  log(`  $ ${marker.manualRestore.command}`);
-  log(
-    `  $ ${marker.manualRestore.verifyMd5Command}   # ${marker.manualRestore.expectedMd5} と一致するはず`,
-  );
-  log('');
-  log(`前提つきの代替: ${marker.alternativeWithCaveat}`);
-  log('');
-  log(`もしくは: node ${path.relative(ROOT, __filename)} restore`);
+
+  if (stage === 'dist-unverified') {
+    log(
+      '段階: ソース（git 管理下）は既に復元済みである。残っているのは dist の確認が取れていないことである。',
+    );
+    log(
+      `（参考: ソースの md5 は既に ${marker.md5Pre} と一致しているはずである。ソースの cp による復元は不要 — それをやり直しても dist は直らない）`,
+    );
+    log('');
+    log(`対象パッケージ: ${marker.target ?? '(不明)'}`);
+    if (marker.artifact) {
+      log(
+        `成果物: ${marker.artifact.file}（"${marker.artifact.contains}" が消えていることを確認できていない）`,
+      );
+    } else {
+      log('成果物検査の設定が無いため、build の成功だけを根拠にする（内容までは確認できない）。');
+    }
+    log('');
+    log('次にやること（ソース側は何もしなくてよい。dist を作り直すこと）:');
+    log(`  $ pnpm --filter ${marker.target ?? '<target>'} build`);
+    log(
+      `  $ node ${path.relative(ROOT, __filename)} restore   # べき等。再度呼べば dist を検証し、通れば印を消す`,
+    );
+  } else {
+    log('段階: ソースが変異したまま（まだ復元されていない）。');
+    log('');
+    log('ハーネスを使わない復元手順:');
+    log(`  $ ${marker.manualRestore.command}`);
+    log(
+      `  $ ${marker.manualRestore.verifyMd5Command}   # ${marker.manualRestore.expectedMd5} と一致するはず`,
+    );
+    log('');
+    log(`前提つきの代替: ${marker.alternativeWithCaveat}`);
+    log('');
+    log(`もしくは: node ${path.relative(ROOT, __filename)} restore`);
+  }
   process.exit(2);
 }
 
