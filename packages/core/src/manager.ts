@@ -512,12 +512,7 @@ class Pool implements ManagerPool {
 
     const runner = await this.#runnerOf(record);
     if (!runner) {
-      return {
-        outcome: 'unknown',
-        detail:
-          `${managerId} を走らせていた runner（${record.job.runnerId ?? '不明'}）が居ない。` +
-          '別の runner で続きを起こすには workspace の移送が要る。',
-      };
+      return { outcome: 'unknown', detail: this.#absentRunnerDetail(record) };
     }
 
     const { decision, requestId } = options;
@@ -1295,6 +1290,50 @@ class Pool implements ManagerPool {
         .filter((line) => line !== '')
         .join('\n'),
     });
+  }
+
+  /**
+   * 宛先を引けなかったときに返す1行。
+   *
+   * **観測しているのは「いま名簿に開いた宛先が無い」ことだけである。** ここは
+   * 「別の runner で続きを起こすには workspace の移送が要る」と**恒久の話**を
+   * していたが、そう言える材料はここに無い。`RunnerRegistry#get()` が `null` を
+   * 返すのは `entry.client` が無いときで、そこには**まだ開けていない**
+   * （`connecting` / `unreachable`。再試行は予約済み）が含まれる — つまり
+   * **待てば直る状態を、待っても直らない状態の言葉で報告していた**。
+   *
+   * **文言の誤りは、状態の誤りより直りにくい。** 読んだ側は「この宛先はもう
+   * 戻せない」という結論を持ち帰り、その結論はデーモンのどこにも残らないので、
+   * 後から名簿が `connected` へ戻っても訂正が届かない。**判定できないものは
+   * 言わない**（AGENTS.md「取れない軸に 0 の行を作らない」）。
+   *
+   * 代わりに**名簿の状態を5値のまま添える。** `connected` へ畳まないのは
+   * `RunnerOverview` と同じ理由で、「まだ開けていない」と「待っても同じ答えが
+   * 返る」の違いが、読む側が待つか起こし直すかを決める材料そのものだからである。
+   * **値の意味をここに書き写さない** — 持ち主は `runner_list` の説明であり、
+   * 写せば必ずずれる。
+   *
+   * **宛先1台に絞れない。** `RunnerEntry` が `runnerId` を載せるのは
+   * `entry.client` があるときだけで（`runner-protocol.ts` の `entries()`）、
+   * ここはまさにそれが無い場合である。**引けない対応付けを推測で埋めない**ので、
+   * 名簿はそのまま見せて、絞り込みは読む側に任せる。
+   */
+  #absentRunnerDetail(record: ManagerRecord): string {
+    const entries = this.#runners.entries();
+    const fleet =
+      entries.length === 0
+        ? '名簿には runner が1台も登録されていない。'
+        : `いまの名簿: ${entries.map((entry) => `${entry.label}=${entry.state}`).join(' / ')}。`;
+    const runnerId = record.job.runnerId;
+    const head =
+      runnerId === undefined
+        ? `${record.job.id} には宛先の runner が記録されておらず、いま開いている runner も無い。`
+        : `${record.job.id} の宛先（runner ${runnerId}）は、いま名簿に開いていない。`;
+    return (
+      `${head}${fleet}` +
+      'これは「いま開いた宛先が無い」という観測であって、戻せないことの証明ではない。' +
+      '状態の読み方と、待つか起こし直すかの判断材料は runner_list が持つ。'
+    );
   }
 
   async #runnerOf(record: ManagerRecord): Promise<RunnerClient | null> {
