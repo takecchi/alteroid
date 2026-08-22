@@ -57,6 +57,44 @@ export interface RunnerUnknownReport {
 }
 
 /**
+ * **降りてきた出来事を、跡なしで捨てないための報告。**
+ *
+ * SSE のフレームは2つの形で捨てられていた。どちらも跡がゼロで、
+ * **届いていないことを観測できる場所が1つも無かった。**
+ *
+ * 1. `JSON.parse` が投げる（`reason: 'unparsable'`）— 構造が無いので `type` も取れない
+ * 2. `runnerEventSchema.safeParse` が失敗する（`reason: 'unknown-shape'`）—
+ *    **構文としては正しい JSON で、`type` は読めることが多い**
+ *
+ * **2つ目のほうが重い。** runner が新しい種類の出来事を出し始めても、
+ * デーモンのスキーマが知らなければ黙って消える。**次に runner 側へイベントを1つ
+ * 足した人が、それが届かないことに気づけない。**
+ *
+ * **`onUnknown` を借りない。** あちらは「こちらが投げた呼びが期限内に返らなかった」
+ * で、主語が違う（こちらは「向こうから降りてきたものを解釈できなかった」）。
+ * 形（上の層が届け先を選ぶコールバック）だけを揃えてある。
+ *
+ * **本文は載せない。** ここへ来るフレームにはマネージャーの報告が入りうる
+ * （報告本文に `GH_TOKEN` が全文で出た前例がある。#52）。載せるのは `type` と
+ * バイト数だけである。
+ */
+export type RunnerDroppedEventReport =
+  | {
+      /** **その `type` の初出。その場で1行出す。** */
+      phase: 'first';
+      reason: 'unparsable' | 'unknown-shape';
+      /** 読めた `type`。JSON にならなかったフレームでは付かない。 */
+      type?: string;
+      /** そのフレームのバイト数。**取れない `type` の代わりに 0 を置かない。** */
+      bytes: number;
+    }
+  | {
+      /** 接続を閉じるときのまとめ。**量はここでしか出ない。** */
+      phase: 'closed';
+      dropped: { key: string; count: number }[];
+    };
+
+/**
  * 挑み直しの間隔の既定値（基準・上限）。
  *
  * **正本は `packages/core/src/runner-protocol.ts` の `REGISTRY_RETRY_BASE_MS` /
@@ -135,6 +173,13 @@ export interface HttpRunnerOptions {
    * 上の層の仕事である。
    */
   onUnknown?: (report: RunnerUnknownReport) => void;
+  /**
+   * **解釈できずに捨てたフレーム**の受け口（{@link RunnerDroppedEventReport}）。
+   *
+   * **ここを繋がないと、捨てたことが誰にも届かない。** `onUnknown` と同じで、
+   * runner-client 自身は日誌を知らない——誰に知らせるかを選ぶのは上の層である。
+   */
+  onDroppedEvent?: (report: RunnerDroppedEventReport) => void;
 }
 
 /**
@@ -170,6 +215,40 @@ export function managerIdOfRunnerPath(path: string): string | undefined {
  * **後から解けたことも同じ形で残す。** 「不明」だけが残って解決が残らないと、
  * 日誌を辿った人は永久に不明のままだと読む。
  */
+/** `type` として載せてよい長さの上限。**自由文を持ち込ませない。** */
+const DROPPED_TYPE_LIMIT = 64;
+
+/**
+ * 捨てたフレームから `type` だけを取り出す。**本文は取らない。**
+ *
+ * JSON として読めていれば `type` は文字列であることが多い（`runnerEventSchema` は
+ * `type` の判別共用体である）。**読めなければ付けない** —— 「取れなかった」を
+ * `'(不明)'` のような値にすると、それが `type` の1つとして数えられてしまう。
+ */
+function typeOf(raw: unknown): string | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const value = (raw as { type?: unknown }).type;
+  if (typeof value !== 'string' || value.length === 0) return undefined;
+  return value.replaceAll(/\s+/gu, ' ').slice(0, DROPPED_TYPE_LIMIT);
+}
+
+/**
+ * 捨てたフレームの報告を1行に畳む。**本文は載らない。**
+ *
+ * `describeRunnerUnknown` と同じ役で、**日誌へ出す文字列を作る場所を1つにする**
+ * ためにここに置く（呼ぶのは `index.ts`）。
+ */
+export function describeRunnerDropped(report: RunnerDroppedEventReport): string {
+  if (report.phase === 'closed') {
+    const detail = report.dropped.map(({ key, count }) => `${key}×${count}`).join(' / ');
+    return `runner から降りてきた出来事を解釈できずに捨てた（この接続の合計）: ${detail}`;
+  }
+  const what =
+    report.reason === 'unparsable' ? 'JSON として読めなかった' : 'こちらのスキーマに合わなかった';
+  const type = report.type === undefined ? '（type も読めない）' : `type=${report.type}`;
+  return `runner から降りてきた出来事を解釈できずに捨てた（初出）: ${what} ${type} bytes=${report.bytes}`;
+}
+
 export function describeRunnerUnknown(report: RunnerUnknownReport): string {
   const managerId = managerIdOfRunnerPath(report.path);
   // 委譲1本の話なら id を前置する。日誌の他の行（`manager.ts` の `#journal`）と
@@ -267,6 +346,7 @@ class HttpRunner implements RunnerClient {
   readonly #sleepFn: (ms: number) => Promise<void>;
   readonly #deadlineMs: number;
   readonly #onUnknown: ((report: RunnerUnknownReport) => void) | undefined;
+  readonly #onDroppedEvent: ((report: RunnerDroppedEventReport) => void) | undefined;
   #controller: AbortController | null = null;
   #closed = false;
   /** 次に失敗したときに待つ長さ。失敗のたびに倍々に伸び、成功で基準へ戻る。 */
@@ -289,6 +369,7 @@ class HttpRunner implements RunnerClient {
     this.#nextDelayMs = this.#retryBaseMs;
     this.#deadlineMs = options.deadlineMs ?? RUNNER_CALL_DEADLINE_MS;
     this.#onUnknown = options.onUnknown;
+    this.#onDroppedEvent = options.onDroppedEvent;
   }
 
   /**
@@ -478,9 +559,41 @@ class HttpRunner implements RunnerClient {
     }
 
     const reader = response.body.getReader();
+    /**
+     * この接続で捨てたフレームの数（種別ごと）。**接続1本ぶんである。**
+     *
+     * 器が入れ替われば数え直す——プロセス単位で畳むと、新しい runner が同じ
+     * `type` を出し始めたときに「前に見たから」で黙る。
+     */
+    const dropped = new Map<string, number>();
+    /** 閉じるときに、量をまとめて1行。**存在は初出が既に出している。** */
+    const summarize = (): void => {
+      if (dropped.size === 0) return;
+      this.#onDroppedEvent?.({
+        phase: 'closed',
+        dropped: [...dropped].map(([key, count]) => ({ key, count })),
+      });
+    };
+
+    try {
+      await this.#read(reader, onEvent, dropped);
+    } finally {
+      // **例外で抜けても量を出す。** ただしプロセスごと落ちたときは走らない
+      // ——だから存在のほうは初出で先に出してある。
+      summarize();
+    }
+  }
+
+  /**
+   * ストリームを読み続ける。**捨てたフレームは `dropped` に数える。**
+   */
+  async #read(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    onEvent: (event: RunnerEvent) => void,
+    dropped: Map<string, number>,
+  ): Promise<void> {
     const decoder = new TextDecoder();
     let buffer = '';
-
     for (;;) {
       const { value, done } = await reader.read();
       if (done) return;
@@ -498,15 +611,60 @@ class HttpRunner implements RunnerClient {
           .join('\n');
         if (data.length > 0) {
           try {
-            const parsed = runnerEventSchema.safeParse(JSON.parse(data));
+            const raw: unknown = JSON.parse(data);
+            const parsed = runnerEventSchema.safeParse(raw);
             if (parsed.success) onEvent(parsed.data);
+            // **スキーマに合わなかったぶんを黙って落とさない。** ここが
+            // 「気づく主体が誰も居ない」形だった —— runner が新しい種類の
+            // 出来事を出し始めても、`if` が偽になるだけで跡が残らない。
+            else this.#noteDropped(dropped, 'unknown-shape', typeOf(raw), data.length);
           } catch {
-            // 壊れた1フレームでストリームごと落とさない
+            // 壊れた1フレームでストリームごと落とさない。**ただし黙って捨てない。**
+            // 構造が無いので `type` は取れない —— **取れないものを 0 として積まない**
+            // ので、ここではバイト数だけを渡す。
+            this.#noteDropped(dropped, 'unparsable', undefined, data.length);
           }
         }
         boundary = buffer.indexOf('\n\n');
       }
     }
+  }
+
+  /**
+   * 捨てた1フレームを数える。**初出だけその場で1行、量はまとめて後で。**
+   *
+   * 初出を即座に出すのは、**閉じるときのまとめだけでは足りない**からである——
+   * デーモンが拾われない例外で死ぬと閉じる処理は走らないので、`type` の存在
+   * そのものが失われる。**失ってよいのは量で、存在ではない。**
+   *
+   * そして初出だけにすることで、壊れたストリームが跡でログを埋めない
+   * （同じ `type` は2度目以降1行も書かない）。
+   *
+   * **範囲は接続1本である。** プロセス単位で畳むと、器が入れ替わって新しい
+   * runner が同じ `type` を出し始めたときに「前に見たから」で黙る——それは
+   * まさにここで塞いでいる穴の再発である。
+   *
+   * **これは有界ではない。** 接続が繰り返し張り直されるあいだ、初出は接続ごとに
+   * 出る。`#pump` の待ちが倍々に伸びるのは**失敗したときだけ**で、ストリームが
+   * 正常に閉じた場合は常に基準値（{@link RUNNER_STREAM_RETRY_BASE_MS}）へ戻る
+   * ——**正常終了を繰り返す runner に対しては律速が掛からない。**
+   */
+  #noteDropped(
+    dropped: Map<string, number>,
+    reason: 'unparsable' | 'unknown-shape',
+    type: string | undefined,
+    bytes: number,
+  ): void {
+    const key = type === undefined ? reason : `${reason}:${type}`;
+    const seen = dropped.get(key) ?? 0;
+    dropped.set(key, seen + 1);
+    if (seen > 0) return;
+    this.#onDroppedEvent?.({
+      phase: 'first',
+      reason,
+      ...(type === undefined ? {} : { type }),
+      bytes,
+    });
   }
 
   /**

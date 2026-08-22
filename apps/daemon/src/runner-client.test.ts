@@ -23,7 +23,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createHash } from 'node:crypto';
 
-import { createHttpRunner } from './runner-client.js';
+import { createHttpRunner, type RunnerDroppedEventReport } from './runner-client.js';
 
 /** 制御面の合鍵。runner が持つのは sha256 だけである。 */
 const TOKEN = 'test-runner-token';
@@ -983,5 +983,154 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
     // ループが1周し、close() 後にもう一度 /events を叩いていないかを確かめる。
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(eventsCalls()).toBe(1);
+  });
+});
+
+/**
+ * **解釈できずに捨てたフレームが、跡を残すこと。**
+ *
+ * ここは2つの形で黙って捨てていた —— `JSON.parse` が投げる（構造が無い）と、
+ * `runnerEventSchema.safeParse` が失敗する（構文としては正しい JSON）。
+ * とくに後者は、**runner が新しい種類の出来事を出し始めても、届いていないことを
+ * 観測できる場所が1つも無い**という形だった。
+ *
+ * **5本を別々の `it()` で測る。** vitest は最初の失敗で止まるので、同居させると
+ * 後ろが一度も走らない。**それぞれが単独で守るものを doc に書く。**
+ */
+describe('解釈できずに捨てた出来事の跡', () => {
+  let stderrSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  });
+  afterEach(() => {
+    stderrSpy.mockRestore();
+  });
+
+  /**
+   * 指定したフレームを流してから閉じるストリームを1回だけ返す。
+   *
+   * **2回目以降の `/events` は返らないようにする。** `#pump` は正常終了でも
+   * 1秒後に張り直すので、放っておくと同じ跡が積み増して件数が読めなくなる
+   * （その挙動自体はこの PR の対象ではない）。
+   */
+  function fetchFramesOnce(frames: string[]): typeof fetch {
+    let served = false;
+    return (async (input: string | URL | Request) => {
+      const path = new URL(typeof input === 'string' ? input : input.toString()).pathname;
+      if (path === '/health') {
+        return Response.json({ runnerId: 'runner-noisy', workspacePath: '/workspace' });
+      }
+      if (path === '/events') {
+        if (served) return new Promise<Response>(() => undefined);
+        served = true;
+        const body = new ReadableStream<Uint8Array>({
+          start: (controller) => {
+            const encoder = new TextEncoder();
+            for (const frame of frames) controller.enqueue(encoder.encode(`data: ${frame}\n\n`));
+            controller.close();
+          },
+        });
+        return new Response(body, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        });
+      }
+      throw new Error(`想定していない path: ${path}`);
+    }) as typeof fetch;
+  }
+
+  async function collect(frames: string[]) {
+    const dropped: RunnerDroppedEventReport[] = [];
+    const events: unknown[] = [];
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn: fetchFramesOnce(frames),
+      sleepFn: async () => undefined,
+      onDroppedEvent: (report) => dropped.push(report),
+    });
+    await client.connect((event) => events.push(event));
+    // **読み切れたことの合図は2つある。** 捨てたものが在れば閉じるときの
+    // まとめが来るし、全部正常なら `onEvent` が呼ばれている。**正常な回は跡が
+    // 1件も出ないので、まとめを待つと永久に待つ**（それがこの describe の
+    // 「正常なフレームでは跡を出さない」が主張していることそのものである）。
+    await expect
+      .poll(() => dropped.some((r) => r.phase === 'closed') || events.length > 0, { timeout: 2000 })
+      .toBe(true);
+    await client.close();
+    return { dropped, events };
+  }
+
+  /**
+   * **この歯が単独で守るもの**: スキーマに合わないフレームが跡を残すこと。
+   * これが落ちると、runner が新しい出来事を出し始めても誰も気づけない
+   * （この PR の主題そのもの）。
+   */
+  it('スキーマに合わないフレームは、type つきで跡が出る', async () => {
+    const { dropped } = await collect([JSON.stringify({ type: 'brand_new_event', at: 1 })]);
+
+    const first = dropped.find((r) => r.phase === 'first');
+    expect(first).toMatchObject({
+      phase: 'first',
+      reason: 'unknown-shape',
+      type: 'brand_new_event',
+    });
+  });
+
+  /**
+   * **この歯が単独で守るもの**: 読めなかった `type` を作らないこと。
+   * ここで `'(不明)'` のような値を置くと、それが `type` の1つとして数えられる
+   * （AGENTS.md「取れない軸に 0 の行を作らない」）。
+   */
+  it('JSON にならないフレームでは、type を作らない', async () => {
+    const { dropped } = await collect(['{壊れている']);
+
+    const first = dropped.find((r) => r.phase === 'first');
+    expect(first).toMatchObject({ phase: 'first', reason: 'unparsable' });
+    expect(first && 'type' in first ? first.type : undefined).toBeUndefined();
+    expect(first?.phase === 'first' ? first.bytes : 0).toBeGreaterThan(0);
+  });
+
+  /**
+   * **この歯が単独で守るもの**: 正常なフレームで跡を出さないこと。
+   *
+   * これが無いと「常に跡を出す」実装が緑になる。**そして常時出る跡は、跡を
+   * 無意味にする**（読む人が読まなくなる）。両方向を測るための1本である。
+   */
+  it('正常なフレームでは跡を出さない', async () => {
+    const { dropped, events } = await collect([JSON.stringify({ type: 'hello', runnerId: 'r1' })]);
+
+    expect(events).toHaveLength(1);
+    expect(dropped.filter((r) => r.phase === 'first')).toHaveLength(0);
+    // 閉じるときのまとめも出ない（数える対象が1件も無いので）。
+    expect(dropped).toHaveLength(0);
+  });
+
+  /**
+   * **この歯が単独で守るもの**: 同じ `type` を2度以上出さないこと。
+   * これが落ちると、壊れたストリームが跡でログを埋める。
+   */
+  it('同じ type は初出だけ。2件目以降は数えるだけ', async () => {
+    const frame = JSON.stringify({ type: 'brand_new_event' });
+    const { dropped } = await collect([frame, frame, frame]);
+
+    expect(dropped.filter((r) => r.phase === 'first')).toHaveLength(1);
+  });
+
+  /**
+   * **この歯が単独で守るもの**: 量が閉じるときに出ること。
+   * 初出だけだと「1件だったのか100件だったのか」が永久に分からない。
+   */
+  it('接続を閉じるときに、種別ごとの件数が出る', async () => {
+    const frame = JSON.stringify({ type: 'brand_new_event' });
+    const { dropped } = await collect([frame, frame, '{壊れている']);
+
+    const closed = dropped.find((r) => r.phase === 'closed');
+    expect(closed?.phase === 'closed' ? closed.dropped : []).toEqual(
+      expect.arrayContaining([
+        { key: 'unknown-shape:brand_new_event', count: 2 },
+        { key: 'unparsable', count: 1 },
+      ]),
+    );
   });
 });
