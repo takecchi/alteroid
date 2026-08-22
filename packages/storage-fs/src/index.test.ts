@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -169,16 +169,28 @@ describe('FsPersonaStore', () => {
       expect(status).toEqual({ kind: 'clone-only' });
     });
 
-    // 歯5: 外から書き換えたら unknown に落ちる（store を通さずファイルを
-    // 直接書き換えてから読む）。
-    it('store を通さず直接ファイルを書き換えると unknown に落ちる', async () => {
+    /**
+     * 歯5:「導出値と外部編集検出はセット」であること。
+     *
+     * `PersonaStore` は本文をキャッシュしない（受け入れ基準3。人間が直接書き換えた
+     * 本文は次に読んだとき必ず反映される）。**保護状態だけが古いまま返ると、
+     * 本文と保護状態の足並みが揃わない**——それが設計上の欠陥として指摘された点
+     * である。ここでは、本文が新しい値に反映されるのと同じ読み出しで、保護状態も
+     * 古いまま返らないこと（unknown に落ちること）を確かめる。
+     */
+    it('外部から本文が変わったとき、保護状態が古いまま返らない（unknown になる）', async () => {
       await stores.persona.write('values', '# 価値観\n\nもとの内容\n');
       expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
 
       // クローンを介さずエディタで直接書き換える、を模す（受け入れ基準3のテスト
-      // と同じ手口）。
+      // と同じ手口）。store を通さないので、この書き換えは write() / append() の
+      // ハッシュ更新を一切経由しない。
       await writeFile(join(root, 'memory', 'values.md'), '# 価値観\n\n外から書き換えた\n', 'utf8');
 
+      // 本文はキャッシュされていないので新しい値が読める（既存テストで固定済み）
+      // ——ここではその同じ読み出しの上で、保護状態も古いまま（clone-only）
+      // 返らないことを確かめる。
+      expect((await stores.persona.read('values'))?.content).toContain('外から書き換えた');
       expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'unknown' });
     });
 
@@ -215,6 +227,81 @@ describe('FsPersonaStore', () => {
       await stores.persona.remove('values');
 
       expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'unknown' });
+    });
+  });
+
+  /**
+   * 索引の組み直し（`.index.json` を走行中に失ったときの自己修復）。
+   *
+   * **`unknown` は守る側へ倒す約束のせいで、索引を失うと全文書が保護されたまま
+   * 動かせなくなる**（distill が何も畳めず、クローンには「守られている」としか
+   * 見えない——静かに凍る）。起動時の backfill だけでは、走行中に消えた場合に
+   * 次の再起動まで凍ったままになるので、読み出しのその場で日誌から組み直す。
+   */
+  describe('索引の組み直し（保護状態の派生値を失ったとき）', () => {
+    it('索引を消してから読むと、humanTouchedAt が日誌から復元される', async () => {
+      await stores.persona.write('values', '# 価値観\n\n人間が書いた\n');
+      const entry = await stores.journal.append({
+        type: 'memory_update',
+        slug: 'values',
+        cause: 'human',
+        action: 'write',
+        summary: '過去の PUT を模す',
+      });
+      await stores.persona.markHumanTouched('values', entry.at);
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
+
+      // 索引ファイルが走行中に消えた、を模す。
+      await rm(join(root, 'memory', '.index.json'), { force: true });
+
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
+    });
+
+    it('索引を消してから読んでも、クローンが clone-only の文書を畳める（＝凍らない）', async () => {
+      await stores.persona.write('notes', '# ノート\n\n最初の版\n');
+      expect(await stores.persona.protectionStatus('notes')).toEqual({ kind: 'clone-only' });
+
+      await rm(join(root, 'memory', '.index.json'), { force: true });
+
+      // 組み直し後も clone-only のまま——unknown に落ちて凍らない。
+      // これが無いと、この歯を入れた意味が無い。
+      expect(await stores.persona.protectionStatus('notes')).toEqual({ kind: 'clone-only' });
+    });
+
+    it('組み直しが日誌に残る', async () => {
+      // **store を経由せず直接 `.md` を置く。** `stores.persona.write()` を使うと
+      // その呼び出し自体が（この試験用の器では索引がまだ一度も無い）最初の
+      // 索引の組み直しを引き起こしてしまい、これから確かめたい「消してからの
+      // 組み直し」と数が混ざる。ここでは「索引が一度も存在しない状態」を
+      // そのまま使う。
+      await writeFile(join(root, 'memory', 'notes.md'), '# ノート\n', 'utf8');
+
+      await stores.persona.protectionStatus('notes');
+
+      const entries = await stores.journal.list({ types: ['decision'] });
+      const rebuilds = entries.filter(
+        (entry) => 'decision' in entry && entry.decision.includes('組み直した'),
+      );
+      expect(rebuilds).toHaveLength(1);
+      // memory_update ではないこと（記憶の本文は変わっていない）。
+      expect(await stores.journal.list({ types: ['memory_update'] })).toHaveLength(0);
+    });
+
+    it('組み直しは1回だけで、次の読み出しでは走らない', async () => {
+      // 上のテストと同じ理由で、store を経由せず直接 `.md` を置く。
+      await writeFile(join(root, 'memory', 'notes.md'), '# ノート\n', 'utf8');
+
+      // 複数回・複数の経路から読む。
+      await stores.persona.protectionStatus('notes');
+      await stores.persona.protectionStatus('notes');
+      await stores.persona.read('notes');
+      await stores.persona.list();
+
+      const entries = await stores.journal.list({ types: ['decision'] });
+      const rebuilds = entries.filter(
+        (entry) => 'decision' in entry && entry.decision.includes('組み直した'),
+      );
+      expect(rebuilds).toHaveLength(1);
     });
   });
 });

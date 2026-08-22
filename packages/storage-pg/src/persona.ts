@@ -1,5 +1,11 @@
-import { memorySlugSchema, sha256Hex } from '@alteroid/core';
+import {
+  deriveHumanTouchedAtFromJournal,
+  memorySlugSchema,
+  memoryProtectionRebuildDecision,
+  sha256Hex,
+} from '@alteroid/core';
 import type {
+  JournalStore,
   MemoryDocument,
   MemoryDocumentMeta,
   MemoryProtectionStatus,
@@ -21,9 +27,11 @@ import { memory } from './schema.js';
  */
 export class PgPersonaStore implements PersonaStore {
   readonly #db: Db;
+  readonly #journal: JournalStore;
 
-  constructor(db: Db) {
+  constructor(db: Db, journal: JournalStore) {
     this.#db = db;
+    this.#journal = journal;
   }
 
   #slug(slug: string): string {
@@ -136,10 +144,51 @@ export class PgPersonaStore implements PersonaStore {
     const row = rows[0];
     if (row === undefined) return { kind: 'unknown' };
     if (row.humanTouchedAt !== null) return { kind: 'human' };
-    if (row.contentSha256 === null) return { kind: 'unknown' };
+    if (row.contentSha256 === null) return this.#healRow(key, row.content);
     return row.contentSha256 === sha256Hex(row.content)
       ? { kind: 'clone-only' }
       : { kind: 'unknown' };
+  }
+
+  /**
+   * 保護状態の派生値をその場で組み直す（1行ぶん）。
+   *
+   * **fs 版（`.index.json` 全体の組み直し）とは粒度が違う。** fs は索引が
+   * 「1ファイル丸ごと在るか無いか」で失われるが、pg には索引ファイルという
+   * 概念が無く、`human_touched_at` / `content_sha256` は行ごとの列である。
+   * だからここは**行単位**で「派生値を失っている（`content_sha256` が
+   * `null`）」ことを検出し、その行だけを治す。`human_touched_at` が既に
+   * 立っている行はここへ来ない（`protectionStatus` が先に `human` を返す）。
+   *
+   * **`humanTouchedAt`（保護の信号そのもの）は日誌から完全に復元できる**
+   * ので保護は失われないが、**外部編集の検出の履歴は失われる**——ハッシュは
+   * 日誌に無いので、いまの本文の値で新しく基準化する。この判断の理由は
+   * `memoryProtectionRebuildDecision` の doc にある。
+   *
+   * **`content_sha256 is null` の行だけを対象にした `UPDATE ... WHERE` で
+   * 治す。** 同時に複数の読み出しが来ても、実際に列を動かせた（＝先着した）
+   * 1件だけが日誌へ記録する——2件目以降は `WHERE` に当たらず 0 行更新になる
+   * ので、二重に記録しない。
+   */
+  async #healRow(slug: string, content: string): Promise<MemoryProtectionStatus> {
+    const humanTouchedAt = await deriveHumanTouchedAtFromJournal(this.#journal);
+    const touchedAt = humanTouchedAt.get(slug);
+    const healed = await this.#db
+      .update(memory)
+      .set({
+        contentSha256: sha256Hex(content),
+        ...(touchedAt === undefined ? {} : { humanTouchedAt: new Date(touchedAt) }),
+      })
+      .where(and(eq(memory.slug, slug), isNull(memory.contentSha256)))
+      .returning({ slug: memory.slug });
+    if (healed.length > 0) {
+      const { decision, grounds } = memoryProtectionRebuildDecision({
+        humanRestored: touchedAt === undefined ? 0 : 1,
+        hashesBaselined: 1,
+      });
+      await this.#journal.append({ type: 'decision', decision, grounds });
+    }
+    return touchedAt === undefined ? { kind: 'clone-only' } : { kind: 'human' };
   }
 
   async markHumanTouched(slug: string, at: string): Promise<void> {
@@ -153,7 +202,10 @@ export class PgPersonaStore implements PersonaStore {
       .update(memory)
       .set({ humanTouchedAt: when })
       .where(
-        and(eq(memory.slug, key), or(isNull(memory.humanTouchedAt), lt(memory.humanTouchedAt, when))),
+        and(
+          eq(memory.slug, key),
+          or(isNull(memory.humanTouchedAt), lt(memory.humanTouchedAt, when)),
+        ),
       );
   }
 

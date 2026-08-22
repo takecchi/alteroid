@@ -6,11 +6,7 @@ import { z } from 'zod';
 import { isCronExpression } from './cron.js';
 import { describePage, excerptLine, page } from './excerpt.js';
 import type { ManagerDenial, ManagerPool, ManagerSummary } from './manager.js';
-import {
-  describeMemoryProtectionStatus,
-  memoryProtectionAllowsFullReplace,
-  renderMemoryDocuments,
-} from './memory.js';
+import { assertNeverMemoryProtectionStatus, renderMemoryDocuments } from './memory.js';
 import type { ProfileService } from './profile-service.js';
 import {
   RESERVED_SCHEDULE_KINDS,
@@ -24,6 +20,7 @@ import type {
   ChatStreamEvent,
   JournalEntry,
   MemoryDocumentMeta,
+  MemoryProtectionStatus,
   PendingApproval,
   ScheduleSpec,
   ScheduledRequest,
@@ -325,13 +322,52 @@ async function guardFullReplace(
   if (cause !== 'distill') return null;
   if (resolveMemoryGuard() === 'off') return null;
   const status = await stores.persona.protectionStatus(slug);
-  if (memoryProtectionAllowsFullReplace(status)) return null;
-  return (
-    `記憶 ${slug} は${describeMemoryProtectionStatus(status)}であり、統合の走行（distill）からの` +
-    `${action}を断った。失いたくないだけなら memory_append で追記すること。` +
-    'それでも置き換え・削除が要るなら、ask_human で人間に確認を通すこと' +
-    '（人間の回答が届いた後のターンで実行できる。この場でのやり直しはできない）。'
-  );
+  // **`memoryProtectionAllowsFullReplace` と同じ判定を、ここでは switch で
+  // 網羅的に書く。** 理由は2つ——(1) `human` / `unknown` に絞り込めた状態で
+  // `denialMessage` へ渡したい（TS の型で「畳んでいない」ことを保証する）、
+  // (2) 状態を1つ足したら `default` の `assertNeverMemoryProtectionStatus`
+  // で `tsc` が落ちる（`memory.test.ts` の網羅性の話と同じ形）。
+  switch (status.kind) {
+    case 'clone-only':
+      return null;
+    case 'human':
+    case 'unknown':
+      return denialMessage(slug, status, action);
+    default:
+      return assertNeverMemoryProtectionStatus(status);
+  }
+}
+
+/**
+ * 歯の断りの返答。**「保護されています」だけでは、クローンが次の手を推測する
+ * ことになる。** 必ず4つを言う——(1) なぜ断ったか、(2) どうすれば通るか
+ * （`ask_human` に何を積めばよいかまで）、(3) いま何も失われていないこと、
+ * (4) `memory_append` は断られないこと。
+ *
+ * **(1) は `human` と `unknown` を畳まない。** 前者は「人間の書き込みの履歴が
+ * 実際に在る」という積極的な事実、後者は「履歴が確認できないので守る側へ倒した」
+ * という消極的な既定——理由が違うので、読んだ側が畳まずに区別できる文にする。
+ */
+function denialMessage(
+  slug: string,
+  status: Extract<MemoryProtectionStatus, { kind: 'human' | 'unknown' }>,
+  action: '全文置換' | '削除',
+): string {
+  const reason =
+    status.kind === 'human'
+      ? `この文書には人間の書き込みの履歴が在る（保護状態: human）`
+      : `この文書の書き込みの履歴が確認できない（保護状態: unknown。索引が無い・外から書き換えられた` +
+        `可能性がある、などのときにここへ倒す——不明を「人間は書いていない」とは読まず、守る側へ倒す）`;
+
+  return [
+    `記憶 ${slug} への${action}を、統合の走行（distill）から断った。`,
+    `理由: ${reason}。`,
+    'いま何も変わっていない（記憶は断る前のまま残っている）。',
+    'memory_append（追記）はこの歯の対象ではなく、断られない。失いたくないだけならそちらを使うこと。',
+    `本当に${action}が必要だと判断したら、ask_human に「記憶 ${slug} を${action}したい。理由: ` +
+      '〈ここに理由〉」のように積むこと。人間の回答が届いた後の次のターンで、同じ操作をやり直せば実行できる' +
+      '（この場・このターンではやり直せない）。',
+  ].join(' ');
 }
 
 /** ツール定義そのもの。MCP の配線を通さずに単体テストできるよう分けてある。 */
@@ -382,12 +418,15 @@ export function createCloneTools(context: ToolContext) {
         const cause = memoryCause();
         const denial = await guardFullReplace(stores, slug, cause, '全文置換');
         if (denial !== null) return text(denial);
-        await stores.persona.write(slug, content);
+        const before = await stores.persona.read(slug);
+        const written = await stores.persona.write(slug, content);
         await stores.journal.append({
           type: 'memory_update',
           slug,
           cause,
           action: 'write',
+          bytesBefore: before === null ? 0 : Buffer.byteLength(before.content, 'utf8'),
+          bytesAfter: Buffer.byteLength(written.content, 'utf8'),
           summary,
         });
         return text(`記憶 ${slug} を更新した。`);
@@ -403,12 +442,15 @@ export function createCloneTools(context: ToolContext) {
         summary: z.string().describe('何を追記したかの一行要約（日誌に残る）'),
       },
       async ({ slug, content, summary }) => {
-        await stores.persona.append(slug, content);
+        const before = await stores.persona.read(slug);
+        const written = await stores.persona.append(slug, content);
         await stores.journal.append({
           type: 'memory_update',
           slug,
           cause: memoryCause(),
           action: 'append',
+          bytesBefore: before === null ? 0 : Buffer.byteLength(before.content, 'utf8'),
+          bytesAfter: Buffer.byteLength(written.content, 'utf8'),
           summary,
         });
         return text(`記憶 ${slug} に追記した。`);
@@ -470,7 +512,11 @@ export function createCloneTools(context: ToolContext) {
           slug,
           cause,
           action: 'remove',
-          // 本文は残さず、直前の文字数だけ残す。何を消したかは summary が持つ。
+          // バイト数は機械可読な面（下の bytesBefore/bytesAfter）に出す。
+          // summary の「（削除直前 N 文字）」は人が読む文字数で、別の軸として残す
+          // （両方を消さない——`action` の doc と同じ理由）。
+          bytesBefore: Buffer.byteLength(existing.content, 'utf8'),
+          bytesAfter: 0,
           summary: `${summary}（削除直前 ${existing.content.length} 文字）`,
         });
         return text(`記憶 ${slug} を消した（削除直前 ${existing.content.length} 文字）。`);

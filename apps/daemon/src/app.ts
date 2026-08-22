@@ -1197,12 +1197,17 @@ export function createApp(deps: AppDeps) {
         if (!memorySlugSchema.safeParse(slug).success) {
           return c.json({ error: '記憶のスラッグが不正' as const }, 400);
         }
+        const before = await stores.persona.read(slug);
         const doc = await stores.persona.write(slug, c.req.valid('json').content);
         const entry = await stores.journal.append({
           type: 'memory_update',
           slug,
           cause: 'human',
           action: 'write',
+          // クローンの道具（tools.ts の memory_write）と同じ機械可読な面。
+          // 片方だけ足すと「人間の書き込みだけ数えられない」が生まれる。
+          bytesBefore: before === null ? 0 : Buffer.byteLength(before.content, 'utf8'),
+          bytesAfter: Buffer.byteLength(doc.content, 'utf8'),
           summary: 'HTTP API 経由で人間が記憶を書き換えた',
         });
         // **保護状態の派生値を追いつかせる。** 新しい真実を作るのではなく、
@@ -1265,6 +1270,8 @@ export function createApp(deps: AppDeps) {
           slug,
           cause: 'human',
           action: 'remove',
+          bytesBefore: Buffer.byteLength(existing.content, 'utf8'),
+          bytesAfter: 0,
           summary: 'HTTP API 経由で人間が記憶を削除した',
         });
         return c.json({ ok: true, slug });

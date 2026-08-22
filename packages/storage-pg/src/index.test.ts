@@ -185,9 +185,15 @@ describe('PgPersonaStore', () => {
       expect(status).toEqual({ kind: 'clone-only' });
     });
 
-    // 歯5: 外から書き換えたら unknown に落ちる。pg には mtime 相当が無いので、
-    // store を経由しない直接 UPDATE（psql 相当）を模す。
-    it('store を通さず直接 UPDATE すると unknown に落ちる', async () => {
+    /**
+     * 歯5:「導出値と外部編集検出はセット」であること（pg 版）。
+     *
+     * `PersonaStore` は本文をキャッシュしない（受け入れ基準3）。**保護状態だけが
+     * 古いまま返ると、本文と保護状態の足並みが揃わない**——それが設計上の欠陥
+     * として指摘された点である。pg には mtime 相当が無いので、store を経由しない
+     * 直接 UPDATE（`psql` 相当）で外部編集を模す。
+     */
+    it('外部から本文が変わったとき、保護状態が古いまま返らない（unknown になる）', async () => {
       await stores.persona.write('values', '# 価値観\n\nもとの内容\n');
       expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
 
@@ -195,6 +201,9 @@ describe('PgPersonaStore', () => {
         sql`update memory set content = '# 価値観\n\n外から書き換えた\n' where slug = 'values'`,
       );
 
+      // 本文はキャッシュされていないので新しい値が読める——その同じ読み出しの
+      // 上で、保護状態も古いまま（clone-only）返らないことを確かめる。
+      expect((await stores.persona.read('values'))?.content).toContain('外から書き換えた');
       expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'unknown' });
     });
 

@@ -1,7 +1,7 @@
 import { mkdir } from 'node:fs/promises';
 
 import type { SessionStore } from '@anthropic-ai/claude-agent-sdk';
-import type { Stores } from '@alteroid/core';
+import { deriveHumanTouchedAtFromJournal, type Stores } from '@alteroid/core';
 import { AUTH_WITHHELD_ENV_KEYS } from './auth.js';
 import {
   createFsStores,
@@ -100,13 +100,14 @@ export function planStorage(env: NodeJS.ProcessEnv = process.env): StoragePlan {
  * **`clone.ts` は触らない・呼ばない** — ここは記憶ストアを開いた直後、
  * クローンのセッションが立ち上がる前の起動処理である。
  *
- * 対象は `cause:'human'` かつ `action !== 'remove'`（＝人間が実際に本文を
- * 書いたエントリ）だけ。**`action:'remove'`（人間による削除）は含めない** —
- * `apps/daemon/src/app.ts` の `DELETE /memory/:slug` が `markHumanTouched` を
- * 呼ばないのと同じ理由で、削除は「人間の意思で消した」であって、将来その
- * slug に書かれる新しい内容を無条件に保護する理由にはならない
- * （backfill と実行時の呼び出しを同じ基準に揃えることで、再起動のたびに
- * 保護状態が変わって見える食い違いを避ける）。
+ * 判定基準（`cause:'human'` かつ `action !== 'remove'`）は `deriveHumanTouchedAtFromJournal`
+ * （`@alteroid/core`）に1本化してある。**各 `PersonaStore`（fs / pg）が保護状態の
+ * 索引を読み出し時に失っていたと分かったとき、同じ関数でその場でも組み直す**
+ * （`storage-fs` の `FsPersonaStore#rebuildIndex` / `storage-pg` の
+ * `PgPersonaStore#healRow`）。**ここ（起動時 backfill）はその「その場の組み直し」
+ * だけに頼らないための保険である** — 走行中に索引を失った場合、次にその slug が
+ * 読まれるまでは `unknown`（守る側）のまま動く。基準がここ以外にも散ると、
+ * 片方だけ直して残りが古い基準のまま、という穴ができるので、実装は持たず呼ぶだけ。
  *
  * **既に立っている `human_touched_at` を降ろすことはない** —
  * `markHumanTouched` 自体が単調非減少なので、ここは呼ぶだけでよい。
@@ -116,12 +117,9 @@ export function planStorage(env: NodeJS.ProcessEnv = process.env): StoragePlan {
  */
 async function backfillMemoryHumanTouch(stores: Stores): Promise<void> {
   try {
-    const entries = await stores.journal.list({ types: ['memory_update'] });
-    for (const entry of entries) {
-      if (entry.type !== 'memory_update') continue;
-      if (entry.cause !== 'human') continue;
-      if (entry.action === 'remove') continue;
-      await stores.persona.markHumanTouched(entry.slug, entry.at);
+    const humanTouchedAt = await deriveHumanTouchedAtFromJournal(stores.journal);
+    for (const [slug, at] of humanTouchedAt) {
+      await stores.persona.markHumanTouched(slug, at);
     }
   } catch (error) {
     process.stderr.write(

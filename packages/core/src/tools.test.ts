@@ -616,6 +616,71 @@ describe('クローンの道具', () => {
       expect(await h.stores.persona.read('fresh-doc')).toBeNull();
     });
 
+    /**
+     * 断りの応答は「保護されています」だけで終わらせない。**次の手が書かれて
+     * いること**を測る（文言の完全一致ではなく、要素の有無で測る）。
+     */
+    describe('断りの応答が次の手を示す', () => {
+      it('unknown を理由に断るときは、その理由（履歴が確認できない）を言う', async () => {
+        const h = harness();
+        h.setMemoryCause('distill');
+
+        const reply = await h.call('memory_write', {
+          slug: 'fresh-doc',
+          content: '# 新規\n\n本文',
+          summary: '新規に書く',
+        });
+
+        // (1) なぜ断ったか — human と unknown を畳まない。unknown 側の理由が出る。
+        expect(reply).toContain('unknown');
+        expect(reply).not.toContain('human）');
+        // (2) どうすれば通るか — ask_human に何を積めばよいかまで書いてある。
+        expect(reply).toContain('ask_human');
+        expect(reply).toContain('fresh-doc');
+        // (3) いま何も失われていない。
+        expect(reply).toMatch(/変わっていない|残っている/);
+        // (4) memory_append は断られないことも書いてある。
+        expect(reply).toContain('memory_append');
+      });
+
+      it('human を理由に断るときは、その理由（人間の書き込みの履歴が在る）を言う', async () => {
+        const h = harness();
+        await markHuman(h, 'values', '# 価値観\n\n人間が書いた\n');
+        h.setMemoryCause('distill');
+
+        const reply = await h.call('memory_write', {
+          slug: 'values',
+          content: '# 価値観\n\ndistill が上書き',
+          summary: '畳んだ',
+        });
+
+        // (1) unknown 側の理由文とは違う、human 側の理由が出る（畳んでいない）。
+        expect(reply).toContain('人間の書き込みの履歴が在る');
+        expect(reply).not.toContain('履歴が確認できない');
+        // (2) どうすれば通るか。
+        expect(reply).toContain('ask_human');
+        expect(reply).toContain('values');
+        // (3) いま何も失われていない。実際に本文がそのまま残っていることも確かめる。
+        expect(reply).toMatch(/変わっていない|残っている/);
+        expect((await h.stores.persona.read('values'))?.content).toContain('人間が書いた');
+        // (4) memory_append は断られない。
+        expect(reply).toContain('memory_append');
+      });
+
+      it('memory_delete の断りにも同じ4要素が出る', async () => {
+        const h = harness();
+        await markHuman(h, 'values', '# 価値観\n\n人間が書いた\n');
+        h.setMemoryCause('distill');
+
+        const reply = await h.call('memory_delete', { slug: 'values', summary: '整理' });
+
+        expect(reply).toContain('人間の書き込みの履歴が在る');
+        expect(reply).toContain('ask_human');
+        expect(reply).toMatch(/変わっていない|残っている/);
+        expect(reply).toContain('memory_append');
+      });
+    });
+
     it('clone の書き込みは通る — 同じ文書に cause: clone で書けば通る（能力を消していない）', async () => {
       const h = harness();
       await markHuman(h, 'values', '# 価値観\n\n人間が書いた\n');

@@ -136,8 +136,10 @@ export { Inbox } from './inbox.js';
  */
 export {
   assertNeverMemoryProtectionStatus,
+  deriveHumanTouchedAtFromJournal,
   describeMemoryProtectionStatus,
   memoryProtectionAllowsFullReplace,
+  memoryProtectionRebuildDecision,
   renderMemoryDocument,
   renderMemoryDocuments,
   type MemoryPart,

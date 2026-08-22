@@ -1,8 +1,14 @@
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { memorySlugSchema, sha256Hex } from '@alteroid/core';
+import {
+  deriveHumanTouchedAtFromJournal,
+  memorySlugSchema,
+  memoryProtectionRebuildDecision,
+  sha256Hex,
+} from '@alteroid/core';
 import type {
+  JournalStore,
   MemoryDocument,
   MemoryDocumentMeta,
   MemoryProtectionStatus,
@@ -15,6 +21,16 @@ import type {
  * **新しい真実ではない。** 実体は日誌（`memory_update.cause`）にある。ここは
  * 読み出しを安くするためのキャッシュで、失った・信用できないときは `unknown`
  * （守る側）へ落ちる（`PersonaStore.protectionStatus` の doc）。
+ *
+ * **ここは「誰も送らない導出値」だけを追記で伸ばす場所である。** 人間・クローンが
+ * 書く値は本文（`content`）の側に置く——入口のスキーマ（`memory_write` /
+ * `PUT /memory/:slug` の body）を1つも変えないことが要件だからである。
+ *
+ * **この PR（#173）が要る2つだけを持つ。** #170（記憶の目次化）が要る
+ * `describedAt`（要旨が本文のどの版に対するものか）はここには**まだ無い** —
+ * 未実装の宣言を実装済みの引数の隣に置くと、未実装だったことが隠れる。
+ * #170 が着地するときは、この2つの隣に足せばよい（1ファイルへ統合する形は
+ * 変えない）。
  */
 interface MemoryIndexEntry {
   /** 最後に `cause:'human'` の書き込みが記録された時刻。一度立ったら降ろさない。 */
@@ -34,11 +50,21 @@ type MemoryIndex = Record<string, MemoryIndexEntry>;
  */
 export class FsPersonaStore implements PersonaStore {
   readonly #dir: string;
+  readonly #journal: JournalStore;
   /** 書き込みを直列化する。蒸留は同じ文書へ並行に追記しうる。 */
   #chain: Promise<unknown> = Promise.resolve();
+  /**
+   * 索引の組み直しが進行中なら、その Promise。**同時に複数の組み直しを
+   * 走らせない**（かつ、組み直しを知らせる日誌エントリを1件だけにする）ための
+   * メモ化。完了したら null に戻す——**「一度組み直したら二度と組み直さない」
+   * ではなく「1回の消失イベントにつき1回」**にするため（次に索引が本当に
+   * また消えたら、そのときは改めて組み直してよい）。
+   */
+  #rebuildingIndex: Promise<MemoryIndex> | null = null;
 
-  constructor(dir: string) {
+  constructor(dir: string, journal: JournalStore) {
     this.#dir = dir;
+    this.#journal = journal;
   }
 
   /** read-modify-write が取りこぼさないよう、書き込みを1本に並べる。 */
@@ -63,18 +89,26 @@ export class FsPersonaStore implements PersonaStore {
   }
 
   /**
-   * 索引を読む。**無い・壊れているときは空を返す**（守る側 — 全 slug が
-   * `unknown` に落ちる。1つの slug が壊れていても他を巻き込まない）。
+   * 索引を読む。**無い・壊れている（JSON として読めない／オブジェクトの形を
+   * していない）ときは、その場で日誌から組み直す。** `unknown` は守る側へ倒す
+   * という約束のせいで、索引を失うと全文書が保護されたまま動かせなくなる
+   * （distill が何も畳めず、クローンには「守られている」としか見えない
+   * ——静かに凍る）。起動時の backfill だけでは、走行中に索引が消えた場合に
+   * 次の再起動まで凍ったままになるので、読み出しのその場で直す。
    */
   async #readIndex(): Promise<MemoryIndex> {
     try {
       const raw = await readFile(this.#indexPath(), 'utf8');
       const parsed: unknown = JSON.parse(raw);
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
-      return parsed as MemoryIndex;
+      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+        return parsed as MemoryIndex;
+      }
+      // JSON までは読めたが、期待する形（オブジェクト）をしていない
+      // ＝ スキーマが合わない。組み直す。
     } catch {
-      return {};
+      // 無い（ENOENT）か、JSON として読めない。組み直す。
     }
+    return this.#rebuildIndex();
   }
 
   /** 一時ファイル経由で置き換える（`.md` と同じ作法。壊れた途中経過を見せない）。 */
@@ -83,6 +117,56 @@ export class FsPersonaStore implements PersonaStore {
     const tmp = `${this.#indexPath()}.tmp`;
     await writeFile(tmp, JSON.stringify(index), 'utf8');
     await rename(tmp, this.#indexPath());
+  }
+
+  /** 同時に来た複数の呼び出しを、進行中の組み直し1本へ束ねる。 */
+  async #rebuildIndex(): Promise<MemoryIndex> {
+    this.#rebuildingIndex ??= this.#doRebuildIndex().finally(() => {
+      this.#rebuildingIndex = null;
+    });
+    return this.#rebuildingIndex;
+  }
+
+  /**
+   * 索引（保護状態の派生値）を日誌から組み直す。
+   *
+   * **`humanTouchedAt`（保護の信号そのもの）は日誌から完全に復元できる**
+   * （`cause:'human'` の `memory_update` は追記専用の日誌に残り続ける）ので、
+   * **保護は失われない**。**失うのは外部編集の検出の履歴だけ**である——
+   * `content_sha256` 相当のハッシュは日誌に無いので、いま存在する本文の値で
+   * 新しく基準化する（「ここから先を見張る」）。この組み直しより前に外部から
+   * 本文が書き換えられていたとしても、それはもう検出できない。**これを
+   * 「外部編集が無かった証拠」として読まないこと** — 単に、組み直し以前の
+   * 履歴が失われただけである。
+   *
+   * 組み直したこと自体は日誌へ1件残す（`memory_update` ではなく `decision`
+   * ——記憶の本文は変わっていない。変わったのは派生値だけである）。
+   *
+   * 永続化した結果、次回の `#readIndex` は通常の読み出し経路（ファイルが
+   * 存在し、正しくパースできる）に戻る——**1回の消失イベントにつき1回**だけ
+   * 組み直しが走る。
+   */
+  async #doRebuildIndex(): Promise<MemoryIndex> {
+    const humanTouchedAt = await deriveHumanTouchedAtFromJournal(this.#journal);
+    const docs = await this.documents();
+    const index: MemoryIndex = {};
+    let humanRestored = 0;
+    for (const doc of docs) {
+      const entry: MemoryIndexEntry = { contentSha256: sha256Hex(doc.content) };
+      const touchedAt = humanTouchedAt.get(doc.slug);
+      if (touchedAt !== undefined) {
+        entry.humanTouchedAt = touchedAt;
+        humanRestored += 1;
+      }
+      index[doc.slug] = entry;
+    }
+    await this.#writeIndex(index);
+    const { decision, grounds } = memoryProtectionRebuildDecision({
+      humanRestored,
+      hashesBaselined: docs.length,
+    });
+    await this.#journal.append({ type: 'decision', decision, grounds });
+    return index;
   }
 
   async list(): Promise<MemoryDocumentMeta[]> {
