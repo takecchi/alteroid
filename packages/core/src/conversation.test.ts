@@ -142,8 +142,11 @@ describe('collectConversations', () => {
 
     expect(result).toHaveLength(1);
     const preview = result.map((c) => c.preview).join('');
-    expect(preview.length).toBeLessThan(200);
-    expect(preview.startsWith('x'.repeat(80))).toBe(true);
+    // **長さそのものを固定する。** `length < 200` と `startsWith(80文字)` の組では、
+    // 切る位置を 80 から 100 へ動かしても通ってしまう（人間の画面に出ている値が
+    // 移設で変わったことに気づけない）。ここは移設の等価性を担保する歯なので、
+    // 「80 で切る」を字義どおり書く。
+    expect(preview).toBe(`${'x'.repeat(80)}…`);
   });
 });
 
