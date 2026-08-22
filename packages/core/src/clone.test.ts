@@ -13,6 +13,8 @@ import {
   humanTurnText,
   placedClonePermissionMode,
   resolveCloneModel,
+  isHumanOriginated,
+  resolveCloneHumanPriority,
   resolveClonePermissionMode,
 } from './clone.js';
 import type { HumanMessage } from './clone.js';
@@ -21,7 +23,7 @@ import { renderMemoryDocuments } from './memory.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createScheduler } from './schedule.js';
-import type { ChatStreamEvent, InboxEvent } from './schema.js';
+import type { ChatStreamEvent, InboxEvent, InboxEventType } from './schema.js';
 import type { Stores } from './store.js';
 import { CLONE_ACTOR_ID, isCloneActor } from './usage.js';
 import { createCloneMcpServer, createCloneTools } from './tools.js';
@@ -5912,4 +5914,69 @@ describe('クローン — 人間が待っている合図を待ち行列の先�
 
     await s.clone.stop();
   }, 15_000);
+});
+
+/**
+ * 割り込める起点の集合そのものを固定する。
+ *
+ * ## なぜ doc では守れないのか
+ *
+ * 人間以外が餓死しない理由は**割り込みの量が有界だから**で、有界なのは
+ * **割り込めるのが人間の速さでしか来ないものだけ**だからである（`isHumanOriginated`
+ * の doc）。`external`（webhook）や `timer` を1つ足すと、**割り込みの量が機械の
+ * 速さで決まるようになり、有界性の根拠が消える。**
+ *
+ * **そしてそれは緑のまま起きる。** 順序の歯（上の3本）は有限件数しか流さないので、
+ * 集合が広がっても通る。**踏んでも出力に何も出ない**種類の壊れ方なので、doc に
+ * 書いておくだけでは守れない（この repo は「読んだのに踏んだ」を何度も記録して
+ * いる）。**気づく主体を `vitest` にする。**
+ *
+ * ## どう守っているか
+ *
+ * `InboxEvent` は `type` による判別可能な共用体なので、`Record<InboxEventType, …>`
+ * にすると**新しい起点が増えた瞬間にコンパイルが落ちる。** 落ちた人は「これは人間
+ * 起点か」を宣言させられ、その場で上の doc に当たる。**先例は #159**（画面から
+ * 消した状態の数え上げを、テスト側の `Record<ManagerStatus, true>` へ移して
+ * 「状態が増えるとコンパイルが落ちる」形にしたもの）。
+ */
+describe('クローン — 割り込める起点は、人間の速さで来るものだけ（ここが有界性の全体）', () => {
+  it('割り込める起点が人間の速さで来るものだけであること（ここが有界性の全体）', () => {
+    // **すべての起点について宣言させる。** 起点が増えるとここがコンパイルで落ちる。
+    // 落ちたら、足した起点が「人間が待っている合図」かどうかを決めてから足すこと。
+    const expected: Record<InboxEventType, boolean> = {
+      human_message: true,
+      human_answer: true,
+      // 以下はすべて false。**機械の速さで来るものを true にしないこと** —
+      // した瞬間に割り込みの量が機械の速さで決まり、有界性の根拠が消える。
+      manager_message: false,
+      external: false,
+      timer: false,
+      self_initiative: false,
+      distill: false,
+    };
+
+    // 宣言と実装が一致すること。**`isHumanOriginated` は `type` しか見ない**ので、
+    // 他のフィールドは判定に効かない（型を満たすだけの最小限を渡す）。
+    for (const [type, isHuman] of Object.entries(expected)) {
+      const event = { type, id: `evt-${type}`, at: '2026-08-22T00:00:00.000Z' } as InboxEvent;
+      expect(isHumanOriginated(event), `${type} の判定`).toBe(isHuman);
+    }
+
+    // **true は2つだけである。** 上の Record を全部 true にする変異を弾く歯で、
+    // 個別の一致（上のループ）だけでは「全部 true」を通してしまう。
+    expect(Object.values(expected).filter(Boolean)).toHaveLength(2);
+  });
+
+  it('未設定・空・空白は既定（有効）で、明示的に切ったときだけ無効になる', () => {
+    // **「読めなかった」を「切られた」と読まない。** 緩めると、変数が届かなかった
+    // だけの器で人間の待ちが黙って戻る（`resolveCloneHumanPriority` の doc）。
+    expect(resolveCloneHumanPriority({})).toBe(true);
+    expect(resolveCloneHumanPriority({ ALTEROID_CLONE_HUMAN_PRIORITY: '' })).toBe(true);
+    expect(resolveCloneHumanPriority({ ALTEROID_CLONE_HUMAN_PRIORITY: '   ' })).toBe(true);
+    expect(resolveCloneHumanPriority({ ALTEROID_CLONE_HUMAN_PRIORITY: 'yes' })).toBe(true);
+
+    for (const off of ['0', 'false', 'off', 'no', 'FALSE', 'Off']) {
+      expect(resolveCloneHumanPriority({ ALTEROID_CLONE_HUMAN_PRIORITY: off }), off).toBe(false);
+    }
+  });
 });
