@@ -2022,6 +2022,13 @@ describe('宣言と実物の一致（/schedule）', () => {
       nextAt: '2026-08-12T13:00:00.000Z',
       request: '例の件を毎朝報告して',
       lastRunAt: '2026-08-11T13:00:00.000Z',
+      // **宣言に在る欄は全部埋める。** この試験は応答のキー集合と宣言のキー集合の
+      // **一致**を見る（`toEqual`）ので、足場が宣言済みの欄を欠くと、漏れでも
+      // 落ちるが**欠けでも落ちる。** `createdAt` / `updatedAt` は #235 で
+      // `optional` として宣言に加わったもので、**アサーションは1文字も変えて
+      // いない**（緩めると「余分なフィールドは外へ出ない」の保証が消える）。
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-05T00:00:00.000Z',
       // 宣言（scheduleStatusSchema）に無いフィールド。
       secretDebugField: 'should-not-escape',
     } as unknown as ScheduleStatus;

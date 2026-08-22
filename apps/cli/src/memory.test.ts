@@ -175,6 +175,12 @@ describe('alteroid memory list / show', () => {
             title: '価値観',
             kind: 'premise',
             descriptionFreshness: { kind: 'absent' },
+            // `GET /memory` はこの2つを**必須**で返す（`createdAt` は #220 から）。
+            // **足場が返さないのは、足場が契約に追いついていないということである**
+            // （AGENTS.md「テストの足場・スタブ・モックは、動くのに嘘をつく」）。
+            // アサーションは1文字も変えていない。
+            createdAt: { kind: 'known', at: '2026-08-10T00:00:00.000Z' },
+            updatedAt: '2026-08-15T00:00:00.000Z',
           },
         ],
       },
@@ -197,6 +203,8 @@ describe('alteroid memory list / show', () => {
             kind: 'fact',
             description: '費用の推移',
             descriptionFreshness: { kind: 'stale' },
+            createdAt: { kind: 'known', at: '2026-08-10T00:00:00.000Z' },
+            updatedAt: '2026-08-15T00:00:00.000Z',
           },
         ],
       },
@@ -216,5 +224,45 @@ describe('alteroid memory list / show', () => {
     await memoryShowCommand('missing');
 
     expect(read()).toContain('そんな記憶はありません: missing');
+  });
+
+  /**
+   * `createdAt` は `{kind:'known',at}` / `{kind:'unknown'}` の2状態（#220）。
+   * **`unknown` は「不明」と明言する**——クローンの `memory_list`
+   * （`formatMemoryCreatedAt`）と同じ言葉。片方だけ空欄にすると、人間とクローンが
+   * 同じ記憶を見て違う判断をする。**1つの一覧に両方並べる**——1種類だけだと
+   * 写像が定数（常に同じ文字列を返す）でも通ってしまう。
+   */
+  it('作成時刻は known なら ISO、unknown なら「不明」を出す（1つの一覧に両方並べる）', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: {
+        documents: [
+          {
+            slug: 'values',
+            title: '価値観',
+            kind: 'premise',
+            descriptionFreshness: { kind: 'absent' },
+            createdAt: { kind: 'known', at: '2026-08-10T00:00:00.000Z' },
+            updatedAt: '2026-08-15T00:00:00.000Z',
+          },
+          {
+            slug: 'runbook',
+            title: '定点観測',
+            kind: 'fact',
+            descriptionFreshness: { kind: 'absent' },
+            createdAt: { kind: 'unknown' },
+            updatedAt: '2026-08-12T00:00:00.000Z',
+          },
+        ],
+      },
+    });
+
+    await memoryListCommand();
+
+    const text = read();
+    expect(text).toContain('作成: 2026-08-10T00:00:00.000Z / 更新: 2026-08-15T00:00:00.000Z');
+    expect(text).toContain('作成: 不明 / 更新: 2026-08-12T00:00:00.000Z');
   });
 });
