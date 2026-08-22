@@ -559,3 +559,31 @@ describe('遡り切れていないことを言う', () => {
     expect(screen.queryByText(/先頭には届いていない/)).toBeNull();
   });
 });
+
+/**
+ * 折り返しの付け忘れ（本2）。
+ *
+ * 人間・システムの行は `Markdown`（components/markdown.tsx）を経由しない
+ * 素のテキストのままなので、`break-words` が無いと空白を持たない長い一続きの
+ * 文字列（URL 等）で吹き出しがはみ出す。クローンの行は `Markdown` が自前で
+ * `min-w-0 ... break-words` を持っている（`markdown.test.tsx` 参照）。
+ *
+ * **⚠️ これは「はみ出しが直った」ことの試験ではない。** jsdom はレイアウトを
+ * 持たないので、固定できるのは「そのクラス名が書かれていること」までである。
+ * それでも置くのは、戻す変更（`break-words` を消す）を黙って通さないため。
+ */
+describe('吹き出しの折り返し（本2）', () => {
+  it('人間の吹き出しに break-words が付いている', async () => {
+    stubFetch((url, init) => {
+      if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
+      if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
+      return undefined;
+    });
+
+    renderChat();
+    await send('やあ');
+
+    const bubble = within(transcript()).getByText('やあ');
+    expect(bubble.className.split(/\s+/)).toContain('break-words');
+  });
+});

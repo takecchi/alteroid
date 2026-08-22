@@ -324,3 +324,24 @@ describe('生 HTML の扱い', () => {
     expect(document.body.textContent).toContain('onerror="alert(1)"');
   });
 });
+
+/**
+ * 折り返しの付け忘れ（本2）。
+ *
+ * `slug` は空白を含まない識別子（URL の一部にもなる）なので、既定の折り返し
+ * （空白でしか折れない）では1文字も折れない。タイトル行に `truncate` も
+ * `break-all` も無いまま置かれていたので、長い slug がヘッダからはみ出す。
+ *
+ * **⚠️ これは「はみ出しが直った」ことの試験ではない。** jsdom はレイアウトを
+ * 持たないので、固定できるのは「そのクラス名が書かれていること」までである。
+ * それでも置くのは、戻す変更（`break-all` を消す）を黙って通さないため。
+ */
+describe('折り返しの付け忘れ（本2）', () => {
+  it('タイトル行の slug に break-all が付いている', async () => {
+    const longSlug = 'a'.repeat(80);
+    renderDetail(longSlug, docRoute({ ...DOC, slug: longSlug }));
+
+    const span = await screen.findByText(longSlug);
+    expect(span.className.split(/\s+/)).toContain('break-all');
+  });
+});

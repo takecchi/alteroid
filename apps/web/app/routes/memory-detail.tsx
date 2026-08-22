@@ -84,7 +84,7 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
             記憶
           </Link>
           <span className="text-muted">/</span>
-          <span className="font-mono text-sm">{slug}</span>
+          <span className="font-mono text-sm break-all">{slug}</span>
         </span>
       }
       description={

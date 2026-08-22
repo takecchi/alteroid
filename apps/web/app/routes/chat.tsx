@@ -688,7 +688,11 @@ export function ChatPane({
               >
                 <div
                   className={cn(
-                    'min-w-0 max-w-[46rem] rounded-lg px-3 py-2 text-sm leading-relaxed',
+                    // `break-words`: クローンの行は `Markdown`（components/markdown.tsx）
+                    // が自前で `min-w-0 ... break-words` を持つが、人間・システムの行は
+                    // 素のテキストを直接ここへ置くだけなので、同じ指定がここに無いと
+                    // 長い一続きの文字列（URL・パス等）で吹き出しがはみ出す。
+                    'min-w-0 max-w-[46rem] rounded-lg px-3 py-2 text-sm leading-relaxed break-words',
                     // クローンの本文だけ Markdown で描く（下のコメント参照）。
                     // 人間・システムの行は素のテキストのままなので、これまでどおり
                     // 改行をそのまま見せる。

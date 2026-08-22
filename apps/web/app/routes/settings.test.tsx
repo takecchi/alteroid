@@ -261,3 +261,102 @@ describe('runner の鍵欄は、聞けた分しか言わない', () => {
     expect(await screen.findByText('渡している鍵は無い')).toBeTruthy();
   });
 });
+
+/**
+ * 折り返しの付け忘れ（本2）。
+ *
+ * `runnerId` / `label` / `workspacePath` は空白を含まない識別子・パスなので
+ * `break-all`、`instanceId` 混じり文・`error` 系は自然文に識別子が混じる形
+ * なので `break-words` を、値の性質で選んでいる。`credential.name` は
+ * `CREDENTIAL_NAME`（`/^[A-Z][A-Z0-9_]*$/`）に長さの上限が無く空白も持たない
+ * ので、slug と同じ形として `break-all` を当てた（`Badge` は `className` を
+ * 受け取れる）。
+ *
+ * **⚠️ これは「はみ出しが直った」ことの試験ではない。** jsdom はレイアウトを
+ * 持たないので、固定できるのは「そのクラス名が書かれていること」までである。
+ * それでも置くのは、戻す変更（クラスを消す）を黙って通さないため。
+ */
+describe('折り返しの付け忘れ（本2）', () => {
+  it('runnerId（宛先の1行目）に break-all が付いている', async () => {
+    renderSettings({
+      runners: [{ ...BASE, runnerId: 'runner-primary' }],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+
+    const el = await screen.findByText('runner-primary');
+    expect(el.className.split(/\s+/)).toContain('break-all');
+  });
+
+  it('label（宛先の補助表示）に break-all が付いている', async () => {
+    renderSettings({
+      runners: [{ ...BASE, runnerId: 'runner-primary', label: 'http://runner:4518' }],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+
+    const el = await screen.findByText('http://runner:4518');
+    expect(el.className.split(/\s+/)).toContain('break-all');
+  });
+
+  it('workspacePath に break-all が付いている', async () => {
+    renderSettings({
+      runners: [{ ...BASE, workspacePath: '/very/long/workspace/path' }],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+
+    const el = await screen.findByText('/very/long/workspace/path');
+    expect(el.className.split(/\s+/)).toContain('break-all');
+  });
+
+  it('instanceId 混じり文（プロセス: ...）に break-words が付いている', async () => {
+    renderSettings({
+      runners: [{ ...BASE, instanceId: 'boot-2', instanceSince: '2026-08-22T03:04:00.000Z' }],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+
+    const line = await screen.findByText(/プロセス: boot-2/);
+    expect(line.className.split(/\s+/)).toContain('break-words');
+  });
+
+  it('runner.error に break-words が付いている', async () => {
+    renderSettings({
+      runners: [{ ...BASE, error: 'ETIMEDOUT: 応答が無い' }],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+
+    const el = await screen.findByText('ETIMEDOUT: 応答が無い');
+    expect(el.className.split(/\s+/)).toContain('break-words');
+  });
+
+  it('credentialsProbe が failed のときの理由に break-words が付いている', async () => {
+    renderSettings({
+      runners: [
+        {
+          ...BASE,
+          credentials: [],
+          credentialsProbe: { status: 'failed', error: 'ECONNRESET: 途中で切れた' },
+        },
+      ],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+
+    // ラベル文とエラー文は同じ `<span>` の中に同居しているので、その要素を見る。
+    const el = await screen.findByText(/ECONNRESET: 途中で切れた/);
+    expect(el.className.split(/\s+/)).toContain('break-words');
+  });
+
+  it('資格情報バッジ（credential.name）に break-all が付いている', async () => {
+    renderSettings({
+      runners: [
+        {
+          ...BASE,
+          credentials: [{ name: 'ANTHROPIC_API_KEY', sha256: 'a'.repeat(12), updatedAt: 'now' }],
+          credentialsProbe: { status: 'asked' },
+        },
+      ],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+
+    const badge = await screen.findByText('ANTHROPIC_API_KEY');
+    expect(badge.className.split(/\s+/)).toContain('break-all');
+  });
+});

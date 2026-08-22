@@ -190,7 +190,7 @@ function ApprovalCard({
         )}
       </div>
 
-      <p className="text-sm leading-relaxed whitespace-pre-wrap">{approval.question}</p>
+      <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">{approval.question}</p>
 
       {approval.context !== undefined && approval.context !== null && approval.context !== '' && (
         <pre className="mt-2 max-h-48 overflow-y-auto rounded border border-border bg-bg p-2 text-xs text-muted">
@@ -199,7 +199,7 @@ function ApprovalCard({
       )}
 
       {answered ? (
-        <p className="mt-3 rounded border border-border bg-bg p-2 text-sm">
+        <p className="mt-3 rounded border border-border bg-bg p-2 text-sm break-words">
           <span className="mr-2 text-[11px] text-muted">回答</span>
           {approval.answer}
         </p>

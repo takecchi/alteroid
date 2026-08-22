@@ -119,7 +119,7 @@ function Credentials({ runner }: { runner: RunnerSummary }) {
   }
   if (runner.credentialsProbe.status === 'failed') {
     return (
-      <span className="text-[11px] text-danger">
+      <span className="text-[11px] break-words text-danger">
         鍵を確かめられなかった: {runner.credentialsProbe.error}
       </span>
     );
@@ -130,7 +130,14 @@ function Credentials({ runner }: { runner: RunnerSummary }) {
   return (
     <>
       {runner.credentials.map((credential) => (
-        <Badge key={credential.name}>{credential.name}</Badge>
+        // `credential.name` は `CREDENTIAL_NAME`（packages/core/src/credentials.ts）
+        // ＝ `/^[A-Z][A-Z0-9_]*$/` で長さの上限が無く、空白も含まない。既定の折り返し
+        // （空白でしか折れない）では1文字も折れないので、slug と同じ形として break-all
+        // を当てる（本3 で `Badge` に付いた `shrink-0` は縮まない側なので、
+        // 折り返しが無いままだと横へ伸びる）。
+        <Badge key={credential.name} className="break-all">
+          {credential.name}
+        </Badge>
       ))}
     </>
   );
@@ -178,15 +185,17 @@ function Runners() {
             <li key={runner.label} className="border-b border-border px-4 py-3 last:border-b-0">
               <div className="flex flex-wrap items-center gap-2">
                 {/* 繋がるまで runner_id は分からない。宛先（label）が名簿の鍵である */}
-                <p className="font-mono text-sm">{runner.runnerId ?? runner.label}</p>
+                <p className="font-mono text-sm break-all">{runner.runnerId ?? runner.label}</p>
                 <Badge tone={RUNNER_STATES[runner.state].tone}>
                   {RUNNER_STATES[runner.state].label}
                 </Badge>
               </div>
               {runner.runnerId === undefined ? null : (
-                <p className="mt-0.5 font-mono text-[11px] text-muted">{runner.label}</p>
+                <p className="mt-0.5 font-mono text-[11px] break-all text-muted">{runner.label}</p>
               )}
-              <p className="mt-0.5 font-mono text-[11px] text-muted">{runner.workspacePath}</p>
+              <p className="mt-0.5 font-mono text-[11px] break-all text-muted">
+                {runner.workspacePath}
+              </p>
               {/*
                 いまその宛先に応えているプロセス。**`runnerId` は器を作り直しても同じ**
                 なので、名前だけでは「さっき仕事を渡した相手と同じか」が分からない。
@@ -196,7 +205,7 @@ function Runners() {
                 「入れ替わっていない」と「判定できない」が同じに見える（クローンは
                 `runner_list` で同じものを見ている。片方だけが見える形を作らない）。
               */}
-              <p className="mt-0.5 font-mono text-[11px] text-muted">
+              <p className="mt-0.5 font-mono text-[11px] break-words text-muted">
                 {runner.instanceId === undefined
                   ? 'プロセス: 名乗っていない（入れ替わりを判定できない）'
                   : `プロセス: ${runner.instanceId}${
@@ -220,7 +229,7 @@ function Runners() {
                 版: {describeRevisionStatus(runner.revision)}
               </p>
               {runner.error === undefined ? null : (
-                <p className="mt-1 text-[11px] text-danger">{runner.error}</p>
+                <p className="mt-1 text-[11px] break-words text-danger">{runner.error}</p>
               )}
               <div className="mt-2 flex flex-wrap gap-1.5">
                 <Credentials runner={runner} />

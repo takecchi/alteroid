@@ -602,3 +602,22 @@ describe('停止は status で出し分けない', () => {
     expect(screen.getByRole('button', { name: '停止する' })).toBeTruthy();
   });
 });
+
+/**
+ * 折り返しの付け忘れ（本2）。
+ *
+ * `runnerId` は空白を含まない識別子で、兄弟の `cwd` / `sessionId` / `lease`
+ * にはすでに `break-all` が付いていたのに、ここだけ無かった。
+ *
+ * **⚠️ これは「はみ出しが直った」ことの試験ではない。** jsdom はレイアウトを
+ * 持たないので、固定できるのは「そのクラス名が書かれていること」までである。
+ * それでも置くのは、戻す変更（`break-all` を消す）を黙って通さないため。
+ */
+describe('折り返しの付け忘れ（本2）', () => {
+  it('runnerId に break-all が付いている（cwd/sessionId/lease と同じ扱い）', async () => {
+    renderDetail({ ...BASE, runnerId: 'runner-abcdefghijklmnop' });
+
+    const dd = await screen.findByText('runner-abcdefghijklmnop');
+    expect(dd.className.split(/\s+/)).toContain('break-all');
+  });
+});
