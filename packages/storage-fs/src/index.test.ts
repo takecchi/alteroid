@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -274,6 +274,9 @@ describe('FsPersonaStore', () => {
       // 索引の組み直しを引き起こしてしまい、これから確かめたい「消してからの
       // 組み直し」と数が混ざる。ここでは「索引が一度も存在しない状態」を
       // そのまま使う。
+      // 記憶ディレクトリは store が最初の書き込みで作る。ここは store を通さないので、
+      // 先に自分で作る（作らないと ENOENT で、確かめたい組み直しに届かない）。
+      await mkdir(join(root, 'memory'), { recursive: true });
       await writeFile(join(root, 'memory', 'notes.md'), '# ノート\n', 'utf8');
 
       await stores.persona.protectionStatus('notes');
@@ -289,6 +292,9 @@ describe('FsPersonaStore', () => {
 
     it('組み直しは1回だけで、次の読み出しでは走らない', async () => {
       // 上のテストと同じ理由で、store を経由せず直接 `.md` を置く。
+      // 記憶ディレクトリは store が最初の書き込みで作る。ここは store を通さないので、
+      // 先に自分で作る（作らないと ENOENT で、確かめたい組み直しに届かない）。
+      await mkdir(join(root, 'memory'), { recursive: true });
       await writeFile(join(root, 'memory', 'notes.md'), '# ノート\n', 'utf8');
 
       // 複数回・複数の経路から読む。
