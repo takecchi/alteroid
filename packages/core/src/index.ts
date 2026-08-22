@@ -206,6 +206,22 @@ export {
   type RunnerOverview,
 } from './manager.js';
 /**
+ * 貸し出し期限（lease）— 引き取ってよいかを片側だけで言えるようにする材料
+ * （roadmap M5 PR4）。**「落ちた」は停止の証明ではない**という一点のための層である。
+ */
+export {
+  LEASE_DRAIN_MS,
+  LEASE_MARGIN_MS,
+  LEASE_TTL_MS,
+  describeVerdict,
+  grantLease,
+  judgeLease,
+  mayClaim,
+  touchLease,
+  type LeaseSighting,
+  type LeaseVerdict,
+} from './lease.js';
+/**
  * manager-runner 側（SDK を隔離して走らせる層）と、その境界。
  * デーモンは `RunnerRegistry` しか見ない — 固定 URL も runner のローカルパスも
  * 前提にしない（docs/architecture.md「プロセス境界」）。

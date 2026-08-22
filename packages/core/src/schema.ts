@@ -780,6 +780,69 @@ export const workspaceLocatorSchema = z.discriminatedUnion('kind', [
 
 export type WorkspaceLocator = z.infer<typeof workspaceLocatorSchema>;
 
+/**
+ * 貸し出し期限（lease）— **この委譲を、いまどのプロセスが握っているか**（M5 PR4）。
+ *
+ * ## なぜ `runnerId` だけでは足りないか
+ *
+ * `runnerId` は宛先の名前で、器を作り直しても同じである（台帳の鎖
+ * `manager_id → runner_id` がそれで繋がっている）。だから名前だけでは
+ * 「いまその名前に応えているプロセスが、さっき仕事を渡した相手と同じか」が言えない。
+ * `instanceId`（runner が起動ごとに作る乱数。`apps/runner/src/app.ts`）を並べて初めて
+ * **握っているプロセスの同一性**が表せる。
+ *
+ * ## なぜ期限が要るか
+ *
+ * 「落ちた」は観測の欠落であって停止の証明ではない（roadmap M5）。黙った器の仕事を
+ * 別の器へ起こし直すと、実は生きていた器と合わせて**同じマネージャーが2台で走る** —
+ * `gh pr create` のような取り返しのつかない操作が二重に走る。だから引き取る側は
+ * 「もう動いていない」を**片側だけで言える材料**を要る。それがこの期限である
+ * （判定は `lease.ts` の `judgeLease`、runner 側の自己失効は `runner.ts`）。
+ *
+ * **時刻はすべてデーモンの時計である。** 器をまたいで時計を合わせる前提を置かない
+ * （合っていないことに気づく場所が無い）。runner へ渡すのは `ttlMs`（相対）だけで、
+ * あちらは受け取った瞬間から自分の時計で数える。
+ */
+export const jobLeaseSchema = z.object({
+  /** 貸し出し先の宛先の名前。**台帳の鎖と同じ値**（ここで別の名前へ繋ぎ変えない）。 */
+  runnerId: z.string(),
+  /**
+   * いまその名前に応えているプロセス（runner の `/health` の `instanceId`）。
+   *
+   * **欠けることがある。** `identity()` を持たない runner（同一プロセスの
+   * `runner-local` や古い器）は名乗らないので、そのときは**判定しない**
+   * （「入れ替わっていない」とも「入れ替わった」とも読まない。`judgeLease` 参照）。
+   */
+  instanceId: z.string().optional(),
+  /**
+   * 世代番号。**引き取るたびに1つ増える**（fencing token）。
+   *
+   * runner はセッションごとに最後に受け取った世代を覚えていて、**それより古い世代の
+   * 命令を拒む。** これが無いと、引き取りの後に遅れて届いた古い命令が、新しい世代の
+   * セッションへ黙って混ざる。
+   */
+  fence: z.number().int().nonnegative(),
+  /** 貸し出した時刻。 */
+  grantedAt: isoDateTime,
+  /**
+   * デーモンが**最後にこの貸し出し先の生存を確かめた時刻**。
+   *
+   * ここが古いことは「落ちた」を意味しない（見に行っていないだけのこともある）。
+   * 判定に使うのは `judgeLease` であって、この値の古さそのものではない。
+   */
+  seenAt: isoDateTime,
+  /**
+   * 貸し出し先が**自分で畳むまでの猶予**（ミリ秒）。runner へ渡した値の写しである。
+   *
+   * 写しを持つのは、引き取る側が「あちらはいつ自分で畳むと約束したか」を台帳だけから
+   * 言えるようにするため（渡した値を後から変えても、この委譲に効いている約束は
+   * 渡した時のものである）。
+   */
+  ttlMs: z.number().int().positive(),
+});
+
+export type JobLease = z.infer<typeof jobLeaseSchema>;
+
 export const jobSchema = z.object({
   id: z.string(),
   createdAt: isoDateTime,
@@ -812,6 +875,19 @@ export const jobSchema = z.object({
   runnerId: z.string().optional(),
   /** workspace の所在。runner affinity と合わせて復元できるようにする。 */
   workspace: workspaceLocatorSchema.optional(),
+  /**
+   * 貸し出し期限（M5 PR4）。**いまどのプロセスがこの委譲を握っているか。**
+   *
+   * `runnerId` が「どの宛先か」なのに対し、こちらは「その宛先のどのプロセスか」と
+   * 「いつまで握っていると約束したか」である。
+   *
+   * **欠けている＝判定材料が無い、であって「握られていない」ではない。** それでも
+   * `judgeLease` は欠けているときに引き取りを許す — この欄が無かった頃のジョブと、
+   * 貸し出しを名乗らない runner のジョブが**永久に引き取れなくなる**のを避けるため
+   * である（能力の削除になる。north_star 禁止1）。判定できないことは、判定の結果の
+   * 側ではなく `judgeLease` の返り値の種類として持つ。
+   */
+  lease: jobLeaseSchema.optional(),
   /**
    * 退避済みトランスクリプト以外の生ログへの入口は**ここに持たない**。
    *
