@@ -1,0 +1,467 @@
+// mutate-selftest.mjs — 自己検証（受け入れ条件そのもの）。
+//
+// ここは `mutate-core.mjs`（純粋な層）の関数を**直接呼ぶ**。サブプロセスを
+// 起こしたり、まして殺したりしない — 実プロセスの kill はこの器で他人を撃つ
+// 形に近づくし、テストとして不安定になる（マネージャーからの差し戻し）。
+//
+// 「中断」は、手順を順番どおり呼んで、その先を単に呼ばないことで表現する。
+// 同じ理由で、誤った順序（変異→印）を再現する関数もここにだけ置く —
+// `mutate-core.mjs` 本体に `if (順序フラグ)` のような分岐を作らない。
+// 抜け道は次の穴になる。
+
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+
+import {
+  ROOT,
+  absPath,
+  applyMutation,
+  buildAndCheckArtifact,
+  gitStatusPorcelainFor,
+  HarnessError,
+  judge,
+  log,
+  markerExists,
+  md5,
+  readMarkerVerified,
+  readRepoFile,
+  restoreMutation,
+  runTests,
+  section,
+  writeRepoFile,
+} from './mutate-core.mjs';
+
+export const SELFTEST_SCENARIOS = [
+  'backup-corruption',
+  'weak-tooth',
+  'interrupted',
+  'interrupted-wrong-order',
+  'delivery',
+  'all',
+];
+
+const FIXTURE_REL = '.claude/skills/mutation-testing/selftest-fixture.txt';
+const FIXTURE_ORIGINAL = 'LINE-ONE\nLINE-TWO\nLINE-THREE\n';
+
+function ensureFixtureClean() {
+  const content = fs.existsSync(absPath(FIXTURE_REL)) ? readRepoFile(FIXTURE_REL) : null;
+  if (content !== FIXTURE_ORIGINAL) {
+    throw new HarnessError(
+      `selftest 用の固定ファイル (${FIXTURE_REL}) が想定の中身になっていない。` +
+        '前回の selftest が途中で終わっている疑いがある。手で復元してから再実行すること。',
+    );
+  }
+}
+
+function requireNoMarker(scenarioName) {
+  if (markerExists()) {
+    throw new HarnessError(
+      `${scenarioName}: 印が既にある。selftest は印が無い状態からしか始められない。先に片付けること。`,
+    );
+  }
+}
+
+// ── 1. 控えの汚染 ───────────────────────────────────────────────────
+//
+// 受け入れ条件: 照合2が復元を止めること。止めたあと印が残っていること、
+// ファイルが変異したままであること（＝黙って壊れた原文を書き戻していないこと）
+// も示す。そのうえで、印に埋め込んだ原文からは `--restore-from-marker` で
+// 正しく戻せることも示す（控えが信用できない場合の材料は印の側にもある、
+// という設計の裏取り）。
+function scenarioBackupCorruption() {
+  section('selftest: 1. 控えの汚染');
+  requireNoMarker('backup-corruption');
+  ensureFixtureClean();
+
+  const spec = {
+    id: 'selftest-backup-corruption',
+    file: FIXTURE_REL,
+    from: 'LINE-TWO',
+    to: 'LINE-TWO-MUTATED',
+    expect: 1,
+    target: null,
+  };
+
+  log('-- 1a. 通常どおり変異を当てる --');
+  const ctx = applyMutation(spec);
+
+  log('');
+  log('-- 1b. ここから selftest による意図的な注入。ハーネスの通常動作ではない --');
+  log('控えを、変異後の中身へ差し替える（＝控えが汚染されていた、という状況を再現する）。');
+  const mutatedContent = readRepoFile(FIXTURE_REL);
+  fs.writeFileSync(ctx.backupPath, mutatedContent);
+  log(`控えを上書きした: ${path.relative(ROOT, ctx.backupPath)}`);
+  log(`控えの md5 (汚染後): ${md5(mutatedContent)} / md5Pre (正しい原文): ${ctx.md5Pre}`);
+
+  log('');
+  log('-- 1c. この状態で restore（既定・フラグなし）を呼ぶ --');
+  let refusalMessage = null;
+  try {
+    restoreMutation();
+    log('⚠ restore が例外を投げずに終わった（想定外）');
+  } catch (err) {
+    refusalMessage = err.message;
+    log(`restore は例外で止まった（想定どおり）:\n${err.message}`);
+  }
+
+  log('');
+  log('-- 1d. 止めた後の状態を確認する --');
+  const markerStillThere = markerExists();
+  const fileStillMutated = readRepoFile(FIXTURE_REL).includes('LINE-TWO-MUTATED');
+  log(`印はまだ在るか: ${markerStillThere}`);
+  log(`ファイルはまだ変異したままか（＝黙って書き戻していない）: ${fileStillMutated}`);
+
+  log('');
+  log('-- 1e. 印に埋め込まれた原文から、明示フラグで復元する --');
+  const { selfConsistent } = readMarkerVerified();
+  log(`印内の原文の自己整合性（md5Pre と一致）: ${selfConsistent}`);
+  const restoreResult = restoreMutation({ fromMarker: true });
+  log(`復元元: ${restoreResult.restoredFrom}`);
+
+  const finalContent = readRepoFile(FIXTURE_REL);
+  const restoredCorrectly = finalContent === FIXTURE_ORIGINAL;
+  const statusAfter = gitStatusPorcelainFor(FIXTURE_REL);
+  log(`復元後の中身が原文と一致: ${restoredCorrectly}`);
+  log(`復元後の git status --porcelain: ${JSON.stringify(statusAfter)}`);
+  log(`復元後、印は残っているか（無いはず）: ${markerExists()}`);
+
+  return {
+    scenario: 'backup-corruption',
+    defaultRestoreRefused: refusalMessage !== null,
+    markerStillThereAfterRefusal: markerStillThere,
+    fileStillMutatedAfterRefusal: fileStillMutated,
+    recoveredViaMarkerFlag: restoreResult.restoredFrom === 'marker',
+    restoredCorrectly,
+    cleanAfterward: statusAfter.trim() === '' && !markerExists(),
+  };
+}
+
+// ── 2. 歯が弱い ─────────────────────────────────────────────────────
+//
+// 実在の関数: apps/cli/src/conversations.ts の renderConversationDetail。
+// 複数行の message.text をそのまま出す ——「全文」と「1行目＋継続行」は
+// 行へ潰すと区別が消える構造である。
+//
+// target: null — apps/cli 自身のテストは同じパッケージの source を直接
+// import しており（`./conversations.js` → `conversations.ts`）、dist 境界を
+// 跨がない。だからこの demo では build/artifact 検査は「対象外」になる
+// （本番でパッケージ境界を跨ぐ変異には spec.target を必ず設定すること）。
+function scenarioWeakTooth() {
+  section(
+    'selftest: 2. 歯が弱い（apps/cli/src/conversations.ts の renderConversationDetail）',
+  );
+  requireNoMarker('weak-tooth');
+
+  const spec = {
+    id: 'selftest-weak-strong-tooth',
+    file: 'apps/cli/src/conversations.ts',
+    from: '${message.text}`);',
+    to: "${message.text.split('\\n')[0]}`);",
+    expect: 1,
+    target: null,
+  };
+
+  const cases = [
+    {
+      label: '弱い歯',
+      testRel: 'apps/cli/src/conversations.selftest-weak.test.ts',
+      body: `import { describe, expect, it } from 'vitest';
+import { renderConversationDetail } from './conversations.js';
+
+// selftest 用の一時テスト（mutation-testing ハーネスの自己検証）。実行後に削除する。
+// 弱い歯: 出力を split('\\n') した「1行目」の存在だけを見る。
+// 「全文」と「1行目＋継続行」を区別できないので、継続行が消える変異を通す。
+describe('弱い歯（selftest）', () => {
+  it('1行目が出ていることだけを見る', () => {
+    const rendered = renderConversationDetail(
+      'conv-1',
+      [
+        {
+          id: 'm1',
+          at: '2026-01-01T00:00:00.000Z',
+          role: 'inbound',
+          text: '1行目\\n2行目\\n3行目',
+        },
+      ],
+      1,
+      true,
+    );
+    const lines = rendered.split('\\n');
+    expect(lines.some((l) => l.includes('1行目'))).toBe(true);
+  });
+});
+`,
+    },
+    {
+      label: '強い歯',
+      testRel: 'apps/cli/src/conversations.selftest-strong.test.ts',
+      body: `import { describe, expect, it } from 'vitest';
+import { renderConversationDetail } from './conversations.js';
+
+// selftest 用の一時テスト（mutation-testing ハーネスの自己検証）。実行後に削除する。
+// 強い歯: 全文を1つの文字列として突き合わせる。継続行が消えれば必ず落ちる。
+describe('強い歯（selftest）', () => {
+  it('全文（継続行を含む）を突き合わせる', () => {
+    const rendered = renderConversationDetail(
+      'conv-1',
+      [
+        {
+          id: 'm1',
+          at: '2026-01-01T00:00:00.000Z',
+          role: 'inbound',
+          text: '1行目\\n2行目\\n3行目',
+        },
+      ],
+      1,
+      true,
+    );
+    expect(rendered).toBe(
+      [
+        '── 会話 conv-1 ──',
+        '  [2026-01-01T00:00:00.000Z] 人間: 1行目',
+        '2行目',
+        '3行目',
+        '',
+        '（日誌を 1 件遡り、この会話の先頭まで届いた）',
+      ].join('\\n'),
+    );
+  });
+});
+`,
+    },
+  ];
+
+  const outcomes = {};
+  for (const { label, testRel, body } of cases) {
+    log('');
+    log(`== ${label}: ${testRel} を書いて、この変異だけを当てて run する ==`);
+    writeRepoFile(testRel, body);
+    try {
+      const thisSpec = {
+        ...spec,
+        id: `${spec.id}-${label}`,
+        testFilter: testRel.replace(/\.ts$/, ''),
+      };
+      applyMutation(thisSpec);
+      const artifactResult = buildAndCheckArtifact(thisSpec);
+      const testResult = runTests([thisSpec.testFilter]);
+      log('--- test 生ログ ここから ---');
+      log(testResult.raw);
+      log('--- test 生ログ ここまで ---');
+      let judgement;
+      try {
+        judgement = judge(artifactResult, testResult);
+      } catch (err) {
+        judgement = `判定を出せない: ${err.message}`;
+      }
+      log('');
+      log(`判定 (${label}): ${judgement}`);
+      outcomes[label] = { judgement, testsLine: testResult.testsLine, filesLine: testResult.filesLine };
+      restoreMutation();
+    } finally {
+      fs.rmSync(absPath(testRel), { force: true });
+    }
+  }
+
+  return { scenario: 'weak-tooth', outcomes };
+}
+
+// ── 3. 中断 ─────────────────────────────────────────────────────────
+//
+// マネージャーの差し戻し: 実プロセスの kill は使わない。「変異を書いた後・
+// 復元の前で処理が終わった状態」を、`applyMutation` を呼んでその先を単に
+// 呼ばないことで作る。確認するのは3点だけ:
+//   - 印が残る
+//   - 印から原文が復元できる（このシナリオでは控えもわざと使えなくして、
+//     マーカー単独での復元を裏取りする）
+//   - 印が残った状態では、測定を始めずに落ちる（baseline/run の入口チェック）
+function scenarioInterrupted() {
+  section('selftest: 3. 中断（正しい順序: 印 → 変異）');
+  requireNoMarker('interrupted');
+  ensureFixtureClean();
+
+  const spec = {
+    id: 'selftest-interrupted',
+    file: FIXTURE_REL,
+    from: 'LINE-TWO',
+    to: 'LINE-TWO-INTERRUPTED',
+    expect: 1,
+    target: null,
+  };
+
+  log('-- 3a. 変異を当てる。ここで「セッションが終わった」ことにする（この先の build/test/restore を単に呼ばない） --');
+  const ctx = applyMutation(spec);
+
+  const markerPresent = markerExists();
+  log(`印が残っているか: ${markerPresent}`);
+  log(`ファイルは変異したままか: ${readRepoFile(FIXTURE_REL).includes('LINE-TWO-INTERRUPTED')}`);
+
+  log('');
+  log('-- 3b. 次に来た人の視点: 実プロセスとして `mutate.mjs status` を呼ぶ（kill はしていない。単に別の起動） --');
+  const statusResult = execFileSync('node', [path.join(ROOT, '.claude/skills/mutation-testing/mutate.mjs'), 'status'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+  }).toString();
+  log(statusResult);
+
+  log('');
+  log('-- 3c. 印が残った状態で `baseline` を呼ぶと、測定を始めずに落ちることを確認する --');
+  let baselineBlocked = false;
+  try {
+    execFileSync(
+      'node',
+      [path.join(ROOT, '.claude/skills/mutation-testing/mutate.mjs'), 'baseline'],
+      { cwd: ROOT, encoding: 'utf8', stdio: 'pipe' },
+    );
+  } catch (err) {
+    baselineBlocked = true;
+    log('baseline は測定を始めずに落ちた（想定どおり）。stdout:');
+    log(err.stdout?.toString() ?? '');
+  }
+
+  log('');
+  log('-- 3d. 控えも失われた状況を作り、印だけから復元できることを裏取りする --');
+  fs.rmSync(ctx.backupPath, { force: true });
+  log(`控えを削除した: ${path.relative(ROOT, ctx.backupPath)}（存在しない状態にした）`);
+  let recoveredFromMarkerOnly = false;
+  try {
+    restoreMutation({ fromMarker: true });
+    recoveredFromMarkerOnly = true;
+  } catch (err) {
+    log(`--restore-from-marker でも失敗した（想定外）: ${err.message}`);
+  }
+  const finalContent = fs.existsSync(absPath(FIXTURE_REL)) ? readRepoFile(FIXTURE_REL) : null;
+  const restoredCorrectly = finalContent === FIXTURE_ORIGINAL;
+  log(`印だけから復元できたか: ${recoveredFromMarkerOnly}`);
+  log(`復元後の中身が原文と一致: ${restoredCorrectly}`);
+  log(`復元後、印は残っているか（無いはず）: ${markerExists()}`);
+
+  return {
+    scenario: 'interrupted',
+    order: 'correct',
+    markerPresentAfterInterruption: markerPresent,
+    statusReportedProblem: /変異が当たったまま/.test(statusResult),
+    baselineBlockedWhileMarkerPresent: baselineBlocked,
+    recoveredFromMarkerOnly,
+    restoredCorrectly,
+  };
+}
+
+// ── 3'. 中断（誤った順序との対比） ──────────────────────────────────
+//
+// **これはハーネス本体の手順ではない。** `mutate-core.mjs` の `applyMutation`
+// を呼ばず、ここだけで直線的に「変異を先に書き、印はまだ置かない」という
+// 誤った順序を再現する。本体に順序を切り替えるフラグは無い — 抜け道は
+// 次の穴になるので置かない。
+function scenarioInterruptedWrongOrder() {
+  section('selftest: 3´. 中断との対比（誤った順序: 変異 → 印。ハーネス本体には存在しない経路）');
+  requireNoMarker('interrupted-wrong-order');
+  ensureFixtureClean();
+
+  log('-- ここで「変異だけ書いて、印を置く前にセッションが終わった」ことにする --');
+  const original = readRepoFile(FIXTURE_REL);
+  const mutated = original.split('LINE-TWO').join('LINE-TWO-WRONGORDER');
+  writeRepoFile(FIXTURE_REL, mutated);
+  // 印は書かない。誤った順序ではここまでで「終わった」ことになる。
+
+  const markerPresent = markerExists();
+  log(`印が残っているか: ${markerPresent}（正しい順序では true だった）`);
+  log(`ファイルは変異したままか: ${readRepoFile(FIXTURE_REL).includes('LINE-TWO-WRONGORDER')}`);
+
+  log('');
+  log('-- `mutate.mjs status` を呼ぶ --');
+  const statusResult = execFileSync(
+    'node',
+    [path.join(ROOT, '.claude/skills/mutation-testing/mutate.mjs'), 'status'],
+    { cwd: ROOT, encoding: 'utf8' },
+  ).toString();
+  log(statusResult);
+
+  log('');
+  log('-- selftest による後始末（印が無いので、既知の原文へ直接戻す。ハーネスの通常経路の外） --');
+  writeRepoFile(FIXTURE_REL, FIXTURE_ORIGINAL);
+  const statusAfterCleanup = gitStatusPorcelainFor(FIXTURE_REL);
+  log(`cleanup 後の git status --porcelain: ${JSON.stringify(statusAfterCleanup)}`);
+
+  return {
+    scenario: 'interrupted-wrong-order',
+    order: 'wrong',
+    markerPresentAfterInterruption: markerPresent,
+    statusReportedNoProblem: /印は無い/.test(statusResult),
+  };
+}
+
+// ── 4. 変異が成果物へ届いたか ────────────────────────────────────────
+function scenarioDelivery() {
+  section('selftest: 4. 変異が成果物へ届いたか（packages/core/src/excerpt.ts）');
+  requireNoMarker('delivery');
+
+  const spec = {
+    id: 'selftest-delivery',
+    file: 'packages/core/src/excerpt.ts',
+    from: '文字省略。全',
+    to: 'SELFTEST_MUTATED。全',
+    expect: 1,
+    target: '@alteroid/core',
+    artifact: { file: 'packages/core/dist/index.js', contains: 'SELFTEST_MUTATED' },
+  };
+
+  log('-- 4a. 変異前: いま dist に SELFTEST_MUTATED が無いことを確認する（当然） --');
+  const distAbs = absPath(spec.artifact.file);
+  const before = fs.existsSync(distAbs) ? fs.readFileSync(distAbs, 'utf8') : '';
+  log(`build 前の dist に含まれるか: ${before.includes('SELFTEST_MUTATED')}`);
+
+  log('');
+  log('-- 4b. 変異を当てる（build はまだ呼ばない） --');
+  applyMutation(spec);
+
+  log('');
+  log('-- 4c. build をまだ呼ばずに、いまの dist をもう一度読む --');
+  const distAfterMutationNoBuild = fs.existsSync(distAbs) ? fs.readFileSync(distAbs, 'utf8') : '';
+  const deliveredBeforeBuild = distAfterMutationNoBuild.includes('SELFTEST_MUTATED');
+  log(`build 前（ソースは変異済み）の dist に含まれるか: ${deliveredBeforeBuild}`);
+  log('この時点で参照できる「直近の build の exit code」は、前回 (baseline 相当) の 0 のままである。');
+
+  log('');
+  log('-- 4d. build する --');
+  const artifactResult = buildAndCheckArtifact(spec);
+
+  log('');
+  log(
+    `対比: build 前 exit=0(前回分) / 届いた=${deliveredBeforeBuild} — ` +
+      `build 後 exit=${artifactResult.buildExitCode} / 届いた=${artifactResult.artifactState === 'delivered'}。` +
+      'exit code はどちらも 0 でありうるが、届いたかどうかは dist を実際に読まないと分からない。',
+  );
+
+  log('');
+  log('-- 4e. 復元し、dist も build し直して現物と一致させる（後始末。restore 自体は歯4/12まで） --');
+  restoreMutation();
+  const rebuild = buildAndCheckArtifact({ ...spec, artifact: undefined });
+  log(`後始末の build exit code: ${rebuild.buildExitCode}`);
+
+  return {
+    scenario: 'delivery',
+    deliveredBeforeBuild,
+    deliveredAfterBuild: artifactResult.artifactState === 'delivered',
+    buildExitCodeBeforeBuild: 0,
+    buildExitCodeAfterBuild: artifactResult.buildExitCode,
+  };
+}
+
+const SCENARIO_FNS = {
+  'backup-corruption': scenarioBackupCorruption,
+  'weak-tooth': scenarioWeakTooth,
+  interrupted: scenarioInterrupted,
+  'interrupted-wrong-order': scenarioInterruptedWrongOrder,
+  delivery: scenarioDelivery,
+};
+
+export function runSelftestScenario(scenario) {
+  const names = scenario === 'all' ? Object.keys(SCENARIO_FNS) : [scenario];
+  const results = [];
+  for (const name of names) {
+    results.push(SCENARIO_FNS[name]());
+  }
+  return results;
+}
