@@ -58,6 +58,10 @@
   - 中立の語彙は `packages/core/src/agent-ports.ts`、`Options` の組み立ては `packages/core/src/claude-provider.ts` に閉じる。**前者から SDK を import しない**（番人テストで固定してある）
   - 「要件を担う能力」の機械可読な一覧は `agent-ports.ts` の `REQUIREMENT_BEARING_CAPABILITIES` が持つ。**要件の出所は PRD であって、こちらは写しである**（増減は PRD 側で決まる）
   - **境界は2つ要る。** マネージャーと作業者は1ターンぶんのストリームで足りるが、**クローンは自作の道具をインプロセス MCP（SDK の機能）で持っている**ので、道具を stdio MCP サーバへ外へ出すまで中立の口を作れない。無理に中立の顔を被せると SDK の型が `agent-ports.ts` へ漏れ、`queryFn` を別名で作り直すだけになる
+  - **2つ目の provider を載せる順序を決めている依存が他に3つある**（`docs/roadmap.md` の M7 節から移した。あちらは 2026-08-22 に畳んだ）:
+    - **読み側の中立化が無ければ2つ目の provider は載らない。** いまクローンとマネージャーは SDK のメッセージを直接ディスパッチしており、そこへ provider 固有の分岐を足していく形にすると、畳み込みが provider の数だけ分裂する
+    - **「失われているものを出す口」は2つ目の provider より先に要る。** 逆順だと、要件が欠けた provider が入った状態を誰も観測できない期間が生まれる
+    - **台帳の「取れなかった」も2つ目の provider より先に要る。** 0 が積まれた区間は「その層は安い」と読めるので、後から直しても既に人間へ出した数字は訂正できない
 
 ## プロセス境界 — なぜ manager-runner を分けるか
 
@@ -316,6 +320,8 @@ type WorkspaceLocator =
 M4 で実際に使うのは `runner-volume` だけである。**runner のローカルパス（走行中の
 トランスクリプトの置き場など）を台帳に持たないこと** — runner が入れ替わった瞬間に嘘になる。
 生ログへは runner の API → アーカイブ → 預かったセッションの生ログ、の順で降りる。
+
+**workspace locator の運用選択を決めている依存も、ここへ移す**（`docs/roadmap.md` の M5 節から移した。あちらは 2026-08-22 に畳んだ）。**workspace locator の運用選択は移送と切り離せない。** workspace がどこにあるかを決めない限り「別 runner で引き継ぐ」の中身が決まらない。runner-volume を選べば引き継ぎは復旧ではなく再構築になり、受け入れ基準4の「復旧不能な未永続状態」の線もそこで動く
 
 - **fs を先に作る**。記憶が Markdown ファイルであることは「人間がいつでも読んで直せる」（提供価値1）の最短の実装
 - SDK セッション自体の永続化は SessionStore アダプタ（SDK 公式）で同じ PostgreSQL に載せる。デーモン再起動時は JobStore の session_id からマネージャーを resume する
