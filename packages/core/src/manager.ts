@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { journalEntryShape, noteDroppedRecord } from './dropped-record.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap, type RecentMap } from './recent.js';
-import { isRetryableRunnerError } from './runner-protocol.js';
+import { describeRunnerEntries, isRetryableRunnerError } from './runner-protocol.js';
 import type {
   RunnerClient,
   RunnerCredentialFingerprint,
@@ -1309,9 +1309,15 @@ class Pool implements ManagerPool {
    *
    * 代わりに**名簿の状態を5値のまま添える。** `connected` へ畳まないのは
    * `RunnerOverview` と同じ理由で、「まだ開けていない」と「待っても同じ答えが
-   * 返る」の違いが、読む側が待つか起こし直すかを決める材料そのものだからである。
-   * **値の意味をここに書き写さない** — 持ち主は `runner_list` の説明であり、
-   * 写せば必ずずれる。
+   * 返る」の違いが、読む側が待つか起こし直すかを決める材料そのものだからである
+   * （`RunnerRegistry#select` の doc が「呼んだ側の対応が変わるので必ず区別する」
+   * として3種類を数え上げている。**`select` はそれを守っていて、ここだけが
+   * 守っていなかった**）。
+   *
+   * **畳み方は新しく作らない。** 同じことを名簿の側が既に持っている
+   * （`describeRunnerEntries`）ので、そちらを呼ぶ。両方で組み立てると、片方だけが
+   * 畳んだ形へ倒れても誰も気づけない。**値の意味もここに書き写さない** — 持ち主は
+   * `runner_list` の説明であり、写せば必ずずれる。
    *
    * **宛先1台に絞れない。** `RunnerEntry` が `runnerId` を載せるのは
    * `entry.client` があるときだけで（`runner-protocol.ts` の `entries()`）、
@@ -1320,15 +1326,15 @@ class Pool implements ManagerPool {
    */
   #absentRunnerDetail(record: ManagerRecord): string {
     const entries = this.#runners.entries();
-    const fleet =
-      entries.length === 0
-        ? '名簿には runner が1台も登録されていない。'
-        : `いまの名簿: ${entries.map((entry) => `${entry.label}=${entry.state}`).join(' / ')}。`;
     const runnerId = record.job.runnerId;
     const head =
       runnerId === undefined
         ? `${record.job.id} には宛先の runner が記録されておらず、いま開いている runner も無い。`
         : `${record.job.id} の宛先（runner ${runnerId}）は、いま名簿に開いていない。`;
+    const fleet =
+      entries.length === 0
+        ? '名簿には runner が1台も登録されていない（時間では直らない）。'
+        : `名簿: ${describeRunnerEntries(entries)}。`;
     return (
       `${head}${fleet}` +
       'これは「いま開いた宛先が無い」という観測であって、戻せないことの証明ではない。' +

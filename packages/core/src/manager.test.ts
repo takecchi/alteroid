@@ -4040,3 +4040,120 @@ describe('runner の一覧（ManagerPool.runners）', () => {
     await registry.stop();
   });
 });
+
+/**
+ * 宛先を引けなかったときに返す言葉（`ManagerPool#send` の `#absentRunnerDetail`）。
+ *
+ * **測るのは「言葉が、コードの観測と食い違っていないか」だけである。**
+ * `RunnerRegistry#get()` が `null` を返すのは `entry.client` が無いときで、そこには
+ * **まだ開けていない**（`unreachable`。再試行は予約済み）が含まれる。それをここは
+ * 「別の runner で続きを起こすには workspace の移送が要る」という**恒久の言葉**で
+ * 返していた——待てば直る状態を、待っても直らない状態の言葉で報告していた形である。
+ *
+ * **3つを別々の `it()` で測る。** vitest は最初の失敗で止まるので、1本に同居させると
+ * 後ろの検査が一度も走らないまま緑になる（同居していれば、`unusable` の側を消す変異が
+ * 素通りしていた）。
+ *
+ * **能力の話ではない。** `manager_send` は塞いでいないので、宛先が開いていれば
+ * 従来どおり届く——それを4本目で押さえる（一律にこの言葉へ倒していないこと）。
+ */
+describe('宛先が名簿に開いていないときに返す言葉', () => {
+  const away = {
+    id: 'mgr-away',
+    managerId: 'mgr-away',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T01:00:00.000Z',
+    status: 'done' as const,
+    summary: '移行作業',
+    request: 'DB の移行をやって',
+    cwd: '/work/project',
+    runnerId: 'runner-primary',
+    sessionId: 'sess-before-swap',
+  };
+
+  /**
+   * 開けない宛先だけが載っている名簿でプールを組む。
+   *
+   * `register()` は `#open()` を `await` するので、戻った時点で状態は確定している
+   * （`isRetryableRunnerError` が真なら `unreachable`、偽なら `unusable`）。
+   * **`entry.client` は `null` のまま**なので `get()` は `null` を返し、
+   * `#runnerOf` がこの経路に落ちる。
+   */
+  async function poolWithClosedRegistry(open: () => Promise<RunnerClient>) {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(away);
+    const registry = createRunnerRegistry([], { notify: () => undefined });
+    await registry.register({ label: 'http://runner:4518', open });
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: registry,
+      profile: createProfileService({ stores, runners: registry }),
+    });
+    return { pool, registry };
+  }
+
+  it('まだ開けていない宛先は、まだ開けていないと言う（unreachable を畳まない）', async () => {
+    // status を持たない失敗は「待てば直る」側（`isRetryableRunnerError`）。
+    const s = await poolWithClosedRegistry(async () => {
+      throw new Error('まだ上がっていない');
+    });
+
+    const result = await s.pool.send('mgr-away', '続きをやって');
+
+    expect(result.outcome).toBe('unknown');
+    // 名簿の状態がそのまま出ている。**5値を `connected` へ畳まない。**
+    expect(result.detail).toContain('unreachable');
+
+    await s.pool.stop();
+    await s.registry.stop();
+  });
+
+  it('待っても直らない宛先は、そう言う（unusable と unreachable を混ぜない）', async () => {
+    // 4xx は runner が「その命令は受け取れない」と答えている＝挑み直さない側。
+    const s = await poolWithClosedRegistry(async () => {
+      throw new RunnerHttpError('鍵が違う', 403);
+    });
+
+    const result = await s.pool.send('mgr-away', '続きをやって');
+
+    expect(result.outcome).toBe('unknown');
+    expect(result.detail).toContain('unusable');
+    // **同じ言葉で両方を言わない。** ここが混ざると、読む側は待つか起こし直すかを
+    // 決められない（`RunnerRegistry#select` の doc が数え上げている区別そのもの）。
+    expect(result.detail).not.toContain('unreachable');
+
+    await s.pool.stop();
+    await s.registry.stop();
+  });
+
+  it('恒久の断定をしない（判定できないことを言わない）', async () => {
+    const s = await poolWithClosedRegistry(async () => {
+      throw new Error('まだ上がっていない');
+    });
+
+    const result = await s.pool.send('mgr-away', '続きをやって');
+
+    // ここが観測しているのは「いま開いた宛先が無い」ことだけで、移送が要るかどうかは
+    // 判定していない。**読んだ側が恒久の結論を持ち帰る形にしない。**
+    expect(result.detail).not.toContain('移送');
+    expect(result.detail).toContain('戻せないことの証明ではない');
+
+    await s.pool.stop();
+    await s.registry.stop();
+  });
+
+  it('宛先が開いていれば、いままでどおり届く（一律にこの言葉へ倒していない）', async () => {
+    // **能力を削っていないことの側。** 文言を直すだけの変更なので、送れる相手は
+    // 1件も変わらない。
+    const s = setup();
+    const { managerId } = await s.pool.start({ request: '長い仕事' });
+
+    const result = await s.pool.send(managerId, 'まだ続きがある');
+
+    expect(result.outcome).toBe('delivered');
+    expect(result.detail).not.toContain('名簿');
+
+    await s.pool.stop();
+  });
+});
