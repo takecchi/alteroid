@@ -194,8 +194,18 @@ export type ManagerStopActor = 'human' | 'clone';
  * | --- | --- | --- | --- |
  * | `'stopped'` | `sessionGone === true`。止まったと確かめた | `status: 'stopped'` へ、`waiting`/`attached` を畳んで `#retire` | 200 |
  * | `'not_stopped'` | `sessionGone === false`。**止まっていないと確かめた**（明確な失敗） | 何も書かない | 200 |
- * | `'unknown'` | 確かめられなかった（`runner.list()` が答えない／`runner.stop()` が期限切れ） | 何も書かない | 200 |
- * | `'absent'` | そのマネージャーが居ない／runner が居ない（旧 `'unknown'` の改名） | — | 404 |
+ * | `'unknown'` | 確かめられなかった（`runner.list()` が答えない／`runner.stop()` が期限切れ／**宛先の runner が名簿に開いていない**） | 何も書かない | 200 |
+ * | `'absent'` | **そのマネージャーが台帳に居ない。** 旧 `'unknown'` の改名 | — | 404 |
+ *
+ * **`'absent'` は「宛先の runner が居ない」を含んでいた。** その2つは別である —
+ * 台帳に居ないマネージャーは存在しないが、**宛先が開いていないだけのマネージャーは
+ * 存在する。** しかも「開いていない」は `unreachable`（まだ開けていない。再試行は
+ * 予約済み）を含むので、**待てば直る状態を 404 という機械可読な終端で返していた。**
+ * 404 は人間もクローンも CLI も Web も「そんなものは無い」としてしか読めず、
+ * **文言と違って読み手の解釈で救われない。**
+ *
+ * `'unknown'`（そのものは居るが確かめられなかった → 200）が、この場合のために
+ * 既に在る。新しい値は足していない。
  */
 export interface ManagerAbortResult {
   outcome: 'stopped' | 'not_stopped' | 'unknown' | 'absent';
@@ -884,10 +894,16 @@ class Pool implements ManagerPool {
 
     const runner = await this.#runnerOf(record);
     if (!runner) {
-      return {
-        outcome: 'absent',
-        detail: `${managerId} を走らせていた runner（${record.job.runnerId ?? '不明'}）が居ない。`,
-      };
+      // **台帳に居ないのと同じ答えを返さない。** ここまで来ているということは
+      // `#load` が台帳から像を作れた＝**このマネージャーは存在する**。宛先が
+      // いま開いていないだけで、その中には `unreachable`（まだ開けていない。
+      // 再試行は予約済み）が含まれる。`'absent'` を返すと `app.ts` が 404 に
+      // するので、**一時的な状態が「そんなものは無い」という機械可読な終端に
+      // なる**（`ManagerAbortResult` の doc）。
+      //
+      // **言い方は `send()` と同じものを使う。** 同じ観測に2つの言い方を
+      // 持たせると、片方だけが直る形になる。
+      return { outcome: 'unknown', detail: this.#absentRunnerDetail(record) };
     }
 
     // **`runner.stop()` が投げても、ここで abort() ごと reject させない。** HTTP
