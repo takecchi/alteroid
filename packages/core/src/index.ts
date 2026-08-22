@@ -164,6 +164,19 @@ export {
   type CloneRuntimeFacts,
   type SelfFacts,
 } from './self.js';
+/**
+ * いま走っているプロセスの版（コミット sha）。デーモンと runner は別 Service で
+ * 別々にデプロイされるので、両方が自分の版を名乗れることでその窓のずれが見える。
+ */
+export {
+  resolveBuildRevision,
+  describeBuildRevision,
+  reportRunnerRevision,
+  buildRevisionSchema,
+  type BuildRevision,
+  type RevisionSource,
+  type RunnerRevisionReport,
+} from './revision.js';
 export { CRON_EXPRESSION_MAX, isCronExpression, parseCron, type CronSchedule } from './cron.js';
 export {
   DAILY_REPORT_KIND,
@@ -302,6 +315,7 @@ export {
   type RunnerProfileResult,
   type RunnerRegistry,
   type RunnerRegistryOptions,
+  type RunnerRevisionStatus,
   type RunnerSource,
   type RunnerResumeCommand,
   type RunnerSetCredentialsCommand,

@@ -37,6 +37,12 @@ class IdentifyingRunner implements RunnerClient {
   instanceId: string | undefined;
   /** 名乗る `runnerId`。**採られないことを見る**ために差し替えられるようにしてある。 */
   claimedRunnerId: string;
+  /**
+   * 名乗る版。既定は無し（従来どおり `revision` を返さない runner を再現する）。
+   * `connected` は `identity()` を一度も呼んだことを保証しない、という歯
+   * （下の「一度も probe されていない」describe）のためだけに足した。
+   */
+  revision: { status: 'known'; commit: string; short: string; source: 'build' } | undefined;
 
   constructor(runnerId: string, instanceId: string | undefined) {
     this.runnerId = runnerId;
@@ -44,11 +50,14 @@ class IdentifyingRunner implements RunnerClient {
     this.instanceId = instanceId;
   }
 
-  async identity(): Promise<{ runnerId?: string; instanceId?: string } | undefined> {
+  async identity(): Promise<
+    { runnerId?: string; instanceId?: string; revision?: IdentifyingRunner['revision'] } | undefined
+  > {
     this.probes += 1;
     return {
       runnerId: this.claimedRunnerId,
       ...(this.instanceId === undefined ? {} : { instanceId: this.instanceId }),
+      ...(this.revision === undefined ? {} : { revision: this.revision }),
     };
   }
 
@@ -213,6 +222,43 @@ describe('器の入れ替えを見分ける', () => {
 
     expect(runner.probes).toBe(3);
     expect(swaps).toEqual([]);
+
+    await registry.stop();
+  });
+
+  /**
+   * **`state: 'connected'` は `identity()` を一度も呼んだことを保証しない。**
+   *
+   * `#open()`（`runner-protocol.ts`）は `entry.source.open()` が解決した時点で
+   * `state = 'connected'` を即座に立てるが、`identity()` は heartbeat
+   * （`HEARTBEAT_INTERVAL_MS` ごとの `#beat()`）でしか呼ばれない。つまり
+   * **登録が終わってから最初の heartbeat が回るまでの間（最大で約10秒）**、
+   * runner は `connected` なのに `revision` は初期値の `unheard` のままである
+   * ——たとえその runner の `identity()` が呼ばれれば `known` を返す実装でも、
+   * 呼ばれていない以上は `unheard` としか言えない。
+   *
+   * これは稀なレースではなく、**新しく繋がった runner 全員が必ず一度通る窓**
+   * である。`state` だけを見て「繋がっているのに版が無いのはおかしい」と
+   * 読まないこと——`revision` は `state` とは別の、独立した観測である。
+   */
+  it('connected の直後・最初の heartbeat が回るまでは revision は unheard のまま（identity() はまだ呼ばれていない）', async () => {
+    const runner = new IdentifyingRunner('runner-fresh', 'boot-1');
+    // 「呼べば known を返す」runner を使う——それでも呼んでいない間は unheard
+    // であることが本体である。
+    runner.revision = {
+      status: 'known',
+      commit: 'c'.repeat(40),
+      short: 'c'.repeat(12),
+      source: 'build',
+    };
+    const registry = createRunnerRegistry();
+    await registry.register({ label: 'http://runner-fresh:4518', open: async () => runner });
+
+    // **heartbeat を一切進めていない。** register() が解決した直後の状態を見る。
+    expect(runner.probes).toBe(0);
+    expect(registry.entries()).toMatchObject([
+      { label: 'http://runner-fresh:4518', state: 'connected', revision: { status: 'unheard' } },
+    ]);
 
     await registry.stop();
   });

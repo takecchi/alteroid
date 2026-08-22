@@ -95,7 +95,7 @@ function fakeClone() {
     // （`RunnerRegistry`）を直に読み、`ManagerPool.runners()` は経由しない
     // （クローンの道具専用）ので、ここでは型を満たすだけの空スタブで足りる。
     async runners() {
-      return { runners: [], unassigned: [] };
+      return { runners: [], unassigned: [], daemonRevision: { status: 'unknown' } };
     },
     async transcript(managerId) {
       return transcripts.get(managerId) ?? null;
@@ -2197,5 +2197,204 @@ describe('DELETE /managers/:id と実物の ManagerPool（absent と unreachable
 
     await pool.stop();
     await registry.stop();
+  });
+});
+
+/**
+ * `GET /runners` の `revision`（roadmap M5 相当。「自分がどのコミットで走って
+ * いるか」）——デーモンと runner が別々にデプロイされて別コミットで走る窓に
+ * 気づくための計器。
+ *
+ * **本体はここ。** `unknown`（名乗ったが runner が版を知らない）と `unheard`
+ * （名乗り自体をまだ聞けていない）が同じ値へ潰れていないことを、**1つのテストの
+ * 中で**確かめる——別々に測ると、両方が同じ値へ潰れる実装でも両方緑になる。
+ *
+ * 値は名簿（`RunnerRegistry#entries()`）が heartbeat で既に拾ったものをそのまま
+ * 出すだけである（`app.ts` の `GET /runners` は新たに runner を叩かない）ので、
+ * ここでは実際に heartbeat を1周させて `entries()` を更新させてから読む。
+ */
+describe('runner の版（GET /runners revision）', () => {
+  it('unknown（名乗ったが版を知らない）と unheard（名乗りをまだ聞けていない）は別の値として並ぶ', async () => {
+    vi.useFakeTimers();
+    try {
+      const registry = createRunnerRegistry();
+      // 繋がって名乗るが、版を知らない runner。
+      await registry.register({
+        label: 'http://runner-unknown-revision:4518',
+        open: async () =>
+          ({
+            ...fakeRunner('runner-unknown-revision'),
+            async identity() {
+              return { runnerId: 'runner-unknown-revision', revision: { status: 'unknown' } };
+            },
+          }) as never,
+      });
+      // 一度も繋がらない runner——名乗り自体を聞けていない。
+      await registry.register({
+        label: 'http://runner-never-connects:4518',
+        open: () => Promise.reject(new Error('fetch failed')),
+      });
+
+      const withRunners = createApp({
+        clone: fake.clone,
+        stores,
+        token: 'test-token',
+        shutdown: () => undefined,
+        runners: registry,
+      });
+
+      // 1回分の heartbeat を進めて、繋がった方の revision を probe させる。
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      const body = (await (await withRunners.request('/runners')).json()) as {
+        runners: { label: string; revision: { status: string } }[];
+      };
+
+      const knownButUnknown = body.runners.find(
+        (r) => r.label === 'http://runner-unknown-revision:4518',
+      );
+      const neverConnected = body.runners.find(
+        (r) => r.label === 'http://runner-never-connects:4518',
+      );
+
+      expect(knownButUnknown?.revision).toEqual({ status: 'unknown' });
+      expect(neverConnected?.revision).toEqual({ status: 'unheard' });
+      // **本体はここ。** 2状態が同じ値へ畳まれていないことを、同じテストの中で見る。
+      expect(knownButUnknown?.revision).not.toEqual(neverConnected?.revision);
+
+      await registry.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('版が返ってきた runner は known として、フル sha ごと並ぶ', async () => {
+    vi.useFakeTimers();
+    try {
+      const registry = createRunnerRegistry();
+      const rev = {
+        status: 'known' as const,
+        commit: 'a'.repeat(40),
+        short: 'a'.repeat(12),
+        source: 'build' as const,
+      };
+      await registry.register({
+        label: 'http://runner-known:4518',
+        open: async () =>
+          ({
+            ...fakeRunner('runner-known'),
+            async identity() {
+              return { runnerId: 'runner-known', revision: rev };
+            },
+          }) as never,
+      });
+
+      const withRunners = createApp({
+        clone: fake.clone,
+        stores,
+        token: 'test-token',
+        shutdown: () => undefined,
+        runners: registry,
+      });
+
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      const body = (await (await withRunners.request('/runners')).json()) as {
+        runners: { label: string; revision: unknown }[];
+      };
+
+      expect(body.runners[0]?.revision).toEqual(rev);
+
+      await registry.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * **`RunnerRevisionStatus` は `RunnerLiveness`（`state`）から導出できない。**
+   *
+   * `#markSilent`（`runner-protocol.ts`）は `state` を `'lost'` にするとき、
+   * それまでに学習した情報（`entry.client` も `entry.revision` も）を捨てない。
+   * つまり「黙る直前まで、この版で走っていた」という情報は残り、それ自体が
+   * 価値のある情報である。この歯は、将来誰かが「revision は state から
+   * 導けるのでは」と簡約しに来たときに落ちる場所として置いてある
+   * （`state === 'connected' ? known/unknown : unheard` のような導出へ書き換える
+   * と、`lost` になった瞬間に version が消えて `unheard` へ化ける）。
+   */
+  it('state が lost になっても、直前に聞けた known な版は残る（state からは導出できない）', async () => {
+    vi.useFakeTimers();
+    try {
+      const registry = createRunnerRegistry();
+      const rev = {
+        status: 'known' as const,
+        commit: 'b'.repeat(40),
+        short: 'b'.repeat(12),
+        source: 'workspace' as const,
+      };
+      let heard = false;
+      await registry.register({
+        label: 'http://runner-lost-but-known:4518',
+        open: async () =>
+          ({
+            ...fakeRunner('runner-lost-but-known'),
+            async identity() {
+              // 最初の1回だけ名乗り、以後は黙る（電源が抜けた・経路だけが切れた）。
+              if (!heard) {
+                heard = true;
+                return { runnerId: 'runner-lost-but-known', revision: rev };
+              }
+              throw new Error('fetch failed');
+            },
+          }) as never,
+      });
+
+      const withRunners = createApp({
+        clone: fake.clone,
+        stores,
+        token: 'test-token',
+        shutdown: () => undefined,
+        runners: registry,
+      });
+
+      // 1本目の heartbeat（t=10s）で known を覚える。以後3回（t=20s/30s/40s）
+      // 黙り続け、t=40s の時点で HEARTBEAT_LOST_MS（30s）を超えて lost へ遷移する。
+      await vi.advanceTimersByTimeAsync(40_000);
+
+      const body = (await (await withRunners.request('/runners')).json()) as {
+        runners: { label: string; state: string; revision: unknown }[];
+      };
+      const entry = body.runners.find((r) => r.label === 'http://runner-lost-but-known:4518');
+
+      expect(entry?.state).toBe('lost');
+      // **本体はここ。** state が lost でも revision は known のまま。
+      expect(entry?.revision).toEqual(rev);
+
+      await registry.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('登録前（名簿が空）でも daemonRevision は出る——runner の登録有無と無関係な事実だから', async () => {
+    const withoutRunners = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      // `runners` を渡さない＝名簿そのものが無い構成。
+    });
+
+    const body = (await (await withoutRunners.request('/runners')).json()) as {
+      runners: unknown[];
+      daemonRevision: { status: string };
+    };
+
+    expect(body.runners).toEqual([]);
+    // **デーモン自身の版が同じ応答に出ている**（1回の読みで runner の版と
+    // 比較できる、が受け入れの本体）。値そのものはこのプロセスの焼き込み状態に
+    // 依存するので、期待するのは「known か unknown のどちらかであり、
+    // プレースホルダではない」ことだけである。
+    expect(['known', 'unknown']).toContain(body.daemonRevision.status);
   });
 });

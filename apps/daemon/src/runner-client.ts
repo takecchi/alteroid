@@ -8,6 +8,7 @@ import type {
   RunnerResumeCommand,
   RunnerProfileFingerprint,
   RunnerProfileResult,
+  RunnerRevisionReport,
   RunnerSetCredentialsCommand,
   RunnerStartCommand,
 } from '@alteroid/core';
@@ -18,6 +19,8 @@ import { RUNNER_CALL_DEADLINE_MS, RunnerUnknownError, settleWithinDeadline } fro
 
 import {
   RunnerHttpError,
+  buildRevisionSchema,
+  reportRunnerRevision,
   runnerCredentialFingerprintSchema,
   runnerProfileFingerprintSchema,
   runnerProfileResultSchema,
@@ -210,6 +213,21 @@ interface HealthBody {
   profile?: unknown;
   managers?: unknown;
   resources?: unknown;
+  revision?: unknown;
+}
+
+/**
+ * `/health` の `revision` を `RunnerRevisionReport` へ畳む。
+ *
+ * **形が壊れていても `unknown` に倒す。** ネットワーク越しの入力（runner の版・
+ * 改造された応答）を信用しない側なので、`.safeParse` に落ちても投げない —
+ * 「訊けたが分からない」と同じ扱いにする。`revision` フィールド自体が無い
+ * 古い runner（この機能より前の版）も同じ経路を通る。
+ */
+function revisionReportOf(value: unknown): RunnerRevisionReport {
+  const parsed = buildRevisionSchema.safeParse(value);
+  if (!parsed.success) return { status: 'unknown' };
+  return reportRunnerRevision(parsed.data);
 }
 
 /** 指紋の配列だけを取り出す（値は runner も返さないし、こちらも持たない）。 */
@@ -306,10 +324,17 @@ class HttpRunner implements RunnerClient {
    *
    * **`instanceId` を返さない runner とも繋がる。** そのときは `undefined` のままで、
    * 名簿は入れ替えを判定しない（「入れ替わっていない」とは読まない）。
+   *
+   * **`revision` は常に返す（`known` か `unknown`）。** `instanceId` と違って
+   * 省略できる情報ではない ——「応答は返ってきたのに版の状態が分からない」を
+   * 作らないことで、名簿の側は「一度も名乗りを聞けていない」（`unheard`）と
+   * 混同せずに済む。
    */
   async identity(options?: {
     signal?: AbortSignal;
-  }): Promise<{ runnerId?: string; instanceId?: string } | undefined> {
+  }): Promise<
+    { runnerId?: string; instanceId?: string; revision: RunnerRevisionReport } | undefined
+  > {
     const response = await this.#call('GET', '/health', undefined, options?.signal);
     const body = (await response.json()) as HealthBody;
     return {
@@ -319,6 +344,7 @@ class HttpRunner implements RunnerClient {
       ...(typeof body.instanceId === 'string' && body.instanceId.length > 0
         ? { instanceId: body.instanceId }
         : {}),
+      revision: revisionReportOf(body.revision),
     };
   }
   /**

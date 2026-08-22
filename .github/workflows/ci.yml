@@ -133,6 +133,27 @@ jobs:
             cd /tmp && git clone --depth 1 -q https://github.com/cli/cli.git probe
           '
 
+      # **「渡したつもり」で終わらせない。** 上のビルドで `ALTEROID_BUILD_REV=
+      # github.sha` を渡したが、それが実際に焼き込まれ、`resolveBuildRevision()`
+      # が `commit === github.sha` かつ `source === 'build'` を返すことまで見る。
+      # 渡した build-arg が握りつぶされていても、ここが無ければ気づけない。
+      - name: 焼いたイメージが github.sha を実際に名乗るか
+        run: |
+          docker run --rm -u 1001 -e GITHUB_SHA="${{ github.sha }}" alteroid:ci node -e '
+            import("/app/packages/core/dist/index.js").then(({ resolveBuildRevision }) => {
+              const rev = resolveBuildRevision();
+              const expected = process.env.GITHUB_SHA;
+              if (rev.commit !== expected || rev.source !== "build") {
+                console.error(
+                  "焼き込みが github.sha を名乗っていない: " + JSON.stringify(rev) +
+                    "（期待: commit=" + expected + ", source=build）",
+                );
+                process.exit(1);
+              }
+              console.log("ok: " + JSON.stringify(rev));
+            }).catch((error) => { console.error(error); process.exit(1); });
+          '
+
       # **鍵が凍らないこと。** env で配ると、鍵は runner の起動時に固定され、走行中の
       # マネージャーには永久に届かない（「鍵を直す」と「走行中の仕事を失う」が同じ
       # 操作になる）。`gh` が毎回ファイルを読むこと自体をここで見る。手元で壊れたことに

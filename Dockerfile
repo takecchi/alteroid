@@ -32,13 +32,23 @@ RUN pnpm install --frozen-lockfile
 
 COPY . .
 
-# クローンの自己認識に載るリビジョン。**`.git` はビルド文脈に入れない**ので
-# （.dockerignore）、ここで渡さない限り「リビジョン不明」になる。不明でも壊れない
-# — クローンには不明と伝わり、最新が要るならリポジトリを見に行く判断ができる。
-# 渡せば、自分が走っているのがどのコミットかまで言えるようになる。
-#   docker build --build-arg ALTEROID_BUILD_REV=$(git rev-parse --short HEAD) .
+# デーモンと runner の自己認識に載るリビジョン。**`.git` はビルド文脈に入れない**
+# ので（.dockerignore）、`ALTEROID_BUILD_REV` を渡さない限り、焼き込みは
+# `write-canon.mjs` の git フォールバックに委ねられる（`CANON_REVISION_SOURCE`
+# が `'workspace'` になる。それも取れなければ空——不明でも壊れない）。
+#   docker build --build-arg ALTEROID_BUILD_REV=$(git rev-parse HEAD) .
+#
+# **`RAILWAY_GIT_COMMIT_SHA` はフォールバックの種として渡すだけ。** Railway が
+# Dockerfile ビルドへ Service 変数を build arg として自動で渡すかどうかは、
+# **確かめていない仮説である。** 渡らなければこの ARG は空のまま素通りするだけで
+# 害は無い——そのときは実行時の `RAILWAY_GIT_COMMIT_SHA`
+# （`packages/core/src/revision.ts` の優先順位3、`source: 'platform'`）が拾う。
+# **どちらの経路が実際に効いたかは、焼き込みが効けば `CANON_REVISION_SOURCE`
+# （`'build'` になる）として、効かなければ実行時の `source: 'platform'` として
+# 観測できる** — 仮説が外れても嘘の値には繋がらない。
+ARG RAILWAY_GIT_COMMIT_SHA=""
 ARG ALTEROID_BUILD_REV=""
-ENV ALTEROID_BUILD_REV=$ALTEROID_BUILD_REV
+ENV ALTEROID_BUILD_REV=${ALTEROID_BUILD_REV:-$RAILWAY_GIT_COMMIT_SHA}
 
 RUN pnpm build
 

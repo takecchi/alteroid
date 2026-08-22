@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { journalEntryShape, noteDroppedRecord, noteUnreadableRecord } from './dropped-record.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap, type RecentMap } from './recent.js';
+import { reportRunnerRevision, resolveBuildRevision } from './revision.js';
+import type { RunnerRevisionReport } from './revision.js';
 import { describeRunnerEntries, isRetryableRunnerError } from './runner-protocol.js';
 import type {
   RunnerClient,
@@ -11,6 +13,7 @@ import type {
   RunnerLiveness,
   RunnerProfileFingerprint,
   RunnerRegistry,
+  RunnerRevisionStatus,
 } from './runner-protocol.js';
 import { brief } from './runner.js';
 import type { InboxEvent, Job, JobStatus, JournalEntryInput, WorkspaceLocator } from './schema.js';
@@ -139,6 +142,19 @@ export interface RunnerOverview {
   credentials?: RunnerCredentialFingerprint[];
   /** 置かれている実行環境プロファイルの指紋。`fingerprints: true` を渡したときだけ載る。 */
   profile?: RunnerProfileFingerprint;
+  /**
+   * runner が名乗った版（コミット sha）。**3状態を区別する**
+   * （`RunnerRevisionStatus`）——`known`（版が取れた）/ `unknown`（名乗ったが
+   * runner が自分の版を知らない）/ `unheard`（名乗り自体をまだ聞けていない）。
+   *
+   * **`state`（`RunnerLiveness`）から導けない。** `state: 'lost'` でも直前の
+   * `known` な版がそのまま残ることがある（`RunnerRevisionStatus` の doc）。
+   *
+   * **ここで新たに runner を叩かない。** `RunnerRegistry#entries()` が
+   * heartbeat で既に拾っている値をそのまま出す——`fingerprints` のように
+   * 「未接続」と「頼んで失敗」が同じ空の形へ潰れる穴を、ここでは増やさない。
+   */
+  revision: RunnerRevisionStatus;
 }
 
 /** `runner_list` が返す全体像。 */
@@ -153,6 +169,16 @@ export interface RunnerFleetOverview {
    * 「マネージャーは全部どこかの器に居る」という誤った前提を実装が持つことになる。
    */
   unassigned: { managerId: string; status: JobStatus }[];
+  /**
+   * **デーモン自身の版。** `runners[].revision` と1回の読みで比較できるように、
+   * 同じ応答の外側へ並べて出す——別々の場所に出すと、依頼者が手で突き合わせる
+   * ことになり、突き合わせ忘れがそのまま見逃しになる。
+   *
+   * 自分のことなので取りに行く必要が無く（`resolveBuildRevision()` を直に呼ぶ）、
+   * `known` / `unknown` の2状態で足りる（`unheard` は「自分の名乗りを自分が
+   * 聞けていない」が意味を持たないので無い）。
+   */
+  daemonRevision: RunnerRevisionReport;
 }
 
 export type ManagerDecision = 'allow' | 'deny';
@@ -710,12 +736,19 @@ class Pool implements ManagerPool {
           managers: entry.runnerId === undefined ? [] : (byRunner.get(entry.runnerId) ?? []),
           ...(credentials === undefined ? {} : { credentials }),
           ...(profile === undefined ? {} : { profile }),
+          revision: entry.revision,
         };
         return overview;
       }),
     );
 
-    return { runners, unassigned };
+    // デーモン自身の版。**自分のことなので取りに行く必要が無い**——runner のように
+    // ネットワーク越しに訊く経路が無く、`resolveBuildRevision()` を直に呼べば
+    // 済む（`known` / `unknown` の2状態。取れなかったときはプレースホルダでは
+    // なく `unknown` として出る）。
+    const daemonRevision = reportRunnerRevision(resolveBuildRevision());
+
+    return { runners, unassigned, daemonRevision };
   }
 
   async transcript(managerId: string): Promise<string | null> {
