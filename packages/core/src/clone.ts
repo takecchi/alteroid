@@ -153,6 +153,64 @@ export function placedCloneModel(env: NodeJS.ProcessEnv = process.env): string |
  */
 export const CLONE_PERMISSION_MODE_ENV_KEY = 'ALTEROID_CLONE_PERMISSION_MODE';
 
+/**
+ * 人間の合図を待ち行列の先頭側へ入れるか（`ALTEROID_CLONE_HUMAN_PRIORITY`）。
+ *
+ * **既定は有効。** これは人間の決定である（2026-08-22 JST、逐語）:
+ *
+ * > **優先度を人間 > マネージャーにできますか？**
+ * > **割り込んでもいいので人間への回答を優先するようにしてほしい。**
+ *
+ * **切れる口を必ず残す**（north_star 禁止2「方針は設定で開けられなければ
+ * ならない」）。順序付けは方針であって能力ではないので、方針として設定で
+ * 表す — ここを「切れない」にすると、器が優先順位を握って動かせなくなる。
+ */
+export const CLONE_HUMAN_PRIORITY_ENV_KEY = 'ALTEROID_CLONE_HUMAN_PRIORITY';
+
+/**
+ * 環境変数を見て人間優先を使うか決める。**既定は有効**で、明示的に切ったときだけ偽。
+ *
+ * **「読めなかった」を「切られた」と読まないこと。** 未設定・空・空白はすべて
+ * 既定（有効）である — 人間が明示的に `0` / `false` / `off` / `no` と書いたときだけ
+ * 切る。ここを緩めると、変数が届かなかっただけの器で**人間の待ちが黙って戻る。**
+ */
+export function resolveCloneHumanPriority(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env[CLONE_HUMAN_PRIORITY_ENV_KEY]?.trim().toLowerCase();
+  if (raw === undefined || raw === '') return true;
+  return !['0', 'false', 'off', 'no'].includes(raw);
+}
+
+/**
+ * 待ち行列で割り込んでよい合図か ＝ 人間が返事を待っている合図か。
+ *
+ * **2種類ある。** `human_message`（発言）と `human_answer`（承認待ちへの回答）で、
+ * どちらも**人間が画面の前で止まっている**。後者を外すと、「答えたのに止まった
+ * マネージャーへ返らない」という既知の壊れ方（`commitmentFor` の `human_answer`
+ * の doc）が、待ち時間の側からもう一度出る。
+ *
+ * **タイマー・発意・外部イベント・マネージャーからの一件・蒸留は含まない。**
+ * どれも人間が待っている合図ではない。
+ *
+ * ## なぜこれで人間以外が餓死しないのか
+ *
+ * **理由は「割り込みの量が有界だから」であって、実装が何かを保証しているから
+ * ではない。** 割り込めるのは人間が実際に打った発言だけで、**人間の速さでしか
+ * 来ない。** 5件まとめて送られれば5件ぶん遅れて、そのあと必ず進む。
+ *
+ * **だから機械が人間を名乗る形を作らないこと。** ここに `external`（webhook）や
+ * `timer` を足した瞬間、割り込みの量が機械の速さで決まるようになり、**有界性の
+ * 根拠が消えて本当に餓死する。** `isHumanOriginated` が2つしか返さないのは、
+ * 数が少ないからではなく**ここが有界性の全体だから**である。
+ *
+ * **テストが測っているのは餓死しないことではない**（それは上の有界性の話で、
+ * 有限のテストでは示せない）。**測っているのは「人間を挟んでも人間以外が1件も
+ * 消えず、人間以外どうしの到着順も保たれる」＝ 順序の保存と非喪失**である。
+ * 歯の名前もそう書いてある。**名前が中身より多くを約束しないこと。**
+ */
+export function isHumanOriginated(event: InboxEvent): boolean {
+  return event.type === 'human_message' || event.type === 'human_answer';
+}
+
 /** 環境変数を見てクローンの権限モードを決める。空・空白なら既定（`auto`）。 */
 export function resolveClonePermissionMode(
   env: NodeJS.ProcessEnv = process.env,
@@ -271,6 +329,12 @@ export interface CloneOptions {
    * runner の `RunnerHostOptions.permissionMode` と同じ形である。
    */
   permissionMode?: PermissionModeName;
+  /**
+   * 人間の合図を待ち行列の先頭側へ入れるか。省略すると `env` の
+   * `ALTEROID_CLONE_HUMAN_PRIORITY`、それも無ければ**有効**
+   * （`resolveCloneHumanPriority`）。主にテスト用の直渡しである。
+   */
+  humanPriority?: boolean;
   /**
    * 実行環境プロファイル（`.zprofile` 相当）。
    *
@@ -410,6 +474,8 @@ class Clone implements CloneHost {
    * 片方だけを持つと、頼んだ値が通っていないことに気づけない。
    */
   readonly #permissionMode: PermissionModeName;
+  /** 人間の合図を割り込ませるか（`CLONE_HUMAN_PRIORITY_ENV_KEY`）。 */
+  readonly #humanPriority: boolean;
   /** 道具の MCP サーバを組み立てる関数。既定は本物、テストでは差し替えられる。 */
   readonly #mcpServerFactory: typeof createCloneMcpServer;
 
@@ -710,6 +776,7 @@ class Clone implements CloneHost {
       managers,
       env,
       permissionMode,
+      humanPriority,
       profile,
       profileService,
       accountUsage,
@@ -724,6 +791,7 @@ class Clone implements CloneHost {
     this.#model = resolveCloneModel(envSource);
     this.#modelOverridden = placedCloneModel(envSource) !== null;
     this.#permissionMode = permissionMode ?? resolveClonePermissionMode(envSource);
+    this.#humanPriority = humanPriority ?? resolveCloneHumanPriority(envSource);
     this.#env = envSource;
     this.#profile = profile;
     this.#profileService = profileService;
@@ -825,7 +893,21 @@ class Clone implements CloneHost {
     // `finally`）、ターンの中で開く形にすると、いちばん落としてはいけない
     // 「処理に失敗した依頼」だけが台帳に載らない。
     this.#commit(event);
-    this.#inbox.push(event);
+    // **人間が待っている合図は、待ち行列の人間の最後尾へ入れる**（`Inbox#push` の
+    // `insertAfterLast`）。人間どうしは追い越さず、人間以外は飛び越す。
+    //
+    // **効く範囲を取り違えないこと。** `Inbox#push` は待ち手が居ればそのまま渡す
+    // ので、**クローンが暇なときこの分岐は何もしない**（待ち行列が空なので割り込む
+    // 相手が居ない）。効くのは「ターンが走っていて後ろに積まれている」ときだけで、
+    // それがまさに人間が待たされる場面である。
+    //
+    // **走行中のターンは止めない。** 止めれば掛かった分が捨てられる。できるのは
+    // 「次に読むものを人間にする」までで、人間の待ちは「いま回っているターンの
+    // 残り」に縮む（それ以上は縮まない）。
+    this.#inbox.push(
+      event,
+      this.#humanPriority && isHumanOriginated(event) ? isHumanOriginated : undefined,
+    );
   }
 
   subscribe(conversationId: string, listener: Listener): () => void {
@@ -1032,6 +1114,13 @@ class Clone implements CloneHost {
 
       // 処理待ちのあいだに積み上がった**続きの発言**を、ここで一緒に取り出す
       // （`#mergedHumanBatch`）。`null` なら今までどおりこの1件だけを読む。
+      //
+      // **ここで言う「積み上がった続きの発言」は、かつては到着順で連続して
+      // いたものだけを指していた。** いまは人間優先（`CLONE_HUMAN_PRIORITY_ENV_KEY`）
+      // により、人間が待っている発言は待ち行列の人間の最後尾へ入り直すので、
+      // 到着順では間に人間以外が挟まっていた発言どうしが、並べ替えられた結果
+      // として連続することもある（`#mergedHumanBatch` 本体の doc「並びは到着順
+      // とは限らない」）。書かないと、この一文が黙って偽になる。
       const merged = this.#mergedHumanBatch(event);
       const batch: InboxEvent[] = merged ?? [event];
 
@@ -1104,8 +1193,14 @@ class Clone implements CloneHost {
     if (!this.#mergeable(event)) return null;
 
     // **先頭から連続している分だけ**である（`Inbox#drainWhile`）。間に別の起点が
-    // 挟まっていたらそこで止まる — 飛び越えて集めると、後から届いた発言を先に
-    // 読むことになり、受信箱が順序を並べ替えないという設計が崩れる。
+    // 挟まっていたらそこで止まる — 飛び越えて集めると、**並んでいる順に読む**という
+    // 約束が崩れる。
+    //
+    // **並びは到着順とは限らない。** 人間が待っている合図は `post` の時点で人間の
+    // 最後尾へ入る（`CLONE_HUMAN_PRIORITY_ENV_KEY`）ので、人間以外より前に並ぶ。
+    // **ここはむしろ素直に効く** — 人間の発言が先頭側へ固まるぶん、連続して
+    // 取れる範囲が広がる（人間どうしの到着順は保たれているので、まとめた本文の
+    // 並びも到着順のままである）。
     const rest = this.#inbox.drainWhile(
       (queued) =>
         queued.type === 'human_message' &&
@@ -1381,10 +1476,16 @@ class Clone implements CloneHost {
    * 2つを1つの節で渡す。**この合図に対応する未了の id**（閉じ方が分からなければ
    * 閉じられない）と、**いま何件が未了で、いちばん古いものがいつのものか**である。
    *
-   * **件数と齢を毎ターン見せるのは、優先度を決め直させるためである。** 受信箱は
-   * 純粋な先入れ先出しで、器は並べ替えない（並べ替えた瞬間に「何を先にやるか」の
-   * 判断が器へ移る）。代わりに溜まっているものを毎回見せて、順序はクローンが記憶に
-   * 照らして決め直す。**一覧そのものは載せない** — 件数に比例して伸びるものを毎ターン
+   * **件数と齢を毎ターン見せるのは、優先度を決め直させるためである。** 器は起点の
+   * 中身を読んで順番を付けない（**付けた瞬間に「何を先にやるか」の判断が器へ移る**）。
+   * 代わりに溜まっているものを毎回見せて、順序はクローンが記憶に照らして決め直す。
+   *
+   * **⚠️ 例外が1つある。人間が待っている合図だけは器が前へ出す**
+   * （`CLONE_HUMAN_PRIORITY_ENV_KEY` に人間の逐語がある）。**それでもこの節は
+   * 要る** — 前へ出るのは「人間 対 それ以外」の1段だけで、**溜まっている中身の
+   * どれを先にやるかは、依然としてクローンが決める。** 器が持っているのは
+   * 「人間を待たせない」という1行の方針であって、優先順位そのものではない。
+   * **ここが古くなると、クローンは「器は並べ替えない」と読み続ける。****一覧そのものは載せない** — 件数に比例して伸びるものを毎ターン
    * 積むと、溜まっているときほどターンが重くなる。全文は `commitment_list` で取れる。
    *
    * **読めなくても空文字を返してターンを進める。** 台帳が読めないことでターンまで

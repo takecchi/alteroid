@@ -13,6 +13,8 @@ import {
   humanTurnText,
   placedClonePermissionMode,
   resolveCloneModel,
+  isHumanOriginated,
+  resolveCloneHumanPriority,
   resolveClonePermissionMode,
 } from './clone.js';
 import type { HumanMessage } from './clone.js';
@@ -21,7 +23,7 @@ import { renderMemoryDocuments } from './memory.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createScheduler } from './schedule.js';
-import type { ChatStreamEvent, InboxEvent } from './schema.js';
+import type { ChatStreamEvent, InboxEvent, InboxEventType } from './schema.js';
 import type { Stores } from './store.js';
 import { CLONE_ACTOR_ID, isCloneActor } from './usage.js';
 import { createCloneMcpServer, createCloneTools } from './tools.js';
@@ -4529,9 +4531,48 @@ describe('クローン — 枠（利用上限）が閉じたら保持して次�
  * 偶然一致して歯が落ちない（実測でこの変異は歯3を生き残らせた）。歯3では
  * 代わりに `releaseAttemptCount`（日誌の「枠の解除を試す」行数）だけを見て
  * 同期する — 詳しい理由は歯3のテスト本体のコメントを見よ。
+ *
+ * **⚠️ この3本は `humanPriority: false`（人間優先を切った状態）に固定してある。**
+ * `postTickThenPacer`（pacer 同期）も歯3の `releaseAttemptCount` 直接待ちも、
+ * 「tick を post した直後に別の合図を post すれば、待ち行列上でも tick が先・
+ * 後続が後という順序のまま処理される」という FIFO の歩調取りを前提にしている。
+ * 人間優先（既定で有効。`CLONE_HUMAN_PRIORITY_ENV_KEY`）が入ると、pacer 自身が
+ * 人間の発言なので待ち行列の人間の最後尾へ割り込みうる — 前提が崩れる（実測:
+ * `humanPriority` を既定のまま歯1を走らせると `selfInitiatives` が1件のはずが
+ * 2件になって落ちる）。**これらが測っているのは「FIFO の下での畳み込み」であって、
+ * 「人間優先が有効なままでの畳み込み」ではない。人間優先が有効なままでの畳み込みは
+ * 別の歯（`人間優先が有効なままでも、保持中の tick は畳まれて在庫が増えない`）が
+ * 測る。**
  */
 describe('クローン — 枠で保持している間、中身を持たない合図で在庫を作らない', () => {
   const spendLimitMessage = "You've hit your individual spend limit for this account.";
+
+  /**
+   * `humanPriority: false` に固定したセットアップ。**このブロックの3本
+   * （歯1・2・3）専用。** 上のブロック doc の「⚠️」の理由により、FIFO の
+   * 歩調取り（`postTickThenPacer` / `releaseAttemptCount` 直接待ち）はこの前提
+   * が崩れると測れなくなる。`setup()`（ファイル冒頭）は `env` を渡す口しか
+   * 持たないので、ここでは `setupWithHumanPriority`（ファイル末尾）と同じ形で
+   * `createClone` を直接呼び、`CloneOptions.humanPriority` を直渡しする。
+   */
+  function setupFixedFifo(
+    reply?: (input: string) => string,
+    stores: Stores = createMemoryStores(),
+    sdkOptions: Parameters<typeof fakeSdk>[1] = {},
+  ): Setup {
+    const { fn, calls } = fakeSdk(reply, sdkOptions);
+    const clone = createClone({
+      stores,
+      queryFn: fn,
+      env: {},
+      humanPriority: false,
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    const { events, waitForEvents } = wireEvents(clone, 'conv-1');
+    return { clone, stores, calls, events, waitForEvents };
+  }
 
   /** 「畳んだ」旨の日誌の行数。 */
   async function foldedNoteCount(s: Setup): Promise<number> {
@@ -4540,7 +4581,9 @@ describe('クローン — 枠で保持している間、中身を持たない�
   }
 
   /**
-   * 解除の試行が `expected` 回に達するまで待つ。**歯3 専用。**
+   * 解除の試行が `expected` 回に達するまで待つ。**当初は歯3専用だったが、
+   * 「人間優先が有効なままでも、保持中の tick は畳まれて在庫が増えない」
+   * （後述）も同じ待ちを使う。**
    *
    * ## この待ちが言えないこと（計器の側に貼る）
    *
@@ -4570,6 +4613,33 @@ describe('クローン — 枠で保持している間、中身を持たない�
           `${what}: 解除の試行が ${expected} 回になるのを ${RELEASE_WAIT_BUDGET_MS}ms 待ったが ${seen} 回のままだった。` +
             'この歯は「起きなかった（退行）」と「器が遅すぎた（飽和）」を区別できない。' +
             '他の歯（歯1・歯2）が緑でここだけ落ちているなら退行を、全体が遅いなら器の飽和を先に疑うこと。',
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+
+  /**
+   * 解除の試行が `baseline` より増えるまで待つ。**目標を固定値にできない歯用**
+   * （「人間優先が有効なままでも、保持中の tick は畳まれて在庫が増えない」）。
+   * 人間の発言も枠の解除を誘発しうる（`post()` の `#releaseRequested` は起点の
+   * 種類を問わない）ので、そのぶんの回数を歯の側で先読みできない。**予算・
+   * 断り書きの理由は `waitForReleaseAttempts` と同じなのでそちらを見よ。**
+   */
+  async function waitForReleaseAttemptsAbove(
+    s: Setup,
+    baseline: number,
+    what: string,
+  ): Promise<void> {
+    const started = Date.now();
+    for (;;) {
+      const seen = await releaseAttemptCount(s);
+      if (seen > baseline) return;
+      if (Date.now() - started > RELEASE_WAIT_BUDGET_MS) {
+        throw new Error(
+          `${what}: 解除の試行が ${baseline} 回より増えるのを ${RELEASE_WAIT_BUDGET_MS}ms 待ったが ${seen} 回のままだった。` +
+            'この歯は「起きなかった（退行）」と「器が遅すぎた（飽和）」を区別できない。' +
+            '他の歯が緑でここだけ落ちているなら退行を、全体が遅いなら器の飽和を先に疑うこと。',
         );
       }
       await new Promise((resolve) => setTimeout(resolve, 5));
@@ -4662,7 +4732,7 @@ describe('クローン — 枠で保持している間、中身を持たない�
   // ションは1つも削らない — 「なぜ全部の変異で落ちるのか」を次に読む者が
   // 疑わずに済むように、ここへ明記しておく。
   it('歯1: 発意 tick を続けて送っても、保持する在庫は1件のまま増えない', async () => {
-    const s = setup(undefined, createMemoryStores(), {
+    const s = setupFixedFifo(undefined, createMemoryStores(), {
       resultSubtype: 'error_during_execution',
       resultText: spendLimitMessage,
     });
@@ -4733,7 +4803,7 @@ describe('クローン — 枠で保持している間、中身を持たない�
     // ための可変フラグ。再試行が何回起きるかを数えずに済ませるための口
     // （`resultFor` は毎ターン呼ばれるので、フラグを見るだけで済む）。
     let releaseGateOpen = false;
-    const s = setup(undefined, createMemoryStores(), {
+    const s = setupFixedFifo(undefined, createMemoryStores(), {
       resultFor: () =>
         releaseGateOpen
           ? undefined
@@ -4887,7 +4957,7 @@ describe('クローン — 枠で保持している間、中身を持たない�
    */
   it('歯3: 発意 tick を畳んでも、枠が開いたかを試した回数は3回のまま減らない', async () => {
     const { stores, putCallCountFor } = withInboxPutSpy(createMemoryStores());
-    const s = setup(undefined, stores, {
+    const s = setupFixedFifo(undefined, stores, {
       resultSubtype: 'error_during_execution',
       resultText: spendLimitMessage,
     });
@@ -4985,6 +5055,140 @@ describe('クローン — 枠で保持している間、中身を持たない�
     // すること — vitest の既定は 5 秒なので、付けないとこちらが先に当たり、
     // あの断り書き（「退行か飽和かを区別できない」）が読まれないまま
     // 汎用のタイムアウトに化ける。
+  }, 30_000);
+
+  /**
+   * ## この歯が守っているもの
+   *
+   * 上の3本（歯1・2・3）は `humanPriority: false` に固定してある（このブロック
+   * doc の「⚠️」）。**それだけだと、実際に出荷される設定（`humanPriority: true`
+   * が既定）について畳み込みを測る歯が1本も無くなる** — そこが壊れても緑の
+   * ままになる。ここではその穴を埋める。
+   *
+   * 足場に `postTickThenPacer` は使えない。人間優先の下では pacer（人間の
+   * 発言）が待ち行列上で tick を追い越しうるので、「pacer の終端＝直前の tick
+   * の後始末が完了している」という FIFO 前提が成り立たない。代わりに歯3と
+   * 同じ形 — `releaseAttemptCount`（日誌の「枠の解除を試す」行数）を直接
+   * 待つ — を使う。
+   *
+   * **単に `humanPriority: true` を渡すだけの歯にしないため、1件目の tick を
+   * 保持させた後、実際に「もう1件人間の発言を挟む」場面を通す。** この post は
+   * `Clone#post` の `this.#humanPriority && isHumanOriginated(event) ? …` の
+   * 分岐を毎回、真の側（`isHumanOriginated` を `Inbox#push` へ渡す側）で通る
+   * — `humanPriority: false` にすればここは必ず `undefined` になる。**その
+   * 人間の発言そのものが「新しい合図」として枠の解除をもう1回誘発しうる**
+   * （`post()` の `#releaseRequested` は起点の種類を問わない）ので、2件目の
+   * tick を送った後の `releaseAttemptCount` を固定値ではなく「人間の発言を
+   * 挟んだ時点の値より増えていること」で待つ（固定値にすると、人間の発言が
+   * 誘発する解除の回数が変わっただけで歯が壊れたことになり、測りたいもの —
+   * 畳み込みそのもの — とは無関係な理由で落ちる）。
+   *
+   * **⚠️ この歯が示さないこと。** ここで人間の発言を挟む時点では `#pump` は
+   * 必ず待ち手（`Inbox` の `#waiters`）が居る状態まで進んでいる（`releaseAttemptCount`
+   * を直接待つ設計そのものが、待ち行列が捌け切るまで待つ形だからである）。
+   * `Inbox#push` は待ち手が居ればそのまま渡す（＝クローンが暇なとき、割り込む
+   * 相手が待ち行列に居ない）ので、**この歯だけでは `insertAfterLast` による
+   * 待ち行列上の並べ替えそのもの（人間以外を実際に飛び越す分岐）は踏まない。**
+   * 実測: この `it` は `humanPriority: true` を `false` に変えても、他の
+   * assert を1つも変えずに緑のまま通る（畳み込みの成否は「`#deferred` に
+   * 同種の tick が既に居るか」だけで決まり、その周りに何が・どの順で
+   * 積まれたかには依らないため）。**並べ替えそのもの（人間が人間以外を
+   * 飛び越す・人間以外どうしは飛び越さない）は上の
+   * `describe('クローン — 人間が待っている合図を待ち行列の先頭側へ入れる', ...)`
+   * が別に測っている。**
+   *
+   * ## ⚠️ この歯は「干渉しないこと」を測っていない
+   *
+   * **`humanPriority` を `false` に反転しても、この歯は緑のまま通る**（実測、
+   * 2026-08-22）。だから**フラグの効果を測ってはいない。**
+   *
+   * **そしてそれは歯の作りが悪いのではなく、干渉が構造的に起きないからである。**
+   * 畳み込みが成立するかは `#deferred` に同種の tick が既に居るかだけで決まり、
+   * 順序が効くのは **tick どうしの前後**だけである。**tick はすべて人間以外なので、
+   * 人間優先は tick どうしの順序を1ミリも動かさない**（動かすのは「人間 対 それ
+   * 以外」の1段だけ）。**だから落ちる歯は書けない。書けば嘘の歯になる。**
+   *
+   * **その構造そのものを守っているのは、下の有界性の歯である**
+   * （`割り込める起点が人間の速さで来るものだけであること`）。tick を人間起点に
+   * した瞬間に前提が崩れるので、あちらがコンパイルで止める。
+   *
+   * **ここが測っているのは1つだけ** — **出荷される設定（`humanPriority: true`）
+   * の下で、畳み込みが壊れたら落ちること。** それは被覆として要る（#168 の歯3本は
+   * `humanPriority: false` に固定してあるので、既定の設定を通る歯がここしかない）。
+   *
+   * 見るのは歯1と同じ2点 — (1) 未読の `self_initiative` が1件だけ（畳んでも
+   * 在庫が増えない）、(2) 畳んだ跡の日誌が1件（畳み込みが実際に起きた証拠）。
+   */
+  it('人間優先が有効なままでも、保持中の tick は畳まれて在庫が増えない', async () => {
+    const s = setup(
+      undefined,
+      createMemoryStores(),
+      { resultSubtype: 'error_during_execution', resultText: spendLimitMessage },
+      // 人間優先は既定で有効（`resolveCloneHumanPriority({}) === true`）。
+      // ここでは明示的に渡し、この歯が `humanPriority: true` の下で測っている
+      // ことを自明にする。
+      { ALTEROID_CLONE_HUMAN_PRIORITY: 'true' },
+    );
+
+    const origin = humanMessage('起点');
+    s.clone.post(origin);
+    await waitForTerminal(s.events);
+    await waitFor(async () => {
+      const pending = await s.stores.inbox.claimPending();
+      return pending.some((p) => p.event.id === origin.id);
+    }, '起点が未読として保持される');
+
+    // 1件目の tick。まだ `#deferred` に self_initiative は無いので畳めない。
+    // 届いたこと自体が枠の解除を1回誘発する（歯3と同じ理由）。
+    s.clone.post({
+      type: 'self_initiative',
+      id: 'evt-si-1',
+      at: new Date().toISOString(),
+      reason: '1本目',
+    });
+    await waitForReleaseAttempts(s, 1, '1件目の tick');
+    const attemptsAfterTick1 = await releaseAttemptCount(s);
+
+    // 枠で保持している最中に、もう1件人間が発言する（`humanPriority: true` の
+    // 分岐を実際に通す一手。上の doc の「⚠️」に、ここが示すこと・示さない
+    // ことの線引きがある）。人間優先下でも枠のロジック（保持・未読）は
+    // 変わらないことをここで確かめる。
+    const second = humanMessage('もう一件');
+    s.clone.post(second);
+    await waitFor(async () => {
+      const pending = await s.stores.inbox.claimPending();
+      return pending.some((p) => p.event.id === second.id);
+    }, '2件目の人間の発言が未読として保持される');
+
+    // 2件目の tick。既に `#deferred` に1件目（self_initiative）が保持されて
+    // いるので畳まれる（はず）。解除の試行そのものは1回も減らない —
+    // **ただし目標値は固定しない。** 直前の人間の発言（`second`）自体も
+    // 枠の解除をもう1回誘発しうる（上の doc）ので、「2件目の tick を送る前の
+    // 値より増えている」ことだけを待つ。
+    s.clone.post({
+      type: 'self_initiative',
+      id: 'evt-si-2',
+      at: new Date().toISOString(),
+      reason: '2本目',
+    });
+    await waitForReleaseAttemptsAbove(
+      s,
+      attemptsAfterTick1,
+      '2件目の tick が枠の解除をもう一度誘発する（人間優先が有効でも回数は減らない）',
+    );
+
+    const pending = await s.stores.inbox.claimPending();
+    const selfInitiatives = pending.filter((p) => p.event.type === 'self_initiative');
+    // 未読の self_initiative は1件だけ（人間優先が有効でも在庫は増えない）。
+    expect(selfInitiatives).toHaveLength(1);
+    expect(selfInitiatives[0]?.event.id).toBe('evt-si-1');
+    // 畳んだ跡が日誌に1件だけ残る（2本目のぶん）。
+    expect(await foldedNoteCount(s)).toBe(1);
+    // 人間の発言（起点・2件目）は畳み込みの対象外なので、両方とも未読のまま。
+    expect(pending.some((p) => p.event.id === origin.id)).toBe(true);
+    expect(pending.some((p) => p.event.id === second.id)).toBe(true);
+
+    await s.clone.stop();
   }, 30_000);
 });
 
@@ -5573,7 +5777,17 @@ describe('クローン — 処理待ちのあいだに積み上がった発言',
     await s.clone.stop();
   }, 15_000);
 
-  it('間に別の起点が挟まったら飛び越えない（受信箱の順序を並べ替えない）', async () => {
+  // **この歯はかつて「間に別の起点が挟まったら飛び越えない（受信箱の順序を
+  // 並べ替えない）」という名前で、飛び越えないことを保証していた。** 人間から
+  // 「優先度を人間 > マネージャーにできますか？ 割り込んでもいいので人間への
+  // 回答を優先するようにしてほしい」（2026-08-22 JST、逐語）という要望を受け、
+  // `CLONE_HUMAN_PRIORITY_ENV_KEY`（既定で有効）により**人間の発言だけ**が
+  // 待ち行列上で人間以外を飛び越すようになった。飛び越すのは人間どうしの中で
+  // 最後尾へ、であって人間以外は互いに追い越さない — この歯はいま真になった
+  // その形（人間以外どうしの非喪失・順序保存）を測る。人間が飛び越す場面は
+  // 上の `describe('クローン — 人間が待っている合図を待ち行列の先頭側へ入れる', ...)`
+  // が別に測っている。
+  it('人間以外どうしは、間に別の起点が挟まっても飛び越えない', async () => {
     const s = setup(() => 'わかった', createMemoryStores(), { delayMs: 150 });
 
     s.clone.post(humanMessage('先客'));
@@ -5592,12 +5806,23 @@ describe('クローン — 処理待ちのあいだに積み上がった発言',
     await settle();
 
     const inputs = s.calls[0]?.inputs ?? [];
-    expect(inputs).toHaveLength(4);
+    // **実測で決めた期待値（2026-08-22 観測）。** 「挟まった後」は待ち行列上、
+    // 到着順ではなく人間の最後尾（＝「挟まる前」の直後）へ入り直すので、external
+    // を飛び越えて「挟まる前」に連続する。連続した人間の発言2件は
+    // `#mergedHumanBatch` により1ターンにまとめられる（まとめられること自体は
+    // 依頼者が受け入れ済み）。だから本数は「先客」＋「人間2件の合流ターン」＋
+    // 「external」の3本になる（4本ではない）。
+    expect(inputs).toHaveLength(3);
+    // 人間2件が1ターンにまとまる。
     expect(inputs[1]).toContain('挟まる前');
-    expect(inputs[1]).not.toContain('挟まった後');
+    expect(inputs[1]).toContain('挟まった後');
+    // まとめても本文中の順序は到着順のまま（言い直しを先に読ませない）。
+    const merged = inputs[1] ?? '';
+    expect(merged.indexOf('挟まる前')).toBeLessThan(merged.indexOf('挟まった後'));
     // 外部イベントが人間の発言に追い越されない
+    // だった。いまは人間が飛び越す（人間の決定。逐語は `CLONE_HUMAN_PRIORITY_ENV_KEY`）。
+    // その結果、external は人間2件がまとまった後（3本目）に置かれる。
     expect(inputs[2]).toContain('先に届いた外部イベント');
-    expect(inputs[3]).toContain('挟まった後');
 
     await s.clone.stop();
   }, 15_000);
@@ -5693,5 +5918,379 @@ describe('humanTurnText（ターン本文の組み立て）', () => {
 
   it('1件も無ければ空文字（呼び出し側が先頭を仮定しない）', () => {
     expect(humanTurnText([])).toBe('');
+  });
+});
+
+describe('クローン — 人間が待っている合図を待ち行列の先頭側へ入れる', () => {
+  /**
+   * `setup()`（`Setup`）は `CloneOptions.humanPriority` を渡す口を持たないので、
+   * ここでは `createClone` を直接呼ぶ（`setupCapturing` などファイル内の既存の
+   * 特設セットアップと同じ形）。`humanPriority` は環境変数を経由せず直渡しする
+   * （`permissionMode` の直渡し実測は無いが、コンストラクタは
+   * `humanPriority ?? resolveCloneHumanPriority(envSource)` で `false` を
+   * nullish coalescing が通すので、直渡しした `false` がそのまま効く）。
+   */
+  function setupWithHumanPriority(
+    humanPriority: boolean,
+    reply: (input: string) => string = () => 'わかった',
+    sdkOptions: Parameters<typeof fakeSdk>[1] = {},
+  ): Setup {
+    const stores = createMemoryStores();
+    const { fn, calls } = fakeSdk(reply, sdkOptions);
+    const clone = createClone({
+      stores,
+      queryFn: fn,
+      env: {},
+      humanPriority,
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    const { events, waitForEvents } = wireEvents(clone, 'conv-1');
+    return { clone, stores, calls, events, waitForEvents };
+  }
+
+  /** 先客のターンが実際に走り始めるまで待つ（積んだ時点で「処理待ち」だと言えるようにする）。 */
+  const waitForFirstTurn = (s: Setup): Promise<void> =>
+    waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+  /**
+   * 渡した目印が全部、実際にモデルへ渡った入力のどこかに現れるまで待つ。
+   *
+   * **順序では待たない。** 「N番目に来た」を条件にすると、割り込みが起きない
+   * 壊れ方（＝人間が最後に読まれる）でもタイムアウトせずに済んでしまい、歯が
+   * 「揃って届いたこと」しか測らなくなる（測りたいのは順序そのもの）。ここでは
+   * 「全部届いたか」だけを見て、届いた順序はテスト本体が `findIndex` で確かめる。
+   */
+  const waitForAllDelivered = (s: Setup, markers: readonly string[]): Promise<void> =>
+    waitFor(
+      () => markers.every((marker) => (s.calls[0]?.inputs ?? []).join('\n').includes(marker)),
+      `${markers.join(' / ')} が全部届く`,
+    );
+
+  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 400));
+
+  const managerMessage = (id: string, managerId: string, text: string): InboxEvent => ({
+    type: 'manager_message',
+    id,
+    at: new Date().toISOString(),
+    managerId,
+    kind: 'report',
+    text,
+  });
+
+  const timerEvent = (id: string, kind: string): InboxEvent => ({
+    type: 'timer',
+    id,
+    at: new Date().toISOString(),
+    kind,
+  });
+
+  // --- 目印（マーカー）の作り方 -------------------------------------------
+  //
+  // **単純な部分文字列一致だと誤検出する。** タイマー・発意 tick のターンは
+  // `#recentDigest` を積むので、**まだ実際には読まれていない、他の待ち行列上の
+  // 合図の本文（`text`）まで、そのターンの中に「引き受けたまま終わっていない
+  // 仕事」の一覧としてそのまま引用される**（`commitment_list` と同じ台帳を見る
+  // ため）。実測: `manager_message` C を投げる前に `timer` B のターンが走ると、
+  // B のターンの digest 節に C の `text` がそのまま載り、`text.includes(...)`
+  // で C の目印を探すと**C 自身のターンより前に**当たってしまい、順序の検証が
+  // 壊れる（本当は正しい実装なのに歯が誤って落ちる／誤って通る）。
+  //
+  // 対策は、**そのイベント自身が処理されているときにしか現れない複合文字列**を
+  // 目印にすること。
+  // - `manager_message`: 本物のターンは `managerPrompt` の
+  //   `マネージャー ${managerId} から届いた。（報告）\n\n${text}` という並びで
+  //   しか現れない。digest の引用は `- evt-x（... / manager / ...）\n  [report]
+  //   ${text}` という別の並びなので、「から届いた」を含めれば衝突しない。
+  // - `timer`: `定期ジョブ ${kind} の時刻になった` は、そのタイマー自身が
+  //   処理されたときにしか現れない（**タイマーは台帳に開かないので、他の
+  //   ターンの digest にタイマーが載ることはそもそも無い** — `commitFor` の
+  //   doc）。
+  // - `human_message`（単発）: 本物のターンの本文は `humanTurnText([event])`
+  //   ＝ `text` そのもので、直前には `#commitmentNotice` の区切り `\n\n---\n`
+  //   が必ず付く（合図を1件でも受理していれば起こる）。digest の引用は
+  //   `\n  ${text}`（2スペース区切り）であって `---\n` ではないので、
+  //   `---\n${text}` を目印にすれば衝突しない。
+  const managerMarker = (managerId: string, text: string): string =>
+    `マネージャー ${managerId} から届いた。（報告）\n\n${text}`;
+  const timerMarker = (kind: string): string => `定期ジョブ ${kind} の時刻になった`;
+  const humanMarker = (text: string): string => `---\n${text}`;
+
+  it('人間の発言は、先に積まれていた人間以外を追い越して先に読まれる', async () => {
+    const s = setupWithHumanPriority(true, () => 'わかった', { delayMs: 150 });
+
+    // クローンがターンを回している最中（先客）に、待ち行列へ積む。
+    s.clone.post(humanMessage('先客'));
+    await waitForFirstTurn(s);
+
+    s.clone.post(managerMessage('evt-mgr-a', 'mgr-a', 'マネージャーAの報告'));
+    s.clone.post(managerMessage('evt-mgr-b', 'mgr-b', 'マネージャーBの報告'));
+    s.clone.post(timerEvent('evt-timer-c', 'timer-c-kind'));
+    s.clone.post(humanMessage('人間の発言だ'));
+
+    const markerHuman = humanMarker('人間の発言だ');
+    const markerMgrA = managerMarker('mgr-a', 'マネージャーAの報告');
+    const markerMgrB = managerMarker('mgr-b', 'マネージャーBの報告');
+    const markerTimer = timerMarker('timer-c-kind');
+
+    await waitForAllDelivered(s, [markerHuman, markerMgrA, markerMgrB, markerTimer]);
+    await settle();
+
+    const inputs = s.calls[0]?.inputs ?? [];
+    const idxHuman = inputs.findIndex((text) => text.includes(markerHuman));
+    const idxMgrA = inputs.findIndex((text) => text.includes(markerMgrA));
+    const idxMgrB = inputs.findIndex((text) => text.includes(markerMgrB));
+    const idxTimer = inputs.findIndex((text) => text.includes(markerTimer));
+
+    // 全部実際に届いている（見つからない＝-1 を「先」と誤読しない）
+    expect(idxHuman).toBeGreaterThan(-1);
+    expect(idxMgrA).toBeGreaterThan(-1);
+    expect(idxMgrB).toBeGreaterThan(-1);
+    expect(idxTimer).toBeGreaterThan(-1);
+
+    // 待ち行列に積まれていた3件の人間以外より、人間の発言が先に読まれる
+    expect(idxHuman).toBeLessThan(idxMgrA);
+    expect(idxHuman).toBeLessThan(idxMgrB);
+    expect(idxHuman).toBeLessThan(idxTimer);
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('人間を挟んでも、人間以外は1件も消えず、人間以外どうしの到着順も保たれる', async () => {
+    const s = setupWithHumanPriority(true, () => 'わかった', { delayMs: 150 });
+
+    s.clone.post(humanMessage('先客'));
+    await waitForFirstTurn(s);
+
+    // 人間以外A → 人間以外B → （人間を挟む）→ 人間以外C
+    s.clone.post(managerMessage('evt-a', 'mgr-a', '非人間A'));
+    s.clone.post(timerEvent('evt-b', '非人間B'));
+    s.clone.post(humanMessage('割り込む人間'));
+    s.clone.post(managerMessage('evt-c', 'mgr-c', '非人間C'));
+
+    const markerA = managerMarker('mgr-a', '非人間A');
+    const markerB = timerMarker('非人間B');
+    const markerC = managerMarker('mgr-c', '非人間C');
+    const markerHuman = humanMarker('割り込む人間');
+
+    await waitForAllDelivered(s, [markerA, markerB, markerC, markerHuman]);
+    await settle();
+
+    const inputs = s.calls[0]?.inputs ?? [];
+    const idxA = inputs.findIndex((text) => text.includes(markerA));
+    const idxB = inputs.findIndex((text) => text.includes(markerB));
+    const idxC = inputs.findIndex((text) => text.includes(markerC));
+    const idxHuman = inputs.findIndex((text) => text.includes(markerHuman));
+
+    // (a) 人間以外は3件とも処理される（1件も消えない）
+    expect(idxA).toBeGreaterThan(-1);
+    expect(idxB).toBeGreaterThan(-1);
+    expect(idxC).toBeGreaterThan(-1);
+
+    // (b) 人間以外どうしの到着順（A → B → C）は保たれる
+    expect(idxA).toBeLessThan(idxB);
+    expect(idxB).toBeLessThan(idxC);
+
+    // (c) 人間の発言はそれらより先に読まれる
+    expect(idxHuman).toBeGreaterThan(-1);
+    expect(idxHuman).toBeLessThan(idxA);
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('切ると純粋な先入れ先出しに戻る', async () => {
+    const s = setupWithHumanPriority(false, () => 'わかった', { delayMs: 150 });
+
+    s.clone.post(humanMessage('先客'));
+    await waitForFirstTurn(s);
+
+    // 歯1と同じ並びで post する（人間以外2件 + timer 1件 → 人間の発言）
+    s.clone.post(managerMessage('evt-mgr-a', 'mgr-a', 'マネージャーAの報告'));
+    s.clone.post(managerMessage('evt-mgr-b', 'mgr-b', 'マネージャーBの報告'));
+    s.clone.post(timerEvent('evt-timer-c', 'timer-c-kind'));
+    s.clone.post(humanMessage('人間の発言だ'));
+
+    const markerHuman = humanMarker('人間の発言だ');
+    const markerMgrA = managerMarker('mgr-a', 'マネージャーAの報告');
+    const markerMgrB = managerMarker('mgr-b', 'マネージャーBの報告');
+    const markerTimer = timerMarker('timer-c-kind');
+
+    await waitForAllDelivered(s, [markerHuman, markerMgrA, markerMgrB, markerTimer]);
+    await settle();
+
+    const inputs = s.calls[0]?.inputs ?? [];
+    const idxHuman = inputs.findIndex((text) => text.includes(markerHuman));
+    const idxMgrA = inputs.findIndex((text) => text.includes(markerMgrA));
+    const idxMgrB = inputs.findIndex((text) => text.includes(markerMgrB));
+    const idxTimer = inputs.findIndex((text) => text.includes(markerTimer));
+
+    expect(idxHuman).toBeGreaterThan(-1);
+    expect(idxMgrA).toBeGreaterThan(-1);
+    expect(idxMgrB).toBeGreaterThan(-1);
+    expect(idxTimer).toBeGreaterThan(-1);
+
+    // 切ってあるので到着順のまま。人間の発言は最後に読まれる（追い越さない）
+    expect(idxMgrA).toBeLessThan(idxMgrB);
+    expect(idxMgrB).toBeLessThan(idxTimer);
+    expect(idxTimer).toBeLessThan(idxHuman);
+
+    await s.clone.stop();
+  }, 15_000);
+
+  /**
+   * **人間どうしは送信順のまま。追い越さない。** 割り込むのは「人間 対 それ以外」の
+   * 1段だけで、人間の発言の中では送った順が保たれる（`Inbox#push` の
+   * `insertAfterLast` が「最後に一致した要素の**直後**」へ入れるため）。
+   *
+   * **人間優先が壊しうるものの中で、これは壊してはいけない側である。**
+   *
+   * **人間が名指しで聞いた性質である**（2026-08-22 JST、逐語）:
+   *
+   * > 人間が4回割り込んだ際には、**ちゃんと送信順**（当たり前だが、早い方が優先
+   * > される）**に割り込まれるようになっていますか？**
+   *
+   * **だから4件で、しかもクローン全体を通して測る**（`post` から流して、実際に
+   * SDK へ渡った並びを見る）。`Inbox` を直接動かす測定では「並べ替えの機構は
+   * 送信順を保つ」までしか言えず、**人間が聞いているのは自分の体験のほう**である。
+   *
+   * **この歯が無いと、実装を「常に先頭へ入れる」に変えても誰も気づかない。**
+   * 実測（変異試験 N2、2026-08-22）: `insertAfterLast` の探索を捨てて常に先頭へ
+   * 入れる変異を当てたとき、**順序の歯3本はどれも落ちなかった。** 人間が人間以外
+   * より前に出ることは変わらないので素通りする。**落ちたのは無関係な既存テスト
+   * 1本だけだった。** ＝ **設計としては保たれていたが、測る歯は1本も無かった。**
+   */
+  it('人間が続けて割り込んでも、人間どうしは送信順のまま（早い方が先）', async () => {
+    const s = setupWithHumanPriority(true, () => 'わかった', { delayMs: 150 });
+
+    s.clone.post(humanMessage('先客'));
+    await waitForFirstTurn(s);
+
+    // 人間4件のあいだに人間以外を挟む（挟まっても人間どうしの順は変わらない）。
+    s.clone.post(humanMessage('人間1'));
+    s.clone.post(managerMessage('evt-mgr', 'mgr-x', 'マネージャーの報告'));
+    s.clone.post(humanMessage('人間2'));
+    s.clone.post(humanMessage('人間3'));
+    s.clone.post(timerEvent('evt-timer', 'timer-kind'));
+    s.clone.post(humanMessage('人間4'));
+
+    const markerMgr = managerMarker('mgr-x', 'マネージャーの報告');
+    const markerTimer = timerMarker('timer-kind');
+    await waitForAllDelivered(s, ['人間1', '人間4', markerMgr, markerTimer]);
+    await settle();
+
+    // **4件は隣り合うので1ターンにまとめられる**（`#mergedHumanBatch`）。
+    // まとまっても、まとまらなくても、**本文の並びで送信順を見る**。
+    //
+    // **目印は本文にしか現れない形にする。** 生の `人間1` で探すと、台帳の断り書き
+    // に載る id 一覧に当たる。**あの一覧は実際の並び順と無関係に安定した順で出るので、
+    // 順序を壊しても検出できない** — 実測（2026-08-22）: 変異 N2「常に先頭へ入れる」
+    // を当てたとき、生の目印だとこの歯は**緑のまま通り**、本文だけを見る形に直したら
+    // `expected 897 to be less than 858` で落ちた。まとめた本文は `humanTurnText` が
+    // `` **(n) <at>**\n\n<text> `` の形で並べるので、`**\n\n` を前置きにする。
+    const joined = (s.calls[0]?.inputs ?? []).join('\n');
+    const idxOf = (text: string): number => joined.indexOf(`**\n\n${text}`);
+    const i1 = idxOf('人間1');
+    const i2 = idxOf('人間2');
+    const i3 = idxOf('人間3');
+    const i4 = idxOf('人間4');
+    const idxMgr = joined.indexOf(markerMgr);
+    const idxTimer = joined.indexOf(markerTimer);
+
+    expect(i1, '人間1 が本文に見つからない').toBeGreaterThan(-1);
+    expect(i2, '人間2 が本文に見つからない').toBeGreaterThan(-1);
+    expect(i3, '人間3 が本文に見つからない').toBeGreaterThan(-1);
+    expect(i4, '人間4 が本文に見つからない').toBeGreaterThan(-1);
+    expect(idxMgr).toBeGreaterThan(-1);
+    expect(idxTimer).toBeGreaterThan(-1);
+
+    // **送信順（1 → 2 → 3 → 4）。ここが「常に先頭へ入れる」で反転する。**
+    expect(i1).toBeLessThan(i2);
+    expect(i2).toBeLessThan(i3);
+    expect(i3).toBeLessThan(i4);
+    // そのうえで、4件とも人間以外より前に出ている。
+    expect(i4).toBeLessThan(idxMgr);
+    expect(i4).toBeLessThan(idxTimer);
+
+    await s.clone.stop();
+  }, 15_000);
+});
+
+/**
+ * 割り込める起点の集合そのものを固定する。
+ *
+ * ## なぜ doc では守れないのか
+ *
+ * 人間以外が餓死しない理由は**割り込みの量が有界だから**で、有界なのは
+ * **割り込めるのが人間の速さでしか来ないものだけ**だからである（`isHumanOriginated`
+ * の doc）。`external`（webhook）や `timer` を1つ足すと、**割り込みの量が機械の
+ * 速さで決まるようになり、有界性の根拠が消える。**
+ *
+ * ## この集合は畳み込みの前提でもある（守っているものが2つある）
+ *
+ * **⚠️ この2つ目は、設計時に意図したものではない。** 人間優先を入れる過程で
+ * 「出荷される設定を測る歯が無くなる」を塞ごうとして、初めて見つかった。
+ * **だからここには「なぜそう決めたか」の記録が無い** — 探しても出てこないのは
+ * 記録漏れではなく、**誰も一度も決めていない**からである。**暗黙の前提がほかにも
+ * 在りうると疑うこと。**
+ *
+ * **tick（`timer` / `self_initiative`）を `true` にすると、tick どうしが並べ替わり
+ * うるようになり、畳み込み（`#foldsIntoHeldTick`）が黙って効かなくなる** —
+ * 「先に届いた tick が `#deferred` へ入る前に次の tick が処理される」が起こりうる
+ * ためで、#168 の歯「発意 tick を続けて送っても、保持する在庫は1件のまま増えない」
+ * が守っているものが崩れる。**有界性だけを検討して足さないこと。**
+ *
+ * **そしてそれは緑のまま起きる。** 順序の歯（上の3本）は有限件数しか流さないので、
+ * 集合が広がっても通る。**踏んでも出力に何も出ない**種類の壊れ方なので、doc に
+ * 書いておくだけでは守れない（この repo は「読んだのに踏んだ」を何度も記録して
+ * いる）。**気づく主体を `vitest` にする。**
+ *
+ * ## どう守っているか
+ *
+ * `InboxEvent` は `type` による判別可能な共用体なので、`Record<InboxEventType, …>`
+ * にすると**新しい起点が増えた瞬間にコンパイルが落ちる。** 落ちた人は「これは人間
+ * 起点か」を宣言させられ、その場で上の doc に当たる。**先例は #159**（画面から
+ * 消した状態の数え上げを、テスト側の `Record<ManagerStatus, true>` へ移して
+ * 「状態が増えるとコンパイルが落ちる」形にしたもの）。
+ */
+describe('クローン — 割り込める起点は、人間の速さで来るものだけ（ここが有界性の全体）', () => {
+  it('割り込める起点が人間の速さで来るものだけであること（ここが有界性の全体）', () => {
+    // **すべての起点について宣言させる。** 起点が増えるとここがコンパイルで落ちる。
+    // 落ちたら、足した起点が「人間が待っている合図」かどうかを決めてから足すこと。
+    const expected: Record<InboxEventType, boolean> = {
+      human_message: true,
+      human_answer: true,
+      // 以下はすべて false。**機械の速さで来るものを true にしないこと** —
+      // した瞬間に割り込みの量が機械の速さで決まり、有界性の根拠が消える。
+      manager_message: false,
+      external: false,
+      timer: false,
+      self_initiative: false,
+      distill: false,
+    };
+
+    // 宣言と実装が一致すること。**`isHumanOriginated` は `type` しか見ない**ので、
+    // 他のフィールドは判定に効かない（型を満たすだけの最小限を渡す）。
+    for (const [type, isHuman] of Object.entries(expected)) {
+      const event = { type, id: `evt-${type}`, at: '2026-08-22T00:00:00.000Z' } as InboxEvent;
+      expect(isHumanOriginated(event), `${type} の判定`).toBe(isHuman);
+    }
+
+    // **true は2つだけである。** 上の Record を全部 true にする変異を弾く歯で、
+    // 個別の一致（上のループ）だけでは「全部 true」を通してしまう。
+    expect(Object.values(expected).filter(Boolean)).toHaveLength(2);
+  });
+
+  it('未設定・空・空白は既定（有効）で、明示的に切ったときだけ無効になる', () => {
+    // **「読めなかった」を「切られた」と読まない。** 緩めると、変数が届かなかった
+    // だけの器で人間の待ちが黙って戻る（`resolveCloneHumanPriority` の doc）。
+    expect(resolveCloneHumanPriority({})).toBe(true);
+    expect(resolveCloneHumanPriority({ ALTEROID_CLONE_HUMAN_PRIORITY: '' })).toBe(true);
+    expect(resolveCloneHumanPriority({ ALTEROID_CLONE_HUMAN_PRIORITY: '   ' })).toBe(true);
+    expect(resolveCloneHumanPriority({ ALTEROID_CLONE_HUMAN_PRIORITY: 'yes' })).toBe(true);
+
+    for (const off of ['0', 'false', 'off', 'no', 'FALSE', 'Off']) {
+      expect(resolveCloneHumanPriority({ ALTEROID_CLONE_HUMAN_PRIORITY: off }), off).toBe(false);
+    }
   });
 });
