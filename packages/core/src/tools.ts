@@ -4,7 +4,7 @@ import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 
 import { isCronExpression } from './cron.js';
-import { describePage, excerptLine, page } from './excerpt.js';
+import { describePage, excerptLine, page, renderListing } from './excerpt.js';
 import type { ManagerDenial, ManagerPool, ManagerSummary } from './manager.js';
 import {
   assertNeverMemoryProtectionStatus,
@@ -165,6 +165,14 @@ export const CLONE_TOOL_NAMES = [
  */
 const LIST_REQUEST_EXCERPT = 160;
 const LIST_REPORT_EXCERPT = 240;
+/**
+ * 返事待ち1件の要約の厚み。
+ *
+ * **runner 側のキャップをここの根拠にしない。** `brief(input, 200)` が効くのは
+ * 1つの経路だけで、`AskUserQuestion`（`describeQuestions`）は複数の質問文を
+ * 連ねて返すのでそれを通らない。上流の数え上げに依存せず、出す側で締める。
+ */
+const LIST_WAITING_EXCERPT = 200;
 const LIST_BUDGET = 8_000;
 /**
  * 一覧に添える拒否は、**新しい側から**この件数まで。
@@ -211,6 +219,56 @@ const JOURNAL_TEXT_EXCERPT = 120;
 const JOURNAL_BUDGET = 8_000;
 /** 日誌1件の全文を取りに来たときの1回分。続きは `offset` で取れる。 */
 const JOURNAL_PAGE = 8_000;
+
+/**
+ * 承認待ちの一覧の予算と、1件ぶんの質問の厚み。
+ *
+ * **溜まる速さを決めるのは人間である。** 席を外しているあいだ `ask_human` は
+ * 積み続けるので、ここは「件数が増えても壊れない」ことだけが要件になる。
+ * 質問の全文は `approvals_list id=<id>` で取れる。
+ */
+const APPROVAL_LIST_BUDGET = 8_000;
+const APPROVAL_QUESTION_EXCERPT = 200;
+/** 承認待ち1件の全文を取りに来たときの1回分。続きは `offset` で取れる。 */
+const APPROVAL_PAGE = 8_000;
+
+/**
+ * 継続中の依頼の一覧の予算と、1件ぶんの依頼本文の厚み。
+ *
+ * **ここは構造的に育つ。** `schedule_create` は「時刻が来たときのあなたが読んで
+ * そのまま動ける粒度で書く」よう求めており、つまり**長文を書かせる設計**である。
+ * その長文を一覧が全文で出していたので、仕込みが増えるほど一覧が壊れる形だった。
+ * 全文は `schedule_list kind=<kind>` で取れる。
+ */
+const SCHEDULE_LIST_BUDGET = 8_000;
+const SCHEDULE_REQUEST_EXCERPT = 200;
+/** 継続中の依頼1件の本文を取りに来たときの1回分。続きは `offset` で取れる。 */
+const SCHEDULE_PAGE = 8_000;
+
+/**
+ * 器の一覧の予算と、器1台ぶんに並べるマネージャーの件数。
+ *
+ * **`LIST_BUDGET` を使い回さない。** あちらはマネージャーの一覧で、こちらは器の
+ * 一覧である（値は同じだが、片方だけを直したくなったときに一緒に動かないよう
+ * `REPORT_PAGE` / `TRANSCRIPT_PAGE` と同じ理由で分けてある）。
+ *
+ * マネージャーの内訳をここで切っても能力は落ちない——`manager_list` が
+ * 同じものを予算つきで持っている。**切ったことは必ず言う。**
+ */
+const RUNNER_LIST_BUDGET = 8_000;
+const RUNNER_MANAGER_LIST_LIMIT = 20;
+
+/** 記憶1件の本文を取りに来たときの1回分。続きは `offset` で取れる。 */
+const MEMORY_PAGE = 8_000;
+/**
+ * 正典1本を取りに来たときの1回分。続きは `offset` で取れる。
+ *
+ * **`docs/architecture.md` は 48,856 バイトある**（着手時点の実測）。ページングが
+ * 無いあいだ、この道具は1回で48KBを文脈へ流し込んでいた。
+ */
+const CANON_PAGE = 8_000;
+/** プロファイル本文を取りに来たときの1回分。続きは `offset` で取れる。 */
+const PROFILE_PAGE = 8_000;
 
 /**
  * 自作ツールは確認なしで通す（能力の削除ではなく、道具が道具として使えること）。
@@ -417,11 +475,22 @@ export function createCloneTools(context: ToolContext) {
 
     tool(
       'memory_read',
-      '記憶の文書を1つ読む。',
-      { slug: z.string().describe('文書のスラッグ（拡張子なし）') },
-      async ({ slug }) => {
+      ['記憶の文書を1つ読む。', '長ければ切れて出る（続きの取り方が出力に付く）。'].join(' '),
+      {
+        slug: z.string().describe('文書のスラッグ（拡張子なし）'),
+        offset: z.number().int().min(0).optional().describe('何文字目から読むか（既定 0）'),
+      },
+      async ({ slug, offset = 0 }) => {
         const doc = await stores.persona.read(slug);
-        return text(doc ? doc.content : `記憶 ${slug} は存在しない。`);
+        if (!doc) return text(`記憶 ${slug} は存在しない。`);
+        const part = page(doc.content, offset, MEMORY_PAGE);
+        const tail = part.more
+          ? `\n\n…（ここで切れている。続きは memory_read slug=${slug} offset=${part.to}）`
+          : '';
+        // **切れていないときは注記を出さない。** 毎回付けると、本当に切れている
+        // ときの目印が効かなくなる（`excerpt` と同じ理由）。
+        if (part.from === 0 && !part.more) return text(part.body);
+        return text(`（${describePage(part)}）\n\n${part.body}${tail}`);
       },
     ),
 
@@ -652,29 +721,25 @@ export function createCloneTools(context: ToolContext) {
 
         // **予算を先に決めて、入るところまで積む。** 件数から出力量を決めると、
         // 何件で壊れるかが運任せになる（それで丸ごと落ちた）。切ったなら必ずそう言う。
-        const lines: string[] = [];
-        let used = 0;
-        let shown = 0;
-        for (const entry of entries) {
+        // 積む形そのものは `renderListing` が持つ（一覧ごとに手で書かない）。
+        const items = entries.map((entry) => {
           const { head, body } = renderJournalEntry(entry);
-          const line =
+          return (
             `${entry.at} ${head} id=${entry.id}` +
-            (body === '' ? '' : `\n  ${excerptLine(body, JOURNAL_TEXT_EXCERPT)}`);
-          if (shown > 0 && used + line.length > JOURNAL_BUDGET) break;
-          lines.push(line);
-          used += line.length;
-          shown += 1;
-        }
-
-        const rest = entries.length - shown;
-        if (rest > 0) {
-          lines.push(
-            `…ほか ${rest} 件は省略（この条件で ${entries.length} 件あり、新しい順に ${shown} 件だけ出した）。` +
-              'さらに遡るなら until を、狭めるなら since / types を指定すること。',
+            (body === '' ? '' : `\n  ${excerptLine(body, JOURNAL_TEXT_EXCERPT)}`)
           );
-        }
-        lines.push('（本文は抜粋。全文は journal_read id=<id> で取れる）');
-        return text(lines.join('\n'));
+        });
+        return text(
+          [
+            renderListing(items, {
+              budget: JOURNAL_BUDGET,
+              omitted: ({ rest, shown, total }) =>
+                `…ほか ${rest} 件は省略（この条件で ${total} 件あり、新しい順に ${shown} 件だけ出した）。` +
+                'さらに遡るなら until を、狭めるなら since / types を指定すること。',
+            }),
+            '（本文は抜粋。全文は journal_read id=<id> で取れる）',
+          ].join('\n'),
+        );
       },
     ),
 
@@ -727,27 +792,70 @@ export function createCloneTools(context: ToolContext) {
       [
         'いま人間の回答を待っている件の一覧。',
         '人間が席に居ないあいだに溜まる。溜まっていても他の仕事は進めてよい。',
+        '一覧の質問は抜粋で、全文が要る1件は id を渡して取る。',
       ].join(' '),
-      {},
-      async () => {
+      {
+        id: z
+          .string()
+          .optional()
+          .describe('この1件を全文で読む（一覧に出ている id）。他の条件は無視される'),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe('id で全文を読むとき、何文字目から読むか'),
+      },
+      async ({ id, offset = 0 }) => {
+        // --- 全文モード（1件だけ） ---
+        if (id !== undefined) {
+          const approval = await stores.jobs.getApproval(id);
+          if (!approval) return text(`承認待ち ${id} は無い（id が違う）。`);
+          // **答えが付いた件も読める。** 「もう答えが来た」ことと「その質問が
+          // 何だったか」は別の問いで、後者は答えが付いた後にこそ要る。
+          const head =
+            `${approval.id}（${approval.createdAt}）` +
+            (approval.answeredAt === undefined ? '回答待ち' : `${approval.answeredAt} に回答済み`) +
+            (approval.jobId === undefined
+              ? ''
+              : ` / 宛先 managerId: "${approval.jobId}"` +
+                (approval.requestId === undefined ? '' : `, requestId: "${approval.requestId}"`));
+          const body = [
+            `質問: ${approval.question}`,
+            ...(approval.context === undefined ? [] : [`背景: ${approval.context}`]),
+            ...(approval.answer === undefined ? [] : [`回答: ${approval.answer}`]),
+          ].join('\n\n');
+          const part = page(body, offset, APPROVAL_PAGE);
+          const tail = part.more
+            ? `\n\n…（ここで切れている。続きは approvals_list id=${approval.id} offset=${part.to}）`
+            : '';
+          return text(`${head}（${describePage(part)}）\n\n${part.body}${tail}`);
+        }
+
+        // --- 一覧モード ---
         const pending = await stores.jobs.listApprovals({ pendingOnly: true });
         if (pending.length === 0) return text('（人間の回答待ちは無い）');
-        return text(
-          pending
-            .map((approval) =>
-              [
-                `- ${approval.id}（${approval.createdAt}）${approval.question}`,
-                approval.jobId === undefined
-                  ? null
-                  : `  宛先: managerId: "${approval.jobId}"` +
-                    (approval.requestId === undefined
-                      ? ''
-                      : `, requestId: "${approval.requestId}"`),
-              ]
-                .filter((line) => line !== null)
-                .join('\n'),
-            )
+        const items = pending.map((approval) =>
+          [
+            `- ${approval.id}（${approval.createdAt}）` +
+              excerptLine(approval.question, APPROVAL_QUESTION_EXCERPT),
+            approval.jobId === undefined
+              ? null
+              : `  宛先: managerId: "${approval.jobId}"` +
+                (approval.requestId === undefined ? '' : `, requestId: "${approval.requestId}"`),
+          ]
+            .filter((line) => line !== null)
             .join('\n'),
+        );
+        return text(
+          [
+            renderListing(items, {
+              budget: APPROVAL_LIST_BUDGET,
+              omitted: ({ rest, shown, total }) =>
+                `…ほか ${rest} 件は省略（回答待ちは ${total} 件あり、古い順に ${shown} 件だけ出した）。`,
+            }),
+            '（質問は抜粋。全文は approvals_list id=<id> で取れる）',
+          ].join('\n'),
         );
       },
     ),
@@ -851,21 +959,54 @@ export function createCloneTools(context: ToolContext) {
       [
         '仕込んである継続中の依頼の一覧。周期と、前回それで動いた時刻が分かる。',
         '既定の日報・発意 tick はここには出ない（あれは設定で回っているもの）。',
+        '一覧の依頼本文は抜粋で、全文が要る1件は kind を渡して取る。',
       ].join(' '),
-      {},
-      async () => {
+      {
+        kind: z
+          .string()
+          .optional()
+          .describe('この1件の依頼本文を全文で読む（一覧に出ている kind）'),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe('kind で全文を読むとき、何文字目から読むか'),
+      },
+      async ({ kind, offset = 0 }) => {
+        // --- 全文モード（1件だけ） ---
+        if (kind !== undefined) {
+          const plan = await stores.schedules.get(kind);
+          if (!plan) return text(`継続中の依頼 ${kind} は無い（kind が違うか、もう外してある）。`);
+          const head =
+            `${plan.kind}（${describeScheduleSpec(plan.spec)}）` +
+            ` 前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}`;
+          const part = page(plan.request, offset, SCHEDULE_PAGE);
+          const tail = part.more
+            ? `\n\n…（ここで切れている。続きは schedule_list kind=${plan.kind} offset=${part.to}）`
+            : '';
+          return text(`${head}（依頼本文: ${describePage(part)}）\n\n${part.body}${tail}`);
+        }
+
+        // --- 一覧モード ---
         const plans = await stores.schedules.list();
         if (plans.length === 0) return text('（継続中の依頼は無い）');
+        const items = plans.map((plan) =>
+          [
+            `- ${plan.kind}（${describeScheduleSpec(plan.spec)}）`,
+            `  依頼: ${excerptLine(plan.request, SCHEDULE_REQUEST_EXCERPT)}`,
+            `  前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}`,
+          ].join('\n'),
+        );
         return text(
-          plans
-            .map((plan) =>
-              [
-                `- ${plan.kind}（${describeScheduleSpec(plan.spec)}）`,
-                `  依頼: ${plan.request}`,
-                `  前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}`,
-              ].join('\n'),
-            )
-            .join('\n'),
+          [
+            renderListing(items, {
+              budget: SCHEDULE_LIST_BUDGET,
+              omitted: ({ rest, shown, total }) =>
+                `…ほか ${rest} 件は省略（継続中の依頼は ${total} 件あり、${shown} 件だけ出した）。`,
+            }),
+            '（依頼本文は抜粋。全文は schedule_list kind=<kind> で取れる）',
+          ].join('\n'),
         );
       },
     ),
@@ -1121,13 +1262,27 @@ export function createCloneTools(context: ToolContext) {
         '**本文には鍵が入っている。読んだ中身を記憶や日誌へ書き写さないこと**',
         '（記憶はあなたのシステムプロンプトに載るし、人間がいつでも開く場所である）。',
       ].join(' '),
-      {},
-      async () => {
+      {
+        offset: z.number().int().min(0).optional().describe('何文字目から読むか（既定 0）'),
+      },
+      async ({ offset = 0 }) => {
         const current = await stores.profile.read();
         if (current === null) {
           return text('実行環境プロファイルは置かれていない。');
         }
-        return text(`（最終更新 ${current.updatedAt}）\n${current.script}`);
+        const part = page(current.script, offset, PROFILE_PAGE);
+        // **ここで切れたものを profile_write へ渡すと、プロファイルが縮む。**
+        // `profile_write` は全文置換であり、切れた本文でも shell として妥当に
+        // 見えるので、検証を通ってしまう＝黙って行が消える。だから
+        // 「切れている」だけでは足りず、**書き戻す前に何をすべきか**まで言う。
+        const tail = part.more
+          ? `\n…（ここで切れている。続きは profile_read offset=${part.to}。` +
+            '**profile_write は全文置換なので、書き戻すつもりなら先に offset を進めて' +
+            '最後まで取ること** — ここまでの分だけを渡すと残りが消える）'
+          : '';
+        return text(
+          `（最終更新 ${current.updatedAt} / ${describePage(part)}）\n${part.body}${tail}`,
+        );
       },
     ),
 
@@ -1200,22 +1355,28 @@ export function createCloneTools(context: ToolContext) {
     tool(
       'self_read',
       [
-        '自分自身（alteroid）の正典を1つ、全文で読む。',
+        '自分自身（alteroid）の正典を1つ読む。',
         '自分が何で出来ているか・何が要件か・どう設計されているか・何が未着手かはここにある。',
         'ビルド時に焼き込んだ写しなので、実装の最新が要るならマネージャーにリポジトリを読ませること。',
+        '長いので切れて出る（続きの取り方が出力に付く）。',
       ].join(' '),
       {
         document: z
           .string()
           .describe(`正典の名前。読めるのは ${canonNames().join(' / ')}（上ほど優先順位が高い）`),
+        offset: z.number().int().min(0).optional().describe('何文字目から読むか（既定 0）'),
       },
-      async ({ document }) => {
+      async ({ document, offset = 0 }) => {
         const doc = canonDocument(document);
         if (doc === undefined) {
           return text(`正典 ${document} は無い。読めるのは ${canonNames().join(' / ')}。`);
         }
+        const part = page(doc.content, offset, CANON_PAGE);
+        const tail = part.more
+          ? `\n\n…（ここで切れている。続きは self_read document=${doc.name} offset=${part.to}）`
+          : '';
         return text(
-          `${doc.path}（${CANON_REVISION.length > 0 ? `リビジョン ${CANON_REVISION}` : 'リビジョン不明'} の写し）\n\n${doc.content}`,
+          `${doc.path}（${CANON_REVISION.length > 0 ? `リビジョン ${CANON_REVISION}` : 'リビジョン不明'} の写し / ${describePage(part)}）\n\n${part.body}${tail}`,
         );
       },
     ),
@@ -1475,11 +1636,9 @@ export function createCloneTools(context: ToolContext) {
 
         // **予算を先に決めて、入るところまで積む。** 件数から出力量を決めると、
         // 何件で壊れるかが運任せになる。切ったなら必ずそう言う。
-        const lines: string[] = [];
-        let used = 0;
-        let shown = 0;
-        for (const manager of managers) {
-          const entry = [
+        // 積む形そのものは `renderListing` が持つ（一覧ごとに手で書かない）。
+        const items = managers.map((manager) =>
+          [
             `- ${manager.managerId} [${manager.status}${manager.live ? '' : '/セッション切断'}]`,
             // **runnerId は空欄にしない。** 取れていないことを「未記録」という
             // 文字列で読める形にする（AGENTS.md「取れない軸に0の行を作らない」と
@@ -1512,30 +1671,32 @@ export function createCloneTools(context: ToolContext) {
             // 受信箱にしか出ないので、一覧を見ているクローンには「走っている」と
             // しか読めなかった。状態の値は増やさず、状態に添える。
             denialLine(context.managers?.denials(manager.managerId) ?? []),
+            // **待ちの要約も抜粋を通す。** runner 側の `brief(input, 200)` が実質の
+            // キャップになっていたが、`AskUserQuestion` の経路（`describeQuestions`）は
+            // 質問文を `join(' / ')` で連ねてそのキャップを通らない。ここを通して
+            // おけば、上流のどの経路から来ても一覧は伸びない。
             ...manager.waiting.map(
-              (item) => `  返事待ち(requestId: ${item.requestId}): ${item.summary}`,
+              (item) =>
+                `  返事待ち(requestId: ${item.requestId}): ` +
+                excerptLine(item.summary, LIST_WAITING_EXCERPT),
             ),
             manager.lastReport === undefined
               ? null
               : `  直近の報告: ${excerptLine(manager.lastReport, LIST_REPORT_EXCERPT)}`,
           ]
             .filter((line) => line !== null)
-            .join('\n');
-          if (shown > 0 && used + entry.length > LIST_BUDGET) break;
-          lines.push(entry);
-          used += entry.length;
-          shown += 1;
-        }
-
-        const rest = managers.length - shown;
-        if (rest > 0) {
-          lines.push(
-            `…ほか ${rest} 件は省略（全 ${managers.length} 件）。` +
-              '走っているものから順に出している。',
-          );
-        }
-        lines.push('（依頼と報告は抜粋。全文は manager_report <managerId> で取れる）');
-        return text(lines.join('\n'));
+            .join('\n'),
+        );
+        return text(
+          [
+            renderListing(items, {
+              budget: LIST_BUDGET,
+              omitted: ({ rest, total }) =>
+                `…ほか ${rest} 件は省略（全 ${total} 件）。走っているものから順に出している。`,
+            }),
+            '（依頼と報告は抜粋。全文は manager_report <managerId> で取れる）',
+          ].join('\n'),
+        );
       },
     ),
 
@@ -1727,7 +1888,7 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        const lines: string[] = [
+        const head: string[] = [
           // **1台のときにそう言う。** 言わないと「分散していない」ことが読み取れず、
           // 複数台に散っていると誤読されうる（依頼者からの明示要求）。
           overview.runners.length === 1
@@ -1739,7 +1900,11 @@ export function createCloneTools(context: ToolContext) {
           daemonLine,
         ];
 
+        // **器1台ぶんを1つのブロックにしてから予算で積む。** 行ごとに積むと、
+        // 予算に当たった器が途中の1行で切れて「版が無い器」に見える。
+        const blocks: string[] = [];
         for (const runner of overview.runners) {
+          const lines: string[] = [];
           lines.push(
             `- ${runner.label} [${runner.state}]` +
               (runner.runnerId === undefined
@@ -1777,12 +1942,19 @@ export function createCloneTools(context: ToolContext) {
            */
           lines.push(`  版: ${describeRevisionStatus(runner.revision)}`);
           if (runner.error !== undefined) lines.push(`  直近の失敗: ${runner.error}`);
-          lines.push(
-            runner.managers.length === 0
-              ? '  マネージャー: 無し'
-              : `  マネージャー(${runner.managers.length}): ` +
-                  runner.managers.map((m) => `${m.managerId}[${m.status}]`).join(', '),
-          );
+          // **内訳は件数で切る。** 切っても能力は落ちない——同じものを
+          // `manager_list` が予算つきで持っている。切ったことは必ず言う。
+          if (runner.managers.length === 0) {
+            lines.push('  マネージャー: 無し');
+          } else {
+            const shown = runner.managers.slice(0, RUNNER_MANAGER_LIST_LIMIT);
+            const rest = runner.managers.length - shown.length;
+            lines.push(
+              `  マネージャー(${runner.managers.length}): ` +
+                shown.map((m) => `${m.managerId}[${m.status}]`).join(', ') +
+                (rest === 0 ? '' : `, …ほか ${rest} 本は省略（manager_list で全部見える）`),
+            );
+          }
           // **表示そのものを引数で二重に締める。** 値を取ってくるかどうかは
           // `ManagerPool.runners()` 側（`options.fingerprints`）が決めるが、ここでも
           // `fingerprints === true` のときしか出さない——どちらか片方が緩んでも
@@ -1797,17 +1969,32 @@ export function createCloneTools(context: ToolContext) {
           if (fingerprints === true && runner.profile !== undefined) {
             lines.push(`  プロファイルの指紋: ${runner.profile.sha256}`);
           }
+          blocks.push(lines.join('\n'));
         }
 
+        const tail: string[] = [];
         if (overview.unassigned.length > 0) {
-          lines.push(
+          const shown = overview.unassigned.slice(0, RUNNER_MANAGER_LIST_LIMIT);
+          const rest = overview.unassigned.length - shown.length;
+          tail.push(
             `どの器か分からない: ${overview.unassigned.length}件（` +
-              overview.unassigned.map((m) => `${m.managerId}[${m.status}]`).join(', ') +
+              shown.map((m) => `${m.managerId}[${m.status}]`).join(', ') +
+              (rest === 0 ? '' : `, …ほか ${rest} 本は省略（manager_list で全部見える）`) +
               '）。runnerId が記録されていない古いマネージャーで、どの器の内訳にも混ぜていない。',
           );
         }
 
-        return text(lines.join('\n'));
+        return text(
+          [
+            ...head,
+            renderListing(blocks, {
+              budget: RUNNER_LIST_BUDGET,
+              omitted: ({ rest, shown, total }) =>
+                `…ほか ${rest} 台は省略（登録は ${total} 台あり、${shown} 台だけ出した）。`,
+            }),
+            ...tail,
+          ].join('\n'),
+        );
       },
     ),
   ];
