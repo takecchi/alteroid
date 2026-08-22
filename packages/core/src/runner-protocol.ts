@@ -826,6 +826,31 @@ export interface RunnerEntry {
   error?: string;
   /** この状態になった時刻。 */
   since: string;
+  /**
+   * **いまこの宛先に応えているプロセス**（`identity()` が返す `instanceId`）。
+   *
+   * `runnerId` が「どの宛先か」で、こちらは「その宛先のどのプロセスか」である。
+   * **名乗らない runner では無い**（`identity()` を持たない実装・古い器）。無いことを
+   * 「入れ替わっていない」と読まないこと。
+   *
+   * ## 遷移だけでなく状態としても出す理由
+   *
+   * 入れ替わった瞬間は `onSwap` で知らせている（#115）が、それは**遷移の知らせ**で
+   * あって、後から「いまどのプロセスが応えているのか」を確かめる口ではなかった。
+   * 知らせを見落とした後、あるいはデーモン自身が再起動した後は、誰も検算できない。
+   * 引き取りの可否（`lease.ts`）はこの値と次の `instanceSince` を材料にするので、
+   * **判定に使う値が人間からも見えていないと、判定が正しいかを誰も確かめられない。**
+   */
+  instanceId?: string;
+  /**
+   * **そのプロセスを最初に見た時刻。** 入れ替わるたびに更新される。
+   *
+   * 「入れ替えを観測した時刻」ではなく「いまの相手を初めて見た時刻」である。
+   * デーモンが再起動した直後は入れ替えの瞬間を知らないので、**自分が初めて見た
+   * 時刻から数える**（知らない時刻を過去に見積もると、まだ畳まれていない器の仕事を
+   * 奪いに行く。`lease.ts` の `LEASE_DRAIN_MS` の項）。
+   */
+  instanceSince?: string;
 }
 
 /**
@@ -1085,6 +1110,15 @@ interface RegistryEntry {
    * そのときは**判定しない**（「入れ替わっていない」と読まないこと）。
    */
   instanceId?: string;
+  /**
+   * `instanceId` を**初めて見た時刻**（入れ替わるたびに置き直す）。
+   *
+   * 引き取りの可否がこの時刻から猶予を数える（`lease.ts`）。**入れ替えの瞬間では
+   * なく「自分が初めて見た時刻」である**ことが要点で、デーモンが再起動した直後は
+   * 入れ替えの瞬間を知らないから、知らないものを過去に見積もらないためにこの形に
+   * してある。
+   */
+  instanceSince?: string;
 }
 
 class Registry implements RunnerRegistry {
@@ -1167,6 +1201,11 @@ class Registry implements RunnerRegistry {
         ? {}
         : { runnerId: entry.client.runnerId, workspacePath: entry.client.workspacePath }),
       ...(entry.error === undefined ? {} : { error: entry.error }),
+      // **開けていなくても、最後に名乗ったプロセスは出す。** 黙った器について
+      // 「どのプロセスが最後に応えていたか」は、戻ってきたときに同じ器かを
+      // 突き合わせる材料である（消すと、黙っている間だけ判定材料が消える）。
+      ...(entry.instanceId === undefined ? {} : { instanceId: entry.instanceId }),
+      ...(entry.instanceSince === undefined ? {} : { instanceSince: entry.instanceSince }),
     }));
   }
 
@@ -1436,6 +1475,27 @@ class Registry implements RunnerRegistry {
         // 「30秒黙っていた」ことにされる。
         entry.lastSeen = Date.now();
         entry.alive = true;
+        /*
+         * **引き取りが走る前に、いま応えているのが誰かを聞いておく。**
+         *
+         * 直後の `#subscribers` はデーモンの引き取り（`takeOver`）で、そこでは
+         * 貸し出し期限の判定（`lease.ts`）が `instanceId` を材料にする。ここで
+         * 聞かずにハートビートの1周（10秒）を待つと、**開け直しのたびに「判定材料が
+         * 無い」状態で引き取りが走る** — それは生きている器の仕事を奪いうる側である。
+         *
+         * 失敗は握り潰す（生死は `hello` で既に分かっている）。**聞けなかったことは
+         * 「入れ替わっていない」ではない** — 覚えないだけなので、判定は
+         * 「判定できない」へ倒れる。
+         */
+        const probeIdentity = client.identity?.bind(client);
+        if (probeIdentity !== undefined) {
+          const identity = await withDeadline(
+            (signal) => probeIdentity({ signal }),
+            HEARTBEAT_PROBE_MS,
+          ).catch(() => undefined);
+          if (this.#stopped || this.#entries.get(entry.source.label) !== entry) return;
+          if (entry.client === client) this.#noteInstance(entry, Date.now(), identity);
+        }
         for (const subscriber of this.#subscribers) subscriber(client);
         for (const waiter of this.#waiting) waiter.resolve(client);
         this.#waiting.clear();
@@ -1578,23 +1638,7 @@ class Registry implements RunnerRegistry {
     identity?: { runnerId?: string; instanceId?: string },
   ): void {
     entry.lastSeen = at;
-
-    const instanceId = identity?.instanceId;
-    if (instanceId !== undefined && instanceId.length > 0) {
-      const before = entry.instanceId;
-      // **初めて聞いた分は入れ替えではない。** 覚えるだけ（覚える前に知らせると、
-      // デーモンが起きた直後に必ず1回「入れ替わった」が出る）。
-      entry.instanceId = instanceId;
-      if (before !== undefined && before !== instanceId) {
-        this.#onSwap?.({
-          label: entry.source.label,
-          // **書き換えていない値をそのまま渡す。** 台帳の鎖はこの名前で繋がっている。
-          ...(entry.client === null ? {} : { runnerId: entry.client.runnerId }),
-          before,
-          after: instanceId,
-        });
-      }
-    }
+    this.#noteInstance(entry, at, identity);
     if (entry.alive) {
       // 一時的にこけていただけの失敗は、返ってきた時点で窓から下ろす。
       delete entry.error;
@@ -1607,6 +1651,41 @@ class Registry implements RunnerRegistry {
     // 戻ってきた1台は、いま待っている `select` の宛先になれる。
     for (const waiter of this.#waiting) waiter.resolve(client);
     this.#waiting.clear();
+  }
+
+  /**
+   * 名乗りの中身から「**いまその名前に応えているプロセス**」を覚える。
+   *
+   * **採るのは `instanceId` だけで、`runnerId` は絶対に採らない。** 採れば台帳の鎖
+   * （`manager_id → runner_id`）が音もなく繋ぎ変わる（`RunnerClient.ping` の項）。
+   *
+   * 開けた直後（`#open`）とハートビート（`#markSeen`）の両方から呼ぶ。**同じ判定を
+   * 2箇所に書かないための1本**であって、呼ばれる契機の違いは覚える時刻にしか出ない。
+   */
+  #noteInstance(
+    entry: RegistryEntry,
+    at: number,
+    identity: { runnerId?: string; instanceId?: string } | undefined,
+  ): void {
+    const instanceId = identity?.instanceId;
+    if (instanceId === undefined || instanceId.length === 0) return;
+    const before = entry.instanceId;
+    // **初めて聞いた分は入れ替えではない。** 覚えるだけ（覚える前に知らせると、
+    // デーモンが起きた直後に必ず1回「入れ替わった」が出る）。
+    entry.instanceId = instanceId;
+    // 「いまの相手を初めて見た時刻」。**同じ相手なら動かさない**（動かすと、
+    // 入れ替わりの猶予がハートビートごとに先送りされ、期限が永久に来ない）。
+    if (before !== instanceId || entry.instanceSince === undefined) {
+      entry.instanceSince = new Date(at).toISOString();
+    }
+    if (before === undefined || before === instanceId) return;
+    this.#onSwap?.({
+      label: entry.source.label,
+      // **書き換えていない値をそのまま渡す。** 台帳の鎖はこの名前で繋がっている。
+      ...(entry.client === null ? {} : { runnerId: entry.client.runnerId }),
+      before,
+      after: instanceId,
+    });
   }
 
   /**
