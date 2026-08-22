@@ -587,3 +587,76 @@ describe('吹き出しの折り返し（本2）', () => {
     expect(bubble.className.split(/\s+/)).toContain('break-words');
   });
 });
+
+/**
+ * 送信まわりのボタンの狭幅対応（本6）。
+ *
+ * 「送る」「受信をやめる」は、狭い画面（`md` 未満）ではラベルを畳みアイコンだけに
+ * する（`hidden md:inline`）。**これは「実際に隠れた」ことの試験ではない。**
+ * jsdom は CSS を1つも持たないので、`hidden md:inline` が画面上で本当にラベルを
+ * 隠すことはここでは1つも観測できない。固定できるのは、ラベルを包む `<span>` に
+ * そのクラス名が書かれていることまでである。
+ *
+ * `aria-label` は別に固定する。**ラベルの `<span>` を `hidden` にしても、jsdom は
+ * CSS を評価しないのでアクセシブルネームの計算はラベルの文字列を通常どおり拾える。
+ * つまり `getByRole('button', { name: '送る' })` は `aria-label` を消しても
+ * 通ってしまい、それだけでは `aria-label` の有無を確かめられない。** だから
+ * ここでは `aria-label` 属性そのものを直接見る。
+ */
+describe('送信ボタンの狭幅対応（本6）', () => {
+  it('「送る」のラベルは hidden md:inline を持つ span に包まれている（クラス名の存在のみ。実際に隠れることはここでは確認できない）', async () => {
+    stubFetch((url, init) => {
+      if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
+      if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
+      return undefined;
+    });
+
+    renderChat();
+    const sendButton = await screen.findByRole('button', { name: '送る' });
+    const label = within(sendButton).getByText('送る');
+    expect(label.tagName).toBe('SPAN');
+    const classes = label.className.split(/\s+/);
+    expect(classes).toContain('hidden');
+    expect(classes).toContain('md:inline');
+  });
+
+  it('「送る」ボタンは aria-label="送る" を明示している（getByRole の名前一致だけでは確かめられない — 属性を直接見る）', async () => {
+    stubFetch((url, init) => {
+      if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
+      if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
+      return undefined;
+    });
+
+    renderChat();
+    const sendButton = await screen.findByRole('button', { name: '送る' });
+    expect(sendButton.getAttribute('aria-label')).toBe('送る');
+  });
+
+  it('受信中は「受信をやめる」のラベルも hidden md:inline を持つ span に包まれ、aria-label も明示されている。かつ「送る」ボタンは消えず両方とも出ている', async () => {
+    stubFetch((url, init) => {
+      if (url.endsWith('/chat')) {
+        return sse(
+          [{ event: 'open', data: { conversationId: CONVERSATION_ID } }],
+          // 受信中の状態を保つ（`done` を送らない）。
+          { keepOpen: true, signal: init?.signal },
+        );
+      }
+      if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
+      return undefined;
+    });
+
+    renderChat();
+    await send('やあ');
+
+    const stopButton = await screen.findByRole('button', { name: '受信をやめる' });
+    const stopLabel = within(stopButton).getByText('受信をやめる');
+    expect(stopLabel.tagName).toBe('SPAN');
+    const stopClasses = stopLabel.className.split(/\s+/);
+    expect(stopClasses).toContain('hidden');
+    expect(stopClasses).toContain('md:inline');
+    expect(stopButton.getAttribute('aria-label')).toBe('受信をやめる');
+
+    // 「受信をやめる」は「送る」の代わりではない。並べて出ている。
+    expect(screen.getByRole('button', { name: '送る' })).toBeTruthy();
+  });
+});
