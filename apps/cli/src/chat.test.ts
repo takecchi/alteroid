@@ -2,6 +2,7 @@ import type { Commitment } from '@alteroid/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  parseSSEChunk,
   renderCommitments,
   renderManagerList,
   renderReport,
@@ -1116,5 +1117,37 @@ describe('chat の /conversations と /conversation', () => {
     const text = read();
     expect(text).toContain('/conversations');
     expect(text).toContain('/conversation <番号|id>');
+  });
+});
+
+/**
+ * **デーモンの heartbeat が `alteroid chat` を壊さないことを固定する。**
+ *
+ * デーモンは無音死の掃除のため SSE にコメント行（`: hb`）を周期的に流す
+ * （`apps/daemon/src/sse-heartbeat.ts`）。SSE の仕様上クライアントは捨ててよい行で、
+ * この CLI は `data:` が1本も無い塊を `null`（読み飛ばし）にすることで捨てている。
+ * **「たまたま捨てている」ではなく、捨てることが保証されている状態にする。**
+ */
+describe('parseSSEChunk', () => {
+  it('コメント行だけの塊は読み飛ばす（デーモンの heartbeat を画面に出さない）', () => {
+    expect(parseSSEChunk(': hb')).toBeNull();
+    // 前後に空行が付いた形でも同じ（`readSSE` の切り方に依らない）
+    expect(parseSSEChunk('')).toBeNull();
+    expect(parseSSEChunk(':')).toBeNull();
+  });
+
+  it('コメント行が同じ塊に混ざっても、イベントの中身を壊さない', () => {
+    const parsed = parseSSEChunk(': hb\nevent: text\ndata: {"type":"text","text":"やあ"}');
+
+    expect(parsed).not.toBeNull();
+    expect(parsed?.name).toBe('text');
+    expect(parsed?.json<{ text: string }>()?.text).toBe('やあ');
+  });
+
+  it('ふつうのイベントはこれまでどおり読める（上の2件が緩めでないことの裏取り）', () => {
+    const parsed = parseSSEChunk('event: done\ndata: {"type":"done"}');
+
+    expect(parsed?.name).toBe('done');
+    expect(parsed?.json<{ type: string }>()?.type).toBe('done');
   });
 });
