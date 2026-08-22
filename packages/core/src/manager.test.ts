@@ -4396,3 +4396,132 @@ describe('abort() は宛先が名簿に開いていないことを absent と言
     await registry.stop();
   });
 });
+
+/**
+ * 起動時の生存判定で、**runner に聞けなかったことを「セッションが無い」と読まない**
+ * （`ManagerPool#restoreJobs`）。
+ *
+ * ここは `runner.list().catch(() => [])` だった。`alive` に載らなかったジョブは
+ * `running` / `waiting_human` なら実際に resume されるので、**runner に聞けな
+ * かっただけで、走り続けているマネージャーがもう1本起こされる。**
+ *
+ * **同じ歯止めは `#reattach` に逐語で在った**（「聞けなかったときは何もしない。
+ * 応答が無いことを『セッションが無い』と読むと、生きている仕事を二重に起こす」）。
+ * 同じクラス・同じ RPC・同じ危険で、片方にだけ置かれていた。
+ *
+ * **3本を別々の `it()` で測る。** vitest は最初の失敗で止まるので、同居させると
+ * 後ろが一度も走らない。**それぞれが単独で守るものを doc に書く。**
+ */
+describe('起動時の生存判定で、聞けなかったことを「居ない」と読まない', () => {
+  const onA = {
+    id: 'mgr-on-a',
+    managerId: 'mgr-on-a',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T01:00:00.000Z',
+    status: 'running' as const,
+    summary: '長い移行作業',
+    request: 'DB の移行をやって',
+    cwd: '/work/project',
+    runnerId: 'runner-a',
+    sessionId: 'sess-a',
+  };
+
+  function poolWith(runners: RunnerClient[], jobs: Job[]) {
+    const stores = createMemoryStores();
+    const registry = createRunnerRegistry(runners);
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: registry,
+      profile: createProfileService({ stores, runners: registry }),
+    });
+    return {
+      stores,
+      registry,
+      pool,
+      seed: async () => {
+        for (const job of jobs) await stores.jobs.putJob(job);
+      },
+    };
+  }
+
+  /**
+   * **この歯が単独で守るもの**: 聞けなかった器のジョブを resume しないこと。
+   * これが落ちると、生きているマネージャーが二重に起こされる（この PR の主題）。
+   */
+  it('聞けなかった器のジョブは resume せず、台帳も動かさない', async () => {
+    const fake = swappableRunner('runner-a');
+    fake.runner.list = async () => {
+      throw new Error('runner が応答しない');
+    };
+    const s = poolWith([fake.runner], [onA]);
+    await s.seed();
+
+    await s.pool.restore();
+
+    // 二重に起こしていない。
+    expect(fake.state.resumes).toHaveLength(0);
+    // 台帳は走行中のまま（終端へも落としていない）。
+    const job = (await s.stores.jobs.listJobs()).find((j) => j.id === 'mgr-on-a');
+    expect(job?.status).toBe('running');
+
+    await s.pool.stop();
+    await s.registry.stop();
+  });
+
+  /**
+   * **この歯が単独で守るもの**: 聞けなかったことが跡に残ること。
+   * 上の歯だけだと「黙って飛ばす」実装でも緑になり、後から「セッションが無かった」
+   * のか「聞けなかった」のかを誰も言えない。
+   */
+  it('聞けなかったことが跡に残る', async () => {
+    const fake = swappableRunner('runner-a');
+    fake.runner.list = async () => {
+      throw new Error('runner が応答しない');
+    };
+    const s = poolWith([fake.runner], [onA]);
+    await s.seed();
+
+    const lines = await captureStderr(async () => {
+      await s.pool.restore();
+    });
+
+    expect(lines.join('')).toContain('runner のセッション一覧を読み出せませんでした');
+    expect(lines.join('')).toContain('runner-a');
+
+    await s.pool.stop();
+    await s.registry.stop();
+  });
+
+  /**
+   * **この歯が単独で守るもの**: 巻き添えにしないこと。
+   * 上の2本だけだと「1台でも聞けなければ全部飛ばす」という一律の実装でも緑になる。
+   * **答えた器のジョブは、いままでどおり起こし直す。**
+   */
+  it('答えた器のジョブは巻き添えにしない（一律に飛ばしていない）', async () => {
+    const a = swappableRunner('runner-a');
+    a.runner.list = async () => {
+      throw new Error('runner が応答しない');
+    };
+    const b = swappableRunner('runner-b');
+    const onB = {
+      ...onA,
+      id: 'mgr-on-b',
+      managerId: 'mgr-on-b',
+      runnerId: 'runner-b',
+      sessionId: 'sess-b',
+    };
+    const s = poolWith([a.runner, b.runner], [onA, onB]);
+    await s.seed();
+
+    await s.pool.restore();
+
+    // 聞けなかった器の分は起こさない。
+    expect(a.state.resumes).toHaveLength(0);
+    // 答えた器の分は、いままでどおり起こす。
+    expect(b.state.resumes.map((r) => r.managerId)).toEqual(['mgr-on-b']);
+
+    await s.pool.stop();
+    await s.registry.stop();
+  });
+});
