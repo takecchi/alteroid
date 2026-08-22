@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  MEMORY_LISTING_BUDGET,
   MEMORY_TOC_ENTRY_LIMIT,
   assertNeverMemoryDescriptionFreshness,
   assertNeverMemoryFrontmatterState,
@@ -546,5 +547,61 @@ describe('renderMemoryListing — `memory_list` 用の一覧。全区分を対�
     expect(listing).toContain('[premise] p1: P1');
     expect(listing).toContain('[fact] f1: F1');
     expect(listing).toContain('要旨');
+  });
+
+  /**
+   * **上限は件数ではなく文字数である。**
+   *
+   * #170 が入れた `MEMORY_TOC_ENTRY_LIMIT`（300件）はプロンプトへ焼く目次
+   * （`renderMemoryToc`）にだけ効いていて、道具の側（`memory_list`）は全件を
+   * 返していた。そして件数だけでは足りない——300件 × 1行200字で 60,000 字になり、
+   * `manager_list` が実際に溢れた 52,997 字を超える。
+   */
+  /**
+   * `description` の長さは呼び手が指定できるようにしてある。
+   *
+   * **「1行の抜粋」と「一覧の打ち切り」は別の省略である。** 長い要旨を渡すと
+   * 1行ごとに `excerptLine` の注記（「…文字省略」）が付くので、素朴に `'省略'`
+   * を探すと一覧を切っていなくても当たる。**2つを1つの語で測らない。**
+   */
+  function docs(count: number, descriptionLength = 40) {
+    return Array.from({ length: count }, (_, index) => ({
+      slug: `doc-${index}`,
+      title: `題${index}`,
+      kind: 'fact' as const,
+      description: 'あ'.repeat(descriptionLength),
+      descriptionFreshness: { kind: 'fresh' as const },
+      parent: undefined,
+      updatedAt: '2026-08-21T00:00:00Z',
+    }));
+  }
+
+  it('文書が増えても、一覧は文字数の予算に収まる', () => {
+    const listing = renderMemoryListing(docs(500));
+
+    expect(listing.length).toBeLessThan(MEMORY_LISTING_BUDGET + 500);
+  });
+
+  it('要旨が長くても、一覧は文字数の予算に収まる', () => {
+    // 件数だけを上限にしていると、ここが 300件 × 200字 = 60,000 字になる。
+    const listing = renderMemoryListing(docs(500, 400));
+
+    expect(listing.length).toBeLessThan(MEMORY_LISTING_BUDGET + 500);
+  });
+
+  it('切ったなら黙らない（出した件数・全体の件数・全文の取り方が出る）', () => {
+    const listing = renderMemoryListing(docs(500));
+
+    // 一覧を切ったことは「N 件は省略」で言う（1行の抜粋の注記とは別の文言）
+    expect(listing).toMatch(/ほか \d+ 件は省略/);
+    expect(listing).toContain('全 500 件');
+    // 一覧から落ちた文書へも行けること（落ちた＝到達できないでは能力の削除になる）
+    expect(listing).toContain('memory_read');
+  });
+
+  it('予算に収まる件数なら、一覧の断り書きを付けない', () => {
+    const listing = renderMemoryListing(docs(3));
+
+    expect(listing).not.toMatch(/件は省略/);
   });
 });

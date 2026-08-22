@@ -18,7 +18,7 @@
  *    「どれが差し替わったか」を自分で対応付けられる。
  */
 
-import { excerptLine } from './excerpt.js';
+import { excerptLine, renderListing } from './excerpt.js';
 import type {
   MemoryDescriptionFreshness,
   MemoryDocKind,
@@ -391,6 +391,17 @@ const MEMORY_TOC_LINE_LIMIT = 200;
  */
 export const MEMORY_TOC_ENTRY_LIMIT = 300;
 
+/**
+ * `memory_list`（道具）の一覧の予算。**件数ではなく文字数である。**
+ *
+ * プロンプトへ焼く目次（`renderMemoryToc`）が使う `MEMORY_TOC_ENTRY_LIMIT` とは
+ * 別物にしてある。あちらは「システムプロンプトに何件載せるか」、こちらは
+ * 「1回のツール応答に何文字載せるか」で、上限を決めるものが違う（MCP の出力上限）。
+ *
+ * **`export` してあるのはテストのため**（値を書き写さずに参照する）。
+ */
+export const MEMORY_LISTING_BUDGET = 8_000;
+
 interface MemoryTocEntry {
   slug: string;
   title: string;
@@ -615,6 +626,16 @@ export interface MemoryListingEntry {
  * べきである（全文がどこかに焼かれていることと、一覧に載ることは別の話）。
  *
  * 階層の組み立て（循環・存在しない親の扱い）は目次と同じ実装を共有する。
+ *
+ * **上限は件数ではなく文字数で持つ。** ここが無上限だったあいだ、
+ * `MEMORY_TOC_ENTRY_LIMIT` はプロンプトへ焼く目次（`renderMemoryToc`）にだけ
+ * 効いていて、同じものを返す道具（`memory_list`）は全件を返していた。
+ *
+ * そして**件数だけでは足りない。** 300件 × 1行200字で 60,000 字になり、
+ * `manager_list` が実際に溢れた 52,997 字を超える。件数から出力量を決めると
+ * 何件で壊れるかが運任せになる——だから他の一覧（`journal_read` /
+ * `manager_list` / `approvals_list` / `schedule_list` / `runner_list`）と
+ * 同じ `renderListing` を通し、**文字数の予算**で締める。
  */
 export function renderMemoryListing(entries: readonly MemoryListingEntry[]): string {
   if (entries.length === 0) return '（記憶はまだ空）';
@@ -629,17 +650,22 @@ export function renderMemoryListing(entries: readonly MemoryListingEntry[]): str
   }));
   const flat = flattenMemoryToc(resolveMemoryHierarchy(tocEntries));
 
-  return flat
-    .map((node) => {
-      const meta = bySlug.get(node.entry.slug);
-      const indent = '  '.repeat(node.depth);
-      const kindTag = meta === undefined ? '' : `[${meta.kind}] `;
-      const updatedAt = meta === undefined ? '' : ` (${meta.updatedAt})`;
-      const descriptor =
-        node.entry.description === undefined
-          ? ''
-          : ` — ${memoryFreshnessMarker(node.entry.descriptionFreshness)}${excerptLine(node.entry.description, MEMORY_TOC_LINE_LIMIT)}`;
-      return `${indent}- ${kindTag}${node.entry.slug}: ${node.entry.title}${updatedAt}${descriptor}${renderMemoryTocIssue(node)}`;
-    })
-    .join('\n');
+  const items = flat.map((node) => {
+    const meta = bySlug.get(node.entry.slug);
+    const indent = '  '.repeat(node.depth);
+    const kindTag = meta === undefined ? '' : `[${meta.kind}] `;
+    const updatedAt = meta === undefined ? '' : ` (${meta.updatedAt})`;
+    const descriptor =
+      node.entry.description === undefined
+        ? ''
+        : ` — ${memoryFreshnessMarker(node.entry.descriptionFreshness)}${excerptLine(node.entry.description, MEMORY_TOC_LINE_LIMIT)}`;
+    return `${indent}- ${kindTag}${node.entry.slug}: ${node.entry.title}${updatedAt}${descriptor}${renderMemoryTocIssue(node)}`;
+  });
+
+  return renderListing(items, {
+    budget: MEMORY_LISTING_BUDGET,
+    omitted: ({ rest, shown, total }) =>
+      `…ほか ${rest} 件は省略（記憶は全 ${total} 件あり、${shown} 件だけ出した）。` +
+      '狙った文書が出ていなければ memory_read slug=<slug> で直接開けること。',
+  });
 }
