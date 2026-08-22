@@ -4340,6 +4340,48 @@ describe('abort() は宛先が名簿に開いていないことを absent と言
     await registry.stop();
   });
 
+  /**
+   * **`unusable`（待っても直らない）でも同じ枝を通り、しかも畳まれないこと。**
+   *
+   * この PR は「一時（`unreachable`）と恒久（台帳に居ない）を畳むな」を潰して
+   * いる。**その隣に別の畳みが残っていると同じ形が再発する** — `unusable` は
+   * 4xx 由来（runner が「その命令は受け取れない」と答えている）なので、
+   * `unreachable`（待てば直る。再試行は予約済み）と畳まれると**意味が逆になる**。
+   *
+   * 構造上は同じ枝を通るはずである（`runner-protocol.ts` の `#open()` の catch
+   * 節で `entry.client = null` は `isRetryableRunnerError` による分岐の**手前**に
+   * 置かれている）。**が、それは読みであって観測ではないので、ここで測る。**
+   */
+  it('待っても直らない宛先（unusable）でも、居ないとは言わず、状態も畳まない', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningAway);
+    const registry = createRunnerRegistry([], { notify: () => undefined });
+    // 4xx は「挑み直しても同じ答えが返る」側（`isRetryableRunnerError` が偽）。
+    await registry.register({
+      label: 'http://runner:4518',
+      open: async () => {
+        throw new RunnerHttpError('鍵が違う', 403);
+      },
+    });
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: registry,
+      profile: createProfileService({ stores, runners: registry }),
+    });
+
+    const result = await pool.abort('mgr-running-away');
+
+    expect(result.outcome).toBe('unknown');
+    expect(result.detail).toContain('unusable');
+    // **待てば直る側と混ぜない。** ここが混ざると、読む側は待つか諦めるかを
+    // 決められない（意味が逆になる）。
+    expect(result.detail).not.toContain('unreachable');
+
+    await pool.stop();
+    await registry.stop();
+  });
+
   it('台帳に居ないものは、いままでどおり absent', async () => {
     const { pool, registry } = await poolWithUnreachableRunnerAndJob();
 
