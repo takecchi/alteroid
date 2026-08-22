@@ -249,4 +249,77 @@ describe('確認へ上がらずに止められた実行（HTTP 境界）', () =>
     expect((await deniedLines(r.stores))[0]).toContain('Edit');
     expect((await deniedLines(r.stores))[0]).toContain('走行中の合図');
   }, 15_000);
+
+  /**
+   * **理由・分類・モデルへの拒否文（`decision_reason` / `decision_reason_type` /
+   * `message`）が、HTTP 境界を越えて日誌まで届くこと。**
+   *
+   * `runnerEventSchema` の `permission_denied` にこの3欄を足した PR（`input` の
+   * ときと同じ理由で全部 `.optional()`）。**同一プロセスのテスト
+   * （`packages/core/src/permission-denied.test.ts`）だけでは、この3欄が
+   * `JSON.stringify` でキーごと落ちる形を再現できない** — ここは本物の HTTP
+   * （`fetchInto` 経由で hono の app へ）を通す。
+   */
+  it('理由・分類・モデルへの拒否文が、境界越しに日誌まで届く', async () => {
+    const r = await open();
+    await r.pool.start({ request: 'テストを直して' });
+    await expect.poll(() => r.sessions.length, { timeout: 2000 }).toBe(1);
+    const session = r.sessions[0];
+    if (!session) throw new Error('マネージャーのセッションが無い');
+
+    // 実機の SDK が送ってくる形（`tool_input` は無く、理由の3欄がある）
+    session.push({
+      type: 'system',
+      subtype: 'permission_denied',
+      tool_name: 'Edit',
+      tool_use_id: 'toolu_1',
+      decision_reason: 'この編集は許可されていないパスに触れている',
+      decision_reason_type: 'rule',
+      message: 'Edit was denied by a deny rule',
+      session_id: 'sess-1',
+      uuid: 'uuid-denied-1',
+    } as unknown as SDKMessage);
+
+    await expect.poll(async () => (await deniedLines(r.stores)).length, { timeout: 2000 }).toBe(1);
+    const line = (await deniedLines(r.stores))[0];
+    expect(line).toContain('Edit');
+    expect(line).toContain('走行中の合図');
+    expect(line).toContain('この編集は許可されていないパスに触れている');
+    expect(line).toContain('rule');
+    expect(line).toContain('Edit was denied by a deny rule');
+  }, 15_000);
+
+  /**
+   * **理由の3欄が無くても、境界越しに拒否そのものは変わらず届くこと。**
+   *
+   * `via: 'result'`（`SDKPermissionDenial`）は理由を一切持たないので、これが
+   * 実機の主要な形である。3欄とも欠けたときに「（不明）」等の作り物を出さない
+   * ことをここで固定する。
+   */
+  it('理由の3欄が無い result の記録でも、作り物を足さずに境界越しに届く', async () => {
+    const r = await open();
+    await r.pool.start({ request: 'テストを直して' });
+    await expect.poll(() => r.sessions.length, { timeout: 2000 }).toBe(1);
+    const session = r.sessions[0];
+    if (!session) throw new Error('マネージャーのセッションが無い');
+
+    session.push({
+      type: 'result',
+      subtype: 'success',
+      result: '編集できなかったので報告する',
+      permission_denials: [
+        { tool_name: 'Edit', tool_use_id: 'toolu_1', tool_input: { file_path: 'a.tsx' } },
+      ],
+      session_id: 'sess-1',
+      uuid: 'uuid-result-1',
+    } as unknown as SDKMessage);
+
+    await expect.poll(async () => (await deniedLines(r.stores)).length, { timeout: 2000 }).toBe(1);
+    const line = (await deniedLines(r.stores))[0];
+    expect(line).toContain('Edit');
+    expect(line).not.toContain('分類:');
+    expect(line).not.toContain('理由:');
+    expect(line).not.toContain('モデルへの拒否文:');
+    expect(line).not.toContain('（不明）');
+  }, 15_000);
 });
