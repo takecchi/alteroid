@@ -382,3 +382,98 @@ describe('turn_usage — 種別フィルタと1行の文言', () => {
     });
   });
 });
+
+/**
+ * **「もっと遡る」ボタン（過去方向のカーソル送り、`use-journal-window.ts` の
+ * `loadOlderAt`）に対する歯。**
+ *
+ * このボタンは `<Card>`（`Virtualizer` を包む）の外にある素の JSX で、
+ * `entries.length > 0` かつ `olderStatus` が `progress`/`retryLarger` のときに
+ * 出るだけの通常のボタンである。virtua の描画には依存しないので、他の
+ * テストと同じ `fireEvent.click` で押せる（`stub.calls` で実際に撃たれた
+ * クエリを見る）。
+ *
+ * 2026-08-23 追記: 変異試験（PR #239）で「until/limit の取り違えを検出する
+ * 歯が無い。ただし virtua に阻まれておらず、素の jsdom で測れるはず」と
+ * 指摘されたので、ここへ足す。
+ */
+describe('もっと遡る（過去方向のカーソル送り）', () => {
+  const CURSOR_BASE = new Date('2026-08-20T00:00:00.000Z').getTime();
+
+  function pastDecision(id: string, minutesAgo: number): JournalEntry {
+    return {
+      type: 'decision',
+      id,
+      at: new Date(CURSOR_BASE - minutesAgo * 60_000).toISOString(),
+      decision: `d-${id}`,
+      grounds: 'g',
+    };
+  }
+
+  /** 新しい順（`at` 降順）に100件。先頭と末尾で `at` が違う値になっている。 */
+  const PAGE = Array.from({ length: 100 }, (_, i) => pastDecision(`p${i}`, i));
+
+  it('until には一覧の末尾（最古）の at を渡す（先頭の at と取り違えたら落ちる）', async () => {
+    const stub = stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      if (new URL(url).searchParams.has('until')) {
+        // 2回目（クリック後）の呼び出し。until の値だけを見たいので、応答は
+        // 空でよい（freshCount===0 かつ pageLength(0) < limit で素直に `end`
+        // になり、余計な撃ち直しを起こさない）。
+        return json({ entries: [], scanned: 0 });
+      }
+      return json({ entries: PAGE, scanned: PAGE.length });
+    });
+
+    renderJournal({ status: 'live', recent: [] });
+    await waitForLoaded();
+
+    fireEvent.click(await screen.findByRole('button', { name: /もっと遡る/ }));
+
+    await waitFor(() => {
+      expect(stub.calls.filter((url) => url.includes('/journal'))).toHaveLength(2);
+    });
+
+    const secondCall = stub.calls.filter((url) => url.includes('/journal'))[1]!;
+    // 末尾（最古）の at。`newestAt`（先頭）と取り違えると別の値になり、ここで落ちる。
+    expect(new URL(secondCall).searchParams.get('until')).toBe(PAGE.at(-1)!.at);
+  });
+
+  it('retryLarger（同じ境界が limit ちょうど埋まった）のとき limit を JOURNAL_MAX_LIMIT へ上げて撃ち直す', async () => {
+    // **呼び出し回数で応答を決める（`limit` の値では決めない）。** `limit` の
+    // 値で分岐すると、「limit を上げない」変異（B2）を当てたときに同じ分岐へ
+    // 何度でも入り続けて撃ち直しが止まらなくなる（実際に手元で無限再帰になり、
+    // このテストを含むプロセスが応答しなくなった）。呼び出し回数で切れば、
+    // 変異があってもなくても3回目で必ず終端（`end`）になり、判定は3回目に
+    // 実際に使われた `limit` の値そのもので行う。
+    let journalCalls = 0;
+    const stub = stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      journalCalls += 1;
+      if (journalCalls <= 2) {
+        // 1回目（初期読み込み）・2回目（クリック直後、limit=100 で撃ち直す）は
+        // 同じ100件をそのまま返す＝全件が既知（freshCount===0）かつ
+        // pageLength(100)===limit(100) → retryLarger
+        // （`~/lib/journal-window.ts` の `pageOutcome` の doc）。
+        return json({ entries: PAGE, scanned: PAGE.length });
+      }
+      // 3回目以降は無条件に終端にする（limit が上がったかどうかに関わらず、
+      // ここで撃ち直しを止める）。
+      return json({ entries: [], scanned: 0 });
+    });
+
+    renderJournal({ status: 'live', recent: [] });
+    await waitForLoaded();
+
+    fireEvent.click(await screen.findByRole('button', { name: /もっと遡る/ }));
+
+    await waitFor(() => {
+      expect(stub.calls.filter((url) => url.includes('/journal')).length).toBeGreaterThanOrEqual(3);
+    });
+
+    const thirdCall = stub.calls.filter((url) => url.includes('/journal'))[2]!;
+    // JOURNAL_MAX_LIMIT を素通しする変異（limit を上げずに撃ち直す）だと
+    // ここが '100' のままになり落ちる。
+    expect(new URL(thirdCall).searchParams.get('limit')).toBe('1000');
+  });
+});
