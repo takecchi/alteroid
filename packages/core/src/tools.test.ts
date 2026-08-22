@@ -15,6 +15,7 @@ import {
   qualifiedToolName,
 } from './tools.js';
 import type { AccountUsageState } from './usage-snapshot.js';
+import { usageDate } from './usage.js';
 
 interface Harness {
   stores: Stores;
@@ -2358,5 +2359,356 @@ describe('システムプロンプトの道具一覧', () => {
     expect(section).toBeDefined();
     const missing = CLONE_TOOL_NAMES.filter((name) => !(section ?? '').includes(`\`${name}\``));
     expect(missing).toEqual([]);
+  });
+});
+
+/**
+ * **一覧の総当たり — 「予算を書き忘れても何も落ちない」形をやめる。**
+ *
+ * この repo は同じバグを3回踏んでいる。`manager_list` が件数で溢れ（実測
+ * 52,997 文字）、`journal_read` が出力上限で丸ごと落ち、`digest` の6節が
+ * 黙って切れた。3回とも「溢れた1本を後追いで塞ぐ」形で終わっていて、
+ * その理由は `digest.ts` の冒頭が逐語で記録している:
+ *
+ * > 後から足した6節が黙って切れていたのは、**この行が各節の実装の側にあって
+ * > 書き忘れても何も落ちなかったから**
+ *
+ * 道具の側も同じだった。`manager_list` にだけ「件数が増えても壊れない」歯が
+ * 立っていて、`approvals_list` / `schedule_list` / `runner_list` は無上限のまま
+ * 残っていた。**歯が1本ずつだと、次に足す一覧も無上限で入る。**
+ *
+ * だからここは**名前から機械的に集める**。`CLONE_TOOL_NAMES` に `_list` で
+ * 終わる名前を足した人は、この試験に何も書き足さなくても捕まる。
+ *
+ * ⚠️ **この掃き方が拾えない範囲を明示しておく。** 集めているのは名前が
+ * `_list` で終わるものだけで、`journal_read` / `usage_read` は一覧を返すのに
+ * この網に入らない（下で名指しして足してある）。**別の名前で新しい一覧を
+ * 足した人は、やはり自分で書き足す必要がある** — 網が全部を覆っていると
+ * 読まれるほうが、覆っていないと分かっているより悪い。
+ */
+describe('一覧は例外なく件数で壊れない（`*_list` の総当たり）', () => {
+  /** 名前から集めた一覧。**ここに手で名前を書かない**（書けば数え上げが腐る）。 */
+  const SWEPT = CLONE_TOOL_NAMES.filter((name) => name.endsWith('_list'));
+  /**
+   * 名前が `_list` で終わらないのに一覧を返すもの。**網の外なので名指しする。**
+   * 引数は「既定の呼び方」（一覧モード）を選ぶためのもの。
+   */
+  const NAMED: { label: string; name: string; args: Record<string, unknown> }[] = [
+    { label: 'journal_read（既定）', name: 'journal_read', args: {} },
+    /*
+     * **`journal_read` は既定の引数では予算に届かない。**
+     *
+     * 既定は 20 件で、1件の本文は 120 字に抜粋される（`JOURNAL_TEXT_EXCERPT`）
+     * ので、既定の呼びは高々 3,000 字程度にしかならず `JOURNAL_BUDGET` は
+     * 一度も拘束条件にならない。既定だけを測ると、この一覧については
+     * 「予算が効いている」ことを何も確かめていない。
+     *
+     * だから**呼び手が広げられる上限まで広げた呼び**も測る。`limit` の最大は
+     * 200 なので、これが「クローンが出せる最大の要求」である。
+     */
+    { label: 'journal_read（limit 最大）', name: 'journal_read', args: { limit: 200 } },
+    { label: 'usage_read', name: 'usage_read', args: {} },
+  ];
+
+  /**
+   * MCP の出力上限より十分小さい安全域。`manager_list` の既存の歯と同じ値を
+   * 使う（実測で溢れたのは 52,997 文字）。
+   */
+  const OUTPUT_CAP = 12_000;
+
+  /**
+   * 「切った」と読める合図。**この形のどれかで言うことが一覧の契約である。**
+   *
+   * ⚠️ **語彙を増やすほど、この試験は「何か書いてある」しか測らなくなる。**
+   * 新しい一覧を足すときは、まず既存の言い方に寄せること——ここへ1つ足すのは
+   * 「その言い方も契約に入れる」という判断であって、通し方の調整ではない。
+   *
+   * いま入っているものの出どころ:
+   * - `省略` — `manager_list` / `journal_read` / `approvals_list` /
+   *   `schedule_list` / `runner_list` / `memory_list` / `commitment_list`
+   * - `残り N` — `usage_read`（軸モードの続きの案内。既存の言い方）
+   * - `文字目` — `describePage`（全文モードで何文字目までか）
+   */
+  const TRUNCATION_MARK = /省略|残り \d|文字目/;
+
+  it('掃き出しが空にならない（検出器そのものが効いていることの確認）', () => {
+    // 0件でも `it.each` は「通った」ように見える。数え上げが壊れたら落ちる。
+    expect(SWEPT.length).toBeGreaterThanOrEqual(6);
+    expect(SWEPT).toContain('approvals_list');
+    expect(SWEPT).toContain('schedule_list');
+    expect(SWEPT).toContain('runner_list');
+    expect(SWEPT).toContain('memory_list');
+    expect(SWEPT).toContain('commitment_list');
+    expect(SWEPT).toContain('manager_list');
+  });
+
+  /**
+   * どの一覧も「溢れる手前」まで積んだ器を作る。
+   *
+   * **1つの器で全部の一覧を撃つ。** 一覧ごとに別の器を作ると、積み忘れた
+   * ストアの一覧が「0件だから短い」で通ってしまう（それは上限の保証ではない）。
+   */
+  async function flooded(count: number): Promise<Harness> {
+    const h = harness();
+    const long = 'あ'.repeat(1_500);
+
+    for (let index = 0; index < count; index += 1) {
+      const pad = String(index).padStart(4, '0');
+      // マネージャー（manager_list / runner_list の内訳）
+      await h.call('manager_start', { request: `依頼${pad}: ${long}` });
+      // 承認待ち（approvals_list）
+      await h.stores.jobs.putApproval({
+        id: `ap-${pad}`,
+        createdAt: `2026-01-01T00:00:${String(index % 60).padStart(2, '0')}.000Z`,
+        question: `質問${pad}: ${long}`,
+        jobId: `mgr-${pad}`,
+        requestId: `req-${pad}`,
+      });
+      // 継続中の依頼（schedule_list）
+      await h.call('schedule_create', {
+        kind: `watch-${pad}`,
+        request: `仕込み${pad}: ${long}`,
+        everyMinutes: 60,
+      });
+      // 引き受けた仕事（commitment_list）
+      await h.call('commitment_open', { body: `約束${pad}: ${long}` });
+      // 記憶（memory_list）
+      await h.stores.persona.write(
+        `doc-${pad}`,
+        `---\ndescription: 要旨${pad} ${long}\ntype: fact\n---\n# 題${pad}\n\n${long}`,
+      );
+      // 日誌（journal_read）
+      await h.call('journal_write', { type: 'decision', decision: `決めた${pad}: ${long}` });
+      // 使用量の台帳（usage_read）— 委譲別の軸が件数で伸びる
+      await h.stores.usage.record({
+        layer: 'manager',
+        site: 'session',
+        accumulation: 'cumulative',
+        managerId: `mgr-${pad}`,
+        date: usageDate(new Date(2026, 7, 14, 10, 0)),
+        at: new Date(2026, 7, 14, 10, 0).toISOString(),
+        snapshot: {
+          models: {
+            [`claude-model-${pad}`]: {
+              inputTokens: 10,
+              outputTokens: 100,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+              webSearchRequests: 0,
+              costUsd: 1 + index,
+            },
+          },
+        },
+      });
+    }
+    for (const summary of h.running) {
+      summary.lastReport = `報告: ${'ほ'.repeat(3_000)}`;
+      summary.waiting = [{ requestId: `req-${summary.managerId}`, summary: 'ま'.repeat(3_000) }];
+    }
+    // 器の一覧（runner_list）— 内訳に全マネージャーを載せる。
+    // **台数は「予算が拘束条件になる」ところまで積む。** 12台で試したときは
+    // `RUNNER_MANAGER_LIST_LIMIT`（内訳の件数）だけで上限内に収まってしまい、
+    // ブロックの予算を外す変異が生き残った（＝この一覧については何も測れて
+    // いなかった）。変異で確かめて決めた台数である。
+    h.setRunnersOverview({
+      runners: Array.from({ length: 120 }, (_, index) => ({
+        label: `runner-${index}`,
+        state: 'connected' as const,
+        since: '2026-01-01T00:00:00.000Z',
+        runnerId: `runner-${index}`,
+        workspacePath: '/workspace',
+        revision: { status: 'unknown' as const },
+        managers: h.running.map((m) => ({ managerId: m.managerId, status: m.status })),
+      })),
+      unassigned: h.running.map((m) => ({ managerId: m.managerId, status: m.status })),
+      daemonRevision: { status: 'unknown' as const },
+    });
+    return h;
+  }
+
+  const CASES = [
+    ...SWEPT.map((name) => ({ label: name, name, args: {} as Record<string, unknown> })),
+    ...NAMED,
+  ];
+
+  it.each(CASES)('$label — 件数が増えても出力は上限内に収まる', async ({ name, args }) => {
+    const h = await flooded(60);
+
+    const reply = await h.call(name, args);
+
+    expect(reply.length).toBeLessThan(OUTPUT_CAP);
+  });
+
+  it.each(CASES)(
+    '$label — 切ったなら黙らない（省いたことが出力に出る）',
+    async ({ name, args }) => {
+      const h = await flooded(60);
+
+      const reply = await h.call(name, args);
+
+      // **「切った」と読める合図が出ていること。** 何も出ていなければ、
+      // 受け取った側は「これで全部だ」と読んで全体像を組み立てる。
+      expect(reply).toMatch(TRUNCATION_MARK);
+    },
+  );
+
+  it('積んだ器が本当に溢れる量を持っている（上限を外すと落ちること）', async () => {
+    const h = await flooded(60);
+
+    // **この試験の前提そのものを測る。** 積んだ量が上限より小さいと、
+    // 上の2本は「上限が効いた」のではなく「そもそも短かった」で通る。
+    // 生データの側が `OUTPUT_CAP` を大きく超えていることを、一覧を通さずに確かめる。
+    const approvals = await h.stores.jobs.listApprovals({ pendingOnly: true });
+    const raw = approvals.map((a) => a.question).join('\n');
+    expect(raw.length).toBeGreaterThan(OUTPUT_CAP * 4);
+  });
+});
+
+/**
+ * **詳細側 — 一覧を抜粋にした以上、全文への行き先が要る。**
+ *
+ * 人間は Web UI で全部読める。クローンだけが「抜粋しか読めない」なら、
+ * それは能力の削除である（north_star 禁止1）。だから一覧を締めるときは、
+ * 必ず同じ PR で全文の口を用意する。
+ *
+ * そして全文の口は**分けて渡す**（切って捨てるのではない）。ここで測るのは
+ * 「続きが取れること」と「切れていることが分かること」の2つで、
+ * **別々の `it()` にしてある** — 片方が通ったらもう片方も通ったように
+ * 見える形にすると、どちらが壊れたのか分からなくなる。
+ */
+describe('一覧を抜粋にしたものには、全文の行き先がある', () => {
+  it('approvals_list id=<id> で質問の全文が取れる', async () => {
+    const h = harness();
+    await h.stores.jobs.putApproval({
+      id: 'ap-1',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      question: `頭${'あ'.repeat(400)}尻`,
+      context: '背景の説明',
+    });
+
+    const listing = await h.call('approvals_list', {});
+    const full = await h.call('approvals_list', { id: 'ap-1' });
+
+    // 一覧は抜粋（末尾まで出ない）
+    expect(listing).not.toContain('尻');
+    // 全文は末尾まで出る
+    expect(full).toContain('尻');
+    expect(full).toContain('背景の説明');
+  });
+
+  it('approvals_list は回答が付いた件も id で読める（一覧からは消えていても）', async () => {
+    // 「もう答えが来た」と「その質問が何だったか」は別の問いで、
+    // 後者は答えが付いた後にこそ要る。
+    const h = harness();
+    await h.stores.jobs.putApproval({
+      id: 'ap-done',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      question: '本番に出してよいか',
+      answeredAt: '2026-01-01T01:00:00.000Z',
+      answer: 'よい',
+    });
+
+    expect(await h.call('approvals_list', {})).not.toContain('本番に出してよいか');
+
+    const full = await h.call('approvals_list', { id: 'ap-done' });
+    expect(full).toContain('本番に出してよいか');
+    expect(full).toContain('よい');
+    expect(full).toContain('回答済み');
+  });
+
+  it('approvals_list の全文が長ければ、続きの取り方が出力に出る', async () => {
+    const h = harness();
+    await h.stores.jobs.putApproval({
+      id: 'ap-long',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      question: 'あ'.repeat(9_000),
+    });
+
+    const reply = await h.call('approvals_list', { id: 'ap-long' });
+
+    expect(reply).toContain('ここで切れている');
+    expect(reply).toContain('offset');
+    expect(reply).toMatch(/文字目/);
+  });
+
+  it('schedule_list kind=<kind> で依頼本文の全文が取れる', async () => {
+    const h = harness();
+    await h.call('schedule_create', {
+      kind: 'watch',
+      request: `頭${'あ'.repeat(400)}尻`,
+      everyMinutes: 60,
+    });
+
+    const listing = await h.call('schedule_list', {});
+    const full = await h.call('schedule_list', { kind: 'watch' });
+
+    expect(listing).not.toContain('尻');
+    expect(full).toContain('尻');
+  });
+
+  it('memory_read は長ければ切れて、続きの取り方が出力に出る', async () => {
+    const h = harness();
+    await h.stores.persona.write('big', `# 題\n\n${'あ'.repeat(9_000)}`);
+
+    const reply = await h.call('memory_read', { slug: 'big' });
+
+    expect(reply).toContain('ここで切れている');
+    expect(reply).toContain('memory_read');
+    expect(reply).toContain('offset');
+  });
+
+  it('memory_read は offset で続きが取れる（分けて渡せば全部届く）', async () => {
+    const h = harness();
+    await h.stores.persona.write('big', `${'あ'.repeat(9_000)}しっぽ`);
+
+    const first = await h.call('memory_read', { slug: 'big' });
+    const second = await h.call('memory_read', { slug: 'big', offset: 8_000 });
+
+    expect(first).not.toContain('しっぽ');
+    expect(second).toContain('しっぽ');
+  });
+
+  it('memory_read は切れていないとき注記を出さない（目印を効かせるため）', async () => {
+    const h = harness();
+    await h.stores.persona.write('small', '# 題\n\n短い本文');
+
+    const reply = await h.call('memory_read', { slug: 'small' });
+
+    expect(reply).toBe('# 題\n\n短い本文');
+  });
+
+  it('self_read は長い正典を切って返し、続きの取り方を示す', async () => {
+    const h = harness();
+
+    // `docs/architecture.md` は着手時点で 48,856 バイトある。
+    const reply = await h.call('self_read', { document: 'architecture' });
+
+    expect(reply.length).toBeLessThan(12_000);
+    expect(reply).toContain('ここで切れている');
+    expect(reply).toContain('self_read');
+    expect(reply).toContain('offset');
+  });
+
+  it('self_read は offset で続きが取れる', async () => {
+    const h = harness();
+
+    const first = await h.call('self_read', { document: 'architecture' });
+    const second = await h.call('self_read', { document: 'architecture', offset: 8_000 });
+
+    expect(second).not.toBe(first);
+    expect(second).toMatch(/文字目/);
+  });
+
+  it('profile_read が切れるときは、全文置換の危険まで言う', async () => {
+    // `profile_write` は全文置換である。切れた本文をそのまま書き戻すと
+    // 残りが黙って消える——しかも切れた shell も妥当に見えるので検証を通る。
+    const h = harness();
+    await h.call('profile_write', { script: `export A=1\n${'# 埋め草\n'.repeat(1_500)}` });
+
+    const reply = await h.call('profile_read', {});
+
+    expect(reply).toContain('ここで切れている');
+    expect(reply).toContain('offset');
+    expect(reply).toContain('全文置換');
   });
 });
