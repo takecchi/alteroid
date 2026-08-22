@@ -1236,7 +1236,7 @@ describe('HTTP API', () => {
     expect(response.status).toBe(200);
     const { id } = (await response.json()) as { id: string };
     expect(await stores.permissions.list()).toMatchObject([
-      { id, rule: 'Bash(gh pr merge:*)', grantedBy: 'human', note: '#182 の発端' },
+      { id, rule: 'Bash(gh pr merge:*)', grantedBy: 'operator', note: '#182 の発端' },
     ]);
 
     // **流し込まないと、次にセッションが開くまで（数時間後か数日後）効かない。**
@@ -1304,19 +1304,58 @@ describe('HTTP API', () => {
   });
 
   /**
-   * **`grantedBy` を本文から取らない**（`POST /commitments` の `origin` と同じ理由）。
+   * **`grantedBy` は本文から取らず、観測できた資格を書く。**
    *
-   * ここを呼び出し側に選ばせると、クローンが人間以外を名乗って許可を足したように
-   * 見せられる ＝「誰の承認で増えたか」が記録として信用できなくなる。
+   * 呼び出し側に選ばせると名乗りたい名前を名乗れる。**かといって `'human'` 固定にも
+   * しない — それは嘘になる。** `operator` の資格は状態ファイルを読めることでしかなく、
+   * クローンの手は同じ器の中にあるので `Bash` で読んで `curl` で叩ける。固定すると
+   * クローンが足したものまで「人間が足した」と記録される。
    */
-  it('grantedBy は本文から取らない（human で固定）', async () => {
+  it('grantedBy は本文から取らず、提示された資格を書く', async () => {
     const response = await app.request(
       '/permissions',
-      json({ rule: 'WebFetch', grantedBy: 'clone' }),
+      json({ rule: 'WebFetch', grantedBy: 'クローンではない誰か' }),
     );
 
     expect(response.status).toBe(200);
-    expect((await stores.permissions.list())[0]?.grantedBy).toBe('human');
+    // 本文の名乗りは通らない。入るのは観測できた資格だけ
+    expect((await stores.permissions.list())[0]?.grantedBy).toBe('operator');
+  });
+
+  /**
+   * **足す瞬間に「これは効かない見込みだ」と言う。**
+   *
+   * `auto` はインタプリタ・遠隔実行系の Bash allow 規則を照合の前に候補から外すので、
+   * 人間は許可したつもりで一度も効かないことがある。積み上がってからの検出
+   * （`#noteDenial`）だけでは、気づくまでに人間が何本も足してしまう。
+   */
+  it('auto で黙って効かない見込みの規則は、開けた応答で警告する（止めはしない）', async () => {
+    const response = await app.request('/permissions', json({ rule: 'Bash(python:*)' }));
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { warning?: string };
+    expect(body.warning).toContain('python');
+
+    // **止めない。** ここに「何が通るか」を決める表を持たせない（不変条件1）
+    expect(await stores.permissions.list()).toHaveLength(1);
+    // 日誌にも残る（人間が後から読んで気づける）
+    const decisions = (await stores.journal.list())
+      .filter((entry) => entry.type === 'decision')
+      .map((entry) => (entry as { decision: string }).decision);
+    expect(decisions.some((text) => text.includes('auto のとき'))).toBe(true);
+  });
+
+  /**
+   * **警告が無いことは「効く」を意味しない。**
+   *
+   * 言えるのは「当たったなら効かない見込み」までである（見分けは SDK 実装の写しで
+   * あって正本ではない）。ここで問うているのは、当たらない規則に警告を付けないことだけ。
+   */
+  it('除外に当たらない規則には警告を付けない', async () => {
+    const response = await app.request('/permissions', json({ rule: 'Bash(gh pr merge:*)' }));
+
+    expect(response.status).toBe(200);
+    expect((await response.json()) as { warning?: string }).not.toHaveProperty('warning');
   });
 
   /**

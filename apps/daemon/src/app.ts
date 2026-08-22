@@ -368,6 +368,62 @@ const commitmentCloseBody = z.object({ reason: z.string().min(1) });
 const commitmentsQuery = z.object({ includeClosed: z.enum(['true', 'false']).default('false') });
 
 /**
+ * `auto` が照合の前に候補から外す Bash 規則を見分ける（**助言であって判定ではない**）。
+ *
+ * 出荷されている判定実装を静的に読んだ結果（2026-08-22 観測、
+ * `claude-agent-sdk-linux-x64@0.3.239` の `BOe` / `N1t` / `B4n`）、`permissionMode`
+ * が `auto` のとき、**インタプリタ・遠隔実行系の Bash allow 規則は照合される前に
+ * allow の候補から除外される。** 除外された規則は一致しようがないので、
+ * **人間は許可したつもりで一度も効かない。**
+ *
+ * **⚠️ この一覧は向こうの実装の写しであって、正本ではない。**
+ * 向こうが増やせばここは黙って古くなる（この repo の「固定した数は固定した瞬間から
+ * 腐り、腐ったことは読む側からは分からない」と同じ形）。だから:
+ *
+ * - **止めない。** 助言を返すだけで、許可そのものは通す（不変条件1 — ここに
+ *   「何が通るか」を決める表を持たない。持った瞬間に権限の一覧になる）
+ * - **「当たらなかった＝効く」と言わない。** 言えるのは「当たったなら効かない見込み」
+ *   までである。設定 `autoMode.classifyAllShell` が真なら **Bash の allow 規則は
+ *   全部**除外されるが、デーモンからその設定は読んでいないので、ここでは判定できない
+ * - 積み上がってからの検出は別に在る（`clone.ts` の `#noteDenial`）。**こちらは
+ *   足す瞬間に言うためのもので、両方要る**
+ */
+const AUTO_EXCLUDED_BASH_HEADS = [
+  'python',
+  'python3',
+  'node',
+  'ruby',
+  'perl',
+  'php',
+  'ssh',
+  'scp',
+  'kubectl',
+  'docker',
+  'eval',
+  'sh',
+  'bash',
+  'zsh',
+];
+
+/**
+ * 足そうとしている規則が `auto` で黙って効かない見込みなら、その旨の1行。
+ * 当たらなければ `null`（**「効く」の意味ではない**。上の doc）。
+ */
+export function autoModeWarningFor(rule: string): string | null {
+  const match = /^Bash\((.*)\)$/.exec(rule.trim());
+  if (match === null) return null;
+  const head = (match[1] ?? '').trim().split(/[\s:]/)[0]?.toLowerCase() ?? '';
+  if (head.length === 0) return null;
+  if (!AUTO_EXCLUDED_BASH_HEADS.includes(head)) return null;
+  return (
+    `⚠️ この規則は permissionMode が auto のとき、照合される前に候補から外される見込み` +
+    `（${head} はインタプリタ・遠隔実行系として除外される）。` +
+    `許可しても一度も効かない可能性が高い。` +
+    `**この見分けは SDK 実装の写し（2026-08-22 観測）であって正本ではない。**`
+  );
+}
+
+/**
  * 許す規則1本。
  *
  * **器はこの文字列の中身を解釈しない。** 何が広くて何が狭いかを判定する表をここに
@@ -2019,14 +2075,20 @@ export function createApp(deps: AppDeps) {
       validator('json', permissionGrantBody),
       async (c) => {
         const { rule, note } = c.req.valid('json');
+        // **本文から取らない**（`POST /commitments` の `origin` と同じ理由）。
+        // ここを呼び出し側に選ばせると、名乗りたい名前を名乗れる。
+        //
+        // **ただし `'human'` 固定にもしないこと。それは嘘になる** — `operator` の資格は
+        // 状態ファイルを読めることでしかなく、クローンの手は同じ器の中にあるので
+        // `Bash` で読んで `curl` で叩ける。固定すると、クローンが足したものまで
+        // 「人間が足した」と記録されてしまう。**観測できたものだけを書く**
+        // （`permissionRuleSchema.grantedBy` の doc）。
+        const principal = c.get('principal');
         const entry = {
           id: randomUUID(),
           rule,
           grantedAt: new Date().toISOString(),
-          // **本文から取らない**（`POST /commitments` の `origin` と同じ理由）。
-          // ここを呼び出し側に選ばせると、クローンが自分の名前以外を名乗って
-          // 許可を足したように見せられる。
-          grantedBy: 'human' as const,
+          grantedBy: principal.kind === 'operator' ? 'operator' : `account:${principal.account.id}`,
           ...(note === undefined ? {} : { note }),
         };
         // **重ねない。** 同じ規則が2行あると、人間が1行消しても規則は効いたままになり
@@ -2036,17 +2098,27 @@ export function createApp(deps: AppDeps) {
         }
         // **記録に残らない許可は、許可として成立していない。** 人間が後から読んで
         // 否定できることが最終承認の実体である（north_star）。
+        // **足す瞬間に言う。** 積み上がってから検出するより安い（`autoModeWarningFor`）。
+        const warning = autoModeWarningFor(rule);
         await stores.journal.append({
           type: 'decision',
           decision:
-            `人間が実行許可を開けた（${entry.id}）: ${rule}` +
-            `${note === undefined ? '' : `（${note}）`}`,
-          grounds: '人間が直接 API から許可を開けた',
+            `実行許可を開けた（${entry.id}）: ${rule}` +
+            `${note === undefined ? '' : `（${note}）`}` +
+            `${warning === null ? '' : ` ${warning}`}`,
+          // **「人間が」と書かない。** 書けるのは提示された資格までである
+          grounds: `${entry.grantedBy} の資格で HTTP から許可を開けた`,
         });
         // **台帳を書き換えたら必ず流し込む。** 呼ばないと次にセッションが開くまで
         // （＝数時間後か数日後）効かない。
         await clone.applyPermissions();
-        return c.json(permissionGrantedResponseSchema.parse({ ok: true, id: entry.id }));
+        return c.json(
+          permissionGrantedResponseSchema.parse({
+            ok: true,
+            id: entry.id,
+            ...(warning === null ? {} : { warning }),
+          }),
+        );
       },
     )
 
@@ -2080,8 +2152,8 @@ export function createApp(deps: AppDeps) {
         }
         await stores.journal.append({
           type: 'decision',
-          decision: `人間が実行許可を取り消した（${id}）: ${existing?.rule ?? '規則の記録なし'}`,
-          grounds: '人間が直接 API から取り消した',
+          decision: `実行許可を取り消した（${id}）: ${existing?.rule ?? '規則の記録なし'}`,
+          grounds: `${c.get('principal').kind === 'operator' ? 'operator' : 'account'} の資格で HTTP から取り消した`,
         });
         // **消したら実際に効かなくなること。** 全量を送り直すので、減った規則はここで消える。
         await clone.applyPermissions();

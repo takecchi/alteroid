@@ -356,7 +356,17 @@ export const permissionListResponseSchema = z.object({ entries: z.array(permissi
  * 「人間は増やせるが自分では消せない」＝ 片道の権限になる（`commitmentOpenedResponseSchema`
  * と同じ理由）。
  */
-export const permissionGrantedResponseSchema = z.object({ ok: z.literal(true), id: z.string() });
+export const permissionGrantedResponseSchema = z.object({
+  ok: z.literal(true),
+  id: z.string(),
+  /**
+   * その規則が `auto` で黙って効かない見込みのときの1行（`autoModeWarningFor`）。
+   *
+   * **無いことは「効く」を意味しない。** 言えるのは「当たったなら効かない見込み」
+   * までである（見分けは SDK 実装の写しであって正本ではない）。
+   */
+  warning: z.string().optional(),
+});
 
 // ---------------------------------------------------------------------------
 // マネージャー（/managers）
