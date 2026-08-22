@@ -562,7 +562,7 @@ class Pool implements ManagerPool {
 
     const runner = await this.#runnerOf(record);
     if (!runner) {
-      return { outcome: 'unknown', detail: this.#absentRunnerDetail(record) };
+      return { outcome: 'unknown', detail: this.#runnerNotOpenDetail(record) };
     }
 
     const { decision, requestId } = options;
@@ -903,7 +903,7 @@ class Pool implements ManagerPool {
       //
       // **言い方は `send()` と同じものを使う。** 同じ観測に2つの言い方を
       // 持たせると、片方だけが直る形になる。
-      return { outcome: 'unknown', detail: this.#absentRunnerDetail(record) };
+      return { outcome: 'unknown', detail: this.#runnerNotOpenDetail(record) };
     }
 
     // **`runner.stop()` が投げても、ここで abort() ごと reject させない。** HTTP
@@ -1355,6 +1355,13 @@ class Pool implements ManagerPool {
   /**
    * 宛先を引けなかったときに返す1行。
    *
+   * **名前に `absent` を使わない。** このファイルでは `'absent'` が
+   * `ManagerAbortResult` の値（＝**そのマネージャーが台帳に居ない**。HTTP 404）
+   * として意味を持っている。ここが答えているのは「宛先の runner がいま名簿に
+   * 開いていない」であって**別の観測**なので、名前で寄せると、この関数を呼ぶ側が
+   * まさに畳んではいけない2つを畳む向きへ押される（`abort()` は実際にそう
+   * 畳んでいた）。
+   *
    * **観測しているのは「いま名簿に開いた宛先が無い」ことだけである。** ここは
    * 「別の runner で続きを起こすには workspace の移送が要る」と**恒久の話**を
    * していたが、そう言える材料はここに無い。`RunnerRegistry#get()` が `null` を
@@ -1384,7 +1391,7 @@ class Pool implements ManagerPool {
    * ここはまさにそれが無い場合である。**引けない対応付けを推測で埋めない**ので、
    * 名簿はそのまま見せて、絞り込みは読む側に任せる。
    */
-  #absentRunnerDetail(record: ManagerRecord): string {
+  #runnerNotOpenDetail(record: ManagerRecord): string {
     const entries = this.#runners.entries();
     const runnerId = record.job.runnerId;
     const head =

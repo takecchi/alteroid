@@ -4043,7 +4043,8 @@ describe('runner の一覧（ManagerPool.runners）', () => {
 });
 
 /**
- * 宛先を引けなかったときに返す言葉（`ManagerPool#send` の `#absentRunnerDetail`）。
+ * 宛先を引けなかったときに返す言葉（`ManagerPool` の `#runnerNotOpenDetail`。
+ * `send()` と `abort()` の両方がこれを呼ぶ）。
  *
  * **測るのは「言葉が、コードの観測と食い違っていないか」だけである。**
  * `RunnerRegistry#get()` が `null` を返すのは `entry.client` が無いときで、そこには
