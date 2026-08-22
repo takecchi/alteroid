@@ -1528,6 +1528,11 @@ describe('会話・出来事・マネージャーへの手出し', () => {
       { role: 'inbound', text: 'ひとつめ' },
       { role: 'outbound', text: 'ふたつめ' },
     ]);
+    // **項目が増えていないことも見る。** `toMatchObject` は余分な鍵を無視し、
+    // 応答スキーマは実行時に本体を削らない（`resolver()` は文書化だけ）ので、
+    // 共有した組み立て（`conversation.ts` は `conversationId` も持つ）から
+    // 1項目余って出ても、上のアサーションは通ってしまう。
+    expect(Object.keys(body.messages[0]!).sort()).toEqual(['at', 'id', 'role', 'text']);
   });
 
   /**

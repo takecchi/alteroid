@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { describePage, excerpt, excerptLine, page, renderListing } from './excerpt.js';
+import {
+  describePage,
+  excerpt,
+  excerptLine,
+  page,
+  renderListing,
+  renderListingFromEnd,
+} from './excerpt.js';
 
 /**
  * 抜粋 — **切るなら、切ったと分かる形で切る。**
@@ -72,6 +79,57 @@ describe('renderListing（一覧を予算で積む）', () => {
 
   it('空なら空文字（呼び手が「0件のときの言い方」を自分で決められる）', () => {
     expect(renderListing([], { budget: 100, omitted })).toBe('');
+  });
+});
+
+/**
+ * **落とす側が逆だと、いちばん要るものが消える。**
+ *
+ * 時系列に並んだ会話を先頭から積むと、予算で落ちるのは直近の発言になる。
+ * 会話を開く動機はたいてい「さっきの続き」なので、そこが消えるのは一番効く
+ * 場所が消えることであり、しかも断り書きは「もっと遡れ」と逆向きの続きの
+ * 取り方を案内することになる。
+ */
+describe('renderListingFromEnd（末尾を残して積む）', () => {
+  const omitted = ({ rest, shown, total }: { rest: number; shown: number; total: number }) =>
+    `…古い側 ${rest} 件は省略（全 ${total} 件のうち ${shown} 件）。`;
+
+  it('予算に収まるなら全件そのまま、並びも変えない', () => {
+    const result = renderListingFromEnd(['あ', 'い', 'う'], { budget: 100, omitted });
+
+    expect(result).toBe('あ\nい\nう');
+    expect(result).not.toContain('省略');
+  });
+
+  it('落とすのは古い側（先頭）で、残すのは新しい側（末尾）', () => {
+    const items = Array.from({ length: 10 }, (_, index) => `[${index}]${'x'.repeat(30)}`);
+
+    const result = renderListingFromEnd(items, { budget: 100, omitted });
+
+    // いちばん新しい `[9]` は残り、いちばん古い `[0]` は落ちる。
+    expect(result).toContain('[9]');
+    expect(result).not.toContain('[0]');
+    expect(result).toContain('省略');
+  });
+
+  it('断り書きは先頭に置く（穴が空いているのは古い側だから）', () => {
+    const items = Array.from({ length: 10 }, (_, index) => `[${index}]${'x'.repeat(30)}`);
+
+    const result = renderListingFromEnd(items, { budget: 100, omitted });
+
+    // 末尾に置くと「この下にまだある」と読める。穴は先頭にある。
+    expect(result.split('\n')[0]).toContain('省略');
+  });
+
+  it('1件だけで予算を超えるときは、その1件を切って出す', () => {
+    const result = renderListingFromEnd(['あ'.repeat(500)], { budget: 100, omitted });
+
+    expect(result.length).toBeLessThan(200);
+    expect(result).toContain('文字省略');
+  });
+
+  it('空なら空文字', () => {
+    expect(renderListingFromEnd([], { budget: 100, omitted })).toBe('');
   });
 });
 

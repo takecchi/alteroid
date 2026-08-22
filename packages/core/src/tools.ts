@@ -3,8 +3,16 @@ import { randomUUID } from 'node:crypto';
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 
+import {
+  bySpeaker,
+  collectConversations,
+  humanExchanges,
+  reachedStart,
+  searchExchanges,
+  toMessage,
+} from './conversation.js';
 import { isCronExpression } from './cron.js';
-import { describePage, excerptLine, page, renderListing } from './excerpt.js';
+import { describePage, excerptLine, page, renderListing, renderListingFromEnd } from './excerpt.js';
 import type { ManagerDenial, ManagerPool, ManagerSummary } from './manager.js';
 import {
   assertNeverMemoryProtectionStatus,
@@ -129,6 +137,7 @@ export const CLONE_TOOL_NAMES = [
   'memory_delete',
   'journal_write',
   'journal_read',
+  'conversation_read',
   'ask_human',
   'approvals_list',
   'daily_report_write',
@@ -269,6 +278,19 @@ const MEMORY_PAGE = 8_000;
 const CANON_PAGE = 8_000;
 /** プロファイル本文を取りに来たときの1回分。続きは `offset` で取れる。 */
 const PROFILE_PAGE = 8_000;
+
+/**
+ * `conversation_read` 専用の抜粋長・予算・ページ幅。
+ *
+ * **`JOURNAL_*` を使い回さない。** 値は同じでも意味が違う — こちらは「会話の
+ * 1発言」を単位にした抜粋・予算であって、`journal_read` の「日誌の1行」とは
+ * 探す対象そのものが違う（`TRANSCRIPT_PAGE` の doc と同じ判断）。片方だけ
+ * 直したくなったときに一緒に動かないよう定数を分けてある。
+ */
+const CONVERSATION_EXCHANGE_EXCERPT = 200;
+const CONVERSATION_LIST_BUDGET = 8_000;
+/** 発言1件の全文を取りに来たときの1回分。続きは `offset` で取れる。 */
+const CONVERSATION_PAGE = 8_000;
 
 /**
  * 自作ツールは確認なしで通す（能力の削除ではなく、道具が道具として使えること）。
@@ -1766,6 +1788,292 @@ export function createCloneTools(context: ToolContext) {
     ),
 
     /**
+     * 人間との会話を、日誌から読み返す道具。
+     *
+     * **逐語はもう日誌に残っている。読む口が無かっただけである**（`conversation.ts`
+     * の冒頭）。`journal_read` は `types` でしか絞れないので `exchange` に絞っても
+     * manager / self との往復に埋もれ、人間の発言は窓の外へ押し出されて見えなく
+     * なる。ここでは `with: 'human'` の exchange だけを会話へ畳み直し、
+     * `speaker: 'human'` で人間自身の発言だけに絞れるようにする——要約に潰された
+     * 後でも、逐語はここから読み返せる。
+     *
+     * **形は `journal_read` をそのまま踏襲する。新しい契約を作らない。** `id` で
+     * 1件の全文、それ以外は予算を先に決めて入るところまで積む一覧。切ったら
+     * 必ず言い、遡った件数と先頭に届いたかを必ず出す（`app.ts` の `/conversations`
+     * と同じ判断——遡り切れていない窓で「無い」と言い切らない）。
+     */
+    tool(
+      'conversation_read',
+      [
+        '人間との会話を日誌から読み返す。要約に潰された後でも逐語はここに残っている。',
+        'conversationId を指定するとその会話の中身を古い順に読める。',
+        'q だけを指定すると窓の中を語で探す（新しい順）。',
+        '何も指定しなければ会話の一覧（新しい順）。',
+        '人間自身の発言だけを見るなら speaker: "human" を指定する',
+        '（既定 both は人間とクローンの両方の発言を含む）。',
+        '一覧の本文は抜粋で、全文が要る1件は id を渡して取る。',
+        '**ここに出ないもの**（知らずに引くと「無かった」と読むので、先に言う）:',
+        '① **ask_human への人間の回答は、この道具では出ない。**',
+        '回答の本文は日誌の escalation にしか無いので journal_read types=["escalation"] で読むこと',
+        '（approvals_list では出ない。あれは**まだ答えが来ていない件**だけを出す口で、答えの本文を持たない）。',
+        '② 人間がマネージャーへ直接話しかけた発言も出ない',
+        '（日誌には with:"manager" として載り、あなた自身の指示と見分けが付かない）。',
+      ].join(' '),
+      {
+        conversationId: z
+          .string()
+          .optional()
+          .describe('この会話の中身を古い順に読む（一覧に出ている conversationId）'),
+        q: z
+          .string()
+          .optional()
+          .describe('語で探す（大文字小文字を区別しない部分一致）。conversationId と併用できる'),
+        speaker: z
+          .enum(['human', 'clone', 'both'])
+          .optional()
+          .describe('既定 both。human で人間自身の発言だけ（clone はクローンの返答だけ）'),
+        since: z
+          .string()
+          .optional()
+          .describe('ISO 8601。この時刻以降だけ返す（例 2026-08-15T09:00:00Z）'),
+        until: z
+          .string()
+          .optional()
+          .describe('ISO 8601。この時刻以前だけ返す。過去を掘るときはこれを指定する'),
+        scan: z
+          .number()
+          .int()
+          .min(1)
+          .max(10_000)
+          .optional()
+          .describe('日誌を何件遡るか（既定 2000）。遡り切れたかは応答の注記で分かる'),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(200)
+          .optional()
+          .describe('一覧モードで返す会話の本数（既定 20）。conversationId / q のときは効かない'),
+        id: z
+          .string()
+          .optional()
+          .describe('この発言1件を全文で読む（一覧に出ている id）。他の条件は無視される'),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe('id で全文を読むとき、何文字目から読むか'),
+      },
+      async ({
+        conversationId,
+        q,
+        speaker = 'both',
+        since,
+        until,
+        scan,
+        limit,
+        id,
+        offset = 0,
+      }) => {
+        // --- 全文モード（発言1件） ---
+        if (id !== undefined) {
+          const entry = await stores.journal.get(id);
+          if (!entry) return text(`発言 ${id} は無い（id が違うか、まだ書かれていない）。`);
+          if (entry.type !== 'exchange' || entry.with !== 'human') {
+            return text(
+              `${id} は会話の発言ではない。日誌の中身を見るなら journal_read id=${id} を使うこと。`,
+            );
+          }
+          const part = page(entry.text, offset, CONVERSATION_PAGE);
+          const tail = part.more
+            ? `\n\n…（ここで切れている。続きは conversation_read id=${entry.id} offset=${part.to}）`
+            : '';
+          return text(
+            `${entry.at} [${roleLabel(entry.role)}] id=${entry.id}（${describePage(part)}）` +
+              `\n\n${part.body}${tail}`,
+          );
+        }
+
+        // --- ここから一覧系。まず窓を取り、遡った件数と先頭到達を毎回言う ---
+        const scanLimit = scan ?? 2000;
+        const entries = await stores.journal.list({
+          limit: scanLimit,
+          types: ['exchange'],
+          ...(since === undefined ? {} : { since }),
+          ...(until === undefined ? {} : { until }),
+        });
+        // **`since` を渡されたら「先頭に届いた」とは言えない。**
+        //
+        // `reachedStart` が答えるのは「ストアが行を出し切ったか」だけである。
+        // ところが `since` は LIMIT より先に効く（fs / pg / memory とも
+        // WHERE → LIMIT の順。`storage-pg/src/journal.ts` は `where()` の後に
+        // `.limit()` を呼ぶ）ので、件数が `scan` に届かないのは
+        // 「日誌の先頭まで見た」ではなく「`since` より新しい範囲を出し切った」
+        // でしかない。**ここを混ぜると「無い」と言い切ってしまう** —
+        // 実際には `since` より古い側に在りうるのに、下の分岐が
+        // 「当たる発言は無い」を選ぶ。これはこの道具が塞いでいる欠陥
+        // （観測の欠落を「無い」と報告する形）そのものである。
+        const exhausted = reachedStart(entries.length, scanLimit);
+        const reached = exhausted && since === undefined;
+        const scanNote =
+          `（日誌を ${entries.length} 件遡った。` +
+          (reached
+            ? '先頭に届いている）'
+            : exhausted
+              ? `since=${since} より新しい範囲は出し切ったが、それより古い側は見ていない。` +
+                'since を外すか古い方へずらすこと）'
+              : 'この窓より古いものは見ていない。scan を増やすか until で窓をずらすこと）');
+
+        // --- 会話の中身（conversationId 指定、古い順） ---
+        if (conversationId !== undefined) {
+          const exchanges = bySpeaker(
+            humanExchanges(entries).filter((entry) => entry.conversationId === conversationId),
+            speaker,
+          );
+          const matched = (
+            q === undefined ? exchanges.map(toMessage) : searchExchanges(exchanges, q)
+          )
+            .slice()
+            .reverse(); // 新しい順で来た窓を、会話としては古い順に直す
+          if (matched.length === 0) {
+            return text(
+              (reached
+                ? `会話 ${conversationId} に当たる発言は無い。`
+                : `会話 ${conversationId} は、この窓には無い（判定できない）。`) + `\n${scanNote}`,
+            );
+          }
+          const lines = matched.map(
+            (message) =>
+              `${message.at} [${roleLabel(message.role)}] id=${message.id}\n` +
+              `  ${excerptLine(message.text, CONVERSATION_EXCHANGE_EXCERPT)}`,
+          );
+          // **会話は新しい側から積む。** 表示は古い順のままだが、予算で切れるときに
+          // 落とすのは古い側である（会話を開く動機はたいてい直近の続きを思い出すこと
+          // で、人が chat の履歴を開くと末尾が見えているのと同じ形にしてある）。
+          // 積む形そのものは `renderListingFromEnd` が持つ（一覧ごとに手で書かない）。
+          return text(
+            [
+              renderListingFromEnd(lines, {
+                budget: CONVERSATION_LIST_BUDGET,
+                // **どちら側を落としたかを言う。** 「N 件省略」だけだと、続きの取り方を
+                // 間違える（ここで `scan` を増やしても、落ちているのは古い側なので出てこない）。
+                omitted: ({ rest, shown, total }) =>
+                  `…この会話の**古い側** ${rest} 件は省略（この窓に ${total} 件あり、` +
+                  `新しい側から ${shown} 件だけ出した）。古い側を見るには until で窓を古い方へずらすこと。`,
+              }),
+              '（本文は抜粋。全文は conversation_read id=<id> で取れる）',
+              scanNote,
+            ].join('\n'),
+          );
+        }
+
+        // --- 語で探す（q だけ、新しい順） ---
+        if (q !== undefined) {
+          const exchanges = bySpeaker(humanExchanges(entries), speaker);
+          const matched = searchExchanges(exchanges, q);
+          if (matched.length === 0) {
+            return text(
+              (reached
+                ? `"${q}" に当たる発言は無い。`
+                : `"${q}" は、この窓には無い（判定できない）。`) + `\n${scanNote}`,
+            );
+          }
+          const lines = matched.map(
+            (message) =>
+              `${message.at} [${roleLabel(message.role)}] id=${message.id}` +
+              ` conversation=${message.conversationId ?? '(無し)'}\n` +
+              `  ${excerptLine(message.text, CONVERSATION_EXCHANGE_EXCERPT)}`,
+          );
+          // 積む形そのものは `renderListing` が持つ（一覧ごとに手で書かない）。
+          return text(
+            [
+              renderListing(lines, {
+                budget: CONVERSATION_LIST_BUDGET,
+                omitted: ({ rest, shown, total }) =>
+                  `…ほか ${rest} 件は省略（"${q}" に ${total} 件当たり、新しい順に ${shown} 件だけ出した）。` +
+                  '省いたのは**古い側**である。scan を増やしても出てこない（当たりが増えるだけで、' +
+                  '切られる側は変わらない）ので、until で窓を古い方へずらすこと。',
+              }),
+              '（本文は抜粋。全文は conversation_read id=<id> で取れる）',
+              scanNote,
+            ].join('\n'),
+          );
+        }
+
+        // --- 会話の一覧（新しい順） ---
+        //
+        // **`speaker` はここでは効かない。効かないことを黙らない。** 会話が在るか
+        // どうかは誰が喋ったかで変わらない（片方だけで数えると、あるはずの会話が
+        // 一覧から消える）ので無視するのが正しいが、**渡した側から見ると絞れた一覧に
+        // 見える。** 渡されたのに使わなかったなら、そう言う。
+        // **`limit` で落ちた分も数に入れる。** 削るのは2段（`limit` と予算）で、
+        // 効く手が違う — `limit` は増やせば出るが、予算で切れているなら増やした分は
+        // そのまま省略へ回る。**`slice` の後の件数だけを見ると、`limit` で消えた分が
+        // 出力のどこにも現れない**（`omitted` は予算の切り口しか数えない）ので、
+        // 「20 件出して、日誌の先頭に届いている」と読める応答のまま 80 件が消える。
+        const allConversations = collectConversations(entries);
+        const listLimit = limit ?? 20;
+        const conversations = allConversations.slice(0, listLimit);
+        const hiddenByLimit = allConversations.length - conversations.length;
+        if (conversations.length === 0) {
+          return text(
+            (reached ? '会話はまだ無い。' : 'この窓には無い（判定できない）。') + `\n${scanNote}`,
+          );
+        }
+        const lines = conversations.map(
+          (conversation) =>
+            `${conversation.conversationId} ${conversation.startedAt}〜${conversation.updatedAt}` +
+            `（${conversation.messages} 件）\n  ${conversation.preview}`,
+        );
+        // **どちらの段で切れたかで、勧める手を変える。** 混ぜると効かない手を
+        // 案内することになる（予算で切れているのに「limit を増やせ」と言う、など）。
+        // 予算の側で切れたかどうかは `renderListing` しか知らないので、
+        // 断り書きが出たことをここで受け取る。
+        let cutByBudget = false;
+        // 積む形そのものは `renderListing` が持つ（一覧ごとに手で書かない）。
+        const body = renderListing(lines, {
+          budget: CONVERSATION_LIST_BUDGET,
+          // 予算が縛っている。ここまで来ると `limit` を増やしても省略へ回るだけなので、
+          // `limit` で落ちた分も合わせて「古い側」として1つの数で言う。
+          omitted: ({ rest, shown }) => {
+            cutByBudget = true;
+            return (
+              `…ほか ${rest + hiddenByLimit} 件は省略（この窓に ${allConversations.length} 件あり、` +
+              `新しい順に ${shown} 件だけ出した）。` +
+              '省いたのは**古い側**である。limit を増やしても出てこない（予算のほうで切れているので、' +
+              '増やした分がそのまま省略へ回る）ので、until で窓を古い方へずらすこと。'
+            );
+          },
+        });
+        const notes: string[] = [];
+        if (!cutByBudget && hiddenByLimit > 0) {
+          // 予算にはまだ余りがあり、縛っているのは `limit` である。こちらは増やせば出る。
+          // **言い方は既存の一覧に寄せる（`…ほか N 件は省略`）。** 総当たりの歯が
+          // 「切った」と読む語彙はそこに揃えてあり、ここへ新しい言い方を足すのは
+          // 「その言い方も契約に入れる」という判断であって、通し方の調整ではない。
+          // 予算の側と区別が要るのは**語ではなく勧める手**なので、そちらで分ける。
+          notes.push(
+            `…ほか ${hiddenByLimit} 件は省略（この窓に ${allConversations.length} 件あり、` +
+              `新しい順に ${conversations.length} 件だけ出した）。` +
+              '省いたのは**古い側**で、切ったのは limit=' +
+              `${listLimit} である。予算にはまだ余りがあるので、limit を増やせば出る。`,
+          );
+        }
+        notes.push('（各会話の中身は conversation_read conversationId=<id> で古い順に読める）');
+        if (speaker !== 'both') {
+          notes.push(
+            `（speaker=${speaker} はこの一覧には効いていない。会話が在るかどうかは誰が喋ったかで` +
+              '変わらないので、一覧は絞らずに出している。話者で絞るのは conversationId か q の' +
+              'ときである）',
+          );
+        }
+        notes.push(scanNote);
+        return text([body, ...notes].join('\n'));
+      },
+    ),
+
+    /**
      * 可観測性の最下段 — マネージャーのセッションそのものの生ログ。
      *
      * **`manager_report` に `part: 'transcript'` を足す形にはしていない。**
@@ -1998,6 +2306,11 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
   ];
+}
+
+/** 会話の発言の `role` を人が読める形にする（`conversation_read` 専用）。 */
+function roleLabel(role: 'inbound' | 'outbound'): string {
+  return role === 'inbound' ? '人間' : 'クローン';
 }
 
 /**
