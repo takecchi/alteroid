@@ -848,11 +848,22 @@ export type RunnerLiveness = 'connecting' | 'connected' | 'unreachable' | 'unusa
  * 別の主語へ使うと、読み手は2つを同じ意味として重ねて読む。
  *
  * **`RunnerLiveness` から導出できない。** 一見 `state === 'connected'` なら
- * `known`/`unknown`、それ以外なら `unheard` で足りそうに見えるが、
- * `#markSilent`（このファイル内）は `state` を `'lost'` にするとき**それまでに
- * 学習した情報を捨てない**（`entry.client` も `entry.revision` もそのまま残る）。
- * つまり **`state: 'lost'` でありながら版は `known`（黙る直前に聞いた名乗り）と
- * いう組み合わせが実際に起きる。** だから版の状態は生死とは別の契約として持つ。
+ * `known`/`unknown`、それ以外なら `unheard` で足りそうに見えるが、実際には
+ * 両方向にずれる（実測は `runner-swap.test.ts` / `apps/daemon/src/app.test.ts`
+ * の「runner の版」系）。
+ *
+ * 1. **`state: 'lost'` でも `known` が残る。** `#markSilent`（このファイル内）は
+ *    `state` を `'lost'` にするとき**それまでに学習した情報を捨てない**
+ *    （`entry.client` も `entry.revision` もそのまま残る）。黙る直前に聞いた
+ *    名乗りが、黙った後も見え続ける
+ * 2. **`state: 'connected'` でも `unheard` のことがある。** `#open()` は
+ *    `entry.source.open()` が解決した時点で `state = 'connected'` を即座に
+ *    立てるが、`identity()` は heartbeat（`HEARTBEAT_INTERVAL_MS` ごとの
+ *    `#beat()`）でしか呼ばれない。**登録が終わってから最初の heartbeat が
+ *    回るまでの間（最大で約10秒）、新しく繋がった runner は全員この状態を
+ *    通る。** 稀なレースではない
+ *
+ * だから版の状態は生死とは別の契約として持つ。
  *
  * **`known` は「最後に聞いた名乗り」であって「いま走っている版」ではない。**
  * `state` が `'lost'` のとき、この値は黙る前のものである。単独で読まず `state`
