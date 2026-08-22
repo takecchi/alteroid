@@ -1210,8 +1210,15 @@ export function createCloneTools(context: ToolContext) {
             // 詳細へ降りる道具（`commitment_list id=<id>` のようなもの）が
             // 無い。無い口を案内すると嘘になる（`.claude/skills/listing-and-detail/SKILL.md`
             // 「いま揃っていないもの」に記録済みの既知の穴）。
+            // **`includeClosed` のときは「未了は」と言わないこと。** `total` には
+            // 片付いたものも含まれるので、そのまま「未了は N 件」と言うと片付いた
+            // 分まで未了として数えた嘘になる（数が大きく出る方向の嘘）。
             omitted: ({ rest, shown, total }) =>
-              `…ほか ${rest} 件は省略（未了は ${total} 件あり、古い順に ${shown} 件だけ出した）。`,
+              `…ほか ${rest} 件は省略（${
+                includeClosed === true
+                  ? `片付けた分を含めて ${total} 件あり`
+                  : `未了は ${total} 件あり`
+              }、古い順に ${shown} 件だけ出した）。`,
           }),
         );
       },
