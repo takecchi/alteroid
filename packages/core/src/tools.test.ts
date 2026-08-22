@@ -262,6 +262,20 @@ describe('クローンの道具', () => {
     expect(entry).toMatchObject({ action: 'write' });
   });
 
+  // 監査に使う機械可読な面。summary の文言（人が読む要約）とは別の保証であり、
+  // 片方が通ってももう片方の歯にはならない（`AGENTS.md`「一つの変異で複数の
+  // 保証を確かめない」の裏側——ここでは逆に、別々の it() で別々に測る）。
+  it('memory_write の日誌には bytesBefore / bytesAfter が数として記録される', async () => {
+    const h = harness();
+    await h.call('memory_write', { slug: 'values', content: '12345', summary: '最初' });
+    await h.call('memory_write', { slug: 'values', content: '1234567890', summary: '書き換え' });
+
+    // 新しい順に返るので、先頭が2回目の書き込み。
+    const [second, first] = await h.stores.journal.list({ types: ['memory_update'] });
+    expect(first).toMatchObject({ bytesBefore: 0, bytesAfter: 5 });
+    expect(second).toMatchObject({ bytesBefore: 5, bytesAfter: 10 });
+  });
+
   /**
    * 実行環境プロファイル。
    *
@@ -499,6 +513,17 @@ describe('クローンの道具', () => {
     expect(entry).toMatchObject({ action: 'append' });
   });
 
+  it('memory_append の日誌には bytesBefore / bytesAfter が数として記録される', async () => {
+    const h = harness();
+    await h.call('memory_write', { slug: 'values', content: '12345', summary: '最初' });
+    await h.call('memory_append', { slug: 'values', content: '67890', summary: '追記' });
+
+    const [entry] = await h.stores.journal.list({ types: ['memory_update'], limit: 1 });
+    // append は改行を挟んで足す（testing.ts の append 実装）ので
+    // 5（前の内容）+ 1（改行）+ 5（追記）= 11。
+    expect(entry).toMatchObject({ action: 'append', bytesBefore: 5, bytesAfter: 11 });
+  });
+
   /**
    * `memory_delete` — 記憶の文書ごと消す口。
    *
@@ -537,6 +562,16 @@ describe('クローンの道具', () => {
       const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
       expect(entry).toMatchObject({ type: 'memory_update', slug: 'temp-note' });
       expect((entry as { summary: string }).summary).toContain(String(body.length));
+    });
+
+    it('削除の日誌には bytesBefore / bytesAfter が数として記録される（bytesAfter は常に0）', async () => {
+      const h = harness();
+      await h.stores.persona.write('temp-note', '12345');
+
+      await h.call('memory_delete', { slug: 'temp-note', summary: '片付け' });
+
+      const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
+      expect(entry).toMatchObject({ bytesBefore: 5, bytesAfter: 0 });
     });
 
     it('削除の日誌に本文が写っていない', async () => {

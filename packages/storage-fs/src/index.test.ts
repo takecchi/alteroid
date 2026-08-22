@@ -158,6 +158,38 @@ describe('FsPersonaStore', () => {
       expect(await stores.persona.protectionStatus('log')).toEqual({ kind: 'clone-only' });
     });
 
+    /**
+     * 歯7の対照（変異試験で見つかった穴を塞ぐ）。
+     *
+     * **上の2つのテストだけでは、`#writeNow` のハッシュ更新を丸ごと削っても
+     * 落ちない。** `.index.json` が無い状態から読むと「索引の組み直し」が
+     * 現在の本文を直接読んで基準化するため、write()/append() 自身がハッシュを
+     * 更新していなくても、初回の組み直しに救われて正しい値が返ってしまう
+     * （実際に変異試験でこれを確認した——`#writeNow` のハッシュ更新をまるごと
+     * 消しても上の79件は1件も落ちなかった）。
+     *
+     * ここでは、いったん `protectionStatus` を呼んで索引ファイルを確定させて
+     * から2回目の書き込みを行う。索引が既に存在する状態での書き込みなら、
+     * write()/append() 自身が更新していない限り、古いハッシュが残って
+     * 次の本文と食い違い、unknown に落ちる——組み直しには救われない。
+     */
+    it('索引が確定した後の write でも、ハッシュ更新は組み直しに頼らない', async () => {
+      await stores.persona.write('values', '# 版1\n');
+      // ここで一度確定させる（.index.json を作る）。
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
+
+      await stores.persona.write('values', '# 版2\n');
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
+    });
+
+    it('索引が確定した後の append でも、ハッシュ更新は組み直しに頼らない', async () => {
+      await stores.persona.write('log2', '# ログ\n');
+      expect(await stores.persona.protectionStatus('log2')).toEqual({ kind: 'clone-only' });
+
+      await stores.persona.append('log2', '- 追記');
+      expect(await stores.persona.protectionStatus('log2')).toEqual({ kind: 'clone-only' });
+    });
+
     // 歯6: 道具経由の書き込み直後は unknown にならない（誤検出しない）。
     // 歯5（次のテスト）とは別の it() で測る——片方が通ってももう片方の保証にはならない。
     it('道具経由（write）の直後は unknown にならない', async () => {

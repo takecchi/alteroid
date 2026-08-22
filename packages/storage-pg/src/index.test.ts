@@ -165,6 +165,31 @@ describe('PgPersonaStore', () => {
       expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
     });
 
+    /**
+     * 歯7の対照（変異試験で見つかった穴を塞ぐ）。
+     *
+     * **`write()` だけの文書が `clone-only` になる、という上のテストだけでは、
+     * `write()` 内の `#updateHash` 呼び出しをまるごと削っても落ちない。**
+     * `content_sha256` は insert 時に設定されないので、削ると null のままになり、
+     * 次の `protectionStatus` 呼び出しが「行単位の自己修復」（`#healRow`）を
+     * 誘発して現在の本文からその場でハッシュを基準化してしまう
+     * （実際に変異試験でこれを確認した——`write()` の `#updateHash` 呼び出しを
+     * 消しても、上の84件は1件も落ちなかった）。
+     *
+     * ここでは、いったん `protectionStatus` を呼んで `content_sha256` を
+     * 非 null に確定させてから2回目の `write()` を行う。既に非 null なら
+     * `#healRow` は誘発されないので、`write()` 自身が更新していない限り
+     * 古いハッシュが残り、2回目の本文と食い違って unknown に落ちる。
+     */
+    it('索引（content_sha256）が確定した後の write でも、ハッシュ更新は heal に頼らない', async () => {
+      await stores.persona.write('values', '# 版1\n');
+      // ここで一度確定させる（content_sha256 を非 null にする）。
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
+
+      await stores.persona.write('values', '# 版2\n');
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
+    });
+
     // 歯7: write() と append() は独立した2メソッドなので、append 経路でも
     // content_sha256 が更新されることを個別に確かめる（片方だけ直す穴を塞ぐ）。
     it('append 経路でもハッシュが更新される（誤検出しない）', async () => {
