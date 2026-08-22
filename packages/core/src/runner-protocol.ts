@@ -426,11 +426,23 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     submits: z.number().int().nonnegative(),
     /**
      * `UserPromptSubmit` の `source` ごとの内訳。**取れた分だけ載せる。**
+     * 1件も取れなければ**フィールドごと省く**（`{}` を置かない） — 取れない軸に
+     * 0の行を作らない（AGENTS.md 地雷）。
      *
-     * SDK はいまのところ「Anthropic 内部のセッションでしか付かない見込みの
-     * 試験中のフィールド」と言っており、外部のペイロードには付かない見込み
-     * である。1件も取れなければ**フィールドごと省く**（`{}` を置かない） —
-     * 取れない軸に0の行を作らない（AGENTS.md 地雷）。
+     * **この行を読む人へ。** SDK（0.3.239 の `UserPromptSubmitHookInput.source`）
+     * は `'system'` を「他の機械が起こしたターン（peer/channel messages・
+     * task notifications・auto-continuation）」と定義している。つまり
+     * `sources: { system: N }` の N は「機械に起こされたターン」の数であって、
+     * **その内訳（通知なのか SDK の自己継続なのか）ではない** — そこは同じ
+     * `'system'` に畳まれていて割れない。`byCause.notification` /
+     * `byCause.continuation` のほうは alteroid 側の推定であり、`sources` の
+     * `'system'` はその**上位集合を SDK 側から数えた別の観測**である。
+     * **両者が食い違うこと自体が観測になる**（片方だけを信じないこと）。
+     *
+     * **`sources` が無いことは「機械に起こされていない」ではない。** 同じ
+     * JSDoc は「Payloads may omit it while the field rolls out」と言っており、
+     * 付かない回が今も在る。0.3.237 まではもっと強く「外部のペイロードには
+     * 付かない」と書かれていた（経緯は `runner.ts` の `#submitSources` の doc）。
      */
     sources: z.record(z.string(), z.number().int().nonnegative()).optional(),
     /**

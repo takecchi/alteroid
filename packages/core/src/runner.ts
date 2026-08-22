@@ -711,11 +711,42 @@ class RunnerSession {
   /**
    * `UserPromptSubmit` の `source` ごとの件数（`result` で畳む）。
    *
-   * **取れた分だけ載せる。** SDK の JSDoc（`UserPromptSubmitHookInput.source`）
-   * 曰く、この値は「いまは Anthropic 内部のセッションでしか付かない見込みで
-   * 試験中のフィールドであり、外部のペイロードには付かない」。取れない回に
-   * `'unknown': 1` のような行を作らない（AGENTS.md 地雷「取れない軸に0の行を
-   * 作る」）。
+   * **取れた分だけ載せる。** 取れない回に `'unknown': 1` のような行を作らない
+   * （AGENTS.md 地雷「取れない軸に0の行を作る」）。
+   *
+   * ## **「外部には付かない」は SDK 0.3.239 で消えた。この軸はもう死んでいない**
+   *
+   * ここには元々「いまは Anthropic 内部のセッションでしか付かない見込みで、
+   * 外部のペイロードには付かない」と書いてあった。**それは SDK 0.3.237 の
+   * JSDoc の正しい引き写しだったが、`1ce97ed`（0.3.239 への自動更新）で
+   * 前提のほうが変わった。** 実物の差分（2026-08-22 観測）:
+   *
+   * - 0.3.237: `Currently only set for Anthropic-internal sessions while the
+   *   field is trialed; external payloads omit it.`
+   * - 0.3.239: `Payloads may omit it while the field rolls out.`
+   *
+   * **「必ず付かない」から「付かないこともある」へ変わった** ので、alteroid の
+   * ような外部セッションでも `sources` が埋まりうる。**取れない前提で読み飛ばす
+   * と、いちばん知りたい内訳を見落とす** — 同じ JSDoc は `system` を
+   * 「他の機械が起こしたターン（peer/channel messages・task notifications・
+   * auto-continuation）」と定義しており、これは `byCause` が
+   * `notification`（通知の直後）と `continuation`（消去法の残り）に分けて
+   * *推定*している当のものを、**SDK 自身が名指しで分類した値**である。
+   *
+   * ## それでも `sources` が答えない問い
+   *
+   * - **`system` は3つを畳んでいる。** peer/channel messages と
+   *   task notifications と auto-continuation は同じ `'system'` に落ちる。
+   *   「通知で起きたのか、SDK が自分で続けたのか」は**この値では割れない**
+   * - **付かない回は今も在る**（「may omit」）。`sources` の合計は `submits`
+   *   と一致するとは限らず、**一致しない分が「どの source だったか」は不明**で
+   *   あって「source が無い契機だった」ではない
+   *
+   * **この JSDoc がまた変わったら `sdk-source-field.test.ts` が落ちる。**
+   * 落ちたら、この doc と `runner-protocol.ts` の `sources` の doc と
+   * `#onUserPromptSubmit` のコメントの3か所を読み直すこと（SDK の更新は
+   * `.github/workflows/update-claude-sdk.yml` が自動で PR にするので、
+   * **黙って腐る。実際に一度腐った**）。
    */
   #submitSources = new Map<string, number>();
   readonly #inputWaiters = new Set<() => void>();
@@ -1763,10 +1794,11 @@ class RunnerSession {
       // **取れた分だけ載せる。** SDK の JSDoc
       // （`UserPromptSubmitHookInput.source`）曰く、この値は「system = 他の
       // 機械が起こしたターン（peer/channel messages・task notifications・
-      // auto-continuation）」等を表す一方、「いまは Anthropic 内部のセッション
-      // でしか付かない見込みで試験中のフィールドであり、外部のペイロードには
-      // 付かない」。取れない回に `'unknown': 1` のような行を作らない
-      // （AGENTS.md 地雷「取れない軸に0の行を作る」）。
+      // auto-continuation）」等を表す。**取れる見込みは 0.3.239 で変わった**
+      // （「外部のペイロードには付かない」→「付かないこともある」。経緯と、
+      // それでも割れない問いは `#submitSources` の doc）。取れない回に
+      // `'unknown': 1` のような行を作らない（AGENTS.md 地雷「取れない軸に0の
+      // 行を作る」）。
       if (typeof hook.source === 'string') {
         this.#submitSources.set(hook.source, (this.#submitSources.get(hook.source) ?? 0) + 1);
       }
