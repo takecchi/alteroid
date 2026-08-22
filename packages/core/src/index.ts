@@ -135,14 +135,24 @@ export { Inbox } from './inbox.js';
  * 器ごとに書いた結果、実際に食い違ったことがある（`memory.ts` の冒頭）。
  */
 export {
+  assertNeverMemoryDescriptionFreshness,
+  assertNeverMemoryFrontmatterState,
   assertNeverMemoryProtectionStatus,
   deriveHumanTouchedAtFromJournal,
+  deriveMemoryFrontmatter,
   describeMemoryProtectionStatus,
   memoryProtectionAllowsFullReplace,
   memoryProtectionRebuildDecision,
+  nextDescribedAt,
+  parseMemoryFrontmatter,
   renderMemoryDocument,
   renderMemoryDocuments,
+  renderMemoryListing,
+  resolveMemoryDescriptionFreshness,
+  resolveMemoryDocKind,
+  type MemoryListingEntry,
   type MemoryPart,
+  type RenderedMemory,
 } from './memory.js';
 export type { CloneSystemPromptInput } from './prompt.js';
 export {

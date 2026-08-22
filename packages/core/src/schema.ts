@@ -28,12 +28,123 @@ export const memorySlugSchema = z
   .max(128)
   .regex(/^[a-z0-9][a-z0-9._-]*$/, 'slug は英小文字・数字・. _ - のみ');
 
+// ---------------------------------------------------------------------------
+// 記憶の frontmatter（#170「目次 → 詳細（オンデマンド）＋ 階層」）
+// ---------------------------------------------------------------------------
+
+/**
+ * frontmatter の解釈状態（3値。畳まない — `packages/core/src/memory.ts` の
+ * `parseMemoryFrontmatter` が唯一の実装）。
+ *
+ * - **`none`** — content の先頭が frontmatter の形をしていない（1行目が
+ *   `---` ではない）。**これが移行直後の全文書の状態である。** 区分の既定
+ *   （下の `memoryDocKindSchema` の doc）が `premise`（＝全文）なので、
+ *   frontmatter を1つも持たない文書の集合に対しては焼き込みがこの改修の
+ *   前後で完全に同じになる（受け入れ基準の最上位）。
+ * - **`malformed`** — 1行目は `---` だが、狭く固定した形（各行が
+ *   `key: value`・キーは既知の集合のみ・ネスト無し・複数行無し・型推論を
+ *   しない）から外れた。**`none` に畳まない** — 人間が textarea で編集する
+ *   以上、frontmatter は壊れる。壊れたときに文書ごと記憶から消えるのが
+ *   最悪の形なので、区分はここでも既定の `premise` に倒れ、文書自体は
+ *   全文が載り続ける（消えない）。
+ * - **`parsed`** — 狭い形の範囲で読めた。**値は文字列としてのみ持つ**
+ *   （`description: no` を `false` にするような YAML ライブラリの賢さは、
+ *   この用途では「静かに別の値になる」リスクでしかないため、そもそも
+ *   YAML ライブラリを使わない — repo に YAML 系の依存は無い）。
+ */
+export const memoryFrontmatterStateSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('none') }),
+  z.object({ kind: z.literal('malformed') }),
+  z.object({
+    kind: z.literal('parsed'),
+    /** 要旨（目次の1行に載る）。 */
+    description: z.string().optional(),
+    /** 生の値。既知の集合（`premise` / `fact`）に無ければ区分は `premise` へ倒れる。 */
+    type: z.string().optional(),
+    /** 親文書の slug。存在するとは限らない（目次の階層の組み立て側が扱う）。 */
+    parent: z.string().optional(),
+  }),
+]);
+export type MemoryFrontmatterState = z.infer<typeof memoryFrontmatterStateSchema>;
+
+/**
+ * 区分。**判断の前提（`premise`）はプロンプトへ全文、事実と蓄積（`fact`）は
+ * 目次の1行だけ**（本文は `memory_read` で開く）。
+ *
+ * frontmatter が無い（`none`）・読めない（`malformed`）・`type` が既知の
+ * 集合に無い値のときは、**すべて `premise` として扱う**（移行の安全弁。
+ * `memory.ts` の `resolveMemoryDocKind` の doc）。`fact` を既定にすると、
+ * 区分の判定を誤ったとき（本来 `premise` であるべき文書が `fact` に
+ * 分類される）に文書が黙って目次の1行へ縮み、クローンはそれに気づけない
+ * — 反対に `premise` を既定にした誤りは「余分に全文を焼く」だけなので、
+ * `self_status` の総文字数で必ず気づける。
+ */
+export const memoryDocKindSchema = z.enum(['premise', 'fact']);
+export type MemoryDocKind = z.infer<typeof memoryDocKindSchema>;
+
+/**
+ * 要旨（`description`）の鮮度。4状態、畳まない。
+ *
+ * **代理指標である。** `fresh` が言えるのは「`description` が最後の本文
+ * 変更以降に変わった」ことだけで、「誰かが本文を読み直して要旨を書き直した」
+ * ことは意味しない —— `description` の誤字だけ直しても `fresh` になる。
+ * これは直せない（本文を読み直したかどうかを知る手が無いので、
+ * `description` の変化を代理指標にするのが最善である）。**この値を
+ * 「要旨は本文と合っている」の保証として読まないこと。**
+ *
+ * - **`fresh`** — 要旨があり、最後の本文変更以降に書かれている
+ *   （`describedAt >= updatedAt`）
+ * - **`stale`** — 要旨があるが、本文の方が新しい（`describedAt < updatedAt`）。
+ *   目次からは消さない・全文へも落とさない —— 印つきで出す
+ * - **`unknown`** — 要旨はあるが、いつ書かれたか分からない（索引を失った・
+ *   まだ観測していない）。**`fresh` にも `stale` にも畳まない** — 畳むと、
+ *   索引を失った瞬間に「全部新鮮」か「全部古い」のどちらかの嘘になる
+ * - **`absent`** — 要旨がまだ無い
+ *
+ * ## `title`（`memoryDocumentMetaSchema.title`）と腐り方が違う——畳まないこと
+ *
+ * 両方とも時間とともに実態とずれうる（「腐る」）が、**片方だけをこの型が
+ * 検出できる。**
+ *
+ * | | 腐り方 | 誰が気づけるか |
+ * |---|---|---|
+ * | `description`（この型） | 本文が変わっても追従しない——**「古く」なる** | **コードの構造**。`describedAt ≠ updatedAt` を突き合わせれば機械的に判る（この型そのもの） |
+ * | `title` | 本文の先頭 `# ` 行から都度計算するので**「古く」はならない**。腐るとすれば「水準」——「コードベースについて」のような、開くべきか判断できない題のまま放置されること | **機械には判らない。** 見出しの文字列を見ただけでは「水準が足りているか」を判定するアルゴリズムが無い。要求できるのは蒸留の指示文（`prompt.ts` の `buildDistillPrompt`）で人（＝蒸留のターンを回すクローン）に見て回らせることだけ |
+ *
+ * **この差を畳まないこと。** 「`title` も機械が守っている」と書く・実装する
+ * ——たとえば `title` にもここと同じ4状態の鮮度を足す——と、**守っていない
+ * ものを守っていることにする。** 次にこの型を読んだ人が「`title` の水準も
+ * 自動で検出できる」と誤読しないよう、意図的に `title` 用の鮮度フィールドを
+ * 作っていない。
+ */
+export const memoryDescriptionFreshnessSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('fresh') }),
+  z.object({ kind: z.literal('stale') }),
+  z.object({ kind: z.literal('unknown') }),
+  z.object({ kind: z.literal('absent') }),
+]);
+export type MemoryDescriptionFreshness = z.infer<typeof memoryDescriptionFreshnessSchema>;
+
 export const memoryDocumentMetaSchema = z.object({
   slug: memorySlugSchema,
-  /** 文書の先頭見出し（`# ...`）。無ければ slug。 */
+  /**
+   * 文書の先頭見出し（`# ...`）。無ければ slug。都度の計算値なので「古く」は
+   * ならない。`description` とは腐り方が違う——`memoryDescriptionFreshnessSchema`
+   * の doc「`title` と腐り方が違う」を見よ。
+   */
   title: z.string(),
   updatedAt: isoDateTime,
   bytes: z.number().int().nonnegative(),
+  /** frontmatter の解釈状態そのもの（3値）。 */
+  frontmatter: memoryFrontmatterStateSchema,
+  /** 区分（既定込みで解決済みの値）。`memory.ts` の `resolveMemoryDocKind`。 */
+  kind: memoryDocKindSchema,
+  /** 要旨。`frontmatter.kind === 'parsed'` かつ書かれているときだけ在る。 */
+  description: z.string().optional(),
+  /** 親文書の slug（生の値。存在するとは限らない）。 */
+  parent: z.string().optional(),
+  /** 要旨の鮮度（4状態）。 */
+  descriptionFreshness: memoryDescriptionFreshnessSchema,
 });
 
 export const memoryDocumentSchema = memoryDocumentMetaSchema.extend({

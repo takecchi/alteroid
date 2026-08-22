@@ -1102,9 +1102,114 @@
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 9007199254740991
+                          },
+                          "frontmatter": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "none"
+                                  }
+                                },
+                                "required": ["kind"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "malformed"
+                                  }
+                                },
+                                "required": ["kind"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "parsed"
+                                  },
+                                  "description": {
+                                    "type": "string"
+                                  },
+                                  "type": {
+                                    "type": "string"
+                                  },
+                                  "parent": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["kind"]
+                              }
+                            ]
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": ["premise", "fact"]
+                          },
+                          "description": {
+                            "type": "string"
+                          },
+                          "parent": {
+                            "type": "string"
+                          },
+                          "descriptionFreshness": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "fresh"
+                                  }
+                                },
+                                "required": ["kind"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "stale"
+                                  }
+                                },
+                                "required": ["kind"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "unknown"
+                                  }
+                                },
+                                "required": ["kind"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "absent"
+                                  }
+                                },
+                                "required": ["kind"]
+                              }
+                            ]
                           }
                         },
-                        "required": ["slug", "title", "updatedAt", "bytes"]
+                        "required": [
+                          "slug",
+                          "title",
+                          "updatedAt",
+                          "bytes",
+                          "frontmatter",
+                          "kind",
+                          "descriptionFreshness"
+                        ]
                       }
                     }
                   },
@@ -1151,11 +1256,117 @@
                           "minimum": 0,
                           "maximum": 9007199254740991
                         },
+                        "frontmatter": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "none"
+                                }
+                              },
+                              "required": ["kind"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "malformed"
+                                }
+                              },
+                              "required": ["kind"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "parsed"
+                                },
+                                "description": {
+                                  "type": "string"
+                                },
+                                "type": {
+                                  "type": "string"
+                                },
+                                "parent": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["kind"]
+                            }
+                          ]
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": ["premise", "fact"]
+                        },
+                        "description": {
+                          "type": "string"
+                        },
+                        "parent": {
+                          "type": "string"
+                        },
+                        "descriptionFreshness": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "fresh"
+                                }
+                              },
+                              "required": ["kind"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "stale"
+                                }
+                              },
+                              "required": ["kind"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "unknown"
+                                }
+                              },
+                              "required": ["kind"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "absent"
+                                }
+                              },
+                              "required": ["kind"]
+                            }
+                          ]
+                        },
                         "content": {
                           "type": "string"
                         }
                       },
-                      "required": ["slug", "title", "updatedAt", "bytes", "content"]
+                      "required": [
+                        "slug",
+                        "title",
+                        "updatedAt",
+                        "bytes",
+                        "frontmatter",
+                        "kind",
+                        "descriptionFreshness",
+                        "content"
+                      ]
                     }
                   },
                   "required": ["document"]
@@ -1226,11 +1437,117 @@
                           "minimum": 0,
                           "maximum": 9007199254740991
                         },
+                        "frontmatter": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "none"
+                                }
+                              },
+                              "required": ["kind"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "malformed"
+                                }
+                              },
+                              "required": ["kind"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "parsed"
+                                },
+                                "description": {
+                                  "type": "string"
+                                },
+                                "type": {
+                                  "type": "string"
+                                },
+                                "parent": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["kind"]
+                            }
+                          ]
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": ["premise", "fact"]
+                        },
+                        "description": {
+                          "type": "string"
+                        },
+                        "parent": {
+                          "type": "string"
+                        },
+                        "descriptionFreshness": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "fresh"
+                                }
+                              },
+                              "required": ["kind"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "stale"
+                                }
+                              },
+                              "required": ["kind"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "unknown"
+                                }
+                              },
+                              "required": ["kind"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "absent"
+                                }
+                              },
+                              "required": ["kind"]
+                            }
+                          ]
+                        },
                         "content": {
                           "type": "string"
                         }
                       },
-                      "required": ["slug", "title", "updatedAt", "bytes", "content"]
+                      "required": [
+                        "slug",
+                        "title",
+                        "updatedAt",
+                        "bytes",
+                        "frontmatter",
+                        "kind",
+                        "descriptionFreshness",
+                        "content"
+                      ]
                     }
                   },
                   "required": ["document"]

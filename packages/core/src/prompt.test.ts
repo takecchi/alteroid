@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { renderMemoryDocuments } from './memory.js';
 import { buildCloneSystemPrompt, buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
 
 /**
@@ -75,7 +76,7 @@ describe('マネージャーのシステムプロンプト — 委譲の指針',
  * どちらが落ちても落ちるようにしてある。
  */
 describe('クローンのシステムプロンプト — 道具と委譲', () => {
-  const prompt = buildCloneSystemPrompt({ memory: '' });
+  const prompt = buildCloneSystemPrompt({ memory: renderMemoryDocuments([]) });
 
   it('委譲が原則であることを方針として書いている', () => {
     // PRD「層ごとの能力」: 重い調査と実作業は方針として下へ委ねる。

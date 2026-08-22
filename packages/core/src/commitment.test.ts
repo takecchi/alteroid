@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { commitmentFor, createClone } from './clone.js';
 import { buildActivityDigest } from './digest.js';
 import type { CloneHost } from './host.js';
+import { renderMemoryDocuments } from './memory.js';
 import { buildCloneSystemPrompt } from './prompt.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -411,7 +412,7 @@ describe('未了の見え方', () => {
   });
 
   it('システムプロンプトが「順序は台帳に無い」と言っている（器に優先度を持たせない歯止め）', () => {
-    const prompt = buildCloneSystemPrompt({ memory: '' });
+    const prompt = buildCloneSystemPrompt({ memory: renderMemoryDocuments([]) });
 
     expect(prompt).toContain('commitment_close');
     expect(prompt).toContain('commitment_open');

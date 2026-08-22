@@ -2287,7 +2287,7 @@ describe('journalEntrySchema の memory_update（action の後方互換）', () 
  */
 describe('システムプロンプトの道具一覧', () => {
   it('CLONE_TOOL_NAMES の全部が載っている（一覧に無い道具を作らない）', () => {
-    const prompt = buildCloneSystemPrompt({ memory: '' });
+    const prompt = buildCloneSystemPrompt({ memory: renderMemoryDocuments([]) });
     const section = prompt.split('# 道具')[1]?.split('# 委譲')[0];
     // 節そのものが見つからなければ、下の照合は全部「載っていない」に倒れる。
     // **その状態を「一覧が空だった」と読み替えないこと**（節の名前を変えたなら
