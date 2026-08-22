@@ -951,6 +951,19 @@ export function createCloneTools(context: ToolContext) {
             // 作成と一致する。** それは軸が無いのではなく「まだ一度も変わって
             // いない」という観測そのものなので、値を作らずに `createdAt` を出す
             // （下の断り書きの行で、読み手にもそう読める形にしてある）。
+            //
+            // **⚠️ この `??` の左枝は、いまは到達しない。消さないこと。** 一覧は
+            // `listApprovals({ pendingOnly: true })` をハードコードで呼び、fs /
+            // pg / インメモリの3実装すべてが `answeredAt === undefined`（pg は
+            // `isNull`）で絞る。**つまり歯で固定できない** — この `??` を
+            // `approval.createdAt` に潰す変異は、どのテストにも捕まらずに生き残る。
+            // それでも残してあるのは、**将来 `pendingOnly` を外したときに
+            // 「更新」が黙って嘘になるのを防ぐため**である（答えが付いた件が
+            // 一覧に出るようになった瞬間、更新が回答時刻ではなく作成時刻を
+            // 指す）。「死んでいるコード」と「将来のために置いてあるもの」は、
+            // 書いていなければ区別が付かない。
+            // 根拠は3実装のソースと呼び出し元1箇所の網羅（2026-08-22T15:58Z 観測）
+            // であって、実行時カバレッジでは確かめていない。
             `  作成: ${approval.createdAt} / 更新: ${approval.answeredAt ?? approval.createdAt}`,
             `  ${excerptLine(approval.question, APPROVAL_QUESTION_EXCERPT)}`,
             approval.jobId === undefined
