@@ -96,7 +96,31 @@ export function startSseHeartbeat(
       wake();
       return;
     }
-    void stream.write(HEARTBEAT_FRAME);
+    /*
+     * **`void` だけで済ませない。`catch` を付ける。**
+     *
+     * いまの `StreamingApi#write` は中で `try { } catch {}` しているので拒否した
+     * Promise を返さない（このモジュール冒頭の JSDoc）。だが**それに依存すると、
+     * 依存先が変わった日に落ち方が「デーモンの死」になる** —— Node 15 以降の
+     * 既定は `--unhandled-rejections=throw` で、拾われない拒否はプロセスを
+     * 終了させる。heartbeat は全 SSE 接続で回るタイマーなので、ここが投げると
+     * 1本の死んだ接続がデーモン全体を落とす。
+     *
+     * **握り潰してよい理由は「ここが検知の主経路ではない」からである。** 書けな
+     * かったことに意味を持たせているのは Node 側の `outgoing` の `close` /
+     * `error` → `reader.cancel()` → `abort()` の経路（冒頭の JSDoc）で、この
+     * `catch` はその経路を塞がない。次の tick で `aborted` / `closed` を見る
+     * 自衛も残る。
+     */
+    void stream.write(HEARTBEAT_FRAME).catch(() => {});
   }, intervalMs);
+  /*
+   * **`unref()` する。** heartbeat は「接続が在るあいだ回る」ものであって、
+   * プロセスを生かしておく理由ではない。接続そのものは `http.Server` の
+   * ハンドルが生かしているので、ここを ref したままにしても得るものが無く、
+   * 逆に停止時（`SHUTDOWN_GRACE_MS` 待ち）や、ループが `wake` を待ったまま
+   * 戻らない経路で、event loop を空にできない理由をひとつ増やすだけである。
+   */
+  timer.unref?.();
   return () => clearInterval(timer);
 }
