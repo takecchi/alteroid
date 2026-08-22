@@ -32,7 +32,12 @@ import type {
 import { brief } from './runner.js';
 import type { InboxEvent, Job, JobStatus, JournalEntryInput, WorkspaceLocator } from './schema.js';
 import type { Stores } from './store.js';
-import { describeUsageNotice, usageTransitionOf, type RateLimitFacts } from './usage-limits.js';
+import {
+  describeUsageNotice,
+  mergeRateLimitFacts,
+  usageTransitionOf,
+  type RateLimitFacts,
+} from './usage-limits.js';
 import { usageDate } from './usage.js';
 
 /**
@@ -525,6 +530,38 @@ const DENIED_TOOL_LIMIT = 64;
 /** 何件目の拒否からクローンへ上げるか。以後は3倍ごと（3, 9, 27, 81…）。 */
 const DENIED_ESCALATE_AT = 3;
 
+/**
+ * 上限の文言を、種類ごとに何通り覚えておくか。
+ *
+ * **これは配達の制限ではない。** 覚えているのは「もうクローンへ配った文言」だけで、
+ * 溢れて忘れた文言は次に届いたときに**もう一度配られる**（＝取りこぼす側ではなく
+ * 配り直す側へ倒れる）。忘れたこと自体は `onForget` が日誌へ残す。
+ *
+ * 1つの種類（`reached` など）で 32 通りの別々の文言が出る状況は実機では起きて
+ * いない。溢れるなら、それ自体が異常として日誌に出る。
+ */
+const USAGE_NOTICE_MEMORY_LIMIT = 32;
+
+/**
+ * 上限の文言について、この種類（`kind`）で覚えていること。
+ *
+ * **「観測した値」ではなく「配った事実」を持つ器である。** 名前も型もそう読める形に
+ * してある — ここが `string`（最後に見た文言）だった頃の壊れ方は
+ * `Pool` の `#usageNotices` の doc にある。
+ */
+interface UsageNoticeMemory {
+  /** もうクローンへ配った文言（`notice.text` そのもの。言い換える前の SDK の原文）。 */
+  delivered: RecentMap<true>;
+  /**
+   * 前回配ってから、配らずに畳んだ件数。
+   *
+   * **次にこの種類を配る1本の本文へ必ず載せて 0 に戻す。** 受信箱しか見ていない
+   * 読み手には日誌の行が見えないので、ここを配る側へ出さないと「畳んだ」という
+   * 事実そのものが観測から消える。
+   */
+  folded: number;
+}
+
 class Pool implements ManagerPool {
   readonly #stores: Stores;
   readonly #post: (event: InboxEvent) => void;
@@ -549,12 +586,22 @@ class Pool implements ManagerPool {
    */
   readonly #rateLimits = new Map<string, RateLimitFacts>();
   /**
-   * 種類ごとに最後にクローンへ流した上限の文言。
+   * 種類ごとに、**もうクローンへ配った上限の文言**と、配らずに畳んだ件数。
    *
    * **同じ知らせで受信箱を埋めないため**にある。通知はターンごとに繰り返し届きうる
    * ので、そのまま流すと本当に変わった1回が埋もれる。
+   *
+   * **「最後に見た文言」ではなく「配った文言の集合」を覚える。** 直す前はここが
+   * `Map<kind, 最後の文言>` で、判定は「最後に見たものと文字列が違うか」だった。
+   * 同じ種類で文言が2通り出る状況（別々の枠の英文が交互に届く）では、その判定は
+   * **毎回「違う」と答える** — A→B→A→B のたびに配られ、クローンのターンが1本ずつ
+   * 焼かれる。文字列の一致は出来事の同一性を表していないので、記憶する対象を
+   * 「観測した値」から「配った事実」へ変える。
+   *
+   * **畳んだ分は黙って消さない。** 1件ごとに日誌へ残し、件数はその種類で次に配る
+   * 1本の本文に必ず載る（{@link UsageNoticeMemory.folded}）。
    */
-  readonly #usageNotices = new Map<string, string>();
+  readonly #usageNotices = new Map<string, UsageNoticeMemory>();
   /** 起動時の引き取りが走っている間だけ立つ。`#reattach` はこれを待つ。 */
   #restoring: Promise<void> | null = null;
   /**
@@ -2293,17 +2340,45 @@ class Pool implements ManagerPool {
         // **同じ文言で受信箱を埋めない。** 通知はターンごとに繰り返し届きうるので、
         // そのまま流すとクローンは同じ知らせを何十回も読むことになり、本当に
         // 変わった1回が埋もれる。
+        //
+        // **判定は文字列の一致ではなく「もう配ったか」で行う。** 理由と、直す前に
+        // 何が起きていたかは `#usageNotices` の doc にある。
         const text = describeUsageNotice(event.notice);
-        if (this.#usageNotices.get(event.notice.kind) !== event.notice.text) {
-          this.#usageNotices.set(event.notice.kind, event.notice.text);
+        const memory = this.#usageNoticeMemoryOf(event.notice.kind);
+        if (memory.delivered.has(event.notice.text)) {
+          // **畳んだことを記録に残す。** ここを `return` だけで済ませると、
+          // 「同じ事象だから捨てた」が跡形も無くなり、後から「なぜ1回しか
+          // 届いていないのか」を誰も辿れない（AGENTS.md「静かに失敗する道具」）。
+          memory.folded += 1;
           await this.#journal({
             type: 'exchange',
             with: 'manager',
             role: 'inbound',
-            text: `[${event.managerId}] ${text}`,
+            text:
+              `[${event.managerId}] （配達済みの知らせなので受信箱へは回さない。` +
+              `この種類で ${memory.folded} 件目）${text}`,
           });
-          this.#emit(event.managerId, 'report', text);
+          return;
         }
+        memory.delivered.set(event.notice.text, true);
+        const folded = memory.folded;
+        memory.folded = 0;
+        await this.#journal({
+          type: 'exchange',
+          with: 'manager',
+          role: 'inbound',
+          text: `[${event.managerId}] ${text}`,
+        });
+        // **畳んだ件数を配る1本に必ず載せる。** 受信箱しか見ていない読み手からは
+        // 日誌の行が見えないので、ここに書かないと「畳んだ」が観測から消える。
+        this.#emit(
+          event.managerId,
+          'report',
+          folded === 0
+            ? text
+            : `${text}\n（前にこの種類を知らせてから、配達済みの同じ文言を ` +
+                `${folded} 件畳んでいる。全件は日誌に残っている。）`,
+        );
         return;
       }
 
@@ -2315,11 +2390,14 @@ class Pool implements ManagerPool {
         //
         // 枠の事実はアカウント単位なので、マネージャーごとに持たない。
         // **ターン中しか届かない**ので、走行中はここが最新になる。
-        const transition = usageTransitionOf(
-          this.#rateLimits.get(event.facts.kind ?? ''),
-          event.facts,
-        );
-        this.#rateLimits.set(event.facts.kind ?? '', event.facts);
+        //
+        // **覚えるのは重ねた形である（`mergeRateLimitFacts`）。** 届いた1件で丸ごと
+        // 置き換えると、`status` を運んでいない観測が「もう `rejected` を知らせた」
+        // という記憶を消し、次の同じ `rejected` が新しい遷移として**一字一句同じ
+        // 文言でもう一度配られる**（あちらの doc に理由がある）。
+        const previous = this.#rateLimits.get(event.facts.kind ?? '');
+        const transition = usageTransitionOf(previous, event.facts);
+        this.#rateLimits.set(event.facts.kind ?? '', mergeRateLimitFacts(previous, event.facts));
         if (transition === undefined) return;
 
         // 「移った」「追い返された」の**瞬間だけ**を知らせる（状態を毎回流さない）。
@@ -2605,6 +2683,38 @@ class Pool implements ManagerPool {
     });
     record.denied = denied;
     return denied;
+  }
+
+  /**
+   * 種類ごとの「配った文言」の帳面。無ければここで作る。
+   *
+   * **上限で忘れたら黙っていない**（`#askedOf` / `#deniedOf` と同じ形）— 忘れた
+   * 文言が次に届けばもう一度配られるので、跡が無いと「なぜ同じ知らせが二度来たか」
+   * を後から辿れない。ここは `managerId` を持たない（枠の事実はアカウント単位で、
+   * どのマネージャーのターンで気づいたかは記憶の側の軸ではない）。
+   */
+  #usageNoticeMemoryOf(kind: string): UsageNoticeMemory {
+    const existing = this.#usageNotices.get(kind);
+    if (existing !== undefined) return existing;
+    const memory: UsageNoticeMemory = {
+      delivered: createRecentMap<true>({
+        limit: USAGE_NOTICE_MEMORY_LIMIT,
+        onForget: (texts) => {
+          void this.#journal({
+            type: 'exchange',
+            with: 'manager',
+            role: 'inbound',
+            text:
+              `配り終えた上限の文言の記憶（${kind}）が上限（${USAGE_NOTICE_MEMORY_LIMIT}通り）に` +
+              `達したので、古い ${texts.length} 件を忘れた。この文言が次に届いたら` +
+              'もう一度クローンへ配る。',
+          });
+        },
+      }),
+      folded: 0,
+    };
+    this.#usageNotices.set(kind, memory);
+    return memory;
   }
 
   #choosePending(

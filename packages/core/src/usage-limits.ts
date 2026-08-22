@@ -182,6 +182,39 @@ export function toRateLimitFacts(value: unknown): RateLimitFacts | undefined {
 }
 
 /**
+ * 覚えている事実へ、新しい観測を**重ねる**（置き換えない）。
+ *
+ * **なぜ置き換えてはいけないか。** {@link RateLimitFacts} は全フィールドが省略可で、
+ * {@link toRateLimitFacts} は「1つでも読めた」時点で値を返す。つまり `status` を
+ * 運んでいない観測が**正常な入力として**この経路を通る。覚える側が丸ごと置き換える
+ * 形だと、その1件が「もう `rejected` を知らせた」という記憶
+ * （{@link usageTransitionOf} が見る `previous.status`）を消してしまい、**次に届いた
+ * 同じ `rejected` が新しい遷移として扱われる。** クローンには一字一句同じ知らせが
+ * もう一度配られ、そのぶんターンが焼かれる（配達1本＝クローンのターン1回）。しかも
+ * `rate_limit_event` はターンの頭ごとに来るので、これは1回では済まない。
+ *
+ * **省略は「無くなった」ではなく「何も言っていない」として扱う。** この経路には
+ * 否定を表す形が無く（省略と否定がどちらも `undefined`）、区別する材料もここには
+ * 無い。値が実際に変わったのなら、新しい観測がその値を運んでくる。
+ *
+ * **記憶が消える道は塞がない。** `status` が `'allowed'` で届けば `rejected` の
+ * 記憶はそこで上書きされ、その後の `rejected` は新しい出来事としてもう一度
+ * 知らされる。枠は実際に開いて閉じ直すので、ここまで塞ぐと**本物の再発が黙って
+ * 消える** — 直そうとしている穴（同じ知らせの再配達）の裏返しを作らないこと。
+ */
+export function mergeRateLimitFacts(
+  previous: RateLimitFacts | undefined,
+  next: RateLimitFacts,
+): RateLimitFacts {
+  if (previous === undefined) return next;
+  const merged: Record<string, unknown> = { ...previous };
+  for (const [key, value] of Object.entries(next)) {
+    if (value !== undefined) merged[key] = value;
+  }
+  return merged as RateLimitFacts;
+}
+
+/**
  * 前回と比べて、クローンへ知らせるべき変化が起きたか。
  *
  * 知らせるのは2つだけ。**課金枠へ入った瞬間**（`usingOverage` が偽→真）と、
