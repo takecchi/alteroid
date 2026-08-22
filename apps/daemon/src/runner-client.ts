@@ -244,9 +244,7 @@ export function describeRunnerDropped(report: RunnerDroppedEventReport): string 
     return `runner から降りてきた出来事を解釈できずに捨てた（この接続の合計）: ${detail}`;
   }
   const what =
-    report.reason === 'unparsable'
-      ? 'JSON として読めなかった'
-      : 'こちらのスキーマに合わなかった';
+    report.reason === 'unparsable' ? 'JSON として読めなかった' : 'こちらのスキーマに合わなかった';
   const type = report.type === undefined ? '（type も読めない）' : `type=${report.type}`;
   return `runner から降りてきた出来事を解釈できずに捨てた（初出）: ${what} ${type} bytes=${report.bytes}`;
 }
