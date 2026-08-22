@@ -342,6 +342,93 @@ describe('FsPersonaStore', () => {
       expect(rebuilds).toHaveLength(1);
     });
   });
+
+  /**
+   * `describedAt`（#170「記憶の目次化」の派生値）。書き手は書けない——
+   * `write()` / `append()` が新旧の `description`（frontmatter）を比べて
+   * 進めるか据え置くかを決める（4-3）。
+   */
+  describe('describedAt（要旨の鮮度の派生値）', () => {
+    it('description を書いた直後は fresh になる（describedAt === updatedAt）', async () => {
+      await stores.persona.write(
+        'runbook',
+        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n本文\n',
+      );
+
+      const doc = await stores.persona.read('runbook');
+      expect(doc?.descriptionFreshness).toEqual({ kind: 'fresh' });
+      expect(doc?.description).toBe('費用の推移');
+      expect(doc?.kind).toBe('fact');
+    });
+
+    it('同じ書き込みで本文と description を両方変えても fresh のまま（同じ writtenAt で確定するため）', async () => {
+      await stores.persona.write(
+        'runbook',
+        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n旧本文\n',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await stores.persona.write(
+        'runbook',
+        '---\ndescription: 費用の推移（改訂）\ntype: fact\n---\n# 定点観測\n新本文\n',
+      );
+
+      const doc = await stores.persona.read('runbook');
+      expect(doc?.descriptionFreshness).toEqual({ kind: 'fresh' });
+      expect(doc?.description).toBe('費用の推移（改訂）');
+    });
+
+    it('本文だけを書き直すと stale になる（description は本文の変更に追従しない）', async () => {
+      await stores.persona.write(
+        'runbook',
+        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版1\n',
+      );
+      // ファイルシステムの mtime 分解能に負けないよう、確実に時刻を進める。
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await stores.persona.write(
+        'runbook',
+        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版2（本文だけ変えた）\n',
+      );
+
+      const doc = await stores.persona.read('runbook');
+      // description は変わっていないので describedAt は最初の書き込み時刻の
+      // まま据え置かれ、updatedAt はこの2回目の書き込みで進んだ——結果、
+      // describedAt < updatedAt になり stale になる。
+      expect(doc?.descriptionFreshness).toEqual({ kind: 'stale' });
+      expect(doc?.description).toBe('費用の推移');
+    });
+
+    it('stale になった後、description を書き直すと fresh に戻る', async () => {
+      await stores.persona.write(
+        'runbook',
+        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版1\n',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await stores.persona.write(
+        'runbook',
+        '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n版2（本文だけ変えた）\n',
+      );
+      expect((await stores.persona.read('runbook'))?.descriptionFreshness).toEqual({
+        kind: 'stale',
+      });
+
+      await stores.persona.write(
+        'runbook',
+        '---\ndescription: 費用の推移（書き直した）\ntype: fact\n---\n# 定点観測\n版2（本文だけ変えた）\n',
+      );
+
+      expect((await stores.persona.read('runbook'))?.descriptionFreshness).toEqual({
+        kind: 'fresh',
+      });
+    });
+
+    it('description を書かなければ absent のまま（premise の既定と同じ安全側）', async () => {
+      await stores.persona.write('about-me', '# 私\n\n前提の本文\n');
+
+      const doc = await stores.persona.read('about-me');
+      expect(doc?.descriptionFreshness).toEqual({ kind: 'absent' });
+      expect(doc?.kind).toBe('premise');
+    });
+  });
 });
 
 describe('FsJournalStore', () => {

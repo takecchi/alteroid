@@ -37,11 +37,6 @@ export const memory = pgTable('memory', {
    * 書く値は `content` 列の側に置く——入口のスキーマ（`memory_write` /
    * `PUT /memory/:slug` の body）を1つも変えないことが要件だからである。
    *
-   * **この PR（#173）が要る2列だけを持つ。** #170（記憶の目次化）が要る
-   * `described_at`（要旨が本文のどの版に対するものか）はまだ無い —
-   * 未実装の宣言を実装済みの列の隣に置くと、未実装だったことが隠れる。
-   * #170 が着地するときは、この2列の隣に足せばよい。
-   *
    * `humanTouchedAt`: 最後に `cause:'human'` の書き込みが記録された時刻。
    * **一度立ったら降ろさない**（クローンの書き込みで null に戻さない — 更新対象
    * に含めないことで保証する。`persona.ts` の `#updateHash` を見よ）。
@@ -58,6 +53,18 @@ export const memory = pgTable('memory', {
    * 穴になる。**
    */
   contentSha256: text('content_sha256'),
+  /**
+   * #170（記憶の目次化）が要る導出値。**#173 が置いた上の2列の隣へ追記で
+   * 足す**（未実装の宣言を実装済みの列の隣に置くと、未実装だったことが
+   * 隠れる、という #173 の doc の約束のとおり）。
+   *
+   * 最後に `content` 先頭の frontmatter の `description` が変わったと確定した
+   * 時刻。**書き手は書けない** — `write()` / `append()` が新旧の `description`
+   * を比べて進めるか据え置くかを決める（`@alteroid/core` の
+   * `nextDescribedAt` の doc）。`updatedAt` と比べて要旨の鮮度
+   * （fresh / stale / unknown / absent）を出す。
+   */
+  describedAt: timestamp('described_at', { withTimezone: true, mode: 'date' }),
 });
 
 /**

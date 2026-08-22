@@ -1,7 +1,9 @@
 import {
   deriveHumanTouchedAtFromJournal,
+  deriveMemoryFrontmatter,
   memorySlugSchema,
   memoryProtectionRebuildDecision,
+  nextDescribedAt,
   sha256Hex,
 } from '@alteroid/core';
 import type {
@@ -42,7 +44,12 @@ export class PgPersonaStore implements PersonaStore {
 
   async list(): Promise<MemoryDocumentMeta[]> {
     const rows = await this.#db
-      .select({ slug: memory.slug, content: memory.content, updatedAt: memory.updatedAt })
+      .select({
+        slug: memory.slug,
+        content: memory.content,
+        updatedAt: memory.updatedAt,
+        describedAt: memory.describedAt,
+      })
       .from(memory)
       .orderBy(asc(memory.slug));
     return rows.map((row) => stripContent(toDocument(row)));
@@ -50,7 +57,12 @@ export class PgPersonaStore implements PersonaStore {
 
   async read(slug: string): Promise<MemoryDocument | null> {
     const rows = await this.#db
-      .select({ slug: memory.slug, content: memory.content, updatedAt: memory.updatedAt })
+      .select({
+        slug: memory.slug,
+        content: memory.content,
+        updatedAt: memory.updatedAt,
+        describedAt: memory.describedAt,
+      })
       .from(memory)
       .where(eq(memory.slug, this.#slug(slug)))
       .limit(1);
@@ -60,6 +72,10 @@ export class PgPersonaStore implements PersonaStore {
 
   async write(slug: string, content: string): Promise<MemoryDocument> {
     const key = this.#slug(slug);
+    // **describedAt の判定に要る「書く前の内容」を先に控える。** upsert は
+    // SQL の1文で完結するので、JS 側からは新旧の content を突き合わせられない
+    // ——別途 SELECT する（fs 版の `#writeNow` が先に `read()` するのと同じ形）。
+    const prior = await this.#readPrior(key);
     const body = stripNulls(ensureTrailingNewline(content));
     const rows = await this.#db
       .insert(memory)
@@ -71,24 +87,56 @@ export class PgPersonaStore implements PersonaStore {
       .returning({ slug: memory.slug, content: memory.content, updatedAt: memory.updatedAt });
     const row = rows[0];
     if (row === undefined) throw new Error(`記憶の書き込みに失敗: ${slug}`);
-    await this.#updateHash(key, row.content);
-    return toDocument(row);
+    const describedAt = await this.#updateDerived(key, prior, row);
+    return toDocument({ ...row, describedAt });
   }
 
   /**
-   * 書いた直後の content をハッシュして `content_sha256` へ記録する。
+   * 書いた直後の content をハッシュして `content_sha256` へ記録し、
+   * `described_at` を進める（変わっていなければ据え置く）。
    *
    * **write() と append() の両方から呼ぶ。** fs 版は `#writeNow` という
    * 唯一の通り道があるが、pg はこの2つが独立したメソッドなので、片方だけ
    * 直す穴を作らないよう意識的に2箇所で揃える。`human_touched_at` はここでは
    * 一切更新しない — 降ろさないための唯一の保証は、この列を更新対象に
    * 含めないことである。
+   *
+   * **`describedAt` は書き手が渡す値ではなく、ここで新旧の `description` を
+   * 比べて決める**（`@alteroid/core` の `nextDescribedAt` の doc）。渡した
+   * `row.updatedAt` と同じ時刻を使うことで、直後の読み出しが必ず `fresh` に
+   * なるようにする。
    */
-  async #updateHash(slug: string, content: string): Promise<void> {
+  async #updateDerived(
+    slug: string,
+    prior: { content: string; describedAt: Date | null } | undefined,
+    written: { content: string; updatedAt: Date | string },
+  ): Promise<Date | null> {
+    const describedAtIso = nextDescribedAt({
+      priorContent: prior?.content ?? null,
+      nextContent: written.content,
+      priorDescribedAt:
+        prior?.describedAt === null || prior?.describedAt === undefined
+          ? undefined
+          : toIso(prior.describedAt),
+      writtenAt: toIso(written.updatedAt),
+    });
+    const describedAt = describedAtIso === undefined ? null : new Date(describedAtIso);
     await this.#db
       .update(memory)
-      .set({ contentSha256: sha256Hex(content) })
+      .set({ contentSha256: sha256Hex(written.content), describedAt })
       .where(eq(memory.slug, slug));
+    return describedAt;
+  }
+
+  async #readPrior(
+    slug: string,
+  ): Promise<{ content: string; describedAt: Date | null } | undefined> {
+    const rows = await this.#db
+      .select({ content: memory.content, describedAt: memory.describedAt })
+      .from(memory)
+      .where(eq(memory.slug, slug))
+      .limit(1);
+    return rows[0];
   }
 
   /**
@@ -96,9 +144,16 @@ export class PgPersonaStore implements PersonaStore {
    *
    * 蒸留は同じ文書へ並行に追記しうるので、SQL の1文で連結する。読み書きに割ると、
    * 間に入った別の追記が消える（fs 版が書き込みを直列化しているのと同じ理由）。
+   *
+   * **`describedAt` の判定用の「書く前の内容」は、この直列化と別に取る**
+   * （下の `#readPrior`）。並行な追記が競合しても、`description` は
+   * frontmatter（本文の先頭）にしか無く、末尾への追記では通常変わらない
+   * ——変わる稀なケース（追記中の内容に frontmatter の再定義が混じる等）は
+   * 想定しない。
    */
   async append(slug: string, content: string): Promise<MemoryDocument> {
     const key = this.#slug(slug);
+    const prior = await this.#readPrior(key);
     const body = stripNulls(ensureTrailingNewline(content));
     const rows = await this.#db
       .insert(memory)
@@ -116,8 +171,8 @@ export class PgPersonaStore implements PersonaStore {
       .returning({ slug: memory.slug, content: memory.content, updatedAt: memory.updatedAt });
     const row = rows[0];
     if (row === undefined) throw new Error(`記憶の追記に失敗: ${slug}`);
-    await this.#updateHash(key, row.content);
-    return toDocument(row);
+    const describedAt = await this.#updateDerived(key, prior, row);
+    return toDocument({ ...row, describedAt });
   }
 
   /**
@@ -125,6 +180,8 @@ export class PgPersonaStore implements PersonaStore {
    * 同じ行に乗っているので一緒に消える** — fs 版の `remove()` が索引エントリを
    * 消すのと同じ意味である。過去に一度でも human で書かれた事実そのものは
    * 日誌に残り続けるので、デーモン再起動時の backfill が再びこの印を立て直す。
+   * `described_at` も同じ行が消えるので一緒に消える（要旨の鮮度は実体が無い
+   * 文書には意味を持たない）。
    */
   async remove(slug: string): Promise<void> {
     await this.#db.delete(memory).where(eq(memory.slug, this.#slug(slug)));
@@ -163,7 +220,9 @@ export class PgPersonaStore implements PersonaStore {
    * **`humanTouchedAt`（保護の信号そのもの）は日誌から完全に復元できる**
    * ので保護は失われないが、**外部編集の検出の履歴は失われる**——ハッシュは
    * 日誌に無いので、いまの本文の値で新しく基準化する。この判断の理由は
-   * `memoryProtectionRebuildDecision` の doc にある。
+   * `memoryProtectionRebuildDecision` の doc にある。**`described_at`
+   * （#170 の派生値）はここでは触らない** — 行が既にあった以上 `content` は
+   * 変わっておらず、`description` の鮮度判定には影響しない。
    *
    * **`content_sha256 is null` の行だけを対象にした `UPDATE ... WHERE` で
    * 治す。** 同時に複数の読み出しが来ても、実際に列を動かせた（＝先着した）
@@ -221,7 +280,12 @@ export class PgPersonaStore implements PersonaStore {
    */
   async documents(): Promise<MemoryDocument[]> {
     const rows = await this.#db
-      .select({ slug: memory.slug, content: memory.content, updatedAt: memory.updatedAt })
+      .select({
+        slug: memory.slug,
+        content: memory.content,
+        updatedAt: memory.updatedAt,
+        describedAt: memory.describedAt,
+      })
       .from(memory)
       .orderBy(asc(memory.slug));
     return rows.map(toDocument);
@@ -232,20 +296,42 @@ interface MemoryRow {
   slug: string;
   content: string;
   updatedAt: Date | string;
+  describedAt: Date | string | null;
 }
 
 function toDocument(row: MemoryRow): MemoryDocument {
+  const updatedAt = toIso(row.updatedAt);
+  const derived = deriveMemoryFrontmatter({
+    content: row.content,
+    updatedAt,
+    describedAt: row.describedAt === null ? undefined : toIso(row.describedAt),
+  });
   return {
     slug: row.slug,
     title: titleOf(row.content, row.slug),
-    updatedAt: toIso(row.updatedAt),
+    updatedAt,
     bytes: Buffer.byteLength(row.content, 'utf8'),
     content: row.content,
+    frontmatter: derived.frontmatter,
+    kind: derived.kind,
+    description: derived.description,
+    parent: derived.parent,
+    descriptionFreshness: derived.descriptionFreshness,
   };
 }
 
 function stripContent(doc: MemoryDocument): MemoryDocumentMeta {
-  return { slug: doc.slug, title: doc.title, updatedAt: doc.updatedAt, bytes: doc.bytes };
+  return {
+    slug: doc.slug,
+    title: doc.title,
+    updatedAt: doc.updatedAt,
+    bytes: doc.bytes,
+    frontmatter: doc.frontmatter,
+    kind: doc.kind,
+    description: doc.description,
+    parent: doc.parent,
+    descriptionFreshness: doc.descriptionFreshness,
+  };
 }
 
 function titleOf(content: string, fallback: string): string {

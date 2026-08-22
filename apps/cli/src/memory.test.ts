@@ -168,12 +168,45 @@ describe('alteroid memory list / show', () => {
     const read = captureStdout();
     replies.push({
       status: 200,
-      body: { documents: [{ slug: 'values', title: '価値観' }] },
+      body: {
+        documents: [
+          {
+            slug: 'values',
+            title: '価値観',
+            kind: 'premise',
+            descriptionFreshness: { kind: 'absent' },
+          },
+        ],
+      },
     });
 
     await memoryListCommand();
 
     expect(read()).toContain('values  — 価値観');
+  });
+
+  it('区分と要旨・鮮度の印を出す', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: {
+        documents: [
+          {
+            slug: 'runbook',
+            title: '定点観測',
+            kind: 'fact',
+            description: '費用の推移',
+            descriptionFreshness: { kind: 'stale' },
+          },
+        ],
+      },
+    });
+
+    await memoryListCommand();
+
+    const text = read();
+    expect(text).toContain('[fact] runbook');
+    expect(text).toContain('⚠古い要旨: 費用の推移');
   });
 
   it('無い記憶を読もうとしたら、そう言う（空の本文と区別する）', async () => {

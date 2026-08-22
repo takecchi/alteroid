@@ -3,8 +3,11 @@ import { join } from 'node:path';
 
 import {
   deriveHumanTouchedAtFromJournal,
+  deriveMemoryFrontmatter,
   memorySlugSchema,
   memoryProtectionRebuildDecision,
+  nextDescribedAt,
+  resolveMemoryDescriptionFreshness,
   sha256Hex,
 } from '@alteroid/core';
 import type {
@@ -16,27 +19,34 @@ import type {
 } from '@alteroid/core';
 
 /**
- * 保護状態（human guard）の派生値、1文書ぶん。
+ * 保護状態（human guard）の派生値と、要旨の鮮度の派生値、1文書ぶん。
  *
- * **新しい真実ではない。** 実体は日誌（`memory_update.cause`）にある。ここは
- * 読み出しを安くするためのキャッシュで、失った・信用できないときは `unknown`
- * （守る側）へ落ちる（`PersonaStore.protectionStatus` の doc）。
+ * **新しい真実ではない。** 実体は日誌（`memory_update.cause`）と本文
+ * （`content` 先頭の frontmatter）にある。ここは読み出しを安くするための
+ * キャッシュで、失った・信用できないときは安全側（保護は `unknown`、
+ * 要旨の鮮度は `unknown`）へ落ちる。
  *
  * **ここは「誰も送らない導出値」だけを追記で伸ばす場所である。** 人間・クローンが
  * 書く値は本文（`content`）の側に置く——入口のスキーマ（`memory_write` /
  * `PUT /memory/:slug` の body）を1つも変えないことが要件だからである。
  *
- * **この PR（#173）が要る2つだけを持つ。** #170（記憶の目次化）が要る
- * `describedAt`（要旨が本文のどの版に対するものか）はここには**まだ無い** —
- * 未実装の宣言を実装済みの引数の隣に置くと、未実装だったことが隠れる。
- * #170 が着地するときは、この2つの隣に足せばよい（1ファイルへ統合する形は
- * 変えない）。
+ * **#173 が要った2つ（`humanTouchedAt` / `contentSha256`）の隣に、#170（記憶の
+ * 目次化）が要る `describedAt` を足す。** 1ファイルへ統合する形は変えない。
  */
 interface MemoryIndexEntry {
   /** 最後に `cause:'human'` の書き込みが記録された時刻。一度立ったら降ろさない。 */
   humanTouchedAt?: string;
   /** デーモン経由で最後に書いた本文のハッシュ（sha256 hex）。外部編集の検出に使う。 */
   contentSha256?: string;
+  /**
+   * 最後に `description`（frontmatter）が変わったと確定した時刻。
+   *
+   * **書き手は書けない**（`write()` のとき新旧の `description` を比べて
+   * store がここを進める。書き手が採番するとしたら `updatedAt` より必ず
+   * 前になり、書いた直後から「古い」と出てしまう）。変わっていなければ
+   * 据え置く（`@alteroid/core` の `nextDescribedAt` の doc）。
+   */
+  describedAt?: string;
 }
 
 type MemoryIndex = Record<string, MemoryIndexEntry>;
@@ -148,7 +158,13 @@ export class FsPersonaStore implements PersonaStore {
    */
   async #doRebuildIndex(): Promise<MemoryIndex> {
     const humanTouchedAt = await deriveHumanTouchedAtFromJournal(this.#journal);
-    const docs = await this.documents();
+    // **`this.documents()` を呼ばない。** `documents()` → `list()` → `read()` は
+    // （この PR から）`#readIndex()` に依存しており、索引がまだ無い・壊れている
+    // このタイミングでそれを呼ぶと `#readIndex()` が再び `#rebuildIndex()` を
+    // 呼ぶ——`#rebuildingIndex` のメモ化により**この実行中の Promise を
+    // 自分自身が待つ**循環待機（デッドロック）になる。索引に依存しない生の
+    // 読み出しだけをここで使う。
+    const docs = await this.#listRawContents();
     const index: MemoryIndex = {};
     let humanRestored = 0;
     for (const doc of docs) {
@@ -167,6 +183,36 @@ export class FsPersonaStore implements PersonaStore {
     });
     await this.#journal.append({ type: 'decision', decision, grounds });
     return index;
+  }
+
+  /**
+   * ファイル名と本文だけを、索引に触れずに読む。
+   *
+   * **`#doRebuildIndex` からだけ呼ぶ。** `list()` / `read()` / `documents()`
+   * は `#readIndex()` に依存しており、索引の組み直し中にそれらを呼ぶと
+   * 自分自身を待つ循環待機になる（`#doRebuildIndex` のコメント）。
+   */
+  async #listRawContents(): Promise<{ slug: string; content: string }[]> {
+    let names: string[];
+    try {
+      names = await readdir(this.#dir);
+    } catch (error) {
+      if (isNotFound(error)) return [];
+      throw error;
+    }
+    const out: { slug: string; content: string }[] = [];
+    for (const name of names.sort()) {
+      if (!name.endsWith('.md')) continue;
+      const slug = name.slice(0, -'.md'.length);
+      if (!memorySlugSchema.safeParse(slug).success) continue;
+      try {
+        const content = await readFile(this.#path(slug), 'utf8');
+        out.push({ slug, content });
+      } catch (error) {
+        if (!isNotFound(error)) throw error;
+      }
+    }
+    return out;
   }
 
   async list(): Promise<MemoryDocumentMeta[]> {
@@ -193,12 +239,24 @@ export class FsPersonaStore implements PersonaStore {
     const path = this.#path(slug);
     try {
       const [content, stats] = await Promise.all([readFile(path, 'utf8'), stat(path)]);
+      const updatedAt = stats.mtime.toISOString();
+      const index = await this.#readIndex();
+      const derived = deriveMemoryFrontmatter({
+        content,
+        updatedAt,
+        describedAt: index[slug]?.describedAt,
+      });
       return {
         slug,
         title: titleOf(content, slug),
-        updatedAt: stats.mtime.toISOString(),
+        updatedAt,
         bytes: stats.size,
         content,
+        frontmatter: derived.frontmatter,
+        kind: derived.kind,
+        description: derived.description,
+        parent: derived.parent,
+        descriptionFreshness: derived.descriptionFreshness,
       };
     } catch (error) {
       if (isNotFound(error)) return null;
@@ -224,6 +282,10 @@ export class FsPersonaStore implements PersonaStore {
    * 壊れた状態が見える瞬間を作らない）。
    */
   async #writeNow(slug: string, content: string): Promise<MemoryDocument> {
+    // **describedAt の判定に要る「書く前の内容」を先に控える。** 存在しない
+    // slug（新規作成）なら null——`nextDescribedAt` はその場合 `description`
+    // が「無い→在る」に変わったとみなし、新しい describedAt を立てる。
+    const before = await this.read(slug);
     const path = this.#path(slug);
     await mkdir(this.#dir, { recursive: true });
     const tmp = `${path}.tmp`;
@@ -237,9 +299,31 @@ export class FsPersonaStore implements PersonaStore {
     // （humanTouchedAt）はここでは一切触らない（降ろさないための唯一の保証は、
     // ここで更新対象に含めないことである）。
     const index = await this.#readIndex();
-    index[slug] = { ...index[slug], contentSha256: sha256Hex(written.content) };
+    const priorEntry = index[slug];
+    // **describedAt も同じ唯一の通り道で進める。** 書き手は describedAt を
+    // 直接書けない（`MemoryIndexEntry.describedAt` の doc）——ここが
+    // `description` の新旧を比べて、変わっていれば `written.updatedAt` と
+    // 同じ時刻に確定させる（変わっていなければ据え置く）。同じ時刻を使うのは、
+    // 直後の読み出しが必ず `fresh` になるようにするためである（`describedAt`
+    // をここで別に採番すると mtime の精度差で `stale` に化けうる）。
+    const describedAt = nextDescribedAt({
+      priorContent: before?.content ?? null,
+      nextContent: written.content,
+      priorDescribedAt: priorEntry?.describedAt,
+      writtenAt: written.updatedAt,
+    });
+    index[slug] = { ...priorEntry, contentSha256: sha256Hex(written.content), describedAt };
     await this.#writeIndex(index);
-    return written;
+    // written は上の index 更新より前に読んだので、その時点の describedAt
+    // （更新前の値）で鮮度を計算している。確定した describedAt で組み直す。
+    return {
+      ...written,
+      descriptionFreshness: resolveMemoryDescriptionFreshness({
+        description: written.description,
+        describedAt,
+        updatedAt: written.updatedAt,
+      }),
+    };
   }
 
   async remove(slug: string): Promise<void> {
@@ -309,7 +393,17 @@ export class FsPersonaStore implements PersonaStore {
 }
 
 function stripContent(doc: MemoryDocument): MemoryDocumentMeta {
-  return { slug: doc.slug, title: doc.title, updatedAt: doc.updatedAt, bytes: doc.bytes };
+  return {
+    slug: doc.slug,
+    title: doc.title,
+    updatedAt: doc.updatedAt,
+    bytes: doc.bytes,
+    frontmatter: doc.frontmatter,
+    kind: doc.kind,
+    description: doc.description,
+    parent: doc.parent,
+    descriptionFreshness: doc.descriptionFreshness,
+  };
 }
 
 function titleOf(content: string, fallback: string): string {

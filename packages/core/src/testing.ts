@@ -1,3 +1,4 @@
+import { deriveMemoryFrontmatter, nextDescribedAt } from './memory.js';
 import type {
   Commitment,
   InboxEvent,
@@ -97,6 +98,9 @@ export function createMemoryStores(): Stores {
   // journal.append(cause:'human') 相当の呼び出しから反映される派生値）。
   const humanTouchedAt = new Map<string, string>();
   const contentSha256 = new Map<string, string>();
+  // #170（記憶の目次化）の派生値。fs の `.index.json` / pg の `described_at`
+  // 列と同じ形——書き手は書けず、write() が新旧の description を比べて進める。
+  const describedAt = new Map<string, string>();
   const entries: JournalEntry[] = [];
   const jobs = new Map<string, Job>();
   const approvals = new Map<string, PendingApproval>();
@@ -113,23 +117,62 @@ export function createMemoryStores(): Stores {
   const persona: PersonaStore = {
     async list(): Promise<MemoryDocumentMeta[]> {
       return [...documents.values()]
-        .map(({ slug, title, updatedAt, bytes }) => ({ slug, title, updatedAt, bytes }))
+        .map(
+          ({
+            slug,
+            title,
+            updatedAt,
+            bytes,
+            frontmatter,
+            kind,
+            description,
+            parent,
+            descriptionFreshness,
+          }) => ({
+            slug,
+            title,
+            updatedAt,
+            bytes,
+            frontmatter,
+            kind,
+            description,
+            parent,
+            descriptionFreshness,
+          }),
+        )
         .sort((a, b) => a.slug.localeCompare(b.slug));
     },
     async read(slug) {
       return documents.get(slug) ?? null;
     },
     async write(slug, content) {
+      const before = documents.get(slug);
+      const updatedAt = new Date().toISOString();
+      // **write() と append()（下）の唯一の通り道。** fs / pg と同じく、誰が
+      // 書いたかを問わずここでハッシュ・describedAt を更新する。human 印には
+      // 触らない。describedAt は書き手が書けない（`nextDescribedAt` の doc）。
+      const next = nextDescribedAt({
+        priorContent: before?.content ?? null,
+        nextContent: content,
+        priorDescribedAt: describedAt.get(slug),
+        writtenAt: updatedAt,
+      });
+      if (next === undefined) describedAt.delete(slug);
+      else describedAt.set(slug, next);
+      const derived = deriveMemoryFrontmatter({ content, updatedAt, describedAt: next });
       const doc: MemoryDocument = {
         slug,
         title: /^#\s+(.+)$/m.exec(content)?.[1] ?? slug,
-        updatedAt: new Date().toISOString(),
+        updatedAt,
         bytes: Buffer.byteLength(content),
         content,
+        frontmatter: derived.frontmatter,
+        kind: derived.kind,
+        description: derived.description,
+        parent: derived.parent,
+        descriptionFreshness: derived.descriptionFreshness,
       };
       documents.set(slug, doc);
-      // **write() と append()（下）の唯一の通り道。** fs / pg と同じく、誰が
-      // 書いたかを問わずここでハッシュを更新する。human 印には触らない。
       contentSha256.set(slug, sha256Hex(content));
       return doc;
     },
@@ -143,6 +186,7 @@ export function createMemoryStores(): Stores {
       // 事実そのものは journal に残るので、backfill が立て直す）。
       humanTouchedAt.delete(slug);
       contentSha256.delete(slug);
+      describedAt.delete(slug);
     },
     async protectionStatus(slug): Promise<MemoryProtectionStatus> {
       if (humanTouchedAt.has(slug)) return { kind: 'human' };

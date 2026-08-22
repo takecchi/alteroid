@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildCloneSystemPrompt, buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
+import { renderMemoryDocuments } from './memory.js';
+import {
+  buildCloneSystemPrompt,
+  buildDistillPrompt,
+  buildManagerSystemPrompt,
+  buildWorkerPrompt,
+} from './prompt.js';
 
 /**
  * マネージャーのシステムプロンプトに書く「委譲の指針」を守るテスト。
@@ -75,7 +81,7 @@ describe('マネージャーのシステムプロンプト — 委譲の指針',
  * どちらが落ちても落ちるようにしてある。
  */
 describe('クローンのシステムプロンプト — 道具と委譲', () => {
-  const prompt = buildCloneSystemPrompt({ memory: '' });
+  const prompt = buildCloneSystemPrompt({ memory: renderMemoryDocuments([]) });
 
   it('委譲が原則であることを方針として書いている', () => {
     // PRD「層ごとの能力」: 重い調査と実作業は方針として下へ委ねる。
@@ -125,5 +131,100 @@ describe('作業者のシステムプロンプト', () => {
 
   it('握り潰さずに上へ返す経路があることを書いている', () => {
     expect(buildWorkerPrompt()).toContain('握り潰さず');
+  });
+});
+
+/**
+ * branded type（4-14）— `renderMemoryDocuments` を通さずに `buildCloneSystemPrompt`
+ * へ記憶を渡す経路を `tsc` で塞ぐ。
+ *
+ * **これは型レベルの歯である。** `vitest` はトランスパイル済みの JS を実行する
+ * だけなので、この `it()` 自体は実行時には常に通る（ブランドは実行時には
+ * 消える）。守っているのは **`pnpm typecheck`（`tsc --noEmit`）がこのファイルを
+ * 検査したときに、次の行が「型エラーである」ことを要求する** 側——
+ * `@ts-expect-error` は「次の行は型エラーになるはずだ」という主張で、
+ * **実際にエラーにならなければ `@ts-expect-error` 自身が「不要な抑制」として
+ * `tsc` を落とす。** だから `RenderedMemory` のブランドが外れる・弱まる
+ * リグレッションが起きると、`pnpm typecheck` が real に落ちる。
+ */
+/**
+ * `buildDistillPrompt` — #170 で足した統合の指示（4-9 / F 章）。
+ *
+ * **蒸留は死んでいなかったが、畳んでいなかった**（`cause:'distill'` が
+ * 極端に少ないという実測が起点）。「畳め」「重複を消せ」「要旨を直せ」
+ * それぞれが1つの `it()` で別々に測る——どれか1つが欠けても、他の
+ * 指示があるから通ったように見えるのを避けるため。
+ */
+describe('buildDistillPrompt — 統合の指示（畳む・重複を消す・要旨を直す・タイトルの水準）', () => {
+  it('新しく書く前に既存を探すよう指示している（重複を作らない）', () => {
+    const prompt = buildDistillPrompt('conversation_end');
+    expect(prompt).toContain('memory_list');
+    expect(prompt).toContain('重複する文書を作らない');
+  });
+
+  it('相対日付を絶対日付へ直すよう指示している', () => {
+    expect(buildDistillPrompt('conversation_end')).toContain('絶対日付');
+  });
+
+  it('矛盾する古い事実を消すよう指示している', () => {
+    expect(buildDistillPrompt('conversation_end')).toContain('矛盾する古い事実');
+  });
+
+  it('要旨を本文に合わせて直すよう指示し、鮮度の印を優先するよう言っている', () => {
+    const prompt = buildDistillPrompt('conversation_end');
+    expect(prompt).toContain('要旨');
+    expect(prompt).toContain('鮮度');
+  });
+
+  it('既存文書へ frontmatter（description / type）を書くことを、移行後最初の仕事として指示している', () => {
+    const prompt = buildDistillPrompt('conversation_end');
+    expect(prompt).toContain('frontmatter');
+    expect(prompt).toContain('description');
+    expect(prompt).toContain('type: premise');
+    expect(prompt).toContain('type: fact');
+  });
+
+  /**
+   * **タイトルの水準は機械には守れない。** `description`（要旨）の鮮度は
+   * `describedAt` で機械的に検出できるが、`title` の「開くべきか判断できる
+   * 水準か」は機械には判らない——だから指示文で明示的に要求するしかない
+   * （`schema.ts` の `memoryDescriptionFreshnessSchema` の doc と対）。
+   */
+  it('目次の1行が「開かなかったことが判断になる」水準で書かれることを要求している', () => {
+    const prompt = buildDistillPrompt('conversation_end');
+    expect(prompt).toContain('欠落');
+    expect(prompt).toContain('判断');
+    // 悪い例・良い例が具体的に書いてあること（「良い題を書け」だけでは
+    // 判定できる形になっていない）。
+    expect(prompt).toContain('コードベースについて');
+  });
+
+  it('「畳まないもの」の一覧が、畳む指示と同じ場所（この返り値）に書いてある', () => {
+    const prompt = buildDistillPrompt('conversation_end');
+    expect(prompt).toContain('畳まないもの');
+    expect(prompt).toContain('人間が一度でも書いた文書');
+    // premise を費用のために fact へ格下げしない、という歯止め。
+    expect(prompt).toContain('格下げ');
+  });
+
+  it('conversation_end / pre_compact のどちらでも統合の指示が同じ内容で載る', () => {
+    const a = buildDistillPrompt('conversation_end');
+    const b = buildDistillPrompt('pre_compact');
+    // 理由の一文（why）だけが違うはずなので、統合の節はどちらにも同じ形で入る。
+    expect(a).toContain('新しく書く前に、既存の記憶を');
+    expect(b).toContain('新しく書く前に、既存の記憶を');
+  });
+});
+
+describe('branded type — RenderedMemory を経由しない記憶は buildCloneSystemPrompt に渡せない', () => {
+  it('renderMemoryDocuments を通さない生の文字列は型で拒否される', () => {
+    // @ts-expect-error 生の string は RenderedMemory ではない。
+    // renderMemoryDocuments（memory.ts）だけが作れる branded type にしてある
+    // （4-14）。この行が本当に型エラーにならなくなったら、上の
+    // `@ts-expect-error` 自体が「不要な抑制」として `pnpm typecheck` を落とす。
+    buildCloneSystemPrompt({ memory: '生の文字列' });
+
+    // renderMemoryDocuments を通した値は問題なく渡せる（対照）。
+    expect(() => buildCloneSystemPrompt({ memory: renderMemoryDocuments([]) })).not.toThrow();
   });
 });

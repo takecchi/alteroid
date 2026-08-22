@@ -1,13 +1,23 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  MEMORY_TOC_ENTRY_LIMIT,
+  assertNeverMemoryDescriptionFreshness,
+  assertNeverMemoryFrontmatterState,
   assertNeverMemoryProtectionStatus,
+  deriveMemoryFrontmatter,
   describeMemoryProtectionStatus,
   memoryProtectionAllowsFullReplace,
+  nextDescribedAt,
+  parseMemoryFrontmatter,
   renderMemoryDocument,
   renderMemoryDocuments,
+  renderMemoryListing,
+  resolveMemoryDescriptionFreshness,
+  resolveMemoryDocKind,
+  type MemoryPart,
 } from './memory.js';
-import type { MemoryProtectionStatus } from './schema.js';
+import type { MemoryDescriptionFreshness, MemoryProtectionStatus } from './schema.js';
 
 /**
  * 記憶をクローンの文脈へ載せる形。
@@ -105,5 +115,436 @@ describe('MemoryProtectionStatus の網羅性', () => {
   it('assertNeverMemoryProtectionStatus 自体も、渡されたものを含めて例外を投げる', () => {
     const bogus = { kind: 'bogus' } as never;
     expect(() => assertNeverMemoryProtectionStatus(bogus)).toThrow(/bogus/);
+  });
+});
+
+// =============================================================================
+// #170「目次 → 詳細（オンデマンド）＋ 階層」
+// =============================================================================
+
+/** 目次（fact）に載る1件を作る小さなヘルパー。テストの意図を読みやすくする。 */
+function fact(
+  slug: string,
+  options: {
+    title?: string;
+    description?: string;
+    type?: string;
+    parent?: string;
+    freshness?: MemoryDescriptionFreshness;
+    extraFrontmatter?: string;
+  } = {},
+): MemoryPart {
+  const title = options.title ?? slug;
+  const type = options.type ?? 'fact';
+  const lines = ['---'];
+  if (options.description !== undefined) lines.push(`description: ${options.description}`);
+  lines.push(`type: ${type}`);
+  if (options.parent !== undefined) lines.push(`parent: ${options.parent}`);
+  if (options.extraFrontmatter !== undefined) lines.push(options.extraFrontmatter);
+  lines.push('---');
+  lines.push(`# ${title}`);
+  lines.push('本文の詳細（目次からは開けない）');
+  return {
+    slug,
+    title,
+    content: lines.join('\n'),
+    descriptionFreshness: options.freshness ?? { kind: 'unknown' },
+  };
+}
+
+function premise(slug: string, body = '本文'): MemoryPart {
+  return { slug, content: `# ${slug}\n${body}` };
+}
+
+describe('frontmatter の解釈（parseMemoryFrontmatter）— 3状態、畳まない', () => {
+  it('先頭が `---` でなければ none', () => {
+    expect(parseMemoryFrontmatter('# 価値観\n\n本文')).toEqual({ kind: 'none' });
+    expect(parseMemoryFrontmatter('')).toEqual({ kind: 'none' });
+  });
+
+  it('閉じの `---` が無ければ malformed', () => {
+    expect(parseMemoryFrontmatter('---\ndescription: x\n# 見出し')).toEqual({
+      kind: 'malformed',
+    });
+  });
+
+  it('未知のキーがあれば malformed', () => {
+    expect(parseMemoryFrontmatter('---\nauthor: someone\n---\n# T')).toEqual({
+      kind: 'malformed',
+    });
+  });
+
+  it('`key: value` の形から外れた行（コロンが無い）があれば malformed', () => {
+    expect(parseMemoryFrontmatter('---\njust text\n---\n# T')).toEqual({ kind: 'malformed' });
+  });
+
+  it('既知のキー（description / type / parent）だけなら parsed。値は文字列のまま', () => {
+    expect(
+      parseMemoryFrontmatter('---\ndescription: 要旨\ntype: fact\nparent: p\n---\n# T\n本文'),
+    ).toEqual({ kind: 'parsed', description: '要旨', type: 'fact', parent: 'p' });
+  });
+
+  it('値は型推論しない（`type: no` は文字列 "no" のまま。false にしない）', () => {
+    const parsed = parseMemoryFrontmatter('---\ntype: no\n---\n# T');
+    expect(parsed).toEqual({ kind: 'parsed', type: 'no' });
+  });
+
+  it('一部のキーだけでも parsed になる（description のみ、type のみ）', () => {
+    expect(parseMemoryFrontmatter('---\ndescription: 要旨だけ\n---\n# T')).toEqual({
+      kind: 'parsed',
+      description: '要旨だけ',
+    });
+  });
+});
+
+describe('区分の解決（resolveMemoryDocKind）— 既定は premise（4-11 の安全弁）', () => {
+  it('frontmatter が無い（none）なら premise', () => {
+    expect(resolveMemoryDocKind({ kind: 'none' })).toBe('premise');
+  });
+
+  it('frontmatter が壊れている（malformed）なら premise', () => {
+    expect(resolveMemoryDocKind({ kind: 'malformed' })).toBe('premise');
+  });
+
+  it('type が無ければ premise', () => {
+    expect(resolveMemoryDocKind({ kind: 'parsed' })).toBe('premise');
+  });
+
+  it('type が既知の集合に無い値なら premise', () => {
+    expect(resolveMemoryDocKind({ kind: 'parsed', type: 'note' })).toBe('premise');
+  });
+
+  it('type: premise は premise、type: fact は fact', () => {
+    expect(resolveMemoryDocKind({ kind: 'parsed', type: 'premise' })).toBe('premise');
+    expect(resolveMemoryDocKind({ kind: 'parsed', type: 'fact' })).toBe('fact');
+  });
+});
+
+describe('要旨の鮮度（resolveMemoryDescriptionFreshness）— 4状態、畳まない', () => {
+  it('description が無ければ absent（describedAt があっても absent が勝つ）', () => {
+    expect(
+      resolveMemoryDescriptionFreshness({
+        description: undefined,
+        describedAt: '2026-08-20T00:00:00Z',
+        updatedAt: '2026-08-21T00:00:00Z',
+      }),
+    ).toEqual({ kind: 'absent' });
+  });
+
+  it('description はあるが describedAt を持たなければ unknown', () => {
+    expect(
+      resolveMemoryDescriptionFreshness({
+        description: '要旨',
+        describedAt: undefined,
+        updatedAt: '2026-08-21T00:00:00Z',
+      }),
+    ).toEqual({ kind: 'unknown' });
+  });
+
+  it('describedAt が updatedAt 以降なら fresh', () => {
+    expect(
+      resolveMemoryDescriptionFreshness({
+        description: '要旨',
+        describedAt: '2026-08-21T00:00:00Z',
+        updatedAt: '2026-08-21T00:00:00Z',
+      }),
+    ).toEqual({ kind: 'fresh' });
+  });
+
+  it('describedAt が updatedAt より前なら stale', () => {
+    expect(
+      resolveMemoryDescriptionFreshness({
+        description: '要旨',
+        describedAt: '2026-08-20T00:00:00Z',
+        updatedAt: '2026-08-21T00:00:00Z',
+      }),
+    ).toEqual({ kind: 'stale' });
+  });
+
+  it('assertNeverMemoryDescriptionFreshness は未知の状態を投げる', () => {
+    const bogus = { kind: 'bogus' } as never;
+    expect(() => assertNeverMemoryDescriptionFreshness(bogus)).toThrow(/bogus/);
+  });
+
+  it('assertNeverMemoryFrontmatterState は未知の状態を投げる', () => {
+    const bogus = { kind: 'bogus' } as never;
+    expect(() => assertNeverMemoryFrontmatterState(bogus)).toThrow(/bogus/);
+  });
+});
+
+describe('deriveMemoryFrontmatter — fs / pg が list() / read() / documents() で共通に使う唯一の実装', () => {
+  it('none の文書は premise・description 無し・absent', () => {
+    const derived = deriveMemoryFrontmatter({
+      content: '# 価値観\n本文',
+      updatedAt: '2026-08-21T00:00:00Z',
+      describedAt: undefined,
+    });
+    expect(derived.frontmatter).toEqual({ kind: 'none' });
+    expect(derived.kind).toBe('premise');
+    expect(derived.description).toBeUndefined();
+    expect(derived.descriptionFreshness).toEqual({ kind: 'absent' });
+  });
+
+  it('fact かつ describedAt が updatedAt 以降なら fresh を返す', () => {
+    const derived = deriveMemoryFrontmatter({
+      content: '---\ndescription: 要旨\ntype: fact\n---\n# T\n本文',
+      updatedAt: '2026-08-21T00:00:00Z',
+      describedAt: '2026-08-21T00:00:00Z',
+    });
+    expect(derived.kind).toBe('fact');
+    expect(derived.description).toBe('要旨');
+    expect(derived.descriptionFreshness).toEqual({ kind: 'fresh' });
+  });
+});
+
+describe('nextDescribedAt — 書き手は書けない。store が新旧の description を比べて進める（4-3）', () => {
+  it('description が変わっていなければ据え置く', () => {
+    const result = nextDescribedAt({
+      priorContent: '---\ndescription: 同じ\n---\n# T\n旧本文',
+      nextContent: '---\ndescription: 同じ\n---\n# T\n新本文（本文だけ変えた）',
+      priorDescribedAt: '2026-08-01T00:00:00Z',
+      writtenAt: '2026-08-21T00:00:00Z',
+    });
+    expect(result).toBe('2026-08-01T00:00:00Z');
+  });
+
+  it('description が変わっていれば、渡された writtenAt へ進める', () => {
+    const result = nextDescribedAt({
+      priorContent: '---\ndescription: 旧\n---\n# T\n本文',
+      nextContent: '---\ndescription: 新\n---\n# T\n本文',
+      priorDescribedAt: '2026-08-01T00:00:00Z',
+      writtenAt: '2026-08-21T00:00:00Z',
+    });
+    expect(result).toBe('2026-08-21T00:00:00Z');
+  });
+
+  it('新規作成（priorContent が null）で description が付けば、changed 扱いになる', () => {
+    const result = nextDescribedAt({
+      priorContent: null,
+      nextContent: '---\ndescription: 初めての要旨\n---\n# T\n本文',
+      priorDescribedAt: undefined,
+      writtenAt: '2026-08-21T00:00:00Z',
+    });
+    expect(result).toBe('2026-08-21T00:00:00Z');
+  });
+
+  it('書いた直後は describedAt === updatedAt になるので、直後の読み出しは必ず fresh', () => {
+    const writtenAt = '2026-08-21T00:00:00Z';
+    const describedAt = nextDescribedAt({
+      priorContent: '---\ndescription: 旧\n---\n# T\n本文',
+      nextContent: '---\ndescription: 新\n---\n# T\n本文',
+      priorDescribedAt: '2026-08-01T00:00:00Z',
+      writtenAt,
+    });
+    expect(
+      resolveMemoryDescriptionFreshness({ description: '新', describedAt, updatedAt: writtenAt }),
+    ).toEqual({ kind: 'fresh' });
+  });
+});
+
+/**
+ * `renderMemoryDocuments` — 区分ごとの載り方（B の表）と、5つの受け入れ基準
+ * （二重に載せない・取りこぼさない・切ったら言う・古い要旨は消えない・
+ * 4状態を畳まない）。**「該当0件」だけを根拠にするテストは書かない** ——
+ * 切る/切らない、載せる/載せない、それぞれを別の `it()` で測る。
+ */
+describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳細の受け入れ基準', () => {
+  it('【受け入れ基準の最上位】frontmatter を1つも持たない文書の集合に対して、焼き込みが現行と完全に同じである', () => {
+    const docs = [premise('b', 'に'), premise('a', 'い')];
+    const rendered = renderMemoryDocuments(docs);
+    const legacy = docs.map(renderMemoryDocument).join('\n\n');
+    expect(rendered).toBe(legacy);
+  });
+
+  it('premise（区分無し）は全文が載る', () => {
+    const rendered = renderMemoryDocuments([premise('values', '大事にしていること')]);
+    expect(rendered).toContain('<!-- memory: values.md -->');
+    expect(rendered).toContain('大事にしていること');
+  });
+
+  it('fact は目次の1行だけが載り、本文は載らない（memory_read で開く前提）', () => {
+    const rendered = renderMemoryDocuments([
+      fact('runbook', {
+        title: '定点観測',
+        description: '費用の推移',
+        freshness: { kind: 'fresh' },
+      }),
+    ]);
+    expect(rendered).toContain('runbook: 定点観測');
+    expect(rendered).toContain('費用の推移');
+    expect(rendered).not.toContain('本文の詳細（目次からは開けない）');
+  });
+
+  it('二重に載せない: premise が全文で載っているとき、同じ文書の本文が目次側にも出ない', () => {
+    const docs = [
+      premise('p1', '前提の本文'),
+      fact('f1', { title: 'F1', description: '要旨', freshness: { kind: 'fresh' } }),
+    ];
+    const rendered = renderMemoryDocuments(docs);
+
+    // premise は1回だけ全文で載る。
+    const occurrences = rendered.split('<!-- memory: p1.md -->').length - 1;
+    expect(occurrences).toBe(1);
+    // fact の本文（見出し以降の詳細）はどこにも出ない。
+    expect(rendered).not.toContain('本文の詳細（目次からは開けない）');
+    expect(rendered).toContain('- f1: F1');
+  });
+
+  it('取りこぼさない: documents() の件数 == 全文で載った件数 + 目次に出た件数', () => {
+    const docs = [
+      premise('premise-a'),
+      premise('premise-b'),
+      fact('fact-a', { description: '要旨a', freshness: { kind: 'fresh' } }),
+      fact('fact-b', { description: '要旨b', freshness: { kind: 'stale' } }),
+      fact('malformed-parent-ignored', {
+        description: '要旨c',
+        freshness: { kind: 'unknown' },
+        parent: 'nope',
+      }),
+    ];
+    const rendered = renderMemoryDocuments(docs);
+
+    const fullTextCount = (rendered.match(/<!-- memory: [\w-]+\.md -->/g) ?? []).length;
+    const tocCount = docs.filter((doc) => rendered.includes(`- ${doc.slug}:`)).length;
+    expect(fullTextCount + tocCount).toBe(docs.length);
+  });
+
+  it('切ったら言う: 目次を件数で切ったら、切った件数が出力に現れる', () => {
+    const docs = Array.from({ length: MEMORY_TOC_ENTRY_LIMIT + 5 }, (_, index) =>
+      fact(`fact-${index}`, { description: `要旨${index}`, freshness: { kind: 'fresh' } }),
+    );
+    const rendered = renderMemoryDocuments(docs);
+    expect(rendered).toContain('…ほか 5 件は目次から省略');
+  });
+
+  it('切らないときは、切った件数の注記が出ない（切る/切らないは別の it() で測る）', () => {
+    const docs = [fact('a'), fact('b'), fact('c')];
+    const rendered = renderMemoryDocuments(docs);
+    expect(rendered).not.toContain('省略');
+  });
+
+  it('古い要旨は消えない: stale な fact 文書が印つきで目次に残る', () => {
+    const rendered = renderMemoryDocuments([
+      fact('stale-doc', {
+        title: 'Stale Doc',
+        description: '古い要旨',
+        freshness: { kind: 'stale' },
+      }),
+    ]);
+    expect(rendered).toContain('stale-doc');
+    expect(rendered).toContain('⚠古い要旨（本文の方が新しい）: 古い要旨');
+  });
+
+  it('4状態を畳まない: fresh / stale / unknown / absent がそれぞれ別の表示になる', () => {
+    const fresh = renderMemoryDocuments([
+      fact('x-fresh', { description: '説明', freshness: { kind: 'fresh' } }),
+    ]);
+    const stale = renderMemoryDocuments([
+      fact('x-stale', { description: '説明', freshness: { kind: 'stale' } }),
+    ]);
+    const unknown = renderMemoryDocuments([
+      fact('x-unknown', { description: '説明', freshness: { kind: 'unknown' } }),
+    ]);
+    // absent は description そのものを frontmatter に書かない（4状態のうち
+    // description が無いときの唯一の状態であることを、内容そのもので表す）。
+    const absent = renderMemoryDocuments([fact('x-absent', { freshness: { kind: 'absent' } })]);
+
+    const distinct = new Set([fresh, stale, unknown, absent].map((s) => s.trim()));
+    expect(distinct.size).toBe(4);
+    expect(absent).toContain('（要旨なし）');
+  });
+
+  it('malformed の文書は消えず、premise として全文が残り、frontmatter が壊れている印が付く', () => {
+    const rendered = renderMemoryDocuments([
+      { slug: 'broken', content: '---\nauthor: 未知のキー\n---\n# Broken\n本文は残る' },
+    ]);
+    expect(rendered).toContain('本文は残る');
+    expect(rendered).toContain('frontmatter が壊れている');
+  });
+
+  it('存在しない親を指す parent を黙って落とさない', () => {
+    const rendered = renderMemoryDocuments([
+      fact('orphan', { description: '説明', freshness: { kind: 'fresh' }, parent: 'not-exist' }),
+    ]);
+    expect(rendered).toContain('orphan');
+    expect(rendered).toContain('親 not-exist が見つからない');
+  });
+
+  it('循環する parent を黙って落とさない', () => {
+    const rendered = renderMemoryDocuments([
+      fact('cycle-a', { description: 'A', freshness: { kind: 'fresh' }, parent: 'cycle-b' }),
+      fact('cycle-b', { description: 'B', freshness: { kind: 'fresh' }, parent: 'cycle-a' }),
+    ]);
+    expect(rendered).toContain('cycle-a');
+    expect(rendered).toContain('cycle-b');
+    expect(rendered).toContain('循環');
+  });
+
+  it('自分自身を親に指定しても黙って落とさない', () => {
+    const rendered = renderMemoryDocuments([
+      fact('self-parent', {
+        description: 'S',
+        freshness: { kind: 'fresh' },
+        parent: 'self-parent',
+      }),
+    ]);
+    expect(rendered).toContain('self-parent');
+    expect(rendered).toContain('循環');
+  });
+
+  it('階層はインデントで表す（親子とも fact のとき）', () => {
+    const rendered = renderMemoryDocuments([
+      fact('parent-doc', { title: '親', description: '親の説明', freshness: { kind: 'fresh' } }),
+      fact('child-doc', {
+        title: '子',
+        description: '子の説明',
+        freshness: { kind: 'fresh' },
+        parent: 'parent-doc',
+      }),
+    ]);
+    const lines = rendered.split('\n');
+    const parentLine = lines.find((line) => line.includes('parent-doc:'));
+    const childLine = lines.find((line) => line.includes('child-doc:'));
+    expect(parentLine).toBeDefined();
+    expect(childLine).toBeDefined();
+    // 子のほうがインデントが深い（先頭の空白の数で見る）。
+    const leadingSpaces = (line: string) => line.length - line.trimStart().length;
+    expect(leadingSpaces(childLine ?? '')).toBeGreaterThan(leadingSpaces(parentLine ?? ''));
+  });
+
+  it('記憶が1つも無ければ空文字のまま（従来と同じ）', () => {
+    expect(renderMemoryDocuments([])).toBe('');
+  });
+});
+
+describe('renderMemoryListing — `memory_list` 用の一覧。全区分を対象にする', () => {
+  it('記憶が空なら空である旨を返す', () => {
+    expect(renderMemoryListing([])).toBe('（記憶はまだ空）');
+  });
+
+  it('premise も fact も一覧に出る（premise は全文には出ないが一覧には出る）', () => {
+    const listing = renderMemoryListing([
+      {
+        slug: 'p1',
+        title: 'P1',
+        kind: 'premise',
+        description: undefined,
+        descriptionFreshness: { kind: 'absent' },
+        parent: undefined,
+        updatedAt: '2026-08-21T00:00:00Z',
+      },
+      {
+        slug: 'f1',
+        title: 'F1',
+        kind: 'fact',
+        description: '要旨',
+        descriptionFreshness: { kind: 'fresh' },
+        parent: undefined,
+        updatedAt: '2026-08-21T00:00:00Z',
+      },
+    ]);
+    expect(listing).toContain('[premise] p1: P1');
+    expect(listing).toContain('[fact] f1: F1');
+    expect(listing).toContain('要旨');
   });
 });

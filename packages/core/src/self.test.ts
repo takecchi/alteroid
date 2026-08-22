@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { renderMemoryDocuments } from './memory.js';
 import { buildCloneSystemPrompt } from './prompt.js';
 import {
   CANON_DOCUMENTS,
@@ -133,7 +134,7 @@ describe('自己認識 — システムプロンプトに載る節', () => {
   });
 
   it('クローンのシステムプロンプトに組み込まれる', () => {
-    const prompt = buildCloneSystemPrompt({ memory: '', self: FACTS });
+    const prompt = buildCloneSystemPrompt({ memory: renderMemoryDocuments([]), self: FACTS });
 
     expect(prompt).toContain('# あなた自身（alteroid）');
     expect(prompt).toContain(REPOSITORY_URL);

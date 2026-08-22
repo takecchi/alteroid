@@ -18,13 +18,33 @@
  *    「どれが差し替わったか」を自分で対応付けられる。
  */
 
-import type { MemoryProtectionStatus } from './schema.js';
+import { excerptLine } from './excerpt.js';
+import type {
+  MemoryDescriptionFreshness,
+  MemoryDocKind,
+  MemoryFrontmatterState,
+  MemoryProtectionStatus,
+} from './schema.js';
 import type { JournalStore } from './store.js';
 
-/** 記憶を載せるときの1文書ぶんの単位。`MemoryDocument` はこれを満たす。 */
+/**
+ * 記憶を載せるときの1文書ぶんの単位。`MemoryDocument` はこれを満たす。
+ *
+ * `title` / `descriptionFreshness` は省略可能——**`content` から導出できる
+ * もの（区分・要旨・親）は `renderMemoryDocuments` がここで毎回 `content` から
+ * 読み直す**（frontmatter を1つも持たない文書の集合に対して焼き込みが現行と
+ * 完全に同じであることを、保存された別の値ではなく `content` 自身で保証する
+ * ため）。`descriptionFreshness` だけは `content` から導出できない
+ * （導出元の `describedAt` はストアの派生値置き場にあり、本文には無い）ので、
+ * 渡し手（ストア）が添える。省略時は `unknown`（安全側）として扱う。
+ */
 export interface MemoryPart {
   slug: string;
   content: string;
+  /** 目次の1行に出すタイトル。省略時は `slug`。 */
+  title?: string;
+  /** 要旨の鮮度。`content` からは導出できない。省略時は `unknown`。 */
+  descriptionFreshness?: MemoryDescriptionFreshness;
 }
 
 // ---------------------------------------------------------------------------
@@ -157,12 +177,469 @@ export function memoryProtectionRebuildDecision(counts: {
  *
  * 末尾の空白行だけ落とす。**先頭や本文には触らない** — 人間の手書きの記述を
  * 整形の都合で書き換えないこと（`prompt.ts` の「記憶」の節と同じ約束）。
+ *
+ * **frontmatter を意識しない、純粋な単文書レンダラのままにしてある。** 区分の
+ * 判定・malformed の印づけ・目次への振り分けは、すべて呼び手
+ * （`renderMemoryDocuments`）の責務である——ここを frontmatter で分岐させると、
+ * 直接この関数を固定している既存のテスト（`memory.test.ts`）が frontmatter の
+ * 有無で意味を変えてしまう。
  */
 export function renderMemoryDocument({ slug, content }: MemoryPart): string {
   return `<!-- memory: ${slug}.md -->\n${content.trimEnd()}`;
 }
 
-/** 記憶の全文。文書の順序は呼び手（ストア）が決めた順そのままである。 */
-export function renderMemoryDocuments(documents: readonly MemoryPart[]): string {
-  return documents.map(renderMemoryDocument).join('\n\n');
+// ---------------------------------------------------------------------------
+// frontmatter の解釈（content の先頭。#170）
+// ---------------------------------------------------------------------------
+
+const FRONTMATTER_DELIMITER = '---';
+
+/** frontmatter が受け付ける既知のキー。これ以外は `malformed`。 */
+const KNOWN_FRONTMATTER_KEYS = new Set(['description', 'type', 'parent']);
+
+/**
+ * `content` の先頭から frontmatter を読む。
+ *
+ * **受け付ける形を狭く固定する**（`MemoryFrontmatterState` の doc）:
+ * 1行目が `---`、閉じの `---` までが frontmatter。各行は `key: value`。
+ * キーは既知の集合のみ。値は文字列としてのみ読む——ネスト無し、複数行無し、
+ * 型推論を一切しない。外れたら `malformed`。
+ *
+ * **YAML ライブラリを使わない。** repo に YAML 系の依存は現状ゼロで、この
+ * 用途で欲しいのは「読めなければ落ちる」パーサであって賢いパーサではない
+ * （`description: no` が静かに `false` になるような挙動は、この用途では
+ * リスクでしかない）。
+ *
+ * **既知の落とし穴**: Markdown の水平線・見出し下線もまた `---` の1行である。
+ * 文書の1行目がたまたまそれだと、このパーサは frontmatter の開始とみなし、
+ * 閉じの `---` が見つからなければ `malformed` になる。これは意図した設計
+ * ——`malformed` は既定で `premise`（全文）に倒れるので、文書自体が消える
+ * ことはない（区分の既定は `resolveMemoryDocKind` を見よ）。
+ */
+export function parseMemoryFrontmatter(content: string): MemoryFrontmatterState {
+  const lines = content.split('\n');
+  if (lines[0]?.trim() !== FRONTMATTER_DELIMITER) return { kind: 'none' };
+
+  const closingIndex = lines.findIndex(
+    (line, index) => index > 0 && line.trim() === FRONTMATTER_DELIMITER,
+  );
+  if (closingIndex === -1) return { kind: 'malformed' };
+
+  const fields: { description?: string; type?: string; parent?: string } = {};
+  for (const line of lines.slice(1, closingIndex)) {
+    const separator = line.indexOf(':');
+    if (separator === -1) return { kind: 'malformed' };
+    const key = line.slice(0, separator).trim();
+    const value = line.slice(separator + 1).trim();
+    if (!KNOWN_FRONTMATTER_KEYS.has(key)) return { kind: 'malformed' };
+    if (key === 'description') fields.description = value;
+    else if (key === 'type') fields.type = value;
+    else if (key === 'parent') fields.parent = value;
+  }
+  return { kind: 'parsed', ...fields };
+}
+
+/**
+ * `MemoryFrontmatterState` の3状態の網羅性を型で強制する
+ * （`assertNeverMemoryProtectionStatus` と同じ形）。
+ */
+export function assertNeverMemoryFrontmatterState(state: never): never {
+  throw new Error(`未知の frontmatter 解釈状態: ${JSON.stringify(state)}`);
+}
+
+const KNOWN_DOC_KINDS: ReadonlySet<MemoryDocKind> = new Set(['premise', 'fact']);
+
+/**
+ * 区分を解決する（frontmatter → `premise` | `fact`）。
+ *
+ * **区分が無い（`none`）・読めない（`malformed`）・`type` が既知の集合に
+ * 無い値のときは、`fact` ではなく `premise` として扱う。** これが移行の
+ * 安全弁である——frontmatter を1つも持たない文書（`none`）は全て `premise`
+ * になるので、この改修をマージした直後は焼き込みが従来と完全に同じになる。
+ *
+ * 取り返しがつく側へ倒す判断でもある: `premise` を既定にした誤りは
+ * 「余分に全文を焼く」だけで `self_status` の総文字数から必ず気づけるが、
+ * `fact` を既定にした誤りは文書が黙って目次の1行へ縮み、気づく手段
+ * そのもの（その文書の中身）が失われる。
+ */
+export function resolveMemoryDocKind(frontmatter: MemoryFrontmatterState): MemoryDocKind {
+  if (frontmatter.kind !== 'parsed') return 'premise';
+  const { type } = frontmatter;
+  if (type !== undefined && KNOWN_DOC_KINDS.has(type as MemoryDocKind))
+    return type as MemoryDocKind;
+  return 'premise';
+}
+
+/**
+ * 要旨の鮮度を判定する。
+ *
+ * **代理指標である**（`MemoryDescriptionFreshness` の doc）。ここが言えるのは
+ * 「`description` が最後の本文変更以降に変わったか」だけで、「本文を読み
+ * 直して書き直したか」ではない。
+ */
+export function resolveMemoryDescriptionFreshness(input: {
+  description: string | undefined;
+  /** ストアの派生値。一度も観測できていなければ `undefined`。 */
+  describedAt: string | undefined;
+  updatedAt: string;
+}): MemoryDescriptionFreshness {
+  if (input.description === undefined) return { kind: 'absent' };
+  if (input.describedAt === undefined) return { kind: 'unknown' };
+  return input.describedAt >= input.updatedAt ? { kind: 'fresh' } : { kind: 'stale' };
+}
+
+/** `MemoryDescriptionFreshness` の4状態の網羅性を型で強制する。 */
+export function assertNeverMemoryDescriptionFreshness(freshness: never): never {
+  throw new Error(`未知の要旨の鮮度状態: ${JSON.stringify(freshness)}`);
+}
+
+/**
+ * frontmatter から導出される値をまとめて返す（fs / pg のストアが
+ * `list()` / `read()` / `documents()` で共通に呼ぶ、唯一の実装）。
+ *
+ * **ここを2箇所（fs と pg）で別々に書かないための関数である。** 器ごとに
+ * frontmatter の解釈を書いた結果 fs / pg で食い違う、という `memory.ts`
+ * 冒頭のコメントに書いてある過去の失敗（`concat()` の一件）と同じ形の
+ * 危険をここでも避ける。
+ */
+export function deriveMemoryFrontmatter(input: {
+  content: string;
+  updatedAt: string;
+  /** ストアの派生値置き場（fs: `.index.json` / pg: `described_at` 列）。 */
+  describedAt: string | undefined;
+}): {
+  frontmatter: MemoryFrontmatterState;
+  kind: MemoryDocKind;
+  description: string | undefined;
+  parent: string | undefined;
+  descriptionFreshness: MemoryDescriptionFreshness;
+} {
+  const frontmatter = parseMemoryFrontmatter(input.content);
+  const kind = resolveMemoryDocKind(frontmatter);
+  const description = frontmatter.kind === 'parsed' ? frontmatter.description : undefined;
+  const parent = frontmatter.kind === 'parsed' ? frontmatter.parent : undefined;
+  const descriptionFreshness = resolveMemoryDescriptionFreshness({
+    description,
+    describedAt: input.describedAt,
+    updatedAt: input.updatedAt,
+  });
+  return { frontmatter, kind, description, parent, descriptionFreshness };
+}
+
+/**
+ * `description` が新旧で変わったかを比べる。ストアの `write()` がこれで
+ * `describedAt` を進めるか据え置くかを決める（4-3: 書き手は `describedAt` を
+ * 書けない——store が採番する `updatedAt` を書き手は知らないので、書いた
+ * 直後から必ず「古い」と出てしまう。だから store が導出する）。
+ *
+ * 変わっていなければ据え置く。変わっていれば新しい時刻へ進める——**その
+ * 時刻は呼び手が渡す**（fs なら書き込み後に確定した `updatedAt`、pg なら
+ * `UPDATE` が返した行の `updatedAt`。ここで `Date.now()` を新たに取らない
+ * ことで、`describedAt === updatedAt` が保証され、直後の読み出しが必ず
+ * `fresh` になる）。
+ */
+export function nextDescribedAt(input: {
+  priorContent: string | null;
+  nextContent: string;
+  priorDescribedAt: string | undefined;
+  /** この書き込みが確定した時刻（呼び手の `updatedAt` と同じ値を渡すこと）。 */
+  writtenAt: string;
+}): string | undefined {
+  const priorDescription =
+    input.priorContent === null
+      ? undefined
+      : ((state) => (state.kind === 'parsed' ? state.description : undefined))(
+          parseMemoryFrontmatter(input.priorContent),
+        );
+  const nextState = parseMemoryFrontmatter(input.nextContent);
+  const nextDescription = nextState.kind === 'parsed' ? nextState.description : undefined;
+  return priorDescription === nextDescription ? input.priorDescribedAt : input.writtenAt;
+}
+
+// ---------------------------------------------------------------------------
+// 記憶の全文（branded type — `renderMemoryDocuments` だけが作れる。4-14）
+// ---------------------------------------------------------------------------
+
+declare const RENDERED_MEMORY_BRAND: unique symbol;
+
+/**
+ * `renderMemoryDocuments` の戻り値であることを型で保証する印。
+ *
+ * **`buildCloneSystemPrompt`（`prompt.ts`）の `memory` 引数はこの型を要求する。**
+ * 生の文字列を渡すと `tsc` が落ちる——記憶が文字列になる関数は
+ * `renderMemoryDocuments` の1つに閉じている（`store.ts:48-53` の「器は文字列を
+ * 組み立てない」という契約を、`tsc` が守る側へ回すための釘）。実行時には
+ * ただの `string` であり、ランタイムの挙動には一切影響しない。
+ */
+export type RenderedMemory = string & { readonly [RENDERED_MEMORY_BRAND]: true };
+
+function brandRenderedMemory(text: string): RenderedMemory {
+  return text as RenderedMemory;
+}
+
+// ---------------------------------------------------------------------------
+// 目次（TOC）— 保存しない。毎回、文書そのものから組み立てる
+// ---------------------------------------------------------------------------
+
+/** 目次1行の長さの上限（1文書が目次を飲み込まないため。外部の値は持ち込まない。4-5）。 */
+const MEMORY_TOC_LINE_LIMIT = 200;
+
+/**
+ * 目次を件数で切るときの上限（`self_status` の `SELF_STATUS_MEMORY_DOC_LIMIT` と
+ * 同じ考え方）。**`export` してあるのはテストのため**（`memory.test.ts` が
+ * 「切ったら言う」を確かめるのに、この値を書き写さず参照する）。
+ */
+export const MEMORY_TOC_ENTRY_LIMIT = 300;
+
+interface MemoryTocEntry {
+  slug: string;
+  title: string;
+  description: string | undefined;
+  descriptionFreshness: MemoryDescriptionFreshness;
+  parent: string | undefined;
+}
+
+interface ResolvedTocNode {
+  entry: MemoryTocEntry;
+  depth: number;
+  issue?: 'missing-parent' | 'cycle';
+  children: ResolvedTocNode[];
+}
+
+/**
+ * 親子関係を解決し、木にする。**循環と、存在しない親を指す `parent` を
+ * 黙って落とさない**（4-1「階層は『それ自体が目次である文書』で作る」）。
+ *
+ * - 親が存在しない slug を指す → ルート扱いにし、`issue: 'missing-parent'`
+ * - 親をたどると自分自身に戻る（循環） → ルート扱いにし、`issue: 'cycle'`
+ *
+ * どちらも文書自体は消えない——ルートとして目次に残り、印がつく。
+ */
+function resolveMemoryHierarchy(entries: readonly MemoryTocEntry[]): ResolvedTocNode[] {
+  const bySlug = new Map(entries.map((entry) => [entry.slug, entry]));
+  const parentOf = new Map(entries.map((entry) => [entry.slug, entry.parent]));
+
+  function effectiveParent(slug: string): { parent?: string; issue?: 'missing-parent' | 'cycle' } {
+    const direct = parentOf.get(slug);
+    if (direct === undefined || direct === '') return {};
+    if (!bySlug.has(direct)) return { issue: 'missing-parent' };
+    if (direct === slug) return { issue: 'cycle' };
+    const seen = new Set<string>([slug]);
+    let cursor = direct;
+    for (;;) {
+      if (seen.has(cursor)) return { issue: 'cycle' };
+      seen.add(cursor);
+      const next = parentOf.get(cursor);
+      if (next === undefined || next === '' || !bySlug.has(next)) break;
+      cursor = next;
+    }
+    return { parent: direct };
+  }
+
+  const nodes = new Map<string, ResolvedTocNode>(
+    entries.map((entry) => [entry.slug, { entry, depth: 0, children: [] }]),
+  );
+  const roots: ResolvedTocNode[] = [];
+
+  for (const entry of entries) {
+    const node = nodes.get(entry.slug);
+    if (!node) continue;
+    const resolved = effectiveParent(entry.slug);
+    if (resolved.issue !== undefined) node.issue = resolved.issue;
+    const parentNode = resolved.parent === undefined ? undefined : nodes.get(resolved.parent);
+    if (parentNode !== undefined) {
+      parentNode.children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+
+  function sortAndDepth(node: ResolvedTocNode, depth: number): void {
+    node.depth = depth;
+    node.children.sort((a, b) => a.entry.slug.localeCompare(b.entry.slug));
+    for (const child of node.children) sortAndDepth(child, depth + 1);
+  }
+  roots.sort((a, b) => a.entry.slug.localeCompare(b.entry.slug));
+  for (const root of roots) sortAndDepth(root, 0);
+
+  return roots;
+}
+
+function flattenMemoryToc(roots: readonly ResolvedTocNode[]): ResolvedTocNode[] {
+  const out: ResolvedTocNode[] = [];
+  function walk(node: ResolvedTocNode): void {
+    out.push(node);
+    for (const child of node.children) walk(child);
+  }
+  for (const root of roots) walk(root);
+  return out;
+}
+
+/**
+ * 印は要旨の**前**に置く——左から読んで必ず当たる形にする（4-1）。
+ *
+ * **代理指標であることをここにも書く**（`MemoryDescriptionFreshness` の doc
+ * と同じ注意）。`fresh`（印なし）は「`description` が本文の変更後に書かれた」
+ * ことしか意味しない。「本文を読み直して要旨を書き直した」ことの保証では
+ * ない。
+ */
+function memoryFreshnessMarker(freshness: MemoryDescriptionFreshness): string {
+  switch (freshness.kind) {
+    case 'fresh':
+      return '';
+    case 'stale':
+      return '⚠古い要旨（本文の方が新しい）: ';
+    case 'unknown':
+      return '？要旨の鮮度不明: ';
+    case 'absent':
+      return '';
+    default:
+      return assertNeverMemoryDescriptionFreshness(freshness);
+  }
+}
+
+/** 循環・存在しない親を黙って落とさず、印として言葉にする。 */
+function renderMemoryTocIssue(node: ResolvedTocNode): string {
+  if (node.issue === 'missing-parent') return `［親 ${String(node.entry.parent)} が見つからない］`;
+  if (node.issue === 'cycle') return `［親 ${String(node.entry.parent)} との間で循環］`;
+  return '';
+}
+
+function renderMemoryTocLine(node: ResolvedTocNode): string {
+  const indent = '  '.repeat(node.depth);
+  const descriptor =
+    node.entry.description === undefined
+      ? '（要旨なし）'
+      : `${memoryFreshnessMarker(node.entry.descriptionFreshness)}${excerptLine(node.entry.description, MEMORY_TOC_LINE_LIMIT)}`;
+  return `${indent}- ${node.entry.slug}: ${node.entry.title} — ${descriptor}${renderMemoryTocIssue(node)}`;
+}
+
+/**
+ * `fact` 文書の目次を組み立てる。**保存しない——毎回この関数が
+ * 各文書の `description` から組み立て直す**ので、目次と実体が食い違う
+ * ことは構造的に起こりえない（4-1）。
+ *
+ * **件数で切ったら、切った件数を必ず出す**（`excerpt.ts` と同じ約束）。
+ */
+function renderMemoryToc(entries: readonly MemoryTocEntry[]): string {
+  const flat = flattenMemoryToc(resolveMemoryHierarchy(entries));
+  const shown = flat.slice(0, MEMORY_TOC_ENTRY_LIMIT);
+  const omitted = flat.length - shown.length;
+  const lines = [
+    '<!-- memory: index -->',
+    '## 記憶の目次（fact。本文は memory_read で開く。階層はインデントで表す）',
+    ...shown.map(renderMemoryTocLine),
+  ];
+  if (omitted > 0) {
+    lines.push(`…ほか ${omitted} 件は目次から省略（目次の対象は全 ${flat.length} 件）。`);
+  }
+  return lines.join('\n');
+}
+
+const MALFORMED_FRONTMATTER_NOTE =
+  '<!-- memory: frontmatter が壊れている（既知の形にならなかった。premise として全文を扱っている） -->';
+
+function renderPremisePart(part: MemoryPart): string {
+  const rendered = renderMemoryDocument(part);
+  const frontmatter = parseMemoryFrontmatter(part.content);
+  return frontmatter.kind === 'malformed' ? `${MALFORMED_FRONTMATTER_NOTE}\n${rendered}` : rendered;
+}
+
+/**
+ * 記憶をクローンの文脈へ載せる、唯一の入口。
+ *
+ * **区分ごとに載り方を変える**（4-1「B. 区分と載せ方」）:
+ * - `premise`（判断の前提。既定でもある） — **全文**。切り詰めない
+ *   （切り詰めた前提は「持っていない前提」と区別できない）
+ * - `fact`（事実と蓄積） — **目次の1行だけ**。本文は `memory_read` で開く
+ *
+ * **どの文書も、全文か目次行かの「どちらか一方」に必ず現れる**（二重に
+ * 載せない・取りこぼさない）。文書の順序は呼び手（ストア）が決めた順
+ * そのまま（`premise` は slug 昇順のまま連結、`fact` は目次側で
+ * 階層・slug 昇順に並べ直す）。
+ *
+ * frontmatter を1つも持たない文書の集合（`kind: 'none'` のみ）に対しては、
+ * 全件が `premise` に分類されるため、出力は frontmatter 導入前の
+ * `renderMemoryDocuments` と1バイトも変わらない（受け入れ基準の最上位）。
+ */
+export function renderMemoryDocuments(documents: readonly MemoryPart[]): RenderedMemory {
+  const premiseParts: MemoryPart[] = [];
+  const tocEntries: MemoryTocEntry[] = [];
+
+  for (const doc of documents) {
+    const frontmatter = parseMemoryFrontmatter(doc.content);
+    const kind = resolveMemoryDocKind(frontmatter);
+    if (kind === 'premise') {
+      premiseParts.push(doc);
+      continue;
+    }
+    tocEntries.push({
+      slug: doc.slug,
+      title: doc.title ?? doc.slug,
+      description: frontmatter.kind === 'parsed' ? frontmatter.description : undefined,
+      descriptionFreshness: doc.descriptionFreshness ?? { kind: 'unknown' },
+      parent: frontmatter.kind === 'parsed' ? frontmatter.parent : undefined,
+    });
+  }
+
+  const premiseSection =
+    premiseParts.length === 0 ? '' : premiseParts.map(renderPremisePart).join('\n\n');
+  const tocSection = tocEntries.length === 0 ? '' : renderMemoryToc(tocEntries);
+
+  const sections = [premiseSection, tocSection].filter((section) => section.length > 0);
+  return brandRenderedMemory(sections.join('\n\n'));
+}
+
+// ---------------------------------------------------------------------------
+// 一覧（`memory_list` / `GET /memory` / CLI / Web が使う。全区分を対象にする）
+// ---------------------------------------------------------------------------
+
+/** `memory_list` 等の一覧に出す1件。`MemoryDocumentMeta` はこれを満たす。 */
+export interface MemoryListingEntry {
+  slug: string;
+  title: string;
+  kind: MemoryDocKind;
+  description: string | undefined;
+  descriptionFreshness: MemoryDescriptionFreshness;
+  parent: string | undefined;
+  updatedAt: string;
+}
+
+/**
+ * 記憶の一覧を人間可読な形にする（`memory_list` ツールの出力）。
+ *
+ * **プロンプトへ焼き込む目次（`renderMemoryDocuments` の TOC 節）とは別物。**
+ * あちらは `fact` だけを対象にする（`premise` は全文で載っているので二重に
+ * 載せない）が、こちらは**全区分を対象にする**——一覧はクローンが「何が
+ * あるか」を把握するための道具であり、`premise` の文書も一覧には出ている
+ * べきである（全文がどこかに焼かれていることと、一覧に載ることは別の話）。
+ *
+ * 階層の組み立て（循環・存在しない親の扱い）は目次と同じ実装を共有する。
+ */
+export function renderMemoryListing(entries: readonly MemoryListingEntry[]): string {
+  if (entries.length === 0) return '（記憶はまだ空）';
+
+  const bySlug = new Map(entries.map((entry) => [entry.slug, entry]));
+  const tocEntries: MemoryTocEntry[] = entries.map((entry) => ({
+    slug: entry.slug,
+    title: entry.title,
+    description: entry.description,
+    descriptionFreshness: entry.descriptionFreshness,
+    parent: entry.parent,
+  }));
+  const flat = flattenMemoryToc(resolveMemoryHierarchy(tocEntries));
+
+  return flat
+    .map((node) => {
+      const meta = bySlug.get(node.entry.slug);
+      const indent = '  '.repeat(node.depth);
+      const kindTag = meta === undefined ? '' : `[${meta.kind}] `;
+      const updatedAt = meta === undefined ? '' : ` (${meta.updatedAt})`;
+      const descriptor =
+        node.entry.description === undefined
+          ? ''
+          : ` — ${memoryFreshnessMarker(node.entry.descriptionFreshness)}${excerptLine(node.entry.description, MEMORY_TOC_LINE_LIMIT)}`;
+      return `${indent}- ${kindTag}${node.entry.slug}: ${node.entry.title}${updatedAt}${descriptor}${renderMemoryTocIssue(node)}`;
+    })
+    .join('\n');
 }

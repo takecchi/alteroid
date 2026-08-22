@@ -6,7 +6,11 @@ import { z } from 'zod';
 import { isCronExpression } from './cron.js';
 import { describePage, excerptLine, page } from './excerpt.js';
 import type { ManagerDenial, ManagerPool, ManagerSummary } from './manager.js';
-import { assertNeverMemoryProtectionStatus, renderMemoryDocuments } from './memory.js';
+import {
+  assertNeverMemoryProtectionStatus,
+  renderMemoryDocuments,
+  renderMemoryListing,
+} from './memory.js';
 import type { ProfileService } from './profile-service.js';
 import {
   RESERVED_SCHEDULE_KINDS,
@@ -382,13 +386,34 @@ export function createCloneTools(context: ToolContext) {
 
   return [
     // --- 記憶 -----------------------------------------------------------
-    tool('memory_list', '記憶の文書一覧を返す。中身は返さない。', {}, async () => {
-      const documents = await stores.persona.list();
-      if (documents.length === 0) return text('（記憶はまだ空）');
-      return text(
-        documents.map((doc) => `- ${doc.slug}: ${doc.title} (${doc.updatedAt})`).join('\n'),
-      );
-    }),
+    tool(
+      'memory_list',
+      [
+        '記憶の文書一覧を返す。中身は返さない。',
+        '各行は `[premise|fact] slug: title (updatedAt) — 要旨` の形。',
+        'premise はプロンプトへ全文が焼き込まれている。fact は目次の1行だけがプロンプトに載るので、',
+        '中身が要るなら memory_read で開くこと。要旨の前に付く印（⚠古い要旨 / ？鮮度不明）は',
+        'description が最後の本文変更より前に書かれた可能性があることを示す（本文と合っている保証ではない）。',
+        '階層は frontmatter の parent から組み立てた木で、インデントで表す。',
+      ].join(' '),
+      {},
+      async () => {
+        const documents = await stores.persona.list();
+        return text(
+          renderMemoryListing(
+            documents.map((doc) => ({
+              slug: doc.slug,
+              title: doc.title,
+              kind: doc.kind,
+              description: doc.description,
+              descriptionFreshness: doc.descriptionFreshness,
+              parent: doc.parent,
+              updatedAt: doc.updatedAt,
+            })),
+          ),
+        );
+      },
+    ),
 
     tool(
       'memory_read',
@@ -406,6 +431,12 @@ export function createCloneTools(context: ToolContext) {
         '記憶の文書を全文置換する（無ければ作る）。',
         '人間がこのファイルを直接開いて読むことを前提に、Markdown として読みやすく書くこと。',
         '人間が手で書いた記述を、整形の都合で消さないこと。',
+        '先頭に frontmatter を置ける（無くてもよい。無ければ premise として全文が焼かれる——安全側の既定）。',
+        '形は `---` で始まり `---` で閉じ、各行は `key: value`。使えるキーは description（要旨。目次の1行に載る）・',
+        'type（premise または fact。premise は全文が焼かれ、fact は目次の1行だけになる。判断の前提なら premise、',
+        '事実の蓄積で毎回全文を読む必要が無いものなら fact）・parent（親文書の slug。階層を作る）の3つだけ。',
+        'ネスト・複数行・引用符の解釈は無い（値は文字列としてそのまま読む）。狭い形から外れると malformed として',
+        '扱われ、文書は消えずに premise（全文）のまま残る。',
         '**統合の走行（distill）からは、人間が一度でも書いた文書・履歴の無い文書には使えない**',
         '（断られる。ask_human で人間に確認を通せば次のターンで実行できる）。会話の中の書き込みは通る。',
       ].join(' '),

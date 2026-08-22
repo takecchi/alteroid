@@ -68,8 +68,17 @@ export default function Memory() {
                   className="flex items-center gap-3 px-4 py-3 hover:bg-surface-2"
                 >
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm">{document.title}</p>
+                    <p className="truncate text-sm">
+                      <span className="mr-1.5 text-[10px] text-muted">[{document.kind}]</span>
+                      {document.title}
+                    </p>
                     <p className="truncate font-mono text-[11px] text-muted">{document.slug}</p>
+                    {document.description !== undefined && (
+                      <p className="truncate text-[11px] text-muted">
+                        {freshnessMark(document.descriptionFreshness.kind)}
+                        {document.description}
+                      </p>
+                    )}
                   </div>
                   <span className="shrink-0 text-[11px] text-muted">
                     {formatBytes(document.bytes)} · {formatRelative(document.updatedAt)}
@@ -82,4 +91,22 @@ export default function Memory() {
       )}
     </Page>
   );
+}
+
+/**
+ * 印は要旨の前に置く（`packages/core/src/memory.ts` と同じ約束）。
+ *
+ * **代理指標である。** `fresh`（印なし）は「要旨が最後の本文変更以降に
+ * 書かれた」ことしか意味せず、「本文を読み直して書き直した」ことの保証では
+ * ない。誤字だけ直しても fresh になる。
+ */
+function freshnessMark(kind: 'fresh' | 'stale' | 'unknown' | 'absent'): string {
+  switch (kind) {
+    case 'stale':
+      return '⚠古い要旨: ';
+    case 'unknown':
+      return '？鮮度不明: ';
+    default:
+      return '';
+  }
 }

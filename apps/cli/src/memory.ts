@@ -29,6 +29,9 @@ import { resolveTarget } from './target.js';
 interface MemorySummary {
   slug: string;
   title: string;
+  kind: 'premise' | 'fact';
+  description?: string;
+  descriptionFreshness: { kind: 'fresh' | 'stale' | 'unknown' | 'absent' };
 }
 
 export async function memoryListCommand(): Promise<void> {
@@ -47,7 +50,27 @@ export async function memoryListCommand(): Promise<void> {
     stdout.write('置くには: alteroid memory edit <slug>\n');
     return;
   }
-  for (const doc of documents) stdout.write(`  ${doc.slug}  — ${doc.title}\n`);
+  for (const doc of documents) {
+    const marker = freshnessMarker(doc.descriptionFreshness.kind);
+    const desc = doc.description === undefined ? '' : ` — ${marker}${doc.description}`;
+    stdout.write(`  [${doc.kind}] ${doc.slug}  — ${doc.title}${desc}\n`);
+  }
+}
+
+/**
+ * 印は要旨の前に置く（`memory_list` ツール・プロンプトの目次と同じ約束。
+ * `packages/core/src/memory.ts` の doc）。**代理指標である** — `fresh` は
+ * 「要旨が最後の本文変更以降に書かれた」ことしか意味しない。
+ */
+function freshnessMarker(kind: 'fresh' | 'stale' | 'unknown' | 'absent'): string {
+  switch (kind) {
+    case 'stale':
+      return '⚠古い要旨: ';
+    case 'unknown':
+      return '？鮮度不明: ';
+    default:
+      return '';
+  }
 }
 
 export async function memoryShowCommand(slug: string): Promise<void> {
