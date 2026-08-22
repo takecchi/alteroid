@@ -1486,7 +1486,20 @@ class Pool implements ManagerPool {
     message: string | undefined,
   ): Promise<boolean> {
     const id = record.job.id;
-    if (this.#resuming.has(id)) return false;
+    if (this.#resuming.has(id)) {
+      /*
+       * 別の契機が取り直している最中。**貸し出しの断りを残さない。**
+       *
+       * 残すと、呼び手（`send()`）が `false` の理由を「まだ前の器が握っている＝
+       * 待てば通る」と読む。ここで起きているのは別のこと（同じ委譲を二重に起こさない
+       * ための短絡）で、**言い分けを間違えると呼び手の次の一手が変わる。**
+       *
+       * **この分岐はテストで踏めていない**（`send()` は呼ぶ前に同じ旗を見るので、
+       * ここへ来るには2つの契機の競合が要る）。根拠は分岐の目視だけである。
+       */
+      delete record.leaseRefusal;
+      return false;
+    }
     this.#resuming.add(id);
     try {
       return await this.#resume(record, runner, message);

@@ -313,6 +313,31 @@ describe('引き取りの関門（貸し出し期限）', () => {
     await h.close();
   });
 
+  /**
+   * **「まだ」と「無理」を言い分ける。** クローンが読むのはこの文であって、内部の
+   * 真偽値ではない。同じ文言にすると、待てば通る委譲を新しく起こし直して**同じ仕事が
+   * 2本になる**（この関門が防ごうとしているものそのもの）。
+   */
+  it('manager_send は「まだ前の器が握っている」と言い、起こし直すなと明示する', async () => {
+    const h = await harnessOf();
+    await h.stores.jobs.putJob(runningJob(leaseHeldBy('boot-1')));
+
+    const held = await h.pool.send('mgr-1', '続けて');
+
+    expect(held.outcome).toBe('unknown');
+    expect(held.detail).toContain('前の器が握っている');
+    expect(held.detail).toContain('新しく起こし直さないこと');
+    expect(h.runner.resumes).toEqual([]);
+
+    // 期限が切れれば、同じ呼びが通る（断りが恒久化しない）。
+    h.advance(LEASE_DRAIN_MS + LEASE_MARGIN_MS + 1_000);
+    const delivered = await h.pool.send('mgr-1', '続けて');
+    expect(delivered.outcome).toBe('delivered');
+    expect(h.runner.resumes).toHaveLength(1);
+
+    await h.close();
+  });
+
   it('止まったと確かめた委譲は貸し出しを返す（次の引き取りが猶予を待たない）', async () => {
     const h = await harnessOf();
     await h.stores.jobs.putJob(runningJob(leaseHeldBy('boot-2', 9)));
