@@ -216,4 +216,37 @@ describe('確認へ上がらずに止められた実行（HTTP 境界）', () =>
       ),
     ).toHaveLength(1);
   }, 15_000);
+
+  /**
+   * **回帰: `tool_input` を持たない走行中の合図が、HTTP 境界を越えて捨てられる。**
+   *
+   * SDK の実際の `SDKPermissionDeniedMessage` には `tool_input` フィールドが
+   * 無い。上のテストは `tool_input` を手で渡していたので、`input` というキーが
+   * 常に存在する形でしかこの境界を通していなかった。実機では `input` が
+   * `undefined` になり、`JSON.stringify`（`apps/runner/src/app.ts`）がキーごと
+   * 落とすので、`runnerEventSchema` が `input` を必須のまま持っていると
+   * （zod 4 はキーの不在を許さない）`safeParse` が失敗し、拒否が丸ごと
+   * デーモンに届かなかった。
+   */
+  it('`tool_input` の無い走行中の合図でも、境界越しに日誌まで届く', async () => {
+    const r = await open();
+    await r.pool.start({ request: 'テストを直して' });
+    await expect.poll(() => r.sessions.length, { timeout: 2000 }).toBe(1);
+    const session = r.sessions[0];
+    if (!session) throw new Error('マネージャーのセッションが無い');
+
+    // 走行中の合図（実機の SDK が実際に送ってくる形。`tool_input` を持たない）
+    session.push({
+      type: 'system',
+      subtype: 'permission_denied',
+      tool_name: 'Edit',
+      tool_use_id: 'toolu_1',
+      session_id: 'sess-1',
+      uuid: 'uuid-denied-1',
+    } as unknown as SDKMessage);
+
+    await expect.poll(async () => (await deniedLines(r.stores)).length, { timeout: 2000 }).toBe(1);
+    expect((await deniedLines(r.stores))[0]).toContain('Edit');
+    expect((await deniedLines(r.stores))[0]).toContain('走行中の合図');
+  }, 15_000);
 });

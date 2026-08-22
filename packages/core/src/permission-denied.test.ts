@@ -74,7 +74,16 @@ function fakeManagerSdk() {
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-/** 走行中の合図（`system/permission_denied`）。 */
+/**
+ * 走行中の合図（`system/permission_denied`）。
+ *
+ * **⚠️ ここで渡している `tool_input` は足場の都合であって、実機の形ではない。**
+ * SDK の実際の型 `SDKPermissionDeniedMessage` に `tool_input` フィールドは
+ * 存在しない（`tool_name` / `tool_use_id` / `message` / `uuid` / `session_id`
+ * と任意の3つだけ）。このヘルパは「`input` が付いている形」を確かめるテストの
+ * ためだけに残してある。**実機に忠実な形が要るテストは `liveDenialAsSdkSends`
+ * を使うこと。**
+ */
 function liveDenial(tool: string, toolUseId: string, input: Record<string, unknown>): SDKMessage {
   return {
     type: 'system',
@@ -82,6 +91,29 @@ function liveDenial(tool: string, toolUseId: string, input: Record<string, unkno
     tool_name: tool,
     tool_use_id: toolUseId,
     tool_input: input,
+    session_id: 'sess-mgr',
+    uuid: `uuid-denied-${toolUseId}`,
+  } as unknown as SDKMessage;
+}
+
+/**
+ * 走行中の合図（`system/permission_denied`）を、**実機の SDK が実際に送ってくる
+ * 形**で作る。`tool_input` を持たない。
+ *
+ * このヘルパが無かったことがこの不具合を見えなくしていた足場である —
+ * `liveDenial()` が常に `tool_input` を手で渡していたため、`#noteDenial`
+ * （`runner.ts`）が読む `denial.tool_input` が `undefined` になる経路を
+ * どのテストも一度も通していなかった。`undefined` は `JSON.stringify`
+ * （`apps/runner/src/app.ts`）でキーごと落ち、`runnerEventSchema`
+ * （`runner-protocol.ts`）が `input` を必須のまま持っていた（zod 4 では
+ * キーの不在を許さない）ので、境界を越えるとイベントが丸ごと捨てられていた。
+ */
+function liveDenialAsSdkSends(tool: string, toolUseId: string): SDKMessage {
+  return {
+    type: 'system',
+    subtype: 'permission_denied',
+    tool_name: tool,
+    tool_use_id: toolUseId,
     session_id: 'sess-mgr',
     uuid: `uuid-denied-${toolUseId}`,
   } as unknown as SDKMessage;
@@ -347,4 +379,51 @@ describe('確認へ上がらずに止められた実行（permissionMode: auto�
     );
     expect(parsed.success).toBe(true);
   });
+
+  /**
+   * **上のテストは、まさにこの回帰を守るはずだった。**
+   *
+   * だが `input: { file_path: 'a.tsx' }` と `input` を手で書いて渡していたため、
+   * 実際に境界を越えて壊れていた形 — `via: 'live'` のとき `input` という
+   * **キー自体が存在しない**形 — を一度も通していなかった。SDK の
+   * `SDKPermissionDeniedMessage` には `tool_input` が無く、`#noteDenial`
+   * （`runner.ts`）が読む値は `undefined` になり、`JSON.stringify`
+   * （`apps/runner/src/app.ts`）はそれをキーごと落とす。zod 4 では
+   * `z.unknown()` はキーの不在を許さないので（zod 3 と違う）、`input` を
+   * 必須のままにしていると `safeParse` はここで失敗していた。
+   */
+  it('live の拒否は `input` キーが無くても境界のスキーマを通る（実機の形）', () => {
+    const parsed = runnerEventSchema.safeParse(
+      JSON.parse(
+        JSON.stringify({
+          type: 'permission_denied',
+          managerId: 'mgr-1',
+          toolUseId: 'toolu_1',
+          tool: 'Edit',
+          // `input` を渡していない。JSON.stringify も undefined のキーを
+          // 落とすので、これが `via: 'live'` の実機の形と一致する。
+          via: 'live',
+        }),
+      ),
+    );
+    expect(parsed.success).toBe(true);
+  });
+
+  it('`tool_input` を持たない走行中の合図でも、拒否がクローンの日誌まで届く', async () => {
+    const s = open();
+    const { managerId } = await s.pool.start({ request: 'web の画面を直して' });
+    const session = s.manager.sessions[0];
+    if (!session) throw new Error('マネージャーのセッションが無い');
+
+    session.push(liveDenialAsSdkSends('Edit', 'toolu_1'));
+    await tick();
+
+    const lines = await deniedLines(s.stores);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(`[${managerId}]`);
+    expect(lines[0]).toContain('Edit');
+    expect(lines[0]).toContain('走行中の合図');
+
+    await s.pool.stop();
+  }, 15_000);
 });
