@@ -249,6 +249,34 @@ describe('/usage 画面', () => {
     expect(screen.getByText(/2026-08-19T00:00:00\.000Z/)).toBeTruthy();
   });
 
+  /**
+   * 軸カード（`AxisCard`）の `entry.label` は `truncate` で1行に切っているが、
+   * `title` 属性が無く続きを取る手段が無かった（本5「省略の出口」）。
+   *
+   * **ここで言えること / 言えないこと**: `title` 属性は DOM に出るので
+   * `getByTitle` で引ける — 「切られている値と同じ文字列が `title` に入って
+   * いること」はここで踏める。jsdom はレイアウトを持たないので「実際に狭い
+   * 画面で見た目が切れて hover で続きが読めること」はここでは確かめられない。
+   */
+  it('entry.label が truncate で切られていても title で全文が引ける', async () => {
+    const longManagerId = 'mgr-with-a-very-long-identifier-that-narrow-screens-will-cut-off';
+    stubUsage({
+      rows: [row(1, { managerId: longManagerId })],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+    });
+
+    render(
+      <Providers>
+        <Usage />
+      </Providers>,
+    );
+
+    await screen.findByRole('heading', { name: 'マネージャー別' });
+    const managers = axisCard('マネージャー別');
+    expect(within(managers).getByTitle(longManagerId)).toBeTruthy();
+  });
+
   it('層と場所で絞り込める（4つの口に同じ絞り込みがある）', async () => {
     const calls: string[] = [];
     stubFetch((url) => {
