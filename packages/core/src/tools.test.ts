@@ -277,6 +277,69 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * `memory_list`（#170「記憶の目次化」）。要旨・鮮度・区分・階層を出す。
+   * `memory_write` が frontmatter を書けること自体はストア層の歯
+   * （`memory.test.ts` / `storage-fs` / `storage-pg` のテスト）で確かめてあるので、
+   * ここでは「道具として呼んだときに、その情報が出力に出るか」だけを見る。
+   */
+  describe('memory_list（要旨・鮮度・区分・階層を出す）', () => {
+    it('区分と要旨が出る', async () => {
+      const h = harness();
+      await h.call('memory_write', {
+        slug: 'runbook',
+        content: '---\ndescription: 費用の推移\ntype: fact\n---\n# 定点観測\n本文\n',
+        summary: '定点観測を書いた',
+      });
+
+      const reply = await h.call('memory_list', {});
+
+      expect(reply).toContain('[fact] runbook');
+      expect(reply).toContain('費用の推移');
+    });
+
+    it('premise（既定）の文書も一覧には出る', async () => {
+      const h = harness();
+      await h.call('memory_write', {
+        slug: 'about-me',
+        content: '# 私\n\n前提の本文\n',
+        summary: '前提を書いた',
+      });
+
+      const reply = await h.call('memory_list', {});
+
+      expect(reply).toContain('[premise] about-me');
+    });
+
+    it('階層は parent から組み立てて、インデントで表す', async () => {
+      const h = harness();
+      await h.call('memory_write', {
+        slug: 'parent-doc',
+        content: '---\ndescription: 親\ntype: fact\n---\n# 親\n本文\n',
+        summary: '親を書いた',
+      });
+      await h.call('memory_write', {
+        slug: 'child-doc',
+        content: '---\ndescription: 子\ntype: fact\nparent: parent-doc\n---\n# 子\n本文\n',
+        summary: '子を書いた',
+      });
+
+      const reply = await h.call('memory_list', {});
+      const lines = reply.split('\n');
+      const parentLine = lines.find((line) => line.includes('parent-doc:'));
+      const childLine = lines.find((line) => line.includes('child-doc:'));
+      const indent = (line: string) => line.length - line.trimStart().length;
+      expect(parentLine).toBeDefined();
+      expect(childLine).toBeDefined();
+      expect(indent(childLine ?? '')).toBeGreaterThan(indent(parentLine ?? ''));
+    });
+
+    it('記憶が空なら「空」と言う（0 件で終わらせない）', async () => {
+      const h = harness();
+      expect(await h.call('memory_list', {})).toContain('空');
+    });
+  });
+
+  /**
    * 実行環境プロファイル。
    *
    * **クローンにも人間と同じ手を持たせる。** 人間は自分の `~/.zshenv` を開いて

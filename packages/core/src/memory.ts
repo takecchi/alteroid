@@ -265,7 +265,8 @@ const KNOWN_DOC_KINDS: ReadonlySet<MemoryDocKind> = new Set(['premise', 'fact'])
 export function resolveMemoryDocKind(frontmatter: MemoryFrontmatterState): MemoryDocKind {
   if (frontmatter.kind !== 'parsed') return 'premise';
   const { type } = frontmatter;
-  if (type !== undefined && KNOWN_DOC_KINDS.has(type as MemoryDocKind)) return type as MemoryDocKind;
+  if (type !== undefined && KNOWN_DOC_KINDS.has(type as MemoryDocKind))
+    return type as MemoryDocKind;
   return 'premise';
 }
 
@@ -383,8 +384,12 @@ function brandRenderedMemory(text: string): RenderedMemory {
 /** 目次1行の長さの上限（1文書が目次を飲み込まないため。外部の値は持ち込まない。4-5）。 */
 const MEMORY_TOC_LINE_LIMIT = 200;
 
-/** 目次を件数で切るときの上限（`self_status` の `SELF_STATUS_MEMORY_DOC_LIMIT` と同じ考え方）。 */
-const MEMORY_TOC_ENTRY_LIMIT = 300;
+/**
+ * 目次を件数で切るときの上限（`self_status` の `SELF_STATUS_MEMORY_DOC_LIMIT` と
+ * 同じ考え方）。**`export` してあるのはテストのため**（`memory.test.ts` が
+ * 「切ったら言う」を確かめるのに、この値を書き写さず参照する）。
+ */
+export const MEMORY_TOC_ENTRY_LIMIT = 300;
 
 interface MemoryTocEntry {
   slug: string;

@@ -117,17 +117,29 @@ export function createMemoryStores(): Stores {
   const persona: PersonaStore = {
     async list(): Promise<MemoryDocumentMeta[]> {
       return [...documents.values()]
-        .map(({ slug, title, updatedAt, bytes, frontmatter, kind, description, parent, descriptionFreshness }) => ({
-          slug,
-          title,
-          updatedAt,
-          bytes,
-          frontmatter,
-          kind,
-          description,
-          parent,
-          descriptionFreshness,
-        }))
+        .map(
+          ({
+            slug,
+            title,
+            updatedAt,
+            bytes,
+            frontmatter,
+            kind,
+            description,
+            parent,
+            descriptionFreshness,
+          }) => ({
+            slug,
+            title,
+            updatedAt,
+            bytes,
+            frontmatter,
+            kind,
+            description,
+            parent,
+            descriptionFreshness,
+          }),
+        )
         .sort((a, b) => a.slug.localeCompare(b.slug));
     },
     async read(slug) {
