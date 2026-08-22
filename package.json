@@ -12,7 +12,8 @@
     "lint": "eslint .",
     "test": "vitest run",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "verify": "node ./scripts/verify.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
