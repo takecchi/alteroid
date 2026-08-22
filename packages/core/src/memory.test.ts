@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   MEMORY_LISTING_BUDGET,
   MEMORY_TOC_ENTRY_LIMIT,
+  assertNeverMemoryCreatedAt,
   assertNeverMemoryDescriptionFreshness,
   assertNeverMemoryFrontmatterState,
   assertNeverMemoryProtectionStatus,
+  deriveMemoryCreatedAtFromJournal,
   deriveMemoryFrontmatter,
   describeMemoryProtectionStatus,
   memoryProtectionAllowsFullReplace,
@@ -18,7 +20,7 @@ import {
   resolveMemoryDocKind,
   type MemoryPart,
 } from './memory.js';
-import type { MemoryDescriptionFreshness, MemoryProtectionStatus } from './schema.js';
+import type { JournalEntry, MemoryDescriptionFreshness, MemoryProtectionStatus } from './schema.js';
 
 /**
  * 記憶をクローンの文脈へ載せる形。
@@ -116,6 +118,93 @@ describe('MemoryProtectionStatus の網羅性', () => {
   it('assertNeverMemoryProtectionStatus 自体も、渡されたものを含めて例外を投げる', () => {
     const bogus = { kind: 'bogus' } as never;
     expect(() => assertNeverMemoryProtectionStatus(bogus)).toThrow(/bogus/);
+  });
+});
+
+/** `deriveMemoryCreatedAtFromJournal` に渡す最小限のフェイク journal。 */
+function fakeJournal(entries: JournalEntry[]): { list: () => Promise<JournalEntry[]> } {
+  return { list: async () => entries };
+}
+
+/** `memory_update` の日誌エントリを1件作る（テストの意図を読みやすくする）。 */
+function memoryUpdateEntry(
+  slug: string,
+  at: string,
+  action: 'write' | 'append' | 'remove' | undefined,
+): JournalEntry {
+  return {
+    type: 'memory_update',
+    id: `id-${slug}-${at}`,
+    at,
+    slug,
+    cause: 'clone',
+    action,
+    summary: 'テスト用',
+  } as JournalEntry;
+}
+
+describe('MemoryCreatedAt の網羅性', () => {
+  it('assertNeverMemoryCreatedAt は未知の状態を投げる', () => {
+    const bogus = { kind: 'bogus' } as never;
+    expect(() => assertNeverMemoryCreatedAt(bogus)).toThrow(/bogus/);
+  });
+});
+
+/**
+ * `deriveMemoryCreatedAtFromJournal` — 記憶の `createdAt` の唯一の根拠。
+ *
+ * `deriveHumanTouchedAtFromJournal` と対になるが見るものが逆——あちらは
+ * `cause:'human'` に絞って**最後**（新しいほう）を残すのに対し、こちらは
+ * `cause` を問わず `action:'write'` だけに絞って**最初**（古いほう）を残す。
+ */
+describe('deriveMemoryCreatedAtFromJournal — 日誌から createdAt の根拠を導出する', () => {
+  it('その slug の最初の write の at が採られる（新しいほうが採られないこと）', async () => {
+    // journal.list() は新しい順に返るので、新しい順に並べて渡す。
+    const journal = fakeJournal([
+      memoryUpdateEntry('notes', '2026-03-01T00:00:00.000Z', 'write'),
+      memoryUpdateEntry('notes', '2026-02-01T00:00:00.000Z', 'append'),
+      memoryUpdateEntry('notes', '2026-01-01T00:00:00.000Z', 'write'),
+    ]);
+
+    const result = await deriveMemoryCreatedAtFromJournal(journal);
+
+    // 一番新しい write（3/1）でも、間の append（2/1）でもなく、
+    // 一番古い write（1/1）が採られる。
+    expect(result.get('notes')).toBe('2026-01-01T00:00:00.000Z');
+  });
+
+  it('action:write が無い slug は結果に含まれない（根拠が無い＝unknown の元）', async () => {
+    const journal = fakeJournal([
+      memoryUpdateEntry('appended-only', '2026-01-01T00:00:00.000Z', 'append'),
+      memoryUpdateEntry('removed-only', '2026-01-01T00:00:00.000Z', 'remove'),
+      memoryUpdateEntry('legacy', '2026-01-01T00:00:00.000Z', undefined),
+    ]);
+
+    const result = await deriveMemoryCreatedAtFromJournal(journal);
+
+    expect(result.has('appended-only')).toBe(false);
+    expect(result.has('removed-only')).toBe(false);
+    expect(result.has('legacy')).toBe(false);
+    expect(result.size).toBe(0);
+  });
+
+  it('日誌が空なら空の Map（根拠ゼロ件）', async () => {
+    const result = await deriveMemoryCreatedAtFromJournal(fakeJournal([]));
+
+    expect(result.size).toBe(0);
+  });
+
+  it('複数の slug を同時に扱える', async () => {
+    const journal = fakeJournal([
+      memoryUpdateEntry('b', '2026-02-01T00:00:00.000Z', 'write'),
+      memoryUpdateEntry('a', '2026-01-15T00:00:00.000Z', 'write'),
+      memoryUpdateEntry('b', '2026-01-01T00:00:00.000Z', 'write'),
+    ]);
+
+    const result = await deriveMemoryCreatedAtFromJournal(journal);
+
+    expect(result.get('a')).toBe('2026-01-15T00:00:00.000Z');
+    expect(result.get('b')).toBe('2026-01-01T00:00:00.000Z');
   });
 });
 
@@ -533,6 +622,7 @@ describe('renderMemoryListing — `memory_list` 用の一覧。全区分を対�
         descriptionFreshness: { kind: 'absent' },
         parent: undefined,
         updatedAt: '2026-08-21T00:00:00Z',
+        createdAt: { kind: 'unknown' },
       },
       {
         slug: 'f1',
@@ -542,11 +632,57 @@ describe('renderMemoryListing — `memory_list` 用の一覧。全区分を対�
         descriptionFreshness: { kind: 'fresh' },
         parent: undefined,
         updatedAt: '2026-08-21T00:00:00Z',
+        createdAt: { kind: 'unknown' },
       },
     ]);
     expect(listing).toContain('[premise] p1: P1');
     expect(listing).toContain('[fact] f1: F1');
     expect(listing).toContain('要旨');
+  });
+
+  /**
+   * `memory_list` は7つのツールが横並びで持つ id + 名前 + 概要 + updated_at +
+   * created_at のうち、`createdAt` を最後に足したもの（人間の依頼、逐語:
+   * 「一覧系ツールは最低でも id + 名前 + 概要 + updated_at + created_at が
+   * 欲しい」）。known / unknown を別々の `it()` にする——片方が通ると
+   * もう片方も通ったように見える形にしないため。
+   */
+  it('createdAt が known なら ISO 時刻がそのまま出る', () => {
+    const listing = renderMemoryListing([
+      {
+        slug: 'p1',
+        title: 'P1',
+        kind: 'premise',
+        description: undefined,
+        descriptionFreshness: { kind: 'absent' },
+        parent: undefined,
+        updatedAt: '2026-08-21T00:00:00Z',
+        createdAt: { kind: 'known', at: '2026-01-02T03:04:05.000Z' },
+      },
+    ]);
+
+    expect(listing).toContain('作成: 2026-01-02T03:04:05.000Z');
+    expect(listing).toContain('更新: 2026-08-21T00:00:00Z');
+  });
+
+  it('createdAt が unknown なら「不明」と明言する（空文字で隠さない）', () => {
+    const listing = renderMemoryListing([
+      {
+        slug: 'p1',
+        title: 'P1',
+        kind: 'premise',
+        description: undefined,
+        descriptionFreshness: { kind: 'absent' },
+        parent: undefined,
+        updatedAt: '2026-08-21T00:00:00Z',
+        createdAt: { kind: 'unknown' },
+      },
+    ]);
+
+    expect(listing).toContain('作成: 不明');
+    // 「作成: 」で終わって空になっていないこと（取れないことが出力から消えない）。
+    expect(listing).not.toMatch(/作成: $/m);
+    expect(listing).not.toMatch(/作成: \/ /);
   });
 
   /**
@@ -573,6 +709,7 @@ describe('renderMemoryListing — `memory_list` 用の一覧。全区分を対�
       descriptionFreshness: { kind: 'fresh' as const },
       parent: undefined,
       updatedAt: '2026-08-21T00:00:00Z',
+      createdAt: { kind: 'unknown' as const },
     }));
   }
 

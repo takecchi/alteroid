@@ -49,6 +49,19 @@ describe('migrate', () => {
       '2026-08-12T01:00:00.000Z',
     );
   });
+
+  it('created_at 列の追加は加算のみ・冪等（記憶の絶対条件6）——値を消さず二度通しても壊れない', async () => {
+    await stores.persona.write('values', '# 価値観\n');
+    await stores.persona.markCreatedAt('values', '2026-01-02T03:04:05.000Z');
+
+    await migrate(db);
+    await migrate(db);
+
+    expect((await stores.persona.read('values'))?.createdAt).toEqual({
+      kind: 'known',
+      at: '2026-01-02T03:04:05.000Z',
+    });
+  });
 });
 
 describe('seedPgWorkspace', () => {
@@ -265,6 +278,96 @@ describe('PgPersonaStore', () => {
 
       expect(await stores.persona.read('ghost')).toBeNull();
       expect(await stores.persona.protectionStatus('ghost')).toEqual({ kind: 'unknown' });
+    });
+  });
+
+  /**
+   * `createdAt`（`created_at` 列。記憶の絶対条件）。**列の値は `markCreatedAt`
+   * からしか動かない**——journal からの導出は `apps/daemon/src/storage.ts` の
+   * 起動時 backfill の仕事で、ここは `PersonaStore` 単体の振る舞いだけを見る。
+   * fs 版と同じ契約を、pg（PGlite）に対しても確かめる。
+   */
+  describe('createdAt（作成時刻の派生値）', () => {
+    it('markCreatedAt を呼んでいなければ unknown（mtime を使わない——pg にそもそも mtime は無い）', async () => {
+      await stores.persona.write('values', '# 価値観\n');
+
+      const doc = await stores.persona.read('values');
+
+      expect(doc?.createdAt).toEqual({ kind: 'unknown' });
+    });
+
+    it('markCreatedAt を呼んだ文書は known になる（read() にも list() にも出る）', async () => {
+      await stores.persona.write('values', '# 価値観\n');
+
+      await stores.persona.markCreatedAt('values', '2026-01-02T03:04:05.000Z');
+
+      expect((await stores.persona.read('values'))?.createdAt).toEqual({
+        kind: 'known',
+        at: '2026-01-02T03:04:05.000Z',
+      });
+      const meta = (await stores.persona.list()).find((entry) => entry.slug === 'values');
+      expect(meta?.createdAt).toEqual({ kind: 'known', at: '2026-01-02T03:04:05.000Z' });
+    });
+
+    it('markCreatedAt は一度きりの確定——2回目は無視される（冪等・絶対条件2）', async () => {
+      await stores.persona.write('values', '# 価値観\n');
+
+      const first = await stores.persona.markCreatedAt('values', '2026-01-02T03:04:05.000Z');
+      const second = await stores.persona.markCreatedAt('values', '2020-01-01T00:00:00.000Z');
+
+      expect(first).toBe(true);
+      expect(second).toBe(false);
+      expect((await stores.persona.read('values'))?.createdAt).toEqual({
+        kind: 'known',
+        at: '2026-01-02T03:04:05.000Z',
+      });
+    });
+
+    it('同じ引数で2回走らせても結果は変わらない（backfill の再実行を模す）', async () => {
+      await stores.persona.write('values', '# 価値観\n');
+
+      await stores.persona.markCreatedAt('values', '2026-01-02T03:04:05.000Z');
+      await stores.persona.markCreatedAt('values', '2026-01-02T03:04:05.000Z');
+
+      expect((await stores.persona.read('values'))?.createdAt).toEqual({
+        kind: 'known',
+        at: '2026-01-02T03:04:05.000Z',
+      });
+    });
+
+    it('markCreatedAt は削除済みの slug に行を作らない（空文字の「文書」を生まない）', async () => {
+      const wrote = await stores.persona.markCreatedAt('ghost', new Date().toISOString());
+
+      expect(wrote).toBe(false);
+      expect(await stores.persona.read('ghost')).toBeNull();
+    });
+
+    /**
+     * **絶対条件5「バックフィルは created_at を埋める以外のことを一切しない」**
+     * を `markCreatedAt` 単体で確かめる——本文・`updatedAt`・保護状態
+     * （`humanTouchedAt` 由来）・`description` を走行前後で突き合わせる。
+     */
+    it('markCreatedAt は createdAt 以外を1つも書き換えない', async () => {
+      await stores.persona.write(
+        'runbook',
+        ['---', 'description: 手順', '---', '# 手順書', '', '本文'].join('\n'),
+      );
+      await stores.persona.markHumanTouched('runbook', '2020-01-01T00:00:00.000Z');
+      const before = await stores.persona.read('runbook');
+      const beforeProtection = await stores.persona.protectionStatus('runbook');
+
+      await stores.persona.markCreatedAt('runbook', '2026-01-02T03:04:05.000Z');
+
+      const after = await stores.persona.read('runbook');
+      const afterProtection = await stores.persona.protectionStatus('runbook');
+      expect(after?.content).toBe(before?.content);
+      expect(after?.updatedAt).toBe(before?.updatedAt);
+      expect(after?.description).toBe(before?.description);
+      expect(after?.kind).toBe(before?.kind);
+      expect(after?.parent).toBe(before?.parent);
+      expect(afterProtection).toEqual(beforeProtection);
+      expect(before?.createdAt).toEqual({ kind: 'unknown' });
+      expect(after?.createdAt).toEqual({ kind: 'known', at: '2026-01-02T03:04:05.000Z' });
     });
   });
 

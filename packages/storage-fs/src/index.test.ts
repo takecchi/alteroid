@@ -344,6 +344,110 @@ describe('FsPersonaStore', () => {
   });
 
   /**
+   * `createdAt`（記憶の絶対条件）。**索引の値は `markCreatedAt` からしか
+   * 動かない**——journal からの導出（`deriveMemoryCreatedAtFromJournal`）は
+   * `apps/daemon/src/storage.ts` の起動時 backfill の仕事で、ここは
+   * `PersonaStore` 単体の振る舞いだけを見る。
+   */
+  describe('createdAt（作成時刻の派生値）', () => {
+    it('markCreatedAt を呼んでいなければ unknown（mtime を使わない）', async () => {
+      await stores.persona.write('values', '# 価値観\n');
+
+      const doc = await stores.persona.read('values');
+
+      expect(doc?.createdAt).toEqual({ kind: 'unknown' });
+    });
+
+    it('markCreatedAt を呼んだ文書は known になる（read() にも list() にも出る）', async () => {
+      await stores.persona.write('values', '# 価値観\n');
+
+      await stores.persona.markCreatedAt('values', '2026-01-02T03:04:05.000Z');
+
+      expect((await stores.persona.read('values'))?.createdAt).toEqual({
+        kind: 'known',
+        at: '2026-01-02T03:04:05.000Z',
+      });
+      const meta = (await stores.persona.list()).find((entry) => entry.slug === 'values');
+      expect(meta?.createdAt).toEqual({ kind: 'known', at: '2026-01-02T03:04:05.000Z' });
+    });
+
+    it('markCreatedAt は一度きりの確定——2回目は無視される（冪等・絶対条件2）', async () => {
+      await stores.persona.write('values', '# 価値観\n');
+
+      const first = await stores.persona.markCreatedAt('values', '2026-01-02T03:04:05.000Z');
+      const second = await stores.persona.markCreatedAt('values', '2020-01-01T00:00:00.000Z');
+
+      expect(first).toBe(true);
+      expect(second).toBe(false);
+      // 後から呼んだほうにも、より新しいほうにも動かない——最初の値のまま。
+      expect((await stores.persona.read('values'))?.createdAt).toEqual({
+        kind: 'known',
+        at: '2026-01-02T03:04:05.000Z',
+      });
+    });
+
+    it('同じ引数で2回走らせても結果は変わらない（backfill の再実行を模す）', async () => {
+      await stores.persona.write('values', '# 価値観\n');
+
+      await stores.persona.markCreatedAt('values', '2026-01-02T03:04:05.000Z');
+      await stores.persona.markCreatedAt('values', '2026-01-02T03:04:05.000Z');
+
+      expect((await stores.persona.read('values'))?.createdAt).toEqual({
+        kind: 'known',
+        at: '2026-01-02T03:04:05.000Z',
+      });
+    });
+
+    it('実体の無い slug には新しく行を作らない（削除済み記憶が復活しない）', async () => {
+      const wrote = await stores.persona.markCreatedAt('ghost', '2026-01-02T03:04:05.000Z');
+
+      expect(wrote).toBe(false);
+      expect(await stores.persona.read('ghost')).toBeNull();
+      expect(await stores.persona.list()).toEqual([]);
+    });
+
+    it('remove() で createdAt も一緒に消える（実体の無い印を残さない）', async () => {
+      await stores.persona.write('values', '# 価値観\n');
+      await stores.persona.markCreatedAt('values', '2026-01-02T03:04:05.000Z');
+
+      await stores.persona.remove('values');
+      await stores.persona.write('values', '# 価値観\n\n書き直した\n');
+
+      // 削除後に同じ slug へ新しく書いても、古い印は蘇らない。
+      expect((await stores.persona.read('values'))?.createdAt).toEqual({ kind: 'unknown' });
+    });
+
+    /**
+     * **絶対条件5「バックフィルは created_at を埋める以外のことを一切しない」**
+     * を `markCreatedAt` 単体で確かめる——本文・`updatedAt`・保護状態
+     * （`humanTouchedAt` 由来）・`description` を走行前後で突き合わせる。
+     */
+    it('markCreatedAt は createdAt 以外を1つも書き換えない', async () => {
+      await stores.persona.write(
+        'runbook',
+        ['---', 'description: 手順', '---', '# 手順書', '', '本文'].join('\n'),
+      );
+      await stores.persona.markHumanTouched('runbook', '2020-01-01T00:00:00.000Z');
+      const before = await stores.persona.read('runbook');
+      const beforeProtection = await stores.persona.protectionStatus('runbook');
+
+      await stores.persona.markCreatedAt('runbook', '2026-01-02T03:04:05.000Z');
+
+      const after = await stores.persona.read('runbook');
+      const afterProtection = await stores.persona.protectionStatus('runbook');
+      expect(after?.content).toBe(before?.content);
+      expect(after?.updatedAt).toBe(before?.updatedAt);
+      expect(after?.description).toBe(before?.description);
+      expect(after?.kind).toBe(before?.kind);
+      expect(after?.parent).toBe(before?.parent);
+      expect(afterProtection).toEqual(beforeProtection);
+      // createdAt だけが動いたことも合わせて見る（before は unknown のまま）。
+      expect(before?.createdAt).toEqual({ kind: 'unknown' });
+      expect(after?.createdAt).toEqual({ kind: 'known', at: '2026-01-02T03:04:05.000Z' });
+    });
+  });
+
+  /**
    * `describedAt`（#170「記憶の目次化」の派生値）。書き手は書けない——
    * `write()` / `append()` が新旧の `description`（frontmatter）を比べて
    * 進めるか据え置くかを決める（4-3）。

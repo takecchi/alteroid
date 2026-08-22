@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { WITHHELD_ENV_KEYS } from '@alteroid/core';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { DATABASE_URL_ENV, openStorage, planStorage } from './storage.js';
 
@@ -136,5 +136,160 @@ describe('openStorage', () => {
     expect(await second.stores.persona.protectionStatus('gone')).toEqual({ kind: 'unknown' });
 
     await second.close();
+  });
+
+  /**
+   * 記憶の `createdAt` の backfill。**`backfillMemoryHumanTouch` の歯と対の
+   * 形にしてある**——同じくデーモン再起動を挟んで、日誌にはあるが派生値に
+   * まだ無い状況を再現する。
+   */
+  describe('createdAt の backfill', () => {
+    it('起動時に日誌の最初の write を createdAt として backfill する（新しいほうが採られないこと）', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
+
+      // **`journal.append` の `at` は呼び出し側から渡せず、その場の
+      // `new Date().toISOString()` になる。** 同じ tick で2回呼ぶと同じ
+      // ミリ秒になりかねないので、時計を止めて明示的に2つの時刻を作る
+      // （「新しいほうが採られない」を確かめるには、2つが確実に違う必要がある）。
+      vi.useFakeTimers();
+      try {
+        // --- 1回目の起動 -----------------------------------------------------
+        const first = await openStorage({ ALTEROID_HOME: root });
+        await first.stores.persona.write('habits', '# 習慣\n\n最初の版\n');
+        vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+        const firstWrite = await first.stores.journal.append({
+          type: 'memory_update',
+          slug: 'habits',
+          cause: 'clone',
+          action: 'write',
+          summary: '最初の write を模す',
+        });
+        vi.setSystemTime(new Date('2026-03-01T00:00:00.000Z'));
+        const secondWrite = await first.stores.journal.append({
+          type: 'memory_update',
+          slug: 'habits',
+          cause: 'clone',
+          action: 'write',
+          summary: '2回目の write を模す',
+        });
+        expect(firstWrite.at).not.toBe(secondWrite.at);
+        // まだ backfill していないので unknown。
+        expect((await first.stores.persona.read('habits'))?.createdAt).toEqual({
+          kind: 'unknown',
+        });
+        await first.close();
+
+        // --- 2回目の起動（再起動） -------------------------------------------
+        const second = await openStorage({ ALTEROID_HOME: root });
+
+        // 古いほう（1回目の write）が採られ、新しいほう（2回目）は採られない。
+        expect((await second.stores.persona.read('habits'))?.createdAt).toEqual({
+          kind: 'known',
+          at: firstWrite.at,
+        });
+
+        await second.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('日誌に根拠が無い文書は unknown のまま（ファイルの mtime を使わない）', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
+
+      const first = await openStorage({ ALTEROID_HOME: root });
+      // memory_update を1件も残さずに書く（`persona.write` 自体は journal を
+      // 書かない——journal へ積むのは `app.ts` のハンドラの仕事なので、ここは
+      // 「日誌に根拠が無い」状況をそのまま作れる）。
+      await first.stores.persona.write('mystery', '# 謎\n\n根拠の無い記憶\n');
+      await first.close();
+
+      const second = await openStorage({ ALTEROID_HOME: root });
+
+      expect((await second.stores.persona.read('mystery'))?.createdAt).toEqual({
+        kind: 'unknown',
+      });
+
+      await second.close();
+    });
+
+    it('backfill は冪等——2回目の再起動でも既に埋まった createdAt を書き換えない（絶対条件2・4）', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
+
+      const first = await openStorage({ ALTEROID_HOME: root });
+      await first.stores.persona.write('habits', '# 習慣\n');
+      await first.stores.journal.append({
+        type: 'memory_update',
+        slug: 'habits',
+        cause: 'clone',
+        action: 'write',
+        summary: '最初の write を模す',
+      });
+      await first.close();
+
+      const second = await openStorage({ ALTEROID_HOME: root });
+      const afterFirstBackfill = (await second.stores.persona.read('habits'))?.createdAt;
+      expect(afterFirstBackfill?.kind).toBe('known');
+      // 2回目の backfill が動く前に、日誌へさらに古い write を追記する——
+      // 冪等でなければここで createdAt が巻き戻って見えてしまう。
+      await second.stores.journal.append({
+        type: 'memory_update',
+        slug: 'habits',
+        cause: 'clone',
+        action: 'write',
+        summary: 'もっと古い write（あとから発覚した過去）を模す',
+      });
+      await second.close();
+
+      const third = await openStorage({ ALTEROID_HOME: root });
+      const afterSecondBackfill = (await third.stores.persona.read('habits'))?.createdAt;
+
+      // 一度確定した値のまま——追記された「もっと古い」記録には動かない。
+      expect(afterSecondBackfill).toEqual(afterFirstBackfill);
+
+      await third.close();
+    });
+
+    /**
+     * **絶対条件1「バックフィルは created_at を埋める以外のことを一切しない」**
+     * を、起動をまたいだ実際の配線（`openStorage` → `backfillMemoryCreatedAt`）
+     * で確かめる。`markCreatedAt` 単体の歯は `storage-fs` / `storage-pg` の
+     * テストに在るが、ここは「本当に backfill 経路からしか動かないこと」を見る。
+     */
+    it('backfill は本文・updatedAt・保護状態・要旨を書き換えない', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
+
+      const first = await openStorage({ ALTEROID_HOME: root });
+      await first.stores.persona.write(
+        'runbook',
+        ['---', 'description: 手順', '---', '# 手順書', '', '本文'].join('\n'),
+      );
+      await first.stores.persona.markHumanTouched('runbook', '2020-01-01T00:00:00.000Z');
+      await first.stores.journal.append({
+        type: 'memory_update',
+        slug: 'runbook',
+        cause: 'human',
+        action: 'write',
+        summary: '過去の PUT を模す',
+      });
+      const before = await first.stores.persona.read('runbook');
+      const beforeProtection = await first.stores.persona.protectionStatus('runbook');
+      await first.close();
+
+      const second = await openStorage({ ALTEROID_HOME: root });
+      const after = await second.stores.persona.read('runbook');
+      const afterProtection = await second.stores.persona.protectionStatus('runbook');
+
+      expect(after?.content).toBe(before?.content);
+      expect(after?.updatedAt).toBe(before?.updatedAt);
+      expect(after?.description).toBe(before?.description);
+      expect(after?.kind).toBe(before?.kind);
+      expect(afterProtection).toEqual(beforeProtection);
+      // createdAt だけが unknown → known に動いたこと。
+      expect(before?.createdAt).toEqual({ kind: 'unknown' });
+      expect(after?.createdAt?.kind).toBe('known');
+
+      await second.close();
+    });
   });
 });
