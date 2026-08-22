@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { journalEntryShape, noteDroppedRecord, noteUnreadableRecord } from './dropped-record.js';
+import { excerptLine } from './excerpt.js';
 import {
   LEASE_TTL_MS,
   describeVerdict,
@@ -516,6 +517,24 @@ interface ManagerRecord {
    */
   leaseRefusal?: { detail: string; claimableAt?: number };
 }
+
+/**
+ * 「知らせ」（`#notifyRestored` / `#notifyUnresumable` / `#notifyResumeFallback`）が
+ * 埋め込む「直近の報告」の抜粋の厚み（#252）。
+ *
+ * この3つはどれも「デーモンが再起動した」「runner の器が作り直された」「前の
+ * セッションから戻せなかった」という**状態が変わった知らせ**であって「報告」では
+ * ない。中身は `manager_report` でいつでも全文が読めるので、ここでは短い抜粋だけを
+ * 添え、全文へは名指しで案内する。
+ *
+ * **値は `tools.ts` の `LIST_REPORT_EXCERPT`（240）に揃えてある** — 一覧に出す
+ * 「直近の報告」の抜粋と同じ意味・同じ理由（一覧はタイトルと要旨だけ、詳細は明示的
+ * な呼び出しへ回す）だからである。**定数そのものは import しない** — `tools.ts` は
+ * `ManagerPool` 等の型を `manager.ts` から import しているので、逆方向の import は
+ * 循環になる。`tools.ts` の `TRANSCRIPT_PAGE` が `REPORT_PAGE` と同じ値を別の定数
+ * として持っているのと同じ形（意味が違えば、値が同じでも定数は分ける）。
+ */
+const NOTIFY_REPORT_EXCERPT = 240;
 
 /** 1マネージャーぶんで覚えておく確認の件数。達したら**黙らずに日誌へ残す**。 */
 const ASKED_MEMORY_LIMIT = 512;
@@ -1662,6 +1681,36 @@ class Pool implements ManagerPool {
   }
 
   /**
+   * 「状態が変わった知らせ」に添える、直近の報告の抜粋と続きの取り方（#252）。
+   *
+   * `#notifyRestored` / `#notifyUnresumable` / `#notifyResumeFallback` の3つが
+   * 共通で持っていた欠陥はここに寄せてある——「デーモンが再起動した」
+   * 「runner の器が作り直された」「前のセッションから戻せなかった」という事実の
+   * 知らせに、依頼文と直近の報告を**全文で**添えていた。
+   *
+   * **`依頼:` はここに無い。** 依頼文はクローン自身が書いたものなので、送り返す
+   * 理由がそもそも無い（読みたければ `manager_report ... part=request` で取れる）。
+   * **直近の報告は全文を持たず、`excerptLine` で切った短い抜粋だけを持つ**——
+   * 中身は `manager_report` でいつでも読めるので、知らせの側に全文を持たせる
+   * 必要が無い。
+   *
+   * `lastReport` が無ければ、その行ごと落とす（既存どおり）。続きの取り方の行は
+   * `job.id` を実際に埋め込んだ形で、report と request の両方の取り方を書く——
+   * 呼び出し元3つのうち `#notifyResumeFallback` には `依頼:` 行に相当するものが
+   * 元から無いが、request も同じ `manager_report` から読めることに変わりはない
+   * ので、案内はどの呼び出し元でも同じ1行で足りる。
+   */
+  #notifyExcerptLines(job: Job): string[] {
+    return [
+      job.lastReport === undefined
+        ? ''
+        : `直近の報告（抜粋）: ${excerptLine(job.lastReport, NOTIFY_REPORT_EXCERPT)}`,
+      `続きを読むなら manager_report managerId=${job.id}（直近の報告の全文） / ` +
+        `manager_report managerId=${job.id} part=request（依頼文）。`,
+    ];
+  }
+
+  /**
    * 戻せないと分かった仕事をクローンへ知らせる。
    *
    * **黙って `running` のまま置かない。** 再試行しても同じ答えが返る失敗なので、
@@ -1686,9 +1735,8 @@ class Pool implements ManagerPool {
             '生ログも預かっていないので、続きの材料が無い。'
           : 'runner の器が作り直されたが、この委譲を前のセッションから戻せなかった。',
         `理由: ${String(error)}`,
-        `依頼: ${job.request ?? job.summary}`,
         `作業ディレクトリ: ${job.cwd ?? '(不明)'}`,
-        job.lastReport === undefined ? '' : `直近の報告: ${job.lastReport}`,
+        ...this.#notifyExcerptLines(job),
         '',
         // **戻れなかったことしか観測していない。** このデーモンは PR もブランチも
         // 見に行かない（リポジトリの事情はマネージャーの領域である）。だから
@@ -1724,8 +1772,7 @@ class Pool implements ManagerPool {
         `前のセッション（${sessionId}）へは戻れなかったので、預かってあった生ログから` +
           '新しいセッションを起こして続けさせた。',
         `理由: ${reason}`,
-        `依頼: ${job.request ?? job.summary}`,
-        job.lastReport === undefined ? '' : `直近の報告: ${job.lastReport}`,
+        ...this.#notifyExcerptLines(job),
         '',
         'マネージャーが持っているのは記録から読み取れる範囲だけである。' +
           '前のセッションで口頭で足した細かい指示は効いていないと考えて、' +
@@ -2789,9 +2836,8 @@ class Pool implements ManagerPool {
         how === 'attached'
           ? `${head}。この委譲は runner の中で走り続けている。`
           : `${head}。中断されていたこの委譲を、前のセッションから再開させた。`,
-        `依頼: ${job.request ?? job.summary}`,
         `作業ディレクトリ: ${job.cwd ?? '(不明)'}`,
-        job.lastReport === undefined ? '' : `直近の報告: ${job.lastReport}`,
+        ...this.#notifyExcerptLines(job),
         '',
         how === 'attached'
           ? '返事待ちがあれば改めて届く。`manager_send` で追加の指示も送れる。'
