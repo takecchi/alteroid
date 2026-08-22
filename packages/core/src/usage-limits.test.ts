@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   classifyUsageNotice,
   describeUsageNotice,
+  mergeRateLimitFacts,
   toRateLimitFacts,
   usageTransitionOf,
 } from './usage-limits.js';
@@ -128,5 +129,40 @@ describe('知らせるべき変化', () => {
     expect(usageTransitionOf(undefined, { status: 'rejected', usingOverage: true })).toBe(
       'rejected',
     );
+  });
+});
+
+describe('覚えている事実に新しい観測を重ねる', () => {
+  it('運ばれてこなかったフィールドで、覚えていた値を消さない', () => {
+    // **これが「同じ知らせが二度配られる」の根である。** `status` を運ばない観測
+    // （全フィールドが省略可なので正常な入力である）で丸ごと置き換えると、
+    // 「もう rejected を知らせた」という記憶が消え、次の rejected が新しい遷移に
+    // 見える。重ねる形なら、覚えていた `status` はそのまま残る。
+    const remembered = {
+      kind: 'five_hour',
+      status: 'rejected' as const,
+      overageDisabledReason: 'org_level_disabled_until',
+    };
+    const merged = mergeRateLimitFacts(remembered, { kind: 'five_hour', resetsAt: 1_770_000_000 });
+    expect(merged.status).toBe('rejected');
+    expect(merged.overageDisabledReason).toBe('org_level_disabled_until');
+    expect(merged.resetsAt).toBe(1_770_000_000);
+    // 重ねた結果で判定すると、同じ rejected はもう遷移ではない。
+    expect(usageTransitionOf(merged, remembered)).toBeUndefined();
+  });
+
+  it('運ばれてきた値は上書きする（枠が開いたことを見落とさない）', () => {
+    // **消える道を塞がない。** ここまで残す形にすると、本物の再発が黙って消える。
+    const merged = mergeRateLimitFacts(
+      { kind: 'five_hour', status: 'rejected' },
+      { kind: 'five_hour', status: 'allowed' },
+    );
+    expect(merged.status).toBe('allowed');
+    expect(usageTransitionOf(merged, { kind: 'five_hour', status: 'rejected' })).toBe('rejected');
+  });
+
+  it('覚えている事実が無ければ、届いた観測がそのまま記憶になる', () => {
+    const next = { kind: 'five_hour', status: 'rejected' as const };
+    expect(mergeRateLimitFacts(undefined, next)).toEqual(next);
   });
 });
