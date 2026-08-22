@@ -1756,7 +1756,14 @@ class RunnerSession {
    * 「もう作業した」と誤認して生ログからの作り直しを止めてしまう。
    */
   #noteDenial(source: unknown, via: 'live' | 'result'): void {
-    const denial = source as { tool_name?: unknown; tool_use_id?: unknown; tool_input?: unknown };
+    const denial = source as {
+      tool_name?: unknown;
+      tool_use_id?: unknown;
+      tool_input?: unknown;
+      decision_reason?: unknown;
+      decision_reason_type?: unknown;
+      message?: unknown;
+    };
     const tool = typeof denial.tool_name === 'string' ? denial.tool_name : '(不明な道具)';
     const input = denial.tool_input;
     // id が無ければ道具と入力から作る。**取りこぼすより重複を許す** — 決まった
@@ -1767,6 +1774,13 @@ class RunnerSession {
         : `${tool}:${brief(input, 120)}`;
     if (this.#denied.has(toolUseId)) return;
     this.#denied.set(toolUseId, true);
+    // `decision_reason` / `decision_reason_type` / `message` は SDK の走行中の
+    // 合図（`via: 'live'`）にしか付かない任意フィールドである（`result` の
+    // `SDKPermissionDenial` は理由を持たない）。**文字列であることを確かめて
+    // からしか載せない** — `undefined` を代入すると `JSON.stringify` で落ちる
+    // にせよ、型を保証しないまま runner-protocol.ts の `z.string().optional()`
+    // へ渡すのは事故のもとである（SDK の型変化で数値や null が来ても黙って通す
+    // ことになる）。無いものは作り物を出さず、キーごと省く。
     this.#emit({
       type: 'permission_denied',
       managerId: this.#id,
@@ -1774,6 +1788,11 @@ class RunnerSession {
       tool,
       input,
       via,
+      ...(typeof denial.decision_reason === 'string' ? { reason: denial.decision_reason } : {}),
+      ...(typeof denial.decision_reason_type === 'string'
+        ? { reasonType: denial.decision_reason_type }
+        : {}),
+      ...(typeof denial.message === 'string' ? { message: denial.message } : {}),
     });
   }
 
