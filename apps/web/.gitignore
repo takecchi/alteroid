@@ -1,2 +1,3 @@
-.react-router/
-build/
+# 末尾に `/` を付けないこと（理由はリポジトリ直下の .gitignore の冒頭）。
+.react-router
+build

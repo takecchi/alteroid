@@ -1,27 +1,36 @@
+# ⚠️ ディレクトリを無視するとき、末尾に `/` を付けないこと。
+# `foo/` は**ディレクトリにしか一致しない** — 同じ名前の symlink には一致しない。
+# git worktree を配る道具（codiva 等）は、無視されている既存パスを
+# 「元のリポジトリを指す symlink」として worktree へ置く。`/` 付きだとそれが
+# 無視から漏れて `git status` に未追跡として並び、`git add -A` で
+# **このマシンの絶対パスを持つ symlink がコミットされる**（実際に `.idea` が
+# main へ入った。PR #160）。`/` 無しならディレクトリ・ファイル・symlink の
+# どれにも一致するので、この漏れ方をしない。
+
 # IDE
-.idea/
-.vscode/
+.idea
+.vscode
 
 # Node
-node_modules/
-dist/
-coverage/
+node_modules
+dist
+coverage
 *.tsbuildinfo
 
 # pnpm のストア。既定の置き場は「リポジトリが載っているマウント点」なので、
 # リポジトリ自身がマウント点だとここに落ちる（`pnpm store path` で確かめられる）。
 # prettier は既定で .gitignore も読むので、無視していないと `pnpm format:check` が
 # ストアの中身を検査して落ちる ＝ CI（ストアが無い）と手元で同じコマンドが違う結論を出す。
-.pnpm-store/
+.pnpm-store
 
 # OpenAPI spec から起こす型（pnpm build が毎回作る）。
 # **spec（apps/daemon/openapi.json）の方はコミットする** — コードとのずれを
 # CI が検出できる場所がそこだからで、そこから機械的に落ちるだけのこれは持たない。
-packages/api-client/src/generated/
+packages/api-client/src/generated
 
 # 正典（docs/*.md）を core へ焼き込んだ写し（pnpm build が毎回作る）。
 # **docs 側が唯一の出所**なので、機械的に落ちるだけのこれは持たない。
-packages/core/src/generated/
+packages/core/src/generated
 
 # env / secrets
 .env
@@ -30,7 +39,7 @@ packages/core/src/generated/
 !.env.example
 
 # compose の既定の作業ディレクトリ（マネージャーが実際に触る場所）
-workspace/
+workspace
 
 # misc
 *.log
