@@ -1,13 +1,20 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
+import { Tabs } from 'radix-ui';
 
+import { Markdown } from '~/components/markdown';
 import { Page } from '~/components/page';
 import { Button, ErrorNote, Spinner, Textarea } from '~/components/ui';
 import { useDeleteMemory, useSaveMemory } from '~/hooks/mutations';
 import { useMemoryDocument } from '~/hooks/queries';
+import { cn } from '~/lib/cn';
 import { formatDateTime } from '~/lib/format';
 
 import type { Route } from './+types/memory-detail';
+
+const TAB_TRIGGER_CLASS =
+  'border-b-2 border-transparent px-3 py-1.5 text-sm font-medium text-muted transition-colors hover:text-fg';
+const TAB_TRIGGER_ACTIVE_CLASS = 'border-accent text-fg';
 
 export function clientLoader({ params }: Route.ClientLoaderArgs) {
   return { slug: params.slug };
@@ -39,6 +46,21 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
   // 記憶が無い slug は 404 になる。それは「これから書く」場合なので、
   // 失敗ではなく空の編集画面として扱う。
   const missing = error !== undefined && (error as { status?: number }).status === 404;
+
+  /**
+   * `undefined` は「まだ人間がタブに触っていない」— `draft` と同じ作法。
+   *
+   * データが届く前に既定タブを確定させない。届いたら、**読むものが在れば
+   * プレビュー、無ければ編集**を既定にする。
+   *
+   * 「無い」は2つある。404（これから書く記憶）と、**在るが本文が空**である。
+   * 後者は実在しうる状態で、`PUT /memory/:slug` の body スキーマは
+   * `z.object({ content: z.string() })`（`apps/daemon/src/app.ts`）— 隣の
+   * `answerBody` と違って `.min(1)` が無いので、空の記憶は API として正当に
+   * 作れる。**この2つを分けると、プレビューが真っ白な画面が既定で開く。**
+   */
+  const [tab, setTab] = useState<string | undefined>(undefined);
+  const activeTab = tab ?? (missing || loaded.trim() === '' ? 'edit' : 'preview');
 
   function save() {
     if (draft === undefined) return;
@@ -105,23 +127,50 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
       {isLoading && !missing ? (
         <Spinner />
       ) : (
-        <>
-          <p className="mb-2 text-xs text-muted">
-            ここで書き換えたものは `memory_update`（cause: human）として日誌に残る。
-          </p>
-          <Textarea
-            className="min-h-[60vh] flex-1 font-mono text-xs leading-relaxed"
-            value={value}
-            spellCheck={false}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if ((event.metaKey || event.ctrlKey) && event.key === 's') {
-                event.preventDefault();
-                save();
-              }
-            }}
-          />
-        </>
+        <Tabs.Root value={activeTab} onValueChange={setTab} className="flex flex-1 flex-col">
+          <Tabs.List className="mb-2 flex shrink-0 gap-1 border-b border-border">
+            <Tabs.Trigger
+              value="preview"
+              className={cn(TAB_TRIGGER_CLASS, activeTab === 'preview' && TAB_TRIGGER_ACTIVE_CLASS)}
+            >
+              プレビュー
+            </Tabs.Trigger>
+            <Tabs.Trigger
+              value="edit"
+              className={cn(TAB_TRIGGER_CLASS, activeTab === 'edit' && TAB_TRIGGER_ACTIVE_CLASS)}
+            >
+              編集
+            </Tabs.Trigger>
+          </Tabs.List>
+
+          {/*
+            **`draft` はこの `Tabs.Root` の外（コンポーネント自身）に在る。**
+            非活性の `Tabs.Content` は既定で unmount されるが、書きかけの実体は
+            state 側に残るので、タブを行き来しても消えない。プレビューが映すのは
+            保存前の `value`（= draft ?? loaded）そのもの — 本文を書き換えない。
+          */}
+          <Tabs.Content value="preview" className="min-h-0 flex-1 overflow-y-auto">
+            <Markdown>{value}</Markdown>
+          </Tabs.Content>
+
+          <Tabs.Content value="edit" className="flex min-h-0 flex-1 flex-col">
+            <p className="mb-2 shrink-0 text-xs text-muted">
+              ここで書き換えたものは `memory_update`（cause: human）として日誌に残る。
+            </p>
+            <Textarea
+              className="min-h-[60vh] flex-1 font-mono text-xs leading-relaxed"
+              value={value}
+              spellCheck={false}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if ((event.metaKey || event.ctrlKey) && event.key === 's') {
+                  event.preventDefault();
+                  save();
+                }
+              }}
+            />
+          </Tabs.Content>
+        </Tabs.Root>
       )}
     </Page>
   );
