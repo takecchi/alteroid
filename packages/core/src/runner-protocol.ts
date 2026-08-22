@@ -1099,6 +1099,28 @@ interface RegistryEntry {
   instanceId?: string;
 }
 
+/**
+ * 名簿の内訳を一行に畳む（宛先・状態・直近の失敗。**値は載せない**）。
+ *
+ * **持ち主を1つにするために外へ出してある。** 宛先が引けなかったことを報告する
+ * 場所は名簿の中だけではない（`ManagerPool#send` にもある）。同じものを両方で
+ * 組み立てると、**片方だけが 5値を畳んだ形へ倒れても誰も気づけない** — 実際に
+ * `send()` の側は状態を1つも見ずに「移送が要る」と恒久の結論を返していた。
+ *
+ * **`state` を `connected` へ畳まない。** 「まだ開けていない」と「待っても同じ
+ * 答えが返る」の違いが、読む側が待つか起こし直すかを決める材料そのものである
+ * （`RunnerRegistry#select` の doc が数え上げている3種類がこれである）。
+ */
+export function describeRunnerEntries(entries: RunnerEntry[]): string {
+  return entries
+    .map(
+      (entry) =>
+        `${entry.label} は ${entry.state}` +
+        `${entry.error === undefined ? '' : `（${entry.error}）`}`,
+    )
+    .join(' / ');
+}
+
 class Registry implements RunnerRegistry {
   readonly #entries = new Map<string, RegistryEntry>();
   readonly #subscribers = new Set<(runner: RunnerClient) => void>();
@@ -1398,13 +1420,7 @@ class Registry implements RunnerRegistry {
 
   /** 名簿の内訳を一行に畳む（宛先・状態・直近の失敗。**値は載せない**）。 */
   #describeEntries(): string {
-    return [...this.#entries.values()]
-      .map(
-        (entry) =>
-          `${entry.source.label} は ${entry.state}` +
-          `${entry.error === undefined ? '' : `（${entry.error}）`}`,
-      )
-      .join(' / ');
+    return describeRunnerEntries(this.entries());
   }
 
   async stop(): Promise<void> {
