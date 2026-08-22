@@ -44,7 +44,10 @@ import { createMemoryStores } from './testing.js';
 
 /** 名乗るプロセスを差し替えられる偽 runner。**受けた命令を全部記録する。** */
 class LeasedRunner implements RunnerClient {
-  readonly runnerId = 'runner-primary';
+  // **併存（#200）を作るために runnerId を差し替えられるようにしてある。**
+  // 既定は既存テストと同じ `runner-primary`——ここを変えても既存テストの
+  // 期待値は1つも変わらない。
+  readonly runnerId: string;
   readonly workspacePath = '/work/project';
   readonly sessions = new Map<string, RunnerManagerState>();
   readonly resumes: RunnerResumeCommand[] = [];
@@ -53,6 +56,10 @@ class LeasedRunner implements RunnerClient {
   instanceId: string | undefined = 'boot-2';
   /** 次の resume で投げる失敗（世代で拒む 409 を作るため）。 */
   resumeFailure: unknown;
+
+  constructor(runnerId = 'runner-primary') {
+    this.runnerId = runnerId;
+  }
 
   async identity(): Promise<{ runnerId?: string; instanceId?: string } | undefined> {
     return {
@@ -561,5 +568,98 @@ describe('引き取りの関門（貸し出し期限）', () => {
     expect(stopped?.fence).toBe(9);
 
     await h.close();
+  });
+
+  /**
+   * 併存（同じ `runnerId` を名乗る器が2台以上開いている。#200）。
+   *
+   * **`held`（貸し出し期限）とは別レイヤーの断りである。** `held` は「時間が
+   * 経てば解ける」が、併存は人間が `ALTEROID_RUNNER_ID` を直すまで解けない。
+   * `#sighting`（名簿から `LeaseSighting` を作るところ）が台数（`duplicates`）を
+   * 見つけたら `judgeLease` が `ambiguous` を返し、`mayClaim` が `false` になる
+   * ——ここではその一連が実際に resume を止めることと、クローンへ届く文言が
+   * 「時間では解けない・何をすれば解けるか」を言うことを固定する。
+   */
+  describe('併存（同じ runnerId を名乗る器が2台以上。#200）', () => {
+    /** 同じ `runnerId` を名乗る2台目を、別の label で名簿へ足す。 */
+    async function withDuplicate(h: Harness): Promise<LeasedRunner> {
+      const duplicate = new LeasedRunner('runner-primary');
+      await h.registry.register({ label: 'http://runner-dup:4518', open: async () => duplicate });
+      return duplicate;
+    }
+
+    it('併存では resume を1本も出さない', async () => {
+      const h = await harnessOf();
+      const duplicate = await withDuplicate(h);
+      await h.stores.jobs.putJob(runningJob(leaseHeldBy('boot-1')));
+
+      const restored = await h.pool.restore();
+
+      expect(restored).toEqual([]);
+      expect(h.runner.resumes).toEqual([]);
+      expect(duplicate.resumes).toEqual([]);
+      // **貸し出しを書き換えていない**（`held` と同じ扱い。書けたことを条件にする
+      // 「奪う操作」を通していない）。
+      expect((await jobOf(h.stores))?.lease).toMatchObject({ instanceId: 'boot-1', fence: 4 });
+
+      await h.close();
+    });
+
+    /**
+     * **`unheld` はここでも通る（残る穴。#200「6. 塞げない部分」）。**
+     * 貸し出しの記録が無い委譲は、併存の下でも締め出さない——`unheld` 自身の
+     * 既存の約束（この欄より前の委譲を締め出さない）を、併存の穴を塞ぐために
+     * 壊さない、という意図した挙動である。
+     */
+    it('unheld（貸し出しの記録が無い）は併存でも従来どおり引き取る（残る穴）', async () => {
+      const h = await harnessOf();
+      await withDuplicate(h);
+      await h.stores.jobs.putJob(runningJob(undefined));
+
+      await h.pool.restore();
+
+      expect(h.runner.resumes).toHaveLength(1);
+
+      await h.close();
+    });
+
+    it('日誌に残る根拠が「時間では解けない」と分かる形である（held の言い方とは違う）', async () => {
+      const h = await harnessOf();
+      await withDuplicate(h);
+      await h.stores.jobs.putJob(runningJob(leaseHeldBy('boot-1')));
+
+      await h.pool.restore();
+
+      const decided = (await h.journal()).filter((entry) => entry.type === 'decision');
+      const text = decided
+        .map((entry) => (entry.type === 'decision' ? `${entry.decision}\n${entry.grounds}` : ''))
+        .join('\n');
+      expect(text).toContain('引き取りを見送った');
+      expect(text).toContain('時間では解けない');
+      // 台数（併存であること自体）も分かる。
+      expect(text).toContain('2 台');
+      // `held` のときの言い方（期限が切れれば自動で挑み直す）はここでは出ない。
+      expect(text).not.toContain('期限が切れたら自動で挑み直す');
+
+      await h.close();
+    });
+
+    it('manager_send の応答が「起こし直すな」と、何をすれば解けるかを言う', async () => {
+      const h = await harnessOf();
+      await withDuplicate(h);
+      await h.stores.jobs.putJob(runningJob(leaseHeldBy('boot-1')));
+
+      const result = await h.pool.send('mgr-1', '続けて');
+
+      expect(result.outcome).toBe('unknown');
+      expect(result.detail).toContain('新しく起こし直さないこと');
+      expect(result.detail).toContain('時間では解けない');
+      // 「期限が切れれば自動で引き取る」と書いて待たせない（held の言い方と混ぜない）。
+      expect(result.detail).not.toContain('期限が切れれば自動で引き取る');
+      // 直し方（何をすれば解けるか）まで届く。
+      expect(result.detail).toContain('ALTEROID_RUNNER_ID');
+
+      await h.close();
+    });
   });
 });

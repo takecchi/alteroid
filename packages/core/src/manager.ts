@@ -825,7 +825,7 @@ class Pool implements ManagerPool {
          */
         return {
           outcome: 'unknown',
-          detail: resumeFailureDetail(managerId, resumed, record.leaseRefusal?.detail),
+          detail: resumeFailureDetail(managerId, resumed, record.leaseRefusal),
         };
       }
     } else {
@@ -1150,7 +1150,7 @@ class Pool implements ManagerPool {
           // 引き取らなかったことは判断であって欠落ではない（根拠も一緒に残す）。
           await this.#journal({
             type: 'decision',
-            decision: `[${job.id}] 引き取りを見送った（貸し出し期限。期限が切れたら自動で挑み直す）`,
+            decision: leaseRefusalDecision(job.id, record.leaseRefusal?.claimableAt),
             grounds: record.leaseRefusal?.detail ?? '（根拠を取れなかった）',
           });
           this.#scheduleReattach(runner.runnerId);
@@ -1544,7 +1544,7 @@ class Pool implements ManagerPool {
             if (!refusedBefore) {
               await this.#journal({
                 type: 'decision',
-                decision: `[${job.id}] 引き取りを見送った（貸し出し期限。期限が切れたら自動で挑み直す）`,
+                decision: leaseRefusalDecision(job.id, record.leaseRefusal?.claimableAt),
                 grounds: record.leaseRefusal?.detail ?? '（根拠を取れなかった）',
               });
             }
@@ -1831,18 +1831,29 @@ class Pool implements ManagerPool {
   /**
    * 名簿から「**いまその宛先に応えているプロセス**」を引く（貸し出し判定の材料）。
    *
-   * **同じ名前を名乗る器が2台開いているときは、名乗りを採らない。** `RunnerEntry` は
-   * label ごとなので同じ `runnerId` の行が2つ並びうる。そのとき「どちらの
-   * `instanceId` と突き合わせるか」を決める材料はここに無く、片方を選べば
-   * **話しかける相手（`Registry#get` の線形一致）と判定した相手が食い違いうる** —
-   * 食い違ったまま `same-holder` と答えるのが一番危ない（奪っていないつもりで奪う）。
-   * だから判定材料を返さず、判定は `undecidable` へ倒す（roadmap M5 PR4 の申し送り
-   * 「同じ `runner_id` を名乗る2台」は、ここでも解けていない）。
+   * **同じ名前を名乗る器が2台以上開いているときは、instanceId を採らず台数を返す。**
+   * `RunnerEntry` は label ごとなので同じ `runnerId` の行が2つ並びうる。そのとき
+   * 「どちらの `instanceId` と突き合わせるか」を決める材料はここに無く、片方を
+   * 選べば**話しかける相手（`Registry#get` の線形一致）と判定した相手が食い違い
+   * うる** — 食い違ったまま `same-holder` と答えるのが一番危ない（奪っていない
+   * つもりで奪う）。**だから instanceId は返さず、代わりに台数（`duplicates`）を
+   * 返して `judgeLease` を `ambiguous` へ倒す**（#200）。
+   *
+   * `matches.length === 0`（名簿に居ない）は「一意でない」とは別なので、こちらは
+   * 従来どおり `{ runnerId }` だけを返す — `judgeLease` はそのまま `undecidable`
+   * 系の判定へ進む。
+   *
+   * roadmap M5 PR4 の申し送り「同じ `runner_id` を名乗る2台」は、ここでは
+   * **解けてはいない** — 締め出された側を止める材料はまだ無い（#200 の設計提案
+   * 「6. 塞げない部分」）。ここで変わったのは「材料を捨てて `undecidable` へ倒す」
+   * から「材料（台数）を渡して `ambiguous` へ倒す」への切り替えである。
    */
   #sighting(runnerId: string): LeaseSighting {
     const matches = this.#runners.entries().filter((entry) => entry.runnerId === runnerId);
     const only = matches.length === 1 ? matches[0] : undefined;
-    if (only === undefined) return { runnerId };
+    if (only === undefined) {
+      return matches.length > 1 ? { runnerId, duplicates: matches.length } : { runnerId };
+    }
     const since = only.instanceSince === undefined ? NaN : Date.parse(only.instanceSince);
     return {
       runnerId,
@@ -2896,6 +2907,28 @@ function shouldEscalateDenial(count: number): boolean {
  * 器に永続化が無ければコミット前の変更は消えている。
  */
 /**
+ * 貸し出し期限で引き取りを見送ったことを日誌へ残す1行。
+ *
+ * **`#restoreJobs`（起動時の引き取り）と `#reattach`（runner 入れ替え後の取り
+ * 直し）の共有ヘルパ。** 同じ判断を2箇所に別々に書いていたので、直すときに
+ * 片方だけ直る形になりえた（このヘルパを起こす前の姿がまさにそれだった —
+ * どちらも逐語で同じ文字列を書いていた）。
+ *
+ * **`claimableAt` の有無で言い方を変える。** 在れば `held`（`judgeLease` が
+ * 時間で解けると言っている）で、従来どおり「期限が切れたら自動で挑み直す」と
+ * 言ってよい。無ければ `ambiguous` など時間では解けない判定（`lease.ts` の
+ * `LeaseVerdict`）で、「期限が切れたら」と書くと、人間が `ALTEROID_RUNNER_ID`
+ * を直すまで永久に来ない解決を待つだけの記録になる（#200）。
+ */
+function leaseRefusalDecision(jobId: string, claimableAt: number | undefined): string {
+  const resolution =
+    claimableAt === undefined
+      ? '時間では解けない（人間が直すまで解けない）。挑み直しは続ける'
+      : '期限が切れたら自動で挑み直す';
+  return `[${jobId}] 引き取りを見送った（貸し出しの関門。${resolution}）`;
+}
+
+/**
  * resume が `'resumed'` にならなかったときに `manager_send` が返す1行。
  *
  * **種類ごとに違うことを言う。** ここは全部を「`session_id` を持っておらず、
@@ -2914,20 +2947,35 @@ function resumeFailureDetail(
   managerId: string,
   outcome: Exclude<ResumeOutcome, 'resumed'>,
   /**
-   * 貸し出し期限で断られたときの根拠（誰が握っていて、いつから引き取れるか）。
+   * 貸し出しの関門で断られたときの根拠（誰が握っていて、いつから引き取れるか）。
    *
    * **判定側にしか無い情報なので渡してもらう**（`judgeLease` の答えを
-   * `describeVerdict` が1行にしたもの）。取れなかったことを黙って埋めない。
+   * `describeVerdict` が1行にしたもの、および `claimableAt` の有無）。取れな
+   * かったことを黙って埋めない。
+   *
+   * **`claimableAt` の有無で言い方を変える理由は`leaseRefusalDecision` と
+   * 同じだが、ここはそれ以上に大事である。** これは `manager_send` の応答と
+   * してクローンへ直接届く1行で、読んだ側はここに書かれた通りに行動する。
+   * `held`（`claimableAt` 在り）を「期限が切れれば自動で引き取る」と言うのは
+   * 正しいが、`ambiguous`（`claimableAt` 無し）でも同じ文言を返すと、読んだ
+   * 側は「待てば解ける」と誤って信じて待ち続ける — 実際には人間が
+   * `ALTEROID_RUNNER_ID` を直すまで永久に解けない。**「新しく起こし直さない
+   * こと」は両方で必ず言う**（消すと二重実行の入口になる）。
    */
-  leaseDetail?: string,
+  leaseRefusal?: { detail: string; claimableAt?: number },
 ): string {
   switch (outcome) {
-    case 'held-by-lease':
+    case 'held-by-lease': {
+      const detail = leaseRefusal?.detail ?? '（根拠を取れなかった）';
+      const resolution =
+        leaseRefusal?.claimableAt === undefined
+          ? '時間では解けない（人間が ALTEROID_RUNNER_ID 等を直すまで解けない）'
+          : '期限が切れれば自動で引き取る';
       return (
-        `${managerId} はまだ前の器が握っている（貸し出し期限）。**新しく起こし直さないこと** — ` +
-        `起こし直すと同じ仕事が2本になる。期限が切れれば自動で引き取る: ` +
-        `${leaseDetail ?? '（根拠を取れなかった）'}`
+        `${managerId} はまだ前の器が握っている（貸し出しの関門）。**新しく起こし直さないこと** — ` +
+        `起こし直すと同じ仕事が2本になる。${resolution}: ${detail}`
       );
+    }
     case 'no-session':
       return `${managerId} は session_id を持っておらず、続きへ戻れない。新しく起こし直すこと。`;
     case 'unreadable':

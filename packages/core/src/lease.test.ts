@@ -278,6 +278,92 @@ describe('judgeLease', () => {
   });
 });
 
+/**
+ * 併存（同じ `runnerId` を名乗る器が2台以上開いている。#200）。
+ *
+ * **`undecidable` とは別の答えである。** あちらは「分からない」、こちらは
+ * 「宛先が一意でないと分かっている」。同じ答えへ畳むと、`undecidable` の
+ * 「引き取ってよい」がこちらの危険まで通してしまう。
+ */
+describe('judgeLease > 併存（同じ runnerId を名乗る器が2台以上）', () => {
+  it('併存では ambiguous を返し、mayClaim は false', () => {
+    const lease = leaseAt();
+    const verdict = judgeLease({
+      lease,
+      now: T0 + 1_000,
+      answering: { runnerId: 'runner-primary', duplicates: 2 },
+    });
+    expect(verdict).toEqual({ kind: 'ambiguous', lease, duplicates: 2 });
+    expect(mayClaim(verdict)).toBe(false);
+    // **時間では解けない。** `held` と違って claimableAt を持たない。
+    expect(verdict).not.toHaveProperty('claimableAt');
+    expect(describeVerdict(verdict)).toContain('引き取らない');
+    expect(describeVerdict(verdict)).toContain('ALTEROID_RUNNER_ID');
+  });
+
+  /**
+   * ⭐ **素朴な形にしない根拠の固定。**
+   *
+   * `instanceId` が入れ替わっており、`instanceSince` が畳む猶予（`LEASE_DRAIN_MS`
+   * + `LEASE_MARGIN_MS`）より古い——併存でなければ `decideAfterSwap` が
+   * `expired: 'drained'` を出す時刻条件そのものである。**併存では、この条件を
+   * 満たしていても `drained` にならず `ambiguous` のままであること。**
+   *
+   * これが無いと、後から誰かが「`instanceId` を見て `decideAfterSwap` に流せば
+   * 判定できるじゃないか」と言って戻す——併存はそもそも「入れ替え」ではないので
+   * `drained` の前提（器が古いプロセスを畳む）が最初から成り立っていない。
+   */
+  it('併存で、入れ替えなら drained が出る時刻条件を作っても、drained にならず ambiguous のままである', () => {
+    const lease = leaseAt();
+    const swapAt = T0 + 10_000;
+    const now = swapAt + LEASE_DRAIN_MS + LEASE_MARGIN_MS; // drained が出るはずの時刻
+    const verdict = judgeLease({
+      lease,
+      now,
+      answering: {
+        runnerId: 'runner-primary',
+        instanceId: 'boot-2',
+        instanceSince: swapAt,
+        duplicates: 2,
+      },
+    });
+    expect(verdict.kind).toBe('ambiguous');
+    expect(verdict.kind).not.toBe('expired');
+    expect(mayClaim(verdict)).toBe(false);
+  });
+
+  it('unheld は併存でも従来どおり通る（残る穴。#200「6. 塞げない部分」）', () => {
+    const verdict = judgeLease({
+      lease: undefined,
+      now: T0,
+      answering: { runnerId: 'runner-primary', duplicates: 2 },
+    });
+    expect(verdict).toEqual({ kind: 'unheld' });
+    expect(mayClaim(verdict)).toBe(true);
+  });
+
+  it('released は併存でも従来どおり通る（持ち主が自分で返したことは併存と無関係）', () => {
+    const lease = leaseAt({ releasedAt: new Date(T0).toISOString() });
+    const verdict = judgeLease({
+      lease,
+      now: T0 + 1_000,
+      answering: { runnerId: 'runner-primary', duplicates: 2 },
+    });
+    expect(verdict).toEqual({ kind: 'released', lease });
+    expect(mayClaim(verdict)).toBe(true);
+  });
+
+  it('名乗らない runner（duplicates 無し）は従来どおり undecidable のままで、引き取れる', () => {
+    const verdict = judgeLease({
+      lease: leaseAt(),
+      now: T0 + 1_000,
+      answering: { runnerId: 'runner-primary' },
+    });
+    expect(verdict.kind).toBe('undecidable');
+    expect(mayClaim(verdict)).toBe(true);
+  });
+});
+
 describe('grantLease / touchLease', () => {
   it('貸し直すたびに世代が1つ進む（古い命令を runner が見分けられる）', () => {
     const first = grantLease({ previous: undefined, runnerId: 'runner-primary', now: T0 });
