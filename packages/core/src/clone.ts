@@ -489,6 +489,11 @@ class Clone implements CloneHost {
    * （器＝`stores.inbox` にも未読のまま残っている）ので、途中でプロセスが
    * 死んでも `#restoreUnread` が拾い直す。この配列はそれとは別に、**同じ
    * 器の中身をメモリ上でも順序どおり並べておく**ためのものである。
+   *
+   * **中身を持たない合図（`isTick`）の畳み込みは、ここも見る**
+   * （`#foldsIntoHeldTick`）。`post` の畳み込みは `Inbox#hasPending`＝待ち行列
+   * しか見ないので、ここに移った分は向こうからは見えない。両方を見なければ、
+   * 枠が閉じている間だけ畳み込みが効かなくなる。
    */
   readonly #deferred: InboxEvent[] = [];
   /**
@@ -1170,7 +1175,31 @@ class Clone implements CloneHost {
     // 「もう誰も待たない」という印だけである。
     this.#recorded.delete(event.id);
 
-    if (defer) {
+    if (defer && this.#foldsIntoHeldTick(event)) {
+      // **中身を持たない合図で在庫を作らない。** `post` の畳み込みと同じ規則
+      // （`isTick` の doc「読まれる前の重複には情報が無い」）を、保持した側にも
+      // 適用する地点である。規則は「読まれる前」で書かれているのに、`post` は
+      // `Inbox#hasPending`（＝待ち行列）しか見ない。枠で保持した分は `#deferred`
+      // に居て待ち行列には無いので、**合図が溜まる唯一の状況＝枠が閉じている間
+      // だけ、規則が静かに効かなくなっていた**（実測: 枠を閉じたまま発意 tick を
+      // 5回送ると5件とも別々に保持される）。
+      //
+      // **`post` 側では畳めない。ここでなければならない。** `post` で return すると
+      // 受信箱へ何も積まれないので、`#releaseRequested` を立てても `#pump` がその印を
+      // 見に来ない（解除ブロックの doc の「どちらの道でも待ち行列は空でない」が
+      // 成り立たなくなる）。tick は**枠が開いたかを試す唯一の定期的な契機**なので、
+      // そこで畳むと再試行そのものが静かに止まる。ここまで通っていれば、その合図は
+      // 既に解除を1回試させた後である ＝ **試行の回数は1回も減らない。**
+      //
+      // 畳むのは**いま届いた新しい方だけ**で、先に保持している同じ tick は1件も
+      // 動かない（FIFO も断り書きも `#heldForUsage` も触らない）。
+      await this.#noteFoldedTick(event);
+      // 器の未読からも外す。**残すと、この1件だけが起動のたびに配り直されて
+      // クローンのターンを焼く**（`#forget` の doc）。吸収した側は未読のまま残るので、
+      // 「見に行け」という仕事そのものは失われない。
+      this.#heldForUsage.delete(event.id);
+      await this.#forget(event);
+    } else if (defer) {
       this.#deferred.push(event);
       // 保持したことを覚えておく（`#heldForUsage` の doc）。**印を消すのは
       // `#forget` と同じ側である** — 保持している間に消すと、解除で戻ってきた
@@ -1192,6 +1221,44 @@ class Clone implements CloneHost {
     const done = this.#completions.get(event.id);
     this.#completions.delete(event.id);
     done?.();
+  }
+
+  /**
+   * いま保持しようとしている合図を、既に保持している同じ tick へ畳んでよいか。
+   *
+   * **畳めるのは「中身を持たない合図」だけである**（`isTick`）。人間の発言・
+   * マネージャーからの一件・外部イベント・蒸留・承認の回答は、`isTick` が偽を
+   * 返すので構造上ここを通らない。`timer` は `kind` / `target` / `cause` が
+   * 揃ったときだけ同じ tick である（別の日の日報は別の仕事 — `isSameTick`）。
+   *
+   * **文言では判定しない。** 判定は `isSameTick`（型と構造化フィールドだけを見る）
+   * に委ねてあり、本文の一致は1文字も見ていない。
+   */
+  #foldsIntoHeldTick(event: InboxEvent): boolean {
+    return isTick(event) && this.#deferred.some((held) => isSameTick(held, event));
+  }
+
+  /**
+   * 畳んだことを日誌へ残す。
+   *
+   * **畳む仕組みを入れるなら、畳んだ跡が残らなければならない。** この畳み込みは
+   * 器にも台帳にも何も残さない（`#forget` で未読から外す）ので、**ここで書かな
+   * ければ「静かに消えた」と区別が付かない。** 判定が間違っていたとき、記録が
+   * 在れば後から気づけるが、無ければ永久に見えない。
+   *
+   * 件数を添えるのは、後から数え直せるようにするためである（枠が閉じている間に
+   * 何件ぶん畳んだのかは、この行を数えれば出る）。
+   */
+  async #noteFoldedTick(event: InboxEvent): Promise<void> {
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text:
+        `枠で保持している同じ合図（${event.type}）が既にあるので、新しく届いた分を畳んだ。` +
+        `中身は処理の瞬間に組み立て直すので、読まれる前の重複には情報が無い（保持中の同種: ` +
+        `${this.#deferred.filter((held) => isSameTick(held, event)).length} 件）。`,
+    });
   }
 
   #conversationOf(event: InboxEvent): string | null {
