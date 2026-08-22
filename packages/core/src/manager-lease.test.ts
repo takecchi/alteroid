@@ -6,6 +6,7 @@ import {
   createRunnerRegistry,
   type RunnerClient,
   type RunnerCredentialFingerprint,
+  type RunnerEvent,
   type RunnerManagerState,
   type RunnerProfileFingerprint,
   type RunnerProfileResult,
@@ -68,7 +69,12 @@ class LeasedRunner implements RunnerClient {
     });
   }
 
-  async connect(): Promise<void> {}
+  /** デーモンが張った受け口。**テストから runner 発の出来事を流すために持つ。** */
+  emit: ((event: RunnerEvent) => void) | undefined;
+
+  async connect(onEvent: (event: RunnerEvent) => void): Promise<void> {
+    this.emit = onEvent;
+  }
   async start(): Promise<void> {}
   async resume(command: RunnerResumeCommand): Promise<void> {
     this.resumes.push(command);
@@ -333,6 +339,58 @@ describe('引き取りの関門（貸し出し期限）', () => {
     h.advance(LEASE_DRAIN_MS + LEASE_MARGIN_MS + 1_000);
     const delivered = await h.pool.send('mgr-1', '続けて');
     expect(delivered.outcome).toBe('delivered');
+    expect(h.runner.resumes).toHaveLength(1);
+
+    await h.close();
+  });
+
+  /**
+   * **自己失効は「終わった」ではない。**
+   *
+   * runner が「デーモンと連絡が取れない」と言って自分で畳んだとき、そのプロセスからは
+   * 続けられないが仕事はまだ owed である。`event.status`（`lost`）をそのまま台帳へ
+   * 書くと `#restoreJobs` も `#reattach` も見送るので、**二重実行を止めた代わりに
+   * 誰も拾わない仕事ができる。** それを起こさないことを固定する。
+   */
+  it('自己失効の closed では状態を動かさず、貸し出しだけ返して引き取り直せる', async () => {
+    const h = await harnessOf();
+    await h.stores.jobs.putJob(runningJob(leaseHeldBy('boot-2', 3)));
+    h.runner.hold('mgr-1');
+    await h.pool.restore();
+    // 繋ぎ直しただけ（resume は出ていない）。
+    expect(h.runner.resumes).toEqual([]);
+
+    h.runner.emit?.({
+      type: 'closed',
+      managerId: 'mgr-1',
+      status: 'lost',
+      reason: 'デーモンと連絡が取れないので貸し出し期限が切れた（自己失効）。',
+      selfFenced: true,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const after = await jobOf(h.stores);
+    // **状態は動かさない**（`lost` にすると自動の引き取りが二度と触らない）。
+    expect(after?.status).toBe('running');
+    // **貸し出しは返す**（次の引き取りが猶予を待たない）。
+    expect(after?.lease).toBeUndefined();
+    // クローンへ黙っていない。
+    const told = (await h.journal()).map((entry) =>
+      entry.type === 'exchange' ? entry.text : entry.type,
+    );
+    expect(told.join('\n')).toContain('自己失効');
+
+    /*
+     * そして実際に引き取れる（誰も拾わない仕事にしない）。
+     *
+     * **`restore()` ではなく取り直し（`hello`）の経路で確かめる。** `restore()` は
+     * 既に像を持っている委譲を見送る（`#records.has` で `continue`）ので、自己失効の
+     * 後に効くのはこちら側である — 自己失効で像を外していないことと対になっている。
+     * 実機でも、連絡が戻れば SSE が名乗り直す。
+     */
+    h.runner.sessions.delete('mgr-1');
+    h.runner.emit?.({ type: 'hello', runnerId: 'runner-primary' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
     expect(h.runner.resumes).toHaveLength(1);
 
     await h.close();

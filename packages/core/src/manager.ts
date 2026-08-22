@@ -2139,6 +2139,46 @@ class Pool implements ManagerPool {
           });
           return;
         }
+        /*
+         * **自己失効は「終わった」ではない（M5 PR4）。**
+         *
+         * runner が「デーモンと連絡が取れないので貸し出し期限が切れた」と言って畳んだ
+         * 場合、そのプロセスからは続けられないが、**仕事そのものはまだ owed である**
+         * （生ログは預かってあるので別の器で続けられる）。ここで `event.status`
+         * （`lost`）をそのまま台帳へ書くと、`#restoreJobs` は `lost` を引き取らず、
+         * `#reattach` も `running` / `waiting_human` 以外を見送るので、
+         * **二重実行を止めた代わりに誰も拾わない仕事ができる。**
+         *
+         * だから状態は動かさず、貸し出しだけ返して挑み直しの梯子へ載せる。**判定は
+         * 構造化された印だけで行う**（`reason` の文字列一致で判定すると、マネージャーが
+         * 同じ文を書いた回まで巻き込む — `sdk-failure.ts` と同じ理由）。
+         */
+        if (event.selfFenced === true) {
+          record.waiting = [];
+          record.attached = false;
+          delete record.job.lease;
+          await this.#persist(record);
+          await this.#journal({
+            type: 'exchange',
+            with: 'manager',
+            role: 'inbound',
+            text:
+              `[${event.managerId}] 器が貸し出し期限で自分で畳んだ（自己失効）。` +
+              `台帳の状態（${record.job.status}）は動かさず、別の器で続きを起こし直す: ${event.reason}`,
+          });
+          // **クローンへも知らせる。** 黙って止まったように見えるのが一番まずい
+          // （引き取りが走るまでの間、この委譲は誰の手も動いていない）。
+          this.#emit(
+            event.managerId,
+            'report',
+            `器がデーモンと連絡を失い、貸し出し期限で自分で畳みました（自己失効）。` +
+              `この委譲は終わっていません — 引き取りを自動で挑み直します: ${event.reason}`,
+          );
+          // **像から外さない**（終わっていない）。梯子へ載せて自分で挑み直す。
+          if (record.job.runnerId !== undefined) this.#scheduleReattach(record.job.runnerId);
+          return;
+        }
+
         record.job.status = event.status;
         record.waiting = [];
         record.attached = false;
