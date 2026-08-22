@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { createManagerPool, type ManagerPool } from './manager.js';
 import {
   createRunnerRegistry,
+  type RunnerAnswerCommand,
   type RunnerClient,
   type RunnerCredentialFingerprint,
+  type RunnerEvent,
   type RunnerManagerState,
   type RunnerProfileFingerprint,
   type RunnerProfileResult,
@@ -27,8 +29,9 @@ import { createMemoryStores } from './testing.js';
  * 区別できない（`manager.test.ts` の「別の runner のジョブには手を出さない」は
  * 1台構成で、*触らない*ことは見ているが *正しい1台へ届く*ことは見ていない）。
  *
- * ここで固定するのは、**3台を同時に登録した状態で** `#runnerOf` を通る4つの経路
- * （`send` / `abort` / `transcript` / `restore`）が、
+ * ここで固定するのは、**3台を同時に登録した状態で** `#runnerOf` を通る経路
+ * （`send` / `abort` / `transcript` / `restore`、および `send` の中でも**許可確認
+ * の回答**が通す `RunnerClient#answer`）が、
  *
  * 1. 台帳の `runnerId` が指す器へ届き、
  * 2. **他の器は1度も受けていない**（「届いた」だけでは全台配布でも通ってしまう）、
@@ -37,6 +40,14 @@ import { createMemoryStores } from './testing.js';
  * ことである。壊れたときに起きるのは「クローンが A に出した指示が B のマネージャー
  * へ届く」＝別の仕事の文脈に他人の指示が混ざる、である。台帳にも日誌にも
  * 「届けた」としか残らないので、壊れても誰も気づけない形の壊れ方をする。
+ *
+ * **`answer` だけは他の経路と違い、まず `waiting` へ積む前段が要る。** `Pool#send`
+ * は `record.waiting` に一致する `requestId` があるときだけ `runner.answer(...)`
+ * を呼ぶ（`manager.ts:766` 付近）。`waiting` は runner の `connect(onEvent)` で
+ * 渡された `onEvent` へ `{type:'ask', ...}` を流して積む（`permission-resend.test.ts`
+ * と同じ形）。**だから `StickyRunner#connect` は `onEvent` を捨てずに覚え、
+ * テストから `ask()` で流せるようにしてある**（元は空実装で、他の4経路の保証には
+ * 要らなかった）。
  *
  * **最後の1本（`runner-dup`）は現状の穴を固定している。** 直っていることを
  * 主張するテストではない — 詳細はそのテストのコメント。
@@ -59,10 +70,29 @@ class StickyRunner implements RunnerClient {
   readonly resumes: RunnerResumeCommand[] = [];
   readonly stops: string[] = [];
   readonly transcripts: string[] = [];
-  readonly answers: string[] = [];
+  readonly answers: { managerId: string; answer: RunnerAnswerCommand }[] = [];
+  /**
+   * `connect()` が渡された `onEvent` を覚えておく先。**元は空実装で捨てていた** —
+   * `send` / `abort` / `transcript` / `restore` の4経路はここを使わずに保証できて
+   * いたが、許可確認は `Pool` 側の `waiting` に積まれて初めて `answer` が呼ばれる
+   * ので、積む手段（`ask()`）が要る。
+   */
+  #onEvent: ((event: RunnerEvent) => void) | null = null;
 
   constructor(runnerId: string) {
     this.runnerId = runnerId;
+  }
+
+  /**
+   * この器から、指定した managerId 宛の許可確認をクローンへ流す。
+   * `connect()` 前（＝ `Pool` がまだ繋いでいない）に呼ぶと、静かに何も起きずに
+   * テストが空振りするのを避けるため例外にする。
+   */
+  ask(managerId: string, requestId: string, summary = '許可確認'): void {
+    if (this.#onEvent === null) {
+      throw new Error(`${this.runnerId} はまだ connect していない（ask を流せない）`);
+    }
+    this.#onEvent({ type: 'ask', managerId, requestId, kind: 'permission', summary });
   }
 
   /**
@@ -94,7 +124,9 @@ class StickyRunner implements RunnerClient {
     });
   }
 
-  async connect(): Promise<void> {}
+  async connect(onEvent: (event: RunnerEvent) => void): Promise<void> {
+    this.#onEvent = onEvent;
+  }
   async start(command: { managerId: string }): Promise<void> {
     this.hold(command.managerId);
   }
@@ -105,9 +137,21 @@ class StickyRunner implements RunnerClient {
   async send(managerId: string, text: string): Promise<void> {
     this.sends.push({ managerId, text });
   }
-  async answer(managerId: string): Promise<boolean> {
-    this.answers.push(managerId);
-    return false;
+  async answer(managerId: string, answer: RunnerAnswerCommand): Promise<boolean> {
+    this.answers.push({ managerId, answer });
+    // **解けたことにする。** `false` を返すと `Pool#send` は `outcome: 'unknown'`
+    // （「runner 側で既に解けている」）を返し、`answered` を主張するテストが
+    // 立たない。実 runner は解けていれば `true` を返す（`permission-resend.test.ts`
+    // の1本目と同じ約束）。
+    //
+    // **`settled` も流す。** `Pool#send` の `answered` 分岐は自分では
+    // `record.waiting` から取り除かない — 実 runner（`runner.ts:1944`）が
+    // `canUseTool` の解決時に `settled` を上げ、それを `#onEvent` が受けて
+    // 消す形になっている（`permission-resend.test.ts` と同じ約束）。ここで
+    // 流さないと、答えたのに `waiting` が残ったままになり「解けた」を
+    // 主張できない。
+    this.#onEvent?.({ type: 'settled', managerId, requestId: answer.requestId });
+    return true;
   }
   async stop(managerId: string): Promise<void> {
     this.stops.push(managerId);
@@ -183,6 +227,13 @@ async function fleetOf(specs: { label: string; runnerId: string }[]): Promise<Fl
     },
   };
 }
+
+/**
+ * `StickyRunner#ask()` は `connect()` で覚えた `onEvent` を呼ぶだけで、その先
+ * （`Pool#onEvent` の中の `persist` 等）は待たずに戻る（`permission-resend.test.ts`
+ * と同じ形）。台帳へ積まれたことを見る前に1マクロタスク待つ。
+ */
+const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 /** 器3台ぶんの名簿（label は宛先の形に寄せてある）。 */
 const THREE = [
@@ -381,6 +432,112 @@ describe('manager_id → runner_id の貼り付き（M5 受け入れ基準2 / 3�
     expect(dup1.resumes.length + dup2.resumes.length).toBe(1);
     // 名前が違う器には流れない（線形一致でも宛先の名前そのものは効いている）。
     expect(other.receivedCount).toBe(0);
+
+    await fleet.close();
+  });
+
+  /**
+   * roadmap M5 受け入れ基準2 が言う「`manager_send` / **許可確認** / 報告」の
+   * うち、これまで2台以上で通したテストが無かったのが許可確認の回答である
+   * （リポジトリ全体で `.answer(` を呼ぶテストはこれが最初）。`Pool#send` は
+   * `record.waiting` に一致があるときだけ `runner.answer(...)` を呼ぶので、
+   * まず `StickyRunner#ask()` で3台のうち1台（b）だけに確認を積んでから答える。
+   */
+  it('許可確認の回答（answer）は台帳の runnerId が指す器にだけ届き、他の2台は1度も受けない', async () => {
+    const fleet = await attachedFleet();
+    const [a, b, c] = fleet.runners as [StickyRunner, StickyRunner, StickyRunner];
+    // 繋ぎ直しただけで、まだ誰も受けていないこと（この後の観測の起点）。
+    expect([a.receivedCount, b.receivedCount, c.receivedCount]).toEqual([0, 0, 0]);
+
+    // b だけに、許可確認の待ちを積む（実機の `ask` イベントに相当）。
+    b.ask('mgr-on-runner-b', 'req-1', 'Bash の実行許可: ls');
+    await tick();
+    expect(
+      (await fleet.pool.list()).find((m) => m.managerId === 'mgr-on-runner-b')?.waiting,
+    ).toEqual([{ requestId: 'req-1', summary: 'Bash の実行許可: ls' }]);
+
+    const result = await fleet.pool.send('mgr-on-runner-b', '許可します', {
+      requestId: 'req-1',
+      decision: 'allow',
+    });
+
+    expect(result.outcome).toBe('answered');
+    // **引数の中身まで見る。** 宛先だけを数えると、requestId や decision を
+    // 取り違えた空同然の呼び出しでも緑になる。
+    expect(b.answers).toEqual([
+      {
+        managerId: 'mgr-on-runner-b',
+        answer: { requestId: 'req-1', message: '許可します', decision: 'allow' },
+      },
+    ]);
+    // **ここが本題。** 全台へ配る実装でも `b.answers` は埋まるので、他の2台が
+    // 「1度も受けていない」ことを見ないとこの保証は成立しない。
+    expect(a.receivedCount).toBe(0);
+    expect(c.receivedCount).toBe(0);
+    // 答えた後は b の待ちも消えている（`answered` が字面だけでないことの裏付け）。
+    // `settled` は `answer()` の中から fire-and-forget で流れるので1tick待つ
+    // （permission-resend.test.ts と同じ形）。
+    await tick();
+    expect(
+      (await fleet.pool.list()).find((m) => m.managerId === 'mgr-on-runner-b')?.waiting,
+    ).toEqual([]);
+
+    await fleet.close();
+  });
+
+  /**
+   * 2台が**同時に、同じ requestId で**許可確認を待っている状態を作る。
+   *
+   * 実機では `requestId` は runner 側（SDK の `tool_use_id` 相当）が振るので、
+   * 別々のマネージャー・別々の器で偶然同じ値になることはありうる。宛先の解決
+   * （`#runnerOf`）は `requestId` ではなく `managerId → job.runnerId` を見ている
+   * ので衝突しないはずだが、それを2台以上の構成で固定したテストが無かった。
+   * 片方（c）へ答えても、もう片方（a）の待ちは解けず、a の器も一度も受けない
+   * ことを見る。
+   *
+   * **答える側を意図的に a ではなく c にしてある。** `THREE` の並びは a が
+   * 先頭なので、`#runnerOf` が壊れて「常に名簿の先頭を返す」形（実際に壊して
+   * 確かめた壊れ方）になっても、答える相手が a なら先頭と一致してしまい
+   * 偶然通ってしまう。**c を答える相手にすることで、その偶然を潰してある。**
+   */
+  it('同じ requestId を2つの器が同時に持っていても、答えは managerId が指す器にしか届かない', async () => {
+    const fleet = await attachedFleet();
+    const [a, b, c] = fleet.runners as [StickyRunner, StickyRunner, StickyRunner];
+
+    a.ask('mgr-on-runner-a', 'req-shared', 'A の確認');
+    c.ask('mgr-on-runner-c', 'req-shared', 'C の確認');
+    await tick();
+    const waitingOf = async (managerId: string) =>
+      (await fleet.pool.list()).find((m) => m.managerId === managerId)?.waiting;
+    expect(await waitingOf('mgr-on-runner-a')).toEqual([
+      { requestId: 'req-shared', summary: 'A の確認' },
+    ]);
+    expect(await waitingOf('mgr-on-runner-c')).toEqual([
+      { requestId: 'req-shared', summary: 'C の確認' },
+    ]);
+
+    const result = await fleet.pool.send('mgr-on-runner-c', 'C を許可', {
+      requestId: 'req-shared',
+      decision: 'allow',
+    });
+
+    expect(result.outcome).toBe('answered');
+    expect(c.answers).toEqual([
+      {
+        managerId: 'mgr-on-runner-c',
+        answer: { requestId: 'req-shared', message: 'C を許可', decision: 'allow' },
+      },
+    ]);
+    // c の `settled` は fire-and-forget なので1tick待ってから確かめる
+    // （a 側は触れられないはず、というのが本題）。
+    await tick();
+    // **本題。** a の待ちは同じ requestId でも解けず残っている。
+    expect(await waitingOf('mgr-on-runner-a')).toEqual([
+      { requestId: 'req-shared', summary: 'A の確認' },
+    ]);
+    // a は一度も answer を（他の経路も）受けていない。b も無関係のまま。
+    expect(a.receivedCount).toBe(0);
+    expect(b.receivedCount).toBe(0);
 
     await fleet.close();
   });
