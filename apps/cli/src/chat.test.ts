@@ -295,6 +295,7 @@ describe('renderReport / renderReportLine', () => {
   it('一覧の行でも、印の付いた行を本文の抜粋で出さない', () => {
     const line = renderReportLine({
       date: '2026-08-20',
+      at: '2026-08-20T13:00:00.000Z',
       body: `（この日の日報は作れなかった。日誌から直接辿ること。理由: ${REASON}）`,
       unavailable: REASON,
     });
@@ -307,11 +308,37 @@ describe('renderReport / renderReportLine', () => {
   });
 
   it('一覧の行は、印が無ければこれまでどおり本文の抜粋である', () => {
-    const line = renderReportLine({ date: '2026-08-20', body: '進捗があった。' });
+    const line = renderReportLine({
+      date: '2026-08-20',
+      at: '2026-08-20T13:00:00.000Z',
+      body: '進捗があった。',
+    });
 
     expect(line).toContain('2026-08-20');
     expect(line).toContain('進捗があった。');
     expect(line).not.toContain('⚠');
+  });
+
+  /**
+   * #214: `date` だけだと同じ日に2本あると見分けが付かない。`at` を出す。
+   * ISO をそのまま出す文字列の受け渡しなので、`TZ` は結果に関与しない
+   * （`Date` を作って整形し直してはいない）。
+   */
+  it('同じ日に2本あっても at で見分けが付く（#214）', () => {
+    const morning = renderReportLine({
+      date: '2026-08-20',
+      at: '2026-08-20T00:30:00.000Z',
+      body: '朝の分。',
+    });
+    const afternoon = renderReportLine({
+      date: '2026-08-20',
+      at: '2026-08-20T13:00:00.000Z',
+      body: '午後にやり直した分。',
+    });
+
+    expect(morning).toContain('2026-08-20T00:30:00.000Z');
+    expect(afternoon).toContain('2026-08-20T13:00:00.000Z');
+    expect(morning).not.toBe(afternoon);
   });
 });
 
@@ -379,6 +406,25 @@ interface ScheduleEntryLike {
   lastRunAt?: string;
 }
 
+/** `GET /memory` が返す1件の形（`memoryDocumentMetaSchema`）。 */
+interface MemoryDocLike {
+  slug: string;
+  title: string;
+  kind: 'premise' | 'fact';
+  description?: string;
+  descriptionFreshness: { kind: 'fresh' | 'stale' | 'unknown' | 'absent' };
+  updatedAt: string;
+  createdAt: { kind: 'known'; at: string } | { kind: 'unknown' };
+}
+
+/** `GET /journal` が返す1件の形（`journalEntrySchema` の網羅はしない。テストに要る分だけ）。 */
+interface JournalEntryLike {
+  id: string;
+  at: string;
+  type: string;
+  [field: string]: unknown;
+}
+
 function stubClient(
   options: {
     commitments?: Commitment[];
@@ -411,6 +457,10 @@ function stubClient(
     approvals?: ApprovalLike[];
     /** `GET /schedule` が返す一覧。既定は空。 */
     scheduleEntries?: ScheduleEntryLike[];
+    /** `GET /memory` が返す一覧。既定は空。 */
+    memoryDocuments?: MemoryDocLike[];
+    /** `GET /journal` が返す一覧。既定は空。 */
+    journalEntries?: JournalEntryLike[];
   } = {},
 ) {
   const calls: { route: string; args: unknown }[] = [];
@@ -499,6 +549,18 @@ function stubClient(
       $get: (args: unknown) => {
         calls.push({ route: 'GET /schedule', args });
         return Promise.resolve(reply(200, { entries: options.scheduleEntries ?? [] }));
+      },
+    },
+    memory: {
+      $get: (args: unknown) => {
+        calls.push({ route: 'GET /memory', args });
+        return Promise.resolve(reply(200, { documents: options.memoryDocuments ?? [] }));
+      },
+    },
+    journal: {
+      $get: (args: unknown) => {
+        calls.push({ route: 'GET /journal', args });
+        return Promise.resolve(reply(200, { entries: options.journalEntries ?? [] }));
       },
     },
   };
@@ -1014,6 +1076,103 @@ describe('chat の /schedule', () => {
 });
 
 /**
+ * `chat` の `/memory`（`alteroid memory list` とは別の重複実装）。
+ *
+ * **同じ `GET /memory` を見ながら、ここは slug と title しか出していなかった。**
+ * #235 はトップレベルの `alteroid memory list`（`memory.ts`）に5項目を揃えたが、
+ * `chat` の中のこの一覧は直っていなかった——同じ記憶を同じセッションの中で
+ * 違う答えで出す形になっていた。
+ */
+describe('chat の /memory', () => {
+  it('概要・作成・更新を出す（alteroid memory list と同じ言葉）', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      memoryDocuments: [
+        {
+          slug: 'values',
+          title: '価値観',
+          kind: 'premise',
+          description: '判断の基準',
+          descriptionFreshness: { kind: 'fresh' },
+          createdAt: { kind: 'known', at: '2026-08-10T00:00:00.000Z' },
+          updatedAt: '2026-08-15T00:00:00.000Z',
+        },
+      ],
+    });
+
+    await runSlashCommand('/memory', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain('values');
+    expect(text).toContain('価値観');
+    // `alteroid memory list`（`memory.ts`）と同じ形。新しい言い方を発明しない。
+    expect(text).toContain('作成: 2026-08-10T00:00:00.000Z / 更新: 2026-08-15T00:00:00.000Z');
+    expect(text).toContain('判断の基準');
+  });
+
+  it('createdAt が unknown なら「不明」と出す（空欄にしない）', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      memoryDocuments: [
+        {
+          slug: 'runbook',
+          title: '定点観測',
+          kind: 'fact',
+          descriptionFreshness: { kind: 'absent' },
+          createdAt: { kind: 'unknown' },
+          updatedAt: '2026-08-12T00:00:00.000Z',
+        },
+      ],
+    });
+
+    await runSlashCommand('/memory', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain('作成: 不明 / 更新: 2026-08-12T00:00:00.000Z');
+    expect(text).not.toContain('undefined');
+  });
+
+  it('記憶がまだ空なら、そう言う（既存の挙動を壊さない）', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({ memoryDocuments: [] });
+
+    await runSlashCommand('/memory', client, emptyListed());
+
+    expect(read()).toContain('記憶はまだ空');
+  });
+});
+
+/**
+ * `chat` の `/journal`。全 variant が `id` を持つのに、一覧では1度も
+ * 出ていなかった。日誌の1件を後から名指しで辿る手がかりが無かった。
+ */
+describe('chat の /journal', () => {
+  it('id を出す', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      journalEntries: [
+        { id: 'j-1', at: '2026-08-16T10:00:00.000Z', type: 'exchange', text: '設計の相談' },
+      ],
+    });
+
+    await runSlashCommand('/journal', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain('設計の相談');
+    expect(text).toContain('id: j-1');
+  });
+
+  it('空なら、そう言う（既存の挙動を壊さない）', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({ journalEntries: [] });
+
+    await runSlashCommand('/journal', client, emptyListed());
+
+    expect(read()).toContain('日誌はまだ空');
+  });
+});
+
+/**
  * 委譲を**止める**手が CLI にもあること。
  *
  * PRD「インターフェース」は3面（CLI・HTTP API・Web UI）で同じことができると
@@ -1119,6 +1278,9 @@ describe('chat の /conversations と /conversation', () => {
     const text = read();
     expect(text).toContain('conv-1');
     expect(text).toContain('設計の相談');
+    // #214: 作成（startedAt）は元から応答に在り、ここが出していなかっただけ。
+    expect(text).toContain('作成: 2026-08-16T10:00:00.000Z');
+    expect(text).toContain('更新: 2026-08-16T10:05:00.000Z');
     // scanned が無いと、返ってきた件数が「これで全部」に見えてしまう。
     expect(text).toContain('137');
     expect(text).toContain('/conversation <番号|id>');
