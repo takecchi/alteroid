@@ -4922,10 +4922,16 @@ describe('クローン — 枠で保持している間、中身を持たない�
     expect(await releaseAttemptCount(s)).toBe(3);
 
     // (3) 畳まれた分も含めて、tick はすべて一度は器へ書き出されている
-    // （`withInboxPutSpy` の doc）。畳み込みを `post()` 側へ動かす変異が
-    // 当たっても、`#remember` は `post()` の中で畳み込みの判定より前に
-    // 呼ばれるので、ここは 0 のままにはならない（この観測点は上の M3 を
-    // 捕まえない — 捕まえるのは (2) の `releaseAttemptCount` である）。
+    // （`withInboxPutSpy` の doc）。**畳み込みが `#settleInboxEvent` に在る
+    // ＝ 合図が器へ書かれた後に畳む**ということなので、畳んだ側が `#forget`
+    // で消しに行く必要がある、という実装の形がここに出ている。
+    //
+    // **この観測点も、畳み込みを `post()` 側へ動かす変異を捕まえる。**
+    // `post()` の畳み込みは `#remember`（＝器への書き出し）より**前**に
+    // return するので、2件目・3件目は器へ1度も書かれず 0 になる。
+    // ただし実際にその変異を当てたときに落ちるのは (2) の待ちのほうで
+    // （`releaseAttemptCount` が 2 にならずタイムアウトする）、ここまで
+    // 到達しない。**「捕まえる観測点」と「実際に落ちる観測点」は別である。**
     expect(putCallCountFor('evt-si-1')).toBe(1);
     expect(putCallCountFor('evt-si-2')).toBe(1);
     expect(putCallCountFor('evt-si-3')).toBe(1);
