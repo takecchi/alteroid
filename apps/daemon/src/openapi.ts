@@ -489,6 +489,38 @@ const daemonRevisionSchema = z.discriminatedUnion('status', [
   runnerRevisionUnknownSchema,
 ]);
 
+/**
+ * 指紋を**聞きに行けたか**。
+ *
+ * **`credentials` / `profile` の「空」と、「聞けなかった」を分けるためにある。**
+ * ここが無かったので、`GET /runners` は3つの状態を1つの表現へ潰していた —
+ * 「繋がっていないので叩いていない」「叩いたが失敗した」「叩いて0件だった」が
+ * すべて `credentials: []` / `profile: undefined` になり、読む側は**鍵が配られて
+ * いないのか、確かめられなかったのか**を区別できなかった。
+ *
+ * **`state` から導出しないこと。** 一見 `state === 'connected'` なら叩いた、
+ * それ以外なら叩いていない、で足りそうに見えるが、それは
+ * `RunnerRegistry#list()` がいまどの状態を並べるかという**実装の都合**に依存する。
+ * 同じ論法は `RunnerRevisionStatus` の doc（`runner-protocol.ts`）が
+ * 「**`RunnerLiveness` から導出できない**」として反例2つで潰している。
+ *
+ * **`RunnerRevisionStatus` の語をそのまま借りない。** あちらの `unknown` は
+ * 「繋がって名乗ったが版を知らない」＝ runner 自身が値を持っていない、という
+ * 意味で、こちらの「叩いたが RPC が失敗した」とは主語が違う。**形（`status` の
+ * 判別共用体）だけを揃え、語はこの契約に合わせる。**
+ */
+const runnerProbeSchema = z.discriminatedUnion('status', [
+  /** 叩いて返ってきた。**中身が0件でもこれである**（0件であることが分かった）。 */
+  z.object({ status: z.literal('asked') }),
+  /** 叩いていない。繋がっていない相手には聞きに行かない（指紋は runner が持つ）。 */
+  z.object({ status: z.literal('unheard') }),
+  /**
+   * 叩いたが失敗した。**理由は1行に畳んである**（`reasonOf`）——例外は失敗した
+   * 呼び出しのパラメータを添えてくることがあるので、素のまま載せない。
+   */
+  z.object({ status: z.literal('failed'), error: z.string() }),
+]);
+
 const runnerSummarySchema = z.object({
   /**
    * 人間が見る宛先（URL か「同一プロセス」）。
@@ -533,10 +565,24 @@ const runnerSummarySchema = z.object({
   instanceId: z.string().optional(),
   /** そのプロセスを**デーモンが初めて見た時刻**。引き取りの猶予はここから数える。 */
   instanceSince: z.string().optional(),
-  /** 配られている鍵の指紋。**値は返らない。** */
+  /**
+   * 配られている鍵の指紋。**値は返らない。**
+   *
+   * **空であることだけを見ないこと。** 叩けなかったときもここは空になるので、
+   * 「鍵が配られていない」と読んでよいのは `credentialsProbe.status === 'asked'`
+   * のときだけである。
+   */
   credentials: z.array(runnerCredentialFingerprintSchema),
-  /** 置かれている実行環境プロファイルの指紋。**本文は返らない。** */
+  /** 指紋を聞きに行けたか。**上の空と、聞けなかったことを分ける。** */
+  credentialsProbe: runnerProbeSchema,
+  /**
+   * 置かれている実行環境プロファイルの指紋。**本文は返らない。**
+   *
+   * **無いことだけを見ないこと。** 叩けなかったときもここは省略される。
+   */
   profile: runnerProfileFingerprintSchema.optional(),
+  /** プロファイルの指紋を聞きに行けたか。**上の不在と、聞けなかったことを分ける。** */
+  profileProbe: runnerProbeSchema,
   /**
    * runner が名乗った版。**名簿に既にある値をそのまま出す**（ここで新たに
    * runner を叩かない）。

@@ -9,6 +9,7 @@ import type {
   ManagerPool,
   ManagerSummary,
   ProfileService,
+  RunnerClient,
   RunnerRegistry,
   Scheduler,
   Stores,
@@ -24,6 +25,7 @@ import {
   localDayRange,
   memorySlugSchema,
   fingerprintOf,
+  reasonOf,
   reportRunnerRevision,
   resolveBuildRevision,
   runnerSetCredentialsCommandSchema,
@@ -597,6 +599,39 @@ function callbackPage(title: string, detail: string): string {
  p{margin:0;color:#555;line-height:1.7}
 </style></head>
 <body><main><h1>${escape(title)}</h1><p>${escape(detail)}</p></main></body></html>`;
+}
+
+/**
+ * runner を1回叩いて、**叩けたかどうかごと**返す。
+ *
+ * **戻り値を1つの値に畳まない。** `credentials` / `profile` は「空」と
+ * 「聞けなかった」が同じ形になりやすく、実際に `GET /runners` はそこを潰していた。
+ * ここで `*Probe` を必ず一緒に組み立てるので、**片方だけ足して片方を忘れる**形に
+ * ならない（呼ぶ側は展開するだけで、判断を省略できない）。
+ *
+ * **理由は `reasonOf` を通す。** 例外は失敗した呼び出しのパラメータを添えて
+ * くることがあるので、素の `String(error)` を応答へ載せない
+ * （`dropped-record.ts` の `reasonOf` の doc）。
+ */
+async function probe(
+  runner: RunnerClient | undefined,
+  kind: 'credentials' | 'profile',
+): Promise<Record<string, unknown>> {
+  const key = kind === 'credentials' ? 'credentialsProbe' : 'profileProbe';
+  const empty = kind === 'credentials' ? { credentials: [] } : {};
+  if (runner === undefined) return { ...empty, [key]: { status: 'unheard' } };
+  try {
+    if (kind === 'credentials') {
+      return { credentials: await runner.credentials(), credentialsProbe: { status: 'asked' } };
+    }
+    const value = await runner.profile();
+    return {
+      ...(value === undefined ? {} : { profile: value }),
+      profileProbe: { status: 'asked' },
+    };
+  } catch (error) {
+    return { ...empty, [key]: { status: 'failed', error: reasonOf(error) } };
+  }
 }
 
 export function createApp(deps: AppDeps) {
@@ -2148,13 +2183,13 @@ export function createApp(deps: AppDeps) {
                   ...(entry.instanceSince === undefined
                     ? {}
                     : { instanceSince: entry.instanceSince }),
-                  // 繋がっていない相手には聞きに行かない（指紋は runner が持つ）。
-                  credentials:
-                    runner === undefined ? [] : await runner.credentials().catch(() => []),
-                  profile:
-                    runner === undefined
-                      ? undefined
-                      : await runner.profile().catch(() => undefined),
+                  // **繋がっていない相手には聞きに行かない**（指紋は runner が
+                  // 持つ）。**そして聞かなかったことと、聞いて失敗したことと、
+                  // 聞いて0件だったことを、同じ表現へ潰さない** — 潰すと読む側は
+                  // 「鍵が配られていない」のか「確かめられなかった」のかを
+                  // 区別できない（`runnerProbeSchema` の doc）。
+                  ...(await probe(runner, 'credentials')),
+                  ...(await probe(runner, 'profile')),
                   // **名簿に既にある値をそのまま出す**（heartbeat が拾った分）。
                   // ここで新たに runner を叩かない——`fingerprints` と同じ「未接続
                   // ／頼んで失敗／頼んでいない」が潰れる穴を増やさないため。

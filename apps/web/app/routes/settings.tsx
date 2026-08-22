@@ -11,6 +11,7 @@ import { Badge, Button, Card, CardHeader, Empty, ErrorNote, Spinner } from '~/co
 import { useRunners } from '~/hooks/queries';
 import { formatDateTime } from '~/lib/format';
 import { useAuth } from '~/hooks/use-auth';
+import type { RunnerSummary } from '~/lib/types';
 
 export default function Settings() {
   return (
@@ -93,6 +94,47 @@ const RUNNER_STATES = {
   // こちらは走っていた仕事ごと黙った可能性がある。
   lost: { label: '名乗らない（落ちた可能性）', tone: 'danger' },
 } as const;
+
+/**
+ * 渡している鍵の指紋。
+ *
+ * **「無い」と言ってよいのは、聞けたときだけである。**
+ *
+ * ここは `credentials.length === 0` だけを見て「渡している鍵は無い」と断定して
+ * いた。だが空になるのは3つの場合がある——**繋がっていないので聞いていない**
+ * （`unheard`）／**聞いたが失敗した**（`failed`）／**聞いて0件だった**
+ * （`asked`）。前の2つで「無い」と書くと、**確かめられなかったことが、確かめた
+ * 結果として人間に届く。**
+ *
+ * デーモン側（`GET /runners` の `credentialsProbe`）が3状態を返すようにした
+ * ので、ここで潰し直さない。**潰す場所が1つ奥へ移るだけになる。**
+ */
+function Credentials({ runner }: { runner: RunnerSummary }) {
+  if (runner.credentialsProbe.status === 'unheard') {
+    return (
+      <span className="text-[11px] text-muted">
+        鍵は確かめていない（繋がっていないので聞いていない）
+      </span>
+    );
+  }
+  if (runner.credentialsProbe.status === 'failed') {
+    return (
+      <span className="text-[11px] text-danger">
+        鍵を確かめられなかった: {runner.credentialsProbe.error}
+      </span>
+    );
+  }
+  if (runner.credentials.length === 0) {
+    return <span className="text-[11px] text-muted">渡している鍵は無い</span>;
+  }
+  return (
+    <>
+      {runner.credentials.map((credential) => (
+        <Badge key={credential.name}>{credential.name}</Badge>
+      ))}
+    </>
+  );
+}
 
 function Runners() {
   const { data, error, isLoading } = useRunners();
@@ -181,13 +223,7 @@ function Runners() {
                 <p className="mt-1 text-[11px] text-danger">{runner.error}</p>
               )}
               <div className="mt-2 flex flex-wrap gap-1.5">
-                {runner.credentials.length === 0 ? (
-                  <span className="text-[11px] text-muted">渡している鍵は無い</span>
-                ) : (
-                  runner.credentials.map((credential) => (
-                    <Badge key={credential.name}>{credential.name}</Badge>
-                  ))
-                )}
+                <Credentials runner={runner} />
               </div>
             </li>
           ))}
