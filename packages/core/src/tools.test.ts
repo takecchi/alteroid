@@ -2883,3 +2883,147 @@ describe('commitment_list を文字数の予算へ寄せる（潜在バグの修
     expect(reply).not.toContain(`未了は ${total} 件あり`);
   });
 });
+
+/**
+ * #215（一覧の第2弾）。人間の依頼の逐語は「一覧系ツールは最低でも
+ * id + 名前 + 概要 + updated_at + created_at が欲しい」で、`manager_list` /
+ * `schedule_list`（#208）に続いてこの2つへ同じ形を入れた。
+ *
+ * **札は「概要の先頭 n 文字」ではない。** 一覧を目で走らせるとき最初に知りたい
+ * ものを置く——`commitment` は**出所と種別**（人間が頼んだ件か、自分で気づいた
+ * 宿題か）、`approval` は**質問の1行目**である。
+ *
+ * **更新の定義は「この1件が最後に変わった時刻」。** まだ一度も変わっていない
+ * レコードでは作成と一致するが、それは値を捏造しているのではなく観測そのもの
+ * である（AGENTS.md「取れない軸に0の行を作らない」に触れないのはこのため——
+ * 軸は在って、値がまだ動いていないだけである）。
+ */
+describe('commitment_list / approvals_list に札と作成・更新を足す（#215）', () => {
+  it('commitment_list の札は origin 4種を撃ち分ける', async () => {
+    // **1種類だけでは、写像が恒等でも定数でも通ってしまう。** 4種すべてを
+    // 積んで、4つとも違う札が出ることを見る（`COMMITMENT_ORIGIN_LABEL` の
+    // どの1行を書き換えても落ちる）。
+    const h = harness();
+    const origins = [
+      { id: 'c-human', origin: 'human', label: '人間の依頼' },
+      { id: 'c-manager', origin: 'manager', label: 'マネージャーの報告' },
+      { id: 'c-external', origin: 'external', label: '外部イベント' },
+      { id: 'c-self', origin: 'self', label: '自分で気づいた宿題' },
+    ] as const;
+    for (const [index, entry] of origins.entries()) {
+      await h.stores.commitments.open({
+        id: entry.id,
+        at: `2026-01-0${index + 1}T00:00:00.000Z`,
+        origin: entry.origin,
+        body: `本文${entry.id}`,
+      });
+    }
+
+    const reply = await h.call('commitment_list', {});
+    const lines = reply.split('\n');
+
+    for (const entry of origins) {
+      // 札は先頭行の、id の隣。位置まで固定する（別の行へ落ちたら落とす）。
+      expect(lines).toContain(`- ${entry.id} [${entry.label}]`);
+    }
+  });
+
+  it('commitment_list の札は source が在れば添え、無ければ付けない', async () => {
+    const h = harness();
+    await h.stores.commitments.open({
+      id: 'c-with-source',
+      at: '2026-01-01T00:00:00.000Z',
+      origin: 'manager',
+      source: 'mgr-9',
+      body: '報告が来た',
+    });
+    await h.stores.commitments.open({
+      id: 'c-no-source',
+      at: '2026-01-02T00:00:00.000Z',
+      origin: 'manager',
+      body: '出所の細目は無い',
+    });
+
+    const lines = (await h.call('commitment_list', {})).split('\n');
+
+    // 同じ origin の2件を並べているので、違いは source の有無だけになる。
+    expect(lines).toContain('- c-with-source [マネージャーの報告 / mgr-9]');
+    expect(lines).toContain('- c-no-source [マネージャーの報告]');
+  });
+
+  it('commitment_list の作成は at・更新は closedAt ?? at（同じ行に並ぶので入れ替わりも落ちる）', async () => {
+    const h = harness();
+    await h.stores.commitments.open({
+      id: 'c-open',
+      at: '2026-02-01T00:00:00.000Z',
+      origin: 'external',
+      body: '未了のまま',
+    });
+    await h.stores.commitments.open({
+      id: 'c-closed',
+      at: '2026-02-02T00:00:00.000Z',
+      origin: 'manager',
+      body: '片付いた',
+    });
+    await h.stores.commitments.close('c-closed', '2026-02-03T00:00:00.000Z', '対応済み');
+
+    const lines = (await h.call('commitment_list', { includeClosed: true })).split('\n');
+
+    // 未了は「まだ一度も変わっていない」ので作成と更新が一致する。
+    expect(lines).toContain('  作成: 2026-02-01T00:00:00.000Z / 更新: 2026-02-01T00:00:00.000Z');
+    // 片付いた分は closedAt が更新になる。**3つの時刻を全部違う日付にしてある**
+    // ので、作成と更新を取り違えても、片方をもう片方で埋めても落ちる。
+    expect(lines).toContain('  作成: 2026-02-02T00:00:00.000Z / 更新: 2026-02-03T00:00:00.000Z');
+  });
+
+  it('approvals_list の札は質問の1行目だけで、2行目は混ざらない', async () => {
+    const h = harness();
+    await h.stores.jobs.putApproval({
+      id: 'ap-multiline',
+      createdAt: '2026-03-01T00:00:00.000Z',
+      question: '本番へ出してよいか\n影響範囲: 全ユーザー',
+    });
+
+    const reply = await h.call('approvals_list', {});
+    const titleLine = reply.split('\n').find((line) => line.startsWith('- ap-multiline'));
+
+    expect(titleLine).toBe('- ap-multiline 本番へ出してよいか');
+    // **2行目は落としていない。** 札に混ざらないだけで、概要の行には出る
+    // （札を1行目で切るのが能力の削除にならないのはこのため）。
+    expect(reply).toContain('影響範囲: 全ユーザー');
+  });
+
+  it('approvals_list の札は、質問が改行で始まっても空にならない', async () => {
+    // 1行目が空だと札が消える。空欄は「名前が無い」のか「取り忘れ」なのか
+    // 区別できないので、そのときだけ全体を潰した抜粋へ落とす。
+    const h = harness();
+    await h.stores.jobs.putApproval({
+      id: 'ap-leading-newline',
+      createdAt: '2026-03-02T00:00:00.000Z',
+      question: '\n先頭が改行の質問',
+    });
+
+    const titleLine = (await h.call('approvals_list', {}))
+      .split('\n')
+      .find((line) => line.startsWith('- ap-leading-newline'));
+
+    expect(titleLine).toBe('- ap-leading-newline 先頭が改行の質問');
+  });
+
+  it('approvals_list は作成と更新を出す（回答待ちだけの一覧なので両方が一致する）', async () => {
+    const h = harness();
+    await h.stores.jobs.putApproval({
+      id: 'ap-1',
+      createdAt: '2026-04-01T00:00:00.000Z',
+      question: '続けてよいか',
+    });
+
+    const reply = await h.call('approvals_list', {});
+
+    expect(reply.split('\n')).toContain(
+      '  作成: 2026-04-01T00:00:00.000Z / 更新: 2026-04-01T00:00:00.000Z',
+    );
+    // **一致していることを「値が無い」と読ませない。** 欄の意味を出力自身が言う。
+    expect(reply).toContain('更新＝この1件が最後に変わった時刻');
+  });
+});
