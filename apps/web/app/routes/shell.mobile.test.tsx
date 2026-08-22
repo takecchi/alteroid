@@ -139,6 +139,36 @@ describe('広い画面（1280px）', () => {
   });
 });
 
+/**
+ * サイドバー（狭い画面ではドロワーの中に同じものが出る）フッターの
+ * `記憶: {data.storage}` は `truncate` で1行に切っているが、`title` 属性が
+ * 無く続きを取る手段が無かった（本5「省略の出口」）。
+ *
+ * **ここで言えること / 言えないこと**: `title` は DOM に出るので `getByTitle`
+ * で引ける — 「切られている値と同じ文字列が `title` に入っていること」は
+ * ここで踏める。jsdom はレイアウトを持たないので「実際に幅52（`w-52`）の
+ * サイドバーで見た目が切れて hover で続きが読めること」はここでは確かめられない。
+ */
+describe('サイドバーの記憶ストレージ説明', () => {
+  it('truncate で切られていても title で全文が引ける', async () => {
+    const longStorage =
+      'PostgreSQL（a-very-long-masked-connection-target-that-will-not-fit-in-w-52）';
+    setViewportWidth(DEFAULT_VIEWPORT_WIDTH);
+    stubAuthedShell();
+    // `stubAuthedShell` の既定の `HEALTH` は短い値なので、この試験だけ差し替える。
+    stubFetch((url, init) => {
+      if (url.endsWith('/health')) return json({ ...HEALTH, storage: longStorage });
+      if (url.includes('/approvals')) return json({ approvals: [] });
+      if (url.endsWith('/journal/stream')) return sse([], { keepOpen: true, signal: init?.signal });
+      return undefined;
+    });
+
+    renderShell();
+
+    expect(await screen.findByTitle(longStorage)).toBeTruthy();
+  });
+});
+
 describe('承認待ちの見え方', () => {
   it('狭い画面でも、脇を畳んだまま件数が見える（人間を待っている仕事が消えない）', async () => {
     setViewportWidth(NARROW_WIDTH);

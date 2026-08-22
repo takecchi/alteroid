@@ -65,6 +65,8 @@ function renderDashboard(
   // 概要カードが打ち切る側の分岐へ入れるための材料。既定は空なので、
   // 既存のテストは1つも振る舞いが変わらない。
   lists: { approvals?: unknown[]; managers?: unknown[] } = {},
+  // 「次の自動実行」カードの材料。既定は空なので既存のテストは変わらない。
+  scheduleEntries: Array<{ kind: string; description: string; nextAt: string }> = [],
 ): FetchStub {
   // **`/journal/stream` の経路を置いていない。** 置くと購読が増えたことに気づけない
   // （知らない URL は `stubFetch` が「繋がらない」にするので、張りに行けば必ず出る）。
@@ -72,7 +74,7 @@ function renderDashboard(
     if (url.includes('/reports')) return json({ reports });
     if (url.includes('/approvals')) return json({ approvals: lists.approvals ?? [] });
     if (url.includes('/managers')) return json({ managers: lists.managers ?? [] });
-    if (url.includes('/schedule')) return json({ entries: [] });
+    if (url.includes('/schedule')) return json({ entries: scheduleEntries });
     if (url.includes('/usage')) {
       return json({
         ...usageBody,
@@ -261,6 +263,46 @@ describe('概要カードが打ち切ったことを言う', () => {
     expect(await screen.findByText(/残り 2 件は出していない/)).toBeTruthy();
     expect(screen.getByText(summarizeJournalEntry(decision(0)))).toBeTruthy();
     expect(screen.queryByText(summarizeJournalEntry(decision(31)))).toBeNull();
+  });
+});
+
+/**
+ * 「次の自動実行」カードは、この画面の他5枚（最新の日報／承認待ち／稼働中の
+ * マネージャー／今日の利用／いま届いている出来事）と違って `action` を持たず、
+ * かつ `entry.description` を `truncate` で切っている唯一のカードだった
+ * （本5「省略の出口」）。
+ *
+ * **ここで言えること / 言えないこと**: `action` の `<Link>` と `title` 属性は
+ * DOM に出るので `getByRole('link', { name })` の `href` と `getByTitle` で
+ * 引ける — 「リンクが在り行き先が `/schedule` であること」「`title` に
+ * `entry.description` と同じ値が入っていること」はここで踏める。
+ * jsdom はレイアウトを持たないので、「実際に狭い画面で文字が切れて hover で
+ * 続きが読めること」はここでは確かめられない（クラス名が書かれたことまで）。
+ */
+describe('「次の自動実行」カードの出口', () => {
+  const USAGE = { rows: [], since: null, beforeLedger: false };
+  const LONG_DESCRIPTION =
+    '毎朝5時に日報を締めて要約する定期ジョブ（設定を長くすると狭い画面では確実に切れる長さの説明文）';
+
+  it('他5枚と同じ形で action にスケジュール画面へのリンクを持つ', async () => {
+    renderDashboard(USAGE, EMPTY_FEED, [], {}, [
+      { kind: 'daily_report', description: LONG_DESCRIPTION, nextAt: '2026-08-15T05:00:00.000Z' },
+    ]);
+
+    // 「今日の利用」カードの action も同じ文言（「詳しく見る」）を使っているので
+    // `getByRole` 単体では一意にならない。href で `/schedule` へのものを選ぶ。
+    await screen.findByText(LONG_DESCRIPTION, { exact: false });
+    const links = screen.getAllByRole('link', { name: '詳しく見る' });
+    const hrefs = links.map((link) => link.getAttribute('href'));
+    expect(hrefs).toContain('/schedule');
+  });
+
+  it('entry.description が truncate で切られていても title で全文が引ける', async () => {
+    renderDashboard(USAGE, EMPTY_FEED, [], {}, [
+      { kind: 'daily_report', description: LONG_DESCRIPTION, nextAt: '2026-08-15T05:00:00.000Z' },
+    ]);
+
+    expect(await screen.findByTitle(LONG_DESCRIPTION)).toBeTruthy();
   });
 });
 

@@ -302,7 +302,9 @@ function HealthFooter() {
         <span>確認中…</span>
       ) : (
         <>
-          <span className="block truncate">記憶: {data.storage}</span>
+          <span className="block truncate" title={data.storage}>
+            記憶: {data.storage}
+          </span>
           <span className="block truncate">pid {data.pid}</span>
         </>
       )}
