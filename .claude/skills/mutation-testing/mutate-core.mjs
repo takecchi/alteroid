@@ -230,8 +230,11 @@ function buildMarker(spec, ctx) {
     file: spec.file,
     from: spec.from,
     to: spec.to,
-    // 復元後の後始末（dist の再 build）に要る。`target` が無ければ後始末も無い。
+    // 復元後の後始末（dist の再 build と、その検証）に要る。`target` が無ければ
+    // 後始末も無い。`artifact` が無ければ build 成功しか確認できない
+    // （内容までは確認できないことを後始末の側で明示する）。
     target: spec.target ?? null,
+    artifact: spec.artifact ?? null,
     startedAt: nowIso(),
     sessionId: process.env.CLAUDE_SESSION_ID ?? process.env.ALTEROID_SESSION_ID ?? null,
     pid: process.pid,
@@ -506,7 +509,34 @@ export function restoreMutation(opts = {}) {
   }
   log(`[12d] HEAD 一致: ${headAfter}`);
 
-  // 13. 12が全部通ってから印を消す。
+  // **後始末（手順1〜13には無い工程。番号は振らない）。** 手順8〜9は build 済みの
+  // `dist` を検査するが、この時点まではソースだけを書き戻した状態なので、
+  // ここで再 build して確かめない限り `dist` に変異が残ったまま次の作業者へ
+  // 渡る——このハーネスが潰そうとしている「静かに壊れたツリー」そのものである。
+  // `SKILL.md` に理由を残してある。
+  //
+  // **入り（手順9）と同じ基準を、逆向きに使う。** 「build の終了コードでは
+  // 判定しない」を後始末にも適用する — build が exit 0 でも `dist` を実際に
+  // 読み直し、`artifact.contains` が消えていることを確認する。
+  //
+  // **確認が取れなければ印を消さない。** ソース（git 管理下）の復元はここまでで
+  // 完了・検査済みだが、`dist`（untracked）の整合性は別の保証であり、それが
+  // 取れない限り「このツリーは触ったままではない」と言い切れない。だから
+  // `clearMarker()` をこの検証の後に置く——「復元は成功したのに印が残る」形に
+  // なるが、「静かに壊れた dist を伴ったまま印だけ消える」よりましだという
+  // 判断である。印が残っていれば `status`/`baseline`/`run` が知らせ続ける。
+  // 次に `restore` を呼べば、ソース側は既に一致しているので歯4・12a〜12dは
+  // 素通りし、ここ（後始末）だけをやり直せる（べき等）。
+  const rebuildCheck = rebuildAndVerify(marker);
+  if (!rebuildCheck.ok) {
+    throw new HarnessError(
+      `[後始末] 失敗: ${rebuildCheck.reason}。ソース（git 管理下）の復元は完了しているが、` +
+        'dist の整合性が確認できないため印を残す。`status` はこの印を報告し続ける。' +
+        '再度 `restore` を呼べば、ここだけをやり直せる。',
+    );
+  }
+
+  // 13. 12と後始末の検証が全部通ってから印を消す。
   clearMarker();
   log('[13] 印を解除した');
 
@@ -516,25 +546,69 @@ export function restoreMutation(opts = {}) {
   // 残る（手動復元・`--restore-from-marker` に要る）。
   if (backupReadable) fs.rmSync(backupAbs, { force: true });
 
-  // **後始末（手順1〜13には無い工程。番号は振らない）。** 手順8〜9は build 済みの
-  // `dist` を検査するが、手順12はソースだけを書き戻すので、ここで再 build しない
-  // 限り `dist` に変異が残ったまま次の作業者へ渡る——このハーネスが潰そうとして
-  // いる「静かに壊れたツリー」そのものである。`SKILL.md` に理由を残してある。
-  // `apply`/`restore` を手で段階実行したときも、`run` を通したときも、
-  // `restoreMutation` を呼べば必ずここを通るので、この後始末を忘れる経路は無い。
-  const rebuildExitCode = rebuildIfTargeted(marker.target);
-
-  return { marker, restoredFrom, rebuildExitCode };
+  return { marker, restoredFrom, rebuildCheck };
 }
 
-function rebuildIfTargeted(target) {
-  if (!target) return null;
-  log(`[後始末] dist を再 build する（--filter ${target}）`);
-  const result = spawnSync('pnpm', ['--filter', target, 'build'], {
+/**
+ * 後始末: `target` が設定されていたら dist を再 build し、実際に読み直して
+ * 変異が消えていることを確認する。`target` が無ければ後始末そのものが不要
+ * （build 境界を跨がない変異にこれを課さない）。
+ */
+function rebuildAndVerify(marker) {
+  if (!marker.target) {
+    return {
+      checked: false,
+      ok: true,
+      reason: 'target が無いので後始末は不要',
+      buildExitCode: null,
+    };
+  }
+
+  log(`[後始末] dist を再 build する（--filter ${marker.target}）`);
+  const result = spawnSync('pnpm', ['--filter', marker.target, 'build'], {
     cwd: ROOT,
     encoding: 'utf8',
     maxBuffer: 200 * 1024 * 1024,
   });
   log(`[後始末] build exit=${result.status}`);
-  return result.status;
+  if (result.status !== 0) {
+    log('--- 後始末 build 生ログ ここから ---');
+    log((result.stdout ?? '') + (result.stderr ?? ''));
+    log('--- 後始末 build 生ログ ここまで ---');
+    return {
+      checked: true,
+      ok: false,
+      reason: `再 build が exit ${result.status} で失敗した。dist が現物（復元後のソース）と一致している保証が無い`,
+      buildExitCode: result.status,
+    };
+  }
+
+  if (!marker.artifact) {
+    log(
+      '[後始末] artifact 情報が無いため、build の成功だけを根拠にする' +
+        '（内容までは確認できない。以後の生存にはこの限界がある）',
+    );
+    return {
+      checked: true,
+      ok: true,
+      reason: 'artifact 情報が無く、build 成功のみで判定した（内容未確認）',
+      buildExitCode: 0,
+    };
+  }
+
+  const artifactAbs = absPath(marker.artifact.file);
+  const content = fs.existsSync(artifactAbs) ? fs.readFileSync(artifactAbs, 'utf8') : '';
+  const stillContainsMutation = content.includes(marker.artifact.contains);
+  log(
+    `[後始末] ${marker.artifact.file} を読み直し、"${marker.artifact.contains}" が消えているか確認 → ` +
+      `${stillContainsMutation ? '消えていない（失敗）' : '消えている（成功）'}`,
+  );
+  return {
+    checked: true,
+    ok: !stillContainsMutation,
+    reason: stillContainsMutation
+      ? 'build は成功したが、dist にまだ変異の痕跡が残っている'
+      : 'dist から変異の痕跡が消えたことを確認した',
+    buildExitCode: 0,
+  };
 }

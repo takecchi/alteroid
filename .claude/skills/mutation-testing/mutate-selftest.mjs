@@ -9,9 +9,10 @@
 // `mutate-core.mjs` 本体に `if (順序フラグ)` のような分岐を作らない。
 // 抜け道は次の穴になる。
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import process from 'node:process';
 
 import {
   ROOT,
@@ -39,6 +40,7 @@ export const SELFTEST_SCENARIOS = [
   'interrupted-wrong-order',
   'delivery',
   'judgement-id-integrity',
+  'rebuild-failure',
   'all',
 ];
 
@@ -465,10 +467,10 @@ function scenarioDelivery() {
 
   log('');
   log(
-    '-- 4e. 復元する。dist の再 build は restoreMutation 自身が後始末として行う（手動では呼ばない） --',
+    '-- 4e. 復元する。dist の再 build と検証は restoreMutation 自身が後始末として行う（手動では呼ばない） --',
   );
-  const { rebuildExitCode } = restoreMutation();
-  log(`restoreMutation が自動で行った後始末の build exit code: ${rebuildExitCode}`);
+  const { rebuildCheck } = restoreMutation();
+  log(`restoreMutation が自動で行った後始末: ${rebuildCheck.reason}`);
   const distAfterRestore = fs.readFileSync(distAbs, 'utf8');
   const distMatchesRestoredSource = !distAfterRestore.includes('SELFTEST_MUTATED');
   log(`後始末後、dist に変異が残っていないか（残っていないはず）: ${distMatchesRestoredSource}`);
@@ -479,7 +481,8 @@ function scenarioDelivery() {
     deliveredAfterBuild: artifactResult.artifactState === 'delivered',
     buildExitCodeBeforeBuild: 0,
     buildExitCodeAfterBuild: artifactResult.buildExitCode,
-    postRestoreRebuildExitCode: rebuildExitCode,
+    postRestoreRebuildOk: rebuildCheck.ok,
+    postRestoreRebuildReason: rebuildCheck.reason,
     distCleanAfterRestore: distMatchesRestoredSource,
   };
 }
@@ -585,6 +588,101 @@ function scenarioJudgementIdIntegrity() {
   };
 }
 
+// ── 6. 後始末（dist 再 build）が失敗したとき、静かに終わらないことの確認 ──
+//
+// マネージャーの実測で見つかった欠陥: 復元後の再 build が落ちても、印は消え、
+// `git status` は clean になり、`status` は「変異は無い」と言い切っていた
+// （`dist` には変異が残ったまま）。`pnpm` が必ず失敗する PATH を用意し、
+// **実プロセスとして** `mutate.mjs restore` を起こして確かめる
+// （マネージャーが使ったのと同じ手 — PATH に exit 1 する擬似 `pnpm` を置く。
+// `mutate-core.mjs` 本体には一切手を入れない。抜け道は本体ではなく外側に置く）。
+function scenarioRebuildFailure() {
+  section('selftest: 6. 後始末の build が落ちても、印が残り status が知らせることの確認');
+  requireNoMarker('rebuild-failure');
+
+  const spec = {
+    id: 'selftest-rebuild-failure',
+    file: 'packages/core/src/excerpt.ts',
+    from: '文字省略。全',
+    to: 'REBUILDCHECK_MUTATED。全',
+    expect: 1,
+    target: '@alteroid/core',
+    artifact: { file: 'packages/core/dist/index.js', contains: 'REBUILDCHECK_MUTATED' },
+  };
+
+  log('-- 6a. 変異を当てる --');
+  applyMutation(spec);
+
+  const fakeBinDir = path.join(ROOT, '.mutation-testing', 'selftest-fake-bin');
+  fs.mkdirSync(fakeBinDir, { recursive: true });
+  const fakePnpmPath = path.join(fakeBinDir, 'pnpm');
+  fs.writeFileSync(fakePnpmPath, '#!/bin/sh\nexit 1\n');
+  fs.chmodSync(fakePnpmPath, 0o755);
+  log(`擬似 pnpm を用意した（常に exit 1）: ${fakePnpmPath}`);
+
+  log('');
+  log('-- 6b. この PATH で、実プロセスとして `mutate.mjs restore` を起こす --');
+  const poisonedEnv = { ...process.env, PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH}` };
+  const restoreResult = spawnSync(
+    'node',
+    [path.join(ROOT, '.claude/skills/mutation-testing/mutate.mjs'), 'restore'],
+    { cwd: ROOT, env: poisonedEnv, encoding: 'utf8' },
+  );
+  log(`restore の exit code: ${restoreResult.status}`);
+  log(restoreResult.stdout ?? '');
+  log(restoreResult.stderr ?? '');
+
+  const markerLeft = markerExists();
+  const artifactAbs = absPath(spec.artifact.file);
+  const distStillHasMutation = fs
+    .readFileSync(artifactAbs, 'utf8')
+    .includes('REBUILDCHECK_MUTATED');
+  log(`restore が非0 で終わったか: ${restoreResult.status !== 0}`);
+  log(`印が残っているか: ${markerLeft}`);
+  log(`dist に変異がまだ残っているか: ${distStillHasMutation}`);
+
+  log('');
+  log('-- 6c. 実プロセスとして `mutate.mjs status`（通常の PATH）を起こす --');
+  let statusOut;
+  let statusExit;
+  try {
+    statusOut = execFileSync(
+      'node',
+      [path.join(ROOT, '.claude/skills/mutation-testing/mutate.mjs'), 'status'],
+      { cwd: ROOT, encoding: 'utf8' },
+    ).toString();
+    statusExit = 0;
+  } catch (err) {
+    statusOut = err.stdout?.toString() ?? '';
+    statusExit = err.status;
+  }
+  log(`status の exit code: ${statusExit}`);
+  log(statusOut);
+  const statusReportedProblem = /変異が当たったまま/.test(statusOut);
+
+  log('');
+  log('-- 6d. 擬似 pnpm を片付け、本物の pnpm で復元する --');
+  fs.rmSync(fakeBinDir, { recursive: true, force: true });
+  const finalRestore = restoreMutation();
+  log(`後始末（本物の pnpm）: ${finalRestore.rebuildCheck.reason}`);
+  const distCleanAfterRealRestore = !fs
+    .readFileSync(artifactAbs, 'utf8')
+    .includes('REBUILDCHECK_MUTATED');
+  const gitStatusAfter = gitStatusPorcelainFor(spec.file);
+
+  return {
+    scenario: 'rebuild-failure',
+    restoreExitCodeWasNonZero: restoreResult.status !== 0,
+    markerLeftAfterFailedRebuild: markerLeft,
+    statusExitCodeAfterFailedRebuild: statusExit,
+    statusReportedProblemAfterFailedRebuild: statusReportedProblem,
+    distStillHadMutationRightAfterFailedRebuild: distStillHasMutation,
+    finalCleanupOk: finalRestore.rebuildCheck.ok,
+    distCleanAfterRealRestore,
+    gitCleanAfterRealRestore: gitStatusAfter.trim() === '',
+  };
+}
+
 const SCENARIO_FNS = {
   'backup-corruption': scenarioBackupCorruption,
   'weak-tooth': scenarioWeakTooth,
@@ -592,6 +690,7 @@ const SCENARIO_FNS = {
   'interrupted-wrong-order': scenarioInterruptedWrongOrder,
   delivery: scenarioDelivery,
   'judgement-id-integrity': scenarioJudgementIdIntegrity,
+  'rebuild-failure': scenarioRebuildFailure,
 };
 
 export function runSelftestScenario(scenario) {

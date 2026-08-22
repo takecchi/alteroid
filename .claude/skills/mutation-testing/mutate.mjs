@@ -15,7 +15,7 @@
 //   apply --spec <file.json>        段階実行: 1つの変異を当てて印を置くところまで。
 //   restore [--restore-from-marker] 段階実行: 印を読んで復元する。
 //   run --plan <file.json>          本番: 複数の変異を順に回す。
-//   selftest --scenario <name>      自己検証（3つ+1の再現）。省略で一覧を出す。
+//   selftest --scenario <name>      自己検証（受け入れ条件の3つ+1に加え、レビューで見つかった欠陥2件の回帰確認）。省略で一覧を出す。
 //
 // `baseline` / `run` は、印が残っている状態では測定を始めずに落ちる（既定）。
 // 中断されたツリーで新しい測定を始めると、生存も検出も意味を失うため。
@@ -146,7 +146,17 @@ function cmdRestore(args) {
   checkJudgementVocabulary();
   section('restore');
   const fromMarker = args.includes('--restore-from-marker');
-  restoreMutation({ fromMarker });
+  const result = restoreMutation({ fromMarker });
+  // **戻り値を読む。** `rebuildCheck` を捨てると、後始末の build が落ちて
+  // いても `restore` が exit 0 で終わったように見えかねない（マネージャーの
+  // 実測で見つかった欠陥）。`restoreMutation` は後始末の検証が失敗すれば
+  // 例外を投げて印を残すので、ここに到達する時点では既に検証済みだが、
+  // その事実を CLI の出力でも明示する。
+  log('');
+  log(
+    `復元元: ${result.restoredFrom} / 後始末: ${result.rebuildCheck.reason}` +
+      `（build exit=${result.rebuildCheck.buildExitCode ?? 'N/A'}）`,
+  );
 }
 
 function runOneMutation(spec) {
@@ -183,13 +193,18 @@ function runOneMutation(spec) {
   }
 
   section(`変異 ${spec.id}: 復元`);
+  let restoreResult;
   try {
-    restoreMutation();
+    restoreResult = restoreMutation();
   } catch (err) {
     log(`復元に失敗した: ${err.message}`);
     log('印を残したまま停止する。この状態でさらに変異を重ねてはいけない。');
     throw err;
   }
+  // 戻り値を読む（cmdRestore と同じ理由）。後始末が「対象外」なのか
+  // 「build 成功のみで判定した」のか「dist を読み直して確認した」のかを、
+  // ここでも出す — `run` を通した経路でも黙って読み捨てない。
+  log(`後始末: ${restoreResult.rebuildCheck.reason}`);
 
   // **まとめ行は「種別」を持つ** — `judged` のような中身の無い語ではなく、
   // 実際の判定（検出/生存/不明）そのものを出す。id とは別軸なので、

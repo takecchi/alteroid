@@ -25,7 +25,7 @@ node .claude/skills/mutation-testing/mutate.mjs baseline                   # ベ
 node .claude/skills/mutation-testing/mutate.mjs apply --spec <spec.json>   # 段階実行: 1つの変異を当てて印を置くところまで
 node .claude/skills/mutation-testing/mutate.mjs restore [--restore-from-marker]  # 段階実行: 印を読んで復元する
 node .claude/skills/mutation-testing/mutate.mjs run --plan <plan.json>     # 本番: 複数の変異を順に回す
-node .claude/skills/mutation-testing/mutate.mjs selftest --scenario <name> # 自己検証（3つ+1の再現）。省略で一覧を出す
+node .claude/skills/mutation-testing/mutate.mjs selftest --scenario <name> # 自己検証（受け入れ条件の3つ+1に加え、レビューで見つかった欠陥2件の回帰確認）。省略で一覧を出す
 ```
 
 `baseline` / `run` は、印（`MUTATION-IN-PROGRESS.json`）が残っている状態では測定を始めずに落ちる
@@ -57,7 +57,11 @@ node .claude/skills/mutation-testing/mutate.mjs selftest --scenario <name> # 自
 | 同じツリーで HEAD を動かす汚染          | `git rev-parse HEAD` を変異前後で突き合わせ、不一致なら例外                                                                             | 他プロセスが同じツリーで何をしているかを疑う判断（ハーネスは差分の検出だけをする）                                                                                             |
 | 中断からの復旧                          | 印は変異を書き込む前に置く。印には原文そのものを埋め込む。印が残っていれば `status`/`baseline`/`run` が知らせる                         | —                                                                                                                                                                              |
 
-**手順13（印を消す）の後、対象パッケージに `target` が設定されていたら `dist` を build し直す後始末が要る。** 手順8〜9は build 済みの `dist` に変異を検査するが、手順12はソースだけを書き戻すので、後始末を挟まないと `dist` に変異が残ったまま次の作業者へ渡ることになる——それこそこのハーネスが潰そうとしている「静かに壊れたツリー」である。
+**ソース（git 管理下）を書き戻しただけでは復元は完了と見なさない。** 対象パッケージに `target` が設定されていたら、**手順13（印を消す）より前**に `dist` を再 build し、実際に読み直して変異が消えたことを確認する（手順9「`build` の終了コードでは判定しない」を、逆向きに後始末にも適用する）。**確認が取れなければ印を消さない** — ソースの復元は成功しているのに印が残る形になるが、「静かに壊れた `dist` を伴ったまま印だけ消える」よりましだ、という判断である。
+
+**この確認は最初、抜けていた。** `dist` の再 build を入れた直後の版は、build の終了コード・確認結果のどちらも誰も読まずに印を消していた——実測（マネージャーが PATH に exit 1 する擬似 `pnpm` を置いて確認）で、後始末の build が落ちても `restore` が exit 0 で終わり、印が消え、`git status` が clean になり、`status` が「変異は無い」と言い切る形が再現された。**歯9（入り）と同じ基準を後始末（出）にも適用していなかった**、という欠陥だった。
+
+`pnpm build` が資源枯渇で落ちる事例が記録されている（#254）。**別のマネージャーの報告では、落ちるのは `-r`（並列）のときで、`--filter` を1つずつなら完走するという——⚠️ このリポジトリでは自分では確かめていない。** 後始末は `--filter` を使っているので確率は下がるが、ゼロだと示せてはいない。**確率の高低ではなく、結果を読んでいなかったことが欠陥だった**（変異が生存する確率が低いから測らなくてよい、とは言わないのと同じ理由）。
 
 **手順そのものは単純である。テスト対象のコードを意図的に壊し、テストが落ちるかを見る。落ちなければ、そこに歯は無い。**
 
