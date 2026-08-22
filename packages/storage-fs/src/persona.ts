@@ -1,8 +1,45 @@
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { memorySlugSchema } from '@alteroid/core';
-import type { MemoryDocument, MemoryDocumentMeta, PersonaStore } from '@alteroid/core';
+import {
+  deriveHumanTouchedAtFromJournal,
+  memorySlugSchema,
+  memoryProtectionRebuildDecision,
+  sha256Hex,
+} from '@alteroid/core';
+import type {
+  JournalStore,
+  MemoryDocument,
+  MemoryDocumentMeta,
+  MemoryProtectionStatus,
+  PersonaStore,
+} from '@alteroid/core';
+
+/**
+ * 保護状態（human guard）の派生値、1文書ぶん。
+ *
+ * **新しい真実ではない。** 実体は日誌（`memory_update.cause`）にある。ここは
+ * 読み出しを安くするためのキャッシュで、失った・信用できないときは `unknown`
+ * （守る側）へ落ちる（`PersonaStore.protectionStatus` の doc）。
+ *
+ * **ここは「誰も送らない導出値」だけを追記で伸ばす場所である。** 人間・クローンが
+ * 書く値は本文（`content`）の側に置く——入口のスキーマ（`memory_write` /
+ * `PUT /memory/:slug` の body）を1つも変えないことが要件だからである。
+ *
+ * **この PR（#173）が要る2つだけを持つ。** #170（記憶の目次化）が要る
+ * `describedAt`（要旨が本文のどの版に対するものか）はここには**まだ無い** —
+ * 未実装の宣言を実装済みの引数の隣に置くと、未実装だったことが隠れる。
+ * #170 が着地するときは、この2つの隣に足せばよい（1ファイルへ統合する形は
+ * 変えない）。
+ */
+interface MemoryIndexEntry {
+  /** 最後に `cause:'human'` の書き込みが記録された時刻。一度立ったら降ろさない。 */
+  humanTouchedAt?: string;
+  /** デーモン経由で最後に書いた本文のハッシュ（sha256 hex）。外部編集の検出に使う。 */
+  contentSha256?: string;
+}
+
+type MemoryIndex = Record<string, MemoryIndexEntry>;
 
 /**
  * 記憶 = Markdown ファイル群。
@@ -13,11 +50,21 @@ import type { MemoryDocument, MemoryDocumentMeta, PersonaStore } from '@alteroid
  */
 export class FsPersonaStore implements PersonaStore {
   readonly #dir: string;
+  readonly #journal: JournalStore;
   /** 書き込みを直列化する。蒸留は同じ文書へ並行に追記しうる。 */
   #chain: Promise<unknown> = Promise.resolve();
+  /**
+   * 索引の組み直しが進行中なら、その Promise。**同時に複数の組み直しを
+   * 走らせない**（かつ、組み直しを知らせる日誌エントリを1件だけにする）ための
+   * メモ化。完了したら null に戻す——**「一度組み直したら二度と組み直さない」
+   * ではなく「1回の消失イベントにつき1回」**にするため（次に索引が本当に
+   * また消えたら、そのときは改めて組み直してよい）。
+   */
+  #rebuildingIndex: Promise<MemoryIndex> | null = null;
 
-  constructor(dir: string) {
+  constructor(dir: string, journal: JournalStore) {
     this.#dir = dir;
+    this.#journal = journal;
   }
 
   /** read-modify-write が取りこぼさないよう、書き込みを1本に並べる。 */
@@ -31,6 +78,95 @@ export class FsPersonaStore implements PersonaStore {
     const parsed = memorySlugSchema.safeParse(slug);
     if (!parsed.success) throw new Error(`記憶のスラッグが不正: ${slug}`);
     return join(this.#dir, `${parsed.data}.md`);
+  }
+
+  /**
+   * 保護状態の索引ファイル。**`list()` は `*.md` しか見ないのでここは拾われない**
+   * （`.index.json` は `.md` で終わらない）。
+   */
+  #indexPath(): string {
+    return join(this.#dir, '.index.json');
+  }
+
+  /**
+   * 索引を読む。**無い・壊れている（JSON として読めない／オブジェクトの形を
+   * していない）ときは、その場で日誌から組み直す。** `unknown` は守る側へ倒す
+   * という約束のせいで、索引を失うと全文書が保護されたまま動かせなくなる
+   * （distill が何も畳めず、クローンには「守られている」としか見えない
+   * ——静かに凍る）。起動時の backfill だけでは、走行中に索引が消えた場合に
+   * 次の再起動まで凍ったままになるので、読み出しのその場で直す。
+   */
+  async #readIndex(): Promise<MemoryIndex> {
+    try {
+      const raw = await readFile(this.#indexPath(), 'utf8');
+      const parsed: unknown = JSON.parse(raw);
+      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+        return parsed as MemoryIndex;
+      }
+      // JSON までは読めたが、期待する形（オブジェクト）をしていない
+      // ＝ スキーマが合わない。組み直す。
+    } catch {
+      // 無い（ENOENT）か、JSON として読めない。組み直す。
+    }
+    return this.#rebuildIndex();
+  }
+
+  /** 一時ファイル経由で置き換える（`.md` と同じ作法。壊れた途中経過を見せない）。 */
+  async #writeIndex(index: MemoryIndex): Promise<void> {
+    await mkdir(this.#dir, { recursive: true });
+    const tmp = `${this.#indexPath()}.tmp`;
+    await writeFile(tmp, JSON.stringify(index), 'utf8');
+    await rename(tmp, this.#indexPath());
+  }
+
+  /** 同時に来た複数の呼び出しを、進行中の組み直し1本へ束ねる。 */
+  async #rebuildIndex(): Promise<MemoryIndex> {
+    this.#rebuildingIndex ??= this.#doRebuildIndex().finally(() => {
+      this.#rebuildingIndex = null;
+    });
+    return this.#rebuildingIndex;
+  }
+
+  /**
+   * 索引（保護状態の派生値）を日誌から組み直す。
+   *
+   * **`humanTouchedAt`（保護の信号そのもの）は日誌から完全に復元できる**
+   * （`cause:'human'` の `memory_update` は追記専用の日誌に残り続ける）ので、
+   * **保護は失われない**。**失うのは外部編集の検出の履歴だけ**である——
+   * `content_sha256` 相当のハッシュは日誌に無いので、いま存在する本文の値で
+   * 新しく基準化する（「ここから先を見張る」）。この組み直しより前に外部から
+   * 本文が書き換えられていたとしても、それはもう検出できない。**これを
+   * 「外部編集が無かった証拠」として読まないこと** — 単に、組み直し以前の
+   * 履歴が失われただけである。
+   *
+   * 組み直したこと自体は日誌へ1件残す（`memory_update` ではなく `decision`
+   * ——記憶の本文は変わっていない。変わったのは派生値だけである）。
+   *
+   * 永続化した結果、次回の `#readIndex` は通常の読み出し経路（ファイルが
+   * 存在し、正しくパースできる）に戻る——**1回の消失イベントにつき1回**だけ
+   * 組み直しが走る。
+   */
+  async #doRebuildIndex(): Promise<MemoryIndex> {
+    const humanTouchedAt = await deriveHumanTouchedAtFromJournal(this.#journal);
+    const docs = await this.documents();
+    const index: MemoryIndex = {};
+    let humanRestored = 0;
+    for (const doc of docs) {
+      const entry: MemoryIndexEntry = { contentSha256: sha256Hex(doc.content) };
+      const touchedAt = humanTouchedAt.get(doc.slug);
+      if (touchedAt !== undefined) {
+        entry.humanTouchedAt = touchedAt;
+        humanRestored += 1;
+      }
+      index[doc.slug] = entry;
+    }
+    await this.#writeIndex(index);
+    const { decision, grounds } = memoryProtectionRebuildDecision({
+      humanRestored,
+      hashesBaselined: docs.length,
+    });
+    await this.#journal.append({ type: 'decision', decision, grounds });
+    return index;
   }
 
   async list(): Promise<MemoryDocumentMeta[]> {
@@ -95,11 +231,61 @@ export class FsPersonaStore implements PersonaStore {
     await rename(tmp, path);
     const written = await this.read(slug);
     if (!written) throw new Error(`記憶の書き込みに失敗: ${slug}`);
+    // **書いた直後のハッシュを記録する。** ここが write() と append() の唯一の
+    // 通り道なので、道具のハンドラ側（tools.ts）に同じロジックを重複させずに済む。
+    // 誰が呼んだか（human / clone / distill）は問わない — 保護の印
+    // （humanTouchedAt）はここでは一切触らない（降ろさないための唯一の保証は、
+    // ここで更新対象に含めないことである）。
+    const index = await this.#readIndex();
+    index[slug] = { ...index[slug], contentSha256: sha256Hex(written.content) };
+    await this.#writeIndex(index);
     return written;
   }
 
   async remove(slug: string): Promise<void> {
-    await rm(this.#path(slug), { force: true });
+    await this.#serialize(async () => {
+      await rm(this.#path(slug), { force: true });
+      // 保護状態の派生値も一緒に消す（pg は行ごと DELETE するので、同じ意味を
+      // fs 側でも揃える）。**人間が付けた human 印は、その文書の実体が無くなれば
+      // 一緒に消える** — 印だけが実体の無いまま残るのは監査上の嘘になる。
+      // 過去に一度でも human で書かれた事実そのものは日誌に残り続けるので、
+      // デーモン再起動時の backfill が再びこの印を立て直す。
+      const index = await this.#readIndex();
+      if (slug in index) {
+        delete index[slug];
+        await this.#writeIndex(index);
+      }
+    });
+  }
+
+  async protectionStatus(slug: string): Promise<MemoryProtectionStatus> {
+    const index = await this.#readIndex();
+    const entry = index[slug];
+    if (entry?.humanTouchedAt !== undefined) return { kind: 'human' };
+    if (entry?.contentSha256 === undefined) return { kind: 'unknown' };
+    const doc = await this.read(slug);
+    if (doc === null) return { kind: 'unknown' };
+    return entry.contentSha256 === sha256Hex(doc.content)
+      ? { kind: 'clone-only' }
+      : { kind: 'unknown' };
+  }
+
+  async markHumanTouched(slug: string, at: string): Promise<void> {
+    await this.#serialize(async () => {
+      const index = await this.#readIndex();
+      const entry = index[slug];
+      // 実体が無い slug に新しい行を作らない（削除済みの記憶が index にだけ
+      // 復活するのを防ぐ）。既に human 印が立っているなら実体の有無を問わず
+      // その印は保つ（`remove()` が消すのはこの `#serialize` チェーンの中で
+      // 直列に行われるので、ここで新規に作る行と衝突しない）。
+      if (entry === undefined && (await this.read(slug)) === null) return;
+      const prior = entry?.humanTouchedAt;
+      // **単調非減少。** backfill は日誌を新しい順に舐めるので、古いエントリで
+      // 巻き戻らないようにする。
+      const next = prior === undefined || at > prior ? at : prior;
+      index[slug] = { ...entry, humanTouchedAt: next };
+      await this.#writeIndex(index);
+    });
   }
 
   /**

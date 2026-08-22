@@ -1496,6 +1496,14 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
 
   it('T1: 本セッションの蒸留ターンが書いた記憶は cause: distill になる', async () => {
     const s = setupGated();
+    // **human guard（記憶の保護）の前提を先に満たしておく。** `values` に
+    // 一度も書き込みが無い（履歴が無い＝ unknown）状態のまま distill から
+    // `memory_write`（全文置換）すると、その歯で断られてしまい journal に
+    // `memory_update` が1件も残らない——ここで確かめたいのは「distill が書けば
+    // cause: distill になる」ことであって、歯そのものはガードのテスト
+    // （`tools.test.ts`）が持つ。既存の記憶を蒸留が上書きする、という現実の
+    // 形に合わせて先に1回 clone-only の下書きを作っておく。
+    await s.stores.persona.write('values', '# 価値観\n\n（下書き）\n');
 
     // 1本目 — 通常ターンをまず1本通し、セッションを確立する
     // （`endConversation` は `this.#query` が無ければ何もしない）。
@@ -1565,6 +1573,10 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
     // それぞれ1回ずつ呼ばれるので、道具の配列も2本控わる）。
     const toolsLists: ReturnType<typeof createCloneTools>[] = [];
     const stores = createMemoryStores();
+    // T1 と同じ理由（human guard: 履歴の無い `values` への distill 全文置換は
+    // 断られる。ここで確かめたいのは cause: distill のタグ付けであって、
+    // 歯そのものは `tools.test.ts` が持つ）。
+    await stores.persona.write('values', '# 価値観\n\n（下書き）\n');
     const clone = createClone({
       stores,
       queryFn: fn,

@@ -1,7 +1,7 @@
 import { mkdir } from 'node:fs/promises';
 
 import type { SessionStore } from '@anthropic-ai/claude-agent-sdk';
-import type { Stores } from '@alteroid/core';
+import { deriveHumanTouchedAtFromJournal, type Stores } from '@alteroid/core';
 import { AUTH_WITHHELD_ENV_KEYS } from './auth.js';
 import {
   createFsStores,
@@ -92,13 +92,51 @@ export function planStorage(env: NodeJS.ProcessEnv = process.env): StoragePlan {
   };
 }
 
+/**
+ * 記憶の保護状態（human guard）の backfill。
+ *
+ * デーモン起動時に、日誌の全 `memory_update` を舐めて各 slug の
+ * `human_touched_at` を確定させる（`PersonaStore.markHumanTouched` の doc）。
+ * **`clone.ts` は触らない・呼ばない** — ここは記憶ストアを開いた直後、
+ * クローンのセッションが立ち上がる前の起動処理である。
+ *
+ * 判定基準（`cause:'human'` かつ `action !== 'remove'`）は `deriveHumanTouchedAtFromJournal`
+ * （`@alteroid/core`）に1本化してある。**各 `PersonaStore`（fs / pg）が保護状態の
+ * 索引を読み出し時に失っていたと分かったとき、同じ関数でその場でも組み直す**
+ * （`storage-fs` の `FsPersonaStore#rebuildIndex` / `storage-pg` の
+ * `PgPersonaStore#healRow`）。**ここ（起動時 backfill）はその「その場の組み直し」
+ * だけに頼らないための保険である** — 走行中に索引を失った場合、次にその slug が
+ * 読まれるまでは `unknown`（守る側）のまま動く。基準がここ以外にも散ると、
+ * 片方だけ直して残りが古い基準のまま、という穴ができるので、実装は持たず呼ぶだけ。
+ *
+ * **既に立っている `human_touched_at` を降ろすことはない** —
+ * `markHumanTouched` 自体が単調非減少なので、ここは呼ぶだけでよい。
+ *
+ * **失敗しても起動は続ける。** 失敗した slug は `unknown` のまま
+ * （守る側へ自然に倒れる）。
+ */
+async function backfillMemoryHumanTouch(stores: Stores): Promise<void> {
+  try {
+    const humanTouchedAt = await deriveHumanTouchedAtFromJournal(stores.journal);
+    for (const [slug, at] of humanTouchedAt) {
+      await stores.persona.markHumanTouched(slug, at);
+    }
+  } catch (error) {
+    process.stderr.write(
+      `alteroidd: 記憶の保護状態の backfill に失敗した（unknown のまま起動を続ける）: ${String(error)}\n`,
+    );
+  }
+}
+
 export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise<Storage> {
   const plan = planStorage(env);
 
   if (plan.kind === 'fs' || plan.databaseUrl === undefined) {
     const { paths } = await initWorkspace(plan.root);
+    const stores = createFsStores(plan.root);
+    await backfillMemoryHumanTouch(stores);
     return {
-      stores: createFsStores(plan.root),
+      stores,
       paths,
       withheldEnvKeys: plan.withheldEnvKeys,
       kind: 'fs',
@@ -116,6 +154,7 @@ export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise
   const { createPgStores, seedPgWorkspace } = await import('@alteroid/storage-pg');
   const pg = await createPgStores(plan.databaseUrl);
   await seedPgWorkspace(pg);
+  await backfillMemoryHumanTouch(pg);
 
   return {
     stores: pg,

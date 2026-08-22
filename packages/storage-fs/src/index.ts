@@ -32,10 +32,13 @@ export { ALTEROID_HOME_ENV, defaultRoot, resolvePaths, type AlteroidPaths } from
 /** ローカル（fs）ドライバ一式。デーモンプロセスだけがこれを持つ。 */
 export function createFsStores(root?: string): Stores & { paths: AlteroidPaths } {
   const paths = resolvePaths(root);
+  // `FsPersonaStore` は保護状態の索引を失ったとき、その場で日誌から組み直す
+  // （`persona.ts` の `#rebuildIndex` の doc）ので journal を要る。
+  const journal = new FsJournalStore(paths.journal);
   return {
     paths,
-    persona: new FsPersonaStore(paths.memory),
-    journal: new FsJournalStore(paths.journal),
+    persona: new FsPersonaStore(paths.memory, journal),
+    journal,
     jobs: new FsJobStore(paths.jobs),
     schedules: new FsScheduleStore(paths.jobs),
     commitments: new FsCommitmentStore(paths.jobs),

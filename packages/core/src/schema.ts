@@ -45,6 +45,33 @@ export type MemoryDocumentMeta = z.infer<typeof memoryDocumentMetaSchema>;
 export type MemoryDocument = z.infer<typeof memoryDocumentSchema>;
 
 // ---------------------------------------------------------------------------
+// 記憶の保護状態（human guard）
+// ---------------------------------------------------------------------------
+
+/**
+ * 記憶1文書が「人間の手を経ているか」の3状態。
+ *
+ * **これ自体は新しい真実ではない。** 実体は日誌（`memory_update.cause`）に
+ * あり、ここが表すのはその派生値（pg: `memory` テーブルの `human_touched_at` /
+ * `content_sha256` 列 — pg では `packages/storage-pg` / fs: `.index.json` —
+ * fs では `packages/storage-fs` が持つ）を読んだ結果である。
+ *
+ * - **`human`** — 過去に `cause:'human'` の `memory_update`（`action:'write'`）が
+ *   在る。**一度立ったら絶対に降りない** — クローンが何度書いても、この状態は
+ *   `clone-only` へは戻らない。
+ * - **`clone-only`** — 履歴は在るが全部 `clone` / `distill`。
+ * - **`unknown`** — 履歴が無い／派生値を失った／外から書き換えられた可能性がある。
+ *   **`human` と同じ扱いで守る側へ倒す。**
+ *
+ * **`unknown` を `clone-only` に畳まないこと。** 畳むと、履歴を失った瞬間に
+ * 「人間は書いていない」という嘘になる。判定・描画のどちらの側も3状態を
+ * 分岐すること — 網羅性は `memory.ts` の `assertNeverMemoryProtectionStatus`
+ * （`never` への代入）で強制する。状態を1つ足して分岐を足し忘れると `tsc` が落ちる。
+ */
+export type MemoryProtectionStatus =
+  { kind: 'human' } | { kind: 'clone-only' } | { kind: 'unknown' };
+
+// ---------------------------------------------------------------------------
 // 受信箱イベント
 // ---------------------------------------------------------------------------
 
@@ -231,6 +258,33 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * ことと機械可読な区別を足すことは別である）。
      */
     action: z.enum(['write', 'append', 'remove']).optional(),
+    /**
+     * 「どれだけ失ったか」の機械可読な面。バイト数（`Buffer.byteLength` 相当）。
+     *
+     * **`optional` にしてあるのは、既存の日誌エントリを1件も壊さないため**
+     * （`action` と完全に同じ形・同じ理由）。これが無いエントリは「この区別が
+     * 導入される前の古いエントリ」を意味する。
+     *
+     * **`memory_delete`（`action: 'remove'`）は既に文字数を `summary` の自由文
+     * （「削除直前 N 文字」）へ埋め込んでいたが、機械可読な面には出ていなかった**
+     * — `action` の doc が警告している形そのもの（PR #144 と同じ形 — 機械可読な
+     * 面が持たない区別を自由文の `summary` だけに持たせると、日誌を辿って
+     * 「どれだけ失ったか」を数えたい側が文言に一致させるしかなくなる）。
+     * **`summary` の自由文からは既存の「（削除直前 N 文字）」を消さない** —
+     * 人が読む説明を減らすことと機械可読な区別を足すことは別である。
+     *
+     * - `write`: 置き換え前の文書のバイト数（無ければ新規作成なので `0`）
+     * - `append`: 追記前の文書のバイト数（無ければ `0`）
+     * - `remove`: 消す直前のバイト数
+     */
+    bytesBefore: z.number().int().nonnegative().optional(),
+    /**
+     * 書き込み後のバイト数。
+     *
+     * - `write` / `append`: 書き込み後の文書のバイト数
+     * - `remove`: 常に `0`（実体が無くなるため）
+     */
+    bytesAfter: z.number().int().nonnegative().optional(),
     summary: z.string(),
   }),
   z.object({

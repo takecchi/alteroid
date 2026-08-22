@@ -28,6 +28,36 @@ export const memory = pgTable('memory', {
   slug: text('slug').primaryKey(),
   content: text('content').notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  /**
+   * 保護状態（human guard）の派生値。**新しい真実ではない** — 実体は日誌
+   * （`memory_update.cause`）にあり、この2列は読み出しを安くするためのキャッシュ
+   * である（`packages/core` の `PersonaStore.protectionStatus` の doc）。
+   *
+   * **ここは「誰も送らない導出値」だけを追記で伸ばす場所である。** 人間・クローンが
+   * 書く値は `content` 列の側に置く——入口のスキーマ（`memory_write` /
+   * `PUT /memory/:slug` の body）を1つも変えないことが要件だからである。
+   *
+   * **この PR（#173）が要る2列だけを持つ。** #170（記憶の目次化）が要る
+   * `described_at`（要旨が本文のどの版に対するものか）はまだ無い —
+   * 未実装の宣言を実装済みの列の隣に置くと、未実装だったことが隠れる。
+   * #170 が着地するときは、この2列の隣に足せばよい。
+   *
+   * `humanTouchedAt`: 最後に `cause:'human'` の書き込みが記録された時刻。
+   * **一度立ったら降ろさない**（クローンの書き込みで null に戻さない — 更新対象
+   * に含めないことで保証する。`persona.ts` の `#updateHash` を見よ）。
+   */
+  humanTouchedAt: timestamp('human_touched_at', { withTimezone: true, mode: 'date' }),
+  /**
+   * デーモン経由で最後に書いた本文のハッシュ（sha256 hex）。外部編集の検出に使う。
+   *
+   * **更新する場所は `persona.ts` の `write()` / `append()` の2箇所——意識して
+   * 両方揃えること。** fs 版（`FsPersonaStore`）は `#writeNow` が両方の唯一の
+   * 通り道なので1点で済むが、pg はこのテーブルへの書き込み経路が
+   * `write()` / `append()` で独立した2メソッドに分かれている。**片方だけ
+   * 直すと、もう片方の経路（たとえば append）だけが外部編集と誤検出される
+   * 穴になる。**
+   */
+  contentSha256: text('content_sha256'),
 });
 
 /**

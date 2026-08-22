@@ -1,6 +1,17 @@
-import { memorySlugSchema } from '@alteroid/core';
-import type { MemoryDocument, MemoryDocumentMeta, PersonaStore } from '@alteroid/core';
-import { asc, eq, sql } from 'drizzle-orm';
+import {
+  deriveHumanTouchedAtFromJournal,
+  memorySlugSchema,
+  memoryProtectionRebuildDecision,
+  sha256Hex,
+} from '@alteroid/core';
+import type {
+  JournalStore,
+  MemoryDocument,
+  MemoryDocumentMeta,
+  MemoryProtectionStatus,
+  PersonaStore,
+} from '@alteroid/core';
+import { and, asc, eq, isNull, lt, or, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { stripNulls, toIso } from './db.js';
@@ -16,9 +27,11 @@ import { memory } from './schema.js';
  */
 export class PgPersonaStore implements PersonaStore {
   readonly #db: Db;
+  readonly #journal: JournalStore;
 
-  constructor(db: Db) {
+  constructor(db: Db, journal: JournalStore) {
     this.#db = db;
+    this.#journal = journal;
   }
 
   #slug(slug: string): string {
@@ -58,7 +71,24 @@ export class PgPersonaStore implements PersonaStore {
       .returning({ slug: memory.slug, content: memory.content, updatedAt: memory.updatedAt });
     const row = rows[0];
     if (row === undefined) throw new Error(`記憶の書き込みに失敗: ${slug}`);
+    await this.#updateHash(key, row.content);
     return toDocument(row);
+  }
+
+  /**
+   * 書いた直後の content をハッシュして `content_sha256` へ記録する。
+   *
+   * **write() と append() の両方から呼ぶ。** fs 版は `#writeNow` という
+   * 唯一の通り道があるが、pg はこの2つが独立したメソッドなので、片方だけ
+   * 直す穴を作らないよう意識的に2箇所で揃える。`human_touched_at` はここでは
+   * 一切更新しない — 降ろさないための唯一の保証は、この列を更新対象に
+   * 含めないことである。
+   */
+  async #updateHash(slug: string, content: string): Promise<void> {
+    await this.#db
+      .update(memory)
+      .set({ contentSha256: sha256Hex(content) })
+      .where(eq(memory.slug, slug));
   }
 
   /**
@@ -86,11 +116,97 @@ export class PgPersonaStore implements PersonaStore {
       .returning({ slug: memory.slug, content: memory.content, updatedAt: memory.updatedAt });
     const row = rows[0];
     if (row === undefined) throw new Error(`記憶の追記に失敗: ${slug}`);
+    await this.#updateHash(key, row.content);
     return toDocument(row);
   }
 
+  /**
+   * 行ごと消す。**保護状態の派生値（`human_touched_at` / `content_sha256`）も
+   * 同じ行に乗っているので一緒に消える** — fs 版の `remove()` が索引エントリを
+   * 消すのと同じ意味である。過去に一度でも human で書かれた事実そのものは
+   * 日誌に残り続けるので、デーモン再起動時の backfill が再びこの印を立て直す。
+   */
   async remove(slug: string): Promise<void> {
     await this.#db.delete(memory).where(eq(memory.slug, this.#slug(slug)));
+  }
+
+  async protectionStatus(slug: string): Promise<MemoryProtectionStatus> {
+    const key = this.#slug(slug);
+    const rows = await this.#db
+      .select({
+        content: memory.content,
+        humanTouchedAt: memory.humanTouchedAt,
+        contentSha256: memory.contentSha256,
+      })
+      .from(memory)
+      .where(eq(memory.slug, key))
+      .limit(1);
+    const row = rows[0];
+    if (row === undefined) return { kind: 'unknown' };
+    if (row.humanTouchedAt !== null) return { kind: 'human' };
+    if (row.contentSha256 === null) return this.#healRow(key, row.content);
+    return row.contentSha256 === sha256Hex(row.content)
+      ? { kind: 'clone-only' }
+      : { kind: 'unknown' };
+  }
+
+  /**
+   * 保護状態の派生値をその場で組み直す（1行ぶん）。
+   *
+   * **fs 版（`.index.json` 全体の組み直し）とは粒度が違う。** fs は索引が
+   * 「1ファイル丸ごと在るか無いか」で失われるが、pg には索引ファイルという
+   * 概念が無く、`human_touched_at` / `content_sha256` は行ごとの列である。
+   * だからここは**行単位**で「派生値を失っている（`content_sha256` が
+   * `null`）」ことを検出し、その行だけを治す。`human_touched_at` が既に
+   * 立っている行はここへ来ない（`protectionStatus` が先に `human` を返す）。
+   *
+   * **`humanTouchedAt`（保護の信号そのもの）は日誌から完全に復元できる**
+   * ので保護は失われないが、**外部編集の検出の履歴は失われる**——ハッシュは
+   * 日誌に無いので、いまの本文の値で新しく基準化する。この判断の理由は
+   * `memoryProtectionRebuildDecision` の doc にある。
+   *
+   * **`content_sha256 is null` の行だけを対象にした `UPDATE ... WHERE` で
+   * 治す。** 同時に複数の読み出しが来ても、実際に列を動かせた（＝先着した）
+   * 1件だけが日誌へ記録する——2件目以降は `WHERE` に当たらず 0 行更新になる
+   * ので、二重に記録しない。
+   */
+  async #healRow(slug: string, content: string): Promise<MemoryProtectionStatus> {
+    const humanTouchedAt = await deriveHumanTouchedAtFromJournal(this.#journal);
+    const touchedAt = humanTouchedAt.get(slug);
+    const healed = await this.#db
+      .update(memory)
+      .set({
+        contentSha256: sha256Hex(content),
+        ...(touchedAt === undefined ? {} : { humanTouchedAt: new Date(touchedAt) }),
+      })
+      .where(and(eq(memory.slug, slug), isNull(memory.contentSha256)))
+      .returning({ slug: memory.slug });
+    if (healed.length > 0) {
+      const { decision, grounds } = memoryProtectionRebuildDecision({
+        humanRestored: touchedAt === undefined ? 0 : 1,
+        hashesBaselined: 1,
+      });
+      await this.#journal.append({ type: 'decision', decision, grounds });
+    }
+    return touchedAt === undefined ? { kind: 'clone-only' } : { kind: 'human' };
+  }
+
+  async markHumanTouched(slug: string, at: string): Promise<void> {
+    const key = this.#slug(slug);
+    const when = new Date(at);
+    // 行が既に在るときだけ更新する（**新しく行を作らない**）。無い slug へ行を
+    // 作ると、削除済みの記憶が空文字の「文書」として list() / read() に化けて
+    // 出てくる。単調非減少にするのは、日誌を新しい順に舐める backfill が
+    // 呼んでも巻き戻らないようにするため。
+    await this.#db
+      .update(memory)
+      .set({ humanTouchedAt: when })
+      .where(
+        and(
+          eq(memory.slug, key),
+          or(isNull(memory.humanTouchedAt), lt(memory.humanTouchedAt, when)),
+        ),
+      );
   }
 
   /**

@@ -134,7 +134,16 @@ export { Inbox } from './inbox.js';
  * 記憶をクローンの文脈へ載せる形。**器（storage-fs / storage-pg）もここを使う** —
  * 器ごとに書いた結果、実際に食い違ったことがある（`memory.ts` の冒頭）。
  */
-export { renderMemoryDocument, renderMemoryDocuments, type MemoryPart } from './memory.js';
+export {
+  assertNeverMemoryProtectionStatus,
+  deriveHumanTouchedAtFromJournal,
+  describeMemoryProtectionStatus,
+  memoryProtectionAllowsFullReplace,
+  memoryProtectionRebuildDecision,
+  renderMemoryDocument,
+  renderMemoryDocuments,
+  type MemoryPart,
+} from './memory.js';
 export type { CloneSystemPromptInput } from './prompt.js';
 export {
   buildCloneSystemPrompt,
@@ -357,10 +366,15 @@ export {
 export {
   CLONE_ALLOWED_TOOLS,
   CLONE_TOOL_NAMES,
+  DEFAULT_MEMORY_GUARD,
   MCP_SERVER_NAME,
+  MEMORY_GUARD_ENV,
+  MEMORY_GUARD_VALUES,
   createCloneMcpServer,
   createCloneTools,
   qualifiedToolName,
+  resolveMemoryGuard,
+  type MemoryGuardValue,
   type ToolContext,
 } from './tools.js';
 export {

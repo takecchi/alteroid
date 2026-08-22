@@ -52,6 +52,14 @@ interface Harness {
   setTranscript(managerId: string, body: string | null): void;
   /** `runners()` に渡された引数（`fingerprints` を渡したかどうかの検査用）。 */
   runnersCalls: { fingerprints?: boolean }[];
+  /**
+   * この道具呼び出しが `memory_update.cause` でどう名乗るか（既定 `'clone'`）。
+   *
+   * **`ToolContext.memoryCause` の doc どおり、呼ぶたびに評価される値。** ここで
+   * 差し替えれば、次の `call()` からその値になる（`createCloneTools` を呼び直す
+   * 必要が無い ＝ 本番でセッション中に何度も呼ばれる形をそのまま模す）。
+   */
+  setMemoryCause(cause: 'distill' | 'clone'): void;
   call(name: string, args: Record<string, unknown>): Promise<string>;
 }
 
@@ -75,6 +83,7 @@ function harness(runtime?: () => CloneRuntimeFacts): Harness {
   };
   const runnersCalls: { fingerprints?: boolean }[] = [];
   const transcripts = new Map<string, string>();
+  let memoryCause: 'distill' | 'clone' = 'clone';
 
   const managers: ManagerPool = {
     async start(input) {
@@ -179,6 +188,7 @@ function harness(runtime?: () => CloneRuntimeFacts): Harness {
     // テストの外に出てしまう。
     profile: createProfileService({ stores, runners }),
     ...(runtime === undefined ? {} : { runtime }),
+    memoryCause: () => memoryCause,
   });
 
   return {
@@ -190,6 +200,9 @@ function harness(runtime?: () => CloneRuntimeFacts): Harness {
     distributed,
     running,
     denied,
+    setMemoryCause(cause) {
+      memoryCause = cause;
+    },
     setAbortOutcome(outcome, sessionGone) {
       abortOutcome = outcome;
       // 省略時は outcome から自然に決まる値を補う（`stopped` ⟺ `true`、
@@ -247,6 +260,20 @@ describe('クローンの道具', () => {
 
     const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
     expect(entry).toMatchObject({ action: 'write' });
+  });
+
+  // 監査に使う機械可読な面。summary の文言（人が読む要約）とは別の保証であり、
+  // 片方が通ってももう片方の歯にはならない（`AGENTS.md`「一つの変異で複数の
+  // 保証を確かめない」の裏側——ここでは逆に、別々の it() で別々に測る）。
+  it('memory_write の日誌には bytesBefore / bytesAfter が数として記録される', async () => {
+    const h = harness();
+    await h.call('memory_write', { slug: 'values', content: '12345', summary: '最初' });
+    await h.call('memory_write', { slug: 'values', content: '1234567890', summary: '書き換え' });
+
+    // 新しい順に返るので、先頭が2回目の書き込み。
+    const [second, first] = await h.stores.journal.list({ types: ['memory_update'] });
+    expect(first).toMatchObject({ bytesBefore: 0, bytesAfter: 5 });
+    expect(second).toMatchObject({ bytesBefore: 5, bytesAfter: 10 });
   });
 
   /**
@@ -486,6 +513,17 @@ describe('クローンの道具', () => {
     expect(entry).toMatchObject({ action: 'append' });
   });
 
+  it('memory_append の日誌には bytesBefore / bytesAfter が数として記録される', async () => {
+    const h = harness();
+    await h.call('memory_write', { slug: 'values', content: '12345', summary: '最初' });
+    await h.call('memory_append', { slug: 'values', content: '67890', summary: '追記' });
+
+    const [entry] = await h.stores.journal.list({ types: ['memory_update'], limit: 1 });
+    // append は改行を挟んで足す（testing.ts の append 実装）ので
+    // 5（前の内容）+ 1（改行）+ 5（追記）= 11。
+    expect(entry).toMatchObject({ action: 'append', bytesBefore: 5, bytesAfter: 11 });
+  });
+
   /**
    * `memory_delete` — 記憶の文書ごと消す口。
    *
@@ -526,6 +564,16 @@ describe('クローンの道具', () => {
       expect((entry as { summary: string }).summary).toContain(String(body.length));
     });
 
+    it('削除の日誌には bytesBefore / bytesAfter が数として記録される（bytesAfter は常に0）', async () => {
+      const h = harness();
+      await h.stores.persona.write('temp-note', '12345');
+
+      await h.call('memory_delete', { slug: 'temp-note', summary: '片付け' });
+
+      const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
+      expect(entry).toMatchObject({ bytesBefore: 5, bytesAfter: 0 });
+    });
+
     it('削除の日誌に本文が写っていない', async () => {
       const h = harness();
       const secretBody = '# メモ\n\n他人に見せたくない値: SECRET-XYZ-999';
@@ -545,6 +593,209 @@ describe('クローンの道具', () => {
 
       const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
       expect(entry).toMatchObject({ action: 'remove' });
+    });
+  });
+
+  /**
+   * 記憶の human guard（PR「人間が一度でも書いた記憶を、統合の走行が黙って壊せない
+   * ようにする」）。
+   *
+   * **判定軸は「保護状態 × 書き手」であって量ではない。** ここでは書き手
+   * （`memoryCause`）の軸だけを動かす——保護状態そのものの正しさ（外部編集の検出・
+   * ハッシュの更新箇所）は `packages/storage-fs` / `packages/storage-pg` の
+   * `FsPersonaStore` / `PgPersonaStore` のテストが持つ（実ファイル・実 DB が要る）。
+   */
+  describe('記憶の human guard（人間が書いた記憶を distill が壊せない）', () => {
+    async function markHuman(h: Harness, slug: string, content: string): Promise<void> {
+      // app.ts の PUT /memory/:slug と同じ手順を模す（write してから印を立てる）。
+      await h.stores.persona.write(slug, content);
+      await h.stores.persona.markHumanTouched(slug, new Date().toISOString());
+    }
+
+    it('印は降りない — 人間が書いた後にクローンが何度書いても human のまま', async () => {
+      const h = harness();
+      await markHuman(h, 'values', '# 価値観\n\n人間が書いた\n');
+      expect(await h.stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
+
+      h.setMemoryCause('clone');
+      await h.call('memory_write', {
+        slug: 'values',
+        content: '# 価値観\n\nクローンが書いた1',
+        summary: '1',
+      });
+      await h.call('memory_write', {
+        slug: 'values',
+        content: '# 価値観\n\nクローンが書いた2',
+        summary: '2',
+      });
+      await h.call('memory_write', {
+        slug: 'values',
+        content: '# 価値観\n\nクローンが書いた3',
+        summary: '3',
+      });
+
+      expect(await h.stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
+    });
+
+    it('unknown は守る側 — 履歴が無い文書に対して distill の memory_write が断られる', async () => {
+      const h = harness();
+      h.setMemoryCause('distill');
+
+      const reply = await h.call('memory_write', {
+        slug: 'fresh-doc',
+        content: '# 新規\n\n本文',
+        summary: '新規に書く',
+      });
+
+      expect(reply).toContain('断った');
+      expect(await h.stores.persona.read('fresh-doc')).toBeNull();
+    });
+
+    /**
+     * 断りの応答は「保護されています」だけで終わらせない。**次の手が書かれて
+     * いること**を測る（文言の完全一致ではなく、要素の有無で測る）。
+     */
+    describe('断りの応答が次の手を示す', () => {
+      it('unknown を理由に断るときは、その理由（履歴が確認できない）を言う', async () => {
+        const h = harness();
+        h.setMemoryCause('distill');
+
+        const reply = await h.call('memory_write', {
+          slug: 'fresh-doc',
+          content: '# 新規\n\n本文',
+          summary: '新規に書く',
+        });
+
+        // (1) なぜ断ったか — human と unknown を畳まない。unknown 側の理由が出る。
+        expect(reply).toContain('unknown');
+        expect(reply).not.toContain('human）');
+        // (2) どうすれば通るか — ask_human に何を積めばよいかまで書いてある。
+        expect(reply).toContain('ask_human');
+        expect(reply).toContain('fresh-doc');
+        // (3) いま何も失われていない。
+        expect(reply).toMatch(/変わっていない|残っている/);
+        // (4) memory_append は断られないことも書いてある。
+        expect(reply).toContain('memory_append');
+      });
+
+      it('human を理由に断るときは、その理由（人間の書き込みの履歴が在る）を言う', async () => {
+        const h = harness();
+        await markHuman(h, 'values', '# 価値観\n\n人間が書いた\n');
+        h.setMemoryCause('distill');
+
+        const reply = await h.call('memory_write', {
+          slug: 'values',
+          content: '# 価値観\n\ndistill が上書き',
+          summary: '畳んだ',
+        });
+
+        // (1) unknown 側の理由文とは違う、human 側の理由が出る（畳んでいない）。
+        expect(reply).toContain('人間の書き込みの履歴が在る');
+        expect(reply).not.toContain('履歴が確認できない');
+        // (2) どうすれば通るか。
+        expect(reply).toContain('ask_human');
+        expect(reply).toContain('values');
+        // (3) いま何も失われていない。実際に本文がそのまま残っていることも確かめる。
+        expect(reply).toMatch(/変わっていない|残っている/);
+        expect((await h.stores.persona.read('values'))?.content).toContain('人間が書いた');
+        // (4) memory_append は断られない。
+        expect(reply).toContain('memory_append');
+      });
+
+      it('memory_delete の断りにも同じ4要素が出る', async () => {
+        const h = harness();
+        await markHuman(h, 'values', '# 価値観\n\n人間が書いた\n');
+        h.setMemoryCause('distill');
+
+        const reply = await h.call('memory_delete', { slug: 'values', summary: '整理' });
+
+        expect(reply).toContain('人間の書き込みの履歴が在る');
+        expect(reply).toContain('ask_human');
+        expect(reply).toMatch(/変わっていない|残っている/);
+        expect(reply).toContain('memory_append');
+      });
+    });
+
+    it('clone の書き込みは通る — 同じ文書に cause: clone で書けば通る（能力を消していない）', async () => {
+      const h = harness();
+      await markHuman(h, 'values', '# 価値観\n\n人間が書いた\n');
+
+      h.setMemoryCause('clone');
+      const reply = await h.call('memory_write', {
+        slug: 'values',
+        content: '# 価値観\n\n会話の中で書き換えた',
+        summary: '書き換え',
+      });
+
+      expect(reply).toContain('更新した');
+      expect((await h.stores.persona.read('values'))?.content).toContain('会話の中で書き換えた');
+    });
+
+    it('memory_append は断られない（human 対象・distill でも）', async () => {
+      const h = harness();
+      await markHuman(h, 'values', '# 価値観\n\n人間が書いた\n');
+
+      h.setMemoryCause('distill');
+      const reply = await h.call('memory_append', {
+        slug: 'values',
+        content: '- 追記',
+        summary: '追記した',
+      });
+
+      expect(reply).toContain('追記した');
+      expect((await h.stores.persona.read('values'))?.content).toContain('追記');
+    });
+
+    it('distill の memory_delete も human 対象なら断られる', async () => {
+      const h = harness();
+      await markHuman(h, 'values', '# 価値観\n\n人間が書いた\n');
+
+      h.setMemoryCause('distill');
+      const reply = await h.call('memory_delete', { slug: 'values', summary: '整理' });
+
+      expect(reply).toContain('断った');
+      expect(await h.stores.persona.read('values')).not.toBeNull();
+    });
+
+    it('clone-only の文書には distill の全文置換・削除が通る（対照 — 検出器が非0を出せること）', async () => {
+      const h = harness();
+      // クローンが書いた文書（human 印なし）は clone-only になる。
+      await h.call('memory_write', {
+        slug: 'notes',
+        content: '# ノート\n\n最初の版',
+        summary: '1',
+      });
+      expect(await h.stores.persona.protectionStatus('notes')).toEqual({ kind: 'clone-only' });
+
+      h.setMemoryCause('distill');
+      const reply = await h.call('memory_write', {
+        slug: 'notes',
+        content: '# ノート\n\n畳んだ版',
+        summary: '畳んだ',
+      });
+
+      expect(reply).toContain('更新した');
+      expect((await h.stores.persona.read('notes'))?.content).toContain('畳んだ版');
+    });
+
+    it('トグルを off にすると断らない（能力を消していない）', async () => {
+      const h = harness();
+      await markHuman(h, 'values', '# 価値観\n\n人間が書いた\n');
+      h.setMemoryCause('distill');
+
+      const before = process.env.ALTEROID_MEMORY_GUARD;
+      process.env.ALTEROID_MEMORY_GUARD = 'off';
+      try {
+        const reply = await h.call('memory_write', {
+          slug: 'values',
+          content: '# 価値観\n\ndistill が上書き',
+          summary: '畳んだ',
+        });
+        expect(reply).toContain('更新した');
+      } finally {
+        if (before === undefined) delete process.env.ALTEROID_MEMORY_GUARD;
+        else process.env.ALTEROID_MEMORY_GUARD = before;
+      }
     });
   });
 

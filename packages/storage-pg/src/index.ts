@@ -70,10 +70,13 @@ export interface CreatePgStoresOptions {
 
 /** 既存の drizzle ハンドルからストア一式を組む（ドライバを問わない）。 */
 export function createPgStoresFromDb(db: Db, close?: () => Promise<void>): PgStores {
+  // `PgPersonaStore` は保護状態の派生値を失った行を、その場で日誌から
+  // 組み直す（`persona.ts` の `#healRow` の doc）ので journal を要る。
+  const journal = new PgJournalStore(db);
   return {
     db,
-    persona: new PgPersonaStore(db),
-    journal: new PgJournalStore(db),
+    persona: new PgPersonaStore(db, journal),
+    journal,
     jobs: new PgJobStore(db),
     schedules: new PgScheduleStore(db),
     commitments: new PgCommitmentStore(db),

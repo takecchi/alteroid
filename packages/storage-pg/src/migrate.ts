@@ -276,6 +276,19 @@ const STATEMENTS = [
   // 一覧の主経路は「未了だけを古い順」。閉じた行が積もっても効き続けるよう部分索引。
   `create index if not exists commitments_open_idx
      on commitments (at) where closed_at is null`,
+
+  // --- 記憶の保護状態（human guard。schema.ts の `memory` の doc） -----------
+  // 「一度でも人間が書いた記憶を、統合の走行が黙って壊せないようにする」ための
+  // 派生値。実体は日誌（memory_update.cause）にあり、この2列は読み出しを安く
+  // するためのキャッシュ。**既存行にとって null は「まだ分からない」であり、
+  // それは unknown（守る側）に落ちるので安全な既定である。**
+  //
+  // **ここは「誰も送らない導出値」だけを追記で伸ばす場所である。** #170（記憶の
+  // 目次化）が要る `described_at` はこの PR（#173）には無い——未実装の宣言を
+  // 実装済みの列の隣に置くと、未実装だったことが隠れる。#170 が着地するときは
+  // この2列の隣に `alter table ... add column if not exists` を1文足せばよい。
+  `alter table memory add column if not exists human_touched_at timestamptz`,
+  `alter table memory add column if not exists content_sha256 text`,
 ] as const;
 
 export async function migrate(db: Db): Promise<void> {
