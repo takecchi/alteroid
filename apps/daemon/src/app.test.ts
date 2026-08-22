@@ -6,14 +6,17 @@ import type {
   ChatStreamEvent,
   CloneHost,
   InboxEvent,
+  Job,
   ManagerDenial,
   ManagerPool,
   ManagerSummary,
+  RunnerClient,
   ScheduleStatus,
   Scheduler,
   Stores,
 } from '@alteroid/core';
 import {
+  createManagerPool,
   createMemoryStores,
   createProfileApplier,
   createProfileService,
@@ -2105,5 +2108,94 @@ describe('runner の生死', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+/**
+ * `DELETE /managers/:id` が「宛先が名簿に開いていないだけ」を 404 と畳まなく
+ * なったことを、HTTP まで通して固定する。
+ *
+ * **`fakeClone()` では測れない。** あの偽物の `abort()` は、台帳に居ないときだけ
+ * `'absent'` を返す作りで、「台帳には居るが宛先が名簿に開いていない」という今回の
+ * 状態そのものを表現できない（`fake.managerList` に積むか積まないかの2値しか
+ * 無い）。`outcome` の値だけを測ると「文言だけ直して 404 が残る」を見逃すので、
+ * ここでは `fakeClone()` の `managers` を実物の `createManagerPool` へ差し替えて
+ * `createApp` に繋ぐ——`packages/core/src/manager.test.ts` の
+ * `describe('abort() は宛先が名簿に開いていないことを absent と言わない', ...)` と
+ * 同じ足場（開けない宛先だけの名簿＋台帳にジョブ1本）を HTTP 層まで持ち上げた形。
+ */
+describe('DELETE /managers/:id と実物の ManagerPool（absent と unreachable を混ぜない）', () => {
+  const runningAway: Job = {
+    id: 'mgr-running-away',
+    managerId: 'mgr-running-away',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T01:00:00.000Z',
+    status: 'running',
+    summary: '長い移行作業',
+    request: 'DB の移行をやって',
+    cwd: '/work/project',
+    runnerId: 'runner-primary',
+    sessionId: 'sess-before-swap',
+  };
+
+  /**
+   * 台帳にジョブを1本置き、名簿には**開けない宛先だけ**を登録した実物の
+   * `ManagerPool` を `createApp` へ繋ぐ。`register()` は `#open()` を `await`
+   * するので、戻った時点で名簿の状態は `unreachable` に確定している。
+   */
+  async function appWithUnreachableRunner() {
+    const realStores = createMemoryStores();
+    await realStores.jobs.putJob(runningAway);
+    const registry = createRunnerRegistry([], { notify: () => undefined });
+    await registry.register({
+      label: 'http://runner:4518',
+      open: (): Promise<RunnerClient> => Promise.reject(new Error('まだ上がっていない')),
+    });
+    const pool: ManagerPool = createManagerPool({
+      stores: realStores,
+      post: () => undefined,
+      runners: registry,
+      profile: createProfileService({ stores: realStores, runners: registry }),
+    });
+    const base = fakeClone();
+    const realApp = createApp({
+      clone: { ...base.clone, managers: pool },
+      stores: realStores,
+      token: 'test-token',
+      shutdown: () => undefined,
+    });
+    return { realApp, pool, registry };
+  }
+
+  it('宛先が開いていないだけなら 404 にしない', async () => {
+    const { realApp, pool, registry } = await appWithUnreachableRunner();
+
+    const response = await realApp.request('/managers/mgr-running-away', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { outcome?: string };
+    expect(body.outcome).toBe('unknown');
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  it('台帳に居ないものは、いままでどおり 404', async () => {
+    const { realApp, pool, registry } = await appWithUnreachableRunner();
+
+    const response = await realApp.request('/managers/mgr-does-not-exist', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    expect(response.status).toBe(404);
+
+    await pool.stop();
+    await registry.stop();
   });
 });
