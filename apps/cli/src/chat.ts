@@ -11,6 +11,7 @@ import {
 import type { InferResponseType } from 'hono/client';
 
 import { createClient, type DaemonClient } from './client.js';
+import { formatCreatedAt, freshnessMarker } from './memory.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { narrowUsageAxis, renderUsage } from './usage.js';
 
@@ -429,7 +430,20 @@ export async function runSlashCommand(
         const response = await client.memory.$get();
         const { documents } = await response.json();
         if (documents.length === 0) stdout.write('（記憶はまだ空）\n');
-        for (const doc of documents) stdout.write(`  ${doc.slug}  — ${doc.title}\n`);
+        // **表記は `alteroid memory list`（`memory.ts`）に寄せる。** 同じ
+        // `GET /memory` を見ながら、ここは slug と title しか出していなかった
+        // （#235 はトップレベルの `alteroid memory list` だけを直し、この
+        // `chat` の中の重複実装を残していた——同じ記憶を同じセッションの中で
+        // 違う答えで出す形になっていた）。新しい言い方を発明せず、
+        // `memory.ts` の `formatCreatedAt` / `freshnessMarker` をそのまま使う。
+        for (const doc of documents) {
+          const marker = freshnessMarker(doc.descriptionFreshness.kind);
+          const desc = doc.description === undefined ? '' : ` — ${marker}${doc.description}`;
+          stdout.write(
+            `  ${doc.slug}  — ${doc.title}` +
+              ` (作成: ${formatCreatedAt(doc.createdAt)} / 更新: ${doc.updatedAt})${desc}\n`,
+          );
+        }
         return 'ok';
       }
       const response = await client.memory[':slug'].$get({ param: { slug } });
@@ -453,6 +467,9 @@ export async function runSlashCommand(
       if (entries.length === 0) stdout.write('（日誌はまだ空）\n');
       for (const entry of entries) {
         stdout.write(`  ${entry.at}  [${entry.type}] ${summarize(entry)}\n`);
+        // **id を出す。** 全 variant が持っているのに、ここでは1度も出て
+        // いなかった。日誌の1件を後から名指しで辿る手がかりが無かった。
+        stdout.write(`      id: ${entry.id}\n`);
       }
       return 'ok';
     }
@@ -489,8 +506,12 @@ export async function runSlashCommand(
       } else {
         conversations.forEach((conversation, index) => {
           listed.conversations.push(conversation.conversationId);
+          // **作成（`startedAt`）を足す。** `conversations.ts` の
+          // `renderConversationsList` と同じ欠落（#214）。同じ `GET /conversations`
+          // を見ながら、こちらの重複実装も `startedAt` を出していなかった。
           stdout.write(
-            `  [${index + 1}] ${conversation.conversationId}  更新: ${conversation.updatedAt}` +
+            `  [${index + 1}] ${conversation.conversationId}` +
+              `  作成: ${conversation.startedAt}  更新: ${conversation.updatedAt}` +
               `  (${conversation.messages}件)\n`,
           );
           stdout.write(`      ${conversation.preview}\n`);
@@ -937,16 +958,27 @@ export function renderReport(report: {
  *
  * **ここでも本文を素で出さない。** 一覧は日付が並ぶだけの面なので、印の行を
  * 本文の抜粋で出すと「その日は上限に当たった話が日報に書かれている」と読める。
+ *
+ * **`at`（書かれた時刻）を足す。** `date` だけだと、同じ日に日報が2本あると
+ * 見分けが付かない（#214）。`dailyReportEntrySchema` は元から `at` を持ち、
+ * Web（`apps/web/app/routes/reports.tsx` の `reportLabel`）は `date` と時刻を
+ * 並べて出している——CLI にだけこの区別が無かった。**ISO をそのまま出す**
+ * （ロケール依存の整形はしない。この一覧の他の欄——`作成`/`更新`——もすべて
+ * 生の ISO で、ここだけ変えると読み方が揃わなくなる）。
  */
 export function renderReportLine(report: {
   date: string;
+  at: string;
   body: string;
   unavailable?: string | undefined;
 }): string {
   if (report.unavailable !== undefined && report.unavailable !== '') {
-    return `  ${report.date}  ⚠ 日報なし（作れなかった。理由: ${summarizeText(report.unavailable)}）`;
+    return (
+      `  ${report.date}  ${report.at}` +
+      `  ⚠ 日報なし（作れなかった。理由: ${summarizeText(report.unavailable)}）`
+    );
   }
-  return `  ${report.date}  ${summarizeText(report.body)}`;
+  return `  ${report.date}  ${report.at}  ${summarizeText(report.body)}`;
 }
 
 function writeReport(report: { date: string; body: string; unavailable?: string }): void {
