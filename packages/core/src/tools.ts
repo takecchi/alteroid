@@ -1981,6 +1981,11 @@ export function createCloneTools(context: ToolContext) {
         }
 
         // --- 会話の一覧（新しい順） ---
+        //
+        // **`speaker` はここでは効かない。効かないことを黙らない。** 会話が在るか
+        // どうかは誰が喋ったかで変わらない（片方だけで数えると、あるはずの会話が
+        // 一覧から消える）ので無視するのが正しいが、**渡した側から見ると絞れた一覧に
+        // 見える。** 渡されたのに使わなかったなら、そう言う。
         const conversations = collectConversations(entries).slice(0, limit ?? 20);
         if (conversations.length === 0) {
           return text(
@@ -2001,6 +2006,13 @@ export function createCloneTools(context: ToolContext) {
           );
         }
         shown.push('（各会話の中身は conversation_read conversationId=<id> で古い順に読める）');
+        if (speaker !== 'both') {
+          shown.push(
+            `（speaker=${speaker} はこの一覧には効いていない。会話が在るかどうかは誰が喋ったかで` +
+              '変わらないので、一覧は絞らずに出している。話者で絞るのは conversationId か q の' +
+              'ときである）',
+          );
+        }
         shown.push(scanNote);
         return text(shown.join('\n'));
       },

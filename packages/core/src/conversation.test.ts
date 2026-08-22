@@ -126,7 +126,9 @@ describe('collectConversations', () => {
     expect(result.map((c) => c.conversationId)).toEqual(['c3']);
   });
 
-  it('preview は改行を潰し80文字で切る（app.ts の preview と同じ長さ）', () => {
+  // **この preview は `GET /conversations` がそのまま人間へ返している値である**
+  // （`app.ts` から移設した。移設で表示が変わらないよう、長さも切り方もそのまま）。
+  it('preview は改行を潰し80文字で切る（人間の口へ出ている値と同じ形）', () => {
     const entries: JournalEntry[] = [
       exchange({
         id: 'e1',

@@ -359,3 +359,33 @@ describe('conversation_read — 出ないものを説明文が名指ししてい
     expect(found.description).toContain('approvals_list では出ない');
   });
 });
+
+/**
+ * **渡されたのに使わなかった入力を、黙って捨てない。**
+ *
+ * `speaker` は会話の一覧では効かない（会話が在るかどうかは誰が喋ったかで変わらず、
+ * 片方だけで数えるとあるはずの会話が一覧から消える）。**無視するのは正しいが、
+ * 渡した側からは絞れた一覧に見える** — 効いていないことを応答に出す。
+ */
+describe('conversation_read — 効かなかった指定を黙らない', () => {
+  it('一覧モードで speaker を渡すと、効いていないことを応答に書く', async () => {
+    const stores = createMemoryStores();
+    await humanTurn(stores, 'conv-1', '人間の発言', 'クローンの返答');
+    const call = tools(stores);
+
+    const reply = await call('conversation_read', { speaker: 'human' });
+
+    expect(reply).toContain('speaker=human');
+    expect(reply).toContain('効いていない');
+  });
+
+  it('speaker を渡さなければ、その注記は出ない（毎回出ると目印が効かなくなる）', async () => {
+    const stores = createMemoryStores();
+    await humanTurn(stores, 'conv-1', '人間の発言', 'クローンの返答');
+    const call = tools(stores);
+
+    const reply = await call('conversation_read', {});
+
+    expect(reply).not.toContain('効いていない');
+  });
+});
