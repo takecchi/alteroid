@@ -1017,6 +1017,7 @@ export function createCloneTools(context: ToolContext) {
           [
             `- ${plan.kind}（${describeScheduleSpec(plan.spec)}）`,
             `  依頼: ${excerptLine(plan.request, SCHEDULE_REQUEST_EXCERPT)}`,
+            `  作成: ${plan.createdAt} / 更新: ${plan.updatedAt}`,
             `  前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}`,
           ].join('\n'),
         );
@@ -1668,6 +1669,7 @@ export function createCloneTools(context: ToolContext) {
             `  runner: ${manager.runnerId ?? '未記録'}`,
             `  依頼: ${excerptLine(manager.request, LIST_REQUEST_EXCERPT)}`,
             `  cwd: ${manager.cwd}`,
+            `  作成: ${manager.startedAt} / 更新: ${manager.updatedAt}`,
             // **`lost` を状態名だけで済ませない。** 「終わった」と読まれると、
             // 完了していない仕事がそのまま片付く。何が起きたかと、次に何をすれば
             // よいかを、この一覧の中で言い切る。
