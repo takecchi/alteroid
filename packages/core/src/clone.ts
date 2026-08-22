@@ -57,6 +57,7 @@ import { resolveBuildRevision } from './revision.js';
 import type { CloneRuntimeFacts, SelfFacts } from './self.js';
 import type { PendingInboxEvent, Stores } from './store.js';
 import { MCP_SERVER_NAME, createCloneMcpServer, type ToolContext } from './tools.js';
+import { turnInputEntry } from './turn-input.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import {
   CLONE_ACTOR_ID,
@@ -1925,10 +1926,15 @@ class Clone implements CloneHost {
           });
           return;
         }
-        const outcome = await this.#runInternal(
-          buildDistillPrompt(event.reason === 'shutdown' ? 'conversation_end' : event.reason),
-          'distill',
+        const distillPrompt = buildDistillPrompt(
+          event.reason === 'shutdown' ? 'conversation_end' : event.reason,
         );
+        // **このターンへ何が入ったかを残す**（#243）。本文は定型文なので長さだけ
+        // を書く（何を載せるかの判断は `turnInputEntry` に1本化してある）。
+        await this.#journal(
+          turnInputEntry({ type: 'distill', reason: event.reason, prompt: distillPrompt }),
+        );
+        const outcome = await this.#runInternal(distillPrompt, 'distill');
         // **成功で終わった蒸留だけが印を下ろす。** 失敗した蒸留（枠で保持
         // された場合を含む。`outcome.status === 'failed'`）で下ろすと、移せ
         // なかった記憶を「移した」ことにして記憶を落とす（`#hasUndistilledActivity`
@@ -1939,11 +1945,19 @@ class Clone implements CloneHost {
 
       case 'human_answer': {
         // 片付け済みの配り直しなら、承認待ちを読み直さず断り書きだけで済ませる
-        // （`#closedRedeliveryNoticeFor` の doc。全文の取り方は `approvals_list`
-        // — この分岐は元々 `#journal` を呼ばないので、日誌にはこの回答の全文が
-        // 無い）。
+        // （`#closedRedeliveryNoticeFor` の doc。全文の取り方は `approvals_list`）。
+        // **配った断り書きは日誌へ全文で残す**（#243）— この文字列はここで組み立てた
+        // だけでどこにも保存されないので、写さなければ「回答の代わりに何を配ったか」が
+        // 永久に取れない。
         const closedNotice = this.#closedRedeliveryNoticeFor(event);
         if (closedNotice !== null) {
+          await this.#journal(
+            turnInputEntry({
+              type: 'human_answer_closed',
+              approvalId: event.approvalId,
+              text: closedNotice,
+            }),
+          );
           await this.#runInternal(closedNotice);
           return;
         }
@@ -1960,11 +1974,20 @@ class Clone implements CloneHost {
               `回答を \`manager_send\`（許可確認なら decision 付き）で返すと、止まっていたその仕事が再開する。` +
               `\n宛先: managerId: "${approval.jobId}"` +
               (approval.requestId === undefined ? '' : `, requestId: "${approval.requestId}"`);
-        await this.#runInternal(
+        const answerPrompt =
           `[system] 承認待ちにしていた質問に人間が答えた。\n\n質問: ${question}\n回答: ${event.answer}` +
-            `${waiting}\n\n` +
-            'この回答に沿って続きを進めよ。今後同じ判断を自分でできるよう、必要なら記憶へ残すこと。',
+          `${waiting}\n\n` +
+          'この回答に沿って続きを進めよ。今後同じ判断を自分でできるよう、必要なら記憶へ残すこと。';
+        // **全文を残す**（#243）。回答そのものは承認待ちの器にも在るが、質問・回答・
+        // 宛先を1本にしたこの形＝**このターンへ入ったもの**は、ここにしか無い。
+        await this.#journal(
+          turnInputEntry({
+            type: 'human_answer',
+            approvalId: event.approvalId,
+            text: answerPrompt,
+          }),
         );
+        await this.#runInternal(answerPrompt);
         return;
       }
 
@@ -2033,6 +2056,20 @@ class Clone implements CloneHost {
 
         const cause = event.cause === 'manual' ? 'manual' : 'schedule';
         const plan = claimed.status === 'ok' ? claimed.plan : null;
+        const timerDigest = await this.#recentDigest();
+        // **このターンへ何が入ったかを残す**（#243）。digest の全文は書かない —
+        // 材料はこの日誌の中に在るので、形と長さがあれば組み直せる
+        // （`turn-input.ts` の doc）。
+        await this.#journal(
+          turnInputEntry({
+            type: 'timer',
+            kind: event.kind,
+            cause,
+            ...(event.target === undefined ? {} : { target: event.target }),
+            request: plan !== null,
+            digest: timerDigest,
+          }),
+        );
         await this.#runInternal(
           buildTimerPrompt({
             kind: event.kind,
@@ -2042,7 +2079,7 @@ class Clone implements CloneHost {
             // 前の発火が終わっていなかったなら、それは器が落ちた跡である。
             // 走りかけていた可能性があることを隠さない（二重に手を出さないため）。
             ...(plan?.pendingRun === undefined ? {} : { unfinishedAt: plan.pendingRun.at }),
-            digest: await this.#recentDigest(),
+            digest: timerDigest,
           }),
         );
 
@@ -2069,9 +2106,13 @@ class Clone implements CloneHost {
       }
 
       case 'self_initiative': {
-        await this.#runInternal(
-          buildSelfInitiativePrompt({ reason: event.reason, digest: await this.#recentDigest() }),
+        const digest = await this.#recentDigest();
+        // **このターンへ何が入ったかを残す**（#243。digest の全文を書かない理由は
+        // `turn-input.ts` の doc）。
+        await this.#journal(
+          turnInputEntry({ type: 'self_initiative', reason: event.reason, digest }),
         );
+        await this.#runInternal(buildSelfInitiativePrompt({ reason: event.reason, digest }));
         return;
       }
 
@@ -2375,6 +2416,11 @@ class Clone implements CloneHost {
         : await buildActivityDigest(this.#stores, range).catch(
             (error: unknown) => `（この日の記録をまとめられなかった: ${String(error)}）`,
           );
+
+    // **このターンへ何が入ったかを残す**（#243）。日報は結果（`daily_report` の行）
+    // しか残っていなかったので、「何を材料に書いたか」が後から取れなかった。digest の
+    // 全文は書かない（`turn-input.ts` の doc）。
+    await this.#journal(turnInputEntry({ type: 'daily_report', date, digest }));
 
     const outcome = await this.#runInternal(buildDailyReportPrompt({ date, digest }));
 
@@ -3577,13 +3623,15 @@ export function closedRedeliveryNotice(event: InboxEvent, commitment: Commitment
  * 変わらず書く — `#restoreUnread` / `#handle` の当該コメントを見よ）ので
  * `journal_read` で取れる。
  *
- * **`human_answer` だけは違う。** `#handle` の `human_answer` 分岐は
- * `#journal` を一度も呼ばない（回答は日誌ではなく承認待ちの器へ残る。
- * `answerApproval` が `stores.jobs.putApproval` へ書く）。ここを
- * `journal_read` と書くと、取り方が分かる体裁のまま実際には取れない指示に
- * なる（依頼者の禁止「取り方が分からない形にしないこと」に触れる）。全文は
- * `approvals_list id=<approvalId>` から取る — `tools.ts` の `approvals_list`
- * の doc「答えが付いた件も読める」がその根拠。
+ * **`human_answer` だけは違う。** 案内するのは `journal_read` ではなく
+ * `approvals_list id=<approvalId>` である — `tools.ts` の `approvals_list` の
+ * doc「答えが付いた件も読める」がその根拠。
+ *
+ * **#243 で `human_answer` 分岐も `#journal` を呼ぶようになった**（そのターンへ
+ * 入った本文を `turnInputEntry` で残す）ので、日誌からも辿れるようにはなった。
+ * **それでも案内はこのままにする** — 承認待ちの器は回答そのものを保つ器であって、
+ * 日誌の追記は失敗を握り潰す（`#journal` の doc）。**必ず在る側を案内する**方が、
+ * 「取り方が分かる体裁のまま実際には取れない」を作らない。
  */
 function retrievalHintFor(event: InboxEvent): string {
   switch (event.type) {
