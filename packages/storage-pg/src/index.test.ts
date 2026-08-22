@@ -618,6 +618,62 @@ describe('PgJournalStore', () => {
     expect(JSON.stringify(entry)).not.toContain('\u0000');
     expect(JSON.stringify(entry)).toContain('ab');
   });
+
+  /**
+   * **回帰: `input` を持たない `tool_use` エントリが、jsonb への直列化を挟むと
+   * 跡形もなく消える（#223 と同じ形。日誌エントリ版。Issue #224）。**
+   *
+   * `append()` に渡すオブジェクトは `input` というキーを値 `undefined` として
+   * 持つ（キーは在る）ので、書き込み時の `journalEntrySchema.parse` は通る。
+   * しかし pg 版は `stripNulls(entry)` を経て `jsonb` 列へ入れる（`db.insert`）
+   * ——値が `undefined` のキーはここで丸ごと落ちる。読み出し時は `journal.entry`
+   * 列を `journalEntrySchema.safeParse` に通す（`list`）ので、`input` が必須の
+   * ままだと zod 4 の「キーの不在を許さない」規則に引っかかって落ち、**この行が
+   * `list()` の結果から丸ごと消える**（`createMemoryStores` は直列化しないので、
+   * この壊れ方を再現できない）。
+   */
+  it('input の無い tool_use エントリが、jsonb への直列化を挟んでも読み出せる（回帰）', async () => {
+    const written = await stores.journal.append({
+      type: 'tool_use',
+      actor: 'manager:mgr-1',
+      tool: 'Bash',
+    });
+
+    const entries = await stores.journal.list({ types: ['tool_use'] });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ id: written.id, actor: 'manager:mgr-1', tool: 'Bash' });
+    expect((entries[0] as { input?: unknown }).input).toBeUndefined();
+  });
+
+  /**
+   * **回帰（静かなほう）: `input` というキーが在って値が `undefined` の形。**
+   *
+   * これが実機で通る形である —— `manager.ts` の `case 'tool_use'` は
+   * `input: event.input` と**必ずキーを書く**ので、`event.input` が
+   * `undefined` でも「キーは在る」状態で `append()` へ来る。
+   *
+   * **上のテストとは壊れ方が違う。** キー自体を書かない形は、`input` が必須の
+   * ままだと `append()` の `journalEntrySchema.parse` がその場で投げる（大きな
+   * 音がする）。こちらは**書き込みが通ってしまう** —— zod は「キーが在って値が
+   * `undefined`」を通すからである。pg 版は `jsonb` 列へ入れるので、直列化でキーが落ち、
+   * **読み出しで初めて落ちて、その行が `list()` から黙って消える。**
+   * 跡は残らない（Issue #224）。**silent なのはこちらだけなので、この歯を
+   * 消さないこと。**
+   */
+  it('input のキーが在って値が undefined でも、直列化を挟んで読み出せる（回帰・静かなほう）', async () => {
+    const written = await stores.journal.append({
+      type: 'tool_use',
+      actor: 'manager:mgr-1',
+      tool: 'Bash',
+      input: undefined,
+    });
+
+    const entries = await stores.journal.list({ types: ['tool_use'] });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ id: written.id, actor: 'manager:mgr-1', tool: 'Bash' });
+  });
 });
 
 describe('PgJobStore', () => {
