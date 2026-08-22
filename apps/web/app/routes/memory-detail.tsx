@@ -8,7 +8,7 @@ import { Button, ErrorNote, Spinner, Textarea } from '~/components/ui';
 import { useDeleteMemory, useSaveMemory } from '~/hooks/mutations';
 import { useMemoryDocument } from '~/hooks/queries';
 import { cn } from '~/lib/cn';
-import { formatDateTime } from '~/lib/format';
+import { formatCreatedAt, formatDateTime } from '~/lib/format';
 
 import type { Route } from './+types/memory-detail';
 
@@ -89,9 +89,11 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
       }
       description={
         savedAt !== undefined
-          ? `保存した（${formatDateTime(savedAt)}）`
+          ? `保存した（${formatDateTime(savedAt)}）` +
+            // 保存直後でも作成時刻は画面から消さない（`data` が届いていれば足す）。
+            (data !== undefined ? ` · 作成 ${formatCreatedAt(data.document.createdAt)}` : '')
           : data !== undefined
-            ? `更新 ${formatDateTime(data.document.updatedAt)}`
+            ? `作成 ${formatCreatedAt(data.document.createdAt)} · 更新 ${formatDateTime(data.document.updatedAt)}`
             : missing
               ? 'まだ無い記憶。書けば作られる'
               : undefined

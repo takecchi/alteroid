@@ -16,13 +16,35 @@
  */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { MemoryDocument } from '~/lib/types';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import type { Route } from './+types/memory-detail';
 import MemoryDetail, { clientLoader } from './memory-detail';
+
+/**
+ * 「作成時刻」テストは絶対時刻の文字列を期待値に持つ。`app/lib/format.ts` の
+ * `Intl.DateTimeFormat` は `timeZone` を指定していないので、器の `TZ` に
+ * 依存する——手元は `TZ=Asia/Tokyo` だが CI の runner は UTC で、同じ ISO
+ * 文字列が両者で違う時刻に見える。`vi.hoisted` でなければ静かに効かない
+ * 理由は `reports.test.tsx` の冒頭に逐語で在る（`~/lib/format` はモジュール
+ * 読み込み時に `Intl.DateTimeFormat` を作るので、import 評価より前に固定
+ * しないと効かない）。**期待値を器へ寄せて直さない。表示側も固定しない**
+ * （人間は JST で読む）——ここでは時間帯そのものを固定し、どちらの器でも
+ * 同じ1つの期待値で通るようにする。
+ */
+const tzBeforeThisFile = vi.hoisted(() => {
+  const before = process.env.TZ;
+  process.env.TZ = 'Asia/Tokyo';
+  return before;
+});
+
+afterAll(() => {
+  if (tzBeforeThisFile === undefined) delete process.env.TZ;
+  else process.env.TZ = tzBeforeThisFile;
+});
 
 let originalFetch: typeof fetch;
 
@@ -210,6 +232,65 @@ describe('保存', () => {
     });
     // PUT が実際に飛んだこと（method で区別できているか自体の確認）。
     expect(putCalled).toBe(true);
+  });
+});
+
+describe('作成時刻', () => {
+  /**
+   * `memory_list`（クローンの道具、`packages/core/src/memory.ts` の
+   * `formatMemoryCreatedAt`）と語彙を揃える——「作成」「更新」の順で、
+   * 根拠が無ければ「不明」と明言する（AGENTS.md「踏みやすい地雷」の
+   * 「取れない軸に 0 の行を作る」——空欄にすると取れないことが消える）。
+   *
+   * known と unknown を同じ `it()` に混ぜない——アサーションは最初の1つで
+   * 止まるので、片方が通るともう片方も通ったように見える。
+   */
+  it('作成時刻が known なら、その時刻が画面に出る', async () => {
+    renderDetail(
+      'notes',
+      docRoute({ ...DOC, createdAt: { kind: 'known', at: '2026-08-01T00:00:00.000Z' } }),
+    );
+
+    await screen.findByRole('heading', { name: '見出し' });
+    expect(screen.getByText(/作成 08\/01 09:00/)).toBeTruthy();
+  });
+
+  it('作成時刻が unknown なら「不明」と出す（空欄にしない）', async () => {
+    renderDetail('notes', docRoute({ ...DOC, createdAt: { kind: 'unknown' } }));
+
+    await screen.findByRole('heading', { name: '見出し' });
+    expect(screen.getByText(/作成 不明/)).toBeTruthy();
+  });
+
+  it('保存直後も作成時刻が画面から消えない', async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      if (!request.url.includes('/memory/notes')) {
+        return Promise.reject(new TypeError(`Failed to fetch: ${request.url}`));
+      }
+      if (request.method === 'PUT') {
+        return json({
+          document: {
+            ...DOC,
+            createdAt: { kind: 'known', at: '2026-08-01T00:00:00.000Z' },
+            content: '書き換えた本文',
+            updatedAt: '2026-08-22T01:00:00.000Z',
+          },
+        });
+      }
+      return json({
+        document: { ...DOC, createdAt: { kind: 'known', at: '2026-08-01T00:00:00.000Z' } },
+      });
+    }) as typeof fetch;
+    mountDetail('notes');
+
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    const textarea = await screen.findByRole('textbox');
+    fireEvent.change(textarea, { target: { value: '書き換えた本文' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+
+    expect(await screen.findByText(/保存した/)).toBeTruthy();
+    expect(screen.getByText(/作成 08\/01 09:00/)).toBeTruthy();
   });
 });
 
