@@ -4494,6 +4494,42 @@ describe('起動時の生存判定で、聞けなかったことを「居ない�
   });
 
   /**
+   * **この歯が単独で守るもの**: 飛ばしたことが**先送りであって取りこぼしではない**こと。
+   *
+   * 「聞けなかったら起こさない」に倒すと、今度は逆側の「黙って失われる」を作る —
+   * runner が答えられない間ずっと飛ばし続け、誰も拾い直さないまま台帳に
+   * `running` が残る、という形である。**そうなっていないことを測る。**
+   *
+   * 仕組みは「`#records` へ載せる前に抜ける」こと。載せずに帰れば次の
+   * `restore()` が `#records.has` で弾かれずにもう一度拾う。`restore()` は
+   * runner が開くたびに `takeOver`（`apps/daemon/src/index.ts`）から呼ばれる。
+   *
+   * **ガードを `#records.set` の後ろへ動かすと、この歯だけが落ちる。**
+   */
+  it('聞けなかったのは先送りであって、取りこぼしではない（次に答えたら起こし直す）', async () => {
+    const fake = swappableRunner('runner-a');
+    let asked = 0;
+    fake.runner.list = async () => {
+      asked += 1;
+      if (asked === 1) throw new Error('runner が応答しない');
+      return [...fake.state.alive];
+    };
+    const s = poolWith([fake.runner], [onA]);
+    await s.seed();
+
+    // 1回目は聞けないので起こさない。
+    await s.pool.restore();
+    expect(fake.state.resumes).toHaveLength(0);
+
+    // 2回目（runner が開き直って `takeOver` が走った形）。**ここで拾い直す。**
+    await s.pool.restore();
+    expect(fake.state.resumes.map((r) => r.managerId)).toEqual(['mgr-on-a']);
+
+    await s.pool.stop();
+    await s.registry.stop();
+  });
+
+  /**
    * **この歯が単独で守るもの**: 巻き添えにしないこと。
    * 上の2本だけだと「1台でも聞けなければ全部飛ばす」という一律の実装でも緑になる。
    * **答えた器のジョブは、いままでどおり起こし直す。**
