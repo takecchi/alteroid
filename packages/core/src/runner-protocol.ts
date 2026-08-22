@@ -678,6 +678,21 @@ export interface RunnerClient {
   readonly runnerId: string;
   /** この runner の既定の作業ディレクトリ（workspace locator の path になる）。 */
   readonly workspacePath: string;
+  /**
+   * 名乗りの中身（`runnerId` / `workspacePath` と同じ応答 = `hello()` が読む
+   * `GET /health`）に含まれていた版。**接続した瞬間に一度だけ読む値であって、
+   * heartbeat では更新しない**——それは `identity()` の役目である。新しい口も
+   * 新しい呼び出しも増やしていない（`hello()` が既に読んでいる応答の中から、
+   * 今まで捨てていた1フィールドを拾うだけ）。
+   *
+   * **省略できる。** 答えない実装・古い runner（`/health` に `revision` を
+   * 持たない）はこの項目自体を持たない。そのときは `#open()` が触らないので
+   * 名簿は初期値の `unheard` のまま——「版を名乗った上で分からない」
+   * （`unknown`）と混同しない。`LocalRunner`（同一プロセス構成）はこの項目を
+   * 実装しないので、常にこの経路を通らず `identity()` の heartbeat（それも
+   * 実装していなければ `unheard` のまま）に委ねる。
+   */
+  readonly revision?: RunnerRevisionReport;
   /** イベントの受け取りを始める。**接続を張るのはデーモン側**である。 */
   connect(onEvent: (event: RunnerEvent) => void): Promise<void>;
   /**
@@ -856,12 +871,15 @@ export type RunnerLiveness = 'connecting' | 'connected' | 'unreachable' | 'unusa
  *    `state` を `'lost'` にするとき**それまでに学習した情報を捨てない**
  *    （`entry.client` も `entry.revision` もそのまま残る）。黙る直前に聞いた
  *    名乗りが、黙った後も見え続ける
- * 2. **`state: 'connected'` でも `unheard` のことがある。** `#open()` は
- *    `entry.source.open()` が解決した時点で `state = 'connected'` を即座に
- *    立てるが、`identity()` は heartbeat（`HEARTBEAT_INTERVAL_MS` ごとの
- *    `#beat()`）でしか呼ばれない。**登録が終わってから最初の heartbeat が
- *    回るまでの間（最大で約10秒）、新しく繋がった runner は全員この状態を
- *    通る。** 稀なレースではない
+ * 2. **`state: 'connected'` でも `unheard` のことがある——ただし版を名乗らない
+ *    runner に限る。** `#open()` は `hello()` が既に読んでいた
+ *    `RunnerClient.revision`（`runnerId` / `workspacePath` と同じ応答）を接続
+ *    した瞬間に採るので、版を報告できる runner はここで `known` / `unknown`
+ *    へ動く——`identity()` の最初の heartbeat（`HEARTBEAT_INTERVAL_MS` 後）を
+ *    待たない。**`revision` を実装しない runner（`LocalRunner` 等）だけが
+ *    `unheard` のまま残る**——`#open()` は `client.revision === undefined` の
+ *    ときは触らないので、`register()` / `adopt()` の初期値が heartbeat の
+ *    1周目まで見え続ける
  *
  * だから版の状態は生死とは別の契約として持つ。
  *
@@ -1538,6 +1556,17 @@ class Registry implements RunnerRegistry {
         // 「30秒黙っていた」ことにされる。
         entry.lastSeen = Date.now();
         entry.alive = true;
+        // **`hello()` で既に読んでいた版を、ここで採る。** 新しい呼び出しは
+        // 増やさない——identity() の heartbeat（最大 `HEARTBEAT_INTERVAL_MS`
+        // 後）を待たずに、繋がった瞬間から版が分かる runner はそう見える
+        // （`RunnerRevisionStatus` の doc「2. state: connected でも unheard
+        // のことがある」の窓を、報告できる runner については塞ぐ）。
+        // 省略している runner（`LocalRunner` 等）は `client.revision` が
+        // `undefined` なので、ここでは触らず `register()` / `adopt()` の
+        // 初期値（`unheard`）のまま残る。
+        if (client.revision !== undefined) {
+          entry.revision = client.revision;
+        }
         for (const subscriber of this.#subscribers) subscriber(client);
         for (const waiter of this.#waiting) waiter.resolve(client);
         this.#waiting.clear();
