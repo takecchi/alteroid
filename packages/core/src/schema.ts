@@ -921,9 +921,13 @@ export type JobStatus = z.infer<typeof jobStatusSchema>;
  * workspace の所在（M4 で置く継ぎ目）。
  *
  * 文字列のパスだけにしないのは、**runner が増えたときに移送の話になる**からである
- * （M5）。いまは `runner-volume` しか使わないが、共有 FS や git からの再構築へ
- * 伸ばせる形で JobStore に残しておく。ここが欠けると、runner が落ちたときに
- * 「どこで何を触っていたのか」が復元できない。
+ * （M5）。共有 FS や git からの再構築へ伸ばせる形で JobStore に残しておく。
+ * ここが欠けると、runner が落ちたときに「どこで何を触っていたのか」が復元できない。
+ *
+ * **いま新しく書かれるのは `unknown` だけである**（`manager.ts` の `start`）。
+ * 永続性を確かめる手段がまだ無いからで、詳しい理由はその変種の doc に在る。
+ * `runner-volume` は**それ以前に書かれた行が名乗っている値**であり、確かめた
+ * 結果ではない — 新旧で意味が違うので、読むときに混ぜないこと。
  */
 export const workspaceLocatorSchema = z.discriminatedUnion('kind', [
   /** その runner に固定された volume。M4 の既定。 */
@@ -934,6 +938,29 @@ export const workspaceLocatorSchema = z.discriminatedUnion('kind', [
   }),
   /** 複数 runner から見える共有ファイルシステム（M5 の選択肢）。 */
   z.object({ kind: z.literal('shared-volume'), path: z.string() }),
+  /**
+   * **どこに在るかは分かるが、入れ替えを跨いで残るかは確かめられなかった。**
+   *
+   * `runner-volume` は「その器のボリュームに在る」＝**残る**と読める値である。
+   * ところがデーモンには、runner の `/workspace` がボリュームなのかどうかを知る
+   * 手段が無い（名乗りに入っていない。`runner-protocol.ts` の `workspacePath` は
+   * パスであって永続性ではない）。**確かめずに `runner-volume` と書くと、台帳が
+   * 存在しない永続性を主張することになる** — ボリュームを付けない構成
+   * （`railway/README.md`「workspace は毎デプロイで消える」）では実際に偽になり、
+   * しかも**「復旧できる」と信じる方向へ嘘をつく。**
+   *
+   * だから確かめられないときは値を作らず、**何が取れなかったのかを `reason` に
+   * 書いて残す**（AGENTS.md の地雷表「取れない軸に 0 の行を作る」の処方）。
+   * `runnerId` と `path` は**確かめずに言える**ので落とさない — 分からないのは
+   * 永続性だけである。
+   */
+  z.object({
+    kind: z.literal('unknown'),
+    runnerId: z.string(),
+    path: z.string(),
+    /** なぜ確かめられなかったか。**空にしないこと**（理由の無い「分からない」は値と同じである）。 */
+    reason: z.string(),
+  }),
   /** git から作り直す（M5 の選択肢。未コミット差分は別途退避が要る）。 */
   z.object({
     kind: z.literal('git'),

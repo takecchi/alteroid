@@ -4177,6 +4177,25 @@
                                 "properties": {
                                   "kind": {
                                     "type": "string",
+                                    "const": "unknown"
+                                  },
+                                  "runnerId": {
+                                    "type": "string"
+                                  },
+                                  "path": {
+                                    "type": "string"
+                                  },
+                                  "reason": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["kind", "runnerId", "path", "reason"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
                                     "const": "git"
                                   },
                                   "repository": {
@@ -4378,6 +4397,25 @@
                                 }
                               },
                               "required": ["kind", "path"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "unknown"
+                                },
+                                "runnerId": {
+                                  "type": "string"
+                                },
+                                "path": {
+                                  "type": "string"
+                                },
+                                "reason": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["kind", "runnerId", "path", "reason"]
                             },
                             {
                               "type": "object",

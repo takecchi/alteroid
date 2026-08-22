@@ -221,7 +221,13 @@ describe('デーモン ↔ manager-runner（HTTP 境界）', () => {
     // 宛先と workspace の所在が台帳に残る（`manager_id → runner_id → …` の鎖）
     await expect
       .poll(async () => (await r.stores.jobs.listJobs())[0]?.workspace, { timeout: 2000 })
-      .toEqual({ kind: 'runner-volume', runnerId: 'runner-primary', path: '/workspace' });
+      .toEqual({
+        // 境界を越えても、**確かめていない永続性は名乗らない**。
+        kind: 'unknown',
+        runnerId: 'runner-primary',
+        path: '/workspace',
+        reason: expect.stringContaining('確かめられない') as unknown as string,
+      });
     await expect
       .poll(async () => (await r.stores.jobs.listJobs())[0]?.sessionId, { timeout: 2000 })
       .toBe('sess-1');
