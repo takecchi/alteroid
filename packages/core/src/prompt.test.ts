@@ -135,6 +135,41 @@ describe('作業者のシステムプロンプト', () => {
 });
 
 /**
+ * 作業ツリーの指示文書（`AGENTS.md` / `CLAUDE.md`）への到達経路を守るテスト。
+ *
+ * **委譲の指針と同じ理由で、文字列の中身に歯を当てる。** この1行を消しても型は
+ * 通り、`agents` 定義も `Options` も何一つ変わらないので、**どのテストも落ちない。**
+ *
+ * そして消えたことは実行時にも見えない。マネージャーの cwd は
+ * `ALTEROID_WORKSPACE`（workspace の根）で、リポジトリはその1階層下なので、
+ * `settingSources` の `'project'` が解決する先に `CLAUDE.md` は無い。**後から
+ * 載ることはあるが、それはハーネス側の挙動で alteroid が制御していない**
+ * （実測4例が4例とも形が違う。`AGENTS.md`「書く先を決める」）。だから
+ * この1行が消えても、たまたま載った回は今までどおり動いてしまう —
+ * **壊れたことが赤くならない形である。**
+ *
+ * 文言そのものではなく、**所在を告げていること**に歯を当てる。
+ */
+describe('作業ツリーの指示文書への到達経路', () => {
+  it('マネージャーに、作業ツリー直下の指示文書の所在を告げている', () => {
+    const prompt = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
+    expect(prompt).toContain('AGENTS.md');
+    expect(prompt).toContain('CLAUDE.md');
+    expect(prompt).toContain('そのリポジトリの指示である');
+  });
+
+  it('作業者にも同じことを告げている（こちらは他に到達経路が無い）', () => {
+    // `AgentDefinition.skills` は `'all'` を受けないので、作業者には
+    // `.claude/skills/` の一覧が1つも載らない（`claude-provider.ts`）。
+    // ここが消えると、作業者はリポジトリの規則へ到達する経路を1つも持たない。
+    const prompt = buildWorkerPrompt();
+    expect(prompt).toContain('AGENTS.md');
+    expect(prompt).toContain('CLAUDE.md');
+    expect(prompt).toContain('そのリポジトリの指示である');
+  });
+});
+
+/**
  * branded type（4-14）— `renderMemoryDocuments` を通さずに `buildCloneSystemPrompt`
  * へ記憶を渡す経路を `tsc` で塞ぐ。
  *
