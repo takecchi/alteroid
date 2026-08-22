@@ -79,12 +79,23 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
   return (
     <Page
       title={
+        // `Page` の title は h1 の親（div）が既に `min-w-0` を持つので、この
+        // flex 行自体は絞られる側に居る。slug は `break-all` 済み（最大128
+        // 文字・空白なし、本2）で、break-all は最小コンテンツ幅を1文字ぶんまで
+        // 縮めるので理屈のうえでは既にはみ出さない。それでも flex item の
+        // `min-width: auto`（既定は min-content 依存）に頼らせず、
+        // `min-w-0` を明示して縮む先を固定する — `connection.tsx` の入力欄・
+        // `schedule.tsx` の本文欄と同じ、縮める側に `min-w-0` を明示する流儀
+        // に揃えた。`flex-wrap` は付けていない: 折り返すと1行に収まる
+        // 「記憶 / slug」の見た目が崩れ、items-center との組み合わせで
+        // リンクが複数行の slug の縦中央に浮く見た目になる（stackingの利点が
+        // 無いのに見た目だけ悪くなる）。
         <span className="flex items-center gap-2">
           <Link to="/memory" className="text-muted hover:text-fg">
             記憶
           </Link>
           <span className="text-muted">/</span>
-          <span className="font-mono text-sm break-all">{slug}</span>
+          <span className="min-w-0 font-mono text-sm break-all">{slug}</span>
         </span>
       }
       description={

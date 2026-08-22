@@ -38,17 +38,33 @@ export function ConnectionCard({ compact = false }: { compact?: boolean }) {
       />
 
       <div className="flex flex-col gap-3 px-4 py-3">
+        {/*
+          **`Input` を `min-w-0 flex-1` で包む**（`chat.tsx` の
+          `<div className="min-w-0 flex-1"><Textarea .../></div>` と同じ形。
+          #53 由来）。`input` はフォームコントロールの既定の最小幅を持つので、
+          この div が無いと本3で `h-11`（44px、md: 以上は既定のまま）になった
+          ボタン2つとの取り合いで潰れる（ボタン側は短い日本語ラベルなので
+          `flex-shrink` の床が高く、先に犠牲になるのは `input` 側である）。
+
+          **`flex-wrap` は付けていない。** `min-w-0 flex-1` だけで `input` が
+          縮む側へ吸収するので、ボタン2つを画面外へ押し出す形の破綻は起きない
+          — 折り返すと3つの高さが不揃いな行が2段になり、`chat.tsx` の前例とも
+          違う形になる。狭い画面で `input` が窮屈になるのは UX の余地だが、
+          「本4」が扱う「はみ出し／横スクロール」ではない。
+        */}
         <div className="flex gap-2">
-          <Input
-            value={draft}
-            spellCheck={false}
-            aria-label="接続先"
-            placeholder={SAME_ORIGIN_BASE_URL}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && dirty) setBaseUrl(draft);
-            }}
-          />
+          <div className="min-w-0 flex-1">
+            <Input
+              value={draft}
+              spellCheck={false}
+              aria-label="接続先"
+              placeholder={SAME_ORIGIN_BASE_URL}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && dirty) setBaseUrl(draft);
+              }}
+            />
+          </div>
           <Button variant="primary" disabled={!dirty} onClick={() => setBaseUrl(draft)}>
             適用
           </Button>
@@ -65,11 +81,11 @@ export function ConnectionCard({ compact = false }: { compact?: boolean }) {
         <ErrorNote error={health.error} />
 
         {health.data !== undefined && (
-          {/*
-              **`sm:`（640px）未満は1列に積む。** 理由・`dt` の `mt-3 first:mt-0`
-              の意味は `manager-detail.tsx` の同型の `dl` に書いたコメントと同じ
-              （ここも6remなのでなお余裕がある）。
-            */}
+          /*
+            **`sm:`（640px）未満は1列に積む。** 理由・`dt` の `mt-3 first:mt-0`
+            の意味は `manager-detail.tsx` の同型の `dl` に書いたコメントと同じ
+            （ここも6remなのでなお余裕がある）。
+          */
           <dl className="grid grid-cols-1 gap-y-1 text-sm sm:grid-cols-[6rem_1fr]">
             <dt className="mt-3 text-muted first:mt-0 sm:mt-0">記憶</dt>
             <dd className="font-mono text-xs break-all">{health.data.storage}</dd>
