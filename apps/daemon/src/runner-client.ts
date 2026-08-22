@@ -76,7 +76,7 @@ function defaultSleep(ms: number): Promise<void> {
 }
 
 /**
- * manager-runner への HTTP の口（roadmap M4）。
+ * manager-runner への HTTP の口（M4）。
  *
  * **繋ぎに行くのはこちら（デーモン）だけである。** runner はデーモンの所在も鍵も
  * 知らない。逆向きのコールバック URL を足すと、runner の中のマネージャーがその
@@ -296,7 +296,7 @@ class HttpRunner implements RunnerClient {
   }
 
   /**
-   * 名乗りの中身を**読むが採らない**（roadmap M5 PR4 の判定材料）。
+   * 名乗りの中身を**読むが採らない**（M5 PR4 の判定材料）。
    *
    * 叩く先は `ping()` と同じ `GET /health` で、新しい口は足していない。違うのは
    * 本文を読むことだけである。**それでも `this.runnerId` / `this.workspacePath` は

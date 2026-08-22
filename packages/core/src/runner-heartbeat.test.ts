@@ -10,7 +10,7 @@ import type {
 } from './runner-protocol.js';
 
 /**
- * runner の生存判定（roadmap M5）。
+ * runner の生存判定（M5）。
  *
  * ここで固定したいのは、**黙って死んだ器を名簿が自分で見つけられる**ことである。
  * SSE の `hello` は器が礼儀正しく落ちたときにしか届かない — 電源が抜けた器も、

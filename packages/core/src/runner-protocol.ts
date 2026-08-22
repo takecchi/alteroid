@@ -8,7 +8,7 @@ import { usageTotalsSchema } from './usage.js';
 const isoDateTime = z.string().datetime({ offset: true });
 
 /**
- * デーモン ↔ manager-runner の境界（roadmap M4）。
+ * デーモン ↔ manager-runner の境界（M4）。
  *
  * **なぜ分けるのか。** マネージャーはデーモンと同じ器で走る限り、`/proc/1/environ`
  * からデーモンの環境変数（＝記憶ストアの接続情報）に届く。ツールを削って塞ぐのは
@@ -82,7 +82,7 @@ export type RunnerResumeCommand = z.infer<typeof runnerResumeCommandSchema>;
 export const runnerMessageCommandSchema = z.object({ text: z.string().min(1) });
 
 /**
- * マネージャーの道具の鍵の差し替え（roadmap M4 の穴埋め）。
+ * マネージャーの道具の鍵の差し替え（M4 の穴埋め）。
  *
  * **なぜ命令として降ろすのか。** 鍵を runner の環境変数で配ると、値は runner の
  * プロセスが起動した瞬間に凍る。人間が鍵を直しても、器を作り直すまで届かない —
@@ -178,13 +178,13 @@ export type RunnerProfileResult = z.infer<typeof runnerProfileResultSchema>;
  *
  * 「収容能力」と読める語をプロトコルに置くと、次に触る人がそれを上限として使い
  * 始める。`capacity` があれば「capacity を超えたら断る」は自然な実装に見えるが、
- * それは定員であって能力の削除である（north_star 禁止2 / roadmap M5 の地雷）。
+ * それは定員であって能力の削除である（north_star 禁止2 / M5 の地雷）。
  * ここにあるのは**いま器がどうなっているか**の観測値だけで、置ける・置けないの
  * 判断は含まない。
  *
  * 材料はそれぞれ**独立して省略できる。** 器によって読めるものが違い（cgroup を
  * 持たない器、資源を報告しない古い runner）、**報告できないことを理由に宛先から
- * 外すのはデグレードである**（roadmap M5 受け入れ基準5 — runner 数を増減しても
+ * 外すのはデグレードである**（M5 受け入れ基準5 — runner 数を増減しても
  * 能力削減が入らない）。欠けた材料をどう扱うかは配置側にある（`select`）。
  */
 export const runnerExecutionResourcesSchema = z.object({
@@ -695,7 +695,7 @@ export interface RunnerClient {
    */
   ping?(options?: { signal?: AbortSignal }): Promise<void>;
   /**
-   * 名乗りの中身を**読むが採らない**口（roadmap M5 PR4 の判定材料）。
+   * 名乗りの中身を**読むが採らない**口（M5 PR4 の判定材料）。
    *
    * **`ping` の代わりに叩く。** 同じ `GET /health` なので生死は等しく分かる。
    * 新しい口も足していない（`resources()` / `credentials()` / `profile()` と同じ
@@ -726,7 +726,7 @@ export interface RunnerClient {
     signal?: AbortSignal;
   }): Promise<{ runnerId?: string; instanceId?: string } | undefined>;
   /**
-   * 配置の材料を聞く（roadmap M5 PR3）。**`ping` に相乗りさせない。**
+   * 配置の材料を聞く（M5 PR3）。**`ping` に相乗りさせない。**
    *
    * `ping` は同じ `/health` を叩くが**本文を読み捨てる。** 名乗りの中身
    * （`runner_id`）を読んで黙って採ると、器が入れ替わったときに台帳の鎖
@@ -843,7 +843,7 @@ export interface RunnerEntry {
 /**
  * runner の名簿。デーモンは**固定 URL ではなくここ**を見る。
  *
- * **動的である**ことがこの層の本体である（roadmap M5）。デーモンは名簿が空のまま
+ * **動的である**ことがこの層の本体である（M5）。デーモンは名簿が空のまま
  * 起動してよく、runner は後から載る。載る前に届いた委譲だけが待たされ、chat・日誌・
  * 承認は最初から動く（PRD「自律」— 人間の不在で止まってよいのは承認待ちの仕事だけ）。
  *
@@ -879,7 +879,7 @@ export interface RunnerRegistry {
    * **`cwd` はまだ置き先の材料になっていない。** 渡すと `Registry` は受け取るが読まない
    * （実装側の `select` にも同じ注意書きがある）。**「渡しているから効いている」と
    * 読まないこと** — 材料にできるのは workspace がどこにあるかを決めてからで、それは
-   * roadmap M5 の「workspace locator の運用選択」である。いま全台が同じ `workspacePath`
+   * M5 の「workspace locator の運用選択」である。いま全台が同じ `workspacePath`
    * （`/workspace`）を名乗り、実体だけが別のボリュームなので、パスの一致では
    * どの器のものか区別が付かない。**区別が付かないまま突き合わせる実装を入れると、
    * 効いていない照合を「効いている」と読める形で残すことになる。**
@@ -900,9 +900,9 @@ export interface RunnerRegistry {
    *   かもしれない」と言う——「名簿に無い」と断定しない）
    * - 一致する器はあるが `connected` ではない（state と直近の失敗を添えて言う）
    * - 一致する器が複数開けている（`Registry#get` は線形一致で先に見つかった方を
-   *   返す実装なので、指名しても片方に固定できない。roadmap M5 PR4（fencing）待ちの
+   *   返す実装なので、指名しても片方に固定できない。M5 PR4（fencing）待ちの
    *   既知のギャップが、指名を足したことで「クローンの判断が黙って別の器へ向く」形で
-   *   表に出る——`docs/roadmap.md` の申し送りそのもの）
+   *   表に出る——`docs/architecture.md`「実装フェーズ」の申し送りそのもの）
    */
   select(input: { cwd?: string; runnerId?: string }): Promise<RunnerClient>;
   /**
@@ -946,18 +946,18 @@ export interface RunnerRegistryOptions {
    *
    * **状態の再計算ではなく遷移である。** 「いま何秒応答が無いか」を都度数える形だと
    * *落ちた瞬間*がどこにも現れず、あとで走っていた仕事を別の器へ移す契機が作れない
-   * （roadmap M5 受け入れ基準4）。ここはその瞬間そのものを表す。
+   * （M5 受け入れ基準4）。ここはその瞬間そのものを表す。
    *
    * **ここで移送はしない。** 移送は二重実行を止める仕組み（fencing）が入ってからで、
    * 先に動かすと同じマネージャーが2台で走る。この PR が出すのは知らせだけである。
    */
   onLost?: (lost: { label: string; runnerId?: string; error: string }) => void;
   /**
-   * 同じ宛先に、**別のプロセスが応え始めた**ときに呼ばれる（roadmap M5 PR4）。
+   * 同じ宛先に、**別のプロセスが応え始めた**ときに呼ばれる（M5 PR4）。
    *
    * **これは `onLost` では拾えない。** 器が入れ替わっても `/health` は応え続ける
    * ので、生死の判定からは何も起きていないように見える（＝黙って入れ替わる）。
-   * roadmap 受け入れ基準6 が「一度開いた宛先が黙って入れ替わった場合は今も
+   * M5 受け入れ基準6 が「一度開いた宛先が黙って入れ替わった場合は今も
    * 引き取りが走らない」と書いているのがこの状態で、その**判定材料が無い**ことが
    * 直接の原因だった。
    *
@@ -1048,7 +1048,7 @@ const HEARTBEAT_PROBE_MS = 5_000;
 const PLACEMENT_PROBE_MS = 2_000;
 
 /**
- * 動的な名簿（roadmap M5）。
+ * 動的な名簿（M5）。
  *
  * 既に開いてある `RunnerClient` を渡す形も残してある — 既存の呼び出し（テストを
  * 含む）はそのまま動き、渡した分は「常に開ける開き方」として登録される。
@@ -1252,7 +1252,7 @@ class Registry implements RunnerRegistry {
    * `cwd` を引数だけ受けて捨てる形にしないのは、受けてあると「読んでいるが効かな
    * かった」に見え、届いていないこと自体が消えるからである。仮引数を作らなければ、
    * 呼び出し側から辿った者がここで必ず気づく。`cwd` が材料にできるようになるのは
-   * roadmap M5 の「workspace locator の運用選択」の後である（宣言側の注意書きに
+   * M5 の「workspace locator の運用選択」の後である（宣言側の注意書きに
    * 理由を書いた）。
    *
    * **`runnerId` は指名として読む。** 名指しされた器が開けていて使えるなら、点数
@@ -1329,8 +1329,8 @@ class Registry implements RunnerRegistry {
    *   添えて言う
    * - 一致する器が複数開けている。**`Registry#get` は `#entries` を線形一致で
    *   走査し先に見つかった方を返す実装なので、指名しても片方に固定できない**
-   *   （`docs/roadmap.md` M5 の申し送り、`get()` の doc に同じ注意がある）。
-   *   fencing（roadmap M5 PR4）が無いいまは、これを「一意でない」として拒むのが
+   *   （M5 の申し送り、`get()` の doc に同じ注意がある）。
+   *   fencing（M5 PR4）が無いいまは、これを「一意でない」として拒むのが
    *   誤った器を黙って選ぶよりましである
    */
   #selectByName(runnerId: string): RunnerClient {
@@ -1342,7 +1342,7 @@ class Registry implements RunnerRegistry {
       throw new Error(
         `runnerId=${runnerId} を名乗る器が ${matches.length} 台開けている（名前が一意でない）。` +
           'Registry#get は線形一致で先に見つかった方を返す実装なので、指名しても片方には' +
-          '固定できない（roadmap M5 PR4 の fencing 待ちの既知のギャップ）: ' +
+          '固定できない（M5 PR4 の fencing 待ちの既知のギャップ）: ' +
           matches.map((entry) => `${entry.source.label}(${entry.state})`).join(' / '),
       );
     }
@@ -1507,7 +1507,7 @@ class Registry implements RunnerRegistry {
   }
 
   // -------------------------------------------------------------------------
-  // 生きているかを聞く（roadmap M5）
+  // 生きているかを聞く（M5）
   //
   // **SSE の `hello` の置き換えではない。** あれは器が礼儀正しく落ちたときにしか
   // 届かない。電源が抜けた器も、ネットワークだけが切れた器も、ストリームは開いた
@@ -1582,7 +1582,7 @@ class Registry implements RunnerRegistry {
    * 区別が付かないまま引き取りを走らせると、**生きている器で走っている仕事を奪いに
    * 行く**＝同じマネージャーが2台で走る。
    *
-   * **解決するのは fencing（roadmap M5 PR4）である。** 「引き取ってよいか」を判定
+   * **解決するのは fencing（M5 PR4）である。** 「引き取ってよいか」を判定
    * できるようになって初めて、この遷移を契機にできる。それまでは知らせるだけに留める。
    *
    * ## 区別だけは付くようになった（それでも引き取りは走らせない）
@@ -1746,7 +1746,7 @@ function withDeadline<T>(
 }
 
 /**
- * 資源から置き先を決める（roadmap M5 PR3）。**必ず1台返る。**
+ * 資源から置き先を決める（M5 PR3）。**必ず1台返る。**
  *
  * 点数は「メモリの余り × 新しい1本が受け取る CPU」である。
  *
@@ -1759,7 +1759,7 @@ function withDeadline<T>(
  * `HEARTBEAT_*` に3度書いてあるのと同じ論法である。
  *
  * **報告の無い材料は、見えている器の平均で埋める。** 除外すれば資源を報告しない
- * 古い器が締め出され（roadmap M5 受け入れ基準5 — runner 数を増減しても能力削減が
+ * 古い器が締め出され（M5 受け入れ基準5 — runner 数を増減しても能力削減が
  * 入らない。禁止2 の「追加制限」でもある）、最良として扱えば余裕のある新しい器が
  * 選ばれなくなる。**どちらも欠陥なので、真ん中に置く** — 平均で埋めた器は、自分が
  * 報告できた材料だけで平均的な器と競う。M4 から `/health` が返している `managers`

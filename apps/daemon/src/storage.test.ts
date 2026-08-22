@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { DATABASE_URL_ENV, openStorage, planStorage } from './storage.js';
 
 /**
- * 記憶の置き場の選び方（roadmap M4）。
+ * 記憶の置き場の選び方（M4）。
  *
  * 実 DB への接続が要る部分は storage-pg のテストで担保してある。ここで固定したいのは
  * **構成の決まり方**、とくに「記憶へ到達するのに使った鍵を子プロセスから伏せる」

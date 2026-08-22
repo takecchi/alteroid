@@ -1,4 +1,4 @@
-# ローカルと同じものを、コンテナ + PostgreSQL で常駐させる（roadmap M4）。
+# ローカルと同じものを、コンテナ + PostgreSQL で常駐させる（M4）。
 #
 #   cp .env.example .env        # 3つ埋める（下記）
 #   docker compose up -d

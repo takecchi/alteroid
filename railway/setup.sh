@@ -219,7 +219,7 @@ fi
 
 # runner の台数。**既定は1のままにしてある** — 台数は費用でもあるので、増やすのは
 # 人間が言ったときだけである（`-c` か `.env`）。**台数を増やしても能力の上限は動かない**
-# （配置は実行環境の資源で決まる。人工の `maxManagers` は置かない。roadmap M5 の地雷）。
+# （配置は実行環境の資源で決まる。人工の `maxManagers` は置かない。M5 の地雷）。
 [ -n "$RUNNER_COUNT" ] || RUNNER_COUNT="$(env_file_get ALTEROID_RUNNER_COUNT)"
 : "${RUNNER_COUNT:=1}"
 case "$RUNNER_COUNT" in
@@ -721,7 +721,7 @@ if [ -n "$GH_TOKEN_VALUE" ]; then
     マネージャーに頼む:
 
       alteroid chat
-      > alteroid リポジトリの M5 を実装して PR を出して。AGENTS.md と docs/roadmap.md を先に読んで。
+      > alteroid リポジトリの M5 を実装して PR を出して。AGENTS.md と docs/architecture.md を先に読んで。
 
     鍵の差し替えは変数を置き直すだけでは走行中のマネージャーに届かない。
     railway/README.md「鍵を回す（走行中でも）」を見る。

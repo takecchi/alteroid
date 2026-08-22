@@ -53,7 +53,7 @@ import { settleWithin } from './usage-probe.js';
 import { hasAnyUsage, isSuccessResult, modelUsageOf, sessionModelUsageOf } from './usage.js';
 
 /**
- * manager-runner — SDK を隔離して走らせる層（roadmap M4）。
+ * manager-runner — SDK を隔離して走らせる層（M4）。
  *
  * **マネージャーと作業者は実装物ではない。** ここに書くのは配線だけ — 起こす・
  * 話しかける・出来事をデーモンへ返す・生ログを渡す。

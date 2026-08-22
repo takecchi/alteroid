@@ -16,7 +16,7 @@ import { createMiddleware } from 'hono/factory';
 import { streamSSE } from 'hono/streaming';
 
 /**
- * manager-runner の HTTP API（roadmap M4）。
+ * manager-runner の HTTP API（M4）。
  *
  * **叩くのはデーモンだけである。** runner はデーモンの所在も鍵も知らない —
  * 出来事は「デーモンが開いたストリーム」を流れ落ちる（`GET /events`）。逆向きの
@@ -145,12 +145,12 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         ok: true,
         runnerId: host.runnerId,
         /**
-         * **いまこの名前に応えているプロセスがどれか**（roadmap M5 PR4 の判定材料）。
+         * **いまこの名前に応えているプロセスがどれか**（M5 PR4 の判定材料）。
          *
          * `runnerId` は宛先の名前で、器を作り直しても同じである（台帳の鎖
          * `manager_id → runner_id` がそれで繋がっている）。だからこの値だけでは
          * 「新しいコンテナが応え始めた」ことを誰も観測できず、名簿は器の入れ替えと
-         * 単なる回復を区別できなかった（roadmap 受け入れ基準6）。
+         * 単なる回復を区別できなかった（M5 受け入れ基準6）。
          *
          * **安定させないこと。** ここは起動ごとに変わることが唯一の役目である
          * （`runnerId` の別名を作るのではない）。ファイルや環境変数から読んで
@@ -164,7 +164,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         managers: host.list().length,
         pendingEvents: outbox.pending,
         /**
-         * 実行環境の資源（roadmap M5 PR3）。**「収容能力」ではない。**
+         * 実行環境の資源（M5 PR3）。**「収容能力」ではない。**
          *
          * ここに出るのは観測値だけである。「あと何本置けるか」は runner も答えない
          * — それは定員であって、配置の判断は名簿の側（`select`）にある

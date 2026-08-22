@@ -9,7 +9,7 @@ import type { InboxEvent } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
 /**
- * runner の名簿（roadmap M5）。
+ * runner の名簿（M5）。
  *
  * ここで固定したいのは**名簿が動的である**ことである。デーモンは runner が
  * 上がるのを待たずに走り始め、runner は後から名簿に載る。載る前に届いた委譲が

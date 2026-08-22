@@ -257,7 +257,7 @@ function describeRunner(): string {
  */
 export async function main(): Promise<void> {
   // 記憶の置き場（ローカルの fs か、クラウドの PostgreSQL か）。器が違っても
-  // 上の階層は同じものを見る（roadmap M4 受け入れ基準1）。
+  // 上の階層は同じものを見る（M4 受け入れ基準1）。
   const storage = await openStorage();
   const { paths } = storage;
 
@@ -361,7 +361,7 @@ export async function main(): Promise<void> {
      *
      * **`onLost` では拾えない事象である。** 器が入れ替わっても `/health` は応え
      * 続けるので、生死の判定からは何も起きていないように見える — これまでは
-     * **黙って入れ替わっていた**（roadmap 受け入れ基準6 の「一度開いた宛先が黙って
+     * **黙って入れ替わっていた**（M5 受け入れ基準6 の「一度開いた宛先が黙って
      * 入れ替わった場合」）。
      *
      * **ここでも引き取りはしない。** 入れ替わったことが見えても「古いプロセスが

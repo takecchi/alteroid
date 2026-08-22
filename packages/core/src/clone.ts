@@ -2567,7 +2567,7 @@ class Clone implements CloneHost {
     }
 
     try {
-      // 退避するのは全文（ロードマップの要件）。蒸留に渡すのは末尾だけにする。
+      // 退避するのは全文（実装フェーズの要件）。蒸留に渡すのは末尾だけにする。
       const transcript = await readFile(transcriptPath, 'utf8');
       await this.#stores.archive.archive(sessionId ?? 'clone', transcript);
       if (signal?.aborted !== true) await this.#distillFromTranscript(tailOf(transcript));

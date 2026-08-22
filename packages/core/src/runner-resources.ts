@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { RunnerExecutionResources } from './runner-protocol.js';
 
 /**
- * 実行環境の資源を読む（roadmap M5 PR3「cgroup v2 で実行環境の資源を読む」）。
+ * 実行環境の資源を読む（M5 PR3「cgroup v2 で実行環境の資源を読む」）。
  *
  * **`os` モジュールで代用しないこと。** `os` が答えるのは器の外（ホスト）の値で、
  * 器がどれだけ絞られていても同じ数を返す。実測（runner の器の中・2026-08-19）:

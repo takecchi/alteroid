@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readExecutionResources } from './runner-resources.js';
 
 /**
- * 実行環境の資源の読み方（roadmap M5 / PR3「cgroup v2 で読む」）。
+ * 実行環境の資源の読み方（M5 / PR3「cgroup v2 で読む」）。
  *
  * **ここはメモリで押さえてある。** CPU 数だけで確かめると、器の絞り方によっては
  * cgroup とホストの数が偶然一致し、`os` モジュールを読む実装でも「正しく見える」

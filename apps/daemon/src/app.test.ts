@@ -2021,7 +2021,7 @@ describe('parseAllowedOrigins', () => {
  * `GET /runners` は runner の一覧であって、**繋がっている runner の一覧ではない。**
  *
  * 上がってこない runner が一覧から消えるだけだと、人間には「設定し忘れた」のか
- * 「上がってこない」のかが区別できない（roadmap M5「runner の登録・生存判定」）。
+ * 「上がってこない」のかが区別できない（M5「runner の登録・生存判定」）。
  */
 describe('runner の生死', () => {
   it('繋がっていない runner も、宛先と状態付きで並ぶ', async () => {

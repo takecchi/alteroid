@@ -10,7 +10,7 @@ import { approvals, jobs } from './schema.js';
  * ジョブ台帳と承認待ちキュー。
  *
  * ジョブ行が持つ `session_id`（jsonb の中）が、デーモン再起動後にマネージャーの
- * 続きへ戻るための足がかりである（roadmap M4）。
+ * 続きへ戻るための足がかりである（M4）。
  */
 export class PgJobStore implements JobStore {
   readonly #db: Db;

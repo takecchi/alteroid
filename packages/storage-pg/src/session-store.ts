@@ -6,7 +6,7 @@ import { stripNulls } from './db.js';
 import { sessionEntries, sessions } from './schema.js';
 
 /**
- * SDK の SessionStore アダプタ（roadmap M4）。
+ * SDK の SessionStore アダプタ（M4）。
  *
  * クローンもマネージャーも、セッションの生ログはローカルディスクにも書かれるが、
  * コンテナではそれが再起動で消える。**同じ PostgreSQL に載せておけば、器が作り

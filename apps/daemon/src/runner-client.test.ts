@@ -30,7 +30,7 @@ const TOKEN = 'test-runner-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
 
 /**
- * デーモン ↔ manager-runner を**実際の HTTP 境界越しに**通す統合テスト（roadmap M4）。
+ * デーモン ↔ manager-runner を**実際の HTTP 境界越しに**通す統合テスト（M4）。
  *
  * ここで確かめたいのは、分離しても M1〜M3 の能力が落ちないことである:
  * 委譲・許可確認のエスカレーション・報告・監査（全ツール実行）・生ログ、そして
@@ -525,7 +525,7 @@ describe('デーモン ↔ manager-runner（HTTP 境界）', () => {
 });
 
 /**
- * 配置の材料が HTTP の境界を渡ること（roadmap M5 / PR3）。
+ * 配置の材料が HTTP の境界を渡ること（M5 / PR3）。
  *
  * 資源の値そのものは器によって違うので**値では見ない**（cgroup の読み方は
  * `packages/core/src/runner-resources.test.ts` が押さえている）。ここで見るのは、
@@ -626,7 +626,7 @@ describe('資源による配置の材料', () => {
 });
 
 /**
- * 器の入れ替えの判定材料（roadmap M5 PR4）。
+ * 器の入れ替えの判定材料（M5 PR4）。
  *
  * **本物の runner の `/health` を通して確かめる。** ここで偽の応答を組み立てると、
  * runner が実際に `instanceId` を名乗っていることを1つも確かめられない

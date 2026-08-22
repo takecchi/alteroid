@@ -16,7 +16,7 @@ import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 
 /**
- * `manager_id → runner_id` の貼り付き（sticky routing。roadmap M5 受け入れ基準2）。
+ * `manager_id → runner_id` の貼り付き（sticky routing。M5 受け入れ基準2）。
  *
  * **機構は前から在る**（`Pool#runnerOf` が台帳の `job.runnerId` を
  * `RunnerRegistry#get` で解決し、見つからなければ `null` を返して別の器へは
@@ -345,7 +345,7 @@ describe('manager_id → runner_id の貼り付き（M5 受け入れ基準2 / 3�
    * 2台開いていると、台帳が指しているのは1つの名前なのに、指示は名簿の並び順で
    * 決まった片方へ行く — **クローンが指名した器ではない器で手が動きうる。**
    *
-   * 塞ぐのは fencing（`docs/roadmap.md` M5 PR4 / 貸し出し期限）で、それが入るまで
+   * 塞ぐのは fencing（M5 PR4 / 貸し出し期限）で、それが入るまで
    * こうなる。`RunnerRegistry#select` の doc（「指名しても片方に固定できない」）と
    * `onSwap` の doc が同じギャップを申し送りしている。
    *

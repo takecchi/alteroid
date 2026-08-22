@@ -11,7 +11,7 @@ import type {
 } from './runner-protocol.js';
 
 /**
- * 指名（`select({ runnerId })`）による置き先の選択（roadmap M5、「選ぶ」側）。
+ * 指名（`select({ runnerId })`）による置き先の選択（M5、「選ぶ」側）。
  *
  * **これは配置の指名であって、本数の制限ではない。** ここで固定したいのは、
  * 指名された器が使えるときは資源の点数計算（`#place` / `chooseByResources`）を
@@ -158,7 +158,7 @@ describe('指名（select({ runnerId })）', () => {
 
   it('同じ名前を名乗る2台が開けているとき失敗する（名前が一意でない）', async () => {
     // **`Registry#get` の線形一致と同じ穴。** 別々の label で登録された2台が、
-    // 同じ `runnerId` を名乗って開けている状況（roadmap M5 PR4 の fencing 待ち）。
+    // 同じ `runnerId` を名乗って開けている状況（M5 PR4 の fencing 待ち）。
     const registry = createRunnerRegistry();
     await registry.register({ label: 'label-a', open: async () => new FakeRunner('dup-name') });
     await registry.register({ label: 'label-b', open: async () => new FakeRunner('dup-name') });

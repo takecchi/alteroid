@@ -115,7 +115,7 @@ export const NO_CAPABILITIES: AgentCapabilities = {
  * `partialMessages` を除いた9個）。
  *
  * **`partialMessages` だけを外している理由**: 他の9個はいずれも docs
- * （north_star / PRD / architecture）か roadmap の受け入れ基準が名指しで要求して
+ * （north_star / PRD / architecture）か architecture『実装フェーズ』の受け入れ基準が名指しで要求して
  * いるのに対し、`partialMessages` は応答の見せ方（ストリーミング表示）でしかない
  * — それが `false` でも、人間が最終的に受け取る応答内容そのものは変わらない
  * （`includePartialMessages` は途中経過の `stream_event` を追加で流すだけで、

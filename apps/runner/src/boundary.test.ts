@@ -21,7 +21,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createRunnerApp, Outbox } from './app.js';
 
 /**
- * **マネージャーが自分の許可確認に自分で答えられないこと**を確かめる（roadmap M4）。
+ * **マネージャーが自分の許可確認に自分で答えられないこと**を確かめる（M4）。
  *
  * マネージャーは runner の中で走る子プロセスであり、Bash も WebFetch も持っている。
  * 制御面（runner API）に手が届けば、`GET /managers` で自分の `requestId` を調べ、
