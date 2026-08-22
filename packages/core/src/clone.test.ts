@@ -6214,6 +6214,114 @@ describe('クローン — 人間が待っている合図を待ち行列の先�
 
     await s.clone.stop();
   }, 15_000);
+
+  /**
+   * **会話をまたいでも人間どうしは送信順で、まとめは会話の中だけ。** 上の
+   * 「送信順のまま」は会話が1つの場合を測っている。ここは**会話が複数ある場合**を
+   * 測る — Web UI は会話を別々に作れ（`/chat/<conversationId>`）、人間は複数の
+   * 会話を並行して開く。
+   *
+   * **人間が名指しで聞いた形である**（2026-08-22 JST、逐語）:
+   *
+   * > 処理待機中→マネージャーAから発言→マネージャーBから発言→ユーザーが新規会話
+   * > (会話ID:H)→ユーザーが新規会話(会話ID:I)→ユーザーが追加発言(会話ID:H)→
+   * > マネージャーCから発言
+   * >
+   * > この処理順を教えてほしい
+   *
+   * **並びが2つの規則の交点で決まるので、片方だけ見ても答えが出ない。**
+   *
+   * 1. `Inbox#push` の `insertAfterLast(isHumanOriginated)` は**会話 id を見ない**
+   *    ので、人間の中は純粋な送信順（H → I → H）。**会話 H の2件目は、先に届いた
+   *    会話 I を追い越さない**
+   * 2. `#mergedHumanBatch` は「**先頭から連続していて、かつ同じ `conversationId`**」
+   *    しか束ねない（`drainWhile`）ので、あいだに会話 I が挟まった会話 H の2件は
+   *    **まとまらず、別々のターンで読まれる**
+   *
+   * **1と2は逆を向いている。** 1は「会話をまたいで1列に並べる」、2は「会話の中
+   * でしか束ねない」。**どちらかを変えると、もう一方が黙って変わる** — 会話 H の
+   * 2件を束ねるには待ち行列全体から掻き集めるしかなく、その瞬間に会話 I が1ターン
+   * 後ろへ下がって規則1（会話をまたぐ送信順）が崩れる。**人間はこの交換を提示された
+   * うえで「会話をまたぐと送信順を守るでいい」と決めた**（同日、逐語）。だから
+   * **ここで固定しているのは実装の都合ではなく、人間が選んだ側である。**
+   *
+   * **実装は1文字も変えずにこの歯を足している。** 挙動は #177 の時点で既にこう
+   * なっていたが、**測る歯が1本も無かった** — 人間が聞くまで誰も測っていなかった、
+   * という #177 と同じ形である（あちらは「人間どうしの送信順」）。
+   *
+   * **本数（7）まで assert するのは、まとめの有無が本数にしか現れないからである。**
+   * 順序（`findIndex`）だけを見ると、会話 H の2件が1ターンに束ねられても
+   * 「H1 が I1 より前」は真のまま通る。**規則2が壊れても順序の assert は緑になる。**
+   */
+  it('会話をまたいでも人間どうしは送信順で、あいだに別の会話が挟まればまとめない', async () => {
+    const s = setupWithHumanPriority(true, () => 'わかった', { delayMs: 150 });
+
+    // 「処理待機中」＝ 先客のターンが走っている最中。ここへ6件が積み上がる。
+    // **走行中のターンは止まらない**（人間優先が縮めるのは待ち行列で待つ時間だけ）。
+    s.clone.post(humanMessage('先客', 'conv-0'));
+    await waitForFirstTurn(s);
+
+    s.clone.post(managerMessage('evt-mgr-a', 'mgr-A', 'Aの報告'));
+    s.clone.post(managerMessage('evt-mgr-b', 'mgr-B', 'Bの報告'));
+    s.clone.post(humanMessage('会話Hの1件目', 'conv-H'));
+    s.clone.post(humanMessage('会話Iの1件目', 'conv-I'));
+    s.clone.post(humanMessage('会話Hの2件目', 'conv-H'));
+    s.clone.post(managerMessage('evt-mgr-c', 'mgr-C', 'Cの報告'));
+
+    const markerA = managerMarker('mgr-A', 'Aの報告');
+    const markerB = managerMarker('mgr-B', 'Bの報告');
+    const markerC = managerMarker('mgr-C', 'Cの報告');
+    // **最後に読まれるはずのものが届くまで待つ。** 順序では待たない
+    // （`waitForAllDelivered` の doc）。
+    await waitForAllDelivered(s, [markerC]);
+    await settle();
+
+    const inputs = s.calls[0]?.inputs ?? [];
+
+    // **本数で、まとめが1件も起きていないことを見る。** 先客 ＋ 人間3件 ＋
+    // マネージャー3件 ＝ 7本。会話 H の2件が束ねられれば6本になる。
+    expect(inputs).toHaveLength(7);
+
+    // **目印は単発ターンの形（`---\n<本文>`）で探す。** 生の本文で探すと、他の
+    // ターンの digest に引用された「まだ読まれていない合図」に当たる
+    // （`humanMarker` の doc）。まとめられた場合はこの形にならないので、
+    // 束ねられた瞬間にここが -1 になって落ちる（本数の assert と二重に効く）。
+    const joined = inputs.join('\n');
+    const idxH1 = joined.indexOf(humanMarker('会話Hの1件目'));
+    const idxI1 = joined.indexOf(humanMarker('会話Iの1件目'));
+    const idxH2 = joined.indexOf(humanMarker('会話Hの2件目'));
+    const idxA = joined.indexOf(markerA);
+    const idxB = joined.indexOf(markerB);
+    const idxC = joined.indexOf(markerC);
+
+    expect(idxH1, '会話Hの1件目 が単発ターンとして見つからない').toBeGreaterThan(-1);
+    expect(idxI1, '会話Iの1件目 が単発ターンとして見つからない').toBeGreaterThan(-1);
+    expect(idxH2, '会話Hの2件目 が単発ターンとして見つからない').toBeGreaterThan(-1);
+    expect(idxA).toBeGreaterThan(-1);
+    expect(idxB).toBeGreaterThan(-1);
+    expect(idxC).toBeGreaterThan(-1);
+
+    // **人間の中は送信順。会話 H の2件目は、先に届いた会話 I を追い越さない。**
+    // ここが「同じ会話を待ち行列全体から掻き集める」実装で反転する。
+    expect(idxH1).toBeLessThan(idxI1);
+    expect(idxI1).toBeLessThan(idxH2);
+
+    // **人間3件は、先に積まれていたマネージャー2件を全部飛び越す。**
+    expect(idxH2).toBeLessThan(idxA);
+
+    // **人間以外どうしは到着順のまま。後から届いた C も末尾のままで、餓死しない。**
+    expect(idxA).toBeLessThan(idxB);
+    expect(idxB).toBeLessThan(idxC);
+
+    // 会話 H の2件が別々のターンで読まれている（同じターンに同居していない）。
+    // **本数の assert とは別の壊れ方を捕まえる** — 片方が落ちて片方が残る形
+    // （例: 束ねずに1件を捨てる）だと本数は7のままになりうる。
+    const turnOfH1 = inputs.findIndex((text) => text.includes(humanMarker('会話Hの1件目')));
+    const turnOfH2 = inputs.findIndex((text) => text.includes(humanMarker('会話Hの2件目')));
+    expect(turnOfH1).not.toBe(turnOfH2);
+
+    await s.clone.stop();
+  }, 20_000);
 });
 
 /**
