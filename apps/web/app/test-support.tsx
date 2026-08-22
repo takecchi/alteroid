@@ -21,6 +21,37 @@ if (typeof Element !== 'undefined' && Element.prototype.scrollIntoView === undef
 }
 
 /**
+ * `ResizeObserver` も jsdom には無い。**`virtua`（日誌画面の仮想スクロール、
+ * `routes/journal.tsx`）がマウント時に `new ResizeObserver(...)` を呼ぶため、
+ * 無いままでは `ResizeObserver is not a constructor` で描画そのものが例外に
+ * なる**（実測、2026-08-23: `<Virtualizer>` を素の jsdom へ `render()` すると
+ * この例外が `render()` の呼び出し元まで同期的に伝播する）。
+ *
+ * ⚠️ **これは「クラッシュを防ぐだけ」の足場であり、実測はしない。** 呼ばれた
+ * `observe()` のコールバックを一度も呼ばない no-op である。**理由は
+ * `matchMedia` と違って偽装できないから** — jsdom は本物のレイアウトを
+ * 持たず、`offsetParent` が常に `null`・`getBoundingClientRect()` が常に
+ * ゼロを返す。virtua のコールバック処理は `target.offsetParent` が非 null の
+ * 要素だけを扱うので、コールバックを合成して呼んでも（＝実寸を捏造しても）
+ * 素通りされる（実験で確認済み: `clientHeight`/`offsetHeight` を固定値で
+ * 上書きしても結果は変わらなかった）。**結果として、`virtua` は jsdom では
+ * 中身（日誌の行）を1行も描画しない。** 行の中身を `screen.getByText` で
+ * アサートするテストは、この足場では書けない — `journal.test.tsx` の冒頭
+ * コメントと `.claude/skills/mutation-testing/SKILL.md`「足場が触る対象と、
+ * 歯が測る対象が重なる」を参照。**対応していない入力を投げる形（`matchMedia`
+ * と同じ作法）はここでは採らない** — `ResizeObserver` に「対応していない
+ * クエリ」に相当する分岐が無く、投げる先が無いため。
+ */
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  class NoopResizeObserver implements ResizeObserver {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  globalThis.ResizeObserver = NoopResizeObserver;
+}
+
+/**
  * `window.matchMedia` も jsdom には無い。**`useIsMobile`（`useSyncExternalStore` で
  * `matchMedia('(max-width: 767px)')` を見る）を通る画面を描くと、無いままでは
  * `window.matchMedia is not a function` で落ちる。** `AuthedShell` を描く既存・将来の
