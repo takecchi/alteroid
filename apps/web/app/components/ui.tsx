@@ -44,8 +44,15 @@ const BUTTON_VARIANTS = {
 } as const;
 
 const BUTTON_SIZES = {
-  sm: 'h-7 px-2 text-xs',
-  md: 'h-9 px-3 text-sm',
+  // 狭い画面（`md` 未満）ではタップ標的を 44px（`h-11`）まで持ち上げる。
+  // 指で押す先は 44px 以上（WCAG 2.5.5 / Apple HIG の下限。同じ基準を
+  // `apps/web/app/routes/shell.tsx` の `size-11` が既に使っている）。
+  // `md:` の境目は `apps/web/app/hooks/use-is-mobile.ts` の
+  // `MOBILE_BREAKPOINT`（768）と揃えてある。広い画面の見た目は変えない
+  // （依頼は「スマホ表示」であって、デスクトップまで背を高くするのは
+  // 依頼より広い）。
+  sm: 'h-11 px-3 text-xs md:h-7 md:px-2',
+  md: 'h-11 px-3 text-sm md:h-9',
 } as const;
 
 export function Button({
@@ -101,7 +108,14 @@ export function Badge({
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium',
+        // `shrink-0`: 横並びの flex 行の中で潰されて文字が読めなくなる幅まで
+        // 縮まないようにする。**`whitespace-nowrap` は入れていない** —
+        // `commitments.tsx` の `OriginBadge` は `commitment.source`
+        // （`z.string().optional()`、長さの制約なし）を、`settings.tsx` の
+        // 資格情報一覧は `credential.name`（`CREDENTIAL_NAME` 正規表現に
+        // 長さの上限が無い）をそのまま中身にしており、折り返さない指定は
+        // 可変の長文が来たときにはみ出しを直すどころか作る側へ振れる。
+        'inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium',
         BADGE_TONES[tone],
         className,
       )}
