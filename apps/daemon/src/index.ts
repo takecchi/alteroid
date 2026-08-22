@@ -40,9 +40,11 @@ import { planAuth } from './auth.js';
 import { createJournalBus } from './journal-bus.js';
 import {
   createHttpRunner,
+  describeRunnerDropped,
   describeRunnerUnknown,
   managerIdOfRunnerPath,
   RunnerHttpError,
+  type RunnerDroppedEventReport,
   type RunnerUnknownReport,
 } from './runner-client.js';
 import { clearRuntimeInfo, writeRuntimeInfo } from './runtime.js';
@@ -72,12 +74,14 @@ export { createJournalBus, type JournalBus } from './journal-bus.js';
 export { openStorage, DATABASE_URL_ENV, type Storage } from './storage.js';
 export {
   createHttpRunner,
+  describeRunnerDropped,
   describeRunnerUnknown,
   managerIdOfRunnerPath,
   RUNNER_CALL_DEADLINE_MS,
   RunnerHttpError,
   RunnerUnknownError,
   type HttpRunnerOptions,
+  type RunnerDroppedEventReport,
   type RunnerUnknownReport,
 } from './runner-client.js';
 export {
@@ -170,6 +174,7 @@ function runnerSeeds(options: {
    * （`main()` が `stores.journal` を持っている）。
    */
   onRunnerUnknown: (report: RunnerUnknownReport) => void;
+  onRunnerDropped: (report: RunnerDroppedEventReport) => void;
 }): RunnerSource[] {
   const urls = parseRunnerUrls(process.env);
   if (urls.length > 0) {
@@ -182,7 +187,7 @@ function runnerSeeds(options: {
     }
     return urls.map((url) => ({
       label: url,
-      open: () => openHttpRunner(url, token, options.onRunnerUnknown),
+      open: () => openHttpRunner(url, token, options.onRunnerUnknown, options.onRunnerDropped),
     }));
   }
   return [
@@ -216,9 +221,10 @@ async function openHttpRunner(
   baseUrl: string,
   token: string,
   onUnknown: (report: RunnerUnknownReport) => void,
+  onDroppedEvent: (report: RunnerDroppedEventReport) => void,
 ): Promise<RunnerClient> {
   try {
-    return await createHttpRunner({ baseUrl, token, onUnknown });
+    return await createHttpRunner({ baseUrl, token, onUnknown, onDroppedEvent });
   } catch (error) {
     if (error instanceof RunnerHttpError && (error.status === 401 || error.status === 403)) {
       throw new RunnerHttpError(
@@ -319,11 +325,33 @@ export async function main(): Promise<void> {
       });
   };
 
+  /**
+   * **解釈できずに捨てた出来事を、日誌へ残す。**
+   *
+   * これが無いと、runner が新しい種類の出来事を出し始めても**届いていないことを
+   * 観測できる場所が1つも無い**（`describeRunnerDropped` の doc）。
+   *
+   * **日誌に落ちなかったときは stderr へ。** `reportRunnerUnknown` と同じ形で、
+   * 「残せなかった」ことまで残す。
+   */
+  const reportRunnerDropped = (report: RunnerDroppedEventReport): void => {
+    const summary = describeRunnerDropped(report);
+    void stores.journal
+      .append({ type: 'external_event', source: 'runner', summary })
+      .catch((error: unknown) => {
+        process.stderr.write(
+          `alteroidd: runner の捨てた出来事を日誌へ残せませんでした: ${reasonOf(error)}\n` +
+            `  ${summary}\n`,
+        );
+      });
+  };
+
   const seeds = runnerSeeds({
     workspace,
     withheldEnvKeys: storage.withheldEnvKeys,
     profilePath: join(paths.state, 'runner-profile.sh'),
     onRunnerUnknown: reportRunnerUnknown,
+    onRunnerDropped: reportRunnerDropped,
   });
 
   /**
