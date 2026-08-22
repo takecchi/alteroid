@@ -7,6 +7,7 @@ import type {
   PermissionResult,
   Query,
   SDKMessage,
+  SessionStoreEntry,
 } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -4190,8 +4191,11 @@ describe('生ログを読み出せなかったとき（「無い」と畳まな�
   };
 
   /** `load` の振る舞いだけを差し替えたプールを組む。 */
-  async function poolWithSessionStore(load: () => Promise<unknown[] | null>) {
-    const stores = { ...createMemoryStores(), sessionStore: { append: async () => undefined, load } };
+  async function poolWithSessionStore(load: () => Promise<SessionStoreEntry[] | null>) {
+    const stores = {
+      ...createMemoryStores(),
+      sessionStore: { append: async () => undefined, load },
+    };
     await stores.jobs.putJob(job);
     const fake = swappableRunner();
     const inbox: InboxEvent[] = [];

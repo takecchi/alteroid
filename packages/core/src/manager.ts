@@ -1,10 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import {
-  journalEntryShape,
-  noteDroppedRecord,
-  noteUnreadableRecord,
-} from './dropped-record.js';
+import { journalEntryShape, noteDroppedRecord, noteUnreadableRecord } from './dropped-record.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap, type RecentMap } from './recent.js';
 import { describeRunnerEntries, isRetryableRunnerError } from './runner-protocol.js';
@@ -2238,7 +2234,10 @@ function shouldEscalateDenial(count: number): boolean {
  * **言い方の持ち主を1つにする。** `send()` は `#resuming` を事前にも見るので、
  * 同じ「取り直している最中」を2箇所で書くと、片方だけが直る形になる。
  */
-function resumeFailureDetail(managerId: string, outcome: Exclude<ResumeOutcome, 'resumed'>): string {
+function resumeFailureDetail(
+  managerId: string,
+  outcome: Exclude<ResumeOutcome, 'resumed'>,
+): string {
   switch (outcome) {
     case 'no-session':
       return `${managerId} は session_id を持っておらず、続きへ戻れない。新しく起こし直すこと。`;
