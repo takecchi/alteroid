@@ -418,3 +418,180 @@ async function waitForNoUnread(stores: Stores): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
+
+/** 台帳にその id が現れるまで待つ（`#commit` は `post` から見て非同期）。 */
+async function waitForCommitment(stores: Stores, id: string): Promise<void> {
+  const started = Date.now();
+  for (;;) {
+    if ((await stores.commitments.get(id)) !== null) return;
+    if (Date.now() - started > 3000) throw new Error(`台帳に ${id} が現れない`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+/**
+ * 「クローンが既に片付けたと宣言済みの合図が、再起動後にまた全文で配り直される」
+ * という実測の直し（`#restoreUnread` が `stores.commitments` を引く）。
+ *
+ * **合図は落とさない。ターンも焼く。短くするのは本文だけ**という仕様をそのまま
+ * テストにする。`fakeSdk` はツール呼び出しを再現しないので、「クローンが
+ * `commitment_close` を呼んだ」状態は台帳を直接閉じて代用する。
+ */
+describe('片付け済みの配り直し（本文だけを短くする）', () => {
+  it('既に commitment_close で片付けていたら、配り直しは短縮され、全文の取り方が具体的に入る', async () => {
+    // **最初の1回分の日誌書き込みだけを落とす。** 落とさないと、この検証は
+    // 「dying（クローズ前）が書いた全文」で満たせてしまい、「配り直しでも日誌の
+    // 書き込みは変えていない」を測ったことにならない（`droppingFirstJournalAppend`
+    // と同じ形。修復＝別の書き込みが同じ結論を出してしまう問題）。
+    const base = createMemoryStores();
+    let droppedFirstManagerExchange = false;
+    const stores: Stores = {
+      ...base,
+      journal: {
+        ...base.journal,
+        append(entry) {
+          if (
+            !droppedFirstManagerExchange &&
+            entry.type === 'exchange' &&
+            entry.with === 'manager' &&
+            entry.role === 'inbound'
+          ) {
+            droppedFirstManagerExchange = true;
+            return Promise.reject(new Error('最初の1回だけ落とす（検証のため）'));
+          }
+          return base.journal.append(entry);
+        },
+      },
+    };
+
+    const dying = bootClone(stores, 'hang');
+    await idle();
+    dying.clone.post(report('CLOSED-REPORT 本文はこれだけ長くしておく', 'evt-closed'));
+    await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
+    await waitForCommitment(stores, 'evt-closed');
+
+    expect(
+      await stores.commitments.close('evt-closed', '2026-08-02T00:00:00.000Z', 'もう対応済み'),
+    ).toBe(true);
+
+    const reborn = bootClone(stores);
+    await waitFor(() => reborn.inputs.length > 0, '拾い直した合図が処理に入る');
+
+    const prompt = reborn.inputs[0] ?? '';
+    // 本文はもう全文では載らない。
+    expect(prompt).not.toContain('CLOSED-REPORT 本文はこれだけ長くしておく');
+    // だが「配り直しである」ことと、片付いていることは分かる。
+    expect(prompt).toContain('再起動後の配り直しである');
+    expect(prompt).toContain('片付けた時刻');
+    expect(prompt).toContain('2026-08-02T00:00:00.000Z');
+    expect(prompt).toContain('もう対応済み');
+    // 全文の取り方（journal_read）が具体的に書いてある（「省略した」だけで終わらない）。
+    expect(prompt).toContain('journal_read');
+    // どの合図かも分かる（マネージャー id。`inboxEventShape` を流用）。
+    expect(prompt).toContain('mgr-1');
+
+    // **日誌への書き込みは変えない。** dying の1回目は上で落としてあるので、
+    // ここに全文があるのは配り直し（reborn）自身の書き込みでしかありえない。
+    expect(droppedFirstManagerExchange).toBe(true);
+    const journal = await stores.journal.list({ types: ['exchange'] });
+    expect(
+      journal.some(
+        (entry) =>
+          entry.type === 'exchange' &&
+          entry.role === 'inbound' &&
+          entry.with === 'manager' &&
+          entry.text.includes('CLOSED-REPORT 本文はこれだけ長くしておく'),
+      ),
+    ).toBe(true);
+
+    // それでも「合図は落とさない。ターンも焼く」— 消し込みは通常どおり進む。
+    await reborn.clone.stop();
+    expect(await stores.inbox.claimPending()).toEqual([]);
+  });
+
+  it('human_message でも同じく短縮される（配線は起点ごとに分かれているので `manager_message` だけでは足りない）', async () => {
+    const stores = createMemoryStores();
+    const text = 'CLOSED-HUMAN-MSG 本文はこれだけ長くしておく';
+    const event = humanMessage(text);
+
+    const dying = bootClone(stores, 'hang');
+    await idle();
+    dying.clone.post(event);
+    await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
+    await waitForCommitment(stores, event.id);
+
+    expect(
+      await stores.commitments.close(event.id, '2026-08-02T00:00:00.000Z', 'もう対応済み'),
+    ).toBe(true);
+
+    const reborn = bootClone(stores);
+    await waitFor(() => reborn.inputs.length > 0, '拾い直した合図が処理に入る');
+
+    const prompt = reborn.inputs[0] ?? '';
+    expect(prompt).not.toContain(text);
+    expect(prompt).toContain('再起動後の配り直しである');
+    expect(prompt).toContain('journal_read');
+
+    await reborn.clone.stop();
+  });
+
+  it('未了（クローンがまだ片付けていない）合図の配り直しは、1文字も変えず全文のまま届く', async () => {
+    const stores = createMemoryStores();
+
+    const dying = bootClone(stores, 'hang');
+    await idle();
+    dying.clone.post(report('OPEN-REPORT 本文はこれだけ長くしておく', 'evt-open'));
+    await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
+    await waitForCommitment(stores, 'evt-open');
+    // 閉じない（未了のまま次の器を起こす）。
+
+    const reborn = bootClone(stores);
+    await waitFor(() => reborn.inputs.length > 0, '拾い直した合図が処理に入る');
+
+    const prompt = reborn.inputs[0] ?? '';
+    expect(prompt).toContain('OPEN-REPORT 本文はこれだけ長くしておく');
+    // 短縮側の断り書きは出ない。
+    expect(prompt).not.toContain('クローンは既にこの合図を片付けている');
+
+    await reborn.clone.stop();
+  });
+
+  it('片付き確認（commitments.get）が失敗しても全文で配る。ターンは落ちない（雑音であって喪失ではない側へ倒す）', async () => {
+    const base = createMemoryStores();
+    let failNextGet = false;
+    const stores: Stores = {
+      ...base,
+      commitments: {
+        ...base.commitments,
+        get: (id: string) => {
+          if (failNextGet) return Promise.reject(new Error('台帳が読めない'));
+          return base.commitments.get(id);
+        },
+      },
+    };
+
+    const dying = bootClone(stores, 'hang');
+    await idle();
+    dying.clone.post(report('THROW-REPORT 本文はこれだけ長くしておく', 'evt-throw'));
+    await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
+    await waitForCommitment(stores, 'evt-throw');
+    expect(await stores.commitments.close('evt-throw', new Date().toISOString(), '片付けた')).toBe(
+      true,
+    );
+
+    // 拾い直しの側でだけ読み出しを落とす。
+    failNextGet = true;
+    const lines = await captureStderr(async () => {
+      const reborn = bootClone(stores);
+      await waitFor(() => reborn.inputs.length > 0, '拾い直した合図が処理に入る');
+
+      const prompt = reborn.inputs[0] ?? '';
+      // **閉じているのに、読めなかったので全文のまま届く。** ターンは落ちていない
+      // （待てたこと自体が、ターンが最後まで走った証拠である）。
+      expect(prompt).toContain('THROW-REPORT 本文はこれだけ長くしておく');
+
+      await reborn.clone.stop();
+    });
+    expect(lines.some((line) => line.includes('配り直しの片付き確認'))).toBe(true);
+  });
+});
