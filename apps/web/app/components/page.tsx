@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ReactNode, Ref } from 'react';
 
 import { cn } from '~/lib/cn';
 
@@ -16,12 +16,27 @@ export function Page({
   description,
   action,
   className,
+  scrollRef,
   children,
 }: {
   title: ReactNode;
   description?: ReactNode;
   action?: ReactNode;
   className?: string;
+  /**
+   * スクロールする本文の div へそのまま渡す。**既定は無し**（渡さない画面は
+   * 何も変わらない）。
+   *
+   * 日誌画面（`routes/journal.tsx`）が `virtua` の `Virtualizer` へ
+   * `scrollRef` を渡すために要る — `Virtualizer` の既定のスクロール対象は
+   * 「直接の親要素」だが、この div と `Virtualizer` のあいだにチップ帯や
+   * `ErrorNote` を挟むので、直接の親では足りない（virtua の doc:
+   * `scrollRef` を渡さないと「the direct parent element of virtualizer」を
+   * 見る）。ここでスクロール領域そのものの ref を渡せるようにしておけば、
+   * `Page` の内側スクロール1本をそのまま virtua の対象にでき、スクロール
+   * バーが増えない。
+   */
+  scrollRef?: Ref<HTMLDivElement>;
   children: ReactNode;
 }) {
   return (
@@ -51,6 +66,7 @@ export function Page({
         表や生ログが読めなくなる側の効き方をする。下端は切り欠きのぶんだけ足す。
       */}
       <div
+        ref={scrollRef}
         className={cn(
           'min-h-0 flex-1 overflow-y-auto p-4 pb-[calc(1rem+var(--safe-bottom))] md:p-6 md:pb-[calc(1.5rem+var(--safe-bottom))]',
           className,

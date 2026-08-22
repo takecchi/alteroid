@@ -26,7 +26,8 @@
     "shadcn": "catalog:",
     "swr": "catalog:",
     "tailwind-merge": "catalog:",
-    "tw-animate-css": "catalog:"
+    "tw-animate-css": "catalog:",
+    "virtua": "catalog:"
   },
   "devDependencies": {
     "@react-router/dev": "catalog:",

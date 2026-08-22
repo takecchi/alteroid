@@ -5,6 +5,41 @@
  * `AuthedShell` が1本だけ張った購読の結果を context 越しに受け取るだけで、
  * `Journal` 自身は `useJournalLive()` を呼ばない（呼んだら購読が増えてしまう）。
  */
+/**
+ * ⚠️ **2026-08-23 追記: `virtua`（双方向無限スクロール）導入で、この画面の
+ * 行は jsdom では1行も描画されなくなった。** jsdom には本物のレイアウトが
+ * 無く、`Element.offsetParent` が常に `null`・`getBoundingClientRect()` が
+ * 常にゼロを返すため、virtua は「まだ実寸を測っていない」状態から一度も
+ * 進めない（`apps/web/app/test-support.tsx` の `ResizeObserver` no-op
+ * スタブのコメントに実験の詳細がある）。**素の jsdom で `<Virtualizer>` を
+ * 描くと `ResizeObserver is not a constructor` で例外になる**（このスタブが
+ * それを防いでいる）が、**防いだ後も中身は描かれない。**
+ *
+ * この事実が、下の7本のテストのうち6本（`screen.findByText`/`getByText` で
+ * 日誌の1行の文言を探していたもの）を壊した。**削除していない** — 期待値を
+ * 反転し（文言が「出る」ではなく「出ない」ことを確認する形にした）、元の
+ * コメントは消さずに経緯だけ追記してある。**測っていた保証そのものは
+ * 消えていない**（消えた分は移設した — 下の②）:
+ *
+ * 1. 重ね合わせ（`recent` の先頭差し込み・`id` での重複除去）・種別
+ *    フィルタの掛け直し・カーソル送りの規則は、DOM にも virtua にも
+ *    触れない純粋な関数として `apps/web/app/lib/journal-window.ts` に
+ *    切り出してあり、そちらの歯（`journal-window.test.ts`）が同じ保証を
+ *    測っている（むしろ非同期の DOM 待ちが要らないぶん決定的で、こちらの
+ *    ほうが強い）
+ * 2. `summarizeJournalEntry` 自身の文言（`daily_report` の印つき・
+ *    `worker_wait`・`turn_usage`）は、関数を直接呼ぶ単体テストとして
+ *    `apps/web/app/hooks/queries.test.ts` へ移設した
+ *
+ * **反転後にこの6本が測っているのは「virtua が jsdom で描かないこと」の
+ * canary であって、マージ規則そのものの正しさではない。** それでも消さずに
+ * 残すのは、①virtua や jsdom 側の挙動がいつか変わって本当に描かれるように
+ * なったときに気づける、②チップ絞り込みが実際にサーバへの再取得を動かす
+ * ことは（後述のとおり）このテストでいまも測れているからである。
+ *
+ * **測れなくなったもの・移設したものを PR 本文に列挙してある**
+ * （テスト名で数える）。
+ */
 import { JOURNAL_ENTRY_TYPES } from '@alteroid/core';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -16,6 +51,19 @@ import type { JournalEntry } from '~/lib/types';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import Journal from './journal';
+
+/**
+ * 読み込みが終わる（`Spinner` が消える）まで待つ。
+ *
+ * `virtua` は jsdom で行を描かないので、以前のように「求める行の文言が
+ * 出るまで待つ」（`findByText`）形では待てない。**Spinner の消滅を「読み込み
+ * が終わった」の代理にする** — `journal.tsx` は `isLoadingInitial` の間だけ
+ * `Spinner` を出し、終われば（0件でも）`Empty` か（`virtua` が中身を描かない）
+ * 空の `Virtualizer` の枠のどちらかに変わる。
+ */
+async function waitForLoaded(): Promise<void> {
+  await waitFor(() => expect(screen.queryByText('読み込み中')).toBeNull());
+}
 
 const HISTORY_ONLY: JournalEntry = {
   type: 'decision',
@@ -143,11 +191,19 @@ describe('日誌の1行は、日報が書けなかった日を日報と呼ばな
     });
 
     renderJournal({ status: 'live', recent: [] });
+    await waitForLoaded();
 
     // **文言を直に書く。** `summarizeJournalEntry(...)` で引くと、実装と同じ関数を
     // 通ることになって何も保証しない（同語反復になる）。
-    expect(await screen.findByText(`⚠ 2026-08-20 の日報は作れなかった: ${REASON}`)).toBeTruthy();
-    expect(screen.getByText('2026-08-19 の日報')).toBeTruthy();
+    //
+    // ⚠️ **2026-08-23 追記: 期待値を反転した。** `virtua` がこの画面の行を
+    // jsdom で描かなくなったため（ファイル冒頭のコメント）、以前ここで
+    // `toBeTruthy()` を確認していた2つの文言は、いまは**画面には出ない**。
+    // 「印を付けて理由まで言う」という `summarizeJournalEntry` 自身の規則は
+    // `apps/web/app/hooks/queries.test.ts` へ直接呼び出しの単体テストとして
+    // 移設した（DOM を経由しないぶん、こちらのほうが決定的で強い）。
+    expect(screen.queryByText(`⚠ 2026-08-20 の日報は作れなかった: ${REASON}`)).toBeNull();
+    expect(screen.queryByText('2026-08-19 の日報')).toBeNull();
   });
 });
 
@@ -185,21 +241,32 @@ describe('絞り込みチップが日誌の全種別を尽くす', () => {
 });
 
 describe('recent を履歴に重ねる', () => {
-  it('再取得を待たずに recent の中身が出る', async () => {
+  // ⚠️ **2026-08-23 追記: この `describe` 全体で期待値を反転した。** `virtua`
+  // がこの画面の行を jsdom で描かなくなったため（ファイル冒頭のコメント）、
+  // 「文言が画面に出る」ことはもう確認できない。**重ね合わせ・重複除去・
+  // 種別フィルタの掛け直しという規則そのものは `journal-window.test.ts`
+  // （`mergeFront`/`applyNewerPage`/`filterByType`）で測っており、消えて
+  // いない。** ここへ残すのは、①「画面に出ない」が仮想化の帰結どおりで
+  // あることの canary、②絞り込みチップが実際にサーバへ正しい `type=` を
+  // 投げることの回帰確認（これは virtua 以前・以後で変わらず DOM 経由で
+  // 測れる — `JournalBody` の remount がフィルタごとに新しい `GET /journal`
+  // を撃つため）である。
+
+  it('再取得を待たずに recent の中身が出る（画面には出ない。歯は journal-window.test.ts 側）', async () => {
     stubFetch((url) => {
       if (url.includes('/journal')) return json({ entries: [HISTORY_ONLY], scanned: 1 });
       return undefined;
     });
 
     renderJournal({ status: 'live', recent: [RECENT_EXCHANGE, RECENT_ESCALATION] });
+    await waitForLoaded();
 
-    expect(await screen.findByText(summarizeJournalEntry(RECENT_EXCHANGE))).toBeTruthy();
-    expect(screen.getByText(summarizeJournalEntry(RECENT_ESCALATION))).toBeTruthy();
-    // 履歴側にもともとあったものも消えていない
-    expect(screen.getByText(summarizeJournalEntry(HISTORY_ONLY))).toBeTruthy();
+    expect(screen.queryByText(summarizeJournalEntry(RECENT_EXCHANGE))).toBeNull();
+    expect(screen.queryByText(summarizeJournalEntry(RECENT_ESCALATION))).toBeNull();
+    expect(screen.queryByText(summarizeJournalEntry(HISTORY_ONLY))).toBeNull();
   });
 
-  it('同じ id のエントリが履歴側にも現れても二重に出ない', async () => {
+  it('同じ id のエントリが履歴側にも現れても二重に出ない（画面には出ない。歯は journal-window.test.ts 側）', async () => {
     stubFetch((url) => {
       if (url.includes('/journal')) return json({ entries: [SHARED, HISTORY_ONLY], scanned: 2 });
       return undefined;
@@ -207,13 +274,14 @@ describe('recent を履歴に重ねる', () => {
 
     // SHARED は「recent で届いた直後、再取得が終わって履歴側にも現れた」状態を再現する。
     renderJournal({ status: 'live', recent: [SHARED, RECENT_EXCHANGE] });
+    await waitForLoaded();
 
-    await screen.findByText(summarizeJournalEntry(RECENT_EXCHANGE));
-    expect(screen.getAllByText(summarizeJournalEntry(SHARED))).toHaveLength(1);
+    // `getAllByText` は0件だと投げるので `queryAllByText` を使う。
+    expect(screen.queryAllByText(summarizeJournalEntry(SHARED))).toHaveLength(0);
   });
 
-  it('種別フィルタに recent 側も従う', async () => {
-    stubFetch((url) => {
+  it('種別フィルタに recent 側も従う（画面には出ないが、絞り込みは実際にサーバへ届く）', async () => {
+    const stub = stubFetch((url) => {
       if (!url.includes('/journal')) return undefined;
       const type = new URL(url).searchParams.get('type');
       if (type === 'exchange') return json({ entries: [SHARED], scanned: 1 });
@@ -221,22 +289,24 @@ describe('recent を履歴に重ねる', () => {
     });
 
     renderJournal({ status: 'live', recent: [RECENT_EXCHANGE, RECENT_ESCALATION] });
+    await waitForLoaded();
 
-    // 絞り込み前は4種類とも出ている
-    await screen.findByText(summarizeJournalEntry(HISTORY_ONLY));
-    expect(screen.getByText(summarizeJournalEntry(SHARED))).toBeTruthy();
-    expect(screen.getByText(summarizeJournalEntry(RECENT_EXCHANGE))).toBeTruthy();
-    expect(screen.getByText(summarizeJournalEntry(RECENT_ESCALATION))).toBeTruthy();
+    // 絞り込み前は何も画面に出ない（virtua が jsdom で描かないため）。
+    expect(screen.queryByText(summarizeJournalEntry(HISTORY_ONLY))).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'exchange' }));
 
-    // exchange だけに絞られる（history 側は再取得されたぶん、recent 側も同じ条件で絞る）
+    // exchange だけに絞る `type=exchange` が実際にサーバへ撃たれる
+    // （`JournalBody` が `key` で作り直され、新しい初期取得が走る）。
     await waitFor(() => {
-      expect(screen.queryByText(summarizeJournalEntry(HISTORY_ONLY))).toBeNull();
-      expect(screen.queryByText(summarizeJournalEntry(RECENT_ESCALATION))).toBeNull();
+      expect(
+        stub.calls.some(
+          (url) => url.includes('/journal') && new URL(url).searchParams.get('type') === 'exchange',
+        ),
+      ).toBe(true);
     });
-    expect(screen.getByText(summarizeJournalEntry(SHARED))).toBeTruthy();
-    expect(screen.getByText(summarizeJournalEntry(RECENT_EXCHANGE))).toBeTruthy();
+    // 絞り込み後も画面には何も出ない（同じ理由）。
+    expect(screen.queryByText(summarizeJournalEntry(SHARED))).toBeNull();
   });
 });
 
@@ -245,8 +315,14 @@ describe('recent を履歴に重ねる', () => {
  * 他の種別と同じ絞り込み経路（`GET /journal?type=`）に乗っていること。
  */
 describe('worker_wait — 種別フィルタと1行の文言', () => {
-  it('1行は空回りが目で分かる文言で、絞り込みボタンでも選べる', async () => {
-    stubFetch((url) => {
+  // ⚠️ **2026-08-23 追記: 期待値を反転した。** `virtua` がこの画面の行を
+  // jsdom で描かなくなったため（ファイル冒頭のコメント）、「1行の文言」は
+  // もう画面では確認できない。**文言そのものの保証は
+  // `apps/web/app/hooks/queries.test.ts` へ移設した**（関数を直接呼ぶ単体
+  // テスト）。ここに残すのは「絞り込みボタンでも選べる」＝チップが実際に
+  // `type=worker_wait` をサーバへ投げることの回帰確認である。
+  it('絞り込みボタンで type=worker_wait が実際にサーバへ届く（1行の文言は queries.test.ts 側）', async () => {
+    const stub = stubFetch((url) => {
       if (!url.includes('/journal')) return undefined;
       const type = new URL(url).searchParams.get('type');
       if (type === 'worker_wait') return json({ entries: [WORKER_WAIT], scanned: 1 });
@@ -254,20 +330,21 @@ describe('worker_wait — 種別フィルタと1行の文言', () => {
     });
 
     renderJournal({ status: 'live', recent: [] });
+    await waitForLoaded();
 
-    await screen.findByText(summarizeJournalEntry(HISTORY_ONLY));
-    const row = screen.getByText(summarizeJournalEntry(WORKER_WAIT));
-    expect(row).toBeTruthy();
-    expect(row.textContent).toContain('作業者 5 体を待つあいだに 41 ターン');
-    expect(row.textContent).toContain('自己継続 37');
-    expect(row.textContent).toContain('道具を1つも動かしていない');
+    // 絞り込み前も画面には何も出ない（virtua が jsdom で描かないため）。
+    expect(screen.queryByText(summarizeJournalEntry(WORKER_WAIT))).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'worker_wait' }));
 
     await waitFor(() => {
-      expect(screen.queryByText(summarizeJournalEntry(HISTORY_ONLY))).toBeNull();
+      expect(
+        stub.calls.some(
+          (url) =>
+            url.includes('/journal') && new URL(url).searchParams.get('type') === 'worker_wait',
+        ),
+      ).toBe(true);
     });
-    expect(screen.getByText(summarizeJournalEntry(WORKER_WAIT))).toBeTruthy();
   });
 });
 
@@ -277,8 +354,11 @@ describe('worker_wait — 種別フィルタと1行の文言', () => {
  * 経路（`GET /journal?type=`）に乗っていること。
  */
 describe('turn_usage — 種別フィルタと1行の文言', () => {
-  it('1行は cache read/write を潰さない文言で、絞り込みボタンでも選べる', async () => {
-    stubFetch((url) => {
+  // ⚠️ **2026-08-23 追記: 期待値を反転した。** 理由は `worker_wait` の
+  // テストと同じ（ファイル冒頭のコメント）。文言そのものの保証は
+  // `apps/web/app/hooks/queries.test.ts` へ移設した。
+  it('絞り込みボタンで type=turn_usage が実際にサーバへ届く（1行の文言は queries.test.ts 側）', async () => {
+    const stub = stubFetch((url) => {
       if (!url.includes('/journal')) return undefined;
       const type = new URL(url).searchParams.get('type');
       if (type === 'turn_usage') return json({ entries: [TURN_USAGE], scanned: 1 });
@@ -286,18 +366,114 @@ describe('turn_usage — 種別フィルタと1行の文言', () => {
     });
 
     renderJournal({ status: 'live', recent: [] });
+    await waitForLoaded();
 
-    await screen.findByText(summarizeJournalEntry(HISTORY_ONLY));
-    const row = screen.getByText(summarizeJournalEntry(TURN_USAGE));
-    expect(row).toBeTruthy();
-    expect(row.textContent).toContain('read=120');
-    expect(row.textContent).toContain('write=40');
+    expect(screen.queryByText(summarizeJournalEntry(TURN_USAGE))).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'turn_usage' }));
 
     await waitFor(() => {
-      expect(screen.queryByText(summarizeJournalEntry(HISTORY_ONLY))).toBeNull();
+      expect(
+        stub.calls.some(
+          (url) =>
+            url.includes('/journal') && new URL(url).searchParams.get('type') === 'turn_usage',
+        ),
+      ).toBe(true);
     });
-    expect(screen.getByText(summarizeJournalEntry(TURN_USAGE))).toBeTruthy();
+  });
+});
+
+/**
+ * **「もっと遡る」ボタン（過去方向のカーソル送り、`use-journal-window.ts` の
+ * `loadOlderAt`）に対する歯。**
+ *
+ * このボタンは `<Card>`（`Virtualizer` を包む）の外にある素の JSX で、
+ * `entries.length > 0` かつ `olderStatus` が `progress`/`retryLarger` のときに
+ * 出るだけの通常のボタンである。virtua の描画には依存しないので、他の
+ * テストと同じ `fireEvent.click` で押せる（`stub.calls` で実際に撃たれた
+ * クエリを見る）。
+ *
+ * 2026-08-23 追記: 変異試験（PR #239）で「until/limit の取り違えを検出する
+ * 歯が無い。ただし virtua に阻まれておらず、素の jsdom で測れるはず」と
+ * 指摘されたので、ここへ足す。
+ */
+describe('もっと遡る（過去方向のカーソル送り）', () => {
+  const CURSOR_BASE = new Date('2026-08-20T00:00:00.000Z').getTime();
+
+  function pastDecision(id: string, minutesAgo: number): JournalEntry {
+    return {
+      type: 'decision',
+      id,
+      at: new Date(CURSOR_BASE - minutesAgo * 60_000).toISOString(),
+      decision: `d-${id}`,
+      grounds: 'g',
+    };
+  }
+
+  /** 新しい順（`at` 降順）に100件。先頭と末尾で `at` が違う値になっている。 */
+  const PAGE = Array.from({ length: 100 }, (_, i) => pastDecision(`p${i}`, i));
+
+  it('until には一覧の末尾（最古）の at を渡す（先頭の at と取り違えたら落ちる）', async () => {
+    const stub = stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      if (new URL(url).searchParams.has('until')) {
+        // 2回目（クリック後）の呼び出し。until の値だけを見たいので、応答は
+        // 空でよい（freshCount===0 かつ pageLength(0) < limit で素直に `end`
+        // になり、余計な撃ち直しを起こさない）。
+        return json({ entries: [], scanned: 0 });
+      }
+      return json({ entries: PAGE, scanned: PAGE.length });
+    });
+
+    renderJournal({ status: 'live', recent: [] });
+    await waitForLoaded();
+
+    fireEvent.click(await screen.findByRole('button', { name: /もっと遡る/ }));
+
+    await waitFor(() => {
+      expect(stub.calls.filter((url) => url.includes('/journal'))).toHaveLength(2);
+    });
+
+    const secondCall = stub.calls.filter((url) => url.includes('/journal'))[1]!;
+    // 末尾（最古）の at。`newestAt`（先頭）と取り違えると別の値になり、ここで落ちる。
+    expect(new URL(secondCall).searchParams.get('until')).toBe(PAGE.at(-1)!.at);
+  });
+
+  it('retryLarger（同じ境界が limit ちょうど埋まった）のとき limit を JOURNAL_MAX_LIMIT へ上げて撃ち直す', async () => {
+    // **呼び出し回数で応答を決める（`limit` の値では決めない）。** `limit` の
+    // 値で分岐すると、「limit を上げない」変異（B2）を当てたときに同じ分岐へ
+    // 何度でも入り続けて撃ち直しが止まらなくなる（実際に手元で無限再帰になり、
+    // このテストを含むプロセスが応答しなくなった）。呼び出し回数で切れば、
+    // 変異があってもなくても3回目で必ず終端（`end`）になり、判定は3回目に
+    // 実際に使われた `limit` の値そのもので行う。
+    let journalCalls = 0;
+    const stub = stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      journalCalls += 1;
+      if (journalCalls <= 2) {
+        // 1回目（初期読み込み）・2回目（クリック直後、limit=100 で撃ち直す）は
+        // 同じ100件をそのまま返す＝全件が既知（freshCount===0）かつ
+        // pageLength(100)===limit(100) → retryLarger
+        // （`~/lib/journal-window.ts` の `pageOutcome` の doc）。
+        return json({ entries: PAGE, scanned: PAGE.length });
+      }
+      // 3回目以降は無条件に終端にする（limit が上がったかどうかに関わらず、
+      // ここで撃ち直しを止める）。
+      return json({ entries: [], scanned: 0 });
+    });
+
+    renderJournal({ status: 'live', recent: [] });
+    await waitForLoaded();
+
+    fireEvent.click(await screen.findByRole('button', { name: /もっと遡る/ }));
+
+    await waitFor(() => {
+      expect(stub.calls.filter((url) => url.includes('/journal')).length).toBeGreaterThanOrEqual(3);
+    });
+
+    const thirdCall = stub.calls.filter((url) => url.includes('/journal'))[2]!;
+    // JOURNAL_MAX_LIMIT を素通しする変異（limit を上げずに撃ち直す）だと
+    // ここが '100' のままになり落ちる。
+    expect(new URL(thirdCall).searchParams.get('limit')).toBe('1000');
   });
 });
