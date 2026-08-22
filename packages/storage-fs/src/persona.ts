@@ -12,6 +12,7 @@ import {
 } from '@alteroid/core';
 import type {
   JournalStore,
+  MemoryCreatedAt,
   MemoryDocument,
   MemoryDocumentMeta,
   MemoryProtectionStatus,
@@ -32,6 +33,11 @@ import type {
  *
  * **#173 が要った2つ（`humanTouchedAt` / `contentSha256`）の隣に、#170（記憶の
  * 目次化）が要る `describedAt` を足す。** 1ファイルへ統合する形は変えない。
+ *
+ * **`createdAt` も同じ隣に足す（記憶の `createdAt` 対応）。** `humanTouchedAt`
+ * と完全に同じ形——素の `optional`。**「unknown」という値をここへ書き込まない**
+ * ——値が無いこと自体が「日誌に根拠が無い」を表す（`memoryCreatedAtSchema` の
+ * doc）。読み出し側（`read()`）が無い slug を `{ kind: 'unknown' }` へ組み立てる。
  */
 interface MemoryIndexEntry {
   /** 最後に `cause:'human'` の書き込みが記録された時刻。一度立ったら降ろさない。 */
@@ -47,6 +53,13 @@ interface MemoryIndexEntry {
    * 据え置く（`@alteroid/core` の `nextDescribedAt` の doc）。
    */
   describedAt?: string;
+  /**
+   * その slug の最初の `memory_update`（`action:'write'`）の時刻。
+   * **一度定まったら変わらない**（`markHumanTouched` の単調非減少とも違う——
+   * 単調非減少ですらなく、一度セットしたら二度と触らない一度きりの確定値）。
+   * `deriveMemoryCreatedAtFromJournal`（`@alteroid/core`）の doc。
+   */
+  createdAt?: string;
 }
 
 type MemoryIndex = Record<string, MemoryIndexEntry>;
@@ -250,6 +263,7 @@ export class FsPersonaStore implements PersonaStore {
         slug,
         title: titleOf(content, slug),
         updatedAt,
+        createdAt: toMemoryCreatedAt(index[slug]?.createdAt),
         bytes: stats.size,
         content,
         frontmatter: derived.frontmatter,
@@ -372,6 +386,22 @@ export class FsPersonaStore implements PersonaStore {
     });
   }
 
+  async markCreatedAt(slug: string, at: string): Promise<boolean> {
+    return this.#serialize(async () => {
+      const index = await this.#readIndex();
+      const entry = index[slug];
+      // 実体が無い slug に新しい行を作らない（`markHumanTouched` と同じ理由）。
+      if (entry === undefined && (await this.read(slug)) === null) return false;
+      // **一度きりの確定。** `markHumanTouched` の単調非減少とも違う——
+      // 既に値が入っていれば何もしない（絶対条件2「埋めるのは値が無いときだけ」）。
+      // これにより2回目以降の backfill は自動的に冪等になる。
+      if (entry?.createdAt !== undefined) return false;
+      index[slug] = { ...entry, createdAt: at };
+      await this.#writeIndex(index);
+      return true;
+    });
+  }
+
   /**
    * 全文書を本文ごと `slug` 昇順で返す（`list()` がその順で並べる）。
    *
@@ -397,6 +427,7 @@ function stripContent(doc: MemoryDocument): MemoryDocumentMeta {
     slug: doc.slug,
     title: doc.title,
     updatedAt: doc.updatedAt,
+    createdAt: doc.createdAt,
     bytes: doc.bytes,
     frontmatter: doc.frontmatter,
     kind: doc.kind,
@@ -404,6 +435,11 @@ function stripContent(doc: MemoryDocument): MemoryDocumentMeta {
     parent: doc.parent,
     descriptionFreshness: doc.descriptionFreshness,
   };
+}
+
+/** 索引の生の値（`optional`）を `MemoryCreatedAt`（2値）へ組み立てる。 */
+function toMemoryCreatedAt(at: string | undefined): MemoryCreatedAt {
+  return at === undefined ? { kind: 'unknown' } : { kind: 'known', at };
 }
 
 function titleOf(content: string, fallback: string): string {

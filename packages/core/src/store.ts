@@ -84,6 +84,29 @@ export interface PersonaStore {
    * slug が空文字の「文書」として `list()` / `read()` に化けて出てくる。
    */
   markHumanTouched(slug: string, at: string): Promise<void>;
+
+  /**
+   * `createdAt` の派生値へ、日誌から導出した「最初に `action:'write'` で
+   * 書かれた時刻」を反映する。
+   *
+   * 呼ぶのはデーモン起動時の backfill（`apps/daemon/src/storage.ts`）だけである。
+   * **新しく配線を増やす場所ではない**（`markHumanTouched` と同じ約束）。
+   *
+   * **`markHumanTouched` と違い、単調非減少ではない——一度きりの確定である。**
+   * 既に値が入っている slug には何もしない（**冪等**。2回目以降の backfill は
+   * 何も変えない）。実体が既に無い slug に対して呼ばれても、新しく行を作っては
+   * いけない（`markHumanTouched` と同じ理由）。
+   *
+   * **`unknown` という値をストアへ書き込む口ではない。** 根拠が無い slug に
+   * ついてはこのメソッドを呼ばないこと——値が無いこと自体が「根拠が無い」を
+   * 表す（`memoryCreatedAtSchema` の doc）。読み出し側（`list()` / `read()`）が
+   * 値の無い slug を `{ kind: 'unknown' }` として組み立てる。
+   *
+   * **戻り値は「実際に書いたか」。** `markHumanTouched` と違って `boolean` を
+   * 返すのは、backfill が「何件埋めたか」を観測できる必要があるからである
+   * （記憶の絶対条件5）。既に値が入っていた・実体が無い、のどちらでも `false`。
+   */
+  markCreatedAt(slug: string, at: string): Promise<boolean>;
 }
 
 export interface JournalQuery {

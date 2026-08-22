@@ -5,6 +5,7 @@ import type {
   Job,
   JournalEntry,
   JournalEntryInput,
+  MemoryCreatedAt,
   MemoryDocument,
   MemoryDocumentMeta,
   MemoryProtectionStatus,
@@ -101,6 +102,10 @@ export function createMemoryStores(): Stores {
   // #170（記憶の目次化）の派生値。fs の `.index.json` / pg の `described_at`
   // 列と同じ形——書き手は書けず、write() が新旧の description を比べて進める。
   const describedAt = new Map<string, string>();
+  // 記憶の `createdAt`。fs の `.index.json` / pg の `created_at` 列と同じ形
+  // ——素の optional。「unknown」という値をここへ書き込まない。値が無いこと
+  // 自体が「日誌に根拠が無い」を表す（`read()` / `list()` が組み立てる）。
+  const createdAtStore = new Map<string, string>();
   const entries: JournalEntry[] = [];
   const jobs = new Map<string, Job>();
   const approvals = new Map<string, PendingApproval>();
@@ -113,6 +118,9 @@ export function createMemoryStores(): Stores {
   let envProfile: EnvProfile | null = null;
   let counter = 0;
   const nextId = () => `id-${++counter}`;
+
+  const toMemoryCreatedAt = (at: string | undefined): MemoryCreatedAt =>
+    at === undefined ? { kind: 'unknown' } : { kind: 'known', at };
 
   const persona: PersonaStore = {
     async list(): Promise<MemoryDocumentMeta[]> {
@@ -132,6 +140,11 @@ export function createMemoryStores(): Stores {
             slug,
             title,
             updatedAt,
+            // **書き込み時にキャッシュした値ではなく、その場で組み立てる。**
+            // fs（索引を都度読む） / pg（列を都度 SELECT する）と同じく、
+            // `markCreatedAt` が write() の後に別途反映されても読み出しに
+            // 反映されるようにするため。
+            createdAt: toMemoryCreatedAt(createdAtStore.get(slug)),
             bytes,
             frontmatter,
             kind,
@@ -143,7 +156,9 @@ export function createMemoryStores(): Stores {
         .sort((a, b) => a.slug.localeCompare(b.slug));
     },
     async read(slug) {
-      return documents.get(slug) ?? null;
+      const doc = documents.get(slug);
+      if (doc === undefined) return null;
+      return { ...doc, createdAt: toMemoryCreatedAt(createdAtStore.get(slug)) };
     },
     async write(slug, content) {
       const before = documents.get(slug);
@@ -151,6 +166,7 @@ export function createMemoryStores(): Stores {
       // **write() と append()（下）の唯一の通り道。** fs / pg と同じく、誰が
       // 書いたかを問わずここでハッシュ・describedAt を更新する。human 印には
       // 触らない。describedAt は書き手が書けない（`nextDescribedAt` の doc）。
+      // `createdAt` にも触らない——backfill（`markCreatedAt`）だけが書く。
       const next = nextDescribedAt({
         priorContent: before?.content ?? null,
         nextContent: content,
@@ -164,6 +180,7 @@ export function createMemoryStores(): Stores {
         slug,
         title: /^#\s+(.+)$/m.exec(content)?.[1] ?? slug,
         updatedAt,
+        createdAt: toMemoryCreatedAt(createdAtStore.get(slug)),
         bytes: Buffer.byteLength(content),
         content,
         frontmatter: derived.frontmatter,
@@ -187,6 +204,7 @@ export function createMemoryStores(): Stores {
       humanTouchedAt.delete(slug);
       contentSha256.delete(slug);
       describedAt.delete(slug);
+      createdAtStore.delete(slug);
     },
     async protectionStatus(slug): Promise<MemoryProtectionStatus> {
       if (humanTouchedAt.has(slug)) return { kind: 'human' };
@@ -202,6 +220,15 @@ export function createMemoryStores(): Stores {
       const prior = humanTouchedAt.get(slug);
       if (prior === undefined || at > prior) humanTouchedAt.set(slug, at);
     },
+    async markCreatedAt(slug, at) {
+      // 実体も index も無い slug には新しく行を作らない（`markHumanTouched` と
+      // 同じ約束）。**一度きりの確定**——既に値が入っていれば何もしない
+      // （絶対条件2「埋めるのは値が無いときだけ」。fs / pg と同じ）。
+      if (!documents.has(slug) && !createdAtStore.has(slug)) return false;
+      if (createdAtStore.has(slug)) return false;
+      createdAtStore.set(slug, at);
+      return true;
+    },
     // **`slug` 昇順で、本文ごと返す。** ここが本物（fs / pg）と同じ順序・同じ中身で
     // ないと、上の層の「どの文書が変わったか」がテストでは確かめられない。
     // かつてここは `concat()` で、しかも本物と違って `<!-- memory: slug.md -->` の
@@ -211,7 +238,9 @@ export function createMemoryStores(): Stores {
       const metas = await persona.list();
       const found: MemoryDocument[] = [];
       for (const meta of metas) {
-        const doc = documents.get(meta.slug);
+        // `read()` を通す——`documents` の生キャッシュには `markCreatedAt` が
+        // 別途反映した最新の `createdAt` が乗っていない（`read()` の doc）。
+        const doc = await persona.read(meta.slug);
         if (doc) found.push(doc);
       }
       return found;

@@ -65,6 +65,18 @@ export const memory = pgTable('memory', {
    * （fresh / stale / unknown / absent）を出す。
    */
   describedAt: timestamp('described_at', { withTimezone: true, mode: 'date' }),
+  /**
+   * その slug の最初の `memory_update`（`action:'write'`）の時刻。**#173 が
+   * 置いた列の隣へ追記で足す**（同じ約束）。
+   *
+   * **`humanTouchedAt` と完全に同じ形——素の nullable。**`unknown` という値を
+   * ここへ書き込まない。無いこと自体が「日誌に根拠が無い」を表す
+   * （`@alteroid/core` の `memoryCreatedAtSchema` の doc）。
+   *
+   * **`humanTouchedAt` の単調非減少とも違う——一度きりの確定値。** `persona.ts`
+   * の `markCreatedAt` が「既に値が入っていれば何もしない」で冪等を保証する。
+   */
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }),
 });
 
 /**

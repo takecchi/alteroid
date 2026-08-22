@@ -1,7 +1,11 @@
 import { mkdir } from 'node:fs/promises';
 
 import type { SessionStore } from '@anthropic-ai/claude-agent-sdk';
-import { deriveHumanTouchedAtFromJournal, type Stores } from '@alteroid/core';
+import {
+  deriveHumanTouchedAtFromJournal,
+  deriveMemoryCreatedAtFromJournal,
+  type Stores,
+} from '@alteroid/core';
 import { AUTH_WITHHELD_ENV_KEYS } from './auth.js';
 import {
   createFsStores,
@@ -128,6 +132,59 @@ async function backfillMemoryHumanTouch(stores: Stores): Promise<void> {
   }
 }
 
+/**
+ * 記憶の `createdAt` の backfill。**`backfillMemoryHumanTouch` がそのまま
+ * 手本である**——同じ場所（記憶ストアを開いた直後、クローンのセッションが
+ * 立ち上がる前）で、同じ形（日誌を舐めて derive → 器へ反映）で走る。
+ *
+ * **バックフィルは `created_at` を埋める以外のことを一切しない**（記憶の
+ * 絶対条件1）。触るのは `PersonaStore.markCreatedAt` を通した `created_at`
+ * 列 / `.index.json` の `createdAt` フィールドだけで、本文・`updatedAt`・
+ * `humanTouchedAt`・`description`・`kind`・`parent` のどれにも触れない
+ * （呼んでいる `markCreatedAt` 自身がそれ以外の列 / フィールドを更新対象に
+ * 含めない実装になっている——`storage-fs` / `storage-pg` の `markCreatedAt`
+ * の doc）。
+ *
+ * **埋めるのは値が無いときだけ（絶対条件2。冪等）。** `markCreatedAt` が
+ * 「既に値が入っていれば何もしない」を保証するので、ここは日誌から導出した
+ * 候補をただ渡すだけでよい——2回目以降の起動でも同じ結果になる。
+ *
+ * **削除しない（絶対条件3）。** ここが呼ぶのは `markCreatedAt` だけで、
+ * 記憶の削除・本文の書き換えに繋がる経路を一切持たない。
+ *
+ * **根拠が無い文書は `unknown` のまま（絶対条件4）。** 日誌に
+ * `action:'write'` の `memory_update` が無い slug には `markCreatedAt` を
+ * 呼ばない——呼ばないこと自体が「根拠が無い」を表す
+ * （`memoryCreatedAtSchema` の doc）。`mtime` にも `birthtime` にも一切触れない。
+ *
+ * **何を埋めたかが後から分かる（絶対条件5）。** 起動ログに
+ * 「何件埋めたか / 対象は何件で unknown は何件か」を1行出す
+ * （`backfillMemoryHumanTouch` は件数を出していないが、この器からは
+ * 実データの件数を確かめられないと分かっているため、ここでは明示的に出す）。
+ *
+ * **失敗しても起動は続ける。** 失敗した slug は `unknown` のまま
+ * （守る側へ自然に倒れる。`backfillMemoryHumanTouch` と同じ判断）。
+ */
+async function backfillMemoryCreatedAt(stores: Stores): Promise<void> {
+  try {
+    const createdAt = await deriveMemoryCreatedAtFromJournal(stores.journal);
+    let filled = 0;
+    for (const [slug, at] of createdAt) {
+      if (await stores.persona.markCreatedAt(slug, at)) filled += 1;
+    }
+    const metas = await stores.persona.list();
+    const unknown = metas.filter((meta) => meta.createdAt.kind === 'unknown').length;
+    process.stderr.write(
+      `alteroidd: 記憶の created_at backfill: ${filled} 件を新たに埋めた` +
+        `（記憶は全 ${metas.length} 件、うち unknown ${unknown} 件）。\n`,
+    );
+  } catch (error) {
+    process.stderr.write(
+      `alteroidd: 記憶の created_at backfill に失敗した（unknown のまま起動を続ける）: ${String(error)}\n`,
+    );
+  }
+}
+
 export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise<Storage> {
   const plan = planStorage(env);
 
@@ -135,6 +192,7 @@ export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise
     const { paths } = await initWorkspace(plan.root);
     const stores = createFsStores(plan.root);
     await backfillMemoryHumanTouch(stores);
+    await backfillMemoryCreatedAt(stores);
     return {
       stores,
       paths,
@@ -155,6 +213,7 @@ export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise
   const pg = await createPgStores(plan.databaseUrl);
   await seedPgWorkspace(pg);
   await backfillMemoryHumanTouch(pg);
+  await backfillMemoryCreatedAt(pg);
 
   return {
     stores: pg,
