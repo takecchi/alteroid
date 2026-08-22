@@ -181,7 +181,14 @@ function ApprovalCard({
 
   return (
     <Card className="p-4">
-      <div className="mb-2 flex items-center gap-2 text-[11px] text-muted">
+      {/*
+        **本3 で `Badge` に `shrink-0` が入り、縮まなくなった。** メタ行の
+        バッジ（未回答/回答済）は文字数を持たないので普段は問題ないが、
+        `job {jobId}` は `z.string()` に長さの上限が無く、他のバッジ・時刻
+        表示と合わせて `flex-wrap` が無いと押し出す側へ振れる。同じ画面の
+        `:98`（`flex flex-wrap items-center gap-3 ...`）に既に在る流儀へ揃える。
+      */}
+      <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-muted">
         <Badge tone={answered ? 'neutral' : 'warn'}>{answered ? '回答済' : '未回答'}</Badge>
         <span>{formatDateTime(approval.createdAt)}</span>
         <span>({formatRelative(approval.createdAt)})</span>
@@ -218,7 +225,12 @@ function ApprovalCard({
               }
             }}
           />
-          <div className="mt-2 flex items-center gap-2">
+          {/*
+            **本3 で `Button` が狭い画面で `h-11`（44px）になり、以前より
+            横幅を食う。** ボタン3つ＋ショートカット表示が横一列に並ぶこの行は
+            折り返さないと画面外へ出る側へ振れるので `flex-wrap` を足す。
+          */}
+          <div className="mt-2 flex flex-wrap items-center gap-2">
             <Button
               variant="primary"
               size="sm"

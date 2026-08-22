@@ -231,3 +231,42 @@ describe('一覧が依頼の本文と前回の発火を出す', () => {
     expect(screen.queryByText(/前回:/)).toBeNull();
   });
 });
+
+/**
+ * 横並びの積み替え（本4-B）。
+ *
+ * 一覧の行（`li`）は「本文＋kind」「次回時刻＋バッジ（shrink-0）」「今すぐ
+ * 回す/外すボタン」の3〜4要素が横に並ぶが、`flex-wrap` が無かった。本3 で
+ * `Button` が狭い画面で `h-11`（44px）になった分、以前より横幅を食う。
+ *
+ * 併せて `entry.kind` は `scheduleKindSchema`（`min(1).max(64)`、
+ * `[a-z0-9._-]` のみ）——空白を持たない最大64字の機械可読トークンなので、
+ * `min-w-0 flex-1` の中でもテキスト自体がはみ出しうる。`break-words` を足した。
+ *
+ * **⚠️ これは「折り返した」「積み替わった」ことの試験ではない。** jsdom は
+ * レイアウトを持たない（`offsetWidth` / `scrollWidth` /
+ * `getBoundingClientRect()` はすべて 0）ので、`flex-wrap` / `break-words` が
+ * 実際に効いているかはここでは1つも観測できない。固定できるのは
+ * 「そのクラス名が書かれていること」までである。
+ */
+describe('横並びの積み替え（本4-B）: flex-wrap と break-words', () => {
+  it('一覧の行（li）に flex-wrap が付いている', async () => {
+    stubSchedule([DEFAULT_ENTRY]);
+    renderSchedule();
+
+    const description = await screen.findByText('毎日 22:00 に日報');
+    const li = description.closest('li');
+    expect(li).not.toBeNull();
+    const tokens = li!.className.split(/\s+/);
+    expect(tokens).toContain('flex-wrap');
+  });
+
+  it('kind の表示に break-words が付いている', async () => {
+    stubSchedule([DEFAULT_ENTRY]);
+    renderSchedule();
+
+    const kind = await screen.findByText('daily_report');
+    const tokens = kind.className.split(/\s+/);
+    expect(tokens).toContain('break-words');
+  });
+});

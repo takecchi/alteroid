@@ -280,3 +280,42 @@ describe('折り返しの付け忘れ（本2）', () => {
     expect(tokens).toContain('break-words');
   });
 });
+
+/**
+ * 横並びの積み替え（本4-B）: flex-wrap の付け忘れ。
+ *
+ * メタ行（バッジ・時刻・`job {id}`）とボタン行（回答する/許可/却下/
+ * ショートカット表示）は、同じ画面の別の行（`:98`）には既に付いていた
+ * `flex-wrap` がここには無かった。本3 で `Badge` に `shrink-0` が入って
+ * 縮まなくなり、`Button` が狭い画面で `h-11`（44px）になった分、どちらの
+ * 行も以前より横幅を食う側へ振れている。
+ *
+ * **⚠️ これは「折り返した」ことの試験ではない。** jsdom はレイアウトを
+ * 持たない（`offsetWidth` / `scrollWidth` / `getBoundingClientRect()` は
+ * すべて 0）ので、`flex-wrap` が実際に効いて折り返しているかはここでは
+ * 1つも観測できない。固定できるのは「そのクラス名が書かれていること」
+ * までである。
+ */
+describe('横並びの積み替え（本4-B）: flex-wrap の付け忘れ', () => {
+  it('メタ行（バッジ・時刻・job id）に flex-wrap が付いている', async () => {
+    stubApprovals([approval({ id: 'a-1', jobId: 'job-abc' })]);
+    renderPage();
+
+    const jobText = await screen.findByText('job job-abc');
+    const row = jobText.closest('div');
+    expect(row).not.toBeNull();
+    const tokens = row!.className.split(/\s+/);
+    expect(tokens).toContain('flex-wrap');
+  });
+
+  it('未回答カードのボタン行に flex-wrap が付いている', async () => {
+    stubApprovals([approval({ id: 'a-1' })]);
+    renderPage();
+
+    const button = await screen.findByRole('button', { name: '回答する' });
+    const row = button.closest('div');
+    expect(row).not.toBeNull();
+    const tokens = row!.className.split(/\s+/);
+    expect(tokens).toContain('flex-wrap');
+  });
+});

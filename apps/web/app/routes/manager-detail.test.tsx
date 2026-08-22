@@ -10,7 +10,7 @@
  * この画面が「実行中」としか言わないと、同じ仕事を見て人間とクローンで見えている
  * ものが食い違う（北極星 禁止1 を逆向きに踏む）。
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -619,5 +619,58 @@ describe('折り返しの付け忘れ（本2）', () => {
 
     const dd = await screen.findByText('runner-abcdefghijklmnop');
     expect(dd.className.split(/\s+/)).toContain('break-all');
+  });
+});
+
+/**
+ * 横並びの積み替え（本4-A）。
+ *
+ * `dl`（`grid-cols-[8rem_1fr]`）は breakpoint 無しで固定されていたので、
+ * 375px 幅でもラベル列（8rem）が値の取り分を持っていっていた。`sm:` 未満は
+ * 1列、`sm:` 以上で固定幅ラベル列に切り替える。積んだときに `dt`/`dd` の
+ * 対応が読めるよう、`dt` に `mt-3 first:mt-0 sm:mt-0` を足して組の境目を
+ * 間隔の差で表す。
+ *
+ * **⚠️ これは「積み替わった」ことの試験ではない。** jsdom はレイアウトを
+ * 持たない（`offsetWidth` / `scrollWidth` / `getBoundingClientRect()` は
+ * すべて 0）ので、`sm:grid-cols-[8rem_1fr]` が実際に効いていることは
+ * ここでは1つも観測できない。固定できるのは「そのクラス名が書かれていること」
+ * までである。本2・本3 のテストより歯が弱い — breakpoint は CSS の話なので、
+ * jsdom では「効いている」ことそのものが原理的に見えない。
+ */
+describe('横並びの積み替え（本4-A）: 状態カードの dl', () => {
+  /*
+   * **`状態` という文字列は画面に2箇所在る**（`CardHeader title="状態"` の
+   * `<h2>状態</h2>` と、この `dl` の `<dt>状態</dt>`）。`findByText('状態')`
+   * は複数一致で例外になるので、まず衝突しないラベル（`作業ディレクトリ`）で
+   * `dl` を掴み、そこから先は `within(dl)` で範囲を絞る。
+   */
+  it('狭い画面では1列、sm: 以上で固定幅ラベル列になる', async () => {
+    renderDetail(BASE);
+
+    const anchor = await screen.findByText('作業ディレクトリ');
+    const dl = anchor.closest('dl');
+    expect(dl).not.toBeNull();
+    const dlTokens = dl!.className.split(/\s+/);
+    expect(dlTokens).toContain('grid-cols-1');
+    expect(dlTokens).toContain('sm:grid-cols-[8rem_1fr]');
+    expect(dlTokens).not.toContain('grid-cols-[8rem_1fr]');
+  });
+
+  it('全ての dt に mt-3 first:mt-0 sm:mt-0 が付いている（積んだときの組の境目）', async () => {
+    renderDetail(BASE);
+
+    const anchor = await screen.findByText('作業ディレクトリ');
+    const dl = anchor.closest('dl');
+    expect(dl).not.toBeNull();
+    const scope = within(dl!);
+
+    for (const label of ['状態', '作業ディレクトリ', '開始', '更新']) {
+      const dt = scope.getByText(label);
+      const tokens = dt.className.split(/\s+/);
+      expect(tokens).toContain('mt-3');
+      expect(tokens).toContain('first:mt-0');
+      expect(tokens).toContain('sm:mt-0');
+    }
   });
 });
