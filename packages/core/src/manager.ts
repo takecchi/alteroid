@@ -2635,38 +2635,6 @@ class Pool implements ManagerPool {
    * それは新しい確認としてもう一度クローンへ回る。日誌に残っていなければ、
    * 「なぜ同じ確認が二度来たのか」を後から誰も辿れない。
    */
-  /**
-   * 種類ごとの「配った文言」の帳面。無ければここで作る。
-   *
-   * **上限で忘れたら黙っていない**（`#askedOf` / `#deniedOf` と同じ形）— 忘れた
-   * 文言が次に届けばもう一度配られるので、跡が無いと「なぜ同じ知らせが二度来たか」
-   * を後から辿れない。ここは `managerId` を持たない（枠の事実はアカウント単位で、
-   * どのマネージャーのターンで気づいたかは記憶の側の軸ではない）。
-   */
-  #usageNoticeMemoryOf(kind: string): UsageNoticeMemory {
-    const existing = this.#usageNotices.get(kind);
-    if (existing !== undefined) return existing;
-    const memory: UsageNoticeMemory = {
-      delivered: createRecentMap<true>({
-        limit: USAGE_NOTICE_MEMORY_LIMIT,
-        onForget: (texts) => {
-          void this.#journal({
-            type: 'exchange',
-            with: 'manager',
-            role: 'inbound',
-            text:
-              `配り終えた上限の文言の記憶（${kind}）が上限（${USAGE_NOTICE_MEMORY_LIMIT}通り）に` +
-              `達したので、古い ${texts.length} 件を忘れた。この文言が次に届いたら` +
-              'もう一度クローンへ配る。',
-          });
-        },
-      }),
-      folded: 0,
-    };
-    this.#usageNotices.set(kind, memory);
-    return memory;
-  }
-
   #askedOf(record: ManagerRecord): RecentMap<true> {
     const existing = record.asked;
     if (existing !== undefined) return existing;
@@ -2715,6 +2683,38 @@ class Pool implements ManagerPool {
     });
     record.denied = denied;
     return denied;
+  }
+
+  /**
+   * 種類ごとの「配った文言」の帳面。無ければここで作る。
+   *
+   * **上限で忘れたら黙っていない**（`#askedOf` / `#deniedOf` と同じ形）— 忘れた
+   * 文言が次に届けばもう一度配られるので、跡が無いと「なぜ同じ知らせが二度来たか」
+   * を後から辿れない。ここは `managerId` を持たない（枠の事実はアカウント単位で、
+   * どのマネージャーのターンで気づいたかは記憶の側の軸ではない）。
+   */
+  #usageNoticeMemoryOf(kind: string): UsageNoticeMemory {
+    const existing = this.#usageNotices.get(kind);
+    if (existing !== undefined) return existing;
+    const memory: UsageNoticeMemory = {
+      delivered: createRecentMap<true>({
+        limit: USAGE_NOTICE_MEMORY_LIMIT,
+        onForget: (texts) => {
+          void this.#journal({
+            type: 'exchange',
+            with: 'manager',
+            role: 'inbound',
+            text:
+              `配り終えた上限の文言の記憶（${kind}）が上限（${USAGE_NOTICE_MEMORY_LIMIT}通り）に` +
+              `達したので、古い ${texts.length} 件を忘れた。この文言が次に届いたら` +
+              'もう一度クローンへ配る。',
+          });
+        },
+      }),
+      folded: 0,
+    };
+    this.#usageNotices.set(kind, memory);
+    return memory;
   }
 
   #choosePending(
