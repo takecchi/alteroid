@@ -3,7 +3,12 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { describeBuildRevision, reportRunnerRevision, resolveBuildRevision } from './revision.js';
+import {
+  describeBuildRevision,
+  describeRevisionStatus,
+  reportRunnerRevision,
+  resolveBuildRevision,
+} from './revision.js';
 
 /**
  * 「自分がどのコミットで走っているか」を解決する唯一の場所（roadmap M5 相当、
@@ -122,6 +127,47 @@ describe('describeBuildRevision', () => {
 
     expect(text).toContain(BAKED_BUILD.revision);
     expect(text).toContain('イメージに焼き込み済み');
+  });
+});
+
+/**
+ * `describeRevisionStatus` — 版を出す口（クローンの `runner_list` / Web UI /
+ * CLI）が全部これを通る。
+ *
+ * **本体は「`unknown` と `unheard` が別の言葉で出る」側である。** 同じ言葉に
+ * 畳んだ実装でも「版が出ている」ようには見えるので、畳まれたことは出力を
+ * 眺めていても分からない——ここで区別を固定する。
+ */
+describe('describeRevisionStatus', () => {
+  it('known は短縮とフル sha の両方と、出所の説明を含む', () => {
+    const text = describeRevisionStatus({
+      status: 'known',
+      commit: 'c'.repeat(40),
+      short: 'c'.repeat(12),
+      source: 'platform',
+    });
+
+    expect(text).toContain('c'.repeat(40));
+    expect(text).toContain('c'.repeat(12));
+    expect(text).toContain('Railway が実行時に注入');
+  });
+
+  it('unknown と unheard は別の言葉になる（疑う先が違うので畳んではいけない）', () => {
+    const unknown = describeRevisionStatus({ status: 'unknown' });
+    const unheard = describeRevisionStatus({ status: 'unheard' });
+
+    expect(unknown).not.toBe(unheard);
+    expect(unknown).toContain('不明');
+    expect(unheard).toContain('未確認');
+    // **「不明」が「未確認」の側へ滲んでいない。** 片方の文言をもう片方に流用した
+    // 実装（両方に「不明」を含める等）は、目には区別が付いて見えるのでここで測る。
+    expect(unheard).not.toContain('不明');
+  });
+
+  it('版が取れていないときに、それらしい sha を作らない', () => {
+    for (const status of [{ status: 'unknown' } as const, { status: 'unheard' } as const]) {
+      expect(describeRevisionStatus(status)).not.toMatch(/[0-9a-f]{7,}/);
+    }
   });
 });
 

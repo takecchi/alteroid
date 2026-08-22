@@ -10,52 +10,25 @@
  * なかったときに既定値・プレースホルダ・腐る値（前回のリリースの sha 等）を
  * 絶対に返さない。全部 `null` に倒し、表示は `describeBuildRevision` が
  * 「不明」に倒す。
+ *
+ * **型と言い方は隣の `revision-format.ts` に在る**（`@alteroid/core/revision` として
+ * ブラウザへ出す軽い口。ここは焼き込みと zod を読むので画面からは読ませられない）。
+ * 既存の呼び出し側のために、このファイルからもそのまま再 export する。
  */
 
 import { z } from 'zod';
 
 import { CANON_REVISION, CANON_REVISION_SOURCE } from './generated/canon.js';
+import type { BuildRevision, RunnerRevisionReport } from './revision-format.js';
 
-/**
- * どこから取れた値か。
- *
- * - `'build'` — `ALTEROID_BUILD_REV` を焼き込み時に渡された（`write-canon.mjs`）
- * - `'workspace'` — 焼き込み時の git 作業ツリーから `git rev-parse HEAD` で拾った
- * - `'env'` — 実行時の `ALTEROID_BUILD_REV`（人間が手で置いた値）
- * - `'platform'` — 実行時の `RAILWAY_GIT_COMMIT_SHA`（Railway がデプロイごとに注入）
- */
-export type RevisionSource = 'build' | 'workspace' | 'env' | 'platform';
-
-/**
- * いま走っているプロセスの版。
- *
- * **不変条件: `commit` と `short` は必ず揃って `null` になるか、揃って値を持つ。**
- * ただし `source` はそれとは独立に `null` になりうる——`commit`/`short` が値を
- * 持っていても `source` だけ `null` という組み合わせが実際に起きる（優先順位1
- * の焼き込み分岐で、`baked.revision` は非空なのに `baked.source` が `'build'` /
- * `'workspace'` のどちらでもないとき）。**「commit が在れば source も必ず在る」
- * とは読まないこと。** いまの `write-canon.mjs` は `''` / `'build'` /
- * `'workspace'` しか書かないのでこの組み合わせには実際には到達しないが、
- * `resolveBuildRevision` の実装は到達を許している——**返る値は正直**（「sha は
- * 分かるが出所の分類は分からない」）で、doc がそれより強い制限を書くと、次に
- * 読む人は「doc が嘘だ」と実装のほうを直しに行く。
- */
-export interface BuildRevision {
-  /**
-   * フル sha（40桁）。取れなければ `null`。
-   *
-   * コミット sha は**秘密ではない**（公開リポジトリを指すポインタである）ので、
-   * 伏せない。**この判断は「このリポジトリが公開である」という前提に乗っている。
-   * 非公開になったら成り立たない。**（いまこの値が出るのは認証の内側だけ
-   * ——`GET /runners` は認証必須、runner の `/health` は制御面の合鍵の内側
-   * ——なので、この判断が実際に効いている場面は無い。**前提が変わったときに
-   * 読む場所として置いてある。**）
-   */
-  commit: string | null;
-  /** 表示用の短縮。取れなければ `null`。 */
-  short: string | null;
-  source: RevisionSource | null;
-}
+export {
+  describeBuildRevision,
+  describeRevisionStatus,
+  revisionSourceLabel,
+  type BuildRevision,
+  type RevisionSource,
+  type RunnerRevisionReport,
+} from './revision-format.js';
 
 /** 焼き込み値（`CANON_REVISION` / `CANON_REVISION_SOURCE`）の形。 */
 interface BakedCanonRevision {
@@ -140,25 +113,6 @@ export function resolveBuildRevision(
   return { commit: null, short: null, source: null };
 }
 
-const SOURCE_LABEL: Record<RevisionSource, string> = {
-  build: 'イメージに焼き込み済み',
-  workspace: 'ビルド時の作業ツリーから取得',
-  env: '実行時に ALTEROID_BUILD_REV で指定',
-  platform: 'Railway が実行時に注入',
-};
-
-/**
- * 人間 / クローン向けの1行。**「不明」に倒すのがここの唯一の仕事である。**
- *
- * 取れなかったときに、それらしい既定値やハイフンではなく明示的に「不明」と言う。
- */
-export function describeBuildRevision(rev: BuildRevision): string {
-  if (rev.commit === null || rev.short === null || rev.source === null) {
-    return 'リビジョン: 不明（焼き込み・実行時の環境変数のどちらからも取れなかった）';
-  }
-  return `リビジョン: ${rev.short}（${SOURCE_LABEL[rev.source]}、フル ${rev.commit}）`;
-}
-
 /**
  * `BuildRevision` の wire 形（`GET /health` が返す JSON の中身）。
  *
@@ -171,22 +125,6 @@ export const buildRevisionSchema = z.object({
   short: z.string().min(1).nullable(),
   source: z.enum(['build', 'workspace', 'env', 'platform']).nullable(),
 });
-
-/**
- * runner 1台についての版の報告。**器から返ってきた応答の中身だけを表す。**
- *
- * - `known` — 版が返ってきた
- * - `unknown` — 器には繋がった（`/health` が応答した）が、器自身が自分の版を
- *   知らない（`resolveBuildRevision` が全部 `null` を返した、または `revision`
- *   フィールド自体を持たない古い runner）
- *
- * **「そもそも訊けていない」はここには無い。** それは応答の中身ではなく
- * 「応答が無かった」ことなので、この型の外（呼び出し側 — 名簿を持つ
- * `runner-protocol.ts` の `RunnerRevisionStatus`）でしか判定できない。
- */
-export type RunnerRevisionReport =
-  | { status: 'known'; commit: string; short: string; source: RevisionSource }
-  | { status: 'unknown' };
 
 /**
  * `BuildRevision` を `RunnerRevisionReport` へ畳む。

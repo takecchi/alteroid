@@ -849,6 +849,106 @@ describe('runner_list（器の一覧）', () => {
     expect(reply).toContain('0台');
   });
 
+  /**
+   * **デーモン自身の版は、runner が0台でも出す。**
+   *
+   * 0台は「まだ配線されていない」状態、つまり**版を確かめたい状態そのもの**である。
+   * 早期 return の分岐に版を載せ忘れると、そこでだけ答えが消える——次のテスト
+   * （1台以上）が通るので、落ちる場所がここにしか無い。
+   */
+  it('runner が0台でも、デーモン自身の版は出す', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [],
+      unassigned: [],
+      daemonRevision: {
+        status: 'known',
+        commit: 'e'.repeat(40),
+        short: 'e'.repeat(12),
+        source: 'build',
+      },
+    });
+
+    const reply = await h.call('runner_list', {});
+
+    expect(reply).toContain('0台');
+    expect(reply).toContain('e'.repeat(40));
+  });
+
+  /**
+   * **デーモンと runner の版が同じ出力に並ぶ。**
+   *
+   * 別々の口に出すと突き合わせ忘れがそのまま見逃しになる
+   * （`RunnerFleetOverview.daemonRevision` の doc）。2つの Service は別々に
+   * デプロイされるので、ずれている窓が実際に在る。
+   */
+  it('デーモンの版と runner の版を、同じ出力に並べて出す', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-a',
+          revision: {
+            status: 'known',
+            commit: 'a'.repeat(40),
+            short: 'a'.repeat(12),
+            source: 'platform',
+          },
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-a',
+          managers: [],
+        },
+      ],
+      unassigned: [],
+      daemonRevision: {
+        status: 'known',
+        commit: 'b'.repeat(40),
+        short: 'b'.repeat(12),
+        source: 'build',
+      },
+    });
+
+    const reply = await h.call('runner_list', {});
+
+    expect(reply).toContain('a'.repeat(40));
+    expect(reply).toContain('b'.repeat(40));
+  });
+
+  /**
+   * **`unknown` と `unheard` を畳まない。** 疑う先が違う（前者は器の設定、後者は
+   * 登録とネットワーク）ので、同じ言葉で出すとクローンは次の手を取り違える。
+   */
+  it('版の「不明」と「未確認」を、別の言葉で出す', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-knows-nothing',
+          revision: { status: 'unknown' },
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-knows-nothing',
+          managers: [],
+        },
+        {
+          label: 'runner-silent',
+          revision: { status: 'unheard' },
+          state: 'unreachable',
+          since: '2026-01-01T00:00:00.000Z',
+          managers: [],
+        },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', {});
+
+    expect(reply).toContain('不明');
+    expect(reply).toContain('未確認');
+  });
+
   it('器が1台のときは「分散していない」と読める1行が入る', async () => {
     const h = harness();
     h.setRunnersOverview({
@@ -1727,6 +1827,7 @@ describe('usage_read はアカウント全体の残りも返す（人間と同�
  */
 describe('self_status（いま自分がどう走っているか）', () => {
   const RUNTIME: CloneRuntimeFacts = {
+    revision: { commit: null, short: null, source: null },
     declaredModel: 'fable',
     modelOverridden: false,
     modelEnvKey: 'ALTEROID_CLONE_MODEL',

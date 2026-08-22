@@ -19,6 +19,7 @@
  */
 
 import { CANON_DOCUMENTS, CANON_REVISION, type CanonDocument } from './generated/canon.js';
+import { describeBuildRevision, type BuildRevision } from './revision.js';
 
 export { CANON_DOCUMENTS, CANON_REVISION, type CanonDocument };
 
@@ -103,6 +104,19 @@ export interface SelfFacts {
  * この型はそれを持たない（`self.ts` 冒頭の約束と同じ理由）。
  */
 export interface CloneRuntimeFacts {
+  /**
+   * **いま自分が走っているコードそのものの版**（`resolveBuildRevision()` の結果）。
+   *
+   * **正典の写しの版（`CANON_REVISION`）とは別物である。** あちらはビルド時に
+   * 焼き込まれた `docs/*.md` の写しが「いつのものか」で、こちらは「このプロセスの
+   * コードがどのコミットか」——焼き込みが空でも実行時の環境変数から取れることが
+   * あり、そのとき2つは食い違う。**片方だけを出すと、クローンは自分が走っている
+   * コードを写しの版で言い換えることになる。**
+   *
+   * 取れなかったときに埋めないのは `BuildRevision` 側の仕事なので、ここは
+   * その値をそのまま持つ（`null` を既定値へ倒さない）。
+   */
+  revision: BuildRevision;
   /** 宣言されたモデル帯（`ALTEROID_CLONE_MODEL` があればその値、無ければ既定）。 */
   declaredModel: string;
   /**
@@ -187,6 +201,12 @@ export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
   return [
     '## いまどう走っているか',
     '',
+    // **最初に版を出す。** 自分が何で走っているかを答える節で、いちばん外側の
+    // 事実がこれである（モデル帯より外側 — モデルは差し替えられるが、コードの版は
+    // このプロセスの正体そのもの）。**「正典の写しの版」ではなく「このプロセスの
+    // コードの版」であることを言葉で区別する** — 2つは食い違いうる
+    // （`CloneRuntimeFacts.revision` の doc）。
+    `- 自分がいま走っているコードの${describeBuildRevision(facts.revision)}`,
     // **「既定と同じ値か」ではなく「置かれているか」を言う。** 人間が
     // \`ALTEROID_CLONE_MODEL=fable\` を明示的に置いた場合、前者では「既定のまま」と
     // 嘘になる（承認が置かれている事実が消える）。
@@ -261,7 +281,11 @@ export function buildSelfKnowledge(facts?: SelfFacts): string {
     '',
     ...CANON_DOCUMENTS.map((doc, index) => `${index + 1}. \`${doc.name}\` — ${doc.summary}`),
     '',
-    `**正典と実装が食い違ったら、バグなのは実装である。** ただしここにあるのはビルド時点の写し（リビジョン: ${CANON_REVISION.length > 0 ? CANON_REVISION : '不明'}）なので、実装の方が先に進んでいることもある。`,
+    // **ここの版は「写しがいつのものか」であって「いま走っているコードの版」では
+    // ない。** 焼き込みが空でも実行時の環境変数から後者だけが取れることがあるので、
+    // 同じ語で言うとクローンは片方をもう片方の答えとして使う。後者の在り処
+    // （`self_status`）をこの行から指しておく。
+    `**正典と実装が食い違ったら、バグなのは実装である。** ただしここにあるのはビルド時点の写し（写しの焼き込み時のリビジョン: ${CANON_REVISION.length > 0 ? CANON_REVISION : '不明'}）なので、実装の方が先に進んでいることもある。いま自分が走っているコードそのものの版は \`self_status\` が名乗る（写しの版と食い違うことがある）。`,
     'コードそのものや最新の状態が要るなら、`manager_start` でリポジトリを読ませること（マネージャーは実際に `git` と `gh` を持っている）。',
     '自分について分かったこと・人間と決めた自分の扱いは、他のことと同じように記憶へ移す。',
   );

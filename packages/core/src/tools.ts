@@ -24,6 +24,7 @@ import type {
   ScheduleSpec,
   ScheduledRequest,
 } from './schema.js';
+import { describeRevisionStatus } from './revision.js';
 import { CANON_REVISION, canonDocument, canonNames, describeCloneRuntime } from './self.js';
 import type { CloneRuntimeFacts } from './self.js';
 import type { Stores } from './store.js';
@@ -1524,6 +1525,13 @@ export function createCloneTools(context: ToolContext) {
           '名乗る別の値で、この一覧とはずれうる——混ぜて配置の判断を予測しないこと。',
         'state は5値（connecting/connected/unreachable/unusable/lost）のまま出る。' +
           'unreachable（まだ開けていない）と lost（開けていたのに黙った）は別物である。',
+        'デーモン自身の版と、各 runner が名乗った版（コミット sha）も出る。' +
+          'デーモンと runner は別々にデプロイされるので、同じ main から起こしていても' +
+          '別のコミットで走る窓がある——調べ物で「コードはこうなっている」と言う前に、' +
+          'いま走っている版がその主張と同じかを見ること。',
+        '版が「不明」（器が自分の版を知らない）と「未確認」（名乗りをまだ聞けていない）は' +
+          '別物で、疑う先が違う（前者は器の設定、後者は登録とネットワーク）。' +
+          'state が lost の器の版は黙る前に聞いた古い値である。',
       ].join(' '),
       {
         fingerprints: z
@@ -1541,10 +1549,17 @@ export function createCloneTools(context: ToolContext) {
           fingerprints === undefined ? {} : { fingerprints },
         );
 
+        // **デーモン自身の版は、runner が0台でも出す。** 「自分は何で走っているか」は
+        // 名簿の中身に依存しない事実であり、0台のときに落とすと、配線がまだ無い状態
+        // （まさに版を確かめたい状態）でだけ答えが消える。
+        const daemonLine = `デーモン（あなた自身が居るプロセス）の版: ${describeRevisionStatus(
+          overview.daemonRevision,
+        )}`;
+
         if (overview.runners.length === 0) {
           return text(
             '登録されている runner は0台である（設定に ALTEROID_RUNNER_URLS 等が無いか、' +
-              'まだ配線されていない）。',
+              `まだ配線されていない）。\n${daemonLine}`,
           );
         }
 
@@ -1554,6 +1569,10 @@ export function createCloneTools(context: ToolContext) {
           overview.runners.length === 1
             ? 'runner は1台のみ登録されている（分散していない）。'
             : `runner は${overview.runners.length}台登録されている。`,
+          // **デーモンと runner の版を同じ出力に並べる。** 別々の口に出すと、突き合わせ
+          // 忘れがそのまま見逃しになる（`RunnerFleetOverview.daemonRevision` の doc）。
+          // 2つの Service は別々にデプロイされるので、ずれている窓が実際に在る。
+          daemonLine,
         ];
 
         for (const runner of overview.runners) {
@@ -1581,6 +1600,18 @@ export function createCloneTools(context: ToolContext) {
               : `  応えているプロセス: ${runner.instanceId}` +
                   (runner.instanceSince === undefined ? '' : `（${runner.instanceSince} から）`),
           );
+          /*
+           * **版は「どのプロセスか」の隣に置く。** この2つは別の問いに答える —
+           * 上は「自分が委譲を置いた器がまだ同じプロセスか」、こちらは「そのプロセスが
+           * どのコミットのコードで走っているか」である。器を作り直さずにデプロイし
+           * 直せば両方変わり、器だけ再起動すれば `instanceId` だけが変わる。
+           * **並べて置かないと、どちらか片方でもう片方を推測することになる。**
+           *
+           * そして `known` は「最後に聞けた名乗り」であって「いま走っている版」では
+           * ないので（`RunnerRevisionStatus` の doc）、state から遠い場所に出すと
+           * `lost` の器の古い値が現役の版として読まれる。
+           */
+          lines.push(`  版: ${describeRevisionStatus(runner.revision)}`);
           if (runner.error !== undefined) lines.push(`  直近の失敗: ${runner.error}`);
           lines.push(
             runner.managers.length === 0

@@ -158,6 +158,14 @@ describe('自己認識 — システムプロンプトに載る節', () => {
  */
 describe('CloneRuntimeFacts の整形 — 観測した値と、取れていない理由だけを出す', () => {
   const RUNTIME: CloneRuntimeFacts = {
+    // **正典の写しの版（`CANON_REVISION`）とは意図的に別の値にしてある。** 実装が
+    // 写しの版で言い換えても「版が出ている」ようには見えるので、値そのものを
+    // 区別できる形で置く。
+    revision: {
+      commit: 'd'.repeat(40),
+      short: 'd'.repeat(12),
+      source: 'platform',
+    },
     declaredModel: 'fable',
     modelOverridden: false,
     modelEnvKey: 'ALTEROID_CLONE_MODEL',
@@ -174,6 +182,39 @@ describe('CloneRuntimeFacts の整形 — 観測した値と、取れていな�
     injectedMemoryChars: 120,
     systemPromptChars: 4000,
   };
+
+  /**
+   * **自分が走っているコードの版。**
+   *
+   * これが無いと、クローンは自分について調べるときに「正典の写しの版」を
+   * 「いま走っているコードの版」の答えとして使う（写しは焼き込み時点のもので、
+   * 実行時に環境変数から取れる版とは食い違いうる）。
+   */
+  it('いま走っているコードのリビジョンを、フル sha 付きで出す', () => {
+    const section = describeCloneRuntime(RUNTIME);
+
+    expect(section).toContain('自分がいま走っているコードのリビジョン');
+    expect(section).toContain('d'.repeat(40));
+    expect(section).toContain('Railway が実行時に注入');
+  });
+
+  /**
+   * **取れなかったときに埋めない。** ここが「不明」と言えないと、焼き込みも
+   * 実行時変数も無い器で、クローンは自分の版について嘘を確信する。
+   */
+  it('版が取れていなければ「不明」と言い、それらしい sha を作らない', () => {
+    const section = describeCloneRuntime({
+      ...RUNTIME,
+      revision: { commit: null, short: null, source: null },
+    });
+    const line = section
+      .split('\n')
+      .find((entry) => entry.includes('走っているコードのリビジョン'));
+
+    expect(line).toBeDefined();
+    expect(line).toContain('不明');
+    expect(line).not.toMatch(/[0-9a-f]{7,}/);
+  });
 
   /**
    * **「置かれているか」で言う。「既定と違うか」ではない。** RUNTIME の
