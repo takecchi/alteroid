@@ -28,6 +28,18 @@ export const memory = pgTable('memory', {
   slug: text('slug').primaryKey(),
   content: text('content').notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  /**
+   * 保護状態（human guard）の派生値。**新しい真実ではない** — 実体は日誌
+   * （`memory_update.cause`）にあり、この2列は読み出しを安くするためのキャッシュ
+   * である（`packages/core` の `PersonaStore.protectionStatus` の doc）。
+   *
+   * `humanTouchedAt`: 最後に `cause:'human'` の書き込みが記録された時刻。
+   * **一度立ったら降ろさない**（クローンの書き込みで null に戻さない — 更新対象
+   * に含めないことで保証する。`persona.ts` の `#updateHash` を見よ）。
+   */
+  humanTouchedAt: timestamp('human_touched_at', { withTimezone: true, mode: 'date' }),
+  /** デーモン経由で最後に書いた本文のハッシュ（sha256 hex）。外部編集の検出に使う。 */
+  contentSha256: text('content_sha256'),
 });
 
 /**

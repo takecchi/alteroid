@@ -347,6 +347,39 @@ describe('HTTP API', () => {
     expect(entries[0]).toMatchObject({ action: 'write' });
   });
 
+  /**
+   * human guard（記憶の保護状態）は「誰も送らない導出値」である
+   * （PR「人間が一度でも書いた記憶を、統合の走行が黙って壊せないようにする」）。
+   *
+   * **入口の入力スキーマを1つも変えていないこと**が要件——`PUT /memory/:slug`
+   * の body は `{ content }` のままで、保護状態はサーバ側だけで決まる。
+   * `content` 以外を足しても（`cause` や `humanTouchedAt` のような、保護状態を
+   * 自称できてしまいそうなフィールドを混ぜても）黙って無視され、書き込みは
+   * `content` だけで完結する——書き手を選べる口ではない。
+   */
+  it('PUT /memory/:slug の body は content だけのまま（human guard は入口を増やしていない）', async () => {
+    const put = await app.request('/memory/values', {
+      ...json({
+        content: '# 価値観\n\n最小の body\n',
+        // 保護状態に見えるフィールドを混ぜても、入力スキーマには無いので無視される。
+        humanTouchedAt: '2020-01-01T00:00:00.000Z',
+        cause: 'clone',
+      }),
+      method: 'PUT',
+    });
+
+    expect(put.status).toBe(200);
+    const body = (await put.json()) as { document: { content: string } };
+    expect(body.document.content).toContain('最小の body');
+    expect(body.document).not.toHaveProperty('cause');
+    expect(body.document).not.toHaveProperty('humanTouchedAt');
+
+    // PUT は常に人間の書き込みとして扱われる（body の cause: 'clone' は効かない）。
+    const entries = await stores.journal.list({ types: ['memory_update'] });
+    expect(entries[0]).toMatchObject({ cause: 'human' });
+    expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
+  });
+
   it('存在しない記憶は 404', async () => {
     expect((await app.request('/memory/nope')).status).toBe(404);
   });

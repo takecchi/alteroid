@@ -92,13 +92,53 @@ export function planStorage(env: NodeJS.ProcessEnv = process.env): StoragePlan {
   };
 }
 
+/**
+ * 記憶の保護状態（human guard）の backfill。
+ *
+ * デーモン起動時に、日誌の全 `memory_update` を舐めて各 slug の
+ * `human_touched_at` を確定させる（`PersonaStore.markHumanTouched` の doc）。
+ * **`clone.ts` は触らない・呼ばない** — ここは記憶ストアを開いた直後、
+ * クローンのセッションが立ち上がる前の起動処理である。
+ *
+ * 対象は `cause:'human'` かつ `action !== 'remove'`（＝人間が実際に本文を
+ * 書いたエントリ）だけ。**`action:'remove'`（人間による削除）は含めない** —
+ * `apps/daemon/src/app.ts` の `DELETE /memory/:slug` が `markHumanTouched` を
+ * 呼ばないのと同じ理由で、削除は「人間の意思で消した」であって、将来その
+ * slug に書かれる新しい内容を無条件に保護する理由にはならない
+ * （backfill と実行時の呼び出しを同じ基準に揃えることで、再起動のたびに
+ * 保護状態が変わって見える食い違いを避ける）。
+ *
+ * **既に立っている `human_touched_at` を降ろすことはない** —
+ * `markHumanTouched` 自体が単調非減少なので、ここは呼ぶだけでよい。
+ *
+ * **失敗しても起動は続ける。** 失敗した slug は `unknown` のまま
+ * （守る側へ自然に倒れる）。
+ */
+async function backfillMemoryHumanTouch(stores: Stores): Promise<void> {
+  try {
+    const entries = await stores.journal.list({ types: ['memory_update'] });
+    for (const entry of entries) {
+      if (entry.type !== 'memory_update') continue;
+      if (entry.cause !== 'human') continue;
+      if (entry.action === 'remove') continue;
+      await stores.persona.markHumanTouched(entry.slug, entry.at);
+    }
+  } catch (error) {
+    process.stderr.write(
+      `alteroidd: 記憶の保護状態の backfill に失敗した（unknown のまま起動を続ける）: ${String(error)}\n`,
+    );
+  }
+}
+
 export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise<Storage> {
   const plan = planStorage(env);
 
   if (plan.kind === 'fs' || plan.databaseUrl === undefined) {
     const { paths } = await initWorkspace(plan.root);
+    const stores = createFsStores(plan.root);
+    await backfillMemoryHumanTouch(stores);
     return {
-      stores: createFsStores(plan.root),
+      stores,
       paths,
       withheldEnvKeys: plan.withheldEnvKeys,
       kind: 'fs',
@@ -116,6 +156,7 @@ export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise
   const { createPgStores, seedPgWorkspace } = await import('@alteroid/storage-pg');
   const pg = await createPgStores(plan.databaseUrl);
   await seedPgWorkspace(pg);
+  await backfillMemoryHumanTouch(pg);
 
   return {
     stores: pg,

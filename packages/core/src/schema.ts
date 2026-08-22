@@ -45,6 +45,35 @@ export type MemoryDocumentMeta = z.infer<typeof memoryDocumentMetaSchema>;
 export type MemoryDocument = z.infer<typeof memoryDocumentSchema>;
 
 // ---------------------------------------------------------------------------
+// 記憶の保護状態（human guard）
+// ---------------------------------------------------------------------------
+
+/**
+ * 記憶1文書が「人間の手を経ているか」の3状態。
+ *
+ * **これ自体は新しい真実ではない。** 実体は日誌（`memory_update.cause`）に
+ * あり、ここが表すのはその派生値（pg: `memory` テーブルの `human_touched_at` /
+ * `content_sha256` 列 — pg では `packages/storage-pg` / fs: `.index.json` —
+ * fs では `packages/storage-fs` が持つ）を読んだ結果である。
+ *
+ * - **`human`** — 過去に `cause:'human'` の `memory_update`（`action:'write'`）が
+ *   在る。**一度立ったら絶対に降りない** — クローンが何度書いても、この状態は
+ *   `clone-only` へは戻らない。
+ * - **`clone-only`** — 履歴は在るが全部 `clone` / `distill`。
+ * - **`unknown`** — 履歴が無い／派生値を失った／外から書き換えられた可能性がある。
+ *   **`human` と同じ扱いで守る側へ倒す。**
+ *
+ * **`unknown` を `clone-only` に畳まないこと。** 畳むと、履歴を失った瞬間に
+ * 「人間は書いていない」という嘘になる。判定・描画のどちらの側も3状態を
+ * 分岐すること — 網羅性は `memory.ts` の `assertNeverMemoryProtectionStatus`
+ * （`never` への代入）で強制する。状態を1つ足して分岐を足し忘れると `tsc` が落ちる。
+ */
+export type MemoryProtectionStatus =
+  | { kind: 'human' }
+  | { kind: 'clone-only' }
+  | { kind: 'unknown' };
+
+// ---------------------------------------------------------------------------
 // 受信箱イベント
 // ---------------------------------------------------------------------------
 

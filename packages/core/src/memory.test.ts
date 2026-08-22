@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { renderMemoryDocument, renderMemoryDocuments } from './memory.js';
+import {
+  assertNeverMemoryProtectionStatus,
+  describeMemoryProtectionStatus,
+  memoryProtectionAllowsFullReplace,
+  renderMemoryDocument,
+  renderMemoryDocuments,
+} from './memory.js';
+import type { MemoryProtectionStatus } from './schema.js';
 
 /**
  * 記憶をクローンの文脈へ載せる形。
@@ -42,5 +49,61 @@ describe('記憶の載せ方', () => {
 
   it('記憶が1つも無ければ空文字（「空」を言うのは呼び手の仕事である）', () => {
     expect(renderMemoryDocuments([])).toBe('');
+  });
+});
+
+/**
+ * `MemoryProtectionStatus` の3状態の網羅性。
+ *
+ * **`unknown` を `clone-only` に畳まないこと。** 判定（`memoryProtectionAllowsFullReplace`）
+ * と描画（`describeMemoryProtectionStatus`）のどちらも `switch` の `default` で
+ * `assertNeverMemoryProtectionStatus`（引数の型は `never`）へ渡している。
+ *
+ * **これが型レベルの網羅性チェックである。** 状態を1つ足すと、その `switch` の
+ * どの分岐にも当たらなくなった値が `default` まで落ち、`never` へ代入できずに
+ * `tsc` が落ちる——分岐を書き足し忘れたまま黙って `unknown` 側に倒れる実装を
+ * 防いでいる。ここでは同じ構造の**実行時の裏付け**を確かめる: 3状態それぞれで
+ * 例外を投げずに判定・描画ができること（正の保証）と、型で弾かれるはずの
+ * 未知の状態が来たら `default` 節が実際に例外を投げること（負の保証。
+ * 黙って何かを返して嘘をつかないことの確認）。
+ */
+describe('MemoryProtectionStatus の網羅性', () => {
+  const ALL_STATUSES: MemoryProtectionStatus[] = [
+    { kind: 'human' },
+    { kind: 'clone-only' },
+    { kind: 'unknown' },
+  ];
+
+  it('3状態それぞれで判定・描画が例外を投げずに返る', () => {
+    for (const status of ALL_STATUSES) {
+      expect(() => memoryProtectionAllowsFullReplace(status)).not.toThrow();
+      expect(() => describeMemoryProtectionStatus(status)).not.toThrow();
+    }
+  });
+
+  it('human / unknown は distill からの全文置換を許さず、clone-only だけ許す', () => {
+    expect(memoryProtectionAllowsFullReplace({ kind: 'human' })).toBe(false);
+    expect(memoryProtectionAllowsFullReplace({ kind: 'unknown' })).toBe(false);
+    expect(memoryProtectionAllowsFullReplace({ kind: 'clone-only' })).toBe(true);
+  });
+
+  it('3状態それぞれが異なる一言を返す（unknown を human や clone-only に読み替えない）', () => {
+    const labels = new Set(ALL_STATUSES.map((status) => describeMemoryProtectionStatus(status)));
+    expect(labels.size).toBe(3);
+  });
+
+  it('未知の状態（型では弾かれるはずの値）が来たら、黙って倒れず例外を投げる', () => {
+    // `as unknown as MemoryProtectionStatus` は型チェックを迂回する——ここは
+    // 「実行時にここへ来たら」という if の話であって、通常の呼び出し経路では
+    // 型で弾かれる（switch の default が `never` を要求するのがその強制力）。
+    const unknownVariant = { kind: 'new-kind' } as unknown as MemoryProtectionStatus;
+
+    expect(() => memoryProtectionAllowsFullReplace(unknownVariant)).toThrow();
+    expect(() => describeMemoryProtectionStatus(unknownVariant)).toThrow();
+  });
+
+  it('assertNeverMemoryProtectionStatus 自体も、渡されたものを含めて例外を投げる', () => {
+    const bogus = { kind: 'bogus' } as never;
+    expect(() => assertNeverMemoryProtectionStatus(bogus)).toThrow(/bogus/);
   });
 });

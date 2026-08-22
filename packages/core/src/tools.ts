@@ -6,7 +6,11 @@ import { z } from 'zod';
 import { isCronExpression } from './cron.js';
 import { describePage, excerptLine, page } from './excerpt.js';
 import type { ManagerDenial, ManagerPool, ManagerSummary } from './manager.js';
-import { renderMemoryDocuments } from './memory.js';
+import {
+  describeMemoryProtectionStatus,
+  memoryProtectionAllowsFullReplace,
+  renderMemoryDocuments,
+} from './memory.js';
 import type { ProfileService } from './profile-service.js';
 import {
   RESERVED_SCHEDULE_KINDS,
@@ -254,6 +258,82 @@ const NO_POOL = text(
     '実作業が必要なら、この場では記憶に残すだけにして、次の会話で委譲すること。',
 );
 
+// ---------------------------------------------------------------------------
+// 記憶の human guard（人間が一度でも書いた記憶を、統合の走行が黙って壊せないよう
+// にする歯）
+// ---------------------------------------------------------------------------
+
+/**
+ * この歯を有効にするかの環境変数。**制限は方針で表し、方針は設定で開けられる
+ * こと**（正典）。既定は有効（守る側）。
+ *
+ * **`permission-mode.ts` の `resolvePermissionModeFor` と同じ形にしてある** —
+ * 空・空白は「未設定」として既定へ、綴りを間違えた値は黙って既定へ倒さず
+ * 落とす（都度守っているつもりの持ち主が、綴りの間違いで気づけないままに
+ * ならないため）。
+ *
+ * **これは能力の制限ではなく実行環境の設定である。** `off` にしても道具は
+ * 1つも減らない — `memory_write` / `memory_delete` は変わらず在り、断られなく
+ * なるだけである。
+ */
+export const MEMORY_GUARD_ENV = 'ALTEROID_MEMORY_GUARD';
+
+/** 環境変数が受け付ける値。 */
+export const MEMORY_GUARD_VALUES = ['on', 'off'] as const;
+export type MemoryGuardValue = (typeof MEMORY_GUARD_VALUES)[number];
+
+/** 既定値。ここを `off` に倒すと、統合の走行が人間の記憶を無条件に壊せる。 */
+export const DEFAULT_MEMORY_GUARD: MemoryGuardValue = 'on';
+
+export function resolveMemoryGuard(env: NodeJS.ProcessEnv = process.env): MemoryGuardValue {
+  const given = env[MEMORY_GUARD_ENV]?.trim();
+  if (given === undefined || given.length === 0) return DEFAULT_MEMORY_GUARD;
+  if ((MEMORY_GUARD_VALUES as readonly string[]).includes(given)) {
+    return given as MemoryGuardValue;
+  }
+  throw new Error(
+    `${MEMORY_GUARD_ENV} の値が不正: ${given}（使えるのは on / off。既定は ${DEFAULT_MEMORY_GUARD}）`,
+  );
+}
+
+/**
+ * `memory_write`（全文置換）・`memory_delete` の歯そのもの。
+ *
+ * **判定軸は「保護状態 × 書き手」だけである。量（文字数の減少率）では判定しない**
+ * — 蒸留は正当な運用として大きく畳むことがあり、量では意図を分離できない
+ * （設計の議論を見よ）。
+ *
+ * - 書き手が `'clone'`（会話の中）なら常に通す。人間がその場に居る書き込みである。
+ * - 書き手が `'distill'`（統合の走行。人間が居ない場）で、対象が `human` /
+ *   `unknown`（守る側）なら断る。`clone-only` なら通す。
+ *
+ * **`canUseTool` をクローン層に繋いで止めて待つ形にはしない** — クローンは受信箱を
+ * 直列に処理する単一セッションなので、待つとそのターンだけでなく全部が止まる
+ * （`claude-provider.ts` に理由がある）。だから「断って返す」。`ask_human` は
+ * 承認待ちに積むだけで応答を待たないので、断られた後 `ask_human` を通せば
+ * 次のターンで実行できる — 能力は消えない。
+ *
+ * `memory_append` はここを通らない（呼ばない）。追記は記憶を失わないので、
+ * どの書き手・どの保護状態でも断らない。
+ */
+async function guardFullReplace(
+  stores: Stores,
+  slug: string,
+  cause: 'distill' | 'clone',
+  action: '全文置換' | '削除',
+): Promise<string | null> {
+  if (cause !== 'distill') return null;
+  if (resolveMemoryGuard() === 'off') return null;
+  const status = await stores.persona.protectionStatus(slug);
+  if (memoryProtectionAllowsFullReplace(status)) return null;
+  return (
+    `記憶 ${slug} は${describeMemoryProtectionStatus(status)}であり、統合の走行（distill）からの` +
+    `${action}を断った。失いたくないだけなら memory_append で追記すること。` +
+    'それでも置き換え・削除が要るなら、ask_human で人間に確認を通すこと' +
+    '（人間の回答が届いた後のターンで実行できる。この場でのやり直しはできない）。'
+  );
+}
+
 /** ツール定義そのもの。MCP の配線を通さずに単体テストできるよう分けてある。 */
 export function createCloneTools(context: ToolContext) {
   const { stores } = context;
@@ -290,6 +370,8 @@ export function createCloneTools(context: ToolContext) {
         '記憶の文書を全文置換する（無ければ作る）。',
         '人間がこのファイルを直接開いて読むことを前提に、Markdown として読みやすく書くこと。',
         '人間が手で書いた記述を、整形の都合で消さないこと。',
+        '**統合の走行（distill）からは、人間が一度でも書いた文書・履歴の無い文書には使えない**',
+        '（断られる。ask_human で人間に確認を通せば次のターンで実行できる）。会話の中の書き込みは通る。',
       ].join(' '),
       {
         slug: z.string().describe('文書のスラッグ（英小文字・数字・-・_）'),
@@ -297,11 +379,14 @@ export function createCloneTools(context: ToolContext) {
         summary: z.string().describe('何を更新したかの一行要約（日誌に残る）'),
       },
       async ({ slug, content, summary }) => {
+        const cause = memoryCause();
+        const denial = await guardFullReplace(stores, slug, cause, '全文置換');
+        if (denial !== null) return text(denial);
         await stores.persona.write(slug, content);
         await stores.journal.append({
           type: 'memory_update',
           slug,
-          cause: memoryCause(),
+          cause,
           action: 'write',
           summary,
         });
@@ -349,15 +434,14 @@ export function createCloneTools(context: ToolContext) {
      * **本文は日誌へ写さない。** 残すのはスラッグと消す直前の文字数だけ
      * （AGENTS.md「秘密の扱い」— 記憶の中身を別の場所へ増やさない）。
      *
-     * **「人間が書いた文書かクローンが書いた文書か」はここでは判別できない。**
-     * `memoryDocumentMetaSchema` / `memoryDocumentSchema`
-     * （`slug` / `title` / `updatedAt` / `bytes` / `content`）にも
-     * `storage-pg` の `memory` テーブル（`slug` / `content` / `updated_at`）にも
-     * 書き手を記録する列が無く、`storage-fs` は人間が `~/.alteroid/memory/*.md` を
-     * 直接開いて書き換えられること自体が要件（提供価値1）で、その経路は日誌に
-     * 一切痕跡を残さない。**だから「人間のものは消さない」を機構では守れない
-     * ——次にここを読んで書き手で判別するガードを足そうとしても、守れない規則を
-     * 実装しないこと。** 担保は逆側（消したことが必ず日誌へ残る側）に置いてある。
+     * **書き手（人間 / クローン / 統合の走行）は `ToolContext.memoryCause` から
+     * 分かる。** これは書き手そのものの判別ではなく「この道具をどのターンが
+     * 呼んだか」の申告で、`'human'` はここからは出ない（`'human'` を書くのは
+     * `app.ts` の `PUT` / `DELETE /memory/:slug` の2箇所だけである）。**この
+     * 道具（`memory_delete`）自体は誰が呼んでも「消せる」——歯は「文書が過去に
+     * 人間の手を経たか（保護状態）」×「呼んだのが統合の走行か」の組み合わせに
+     * だけ付く（`guardFullReplace`）。** 会話の中のクローンの判断で消すのは、
+     * 保護状態を問わず常に通る。
      */
     tool(
       'memory_delete',
@@ -365,8 +449,8 @@ export function createCloneTools(context: ToolContext) {
         '記憶の文書を1つ、文書ごと消す（部分削除ではない。一部を変えたいだけなら memory_write を使う）。',
         '無いスラッグを渡しても成功にはならず、そう返る。',
         '消した事実は日誌に残る（スラッグと直前の文字数のみ。本文は残らない）。',
-        '**このデーモンは記憶の書き手（人間かクローンか）を区別できない** —',
-        'この道具でも「人間が書いたものだけ避ける」ような判断はできない。',
+        '**統合の走行（distill）からは、人間が一度でも書いた文書・履歴の無い文書は消せない**',
+        '（断られる。ask_human で人間に確認を通せば次のターンで実行できる）。会話の中の削除は通る。',
       ].join(' '),
       {
         slug: z.string().describe('記憶のスラッグ（拡張子なし）'),
@@ -377,11 +461,14 @@ export function createCloneTools(context: ToolContext) {
         if (existing === null) {
           return text(`記憶 ${slug} は存在しない（消せない。何も変わっていない）。`);
         }
+        const cause = memoryCause();
+        const denial = await guardFullReplace(stores, slug, cause, '削除');
+        if (denial !== null) return text(denial);
         await stores.persona.remove(slug);
         await stores.journal.append({
           type: 'memory_update',
           slug,
-          cause: memoryCause(),
+          cause,
           action: 'remove',
           // 本文は残さず、直前の文字数だけ残す。何を消したかは summary が持つ。
           summary: `${summary}（削除直前 ${existing.content.length} 文字）`,

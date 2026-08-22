@@ -140,6 +140,99 @@ describe('PgPersonaStore', () => {
 
     expect(await stores.persona.read('tmp')).toBeNull();
   });
+
+  /**
+   * 保護状態（human guard）の派生値。実体は日誌にあり、ここは pg 側の置き場
+   * （`memory` テーブルの2列）が正しく振る舞うかを確かめる。「断ることを測る」歯
+   * そのもの（distill が断られる／通る）は `packages/core` の `tools.test.ts` が
+   * 持つ——ここは `PersonaStore` が返す `protectionStatus` の正しさだけを見る。
+   */
+  describe('protectionStatus（保護状態の派生値）', () => {
+    it('行そのものが無ければ unknown（守る側の既定）', async () => {
+      expect(await stores.persona.protectionStatus('nope')).toEqual({ kind: 'unknown' });
+    });
+
+    it('markHumanTouched を呼んだ文書は human になる', async () => {
+      await stores.persona.write('values', '# 価値観\n');
+      await stores.persona.markHumanTouched('values', new Date().toISOString());
+
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
+    });
+
+    it('write() だけの文書は clone-only になる（human 印が無い）', async () => {
+      await stores.persona.write('values', '# 価値観\n');
+
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
+    });
+
+    // 歯7: write() と append() は独立した2メソッドなので、append 経路でも
+    // content_sha256 が更新されることを個別に確かめる（片方だけ直す穴を塞ぐ）。
+    it('append 経路でもハッシュが更新される（誤検出しない）', async () => {
+      await stores.persona.write('log', '# ログ\n');
+      await stores.persona.append('log', '- 追記');
+
+      expect(await stores.persona.protectionStatus('log')).toEqual({ kind: 'clone-only' });
+    });
+
+    // 歯6: 道具経由の書き込み直後は unknown にならない（誤検出しない）。
+    // 歯5（次のテスト）とは別の it() で測る。
+    it('道具経由（write）の直後は unknown にならない', async () => {
+      await stores.persona.write('values', '# 価値観\n\n本文\n');
+
+      const status = await stores.persona.protectionStatus('values');
+
+      expect(status).not.toEqual({ kind: 'unknown' });
+      expect(status).toEqual({ kind: 'clone-only' });
+    });
+
+    // 歯5: 外から書き換えたら unknown に落ちる。pg には mtime 相当が無いので、
+    // store を経由しない直接 UPDATE（psql 相当）を模す。
+    it('store を通さず直接 UPDATE すると unknown に落ちる', async () => {
+      await stores.persona.write('values', '# 価値観\n\nもとの内容\n');
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
+
+      await db.execute(
+        sql`update memory set content = '# 価値観\n\n外から書き換えた\n' where slug = 'values'`,
+      );
+
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'unknown' });
+    });
+
+    it('human 印は外部編集があっても降りない（human が unknown より優先）', async () => {
+      await stores.persona.write('values', '# 価値観\n\n人間が書いた\n');
+      await stores.persona.markHumanTouched('values', new Date().toISOString());
+
+      await db.execute(
+        sql`update memory set content = '# 価値観\n\n外から書き換えた\n' where slug = 'values'`,
+      );
+
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
+    });
+
+    it('markHumanTouched は降ろさない（古い時刻を渡しても human のまま）', async () => {
+      await stores.persona.write('values', '# 価値観\n');
+      await stores.persona.markHumanTouched('values', '2026-01-02T00:00:00.000Z');
+      await stores.persona.markHumanTouched('values', '2020-01-01T00:00:00.000Z');
+
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
+    });
+
+    it('remove() で保護状態も一緒に消える（実体の無い印を残さない）', async () => {
+      await stores.persona.write('values', '# 価値観\n');
+      await stores.persona.markHumanTouched('values', new Date().toISOString());
+
+      await stores.persona.remove('values');
+
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'unknown' });
+    });
+
+    it('markHumanTouched は削除済みの slug に行を作らない（空文字の「文書」を生まない）', async () => {
+      await stores.persona.markHumanTouched('ghost', new Date().toISOString());
+
+      expect(await stores.persona.read('ghost')).toBeNull();
+      expect(await stores.persona.protectionStatus('ghost')).toEqual({ kind: 'unknown' });
+    });
+  });
 });
 
 describe('PgJournalStore', () => {

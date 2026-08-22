@@ -10,6 +10,7 @@ import type {
   JournalEntryType,
   MemoryDocument,
   MemoryDocumentMeta,
+  MemoryProtectionStatus,
   PendingApproval,
   SchedulePhase,
   ScheduledRequest,
@@ -52,6 +53,37 @@ export interface PersonaStore {
    * `renderMemoryDocuments`（`memory.ts`）が持ち、器は文書を渡すだけにする。
    */
   documents(): Promise<MemoryDocument[]>;
+
+  /**
+   * この文書の保護状態（`schema.ts` の `MemoryProtectionStatus`）を返す。
+   *
+   * **新しい真実ではない。** 実体は日誌（`memory_update.cause`）にあり、ここは
+   * その派生値（pg: `memory` テーブルの2列 / fs: `.index.json`）を読んだ結果を
+   * 返すだけである。派生値を失った・信用できないとき（fs で索引ファイルが無い・
+   * 壊れている／内容のハッシュが `content_sha256` と一致しない＝デーモンを
+   * 通さず誰かが書き換えた可能性がある）は `unknown`（守る側）を返す。
+   *
+   * **誰にも送られない。** HTTP / CLI / 道具のどの入力スキーマにも登場しない
+   * — `tools.ts` の distill ガードと、状態を人間可読にする表示のためだけに
+   * 内部で使う値である。
+   */
+  protectionStatus(slug: string): Promise<MemoryProtectionStatus>;
+
+  /**
+   * `cause:'human'` の `memory_update`（`action:'write'`）が記録されたことを、
+   * 保護状態の派生値へ反映する。
+   *
+   * 呼ぶのは日誌へ `cause:'human'` を書く箇所（`apps/daemon/src/app.ts` の
+   * `PUT /memory/:slug`）と、デーモン起動時の backfill（`apps/daemon/src/storage.ts`）
+   * だけである。**新しく配線を増やす場所ではない。**
+   *
+   * **一度立てたら降ろさない。** `at` はその時点で分かっている human 書き込みの
+   * 時刻で、既に持っている値より古ければ何もしない（新しい順に舐める backfill が
+   * 呼んでも巻き戻らないため）。実体（`.md` ファイル / `memory` テーブルの行）が
+   * 既に無い slug に対して呼ばれても、新しく行を作ってはいけない — 削除済みの
+   * slug が空文字の「文書」として `list()` / `read()` に化けて出てくる。
+   */
+  markHumanTouched(slug: string, at: string): Promise<void>;
 }
 
 export interface JournalQuery {

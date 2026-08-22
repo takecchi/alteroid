@@ -73,4 +73,68 @@ describe('openStorage', () => {
 
     await storage.close();
   });
+
+  /**
+   * 記憶の保護状態（human guard）の backfill。
+   *
+   * **日誌に過去の `cause:'human'` の記録があるのに、派生値（human_touched_at /
+   * `.index.json`）だけが立っていない**という状況を、デーモン再起動を挟んで
+   * 再現する。これは実際に起きうる — 既存の環境にこの機能を入れた直後は、
+   * 過去の PUT の履歴が日誌にはあっても派生値はまだ無い。backfill がそれを
+   * 追いつかせないと、既存の人間の書き込みが `unknown` に落ちたままになる
+   * （守る側なので保護自体は効くが、`human` と `unknown` を混同したままになる）。
+   */
+  it('起動時に日誌の cause:human を backfill し、既存の人間の書き込みが human になる', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
+
+    // --- 1回目の起動（過去のデーモンの寿命を模す） -------------------------
+    const first = await openStorage({ ALTEROID_HOME: root });
+    await first.stores.persona.write('habits', '# 習慣\n\n人間が過去に書いた\n');
+    // `app.ts` の PUT ハンドラが書く形をそのまま模す。ここではあえて
+    // `markHumanTouched` を呼ばない — 「日誌には残っているが派生値だけが
+    // 追いついていない」状態を作るのが目的である。
+    await first.stores.journal.append({
+      type: 'memory_update',
+      slug: 'habits',
+      cause: 'human',
+      action: 'write',
+      summary: '過去の PUT を模す',
+    });
+    // まだ backfill していないので clone-only（human 印が無い）。
+    expect(await first.stores.persona.protectionStatus('habits')).toEqual({
+      kind: 'clone-only',
+    });
+    await first.close();
+
+    // --- 2回目の起動（再起動） ---------------------------------------------
+    const second = await openStorage({ ALTEROID_HOME: root });
+
+    expect(await second.stores.persona.protectionStatus('habits')).toEqual({ kind: 'human' });
+
+    await second.close();
+  });
+
+  it('cause:human の action:remove からは backfill しない（削除は保護を立てる理由にならない）', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
+
+    const first = await openStorage({ ALTEROID_HOME: root });
+    // 人間が削除した記録だけが日誌にある（実体は既に無い）。
+    await first.stores.journal.append({
+      type: 'memory_update',
+      slug: 'gone',
+      cause: 'human',
+      action: 'remove',
+      summary: '過去の DELETE を模す',
+    });
+    await first.close();
+
+    const second = await openStorage({ ALTEROID_HOME: root });
+
+    // 実体も無ければ human 印も立たない — 新しく書かれたときは無条件で
+    // 保護されるのではなく、clone-only から始まる。
+    expect(await second.stores.persona.read('gone')).toBeNull();
+    expect(await second.stores.persona.protectionStatus('gone')).toEqual({ kind: 'unknown' });
+
+    await second.close();
+  });
 });

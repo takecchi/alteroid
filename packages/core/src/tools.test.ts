@@ -52,6 +52,14 @@ interface Harness {
   setTranscript(managerId: string, body: string | null): void;
   /** `runners()` に渡された引数（`fingerprints` を渡したかどうかの検査用）。 */
   runnersCalls: { fingerprints?: boolean }[];
+  /**
+   * この道具呼び出しが `memory_update.cause` でどう名乗るか（既定 `'clone'`）。
+   *
+   * **`ToolContext.memoryCause` の doc どおり、呼ぶたびに評価される値。** ここで
+   * 差し替えれば、次の `call()` からその値になる（`createCloneTools` を呼び直す
+   * 必要が無い ＝ 本番でセッション中に何度も呼ばれる形をそのまま模す）。
+   */
+  setMemoryCause(cause: 'distill' | 'clone'): void;
   call(name: string, args: Record<string, unknown>): Promise<string>;
 }
 
@@ -75,6 +83,7 @@ function harness(runtime?: () => CloneRuntimeFacts): Harness {
   };
   const runnersCalls: { fingerprints?: boolean }[] = [];
   const transcripts = new Map<string, string>();
+  let memoryCause: 'distill' | 'clone' = 'clone';
 
   const managers: ManagerPool = {
     async start(input) {
@@ -179,6 +188,7 @@ function harness(runtime?: () => CloneRuntimeFacts): Harness {
     // テストの外に出てしまう。
     profile: createProfileService({ stores, runners }),
     ...(runtime === undefined ? {} : { runtime }),
+    memoryCause: () => memoryCause,
   });
 
   return {
@@ -190,6 +200,9 @@ function harness(runtime?: () => CloneRuntimeFacts): Harness {
     distributed,
     running,
     denied,
+    setMemoryCause(cause) {
+      memoryCause = cause;
+    },
     setAbortOutcome(outcome, sessionGone) {
       abortOutcome = outcome;
       // 省略時は outcome から自然に決まる値を補う（`stopped` ⟺ `true`、
@@ -545,6 +558,144 @@ describe('クローンの道具', () => {
 
       const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
       expect(entry).toMatchObject({ action: 'remove' });
+    });
+  });
+
+  /**
+   * 記憶の human guard（PR「人間が一度でも書いた記憶を、統合の走行が黙って壊せない
+   * ようにする」）。
+   *
+   * **判定軸は「保護状態 × 書き手」であって量ではない。** ここでは書き手
+   * （`memoryCause`）の軸だけを動かす——保護状態そのものの正しさ（外部編集の検出・
+   * ハッシュの更新箇所）は `packages/storage-fs` / `packages/storage-pg` の
+   * `FsPersonaStore` / `PgPersonaStore` のテストが持つ（実ファイル・実 DB が要る）。
+   */
+  describe('記憶の human guard（人間が書いた記憶を distill が壊せない）', () => {
+    async function markHuman(h: Harness, slug: string, content: string): Promise<void> {
+      // app.ts の PUT /memory/:slug と同じ手順を模す（write してから印を立てる）。
+      await h.stores.persona.write(slug, content);
+      await h.stores.persona.markHumanTouched(slug, new Date().toISOString());
+    }
+
+    it('印は降りない — 人間が書いた後にクローンが何度書いても human のまま', async () => {
+      const h = harness();
+      await markHuman(h, 'values', '# 価値観\n\n人間が書いた\n');
+      expect(await h.stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
+
+      h.setMemoryCause('clone');
+      await h.call('memory_write', {
+        slug: 'values',
+        content: '# 価値観\n\nクローンが書いた1',
+        summary: '1',
+      });
+      await h.call('memory_write', {
+        slug: 'values',
+        content: '# 価値観\n\nクローンが書いた2',
+        summary: '2',
+      });
+      await h.call('memory_write', {
+        slug: 'values',
+        content: '# 価値観\n\nクローンが書いた3',
+        summary: '3',
+      });
+
+      expect(await h.stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
+    });
+
+    it('unknown は守る側 — 履歴が無い文書に対して distill の memory_write が断られる', async () => {
+      const h = harness();
+      h.setMemoryCause('distill');
+
+      const reply = await h.call('memory_write', {
+        slug: 'fresh-doc',
+        content: '# 新規\n\n本文',
+        summary: '新規に書く',
+      });
+
+      expect(reply).toContain('断った');
+      expect(await h.stores.persona.read('fresh-doc')).toBeNull();
+    });
+
+    it('clone の書き込みは通る — 同じ文書に cause: clone で書けば通る（能力を消していない）', async () => {
+      const h = harness();
+      await markHuman(h, 'values', '# 価値観\n\n人間が書いた\n');
+
+      h.setMemoryCause('clone');
+      const reply = await h.call('memory_write', {
+        slug: 'values',
+        content: '# 価値観\n\n会話の中で書き換えた',
+        summary: '書き換え',
+      });
+
+      expect(reply).toContain('更新した');
+      expect((await h.stores.persona.read('values'))?.content).toContain('会話の中で書き換えた');
+    });
+
+    it('memory_append は断られない（human 対象・distill でも）', async () => {
+      const h = harness();
+      await markHuman(h, 'values', '# 価値観\n\n人間が書いた\n');
+
+      h.setMemoryCause('distill');
+      const reply = await h.call('memory_append', {
+        slug: 'values',
+        content: '- 追記',
+        summary: '追記した',
+      });
+
+      expect(reply).toContain('追記した');
+      expect((await h.stores.persona.read('values'))?.content).toContain('追記');
+    });
+
+    it('distill の memory_delete も human 対象なら断られる', async () => {
+      const h = harness();
+      await markHuman(h, 'values', '# 価値観\n\n人間が書いた\n');
+
+      h.setMemoryCause('distill');
+      const reply = await h.call('memory_delete', { slug: 'values', summary: '整理' });
+
+      expect(reply).toContain('断った');
+      expect(await h.stores.persona.read('values')).not.toBeNull();
+    });
+
+    it('clone-only の文書には distill の全文置換・削除が通る（対照 — 検出器が非0を出せること）', async () => {
+      const h = harness();
+      // クローンが書いた文書（human 印なし）は clone-only になる。
+      await h.call('memory_write', {
+        slug: 'notes',
+        content: '# ノート\n\n最初の版',
+        summary: '1',
+      });
+      expect(await h.stores.persona.protectionStatus('notes')).toEqual({ kind: 'clone-only' });
+
+      h.setMemoryCause('distill');
+      const reply = await h.call('memory_write', {
+        slug: 'notes',
+        content: '# ノート\n\n畳んだ版',
+        summary: '畳んだ',
+      });
+
+      expect(reply).toContain('更新した');
+      expect((await h.stores.persona.read('notes'))?.content).toContain('畳んだ版');
+    });
+
+    it('トグルを off にすると断らない（能力を消していない）', async () => {
+      const h = harness();
+      await markHuman(h, 'values', '# 価値観\n\n人間が書いた\n');
+      h.setMemoryCause('distill');
+
+      const before = process.env.ALTEROID_MEMORY_GUARD;
+      process.env.ALTEROID_MEMORY_GUARD = 'off';
+      try {
+        const reply = await h.call('memory_write', {
+          slug: 'values',
+          content: '# 価値観\n\ndistill が上書き',
+          summary: '畳んだ',
+        });
+        expect(reply).toContain('更新した');
+      } finally {
+        if (before === undefined) delete process.env.ALTEROID_MEMORY_GUARD;
+        else process.env.ALTEROID_MEMORY_GUARD = before;
+      }
     });
   });
 

@@ -6,17 +6,19 @@ import type {
   JournalEntryInput,
   MemoryDocument,
   MemoryDocumentMeta,
+  MemoryProtectionStatus,
   PendingApproval,
   SchedulePhase,
   ScheduledRequest,
 } from './schema.js';
 import { schedulePhaseSchema } from './schema.js';
-import type {
-  AccessTokenRecord,
-  AuthAccount,
-  AuthIdentity,
-  AuthStore,
-  LoginRequest,
+import {
+  sha256Hex,
+  type AccessTokenRecord,
+  type AuthAccount,
+  type AuthIdentity,
+  type AuthStore,
+  type LoginRequest,
 } from './auth.js';
 import type {
   EnvProfile,
@@ -91,6 +93,10 @@ function isBeforeUsageStart(start: string | null, from: string | undefined): boo
  */
 export function createMemoryStores(): Stores {
   const documents = new Map<string, MemoryDocument>();
+  // 保護状態（human guard）の派生値。fs / pg と同じ形（新しい真実ではなく、
+  // journal.append(cause:'human') 相当の呼び出しから反映される派生値）。
+  const humanTouchedAt = new Map<string, string>();
+  const contentSha256 = new Map<string, string>();
   const entries: JournalEntry[] = [];
   const jobs = new Map<string, Job>();
   const approvals = new Map<string, PendingApproval>();
@@ -122,6 +128,9 @@ export function createMemoryStores(): Stores {
         content,
       };
       documents.set(slug, doc);
+      // **write() と append()（下）の唯一の通り道。** fs / pg と同じく、誰が
+      // 書いたかを問わずここでハッシュを更新する。human 印には触らない。
+      contentSha256.set(slug, sha256Hex(content));
       return doc;
     },
     async append(slug, content) {
@@ -130,6 +139,24 @@ export function createMemoryStores(): Stores {
     },
     async remove(slug) {
       documents.delete(slug);
+      // fs / pg と同じく、実体が消えれば派生値も消える（過去に human で書かれた
+      // 事実そのものは journal に残るので、backfill が立て直す）。
+      humanTouchedAt.delete(slug);
+      contentSha256.delete(slug);
+    },
+    async protectionStatus(slug): Promise<MemoryProtectionStatus> {
+      if (humanTouchedAt.has(slug)) return { kind: 'human' };
+      const hash = contentSha256.get(slug);
+      if (hash === undefined) return { kind: 'unknown' };
+      const doc = documents.get(slug);
+      if (doc === undefined) return { kind: 'unknown' };
+      return hash === sha256Hex(doc.content) ? { kind: 'clone-only' } : { kind: 'unknown' };
+    },
+    async markHumanTouched(slug, at) {
+      // 実体も索引も無い slug には新しく行を作らない（fs / pg と同じ約束）。
+      if (!documents.has(slug) && !humanTouchedAt.has(slug)) return;
+      const prior = humanTouchedAt.get(slug);
+      if (prior === undefined || at > prior) humanTouchedAt.set(slug, at);
     },
     // **`slug` 昇順で、本文ごと返す。** ここが本物（fs / pg）と同じ順序・同じ中身で
     // ないと、上の層の「どの文書が変わったか」がテストでは確かめられない。

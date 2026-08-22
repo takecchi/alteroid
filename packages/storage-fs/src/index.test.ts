@@ -122,6 +122,101 @@ describe('FsPersonaStore', () => {
     expect(all).toContain('memory: a.md');
     expect(all).toContain('memory: b.md');
   });
+
+  /**
+   * 保護状態（human guard）の派生値。実体は日誌にあり、ここは fs 側の置き場
+   * （`.index.json`）が正しく振る舞うかを確かめる。「断ることを測る」歯そのもの
+   * （distill が断られる／通る）は `tools.test.ts` が持つ——ここは `PersonaStore`
+   * が返す `protectionStatus` の正しさだけを見る。
+   */
+  describe('protectionStatus（保護状態の派生値）', () => {
+    it('索引ファイルが無ければ unknown（守る側の既定）', async () => {
+      await stores.persona.write('values', '# 価値観\n');
+
+      expect(await stores.persona.protectionStatus('nope')).toEqual({ kind: 'unknown' });
+    });
+
+    it('markHumanTouched を呼んだ文書は human になる', async () => {
+      await stores.persona.write('values', '# 価値観\n');
+      await stores.persona.markHumanTouched('values', new Date().toISOString());
+
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
+    });
+
+    it('write() だけの文書は clone-only になる（human 印が無い）', async () => {
+      await stores.persona.write('values', '# 価値観\n');
+
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
+    });
+
+    // 歯7: append の経路でもハッシュが更新される（write だけ直して append を
+    // 忘れる穴を塞ぐ）。
+    it('append 経路でもハッシュが更新される（誤検出しない）', async () => {
+      await stores.persona.write('log', '# ログ\n');
+      await stores.persona.append('log', '- 追記');
+
+      expect(await stores.persona.protectionStatus('log')).toEqual({ kind: 'clone-only' });
+    });
+
+    // 歯6: 道具経由の書き込み直後は unknown にならない（誤検出しない）。
+    // 歯5（次のテスト）とは別の it() で測る——片方が通ってももう片方の保証にはならない。
+    it('道具経由（write）の直後は unknown にならない', async () => {
+      await stores.persona.write('values', '# 価値観\n\n本文\n');
+
+      const status = await stores.persona.protectionStatus('values');
+
+      expect(status).not.toEqual({ kind: 'unknown' });
+      expect(status).toEqual({ kind: 'clone-only' });
+    });
+
+    // 歯5: 外から書き換えたら unknown に落ちる（store を通さずファイルを
+    // 直接書き換えてから読む）。
+    it('store を通さず直接ファイルを書き換えると unknown に落ちる', async () => {
+      await stores.persona.write('values', '# 価値観\n\nもとの内容\n');
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
+
+      // クローンを介さずエディタで直接書き換える、を模す（受け入れ基準3のテスト
+      // と同じ手口）。
+      await writeFile(join(root, 'memory', 'values.md'), '# 価値観\n\n外から書き換えた\n', 'utf8');
+
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'unknown' });
+    });
+
+    it('human 印は外部編集があっても降りない（human が unknown より優先）', async () => {
+      await stores.persona.write('values', '# 価値観\n\n人間が書いた\n');
+      await stores.persona.markHumanTouched('values', new Date().toISOString());
+
+      await writeFile(join(root, 'memory', 'values.md'), '# 価値観\n\n外から書き換えた\n', 'utf8');
+
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
+    });
+
+    it('markHumanTouched は降ろさない（古い時刻を渡しても human のまま）', async () => {
+      await stores.persona.write('values', '# 価値観\n');
+      await stores.persona.markHumanTouched('values', '2026-01-02T00:00:00.000Z');
+      await stores.persona.markHumanTouched('values', '2020-01-01T00:00:00.000Z');
+
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
+    });
+
+    it('list() は .index.json を拾わない（*.md しか見ない）', async () => {
+      await stores.persona.write('values', '# 価値観\n');
+      await stores.persona.markHumanTouched('values', new Date().toISOString());
+
+      const list = await stores.persona.list();
+
+      expect(list.map((doc) => doc.slug)).toEqual(['values']);
+    });
+
+    it('remove() で保護状態も一緒に消える（実体の無い印を残さない）', async () => {
+      await stores.persona.write('values', '# 価値観\n');
+      await stores.persona.markHumanTouched('values', new Date().toISOString());
+
+      await stores.persona.remove('values');
+
+      expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'unknown' });
+    });
+  });
 });
 
 describe('FsJournalStore', () => {

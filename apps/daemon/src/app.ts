@@ -1198,13 +1198,18 @@ export function createApp(deps: AppDeps) {
           return c.json({ error: '記憶のスラッグが不正' as const }, 400);
         }
         const doc = await stores.persona.write(slug, c.req.valid('json').content);
-        await stores.journal.append({
+        const entry = await stores.journal.append({
           type: 'memory_update',
           slug,
           cause: 'human',
           action: 'write',
           summary: 'HTTP API 経由で人間が記憶を書き換えた',
         });
+        // **保護状態の派生値を追いつかせる。** 新しい真実を作るのではなく、
+        // いま journal.append が書いた cause:'human' の記録そのものを読み出し
+        // やすい形にキャッシュしている（一度立てたら降ろさない。`store.ts` の
+        // `PersonaStore.markHumanTouched` の doc）。
+        await stores.persona.markHumanTouched(slug, entry.at);
         return c.json({ document: doc });
       },
     )
@@ -1246,6 +1251,14 @@ export function createApp(deps: AppDeps) {
         }
         const existing = await stores.persona.read(slug);
         if (existing === null) return c.json({ error: 'not found' as const }, 404);
+        // **`markHumanTouched` はここでは呼ばない。** `PersonaStore.remove` は
+        // 保護状態の派生値も一緒に消す（実体の無い印は監査上の嘘になるため）ので、
+        // ここで印を立てても同じ操作の中で消える。人間がこの slug を書いた事実
+        // そのものは日誌（下の `memory_update`）に残り続けるので、
+        // デーモン再起動時の backfill がこの slug の履歴を再び舐めても
+        // `action:'remove'` のこのエントリからは印を立て直さない（`storage.ts` の
+        // backfill の doc）——delete は「人間の意思で消した」であって、
+        // 将来ここに書かれる新しい内容を無条件に保護する理由にはならない。
         await stores.persona.remove(slug);
         await stores.journal.append({
           type: 'memory_update',
