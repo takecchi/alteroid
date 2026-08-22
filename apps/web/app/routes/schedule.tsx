@@ -53,11 +53,27 @@ export default function Schedule() {
             {data.entries.map((entry) => (
               <li
                 key={entry.kind}
-                className="flex items-center gap-3 border-b border-border px-4 py-3 last:border-b-0"
+                /*
+                  **この行だけで2種類の直しが要る。**
+                  (1) `flex-wrap`: 右側の時刻+バッジ（`shrink-0`）と、本3で
+                  `h-11` になったボタン1〜2個が、本文側が `min-w-0 flex-1`
+                  で縮んでも合計で入りきらないことがある。折り返さないと
+                  画面外へ出る側へ振れる。
+                  (2) `entry.kind` は `scheduleKindSchema`（`packages/core/
+                  src/schema.ts`）で `min(1).max(64)` かつ `[a-z0-9._-]` のみ
+                  ——空白を持たない最大64字の機械可読トークンなので、
+                  `break-words` が無いと `min-w-0 flex-1` の中でもテキスト
+                  自体がはみ出しうる（`.`/`-`/`_` は必ずしも改行点にならない）。
+                  `entry.description` は自由文（空白を含む）なので同じ懸念は
+                  無く、ここでは追加していない。
+                */
+                className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3 last:border-b-0"
               >
                 <div className="min-w-0 flex-1">
                   <p className="text-sm">{entry.description}</p>
-                  <p className="mt-0.5 font-mono text-[11px] text-muted">{entry.kind}</p>
+                  <p className="mt-0.5 font-mono text-[11px] break-words text-muted">
+                    {entry.kind}
+                  </p>
                   {/*
                     **継続中の依頼だけが持つもの。** `request` があるかどうかが
                     「人間かクローンが仕込んだ依頼」と「既定の仕込み（日報・発意

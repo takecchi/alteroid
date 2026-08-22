@@ -345,3 +345,34 @@ describe('折り返しの付け忘れ（本2）', () => {
     expect(span.className.split(/\s+/)).toContain('break-all');
   });
 });
+
+/**
+ * 横並びの積み替え（本4-D）。
+ *
+ * タイトル行（`記憶` へのリンク + `/` + slug）は `Page` の title 用の
+ * flex 行で、`flex-wrap` も `min-w-0` も無いまま前の作業者（本2）が範囲外
+ * として上げていた。読んだ結果: `Page` の title は既に `min-w-0` を持つ親
+ * div に包まれており、slug は `break-all` 済みなので、理屈のうえでは
+ * flex item の最小コンテンツ幅が既にごく小さく、はみ出さない可能性が高い。
+ * それでも `min-width: auto`（flex item の既定値は min-content 依存）という
+ * 間接的な仕組みに頼らせず、`connection.tsx` の入力欄・`schedule.tsx` の
+ * 本文欄と同じ「縮む側に `min-w-0` を明示する」流儀に揃えた
+ * （`flex-wrap` は付けていない。理由は `memory-detail.tsx` のコメントに書いた
+ * — 1行に収まる見た目が崩れるうえ、`items-center` と組み合わさると複数行に
+ * 折り返した slug の縦中央にリンクが浮く見た目になる）。
+ *
+ * **⚠️ これは「はみ出さなくなった」ことの試験ではない。** jsdom はレイアウトを
+ * 持たないので、固定できるのは「そのクラス名が書かれていること」までである。
+ */
+describe('横並びの積み替え（本4-D）: タイトル行の slug', () => {
+  it('slug の span に min-w-0 が付いている', async () => {
+    const longSlug = 'a'.repeat(80);
+    renderDetail(longSlug, docRoute({ ...DOC, slug: longSlug }));
+
+    const span = await screen.findByText(longSlug);
+    const tokens = span.className.split(/\s+/);
+    expect(tokens).toContain('min-w-0');
+    // break-all（本2）も残っていること。
+    expect(tokens).toContain('break-all');
+  });
+});

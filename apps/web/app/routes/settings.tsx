@@ -53,12 +53,17 @@ function Account() {
           </p>
         ) : (
           <>
-            <dl className="grid grid-cols-[6rem_1fr] gap-y-1">
-              <dt className="text-muted">アカウント</dt>
+            {/*
+              **`sm:`（640px）未満は1列に積む。** 理由・`dt` の `mt-3 first:mt-0`
+              の意味は `manager-detail.tsx` の同型の `dl` に書いたコメントと同じ
+              （ここは6remなのでなお余裕がある）。
+            */}
+            <dl className="grid grid-cols-1 gap-y-1 sm:grid-cols-[6rem_1fr]">
+              <dt className="mt-3 text-muted first:mt-0 sm:mt-0">アカウント</dt>
               <dd className="font-mono text-xs break-all">{auth.account?.id ?? '—'}</dd>
               {auth.account?.email !== null && auth.account?.email !== undefined && (
                 <>
-                  <dt className="text-muted">メール</dt>
+                  <dt className="mt-3 text-muted first:mt-0 sm:mt-0">メール</dt>
                   <dd className="text-xs break-all">{auth.account.email}</dd>
                 </>
               )}

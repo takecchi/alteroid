@@ -360,3 +360,47 @@ describe('折り返しの付け忘れ（本2）', () => {
     expect(badge.className.split(/\s+/)).toContain('break-all');
   });
 });
+
+/**
+ * 横並びの積み替え（本4-A）。
+ *
+ * `Account` の `dl`（`grid-cols-[6rem_1fr]`）は breakpoint 無しで固定されて
+ * いたので、375px 幅でもラベル列（6rem）が値の取り分を持っていっていた。
+ * `sm:` 未満は1列、`sm:` 以上で固定幅ラベル列に切り替える。積んだときに
+ * `dt`/`dd` の対応が読めるよう、`dt` に `mt-3 first:mt-0 sm:mt-0` を足して
+ * 組の境目を間隔の差で表す。
+ *
+ * この `dl` は `auth.status !== 'open'` なら常に描かれる（この harness の
+ * `/health` は `auth` を持たない応答なので `useAuth` は `checking` のまま
+ * 落ち着き、「open」にはならない — 上のテスト群と同じ前提）。
+ *
+ * **⚠️ これは「積み替わった」ことの試験ではない。** jsdom はレイアウトを
+ * 持たない（`offsetWidth` / `scrollWidth` / `getBoundingClientRect()` は
+ * すべて 0）ので、`sm:grid-cols-[6rem_1fr]` が実際に効いていることは
+ * ここでは1つも観測できない。固定できるのは「そのクラス名が書かれていること」
+ * までである。本2・本3 のテストより歯が弱い — breakpoint は CSS の話なので、
+ * jsdom では「効いている」ことそのものが原理的に見えない。
+ */
+describe('横並びの積み替え（本4-A）: アカウントの dl', () => {
+  it('狭い画面では1列、sm: 以上で固定幅ラベル列になる', async () => {
+    renderSettings({ runners: [], daemonRevision: DAEMON_UNKNOWN });
+
+    const dt = await screen.findByText('アカウント');
+    const dl = dt.closest('dl');
+    expect(dl).not.toBeNull();
+    const dlTokens = dl!.className.split(/\s+/);
+    expect(dlTokens).toContain('grid-cols-1');
+    expect(dlTokens).toContain('sm:grid-cols-[6rem_1fr]');
+    expect(dlTokens).not.toContain('grid-cols-[6rem_1fr]');
+  });
+
+  it('dt に mt-3 first:mt-0 sm:mt-0 が付いている（積んだときの組の境目）', async () => {
+    renderSettings({ runners: [], daemonRevision: DAEMON_UNKNOWN });
+
+    const dt = await screen.findByText('アカウント');
+    const tokens = dt.className.split(/\s+/);
+    expect(tokens).toContain('mt-3');
+    expect(tokens).toContain('first:mt-0');
+    expect(tokens).toContain('sm:mt-0');
+  });
+});

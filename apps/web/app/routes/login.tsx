@@ -230,12 +230,19 @@ function Ungranted() {
         は単一の持ち主のものなので、使えるようにするのは人間の明示的な操作である。
       </p>
 
-      <dl className="mt-3 grid grid-cols-[5rem_1fr] gap-y-1 text-xs">
-        <dt className="text-muted">アカウント</dt>
+      {/*
+          **`sm:`（640px）未満は1列に積む。** 理由・`dt` の `mt-3 first:mt-0`
+          の意味は `manager-detail.tsx` の同型の `dl` に書いたコメントと同じ
+          （ここは5remで4つの中でいちばん狭いので、なおのこと余裕がある）。
+          外側の `mt-3` は上の段落からの間隔で、`dt` に足した `mt-3` とは
+          別の役目である（混同しないこと）。
+        */}
+      <dl className="mt-3 grid grid-cols-1 gap-y-1 text-xs sm:grid-cols-[5rem_1fr]">
+        <dt className="mt-3 text-muted first:mt-0 sm:mt-0">アカウント</dt>
         <dd className="font-mono break-all">{auth.account?.id ?? '—'}</dd>
         {auth.account?.email !== null && auth.account?.email !== undefined && (
           <>
-            <dt className="text-muted">メール</dt>
+            <dt className="mt-3 text-muted first:mt-0 sm:mt-0">メール</dt>
             <dd className="break-all">{auth.account.email}</dd>
           </>
         )}
