@@ -242,6 +242,13 @@ function fingerprintsOf(value: unknown): RunnerCredentialFingerprint[] {
 class HttpRunner implements RunnerClient {
   runnerId = 'runner-primary';
   workspacePath = '';
+  /**
+   * `hello()` が読んだ版。**`runnerId` / `workspacePath` と同じ応答から拾う
+   * だけで、新しい往復は増やさない。** `body.revision` フィールド自体が無い
+   * （古い runner）間は `undefined` のまま——`RunnerClient.revision` の doc
+   * 参照。
+   */
+  revision?: RunnerRevisionReport;
   readonly #baseUrl: string;
   readonly #socketPath: string | null;
   readonly #token: string;
@@ -296,6 +303,14 @@ class HttpRunner implements RunnerClient {
       this.runnerId = body.runnerId;
     }
     if (typeof body.workspacePath === 'string') this.workspacePath = body.workspacePath;
+    // **`revision` フィールド自体が無ければ触らない**（`undefined` のまま）。
+    // 古い runner（この機能より前の版）は「まだ何も言っていない」として扱い、
+    // 名簿は `unheard` のまま保つ——`revisionReportOf(undefined)` を無条件で
+    // 呼ぶと、フィールド不在の runner まで `unknown` へ倒れてしまい、
+    // 「訊けたが分からない」と「そもそも報告する口が無い」が区別できなくなる。
+    if (body.revision !== undefined) {
+      this.revision = revisionReportOf(body.revision);
+    }
   }
 
   /**

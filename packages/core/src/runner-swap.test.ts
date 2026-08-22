@@ -227,24 +227,53 @@ describe('器の入れ替えを見分ける', () => {
   });
 
   /**
-   * **`state: 'connected'` は `identity()` を一度も呼んだことを保証しない。**
+   * **`state: 'connected'` は「版が分かっている」を保証しない——版を名乗らない
+   * runner に限って。**
    *
-   * `#open()`（`runner-protocol.ts`）は `entry.source.open()` が解決した時点で
-   * `state = 'connected'` を即座に立てるが、`identity()` は heartbeat
-   * （`HEARTBEAT_INTERVAL_MS` ごとの `#beat()`）でしか呼ばれない。つまり
-   * **登録が終わってから最初の heartbeat が回るまでの間（最大で約10秒）**、
-   * runner は `connected` なのに `revision` は初期値の `unheard` のままである
-   * ——たとえその runner の `identity()` が呼ばれれば `known` を返す実装でも、
-   * 呼ばれていない以上は `unheard` としか言えない。
+   * `#open()`（`runner-protocol.ts`）は `entry.source.open()` が解決した直後、
+   * `client.revision`（`hello()` 相当——`runnerId` / `workspacePath` と同じ
+   * 応答から拾う値）が在ればそれを採るので、**版を報告できる runner は繋がった
+   * 瞬間から `known` / `unknown` に見える**（`identity()` の最初の heartbeat を
+   * 待たない）。
    *
-   * これは稀なレースではなく、**新しく繋がった runner 全員が必ず一度通る窓**
-   * である。`state` だけを見て「繋がっているのに版が無いのはおかしい」と
-   * 読まないこと——`revision` は `state` とは別の、独立した観測である。
+   * **`revision` を実装しない runner（`IdentifyingRunner` の既定・実物では
+   * `LocalRunner`）だけが `unheard` のまま残る。** `identity()` すら版を
+   * 返さない（`this.revision` を設定していない）ので、`state: 'connected'` に
+   * なった後、heartbeat が1周してもなお `unheard` が動かないことまでここで
+   * 固定する——「繋がった瞬間の窓」ではなく「版を名乗る手段を持たない runner
+   * の恒常的な姿」であることを示す。
    */
-  it('connected の直後・最初の heartbeat が回るまでは revision は unheard のまま（identity() はまだ呼ばれていない）', async () => {
+  it('版を名乗らない runner（LocalRunner 相当）は connected でも unheard のまま——heartbeat が回っても動かない', async () => {
+    // `IdentifyingRunner` の既定では `revision` を設定しない——`hello()` に
+    // 相当する値も `identity()` が返す値も、どちらも無い runner を表す。
     const runner = new IdentifyingRunner('runner-fresh', 'boot-1');
-    // 「呼べば known を返す」runner を使う——それでも呼んでいない間は unheard
-    // であることが本体である。
+    const registry = createRunnerRegistry();
+    await registry.register({ label: 'http://runner-fresh:4518', open: async () => runner });
+
+    // **接続直後。** heartbeat を一切進めていない状態でも unheard。
+    expect(runner.probes).toBe(0);
+    expect(registry.entries()).toMatchObject([
+      { label: 'http://runner-fresh:4518', state: 'connected', revision: { status: 'unheard' } },
+    ]);
+
+    // **heartbeat を1周させても変わらない。** `identity()` 自体は呼ばれる
+    // （`probes` が増える）が、`this.revision` を設定していないので
+    // `identity()` の応答に `revision` が乗らず、`#markSeen` は何も更新しない。
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(runner.probes).toBe(1);
+    expect(registry.entries()).toMatchObject([
+      { label: 'http://runner-fresh:4518', revision: { status: 'unheard' } },
+    ]);
+
+    await registry.stop();
+  });
+
+  /**
+   * **窓が塞がっている側の証拠。** 上のテストと対になる——`revision` を実装
+   * する runner は、heartbeat を待たずに `known` として見える。
+   */
+  it('版を名乗る runner は、接続した瞬間（heartbeat 前）から known として見える', async () => {
+    const runner = new IdentifyingRunner('runner-fresh', 'boot-1');
     runner.revision = {
       status: 'known',
       commit: 'c'.repeat(40),
@@ -254,10 +283,15 @@ describe('器の入れ替えを見分ける', () => {
     const registry = createRunnerRegistry();
     await registry.register({ label: 'http://runner-fresh:4518', open: async () => runner });
 
-    // **heartbeat を一切進めていない。** register() が解決した直後の状態を見る。
+    // **heartbeat を一切進めていない。** それでも known——`#open()` が
+    // `hello()` 相当の応答から直接採ったからである。
     expect(runner.probes).toBe(0);
     expect(registry.entries()).toMatchObject([
-      { label: 'http://runner-fresh:4518', state: 'connected', revision: { status: 'unheard' } },
+      {
+        label: 'http://runner-fresh:4518',
+        state: 'connected',
+        revision: { status: 'known', commit: 'c'.repeat(40) },
+      },
     ]);
 
     await registry.stop();

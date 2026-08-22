@@ -693,6 +693,69 @@ describe('器の入れ替えの判定材料', () => {
 });
 
 /**
+ * `hello()` が拾う版（roadmap M5 相当。「connected なのに unheard」の窓を
+ * 塞ぐ側）。
+ *
+ * **`identity()` の heartbeat とは別の経路である。** `createHttpRunner()` は
+ * 内部で `hello()` を呼んでから返る（`runnerId` / `workspacePath` を確かめる
+ * のと同じタイミング）ので、繋がった時点で `client.revision` が既に埋まって
+ * いることを確かめる——`identity()` を1回も呼ばずに、である。
+ *
+ * **本物の runner の `/health` を通して確かめる。** 名簿側が実際にこれを
+ * 拾って `entry.revision` を早める判定は `packages/core/src/runner-swap.test.ts`
+ * が持つ。
+ */
+describe('hello() が拾う版', () => {
+  const cleanups: (() => Promise<void> | void)[] = [];
+
+  afterEach(async () => {
+    for (const cleanup of cleanups.splice(0)) await cleanup();
+  });
+
+  it('接続した時点（identity() を呼ぶ前）で revision が埋まっている', async () => {
+    const outbox = new Outbox();
+    const host = createRunnerHost({
+      runnerId: 'runner-primary',
+      workspacePath: '/workspace',
+      emit: (event) => outbox.push(event),
+      queryFn: fakeSdk().fn,
+    });
+    const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn: fetchInto(app),
+    });
+    cleanups.push(() => client.close());
+
+    // **`identity()` を一度も呼んでいない。** それでも revision は埋まって
+    // いる——`hello()`（`createHttpRunner` 内部）が既に読んでいるからである。
+    // このテスト環境では `pnpm build` 済みなので CANON_REVISION が焼かれて
+    // おり、runner の /health は known を返す（`known` 固定にしない——焼き
+    // 込み状態に依存するので `status` の型だけを見る）。
+    expect(client.revision).toBeDefined();
+    expect(['known', 'unknown']).toContain(client.revision?.status);
+  });
+
+  it('/health に revision フィールドが無い古い runner では、revision は undefined のまま（プレースホルダにしない）', async () => {
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn: (async () =>
+        Response.json({
+          ok: true,
+          runnerId: 'runner-old',
+          workspacePath: '/workspace',
+          // revision フィールド自体を持たない（この機能より前の runner を模す）。
+        })) as typeof fetch,
+    });
+    cleanups.push(() => client.close());
+
+    expect(client.revision).toBeUndefined();
+  });
+});
+
+/**
  * 死んだ runner への SSE 再接続のバックオフ。
  *
  * `sleepFn` を差し替えて、実時間を待たずに決定的に測る（`fetchFn` と同じ作法）。
