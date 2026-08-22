@@ -1,6 +1,5 @@
 /** 表示用の整形。ロケールは端末任せにせず日本語で固定する（作者ひとりの道具なので）。 */
 
-import { assertNeverMemoryCreatedAt } from '@alteroid/core';
 import type { MemoryCreatedAt } from '@alteroid/core';
 
 const dateTime = new Intl.DateTimeFormat('ja-JP', {
@@ -43,15 +42,33 @@ export function formatRelative(iso: string, now: number = Date.now()): string {
 }
 
 /**
+ * `MemoryCreatedAt` の2状態の網羅性を型で強制する。
+ *
+ * **`@alteroid/core` の `assertNeverMemoryCreatedAt` を呼ばず、ここで
+ * 同じ形を私物として持つ。** `@alteroid/core` はランタイム値を1つでも
+ * import すると（`sideEffects` を宣言していないため）バンドラが安全側に
+ * 倒れ、パッケージ全体を tree-shake できずに client バンドルへ丸ごと
+ * 混入する——実測（2026-08-22 観測、`pnpm build` の出力）: この関数だけを
+ * core から import した状態で `apps/web` の生成物に `format-*.js`
+ * （1,193.04 kB）という、他のどの route チャンクよりも桁違いに大きい
+ * チャンクが生まれた。`MemoryCreatedAt` は型だけなので消えるが、値は
+ * 消えない。**型の網羅性チェックのためだけに約1.2MBを配る家庭用の道具に
+ * しないため**、ロジックは同じでも実体はここに置く（`memory.ts` の
+ * `formatMemoryCreatedAt` とコードは重複するが、2箇所とも数行の
+ * `switch` なので、二重管理のリスクより client バンドルの肥大のほうが
+ * 重いと判断した）。
+ */
+function assertNeverCreatedAt(createdAt: never): never {
+  throw new Error(`未知の記憶作成時刻の状態: ${JSON.stringify(createdAt)}`);
+}
+
+/**
  * 記憶の作成時刻を絶対時刻で出す（詳細画面）。
  *
  * `memory_list`（クローンの道具、`packages/core/src/memory.ts` の
  * `formatMemoryCreatedAt`）と語彙を揃える——根拠が無ければ**「不明」と
  * 明言する**。空欄にすると「取れないこと」が出力から消える
  * （AGENTS.md「踏みやすい地雷」の「取れない軸に 0 の行を作る」と同じ形）。
- *
- * `assertNeverMemoryCreatedAt` で2状態の網羅性を型で強制する
- * （`formatMemoryCreatedAt` と同じ形）。
  */
 export function formatCreatedAt(createdAt: MemoryCreatedAt): string {
   switch (createdAt.kind) {
@@ -60,7 +77,7 @@ export function formatCreatedAt(createdAt: MemoryCreatedAt): string {
     case 'unknown':
       return '不明';
     default:
-      return assertNeverMemoryCreatedAt(createdAt);
+      return assertNeverCreatedAt(createdAt);
   }
 }
 
@@ -74,7 +91,7 @@ export function formatCreatedAtRelative(createdAt: MemoryCreatedAt): string {
     case 'unknown':
       return '不明';
     default:
-      return assertNeverMemoryCreatedAt(createdAt);
+      return assertNeverCreatedAt(createdAt);
   }
 }
 

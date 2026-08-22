@@ -4,7 +4,7 @@ import { Link, useNavigate } from 'react-router';
 import { Page } from '~/components/page';
 import { Button, Card, Empty, ErrorNote, Input, Spinner } from '~/components/ui';
 import { useMemoryDocuments } from '~/hooks/queries';
-import { formatBytes, formatRelative } from '~/lib/format';
+import { formatBytes, formatCreatedAtRelative, formatRelative } from '~/lib/format';
 
 /** サーバ側と同じ規則（`memorySlugSchema`）。ここで弾いて 400 を待たない。 */
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
@@ -81,7 +81,9 @@ export default function Memory() {
                     )}
                   </div>
                   <span className="shrink-0 text-[11px] text-muted">
-                    {formatBytes(document.bytes)} · {formatRelative(document.updatedAt)}
+                    {formatBytes(document.bytes)} · 作成{' '}
+                    {formatCreatedAtRelative(document.createdAt)} · 更新{' '}
+                    {formatRelative(document.updatedAt)}
                   </span>
                 </Link>
               </li>
