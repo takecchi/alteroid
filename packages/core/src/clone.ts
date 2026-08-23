@@ -3703,6 +3703,16 @@ export function commitmentFor(event: InboxEvent): Commitment | null {
         origin: 'manager',
         source: event.managerId,
         body: `[${event.kind}] ${event.text}`,
+        // **`bodyMarkup` が指すのは `event.text`（接頭辞を除いた本体）である。**
+        // `body` は `[${event.kind}] ` を前置した形なので、この印をそのまま
+        // 持ち越すと、指す対象は接頭辞を含まない本体のまま揃う（表示側
+        // `apps/web/app/routes/commitments.tsx` は接頭辞を剥がしてから
+        // `bodyMarkup` を当てる、という前提が両側で一致している）。
+        //
+        // **印が無いイベント（`event.markup === undefined`）では、
+        // `bodyMarkup` も立てず `undefined` のままにする。** 既定へ倒さない
+        // （`textMarkupSchema` の doc、`packages/core/src/schema.ts`）。
+        ...(event.markup === undefined ? {} : { bodyMarkup: event.markup }),
       };
     case 'external':
       return {

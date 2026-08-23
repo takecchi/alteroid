@@ -31,7 +31,14 @@ import type {
   RunnerRevisionStatus,
 } from './runner-protocol.js';
 import { brief } from './runner.js';
-import type { InboxEvent, Job, JobStatus, JournalEntryInput, WorkspaceLocator } from './schema.js';
+import type {
+  InboxEvent,
+  Job,
+  JobStatus,
+  JournalEntryInput,
+  TextMarkup,
+  WorkspaceLocator,
+} from './schema.js';
 import type { Stores } from './store.js';
 import {
   describeUsageNotice,
@@ -1329,6 +1336,37 @@ class Pool implements ManagerPool {
           ? `${managerId} を${who}が止めようとしましたが、まだ止まっていません` +
             `（runner にセッションが残っています）。`
           : `${managerId} を${who}が止めようとしましたが、止まったかどうか確認が取れませんでした。`;
+    // **`markup: 'none'` は、人間が打った自由記述 `reason` が実際にこの
+    // `messageText` へ埋め込まれる回にだけ立てる。** 条件は3つ:
+    //
+    // - **`outcome === 'stopped'` のときだけ立てる。** `reason` が
+    //   `messageText` へ前置されるのはこの枝だけで、`not_stopped` /
+    //   `unknown` の文にはデーモンの定型文しか入らない。人間が `reason` を
+    //   書いていても、その文字が1文字も入っていないメッセージに印を立てるのは
+    //   嘘である — 印は「この text が Markdown として書かれていない」という
+    //   **その text についての事実**を名乗るものだからである。
+    //
+    // - **`by === 'clone'` のときは立てない。** クローンの `reason`
+    //   （`packages/core/src/tools.ts` の `manager_stop`）は AI が書いた自由
+    //   記述で、今日と同じく Markdown として描いてよい。
+    // - **`reason === undefined` のときも立てない。** 本文はデーモンの定型文
+    //   だけで、人間が打った文字は1文字も入っていない。今日と同じ扱いでよい。
+    // - **他の5つの `#post({ type: 'manager_message', … })` 呼び出し箇所
+    //   （この関数の外。`abort()` 以外の場所にある）と `#emit()` の呼び出し
+    //   元にはこの印を足さない。** ここは `reason` という「人間が Web UI /
+    //   `DELETE /managers/:id` で自由に打った文字列」がそのまま埋め込まれる、
+    //   数少ない箇所の1つである（issue #287 は範囲をこの1箇所に絞っている）。
+    //
+    // **`by === 'clone'` のときに `markup: 'markdown'` を立てないのは消極的な
+    // 選択ではない。** 「まだ決めていない」を保存する積極的な選択である —
+    // 挙動はどちらでも今日と同じ（既定で Markdown として描かれる）ので、選ぶ
+    // 基準は挙動ではなく、この欄が後から読まれたときに何を主張するかである。
+    // 将来もし既定が反転したら（「印が無ければ素で描く」へ）、`'markdown'` を
+    // 立ててあった箇所だけが確かめていない推定を方針変更の外へ生き残らせて
+    // しまう。`undefined` なら「ここは決めていない」が目に見える形で残る
+    // （`textMarkupSchema` の doc、`packages/core/src/schema.ts`）。
+    const markup: TextMarkup | undefined =
+      outcome === 'stopped' && by === 'human' && reason !== undefined ? 'none' : undefined;
     this.#post({
       type: 'manager_message',
       id: randomUUID(),
@@ -1336,6 +1374,7 @@ class Pool implements ManagerPool {
       managerId,
       kind: 'report',
       text: messageText,
+      ...(markup === undefined ? {} : { markup }),
     });
 
     return { outcome, detail, ...(sessionGone === undefined ? {} : { sessionGone }) };
