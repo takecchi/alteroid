@@ -59,14 +59,44 @@ export default function Usage() {
       description="alteroid が使った分（トークンと費用）。SDK の推定値であり、Anthropic の請求明細ではない"
     >
       <Card className="mb-4 p-4">
-        <div className="grid gap-3 sm:grid-cols-3">
+        {/*
+          `sm` 未満にはこの容器へ `grid-template-columns` の指定が1つも無い
+          （旧: `grid gap-3 sm:grid-cols-3`）。無い場合の暗黙の単一トラックは
+          `auto`＝max-content になるので、**中身の内在幅がそのままトラック幅**
+          になり `Card` の枠を超える。`sm` 以上で出ないのは `minmax(0,1fr)` の
+          `0` がトラックの下限を潰しているからで、狭い画面だけその傘が無い穴
+          だった（#265 と同じ形の欠落）。`grid-cols-1` を足して傘を掛けるのが
+          根の直し（#265 の `login.tsx` / `manager-detail.tsx` / `settings.tsx`
+          が `dl` でやっているのと同じ流儀。別解は持ち込まない）。
+
+          **`type="date"` の2つの `Input` にだけ `min-w-0` も足してある。**
+          `input[type=date]` は内在幅が大きく（特に iOS Safari）、アプリ内で
+          `type="date"` を使うのはここの2箇所だけ（`manager` は素のテキスト、
+          `layer`/`site` は `Select` で内在幅が小さい）。1で足りるはずだが
+          実機で確かめられないので二重に押さえてある。
+
+          **jsdom はレイアウトを持たないので、この修正が実機で効いていること
+          はテストでは確かめられない。** 下のテストが保証するのはクラスが
+          当たっていることまでである。
+        */}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <label className="flex flex-col gap-1 text-xs text-muted">
             from
-            <Input type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
+            <Input
+              type="date"
+              className="min-w-0"
+              value={from}
+              onChange={(event) => setFrom(event.target.value)}
+            />
           </label>
           <label className="flex flex-col gap-1 text-xs text-muted">
             to
-            <Input type="date" value={to} onChange={(event) => setTo(event.target.value)} />
+            <Input
+              type="date"
+              className="min-w-0"
+              value={to}
+              onChange={(event) => setTo(event.target.value)}
+            />
           </label>
           <label className="flex flex-col gap-1 text-xs text-muted">
             manager
