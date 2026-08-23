@@ -753,3 +753,113 @@ export function renderMemoryListing(entries: readonly MemoryListingEntry[]): str
       '狙った文書が出ていなければ memory_read slug=<slug> で直接開けること。',
   });
 }
+
+// ---------------------------------------------------------------------------
+// memory_write / memory_append の応答に添える差分の要約（#318 案 (d)）
+// ---------------------------------------------------------------------------
+
+/**
+ * なぜ要るか。
+ *
+ * クローンが `memory_write` で全文を再生成するとき、ツール呼び出しの
+ * 中で本文を作り直す。その本文が途中で切れても、記憶には控えも履歴も
+ * 無いので突き合わせる相手が存在しない——だからクローンは全文置換を
+ * 安全に選べない。ここは「そもそも切れない」ようにするものではなく、
+ * **切れたことにその場で気づけるようにする**ものである。
+ *
+ * `memory_append` にも同じ要約を付ける。追記も、追記しようとした文字列
+ * そのものがツール呼び出しの中で切れれば、足りない分は静かに失われる。
+ * ただし append は既存を消さないので、「消えた見出し」は理屈のうえでは
+ * 常に 0 件のはずである——0 件でないなら append の異常（呼び手のバグや
+ * ストア側の想定外の挙動）を疑う根拠になる（歯は `tools.test.ts` にある）。
+ *
+ * **単位は文字数で統一する**（`content.length`）。日誌の `bytesBefore` /
+ * `bytesAfter`（バイト）はそのまま——機械可読な面はバイト、人が読む面は
+ * 文字という既にある二重構造（`memory_delete` の「削除直前 N 文字」と
+ * 同じ軸）を壊さない。バイトと文字を1つの文に混ぜない。
+ *
+ * **本文そのものは載せない**（AGENTS.md「秘密の扱い」）。載せるのは
+ * 見出しの文字列と数だけである。
+ */
+
+/** 消えた見出しの列挙を切るときの予算（文字数）。`renderListing` と同じ規律。 */
+export const MEMORY_MISSING_HEADINGS_BUDGET = 600;
+
+function formatMemoryCharCount(value: number): string {
+  return value.toLocaleString('en-US');
+}
+
+/** 増減の文字数。0 以上には `+` を付け、符号を持たない生の数と区別する。 */
+function formatMemoryCharDelta(delta: number): string {
+  return delta >= 0 ? `+${formatMemoryCharCount(delta)}` : formatMemoryCharCount(delta);
+}
+
+/**
+ * Markdown の ATX 見出し（行頭の `#` 〜 `######`）を抜き出す。
+ *
+ * **行頭に限る。** 行のどこかに `#` があるだけの行（インラインの `#` や
+ * コードブロックの中身）は見出しではない——ここを緩めると、本文中の
+ * `#` がすべて「見出し」として数えられてしまう。
+ */
+function extractMemoryHeadings(content: string): string[] {
+  const headings: string[] = [];
+  for (const line of content.split('\n')) {
+    const match = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
+    if (match) headings.push(`${match[1]} ${match[2]}`);
+  }
+  return headings;
+}
+
+/**
+ * `before` に在って `after` に無い見出しを、重複を畳んで返す（出現順）。
+ *
+ * 見出しは集合として比べる——同じ見出しが `before` に複数回出ていても、
+ * `after` のどこかに1つでも残っていれば「消えた」とは数えない。
+ */
+function missingMemoryHeadings(before: string, after: string): string[] {
+  const beforeHeadings = extractMemoryHeadings(before);
+  const afterHeadings = new Set(extractMemoryHeadings(after));
+  const seen = new Set<string>();
+  const missing: string[] = [];
+  for (const heading of beforeHeadings) {
+    if (afterHeadings.has(heading)) continue;
+    if (seen.has(heading)) continue;
+    seen.add(heading);
+    missing.push(heading);
+  }
+  return missing;
+}
+
+function describeMemoryHeadingDiff(before: string, after: string): string {
+  const missing = missingMemoryHeadings(before, after);
+  if (missing.length === 0) return '消えた見出し: なし。';
+  return [
+    `消えた見出し（${formatMemoryCharCount(missing.length)} 件）:`,
+    renderListing(
+      missing.map((heading) => `- ${heading}`),
+      {
+        budget: MEMORY_MISSING_HEADINGS_BUDGET,
+        omitted: ({ rest, shown, total }) =>
+          `…ほか ${rest} 件は省略（消えた見出しは全 ${total} 件のうち ${shown} 件だけ出した）。`,
+      },
+    ),
+  ].join('\n');
+}
+
+/**
+ * `memory_write` / `memory_append` が成功したときに返す差分の要約。
+ *
+ * `before` は書き込み前の本文（無ければ `null`）、`after` は書き込み後の
+ * 本文（ストアが返した実際の値——呼び手が計算し直さない）。
+ *
+ * **新規作成（`before === null`）は「前」が無いので、増減ではなくそう
+ * 分かる形にする。** 見出しの比較も行わない（比べる相手が無い）。
+ */
+export function describeMemoryWriteDiff(before: string | null, after: string): string {
+  if (before === null) {
+    return `新規作成（${formatMemoryCharCount(after.length)} 文字）。`;
+  }
+  const delta = after.length - before.length;
+  const charLine = `${formatMemoryCharCount(before.length)} → ${formatMemoryCharCount(after.length)} 文字（${formatMemoryCharDelta(delta)}）`;
+  return [charLine, describeMemoryHeadingDiff(before, after)].join('\n');
+}
