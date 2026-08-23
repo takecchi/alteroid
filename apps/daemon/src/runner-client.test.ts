@@ -1044,6 +1044,175 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(eventsCalls()).toBe(1);
   });
+
+  describe('stderr の cause 付記', () => {
+    /**
+     * `/events` への `fetch` 自体が例外を投げる形の失敗を組み立てる。
+     *
+     * `fetchEvents`（この describe の外側にある）は 503 の `Response` を返す
+     * 形の失敗しか作れない——これは `#stream` が自分で投げる
+     * `new Error(...)`（`cause` を持たない）であって、**Node 22 の素の
+     * `fetch`（undici）が streaming 中の切断で投げる `TypeError: terminated`
+     * （`cause` 付き）を再現できない。** ここではその形を直接作る。
+     */
+    function fetchEventsThrowing(causeOf: (callIndex: number) => unknown): {
+      fetchFn: typeof fetch;
+    } {
+      let calls = 0;
+      const fetchFn = (async (input: string | URL | Request) => {
+        const path = pathOf(input);
+        if (path === '/health') {
+          return Response.json({ runnerId: 'runner-flaky', workspacePath: '/workspace' });
+        }
+        if (path === '/events') {
+          const cause = causeOf(calls);
+          calls += 1;
+          throw new TypeError('terminated', { cause });
+        }
+        throw new Error(`想定していない path: ${path}`);
+      }) as typeof fetch;
+      return { fetchFn };
+    }
+
+    /**
+     * ちょうど1敗ぶんだけ待たせて、その1回分のログを読む。
+     *
+     * **`close()` は `sleepFn` の中から呼ぶ**（上の「close() の後は挑み直さ
+     * ない」テストと同じ形）。`await enough; await client.close();` のように
+     * 外側から呼ぶと、`#pump` のループがもう1周（次の `#stream` 呼び出し）を
+     * 始めてから `close()` が効くまでの間にレースが生まれ、2行目が書かれる
+     * ことがある。`sleepFn` の中で `close()` を await すると、`#pump` が次の
+     * ループへ進む前に `#closed` が立つので、1周しか回らないことが保証できる。
+     */
+    async function runOnceAndCollectFailureLines(fetchFn: typeof fetch): Promise<string[]> {
+      const clientHolder: { current?: { close(): Promise<void> } } = {};
+      const sleepFn = async (): Promise<void> => {
+        await clientHolder.current?.close();
+      };
+
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+        sleepFn,
+      });
+      clientHolder.current = client;
+      await client.connect(() => undefined);
+
+      // ループが1周し、sleepFn の中の close() が完了するのを待つ
+      // （「close() の後は挑み直さない」テストと同じ待ち方）。
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      return stderrSpy.mock.calls
+        .map((call: unknown[]) => String(call[0]))
+        .filter((line: string) => line.includes('ストリームが切れました'));
+    }
+
+    it('cause を持つ例外で切れたとき、ログ行に cause と code が1行で出る', async () => {
+      const socketError = Object.assign(new Error('other side closed'), {
+        name: 'SocketError',
+        code: 'UND_ERR_SOCKET',
+      });
+      const { fetchFn } = fetchEventsThrowing(() => socketError);
+
+      const failureLines = await runOnceAndCollectFailureLines(fetchFn);
+
+      expect(failureLines).toHaveLength(1);
+      const line = failureLines[0] as string;
+      expect(line).toContain('TypeError: terminated');
+      expect(line).toContain('cause=SocketError: other side closed');
+      expect(line).toContain('code=UND_ERR_SOCKET');
+      // 1行に収まる（既存の「間隔で機構を判別する」運用が読める形のまま）。
+      expect(line.endsWith('\n')).toBe(true);
+      expect(line.trimEnd()).not.toContain('\n');
+    });
+
+    it('body timeout の cause（別の code）も区別して出る', async () => {
+      const bodyTimeout = Object.assign(new Error('Body Timeout Error'), {
+        name: 'BodyTimeoutError',
+        code: 'UND_ERR_BODY_TIMEOUT',
+      });
+      const { fetchFn } = fetchEventsThrowing(() => bodyTimeout);
+
+      const failureLines = await runOnceAndCollectFailureLines(fetchFn);
+
+      expect(failureLines).toHaveLength(1);
+      expect(failureLines[0]).toContain('cause=BodyTimeoutError: Body Timeout Error');
+      expect(failureLines[0]).toContain('code=UND_ERR_BODY_TIMEOUT');
+    });
+
+    it('cause が無い例外でも壊れず、従来どおりの行が出る', async () => {
+      // 503 応答は #stream 自身が投げる `new Error(...)` で、cause を持たない。
+      const { fetchFn } = fetchEvents(() => 'fail');
+
+      const failureLines = await runOnceAndCollectFailureLines(fetchFn);
+
+      expect(failureLines).toHaveLength(1);
+      const line = failureLines[0] as string;
+      expect(line).toContain('runner の /events に繋げない (503)');
+      expect(line).not.toContain('cause=');
+      expect(line.trimEnd()).not.toContain('\n');
+    });
+
+    it('cause が Error でない値（文字列）でも壊れない', async () => {
+      const { fetchFn } = fetchEventsThrowing(() => 'ただの文字列の cause');
+
+      const failureLines = await runOnceAndCollectFailureLines(fetchFn);
+
+      expect(failureLines).toHaveLength(1);
+      const line = failureLines[0] as string;
+      expect(line).toContain('cause=ただの文字列の cause');
+      expect(line).not.toContain('code=');
+      expect(line.trimEnd()).not.toContain('\n');
+    });
+
+    it('待ち時間が同じでも cause の code が変われば、頭打ち後でもまた書く', async () => {
+      // 1〜6敗目は SocketError（待ちは 1000→2000→4000→8000→16000→30000 と
+      // 伸びるので、待ちが変わるたびに書く＝既存の間引きの範囲）。7敗目から
+      // BodyTimeoutError に切り替わる——待ちは 6敗目と同じ 30000 で頭打ちの
+      // ままだが、**cause の code が変わっている**。8敗目は7敗目と同じ
+      // BodyTimeoutError なので、そこは従来どおり黙る。
+      const socketError = Object.assign(new Error('other side closed'), {
+        name: 'SocketError',
+        code: 'UND_ERR_SOCKET',
+      });
+      const bodyTimeout = Object.assign(new Error('Body Timeout Error'), {
+        name: 'BodyTimeoutError',
+        code: 'UND_ERR_BODY_TIMEOUT',
+      });
+      const { fetchFn } = fetchEventsThrowing((i) => (i < 6 ? socketError : bodyTimeout));
+
+      const waits: number[] = [];
+      let notifyEnough: () => void = () => undefined;
+      const enough = new Promise<void>((resolve) => {
+        notifyEnough = resolve;
+      });
+      const sleepFn = async (ms: number): Promise<void> => {
+        waits.push(ms);
+        if (waits.length >= 8) notifyEnough();
+      };
+
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+        sleepFn,
+      });
+      await client.connect(() => undefined);
+      await enough;
+      await client.close();
+
+      const failureLines = stderrSpy.mock.calls
+        .map((call: unknown[]) => String(call[0]))
+        .filter((line: string) => line.includes('ストリームが切れました'));
+
+      // 待ちが変わる1〜6敗目で6行、待ちは同じでも cause が切り替わった
+      // 7敗目でもう1行、cause も待ちも同じ8敗目では書かない: 計7行。
+      expect(failureLines).toHaveLength(7);
+      expect(failureLines[5]).toContain('code=UND_ERR_SOCKET');
+      expect(failureLines[6]).toContain('code=UND_ERR_BODY_TIMEOUT');
+    });
+  });
 });
 
 /**

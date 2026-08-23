@@ -20,6 +20,7 @@ import { RUNNER_CALL_DEADLINE_MS, RunnerUnknownError, settleWithinDeadline } fro
 import {
   RunnerHttpError,
   buildRevisionSchema,
+  reasonOf,
   reportRunnerRevision,
   runnerCredentialFingerprintSchema,
   runnerProfileFingerprintSchema,
@@ -318,6 +319,47 @@ function fingerprintsOf(value: unknown): RunnerCredentialFingerprint[] {
   });
 }
 
+/**
+ * `failure.cause` から、1行に畳んだ本文と `code`（無ければ空文字）を取り出す。
+ * `cause` が無い／`failure` が `Error` でなければ `undefined`。
+ *
+ * **`String(failure)` は `cause` を落とす**——`Error.prototype.toString()`
+ * （`TypeError` もこれを継承する）は `name: message` しか返さない。Node 22 の
+ * 素の `fetch`（内蔵 undici）は streaming 中の切断を `TypeError: terminated`
+ * として投げ、**本当の理由は `cause` に入る**（実測で確認した2系統: `cause`
+ * が `SocketError`／`cause.code === 'UND_ERR_SOCKET'` なら下の TCP が本当に
+ * 切れた、`cause` が `BodyTimeoutError`／`cause.code === 'UND_ERR_BODY_TIMEOUT'`
+ * なら undici 既定の無通信タイムアウト（既定 300000ms）が発火した）。**この2つは
+ * `String(err)` では区別できず、区別できるのは `cause.code` だけ。**
+ *
+ * **`reasonOf`（`packages/core/src/dropped-record.ts`）は「畳む」部分だけ借りて、
+ * `code` の取り出しはここに置く。** `reasonOf` 自体は変えない —— あちらは
+ * 「ドライバの例外がクエリのパラメータを裏口から持ち込む経路から記録の自由文を
+ * 守る」契約を持ち、`dropped-record.ts` 経由の他の呼び出し元（日誌・記録の
+ * 記録失敗）がその契約に依存している。ここで足したいのは undici の固定語彙
+ * （`cause.code`）であって、契約の中身が違うので、共有関数を広げず専用の
+ * 畳み方をここに置く。
+ *
+ * `cause` は型定義上 `unknown`。無い／`Error` でない／入れ子になっている、
+ * どれでも例外を投げない（`cause.cause` へは踏み込まない——1段目だけで十分）。
+ * `code` の判定はここ1か所に置く（ログの付記・間引きの見分け、両方がここを通す）。
+ */
+function causeInfoOf(failure: unknown): { text: string; code: string } | undefined {
+  if (!(failure instanceof Error) || failure.cause === undefined) return undefined;
+  const cause = failure.cause;
+  const code =
+    typeof cause === 'object' && cause !== null && 'code' in cause && typeof cause.code === 'string'
+      ? cause.code
+      : '';
+  return { text: reasonOf(cause), code };
+}
+
+/** ログ本文へ足す付記（`cause=... code=...`。`cause` が無ければ空文字）。 */
+function causeSuffixOf(info: ReturnType<typeof causeInfoOf>): string {
+  if (info === undefined) return '';
+  return ` cause=${info.text}${info.code === '' ? '' : ` code=${info.code}`}`;
+}
+
 class HttpRunner implements RunnerClient {
   runnerId = 'runner-primary';
   workspacePath = '';
@@ -355,6 +397,18 @@ class HttpRunner implements RunnerClient {
   #backingOff = false;
   /** 直前に stderr へ書いた待ち時間。同じ値のときは書き直さない。 */
   #lastLoggedDelayMs: number | null = null;
+  /**
+   * 直前に stderr へ書いた cause の見分け（{@link causeInfoOf} が返す `code`）。
+   *
+   * **待ち時間の間引きに横並びで効かせる。** 待ち時間だけを見ていると、
+   * バックオフが頭打ち（`retryMaxMs`）で張り付いたまま失敗が続く間、
+   * `cause.code` が別物（例: `UND_ERR_SOCKET` → `UND_ERR_BODY_TIMEOUT`）へ
+   * 切り替わっても書かれない——だが本番でどちらが起きているかを見分けたい
+   * のがこの付記そのものの目的なので、張り付いた区間こそ見えてほしい。
+   * `code` が無い失敗どうしは区別しない（{@link causeInfoOf} の doc）ので、
+   * この項目が無くても既存の間引き（待ち時間ベース）の挙動は変わらない。
+   */
+  #lastLoggedCauseCode = '';
 
   constructor(options: HttpRunnerOptions) {
     this.#socketPath = socketPathOf(options.baseUrl);
@@ -530,14 +584,18 @@ class HttpRunner implements RunnerClient {
 
       if (failed) {
         this.#backingOff = true;
-        if (this.#lastLoggedDelayMs !== waitMs) {
+        const causeInfo = causeInfoOf(failure);
+        const causeCode = causeInfo?.code ?? '';
+        if (this.#lastLoggedDelayMs !== waitMs || this.#lastLoggedCauseCode !== causeCode) {
           process.stderr.write(
-            `alteroidd: runner のストリームが切れました: ${String(failure)}（次は${waitMs}ms後に再試行）\n`,
+            `alteroidd: runner のストリームが切れました: ${reasonOf(failure)}${causeSuffixOf(causeInfo)}（次は${waitMs}ms後に再試行）\n`,
           );
           this.#lastLoggedDelayMs = waitMs;
+          this.#lastLoggedCauseCode = causeCode;
         }
       } else {
         this.#lastLoggedDelayMs = null;
+        this.#lastLoggedCauseCode = '';
       }
 
       // 次に使う値を決める。失敗なら倍々に伸ばして頭打ち、成功なら基準へ戻す。
