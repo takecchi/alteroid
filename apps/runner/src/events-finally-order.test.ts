@@ -72,15 +72,16 @@ describe('runner の /events: finally の片付け順序と取りこぼし無し
       });
 
     const realAttach = Outbox.prototype.attach;
-    const attachSpy = vi
-      .spyOn(Outbox.prototype, 'attach')
-      .mockImplementation(function (this: Outbox, listener: (event: RunnerEvent) => void) {
-        const detach = realAttach.call(this, listener);
-        return () => {
-          order.push('detach');
-          detach();
-        };
-      });
+    const attachSpy = vi.spyOn(Outbox.prototype, 'attach').mockImplementation(function (
+      this: Outbox,
+      listener: (event: RunnerEvent) => void,
+    ) {
+      const detach = realAttach.call(this, listener);
+      return () => {
+        order.push('detach');
+        detach();
+      };
+    });
 
     try {
       const host = newHost();
