@@ -326,7 +326,12 @@ describe('本文を origin で Markdown / 素のテキストへ切り分ける',
       // `queryByRole('heading')` を名前指定なしで使うと誤検出する** — 名前で
       // 絞って確かめる。
       expect(screen.queryByRole('heading', { name: new RegExp(kind) })).toBeNull();
-      expect(document.querySelector('strong, em')).toBeNull();
+      // **`document` 全体ではなくこの行（`<li>`）の中だけを見る。** 画面の
+      // どこか無関係な場所に将来 `strong` / `em` が増えても、この行が
+      // 無関係な理由で落ちないようにする。
+      const row = prefix.closest('li');
+      expect(row).not.toBeNull();
+      expect(row!.querySelector('strong, em')).toBeNull();
     },
   );
 
