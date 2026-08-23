@@ -1484,7 +1484,7 @@ describe('chat の /conversations と /conversation', () => {
  * **デーモンの heartbeat が `alteroid chat` を壊さないことを固定する。**
  *
  * デーモンは無音死の掃除のため SSE にコメント行（`: hb`）を周期的に流す
- * （`apps/daemon/src/sse-heartbeat.ts`）。SSE の仕様上クライアントは捨ててよい行で、
+ * （`packages/core/src/sse-heartbeat.ts`）。SSE の仕様上クライアントは捨ててよい行で、
  * この CLI は `data:` が1本も無い塊を `null`（読み飛ばし）にすることで捨てている。
  * **「たまたま捨てている」ではなく、捨てることが保証されている状態にする。**
  */
