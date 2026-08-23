@@ -630,7 +630,8 @@ export function readMaxWorkers(args) {
  * までである。
  *
  * **⚠️ ただし「色が付く条件」は1つ特定できた —— GitHub Actions の CI である。**
- * 実測（**この修正自身の head sha `a969fd19` の CI run `32671276901`**、job `ci` の
+ * 実測（**この PR の CI**。run `32671276901` と `32672700282` の2回で再現した。
+ * **⚠️ head sha ではなく run id で書いてある** —— sha は rebase で動くが run は動かない。job `ci` の
  * step `Run pnpm test` の raw log archive を展開して取った生バイト。`gh run view --log`
  * は ESC を `^[` へ均してしまうので、archive のバイトで数えた）: 集計行2本に
  * **ESC(0x1B) が16個**入っており、形は `scripts/mutate-core-strip-ansi.test.ts` の

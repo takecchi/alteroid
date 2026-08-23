@@ -40,7 +40,8 @@ import { parseAggregateLines as guardParseAggregateLines } from './test-guard-co
  * 差し込んだプローブで確認）。**この食い違いの理由は特定していない。**
  *
  * **⚠️ ただし「色が付く条件」は1つ特定できた —— GitHub Actions の CI である。**
- * この PR 自身の head sha `a969fd19` の CI run `32671276901`（job `ci` /
+ * この PR の CI（run `32671276901` と `32672700282` の2回で再現。**head sha ではなく
+ * run id で書いてある** —— sha は rebase で動くが run は動かない。job `ci` /
  * step `Run pnpm test`）の **raw log archive** を展開すると、集計行2本に
  * **ESC(0x1B) が16個**入っている（`gh run view --log` は ESC を ^[ へ均して
  * しまうので、archive のバイトで数えた）。逐語:
