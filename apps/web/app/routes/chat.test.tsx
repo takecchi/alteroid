@@ -660,3 +660,59 @@ describe('送信ボタンの狭幅対応（本6）', () => {
     expect(screen.getByRole('button', { name: '送る' })).toBeTruthy();
   });
 });
+
+/**
+ * `ChatPane` の横向き safe-area inset（Issue #247 の4）。
+ *
+ * **これは「切り欠きの側で本文が欠けなくなった」ことの試験ではない。** jsdom は
+ * `env(safe-area-inset-*)` を評価できないので、実際に何 px になるかはここでは
+ * 測れない。固定できるのは、ヘッダ・やりとりの本文・入力欄の帯の3箇所に
+ * `--safe-left` / `--safe-right` を使うクラス名が書かれていることまでである。
+ *
+ * 入力欄の帯（footer）は `--safe-bottom` を既に持っていた（縦向き）。ここで
+ * 見るのは横向きぶんで、ヘッダ・本文にも同じ幅で当ててあることを併せて見る
+ * （3つとも同じ左右の物理端を共有するので、本文だけ当てるとヘッダの見出しだけ
+ * 切り欠きにかぶることになる）。
+ */
+describe('ChatPane の横向き safe-area inset（本4）', () => {
+  it('ヘッダ・本文・入力欄の帯が pl / pr の safe-area クラスを持つ（クラス名の存在のみ）', async () => {
+    stubFetch((url, init) => {
+      if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
+      if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
+      return undefined;
+    });
+
+    renderChat();
+    // 「やりとり」の `<ul>` は本文が1件も無いあいだは出ない（`Empty` に差し替わる）。
+    // 本文側の要素を掴むために、まず1件送る。
+    await send('やあ');
+
+    const header = screen.getByRole('banner');
+    const headerClasses = header.className.split(/\s+/);
+    expect(headerClasses).toContain('pl-[calc(1rem+var(--safe-left))]');
+    expect(headerClasses).toContain('pr-[calc(1rem+var(--safe-right))]');
+    expect(headerClasses).toContain('md:pl-[calc(1.5rem+var(--safe-left))]');
+    expect(headerClasses).toContain('md:pr-[calc(1.5rem+var(--safe-right))]');
+
+    const body = screen.getByRole('list', { name: 'やりとり' }).parentElement;
+    if (body === null) throw new Error('やりとりの親要素が見つからない');
+    const bodyClasses = body.className.split(/\s+/);
+    expect(bodyClasses).toContain('pl-[calc(1rem+var(--safe-left))]');
+    expect(bodyClasses).toContain('pr-[calc(1rem+var(--safe-right))]');
+    expect(bodyClasses).toContain('md:pl-[calc(1.5rem+var(--safe-left))]');
+    expect(bodyClasses).toContain('md:pr-[calc(1.5rem+var(--safe-right))]');
+
+    const textbox = screen.getByPlaceholderText(/クローンに話しかける/);
+    // 入力欄の帯そのもの（`border-t` の div）まで3階層上がる
+    // （`<textarea>` → `min-w-0 flex-1` → `flex items-end gap-2` → 帯本体）。
+    const footer = textbox.parentElement?.parentElement?.parentElement;
+    if (footer === undefined || footer === null) throw new Error('入力欄の帯が見つからない');
+    const footerClasses = footer.className.split(/\s+/);
+    expect(footerClasses).toContain('pl-[calc(1rem+var(--safe-left))]');
+    expect(footerClasses).toContain('pr-[calc(1rem+var(--safe-right))]');
+    expect(footerClasses).toContain('md:pl-[calc(1.5rem+var(--safe-left))]');
+    expect(footerClasses).toContain('md:pr-[calc(1.5rem+var(--safe-right))]');
+    // 既存の縦の safe-area（本4の対象外だが、消していないことも一緒に見ておく）。
+    expect(footerClasses).toContain('pb-[calc(0.75rem+var(--safe-bottom))]');
+  });
+});

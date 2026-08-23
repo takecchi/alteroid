@@ -46,7 +46,7 @@ export function Page({
      * 画面からはみ出す（帯は shell が持っていて、この部品からは見えない）。
      */
     <div className="flex h-full flex-col">
-      <header className="flex shrink-0 items-start justify-between gap-4 border-b border-border px-4 py-4 md:px-6">
+      <header className="flex shrink-0 items-start justify-between gap-4 border-b border-border py-4 pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]">
         <div className="min-w-0">
           <h1 className="text-base font-semibold">{title}</h1>
           {/*
@@ -68,7 +68,7 @@ export function Page({
       <div
         ref={scrollRef}
         className={cn(
-          'min-h-0 flex-1 overflow-y-auto p-4 pb-[calc(1rem+var(--safe-bottom))] md:p-6 md:pb-[calc(1.5rem+var(--safe-bottom))]',
+          'min-h-0 flex-1 overflow-y-auto p-4 pb-[calc(1rem+var(--safe-bottom))] pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:p-6 md:pb-[calc(1.5rem+var(--safe-bottom))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]',
           className,
         )}
       >
