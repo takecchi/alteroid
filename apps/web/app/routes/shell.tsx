@@ -185,7 +185,13 @@ function Nav({
          * この幅を超える**ので、横向きの左端の safe-area はむしろこちらが主な
          * 当たり先になる。右は当てていない — 広い画面では `nav` の右に `main`
          * （`page.tsx` / `chat.tsx`）が続き、画面の右端は既にそちら側の
-         * `pr-[calc(...+var(--safe-right))]` が持っている。
+         * pr-safe-right の calc() 版が持っている（⚠️ ここで実際の角括弧つきの
+         * クラス名を書くと、Tailwind のスキャナがコメントか本物のコードかを
+         * 区別せず拾って壊れた CSS を生成する。実測: 一度 `pr-[calc(...+var(
+         * --safe-right))]` と書いたところ、コンパイル後の CSS に
+         * `padding-right:calc(...+var(--safe-right))` という不正な calc() が
+         * そのまま出た。使われない・壊れてもいないので実害は無いが、次に
+         * ここへ角括弧つきの例を書くときは注意すること）。
          */
         onNavigate === undefined
           ? 'w-52 shrink-0 border-r border-border pl-[var(--safe-left)]'
