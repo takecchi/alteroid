@@ -1944,6 +1944,123 @@ describe('クローンの道具', () => {
     expect(reply).toContain('更新: 2026-03-04T05:06:07.000Z');
   });
 
+  /**
+   * `lastReportAt`（#358。デーモインが報告を受け取った時刻）は既存の
+   * 「直近の報告」行に添えるだけで、行を1本増やさない——`manager_list` の
+   * 予算は文字数なので、行を増やすと出せる件数が減る（`LIST_BUDGET` の doc）。
+   */
+  it('manager_list は lastReportAt を「直近の報告」の行に添える（行は増やさない）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.lastReport = '終わった';
+    target.lastReportAt = '2026-08-24T00:00:00.000Z';
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('2026-08-24T00:00:00.000Z');
+    expect(reply).toContain('終わった');
+    // 添えた行であって新しい行ではない——「直近の報告」は1回しか出ない。
+    expect(reply.match(/直近の報告/g)).toHaveLength(1);
+  });
+
+  /**
+   * **取れない軸に0の行を作らない**（AGENTS.md の地雷表）。`lastReportAt` が
+   * 無い（版のずれ・古いデータ）行に「未受信」のような文言を作らない——
+   * `lastReport` の行はそのまま出るだけで、時刻の断片は付かない。
+   */
+  it('manager_list は lastReportAt が無い行に何も足さない（「未受信」を作らない）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.lastReport = '終わった';
+    // lastReportAt はセットしない。
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('直近の報告: 終わった');
+    expect(reply).not.toContain('未受信');
+    expect(reply).not.toContain('undefined');
+  });
+
+  /**
+   * クローンの受信箱（`InboxStore`）の滞留は、`renderListing` の外——一覧
+   * 全体に1行だけ添える（#358「答えない問い」のうち、デーモン→クローンの脚）。
+   * **0件のときは1文字も出さない**（AGENTS.md「取れない軸に0の行を作る」の
+   * 逆方向——「詰まっていない」という健全な行を毎回積み重ねない）。
+   */
+  it('manager_list は受信箱に未処理が無ければ、その注記を1文字も出さない', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).not.toContain('受信箱');
+  });
+
+  it('manager_list は受信箱に未処理があれば、件数と最も古い時刻を1行で出す', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    await h.stores.inbox.put(
+      {
+        type: 'human_message',
+        id: 'evt-1',
+        at: '2026-08-24T00:00:00.000Z',
+        text: '未処理の発言',
+        conversationId: 'conv-1',
+      },
+      '2026-08-24T00:00:00.000Z',
+    );
+    await h.stores.inbox.put(
+      {
+        type: 'human_message',
+        id: 'evt-2',
+        at: '2026-08-24T01:00:00.000Z',
+        text: 'もう1件',
+        conversationId: 'conv-1',
+      },
+      '2026-08-24T01:00:00.000Z',
+    );
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('受信箱');
+    expect(reply).toContain('2 件');
+    expect(reply).toContain('2026-08-24T00:00:00.000Z');
+    // put しか呼んでいない——claimPending の副作用（配達回数を進める）を
+    // 経由していないことの裏取り。
+    expect(await h.stores.inbox.pending()).toEqual({
+      count: 2,
+      oldestAt: '2026-08-24T00:00:00.000Z',
+    });
+  });
+
+  /**
+   * マネージャーが1本も居なくても、受信箱の滞留は別の軸なので出る
+   * （#358「答えない問い」の3行目——マネージャーの本数と無関係）。
+   */
+  it('manager_list はマネージャーが1本も居なくても、受信箱の滞留があれば出す', async () => {
+    const h = harness();
+    await h.stores.inbox.put(
+      {
+        type: 'human_message',
+        id: 'evt-1',
+        at: '2026-08-24T00:00:00.000Z',
+        text: '未処理の発言',
+        conversationId: 'conv-1',
+      },
+      '2026-08-24T00:00:00.000Z',
+    );
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('マネージャーは1本も居ない');
+    expect(reply).toContain('受信箱');
+    expect(reply).toContain('1 件');
+  });
+
   it('委譲先が無い場面（蒸留の内部ターン）は、黙らずにそう返す', async () => {
     const stores = createMemoryStores();
     const tools = createCloneTools({ stores, emit: () => undefined });
