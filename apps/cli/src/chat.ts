@@ -1484,8 +1484,7 @@ function resolveListedId(reference: string, listed: string[]): string | null {
 
 /** `/reply` `/allow` `/deny` の宛先解決の結果。 */
 type WaitingTarget =
-  | { ok: true; managerId: string; requestId: string }
-  | { ok: false; message: string };
+  { ok: true; managerId: string; requestId: string } | { ok: false; message: string };
 
 /**
  * `/reply` `/allow` `/deny` の第1引数を (managerId, requestId) へ解く。
