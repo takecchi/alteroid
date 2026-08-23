@@ -600,3 +600,37 @@ describe('片付け済みの配り直し（本文だけを短くする）', () =
     expect(lines.some((line) => line.includes('配り直しの片付き確認'))).toBe(true);
   });
 });
+
+describe('InboxStore.pending（#358。読むだけで配達回数を進めない）', () => {
+  it('件数といちばん古い時刻を返す（0件のときは oldestAt を作らない）', async () => {
+    const stores = createMemoryStores();
+    expect(await stores.inbox.pending()).toEqual({ count: 0 });
+
+    await stores.inbox.put(report('2件目', 'evt-2'), '2026-08-11T00:00:00.000Z');
+    await stores.inbox.put(report('1件目', 'evt-1'), '2026-08-10T00:00:00.000Z');
+
+    expect(await stores.inbox.pending()).toEqual({
+      count: 2,
+      oldestAt: '2026-08-10T00:00:00.000Z',
+    });
+  });
+
+  /**
+   * **この歯が単独で守るもの**: `pending()` を何度呼んでも `claimPending()` が
+   * 返す `deliveries` が変わらないこと。fs / pg と同じ性質をインメモリ実装
+   * （`packages/core/src/testing.ts` の `createMemoryInboxStore`）に対しても
+   * 確かめる——3実装すべてに同じ歯を立てる（`store.ts`「省略可能にしない
+   * こと」と同じ理由: 1つだけ確かめても、能力差が別の器で静かに生まれうる）。
+   */
+  it('pending() を何度呼んでも claimPending() の deliveries は動かない', async () => {
+    const stores = createMemoryStores();
+    await stores.inbox.put(report('本文', 'evt-1'), '2026-08-10T00:00:00.000Z');
+
+    await stores.inbox.pending();
+    await stores.inbox.pending();
+    await stores.inbox.pending();
+
+    const claimed = await stores.inbox.claimPending();
+    expect(claimed[0]?.deliveries).toBe(1);
+  });
+});

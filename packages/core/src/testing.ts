@@ -629,6 +629,16 @@ function createMemoryInboxStore(): InboxStore {
         return next;
       });
     },
+    async pending(): Promise<{ count: number; oldestAt?: string }> {
+      // **`claimPending` と違い、`unread` を1文字も書き換えない**
+      // （`InboxStore.pending` の doc）。
+      const rows = [...unread.values()];
+      const oldest = rows.reduce<string | undefined>(
+        (min, row) => (min === undefined || row.at < min ? row.at : min),
+        undefined,
+      );
+      return { count: rows.length, ...(oldest === undefined ? {} : { oldestAt: oldest }) };
+    },
   };
 }
 
