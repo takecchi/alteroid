@@ -18,6 +18,7 @@ import { Readable } from 'node:stream';
 import { RUNNER_CALL_DEADLINE_MS, RunnerUnknownError, settleWithinDeadline } from './deadline.js';
 
 import {
+  DEFAULT_SSE_HEARTBEAT_MS,
   RunnerHttpError,
   buildRevisionSchema,
   reasonOf,
@@ -107,6 +108,31 @@ export type RunnerDroppedEventReport =
 const RUNNER_STREAM_RETRY_BASE_MS = 1_000;
 const RUNNER_STREAM_RETRY_MAX_MS = 30_000;
 
+/**
+ * 接続を「持続した」とみなす閾値（#274）。**新しいマジックナンバーを置かない**——
+ * 既にシステムに在る量（{@link DEFAULT_SSE_HEARTBEAT_MS}）の2倍として導く。
+ *
+ * **なぜ2倍か。** heartbeat の間隔を1回以上またいで生きていた接続は、相手が
+ * 生きていたことを実際に示している——またげたのは heartbeat（`packages/core/
+ * src/sse-heartbeat.ts` の {@link DEFAULT_SSE_HEARTBEAT_MS} 間隔で runner が送る
+ * コメント行）が届いていたからである。1倍（heartbeat の間隔そのもの）では
+ * 「1回も届かないうちに閾値へ達する」余地が残り、「またいだ」と言い切れない。
+ * 2倍にすれば、閾値に達した時点で少なくとも1回分の間隔をまたいでいることが
+ * 保証される。
+ *
+ * この判定はフレームの中身（`: hb` かどうか）を一切見ない——`#read` が
+ * `reader.read()` から中身を受け取ったという事実だけを使う（下の `#pump` の
+ * doc）。heartbeat の実装が変わっても、閾値の意味は変わらない。
+ *
+ * **この値が {@link RUNNER_STREAM_RETRY_MAX_MS}（30000ms）と一致するのは
+ * 傍証であって、この閾値を選んだ理由そのものではない。** Issue #274 が挙げた
+ * 2つの根拠（バックオフの上限を超えること／heartbeat を複数回受けること）が
+ * たまたま同じ値に落ちているだけである。`packages/core/src/sse-heartbeat.
+ * test.ts` の `DEFAULT_SSE_HEARTBEAT_MS * 2 <= 30_000` という既存の歯とも
+ * 整合する。
+ */
+const CONNECTION_HEALTHY_THRESHOLD_MS = DEFAULT_SSE_HEARTBEAT_MS * 2;
+
 /** `setTimeout` を `unref` して待つ（既定の `sleepFn`）。 */
 function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -159,6 +185,16 @@ export interface HttpRunnerOptions {
    * 既定は `setTimeout`（`unref` 済み）で実際に待つ。
    */
   sleepFn?: (ms: number) => Promise<void>;
+  /**
+   * 現在時刻を差し替える口。**主にテスト用**（`sleepFn` / `fetchFn` と同じ
+   * 位置づけ——外から差し替えられる依存であって、本体に「テスト中か」の
+   * 分岐は作らない）。既定は `Date.now`。
+   *
+   * 接続が {@link CONNECTION_HEALTHY_THRESHOLD_MS} だけ持続したかを測るのに使う
+   * （`#pump` の doc）。実時間を待たずに決定的なテストを書くための口であり、
+   * `vi.useFakeTimers()` は使わない（このファイルの既存の作法を踏襲する）。
+   */
+  nowFn?: () => number;
   /**
    * 制御面の応答を待つ期限（既定 {@link RUNNER_CALL_DEADLINE_MS}）。**主にテスト用。**
    *
@@ -386,6 +422,7 @@ class HttpRunner implements RunnerClient {
   readonly #retryBaseMs: number;
   readonly #retryMaxMs: number;
   readonly #sleepFn: (ms: number) => Promise<void>;
+  readonly #nowFn: () => number;
   readonly #deadlineMs: number;
   readonly #onUnknown: ((report: RunnerUnknownReport) => void) | undefined;
   readonly #onDroppedEvent: ((report: RunnerDroppedEventReport) => void) | undefined;
@@ -395,7 +432,15 @@ class HttpRunner implements RunnerClient {
   #nextDelayMs: number;
   /** 直前の接続が失敗していて、まだ繋ぎ直せていないか。 */
   #backingOff = false;
-  /** 直前に stderr へ書いた待ち時間。同じ値のときは書き直さない。 */
+  /**
+   * 直前に stderr へ書いた待ち時間。同じ値のときは書き直さない。
+   *
+   * **⚠️ この dedup は「一度も健全にならない」区間の可視性を下げる。** 待ち幅が
+   * 上限（30000ms）へ張り付いたまま失敗し続けると、以後は最初の1行しか
+   * 出ない——同じ間隔で切れ続ける沈黙と「直った」（`繋ぎ直せた` の行が出る）
+   * が、ログの不在だけでは見分けが付かない。**このファイルを次に触るときは
+   * この行で立ち止まること**（#308）。この PR（#274）では直していない。
+   */
   #lastLoggedDelayMs: number | null = null;
   /**
    * 直前に stderr へ書いた cause の見分け（{@link causeInfoOf} が返す `code`）。
@@ -420,6 +465,7 @@ class HttpRunner implements RunnerClient {
     this.#retryBaseMs = options.retryDelayMs ?? RUNNER_STREAM_RETRY_BASE_MS;
     this.#retryMaxMs = options.retryMaxDelayMs ?? RUNNER_STREAM_RETRY_MAX_MS;
     this.#sleepFn = options.sleepFn ?? defaultSleep;
+    this.#nowFn = options.nowFn ?? Date.now;
     this.#nextDelayMs = this.#retryBaseMs;
     this.#deadlineMs = options.deadlineMs ?? RUNNER_CALL_DEADLINE_MS;
     this.#onUnknown = options.onUnknown;
@@ -550,24 +596,54 @@ class HttpRunner implements RunnerClient {
    * 切れたら挑み直す。**間隔は固定ではなく、失敗が続くほど倍々に伸びて
    * `retryMaxMs` で頭打ちになる**（`packages/core` の名簿側の再接続と同じ形）。
    *
-   * **リセットの契機は「読み切れた（例外なく終わった）」時点である。** 「繋がった
-   * 時点」（`#stream()` が応答を受け取った直後）にしなかったのは意図的で、
-   * 開いた直後に毎回すぐ死ぬ相手を相手にしたとき、繋がった瞬間にリセットする
-   * 形だと失敗のたびに基準へ戻ってしまい、指数バックオフが一度も進まない
-   * （`packages/core` の `#open` はまさに「繋がった」時点でリセットしており、
-   * ここではその弱さを引き継がない形を選んでいる）。読み切れた＝一度は健全に
-   * 届いた、を基準にすることで、開いてすぐ壊れる相手にもバックオフが効く。
+   * **リセットの契機は「接続が {@link CONNECTION_HEALTHY_THRESHOLD_MS} だけ
+   * 持続したうえで、相手からバイトが届いた」時点である**（#274）。
+   *
+   * **なぜ「繋がった時点」ではないか。** 以前の doc の意図はいまも生きている
+   * ——「繋がった」（`#stream()` が応答を受け取った直後）でリセットすると、
+   * 開いた直後に毎回すぐ死ぬ相手を相手にしたとき失敗のたびに基準へ戻って
+   * しまい、指数バックオフが一度も進まない（`packages/core` の `#open` は
+   * まさに「繋がった」時点でリセットしており、ここではその弱さを引き継がない）。
+   * **開いてすぐ壊れる接続は `CONNECTION_HEALTHY_THRESHOLD_MS` に届かないので、
+   * バックオフは意図どおり登り続ける。**
+   *
+   * **なぜ「一度でも出来事が届いたら」ではないか。** runner は `/events` を
+   * 開いた直後に、無条件で `hello` を書く（`apps/runner/src/app.ts`、
+   * `for (;;)` ループに入る前）。だから「何か届いた」は「繋がった」とほぼ
+   * 同義であり、上と同じ問題をそのまま作り直す。**この条件は一度提案され、
+   * `hello` の現物を読んで撤回された**——同じ道を二度通らないようにここへ
+   * 残す。
+   *
+   * **なぜ「経過時間だけ」ではないか。** runner の event loop が詰まって
+   * ソケットだけ開いている場合、バイトは1つも来ないのに接続は undici の
+   * `bodyTimeout`（既定 300000ms）まで生き延びる。**時間が経ったことは、
+   * 相手が生きている証拠にならない。証拠は相手が何かを寄越したことである。**
+   * 純粋な経過時間だけでリセットすると、その死んだ接続を「繋ぎ直せた」と
+   * 書いてしまう——「たまたま切れなかった」を「健全だった」と読む嘘の観測が
+   * 入る。**だから判定は「閾値を超えた後に、`reader.read()` が中身を返した
+   * 瞬間」であり、`#read` はフレームの中身（`data:` かコメント行かなど）を
+   * 一切見ない。** heartbeat の実装が変わっても、この判定は変わらない
+   * （`CONNECTION_HEALTHY_THRESHOLD_MS` の doc を参照）。
+   *
+   * この「持続した」判定と、失敗そのもの（例外が投げられたか）は別の軸である
+   * ——持続した接続がその後に例外で終わっても、持続した事実は消えない
+   * （次のバックオフは基準から始まる）。
    *
    * ログは**初回と、待ち時間が変わったときだけ**書く（同じ行を毎回吐かない）。
-   * 加えて、**繋ぎ直せたときに1行書く** — 沈黙だけでは「直った」のか「諦めた」
-   * のか読めないので、諦めていないことを見えるようにする。
+   * 加えて、**「繋ぎ直せた」はリセットと同じ条件（持続した）で1行書く** ——
+   * 繋がるたびに書くと「繋がった」と「回復した」が同じ記号に化ける。同じ条件を
+   * 共有することで、この行の意味は「システムが回復したと判断した」の一つに
+   * 決まる——出ないことは「一度も回復していない」を意味する。
    */
   async #pump(onEvent: (event: RunnerEvent) => void): Promise<void> {
     while (!this.#closed) {
       let failed = false;
       let failure: unknown;
+      let healthy = false;
       try {
-        await this.#stream(onEvent);
+        await this.#stream(onEvent, () => {
+          healthy = true;
+        });
       } catch (error) {
         if (this.#closed) return;
         failed = true;
@@ -575,12 +651,12 @@ class HttpRunner implements RunnerClient {
       }
       if (this.#closed) return;
 
-      if (!failed && this.#backingOff) {
+      if (healthy && this.#backingOff) {
         process.stderr.write(`alteroidd: runner のストリームに繋ぎ直せた\n`);
         this.#backingOff = false;
       }
 
-      const waitMs = failed ? this.#nextDelayMs : this.#retryBaseMs;
+      const waitMs = healthy ? this.#retryBaseMs : this.#nextDelayMs;
 
       if (failed) {
         this.#backingOff = true;
@@ -593,19 +669,20 @@ class HttpRunner implements RunnerClient {
           this.#lastLoggedDelayMs = waitMs;
           this.#lastLoggedCauseCode = causeCode;
         }
-      } else {
+      } else if (healthy) {
         this.#lastLoggedDelayMs = null;
         this.#lastLoggedCauseCode = '';
       }
 
-      // 次に使う値を決める。失敗なら倍々に伸ばして頭打ち、成功なら基準へ戻す。
-      this.#nextDelayMs = failed ? Math.min(waitMs * 2, this.#retryMaxMs) : this.#retryBaseMs;
+      // 次に使う値を決める。持続した(healthy)なら基準へ戻す。そうでなければ
+      // (失敗でも、閾値未満で終わった「静かな」接続でも) 倍々に伸ばして頭打ち。
+      this.#nextDelayMs = healthy ? this.#retryBaseMs : Math.min(waitMs * 2, this.#retryMaxMs);
 
       await this.#sleepFn(waitMs);
     }
   }
 
-  async #stream(onEvent: (event: RunnerEvent) => void): Promise<void> {
+  async #stream(onEvent: (event: RunnerEvent) => void, markHealthy: () => void): Promise<void> {
     const controller = new AbortController();
     this.#controller = controller;
     const response = await this.#fetch(`${this.#baseUrl}/events`, {
@@ -616,6 +693,10 @@ class HttpRunner implements RunnerClient {
       throw new Error(`runner の /events に繋げない (${response.status})`);
     }
 
+    // **「接続してから」の起点。** ここから `CONNECTION_HEALTHY_THRESHOLD_MS`
+    // だけ経ってからバイトが届いたら、その接続を持続したとみなす（`#pump` の
+    // doc）。
+    const connectedAt = this.#nowFn();
     const reader = response.body.getReader();
     /**
      * この接続で捨てたフレームの数（種別ごと）。**接続1本ぶんである。**
@@ -634,7 +715,12 @@ class HttpRunner implements RunnerClient {
     };
 
     try {
-      await this.#read(reader, onEvent, dropped);
+      await this.#read(reader, onEvent, dropped, () => {
+        // **バイトの中身は一切見ない。** `reader.read()` が中身を返したという
+        // 事実だけを使う（`#pump` の doc）。閾値を跨いだ後は何度呼ばれても
+        // 結果は変わらない——`markHealthy` は冪等である。
+        if (this.#nowFn() - connectedAt >= CONNECTION_HEALTHY_THRESHOLD_MS) markHealthy();
+      });
     } finally {
       // **例外で抜けても量を出す。** ただしプロセスごと落ちたときは走らない
       // ——だから存在のほうは初出で先に出してある。
@@ -649,12 +735,14 @@ class HttpRunner implements RunnerClient {
     reader: ReadableStreamDefaultReader<Uint8Array>,
     onEvent: (event: RunnerEvent) => void,
     dropped: Map<string, number>,
+    onBytes: () => void,
   ): Promise<void> {
     const decoder = new TextDecoder();
     let buffer = '';
     for (;;) {
       const { value, done } = await reader.read();
       if (done) return;
+      onBytes();
       buffer += decoder.decode(value, { stream: true });
 
       // SSE のフレームは空行区切り。`data:` 行だけを拾う。
