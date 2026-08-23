@@ -46,6 +46,21 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
 
+      # **`apps/web` の生成物に Node 専用の痕跡が無いことを見る（結果側の歯）。**
+      # `@alteroid/core`（サーバ専用のドメイン層まで丸ごと再エクスポートするバレル）
+      # から**値**を import すると、そのコードごとブラウザバンドルへ入る事故が実際に
+      # 起きた（#294 / #306。`commitments` ルートのチャンクが 1.2MB に膨らみ、
+      # `node:module` の `createRequire` 呼び出しがブラウザでのモジュール評価
+      # 時点で例外を投げて、本番で一度も開けなくなった）。
+      #
+      # `eslint.config.js` の `@typescript-eslint/no-restricted-imports` が
+      # 同じ事故の**入口**（`@alteroid/core` からの値 import）を塞ぐが、経路を
+      # 固定した歯なので、別の依存から同じ形の混入が起きたら鳴らない。この検査は
+      # 経路を問わず**生成物そのもの**を見るので、原因が何であっても捕まえる。
+      # 検査語の選び方・言えないことは `scripts/check-web-bundle-node-traces.mjs` の
+      # doc を見よ。
+      - run: pnpm check:web-bundle-node-traces
+
       # **コードと OpenAPI spec がずれたまま気づかない状態を作らない。**
       # spec は経路の zod スキーマから機械生成され、`pnpm build` が毎回書き直す。
       # つまりここに差分が出るのは「コードを変えたのに commit した spec が古い」
