@@ -123,7 +123,28 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
     <Page title="日報" description="普段の接点はほぼこれだけでよい。掘りたくなったら日誌へ降りる">
       <ErrorNote error={list.error} className="mb-4" />
 
-      <div className="grid gap-4 lg:grid-cols-[16rem_1fr]">
+      {/*
+        `lg` 未満にはこの容器へ `grid-template-columns` の指定が1つも無かった
+        （旧: `grid gap-4 lg:grid-cols-[16rem_1fr]`）。無い場合の暗黙の単一
+        トラックは `auto`＝max-content になるので、**中身の内在幅がそのまま
+        トラック幅**になり枠を超えうる（#265/#282 と同じ形の欠落。#283 で
+        特定・追跡）。`grid-cols-1` を足して傘を掛けるのが根の直し。
+
+        **`lg:grid-cols-[16rem_1fr]` の生の `1fr` は `minmax(auto,1fr)` に
+        展開される**（#265 で特定済み）ので、`lg` 以上でも2つ目の列（1fr側）の
+        自動最小サイズは content-based のままである。1つ目の列（16rem側、
+        `<Card className="h-fit">`）は一覧の1行が短い固定フォーマットの文字列
+        （日付+時刻）で、空白のところで折り返せるため実害は無いと判断し、
+        `min-w-0` は足していない。2つ目の列（1fr側）に来る子には `min-w-0` を
+        足す — `<ReportBody>` のルート `Card` には既に付いている。日報が0件の
+        ときに出る `<Card><Empty>…</Empty></Card>` はこの列に来る唯一のもう
+        1つの分岐で、こちらには付いていなかったので今回足した。
+
+        **jsdom はレイアウトを持たないので、この修正が実機で効いていることは
+        テストでは確かめられない。** 下のテストが保証するのはクラスが当たって
+        いることまでである。
+      */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[16rem_1fr]">
         <Card className="h-fit">
           {list.isLoading ? (
             <Spinner />
@@ -170,7 +191,7 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
         </Card>
 
         {selectedDate === undefined ? (
-          <Card>
+          <Card className="min-w-0">
             <Empty>
               日報が1件も無い。クローンが締め時刻にまとめる（スケジュールから今すぐ回せる）。
             </Empty>
