@@ -13,6 +13,7 @@ import type {
 
 import { buildCloneDistillOptions, buildCloneSessionOptions } from './claude-provider.js';
 import { buildActivityDigest } from './digest.js';
+import { excerptLine } from './excerpt.js';
 import {
   inboxEventShape,
   journalEntryShape,
@@ -2045,7 +2046,13 @@ class Clone implements CloneHost {
           event.requestId !== undefined
             ? await confirmationLiveness(this.#managers, event.managerId, event.requestId)
             : 'unknown';
-        await this.#runInternal(managerPrompt(event, liveness));
+        // **報告は逆に、台帳を引く**（#391。`reportSettlement` の doc）。質問側と
+        // 材料が違うので、判定も別に取る。
+        const settlement: ReportSettlement =
+          event.kind === 'report'
+            ? await reportSettlement(this.#stores.commitments, event.id)
+            : { kind: 'unknown' };
+        await this.#runInternal(managerPrompt(event, liveness, settlement));
         return;
       }
 
@@ -3502,6 +3509,99 @@ export function humanTurnText(events: HumanMessage[]): string {
 type ConfirmationLiveness = 'live' | 'settled' | 'unknown';
 
 /**
+ * 報告（`kind === 'report'`）が、台帳で既に片付けられているかの3値（#391）。
+ *
+ * **2値にしない**（AGENTS.md「静かに失敗する道具」——判定できない場合が
+ * どちらかへ黙って倒れる）。`'unknown'` は**安全側＝雑音側**（＝ふつうに全文を
+ * 出す）へ倒すためのもので、`'open'` の言い換えではない。
+ *
+ * ## `'open'` は「まだ読んでいない」を意味しない
+ *
+ * クローンが閉じずに読んだ報告は `'open'` のままである。**この3値が保証するのは
+ * 「閉じたものには印が付く」までであって、「印が無ければ未読」ではない。**
+ */
+type ReportSettlement =
+  { kind: 'closed'; closedReason?: string } | { kind: 'open' } | { kind: 'unknown' };
+
+/**
+ * 片付け済みの報告に添える「閉じた理由」の長さ（#391）。
+ *
+ * **全文ではなく先頭だけでよい。** 目的は「自分がどういう判断で閉じたか」を
+ * 思い出させることであって、判断そのものを読み直させることではない
+ * （読み直すなら `commitment_list` に全文が在る）。
+ */
+const CLOSED_REASON_EXCERPT = 120;
+
+/**
+ * 報告の台帳項目を引いて、既に片付けられているかを答える（#391）。
+ *
+ * ## なぜ台帳を引くのか（質問側と材料が違う）
+ *
+ * 質問・許可確認は `managers.list()` の `waiting` に `requestId` が載っているかで
+ * 「もう待たれていない」を判定できる（{@link confirmationLiveness}）。**報告には
+ * `requestId` が無く、「待たれている」という状態がそもそも存在しない。** 報告に
+ * おける「もう要らない」の合図は、**クローンが `commitment_close` で閉じたこと
+ * そのもの**である。
+ *
+ * ## 「配り直しかどうか」を見ない —— それがこの判定の要点である
+ *
+ * `#redeliveredClosed` を引く既存の断り書きは、`#restoreUnread`（プロセスの生涯に
+ * 1回だけ走る）が埋めた Map しか見ないので、**起動を跨がない配達には初めから
+ * 対象外である。** そして `Clone#post()` は受信箱へ積む**前**に `#commit` を呼ぶので、
+ * **台帳に本文が見えるのは `post()` 到達の瞬間であって、ターンへ配られた時点では
+ * ない** —— クローンは配られる前の本文を台帳で読んで閉じられる。**その後に来る
+ * 「初回配達」は配り直しではないので、配り直しの機構では原理的に捕まえられない。**
+ *
+ * **だからここでは配り直しかどうかを一切見ず、「いま配ろうとしているこの報告は、
+ * 台帳で既に閉じているか」だけを見る。** #391 が未決のまま残した問い（初回配達か
+ * 再配達か）に答えなくても、この判定は成り立つ。
+ *
+ * 追加の I/O は無い —— 台帳の id は `event.id` そのもの（{@link commitmentFor} の
+ * `base`）で、`closedAt` / `closedReason` は `get(id)` の戻り値に載っている。
+ */
+async function reportSettlement(
+  commitments: Stores['commitments'],
+  id: string,
+): Promise<ReportSettlement> {
+  const commitment = await commitments.get(id).catch(() => null);
+  // **引けなかったのと「無い」のを混ぜない。** `get` は無ければ `null` を返すが、
+  // 投げたときもここで `null` に畳んでいる——どちらも「閉じていると言える根拠が
+  // 無い」側なので、同じ `'unknown'` へ倒す。**`'open'` にはしない**：
+  // 「開いている」は台帳を実際に読めたときにだけ言える。
+  if (commitment === null) return { kind: 'unknown' };
+  if (commitment.closedAt === undefined) return { kind: 'open' };
+  return {
+    kind: 'closed',
+    ...(commitment.closedReason === undefined ? {} : { closedReason: commitment.closedReason }),
+  };
+}
+
+/**
+ * 片付け済みの報告に添える1行（#391）。**閉じた理由の先頭を一緒に運ぶ。**
+ *
+ * ## なぜ理由まで出すのか
+ *
+ * **誤って閉じたとき、誤りは「閉じた理由」に出る。** 実例（2026-08-24、台帳
+ * `801f5ee7`）: クローンが「判断は求めていない」と書いて閉じたが、**本文の後半に
+ * 依頼が入っていた。** 印だけでは「片付け済みだから読まなくてよい」と読めてしまい、
+ * その誤りに気づく手がかりが1つも無い。
+ *
+ * **ただし本文の代わりにはならない。** 上の実例でクローンが気づけたのは本文の
+ * 後半を読み直したからであって、閉じた理由を見たからではない。**だから本文は
+ * 短くしない**（{@link managerPrompt} の doc）。
+ *
+ * `closedReason` が無ければ括弧ごと出さない（取れない軸に値を作らない）。
+ */
+function closedReportNotice(settlement: ReportSettlement): string | null {
+  if (settlement.kind !== 'closed') return null;
+  const why =
+    settlement.closedReason === undefined
+      ? ''
+      : `（閉じた理由: 「${excerptLine(settlement.closedReason, CLOSED_REASON_EXCERPT)}」）`;
+  return `この報告は台帳で既に片付けている${why}。読み直す必要は無い。`;
+}
+
+/**
  * `event`（質問・許可確認）が、いまも `managers.list()` の `waiting` に載って
  * いるかを確かめる。
  *
@@ -3559,15 +3659,20 @@ async function confirmationLiveness(
 function managerPrompt(
   event: Extract<InboxEvent, { type: 'manager_message' }>,
   liveness: ConfirmationLiveness,
+  settlement: ReportSettlement = { kind: 'unknown' },
 ): string {
   const head = `[system] マネージャー ${event.managerId} から届いた。`;
 
   if (event.kind === 'report') {
+    const closed = closedReportNotice(settlement);
     return [
       `${head}（報告）`,
       '',
       event.text,
       '',
+      // **印は本文の後ろ、指示の前に置く**（#391）。本文より前に置くと「読まなく
+      // てよい」と読まれて本文を飛ばされる —— 本文を残した意味が消える。
+      ...(closed === null ? [] : [closed, '']),
       '続きが要るなら `manager_send` で指示を出し、要らないなら何もしなくてよい。',
       '学びや判断の基準になったことがあれば記憶へ移すこと。',
     ].join('\n');
