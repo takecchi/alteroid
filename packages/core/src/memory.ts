@@ -285,7 +285,139 @@ export function assertNeverMemoryFrontmatterState(state: never): never {
   throw new Error(`未知の frontmatter 解釈状態: ${JSON.stringify(state)}`);
 }
 
+/**
+ * `content` から frontmatter ブロック（開始・終了の `---` を含む）を取り除いた
+ * 残り（本文）を返す。
+ *
+ * **`parseMemoryFrontmatter` と同じ「1行目が `---` か」「閉じの `---` は
+ * どこか」の判定をここでも行うが、意図して別関数にしてある** ——
+ * `parseMemoryFrontmatter` は3状態のどれかを返す判定器で、`malformed`
+ * （閉じが無い）を返せることが前提の形になっている。こちらは
+ * `applyMemoryFrontmatterPatch` だけが呼ぶ下ごしらえで、**呼び手が既に
+ * `parseMemoryFrontmatter(content).kind !== 'malformed'` を確かめた後にしか
+ * 呼ばない**契約なので、`malformed` の場合を型で持たない（呼び手の責務は
+ * `applyMemoryFrontmatterPatch` の doc に書く）。
+ *
+ * - 1行目が `---` でなければ、`content` 全体を本文として返す（frontmatter が
+ *   無い＝`none`）。
+ * - 1行目が `---` なら、閉じの `---` の次の行から本文とする。閉じが無い
+ *   （`malformed`）場合は呼び手の契約違反なので、便宜的に `content` 全体を
+ *   返す——ここに来ること自体が呼び手のバグであり、値の正しさは保証しない。
+ */
+function frontmatterBody(content: string): string {
+  const lines = content.split('\n');
+  if (lines[0]?.trim() !== FRONTMATTER_DELIMITER) return content;
+  const closingIndex = lines.findIndex(
+    (line, index) => index > 0 && line.trim() === FRONTMATTER_DELIMITER,
+  );
+  if (closingIndex === -1) return content;
+  return lines.slice(closingIndex + 1).join('\n');
+}
+
+/** frontmatter の3キーのうち、渡したものだけを新しい値にする差分。 */
+export interface MemoryFrontmatterPatch {
+  description?: string;
+  type?: string;
+  parent?: string;
+}
+
+function serializeMemoryFrontmatter(fields: MemoryFrontmatterPatch): string {
+  const lines = [FRONTMATTER_DELIMITER];
+  if (fields.description !== undefined) lines.push(`description: ${fields.description}`);
+  if (fields.type !== undefined) lines.push(`type: ${fields.type}`);
+  if (fields.parent !== undefined) lines.push(`parent: ${fields.parent}`);
+  lines.push(FRONTMATTER_DELIMITER);
+  return lines.join('\n');
+}
+
+/**
+ * `serializeMemoryFrontmatter` は各キーを `key: value` の1行として並べる。
+ * `value` に改行（`\n` / `\r`）が入ると、その行から先が別の行として現れる
+ * ——frontmatter の別のキー・閉じの `---`・本文の1行目と見分けが付かなく
+ * なる。**本文そのものは失われない**（`applyMemoryFrontmatterPatch` は
+ * 古い `content` から本文を取るだけで、値をそこへ書き込みはしない）が、
+ * 改行を含む値を許すと、値の続きが「本文の先頭」として紛れ込む形になる。
+ *
+ * **書き込み側の入口（`memory_frontmatter_set`）がこれを断るために使う。**
+ * `parseMemoryFrontmatter`（読み出し側）は既に `---` を含む行を malformed
+ * として扱うので、この関数が防ぐのは「新しく書き込もうとしている値」で
+ * あって、既存の読み出しの挙動は変えない。
+ *
+ * `\r` も検査する——`\r\n` は `\n` だけでも捕まるが、単独の `\r` は
+ * 目次の1行（`renderMemoryToc` 等）にそのまま残り、読めない行を作る。
+ */
+export function containsMemoryFrontmatterLineBreak(value: string): boolean {
+  return /[\r\n]/.test(value);
+}
+
+/**
+ * frontmatter の指定されたキーだけを差し替え／追加する（#318 案 (a)）。
+ * **本文には一切触れない。**
+ *
+ * これが `memory_frontmatter_set` の中核である——**本文はこの関数の呼び出しの
+ * 中に一度も文字列として現れない**（`content` は呼び手がストアから読んだ
+ * ものをそのまま渡すだけで、モデルのツール呼び出しの引数には含まれない）。
+ * だから本文が途中で切れて通る経路が構造的に無い（検出できる、より強い
+ * 「起こりえない」——issue #318 の設計判断そのもの）。
+ *
+ * - `content` が frontmatter を持たない（`parseMemoryFrontmatter` が
+ *   `{ kind: 'none' }`）→ 先頭に新しく frontmatter を作って足す。本文は
+ *   そのまま後ろに続く（1バイトも変えない）。
+ * - `content` が frontmatter を持つ（`{ kind: 'parsed' }`）→ `patch` に
+ *   渡されたキーだけを差し替え／追加し、渡されなかったキーは既存の値の
+ *   まま残す。本文は1バイトも変えない。
+ * - `content` が `malformed` → **呼ばないこと。** 呼ぶと例外を投げる
+ *   （安全側——呼び手（`memory_frontmatter_set`）は必ず先に
+ *   `parseMemoryFrontmatter` で `malformed` を弾いて断る判断をしている
+ *   はずで、ここへ `malformed` な `content` が来るのはその判断が抜けている
+ *   ときだけである）。
+ *
+ * `patch` のキーを1つも渡さない呼び（3キーとも `undefined`）を断るかどうかは
+ * ここでは決めない——それは道具（呼び手）の責務であり、この関数自体は
+ * 「空のパッチ」を渡されれば frontmatter を（内容が変わらないまま）
+ * 再構成して返す。
+ */
+export function applyMemoryFrontmatterPatch(
+  content: string,
+  patch: MemoryFrontmatterPatch,
+): string {
+  const state = parseMemoryFrontmatter(content);
+  if (state.kind === 'malformed') {
+    throw new Error(
+      'applyMemoryFrontmatterPatch: malformed な frontmatter にはパッチを当てられない' +
+        '（呼び手が先に断ること）',
+    );
+  }
+  const priorFields: MemoryFrontmatterPatch = state.kind === 'parsed' ? state : {};
+  const nextFields: MemoryFrontmatterPatch = {
+    description: patch.description ?? priorFields.description,
+    type: patch.type ?? priorFields.type,
+    parent: patch.parent ?? priorFields.parent,
+  };
+  const body = frontmatterBody(content);
+  const header = serializeMemoryFrontmatter(nextFields);
+  return body.length === 0 ? header : `${header}\n${body}`;
+}
+
 const KNOWN_DOC_KINDS: ReadonlySet<MemoryDocKind> = new Set(['premise', 'fact']);
+
+/**
+ * `value` が既知の区分（`premise` / `fact`）かどうか。
+ *
+ * **`resolveMemoryDocKind`（読み出し側）の「未知の値は premise へ倒す」安全弁
+ * とは別の使い道である。** あちらは既存文書・`memory_write` が書いた任意の
+ * `type` を受けて表示のために区分を決める側（未知の値でも文書は消えない）。
+ * こちらは `memory_frontmatter_set`（書き込み側の入口）が「渡された値を
+ * そのまま frontmatter へ書いてよいか」を判定するために使う——**綴りを
+ * 間違えた値（`Fact` / `facts` 等）を黙って書くと、`resolveMemoryDocKind`
+ * が premise へ倒すので区分は変わらないのに、書き手には「変えた」つもりが
+ * 残る**（応答は嘘をつかないが、何も言わないまま次のターンへ進む）。
+ *
+ * 既知の集合を2箇所に持たない——`KNOWN_DOC_KINDS` を唯一の実装として共有する。
+ */
+export function isKnownMemoryDocKind(value: string): value is MemoryDocKind {
+  return KNOWN_DOC_KINDS.has(value as MemoryDocKind);
+}
 
 /**
  * 区分を解決する（frontmatter → `premise` | `fact`）。

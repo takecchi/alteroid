@@ -23,11 +23,16 @@ import {
 } from './excerpt.js';
 import type { ManagerDenial, ManagerPool, ManagerSummary } from './manager.js';
 import {
+  applyMemoryFrontmatterPatch,
   assertNeverMemoryProtectionStatus,
+  containsMemoryFrontmatterLineBreak,
   describeMemoryWriteDiff,
   formatMemoryCreatedAt,
+  isKnownMemoryDocKind,
+  parseMemoryFrontmatter,
   renderMemoryDocuments,
   renderMemoryListing,
+  resolveMemoryDocKind,
 } from './memory.js';
 import type { ProfileService } from './profile-service.js';
 import {
@@ -154,6 +159,7 @@ export const CLONE_TOOL_NAMES = [
   'memory_write',
   'memory_append',
   'memory_delete',
+  'memory_frontmatter_set',
   'journal_write',
   'journal_read',
   'conversation_read',
@@ -476,11 +482,14 @@ export function resolveMemoryGuard(env: NodeJS.ProcessEnv = process.env): Memory
 }
 
 /**
- * `memory_write`（全文置換）・`memory_delete` の歯そのもの。
+ * `memory_write`（全文置換）・`memory_delete`・`memory_frontmatter_set`
+ * （#318 案 (a)。frontmatter のキーだけの差し替え）の歯そのもの。
  *
  * **判定軸は「保護状態 × 書き手」だけである。量（文字数の減少率）では判定しない**
  * — 蒸留は正当な運用として大きく畳むことがあり、量では意図を分離できない
- * （設計の議論を見よ）。
+ * （設計の議論を見よ）。**`memory_frontmatter_set` も同じ判定をそのまま
+ * 通す** — 判定を書き直さない（`tools.ts` の実装をここ1本に保つ。判定が
+ * 2本になれば片方だけ直して片方が古いまま、という穴ができる）。
  *
  * - 書き手が `'clone'`（会話の中）なら常に通す。人間がその場に居る書き込みである。
  * - 書き手が `'distill'`（統合の走行。人間が居ない場）で、対象が `human` /
@@ -499,7 +508,7 @@ async function guardFullReplace(
   stores: Stores,
   slug: string,
   cause: 'distill' | 'clone',
-  action: '全文置換' | '削除',
+  action: '全文置換' | '削除' | 'frontmatter の更新',
 ): Promise<string | null> {
   if (cause !== 'distill') return null;
   if (resolveMemoryGuard() === 'off') return null;
@@ -524,16 +533,23 @@ async function guardFullReplace(
  * 歯の断りの返答。**「保護されています」だけでは、クローンが次の手を推測する
  * ことになる。** 必ず4つを言う——(1) なぜ断ったか、(2) どうすれば通るか
  * （`ask_human` に何を積めばよいかまで）、(3) いま何も失われていないこと、
- * (4) `memory_append` は断られないこと。
+ * (4) 口ごとに違う「代わりに使えるもの」の案内。
  *
  * **(1) は `human` と `unknown` を畳まない。** 前者は「人間の書き込みの履歴が
  * 実際に在る」という積極的な事実、後者は「履歴が確認できないので守る側へ倒した」
  * という消極的な既定——理由が違うので、読んだ側が畳まずに区別できる文にする。
+ *
+ * **(4) は `action` ごとに文言を分ける。** `全文置換` / `削除` では
+ * 「`memory_append`（追記）はこの歯の対象ではなく断られない」が正しい代替
+ * になる——追記は既存を消さないので、失いたくないだけならそちらで足りる。
+ * **`frontmatter の更新`（`memory_frontmatter_set`）ではこれが効かない**
+ * ——要旨や区分を直したい人に「本文の末尾に追記せよ」と勧めても意味が無い。
+ * ここだけ別の文言にする。
  */
 function denialMessage(
   slug: string,
   status: Extract<MemoryProtectionStatus, { kind: 'human' | 'unknown' }>,
-  action: '全文置換' | '削除',
+  action: '全文置換' | '削除' | 'frontmatter の更新',
 ): string {
   const reason =
     status.kind === 'human'
@@ -541,14 +557,30 @@ function denialMessage(
       : `この文書の書き込みの履歴が確認できない（保護状態: unknown。索引が無い・外から書き換えられた` +
         `可能性がある、などのときにここへ倒す——不明を「人間は書いていない」とは読まず、守る側へ倒す）`;
 
+  const alternative =
+    action === 'frontmatter の更新'
+      ? 'memory_append（追記）はここでは代わりにならない——追記は本文の末尾に文字列を足すだけで、' +
+        'frontmatter のキー（description / type / parent）は直せない。'
+      : 'memory_append（追記）はこの歯の対象ではなく、断られない。失いたくないだけならそちらを使うこと。';
+
+  // **`frontmatter の更新` だけ文を組み替える。** 「記憶 slug を frontmatter の
+  // 更新したい」は助詞が壊れる（「〜を全文置換したい」「〜を削除したい」と違い、
+  // 「更新」の対象は記憶そのものではなく frontmatter のほうだから）。
+  const askHumanHint =
+    action === 'frontmatter の更新'
+      ? `本当に frontmatter の更新が必要だと判断したら、ask_human に「記憶 ${slug} の frontmatter を更新したい。` +
+        '理由: 〈ここに理由〉」のように積むこと。人間の回答が届いた後の次のターンで、同じ操作をやり直せば実行できる' +
+        '（この場・このターンではやり直せない）。'
+      : `本当に${action}が必要だと判断したら、ask_human に「記憶 ${slug} を${action}したい。理由: ` +
+        '〈ここに理由〉」のように積むこと。人間の回答が届いた後の次のターンで、同じ操作をやり直せば実行できる' +
+        '（この場・このターンではやり直せない）。';
+
   return [
     `記憶 ${slug} への${action}を、統合の走行（distill）から断った。`,
     `理由: ${reason}。`,
     'いま何も変わっていない（記憶は断る前のまま残っている）。',
-    'memory_append（追記）はこの歯の対象ではなく、断られない。失いたくないだけならそちらを使うこと。',
-    `本当に${action}が必要だと判断したら、ask_human に「記憶 ${slug} を${action}したい。理由: ` +
-      '〈ここに理由〉」のように積むこと。人間の回答が届いた後の次のターンで、同じ操作をやり直せば実行できる' +
-      '（この場・このターンではやり直せない）。',
+    alternative,
+    askHumanHint,
   ].join(' ');
 }
 
@@ -751,6 +783,181 @@ export function createCloneTools(context: ToolContext) {
           summary: `${summary}（削除直前 ${existing.content.length} 文字）`,
         });
         return text(`記憶 ${slug} を消した（削除直前 ${existing.content.length} 文字）。`);
+      },
+    ),
+
+    /**
+     * frontmatter（`description` / `type` / `parent`）だけを差し替える口
+     * （#318 案 (a)）。
+     *
+     * **なぜ要るか。** `memory_write` は全文置換しか無いので、要旨や区分を
+     * 直すだけでも本文全体をツール呼び出しの中に再生成する必要があった。
+     * 記憶には控えも履歴も無いので、本文が途中で切れても突き合わせる相手が
+     * 存在しない——だからクローンは全文置換を安全に選べず、要旨は古いまま
+     * 放置され続けていた（`memory_list` の `⚠古い要旨`）。
+     *
+     * **この口の性質は「本文がツール呼び出しの中に一度も現れないこと」**
+     * である（`applyMemoryFrontmatterPatch` の doc）。`content` はストアから
+     * 読んだ値をそのまま渡すだけで、モデルの引数には frontmatter の3キー
+     * しか登場しない。だから本文が切れて通る経路が構造的に無い——「検出
+     * できる」より強い「起こりえない」。
+     *
+     * **⚠️ 「本文が切れない」と「本文に文字列が混ざらない」は別の性質である。**
+     * `serializeMemoryFrontmatter` は各キーを `key: value` の1行として書く
+     * ので、値に改行が入っていると、その続きが frontmatter の別のキー・
+     * 閉じの `---`・本文の1行目として紛れ込む（本文そのものは失われない
+     * ——古い `content` から取るだけなので1バイトも消えない。だが値の
+     * 続きが「本文の先頭」として現れる）。**だから改行を含む値は入口で
+     * 断る**（`containsMemoryFrontmatterLineBreak`）。上の段落（切断が
+     * 起こりえないこと）と、この段落（混入が起こりえないこと）は独立した
+     * 2つの保証であり、どちらか片方の歯でもう片方も測ったことにしない。
+     *
+     * **既に在る文書にしか使えない。** ここは「文書を直す口」であって
+     * 「作る口」ではない（`memory_delete` が存在しない slug を成功にしない
+     * のと同じ判断）。
+     *
+     * **`malformed` な frontmatter には断る。** 壊れた frontmatter を機械が
+     * 推測して組み直すと、本文を食う経路ができる
+     * （`parseMemoryFrontmatter` の「既知の落とし穴」——Markdown の水平線も
+     * `---` の1行である）。断って `memory_write` か `ask_human` へ回す。
+     *
+     * **`guardFullReplace` をそのまま呼ぶ。** 判定を書き直さない
+     * （`guardFullReplace` の doc）。
+     */
+    tool(
+      'memory_frontmatter_set',
+      [
+        '記憶の frontmatter（description・type・parent）のうち、渡したキーだけを差し替える／追加する。',
+        '本文には一切触れない——本文はストアから読んだ古い content からそのまま取るので、1バイトも失われない。',
+        'この道具の呼び出しの中に本文が現れることは無いので、本文が途中で切れることも構造的に起こりえない。',
+        'description・type・parent の値に改行（\\n / \\r）を含む値は渡せない（断る）——値から本文へ文字列が混ざる経路を構造的に無くすため。',
+        '既に在る文書にしか使えない（存在しない slug には断る。新規作成は memory_write を使うこと）。',
+        'frontmatter が無い文書には、先頭に新しく frontmatter を作って足す（type を渡さなければ premise のまま——載り方は変わらない）。',
+        'frontmatter が壊れている（malformed）文書には断る（機械が推測して組み直すと本文を食う経路ができるため）。',
+        'memory_write で全文を書き直すか、人間に確認を通すこと。',
+        'description・type・parent のうち少なくとも1つを渡すこと（1つも渡さない呼びは断る。何も変わらない）。',
+        'type に渡せるのは premise か fact のどちらかだけ（それ以外の値は断る。綴りを間違えたまま黙って書かない）。',
+        'premise は全文がプロンプトへ焼かれ、fact は目次の1行だけになる。区分が変わったときは、その変化が応答に出る。',
+        '**統合の走行（distill）からは、人間が一度でも書いた文書・履歴の無い文書には使えない**',
+        '（断られる。ask_human で人間に確認を通せば次のターンで実行できる）。会話の中の書き込みは通る。',
+      ].join(' '),
+      {
+        slug: z.string().describe('文書のスラッグ（拡張子なし）'),
+        description: z
+          .string()
+          .optional()
+          .describe('要旨（目次の1行に載る）。渡さなければ既存の値のまま'),
+        type: z
+          .string()
+          .optional()
+          .describe(
+            'premise か fact のどちらかのみ（それ以外は断る）。渡さなければ既存の値のまま（既定は premise）',
+          ),
+        parent: z.string().optional().describe('親文書の slug（階層）。渡さなければ既存の値のまま'),
+        summary: z.string().describe('何を直したかの一行要約（日誌に残る）'),
+      },
+      async ({ slug, description, type, parent, summary }) => {
+        if (description === undefined && type === undefined && parent === undefined) {
+          return text(
+            `記憶 ${slug} の frontmatter を直すには description・type・parent のうち少なくとも1つを渡すこと` +
+              '（何も変わっていない）。',
+          );
+        }
+
+        // **frontmatter の値は1キー1行で書く約束である。** 改行（\n / \r）を
+        // 含む値をそのまま書くと、`serializeMemoryFrontmatter` がそれを
+        // そのまま行として並べるので、値の続きが別の行——他のキー・閉じの
+        // `---`・本文の1行目——として紛れ込む（`containsMemoryFrontmatterLineBreak`
+        // の doc）。**本文そのものは失われない**（古い `content` から取るだけ）
+        // が、値から本文へ文字列が混ざる経路ができてしまう。ここで断ることで
+        // その経路を構造的に塞ぐ——`type` の検査と同じ位置（ストアを読む前）
+        // に置き、断りの前に副作用が入る余地を作らない。
+        const lineBreakInputs: readonly ['description' | 'type' | 'parent', string | undefined][] =
+          [
+            ['description', description],
+            ['type', type],
+            ['parent', parent],
+          ];
+        const lineBreakEntry = lineBreakInputs.find(
+          ([, value]) => value !== undefined && containsMemoryFrontmatterLineBreak(value),
+        );
+        if (lineBreakEntry !== undefined) {
+          const [lineBreakKey] = lineBreakEntry;
+          return text(
+            `記憶 ${slug} の frontmatter を更新できない——${lineBreakKey} に改行（\\n / \\r）を含む値は渡せない` +
+              '（frontmatter は1キー1行で書く約束なので、改行が入ると値の続きが本文や他のキーと混ざる）。' +
+              '何も変わっていない。',
+          );
+        }
+
+        // **`type` は自由文字列では受けない。** `z.string()` のままだと綴りを
+        // 間違えた値（`Fact` / `facts` 等）がそのまま frontmatter へ書かれる
+        // ——`resolveMemoryDocKind`（読み出し側）は未知の値を `premise` へ
+        // 倒すので区分は実際には変わらないのに、`priorKind === nextKind` に
+        // なって `kindChangeNote` が空になり、**書き手には「変えた」つもりが
+        // 残ったまま、応答は何も言わない。** ここで断ることで、書き込み側の
+        // 入口だけを狭める（読み出し側の安全弁 `resolveMemoryDocKind` の既定は
+        // 触らない——既存文書・`memory_write` が書いた任意の値を受ける必要が
+        // 引き続きあるため）。
+        if (type !== undefined && !isKnownMemoryDocKind(type)) {
+          return text(
+            `記憶 ${slug} の frontmatter を更新できない——type に渡せるのは premise か fact のどちらかだけである` +
+              `（渡された値: ${JSON.stringify(type)}）。何も変わっていない。`,
+          );
+        }
+
+        const existing = await stores.persona.read(slug);
+        if (existing === null) {
+          return text(
+            `記憶 ${slug} は存在しない（frontmatter を直せない。新規作成は memory_write を使うこと。` +
+              '何も変わっていない）。',
+          );
+        }
+
+        const cause = memoryCause();
+        const denial = await guardFullReplace(stores, slug, cause, 'frontmatter の更新');
+        if (denial !== null) return text(denial);
+
+        const priorFrontmatter = parseMemoryFrontmatter(existing.content);
+        if (priorFrontmatter.kind === 'malformed') {
+          return text(
+            `記憶 ${slug} の frontmatter が壊れている（malformed）。ここでは直さない——` +
+              '機械が推測して組み直すと本文を食う経路ができるため。memory_write で全文を書き直すか、' +
+              '人間に確認を通すこと（何も変わっていない）。',
+          );
+        }
+
+        const priorKind = resolveMemoryDocKind(priorFrontmatter);
+        const nextContent = applyMemoryFrontmatterPatch(existing.content, {
+          description,
+          type,
+          parent,
+        });
+        const written = await stores.persona.write(slug, nextContent);
+        const nextKind = resolveMemoryDocKind(parseMemoryFrontmatter(written.content));
+
+        await stores.journal.append({
+          type: 'memory_update',
+          slug,
+          cause,
+          action: 'describe',
+          bytesBefore: Buffer.byteLength(existing.content, 'utf8'),
+          bytesAfter: Buffer.byteLength(written.content, 'utf8'),
+          summary,
+        });
+
+        const diff = describeMemoryWriteDiff(existing.content, written.content);
+        const kindLabel = (kind: 'premise' | 'fact'): string =>
+          kind === 'premise' ? 'premise（全文が載る）' : 'fact（目次の1行だけ載る）';
+        const kindChangeNote =
+          priorKind === nextKind
+            ? ''
+            : `\n\n区分が変わった: ${kindLabel(priorKind)} → ${kindLabel(nextKind)}。` +
+              (nextKind === 'fact'
+                ? '次のターンから、この文書の本文はプロンプトの全文には載らない（目次の1行だけになる）。'
+                : '次のターンから、この文書の本文はプロンプトへ全文が載る。');
+
+        return text(`記憶 ${slug} の frontmatter を更新した。\n\n${diff}${kindChangeNote}`);
       },
     ),
 

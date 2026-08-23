@@ -3,13 +3,16 @@ import { describe, expect, it } from 'vitest';
 import {
   MEMORY_LISTING_BUDGET,
   MEMORY_TOC_ENTRY_LIMIT,
+  applyMemoryFrontmatterPatch,
   assertNeverMemoryCreatedAt,
   assertNeverMemoryDescriptionFreshness,
   assertNeverMemoryFrontmatterState,
   assertNeverMemoryProtectionStatus,
+  containsMemoryFrontmatterLineBreak,
   deriveMemoryCreatedAtFromJournal,
   deriveMemoryFrontmatter,
   describeMemoryProtectionStatus,
+  isKnownMemoryDocKind,
   memoryProtectionAllowsFullReplace,
   nextDescribedAt,
   parseMemoryFrontmatter,
@@ -291,6 +294,85 @@ describe('frontmatter の解釈（parseMemoryFrontmatter）— 3状態、畳ま�
   });
 });
 
+/**
+ * `applyMemoryFrontmatterPatch` — #318 案 (a) の中核。
+ *
+ * **本文が1バイトも変わらないことを、複数見出しを持つ長い本文で確かめる**
+ * （マネージャーの指定どおり）。ここが崩れると「本文がツール呼び出しの中に
+ * 一度も現れない」という性質（`memory_frontmatter_set` の存在理由そのもの）
+ * が壊れる。
+ */
+describe('applyMemoryFrontmatterPatch — frontmatter のキーだけを差し替える。本文には触れない', () => {
+  const longBody = [
+    '# 価値観',
+    '',
+    '## 判断の基準',
+    '',
+    '本文1行目。',
+    '本文2行目。',
+    '',
+    '## 好み',
+    '',
+    '- 箇条書き1',
+    '- 箇条書き2',
+    '',
+    '### 細目',
+    '',
+    '最後の段落。複数行の\n本文が続く。',
+  ].join('\n');
+
+  it('frontmatter が無い（none）文書には、先頭に新しく作って足す。本文は無傷', () => {
+    const next = applyMemoryFrontmatterPatch(longBody, { description: '新しい要旨' });
+    expect(next).toBe(`---\ndescription: 新しい要旨\n---\n${longBody}`);
+    // 本文がそのまま、1文字も変わらずに残っている。
+    expect(next.endsWith(longBody)).toBe(true);
+  });
+
+  it('type を渡さなければ、none の文書は premise のまま（載り方は変わらない）', () => {
+    const next = applyMemoryFrontmatterPatch(longBody, { description: '要旨' });
+    expect(resolveMemoryDocKind(parseMemoryFrontmatter(next))).toBe('premise');
+  });
+
+  it('parsed の文書は、渡したキーだけを差し替え、渡さなかったキーは既存のまま残す', () => {
+    const original = `---\ndescription: 古い要旨\ntype: fact\nparent: root\n---\n${longBody}`;
+    const next = applyMemoryFrontmatterPatch(original, { description: '新しい要旨' });
+    expect(parseMemoryFrontmatter(next)).toEqual({
+      kind: 'parsed',
+      description: '新しい要旨',
+      type: 'fact',
+      parent: 'root',
+    });
+  });
+
+  it('本文は1バイトも変わらない（見出しを複数持つ長い本文で確かめる）', () => {
+    const original = `---\ndescription: 古い要旨\ntype: premise\n---\n${longBody}`;
+    const next = applyMemoryFrontmatterPatch(original, { type: 'fact' });
+    const body = next.split('\n').slice(4).join('\n'); // 3行の frontmatter + 閉じの --- の次から
+    expect(body).toBe(longBody);
+  });
+
+  it('3キー全部を同時に差し替えられる', () => {
+    const original = `---\ndescription: 古\ntype: premise\nparent: old-parent\n---\n${longBody}`;
+    const next = applyMemoryFrontmatterPatch(original, {
+      description: '新',
+      type: 'fact',
+      parent: 'new-parent',
+    });
+    expect(parseMemoryFrontmatter(next)).toEqual({
+      kind: 'parsed',
+      description: '新',
+      type: 'fact',
+      parent: 'new-parent',
+    });
+  });
+
+  it('malformed には例外を投げる（呼び手が先に断ること）', () => {
+    const malformed = '---\nno colon here\n---\n本文';
+    expect(parseMemoryFrontmatter(malformed)).toEqual({ kind: 'malformed' });
+    expect(() => applyMemoryFrontmatterPatch(malformed, { description: 'x' })).toThrow();
+  });
+});
+
 describe('区分の解決（resolveMemoryDocKind）— 既定は premise（4-11 の安全弁）', () => {
   it('frontmatter が無い（none）なら premise', () => {
     expect(resolveMemoryDocKind({ kind: 'none' })).toBe('premise');
@@ -311,6 +393,75 @@ describe('区分の解決（resolveMemoryDocKind）— 既定は premise（4-11 
   it('type: premise は premise、type: fact は fact', () => {
     expect(resolveMemoryDocKind({ kind: 'parsed', type: 'premise' })).toBe('premise');
     expect(resolveMemoryDocKind({ kind: 'parsed', type: 'fact' })).toBe('fact');
+  });
+});
+
+/**
+ * `isKnownMemoryDocKind` — 書き込み側の入口（`memory_frontmatter_set`）が
+ * 「渡された値をそのまま frontmatter へ書いてよいか」を判定するための関数。
+ * `resolveMemoryDocKind` の「未知の値は premise へ倒す」読み出し側の安全弁
+ * とは別の使い道である（同じ集合を共有するので、既知の値の判定そのものは
+ * 一致する）。
+ */
+describe('isKnownMemoryDocKind — 書き込み側の入口が使う判定', () => {
+  it('premise と fact は既知', () => {
+    expect(isKnownMemoryDocKind('premise')).toBe(true);
+    expect(isKnownMemoryDocKind('fact')).toBe(true);
+  });
+
+  it('綴り違い・大文字・空文字・未知の語は既知ではない', () => {
+    expect(isKnownMemoryDocKind('Fact')).toBe(false);
+    expect(isKnownMemoryDocKind('facts')).toBe(false);
+    expect(isKnownMemoryDocKind('premis')).toBe(false);
+    expect(isKnownMemoryDocKind('')).toBe(false);
+    expect(isKnownMemoryDocKind('note')).toBe(false);
+  });
+});
+
+/**
+ * `containsMemoryFrontmatterLineBreak` — `memory_frontmatter_set`（tools.ts）
+ * が入口で断るために使う検査。改行を含む値を `serializeMemoryFrontmatter`
+ * （1キー1行の形）へそのまま渡すと、値の続きが別の行として紛れ込む
+ * （本文は失われないが、値から本文へ文字列が混ざる経路ができる）。
+ */
+describe('containsMemoryFrontmatterLineBreak — 改行を含む値の検出', () => {
+  it('\\n を含めば true', () => {
+    expect(containsMemoryFrontmatterLineBreak('a\nb')).toBe(true);
+  });
+
+  it('\\r を含めば true（\\r\\n だけでなく単独の \\r も）', () => {
+    expect(containsMemoryFrontmatterLineBreak('a\rb')).toBe(true);
+    expect(containsMemoryFrontmatterLineBreak('a\r\nb')).toBe(true);
+  });
+
+  it('改行を含まなければ false（--- を含む1行の値はここでは問題ない）', () => {
+    expect(containsMemoryFrontmatterLineBreak('a')).toBe(false);
+    expect(containsMemoryFrontmatterLineBreak('a---b')).toBe(false);
+    expect(containsMemoryFrontmatterLineBreak('')).toBe(false);
+  });
+
+  /**
+   * ⚠️ 差し戻しで見つかった実際の混入を再現する（回帰確認）。
+   *
+   * `applyMemoryFrontmatterPatch` 自体は改行を検査しない
+   * （検査は呼び手＝ `memory_frontmatter_set` の入口の責務——`type` の
+   * 検査と同じ設計）。ここでは「検査を挟まずに直接呼んだら何が起きるか」
+   * を固定し、`containsMemoryFrontmatterLineBreak` が本当にこの形を
+   * 捕まえる値を検出することを確かめる。
+   */
+  it('検査を挟まないまま渡すと、値の続きが本文の先頭へ紛れ込む（再現）', () => {
+    const original = '---\ndescription: 古\n---\n# 見出し\n\n本文である';
+    const injected = applyMemoryFrontmatterPatch(original, {
+      description: 'a\n---\nb',
+      type: 'fact',
+    });
+    expect(parseMemoryFrontmatter(injected)).toEqual({ kind: 'parsed', description: 'a' });
+    // 本文そのものは失われていない（末尾に残っている）。
+    expect(injected.endsWith('本文である')).toBe(true);
+    // だが値の続き（'b' や 'type: fact' や '---'）が本文の先頭として紛れ込む。
+    expect(injected).toContain('b\ntype: fact\n---\n# 見出し');
+    // これが `containsMemoryFrontmatterLineBreak` が入口で断るべき理由である。
+    expect(containsMemoryFrontmatterLineBreak('a\n---\nb')).toBe(true);
   });
 });
 
