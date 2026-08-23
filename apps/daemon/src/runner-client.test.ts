@@ -2526,24 +2526,36 @@ describe('#pump は周回の途中で投げられても止まらない（#323）
         throw new Error('待ちの差し替えが壊れている');
       };
 
+      // **既定の待ちへ落ちたときは実時間で待つ**ので、基準と上限は小さくする。
+      // ただし 0 にはしない —— 下の経過時間の下限が測れなくなる。
+      const base = 20;
+      const max = 40;
       const client = await createHttpRunner({
         baseUrl: 'http://runner.test',
         token: TOKEN,
         fetchFn,
         sleepFn,
-        // 既定へ落ちたときに実時間で待つので、基準も上限も十分小さくしておく。
-        retryDelayMs: 1,
-        retryMaxDelayMs: 2,
+        retryDelayMs: base,
+        retryMaxDelayMs: max,
       });
+      const startedAt = Date.now();
       await client.connect(() => undefined);
-      for (let i = 0; i < 200 && asked.length < 3; i += 1)
+      for (let i = 0; i < 400 && asked.length < 3; i += 1)
         await new Promise((r) => setTimeout(r, 1));
+      const elapsedMs = Date.now() - startedAt;
       await client.close();
 
       expect(eventsCalls()).toBeGreaterThanOrEqual(3);
-      // **投げた待ちを黙って飛ばしていない。** 既定の待ちへ落ちたうえで、
-      // 次の周回でも同じ口をちゃんと呼びに行っている。
-      expect(asked.slice(0, 3)).toEqual([1, 2, 2]);
+      // 投げた待ちを、次の周回でもちゃんと呼びに行っている（列も伸びている）。
+      expect(asked.slice(0, 3)).toEqual([base, max, max]);
+      // **待ちそのものを飛ばしていない。**
+      //
+      // `asked` の中身だけでは、これは測れない —— 例外を握り潰して**待たずに**
+      // 回り続けても `asked` は同じ列になる。**測れるのは実時間だけである。**
+      // `asked` が3本たまるまでに既定の待ちが2回（`base` と `max`）完了して
+      // いるので、下限は `base + max`。**下限にしてあるので、器が遅い側へ
+      // ぶれても落ちない**（速い側へはぶれようが無い）。
+      expect(elapsedMs).toBeGreaterThanOrEqual(base + max - 15);
     } finally {
       stderrSpy.mockRestore();
     }
