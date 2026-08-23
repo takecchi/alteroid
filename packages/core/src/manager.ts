@@ -883,7 +883,7 @@ class Pool implements ManagerPool {
         message,
         ...(decision === undefined ? {} : { decision }),
       });
-      if (!answered) {
+      if (!answered.delivered) {
         return {
           outcome: 'unknown',
           detail: `${pending.requestId} は runner 側で既に解けている。`,
@@ -897,12 +897,24 @@ class Pool implements ManagerPool {
         managerId,
         answeredAt: new Date().toISOString(),
         /*
-         * **`decision` が無い回答は、allow と deny のどちらに倒れたかが日誌から
-         * 取れない。** `requestId` だけを添えて答える経路は `runner` 側の
-         * `inferDecision` に落ちるので、ここに残るのは本文だけである。
-         * 別の穴として Issue #322 に切ってある。**ここを触るなら先に #322 を読むこと。**
+         * **runner.ts が確定した decision をそのまま書く（#322）。** ここで
+         * `decision`（クローンが明示した値）や `inferDecision(message)` を
+         * 独自に計算し直さない——`AskUserQuestion` は decision を一切見ず常に
+         * allow だし、`decision` を省いた回は runner 側の `inferDecision` が
+         * 決める。この2つを manager.ts 側で再現すると、Issue #322 が候補2
+         * （`inferDecision` を呼び直す）を却下した理由（「runner.ts 側が変わった
+         * ときに黙ってずれる」）をそのまま踏む。
+         *
+         * **`answered.decision` が無い回は `allow`/`deny` へ倒さない。**
+         * ローリング再デプロイの窓では、まだこの変更前の runner が
+         * `{ ok: true }` だけを返し、確定した値を報告できない——「allow
+         * だった」でも「deny だった」でもない3つ目の状態なので、`[unknown]`
+         * として区別する（`AGENTS.md`「取れない軸に0の行を作る」）。
          */
-        answer: decision === undefined ? message : `[${decision}] ${message}`,
+        answer:
+          answered.decision === undefined
+            ? `[unknown] ${message}`
+            : `[${answered.decision}] ${message}`,
       });
       return { outcome: 'answered', detail: `${pending.summary} に回答した。` };
     }

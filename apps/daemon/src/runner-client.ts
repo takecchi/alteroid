@@ -1,5 +1,6 @@
 import type {
   RunnerAnswerCommand,
+  RunnerAnswerOutcome,
   RunnerClient,
   RunnerCredentialFingerprint,
   RunnerEvent,
@@ -26,6 +27,7 @@ import {
   runnerCredentialFingerprintSchema,
   runnerProfileFingerprintSchema,
   runnerProfileResultSchema,
+  runnerAnswerResultSchema,
   runnerEventSchema,
   runnerExecutionResourcesSchema,
   runnerManagerStateSchema,
@@ -1149,14 +1151,23 @@ class HttpRunner implements RunnerClient {
     await this.#call('POST', `/managers/${encodeURIComponent(managerId)}/messages`, { text });
   }
 
-  async answer(managerId: string, answer: RunnerAnswerCommand): Promise<boolean> {
+  async answer(managerId: string, answer: RunnerAnswerCommand): Promise<RunnerAnswerOutcome> {
     const response = await this.#call(
       'POST',
       `/managers/${encodeURIComponent(managerId)}/answers`,
       answer,
     );
-    const body = (await response.json()) as { ok?: unknown };
-    return body.ok === true;
+    const body = (await response.json()) as { ok?: unknown; decision?: unknown };
+    // **`managers` / `pendingEvents`（#358）と同じ扱い**——1つずつ検証する。
+    // まとめて弾くと、`ok` の形が崩れただけで `decision` まで落ちる。
+    const decision = runnerAnswerResultSchema.shape.decision.safeParse(body.decision);
+    return {
+      delivered: body.ok === true,
+      // **欠けた回を allow/deny の既定値へ倒さない（#322）。** ローリング
+      // 再デプロイの窓では、まだこの変更前の runner が `decision` を持たない
+      // 応答を返す——そのときは欄そのものを省く（`RunnerAnswerOutcome` の doc）。
+      ...(decision.success && decision.data !== undefined ? { decision: decision.data } : {}),
+    };
   }
 
   async stop(managerId: string): Promise<void> {
