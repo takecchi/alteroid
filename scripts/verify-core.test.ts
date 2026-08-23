@@ -391,11 +391,17 @@ describe('pnpm verify — 引数の宛先（#362）', () => {
   });
 
   it('= の形（--workspace-concurrency=<n>）を読む', () => {
-    expect(splitVerifyArgs(['--workspace-concurrency=2']).workspaceConcurrency).toBe(2);
+    expect(
+      splitVerifyArgs(['--workspace-concurrency=2']).workspaceConcurrency,
+      '= の形の --workspace-concurrency が読めていない（静かに undefined へ落ちる形）',
+    ).toBe(2);
   });
 
   it('空白区切りの形（--workspace-concurrency <n>）を読む', () => {
-    expect(splitVerifyArgs(['--workspace-concurrency', '2']).workspaceConcurrency).toBe(2);
+    expect(
+      splitVerifyArgs(['--workspace-concurrency', '2']).workspaceConcurrency,
+      '空白区切りの --workspace-concurrency が読めていない',
+    ).toBe(2);
   });
 
   it('渡さなければ undefined を返す（既定を持たない）', () => {
@@ -410,14 +416,29 @@ describe('pnpm verify — 引数の宛先（#362）', () => {
   });
 
   it('0以下の値は拒否する', () => {
-    expect(() => splitVerifyArgs(['--workspace-concurrency=0'])).toThrow(/1以上の整数/);
-    expect(() => splitVerifyArgs(['--workspace-concurrency', '-1'])).toThrow(/1以上の整数/);
+    expect(
+      () => splitVerifyArgs(['--workspace-concurrency=0']),
+      '0 を黙って受けている（拒否せず既定へ倒していないか）',
+    ).toThrow(/1以上の整数/);
+    expect(
+      () => splitVerifyArgs(['--workspace-concurrency', '-1']),
+      '負の数を黙って受けている',
+    ).toThrow(/1以上の整数/);
   });
 
   it('整数でない値は拒否する', () => {
-    expect(() => splitVerifyArgs(['--workspace-concurrency=1.5'])).toThrow(/1以上の整数/);
-    expect(() => splitVerifyArgs(['--workspace-concurrency=abc'])).toThrow(/1以上の整数/);
-    expect(() => splitVerifyArgs(['--workspace-concurrency'])).toThrow(/1以上の整数/);
+    expect(
+      () => splitVerifyArgs(['--workspace-concurrency=1.5']),
+      '小数を黙って受けている',
+    ).toThrow(/1以上の整数/);
+    expect(
+      () => splitVerifyArgs(['--workspace-concurrency=abc']),
+      '数でない値を黙って受けている',
+    ).toThrow(/1以上の整数/);
+    expect(
+      () => splitVerifyArgs(['--workspace-concurrency']),
+      '値の無い --workspace-concurrency を黙って受けている',
+    ).toThrow(/1以上の整数/);
   });
 
   it('--workspace-concurrency を渡しても --maxWorkers=4 は test 側に残る（両方渡せる）', () => {
