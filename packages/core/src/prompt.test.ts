@@ -182,14 +182,33 @@ describe('作業ツリーの指示文書への到達経路', () => {
  * 器の共有という事実は `AGENTS.md` に書いてあるが、**それを読めるのは作業ツリーを
  * 作った後**である。置き場所を決める時点では到達経路が1つも無い。
  *
- * 文言そのものではなく、**事実を告げていること**と、**置き場所を指図していないこと**の
- * 両方に歯を当てる（後者が消えると、alteroid 専用の運用スタイルがプロンプトへ入る）。
+ * 文言そのものではなく、**事実を告げていること**と、**そこから何をするか（`cwd` そのものを
+ * 作業ツリーにしない）を告げていること**と、**置き場所を指図していないこと**の3つに歯を当てる。
+ * 最後のひとつが消えると、alteroid 専用の運用スタイルがプロンプトへ入る。
  */
 describe('器が共有であることの告知', () => {
   it('マネージャーに、`cwd` が自分専用ではないという事実を告げている', () => {
     const prompt = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
     expect(prompt).toContain('他のマネージャーと共有');
     expect(prompt).toContain('あなた専用のディレクトリではない');
+  });
+
+  it('事実の隣に「`cwd` そのものを作業ツリーにしない」という行動を書いている', () => {
+    // 状態（共有である）だけでは、置き場所を決める側が `cwd` の下へ作る形を排除できない。
+    // ⚠️ 長い一文の丸ごと一致では見ない — 1文字直すだけで壊れるうえ、Markdown の折り返しを
+    // 跨ぐと当たらない（`AGENTS.md`「静かに失敗する道具」の grep の罠4と同じ形）。
+    // 性質を名指しする短い断片で見る。
+    const prompt = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
+    expect(prompt).toContain('そのものを作業ツリーにしない');
+    expect(prompt).toContain('自分専用のディレクトリ');
+  });
+
+  it('`cwd` の下へ作ると入れ子になることと、落ちるのが相手側であることを告げている', () => {
+    // 入れ子は自分の側では観測できない（相手の整形・静的検査が落ちる形でしか出ない）。
+    // 「自分は緑のままである」まで書いていないと、読み手は自分の緑を根拠にしてしまう。
+    const prompt = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
+    expect(prompt).toContain('入れ子');
+    expect(prompt).toContain('あなたの側は最後まで緑');
   });
 
   it('置き場所は指図していない（alteroid 専用の記述にしない）', () => {
@@ -199,6 +218,15 @@ describe('器が共有であることの告知', () => {
     const prompt = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
     expect(prompt).not.toContain('/tmp');
     expect(prompt).not.toContain('/workspace');
+  });
+
+  it('具体のパスが1つも現れない（`/tmp` `/workspace` 以外も含めて）', () => {
+    // 直上の歯は `/tmp` と `/workspace` の2語しか見ていないので、親切心で別の絶対パス
+    // （`/home/...` や `/var/...`）を書き足す形は止まらない。#191 の線は「置き場所を
+    // 名指ししない」であって「この2語を書かない」ではないため、語ではなく形で見る。
+    const prompt = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
+    const paths = prompt.match(/\/(?:tmp|workspace|home|root|var|usr|opt|mnt|srv|Users|data)\b/g) ?? [];
+    expect(paths).toEqual([]);
   });
 });
 
