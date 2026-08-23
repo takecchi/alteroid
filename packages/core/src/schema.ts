@@ -892,6 +892,26 @@ export type SchedulePhase = z.infer<typeof schedulePhaseSchema>;
 export const commitmentOriginSchema = z.enum(['human', 'manager', 'external', 'self']);
 
 /**
+ * `closedReason`（どう片付いたか）を**誰が書いたか**。
+ *
+ * **`origin` とは別の軸である。** `origin` は「開いたときの起点」であって、
+ * 閉じた主体ではない — 人間が積んだ仕事（`origin: 'human'`）をクローンが
+ * 片付けることも、クローンが立てた仕事（`origin: 'self'`）を人間が片付ける
+ * こともある。`origin` から `closedBy` を導出することはできない（issue #286）。
+ *
+ * 語彙は既存の2つに揃えてある — `journalEntry.memory_update.cause`
+ * （`'distill' | 'clone' | 'human'`、本ファイル）と `ManagerStopActor`
+ * （`'human' | 'clone'`、`packages/core/src/manager.ts`）。
+ *
+ * **`'human'` の意味は `memory_update.cause` の `'human'` と同じ — HTTP の口
+ * （`POST /commitments/:id/close`）から入ったもの、という意味であって、
+ * 「その瞬間に人間が居たことをデーモンが確かめた」ではない。** AGENTS.md
+ * 「git / GitHub の actor から層を推定しないこと」と同じ限界がここにも在る
+ * — HTTP を叩いたのが本当に人間かどうかを、この値は保証しない。
+ */
+export const commitmentClosedBySchema = z.enum(['clone', 'human']);
+
+/**
  * 引き受けたまま終わっていない仕事1件（PRD「自律」の器を、単発の依頼へ広げたもの）。
  *
  * **なぜ受信箱と日誌だけでは足りないか。** 受信箱の未読はプロセスが死んでも残るが、
@@ -945,9 +965,20 @@ export const commitmentSchema = z.object({
    * あり（north_star）、何をもって終わりとしたのかが無いと否定のしようがない。
    */
   closedReason: z.string().optional(),
+  /**
+   * `closedReason` を誰が書いたか（`commitmentClosedBySchema`）。
+   *
+   * **`undefined` は「不明」でも「未決」でもなく「そもそも無い」である。**
+   * この欄が入る前に閉じられた行にはこの情報が存在しない —
+   * **既定へ倒さないこと**（`'clone'` や `'human'` のどちらかへ倒した側が、
+   * 黙って化ける／黙って化けないを引き受けることになる。表示側は3値目の
+   * 「無い」を独立した状態として扱う。`apps/web/app/routes/commitments.tsx`）。
+   */
+  closedBy: commitmentClosedBySchema.optional(),
 });
 
 export type CommitmentOrigin = z.infer<typeof commitmentOriginSchema>;
+export type CommitmentClosedBy = z.infer<typeof commitmentClosedBySchema>;
 export type Commitment = z.infer<typeof commitmentSchema>;
 
 /**
