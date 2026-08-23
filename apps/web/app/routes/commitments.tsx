@@ -109,10 +109,42 @@ const ORIGIN_LABEL: Record<CommitmentOrigin, string> = {
   self: '自分',
 };
 
+/**
+ * `ORIGIN_LABEL[origin]` の実行時の倒れ先（issue #288）。
+ *
+ * **`ORIGIN_LABEL` は `Record<CommitmentOrigin, string>` のまま維持する** —
+ * これがビルド時の網羅性そのものである（`commitmentOriginSchema`
+ * （`packages/core/src/schema.ts:892`）に新しい値が足されると、この
+ * `Record` を埋めるまで `pnpm typecheck` を通せない。変異試験で確認済み、
+ * 詳細は PR 本文）。
+ *
+ * **ただし実行時はビルド時の型を追い越しうる。** デーモンが先に新しい
+ * `origin` を返し、この画面（この型定義）がまだ古い、という順序が実在する
+ * （Web UI とデーモンは別デプロイ）。そのとき `ORIGIN_LABEL[origin]` は
+ * `undefined` を返すが、`Record<CommitmentOrigin, string>` の型の上では
+ * `string` にしか見えないので、`ORIGIN_LABEL[origin] ?? origin` は型的には
+ * 「絶対に発火しない不要な条件」に見えてしまう。**それを避けるためだけに、
+ * ここで `Record<string, string | undefined>` へ広げて引く** — `Record` の
+ * 網羅性そのものは1文字も緩めていない。
+ *
+ * **倒れ先は空文字ではなく、起点の生の値そのもの**（`CommitmentBody` の
+ * `PlainBody` フォールバックと同じ「取れないことを出力から消さない」形。
+ * AGENTS.md の地雷表「取れない軸に 0 の行を作る」）。`console.warn` も
+ * `assertOriginHandled`（下）に揃え、痕跡を残す。
+ */
+function originLabel(origin: CommitmentOrigin): string {
+  const labels: Record<string, string | undefined> = ORIGIN_LABEL;
+  const label = labels[origin];
+  if (label !== undefined) return label;
+
+  console.warn(`commitments.tsx: 未知の commitment.origin が来た（バッジ）: ${origin}`);
+  return origin;
+}
+
 function OriginBadge({ commitment }: { commitment: Commitment }) {
   return (
     <Badge tone={commitment.origin === 'human' ? 'accent' : 'neutral'}>
-      {ORIGIN_LABEL[commitment.origin]}
+      {originLabel(commitment.origin)}
       {commitment.source !== undefined && commitment.source !== null && ` / ${commitment.source}`}
     </Badge>
   );
@@ -174,10 +206,11 @@ function PlainBody({ body }: { body: string }) {
  * 何が起きたかも残らない。デーモンが先に新しい `origin` を返す順序が
  * 実在しうる以上、次にここを読む人が気づける痕跡を残しておく。
  *
- * **同じ画面の `OriginBadge`（`ORIGIN_LABEL`）には、この実行時の倒れ先が
- * 入っていない。** 未知の `origin` ではラベルが空文字で描かれる（issue
- * #288）。ここに書くのは、次に `origin` を足す人が Issue を読むとは限らない
- * 一方、**この関数はその人が必ずコンパイルエラーで立ち止まる場所だから**である。
+ * **同じ画面の `OriginBadge`（`ORIGIN_LABEL`）にも、`originLabel()` として
+ * 同種の実行時の倒れ先が入っている（issue #288）。** 未知の `origin` では
+ * ラベルが空文字ではなく起点の生の値になる。ここに書くのは、次に `origin`
+ * を足す人が Issue を読むとは限らない一方、**この関数はその人が必ず
+ * コンパイルエラーで立ち止まる場所だから**である。
  *
  * **この `console.warn` は、通るテストの出力には現れない**（vitest の既定
  * reporter が console を横取りし、通ったぶんを捨てる）。**「テストに warn が
