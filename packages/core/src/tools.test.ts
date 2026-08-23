@@ -953,6 +953,29 @@ describe('クローンの道具', () => {
       expect(bodyAfter).toBe(longBody);
     });
 
+    /**
+     * 本文が空（frontmatter だけ）の文書（#354 のコメント）。
+     *
+     * **道具を通した側にも歯を1本置く。** 単体（`memory.test.ts` の
+     * `applyMemoryFrontmatterPatch`）は純粋関数の戻り値しか見ないので、
+     * **ストアに実際に残った文書**が測れていない。ここが見るのは
+     * `persona.read()` が返す `content` そのものである。
+     */
+    it('本文が空（frontmatter だけ）の文書でも、閉じの --- の後ろの改行が落ちない', async () => {
+      const h = harness();
+      await h.stores.persona.write('values', '---\ndescription: 元の要旨\n---\n');
+
+      await h.call('memory_frontmatter_set', {
+        slug: 'values',
+        type: 'fact',
+        summary: '区分を付けた',
+      });
+
+      const content = (await h.stores.persona.read('values'))?.content ?? '';
+      expect(content).toBe('---\ndescription: 元の要旨\ntype: fact\n---\n');
+      expect(content.endsWith('---\n')).toBe(true);
+    });
+
     it('渡さなかったキーは既存の値のまま残る', async () => {
       const h = harness();
       const original = `---\ndescription: 元の要旨\ntype: fact\nparent: root\n---\n${longBody}`;

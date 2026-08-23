@@ -378,6 +378,22 @@ export function containsMemoryFrontmatterLineBreak(value: string): boolean {
  *   はずで、ここへ `malformed` な `content` が来るのはその判断が抜けている
  *   ときだけである）。
  *
+ * **本文が空（frontmatter だけの文書）のとき、閉じの `---` の後ろの改行は
+ * 元の文書に在ったとおりに保つ（#354 のコメント）。** `frontmatterBody` は
+ * `---\n…\n---\n`（末尾に改行あり）と `---\n…\n---`（改行なし）の**両方**に
+ * 対して空文字を返すので、**`body` だけを見ても、閉じの `---` を終える改行が
+ * 在ったのかどうかは決まらない**——だから `content` の末尾で決める。
+ *
+ * - **`${header}\n` を無条件で返す形にしないこと。** 末尾の改行を持たない
+ *   文書で1バイト増える。**いま落ちている1バイトを、逆向きの1バイトに
+ *   置き換えるだけ**になる
+ * - **`header` を無条件で返す形にも戻さないこと**（#338 以降しばらくこの形
+ *   だった）。`---\n…\n---\n` に対して閉じの `---` の後ろの改行が1つ落ちた
+ * - **本文が空でない側はこの分岐に入らない。** そちらは `header` と `body` の
+ *   あいだの改行が必ず在るので、`\n` で繋ぎ直せば元に戻る
+ * - 歯は `memory.test.ts`（両方向を1本ずつ）と `tools.test.ts`
+ *   （`memory_frontmatter_set` 経由で、ストアに残った文書そのもの）に在る
+ *
  * `patch` のキーを1つも渡さない呼び（3キーとも `undefined`）を断るかどうかは
  * ここでは決めない——それは道具（呼び手）の責務であり、この関数自体は
  * 「空のパッチ」を渡されれば frontmatter を（内容が変わらないまま）
@@ -402,7 +418,11 @@ export function applyMemoryFrontmatterPatch(
   };
   const body = frontmatterBody(content);
   const header = serializeMemoryFrontmatter(nextFields);
-  return body.length === 0 ? header : `${header}\n${body}`;
+  if (body.length > 0) return `${header}\n${body}`;
+  // 本文が空のときだけ、`body` からは「閉じの `---` を終える改行が在ったか」
+  // が決まらない（`frontmatterBody` は両方に対して空文字を返す）。元の文書の
+  // 末尾で決める。上の doc「本文が空の文書」を読むこと。
+  return content.endsWith('\n') ? `${header}\n` : header;
 }
 
 const KNOWN_DOC_KINDS: ReadonlySet<MemoryDocKind> = new Set(['premise', 'fact']);
@@ -935,9 +955,42 @@ function formatMemoryCharDelta(delta: number): string {
 /**
  * Markdown の ATX 見出し（行頭の `#` 〜 `######`）を抜き出す。
  *
- * **行頭に限る。** 行のどこかに `#` があるだけの行（インラインの `#` や
- * コードブロックの中身）は見出しではない——ここを緩めると、本文中の
- * `#` がすべて「見出し」として数えられてしまう。
+ * **行頭に限る。** 行の途中に `#` があるだけの行（インラインの `#`）は
+ * 見出しではない——ここを緩めると、本文中の `#` がすべて「見出し」として
+ * 数えられてしまう。
+ *
+ * ## ⚠️ 過剰に拾う側へ「意図して」倒してある（#354）
+ *
+ * この関数を呼ぶのは `missingMemoryHeadings` だけで、そこでの誤りは2方向
+ * にしか出ない。**その2つは対称ではない。**
+ *
+ * | 誤りの向き               | 何が起きるか                                                                     |
+ * | ------------------------ | -------------------------------------------------------------------------------- |
+ * | **拾いすぎ（偽陽性）**   | 見出しでないものが「消えた見出し」に名指しされる。呼び手が余分に1つ確かめて済む  |
+ * | **拾い漏れ（偽陰性）**   | 本物の見出しが消えたのに「消えた見出し: なし」と返る。**その場で気づく手段が無い** |
+ *
+ * 差分の要約が在る理由は「全文置換で本文が途中で切れたことに**その場で**
+ * 気づく」ことだけで、記憶には控えも履歴も無い（`describeMemoryWriteDiff`
+ * の doc）。**見落としたらそこで終わる。** だから拾いすぎを受け入れて
+ * 拾い漏れを潰す側へ倒す。**これは #338 の実装がたまたまそうなっていた
+ * 向きを、意図として固定したものである（#354）。**
+ *
+ * ### 次に触る人へ — 以下は欠陥ではない。「直す」と検出器が弱くなる
+ *
+ * - **コードフェンス（```` ``` ````）の中を除外していない。** フェンスの中の
+ *   `# コメント`（シェル・設定ファイルの例）も見出しとして数える。**除外する
+ *   実装を足さないこと** — フェンスの開閉が非対称な本文（**途中で切れた本文が
+ *   まさにそうなる**）ではフェンスの内外を見誤り、そこから先の本物の見出しを
+ *   丸ごと落とす。**この検出器がいちばん働くべき入力で、いちばん壊れる。**
+ * - **setext 見出し（`===` / `---` の下線）は数えていない。** こちらは逆向きの
+ *   拾い漏れで、上の方針からは足すほうが正しい。足していないのは、`---` が
+ *   frontmatter の閉じと同じ形で、区別に本文全体の文脈が要るからである。
+ *   **限界として道具の説明文（`memory_write` / `memory_append`）にも書いてある**
+ *   ので、足すならそちらも直すこと。
+ *
+ * **単位は文字（`content.length`）である。** 日誌の `bytesBefore` /
+ * `bytesAfter` はバイトで、別物である（`describeMemoryWriteDiff` の doc の
+ * 「バイトと文字を1つの文に混ぜない」）。
  */
 function extractMemoryHeadings(content: string): string[] {
   const headings: string[] = [];
@@ -953,6 +1006,10 @@ function extractMemoryHeadings(content: string): string[] {
  *
  * 見出しは集合として比べる——同じ見出しが `before` に複数回出ていても、
  * `after` のどこかに1つでも残っていれば「消えた」とは数えない。
+ *
+ * **偽陽性と偽陰性のどちらへ倒してあるかは `extractMemoryHeadings` の doc
+ * に在る**（拾いすぎる側へ意図的に倒してある。#354）。ここを厳しくする
+ * 変更は、そちらを読んでからにすること。
  */
 function missingMemoryHeadings(before: string, after: string): string[] {
   const beforeHeadings = extractMemoryHeadings(before);
