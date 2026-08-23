@@ -454,11 +454,73 @@ export function buildAndCheckArtifact(spec) {
   };
 }
 
+// **既定の並列度。この器の狭さに合わせた値であって、変異試験の性質が決めた値
+// ではない。** #331: `baseline` / `run --plan` からも並列度を外から渡せるように
+// したが、呼び出し側が何も渡さなければこれまでどおり `--maxWorkers=4` で走ること
+// を歯として固定する（`mutate.mjs` の `--max-workers` を渡さなければここへ落ちる）。
+// 既定を消すと、渡し忘れた回だけ vitest の既定（`nproc` 相当）へ跳ね上がる。
+export const DEFAULT_MAX_WORKERS = 4;
+
+/**
+ * `runTests` が `spawnSync` へ渡す args 配列そのものを組み立てる。
+ *
+ * **`runTests` から切り出した理由**: `spawnSync` を実際に起こさずに「引数を
+ * 渡さなければ `--maxWorkers=4` になること」「渡した値がそのまま使われること」
+ * を確かめる歯を書けるようにするため（AGENTS.md「テストが書けない構造は、
+ * テストが無いのと同じ」）。切り出しただけで、`runTests` の出力・挙動は
+ * 1文字も変えていない — 元々ここでインライン配列として組み立てていたものを
+ * 関数の戻り値に変えただけである。
+ */
+export function buildTestSpawnArgs(extraArgs = [], maxWorkers = DEFAULT_MAX_WORKERS) {
+  return ['test', `--maxWorkers=${maxWorkers}`, ...extraArgs];
+}
+
+/**
+ * `--max-workers <n>` / `--max-workers=<n>` の両方の形を読む。省略なら
+ * `undefined`（＝呼び出し側の既定に委ねる）。値が1以上の整数でなければ落ちる。
+ *
+ * **`mutate.mjs`（CLI 層）ではなくここ（純粋な層）に置く理由**: `mutate.mjs`
+ * はモジュールの末尾で無条件に `main()` を呼ぶため、そこから関数だけを
+ * `import` すると `main()` が副作用として実行され、`process.argv` 次第で
+ * `process.exit()` が起きる（テストプロセスを巻き込んで落ちる）。`import`
+ * だけでは安全に取り出せない。ここは他の純粋関数と同じく `import` するだけで
+ * 副作用が起きない層なので、テストから直接呼べる（マネージャーの指摘: `=` の
+ * 形が静かに無視される欠陥を、テストで歯として固定するため）。
+ *
+ * **`=` の形を見落としていた理由**: 元は `args.indexOf('--max-workers')` の
+ * 完全一致だけを見ていた。`--max-workers=2` は要素そのものが
+ * `'--max-workers=2'` という1つの文字列なので `indexOf('--max-workers')` に
+ * 一致せず、`-1` → `undefined` → 呼び出し側の既定（`DEFAULT_MAX_WORKERS`）へ
+ * 静かに落ちていた。vitest 本体のフラグが `--maxWorkers=4` という `=` の形
+ * そのものなので、その形を知っている人ほどこの穴を踏む。
+ */
+export function readMaxWorkers(args) {
+  const EQ_PREFIX = '--max-workers=';
+  const eqArg = args.find((a) => a.startsWith(EQ_PREFIX));
+  let raw;
+  if (eqArg !== undefined) {
+    raw = eqArg.slice(EQ_PREFIX.length);
+  } else {
+    const idx = args.indexOf('--max-workers');
+    if (idx === -1) return undefined;
+    raw = args[idx + 1];
+  }
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) {
+    throw new HarnessError(
+      `--max-workers には1以上の整数を渡すこと（--max-workers <n> または ` +
+        `--max-workers=<n> の形。実際: ${JSON.stringify(raw)}）`,
+    );
+  }
+  return n;
+}
+
 /** 手順10: テストを走らせ、`Test Files ... passed` と `Tests ... passed` の
  * 両方の行を読む。行の不在は「走っていない」であって「通った/落ちた」ではない。
+ * `maxWorkers` を渡さなければ `DEFAULT_MAX_WORKERS`（＝これまでどおり `4`）で走る。
  */
-export function runTests(extraArgs = []) {
-  const result = spawnSync('pnpm', ['test', '--maxWorkers=4', ...extraArgs], {
+export function runTests(extraArgs = [], maxWorkers = DEFAULT_MAX_WORKERS) {
+  const result = spawnSync('pnpm', buildTestSpawnArgs(extraArgs, maxWorkers), {
     cwd: ROOT,
     encoding: 'utf8',
     maxBuffer: 200 * 1024 * 1024,
