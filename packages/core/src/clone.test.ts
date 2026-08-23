@@ -139,6 +139,12 @@ function fakeSdk(
      * 「受信箱が閉じた後に `#pump` の先頭へ来る」順序を作る唯一の手である。
      */
     endSessionAfterTurn?: number;
+    /**
+     * init に載せる `mcp_servers`。既定は非空の1件（既存の呼び出し元の挙動を
+     * 変えない）。`[]` を渡せば「init を観測して、SDK が0本と報告した」を
+     * 再現できる（#324 —— `null`＝未観測とは別の状態であることを確かめる口）。
+     */
+    mcpServers?: Array<{ name: string; status: string }>;
   } = {},
 ) {
   const calls: FakeCall[] = [];
@@ -162,7 +168,7 @@ function fakeSdk(
         claude_code_version: '9.9.9-fake',
         apiKeySource: 'user',
         permissionMode: 'default',
-        mcp_servers: [{ name: 'alteroid', status: 'connected' }],
+        mcp_servers: options.mcpServers ?? [{ name: 'alteroid', status: 'connected' }],
       } as unknown as SDKMessage;
 
       const prompt = params.prompt;
@@ -1330,8 +1336,12 @@ describe('クローン — shutdown 蒸留の重複防止', () => {
  * `createCloneTools(context)` を呼んで取り出す（`tools.test.ts` と同じ形）。
  */
 describe('クローン — self_status（runtime facts の配線）', () => {
-  function setupCapturing(env: NodeJS.ProcessEnv = {}, stores: Stores = createMemoryStores()) {
-    const { fn, calls } = fakeSdk();
+  function setupCapturing(
+    env: NodeJS.ProcessEnv = {},
+    stores: Stores = createMemoryStores(),
+    fakeSdkOptions: Parameters<typeof fakeSdk>[1] = {},
+  ) {
+    const { fn, calls } = fakeSdk(undefined, fakeSdkOptions);
     let captured: ToolContext | undefined;
     const clone = createClone({
       stores,
@@ -1400,6 +1410,28 @@ describe('クローン — self_status（runtime facts の配線）', () => {
     const sdkLine = body.split('\n').find((line) => line.includes('SDK が実際に報告したモデル'));
     expect(sdkLine).toBeDefined();
     expect(sdkLine).not.toContain('まだ無いモデル');
+
+    await s.clone.stop();
+  });
+
+  /**
+   * **`#captureInitFacts` が本物の init メッセージから読んだ `[]` を、そのまま
+   * 「観測できた0本」として `self_status` まで運ぶことを確かめる（#324）。**
+   * `self.ts` 側の単体テストは `describeCloneRuntime` に直接 `mcpServers: []` を
+   * 渡すだけなので、`clone.ts` が実際に init の `mcp_servers: []` を `null` に
+   * 潰さず配線できているかはここでしか見えない —— 直しの本体は `clone.ts` の
+   * 側（init を観測したかどうかを実際に区別できること）である。
+   */
+  it('偽 SDK が init で mcp_servers: [] を報告すると、self_status は「0本」と言い「まだ分からない」は出ない', async () => {
+    const s = setupCapturing({}, createMemoryStores(), { mcpServers: [] });
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const body = await s.selfStatus();
+    const mcpLine = body.split('\n').find((line) => line.includes('MCP サーバ'));
+    expect(mcpLine).toBeDefined();
+    expect(mcpLine).not.toContain('まだ分からない');
+    expect(mcpLine).toContain('0本');
 
     await s.clone.stop();
   });
@@ -1488,6 +1520,13 @@ describe('クローン — self_status（runtime facts の配線）', () => {
 
     expect(body).toContain('SDK が実際に報告したモデル id: まだ分からない');
     expect(body).not.toContain('claude-fake-init-model-xyz');
+    // init 未観測のこの窓では MCP サーバも「まだ分からない」——「0本」ではない
+    // （#324）。gate の向こう側で init は非空の mcp_servers を運んでくるので、
+    // ここで「0本」が出ていたら「未観測」と「観測できた0本」を区別できていない。
+    const mcpLine = body.split('\n').find((line) => line.includes('MCP サーバ'));
+    expect(mcpLine).toBeDefined();
+    expect(mcpLine).toContain('まだ分からない');
+    expect(mcpLine).not.toContain('0本');
 
     releaseInit();
     await waitForDone(events);

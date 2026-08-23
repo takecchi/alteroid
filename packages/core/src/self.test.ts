@@ -269,19 +269,63 @@ describe('CloneRuntimeFacts の整形 — 観測した値と、取れていな�
     expect(section).toContain('渡していない');
   });
 
+  /**
+   * **経緯（#324）: このテストは元々 `mcpServers: []` を「未観測」の例として
+   * 置いていた。** それは `describeCloneRuntime` 側の欠陥 —— init 未観測（本当は
+   * 取れていない）と、init を観測して SDK が0本と報告した（取れた値）を、
+   * どちらも `[]` として同じ「まだ分からない」に畳んでいた —— をテストが
+   * 仕様として固定してしまっていた形である。未観測を表す値はいまは `null` に
+   * 分離したので、ここは `mcpServers: null` に直す。`mcpServers: []`（観測できた
+   * 0本）が「まだ分からない」と出ないことは、この下の別のテストが固定する。
+   */
   it('Claude Code の版・認証の出所・許可モード・MCP サーバは、未観測なら埋めない', () => {
     const section = describeCloneRuntime({
       ...RUNTIME,
       claudeCodeVersion: null,
       apiKeySource: null,
       permissionMode: null,
-      mcpServers: [],
+      mcpServers: null,
     });
     expect(section).not.toContain('2.1.0');
     expect(section).not.toContain('oauth');
     expect(section).not.toContain('default');
     // 「まだ分からない」が複数箇所に出るので、件数だけ見る（未観測4件 + resume元は別文言）。
     expect(section.match(/まだ分からない/g)?.length).toBeGreaterThanOrEqual(4);
+  });
+
+  /**
+   * **観測できた0本は「未観測」と区別できる文言で出る（#324 の直し方の本体）。**
+   * `mcpServers: []` は「init を観測して、SDK が mcp_servers: [] を報告した」＝
+   * 連携が1本も無い、という取れた値である。ここが「まだ分からない」に化けると、
+   * MCP 連携が0本であるという事実が自己認識から消える —— MCP は外部サービス
+   * 接続の唯一の手段（PRD）なので、0本は業務範囲の柱が空であることを直接言う
+   * 値であって、取れなかったのではない。だから黙って空欄にもしない
+   * （AGENTS.md 地雷「取れない軸に 0 の行を作る」の逆側 —— こちらは取れた 0 を
+   * 消してしまう形である）。
+   */
+  it('MCP サーバは、観測できた0本と未観測を区別する（0本のとき「まだ分からない」は出ない）', () => {
+    const section = describeCloneRuntime({ ...RUNTIME, mcpServers: [] });
+    const line = section.split('\n').find((entry) => entry.includes('MCP サーバ'));
+
+    expect(line).toBeDefined();
+    expect(line).not.toContain('まだ分からない');
+    expect(line).toContain('0本');
+    expect(line).toContain('観測済み');
+  });
+
+  it('MCP サーバが1本以上あれば、これまでどおり名前と状態がそのまま出る', () => {
+    const section = describeCloneRuntime({
+      ...RUNTIME,
+      mcpServers: [
+        { name: 'alteroid', status: 'connected' },
+        { name: 'stripe', status: 'pending' },
+      ],
+    });
+    const line = section.split('\n').find((entry) => entry.includes('MCP サーバ'));
+
+    expect(line).toBeDefined();
+    expect(line).toContain('alteroid(connected)');
+    expect(line).toContain('stripe(pending)');
   });
 
   /**
