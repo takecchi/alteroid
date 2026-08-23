@@ -551,6 +551,47 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
+  /**
+   * **`RunnerSession#state()` は呼ばれるたびに `askedAt` を取り直さない
+   * （#334 / #323）ことを、`state()` を直接呼ぶ経路で測る。**
+   *
+   * ⚠️ 直前のテストや `manager.test.ts` の他の歯は `s.pool.list()`（＝
+   * manager.ts の `record.waiting`。`ask` イベント経由で1度だけ埋まる）を
+   * 見ている。**これだけでは `state()` 側の取り直しを検出できない** ——
+   * 実際に変異試験（`.claude/skills/mutation-testing/`）で確かめた。
+   * `state()` の `askedAt: request.askedAt` を `askedAt: new
+   * Date().toISOString()` に変える変異は、`s.pool.list()` ベースの歯・
+   * 「デーモン再起動でも kind と askedAt を保つ」歯（`swappableRunner` の
+   * fake を使うテスト。実 runner を経由しない）のどちらでも生存したまま
+   * だった。
+   *
+   * だからここでは `s.runner.list()`（`LocalRunner#list()` → `RunnerHost#list()`
+   * → 各セッションの `state()` を直接呼ぶ、本番と同じ経路）を2回、実時間を
+   * 空けて呼び、`askedAt` が両方の呼び出しで同じ値であることを直接見る。
+   */
+  it('runner.state() は呼ぶたびに askedAt を取り直さない（#334 / #323）', async () => {
+    const s = setup();
+    const { managerId } = await s.pool.start({ request: 'デプロイして' });
+    const session = s.sessions[0] as FakeSession;
+
+    session.ask('Bash', { command: 'git push' }, undefined, 'req-stable');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const first = (await s.runner.list()).find((m) => m.managerId === managerId);
+    const askedAtFirst = first?.waiting.find((item) => item.requestId === 'req-stable')?.askedAt;
+    expect(askedAtFirst).toBeTruthy();
+
+    // 実時間で間隔を空ける。取り直す変異ならここで別の値（別のミリ秒）になる。
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const second = (await s.runner.list()).find((m) => m.managerId === managerId);
+    const askedAtSecond = second?.waiting.find((item) => item.requestId === 'req-stable')?.askedAt;
+
+    expect(askedAtSecond).toBe(askedAtFirst);
+
+    await s.pool.stop();
+  });
+
   it('返事待ちでないときの manager_send は追加指示として届く（会話に戻れる）', async () => {
     const s = setup();
     const { managerId } = await s.pool.start({ request: '調べて' });
