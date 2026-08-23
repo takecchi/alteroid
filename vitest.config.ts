@@ -12,6 +12,14 @@ export default defineConfig({
     },
   },
   test: {
+    /**
+     * **テストが本物の stdout へ書いたら落とす歯**（#314）。中身と理由は
+     * `vitest.setup.ts` に在る。ここに `setupFiles` を置くのはこれが最初で、
+     * 置き場所は根の vitest 設定しか無い（下の `include` のとおり
+     * テストは複数のワークスペースと `railway/` `scripts/` `.github/scripts/` に
+     * 散っていて、共通の足場を置ける場所が他に無いため）。
+     */
+    setupFiles: ['./vitest.setup.ts'],
     include: [
       'packages/*/src/**/*.test.ts',
       'apps/*/src/**/*.test.ts',
