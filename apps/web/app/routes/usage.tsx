@@ -278,6 +278,30 @@ function UsageBody({
       </Card>
 
       {rows.length > 0 && (
+        // ⚠️ #295: この grid には基底の `grid-cols-*` が無いので、暗黙トラック
+        // の幅は各アイテムの min-content 寄与の最大値（＝ auto）で決まる。
+        //
+        // 膨らまない理由 — 直接の子（`<AxisCard>` が返す `<Card>`。
+        // className 未指定）自身は緩和クラスを持たない。膨らみを止めている
+        // のは3階層下、`AxisCard`（このファイル内、下に定義）の `<li>` 直下
+        // `<span className="min-w-0 truncate" ...>` である。`truncate` は
+        // `overflow: hidden` と `white-space: nowrap` を含む（実測:
+        // `tailwindcss@4.3.3` のユーティリティ定義を grep で確認 —
+        // `truncate` → `overflow:hidden` / `text-overflow:ellipsis` /
+        // `white-space:nowrap`）。`overflow: hidden` と `min-width: 0` が
+        // 揃うと、その要素自身の自動最小サイズが 0 に落ち、祖先の
+        // min-content 計算への寄与も 0 になる。
+        //
+        // **usage.tsx はこの機構で一度実際に壊れている**（#282。人間の実機
+        // 報告「モバイルで見た時利用状況の from と to 両方とも枠から出てる」
+        // から発覚した）。
+        //
+        // ⚠️ 上の「寄与が0に落ちる」は CSS の記述からの読みであって実測で
+        // はない。jsdom はレイアウトを持たず（offsetWidth /
+        // getBoundingClientRect が常に 0、CSS も適用されない）、視覚回帰の
+        // 道具（Playwright / Storybook / Chromatic）も無く、Vercel の
+        // preview は release/prod へ push されるまで出ない。詳細と再オープ
+        // ン条件は #295。
         <div className="grid gap-4 lg:grid-cols-3">
           <AxisCard
             title="日別"
