@@ -988,6 +988,7 @@ describe('マネージャー', () => {
     const wired: { emit: ((event: RunnerEvent) => void) | null } = { emit: null };
     const legacyRunner: RunnerClient = {
       runnerId: 'runner-legacy',
+      runnerIdKnown: true,
       workspacePath: '/work/project',
       async connect(onEvent) {
         wired.emit = onEvent;
