@@ -125,7 +125,7 @@ describe('AGENTS.md の参照の形（#369）', () => {
     expect(
       found.map((c) => `AGENTS.md:${c.line} ${c.token}`),
       '行番号は腐り、腐ったことが読む側から分からない（開いた人には「そこに無い」としか見えず、' +
-        '移動したのか消えたのかが区別できない）。逐語（`grep -n \'<逐語>\' <path>`）かシンボル名で指すこと。',
+        "移動したのか消えたのかが区別できない）。逐語（`grep -n '<逐語>' <path>`）かシンボル名で指すこと。",
     ).toEqual([]);
   });
 
@@ -185,7 +185,11 @@ describe('参照を拾う側そのもの（歯が空振りしていないこと�
 
   it('リポジトリ内のファイルの `path:行番号` だけを拾う（時刻とリポジトリ外は拾わない）', () => {
     expect(findLineNumberCitations(fixtureProse, fixtureIsRepoFile)).toEqual([
-      { line: 1, token: 'packages/core/src/schema.ts:500-503', target: 'packages/core/src/schema.ts' },
+      {
+        line: 1,
+        token: 'packages/core/src/schema.ts:500-503',
+        target: 'packages/core/src/schema.ts',
+      },
     ]);
   });
 
