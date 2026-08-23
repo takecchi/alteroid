@@ -10,15 +10,33 @@
  * この画面が「実行中」としか言わないと、同じ仕事を見て人間とクローンで見えている
  * ものが食い違う（北極星 禁止1 を逆向きに踏む）。
  */
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ManagerStatus, ManagerSummary } from '~/lib/types';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import type { Route } from './+types/manager-detail';
 import ManagerDetail, { clientLoader } from './manager-detail';
+
+/**
+ * `askedAt` の絶対時刻表示（`~/lib/format` の `formatDateTime`）を確かめる
+ * 歯があるので、この画面と同じ理由で TZ を固定する。**理由（`vi.hoisted` で
+ * なければ静かに効かない事情、CI が UTC で手元が JST であること）は
+ * `apps/web/app/routes/reports.test.tsx` の冒頭に逐語で在るので、ここには
+ * 写さない。**
+ */
+const tzBeforeThisFile = vi.hoisted(() => {
+  const before = process.env.TZ;
+  process.env.TZ = 'Asia/Tokyo';
+  return before;
+});
+
+afterAll(() => {
+  if (tzBeforeThisFile === undefined) delete process.env.TZ;
+  else process.env.TZ = tzBeforeThisFile;
+});
 
 const BASE: ManagerSummary = {
   managerId: 'mgr-1',
@@ -101,12 +119,20 @@ function renderDetailWithMessages(
     detail: '追加指示として届けた。',
   },
 ) {
-  const sent: { url: string; method: string }[] = [];
+  const sent: { url: string; method: string; body?: unknown }[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = input instanceof Request ? input : new Request(input, init);
     const { url, method } = request;
     if (url.endsWith(`/managers/${manager.managerId}/messages`)) {
-      sent.push({ url, method });
+      // **本文も控える（`body`）。** 種別（`kind`）ごとに送る JSON の形
+      // （`decision` を付けるか）を確かめる歯（#334）が要る。`.clone()` で
+      // 読むのは、これより後で本物の fetch 実装が同じ `request` を読む
+      // 経路が万一あっても壊れないため。
+      const body: unknown = await request
+        .clone()
+        .json()
+        .catch(() => undefined);
+      sent.push({ url, method, body });
       return json(sendResult);
     }
     if (url.includes(`/managers/${manager.managerId}`)) return json({ manager });
@@ -233,6 +259,133 @@ describe('詳細でも、拒否は状態を置き換えずに状態へ添える'
 
     expect(await screen.findByText('実行中')).toBeTruthy();
     expect(screen.queryByText(/確認へ上がらず止められた/)).toBeNull();
+  });
+});
+
+/**
+ * **待ちは `kind` で質問と実行許可を出し分ける（Issue #334）。**
+ *
+ * 直す前は `waiting` の要素が `{ requestId, summary }` しか持たず、画面は
+ * 両者を区別できなかった——質問に拒否ボタンを押すと、文字列「許可しない」が
+ * そのまま回答として注入されていた（`runner.ts` の `kind === 'question'`
+ * 分岐は本文をそのまま答えに使うため）。
+ *
+ * **`askedAt` の絶対時刻表示は歯で確かめるが、相対表記（「〜分前」）の文言は
+ * 確かめない。** `formatRelative` は壁時計（`Date.now()`）に依存するため、
+ * 固定の期待値を書くとテスト実行時刻によっては別の帯（分／時間／日）に
+ * 化ける——`vi.useFakeTimers` を導入すれば固定できるが、この画面のテストは
+ * RTL の非同期待ち（`findByText` / `waitFor`）に real timers を前提にした
+ * ものが多く、混ぜるとハングの危険がある（このリポジトリに fake timers を
+ * 使う `apps/web` テストの先例が無いことも踏まえ、今回は避けた）。
+ */
+describe('待ちは kind で質問と実行許可を出し分ける（#334）', () => {
+  const askedAt = '2026-08-23T01:00:00.000Z'; // TZ=Asia/Tokyo で 08/23 10:00
+
+  it('kind: question には本文の入力欄が出て、送るのは人間が書いた文と requestId だけ（decision を送らない）', async () => {
+    const { sent } = renderDetailWithMessages(
+      {
+        ...BASE,
+        status: 'waiting_human',
+        waiting: [
+          { requestId: 'req-q', summary: 'DB はどちらにする？', kind: 'question', askedAt },
+        ],
+      },
+      { outcome: 'answered', detail: '回答として届けた。' },
+    );
+
+    expect(await screen.findByText('DB はどちらにする？')).toBeTruthy();
+    // allow/deny の概念が無いので、許可・拒否ボタンは出ない。
+    expect(screen.queryByRole('button', { name: '許可' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '拒否' })).toBeNull();
+    // 待ち始めた時刻（絶対表記）。書式は既存の startedAt/updatedAt と同じ道具
+    // （`formatDateTime`）で出ている。
+    expect(screen.getByText(/08\/23 10:00/)).toBeTruthy();
+
+    const textarea = screen.getByPlaceholderText('この質問への答えを、自分の言葉で書く');
+    fireEvent.change(textarea, { target: { value: 'PostgreSQL で' } });
+    const button = screen.getByRole('button', { name: '送信' });
+    expect(button.hasAttribute('disabled')).toBe(false);
+    fireEvent.click(button);
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toMatchObject({ method: 'POST' });
+    // **`decision` を送らない。** 本文と requestId だけが乗る
+    // （余計なキーが無いことまで見るため `toEqual` で完全一致にする）。
+    expect(sent[0]?.body).toEqual({ text: 'PostgreSQL で', requestId: 'req-q' });
+  });
+
+  it('question は空文字・空白のみでは送らない', async () => {
+    const { sent } = renderDetailWithMessages({
+      ...BASE,
+      status: 'waiting_human',
+      waiting: [{ requestId: 'req-q', summary: 'DB はどちらにする？', kind: 'question', askedAt }],
+    });
+
+    expect(await screen.findByText('DB はどちらにする？')).toBeTruthy();
+    const textarea = screen.getByPlaceholderText('この質問への答えを、自分の言葉で書く');
+    const button = screen.getByRole('button', { name: '送信' });
+
+    // 空欄のまま押しても disabled なので飛ばない。
+    expect(button.hasAttribute('disabled')).toBe(true);
+    fireEvent.click(button);
+    expect(sent).toHaveLength(0);
+
+    // 空白だけを入れて Cmd/Ctrl+Enter で送っても、`disabled` を経由しない
+    // `submit()` 側の歯（`text.trim() === ''`）が弾く。
+    fireEvent.change(textarea, { target: { value: '   ' } });
+    fireEvent.keyDown(textarea, { key: 'Enter', ctrlKey: true });
+    expect(sent).toHaveLength(0);
+  });
+
+  it('kind: permission は許可・拒否の2ボタンのまま', async () => {
+    const { sent } = renderDetailWithMessages({
+      ...BASE,
+      status: 'waiting_human',
+      waiting: [
+        { requestId: 'req-p', summary: 'Bash の実行許可: ls', kind: 'permission', askedAt },
+      ],
+    });
+
+    expect(await screen.findByText('Bash の実行許可: ls')).toBeTruthy();
+    // 質問用の入力欄は出ない。
+    expect(screen.queryByPlaceholderText('この質問への答えを、自分の言葉で書く')).toBeNull();
+    expect(screen.getByText(/08\/23 10:00/)).toBeTruthy();
+
+    const allow = screen.getByRole('button', { name: '許可' });
+    fireEvent.click(allow);
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    // **今までどおり `decision` を送る。** ここは1文字も変えていない。
+    expect(sent[0]?.body).toEqual({ text: '許可する', requestId: 'req-p', decision: 'allow' });
+  });
+
+  /**
+   * **版のずれの倒れ先。** `packages/api-client` は型だけで実行時検証を
+   * 持たない（`packages/api-client/src/index.ts`）ので、古いデーモン＋新しい
+   * 画面という組み合わせでは実際に `kind` というキー自体が届かないことが
+   * ある。そのときは現状の2ボタン（許可確認）へ倒す——何も消さない、
+   * 安全側の既定（AGENTS.md「型で塞いだ分岐にも、実行時の倒れ先の歯を
+   * 足す」）。
+   */
+  it('kind が届かない（版のずれ）ときは許可確認と同じ2ボタンへ倒れる', async () => {
+    renderDetail({
+      ...BASE,
+      status: 'waiting_human',
+      waiting: [
+        {
+          requestId: 'req-unknown',
+          summary: '種別が来なかった確認',
+          // `kind` を欠いたオブジェクト。型は `ManagerSummary['waiting'][number]`
+          // が `kind` を必須で持つので、実機の版ずれを模すために `as` で
+          // 割り込む——ここが今回のテストの前提そのものである。
+        } as ManagerSummary['waiting'][number],
+      ],
+    });
+
+    expect(await screen.findByText('種別が来なかった確認')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '許可' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '拒否' })).toBeTruthy();
+    expect(screen.queryByPlaceholderText('この質問への答えを、自分の言葉で書く')).toBeNull();
   });
 });
 

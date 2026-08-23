@@ -518,6 +518,39 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
+  /**
+   * **一覧が種別を持つこと自体を測る（#334）。** 直前のテストは「質問への
+   * 回答がそのまま answers に入る」という別の性質を測っており、`kind` の
+   * 値そのものは `toMatchObject` で1回しか通していない。ここでは
+   * `s.pool.list()`（画面・クローンの `manager_list` が読む面そのもの）が
+   * 返す `waiting` を主語にして、質問と実行許可の両方を同時に持たせ、
+   * それぞれが正しい `kind` を名乗ることを見る。
+   */
+  it('AskUserQuestion の待ちは kind: question として一覧に出る / 実行許可の待ちは kind: permission として出る（#334）', async () => {
+    const s = setup();
+    const { managerId } = await s.pool.start({ request: '設計を相談したい' });
+    const session = s.sessions[0] as FakeSession;
+
+    session.ask(
+      'AskUserQuestion',
+      {
+        questions: [
+          { question: 'DB はどちらにする？', header: 'DB', options: [], multiSelect: false },
+        ],
+      },
+      undefined,
+      'req-kind-q',
+    );
+    session.ask('Bash', { command: 'git push' }, undefined, 'req-kind-p');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const waiting = (await s.pool.list()).find((m) => m.managerId === managerId)?.waiting ?? [];
+    expect(waiting.find((item) => item.requestId === 'req-kind-q')?.kind).toBe('question');
+    expect(waiting.find((item) => item.requestId === 'req-kind-p')?.kind).toBe('permission');
+
+    await s.pool.stop();
+  });
+
   it('返事待ちでないときの manager_send は追加指示として届く（会話に戻れる）', async () => {
     const s = setup();
     const { managerId } = await s.pool.start({ request: '調べて' });
@@ -1159,8 +1192,7 @@ describe('デーモン再起動後（M4）', () => {
     const restored = await s.pool.restore();
     expect(restored.map((m) => m.managerId)).toEqual([runningJob.id]);
 
-    const waiting =
-      (await s.pool.list()).find((m) => m.managerId === runningJob.id)?.waiting ?? [];
+    const waiting = (await s.pool.list()).find((m) => m.managerId === runningJob.id)?.waiting ?? [];
     const question = waiting.find((item) => item.requestId === 'req-restart-q');
     const permission = waiting.find((item) => item.requestId === 'req-restart-p');
     expect(question?.kind).toBe('question');

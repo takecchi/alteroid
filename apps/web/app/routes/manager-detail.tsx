@@ -1,9 +1,20 @@
 import { useState } from 'react';
+import type { ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
 
 import { Markdown } from '~/components/markdown';
 import { Page } from '~/components/page';
-import { Badge, Button, Card, CardHeader, Empty, ErrorNote, Input, Spinner } from '~/components/ui';
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  Empty,
+  ErrorNote,
+  Input,
+  Spinner,
+  Textarea,
+} from '~/components/ui';
 import { useAbortManager, useSendManagerMessage } from '~/hooks/mutations';
 import { useManager, useManagerTranscript } from '~/hooks/queries';
 import { formatDateTime, formatRelative } from '~/lib/format';
@@ -217,7 +228,13 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
               <ul>
                 {manager.waiting.map((request) => (
                   <li key={request.requestId} className="border-b border-border last:border-b-0">
-                    <WaitingRow id={id} requestId={request.requestId} summary={request.summary} />
+                    <WaitingRow
+                      id={id}
+                      requestId={request.requestId}
+                      summary={request.summary}
+                      kind={request.kind}
+                      askedAt={request.askedAt}
+                    />
                   </li>
                 ))}
               </ul>
@@ -552,14 +569,41 @@ function DenialsCard({ denials }: { denials: ManagerDenial[] | undefined }) {
   );
 }
 
-function WaitingRow({
+/**
+ * 「◯分前から」の1行。**共通部品にする**——質問・実行許可のどちらの待ちも
+ * 「いつから待っているか」で人間の次の一手が変わる（#323: 報告が何時間も
+ * 遅れても人間には分からない欠陥）。書式は `manager.startedAt` /
+ * `manager.updatedAt` と同じ道具（`formatDateTime` + `formatRelative`）を
+ * 使う——新しい書式を自分で作らない。
+ *
+ * **`askedAt` が届かないときは何も描かない。** `kind` と同じ理由（版のずれで
+ * 古いデーモンが未知のフィールドを持たないことがある）で、無いことを空欄
+ * 以外の形で嘘つかない——「不明」と書くほどではない付随情報なので、無ければ
+ * 単に出さない。
+ */
+function AskedAtNote({ askedAt }: { askedAt: string | undefined }) {
+  if (askedAt === undefined) return null;
+  return (
+    <p className="mt-1 text-xs text-muted">
+      {formatDateTime(askedAt)}（{formatRelative(askedAt)}）から
+    </p>
+  );
+}
+
+/**
+ * **`kind === 'permission'` の見た目（許可／拒否の2ボタン）。1文字も変えて
+ * いない**（`askedAtNote` の差し込みを除く。Issue #334 の指示どおり）。
+ */
+function PermissionWaitingRow({
   id,
   requestId,
   summary,
+  askedAtNote,
 }: {
   id: string;
   requestId: string;
   summary: string;
+  askedAtNote: ReactNode;
 }) {
   const send = useSendManagerMessage();
   const [busy, setBusy] = useState(false);
@@ -580,6 +624,7 @@ function WaitingRow({
   return (
     <div className="px-4 py-3">
       <p className="text-sm">{summary}</p>
+      {askedAtNote}
       <div className="mt-2 flex items-center gap-2">
         <Button size="sm" variant="primary" loading={busy} onClick={() => answer('allow')}>
           許可
@@ -590,6 +635,131 @@ function WaitingRow({
       </div>
       <ErrorNote error={failure} className="mt-2" />
     </div>
+  );
+}
+
+/**
+ * **`kind === 'question'` の見た目。** `AskUserQuestion` には allow / deny が
+ * 無いので、人間が自分の言葉で書いた本文を送る。**`decision` は付けない** —
+ * `runner.ts` の `kind === 'question'` 分岐は `answer.decision` を一度も読まず
+ * （`withAnswers` が本文をそのまま答えに使う）、付けると日誌に `[allow]` の
+ * 接頭辞だけが残って嘘になる（Issue #334 の doc）。
+ *
+ * 送信欄は `approvals.tsx` の回答欄と同じ道具・同じ操作系に揃える
+ * （`Textarea` + Cmd/Ctrl+Enter で送信）——このリポジトリで唯一の「人間が
+ * マネージャーへ自由文を返す」画面と、操作感を分けない。
+ */
+function QuestionWaitingRow({
+  id,
+  requestId,
+  summary,
+  askedAtNote,
+}: {
+  id: string;
+  requestId: string;
+  summary: string;
+  askedAtNote: ReactNode;
+}) {
+  const send = useSendManagerMessage();
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<unknown>(undefined);
+
+  function submit() {
+    // **空文字・空白のみでは送らない。** ボタンの `disabled` だけに頼らない
+    // （Cmd/Ctrl+Enter でもここへ来る）。
+    if (text.trim() === '') return;
+    setBusy(true);
+    setFailure(undefined);
+    // **`decision` を付けない。** 質問に allow/deny は無い。
+    send(id, { text, requestId })
+      .then(() => setText(''))
+      .catch(setFailure)
+      .finally(() => setBusy(false));
+  }
+
+  return (
+    <div className="px-4 py-3">
+      <p className="text-sm">{summary}</p>
+      {askedAtNote}
+      <div className="mt-2">
+        <Textarea
+          rows={2}
+          value={text}
+          placeholder="この質問への答えを、自分の言葉で書く"
+          disabled={busy}
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={(event) => {
+            // 長文になりうるので Enter は改行のまま。送信は Cmd/Ctrl+Enter。
+            if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+              event.preventDefault();
+              submit();
+            }
+          }}
+        />
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            variant="primary"
+            loading={busy}
+            disabled={text.trim() === ''}
+            onClick={submit}
+          >
+            送信
+          </Button>
+          <span className="text-[11px] text-muted">⌘/Ctrl + Enter</span>
+        </div>
+      </div>
+      <ErrorNote error={failure} className="mt-2" />
+    </div>
+  );
+}
+
+/**
+ * 1件の待ち——質問（`AskUserQuestion`）か実行許可かで見た目を出し分ける
+ * （Issue #334。かつては区別できず、質問に拒否を押すと文字列「許可しない」
+ * が回答として注入されていた）。
+ *
+ * **`kind` が `'question'` 以外はすべて実行許可として扱う。** 型の上では
+ * `'question' | 'permission'` の2値だが、`packages/api-client` は型だけで
+ * 実行時検証を持たない（`packages/api-client/src/index.ts`）——古いデーモン
+ * ＋新しい画面という版のずれで、実際には `undefined` や未知の文字列が届き
+ * うる（AGENTS.md「型で塞いだ分岐にも、実行時の倒れ先の歯を足す」）。**倒れ
+ * 先は現状の2ボタン（許可確認）——何も消さない、安全側の既定。**
+ */
+function WaitingRow({
+  id,
+  requestId,
+  summary,
+  kind,
+  askedAt,
+}: {
+  id: string;
+  requestId: string;
+  summary: string;
+  kind: ManagerSummary['waiting'][number]['kind'] | undefined;
+  askedAt: string | undefined;
+}) {
+  const askedAtNote = <AskedAtNote askedAt={askedAt} />;
+
+  if (kind === 'question') {
+    return (
+      <QuestionWaitingRow
+        id={id}
+        requestId={requestId}
+        summary={summary}
+        askedAtNote={askedAtNote}
+      />
+    );
+  }
+
+  return (
+    <PermissionWaitingRow
+      id={id}
+      requestId={requestId}
+      summary={summary}
+      askedAtNote={askedAtNote}
+    />
   );
 }
 
