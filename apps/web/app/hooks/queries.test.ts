@@ -68,6 +68,82 @@ describe('summarizeJournalEntry — worker_wait', () => {
   });
 });
 
+describe('summarizeJournalEntry — memory_update', () => {
+  it('action と前後バイト数を出す（新形式）', () => {
+    const entry: JournalEntry = {
+      type: 'memory_update',
+      id: 'mu-new',
+      at: '2026-08-23T10:00:00.000Z',
+      slug: 'values',
+      cause: 'clone',
+      action: 'write',
+      bytesBefore: 12,
+      bytesAfter: 34,
+      summary: '価値観を書いた',
+    };
+    const summary = summarizeJournalEntry(entry);
+    expect(summary).toContain('write');
+    expect(summary).toContain('12→34 バイト');
+  });
+
+  it('bytesBefore が実際に0のときは「不明」ではなく 0 をそのまま出す（新規作成）', () => {
+    const entry: JournalEntry = {
+      type: 'memory_update',
+      id: 'mu-created',
+      at: '2026-08-23T10:00:00.000Z',
+      slug: 'new-doc',
+      cause: 'clone',
+      action: 'write',
+      bytesBefore: 0,
+      bytesAfter: 34,
+      summary: '新規作成',
+    };
+    const summary = summarizeJournalEntry(entry);
+    expect(summary).toContain('0→34 バイト');
+    expect(summary).not.toContain('不明');
+  });
+
+  it('action / バイト数を持たない古いエントリは「不明」と明示し、0 とは出さない', () => {
+    const entry: JournalEntry = {
+      type: 'memory_update',
+      id: 'mu-old',
+      at: '2026-08-19T10:00:00.000Z',
+      slug: 'values',
+      cause: 'human',
+      summary: '昔の更新',
+    };
+    const summary = summarizeJournalEntry(entry);
+    expect(summary).not.toMatch(/[^→]0 バイト/);
+    expect(summary).not.toContain('0→0 バイト');
+    expect(summary).toContain('不明');
+  });
+
+  it('バイト数（機械可読）と summary に埋め込まれた文字数（自由文）が同じ節に混在しない', () => {
+    // memory_delete の summary は「（削除直前 N 文字）」を埋め込む
+    // （tools.ts の memory_delete）。この関数が新しく足すバイトの注記は
+    // 構造化された括弧の中に置き、自由文の summary はコロンの後ろへ分ける。
+    const entry: JournalEntry = {
+      type: 'memory_update',
+      id: 'mu-delete',
+      at: '2026-08-23T10:00:00.000Z',
+      slug: 'temp-note',
+      cause: 'clone',
+      action: 'remove',
+      bytesBefore: 42,
+      bytesAfter: 0,
+      summary: '片付け（削除直前 40 文字）',
+    };
+    const summary = summarizeJournalEntry(entry);
+    const beforeColon = summary.slice(0, summary.indexOf(': '));
+    const afterColon = summary.slice(summary.indexOf(': ') + 2);
+    // バイトの注記（構造化）はコロンより前、文字数を含む自由文はコロンより後。
+    expect(beforeColon).toContain('42→0 バイト');
+    expect(beforeColon).not.toContain('文字');
+    expect(afterColon).toContain('40 文字');
+    expect(afterColon).not.toContain('バイト');
+  });
+});
+
 describe('summarizeJournalEntry — turn_usage', () => {
   it('cache read/write を潰さない', () => {
     const entry: JournalEntry = {
