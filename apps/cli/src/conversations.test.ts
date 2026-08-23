@@ -145,6 +145,43 @@ describe('alteroid conversations list', () => {
 
     expect(read()).toContain('読めませんでした');
   });
+
+  /**
+   * #326: `renderConversationsList` 自体は改行で終わらずに返す（それは
+   * `mutate-selftest.mjs` が固定している仕様）。呼び出し側（ここ）が `\n` を
+   * 足すことで、端末の次のプロンプトや後続の書き込みが最終行へ食い込まない。
+   */
+  it('出力は改行で終わる（#326）', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: {
+        conversations: [
+          {
+            conversationId: 'conv-1',
+            startedAt: '2026-08-16T10:00:00.000Z',
+            updatedAt: '2026-08-16T10:05:00.000Z',
+            messages: 3,
+            preview: '設計の相談',
+          },
+        ],
+        scanned: 512,
+      },
+    });
+
+    await conversationsListCommand();
+
+    expect(read().endsWith('\n')).toBe(true);
+  });
+
+  it('空の一覧でも出力は改行で終わる（#326）', async () => {
+    const read = captureStdout();
+    replies.push({ status: 200, body: { conversations: [], scanned: 0 } });
+
+    await conversationsListCommand();
+
+    expect(read().endsWith('\n')).toBe(true);
+  });
 });
 
 describe('alteroid conversations show', () => {
@@ -216,5 +253,41 @@ describe('alteroid conversations show', () => {
     await conversationsShowCommand('conv-missing');
 
     expect(read()).toContain('そんな会話はありません: conv-missing');
+  });
+
+  /**
+   * #326: `renderConversationDetail` 自体は改行で終わらずに返す（それは
+   * `mutate-selftest.mjs` が固定している仕様）。呼び出し側（ここ）が `\n` を
+   * 足すことで、次に書かれるものが最終行へ食い込まない（#314 で実際に融合した）。
+   */
+  it('出力は改行で終わる（#326）', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: {
+        conversationId: 'conv-1',
+        messages: [
+          { id: 'm1', at: '2026-08-16T10:00:00.000Z', role: 'inbound', text: '設計どうする？' },
+        ],
+        scanned: 88,
+        reachedStart: true,
+      },
+    });
+
+    await conversationsShowCommand('conv-1');
+
+    expect(read().endsWith('\n')).toBe(true);
+  });
+
+  it('発言が無い会話でも出力は改行で終わる（#326）', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: { conversationId: 'conv-1', messages: [], scanned: 2000, reachedStart: false },
+    });
+
+    await conversationsShowCommand('conv-1');
+
+    expect(read().endsWith('\n')).toBe(true);
   });
 });
