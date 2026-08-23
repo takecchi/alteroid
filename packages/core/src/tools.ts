@@ -26,14 +26,19 @@ import {
   applyMemoryFrontmatterPatch,
   assertNeverMemoryProtectionStatus,
   containsMemoryFrontmatterLineBreak,
+  cutMemorySection,
   describeMemoryWriteDiff,
   formatMemoryCreatedAt,
   isKnownMemoryDocKind,
+  lookupMemorySection,
   parseMemoryFrontmatter,
   renderMemoryDocuments,
   renderMemoryListing,
+  renderMemoryOutline,
   resolveMemoryDocKind,
+  scanMemorySections,
 } from './memory.js';
+import type { MemorySectionLookup } from './memory.js';
 import type { ProfileService } from './profile-service.js';
 import {
   RESERVED_SCHEDULE_KINDS,
@@ -160,6 +165,8 @@ export const CLONE_TOOL_NAMES = [
   'memory_append',
   'memory_delete',
   'memory_frontmatter_set',
+  'memory_outline',
+  'memory_section_move',
   'journal_write',
   'journal_read',
   'conversation_read',
@@ -530,8 +537,45 @@ export function resolveMemoryGuard(env: NodeJS.ProcessEnv = process.env): Memory
 }
 
 /**
+ * 歯が掛かる操作の名前。**この union に値を足したら `denialMessage` の
+ * `switch` が `tsc` で落ちる**（`assertNeverMemoryGuardAction`）。
+ *
+ * ## ⚠️ 落ちるようになったのは #318 案 (b) からである。それ以前は落ちなかった
+ *
+ * この型に3つ目（`'frontmatter の更新'`）を足した時点の `denialMessage` は
+ * 「代わりに使えるもの」と `ask_human` の文言を**三項演算子**
+ * （`action === 'frontmatter の更新' ? A : B`）で分けていた。**三項演算子は
+ * union が広がっても落ちない**——新しい値は黙って `B`（`memory_write` /
+ * `memory_delete` 向けの文言）へ倒れる。実測（この repo の `main` =
+ * `fba5289c`、`packages/core` の `tsc --noEmit`）: この union に
+ * `| '節の移動'` を足しただけで `denialMessage` に1行も足さずに typecheck を
+ * 通すと **exit 0** だった。**「型の側に既に歯が在る」は、当時は事実では
+ * なかった。**
+ *
+ * **黙って倒れた先は嘘になる。** 節の移動で断られた呼び手に
+ * 「`memory_append` を使えば失いたくないものは足せる」とだけ返すのは、
+ * 「移す」という要求に対して答えになっていない。**だから `switch` に
+ * 書き換えて、型の側に本当に歯を置いた。**
+ */
+type MemoryGuardAction = '全文置換' | '削除' | 'frontmatter の更新' | '節の移動';
+
+/** `MemoryGuardAction` の網羅性を型で強制する（`assertNever*` の系）。 */
+function assertNeverMemoryGuardAction(action: never): never {
+  throw new Error(`未知の歯の対象: ${JSON.stringify(action)}`);
+}
+
+/**
  * `memory_write`（全文置換）・`memory_delete`・`memory_frontmatter_set`
- * （#318 案 (a)。frontmatter のキーだけの差し替え）の歯そのもの。
+ * （#318 案 (a)。frontmatter のキーだけの差し替え）・`memory_section_move`
+ * （#318 案 (b)。節を別の文書へ移す）の歯そのもの。
+ *
+ * ## `memory_section_move` がここを通る理由
+ *
+ * **「移す」であって「消す」ではないが、*出どころの文書からは節が消える*。**
+ * 移した先に同じ本文が在ることは、出どころの文書を元に戻す手段にはならない
+ * （文書の形も文脈も変わっている）。**だから守りの対象である**——統合の
+ * 走行からは、人間が書いた文書の節を動かせない。**移した先（`toSlug`）には
+ * 歯を掛けない**（追記なので。`memory_append` がここを通らないのと同じ線）。
  *
  * **判定軸は「保護状態 × 書き手」だけである。量（文字数の減少率）では判定しない**
  * — 蒸留は正当な運用として大きく畳むことがあり、量では意図を分離できない
@@ -556,7 +600,7 @@ async function guardFullReplace(
   stores: Stores,
   slug: string,
   cause: 'distill' | 'clone',
-  action: '全文置換' | '削除' | 'frontmatter の更新',
+  action: MemoryGuardAction,
 ): Promise<string | null> {
   if (cause !== 'distill') return null;
   if (resolveMemoryGuard() === 'off') return null;
@@ -592,12 +636,18 @@ async function guardFullReplace(
  * になる——追記は既存を消さないので、失いたくないだけならそちらで足りる。
  * **`frontmatter の更新`（`memory_frontmatter_set`）ではこれが効かない**
  * ——要旨や区分を直したい人に「本文の末尾に追記せよ」と勧めても意味が無い。
- * ここだけ別の文言にする。
+ * **`節の移動`（`memory_section_move`）では半分しか効かない**——移し先へ
+ * 写すことは追記でできるが、出どころから節を消すことはできない。ここも
+ * 別の文言にする。
+ *
+ * **⚠️ 3つとも `switch` で書く。三項演算子に戻さないこと。** `action` の
+ * union に値を足したときに落ちるのはこの `switch` だけで、三項演算子は
+ * 黙って `else` 側へ倒れる（`MemoryGuardAction` の doc に実測が在る）。
  */
 function denialMessage(
   slug: string,
   status: Extract<MemoryProtectionStatus, { kind: 'human' | 'unknown' }>,
-  action: '全文置換' | '削除' | 'frontmatter の更新',
+  action: MemoryGuardAction,
 ): string {
   const reason =
     status.kind === 'human'
@@ -605,23 +655,47 @@ function denialMessage(
       : `この文書の書き込みの履歴が確認できない（保護状態: unknown。索引が無い・外から書き換えられた` +
         `可能性がある、などのときにここへ倒す——不明を「人間は書いていない」とは読まず、守る側へ倒す）`;
 
-  const alternative =
-    action === 'frontmatter の更新'
-      ? 'memory_append（追記）はここでは代わりにならない——追記は本文の末尾に文字列を足すだけで、' +
-        'frontmatter のキー（description / type / parent）は直せない。'
-      : 'memory_append（追記）はこの歯の対象ではなく、断られない。失いたくないだけならそちらを使うこと。';
+  const alternative = ((): string => {
+    switch (action) {
+      case '全文置換':
+      case '削除':
+        return 'memory_append（追記）はこの歯の対象ではなく、断られない。失いたくないだけならそちらを使うこと。';
+      case 'frontmatter の更新':
+        return (
+          'memory_append（追記）はここでは代わりにならない——追記は本文の末尾に文字列を足すだけで、' +
+          'frontmatter のキー（description / type / parent）は直せない。'
+        );
+      case '節の移動':
+        return (
+          'memory_append（追記）はこの歯の対象ではないので、移し先の文書へ本文を写すことだけは断られない' +
+          '——ただし出どころの文書から節を消すことはできないので、写した後は同じ本文が2箇所に残る。' +
+          '失いたくないだけならそれで足りる。'
+        );
+      default:
+        return assertNeverMemoryGuardAction(action);
+    }
+  })();
 
-  // **`frontmatter の更新` だけ文を組み替える。** 「記憶 slug を frontmatter の
-  // 更新したい」は助詞が壊れる（「〜を全文置換したい」「〜を削除したい」と違い、
-  // 「更新」の対象は記憶そのものではなく frontmatter のほうだから）。
-  const askHumanHint =
-    action === 'frontmatter の更新'
-      ? `本当に frontmatter の更新が必要だと判断したら、ask_human に「記憶 ${slug} の frontmatter を更新したい。` +
-        '理由: 〈ここに理由〉」のように積むこと。人間の回答が届いた後の次のターンで、同じ操作をやり直せば実行できる' +
-        '（この場・このターンではやり直せない）。'
-      : `本当に${action}が必要だと判断したら、ask_human に「記憶 ${slug} を${action}したい。理由: ` +
-        '〈ここに理由〉」のように積むこと。人間の回答が届いた後の次のターンで、同じ操作をやり直せば実行できる' +
-        '（この場・このターンではやり直せない）。';
+  // **助詞が壊れる口だけ文を組み替える。** 「記憶 slug を frontmatter の
+  // 更新したい」「記憶 slug を節の移動したい」は日本語として壊れる
+  // （「〜を全文置換したい」「〜を削除したい」と違い、対象が記憶そのもの
+  // ではないから）。
+  const askHumanHint = ((): string => {
+    const tail =
+      '」のように積むこと。人間の回答が届いた後の次のターンで、同じ操作をやり直せば実行できる' +
+      '（この場・このターンではやり直せない）。';
+    switch (action) {
+      case '全文置換':
+      case '削除':
+        return `本当に${action}が必要だと判断したら、ask_human に「記憶 ${slug} を${action}したい。理由: 〈ここに理由〉${tail}`;
+      case 'frontmatter の更新':
+        return `本当に frontmatter の更新が必要だと判断したら、ask_human に「記憶 ${slug} の frontmatter を更新したい。理由: 〈ここに理由〉${tail}`;
+      case '節の移動':
+        return `本当に節の移動が必要だと判断したら、ask_human に「記憶 ${slug} から節を1つ別の文書へ移したい。理由: 〈ここに理由〉${tail}`;
+      default:
+        return assertNeverMemoryGuardAction(action);
+    }
+  })();
 
   return [
     `記憶 ${slug} への${action}を、統合の走行（distill）から断った。`,
@@ -630,6 +704,63 @@ function denialMessage(
     alternative,
     askHumanHint,
   ].join(' ');
+}
+
+/** `MemorySectionLookup` の網羅性を型で強制する（`assertNever*` の系）。 */
+function assertNeverMemorySectionLookup(lookup: never): never {
+  throw new Error(`未知の節の照合結果: ${JSON.stringify(lookup)}`);
+}
+
+/**
+ * 節id が1つに決まらなかったときの断り文。
+ *
+ * ## ⚠️ 3つを同じ「見つかりません」に畳まないこと。**疑う先が違う**
+ *
+ * | 断り | 意味 | 呼び手が次にやること |
+ * | --- | --- | --- |
+ * | **そんな id は無い** | 打ち間違い／別の文書／見出しごと書き換えられた | 文書を確かめる |
+ * | **その id は古い** | **誰かが中身を書き換えた** | `memory_outline` を取り直す |
+ * | **曖昧である** | 中身まで同一の節が複数在る | 別の指し方をする（節を書き分ける） |
+ *
+ * 畳むと、**いちばん重い「誰かが書き換えた」が「打ち間違い」に見える。**
+ * 呼び手は同じ id をもう一度打ちに行き、また断られる——そのあいだ、本当に
+ * 起きたこと（並行編集）は一度も観測されない。判定の材料は
+ * `memorySectionId` の doc に在る。
+ *
+ * **曖昧なときに「どちらか」を選ばない。** 片方を黙って選ぶと、**消える側が
+ * 観測できない**（応答は「移した」としか言わない）。稀で、しかも正直な
+ * 断りである。
+ */
+function describeMemorySectionLookupFailure(
+  slug: string,
+  id: string,
+  lookup: Exclude<MemorySectionLookup, { kind: 'found' }>,
+): string {
+  switch (lookup.kind) {
+    case 'absent':
+      return (
+        `記憶 ${slug} に節id ${id} の節は無い。打ち間違いか、別の文書の節id か、` +
+        '見出しごと書き換えられたかのどれかである。memory_outline で目次を取り直すこと' +
+        '（何も変わっていない）。'
+      );
+    case 'stale':
+      return (
+        `節id ${id} は古い。記憶 ${slug} に同じ見出しの節は在るが、中身のハッシュが違う——` +
+        `**この目次を読んだ後で、誰かがこの節を書き換えている。** 節id は指し先であると同時に版の照合` +
+        `なので、ここで断って上書きを防いでいる。memory_outline で ${slug} の目次を取り直し、` +
+        '中身を確かめてから新しい節id でやり直すこと（何も変わっていない）。'
+      );
+    case 'ambiguous':
+      return (
+        `節id ${id} は記憶 ${slug} の中で ${lookup.sections.length} 箇所に当たる` +
+        '（見出しも中身も完全に同一の節が複数ある）。**どちらかを選ばずに断る**——' +
+        '黙って一方を選ぶと、消えた側を後から観測する手段が無い。' +
+        'どちらか一方の中身を先に書き分けてから（memory_write で1行足すなど）やり直すこと' +
+        '（何も変わっていない）。'
+      );
+    default:
+      return assertNeverMemorySectionLookup(lookup);
+  }
 }
 
 /** ツール定義そのもの。MCP の配線を通さずに単体テストできるよう分けてある。 */
@@ -1013,6 +1144,233 @@ export function createCloneTools(context: ToolContext) {
                 : '次のターンから、この文書の本文はプロンプトへ全文が載る。');
 
         return text(`記憶 ${slug} の frontmatter を更新した。\n\n${diff}${kindChangeNote}`);
+      },
+    ),
+
+    /**
+     * 記憶の文書の目次（節id・見出し・各節の文字数）を返す口
+     * （#318 案 (b) の片方）。**読むだけである。**
+     *
+     * **なぜ要るか。** `fact` の文書はプロンプトへ目次の1行しか載らないので、
+     * その中の節を指す材料が手元に無い。`memory_read` で読めば材料は手に
+     * 入るが、**そのために文書の全文が文脈へ入る**——`MEMORY_PAGE` は
+     * 8,000 文字なので、大きな文書ほど何回も呼ぶことになり、
+     * `memory_section_move` が避けようとした形そのものになる。
+     *
+     * **歯も守りも要らない。** 何も書き換えないので `guardFullReplace` を
+     * 呼ばない（`memory_list` / `memory_read` と同じ線）。
+     *
+     * **本文は1文字も返さない。** `memory_delete` が本文を日誌へ写さないのと
+     * 同じ判断（AGENTS.md「秘密の扱い」— 記憶の中身を別の場所へ増やさない）。
+     * ここで本文を返すと、この道具を呼ぶこと自体が「文脈へ入れずに構造を
+     * 見る」という存在理由を潰す。
+     *
+     * **`malformed` な frontmatter でも目次は返す。** 読むだけなので断る
+     * 理由が無い（能力を消さない側）。ただし `memory_section_move` はその
+     * 文書を断るので、**そのことを応答に書く**——目次だけ読めて移動だけ
+     * 断られると、呼び手には理由が見えない。
+     */
+    tool(
+      'memory_outline',
+      [
+        '記憶の文書の目次を返す（読むだけ。1文字も書き換えない）。',
+        '各行は `[節id] 見出し行 — N 文字` で、インデントが見出しの深さを表す。文字数は入れ子の子を含むので、その節を動かしたときに動く量がそのまま出る。',
+        '本文は1文字も返さない（本文が要るなら memory_read）。frontmatter の行も出ない。',
+        '節id は memory_section_move の指し先であると同時に、その節の版の照合でもある——中身が変われば id も変わるので、目次を読んでから移すまでの間に誰かがその節を書き換えていたら断られる。移す直前に取り直すこと。',
+        '中身まで同一の節が2つあると id が衝突する。その行には印が付き、その id では動かせない。',
+      ].join(' '),
+      {
+        slug: z.string().describe('文書のスラッグ（拡張子なし）'),
+      },
+      async ({ slug }) => {
+        const doc = await stores.persona.read(slug);
+        if (doc === null) return text(`記憶 ${slug} は存在しない。`);
+        const { sections } = scanMemorySections(doc.content);
+        const malformedNote =
+          parseMemoryFrontmatter(doc.content).kind === 'malformed'
+            ? '\n\n⚠この文書の frontmatter は壊れている（malformed）。目次はこのまま読めるが、' +
+              'memory_section_move はこの文書を断る（memory_write で全文を書き直すか、人間に確認を通すこと）。'
+            : '';
+        return text(
+          `記憶 ${slug} の目次（${sections.length} 節）。本文は含まない。\n\n` +
+            `${renderMemoryOutline(sections)}${malformedNote}`,
+        );
+      },
+    ),
+
+    /**
+     * 節id で指した節を、別の文書の末尾へ移す口（#318 案 (b)）。
+     *
+     * ## この口の存在理由 — **本文が0文字である**
+     *
+     * 大きな `premise` の文書を「小さな芯 + 付録の `fact`」へ割るには、
+     * 節を別の文書へ動かす必要がある。いまその手段は「新しい文書へ
+     * `memory_write` で書き写す → 元を全文置換で縮める」しかなく、**両方の
+     * 呼び出しに本文が現れる**（3万文字級）。記憶には控えも履歴も無いので、
+     * 途中で切れても突き合わせる相手が無い。
+     *
+     * **この口は、本文がツール呼び出しにも応答にも一度も現れない（0文字）。**
+     * `memory_frontmatter_set` が持っていた「切れることが起こりえない」と
+     * 同じ性質である。歯（`tools.test.ts`）が、節に置いた目印の文字列が
+     * 応答に1文字も出ないことを測っている。
+     *
+     * ## ⚠️ 順序は「先に足して、後で消す」
+     *
+     * **`PersonaStore` に2文書をまたぐトランザクションは無い。** だから
+     * 途中で落ちる可能性は消せない——消せるのは**どちらへ倒れるか**だけで
+     * ある。先に足して後で消せば、途中で落ちたときに残るのは**重複**で
+     * ある（同じ節が両方に在る）。逆順にすると、落ちたときに残るのは
+     * **消失**である。**失う側に倒れない。**
+     *
+     * 落ちたときは、そのことを名乗って返す——「移した」とだけ返すと、
+     * 呼び手は重複に気づけない。歯が `tools.test.ts` に在る。
+     *
+     * ## 守り
+     *
+     * **`guardFullReplace` をそのまま呼ぶ。判定を書き直さない**
+     * （`guardFullReplace` の doc）。**「移す」であって「消す」ではないが、
+     * 出どころの文書からは節が消える**ので守りの対象である。移した先には
+     * 掛けない（追記なので。`memory_append` と同じ線）。
+     *
+     * ## frontmatter を触らないことは3層で守る
+     *
+     * 1. **指す値が存在しない。** 節id は `memoryBodyStart` より後ろの
+     *    見出しにしか発行されない（`scanMemorySections`）。frontmatter を
+     *    名指しする値がそもそも無い——行番号方式・オフセット方式を採らな
+     *    かった理由がここである
+     * 2. **組み立ては継ぎ足し。** `cutMemorySection` は `slice` を2つ繋ぐ
+     *    だけで、**frontmatter のバイト列は添字で運ばれるだけで一度も
+     *    書き直されない**（`serializeMemoryFrontmatter` を通さないので、
+     *    キーの順序の正規化すら起きない）
+     * 3. **書き込み前に確かめる。** frontmatter のバイト列が同一であることと
+     *    `parseMemoryFrontmatter().kind` が変わっていないことを検査し、
+     *    外れたら**断って何も書かない**
+     *
+     * **3層目が要る理由は具体的である。** frontmatter を持たない文書
+     * （`kind: 'none'`）の最初の節を切り取ると、その後ろに `---` で始まる
+     * 塊が在った場合、**残りが frontmatter として解釈され始める**
+     * （`'none'` → `'parsed'` / `'malformed'`）。1層目と2層目は
+     * 「frontmatter を書き換えない」ことしか守っておらず、**「本文だった
+     * ものが frontmatter に化ける」はそこをすり抜ける。**
+     */
+    tool(
+      'memory_section_move',
+      [
+        'memory_outline が出した節id で指した節を、別の文書の末尾へ移す（切り取って足す）。移し先が無ければ作る。',
+        '本文はこの呼び出しにも応答にも一度も現れない（0文字）——これがこの道具の存在理由である。大きな文書を割るのに本文を作り直さなくてよい。',
+        '節の範囲は見出し行から「同じ深さ以下の次の見出しの直前」までで、入れ子の子は一緒に動く。frontmatter は節ではないので指せない。',
+        '先に移し先へ足し、後から出どころを消す——途中で落ちれば同じ節が両方に残る（重複するが、失われない）。そのときはそう返る。',
+        '断るのは5つ: from と to が同じ／その id の節が無い／その id は古い（中身が書き換えられた。memory_outline を取り直すこと）／中身まで同じ節が複数あって id が曖昧（どちらかを選ばずに断る）／frontmatter が壊れている。',
+        '**統合の走行（distill）からは、人間が一度でも書いた文書・履歴の無い文書からは節を移せない**',
+        '（断られる。ask_human で人間に確認を通せば次のターンで実行できる）。会話の中の移動は通る。移し先には歯が掛からない（追記なので）。',
+      ].join(' '),
+      {
+        fromSlug: z.string().describe('節を切り取る側の文書のスラッグ'),
+        section: z.string().describe('memory_outline が出した節id（`[...]` の中身）'),
+        toSlug: z.string().describe('節を足す側の文書のスラッグ（無ければ作る）'),
+        summary: z.string().describe('なぜ移したかの一行要約（日誌に残る。本文は残らない）'),
+      },
+      async ({ fromSlug, section, toSlug, summary }) => {
+        if (fromSlug === toSlug) {
+          return text(
+            `from と to が同じ文書（${fromSlug}）である。節の移動先は別の文書でなければならない` +
+              '（同じ文書の中で節を動かす口はここには無い）。何も変わっていない。',
+          );
+        }
+
+        const existing = await stores.persona.read(fromSlug);
+        if (existing === null) {
+          return text(`記憶 ${fromSlug} は存在しない（節を移せない。何も変わっていない）。`);
+        }
+
+        const cause = memoryCause();
+        const denial = await guardFullReplace(stores, fromSlug, cause, '節の移動');
+        if (denial !== null) return text(denial);
+
+        const priorFrontmatter = parseMemoryFrontmatter(existing.content);
+        if (priorFrontmatter.kind === 'malformed') {
+          return text(
+            `記憶 ${fromSlug} の frontmatter が壊れている（malformed）。ここでは節を移さない——` +
+              '本文の始まる位置が決まらないので、frontmatter を本文として運ぶ経路ができる。' +
+              'memory_write で全文を書き直すか、人間に確認を通すこと（何も変わっていない）。',
+          );
+        }
+
+        const scan = scanMemorySections(existing.content);
+        const lookup = lookupMemorySection(scan.sections, section);
+        if (lookup.kind !== 'found') {
+          return text(describeMemorySectionLookupFailure(fromSlug, section, lookup));
+        }
+        const target = lookup.section;
+        const { nextContent, cut } = cutMemorySection(existing.content, target);
+
+        // **第3層。** 1層目（指す値が存在しない）と2層目（継ぎ足し）を
+        // すり抜ける形が1つある——「本文だったものが frontmatter に化ける」。
+        // 上の doc を読むこと。**外れたら何も書かない。**
+        const priorHeader = existing.content.slice(0, scan.bodyStart);
+        const nextHeader = nextContent.slice(0, scan.bodyStart);
+        const nextFrontmatter = parseMemoryFrontmatter(nextContent);
+        if (nextHeader !== priorHeader || nextFrontmatter.kind !== priorFrontmatter.kind) {
+          return text(
+            `記憶 ${fromSlug} からこの節を切り取ると、frontmatter の解釈が変わってしまう` +
+              `（${priorFrontmatter.kind} → ${nextFrontmatter.kind}）。断った——この道具は` +
+              'frontmatter を1バイトも動かさないと約束しているので、約束が破れる切り取りは行わない。' +
+              '何も変わっていない（出どころも移し先も、1文字も動いていない）。',
+          );
+        }
+
+        // **先に足して、後で消す。** 上の doc「順序」を読むこと。
+        const toBefore = await stores.persona.read(toSlug);
+        const toWritten = await stores.persona.append(toSlug, cut);
+        await stores.journal.append({
+          type: 'memory_update',
+          slug: toSlug,
+          cause,
+          action: 'move_in',
+          bytesBefore: toBefore === null ? 0 : Buffer.byteLength(toBefore.content, 'utf8'),
+          bytesAfter: Buffer.byteLength(toWritten.content, 'utf8'),
+          summary,
+        });
+
+        let fromWritten;
+        try {
+          fromWritten = await stores.persona.write(fromSlug, nextContent);
+        } catch (error) {
+          // **ここで嘘をつかない。** 「移した」と返すと、呼び手は重複に
+          // 気づけない。落ちたのは2手目なので、1手目（移し先への追記）は
+          // 済んでいる＝**同じ節が両方に在る。何も失われていない。**
+          return text(
+            `⚠ 節「${target.heading}」を ${toSlug} の末尾へ足すところまでは済んだが、` +
+              `${fromSlug} からの切り取りに失敗した（${error instanceof Error ? error.message : String(error)}）。` +
+              `いま同じ節が ${fromSlug} と ${toSlug} の両方に在る——**重複しているが、失われてはいない。**` +
+              `${fromSlug} 側は1文字も変わっていない。memory_outline で ${fromSlug} を読み直し、` +
+              '同じ操作をやり直すか、重複したままにするかを決めること。',
+          );
+        }
+        await stores.journal.append({
+          type: 'memory_update',
+          slug: fromSlug,
+          cause,
+          action: 'move_out',
+          bytesBefore: Buffer.byteLength(existing.content, 'utf8'),
+          bytesAfter: Buffer.byteLength(fromWritten.content, 'utf8'),
+          summary,
+        });
+
+        // **古い本文を1文字も出さない。** 出せば文脈に入る（この道具の
+        // 存在理由が消える）。名指しするのは見出しと節id だけ——呼び手が
+        // 「意図した節か」を確かめるのに要る最小限である。
+        return text(
+          [
+            `記憶 ${fromSlug} の節「${target.heading}」（節id ${target.id}、${target.chars.toLocaleString('en-US')} 文字）を ${toSlug} の末尾へ移した。`,
+            '',
+            `移した先 ${toSlug}:`,
+            describeMemoryWriteDiff(toBefore === null ? null : toBefore.content, toWritten.content),
+            '',
+            `出どころ ${fromSlug}:`,
+            describeMemoryWriteDiff(existing.content, fromWritten.content),
+          ].join('\n'),
+        );
       },
     ),
 

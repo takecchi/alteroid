@@ -517,8 +517,39 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * するので `describe` は自動で対象外——`memory_frontmatter_set` は
      * 文書を作らない口なので、これは正しい）、`dropped-record.ts`（文字列に
      * 混ぜるだけ）。網羅的に分岐する `switch` は無い。
+     *
+     * **`'move_in'` / `'move_out'`** — `memory_section_move`（#318 案 (b)）が
+     * 節を1つ、別の文書へ移したときに書く。**1回の移動で2件のエントリが
+     * 出る**（`memory_update` は slug ごとの記録なので、2文書が動けば2件で
+     * ある）。移し先が `move_in`、出どころが `move_out`。
+     *
+     * - **`'write'` / `'remove'` に畳まない。** 畳むと「全文置換した」と
+     *   「節を1つ移した」、「文書ごと消した」と「節を1つ出した」の区別が
+     *   `summary` の自由文だけに落ちる（上の `describe` と同じ理由）
+     * - **2つに分ける（`'move'` 1つにしない）。** 1つにすると、2件のうち
+     *   どちらが「増えた側」でどちらが「減った側」かを `bytesBefore` /
+     *   `bytesAfter` の大小から**推測する**ことになる。推測が要らない形に
+     *   しておく（節が空に近ければ大小はほとんど動かない）
+     * - **⚠️ `deriveMemoryCreatedAtFromJournal` は `write` だけを見るので、
+     *   `move_in` で新しく生まれた文書の `createdAt` の根拠は日誌に残らない。
+     *   それで足りる**——`createdAt` の**第一の出所は日誌ではなくストアの
+     *   書き込み経路そのもの**であり（`PersonaStore.markCreatedAt` の doc:
+     *   「`createdAt` の第一の出所はこのメソッドではない」）、3実装とも
+     *   `append` が文書を作った瞬間に値を立てる（実装を引いて確かめた:
+     *   `testing.ts` の `append` は `write` へ委譲し `before === undefined`
+     *   で set、`storage-fs` の `append` は `#writeNow` へ委譲し
+     *   `before === null` で set、`storage-pg` の `append` は
+     *   `ON CONFLICT` の `set` に `created_at` を含めないので新規挿入時
+     *   だけ入る）。`deriveMemoryCreatedAtFromJournal` が担うのは
+     *   **その配線より前に作られた昔の行の後始末だけ**である
+     * - `deriveHumanTouchedAtFromJournal` は `remove` 以外を含めるので
+     *   `move_in` / `move_out` は対象に入るが、`memory_section_move` は
+     *   `cause:'human'` を書ける経路ではないので実際には影響しない
+     *   （`describe` と同じ）
      */
-    action: z.enum(['write', 'append', 'remove', 'describe']).optional(),
+    action: z
+      .enum(['write', 'append', 'remove', 'describe', 'move_in', 'move_out'])
+      .optional(),
     /**
      * 「どれだけ失ったか」の機械可読な面。バイト数（`Buffer.byteLength` 相当）。
      *
@@ -540,6 +571,8 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * - `describe`: frontmatter を差し替える前の文書のバイト数
      *   （`memory_frontmatter_set` は既存文書にしか使えないので、新規作成は
      *   起こらない）
+     * - `move_in`: 節を足す前の移し先の文書のバイト数（無ければ `0`）
+     * - `move_out`: 節を切り取る前の出どころの文書のバイト数
      */
     bytesBefore: z.number().int().nonnegative().optional(),
     /**
@@ -547,6 +580,8 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      *
      * - `write` / `append`: 書き込み後の文書のバイト数
      * - `remove`: 常に `0`（実体が無くなるため）
+     * - `move_in`: 節を足した後の移し先の文書のバイト数
+     * - `move_out`: 節を切り取った後の出どころの文書のバイト数
      * - `describe`: frontmatter を差し替えた後の文書のバイト数
      */
     bytesAfter: z.number().int().nonnegative().optional(),
