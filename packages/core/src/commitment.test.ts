@@ -151,7 +151,7 @@ describe('引き受けたまま終わっていない仕事', () => {
     s.clone.post(humanMessage('リリースノートを書いておいて'));
     await waitForSettled(s.events);
 
-    const open = await s.stores.commitments.list();
+    const open = (await s.stores.commitments.list()).entries;
     expect(open).toHaveLength(1);
     // **本文は全文で残る。** 要約にすると、頼まれた内容そのものが二度と取れない
     expect(open[0]?.body).toBe('リリースノートを書いておいて');
@@ -170,7 +170,7 @@ describe('引き受けたまま終わっていない仕事', () => {
 
     expect(s.events.some((event) => event.type === 'error')).toBe(true);
 
-    const open = await s.stores.commitments.list();
+    const open = (await s.stores.commitments.list()).entries;
     expect(open).toHaveLength(1);
     expect(open[0]?.body).toBe('CI の失敗を直しておいて');
 
@@ -185,7 +185,7 @@ describe('引き受けたまま終わっていない仕事', () => {
     await waitForSettled(s.events);
 
     // ターンは終わっている。それでも開いたまま
-    const beforeClose = await stores.commitments.list();
+    const beforeClose = (await stores.commitments.list()).entries;
     expect(beforeClose).toHaveLength(1);
     const id = beforeClose[0]?.id ?? '';
 
@@ -194,8 +194,8 @@ describe('引き受けたまま終わっていない仕事', () => {
     const close = tools.find((entry) => entry.name === 'commitment_close');
     await close?.handler({ id, reason: '直してマージした' } as never, {} as never);
 
-    expect(await stores.commitments.list()).toHaveLength(0);
-    const all = await stores.commitments.list({ includeClosed: true });
+    expect((await stores.commitments.list()).entries).toHaveLength(0);
+    const all = (await stores.commitments.list({ includeClosed: true })).entries;
     expect(all).toHaveLength(1);
     // **「閉じた」だけを残さない。** 何をもって終わりとしたかが無いと、人間は否定できない
     expect(all[0]?.closedReason).toBe('直してマージした');
@@ -218,7 +218,7 @@ describe('引き受けたまま終わっていない仕事', () => {
     // 配り直し = 同じ id でもう一度開こうとする
     expect(await stores.commitments.open(commitmentFor(event) as Commitment)).toBe(false);
 
-    expect(await stores.commitments.list()).toHaveLength(0);
+    expect((await stores.commitments.list()).entries).toHaveLength(0);
   });
 
   /**
@@ -303,9 +303,12 @@ describe('引き受けたまま終わっていない仕事', () => {
     const s = setup();
 
     s.clone.post(managerMessage('PR を出した。レビュー待ち'));
-    await waitFor(async () => (await s.stores.commitments.list()).length > 0, 'マネージャーの記帳');
+    await waitFor(
+      async () => (await s.stores.commitments.list()).entries.length > 0,
+      'マネージャーの記帳',
+    );
 
-    const open = await s.stores.commitments.list();
+    const open = (await s.stores.commitments.list()).entries;
     expect(open[0]?.origin).toBe('manager');
     expect(open[0]?.source).toBe('mgr-1');
 
@@ -323,7 +326,7 @@ describe('引き受けたまま終わっていない仕事', () => {
     });
     await waitFor(() => s.calls.some((call) => call.inputs.length > 0), '発意ターン');
 
-    expect(await s.stores.commitments.list()).toHaveLength(0);
+    expect((await s.stores.commitments.list()).entries).toHaveLength(0);
 
     await s.clone.stop();
   });

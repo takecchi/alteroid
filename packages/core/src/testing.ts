@@ -351,11 +351,16 @@ export function createMemoryStores(): Stores {
       const open = all
         .filter((entry) => entry.closedAt === undefined)
         .sort((a, b) => a.at.localeCompare(b.at));
-      if (options?.includeClosed !== true) return open;
+      // **この偽物は `unreadable` を常に空にする。** ここが持つのは常に
+      // `commitmentSchema.parse` を経た `Commitment` だけで（`open()` を見よ）、
+      // 保存層のように行が壊れた形で入る経路が無い。`entries` /
+      // `unreadable` という型そのものは本物と揃えること（issue #296。
+      // `CommitmentStore.list` の返り値、`store.ts` の `CommitmentList`）。
+      if (options?.includeClosed !== true) return { entries: open, unreadable: [] };
       const closed = all
         .filter((entry) => entry.closedAt !== undefined)
         .sort((a, b) => (b.closedAt ?? '').localeCompare(a.closedAt ?? ''));
-      return [...open, ...closed];
+      return { entries: [...open, ...closed], unreadable: [] };
     },
     async get(id) {
       return commitments.get(id) ?? null;

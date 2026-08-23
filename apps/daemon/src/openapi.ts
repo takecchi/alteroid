@@ -9,6 +9,7 @@ import {
   pendingApprovalSchema,
   runnerCredentialFingerprintSchema,
   runnerProfileFingerprintSchema,
+  unreadableCommitmentSchema,
   workspaceLocatorSchema,
   type CloneHost,
   type JournalEntry,
@@ -370,6 +371,16 @@ export const scheduleListResponseSchema = z.object({ entries: z.array(scheduleSt
  */
 export const commitmentListResponseSchema = z.object({
   entries: z.array(commitmentSchema.extend({ updatedAt: isoDateTimeSchema })),
+  /**
+   * 読めなかった行（issue #296）。**「無い」でも「片付いた」でもない第3の状態。**
+   *
+   * `CommitmentStore.list`（`packages/core/src/store.ts`）が返す
+   * `CommitmentList.unreadable` をそのまま外へ出す。クローンの `commitment_list`
+   * が末尾に足す断りと同じ材料を、人間の側（Web UI・API を直接叩く側）にも
+   * 渡す——片方にしか無いと、人間が API で見た台帳とクローンが見る台帳が
+   * 違う、という上の doc が塞ごうとしている形そのものになる。
+   */
+  unreadable: z.array(unreadableCommitmentSchema),
 });
 
 /**

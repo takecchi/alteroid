@@ -89,11 +89,16 @@ export async function buildActivityDigest(stores: Stores, window: DigestWindow):
   // 未了も期間で切らない。**切ると、この器の目的そのものが消える** — 24時間の窓で
   // 切れば、2日前に頼まれてまだ手を付けていない仕事だけが静かに落ちる（それは
   // いちばん落としてはいけないものである）。
-  const commitments = await stores.commitments.list();
+  //
+  // **`list()` は `{ entries, unreadable }` を返す（issue #296）。** 読めない行を
+  // 件数からもここからも消さないため、`unreadable` を別に持ち回り、下の節へ渡す。
+  const commitmentList = await stores.commitments.list();
+  const commitments = commitmentList.entries;
+  const unreadableCommitments = commitmentList.unreadable;
   // **片付けたものは期間で切る。** 未了と逆で、こちらは「この期間に何を終えたか」
   // だからである（日報の「今日何をしたか」の材料になる）。切らないと、日報が
   // 過去に片付けた分を毎日並べ直すことになる。
-  const settled = (await stores.commitments.list({ includeClosed: true })).filter(
+  const settled = (await stores.commitments.list({ includeClosed: true })).entries.filter(
     (entry) =>
       entry.closedAt !== undefined &&
       entry.closedAt >= window.since.toISOString() &&
@@ -151,15 +156,40 @@ export async function buildActivityDigest(stores: Stores, window: DigestWindow):
     `- いま人間の回答を待っているもの: ${pending.length} 件`,
     `- 継続中の依頼（定期の仕込み）: ${standing.length} 件`,
     `- 引き受けたまま終わっていない仕事: ${commitments.length} 件`,
+    // **0件でも出す**（他の行と同じ扱い）。台帳の破損は稀だが、無いことも
+    // 常に言えるようにしておく（「取れない軸に0の行を作る」の逆 — ここは
+    // 実際に取れている軸なので0を隠さない）。詳細は下の節（issue #296）。
+    `- 読めない行（台帳が壊れている。片付いたのではない）: ${unreadableCommitments.length} 件`,
     `- この期間に片付けた仕事: ${settled.length} 件`,
   ];
 
-  if (commitments.length > 0) {
+  // **読めない行が在れば、件数と一緒に節を出す（issue #296）。** `commitments`
+  // （＝ `entries`）が0件でも読めない行だけは在りうるので、`commitments.length`
+  // だけをこの節の出し分けの条件にしない。
+  if (commitments.length > 0 || unreadableCommitments.length > 0) {
     sections.push(
       '',
       '## 引き受けたまま終わっていない仕事（古い順。片付いたら `commitment_close` で閉じる）',
       '**順序はここには無い。** どれを先にやるかは記憶にある目的と価値観に照らして決めること。',
     );
+    if (unreadableCommitments.length > 0) {
+      // **件数やログではなくここでも明言する。** 「片付いたのではない」を
+      // 落とすと、読めない行が静かに未了から消えたのと区別が付かなくなる
+      // （`store.ts` の `CommitmentList` の doc と同じ理由）。
+      const ids = unreadableCommitments
+        .map((entry) => entry.id)
+        .filter((id): id is string => id !== undefined);
+      sections.push(
+        `**読めない行が ${unreadableCommitments.length} 件ある（片付いたのではない）。**` +
+          (ids.length === 0 ? '' : ` id: ${ids.join(', ')}。`) +
+          // **「全文が見られる」とは書かない。** `commitment_list id=<id>` の
+          // 全文モードは `get(id)` が読めない行で throw するので、本文は
+          // 返らない（`UnreadableCommitmentError` を捕まえて「読めない」と
+          // 返すだけの3値目になる。`tools.ts` の該当箇所）。ここは実際に
+          // できることだけを書く。
+          '`commitment_list id=<id>` で状態は確かめられる（本文はここでは取れない）。',
+      );
+    }
     for (const entry of commitments.slice(0, MAX_ITEMS)) {
       sections.push(
         `- ${entry.id}（${entry.at} / ${entry.origin}${entry.source === undefined ? '' : ` / ${entry.source}`}）` +

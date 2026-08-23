@@ -55,7 +55,7 @@ import type {
 } from './schema.js';
 import { resolveBuildRevision } from './revision.js';
 import type { CloneRuntimeFacts, SelfFacts } from './self.js';
-import type { PendingInboxEvent, Stores } from './store.js';
+import type { CommitmentList, PendingInboxEvent, Stores } from './store.js';
 import { MCP_SERVER_NAME, createCloneMcpServer, type ToolContext } from './tools.js';
 import { turnInputEntry } from './turn-input.js';
 import type { AccountUsageState } from './usage-snapshot.js';
@@ -1534,13 +1534,18 @@ class Clone implements CloneHost {
     // 間に合わず、閉じ方（id）を渡せない未了が黙って混じる。
     for (const pending of events) await this.#committed.get(pending.id);
 
-    let open: Commitment[];
+    // **`list()` は `CommitmentList`（`{ entries, unreadable }`）を返す
+    // （issue #296）。`entries` のことをここでは従来どおり `open` と呼ぶが、
+    // 読めない行が在れば `unreadable` として別に断る（下）——件数だけを見て
+    // 読めない行を握り潰さない。
+    let list: CommitmentList;
     try {
-      open = await this.#stores.commitments.list();
+      list = await this.#stores.commitments.list();
     } catch (error) {
       noteDroppedRecord('未了の読み出し', inboxEventShape(event), error);
       return '';
     }
+    const open = list.entries;
 
     // **まとめた件数ぶん台帳に載っている**（記帳は `post` が合図ごとに行う）。
     // 1件しか渡さないと、残りは id を渡されないまま未了として溜まる。
@@ -1560,6 +1565,21 @@ class Clone implements CloneHost {
                 '**まとめて1つの応答で答えても、閉じるのは id ごとである。**') +
               '**片付いたら `commitment_close` で閉じること** — 返事をしただけでは閉じない。' +
               '雑談や、その場で答えて終わる話なら、答えたうえですぐ閉じてよい。',
+          ]),
+      // **読めない行が在ることを、ここでも断る（issue #296）。** `open.length`
+      // には読めない行は数えられていない（`entries` だけの件数）ので、
+      // ここが無いと読めない行は完全に見えなくなる — digest / commitment_list
+      // と同じ趣旨の1行をターンの先頭にも置く。
+      ...(list.unreadable.length === 0
+        ? []
+        : [
+            // **「詳細が見られる」とは書かない。** `commitment_list id=<id>` の
+            // 全文モードは読めない行で `get(id)` が throw するので、返るのは
+            // 「読めない」という事実だけで本文ではない（`tools.ts` の
+            // `UnreadableCommitmentError` の扱いを見よ）。ここは実際に
+            // できることだけを書く。
+            `**読めない行が ${list.unreadable.length} 件ある（片付いたのではない）。**` +
+              '`commitment_list` の一覧に件数として出る（本文はここでは取れない）。',
           ]),
       '全文と齢は `commitment_list` で見られる。**どれを先にやるかは、記憶にある目的と価値観に照らして毎回決め直すこと**' +
         '（台帳は順序を持たない。溜まっている順に片付ける決まりは無い）。',

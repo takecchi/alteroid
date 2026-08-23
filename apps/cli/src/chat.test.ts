@@ -690,6 +690,53 @@ describe('renderCommitments', () => {
     expect(ids).toEqual([]);
     expect(text).toContain('引き受けたまま終わっていない仕事はありません');
   });
+
+  /**
+   * **口ごとに能力差を作らない**（`docs/PRD.md`「要件: インターフェース
+   * （CLI・HTTP API・Web UI）」）。読めない行の断りは Web
+   * （`apps/web/app/routes/commitments.tsx` の `UnreadableNote`）とクローン
+   * （`packages/core/src/tools.ts` の `commitment_list`）に在るので、
+   * CLI にも在ること（issue #296）。
+   */
+  it('読めない行が在れば、件数と id を断る（片付いたのではない、と明示する）', () => {
+    const { text, ids } = renderCommitments([commitment({ id: 'a' })], NOW, [
+      { id: 'broken-1', reason: 'origin が読めない' },
+    ]);
+
+    // 読める行はそのまま出る（断りが一覧を潰していない）。
+    expect(ids).toEqual(['a']);
+    expect(text).toContain('id: a');
+    // 断りは件数・id・「片付いたのではない」の3つを名指しする。
+    expect(text).toContain('読めない行が 1 件あります');
+    expect(text).toContain('broken-1');
+    expect(text).toContain('片付いたのではありません');
+  });
+
+  /**
+   * **いちばん危ない状態が、いちばん安心な文言で出る形を塞ぐ。** 読める行が
+   * 0件でも、読めない行が在るなら「ありません」で終わらせない（issue #296）。
+   */
+  it('読める行が0件でも、読めない行が在れば断りを出す（「ありません」で終わらせない）', () => {
+    const { text } = renderCommitments([], NOW, [{ id: 'broken-1', reason: 'origin が読めない' }]);
+
+    expect(text).toContain('読めない行が 1 件あります');
+    expect(text).not.toContain('引き受けたまま終わっていない仕事はありません');
+  });
+
+  /** id が取れない行は件数だけに数える（行が壊れている以上、id が無いことがある）。 */
+  it('id が取れない読めない行は、件数だけに数える', () => {
+    const { text } = renderCommitments([], NOW, [{ reason: 'id ごと読めない' }]);
+
+    expect(text).toContain('読めない行が 1 件あります');
+    expect(text).not.toContain('id: ');
+  });
+
+  /** 0件なら何も足さない（常に出る断りは、出ていることが情報にならない）。 */
+  it('読めない行が0件なら、断りを足さない', () => {
+    const { text } = renderCommitments([commitment({ id: 'a' })], NOW, []);
+
+    expect(text).not.toContain('読めない行');
+  });
 });
 
 describe('chat の台帳コマンド', () => {

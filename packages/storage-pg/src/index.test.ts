@@ -1091,9 +1091,10 @@ describe('PgCommitmentStore', () => {
   it('開いた仕事は未了として読み戻せる（fs 版と同じ振る舞い）', async () => {
     await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す'));
 
-    expect(await stores.commitments.list()).toEqual([
-      commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す'),
-    ]);
+    expect(await stores.commitments.list()).toEqual({
+      entries: [commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す')],
+      unreadable: [],
+    });
     expect((await stores.commitments.get('c-1'))?.body).toBe('PR を出す');
     expect(await stores.commitments.get('しらない')).toBeNull();
   });
@@ -1105,8 +1106,8 @@ describe('PgCommitmentStore', () => {
       await stores.commitments.close('c-1', '2026-08-13T00:00:00.000Z', '#99 で出した', 'clone'),
     ).toBe(true);
 
-    expect(await stores.commitments.list()).toEqual([]);
-    const all = await stores.commitments.list({ includeClosed: true });
+    expect(await stores.commitments.list()).toEqual({ entries: [], unreadable: [] });
+    const all = (await stores.commitments.list({ includeClosed: true })).entries;
     expect(all).toHaveLength(1);
     // 列だけ直しても読み出しは jsonb からなので、クローンが見る側に入っていること
     expect(all[0]?.closedAt).toBe('2026-08-13T00:00:00.000Z');
@@ -1188,16 +1189,72 @@ describe('PgCommitmentStore', () => {
     );
 
     // list() が例外を投げず、他の行も含めて読める。
-    // （`.resolves` の形にしてあるのは、厳密な enum へ戻す変異を当てたとき
-    // `list()` 自身が assertion として落ちることを見るためである。）
-    await expect(stores.commitments.list({ includeClosed: true })).resolves.toHaveLength(1);
+    // **`list()` は `{ entries, unreadable }` を返すようになった（issue #296）ので、
+    // 配列 matcher の `.resolves.toHaveLength` はもう使えない。** 直接 await して
+    // `.entries` を確かめる形でも、同じ意図（厳密な enum へ戻す変異を当てると
+    // `list()` 自身が例外を投げ、この await がそのまま失敗する）は保たれる。
+    const listed = await stores.commitments.list({ includeClosed: true });
+    expect(listed.entries).toHaveLength(1);
+    // この行は既知の欄（closedBy）の話であって、行そのものは読める。
+    // `unreadable` へは回らない。
+    expect(listed.unreadable).toEqual([]);
 
-    const all = await stores.commitments.list({ includeClosed: true });
+    const all = listed.entries;
     // **未知の値は undefined へ潰さず、そのまま保持する。**
     expect(all[0]?.closedBy).toBe('manager');
 
     const single = await stores.commitments.get('c-unknown-closedby');
     expect(single?.closedBy).toBe('manager');
+  });
+
+  /**
+   * **これが issue #296 の本体である。** `closedBy` は由来の注記に過ぎず意図的に
+   * 緩く持つ欄だが（直上のテスト）、`origin`（`commitmentOriginSchema`。
+   * `z.enum(['human', 'manager', 'external', 'self'])`）は厳密な enum のまま
+   * ——直さなければ、未知の値を持つ1行が `list()` を丸ごと落としていた。
+   * 生 SQL でスキーマ検証を経由せず insert する手法は「未知の closedBy」テストと
+   * 同じ（`open()` 経由では `commitmentSchema.parse` を通ってしまい、未知の
+   * `origin` を持つ行をそもそも作れない）。
+   */
+  it('未知の origin を1行混ぜても list() は落ちず、健全な行は全部返る（未知の1行は unreadable へ、id 付きで）', async () => {
+    await stores.commitments.open(commitment('c-ok-1', '2026-08-10T00:00:00.000Z', '健全な行1'));
+    await stores.commitments.open(commitment('c-ok-2', '2026-08-11T00:00:00.000Z', '健全な行2'));
+
+    await db.execute(
+      sql`insert into commitments (id, at, commitment)
+          values (
+            'c-unknown-origin',
+            '2026-08-12T00:00:00.000Z',
+            ${JSON.stringify({
+              id: 'c-unknown-origin',
+              at: '2026-08-12T00:00:00.000Z',
+              // **`commitmentOriginSchema` に無い値。** 将来 origin の種類が
+              // 増えた・外部から直接書かれた、を模す。
+              origin: 'future-origin',
+              body: '未知の origin を持つ行',
+            })}::jsonb
+          )`,
+    );
+
+    // 0. **一覧そのものが落ちない。** ここを素の `await` だけで済ませると、
+    //    行ごとの `safeParse` をやめる変異が**例外**でテストを殺す —— 例外は
+    //    測っている性質を名指ししない。`.resolves` なら「reject した」という
+    //    assertion として落ちる（issue #296）。
+    await expect(stores.commitments.list()).resolves.toBeDefined();
+
+    // 1. **健全な行は全部返る。** id を名指しして検査する（順序は齢の昇順）。
+    const listed = await stores.commitments.list();
+    expect(listed.entries.map((entry) => entry.id)).toEqual(['c-ok-1', 'c-ok-2']);
+
+    // 2. **未知の1行は `unreadable` に、id 付きで現れる（黙って消えていない）。**
+    expect(listed.unreadable).toHaveLength(1);
+    expect(listed.unreadable[0]?.id).toBe('c-unknown-origin');
+    expect(listed.unreadable[0]?.at).toBe('2026-08-12T00:00:00.000Z');
+    // reason に本文（body）が混ざっていないこと（dropped-record.ts と同じ制約）。
+    expect(listed.unreadable[0]?.reason).not.toContain('未知の origin を持つ行');
+
+    // 3. **`get()` はその id で throw する（「無い」と「読めない」の区別が消えていない）。**
+    await expect(stores.commitments.get('c-unknown-origin')).rejects.toThrow(/読めない形/);
   });
 
   it('同じ id で二度 open しても上書きされない（1回目の本文が残る）', async () => {
@@ -1213,7 +1270,7 @@ describe('PgCommitmentStore', () => {
     const entry = await stores.commitments.get('c-1');
     expect(entry?.body).toBe('最初の依頼');
     expect(entry?.at).toBe('2026-08-12T00:00:00.000Z');
-    expect(await stores.commitments.list()).toHaveLength(1);
+    expect((await stores.commitments.list()).entries).toHaveLength(1);
   });
 
   it('閉じた id を open し直しても開き直らない（片付いた仕事が蘇らない）', async () => {
@@ -1225,7 +1282,7 @@ describe('PgCommitmentStore', () => {
       await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す')),
     ).toBe(false);
 
-    expect(await stores.commitments.list()).toEqual([]);
+    expect(await stores.commitments.list()).toEqual({ entries: [], unreadable: [] });
     expect((await stores.commitments.get('c-1'))?.closedAt).toBe('2026-08-13T00:00:00.000Z');
   });
 
@@ -1250,7 +1307,10 @@ describe('PgCommitmentStore', () => {
       await stores.commitments.close('しらない', '2026-08-13T00:00:00.000Z', '片付けた', 'clone'),
     ).toBe(false);
 
-    expect(await stores.commitments.list({ includeClosed: true })).toEqual([]);
+    expect(await stores.commitments.list({ includeClosed: true })).toEqual({
+      entries: [],
+      unreadable: [],
+    });
   });
 
   it('未了は古い順に返り、閉じたものは新しく片付いた順で後ろに続く', async () => {
@@ -1261,9 +1321,12 @@ describe('PgCommitmentStore', () => {
     await stores.commitments.close('c-a', '2026-08-15T00:00:00.000Z', 'A を片付けた', 'clone');
     await stores.commitments.close('c-b', '2026-08-16T00:00:00.000Z', 'B を片付けた', 'clone');
 
-    expect((await stores.commitments.list()).map((entry) => entry.id)).toEqual(['c-old', 'c-new']);
+    expect((await stores.commitments.list()).entries.map((entry) => entry.id)).toEqual([
+      'c-old',
+      'c-new',
+    ]);
     expect(
-      (await stores.commitments.list({ includeClosed: true })).map((entry) => entry.id),
+      (await stores.commitments.list({ includeClosed: true })).entries.map((entry) => entry.id),
     ).toEqual(['c-old', 'c-new', 'c-b', 'c-a']);
   });
 
@@ -1276,7 +1339,7 @@ describe('PgCommitmentStore', () => {
 
     // 「いま自分が開いた」と言えるのは1本だけ
     expect(results.filter(Boolean)).toHaveLength(1);
-    const rows = await stores.commitments.list();
+    const rows = (await stores.commitments.list()).entries;
     expect(rows).toHaveLength(1);
     // 後から来たものが先の行を上書きしていない（上書きすると片付いた仕事が蘇る）
     expect(rows[0]?.body).toBe('最初の依頼');
@@ -1292,20 +1355,49 @@ describe('PgCommitmentStore', () => {
     ]);
 
     expect(results.filter(Boolean)).toHaveLength(1);
-    expect(await stores.commitments.list()).toEqual([]);
+    expect(await stores.commitments.list()).toEqual({ entries: [], unreadable: [] });
   });
 
-  it('読めない行を「片付いた」に潰さない（fs 版と同じく失敗を表へ出す）', async () => {
+  /**
+   * **反転した既存テスト（issue #296）。** 元の題は「読めない行を『片付いた』に
+   * 潰さない（fs 版と同じく失敗を表へ出す）」で、`list()` が `rejects.toThrow`
+   * することを仕様として固定していた。**この PR がその仕様そのものを直す**
+   * ——1行が読めなくても一覧は丸ごと落ちず、その行だけが `unreadable` へ回る。
+   * `get('broken')` の `rejects.toThrow` は変えていない（`get` は単票なので
+   * 「無い」と「読めない」の区別を throw のまま保つ。`CommitmentStore.get` の
+   * doc・`UnreadableCommitmentError` の doc）。
+   */
+  it('読めない行を「片付いた」に潰さない（list() は丸ごと落ちず、その行だけ unreadable へ回る）', async () => {
     // 人間が手で直した・古い形が残っている、を模して不正な本体を直接置く
     await db.execute(
       sql`insert into commitments (id, at, commitment)
           values ('broken', now(), '{"id":"broken"}'::jsonb)`,
     );
+    // 健全な行も1つ混ぜる。**壊れた行がある中でも、健全な行は普通に返ることを見る**
+    // （id を名指しして検査する。「読めた行の中身」まで検査しないと、`entries`
+    // が空になって握り潰していても気づけない）。
+    await stores.commitments.open(commitment('c-ok', '2026-08-12T00:00:00.000Z', '健全な行'));
 
-    // 黙って飛ばすと未了の一覧からも digest からも消え、クローンは引き受けたことを
-    // 二度と思い出さない（＝この器が塞いでいる穴がそのまま開く）
+    // `get('broken')` は依然として throw する（単票の契約は変えていない）。
     await expect(stores.commitments.get('broken')).rejects.toThrow(/読めない形/);
-    await expect(stores.commitments.list()).rejects.toThrow(/読めない形/);
+
+    // **`list()` は丸ごと落ちない。**
+    //
+    // **`.resolves` の形を保つこと（元のテストがこの形だった理由そのもの）。**
+    // 素の `await` で受けてから中身だけ検査すると、行ごとの `safeParse` をやめて
+    // throw へ戻す変異を当てたとき、この行は**例外**で死ぬ。例外は「実装が
+    // 壊れた」と「足場が壊れた」を区別しないので、**測っている性質を名指し
+    // しない。** `.resolves` なら「reject した」という assertion として落ちるので、
+    // 赤の理由が「一覧が丸ごと落ちるようになった」だと読める。
+    await expect(stores.commitments.list({ includeClosed: true })).resolves.toBeDefined();
+
+    // 健全な行（`c-ok`）は `entries` に、壊れた行（`broken`）は `unreadable` に、
+    // id 付きで現れる。
+    const listed = await stores.commitments.list({ includeClosed: true });
+    expect(listed.entries.map((entry) => entry.id)).toEqual(['c-ok']);
+    expect(listed.unreadable).toHaveLength(1);
+    expect(listed.unreadable[0]?.id).toBe('broken');
+    expect(listed.unreadable[0]?.reason).toMatch(/./); // 理由は空でない（本文は含めない。上の doc）
 
     // 「無い」ことだけが null である
     expect(await stores.commitments.get('しらない')).toBeNull();

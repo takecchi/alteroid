@@ -1841,7 +1841,9 @@ export function createApp(deps: AppDeps) {
         description:
           'クローンの `commitment_list` と同じものを人間の側から読む。既定は**未了だけ**で、' +
           '古い順に返る（齢が判断の材料なので、古いものから見せる）。`includeClosed=true` を' +
-          '付けると片付けたものが未了の後ろに新しい順で続く。順序や優先度は器が持たない。',
+          '付けると片付けたものが未了の後ろに新しい順で続く。順序や優先度は器が持たない。' +
+          '`unreadable` は台帳の行が読めなかったもの（issue #296）。**「無い」でも' +
+          '「片付いた」でもない第3の状態**で、0件でも欄自体は必ず返る。',
         responses: {
           200: {
             description: '台帳の中身。',
@@ -1855,12 +1857,17 @@ export function createApp(deps: AppDeps) {
       }),
       validator('query', commitmentsQuery),
       async (c) => {
-        const entries = await stores.commitments.list(
+        // **`list()` は `{ entries, unreadable }` を返す（issue #296）。**
+        // `unreadable` もそのまま応答へ含める — 人間の側（Web UI・API を
+        // 直接叩く側）にもクローンと同じ「読めない行が在る」という事実が
+        // 見えるようにする（`commitmentListResponseSchema` の doc）。
+        const { entries, unreadable } = await stores.commitments.list(
           c.req.valid('query').includeClosed === 'true' ? { includeClosed: true } : undefined,
         );
         return c.json(
           commitmentListResponseSchema.parse({
             entries: entries.map((entry) => ({ ...entry, updatedAt: commitmentUpdatedAt(entry) })),
+            unreadable,
           }),
         );
       },
