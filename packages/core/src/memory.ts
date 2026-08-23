@@ -331,6 +331,26 @@ function serializeMemoryFrontmatter(fields: MemoryFrontmatterPatch): string {
 }
 
 /**
+ * `serializeMemoryFrontmatter` は各キーを `key: value` の1行として並べる。
+ * `value` に改行（`\n` / `\r`）が入ると、その行から先が別の行として現れる
+ * ——frontmatter の別のキー・閉じの `---`・本文の1行目と見分けが付かなく
+ * なる。**本文そのものは失われない**（`applyMemoryFrontmatterPatch` は
+ * 古い `content` から本文を取るだけで、値をそこへ書き込みはしない）が、
+ * 改行を含む値を許すと、値の続きが「本文の先頭」として紛れ込む形になる。
+ *
+ * **書き込み側の入口（`memory_frontmatter_set`）がこれを断るために使う。**
+ * `parseMemoryFrontmatter`（読み出し側）は既に `---` を含む行を malformed
+ * として扱うので、この関数が防ぐのは「新しく書き込もうとしている値」で
+ * あって、既存の読み出しの挙動は変えない。
+ *
+ * `\r` も検査する——`\r\n` は `\n` だけでも捕まるが、単独の `\r` は
+ * 目次の1行（`renderMemoryToc` 等）にそのまま残り、読めない行を作る。
+ */
+export function containsMemoryFrontmatterLineBreak(value: string): boolean {
+  return /[\r\n]/.test(value);
+}
+
+/**
  * frontmatter の指定されたキーだけを差し替え／追加する（#318 案 (a)）。
  * **本文には一切触れない。**
  *

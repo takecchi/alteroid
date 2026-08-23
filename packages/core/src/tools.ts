@@ -25,6 +25,7 @@ import type { ManagerDenial, ManagerPool, ManagerSummary } from './manager.js';
 import {
   applyMemoryFrontmatterPatch,
   assertNeverMemoryProtectionStatus,
+  containsMemoryFrontmatterLineBreak,
   describeMemoryWriteDiff,
   formatMemoryCreatedAt,
   isKnownMemoryDocKind,
@@ -801,6 +802,16 @@ export function createCloneTools(context: ToolContext) {
      * しか登場しない。だから本文が切れて通る経路が構造的に無い——「検出
      * できる」より強い「起こりえない」。
      *
+     * **⚠️ 「本文が切れない」と「本文に文字列が混ざらない」は別の性質である。**
+     * `serializeMemoryFrontmatter` は各キーを `key: value` の1行として書く
+     * ので、値に改行が入っていると、その続きが frontmatter の別のキー・
+     * 閉じの `---`・本文の1行目として紛れ込む（本文そのものは失われない
+     * ——古い `content` から取るだけなので1バイトも消えない。だが値の
+     * 続きが「本文の先頭」として現れる）。**だから改行を含む値は入口で
+     * 断る**（`containsMemoryFrontmatterLineBreak`）。上の段落（切断が
+     * 起こりえないこと）と、この段落（混入が起こりえないこと）は独立した
+     * 2つの保証であり、どちらか片方の歯でもう片方も測ったことにしない。
+     *
      * **既に在る文書にしか使えない。** ここは「文書を直す口」であって
      * 「作る口」ではない（`memory_delete` が存在しない slug を成功にしない
      * のと同じ判断）。
@@ -817,7 +828,9 @@ export function createCloneTools(context: ToolContext) {
       'memory_frontmatter_set',
       [
         '記憶の frontmatter（description・type・parent）のうち、渡したキーだけを差し替える／追加する。',
-        '本文には一切触れない——この道具の呼び出しの中に本文が現れることは無いので、本文が途中で切れることが構造的に起こりえない。',
+        '本文には一切触れない——本文はストアから読んだ古い content からそのまま取るので、1バイトも失われない。',
+        'この道具の呼び出しの中に本文が現れることは無いので、本文が途中で切れることも構造的に起こりえない。',
+        'description・type・parent の値に改行（\\n / \\r）を含む値は渡せない（断る）——値から本文へ文字列が混ざる経路を構造的に無くすため。',
         '既に在る文書にしか使えない（存在しない slug には断る。新規作成は memory_write を使うこと）。',
         'frontmatter が無い文書には、先頭に新しく frontmatter を作って足す（type を渡さなければ premise のまま——載り方は変わらない）。',
         'frontmatter が壊れている（malformed）文書には断る（機械が推測して組み直すと本文を食う経路ができるため）。',
@@ -848,6 +861,32 @@ export function createCloneTools(context: ToolContext) {
           return text(
             `記憶 ${slug} の frontmatter を直すには description・type・parent のうち少なくとも1つを渡すこと` +
               '（何も変わっていない）。',
+          );
+        }
+
+        // **frontmatter の値は1キー1行で書く約束である。** 改行（\n / \r）を
+        // 含む値をそのまま書くと、`serializeMemoryFrontmatter` がそれを
+        // そのまま行として並べるので、値の続きが別の行——他のキー・閉じの
+        // `---`・本文の1行目——として紛れ込む（`containsMemoryFrontmatterLineBreak`
+        // の doc）。**本文そのものは失われない**（古い `content` から取るだけ）
+        // が、値から本文へ文字列が混ざる経路ができてしまう。ここで断ることで
+        // その経路を構造的に塞ぐ——`type` の検査と同じ位置（ストアを読む前）
+        // に置き、断りの前に副作用が入る余地を作らない。
+        const lineBreakInputs: readonly ['description' | 'type' | 'parent', string | undefined][] =
+          [
+            ['description', description],
+            ['type', type],
+            ['parent', parent],
+          ];
+        const lineBreakEntry = lineBreakInputs.find(
+          ([, value]) => value !== undefined && containsMemoryFrontmatterLineBreak(value),
+        );
+        if (lineBreakEntry !== undefined) {
+          const [lineBreakKey] = lineBreakEntry;
+          return text(
+            `記憶 ${slug} の frontmatter を更新できない——${lineBreakKey} に改行（\\n / \\r）を含む値は渡せない` +
+              '（frontmatter は1キー1行で書く約束なので、改行が入ると値の続きが本文や他のキーと混ざる）。' +
+              '何も変わっていない。',
           );
         }
 

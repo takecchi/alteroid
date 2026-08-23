@@ -8,6 +8,7 @@ import {
   assertNeverMemoryDescriptionFreshness,
   assertNeverMemoryFrontmatterState,
   assertNeverMemoryProtectionStatus,
+  containsMemoryFrontmatterLineBreak,
   deriveMemoryCreatedAtFromJournal,
   deriveMemoryFrontmatter,
   describeMemoryProtectionStatus,
@@ -414,6 +415,53 @@ describe('isKnownMemoryDocKind — 書き込み側の入口が使う判定', () 
     expect(isKnownMemoryDocKind('premis')).toBe(false);
     expect(isKnownMemoryDocKind('')).toBe(false);
     expect(isKnownMemoryDocKind('note')).toBe(false);
+  });
+});
+
+/**
+ * `containsMemoryFrontmatterLineBreak` — `memory_frontmatter_set`（tools.ts）
+ * が入口で断るために使う検査。改行を含む値を `serializeMemoryFrontmatter`
+ * （1キー1行の形）へそのまま渡すと、値の続きが別の行として紛れ込む
+ * （本文は失われないが、値から本文へ文字列が混ざる経路ができる）。
+ */
+describe('containsMemoryFrontmatterLineBreak — 改行を含む値の検出', () => {
+  it('\\n を含めば true', () => {
+    expect(containsMemoryFrontmatterLineBreak('a\nb')).toBe(true);
+  });
+
+  it('\\r を含めば true（\\r\\n だけでなく単独の \\r も）', () => {
+    expect(containsMemoryFrontmatterLineBreak('a\rb')).toBe(true);
+    expect(containsMemoryFrontmatterLineBreak('a\r\nb')).toBe(true);
+  });
+
+  it('改行を含まなければ false（--- を含む1行の値はここでは問題ない）', () => {
+    expect(containsMemoryFrontmatterLineBreak('a')).toBe(false);
+    expect(containsMemoryFrontmatterLineBreak('a---b')).toBe(false);
+    expect(containsMemoryFrontmatterLineBreak('')).toBe(false);
+  });
+
+  /**
+   * ⚠️ 差し戻しで見つかった実際の混入を再現する（回帰確認）。
+   *
+   * `applyMemoryFrontmatterPatch` 自体は改行を検査しない
+   * （検査は呼び手＝ `memory_frontmatter_set` の入口の責務——`type` の
+   * 検査と同じ設計）。ここでは「検査を挟まずに直接呼んだら何が起きるか」
+   * を固定し、`containsMemoryFrontmatterLineBreak` が本当にこの形を
+   * 捕まえる値を検出することを確かめる。
+   */
+  it('検査を挟まないまま渡すと、値の続きが本文の先頭へ紛れ込む（再現）', () => {
+    const original = '---\ndescription: 古\n---\n# 見出し\n\n本文である';
+    const injected = applyMemoryFrontmatterPatch(original, {
+      description: 'a\n---\nb',
+      type: 'fact',
+    });
+    expect(parseMemoryFrontmatter(injected)).toEqual({ kind: 'parsed', description: 'a' });
+    // 本文そのものは失われていない（末尾に残っている）。
+    expect(injected.endsWith('本文である')).toBe(true);
+    // だが値の続き（'b' や 'type: fact' や '---'）が本文の先頭として紛れ込む。
+    expect(injected).toContain('b\ntype: fact\n---\n# 見出し');
+    // これが `containsMemoryFrontmatterLineBreak` が入口で断るべき理由である。
+    expect(containsMemoryFrontmatterLineBreak('a\n---\nb')).toBe(true);
   });
 });
 

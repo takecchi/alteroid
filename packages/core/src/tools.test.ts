@@ -1065,6 +1065,83 @@ describe('クローンの道具', () => {
       expect((await h.stores.persona.read('values'))?.content).toBe(original);
     });
 
+    /**
+     * ⚠️ 差し戻しで見つかった欠陥の回帰確認（injection）。
+     *
+     * `description` / `parent` に改行を含む値を渡すと、
+     * `serializeMemoryFrontmatter` が1キー1行で並べるため、値の続きが
+     * frontmatter の別のキー・閉じの `---`・本文の1行目として紛れ込んで
+     * いた。本文そのものは失われない（古い content から取るだけ）が、
+     * 値から本文へ文字列が「混ざる」——これは「切れない」とは別の性質
+     * である。ここでは (1) 断り文が出ること (2) frontmatter も本文も
+     * 1文字も変わっていないこと（malformed・不正な type と同じ形）を
+     * 両方測る——断ってから書いてしまう実装が生存しないように。
+     */
+    describe('改行を含む値は断る（description / type / parent に文字列が混ざるのを防ぐ）', () => {
+      it('description に \\n を含む値は断り、frontmatter も本文も1文字も変わっていない', async () => {
+        const h = harness();
+        const original = `---\ndescription: 旧\n---\n${longBody}`;
+        await h.stores.persona.write('values', original);
+
+        const reply = await h.call('memory_frontmatter_set', {
+          slug: 'values',
+          description: 'a\n---\nb',
+          type: 'fact',
+          summary: '混ぜようとした',
+        });
+
+        expect(reply).toContain('description');
+        expect(reply).toMatch(/断|何も変わっていない/);
+        expect((await h.stores.persona.read('values'))?.content).toBe(original);
+      });
+
+      it('description に単独の \\r を含む値も断る（\\r\\n だけでなく）', async () => {
+        const h = harness();
+        const original = `---\ndescription: 旧\n---\n${longBody}`;
+        await h.stores.persona.write('values', original);
+
+        const reply = await h.call('memory_frontmatter_set', {
+          slug: 'values',
+          description: 'a\rb',
+          summary: '混ぜようとした',
+        });
+
+        expect(reply).toContain('description');
+        expect(reply).toMatch(/断|何も変わっていない/);
+        expect((await h.stores.persona.read('values'))?.content).toBe(original);
+      });
+
+      it('parent に改行を含む値も断る（frontmatter も本文も1文字も変わっていない）', async () => {
+        const h = harness();
+        const original = `---\ndescription: 旧\nparent: root\n---\n${longBody}`;
+        await h.stores.persona.write('values', original);
+
+        const reply = await h.call('memory_frontmatter_set', {
+          slug: 'values',
+          parent: 'root\ndescription: hijacked',
+          summary: '混ぜようとした',
+        });
+
+        expect(reply).toContain('parent');
+        expect(reply).toMatch(/断|何も変わっていない/);
+        expect((await h.stores.persona.read('values'))?.content).toBe(original);
+      });
+
+      it('改行が無ければ通る（--- を含む1行の値そのものは問題ない）', async () => {
+        const h = harness();
+        await h.stores.persona.write('values', `---\ndescription: 旧\n---\n${longBody}`);
+
+        const reply = await h.call('memory_frontmatter_set', {
+          slug: 'values',
+          description: 'a---b（1行のまま）',
+          summary: '1行のまま直した',
+        });
+
+        expect(reply).toContain('更新した');
+        expect((await h.stores.persona.read('values'))?.description).toBe('a---b（1行のまま）');
+      });
+    });
+
     it('malformed な frontmatter には断り、何も変わっていない', async () => {
       const h = harness();
       const malformed = '---\nno colon here\n---\n本文';
