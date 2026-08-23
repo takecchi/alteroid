@@ -65,7 +65,10 @@ export async function conversationsListCommand(
     return;
   }
   const { conversations, scanned } = await response.json();
-  stdout.write(renderConversationsList(conversations, scanned));
+  // `renderConversationsList` は改行で終わらずに返す（末尾に改行が無いことは
+  // `.claude/skills/mutation-testing/mutate-selftest.mjs` が固定している）。
+  // 端末の次のプロンプトや後続の書き込みが最終行へ食い込まないよう、ここで足す（#326）。
+  stdout.write(`${renderConversationsList(conversations, scanned)}\n`);
 }
 
 /**
@@ -130,7 +133,9 @@ export async function conversationsShowCommand(
     return;
   }
   const { messages, scanned, reachedStart } = await response.json();
-  stdout.write(renderConversationDetail(id, messages, scanned, reachedStart));
+  // `renderConversationDetail` も改行で終わらずに返す（理由は上の
+  // `renderConversationsList` の呼び出しと同じ。#326）。
+  stdout.write(`${renderConversationDetail(id, messages, scanned, reachedStart)}\n`);
 }
 
 /**
