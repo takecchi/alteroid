@@ -405,17 +405,23 @@ export const commitmentOpenedResponseSchema = z.object({ ok: z.literal(true), id
  * 拒否ボタンを押すと文字列「許可しない」が回答として注入されていた。種別は
  * `@alteroid/core` の `waitingKindSchema`（`packages/core/src/runner-protocol.ts`）
  * と同じ2値で、二重管理を避けるためにそこから引く。
+ *
+ * **`kind`・`askedAt` とも `.optional()`。** これは外向きの API の形なので、
+ * `@alteroid/core` の `runnerWaitingSchema` と同じ理由（版のずれで旧 runner の
+ * `/managers` 応答にこの2つが乗らない窓がある）がそのまま当てはまる。デーモン
+ * がここへ既定値を作ってはいけない——`RunnerWaiting` が `undefined` のまま
+ * 運んできたものを、ここで埋めると経路によって値の意味が変わる。
  */
 const managerWaitingSchema = z.object({
   requestId: z.string(),
   summary: z.string(),
-  kind: waitingKindSchema,
+  kind: waitingKindSchema.optional(),
   /**
    * runner がこの確認を受け取った時刻（ISO8601, UTC）。**「回答が来た時刻」
    * ではない。** `packages/core/src/runner-protocol.ts` の
    * `runnerWaitingSchema.askedAt` と同じ意味・同じ値（#334、#323 対応）。
    */
-  askedAt: isoDateTimeSchema,
+  askedAt: isoDateTimeSchema.optional(),
 });
 
 /**

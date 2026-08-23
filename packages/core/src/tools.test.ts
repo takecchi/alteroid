@@ -1758,6 +1758,64 @@ describe('クローンの道具', () => {
     expect(reply).toContain('running');
   });
 
+  it('manager_list は返事待ちの種別と時刻を出す（kind/askedAt が揃っているとき）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.waiting = [
+      {
+        requestId: 'req-1',
+        summary: 'これでよいか',
+        kind: 'question',
+        askedAt: '2026-08-20T00:00:00.000Z',
+      },
+    ];
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('質問');
+    expect(reply).toContain('2026-08-20T00:00:00.000Z から');
+    expect(reply).not.toContain('実行許可');
+  });
+
+  /**
+   * **#334 が作りかけていた退行**（旧 runner とのバージョンのずれの窓では
+   * `kind`/`askedAt` が届かない）に対する歯。`packages/core/src/runner-protocol.ts`
+   * の `runnerWaitingSchema` は `kind`/`askedAt` を `.optional()` にしてある
+   * ので、ここでは欠けた形をそのまま `ManagerSummary.waiting` へ渡せる
+   * （`RunnerHttpClient.list()` 側の歯は `apps/daemon/src/runner-client.test.ts`）。
+   *
+   * **`manager_list`（`tools.ts`）は表示側で `kind`/`askedAt` を組み立て直す
+   * 唯一の場所である** — `apps/web`（`manager-detail.tsx`）と `apps/cli`
+   * （`chat.ts`）は既にこの形に対応済みで、対応していなかったのがここだった。
+   * `item.kind === 'question' ? '質問' : '実行許可'` のままだと、`kind` が
+   * 無いときに問答無用で「実行許可」と嘘をつく。
+   */
+  it('manager_list は kind/askedAt が無くても「実行許可」と決めつけない（#334 の追加コメント）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.waiting = [
+      {
+        requestId: 'req-legacy',
+        summary: 'これでよいか',
+        // **`kind` も `askedAt` も無い** — 版のずれの窓（旧 runner の応答）。
+      },
+    ];
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('req-legacy');
+    // 種別が読めないまま「実行許可」と決めつけない。
+    expect(reply).not.toContain('実行許可');
+    expect(reply).toContain('種別不明');
+    // 時刻が取れないのに `undefined` を出さない、` から` という空の断片も残さない。
+    expect(reply).not.toContain('undefined');
+    expect(reply).not.toMatch(/,\s*から/);
+  });
+
   it('manager_list は runnerId を出す（未記録なら空欄にせずそう言う）', async () => {
     const h = harness();
     h.setAutoRunnerId('runner-shown');

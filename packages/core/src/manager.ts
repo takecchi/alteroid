@@ -2381,7 +2381,14 @@ class Pool implements ManagerPool {
           requestId: event.requestId,
           summary: event.summary,
           kind: event.kind,
-          askedAt: event.askedAt,
+          // **`askedAt` はここでは optional（`runnerEventSchema` の `ask` の
+          // doc）。取れなければキーごと書かない** — `askedAt: undefined` を
+          // 書くと JSON を通っても同じ形にはならないが、この境界を跨がない
+          // 経路（同一プロセスのテスト・後段のオブジェクト比較）で意味が
+          // ぶれるのを避ける。デーモン側で `new Date().toISOString()` は
+          // 呼ばない（値の意味が経路によって変わる。`AGENTS.md`「取れない
+          // 軸に0の行を作る」）。
+          ...(event.askedAt === undefined ? {} : { askedAt: event.askedAt }),
         });
         record.job.status = 'waiting_human';
         await this.#persist(record);
