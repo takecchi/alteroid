@@ -382,6 +382,24 @@ export function applyMemoryFrontmatterPatch(
 const KNOWN_DOC_KINDS: ReadonlySet<MemoryDocKind> = new Set(['premise', 'fact']);
 
 /**
+ * `value` が既知の区分（`premise` / `fact`）かどうか。
+ *
+ * **`resolveMemoryDocKind`（読み出し側）の「未知の値は premise へ倒す」安全弁
+ * とは別の使い道である。** あちらは既存文書・`memory_write` が書いた任意の
+ * `type` を受けて表示のために区分を決める側（未知の値でも文書は消えない）。
+ * こちらは `memory_frontmatter_set`（書き込み側の入口）が「渡された値を
+ * そのまま frontmatter へ書いてよいか」を判定するために使う——**綴りを
+ * 間違えた値（`Fact` / `facts` 等）を黙って書くと、`resolveMemoryDocKind`
+ * が premise へ倒すので区分は変わらないのに、書き手には「変えた」つもりが
+ * 残る**（応答は嘘をつかないが、何も言わないまま次のターンへ進む）。
+ *
+ * 既知の集合を2箇所に持たない——`KNOWN_DOC_KINDS` を唯一の実装として共有する。
+ */
+export function isKnownMemoryDocKind(value: string): value is MemoryDocKind {
+  return KNOWN_DOC_KINDS.has(value as MemoryDocKind);
+}
+
+/**
  * 区分を解決する（frontmatter → `premise` | `fact`）。
  *
  * **区分が無い（`none`）・読めない（`malformed`）・`type` が既知の集合に

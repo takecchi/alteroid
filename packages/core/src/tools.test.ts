@@ -1034,6 +1034,37 @@ describe('クローンの道具', () => {
       expect(reply).not.toContain('区分が変わった');
     });
 
+    /**
+     * ⚠️ 差し戻しで見つかった欠陥の回帰確認。
+     *
+     * `type` を `z.string()` のまま自由文字列で受けていたとき、綴りを
+     * 間違えた値（`'Fact'` 等）がそのまま frontmatter へ書かれていた。
+     * `resolveMemoryDocKind`（読み出し側）は未知の値を `premise` へ倒すので
+     * 区分は実際には変わらないのに、`priorKind === nextKind` になって
+     * `kindChangeNote` が空文字のまま返り、**書き手は「変えたつもり」で
+     * 次のターンへ進んでいた。** ここでは (1) frontmatter が1文字も
+     * 変わっていないこと (2) 断り文に使える値（premise/fact）が出ることの
+     * 両方を確かめる。
+     */
+    it('不正な type（綴り違い等）には断り、frontmatter が1文字も変わっていない', async () => {
+      const h = harness();
+      const original = `---\ndescription: 旧\ntype: premise\n---\n${longBody}`;
+      await h.stores.persona.write('values', original);
+
+      const reply = await h.call('memory_frontmatter_set', {
+        slug: 'values',
+        type: 'Fact', // 綴り違い（正しくは小文字の 'fact'）
+        summary: '区分を変えたつもり',
+      });
+
+      expect(reply).toContain('premise');
+      expect(reply).toContain('fact');
+      expect(reply).toMatch(/断|何も変わっていない/);
+      // 断り文が出たことだけでなく、frontmatter 込みで内容が1文字も
+      // 変わっていないことも確かめる（malformed の歯・human guard の歯と同じ形）。
+      expect((await h.stores.persona.read('values'))?.content).toBe(original);
+    });
+
     it('malformed な frontmatter には断り、何も変わっていない', async () => {
       const h = harness();
       const malformed = '---\nno colon here\n---\n本文';

@@ -27,6 +27,7 @@ import {
   assertNeverMemoryProtectionStatus,
   describeMemoryWriteDiff,
   formatMemoryCreatedAt,
+  isKnownMemoryDocKind,
   parseMemoryFrontmatter,
   renderMemoryDocuments,
   renderMemoryListing,
@@ -822,8 +823,8 @@ export function createCloneTools(context: ToolContext) {
         'frontmatter が壊れている（malformed）文書には断る（機械が推測して組み直すと本文を食う経路ができるため）。',
         'memory_write で全文を書き直すか、人間に確認を通すこと。',
         'description・type・parent のうち少なくとも1つを渡すこと（1つも渡さない呼びは断る。何も変わらない）。',
-        'type は premise または fact。premise は全文がプロンプトへ焼かれ、fact は目次の1行だけになる。',
-        '区分が変わったときは、その変化が応答に出る。',
+        'type に渡せるのは premise か fact のどちらかだけ（それ以外の値は断る。綴りを間違えたまま黙って書かない）。',
+        'premise は全文がプロンプトへ焼かれ、fact は目次の1行だけになる。区分が変わったときは、その変化が応答に出る。',
         '**統合の走行（distill）からは、人間が一度でも書いた文書・履歴の無い文書には使えない**',
         '（断られる。ask_human で人間に確認を通せば次のターンで実行できる）。会話の中の書き込みは通る。',
       ].join(' '),
@@ -836,7 +837,9 @@ export function createCloneTools(context: ToolContext) {
         type: z
           .string()
           .optional()
-          .describe('premise または fact。渡さなければ既存の値のまま（既定は premise）'),
+          .describe(
+            'premise か fact のどちらかのみ（それ以外は断る）。渡さなければ既存の値のまま（既定は premise）',
+          ),
         parent: z.string().optional().describe('親文書の slug（階層）。渡さなければ既存の値のまま'),
         summary: z.string().describe('何を直したかの一行要約（日誌に残る）'),
       },
@@ -845,6 +848,22 @@ export function createCloneTools(context: ToolContext) {
           return text(
             `記憶 ${slug} の frontmatter を直すには description・type・parent のうち少なくとも1つを渡すこと` +
               '（何も変わっていない）。',
+          );
+        }
+
+        // **`type` は自由文字列では受けない。** `z.string()` のままだと綴りを
+        // 間違えた値（`Fact` / `facts` 等）がそのまま frontmatter へ書かれる
+        // ——`resolveMemoryDocKind`（読み出し側）は未知の値を `premise` へ
+        // 倒すので区分は実際には変わらないのに、`priorKind === nextKind` に
+        // なって `kindChangeNote` が空になり、**書き手には「変えた」つもりが
+        // 残ったまま、応答は何も言わない。** ここで断ることで、書き込み側の
+        // 入口だけを狭める（読み出し側の安全弁 `resolveMemoryDocKind` の既定は
+        // 触らない——既存文書・`memory_write` が書いた任意の値を受ける必要が
+        // 引き続きあるため）。
+        if (type !== undefined && !isKnownMemoryDocKind(type)) {
+          return text(
+            `記憶 ${slug} の frontmatter を更新できない——type に渡せるのは premise か fact のどちらかだけである` +
+              `（渡された値: ${JSON.stringify(type)}）。何も変わっていない。`,
           );
         }
 

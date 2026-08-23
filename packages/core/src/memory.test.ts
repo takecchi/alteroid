@@ -11,6 +11,7 @@ import {
   deriveMemoryCreatedAtFromJournal,
   deriveMemoryFrontmatter,
   describeMemoryProtectionStatus,
+  isKnownMemoryDocKind,
   memoryProtectionAllowsFullReplace,
   nextDescribedAt,
   parseMemoryFrontmatter,
@@ -391,6 +392,28 @@ describe('区分の解決（resolveMemoryDocKind）— 既定は premise（4-11 
   it('type: premise は premise、type: fact は fact', () => {
     expect(resolveMemoryDocKind({ kind: 'parsed', type: 'premise' })).toBe('premise');
     expect(resolveMemoryDocKind({ kind: 'parsed', type: 'fact' })).toBe('fact');
+  });
+});
+
+/**
+ * `isKnownMemoryDocKind` — 書き込み側の入口（`memory_frontmatter_set`）が
+ * 「渡された値をそのまま frontmatter へ書いてよいか」を判定するための関数。
+ * `resolveMemoryDocKind` の「未知の値は premise へ倒す」読み出し側の安全弁
+ * とは別の使い道である（同じ集合を共有するので、既知の値の判定そのものは
+ * 一致する）。
+ */
+describe('isKnownMemoryDocKind — 書き込み側の入口が使う判定', () => {
+  it('premise と fact は既知', () => {
+    expect(isKnownMemoryDocKind('premise')).toBe(true);
+    expect(isKnownMemoryDocKind('fact')).toBe(true);
+  });
+
+  it('綴り違い・大文字・空文字・未知の語は既知ではない', () => {
+    expect(isKnownMemoryDocKind('Fact')).toBe(false);
+    expect(isKnownMemoryDocKind('facts')).toBe(false);
+    expect(isKnownMemoryDocKind('premis')).toBe(false);
+    expect(isKnownMemoryDocKind('')).toBe(false);
+    expect(isKnownMemoryDocKind('note')).toBe(false);
   });
 });
 
