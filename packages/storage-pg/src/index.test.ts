@@ -1,12 +1,13 @@
 import { renderMemoryDocuments } from '@alteroid/core';
 import type { Commitment, InboxEvent } from '@alteroid/core';
 import { PGlite } from '@electric-sql/pglite';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb, migrate, seedPgWorkspace, type PgStores } from './index.js';
+import { memory } from './schema.js';
 
 /**
  * pg ドライバの受け入れ確認。
@@ -456,15 +457,20 @@ describe('PgPersonaStore', () => {
      *
      * ここでは `markHumanTouched` を呼ばずに `protectionStatus` を
      * `contentSha256` の比較まで通し、かつ `descriptionFreshness` も
-     * 突き合わせる。**`content_sha256` を巻き添えで消す変異は、この歯でも
-     * 捕まえられない**——`protectionStatus` は `content_sha256 IS NULL` の
-     * 行を読むと `#healRow` でその場から本文のハッシュを組み直してしまう
-     * （fs の `.index.json` 全体の組み直しとは違い、pg は行単位の自己修復を持つ）。
-     * 実測（`.set({ createdAt: when, contentSha256: null })` を当てて確認）:
-     * `protectionStatus` が読み出しのその場で `content_sha256` を再計算して
-     * 埋め直すため、130本すべて緑のまま通過する——`markCreatedAt` 単体の変異
-     * ではなく `#healRow` が隠している。**`describedAt` には同じ自己修復が
-     * 無い**ので、そちら側だけがこの歯で観測できる。
+     * 突き合わせる。**ただし `content_sha256` の巻き添え消失は、`protectionStatus`
+     * を計器にしている限りこの歯でも捕まえられない**——`protectionStatus` は
+     * `content_sha256 IS NULL` の行を読むと `#healRow` でその場から本文の
+     * ハッシュを組み直してしまう（fs の `.index.json` 全体の組み直しとは違い、
+     * pg は行単位の自己修復を持つ）。実測（`.set({ createdAt: when,
+     * contentSha256: null })` を当てて確認）: `protectionStatus` が読み出しの
+     * その場で `content_sha256` を再計算して埋め直すため、この歯を含む130本
+     * すべて緑のまま通過する——`markCreatedAt` 単体の変異ではなく `#healRow`
+     * が隠している。**`describedAt` には同じ自己修復が無い**ので、そちら側は
+     * この歯（`protectionStatus` 経由）でも観測できる。
+     *
+     * **`content_sha256` 自体は別の計器（`content_sha256` 列の直接読み出し）
+     * で観測できる**——下の別の `it()` を見ること。`protectionStatus` を
+     * 経由しない限り `#healRow` は挟まらない。
      */
     it('markCreatedAt は human 印を経由しない場合でも created_at 以外を書き換えない（describedAt 側）', async () => {
       await stores.persona.write(
@@ -490,6 +496,47 @@ describe('PgPersonaStore', () => {
       expect(afterProtection).toEqual(beforeProtection);
       expect(after?.descriptionFreshness).toEqual(before?.descriptionFreshness);
       expect(after?.createdAt).toEqual({ kind: 'known', at: '2026-01-02T03:04:05.000Z' });
+    });
+
+    /**
+     * `content_sha256` は `protectionStatus` を計器にしている限り観測できない
+     * ——`content_sha256 IS NULL` の行を読むと `#healRow` がその場で本文から
+     * ハッシュを組み直してしまう（pg 特有の行単位の自己修復。上のテストの
+     * doc コメントにも書いた）。**しかし計器は `protectionStatus` だけでは
+     * ない。** `content_sha256` は `memory` テーブルの列そのものなので、
+     * `#healRow` を経由せずに列を直接読める——それだけで自己修復を回避できる。
+     *
+     * **順序が要る。** `before` を取るのは `write()` 直後（`content_sha256`
+     * は `write()` 自身が埋めるので、ここではまだ何も治す必要が無い）。
+     * `after` は `markCreatedAt` の直後、`protectionStatus` を一度も呼ばずに
+     * 直接列を読む——`read()` は `human_touched_at` / `content_sha256` に
+     * 触れないので、間に挟んでも安全（`persona.ts` の `read()` 参照）。
+     */
+    it('markCreatedAt は content_sha256 の列を直接読んでも書き換えない（healRow を経由しない計器）', async () => {
+      await stores.persona.write(
+        'runbook',
+        ['---', 'description: 手順', '---', '# 手順書', '', '本文'].join('\n'),
+      );
+      await db.execute(sql`update memory set created_at = null where slug = 'runbook'`);
+
+      const beforeRows = await db
+        .select({ contentSha256: memory.contentSha256 })
+        .from(memory)
+        .where(eq(memory.slug, 'runbook'));
+      const beforeSha256 = beforeRows[0]?.contentSha256;
+      expect(beforeSha256).not.toBeNull();
+
+      const wrote = await stores.persona.markCreatedAt('runbook', '2026-01-02T03:04:05.000Z');
+
+      // protectionStatus() を一度も呼ばずに列を直接読む——healRow を経由しない。
+      const afterRows = await db
+        .select({ contentSha256: memory.contentSha256 })
+        .from(memory)
+        .where(eq(memory.slug, 'runbook'));
+      const afterSha256 = afterRows[0]?.contentSha256;
+
+      expect(wrote).toBe(true);
+      expect(afterSha256).toBe(beforeSha256);
     });
   });
 
