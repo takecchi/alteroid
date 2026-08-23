@@ -1217,20 +1217,50 @@ describe('FsCommitmentStore', () => {
    * `index.test.ts` に同じ名前のテストがあり、そちらが本体（`packages/core/
    * src/schema.ts` の doc に理由がある）。fs / pg で能力差を作らないため、
    * ここでも同じ性質を問う。
+   *
+   * **なぜ `open()` を使わないのか。** この器が書く値は 'clone' | 'human'
+   * の2つに限られる（`CommitmentStore.close` の `by` 引数の型で縛って
+   * ある）ので、`open()`（`commitmentSchema.parse` を通す）経由では
+   * `closedBy` が未知の値を持つ行をそもそも作れない。**測りたい場面は
+   * 「新しい版のデーモンが書いた行を、古い版が読む」であり、そのとき行は
+   * 既に保存層（ファイル）に在って `open()` は通っていない。** `open()`
+   * 経由で作ると、厳密な enum へ戻す変異を当てたとき `open()`（setup）が
+   * 先に落ち、`list()` が丸ごと読めなくなるという当の害が一度も再現され
+   * ないままテストが赤くなる（変異には反応するが症状を伝えない）。だから
+   * 行の作成は `commitments.json` へ直接 `writeFile` し、スキーマ検証
+   * （`#read()` の `fileSchema.parse`）を経由しない。
    */
   it('未知の closedBy を持つ行があっても list() は落ちない（closedBy は台帳の完全性を担わない）', async () => {
-    await stores.commitments.open({
-      id: 'c-unknown-closedby',
-      at: '2026-08-01T00:00:00.000Z',
-      origin: 'human',
-      body: '未知の closedBy を持つ行',
-      closedAt: '2026-08-02T00:00:00.000Z',
-      closedReason: '将来の書き手を模す',
-      closedBy: 'manager',
-    });
+    // スキーマ検証を経由せず、台帳ファイルへ直接書く（上の doc を見よ）。
+    await mkdir(stores.paths.jobs, { recursive: true });
+    await writeFile(
+      join(stores.paths.jobs, 'commitments.json'),
+      JSON.stringify({
+        commitments: [
+          {
+            id: 'c-unknown-closedby',
+            at: '2026-08-01T00:00:00.000Z',
+            origin: 'human',
+            body: '未知の closedBy を持つ行',
+            closedAt: '2026-08-02T00:00:00.000Z',
+            closedReason: '将来の書き手を模す',
+            // 実際にこの器が書く値は 'clone' | 'human' の2つに限られる。
+            // 'manager' は、将来書き手が増えた場合や外部から直接書かれた
+            // 場合を模すためのものであって、この器自身がこの値を書くわけ
+            // ではない。
+            closedBy: 'manager',
+          },
+        ],
+      }),
+      'utf8',
+    );
+
+    // list() が例外を投げず、他の行も含めて読める。
+    // （`.resolves` の形にしてあるのは、厳密な enum へ戻す変異を当てたとき
+    // `list()` 自身が assertion として落ちることを見るためである。）
+    await expect(stores.commitments.list({ includeClosed: true })).resolves.toHaveLength(1);
 
     const all = await stores.commitments.list({ includeClosed: true });
-    expect(all).toHaveLength(1);
     expect(all[0]?.closedBy).toBe('manager');
 
     const single = await stores.commitments.get('c-unknown-closedby');

@@ -1150,26 +1150,49 @@ describe('PgCommitmentStore', () => {
    * `list()` が例外を投げ、台帳の一覧が丸ごと読めなくなっていた。**
    * `closedBy` は由来の注記であって台帳の完全性を担わないので、その代償は
    * 大きすぎる（`packages/core/src/schema.ts` の doc）。
+   *
+   * **なぜ `open()` を使わないのか。** この器が書く値は 'clone' | 'human'
+   * の2つに限られる（`CommitmentStore.close` の `by` 引数の型で縛って
+   * ある）ので、`open()`（`commitmentSchema.parse` を通す）経由では
+   * `closedBy` が未知の値を持つ行をそもそも作れない。**測りたい場面は
+   * 「新しい版のデーモンが書いた行を、古い版が読む」であり、そのとき行は
+   * 既に保存層に在って `open()` は通っていない。** `open()` 経由で作ると、
+   * 厳密な enum へ戻す変異を当てたとき `open()`（setup）が先に落ち、
+   * `list()` が丸ごと読めなくなるという当の害が一度も再現されないまま
+   * テストが赤くなる（変異には反応するが症状を伝えない）。だから行の作成は
+   * `db.execute`（生 SQL）でスキーマ検証を経由せず直接 insert する
+   * （同じファイルの「読めない行を『片付いた』に潰さない」テストと同じ作法）。
    */
   it('未知の closedBy を持つ行があっても list() は落ちない（closedBy は台帳の完全性を担わない）', async () => {
-    // 実際にこの器が書く値は 'clone' | 'human' の2つに限られる
-    // （`CommitmentStore.close` の `by` 引数の型で縛ってある）。ここで
-    // 'manager' のような値を作るのは、将来書き手が増えた場合や外部から
-    // 直接書かれた場合を模すためであって、この器自身がこの値を書くわけ
-    // ではない。
-    await stores.commitments.open({
-      id: 'c-unknown-closedby',
-      at: '2026-08-01T00:00:00.000Z',
-      origin: 'human',
-      body: '未知の closedBy を持つ行',
-      closedAt: '2026-08-02T00:00:00.000Z',
-      closedReason: '将来の書き手を模す',
-      closedBy: 'manager',
-    });
+    // スキーマ検証を経由せず直接 insert する（上の doc を見よ）。
+    await db.execute(
+      sql`insert into commitments (id, at, closed_at, commitment)
+          values (
+            'c-unknown-closedby',
+            '2026-08-01T00:00:00.000Z',
+            '2026-08-02T00:00:00.000Z',
+            ${JSON.stringify({
+              id: 'c-unknown-closedby',
+              at: '2026-08-01T00:00:00.000Z',
+              origin: 'human',
+              body: '未知の closedBy を持つ行',
+              closedAt: '2026-08-02T00:00:00.000Z',
+              closedReason: '将来の書き手を模す',
+              // 実際にこの器が書く値は 'clone' | 'human' の2つに限られる。
+              // 'manager' は、将来書き手が増えた場合や外部から直接書かれた
+              // 場合を模すためのものであって、この器自身がこの値を書くわけ
+              // ではない。
+              closedBy: 'manager',
+            })}::jsonb
+          )`,
+    );
 
     // list() が例外を投げず、他の行も含めて読める。
+    // （`.resolves` の形にしてあるのは、厳密な enum へ戻す変異を当てたとき
+    // `list()` 自身が assertion として落ちることを見るためである。）
+    await expect(stores.commitments.list({ includeClosed: true })).resolves.toHaveLength(1);
+
     const all = await stores.commitments.list({ includeClosed: true });
-    expect(all).toHaveLength(1);
     // **未知の値は undefined へ潰さず、そのまま保持する。**
     expect(all[0]?.closedBy).toBe('manager');
 
