@@ -783,11 +783,14 @@ class Pool implements ManagerPool {
   }
 
   /**
-   * クローンからの一言。止まっている確認があればその回答として使い、無ければ
-   * 追加指示として流す（architecture.md「会話に戻れる」）。
+   * クローンからの一言。**宛先（`requestId`）か意思（`decision`）が在るときだけ**
+   * 止まっている確認への回答として使い、それ以外は追加指示として流す
+   * （architecture.md「会話に戻れる」）。
    *
    * **宛先を推測しない。** 1本のマネージャーが複数の確認を同時に待つことがあり、
    * そこで先頭に入れてしまうと、拒否のつもりの一言が別の質問の答えになる。
+   * **待ちが1件のときも同じである** — かつてはそこだけ推測していて、宛先も意思も
+   * 示していない普通の会話文が回答に化けていた（#313。`#choosePending` の doc）。
    */
   async send(
     managerId: string,
@@ -807,7 +810,7 @@ class Pool implements ManagerPool {
     }
 
     const { decision, requestId } = options;
-    const pending = this.#choosePending(record, requestId);
+    const pending = this.#choosePending(record, requestId, decision);
     if (pending === 'ambiguous') {
       return {
         outcome: 'unknown',
@@ -842,6 +845,12 @@ class Pool implements ManagerPool {
         approvalId: pending.requestId,
         managerId,
         answeredAt: new Date().toISOString(),
+        /*
+         * **`decision` が無い回答は、allow と deny のどちらに倒れたかが日誌から
+         * 取れない。** `requestId` だけを添えて答える経路は `runner` 側の
+         * `inferDecision` に落ちるので、ここに残るのは本文だけである。
+         * 別の穴として Issue #322 に切ってある。**ここを触るなら先に #322 を読むこと。**
+         */
         answer: decision === undefined ? message : `[${decision}] ${message}`,
       });
       return { outcome: 'answered', detail: `${pending.summary} に回答した。` };
@@ -2837,13 +2846,29 @@ class Pool implements ManagerPool {
     return memory;
   }
 
+  /**
+   * この一言を「止まっている確認への回答」として消費してよいかを決める。
+   *
+   * **宛先（`requestId`）か意思（`decision`）のどちらかが在るときだけ消費する。**
+   * どちらも無いものは回答ではなく追加指示として流す（`send` の doc「宛先を推測
+   * しない」を、待ちが1件のときにも当てる）。かつては待ちが1件なら本文を見ずに
+   * 先頭へ入れていたので、宛先も意思も示していない普通の会話文が
+   * `inferDecision` に落ちて `allow` に化け、逆に「その件は少し待ってください」の
+   * ような文が `deny` として道具の呼び出し元へ返っていた（#313）。
+   *
+   * **保守側へ倒すための関門ではない。** 意思が示されていれば従来どおり通す。
+   * `requestId` だけを添えた回答は今までどおり `inferDecision` に落ちる
+   * （`runner.ts` の `inferDecision` の doc がその読み取りの持ち主である）。
+   */
   #choosePending(
     record: ManagerRecord,
     requestId: string | undefined,
+    decision: ManagerDecision | undefined,
   ): { requestId: string; summary: string } | null | 'ambiguous' | 'gone' {
     if (requestId !== undefined) {
       return record.waiting.find((item) => item.requestId === requestId) ?? 'gone';
     }
+    if (decision === undefined) return null;
     if (record.waiting.length === 0) return null;
     if (record.waiting.length === 1) return record.waiting[0] ?? null;
     return 'ambiguous';

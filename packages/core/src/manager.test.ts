@@ -489,11 +489,19 @@ describe('マネージャー', () => {
     const { managerId } = await s.pool.start({ request: '設計を相談したい' });
     const session = s.sessions[0] as FakeSession;
 
-    const asked = session.ask('AskUserQuestion', {
-      questions: [
-        { question: 'DB はどちらにする？', header: 'DB', options: [], multiSelect: false },
-      ],
-    });
+    // #313 以降、回答として消費されるのは requestId か decision が在るものだけ。
+    // 質問に allow/deny は無いので、宛先（requestId）で特定する。測っている性質
+    // （クローンの言葉がそのまま answers に入る）は変わっていない。
+    const asked = session.ask(
+      'AskUserQuestion',
+      {
+        questions: [
+          { question: 'DB はどちらにする？', header: 'DB', options: [], multiSelect: false },
+        ],
+      },
+      undefined,
+      'req-db',
+    );
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(s.inbox.find((e) => e.type === 'manager_message')).toMatchObject({
@@ -501,7 +509,7 @@ describe('マネージャー', () => {
       text: 'DB はどちらにする？',
     });
 
-    await s.pool.send(managerId, 'PostgreSQL で');
+    await s.pool.send(managerId, 'PostgreSQL で', { requestId: 'req-db' });
     expect(await asked).toMatchObject({
       behavior: 'allow',
       updatedInput: { answers: { 'DB はどちらにする？': 'PostgreSQL で' } },
@@ -520,6 +528,69 @@ describe('マネージャー', () => {
     await expect
       .poll(() => (s.sessions[0] as FakeSession).inputs, { timeout: 2000 })
       .toEqual(['調べて', 'ついでにこれも見て']);
+
+    await s.pool.stop();
+  });
+
+  it('保留が1件でも、宛先も意思も示さないメッセージは回答として消費されない（#313）', async () => {
+    // 直上の歯は「待ちが0件」の側。こちらは**待ちが1件ある**側で、かつては
+    // 件数が1であることだけを根拠に、本文を見ずに先頭へ入れていた。宛先
+    // （requestId）も意思（decision）も示していない普通の会話文が
+    // inferDecision に落ちて {behavior:'allow'} に化けていた。
+    const s = setup();
+    const { managerId } = await s.pool.start({ request: 'デプロイして' });
+    const session = s.sessions[0] as FakeSession;
+
+    const asked = session.ask('Bash', { command: 'git push --force' }, undefined, 'req-only');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect((await s.pool.list()).find((m) => m.managerId === managerId)?.waiting).toHaveLength(1);
+
+    const result = await s.pool.send(managerId, 'ところで、進捗はどうなっている？');
+
+    // 回答ではなく追加指示として届く
+    expect(result.outcome).toBe('delivered');
+    await expect
+      .poll(() => session.inputs, { timeout: 2000 })
+      .toEqual(['デプロイして', 'ところで、進捗はどうなっている？']);
+    // 確認は解けていない。誰も答えていないので待ち行列に残ったまま
+    expect((await s.pool.list()).find((m) => m.managerId === managerId)?.waiting).toHaveLength(1);
+
+    // **能力は削っていない** — 意思を示せば、待ちが1件のときは今までどおり通る
+    const answered = await s.pool.send(managerId, 'よい', { decision: 'allow' });
+    expect(answered.outcome).toBe('answered');
+    expect(await asked).toEqual({ behavior: 'allow' });
+
+    await s.pool.stop();
+  });
+
+  it('保留が1件でも、「待って」を含む普通の会話文は deny として消費されない（#313）', async () => {
+    // 逆向きの誤射。DENIAL_PHRASES は部分一致なので、「少し待ってください」の
+    // ような普通の文が deny になり、本文全文が**その道具を呼んだ主体**（作業者を
+    // 含む）の tool 結果として返っていた。
+    const s = setup();
+    const { managerId } = await s.pool.start({ request: '公開して' });
+    const session = s.sessions[0] as FakeSession;
+
+    const asked = session.ask('Bash', { command: 'npm publish' }, undefined, 'req-wait');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const result = await s.pool.send(managerId, 'その件は少し待ってください。先に状況を教えて');
+
+    // **この歯の本題を先に測る** — 呼び出し元へ deny が返っていないこと。
+    // outcome を先に見ると、消費されたときにそちらで落ちてしまい、
+    // 「誰の tool 結果に何が返ったか」を名指しするこの行まで到達しない。
+    const settled = await Promise.race([
+      asked,
+      new Promise((resolve) => setTimeout(() => resolve('unsettled'), 50)),
+    ]);
+    expect(settled).toBe('unsettled');
+
+    expect(result.outcome).toBe('delivered');
+
+    // **inferDecision は残っている** — requestId を添えた回答は今までどおり
+    // 本文から拒否を読み取る
+    await s.pool.send(managerId, 'やっぱり待って', { requestId: 'req-wait' });
+    expect(await asked).toMatchObject({ behavior: 'deny', message: 'やっぱり待って' });
 
     await s.pool.stop();
   });
@@ -688,9 +759,14 @@ describe('マネージャー', () => {
     const { managerId } = await s.pool.start({ request: 'デプロイして' });
     const session = s.sessions[0] as FakeSession;
 
-    const asked = session.ask('Bash', { command: 'git push --force' });
+    // #313 以降、宛先も意思も示さない一言は回答として消費されない。**decision は
+    // 足さない** — このテストが測っているのは「decision を書き忘れた回答」の
+    // 読み取りそのものなので、足すと測る対象が消える。宛先だけを特定する。
+    const asked = session.ask('Bash', { command: 'git push --force' }, undefined, 'req-force');
     await new Promise((resolve) => setTimeout(resolve, 0));
-    await s.pool.send(managerId, 'それはやめて、代わりに差分だけ見せて');
+    await s.pool.send(managerId, 'それはやめて、代わりに差分だけ見せて', {
+      requestId: 'req-force',
+    });
 
     expect(await asked).toMatchObject({ behavior: 'deny' });
 
@@ -702,9 +778,11 @@ describe('マネージャー', () => {
     const { managerId } = await s.pool.start({ request: '調べて' });
     const session = s.sessions[0] as FakeSession;
 
-    const asked = session.ask('Read', { file_path: '/work/a.ts' });
+    // #313 以降の宛先の明示。**decision は足さない**（直上と同じ理由 — 測って
+    // いるのは decision 無しでの読み取りが allow へ倒れることである）。
+    const asked = session.ask('Read', { file_path: '/work/a.ts' }, undefined, 'req-read');
     await new Promise((resolve) => setTimeout(resolve, 0));
-    await s.pool.send(managerId, 'よい、そのまま進めて');
+    await s.pool.send(managerId, 'よい、そのまま進めて', { requestId: 'req-read' });
 
     expect(await asked).toEqual({ behavior: 'allow' });
 
