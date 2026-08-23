@@ -41,6 +41,7 @@ export const SELFTEST_SCENARIOS = [
   'delivery',
   'judgement-id-integrity',
   'rebuild-failure',
+  'spec-validation',
   'all',
 ];
 
@@ -544,6 +545,26 @@ function scenarioJudgementIdIntegrity() {
       throw new HarnessError(`spec.id=${spec.id} の判定に失敗した: ${err.message}`);
     }
     log(`判定行: ${judgement.text}`);
+    // **この比較を書くときの一般形の注意（#301 で見つかった）**: 両側が同じ
+    // 経路で同じ文字列へ強制されると、比較そのものが恒真になる。
+    // `judgement.text` 側は `formatJudgement` が `spec.id` をテンプレート
+    // リテラルへ差し込む（`${mutationId}` → 非文字列も `String()` で強制）。
+    // もし `spec.id` の型を確かめずに `.includes(spec.id)` を呼べば、`.includes`
+    // に渡す引数も同じ強制を受ける。`spec.id` が `undefined` のとき、差し込む
+    // 側は文字列 `"undefined"` になり、比べる側の引数も `"undefined"` へ
+    // 強制されるので、**両側が一致してしまう**。この歯は「id 取り違えの回帰」
+    // を捕まえるために在るのに、**いちばん名前が壊れている場合（id が無い）に
+    // だけ鳴らない**という形になる——見た目は歯があるのに、最悪のケースで
+    // だけ穴が開く。#301 の後は `applyMutation` の入り口（`validateSpec`）が
+    // 非文字列・空文字の `id` を弾くので `judgement.text` 側にはもう
+    // `undefined` は来ないはずだが、この歯自身も強制に頼らない形にしておく
+    // ——次にここを触る人が、確認済みのはずの前提を静かに壊さないように。
+    if (typeof spec.id !== 'string' || spec.id.length === 0) {
+      throw new HarnessError(
+        `spec.id が非空文字列でない（実際: ${JSON.stringify(spec.id)}）。この歯は文字列比較を` +
+          '前提にしており、型を確かめずに includes へ渡すと強制に頼った恒真比較になる。',
+      );
+    }
     const mentionsOwnId = judgement.text.includes(spec.id);
     log(`判定行が spec.id (${spec.id}) を正しく名乗っているか: ${mentionsOwnId}`);
     restoreMutation();
@@ -708,6 +729,105 @@ function scenarioRebuildFailure() {
   };
 }
 
+// ── 7. spec の形の検査（#301） ───────────────────────────────────────
+//
+// 受け入れ条件: id / file / from / to / expect が欠けている・型が違う・
+// （id については）パス区切りや .. を含む spec は、すべて applyMutation の
+// 入口（validateSpec）で拒否されること。**そして「落ちたこと」だけでなく
+// 「何も書かれていないこと」も見る** — 拒否のたびに、控えディレクトリの
+// ファイル数・印の有無・対象ファイルの md5 が変化していないことを確認する。
+// 最後に、正しい spec は変わらず通ることも確認する（検査が過剰でないこと）。
+function scenarioSpecValidation() {
+  section('selftest: 7. spec の形の検査（#301）');
+  requireNoMarker('spec-validation');
+  ensureFixtureClean();
+
+  const baseValid = {
+    id: 'selftest-spec-validation',
+    file: FIXTURE_REL,
+    from: 'LINE-TWO',
+    to: 'LINE-TWO-SPECVALID',
+    expect: 1,
+    target: null,
+  };
+
+  const invalidCases = [
+    { label: 'id が無い', spec: { ...baseValid, id: undefined } },
+    { label: 'id が空文字', spec: { ...baseValid, id: '' } },
+    { label: 'id が非文字列（数値）', spec: { ...baseValid, id: 42 } },
+    { label: 'id にパス区切り(/)と..を含む（BACKUP_DIR 脱出を試みる）', spec: { ...baseValid, id: '../escape' } },
+    { label: 'id にパス区切り(\\)を含む', spec: { ...baseValid, id: 'a\\b' } },
+    { label: 'id に .. を含む（区切りなし）', spec: { ...baseValid, id: 'a..b' } },
+    { label: 'file が無い', spec: { ...baseValid, file: undefined } },
+    { label: 'file が空文字', spec: { ...baseValid, file: '' } },
+    { label: 'from が無い', spec: { ...baseValid, from: undefined } },
+    { label: 'from が空文字', spec: { ...baseValid, from: '' } },
+    { label: 'to が無い（非文字列）', spec: { ...baseValid, to: undefined } },
+    { label: 'to が非文字列（数値0）', spec: { ...baseValid, to: 0 } },
+    { label: 'expect が無い', spec: { ...baseValid, expect: undefined } },
+    { label: 'expect が0', spec: { ...baseValid, expect: 0 } },
+    { label: 'expect が非整数（1.5）', spec: { ...baseValid, expect: 1.5 } },
+    { label: 'spec が null', spec: null },
+    { label: 'spec が配列', spec: [] },
+  ];
+
+  const preMd5 = md5(readRepoFile(FIXTURE_REL));
+  const backupDir = path.join(ROOT, '.mutation-testing', 'backups');
+  const preBackupCount = fs.existsSync(backupDir) ? fs.readdirSync(backupDir).length : 0;
+
+  const results = [];
+  for (const { label, spec } of invalidCases) {
+    let rejected = false;
+    let message = null;
+    try {
+      applyMutation(spec);
+      // 拒否されなかった場合（想定外）、後始末しないと次のケースが
+      // 「印が既にある」で失敗し、本当の原因が分からなくなる。
+      restoreMutation();
+    } catch (err) {
+      rejected = err instanceof HarnessError;
+      message = err.message;
+    }
+    const markerAfter = markerExists();
+    const backupCountAfter = fs.existsSync(backupDir) ? fs.readdirSync(backupDir).length : 0;
+    const fileMd5After = md5(readRepoFile(FIXTURE_REL));
+    const nothingWritten =
+      !markerAfter && backupCountAfter === preBackupCount && fileMd5After === preMd5;
+    log(
+      `[${label}] 拒否=${rejected} / 何も書かれていない=${nothingWritten}` +
+        (message ? ` / メッセージ冒頭: ${message.slice(0, 50).replace(/\n/g, ' ')}...` : ''),
+    );
+    results.push({ label, rejected, nothingWritten });
+  }
+
+  log('');
+  log('-- 対照: 正しい spec は変わらず通ることを確認する（検査が過剰になっていないか） --');
+  applyMutation(baseValid);
+  const appliedOk = readRepoFile(FIXTURE_REL).includes('LINE-TWO-SPECVALID');
+  restoreMutation();
+  const cleanAfterward = gitStatusPorcelainFor(FIXTURE_REL).trim() === '' && !markerExists();
+
+  const allRejectedAndClean = results.every((r) => r.rejected && r.nothingWritten);
+  if (!allRejectedAndClean) {
+    throw new HarnessError(
+      `spec 検査の回帰: 拒否されるべき spec が通った、または拒否時に何かが書かれた。詳細: ${JSON.stringify(
+        results.filter((r) => !r.rejected || !r.nothingWritten),
+      )}`,
+    );
+  }
+  if (!appliedOk) {
+    throw new HarnessError('spec 検査が過剰: 正しい spec まで拒否している。');
+  }
+
+  return {
+    scenario: 'spec-validation',
+    allRejectedAndClean,
+    cases: results,
+    validSpecStillWorks: appliedOk,
+    cleanAfterward,
+  };
+}
+
 const SCENARIO_FNS = {
   'backup-corruption': scenarioBackupCorruption,
   'weak-tooth': scenarioWeakTooth,
@@ -716,6 +836,7 @@ const SCENARIO_FNS = {
   delivery: scenarioDelivery,
   'judgement-id-integrity': scenarioJudgementIdIntegrity,
   'rebuild-failure': scenarioRebuildFailure,
+  'spec-validation': scenarioSpecValidation,
 };
 
 export function runSelftestScenario(scenario) {

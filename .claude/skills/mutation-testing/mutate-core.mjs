@@ -223,6 +223,65 @@ export function readMarkerVerified() {
   return { marker, originalContentMd5, selfConsistent };
 }
 
+// ── spec の形の検査（#301） ─────────────────────────────────────────
+//
+// **書く前に検査し、不正なら1バイトも書かずに落とす。** 歯6（書く前にパターンの
+// 一意性を検査する）と同じ位置・同じ理由——書いてから気づくと、ファイルが
+// 変異したまま残る。`applyMutation` の先頭（手順1より前）で呼ぶことで、
+// 控え（手順3）・印（手順6）・変異（手順7）のどれにも到達させない。
+//
+// **`id` はただの表示名ではない。** `${spec.id}.bak`（このファイル内
+// `buildMarker` の少し下、控えのファイル名）としてファイル名の一部になる
+// ため、パス区切り（`/` `\`）や `..` を許すと BACKUP_DIR の外へ書ける形に
+// なる。型検査だけでは塞げない穴なので、ここで明示的に弾く。
+export function validateSpec(spec) {
+  const problems = [];
+
+  if (typeof spec !== 'object' || spec === null || Array.isArray(spec)) {
+    throw new HarnessError(
+      `[0] spec 検査で拒否した。何も書き込んでいない。spec はオブジェクトでなければならない` +
+        `（実際: ${Array.isArray(spec) ? '配列' : typeof spec}）。`,
+    );
+  }
+
+  if (typeof spec.id !== 'string' || spec.id.length === 0) {
+    problems.push(`id は必須の非空文字列である（実際: ${JSON.stringify(spec.id)}）`);
+  } else if (spec.id.includes('/') || spec.id.includes('\\') || spec.id.includes('..')) {
+    problems.push(
+      `id にパス区切り（/ または \\）や .. を含めることはできない（控えのファイル名 ` +
+        `\${spec.id}.bak に直接使われるため、BACKUP_DIR の外へ書ける形になる）。実際: ` +
+        `${JSON.stringify(spec.id)}`,
+    );
+  }
+
+  if (typeof spec.file !== 'string' || spec.file.length === 0) {
+    problems.push(`file は必須の非空文字列である（実際: ${JSON.stringify(spec.file)}）`);
+  }
+
+  // from の空文字は歯2（手順5）が既に見ているが、キーそのものの不在・
+  // 非文字列は誰も見ていなかった（#301）。歯2 はそのまま残し、ここでは
+  // 「無い／文字列でない／空文字」の3つをまとめて見る。
+  if (typeof spec.from !== 'string' || spec.from.length === 0) {
+    problems.push(`from は必須の非空文字列である（実際: ${JSON.stringify(spec.from)}）`);
+  }
+
+  // to は空文字を許す — 文言を消す変異は正当である。型だけを見る。
+  if (typeof spec.to !== 'string') {
+    problems.push(`to は必須の文字列である（空文字は許容する。実際: ${JSON.stringify(spec.to)}）`);
+  }
+
+  if (!Number.isInteger(spec.expect) || spec.expect < 1) {
+    problems.push(`expect は1以上の整数でなければならない（実際: ${JSON.stringify(spec.expect)}）`);
+  }
+
+  if (problems.length > 0) {
+    throw new HarnessError(
+      '[0] spec 検査で拒否した。何も書き込んでいない（控え・印・変異のいずれも0バイト）:\n' +
+        problems.map((p) => `  - ${p}`).join('\n'),
+    );
+  }
+}
+
 /** 印の中身を組み立てる。落ちた本人でなくても復元できることが条件。 */
 function buildMarker(spec, ctx) {
   return {
@@ -272,6 +331,10 @@ function buildMarker(spec, ctx) {
  * 本体に抜け道を作らないため、対比は selftest 側が別の直線的な関数として持つ）。
  */
 export function applyMutation(spec) {
+  // 0. spec の形を検査する。ここで拒否すれば、控え・印・変異のどれも
+  //    まだ何も書いていない（このチェックはファイルにもマーカーにも触れない）。
+  validateSpec(spec);
+
   if (markerExists()) {
     throw new HarnessError(
       '印が既にある。前回の変異が復元されていない可能性がある。`status` で確認すること。',
