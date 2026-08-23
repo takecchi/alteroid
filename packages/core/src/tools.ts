@@ -24,6 +24,7 @@ import {
 import type { ManagerDenial, ManagerPool, ManagerSummary } from './manager.js';
 import {
   assertNeverMemoryProtectionStatus,
+  describeMemoryWriteDiff,
   formatMemoryCreatedAt,
   renderMemoryDocuments,
   renderMemoryListing,
@@ -651,7 +652,8 @@ export function createCloneTools(context: ToolContext) {
           bytesAfter: Buffer.byteLength(written.content, 'utf8'),
           summary,
         });
-        return text(`記憶 ${slug} を更新した。`);
+        const diff = describeMemoryWriteDiff(before === null ? null : before.content, written.content);
+        return text(`記憶 ${slug} を更新した。\n\n${diff}`);
       },
     ),
 
@@ -675,7 +677,8 @@ export function createCloneTools(context: ToolContext) {
           bytesAfter: Buffer.byteLength(written.content, 'utf8'),
           summary,
         });
-        return text(`記憶 ${slug} に追記した。`);
+        const diff = describeMemoryWriteDiff(before === null ? null : before.content, written.content);
+        return text(`記憶 ${slug} に追記した。\n\n${diff}`);
       },
     ),
 
