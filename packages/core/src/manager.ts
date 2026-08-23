@@ -25,6 +25,7 @@ import type {
   RunnerClient,
   RunnerCredentialFingerprint,
   RunnerEvent,
+  RunnerExecutionResources,
   RunnerLiveness,
   RunnerProfileFingerprint,
   RunnerRegistry,
@@ -193,6 +194,28 @@ export interface RunnerOverview {
   /** 置かれている実行環境プロファイルの指紋。`fingerprints: true` を渡したときだけ載る。 */
   profile?: RunnerProfileFingerprint;
   /**
+   * 実行環境の資源。`resources: true` を渡したときだけ載る（#315。`fingerprints`
+   * と同じ opt-in の形——`ManagerPool.runners()` の doc を参照）。
+   *
+   * **いまここで使うのは `pids` だけ**（#315 案1「器の pids の合計を見せる」）。
+   * `cpu` / `memory` も同じ形で乗ってくるが、`runner_list` の出力はまだ pids しか
+   * 読まない——出す先は別に諮る。
+   *
+   * **3つの状態を、ここで潰さないこと**（`RunnerRevisionStatus` の `known` /
+   * `unknown` / `unheard` と同じ作法）:
+   *
+   * 1. **読めた** — `resources.pids` が在る
+   * 2. **runner に訊けなかった** — `resources` 自体が `undefined`
+   *    （器が開いていない・`resources()` が失敗した・応答が無かった）
+   * 3. **訊けたが pids が読めなかった** — `resources` は在るが `pids` が無い
+   *    （cgroup を持たない器。ローカル開発など。フォールバック先が無いので
+   *    `readExecutionResources` の doc のとおり欄ごと省略される）
+   *
+   * **2 と 3 を同じ文言に倒さないこと。** どちらも「pids が出せない」で終わるが、
+   * 疑う先が違う——2 は接続・器の生死、3 は器の cgroup 構成である。
+   */
+  resources?: RunnerExecutionResources;
+  /**
    * runner が名乗った版（コミット sha）。**3状態を区別する**
    * （`RunnerRevisionStatus`）——`known`（版が取れた）/ `unknown`（名乗ったが
    * runner が自分の版を知らない）/ `unheard`（名乗り自体をまだ聞けていない）。
@@ -357,8 +380,8 @@ export interface ManagerPool {
    * 増やさずに済むという利点もある。`manager_stop` が `pool.abort()` を直接
    * 呼ぶのと同じ作法である。
    *
-   * **`resources()` は呼ばない。** この一覧のためにネットワーク往復を足さない
-   * ——ここで数える本数は台帳から見えている分であって、配置が使う本数
+   * **既定では `resources()` を呼ばない。** この一覧のためにネットワーク往復を
+   * 足さない——ここで数える本数は台帳から見えている分であって、配置が使う本数
    * （`RunnerPlacementResources.managers`）とは別物である（`RunnerOverview` の doc）。
    *
    * `fingerprints: true` を渡すと、開けている器について鍵とプロファイルの
@@ -367,8 +390,18 @@ export interface ManagerPool {
    * 「制限は方針で表し、方針は設定で開けられなければならない」と要求している
    * からである。人間は Web UI（`GET /runners`）で常に見られるので、クローンだけ
    * 永久に見えない形にはしない。
+   *
+   * `resources: true` も同じ形の opt-in である（#315「器の pids の合計が
+   * どこからも見えない」の案1）。**渡されたときだけ `resources()` を呼ぶ——
+   * 既定は変えない。** 上の「既定では呼ばない」はそのまま生きていて、ここが
+   * 足したのは「明示的に頼まれたときの経路」1本だけである。出すのは pids
+   * （cgroup の `pids.current` / `pids.max`。合計であって内訳ではない——
+   * #315 の本題である内訳の特定にはこれは触れない）。開いていない器・
+   * `resources()` が失敗した器は `RunnerOverview.resources` が `undefined` の
+   * ままになる（「訊けなかった」）。開けたが `pids` を持たない器（cgroup が無い）
+   * とは区別すること（`RunnerOverview.resources` の doc の3値）。
    */
-  runners(options?: { fingerprints?: boolean }): Promise<RunnerFleetOverview>;
+  runners(options?: { fingerprints?: boolean; resources?: boolean }): Promise<RunnerFleetOverview>;
   /** manager_id からセッションの生ログへ降りる（可観測性の最下段）。 */
   transcript(managerId: string): Promise<string | null>;
   /**
@@ -929,7 +962,9 @@ class Pool implements ManagerPool {
     return denied.entries().map(([tool, count]) => ({ tool, count }));
   }
 
-  async runners(options: { fingerprints?: boolean } = {}): Promise<RunnerFleetOverview> {
+  async runners(
+    options: { fingerprints?: boolean; resources?: boolean } = {},
+  ): Promise<RunnerFleetOverview> {
     // `list()` が台帳とプロセス内の像を合流させ、`#ensureConnected` も済ませる。
     const managers = await this.list();
     const entries = this.#runners.entries();
@@ -949,23 +984,34 @@ class Pool implements ManagerPool {
       else byRunner.set(manager.runnerId, [item]);
     }
 
-    // 指紋は明示的に頼まれたときだけ聞きに行く（開けている器にしか聞けない）。
-    const open = options.fingerprints
-      ? new Map(
-          (await this.#runners.list().catch(() => [])).map((runner) => [runner.runnerId, runner]),
-        )
-      : undefined;
+    // 指紋・資源は明示的に頼まれたときだけ聞きに行く（開けている器にしか聞けない）。
+    // どちらも同じ `open`（開いている器の一覧）を材料にする——2度 `list()` を
+    // 呼んで往復を増やさない。
+    const open =
+      options.fingerprints || options.resources
+        ? new Map(
+            (await this.#runners.list().catch(() => [])).map((runner) => [runner.runnerId, runner]),
+          )
+        : undefined;
 
     const runners = await Promise.all(
       entries.map(async (entry) => {
         const client = entry.runnerId === undefined ? undefined : open?.get(entry.runnerId);
         const [credentials, profile] =
-          client === undefined
+          client === undefined || !options.fingerprints
             ? [undefined, undefined]
             : await Promise.all([
                 client.credentials().catch(() => undefined),
                 client.profile().catch(() => undefined),
               ]);
+        // **`resources` 自体が `undefined` = 訊けなかった。** `resources` が在って
+        // `pids` が無い = 訊けたが読めなかった。この2つを区別するために、失敗も
+        // 「呼ばなかった」も同じ `undefined` へ潰す（`RunnerOverview.resources` の
+        // doc の3値）。
+        const resources =
+          client === undefined || !options.resources
+            ? undefined
+            : ((await client.resources?.().catch(() => undefined)) ?? undefined);
 
         const overview: RunnerOverview = {
           label: entry.label,
@@ -979,6 +1025,7 @@ class Pool implements ManagerPool {
           managers: entry.runnerId === undefined ? [] : (byRunner.get(entry.runnerId) ?? []),
           ...(credentials === undefined ? {} : { credentials }),
           ...(profile === undefined ? {} : { profile }),
+          ...(resources === undefined ? {} : { resources }),
           revision: entry.revision,
         };
         return overview;

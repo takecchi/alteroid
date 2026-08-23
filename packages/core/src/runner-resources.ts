@@ -26,6 +26,14 @@ import type { RunnerExecutionResources } from './runner-protocol.js';
  * `os.freemem()` も同じ理由でホストの空きである。ここが `source: 'os'` を名乗るのは
  * **cgroup に上限が無いときだけ**で、そのときはホストの値が本当にこの器の使える量で
  * ある。どちらを読めたかを黙って混ぜないために `source` を残す。
+ *
+ * **pids には `os` 相当のフォールバックが無い（#315）。** cpu / memory は cgroup が
+ * 無ければホスト（`os`）の値へ倒れられる——「ホストの total メモリ」「ホストの
+ * コア数」はそれ自体が意味を持つ概念だからである。だが「ホストの pids 上限」に
+ * 相当する概念はそもそも無い（`os` モジュールに pids の上限を答える関数が無い）。
+ * だから pids は cgroup が読めなければ **無条件で欄ごと出さない** —— cpu / memory
+ * と違って「読めないなら `os` を名乗る」という第三の道が無い、という非対称を、
+ * ここに書いておく（読む人がここで必ず引っかかるので）。
  */
 export const CGROUP_ROOT = '/sys/fs/cgroup';
 
@@ -52,17 +60,21 @@ export async function readExecutionResources(
     freeBytes: freemem(),
   };
   const dirs = await cgroupDirs(options.cgroupRoot ?? CGROUP_ROOT, options.procCgroupPath);
-  const [cpuMax, memoryMax, memoryCurrent, memoryStat] = await Promise.all([
+  const [cpuMax, memoryMax, memoryCurrent, memoryStat, pidsCurrent, pidsMax] = await Promise.all([
     readFirst(dirs, 'cpu.max'),
     readFirst(dirs, 'memory.max'),
     readFirst(dirs, 'memory.current'),
     readFirst(dirs, 'memory.stat'),
+    readFirst(dirs, 'pids.current'),
+    readFirst(dirs, 'pids.max'),
   ]);
   const cpu = cpuOf(cpuMax, host);
   const memory = memoryOf(memoryMax, memoryCurrent, memoryStat, host);
+  const pids = pidsOf(pidsCurrent, pidsMax);
   return {
     ...(cpu === undefined ? {} : { cpu }),
     ...(memory === undefined ? {} : { memory }),
+    ...(pids === undefined ? {} : { pids }),
   };
 }
 
@@ -107,6 +119,26 @@ function cpuOf(raw: string | undefined, host: { cores: number }): RunnerExecutio
   const cores = Number(quota) / Number(period);
   if (Number.isFinite(cores) && cores > 0) return { cores, source: 'cgroup' };
   return host.cores > 0 ? { cores: host.cores, source: 'os' } : undefined;
+}
+
+/**
+ * `pids.current` / `pids.max`。**フォールバック先が無い**（上のファイル doc）。
+ *
+ * `pids.max` は cgroup v2 では「上限なし」を `max` という文字列で表す。`cpu.max` /
+ * `memory.max` と違い、ここでは「上限なしなら `os` を名乗る」をしない——名乗る
+ * `os` 相当が無いからである。だから `max` が数として読めなければ、`current` が
+ * 読めていても欄ごと出さない（現在値だけを出しても「何に対しての現在値か」が
+ * 言えず、単独では意味を持たない）。
+ */
+function pidsOf(
+  current: string | undefined,
+  max: string | undefined,
+): RunnerExecutionResources['pids'] {
+  const maxValue = Number(max);
+  const currentValue = Number(current);
+  if (!Number.isSafeInteger(maxValue) || maxValue <= 0) return undefined;
+  if (!Number.isFinite(currentValue) || currentValue < 0) return undefined;
+  return { current: currentValue, max: maxValue };
 }
 
 function memoryOf(

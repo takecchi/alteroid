@@ -134,3 +134,62 @@ describe('実行環境の資源', () => {
     expect(resources.cpu?.cores).toBe(32);
   });
 });
+
+/**
+ * pids（#315「器の pids の合計がどこからも見えない」の案1）。
+ *
+ * **`pids` は cpu / memory と同じ作法で読むが、フォールバック先を持たない。**
+ * cpu / memory は cgroup が無ければホスト（`os`）の値へ倒れられるが、
+ * 「ホストの pids 上限」に相当する概念自体が無いので、pids は読めなければ
+ * **無条件で欄ごと出さない**（0 にも `unknown` にもしない）。
+ */
+describe('pids（プロセス数）', () => {
+  it('cgroup の pids.current / pids.max を読む', async () => {
+    place(root, { ...CGROUP_FILES, 'pids.current': '872\n', 'pids.max': '1000\n' });
+    writeFileSync(join(root, 'proc-cgroup'), '0::/\n');
+
+    const resources = await read();
+
+    expect(resources.pids).toEqual({ current: 872, max: 1000 });
+  });
+
+  /**
+   * **これが cpu / memory との非対称そのものである。** 同じ器で cpu / memory は
+   * 上限なし（`max`）を読んで `os` の値へ倒れているのに、pids だけは欄ごと消える。
+   * 1本のテストで両方を確かめないと、「pids だけ倒れない」という差が実測されない。
+   */
+  it('上限の無い器（pids.max が `max`）では、cpu/memory が os へ倒れても pids だけ欄ごと出ない', async () => {
+    place(root, { ...CGROUP_FILES, 'pids.current': '872\n', 'pids.max': 'max\n' });
+    writeFileSync(join(root, 'proc-cgroup'), '0::/\n');
+
+    const resources = await read();
+
+    expect(resources.memory?.source).toBe('cgroup');
+    expect(resources.cpu?.source).toBe('cgroup');
+    // pids には `os` 相当の代替が無いので、`current` が読めていても出ない。
+    expect(resources.pids).toBeUndefined();
+  });
+
+  it('pids.current が読めなければ、pids.max だけがあっても欄ごと出さない', async () => {
+    place(root, { ...CGROUP_FILES, 'pids.max': '1000\n' });
+    writeFileSync(join(root, 'proc-cgroup'), '0::/\n');
+
+    const resources = await read();
+
+    expect(resources.pids).toBeUndefined();
+  });
+
+  it('cgroup 自体が無い器では、cpu/memory は os の値で答えるが pids は出ない', async () => {
+    const resources = await readExecutionResources({
+      cgroupRoot: join(root, 'no-such-cgroup'),
+      procCgroupPath: join(root, 'no-such-proc'),
+      host: HOST,
+    });
+
+    // **cpu / memory と pids の経路がここで分かれる**——これが「フォールバック先が
+    // 無い」の実測である。
+    expect(resources.cpu?.source).toBe('os');
+    expect(resources.memory?.source).toBe('os');
+    expect(resources.pids).toBeUndefined();
+  });
+});

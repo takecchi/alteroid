@@ -276,6 +276,18 @@ export const runnerExecutionResourcesSchema = z.object({
       source: z.enum(['cgroup', 'os']),
     })
     .optional(),
+  /**
+   * プロセス数（cgroup v2 の `pids.current` / `pids.max`。#315）。**器の合計**で
+   * あって、内訳ではない——何が持っているかはこの数字からは分からない
+   * （`runner_list` の出力側で毎回そう断る）。
+   *
+   * **`source` を持たない。** `cpu` / `memory` は cgroup が無ければ `os`
+   * （ホストの値）へ倒れられるが、pids には倒れる先が無い——「ホストの pids
+   * 上限」という概念自体が存在しない（`readExecutionResources` の doc）。だから
+   * cgroup から読めなければ、この材料はまるごと省略される（0 でも `unknown`
+   * でもない——AGENTS.md「取れない軸に 0 の行を作らない」）。
+   */
+  pids: z.object({ current: z.number().nonnegative(), max: z.number().positive() }).optional(),
 });
 
 export type RunnerExecutionResources = z.infer<typeof runnerExecutionResourcesSchema>;
