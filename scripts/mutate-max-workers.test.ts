@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 // @ts-expect-error -- 素の .mjs（型宣言を持たない変異試験ハーネス）を読む
-import { buildTestSpawnArgs, DEFAULT_MAX_WORKERS } from '../.claude/skills/mutation-testing/mutate-core.mjs';
+import {
+  buildTestSpawnArgs,
+  DEFAULT_MAX_WORKERS,
+} from '../.claude/skills/mutation-testing/mutate-core.mjs';
 
 /**
  * #331: 変異ハーネスの `runTests` が `pnpm test` へ渡す args 配列を組み立てる

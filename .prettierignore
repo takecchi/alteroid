@@ -8,3 +8,11 @@ pnpm-lock.yaml
 
 # docs/ は正典。整形ツールにも触らせない（AGENTS.md「リポジトリの約束」）
 docs/
+
+# 変異試験（.claude/skills/mutation-testing/）の途中生成物（#332）。
+# 印と .bak の置き場はどちらも意図して .gitignore には入れていない
+# （mutate-core.mjs 冒頭のコメント参照 — git status に出ることが狙いの設計）。
+# ここ（.prettierignore）は git とは無関係なので、その設計を壊さずに
+# prettier --check . が中身の形式次第で落ちる問題（Issue #332 の3）だけを塞ぐ。
+MUTATION-IN-PROGRESS.json
+.mutation-testing/
