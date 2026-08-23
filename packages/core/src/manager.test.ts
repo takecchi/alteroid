@@ -3195,6 +3195,113 @@ describe('止めた結果を確かめる', () => {
   });
 
   /**
+   * **Issue #320。** クローン自身が `manager_stop` で止めたときの知らせは、
+   * 同じターンの中で同期の戻り値として既に読めている（`packages/core/src/
+   * tools.ts` の `manager_stop` の戻り値が `messageText` の真部分集合を
+   * 含む）。非同期の `manager_message` を重ねて配ると、新しい情報が無いのに
+   * クローンのターンだけ1回消費する（実測: 終了済み7本を畳んで7ターン）。
+   * `abort()` は日誌（`#journal`）を無条件に呼んだうえで、配達（`#post`）
+   * だけを `by === 'clone'` のとき省く——このテストは「配らない」側だけを
+   * 見る。人間発が今までどおり配ることは、次の
+   * 「人間が止めたときは、今までどおり manager_message が1件配られる」で
+   * 対にして見る——**この2本は対でなければ意味が無い**。ここだけ緑にして
+   * 隣を書かないと、`#post` をまるごと消す変異（human 発まで壊す変異）が
+   * 素通りしてしまう。
+   */
+  it('クローンが manager_stop で止めても、manager_message は配らない（post 0件）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job);
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    await s.pool.abort(job.id, '報告は出たのに終わらない', 'clone');
+
+    expect(s.inbox.filter((event) => event.type === 'manager_message')).toHaveLength(0);
+
+    await s.pool.stop();
+  });
+
+  /**
+   * 直前の「クローンが manager_stop で止めても配らない」と対で読む一本。
+   * 人間が止めた事実はクローンにとって外から来た出来事で、同期の戻り値を
+   * 持たない（人間は `manager_stop` ツールを呼んでいないので、そのものが
+   * 無い）——だからここだけは配達が唯一の経路であり、今までどおり配る。
+   */
+  it('人間が止めたときは、今までどおり manager_message が1件配られる（クローン発と対で見る）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job);
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    await s.pool.abort(job.id, '暴走したので', 'human');
+
+    const messages = s.inbox.filter((event) => event.type === 'manager_message');
+    expect(messages).toHaveLength(1);
+    expect(JSON.stringify(messages[0])).toContain('人間が停止させました');
+
+    await s.pool.stop();
+  });
+
+  /**
+   * `outcome !== 'stopped'` でも、`by === 'clone'` なら配らない。`stopped` の
+   * 枝だけを見て `if (by !== 'clone')` を書くと通ってしまう変異
+   * （`not_stopped` / `unknown` の枝にだけ古い無条件 `#post` を残す形）を
+   * この2本（本テストと次の `unknown`）で塞ぐ。
+   */
+  it('クローンが止めても、outcome が not_stopped なら配らない', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({ ...job, status: 'waiting_human' });
+    // `swappableRunner` の `stop` は何もしない ＝ 受理はするが畳まない器。
+    const fake = swappableRunner();
+    fake.state.alive.push({
+      managerId: job.id,
+      status: 'waiting_human',
+      cwd: job.cwd,
+      request: job.request,
+      waiting: [{ requestId: 'req-1', summary: '本番に触ってよいか' }],
+      sessionId: job.sessionId,
+    });
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+    // **`restore()` 自体が「待ちが残っている」通知を配ることがある** — ここで
+    // 数えたいのは `abort()` が新たに配ったぶんだけなので、`restore()` の後で
+    // 基準を取り直す（この後は `abort()` しか `#post` を呼ばない）。
+    const beforeAbort = s.inbox.length;
+
+    const result = await s.pool.abort(job.id, '報告は出たのに終わらない', 'clone');
+
+    expect(result.outcome).toBe('not_stopped');
+    expect(
+      s.inbox.slice(beforeAbort).filter((event) => event.type === 'manager_message'),
+    ).toHaveLength(0);
+
+    await s.pool.stop();
+  });
+
+  it('クローンが止めても、outcome が unknown なら配らない', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job);
+    const fake = swappableRunner();
+    const runner = {
+      ...fake.runner,
+      async stop(): Promise<void> {
+        throw new Error('期限切れ（テスト）');
+      },
+      async list() {
+        throw new Error('list も届かない（テスト）');
+      },
+    };
+    const s = setup(undefined, { stores, runner });
+
+    const result = await s.pool.abort(job.id, '報告は出たのに終わらない', 'clone');
+
+    expect(result.outcome).toBe('unknown');
+    expect(s.inbox.filter((event) => event.type === 'manager_message')).toHaveLength(0);
+
+    await s.pool.stop();
+  });
+
+  /**
    * `markup: 'none'` は、人間が停止理由へ自由記述で打った `reason` が実際に
    * `messageText` へ埋め込まれる回にだけ立つ（issue #287）。条件は
    * `by === 'human' && reason !== undefined` の2つで、**どちらか片方だけ
@@ -3245,14 +3352,27 @@ describe('止めた結果を確かめる', () => {
     await s.pool.stop();
   });
 
-  it('クローンが reason 付きで止めても markup は立たない（by === "clone"）', async () => {
+  /**
+   * **2026-08-24 に反転（Issue #320）。** 直す前は `by === 'clone'` でも
+   * `manager_message` が配られていて、ここは「配られはするが `markup` だけは
+   * 立たない」ことを固定していた。#320 の修正で `by === 'clone'` のときは
+   * そもそも配らなくなった（`abort()` 内の `if (by !== 'clone')`）ので、
+   * 「配られる」という前提そのものが崩れている——`markup` の有無を問う以前に、
+   * 問う対象の `manager_message` が無い。**保証は弱くなっていない**: 以前は
+   * 「配られるが印は無い」だったのが、いまは「配られないので印を心配する
+   * 必要が無い」という、より強い形に置き換わっている（`stopped` が
+   * `undefined` であること自体が、`markup` が絶対に立たないことの証明を
+   * 兼ねる）。この反転自体は「クローンが manager_stop で止めても、
+   * manager_message は配らない（post 0件）」と重なるが、**そちらは0件を
+   * 数えるだけで、`markup` という観点をこの場所に残す意味がある**ので消さない。
+   */
+  it('クローンが reason 付きで止めても manager_message は配られない（markup を問うまでもない。by === "clone"）', async () => {
     const s = await stoppableSetup();
 
     await s.pool.abort(job.id, '報告は出たのに終わらない', 'clone');
 
     const stopped = findStopMessage(s.inbox, '報告は出たのに終わらない');
-    expect(stopped).toBeDefined();
-    expect(stopped?.markup).toBeUndefined();
+    expect(stopped).toBeUndefined();
 
     await s.pool.stop();
   });
