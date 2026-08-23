@@ -221,25 +221,22 @@ function runTest(step) {
   process.stdout.write('\n=== ' + step.name + ': ' + step.cmd + ' ' + args.join(' ') + '\n');
   return new Promise((resolve) => {
     const child = spawn(step.cmd, args, { cwd: REPO, stdio: ['inherit', 'pipe', 'pipe'] });
+    // **stdout だけを判定用に溜める**（上の doc）。stderr は流すだけで溜めない —
+    // 溜めても `testRan` には渡さないので、溜める理由が無い（不要な状態を持つと、
+    // 次に読む者が「判定に使っているのか」と誤読する）。
     let stdoutText = '';
-    let stderrText = '';
     child.stdout.on('data', (chunk) => {
       const text = chunk.toString('utf8');
       stdoutText += text;
       process.stdout.write(text);
     });
     child.stderr.on('data', (chunk) => {
-      const text = chunk.toString('utf8');
-      stderrText += text;
-      process.stdout.write(text);
+      process.stdout.write(chunk.toString('utf8'));
     });
     child.on('error', (error) =>
       resolve({ output: stdoutText, status: null, signal: null, startError: error }),
     );
     child.on('close', (status, signal) => resolve({ output: stdoutText, status, signal }));
-    // `stderrText` は今のところ判定に使わない（`testRan` は stdout だけを見る、上の
-    // doc）。それでも溜めておくのは、流すのと同じ理由（途中経過を捨てない）に加えて、
-    // 次に「stderr 側も判定に使いたい」となったとき、多重化を復活させずに済むように。
   });
 }
 
