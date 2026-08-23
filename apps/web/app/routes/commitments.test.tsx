@@ -97,6 +97,31 @@ describe('/commitments 画面', () => {
   });
 
   /**
+   * **バッジの実行時の倒れ先を固定する歯（issue #288）。**
+   *
+   * `ORIGIN_LABEL`（`commitments.tsx`）は `Record<CommitmentOrigin, string>`
+   * のまま網羅性を保っているので、`commitmentOriginSchema`
+   * （`packages/core/src/schema.ts:892`）に無い値がビルド時に来ることは無い
+   * （変異試験で確認済み、PR 本文）。
+   *
+   * **ただし実行時はビルド時の型を追い越しうる。** デーモンが先に新しい
+   * `origin` を返し、この画面（この型定義）がまだ古い、という順序が実在する
+   * （#285 の `CommitmentBody` と同じ理由）。`originLabel()`
+   * はその倒れ先を固定する — **空文字ではなく、起点の生の値そのものを出す。**
+   */
+  it('未知の origin でもバッジのラベルが空文字にならず、起点の生の値が出る（実行時の倒れ先）', async () => {
+    stubCommitments([
+      commitment({ origin: 'probe' as CommitmentOrigin, body: '未知の起点のコミットメント' }),
+    ]);
+    renderPage();
+
+    await screen.findByText('未知の起点のコミットメント');
+    // ORIGIN_LABEL に無いキーなので、undefined ではなく 'probe'（生の値）が
+    // そのままバッジに出る。空文字（≒バッジの中身が見えない）にはならない。
+    expect(screen.getByText('probe')).toBeTruthy();
+  });
+
+  /**
    * 器は行を消さない（「何を片付けたか」は日報の材料である）。読む手立てが画面に
    * 無いと、その事実へ人間が到達できない。既定で出さないのは未了が埋もれるため。
    */
