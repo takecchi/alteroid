@@ -164,4 +164,12 @@ minimumReleaseAgeExclude:
 # `test` script の有無とは無関係の別穴（パッケージ名の誤字・コピペミス）で、
 # 実測（2026-08-23T07:3xZ）: `pnpm --filter @alteroid/nope test` は
 # 「No projects matched...」と表示しつつ exit 0 だった。これを立てると exit 1 になる。
+#
+# **置き場所は `.npmrc` ではなくここ（`pnpm-workspace.yaml`）であること。**
+# `.npmrc` に `fail-if-no-match=true` を置いても黙って無視される（実測
+# 2026-08-23T07:36Z, pnpm 11.21.0）:
+#   $ pnpm --filter @alteroid/nope --fail-if-no-match test    → EXIT:1
+#   $ .npmrc に fail-if-no-match=true → 同じコマンド           → EXIT:0（無視される）
+#   $ ここ（pnpm-workspace.yaml）に failIfNoMatch: true → 同じコマンド → EXIT:1（効く）
+# `.npmrc` へ「移したほうが素直」に見えても移さないこと — 移した瞬間にこの穴が戻る。
 failIfNoMatch: true
