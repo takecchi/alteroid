@@ -630,10 +630,23 @@ class HttpRunner implements RunnerClient {
    * （次のバックオフは基準から始まる）。
    *
    * ログは**初回と、待ち時間が変わったときだけ**書く（同じ行を毎回吐かない）。
-   * 加えて、**「繋ぎ直せた」はリセットと同じ条件（持続した）で1行書く** ——
-   * 繋がるたびに書くと「繋がった」と「回復した」が同じ記号に化ける。同じ条件を
-   * 共有することで、この行の意味は「システムが回復したと判断した」の一つに
-   * 決まる——出ないことは「一度も回復していない」を意味する。
+   * 加えて、**「繋ぎ直せた」はリセットと同じ条件（持続した）で書く** ——
+   * 繋がるたびに書くと「繋がった」と「回復した」が同じ記号に化ける。
+   *
+   * **書く時点は「健全と判定した瞬間」であり、「接続が終わった後」ではない。**
+   * 持続した接続はそのまま生き続けることが多い——定常状態では `#stream()` が
+   * 何時間も終わらない。終了を待って書く形だと、「繋ぎ直せた」は**次に接続が
+   * 切れたときまで出ず、しかも直後の「切れました」とセットでしか読めない**。
+   * 回復が過去形でしか報告されず、#274 がいちばん見たい場面（繋がったまま
+   * 長く生きている接続）でこの行が出ない。**だから `markHealthy`（下の
+   * `#stream` へ渡すコールバック）自身の中で、健全と判定した瞬間に書く。**
+   * これで「出ないことは一度も回復していないことを意味する」が、接続がまだ
+   * 生きている間も含めて成立する。
+   *
+   * `markHealthy` は同じ接続の中で複数回呼ばれうる（冪等——`#stream` の doc）。
+   * ここでは `#backingOff` を見てから倒す形にしているので、2回目以降の
+   * 呼び出しでは `#backingOff` が既に `false` になっており、**1接続につき
+   * 最大1行に保たれる。**
    */
   async #pump(onEvent: (event: RunnerEvent) => void): Promise<void> {
     while (!this.#closed) {
@@ -643,6 +656,12 @@ class HttpRunner implements RunnerClient {
       try {
         await this.#stream(onEvent, () => {
           healthy = true;
+          // **健全と判定した瞬間に書く。** `#stream()` がまだ終わっていなくても
+          // （＝接続がまだ生きていても）ここへ来る——`#pump` の doc を参照。
+          if (this.#backingOff) {
+            process.stderr.write(`alteroidd: runner のストリームに繋ぎ直せた\n`);
+            this.#backingOff = false;
+          }
         });
       } catch (error) {
         if (this.#closed) return;
@@ -650,11 +669,6 @@ class HttpRunner implements RunnerClient {
         failure = error;
       }
       if (this.#closed) return;
-
-      if (healthy && this.#backingOff) {
-        process.stderr.write(`alteroidd: runner のストリームに繋ぎ直せた\n`);
-        this.#backingOff = false;
-      }
 
       const waitMs = healthy ? this.#retryBaseMs : this.#nextDelayMs;
 

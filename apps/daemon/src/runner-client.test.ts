@@ -1226,6 +1226,70 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
       const lines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
       expect(lines.some((line: string) => line.includes('繋ぎ直せた'))).toBe(false);
     });
+
+    it('繋ぎ直せた は、接続が生きたままの間に出る（接続が終わるのを待たない）', async () => {
+      // **この歯が守るのは「時点」である。** 上の2本（hello直後／無音）は
+      // 「出ないこと」を測っているが、こちらは「出るタイミング」を測る——
+      // 接続を手で操作できるストリームにして、閉じずにバイトだけを流し、
+      // その時点で既に stderr へ書かれていることを確認する。
+      //
+      // **接続を閉じてから確認する形にしないこと。** 閉じてから確認すると、
+      // 「`#stream()` が終わった後に書く」実装でも「健全と判定した瞬間に
+      // 書く」実装でも同じ結果になり、この2つを区別できない
+      // （このテストが守りたい性質そのものが見えなくなる）。
+      let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined;
+      let eventsCalls = 0;
+      const fetchFn = (async (input: string | URL | Request) => {
+        const path = pathOf(input);
+        if (path === '/health') {
+          return Response.json({ runnerId: 'runner-flaky', workspacePath: '/workspace' });
+        }
+        if (path === '/events') {
+          eventsCalls += 1;
+          if (eventsCalls === 1) return new Response(null, { status: 503 }); // 1敗目
+          // 2本目の接続: 手で操作できるストリーム（閉じない限り生き続ける）。
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start: (controller) => {
+                controllerRef = controller;
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'text/event-stream' } },
+          );
+        }
+        throw new Error(`想定していない path: ${path}`);
+      }) as typeof fetch;
+
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+        sleepFn: async () => undefined, // 1敗目の待ちを即座に消費し、2本目へ進む
+        nowFn: nowFnAtExactThreshold(),
+      });
+      await client.connect(() => undefined);
+
+      // 1敗目のログが出て、2本目の接続（手で操作できるストリーム）が
+      // 開かれるのを待つ。
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(controllerRef).toBeDefined();
+      expect(
+        stderrSpy.mock.calls.some((call: unknown[]) => String(call[0]).includes('繋ぎ直せた')),
+      ).toBe(false);
+
+      // 閾値ちょうどでバイトを1つ流す。接続はまだ閉じていない
+      // （`controllerRef.close()` を呼んでいない）。
+      controllerRef?.enqueue(new TextEncoder().encode(HEARTBEAT_FRAME));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      // **接続がまだ生きている時点で、既に書かれている。**
+      const lines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      expect(lines.filter((line: string) => line.includes('繋ぎ直せた'))).toHaveLength(1);
+
+      // 後始末: ストリームを閉じてからクライアントも閉じる。
+      controllerRef?.close();
+      await client.close();
+    });
   });
 
   describe('stderr の cause 付記', () => {
