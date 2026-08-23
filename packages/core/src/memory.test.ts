@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   MEMORY_LISTING_BUDGET,
   MEMORY_TOC_ENTRY_LIMIT,
+  applyMemoryFrontmatterPatch,
   assertNeverMemoryCreatedAt,
   assertNeverMemoryDescriptionFreshness,
   assertNeverMemoryFrontmatterState,
@@ -288,6 +289,85 @@ describe('frontmatter の解釈（parseMemoryFrontmatter）— 3状態、畳ま�
       kind: 'parsed',
       description: '要旨だけ',
     });
+  });
+});
+
+/**
+ * `applyMemoryFrontmatterPatch` — #318 案 (a) の中核。
+ *
+ * **本文が1バイトも変わらないことを、複数見出しを持つ長い本文で確かめる**
+ * （マネージャーの指定どおり）。ここが崩れると「本文がツール呼び出しの中に
+ * 一度も現れない」という性質（`memory_frontmatter_set` の存在理由そのもの）
+ * が壊れる。
+ */
+describe('applyMemoryFrontmatterPatch — frontmatter のキーだけを差し替える。本文には触れない', () => {
+  const longBody = [
+    '# 価値観',
+    '',
+    '## 判断の基準',
+    '',
+    '本文1行目。',
+    '本文2行目。',
+    '',
+    '## 好み',
+    '',
+    '- 箇条書き1',
+    '- 箇条書き2',
+    '',
+    '### 細目',
+    '',
+    '最後の段落。複数行の\n本文が続く。',
+  ].join('\n');
+
+  it('frontmatter が無い（none）文書には、先頭に新しく作って足す。本文は無傷', () => {
+    const next = applyMemoryFrontmatterPatch(longBody, { description: '新しい要旨' });
+    expect(next).toBe(`---\ndescription: 新しい要旨\n---\n${longBody}`);
+    // 本文がそのまま、1文字も変わらずに残っている。
+    expect(next.endsWith(longBody)).toBe(true);
+  });
+
+  it('type を渡さなければ、none の文書は premise のまま（載り方は変わらない）', () => {
+    const next = applyMemoryFrontmatterPatch(longBody, { description: '要旨' });
+    expect(resolveMemoryDocKind(parseMemoryFrontmatter(next))).toBe('premise');
+  });
+
+  it('parsed の文書は、渡したキーだけを差し替え、渡さなかったキーは既存のまま残す', () => {
+    const original = `---\ndescription: 古い要旨\ntype: fact\nparent: root\n---\n${longBody}`;
+    const next = applyMemoryFrontmatterPatch(original, { description: '新しい要旨' });
+    expect(parseMemoryFrontmatter(next)).toEqual({
+      kind: 'parsed',
+      description: '新しい要旨',
+      type: 'fact',
+      parent: 'root',
+    });
+  });
+
+  it('本文は1バイトも変わらない（見出しを複数持つ長い本文で確かめる）', () => {
+    const original = `---\ndescription: 古い要旨\ntype: premise\n---\n${longBody}`;
+    const next = applyMemoryFrontmatterPatch(original, { type: 'fact' });
+    const body = next.split('\n').slice(4).join('\n'); // 3行の frontmatter + 閉じの --- の次から
+    expect(body).toBe(longBody);
+  });
+
+  it('3キー全部を同時に差し替えられる', () => {
+    const original = `---\ndescription: 古\ntype: premise\nparent: old-parent\n---\n${longBody}`;
+    const next = applyMemoryFrontmatterPatch(original, {
+      description: '新',
+      type: 'fact',
+      parent: 'new-parent',
+    });
+    expect(parseMemoryFrontmatter(next)).toEqual({
+      kind: 'parsed',
+      description: '新',
+      type: 'fact',
+      parent: 'new-parent',
+    });
+  });
+
+  it('malformed には例外を投げる（呼び手が先に断ること）', () => {
+    const malformed = '---\nno colon here\n---\n本文';
+    expect(parseMemoryFrontmatter(malformed)).toEqual({ kind: 'malformed' });
+    expect(() => applyMemoryFrontmatterPatch(malformed, { description: 'x' })).toThrow();
   });
 });
 

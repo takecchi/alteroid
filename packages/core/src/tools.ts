@@ -829,7 +829,10 @@ export function createCloneTools(context: ToolContext) {
       ].join(' '),
       {
         slug: z.string().describe('文書のスラッグ（拡張子なし）'),
-        description: z.string().optional().describe('要旨（目次の1行に載る）。渡さなければ既存の値のまま'),
+        description: z
+          .string()
+          .optional()
+          .describe('要旨（目次の1行に載る）。渡さなければ既存の値のまま'),
         type: z
           .string()
           .optional()
@@ -867,7 +870,11 @@ export function createCloneTools(context: ToolContext) {
         }
 
         const priorKind = resolveMemoryDocKind(priorFrontmatter);
-        const nextContent = applyMemoryFrontmatterPatch(existing.content, { description, type, parent });
+        const nextContent = applyMemoryFrontmatterPatch(existing.content, {
+          description,
+          type,
+          parent,
+        });
         const written = await stores.persona.write(slug, nextContent);
         const nextKind = resolveMemoryDocKind(parseMemoryFrontmatter(written.content));
 

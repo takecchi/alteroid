@@ -357,7 +357,10 @@ function serializeMemoryFrontmatter(fields: MemoryFrontmatterPatch): string {
  * 「空のパッチ」を渡されれば frontmatter を（内容が変わらないまま）
  * 再構成して返す。
  */
-export function applyMemoryFrontmatterPatch(content: string, patch: MemoryFrontmatterPatch): string {
+export function applyMemoryFrontmatterPatch(
+  content: string,
+  patch: MemoryFrontmatterPatch,
+): string {
   const state = parseMemoryFrontmatter(content);
   if (state.kind === 'malformed') {
     throw new Error(

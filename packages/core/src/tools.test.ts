@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { ManagerDenial, ManagerPool, ManagerSummary, RunnerFleetOverview } from './manager.js';
 import { renderMemoryDocuments } from './memory.js';
@@ -861,6 +861,330 @@ describe('クローンの道具', () => {
 
       const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
       expect(entry).toMatchObject({ action: 'remove' });
+    });
+  });
+
+  /**
+   * `memory_frontmatter_set` — #318 案 (a)。frontmatter（description / type /
+   * parent）のうち渡したキーだけを差し替える。**本文には一切触れない。**
+   *
+   * ここでの中心の保証は「本文がツール呼び出しの中に一度も現れないので、
+   * 本文が途中で切れることが構造的に起こりえない」こと（長い・見出しを
+   * 複数持つ本文で確かめる）と、「`guardFullReplace` を迂回していない」こと
+   * （human guard と同じ4条件で確かめる）である。
+   */
+  describe('memory_frontmatter_set（frontmatter だけを直す。本文には触れない）', () => {
+    async function markHuman(h: Harness, slug: string, content: string): Promise<void> {
+      await h.stores.persona.write(slug, content);
+      await h.stores.persona.markHumanTouched(slug, new Date().toISOString());
+    }
+
+    const longBody = [
+      '# 価値観',
+      '',
+      '## 判断の基準',
+      '',
+      '本文1行目。',
+      '本文2行目。',
+      '',
+      '## 好み',
+      '',
+      '- 箇条書き1',
+      '- 箇条書き2',
+      '',
+      '### 細目',
+      '',
+      '最後の段落。',
+    ].join('\n');
+
+    it('存在しない slug には断り、作られていない', async () => {
+      const h = harness();
+
+      const reply = await h.call('memory_frontmatter_set', {
+        slug: 'nope',
+        description: '要旨',
+        summary: '直したつもり',
+      });
+
+      expect(reply).toContain('存在しない');
+      expect(await h.stores.persona.read('nope')).toBeNull();
+    });
+
+    it('キーを1つも渡さなければ断る（何も変わらない）', async () => {
+      const h = harness();
+      const original = `---\ndescription: 元の要旨\n---\n${longBody}`;
+      await h.stores.persona.write('values', original);
+
+      const reply = await h.call('memory_frontmatter_set', { slug: 'values', summary: '直す' });
+
+      expect(reply).toMatch(/断|少なくとも1つ/);
+      expect((await h.stores.persona.read('values'))?.content).toBe(original);
+    });
+
+    it('frontmatter が無い（none）文書に足せる。本文は無傷で、type を渡さなければ区分は premise のまま', async () => {
+      const h = harness();
+      await h.stores.persona.write('values', longBody);
+
+      await h.call('memory_frontmatter_set', {
+        slug: 'values',
+        description: '新しい要旨',
+        summary: '要旨を足した',
+      });
+
+      const doc = await h.stores.persona.read('values');
+      expect(doc?.content.endsWith(longBody)).toBe(true);
+      expect(doc?.content).toContain('description: 新しい要旨');
+      expect(doc?.kind).toBe('premise');
+    });
+
+    it('本文は1バイトも変わらない（見出しを複数持つ長い本文で確かめる）', async () => {
+      const h = harness();
+      const original = `---\ndescription: 古い要旨\ntype: premise\n---\n${longBody}`;
+      await h.stores.persona.write('values', original);
+
+      await h.call('memory_frontmatter_set', {
+        slug: 'values',
+        type: 'fact',
+        summary: '区分を変えた',
+      });
+
+      const content = (await h.stores.persona.read('values'))?.content ?? '';
+      const bodyAfter = content.split('\n').slice(4).join('\n'); // --- desc type --- の4行の次から
+      expect(bodyAfter).toBe(longBody);
+    });
+
+    it('渡さなかったキーは既存の値のまま残る', async () => {
+      const h = harness();
+      const original = `---\ndescription: 元の要旨\ntype: fact\nparent: root\n---\n${longBody}`;
+      await h.stores.persona.write('values', original);
+
+      await h.call('memory_frontmatter_set', {
+        slug: 'values',
+        description: '新しい要旨',
+        summary: '要旨だけ直した',
+      });
+
+      const doc = await h.stores.persona.read('values');
+      expect(doc?.description).toBe('新しい要旨');
+      expect(doc?.kind).toBe('fact');
+      expect(doc?.parent).toBe('root');
+    });
+
+    it('description を変えると memory_list の ⚠古い要旨 が消える（describedAt が進む）', async () => {
+      // **時刻を自分で固定する。** `updatedAt` / `describedAt` は実時計
+      // （`new Date().toISOString()`）から来るので、2回の write が同じ
+      // ミリ秒に収まると `describedAt >= updatedAt` が偶然 true になり
+      // stale を作れない（AGENTS.md「時刻を assert するテストは自分で
+      // TZ を固定する」と同じ理由——ここでは TZ ではなく時刻の進みそのもの
+      // を固定する）。
+      vi.useFakeTimers();
+      try {
+        const h = harness();
+        await h.stores.persona.write('values', `---\ndescription: 古い要旨\n---\n${longBody}`);
+        vi.advanceTimersByTime(1000);
+        // 本文だけを更新 → description は据え置かれるので stale になる。
+        await h.stores.persona.write(
+          'values',
+          `---\ndescription: 古い要旨\n---\n${longBody}\n\n追加の1文。`,
+        );
+        vi.advanceTimersByTime(1000);
+
+        const staleListing = await h.call('memory_list', {});
+        expect(staleListing).toContain('⚠古い要旨');
+
+        await h.call('memory_frontmatter_set', {
+          slug: 'values',
+          description: '本文に合わせた新しい要旨',
+          summary: '要旨を直した',
+        });
+
+        const freshListing = await h.call('memory_list', {});
+        expect(freshListing).not.toContain('⚠古い要旨');
+        expect(freshListing).toContain('本文に合わせた新しい要旨');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('type を変えたら、載り方が変わったことが応答に出る（premise → fact）', async () => {
+      const h = harness();
+      await h.stores.persona.write('values', `---\ntype: premise\n---\n${longBody}`);
+
+      const reply = await h.call('memory_frontmatter_set', {
+        slug: 'values',
+        type: 'fact',
+        summary: '区分を下げた',
+      });
+
+      expect(reply).toContain('premise');
+      expect(reply).toContain('fact');
+      expect(reply).toMatch(/目次の1行|全文には載らない/);
+    });
+
+    it('type を変えなければ、区分が変わったという文言は出ない', async () => {
+      const h = harness();
+      await h.stores.persona.write('values', `---\ntype: premise\n---\n${longBody}`);
+
+      const reply = await h.call('memory_frontmatter_set', {
+        slug: 'values',
+        description: '要旨だけ',
+        summary: '要旨だけ',
+      });
+
+      expect(reply).not.toContain('区分が変わった');
+    });
+
+    it('malformed な frontmatter には断り、何も変わっていない', async () => {
+      const h = harness();
+      const malformed = '---\nno colon here\n---\n本文';
+      await h.stores.persona.write('values', malformed);
+
+      const reply = await h.call('memory_frontmatter_set', {
+        slug: 'values',
+        description: '直したい',
+        summary: '直したつもり',
+      });
+
+      expect(reply).toContain('malformed');
+      expect((await h.stores.persona.read('values'))?.content).toBe(malformed);
+    });
+
+    it('差分の要約（describeMemoryWriteDiff）が応答に付き、消えた見出しは無い', async () => {
+      const h = harness();
+      await h.stores.persona.write('values', `---\ndescription: 旧\n---\n${longBody}`);
+
+      const reply = await h.call('memory_frontmatter_set', {
+        slug: 'values',
+        description: '新',
+        summary: '要旨を直した',
+      });
+
+      expect(reply).toContain('消えた見出し: なし。');
+    });
+
+    it('日誌には action: "describe" が構造として載る（bytesBefore/After も数として残る）', async () => {
+      const h = harness();
+      await h.stores.persona.write('values', `---\ndescription: 旧\n---\n${longBody}`);
+
+      await h.call('memory_frontmatter_set', {
+        slug: 'values',
+        description: '新しい要旨（長め）',
+        summary: '要旨を直した',
+      });
+
+      const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
+      expect(entry).toMatchObject({ type: 'memory_update', slug: 'values', action: 'describe' });
+      const withBytes = entry as { bytesBefore: number; bytesAfter: number };
+      expect(typeof withBytes.bytesBefore).toBe('number');
+      expect(typeof withBytes.bytesAfter).toBe('number');
+    });
+
+    describe('human guard — guardFullReplace をそのまま通す', () => {
+      it('⚠️ 蒸留の走行からは human 文書を書き換えられない。断り文だけでなく frontmatter が1文字も変わっていないことも確かめる', async () => {
+        const h = harness();
+        const original = `---\ndescription: 人間が書いた要旨\ntype: premise\n---\n${longBody}`;
+        await markHuman(h, 'values', original);
+        h.setMemoryCause('distill');
+
+        const reply = await h.call('memory_frontmatter_set', {
+          slug: 'values',
+          description: '蒸留が書き換えたい要旨',
+          summary: '直したつもり',
+        });
+
+        expect(reply).toContain('断った');
+        // 断り文が出たことだけでなく、frontmatter 込みで内容が1文字も変わっていないことを確かめる
+        // （断ってから書いてしまう実装が生存しないように）。
+        expect((await h.stores.persona.read('values'))?.content).toBe(original);
+      });
+
+      // **`unknown`（履歴が無い）は、この口ではテストできない。** `memory_write`
+      // と違い `memory_frontmatter_set` は「既に在る文書にしか使えない」ので、
+      // 保護状態を問う時点で必ず一度 `persona.write()` を通っている——
+      // `createMemoryStores()`（インメモリの器）はそこで必ず `contentSha256` を
+      // 立てるため、書き込み済みの文書が `unknown` になる経路が無い（`unknown`
+      // は「索引を失った」ことを表す状態で、fs/pg の索引破損でしか作れない。
+      // `memory_delete` の human guard テストも同じ理由で `unknown` を
+      // テストしていない）。`human` と `unknown` は `denialMessage` の中で
+      // 同じ分岐（`guardFullReplace` の switch）を通るので、`human` 側の
+      // テスト（直上）が同じコードパスを検査している。
+
+      it('断りの応答は4要素を持つ。ただし4つ目は memory_append を勧めない（要旨を直したい人には無意味）', async () => {
+        const h = harness();
+        const original = `---\ndescription: 人間の要旨\n---\n${longBody}`;
+        await markHuman(h, 'values', original);
+        h.setMemoryCause('distill');
+
+        const reply = await h.call('memory_frontmatter_set', {
+          slug: 'values',
+          description: '書き換えたい',
+          summary: '直したつもり',
+        });
+
+        // (1) なぜ断ったか
+        expect(reply).toContain('人間の書き込みの履歴が在る');
+        // (2) どうすれば通るか
+        expect(reply).toContain('ask_human');
+        expect(reply).toContain('values');
+        // (3) いま何も失われていない
+        expect(reply).toMatch(/変わっていない|残っている/);
+        // (4) memory_append は代わりにならないと明言する（勧めない）。
+        expect(reply).toContain('memory_append');
+        expect(reply).toContain('代わりにならない');
+      });
+
+      it('clone の書き込みは通る（能力を消していない）', async () => {
+        const h = harness();
+        const original = `---\ndescription: 人間の要旨\n---\n${longBody}`;
+        await markHuman(h, 'values', original);
+        h.setMemoryCause('clone');
+
+        const reply = await h.call('memory_frontmatter_set', {
+          slug: 'values',
+          description: '会話の中で直した要旨',
+          summary: '直した',
+        });
+
+        expect(reply).toContain('更新した');
+        expect((await h.stores.persona.read('values'))?.description).toBe('会話の中で直した要旨');
+      });
+
+      it('対照 — clone-only の文書には distill からも通る（検出器が非0を出せること）', async () => {
+        const h = harness();
+        await h.call('memory_write', { slug: 'notes', content: longBody, summary: '作成' });
+        expect(await h.stores.persona.protectionStatus('notes')).toEqual({ kind: 'clone-only' });
+
+        h.setMemoryCause('distill');
+        const reply = await h.call('memory_frontmatter_set', {
+          slug: 'notes',
+          description: '蒸留が付けた要旨',
+          summary: '蒸留で要旨を付けた',
+        });
+
+        expect(reply).toContain('更新した');
+        expect((await h.stores.persona.read('notes'))?.description).toBe('蒸留が付けた要旨');
+      });
+
+      it('トグルを off にすると断らない（能力を消していない）', async () => {
+        const h = harness();
+        const original = `---\ndescription: 人間の要旨\n---\n${longBody}`;
+        await markHuman(h, 'values', original);
+        h.setMemoryCause('distill');
+
+        const before = process.env.ALTEROID_MEMORY_GUARD;
+        process.env.ALTEROID_MEMORY_GUARD = 'off';
+        try {
+          const reply = await h.call('memory_frontmatter_set', {
+            slug: 'values',
+            description: 'off にしたので通る',
+            summary: '直した',
+          });
+          expect(reply).toContain('更新した');
+        } finally {
+          if (before === undefined) delete process.env.ALTEROID_MEMORY_GUARD;
+          else process.env.ALTEROID_MEMORY_GUARD = before;
+        }
+      });
     });
   });
 
