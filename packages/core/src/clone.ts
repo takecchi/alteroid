@@ -490,7 +490,12 @@ class Clone implements CloneHost {
   #claudeCodeVersion: string | null = null;
   #apiKeySource: string | null = null;
   #observedPermissionMode: string | null = null;
-  #mcpServersInfo: Array<{ name: string; status: string }> = [];
+  /**
+   * **`null` は「init 未観測」、`[]` は「init を観測して、SDK が0本と報告した」——
+   * 別の状態として持つ（#324）。** 隣の `#observedPermissionMode` 等と同じ形。
+   * どちらも `[]` に畳むと、`self.ts` 側でこの2つを区別する手段が無くなる。
+   */
+  #mcpServersInfo: Array<{ name: string; status: string }> | null = null;
   /** init で報告された、いまの SDK セッション id。`#resumedFrom` とは別（あちらは resume 元）。 */
   #sdkSessionId: string | null = null;
   /**
@@ -2737,17 +2742,23 @@ class Clone implements CloneHost {
     this.#claudeCodeVersion = null;
     this.#apiKeySource = null;
     this.#observedPermissionMode = null;
-    this.#mcpServersInfo = [];
+    // **`null` に戻す（`[]` ではない）。** セッションを開き直した直後は「まだ
+    // 観測していない」であって「0本と観測した」ではない（#324）。`[]` に戻すと
+    // 次の init が届くまでの窓で「0本」と嘘をつく。
+    this.#mcpServersInfo = null;
     this.#sdkSessionId = null;
   }
 
   /**
    * init で SDK が報告してきた実行時の事実を、`self_status` の材料として控える。
    *
-   * **`typeof` で検査し、読めない形は `null`（配列は空）のままにする。** 型定義の
-   * 上ではどれも必須フィールドだが、ここで読み違えて例外を投げると本セッションの
+   * **`typeof` で検査し、読めない形は `null` のままにする。** 型定義の上では
+   * どれも必須フィールドだが、ここで読み違えて例外を投げると本セッションの
    * 起動そのものが壊れる。読めなかったことは「まだ分からない」として出せば済む
-   * （`describeCloneRuntime` 側の仕事）。
+   * （`describeCloneRuntime` 側の仕事）。**`mcp_servers` も同じ扱いにする（#324）**
+   * —— この関数は init を観測した後にしか呼ばれないが、`mcp_servers` の形が
+   * 読めなかったときにまで「0本」と主張する根拠は無い。読めた配列だけが「0本」
+   * を名乗れる。
    */
   #captureInitFacts(message: SDKMessage): void {
     const raw = message as unknown as {
@@ -2773,7 +2784,7 @@ class Clone implements CloneHost {
             typeof (entry as { name?: unknown }).name === 'string' &&
             typeof (entry as { status?: unknown }).status === 'string',
         )
-      : [];
+      : null;
   }
 
   /**

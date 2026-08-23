@@ -161,8 +161,17 @@ export interface CloneRuntimeFacts {
    * 「どちらが効いているのか」を答えられない。
    */
   requestedPermissionMode: string;
-  /** SDK が init で報告した MCP サーバの名前と状態。 */
-  mcpServers: Array<{ name: string; status: string }>;
+  /**
+   * SDK が init で報告した MCP サーバの名前と状態。
+   *
+   * **`null` は「まだ init を観測していない」、`[]` は「init を観測して、
+   * 連携が1本も無いと報告された」——別の事実である（#324）。** 隣の
+   * `claudeCodeVersion` / `apiKeySource` / `permissionMode` と同じ形にしてある。
+   * `[]` を「未観測」の代わりに使うと、**観測できた「0本」という事実そのものが
+   * 出力から消える** — MCP は外部サービス接続の唯一の手段（PRD）なので、0本は
+   * それ自体が業務範囲について言う値であって、取れなかったのではない。
+   */
+  mcpServers: Array<{ name: string; status: string }> | null;
   /**
    * いまの SDK セッション id。まだ init が来ていなければ `null`。
    *
@@ -193,10 +202,16 @@ const INIT_NOT_OBSERVED = 'init 未観測';
  * スタイルも書かない。出すのは観測した値と、値が取れていないときの理由だけ。
  */
 export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
+  // **`null`（未観測）と `[]`（観測できた0本）を別文言にする（#324）。** どちらも
+  // かつては同じ `unknownBecause(INIT_NOT_OBSERVED)` に畳まれていて、「MCP 連携が
+  // 1本も無い」という取れた事実が「まだ分からない」に化けていた。0本は黙って
+  // 空欄にもしない — 読み手が「0本である」と分かる文言にする。
   const mcpServers =
-    facts.mcpServers.length === 0
+    facts.mcpServers === null
       ? unknownBecause(INIT_NOT_OBSERVED)
-      : facts.mcpServers.map((server) => `${server.name}(${server.status})`).join(', ');
+      : facts.mcpServers.length === 0
+        ? '0本（init は観測済み）'
+        : facts.mcpServers.map((server) => `${server.name}(${server.status})`).join(', ');
 
   return [
     '## いまどう走っているか',
