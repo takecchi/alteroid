@@ -147,6 +147,46 @@ function splitManagerPrefix(body: string): { prefix: string | null; rest: string
   return { prefix: null, rest: body };
 }
 
+/** `human` / `external` の描き方（理由は後述の `CommitmentBody` の doc）。素のテキストのまま。 */
+function PlainBody({ body }: { body: string }) {
+  return <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">{body}</p>;
+}
+
+/**
+ * **網羅性チェック専用（ビルド時）。** `CommitmentBody` の `switch` の
+ * `default` から呼ぶ。引数の型は `never` — `commitmentOriginSchema`
+ * （`packages/core/src/schema.ts:892`）に新しい値が足されたのに、上の
+ * `case` がその値を決めていないと、呼び出し側で `commitment.origin` は
+ * ここで `never` にならず、この呼び出し自体が型エラーになる。**新しい
+ * origin を足した人は、ここで分岐を決めるまで `pnpm typecheck` を通せない。**
+ * 型が守っているものは、型を読まない人には見えないので、ここに明記しておく
+ * （`.claude/skills/listing-and-detail/SKILL.md` が「歯が1本ずつだと、次に
+ * 足す一覧も無上限で入る」として、`CLONE_TOOL_NAMES` から `_list` で終わる
+ * 名前を機械的に集める形と同じ発想 — 網の外に在るものを人手ではなく機械
+ * （ここではコンパイラ）に捕まえさせる）。
+ *
+ * **呼ぶこと自体が保証であって、戻り値は使わない。** 本文は呼び出し元が
+ * `commitment.body` からそのまま描く — この関数へは渡さない（渡すと、
+ * 描かれるのが本文ではなく起点の生の値になってしまう）。
+ *
+ * **実行時にここへ来たら `console.warn` で残す。** 黙って安全側へ倒すだけ
+ * では AGENTS.md「静かに失敗する道具」と同じ形になる — 空白は描かないが、
+ * 何が起きたかも残らない。デーモンが先に新しい `origin` を返す順序が
+ * 実在しうる以上、次にここを読む人が気づける痕跡を残しておく。
+ *
+ * **同じ画面の `OriginBadge`（`ORIGIN_LABEL`）には、この実行時の倒れ先が
+ * 入っていない。** 未知の `origin` ではラベルが空文字で描かれる（issue
+ * #288）。ここに書くのは、次に `origin` を足す人が Issue を読むとは限らない
+ * 一方、**この関数はその人が必ずコンパイルエラーで立ち止まる場所だから**である。
+ *
+ * **この `console.warn` は、通るテストの出力には現れない**（vitest の既定
+ * reporter が console を横取りし、通ったぶんを捨てる）。**「テストに warn が
+ * 出ないから呼ばれていない」とは読めない。**
+ */
+function assertOriginHandled(origin: never): void {
+  console.warn(`commitments.tsx: 未知の commitment.origin が来た: ${String(origin)}`);
+}
+
 /**
  * 本文の描き方を `origin`（誰が書いたか）で切り分ける。`OpenRow` と
  * `ClosedRow` が同じ本文の `<p>` を2箇所に持っていたのを、ここへ集める。
@@ -237,37 +277,6 @@ function splitManagerPrefix(body: string): { prefix: string | null; rest: string
  * （`ClosedRow` の `closedReason` は1文字も変えていない。この判別材料の
  * 欠落そのものを issue #286 として立ててある）
  */
-/** `human` / `external` の描き方（理由は `CommitmentBody` 上の doc）。素のテキストのまま。 */
-function PlainBody({ body }: { body: string }) {
-  return <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">{body}</p>;
-}
-
-/**
- * **網羅性チェック専用（ビルド時）。** `CommitmentBody` の `switch` の
- * `default` から呼ぶ。引数の型は `never` — `commitmentOriginSchema`
- * （`packages/core/src/schema.ts:892`）に新しい値が足されたのに、上の
- * `case` がその値を決めていないと、呼び出し側で `commitment.origin` は
- * ここで `never` にならず、この呼び出し自体が型エラーになる。**新しい
- * origin を足した人は、ここで分岐を決めるまで `pnpm typecheck` を通せない。**
- * 型が守っているものは、型を読まない人には見えないので、ここに明記しておく
- * （`.claude/skills/listing-and-detail/SKILL.md` が「歯が1本ずつだと、次に
- * 足す一覧も無上限で入る」として、`CLONE_TOOL_NAMES` から `_list` で終わる
- * 名前を機械的に集める形と同じ発想 — 網の外に在るものを人手ではなく機械
- * （ここではコンパイラ）に捕まえさせる）。
- *
- * **呼ぶこと自体が保証であって、戻り値は使わない。** 本文は呼び出し元が
- * `commitment.body` からそのまま描く — この関数へは渡さない（渡すと、
- * 描かれるのが本文ではなく起点の生の値になってしまう）。
- *
- * **実行時にここへ来たら `console.warn` で残す。** 黙って安全側へ倒すだけ
- * では AGENTS.md「静かに失敗する道具」と同じ形になる — 空白は描かないが、
- * 何が起きたかも残らない。デーモンが先に新しい `origin` を返す順序が
- * 実在しうる以上、次にここを読む人が気づける痕跡を残しておく。
- */
-function assertOriginHandled(origin: never): void {
-  console.warn(`commitments.tsx: 未知の commitment.origin が来た: ${String(origin)}`);
-}
-
 function CommitmentBody({ commitment }: { commitment: Commitment }) {
   switch (commitment.origin) {
     case 'self':
