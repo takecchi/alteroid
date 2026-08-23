@@ -272,7 +272,27 @@ export const reportsResponseSchema = z.object({ reports: z.array(dailyReportEntr
 // 承認待ち（/approvals）— core の pendingApprovalSchema をそのまま使う
 // ---------------------------------------------------------------------------
 
-export const approvalsResponseSchema = z.object({ approvals: z.array(pendingApprovalSchema) });
+/**
+ * 一覧の1件は core の `pendingApprovalSchema` に `updatedAt` を足しただけの形
+ * （`.extend()`）。
+ *
+ * **新しい情報ではない。** `createdAt` と `answeredAt`（付いていれば）は
+ * `pendingApprovalSchema` に既に載っており、受け手は `answeredAt ?? createdAt`
+ * を自分で導けた。この欄はその導出をサーバ側で一度だけ行い、受け手に
+ * やらせるのをやめるだけの変更である。導出は `packages/core/src/schema.ts` の
+ * `approvalUpdatedAt` を呼ぶ（#269）。**ここで `??` を書き直さない。**
+ *
+ * **`.extend()` を土台にする理由。** ファイル冒頭の約束（core が既に zod
+ * スキーマを持つものはここで再定義しない）に当たらない — `pendingApprovalSchema`
+ * を再定義するのではなく、その上に派生欄を1つ足すだけで、元の全欄はそのまま
+ * 通る。`updatedAt` は永続化の欄ではなく応答専用の派生値なので、`commitments`
+ * と同じく「外向きの view を別に書く」問題（保存側にフィールドが増えた日に
+ * 宣言ごと広がる）にも当たらない——土台が `pendingApprovalSchema` 自身なので、
+ * 広がるとしてもそれは core 側の欄が増えたときだけである。
+ */
+export const approvalsResponseSchema = z.object({
+  approvals: z.array(pendingApprovalSchema.extend({ updatedAt: isoDateTimeSchema })),
+});
 
 export const approvalsAnswerResponseSchema = z.object({
   results: z.array(z.object({ id: z.string(), ok: z.boolean(), error: z.string().optional() })),
@@ -338,8 +358,19 @@ export const scheduleListResponseSchema = z.object({ entries: z.array(scheduleSt
  * 逆に view を別に書くと、器に持たせた内容と外から読める内容がずれ、**人間が API で
  * 見た台帳とクローンが `commitment_list` で見る台帳が違う**という形になる。それは
  * PRD「可観測性」が塞ごうとしているものそのものである。
+ *
+ * **`updatedAt` はその2つの懸念のどちらにも当たらない形で足してある。**
+ * `commitmentSchema.extend({ updatedAt: ... })` は再定義ではなく（元のスキーマを
+ * 土台にして派生欄を1つ足すだけ）、かつ別 view でもない（`commitmentSchema` の
+ * 全欄はそのまま通る）。`closedAt` と `at` は既に応答に載っており、受け手は
+ * `closedAt ?? at` を自分で導けた——この欄は新しい情報ではなく、その導出を
+ * サーバ側で一度だけ行うことで受け手にやらせるのをやめる変更である。導出は
+ * `packages/core/src/schema.ts` の `commitmentUpdatedAt` を呼ぶ（#269）。
+ * **ここで `??` を書き直さない。**
  */
-export const commitmentListResponseSchema = z.object({ entries: z.array(commitmentSchema) });
+export const commitmentListResponseSchema = z.object({
+  entries: z.array(commitmentSchema.extend({ updatedAt: isoDateTimeSchema })),
+});
 
 /**
  * 積んだ1件の id。

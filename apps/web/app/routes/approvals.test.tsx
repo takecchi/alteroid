@@ -26,6 +26,9 @@ function approval(over: Partial<PendingApproval> = {}): PendingApproval {
   return {
     id: 'a-1',
     createdAt: '2026-08-19T10:00:00.000Z',
+    // 応答が返す派生欄（`packages/core/src/schema.ts` の `approvalUpdatedAt`）。
+    // まだ回答が無いので既定は `createdAt` と同じ値にしておく。
+    updatedAt: '2026-08-19T10:00:00.000Z',
     question: '本番に出してよいか',
     ...over,
   };
