@@ -23,6 +23,46 @@ function bearer(): Record<string, string> {
   return { authorization: `Bearer ${TOKEN}`, accept: 'text/event-stream' };
 }
 
+/**
+ * 期限を自分で持って読む。**待ちで落とさないためである。**
+ *
+ * `reader.read()` を無条件に await する形だと、来ないときは vitest の
+ * テストタイムアウト（5000ms）で落ちる —— そのとき出るのは
+ * `Test timed out in 5000ms` だけで、**「無音のときに書き込みが発生しなかった」
+ * ではなく「待ち時間を超えた」しか言わない。** 実測（#272 の変異試験 M2:
+ * runner の `startSseHeartbeat(...)` の呼び出しを無効化する変異）で、この歯は
+ * まさにタイムアウトで落ちた。歯としては効いているが、**落ち方が測っている
+ * 性質を指していない。**
+ *
+ * 期限を自分で持てば、期限までに読めたものを持って `expect` へ渡せる ——
+ * 落ちるときは assertion で落ち、何が来ていたのかが出力に出る。
+ */
+async function readUntil(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  needle: string,
+  budgetMs: number,
+): Promise<string> {
+  const decoder = new TextDecoder();
+  let seen = '';
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // **期限は1本で持つ**（読むたびに張り直すと、1回ごとの待ちになって合計が伸びる）。
+  const expired = new Promise<'期限切れ'>((resolve) => {
+    timer = setTimeout(() => resolve('期限切れ'), budgetMs);
+    timer.unref?.();
+  });
+  try {
+    while (!seen.includes(needle)) {
+      const next = await Promise.race([reader.read(), expired]);
+      if (next === '期限切れ') break;
+      if (next.done) break;
+      seen += decoder.decode(next.value, { stream: true });
+    }
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+  return seen;
+}
+
 function newHost(): RunnerHost {
   return createRunnerHost({
     runnerId: 'runner-events-heartbeat-test',
@@ -54,13 +94,9 @@ describe('runner の /events heartbeat', () => {
     if (body === null) throw new Error('SSE の応答に本文が無い');
 
     const reader = body.getReader();
-    const decoder = new TextDecoder();
-    let seen = '';
-    while (!seen.includes(': hb')) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      seen += decoder.decode(value, { stream: true });
-    }
+    // 間隔は 5ms なので 1000ms は200回ぶんの余裕がある。**来ないときは期限で
+    // 読むのをやめ、assertion で落とす**（`readUntil` の JSDoc）。
+    const seen = await readUntil(reader, ': hb', 1000);
 
     expect(seen).toContain(': hb');
     // 既存のフレーム（hello）を壊していないことも見ておく
@@ -91,17 +127,14 @@ describe('runner の /events heartbeat', () => {
     if (body === null) throw new Error('SSE の応答に本文が無い');
 
     const reader = body.getReader();
-    const decoder = new TextDecoder();
-    let seen = '';
-    // `hello` まで読んだら、その後100msぶん待って何も来ないことを見る
-    while (!seen.includes('event: hello')) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      seen += decoder.decode(value, { stream: true });
-    }
+    // `hello` まで読んだら、その後100msぶん待って何も来ないことを見る。
+    // ここも期限つきで読む（`hello` すら来ない壊れ方をしたときに、待ちではなく
+    // assertion で落とすため）。
+    const seen = await readUntil(reader, 'event: hello', 1000);
+    expect(seen).toContain('event: hello');
 
     const next = await Promise.race([
-      reader.read().then(({ value }) => decoder.decode(value)),
+      reader.read().then(({ value }) => new TextDecoder().decode(value)),
       new Promise<'まだ何も来ていない'>((resolve) =>
         setTimeout(() => resolve('まだ何も来ていない'), 100),
       ),
