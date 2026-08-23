@@ -199,6 +199,9 @@ describe('引き受けたまま終わっていない仕事', () => {
     expect(all).toHaveLength(1);
     // **「閉じた」だけを残さない。** 何をもって終わりとしたかが無いと、人間は否定できない
     expect(all[0]?.closedReason).toBe('直してマージした');
+    // **`commitment_close` ツールは `closedBy: 'clone'` を書く**（issue #286）。
+    // `POST /commitments/:id/close`（人間の経路）と同じ欄を、書いた側で分ける。
+    expect(all[0]?.closedBy).toBe('clone');
 
     await s.clone.stop();
   });
@@ -210,12 +213,43 @@ describe('引き受けたまま終わっていない仕事', () => {
     const event = humanMessage('一度だけやる仕事');
 
     expect(await stores.commitments.open(commitmentFor(event) as Commitment)).toBe(true);
-    await stores.commitments.close(event.id, new Date().toISOString(), '済んだ');
+    await stores.commitments.close(event.id, new Date().toISOString(), '済んだ', 'clone');
 
     // 配り直し = 同じ id でもう一度開こうとする
     expect(await stores.commitments.open(commitmentFor(event) as Commitment)).toBe(false);
 
     expect(await stores.commitments.list()).toHaveLength(0);
+  });
+
+  /**
+   * `closedBy`（issue #286）が in-memory 実装（`testing.ts`）でも記録され、
+   * かつ導入前の行では既定へ倒れないことを固定する。fs / pg 版と同じ性質を
+   * `packages/core` 側（`createMemoryStores`）でも問う。
+   */
+  it('close は closedBy を記録し、既存の（closedBy の無い）行は undefined のままで既定へ倒れない', async () => {
+    const stores = createMemoryStores();
+
+    await stores.commitments.open({
+      id: 'c-1',
+      at: new Date().toISOString(),
+      origin: 'human',
+      body: '片付ける',
+    });
+    await stores.commitments.close('c-1', new Date().toISOString(), '片付けた', 'human');
+    expect((await stores.commitments.get('c-1'))?.closedBy).toBe('human');
+
+    // 導入前の記録を模す: open() へ closedAt/closedReason 付きで直接渡す
+    // （close() を経由していない = closedBy を書く機会が無かった行）。
+    await stores.commitments.open({
+      id: 'c-legacy',
+      at: new Date().toISOString(),
+      origin: 'human',
+      body: '導入前に片付いた仕事',
+      closedAt: new Date().toISOString(),
+      closedReason: '当時は書き手を記録していなかった',
+    });
+    // **`'clone'` にも `'human'` にも倒れず、そもそも無いままである。**
+    expect((await stores.commitments.get('c-legacy'))?.closedBy).toBeUndefined();
   });
 
   it('渡されたものは起点を問わず載り、起こされただけの合図は載らない', async () => {
@@ -379,7 +413,7 @@ describe('未了の見え方', () => {
       origin: 'human',
       body: 'もう済んだ依頼',
     });
-    await stores.commitments.close('c-1', new Date().toISOString(), '済んだ');
+    await stores.commitments.close('c-1', new Date().toISOString(), '済んだ', 'clone');
 
     const digest = await buildActivityDigest(stores, {
       since: new Date(Date.now() - 60 * 60 * 1000),
@@ -401,7 +435,7 @@ describe('未了の見え方', () => {
       origin: 'human',
       body: '10 日前に片付けた依頼',
     });
-    await stores.commitments.close('c-old', old, '10 日前に済んだ');
+    await stores.commitments.close('c-old', old, '10 日前に済んだ', 'clone');
 
     const digest = await buildActivityDigest(stores, {
       since: new Date(Date.now() - 60 * 60 * 1000),

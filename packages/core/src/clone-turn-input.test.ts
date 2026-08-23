@@ -364,7 +364,7 @@ describe('ターンの入力を日誌に残す（#243）— 人間の回答は�
     dying.clone.post(answerEvent);
     await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
     await waitFor(async () => (await stores.commitments.get('evt-answer')) !== null, '台帳の未了');
-    expect(await stores.commitments.close('evt-answer', AT, 'もう対応済み')).toBe(true);
+    expect(await stores.commitments.close('evt-answer', AT, 'もう対応済み', 'clone')).toBe(true);
 
     const reborn = bootClone(stores);
     const text = await turnInputAfterTurn(stores, reborn, '片付け済みの配り直し');

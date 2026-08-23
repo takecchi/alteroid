@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { commitmentSchema } from '@alteroid/core';
-import type { Commitment, CommitmentStore } from '@alteroid/core';
+import type { Commitment, CommitmentClosedBy, CommitmentStore } from '@alteroid/core';
 import { z } from 'zod';
 
 const fileSchema = z.object({
@@ -96,7 +96,7 @@ export class FsCommitmentStore implements CommitmentStore {
    * 二重に届いた片付けが両方 `true` を返し、呼び出し側が「いま自分が閉じた」と
    * 誤って二重に報告する。
    */
-  async close(id: string, at: string, reason: string): Promise<boolean> {
+  async close(id: string, at: string, reason: string, by: CommitmentClosedBy): Promise<boolean> {
     return this.#update((file) => {
       const found = file.commitments.find((entry) => entry.id === id);
       // 無い / 既に閉じている。どちらも「いま自分が閉じた」ではない
@@ -106,7 +106,9 @@ export class FsCommitmentStore implements CommitmentStore {
       return {
         next: trimClosed({
           commitments: file.commitments.map((entry) =>
-            entry.id === id ? { ...entry, closedAt: at, closedReason: reason } : entry,
+            entry.id === id
+              ? { ...entry, closedAt: at, closedReason: reason, closedBy: by }
+              : entry,
           ),
         }),
         result: true,

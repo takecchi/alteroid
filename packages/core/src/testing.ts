@@ -1,6 +1,7 @@
 import { deriveMemoryFrontmatter, nextDescribedAt } from './memory.js';
 import type {
   Commitment,
+  CommitmentClosedBy,
   InboxEvent,
   Job,
   JournalEntry,
@@ -364,10 +365,10 @@ export function createMemoryStores(): Stores {
       commitments.set(entry.id, entry);
       return true;
     },
-    async close(id, at, reason) {
+    async close(id, at, reason, by: CommitmentClosedBy) {
       const existing = commitments.get(id);
       if (!existing || existing.closedAt !== undefined) return false;
-      commitments.set(id, { ...existing, closedAt: at, closedReason: reason });
+      commitments.set(id, { ...existing, closedAt: at, closedReason: reason, closedBy: by });
       return true;
     },
   };

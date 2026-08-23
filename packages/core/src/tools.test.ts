@@ -3458,6 +3458,7 @@ describe('commitment_list を文字数の予算へ寄せる（潜在バグの修
         id,
         `2026-01-03T00:00:${String(index).padStart(2, '0')}.000Z`,
         '対応済み',
+        'clone',
       );
     }
     const total = openCount + closedCount;
@@ -3554,7 +3555,7 @@ describe('commitment_list / approvals_list に札と作成・更新を足す（#
       origin: 'manager',
       body: '片付いた',
     });
-    await h.stores.commitments.close('c-closed', '2026-02-03T00:00:00.000Z', '対応済み');
+    await h.stores.commitments.close('c-closed', '2026-02-03T00:00:00.000Z', '対応済み', 'clone');
 
     const lines = (await h.call('commitment_list', { includeClosed: true })).split('\n');
 
@@ -3645,7 +3646,7 @@ describe('commitment_list id=<id> で1件の全文が取れる（#218）', () =>
       source: 'conv-7',
       body: '本番リリースを確認する',
     });
-    await h.stores.commitments.close('c-closed', '2026-05-02T00:00:00.000Z', reason);
+    await h.stores.commitments.close('c-closed', '2026-05-02T00:00:00.000Z', reason, 'clone');
 
     const listing = await h.call('commitment_list', { includeClosed: true });
     const detail = await h.call('commitment_list', { id: 'c-closed' });
@@ -3687,7 +3688,12 @@ describe('commitment_list id=<id> で1件の全文が取れる（#218）', () =>
       origin: 'manager',
       body: '報告を受けた件',
     });
-    await h.stores.commitments.close('c-done', '2026-05-05T00:00:00.000Z', '差し戻して直した');
+    await h.stores.commitments.close(
+      'c-done',
+      '2026-05-05T00:00:00.000Z',
+      '差し戻して直した',
+      'clone',
+    );
 
     // 一覧の既定（未了だけ）からは消えている。
     expect(await h.call('commitment_list', {})).not.toContain('c-done');
@@ -3724,7 +3730,12 @@ describe('commitment_list id=<id> で1件の全文が取れる（#218）', () =>
       origin: 'external',
       body: 'ぬ'.repeat(20_000),
     });
-    await h.stores.commitments.close('c-huge', '2026-05-08T00:00:00.000Z', '外部側で解決した');
+    await h.stores.commitments.close(
+      'c-huge',
+      '2026-05-08T00:00:00.000Z',
+      '外部側で解決した',
+      'clone',
+    );
 
     const first = await h.call('commitment_list', { id: 'c-huge' });
 
@@ -3798,7 +3809,12 @@ describe('commitment_list id=<id> で1件の全文が取れる（#218）', () =>
       origin: 'self',
       body: '片付いた',
     });
-    await h.stores.commitments.close('c-already-closed', '2026-05-13T00:00:00.000Z', '済み');
+    await h.stores.commitments.close(
+      'c-already-closed',
+      '2026-05-13T00:00:00.000Z',
+      '済み',
+      'clone',
+    );
 
     const listing = await h.call('commitment_list', {});
 

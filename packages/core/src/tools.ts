@@ -1450,7 +1450,7 @@ export function createCloneTools(context: ToolContext) {
             `${id} は既に ${existing.closedAt} に片付けてある（${existing.closedReason ?? ''}）。`,
           );
         }
-        await stores.commitments.close(id, new Date().toISOString(), reason);
+        await stores.commitments.close(id, new Date().toISOString(), reason, 'clone');
         return text(`${id} を片付けた。`);
       },
     ),

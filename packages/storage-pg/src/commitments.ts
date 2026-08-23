@@ -1,5 +1,5 @@
 import { commitmentSchema } from '@alteroid/core';
-import type { Commitment, CommitmentStore } from '@alteroid/core';
+import type { Commitment, CommitmentClosedBy, CommitmentStore } from '@alteroid/core';
 import { and, asc, desc, eq, isNotNull, isNull, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
@@ -112,9 +112,9 @@ export class PgCommitmentStore implements CommitmentStore {
    * jsonb の中も一緒に直す。読み出しは `commitment` からなので、列だけ直しても
    * クローンが見る値は未了のままになる。
    */
-  async close(id: string, at: string, reason: string): Promise<boolean> {
+  async close(id: string, at: string, reason: string, by: CommitmentClosedBy): Promise<boolean> {
     const closedReason = stripNulls(reason);
-    const closed = sql`jsonb_set(jsonb_set(${commitments.commitment}, '{closedAt}', ${JSON.stringify(at)}::jsonb, true), '{closedReason}', ${JSON.stringify(closedReason)}::jsonb, true)`;
+    const closed = sql`jsonb_set(jsonb_set(jsonb_set(${commitments.commitment}, '{closedAt}', ${JSON.stringify(at)}::jsonb, true), '{closedReason}', ${JSON.stringify(closedReason)}::jsonb, true), '{closedBy}', ${JSON.stringify(by)}::jsonb, true)`;
 
     const updated = await this.#db
       .update(commitments)
