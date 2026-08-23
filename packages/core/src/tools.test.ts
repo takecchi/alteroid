@@ -3075,6 +3075,56 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     }
   });
 
+  /**
+   * **タイトルの歯（`TITLE_IS_REAL_CONTENT_CASES` と、直上の `memory_list`
+   * 名指しの `it()`）が `FIVE_FIELD_SWEPT` を漏れなく覆っていることを測る歯。**
+   *
+   * 上の2つはどちらも手で書いた名前の表である——タイトルの実測（何を
+   * `check` するか）そのものは一覧ごとに固有で、機械的には作れない。
+   * けれど「表が抜けている」ことは測れる。`CLONE_TOOL_NAMES` に新しい
+   * `_list` が足されたとき、件数の歯（`CASES`）や P1/P2 の歯
+   * （`FIVE_FIELD_SWEPT` / `STRICT_SHAPE_SWEPT`）は `SWEPT` から機械的に
+   * 作り直されるので新顔を自動的に捕まえるが、**タイトルの表だけは
+   * 足し忘れても何も落ちない**まま静かに通ってしまう。
+   *
+   * 直上の「P1/P2 それぞれの網が空にならず、除外は実在する道具を指している」
+   * （`AXIS_UNDECIDED` / `SHAPE_DIFFERENT` の自己測定）と同じ形にする——
+   * 除外を作るなら理由の文字列を持たせ、その除外が実在する道具を指している
+   * ことも測る。
+   */
+  const TITLE_CHECK_NAMES = new Set<string>([
+    ...TITLE_IS_REAL_CONTENT_CASES.map((c) => c.name),
+    'memory_list',
+  ]);
+
+  /**
+   * タイトルの歯を意図的に足さないと決めたもの。**いまは空。**
+   * `FIVE_FIELD_SWEPT` の全件が `TITLE_CHECK_NAMES` で覆われているため。
+   * ここへ足すときは `AXIS_UNDECIDED` / `SHAPE_DIFFERENT` と同じく理由の
+   * 文字列を添えること——散文の理由だけを書いて自己測定を伴わないと、
+   * 「#220 待ち」がマージ後も残ったのと同じ形で嘘になる（直上のコメント）。
+   */
+  const TITLE_CHECK_EXCLUDED = new Map<string, string>([]);
+
+  it('タイトルの歯が FIVE_FIELD_SWEPT を漏れなく覆っている（新しい _list の足し忘れを検出する）', () => {
+    // 除外の綴りが違えば、除外は効かないまま「除外したつもり」になる。
+    for (const name of TITLE_CHECK_EXCLUDED.keys()) {
+      expect(SWEPT, `除外 ${name} が実在する道具を指していない`).toContain(name);
+    }
+
+    // FIVE_FIELD_SWEPT のうち、TITLE_CHECK_NAMES にも TITLE_CHECK_EXCLUDED
+    // にも入っていない名前 = タイトルの歯が無いまま網の外へ落ちているもの。
+    const uncovered = FIVE_FIELD_SWEPT.filter(
+      (name) => !TITLE_CHECK_NAMES.has(name) && !TITLE_CHECK_EXCLUDED.has(name),
+    );
+    expect(
+      uncovered,
+      'タイトルの歯（TITLE_IS_REAL_CONTENT_CASES への追加 / memory_list のような ' +
+        '名指しの it() / 理由つきの TITLE_CHECK_EXCLUDED のいずれか）が無い一覧: ' +
+        `${uncovered.join(', ')}`,
+    ).toEqual([]);
+  });
+
   it.each(STRICT_SHAPE_SWEPT)(
     '%s — どの1件も id + 名前 / 作成 + 更新 / 概要 を決まった順で出す（P2）',
     async (name) => {
