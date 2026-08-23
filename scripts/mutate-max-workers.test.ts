@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildTestSpawnArgs,
   DEFAULT_MAX_WORKERS,
+  readMaxWorkers,
 } from '../.claude/skills/mutation-testing/mutate-core.mjs';
 
 /**
@@ -43,5 +44,43 @@ describe('mutate-core: buildTestSpawnArgs (#331)', () => {
       '--maxWorkers=3',
       'apps/cli/src/conversations',
     ]);
+  });
+});
+
+/**
+ * `readMaxWorkers`（`mutate-core.mjs`）の歯。
+ *
+ * **マネージャーの差し戻し（2026-08-23）が起点**: `--max-workers=2` という
+ * `=` の形が静かに無視され、既定の `4` へ落ちていた欠陥の回帰確認。
+ * vitest 本体のフラグが `--maxWorkers=4` という `=` の形そのものなので、
+ * その形を知っている人ほどこの形で打つ。空白区切りの形（`--max-workers 2`）
+ * との両方を受けることを固定する。
+ */
+describe('mutate-core: readMaxWorkers (#331 差し戻し)', () => {
+  it('引数に無ければ undefined を返す（呼び出し側の既定に委ねる）', () => {
+    expect(readMaxWorkers([])).toBeUndefined();
+    expect(readMaxWorkers(['--plan', 'plan.json'])).toBeUndefined();
+  });
+
+  it('空白区切りの形（--max-workers <n>）を読む', () => {
+    expect(readMaxWorkers(['--max-workers', '2'])).toBe(2);
+  });
+
+  it('= の形（--max-workers=<n>）を読む（差し戻し前は静かに無視されていた）', () => {
+    expect(readMaxWorkers(['--max-workers=2'])).toBe(2);
+  });
+
+  it('= の形は、他の引数と混ざっていても読める', () => {
+    expect(readMaxWorkers(['--plan', 'plan.json', '--max-workers=3'])).toBe(3);
+  });
+
+  it('0以下の値は拒否する', () => {
+    expect(() => readMaxWorkers(['--max-workers=0'])).toThrow(/1以上の整数/);
+    expect(() => readMaxWorkers(['--max-workers', '-1'])).toThrow(/1以上の整数/);
+  });
+
+  it('整数でない値は拒否する', () => {
+    expect(() => readMaxWorkers(['--max-workers=abc'])).toThrow(/1以上の整数/);
+    expect(() => readMaxWorkers(['--max-workers=1.5'])).toThrow(/1以上の整数/);
   });
 });

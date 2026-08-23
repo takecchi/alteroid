@@ -26,8 +26,9 @@ node .claude/skills/mutation-testing/mutate.mjs baseline                   # ベ
 node .claude/skills/mutation-testing/mutate.mjs apply --spec <spec.json>   # 段階実行: 1つの変異を当てて印を置くところまで
 node .claude/skills/mutation-testing/mutate.mjs restore [--restore-from-marker]  # 段階実行: 印を読んで復元する
 node .claude/skills/mutation-testing/mutate.mjs run --plan <plan.json>     # 本番: 複数の変異を順に回す
-# baseline / run は `--max-workers <n>` を受ける（#331）。器が混んでいて並列度を下げるよう
-# 指示されている場面向け。省略時は既定の 4 のまま（`mutate-core.mjs` の DEFAULT_MAX_WORKERS）。
+# baseline / run は `--max-workers <n>` と `--max-workers=<n>` の両方を受ける（#331）。
+# 器が混んでいて並列度を下げるよう指示されている場面向け。省略時は既定の 4 のまま
+# （`mutate-core.mjs` の DEFAULT_MAX_WORKERS）。
 node .claude/skills/mutation-testing/mutate.mjs selftest --scenario <name> # 自己検証（受け入れ条件の3つ+1に加え、レビューで見つかった欠陥2件の回帰確認）。省略で一覧を出す
 ```
 

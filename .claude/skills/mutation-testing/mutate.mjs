@@ -21,9 +21,12 @@
 // 中断されたツリーで新しい測定を始めると、生存も検出も意味を失うため。
 // 逃げ道は `--allow-existing-marker` の1つに限る。
 //
-// `--max-workers <n>`（#331）: 器が混んでいて並列度を下げるよう指示されている
-// 場面向け。省略時は `mutate-core.mjs` の `DEFAULT_MAX_WORKERS`（＝これまでどおり
-// `4`）のまま。`run` に渡すと、baseline の確認と各変異ごとのテスト実行の両方に効く。
+// `--max-workers <n>` / `--max-workers=<n>`（#331）: 器が混んでいて並列度を
+// 下げるよう指示されている場面向け。**どちらの形も受け付ける**（vitest 本体の
+// フラグが `--maxWorkers=4` という `=` の形なので、その形で打っても届く必要が
+// ある。読む実装は `mutate-core.mjs` の `readMaxWorkers`）。省略時は
+// `mutate-core.mjs` の `DEFAULT_MAX_WORKERS`（＝これまでどおり `4`）のまま。
+// `run` に渡すと、baseline の確認と各変異ごとのテスト実行の両方に効く。
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -39,6 +42,7 @@ import {
   judge,
   markerExists,
   readMarkerVerified,
+  readMaxWorkers,
   restoreMutation,
   runTests,
   section,
@@ -140,29 +144,14 @@ function assertNoBlockingMarker(commandName, args) {
   }
 }
 
-/** `--max-workers <n>` を読む。省略なら `undefined`（＝呼び出し側の既定に委ねる）。
- * 値が1以上の整数でなければ落ちる — 器の狭さに合わせるための口を、意図せず
- * `NaN` や `--maxWorkers=0` のような形で壊さないため。
- */
-function readMaxWorkers(args) {
-  const idx = args.indexOf('--max-workers');
-  if (idx === -1) return undefined;
-  const raw = args[idx + 1];
-  const n = Number(raw);
-  if (!Number.isInteger(n) || n < 1) {
-    throw new HarnessError(
-      `--max-workers には1以上の整数を渡すこと（実際: ${JSON.stringify(raw)}）`,
-    );
-  }
-  return n;
-}
-
 function cmdBaseline(args) {
   checkJudgementVocabulary();
   assertNoBlockingMarker('baseline', args);
   const maxWorkers = readMaxWorkers(args);
   section('baseline');
-  const result = maxWorkers === undefined ? runTests([]) : runTests([], maxWorkers);
+  // `runTests` の第2引数は既定で `DEFAULT_MAX_WORKERS` を持つので、`undefined` を
+  // そのまま渡せば呼び出し元の既定が効く（`maxWorkers` で分岐する必要が無い）。
+  const result = runTests([], maxWorkers);
   log(result.raw);
   if (!testsRanCleanly(result)) {
     log('');
@@ -236,7 +225,8 @@ function runOneMutation(spec, maxWorkers) {
   try {
     artifactResult = buildAndCheckArtifact(spec);
     const extraArgs = spec.testFilter ? [spec.testFilter] : [];
-    testResult = maxWorkers === undefined ? runTests(extraArgs) : runTests(extraArgs, maxWorkers);
+    // `maxWorkers` が `undefined` でも `runTests` の既定引数がそのまま効く。
+    testResult = runTests(extraArgs, maxWorkers);
     log('--- test 生ログ ここから ---');
     log(testResult.raw);
     log('--- test 生ログ ここまで ---');
@@ -284,7 +274,7 @@ function cmdRun(args) {
   const { data: plan } = readJsonArg('--plan', args);
 
   section('run: baseline を先に確かめる');
-  const baseline = maxWorkers === undefined ? runTests([]) : runTests([], maxWorkers);
+  const baseline = runTests([], maxWorkers);
   log(baseline.raw);
   if (!testsRanCleanly(baseline) || !testsAllPassed(baseline)) {
     log('ベースラインが緑ではない。run を中止する。');

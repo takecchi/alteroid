@@ -475,6 +475,46 @@ export function buildTestSpawnArgs(extraArgs = [], maxWorkers = DEFAULT_MAX_WORK
   return ['test', `--maxWorkers=${maxWorkers}`, ...extraArgs];
 }
 
+/**
+ * `--max-workers <n>` / `--max-workers=<n>` の両方の形を読む。省略なら
+ * `undefined`（＝呼び出し側の既定に委ねる）。値が1以上の整数でなければ落ちる。
+ *
+ * **`mutate.mjs`（CLI 層）ではなくここ（純粋な層）に置く理由**: `mutate.mjs`
+ * はモジュールの末尾で無条件に `main()` を呼ぶため、そこから関数だけを
+ * `import` すると `main()` が副作用として実行され、`process.argv` 次第で
+ * `process.exit()` が起きる（テストプロセスを巻き込んで落ちる）。`import`
+ * だけでは安全に取り出せない。ここは他の純粋関数と同じく `import` するだけで
+ * 副作用が起きない層なので、テストから直接呼べる（マネージャーの指摘: `=` の
+ * 形が静かに無視される欠陥を、テストで歯として固定するため）。
+ *
+ * **`=` の形を見落としていた理由**: 元は `args.indexOf('--max-workers')` の
+ * 完全一致だけを見ていた。`--max-workers=2` は要素そのものが
+ * `'--max-workers=2'` という1つの文字列なので `indexOf('--max-workers')` に
+ * 一致せず、`-1` → `undefined` → 呼び出し側の既定（`DEFAULT_MAX_WORKERS`）へ
+ * 静かに落ちていた。vitest 本体のフラグが `--maxWorkers=4` という `=` の形
+ * そのものなので、その形を知っている人ほどこの穴を踏む。
+ */
+export function readMaxWorkers(args) {
+  const EQ_PREFIX = '--max-workers=';
+  const eqArg = args.find((a) => a.startsWith(EQ_PREFIX));
+  let raw;
+  if (eqArg !== undefined) {
+    raw = eqArg.slice(EQ_PREFIX.length);
+  } else {
+    const idx = args.indexOf('--max-workers');
+    if (idx === -1) return undefined;
+    raw = args[idx + 1];
+  }
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) {
+    throw new HarnessError(
+      `--max-workers には1以上の整数を渡すこと（--max-workers <n> または ` +
+        `--max-workers=<n> の形。実際: ${JSON.stringify(raw)}）`,
+    );
+  }
+  return n;
+}
+
 /** 手順10: テストを走らせ、`Test Files ... passed` と `Tests ... passed` の
  * 両方の行を読む。行の不在は「走っていない」であって「通った/落ちた」ではない。
  * `maxWorkers` を渡さなければ `DEFAULT_MAX_WORKERS`（＝これまでどおり `4`）で走る。
