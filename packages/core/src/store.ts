@@ -368,6 +368,20 @@ export interface InboxStore {
    * 何回目であっても配ることは変わらない。
    */
   claimPending(): Promise<PendingInboxEvent[]>;
+
+  /**
+   * 残っている未読の件数と、いちばん古いものが積まれた時刻（#358）。
+   * **`claimPending()` と違い、配達回数を進めない。**
+   *
+   * `manager_list` のような一覧が「デーモン→クローンの脚で詰まっているか」を
+   * 覗くための読み取り専用の口。配達回数（`deliveries`）は「配り直された」
+   * ことを示す唯一の材料（`claimPending` の doc）で、覗いただけで進めると、
+   * まだ一度も配っていない合図が「前に配ったが終わらなかった」と嘘をつく。
+   *
+   * 1件も無ければ `oldestAt` は無い（0件のときに値を作らない。AGENTS.md
+   * 「取れない軸に0の行を作る」）。
+   */
+  pending(): Promise<{ count: number; oldestAt?: string }>;
 }
 
 /** 未読として残っていた合図1件。 */

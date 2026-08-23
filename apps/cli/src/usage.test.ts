@@ -1,7 +1,63 @@
 import { USAGE_ESTIMATE_NOTICE, ZERO_USAGE, type UsageRow } from '@alteroid/core';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderUsage, type UsageView } from './usage.js';
+import { captureStdout } from './test-support.js';
+import { renderUsage, usageCommand, type UsageView } from './usage.js';
+
+/**
+ * #361: `renderUsage`（文字列を返す純粋関数）だけでなく、実際に端末へ書く
+ * `usageCommand`（書く側）も測る。`renderUsage` のテストが緑でも、
+ * `usageCommand` が別のものを書く・書かない・書く先を間違える欠陥は別に
+ * 測らないと緑のまま通る（`captureStdout` の doc に同じ注意がある。#333 の
+ * 実例と同じ形）。`fetch` を差し替えて本物の型付きクライアント（`hono/client`）を
+ * 通す形は `conversations.test.ts` / `memory.test.ts` と同じ。
+ */
+vi.mock('./target.js', () => ({
+  // `vi.fn()` にしてあるのは、「ログインしていない」note 分岐だけ1件
+  // `mockResolvedValueOnce` で上書きしたいため（`login.test.ts` と同じ理由）。
+  resolveTarget: vi.fn(() =>
+    Promise.resolve({ baseUrl: 'http://127.0.0.1:4517', headers: {}, note: null, remote: false }),
+  ),
+}));
+
+const target = await import('./target.js');
+
+interface Sent {
+  url: string;
+  method: string;
+}
+
+let sent: Sent[] = [];
+let originalFetch: typeof fetch;
+let replies: { status: number; body: unknown }[] = [];
+
+function stubFetch(): void {
+  globalThis.fetch = ((input: unknown, init?: RequestInit) => {
+    const request = input as { url?: string; method?: string };
+    const url = typeof input === 'string' ? input : (request.url ?? String(input));
+    sent.push({ url, method: init?.method ?? request.method ?? 'GET' });
+    const reply = replies.shift() ?? { status: 200, body: {} };
+    return Promise.resolve(
+      new Response(JSON.stringify(reply.body), {
+        status: reply.status,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+  }) as typeof fetch;
+}
+
+beforeEach(() => {
+  originalFetch = globalThis.fetch;
+  sent = [];
+  replies = [];
+  stubFetch();
+});
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  vi.restoreAllMocks();
+  vi.clearAllMocks();
+});
 
 function row(over: Partial<UsageRow> & { managerId: string; costUsd: number }): UsageRow {
   const { costUsd, ...rest } = over;
@@ -211,5 +267,93 @@ describe('renderUsage はアカウント全体の残りも出す', () => {
     expect(text).toContain('取れなかった');
     expect(text).toContain('0 ではなく、分からない');
     expect(text).not.toContain('0% 使用');
+  });
+});
+
+/**
+ * #361: 「書く側」— `renderUsage` が正しい文字列を作っても、`usageCommand` が
+ * それを書かない・別のものを書く・書く先を間違えれば、上の `renderUsage` の
+ * テストは全部緑のまま通る。ここではその経路自体を測る。
+ */
+describe('usageCommand', () => {
+  it('GET /usage を叩き、renderUsage の出力をそのまま端末へ書く', async () => {
+    const view = aggregate({ rows: [row({ managerId: 'm1', costUsd: 1.5 })] });
+    replies.push({ status: 200, body: view });
+    const read = captureStdout();
+
+    await usageCommand({});
+
+    expect(sent).toHaveLength(1);
+    const url = new URL(sent[0]?.url ?? '');
+    expect(url.pathname).toBe('/usage');
+    // **書く側が別のものを書く／書き忘れる変異を狙って名指す。** 「何か出た」では
+    // なく、`renderUsage` がこの入力に対して作る文字列そのものと一致することを
+    // 見る（末尾の改行1つも含めて）。
+    expect(read()).toBe(`${renderUsage(view)}\n`);
+  });
+
+  it('from / to / manager / layer / site をクエリへそのまま渡す', async () => {
+    replies.push({ status: 200, body: aggregate({}) });
+    captureStdout();
+
+    await usageCommand({
+      from: '2026-08-01',
+      to: '2026-08-14',
+      manager: 'mgr-1',
+      layer: 'clone',
+      site: 'session',
+    });
+
+    expect(sent).toHaveLength(1);
+    const url = new URL(sent[0]?.url ?? '');
+    expect(url.searchParams.get('from')).toBe('2026-08-01');
+    expect(url.searchParams.get('to')).toBe('2026-08-14');
+    expect(url.searchParams.get('managerId')).toBe('mgr-1');
+    expect(url.searchParams.get('layer')).toBe('clone');
+    expect(url.searchParams.get('site')).toBe('session');
+  });
+
+  it('--layer が許された値でなければ、そう書いて叩かない', async () => {
+    const read = captureStdout();
+
+    await usageCommand({ layer: 'not-a-layer' });
+
+    expect(sent).toHaveLength(0);
+    expect(read()).toContain('--layer は');
+    expect(read()).toContain('のどれかを指定してください');
+  });
+
+  it('--site が許された値でなければ、そう書いて叩かない', async () => {
+    const read = captureStdout();
+
+    await usageCommand({ site: 'not-a-site' });
+
+    expect(sent).toHaveLength(0);
+    expect(read()).toContain('--site は');
+    expect(read()).toContain('のどれかを指定してください');
+  });
+
+  it('ログインしていなければ note をそのまま書き、usage を叩かない', async () => {
+    vi.mocked(target.resolveTarget).mockResolvedValueOnce({
+      baseUrl: 'https://runner.example.com',
+      headers: {},
+      note: 'https://runner.example.com にログインしていません（alteroid login）',
+      remote: true,
+    });
+    const read = captureStdout();
+
+    await usageCommand({});
+
+    expect(sent).toHaveLength(0);
+    expect(read()).toBe('https://runner.example.com にログインしていません（alteroid login）\n');
+  });
+
+  it('応答が失敗（ok でない）なら、読めなかったと書く（renderUsage は呼ばない）', async () => {
+    replies.push({ status: 500, body: {} });
+    const read = captureStdout();
+
+    await usageCommand({});
+
+    expect(read()).toBe('利用状況を読めませんでした（クエリの形を確かめてください）\n');
   });
 });

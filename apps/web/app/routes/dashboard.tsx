@@ -66,6 +66,39 @@ export default function Dashboard() {
 
   return (
     <Page title="ダッシュボード" description="いま何が動いていて、何が人間を待っているか">
+      {/*
+        ⚠️ #295: この grid にも基底の `grid-cols-*` が無い
+        （`grid gap-4 lg:grid-cols-3`）。暗黙トラックは auto。
+
+        直接の子は2つある。
+        - 1つ目 `<Card className="flex min-w-0 flex-col lg:col-span-2">`
+          は自分自身が `min-w-0` を持つ。
+        - 2つ目 `<div className="flex flex-col gap-4">`（このすぐ下）は
+          緩和クラスを持たない。膨らみを止めているのは孫以下 —
+          「稼働中のマネージャー」カードの
+          `<span className="min-w-0 flex-1 truncate">` と「次の自動実行」
+          カードの同種の span（`truncate` を含む。usage.tsx と同じ理屈。
+          そちらの grid の直上コメントを参照）。
+
+        ⚠️ ただし「承認待ち」カード（2つ目の子の1枚目）は形が違う —
+        質問文は `<span className="line-clamp-2">` で、`truncate` ではない。
+        実測（`tailwindcss@4.3.3` のユーティリティ定義を grep で確認）:
+        `line-clamp-2` は `overflow:hidden` / `display:-webkit-box` /
+        `-webkit-box-orient:vertical` / `-webkit-line-clamp:2` だけで、
+        `truncate` と違って `white-space: nowrap` を含まない。つまり折り
+        返す。折り返す要素の min-content 寄与は「いちばん長い、改行できな
+        い連続」の幅であって 0 ではない（`question` は自由記述で、URL・
+        パス・識別子など空白の無い文字列を含みうる）。**このカードだけは
+        「min-w-0 は既に有界なものへの冗長な下限だから無害」という説明が
+        同じ形では成り立たない** — もし直接の子へ `min-w-0` を足すと、
+        いま確保されている下限が外れ、その連続が途中で切れうる。
+
+        ⚠️ 「切れうる」もここまでの CSS 定義の読みからの推論であって、
+        実測ではない。jsdom はレイアウトを持たず、視覚回帰の道具
+        （Playwright / Storybook / Chromatic）も無く、Vercel の preview は
+        release/prod へ push されるまで出ない。詳細と再オープン条件は
+        #295。
+      */}
       <div className="grid gap-4 lg:grid-cols-3">
         <Card className="flex min-w-0 flex-col lg:col-span-2">
           <CardHeader

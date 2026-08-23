@@ -75,4 +75,27 @@ export class PgInboxStore implements InboxStore {
         .map((entry) => ({ event: entry.event, at: toIso(entry.at), deliveries: entry.deliveries }))
     );
   }
+
+  /**
+   * 残っている未読の件数と、いちばん古いものが積まれた時刻（#358）。
+   *
+   * **`claimPending` の SQL の形を真似るが、`UPDATE` は含めない**
+   * （`InboxStore.pending` の doc——読むだけで配達回数を進めない）。
+   * `count(*)` / `min(at)` の1発なので、`claimPending` と違ってトランザクションも
+   * 要らない。
+   */
+  async pending(): Promise<{ count: number; oldestAt?: string }> {
+    const [row] = await this.#db
+      .select({
+        count: sql<number>`count(*)::int`,
+        oldestAt: sql<Date | null>`min(${inboxEvents.at})`,
+      })
+      .from(inboxEvents);
+    const count = row?.count ?? 0;
+    const oldestAt = row?.oldestAt;
+    return {
+      count,
+      ...(oldestAt === null || oldestAt === undefined ? {} : { oldestAt: toIso(oldestAt) }),
+    };
+  }
 }

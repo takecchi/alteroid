@@ -386,6 +386,42 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
+  /**
+   * **この歯が単独で守るもの**: 報告が降りてきた瞬間に、デーモンが**受け取った
+   * 時刻を刻む**こと（#358）。
+   *
+   * **描き方の歯とは別物である。** `tools.test.ts` の `manager_list` の歯は
+   * `ManagerSummary.lastReportAt` を**直接代入して**出力の形を測っており、
+   * 「刻む」側は1本も通っていない。**実測（変異試験、2026-08-24）**: この歯を
+   * 足す前に `record.job.lastReportAt = new Date().toISOString();` を消す変異を
+   * 当てたところ、**5本の変異のうちこれだけが生存した** —— 描き方の歯は全部
+   * 緑のまま通った。
+   *
+   * **時刻そのものは固定できない**（`new Date()` を直接使う設計で、`lastFailure.at`
+   * と同じ作法）。だから**区間で挟む** —— 報告の前後で取った時刻の間に在ることを
+   * 見る。これは「何か文字列が入った」より強く、「特定の値」より脆くない。
+   */
+  it('報告が降りてきたら、デーモンが受け取った時刻が委譲の要約に載る（#358）', async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+
+    const before = Date.now();
+    await (s.sessions[0] as FakeSession).report('終わった');
+    const after = Date.now();
+
+    const [summary] = await s.pool.list();
+    expect(summary?.lastReport).toBe('終わった');
+    const at = summary?.lastReportAt;
+    // **存在だけでは足りない。** 刻んだ値が「受け取った瞬間」であることまで見る。
+    expect(at).toBeDefined();
+    const stamped = Date.parse(at ?? '');
+    expect(Number.isNaN(stamped)).toBe(false);
+    expect(stamped).toBeGreaterThanOrEqual(before);
+    expect(stamped).toBeLessThanOrEqual(after);
+
+    await s.pool.stop();
+  });
+
   it('委譲はノンブロッキングで、複数を同時に走らせられる（受け入れ基準1）', async () => {
     const s = setup();
 

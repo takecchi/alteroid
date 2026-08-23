@@ -247,6 +247,22 @@ function describeAskedAt(askedAt: ManagerWaitingItem['askedAt']): string {
   return askedAt === undefined ? '' : `${askedAt} から`;
 }
 
+/**
+ * デーモン→クローンの脚（受信箱）が詰まっているときだけ出す、一覧末尾の1行
+ * （#358「答えない問い」に挙げた3行目のうち、この PR で拾えるほう）。
+ *
+ * **0件のときは `null`**（呼び出し側で filter して落とす）。0件を「詰まって
+ * いない」という文で出すと、`manager_list` を見るたびに「詰まっていない」
+ * という健全な行が積み重なる——これは「取れない軸に0の行を作る」の逆方向
+ * だが同じ理由で避ける（何も言うことが無い行を一覧へ足さない）。
+ */
+function describeInboxBacklog(pending: { count: number; oldestAt?: string }): string | null {
+  if (pending.count === 0) return null;
+  const oldest =
+    pending.oldestAt === undefined ? '' : `（最も古いものは ${pending.oldestAt} から）`;
+  return `⚠ クローンの受信箱に未処理の合図が ${pending.count} 件ある${oldest}`;
+}
+
 /** 全文を取りに来たときの1回分。続きは `offset` で取れる。 */
 const REPORT_PAGE = 8_000;
 
@@ -2131,6 +2147,22 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
+    /**
+     * **#358 のうち、runner→デーモンの脚の滞留は、この一覧にまだ出さない。**
+     *
+     * `RunnerPlacementResources.pendingEvents` / `oldestPendingAt` は runner
+     * ごとに取れるようになった（`apps/daemon/src/runner-client.ts` の
+     * `resources()`）が、それを読むには `ManagerPool.runners({ resources: true })`
+     * を呼ぶ必要がある。**この一覧（`runner_list` ではなく `manager_list`）から
+     * 毎回それを呼ぶと、`runners()` の doc（`ManagerPool.runners` の JSDoc）が守っている
+     * 「既定では `resources()` を呼ばない＝この一覧のためにネットワーク往復を
+     * 足さない」を、`manager_list` 側から実質的に破ることになる**——
+     * `runner_list` の `resources: true` はクローンが明示的に選ぶ opt-in だが、
+     * ここで自動的に呼べば、呼ぶかどうかの判断がクローンから奪われる。
+     * 壊さずに値を取る方法が見つからなかったので、ここでは落とした
+     * （クローンの受信箱側 `describeInboxBacklog` はネットワーク往復が要らない
+     * ので落としていない）。runner 側を出したいなら、まずこの設計判断を諮る。
+     */
     tool(
       'manager_list',
       [
@@ -2145,7 +2177,17 @@ export function createCloneTools(context: ToolContext) {
       async () => {
         if (!context.managers) return NO_POOL;
         const managers = await context.managers.list();
-        if (managers.length === 0) return text('（マネージャーは1本も居ない）');
+        // **デーモン→クローンの脚（受信箱）の滞留は、マネージャーの本数と無関係**
+        // （#358）。マネージャーが1本も居なくても、受信箱には既に合図が溜まって
+        // いることがあるので、早期リターンの前に確かめる。
+        const inboxBacklog = describeInboxBacklog(await context.stores.inbox.pending());
+        if (managers.length === 0) {
+          return text(
+            inboxBacklog === null
+              ? '（マネージャーは1本も居ない）'
+              : `（マネージャーは1本も居ない）\n${inboxBacklog}`,
+          );
+        }
 
         // **予算を先に決めて、入るところまで積む。** 件数から出力量を決めると、
         // 何件で壊れるかが運任せになる。切ったなら必ずそう言う。
@@ -2211,7 +2253,11 @@ export function createCloneTools(context: ToolContext) {
               }),
               manager.lastReport === undefined
                 ? null
-                : `  直近の報告: ${excerptLine(manager.lastReport, LIST_REPORT_EXCERPT)}`,
+                : // **時刻は既存の行に添えるだけ**（#358）。行を1本増やすと、
+                  // 予算に張り付いている一覧では出る件数が減る（この道具の doc
+                  // の実測を参照）。`lastReportAt` が無い行（古いデータ・版の
+                  // ずれ）には何も足さない——「未受信」のような行は作らない。
+                  `  直近の報告${manager.lastReportAt === undefined ? '' : `（${manager.lastReportAt} 受信）`}: ${excerptLine(manager.lastReport, LIST_REPORT_EXCERPT)}`,
             ],
           }),
         );
@@ -2223,7 +2269,10 @@ export function createCloneTools(context: ToolContext) {
                 `…ほか ${rest} 件は省略（全 ${total} 件）。走っているものから順に出している。`,
             }),
             '（依頼と報告は抜粋。全文は manager_report <managerId> で取れる）',
-          ].join('\n'),
+            inboxBacklog,
+          ]
+            .filter((line): line is string => line !== null)
+            .join('\n'),
         );
       },
     ),
