@@ -12,10 +12,12 @@
  *   丸ごと飛ばしても、他が passed なので `passed > 0` のまま）を捕まえられない。
  * - **歯B（ソースの側）**: root の `vitest.config.ts` の `include` に一致する
  *   全テストファイルを静的に走査し、**無条件の** `describe.skip` / `it.skip` /
- *   `test.skip`（`.skip.each` 等の派生を含む）を検出する。**条件付き
- *   （`skipIf` / `runIf` / 実行時の `ctx.skip()`）は対象外** — 正規表現が
- *   `describe.skip` の直後の文字境界を見るので、`describe.skipIf(...)` は
- *   そもそも一致しない（`skip` と `If` の間に単語境界が無い）。**歯Bも2値に
+ *   `test.skip`（`.each` や `.concurrent` のような修飾子との連鎖・tagged
+ *   template 形の `.each` を含む）を検出する。**条件付き（`skipIf` / `runIf` /
+ *   実行時の `ctx.skip()`）は対象外** — `describe`/`it`/`test` に続く `.` 区切り
+ *   の連鎖を分解し、その要素に文字列として厳密に一致する `'skip'` が含まれる
+ *   かで決める（`skipIf` は `'skip'` と文字列として等しくないので、連鎖の
+ *   どこに現れても引っかからない。`SKIP_CALL_CHAIN_RE` の doc）。**歯Bも2値に
  *   しない** — 走査対象が0ファイルなら「無条件の skip が0件だった」ではなく
  *   「判定できない」（`EXIT_SCAN_EMPTY`）にする（`judgeStaticSkipScan`）。
  *
@@ -121,15 +123,53 @@ export function judgeExecution(rawOutput) {
 // ── 歯B: ソースの側（無条件の静的 skip を走査する） ──────────────────
 
 /**
- * `describe.skip(` / `it.skip(` / `test.skip(` と、その `.each` 等の派生に一致する。
+ * `describe` / `it` / `test` に続く**修飾子の連鎖**（`.each` / `.concurrent` 等）を
+ * 呼び出しの直前まで拾い、その連鎖のどこかに `skip` という**完全一致の**要素が
+ * あるかを見る。連鎖は `(` だけでなく、tagged template（`` it.each`...` ``）の
+ * `` ` `` でも終われる。
  *
- * **`skipIf` には一致しない。** 正規表現の `\.skip` の直後は `\b` を要求していない
- * かわりに `(\.\w+)?\s*\(` で「`.` + 識別子」または直接`(`のどちらかしか許さないため、
- * `skipIf` のように `skip` の直後に英数字が続く形（`\w+` に吸収されない位置に `I` が
- * 来る）は `(\.\w+)?` にも `\s*\(` にも一致しない。実際に `describe.skipIf(` は
- * 1件もヒットしない（`test-guard-core.test.ts` の歯で固定）。
+ * **マネージャーの差し戻し（実測、`SKIP_CALL_RE` を直接抜き出して13ケースに
+ * 掛けた結果）が起点**: 旧実装（`\.skip(\.\w+)?\s*\(`）は次の3形を取りこぼして
+ * いた。
+ *
+ * 1. `it.skip.each\`テーブル\`(...)`（tagged template 形の `.each`。終端が
+ *    `` ` `` で、旧実装は `\(` しか許していなかった）— `packages/core/src/tools.test.ts`
+ *    ・`railway/setup.test.ts` に実在する `it.each\`` の書き方へ `.skip` を足せば
+ *    そのまま出る形であり、仮定ではない
+ * 2. `it.concurrent.skip(...)`（修飾子が `skip` の**前**に来る形。旧実装は
+ *    `(describe|it|test)` の直後に `\.skip` が直接続くことしか許していなかった）
+ *
+ * **`skipIf` / `runIf` の除外は、文字列一致ではなく配列の完全一致で行う。**
+ * 連鎖を `.` で割った要素の配列（例: `['concurrent', 'skip']`）を作り、その中に
+ * 文字列として厳密に `'skip'` が含まれるかどうかだけを見る。`'skipIf'` は
+ * `'skip'` と文字列として等しくないので、連鎖のどこに現れても引っかからない
+ * （`\b` の境界トリックに頼らないぶん、連鎖の途中に来ても・前に来ても同じ判定
+ * になる）。
+ *
+ * **意図して直さないもの**: `it .skip(`（識別子と `.skip` のあいだの空白）。
+ * この repo は prettier を通すので、そもそもこの空白は入らない形にしか
+ * ならない（`pnpm format:check` が守る）。塞ぐ価値が無いので塞がない。
+ *
+ * **バッククォート終端は `.each` の直後だけに絞る。** マネージャーの差し戻しへ
+ * 対応する過程で、`scripts/workspace-test-scripts.test.ts` の doc コメント
+ * （Markdown の逆引用符でコードスパンとして「`describe.skip`」「`it.skip`」と
+ * 書いてあるだけの散文）が誤検出することが実地で分かった —— どちらも「識別子
+ * ＋連鎖」の直後に**閉じる**逆引用符が来るので、素朴に「終端が `` ` `` なら
+ * tagged template」と読むと、Markdown のコードスパンの閉じ記号まで tagged
+ * template の開き記号として拾ってしまう。**実在する tagged template 形は
+ * 必ず `.each` の直後にしか現れない**（vitest の逆引用符呼び出しは `.each`
+ * にしか無い）ため、連鎖の**最後の要素が `each` であるときだけ**バッククォート
+ * 終端を認める。開き括弧 `(` のほうはこの制限を掛けない（`.skip(` は連鎖の
+ * 中身によらず常に本物でありうる）。
  */
-const SKIP_CALL_RE = /\b(describe|it|test)\.skip(\.\w+)?\s*\(/g;
+const SKIP_CALL_CHAIN_RE = /\b(describe|it|test)((?:\.\w+)*)\s*([(`])/g;
+
+/** 連鎖（`.skip.each` のような文字列。先頭の `.` を含む）に `skip` という
+ * 完全一致の要素が含まれるか。 */
+function chainHasUnconditionalSkip(chain) {
+  const segments = chain.split('.').filter(Boolean);
+  return segments.includes('skip');
+}
 
 /**
  * `files`（`{ path, content }` の配列）を走査し、無条件の静的 skip の箇所を返す。
@@ -142,14 +182,22 @@ export function findUnconditionalSkips(files) {
     const lines = file.content.split('\n');
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      SKIP_CALL_RE.lastIndex = 0;
+      SKIP_CALL_CHAIN_RE.lastIndex = 0;
       let m;
-      while ((m = SKIP_CALL_RE.exec(line)) !== null) {
-        hits.push({
-          path: file.path,
-          line: i + 1,
-          matched: m[0].replace(/\(\s*$/, ''),
-        });
+      while ((m = SKIP_CALL_CHAIN_RE.exec(line)) !== null) {
+        const base = m[1];
+        const chain = m[2];
+        const terminal = m[3];
+        const segments = chain.split('.').filter(Boolean);
+        // バッククォート終端は `.each` の直後だけ（上の doc）。開き括弧は無条件。
+        if (terminal === '`' && segments[segments.length - 1] !== 'each') continue;
+        if (chainHasUnconditionalSkip(chain)) {
+          hits.push({
+            path: file.path,
+            line: i + 1,
+            matched: `${base}${chain}`,
+          });
+        }
       }
     }
   }

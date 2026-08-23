@@ -38,9 +38,17 @@ import {
  * 試すことに変わりはない。
  */
 
-/** `.skip` を1トークンとしてソースに焼き込まないための組み立てヘルパ。 */
+const BACKTICK = '`';
+
+/** `.foo.bar` のような修飾子の連鎖をソースへ焼き込まないための組み立てヘルパ。
+ * `chainSuffix('concurrent', 'skip')` → `'.concurrent.skip'`。 */
+function chainSuffix(...segments: string[]): string {
+  return segments.map((s) => '.' + s).join('');
+}
+
+/** `.skip` を1トークンとしてソースに焼き込まないための組み立てヘルパ（後方互換の別名）。 */
 function dotSkip(each = false) {
-  return '.' + 'skip' + (each ? '.each' : '');
+  return chainSuffix('skip', ...(each ? ['each'] : []));
 }
 
 describe('parseAggregateLines / parsePassedCount', () => {
@@ -177,6 +185,137 @@ describe('findUnconditionalSkips（歯B: ソースの側）', () => {
   it('スキップが無ければ空配列', () => {
     const content = "it('a', () => { expect(1).toBe(1); });";
     expect(findUnconditionalSkips([{ path: 'f.test.ts', content }])).toEqual([]);
+  });
+});
+
+/**
+ * マネージャーの差し戻し（2026-08-23。#311 実装中）: 旧実装の正規表現
+ * （識別子の直後に `skip` が続き、その直後は追加の1修飾子と丸括弧の開きしか
+ * 許さない形）を直接抜き出して13ケースへ掛けた実測で、3件を取りこぼして
+ * いることが分かった。
+ *
+ * **注意（この段落自体が一度この穴を踏んだ）**: 以下で取りこぼしの形を説明する
+ * とき、`it` や `describe` の直後へ実際の呼び出し構文（`.skip` と丸括弧・
+ * バッククォートの組み合わせ）をそのまま書くと、歯Bの本番スキャンがこの
+ * ファイル自身を「無条件の静的 skip」として検出してしまう。だから
+ * 識別子と修飾子のあいだへ意図して半角スペースを挟み、地の文として読める形
+ * にしてある（`SKIP_CALL_CHAIN_RE` は識別子の直後に空白を挟むと連鎖を
+ * 拾わない——「意図して直さないもの」の doc と同じ性質を、ここでは説明の
+ * ために逆手に取っている）。
+ *
+ * 取りこぼしていた3形:
+ *
+ * 1. `it` .skip.each の直後を丸括弧ではなくバッククォートで始める
+ *    tagged template 形（vitest 標準の書き方。旧実装は呼び出しの開きが
+ *    丸括弧であることしか許していなかった）。**この repo に実在するか、
+ *    ここで訂正しておく**: `grep -rnoE` で `each` の直後がバッククォートか
+ *    丸括弧かを横断的に見た初回の実測は「実在する」と読んだが、ヒットの中身
+ *    （`packages/core/src/tools.test.ts` / `railway/setup.test.ts` の該当行）を
+ *    1件ずつ確認し直すと、**すべて Markdown のコードスパンとして地の文へ
+ *    `` `it` .each ``（バッククォートで閉じただけ）と書いた散文であり、
+ *    タグ付きテンプレートの実コードは1件も無かった**——この repo の `.each` は
+ *    いまのところ全部が丸括弧＋配列の形（`it.each(scripts)` 等）である。
+ *    つまり `grep -c` と同じ「見ているのに探し方の側で取りこぼす」形の逆
+ *    （ここでは「当たっているのに中身が違う」形）を、この doc を書く過程で
+ *    自分で踏んだ。**それでもタグ付きテンプレート形は vitest 標準の構文
+ *    であり、次に書かれたときに歯Bが見逃してよい理由にはならない**ので、
+ *    直す判断そのものは変えていない
+ * 2. `it` .concurrent.skip のように、修飾子が `skip` の**前**に来る形
+ *    （旧実装は describe/it/test の直後に skip が直接続くことしか
+ *    許していなかった）。この repo にいま `concurrent` 修飾子の実例は0件だが、
+ *    歯Bが「無条件の静的 skip はソースに残らない」と名乗る判別器である以上、
+ *    次に書かれたときに緑のまま素通りさせない
+ *
+ * **13ケース全部をここに固定する。当てる側だけでなく当てない側も。**
+ * 当てる側だけ足すと、「全部に当てる」実装（＝判別器として無価値）でも
+ * 緑になってしまう。
+ */
+describe('findUnconditionalSkips（歯B: マネージャー実測の13ケース。#311 差し戻し）', () => {
+  const cases: Array<{ label: string; want: boolean; build: () => string }> = [
+    // ── 当てる側（8ケース） ──────────────────────────────────────────
+    {
+      label: 'describe.skip（基本形）',
+      want: true,
+      build: () => `describe${chainSuffix('skip')}('a', () => {});`,
+    },
+    {
+      label: 'it.skip（基本形）',
+      want: true,
+      build: () => `it${chainSuffix('skip')}('a', () => {});`,
+    },
+    {
+      label: 'test.skip（基本形）',
+      want: true,
+      build: () => `test${chainSuffix('skip')}('a', () => {});`,
+    },
+    {
+      label: 'it.skip.each（配列形。旧実装でも当たっていた）',
+      want: true,
+      build: () => `it${chainSuffix('skip', 'each')}([1, 2])('a', () => {});`,
+    },
+    {
+      label:
+        'it.skip.each（tagged template 形。旧実装が取りこぼしていた1件目。開きが `(` ではなく バッククォート）',
+      want: true,
+      build: () =>
+        `it${chainSuffix('skip', 'each')}${BACKTICK}\na | b\n${BACKTICK}('x', () => {});`,
+    },
+    {
+      label: 'describe.skip.each（tagged template 形。取りこぼしていた2件目）',
+      want: true,
+      build: () =>
+        `describe${chainSuffix('skip', 'each')}${BACKTICK}tbl${BACKTICK}('x', () => {});`,
+    },
+    {
+      label:
+        'it.concurrent.skip（修飾子が skip の前に来る形。取りこぼしていた3件目。この repo に .concurrent の実例は0件だが、次に書かれたら緑のまま素通りさせない）',
+      want: true,
+      build: () => `it${chainSuffix('concurrent', 'skip')}('a', () => {});`,
+    },
+    {
+      label: 'it.skip.concurrent（修飾子が skip の後に来る形。旧実装でも当たっていた）',
+      want: true,
+      build: () => `it${chainSuffix('skip', 'concurrent')}('a', () => {});`,
+    },
+    // ── 当てない側（4ケース） ────────────────────────────────────────
+    {
+      label: 'it.skipIf(cond)（条件付き。対象外——skipIf は文字列として skip と一致しない）',
+      want: false,
+      build: () => `it${chainSuffix('skipIf')}(cond)('a', () => {});`,
+    },
+    {
+      label: 'describe.skipIf(true)（条件付き。対象外）',
+      want: false,
+      build: () => `describe${chainSuffix('skipIf')}(true)('b', () => {});`,
+    },
+    {
+      label: 'it.runIf(cond)（条件付き。対象外）',
+      want: false,
+      build: () => `it${chainSuffix('runIf')}(cond)('a', () => {});`,
+    },
+    {
+      label: 'ctx.skip()（実行時。describe/it/test 以外への .skip なので対象外）',
+      want: false,
+      build: () => `ctx${chainSuffix('skip')}();`,
+    },
+    // ── 意図して当てない側（1ケース） ──────────────────────────────
+    {
+      label:
+        'it .skip(（識別子と .skip のあいだに空白。意図して当てない — この repo は prettier を通すのでこの形は出ない。format:check が守る）',
+      want: false,
+      build: () => `it ${chainSuffix('skip')}('a');`,
+    },
+  ];
+
+  it.each(cases)('$label → want=$want', ({ want, build }) => {
+    const hits = findUnconditionalSkips([{ path: 'f.test.ts', content: build() }]);
+    expect(hits.length > 0).toBe(want);
+  });
+
+  it('13ケースの内訳が想定どおり（当てる8・当てない4・意図して当てない1）', () => {
+    expect(cases).toHaveLength(13);
+    expect(cases.filter((c) => c.want).length).toBe(8);
+    expect(cases.filter((c) => !c.want).length).toBe(5);
   });
 });
 
