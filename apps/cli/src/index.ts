@@ -1,5 +1,7 @@
 #!/usr/bin/env node
+import { realpathSync } from 'node:fs';
 import { stdout } from 'node:process';
+import { pathToFileURL } from 'node:url';
 
 import { initWorkspace } from '@alteroid/storage-fs';
 import { Command } from 'commander';
@@ -364,7 +366,30 @@ daemonCommand
     await daemonStatusCommand();
   });
 
-program.parseAsync(process.argv).catch((error: unknown) => {
-  process.stderr.write(`alteroid: ${String(error)}\n`);
-  process.exit(1);
-});
+/**
+ * 直接起動されたときだけ parseAsync を走らせる。
+ *
+ * `apps/runner/src/index.ts` / `apps/daemon/src/index.ts` と同じ形（既存の
+ * 先例）。**これが無いと、この module をテストのために import しただけで
+ * `program.parseAsync(process.argv)` が走ってしまう** — vitest の argv を
+ * commander が解釈することになり、テスト実行そのものが壊れる。
+ * `import.meta.url` は realpath 済み・パーセントエンコード済みなので、
+ * `argv[1]` を素の文字列と比べると空白入りパスや symlink で誤判定する
+ * （`apps/daemon/src/index.ts` の同名関数の doc と同じ理由）。
+ */
+function invokedDirectly(): boolean {
+  const entry = process.argv[1];
+  if (entry === undefined) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(entry)).href;
+  } catch {
+    return false;
+  }
+}
+
+if (invokedDirectly()) {
+  program.parseAsync(process.argv).catch((error: unknown) => {
+    process.stderr.write(`alteroid: ${String(error)}\n`);
+    process.exit(1);
+  });
+}
