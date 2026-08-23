@@ -342,6 +342,25 @@ export type RunnerExecutionResources = z.infer<typeof runnerExecutionResourcesSc
  */
 export const runnerPlacementResourcesSchema = runnerExecutionResourcesSchema.extend({
   managers: z.number().int().nonnegative().optional(),
+  /**
+   * まだデーモンへ送り出せていない出来事の件数（#358）。**「収容能力」でも
+   * 「配達の失敗」でもない** — `Outbox.pending` の写しで、listener が付いたまま
+   * 溜まっている分も含む（`apps/runner/src/app.ts` の `Outbox.pending` の doc）。
+   *
+   * 0件のときは runner 側が `/health` のキーごと省く（AGENTS.md「取れない軸に
+   * 0の行を作る」と同じ形——ただしここは「0」という値そのものは正しく取れる
+   * 軸なので、0を返す runner からは `0` がそのまま届く。省くのは runner 側の
+   * 判断であって、この欄自体は0を禁じない）。
+   */
+  pendingEvents: z.number().int().nonnegative().optional(),
+  /**
+   * 未送出のうち、いちばん古いものが積まれた時刻（#358）。
+   *
+   * **「マネージャーが報告を生成した時刻」ではない。** runner が `Outbox` へ
+   * 積んだ時刻である（`Outbox.oldestPendingAt` の doc）。1件も無ければ
+   * runner 側がキーごと省く。
+   */
+  oldestPendingAt: isoDateTime.optional(),
 });
 
 export type RunnerPlacementResources = z.infer<typeof runnerPlacementResourcesSchema>;
