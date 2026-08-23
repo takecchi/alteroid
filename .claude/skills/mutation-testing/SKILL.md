@@ -68,6 +68,8 @@ node .claude/skills/mutation-testing/mutate.mjs selftest --scenario <name> # 自
 
 **`spec.artifact`（`{ file, contains }`）は指定すること。** 指定しなければ、`apply` の手順9（成果物検査）も `restore` の後始末（`rebuildAndVerify`）も「build が成功したこと」までしか確認しない——後始末側が実際に出す理由の文言は `artifact 情報が無く、build 成功のみで判定した（内容未確認）` である（`mutate-core.mjs` の `rebuildAndVerify`）。上の対応表で「生存の4分類4（変異が届いていない）」の人間側を「—」（機械が全部守る）と書いたが、それは `spec.artifact` が設定されている前提の上でしか成り立たない。**`artifact` を書くかどうか自体が、歯3の `expect` と同じ「spec の作者の仕事」である。**
 
+**⚠️ そして `spec` のキー名は、いま誰も検査していない（#301）。** 変異を名乗る鍵は **`id`** である——`label` や `name` と書いても**ハーネスは何も言わずに受け取り**、控えが `undefined.bak` になり、見出しが `── apply: undefined ──` になり、判定行も `undefined` を名乗る（実測 2026-08-23、PR #292 の作業中）。**測定そのものは正しく動くので、出力の名前を読むまで気づかない。** しかも `mutate-selftest.mjs` に在る「判定行が `spec.id` を正しく名乗っているか」の歯は、**両側が文字列 `"undefined"` に揃うので素通りする。** 直し方の案まで #301 に書いてある。**`spec` を書いたら、`apply` の見出しが `── apply: <自分が付けた id> ──` になっていることを1度見ること。**
+
 **変異試験でこれが効く理由は、変異が `dist/` に焼かれたかどうかが、この試験の成否そのものだからである。** 生存の4分類の4「変異が届いていない」は、まさにこれを見落とした形で生まれる——`#220`（記憶の `created_at` バックフィルの絶対条件1に対する変異試験）の本文に実例が在る。`apps/daemon` は `@alteroid/storage-fs` を `dist/index.js` 経由で import するため、`packages/storage-fs/src` を変異させただけでは daemon 側へ届かず、`pnpm build` を挟まずに測ると daemon 統合の歯が緑のまま通った（fs 単体の歯は赤のまま）。**実運用（2026-08-23、同じ `packages/storage-fs` を対象にした変異試験）でも `artifact` を指定せずに走らせ、そのつど自分（AI）で `grep` して `dist/index.js` の中身を目視で確認するという手当てをした。それは手当てであって仕組みではない。** 機械に確かめさせられるものを人間（AI）の目視に残さないこと——`spec` を書くときは `target` と揃えて `artifact: { file: '<パッケージ>/dist/....', contains: '<変異後にのみ現れる文字列>' }` を必ず添える。
 
 **そして `contains` に置く文字列は、変異を当てる前に、その成果物へ 0 件であることを確かめること。** `grep -c "<contains>" <artifact.file>` が `0` を返すのを見てから `apply` / `run` へ入る。**この一手で、判定に推測が要らなくなる。**
