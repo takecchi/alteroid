@@ -14,6 +14,7 @@ import {
   createRunnerHost,
   createRunnerRegistry,
   createMemoryStores,
+  DEFAULT_SSE_HEARTBEAT_MS,
   HEARTBEAT_FRAME,
   type ManagerPool,
   type InboxEvent,
@@ -875,8 +876,31 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
     return new URL(typeof input === 'string' ? input : input.toString()).pathname;
   }
 
-  /** `/events` へ行くたびに `outcome()` を呼び、`'fail'` なら 503、`'ok'` なら即座に閉じる健全なストリームを返す。 */
-  function fetchEvents(outcome: (callIndex: number) => 'fail' | 'ok'): {
+  /**
+   * `#274` のリセット閾値と同じ導出をテスト側でも行う。**別の値を手で書かない**
+   * ——本体（`runner-client.ts` の `CONNECTION_HEALTHY_THRESHOLD_MS`）と同じ
+   * 公開定数から導くことで、閾値が変わってもテストが自動で追随する。
+   */
+  const HEALTHY_THRESHOLD_MS = DEFAULT_SSE_HEARTBEAT_MS * 2;
+
+  /**
+   * `/events` へ行くたびに `outcome()` を呼び、結果に応じて応答を組み立てる。
+   *
+   * - `'fail'`: 503（例外を伴う失敗として `#stream` に伝わる）
+   * - `'ok'`: 例外は投げないが、**バイトを一切届けずに即座に閉じる**——`#274`
+   *   より前はこれが「成功」としてリセットの引き金だったが、新条件（持続 +
+   *   バイトの到着）ではリセットしない。「無音のままぶら下がって切れた死んだ
+   *   接続」を模すのにも使う
+   * - `'healthy'`: **バイトが1つ届いてから閉じる。** 「閾値を超えてから届く」の
+   *   部分は `ReadableStream` の中では作らない —— `pull`/`start` は
+   *   `reader.read()` が呼ばれる前に**先出しで**走ることがあり（実測: 接続直後
+   *   に `pull` が走り、`#stream` が `connectedAt` を記録するより前にバイトの
+   *   側の時計を進めてしまった）、ストリーム内部の副作用で経過時間を作ると
+   *   `#stream` 側の計測と競合する。**だから経過時間は `nowFn` 側だけで作る**
+   *   ——呼び出し元が `nowFn` を「1回目の呼び出し（`connectedAt`）は0、以降は
+   *   `HEALTHY_THRESHOLD_MS`」を返す形にして注入する。
+   */
+  function fetchEvents(outcome: (callIndex: number) => 'fail' | 'ok' | 'healthy'): {
     fetchFn: typeof fetch;
     eventsCalls: () => number;
   } {
@@ -890,7 +914,18 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
         const result = outcome(calls);
         calls += 1;
         if (result === 'fail') return new Response(null, { status: 503 });
-        // 健全な接続: 何も流さず、すぐに読み切れる形で閉じる。
+        if (result === 'healthy') {
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start: (controller) => {
+                controller.enqueue(new TextEncoder().encode(HEARTBEAT_FRAME));
+                controller.close();
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'text/event-stream' } },
+          );
+        }
+        // 'ok': 何も流さず、すぐに読み切れる形で閉じる（例外は起きない）。
         return new Response(new ReadableStream({ start: (controller) => controller.close() }), {
           status: 200,
           headers: { 'content-type': 'text/event-stream' },
@@ -899,6 +934,23 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
       throw new Error(`想定していない path: ${path}`);
     }) as typeof fetch;
     return { fetchFn, eventsCalls: () => calls };
+  }
+
+  /**
+   * 「接続してから閾値ちょうど経った後にバイトが届く」を模す `nowFn`。
+   *
+   * **1回目の呼び出し（`#stream` の `connectedAt`）は0、以降は
+   * `HEALTHY_THRESHOLD_MS` を返す。** これは境界そのものを突く——`#pump` の
+   * 判定が `>=` なら健全（`HEALTHY_THRESHOLD_MS - 0 >= HEALTHY_THRESHOLD_MS`
+   * は真）、`>` に変異していれば健全にならない（変異4本の1本目に対応）。
+   */
+  function nowFnAtExactThreshold(): () => number {
+    let calls = 0;
+    return () => {
+      const value = calls === 0 ? 0 : HEALTHY_THRESHOLD_MS;
+      calls += 1;
+      return value;
+    };
   }
 
   it('待ちが 1000→2000→4000→8000→16000→30000→30000… と伸びて頭打ちになる', async () => {
@@ -927,8 +979,16 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
   });
 
   it('繋ぎ直せたら基準へ戻る', async () => {
-    // 1敗目→2敗目→成功（すぐ閉じる）→3敗目、の順で応答する。
-    const { fetchFn } = fetchEvents((i) => (i < 2 ? 'fail' : i === 2 ? 'ok' : 'fail'));
+    // 1敗目→2敗目→成功（閾値を超えてからバイトが届く）→3敗目、の順で応答する。
+    //
+    // **#274 で成功の定義が変わった。** 以前は `'ok'`（例外を伴わず即座に
+    // 閉じる、バイトを一切運ばない接続）が「成功」だった——本番ではこの形が
+    // 「繋がった直後に死ぬ相手」と区別できず、リセットの誤発火の元だった
+    // （doc「なぜ『繋がった時点』ではないか」参照）。ここでは新条件どおり
+    // `'healthy'`（閾値を超えてからバイトが届く）で「持続した接続」を模す。
+    // **保証そのもの（繋ぎ直せたら基準へ戻る）は変わっていない。** 変わった
+    // のは「何をもって繋ぎ直せたと判定するか」だけである。
+    const { fetchFn } = fetchEvents((i) => (i < 2 ? 'fail' : i === 2 ? 'healthy' : 'fail'));
     const waits: number[] = [];
     let notifyEnough: () => void = () => undefined;
     const enough = new Promise<void>((resolve) => {
@@ -944,19 +1004,25 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
       token: TOKEN,
       fetchFn,
       sleepFn,
+      nowFn: nowFnAtExactThreshold(),
     });
     await client.connect(() => undefined);
     await enough;
     await client.close();
 
-    // 1000(1敗目) → 2000(2敗目) → 1000(成功で基準へ戻る) → 1000(3敗目、伸びた列を引き継がない)
+    // 1000(1敗目) → 2000(2敗目) → 1000(持続した接続で基準へ戻る) → 1000(3敗目、伸びた列を引き継がない)
     expect(waits.slice(0, 4)).toEqual([1000, 2000, 1000, 1000]);
   });
 
   it('stderr は初回と間隔が変わったときだけ書き、繋ぎ直せたときは1行書く', async () => {
-    // 3敗 → 成功 → 1敗、の順。3敗目は初回・2回目と違う間隔なのでその都度書き、
-    // 成功で「繋ぎ直せた」を1行、直後の敗北は基準(1000)からまた書く。
-    const { fetchFn } = fetchEvents((i) => (i < 3 ? 'fail' : i === 3 ? 'ok' : 'fail'));
+    // 3敗 → 成功（閾値を超えてからバイトが届く） → 1敗、の順。3敗目は初回・
+    // 2回目と違う間隔なのでその都度書き、成功で「繋ぎ直せた」を1行、直後の
+    // 敗北は基準(1000)からまた書く。
+    //
+    // **#274 で成功の定義が変わった（上のテストと同じ理由）。** `'ok'` から
+    // `'healthy'` へ変えたのはフィクスチャだけで、保証（初回と間隔が変わった
+    // ときだけ書く／繋ぎ直せたら1行書く）そのものは変わっていない。
+    const { fetchFn } = fetchEvents((i) => (i < 3 ? 'fail' : i === 3 ? 'healthy' : 'fail'));
     const waits: number[] = [];
     let notifyEnough: () => void = () => undefined;
     const enough = new Promise<void>((resolve) => {
@@ -972,6 +1038,7 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
       token: TOKEN,
       fetchFn,
       sleepFn,
+      nowFn: nowFnAtExactThreshold(),
     });
     await client.connect(() => undefined);
     await enough;
@@ -1044,6 +1111,121 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
     // ループが1周し、close() 後にもう一度 /events を叩いていないかを確かめる。
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(eventsCalls()).toBe(1);
+  });
+
+  /**
+   * 「持続した」（#274）の核 —— 時間とバイトの両方が要ることを、それぞれ
+   * 単独では効かないことで示す。
+   */
+  describe('リセットは「閾値を超えてからバイトが届いた」ときだけ効く（#274）', () => {
+    it('hello 相当のバイトが接続直後に届いても、リセットされない（閾値未満）', async () => {
+      // 接続直後に1バイト届く（runner の `hello` を模す）が、時計を進めない
+      // ので閾値には絶対に届かないまま接続が死ぬ、を繰り返す。
+      //
+      // **この条件（「一度でも出来事が届いたらリセット」）は一度提案され、
+      // `hello` が接続直後に無条件で書かれる現物（`apps/runner/src/app.ts`
+      // の `for (;;)` ループに入る前の書き込み）を読んで撤回された。** 同じ
+      // 道を二度通らないことを、ここで歯にする——前任が捨てた条件と、今回の
+      // 条件（時間 + バイト）を分けるのがこのテストの役目である。
+      const fetchFn = (async (input: string | URL | Request) => {
+        const path = pathOf(input);
+        if (path === '/health') {
+          return Response.json({ runnerId: 'runner-flaky', workspacePath: '/workspace' });
+        }
+        if (path === '/events') {
+          let pulls = 0;
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              pull: (controller) => {
+                pulls += 1;
+                if (pulls === 1) {
+                  // hello 相当のバイト。**中身は問わない** —— #read はフレーム
+                  // の中身を見ずに、届いた事実だけを使う。
+                  controller.enqueue(new TextEncoder().encode(HEARTBEAT_FRAME));
+                  return;
+                }
+                controller.error(new Error('接続が死んだ'));
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'text/event-stream' } },
+          );
+        }
+        throw new Error(`想定していない path: ${path}`);
+      }) as typeof fetch;
+
+      const waits: number[] = [];
+      let notifyEnough: () => void = () => undefined;
+      const enough = new Promise<void>((resolve) => {
+        notifyEnough = resolve;
+      });
+      const sleepFn = async (ms: number): Promise<void> => {
+        waits.push(ms);
+        if (waits.length >= 6) notifyEnough();
+      };
+
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+        sleepFn,
+        // 時計を進めない —— 経過時間は常に0で、閾値には絶対に届かない。
+        nowFn: () => 0,
+      });
+      await client.connect(() => undefined);
+      await enough;
+      await client.close();
+
+      // バイトは毎回届いているが、閾値未満なのでリセットされない。通常の
+      // 失敗（何も届かない場合）と同じ形で登り続ける——これが doc の意図
+      // 「開いてすぐ壊れる相手にもバックオフが効く」を守っている証拠である。
+      expect(waits.slice(0, 6)).toEqual([1000, 2000, 4000, 8000, 16000, 30000]);
+      const lines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      expect(lines.some((line: string) => line.includes('繋ぎ直せた'))).toBe(false);
+    });
+
+    it('バイトが1度も届かないまま閾値を超えて切れても、リセットされない（無音でぶら下がった死んだ接続）', async () => {
+      // 'ok': 例外を投げずに、バイトを一切運ばず閉じる接続。nowFn は毎回
+      // 大きく進める——「時間だけは閾値を軽々超えたように見える」状況を
+      // 作ってもなお、バイトが一度も届かなければリセットされないことを
+      // 確かめる。**これが「純粋な経過時間では切らない」の歯である**
+      // ——runner の event loop が詰まってソケットだけ開いている場合、
+      // バイトは来ないのに接続は undici の bodyTimeout まで生き延びる、
+      // という doc の懸念そのものを再現している。
+      let clockValue = 0;
+      const nowFn = (): number => {
+        clockValue += HEALTHY_THRESHOLD_MS * 10;
+        return clockValue;
+      };
+      const { fetchFn } = fetchEvents(() => 'ok');
+
+      const waits: number[] = [];
+      let notifyEnough: () => void = () => undefined;
+      const enough = new Promise<void>((resolve) => {
+        notifyEnough = resolve;
+      });
+      const sleepFn = async (ms: number): Promise<void> => {
+        waits.push(ms);
+        if (waits.length >= 6) notifyEnough();
+      };
+
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+        sleepFn,
+        nowFn,
+      });
+      await client.connect(() => undefined);
+      await enough;
+      await client.close();
+
+      // 'ok' は例外を投げないので「切れました」ログは出ない。だがバイトが
+      // 一度も届いていないので持続したとはみなされず、待ちは伸び続ける
+      // ——基準(1000)へは一度も戻らない。
+      expect(waits.slice(0, 6)).toEqual([1000, 2000, 4000, 8000, 16000, 30000]);
+      const lines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      expect(lines.some((line: string) => line.includes('繋ぎ直せた'))).toBe(false);
+    });
   });
 
   describe('stderr の cause 付記', () => {
