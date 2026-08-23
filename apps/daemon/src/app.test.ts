@@ -1299,10 +1299,14 @@ describe('HTTP API', () => {
     );
     expect(closed.status).toBe(200);
 
-    expect(await (await app.request('/commitments')).json()).toEqual({ entries: [] });
+    expect(await (await app.request('/commitments')).json()).toEqual({
+      entries: [],
+      unreadable: [],
+    });
     // **`false` が `false` として効く**（`z.coerce.boolean()` だと真になる）
     expect(await (await app.request('/commitments?includeClosed=false')).json()).toEqual({
       entries: [],
+      unreadable: [],
     });
 
     const all = await app.request('/commitments?includeClosed=true');
