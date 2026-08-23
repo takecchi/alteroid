@@ -187,24 +187,56 @@ function run(step) {
  *
  * **流すのは副産物ではなく要件である。** 溜めるだけだと、数分かかるテストの途中経過が
  * 一切見えない（`spawnSync` の形はそうなっていた）。
+ *
+ * **stdout と stderr は別々に溜める（#327）。** 以前は1本の `output` へ両方を
+ * 多重化していた。子の stdout と stderr は別のパイプで、届いた順に別々の `data`
+ * イベントが飛んでくるだけなので、両方を同じ文字列へ足すと**改行を跨いで混ざる**
+ * — 一方が改行で終わらない書き込みの直後に、たまたま他方の書き込みが続くと、
+ * 2つの書き手の内容が同じ行に見える。#326（`alteroid conversations` の出力が
+ * 改行で終わらない）と組み合わさると、実際に `pnpm test` の生出力で1行に融合した
+ * （Issue #327 の実測）。
+ *
+ * **`testRan` に渡すのは `stdout` だけにする。** 根拠は実測: `pnpm --filter
+ * @alteroid/cli test` を stdout/stderr 別ストリームで受けたところ、vitest の
+ * `Test Files` / `Tests` の集計行は**常に stdout 側**に出た（stderr 側には
+ * テスト内のエラースタックだけが出て、集計行は1件も無かった）。これは
+ * `vitest.setup.ts` の既存コメント「stdout に絞れば当たらないことは、全スイートの
+ * stdout と stderr を別ファイルへ分けて取った実測で確かめてある」とも一致する。
+ * **この前提を確かめずに stdout だけ見る形にすると判定が常に偽になりうるので、
+ * 変える前に実測してある。**
+ *
+ * **同じストリーム内で食われる形は残るか**: 理論上は「stdout へ改行なしで書いた
+ * 直後に、同じ stdout へ vitest 自身が集計行を書く」形が残りうる。ただし vitest の
+ * 既定レポーターは集計ブロックの直前に自分で空行を書く（実測: `…(0 test)\n\n
+ * Test Files  …` のように、集計行の直前の `\n` は vitest 自身の書き込みに含まれて
+ * いる）ため、直前の書き込みが改行で終わっていなくても `^` はその vitest 自身の
+ * 改行の後ろで一致する。**stdout 単独では、この形の食われ方は今回の実測では
+ * 再現しなかった**（`vitest.setup.ts` が「本物の stdout への直書き」をテストの
+ * 赤として検出する歯を持ったこと（#314 以降）も、この形の混入源を塞ぐ側に効いて
+ * いる）。それでも「vitest の将来のレポーター実装が集計行の前に改行を持たなくなる」
+ * 形の変化までは検査していない — 変われば同じ症状が再発しうる。
  */
 function runTest(step) {
   const args = [...step.args, ...passthrough];
   process.stdout.write('\n=== ' + step.name + ': ' + step.cmd + ' ' + args.join(' ') + '\n');
   return new Promise((resolve) => {
     const child = spawn(step.cmd, args, { cwd: REPO, stdio: ['inherit', 'pipe', 'pipe'] });
-    let output = '';
-    const take = (chunk) => {
+    // **stdout だけを判定用に溜める**（上の doc）。stderr は流すだけで溜めない —
+    // 溜めても `testRan` には渡さないので、溜める理由が無い（不要な状態を持つと、
+    // 次に読む者が「判定に使っているのか」と誤読する）。
+    let stdoutText = '';
+    child.stdout.on('data', (chunk) => {
       const text = chunk.toString('utf8');
-      output += text;
+      stdoutText += text;
       process.stdout.write(text);
-    };
-    child.stdout.on('data', take);
-    child.stderr.on('data', take);
+    });
+    child.stderr.on('data', (chunk) => {
+      process.stdout.write(chunk.toString('utf8'));
+    });
     child.on('error', (error) =>
-      resolve({ output, status: null, signal: null, startError: error }),
+      resolve({ output: stdoutText, status: null, signal: null, startError: error }),
     );
-    child.on('close', (status, signal) => resolve({ output, status, signal }));
+    child.on('close', (status, signal) => resolve({ output: stdoutText, status, signal }));
   });
 }
 
