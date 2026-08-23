@@ -474,6 +474,67 @@ describe('枠が閉じている合図（usage_limited）', () => {
 });
 
 describe('会話の切り替え', () => {
+  /**
+   * #251 の flaky 調査で作った回帰テスト。
+   *
+   * **本物の競合が実装側にあるかを、時計に頼らず確かめる。** `sse()` の
+   * `after` を使い、「navigate した直後・かつ signal を渡さない（＝アプリ側の
+   * `abort()` がこのストリームのフレーム送出を止めない）」という最悪条件で、
+   * 前の会話のストリームから `text` チャンクを1つわざと遅れて流す。
+   *
+   * `ChatPane` の `owns()`/`stopped()`（`routes/chat.tsx`）が
+   * `shownIdRef` だけを見て書き込みを許可するかどうかを判定しているので、
+   * ここが正しく機能していれば、フレームの送出そのものが止まっていなくても
+   * 画面には出ない。**8回連続で実測して安定して通ることを確認済み**
+   * （`delayMs: 0` かつ navigate と同じ tick でゲートを外しても揺れない）。
+   */
+  it('navigate と同じ tick で、しかも abort が効かない前の会話のストリームから届いたチャンクは画面に出ない', async () => {
+    let releaseStray: () => void = () => {};
+    const strayGate = new Promise<void>((resolve) => {
+      releaseStray = resolve;
+    });
+    stubFetch((url) => {
+      if (url.endsWith('/chat')) {
+        // ⚠️ わざと signal を渡さない — アプリ側の abort() でこのストリームの
+        // フレーム送出そのものは止まらない状況を作り、実測より厳しい条件で試す。
+        return sse(
+          [
+            { event: 'open', data: { conversationId: CONVERSATION_ID } },
+            { event: 'text', data: { type: 'text', text: 'こんにちは' } },
+            { event: 'text', data: { type: 'text', text: '追加チャンク' }, after: strayGate },
+            { event: 'done', data: { type: 'done' } },
+          ],
+          { keepOpen: true, delayMs: 0 },
+        );
+      }
+      if (url.includes('/conversations/other')) {
+        return json({
+          conversationId: 'other',
+          messages: [{ id: 'm1', at: '2026-08-13T00:00:00Z', role: 'inbound', text: '別の会話' }],
+        });
+      }
+      if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
+      return undefined;
+    });
+
+    const { router } = renderChat();
+    await send('やあ');
+    await screen.findByText('こんにちは');
+
+    // navigate の呼び出しと**同じタイミングで**ストリームのゲートを外す —
+    // React の effect（shownIdRef を進めて abort する側）と、遅れて届く
+    // チャンクの処理のどちらが先に走るかを競わせる。
+    const navPromise = router.navigate('/chat/other');
+    releaseStray();
+    await navPromise;
+
+    await screen.findByText('別の会話');
+    // 数ティック待って、追いついてくる可能性のある描画を拾う。
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(screen.queryByText(/追加チャンク/)).toBeNull();
+  });
+
   it('人間が別の会話を選んだら、前の会話の内容を捨てる', async () => {
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
@@ -495,9 +556,38 @@ describe('会話の切り替え', () => {
     await router.navigate('/chat/other');
 
     expect(await screen.findByText('別の会話')).toBeTruthy();
-    await waitFor(() => {
-      expect(screen.queryByText(/こんにちは、元気にやっている/)).toBeNull();
-    });
+    /*
+     * #251: CI で1度だけ落ち、同じ commit の再実行で通った（詳細は Issue）。
+     *
+     * **実装側に本物の競合は無いことを、この直上の回帰テストで決定的に
+     * 確かめてある** — navigate と同じ tick で、しかも abort が効かない
+     * 前の会話のストリームからチャンクを流しても画面には出ない。8回連続で
+     * 実測しても揺れなかった。だから、ここで落ちるとすれば「消えるまでに
+     * かかる時間」（React の再描画・effect の実行）が既定の `waitFor`
+     * タイムアウト（`asyncUtilTimeout`、testing-library の既定 1000ms。
+     * このリポジトリは `configure()` で上書きしていない）を CI の負荷下で
+     * 超えただけ、という形になる。落ちた回の当該 `it` の所要は 1120ms で、
+     * 「setup 約120ms + waitFor が1000ms 使い切って最後の評価で落ちる」と
+     * 整合する。
+     *
+     * **`timeout` はこのテストが守っている性質（前の会話の内容が消える
+     * こと）を1文字も変えない — assertion 自体（`queryByText` /
+     * `toBeNull()`）はそのまま。変えているのは「どれだけ待つか」という
+     * 足場のパラメータだけである。** 3000ms は同じファイル内の他の
+     * `waitFor` 拡張（`chat.usage-limit-delayed-reply.test.tsx` /
+     * `chat.duplicate-on-invalidate.test.tsx`）と同じ値に揃えた。
+     *
+     * ⚠️ これは「決定的な原因を直した」ではない。**予算を上げても、
+     * CI がこの1000msを超える負荷を再び踏めば、また同じ形で落ちうる。**
+     * 次に同じものを見た人が「無駄に長い timeout だ」と思って戻さないよう、
+     * この経緯をここに残す。
+     */
+    await waitFor(
+      () => {
+        expect(screen.queryByText(/こんにちは、元気にやっている/)).toBeNull();
+      },
+      { timeout: 3000 },
+    );
   });
 });
 
