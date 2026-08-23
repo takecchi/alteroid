@@ -20,7 +20,8 @@
   ],
   "scripts": {
     "build": "tsup && node ./scripts/write-openapi.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --root=../.. apps/daemon/src"
   },
   "dependencies": {
     "@alteroid/core": "workspace:*",

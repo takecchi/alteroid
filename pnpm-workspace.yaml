@@ -159,3 +159,9 @@ catalog:
 # 版そのものを上げるのは `.github/workflows/update-claude-sdk.yml`（毎日）。
 minimumReleaseAgeExclude:
   - '@anthropic-ai/claude-agent-sdk*'
+
+# #246: `pnpm --filter <存在しないパッケージ名>` が黙って exit 0 を返す穴を塞ぐ。
+# `test` script の有無とは無関係の別穴（パッケージ名の誤字・コピペミス）で、
+# 実測（2026-08-23T07:3xZ）: `pnpm --filter @alteroid/nope test` は
+# 「No projects matched...」と表示しつつ exit 0 だった。これを立てると exit 1 になる。
+failIfNoMatch: true
