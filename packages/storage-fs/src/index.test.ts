@@ -519,6 +519,67 @@ describe('FsPersonaStore', () => {
       expect(before?.createdAt).toEqual({ kind: 'unknown' });
       expect(after?.createdAt).toEqual({ kind: 'known', at: '2026-01-02T03:04:05.000Z' });
     });
+
+    /**
+     * 上のテストは先に `markHumanTouched` を呼ぶ。そのせいで `protectionStatus`
+     * は `humanTouchedAt` の分岐で即 `{ kind: 'human' }` を返し、`contentSha256`
+     * を一度も見ない（`persona.ts` の `protectionStatus`）。`descriptionFreshness`
+     * も before/after を比べてはいるが、両方とも `human` という結果に吸収され、
+     * `contentSha256` / `describedAt` が消えても差が出ない構造になっている。
+     * 実際、`markCreatedAt` が `contentSha256` と `describedAt` を巻き添えで
+     * 消す変異を当てても、上のテストを含む全117ファイル2154本は1本も赤くならない
+     * （変異試験で確認済み）。
+     *
+     * ここでは `markHumanTouched` を呼ばずに、`contentSha256` と `describedAt`
+     * の両方を実際に観測できる形を作る。**この2つは `write()` を通さないと
+     * 立たない**（上のテストのように索引の無い生ファイルを直接置くだけでは
+     * 立たない）。ところが `write()` は同時に `createdAt` も立ててしまい、
+     * `markCreatedAt` は「既に値が在れば触らない」ので、そのままでは変異が
+     * 発火する前に `false` を返して終わる。
+     *
+     * そこで `write()` の直後に、索引ファイル（`.index.json`）から `createdAt`
+     * のキーだけを取り除く。**これは小細工ではなく現実の再現である** ——
+     * `contentSha256` / `describedAt` は #173 / #170 から `write()` が立てて
+     * きたのに対し、`createdAt` は #220 でこの配線が入るまで存在しなかった
+     * 列である。つまり配線より前に書かれた行はまさに「`contentSha256` /
+     * `describedAt` は在るが `createdAt` は無い」状態にある。
+     */
+    it('markCreatedAt は（human 印を経由しない場合でも）contentSha256 と describedAt を書き換えない', async () => {
+      await stores.persona.write(
+        'runbook',
+        ['---', 'description: 手順', '---', '# 手順書', '', '本文', ''].join('\n'),
+      );
+
+      // #220 の配線より前に作られた行を模す: contentSha256 / describedAt は
+      // 在るが createdAt は無い。
+      const indexPath = join(root, 'memory', '.index.json');
+      const index = JSON.parse(await readFile(indexPath, 'utf8'));
+      delete index.runbook.createdAt;
+      await writeFile(indexPath, JSON.stringify(index), 'utf8');
+
+      const before = await stores.persona.read('runbook');
+      const beforeProtection = await stores.persona.protectionStatus('runbook');
+      // 前提を確かめる: markHumanTouched を経由していないので、
+      // protectionStatus は contentSha256 を実際に比較して clone-only を返す
+      // （human の一言で吸収されない）。describedAt も生きているので fresh。
+      expect(beforeProtection).toEqual({ kind: 'clone-only' });
+      expect(before?.descriptionFreshness).toEqual({ kind: 'fresh' });
+      expect(before?.createdAt).toEqual({ kind: 'unknown' });
+
+      const wrote = await stores.persona.markCreatedAt('runbook', '2026-01-02T03:04:05.000Z');
+
+      const after = await stores.persona.read('runbook');
+      const afterProtection = await stores.persona.protectionStatus('runbook');
+      expect(wrote).toBe(true);
+      expect(after?.content).toBe(before?.content);
+      expect(after?.updatedAt).toBe(before?.updatedAt);
+      expect(after?.description).toBe(before?.description);
+      // contentSha256 / describedAt は直接読めない派生値なので、
+      // protectionStatus / descriptionFreshness を経由して確かめる。
+      expect(afterProtection).toEqual(beforeProtection);
+      expect(after?.descriptionFreshness).toEqual(before?.descriptionFreshness);
+      expect(after?.createdAt).toEqual({ kind: 'known', at: '2026-01-02T03:04:05.000Z' });
+    });
   });
 
   /**
