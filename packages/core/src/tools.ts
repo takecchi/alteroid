@@ -2413,6 +2413,13 @@ export function createCloneTools(context: ToolContext) {
         '版が「不明」（器が自分の版を知らない）と「未確認」（名乗りをまだ聞けていない）は' +
           '別物で、疑う先が違う（前者は器の設定、後者は登録とネットワーク）。' +
           'state が lost の器の版は黙る前に聞いた古い値である。',
+        'resources: true を渡すと器ごとの pids（プロセス数）の現在値/上限も出る' +
+          '（#315 案1）。これは器の合計であって内訳ではない——何がその数を持って' +
+          'いるかはこの数字からは分からない。空き（上限 − 現在値）も、次に何本' +
+          '置けるかを意味しない——実測では vitest が1本立ち上がるだけで pids が' +
+          '+131 跳ねている。「runner に訊けなかった」（器が開いていない・応答が' +
+          '無い）と「訊けたが pids が読めない」（cgroup を持たない器）は別の文言で' +
+          '出る——どちらも数字が出ない点は同じだが、疑う先が違う。',
       ].join(' '),
       {
         fingerprints: z
@@ -2423,12 +2430,22 @@ export function createCloneTools(context: ToolContext) {
               '要らないものを文脈へ載せない側に倒してある。人間は Web UI の設定画面で' +
               '常に見られるので、必要になったらここを true にして開くこと。',
           ),
+        resources: z
+          .boolean()
+          .optional()
+          .describe(
+            '器ごとの pids（プロセス数）を出すか。既定は出さない——このために' +
+              'ネットワーク往復を足さない側に倒してある。頼んだときだけ各 runner の' +
+              '/health を叩く。合計しか分からず内訳は出ない（#315 の本題である' +
+              '内訳の特定はこれでは解決しない）。',
+          ),
       },
-      async ({ fingerprints }) => {
+      async ({ fingerprints, resources }) => {
         if (!context.managers) return NO_POOL;
-        const overview = await context.managers.runners(
-          fingerprints === undefined ? {} : { fingerprints },
-        );
+        const overview = await context.managers.runners({
+          ...(fingerprints === undefined ? {} : { fingerprints }),
+          ...(resources === undefined ? {} : { resources }),
+        });
 
         // **デーモン自身の版は、runner が0台でも出す。** 「自分は何で走っているか」は
         // 名簿の中身に依存しない事実であり、0台のときに落とすと、配線がまだ無い状態
@@ -2525,10 +2542,52 @@ export function createCloneTools(context: ToolContext) {
           if (fingerprints === true && runner.profile !== undefined) {
             lines.push(`  プロファイルの指紋: ${runner.profile.sha256}`);
           }
+          /*
+           * **pids（#315 案1）。3つの状態を混ぜない。**
+           *
+           * 1. 読めた — `runner.resources.pids` が在る
+           * 2. runner に訊けなかった — `runner.resources` 自体が `undefined`
+           *    （器が開いていない・`resources()` が失敗した）
+           * 3. 訊けたが pids が読めない — `resources` は在るが `pids` が無い
+           *    （cgroup を持たない器。フォールバック先が無い——
+           *    `runner-resources.ts` の doc）
+           *
+           * 2 と 3 は同じ「数字が出ない」結果だが、疑う先が違うので同じ文言に
+           * 倒さない。
+           *
+           * **「言えないこと」は器ごとに繰り返さず、一覧の末尾に1度だけ出す**
+           * （下の `tail`）。器の台数ぶん同じ3行を並べると、断りの長さが本体を
+           * 上回り、**読み飛ばされる側に倒れる**——`.claude/skills/
+           * listing-and-detail` が一覧に予算を持たせているのと同じ理由である。
+           * 数字と断りが離れることになるが、**断りが出なくなるわけではない**
+           * （`resources: true` のときは必ず末尾に出る）。
+           */
+          if (resources === true) {
+            if (runner.resources === undefined) {
+              lines.push('  pids: runner に訊けなかった（器が開いていない、または応答が無い）');
+            } else if (runner.resources.pids === undefined) {
+              lines.push('  pids: 訊けたが読めない器だった（cgroup を持たない。ローカル開発など）');
+            } else {
+              const { current, max } = runner.resources.pids;
+              lines.push(`  pids: ${current} / ${max}`);
+            }
+          }
           blocks.push(lines.join('\n'));
         }
 
         const tail: string[] = [];
+        // **pids を出したなら、その数字が言えないことを必ず添える（#315）。**
+        // 計器に「この数字が言えないこと」を貼るのは、この repo が繰り返している
+        // 作法である（`.github/workflows/ci.yml` の OpenAPI 検査の doc）。
+        // **言えないことを書いていない計器は、読む側が言えると思い込む。**
+        if (resources === true) {
+          tail.push(
+            'pids について: **これは器の合計であって内訳ではない。** 何がその数を持っているかは、' +
+              'この数字からは分からない（#315 の本題である内訳の特定は、まだ誰にもできない）。' +
+              '**空き（上限 − 現在値）は「次に何本置けるか」を意味しない**——実測では ' +
+              'vitest が1本立ち上がるだけで pids が +131 跳ねている。',
+          );
+        }
         if (overview.unassigned.length > 0) {
           const shown = overview.unassigned.slice(0, RUNNER_MANAGER_LIST_LIMIT);
           const rest = overview.unassigned.length - shown.length;

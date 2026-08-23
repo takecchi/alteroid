@@ -4562,6 +4562,72 @@ describe('runner の一覧（ManagerPool.runners）', () => {
     await pool.stop();
     await registry.stop();
   });
+
+  /**
+   * pids（#315 案1）。`fingerprints` と同じ opt-in の形——`resources: true` を
+   * 渡したときだけ `resources()` を呼ぶ。**呼ばれた回数を直接数える**（AGENTS.md
+   * 「取れない軸に0の行を作らない」と対になる、「呼んだかどうか」の歯）。
+   */
+  it('resources を渡さなければ resources() を呼ばない。resources: true のときだけ呼ぶ', async () => {
+    const a = new FakePoolRunner('runner-a', {
+      managers: 0,
+      pids: { current: 872, max: 1000 },
+    });
+    const stores = createMemoryStores();
+    const registry = createRunnerRegistry([a]);
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    await pool.runners();
+    expect(a.resourcesCalls).toBe(0);
+
+    const overview = await pool.runners({ resources: true });
+    expect(a.resourcesCalls).toBe(1);
+    expect(overview.runners[0]?.resources?.pids).toEqual({ current: 872, max: 1000 });
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  /**
+   * **3つの状態を混ぜない。**
+   *
+   * 1. 読めた（上のテストが押さえている）
+   * 2. runner に訊けなかった — `resources` を持つ器が名簿に無い（まだ開けていない）
+   *    ときは、`resources: true` を渡しても呼びようが無い。`RunnerOverview.resources`
+   *    は `undefined` のままである
+   * 3. 訊けたが pids が読めなかった — `resources()` が答えたが `pids` を持たない
+   *    （cgroup の無い器。ローカル開発など）。`RunnerOverview.resources` は
+   *    定義されるが `.pids` が無い
+   *
+   * 2 と 3 を同じ `undefined` へ潰すと、クローンは「訊けなかった」と「そもそも
+   * pids という概念が無い器」を区別できなくなる。
+   */
+  it('訊けなかった器は resources が undefined、訊けたが pids の無い器は resources はあるが pids が無い', async () => {
+    const stores = createMemoryStores();
+    // **state 2**: まだ開けていない（`open` が失敗する）ので、`RunnerRegistry#list()`
+    // には現れない——`resources: true` を渡しても client 自体が見つからない。
+    const registry = createRunnerRegistry([], { retryBaseMs: 5, retryMaxMs: 5 });
+    await registry.register({
+      label: 'runner-unreachable',
+      open: () => Promise.reject(new Error('fetch failed')),
+    });
+    // **state 3**: 開いてはいるが、`resources()` が pids を持たない値を返す
+    // （cgroup を持たない器を模す）。
+    const noCgroup = new FakePoolRunner('runner-no-cgroup', { managers: 0 });
+    await registry.register({ label: 'runner-no-cgroup', open: () => Promise.resolve(noCgroup) });
+
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    const overview = await pool.runners({ resources: true });
+
+    const byLabel = new Map(overview.runners.map((r) => [r.label, r]));
+    expect(byLabel.get('runner-unreachable')?.resources).toBeUndefined();
+    expect(byLabel.get('runner-no-cgroup')?.resources).toBeDefined();
+    expect(byLabel.get('runner-no-cgroup')?.resources?.pids).toBeUndefined();
+
+    await pool.stop();
+    await registry.stop();
+  });
 });
 
 /**

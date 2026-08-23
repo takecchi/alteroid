@@ -51,8 +51,8 @@ interface Harness {
    * 設定しなければ既定で `null`（3段のどこにも無い、を模している）。
    */
   setTranscript(managerId: string, body: string | null): void;
-  /** `runners()` に渡された引数（`fingerprints` を渡したかどうかの検査用）。 */
-  runnersCalls: { fingerprints?: boolean }[];
+  /** `runners()` に渡された引数（`fingerprints` / `resources` を渡したかどうかの検査用）。 */
+  runnersCalls: { fingerprints?: boolean; resources?: boolean }[];
   /**
    * この道具呼び出しが `memory_update.cause` でどう名乗るか（既定 `'clone'`）。
    *
@@ -82,7 +82,7 @@ function harness(runtime?: () => CloneRuntimeFacts): Harness {
     unassigned: [],
     daemonRevision: { status: 'unknown' },
   };
-  const runnersCalls: { fingerprints?: boolean }[] = [];
+  const runnersCalls: { fingerprints?: boolean; resources?: boolean }[] = [];
   const transcripts = new Map<string, string>();
   let memoryCause: 'distill' | 'clone' = 'clone';
 
@@ -1705,6 +1705,170 @@ describe('runner_list（器の一覧）', () => {
     expect(reply).toContain('deadbeef0000');
     expect(reply).toContain('cafef00dbabe');
     expect(h.runnersCalls).toEqual([{ fingerprints: true }]);
+  });
+
+  /**
+   * pids（#315 案1）。**既定では `resources: true` を渡さない。**
+   *
+   * `ManagerPool.runners()` へ渡す引数がそのまま「呼ぶかどうか」を決める
+   * （`resourcesCalls` を直接数える歯は `manager.test.ts` 側に在る——ここで見るのは
+   * 道具の側が黙って `resources: true` へ倒していないかである）。データ側に
+   * `pids` が在っても、既定の呼び出しでは出てこないことも併せて確かめる
+   * （fingerprints の「引数を渡さなければ指紋を出さない」と対になる歯）。
+   */
+  it('resources を渡さなければ既定では pids を出さない（往復を足さない側に倒す）', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-a',
+          revision: { status: 'unheard' },
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-a',
+          managers: [],
+          resources: { pids: { current: 872, max: 1000 } },
+        },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', {});
+
+    expect(reply).not.toContain('872');
+    expect(h.runnersCalls).toEqual([{}]);
+  });
+
+  it('resources: true を渡すと、読めた器の pids（現在値/上限）が出る', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-a',
+          revision: { status: 'unheard' },
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-a',
+          managers: [],
+          resources: { pids: { current: 872, max: 1000 } },
+        },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', { resources: true });
+
+    expect(reply).toContain('872');
+    expect(reply).toContain('1000');
+    expect(h.runnersCalls).toEqual([{ resources: true }]);
+  });
+
+  /**
+   * **「言えないこと」は器ごとに繰り返さず、末尾に1度だけ出す。**
+   *
+   * 器の台数ぶん同じ断りを並べると、断りの長さが本体を上回って**読み飛ばされる
+   * 側に倒れる**。かといって出さなければ、読む側は数字を「言える」と思い込む
+   * （`.github/workflows/ci.yml` の「言えないことを書いていない計器は、読む側が
+   * 言えると思い込む」）。**1度だけ出す**が、その両方を満たす形である。
+   *
+   * 器を3台にしてあるのは、**1台だと「繰り返していない」が測れない**ため
+   * （1回しか出ないのが正しいのか、たまたま1台だからなのかを区別できない）。
+   */
+  it('pids の「言えないこと」は、器が何台でも末尾に1度だけ出る', async () => {
+    const h = harness();
+    const runner = (label: string, current: number) => ({
+      label,
+      revision: { status: 'unheard' } as const,
+      state: 'connected' as const,
+      since: '2026-01-01T00:00:00.000Z',
+      runnerId: label,
+      managers: [],
+      resources: { pids: { current, max: 1000 } },
+    });
+    h.setRunnersOverview({
+      runners: [runner('runner-a', 872), runner('runner-b', 120), runner('runner-c', 4)],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', { resources: true });
+
+    // 3台ぶんの数字はそれぞれ出る（断りを1度にしたせいで数字まで減っていない）。
+    expect(reply).toContain('872');
+    expect(reply).toContain('120');
+    expect(reply).toContain('4');
+    // 断りは1度だけ。**「出る」ではなく「1度だけ出る」を数える。**
+    expect(reply.split('器の合計であって内訳ではない')).toHaveLength(2);
+  });
+
+  /** 出さないと決めたときは、断りも出ない（既定の出力を断りで汚さない）。 */
+  it('resources を渡さなければ、pids の「言えないこと」も出ない', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-a',
+          revision: { status: 'unheard' },
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-a',
+          managers: [],
+          resources: { pids: { current: 872, max: 1000 } },
+        },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', {});
+
+    expect(reply).not.toContain('器の合計であって内訳ではない');
+  });
+
+  /**
+   * **3つの状態を混ぜない。** 「読めた」は上のテストが押さえている。ここは
+   * 残り2つ——「runner に訊けなかった」（`resources` 自体が `undefined`）と
+   * 「訊けたが pids が読めなかった」（`resources` は在るが `pids` が無い）が
+   * **別の文言**で出て、しかもどちらも「読めた」（`current`/`max` の数字）を
+   * 出さないことを確かめる。0 や `unknown` へ潰していないかの歯である。
+   */
+  it('runner に訊けなかった器と、訊けたが pids が読めない器を、別の文言で出す', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          // `resources` を持たない = 訊けなかった（器が開いていない・応答が無い）。
+          label: 'runner-unreachable',
+          revision: { status: 'unheard' },
+          state: 'unreachable',
+          since: '2026-01-01T00:00:00.000Z',
+          managers: [],
+        },
+        {
+          // `resources` は在るが `pids` が無い = 訊けたが読めない（cgroup が無い器）。
+          label: 'runner-no-cgroup',
+          revision: { status: 'unheard' },
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-no-cgroup',
+          managers: [],
+          resources: {},
+        },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', { resources: true });
+
+    expect(reply).toContain('runner に訊けなかった');
+    expect(reply).toContain('読めない器だった');
+    // **2つの文言が同じでないこと自体を確かめる**（潰れていないことの直接の歯）。
+    expect(reply).not.toContain('undefined');
+    expect(reply).not.toContain('pids: 0');
+    expect(reply).not.toContain('pids: unknown');
   });
 });
 
