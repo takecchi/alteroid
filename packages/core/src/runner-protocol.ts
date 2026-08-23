@@ -347,10 +347,13 @@ export const runnerPlacementResourcesSchema = runnerExecutionResourcesSchema.ext
    * 「配達の失敗」でもない** — `Outbox.pending` の写しで、listener が付いたまま
    * 溜まっている分も含む（`apps/runner/src/app.ts` の `Outbox.pending` の doc）。
    *
-   * 0件のときは runner 側が `/health` のキーごと省く（AGENTS.md「取れない軸に
-   * 0の行を作る」と同じ形——ただしここは「0」という値そのものは正しく取れる
-   * 軸なので、0を返す runner からは `0` がそのまま届く。省くのは runner 側の
-   * 判断であって、この欄自体は0を禁じない）。
+   * **0件でもキーは省かれない**（`apps/runner/src/app.ts` の `/health` は
+   * `pendingEvents: outbox.pending` を無条件で書く）。ここが
+   * `oldestPendingAt`（次項）と違うのはそのためである——「未送出が何件か」は
+   * 0件のときも正しく測れる軸なので、AGENTS.md「取れない軸に0の行を作る」は
+   * 当たらない（当たるのは「いちばん古いものの時刻」の側で、0件のときは
+   * そもそも「いちばん古いもの」が存在しない）。`.optional()` にしてあるのは
+   * この機能より前の runner が欄自体を持たない窓のためである。
    */
   pendingEvents: z.number().int().nonnegative().optional(),
   /**

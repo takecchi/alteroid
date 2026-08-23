@@ -93,15 +93,16 @@ describe('runner の /events: writeSSE が投げても出来事を失わない�
     // 同じ出来事がまた `writeSSE` を通ったときは、今度は素通しして実際に
     // 「配り直された」ことまで読めるようにする。
     let thrown = false;
-    const spy = vi
-      .spyOn(SSEStreamingApi.prototype, 'writeSSE')
-      .mockImplementation(async function (this: SSEStreamingApi, message: SSEMessage) {
-        if (message.event !== 'hello' && !thrown) {
-          thrown = true;
-          throw new Error('boom: 相手が読まなくなった接続への書き込みが失敗した（模擬）');
-        }
-        return realWriteSSE.call(this, message);
-      });
+    const spy = vi.spyOn(SSEStreamingApi.prototype, 'writeSSE').mockImplementation(async function (
+      this: SSEStreamingApi,
+      message: SSEMessage,
+    ) {
+      if (message.event !== 'hello' && !thrown) {
+        thrown = true;
+        throw new Error('boom: 相手が読まなくなった接続への書き込みが失敗した（模擬）');
+      }
+      return realWriteSSE.call(this, message);
+    });
 
     try {
       const app = createRunnerApp({

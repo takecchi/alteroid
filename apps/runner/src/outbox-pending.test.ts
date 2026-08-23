@@ -52,14 +52,15 @@ function newHost(): RunnerHost {
 function hangOnRealEvents(): { spy: ReturnType<typeof vi.spyOn>; calls: string[] } {
   const realWriteSSE = SSEStreamingApi.prototype.writeSSE;
   const calls: string[] = [];
-  const spy = vi
-    .spyOn(SSEStreamingApi.prototype, 'writeSSE')
-    .mockImplementation(async function (this: SSEStreamingApi, message: SSEMessage) {
-      if (message.event === 'hello') return realWriteSSE.call(this, message);
-      calls.push(message.event ?? '');
-      // 相手が読まなくなった接続——ここで永久に返らない。
-      return new Promise<void>(() => undefined);
-    });
+  const spy = vi.spyOn(SSEStreamingApi.prototype, 'writeSSE').mockImplementation(async function (
+    this: SSEStreamingApi,
+    message: SSEMessage,
+  ) {
+    if (message.event === 'hello') return realWriteSSE.call(this, message);
+    calls.push(message.event ?? '');
+    // 相手が読まなくなった接続——ここで永久に返らない。
+    return new Promise<void>(() => undefined);
+  });
   return { spy, calls };
 }
 

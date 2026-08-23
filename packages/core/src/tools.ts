@@ -258,7 +258,8 @@ function describeAskedAt(askedAt: ManagerWaitingItem['askedAt']): string {
  */
 function describeInboxBacklog(pending: { count: number; oldestAt?: string }): string | null {
   if (pending.count === 0) return null;
-  const oldest = pending.oldestAt === undefined ? '' : `（最も古いものは ${pending.oldestAt} から）`;
+  const oldest =
+    pending.oldestAt === undefined ? '' : `（最も古いものは ${pending.oldestAt} から）`;
   return `⚠ クローンの受信箱に未処理の合図が ${pending.count} 件ある${oldest}`;
 }
 
@@ -2182,7 +2183,9 @@ export function createCloneTools(context: ToolContext) {
         const inboxBacklog = describeInboxBacklog(await context.stores.inbox.pending());
         if (managers.length === 0) {
           return text(
-            inboxBacklog === null ? '（マネージャーは1本も居ない）' : `（マネージャーは1本も居ない）\n${inboxBacklog}`,
+            inboxBacklog === null
+              ? '（マネージャーは1本も居ない）'
+              : `（マネージャーは1本も居ない）\n${inboxBacklog}`,
           );
         }
 
