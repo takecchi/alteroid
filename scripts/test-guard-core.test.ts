@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+// @ts-expect-error -- 素の .mjs（型宣言を持たない test-guard の中核）を読む
 import {
   EXIT_SCAN_EMPTY,
   EXIT_STATIC_SKIP,
@@ -125,10 +126,9 @@ describe('findUnconditionalSkips（歯B: ソースの側）', () => {
   });
 
   it('it.skip / test.skip も検出する', () => {
-    const content = [
-      `it${dotSkip()}('a', () => {});`,
-      `test${dotSkip()}('b', () => {});`,
-    ].join('\n');
+    const content = [`it${dotSkip()}('a', () => {});`, `test${dotSkip()}('b', () => {});`].join(
+      '\n',
+    );
     const hits = findUnconditionalSkips([{ path: 'f.test.ts', content }]);
     expect(hits.map((h) => h.matched)).toEqual([`it${dotSkip()}`, `test${dotSkip()}`]);
     expect(hits.map((h) => h.line)).toEqual([1, 2]);
@@ -157,7 +157,7 @@ describe('findUnconditionalSkips（歯B: ソースの側）', () => {
   });
 
   it('実行時の ctx.skip() は対象外（describe/it/test 以外のオブジェクトへの .skip）', () => {
-    const content = ['it(\'a\', (ctx) => {', `  ctx${dotSkip()}();`, '});'].join('\n');
+    const content = ["it('a', (ctx) => {", `  ctx${dotSkip()}();`, '});'].join('\n');
     expect(findUnconditionalSkips([{ path: 'f.test.ts', content }])).toEqual([]);
   });
 

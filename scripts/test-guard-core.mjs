@@ -40,7 +40,7 @@
 
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { URL, fileURLToPath, pathToFileURL } from 'node:url';
 
 /** `scripts/` の1つ上 ＝ リポジトリ根。`process.cwd()` に依存しない
  * （`pnpm --filter <pkg> test` では cwd がそのパッケージ配下になるため）。 */

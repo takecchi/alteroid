@@ -47,6 +47,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import process from 'node:process';
 
 import { ROOT, judgeExecution, runStaticSkipGuard } from './test-guard-core.mjs';
 
