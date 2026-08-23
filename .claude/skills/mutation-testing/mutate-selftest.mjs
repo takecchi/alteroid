@@ -755,7 +755,10 @@ function scenarioSpecValidation() {
     { label: 'id が無い', spec: { ...baseValid, id: undefined } },
     { label: 'id が空文字', spec: { ...baseValid, id: '' } },
     { label: 'id が非文字列（数値）', spec: { ...baseValid, id: 42 } },
-    { label: 'id にパス区切り(/)と..を含む（BACKUP_DIR 脱出を試みる）', spec: { ...baseValid, id: '../escape' } },
+    {
+      label: 'id にパス区切り(/)と..を含む（BACKUP_DIR 脱出を試みる）',
+      spec: { ...baseValid, id: '../escape' },
+    },
     { label: 'id にパス区切り(\\)を含む', spec: { ...baseValid, id: 'a\\b' } },
     { label: 'id に .. を含む（区切りなし）', spec: { ...baseValid, id: 'a..b' } },
     { label: 'file が無い', spec: { ...baseValid, file: undefined } },
