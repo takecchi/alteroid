@@ -301,6 +301,7 @@ function JournalRow({ entry, isLast }: { entry: JournalEntry; isLast: boolean })
           {formatDateTime(entry.at)}
         </span>
         <Badge tone={TONE[entry.type]}>{entry.type}</Badge>
+        {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
         <span className="min-w-0 flex-1 truncate text-sm text-muted">
           {summarizeJournalEntry(entry)}
         </span>

@@ -139,6 +139,11 @@ export default function Dashboard() {
                       className="border-b border-border px-4 py-2 last:border-b-0"
                     >
                       <Link to="/approvals" className="block text-sm hover:text-accent">
+                        {/*
+                          一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の
+                          doc）。`line-clamp-2` の内側へブロック要素を入れると、その
+                          畳み方そのものが効かなくなる。
+                        */}
                         <span className="line-clamp-2">{approval.question}</span>
                         <span className="mt-0.5 block text-[11px] text-muted">
                           {formatRelative(approval.createdAt)}
@@ -178,6 +183,7 @@ export default function Dashboard() {
                         className="flex items-center gap-2 text-sm hover:text-accent"
                       >
                         <ManagerStatusBadge status={manager.status} />
+                        {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
                         <span className="min-w-0 flex-1 truncate">{manager.request}</span>
                       </Link>
                     </li>
@@ -284,6 +290,7 @@ export default function Dashboard() {
                     {formatDateTime(entry.at)}
                   </span>
                   <Badge>{entry.type}</Badge>
+                  {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
                   <span className="min-w-0 flex-1 truncate text-muted">
                     {summarizeJournalEntry(entry)}
                   </span>

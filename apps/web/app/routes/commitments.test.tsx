@@ -14,7 +14,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { Commitment } from '@alteroid/core';
+import type { Commitment, CommitmentOrigin } from '@alteroid/core';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import Commitments from './commitments';
@@ -270,5 +270,202 @@ describe('折り返しの付け忘れ（本2）', () => {
     const wrapper = label.closest('p');
     expect(wrapper).not.toBeNull();
     expect(wrapper!.className.split(/\s+/)).toContain('break-words');
+  });
+});
+
+/**
+ * 本文を `origin`（誰が書いたか）で Markdown / 素のテキストへ切り分ける
+ * （`commitments.tsx` の `CommitmentBody`）。
+ *
+ * **Markdown の中身の正しさはここの仕事ではない** — それは
+ * `apps/web/app/components/markdown.test.tsx` が持つ。ここが押さえるのは
+ * 「その欄が Markdown の描画経路を通るか／通らないか」だけである。だから
+ * `## 見出し` を混ぜて `findByRole('heading')` / `queryByRole('heading')` で
+ * 拾う形にしている（`approvals.test.tsx` の「クローンが書いた文だけを
+ * Markdown で描く」と同じ流儀）。
+ */
+describe('本文を origin で Markdown / 素のテキストへ切り分ける', () => {
+  it('起点が自分（self）の本文は Markdown の描画経路を通る', async () => {
+    stubCommitments([commitment({ origin: 'self', body: '## 引き受けた見出し\n\nこれは本文' })]);
+    renderPage();
+
+    expect(await screen.findByRole('heading', { name: '引き受けた見出し' })).toBeTruthy();
+    expect(screen.getByText('これは本文')).toBeTruthy();
+  });
+
+  it('起点がマネージャー（manager）の本文は Markdown の描画経路を通る', async () => {
+    stubCommitments([
+      commitment({ origin: 'manager', body: '[report] ## 報告の見出し\n\n報告の本文' }),
+    ]);
+    renderPage();
+
+    expect(await screen.findByRole('heading', { name: '報告の見出し' })).toBeTruthy();
+    expect(screen.getByText('報告の本文')).toBeTruthy();
+  });
+
+  /**
+   * `[report] ` / `[question] ` / `[permission] ` の3つを総当たりで撃つ
+   * （`packages/core/src/schema.ts` の `kind` が閉じた3値のため）。
+   *
+   * 接頭辞は `splitManagerPrefix` が切り出し、専用の `<span>` として素の
+   * テキストで描く。Markdown を通っていれば `markdown.tsx` の `<p>`
+   * （`mt-2 leading-relaxed first:mt-0`）の中に入るはずなので、そうなって
+   * いないことも合わせて確かめる。
+   */
+  it.each(['report', 'question', 'permission'] as const)(
+    'manager の [%s] 接頭辞は素のテキストとして出る（Markdown の描画経路を通らない）',
+    async (kind) => {
+      stubCommitments([commitment({ origin: 'manager', body: `[${kind}] 完了した` })]);
+      renderPage();
+
+      const prefix = await screen.findByText(new RegExp(`\\[${kind}\\]`));
+      expect(prefix.tagName).toBe('SPAN');
+      expect(prefix.closest('p.mt-2')).toBeNull();
+      // report / question / permission という語自体が見出しや強調として
+      // 解釈されていない。**この画面には常設の見出し（Card の h2）があるので
+      // `queryByRole('heading')` を名前指定なしで使うと誤検出する** — 名前で
+      // 絞って確かめる。
+      expect(screen.queryByRole('heading', { name: new RegExp(kind) })).toBeNull();
+      // **`document` 全体ではなくこの行（`<li>`）の中だけを見る。** 画面の
+      // どこか無関係な場所に将来 `strong` / `em` が増えても、この行が
+      // 無関係な理由で落ちないようにする。
+      const row = prefix.closest('li');
+      expect(row).not.toBeNull();
+      expect(row!.querySelector('strong, em')).toBeNull();
+    },
+  );
+
+  /**
+   * **⭐ 人間の指示で名指しされた歯。** 「AIが書いたものはマークダウンで
+   * 表示する」の裏返しとして、人間が書いた本文は化けさせない
+   * （`apps/web/app/routes/chat.tsx:710` と同じ線）。
+   */
+  it('起点が人間（human）の本文は Markdown の描画経路を通らない', async () => {
+    stubCommitments([commitment({ origin: 'human', body: '## これは見出しではない' })]);
+    renderPage();
+
+    const body = await screen.findByText('## これは見出しではない');
+    expect(screen.queryByRole('heading', { name: 'これは見出しではない' })).toBeNull();
+    expect(body.textContent).toContain('## これは見出しではない');
+  });
+
+  it('起点が外部（external）の本文も Markdown の描画経路を通らない', async () => {
+    stubCommitments([commitment({ origin: 'external', body: '## これも見出しではない' })]);
+    renderPage();
+
+    const body = await screen.findByText('## これも見出しではない');
+    // この画面には常設の見出し（Card の h2）があるので、名前で絞って確かめる。
+    expect(screen.queryByRole('heading', { name: 'これも見出しではない' })).toBeNull();
+    expect(body.textContent).toContain('## これも見出しではない');
+  });
+
+  it('起点が人間（human）の本文は whitespace-pre-wrap と break-words を持つ', async () => {
+    stubCommitments([commitment({ origin: 'human', body: '素のままの本文' })]);
+    renderPage();
+
+    const body = await screen.findByText('素のままの本文');
+    const tokens = body.className.split(/\s+/);
+    expect(tokens).toContain('whitespace-pre-wrap');
+    expect(tokens).toContain('break-words');
+  });
+
+  it('起点が自分（self）の本文も break-words を持つ要素の内側にある', async () => {
+    stubCommitments([commitment({ origin: 'self', body: 'クローンが書いた本文' })]);
+    renderPage();
+
+    // `<Markdown>` は自前で `break-words` をルート（`<div>`）に持つので、
+    // テキストを持つ要素そのものではなく祖先を辿る
+    // （`approvals.test.tsx` の `question.closest('.break-words')` と同じ流儀）。
+    const body = await screen.findByText('クローンが書いた本文');
+    expect(body.closest('.break-words')).not.toBeNull();
+  });
+
+  it('片付いた行（ClosedRow）でも origin による分岐が同じように効く', async () => {
+    stubCommitments(
+      [commitment({ id: 'open-1', body: 'まだ終わっていない' })],
+      [
+        commitment({
+          id: 'closed-self',
+          origin: 'self',
+          body: '## 片付けた見出し',
+          closedAt: new Date().toISOString(),
+        }),
+        commitment({
+          id: 'closed-human',
+          origin: 'human',
+          body: '## 見出しではない',
+          closedAt: new Date().toISOString(),
+        }),
+      ],
+    );
+    renderPage();
+
+    await screen.findByText('まだ終わっていない');
+    fireEvent.click(screen.getByRole('button', { name: '片付けたものも見る' }));
+
+    // self: Markdown の描画経路を通る。
+    expect(await screen.findByRole('heading', { name: '片付けた見出し' })).toBeTruthy();
+    // human: 通らない（`##` が素のテキストのまま見える）。
+    expect(screen.getByText('## 見出しではない')).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: '見出しではない' })).toBeNull();
+  });
+
+  /**
+   * `closedReason` の据え置き（書き手が型に記録されていないための防御）を
+   * 固定する。issue #286。
+   */
+  it('closedReason は Markdown の描画経路を通らない', async () => {
+    stubCommitments(
+      [commitment({ id: 'open-1', body: 'まだ終わっていない' })],
+      [
+        commitment({
+          id: 'closed-1',
+          origin: 'self',
+          body: '片付いた本文',
+          closedAt: new Date().toISOString(),
+          closedReason: '## 理由の見出しではない',
+        }),
+      ],
+    );
+    renderPage();
+
+    await screen.findByText('まだ終わっていない');
+    fireEvent.click(screen.getByRole('button', { name: '片付けたものも見る' }));
+
+    await screen.findByText('片付いた本文');
+    expect(screen.getByText('## 理由の見出しではない')).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: '理由の見出しではない' })).toBeNull();
+  });
+
+  /**
+   * **実行時の網羅性の倒れ先を固定する歯。**
+   *
+   * `commitmentOriginSchema`（`packages/core/src/schema.ts:892`）に無い値が
+   * 来ることは、ビルド時には起こらない（`pnpm typecheck` が塞ぐ。
+   * `CommitmentBody` の `switch` の `default` に置いた
+   * `const unhandled: never = commitment.origin;` が、その塞ぎ方の実体である
+   * — 変異試験で確認済み: `schema.ts` の enum に `'probe'` を一時的に足すと、
+   * この行が `Type '"probe"' is not assignable to type 'never'.` で
+   * `pnpm typecheck` を落とした）。
+   *
+   * **ただし実行時はビルド時の型を追い越しうる。** デーモンが先に新しい
+   * `origin` を返し、この画面（この型定義）がまだ古い、という順序は
+   * ありうる。型はビルド時にしか効かないので、その順序で来た値を
+   * `switch` が「どの `case` にも一致しない」まま実行時まで運んでしまう
+   * ことがある——ここで固定するのはその倒れ先である。**空白にせず、
+   * 素のテキストとして本文をそのまま出す。**
+   */
+  it('schema に無い origin が来ても、本文を消さず素のテキストとして出す（実行時の倒れ先）', async () => {
+    stubCommitments([
+      commitment({ origin: 'probe' as CommitmentOrigin, body: '未知の起点からの本文' }),
+    ]);
+    renderPage();
+
+    const body = await screen.findByText('未知の起点からの本文');
+    // Markdown の描画経路は通っていない（素のテキストの `<p>` のまま）。
+    expect(body.tagName).toBe('P');
+    const tokens = body.className.split(/\s+/);
+    expect(tokens).toContain('whitespace-pre-wrap');
+    expect(tokens).toContain('break-words');
   });
 });

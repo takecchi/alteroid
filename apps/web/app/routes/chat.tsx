@@ -123,6 +123,7 @@ function ConversationList({
                     conversation.conversationId === activeId && 'bg-surface-2',
                   )}
                 >
+                  {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
                   <p className="truncate text-xs">{conversation.preview}</p>
                   <p className="mt-0.5 text-[11px] text-muted">
                     {formatRelative(conversation.updatedAt)} · {conversation.messages} 往復
