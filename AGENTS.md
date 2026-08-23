@@ -376,17 +376,18 @@
     ```
 
     **`dist/index.js` の不在窓が 89ms、`dist/index.d.ts` の不在窓が 2,376ms（約27倍）。** ⟹ 別プロセスが同じツリーで build すると、**その clean が自分の読む `dist` を消す。** 窓が桁で違うので、踏むのはほぼ `.d.ts` の側である。**この2つの数は1つの器での1回の実測であって、規範ではない**（器も `tsup` の版も変われば変わる。固定した数として読まないこと）
+
   - **1本だけなら落ちない。同じツリーへ2本目を重ねると落ちる**（**「回数」は試行数、「落ちた」はそのうち落ちた数。どちらも実測**）:
 
-    | 条件                                                            | 回数 | 落ちた                  |
-    | --------------------------------------------------------------- | ---- | ------------------------- |
-    | clean から `pnpm build`（既定並列度）                           | 5    | 0                         |
-    | clean から `pnpm -r --workspace-concurrency=16 build`           | 5    | 0                         |
-    | clean から `pnpm -r --workspace-concurrency=1 build`            | 5    | 0                         |
-    | `pnpm --filter <1パッケージ> build` 単独（`dist` 削除後）       | 10   | 0                         |
-    | **同一ツリーで `pnpm build` 2本、stagger 2/4/6/8/10 秒**        | 5組  | **2組（TS7016）**         |
-    | **同一ツリーで `pnpm build` ＋ `core` の build を40回連打**      | 3回  | **3回（TS7016）**         |
-    | 同一ツリーで `pnpm build` 2本（stagger 0秒）                    | 5組  | 2組（**別の顔**。下記）   |
+    | 条件                                                        | 回数 | 落ちた                  |
+    | ----------------------------------------------------------- | ---- | ----------------------- |
+    | clean から `pnpm build`（既定並列度）                       | 5    | 0                       |
+    | clean から `pnpm -r --workspace-concurrency=16 build`       | 5    | 0                       |
+    | clean から `pnpm -r --workspace-concurrency=1 build`        | 5    | 0                       |
+    | `pnpm --filter <1パッケージ> build` 単独（`dist` 削除後）   | 10   | 0                       |
+    | **同一ツリーで `pnpm build` 2本、stagger 2/4/6/8/10 秒**    | 5組  | **2組（TS7016）**       |
+    | **同一ツリーで `pnpm build` ＋ `core` の build を40回連打** | 3回  | **3回（TS7016）**       |
+    | 同一ツリーで `pnpm build` 2本（stagger 0秒）                | 5組  | 2組（**別の顔**。下記） |
 
     逐語（stagger 2秒。**`at Worker.<anonymous> (…/tsup/dist/index.js:1545:26)` の行番号は #204 の報告と同一**）:
 
@@ -415,14 +416,14 @@
   - **`pnpm` の並列度: `PNPM_CONFIG_WORKSPACE_CONCURRENCY` / `pnpm_config_workspace_concurrency`。** `NPM_CONFIG_*` / `npm_config_*` は読まない（実測: `pnpm config get workspace-concurrency` が `undefined` のまま）。**大文字なら全部大文字、小文字なら全部小文字でなければ無視される**（`pnpm` の `config/reader/lib/env.js` の `isUpperSnakeCase` / `isLowerSnakeCase`。混在は効かない）。**root の `pnpm build`（入れ子の `pnpm -r build`）にも継承される**（実測: 付けると reporter の接頭辞 `packages/core build$` が消え、所要も 20s → 26s に変わった）
   - **`apps/web` のスレッド数: `RAYON_NUM_THREADS` / `ROLLDOWN_WORKER_THREADS`。** `apps/web` 単独 build のピークスレッド数の実測（**この器での1回の実測であって、規範ではない。器が違えば違う。全ケース exit 0**）:
 
-    | 環境変数                                          | ピークスレッド数        |
-    | --------------------------------------------------- | ------------------------- |
-    | なし                                              | 116                     |
-    | `TOKIO_WORKER_THREADS=2`                          | 116（**効かない**）     |
-    | `UV_THREADPOOL_SIZE=2`                            | 112                     |
-    | `ROLLDOWN_WORKER_THREADS=2`                       | 94                      |
-    | `RAYON_NUM_THREADS=2`                             | 56                      |
-    | `RAYON_NUM_THREADS=2` ＋ `ROLLDOWN_WORKER_THREADS=2` | **34**                  |
+    | 環境変数                                             | ピークスレッド数    |
+    | ---------------------------------------------------- | ------------------- |
+    | なし                                                 | 116                 |
+    | `TOKIO_WORKER_THREADS=2`                             | 116（**効かない**） |
+    | `UV_THREADPOOL_SIZE=2`                               | 112                 |
+    | `ROLLDOWN_WORKER_THREADS=2`                          | 94                  |
+    | `RAYON_NUM_THREADS=2`                                | 56                  |
+    | `RAYON_NUM_THREADS=2` ＋ `ROLLDOWN_WORKER_THREADS=2` | **34**              |
 
   - **⚠️ `pnpm build -- <フラグ>` の形は使わないこと。** フラグは各パッケージの build スクリプトの引数になる。実測:
 
@@ -434,6 +435,7 @@
     ```
 
     **`tsup` は黙って無視するが、`react-router build` は `--` を位置引数のルートディレクトリと解釈して落ちる。** そして並列度は既定のままである。**渡すなら環境変数である**（`pnpm verify` から渡す口は `scripts/verify.mjs` の `--workspace-concurrency`）
+
   - **⚠️ 既定を下げないこと。下げれば全員が遅くなる。そして「スレッド数を減らせば資源枯渇が防げる」は確認していない。** この器では #254 の症状（`EAGAIN` / `ThreadPoolBuildError`）を**一度も再現できなかった**（`taskset -c 0,1` で3回、`--workspace-concurrency=16` で5回、6本同時 build を6回）。**この器は `nproc` と cgroup クォータが一致していて、#254 が記録した器（`nproc` がクォータの1.5倍、pids 545/1000、loadavg がクォータとほぼ同じ）とは条件が違う。** 上の表が測ったのは**スレッド数だけ**であって、落ちにくさではない
 - **この器は pids 上限に当たることがあり、`gh` の起動すら `errno=11`（`failed to create new OS thread`）で失敗する。** `ulimit -u` は大きい（1048576）ので**ユーザの上限ではなく器の側の上限**である。**再試行は混雑を足すので、待つほうが速い** — ここは「待ちのターンを回さない」の裏面で、**待つしかない場面の実例**である
 - **clone して最初の変更を入れたら、その時点で push して draft PR を開く。** 区切りごとではなく最初に、である — clone から2分で落ちて、commit まで済んでいたのに push が無くて全部失われたことがある。**PR さえ開いていれば、途中で落ちても依頼者が拾える**

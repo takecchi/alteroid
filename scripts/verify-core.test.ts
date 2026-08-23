@@ -7,7 +7,16 @@ import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
-import { classifyTest, decideSkip, fingerprint, recordPathFor, testRan } from './verify-core.mjs';
+import {
+  classifyTest,
+  decideSkip,
+  envForStep,
+  fingerprint,
+  recordPathFor,
+  splitVerifyArgs,
+  STEPS,
+  testRan,
+} from './verify-core.mjs';
 
 /**
  * `pnpm verify` の「無料で返す」判定の歯。
@@ -355,5 +364,107 @@ describe('pnpm verify — テストの結末は4つある', () => {
       'このテストは Test Files と Tests の行を読む testRan() の歯を確かめる。\n' +
       '実際の集計行はまだ出ていない。\n';
     expect(testRan(mentionOnly)).toBe(false);
+  });
+});
+
+/**
+ * #362: `pnpm verify -- <引数>` の宛先の歯。
+ *
+ * **いちばん大事な保証はここ**: `--workspace-concurrency` は **build の手順の env** へ
+ * 行き、**`pnpm test` の引数には1つも残らない。** 欠陥はまさにその形だった —
+ * `passthrough` が `runTest` にしか届いていなかったので、build へ渡したつもりの
+ * 並列度が `pnpm test --workspace-concurrency=2` として test のほうへ付いていた。
+ *
+ * **既定を持たないことも固定する。** 渡さなければ `undefined` で、env は1文字も
+ * 増えない（`verify.mjs` の doc「数を持たず、渡せる口だけを開ける」）。
+ *
+ * **`--maxWorkers=4` が test 側に残ることも一緒に測る。** 片方だけ測ると、
+ * 「全部 build へ移す」実装が緑になる。
+ */
+describe('pnpm verify — 引数の宛先（#362）', () => {
+  const buildStep = (STEPS as { name: string }[]).find((s) => s.name === 'build');
+  const testStep = (STEPS as { name: string }[]).find((s) => s.name === 'test');
+
+  it('手順の実物に build と test が在る（この describe の測定対象そのもの）', () => {
+    expect(buildStep, 'STEPS に build の手順が無い').toBeDefined();
+    expect(testStep, 'STEPS に test の手順が無い').toBeDefined();
+  });
+
+  it('= の形（--workspace-concurrency=<n>）を読む', () => {
+    expect(splitVerifyArgs(['--workspace-concurrency=2']).workspaceConcurrency).toBe(2);
+  });
+
+  it('空白区切りの形（--workspace-concurrency <n>）を読む', () => {
+    expect(splitVerifyArgs(['--workspace-concurrency', '2']).workspaceConcurrency).toBe(2);
+  });
+
+  it('渡さなければ undefined を返す（既定を持たない）', () => {
+    expect(
+      splitVerifyArgs([]).workspaceConcurrency,
+      '引数が空なのに既定の数を持っている',
+    ).toBeUndefined();
+    expect(
+      splitVerifyArgs(['--', '--maxWorkers=4', '--force']).workspaceConcurrency,
+      '他の引数だけを渡したのに workspace-concurrency が付いた',
+    ).toBeUndefined();
+  });
+
+  it('0以下の値は拒否する', () => {
+    expect(() => splitVerifyArgs(['--workspace-concurrency=0'])).toThrow(/1以上の整数/);
+    expect(() => splitVerifyArgs(['--workspace-concurrency', '-1'])).toThrow(/1以上の整数/);
+  });
+
+  it('整数でない値は拒否する', () => {
+    expect(() => splitVerifyArgs(['--workspace-concurrency=1.5'])).toThrow(/1以上の整数/);
+    expect(() => splitVerifyArgs(['--workspace-concurrency=abc'])).toThrow(/1以上の整数/);
+    expect(() => splitVerifyArgs(['--workspace-concurrency'])).toThrow(/1以上の整数/);
+  });
+
+  it('--workspace-concurrency を渡しても --maxWorkers=4 は test 側に残る（両方渡せる）', () => {
+    expect(
+      splitVerifyArgs(['--', '--maxWorkers=4', '--workspace-concurrency=2']).passthrough,
+      'test へ渡る引数から --maxWorkers=4 が消えている',
+    ).toEqual(['--maxWorkers=4']);
+  });
+
+  it('--workspace-concurrency は test 側の passthrough に入らない（= の形）', () => {
+    expect(
+      splitVerifyArgs(['--workspace-concurrency=2']).passthrough,
+      '--workspace-concurrency が pnpm test の引数に残っている（#362 の欠陥そのもの）',
+    ).toEqual([]);
+  });
+
+  it('--workspace-concurrency は値の側も test へ漏らさない（空白区切りの形）', () => {
+    expect(
+      splitVerifyArgs(['--workspace-concurrency', '2']).passthrough,
+      '空白区切りの値（裸の数字）が pnpm test の引数に残っている',
+    ).toEqual([]);
+  });
+
+  it('build の手順の env に PNPM_CONFIG_WORKSPACE_CONCURRENCY が入る', () => {
+    const env = envForStep(buildStep, { workspaceConcurrency: 2, baseEnv: { PATH: '/usr/bin' } });
+    expect(
+      env.PNPM_CONFIG_WORKSPACE_CONCURRENCY,
+      'build の手順へ渡る env に並列度が入っていない',
+    ).toBe('2');
+    expect(env.PATH, '元の env が落ちている').toBe('/usr/bin');
+  });
+
+  it('渡さなければ build の手順の env に足さない（既定を持たない）', () => {
+    const baseEnv = { PATH: '/usr/bin' };
+    const env = envForStep(buildStep, { workspaceConcurrency: undefined, baseEnv });
+    expect(
+      'PNPM_CONFIG_WORKSPACE_CONCURRENCY' in env,
+      '渡していないのに env へ並列度が足された',
+    ).toBe(false);
+    expect(env, '渡していないのに env が作り替えられた').toBe(baseEnv);
+  });
+
+  it('test の手順の env には足さない（build 以外の宛先へ漏らさない）', () => {
+    const env = envForStep(testStep, { workspaceConcurrency: 2, baseEnv: { PATH: '/usr/bin' } });
+    expect(
+      'PNPM_CONFIG_WORKSPACE_CONCURRENCY' in env,
+      'test の手順の env に並列度が漏れている',
+    ).toBe(false);
   });
 });
