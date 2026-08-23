@@ -225,7 +225,8 @@ describe('器が共有であることの告知', () => {
     // （`/home/...` や `/var/...`）を書き足す形は止まらない。#191 の線は「置き場所を
     // 名指ししない」であって「この2語を書かない」ではないため、語ではなく形で見る。
     const prompt = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
-    const paths = prompt.match(/\/(?:tmp|workspace|home|root|var|usr|opt|mnt|srv|Users|data)\b/g) ?? [];
+    const paths =
+      prompt.match(/\/(?:tmp|workspace|home|root|var|usr|opt|mnt|srv|Users|data)\b/g) ?? [];
     expect(paths).toEqual([]);
   });
 });
