@@ -35,7 +35,13 @@ import {
   localDayRange,
   parseTimeOfDay,
 } from './schedule.js';
-import { JOURNAL_ENTRY_TYPES, scheduleKindSchema, scheduleSpecSchema } from './schema.js';
+import {
+  JOURNAL_ENTRY_TYPES,
+  approvalUpdatedAt,
+  commitmentUpdatedAt,
+  scheduleKindSchema,
+  scheduleSpecSchema,
+} from './schema.js';
 import type {
   ChatStreamEvent,
   CommitmentOrigin,
@@ -956,21 +962,10 @@ export function createCloneTools(context: ToolContext) {
             // 作成と一致する。** それは軸が無いのではなく「まだ一度も変わって
             // いない」という観測そのものなので、値を作らずに `createdAt` を出す
             // （下の断り書きの行で、読み手にもそう読める形にしてある）。
-            //
-            // **⚠️ この `??` の左枝は、いまは到達しない。消さないこと。** 一覧は
-            // `listApprovals({ pendingOnly: true })` をハードコードで呼び、fs /
-            // pg / インメモリの3実装すべてが `answeredAt === undefined`（pg は
-            // `isNull`）で絞る。**つまり歯で固定できない** — この `??` を
-            // `approval.createdAt` に潰す変異は、どのテストにも捕まらずに生き残る。
-            // それでも残してあるのは、**将来 `pendingOnly` を外したときに
-            // 「更新」が黙って嘘になるのを防ぐため**である（答えが付いた件が
-            // 一覧に出るようになった瞬間、更新が回答時刻ではなく作成時刻を
-            // 指す）。「死んでいるコード」と「将来のために置いてあるもの」は、
-            // 書いていなければ区別が付かない。
-            // 根拠は3実装のソースと呼び出し元1箇所の網羅（2026-08-22T15:58Z 観測）
-            // であって、実行時カバレッジでは確かめていない。
+            // なぜ `??` の左枝がここから到達しないか、それでも消してはいけない
+            // 理由は `approvalUpdatedAt`（`schema.ts`）の doc を見ること。
             createdAt: approval.createdAt,
-            updatedAt: approval.answeredAt ?? approval.createdAt,
+            updatedAt: approvalUpdatedAt(approval),
             summary: excerptLine(approval.question, APPROVAL_QUESTION_EXCERPT),
             extra: [
               approval.jobId === undefined
@@ -1320,7 +1315,7 @@ export function createCloneTools(context: ToolContext) {
           if (!entry) return text(`引き受けた仕事 ${id} は無い（id が違う）。`);
           const head = [
             `${entry.id} ${commitmentOriginBadge(entry)}`,
-            `作成: ${entry.at} / 更新: ${entry.closedAt ?? entry.at}`,
+            `作成: ${entry.at} / 更新: ${commitmentUpdatedAt(entry)}`,
             entry.closedAt === undefined ? '状態: 未了' : `状態: ${entry.closedAt} に片付けた`,
           ].join('\n');
           // **片付けた理由を本文より先に置く。** `body` は長くなりうるので、
@@ -1352,7 +1347,7 @@ export function createCloneTools(context: ToolContext) {
             title: commitmentOriginBadge(entry),
             // 作成＝受け取った時刻、更新＝片付けた時刻（まだなら受け取った時刻）。
             createdAt: entry.at,
-            updatedAt: entry.closedAt ?? entry.at,
+            updatedAt: commitmentUpdatedAt(entry),
             summary: excerptLine(entry.body, COMMITMENT_BODY_LIMIT),
             extra: [
               entry.closedAt === undefined
