@@ -152,11 +152,13 @@ export default function Managers() {
                     <ManagerStatusBadge status={manager.status} />
                   </div>
                   <div className="min-w-0 flex-1">
+                    {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
                     <p className="truncate text-sm">{manager.request}</p>
                     <p className="mt-0.5 truncate font-mono text-[11px] text-muted">
                       {manager.cwd}
                     </p>
                     {manager.waiting.length > 0 && (
+                      // 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc）
                       <p className="mt-1 text-[11px] text-warn">
                         {manager.waiting.length} 件の確認待ち: {manager.waiting[0]?.summary}
                       </p>

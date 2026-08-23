@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { Markdown } from '~/components/markdown';
 import { Page } from '~/components/page';
 import { Badge, Button, Card, CardHeader, Empty, ErrorNote, Input, Spinner } from '~/components/ui';
 import { useCloseCommitment, usePushCommitment } from '~/hooks/mutations';
@@ -117,6 +118,93 @@ function OriginBadge({ commitment }: { commitment: Commitment }) {
   );
 }
 
+/**
+ * `origin: 'manager'` の本文が持つ接頭辞（3つの閉じた列挙）。
+ *
+ * `packages/core/src/schema.ts` の `manager_message`（`inboxEventSchema`）で
+ * `kind: z.enum(['report', 'question', 'permission'])` と閉じているので、
+ * 総当たりで前方一致を見れば足りる（正規表現で緩く取る理由が無い）。
+ */
+const MANAGER_PREFIXES = ['[report] ', '[question] ', '[permission] '] as const;
+
+/**
+ * `origin: 'manager'` の本文を、接頭辞（素）と本体（Markdown）へ分ける。
+ *
+ * **接頭辞の形式（`[kind] text`）の持ち主は `packages/core/src/clone.ts` の
+ * `commitmentFor`（`manager_message` の分岐）である。** ここは画面側で
+ * その形式を再パースしているだけなので、向こうが接頭辞の付け方を変えれば
+ * ここは黙って前方一致しなくなる（＝下の「防御的な分岐」へ落ちて本文全体が
+ * Markdown として描かれる。実害は無いが接頭辞が見えなくなる）。
+ *
+ * **前方一致しなかったときは本文全体を Markdown へ渡す。** `origin: 'manager'`
+ * は `commitmentFor` が必ず `[kind] ` を前置してから台帳へ積む経路なので、
+ * ここに来るのは形式が変わったときだけの防御的な分岐である。
+ */
+function splitManagerPrefix(body: string): { prefix: string | null; rest: string } {
+  for (const prefix of MANAGER_PREFIXES) {
+    if (body.startsWith(prefix)) return { prefix, rest: body.slice(prefix.length) };
+  }
+  return { prefix: null, rest: body };
+}
+
+/**
+ * 本文の描き方を `origin`（誰が書いたか）で切り分ける。`OpenRow` と
+ * `ClosedRow` が同じ本文の `<p>` を2箇所に持っていたのを、ここへ集める。
+ *
+ * **切り出す理由**: 分岐の中身が増える（`self` / `manager` / `human` /
+ * `external` の4方向）ので、2箇所に同じ分岐を書くと片方だけ直し忘れる形が
+ * 生まれる。ここへ集めれば分岐は1箇所にしか存在しない
+ * （AGENTS.md「テストが書けない構造は、テストが無いのと同じ」— 出力・挙動は
+ * 1文字も変えていない切り出しである）。
+ *
+ * | origin | body の中身 | 描き方 |
+ * | --- | --- | --- |
+ * | `self` | `commitment_open` のツール引数そのまま（クローンが書いた） | `<Markdown>` |
+ * | `manager` | `[kind] text`。`kind` は閉じた3値、`text` はマネージャー（AI）の出力 | 接頭辞は素、残りは `<Markdown>` |
+ * | `human` | 3経路とも人間の文字（チャット本文・承認待ちの回答・`POST /commitments`） | 素のテキスト（いまのまま） |
+ * | `external` | `renderPayload` が整形した外部の中身 | 素のテキスト（いまのまま） |
+ *
+ * **`human` を素のままにする理由**: `event.text` は
+ * `apps/web/app/routes/chat.tsx:710` が名指しで守っている文字列そのものである
+ * ——「**クローンの行だけを Markdown にする。** 人間が打った本文
+ * （`role === 'human'`）は素のテキストのままにする — 自分が書いた文字が
+ * 勝手に化けないため」。チャット画面では素・台帳では Markdown、という
+ * 食い違いを作らないために、ここでも素のままにする。
+ *
+ * **`external` を素のままにする理由**: external は AI でも人間でもない
+ * （外部サービスが送ってきた中身をそのまま流し込んだもの）。書き手がどちらとも
+ * 言えない以上、化けて困る側（素のテキスト）へ倒す。
+ *
+ * **`closedReason` はここの対象外。** `commitment_close`（クローン）と
+ * `POST /commitments/:id/close`（人間）の両方が同じ欄へ書き、**どちらが
+ * 書いたかを型が記録していない。** `origin` は開いたときの起点なので判別に
+ * 使えない。書き手が判らない以上、Markdown にすると人間が書いた回だけ静かに
+ * 化ける。**実装しなかったのではなく、判別する材料が無いので据え置いた。**
+ * （`ClosedRow` の `closedReason` は1文字も変えていない）
+ */
+function CommitmentBody({ commitment }: { commitment: Commitment }) {
+  if (commitment.origin === 'self') {
+    return <Markdown>{commitment.body}</Markdown>;
+  }
+
+  if (commitment.origin === 'manager') {
+    const { prefix, rest } = splitManagerPrefix(commitment.body);
+    return (
+      <div className="min-w-0">
+        {prefix !== null && (
+          <span className="mr-1 font-mono text-[11px] text-muted">{prefix}</span>
+        )}
+        <Markdown>{rest}</Markdown>
+      </div>
+    );
+  }
+
+  // `human` / `external` は素のテキストのまま（理由は上の doc）。
+  return (
+    <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">{commitment.body}</p>
+  );
+}
+
 function OpenRow({ commitment }: { commitment: Commitment }) {
   const closeCommitment = useCloseCommitment();
   const [reason, setReason] = useState('');
@@ -147,7 +235,7 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
       </div>
 
       {/* 本文は器が全文を持つ（要約を持たせない）。畳まずにそのまま出す。 */}
-      <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">{commitment.body}</p>
+      <CommitmentBody commitment={commitment} />
 
       <div className="mt-2 flex items-center gap-2">
         <Input
@@ -190,7 +278,15 @@ function ClosedRow({ commitment }: { commitment: Commitment }) {
           {formatDateTime(commitment.at)} → {formatDateTime(commitment.closedAt ?? '')}
         </span>
       </div>
-      <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">{commitment.body}</p>
+      <CommitmentBody commitment={commitment} />
+      {/*
+        **`closedReason` は1文字も触らない（Markdown 化の対象外）。**
+        `commitment_close`（クローン）と `POST /commitments/:id/close`
+        （人間）の両方が同じ欄へ書き、**どちらが書いたかを型が記録していない。**
+        `origin` は開いたときの起点なので判別に使えない。書き手が判らない以上、
+        Markdown にすると人間が書いた回だけ静かに化ける。**実装しなかったの
+        ではなく、判別する材料が無いので据え置いた。**
+      */}
       {commitment.closedReason !== undefined && commitment.closedReason !== null && (
         <p className="mt-1 text-xs break-words">
           <span className="mr-2 text-[11px]">どう片付いたか</span>

@@ -68,12 +68,14 @@ export default function Memory() {
                   className="flex items-center gap-3 px-4 py-3 hover:bg-surface-2"
                 >
                   <div className="min-w-0 flex-1">
+                    {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
                     <p className="truncate text-sm">
                       <span className="mr-1.5 text-[10px] text-muted">[{document.kind}]</span>
                       {document.title}
                     </p>
                     <p className="truncate font-mono text-[11px] text-muted">{document.slug}</p>
                     {document.description !== undefined && (
+                      // 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc）
                       <p className="truncate text-[11px] text-muted">
                         {freshnessMark(document.descriptionFreshness.kind)}
                         {document.description}

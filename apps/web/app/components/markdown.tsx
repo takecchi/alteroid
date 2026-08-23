@@ -25,6 +25,13 @@
  * 無いと「今まで見えていた行区切りが消える」という劣化になる。
  *
  * `remark-gfm` は表・取り消し線・タスクリストなど GFM 拡張のため。
+ *
+ * **一覧の1行（`truncate` / `line-clamp`）は Markdown 化の対象ではない。**
+ * そこに出ているのは畳んだ索引であって本文の面ではなく、押せば全文の面へ
+ * 降りられる。`line-clamp` の内側へブロック要素（`<Markdown>` のルートは
+ * `div`）を入れると畳み方そのものが効かなくなるうえ、`components/page.tsx`
+ * が「`line-clamp` で切ると、収まっているように見えたまま読めない部分ができる」
+ * として避ける理由を既に書いている。**対象は、詳細で全文を出す面だけである。**
  */
 import type { ReactNode } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
