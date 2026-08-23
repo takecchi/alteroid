@@ -1236,6 +1236,12 @@ describe('PgCommitmentStore', () => {
           )`,
     );
 
+    // 0. **一覧そのものが落ちない。** ここを素の `await` だけで済ませると、
+    //    行ごとの `safeParse` をやめる変異が**例外**でテストを殺す —— 例外は
+    //    測っている性質を名指ししない。`.resolves` なら「reject した」という
+    //    assertion として落ちる（issue #296）。
+    await expect(stores.commitments.list()).resolves.toBeDefined();
+
     // 1. **健全な行は全部返る。** id を名指しして検査する（順序は齢の昇順）。
     const listed = await stores.commitments.list();
     expect(listed.entries.map((entry) => entry.id)).toEqual(['c-ok-1', 'c-ok-2']);
@@ -1375,8 +1381,18 @@ describe('PgCommitmentStore', () => {
     // `get('broken')` は依然として throw する（単票の契約は変えていない）。
     await expect(stores.commitments.get('broken')).rejects.toThrow(/読めない形/);
 
-    // **`list()` は丸ごと落ちない。** 健全な行（`c-ok`）は `entries` に、
-    // 壊れた行（`broken`）は `unreadable` に、id 付きで現れる。
+    // **`list()` は丸ごと落ちない。**
+    //
+    // **`.resolves` の形を保つこと（元のテストがこの形だった理由そのもの）。**
+    // 素の `await` で受けてから中身だけ検査すると、行ごとの `safeParse` をやめて
+    // throw へ戻す変異を当てたとき、この行は**例外**で死ぬ。例外は「実装が
+    // 壊れた」と「足場が壊れた」を区別しないので、**測っている性質を名指し
+    // しない。** `.resolves` なら「reject した」という assertion として落ちるので、
+    // 赤の理由が「一覧が丸ごと落ちるようになった」だと読める。
+    await expect(stores.commitments.list({ includeClosed: true })).resolves.toBeDefined();
+
+    // 健全な行（`c-ok`）は `entries` に、壊れた行（`broken`）は `unreadable` に、
+    // id 付きで現れる。
     const listed = await stores.commitments.list({ includeClosed: true });
     expect(listed.entries.map((entry) => entry.id)).toEqual(['c-ok']);
     expect(listed.unreadable).toHaveLength(1);

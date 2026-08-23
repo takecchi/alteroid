@@ -7,6 +7,7 @@ import {
   usageLayerSchema,
   usageSiteSchema,
   type Commitment,
+  type UnreadableCommitment,
   type UsageLayer,
   type UsageSite,
 } from '@alteroid/core';
@@ -817,8 +818,8 @@ export async function runSlashCommand(
         stdout.write('台帳を読めませんでした\n');
         return 'ok';
       }
-      const { entries } = await response.json();
-      const { text, ids } = renderCommitments(entries);
+      const { entries, unreadable } = await response.json();
+      const { text, ids } = renderCommitments(entries, Date.now(), unreadable);
       listed.commitments.length = 0;
       listed.commitments.push(...ids);
       stdout.write(`${text}\n`);
@@ -1275,6 +1276,28 @@ const COMMITMENT_ORIGIN_LABEL: Record<Commitment['origin'], string> = {
 };
 
 /**
+ * 読めない行が在ることの断り（issue #296）。無ければ空文字。
+ *
+ * **id が取れない行は件数だけに数える**（`packages/core/src/tools.ts` の
+ * `commitment_list` ・`packages/core/src/digest.ts` ・`apps/web` の
+ * `UnreadableNote` と同じ扱い。行が壊れている以上、id という材料が
+ * そもそも無いことがある）。
+ *
+ * **「片付いたのではない」を落とさないこと。** これを落とすと、読めない行が
+ * 静かに未了から消えたのと区別が付かなくなる（`packages/core/src/store.ts` の
+ * `CommitmentList` の doc と同じ理由）。
+ */
+function renderUnreadableNotice(unreadable: UnreadableCommitment[]): string {
+  if (unreadable.length === 0) return '';
+  const ids = unreadable.map((entry) => entry.id).filter((id): id is string => id !== undefined);
+  return (
+    `  ⚠ 読めない行が ${unreadable.length} 件あります` +
+    (ids.length === 0 ? '' : `（id: ${ids.join(', ')}）`) +
+    '。片付いたのではありません。'
+  );
+}
+
+/**
  * 台帳を、人間が読む形へ（`/commitments`）。
  *
  * **番号と id の対応をここで一緒に作って返す。** 表示側と `/done` 側で別々に
@@ -1287,13 +1310,33 @@ const COMMITMENT_ORIGIN_LABEL: Record<Commitment['origin'], string> = {
 export function renderCommitments(
   commitments: Commitment[],
   now: number = Date.now(),
+  unreadable: UnreadableCommitment[] = [],
 ): { text: string; ids: string[] } {
+  // **読めない行の断りを、読める行が0件のときも出す（issue #296）。** これを
+  // 下の早期 return より後ろへ置くと、台帳が読めない行だけになったときに
+  // 「引き受けたまま終わっていない仕事はありません」とだけ出る ——
+  // **いちばん危ない状態が、いちばん安心な文言で出る。**
+  //
+  // **CLI にも出すのは、口ごとに能力差を作らないためである**（`docs/PRD.md`
+  // 「要件: インターフェース（CLI・HTTP API・Web UI）」）。Web
+  // （`apps/web/app/routes/commitments.tsx` の `UnreadableNote`）と
+  // クローン（`packages/core/src/tools.ts` の `commitment_list`）にだけ在って
+  // ここに無いと、**CLI で台帳を読んだ人間だけが、読めない行の存在を知らない。**
+  const notice = renderUnreadableNotice(unreadable);
+
   if (commitments.length === 0) {
-    return { text: '（引き受けたまま終わっていない仕事はありません）', ids: [] };
+    return {
+      text:
+        notice === ''
+          ? '（引き受けたまま終わっていない仕事はありません）'
+          : `${notice}\n（読める行は無い）`,
+      ids: [],
+    };
   }
 
   const lines: string[] = [];
   const ids: string[] = [];
+  if (notice !== '') lines.push(notice);
 
   commitments.forEach((commitment, index) => {
     ids.push(commitment.id);

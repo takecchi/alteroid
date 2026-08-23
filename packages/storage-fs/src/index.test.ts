@@ -1314,6 +1314,12 @@ describe('FsCommitmentStore', () => {
       'utf8',
     );
 
+    // 0. **一覧そのものが落ちない。** ここを素の `await` だけで済ませると、
+    //    行ごとの `safeParse` をやめる変異が**例外**でテストを殺す —— 例外は
+    //    測っている性質を名指ししない。`.resolves` なら「reject した」という
+    //    assertion として落ちる（issue #296）。
+    await expect(stores.commitments.list()).resolves.toBeDefined();
+
     // 1. **健全な行は全部返る。** id を名指しして検査する。
     const listed = await stores.commitments.list();
     expect(listed.entries.map((entry) => entry.id)).toEqual(['c-ok-1', 'c-ok-2']);
