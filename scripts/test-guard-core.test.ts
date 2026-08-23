@@ -69,6 +69,31 @@ describe('parseAggregateLines / parsePassedCount', () => {
     expect(parseAggregateLines(raw)).toEqual({ filesLine: null, testsLine: null });
   });
 
+  /**
+   * CI で実際に踏んだ欠陥の回帰（GitHub Actions run 32665717865、head sha
+   * `d26f5a4`）。vitest が ANSI エスケープでラベルを色付けして出す形
+   * （ローカルではパイプ経由なので出ないが、GitHub Actions のログでは出る）。
+   * `^\s*Test Files` がエスケープシーケンスを空白として読めず、緑のまま
+   * 走り切ったのに「判定できない」（`EXIT_UNKNOWN`）に誤って倒れていた。
+   * 断片は実際の CI ログから採ったもの（`\x1b[2m` 等）。
+   */
+  it('ANSI エスケープで色付けされた集計行も読める（CI での実測回帰）', () => {
+    const ESC = '\x1b';
+    const raw = [
+      `${ESC}[2m Test Files ${ESC}[22m ${ESC}[1m${ESC}[32m130 passed${ESC}[39m${ESC}[22m${ESC}[90m (130)${ESC}[39m`,
+      `${ESC}[2m      Tests ${ESC}[22m ${ESC}[1m${ESC}[32m2493 passed${ESC}[39m${ESC}[22m${ESC}[90m (2493)${ESC}[39m`,
+    ].join('\n');
+    const { filesLine, testsLine } = parseAggregateLines(raw);
+    expect(filesLine).not.toBeNull();
+    expect(testsLine).not.toBeNull();
+    expect(filesLine).toContain('Test Files');
+    expect(filesLine).toContain('130 passed');
+    expect(testsLine).toContain('Tests');
+    expect(testsLine).toContain('2493 passed');
+    const judged = judgeExecution(raw);
+    expect(judged.ok).toBe(true);
+  });
+
   it('passed の件数を読む', () => {
     expect(parsePassedCount('Tests  1542 passed (1542)')).toBe(1542);
   });

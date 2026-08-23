@@ -53,11 +53,33 @@ const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.react-r
 
 // ── 歯A: 実行の側（vitest の集計行を読む） ──────────────────────────
 
+/**
+ * ANSI エスケープシーケンス（色付け）を取り除く。
+ *
+ * **CI で実際に踏んだ欠陥（実測、GitHub Actions 実行）**: vitest は
+ * `Test Files` / `Tests` の行を色付きで出す（`\x1b[2m Test Files \x1b[22m …`
+ * のように、ラベルの前後をエスケープシーケンスで挟む）。ローカル（このリポジトリの
+ * 開発機やこのハーネスからの手元実行）では標準出力がパイプになるため vitest が
+ * 自動で色を消し、この問題は出ない——しかし GitHub Actions のログでは色が
+ * 付いたまま出る。**`^\s*Test Files` の `^\s*` はエスケープシーケンスを
+ * 空白として読まない**ため、色が付いた回だけ「集計行が見つからない」＝
+ * 「判定できない」に誤って倒れ、緑のまま走り切ったテストが赤くなった
+ * （CI run 32665717865、head sha `d26f5a4`、vitest 自身は
+ * `Test Files 130 passed (130)` / `Tests 2493 passed (2493)` を出していたが、
+ * この関数がそれを見つけられずに `EXIT_UNKNOWN` を返していた）。
+ * 色の有無に判定が依存してはならないので、マッチの前に必ず剥がす。
+ */
+function stripAnsi(s) {
+  // eslint-disable-next-line no-control-regex -- ANSI エスケープの検出そのものが目的
+  return s.replace(/\x1b\[[0-9;]*m/g, '');
+}
+
 /** vitest の生出力（stdout + stderr）から `Test Files` / `Tests` の集計行を取り出す。
  * どちらかが無ければ `null`（＝「判定できない」の材料）。 */
 export function parseAggregateLines(rawOutput) {
-  const filesLine = rawOutput.match(/^\s*Test Files\s+.+$/m)?.[0]?.trim() ?? null;
-  const testsLine = rawOutput.match(/^\s*Tests\s+.+$/m)?.[0]?.trim() ?? null;
+  const plain = stripAnsi(rawOutput);
+  const filesLine = plain.match(/^\s*Test Files\s+.+$/m)?.[0]?.trim() ?? null;
+  const testsLine = plain.match(/^\s*Tests\s+.+$/m)?.[0]?.trim() ?? null;
   return { filesLine, testsLine };
 }
 
