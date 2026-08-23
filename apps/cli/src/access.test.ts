@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { captureStdout } from './test-support.js';
+
 /**
  * `alteroid access` — 誰が alteroid を使えるかを CLI から見えること。
  *
@@ -37,15 +39,6 @@ function stubFetch(): void {
       }),
     );
   }) as typeof fetch;
-}
-
-function captureStdout(): () => string {
-  const chunks: string[] = [];
-  vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
-    chunks.push(String(chunk));
-    return true;
-  });
-  return () => chunks.join('');
 }
 
 beforeEach(() => {

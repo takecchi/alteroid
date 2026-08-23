@@ -10,6 +10,7 @@ import {
   runSlashCommand,
   type Listed,
 } from './chat.js';
+import { captureStdout } from './test-support.js';
 
 type ManagerListItem = Parameters<typeof renderManagerList>[0][number];
 
@@ -576,16 +577,6 @@ function defaultAnswerResults(
 
 function emptyListed(): Listed {
   return { approvals: [], commitments: [], conversations: [] };
-}
-
-/** 端末へ書いたものを集める。後始末は `afterEach` の `restoreAllMocks`。 */
-function captureStdout(): () => string {
-  const chunks: string[] = [];
-  vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
-    chunks.push(String(chunk));
-    return true;
-  });
-  return () => chunks.join('');
 }
 
 afterEach(() => {
