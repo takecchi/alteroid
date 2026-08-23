@@ -620,6 +620,30 @@ class HttpRunner implements RunnerClient {
   }
 
   /**
+   * `#pump` が書く2行が名乗る宛先。**`runner (<url>[ / <runnerId>])` の形**
+   * ——`index.ts` の `onSwap` / `onLost` が書く行と同じ組み立てである。
+   *
+   * **URL は常に本物を出す**（{@link #displayBaseUrl} の doc）。**`runnerId` は
+   * `/health` から実際に受け取れたとき（{@link #runnerIdKnown}）だけ出す**——
+   * 受け取れていなければ `this.runnerId` は一度も接続できていない段階からの
+   * 既定値 `'runner-primary'` なので、それをそのまま出すと取れていない値が
+   * 取れた値の顔をして出る。
+   *
+   * **なぜこの識別子が要るか（#274）。** 本番には runner が複数台あり、
+   * それぞれ独立した stream と独立した backoff 状態を持つ。この2行
+   * （切断・再接続）が runner を名乗らないと、`16000ms → 4000ms` のような
+   * 待ちの下降が「1台でリセットが起きた証拠」なのか「単に別の台の行」
+   * なのかが、ログからは判定できない。同時刻に並ぶ2行が「2台の同時
+   * タイムアウト」なのか「1台の二重記録」なのかも同様に分けられない。
+   * この PR（#309）が売っている契約（接続が持続してからリセットする）は
+   * runner ごとに成立する条件なので、ログも runner ごとに読めなければ
+   * 本番でその契約が踏めているかを検証できない。
+   */
+  #describeSelf(): string {
+    return `runner (${this.#displayBaseUrl}${this.#runnerIdKnown ? ` / ${this.runnerId}` : ''})`;
+  }
+
+  /**
    * 切れたら挑み直す。**間隔は固定ではなく、失敗が続くほど倍々に伸びて
    * `retryMaxMs` で頭打ちになる**（`packages/core` の名簿側の再接続と同じ形）。
    *
@@ -675,30 +699,6 @@ class HttpRunner implements RunnerClient {
    * 呼び出しでは `#backingOff` が既に `false` になっており、**1接続につき
    * 最大1行に保たれる。**
    */
-  /**
-   * `#pump` が書く2行が名乗る宛先。**`runner (<url>[ / <runnerId>])` の形**
-   * ——`index.ts` の `onSwap` / `onLost` が書く行と同じ組み立てである。
-   *
-   * **URL は常に本物を出す**（{@link #displayBaseUrl} の doc）。**`runnerId` は
-   * `/health` から実際に受け取れたとき（{@link #runnerIdKnown}）だけ出す**——
-   * 受け取れていなければ `this.runnerId` は一度も接続できていない段階からの
-   * 既定値 `'runner-primary'` なので、それをそのまま出すと取れていない値が
-   * 取れた値の顔をして出る。
-   *
-   * **なぜこの識別子が要るか（#274）。** 本番には runner が複数台あり、
-   * それぞれ独立した stream と独立した backoff 状態を持つ。この2行
-   * （切断・再接続）が runner を名乗らないと、`16000ms → 4000ms` のような
-   * 待ちの下降が「1台でリセットが起きた証拠」なのか「単に別の台の行」
-   * なのかが、ログからは判定できない。同時刻に並ぶ2行が「2台の同時
-   * タイムアウト」なのか「1台の二重記録」なのかも同様に分けられない。
-   * この PR（#309）が売っている契約（接続が持続してからリセットする）は
-   * runner ごとに成立する条件なので、ログも runner ごとに読めなければ
-   * 本番でその契約が踏めているかを検証できない。
-   */
-  #describeSelf(): string {
-    return `runner (${this.#displayBaseUrl}${this.#runnerIdKnown ? ` / ${this.runnerId}` : ''})`;
-  }
-
   async #pump(onEvent: (event: RunnerEvent) => void): Promise<void> {
     while (!this.#closed) {
       let failed = false;
