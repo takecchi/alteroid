@@ -423,9 +423,18 @@ function brandRenderedMemory(text: string): RenderedMemory {
 const MEMORY_TOC_LINE_LIMIT = 200;
 
 /**
- * 目次を件数で切るときの上限（`self_status` の `SELF_STATUS_MEMORY_DOC_LIMIT` と
- * 同じ考え方）。**`export` してあるのはテストのため**（`memory.test.ts` が
- * 「切ったら言う」を確かめるのに、この値を書き写さず参照する）。
+ * 目次を件数で切るときの上限。**`self_status` の記憶内訳とは、もう同じ考え方
+ * ではない。** かつてここは `self_status` の `SELF_STATUS_MEMORY_DOC_LIMIT`
+ * （件数）と同じ考え方だったが、`self_status` 側は人間の依頼（id + 名前 +
+ * 概要 + updated_at + created_at）で `title` / 要旨を足したことで1行の長さが
+ * 可変になり、件数のままでは何件で壊れるかが運任せになるため文字数の予算
+ * （`SELF_STATUS_MEMORY_LISTING_BUDGET`、`tools.ts`）へ替えた
+ * （`.claude/skills/listing-and-detail/SKILL.md`「予算は件数ではなく文字数で
+ * 持つ」）。こちらは件数のまま残してある——対象がプロンプトへ焼く目次で
+ * 「何件までなら判断材料として妥当か」という軸であって、MCP の出力上限
+ * （文字数）とは切る理由が違う。**`export` してあるのはテストのため**
+ * （`memory.test.ts` が「切ったら言う」を確かめるのに、この値を書き写さず
+ * 参照する）。
  */
 export const MEMORY_TOC_ENTRY_LIMIT = 300;
 
@@ -536,8 +545,13 @@ export function assertNeverMemoryCreatedAt(createdAt: never): never {
  * `createdAt` を一覧の1行に出す形にする。**根拠が無ければ「不明」と明言する**
  * ——値を持たないことを空文字で隠さない（`memoryFreshnessMarker` の
  * `unknown` 分岐と同じ判断: 分からないことを一覧の上でも言葉にする）。
+ *
+ * **`export` してあるのは `self_status` の記憶内訳（`tools.ts` の
+ * `renderMemorySize`）も同じ整形を使うため。** 同じ結果を返す関数を2つ
+ * 書かない——書けば、片方だけ直したくなったときにもう片方が古いまま残る
+ * （`memory_list` と `self_status` で「不明」の言い方がずれる、という形で）。
  */
-function formatMemoryCreatedAt(createdAt: MemoryCreatedAt): string {
+export function formatMemoryCreatedAt(createdAt: MemoryCreatedAt): string {
   switch (createdAt.kind) {
     case 'known':
       return createdAt.at;

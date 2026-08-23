@@ -24,6 +24,7 @@ import {
 import type { ManagerDenial, ManagerPool, ManagerSummary } from './manager.js';
 import {
   assertNeverMemoryProtectionStatus,
+  formatMemoryCreatedAt,
   renderMemoryDocuments,
   renderMemoryListing,
 } from './memory.js';
@@ -2766,14 +2767,38 @@ function renderUsage(
 }
 
 /**
- * 記憶の文書ごとの内訳を出す上限。
+ * self_status の記憶内訳に出す要旨（description）の抜粋上限（文字数、1行分）。
  *
- * **`memory_list` は件数によらず全件を返す**（persona.list() の meta は軽く、
- * 実測でも壊れていない）。ただし `self_status` は他の節（実行時の事実・台帳との
- * 突き合わせ）と同居するので、ここだけは `LIST_BUDGET` と同じ考え方で件数に
- * 上限を置く。**切ったことは必ず言う。**
+ * **`memory.ts` の `MEMORY_TOC_LINE_LIMIT` を使い回さない。** 値が同じでも
+ * 用途ごとに別の定数として置く（AGENTS.md「値が同じでも使い回さない。片方
+ * だけ直したくなったときに一緒に動いてしまう」）。あちらはプロンプトへ焼く
+ * 目次の1行、こちらは self_status という実行時ステータスの1行で、由来（誰が
+ * 読むか・どの出力上限に収めるか）が違う。
  */
-const SELF_STATUS_MEMORY_DOC_LIMIT = 30;
+const SELF_STATUS_MEMORY_DESCRIPTION_LIMIT = 120;
+
+/**
+ * 記憶の文書ごとの内訳の予算（文字数）。
+ *
+ * **旧版は件数（`SELF_STATUS_MEMORY_DOC_LIMIT = 30`）で切っていた。** 当時の
+ * 1行は `slug + bytes + 更新時刻` だけで、文書によらずほぼ一定の長さだった
+ * ので件数の上限で事実上足りていた。人間の依頼（一覧系ツールは最低でも
+ * id + 名前 + 概要 + updated_at + created_at）に応じて `title` と要旨
+ * （description）を足すと、1行の長さが文書ごとに変わる——件数のまま
+ * 30 × (可変長) にすると、何件で壊れるかが運任せになる。これは
+ * `.claude/skills/listing-and-detail/SKILL.md`「予算は件数ではなく文字数で
+ * 持つ」が指す形そのもの（この repo が3回踏んだバグと同じ）なので、件数の
+ * 上限をやめて `renderListing` の文字数予算へ替えた。
+ *
+ * `MEMORY_LISTING_BUDGET`（`memory.ts`、8,000）より小さく取ってある——
+ * `self_status` はこの節の前後に「実行時の事実」（`describeCloneRuntime`）と
+ * 「台帳との突き合わせ」（`renderLedgerCrossReference`）の節が同居し、3節
+ * 合計を `tools.test.ts` の一覧総当たり試験が定める `OUTPUT_CAP`（12,000）に
+ * 収める必要があるため。値は `tools.test.ts` の `flooded(60)`（一覧が実際に
+ * 溢れる量まで積んだ器）で実測して決めた——3,500 なら60文書中の一部だけが
+ * 収まり、必ず省略の合図が出て、なお3節合計が `OUTPUT_CAP` に収まる。
+ */
+const SELF_STATUS_MEMORY_LISTING_BUDGET = 3_500;
 
 /**
  * 記憶の大きさ。
@@ -2783,6 +2808,14 @@ const SELF_STATUS_MEMORY_DOC_LIMIT = 30;
  * 材料であって、記憶ストアを読み直しても変わらない値だからである）。ここが
  * 出すのは、いま `stores.persona` を読み直した時点の値だけで、会話の途中で
  * 記憶が書き換わっていれば、その場で変わる。
+ *
+ * **内訳の1行は人間の依頼（id + 名前 + 概要 + updated_at + created_at）の
+ * 5項目を満たす。** `memory_list`（`renderMemoryListing`）と同じ語彙・同じ
+ * 並び（`作成: … / 更新: …` の1文、`— 要旨` の区切り）に寄せてある——同じ
+ * 依頼に対する別の一覧なので、ここだけ違う言い方を発明しない。`bytes` は
+ * この節の主題（「記憶の大きさ」）なので残す。`createdAt` の整形は
+ * `memory.ts` の `formatMemoryCreatedAt` をそのまま import して使う——同じ
+ * 結果を返す関数を2つ書かない。
  */
 function renderMemorySize(documents: MemoryDocumentMeta[], totalMemory: string): string {
   const lines = [
@@ -2792,16 +2825,26 @@ function renderMemorySize(documents: MemoryDocumentMeta[], totalMemory: string):
   ];
   if (documents.length === 0) return lines.join('\n');
 
-  const shown = documents.slice(0, SELF_STATUS_MEMORY_DOC_LIMIT);
-  for (const doc of shown) {
-    lines.push(
-      `  - ${doc.slug}: ${doc.bytes.toLocaleString('en-US')} bytes（更新 ${doc.updatedAt}）`,
+  const items = documents.map((doc) => {
+    const descriptor =
+      doc.description === undefined
+        ? ''
+        : ` — ${excerptLine(doc.description, SELF_STATUS_MEMORY_DESCRIPTION_LIMIT)}`;
+    return (
+      `  - ${doc.slug}: ${doc.title} ` +
+      `(作成: ${formatMemoryCreatedAt(doc.createdAt)} / 更新: ${doc.updatedAt}) ` +
+      `${doc.bytes.toLocaleString('en-US')} bytes${descriptor}`
     );
-  }
-  const rest = documents.length - shown.length;
-  if (rest > 0) {
-    lines.push(`  …ほか ${rest} 文書は省略（全 ${documents.length} 文書）。`);
-  }
+  });
+
+  lines.push(
+    renderListing(items, {
+      budget: SELF_STATUS_MEMORY_LISTING_BUDGET,
+      omitted: ({ rest, shown, total }) =>
+        `  …ほか ${rest} 文書は省略（全 ${total} 文書のうち ${shown} 文書だけ出した）。` +
+        '全件は memory_list、本文は memory_read slug=<slug> で取れる。',
+    }),
+  );
   return lines.join('\n');
 }
 
