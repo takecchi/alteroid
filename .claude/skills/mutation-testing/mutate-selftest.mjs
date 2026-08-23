@@ -532,50 +532,62 @@ function scenarioJudgementIdIntegrity() {
     log('');
     log(`== spec.id=${spec.id} を通す（testFilter=${spec.testFilter}） ==`);
     applyMutation(spec);
-    const artifactResult = buildAndCheckArtifact(spec);
-    const testResult = runTests([spec.testFilter]);
-    log('--- test 生ログ ここから ---');
-    log(testResult.raw);
-    log('--- test 生ログ ここまで ---');
-    let judgement;
+    // **投げる箇所が複数ある（判定失敗／spec.id の型検査／id 取り違え）。**
+    // 復元せずに投げると、ソースが変異したまま・印も残ったまま次の spec・
+    // 次の scenario へ進み、本当の原因（ここでの assertion）が後続の
+    // `requireNoMarker(...)`（「印が既にある」）の失敗に化ける——これは
+    // 依頼者から「setup の失敗に本題が隠れる形に自分で入るな」と渡された
+    // ものと同じ形である（マネージャーの指摘、2026-08-23。以前はここだけ
+    // `restoreMutation()` を通さず投げていた）。`applyMutation` の後を
+    // まるごと try/finally で包み、`restoreMutation()` を finally で1回だけ
+    // 呼ぶ形に統一する——投げても投げなくても、次のイテレーション・次の
+    // scenario へ変異したツリーを持ち越さない。
     try {
-      judgement = judge(spec, artifactResult, testResult);
-    } catch (err) {
+      const artifactResult = buildAndCheckArtifact(spec);
+      const testResult = runTests([spec.testFilter]);
+      log('--- test 生ログ ここから ---');
+      log(testResult.raw);
+      log('--- test 生ログ ここまで ---');
+      let judgement;
+      try {
+        judgement = judge(spec, artifactResult, testResult);
+      } catch (err) {
+        throw new HarnessError(`spec.id=${spec.id} の判定に失敗した: ${err.message}`);
+      }
+      log(`判定行: ${judgement.text}`);
+      // **この比較を書くときの一般形の注意（#301 で見つかった）**: 両側が同じ
+      // 経路で同じ文字列へ強制されると、比較そのものが恒真になる。
+      // `judgement.text` 側は `formatJudgement` が `spec.id` をテンプレート
+      // リテラルへ差し込む（`${mutationId}` → 非文字列も `String()` で強制）。
+      // もし `spec.id` の型を確かめずに `.includes(spec.id)` を呼べば、`.includes`
+      // に渡す引数も同じ強制を受ける。`spec.id` が `undefined` のとき、差し込む
+      // 側は文字列 `"undefined"` になり、比べる側の引数も `"undefined"` へ
+      // 強制されるので、**両側が一致してしまう**。この歯は「id 取り違えの回帰」
+      // を捕まえるために在るのに、**いちばん名前が壊れている場合（id が無い）に
+      // だけ鳴らない**という形になる——見た目は歯があるのに、最悪のケースで
+      // だけ穴が開く。#301 の後は `applyMutation` の入り口（`validateSpec`）が
+      // 非文字列・空文字の `id` を弾くので `judgement.text` 側にはもう
+      // `undefined` は来ないはずだが、この歯自身も強制に頼らない形にしておく
+      // ——次にここを触る人が、確認済みのはずの前提を静かに壊さないように。
+      if (typeof spec.id !== 'string' || spec.id.length === 0) {
+        throw new HarnessError(
+          `spec.id が非空文字列でない（実際: ${JSON.stringify(spec.id)}）。この歯は文字列比較を` +
+            '前提にしており、型を確かめずに includes へ渡すと強制に頼った恒真比較になる。',
+        );
+      }
+      const mentionsOwnId = judgement.text.includes(spec.id);
+      log(`判定行が spec.id (${spec.id}) を正しく名乗っているか: ${mentionsOwnId}`);
+      if (!mentionsOwnId) {
+        // この確認自体が回帰を検出する口である。ここで投げれば selftest 全体が
+        // 非0で終わり、取り違えが起きていることが exit code からも分かる。
+        throw new HarnessError(
+          `判定行が spec.id を名乗っていない（id 取り違えの回帰）: ${judgement.text}`,
+        );
+      }
+      results[spec.id] = { category: judgement.category, text: judgement.text, mentionsOwnId };
+    } finally {
       restoreMutation();
-      throw new HarnessError(`spec.id=${spec.id} の判定に失敗した: ${err.message}`);
     }
-    log(`判定行: ${judgement.text}`);
-    // **この比較を書くときの一般形の注意（#301 で見つかった）**: 両側が同じ
-    // 経路で同じ文字列へ強制されると、比較そのものが恒真になる。
-    // `judgement.text` 側は `formatJudgement` が `spec.id` をテンプレート
-    // リテラルへ差し込む（`${mutationId}` → 非文字列も `String()` で強制）。
-    // もし `spec.id` の型を確かめずに `.includes(spec.id)` を呼べば、`.includes`
-    // に渡す引数も同じ強制を受ける。`spec.id` が `undefined` のとき、差し込む
-    // 側は文字列 `"undefined"` になり、比べる側の引数も `"undefined"` へ
-    // 強制されるので、**両側が一致してしまう**。この歯は「id 取り違えの回帰」
-    // を捕まえるために在るのに、**いちばん名前が壊れている場合（id が無い）に
-    // だけ鳴らない**という形になる——見た目は歯があるのに、最悪のケースで
-    // だけ穴が開く。#301 の後は `applyMutation` の入り口（`validateSpec`）が
-    // 非文字列・空文字の `id` を弾くので `judgement.text` 側にはもう
-    // `undefined` は来ないはずだが、この歯自身も強制に頼らない形にしておく
-    // ——次にここを触る人が、確認済みのはずの前提を静かに壊さないように。
-    if (typeof spec.id !== 'string' || spec.id.length === 0) {
-      throw new HarnessError(
-        `spec.id が非空文字列でない（実際: ${JSON.stringify(spec.id)}）。この歯は文字列比較を` +
-          '前提にしており、型を確かめずに includes へ渡すと強制に頼った恒真比較になる。',
-      );
-    }
-    const mentionsOwnId = judgement.text.includes(spec.id);
-    log(`判定行が spec.id (${spec.id}) を正しく名乗っているか: ${mentionsOwnId}`);
-    restoreMutation();
-    if (!mentionsOwnId) {
-      // この確認自体が回帰を検出する口である。ここで投げれば selftest 全体が
-      // 非0で終わり、取り違えが起きていることが exit code からも分かる。
-      throw new HarnessError(
-        `判定行が spec.id を名乗っていない（id 取り違えの回帰）: ${judgement.text}`,
-      );
-    }
-    results[spec.id] = { category: judgement.category, text: judgement.text, mentionsOwnId };
   }
 
   log('');
