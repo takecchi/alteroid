@@ -444,6 +444,53 @@ describe('PgPersonaStore', () => {
       expect(before?.createdAt).toEqual({ kind: 'unknown' });
       expect(after?.createdAt).toEqual({ kind: 'known', at: '2026-01-02T03:04:05.000Z' });
     });
+
+    /**
+     * 上のテストは先に `markHumanTouched` を呼ぶ。そのせいで `protectionStatus`
+     * は `humanTouchedAt` の分岐で即 `{ kind: 'human' }` を返し、`contentSha256`
+     * を一度も見ない。しかも `description` を突き合わせているだけで
+     * `descriptionFreshness`（`describedAt` 由来）は一度も比べていない——
+     * `described_at` を巻き添えで消す変異（`.set({ createdAt: when })` →
+     * `.set({ createdAt: when, describedAt: null })`）を当てても、上のテストは
+     * 赤くならない（変異試験で確認済み。fs 版の同じ構造の穴と対になる）。
+     *
+     * ここでは `markHumanTouched` を呼ばずに `protectionStatus` を
+     * `contentSha256` の比較まで通し、かつ `descriptionFreshness` も
+     * 突き合わせる。**`content_sha256` を巻き添えで消す変異は、この歯でも
+     * 捕まえられない**——`protectionStatus` は `content_sha256 IS NULL` の
+     * 行を読むと `#healRow` でその場から本文のハッシュを組み直してしまう
+     * （fs の `.index.json` 全体の組み直しとは違い、pg は行単位の自己修復を持つ）。
+     * 実測（`.set({ createdAt: when, contentSha256: null })` を当てて確認）:
+     * `protectionStatus` が読み出しのその場で `content_sha256` を再計算して
+     * 埋め直すため、130本すべて緑のまま通過する——`markCreatedAt` 単体の変異
+     * ではなく `#healRow` が隠している。**`describedAt` には同じ自己修復が
+     * 無い**ので、そちら側だけがこの歯で観測できる。
+     */
+    it('markCreatedAt は human 印を経由しない場合でも created_at 以外を書き換えない（describedAt 側）', async () => {
+      await stores.persona.write(
+        'runbook',
+        ['---', 'description: 手順', '---', '# 手順書', '', '本文'].join('\n'),
+      );
+      await db.execute(sql`update memory set created_at = null where slug = 'runbook'`);
+
+      const before = await stores.persona.read('runbook');
+      const beforeProtection = await stores.persona.protectionStatus('runbook');
+      expect(beforeProtection).toEqual({ kind: 'clone-only' });
+      expect(before?.descriptionFreshness).toEqual({ kind: 'fresh' });
+      expect(before?.createdAt).toEqual({ kind: 'unknown' });
+
+      const wrote = await stores.persona.markCreatedAt('runbook', '2026-01-02T03:04:05.000Z');
+
+      const after = await stores.persona.read('runbook');
+      const afterProtection = await stores.persona.protectionStatus('runbook');
+      expect(wrote).toBe(true);
+      expect(after?.content).toBe(before?.content);
+      expect(after?.updatedAt).toBe(before?.updatedAt);
+      expect(after?.description).toBe(before?.description);
+      expect(afterProtection).toEqual(beforeProtection);
+      expect(after?.descriptionFreshness).toEqual(before?.descriptionFreshness);
+      expect(after?.createdAt).toEqual({ kind: 'known', at: '2026-01-02T03:04:05.000Z' });
+    });
   });
 
   /**
