@@ -27,6 +27,17 @@ import { afterEach, expect } from 'vitest';
  * `console.log` はここを通らない — vitest が別経路で横取りして、通ったテストの
  * ぶんは捨てる。**通っても落ちても出てしまうのは `process.stdout.write` だけ**で、
  * この歯が見ているのはそれである。
+ *
+ * **⚠️ この歯が塞いだぶん、デバッグの観測手段が1つ減っている。** テストの中を
+ * 覗くのに `process.stdout.write` を1行足すと、この歯がそのテストを落とす
+ * （出力自体は出る — 握り潰していない — が、赤くなる）。**変異試験ではこれが
+ * 特に重い: 生存＝テストが通った、なので、観測のために足した1行が「変異を
+ * 検出した」に化ける。** 代わりに使えるものは実測してある —
+ * `pnpm test --reporter=verbose` なら通ったテストの `console.log` も出るし、
+ * 既定の reporter のままなら `process.stderr.write` が出る（どちらも歯を通らず、
+ * テストは緑のまま）。**この赤を見てここへ来た人が、次にどうすればよいかを
+ * 出力から辿れるように書いてある** — 詳細は
+ * `.claude/skills/mutation-testing/SKILL.md` の「落ちなかったとき、理由を推測しない」。
  */
 
 const passThrough = process.stdout.write.bind(process.stdout) as (
@@ -60,8 +71,10 @@ afterEach(() => {
     written,
     'このテストが本物の stdout へ書いた。人間向けの出力がテストランナーの出力に' +
       '混ざり、別プロセスからの混入と見分けが付かなくなる（#314）。' +
-      'stdout へ書く関数（apps/cli のコマンド関数など）を呼ぶテストは、呼ぶ前に' +
+      'stdout へ書く関数（apps/cli のコマンド関数など）を呼ぶテストは、呼ぶ前に ' +
       'process.stdout.write を spy へ差し替えること' +
-      '（apps/cli の各テストファイルにある captureStdout() がその形）。',
+      '（apps/cli の各テストファイルにある captureStdout() がその形）。' +
+      ' デバッグで自分で書いたのなら、--reporter=verbose + console.log か' +
+      ' process.stderr.write を使うこと（どちらもこの歯を通らない）。',
   ).toBe('');
 });

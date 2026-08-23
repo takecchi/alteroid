@@ -264,7 +264,8 @@
 - **`gh api --paginate --slurp` は `--jq` と併用できない**（`gh` がエラーで拒否する）
 - **`env | cut -d= -f1` は複数行の値で破れる。** `printenv <名前>` を使う
 - **テストの中の `console.log` は、そのテストが通ると出力に出ない。** vitest の既定の reporter は console を横取りし、**通ったぶんを捨てる**（落ちたぶんは `stdout | <ファイル> > <テスト名>` の形で出る）。実測（2026-08-22T04:28Z 観測、`vitest@4.1.10`。この repo の `vitest.config.ts` は `reporters` / `silent` / `onConsoleLog` / `disableConsoleIntercept` のどれも指定していないので既定のままである）。**`console.error` も同じで、`process.stdout.write` だけは横取りを通らず、通っても落ちても出る。** 「`HERE` が出ないからこの分岐は通っていない」は、**通っていても同じ見た目になる**
-  - **効いているかを「1回落として確かめる」と必ず誤る。** 落ちたぶんは出るので「出た＝ちゃんと出る」と読める。**確かめるなら通るテストで確かめること。** 出すなら `pnpm test --reporter=verbose` か `process.stdout.write`
+  - **効いているかを「1回落として確かめる」と必ず誤る。** 落ちたぶんは出るので「出た＝ちゃんと出る」と読める。**確かめるなら通るテストで確かめること。** 出すなら `pnpm test --reporter=verbose`（`console.log` が通ったテストでも `stdout | …` として出る）か `process.stderr.write`（既定の reporter のままで出る）
+  - **⚠️ 観測に `process.stdout.write` を使わないこと（#314 以降）。** 直上の「横取りを通らず、通っても落ちても出る」はいまも事実で、**出ること自体は変わっていない** — 歯は握り潰さず本物の stdout へ通すし、失敗の差分にも書いた内容が出る。**変わったのは、そのテストが赤くなることである。** `vitest.setup.ts` の歯が「テストが spy を張らずに本物の stdout へ書いた」として `afterEach` で落とす。**変異試験ではこの赤が「変異を検出した」に化ける**（生存＝テストが通った、なので）。実測と、残っている観測手段は `.claude/skills/mutation-testing/SKILL.md`
   - **最も重く出るのは変異試験である** — 生存＝テストが通ったなので、**証拠が要るときにだけ消える。** 詳細は `.claude/skills/mutation-testing/`
 - **CI が Linux だけなので、OS 固有の振る舞いは「緑」として観測される** — macOS は CoreFoundation が `__CF_USER_TEXT_ENCODING` を**どの子プロセスへも**注ぐ（`env -i` でも入る）。子の env を親と比べて差分を取る形は、これを「その処理が置いた」と報告する。**環境を数え上げて捨てる形にしないこと** — 注ぐ主体は OS と shell と node の版で変わる。**同じ条件で対象を通さない1回を走らせ、その実測を基準に引く**（`packages/core/src/profile.ts` の `evaluateProfile`）。テストも OS の注入をあてにせず、注入する側を自分で用意して**どの OS でも落ちる形**にする
 
