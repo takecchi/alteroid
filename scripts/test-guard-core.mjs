@@ -151,15 +151,24 @@ export function judgeExecution(rawOutput) {
  * `` ` `` でも終われる。
  *
  * **マネージャーの差し戻し（実測、`SKIP_CALL_RE` を直接抜き出して13ケースに
- * 掛けた結果）が起点**: 旧実装（`\.skip(\.\w+)?\s*\(`）は次の3形を取りこぼして
+ * 掛けた結果）が起点**: 旧実装（`\.skip(\.\w+)?\s*\(`）は次の2形を取りこぼして
  * いた。
  *
- * 1. `it.skip.each\`テーブル\`(...)`（tagged template 形の `.each`。終端が
- *    `` ` `` で、旧実装は `\(` しか許していなかった）— `packages/core/src/tools.test.ts`
- *    ・`railway/setup.test.ts` に実在する `it.each\`` の書き方へ `.skip` を足せば
- *    そのまま出る形であり、仮定ではない
+ * 1. `it.skip.each\`テーブル\`(...)` / `describe.skip.each\`テーブル\`(...)`
+ *    （tagged template 形の `.each`。終端が `` ` `` で、旧実装は `\(` しか
+ *    許していなかった）
  * 2. `it.concurrent.skip(...)`（修飾子が `skip` の**前**に来る形。旧実装は
  *    `(describe|it|test)` の直後に `\.skip` が直接続くことしか許していなかった）
+ *
+ * **どちらも、この repo にいま現用の実例は無い**（`.each` は全部丸括弧＋配列の
+ * 形、`.concurrent` は実例そのものが無い）。**それでも直す判断は変えていない**
+ * — どちらも vitest 標準の構文であり、次に書かれたときに歯Bが見逃してよい
+ * 理由にはならない。歯Bが「無条件の静的 skip はソースに残らない」と名乗る
+ * 判別器である以上、いま使われていないという事実は保証の穴を正当化しない。
+ * （当初「tagged template 形は `packages/core/src/tools.test.ts` /
+ * `railway/setup.test.ts` に実在する」と grep で読んだが、ヒットの中身は
+ * すべて Markdown コードスパンの散文であり実コードは無かった。取り違えた
+ * 経緯と検算は PR 本文に書いてある。）
  *
  * **`skipIf` / `runIf` の除外は、文字列一致ではなく配列の完全一致で行う。**
  * 連鎖を `.` で割った要素の配列（例: `['concurrent', 'skip']`）を作り、その中に
@@ -178,7 +187,7 @@ export function judgeExecution(rawOutput) {
  * 書いてあるだけの散文）が誤検出することが実地で分かった —— どちらも「識別子
  * ＋連鎖」の直後に**閉じる**逆引用符が来るので、素朴に「終端が `` ` `` なら
  * tagged template」と読むと、Markdown のコードスパンの閉じ記号まで tagged
- * template の開き記号として拾ってしまう。**実在する tagged template 形は
+ * template の開き記号として拾ってしまう。**本物の tagged template 呼び出しは
  * 必ず `.each` の直後にしか現れない**（vitest の逆引用符呼び出しは `.each`
  * にしか無い）ため、連鎖の**最後の要素が `each` であるときだけ**バッククォート
  * 終端を認める。開き括弧 `(` のほうはこの制限を掛けない（`.skip(` は連鎖の
