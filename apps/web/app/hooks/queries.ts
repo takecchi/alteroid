@@ -225,8 +225,27 @@ export function summarizeJournalEntry(entry: JournalEntry): string {
         : `回答済: ${entry.question}`;
     case 'tool_use':
       return `${entry.actor} が ${entry.tool}`;
-    case 'memory_update':
-      return `記憶 ${entry.slug} を更新（${entry.cause}）: ${entry.summary}`;
+    case 'memory_update': {
+      // **単位はバイトである**（`schema.ts` の `bytesBefore`/`bytesAfter` の
+      // doc）。`entry.summary` には文字数が埋め込まれていることがある
+      // （`memory_delete` の「削除直前 N 文字」）ので、バイトの注記は
+      // `:` の手前——`cause`/`action` と同じ構造化された括弧の中——に置き、
+      // 自由文の `summary` はコロンの後ろへ分ける（1行の中でも、単位の
+      // 混ざる場所を分ける。#318 のコメントで実際に読み違いが起きている）。
+      //
+      // `action` と `bytesBefore`/`bytesAfter` は `optional`——この区別が
+      // 導入される前の古いエントリは両方とも無い。無いことを `0` として
+      // 出すと「変化が無かった」と読めてしまう（AGENTS.md の地雷表「取れない
+      // 軸に 0 の行を作る」）ので、値が無いときは「不明」と明示し、
+      // 黙って省かない（省くと、バイトが出ている行と混ざったときに
+      // 「変化なし」に読める）。
+      const action = entry.action === undefined ? '' : `/${entry.action}`;
+      const bytes =
+        entry.bytesBefore === undefined || entry.bytesAfter === undefined
+          ? '前後バイト数不明（旧形式）'
+          : `${entry.bytesBefore}→${entry.bytesAfter} バイト`;
+      return `記憶 ${entry.slug} を更新（${entry.cause}${action} / ${bytes}）: ${entry.summary}`;
+    }
     case 'daily_report':
       // **印の付いた行を「日報」と呼ばない**（`schema.ts` の `unavailable` の doc）。
       // 日誌の一覧は日報の有無を人間が拾い読みする面でもあるので、ここが

@@ -2900,8 +2900,30 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
         head: `[tool_use ${entry.actor} ${entry.tool}]`,
         body: safeJson(entry.input),
       };
-    case 'memory_update':
-      return { head: `[memory_update ${entry.slug} (${entry.cause})]`, body: entry.summary };
+    case 'memory_update': {
+      // **単位はバイトである**（`schema.ts` の `bytesBefore`/`bytesAfter` の
+      // doc — `Buffer.byteLength` 相当）。`entry.summary` 側に文字数が
+      // 埋め込まれていること（`memory_delete` の「削除直前 N 文字」）があるので、
+      // バイトの表示はここでは `head` に置き、文字を含みうる自由文（`summary`）は
+      // `body` のまま分ける——1行・1文にバイトと文字を混ぜない（#318 のコメントで
+      // 実際に読み違いが起きている）。
+      //
+      // **`action` と `bytesBefore`/`bytesAfter` は `optional`。** この区別が
+      // 導入される前の古いエントリでは両方とも無い。無いことを `0` として
+      // 出すと「変化が無かった」と読める（AGENTS.md の地雷表「取れない軸に
+      // 0 の行を作る」）ので、値が無いときは「不明」と明示する——省いて
+      // 黙らせると、バイトが出ている行と出ていない行が混ざったとき
+      // 「変化なし」に読めてしまう。
+      const action = entry.action === undefined ? '' : ` ${entry.action}`;
+      const bytes =
+        entry.bytesBefore === undefined || entry.bytesAfter === undefined
+          ? ' bytes=不明(旧形式)'
+          : ` bytes=${entry.bytesBefore}→${entry.bytesAfter}`;
+      return {
+        head: `[memory_update ${entry.slug} (${entry.cause})${action}${bytes}]`,
+        body: entry.summary,
+      };
+    }
     case 'daily_report':
       return { head: `[daily_report ${entry.date}]`, body: entry.body };
     case 'external_event':
