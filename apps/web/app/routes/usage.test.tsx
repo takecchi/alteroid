@@ -309,6 +309,54 @@ describe('/usage 画面', () => {
     expect(within(siteSelect).getByText('session')).toBeTruthy();
     expect(within(siteSelect).getByText('distill')).toBeTruthy();
   });
+
+  /**
+   * モバイルで from/to が枠から出た不具合（人間の実機報告）の再発防止。
+   *
+   * `sm` 未満の絞り込み容器に `grid-template-columns` が無いと暗黙の単一
+   * トラックは `auto`＝max-content になり、内在幅の大きい要素（`type="date"`
+   * の入力）がそのままトラック幅になって `Card` の枠を超える。
+   *
+   * **ここで押さえられること / 押さえられないこと**: クラスが当たっている
+   * ことは押さえるが、実機で枠に収まることは押さえていない（jsdom は
+   * レイアウトを持たず `offsetWidth` 等はすべて 0 を返すので、実際の
+   * トラック幅も要素の内在幅も測れない）。次に読む人がこのテストを視覚
+   * 回帰試験だと誤読しないように明示しておく。
+   */
+  it('絞り込みの容器は sm 未満でも grid-cols-1 を持つ（暗黙トラックを auto にしない）', async () => {
+    stubUsage({ rows: [], since: null, beforeLedger: false });
+
+    render(
+      <Providers>
+        <Usage />
+      </Providers>,
+    );
+
+    const fromInput = await screen.findByLabelText(/from/);
+    // grid の直接の子ではなく label なので、容器は label の親。
+    const grid = fromInput.closest('label')?.parentElement;
+    if (grid === null || grid === undefined) throw new Error('絞り込みの容器が見つからない');
+    const tokens = grid.className.split(/\s+/);
+    expect(tokens).toContain('grid-cols-1');
+    expect(tokens).toContain('sm:grid-cols-3');
+  });
+
+  it('type="date" の from/to 入力は min-w-0 を持つ（内在幅の大きい要素だけの追加の押さえ）', async () => {
+    stubUsage({ rows: [], since: null, beforeLedger: false });
+
+    render(
+      <Providers>
+        <Usage />
+      </Providers>,
+    );
+
+    const fromInput = await screen.findByLabelText(/from/);
+    const toInput = screen.getByLabelText(/to/);
+    for (const input of [fromInput, toInput]) {
+      const tokens = input.className.split(/\s+/);
+      expect(tokens).toContain('min-w-0');
+    }
+  });
 });
 
 /**
