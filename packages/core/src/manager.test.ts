@@ -4568,7 +4568,29 @@ describe('runner の一覧（ManagerPool.runners）', () => {
    * 渡したときだけ `resources()` を呼ぶ。**呼ばれた回数を直接数える**（AGENTS.md
    * 「取れない軸に0の行を作らない」と対になる、「呼んだかどうか」の歯）。
    */
-  it('resources を渡さなければ resources() を呼ばない。resources: true のときだけ呼ぶ', async () => {
+  /**
+   * **ここが測るのは「`resources: true` のときは呼ぶ／値が載る」だけである。**
+   *
+   * **「既定では呼ばない」をここで測らないのは、測れないからである**（2026-08-24、
+   * 変異試験で確かめた）。既定の経路は**独立した2つの門**で塞がっている:
+   *
+   * 1. 外側 — `options.fingerprints || options.resources` が偽なら `open`
+   *    （開いている器の一覧）自体を作らないので、`client` が `undefined` になる
+   * 2. 内側 — `client === undefined || !options.resources`
+   *
+   * **どちらか片方を壊しても、もう片方が既定の経路を塞ぎ続ける。** だから
+   * 「既定で `resources()` が呼ばれないこと」を assert しても、**その行は
+   * どんな単一の変異でも赤くならない** —— 実測: 内側の門から
+   * `|| !options.resources` を外す変異を当てても、この形の assert は緑のまま
+   * 通った。**落ちないと分かっている assert を置くと、次に読む人へ「この性質は
+   * 守られている」と嘘をつく**ので置かない。
+   *
+   * **その変異を実際に捕まえたのは、上の「resources() は呼ばない（この一覧の
+   * ために配置の往復を足さない）」である** —— あちらは `fingerprints: true` を
+   * 渡して外側の門を通してから数えるので、内側の門だけを単独で撃てる。
+   * **「既定では往復を足さない」の歯はあちらに在る。ここには無い。**
+   */
+  it('resources: true のときだけ resources() を呼び、pids が overview に載る', async () => {
     const a = new FakePoolRunner('runner-a', {
       managers: 0,
       pids: { current: 872, max: 1000 },
@@ -4576,9 +4598,6 @@ describe('runner の一覧（ManagerPool.runners）', () => {
     const stores = createMemoryStores();
     const registry = createRunnerRegistry([a]);
     const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
-
-    await pool.runners();
-    expect(a.resourcesCalls).toBe(0);
 
     const overview = await pool.runners({ resources: true });
     expect(a.resourcesCalls).toBe(1);
