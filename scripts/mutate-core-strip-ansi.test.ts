@@ -38,7 +38,23 @@ import { parseAggregateLines as guardParseAggregateLines } from './test-guard-co
  * vitest 4.1.10 の出力に SGR が1バイトも出なかった（`tr -dc '\033' | wc -c` が 0)。
  * 一方、同じプロセスの中で tinyrainbow 自体は色を出す状態だった（`--import` で
  * 差し込んだプローブで確認）。**この食い違いの理由は特定していない。**
- * だから「色が付く条件（`FORCE_COLOR` / CI / vitest の版）」はここでも未特定である。
+ *
+ * **⚠️ ただし「色が付く条件」は1つ特定できた —— GitHub Actions の CI である。**
+ * この PR 自身の head sha `a969fd19` の CI run `32671276901`（job `ci` /
+ * step `Run pnpm test`）の **raw log archive** を展開すると、集計行2本に
+ * **ESC(0x1B) が16個**入っている（`gh run view --log` は ESC を ^[ へ均して
+ * しまうので、archive のバイトで数えた）。逐語:
+ *
+ *   "\u001b[2m Test Files \u001b[22m \u001b[1m\u001b[32m133 passed\u001b[39m…"
+ *   "\u001b[2m      Tests \u001b[22m \u001b[1m\u001b[32m2559 passed\u001b[39m…"
+ *
+ * **⟹ 下のフィクスチャは、独立な3つ目の経路でも同じ形に着いた**（件数だけが違う）。
+ * そして**その生バイトを ANSI 除去なしの形へ通すと両方 `null` になる** —— この歯が
+ * 固定している欠陥は、**本物の出力で再現する。**
+ *
+ * **⚠️ それでも「ハーネスが踏んだ」ではない。** ハーネスは器の中で `spawnSync` から
+ * `pnpm test` を起こすのであって、GitHub Actions の中では走らない。**測れたのは
+ * 「色が付く経路が実在する」までである。**
  */
 
 /** vitest 4.1.10 自身のフォーマッタが出した本物のバイト列（上の doc を見ること）。 */
@@ -71,6 +87,19 @@ const NO_SUMMARY_OUTPUT = [
   '',
   'Error: write EPIPE',
   '    at afterWriteDispatched (node:internal/stream_base_commons:159:15)',
+].join('\n');
+
+/**
+ * **集計行ではないが `Files` / `Tests` を含む行。** 探す語を緩めるとここに当たる。
+ * どの行も厳密な形には当たらない —— `Files changed:` に `Test Files` は無く、
+ * `Tests:` は `Tests` の直後が空白ではなく `:` だからである。
+ */
+const DECOY_OUTPUT = [
+  ' RUN  v4.1.10 /workspace/alteroid',
+  '',
+  'Files changed: 3',
+  'Tests: none',
+  'Error: write EPIPE',
 ].join('\n');
 
 describe('mutate-core: stripAnsi / parseAggregateLines (#372)', () => {
@@ -127,6 +156,37 @@ describe('mutate-core: stripAnsi / parseAggregateLines (#372)', () => {
     expect(harnessParseAggregateLines(coloredButNoSummary)).toEqual({
       filesLine: null,
       testsLine: null,
+    });
+  });
+
+  /**
+   * **⭐ 探す語そのものが緩んだときに落ちる歯。**
+   *
+   * **⚠️ これより上の歯だけでは、この緩みは捕まらない。実測で確かめた** ——
+   * 探す語を `/^.*Files.*$/m` / `/^.*Tests.*$/m` へ緩める変異を当てたところ、
+   * **リポジトリ全体（`Test Files 133 passed (133)` / `Tests 2559 passed (2559)`）で
+   * 1本も落ちずに生存した。** 理由は、それまでのフィクスチャが `Files` / `Tests` を
+   * 含む行を**集計行としてしか持っていない**ので、緩めても同じ行に当たって値が変わらないからである。
+   *
+   * ＝ doc は「探す語は1文字も緩めていない」と書いていたのに、**それを測る歯が
+   * 無かった。** だから紛らわしい行を持つ入力を別に置く。
+   *
+   * **緩むと何が壊れるか**は直上の歯と同じ —— 「1本も走っていない」の検出
+   * （`testsRanCleanly` →「判定できない」という3つ目の状態）が消える。
+   */
+  it('`Files` / `Tests` を含むだけの行を集計行と読まない（探す語を緩めていない）', () => {
+    expect(harnessParseAggregateLines(DECOY_OUTPUT)).toEqual({
+      filesLine: null,
+      testsLine: null,
+    });
+  });
+
+  it('紛らわしい行が先に在っても、本物の集計行のほうを読む', () => {
+    // 緩めた正規表現は最初の一致（紛らわしい行）を返すので、ここで値が変わる。
+    const decoyThenReal = [DECOY_OUTPUT, COLORED_FILES_LINE, COLORED_TESTS_LINE].join('\n');
+    expect(harnessParseAggregateLines(decoyThenReal)).toEqual({
+      filesLine: 'Test Files  130 passed (130)',
+      testsLine: 'Tests  2493 passed (2493)',
     });
   });
 

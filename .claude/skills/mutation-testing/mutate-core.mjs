@@ -627,7 +627,20 @@ export function readMaxWorkers(args) {
  *    ローカルではパイプ経由で色が付かないため再現しなかった、とも書かれている
  *
  * **だから「直った」とは書けない。** 言えるのは「色が付いても倒れない形にした」
- * までで、**色が付く条件（`FORCE_COLOR` / CI / vitest の版）は特定していない。**
+ * までである。
+ *
+ * **⚠️ ただし「色が付く条件」は1つ特定できた —— GitHub Actions の CI である。**
+ * 実測（**この修正自身の head sha `a969fd19` の CI run `32671276901`**、job `ci` の
+ * step `Run pnpm test` の raw log archive を展開して取った生バイト。`gh run view --log`
+ * は ESC を `^[` へ均してしまうので、archive のバイトで数えた）: 集計行2本に
+ * **ESC(0x1B) が16個**入っており、形は `scripts/mutate-core-strip-ansi.test.ts` の
+ * フィクスチャと同型である。**その生バイトを、この修正の前の形（ANSI を剥がさない）へ
+ * 通すと `filesLine` / `testsLine` が両方 `null` になる** —— **欠陥は本物の出力で
+ * 再現する。**
+ *
+ * **⚠️ それでも「ハーネスが踏んだ」ではない。** ハーネスは器の中で `spawnSync` から
+ * `pnpm test` を起こすのであって、GitHub Actions の中では走らない。**測れたのは
+ * 「色が付く経路が実在する」までで、「ハーネスがその経路に乗る」は測れていない。**
  *
  * **形は `scripts/test-guard-core.mjs` の `stripAnsi` / `parseAggregateLines` に
  * 揃えてある**（同じ正規表現・同じ関数名・「剥がしてから match する」同じ順序）。

@@ -39,8 +39,10 @@ node .claude/skills/mutation-testing/mutate.mjs selftest --scenario <name> # 自
 **集計行は ANSI を剥がしてから読む**（#372。`mutate-core.mjs` の `stripAnsi` /
 `parseAggregateLines`）。色が付くと `^\s*Test Files` の `^\s*` がエスケープシーケンスを
 空白として読まず、**テストが緑でも集計行が `null` になって「判定できない」へ倒れる**。
-**⚠️ ハーネス側でこれを実際に踏んだ観測は無い**（根拠は静的な読みと、同じ正規表現を持つ
-`scripts/test-guard-core.mjs` が CI で踏んだという #355 の報告）。**`raw` は加工前のまま残す**
+**色が付く経路は実在する** —— #374 自身の CI（`Run pnpm test`）の raw log archive で、
+集計行2本に ESC(0x1B) が16個入っていることを実測した。**その生バイトは ANSI 除去なしの形へ
+通すと両方 `null` になる。⚠️ ただし「ハーネスが踏んだ」ではない** —— ハーネスは器の中で
+`spawnSync` から起こすので、GitHub Actions の中では走らない。**`raw` は加工前のまま残す**
 ——剥がすのは判定に使う側だけである（歯7の「加工前の証跡」）。同じ形が `scripts/` 側にも
 在るが、**共有の出所は作っていない**（ハーネスの「依存なし・ビルド不要」を壊さないため）。
 食い違いは `scripts/mutate-core-strip-ansi.test.ts` が両方へ同じ入力を通して見張る。
