@@ -237,25 +237,69 @@ function splitManagerPrefix(body: string): { prefix: string | null; rest: string
  * （`ClosedRow` の `closedReason` は1文字も変えていない。この判別材料の
  * 欠落そのものを issue #286 として立ててある）
  */
+/** `human` / `external` の描き方（理由は `CommitmentBody` 上の doc）。素のテキストのまま。 */
+function PlainBody({ body }: { body: string }) {
+  return <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">{body}</p>;
+}
+
+/**
+ * **網羅性チェック専用（ビルド時）。** `CommitmentBody` の `switch` の
+ * `default` から呼ぶ。引数の型は `never` — `commitmentOriginSchema`
+ * （`packages/core/src/schema.ts:892`）に新しい値が足されたのに、上の
+ * `case` がその値を決めていないと、呼び出し側で `commitment.origin` は
+ * ここで `never` にならず、この呼び出し自体が型エラーになる。**新しい
+ * origin を足した人は、ここで分岐を決めるまで `pnpm typecheck` を通せない。**
+ * 型が守っているものは、型を読まない人には見えないので、ここに明記しておく
+ * （`.claude/skills/listing-and-detail/SKILL.md` が「歯が1本ずつだと、次に
+ * 足す一覧も無上限で入る」として、`CLONE_TOOL_NAMES` から `_list` で終わる
+ * 名前を機械的に集める形と同じ発想 — 網の外に在るものを人手ではなく機械
+ * （ここではコンパイラ）に捕まえさせる）。
+ *
+ * **呼ぶこと自体が保証であって、戻り値は使わない。** 本文は呼び出し元が
+ * `commitment.body` からそのまま描く — この関数へは渡さない（渡すと、
+ * 描かれるのが本文ではなく起点の生の値になってしまう）。
+ *
+ * **実行時にここへ来たら `console.warn` で残す。** 黙って安全側へ倒すだけ
+ * では AGENTS.md「静かに失敗する道具」と同じ形になる — 空白は描かないが、
+ * 何が起きたかも残らない。デーモンが先に新しい `origin` を返す順序が
+ * 実在しうる以上、次にここを読む人が気づける痕跡を残しておく。
+ */
+function assertOriginHandled(origin: never): void {
+  console.warn(`commitments.tsx: 未知の commitment.origin が来た: ${String(origin)}`);
+}
+
 function CommitmentBody({ commitment }: { commitment: Commitment }) {
-  if (commitment.origin === 'self') {
-    return <Markdown>{commitment.body}</Markdown>;
-  }
+  switch (commitment.origin) {
+    case 'self':
+      return <Markdown>{commitment.body}</Markdown>;
 
-  if (commitment.origin === 'manager') {
-    const { prefix, rest } = splitManagerPrefix(commitment.body);
-    return (
-      <div className="min-w-0">
-        {prefix !== null && <span className="mr-1 font-mono text-[11px] text-muted">{prefix}</span>}
-        <Markdown>{rest}</Markdown>
-      </div>
-    );
-  }
+    case 'manager': {
+      const { prefix, rest } = splitManagerPrefix(commitment.body);
+      return (
+        <div className="min-w-0">
+          {prefix !== null && (
+            <span className="mr-1 font-mono text-[11px] text-muted">{prefix}</span>
+          )}
+          <Markdown>{rest}</Markdown>
+        </div>
+      );
+    }
 
-  // `human` / `external` は素のテキストのまま（理由は上の doc）。
-  return (
-    <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">{commitment.body}</p>
-  );
+    case 'human':
+    case 'external':
+      return <PlainBody body={commitment.body} />;
+
+    default:
+      /*
+       * **実行時はここへ来うる（ビルド時の網羅性チェックとは別の話）。**
+       * デーモンが先に新しい `origin` を返し、この画面（この型定義）が
+       * まだ古い、という順序はありうる — 型はビルド時にしか効かない。
+       * そのときに空白を描くのは、いまより悪い。**だから実行時は安全側
+       * （素のテキスト）へ倒し、本文は commitment.body のまま1文字も消さない。**
+       */
+      assertOriginHandled(commitment.origin);
+      return <PlainBody body={commitment.body} />;
+  }
 }
 
 function OpenRow({ commitment }: { commitment: Commitment }) {

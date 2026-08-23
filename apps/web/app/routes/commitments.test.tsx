@@ -14,7 +14,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { Commitment } from '@alteroid/core';
+import type { Commitment, CommitmentOrigin } from '@alteroid/core';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import Commitments from './commitments';
@@ -435,5 +435,37 @@ describe('本文を origin で Markdown / 素のテキストへ切り分ける',
     await screen.findByText('片付いた本文');
     expect(screen.getByText('## 理由の見出しではない')).toBeTruthy();
     expect(screen.queryByRole('heading', { name: '理由の見出しではない' })).toBeNull();
+  });
+
+  /**
+   * **実行時の網羅性の倒れ先を固定する歯。**
+   *
+   * `commitmentOriginSchema`（`packages/core/src/schema.ts:892`）に無い値が
+   * 来ることは、ビルド時には起こらない（`pnpm typecheck` が塞ぐ。
+   * `CommitmentBody` の `switch` の `default` に置いた
+   * `const unhandled: never = commitment.origin;` が、その塞ぎ方の実体である
+   * — 変異試験で確認済み: `schema.ts` の enum に `'probe'` を一時的に足すと、
+   * この行が `Type '"probe"' is not assignable to type 'never'.` で
+   * `pnpm typecheck` を落とした）。
+   *
+   * **ただし実行時はビルド時の型を追い越しうる。** デーモンが先に新しい
+   * `origin` を返し、この画面（この型定義）がまだ古い、という順序は
+   * ありうる。型はビルド時にしか効かないので、その順序で来た値を
+   * `switch` が「どの `case` にも一致しない」まま実行時まで運んでしまう
+   * ことがある——ここで固定するのはその倒れ先である。**空白にせず、
+   * 素のテキストとして本文をそのまま出す。**
+   */
+  it('schema に無い origin が来ても、本文を消さず素のテキストとして出す（実行時の倒れ先）', async () => {
+    stubCommitments([
+      commitment({ origin: 'probe' as CommitmentOrigin, body: '未知の起点からの本文' }),
+    ]);
+    renderPage();
+
+    const body = await screen.findByText('未知の起点からの本文');
+    // Markdown の描画経路は通っていない（素のテキストの `<p>` のまま）。
+    expect(body.tagName).toBe('P');
+    const tokens = body.className.split(/\s+/);
+    expect(tokens).toContain('whitespace-pre-wrap');
+    expect(tokens).toContain('break-words');
   });
 });
