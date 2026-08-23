@@ -253,6 +253,29 @@ export type MemoryProtectionStatus =
 // ---------------------------------------------------------------------------
 
 /**
+ * ある文字列が **どの記法で書かれているか**（issue #287）。
+ *
+ * **これは「どう描くか」ではなく「その文字列が何であるか」である。** `'none'` は
+ * 「Markdown の記法として書かれていない素の文字列」という**事実**であって、
+ * 「素で描け」という表示の指示ではない。表示の方針（`'none'` を素テキストで
+ * 描くか、エスケープして Markdown へ通すか等）は動きうるが、この事実は動かない。
+ *
+ * **`undefined` は「立てていない」であって「Markdown である」ではない。** 印が
+ * 無いときに今日と同じ挙動（Markdown で描く）にするのは、「印が無い＝安全」と
+ * 推論した結果ではなく、いまの既定を変えないという方針の結果である。**取れない
+ * 軸に値を作らない**（AGENTS.md 地雷表「取れない軸に 0 の行を作る」）— 立てられる
+ * 確信が無い箇所には `'markdown'` も `'none'` も立てず、`undefined` のままにする。
+ *
+ * **立てられる場所にだけ立てる。** 複数の書き手・複数の由来の文字列が連結済みで
+ * 届く経路（例: `packages/core/src/manager.ts` の `failedReportText` 由来の
+ * メッセージ。デーモンの定型文・SDK の失敗文言・マネージャーの途中出力が1本の
+ * 文字列に混ざる）には立てない。**立てられないから立てないのであって、安全だから
+ * 立てないのではない**（issue #287）。
+ */
+export const textMarkupSchema = z.enum(['markdown', 'none']);
+export type TextMarkup = z.infer<typeof textMarkupSchema>;
+
+/**
  * 仕事の起点（PRD「自律」の4つ）。M1 で届くのは `human` だけだが、
  * 判別可能ユニオンとして最初から4つ揃えておく。
  */
@@ -329,6 +352,26 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
      * 止まっている。クローンが `manager_send` で答えるとそこだけが再開する。
      */
     requestId: z.string().optional(),
+    /**
+     * `text` がどの記法で書かれているか（`textMarkupSchema`。doc は上）。
+     *
+     * **欄そのものには `z.enum` を置かない。** `commitmentClosedBySchema` /
+     * `commitmentSchema.closedBy`（issue #286）と同じ理由 —
+     * `packages/storage-pg/src/commitments.ts` の `parseCommitment` は parse
+     * 失敗で throw し、`list()` は try/catch なしでそれを map するので、未知の
+     * 値が1つ入るだけで台帳の一覧が丸ごと落ちる（issue #296）。`markup` は
+     * `text` の記法の注記であって台帳の完全性を担っていないので、そこまでの
+     * 強さを持たせない。**書き込み側は `TextMarkup` の型で縛る**（欄自体は
+     * 寛容、書き手は型で縛る）。
+     *
+     * **立てるのは `packages/core/src/manager.ts:1333`
+     * （`#post({ type: 'manager_message', … })`、停止通知）だけである。**
+     * `by === 'human' && reason !== undefined` のときにだけ `'none'` を立てる
+     * — 人間が停止理由に自由記述を打った回で、`*` や `#`
+     * を含んでいても化けないようにするため。**他の post 箇所・`#emit()` の
+     * 呼び出し元にはこの PR では立てない**（issue #287 の残りの範囲）。
+     */
+    markup: z.string().optional(),
   }),
 ]);
 
@@ -1013,6 +1056,29 @@ export const commitmentSchema = z.object({
         '（この欄が入る前の行）。台帳の完全性より由来の注記の厳密さを優先しないため、' +
         '型としては任意の文字列を許す。',
     ),
+  /**
+   * `body` の**接頭辞を除いた本体**がどの記法で書かれているか
+   * （`textMarkupSchema`。issue #287）。
+   *
+   * **`origin: 'manager'` の `body` は `` `[${event.kind}] ${event.text}` ``
+   * の形で、接頭辞（`[report] ` 等）が前置されている**
+   * （`packages/core/src/clone.ts` の `commitmentFor`）。この欄が指すのは
+   * `event.text`（＝ `manager_message.markup` の指す文字列）であって、
+   * 接頭辞を含む `body` 全体ではない。表示側（
+   * `apps/web/app/routes/commitments.tsx`）は接頭辞を剥がしてから
+   * `bodyMarkup` を当てる、という前提が両側で一致している必要がある。
+   *
+   * **ここも `z.enum` を置かない。** `closedBy` と同じ理由で、こちらは
+   * `parseCommitment`（`packages/storage-pg/src/commitments.ts`）の射程に
+   * 直接入る — 未知の値が1つ入るだけで台帳の一覧が丸ごと読めなくなる
+   * （issue #296）ことを避けるため、保存層は寛容にし、既知の値の網羅性は
+   * 書き込み側の型（`TextMarkup`）と表示側の narrow（`textMarkupSchema.
+   * safeParse` ＋ `switch` ＋ `never` の網羅性チェック）で保つ。
+   *
+   * **`origin: 'manager'` 以外では立たない。** `commitmentFor` の他の
+   * `case` は `bodyMarkup` を書かないので、`undefined` のままである。
+   */
+  bodyMarkup: z.string().optional(),
 });
 
 export type CommitmentOrigin = z.infer<typeof commitmentOriginSchema>;
