@@ -469,6 +469,16 @@ function stubClient(
     memoryDocuments?: MemoryDocLike[];
     /** `GET /journal` が返す一覧。既定は空。 */
     journalEntries?: JournalEntryLike[];
+    /** `GET /managers` が返す一覧。既定は空（`/managers` `/waiting` `/reply` 等が使う）。 */
+    managers?: ManagerListItem[];
+    /** `POST /managers/:id/messages` の応答コード。既定は 200。 */
+    messagesStatus?: number;
+    /** `POST /managers/:id/messages` の応答本体。既定は `delivered`。 */
+    messagesBody?: unknown;
+    /** `GET /managers/:id/transcript` の応答コード。既定は 200。 */
+    transcriptStatus?: number;
+    /** `GET /managers/:id/transcript` の応答本体（生テキスト）。既定は空文字。 */
+    transcriptBody?: string;
   } = {},
 ) {
   const calls: { route: string; args: unknown }[] = [];
@@ -480,6 +490,10 @@ function stubClient(
 
   const client = {
     managers: {
+      $get: (args: unknown) => {
+        calls.push({ route: 'GET /managers', args });
+        return Promise.resolve(reply(200, { managers: options.managers ?? [] }));
+      },
       ':id': {
         $delete: (args: unknown) => {
           calls.push({ route: 'DELETE /managers/:id', args });
@@ -489,6 +503,28 @@ function stubClient(
               options.abortBody ?? { outcome: 'stopped', detail: 'mgr-1 を止めた' },
             ),
           );
+        },
+        messages: {
+          $post: (args: unknown) => {
+            calls.push({ route: 'POST /managers/:id/messages', args });
+            return Promise.resolve(
+              reply(
+                options.messagesStatus ?? 200,
+                options.messagesBody ?? { outcome: 'delivered', detail: '追加指示として届けた。' },
+              ),
+            );
+          },
+        },
+        transcript: {
+          $get: (args: unknown) => {
+            calls.push({ route: 'GET /managers/:id/transcript', args });
+            const status = options.transcriptStatus ?? 200;
+            return Promise.resolve({
+              ok: status >= 200 && status < 300,
+              status,
+              text: () => Promise.resolve(options.transcriptBody ?? ''),
+            });
+          },
         },
       },
     },
@@ -583,7 +619,7 @@ function defaultAnswerResults(
 }
 
 function emptyListed(): Listed {
-  return { approvals: [], commitments: [], conversations: [] };
+  return { approvals: [], commitments: [], conversations: [], managers: [], waiting: [] };
 }
 
 afterEach(() => {
@@ -864,7 +900,13 @@ describe('chat の台帳コマンド', () => {
   it('/done は承認待ちの番号を掴まない（覚え場所が別であること）', async () => {
     const read = captureStdout();
     const { calls, client } = stubClient();
-    const listed: Listed = { approvals: ['approval-1'], commitments: [], conversations: [] };
+    const listed: Listed = {
+      approvals: ['approval-1'],
+      commitments: [],
+      conversations: [],
+      managers: [],
+      waiting: [],
+    };
 
     await runSlashCommand('/done 1', client, listed);
 
@@ -896,7 +938,7 @@ describe('chat の台帳コマンド', () => {
  */
 describe('chat の /answers（まとめて答える）', () => {
   function listedApprovals(ids: string[]): Listed {
-    return { approvals: ids, commitments: [], conversations: [] };
+    return { approvals: ids, commitments: [], conversations: [], managers: [], waiting: [] };
   }
 
   it('複数件を1回の POST /approvals/answer にまとめて送る', async () => {
@@ -1423,6 +1465,8 @@ describe('chat の /conversations と /conversation', () => {
       approvals: ['approval-1'],
       commitments: ['cmt-1'],
       conversations: [],
+      managers: [],
+      waiting: [],
     };
 
     await runSlashCommand('/conversation 1', client, listed);

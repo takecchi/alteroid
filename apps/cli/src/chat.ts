@@ -38,7 +38,13 @@ export async function chatCommand(): Promise<void> {
   const rl = createInterface({ input: stdin, output: stdout });
   let conversationId: string | null = null;
   // 直前に一覧したもの。番号で引けるようにするため覚えておく。
-  const listed: Listed = { approvals: [], commitments: [], conversations: [] };
+  const listed: Listed = {
+    approvals: [],
+    commitments: [],
+    conversations: [],
+    managers: [],
+    waiting: [],
+  };
 
   stdout.write('alteroid chat（Ctrl-D で終了 / /help でコマンド）\n');
 
@@ -220,9 +226,14 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /journal [件数]      日誌（新しい順）
 /conversations [limit=<N>] [scan=<N>]  会話の一覧（新しい順、番号付き）
 /conversation <番号|id> [scan=<N>]  その会話の中身（古い順。番号は /conversations の並び）
-/managers            マネージャーの一覧と状態
-/manager <id>        そのマネージャーのセッション生ログ
-/stop <id> [理由]    その仕事だけをやめさせる（止めた事実は日誌に残る）
+/managers            マネージャーの一覧（番号付き）と状態
+/manager <番号|id>    そのマネージャーのセッション生ログ（番号は /managers の並び）
+/stop <番号|id> [理由]  その仕事だけをやめさせる（止めた事実は日誌に残る）
+/waiting             マネージャーの返事待ち一覧（番号付き）
+/msg <番号|id> <本文>  マネージャーへ追加指示を送る（質問への回答としては扱われない）
+/reply <番号|requestId> <本文>  マネージャーの質問に自分の言葉で答える（番号は /waiting の並び）
+/allow <番号|requestId> [理由]  マネージャーの実行許可の確認に許可で答える
+/deny  <番号|requestId> [理由]  マネージャーの実行許可の確認に拒否で答える
 /archive             セッションの生ログ一覧
 /archive <id>        生ログの中身
 /approvals           承認待ち（番号付き）
@@ -246,15 +257,25 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /**
  * 直前に一覧したものの id を、番号で引けるように覚えておく置き場。
  *
- * **承認待ち・台帳・会話で別々に持つ。** 1本にまとめると `/approvals` の直後の
- * `/done 1` が承認待ちの id を閉じに行く（どれも「番号で指す一覧」なので、
- * 混ざったことに人間が気づく手がかりが無い）。会話を足すときも既存のフィールドへ
- * 相乗りさせず、独立したフィールド（`conversations`）にしてある。
+ * **承認待ち・台帳・会話・マネージャー・待ちで別々に持つ。** 1本にまとめると
+ * `/approvals` の直後の `/done 1` が承認待ちの id を閉じに行く（どれも「番号で
+ * 指す一覧」なので、混ざったことに人間が気づく手がかりが無い）。会話・マネー
+ * ジャー・待ちを足すときも既存のフィールドへ相乗りさせず、独立したフィールド
+ * にしてある。
+ *
+ * **`managers` と `waiting` は別物である（#336）。** 答える相手は「マネージャー」
+ * ではなく「その中の1件の確認」なので、番号は待ちの側（`waiting`）に要る。
+ * `/managers` の直後に `/reply 1` を打ったとき、マネージャーの id が requestId
+ * として使われてはいけない — 1本にまとめていたら、それが起きる。
  */
 export interface Listed {
   approvals: string[];
   commitments: string[];
   conversations: string[];
+  /** `/managers` の並び。`/manager` `/stop` `/msg` が引く。 */
+  managers: string[];
+  /** `/waiting` の並び。`/reply` `/allow` `/deny` が引く。 */
+  waiting: { managerId: string; requestId: string }[];
 }
 
 export async function runSlashCommand(
@@ -602,7 +623,37 @@ export async function runSlashCommand(
         return 'ok';
       }
       const { managers } = await response.json();
+      // **番号を振る。** `/manager` `/stop` `/msg` がこの並びを引く（#336）。
+      listed.managers.length = 0;
+      listed.managers.push(...managers.map((entry) => entry.managerId));
       stdout.write(`${renderManagerList(managers)}\n`);
+      return 'ok';
+    }
+
+    /**
+     * マネージャーの返事待ち一覧。`/approvals` のマネージャー版（#336）。
+     *
+     * **`/managers` とは別の番号を振る。** 答える相手は「マネージャー」では
+     * なく「その中の1件の確認」で、1本のマネージャーが同時に複数を待つことも
+     * ある（並列に呼ばれた道具はそれぞれ別の確認として降りてくる）。
+     */
+    case '/waiting': {
+      const response = await client.managers.$get();
+      if (!response.ok) {
+        stdout.write('マネージャーの一覧を読めませんでした\n');
+        return 'ok';
+      }
+      const { managers } = await response.json();
+      const { text, entries } = renderWaitingList(managers);
+      listed.waiting.length = 0;
+      listed.waiting.push(...entries);
+      stdout.write(`${text}\n`);
+      if (entries.length > 0) {
+        stdout.write(
+          '  /reply <番号|requestId> <本文> で質問に答える、' +
+            '/allow /deny <番号|requestId> [理由] で実行許可に答えられます\n',
+        );
+      }
       return 'ok';
     }
 
@@ -619,9 +670,14 @@ export async function runSlashCommand(
      * 無いと、後から見た人間（とクローン）が判断を再構成できない。
      */
     case '/stop': {
-      const id = rest[0];
-      if (!id) {
-        stdout.write('使い方: /stop <manager_id> [理由]\n');
+      const reference = rest[0];
+      if (!reference) {
+        stdout.write('使い方: /stop <番号|manager_id> [理由]\n');
+        return 'ok';
+      }
+      const id = resolveListedId(reference, listed.managers);
+      if (id === null) {
+        stdout.write(`[${reference}] は /managers の一覧にありません\n`);
         return 'ok';
       }
       const reason = rest.slice(1).join(' ').trim();
@@ -644,9 +700,14 @@ export async function runSlashCommand(
 
     case '/manager': {
       // 日誌で足りないときに、manager_id からそのセッションの生ログへ降りる
-      const id = rest[0];
-      if (!id) {
-        stdout.write('使い方: /manager <manager_id>\n');
+      const reference = rest[0];
+      if (!reference) {
+        stdout.write('使い方: /manager <番号|manager_id>\n');
+        return 'ok';
+      }
+      const id = resolveListedId(reference, listed.managers);
+      if (id === null) {
+        stdout.write(`[${reference}] は /managers の一覧にありません\n`);
         return 'ok';
       }
       const response = await client.managers[':id'].transcript.$get({ param: { id } });
@@ -655,6 +716,138 @@ export async function runSlashCommand(
         return 'ok';
       }
       stdout.write(`${await response.text()}\n`);
+      return 'ok';
+    }
+
+    /**
+     * 追加指示。**`requestId` も `decision` も付けない。**
+     *
+     * これが `/reply` と分かれている理由そのもの — マネージャーが確認を待って
+     * いても、この一言は回答として消費されず、追加指示として流れる
+     * （`packages/core/src/manager.ts` の `send` の doc「宛先を推測しない」）。
+     * ここで `requestId`/`decision` を足すと、待ちが在るときに追加指示が
+     * 回答へ化ける形になり、#313 と同じ穴を CLI 側に開けることになる。
+     */
+    case '/msg': {
+      const [reference, ...bodyParts] = rest;
+      const text = bodyParts.join(' ');
+      if (!reference || text.length === 0) {
+        stdout.write('使い方: /msg <番号|manager_id> <本文>\n');
+        return 'ok';
+      }
+      const id = resolveListedId(reference, listed.managers);
+      if (id === null) {
+        stdout.write(`[${reference}] は /managers の一覧にありません\n`);
+        return 'ok';
+      }
+      const response = await client.managers[':id'].messages.$post({
+        param: { id },
+        json: { text },
+      });
+      if (!response.ok) {
+        stdout.write(`そのマネージャーは見つかりませんでした: ${id}\n`);
+        return 'ok';
+      }
+      const { outcome, detail } = await response.json();
+      stdout.write(`${outcome}: ${detail}\n`);
+      return 'ok';
+    }
+
+    /**
+     * マネージャーの質問（`AskUserQuestion`）に、人間が自分の言葉で答える。
+     *
+     * **`requestId` だけを添える。`decision` は付けない** — 質問には
+     * 許可/拒否の意思が無い（`apps/web` の `QuestionWaitingRow` と同じ約束）。
+     */
+    case '/reply': {
+      const [reference, ...bodyParts] = rest;
+      const text = bodyParts.join(' ');
+      if (!reference || text.length === 0) {
+        stdout.write('使い方: /reply <番号|requestId> <本文>\n');
+        return 'ok';
+      }
+      const target = await resolveWaitingTarget(reference, listed.waiting, client);
+      if (!target.ok) {
+        stdout.write(`${target.message}\n`);
+        return 'ok';
+      }
+      const response = await client.managers[':id'].messages.$post({
+        param: { id: target.managerId },
+        json: { text, requestId: target.requestId },
+      });
+      if (!response.ok) {
+        stdout.write(`そのマネージャーは見つかりませんでした: ${target.managerId}\n`);
+        return 'ok';
+      }
+      const { outcome, detail } = await response.json();
+      stdout.write(`${outcome}: ${detail}\n`);
+      return 'ok';
+    }
+
+    /**
+     * 実行許可の確認に答える（許可／拒否）。
+     *
+     * **引数が1つも無ければ「宛先を書かずに decision だけ送る」形になる**
+     * （#336）。番号|requestId の形は第1引数が常に宛先になるので、この分岐
+     * だけがその形を表す。宛先を CLI 側で当てずに、デーモンの
+     * `#choosePending`（`packages/core/src/manager.ts`）へそのまま委ねる —
+     * ただし `#choosePending` はマネージャー1本の中の曖昧さしか見ない
+     * （HTTP の経路が `managerId` を要求するため）。**どのマネージャーへ送る
+     * かは CLI 側で決めなければならず、そこは絶対に当てない** — 返事待ちの
+     * マネージャーが2本以上あれば、どちらへも送らずに候補を出す。1本だけなら
+     * その1本へ decision だけを渡し、複数の確認を待っていた場合はデーモンが
+     * requestId の一覧を添えて断ってくる（その応答をそのまま出す）。
+     *
+     * **理由（本文）は省略できる。** 未指定なら Web UI の固定文言
+     * （`apps/web/app/routes/manager-detail.tsx` の `PermissionWaitingRow`）に
+     * 揃える。理由を必須にすると、API が要求していない制約を CLI 側で足す
+     * ことになる（north_star 禁止2）。
+     */
+    case '/allow':
+    case '/deny': {
+      const decision: 'allow' | 'deny' = command === '/allow' ? 'allow' : 'deny';
+      const defaultText = decision === 'allow' ? '許可する' : '許可しない';
+
+      if (rest.length === 0) {
+        const target = await resolveDecisionOnlyManager(client);
+        if (!target.ok) {
+          stdout.write(`${target.message}\n`);
+          return 'ok';
+        }
+        const response = await client.managers[':id'].messages.$post({
+          param: { id: target.managerId },
+          json: { text: defaultText, decision },
+        });
+        if (!response.ok) {
+          stdout.write(`そのマネージャーは見つかりませんでした: ${target.managerId}\n`);
+          return 'ok';
+        }
+        const { outcome, detail } = await response.json();
+        stdout.write(`${outcome}: ${detail}\n`);
+        return 'ok';
+      }
+
+      const [reference, ...reasonParts] = rest;
+      const reason = reasonParts.join(' ');
+      const target = await resolveWaitingTarget(reference ?? '', listed.waiting, client);
+      if (!target.ok) {
+        stdout.write(`${target.message}\n`);
+        return 'ok';
+      }
+      const response = await client.managers[':id'].messages.$post({
+        param: { id: target.managerId },
+        json: {
+          text: reason.length === 0 ? defaultText : reason,
+          requestId: target.requestId,
+          decision,
+        },
+      });
+      if (!response.ok) {
+        stdout.write(`そのマネージャーは見つかりませんでした: ${target.managerId}\n`);
+        return 'ok';
+      }
+      const { outcome, detail } = await response.json();
+      stdout.write(`${outcome}: ${detail}\n`);
       return 'ok';
     }
 
@@ -1069,12 +1262,15 @@ export function renderManagerList(managers: ManagerListItem[]): string {
   if (managers.length === 0) return '（マネージャーは1本も居ません）';
 
   const lines: string[] = [];
-  for (const manager of managers) {
+  managers.forEach((manager, index) => {
     const live = manager.live ? '' : ' /セッション切断';
     // **依頼文も抜粋にする。** 同じ関数の中で `waiting` と `lastReport` だけを
     // 畳んでいたので、数千字の依頼が来ると一覧そのものが流れて読めなくなった。
+    //
+    // **番号を振る。** `/manager` `/stop` `/msg` がこの並びを引く（#336）。
     lines.push(
-      `  ${manager.managerId}  [${manager.status}${live}]  ${summarizeText(manager.request)}`,
+      `  [${index + 1}] ${manager.managerId}  [${manager.status}${live}]  ` +
+        `${summarizeText(manager.request)}`,
     );
     lines.push(`      cwd: ${manager.cwd}`);
     // **作成と更新。** 値は `GET /managers` が既に返していて、ここが出して
@@ -1096,8 +1292,15 @@ export function renderManagerList(managers: ManagerListItem[]): string {
     }
     const denied = denialLine(manager.denials);
     if (denied !== null) lines.push(`      ${denied}`);
+    // **`kind`（質問／実行許可）と `askedAt` も出す（#336）。** 種別が読めない
+    // と、人間は `/reply` と `/allow` のどちらを打つべきか分からない。どちらも
+    // 版のずれの窓（旧 runner の応答）では欠けうる — 欠けても行そのものは
+    // 出す（`describeWaitingKind` / `describeAskedAt` の doc）。
     for (const item of manager.waiting) {
-      lines.push(`      返事待ち (${item.requestId}): ${summarizeText(item.summary)}`);
+      lines.push(
+        `      返事待ち (${item.requestId})  種別: ${describeWaitingKind(item.kind)}` +
+          `${describeAskedAt(item.askedAt)}: ${summarizeText(item.summary)}`,
+      );
     }
     // **失敗は報告の**上**に置く。** 下に置くと、包まれたエラー文（`lastReport`）を
     // 先に読んでから「実は報告ではない」と分かる順になる。
@@ -1110,8 +1313,74 @@ export function renderManagerList(managers: ManagerListItem[]): string {
       const label = manager.lastFailure === undefined ? '直近の報告' : '直近のターンの中身';
       lines.push(`      ${label}: ${summarizeText(manager.lastReport)}`);
     }
-  }
+  });
   return lines.join('\n');
+}
+
+/** `GET /managers` が返す1件の `waiting`（1本の確認）。 */
+type ManagerWaitingItem = ManagerListItem['waiting'][number];
+
+/**
+ * 種別（質問／実行許可）を人間が読める語へ。
+ *
+ * **`kind` は省略されうる。** 新しいデーモンが `drainingSeconds` の猶予中の
+ * 旧 runner へ問い合わせる窓があり、そちらの応答には `kind` が乗らない
+ * （`railway/README.md`「4. 落ちた側を待つ / 取り直す」）。**分からないものを
+ * 分かった顔で書かない** — 「実行許可」と決めつけると、実際は質問だった
+ * ときに人間が `/allow` を打ってしまう。
+ */
+function describeWaitingKind(kind: ManagerWaitingItem['kind']): string {
+  if (kind === 'question') return '質問';
+  if (kind === 'permission') return '実行許可';
+  return '種別不明';
+}
+
+/**
+ * `askedAt` を人間が読める形へ（無ければ欄そのものを出さない）。
+ *
+ * **絶対値をそのまま出す。** `renderManagerList` の他の欄（`作成`/`更新`）と
+ * 同じ約束で、相対表現（「4時間前」）はここで作らない（`AGENTS.md`「時刻の
+ * 扱い」）。**無いときは空文字や `-` で埋めない** — それ自体が「取れない軸に
+ * 意味の決まっていない値を作る」ことになる（`kind` と同じ版ずれの窓で欠ける）。
+ */
+function describeAskedAt(askedAt: ManagerWaitingItem['askedAt']): string {
+  return askedAt === undefined ? '' : `  確認: ${askedAt}`;
+}
+
+/**
+ * マネージャーの返事待ちを、番号付きで人間が読める形へ（`/waiting`）。
+ *
+ * `/approvals` の一覧（`renderCommitments` と同じ形 — 表示と番号の対応を
+ * ここで一緒に作って返す）に揃えてある。番号と (managerId, requestId) の
+ * 対応を表示側と別々に作ると、ずれた瞬間に**人間が見ていない確認**へ答える
+ * ことになる。
+ *
+ * **`kind`/`askedAt` が欠けていても行は出す。** 版のずれの窓（旧 runner への
+ * 問い合わせ）でも人間の手が残ることを、ここで保証する——欠けたら丸ごと
+ * 落とすと、いちばん要るとき（人間の返事を待っている最中）に口が消える。
+ */
+export function renderWaitingList(managers: ManagerListItem[]): {
+  text: string;
+  entries: { managerId: string; requestId: string }[];
+} {
+  const entries: { managerId: string; requestId: string }[] = [];
+  const lines: string[] = [];
+  for (const manager of managers) {
+    for (const item of manager.waiting) {
+      entries.push({ managerId: manager.managerId, requestId: item.requestId });
+      const [head, ...rest] = item.summary.split('\n');
+      lines.push(`  [${entries.length}] ${head ?? ''}`);
+      for (const line of rest) lines.push(`      ${line}`);
+      lines.push(
+        `      manager: ${manager.managerId}  requestId: ${item.requestId}` +
+          `  種別: ${describeWaitingKind(item.kind)}${describeAskedAt(item.askedAt)}`,
+      );
+    }
+  }
+  if (entries.length === 0) {
+    return { text: '（返事待ちのマネージャーはいません）', entries: [] };
+  }
+  return { text: lines.join('\n'), entries };
 }
 
 type ScheduleSpecInput =
@@ -1211,6 +1480,110 @@ function parseUsageFilters(tokens: string[]): ParsedUsageFilters {
 function resolveListedId(reference: string, listed: string[]): string | null {
   if (/^\d+$/.test(reference)) return listed[Number(reference) - 1] ?? null;
   return reference;
+}
+
+/** `/reply` `/allow` `/deny` の宛先解決の結果。 */
+type WaitingTarget =
+  | { ok: true; managerId: string; requestId: string }
+  | { ok: false; message: string };
+
+/**
+ * `/reply` `/allow` `/deny` の第1引数を (managerId, requestId) へ解く。
+ *
+ * **番号なら `/waiting` の並びをそのまま引く**（`Listed.waiting`）。数字で
+ * なければ **`requestId` そのもの**として受け、**`GET /managers` を引き直して
+ * その `requestId` を持つマネージャーを探す** — 先に `/waiting` を打っていな
+ * くても効くようにするためである（#336）。
+ *
+ * **宛先を CLI 側で当てない。** 同じ `requestId` を複数のマネージャーが持つ
+ * ことは、`requestId` が SDK 側の識別子である以上、原理的には否定できない
+ * （`AGENTS.md`「踏みやすい地雷」）。見つかったものが2件以上なら、どちらへも
+ * 送らず両方の `managerId` を出す — 先頭を選ばない。0件なら「待っている
+ * マネージャーは居ません」と言って終わる（推測しない）。
+ */
+async function resolveWaitingTarget(
+  reference: string,
+  listedWaiting: Listed['waiting'],
+  client: ReturnType<typeof createClient>,
+): Promise<WaitingTarget> {
+  if (/^\d+$/.test(reference)) {
+    const entry = listedWaiting[Number(reference) - 1];
+    if (entry === undefined) {
+      return { ok: false, message: `[${reference}] は /waiting の一覧にありません` };
+    }
+    return { ok: true, managerId: entry.managerId, requestId: entry.requestId };
+  }
+
+  const response = await client.managers.$get();
+  if (!response.ok) {
+    return { ok: false, message: 'マネージャーの一覧を読めませんでした' };
+  }
+  const { managers } = await response.json();
+  const owners = managers.filter((manager) =>
+    manager.waiting.some((item) => item.requestId === reference),
+  );
+  if (owners.length === 0) {
+    return {
+      ok: false,
+      message: `${reference} という requestId を待っているマネージャーは居ません`,
+    };
+  }
+  if (owners.length > 1) {
+    return {
+      ok: false,
+      message:
+        `${reference} は複数のマネージャーが待っています。どちらか分からないので` +
+        `送っていません: ${owners.map((manager) => manager.managerId).join(' / ')}`,
+    };
+  }
+  const owner = owners[0];
+  if (owner === undefined) {
+    return {
+      ok: false,
+      message: `${reference} という requestId を待っているマネージャーは居ません`,
+    };
+  }
+  return { ok: true, managerId: owner.managerId, requestId: reference };
+}
+
+/** `/allow` `/deny` を引数なしで打ったときの宛先解決の結果。 */
+type DecisionOnlyTarget = { ok: true; managerId: string } | { ok: false; message: string };
+
+/**
+ * `/allow` `/deny` を引数なしで打ったとき（宛先を書かずに decision だけ送る形）
+ * の、宛先（マネージャー）解決。
+ *
+ * `POST /managers/:id/messages` は `managerId` を URL に要求するので、
+ * `requestId` を省いても宛先そのものは要る。**ここでも当てない** —
+ * 返事待ちのマネージャーが2本以上あれば、どちらへも送らず候補を出す。1本
+ * だけなら、その1本の中の曖昧さ（複数の確認を同時に待っている場合）は
+ * デーモンの `#choosePending`（`packages/core/src/manager.ts`）が解く。
+ */
+async function resolveDecisionOnlyManager(
+  client: ReturnType<typeof createClient>,
+): Promise<DecisionOnlyTarget> {
+  const response = await client.managers.$get();
+  if (!response.ok) {
+    return { ok: false, message: 'マネージャーの一覧を読めませんでした' };
+  }
+  const { managers } = await response.json();
+  const waiting = managers.filter((manager) => manager.waiting.length > 0);
+  if (waiting.length === 0) {
+    return { ok: false, message: '返事待ちのマネージャーはいません' };
+  }
+  if (waiting.length > 1) {
+    return {
+      ok: false,
+      message:
+        '複数のマネージャーが返事待ちです。どれに送るか分からないので送っていません: ' +
+        waiting.map((manager) => manager.managerId).join(' / '),
+    };
+  }
+  const only = waiting[0];
+  if (only === undefined) {
+    return { ok: false, message: '返事待ちのマネージャーはいません' };
+  }
+  return { ok: true, managerId: only.managerId };
 }
 
 /**
