@@ -2938,7 +2938,41 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
 
     for (const entry of entries) {
       expect(fiveFieldViolations(entry)).toEqual([]);
+      // **`fiveFieldViolations` の id+名前チェックは形（2トークン在るか）しか
+      // 見ない——値が本当に `title` かどうかまでは判定しない。** 変異試験で
+      // 確かめた: `renderMemorySize` から `${doc.title}` を丸ごと落としても、
+      // 直後の `(作成: …` が2つ目のトークンとして数えられ、上の
+      // `fiveFieldViolations` だけでは検出できずに生存した。`flooded()` が
+      // 書く記憶は `# 題<pad>` という見出しを持つ（`persona.write` の
+      // タイトル抽出）ので、その文字列が実際に出ているかも確かめる——
+      // これで `title` を落とす変異が検出できる。
+      expect(entry).toMatch(/題\d{4}/);
     }
+  });
+
+  /**
+   * **`self_status` の記憶内訳は、共通の `TRUNCATION_MARK`（CASES の
+   * 「切ったなら黙らない」試験）だけでは、一覧の予算（`renderListing` の
+   * `budget` / `omitted`）が効いていることを測れない。**
+   *
+   * 変異試験で確かめた: `renderMemorySize` の `omitted` を `() => ''` に
+   * 差し替えて省略の断り書きを消しても、`flooded()` が書く記憶の
+   * `description` は1件ごとに `SELF_STATUS_MEMORY_DESCRIPTION_LIMIT`
+   * （120字）を超えるため、`excerptLine` が1件ごとに「…（N 文字省略。全
+   * M 文字）」を出し続け、`TRUNCATION_MARK`（`/省略|残り \d|文字目/`）は
+   * それだけで満たされてしまう——一覧の側の断り書きが消えたことは、共通の
+   * 歯では検出できずに生存した。
+   *
+   * だから一覧レベルの断り書きの中身（件数と続きの取り方）を直接見る。
+   */
+  it('self_status — 記憶の内訳を切ったら、件数と続きの取り方（memory_list / memory_read）が出る', async () => {
+    const h = await flooded(60);
+
+    const reply = await h.call('self_status', {});
+
+    expect(reply).toMatch(/…ほか \d+ 文書は省略（全 \d+ 文書のうち \d+ 文書だけ出した）。/);
+    expect(reply).toContain('memory_list');
+    expect(reply).toContain('memory_read slug=<slug>');
   });
 
   it.each(STRICT_SHAPE_SWEPT)(
