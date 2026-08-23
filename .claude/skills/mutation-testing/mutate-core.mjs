@@ -129,6 +129,63 @@ function assertNoForbiddenWords(text, contextLabel) {
   }
 }
 
+// ── id の禁止語検査（#348） ─────────────────────────────────────────
+//
+// **禁止語検査そのものは判定行の語彙を守るために在り、外してはいけない**
+// （Issue #348 に明記）。ただし `spec.id` は判定行へ差し込まれるため、
+// 部分文字列で見ると `bypass`（`pass` を含む）・`broken`（`ok` を含む）・
+// `lookup`（`ok` を含む）のような、変異の名前として自然に出てくる語が
+// 誤って拒否される。ここは「判定の語彙にだけ掛け、id には掛けない」の
+// うち id 側を担当する — id は掛けるが、部分文字列ではなく**語の境界**で見る。
+//
+// ASCII の語（OK / ok / pass / passed）は、英数字に挟まれていたら当てない
+// （`lookup-drop` の `ok` は `lo` と `up` に挟まれているので当てない）。
+// `-` や文字列の端で区切られていれば当てる（`token-ok` / `m1-ok`）。
+// 非 ASCII の語（合格 / 成功 / 問題なし / 緑 / ✓）は、変異 id の語彙
+// （英数字とハイフン）に紛れ込みようが無いので部分一致のままでよい —
+// この判断は id の命名規約（`validateSpec` はパス区切りと `..` しか
+// 禁じておらず、非 ASCII 文字自体は形式上は禁止していない）を前提にした
+// 推測であり、確認はしていない。
+
+function isAsciiForbiddenWord(word) {
+  return /^[A-Za-z0-9]+$/.test(word);
+}
+
+/** ASCII の禁止語が、id の中に「単独の語」として現れるかを見る。
+ * 英数字に挟まれた出現（複合語の一部）は無視し、他の出現が無いか探し続ける。
+ */
+function forbiddenWordHitsIdentifier(id, word) {
+  if (!isAsciiForbiddenWord(word)) {
+    return id.includes(word);
+  }
+  let searchFrom = 0;
+  for (;;) {
+    const idx = id.indexOf(word, searchFrom);
+    if (idx === -1) return false;
+    const before = idx > 0 ? id[idx - 1] : null;
+    const after = idx + word.length < id.length ? id[idx + word.length] : null;
+    const leftIsBoundary = before === null || !/[A-Za-z0-9]/.test(before);
+    const rightIsBoundary = after === null || !/[A-Za-z0-9]/.test(after);
+    if (leftIsBoundary && rightIsBoundary) return true;
+    searchFrom = idx + 1;
+  }
+}
+
+/** id 自体を検査する。落ちたときは「id 由来」と分かるメッセージにする
+ * （テンプレートが汚れている場合と同じ文言になっていた #348 の欠陥の修正）。
+ */
+function assertNoForbiddenWordsInIdentifier(id, contextLabel) {
+  for (const word of FORBIDDEN_IN_JUDGEMENT) {
+    if (forbiddenWordHitsIdentifier(id, word)) {
+      throw new HarnessError(
+        `${contextLabel}: 変異 id "${id}" そのものが禁止語 "${word}" に単独の語として一致した` +
+          '（判定テンプレートの語彙が汚れているのではなく、id 由来）。' +
+          'id の部分文字列に当たっただけなら語の境界を見直すこと。',
+      );
+    }
+  }
+}
+
 /**
  * ハーネス自身の判定語彙に禁止語が混ざっていないかを検査する口。
  *
@@ -154,13 +211,28 @@ export function checkJudgementVocabulary() {
   return { ok: true, checked: Object.keys(JUDGEMENT_TEMPLATES) };
 }
 
-/** 種別 + 変異 id から判定行を組み立てる。整形後の文言にも禁止語検査を掛ける。 */
+/**
+ * 種別 + 変異 id から判定行を組み立てる。
+ *
+ * **禁止語検査は2段に分ける（#348）**: (1) id そのものを、部分文字列ではなく
+ * 語の境界で検査する（`assertNoForbiddenWordsInIdentifier`） (2) テンプレート
+ * 由来の語彙を、id を差し込む「前」の状態で検査する（プレースホルダで埋め、
+ * id を混ぜない）。以前は id を差し込んだ「後」の完成文を丸ごと部分文字列で
+ * 検査していたため、id の部分文字列（`bypass` の中の `pass` 等）が誤って
+ * 拒否されていた。禁止語検査そのものは判定の語彙を守るために在り続ける —
+ * 外したのではなく、掛ける対象を「判定の語彙」と「id」に分けて、それぞれに
+ * 合った基準（部分文字列 / 語の境界）を使うようにした。
+ */
 export function formatJudgement(category, mutationId) {
   const template = JUDGEMENT_TEMPLATES[category];
   if (!template) throw new HarnessError(`未知の判定種別: ${category}`);
-  const text = template(mutationId);
-  assertNoForbiddenWords(text, `judge(${mutationId})`);
-  return text;
+
+  assertNoForbiddenWordsInIdentifier(String(mutationId), `judge(${mutationId})`);
+
+  const templateOnly = template('␀id-placeholder␀');
+  assertNoForbiddenWords(templateOnly, `JUDGEMENT_TEMPLATES.${category}（id 差し込み前）`);
+
+  return template(mutationId);
 }
 
 /** 生存/検出/不明のどれかを、成果物検査とテスト結果から決める（id とは無関係）。 */
@@ -304,6 +376,12 @@ function buildMarker(spec, ctx) {
     sessionId: process.env.CLAUDE_SESSION_ID ?? process.env.ALTEROID_SESSION_ID ?? null,
     pid: process.pid,
     headBefore: ctx.headBefore,
+    // 変異を当てる前の `git status --porcelain -- <file>`（#321）。12c が
+    // 比較する相手はこれであって、HEAD（porcelain が空であること）ではない。
+    // 旧い印にはこのフィールドが無い — restoreMutation 側で
+    // `marker.statusBefore === undefined` のときは比較しない（判定できない、
+    // という3つ目の状態。空文字と比べる形に倒すと #321 の欠陥が戻る）。
+    statusBefore: ctx.statusBefore,
     md5Pre: ctx.md5Pre,
     // **原文そのもの。** 控えが汚染・消失していても、これがあれば戻せる。
     originalContent: ctx.original,
@@ -345,6 +423,13 @@ export function applyMutation(spec) {
   const headBefore = gitHead();
   log(`[1] HEAD (適用前): ${headBefore}`);
 
+  // 1b. 対象ファイルの git status --porcelain を、変異を当てる前に記録する
+  //     （#321）。復元後の 12c はこれと比較する — 「HEAD と同じか」ではなく
+  //     「変異の前後で変わっていないか」を見る。対象ファイル自身に正当な
+  //     未コミット変更が在るのは、変異試験では異常ではなく通常である。
+  const statusBefore = gitStatusPorcelainFor(spec.file);
+  log(`[1b] 対象ファイルの git status --porcelain（変異前）: ${JSON.stringify(statusBefore)}`);
+
   // 2. 原文を読み、読んだ中身から md5Pre を計算する（ファイルを2回読まない）。
   const original = readRepoFile(spec.file);
   const md5Pre = md5(original);
@@ -384,7 +469,7 @@ export function applyMutation(spec) {
   log(`[5] パターン検査: 一致件数 ${occurrences} が期待 ${spec.expect} と一致`);
 
   // 6. 印を置く。**変異を書き込む前である。** ここが手順の要点で、7と入れ替えない。
-  const marker = buildMarker(spec, { headBefore, md5Pre, backupPath, original });
+  const marker = buildMarker(spec, { headBefore, statusBefore, md5Pre, backupPath, original });
   writeMarkerFile(marker);
   log(
     `[6] 印を設置した: ${path.relative(ROOT, MARKER_PATH)}（原文 ${original.length} 文字を埋め込み済み）`,
@@ -629,12 +714,44 @@ export function restoreMutation(opts = {}) {
   }
   log(`[12b] 書き戻し完了。md5 が md5Pre と一致 (${md5After})`);
 
-  // 12c. git status --porcelain に対象ファイルが出ないこと。
-  const statusOut = gitStatusPorcelainFor(marker.file);
-  if (statusOut.trim() !== '') {
-    throw new HarnessError(`[12c] git status に対象ファイルが残っている:\n${statusOut}`);
+  // **ソース側の復元がここまでで完了した。** ここが手順の要点（#321）——
+  // 以前はこの書き換えを 12c・12d の「後」に置いていたため、12c が
+  // （下で直した比較に直しても、直す前の比較でも）落ちると、ソースの
+  // 復元自体は成功しているのに印が `stage: 'source-mutated'` のまま
+  // 残っていた。次に来た人はそれを「変異が当たったままのツリーだ」と読み、
+  // 印を信じて `md5Pre` へ書き戻すと、**その人の正当な未コミット変更が
+  // 消える。** md5（12b）で復元の正しさが確認できた時点で、印を
+  // 先に進めておく——これ以降 12c・12d・後始末（dist）のどれが失敗しても、
+  // 次に来た人へは「ソースが変異したまま」ではなく「ソースは復元済みで
+  // dist の確認が取れていない」と伝わる。12b/12c/12d の落ちる条件は
+  // 1つも変えていない——落ちたときに印が何を名乗るかだけを直した。
+  writeMarkerFile({ ...marker, stage: 'dist-unverified' });
+
+  // 12c. git status --porcelain が「変異を当てる前」と変わっていないこと
+  //   （#321）。旧い実装は「porcelain が空か」＝「HEAD と同じか」を見ていたが、
+  //   これは別の質問だった。変異試験は「いま手元で書いているコードに歯が
+  //   効くか」を測る道具なので、対象ファイルに未コミットの変更が在るのは
+  //   異常ではなく通常である——それがある状態を「復元できていない」と
+  //   誤判定していた。「前後で変わっていないこと」は意味のある保証なので、
+  //   この検査自体は残す。比較対象を「変異前の porcelain」に変える。
+  const statusAfter = gitStatusPorcelainFor(marker.file);
+  if (marker.statusBefore === undefined) {
+    // 旧い印（このフィールドを持たない）。空文字と比べる形に倒すと #321 の
+    // 欠陥が戻る（未コミット変更が在る対象ファイルで必ず落ちる）ので、
+    // 判定できないという3つ目の状態のまま先へ進む。
+    log(
+      '[12c] 変異前の git status を印が持っていない（旧い印）ので比較しない。' +
+        `復元後の git status --porcelain: ${JSON.stringify(statusAfter)}`,
+    );
+  } else if (statusAfter !== marker.statusBefore) {
+    throw new HarnessError(
+      `[12c] git status --porcelain が変異前と変わっている。\n` +
+        `変異前: ${JSON.stringify(marker.statusBefore)}\n` +
+        `復元後: ${JSON.stringify(statusAfter)}`,
+    );
+  } else {
+    log(`[12c] git status --porcelain: 変異前と一致（変化なし） ${JSON.stringify(statusAfter)}`);
   }
-  log('[12c] git status --porcelain: 対象ファイルの差分なし');
 
   // 12d. git rev-parse HEAD が手順1と同じであること。
   const headAfter = gitHead();
@@ -642,13 +759,6 @@ export function restoreMutation(opts = {}) {
     throw new HarnessError(`[12d] HEAD が変わっている (${marker.headBefore} → ${headAfter})`);
   }
   log(`[12d] HEAD 一致: ${headAfter}`);
-
-  // **ソース側の復元がここまでで完了した。** これ以降で後始末（dist）が
-  // 失敗しても、次に来た人へは「ソースが変異したまま」ではなく「ソースは
-  // 復元済みで dist の確認が取れていない」と伝える必要がある。印を
-  // 書き換えて、その事実を先にディスクへ残す（この後 rebuildAndVerify が
-  // 例外を投げても、この書き換えは既に効いている）。
-  writeMarkerFile({ ...marker, stage: 'dist-unverified' });
 
   // **後始末（手順1〜13には無い工程。番号は振らない）。** 手順8〜9は build 済みの
   // `dist` を検査するが、この時点まではソースだけを書き戻した状態なので、
