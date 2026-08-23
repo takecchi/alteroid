@@ -290,6 +290,29 @@ export function ChatPane({
     // URL が自分の採番に追いついただけなら、捨てるものは何も無い。
     if (routeId !== shownId) {
       setShownId(routeId);
+      /*
+       * **この `setLines([])` は、下の `owns()`/`stopped()`（`writable()` の
+       * 中身）と同じ役目の二重書きではない。守っている失敗が違う。**
+       *
+       * - **ここ（render 時の同期リセット）** — 会話を切り替えた**瞬間**に、
+       *   前の会話の `lines`（自分の発言・受信中の合図・進行中の transient
+       *   な行）を消す。ストリームが動いているかどうかとは無関係——
+       *   ただ会話を切り替えただけで、静的にでも古い内容が新しい会話の
+       *   画面に残るのを防ぐのはこちらの役目。
+       * - **`owns()`/`stopped()`（`writable()`。この下の `send()` 参照）** —
+       *   切り替えた**後**に、前の会話のストリームがなおも `setLines(...)`
+       *   を呼ぼうとするのを止める。**動いているストリームがあって初めて
+       *   意味を持つ**、上とは別の失敗を防いでいる。
+       *
+       * `git log -S` で確かめた限り、この3つ（この `setLines([])` /
+       * `owns()` / `stopped()`）は同じ初期コミット（`04c1049`、#27）で
+       * 同時に入った——「後から別の障害を踏んで1枚ずつ足した」歴史ではない。
+       * それでも上のとおり守備範囲は最初から別である。
+       *
+       * **ただし変異試験（#363）は、この2つが実際には独立して働いていない
+       * ことを見つけている。** 詳しい構造は下の `owns()`/`stopped()` の
+       * doc（`writable()` の直前）にまとめてある。
+       */
       setLines([]);
       setFailure(undefined);
     }
@@ -400,6 +423,22 @@ export function ChatPane({
    * `open` で自分が採番した id へ同期したときは、ストリームの所属も同時に
    * その id へ移してあるので、ここは何もしない（止めると、続く text / done が
    * 画面に出ないまま会話が終わったように見える）。
+   *
+   * **`shownIdRef.current` の更新と `abort()` は、この1つの効果の中で
+   * 同じ同期実行の中にある。** これが下の `owns()`/`stopped()` の関係を
+   * 決めている——`owns()` は `shownIdRef.current` を、`stopped()` は
+   * `controller.signal.aborted` を見るが、**この効果が走った後は、両方が
+   * 同時に切り替わる。** `owns()` が「別の会話へ移った」と言えるようになる
+   * 瞬間には、`stopped()` も既に「止まった」と言えるようになっている
+   * （順序ではなく同一関数呼び出しの中での事実）。**`owns()` だけを壊しても
+   * `stopped()` が代わりに `writable()` を締める、が起きる構造的な理由は
+   * ここにある。**
+   *
+   * 加えて、この効果は React の受動的 effect なので **render の commit より
+   * 後に走る**。commit そのもの（`routeId` の変化を見て `setLines([])` を
+   * 呼ぶ、上の「捨てる」ブロック）と、この効果が走るまでの短い窓では
+   * `shownIdRef.current`・`controller.signal.aborted` のどちらも**まだ
+   * 古い値のまま**である。詳細と実測は下の `owns()`/`stopped()` の doc。
    */
   useEffect(() => {
     shownIdRef.current = shownId;
@@ -502,6 +541,57 @@ export function ChatPane({
        *
        * - `owns()` — まだこの会話を見ている（別の会話へ移っていない）
        * - `stopped()` — 人間が受信をやめた
+       *
+       * ---
+       *
+       * **⚠️ #363（変異試験）: `owns()` 単独の効きは、いまの構造では測れない。
+       * 「歯が無い」わけではない——測定そのものが成立しない。歯を無理に
+       * 生やしてもいない。**
+       *
+       * 変異試験（`.claude/skills/mutation-testing/`）で `owns()` を
+       * `() => true` に固定する変異（`chat-owns-always-true`）を当てると、
+       * 既存のテスト（`chat.test.tsx`。#356 で足した、navigate と同じ tick
+       * で前の会話のストリームからチャンクが届く回帰テストを含む）が
+       * 1本も落ちない（生存）。一方、切り替え時の `setLines([])`
+       * （上の「捨てる」ブロック）を消す変異（`chat-discard-setlines-removed`）
+       * は、まさにその回帰テストを含む2本を落とす（検出）。
+       *
+       * **理由は「壁が1枚しか無い」からではない。** 上の切り替え検知の
+       * `useEffect`（`shownIdRef.current = shownId; ...abort()...`）の
+       * doc に書いたとおり、`shownIdRef.current` の更新と `abort()` は
+       * **同じ effect の中で同期している**——`owns()` が「移った」と
+       * 言えるようになる瞬間には、`stopped()` も既に「止まった」と
+       * 言えるようになっている。だから **その effect が走った後**は、
+       * `owns()` を壊しても `stopped()` が `writable()` を締め続ける。
+       *
+       * **そしてその effect が走る前（render の commit から、この
+       * 受動的 effect が走るまでの短い窓）は、`owns()`/`stopped()` の
+       * どちらも本物のままで「まだ移っていない」側の値を返す** ——
+       * `shownIdRef.current`/`controller.signal.aborted` がまだ更新されて
+       * いないため。この窓で `append()`（`text` チャンク）が実際には
+       * 漏れないのは、`owns()`/`stopped()` が締めているからではなく、
+       * 上の「捨てる」ブロックが**同じ render の中で同期的に** `lines` を
+       * `[]` にしていて、`append()` の `findIndex(line => line.key ===
+       * replyKey)` が対象を見失い無害な no-op になるからである
+       * （`setTransient()` は既存の行を探さず無条件に積むので、この
+       * 窓ではこの保護を受けない——これは #363 とは別に見つかった実際の
+       * 描画バグとして別途報告する。ここでは「この窓で owns()/stopped()
+       * は保護していない」ことの裏付けとしてだけ書く）。
+       *
+       * **つまり `owns()` が単独で効く窓は、いまの実装には無い。** 効果が
+       * 走った後は `stopped()` に隠れ、効果が走る前は `setLines([])` に
+       * 隠れる（`append()` の場合）か、そもそも保護されていない
+       * （`setTransient()` の場合）。`owns()` を壊しても壊さなくても、
+       * 既存のどのテストの結果も変わらない——これは
+       * `.claude/skills/mutation-testing/SKILL.md` の生存の4分類のうち
+       * **3（テストの構造が観測不能にしている）** であって、2（歯が無い）
+       * ではない。**`owns()` を残しているのは、いま測れているからではなく、
+       * `stopped()` だけでは説明が付かない前提——`shownIdRef` と
+       * `controller` の同期がこの1つの effect に将来も乗り続けるという
+       * 前提——が崩れたときの保険であり、その保険の効きは今回の変異試験の
+       * 対象にできなかった、というだけである。** 歯を追加で書けば
+       * 「この性質は測って確認した」と嘘をつくことになるので、足していない
+       * （同 SKILL.md「2 と判断しても、歯を無理に生やさないこと」）。
        */
       const owns = () => stream.id === shownIdRef.current;
       const stopped = () => controller.signal.aborted;

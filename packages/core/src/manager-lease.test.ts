@@ -49,6 +49,7 @@ class LeasedRunner implements RunnerClient {
   // 既定は既存テストと同じ `runner-primary`——ここを変えても既存テストの
   // 期待値は1つも変わらない。
   readonly runnerId: string;
+  readonly runnerIdKnown = true;
   readonly workspacePath = '/work/project';
   readonly sessions = new Map<string, RunnerManagerState>();
   readonly resumes: RunnerResumeCommand[] = [];

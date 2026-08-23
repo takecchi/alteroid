@@ -125,7 +125,21 @@ describe('runner の /events: finally の片付け順序と取りこぼし無し
    * 流すので、ハンドラが `hello` すら書き終える前に2件とも `queue` の中へ
    * 移っている。その直後に読まずに `reader.cancel()` すれば、2件とも
    * `writeSSE` で流れる前に接続が切れる——`finally` が動けば `outbox.pending`
-   * は2に戻り、動かなければ0のまま（＝出来事が消えたまま）になる。
+   * は2に戻る。
+   *
+   * **⚠️ 2026-08-24（#358 / `bc9f6ba`）追記: 「動かなければ0のまま」の行を
+   * 削った。この行を書いた時点の `Outbox.pending` は `#queue.length` の1行
+   * だけで、listener が付いている間は `push` が `#queue` へ一切積まない
+   * （そのまま listener へ渡す）ので、`attach()` 直後に必ず0になった——
+   * **それ自体が #358 の訂正対象そのもの**（listener 付きの間は溜まりが
+   * 見えない）だった。訂正後の `pending` は listener 側が抱えている分
+   * （`writing` ＋ ハンドラのローカル `queue`）も合算するので、`attach()`
+   * 直後でも2のままである。下の `expect(outbox.pending).toBe(0)` は
+   * このコメントを書いた時点では正しかったが、#358 の訂正で意味が変わった
+   * ——**「消えたことを見ていた」のではなく「listener に渡った時点で見えなく
+   * なっていたこと」を見ていた、というのがこの行の正体である。** 訂正後は
+   * 2のままで正しく、これは後退ではなく「見えなくなる窓が無くなった」こと
+   * そのものを示す。
    */
   it('流し切れなかった出来事は outbox へ戻る（消えない）', async () => {
     const host = newHost();
@@ -149,8 +163,10 @@ describe('runner の /events: finally の片付け順序と取りこぼし無し
     const reader = body.getReader();
 
     // `attach()` が同期的に `outbox` の内部キューを空にした直後、まだ何も
-    // 流れていないうちに切る。
-    expect(outbox.pending).toBe(0);
+    // 流れていないうちに切る。**#358 の訂正後は、ここでもまだ2のまま**
+    // （listener 側が抱えている分を `pending` が合算するようになったため。
+    // 上のコメントの追記を参照）。
+    expect(outbox.pending).toBe(2);
     await reader.cancel();
 
     await expect.poll(() => outbox.pending, { timeout: 1000 }).toBe(2);

@@ -31,6 +31,12 @@ import type {
 /** `identity()` を持つ偽 runner。**名乗る中身を外から差し替えられる。** */
 class IdentifyingRunner implements RunnerClient {
   readonly runnerId: string;
+  /**
+   * **既定は `true`（既存テストの前提を変えない）。** `false` に差し替えると
+   * 「`/health` から一度も `runnerId` を受け取れていない」状態を再現できる
+   * （#330 の歯のために足した）。
+   */
+  runnerIdKnown = true;
   readonly workspacePath = '/work/project';
   /** `/health` を叩かれた回数。 */
   probes = 0;
@@ -229,6 +235,33 @@ describe('器の入れ替えを見分ける', () => {
     // 名簿から引ける名前も変わっていない。
     expect((await registry.get('runner-a'))?.runnerId).toBe('runner-a');
     expect(await registry.get('runner-imposter')).toBeNull();
+
+    await registry.stop();
+  });
+
+  /**
+   * **#330 の罠そのもの。** `runnerId` は常に文字列を持つ（`HttpRunner` の既定値
+   * `'runner-primary'`）ので、`entry.client !== null` だけを根拠に出すと、
+   * `/health` から一度も `runnerId` を受け取れていない相手についても「受け取った
+   * 値」の顔で出てしまう。`runnerIdKnown: false` は、まさにその「聞けていない」
+   * 状態を表す。
+   */
+  it('runnerId を聞けていない runner の入れ替えでは、runnerId を出さない（#330）', async () => {
+    const swaps: { label: string; runnerId?: string; before: string; after: string }[] = [];
+    const runner = new IdentifyingRunner('runner-primary', 'boot-1');
+    runner.runnerIdKnown = false;
+    const registry = createRunnerRegistry([], { onSwap: (event) => swaps.push(event) });
+    await registry.register({ label: 'http://runner:4518', open: async () => runner });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    runner.instanceId = 'boot-2';
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(swaps).toMatchObject([
+      { label: 'http://runner:4518', before: 'boot-1', after: 'boot-2' },
+    ]);
+    // **既定値 `'runner-primary'` が「聞けた値」の顔で出ていないことを名指しで見る。**
+    expect(swaps[0]).not.toHaveProperty('runnerId');
 
     await registry.stop();
   });

@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderRunners } from './runners.js';
+import { captureStdout } from './test-support.js';
 
 /**
  * `alteroid runners` の**文言**。
@@ -10,7 +10,61 @@ import { renderRunners } from './runners.js';
  * 「デーモンの版と runner の版を、同じ出力に並べて出す」）、人間は Web UI の設定画面
  * （`apps/web/app/routes/settings.test.tsx`）とこの口で読む。**3つのどれかにだけ
  * 出ると、「自分が走っているコードはどれか」の答えが口によって違うことになる。**
+ *
+ * **#361: `renderRunners`（文字列を返す純粋関数）だけでなく、実際に端末へ書く
+ * `runnersCommand`（書く側）も測る。** `renderRunners` のテストが緑でも、
+ * `runnersCommand` が別のものを書く・書かない・書く先を間違えるという欠陥は
+ * 別に測らないと緑のまま通る（`captureStdout` の doc に同じ注意がある。#333 の
+ * 実例と同じ形）。`fetch` を差し替えて本物の型付きクライアント（`hono/client`）を
+ * 通す形は `conversations.test.ts` / `memory.test.ts` と同じ。
  */
+vi.mock('./target.js', () => ({
+  // `vi.fn()` にしてあるのは、「ログインしていない」note 分岐だけ1件
+  // `mockResolvedValueOnce` で上書きしたいため（`login.test.ts` と同じ理由）。
+  resolveTarget: vi.fn(() =>
+    Promise.resolve({ baseUrl: 'http://127.0.0.1:4517', headers: {}, note: null, remote: false }),
+  ),
+}));
+
+const { renderRunners, runnersCommand } = await import('./runners.js');
+const target = await import('./target.js');
+
+interface Sent {
+  url: string;
+  method: string;
+}
+
+let sent: Sent[] = [];
+let originalFetch: typeof fetch;
+let replies: { status: number; body: unknown }[] = [];
+
+function stubFetch(): void {
+  globalThis.fetch = ((input: unknown, init?: RequestInit) => {
+    const request = input as { url?: string; method?: string };
+    const url = typeof input === 'string' ? input : (request.url ?? String(input));
+    sent.push({ url, method: init?.method ?? request.method ?? 'GET' });
+    const reply = replies.shift() ?? { status: 200, body: {} };
+    return Promise.resolve(
+      new Response(JSON.stringify(reply.body), {
+        status: reply.status,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+  }) as typeof fetch;
+}
+
+beforeEach(() => {
+  originalFetch = globalThis.fetch;
+  sent = [];
+  replies = [];
+  stubFetch();
+});
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  vi.restoreAllMocks();
+  vi.clearAllMocks();
+});
 
 const KNOWN_DAEMON = {
   status: 'known',
@@ -152,5 +206,55 @@ describe('renderRunners', () => {
 
     expect(text).toContain('[lost]');
     expect(text).toContain('[unreachable]');
+  });
+});
+
+/**
+ * #361: 「書く側」— `renderRunners` が正しい文字列を作っても、`runnersCommand`
+ * がそれを書かない・別のものを書く・書く先を間違えれば、上の `renderRunners` の
+ * テストは全部緑のまま通る。ここではその経路自体を測る。
+ */
+describe('runnersCommand', () => {
+  it('GET /runners を叩き、renderRunners の出力をそのまま端末へ書く', async () => {
+    const view = {
+      runners: [{ ...RUNNER, revision: { status: 'unheard' as const } }],
+      daemonRevision: KNOWN_DAEMON,
+    };
+    replies.push({ status: 200, body: view });
+    const read = captureStdout();
+
+    await runnersCommand();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.url).toBe('http://127.0.0.1:4517/runners');
+    expect(sent[0]?.method).toBe('GET');
+    // **書く側が別のものを書く／書き忘れる変異を狙って名指す。** 「何か出た」では
+    // なく、`renderRunners` がこの入力に対して作る文字列そのものと一致することを
+    // 見る（末尾の改行1つも含めて）。
+    expect(read()).toBe(`${renderRunners(view)}\n`);
+  });
+
+  it('ログインしていなければ note をそのまま書き、runners を叩かない', async () => {
+    vi.mocked(target.resolveTarget).mockResolvedValueOnce({
+      baseUrl: 'https://runner.example.com',
+      headers: {},
+      note: 'https://runner.example.com にログインしていません（alteroid login）',
+      remote: true,
+    });
+    const read = captureStdout();
+
+    await runnersCommand();
+
+    expect(sent).toHaveLength(0);
+    expect(read()).toBe('https://runner.example.com にログインしていません（alteroid login）\n');
+  });
+
+  it('応答が失敗（ok でない）なら、読めなかったと書く（renderRunners は呼ばない）', async () => {
+    replies.push({ status: 500, body: {} });
+    const read = captureStdout();
+
+    await runnersCommand();
+
+    expect(read()).toBe('runner の一覧を読めませんでした\n');
   });
 });

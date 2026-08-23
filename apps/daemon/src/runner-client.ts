@@ -442,6 +442,16 @@ interface HealthBody {
   managers?: unknown;
   resources?: unknown;
   revision?: unknown;
+  /**
+   * まだデーモンへ送り出せていない出来事の件数（#358）。**この欄がここに
+   * 無かったせいで、runner 側が正しい値を返しても読まれずに落ちていた**
+   * （`resources()` は `body.managers` と同じく `/health` 直下から拾う——
+   * `body.resources` の中身ではない。`apps/runner/src/app.ts` の `/health`
+   * が実際に置く場所に合わせてある）。
+   */
+  pendingEvents?: unknown;
+  /** 未送出のうち、いちばん古いものが積まれた時刻（#358）。同上の理由で足す。 */
+  oldestPendingAt?: unknown;
 }
 
 /**
@@ -591,8 +601,25 @@ class HttpRunner implements RunnerClient {
    * 作る」と同じ形）。だから「聞けたか」は `runnerId` そのものではなく、
    * この別のフラグで持つ——`hello()` が空文字でない `body.runnerId` を
    * 読めたときだけ立てる。
+   *
+   * **`#describeSelf`（`#pump` の2行）はこの private フィールドを直に読む。**
+   * {@link runnerIdKnown} は同じ値を `HttpRunner` の外（`onSwap` / `onLost` /
+   * `GET /runners`）から読める形に引き上げた口で、実装は増やしていない（#330）。
    */
   #runnerIdKnown = false;
+
+  /**
+   * {@link #runnerIdKnown} を `RunnerClient` の外から読める形にした口（#330）。
+   *
+   * `onSwap` / `onLost` / `GET /runners`（`packages/core/src/runner-protocol.ts`
+   * の `heardRunnerIdOf`）はこれを見て、聞けていない `runnerId` を出さない。
+   * `#pump` が書く2行（{@link #describeSelf}）が#274/#309で既に持っていた
+   * 判定を、他の出口からも使える形にしただけで、判定そのもの（`hello()` が
+   * 空文字でない `body.runnerId` を読めたときだけ立てる）は変えていない。
+   */
+  get runnerIdKnown(): boolean {
+    return this.#runnerIdKnown;
+  }
 
   constructor(options: HttpRunnerOptions) {
     this.#socketPath = socketPathOf(options.baseUrl);
@@ -719,9 +746,25 @@ class HttpRunner implements RunnerClient {
     const body = (await response.json()) as HealthBody;
     const parsed = runnerExecutionResourcesSchema.safeParse(body.resources ?? {});
     const managers = runnerPlacementResourcesSchema.shape.managers.safeParse(body.managers);
+    // **`managers` と同じ扱い**（#358）——`/health` 直下から1つずつ検証する。
+    // まとめて弾くと、`resources` の形が崩れただけで `pendingEvents` /
+    // `oldestPendingAt` まで落ち、値を出している runner が「何も報告しない器」
+    // に見える。
+    const pendingEvents = runnerPlacementResourcesSchema.shape.pendingEvents.safeParse(
+      body.pendingEvents,
+    );
+    const oldestPendingAt = runnerPlacementResourcesSchema.shape.oldestPendingAt.safeParse(
+      body.oldestPendingAt,
+    );
     return {
       ...(parsed.success ? parsed.data : {}),
       ...(managers.success && managers.data !== undefined ? { managers: managers.data } : {}),
+      ...(pendingEvents.success && pendingEvents.data !== undefined
+        ? { pendingEvents: pendingEvents.data }
+        : {}),
+      ...(oldestPendingAt.success && oldestPendingAt.data !== undefined
+        ? { oldestPendingAt: oldestPendingAt.data }
+        : {}),
     };
   }
 

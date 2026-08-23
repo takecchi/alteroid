@@ -103,6 +103,19 @@ export interface ManagerSummary {
   sessionId?: string;
   lastReport?: string;
   /**
+   * `lastReport` を**デーモンが受け取った時刻**（#358。`jobSchema.lastReportAt`
+   * の写し）。
+   *
+   * **⚠️ 名前が意味を決める。** これは「デーモンが報告を受け取った時刻」で
+   * あって、「マネージャーが報告を生成した時刻」でも「クローンのターンへ
+   * 配られた時刻」でもない。前者は runner 側で包まれる前の話なのでデーモンは
+   * 測っていない。後者はいまどのレコードにも無く、日誌（`#handle` が書く1行の
+   * 書き込み時刻）を掘らないと取れない。**測っていない名前を付けない**
+   * （AGENTS.md「取れない軸に0の行を作る」と同じ理由——ここは0ではなく
+   * 「別の時点」を名乗ってしまう危険なので、doc で先に断っておく）。
+   */
+  lastReportAt?: string;
+  /**
    * 直近の1ターンが**報告ではなく失敗**で終わったこと（`jobSchema.lastFailure`）。
    *
    * **台帳に載っているのに要約へ載っていなかった。** 台帳（`Job`）は `lastFailure` を
@@ -2331,6 +2344,11 @@ class Pool implements ManagerPool {
           return;
         }
         record.job.lastReport = event.text;
+        // **デーモンが受け取った時刻**（#358）。runner がこの報告を包んだ時刻
+        // でも、クローンのターンへ入った時刻でもない — `lastReportAt` の doc
+        // を参照。`lastFailure.at`（この少し下）と同じく、この境界を跨いだ
+        // 瞬間として `new Date().toISOString()` を直接使う。
+        record.job.lastReportAt = new Date().toISOString();
         record.job.status = event.status;
         // **失敗として終わった回は台帳にもそう残す。** 本文（`event.text`）は
         // runner 側で既に包まれているが、包んだ文字列だけに頼ると、一覧を出す側は
@@ -3354,6 +3372,9 @@ function summaryOf(record: ManagerRecord, live: boolean): ManagerSummary {
     waiting: [...record.waiting],
     ...(job.sessionId === undefined ? {} : { sessionId: job.sessionId }),
     ...(job.lastReport === undefined ? {} : { lastReport: job.lastReport }),
+    // **`lastReport` と対で運ぶ**（#358）。台帳をそのまま写すだけ——書き込みは
+    // `#onEvent` の `case 'report'` の1箇所に閉じている。
+    ...(job.lastReportAt === undefined ? {} : { lastReportAt: job.lastReportAt }),
     // **`lastReport` と同じ行で運ぶ。** 片方だけを載せると、読む側は「報告が来た」
     // と「エラーで死んだ」を本文の文言で判定するしかなくなる（塞いだ穴がここで
     // 開き直る）。応答として終わった回では台帳側で消えているので、ここは台帳を

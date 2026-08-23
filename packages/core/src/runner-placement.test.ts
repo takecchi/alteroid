@@ -26,6 +26,7 @@ import type {
 /** 偽 runner。**`resources()` の応え方だけを外から決められる。** */
 class FakeRunner implements RunnerClient {
   readonly runnerId: string;
+  readonly runnerIdKnown = true;
   readonly workspacePath = '/work/project';
   /** `undefined` = 資源を報告しない runner（古い器）。 */
   report: RunnerPlacementResources | undefined;

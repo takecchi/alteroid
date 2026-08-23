@@ -1530,6 +1530,46 @@ describe('PgInboxStore', () => {
 
     await expect(stores.inbox.claimPending()).rejects.toThrow(/読めない形/);
   });
+
+  describe('pending（#358。読むだけで配達回数を進めない）', () => {
+    it('件数といちばん古い時刻を返す（0件のときは oldestAt を作らない）', async () => {
+      expect(await stores.inbox.pending()).toEqual({ count: 0 });
+
+      await stores.inbox.put(
+        human('evt-2', '2026-08-11T00:00:00.000Z', '2件目'),
+        '2026-08-11T00:00:00.000Z',
+      );
+      await stores.inbox.put(
+        human('evt-1', '2026-08-10T00:00:00.000Z', '1件目'),
+        '2026-08-10T00:00:00.000Z',
+      );
+
+      expect(await stores.inbox.pending()).toEqual({
+        count: 2,
+        oldestAt: '2026-08-10T00:00:00.000Z',
+      });
+    });
+
+    /**
+     * **この歯が単独で守るもの**: `pending()` を何度呼んでも `claimPending()`
+     * が返す `deliveries` が変わらないこと。fs 版と同じ性質を pg の
+     * `UPDATE ... RETURNING` 実装に対しても確かめる——`claimPending` の SQL の
+     * 形を真似ているが `UPDATE` を含めていないことの実地の裏取り。
+     */
+    it('pending() を何度呼んでも claimPending() の deliveries は動かない', async () => {
+      await stores.inbox.put(
+        human('evt-1', '2026-08-10T00:00:00.000Z', '本文'),
+        '2026-08-10T00:00:00.000Z',
+      );
+
+      await stores.inbox.pending();
+      await stores.inbox.pending();
+      await stores.inbox.pending();
+
+      const claimed = await stores.inbox.claimPending();
+      expect(claimed[0]?.deliveries).toBe(1);
+    });
+  });
 });
 
 describe('PgTranscriptArchive', () => {

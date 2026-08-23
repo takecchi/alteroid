@@ -342,6 +342,28 @@ export type RunnerExecutionResources = z.infer<typeof runnerExecutionResourcesSc
  */
 export const runnerPlacementResourcesSchema = runnerExecutionResourcesSchema.extend({
   managers: z.number().int().nonnegative().optional(),
+  /**
+   * まだデーモンへ送り出せていない出来事の件数（#358）。**「収容能力」でも
+   * 「配達の失敗」でもない** — `Outbox.pending` の写しで、listener が付いたまま
+   * 溜まっている分も含む（`apps/runner/src/app.ts` の `Outbox.pending` の doc）。
+   *
+   * **0件でもキーは省かれない**（`apps/runner/src/app.ts` の `/health` は
+   * `pendingEvents: outbox.pending` を無条件で書く）。ここが
+   * `oldestPendingAt`（次項）と違うのはそのためである——「未送出が何件か」は
+   * 0件のときも正しく測れる軸なので、AGENTS.md「取れない軸に0の行を作る」は
+   * 当たらない（当たるのは「いちばん古いものの時刻」の側で、0件のときは
+   * そもそも「いちばん古いもの」が存在しない）。`.optional()` にしてあるのは
+   * この機能より前の runner が欄自体を持たない窓のためである。
+   */
+  pendingEvents: z.number().int().nonnegative().optional(),
+  /**
+   * 未送出のうち、いちばん古いものが積まれた時刻（#358）。
+   *
+   * **「マネージャーが報告を生成した時刻」ではない。** runner が `Outbox` へ
+   * 積んだ時刻である（`Outbox.oldestPendingAt` の doc）。1件も無ければ
+   * runner 側がキーごと省く。
+   */
+  oldestPendingAt: isoDateTime.optional(),
 });
 
 export type RunnerPlacementResources = z.infer<typeof runnerPlacementResourcesSchema>;
@@ -1009,10 +1031,32 @@ export interface RunnerClient {
    * は既定値 `'runner-primary'` を持っていて、`/health` から一度も `runnerId` を
    * 受け取れていなくてもその値が入っている。**そのまま出すと、取れていない値が
    * 取れた値の顔をして出る**（`AGENTS.md`「取れない軸に 0 の行を作る」）。
-   * `#pump` が書く2行は「聞けたときだけ名乗る」形で塞いだ（#274 / #309）が、
-   * `onSwap` / `onLost` / `GET /runners` は塞がっていない（#330）。
+   * **「聞けたか」を判定するときは、この欄そのものではなく {@link runnerIdKnown}
+   * を見ること**（#330）。
    */
   readonly runnerId: string;
+  /**
+   * `runnerId` が `/health` から実際に受け取れたかどうか（#330）。
+   *
+   * **`runnerId` は常に文字列を持つ**（既定値 `'runner-primary'` が入っている
+   * ことがある）ので、この欄の有無だけでは「聞けたか」を判定できない。
+   * `false` のときの `runnerId` は一度も接続できていない段階からの既定値で
+   * あって、`/health` が答えた値ではない——出す側はこの欄を先に見て、
+   * `false` なら `runnerId` そのものを出さないこと。
+   *
+   * **`#pump` が書く2行はこの区別を独自の private フラグ（`#runnerIdKnown`）で
+   * 持っていた**（#274 / #309 の `label()`）。この欄はそれを `HttpRunner` の
+   * 外から読める形へ引き上げたもので、実装（`hello()` が非空文字列を読めたときだけ
+   * 立てる）は変えていない。`onSwap` / `onLost` / `GET /runners`（`entries()`）は
+   * この欄が入るまで、`entry.client !== null` だけを根拠に `runnerId` を無条件で
+   * 出していた——`entry.client !== null` は `hello()` が解決したことしか意味せず、
+   * 応答に `runnerId` が入っていたとは限らない。
+   *
+   * **常に `true` を返してよい実装もある。** `LocalRunner`（同一プロセス構成）は
+   * `runnerId` を接続前から自分で確定させているので、「聞けていない」状態が
+   * そもそも存在しない。
+   */
+  readonly runnerIdKnown: boolean;
   /** この runner の既定の作業ディレクトリ（workspace locator の path になる）。 */
   readonly workspacePath: string;
   /**
@@ -1493,6 +1537,32 @@ const HEARTBEAT_INTERVAL_MS = 10_000;
 const HEARTBEAT_LOST_MS = 30_000;
 
 /**
+ * `runnerId` を、聞けたときだけ含む形で組み立てる（#330）。
+ *
+ * **出口（`entries()` / `onSwap` / `onLost`）ごとに同じ条件分岐を書かないための
+ * 1本。** 「(c) 出口ごとに落とす」を採らなかった理由そのものがこの関数の存在
+ * 理由である——3か所に同じ分岐を散らすと、4か所目ができたときに書き忘れる。
+ * ここを通せば、次に増える出口も自動でこの判定に乗る。
+ *
+ * `entry.client !== null` は `hello()` が解決したことしか意味さない。その応答に
+ * `runnerId` が実際に入っていたかどうかは `RunnerClient.runnerIdKnown` を見ないと
+ * 分からない——見ずに `entry.client.runnerId` を出すと、一度も聞けていない相手に
+ * ついて既定値 `'runner-primary'` が「受け取った値」の顔で出る。
+ *
+ * ⚠️ **この関数が塞ぐのは出口だけである。** `onSwap` がここを通して `runnerId`
+ * を渡さなくなったことで、`apps/daemon/src/index.ts` の `takeOverOnSwap` から
+ * `reattachRunner(runnerId)`（`packages/core/src/manager.ts` の `#reattach`）へ
+ * 既定値が渡る経路は塞がったが、**`#reattach` 自身がいまも `runnerId` の文字列
+ * 一致だけで相手（と台帳の対象ジョブ）を決めている**——別の入口から同じ既定値が
+ * 渡れば、複数 runner が同じ既定値を名乗ったときに宛先を取り違えうる。この
+ * 欠陥自体は #390 へ切った（`#reattach` の在り処は `manager.ts` だが、#322 の
+ * 作業と重ならないようこのファイルにポインタだけ置く）。
+ */
+function heardRunnerIdOf(client: RunnerClient | null): { runnerId?: string } {
+  return client !== null && client.runnerIdKnown ? { runnerId: client.runnerId } : {};
+}
+
+/**
  * 1台に名乗らせるときの期限。
  *
  * **返らない1台が名簿全体を止めないため**にある。黙って死んだ器は「拒否する」の
@@ -1682,9 +1752,10 @@ class Registry implements RunnerRegistry {
       state: entry.state,
       since: entry.since,
       revision: entry.revision,
-      ...(entry.client === null
-        ? {}
-        : { runnerId: entry.client.runnerId, workspacePath: entry.client.workspacePath }),
+      // ⚠️ `workspacePath` にも同じ形の既定値（`HttpRunner` の `''`）があるが、
+      // この PR の対象は #330（`runnerId` の3出口）に限る。範囲外として #389 へ切った。
+      ...(entry.client === null ? {} : { workspacePath: entry.client.workspacePath }),
+      ...heardRunnerIdOf(entry.client),
       ...(entry.error === undefined ? {} : { error: entry.error }),
       // **開けていなくても、最後に名乗ったプロセスは出す。** 黙った器について
       // 「どのプロセスが最後に応えていたか」は、戻ってきたときに同じ器かを
@@ -2186,7 +2257,8 @@ class Registry implements RunnerRegistry {
     this.#onSwap?.({
       label: entry.source.label,
       // **書き換えていない値をそのまま渡す。** 台帳の鎖はこの名前で繋がっている。
-      ...(entry.client === null ? {} : { runnerId: entry.client.runnerId }),
+      // **聞けたときだけ渡す（#330）** — `heardRunnerIdOf` の doc を参照。
+      ...heardRunnerIdOf(entry.client),
       before,
       after: instanceId,
     });
@@ -2213,7 +2285,8 @@ class Registry implements RunnerRegistry {
     entry.since = new Date().toISOString();
     this.#onLost?.({
       label: entry.source.label,
-      ...(entry.client === null ? {} : { runnerId: entry.client.runnerId }),
+      // **聞けたときだけ渡す（#330）** — `heardRunnerIdOf` の doc を参照。
+      ...heardRunnerIdOf(entry.client),
       error,
     });
   }

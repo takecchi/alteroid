@@ -104,32 +104,99 @@ function matches(header: string | undefined, expectedHex: string): boolean {
  * 溜める量に上限を置かないのは、上限＝取りこぼしだからである。器の資源が尽きる
  * ときは実行環境の限界として現れるべきで、記録を先に捨てる設計にしない。
  */
+/**
+ * 「まだデーモンへ送り出せていない」量（#358）。**溜まり場は2つ在る**——
+ * {@link Outbox} 自身の待ち行列と、購読側（`GET /events` のハンドラ）が
+ * 抱えている分である。{@link Outbox.pending} はその合計を答える。
+ */
+export interface OutboxPending {
+  /** 件数。 */
+  count: number;
+  /** いちばん古いものが積まれた時刻（ISO 8601）。1件も無ければ `undefined`。 */
+  oldestAt?: string;
+}
+
 export class Outbox {
-  readonly #queue: RunnerEvent[] = [];
+  readonly #queue: { event: RunnerEvent; queuedAt: string }[] = [];
   #listener: ((event: RunnerEvent) => void) | null = null;
+  /**
+   * 購読側が抱えている分を数える口（#358）。**購読が始まったときだけ在る。**
+   *
+   * これが無いと {@link pending} は「要るときにだけ 0 を返す」計器になる
+   * （{@link pending} の doc）。
+   */
+  #probe: (() => OutboxPending) | null = null;
+  readonly #now: () => string;
+
+  constructor(now: () => string = () => new Date().toISOString()) {
+    this.#now = now;
+  }
 
   push(event: RunnerEvent): void {
     if (this.#listener !== null) {
       this.#listener(event);
       return;
     }
-    this.#queue.push(event);
+    this.#queue.push({ event, queuedAt: this.#now() });
   }
 
-  /** 購読を開始する。溜まっていた分を先に流してから、以後は直接渡す。 */
-  attach(listener: (event: RunnerEvent) => void): () => void {
+  /**
+   * 購読を開始する。溜まっていた分を先に流してから、以後は直接渡す。
+   *
+   * `pending` は**購読側が抱えている分を数える口**である（#358）。渡さなくても
+   * 動くが、**渡さなければ購読中の滞留が {@link pending} から消える。**
+   */
+  attach(listener: (event: RunnerEvent) => void, pending?: () => OutboxPending): () => void {
     while (this.#queue.length > 0) {
-      const event = this.#queue.shift();
-      if (event !== undefined) listener(event);
+      const item = this.#queue.shift();
+      if (item !== undefined) listener(item.event);
     }
     this.#listener = listener;
+    this.#probe = pending ?? null;
     return () => {
-      if (this.#listener === listener) this.#listener = null;
+      if (this.#listener !== listener) return;
+      this.#listener = null;
+      this.#probe = null;
     };
   }
 
+  /**
+   * まだデーモンへ送り出せていない件数。**購読側が抱えている分も含む**（#358）。
+   *
+   * ## なぜ合算なのか（ここを分けると計器が嘘をつく）
+   *
+   * {@link push} は listener が付いていれば `#queue` に積まず、**そのまま購読側へ
+   * 渡す。** だから `#queue` の長さだけを数えると:
+   *
+   * | 状況 | listener | 溜まる場所 | `#queue.length` |
+   * | --- | --- | --- | --- |
+   * | デーモンが繋いでいない | 付いていない | `#queue` | 正しく N |
+   * | **デーモンが繋がったまま読まなくなった** | **付いたまま** | **購読側** | **0** |
+   *
+   * **下の行が #323 である。** デーモンの `#pump` が固着しても runner から見た
+   * 接続は開いたままなので `detach()` は呼ばれず、listener は付いたままになる。
+   * **＝ あの4時間、この値はずっと 0 だった。** 「報告が出たのに配られていない」を
+   * 見えるようにするのがこの値の役目なのに、**いちばん要る場面でだけ 0 を返す**
+   * 計器だった（AGENTS.md「静かに失敗する道具」）。
+   */
   get pending(): number {
-    return this.#queue.length;
+    return this.#queue.length + (this.#probe?.().count ?? 0);
+  }
+
+  /**
+   * まだ送り出せていないもののうち、いちばん古いものが積まれた時刻（#358）。
+   *
+   * **「マネージャーが報告を生成した時刻」ではない。** runner がこの箱へ積んだ
+   * 時刻である —— 取れないものを取れた顔で出さない（AGENTS.md の地雷表）。
+   */
+  get oldestPendingAt(): string | undefined {
+    const mine = this.#queue[0]?.queuedAt;
+    const theirs = this.#probe?.().oldestAt;
+    // 片方しか埋まらないのが普通だが（listener が付いていれば `#queue` は空）、
+    // **どちらが古いかで決める。** 「片方は空のはず」を前提にしない。
+    if (mine === undefined) return theirs;
+    if (theirs === undefined) return mine;
+    return theirs < mine ? theirs : mine;
   }
 }
 
@@ -204,6 +271,14 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         workspacePath: host.workspacePath,
         managers: host.list().length,
         pendingEvents: outbox.pending,
+        /**
+         * まだデーモンへ送り出せていない出来事のうち、いちばん古いものが積まれた
+         * 時刻（#358）。1件も無ければ出さない——**0 件のときに値を作らない**
+         * （AGENTS.md「取れない軸に 0 の行を作る」）。
+         */
+        ...(outbox.oldestPendingAt === undefined
+          ? {}
+          : { oldestPendingAt: outbox.oldestPendingAt }),
         /**
          * 実行環境の資源（roadmap M5 PR3）。**「収容能力」ではない。**
          *
@@ -290,14 +365,34 @@ export function createRunnerApp(deps: RunnerAppDeps) {
      */
     .get('/events', (c) =>
       streamSSE(c, async (stream) => {
-        const queue: RunnerEvent[] = [];
+        const queue: { event: RunnerEvent; queuedAt: string }[] = [];
         let wake: (() => void) | null = null;
         let closed = false;
 
-        const detach = outbox.attach((event) => {
-          queue.push(event);
-          wake?.();
-        });
+        /**
+         * **`writeSSE` の途中で止まっている1件**（#358）。
+         *
+         * 固着はまさにここで起きる —— 相手が読まなくなった接続では
+         * `await stream.writeSSE(...)` が返らない。**`queue` から出た後なので、
+         * ここで持たないとどこにも数えられない。**
+         */
+        let writing: { event: RunnerEvent; queuedAt: string } | null = null;
+        const detach = outbox.attach(
+          (event) => {
+            queue.push({ event, queuedAt: new Date().toISOString() });
+            wake?.();
+          },
+          // **この口を渡さないと、購読中の滞留が `outbox.pending` から消える**
+          // （`Outbox.pending` の doc）。
+          () => {
+            // 書きかけの1件がいちばん古い（`queue` より先に出たものだから）。
+            const oldest = writing ?? queue[0];
+            return {
+              count: queue.length + (writing === null ? 0 : 1),
+              ...(oldest === undefined ? {} : { oldestAt: oldest.queuedAt }),
+            };
+          },
+        );
         stream.onAbort(() => {
           closed = true;
           wake?.();
@@ -316,15 +411,23 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         try {
           for (;;) {
             if (closed || stream.aborted || stream.closed) break;
-            const event = queue.shift();
-            if (event === undefined) {
+            const item = queue.shift();
+            if (item === undefined) {
               await new Promise<void>((resolve) => {
                 wake = resolve;
               });
               wake = null;
               continue;
             }
-            await stream.writeSSE({ event: event.type, data: JSON.stringify(event) });
+            // **書き終わるまで手放さない**（#358）。`queue` から出た瞬間に忘れると、
+            // まさに固着している1件が数え上げから消える。
+            writing = item;
+            await stream.writeSSE({ event: item.event.type, data: JSON.stringify(item.event) });
+            // **`finally` で消さない。** 投げたときは `writing` に残したまま抜け、
+            // 下の `finally` が箱へ戻す —— そうしないと、書けなかった1件だけが
+            // 静かに失われる（この `finally` の意図は「流し切れなかった分は箱へ
+            // 戻す」であって、書けなかった分を捨てることではない）。
+            writing = null;
           }
         } finally {
           // **タイマーを先に止める。** 止めないと、ストリームが終わった後も
@@ -332,8 +435,11 @@ export function createRunnerApp(deps: RunnerAppDeps) {
           // 残っていても壊れて見えない）。
           stopHeartbeat();
           detach();
-          // 流し切れなかった分は箱へ戻す（次に繋がったときに届く）
-          for (const event of queue) outbox.push(event);
+          // 流し切れなかった分は箱へ戻す（次に繋がったときに届く）。
+          // **書きかけの1件も戻す**（#358）—— 書けたかどうかは分からないので、
+          // 落とすより二重に届くほうを選ぶ（#206 が指す冪等化は別の穴である）。
+          if (writing !== null) outbox.push(writing.event);
+          for (const item of queue) outbox.push(item.event);
         }
       }),
     )

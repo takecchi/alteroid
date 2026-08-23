@@ -808,6 +808,105 @@ describe('資源による配置の材料', () => {
     expect(await client.resources?.()).toEqual({ managers: 2 });
   });
 
+  /**
+   * `pendingEvents` / `oldestPendingAt`（#358）が `/health` から `resources()`
+   * まで渡ること。**この欄が `HealthBody` に無かったせいで、runner が正しい値を
+   * 返しても読まれずに落ちていた**（Issue #358 の訂正の下流側）。
+   *
+   * 本物の `Outbox` と `createRunnerApp` を通す——`managers` と同じく、
+   * ここも実際の境界を越えさせないと「渡ることの証明」にならない
+   * （直上の「runner の /health が資源を名乗り、デーモンがそれを採る」と同じ理由）。
+   */
+  it('runner の /health が pendingEvents/oldestPendingAt を名乗り、デーモンがそれを採る', async () => {
+    const outbox = new Outbox();
+    // listener を付けない（＝デーモンが繋いでいない状態）ので `Outbox.#queue`
+    // にそのまま溜まる——`resources()` を呼ぶだけなら `/events` を開く必要は無い。
+    outbox.push({ type: 'session', managerId: 'mgr-1', sessionId: 'sess-1' });
+    outbox.push({ type: 'session', managerId: 'mgr-2', sessionId: 'sess-2' });
+    const host = createRunnerHost({
+      runnerId: 'runner-primary',
+      workspacePath: '/workspace',
+      emit: (event) => outbox.push(event),
+      queryFn: fakeSdk().fn,
+    });
+    const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn: fetchInto(app),
+    });
+
+    const resources = await client.resources?.();
+
+    expect(resources?.pendingEvents).toBe(2);
+    expect(typeof resources?.oldestPendingAt).toBe('string');
+
+    await host.shutdown();
+  });
+
+  /**
+   * `pendingEvents` は0件でも「測れる値」なのでそのまま0が渡る（`managers` と
+   * 同じ扱い）。**`oldestPendingAt` だけが違う**——0件のときは「いちばん古い
+   * もの」自体が存在しないので、欄ごと出ない（`runnerPlacementResourcesSchema`
+   * の doc）。ここを混同すると「0の行を作らない」を pendingEvents にも
+   * 誤って当ててしまう（実際に一度、この取り違えでこのテスト自身が壊れた）。
+   */
+  it('未送出が0件のとき、pendingEvents は0のまま渡り oldestPendingAt だけ出ない', async () => {
+    const outbox = new Outbox();
+    const host = createRunnerHost({
+      runnerId: 'runner-primary',
+      workspacePath: '/workspace',
+      emit: (event) => outbox.push(event),
+      queryFn: fakeSdk().fn,
+    });
+    const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn: fetchInto(app),
+    });
+
+    const resources = await client.resources?.();
+
+    expect(resources?.pendingEvents).toBe(0);
+    expect(resources).not.toHaveProperty('oldestPendingAt');
+
+    await host.shutdown();
+  });
+
+  it('pendingEvents/oldestPendingAt を返さない古い runner からも他の材料は渡る（締め出さない）', async () => {
+    const client = await createHttpRunner({
+      baseUrl: 'http://legacy.test',
+      token: TOKEN,
+      fetchFn: fetchHealth({
+        ok: true,
+        runnerId: 'runner-legacy',
+        workspacePath: '/workspace',
+        managers: 3,
+        // pendingEvents / oldestPendingAt を欄ごと持たない（この機能より前の runner）。
+      }),
+    });
+
+    expect(await client.resources?.()).toEqual({ managers: 3 });
+  });
+
+  it('pendingEvents の形が壊れていても、他の材料は落とさない（managers と同じ扱い）', async () => {
+    const client = await createHttpRunner({
+      baseUrl: 'http://broken.test',
+      token: TOKEN,
+      fetchFn: fetchHealth({
+        ok: true,
+        runnerId: 'runner-broken',
+        workspacePath: '/workspace',
+        managers: 2,
+        pendingEvents: 'たくさん',
+        oldestPendingAt: 'ちょっと前',
+      }),
+    });
+
+    expect(await client.resources?.()).toEqual({ managers: 2 });
+  });
+
   it('resources() は runnerId を採らない（器が入れ替わっても宛先を書き換えない）', async () => {
     let runnerId = 'runner-primary';
     const client = await createHttpRunner({
@@ -1793,6 +1892,9 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
       // 書き換えない）。この既定値をそのままログへ出すと、取れていない値が
       // 取れた値の顔をして出る——それを下で確かめる。
       expect(client.runnerId).toBe('runner-primary');
+      // **#330 の歯。** `onSwap` / `onLost` / `GET /runners`（`runner-protocol.ts`
+      // の `heardRunnerIdOf`）はこの欄を見て「聞けたか」を判定する。
+      expect(client.runnerIdKnown).toBe(false);
 
       await client.connect(() => undefined);
       await enough;
@@ -1810,6 +1912,71 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
         expect(line).toContain('runner (http://runner.test)');
         expect(line).not.toMatch(/runner \(http:\/\/runner\.test \/ /);
       }
+    });
+  });
+
+  /**
+   * **`RunnerClient.runnerIdKnown` そのものを直接測る（#330）。**
+   *
+   * 上の「ログの宛先識別子」describe は `#describeSelf` を通した間接的な
+   * 観測（ログ文字列）だが、`runnerIdKnown` は `onSwap` / `onLost` /
+   * `GET /runners`（`packages/core/src/runner-protocol.ts` の
+   * `heardRunnerIdOf`）が直接読む口として `HttpRunner` の外へ引き上げたもの
+   * なので、ここではその口自体を直接読んで確かめる。
+   */
+  describe('runnerIdKnown（#330）', () => {
+    it('/health が runnerId を返せば true になる', async () => {
+      const fetchFn = (async (input: string | URL | Request) => {
+        if (pathOf(input) === '/health') {
+          return Response.json({ runnerId: 'runner-x', workspacePath: '/workspace' });
+        }
+        throw new Error(`想定していない path: ${pathOf(input)}`);
+      }) as typeof fetch;
+
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+      });
+
+      expect(client.runnerId).toBe('runner-x');
+      expect(client.runnerIdKnown).toBe(true);
+    });
+
+    it('/health が runnerId を返さなければ false のまま（既定値 runner-primary は聞けた値ではない）', async () => {
+      const fetchFn = (async (input: string | URL | Request) => {
+        if (pathOf(input) === '/health') {
+          return Response.json({ workspacePath: '/workspace' });
+        }
+        throw new Error(`想定していない path: ${pathOf(input)}`);
+      }) as typeof fetch;
+
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+      });
+
+      expect(client.runnerId).toBe('runner-primary');
+      expect(client.runnerIdKnown).toBe(false);
+    });
+
+    it('/health が空文字の runnerId を返しても false のまま', async () => {
+      const fetchFn = (async (input: string | URL | Request) => {
+        if (pathOf(input) === '/health') {
+          return Response.json({ runnerId: '', workspacePath: '/workspace' });
+        }
+        throw new Error(`想定していない path: ${pathOf(input)}`);
+      }) as typeof fetch;
+
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+      });
+
+      expect(client.runnerId).toBe('runner-primary');
+      expect(client.runnerIdKnown).toBe(false);
     });
   });
 });

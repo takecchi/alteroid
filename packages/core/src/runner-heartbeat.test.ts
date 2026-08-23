@@ -25,6 +25,12 @@ import type {
 /** 偽 runner。**`/health` の応え方だけを外から決められる**（他は名簿が触らない）。 */
 class FakeRunner implements RunnerClient {
   readonly runnerId: string;
+  /**
+   * **既定は `true`（既存テストの前提を変えない）。** `false` に差し替えると
+   * 「`/health` から一度も `runnerId` を受け取れていない」状態を再現できる
+   * （#330 の歯のために足した）。
+   */
+  runnerIdKnown = true;
   readonly workspacePath = '/work/project';
   /** `/health` を叩かれた回数。名乗りが本当に飛んでいるかを見る。 */
   pings = 0;
@@ -111,6 +117,30 @@ describe('runner の生存判定', () => {
     expect(lost).toHaveLength(1);
     // 黙り続けている理由は窓に出したまま（`GET /runners` から見える）。
     expect(registry.entries()[0]?.error).toContain('fetch failed');
+
+    await registry.stop();
+  });
+
+  /**
+   * **#330 の罠そのもの。** `runnerId` は常に文字列を持つ（`HttpRunner` の既定値
+   * `'runner-primary'`）ので、`entry.client !== null` だけを根拠に出すと、
+   * `/health` から一度も `runnerId` を受け取れていない相手についても「受け取った
+   * 値」の顔で出てしまう。`runnerIdKnown: false` は、まさにその「聞けていない」
+   * 状態を表す。
+   */
+  it('runnerId を聞けていない runner が黙っても、runnerId を出さない（#330）', async () => {
+    const lost: { label: string; runnerId?: string }[] = [];
+    const runner = new FakeRunner('runner-primary');
+    runner.runnerIdKnown = false;
+    const registry = createRunnerRegistry([], { onLost: (event) => lost.push(event) });
+    await registry.register({ label: 'http://runner:4518', open: async () => runner });
+
+    runner.reply = 'error';
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(lost).toMatchObject([{ label: 'http://runner:4518' }]);
+    // **既定値 `'runner-primary'` が「聞けた値」の顔で出ていないことを名指しで見る。**
+    expect(lost[0]).not.toHaveProperty('runnerId');
 
     await registry.stop();
   });

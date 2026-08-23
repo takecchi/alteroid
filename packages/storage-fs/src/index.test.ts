@@ -1629,6 +1629,49 @@ describe('FsInboxStore', () => {
     expect((pending[0]?.event as { text: string }).text).toBe('直した本文');
   });
 
+  describe('pending（#358。読むだけで配達回数を進めない）', () => {
+    it('件数といちばん古い時刻を返す（0件のときは oldestAt を作らない）', async () => {
+      expect(await stores.inbox.pending()).toEqual({ count: 0 });
+
+      await stores.inbox.put(
+        human('evt-2', '2026-08-11T00:00:00.000Z', '2件目'),
+        '2026-08-11T00:00:00.000Z',
+      );
+      await stores.inbox.put(
+        human('evt-1', '2026-08-10T00:00:00.000Z', '1件目'),
+        '2026-08-10T00:00:00.000Z',
+      );
+
+      expect(await stores.inbox.pending()).toEqual({
+        count: 2,
+        oldestAt: '2026-08-10T00:00:00.000Z',
+      });
+    });
+
+    /**
+     * **この歯が単独で守るもの**: `pending()` を何度呼んでも `claimPending()`
+     * が返す `deliveries` が変わらないこと。
+     *
+     * `claimPending` は「読むことと回数を進めることを1操作に閉じる」設計
+     * （`store.ts` の doc）で、`deliveries` は配り直しを見分ける唯一の材料。
+     * `pending()` がここへ紛れ込んで回数を進めると、一覧を覗いただけの
+     * クローンが「前に配ったが終わらなかった」という嘘の記録を作ってしまう。
+     */
+    it('pending() を何度呼んでも claimPending() の deliveries は動かない', async () => {
+      await stores.inbox.put(
+        human('evt-1', '2026-08-10T00:00:00.000Z', '本文'),
+        '2026-08-10T00:00:00.000Z',
+      );
+
+      await stores.inbox.pending();
+      await stores.inbox.pending();
+      await stores.inbox.pending();
+
+      const claimed = await stores.inbox.claimPending();
+      expect(claimed[0]?.deliveries).toBe(1);
+    });
+  });
+
   it('本文が欠けずに往復する（human_message の text、external の payload）', async () => {
     await stores.inbox.put(
       human('evt-1', '2026-08-10T00:00:00.000Z', '人間の発言'),
