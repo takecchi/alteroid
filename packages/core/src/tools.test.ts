@@ -408,6 +408,84 @@ describe('クローンの道具', () => {
       expect(reply).toContain('なし');
     });
 
+    /**
+     * `memory_append` の説明文は「消えた見出しは常に 0 件のはずである——
+     * 0 件でなければ異常を疑うこと」と**言い切っている**（`tools.ts`）。
+     * **説明文に呼び手向けの判定基準を置く以上、それが崩れたときに落ちる
+     * ものが要る。** ここがそれである。
+     *
+     * **「常に」が成り立つ理由は、追記が `before` を行の境界を保ったまま
+     * 前置きすることだけである。** だから最も薄い場所——**末尾の行が
+     * 見出しで、しかも末尾に改行が無い文書**——を突く。連結が1文字でも
+     * 詰まると、その見出しの行が追記の1行目と融合して別の文字列になり、
+     * 「消えた見出し」に名指しされる。
+     *
+     * **⚠️ この歯が当たっているのは3つある `PersonaStore.append` のうち
+     * 1つ（`testing.ts` のインメモリ実装）だけである。** fs / pg には
+     * 当たらない——そちらは `packages/storage-fs` /
+     * `packages/storage-pg` の `index.test.ts` に同じ性質の歯を置いた。
+     * **3つのうち1つを測って3つとも測ったことにしないこと。**
+     */
+    it('末尾の行が見出しの文書へ追記しても、その見出しは消えた見出しに出ない（説明文の「常に0件」の根拠）', async () => {
+      const h = harness();
+      // 末尾に改行が無く、最後の行が見出しである文書（いちばん薄いところ）。
+      await h.call('memory_write', {
+        slug: 'doc',
+        content: '# 総論\n\n本文\n\n## 最後の節',
+        summary: '最初',
+      });
+
+      const reply = await h.call('memory_append', {
+        slug: 'doc',
+        content: '追記した1行',
+        summary: '追記',
+      });
+
+      // (1) 応答が「なし」と言うこと。
+      expect(reply).toContain('消えた見出し: なし。');
+      // (2) 実際に見出しが1行として残っていること。(1) と別に測る——応答の
+      //     文言だけを見ると、見出しの抽出そのものが壊れた場合も「なし」に
+      //     なる（両方が同じ経路で嘘になるのを防ぐ）。
+      const stored = (await h.stores.persona.read('doc'))?.content ?? '';
+      expect(stored.split('\n')).toContain('## 最後の節');
+    });
+
+    /**
+     * **これは欠陥を固定している歯ではない。承認済みの設計判断を固定して
+     * いる。** 反転しに来ないこと（#354。判断そのものの経緯は
+     * `memory.ts` の `missingMemoryHeadings` の doc に在る）。
+     *
+     * 見出しは**集合**として比べる。多重度を保つ形（同じ見出しが2回→1回なら
+     * 1件消えたと数える）へ変えると、同じ小見出しを何度も使う記憶では節の
+     * 並べ替えや統合のたびに「消えた」が鳴り、鳴りっぱなしの警報は読まれ
+     * なくなる——**誤検出のほうが増える**という判断で集合を採ってある。
+     *
+     * **その代わり、この向きの見落としが生まれる。** ここで測っているのは
+     * 「見落とすこと」そのものではなく、**見落としても文字数の減少だけは
+     * 必ず残る**という、この場合に唯一残る手がかりのほうである。
+     */
+    it('同じ見出しが他所に残っていれば節を丸ごと消しても名指しされない（集合で比べる設計。文字数の減少だけが手がかりになる）', async () => {
+      const h = harness();
+      await h.call('memory_write', {
+        slug: 'doc',
+        content: '# 私について\n### だから\n本文A\n## 経歴\n### だから\n本文B\n',
+        summary: '最初',
+      });
+
+      // 2つ目の `### だから` の節（見出し＋本文B）を丸ごと消す。
+      const reply = await h.call('memory_write', {
+        slug: 'doc',
+        content: '# 私について\n### だから\n本文A\n## 経歴\n',
+        summary: '節を1つ落とした',
+      });
+
+      // 消えた見出しは「なし」——`### だから` が他所に1つ残っているため。
+      expect(reply).toContain('消えた見出し: なし。');
+      // だから減った文字数だけが手がかりとして残る。ここが消えると、この
+      // 消し方はどの面からも観測できなくなる。
+      expect(reply).toContain('（-12）');
+    });
+
     it('消えた見出しが多いときは文字数の予算で締め、切ったと分かる形で言う', async () => {
       const h = harness();
       // 600 文字の予算に対して十分多い見出しを用意する（1件あたり十数文字）。
@@ -951,6 +1029,29 @@ describe('クローンの道具', () => {
       const content = (await h.stores.persona.read('values'))?.content ?? '';
       const bodyAfter = content.split('\n').slice(4).join('\n'); // --- desc type --- の4行の次から
       expect(bodyAfter).toBe(longBody);
+    });
+
+    /**
+     * 本文が空（frontmatter だけ）の文書（#354 のコメント）。
+     *
+     * **道具を通した側にも歯を1本置く。** 単体（`memory.test.ts` の
+     * `applyMemoryFrontmatterPatch`）は純粋関数の戻り値しか見ないので、
+     * **ストアに実際に残った文書**が測れていない。ここが見るのは
+     * `persona.read()` が返す `content` そのものである。
+     */
+    it('本文が空（frontmatter だけ）の文書でも、閉じの --- の後ろの改行が落ちない', async () => {
+      const h = harness();
+      await h.stores.persona.write('values', '---\ndescription: 元の要旨\n---\n');
+
+      await h.call('memory_frontmatter_set', {
+        slug: 'values',
+        type: 'fact',
+        summary: '区分を付けた',
+      });
+
+      const content = (await h.stores.persona.read('values'))?.content ?? '';
+      expect(content).toBe('---\ndescription: 元の要旨\ntype: fact\n---\n');
+      expect(content.endsWith('---\n')).toBe(true);
     });
 
     it('渡さなかったキーは既存の値のまま残る', async () => {

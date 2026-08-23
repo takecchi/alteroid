@@ -113,6 +113,27 @@ describe('PgPersonaStore', () => {
     expect((await stores.persona.read('log'))?.content).toBe('# ログ\n\n- 追記された学び\n');
   });
 
+  /**
+   * fs 版と同じ性質を pg 側でも測る（#354）。`memory_append` の説明文
+   * （`packages/core/src/tools.ts`）が言い切っている「消えた見出しは常に
+   * 0 件のはずである」は、**追記が `before` を行の境界を保ったまま前置き
+   * すること**にしか依っていない。
+   *
+   * **pg もこれを二重に守っている**（`persona.ts`）: `write` / `append` の
+   * どちらも本文を `ensureTrailingNewline` に通してから保存することと、
+   * `append` の SQL が `right(content, 1) = E'\n'` で場合分けすること。
+   * **片方だけ外してもこの歯は落ちない**——落ちないことは「守られていない」
+   * ではなく、もう片方が効いているという意味である（#354 の変異試験で実測
+   * した。単独で殺すには、既存の改行を落としたうえで連結する必要がある）。
+   */
+  it('末尾の行が見出しの文書へ追記しても、その見出しの行が壊れない', async () => {
+    await stores.persona.write('log', '# ログ\n\n## 最後の節');
+    const doc = await stores.persona.append('log', '追記した1行');
+
+    expect(doc.content.split('\n')).toContain('## 最後の節');
+    expect(doc.content).toContain('追記した1行');
+  });
+
   it('同時に追記しても取りこぼさない（蒸留は並行して同じ文書に書く）', async () => {
     await stores.persona.write('log', '# ログ\n');
 

@@ -371,6 +371,52 @@ describe('applyMemoryFrontmatterPatch — frontmatter のキーだけを差し�
     expect(parseMemoryFrontmatter(malformed)).toEqual({ kind: 'malformed' });
     expect(() => applyMemoryFrontmatterPatch(malformed, { description: 'x' })).toThrow();
   });
+
+  /**
+   * 本文が空（frontmatter だけ）の文書（#354 のコメント）。
+   *
+   * **ここを測るものが1本も無かった。** `frontmatterBody` は
+   * `---\n…\n---\n` と `---\n…\n---` の両方に対して空文字を返すので、
+   * **本文が空のときだけ、閉じの `---` の後ろの改行の有無が `body` から
+   * 復元できない。** 実装は `content` の末尾でそれを決めている。
+   *
+   * **2本ある理由は、片方だけでは倒れる向きを固定できないからである** ——
+   * 「改行を保つ」だけを測ると `${header}\n` を無条件で返す実装が通り、
+   * 「改行を足さない」だけを測ると `header` を無条件で返す実装（#338 以降の
+   * 挙動そのもの）が通る。**両方が同時に在ってはじめて、片側の1バイトを
+   * もう片側の1バイトに付け替える変更が落ちる。**
+   */
+  describe('本文が空（frontmatter だけの文書）— 閉じの --- の後ろの改行は元のまま', () => {
+    it('元が末尾に改行を持つなら、閉じの --- の後ろの改行が残る（1バイトも減らない）', () => {
+      const original = '---\ndescription: 旧\n---\n';
+      const next = applyMemoryFrontmatterPatch(original, { description: '新' });
+      expect(next).toBe('---\ndescription: 新\n---\n');
+      // 落ちていたのはこの1バイトである（#354 のコメント）。
+      expect(next.endsWith('---\n')).toBe(true);
+      expect(next.length).toBe(original.length);
+    });
+
+    it('元が末尾に改行を持たないなら、改行を足さない（1バイトも増えない）', () => {
+      const original = '---\ndescription: 旧\n---';
+      const next = applyMemoryFrontmatterPatch(original, { description: '新' });
+      expect(next).toBe('---\ndescription: 新\n---');
+      expect(next.endsWith('\n')).toBe(false);
+      expect(next.length).toBe(original.length);
+    });
+
+    it('本文が空でも frontmatter は読み直せる（改行の扱いが形を壊していない）', () => {
+      for (const original of ['---\ndescription: 旧\ntype: fact\n---\n', '---\ntype: fact\n---']) {
+        const next = applyMemoryFrontmatterPatch(original, { parent: 'root' });
+        expect(parseMemoryFrontmatter(next)).toMatchObject({ kind: 'parsed', parent: 'root' });
+      }
+    });
+
+    it('本文が空でない側は影響を受けない（末尾の改行がそのまま残る）', () => {
+      const original = `---\ndescription: 旧\n---\n${longBody}\n`;
+      const next = applyMemoryFrontmatterPatch(original, { description: '新' });
+      expect(next).toBe(`---\ndescription: 新\n---\n${longBody}\n`);
+    });
+  });
 });
 
 describe('区分の解決（resolveMemoryDocKind）— 既定は premise（4-11 の安全弁）', () => {
