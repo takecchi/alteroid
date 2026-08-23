@@ -23,6 +23,7 @@ import type {
 /** 偽 runner。**`resources()` と `ping()` の応え方だけを外から決められる。** */
 class FakeRunner implements RunnerClient {
   readonly runnerId: string;
+  readonly runnerIdKnown = true;
   readonly workspacePath = '/work/project';
   report: RunnerPlacementResources | undefined;
   /** `/health` の応え方。生存判定で `lost` を作るために使う。 */

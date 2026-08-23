@@ -1577,6 +1577,7 @@ function swappableRunner(runnerId = 'runner-primary') {
   };
   const runner: RunnerClient = {
     runnerId,
+    runnerIdKnown: true,
     workspacePath: '/work/project',
     async connect(onEvent) {
       // **ここで名乗らせない。** 本物（`apps/daemon/src/runner-client.ts` の
@@ -4455,6 +4456,7 @@ describe('#records の寿命（終端で外れる）', () => {
  */
 class FakePoolRunner implements RunnerClient {
   readonly runnerId: string;
+  readonly runnerIdKnown = true;
   readonly workspacePath = '/work/project';
   report: RunnerPlacementResources | undefined;
   started: string[] = [];
