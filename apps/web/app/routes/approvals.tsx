@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 
+import { Markdown } from '~/components/markdown';
 import { Page } from '~/components/page';
 import { Badge, Button, Card, Empty, ErrorNote, Spinner, Textarea } from '~/components/ui';
 import { useAnswerApproval, useAnswerApprovals } from '~/hooks/mutations';
@@ -197,16 +198,53 @@ function ApprovalCard({
         )}
       </div>
 
-      <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">{approval.question}</p>
+      {/*
+        **クローン（AI）が書いた文字列だけを Markdown で描く。** `question` は
+        クローンが書いた設問なのでこの線の内側である（線そのものの根拠は下の
+        `answer` の側のコメントに在る）。
+
+        **`whitespace-pre-wrap` は外してよい。** `Markdown` は `remark-breaks` を
+        積んでいて単独の改行を `<br>` にするので、行区切りはこれまでどおり保たれる
+        （`apps/web/app/components/markdown.tsx` の doc に理由が逐語で在る）。
+      */}
+      <Markdown>{approval.question}</Markdown>
 
       {approval.context !== undefined && approval.context !== null && approval.context !== '' && (
-        <pre className="mt-2 max-h-48 overflow-y-auto rounded border border-border bg-bg p-2 text-xs text-muted">
-          {approval.context}
-        </pre>
+        /*
+          `context` もクローンが書いた文字列なので Markdown で描く。
+
+          **スクロールの箱（`max-h-48 overflow-y-auto`）は残す。** 外すと長い背景が
+          回答欄を画面外へ押し出す。`apps/web/app/components/page.tsx:55` と
+          `apps/web/app/routes/manager-detail.tsx` の `RequestCard` が同じ流儀 —
+          **文字は1つも捨てず、スクロールへ閉じ込める。**
+
+          `min-w-0` は中の表・コードブロックが `overflow-x-auto` で収まるため
+          （`markdown.tsx` の `table` / `pre` が横スクロールを持つ）。`text-xs` は
+          落とす — `Markdown` のルートが `text-sm` を持つので、外から掛けても効かない。
+        */
+        <div className="mt-2 max-h-48 min-w-0 overflow-y-auto rounded border border-border bg-bg p-2 text-muted">
+          <Markdown>{approval.context}</Markdown>
+        </div>
       )}
 
       {answered ? (
-        <p className="mt-3 rounded border border-border bg-bg p-2 text-sm break-words">
+        /*
+          **`answer` は Markdown にしない。** これは人間が打った文だからである。
+          repo の既存方針が `apps/web/app/routes/chat.tsx:710` に逐語で在る —
+          「**クローンの行だけを Markdown にする。** 人間が打った本文
+          （`role === 'human'`）は素のテキストのままにする — 自分が書いた文字が
+          勝手に化けないため」。`question` / `context` はクローンが書いた文字列
+          なので線の内側だが、`answer` は外側である。**「承認待ちも全部 Markdown に
+          しよう」と思ったら、まずその行を読むこと**（`approvals.test.tsx` の
+          「answer は Markdown の描画経路を通らない」がこの判断を押さえている）。
+
+          **`whitespace-pre-wrap` は Markdown 化とは別の、不具合の修正である。**
+          `apps/web/app/app.css` の `white-space` 指定は `pre` に対する1件だけで
+          `p` を狙う規則が無いため、ここは CSS 既定の `white-space: normal` で
+          描かれていた — 人間が改行を入れて答えても1行に潰れていた（`question` /
+          `context` には効いていたのに `answer` だけ無いという見落としである）。
+        */
+        <p className="mt-3 rounded border border-border bg-bg p-2 text-sm break-words whitespace-pre-wrap">
           <span className="mr-2 text-[11px] text-muted">回答</span>
           {approval.answer}
         </p>
