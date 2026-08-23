@@ -124,6 +124,7 @@ describe('alteroid conversations list', () => {
   });
 
   it('--limit / --scan をクエリへそのまま渡す', async () => {
+    captureStdout();
     replies.push({ status: 200, body: { conversations: [], scanned: 0 } });
 
     await conversationsListCommand({ limit: '5', scan: '9000' });
@@ -183,6 +184,7 @@ describe('alteroid conversations show', () => {
   });
 
   it('--scan をクエリへそのまま渡す', async () => {
+    captureStdout();
     replies.push({
       status: 200,
       body: { conversationId: 'conv-1', messages: [], scanned: 0, reachedStart: true },

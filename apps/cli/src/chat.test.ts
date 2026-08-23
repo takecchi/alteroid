@@ -875,6 +875,7 @@ describe('chat の /answers（まとめて答える）', () => {
 
   /** 番号を書かなければ、その件は送られない（1件飛ばせる）。 */
   it('一覧の一部だけを番号で指せる（残りを飛ばせる）', async () => {
+    captureStdout();
     const { calls, client } = stubClient();
     const listed = listedApprovals(['approval-1', 'approval-2', 'approval-3']);
 
