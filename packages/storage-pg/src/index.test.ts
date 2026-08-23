@@ -511,6 +511,20 @@ describe('PgPersonaStore', () => {
      * `after` は `markCreatedAt` の直後、`protectionStatus` を一度も呼ばずに
      * 直接列を読む——`read()` は `human_touched_at` / `content_sha256` に
      * 触れないので、間に挟んでも安全（`persona.ts` の `read()` 参照）。
+     *
+     * **⚠️ この順序は読みやすさの問題ではない。歯の成立条件そのものである。**
+     * 実測（2026-08-23）: 下の `markCreatedAt` と `afterRows` の `select` の
+     * **間**へ `await stores.persona.protectionStatus('runbook');` を1行だけ
+     * 挟み、`.set({ createdAt: when })` →
+     * `.set({ createdAt: when, contentSha256: null })` の変異を当てたところ、
+     * **この歯を含む pg の 131 本すべてが緑のまま通った**（全体走行でも
+     * `Test Files 121 passed (121)` / `Tests 2205 passed (2205)`）。
+     * `#healRow` が `select` より先に列を埋め直してしまうためである。
+     *
+     * **だから `protectionStatus()` をこの `it()` の中へ持ち込まないこと。**
+     * 「上の2本と揃えて `afterProtection` も見よう」も「呼びをまとめて
+     * 読みやすくしよう」も、この歯を**黙って**殺す——殺した側へ倒れると
+     * 変異が生存する、つまりテストは緑のままなので、出力には何も現れない。
      */
     it('markCreatedAt は content_sha256 の列を直接読んでも書き換えない（healRow を経由しない計器）', async () => {
       await stores.persona.write(
@@ -529,6 +543,8 @@ describe('PgPersonaStore', () => {
       const wrote = await stores.persona.markCreatedAt('runbook', '2026-01-02T03:04:05.000Z');
 
       // protectionStatus() を一度も呼ばずに列を直接読む——healRow を経由しない。
+      // **ここより前に protectionStatus() を差し込まないこと**（上の doc の実測。
+      // 差し込むと変異が生存し、この歯は緑のまま何も測らなくなる）。
       const afterRows = await db
         .select({ contentSha256: memory.contentSha256 })
         .from(memory)
