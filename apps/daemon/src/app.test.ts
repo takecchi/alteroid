@@ -1309,6 +1309,9 @@ describe('HTTP API', () => {
     expect(await all.json()).toMatchObject({
       entries: [{ id, body: '日報の体裁を直す', closedReason: '直して PR を出した' }],
     });
+    // **`POST /commitments/:id/close` は `closedBy: 'human'` を書く**（issue #286）。
+    // `commitment_close` ツール（クローン）と同じ欄を、どちらから来たか記録して分ける。
+    expect((await stores.commitments.get(id))?.closedBy).toBe('human');
     // 行そのものは消えていない（何を片付けたかが日報の材料に残る）
     expect(await stores.commitments.get(id)).not.toBeNull();
     // 閉じたことも日誌に残る（積んだ1件と合わせて2本）
@@ -1338,7 +1341,12 @@ describe('HTTP API', () => {
     expect(openEntry?.updatedAt).toBe('2026-01-01T00:00:00.000Z');
     expect(openEntry?.updatedAt).toBe(openEntry?.at);
 
-    await stores.commitments.close('cm-updated-at', '2026-02-02T00:00:00.000Z', '確認終了');
+    await stores.commitments.close(
+      'cm-updated-at',
+      '2026-02-02T00:00:00.000Z',
+      '確認終了',
+      'human',
+    );
 
     const closedList = (await (await app.request('/commitments?includeClosed=true')).json()) as {
       entries: { id: string; at: string; closedAt: string; updatedAt: string }[];

@@ -471,7 +471,12 @@ describe('片付け済みの配り直し（本文だけを短くする）', () =
     await waitForCommitment(stores, 'evt-closed');
 
     expect(
-      await stores.commitments.close('evt-closed', '2026-08-02T00:00:00.000Z', 'もう対応済み'),
+      await stores.commitments.close(
+        'evt-closed',
+        '2026-08-02T00:00:00.000Z',
+        'もう対応済み',
+        'clone',
+      ),
     ).toBe(true);
 
     const reborn = bootClone(stores);
@@ -521,7 +526,7 @@ describe('片付け済みの配り直し（本文だけを短くする）', () =
     await waitForCommitment(stores, event.id);
 
     expect(
-      await stores.commitments.close(event.id, '2026-08-02T00:00:00.000Z', 'もう対応済み'),
+      await stores.commitments.close(event.id, '2026-08-02T00:00:00.000Z', 'もう対応済み', 'clone'),
     ).toBe(true);
 
     const reborn = bootClone(stores);
@@ -575,9 +580,9 @@ describe('片付け済みの配り直し（本文だけを短くする）', () =
     dying.clone.post(report('THROW-REPORT 本文はこれだけ長くしておく', 'evt-throw'));
     await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
     await waitForCommitment(stores, 'evt-throw');
-    expect(await stores.commitments.close('evt-throw', new Date().toISOString(), '片付けた')).toBe(
-      true,
-    );
+    expect(
+      await stores.commitments.close('evt-throw', new Date().toISOString(), '片付けた', 'clone'),
+    ).toBe(true);
 
     // 拾い直しの側でだけ読み出しを落とす。
     failNextGet = true;

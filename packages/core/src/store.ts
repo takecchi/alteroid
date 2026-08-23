@@ -3,6 +3,7 @@ import type { SessionStore } from '@anthropic-ai/claude-agent-sdk';
 import type { AuthStore } from './auth.js';
 import type {
   Commitment,
+  CommitmentClosedBy,
   InboxEvent,
   Job,
   JournalEntry,
@@ -258,8 +259,13 @@ export interface CommitmentStore {
    *
    * **行は消さない。** 消すと「何を片付けたか」が日報の材料から落ちる。人間が普段
    * 読むのは日報だけである（PRD「可観測性」）。
+   *
+   * **`by` は必須である。** optional にすると、呼び出し側が「誰が閉じたか」を
+   * 決めずに通せてしまう — 実際には全ての呼び出し元（`commitment_close` ツール /
+   * `POST /commitments/:id/close`）が閉じた主体を知っているので、必須にすれば
+   * 決めていない呼び出しはコンパイルエラーで立ち止まる（issue #286）。
    */
-  close(id: string, at: string, reason: string): Promise<boolean>;
+  close(id: string, at: string, reason: string, by: CommitmentClosedBy): Promise<boolean>;
 }
 
 /**

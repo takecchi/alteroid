@@ -438,8 +438,16 @@ describe('本文を origin で Markdown / 素のテキストへ切り分ける',
   /**
    * `closedReason` の据え置き（書き手が型に記録されていないための防御）を
    * 固定する。issue #286。
+   *
+   * **issue #286 で `closedBy` が型に入ったため、期待値を反転した。** 元々は
+   * 「書き手を判別する材料が無いので、`closedReason` は origin を問わず
+   * 常に素のテキストのまま」だった。いまは `commitment.closedBy` に応じて
+   * 分かれる（`ClosedReasonBody`、`apps/web/app/routes/commitments.tsx`）。
+   * このテストのシナリオ（`closedBy: 'clone'`）は Markdown の描画経路を
+   * 通るようになったので、期待値をそちらへ反転した — `closedBy` が
+   * 無い（`undefined`）ケースは下の別テストが据え置きのまま固定している。
    */
-  it('closedReason は Markdown の描画経路を通らない', async () => {
+  it('closedReason は closedBy が clone のとき Markdown の描画経路を通る', async () => {
     stubCommitments(
       [commitment({ id: 'open-1', body: 'まだ終わっていない' })],
       [
@@ -448,7 +456,100 @@ describe('本文を origin で Markdown / 素のテキストへ切り分ける',
           origin: 'self',
           body: '片付いた本文',
           closedAt: new Date().toISOString(),
+          closedReason: '## 理由の見出し',
+          closedBy: 'clone',
+        }),
+      ],
+    );
+    renderPage();
+
+    await screen.findByText('まだ終わっていない');
+    fireEvent.click(screen.getByRole('button', { name: '片付けたものも見る' }));
+
+    await screen.findByText('片付いた本文');
+    expect(await screen.findByRole('heading', { name: '理由の見出し' })).toBeTruthy();
+    expect(screen.queryByText('## 理由の見出し')).toBeNull();
+  });
+
+  /**
+   * `closedBy` が無い行（この欄が導入される前の行、issue #286）は、
+   * 「そもそも無い」を「既定」へ倒さず素のテキストのままである。
+   */
+  it('closedReason は closedBy が無いとき（導入前の行）素のテキストのまま', async () => {
+    stubCommitments(
+      [commitment({ id: 'open-1', body: 'まだ終わっていない' })],
+      [
+        commitment({
+          id: 'closed-legacy',
+          origin: 'self',
+          body: '片付いた本文',
+          closedAt: new Date().toISOString(),
           closedReason: '## 理由の見出しではない',
+          // closedBy は書かない（導入前の行を模す）
+        }),
+      ],
+    );
+    renderPage();
+
+    await screen.findByText('まだ終わっていない');
+    fireEvent.click(screen.getByRole('button', { name: '片付けたものも見る' }));
+
+    await screen.findByText('片付いた本文');
+    expect(screen.getByText('## 理由の見出しではない')).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: '理由の見出しではない' })).toBeNull();
+  });
+
+  /**
+   * `closedBy: 'human'` は素のテキストのまま（`chat.tsx:710` と同じ線 —
+   * 人間が打った文字を化けさせない）。`whitespace-pre-wrap` も保つ。
+   */
+  it('closedReason は closedBy が human のとき素のテキストのまま（whitespace-pre-wrap を保つ）', async () => {
+    stubCommitments(
+      [commitment({ id: 'open-1', body: 'まだ終わっていない' })],
+      [
+        commitment({
+          id: 'closed-human',
+          origin: 'self',
+          body: '片付いた本文',
+          closedAt: new Date().toISOString(),
+          closedReason: '## 理由の見出しではない',
+          closedBy: 'human',
+        }),
+      ],
+    );
+    renderPage();
+
+    await screen.findByText('まだ終わっていない');
+    fireEvent.click(screen.getByRole('button', { name: '片付けたものも見る' }));
+
+    await screen.findByText('片付いた本文');
+    const reason = screen.getByText('## 理由の見出しではない');
+    expect(screen.queryByRole('heading', { name: '理由の見出しではない' })).toBeNull();
+    const p = reason.closest('p');
+    expect(p).not.toBeNull();
+    const tokens = (p?.className ?? '').split(/\s+/);
+    expect(tokens).toContain('whitespace-pre-wrap');
+  });
+
+  /**
+   * **実行時の網羅性の倒れ先（`closedBy` 版）を固定する歯。** `undefined`
+   * とは別扱いにする — `undefined` は warn しないが、未知の値は warn する
+   * （`ClosedReasonBody` の doc）。ここでは「消えずに素のテキストとして
+   * 出ること」だけを固定する（`console.warn` 自体は vitest の既定
+   * reporter が通ったテストの出力を横取りするため、ここでは検証しない
+   * — `AGENTS.md`「静かに失敗する道具」）。
+   */
+  it('closedReason は schema に無い closedBy が来ても、消さず素のテキストとして出す', async () => {
+    stubCommitments(
+      [commitment({ id: 'open-1', body: 'まだ終わっていない' })],
+      [
+        commitment({
+          id: 'closed-unknown',
+          origin: 'self',
+          body: '片付いた本文',
+          closedAt: new Date().toISOString(),
+          closedReason: '## 理由の見出しではない',
+          closedBy: 'manager',
         }),
       ],
     );

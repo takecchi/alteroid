@@ -1171,9 +1171,9 @@ describe('FsCommitmentStore', () => {
   it('閉じたものは未了から外れ、includeClosed でだけ読める（行は消さない）', async () => {
     await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す'));
 
-    expect(await stores.commitments.close('c-1', '2026-08-13T00:00:00.000Z', '#99 で出した')).toBe(
-      true,
-    );
+    expect(
+      await stores.commitments.close('c-1', '2026-08-13T00:00:00.000Z', '#99 で出した', 'clone'),
+    ).toBe(true);
 
     expect(await stores.commitments.list()).toEqual([]);
     const all = await stores.commitments.list({ includeClosed: true });
@@ -1181,6 +1181,90 @@ describe('FsCommitmentStore', () => {
     // 「閉じた」だけを残さない（何をもって終わりとしたかが無いと人間が否定できない）
     expect(all[0]?.closedAt).toBe('2026-08-13T00:00:00.000Z');
     expect(all[0]?.closedReason).toBe('#99 で出した');
+    expect(all[0]?.closedBy).toBe('clone');
+  });
+
+  it('close は closedBy を記録し、既存の（closedBy の無い）行は undefined のままで既定へ倒れない', async () => {
+    // 既に閉じているが closedBy を持たない行 = この欄が導入される前の記録を模す。
+    // open() はどんな Commitment も受け付けるので、そのまま書き込める。
+    await stores.commitments.open({
+      id: 'c-legacy',
+      at: '2026-08-01T00:00:00.000Z',
+      origin: 'human',
+      body: '導入前に片付いた仕事',
+      closedAt: '2026-08-02T00:00:00.000Z',
+      closedReason: '当時は書き手を記録していなかった',
+    });
+    const legacy = await stores.commitments.get('c-legacy');
+    // **既定（'clone' でも 'human' でもない）へ倒れず、そもそも無いままである。**
+    expect(legacy?.closedBy).toBeUndefined();
+
+    await stores.commitments.open(commitment('c-new', '2026-08-13T00:00:00.000Z', '新しい依頼'));
+    await stores.commitments.close('c-new', '2026-08-14T00:00:00.000Z', '片付けた', 'human');
+    const fresh = await stores.commitments.get('c-new');
+    expect(fresh?.closedBy).toBe('human');
+
+    // 導入前の行は close() を経由していないので、closedBy はやはり無いまま。
+    const stillLegacy = await stores.commitments.get('c-legacy');
+    expect(stillLegacy?.closedBy).toBeUndefined();
+  });
+
+  /**
+   * fs 版は `#read()` がファイル全体を `fileSchema.parse`（＝
+   * `commitmentSchema` を要素に持つ配列）へ通す。`closedBy` が厳密な
+   * enum だったら、未知の値を持つ行が1つでも在ると `#read()` 自体が
+   * 例外を投げ、**その行だけでなく台帳全体が読めなくなる。** pg 版の
+   * `index.test.ts` に同じ名前のテストがあり、そちらが本体（`packages/core/
+   * src/schema.ts` の doc に理由がある）。fs / pg で能力差を作らないため、
+   * ここでも同じ性質を問う。
+   *
+   * **なぜ `open()` を使わないのか。** この器が書く値は 'clone' | 'human'
+   * の2つに限られる（`CommitmentStore.close` の `by` 引数の型で縛って
+   * ある）ので、`open()`（`commitmentSchema.parse` を通す）経由では
+   * `closedBy` が未知の値を持つ行をそもそも作れない。**測りたい場面は
+   * 「新しい版のデーモンが書いた行を、古い版が読む」であり、そのとき行は
+   * 既に保存層（ファイル）に在って `open()` は通っていない。** `open()`
+   * 経由で作ると、厳密な enum へ戻す変異を当てたとき `open()`（setup）が
+   * 先に落ち、`list()` が丸ごと読めなくなるという当の害が一度も再現され
+   * ないままテストが赤くなる（変異には反応するが症状を伝えない）。だから
+   * 行の作成は `commitments.json` へ直接 `writeFile` し、スキーマ検証
+   * （`#read()` の `fileSchema.parse`）を経由しない。
+   */
+  it('未知の closedBy を持つ行があっても list() は落ちない（closedBy は台帳の完全性を担わない）', async () => {
+    // スキーマ検証を経由せず、台帳ファイルへ直接書く（上の doc を見よ）。
+    await mkdir(stores.paths.jobs, { recursive: true });
+    await writeFile(
+      join(stores.paths.jobs, 'commitments.json'),
+      JSON.stringify({
+        commitments: [
+          {
+            id: 'c-unknown-closedby',
+            at: '2026-08-01T00:00:00.000Z',
+            origin: 'human',
+            body: '未知の closedBy を持つ行',
+            closedAt: '2026-08-02T00:00:00.000Z',
+            closedReason: '将来の書き手を模す',
+            // 実際にこの器が書く値は 'clone' | 'human' の2つに限られる。
+            // 'manager' は、将来書き手が増えた場合や外部から直接書かれた
+            // 場合を模すためのものであって、この器自身がこの値を書くわけ
+            // ではない。
+            closedBy: 'manager',
+          },
+        ],
+      }),
+      'utf8',
+    );
+
+    // list() が例外を投げず、他の行も含めて読める。
+    // （`.resolves` の形にしてあるのは、厳密な enum へ戻す変異を当てたとき
+    // `list()` 自身が assertion として落ちることを見るためである。）
+    await expect(stores.commitments.list({ includeClosed: true })).resolves.toHaveLength(1);
+
+    const all = await stores.commitments.list({ includeClosed: true });
+    expect(all[0]?.closedBy).toBe('manager');
+
+    const single = await stores.commitments.get('c-unknown-closedby');
+    expect(single?.closedBy).toBe('manager');
   });
 
   it('同じ id で二度 open しても上書きされない（1回目の本文が残る）', async () => {
@@ -1201,7 +1285,7 @@ describe('FsCommitmentStore', () => {
 
   it('閉じた id を open し直しても開き直らない（片付いた仕事が蘇らない）', async () => {
     await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す'));
-    await stores.commitments.close('c-1', '2026-08-13T00:00:00.000Z', '#99 で出した');
+    await stores.commitments.close('c-1', '2026-08-13T00:00:00.000Z', '#99 で出した', 'clone');
 
     // 器が落ちて合図が配り直された、を模す
     expect(
@@ -1215,10 +1299,12 @@ describe('FsCommitmentStore', () => {
   it('close は二度目に false を返す（二重に「いま片付けた」と報告させない）', async () => {
     await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す'));
 
-    expect(await stores.commitments.close('c-1', '2026-08-13T00:00:00.000Z', '出した')).toBe(true);
-    expect(await stores.commitments.close('c-1', '2026-08-14T00:00:00.000Z', 'また出した')).toBe(
-      false,
-    );
+    expect(
+      await stores.commitments.close('c-1', '2026-08-13T00:00:00.000Z', '出した', 'clone'),
+    ).toBe(true);
+    expect(
+      await stores.commitments.close('c-1', '2026-08-14T00:00:00.000Z', 'また出した', 'clone'),
+    ).toBe(false);
 
     // 二度目は記録も動かさない（最初に片付けた事実を書き換えない）
     const entry = await stores.commitments.get('c-1');
@@ -1227,9 +1313,9 @@ describe('FsCommitmentStore', () => {
   });
 
   it('存在しない id の close は false（勝手に行を作らない）', async () => {
-    expect(await stores.commitments.close('しらない', '2026-08-13T00:00:00.000Z', '片付けた')).toBe(
-      false,
-    );
+    expect(
+      await stores.commitments.close('しらない', '2026-08-13T00:00:00.000Z', '片付けた', 'clone'),
+    ).toBe(false);
 
     expect(await stores.commitments.list({ includeClosed: true })).toEqual([]);
   });
@@ -1250,8 +1336,8 @@ describe('FsCommitmentStore', () => {
     await stores.commitments.open(commitment('c-open', '2026-08-14T00:00:00.000Z', 'まだ'));
     await stores.commitments.open(commitment('c-a', '2026-08-10T00:00:00.000Z', 'A'));
     await stores.commitments.open(commitment('c-b', '2026-08-11T00:00:00.000Z', 'B'));
-    await stores.commitments.close('c-a', '2026-08-12T00:00:00.000Z', 'A を片付けた');
-    await stores.commitments.close('c-b', '2026-08-13T00:00:00.000Z', 'B を片付けた');
+    await stores.commitments.close('c-a', '2026-08-12T00:00:00.000Z', 'A を片付けた', 'clone');
+    await stores.commitments.close('c-b', '2026-08-13T00:00:00.000Z', 'B を片付けた', 'clone');
 
     expect(
       (await stores.commitments.list({ includeClosed: true })).map((entry) => entry.id),
@@ -1310,6 +1396,7 @@ describe('FsCommitmentStore', () => {
         id,
         new Date(Date.UTC(2026, 7, 3, 0, 0, 0) + index * 1000).toISOString(),
         `片付けた ${index}`,
+        'clone',
       );
     }
 

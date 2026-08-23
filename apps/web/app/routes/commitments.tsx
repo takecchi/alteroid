@@ -5,6 +5,7 @@ import { Page } from '~/components/page';
 import { Badge, Button, Card, CardHeader, Empty, ErrorNote, Input, Spinner } from '~/components/ui';
 import { useCloseCommitment, usePushCommitment } from '~/hooks/mutations';
 import { useCommitments } from '~/hooks/queries';
+import { commitmentClosedBySchema } from '@alteroid/core';
 import type { Commitment, CommitmentOrigin } from '@alteroid/core';
 import { formatDateTime, formatRelative } from '~/lib/format';
 
@@ -221,6 +222,31 @@ function assertOriginHandled(origin: never): void {
 }
 
 /**
+ * **網羅性チェック専用（ビルド時）。** `ClosedReasonBody` の `switch` の
+ * `default` から呼ぶ。`assertOriginHandled` と同型 — 引数の型は `never` で、
+ * `commitmentClosedBySchema`（`packages/core/src/schema.ts`）に新しい値が
+ * 足されたのに上の `case` がその値を決めていないと、`known.data` はここで
+ * `never` にならず、この呼び出し自体が型エラーになる。**新しい closedBy を
+ * 足した人は、ここで分岐を決めるまで `pnpm typecheck` を通せない。**
+ *
+ * **呼ぶこと自体が保証であって、戻り値は使わない。** `never` 型の変数を
+ * そのまま本文として描かないこと — issue #285 で実際に踏まれた実装ミスと
+ * 同じ形である（`never` も `string` を要求する prop に代入できるので、
+ * 型では捕まらない。空の見出しではなく分岐キーの生の値が画面に出た）。
+ *
+ * **実行時にここへ来ることは、`commitmentSchema.closedBy` が `z.string()`
+ * で緩く持たれている（保存層は未知の値を拒否しない）ため、
+ * `assertOriginHandled` より現実的に起こりうる。** 未知の値は
+ * `ClosedReasonBody` が `commitmentClosedBySchema.safeParse` で弾いた
+ * 時点で別に `console.warn` している（この関数より手前）。**この関数が
+ * 実際に呼ばれるのは、`commitmentClosedBySchema` に値が足されたのに
+ * `switch` 側の `case` が追いついていない、という版のずれのときだけである。**
+ */
+function assertClosedByHandled(closedBy: never): void {
+  console.warn(`commitments.tsx: switch が決めていない commitment.closedBy: ${String(closedBy)}`);
+}
+
+/**
  * 本文の描き方を `origin`（誰が書いたか）で切り分ける。`OpenRow` と
  * `ClosedRow` が同じ本文の `<p>` を2箇所に持っていたのを、ここへ集める。
  *
@@ -303,12 +329,11 @@ function assertOriginHandled(origin: never): void {
  * 言えない以上、化けて困る側（素のテキスト）へ倒す。
  *
  * **`closedReason` はここの対象外。** `commitment_close`（クローン）と
- * `POST /commitments/:id/close`（人間）の両方が同じ欄へ書き、**どちらが
- * 書いたかを型が記録していない。** `origin` は開いたときの起点なので判別に
- * 使えない。書き手が判らない以上、Markdown にすると人間が書いた回だけ静かに
- * 化ける。**実装しなかったのではなく、判別する材料が無いので据え置いた。**
- * （`ClosedRow` の `closedReason` は1文字も変えていない。この判別材料の
- * 欠落そのものを issue #286 として立ててある）
+ * `POST /commitments/:id/close`（人間）の両方が同じ欄へ書くので、`origin`
+ * （開いたときの起点）では書き手を判別できない — 人間が積んだ仕事を
+ * クローンが片付けることも、その逆もある。**`closedReason` の描き分けは
+ * `commitment.closedBy`（issue #286 で型に足した、別軸の欄）を見る
+ * `ClosedReasonBody` が持つ。** 詳細はそちらの doc を見よ。
  */
 function CommitmentBody({ commitment }: { commitment: Commitment }) {
   switch (commitment.origin) {
@@ -418,23 +443,76 @@ function ClosedRow({ commitment }: { commitment: Commitment }) {
         </span>
       </div>
       <CommitmentBody commitment={commitment} />
-      {/*
-        **`closedReason` は1文字も触らない（Markdown 化の対象外）。**
-        `commitment_close`（クローン）と `POST /commitments/:id/close`
-        （人間）の両方が同じ欄へ書き、**どちらが書いたかを型が記録していない。**
-        `origin` は開いたときの起点なので判別に使えない。書き手が判らない以上、
-        Markdown にすると人間が書いた回だけ静かに化ける。**実装しなかったの
-        ではなく、判別する材料が無いので据え置いた。**
-        この判別材料の欠落は issue #286 として立ててある。
-      */}
-      {commitment.closedReason !== undefined && commitment.closedReason !== null && (
-        <p className="mt-1 text-xs break-words">
-          <span className="mr-2 text-[11px]">どう片付いたか</span>
-          {commitment.closedReason}
-        </p>
-      )}
+      <ClosedReasonBody commitment={commitment} />
     </li>
   );
+}
+
+/** `closedReason` のラベルと素テキストをまとめて描く（`clone` 以外の3状態で共通）。 */
+function PlainClosedReason({ reason }: { reason: string }) {
+  return (
+    <p className="mt-1 text-xs break-words whitespace-pre-wrap">
+      <span className="mr-2 text-[11px]">どう片付いたか</span>
+      {reason}
+    </p>
+  );
+}
+
+/**
+ * `closedReason`（どう片付いたか）の描き方を `closedBy`（誰が書いたか）で
+ * 切り分ける。`CommitmentBody` と同じ形（narrow してから switch）だが、
+ * ここが見る軸は `origin` ではなく `closedBy` である — 別の軸である理由は
+ * `commitmentClosedBySchema` の doc（`packages/core/src/schema.ts`）を見よ。
+ *
+ * **実行時に区別すべき状態は4つ:**
+ *
+ * | `closedBy` | 描き方 | 理由 |
+ * | --- | --- | --- |
+ * | `'clone'` | `<Markdown>` | AI が書いた |
+ * | `'human'` | 素テキスト（`whitespace-pre-wrap` を保つ） | 人間が打った文字を化けさせない（`chat.tsx:710` と同じ線） |
+ * | `undefined` | 素テキスト | **「そもそも無い」。** この欄が入る前に閉じられた行にはこの情報が存在しない |
+ * | 上記以外（実行時のみ来うる） | 素テキスト＋`console.warn` | デーモンが先に新しい値を返す順序に備える。**`undefined` と同じ扱いにしない** — warn の有無で見分けが付く（`undefined` は warn しない） |
+ *
+ * **保存層（`commitmentSchema.closedBy`）は `z.string()` で緩く持つ。**
+ * `packages/storage-pg/src/commitments.ts` の `parseCommitment` が読めない
+ * 行で throw し `list()` がそれを try/catch 無しで map するため、未知の
+ * 値が1つ入っただけで台帳の一覧が丸ごと読めなくなるのを避けるためである
+ * （`commitmentSchema` の doc）。**表示側までその緩さを引き継がない** —
+ * ここでは `commitmentClosedBySchema.safeParse` で狭めてから分岐する。
+ */
+function ClosedReasonBody({ commitment }: { commitment: Commitment }) {
+  if (commitment.closedReason === undefined || commitment.closedReason === null) return null;
+  const reason = commitment.closedReason;
+
+  // **「そもそも無い」。** 既定へ倒さない（`'clone'` にも `'human'` にもしない）。
+  if (commitment.closedBy === undefined) return <PlainClosedReason reason={reason} />;
+
+  const known = commitmentClosedBySchema.safeParse(commitment.closedBy);
+  if (!known.success) {
+    // **`undefined` とは別扱い。** ここでだけ warn する（`undefined` は warn しない）。
+    console.warn(
+      `commitments.tsx: 未知の commitment.closedBy が来た（undefined とは別扱い）: ${String(commitment.closedBy)}`,
+    );
+    return <PlainClosedReason reason={reason} />;
+  }
+
+  const closedBy = known.data;
+  switch (closedBy) {
+    case 'clone':
+      return (
+        <div className="mt-1 text-xs">
+          <span className="mr-2 text-[11px]">どう片付いたか</span>
+          <Markdown>{reason}</Markdown>
+        </div>
+      );
+
+    case 'human':
+      return <PlainClosedReason reason={reason} />;
+
+    default:
+      assertClosedByHandled(closedBy);
+      return <PlainClosedReason reason={reason} />;
+  }
 }
 
 /**

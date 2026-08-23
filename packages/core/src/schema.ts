@@ -892,6 +892,33 @@ export type SchedulePhase = z.infer<typeof schedulePhaseSchema>;
 export const commitmentOriginSchema = z.enum(['human', 'manager', 'external', 'self']);
 
 /**
+ * `closedReason`（どう片付いたか）を**誰が書いたか**。
+ *
+ * **`origin` とは別の軸である。** `origin` は「開いたときの起点」であって、
+ * 閉じた主体ではない — 人間が積んだ仕事（`origin: 'human'`）をクローンが
+ * 片付けることも、クローンが立てた仕事（`origin: 'self'`）を人間が片付ける
+ * こともある。`origin` から `closedBy` を導出することはできない（issue #286）。
+ *
+ * 語彙は既存の2つに揃えてある — `journalEntry.memory_update.cause`
+ * （`'distill' | 'clone' | 'human'`、本ファイル）と `ManagerStopActor`
+ * （`'human' | 'clone'`、`packages/core/src/manager.ts`）。
+ *
+ * **`'human'` の意味は `memory_update.cause` の `'human'` と同じ — HTTP の口
+ * （`POST /commitments/:id/close`）から入ったもの、という意味であって、
+ * 「その瞬間に人間が居たことをデーモンが確かめた」ではない。** AGENTS.md
+ * 「git / GitHub の actor から層を推定しないこと」と同じ限界がここにも在る
+ * — HTTP を叩いたのが本当に人間かどうかを、この値は保証しない。
+ *
+ * **これは書き込み側を縛るための型であって、`commitmentSchema.closedBy` の
+ * 欄の型ではない。** `CommitmentStore.close(id, at, reason, by:
+ * CommitmentClosedBy)` の `by` はこの enum で縛ってあるので、**この器が
+ * 書く値はここに挙げた2つに限られる。** それでも保存された行を読む側
+ * （`commitmentSchema`）はこの enum を直接使わない — 理由は次のフィールドの
+ * doc に書いてある。
+ */
+export const commitmentClosedBySchema = z.enum(['clone', 'human']);
+
+/**
  * 引き受けたまま終わっていない仕事1件（PRD「自律」の器を、単発の依頼へ広げたもの）。
  *
  * **なぜ受信箱と日誌だけでは足りないか。** 受信箱の未読はプロセスが死んでも残るが、
@@ -945,9 +972,51 @@ export const commitmentSchema = z.object({
    * あり（north_star）、何をもって終わりとしたのかが無いと否定のしようがない。
    */
   closedReason: z.string().optional(),
+  /**
+   * `closedReason` を誰が書いたか。
+   *
+   * **`undefined` は「不明」でも「未決」でもなく「そもそも無い」である。**
+   * この欄が入る前に閉じられた行にはこの情報が存在しない —
+   * **既定へ倒さないこと**（`'clone'` や `'human'` のどちらかへ倒した側が、
+   * 黙って化ける／黙って化けないを引き受けることになる。表示側は3値目の
+   * 「無い」を独立した状態として扱う。`apps/web/app/routes/commitments.tsx`）。
+   *
+   * **型は `commitmentClosedBySchema`（`z.enum`）ではなく `z.string()` で
+   * 緩く持つ。3点、意図して緩めてある:**
+   *
+   * 1. **既知の値は `commitmentClosedBySchema`（`'clone' | 'human'`）だけ
+   *    である。** 書き込み側は `CommitmentStore.close` の `by` 引数の型で
+   *    縛ってあるので、**この器が実際に書く値はこの2つに限られる。** ここが
+   *    緩いのは読み出し側の耐性のためであって、書き込み側の規律を諦めた
+   *    わけではない
+   * 2. **ここを `z.enum` にしないこと。** `packages/storage-pg/src/
+   *    commitments.ts` の `parseCommitment` は読めない行で throw し、
+   *    `list()` はそれを try/catch 無しで map する — **未知の値が1つ
+   *    入っただけで、その行ではなく台帳の一覧が丸ごと読めなくなる。**
+   *    `closedBy` は由来の注記であって、台帳の完全性（「何を引き受けたか」
+   *    が読めること）を担ってはいない。失敗の非対称で決めている —
+   *    **寛容にして間違えば次の PR で直せるが、厳密にして間違えば台帳が
+   *    読めなくなる**
+   * 3. **`undefined`（そもそも無い）と、未知の値は別物である。** 未知の値
+   *    （将来の書き手が増えた・外部から直接書かれた等）は**そのまま
+   *    保持する**（`undefined` へ潰さない）。潰すと「この欄が入る前の行」
+   *    と区別が付かなくなり、この欄を持たせた主旨そのものが壊れる。
+   *    表示側（`apps/web/app/routes/commitments.tsx`）は
+   *    `commitmentClosedBySchema.safeParse` で狭めてから分岐し、
+   *    未知の値は `undefined` と別の倒れ先（`console.warn` 付き）へ倒す
+   */
+  closedBy: z
+    .string()
+    .optional()
+    .describe(
+      "既知の値は 'clone' | 'human'（commitmentClosedBySchema）。無いこともある" +
+        '（この欄が入る前の行）。台帳の完全性より由来の注記の厳密さを優先しないため、' +
+        '型としては任意の文字列を許す。',
+    ),
 });
 
 export type CommitmentOrigin = z.infer<typeof commitmentOriginSchema>;
+export type CommitmentClosedBy = z.infer<typeof commitmentClosedBySchema>;
 export type Commitment = z.infer<typeof commitmentSchema>;
 
 /**

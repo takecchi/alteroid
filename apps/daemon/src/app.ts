@@ -1960,7 +1960,7 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         const id = c.req.param('id');
         const { reason } = c.req.valid('json');
-        if (!(await stores.commitments.close(id, new Date().toISOString(), reason))) {
+        if (!(await stores.commitments.close(id, new Date().toISOString(), reason, 'human'))) {
           // 閉じられなかった理由は台帳に聞く（無いのか、既に閉じているのか）。
           const existing = await stores.commitments.get(id);
           if (existing === null) return c.json({ error: 'not found' as const }, 404);
