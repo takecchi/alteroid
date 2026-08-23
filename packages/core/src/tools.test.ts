@@ -278,6 +278,194 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * `memory_write` / `memory_append` の応答に添える差分の要約（#318 案 (d)）。
+   *
+   * **なぜ要るか**: クローンが `memory_write` で全文を再生成するとき、本文が
+   * ツール呼び出しの中で途中で切れても、記憶には控えも履歴も無いので突き
+   * 合わせる相手が存在しない。この要約は「そもそも切れない」ようにするもの
+   * ではなく、**切れたことにその場で気づけるようにする**ものである——だから
+   * ここで測るのは文言の一致ではなく、**減った文字数がそのまま出るか**
+   * **消えた見出しが名指しされるか**という性質のほうである。
+   *
+   * 単位は文字数（`content.length`）で統一する。日誌の `bytesBefore` /
+   * `bytesAfter`（バイト）は別の歯（直上）が既に守っているので、ここでは
+   * 混ぜない。
+   */
+  describe('memory_write / memory_append の応答（差分の要約、#318 案 (d)）', () => {
+    it('新規作成のときは「前」が無いので、増減ではなく新規作成と分かる形で返す', async () => {
+      const h = harness();
+
+      const reply = await h.call('memory_write', {
+        slug: 'new-doc',
+        content: '12345',
+        summary: '新規',
+      });
+
+      expect(reply).toContain('新規作成');
+      expect(reply).toContain('5 文字');
+      // 「前」が無いので矢印（増減の表現）は出ない。
+      expect(reply).not.toContain('→');
+    });
+
+    it('書き換えでは前後の文字数と増減が文字単位で出る（Issue #318 の例と同じ桁）', async () => {
+      const h = harness();
+      await h.call('memory_write', { slug: 'values', content: 'a'.repeat(12345), summary: '最初' });
+
+      const reply = await h.call('memory_write', {
+        slug: 'values',
+        content: 'b'.repeat(4567),
+        summary: '書き換え',
+      });
+
+      // 単位は文字（バイトではない）。全角を含まない ASCII なのでバイト数と
+      // 文字数は一致するが、ここで測っているのは `content.length` が使われて
+      // いること（`Buffer.byteLength` への取り違えでも同じ値になってしまう
+      // 入力を避けるため、次のテストでは全角を使って区別する）。
+      expect(reply).toContain('12,345 → 4,567 文字（-7,778）');
+    });
+
+    it('全角文字では文字数とバイト数が一致しない。応答は文字数（バイトではない）', async () => {
+      const h = harness();
+      // 全角1文字は UTF-8 で3バイト。文字数なら 4、バイト数なら 12 になる。
+      await h.call('memory_write', { slug: 'values', content: '', summary: '空' });
+
+      const reply = await h.call('memory_write', {
+        slug: 'values',
+        content: '価値観です',
+        summary: '書いた',
+      });
+
+      // 「価値観です」は5文字・15バイト。バイト数（15）ではなく文字数（5）が出る。
+      expect(reply).toContain('0 → 5 文字（+5）');
+      expect(reply).not.toContain('15');
+    });
+
+    it('増える書き換えは + 付きで出る', async () => {
+      const h = harness();
+      await h.call('memory_write', { slug: 'values', content: '12345', summary: '最初' });
+
+      const reply = await h.call('memory_write', {
+        slug: 'values',
+        content: '1234567890',
+        summary: '増やした',
+      });
+
+      expect(reply).toContain('5 → 10 文字（+5）');
+    });
+
+    it('消えた見出しを名指しで列挙する', async () => {
+      const h = harness();
+      await h.call('memory_write', {
+        slug: 'doc',
+        content: '# 総論\n\n本文\n\n## 旧仕様\n\n消える節\n\n## 現行仕様\n\n残る節\n',
+        summary: '最初',
+      });
+
+      const reply = await h.call('memory_write', {
+        slug: 'doc',
+        content: '# 総論\n\n本文\n\n## 現行仕様\n\n残る節\n',
+        summary: '旧仕様を削除',
+      });
+
+      expect(reply).toContain('## 旧仕様');
+      expect(reply).not.toContain('## 現行仕様');
+    });
+
+    it('見出しがまったく消えていないときは「なし」と分かる形で返す', async () => {
+      const h = harness();
+      await h.call('memory_write', {
+        slug: 'doc',
+        content: '# 総論\n\n本文\n',
+        summary: '最初',
+      });
+
+      const reply = await h.call('memory_write', {
+        slug: 'doc',
+        content: '# 総論\n\n書き足した本文\n',
+        summary: '本文だけ変えた',
+      });
+
+      expect(reply).toContain('消えた見出し');
+      expect(reply).toContain('なし');
+    });
+
+    it('見出しの抽出は行頭の # に限る。行の途中の # は見出しとして数えない', async () => {
+      const h = harness();
+      await h.call('memory_write', {
+        slug: 'doc',
+        content: '# 総論\n\n価格は $100 くらい # メモ\n',
+        summary: '最初',
+      });
+
+      // 見出しではない行（行頭が # でない）が消えても、消えた見出しには数えない。
+      const reply = await h.call('memory_write', {
+        slug: 'doc',
+        content: '# 総論\n',
+        summary: '本文行を削った',
+      });
+
+      expect(reply).toContain('消えた見出し');
+      expect(reply).toContain('なし');
+    });
+
+    it('消えた見出しが多いときは文字数の予算で締め、切ったと分かる形で言う', async () => {
+      const h = harness();
+      // 600 文字の予算に対して十分多い見出しを用意する（1件あたり十数文字）。
+      const headings = Array.from({ length: 80 }, (_, i) => `## 見出し番号${i}`);
+      await h.call('memory_write', {
+        slug: 'doc',
+        content: headings.join('\n\n'),
+        summary: '最初',
+      });
+
+      const reply = await h.call('memory_write', {
+        slug: 'doc',
+        content: '# 総論だけ残す\n',
+        summary: '全部消した',
+      });
+
+      expect(reply).toContain('消えた見出し');
+      expect(reply).toContain('80 件');
+      // 全件は出ていない（予算で締められている）。
+      expect(reply).toContain('省略');
+      expect(reply).not.toContain('## 見出し番号79');
+    });
+
+    it('memory_append の応答にも同じ要約が付く（新規作成の形）', async () => {
+      const h = harness();
+
+      const reply = await h.call('memory_append', {
+        slug: 'notes',
+        content: '最初の1行',
+        summary: '新規',
+      });
+
+      expect(reply).toContain('新規作成');
+    });
+
+    it('memory_append は既存を消さないので、消えた見出しは常に0件のはず（0でないなら異常）', async () => {
+      const h = harness();
+      await h.call('memory_write', {
+        slug: 'notes',
+        content: '# 総論\n\n## 節1\n\n本文\n',
+        summary: '最初',
+      });
+
+      const reply = await h.call('memory_append', {
+        slug: 'notes',
+        content: '## 追記した節\n\n追記した本文',
+        summary: '追記',
+      });
+
+      // append は末尾に足すだけなので、既存の見出しは1つも消えない。
+      expect(reply).toContain('消えた見出し');
+      expect(reply).toContain('なし');
+      // 元の見出しは残っている。
+      expect((await h.stores.persona.read('notes'))?.content).toContain('## 節1');
+    });
+  });
+
+  /**
    * `memory_list`（#170「記憶の目次化」）。要旨・鮮度・区分・階層を出す。
    * `memory_write` が frontmatter を書けること自体はストア層の歯
    * （`memory.test.ts` / `storage-fs` / `storage-pg` のテスト）で確かめてあるので、
