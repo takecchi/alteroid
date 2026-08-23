@@ -116,7 +116,10 @@ describe('workspace の test script が同じ穴を開けていないか（#246�
     expect(script, `${pkgDir}/package.json の scripts.test が無い`).toBeTruthy();
 
     const match = (script as string).match(TEST_SCRIPT_SHAPE);
-    expect(match, `${pkgDir} の test script の形が想定外: ${JSON.stringify(script)}`).not.toBeNull();
+    expect(
+      match,
+      `${pkgDir} の test script の形が想定外: ${JSON.stringify(script)}`,
+    ).not.toBeNull();
 
     const filterPath = match![1];
     const pointsToOwnPackage = filterPath === pkgDir || filterPath.startsWith(`${pkgDir}/`);
@@ -132,12 +135,13 @@ describe('workspace の test script が同じ穴を開けていないか（#246�
       const pkg = JSON.parse(readFileSync(path.join(ROOT, pkgDir, 'package.json'), 'utf8'));
       const script = pkg.scripts?.test;
       const match = (script as string | undefined)?.match(TEST_SCRIPT_SHAPE);
-      expect(match, `${pkgDir} の test script の形が想定外: ${JSON.stringify(script)}`).not.toBeNull();
+      expect(
+        match,
+        `${pkgDir} の test script の形が想定外: ${JSON.stringify(script)}`,
+      ).not.toBeNull();
 
       const filterPath = match![1];
-      const matched = testFiles.filter(
-        (f) => f === filterPath || f.startsWith(`${filterPath}/`),
-      );
+      const matched = testFiles.filter((f) => f === filterPath || f.startsWith(`${filterPath}/`));
       expect(
         matched.length,
         `${pkgDir} の test script（絞り込み先: ${filterPath}）に一致するテストファイルが0件`,
