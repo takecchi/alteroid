@@ -114,6 +114,23 @@ const LONG = Array.from(
 
 const SHORT = '短い値';
 
+/**
+ * 記憶へ書いた本文が、保存された後にどう読み戻るか（`PersonaStore.write` の
+ * 契約。`store.ts`）——末尾の改行が正規化される。
+ *
+ * **実装の `ensureTrailingNewline` を呼ばずに、期待値の側で書き直してある。**
+ * 同じ関数を突き合わせの両側で使うと、その関数を壊す変異で両側が同時に動き、
+ * この歯が鳴らなくなる（`.claude/skills/mutation-testing/SKILL.md`「比較の
+ * 両側が同じ経路で同じ値へ強制されると、比較そのものが恒真になる」）。
+ *
+ * **ここは長さではなく1文字ずつの一致を測る歯なので、契約を織り込んでもなお
+ * `toBe` のままである** —— 末尾の1文字を足す以外の欠けは、いままでどおり撃つ。
+ * **以前ここは正規化を織り込まずに緑だった** —— 当たっているのがインメモリ実装
+ * だけで、それだけが正規化していなかったからである（#370）。
+ */
+const asStored = (content: string): string =>
+  content.endsWith('\n') ? content : `${content}\n`;
+
 describe('クローンの道具に渡した引数は、長さと位置によらず全部届く', () => {
   it('長い値がどの位置にあっても、後ろの引数まで1文字も欠けずに届く（journal_write）', async () => {
     // 位置を変えた3通り。**クローンが観測した表と同じ並びである。**
@@ -161,7 +178,7 @@ describe('クローンの道具に渡した引数は、長さと位置によら�
       expect(result.isError, `${label}: 呼び出しが失敗した（${result.text}）`).toBe(false);
 
       const doc = await stores.persona.read(slug);
-      expect(doc?.content, `${label}: 本文が届いていない`).toBe(content);
+      expect(doc?.content, `${label}: 本文が届いていない`).toBe(asStored(content));
 
       const entries = await stores.journal.list({ limit: 10 });
       const written = entries.find((entry) => entry.type === 'memory_update');
@@ -193,7 +210,7 @@ describe('クローンの道具に渡した引数は、長さと位置によら�
 
       expect(result.isError, `${size}字: 呼び出しが失敗した（${result.text}）`).toBe(false);
       const doc = await stores.persona.read('probe');
-      expect(doc?.content, `${size}字: 本文が届いていない`).toBe(value);
+      expect(doc?.content, `${size}字: 本文が届いていない`).toBe(asStored(value));
       const entries = await stores.journal.list({ limit: 10 });
       const written = entries.find((entry) => entry.type === 'memory_update');
       expect(
