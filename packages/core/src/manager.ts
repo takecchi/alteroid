@@ -252,6 +252,15 @@ export interface ManagerSendOptions {
  * （人間の Web UI もクローンの `manager_stop` も、この下は1本の道を通る）。
  * ここが無いと、クローンが止めた仕事の日誌に「人間が停止させた」と残り、
  * 人間とクローンで見えている経緯が食い違う。
+ *
+ * **`abort()` は、この値によって「配るかどうか」も分ける（Issue #320）。**
+ * `by === 'clone'` のときは日誌には残すが、クローンの受信箱へは配らない
+ * （`abort()` 内の `if (by !== 'clone')` の doc に理由の全文がある）。要約:
+ * クローンは `manager_stop` の戻り値として同じ情報を同じターンで既に受け
+ * 取っており、配り直しは新しい情報を1文字も持たないのに、配るたびに
+ * クローンのターンを1回消費する（実測: 7本畳んで7ターン）。**`by === 'human'`
+ * は今までどおり配る** — 人間が止めた事実はクローンにとって外から来た
+ * 出来事で、他に知る手段が無いため。
  */
 export type ManagerStopActor = 'human' | 'clone';
 
@@ -1376,15 +1385,66 @@ class Pool implements ManagerPool {
     // （`textMarkupSchema` の doc、`packages/core/src/schema.ts`）。
     const markup: TextMarkup | undefined =
       outcome === 'stopped' && by === 'human' && reason !== undefined ? 'none' : undefined;
-    this.#post({
-      type: 'manager_message',
-      id: randomUUID(),
-      at: new Date().toISOString(),
-      managerId,
-      kind: 'report',
-      text: messageText,
-      ...(markup === undefined ? {} : { markup }),
-    });
+    // **`by === 'clone'` のときはここで #post しない（Issue #320）。**
+    //
+    // 日誌（上の `#journal`）はこれより前に、条件を問わず独立して既に済んで
+    // いる——だから配らなくても「誰が止めたか」は日誌の1行として辿れる
+    // （`manager.test.ts` の「クローンが止めたら、クローンが止めたと残る」が
+    // それを固定している）。ここで省くのは**クローンの受信箱への配達**だけ。
+    //
+    // なぜクローン発だけ配らないか、理由は2つ。どちらも実機の実測で確かめた
+    // ものであって推測ではない（Issue #320 のコメント、2026-08-23 観測）:
+    //
+    // 1. **新しい情報が無い。** クローンは `manager_stop` ツール
+    //    （`packages/core/src/tools.ts`）の戻り値として、この `messageText`
+    //    が言えることを**同じターンの中で同期的に**既に受け取っている——
+    //    戻り値は `detail`（`who` / `reason` / `stopErrorNote` を含む）に加え、
+    //    止めた後の状態（`after.status` / `live`）や `done` だった場合の
+    //    但し書きまで返す。対して非同期の `messageText` はここで組み立てた
+    //    `${managerId} を${who}が停止させました。理由: ${reason}` だけであり、
+    //    **戻り値の真部分集合である**。読み手が同じ・ターンも同じ・情報も
+    //    戻り値に含まれる以上、配る先に新しい事実は1文字も無い。
+    // 2. **配る費用が本数に比例する。** 実測（2026-08-23）: 終了済み
+    //    マネージャー7本を `manager_stop` で畳んだところ、台帳は1件も増え
+    //    なかった（片付け済みの判定は効いている）のに、7件の停止の知らせが
+    //    それぞれ独立したターンとしてクローンに届き、**きっかり7ターン**
+    //    消費した（1本も欠けず、呼んだ順のまま）。`manager_message` は
+    //    `#mergedHumanBatch` が常に `null` を返すぶん束ねられないので、
+    //    件数がそのままターン数になる。クローンのターンは起きるたびに
+    //    システムプロンプト（記憶の全文）を読み直すので、実費は「何もしない」
+    //    ターンの数だけ確定的に発生する。
+    //
+    // **人間発（`by === 'human'`）は、今までどおり配る。** 人間がマネージャーを
+    // 止めたことは、クローンにとって**外から来た出来事**である——クローンは
+    // それを同期の戻り値からは知りようがなく（自分が呼んだ道具ではないので
+    // 戻り値そのものが無い）、他に知る手段が無い。だからここだけは配達が
+    // 唯一の経路であり、省くと「なぜ止まったか分からないマネージャー」を作る
+    // （PRD「可観測性」）。
+    //
+    // **言えないこと:** 戻り値を読まずにターンを終えたクローンは、この停止を
+    // 受信箱からは知れない。**それは戻り値を読まない場合の話であって、
+    // `manager_stop` の説明文（`packages/core/src/tools.ts`）は「止めたあと
+    // 本当に止まったかを確かめて返すので、返ってきた状態まで読むこと」を
+    // 既にクローンへ要求している** — この省略は、その要求を前提にしたうえで
+    // 初めて安全である。
+    //
+    // **`commitmentFor`（`packages/core/src/clone.ts`）は触っていない。**
+    // 「`manager_message` は `kind` を問わず台帳に載る」契約はそのまま
+    // 正しく残る——直したのは「そもそもクローン発の停止で知らせを作るか」
+    // であって、「作られた知らせを台帳に載せるか」ではない
+    // （`commitment.test.ts` の「マネージャーからの報告も台帳に載る」を
+    // 反転させていない）。
+    if (by !== 'clone') {
+      this.#post({
+        type: 'manager_message',
+        id: randomUUID(),
+        at: new Date().toISOString(),
+        managerId,
+        kind: 'report',
+        text: messageText,
+        ...(markup === undefined ? {} : { markup }),
+      });
+    }
 
     return { outcome, detail, ...(sessionGone === undefined ? {} : { sessionGone }) };
   }
