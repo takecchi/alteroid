@@ -311,4 +311,49 @@ describe('pnpm verify — テストの結末は4つある', () => {
     expect(testRan('      Tests  3 passed (3)\n')).toBe(false);
     expect(testRan('')).toBe(false);
   });
+
+  /**
+   * #327: `verify.mjs` の `runTest` が子の stdout と stderr を1本の `output` へ
+   * 多重化していたせいで、改行で終わらない書き込みの直後に集計行が来ると `^`
+   * アンカーが当たらず「走っていない」に化けうる（`#326` が実在する書き手）。
+   *
+   * **直したのは `verify.mjs`（stdout と stderr を別々に溜め、`testRan` には
+   * stdout だけを渡す）側であって、この `testRan` 自体のアンカーではない。**
+   * ここではそのことを固定する — `testRan` はこの形の「食われた」文字列を
+   * 依然として `false`（＝ 集計行が無い＝走っていない）と読む。これは仕様の
+   * 後退ではなく、**この判定が緩んでいないことの回帰確認**である。
+   * `verify.mjs` 側で stdout/stderr を分けてさえいれば、この文字列そのものが
+   * `testRan` へ渡ることは無い（実測は `runTest` の doc に書いてある）。
+   */
+  it('改行に食われて集計行が行頭に無い形は、依然として「走っていない」と読む（#327）', () => {
+    const eaten =
+      // **改行が無いのは意図である。** stdout（改行で終わらない書き込み。#326）と
+      // stderr（別プロセスからの1行）が同じ `output` へ多重化されたときの実測の形
+      // （Issue #327 本文）を再現している — `Test Files` の直前に `\n` が無い。
+      '（日誌を 0 件遡り、この会話の先頭まで届いた）alteroid: 台帳を記録できませんでした' +
+      ' Test Files  1 passed (1)\n' +
+      '      Tests  3 passed (3)\n';
+    expect(testRan(eaten)).toBe(false);
+    expect(classifyTest({ status: 0, signal: null, output: eaten })).toMatchObject({
+      state: 'not-run',
+    });
+  });
+
+  it('本当に走っていない形（集計行そのものが無い）は false のまま', () => {
+    const noSummary =
+      '\n=== test: pnpm test\n' +
+      'stub("./target.js") が呼ばれていません\n' +
+      'AssertionError: expected 1 to be 0\n';
+    expect(testRan(noSummary)).toBe(false);
+    expect(classifyTest({ status: 1, signal: null, output: noSummary })).toMatchObject({
+      state: 'not-run',
+    });
+  });
+
+  it('「Test Files」という語が文中に出てくるだけでは true にならない（偽陽性に耐える）', () => {
+    const mentionOnly =
+      'このテストは Test Files と Tests の行を読む testRan() の歯を確かめる。\n' +
+      '実際の集計行はまだ出ていない。\n';
+    expect(testRan(mentionOnly)).toBe(false);
+  });
 });
