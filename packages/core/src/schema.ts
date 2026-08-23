@@ -950,6 +950,26 @@ export const commitmentSchema = z.object({
 export type CommitmentOrigin = z.infer<typeof commitmentOriginSchema>;
 export type Commitment = z.infer<typeof commitmentSchema>;
 
+/**
+ * 一覧の `updatedAt`（更新＝片付けた時刻。まだなら受け取った時刻）を出す。
+ *
+ * **なぜここへ寄せたか。** かつては MCP（`tools.ts`）と CLI（`apps/cli/src/chat.ts`）
+ * のそれぞれの実装側に `commitment.closedAt ?? commitment.at` がそのまま書かれて
+ * いた。この repo は「導出が各実装の側にあって、書き忘れても何も落ちない」形で
+ * 同じ壊れ方を既に3回踏んでいる（`.claude/skills/listing-and-detail/SKILL.md` の
+ * 表、`digest.ts` の `omitted()` の doc — 「節ごとに手で書いていたのをここへ
+ * 寄せた。…この行が各節の実装の側にあって、書き忘れても何も落ちなかったから
+ * である」）。ここもその形だったので、スキーマの隣の共有ヘルパへ寄せ、3面
+ * （MCP / HTTP / CLI）がこれを呼ぶ形にする。
+ *
+ * `Pick<>` で受けるのは、HTTP の応答型など `Commitment` の全欄を持たない値
+ * からも呼べるようにするため（`GET /commitments` が `updatedAt` を返す欄を
+ * 足す側は別 PR）。
+ */
+export function commitmentUpdatedAt(entry: Pick<Commitment, 'at' | 'closedAt'>): string {
+  return entry.closedAt ?? entry.at;
+}
+
 // ---------------------------------------------------------------------------
 // ジョブ・承認待ち
 // ---------------------------------------------------------------------------
@@ -1253,6 +1273,43 @@ export const pendingApprovalSchema = z.object({
 });
 
 export type PendingApproval = z.infer<typeof pendingApprovalSchema>;
+
+/**
+ * 一覧の `updatedAt`（更新＝回答が付いた時刻。まだなら作成時刻）を出す。
+ *
+ * **なぜここへ寄せたか。** かつては MCP（`tools.ts`）と CLI（`apps/cli/src/chat.ts`）
+ * のそれぞれの実装側に `approval.answeredAt ?? approval.createdAt` がそのまま
+ * 書かれていた。この repo は「導出が各実装の側にあって、書き忘れても何も
+ * 落ちない」形で同じ壊れ方を既に3回踏んでいる（`.claude/skills/listing-and-detail/SKILL.md`
+ * の表、`digest.ts` の `omitted()` の doc — 「節ごとに手で書いていたのをここへ
+ * 寄せた。…この行が各節の実装の側にあって、書き忘れても何も落ちなかったから
+ * である」）。ここもその形だったので、スキーマの隣の共有ヘルパへ寄せ、3面
+ * （MCP / HTTP / CLI）がこれを呼ぶ形にする。
+ *
+ * `Pick<>` で受けるのは、HTTP の応答型など `PendingApproval` の全欄を持たない
+ * 値からも呼べるようにするため（`GET /approvals` が `updatedAt` を返す欄を
+ * 足す側は別 PR）。
+ *
+ * **⚠️ `tools.ts` の `approvals_list`（呼び出し元）からは、この `??` の左枝
+ * （`answeredAt` が付いている側）は到達しない。** `approvals_list` の一覧
+ * モードは `listApprovals({ pendingOnly: true })` をハードコードで呼び、fs /
+ * pg / インメモリの3実装すべてが `answeredAt === undefined`（pg は `isNull`）
+ * で絞るからである。**それでも消してはいけない** — 将来 `pendingOnly` を
+ * 外したとき、これが無いと「更新」が黙って嘘になる（答えが付いた件が一覧に
+ * 出るようになった瞬間、更新が回答時刻ではなく作成時刻を指す）。「死んでいる
+ * コード」と「将来のために置いてあるもの」は、書いていなければ区別が付かない。
+ * 根拠は3実装のソースと呼び出し元1箇所の網羅（2026-08-22T15:58Z 観測）であって、
+ * 実行時カバレッジでは確かめていない。
+ *
+ * **左枝を歯で固定できないのは呼び出し元からの話であって、このヘルパ自身に
+ * ついては成り立たない。** `schema.test.ts` はこのヘルパを直接呼ぶ単体試験で
+ * `answeredAt` 有りの枝を固定している。
+ */
+export function approvalUpdatedAt(
+  approval: Pick<PendingApproval, 'createdAt' | 'answeredAt'>,
+): string {
+  return approval.answeredAt ?? approval.createdAt;
+}
 
 // ---------------------------------------------------------------------------
 // chat ストリーム（daemon → CLI）

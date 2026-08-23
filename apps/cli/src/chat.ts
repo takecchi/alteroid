@@ -2,6 +2,8 @@ import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 
 import {
+  approvalUpdatedAt,
+  commitmentUpdatedAt,
   usageLayerSchema,
   usageSiteSchema,
   type Commitment,
@@ -707,7 +709,7 @@ export async function runSlashCommand(
         for (const line of restLines) stdout.write(`      ${line}\n`);
         stdout.write(
           `      id: ${approval.id}  作成: ${approval.createdAt}` +
-            `  更新: ${approval.answeredAt ?? approval.createdAt}\n`,
+            `  更新: ${approvalUpdatedAt(approval)}\n`,
         );
         if (approval.jobId) stdout.write(`      マネージャー: ${approval.jobId}\n`);
         if (approval.context) stdout.write(`      背景: ${summarizeText(approval.context)}\n`);
@@ -1308,7 +1310,7 @@ export function renderCommitments(
     // 一覧を読むときに効くのはそこで、ISO を足したから要らなくなるものではない。
     lines.push(
       `      id: ${commitment.id}  起点: ${from}  作成: ${commitment.at}` +
-        `（${formatElapsed(commitment.at, now)}前）  更新: ${commitment.closedAt ?? commitment.at}`,
+        `（${formatElapsed(commitment.at, now)}前）  更新: ${commitmentUpdatedAt(commitment)}`,
     );
     if (closed) {
       lines.push(
