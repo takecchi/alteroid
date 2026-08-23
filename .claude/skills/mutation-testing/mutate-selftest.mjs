@@ -833,6 +833,21 @@ function scenarioSpecValidation() {
   if (!appliedOk) {
     throw new HarnessError('spec 検査が過剰: 正しい spec まで拒否している。');
   }
+  // **`cleanAfterward` も、上の2つと同じく落とす口を持たせる。** 実質は
+  // no-op の歯である——ここへ来た時点で `restoreMutation()` 自身の歯4
+  // （復元後 md5 の照合）・照合2（12c: 復元後の git status --porcelain）が
+  // 先に投げているはずなので、まず鳴らない。それでも assert せずに値だけ
+  // 返す形にすると、結果に並ぶ真偽値のうち「確かめた値」と「計算しただけの
+  // 値」が見分けられず、読み手は隣にある判定を実測として読んでしまう
+  // （マネージャーの指摘、2026-08-23。AGENTS.md「報告の形」の同じ形）。
+  // no-op の歯は安い——ここに置く。
+  if (!cleanAfterward) {
+    throw new HarnessError(
+      '対照ケース（正しい spec）の後始末でツリーが汚れたまま、または印が残ったまま終わった。' +
+        'restoreMutation() 自身の歯（md5照合・git status 照合）が先に投げているはずなので、' +
+        'ここへ到達すること自体が別の回帰の疑いがある。',
+    );
+  }
 
   return {
     scenario: 'spec-validation',
