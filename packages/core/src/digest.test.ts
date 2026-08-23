@@ -132,6 +132,80 @@ describe('活動の要約', () => {
 });
 
 /**
+ * `## 記憶の更新` 節が `action` / 前後バイト数を出すこと（#339）。
+ *
+ * `journal_read`（`tools.ts`）・Web の日誌一覧（`queries.ts`）と同じ穴
+ * ——journal の `memory_update` エントリを1件1行で読み手へ並べる面——であり、
+ * 同じ3性質（action・バイト数が出る／古いエントリで0を出さない／単位が
+ * 混ざらない）をここでも測る。
+ */
+describe('## 記憶の更新 — action / バイト数（#339）', () => {
+  const since = () => new Date(Date.now() - 60_000);
+
+  it('action と前後バイト数を出す（新形式のエントリ）', async () => {
+    const stores = createMemoryStores();
+    await stores.journal.append({
+      type: 'memory_update',
+      slug: 'values',
+      cause: 'clone',
+      action: 'write',
+      bytesBefore: 12,
+      bytesAfter: 34,
+      summary: '価値観を書いた',
+    });
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    expect(digest).toContain('write');
+    expect(digest).toContain('12→34 バイト');
+  });
+
+  it('action / バイト数を持たない古いエントリは「不明」と明示し、0 としては出さない', async () => {
+    const stores = createMemoryStores();
+    await stores.journal.append({
+      type: 'memory_update',
+      slug: 'values',
+      cause: 'human',
+      summary: '古い形式のエントリ（action フィールドが無い）',
+    });
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    expect(digest).not.toContain('0→0 バイト');
+    expect(digest).toContain('不明');
+  });
+
+  it('バイト数（機械可読）と summary に埋め込まれた文字数（自由文）が同じ括弧に混在しない', async () => {
+    // memory_delete の summary は「（削除直前 N 文字）」を埋め込む（tools.ts の
+    // memory_delete）。バイトの注記は構造化された括弧（cause/action の隣）に
+    // 置き、自由文の summary はその括弧の外へ出す——queries.ts と同じ分け方。
+    const stores = createMemoryStores();
+    await stores.journal.append({
+      type: 'memory_update',
+      slug: 'temp-note',
+      cause: 'clone',
+      action: 'remove',
+      bytesBefore: 42,
+      bytesAfter: 0,
+      summary: '片付け（削除直前 40 文字）',
+    });
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+    const line = digest.split('\n').find((row) => row.includes('temp-note'));
+    expect(line).toBeDefined();
+    if (line === undefined) throw new Error('記憶の更新の行が見つからない');
+    const closingParenIndex = line.indexOf('）');
+    const structured = line.slice(0, closingParenIndex);
+    const freeText = line.slice(closingParenIndex + 1);
+
+    expect(structured).toContain('42→0 バイト');
+    expect(structured).not.toContain('文字');
+    expect(freeText).toContain('40 文字');
+    expect(freeText).not.toContain('バイト');
+  });
+});
+
+/**
  * **上限で切ること自体は要件である。** 件数に比例して伸びる材料は、MCP の出力上限を
  * 超えると1文字も届かない。ここで守るのは「切ったことが出力から消えない」ことだけで
  * ある — 消えると、クローンの手元に残るのは「これで全部だ」と読める一覧になり、

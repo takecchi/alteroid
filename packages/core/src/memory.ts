@@ -321,6 +321,12 @@ export interface MemoryFrontmatterPatch {
   parent?: string;
 }
 
+/**
+ * **キーの並び順は `description` → `type` → `parent` に正規化される。**
+ * 人間が別の順序で書いていた frontmatter でも、`memory_frontmatter_set` を
+ * 一度でも通すとこの順に並べ替わる（値は失われず、意味も変わらない）。
+ * 既存の順序を保つ処理ではないので、直しに行かないこと。
+ */
 function serializeMemoryFrontmatter(fields: MemoryFrontmatterPatch): string {
   const lines = [FRONTMATTER_DELIMITER];
   if (fields.description !== undefined) lines.push(`description: ${fields.description}`);

@@ -280,7 +280,21 @@ export async function buildActivityDigest(stores: Stores, window: DigestWindow):
   if (memoryUpdates.length > 0) {
     sections.push('', '## 記憶の更新');
     for (const entry of memoryUpdates.slice(0, MAX_ITEMS)) {
-      sections.push(`- ${entry.slug}（${entry.cause}）${brief(entry.summary, 120)}`);
+      // `queries.ts` の `summarizeJournalEntry` と同じ言い方に揃える
+      // （`action`/`cause` を1つの括弧にまとめ、バイトの注記を `/` で続ける）。
+      // 単位はバイト（`schema.ts` の `bytesBefore`/`bytesAfter` の doc）。
+      // `action`/`bytesBefore`/`bytesAfter` はこの区別が導入される前の
+      // 古いエントリでは `undefined` — 無いことを `0` として出すと
+      // 「変化が無かった」と読めてしまうので、値が無いときは「不明」と
+      // 明示する（`tools.ts`/`queries.ts` と同じ扱い）。
+      const action = entry.action === undefined ? '' : `/${entry.action}`;
+      const bytes =
+        entry.bytesBefore === undefined || entry.bytesAfter === undefined
+          ? '前後バイト数不明（旧形式）'
+          : `${entry.bytesBefore}→${entry.bytesAfter} バイト`;
+      sections.push(
+        `- ${entry.slug}（${entry.cause}${action} / ${bytes}）${brief(entry.summary, 120)}`,
+      );
     }
     sections.push(...omitted(memoryUpdates.length, journalWhere('memory_update')));
   }

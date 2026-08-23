@@ -3214,6 +3214,71 @@ describe('journalEntrySchema の memory_update（action の後方互換）', () 
 });
 
 /**
+ * `journal_read`（クローンが読む面）が `memory_update` の `action` /
+ * `bytesBefore` / `bytesAfter` を出すこと（#339）。
+ *
+ * 記録側（`memory_write` 等）は既に action / バイト数を日誌へ書いているが
+ * （上のテスト群）、読み出す面がそれを出していなかった。ここで測るのは
+ * 読み出し側——`renderJournalEntry` の `memory_update` 分岐——である。
+ */
+describe('journal_read — memory_update の action / バイト数（#339）', () => {
+  it('action と前後バイト数を出す（新形式のエントリ）', async () => {
+    const h = harness();
+    await h.call('memory_write', { slug: 'values', content: '12345', summary: '最初の書き込み' });
+    const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
+    if (entry === undefined) throw new Error('memory_write が日誌へ記録していない');
+
+    const reply = await h.call('journal_read', { id: entry.id });
+
+    expect(reply).toContain('write');
+    expect(reply).toContain('bytes=0→5');
+  });
+
+  it('action / バイト数を持たない古いエントリは「不明」と明示し、0 としては出さない', async () => {
+    const h = harness();
+    const legacy = await h.stores.journal.append({
+      type: 'memory_update',
+      slug: 'values',
+      cause: 'human',
+      summary: '古い形式のエントリ（action フィールドが無い）',
+    });
+
+    const reply = await h.call('journal_read', { id: legacy.id });
+
+    expect(reply).not.toContain('bytes=0→0');
+    expect(reply).not.toMatch(/bytes=0(?!→)/);
+    expect(reply).toContain('不明');
+  });
+
+  it('head のバイト表示（bytes=）が、summary 由来の文字数（body の自由文）の側へ紛れ込まない', async () => {
+    const h = harness();
+    await h.stores.persona.write('temp-note', '12345');
+    await h.call('memory_delete', { slug: 'temp-note', summary: '片付け' });
+    const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
+    if (entry === undefined) throw new Error('memory_delete が日誌へ記録していない');
+
+    const reply = await h.call('journal_read', { id: entry.id });
+    const separatorIndex = reply.indexOf('\n\n');
+    const headLine = reply.slice(0, separatorIndex);
+    const body = reply.slice(separatorIndex + 2);
+
+    // head 行には機械可読なバイトの注記（`bytes=`）が載る。
+    // （同じ head 行には `excerpt.ts` の `describePage` が付ける「全 N 文字」
+    // という**ページングの都合の**文字数も載るが、それは memory_delete の
+    // summary が埋め込む「削除直前の文字数」とは別物で、全 entry 型に
+    // 共通する既存の仕組みである。ここで確かめたいのはその混在ではなく、
+    // memory_update 固有の自由文（summary、削除直前の文字数を含む）へ
+    // `bytes=` が紛れ込まないことである。）
+    expect(headLine).toContain('bytes=5→0');
+    // body（summary）には削除直前の文字数（「40 文字」等の自由文）が入るが、
+    // 機械可読なバイトのラベル（`bytes=`）は出ない——単位の異なる2つの数値が
+    // 同じ自由文へ混ざる経路を作らない。
+    expect(body).toContain('文字');
+    expect(body).not.toContain('bytes=');
+  });
+});
+
+/**
  * **道具を足したら、システムプロンプトの道具一覧（`prompt.ts` の「# 道具」）にも載せる。**
  *
  * 関数呼び出しのスキーマ（`allowedTools`）に載っていれば呼べはするが、クローンが
