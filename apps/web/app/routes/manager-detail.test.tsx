@@ -295,6 +295,84 @@ describe('詳細でも、失敗は状態を置き換えずに状態へ添える'
 });
 
 /**
+ * **`lastReport` の描き方は `lastFailure` の有無で分岐する（issue #293）。**
+ * 直す前は、失敗回でも `<Markdown>` として無条件に描いていたので、SDK の生の
+ * 失敗文言（例: `You've hit your org's monthly spend limit …`）に Markdown の
+ * 記法が混ざっていた場合、体裁まで正常な報告と同じ顔になっていた。
+ *
+ * ここで確かめるのは `markup`（issue #287 の軸）ではなく `lastFailure`（この
+ * Issue の軸）で分岐していること — 失敗回の本文に Markdown の記法（`*` /
+ * `#` / `**`）を混ぜても化けないこと、成功回は今日どおり化けること、
+ * 失敗回は改行を潰さず長い行が横に溢れないことを別々の歯にする。
+ */
+describe('詳細でも、`lastReport` は `lastFailure` の有無で描き方を分ける', () => {
+  const FAILURE = { code: 'billing_error', via: 'assistant_error', at: '2026-08-20T10:00:00.000Z' };
+
+  it('失敗回の本文は Markdown を通さない（*/#/** が化けず、改行と生の文字がそのまま出る）', async () => {
+    renderDetail({
+      ...BASE,
+      status: 'done',
+      lastFailure: FAILURE,
+      lastReport:
+        '（このターンは応答を返さずに終わった: billing_error / assistant_error）\n' +
+        '# 見出しではない\n' +
+        '*強調ではない* 文字\n\n' +
+        '（失敗する前に出ていた本文）\n' +
+        '**途中まで進めた**',
+    });
+
+    expect(await screen.findByText('最後のターンの中身（報告ではない）')).toBeTruthy();
+    // `<pre>` は1本のテキストノードとして描かれるので、部分一致の
+    // マッチャー関数で取る（`findByText` の完全一致では見えない）。
+    const pre = await screen.findByText((_content, node) => node?.tagName === 'PRE');
+    // 記法の文字を含む見出し・強調が、化けずにそのまま画面に在ること。
+    expect(pre.textContent).toContain('# 見出しではない');
+    expect(pre.textContent).toContain('*強調ではない* 文字');
+    expect(pre.textContent).toContain('**途中まで進めた**');
+    // Markdown を通っていれば em / strong / heading になる。通っていないことを確かめる。
+    expect(screen.queryByRole('heading', { name: '見出しではない' })).toBeNull();
+    expect(pre.querySelector('em, strong, h1, h2, h3')).toBeNull();
+    // 改行を潰さない（`whitespace-pre-wrap`）。
+    const tokens = pre.className.split(/\s+/);
+    expect(tokens).toContain('whitespace-pre-wrap');
+    // 長い1行が横に溢れて画面を壊さないための作法（既存の `reports.tsx` の
+    // `UnavailableNote` と同じ）。
+    expect(tokens).toContain('overflow-x-auto');
+    expect(tokens).toContain('break-words');
+  });
+
+  /** 実際の事故の形（`failedReportText` 相当）。次に読む人へ意図を伝える1本。 */
+  it('実際の事故の形（monthly spend limit の生文言）が化けずそのまま出る', async () => {
+    renderDetail({
+      ...BASE,
+      status: 'done',
+      lastFailure: FAILURE,
+      lastReport:
+        "（このターンは応答を返さずに終わった: billing_error / assistant_error）\n" +
+        "You've hit your org's monthly spend limit for the API. To keep going, **increase your limit** in the console.",
+    });
+
+    const body = await screen.findByText(
+      /You've hit your org's monthly spend limit for the API\./,
+    );
+    expect(body.textContent).toContain('**increase your limit**');
+    expect(body.closest('strong')).toBeNull();
+  });
+
+  it('成功回（lastFailure 無し）は今日どおり Markdown で描く（既定は変えていないことの固定）', async () => {
+    renderDetail({
+      ...BASE,
+      status: 'done',
+      lastReport: '*強調される* はず',
+    });
+
+    expect(await screen.findByText('最後の報告')).toBeTruthy();
+    const em = await screen.findByText('強調される');
+    expect(em.tagName).toBe('EM');
+  });
+});
+
+/**
  * **`live` は status と別の軸である。** `live && <札>` の形は `live === false` を
  * 「札が無い」でしか表さず、読む側は「切断されている」と「この画面が接続状態を
  * 報告していない」を区別できない。だから両側を描く。

@@ -246,22 +246,7 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
                 }
               />
               <div className="min-w-0 px-4 py-3">
-                {/*
-                  **ここで `Markdown` として描いてよいかは判断されていない。**
-                  失敗で終わった回の `lastReport` は SDK の生の文言を含みうる
-                  （`packages/core/src/manager.ts:2157` が
-                  `RunnerEvent{type:'report'}.text` をそのまま入れ、失敗回の
-                  その `text` は `packages/core/src/runner.ts` の
-                  `failedReportText` が「デーモンの頭＋SDK の失敗文言＋
-                  マネージャーの途中出力」を連結して組み立てる）。同じ repo の
-                  別の面は逆の判断を明示している —
-                  `apps/web/app/routes/reports.tsx` の `UnavailableNote` の doc
-                  は「`Markdown` で描かないこと。中身は SDK が出したエラー文
-                  であって…」と逐語で書いている。判別材料はこの場に既に在る
-                  — `manager.lastFailure` が立っているかどうかは、同じ
-                  `Card` の `subtitle`（直上）が既に読んでいる。→ issue #293
-                */}
-                <Markdown>{manager.lastReport}</Markdown>
+                <LastReportBody lastReport={manager.lastReport} lastFailure={manager.lastFailure} />
               </div>
             </Card>
           )}
@@ -430,6 +415,88 @@ function FailureNote({ failure }: { failure: ManagerSummary['lastFailure'] | und
       がこれは応答ではないと言った」ことと、この
       <code className="font-mono">code</code> だけである。
     </p>
+  );
+}
+
+/**
+ * `Job.lastReport`（最後のターンの中身）を、`Markdown` で描くか素のテキストで
+ * 描くかを分ける。issue #293。
+ *
+ * **軸は `markup` ではなく `lastFailure` である。** `manager_message.text` に
+ * 立てた `markup`（issue #287、`packages/core/src/schema.ts` の
+ * `textMarkupSchema`）は、ここには当てない。理由は推測ではなく
+ * `textMarkupSchema` の doc の逐語 ——
+ *
+ * > **立てられる場所にだけ立てる。** 複数の書き手・複数の由来の文字列が
+ * > 連結済みで届く経路（例: `packages/core/src/manager.ts` の
+ * > `failedReportText` 由来のメッセージ。デーモンの定型文・SDK の失敗文言・
+ * > マネージャーの途中出力が1本の文字列に混ざる）には立てない。**立てられ
+ * > ないから立てないのであって、安全だから立てないのではない**（issue #287）。
+ *
+ * `lastReport` が失敗回に持つ本文はまさにこの「連結済みで届く経路」そのもの
+ * ——`packages/core/src/runner.ts` の `failedReportText` が「デーモンの頭＋SDK
+ * の生の失敗文言＋マネージャーの途中出力」を1本へ連結する。**#306 が明示で
+ * 引いた「ここには立てない」線を、ここへ `lastReportMarkup` を足して消す形は
+ * 取らない。**
+ *
+ * 使うのは「その文字列がどの記法で書かれているか」ではなく、「**この回は
+ * 失敗で終わったので、本文に由来の違う文字列が連結されている**」という別の
+ * 軸の事実 —— それを表す印が `manager.lastFailure` である。
+ *
+ * - `record.job.lastReport = event.text` と `lastFailure` の設定／`delete` は
+ *   **同じ `report` イベントの中で同時に動く**（`packages/core/src/manager.ts`
+ *   の `#onEvent` の `case 'report'`）。成功で終わった回は
+ *   `delete record.job.lastFailure` する。**だから「`lastFailure` が立って
+ *   いる ⇒ その `lastReport` はその失敗回の本文」が成り立つ** —— 古い報告に
+ *   新しい失敗が貼り付く形は無い
+ * - 判定は本文の文言ではなく構造化された印で行う、という約束が repo 全体で
+ *   通っている（同じ `#onEvent` のコメント、`reports.tsx` の `isUnavailable`
+ *   の doc）。`lastFailure` はその印である
+ *
+ * **`lastFailure` が無い回で `Markdown` を使うのは「安全だと推論した」から
+ * ではない。** `textMarkupSchema` の doc の `undefined` の扱いと同じ言い方を
+ * 揃える —— **いまの既定を変えない、という方針の結果である。**
+ *
+ * **体裁は `reports.tsx` の `UnavailableNote` へ寄せた**（`commitments.tsx` の
+ * `PlainBody` ではなく）。理由: `lastReport` の失敗回の本文は、`UnavailableNote`
+ * が扱う日報の `unavailable` 欄と**同じ種類の文字列**（SDK の生文言を含みうる
+ * 連結済みテキスト）であり、あちらには既にこの種の文字列についての明示の
+ * 判断（`Markdown` で描かない・言い換えない）が doc として在る。`overflow-x-auto`
+ * を含む `<pre>` の形も流用し、長い1行が横に溢れて画面を壊さないようにする。
+ *
+ * **本文を1文字も消さない・切り詰めない・言い換えない。** SDK の文言で人間が
+ * 検索できることが要件である（`UnavailableNote` の doc、`usage-limits.ts` の
+ * 「言い換えないこと」と同じ約束）。
+ *
+ * **犠牲: 失敗回のマネージャー自身の途中出力（`failedReportText` の
+ * `partial`）が素のテキストとして出るので、そこに含まれる `**…**` は強調に
+ * 化けず、記法の文字がそのまま画面に見える。** 承知のうえの犠牲である ——
+ * `commitment.body`（`commitments.tsx` の `CommitmentBody`）はデーモンの定型文
+ * について**逆**（`Markdown` 側）へ倒しているが、あちらは「分離できないうえ
+ * 頻度と害の向きが違う」（デーモンの定型文は頻繁に出るが SDK のエラー文は失敗
+ * したときしか出ない）ことを理由にしている。こちらは分離はできない点は同じ
+ * だが、**`lastFailure` という印で失敗回だけを切り出せる**点が違う ——
+ * 失敗回に限れば「マネージャーの途中出力が素で出る」犠牲より「SDK の生文言が
+ * 化けて読めなくなる」害のほうが大きいと判断し、素のテキスト側へ倒した。
+ *
+ * 関連: issue #293（この Issue） / #287（`markup` 軸の導入） / #306（`markup`
+ * を「立てられる場所にだけ立てる」と決めた PR、および `commitment.body` の
+ * `markup` 側フォールバック）。
+ */
+function LastReportBody({
+  lastReport,
+  lastFailure,
+}: {
+  lastReport: string;
+  lastFailure: ManagerSummary['lastFailure'] | undefined;
+}) {
+  if (lastFailure === undefined || lastFailure === null) {
+    return <Markdown>{lastReport}</Markdown>;
+  }
+  return (
+    <pre className="overflow-x-auto rounded border border-border bg-bg p-2 text-[11px] break-words whitespace-pre-wrap text-muted">
+      {lastReport}
+    </pre>
   );
 }
 
