@@ -3226,6 +3226,7 @@ describe('journal_read — memory_update の action / バイト数（#339）', (
     const h = harness();
     await h.call('memory_write', { slug: 'values', content: '12345', summary: '最初の書き込み' });
     const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
+    if (entry === undefined) throw new Error('memory_write が日誌へ記録していない');
 
     const reply = await h.call('journal_read', { id: entry.id });
 
@@ -3254,6 +3255,7 @@ describe('journal_read — memory_update の action / バイト数（#339）', (
     await h.stores.persona.write('temp-note', '12345');
     await h.call('memory_delete', { slug: 'temp-note', summary: '片付け' });
     const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
+    if (entry === undefined) throw new Error('memory_delete が日誌へ記録していない');
 
     const reply = await h.call('journal_read', { id: entry.id });
     const separatorIndex = reply.indexOf('\n\n');
