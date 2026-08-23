@@ -648,6 +648,56 @@ describe('HTTP API', () => {
     expect((await app.request('/approvals/nope/answer', json({ answer: 'x' }))).status).toBe(404);
   });
 
+  /**
+   * `updatedAt` は新しい情報ではなく、応答に既に載っている `createdAt` /
+   * `answeredAt` から `packages/core/src/schema.ts` の `approvalUpdatedAt` が
+   * 導くだけの派生欄（#269 / このスキーマの `.extend()` を土台にした宣言は
+   * `openapi.ts` を見ること）。**片方の枝だけ測ると導出を潰す変異が生き残る**
+   * ので、回答待ち（右枝＝`createdAt`）と回答済み（左枝＝`answeredAt`）の
+   * 両方を測る。
+   */
+  it('一覧の updatedAt は approvalUpdatedAt と一致する（回答待ちは作成時刻、回答済みは回答時刻）', async () => {
+    await stores.jobs.putApproval({
+      id: 'ap-updated-at',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      question: '更新時刻の確認',
+    });
+
+    const pendingList = (await (await app.request('/approvals')).json()) as {
+      approvals: { id: string; createdAt: string; updatedAt: string }[];
+    };
+    const pendingEntry = pendingList.approvals.find((a) => a.id === 'ap-updated-at');
+    // 未回答は「作成時刻」と一致する（`answeredAt` が無いので右枝）
+    expect(pendingEntry?.updatedAt).toBe('2026-01-01T00:00:00.000Z');
+    expect(pendingEntry?.updatedAt).toBe(pendingEntry?.createdAt);
+
+    // 回答を付ける（HTTP の /answer 経路はこのテストの偽クローンでは店に書き戻さない
+    // ので、器へ直接書く — 上の「片付けたものは…」と同じやり方）
+    await stores.jobs.putApproval({
+      id: 'ap-updated-at',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      question: '更新時刻の確認',
+      answeredAt: '2026-03-03T00:00:00.000Z',
+      answer: 'よい',
+    });
+
+    // 既定（未回答のみ）では回答済みは一覧から消える
+    const stillDefault = (await (await app.request('/approvals')).json()) as {
+      approvals: { id: string }[];
+    };
+    expect(stillDefault.approvals.find((a) => a.id === 'ap-updated-at')).toBeUndefined();
+
+    // **`pending=false` が、呼び出し元から `approvalUpdatedAt` の左枝
+    // （`answeredAt` 有り）へ実際に到達する初めての経路である**
+    // （`schema.ts` の `approvalUpdatedAt` の doc の2026-08-23 訂正を見ること）。
+    const allList = (await (await app.request('/approvals?pending=false')).json()) as {
+      approvals: { id: string; answeredAt?: string; updatedAt: string }[];
+    };
+    const answeredEntry = allList.approvals.find((a) => a.id === 'ap-updated-at');
+    expect(answeredEntry?.updatedAt).toBe('2026-03-03T00:00:00.000Z');
+    expect(answeredEntry?.updatedAt).toBe(answeredEntry?.answeredAt);
+  });
+
   it('セッションログまで降りられる（可観測性の最下段）', async () => {
     const id = await stores.archive.archive('sess-1', '{"a":1}\n');
 
@@ -1263,6 +1313,41 @@ describe('HTTP API', () => {
     expect(await stores.commitments.get(id)).not.toBeNull();
     // 閉じたことも日誌に残る（積んだ1件と合わせて2本）
     expect(await stores.journal.list({ types: ['decision'] })).toHaveLength(2);
+  });
+
+  /**
+   * `updatedAt` は新しい情報ではなく、応答に既に載っている `at` / `closedAt`
+   * から `packages/core/src/schema.ts` の `commitmentUpdatedAt` が導くだけの
+   * 派生欄（#269 / `.extend()` を土台にした宣言は `openapi.ts` を見ること）。
+   * **片方の枝だけ測ると導出を潰す変異が生き残る**ので、未了（右枝＝`at`）と
+   * 片付いた（左枝＝`closedAt`）の両方を測る。
+   */
+  it('一覧の updatedAt は commitmentUpdatedAt と一致する（未了は受け取った時刻、片付いたら片付けた時刻）', async () => {
+    await stores.commitments.open({
+      id: 'cm-updated-at',
+      at: '2026-01-01T00:00:00.000Z',
+      origin: 'human',
+      body: '更新時刻の確認',
+    });
+
+    const openList = (await (await app.request('/commitments')).json()) as {
+      entries: { id: string; at: string; updatedAt: string }[];
+    };
+    const openEntry = openList.entries.find((e) => e.id === 'cm-updated-at');
+    // 未了は「受け取った時刻」と一致する（`closedAt` が無いので右枝）
+    expect(openEntry?.updatedAt).toBe('2026-01-01T00:00:00.000Z');
+    expect(openEntry?.updatedAt).toBe(openEntry?.at);
+
+    await stores.commitments.close('cm-updated-at', '2026-02-02T00:00:00.000Z', '確認終了');
+
+    const closedList = (await (await app.request('/commitments?includeClosed=true')).json()) as {
+      entries: { id: string; at: string; closedAt: string; updatedAt: string }[];
+    };
+    const closedEntry = closedList.entries.find((e) => e.id === 'cm-updated-at');
+    // 片付いたら「片付けた時刻」と一致する（受け取った時刻ではない — 左枝）
+    expect(closedEntry?.updatedAt).toBe('2026-02-02T00:00:00.000Z');
+    expect(closedEntry?.updatedAt).toBe(closedEntry?.closedAt);
+    expect(closedEntry?.updatedAt).not.toBe(closedEntry?.at);
   });
 
   it('読めない includeClosed は弾く（黙って既定へ倒さない）', async () => {

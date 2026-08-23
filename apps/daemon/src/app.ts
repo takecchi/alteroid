@@ -16,8 +16,10 @@ import type {
 } from '@alteroid/core';
 import {
   RESERVED_SCHEDULE_KINDS,
+  approvalUpdatedAt,
   chatStreamEventSchema,
   collectConversations,
+  commitmentUpdatedAt,
   conversationMessages,
   createAuthProviderRegistry,
   createAuthService,
@@ -1470,12 +1472,19 @@ export function createApp(deps: AppDeps) {
         },
       }),
       validator('query', approvalsQuery),
-      async (c) =>
-        c.json({
-          approvals: await stores.jobs.listApprovals({
-            pendingOnly: c.req.valid('query').pending !== 'false',
+      async (c) => {
+        const approvals = await stores.jobs.listApprovals({
+          pendingOnly: c.req.valid('query').pending !== 'false',
+        });
+        return c.json(
+          approvalsResponseSchema.parse({
+            approvals: approvals.map((approval) => ({
+              ...approval,
+              updatedAt: approvalUpdatedAt(approval),
+            })),
           }),
-        }),
+        );
+      },
     )
 
     /**
@@ -1848,7 +1857,11 @@ export function createApp(deps: AppDeps) {
         const entries = await stores.commitments.list(
           c.req.valid('query').includeClosed === 'true' ? { includeClosed: true } : undefined,
         );
-        return c.json(commitmentListResponseSchema.parse({ entries }));
+        return c.json(
+          commitmentListResponseSchema.parse({
+            entries: entries.map((entry) => ({ ...entry, updatedAt: commitmentUpdatedAt(entry) })),
+          }),
+        );
       },
     )
 

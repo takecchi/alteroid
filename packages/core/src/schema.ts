@@ -963,8 +963,8 @@ export type Commitment = z.infer<typeof commitmentSchema>;
  * （MCP / HTTP / CLI）がこれを呼ぶ形にする。
  *
  * `Pick<>` で受けるのは、HTTP の応答型など `Commitment` の全欄を持たない値
- * からも呼べるようにするため（`GET /commitments` が `updatedAt` を返す欄を
- * 足す側は別 PR）。
+ * からも呼べるようにするため。`GET /commitments` は `updatedAt` を返す欄を
+ * 足してあり（`apps/daemon/src/app.ts`）、このヘルパをそのまま呼ぶ。
  */
 export function commitmentUpdatedAt(entry: Pick<Commitment, 'at' | 'closedAt'>): string {
   return entry.closedAt ?? entry.at;
@@ -1287,23 +1287,35 @@ export type PendingApproval = z.infer<typeof pendingApprovalSchema>;
  * （MCP / HTTP / CLI）がこれを呼ぶ形にする。
  *
  * `Pick<>` で受けるのは、HTTP の応答型など `PendingApproval` の全欄を持たない
- * 値からも呼べるようにするため（`GET /approvals` が `updatedAt` を返す欄を
- * 足す側は別 PR）。
+ * 値からも呼べるようにするため。`GET /approvals` は `updatedAt` を返す欄を
+ * 足してあり（`apps/daemon/src/app.ts`）、このヘルパをそのまま呼ぶ。
  *
- * **⚠️ `tools.ts` の `approvals_list`（呼び出し元）からは、この `??` の左枝
- * （`answeredAt` が付いている側）は到達しない。** `approvals_list` の一覧
+ * **⚠️ 2026-08-23 訂正: 下の「呼び出し元からは到達しない」は `tools.ts` の
+ * `approvals_list`（MCP）についてだけ、いまも成り立つ。** `GET /approvals`
+ * （HTTP）は既定こそ `pending=false` を外した未回答のみだが、**`pending=false`
+ * を渡すと `listApprovals({ pendingOnly: false })` を呼び、回答済みも含めて
+ * 返る。** これが、呼び出し元からこの `??` の左枝（`answeredAt` が付いている側）
+ * へ実際に到達する初めての経路である（`apps/daemon/src/app.test.ts` がこの
+ * 経路の `updatedAt === answeredAt` を固定している）。**「将来 `pendingOnly` を
+ * 外したとき」ではなく、既にその経路が存在する。**
+ *
+ * 以下は元の記録（`tools.ts` の `approvals_list` に限っての話として読むこと）:
+ *
+ * `tools.ts` の `approvals_list`（呼び出し元）からは、この `??` の左枝
+ * （`answeredAt` が付いている側）は到達しない。`approvals_list` の一覧
  * モードは `listApprovals({ pendingOnly: true })` をハードコードで呼び、fs /
  * pg / インメモリの3実装すべてが `answeredAt === undefined`（pg は `isNull`）
- * で絞るからである。**それでも消してはいけない** — 将来 `pendingOnly` を
- * 外したとき、これが無いと「更新」が黙って嘘になる（答えが付いた件が一覧に
+ * で絞るからである。**それでも消してはいけない** — MCP 側で将来 `pendingOnly`
+ * を外したとき、これが無いと「更新」が黙って嘘になる（答えが付いた件が一覧に
  * 出るようになった瞬間、更新が回答時刻ではなく作成時刻を指す）。「死んでいる
  * コード」と「将来のために置いてあるもの」は、書いていなければ区別が付かない。
- * 根拠は3実装のソースと呼び出し元1箇所の網羅（2026-08-22T15:58Z 観測）であって、
- * 実行時カバレッジでは確かめていない。
+ * 根拠は3実装のソースと呼び出し元1箇所の網羅（2026-08-22T15:58Z 観測、MCP
+ * 側のみ）であって、実行時カバレッジでは確かめていない。
  *
- * **左枝を歯で固定できないのは呼び出し元からの話であって、このヘルパ自身に
- * ついては成り立たない。** `schema.test.ts` はこのヘルパを直接呼ぶ単体試験で
- * `answeredAt` 有りの枝を固定している。
+ * **左枝を歯で固定できないのは MCP の呼び出し元からの話であって、このヘルパ
+ * 自身については成り立たない。** `schema.test.ts` はこのヘルパを直接呼ぶ
+ * 単体試験で `answeredAt` 有りの枝を固定しており、HTTP 側も上記のとおり
+ * `app.test.ts` が固定している。
  */
 export function approvalUpdatedAt(
   approval: Pick<PendingApproval, 'createdAt' | 'answeredAt'>,
