@@ -742,6 +742,56 @@ describe('HTTP API', () => {
   });
 
   /**
+   * **`kind`/`askedAt` を持たない `waiting` を抱えたマネージャーが1件でも
+   * いると、それだけで `GET /managers` そのものが例外で落ちる穴が在った。**
+   *
+   * `/managers` と `/managers/:id` は、応答を返す前に `managerSummarySchema`
+   * （`managerWaitingSchema` を含む）を `.parse()` に通す（`.safeParse()` では
+   * ない。上の「宣言していないものは外へ出ない」の doc）。旧 runner は
+   * `drainingSeconds` の猶予中、`kind`/`askedAt` を持たない `waiting` を返す
+   * 窓がある（`packages/core/src/runner-protocol.ts` の `runnerWaitingSchema`
+   * の doc、#334）。`managerWaitingSchema` の `kind`/`askedAt` が必須のまま
+   * だと、その窓に入ったマネージャーが1件でもいるだけで `.parse()` が投げ、
+   * **一覧そのものが1本も読めなくなる**——`RunnerHttpClient#list()` が
+   * `safeParse` で要素ごと黙って捨てる形（歯は
+   * `apps/daemon/src/runner-client.test.ts`）より広く壊れる。
+   *
+   * ここで見るのは状態コードだけではない——`waiting` の要素が本文に残って
+   * いること（200 を返しても中身が消えていたら意味が無い）。
+   */
+  it('kind / askedAt を持たない waiting を抱えたマネージャーでも /managers と /managers/:id は 200 を返す', async () => {
+    fake.managerList.push({
+      managerId: 'mgr-legacy',
+      status: 'waiting_human',
+      live: true,
+      cwd: '/work/legacy',
+      request: '版のずれの窓に入った引き継ぎ',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+      waiting: [{ requestId: 'req-1', summary: 'Bash の実行許可' }],
+    });
+
+    const list = await app.request('/managers');
+    expect(list.status).toBe(200);
+    const listBody = (await list.json()) as {
+      managers: { managerId: string; waiting: { requestId: string; summary: string }[] }[];
+    };
+    const listed = listBody.managers.find((m) => m.managerId === 'mgr-legacy');
+    expect(listed?.waiting).toHaveLength(1);
+    expect(listed?.waiting[0]?.requestId).toBe('req-1');
+    expect(listed?.waiting[0]?.summary).toBe('Bash の実行許可');
+
+    const detail = await app.request('/managers/mgr-legacy');
+    expect(detail.status).toBe(200);
+    const detailBody = (await detail.json()) as {
+      manager: { waiting: { requestId: string; summary: string }[] };
+    };
+    expect(detailBody.manager.waiting).toHaveLength(1);
+    expect(detailBody.manager.waiting[0]?.requestId).toBe('req-1');
+    expect(detailBody.manager.waiting[0]?.summary).toBe('Bash の実行許可');
+  });
+
+  /**
    * **宣言していないものは外へ出ない。**
    *
    * `describeRoute` の `resolver()` は `openapi.json` を作るだけで、ハンドラが
