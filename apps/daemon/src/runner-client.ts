@@ -884,8 +884,18 @@ class HttpRunner implements RunnerClient {
     const controller = new AbortController();
     this.#controller = controller;
 
-    /** 最後にこの接続からバイトを受け取った時刻。**見張りの窓の起点である。** */
-    let lastByteAt = this.#nowFn();
+    /**
+     * 最後にこの接続からバイトを受け取った時刻。**まだ1バイトも来ていなければ
+     * `null`。**
+     *
+     * **ここで `#nowFn()` を呼ばないのは意図である。** このファイルの既存の歯は
+     * `nowFn` が**何回目の呼び出しか**で値を返す形の足場を使っており
+     * （`runner-client.test.ts` の `nowFnAtExactThreshold`。1回目＝`connectedAt`
+     * が0、以降が閾値）、ここで1回呼ぶとその番号が全部ずれて、**測っている
+     * 対象とは無関係に足場のほうが壊れる。** 見張りが「まだ1バイトも来て
+     * いない」を表すのに時刻は要らない —— `null` で足りる。
+     */
+    let lastByteAt: number | null = null;
     /** 見張りが切ったか。**例外の出所を `#pump` へ正しく伝えるために持つ。** */
     let silent = false;
     /**
@@ -906,10 +916,13 @@ class HttpRunner implements RunnerClient {
      */
     const armWatchdog = (ms: number): void => {
       watchdog.cancel = this.#setTimerFn(ms, () => {
-        const idleMs = this.#nowFn() - lastByteAt;
-        if (idleMs < this.#silenceTimeoutMs) {
-          armWatchdog(this.#silenceTimeoutMs - idleMs);
-          return;
+        // **1バイトも来ていなければ、測るまでもなく無音である。**
+        if (lastByteAt !== null) {
+          const idleMs = this.#nowFn() - lastByteAt;
+          if (idleMs < this.#silenceTimeoutMs) {
+            armWatchdog(this.#silenceTimeoutMs - idleMs);
+            return;
+          }
         }
         silent = true;
         controller.abort();
@@ -961,8 +974,13 @@ class HttpRunner implements RunnerClient {
           // **無音の見張りの窓も、同じ1つの事実で張り直す**（#323）——
           // heartbeat のフレームかどうかは見ない。runner の heartbeat の実装が
           // 変わっても、この判定は変わらない。
-          lastByteAt = this.#nowFn();
-          if (this.#nowFn() - connectedAt >= CONNECTION_HEALTHY_THRESHOLD_MS) markHealthy();
+          //
+          // **`#nowFn()` の呼び出しは1バイトにつき1回のまま**（#323 で増やして
+          // いない）。増やすと `nowFnAtExactThreshold` 型の足場が壊れる
+          // ——`lastByteAt` の doc を参照。
+          const now = this.#nowFn();
+          lastByteAt = now;
+          if (now - connectedAt >= CONNECTION_HEALTHY_THRESHOLD_MS) markHealthy();
         });
       } finally {
         // **例外で抜けても量を出す。** ただしプロセスごと落ちたときは走らない
