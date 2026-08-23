@@ -2431,3 +2431,121 @@ describe('/events が無音のまま固着したら切る（#323）', () => {
     expect(timers.cancelled().length).toBe(timers.armed().length);
   });
 });
+
+/**
+ * **`#pump` は、周回の途中で何が投げても止まらない**（#323）。
+ *
+ * ## なぜ `/events` の固着と同じ穴か
+ *
+ * `#pump` は `connect()` が `void` で切り離す背景タスクで、`ManagerPool#connectTo`
+ * は `#connections` の旗で二度目の `connect()` を弾く。**旗が外れるのは
+ * `connect()` が棄却したときだけ**で、`connect()` は中身が fire-and-forget なので
+ * 既に成功として解決している。**＝ `#pump` から例外が抜けた瞬間、この runner へ
+ * 再接続が二度と試されない。**
+ *
+ * #323 の症状はまさにそれ（4時間、再接続が一度も試されなかった）である。
+ * **`#read` の固着だけを塞いで、同じ症状を作る他の枝を残さない。**
+ */
+describe('#pump は周回の途中で投げられても止まらない（#323）', () => {
+  function pathOf(input: string | URL | Request): string {
+    return new URL(typeof input === 'string' ? input : input.toString()).pathname;
+  }
+
+  /** `/events` が必ず 503 で失敗する runner。**`#pump` は延々と挑み直すはず。** */
+  function failingFetch(): { fetchFn: typeof fetch; eventsCalls: () => number } {
+    let calls = 0;
+    const fetchFn = (async (input: string | URL | Request) => {
+      const path = pathOf(input);
+      if (path === '/health') {
+        return Response.json({ runnerId: 'runner-noisy', workspacePath: '/workspace' });
+      }
+      if (path === '/events') {
+        calls += 1;
+        return new Response(null, { status: 503 });
+      }
+      throw new Error(`想定していない path: ${path}`);
+    }) as typeof fetch;
+    return { fetchFn, eventsCalls: () => calls };
+  }
+
+  /**
+   * **この歯が単独で守るもの**: stderr が書けなくても再接続をやめないこと。
+   *
+   * `process.stderr.write` は宛先が壊れていれば投げうる（`ERR_STREAM_DESTROYED`
+   * / EPIPE）。**この1行は `#stream` を包む `catch` の外側に在る**ので、包んで
+   * いなければ最初の失敗で `#pump` ごと死ぬ。
+   */
+  it('stderr が書けなくても、挑み直しは続く', async () => {
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => {
+      throw new Error('ERR_STREAM_DESTROYED');
+    });
+    try {
+      const { fetchFn, eventsCalls } = failingFetch();
+      const waits: number[] = [];
+      let notify: () => void = () => undefined;
+      const enough = new Promise<void>((resolve) => {
+        notify = resolve;
+      });
+      const sleepFn = async (ms: number): Promise<void> => {
+        waits.push(ms);
+        if (waits.length >= 3) notify();
+      };
+
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+        sleepFn,
+      });
+      await client.connect(() => undefined);
+      await enough;
+      await client.close();
+
+      // 1回目で死んでいれば `/events` は1本しか開かれない。
+      expect(eventsCalls()).toBeGreaterThanOrEqual(3);
+      expect(waits.slice(0, 3)).toEqual([1000, 2000, 4000]);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  /**
+   * **この歯が単独で守るもの**: 差し替えられた待ちが投げても、`#pump` が死なず、
+   * **かつ待たずに回り続けない**こと。
+   *
+   * 後半が要る —— 例外を握り潰すだけの実装は、待ちを飛ばして秒間に何度も
+   * runner を叩く形になる。**それはバックオフを持っている意味を消す。**
+   */
+  it('差し替えた待ちが投げても止まらず、待ちそのものは飛ばさない', async () => {
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const { fetchFn, eventsCalls } = failingFetch();
+      const asked: number[] = [];
+      const sleepFn = async (ms: number): Promise<void> => {
+        asked.push(ms);
+        throw new Error('待ちの差し替えが壊れている');
+      };
+
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+        sleepFn,
+        // 既定へ落ちたときに実時間で待つので、基準も上限も十分小さくしておく。
+        retryDelayMs: 1,
+        retryMaxDelayMs: 2,
+      });
+      await client.connect(() => undefined);
+      for (let i = 0; i < 200 && asked.length < 3; i += 1)
+        await new Promise((r) => setTimeout(r, 1));
+      await client.close();
+
+      expect(eventsCalls()).toBeGreaterThanOrEqual(3);
+      // **投げた待ちを黙って飛ばしていない。** 既定の待ちへ落ちたうえで、
+      // 次の周回でも同じ口をちゃんと呼びに行っている。
+      expect(asked.slice(0, 3)).toEqual([1, 2, 2]);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+});

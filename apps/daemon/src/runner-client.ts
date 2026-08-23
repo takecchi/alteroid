@@ -839,15 +839,22 @@ class HttpRunner implements RunnerClient {
 
       if (failed) {
         this.#backingOff = true;
-        const causeInfo = causeInfoOf(failure);
-        const causeCode = causeInfo?.code ?? '';
-        if (this.#lastLoggedDelayMs !== waitMs || this.#lastLoggedCauseCode !== causeCode) {
-          process.stderr.write(
-            `alteroidd: ${this.#describeSelf()} のストリームが切れました: ${reasonOf(failure)}${causeSuffixOf(causeInfo)}（次は${waitMs}ms後に再試行）\n`,
-          );
-          this.#lastLoggedDelayMs = waitMs;
-          this.#lastLoggedCauseCode = causeCode;
-        }
+        // **ログが書けないことを理由に再接続をやめない**（#323）。ここは
+        // `#stream` を包む `catch` の**外側**なので、投げれば `#pump` ごと死ぬ
+        // ——そして死ねば、この runner へ二度と繋ぎ直されない（下の
+        // `#neverEscapes` の doc）。`process.stderr.write` は宛先が壊れていれば
+        // 投げうる（`ERR_STREAM_DESTROYED` / EPIPE）。
+        this.#neverEscapes(() => {
+          const causeInfo = causeInfoOf(failure);
+          const causeCode = causeInfo?.code ?? '';
+          if (this.#lastLoggedDelayMs !== waitMs || this.#lastLoggedCauseCode !== causeCode) {
+            process.stderr.write(
+              `alteroidd: ${this.#describeSelf()} のストリームが切れました: ${reasonOf(failure)}${causeSuffixOf(causeInfo)}（次は${waitMs}ms後に再試行）\n`,
+            );
+            this.#lastLoggedDelayMs = waitMs;
+            this.#lastLoggedCauseCode = causeCode;
+          }
+        });
       } else if (healthy) {
         this.#lastLoggedDelayMs = null;
         this.#lastLoggedCauseCode = '';
@@ -857,7 +864,40 @@ class HttpRunner implements RunnerClient {
       // (失敗でも、閾値未満で終わった「静かな」接続でも) 倍々に伸ばして頭打ち。
       this.#nextDelayMs = healthy ? this.#retryBaseMs : Math.min(waitMs * 2, this.#retryMaxMs);
 
-      await this.#sleepFn(waitMs);
+      // **差し替えられた待ちが投げても、`#pump` を殺さない**（#323）。ただし
+      // **待たずに回り続けもしない** —— それは秒間に何度も runner を叩く形に
+      // なる。既定の待ち（{@link defaultSleep}）へ落として、間隔だけは守る。
+      try {
+        await this.#sleepFn(waitMs);
+      } catch {
+        await defaultSleep(waitMs);
+      }
+    }
+  }
+
+  /**
+   * **`#pump` の周回を殺しうる処理を包む**（#323）。
+   *
+   * `#pump` は `connect()` が `void this.#pump(onEvent)` として切り離す背景
+   * タスクである。**ここから例外が抜けると、ループが終わって二度と戻らない。**
+   * しかも `packages/core/src/manager.ts` の `ManagerPool#connectTo` は
+   * `#connections` に持った promise の有無で二度目の `connect()` を弾き、旗が
+   * 外れるのは `.catch()` のときだけ —— **`connect()` は中身が fire-and-forget
+   * なので既に成功として解決しており、旗は永久に立ったままになる。**
+   *
+   * **＝ `#read` の固着とまったく同じ症状（この runner へ再接続が一度も試され
+   * ない）を、別の枝から作る。** #323 が請け負った穴はその症状そのものなので、
+   * 枝を1つだけ塞いで終わりにしない。
+   *
+   * **握り潰した先を報告しない**のは意図である —— ここで包んでいるのは
+   * 「知らせる」処理そのもの（stderr への1行）で、その宛先が壊れているから
+   * 例外になっている。**別の宛先を新しく作ると、壊れ方が1つ増えるだけである。**
+   */
+  #neverEscapes(body: () => void): void {
+    try {
+      body();
+    } catch {
+      // 何もしない（doc を参照）。
     }
   }
 
