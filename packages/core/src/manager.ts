@@ -30,6 +30,7 @@ import type {
   RunnerProfileFingerprint,
   RunnerRegistry,
   RunnerRevisionStatus,
+  RunnerWaiting,
 } from './runner-protocol.js';
 import { brief } from './runner.js';
 import type {
@@ -134,8 +135,12 @@ export interface ManagerSummary {
    * **1本のマネージャーが同時に複数を待つことがある。** 1回のアシスタント応答で
    * 並列に呼ばれた道具は、それぞれ別の確認として同時に降りてくる。だから配列で持ち、
    * 回答は `requestId` で宛先を指定する。
+   *
+   * **`kind`（`'question'` / `'permission'`）も運ぶ（#334）。** 画面が質問と
+   * 実行許可を区別して出し分けるための材料——種別は runner 側で既に決まって
+   * いる（`RunnerWaiting` と同じ形）。
    */
-  waiting: { requestId: string; summary: string }[];
+  waiting: RunnerWaiting[];
 }
 
 /**
@@ -519,7 +524,7 @@ type ResumeOutcome =
 /** デーモン側が持つ1マネージャーの像（正本は JobStore）。 */
 interface ManagerRecord {
   job: Job;
-  waiting: { requestId: string; summary: string }[];
+  waiting: RunnerWaiting[];
   /** runner に生きたセッションがあるか。無ければ send のときに resume する。 */
   attached: boolean;
   /**
@@ -2368,7 +2373,11 @@ class Pool implements ManagerPool {
         if (asked.has(event.requestId)) return;
         asked.set(event.requestId, true);
 
-        record.waiting.push({ requestId: event.requestId, summary: event.summary });
+        record.waiting.push({
+          requestId: event.requestId,
+          summary: event.summary,
+          kind: event.kind,
+        });
         record.job.status = 'waiting_human';
         await this.#persist(record);
         await this.#journal({

@@ -53,10 +53,24 @@ const isoDateTime = z.string().datetime({ offset: true });
  * のテストは（`input` がキーとして残っていたので）その間ずっと緑のままだった。
  */
 
+/**
+ * 確認の種別。**質問（`AskUserQuestion`）か実行許可か**を運ぶ。
+ *
+ * runner 側で決まる（`RunnerSession#onPermission` の `kind`）。`ask` イベント
+ * （下）が既にこの値を運んでいるが、`state()` が返す `waiting`（`runnerWaitingSchema`）
+ * には運んでいなかった——デーモン再起動後の引き取り（`manager.ts` の
+ * `#restoreJobs`）はこちらを通るため、そこだけ種別が消える形になっていた（#334）。
+ * 定義を1箇所にして、両方が同じ2値を指すようにする。
+ */
+export const waitingKindSchema = z.enum(['question', 'permission']);
+
+export type WaitingKind = z.infer<typeof waitingKindSchema>;
+
 /** 1つの確認（許可確認 / 質問）。runner 側で1件だけが返事を待って止まる。 */
 export const runnerWaitingSchema = z.object({
   requestId: z.string(),
   summary: z.string(),
+  kind: waitingKindSchema,
 });
 
 export type RunnerWaiting = z.infer<typeof runnerWaitingSchema>;
@@ -564,7 +578,7 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     type: z.literal('ask'),
     managerId: z.string(),
     requestId: z.string(),
-    kind: z.enum(['question', 'permission']),
+    kind: waitingKindSchema,
     summary: z.string(),
   }),
   /** 確認が解けた（回答・中断・停止）。デーモン側の待ち行列から外す合図。 */

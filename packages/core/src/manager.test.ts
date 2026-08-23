@@ -1519,10 +1519,15 @@ function swappableRunner(runnerId = 'runner-primary') {
       emit?.({ type: 'session', managerId, sessionId });
     },
     /** マネージャーが確認を上げる（デーモン側の待ち行列に積まれる）。 */
-    ask(managerId: string, requestId: string, summary: string) {
+    ask(
+      managerId: string,
+      requestId: string,
+      summary: string,
+      kind: 'question' | 'permission' = 'permission',
+    ) {
       const session = state.alive.find((s) => s.managerId === managerId);
-      session?.waiting.push({ requestId, summary });
-      emit?.({ type: 'ask', managerId, requestId, kind: 'permission', summary });
+      session?.waiting.push({ requestId, summary, kind });
+      emit?.({ type: 'ask', managerId, requestId, kind, summary });
     },
     /**
      * マネージャーの1ターンが終わって報告が上がる。
@@ -3143,7 +3148,7 @@ describe('止めた結果を確かめる', () => {
       status: 'waiting_human',
       cwd: job.cwd,
       request: job.request,
-      waiting: [{ requestId: 'req-1', summary: '本番に触ってよいか' }],
+      waiting: [{ requestId: 'req-1', summary: '本番に触ってよいか', kind: 'permission' }],
       sessionId: job.sessionId,
     });
     const s = setup(undefined, { stores, runner: fake.runner });
@@ -4262,7 +4267,7 @@ describe('#records の寿命（終端で外れる）', () => {
       status: 'waiting_human',
       cwd: '/work/project',
       request: 'DB の移行をやって',
-      waiting: [{ requestId: 'req-9', summary: '許可して' }],
+      waiting: [{ requestId: 'req-9', summary: '許可して', kind: 'permission' }],
       sessionId: `sess-${id}`,
     });
     const s = setup(undefined, { stores, runner: fake.runner });

@@ -974,9 +974,15 @@ class RunnerSession {
       status: this.#status,
       cwd: this.#cwd,
       request: this.#request,
+      // **`kind` も運ぶ（#334）。** `#pending` の要素（`PendingRequest`）は
+      // 既に `kind` を持っている（`#onPermission` が組み立てる）。ここで
+      // 落とすと、デーモン再起動後の引き取り（`manager.ts` の
+      // `#restoreJobs`、`state()` を経由する）だけ種別が消える——`ask`
+      // イベント経由（`#emit`）は既に運んでいたので、非対称だった。
       waiting: this.#pending.map((request) => ({
         requestId: request.id,
         summary: request.summary,
+        kind: request.kind,
       })),
       ...(this.#sessionId === undefined ? {} : { sessionId: this.#sessionId }),
     };

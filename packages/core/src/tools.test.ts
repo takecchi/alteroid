@@ -3426,7 +3426,9 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     }
     for (const summary of h.running) {
       summary.lastReport = `報告: ${'ほ'.repeat(3_000)}`;
-      summary.waiting = [{ requestId: `req-${summary.managerId}`, summary: 'ま'.repeat(3_000) }];
+      summary.waiting = [
+        { requestId: `req-${summary.managerId}`, summary: 'ま'.repeat(3_000), kind: 'permission' },
+      ];
     }
     // 器の一覧（runner_list）— 内訳に全マネージャーを載せる。
     // **台数は「予算が拘束条件になる」ところまで積む。** 12台で試したときは

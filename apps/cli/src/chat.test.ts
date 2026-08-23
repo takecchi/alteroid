@@ -51,7 +51,7 @@ describe('renderManagerList', () => {
     const text = renderManagerList([
       manager({
         denials: [{ tool: 'Bash', count: 1 }],
-        waiting: [{ requestId: 'req-1', summary: 'これを消してよいか' }],
+        waiting: [{ requestId: 'req-1', summary: 'これを消してよいか', kind: 'permission' }],
       }),
     ]);
 

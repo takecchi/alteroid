@@ -4392,9 +4392,13 @@
                                 },
                                 "summary": {
                                   "type": "string"
+                                },
+                                "kind": {
+                                  "type": "string",
+                                  "enum": ["question", "permission"]
                                 }
                               },
-                              "required": ["requestId", "summary"]
+                              "required": ["requestId", "summary", "kind"]
                             }
                           },
                           "denials": {
@@ -4618,9 +4622,13 @@
                               },
                               "summary": {
                                 "type": "string"
+                              },
+                              "kind": {
+                                "type": "string",
+                                "enum": ["question", "permission"]
                               }
                             },
-                            "required": ["requestId", "summary"]
+                            "required": ["requestId", "summary", "kind"]
                           }
                         },
                         "denials": {

@@ -10,6 +10,7 @@ import {
   runnerCredentialFingerprintSchema,
   runnerProfileFingerprintSchema,
   unreadableCommitmentSchema,
+  waitingKindSchema,
   workspaceLocatorSchema,
   type CloneHost,
   type JournalEntry,
@@ -396,7 +397,20 @@ export const commitmentOpenedResponseSchema = z.object({ ok: z.literal(true), id
 // マネージャー（/managers）
 // ---------------------------------------------------------------------------
 
-const managerWaitingSchema = z.object({ requestId: z.string(), summary: z.string() });
+/**
+ * 返事待ちで止まっている1件。
+ *
+ * **`kind`（`'question'` / `'permission'`）を宣言する（#334）。** これが無いと
+ * 画面は質問（自由文で答える）と実行許可（許可／拒否）を区別できず、質問に
+ * 拒否ボタンを押すと文字列「許可しない」が回答として注入されていた。種別は
+ * `@alteroid/core` の `waitingKindSchema`（`packages/core/src/runner-protocol.ts`）
+ * と同じ2値で、二重管理を避けるためにそこから引く。
+ */
+const managerWaitingSchema = z.object({
+  requestId: z.string(),
+  summary: z.string(),
+  kind: waitingKindSchema,
+});
 
 /**
  * 確認へ上がらずに止められた道具と、その件数（`ManagerDenial`）。
