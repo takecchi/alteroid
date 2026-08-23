@@ -2975,6 +2975,109 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     expect(reply).toContain('memory_read slug=<slug>');
   });
 
+  /**
+   * **#284: `fiveFieldViolations` の id+名前チェックは「先頭行に非空トークンが
+   * 2つ並ぶか」という形しか見ない——2つ目のトークンが本当に `title` かどうかは
+   * 見ていない。** `self_status`（上）は #280 でこれを塞いだが、残る4つの
+   * `_list`（approvals / schedule / commitment / manager）は塞いでいなかった。
+   *
+   * **変異試験で確かめた**（`packages/core/src/tools.ts` の呼び出し側、
+   * `title:` に渡す式を、同じ `renderListingEntry` 呼び出しの中で既に使っている
+   * 別の値——`entry.id` 相当——へ丸ごと差し替える変異）。2トークンの形は保たれる
+   * ので、上の P1（id+名前チェック）・下の P2（`matchesStrictBlockShape`）の
+   * どちらも生存した（4本とも）。**`title` を空文字へ落とす変異は、この4本では
+   * 検出できる**（先頭行が `- <id> ` で終わり2つ目のトークンが無くなるため）。
+   * 生存するのは「値の置き換え」のほうだけである。
+   *
+   * だから `self_status` の `題\d{4}`（#280）と同じ手当てを、値の置き換えで
+   * 検出できる形で足す。**`flooded()` が積む値のうち、id 側には出ず title 側
+   * にだけ出る文字列**を選ぶ:
+   *
+   * - `approvals_list`: 質問の1行目（`質問${pad}`）がそのまま `approvalTitle`
+   *   の出力になる。id（`ap-${pad}`）には出ない
+   * - `schedule_list`: `flooded()` は `everyMinutes: 60` で固定するので、
+   *   `describeScheduleSpec` の出力は毎回 `60 分ごと`。id（`kind=watch-${pad}`）
+   *   には出ない
+   * - `commitment_list`: `flooded()` は `commitment_open({ body })` だけを呼ぶので
+   *   `origin` は必ず `'self'`（`source` も無い）。`commitmentOriginBadge` の
+   *   出力は毎回 `[自分で気づいた宿題]`。id（UUID）には出ない
+   * - `manager_list`: `flooded()` は `manager_start` だけを呼ぶので、どの
+   *   マネージャーも起動直後の `running`（セッション切断なし）。タイトルは
+   *   毎回 `[running]`。id（managerId）には出ない
+   *
+   * **`memory_list` は別枠にする。** `title` を空へ落とす変異も置き換える変異も
+   * どちらも生存した——`memory_list` の1行は `- [kind] slug: title (作成:…) —
+   * 概要` という形で、`kindTag`（`[fact] ` 等）と `slug` だけで2トークンの
+   * 判定を満たしてしまうため、`title` が空でも置き換わっても崩れない
+   * （#264 が自己申告していた弱さと同じ形）。
+   */
+  const TITLE_IS_REAL_CONTENT_CASES: {
+    name: string;
+    check: (firstLine: string) => void;
+  }[] = [
+    {
+      name: 'approvals_list',
+      check: (firstLine) =>
+        expect(firstLine, `id の隣に質問の1行目が無い: ${firstLine}`).toMatch(
+          /^- \S+ 質問\d{4}/,
+        ),
+    },
+    {
+      name: 'schedule_list',
+      check: (firstLine) =>
+        expect(
+          firstLine,
+          `id の隣に周期の説明（60 分ごと）が無い: ${firstLine}`,
+        ).toContain('60 分ごと'),
+    },
+    {
+      name: 'commitment_list',
+      check: (firstLine) =>
+        expect(
+          firstLine,
+          `id の隣に出所の札（[自分で気づいた宿題]）が無い: ${firstLine}`,
+        ).toContain('[自分で気づいた宿題]'),
+    },
+    {
+      name: 'manager_list',
+      check: (firstLine) =>
+        expect(firstLine, `id の隣に状態の札（[running]）が無い: ${firstLine}`).toContain(
+          '[running]',
+        ),
+    },
+  ];
+
+  it.each(TITLE_IS_REAL_CONTENT_CASES)(
+    '$name — id の隣は id そのものではなく、その一覧固有のタイトルである（#284）',
+    async ({ name, check }) => {
+      const h = await flooded(60);
+      const reply = await h.call(name, {});
+      const entries = splitListingEntries(reply);
+      expect(entries.length).toBeGreaterThan(0);
+
+      for (const entry of entries) {
+        check(entry.split('\n')[0] ?? '');
+      }
+    },
+  );
+
+  it('memory_list — タイトルは id や slug の繰り返しではなく、記憶の見出しである（#284）', async () => {
+    const h = await flooded(60);
+
+    const reply = await h.call('memory_list', {});
+    const entries = splitListingEntries(reply);
+    expect(entries.length).toBeGreaterThan(0);
+
+    for (const entry of entries) {
+      // flooded() が書く記憶は `# 題<pad>` という見出しを持つ（persona.write の
+      // タイトル抽出）。self_status の同種の歯（#280、題\d{4}）と同じ実測を
+      // memory_list 自身（renderMemoryListing）にも足す——self_status の歯は
+      // renderMemorySize（tools.ts）を測るだけで、renderMemoryListing
+      // （memory.ts）は測っていない。
+      expect(entry, `記憶の見出し（題NNNN）が出ていない: ${entry}`).toMatch(/題\d{4}/);
+    }
+  });
+
   it.each(STRICT_SHAPE_SWEPT)(
     '%s — どの1件も id + 名前 / 作成 + 更新 / 概要 を決まった順で出す（P2）',
     async (name) => {
