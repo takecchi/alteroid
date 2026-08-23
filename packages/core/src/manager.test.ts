@@ -32,6 +32,7 @@ import { createLocalRunner } from './runner-local.js';
 import {
   createRunnerRegistry,
   RunnerHttpError,
+  type RunnerAnswerOutcome,
   type RunnerClient,
   type RunnerCredentialFingerprint,
   type RunnerEvent,
@@ -515,6 +516,58 @@ describe('マネージャー', () => {
       updatedInput: { answers: { 'DB はどちらにする？': 'PostgreSQL で' } },
     });
 
+    // **#322: AskUserQuestion の常時 allow は、以前は journal から1文字も
+    // 読めなかった。** `decision` を付けずに答えた回でも `[allow]` が残ること
+    // をここで見る（`decision を書き忘れても…` テストが permission 側で見て
+    // いるのと対になる、question 側の回帰）。
+    const escalations = (await s.stores.journal.list({ types: ['escalation'] })) as {
+      answer?: string;
+    }[];
+    expect(escalations[0]?.answer).toBe('[allow] PostgreSQL で');
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **#322 の core: AskUserQuestion は decision を一切見ない。** ここでは
+   * わざと矛盾した `decision: 'deny'` を明示して答え、それでも allow へ
+   * 解決されること（既存の挙動。runner.ts の `#onPermission` が元々そう
+   * 実装している）と、その事実が journal からも読めること（この Issue の
+   * 直す対象）の両方を1本で確かめる。
+   */
+  it('AskUserQuestion は decision を明示しても無視して常に allow になり、その事実が journal に残る（#322）', async () => {
+    const s = setup();
+    const { managerId } = await s.pool.start({ request: '設計を相談したい' });
+    const session = s.sessions[0] as FakeSession;
+
+    const asked = session.ask(
+      'AskUserQuestion',
+      {
+        questions: [
+          { question: 'DB はどちらにする？', header: 'DB', options: [], multiSelect: false },
+        ],
+      },
+      undefined,
+      'req-db-deny',
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // **矛盾した decision を渡す。** 質問への回答に allow/deny という概念は
+    // 無いので、これは無視されて allow になるはずである。
+    await s.pool.send(managerId, 'PostgreSQL で', {
+      requestId: 'req-db-deny',
+      decision: 'deny',
+    });
+    expect(await asked).toMatchObject({ behavior: 'allow' });
+
+    const escalations = (await s.stores.journal.list({ types: ['escalation'] })) as {
+      answer?: string;
+    }[];
+    // **`decision: 'deny'` を渡したのに `[deny]` にはならない。** ここが
+    // 変わっていたら、`decideAnswer` が `kind` を見ずに `decision` を素通し
+    // している（＝仕様が壊れている）ことを意味する。
+    expect(escalations[0]?.answer).toBe('[allow] PostgreSQL で');
+
     await s.pool.stop();
   });
 
@@ -844,6 +897,15 @@ describe('マネージャー', () => {
 
     expect(await asked).toMatchObject({ behavior: 'deny' });
 
+    // **#322: decision を書き忘れた回は、以前は journal に本文がそのまま
+    // 残るだけで `[allow]` か `[deny]` かが読めなかった。** SDK へ実際に
+    // 返った decision（上の `behavior: 'deny'`）と同じ値が journal にも
+    // 残ることを、ここで直接見る。
+    const escalations = (await s.stores.journal.list({ types: ['escalation'] })) as {
+      answer?: string;
+    }[];
+    expect(escalations[0]?.answer).toBe('[deny] それはやめて、代わりに差分だけ見せて');
+
     await s.pool.stop();
   });
 
@@ -859,6 +921,106 @@ describe('マネージャー', () => {
     await s.pool.send(managerId, 'よい、そのまま進めて', { requestId: 'req-read' });
 
     expect(await asked).toEqual({ behavior: 'allow' });
+
+    // **#322: こちらも同じ理由。** decision を書き忘れた肯定の回答が
+    // journal では `[allow]` として残ることを見る（直上の deny 側と対）。
+    const escalations = (await s.stores.journal.list({ types: ['escalation'] })) as {
+      answer?: string;
+    }[];
+    expect(escalations[0]?.answer).toBe('[allow] よい、そのまま進めて');
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **#322 の3つ目の制約: `decision` を報告しない runner の応答を、allow/deny
+   * の既定値へ倒さない。** ローリング再デプロイの窓では、まだこの変更前の
+   * runner が `{ ok: true }` だけを返し、確定した decision を運べない
+   * （`RunnerAnswerOutcome` の doc）。この偽 runner はそれを模す —
+   * `answer()` が `{ delivered: true }` のみを返し、`decision` キー自体を
+   * 持たない。
+   *
+   * **ローカルの `decision: 'allow'` を渡していても** journal は `[allow]`
+   * へ倒さない——渡した値は「クローンが何を言ったか」でしかなく、「runner が
+   * 何を確定したか」の代わりにはならない。この区別自体がこの Issue の中身
+   * である。
+   */
+  it('runner が decision を報告しない回（版skewの窓）は、allow/deny へ倒さず journal に残す（#322）', async () => {
+    // **`let` + 複数クロージャでの narrowing を避けるため、可変箱に包む。**
+    // （素の `let emit` を object literal の複数メソッドから触ると、
+    // 呼び出し側での参照が `never` に narrowing される場合がある）
+    const wired: { emit: ((event: RunnerEvent) => void) | null } = { emit: null };
+    const legacyRunner: RunnerClient = {
+      runnerId: 'runner-legacy',
+      workspacePath: '/work/project',
+      async connect(onEvent) {
+        wired.emit = onEvent;
+      },
+      async start() {
+        /* この検証では使わない */
+      },
+      async resume() {
+        /* この検証では使わない */
+      },
+      async send() {
+        /* この検証では使わない */
+      },
+      async answer(_managerId, answer) {
+        // **この版の runner は decision を報告しない（#322 が模す版skew）。**
+        // `settled` も流す（`runner-sticky.test.ts` と同じ約束 — 流さないと
+        // `waiting` が残ったままになり「解けた」を主張できない）。
+        wired.emit?.({ type: 'settled', managerId: _managerId, requestId: answer.requestId });
+        return { delivered: true };
+      },
+      async stop() {
+        /* この検証では使わない */
+      },
+      async list() {
+        return [];
+      },
+      async transcript() {
+        return null;
+      },
+      async credentials() {
+        return [];
+      },
+      async setCredentials() {
+        return [];
+      },
+      async profile() {
+        return undefined;
+      },
+      async setProfile() {
+        return { ok: true };
+      },
+      async close() {
+        /* この検証では使わない */
+      },
+    };
+    const s = setup(undefined, { runner: legacyRunner });
+    const { managerId } = await s.pool.start({ request: 'デプロイして' });
+
+    wired.emit?.({
+      type: 'ask',
+      managerId,
+      requestId: 'req-legacy',
+      kind: 'permission',
+      summary: 'Bash の実行許可: git push',
+      askedAt: new Date().toISOString(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const result = await s.pool.send(managerId, 'よい', {
+      decision: 'allow',
+      requestId: 'req-legacy',
+    });
+    expect(result.outcome).toBe('answered');
+
+    const escalations = (await s.stores.journal.list({ types: ['escalation'] })) as {
+      answer?: string;
+    }[];
+    // 最新（answer 側）が先頭。ask 側（2件目）は元々 `answer` 欄を持たない。
+    expect(escalations[0]?.answer).toBe('[unknown] よい');
 
     await s.pool.stop();
   });
@@ -1605,7 +1767,10 @@ function swappableRunner(runnerId = 'runner-primary') {
     async answer(managerId, answer) {
       state.answers.push({ managerId, requestId: answer.requestId });
       // 新しい器はその request_id を知らない（＝解けない）。
-      return state.alive.some((s) => s.waiting.some((w) => w.requestId === answer.requestId));
+      const delivered = state.alive.some((s) =>
+        s.waiting.some((w) => w.requestId === answer.requestId),
+      );
+      return { delivered };
     },
     async stop() {
       /* この検証では使わない */
@@ -4480,8 +4645,8 @@ class FakePoolRunner implements RunnerClient {
   }
   async resume(): Promise<void> {}
   async send(): Promise<void> {}
-  async answer(): Promise<boolean> {
-    return false;
+  async answer(): Promise<RunnerAnswerOutcome> {
+    return { delivered: false };
   }
   async stop(): Promise<void> {}
   async list(): Promise<RunnerManagerState[]> {

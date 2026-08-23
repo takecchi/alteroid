@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createRunnerRegistry } from './runner-protocol.js';
 import type {
+  RunnerAnswerOutcome,
   RunnerClient,
   RunnerCredentialFingerprint,
   RunnerManagerState,
@@ -66,8 +67,8 @@ class IdentifyingRunner implements RunnerClient {
   async start(): Promise<void> {}
   async resume(): Promise<void> {}
   async send(): Promise<void> {}
-  async answer(): Promise<boolean> {
-    return false;
+  async answer(): Promise<RunnerAnswerOutcome> {
+    return { delivered: false };
   }
   async stop(): Promise<void> {}
   async list(): Promise<RunnerManagerState[]> {

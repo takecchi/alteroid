@@ -5,6 +5,7 @@ import { createManagerPool, type ManagerPool } from './manager.js';
 import {
   createRunnerRegistry,
   RunnerHttpError,
+  type RunnerAnswerOutcome,
   type RunnerClient,
   type RunnerCredentialFingerprint,
   type RunnerEvent,
@@ -92,8 +93,8 @@ class LeasedRunner implements RunnerClient {
     this.hold(command.managerId);
   }
   async send(): Promise<void> {}
-  async answer(): Promise<boolean> {
-    return false;
+  async answer(): Promise<RunnerAnswerOutcome> {
+    return { delivered: false };
   }
   async stop(managerId: string): Promise<void> {
     this.stops.push(managerId);

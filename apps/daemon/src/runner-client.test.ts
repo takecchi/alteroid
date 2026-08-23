@@ -294,6 +294,42 @@ describe('デーモン ↔ manager-runner（HTTP 境界）', () => {
     expect(escalations.map((entry) => entry.answer)).toEqual(['[allow] よい', undefined]);
   });
 
+  /**
+   * **#322: decision を省略した回答は、境界の先（runner.ts）が推論した
+   * decision（`inferDecision`）が journal まで戻ること。** 直上のテストは
+   * `decision: 'allow'` を明示しており、それは修正前の実装でも
+   * （クローンが渡した値をそのまま書くだけだったので）`[allow]` になっていた
+   * ——境界越しに確定値が正しく運ばれることの証明にはならない。ここでは
+   * **decision を渡さず**、SDK へ実際に返った behavior と journal の両方を
+   * 見る。
+   */
+  it('decision を明示しない回答でも、確定した allow/deny が境界越しに journal へ残る（#322）', async () => {
+    const r = await open();
+    const { managerId } = await r.pool.start({ request: 'デプロイして' });
+    await expect.poll(() => r.sessions.length, { timeout: 2000 }).toBe(1);
+
+    const asked = (r.sessions[0] as FakeSession).ask('Bash', 'req-2');
+    await expect
+      .poll(() => r.inbox.filter((event) => event.type === 'manager_message').length, {
+        timeout: 2000,
+      })
+      .toBe(1);
+
+    // **decision は付けない** — 測るのは runner.ts 側の推論が journal まで
+    // 戻ることである。
+    const result = await r.pool.send(managerId, 'よい、そのまま進めて', { requestId: 'req-2' });
+    expect(result.outcome).toBe('answered');
+    expect(await asked).toEqual({ behavior: 'allow' });
+
+    const escalations = (await r.stores.journal.list({ types: ['escalation'] })) as {
+      answer?: string;
+    }[];
+    expect(escalations.map((entry) => entry.answer)).toEqual([
+      '[allow] よい、そのまま進めて',
+      undefined,
+    ]);
+  });
+
   it('報告と全ツール実行がデーモン側へ上がる（監査は分離後も落ちない）', async () => {
     const r = await open();
     const { managerId } = await r.pool.start({ request: '直して' });
@@ -794,6 +830,60 @@ describe('資源による配置の材料', () => {
     // **黙って繋ぎ変えない。** ここで採ると台帳の鎖（`manager_id → runner_id`）が
     // 音もなく別の器へ向く（`ping` に書いてある理由と同じである）。
     expect(client.runnerId).toBe('runner-primary');
+  });
+});
+
+/**
+ * `POST /managers/:id/answers` の応答から `decision` を読む口（#322）。
+ *
+ * **`資源による配置の材料` と同じ形の罠がここにもある。** ローリング再デプロイの
+ * 窓では、まだこの変更前の runner が `{ ok: true }` だけを返す——`decision` は
+ * 欄そのものが無い。ここでは実際の runner を経由せず、`fetchFn` で応答を
+ * 直接組み立てて確かめる（`資源による配置の材料` の `fetchHealth` と同じ作法）。
+ */
+describe('許可確認の回答の応答から decision を読む', () => {
+  it('decision を報告しない古い runner の応答でも、届いたことは分かる（既定値へは倒さない）', async () => {
+    const client = await createHttpRunner({
+      baseUrl: 'http://legacy.test',
+      token: TOKEN,
+      fetchFn: (async () => Response.json({ ok: true })) as typeof fetch,
+    });
+
+    const outcome = await client.answer('mgr-x', {
+      requestId: 'req-x',
+      message: 'よい',
+      decision: 'allow',
+    });
+
+    // **`decision` キー自体が無いことを見る。** `outcome.decision` を
+    // `undefined` と比べるだけでは「キーが無い」のか「値が undefined」のかを
+    // 区別できない——`toEqual` はキーの有無まで見るので、既定値（`?? 'allow'`
+    // など）へ倒す変異が入ればここで落ちる。
+    expect(outcome).toEqual({ delivered: true });
+  });
+
+  it('decision を報告する runner の応答からは、その値がそのまま渡る', async () => {
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn: (async () => Response.json({ ok: true, decision: 'deny' })) as typeof fetch,
+    });
+
+    const outcome = await client.answer('mgr-x', { requestId: 'req-x', message: 'だめ' });
+
+    expect(outcome).toEqual({ delivered: true, decision: 'deny' });
+  });
+
+  it('宛先が見つからない（ok: false）ときは decision を持たない', async () => {
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn: (async () => Response.json({ ok: false })) as typeof fetch,
+    });
+
+    const outcome = await client.answer('mgr-x', { requestId: 'req-gone', message: 'よい' });
+
+    expect(outcome).toEqual({ delivered: false });
   });
 });
 
