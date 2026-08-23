@@ -1483,6 +1483,15 @@ const HEARTBEAT_LOST_MS = 30_000;
  * `runnerId` が実際に入っていたかどうかは `RunnerClient.runnerIdKnown` を見ないと
  * 分からない——見ずに `entry.client.runnerId` を出すと、一度も聞けていない相手に
  * ついて既定値 `'runner-primary'` が「受け取った値」の顔で出る。
+ *
+ * ⚠️ **この関数が塞ぐのは出口だけである。** `onSwap` がここを通して `runnerId`
+ * を渡さなくなったことで、`apps/daemon/src/index.ts` の `takeOverOnSwap` から
+ * `reattachRunner(runnerId)`（`packages/core/src/manager.ts` の `#reattach`）へ
+ * 既定値が渡る経路は塞がったが、**`#reattach` 自身がいまも `runnerId` の文字列
+ * 一致だけで相手（と台帳の対象ジョブ）を決めている**——別の入口から同じ既定値が
+ * 渡れば、複数 runner が同じ既定値を名乗ったときに宛先を取り違えうる。この
+ * 欠陥自体は #390 へ切った（`#reattach` の在り処は `manager.ts` だが、#322 の
+ * 作業と重ならないようこのファイルにポインタだけ置く）。
  */
 function heardRunnerIdOf(client: RunnerClient | null): { runnerId?: string } {
   return client !== null && client.runnerIdKnown ? { runnerId: client.runnerId } : {};
@@ -1679,7 +1688,7 @@ class Registry implements RunnerRegistry {
       since: entry.since,
       revision: entry.revision,
       // ⚠️ `workspacePath` にも同じ形の既定値（`HttpRunner` の `''`）があるが、
-      // この PR の対象は #330（`runnerId` の3出口）に限る。範囲外として報告済み。
+      // この PR の対象は #330（`runnerId` の3出口）に限る。範囲外として #389 へ切った。
       ...(entry.client === null ? {} : { workspacePath: entry.client.workspacePath }),
       ...heardRunnerIdOf(entry.client),
       ...(entry.error === undefined ? {} : { error: entry.error }),
