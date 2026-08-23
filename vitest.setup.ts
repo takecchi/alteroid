@@ -13,6 +13,11 @@ import { afterEach, expect } from 'vitest';
  * 起きない」ので、同じ穴が黙って再発する。ここで包むのは、その呼び忘れを
  * **赤で出す**ためである。
  *
+ * **掛かるのは `apps/cli` だけではない。** `setupFiles` は root の
+ * `vitest.config.ts` が集める全テストファイルに効く（`packages/core` の
+ * テストへ `process.stdout.write` を1行足す変異で、そこでも赤くなることを
+ * 確かめてある）。#314 の現物が CLI だっただけで、歯は口を選ばない。
+ *
  * **stderr は見ない。** `apps/daemon/src/storage.ts` や
  * `packages/core/src/credentials.ts` は `process.stderr.write` で人間向けの
  * 注意を書いていて、テスト中にも出る。それは別の穴なので、ここでは触らない
@@ -55,7 +60,8 @@ afterEach(() => {
     written,
     'このテストが本物の stdout へ書いた。人間向けの出力がテストランナーの出力に' +
       '混ざり、別プロセスからの混入と見分けが付かなくなる（#314）。' +
-      'CLI のコマンド関数を呼ぶテストは captureStdout() で process.stdout.write を' +
-      '差し替えること。',
+      'stdout へ書く関数（apps/cli のコマンド関数など）を呼ぶテストは、呼ぶ前に' +
+      'process.stdout.write を spy へ差し替えること' +
+      '（apps/cli の各テストファイルにある captureStdout() がその形）。',
   ).toBe('');
 });
