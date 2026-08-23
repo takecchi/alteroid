@@ -160,9 +160,48 @@ function splitManagerPrefix(body: string): { prefix: string | null; rest: string
  * | origin | body の中身 | 描き方 |
  * | --- | --- | --- |
  * | `self` | `commitment_open` のツール引数そのまま（クローンが書いた） | `<Markdown>` |
- * | `manager` | `[kind] text`。`kind` は閉じた3値、`text` はマネージャー（AI）の出力 | 接頭辞は素、残りは `<Markdown>` |
+ * | `manager` | `[kind] text`。`kind` は閉じた3値、`text` は下記の3種が混ざる | 接頭辞は素、残りは `<Markdown>` |
  * | `human` | 3経路とも人間の文字（チャット本文・承認待ちの回答・`POST /commitments`） | 素のテキスト（いまのまま） |
  * | `external` | `renderPayload` が整形した外部の中身 | 素のテキスト（いまのまま） |
+ *
+ * **`manager` の `text` は「マネージャー（AI）の出力」だけではない。** 現物を
+ * 当たり直すと（`packages/core/src/manager.ts`、`type: 'manager_message'` を
+ * post する箇所は6つ、うち5つは `#post` 直書きでデーモンが組み立てた通知。
+ * マネージャーの発言を中継するのは `#emit()` だけで、その呼び出し元は複数
+ * ある）、**`text` には型で区別されない3種が混ざる**:
+ *
+ * 1. **マネージャー自身の出力**（`#emit(event.managerId, 'report', event.text)`
+ *    など。`manager.ts:2190` / `2225` / `2500`）
+ * 2. **デーモンが組み立てた通知文**（`manager.ts:1333` / `1623` / `1727` /
+ *    `1766` / `2830` / `2294` / `2665` など）。**このうち複数は本文に既に
+ *    Markdown の記法を含む**（実例、`manager.ts:1623` の逐語）:
+ *    「この委譲は`**`自分より新しい世代の誰かが握っています`**`。…
+ *    `**`新しく起こし直さないでください`**`」（`2294` にも同様の例がある）
+ * 3. **SDK / runner が出したエラー文**（`manager.ts:2694`
+ *    `#emit(event.managerId, 'report', event.reason)` など。1・2 の文の末尾に
+ *    埋め込まれて届くことも多い、例: `2665` の `…挑み直します: ${event.reason}`）
+ *
+ * **3 は `apps/web/app/routes/reports.tsx:42` が「`Markdown` で描かないこと。
+ * 中身は SDK が出したエラー文であって、クローンが書いた文章ではない」と
+ * 書いているものと同じ種類である。それでもここでは `manager` を丸ごと
+ * Markdown のままにする。** 理由は3つ:
+ *
+ * - **3種類のどれも、人間が打った文字ではない。** 人間の指示が守ろうとして
+ *   いるもの（`chat.tsx:710`「自分が書いた文字が勝手に化けないため」）は、
+ *   ここでは1件も当たらない
+ * - **2 は既に Markdown の記法を本文に持っている**（上の逐語）。素のテキストで
+ *   描くと `**…**` がそのまま画面に出る。Markdown 側に倒すのは、いまの表示の
+ *   修正でもある
+ * - **3 だけを切り分ける材料が画面にも型にも無い。** `commitment.body` は
+ *   1本の文字列で、`origin: 'manager'` に下位の区別が無い。3 が単独で来る
+ *   経路（`2694`）はあるが、多くは 1 / 2 の文の末尾に埋め込まれて届くので、
+ *   切り分けようとすると本文の中身を判定することになる（それは
+ *   `manager.ts:2157` 付近のコメントが「表示のたびに文言の判定が要る」として
+ *   避けている形そのもの）。**これは「たまたま踏まなかった」ではなく、
+ *   「仕組みでは塞げていない」側である** — 3 が単独で `manager` の本文に来た
+ *   とき、SDK のエラー文がそのまま Markdown として描かれることがある。実害は
+ *   小さい（エラー文が記法を含むことは稀）が、`reports.tsx:42` の線と正面から
+ *   食い違う場所として次に読む人へ残しておく。
  *
  * **`human` を素のままにする理由**: `event.text` は
  * `apps/web/app/routes/chat.tsx:710` が名指しで守っている文字列そのものである
@@ -180,7 +219,8 @@ function splitManagerPrefix(body: string): { prefix: string | null; rest: string
  * 書いたかを型が記録していない。** `origin` は開いたときの起点なので判別に
  * 使えない。書き手が判らない以上、Markdown にすると人間が書いた回だけ静かに
  * 化ける。**実装しなかったのではなく、判別する材料が無いので据え置いた。**
- * （`ClosedRow` の `closedReason` は1文字も変えていない）
+ * （`ClosedRow` の `closedReason` は1文字も変えていない。この判別材料の
+ * 欠落そのものを issue #286 として立ててある）
  */
 function CommitmentBody({ commitment }: { commitment: Commitment }) {
   if (commitment.origin === 'self') {
@@ -286,6 +326,7 @@ function ClosedRow({ commitment }: { commitment: Commitment }) {
         `origin` は開いたときの起点なので判別に使えない。書き手が判らない以上、
         Markdown にすると人間が書いた回だけ静かに化ける。**実装しなかったの
         ではなく、判別する材料が無いので据え置いた。**
+        この判別材料の欠落は issue #286 として立ててある。
       */}
       {commitment.closedReason !== undefined && commitment.closedReason !== null && (
         <p className="mt-1 text-xs break-words">
