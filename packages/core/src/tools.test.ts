@@ -3018,17 +3018,14 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     {
       name: 'approvals_list',
       check: (firstLine) =>
-        expect(firstLine, `id の隣に質問の1行目が無い: ${firstLine}`).toMatch(
-          /^- \S+ 質問\d{4}/,
-        ),
+        expect(firstLine, `id の隣に質問の1行目が無い: ${firstLine}`).toMatch(/^- \S+ 質問\d{4}/),
     },
     {
       name: 'schedule_list',
       check: (firstLine) =>
-        expect(
-          firstLine,
-          `id の隣に周期の説明（60 分ごと）が無い: ${firstLine}`,
-        ).toContain('60 分ごと'),
+        expect(firstLine, `id の隣に周期の説明（60 分ごと）が無い: ${firstLine}`).toContain(
+          '60 分ごと',
+        ),
     },
     {
       name: 'commitment_list',
