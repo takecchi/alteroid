@@ -112,7 +112,8 @@ function splitFileRows(rows: unknown[]): CommitmentFile {
     // の `at` の判定をそのまま借りる — 二重定義すると片方だけ直して
     // 食い違う形になる。
     const at =
-      atCandidate !== undefined && unreadableCommitmentSchema.shape.at.safeParse(atCandidate).success
+      atCandidate !== undefined &&
+      unreadableCommitmentSchema.shape.at.safeParse(atCandidate).success
         ? atCandidate
         : undefined;
     unreadable.push({ value, id, at, reason: parsed.error.message });
@@ -329,7 +330,8 @@ export class FsCommitmentStore implements CommitmentStore {
       const parsed = rawFileSchema.parse(JSON.parse(raw));
       return splitFileRows(parsed.commitments);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { entries: [], unreadable: [] };
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+        return { entries: [], unreadable: [] };
       throw error;
     }
   }

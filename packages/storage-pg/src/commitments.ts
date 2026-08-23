@@ -59,9 +59,10 @@ function parseCommitment(id: string, value: unknown): Commitment {
  * — id が取れないことがある fs 版（本体が id を持たない生の値のとき）とは
  * ここが違う。
  */
-function splitReadableRows(
-  rows: { id: string; at: Date; commitment: unknown }[],
-): { entries: Commitment[]; unreadable: UnreadableCommitment[] } {
+function splitReadableRows(rows: { id: string; at: Date; commitment: unknown }[]): {
+  entries: Commitment[];
+  unreadable: UnreadableCommitment[];
+} {
   const entries: Commitment[] = [];
   const unreadable: UnreadableCommitment[] = [];
   for (const row of rows) {
