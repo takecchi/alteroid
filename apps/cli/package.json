@@ -12,7 +12,7 @@
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --root=../.. apps/cli/src"
+    "test": "node ../../scripts/test.mjs --root=../.. apps/cli/src"
   },
   "dependencies": {
     "@alteroid/core": "workspace:*",

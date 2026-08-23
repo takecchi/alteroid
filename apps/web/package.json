@@ -7,7 +7,7 @@
     "build": "react-router build",
     "dev": "react-router dev",
     "typecheck": "react-router typegen && tsc --noEmit",
-    "test": "vitest run --root=../.. apps/web/app"
+    "test": "node ../../scripts/test.mjs --root=../.. apps/web/app"
   },
   "dependencies": {
     "@alteroid/api-client": "workspace:*",

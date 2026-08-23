@@ -66,8 +66,18 @@ function collectFiles(dir: string, out: string[]): void {
   }
 }
 
-/** `vitest run --root=<...> <path>` の形の script から絞り込み先のパスを取り出す。 */
-const TEST_SCRIPT_SHAPE = /^vitest run --root=\S+\s+(\S+)$/;
+/**
+ * `node ../../scripts/test.mjs --root=<...> <path>` の形の script から絞り込み先の
+ * パスを取り出す。
+ *
+ * **#311 でこの形が変わった。** 以前は `vitest run --root=<...> <path>` だったが、
+ * `describe.skip` / `it.skip` で全部飛ばしても exit 0 のまま緑になる欠陥を塞ぐため、
+ * vitest を直呼びせずラッパ（`scripts/test.mjs`）を経由するようにした
+ * （`scripts/test-guard-core.mjs` の doc）。**この歯が見ている3つの性質は変えていない**
+ * — script が在るか・自分自身のパッケージを指しているか・絞り込み先にテストが実在するか。
+ * 変わったのは、それを読み取る正規表現の形だけである。
+ */
+const TEST_SCRIPT_SHAPE = /^node \.\.\/\.\.\/scripts\/test\.mjs --root=\S+\s+(\S+)$/;
 
 const workspaceDirs = expandWorkspaceDirs(readWorkspaceGlobs());
 

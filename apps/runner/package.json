@@ -20,7 +20,7 @@
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --root=../.. apps/runner/src"
+    "test": "node ../../scripts/test.mjs --root=../.. apps/runner/src"
   },
   "dependencies": {
     "@alteroid/core": "workspace:*",

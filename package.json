@@ -11,7 +11,7 @@
     "check:web-bundle-node-traces": "node ./scripts/check-web-bundle-node-traces.mjs",
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint .",
-    "test": "vitest run",
+    "test": "node ./scripts/test.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "verify": "node ./scripts/verify.mjs"
