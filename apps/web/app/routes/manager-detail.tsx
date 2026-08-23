@@ -246,6 +246,21 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
                 }
               />
               <div className="min-w-0 px-4 py-3">
+                {/*
+                  **ここで `Markdown` として描いてよいかは判断されていない。**
+                  失敗で終わった回の `lastReport` は SDK の生の文言を含みうる
+                  （`packages/core/src/manager.ts:2157` が
+                  `RunnerEvent{type:'report'}.text` をそのまま入れ、失敗回の
+                  その `text` は `packages/core/src/runner.ts` の
+                  `failedReportText` が「デーモンの頭＋SDK の失敗文言＋
+                  マネージャーの途中出力」を連結して組み立てる）。同じ repo の
+                  別の面は逆の判断を明示している —
+                  `apps/web/app/routes/reports.tsx` の `UnavailableNote` の doc
+                  は「`Markdown` で描かないこと。中身は SDK が出したエラー文
+                  であって…」と逐語で書いている。判別材料はこの場に既に在る
+                  — `manager.lastFailure` が立っているかどうかは、同じ
+                  `Card` の `subtitle`（直上）が既に読んでいる。→ issue #293
+                */}
                 <Markdown>{manager.lastReport}</Markdown>
               </div>
             </Card>
