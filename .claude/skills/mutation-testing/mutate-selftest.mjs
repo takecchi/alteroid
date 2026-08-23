@@ -1014,7 +1014,9 @@ function scenarioRestoreStatusComparison() {
   const contentAfterRestore = readRepoFile(FIXTURE_REL);
   const restoredWithForeignChangeIntact = contentAfterRestore === foreignChangeContent;
   const markerGoneAfterRestore = !markerExists();
-  log(`復元後、無関係な未コミット変更が残っているか（残るはず）: ${restoredWithForeignChangeIntact}`);
+  log(
+    `復元後、無関係な未コミット変更が残っているか（残るはず）: ${restoredWithForeignChangeIntact}`,
+  );
   log(`復元後、印は消えているか（消えるはず）: ${markerGoneAfterRestore}`);
 
   // 後始末: selftest 用の無関係な変更を取り除き、fixture を元に戻す。
@@ -1037,7 +1039,9 @@ function scenarioRestoreStatusComparison() {
   ensureFixtureClean();
   applyMutation(spec);
   log('');
-  log('-- 9c. 対比: 変異が当たっている最中に、外から対象ファイルを git add する（意図的な注入） --');
+  log(
+    '-- 9c. 対比: 変異が当たっている最中に、外から対象ファイルを git add する（意図的な注入） --',
+  );
   execFileSync('git', ['add', '--', FIXTURE_REL], { cwd: ROOT });
   const statusAfterForeignAdd = gitStatusPorcelainFor(FIXTURE_REL);
   log(`git add 直後の git status: ${JSON.stringify(statusAfterForeignAdd)}`);
@@ -1058,7 +1062,9 @@ function scenarioRestoreStatusComparison() {
   // #321 と同じ形で「変異が当たったまま」と誤読される。
   let stageAfterFailure = null;
   if (markerExists()) {
-    const marker = JSON.parse(fs.readFileSync(path.join(ROOT, 'MUTATION-IN-PROGRESS.json'), 'utf8'));
+    const marker = JSON.parse(
+      fs.readFileSync(path.join(ROOT, 'MUTATION-IN-PROGRESS.json'), 'utf8'),
+    );
     stageAfterFailure = marker.stage ?? 'source-mutated';
   }
   log(`12cで落ちた後、印の stage: ${stageAfterFailure}`);

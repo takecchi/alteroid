@@ -428,9 +428,7 @@ export function applyMutation(spec) {
   //     「変異の前後で変わっていないか」を見る。対象ファイル自身に正当な
   //     未コミット変更が在るのは、変異試験では異常ではなく通常である。
   const statusBefore = gitStatusPorcelainFor(spec.file);
-  log(
-    `[1b] 対象ファイルの git status --porcelain（変異前）: ${JSON.stringify(statusBefore)}`,
-  );
+  log(`[1b] 対象ファイルの git status --porcelain（変異前）: ${JSON.stringify(statusBefore)}`);
 
   // 2. 原文を読み、読んだ中身から md5Pre を計算する（ファイルを2回読まない）。
   const original = readRepoFile(spec.file);
