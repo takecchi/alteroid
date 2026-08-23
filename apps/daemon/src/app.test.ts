@@ -1271,7 +1271,7 @@ describe('HTTP API', () => {
     });
 
     // 器にも同じものが入っている（応答だけが正しい、という形になっていない）
-    expect(await stores.commitments.list()).toMatchObject([{ id, origin: 'human' }]);
+    expect((await stores.commitments.list()).entries).toMatchObject([{ id, origin: 'human' }]);
     // chat の外から積んだものは、日誌に残さなければどこにも跡が無い
     expect(await stores.journal.list({ types: ['decision'] })).toHaveLength(1);
   });
@@ -1285,8 +1285,8 @@ describe('HTTP API', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(await stores.commitments.list()).toMatchObject([{ origin: 'human' }]);
-    expect((await stores.commitments.list())[0]?.id).not.toBe('なりすまし');
+    expect((await stores.commitments.list()).entries).toMatchObject([{ origin: 'human' }]);
+    expect((await stores.commitments.list()).entries[0]?.id).not.toBe('なりすまし');
   });
 
   it('片付けたものは既定の一覧から消え、includeClosed=true でだけ出る', async () => {
@@ -1424,9 +1424,12 @@ describe('HTTP API', () => {
     }
 
     // 積まれても閉じられてもいない
-    expect(await stores.commitments.list({ includeClosed: true })).toEqual([
-      { id: 'cm-1', at: '2026-08-12T00:00:00.000Z', origin: 'human', body: '人間が頼んだこと' },
-    ]);
+    expect(await stores.commitments.list({ includeClosed: true })).toEqual({
+      entries: [
+        { id: 'cm-1', at: '2026-08-12T00:00:00.000Z', origin: 'human', body: '人間が頼んだこと' },
+      ],
+      unreadable: [],
+    });
   });
 
   it('溜まった承認待ちをまとめて片付けられる（1件失敗しても残りは進む）', async () => {

@@ -1086,6 +1086,37 @@ export type CommitmentClosedBy = z.infer<typeof commitmentClosedBySchema>;
 export type Commitment = z.infer<typeof commitmentSchema>;
 
 /**
+ * 台帳の1行が `commitmentSchema` として読めなかったときに、その行の代わりに
+ * 一覧へ載せるもの（issue #296）。
+ *
+ * **なぜ型を足すか。** 直したいのは「1行読めなくても一覧が丸ごと落ちない」こと
+ * だが、それだけだと読めなかった行は一覧から静かに消えるだけになる —
+ * `Commitment[]` を返す関数の型はそのままなので、呼び出し側は握り潰したことに
+ * すら気づけない。`CommitmentStore.list`（`store.ts`）の返り値をこの型を含む
+ * 形へ変えることで、「読めない行が在る」ことを呼び出し側がコンパイル時に
+ * 無視できないようにする。件数やログではなく型で持たせるのはそのためである。
+ *
+ * **「無い」でも「片付いた」でもない第3の状態である。** 空配列（無い）へ潰すと
+ * `parseCommitment`（`packages/storage-pg/src/commitments.ts`）の doc が防ごう
+ * としている結末 — クローンが引き受けたことを二度と思い出さない — へそのまま
+ * 着く。
+ *
+ * **⚠️ `reason` に本文を混ぜないこと。** zod の `safeParse` が返すエラー
+ * メッセージは欄名と型の食い違いしか含まないのでそのまま使ってよいが、
+ * `JSON.stringify(生の値)` を足さないこと（`dropped-record.ts` の doc — #52 で
+ * 依頼の本文が報告経路へ全文で漏れた事故が根拠である）。
+ */
+export const unreadableCommitmentSchema = z.object({
+  /** 台帳の列 / 生の値から取れた id。取れないこともある（fs 版で本体が id を持たない形のとき）。 */
+  id: z.string().optional(),
+  /** 受け取った時刻。pg 版は列から取れる。fs 版は取れないことがある。 */
+  at: isoDateTime.optional(),
+  /** なぜ読めなかったか。**依頼の本文（`body`）を載せないこと**（`dropped-record.ts` と同じ制約）。 */
+  reason: z.string(),
+});
+export type UnreadableCommitment = z.infer<typeof unreadableCommitmentSchema>;
+
+/**
  * 一覧の `updatedAt`（更新＝片付けた時刻。まだなら受け取った時刻）を出す。
  *
  * **なぜここへ寄せたか。** かつては MCP（`tools.ts`）と CLI（`apps/cli/src/chat.ts`）

@@ -1,3 +1,4 @@
+import { AlertTriangle } from 'lucide-react';
 import { useState } from 'react';
 
 import { Markdown } from '~/components/markdown';
@@ -5,7 +6,13 @@ import { Page } from '~/components/page';
 import { Badge, Button, Card, CardHeader, Empty, ErrorNote, Input, Spinner } from '~/components/ui';
 import { useCloseCommitment, usePushCommitment } from '~/hooks/mutations';
 import { useCommitments } from '~/hooks/queries';
-import type { Commitment, CommitmentClosedBy, CommitmentOrigin, TextMarkup } from '@alteroid/core';
+import type {
+  Commitment,
+  CommitmentClosedBy,
+  CommitmentOrigin,
+  TextMarkup,
+  UnreadableCommitment,
+} from '@alteroid/core';
 import { formatDateTime, formatRelative } from '~/lib/format';
 
 /**
@@ -29,6 +36,8 @@ export default function Commitments() {
   const all = data?.entries ?? [];
   const open = all.filter((commitment) => !isClosed(commitment));
   const closed = all.filter(isClosed);
+  // **読めない行（issue #296）。**「無い」でも「片付いた」でもない第3の状態。
+  const unreadable = data?.unreadable ?? [];
 
   return (
     <Page
@@ -48,6 +57,9 @@ export default function Commitments() {
         <Spinner />
       ) : (
         <>
+          {/* 一覧の上に置く。読める行の中身を見る前に、まず断りが目に入るように。 */}
+          <UnreadableNote unreadable={unreadable} />
+
           <Card className="mb-4">
             <CardHeader
               title="未了"
@@ -93,6 +105,41 @@ export default function Commitments() {
 
 function isClosed(commitment: Commitment): boolean {
   return commitment.closedAt !== undefined && commitment.closedAt !== null;
+}
+
+/**
+ * 読めない行が在ることを、一覧の上で断る（issue #296）。
+ *
+ * **新しい共有部品を増やさない。** `ErrorNote`（`~/components/ui`）と同じ
+ * 配色の作法を warn 色で使い回す — `apps/web/app/routes/journal.tsx` の
+ * `BlockedNote`（「終端でも空でもない、本物の限界だと分かる形にする」）と
+ * 同じ考え方で、この画面にもローカルに1つだけ置く。
+ *
+ * **「無い」でも「片付いた」でもない第3の状態を、`Empty` の顔にしない。**
+ * `Empty`（灰色・控えめ）は「無い」を表す部品なので、読めない行の存在を
+ * そこへ混ぜると「特に何も無い」に見えてしまう。
+ *
+ * **0件なら描かない。** 常に出る断りは、出ていることが情報にならない
+ * （`~/components/ui` の `TruncationNote` と同じ判定）。
+ *
+ * **id が取れない行は件数だけに数える**（`commitment_list` ツール・digest と
+ * 同じ扱い。`packages/core/src/tools.ts` / `digest.ts`）。
+ */
+function UnreadableNote({ unreadable }: { unreadable: UnreadableCommitment[] }) {
+  if (unreadable.length === 0) return null;
+  const ids = unreadable.map((entry) => entry.id).filter((id): id is string => id != null);
+  return (
+    <div
+      role="status"
+      className="mb-4 flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn"
+    >
+      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
+      <span className="min-w-0 break-words">
+        読めない行が {unreadable.length} 件ある{ids.length > 0 && `（id: ${ids.join(', ')}）`}。
+        <strong>片付いたのではない。</strong>
+      </span>
+    </div>
+  );
 }
 
 /**

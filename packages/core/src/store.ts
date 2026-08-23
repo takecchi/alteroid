@@ -15,6 +15,7 @@ import type {
   PendingApproval,
   SchedulePhase,
   ScheduledRequest,
+  UnreadableCommitment,
 } from './schema.js';
 import type {
   UsageAccumulation,
@@ -223,6 +224,49 @@ export interface ScheduleStore {
 }
 
 /**
+ * `CommitmentStore.get(id)` が、その行を `commitmentSchema` として読めなかった
+ * ときに投げる専用のエラー型（issue #296）。
+ *
+ * **なぜ型を分けるか。** `get` は「無い（`null`）」と「読めない（throw）」を
+ * 区別する契約のままだが（`CommitmentStore.get` の doc）、呼び出し側
+ * （`commitment_list` ツールの全文モード、`tools.ts`）はその throw をさらに
+ * 2種類へ割る必要がある — **台帳の1行が壊れているという性質**（`entries` /
+ * `unreadable` と同じ第3の状態。安全側は「読めない」と伝えて返す）と、
+ * **DB が落ちた・ファイルが読めない等の器そのものの障害**（安全側は握り潰さず
+ * 上へ投げる）である。前者を後者と同じ扱いで握り潰すと、器の異常が
+ * 「台帳が壊れている」に化けて見えなくなる。
+ *
+ * メッセージの文字列（`/読めない形/` 等）で判定するのは、メッセージの言い回し
+ * を直しただけで判定が静かに外れる脆さがあるので、`instanceof` で見分けられる
+ * 専用のクラスを立てる。
+ */
+export class UnreadableCommitmentError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UnreadableCommitmentError';
+  }
+}
+
+/**
+ * `CommitmentStore.list` の返り値（issue #296）。
+ *
+ * **`Commitment[]` のままにしなかったのは、呼び出し側が握り潰せない形にする
+ * ためである。** 台帳の1行が保存されている形（enum の値など）と、いま動いて
+ * いるコードが読める形は、将来ずれうる（`schema.ts` の `unreadableCommitmentSchema`
+ * の doc）。ずれた行を空配列（無い）へ潰すと、`parseCommitment`
+ * （`packages/storage-pg/src/commitments.ts`）の doc が防ごうとしている結末 —
+ * クローンが引き受けたことを二度と思い出さない — へそのまま着く。件数や
+ * ログではなく型を変えるのは、`entries` だけを見て `unreadable` を読み飛ばす
+ * ことは書けても、`CommitmentList` を受け取っておいて `unreadable` が
+ * コンパイラの目に触れないことはできない、という違いのためである。
+ */
+export interface CommitmentList {
+  entries: Commitment[];
+  /** 読めなかった行。**「無い」でも「片付いた」でもない第3の状態。** */
+  unreadable: UnreadableCommitment[];
+}
+
+/**
  * 引き受けたまま終わっていない仕事の台帳（`schema.ts` の `Commitment`）。
  *
  * **受信箱（`InboxStore`）とは守るものが違う。** あちらが持つのは「その合図がまだ
@@ -239,9 +283,21 @@ export interface CommitmentStore {
    * 片付いたものは新しい順で未了の後ろに続く。
    *
    * `includeClosed` を省いたら未了だけ。
+   *
+   * **1行が読めなくても、その行だけが `unreadable` へ回り `entries` は返る**
+   * （issue #296）。`entries` の順序・件数は「読めた行だけで見たときの」台帳の
+   * 姿であって、読めなかった行はどこにも数え上げに紛れ込まない。
    */
-  list(options?: { includeClosed?: boolean }): Promise<Commitment[]>;
+  list(options?: { includeClosed?: boolean }): Promise<CommitmentList>;
 
+  /**
+   * 1件を読む。**「無い（`null`）」と「読めない」は別物**——単票なので
+   * `list()` のように隔離する一覧が無く、この区別を型（`CommitmentList`）へ
+   * 逃がす先も無い。読めない行は `UnreadableCommitmentError`（本ファイル）を
+   * 投げる。呼び出し側（`commitment_list` ツール、`tools.ts`）はこれを
+   * `instanceof` で捕まえ、「読めない」を text として返す——それ以外の
+   * 例外（器そのものの障害）は捕まえずに上へ通す。
+   */
   get(id: string): Promise<Commitment | null>;
 
   /**

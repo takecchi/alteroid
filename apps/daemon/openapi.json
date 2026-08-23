@@ -3904,7 +3904,7 @@
         "operationId": "getCommitments",
         "tags": ["commitments"],
         "summary": "引き受けたまま終わっていない仕事の一覧",
-        "description": "クローンの `commitment_list` と同じものを人間の側から読む。既定は**未了だけ**で、古い順に返る（齢が判断の材料なので、古いものから見せる）。`includeClosed=true` を付けると片付けたものが未了の後ろに新しい順で続く。順序や優先度は器が持たない。",
+        "description": "クローンの `commitment_list` と同じものを人間の側から読む。既定は**未了だけ**で、古い順に返る（齢が判断の材料なので、古いものから見せる）。`includeClosed=true` を付けると片付けたものが未了の後ろに新しい順で続く。順序や優先度は器が持たない。`unreadable` は台帳の行が読めなかったもの（issue #296）。**「無い」でも「片付いた」でもない第3の状態**で、0件でも欄自体は必ず返る。",
         "responses": {
           "200": {
             "description": "台帳の中身。",
@@ -3959,9 +3959,29 @@
                         },
                         "required": ["id", "at", "origin", "body", "updatedAt"]
                       }
+                    },
+                    "unreadable": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "at": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "reason": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["reason"]
+                      }
                     }
                   },
-                  "required": ["entries"]
+                  "required": ["entries", "unreadable"]
                 }
               }
             }

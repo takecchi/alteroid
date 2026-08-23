@@ -3475,6 +3475,94 @@ describe('commitment_list を文字数の予算へ寄せる（潜在バグの修
 });
 
 /**
+ * issue #296（SPEC 5節）。`CommitmentStore.list` の返りが `{ entries,
+ * unreadable }` になったので、`commitment_list` ツールの一覧末尾に
+ * 「読めない行が N 件」が必ず出ることを固定する——**ここが落ちると、
+ * Issue の doc が守ろうとしたもの（クローンから読めない行の存在が
+ * 見える）が守れない。**
+ *
+ * `createMemoryStores()` は読めない行を作れない（`testing.ts` の doc）ので、
+ * `stores.commitments.list` を差し替えて模す（`commitment.test.ts` の
+ * 「台帳が読めなくてもターンは進む」テストと同じ作法）。
+ */
+describe('commitment_list は読めない行を隠さない（issue #296）', () => {
+  it('一覧の末尾に「読めない行が N 件」が id 付きで出る（読める行が0件でも「無い」とは誤読しない）', async () => {
+    const stores = createMemoryStores();
+    const withUnreadable: Stores = {
+      ...stores,
+      commitments: {
+        ...stores.commitments,
+        async list(options) {
+          const base = await stores.commitments.list(options);
+          return {
+            entries: base.entries,
+            unreadable: [
+              { id: 'c-broken-1', at: '2026-08-01T00:00:00.000Z', reason: '型が合わない' },
+            ],
+          };
+        },
+      },
+    };
+    const tools = createCloneTools({ stores: withUnreadable, emit: () => undefined });
+    const found = tools.find((entry) => entry.name === 'commitment_list');
+
+    // 読める行が0件の状態でも、読めない行だけで断りが出ること
+    // （「無い」＝空配列と誤読しない。`entries.length === 0 && unreadable.length
+    // === 0` のときだけ早期リターンする、という分岐そのものを問う）。
+    const result = await found?.handler({} as never, {});
+    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+    expect(reply).toContain('読めない行が 1 件ある');
+    expect(reply).toContain('c-broken-1');
+    expect(reply).toContain('片付いたのではない');
+
+    // 読める行が1件も無いことも明言していること（`（引き受けたまま終わって
+    // いない仕事は無い）` という「0件」の文言とは別の文言に倒れていること）。
+    expect(reply).not.toBe('（引き受けたまま終わっていない仕事は無い）');
+  });
+
+  it('0件のときは断りを足さない', async () => {
+    const tools = createCloneTools({ stores: createMemoryStores(), emit: () => undefined });
+    const opened = tools.find((entry) => entry.name === 'commitment_open');
+    await opened?.handler({ body: '健全な依頼' } as never, {});
+
+    const found = tools.find((entry) => entry.name === 'commitment_list');
+    const result = await found?.handler({} as never, {});
+    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+
+    expect(reply).not.toContain('読めない行');
+  });
+
+  it('id が取れない行は件数だけに数える（id: の並びに出ない）', async () => {
+    const stores = createMemoryStores();
+    const withUnreadable: Stores = {
+      ...stores,
+      commitments: {
+        ...stores.commitments,
+        async list() {
+          return {
+            entries: [],
+            unreadable: [
+              { id: 'c-broken-1', reason: '型が合わない' },
+              // id が取れない行（fs 版で本体が id を持たない生の値のとき）。
+              { reason: 'id も取れない行' },
+            ],
+          };
+        },
+      },
+    };
+    const tools = createCloneTools({ stores: withUnreadable, emit: () => undefined });
+    const found = tools.find((entry) => entry.name === 'commitment_list');
+    const result = await found?.handler({} as never, {});
+    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+
+    // 件数は2件（id の有無に関わらず数える）。
+    expect(reply).toContain('読めない行が 2 件ある');
+    // id が取れた分だけが (id: ...) に出る。
+    expect(reply).toContain('（id: c-broken-1）');
+  });
+});
+
+/**
  * #215（一覧の第2弾）。人間の依頼の逐語は「一覧系ツールは最低でも
  * id + 名前 + 概要 + updated_at + created_at が欲しい」で、`manager_list` /
  * `schedule_list`（#208）に続いてこの2つへ同じ形を入れた。

@@ -1161,9 +1161,10 @@ describe('FsCommitmentStore', () => {
   it('開いた仕事は未了として読み戻せる（デーモンを作り直しても残る）', async () => {
     await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す'));
 
-    expect(await stores.commitments.list()).toEqual([
-      commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す'),
-    ]);
+    expect(await stores.commitments.list()).toEqual({
+      entries: [commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す')],
+      unreadable: [],
+    });
     expect((await stores.commitments.get('c-1'))?.body).toBe('PR を出す');
     expect(await stores.commitments.get('しらない')).toBeNull();
   });
@@ -1175,8 +1176,8 @@ describe('FsCommitmentStore', () => {
       await stores.commitments.close('c-1', '2026-08-13T00:00:00.000Z', '#99 で出した', 'clone'),
     ).toBe(true);
 
-    expect(await stores.commitments.list()).toEqual([]);
-    const all = await stores.commitments.list({ includeClosed: true });
+    expect(await stores.commitments.list()).toEqual({ entries: [], unreadable: [] });
+    const all = (await stores.commitments.list({ includeClosed: true })).entries;
     expect(all).toHaveLength(1);
     // 「閉じた」だけを残さない（何をもって終わりとしたかが無いと人間が否定できない）
     expect(all[0]?.closedAt).toBe('2026-08-13T00:00:00.000Z');
@@ -1218,6 +1219,14 @@ describe('FsCommitmentStore', () => {
    * src/schema.ts` の doc に理由がある）。fs / pg で能力差を作らないため、
    * ここでも同じ性質を問う。
    *
+   * **追記（issue #296）: 上の段落はもう現物と合っていない。** `#read()` は
+   * いまファイル全体を `commitmentSchema` の配列として一括 parse せず、
+   * `rawFileSchema`（要素は `z.unknown()`）で読んでから行ごとに
+   * `commitmentSchema.safeParse` する（`splitFileRows`）。だから未知の値を
+   * 持つ行は「台帳全体」ではなく「その行」だけが読めなくなり、`entries` /
+   * `unreadable` へ分かれる。この段落は直した経緯として残す
+   * （AGENTS.md「元のコメントを消さず経緯を追記する」）。
+   *
    * **なぜ `open()` を使わないのか。** この器が書く値は 'clone' | 'human'
    * の2つに限られる（`CommitmentStore.close` の `by` 引数の型で縛って
    * ある）ので、`open()`（`commitmentSchema.parse` を通す）経由では
@@ -1256,15 +1265,113 @@ describe('FsCommitmentStore', () => {
     );
 
     // list() が例外を投げず、他の行も含めて読める。
-    // （`.resolves` の形にしてあるのは、厳密な enum へ戻す変異を当てたとき
-    // `list()` 自身が assertion として落ちることを見るためである。）
-    await expect(stores.commitments.list({ includeClosed: true })).resolves.toHaveLength(1);
+    // **`list()` は `{ entries, unreadable }` を返すようになった（issue #296）ので、
+    // 配列 matcher の `.resolves.toHaveLength` はもう使えない。** 直接 await して
+    // `.entries` を確かめる形でも、同じ意図（厳密な enum へ戻す変異を当てると
+    // `list()` 自身が例外を投げ、この await がそのまま失敗する）は保たれる。
+    const listed = await stores.commitments.list({ includeClosed: true });
+    expect(listed.entries).toHaveLength(1);
+    // この行は既知の欄（closedBy）の話であって、行そのものは読める。
+    // `unreadable` へは回らない。
+    expect(listed.unreadable).toEqual([]);
 
-    const all = await stores.commitments.list({ includeClosed: true });
+    const all = listed.entries;
     expect(all[0]?.closedBy).toBe('manager');
 
     const single = await stores.commitments.get('c-unknown-closedby');
     expect(single?.closedBy).toBe('manager');
+  });
+
+  /**
+   * **これが issue #296 の本体である（pg 版 `index.test.ts` の同名テストの対）。**
+   * `closedBy` は由来の注記に過ぎず意図的に緩く持つ欄だが（直上のテスト）、
+   * `origin`（`commitmentOriginSchema`。`z.enum(['human', 'manager', 'external',
+   * 'self'])`）は厳密な enum のまま——直さなければ、未知の値を持つ1行が
+   * `#read()`（＝ファイル全体の parse）を丸ごと落としていた。
+   */
+  it('未知の origin を1行混ぜても list() は落ちず、健全な行は全部返る（未知の1行は unreadable へ、id 付きで）', async () => {
+    await stores.commitments.open(commitment('c-ok-1', '2026-08-10T00:00:00.000Z', '健全な行1'));
+    await stores.commitments.open(commitment('c-ok-2', '2026-08-11T00:00:00.000Z', '健全な行2'));
+
+    // 健全な行と並べて、未知の origin を持つ壊れた行を直接書き込む
+    // （open() 経由では commitmentSchema.parse を通るので作れない。上の doc）。
+    const path = join(stores.paths.jobs, 'commitments.json');
+    const before = JSON.parse(await readFile(path, 'utf8')) as { commitments: unknown[] };
+    await writeFile(
+      path,
+      JSON.stringify({
+        commitments: [
+          ...before.commitments,
+          {
+            id: 'c-unknown-origin',
+            at: '2026-08-12T00:00:00.000Z',
+            // **`commitmentOriginSchema` に無い値。**
+            origin: 'future-origin',
+            body: '未知の origin を持つ行',
+          },
+        ],
+      }),
+      'utf8',
+    );
+
+    // 1. **健全な行は全部返る。** id を名指しして検査する。
+    const listed = await stores.commitments.list();
+    expect(listed.entries.map((entry) => entry.id)).toEqual(['c-ok-1', 'c-ok-2']);
+
+    // 2. **未知の1行は `unreadable` に、id 付きで現れる（黙って消えていない）。**
+    expect(listed.unreadable).toHaveLength(1);
+    expect(listed.unreadable[0]?.id).toBe('c-unknown-origin');
+    expect(listed.unreadable[0]?.at).toBe('2026-08-12T00:00:00.000Z');
+    // reason に本文（body）が混ざっていないこと（dropped-record.ts と同じ制約）。
+    expect(listed.unreadable[0]?.reason).not.toContain('未知の origin を持つ行');
+
+    // 3. **`get()` はその id で throw する（「無い」と「読めない」の区別が消えていない）。**
+    await expect(stores.commitments.get('c-unknown-origin')).rejects.toThrow(/読めない形/);
+  });
+
+  /**
+   * **これが一番大事な歯である（issue #296、SPEC 4節）。** fs 版は
+   * read-modify-write のたびにファイル全体を書き直す器なので、読めない行の
+   * 生の値（`UnreadableRow.value`）を持ち回って書き戻さないと、`open()` /
+   * `close()` が1回走っただけで読めない行が**ディスクから永久に消える**
+   * ——これはこの issue が防ごうとしているもの（1行読めないだけで一覧が
+   * 丸ごと落ちる）より重い事故である。
+   *
+   * ファイルを読み直して生の値が同一であることまで検査する
+   * （`entries` / `unreadable` に分けて返す都合上、一覧の返り値だけを見ても
+   * 書き戻しで消えていないことは確認できない——ディスク上の実体を見る）。
+   */
+  it('読めない行が在る状態で open() / close() を走らせても、読めない行がファイルから消えない（書き戻しで生の値が残る）', async () => {
+    const path = join(stores.paths.jobs, 'commitments.json');
+    const brokenRow = {
+      id: 'c-broken',
+      at: '2026-08-01T00:00:00.000Z',
+      origin: 'future-origin',
+      body: '読めない行の生の値そのもの',
+    };
+    await mkdir(stores.paths.jobs, { recursive: true });
+    await writeFile(path, JSON.stringify({ commitments: [brokenRow] }), 'utf8');
+
+    // 直後の list() で unreadable に現れることをまず確かめる（前提条件）。
+    const before = await stores.commitments.list();
+    expect(before.unreadable).toHaveLength(1);
+    expect(before.unreadable[0]?.id).toBe('c-broken');
+
+    // open() を1回走らせる（読めない行とは別の id）。
+    await stores.commitments.open(commitment('c-new', '2026-08-13T00:00:00.000Z', '新しい依頼'));
+    // close() も1回走らせる。
+    await stores.commitments.close('c-new', '2026-08-14T00:00:00.000Z', '片付けた', 'clone');
+
+    // **ファイルを読み直して、壊れた行の生の値が一切変わっていないことを見る。**
+    const onDisk = JSON.parse(await readFile(path, 'utf8')) as { commitments: unknown[] };
+    expect(onDisk.commitments).toContainEqual(brokenRow);
+
+    // list() から見ても、読めない行は変わらず unreadable に残っている。
+    const after = await stores.commitments.list({ includeClosed: true });
+    expect(after.unreadable).toHaveLength(1);
+    expect(after.unreadable[0]?.id).toBe('c-broken');
+    // 健全な行（新規 open→close）も普通に読める。
+    expect(after.entries.map((entry) => entry.id)).toContain('c-new');
   });
 
   it('同じ id で二度 open しても上書きされない（1回目の本文が残る）', async () => {
@@ -1280,7 +1387,7 @@ describe('FsCommitmentStore', () => {
     const entry = await stores.commitments.get('c-1');
     expect(entry?.body).toBe('最初の依頼');
     expect(entry?.at).toBe('2026-08-12T00:00:00.000Z');
-    expect(await stores.commitments.list()).toHaveLength(1);
+    expect((await stores.commitments.list()).entries).toHaveLength(1);
   });
 
   it('閉じた id を open し直しても開き直らない（片付いた仕事が蘇らない）', async () => {
@@ -1292,7 +1399,7 @@ describe('FsCommitmentStore', () => {
       await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す')),
     ).toBe(false);
 
-    expect(await stores.commitments.list()).toEqual([]);
+    expect(await stores.commitments.list()).toEqual({ entries: [], unreadable: [] });
     expect((await stores.commitments.get('c-1'))?.closedAt).toBe('2026-08-13T00:00:00.000Z');
   });
 
@@ -1317,7 +1424,10 @@ describe('FsCommitmentStore', () => {
       await stores.commitments.close('しらない', '2026-08-13T00:00:00.000Z', '片付けた', 'clone'),
     ).toBe(false);
 
-    expect(await stores.commitments.list({ includeClosed: true })).toEqual([]);
+    expect(await stores.commitments.list({ includeClosed: true })).toEqual({
+      entries: [],
+      unreadable: [],
+    });
   });
 
   it('未了は古い順に返る（齢が判断の材料なので放置されているものから見せる）', async () => {
@@ -1325,7 +1435,7 @@ describe('FsCommitmentStore', () => {
     await stores.commitments.open(commitment('c-old', '2026-08-10T00:00:00.000Z', '古い'));
     await stores.commitments.open(commitment('c-mid', '2026-08-12T00:00:00.000Z', '中'));
 
-    expect((await stores.commitments.list()).map((entry) => entry.id)).toEqual([
+    expect((await stores.commitments.list()).entries.map((entry) => entry.id)).toEqual([
       'c-old',
       'c-mid',
       'c-new',
@@ -1340,7 +1450,7 @@ describe('FsCommitmentStore', () => {
     await stores.commitments.close('c-b', '2026-08-13T00:00:00.000Z', 'B を片付けた', 'clone');
 
     expect(
-      (await stores.commitments.list({ includeClosed: true })).map((entry) => entry.id),
+      (await stores.commitments.list({ includeClosed: true })).entries.map((entry) => entry.id),
     ).toEqual(['c-open', 'c-b', 'c-a']);
   });
 
@@ -1400,7 +1510,7 @@ describe('FsCommitmentStore', () => {
       );
     }
 
-    const all = await stores.commitments.list({ includeClosed: true });
+    const all = (await stores.commitments.list({ includeClosed: true })).entries;
     const open = all.filter((entry) => entry.closedAt === undefined);
     const closed = all.filter((entry) => entry.closedAt !== undefined);
 

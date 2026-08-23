@@ -3501,7 +3501,7 @@ describe('クローン — 考えている合図（thinking）', () => {
     await waitFor(async () => (await s.stores.inbox.claimPending()).length === 2, '未読の書き出し');
 
     // 引き受けた仕事としても載る（人間の最後の一言が、跡だけになって消えない）
-    const open = await s.stores.commitments.list();
+    const open = (await s.stores.commitments.list()).entries;
     expect(open.map((entry) => entry.origin)).toEqual(['human', 'manager']);
     // 本文は器の中には**入る**（拾い直せなければ意味が無い）。出さないのは stderr の側だけ
     expect(open[0]?.body).toContain('ghp_');

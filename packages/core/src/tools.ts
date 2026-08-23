@@ -45,6 +45,7 @@ import {
 } from './schema.js';
 import type {
   ChatStreamEvent,
+  Commitment,
   CommitmentOrigin,
   JournalEntry,
   MemoryDocumentMeta,
@@ -56,6 +57,7 @@ import type {
 import { describeRevisionStatus } from './revision.js';
 import { CANON_REVISION, canonDocument, canonNames, describeCloneRuntime } from './self.js';
 import type { CloneRuntimeFacts } from './self.js';
+import { UnreadableCommitmentError } from './store.js';
 import type { Stores } from './store.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import {
@@ -1310,7 +1312,28 @@ export function createCloneTools(context: ToolContext) {
           // 実体であり、何をもって終わりとしたのかが無いと否定のしようがない」と
           // 書いている欄で、**一覧では120字の抜粋で止まる。** 全文へ降りる口が
           // 無ければ、その設計は抜粋の分しか生きていない（#218）。
-          const entry = await stores.commitments.get(id);
+          //
+          // **`get(id)` は読めない行で throw する（`CommitmentStore.get` の
+          // 契約。issue #296）。** ここで投げっぱなしにすると、クローンから
+          // 見て「道具が壊れた」としか映らず、「無い」「読めない」「読める」の
+          // 3値が握り潰される——直上の doc がまさに防ごうとしている取り違えが
+          // ここで起きる。**`UnreadableCommitmentError` だけを捕まえて3値目
+          // として返し、それ以外（DB 接続断・ファイル読み取り不能などの器
+          // そのものの障害）は捕まえずに上へ通す** — 後者まで飲み込むと、
+          // 器の異常が「台帳が壊れている」に化けて見えなくなる
+          // （`UnreadableCommitmentError` の doc、`packages/core/src/store.ts`）。
+          let entry: Commitment | null;
+          try {
+            entry = await stores.commitments.get(id);
+          } catch (error) {
+            if (error instanceof UnreadableCommitmentError) {
+              return text(
+                `引き受けた仕事 ${id} は読めない形で入っている（片付いたのではない。` +
+                  '無いのとは違う）。本文はここでは取れない。',
+              );
+            }
+            throw error;
+          }
           // **黙って空を返さない。** 「無い」と「読めない」を混ぜると、id の
           // 打ち間違いが「その仕事は存在しなかった」として片付く。
           if (!entry) return text(`引き受けた仕事 ${id} は無い（id が違う）。`);
@@ -1337,10 +1360,15 @@ export function createCloneTools(context: ToolContext) {
         }
 
         // --- 一覧モード ---
-        const entries = await stores.commitments.list(
+        // **`list()` は `{ entries, unreadable }` を返す（issue #296）。**
+        // 読める行（`entries`）が0件でも、読めない行（`unreadable`）だけは
+        // 在りうるので、「無い」と返してよいのは両方0件のときだけである。
+        const { entries, unreadable } = await stores.commitments.list(
           includeClosed === true ? { includeClosed: true } : undefined,
         );
-        if (entries.length === 0) return text('（引き受けたまま終わっていない仕事は無い）');
+        if (entries.length === 0 && unreadable.length === 0) {
+          return text('（引き受けたまま終わっていない仕事は無い）');
+        }
         const items = entries.map((entry) =>
           renderListingEntry({
             id: entry.id,
@@ -1357,29 +1385,52 @@ export function createCloneTools(context: ToolContext) {
             ],
           }),
         );
-        return text(
-          [
-            renderListing(items, {
-              budget: COMMITMENT_LIST_BUDGET,
-              // **続きの取り方を案内する（#218 で口ができた）。** かつてここには
-              // 「この台帳には詳細へ降りる道具が無いので案内すると嘘になる」と
-              // 書いてあった。`commitment_list id=<id>` を足したので、いまは
-              // 案内できる。**案内する口が実在することは歯で固定してある**
-              // （導線が空振りする形は、無い口を案内するのと同じだけ嘘である）。
-              // **`includeClosed` のときは「未了は」と言わないこと。** `total` には
-              // 片付いたものも含まれるので、そのまま「未了は N 件」と言うと片付いた
-              // 分まで未了として数えた嘘になる（数が大きく出る方向の嘘）。
-              omitted: ({ rest, shown, total }) =>
-                `…ほか ${rest} 件は省略（${
-                  includeClosed === true
-                    ? `片付けた分を含めて ${total} 件あり`
-                    : `未了は ${total} 件あり`
-                }、古い順に ${shown} 件だけ出した。落ちた分も含め、1件の全文は commitment_list id=<id> で取れる）。`,
-            }),
+        const lines = [
+          entries.length === 0
+            ? '（読める行は無い）'
+            : renderListing(items, {
+                budget: COMMITMENT_LIST_BUDGET,
+                // **続きの取り方を案内する（#218 で口ができた）。** かつてここには
+                // 「この台帳には詳細へ降りる道具が無いので案内すると嘘になる」と
+                // 書いてあった。`commitment_list id=<id>` を足したので、いまは
+                // 案内できる。**案内する口が実在することは歯で固定してある**
+                // （導線が空振りする形は、無い口を案内するのと同じだけ嘘である）。
+                // **`includeClosed` のときは「未了は」と言わないこと。** `total` には
+                // 片付いたものも含まれるので、そのまま「未了は N 件」と言うと片付いた
+                // 分まで未了として数えた嘘になる（数が大きく出る方向の嘘）。
+                omitted: ({ rest, shown, total }) =>
+                  `…ほか ${rest} 件は省略（${
+                    includeClosed === true
+                      ? `片付けた分を含めて ${total} 件あり`
+                      : `未了は ${total} 件あり`
+                  }、古い順に ${shown} 件だけ出した。落ちた分も含め、1件の全文は commitment_list id=<id> で取れる）。`,
+              }),
+        ];
+        if (entries.length > 0) {
+          lines.push(
             '（本文は240字の抜粋。1件の全文は commitment_list id=<id> で取れる。片付いた件も読める）',
             '（更新＝この1件が最後に変わった時刻。まだ片付けていなければ、受け取った時刻と同じ）',
-          ].join('\n'),
-        );
+          );
+        }
+        // **末尾に必ず断りを足す（issue #296）。** クローンがこれを読む場所
+        // そのものなので、ここが落ちると Issue が守ろうとしたものが守れない。
+        // 0件のときは何も足さない（`entries.length === 0 && unreadable.length
+        // === 0` は上で早期リターン済みなので、ここに来る時点で
+        // `unreadable.length > 0` の可能性だけを見ればよい）。
+        if (unreadable.length > 0) {
+          // **id が取れない行は件数だけに数える。** `id` を持たない行を
+          // 一覧から書き漏らすのではなく、そもそも id という材料が無いので
+          // 出しようがない、という区別である。
+          const ids = unreadable
+            .map((entry) => entry.id)
+            .filter((id): id is string => id !== undefined);
+          lines.push(
+            `**読めない行が ${unreadable.length} 件ある${
+              ids.length > 0 ? `（id: ${ids.join(', ')}）` : ''
+            }。片付いたのではない。**`,
+          );
+        }
+        return text(lines.join('\n'));
       },
     ),
 
