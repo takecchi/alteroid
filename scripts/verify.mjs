@@ -67,6 +67,19 @@
  * **`--force` で必ず走る。** そして**`--force` を毎回打つ人が出たら、それは指紋が
  * 信用されていない合図である** — そのときは指紋の範囲を疑うこと。
  *
+ * ## 並列度を外から渡す（#362）
+ *
+ * `pnpm verify -- --maxWorkers=4` は `pnpm test` へ、`pnpm verify -- --workspace-concurrency=2`
+ * は **build の手順の env（`PNPM_CONFIG_WORKSPACE_CONCURRENCY`）** へ行く。**どちらも既定は
+ * 持たない**（渡さなければ何も足さない）。
+ *
+ * **⚠️ build へ引数として渡す形（`pnpm build -- <フラグ>`）は使えない** — フラグが各
+ * パッケージの build スクリプトの引数になり、`apps/web` の `react-router build` が落ちる。
+ * **一般の口は環境変数のほうである**: `PNPM_CONFIG_WORKSPACE_CONCURRENCY`（pnpm の並列度。
+ * `NPM_CONFIG_*` は読まれない）と `RAYON_NUM_THREADS` / `ROLLDOWN_WORKER_THREADS`
+ * （`apps/web` のスレッド数。この口は足さないので、要るなら呼ぶ側の env で渡すこと）。
+ * 実測は `AGENTS.md`「自分が走っている器」に在る。
+ *
  * ## この口は CI と同じではない（`verify` == CI と読まないこと）
  *
  * **手順の中身と順序は CI（`.github/workflows/ci.yml`）に合わせてあるが、CI にあって
@@ -90,7 +103,15 @@ import { dirname } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-import { classifyTest, decideSkip, fingerprint, recordPathFor } from './verify-core.mjs';
+import {
+  classifyTest,
+  decideSkip,
+  envForStep,
+  fingerprint,
+  recordPathFor,
+  splitVerifyArgs,
+  STEPS,
+} from './verify-core.mjs';
 
 const REPO = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -103,50 +124,19 @@ const REPO = dirname(dirname(fileURLToPath(import.meta.url)));
  */
 const RECORD = recordPathFor(REPO);
 
-/**
- * 一式。**順序に意味がある**（`build` が先。上の doc）。
- *
- * `openapi` だけ `pnpm` ではなく `git` なのは、生成物が最新かを見る検査だからである
- * （`pnpm build` が書き換えた後に差分が残っていれば、commit し忘れている）。
- *
- * **`HEAD` を明示するのは意図である。** CI は `actions/checkout` の直後なので index と
- * `HEAD` が必ず一致していて、素の `git diff` でも「`HEAD` と作業ツリーの差」を意味する。
- * **手元では index が汚れているのが普通なので、同じコマンドが違う意味になる** —
- * `pnpm build` が生成物を書き換えた後に `git add` だけしてソースだけを commit すると、
- * `HEAD` は古い生成物を持ったまま素の `git diff` は 0 を返す（**手元は緑、CI は赤**）。
- * 実測（2026-08-22、`HEAD`=旧 / index=新 / 作業ツリー=新）:
- *
- *     git diff --exit-code -- f        → 0   （素の形。差分を見落とす）
- *     git diff --exit-code HEAD -- f   → 1   （実際の乖離）
- */
-const STEPS = [
-  { name: 'build', cmd: 'pnpm', args: ['build'] },
-  {
-    name: 'web-bundle-node-traces',
-    cmd: 'pnpm',
-    args: ['check:web-bundle-node-traces'],
-    hint:
-      'apps/web の生成物に Node 専用の痕跡（createRequire / node: 指定子 / process.cwd / Bun.）が' +
-      '混入している。@alteroid/core（や他の依存）から値を import してサーバ専用コードを引き込んで' +
-      'いないか確認すること（scripts/check-web-bundle-node-traces.mjs の doc）',
-  },
-  {
-    name: 'openapi',
-    cmd: 'git',
-    args: ['diff', '--exit-code', 'HEAD', '--', 'apps/daemon/openapi.json'],
-    hint: 'apps/daemon/openapi.json が古い。`pnpm build` の結果を commit すること',
-  },
-  { name: 'typecheck', cmd: 'pnpm', args: ['typecheck'] },
-  { name: 'lint', cmd: 'pnpm', args: ['lint'] },
-  { name: 'format:check', cmd: 'pnpm', args: ['format:check'], hint: '`pnpm format` で直る' },
-  { name: 'test', cmd: 'pnpm', args: ['test'], isTest: true },
-];
+// **一式（`STEPS`）は `verify-core.mjs` に在る。** 中身と順序の doc もあちらへ移してある
+// （移しただけで、要約も短縮もしていない）。**歯のためである** — 「build の手順にだけ
+// `PNPM_CONFIG_WORKSPACE_CONCURRENCY` が渡る」を、手順の実物と突き合わせて測れるように
+// するには、手順の定義が import できる側に無ければならない。
 
 const argv = process.argv.slice(2);
 const force = argv.includes('--force');
 
 /**
- * `pnpm test` に足す引数（`pnpm verify -- --maxWorkers=4` の形で渡す）。
+ * 渡された引数を宛先ごとに分ける（`pnpm verify -- --maxWorkers=4` の形で渡す）。
+ *
+ * - `--workspace-concurrency=<n>` / `--workspace-concurrency <n>` → **build の手順の env**
+ * - それ以外 → **`pnpm test` に足す引数**（`--maxWorkers=4` の既存の挙動）
  *
  * **既定を数で固定しない。** この器は混むと既定の並列度で「テスト0本のまま exit 1」に
  * なるが、**適切な数は器ごとに違う**（`AGENTS.md` は器の CPU 数を書かない理由として
@@ -158,18 +148,41 @@ const force = argv.includes('--force');
  * **`--maxWorkers=4` が vitest へ届かない**（既定の並列度で走って、この器では fork pool
  * が EPIPE で死ぬ）。**実測（2026-08-22）**: この取りこぼしを、下の「走っていない」の
  * 判定が捕まえた。**「落ちた」と読んでいたら、存在しない失敗を直しに行っていた。**
+ *
+ * **`--workspace-concurrency` を分けたのは #362 である。** 以前はここが引数を全部
+ * `pnpm test` へ流していたので、**build へ渡したつもりの並列度が `pnpm test` のほうへ
+ * 付いていた。** 分け方と、なぜ env で渡すのかは `verify-core.mjs` の
+ * `splitVerifyArgs` / `envForStep` に在る。
  */
-const passthrough = argv.filter((arg) => arg !== '--' && arg !== '--force');
+let split;
+try {
+  split = splitVerifyArgs(argv);
+} catch (error) {
+  process.stdout.write('\n!! ' + error.message + '\n');
+  process.exit(1);
+}
+const { workspaceConcurrency, passthrough } = split;
 
 /**
  * 1手順を走らせる（テスト以外）。**素通し（`inherit`）で溜めない。**
  *
  * 全部を溜める形にしていたら、この器で `pnpm build` が **SIGABRT（exit 134）** で落ちた
  * （直接打つと通るのに、この口から呼ぶと落ちる）。
+ *
+ * **env に足した分は見出しに書く。** 足したことが出力に出ないと、`--workspace-concurrency`
+ * を渡した人は「効いたのか」を確かめる手段を持たない（#362 が直したのは、まさに
+ * 「渡したのに届いていないことが出力から分からない」形である）。
  */
 function run(step) {
-  process.stdout.write('\n=== ' + step.name + ': ' + step.cmd + ' ' + step.args.join(' ') + '\n');
-  const r = spawnSync(step.cmd, step.args, { cwd: REPO, stdio: 'inherit' });
+  const env = envForStep(step, { workspaceConcurrency, baseEnv: process.env });
+  const note =
+    env === process.env
+      ? ''
+      : ' [env PNPM_CONFIG_WORKSPACE_CONCURRENCY=' + env.PNPM_CONFIG_WORKSPACE_CONCURRENCY + ']';
+  process.stdout.write(
+    '\n=== ' + step.name + ': ' + step.cmd + ' ' + step.args.join(' ') + note + '\n',
+  );
+  const r = spawnSync(step.cmd, step.args, { cwd: REPO, stdio: 'inherit', env });
   if (r.error !== undefined && r.error !== null) {
     return { code: 1, startError: r.error };
   }

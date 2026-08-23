@@ -195,3 +195,147 @@ export function classifyTest({ status, signal, output }) {
   if (!testRan(output)) return { state: 'not-run', reason: 'no-summary-lines' };
   return status === 0 ? { state: 'passed' } : { state: 'failed', code: status };
 }
+
+/**
+ * 一式。**順序に意味がある**（`build` が先。`verify.mjs` の冒頭 doc）。
+ *
+ * **ここに置いてあるのは歯のためである**（このファイルの冒頭 doc と同じ理由）。
+ * 「build の手順にだけ `PNPM_CONFIG_WORKSPACE_CONCURRENCY` が渡る」という保証は、
+ * **実際の手順の定義と突き合わせないと測ったことにならない** — テスト側で手順を
+ * でっち上げて測ると、`verify.mjs` の側でフラグを付け忘れても緑のままになる。
+ *
+ * `openapi` だけ `pnpm` ではなく `git` なのは、生成物が最新かを見る検査だからである
+ * （`pnpm build` が書き換えた後に差分が残っていれば、commit し忘れている）。
+ *
+ * **`HEAD` を明示するのは意図である。** CI は `actions/checkout` の直後なので index と
+ * `HEAD` が必ず一致していて、素の `git diff` でも「`HEAD` と作業ツリーの差」を意味する。
+ * **手元では index が汚れているのが普通なので、同じコマンドが違う意味になる** —
+ * `pnpm build` が生成物を書き換えた後に `git add` だけしてソースだけを commit すると、
+ * `HEAD` は古い生成物を持ったまま素の `git diff` は 0 を返す（**手元は緑、CI は赤**）。
+ * 実測（2026-08-22、`HEAD`=旧 / index=新 / 作業ツリー=新）:
+ *
+ *     git diff --exit-code -- f        → 0   （素の形。差分を見落とす）
+ *     git diff --exit-code HEAD -- f   → 1   （実際の乖離）
+ *
+ * **`workspaceConcurrencyEnv` を持つ手順にだけ env が足される**（`envForStep`）。
+ * いま持っているのは `build` だけである。**手順の名前で分岐しないのは意図である** —
+ * 名前で分岐すると、手順を増やしたり名前を変えたときに、静かに外れる。
+ */
+export const STEPS = [
+  { name: 'build', cmd: 'pnpm', args: ['build'], workspaceConcurrencyEnv: true },
+  {
+    name: 'web-bundle-node-traces',
+    cmd: 'pnpm',
+    args: ['check:web-bundle-node-traces'],
+    hint:
+      'apps/web の生成物に Node 専用の痕跡（createRequire / node: 指定子 / process.cwd / Bun.）が' +
+      '混入している。@alteroid/core（や他の依存）から値を import してサーバ専用コードを引き込んで' +
+      'いないか確認すること（scripts/check-web-bundle-node-traces.mjs の doc）',
+  },
+  {
+    name: 'openapi',
+    cmd: 'git',
+    args: ['diff', '--exit-code', 'HEAD', '--', 'apps/daemon/openapi.json'],
+    hint: 'apps/daemon/openapi.json が古い。`pnpm build` の結果を commit すること',
+  },
+  { name: 'typecheck', cmd: 'pnpm', args: ['typecheck'] },
+  { name: 'lint', cmd: 'pnpm', args: ['lint'] },
+  { name: 'format:check', cmd: 'pnpm', args: ['format:check'], hint: '`pnpm format` で直る' },
+  { name: 'test', cmd: 'pnpm', args: ['test'], isTest: true },
+];
+
+/** `--workspace-concurrency` のフラグ名（`=` 形も空白区切りも、この1つから作る）。 */
+const WORKSPACE_CONCURRENCY_FLAG = '--workspace-concurrency';
+
+/**
+ * `--workspace-concurrency` を読む。**`=` の形と空白区切りの形の両方を受ける。**
+ *
+ * **両方受けるのは #331（→ PR #344）の差し戻しと同じ理由である** — あちらは
+ * `--max-workers=2` の `=` 形が**静かに無視されて既定へ落ちていた**。渡した側からは
+ * 「効かない」ことが出力に出ないので、片方だけ実装すると同じ穴が空く。
+ *
+ * **既定を持たない。** 無ければ `undefined` を返し、呼ぶ側は環境変数を1つも足さない
+ * （`verify.mjs` の doc「既定を数で固定しない。数を持たず、渡せる口だけを開ける」）。
+ *
+ * **1以上の整数でなければ落とす**（`readMaxWorkers` と同じ形）。黙って既定へ倒すと、
+ * 打ち間違いが「効かなかった」という無言の形で出る。
+ */
+export function readWorkspaceConcurrency(args) {
+  const eqPrefix = WORKSPACE_CONCURRENCY_FLAG + '=';
+  const eqArg = args.find((a) => a.startsWith(eqPrefix));
+  let raw;
+  if (eqArg !== undefined) {
+    raw = eqArg.slice(eqPrefix.length);
+  } else {
+    const idx = args.indexOf(WORKSPACE_CONCURRENCY_FLAG);
+    if (idx === -1) return undefined;
+    raw = args[idx + 1];
+  }
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) {
+    throw new Error(
+      `${WORKSPACE_CONCURRENCY_FLAG} には1以上の整数を渡すこと` +
+        `（${WORKSPACE_CONCURRENCY_FLAG} <n> または ${WORKSPACE_CONCURRENCY_FLAG}=<n> の形。` +
+        `実際: ${JSON.stringify(raw)}）`,
+    );
+  }
+  return n;
+}
+
+/**
+ * `pnpm verify -- …` に渡された引数を、宛先ごとに分ける。
+ *
+ * | 引数                        | 宛先                                                       |
+ * | --------------------------- | ---------------------------------------------------------- |
+ * | `--workspace-concurrency`   | **build の手順の env**（`envForStep`）                     |
+ * | `--` / `--force`            | どこへも行かない（`verify.mjs` 自身のもの）                |
+ * | それ以外                    | **test の手順の引数**（`--maxWorkers=4` の既存の挙動）     |
+ *
+ * **`--workspace-concurrency` を `passthrough` に残さないこと。** 残すと `pnpm test
+ * --workspace-concurrency=2` になる — #362 が報告した欠陥そのものである（build へ
+ * 届かないだけでなく、**test のほうへ付いていた**）。空白区切りの形では値の側も
+ * 落とす（落とさないと、裸の数字が vitest へ渡ってパスの絞り込みとして解釈される）。
+ *
+ * **素の `--` を落とす理由は `verify.mjs` の `passthrough` の doc に在る**（`pnpm verify
+ * -- --maxWorkers=4` と打つと pnpm が `--` ごと渡してくるので、そのまま足すと
+ * `pnpm test -- --maxWorkers=4` になり vitest へ届かない）。
+ */
+export function splitVerifyArgs(argv) {
+  const workspaceConcurrency = readWorkspaceConcurrency(argv);
+  const passthrough = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--' || arg === '--force') continue;
+    if (arg.startsWith(WORKSPACE_CONCURRENCY_FLAG + '=')) continue;
+    if (arg === WORKSPACE_CONCURRENCY_FLAG) {
+      // 値の側も落とす（`--workspace-concurrency 2` の `2`）。
+      i += 1;
+      continue;
+    }
+    passthrough.push(arg);
+  }
+  return { workspaceConcurrency, passthrough };
+}
+
+/**
+ * その手順へ渡す環境変数。
+ *
+ * **⚠️ build へ「引数として」渡さないこと。** `pnpm build -- --workspace-concurrency=2`
+ * の形は、フラグが**各パッケージの build スクリプトの引数**になる。`tsup` は黙って
+ * 無視するが、`react-router build`（`apps/web`）は `--` を位置引数のルートディレクトリ
+ * と解釈して `Could not find a root route module in the app directory as "app/root.tsx"`
+ * で落ちる。しかも並列度は既定のままである（実測は `AGENTS.md`「自分が走っている器」）。
+ * **だから環境変数で渡す。**
+ *
+ * `pnpm` が読むのは `PNPM_CONFIG_*` / `pnpm_config_*` であって `NPM_CONFIG_*` ではなく、
+ * **大文字なら全部大文字、小文字なら全部小文字でなければ無視される**（同じく
+ * `AGENTS.md`）。だから大文字の形だけを足す。
+ *
+ * **既定を持たない。** `workspaceConcurrency` が `undefined` なら `baseEnv` を**そのまま**
+ * 返す（1文字も足さない）。器の外で `PNPM_CONFIG_WORKSPACE_CONCURRENCY` を設定している
+ * 人の値を、この口が黙って上書きしないためでもある。
+ */
+export function envForStep(step, { workspaceConcurrency, baseEnv }) {
+  if (workspaceConcurrency === undefined || step.workspaceConcurrencyEnv !== true) return baseEnv;
+  return { ...baseEnv, PNPM_CONFIG_WORKSPACE_CONCURRENCY: String(workspaceConcurrency) };
+}
