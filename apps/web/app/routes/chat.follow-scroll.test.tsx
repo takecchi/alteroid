@@ -16,8 +16,59 @@
  * `Object.defineProperty` でこれらの値を自分で差し込む必要がある
  * （`~/test-support` の `ResizeObserver` の doc に書かれている、jsdom の
  * レイアウト不在という同じ制約の別の現れ）。
+ *
+ * ## `scrollIntoView.mock.calls.length` を `waitFor` の外で比べる形について（#371）
+ *
+ * このファイルの5箇所（「増える」ことを見る3箇所と「増えない」ことを見る2箇所）は
+ * すべて、本文の出現を `waitFor` / `findByText` で待った直後に
+ * `await act(async () => {});` を1回挟んでから `scrollIntoView.mock.calls.length`
+ * を同期的に比べる、同じ形にしてある。
+ *
+ * **直す前は、この `act()` が無かった。** 追従の判定は `chat.tsx` の
+ * `useEffect`（`isAtBottomRef` の doc の「効果」）が行うが、`useEffect` は
+ * commit の後、React がスケジューラへ渡してから走る受動効果である。本文が
+ * DOM に見えること（`waitFor` / `findByText` が見ているもの）と、この効果が
+ * 実際に走ったこと（`scrollIntoView` を呼ぶかどうかを含めて確定すること）は
+ * 別のタイミングであり、両者のあいだに常に隙間があった。混雑した器ではその
+ * 隙間が伸び、増える側の assertion（`waitFor` の外で `toBeGreaterThan` を見る
+ * 箇所）が「効果がまだ走っていない一瞬」を切り取って落ちた（Issue #371 の
+ * 実測: `AssertionError: expected 4 to be greater than 4`）。
+ *
+ * **増える側だけを `waitFor` で包んで「いずれ増える」を待つ形にはしない。**
+ * それは増えない側（「増えないこと」を無限には待てない）との非対称を作るだけで、
+ * レースそのものは消えない——増えない側は「本文が見えた一瞬にまだ効果が
+ * 走っていなかっただけ」を「増えなかった」と読んで、効果が実際には呼ぶ側へ
+ * 倒れていても緑になりうる（偽陰性）。
+ *
+ * **ただしこの偽陰性は、機構の議論であって観測ではない。** 修正前の版へ「常に
+ * 追従させる」変異を当てて20回回したところ、20回とも増えない側2本が落ちた
+ * ——**偽陰性は1回も観測できていない**（1つの器・1つの負荷条件での測定）。
+ * **⚠️ ただし「20回で0件」は「起こりえない」の証拠ではない。** レースが顔を出す
+ * 窓の幅を測っていないので、20回という数はそれ自体では何も決めない（窓が
+ * 分かって初めて、その回数が意味を持つ）。**この形を採った理由は偽陰性を塞ぐ
+ * ことではなく、5箇所を同じ形にすることの側に在る。** 詳細は PR #379 の本文にある。
+ *
+ * **`await act(async () => {})` は、時計ではなくキューを流す。** React の
+ * act 環境下では、保留中の受動効果はこの呼び出しの中でフラッシュされる
+ * （`waitFor` の予算を広げているのではなく、待つ対象を「時間」から
+ * 「保留中の効果が片付くこと」に変えている）。これを5箇所すべてに同じ形で
+ * 当てることで、「本文が見えた直後」が両方向で同じ強さの証拠になる——
+ * 増える側は効果が確実に走った後の呼び出し回数を見るし、増えない側も同じ
+ * タイミングで「効果は走ったが呼んでいない」ことを見る。
+ *
+ * **変異試験で両方向を確認済みである**（`.claude/skills/mutation-testing/`）。
+ * 追従を殺す変異（最下部にいても呼ばない）は増える側3本を、追従を常に走らせる
+ * 変異（最下部にいなくても呼ぶ）は増えない側2本を、それぞれ想定どおりに
+ * 落とした。詳細は PR #379 の本文にある。
+ *
+ * **⚠️ 5箇所のうち1箇所（`会話 A で上へ遡った状態から会話 B へ移ると、B は
+ * 最下部へ送られる`）は、修正前は `waitFor` の中で比べていた。** 同じ形へ
+ * 揃えるためにその `waitFor` を外してあるので、**この1箇所だけは再試行を
+ * 失っている。** `act()` が保留中の効果を流し切ることはこの形の前提であって、
+ * 測った結果ではない。**この5箇所のどれかが再び flaky になったら、まずここを
+ * 見ること。**
  */
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -169,6 +220,9 @@ describe('会話画面のスクロール追従（#247 の 1）', () => {
       expect(within(transcript()).getByText(/続きの一文/)).toBeTruthy();
     });
 
+    // 保留中の受動効果を流す（ファイル冒頭の doc「#371」参照。時計ではなくキューを流す）。
+    await act(async () => {});
+
     // **ここが本題。** 最下部にいたので、新しい行の到着で追従したはずである。
     expect(scrollIntoView.mock.calls.length).toBeGreaterThan(callsBeforeChunk2);
   });
@@ -203,6 +257,9 @@ describe('会話画面のスクロール追従（#247 の 1）', () => {
     await waitFor(() => {
       expect(within(transcript()).getByText(/続きの一文/)).toBeTruthy();
     });
+
+    // 保留中の受動効果を流す（ファイル冒頭の doc「#371」参照。時計ではなくキューを流す）。
+    await act(async () => {});
 
     // **ここが本題。** 最下部にいなかったので、新しい行が来ても追従していない
     // はずである（呼ばれた回数が増えていない）。
@@ -241,6 +298,9 @@ describe('会話画面のスクロール追従（#247 の 1）', () => {
     await waitFor(() => {
       expect(within(transcript()).getByText('二つ目')).toBeTruthy();
     });
+
+    // 保留中の受動効果を流す（ファイル冒頭の doc「#371」参照。時計ではなくキューを流す）。
+    await act(async () => {});
 
     // **ここが本題。** 最下部にいなくても、自分が送った直後は追従したはずである。
     expect(scrollIntoView.mock.calls.length).toBeGreaterThan(callsBeforeSend);
@@ -291,10 +351,11 @@ describe('会話の切り替え（#247 の 1 の追加分）', () => {
     await router.navigate(`/chat/${CONV_B}`);
     await screen.findByText('会話Bの発言');
 
+    // 保留中の受動効果を流す（ファイル冒頭の doc「#371」参照。時計ではなくキューを流す）。
+    await act(async () => {});
+
     // **ここが本題。** 会話 A で遡っていても、会話 B は最下部へ送られたはずである。
-    await waitFor(() => {
-      expect(scrollIntoView.mock.calls.length).toBeGreaterThan(callsBeforeSwitch);
-    });
+    expect(scrollIntoView.mock.calls.length).toBeGreaterThan(callsBeforeSwitch);
   });
 
   it('会話 B へ移った後も、B の中で上へ遡ったら追従しない', async () => {
@@ -334,6 +395,9 @@ describe('会話の切り替え（#247 の 1 の追加分）', () => {
     await waitFor(() => {
       expect(within(transcript()).getByText(/続きの一文/)).toBeTruthy();
     });
+
+    // 保留中の受動効果を流す（ファイル冒頭の doc「#371」参照。時計ではなくキューを流す）。
+    await act(async () => {});
 
     // **ここが本題。** 切り替えのリセットが、B の中での遡りの抑止まで
     // 壊していないこと。
