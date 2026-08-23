@@ -619,6 +619,16 @@ interface PendingRequest {
   id: string;
   kind: 'question' | 'permission';
   summary: string;
+  /**
+   * **runner がこの確認を SDK から受け取った時刻**（ISO8601, UTC）。
+   *
+   * 値の持ち主はここ（`#onPermission` が組み立てる瞬間）1つだけである。
+   * `state()` もデーモン向けの `ask` イベントも、ここで確定した値をそのまま
+   * 運ぶだけで**取り直さない**——デーモン再起動後の引き取り（`state()` 経由）
+   * のたびに取り直すと、待っている時間の長さという、この値を持たせた理由
+   * そのものが消える（#334）。
+   */
+  askedAt: string;
   settle: (answer: { message: string; decision?: 'allow' | 'deny' }) => void;
   /** 同じ確認が再送されたときに同じ結果を返すための約束（SDK は再送しうる）。 */
   result: Promise<PermissionResult>;
@@ -979,10 +989,16 @@ class RunnerSession {
       // 落とすと、デーモン再起動後の引き取り（`manager.ts` の
       // `#restoreJobs`、`state()` を経由する）だけ種別が消える——`ask`
       // イベント経由（`#emit`）は既に運んでいたので、非対称だった。
+      //
+      // **`askedAt` は `request.askedAt` をそのまま運ぶ（取り直さない）。**
+      // ここで `new Date().toISOString()` を新しく呼ぶと、デーモン再起動の
+      // たびに「待ち始めた時刻」が「いま」へ書き換わり、この値を持たせた
+      // 理由（どれだけ待っているかが分かる）が消える。
       waiting: this.#pending.map((request) => ({
         requestId: request.id,
         summary: request.summary,
         kind: request.kind,
+        askedAt: request.askedAt,
       })),
       ...(this.#sessionId === undefined ? {} : { sessionId: this.#sessionId }),
     };
@@ -1928,6 +1944,10 @@ class RunnerSession {
     const kind = toolName === 'AskUserQuestion' ? 'question' : 'permission';
     const summary =
       kind === 'question' ? describeQuestions(input) : `${toolName} の実行許可: ${brief(input)}`;
+    // **ここで1度だけ取る（#334）。** `state()` も `ask` イベントもこの値を
+    // そのまま運ぶだけにする——経路ごとに取り直すと、同じ確認が経路によって
+    // 違う「待ち始めた時刻」を名乗る。
+    const askedAt = new Date().toISOString();
 
     let settle!: PendingRequest['settle'];
     const answered = new Promise<{ message: string; decision?: 'allow' | 'deny' }>((resolve) => {
@@ -1954,6 +1974,7 @@ class RunnerSession {
       id,
       kind,
       summary,
+      askedAt,
       result,
       // **待ち行列から自分を外すのは settle の責任**。呼び出し側任せにすると、
       // 中断で解けた1件が行列に残り、次に届いた言葉を食い潰す。
@@ -1984,7 +2005,7 @@ class RunnerSession {
       unlisten = () => extra.signal.removeEventListener('abort', onAbort);
     }
 
-    this.#emit({ type: 'ask', managerId: this.#id, requestId: id, kind, summary });
+    this.#emit({ type: 'ask', managerId: this.#id, requestId: id, kind, summary, askedAt });
 
     return result;
   }

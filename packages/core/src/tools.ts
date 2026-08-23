@@ -2153,13 +2153,16 @@ export function createCloneTools(context: ToolContext) {
               // キャップになっていたが、`AskUserQuestion` の経路（`describeQuestions`）は
               // 質問文を `join(' / ')` で連ねてそのキャップを通らない。ここを通して
               // おけば、上流のどの経路から来ても一覧は伸びない。
-              // **種別（質問 / 実行許可）も出す（#334）。** クローンは
-              // `requestId` と要約だけでは、答えるべきなのが自由な言葉での
-              // 回答なのか許可の可否なのかを読めなかった——画面側と同じ穴が
-              // ここにもあった。
+              // **種別（質問 / 実行許可）と、待ち始めた時刻も出す（#334 / #323）。**
+              // クローンは `requestId` と要約だけでは、答えるべきなのが自由な
+              // 言葉での回答なのか許可の可否なのかを読めなかった——画面側と
+              // 同じ穴がここにもあった。時刻は runner が確認を受け取った瞬間
+              // （`askedAt`）で、答えが来た時刻ではない。5分前と4時間前とで
+              // 次にすべきことが変わる（#323: 報告が何時間も遅れる欠陥）。
               ...manager.waiting.map(
                 (item) =>
-                  `  返事待ち(requestId: ${item.requestId}, ${item.kind === 'question' ? '質問' : '実行許可'}): ` +
+                  `  返事待ち(requestId: ${item.requestId}, ${item.kind === 'question' ? '質問' : '実行許可'}, ` +
+                  `${item.askedAt} から): ` +
                   excerptLine(item.summary, LIST_WAITING_EXCERPT),
               ),
               manager.lastReport === undefined

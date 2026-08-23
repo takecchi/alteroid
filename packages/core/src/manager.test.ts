@@ -1113,6 +1113,67 @@ describe('デーモン再起動後（M4）', () => {
     await s.pool.stop();
   });
 
+  /**
+   * **デーモン再起動後の引き取り（`#restoreJobs`）は `runner.state()` を経由する。**
+   * `ask` イベント経由（`#onEvent` の `case 'ask'`）とは別の経路で、`kind` /
+   * `askedAt` を運ぶ入口がもう1つある——`RunnerSession#state()`（`runner.ts`）が
+   * `#pending` から `waiting` を組み立てる箇所である。ここが値を落としていても
+   * `ask` 経由の歯（直前・直後のテスト）は気づけない。#334 の実装ではここが
+   * 2箇所目の穴だった。
+   *
+   * **`askedAt` は特に重い。** 引き取り直すたびに「いま」へ取り直すと、4時間
+   * 待っている確認が再起動のたびに「たった今」へ化ける——足した理由（#323。
+   * 待ち時間の長さで人間の次の一手が変わる）がそのまま消える。ここでは
+   * 「いま」とは明らかに違う過去の時刻を fixture に置き、引き取り後もその
+   * 値のままであることを見る。
+   */
+  it('待ちが在るままデーモンが再起動しても、引き取り直した waiting は kind と askedAt を保つ（#334）', async () => {
+    const askedAtQuestion = '2026-08-23T02:00:00.000Z';
+    const askedAtPermission = '2026-08-23T05:30:00.000Z';
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({ ...runningJob, status: 'waiting_human' });
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push({
+      managerId: runningJob.id,
+      status: 'waiting_human',
+      cwd: '/work/project',
+      request: 'DB の移行をやって',
+      waiting: [
+        {
+          requestId: 'req-restart-q',
+          summary: 'DB はどちらにする？',
+          kind: 'question',
+          askedAt: askedAtQuestion,
+        },
+        {
+          requestId: 'req-restart-p',
+          summary: 'Bash の実行許可',
+          kind: 'permission',
+          askedAt: askedAtPermission,
+        },
+      ],
+      sessionId: 'sess-before-restart',
+    });
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    const restored = await s.pool.restore();
+    expect(restored.map((m) => m.managerId)).toEqual([runningJob.id]);
+
+    const waiting =
+      (await s.pool.list()).find((m) => m.managerId === runningJob.id)?.waiting ?? [];
+    const question = waiting.find((item) => item.requestId === 'req-restart-q');
+    const permission = waiting.find((item) => item.requestId === 'req-restart-p');
+    expect(question?.kind).toBe('question');
+    expect(permission?.kind).toBe('permission');
+    // **取り直していないこと**を明示的に見る。「いま」の近似値ではなく
+    // fixture に置いた値そのものと一致する（`toBeCloseTo` のような近似では、
+    // 取り直す変異が生き残る）。
+    expect(question?.askedAt).toBe(askedAtQuestion);
+    expect(permission?.askedAt).toBe(askedAtPermission);
+
+    await s.pool.stop();
+  });
+
   it('runner が lost と名乗ったセッションへ send すると resume 経路を通る（届かない runner.send() にしない）', async () => {
     // `attached: true` を固定していた頃は、ここで `send()` の `!record.attached` が
     // 偽になり `runner.send()` が直に呼ばれていた。しかし畳まれたセッションへの
@@ -1524,10 +1585,11 @@ function swappableRunner(runnerId = 'runner-primary') {
       requestId: string,
       summary: string,
       kind: 'question' | 'permission' = 'permission',
+      askedAt: string = new Date().toISOString(),
     ) {
       const session = state.alive.find((s) => s.managerId === managerId);
-      session?.waiting.push({ requestId, summary, kind });
-      emit?.({ type: 'ask', managerId, requestId, kind, summary });
+      session?.waiting.push({ requestId, summary, kind, askedAt });
+      emit?.({ type: 'ask', managerId, requestId, kind, summary, askedAt });
     },
     /**
      * マネージャーの1ターンが終わって報告が上がる。
@@ -3148,7 +3210,14 @@ describe('止めた結果を確かめる', () => {
       status: 'waiting_human',
       cwd: job.cwd,
       request: job.request,
-      waiting: [{ requestId: 'req-1', summary: '本番に触ってよいか', kind: 'permission' }],
+      waiting: [
+        {
+          requestId: 'req-1',
+          summary: '本番に触ってよいか',
+          kind: 'permission',
+          askedAt: '2026-08-01T01:00:00.000Z',
+        },
+      ],
       sessionId: job.sessionId,
     });
     const s = setup(undefined, { stores, runner: fake.runner });
@@ -3174,7 +3243,14 @@ describe('止めた結果を確かめる', () => {
     // **台帳を1文字も書かない。** status も waiting も、止める前のままである。
     const listed = (await s.pool.list()).find((m) => m.managerId === job.id);
     expect(listed?.status).toBe('waiting_human');
-    expect(listed?.waiting).toEqual([{ requestId: 'req-1', summary: '本番に触ってよいか' }]);
+    expect(listed?.waiting).toEqual([
+      {
+        requestId: 'req-1',
+        summary: '本番に触ってよいか',
+        kind: 'permission',
+        askedAt: '2026-08-01T01:00:00.000Z',
+      },
+    ]);
 
     await s.pool.stop();
   });
@@ -4267,7 +4343,14 @@ describe('#records の寿命（終端で外れる）', () => {
       status: 'waiting_human',
       cwd: '/work/project',
       request: 'DB の移行をやって',
-      waiting: [{ requestId: 'req-9', summary: '許可して', kind: 'permission' }],
+      waiting: [
+        {
+          requestId: 'req-9',
+          summary: '許可して',
+          kind: 'permission',
+          askedAt: '2026-08-01T01:00:00.000Z',
+        },
+      ],
       sessionId: `sess-${id}`,
     });
     const s = setup(undefined, { stores, runner: fake.runner });

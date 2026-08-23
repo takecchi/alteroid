@@ -410,6 +410,12 @@ const managerWaitingSchema = z.object({
   requestId: z.string(),
   summary: z.string(),
   kind: waitingKindSchema,
+  /**
+   * runner がこの確認を受け取った時刻（ISO8601, UTC）。**「回答が来た時刻」
+   * ではない。** `packages/core/src/runner-protocol.ts` の
+   * `runnerWaitingSchema.askedAt` と同じ意味・同じ値（#334、#323 対応）。
+   */
+  askedAt: isoDateTimeSchema,
 });
 
 /**

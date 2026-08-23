@@ -139,6 +139,10 @@ export interface ManagerSummary {
    * **`kind`（`'question'` / `'permission'`）も運ぶ（#334）。** 画面が質問と
    * 実行許可を区別して出し分けるための材料——種別は runner 側で既に決まって
    * いる（`RunnerWaiting` と同じ形）。
+   *
+   * **`askedAt` も同じく運ぶ。** 「runner がこの確認を受け取った時刻」1つに
+   * 意味を固定してある（`RunnerWaiting.askedAt` の doc）。人間が見たとき、
+   * 5分前の確認か4時間前の確認かで打つ手が変わる（#323）。
    */
   waiting: RunnerWaiting[];
 }
@@ -2377,6 +2381,7 @@ class Pool implements ManagerPool {
           requestId: event.requestId,
           summary: event.summary,
           kind: event.kind,
+          askedAt: event.askedAt,
         });
         record.job.status = 'waiting_human';
         await this.#persist(record);

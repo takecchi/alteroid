@@ -71,6 +71,15 @@ export const runnerWaitingSchema = z.object({
   requestId: z.string(),
   summary: z.string(),
   kind: waitingKindSchema,
+  /**
+   * **runner がこの確認を SDK から受け取った時刻**（ISO8601, UTC）。
+   *
+   * 「回答が来た時刻」でも「デーモンが知った時刻」でもない——値の持ち主は
+   * `RunnerSession#onPermission`（`runner.ts`）が確認を組み立てる、その
+   * 1箇所だけである（#334。#323 の「報告が何時間も遅れても人間には分から
+   * ない」を、待ちの側にも塞ぐ材料）。
+   */
+  askedAt: isoDateTime,
 });
 
 export type RunnerWaiting = z.infer<typeof runnerWaitingSchema>;
@@ -580,6 +589,8 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     requestId: z.string(),
     kind: waitingKindSchema,
     summary: z.string(),
+    /** `runnerWaitingSchema.askedAt` と同じ意味・同じ値（#334）。 */
+    askedAt: isoDateTime,
   }),
   /** 確認が解けた（回答・中断・停止）。デーモン側の待ち行列から外す合図。 */
   z.object({ type: z.literal('settled'), managerId: z.string(), requestId: z.string() }),
