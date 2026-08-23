@@ -900,6 +900,13 @@ export interface RunnerClient {
   /**
    * 安定した識別子。`manager_id → runner_id → session_id → workspace` の鎖を
    * JobStore に残すためのもので、runner が増えたときの宛先になる。
+   *
+   * **⚠️ この欄を人間やクローンへ見せる前に立ち止まること。** 実装（`HttpRunner`）
+   * は既定値 `'runner-primary'` を持っていて、`/health` から一度も `runnerId` を
+   * 受け取れていなくてもその値が入っている。**そのまま出すと、取れていない値が
+   * 取れた値の顔をして出る**（`AGENTS.md`「取れない軸に 0 の行を作る」）。
+   * `#pump` が書く2行は「聞けたときだけ名乗る」形で塞いだ（#274 / #309）が、
+   * `onSwap` / `onLost` / `GET /runners` は塞がっていない（#330）。
    */
   readonly runnerId: string;
   /** この runner の既定の作業ディレクトリ（workspace locator の path になる）。 */
