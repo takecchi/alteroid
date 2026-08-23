@@ -250,17 +250,35 @@ describe('/approvals 画面のまとめ送信', () => {
  * 持たない（`offsetWidth` / `scrollWidth` / `getBoundingClientRect()` は
  * すべて 0）ので、固定できるのは「そのクラス名が書かれていること」までである。
  * それでも置くのは、戻す変更（`break-words` を消す）を黙って通さないため。
+ *
+ * **追記（`question` を Markdown 化したとき）**: `question` は
+ * `<Markdown>` で描くようになったので、テキストを持つ要素はもう
+ * `approvals.tsx` の `<p>` ではなく `markdown.tsx` の
+ * `<p className="mt-2 leading-relaxed first:mt-0">` である。`break-words` は
+ * その1つ外側（`markdown.tsx` のルート `<div className="min-w-0 text-sm
+ * break-words">`）へ移った。**保証は消さずに辿り直してある** — 「テキストを
+ * 持つ要素そのものが `break-words` を持つ」から「テキストを持つ要素の側から
+ * `break-words` を持つ要素へ辿り着ける」へ変えただけで、`break-words` を消す
+ * 変更は今も落ちる。
+ *
+ * **`whitespace-pre-wrap` のクラス名の検査は、`question` については別の保証へ
+ * 置き換えた。** あの行が守っていたのはクラス名そのものではなく「単独の改行が
+ * 保たれること」で、Markdown 化後はそれを `remark-breaks` が `<br>` として
+ * 担う。だからクラス名ではなく `<br>` が出ることを直接押さえる — クラス名より
+ * 強い保証である（実装の手段が変わっても、見えるものが変わったときだけ落ちる）。
+ * `answer` は Markdown にしていないので、あちらはクラス名のままで押さえる。
  */
 describe('折り返しの付け忘れ（本2）', () => {
-  it('設問（question）に break-words が付いている', async () => {
-    stubApprovals([approval({ id: 'a-1', question: '質問1' })]);
+  it('設問（question）は break-words を持つ要素の内側にあり、単独の改行が保たれる', async () => {
+    stubApprovals([approval({ id: 'a-1', question: '質問1\n続きの行' })]);
     renderPage();
 
-    const question = await screen.findByText('質問1');
-    const tokens = question.className.split(/\s+/);
-    expect(tokens).toContain('break-words');
-    // 改行を保つ既存の指定も壊していないこと。
-    expect(tokens).toContain('whitespace-pre-wrap');
+    // Markdown 化でテキストを持つ要素は `markdown.tsx` の `<p>` になった。
+    // `break-words` はその祖先（`Markdown` のルート）に在る（doc 参照）。
+    const question = await screen.findByText(/質問1/);
+    expect(question.closest('.break-words')).not.toBeNull();
+    // 単独の改行は `remark-breaks` が `<br>` にして保つ。
+    expect(question.querySelector('br')).not.toBeNull();
   });
 
   it('回答済みの回答（answer）に break-words が付いている', async () => {
@@ -281,6 +299,86 @@ describe('折り返しの付け忘れ（本2）', () => {
     expect(wrapper).not.toBeNull();
     const tokens = wrapper!.className.split(/\s+/);
     expect(tokens).toContain('break-words');
+    // **改行が潰れる不具合の修正**（Markdown 化とは別件）。`app.css` の
+    // `white-space` 指定は `pre` に対する1件だけで `p` を狙う規則が無いため、
+    // ここは CSS 既定の `white-space: normal` で描かれていた — 人間が改行を
+    // 入れて答えても1行に潰れていた。
+    expect(tokens).toContain('whitespace-pre-wrap');
+  });
+});
+
+/**
+ * クローン（AI）が書いた文字列だけを Markdown で描く（`approvals.tsx`）。
+ *
+ * **Markdown の中身の正しさはここの仕事ではない** — それは
+ * `apps/web/app/components/markdown.test.tsx` が持つ。ここが押さえるのは
+ * 「その欄が Markdown の描画経路を通るか／通らないか」だけである。だから
+ * `## 見出し` を混ぜて `findByRole('heading', …)` で拾う形にしている
+ * （`dashboard.test.tsx` / `reports.test.tsx` / `memory-detail.test.tsx` と
+ * 同じ流儀）。
+ */
+describe('クローンが書いた文だけを Markdown で描く', () => {
+  it('設問（question）は Markdown の描画経路を通る', async () => {
+    stubApprovals([approval({ id: 'a-1', question: '## 設問の見出し\n\n本番に出してよいか' })]);
+    renderPage();
+
+    expect(await screen.findByRole('heading', { name: '設問の見出し' })).toBeTruthy();
+    expect(screen.getByText('本番に出してよいか')).toBeTruthy();
+  });
+
+  it('背景（context）は Markdown の描画経路を通る', async () => {
+    stubApprovals([
+      approval({ id: 'a-1', question: '質問1', context: '## 背景の見出し\n\n背景の本文' }),
+    ]);
+    renderPage();
+
+    expect(await screen.findByRole('heading', { name: '背景の見出し' })).toBeTruthy();
+    expect(screen.getByText('背景の本文')).toBeTruthy();
+  });
+
+  /**
+   * **⭐ 設計判断を守る歯。**
+   *
+   * `answer` は人間が打った文なので Markdown にしない。repo の既存方針が
+   * `apps/web/app/routes/chat.tsx:710` に逐語で在る — 「**クローンの行だけを
+   * Markdown にする。** 人間が打った本文（`role === 'human'`）は素のテキストの
+   * ままにする — 自分が書いた文字が勝手に化けないため」。
+   *
+   * このテストは逆向きの変更（`answer` も `<Markdown>` で描く）が黙って通らない
+   * ようにするために在る。落ちたら、まず `chat.tsx:710` を読むこと。
+   */
+  it('回答（answer）は Markdown の描画経路を通らない（人間が書いた文字を化けさせない）', async () => {
+    stubApprovals([
+      approval({
+        id: 'a-1',
+        question: '質問1',
+        answeredAt: '2026-08-19T11:00:00.000Z',
+        answer: '## これは見出しではない',
+      }),
+    ]);
+    renderPage();
+
+    // 見出しとしては解釈されない。
+    const answer = await screen.findByText('## これは見出しではない');
+    expect(screen.queryByRole('heading', { name: 'これは見出しではない' })).toBeNull();
+    // そして `##` を含む文字列がそのまま素のテキストとして見えている。
+    expect(answer.textContent).toContain('## これは見出しではない');
+  });
+
+  it('回答（answer）の改行は whitespace-pre-wrap で保たれる', async () => {
+    stubApprovals([
+      approval({
+        id: 'a-1',
+        question: '質問1',
+        answeredAt: '2026-08-19T11:00:00.000Z',
+        answer: '許可する\n条件は無い',
+      }),
+    ]);
+    renderPage();
+
+    const answer = await screen.findByText(/許可する/);
+    expect(answer.className.split(/\s+/)).toContain('whitespace-pre-wrap');
+    expect(answer.textContent).toContain('許可する\n条件は無い');
   });
 });
 
