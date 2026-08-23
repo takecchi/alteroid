@@ -364,7 +364,7 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
      * 強さを持たせない。**書き込み側は `TextMarkup` の型で縛る**（欄自体は
      * 寛容、書き手は型で縛る）。
      *
-     * **立てるのは `packages/core/src/manager.ts:1333`
+     * **立てるのは `packages/core/src/manager.ts` の `abort()`
      * （`#post({ type: 'manager_message', … })`、停止通知）だけである。**
      * `by === 'human' && reason !== undefined` のときにだけ `'none'` を立てる
      * — 人間が停止理由に自由記述を打った回で、`*` や `#`
