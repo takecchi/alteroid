@@ -390,4 +390,67 @@ describe('日報', () => {
     expect(screen.queryByText('遡り生成本文だけの目印。')).toBeNull();
     expect(screen.queryByRole('heading', { name: '遡り生成の見出し' })).toBeNull();
   });
+
+  /**
+   * `lg` 未満で枠から出た形跡は無い（#282 の from/to と違い、症状の報告は無い）
+   * が、#282 と同じ機構の欠落だったので #283 で予防的に直した再発防止。
+   *
+   * `lg` 未満のこの容器に `grid-template-columns` が1つも無いと暗黙の単一
+   * トラックは `auto`＝max-content になり、中身の内在幅がそのままトラック幅
+   * になって枠を超えうる。
+   *
+   * **これは視覚回帰試験ではない。** jsdom はレイアウトを持たないので
+   * `offsetWidth` / `scrollWidth` / `getBoundingClientRect()` はすべて 0 を
+   * 返し、CSS も適用されない。ここで押さえられるのは「クラス名が当たって
+   * いること」までで、「実機で枠に収まること」ではない。次に読む人がこの
+   * テストを視覚回帰試験だと誤読しないように明示しておく。
+   */
+  it('日報一覧の容器は lg 未満でも grid-cols-1 を持つ（暗黙トラックを auto にしない）', async () => {
+    stubFetch((url) => {
+      if (url.includes('/reports')) return json({ reports: [] });
+      return undefined;
+    });
+
+    renderReports();
+
+    // grid の直接の子（左側の一覧 Card）に含まれる「まだ無い。」から遡って
+    // 容器（grid）を取る。
+    const emptyList = await screen.findByText('まだ無い。');
+    const listCard = emptyList.parentElement;
+    if (listCard === null) throw new Error('一覧の Card が見つからない');
+    const grid = listCard.parentElement;
+    if (grid === null) throw new Error('grid の容器が見つからない');
+    const tokens = grid.className.split(/\s+/);
+    expect(tokens).toContain('grid-cols-1');
+    expect(tokens).toContain('lg:grid-cols-[16rem_1fr]');
+  });
+
+  /**
+   * `lg:grid-cols-[16rem_1fr]` の生の `1fr` は `minmax(auto,1fr)` に展開される
+   * （#265 で特定済み）ので、`lg` 以上でも2つ目の列（1fr側）の自動最小サイズは
+   * content-based のままである。1つ目の列（16rem側、一覧の `Card`）は短い
+   * 固定フォーマットの文字列なので付けていないが、2つ目の列に来る子（本文の
+   * `Card`）には `min-w-0` を明示している。
+   *
+   * 日報が1件も無いときの本文側は `<ReportBody>` ではなく
+   * `<Card><Empty>…</Empty></Card>` の分岐で、こちらには `min-w-0` が付いて
+   * いなかった（#283 で見つけて追加）。
+   *
+   * **これも視覚回帰試験ではない。** 押さえられるのはクラスが当たっている
+   * ことまでである（上のテストの doc と同じ理由）。
+   */
+  it('日報が1件も無いときの本文側 Card は min-w-0 を持つ', async () => {
+    stubFetch((url) => {
+      if (url.includes('/reports')) return json({ reports: [] });
+      return undefined;
+    });
+
+    renderReports();
+
+    const emptyBody = await screen.findByText(/日報が1件も無い/);
+    const bodyCard = emptyBody.parentElement;
+    if (bodyCard === null) throw new Error('本文側の Card が見つからない');
+    const tokens = bodyCard.className.split(/\s+/);
+    expect(tokens).toContain('min-w-0');
+  });
 });
