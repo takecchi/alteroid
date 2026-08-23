@@ -1802,6 +1802,9 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
       // 書き換えない）。この既定値をそのままログへ出すと、取れていない値が
       // 取れた値の顔をして出る——それを下で確かめる。
       expect(client.runnerId).toBe('runner-primary');
+      // **#330 の歯。** `onSwap` / `onLost` / `GET /runners`（`runner-protocol.ts`
+      // の `heardRunnerIdOf`）はこの欄を見て「聞けたか」を判定する。
+      expect(client.runnerIdKnown).toBe(false);
 
       await client.connect(() => undefined);
       await enough;
@@ -1819,6 +1822,71 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
         expect(line).toContain('runner (http://runner.test)');
         expect(line).not.toMatch(/runner \(http:\/\/runner\.test \/ /);
       }
+    });
+  });
+
+  /**
+   * **`RunnerClient.runnerIdKnown` そのものを直接測る（#330）。**
+   *
+   * 上の「ログの宛先識別子」describe は `#describeSelf` を通した間接的な
+   * 観測（ログ文字列）だが、`runnerIdKnown` は `onSwap` / `onLost` /
+   * `GET /runners`（`packages/core/src/runner-protocol.ts` の
+   * `heardRunnerIdOf`）が直接読む口として `HttpRunner` の外へ引き上げたもの
+   * なので、ここではその口自体を直接読んで確かめる。
+   */
+  describe('runnerIdKnown（#330）', () => {
+    it('/health が runnerId を返せば true になる', async () => {
+      const fetchFn = (async (input: string | URL | Request) => {
+        if (pathOf(input) === '/health') {
+          return Response.json({ runnerId: 'runner-x', workspacePath: '/workspace' });
+        }
+        throw new Error(`想定していない path: ${pathOf(input)}`);
+      }) as typeof fetch;
+
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+      });
+
+      expect(client.runnerId).toBe('runner-x');
+      expect(client.runnerIdKnown).toBe(true);
+    });
+
+    it('/health が runnerId を返さなければ false のまま（既定値 runner-primary は聞けた値ではない）', async () => {
+      const fetchFn = (async (input: string | URL | Request) => {
+        if (pathOf(input) === '/health') {
+          return Response.json({ workspacePath: '/workspace' });
+        }
+        throw new Error(`想定していない path: ${pathOf(input)}`);
+      }) as typeof fetch;
+
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+      });
+
+      expect(client.runnerId).toBe('runner-primary');
+      expect(client.runnerIdKnown).toBe(false);
+    });
+
+    it('/health が空文字の runnerId を返しても false のまま', async () => {
+      const fetchFn = (async (input: string | URL | Request) => {
+        if (pathOf(input) === '/health') {
+          return Response.json({ runnerId: '', workspacePath: '/workspace' });
+        }
+        throw new Error(`想定していない path: ${pathOf(input)}`);
+      }) as typeof fetch;
+
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+      });
+
+      expect(client.runnerId).toBe('runner-primary');
+      expect(client.runnerIdKnown).toBe(false);
     });
   });
 });

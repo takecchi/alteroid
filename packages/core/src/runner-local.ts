@@ -55,6 +55,13 @@ export function createLocalRunner(options: LocalRunnerOptions): RunnerClient {
 
 class LocalRunner implements RunnerClient {
   readonly runnerId: string;
+  /**
+   * **常に `true`。** `HttpRunner` と違って `/health` を聞きに行って初めて
+   * `runnerId` が定まる、という段階が無い——同一プロセスなので、コンストラクタの
+   * 時点で自分の `runnerId` を確定させている（既定でも `local-<uuid>` を生成する。
+   * 上のコンストラクタを参照）。「聞けていない」状態がそもそも存在しない（#330）。
+   */
+  readonly runnerIdKnown = true;
   readonly workspacePath: string;
   readonly #host: RunnerHost;
   readonly #queue: RunnerEvent[] = [];

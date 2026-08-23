@@ -2215,10 +2215,14 @@ describe('宣言と実物の一致（/schedule）', () => {
   });
 });
 
-function fakeRunner(runnerId: string) {
+function fakeRunner(runnerId: string, options: { runnerIdKnown?: boolean } = {}) {
   const received: string[] = [];
   return {
     runnerId,
+    // **既定は `true`（既存テストの前提を変えない）。** `false` を渡すと
+    // 「`/health` から一度も `runnerId` を受け取れていない」状態を再現できる
+    // （#330 の歯のために足した）。
+    runnerIdKnown: options.runnerIdKnown ?? true,
     workspacePath: '/work',
     received,
     async setProfile(script: string) {
@@ -2429,6 +2433,39 @@ describe('runner の生死', () => {
     ]);
     expect(body.runners[0]?.runnerId).toBeUndefined();
     expect(body.runners[0]?.error).toContain('fetch failed');
+
+    await registry.stop();
+  });
+
+  /**
+   * **#330 の罠そのもの。** `runnerId` は常に文字列を持つ（`HttpRunner` の既定値
+   * `'runner-primary'`）ので、`entry.client !== null` だけを根拠に出すと、
+   * `/health` から一度も `runnerId` を受け取れていない相手についても「受け取った
+   * 値」の顔で出てしまう。繋がってはいる（`state: 'connected'`）が、まだ聞けて
+   * いない runner が、既定値をそのまま名乗って見えないことを確かめる。
+   */
+  it('繋がっていても runnerId を聞けていない runner は、runnerId を出さない（#330）', async () => {
+    const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
+    await registry.register({
+      label: '旧版の runner',
+      open: async () => fakeRunner('runner-primary', { runnerIdKnown: false }) as never,
+    });
+
+    const withRunners = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      runners: registry,
+    });
+
+    const body = (await (await withRunners.request('/runners')).json()) as {
+      runners: { label: string; state: string; runnerId?: string }[];
+    };
+
+    expect(body.runners).toMatchObject([{ label: '旧版の runner', state: 'connected' }]);
+    // **既定値 `'runner-primary'` が「聞けた値」の顔で出ていないことを名指しで見る。**
+    expect(body.runners[0]).not.toHaveProperty('runnerId');
 
     await registry.stop();
   });
