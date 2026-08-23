@@ -11,15 +11,19 @@
 //
 // コマンド:
 //   status                          印の有無を報告する。誰でも引数なしで打てる。
-//   baseline                        ベースラインが緑であることを確かめる。
+//   baseline [--max-workers <n>]    ベースラインが緑であることを確かめる。
 //   apply --spec <file.json>        段階実行: 1つの変異を当てて印を置くところまで。
 //   restore [--restore-from-marker] 段階実行: 印を読んで復元する。
-//   run --plan <file.json>          本番: 複数の変異を順に回す。
+//   run --plan <file.json> [--max-workers <n>]  本番: 複数の変異を順に回す。
 //   selftest --scenario <name>      自己検証（受け入れ条件の3つ+1に加え、レビューで見つかった欠陥2件の回帰確認）。省略で一覧を出す。
 //
 // `baseline` / `run` は、印が残っている状態では測定を始めずに落ちる（既定）。
 // 中断されたツリーで新しい測定を始めると、生存も検出も意味を失うため。
 // 逃げ道は `--allow-existing-marker` の1つに限る。
+//
+// `--max-workers <n>`（#331）: 器が混んでいて並列度を下げるよう指示されている
+// 場面向け。省略時は `mutate-core.mjs` の `DEFAULT_MAX_WORKERS`（＝これまでどおり
+// `4`）のまま。`run` に渡すと、baseline の確認と各変異ごとのテスト実行の両方に効く。
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -136,11 +140,29 @@ function assertNoBlockingMarker(commandName, args) {
   }
 }
 
+/** `--max-workers <n>` を読む。省略なら `undefined`（＝呼び出し側の既定に委ねる）。
+ * 値が1以上の整数でなければ落ちる — 器の狭さに合わせるための口を、意図せず
+ * `NaN` や `--maxWorkers=0` のような形で壊さないため。
+ */
+function readMaxWorkers(args) {
+  const idx = args.indexOf('--max-workers');
+  if (idx === -1) return undefined;
+  const raw = args[idx + 1];
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) {
+    throw new HarnessError(
+      `--max-workers には1以上の整数を渡すこと（実際: ${JSON.stringify(raw)}）`,
+    );
+  }
+  return n;
+}
+
 function cmdBaseline(args) {
   checkJudgementVocabulary();
   assertNoBlockingMarker('baseline', args);
+  const maxWorkers = readMaxWorkers(args);
   section('baseline');
-  const result = runTests([]);
+  const result = maxWorkers === undefined ? runTests([]) : runTests([], maxWorkers);
   log(result.raw);
   if (!testsRanCleanly(result)) {
     log('');
@@ -196,7 +218,7 @@ function cmdRestore(args) {
   );
 }
 
-function runOneMutation(spec) {
+function runOneMutation(spec, maxWorkers) {
   section(
     `変異 ${spec.id} (${spec.file}: ${JSON.stringify(spec.from)} → ${JSON.stringify(spec.to)})`,
   );
@@ -213,7 +235,8 @@ function runOneMutation(spec) {
   let judgeError = null;
   try {
     artifactResult = buildAndCheckArtifact(spec);
-    testResult = runTests(spec.testFilter ? [spec.testFilter] : []);
+    const extraArgs = spec.testFilter ? [spec.testFilter] : [];
+    testResult = maxWorkers === undefined ? runTests(extraArgs) : runTests(extraArgs, maxWorkers);
     log('--- test 生ログ ここから ---');
     log(testResult.raw);
     log('--- test 生ログ ここまで ---');
@@ -257,10 +280,11 @@ function runOneMutation(spec) {
 function cmdRun(args) {
   checkJudgementVocabulary();
   assertNoBlockingMarker('run', args);
+  const maxWorkers = readMaxWorkers(args);
   const { data: plan } = readJsonArg('--plan', args);
 
   section('run: baseline を先に確かめる');
-  const baseline = runTests([]);
+  const baseline = maxWorkers === undefined ? runTests([]) : runTests([], maxWorkers);
   log(baseline.raw);
   if (!testsRanCleanly(baseline) || !testsAllPassed(baseline)) {
     log('ベースラインが緑ではない。run を中止する。');
@@ -270,7 +294,7 @@ function cmdRun(args) {
 
   const results = [];
   for (const spec of plan) {
-    results.push(runOneMutation(spec));
+    results.push(runOneMutation(spec, maxWorkers));
   }
 
   section('run: まとめ');

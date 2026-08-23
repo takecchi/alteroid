@@ -454,11 +454,33 @@ export function buildAndCheckArtifact(spec) {
   };
 }
 
+// **既定の並列度。この器の狭さに合わせた値であって、変異試験の性質が決めた値
+// ではない。** #331: `baseline` / `run --plan` からも並列度を外から渡せるように
+// したが、呼び出し側が何も渡さなければこれまでどおり `--maxWorkers=4` で走ること
+// を歯として固定する（`mutate.mjs` の `--max-workers` を渡さなければここへ落ちる）。
+// 既定を消すと、渡し忘れた回だけ vitest の既定（`nproc` 相当）へ跳ね上がる。
+export const DEFAULT_MAX_WORKERS = 4;
+
+/**
+ * `runTests` が `spawnSync` へ渡す args 配列そのものを組み立てる。
+ *
+ * **`runTests` から切り出した理由**: `spawnSync` を実際に起こさずに「引数を
+ * 渡さなければ `--maxWorkers=4` になること」「渡した値がそのまま使われること」
+ * を確かめる歯を書けるようにするため（AGENTS.md「テストが書けない構造は、
+ * テストが無いのと同じ」）。切り出しただけで、`runTests` の出力・挙動は
+ * 1文字も変えていない — 元々ここでインライン配列として組み立てていたものを
+ * 関数の戻り値に変えただけである。
+ */
+export function buildTestSpawnArgs(extraArgs = [], maxWorkers = DEFAULT_MAX_WORKERS) {
+  return ['test', `--maxWorkers=${maxWorkers}`, ...extraArgs];
+}
+
 /** 手順10: テストを走らせ、`Test Files ... passed` と `Tests ... passed` の
  * 両方の行を読む。行の不在は「走っていない」であって「通った/落ちた」ではない。
+ * `maxWorkers` を渡さなければ `DEFAULT_MAX_WORKERS`（＝これまでどおり `4`）で走る。
  */
-export function runTests(extraArgs = []) {
-  const result = spawnSync('pnpm', ['test', '--maxWorkers=4', ...extraArgs], {
+export function runTests(extraArgs = [], maxWorkers = DEFAULT_MAX_WORKERS) {
+  const result = spawnSync('pnpm', buildTestSpawnArgs(extraArgs, maxWorkers), {
     cwd: ROOT,
     encoding: 'utf8',
     maxBuffer: 200 * 1024 * 1024,
