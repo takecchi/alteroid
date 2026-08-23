@@ -246,3 +246,97 @@ describe('会話画面のスクロール追従（#247 の 1）', () => {
     expect(scrollIntoView.mock.calls.length).toBeGreaterThan(callsBeforeSend);
   });
 });
+
+/**
+ * `ChatPane` は会話を切り替えても作り直されない（`key` を付けない設計、
+ * `chat.tsx` の該当コメント参照）。`isAtBottomRef` は `ChatPane` が生きている
+ * あいだ値を保つ `useRef` なので、直さなければ**会話 A で遡った状態が会話 B へ
+ * 持ち越ってしまう** — 会話を開いたのに最新が見えない、という別の欠陥になる。
+ */
+describe('会話の切り替え（#247 の 1 の追加分）', () => {
+  const CONV_A = 'conv-switch-a';
+  const CONV_B = 'conv-switch-b';
+
+  function backgroundForSwitch(url: string): Response | undefined {
+    if (url.includes(`/conversations/${CONV_A}`)) {
+      return json({
+        conversationId: CONV_A,
+        messages: [{ id: 'a1', at: '2026-08-20T00:00:00Z', role: 'inbound', text: '会話Aの発言' }],
+      });
+    }
+    if (url.includes(`/conversations/${CONV_B}`)) {
+      return json({
+        conversationId: CONV_B,
+        messages: [{ id: 'b1', at: '2026-08-20T00:00:00Z', role: 'inbound', text: '会話Bの発言' }],
+      });
+    }
+    if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
+    return undefined;
+  }
+
+  it('会話 A で上へ遡った状態から会話 B へ移ると、B は最下部へ送られる', async () => {
+    stubFetch((url) => backgroundForSwitch(url));
+
+    const { router } = renderChat(`/chat/${CONV_A}`);
+    await screen.findByText('会話Aの発言');
+
+    // 会話 A を上へ遡っている、と器に言わせる。
+    setScrollMetrics(scrollContainer(), { scrollTop: 0, scrollHeight: 1000, clientHeight: 200 });
+    fireEvent.scroll(scrollContainer());
+
+    const callsBeforeSwitch = scrollIntoView.mock.calls.length;
+    // 一覧のクリックではなく URL の遷移そのもの（`ChatPane` は同じインスタンスの
+    // まま `routeId` prop だけが変わる。既存の「会話の切り替え」試験
+    // （`chat.test.tsx`）と同じ手段）。
+    await router.navigate(`/chat/${CONV_B}`);
+    await screen.findByText('会話Bの発言');
+
+    // **ここが本題。** 会話 A で遡っていても、会話 B は最下部へ送られたはずである。
+    await waitFor(() => {
+      expect(scrollIntoView.mock.calls.length).toBeGreaterThan(callsBeforeSwitch);
+    });
+  });
+
+  it('会話 B へ移った後も、B の中で上へ遡ったら追従しない', async () => {
+    const chunk2 = gate();
+    stubFetch((url, init) => {
+      if (url.endsWith('/chat')) {
+        return sse(
+          [
+            { event: 'open', data: { conversationId: CONV_B } },
+            { event: 'text', data: { type: 'text', text: '最初の一文' } },
+            { event: 'text', data: { type: 'text', text: '、続きの一文' }, after: chunk2.promise },
+            { event: 'done', data: { type: 'done' } },
+          ],
+          { signal: init?.signal },
+        );
+      }
+      return backgroundForSwitch(url);
+    });
+
+    const { router } = renderChat(`/chat/${CONV_A}`);
+    await screen.findByText('会話Aの発言');
+    await router.navigate(`/chat/${CONV_B}`);
+    await screen.findByText('会話Bの発言');
+
+    // B の中で発言し、応答が届き始めるところまでは追従してよい
+    // （切り替え直後の「最下部から始まる」＋「送った直後は追従する」の重なり）。
+    await send('質問');
+    await screen.findByText('最初の一文');
+
+    // ここから B の中で上へ遡る。**切り替えのリセットがここまで効いたままだと
+    // （＝ isAtBottomRef が常に true に固定されていると）、この歯が落ちる。**
+    setScrollMetrics(scrollContainer(), { scrollTop: 0, scrollHeight: 1000, clientHeight: 200 });
+    fireEvent.scroll(scrollContainer());
+
+    const callsBeforeChunk2 = scrollIntoView.mock.calls.length;
+    chunk2.open();
+    await waitFor(() => {
+      expect(within(transcript()).getByText(/続きの一文/)).toBeTruthy();
+    });
+
+    // **ここが本題。** 切り替えのリセットが、B の中での遡りの抑止まで
+    // 壊していないこと。
+    expect(scrollIntoView.mock.calls.length).toBe(callsBeforeChunk2);
+  });
+});

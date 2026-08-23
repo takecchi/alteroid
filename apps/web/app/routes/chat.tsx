@@ -247,6 +247,21 @@ export function ChatPane({
    * だから最下部にいなくても、送った直後だけは追従してよいと判断した。
    */
   const justSentOwnLineRef = useRef(false);
+  /**
+   * 追従の効果が直前に見た `shownId`。
+   *
+   * **`isAtBottomRef` は `ChatPane` が生きているあいだ値を保つ ref であり、
+   * `ChatPane` は会話を切り替えても作り直されない**（`key` を付けない理由は
+   * 上のコメントのとおり、受信中のストリームを切らないためである）。つまり
+   * 会話 A で上へ遡って `isAtBottomRef.current` が `false` になったあと、
+   * 会話 B へ移っても ref はそのまま `false` を持ち越す — 直さなければ、
+   * 開いたばかりの会話 B が最下部から始まらない。
+   *
+   * **他の効果（`shownId` を見て前の会話のストリームを止める効果）の宣言順に
+   * 依存させない。** 会話の切り替わりをこの効果自身の中で見分けることで、
+   * 同じコミットでどちらの効果が先に走っても結果が変わらないようにしてある。
+   */
+  const lastSeenShownIdRef = useRef(shownId);
 
   /** 走っているストリーム。無ければ `undefined`。 */
   const streamRef = useRef<Stream | undefined>(undefined);
@@ -361,6 +376,14 @@ export function ChatPane({
   }, []);
 
   useEffect(() => {
+    // **会話を切り替えたら、前の会話でどこを読んでいたかは持ち越さない。**
+    // `lastSeenShownIdRef` と `shownId` が違えば「今回の実行で会話が変わった」
+    // と分かる（他の効果の実行順には依存しない、この効果だけで完結する判定）。
+    // 新しい会話は常に最下部から始まる（初回描画と同じ扱いにする）。
+    if (lastSeenShownIdRef.current !== shownId) {
+      lastSeenShownIdRef.current = shownId;
+      isAtBottomRef.current = true;
+    }
     if (isAtBottomRef.current || justSentOwnLineRef.current) {
       bottomRef.current?.scrollIntoView({ block: 'end' });
       // `scrollIntoView` が発火させる `scroll` イベント（延いては上の
@@ -369,7 +392,7 @@ export function ChatPane({
       isAtBottomRef.current = true;
     }
     justSentOwnLineRef.current = false;
-  }, [all.length, lines]);
+  }, [all.length, lines, shownId]);
 
   /**
    * 別の会話へ移ったら、**前の会話の**ストリームだけを止める。
