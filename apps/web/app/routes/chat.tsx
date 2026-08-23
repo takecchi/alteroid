@@ -18,6 +18,20 @@ export function clientLoader({ params }: Route.ClientLoaderArgs) {
   return { conversationId: params.conversationId };
 }
 
+/**
+ * 「最下部にいるか」の余裕（px）。**厳密一致（`scrollTop + clientHeight ===
+ * scrollHeight`）は小数の丸めで成立しないことがある**ので余裕を持たせる。
+ *
+ * 32px にしたのは、この画面の行間・パディング（やりとりの `gap-3` = 12px、
+ * 吹き出しの `py-2` など）を見て、1行ぶん未満の隙間であればブラウザの丸め・
+ * サブピクセルのずれを吸収するのに足り、かつ「実質的にもう1行分スクロール
+ * しないと最下部が見えない」ほど手前では反応しない値だと判断したため
+ * （深い理由がある値ではない。広すぎると「読み返している」を誤って
+ * 「最下部にいる」と判定し、狭すぎると丸め誤差で最下部にいるのに追従
+ * しない、の両方に転びうる）。
+ */
+const BOTTOM_THRESHOLD_PX = 32;
+
 /** 画面に出す1行。届いた順に並べる。 */
 interface Line {
   key: string;
@@ -212,6 +226,42 @@ export function ChatPane({
   const [sending, setSending] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  /** スクロールする器そのもの。「最下部にいるか」を見るのに要る（#247 の 1）。 */
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * 直近に分かっている「最下部にいるか」。
+   *
+   * 効果（下の `useEffect`）はこの値だけを見て追従するかを決める — 効果が
+   * 走る時点では新しい行が既に描かれた後で、器の `scrollHeight` はもう
+   * 伸びているので、そこで測っても「新しい行が来る前にどこにいたか」は
+   * 分からない。だから測定は `onScroll` 側（ユーザーの操作、および自分で
+   * 呼んだ `scrollIntoView` が発火させる `scroll` イベント）で行い、ここへ
+   * 持ち越す。既定は `true`（＝初回描画は最下部から始まる。旧来どおり）。
+   */
+  const isAtBottomRef = useRef(true);
+  /**
+   * 直前の `setLines` が自分の発言を積んだものかどうか。
+   *
+   * 自分が送った直後は遡って読んでいる最中ではない（入力欄を使うのに画面を
+   * 触っているので、読み返しの途中ではなく会話に参加しようとしている）。
+   * だから最下部にいなくても、送った直後だけは追従してよいと判断した。
+   */
+  const justSentOwnLineRef = useRef(false);
+  /**
+   * 追従の効果が直前に見た `shownId`。
+   *
+   * **`isAtBottomRef` は `ChatPane` が生きているあいだ値を保つ ref であり、
+   * `ChatPane` は会話を切り替えても作り直されない**（`key` を付けない理由は
+   * 上のコメントのとおり、受信中のストリームを切らないためである）。つまり
+   * 会話 A で上へ遡って `isAtBottomRef.current` が `false` になったあと、
+   * 会話 B へ移っても ref はそのまま `false` を持ち越す — 直さなければ、
+   * 開いたばかりの会話 B が最下部から始まらない。
+   *
+   * **他の効果（`shownId` を見て前の会話のストリームを止める効果）の宣言順に
+   * 依存させない。** 会話の切り替わりをこの効果自身の中で見分けることで、
+   * 同じコミットでどちらの効果が先に走っても結果が変わらないようにしてある。
+   */
+  const lastSeenShownIdRef = useRef(shownId);
 
   /** 走っているストリーム。無ければ `undefined`。 */
   const streamRef = useRef<Stream | undefined>(undefined);
@@ -319,9 +369,30 @@ export function ChatPane({
     return [...historyLines, ...pending];
   }, [historyLines, lines]);
 
+  const handleScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (el === null) return;
+    isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= BOTTOM_THRESHOLD_PX;
+  }, []);
+
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ block: 'end' });
-  }, [all.length, lines]);
+    // **会話を切り替えたら、前の会話でどこを読んでいたかは持ち越さない。**
+    // `lastSeenShownIdRef` と `shownId` が違えば「今回の実行で会話が変わった」
+    // と分かる（他の効果の実行順には依存しない、この効果だけで完結する判定）。
+    // 新しい会話は常に最下部から始まる（初回描画と同じ扱いにする）。
+    if (lastSeenShownIdRef.current !== shownId) {
+      lastSeenShownIdRef.current = shownId;
+      isAtBottomRef.current = true;
+    }
+    if (isAtBottomRef.current || justSentOwnLineRef.current) {
+      bottomRef.current?.scrollIntoView({ block: 'end' });
+      // `scrollIntoView` が発火させる `scroll` イベント（延いては上の
+      // `handleScroll`）を待たずに確定させる。ストリーミングでチャンクが
+      // 立て続けに届くと、イベントが次の効果の実行に間に合わないことがある。
+      isAtBottomRef.current = true;
+    }
+    justSentOwnLineRef.current = false;
+  }, [all.length, lines, shownId]);
 
   /**
    * 別の会話へ移ったら、**前の会話の**ストリームだけを止める。
@@ -341,6 +412,9 @@ export function ChatPane({
 
   /** 打った本文を画面へ積む。送信の入口が2つ（新規・追送）あるので1本にしてある。 */
   const showOwnLine = useCallback((text: string) => {
+    // 最下部にいなくても、送った直後だけは追従してよい（上の
+    // `justSentOwnLineRef` のコメント参照）。
+    justSentOwnLineRef.current = true;
     setLines((previous) => [
       ...previous,
       { key: `h-${previous.length}-${text.slice(0, 8)}`, role: 'human', text },
@@ -652,7 +726,11 @@ export function ChatPane({
         )}
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto py-4 pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]">
+      <div
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        className="min-h-0 flex-1 overflow-y-auto py-4 pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]"
+      >
         {/*
           **遡り切れていないことを言う。** サーバは日誌の新しい方から `scan` 件しか
           見ないので、古い会話は「続きがあるのに出ていない」状態になりうる。ここが
