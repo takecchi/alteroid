@@ -47,16 +47,19 @@ function waitingItem(over: Partial<ManagerWaitingItem> = {}): ManagerWaitingItem
  * **いまの型はまだ両方を必須としている。** 緩める変更（`kind?` / `askedAt?`）は
  * `packages/core` / `apps/daemon` 側で別の作業者が別コミットとして入れる
  * （このコミット単独では apps/cli しか触っていない）。型が緩むまでの間も
- * 表示側の歯を先に書けるよう、`stubClient` の `client as unknown as ...` と
- * 同じ扱いで意図してキャストしている——実行時の形は緩んだ後の型と同じ
- * （`kind` / `askedAt` が無い1件）である。
+ * 表示側の歯を先に書けるよう、**`Partial<ManagerWaitingItem>` から
+ * `ManagerWaitingItem` への1段の `as`** で緩めている（何を緩めたかが型の
+ * 名前から読める。`as unknown as` や `as any` は使わない）。実行時の形は
+ * 緩んだ後の型と同じ（`kind` / `askedAt` が無い1件）で、型が緩んだ後も
+ * このキャストはそのまま要らなくなるだけで壊れない。
  */
-function legacyWaiting(over: Record<string, unknown> = {}): ManagerWaitingItem {
-  return {
+function legacyWaiting(over: Partial<ManagerWaitingItem> = {}): ManagerWaitingItem {
+  const base: Partial<ManagerWaitingItem> = {
     requestId: 'req-legacy',
     summary: '版ずれの窓からの確認',
     ...over,
-  } as unknown as ManagerWaitingItem;
+  };
+  return base as ManagerWaitingItem;
 }
 
 describe('renderManagerList', () => {
@@ -1748,6 +1751,25 @@ describe('chat の /managers（番号付き一覧）', () => {
 
     expect(calls.filter((call) => call.route === 'POST /managers/:id/messages')).toEqual([]);
     expect(read()).toContain('/waiting の一覧にありません');
+  });
+
+  /**
+   * 上のテストは `listed` を直接組み立てるので、`/managers` の実装（番号を
+   * 振る側）を1バイトも通らない——番号の置き場を混ぜる変異を `/managers` の
+   * 中に仕込んでも、このテストだけでは検出できない（実測、変異試験で確認
+   * 済み）。**`/managers` を実際に呼んで、その結果 `listed.waiting` が
+   * 触られていないことまで確かめる。**
+   */
+  it('/managers を実際に呼んでも、listed.waiting は書き換わらない', async () => {
+    captureStdout();
+    const { client } = stubClient({
+      managers: [manager({ managerId: 'mgr-a' }), manager({ managerId: 'mgr-b' })],
+    });
+    const listed = emptyListed();
+
+    await runSlashCommand('/managers', client, listed);
+
+    expect(listed.waiting).toEqual([]);
   });
 });
 
