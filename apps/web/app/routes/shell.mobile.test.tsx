@@ -207,3 +207,49 @@ describe('上端の帯の横向き safe-area inset（本4）', () => {
     expect(classes).toContain('pt-[var(--safe-top)]');
   });
 });
+
+/**
+ * 広い画面（`useIsMobile` の境目 768px 以上）で `nav` が単独で画面の左端に
+ * 立つときの横向き safe-area inset（Issue #247 の4、差し戻し分）。
+ *
+ * **横向きにすると 768px を超える現行機種が多い**（`MOBILE_BREAKPOINT` は
+ * `use-is-mobile.ts` の doc を参照）。その場合 `MobileTopBar` ではなくこの
+ * `nav` が画面の左端に出るので、横向きの左端の safe-area はむしろこちらが
+ * 主な当たり先になる。
+ *
+ * **狭い画面（`Drawer` の中）では同じ `nav` に `pl-[var(--safe-left)]` を
+ * 足していないことも合わせて見る。** `Drawer` の `SheetContent` が既に
+ * `pl-[var(--safe-left)]` を持っているので（`drawer.tsx`）、`nav` 側にも
+ * 足すと二重に効く（余白が倍になる）。二重にならないことをここで固定する。
+ *
+ * どちらも**クラス名の存在／不在のみを見る弱い歯**である。jsdom は
+ * `env(safe-area-inset-*)` を評価できないので、実際に何 px になるか・
+ * 二重に描画されて余白が本当に倍になるかはここでは測れない。
+ */
+describe('nav の横向き safe-area inset（本4、差し戻し分）', () => {
+  it('広い画面では nav（画面の左端）が pl-[var(--safe-left)] を持つ（クラス名の存在のみ）', async () => {
+    setViewportWidth(DEFAULT_VIEWPORT_WIDTH);
+    stubAuthedShell();
+
+    renderShell();
+    await screen.findByText('ダッシュボードの中身');
+
+    const nav = screen.getByRole('navigation');
+    const classes = nav.className.split(/\s+/);
+    expect(classes).toContain('pl-[var(--safe-left)]');
+  });
+
+  it('狭い画面（Drawer の中）では nav に pl-[var(--safe-left)] が付いていない（Drawer 側と二重にならないこと）', async () => {
+    setViewportWidth(NARROW_WIDTH);
+    stubAuthedShell();
+
+    renderShell();
+    await screen.findByText('ダッシュボードの中身');
+    fireEvent.click(screen.getByRole('button', { name: 'メニューを開く' }));
+    await screen.findByRole('dialog', { name: 'メニュー' });
+
+    const nav = screen.getByRole('navigation');
+    const classes = nav.className.split(/\s+/);
+    expect(classes).not.toContain('pl-[var(--safe-left)]');
+  });
+});

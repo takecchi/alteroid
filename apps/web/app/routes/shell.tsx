@@ -173,8 +173,23 @@ function Nav({
     <nav
       className={cn(
         'flex flex-col bg-surface',
-        // ドロワーの中では枠と幅は Drawer 側が持っている。
-        onNavigate === undefined ? 'w-52 shrink-0 border-r border-border' : 'min-h-0 flex-1',
+        /*
+         * ドロワーの中では枠と幅は Drawer 側が持っている（`pl-[var(--safe-left)]` も
+         * 含めて — `drawer.tsx` の `SheetContent` に既にある）。**ここで同じものを
+         * 足すと二重に効く**（余白が倍になる）ので、`onNavigate` が無い側
+         * （広い画面でこの `nav` が単独でページの左端に立つとき）にだけ足す。
+         *
+         * 横向きで画面幅が 768px（`useIsMobile` の境目）を超える端末では
+         * `MobileTopBar` ではなくこちら（`AuthedShell` の `nav`）が画面の左端に
+         * 出る（`shell.tsx` の `AuthedShell` 参照）。**現行の多くの機種は横向きで
+         * この幅を超える**ので、横向きの左端の safe-area はむしろこちらが主な
+         * 当たり先になる。右は当てていない — 広い画面では `nav` の右に `main`
+         * （`page.tsx` / `chat.tsx`）が続き、画面の右端は既にそちら側の
+         * `pr-[calc(...+var(--safe-right))]` が持っている。
+         */
+        onNavigate === undefined
+          ? 'w-52 shrink-0 border-r border-border pl-[var(--safe-left)]'
+          : 'min-h-0 flex-1',
       )}
     >
       <div className="px-4 py-4">
