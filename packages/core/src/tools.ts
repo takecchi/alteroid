@@ -215,6 +215,38 @@ const LIST_BUDGET = 8_000;
  * 言う**（`denialLine`）。黙って落とすと「3種類しか止められていない」に見える。
  */
 const LIST_DENIED_TOOLS = 3;
+
+/** `ManagerSummary.waiting` の1件（`@alteroid/core` の `RunnerWaiting` と同じ形）。 */
+type ManagerWaitingItem = ManagerSummary['waiting'][number];
+
+/**
+ * 種別（質問／実行許可）を人間向けの語へ。**`kind` は省略されうる。**
+ *
+ * 新しいデーモンが `drainingSeconds` の猶予中の旧 runner へ問い合わせる窓が
+ * あり、そちらの応答には `kind` が乗らない（`railway/README.md`「4. 落ちた
+ * 側を待つ / 取り直す」）。`apps/cli/src/chat.ts` の `describeWaitingKind`
+ * と同じ倒れ先——**分からないものを分かった顔で書かない。** ここを
+ * `item.kind === 'question' ? '質問' : '実行許可'` のままにすると、`kind` が
+ * 無いときに問答無用で「実行許可」と嘘をつく（クローンが質問に許可／拒否で
+ * 答えてしまう）。
+ */
+function describeWaitingKind(kind: ManagerWaitingItem['kind']): string {
+  if (kind === 'question') return '質問';
+  if (kind === 'permission') return '実行許可';
+  return '種別不明';
+}
+
+/**
+ * `askedAt` を人間向けの語へ（無ければ何も足さない）。
+ *
+ * `chat.ts` の `describeAskedAt` と同じ理由・同じ倒れ先。**無いときは空文字や
+ * `-` で埋めない** — 取れない軸に意味の決まった値を作らない（`AGENTS.md`
+ * 「取れない軸に0の行を作る」）。
+ */
+function describeAskedAt(askedAt: ManagerWaitingItem['askedAt']): string {
+  return askedAt === undefined ? '' : `${askedAt} から`;
+}
+
 /** 全文を取りに来たときの1回分。続きは `offset` で取れる。 */
 const REPORT_PAGE = 8_000;
 
@@ -2153,11 +2185,23 @@ export function createCloneTools(context: ToolContext) {
               // キャップになっていたが、`AskUserQuestion` の経路（`describeQuestions`）は
               // 質問文を `join(' / ')` で連ねてそのキャップを通らない。ここを通して
               // おけば、上流のどの経路から来ても一覧は伸びない。
-              ...manager.waiting.map(
-                (item) =>
-                  `  返事待ち(requestId: ${item.requestId}): ` +
-                  excerptLine(item.summary, LIST_WAITING_EXCERPT),
-              ),
+              // **種別（質問 / 実行許可）と、待ち始めた時刻も出す（#334 / #323）。**
+              // クローンは `requestId` と要約だけでは、答えるべきなのが自由な
+              // 言葉での回答なのか許可の可否なのかを読めなかった——画面側と
+              // 同じ穴がここにもあった。時刻は runner が確認を受け取った瞬間
+              // （`askedAt`）で、答えが来た時刻ではない。5分前と4時間前とで
+              // 次にすべきことが変わる（#323: 報告が何時間も遅れる欠陥）。
+              // **どちらも省略されうる**（版のずれの窓。`describeWaitingKind` /
+              // `describeAskedAt` の doc）——欠けていても「実行許可」「undefined
+              // から」と嘘をつかず、`種別不明` にして時刻の断片を落とす。
+              ...manager.waiting.map((item) => {
+                const askedAtNote = describeAskedAt(item.askedAt);
+                return (
+                  `  返事待ち(requestId: ${item.requestId}, ${describeWaitingKind(item.kind)}` +
+                  `${askedAtNote === '' ? '' : `, ${askedAtNote}`}): ` +
+                  excerptLine(item.summary, LIST_WAITING_EXCERPT)
+                );
+              }),
               manager.lastReport === undefined
                 ? null
                 : `  直近の報告: ${excerptLine(manager.lastReport, LIST_REPORT_EXCERPT)}`,

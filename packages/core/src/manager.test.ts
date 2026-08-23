@@ -518,6 +518,80 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
+  /**
+   * **一覧が種別を持つこと自体を測る（#334）。** 直前のテストは「質問への
+   * 回答がそのまま answers に入る」という別の性質を測っており、`kind` の
+   * 値そのものは `toMatchObject` で1回しか通していない。ここでは
+   * `s.pool.list()`（画面・クローンの `manager_list` が読む面そのもの）が
+   * 返す `waiting` を主語にして、質問と実行許可の両方を同時に持たせ、
+   * それぞれが正しい `kind` を名乗ることを見る。
+   */
+  it('AskUserQuestion の待ちは kind: question として一覧に出る / 実行許可の待ちは kind: permission として出る（#334）', async () => {
+    const s = setup();
+    const { managerId } = await s.pool.start({ request: '設計を相談したい' });
+    const session = s.sessions[0] as FakeSession;
+
+    session.ask(
+      'AskUserQuestion',
+      {
+        questions: [
+          { question: 'DB はどちらにする？', header: 'DB', options: [], multiSelect: false },
+        ],
+      },
+      undefined,
+      'req-kind-q',
+    );
+    session.ask('Bash', { command: 'git push' }, undefined, 'req-kind-p');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const waiting = (await s.pool.list()).find((m) => m.managerId === managerId)?.waiting ?? [];
+    expect(waiting.find((item) => item.requestId === 'req-kind-q')?.kind).toBe('question');
+    expect(waiting.find((item) => item.requestId === 'req-kind-p')?.kind).toBe('permission');
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **`RunnerSession#state()` は呼ばれるたびに `askedAt` を取り直さない
+   * （#334 / #323）ことを、`state()` を直接呼ぶ経路で測る。**
+   *
+   * ⚠️ 直前のテストや `manager.test.ts` の他の歯は `s.pool.list()`（＝
+   * manager.ts の `record.waiting`。`ask` イベント経由で1度だけ埋まる）を
+   * 見ている。**これだけでは `state()` 側の取り直しを検出できない** ——
+   * 実際に変異試験（`.claude/skills/mutation-testing/`）で確かめた。
+   * `state()` の `askedAt: request.askedAt` を `askedAt: new
+   * Date().toISOString()` に変える変異は、`s.pool.list()` ベースの歯・
+   * 「デーモン再起動でも kind と askedAt を保つ」歯（`swappableRunner` の
+   * fake を使うテスト。実 runner を経由しない）のどちらでも生存したまま
+   * だった。
+   *
+   * だからここでは `s.runner.list()`（`LocalRunner#list()` → `RunnerHost#list()`
+   * → 各セッションの `state()` を直接呼ぶ、本番と同じ経路）を2回、実時間を
+   * 空けて呼び、`askedAt` が両方の呼び出しで同じ値であることを直接見る。
+   */
+  it('runner.state() は呼ぶたびに askedAt を取り直さない（#334 / #323）', async () => {
+    const s = setup();
+    const { managerId } = await s.pool.start({ request: 'デプロイして' });
+    const session = s.sessions[0] as FakeSession;
+
+    session.ask('Bash', { command: 'git push' }, undefined, 'req-stable');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const first = (await s.runner.list()).find((m) => m.managerId === managerId);
+    const askedAtFirst = first?.waiting.find((item) => item.requestId === 'req-stable')?.askedAt;
+    expect(askedAtFirst).toBeTruthy();
+
+    // 実時間で間隔を空ける。取り直す変異ならここで別の値（別のミリ秒）になる。
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const second = (await s.runner.list()).find((m) => m.managerId === managerId);
+    const askedAtSecond = second?.waiting.find((item) => item.requestId === 'req-stable')?.askedAt;
+
+    expect(askedAtSecond).toBe(askedAtFirst);
+
+    await s.pool.stop();
+  });
+
   it('返事待ちでないときの manager_send は追加指示として届く（会話に戻れる）', async () => {
     const s = setup();
     const { managerId } = await s.pool.start({ request: '調べて' });
@@ -1113,6 +1187,66 @@ describe('デーモン再起動後（M4）', () => {
     await s.pool.stop();
   });
 
+  /**
+   * **デーモン再起動後の引き取り（`#restoreJobs`）は `runner.state()` を経由する。**
+   * `ask` イベント経由（`#onEvent` の `case 'ask'`）とは別の経路で、`kind` /
+   * `askedAt` を運ぶ入口がもう1つある——`RunnerSession#state()`（`runner.ts`）が
+   * `#pending` から `waiting` を組み立てる箇所である。ここが値を落としていても
+   * `ask` 経由の歯（直前・直後のテスト）は気づけない。#334 の実装ではここが
+   * 2箇所目の穴だった。
+   *
+   * **`askedAt` は特に重い。** 引き取り直すたびに「いま」へ取り直すと、4時間
+   * 待っている確認が再起動のたびに「たった今」へ化ける——足した理由（#323。
+   * 待ち時間の長さで人間の次の一手が変わる）がそのまま消える。ここでは
+   * 「いま」とは明らかに違う過去の時刻を fixture に置き、引き取り後もその
+   * 値のままであることを見る。
+   */
+  it('待ちが在るままデーモンが再起動しても、引き取り直した waiting は kind と askedAt を保つ（#334）', async () => {
+    const askedAtQuestion = '2026-08-23T02:00:00.000Z';
+    const askedAtPermission = '2026-08-23T05:30:00.000Z';
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({ ...runningJob, status: 'waiting_human' });
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push({
+      managerId: runningJob.id,
+      status: 'waiting_human',
+      cwd: '/work/project',
+      request: 'DB の移行をやって',
+      waiting: [
+        {
+          requestId: 'req-restart-q',
+          summary: 'DB はどちらにする？',
+          kind: 'question',
+          askedAt: askedAtQuestion,
+        },
+        {
+          requestId: 'req-restart-p',
+          summary: 'Bash の実行許可',
+          kind: 'permission',
+          askedAt: askedAtPermission,
+        },
+      ],
+      sessionId: 'sess-before-restart',
+    });
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    const restored = await s.pool.restore();
+    expect(restored.map((m) => m.managerId)).toEqual([runningJob.id]);
+
+    const waiting = (await s.pool.list()).find((m) => m.managerId === runningJob.id)?.waiting ?? [];
+    const question = waiting.find((item) => item.requestId === 'req-restart-q');
+    const permission = waiting.find((item) => item.requestId === 'req-restart-p');
+    expect(question?.kind).toBe('question');
+    expect(permission?.kind).toBe('permission');
+    // **取り直していないこと**を明示的に見る。「いま」の近似値ではなく
+    // fixture に置いた値そのものと一致する（`toBeCloseTo` のような近似では、
+    // 取り直す変異が生き残る）。
+    expect(question?.askedAt).toBe(askedAtQuestion);
+    expect(permission?.askedAt).toBe(askedAtPermission);
+
+    await s.pool.stop();
+  });
+
   it('runner が lost と名乗ったセッションへ send すると resume 経路を通る（届かない runner.send() にしない）', async () => {
     // `attached: true` を固定していた頃は、ここで `send()` の `!record.attached` が
     // 偽になり `runner.send()` が直に呼ばれていた。しかし畳まれたセッションへの
@@ -1519,10 +1653,16 @@ function swappableRunner(runnerId = 'runner-primary') {
       emit?.({ type: 'session', managerId, sessionId });
     },
     /** マネージャーが確認を上げる（デーモン側の待ち行列に積まれる）。 */
-    ask(managerId: string, requestId: string, summary: string) {
+    ask(
+      managerId: string,
+      requestId: string,
+      summary: string,
+      kind: 'question' | 'permission' = 'permission',
+      askedAt: string = new Date().toISOString(),
+    ) {
       const session = state.alive.find((s) => s.managerId === managerId);
-      session?.waiting.push({ requestId, summary });
-      emit?.({ type: 'ask', managerId, requestId, kind: 'permission', summary });
+      session?.waiting.push({ requestId, summary, kind, askedAt });
+      emit?.({ type: 'ask', managerId, requestId, kind, summary, askedAt });
     },
     /**
      * マネージャーの1ターンが終わって報告が上がる。
@@ -3143,7 +3283,14 @@ describe('止めた結果を確かめる', () => {
       status: 'waiting_human',
       cwd: job.cwd,
       request: job.request,
-      waiting: [{ requestId: 'req-1', summary: '本番に触ってよいか' }],
+      waiting: [
+        {
+          requestId: 'req-1',
+          summary: '本番に触ってよいか',
+          kind: 'permission',
+          askedAt: '2026-08-01T01:00:00.000Z',
+        },
+      ],
       sessionId: job.sessionId,
     });
     const s = setup(undefined, { stores, runner: fake.runner });
@@ -3169,7 +3316,14 @@ describe('止めた結果を確かめる', () => {
     // **台帳を1文字も書かない。** status も waiting も、止める前のままである。
     const listed = (await s.pool.list()).find((m) => m.managerId === job.id);
     expect(listed?.status).toBe('waiting_human');
-    expect(listed?.waiting).toEqual([{ requestId: 'req-1', summary: '本番に触ってよいか' }]);
+    expect(listed?.waiting).toEqual([
+      {
+        requestId: 'req-1',
+        summary: '本番に触ってよいか',
+        kind: 'permission',
+        askedAt: '2026-08-01T01:00:00.000Z',
+      },
+    ]);
 
     await s.pool.stop();
   });
@@ -4262,7 +4416,14 @@ describe('#records の寿命（終端で外れる）', () => {
       status: 'waiting_human',
       cwd: '/work/project',
       request: 'DB の移行をやって',
-      waiting: [{ requestId: 'req-9', summary: '許可して' }],
+      waiting: [
+        {
+          requestId: 'req-9',
+          summary: '許可して',
+          kind: 'permission',
+          askedAt: '2026-08-01T01:00:00.000Z',
+        },
+      ],
       sessionId: `sess-${id}`,
     });
     const s = setup(undefined, { stores, runner: fake.runner });

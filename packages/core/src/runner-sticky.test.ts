@@ -88,11 +88,16 @@ class StickyRunner implements RunnerClient {
    * `connect()` 前（＝ `Pool` がまだ繋いでいない）に呼ぶと、静かに何も起きずに
    * テストが空振りするのを避けるため例外にする。
    */
-  ask(managerId: string, requestId: string, summary = '許可確認'): void {
+  ask(
+    managerId: string,
+    requestId: string,
+    summary = '許可確認',
+    askedAt: string = new Date().toISOString(),
+  ): void {
     if (this.#onEvent === null) {
       throw new Error(`${this.runnerId} はまだ connect していない（ask を流せない）`);
     }
-    this.#onEvent({ type: 'ask', managerId, requestId, kind: 'permission', summary });
+    this.#onEvent({ type: 'ask', managerId, requestId, kind: 'permission', summary, askedAt });
   }
 
   /**
@@ -450,11 +455,18 @@ describe('manager_id → runner_id の貼り付き（M5 受け入れ基準2 / 3�
     expect([a.receivedCount, b.receivedCount, c.receivedCount]).toEqual([0, 0, 0]);
 
     // b だけに、許可確認の待ちを積む（実機の `ask` イベントに相当）。
-    b.ask('mgr-on-runner-b', 'req-1', 'Bash の実行許可: ls');
+    b.ask('mgr-on-runner-b', 'req-1', 'Bash の実行許可: ls', '2026-08-01T00:00:00.000Z');
     await tick();
     expect(
       (await fleet.pool.list()).find((m) => m.managerId === 'mgr-on-runner-b')?.waiting,
-    ).toEqual([{ requestId: 'req-1', summary: 'Bash の実行許可: ls' }]);
+    ).toEqual([
+      {
+        requestId: 'req-1',
+        summary: 'Bash の実行許可: ls',
+        kind: 'permission',
+        askedAt: '2026-08-01T00:00:00.000Z',
+      },
+    ]);
 
     const result = await fleet.pool.send('mgr-on-runner-b', '許可します', {
       requestId: 'req-1',
@@ -504,16 +516,26 @@ describe('manager_id → runner_id の貼り付き（M5 受け入れ基準2 / 3�
     const fleet = await attachedFleet();
     const [a, b, c] = fleet.runners as [StickyRunner, StickyRunner, StickyRunner];
 
-    a.ask('mgr-on-runner-a', 'req-shared', 'A の確認');
-    c.ask('mgr-on-runner-c', 'req-shared', 'C の確認');
+    a.ask('mgr-on-runner-a', 'req-shared', 'A の確認', '2026-08-01T00:00:00.000Z');
+    c.ask('mgr-on-runner-c', 'req-shared', 'C の確認', '2026-08-01T00:00:01.000Z');
     await tick();
     const waitingOf = async (managerId: string) =>
       (await fleet.pool.list()).find((m) => m.managerId === managerId)?.waiting;
     expect(await waitingOf('mgr-on-runner-a')).toEqual([
-      { requestId: 'req-shared', summary: 'A の確認' },
+      {
+        requestId: 'req-shared',
+        summary: 'A の確認',
+        kind: 'permission',
+        askedAt: '2026-08-01T00:00:00.000Z',
+      },
     ]);
     expect(await waitingOf('mgr-on-runner-c')).toEqual([
-      { requestId: 'req-shared', summary: 'C の確認' },
+      {
+        requestId: 'req-shared',
+        summary: 'C の確認',
+        kind: 'permission',
+        askedAt: '2026-08-01T00:00:01.000Z',
+      },
     ]);
 
     const result = await fleet.pool.send('mgr-on-runner-c', 'C を許可', {
@@ -533,7 +555,12 @@ describe('manager_id → runner_id の貼り付き（M5 受け入れ基準2 / 3�
     await tick();
     // **本題。** a の待ちは同じ requestId でも解けず残っている。
     expect(await waitingOf('mgr-on-runner-a')).toEqual([
-      { requestId: 'req-shared', summary: 'A の確認' },
+      {
+        requestId: 'req-shared',
+        summary: 'A の確認',
+        kind: 'permission',
+        askedAt: '2026-08-01T00:00:00.000Z',
+      },
     ]);
     // a は一度も answer を（他の経路も）受けていない。b も無関係のまま。
     expect(a.receivedCount).toBe(0);

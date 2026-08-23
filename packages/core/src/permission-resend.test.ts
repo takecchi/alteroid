@@ -203,6 +203,7 @@ describe('解決済みの許可確認が再送されたとき', () => {
       requestId: 'req-1',
       kind: 'permission' as const,
       summary: 'Bash の実行許可: ls',
+      askedAt: '2026-08-01T00:00:00.000Z',
     };
 
     send(ask);

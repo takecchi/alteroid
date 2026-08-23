@@ -30,6 +30,7 @@ import type {
   RunnerProfileFingerprint,
   RunnerRegistry,
   RunnerRevisionStatus,
+  RunnerWaiting,
 } from './runner-protocol.js';
 import { brief } from './runner.js';
 import type {
@@ -134,8 +135,16 @@ export interface ManagerSummary {
    * **1本のマネージャーが同時に複数を待つことがある。** 1回のアシスタント応答で
    * 並列に呼ばれた道具は、それぞれ別の確認として同時に降りてくる。だから配列で持ち、
    * 回答は `requestId` で宛先を指定する。
+   *
+   * **`kind`（`'question'` / `'permission'`）も運ぶ（#334）。** 画面が質問と
+   * 実行許可を区別して出し分けるための材料——種別は runner 側で既に決まって
+   * いる（`RunnerWaiting` と同じ形）。
+   *
+   * **`askedAt` も同じく運ぶ。** 「runner がこの確認を受け取った時刻」1つに
+   * 意味を固定してある（`RunnerWaiting.askedAt` の doc）。人間が見たとき、
+   * 5分前の確認か4時間前の確認かで打つ手が変わる（#323）。
    */
-  waiting: { requestId: string; summary: string }[];
+  waiting: RunnerWaiting[];
 }
 
 /**
@@ -519,7 +528,7 @@ type ResumeOutcome =
 /** デーモン側が持つ1マネージャーの像（正本は JobStore）。 */
 interface ManagerRecord {
   job: Job;
-  waiting: { requestId: string; summary: string }[];
+  waiting: RunnerWaiting[];
   /** runner に生きたセッションがあるか。無ければ send のときに resume する。 */
   attached: boolean;
   /**
@@ -2368,7 +2377,19 @@ class Pool implements ManagerPool {
         if (asked.has(event.requestId)) return;
         asked.set(event.requestId, true);
 
-        record.waiting.push({ requestId: event.requestId, summary: event.summary });
+        record.waiting.push({
+          requestId: event.requestId,
+          summary: event.summary,
+          kind: event.kind,
+          // **`askedAt` はここでは optional（`runnerEventSchema` の `ask` の
+          // doc）。取れなければキーごと書かない** — `askedAt: undefined` を
+          // 書くと JSON を通っても同じ形にはならないが、この境界を跨がない
+          // 経路（同一プロセスのテスト・後段のオブジェクト比較）で意味が
+          // ぶれるのを避ける。デーモン側で `new Date().toISOString()` は
+          // 呼ばない（値の意味が経路によって変わる。`AGENTS.md`「取れない
+          // 軸に0の行を作る」）。
+          ...(event.askedAt === undefined ? {} : { askedAt: event.askedAt }),
+        });
         record.job.status = 'waiting_human';
         await this.#persist(record);
         await this.#journal({

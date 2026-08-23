@@ -7,12 +7,14 @@ import {
   renderManagerList,
   renderReport,
   renderReportLine,
+  renderWaitingList,
   runSlashCommand,
   type Listed,
 } from './chat.js';
 import { captureStdout } from './test-support.js';
 
 type ManagerListItem = Parameters<typeof renderManagerList>[0][number];
+type ManagerWaitingItem = ManagerListItem['waiting'][number];
 
 function manager(over: Partial<ManagerListItem> = {}): ManagerListItem {
   return {
@@ -26,6 +28,38 @@ function manager(over: Partial<ManagerListItem> = {}): ManagerListItem {
     waiting: [],
     ...over,
   };
+}
+
+function waitingItem(over: Partial<ManagerWaitingItem> = {}): ManagerWaitingItem {
+  return {
+    requestId: 'req-1',
+    summary: 'これを消してよいか',
+    kind: 'permission',
+    askedAt: '2026-08-20T00:00:00.000Z',
+    ...over,
+  };
+}
+
+/**
+ * 版のずれの窓（新しいデーモンが、畳まれつつある旧 runner の `/managers` へ
+ * 問い合わせる間）を模した、`kind` も `askedAt` も持たない待ち。
+ *
+ * **いまの型はまだ両方を必須としている。** 緩める変更（`kind?` / `askedAt?`）は
+ * `packages/core` / `apps/daemon` 側で別の作業者が別コミットとして入れる
+ * （このコミット単独では apps/cli しか触っていない）。型が緩むまでの間も
+ * 表示側の歯を先に書けるよう、**`Partial<ManagerWaitingItem>` から
+ * `ManagerWaitingItem` への1段の `as`** で緩めている（何を緩めたかが型の
+ * 名前から読める。`as unknown as` や `as any` は使わない）。実行時の形は
+ * 緩んだ後の型と同じ（`kind` / `askedAt` が無い1件）で、型が緩んだ後も
+ * このキャストはそのまま要らなくなるだけで壊れない。
+ */
+function legacyWaiting(over: Partial<ManagerWaitingItem> = {}): ManagerWaitingItem {
+  const base: Partial<ManagerWaitingItem> = {
+    requestId: 'req-legacy',
+    summary: '版ずれの窓からの確認',
+    ...over,
+  };
+  return base as ManagerWaitingItem;
 }
 
 describe('renderManagerList', () => {
@@ -51,7 +85,14 @@ describe('renderManagerList', () => {
     const text = renderManagerList([
       manager({
         denials: [{ tool: 'Bash', count: 1 }],
-        waiting: [{ requestId: 'req-1', summary: 'これを消してよいか' }],
+        waiting: [
+          {
+            requestId: 'req-1',
+            summary: 'これを消してよいか',
+            kind: 'permission',
+            askedAt: '2026-08-01T00:00:00.000Z',
+          },
+        ],
       }),
     ]);
 
@@ -60,6 +101,57 @@ describe('renderManagerList', () => {
     const waiting = text.indexOf('返事待ち');
     expect(header).toBeLessThan(denial);
     expect(denial).toBeLessThan(waiting);
+  });
+
+  /**
+   * 種別が読めないと、人間は `/reply` と `/allow` のどちらを打つべきか
+   * 分からない（#336、依頼者コメント）。`askedAt` が無いと「5分前か4時間前か」
+   * で手が変わるのに判断できない（#323）。
+   */
+  it('待ちの行に kind（質問／実行許可）と askedAt（絶対時刻）を出す', () => {
+    const question = renderManagerList([
+      manager({
+        waiting: [waitingItem({ kind: 'question', askedAt: '2026-08-20T01:02:03.000Z' })],
+      }),
+    ]);
+    const permission = renderManagerList([
+      manager({ waiting: [waitingItem({ kind: 'permission' })] }),
+    ]);
+
+    expect(question).toContain('質問');
+    expect(question).toContain('2026-08-20T01:02:03.000Z');
+    expect(permission).toContain('実行許可');
+  });
+
+  /**
+   * 相対表現（「4時間前」）を CLI で作らない（`AGENTS.md`「時刻の扱い」）。
+   * ISO をそのまま出すので、TZ を固定しなくても落ちない歯になる。
+   */
+  it('askedAt は ISO をそのまま出し、相対表現を作らない', () => {
+    const text = renderManagerList([
+      manager({ waiting: [waitingItem({ askedAt: '2026-08-20T01:02:03.000Z' })] }),
+    ]);
+
+    expect(text).toContain('2026-08-20T01:02:03.000Z');
+    expect(text).not.toMatch(/時間前|分前|日前/);
+  });
+
+  /**
+   * **版のずれの窓でも人間の手が残ること。** 新しいデーモンが、畳まれつつ
+   * ある旧 runner の `/managers` へ問い合わせる窓があり、そちらの応答には
+   * `kind` も `askedAt` も乗らない（`railway/README.md`）。落ちない・行は出る・
+   * 「実行許可」と決めつけない・時刻欄は出さない、の4点を測る。
+   */
+  it('kind も askedAt も無い待ちが混じっていても落ちず、種別不明として出す', () => {
+    const text = renderManagerList([manager({ waiting: [legacyWaiting()] })]);
+
+    expect(text).toContain('返事待ち');
+    expect(text).toContain('種別不明');
+    // 分からないものを「実行許可」と決めつけない。
+    expect(text).not.toContain('実行許可');
+    expect(text).not.toContain('質問');
+    // 取れない軸に空文字や `-` の行を作らない — `確認:` の欄そのものを出さない。
+    expect(text).not.toContain('確認:');
   });
 
   it('拒否がゼロなら何も足さない（0 件だったとは言わない）', () => {
@@ -255,6 +347,49 @@ describe('renderManagerList', () => {
       expect(text).not.toContain('⚠');
       expect(text).toContain('直近の報告: スキーマまで書いた');
     });
+  });
+});
+
+/**
+ * `/waiting` の表示。番号と (managerId, requestId) の対応をここで一緒に
+ * 作って返す（`renderCommitments` と同じ形 — 表示側と `/reply` 側で別々に
+ * 並べ直すと、ずれた瞬間に人間が見ていない確認へ答えることになる）。
+ */
+describe('renderWaitingList', () => {
+  it('番号と (managerId, requestId) を同じ順で作る', () => {
+    const { text, entries } = renderWaitingList([
+      manager({ managerId: 'mgr-a', waiting: [waitingItem({ requestId: 'req-a' })] }),
+      manager({ managerId: 'mgr-b', waiting: [waitingItem({ requestId: 'req-b' })] }),
+    ]);
+
+    expect(entries).toEqual([
+      { managerId: 'mgr-a', requestId: 'req-a' },
+      { managerId: 'mgr-b', requestId: 'req-b' },
+    ]);
+    expect(text.indexOf('[1]')).toBeLessThan(text.indexOf('[2]'));
+  });
+
+  it('待ちが無ければ、そう言う（entries は空）', () => {
+    const { text, entries } = renderWaitingList([manager({ waiting: [] })]);
+
+    expect(entries).toEqual([]);
+    expect(text).toContain('返事待ちのマネージャーはいません');
+  });
+
+  /**
+   * **版のずれの窓でも落ちない。** `kind` も `askedAt` も無い待ちが混じって
+   * いても、行は出る・番号は振られる・「実行許可」と決めつけない。
+   */
+  it('kind も askedAt も無い待ちが混じっていても落ちず、種別不明として出す', () => {
+    const { text, entries } = renderWaitingList([
+      manager({ managerId: 'mgr-legacy', waiting: [legacyWaiting()] }),
+    ]);
+
+    expect(entries).toEqual([{ managerId: 'mgr-legacy', requestId: 'req-legacy' }]);
+    expect(text).toContain('[1]');
+    expect(text).toContain('種別不明');
+    expect(text).not.toContain('実行許可');
+    expect(text).not.toContain('確認:');
   });
 });
 
@@ -462,6 +597,16 @@ function stubClient(
     memoryDocuments?: MemoryDocLike[];
     /** `GET /journal` が返す一覧。既定は空。 */
     journalEntries?: JournalEntryLike[];
+    /** `GET /managers` が返す一覧。既定は空（`/managers` `/waiting` `/reply` 等が使う）。 */
+    managers?: ManagerListItem[];
+    /** `POST /managers/:id/messages` の応答コード。既定は 200。 */
+    messagesStatus?: number;
+    /** `POST /managers/:id/messages` の応答本体。既定は `delivered`。 */
+    messagesBody?: unknown;
+    /** `GET /managers/:id/transcript` の応答コード。既定は 200。 */
+    transcriptStatus?: number;
+    /** `GET /managers/:id/transcript` の応答本体（生テキスト）。既定は空文字。 */
+    transcriptBody?: string;
   } = {},
 ) {
   const calls: { route: string; args: unknown }[] = [];
@@ -473,6 +618,10 @@ function stubClient(
 
   const client = {
     managers: {
+      $get: (args: unknown) => {
+        calls.push({ route: 'GET /managers', args });
+        return Promise.resolve(reply(200, { managers: options.managers ?? [] }));
+      },
       ':id': {
         $delete: (args: unknown) => {
           calls.push({ route: 'DELETE /managers/:id', args });
@@ -482,6 +631,28 @@ function stubClient(
               options.abortBody ?? { outcome: 'stopped', detail: 'mgr-1 を止めた' },
             ),
           );
+        },
+        messages: {
+          $post: (args: unknown) => {
+            calls.push({ route: 'POST /managers/:id/messages', args });
+            return Promise.resolve(
+              reply(
+                options.messagesStatus ?? 200,
+                options.messagesBody ?? { outcome: 'delivered', detail: '追加指示として届けた。' },
+              ),
+            );
+          },
+        },
+        transcript: {
+          $get: (args: unknown) => {
+            calls.push({ route: 'GET /managers/:id/transcript', args });
+            const status = options.transcriptStatus ?? 200;
+            return Promise.resolve({
+              ok: status >= 200 && status < 300,
+              status,
+              text: () => Promise.resolve(options.transcriptBody ?? ''),
+            });
+          },
         },
       },
     },
@@ -576,7 +747,7 @@ function defaultAnswerResults(
 }
 
 function emptyListed(): Listed {
-  return { approvals: [], commitments: [], conversations: [] };
+  return { approvals: [], commitments: [], conversations: [], managers: [], waiting: [] };
 }
 
 afterEach(() => {
@@ -857,7 +1028,13 @@ describe('chat の台帳コマンド', () => {
   it('/done は承認待ちの番号を掴まない（覚え場所が別であること）', async () => {
     const read = captureStdout();
     const { calls, client } = stubClient();
-    const listed: Listed = { approvals: ['approval-1'], commitments: [], conversations: [] };
+    const listed: Listed = {
+      approvals: ['approval-1'],
+      commitments: [],
+      conversations: [],
+      managers: [],
+      waiting: [],
+    };
 
     await runSlashCommand('/done 1', client, listed);
 
@@ -889,7 +1066,7 @@ describe('chat の台帳コマンド', () => {
  */
 describe('chat の /answers（まとめて答える）', () => {
   function listedApprovals(ids: string[]): Listed {
-    return { approvals: ids, commitments: [], conversations: [] };
+    return { approvals: ids, commitments: [], conversations: [], managers: [], waiting: [] };
   }
 
   it('複数件を1回の POST /approvals/answer にまとめて送る', async () => {
@@ -1285,6 +1462,22 @@ describe('chat の /stop', () => {
 
     expect(read()).toContain('/stop ');
   });
+
+  /**
+   * `/managers` の番号でも指せる（#336）。既存の「id を直接書く」使い方
+   * （上のテスト群）は壊していないことも、この block 全体が裏取りしている。
+   */
+  it('/managers の番号でも指せる（既存の id 直書きは壊れていない）', async () => {
+    const { calls, client } = stubClient();
+    const listed: Listed = { ...emptyListed(), managers: ['mgr-a', 'mgr-b'] };
+    captureStdout();
+
+    await runSlashCommand('/stop 2', client, listed);
+
+    expect(calls).toEqual([
+      { route: 'DELETE /managers/:id', args: { param: { id: 'mgr-b' }, json: {} } },
+    ]);
+  });
 });
 
 /**
@@ -1416,6 +1609,8 @@ describe('chat の /conversations と /conversation', () => {
       approvals: ['approval-1'],
       commitments: ['cmt-1'],
       conversations: [],
+      managers: [],
+      waiting: [],
     };
 
     await runSlashCommand('/conversation 1', client, listed);
@@ -1516,6 +1711,369 @@ describe('chat の /conversations と /conversation', () => {
     const text = read();
     expect(text).toContain('/conversations');
     expect(text).toContain('/conversation <番号|id>');
+  });
+});
+
+/**
+ * `/managers` の一覧に番号を振る（#336）。`/manager` `/stop` `/msg` がこの
+ * 並びを引く。`/waiting` の並びとは独立の連番であること（`Listed` を
+ * `managers` / `waiting` の別フィールドに分けた理由そのもの）も、ここと
+ * `/reply` の該当テストの両方で裏取りする。
+ */
+describe('chat の /managers（番号付き一覧）', () => {
+  it('一覧に番号を振り、listed.managers を積む', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      managers: [manager({ managerId: 'mgr-a' }), manager({ managerId: 'mgr-b' })],
+    });
+    const listed = emptyListed();
+
+    await runSlashCommand('/managers', client, listed);
+
+    const text = read();
+    expect(text).toContain('[1] mgr-a');
+    expect(text).toContain('[2] mgr-b');
+    expect(listed.managers).toEqual(['mgr-a', 'mgr-b']);
+  });
+
+  /**
+   * **`/managers` の番号は `/waiting` の番号と混ざらない。** `listed.managers`
+   * に値が在っても、`/reply` `/allow` `/deny` はそれを見ない（`listed.waiting`
+   * だけを引く）——1本にまとめていたら、ここでマネージャーの id が requestId
+   * として送られてしまう。
+   */
+  it('/managers の直後に /reply 1 を打っても、マネージャーの id が requestId として使われない', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient();
+    const listed: Listed = { ...emptyListed(), managers: ['mgr-a', 'mgr-b'] };
+
+    await runSlashCommand('/reply 1 わかりました', client, listed);
+
+    expect(calls.filter((call) => call.route === 'POST /managers/:id/messages')).toEqual([]);
+    expect(read()).toContain('/waiting の一覧にありません');
+  });
+
+  /**
+   * 上のテストは `listed` を直接組み立てるので、`/managers` の実装（番号を
+   * 振る側）を1バイトも通らない——番号の置き場を混ぜる変異を `/managers` の
+   * 中に仕込んでも、このテストだけでは検出できない（実測、変異試験で確認
+   * 済み）。**`/managers` を実際に呼んで、その結果 `listed.waiting` が
+   * 触られていないことまで確かめる。**
+   */
+  it('/managers を実際に呼んでも、listed.waiting は書き換わらない', async () => {
+    captureStdout();
+    const { client } = stubClient({
+      managers: [manager({ managerId: 'mgr-a' }), manager({ managerId: 'mgr-b' })],
+    });
+    const listed = emptyListed();
+
+    await runSlashCommand('/managers', client, listed);
+
+    expect(listed.waiting).toEqual([]);
+  });
+});
+
+/**
+ * マネージャーの返事待ち一覧。`/approvals` のマネージャー版（#336）。
+ */
+describe('chat の /waiting', () => {
+  it('複数マネージャーの待ちを1つの連番にし、kind と askedAt を出す', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      managers: [
+        manager({
+          managerId: 'mgr-a',
+          waiting: [
+            waitingItem({
+              requestId: 'req-a',
+              kind: 'question',
+              askedAt: '2026-08-20T01:00:00.000Z',
+              summary: '質問A',
+            }),
+          ],
+        }),
+        manager({
+          managerId: 'mgr-b',
+          waiting: [waitingItem({ requestId: 'req-b', kind: 'permission', summary: '許可B' })],
+        }),
+      ],
+    });
+    const listed = emptyListed();
+
+    await runSlashCommand('/waiting', client, listed);
+
+    const text = read();
+    expect(text).toContain('[1]');
+    expect(text).toContain('[2]');
+    expect(text).toContain('質問');
+    expect(text).toContain('実行許可');
+    expect(text).toContain('2026-08-20T01:00:00.000Z');
+    expect(listed.waiting).toEqual([
+      { managerId: 'mgr-a', requestId: 'req-a' },
+      { managerId: 'mgr-b', requestId: 'req-b' },
+    ]);
+  });
+
+  it('返事待ちが無ければ、そう言う', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({ managers: [manager({ waiting: [] })] });
+
+    await runSlashCommand('/waiting', client, emptyListed());
+
+    expect(read()).toContain('返事待ちのマネージャーはいません');
+  });
+
+  /**
+   * **版のずれの窓でも人間の手が残ること。** `kind` も `askedAt` も持たない
+   * 待ちが混じっていても、番号は振られ、その番号で `/reply` が答えられる。
+   */
+  it('kind も askedAt も無い待ちにも番号が振られ、/reply で答えられる', async () => {
+    const { calls, client } = stubClient({
+      managers: [manager({ managerId: 'mgr-legacy', waiting: [legacyWaiting()] })],
+    });
+    const listed = emptyListed();
+    captureStdout();
+
+    await runSlashCommand('/waiting', client, listed);
+    expect(listed.waiting).toEqual([{ managerId: 'mgr-legacy', requestId: 'req-legacy' }]);
+
+    await runSlashCommand('/reply 1 了解しました', client, listed);
+    const sent = calls.find((call) => call.route === 'POST /managers/:id/messages');
+    expect(sent?.args).toEqual({
+      param: { id: 'mgr-legacy' },
+      json: { text: '了解しました', requestId: 'req-legacy' },
+    });
+  });
+});
+
+/**
+ * 追加指示。**質問への回答（`/reply`）とは別のコマンドである。**
+ *
+ * `requestId` も `decision` も付けない——これが無いと、マネージャーが確認を
+ * 待っているときに追加指示が回答として消費されてしまい、#313 と同じ形の
+ * 穴が CLI に開く（`packages/core/src/manager.ts` の `send` の doc）。
+ */
+describe('chat の /msg（追加指示）', () => {
+  it('requestId も decision も送らない', async () => {
+    const { calls, client } = stubClient();
+    const listed: Listed = { ...emptyListed(), managers: ['mgr-a'] };
+    captureStdout();
+
+    await runSlashCommand('/msg 1 明日までに終わらせて', client, listed);
+
+    expect(calls).toEqual([
+      {
+        route: 'POST /managers/:id/messages',
+        args: { param: { id: 'mgr-a' }, json: { text: '明日までに終わらせて' } },
+      },
+    ]);
+  });
+
+  it('/managers の番号でも id 直書きでも指せる', async () => {
+    const { calls, client } = stubClient();
+    captureStdout();
+
+    await runSlashCommand('/msg mgr-raw 直接 id を書いた', client, emptyListed());
+
+    expect(calls[0]?.args).toEqual({
+      param: { id: 'mgr-raw' },
+      json: { text: '直接 id を書いた' },
+    });
+  });
+
+  it('本文が無ければ何も送らず、使い方を出す', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand('/msg 1', client, emptyListed());
+
+    expect(calls).toEqual([]);
+    expect(read()).toContain('使い方: /msg');
+  });
+});
+
+/**
+ * マネージャーの質問（`AskUserQuestion`）に、人間が自分の言葉で答える。
+ * `requestId` だけを添え、`decision` は付けない（質問には許可/拒否の意思が
+ * 無い——`apps/web` の `QuestionWaitingRow` と同じ約束）。
+ */
+describe('chat の /reply（質問への回答）', () => {
+  it('requestId を添えて送り、decision を送らない', async () => {
+    const { calls, client } = stubClient();
+    const listed: Listed = {
+      ...emptyListed(),
+      waiting: [{ managerId: 'mgr-a', requestId: 'req-1' }],
+    };
+    captureStdout();
+
+    await runSlashCommand('/reply 1 明日で大丈夫です', client, listed);
+
+    expect(calls).toEqual([
+      {
+        route: 'POST /managers/:id/messages',
+        args: {
+          param: { id: 'mgr-a' },
+          json: { text: '明日で大丈夫です', requestId: 'req-1' },
+        },
+      },
+    ]);
+  });
+
+  it('/waiting を先に打っていなくても、生の requestId で宛先を引ける', async () => {
+    const { calls, client } = stubClient({
+      managers: [manager({ managerId: 'mgr-z', waiting: [waitingItem({ requestId: 'req-z' })] })],
+    });
+    const listed = emptyListed();
+    captureStdout();
+
+    await runSlashCommand('/reply req-z 了解です', client, listed);
+
+    const sent = calls.find((call) => call.route === 'POST /managers/:id/messages');
+    expect(sent?.args).toEqual({
+      param: { id: 'mgr-z' },
+      json: { text: '了解です', requestId: 'req-z' },
+    });
+    expect(calls.some((call) => call.route === 'GET /managers')).toBe(true);
+  });
+
+  /**
+   * **推測しない。** 同じ `requestId` を複数のマネージャーが持つことは、
+   * `requestId` が SDK 側の識別子である以上、原理的には否定できない
+   * （`AGENTS.md`「踏みやすい地雷」）。見つかったものが2件以上なら、
+   * どちらへも送らず両方の `managerId` を出す。
+   */
+  it('同じ requestId を2本のマネージャーが待っていたら、どちらへも送らない', async () => {
+    const { calls, client } = stubClient({
+      managers: [
+        manager({ managerId: 'mgr-a', waiting: [waitingItem({ requestId: 'req-dup' })] }),
+        manager({ managerId: 'mgr-b', waiting: [waitingItem({ requestId: 'req-dup' })] }),
+      ],
+    });
+    const listed = emptyListed();
+    const read = captureStdout();
+
+    await runSlashCommand('/reply req-dup 許可します', client, listed);
+
+    expect(calls.filter((call) => call.route === 'POST /managers/:id/messages')).toEqual([]);
+    const text = read();
+    expect(text).toContain('mgr-a');
+    expect(text).toContain('mgr-b');
+  });
+
+  it('待っているマネージャーが居なければ、そう言う（推測しない）', async () => {
+    const { calls, client } = stubClient({ managers: [] });
+    const read = captureStdout();
+
+    await runSlashCommand('/reply req-none 了解', client, emptyListed());
+
+    expect(calls.filter((call) => call.route === 'POST /managers/:id/messages')).toEqual([]);
+    expect(read()).toContain('待っているマネージャーは居ません');
+  });
+});
+
+/**
+ * 実行許可の確認に答える。`decision`（`allow`/`deny`）を添える点が `/reply`
+ * との違いで、`/reply` `/allow` `/deny` は宛先の解決（`/waiting` の番号・
+ * 生の requestId）を共有している。
+ */
+describe('chat の /allow /deny（実行許可への回答）', () => {
+  it('/allow は decision: allow を、理由省略時は既定の文言で送る', async () => {
+    const { calls, client } = stubClient();
+    const listed: Listed = {
+      ...emptyListed(),
+      waiting: [{ managerId: 'mgr-a', requestId: 'req-1' }],
+    };
+    captureStdout();
+
+    await runSlashCommand('/allow 1', client, listed);
+
+    expect(calls).toEqual([
+      {
+        route: 'POST /managers/:id/messages',
+        args: {
+          param: { id: 'mgr-a' },
+          json: { text: '許可する', requestId: 'req-1', decision: 'allow' },
+        },
+      },
+    ]);
+  });
+
+  it('/deny は decision: deny を、書いた理由をそのまま添えて送る', async () => {
+    const { calls, client } = stubClient();
+    const listed: Listed = {
+      ...emptyListed(),
+      waiting: [{ managerId: 'mgr-a', requestId: 'req-1' }],
+    };
+    captureStdout();
+
+    await runSlashCommand('/deny 1 危険な操作なので', client, listed);
+
+    expect(calls).toEqual([
+      {
+        route: 'POST /managers/:id/messages',
+        args: {
+          param: { id: 'mgr-a' },
+          json: { text: '危険な操作なので', requestId: 'req-1', decision: 'deny' },
+        },
+      },
+    ]);
+  });
+
+  /**
+   * **宛先を書かずに decision だけ送る形。** `managerId` は URL が要求する
+   * ので完全な省略はできないが、CLI 側で候補を絞らない——返事待ちの
+   * マネージャーが1本だけなら、その1本へ decision だけを渡す（requestId は
+   * 付けない。デーモンの `#choosePending` がその1本の中で解く）。
+   */
+  it('引数なしで、返事待ちが1本だけなら decision だけを送る（requestId は付けない）', async () => {
+    const { calls, client } = stubClient({
+      managers: [
+        manager({ managerId: 'mgr-solo', waiting: [waitingItem({ requestId: 'req-solo' })] }),
+      ],
+    });
+    const listed = emptyListed();
+    captureStdout();
+
+    await runSlashCommand('/allow', client, listed);
+
+    expect(calls.filter((call) => call.route === 'POST /managers/:id/messages')).toEqual([
+      {
+        route: 'POST /managers/:id/messages',
+        args: { param: { id: 'mgr-solo' }, json: { text: '許可する', decision: 'allow' } },
+      },
+    ]);
+  });
+
+  it('引数なしで返事待ちのマネージャーが2本以上なら、どちらへも送らない', async () => {
+    const { calls, client } = stubClient({
+      managers: [
+        manager({ managerId: 'mgr-a', waiting: [waitingItem({ requestId: 'req-a' })] }),
+        manager({ managerId: 'mgr-b', waiting: [waitingItem({ requestId: 'req-b' })] }),
+      ],
+    });
+    const listed = emptyListed();
+    const read = captureStdout();
+
+    await runSlashCommand('/allow', client, listed);
+
+    expect(calls.filter((call) => call.route === 'POST /managers/:id/messages')).toEqual([]);
+    const text = read();
+    expect(text).toContain('mgr-a');
+    expect(text).toContain('mgr-b');
+  });
+
+  it('/help に /msg /reply /allow /deny /waiting が載っている（隠れた口を作らない）', async () => {
+    const read = captureStdout();
+    const { client } = stubClient();
+
+    await runSlashCommand('/help', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain('/msg ');
+    expect(text).toContain('/reply ');
+    expect(text).toContain('/allow ');
+    expect(text).toContain('/deny');
+    expect(text).toContain('/waiting');
   });
 });
 

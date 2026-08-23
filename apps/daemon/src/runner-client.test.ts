@@ -587,6 +587,116 @@ describe('デーモン ↔ manager-runner（HTTP 境界）', () => {
 });
 
 /**
+ * **旧 runner への問い合わせ（版のずれ。`railway/README.md`「4. 落ちた側を
+ * 待つ / 取り直す」）が `list()` から要素を消さないこと。**
+ *
+ * runner とデーモンは別の Railway Service で、別々にデプロイされる。
+ * `drainingSeconds` の猶予中、畳まれつつある旧 runner は `/health` にも
+ * `/managers` にも答え続け、起動時の引き取りがそれを見て「生きている」と
+ * 判断した直後に SSE が新しい器へ繋がる、という順序が普通に起きる。**その窓
+ * の `/managers` 応答には `kind` も `askedAt` も乗らない**（この2つを足す前の
+ * runner の応答そのもの）。
+ *
+ * `kind`/`askedAt` を必須のままにすると、`runnerManagerStateSchema.safeParse`
+ * がこの形を「読めない」と判定し、`list()` は `flatMap` で要素ごと黙って
+ * 捨てる（跡が残らない）。すると `manager.ts` の `alive.has(job.id)` が偽に
+ * なり、`record.waiting = []` で待っていた確認まで捨てられ、**返事待ちの
+ * マネージャーだけ**が起こし直される——#334 が足した `kind`/`askedAt` 自身が
+ * 作りかけていた退行である。
+ */
+describe('旧 runner への問い合わせ（kind / askedAt を持たない /managers 応答）', () => {
+  /** `/health` には普通に答え、`/managers` だけ旧い形で返す偽 runner。 */
+  function fetchLegacyManagers(): typeof fetch {
+    return (async (input: string | URL | Request) => {
+      const path = new URL(typeof input === 'string' ? input : input.toString()).pathname;
+      if (path === '/health') {
+        return Response.json({ runnerId: 'runner-legacy', workspacePath: '/workspace' });
+      }
+      if (path === '/managers') {
+        return Response.json({
+          managers: [
+            {
+              managerId: 'mgr-legacy',
+              status: 'waiting_human',
+              cwd: '/workspace/mgr-legacy',
+              request: '古い runner からの引き継ぎ',
+              // **`kind` も `askedAt` も無い** — `drainingSeconds` の猶予中の
+              // 旧 runner の応答そのもの（この2つを足す前の版）。
+              waiting: [{ requestId: 'req-legacy', summary: '許可してよいか' }],
+            },
+          ],
+        });
+      }
+      throw new Error(`このテストの偽 runner が想定していないパス: ${path}`);
+    }) as typeof fetch;
+  }
+
+  it('kind / askedAt を持たない waiting も list() から捨てられない', async () => {
+    const client = await createHttpRunner({
+      baseUrl: 'http://legacy.test',
+      token: TOKEN,
+      fetchFn: fetchLegacyManagers(),
+    });
+
+    const managers = await client.list();
+
+    // **本題はここ。** `safeParse` が落ちて `flatMap` で要素ごと消えていたら
+    // ここが空配列になる（跡も残らない）。
+    expect(managers).toHaveLength(1);
+    const manager = managers.find((m) => m.managerId === 'mgr-legacy');
+    expect(manager?.waiting).toHaveLength(1);
+    expect(manager?.waiting[0]?.requestId).toBe('req-legacy');
+    expect(manager?.waiting[0]?.summary).toBe('許可してよいか');
+    // **欠けた2つを、デーモン側の既定値で埋めていないこと。** `askedAt` を
+    // 「取れなければいま」で埋めると、値の意味が経路によって変わる
+    // （`AGENTS.md`「取れない軸に0の行を作る」）。
+    expect(manager?.waiting[0]?.kind).toBeUndefined();
+    expect(manager?.waiting[0]?.askedAt).toBeUndefined();
+  });
+
+  it('kind / askedAt を持つ通常の waiting は今までどおり値ごと届く（回帰なし）', async () => {
+    const fetchFn = (async (input: string | URL | Request) => {
+      const path = new URL(typeof input === 'string' ? input : input.toString()).pathname;
+      if (path === '/health') {
+        return Response.json({ runnerId: 'runner-current', workspacePath: '/workspace' });
+      }
+      if (path === '/managers') {
+        return Response.json({
+          managers: [
+            {
+              managerId: 'mgr-current',
+              status: 'waiting_human',
+              cwd: '/workspace/mgr-current',
+              request: 'いまの runner からの引き継ぎ',
+              waiting: [
+                {
+                  requestId: 'req-current',
+                  summary: '許可してよいか',
+                  kind: 'permission',
+                  askedAt: '2026-08-24T00:00:00.000Z',
+                },
+              ],
+            },
+          ],
+        });
+      }
+      throw new Error(`このテストの偽 runner が想定していないパス: ${path}`);
+    }) as typeof fetch;
+
+    const client = await createHttpRunner({
+      baseUrl: 'http://current.test',
+      token: TOKEN,
+      fetchFn,
+    });
+
+    const managers = await client.list();
+    const manager = managers.find((m) => m.managerId === 'mgr-current');
+    expect(manager?.waiting[0]?.kind).toBe('permission');
+    expect(manager?.waiting[0]?.askedAt).toBe('2026-08-24T00:00:00.000Z');
+  });
+});
+
+/**
  * 配置の材料が HTTP の境界を渡ること（roadmap M5 / PR3）。
  *
  * 資源の値そのものは器によって違うので**値では見ない**（cgroup の読み方は

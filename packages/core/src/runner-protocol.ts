@@ -53,10 +53,51 @@ const isoDateTime = z.string().datetime({ offset: true });
  * のテストは（`input` がキーとして残っていたので）その間ずっと緑のままだった。
  */
 
-/** 1つの確認（許可確認 / 質問）。runner 側で1件だけが返事を待って止まる。 */
+/**
+ * 確認の種別。**質問（`AskUserQuestion`）か実行許可か**を運ぶ。
+ *
+ * runner 側で決まる（`RunnerSession#onPermission` の `kind`）。`ask` イベント
+ * （下）が既にこの値を運んでいるが、`state()` が返す `waiting`（`runnerWaitingSchema`）
+ * には運んでいなかった——デーモン再起動後の引き取り（`manager.ts` の
+ * `#restoreJobs`）はこちらを通るため、そこだけ種別が消える形になっていた（#334）。
+ * 定義を1箇所にして、両方が同じ2値を指すようにする。
+ */
+export const waitingKindSchema = z.enum(['question', 'permission']);
+
+export type WaitingKind = z.infer<typeof waitingKindSchema>;
+
+/**
+ * 1つの確認（許可確認 / 質問）。runner 側で1件だけが返事を待って止まる。
+ *
+ * **`kind` と `askedAt` はどちらも `.optional()`。** runner とデーモンは別の
+ * Railway Service で、別々にデプロイされる。`drainingSeconds` の猶予の間、
+ * 畳まれつつある旧 runner は `/health` にも `/managers` にも答え続け、起動時
+ * の引き取りがそれを見て「生きている」と判断した直後に SSE が新しい器へ
+ * 繋がる、という順序が普通に起きる（`railway/README.md`「4. 落ちた側を待つ /
+ * 取り直す」）。その窓では旧 runner の `/managers` 応答にこの2つが乗らない。
+ *
+ * **必須のままだと `runner-client.ts` の `RunnerHttpClient#list()` が
+ * `safeParse` に落ち、`flatMap` で要素ごと黙って捨てる。** すると
+ * `manager.ts` の `alive.has(job.id)` が偽になり、`record.waiting = []` で
+ * 待っていた確認まで捨てられて、返事待ちのマネージャーだけが起こし直される
+ * ——`kind`/`askedAt` を足した本来の目的が、それ自身の必須化で壊れる形に
+ * なっていた。**欠けたまま運ぶ。デーモン側で既定値は作らない**
+ * （`AGENTS.md`「取れない軸に0の行を作る」——`askedAt` を「取れなければいま」
+ * で埋めると、値の意味が経路によって変わってしまう）。
+ */
 export const runnerWaitingSchema = z.object({
   requestId: z.string(),
   summary: z.string(),
+  kind: waitingKindSchema.optional(),
+  /**
+   * **runner がこの確認を SDK から受け取った時刻**（ISO8601, UTC）。
+   *
+   * 「回答が来た時刻」でも「デーモンが知った時刻」でもない——値の持ち主は
+   * `RunnerSession#onPermission`（`runner.ts`）が確認を組み立てる、その
+   * 1箇所だけである（#334。#323 の「報告が何時間も遅れても人間には分から
+   * ない」を、待ちの側にも塞ぐ材料）。
+   */
+  askedAt: isoDateTime.optional(),
 });
 
 export type RunnerWaiting = z.infer<typeof runnerWaitingSchema>;
@@ -564,8 +605,21 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     type: z.literal('ask'),
     managerId: z.string(),
     requestId: z.string(),
-    kind: z.enum(['question', 'permission']),
+    /**
+     * **`kind` はここでは元から必須（旧 runner もこの版のときから送っていた）。
+     * 触らない。** optional にすべきなのは `runnerWaitingSchema`（`state()` が
+     * 返す方）と、この `ask` イベントの `askedAt` の2つだけである
+     * （`waitingKindSchema` の doc）。
+     */
+    kind: waitingKindSchema,
     summary: z.string(),
+    /**
+     * `runnerWaitingSchema.askedAt` と同じ意味・同じ値（#334）。**こちらは
+     * `runnerWaitingSchema` と同じ理由（版のずれ）で `.optional()`** ——
+     * `kind` と違い、この欄自体がこの PR で新しく足されたものなので、旧
+     * runner の応答には最初から乗らない。
+     */
+    askedAt: isoDateTime.optional(),
   }),
   /** 確認が解けた（回答・中断・停止）。デーモン側の待ち行列から外す合図。 */
   z.object({ type: z.literal('settled'), managerId: z.string(), requestId: z.string() }),

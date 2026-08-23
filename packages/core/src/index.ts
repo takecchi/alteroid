@@ -379,6 +379,7 @@ export {
   runnerSetProfileCommandSchema,
   runnerStartCommandSchema,
   runnerWaitingSchema,
+  waitingKindSchema,
   type RunnerAnswerCommand,
   type RunnerClient,
   type RunnerCredentialFingerprint,
@@ -400,6 +401,7 @@ export {
   type RunnerSetProfileCommand,
   type RunnerStartCommand,
   type RunnerWaiting,
+  type WaitingKind,
 } from './runner-protocol.js';
 /**
  * 実行環境の資源の読み方（cgroup v2）。**`os` モジュールで代用しないこと**
