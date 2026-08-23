@@ -348,13 +348,11 @@ describe('詳細でも、`lastReport` は `lastFailure` の有無で描き方を
       status: 'done',
       lastFailure: FAILURE,
       lastReport:
-        "（このターンは応答を返さずに終わった: billing_error / assistant_error）\n" +
+        '（このターンは応答を返さずに終わった: billing_error / assistant_error）\n' +
         "You've hit your org's monthly spend limit for the API. To keep going, **increase your limit** in the console.",
     });
 
-    const body = await screen.findByText(
-      /You've hit your org's monthly spend limit for the API\./,
-    );
+    const body = await screen.findByText(/You've hit your org's monthly spend limit for the API\./);
     expect(body.textContent).toContain('**increase your limit**');
     expect(body.closest('strong')).toBeNull();
   });
