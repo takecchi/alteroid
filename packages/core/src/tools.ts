@@ -2154,7 +2154,7 @@ export function createCloneTools(context: ToolContext) {
      * ごとに取れるようになった（`apps/daemon/src/runner-client.ts` の
      * `resources()`）が、それを読むには `ManagerPool.runners({ resources: true })`
      * を呼ぶ必要がある。**この一覧（`runner_list` ではなく `manager_list`）から
-     * 毎回それを呼ぶと、`runners()` の doc（`manager.ts:392` 付近）が守っている
+     * 毎回それを呼ぶと、`runners()` の doc（`ManagerPool.runners` の JSDoc）が守っている
      * 「既定では `resources()` を呼ばない＝この一覧のためにネットワーク往復を
      * 足さない」を、`manager_list` 側から実質的に破ることになる**——
      * `runner_list` の `resources: true` はクローンが明示的に選ぶ opt-in だが、
