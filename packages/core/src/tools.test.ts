@@ -1426,6 +1426,555 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * `memory_outline`（読むだけ）と `memory_section_move`（節を別の文書へ移す）
+   * ——#318 案 (b)。
+   *
+   * **この2本の存在理由は「本文がツール呼び出しにも応答にも一度も現れない」
+   * ことである。** だからここで測るのも、文言の一致ではなくその性質のほうで
+   * ある——目印の文字列が応答に出ないこと、frontmatter が1バイトも動かない
+   * こと、断ったときに**両方の文書が1文字も変わっていない**こと。
+   *
+   * **`toBe(original)` で丸ごと比べる。** 「断り文が出た」だけを測ると、
+   * 断ってから書いてしまう実装がそのまま生存する。
+   */
+  describe('memory_outline / memory_section_move（本文を出さずに節を移す。#318 案 (b)）', () => {
+    async function markHuman(h: Harness, slug: string, content: string): Promise<void> {
+      await h.stores.persona.write(slug, content);
+      await h.stores.persona.markHumanTouched(slug, new Date().toISOString());
+    }
+
+    /** 目印。応答にも呼び出しにも出てはいけない本文（`memory_delete` の歯と同じ形）。 */
+    const SECRET = 'SECRET-XYZ-999';
+
+    const source = [
+      '---',
+      'description: 私について',
+      'type: premise',
+      '---',
+      '# 私について',
+      '芯である。',
+      '',
+      '## 事例',
+      `${SECRET} を含む事例の本文である。`,
+      '',
+      '### だから',
+      '子の節である。',
+      '',
+      '## 次',
+      '残る節である。',
+      '',
+    ].join('\n');
+
+    /** `memory_outline` の出力から節id を引く（本物の経路を通す）。 */
+    async function outlineId(h: Harness, slug: string, heading: string): Promise<string> {
+      const outline = await h.call('memory_outline', { slug });
+      for (const line of outline.split('\n')) {
+        const match = /^\s*\[([0-9a-f]{8}-[0-9a-f]{8})\] (.+?) — /.exec(line);
+        if (match && match[2] === heading) return match[1] as string;
+      }
+      throw new Error(`節 ${heading} が目次に無い:\n${outline}`);
+    }
+
+    async function seed(h: Harness, slug = 'about-me', content = source): Promise<void> {
+      await h.call('memory_write', { slug, content, summary: '作成' });
+    }
+
+    describe('memory_outline（読むだけ）', () => {
+      it('本文を1文字も返さない／frontmatter の行を1つも出さない', async () => {
+        const h = harness();
+        await seed(h);
+
+        const outline = await h.call('memory_outline', { slug: 'about-me' });
+
+        expect(outline).not.toContain(SECRET);
+        expect(outline).not.toContain('芯である');
+        expect(outline).not.toContain('description:');
+        expect(outline).not.toContain('type: premise');
+        // 出るのは節id・見出し行・文字数だけ。
+        expect(outline).toContain('# 私について');
+        expect(outline).toContain('## 事例');
+        expect(outline).toMatch(/\[[0-9a-f]{8}-[0-9a-f]{8}\]/);
+        expect(outline).toMatch(/— \d+ 文字/);
+      });
+
+      it('存在しない slug には、そう返す（黙って空の目次を返さない）', async () => {
+        const h = harness();
+
+        expect(await h.call('memory_outline', { slug: 'nope' })).toContain('存在しない');
+      });
+
+      it('malformed な文書でも目次は返すが、移動は断られると書く（能力を消さず、理由を見せる）', async () => {
+        const h = harness();
+        await seed(h, 'broken', '---\ndescription: 閉じが無い\n# 見出し\n本文\n');
+
+        const outline = await h.call('memory_outline', { slug: 'broken' });
+
+        expect(outline).toContain('malformed');
+        expect(outline).toContain('memory_section_move');
+      });
+    });
+
+    describe('移せたとき', () => {
+      it('節が移し先の末尾へ足され、出どころから消える。移し先が無ければ作る', async () => {
+        const h = harness();
+        await seed(h);
+        const id = await outlineId(h, 'about-me', '## 事例');
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'about-me',
+          section: id,
+          toSlug: 'about-me-appendix',
+          summary: '事例を付録へ移した',
+        });
+
+        const from = await h.stores.persona.read('about-me');
+        const to = await h.stores.persona.read('about-me-appendix');
+        expect(from?.content).not.toContain(SECRET);
+        expect(from?.content).not.toContain('## 事例');
+        expect(to?.content).toContain('## 事例');
+        expect(to?.content).toContain(SECRET);
+        // 入れ子の子（### だから）は親と一緒に動く。
+        expect(from?.content).not.toContain('### だから');
+        expect(to?.content).toContain('### だから');
+        // 動かしていない節は残る。
+        expect(from?.content).toContain('## 次');
+        expect(reply).toContain('移した');
+      });
+
+      /**
+       * **frontmatter は添字で運ばれるだけで一度も書き直されない。** だから
+       * キーの順序も余分な空白も、1バイトも動かない
+       * （`applyMemoryFrontmatterPatch` は `description` → `type` → `parent`
+       * の順に正規化する。こちらはそれすら起きない）。
+       */
+      it('出どころの frontmatter がバイト同一である（キーの順序・空白も含めて）', async () => {
+        const h = harness();
+        const odd = ['---', 'type:  premise', 'description:   私について', '---', '# A', '本文', '', '# B', '本文', ''].join(
+          '\n',
+        );
+        await seed(h, 'odd', odd);
+        const header = odd.slice(0, odd.indexOf('# A'));
+        const id = await outlineId(h, 'odd', '# A');
+
+        await h.call('memory_section_move', {
+          fromSlug: 'odd',
+          section: id,
+          toSlug: 'odd-appendix',
+          summary: '移した',
+        });
+
+        const from = await h.stores.persona.read('odd');
+        expect(from?.content.slice(0, header.length)).toBe(header);
+      });
+
+      it('コードフェンスの中の見出しを境界にしないので、移した後もフェンスの開閉が揃う', async () => {
+        const h = harness();
+        const fenced = [
+          '# ログ',
+          '',
+          '## 例',
+          '```sh',
+          '## これは見出しではない',
+          'echo hi',
+          '```',
+          '本文E',
+          '',
+          '## 次',
+          '本文F',
+          '',
+        ].join('\n');
+        await seed(h, 'log', fenced);
+        const id = await outlineId(h, 'log', '## 例');
+
+        await h.call('memory_section_move', {
+          fromSlug: 'log',
+          section: id,
+          toSlug: 'log-appendix',
+          summary: '移した',
+        });
+
+        const from = await h.stores.persona.read('log');
+        const to = await h.stores.persona.read('log-appendix');
+        // 片方だけ残っていない＝どちらの文書もフェンスが偶数個である。
+        expect((from?.content.match(/^```/gm) ?? []).length).toBe(0);
+        expect((to?.content.match(/^```/gm) ?? []).length).toBe(2);
+        expect(from?.content).toContain('## 次');
+      });
+
+      /**
+       * **⭐ この道具の存在理由そのものを測る歯。** 本文が応答に出れば、
+       * 呼び出しを 0 文字にした意味が消える（文脈へ入ってしまう）。
+       * `memory_delete` の「削除の日誌に本文が写っていない」と同じ形である。
+       */
+      it('⭐ 応答に古い本文が1文字も出ない（名指しするのは見出しと節id だけ）', async () => {
+        const h = harness();
+        await seed(h);
+        const id = await outlineId(h, 'about-me', '## 事例');
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'about-me',
+          section: id,
+          toSlug: 'about-me-appendix',
+          summary: '移した',
+        });
+
+        expect(reply).not.toContain(SECRET);
+        expect(reply).not.toContain('子の節である');
+        // 呼び手が「意図した節か」を確かめられるだけの名指しはする。
+        expect(reply).toContain('## 事例');
+        expect(reply).toContain(id);
+      });
+
+      it('両方の文書について差分の要約が出る', async () => {
+        const h = harness();
+        await seed(h);
+        const id = await outlineId(h, 'about-me', '## 事例');
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'about-me',
+          section: id,
+          toSlug: 'about-me-appendix',
+          summary: '移した',
+        });
+
+        expect(reply).toContain('移した先 about-me-appendix');
+        expect(reply).toContain('新規作成');
+        expect(reply).toContain('出どころ about-me');
+        // 出どころ側は減った文字数が符号つきで出る。
+        expect(reply).toMatch(/→ [\d,]+ 文字（-[\d,]+）/);
+      });
+
+      it('日誌に move_in / move_out が2件、bytesBefore / bytesAfter つきで載る', async () => {
+        const h = harness();
+        await seed(h);
+        const id = await outlineId(h, 'about-me', '## 事例');
+        const before = (await h.stores.persona.read('about-me'))?.content as string;
+
+        await h.call('memory_section_move', {
+          fromSlug: 'about-me',
+          section: id,
+          toSlug: 'about-me-appendix',
+          summary: '事例を付録へ移した',
+        });
+
+        const entries = await h.stores.journal.list({ types: ['memory_update'] });
+        const moveOut = entries.find((entry) => 'action' in entry && entry.action === 'move_out');
+        const moveIn = entries.find((entry) => 'action' in entry && entry.action === 'move_in');
+        expect(moveOut).toMatchObject({
+          slug: 'about-me',
+          cause: 'clone',
+          bytesBefore: Buffer.byteLength(before, 'utf8'),
+        });
+        expect(moveIn).toMatchObject({ slug: 'about-me-appendix', cause: 'clone', bytesBefore: 0 });
+        // 減った側・増えた側が、推測ではなく action の値そのもので分かる。
+        expect((moveOut as { bytesAfter: number }).bytesAfter).toBeLessThan(
+          Buffer.byteLength(before, 'utf8'),
+        );
+        expect((moveIn as { bytesAfter: number }).bytesAfter).toBeGreaterThan(0);
+        // 本文は日誌へ写さない。
+        for (const entry of entries) expect(JSON.stringify(entry)).not.toContain(SECRET);
+      });
+    });
+
+    describe('断るとき（どの断りでも、from も to も1文字も変わらない）', () => {
+      it('from と to が同じ slug なら断る', async () => {
+        const h = harness();
+        await seed(h);
+        const original = (await h.stores.persona.read('about-me'))?.content as string;
+        const id = await outlineId(h, 'about-me', '## 事例');
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'about-me',
+          section: id,
+          toSlug: 'about-me',
+          summary: '移した',
+        });
+
+        expect(reply).toContain('同じ文書');
+        expect((await h.stores.persona.read('about-me'))?.content).toBe(original);
+      });
+
+      it('存在しない文書には断る（何も作らない）', async () => {
+        const h = harness();
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'nope',
+          section: 'deadbeef-cafebabe',
+          toSlug: 'somewhere',
+          summary: '移した',
+        });
+
+        expect(reply).toContain('存在しない');
+        expect(await h.stores.persona.read('somewhere')).toBeNull();
+      });
+
+      it('frontmatter が malformed なら断る（本文の始まりが決まらないので運べない）', async () => {
+        const h = harness();
+        const broken = '---\ndescription: 閉じが無い\n# 見出し\n本文\n';
+        await seed(h, 'broken', broken);
+        const original = (await h.stores.persona.read('broken'))?.content as string;
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'broken',
+          section: 'deadbeef-cafebabe',
+          toSlug: 'elsewhere',
+          summary: '移した',
+        });
+
+        expect(reply).toContain('malformed');
+        expect((await h.stores.persona.read('broken'))?.content).toBe(original);
+        expect(await h.stores.persona.read('elsewhere')).toBeNull();
+      });
+
+      /**
+       * **⭐ 版の照合（当たり）。** 目次を読んでから移すまでの間に、その節が
+       * 書き換えられていたら断る＝楽観的排他そのものである。
+       */
+      it('⭐ 対象の節を外から書き換えてから同じ節id で呼ぶと、断られて1文字も変わらない', async () => {
+        const h = harness();
+        await seed(h);
+        const id = await outlineId(h, 'about-me', '## 事例');
+
+        // 目次を読んだ後、誰か（人間・別の走行）が同じ節を書き換えた。
+        await h.stores.persona.write('about-me', source.replace('事例の本文である', '事例の本文を直した'));
+        const original = (await h.stores.persona.read('about-me'))?.content as string;
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'about-me',
+          section: id,
+          toSlug: 'about-me-appendix',
+          summary: '移した',
+        });
+
+        expect(reply).toContain('古い');
+        expect((await h.stores.persona.read('about-me'))?.content).toBe(original);
+        expect(await h.stores.persona.read('about-me-appendix')).toBeNull();
+      });
+
+      /**
+       * **⭐ 誤検出しない。** 文書全体のハッシュを ETag にする形との決定的な
+       * 違いがここである——無関係な節が動いただけで断られるなら、この道具は
+       * 使えない。
+       */
+      it('⭐ 別の節を外から書き換えてから同じ節id で呼ぶと、通る（無関係な変更で断らない）', async () => {
+        const h = harness();
+        await seed(h);
+        const id = await outlineId(h, 'about-me', '## 事例');
+
+        // 目次を読んだ後、**別の**節が書き換えられた。
+        await h.stores.persona.write('about-me', source.replace('残る節である', '残る節を直した'));
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'about-me',
+          section: id,
+          toSlug: 'about-me-appendix',
+          summary: '移した',
+        });
+
+        expect(reply).toContain('移した');
+        expect((await h.stores.persona.read('about-me-appendix'))?.content).toContain(SECRET);
+      });
+
+      /**
+       * **⭐ 2つの断りを畳まない。** 「打ち間違い」と「誰かが書き換えた」は
+       * 疑う先が違う。畳むと、いちばん重い後者が前者に見える。
+       */
+      it('⭐ 「そんな id は無い」と「その id は古い」で文言が違う', async () => {
+        const h = harness();
+        await seed(h);
+        const id = await outlineId(h, 'about-me', '## 事例');
+        const staleId = `${id.split('-')[0]}-00000000`;
+        const original = (await h.stores.persona.read('about-me'))?.content as string;
+
+        const absent = await h.call('memory_section_move', {
+          fromSlug: 'about-me',
+          section: 'deadbeef-cafebabe',
+          toSlug: 'appendix',
+          summary: '移した',
+        });
+        const stale = await h.call('memory_section_move', {
+          fromSlug: 'about-me',
+          section: staleId,
+          toSlug: 'appendix',
+          summary: '移した',
+        });
+
+        expect(absent).not.toBe(stale);
+        expect(absent).toContain('打ち間違い');
+        expect(absent).not.toContain('書き換えている');
+        expect(stale).toContain('古い');
+        expect(stale).toContain('書き換えている');
+        expect(stale).toContain('memory_outline');
+        // どちらでも何も書いていない。
+        expect((await h.stores.persona.read('about-me'))?.content).toBe(original);
+        expect(await h.stores.persona.read('appendix')).toBeNull();
+      });
+
+      /**
+       * **⭐ 曖昧なら「どちらか」を選ばずに断る。** 黙って一方を選ぶと、
+       * 消えた側を後から観測する手段が無い。
+       */
+      it('⭐ 中身まで同一の節が2つある文書では、その節id を断る（1文字も変わらない）', async () => {
+        const h = harness();
+        const dup = '# A\n本文\n\n# A\n本文\n\n# B\n終わり\n';
+        await seed(h, 'dup', dup);
+        const outline = await h.call('memory_outline', { slug: 'dup' });
+        const id = (/\[([0-9a-f]{8}-[0-9a-f]{8})\] # A/.exec(outline) as RegExpExecArray)[1] as string;
+        const original = (await h.stores.persona.read('dup'))?.content as string;
+
+        // 目次の側でも、その id では動かせないと分かる。
+        expect(outline).toContain('この id では動かせない');
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'dup',
+          section: id,
+          toSlug: 'dup-appendix',
+          summary: '移した',
+        });
+
+        expect(reply).toContain('2 箇所');
+        expect(reply).toContain('選ばずに断る');
+        expect((await h.stores.persona.read('dup'))?.content).toBe(original);
+        expect(await h.stores.persona.read('dup-appendix')).toBeNull();
+      });
+    });
+
+    describe('human guard — guardFullReplace をそのまま通す（出どころにだけ掛ける）', () => {
+      it('⭐ 蒸留の走行からは human 文書の節を移せない。from も to も1文字も変わらない', async () => {
+        const h = harness();
+        await markHuman(h, 'about-me', source);
+        const id = await outlineId(h, 'about-me', '## 事例');
+        h.setMemoryCause('distill');
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'about-me',
+          section: id,
+          toSlug: 'about-me-appendix',
+          summary: '移したつもり',
+        });
+
+        expect(reply).toContain('断った');
+        // 断り文が出たことだけを測らない（断ってから書いてしまう実装が生存する）。
+        expect((await h.stores.persona.read('about-me'))?.content).toBe(source);
+        expect(await h.stores.persona.read('about-me-appendix')).toBeNull();
+      });
+
+      it('断りの応答の4つ目は「追記なら移し先へ写せるが、出どころからは消せない」と言う', async () => {
+        const h = harness();
+        await markHuman(h, 'about-me', source);
+        const id = await outlineId(h, 'about-me', '## 事例');
+        h.setMemoryCause('distill');
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'about-me',
+          section: id,
+          toSlug: 'about-me-appendix',
+          summary: '移したつもり',
+        });
+
+        // (1) なぜ断ったか (2) どうすれば通るか (3) 何も失われていない (4) 代わり
+        expect(reply).toContain('人間の書き込みの履歴が在る');
+        expect(reply).toContain('ask_human');
+        expect(reply).toMatch(/変わっていない|残っている/);
+        expect(reply).toContain('memory_append');
+        expect(reply).toContain('2箇所に残る');
+      });
+
+      it('対照 — clone-only の文書なら distill からも通る（検出器が非0を出せること）', async () => {
+        const h = harness();
+        await seed(h);
+        expect(await h.stores.persona.protectionStatus('about-me')).toEqual({ kind: 'clone-only' });
+        const id = await outlineId(h, 'about-me', '## 事例');
+        h.setMemoryCause('distill');
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'about-me',
+          section: id,
+          toSlug: 'about-me-appendix',
+          summary: '移した',
+        });
+
+        expect(reply).toContain('移した');
+      });
+
+      it('対照 — 会話の中（clone）なら human 印の文書でも通る（能力を消していない）', async () => {
+        const h = harness();
+        await markHuman(h, 'about-me', source);
+        const id = await outlineId(h, 'about-me', '## 事例');
+        h.setMemoryCause('clone');
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'about-me',
+          section: id,
+          toSlug: 'about-me-appendix',
+          summary: '移した',
+        });
+
+        expect(reply).toContain('移した');
+        expect((await h.stores.persona.read('about-me-appendix'))?.content).toContain('## 事例');
+      });
+
+      /**
+       * **移した先には歯を掛けない**（追記なので。`memory_append` が
+       * `guardFullReplace` を通らないのと同じ線）。
+       */
+      it('移し先が human 印でも、蒸留の走行から足せる（歯は出どころにだけ掛かる）', async () => {
+        const h = harness();
+        await seed(h);
+        await markHuman(h, 'appendix', '# 付録\n人間が書いた\n');
+        const id = await outlineId(h, 'about-me', '## 事例');
+        h.setMemoryCause('distill');
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'about-me',
+          section: id,
+          toSlug: 'appendix',
+          summary: '移した',
+        });
+
+        expect(reply).toContain('移した');
+        expect((await h.stores.persona.read('appendix'))?.content).toContain('人間が書いた');
+        expect((await h.stores.persona.read('appendix'))?.content).toContain('## 事例');
+      });
+    });
+
+    /**
+     * **⭐ 順序は「先に足して、後で消す」。** `PersonaStore` に2文書をまたぐ
+     * トランザクションは無いので、途中で落ちる可能性は消せない——消せるのは
+     * **どちらへ倒れるか**だけである。
+     */
+    it('⭐ 移し先への追記が済んだ後に出どころの書き込みが落ちても、重複が残るだけで失われない', async () => {
+      const h = harness();
+      await seed(h);
+      const id = await outlineId(h, 'about-me', '## 事例');
+      const original = (await h.stores.persona.read('about-me'))?.content as string;
+
+      // **出どころへの書き込みだけを落とす。** 移し先への追記
+      // （`append` は内部で `write` を呼ぶ）は通す必要があるので、slug で分ける。
+      const realWrite = h.stores.persona.write.bind(h.stores.persona);
+      h.stores.persona.write = async (slug: string, content: string) => {
+        if (slug === 'about-me') throw new Error('ストアが落ちた');
+        return realWrite(slug, content);
+      };
+
+      const reply = await h.call('memory_section_move', {
+        fromSlug: 'about-me',
+        section: id,
+        toSlug: 'about-me-appendix',
+        summary: '移した',
+      });
+
+      // 出どころは1文字も変わっていない＝節は失われていない。
+      expect((await h.stores.persona.read('about-me'))?.content).toBe(original);
+      // 移し先には既に在る＝重複している。
+      expect((await h.stores.persona.read('about-me-appendix'))?.content).toContain('## 事例');
+      // **そのことを名乗る。**「移した」とだけ返すと、呼び手は重複に気づけない。
+      expect(reply).toContain('重複');
+      expect(reply).toContain('失われてはいない');
+    });
+  });
+
+  /**
    * 記憶の human guard（PR「人間が一度でも書いた記憶を、統合の走行が黙って壊せない
    * ようにする」）。
    *

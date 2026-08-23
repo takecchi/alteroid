@@ -9,18 +9,25 @@ import {
   assertNeverMemoryFrontmatterState,
   assertNeverMemoryProtectionStatus,
   containsMemoryFrontmatterLineBreak,
+  cutMemorySection,
   deriveMemoryCreatedAtFromJournal,
   deriveMemoryFrontmatter,
   describeMemoryProtectionStatus,
+  describeMemoryWriteDiff,
   isKnownMemoryDocKind,
+  lookupMemorySection,
+  memoryBodyStart,
   memoryProtectionAllowsFullReplace,
+  memorySectionId,
   nextDescribedAt,
   parseMemoryFrontmatter,
   renderMemoryDocument,
   renderMemoryDocuments,
   renderMemoryListing,
+  renderMemoryOutline,
   resolveMemoryDescriptionFreshness,
   resolveMemoryDocKind,
+  scanMemorySections,
   type MemoryPart,
 } from './memory.js';
 import type { JournalEntry, MemoryDescriptionFreshness, MemoryProtectionStatus } from './schema.js';
@@ -941,5 +948,422 @@ describe('renderMemoryListing — `memory_list` 用の一覧。全区分を対�
     const listing = renderMemoryListing(docs(3));
 
     expect(listing).not.toMatch(/件は省略/);
+  });
+});
+
+/**
+ * 節（section）の走査・節id・切り取り・目次（#318 案 (b)）。
+ *
+ * **ここで測るのは純粋関数だけである。** ストア（3実装）を通す性質は
+ * `tools.test.ts` の側に置く——節の切り分けそのものは `content` から
+ * `content` への関数なので、器を替えても答えは変わらない。
+ */
+describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）', () => {
+  const withFrontmatter = [
+    '---',
+    'description: 私について',
+    'type: premise',
+    '---',
+    '前書きである（節ではない）。',
+    '',
+    '# 私について',
+    '本文A',
+    '',
+    '## 経歴',
+    '本文B',
+    '',
+    '### だから',
+    '本文C',
+    '',
+    '#### さらに',
+    '本文D',
+    '',
+    '## 例',
+    '本文E',
+    '',
+  ].join('\n');
+
+  const headingsOf = (content: string): string[] =>
+    scanMemorySections(content).sections.map((section) => section.heading);
+
+  it('frontmatter は節ではない（本文の始まりより前を1つも節にしない）', () => {
+    const scan = scanMemorySections(withFrontmatter);
+
+    expect(scan.bodyStart).toBe(memoryBodyStart(withFrontmatter));
+    // frontmatter の3行はどの節にも入らない。
+    for (const section of scan.sections) expect(section.start).toBeGreaterThanOrEqual(scan.bodyStart);
+    expect(headingsOf(withFrontmatter)).toEqual([
+      '# 私について',
+      '## 経歴',
+      '### だから',
+      '#### さらに',
+      '## 例',
+    ]);
+  });
+
+  it('最初の見出しより前の前書きは節ではない（指す値が発行されない）', () => {
+    const scan = scanMemorySections(withFrontmatter);
+    const first = scan.sections[0];
+
+    expect(first?.heading).toBe('# 私について');
+    // 前書き（「前書きである（節ではない）。」）は最初の節の外に在る。
+    expect(withFrontmatter.slice(scan.bodyStart, first?.start)).toContain('前書きである');
+    for (const section of scan.sections) {
+      expect(withFrontmatter.slice(section.start, section.end)).not.toContain('前書きである');
+    }
+  });
+
+  /**
+   * 節の範囲（子込み）。**「同じ深さ以下」を「同じ深さ」に狭めると壊れる。**
+   * `###` の節が次の `##` で終わらなくなり、子でないものを子として運ぶ。
+   */
+  it('節は「同じ深さ以下の次の見出しの直前」で終わる（### は次の ## で終わり、次の #### では終わらない）', () => {
+    const sections = scanMemorySections(withFrontmatter).sections;
+    const dakara = sections.find((section) => section.heading === '### だから');
+    const body = withFrontmatter.slice(dakara?.start, dakara?.end);
+
+    // `#### さらに` は子なので含む（次の #### では終わらない）。
+    expect(body).toContain('#### さらに');
+    expect(body).toContain('本文D');
+    // `## 例` は同じ深さ以下なので、その直前で終わる。
+    expect(body).not.toContain('## 例');
+    expect(body).not.toContain('本文E');
+  });
+
+  it('各節の文字数は子込みである（移したときに動く量が、呼ぶ前に分かる）', () => {
+    const sections = scanMemorySections(withFrontmatter).sections;
+    const keireki = sections.find((section) => section.heading === '## 経歴');
+    const dakara = sections.find((section) => section.heading === '### だから');
+    const sarani = sections.find((section) => section.heading === '#### さらに');
+
+    expect(keireki?.chars).toBe((keireki?.end ?? 0) - (keireki?.start ?? 0));
+    // 親の文字数は子を含む（子の分を足し合わせるのではなく、包含関係で測る
+    // ——子の子を二重に数えないため）。
+    expect(keireki?.chars).toBeGreaterThan(dakara?.chars ?? 0);
+    expect(dakara?.chars).toBeGreaterThan(sarani?.chars ?? 0);
+  });
+
+  describe('節id は「指し先」であると同時に「版の照合」である', () => {
+    it('中身が変われば id が変わる（＝読んだ後の書き換えを検出できる）', () => {
+      const before = scanMemorySections(withFrontmatter).sections.find(
+        (section) => section.heading === '## 例',
+      );
+      const after = scanMemorySections(withFrontmatter.replace('本文E', '本文E（直した）')).sections.find(
+        (section) => section.heading === '## 例',
+      );
+
+      expect(before?.id).not.toBe(after?.id);
+    });
+
+    /**
+     * **文書全体のハッシュを ETag にする形との決定的な違いがここである。**
+     * 無関係な節が動いただけで断られるようになると、この道具は使えなくなる。
+     */
+    it('他の節が変わっても id は変わらない（無関係な変更で誤検出しない）', () => {
+      const before = scanMemorySections(withFrontmatter).sections.find(
+        (section) => section.heading === '## 例',
+      );
+      const after = scanMemorySections(withFrontmatter.replace('本文A', '本文A（別の節を直した）')).sections.find(
+        (section) => section.heading === '## 例',
+      );
+
+      expect(after?.id).toBe(before?.id);
+    });
+
+    /**
+     * **例外を1つ、仕様として固定する。** 節の範囲は子を含むので、子を
+     * 動かすと親の中身が実際に変わる＝親の id も変わる。正しい振る舞い
+     * だが呼び手は驚くので、`memorySectionId` の doc に書いてある。
+     */
+    it('入れ子の子を移すと、親の id は変わる（子は親の中身だから）', () => {
+      const scan = scanMemorySections(withFrontmatter);
+      const parentBefore = scan.sections.find((section) => section.heading === '### だから');
+      const child = scan.sections.find((section) => section.heading === '#### さらに');
+      const { nextContent } = cutMemorySection(withFrontmatter, child as never);
+      const parentAfter = scanMemorySections(nextContent).sections.find(
+        (section) => section.heading === '### だから',
+      );
+
+      expect(parentAfter).toBeDefined();
+      expect(parentAfter?.id).not.toBe(parentBefore?.id);
+    });
+
+    it('見出しが同じで中身も同じ節は、同じ id になる（曖昧さが id に現れる）', () => {
+      // **末尾の空行まで一致させる。** 節の範囲は「次の見出しの直前」までなので、
+      // 最後の節だけ末尾の改行の数が違うと、それだけで別の id になる。
+      const doc = '# A\n本文\n\n# A\n本文\n\n# B\n終わり\n';
+      const [first, second] = scanMemorySections(doc).sections;
+
+      expect(first?.id).toBe(second?.id);
+      expect(lookupMemorySection(scanMemorySections(doc).sections, first?.id as string).kind).toBe(
+        'ambiguous',
+      );
+    });
+
+    it('memorySectionId は「見出しだけのハッシュ」と「見出し＋中身のハッシュ」を繋いだ形である', () => {
+      // 前半は見出しだけで決まるので、中身が変わっても動かない。
+      const a = memorySectionId('## 経歴', '本文B\n');
+      const b = memorySectionId('## 経歴', '別の本文\n');
+      const c = memorySectionId('## 別の見出し', '本文B\n');
+
+      expect(a.split('-')[0]).toBe(b.split('-')[0]);
+      expect(a.split('-')[1]).not.toBe(b.split('-')[1]);
+      expect(a.split('-')[0]).not.toBe(c.split('-')[0]);
+    });
+  });
+
+  describe('lookupMemorySection は「無い」と「古い」を畳まない', () => {
+    const sections = () => scanMemorySections(withFrontmatter).sections;
+
+    it('その id の節が在れば found', () => {
+      const target = sections().find((section) => section.heading === '## 経歴');
+
+      expect(lookupMemorySection(sections(), target?.id as string)).toMatchObject({
+        kind: 'found',
+      });
+    });
+
+    it('見出しが一致するが中身のハッシュが違うなら stale（誰かが書き換えた）', () => {
+      const target = sections().find((section) => section.heading === '## 経歴');
+      const stale = `${(target?.id as string).split('-')[0]}-00000000`;
+
+      expect(lookupMemorySection(sections(), stale)).toMatchObject({ kind: 'stale' });
+    });
+
+    it('見出しごと一致しないなら absent（打ち間違い・別の文書）', () => {
+      expect(lookupMemorySection(sections(), 'deadbeef-cafebabe')).toMatchObject({
+        kind: 'absent',
+      });
+    });
+  });
+
+  /**
+   * ⚠️⚠️ **走査が2本であることを、意図として固定する歯。**
+   *
+   * 同じ文書に対して、片方（差分の要約の検出器 `extractMemoryHeadings`）は
+   * コードフェンスの中の `#` 行を**拾い**、もう片方（節の境界の決定器
+   * `scanMemorySections`）は**拾わない**。
+   *
+   * **食い違いではなく、向きが逆だから2本在る**——検出器は拾いすぎる側
+   * （見落とすと気づく手段が無い）、決定器は拾わない側（拾いすぎると
+   * フェンスが片方だけ残って静かに壊れる）へ倒してある。
+   *
+   * **1つの `it()` で並べて assert しているのは、どちらか片方を「直して」
+   * 1本にまとめようとする変更を、必ずここで止めるためである。**
+   * `extractMemoryHeadings` は export されていないので、その実際の呼び手
+   * （`describeMemoryWriteDiff`）を通して測る——本物の経路で測るぶん、
+   * 直接呼ぶより強い。
+   */
+  it('走査は2本である: 差分の要約はフェンスの中の見出しを拾い、節の境界は拾わない', () => {
+    const fenced = ['# ログ', '', '## 例', '```sh', '## これは見出しではない', 'echo hi', '```', '本文', ''].join(
+      '\n',
+    );
+
+    // (1) 節の境界の決定器 — フェンスの中の `##` を節にしない。
+    expect(headingsOf(fenced)).toEqual(['# ログ', '## 例']);
+
+    // (2) 差分の要約の検出器 — フェンスの中の `##` を見出しとして数える
+    //     （だからフェンスごと消すと「消えた見出し」として名指しされる）。
+    const withoutFence = ['# ログ', '', '## 例', '本文', ''].join('\n');
+    expect(describeMemoryWriteDiff(fenced, withoutFence)).toContain('## これは見出しではない');
+  });
+
+  it('コードフェンスの中の見出しを節の境界にしないので、移した後もフェンスの開閉が揃う', () => {
+    const fenced = [
+      '# ログ',
+      '',
+      '## 例',
+      '```sh',
+      '## これは見出しではない',
+      'echo hi',
+      '```',
+      '本文E',
+      '',
+      '## 次',
+      '本文F',
+      '',
+    ].join('\n');
+    const target = scanMemorySections(fenced).sections.find((section) => section.heading === '## 例');
+    const { nextContent, cut } = cutMemorySection(fenced, target as never);
+
+    // 切り取った側にフェンスが丸ごと入っている（開きと閉じが同数）。
+    expect((cut.match(/^```/gm) ?? []).length).toBe(2);
+    // 残った側にはフェンスが1つも残っていない（片方だけ残っていない）。
+    expect((nextContent.match(/^```/gm) ?? []).length).toBe(0);
+    expect(nextContent).toContain('## 次');
+    expect(nextContent).not.toContain('echo hi');
+  });
+
+  it('~~~ のフェンスも追う（``` だけを見ていない）', () => {
+    const fenced = ['# ログ', '~~~', '## 中', '~~~', '本文', ''].join('\n');
+
+    expect(headingsOf(fenced)).toEqual(['# ログ']);
+  });
+
+  it('開いたまま閉じないフェンスは、そこから先を全部フェンスの中とみなす（拾わない側へ倒す）', () => {
+    const broken = ['# ログ', '```sh', '## 閉じていない', '本文', ''].join('\n');
+
+    expect(headingsOf(broken)).toEqual(['# ログ']);
+  });
+
+  describe('cutMemorySection は継ぎ足しである（frontmatter を書き直さない）', () => {
+    it('frontmatter のバイト列が1バイトも変わらない（キーの順序も空白も含めて）', () => {
+      // わざとキーの順序を `type` → `description` にし、余分な空白も入れる。
+      const doc = ['---', 'type:  premise', 'description:   私について', '---', '# A', '本文', '', '# B', '本文', ''].join(
+        '\n',
+      );
+      const scan = scanMemorySections(doc);
+      const target = scan.sections.find((section) => section.heading === '# A');
+      const { nextContent } = cutMemorySection(doc, target as never);
+
+      expect(nextContent.slice(0, scan.bodyStart)).toBe(doc.slice(0, scan.bodyStart));
+      expect(nextContent).toContain('type:  premise');
+      expect(nextContent).toContain('description:   私について');
+      expect(nextContent).not.toContain('# A');
+    });
+
+    it('切り取った文字列と残った文字列を繋ぐと、必ず元に戻る（1文字も落とさない・増やさない）', () => {
+      const scan = scanMemorySections(withFrontmatter);
+      for (const section of scan.sections) {
+        const { nextContent, cut } = cutMemorySection(withFrontmatter, section);
+        expect(nextContent.slice(0, section.start) + cut + nextContent.slice(section.start)).toBe(
+          withFrontmatter,
+        );
+      }
+    });
+  });
+
+  it('memoryBodyStart は frontmatterBody（applyMemoryFrontmatterPatch が使う側）と一致する', () => {
+    // 本文の始まりが2つの実装に分かれると、frontmatter を添字で運ぶ側が
+    // 本文の一部を frontmatter として運ぶ形で壊れる。同じ答えであることを固定する。
+    const cases = [
+      '---\ndescription: x\n---\n# A\n本文\n',
+      '---\ndescription: x\n---\n',
+      '---\ndescription: x\n---',
+      '# A\n本文\n',
+      '---\n閉じが無い\n# A\n',
+      '',
+    ];
+    for (const content of cases) {
+      // `applyMemoryFrontmatterPatch` は本文をそのまま後ろへ繋ぎ直すので、
+      // 「本文」の側が食い違えば必ずこの等式が破れる。
+      const patched = parseMemoryFrontmatter(content).kind === 'malformed'
+        ? null
+        : applyMemoryFrontmatterPatch(content, {});
+      if (patched !== null) expect(patched.endsWith(content.slice(memoryBodyStart(content)))).toBe(true);
+    }
+  });
+
+  describe('renderMemoryOutline', () => {
+    it('本文を1文字も出さない（出るのは節id・見出し行・文字数だけ）', () => {
+      const doc = ['# 見出し', 'SECRET-XYZ-999', '', '## 子', 'SECRET-XYZ-999', ''].join('\n');
+
+      const outline = renderMemoryOutline(scanMemorySections(doc).sections);
+
+      expect(outline).not.toContain('SECRET-XYZ-999');
+      expect(outline).toContain('# 見出し');
+      expect(outline).toContain('## 子');
+    });
+
+    it('frontmatter の行を1つも出さない', () => {
+      const outline = renderMemoryOutline(scanMemorySections(withFrontmatter).sections);
+
+      expect(outline).not.toContain('description:');
+      expect(outline).not.toContain('type:');
+      expect(outline).not.toContain('---');
+    });
+
+    it('インデントが見出しの深さを表す', () => {
+      const lines = renderMemoryOutline(scanMemorySections(withFrontmatter).sections).split('\n');
+
+      expect(lines[0]).toMatch(/^\[/);
+      expect(lines[1]).toMatch(/^ {2}\[/);
+      expect(lines[2]).toMatch(/^ {4}\[/);
+      expect(lines[3]).toMatch(/^ {6}\[/);
+    });
+
+    it('中身まで同一の節が2つあると、その id の行に「この id では動かせない」と印が出る', () => {
+      const doc = '# A\n本文\n\n# A\n本文\n\n# B\n終わり\n';
+
+      const outline = renderMemoryOutline(scanMemorySections(doc).sections);
+
+      expect(outline.match(/この id では動かせない/g)?.length).toBe(2);
+    });
+
+    it('節が1つも無いなら、そう返す（黙って空を返さない）', () => {
+      expect(renderMemoryOutline(scanMemorySections('前書きだけである。\n').sections)).toContain(
+        '節が1つも無い',
+      );
+    });
+
+    it('件数ではなく文字数の予算で切り、切ったことを必ず言う', () => {
+      const many = Array.from({ length: 400 }, (_, index) => `## 節${index}\n${'あ'.repeat(50)}\n`).join(
+        '\n',
+      );
+
+      const outline = renderMemoryOutline(scanMemorySections(many).sections);
+
+      expect(outline).toMatch(/ほか \d+ 節は省略/);
+      expect(outline).toContain('全 400 件');
+    });
+  });
+});
+
+/**
+ * frontmatter の「乗っ取り」が起こりえないことを、性質として測る（#318 案 (b) の第3層）。
+ *
+ * **⚠️ これは分岐のテストではない。** `memory_section_move` は書き込み前に
+ * 「frontmatter のバイト列が同一か」「`parseMemoryFrontmatter().kind` が
+ * 変わっていないか」を検査して、外れたら何も書かずに断る。**その断りへ到達
+ * する入力を、私は1つも構成できなかった**——節の切り取りは
+ * 「`content.slice(0, section.start)` ＋ `content.slice(section.end)`」で、
+ * `section.start` は必ず `memoryBodyStart` 以上、かつ切り取り後の1行目は
+ * 見出し行（`#` で始まる）か空文字にしかならないからである。
+ *
+ * **だからここで測るのは「検査が鳴ること」ではなく「鳴る入力が無いこと」で
+ * ある。** 検査そのものは、次にここを触る人が継ぎ足しをやめて組み直す形へ
+ * 変えたときのための不変条件であって、いまの実装では死んだ枝である
+ * （PR 本文にもそう書いた。変異試験でもこの枝は生存する）。
+ *
+ * **この形が要る理由は、`memory_section_replace`（作らないと決めた口）との
+ * 差にある。** 置換なら呼び手が任意の文字列を渡すので
+ * 「`---\ndescription: 乗っ取り\n---\n# 見出し`」で最初の節を置き換えると
+ * 無かったはずの frontmatter が生える。**移動には呼び手の文字列が1つも
+ * 無いので、その経路が入力の側に存在しない。**
+ */
+describe('節の切り取りは frontmatter の解釈を変えない（乗っ取りが起こりえない）', () => {
+  const documents = [
+    // frontmatter あり
+    '---\ndescription: x\ntype: premise\n---\n# A\n本文\n\n## B\n本文\n',
+    // frontmatter なし・前書きあり・本文の中に `---` の塊
+    '前書き\n---\ndescription: 乗っ取り\n---\n# A\n本文\n\n# B\n本文\n',
+    // frontmatter なし・最初の節の中に `---` の塊
+    '# A\n本文\n\n---\ndescription: 乗っ取り\n---\n\n# B\n本文\n',
+    // frontmatter あり・本文の1行目が `---` の塊
+    '---\ndescription: x\n---\n---\ndescription: 乗っ取り\n---\n# A\n本文\n',
+    // 節が1つだけ（切ると空文字になる）
+    '# A\n本文\n',
+    '---\ndescription: x\n---\n# A\n本文\n',
+  ];
+
+  it('どの文書のどの節を切り取っても、frontmatter のバイト列も解釈も変わらない', () => {
+    for (const content of documents) {
+      const scan = scanMemorySections(content);
+      const priorKind = parseMemoryFrontmatter(content).kind;
+      for (const section of scan.sections) {
+        const { nextContent } = cutMemorySection(content, section);
+        expect(nextContent.slice(0, scan.bodyStart)).toBe(content.slice(0, scan.bodyStart));
+        expect(parseMemoryFrontmatter(nextContent).kind).toBe(priorKind);
+      }
+    }
+  });
+
+  it('切り取った文字列は必ず見出し行から始まる（移し先の先頭に frontmatter を作れない）', () => {
+    for (const content of documents) {
+      for (const section of scanMemorySections(content).sections) {
+        const { cut } = cutMemorySection(content, section);
+        expect(cut.split('\n')[0]).toMatch(/^#{1,6}\s/);
+      }
+    }
   });
 });

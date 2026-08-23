@@ -752,7 +752,7 @@
                         },
                         "action": {
                           "type": "string",
-                          "enum": ["write", "append", "remove", "describe"]
+                          "enum": ["write", "append", "remove", "describe", "move_in", "move_out"]
                         },
                         "bytesBefore": {
                           "type": "integer",
@@ -1940,7 +1940,14 @@
                               },
                               "action": {
                                 "type": "string",
-                                "enum": ["write", "append", "remove", "describe"]
+                                "enum": [
+                                  "write",
+                                  "append",
+                                  "remove",
+                                  "describe",
+                                  "move_in",
+                                  "move_out"
+                                ]
                               },
                               "bytesBefore": {
                                 "type": "integer",
