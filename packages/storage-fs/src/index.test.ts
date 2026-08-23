@@ -74,6 +74,30 @@ describe('FsPersonaStore', () => {
     expect((await stores.persona.read('log'))?.content).toBe('# ログ\n\n- 追記された学び\n');
   });
 
+  /**
+   * `memory_append` の説明文（`packages/core/src/tools.ts`）は「消えた見出しは
+   * 常に 0 件のはずである」と言い切っている。**その「常に」は、追記が
+   * `before` を行の境界を保ったまま前置きすることにしか依っていない。**
+   *
+   * ここが測るのは fs 実装のその性質である——**末尾に改行が無く、最後の行が
+   * 見出しである文書**（いちばん薄いところ）へ追記して、その見出しが1行として
+   * 残ること。連結が1文字でも詰まると、見出しの行が追記の1行目と融合する。
+   *
+   * **fs はこれを二重に守っている**（`persona.ts`）: `append` が
+   * `ensureTrailingNewline(existing.content)` を通すことと、`#writeNow` が
+   * 書き込みのたびに `ensureTrailingNewline(content)` を通すこと。**片方だけ
+   * 外してもこの歯は落ちない**——落ちないことは「守られていない」ではなく、
+   * もう片方が効いているという意味である（#354 の変異試験で実測した）。
+   */
+  it('末尾の行が見出しの文書へ追記しても、その見出しの行が壊れない', async () => {
+    // 末尾に改行を持たない形で渡す（呼び手の側では正規化しない）。
+    await stores.persona.write('log', '# ログ\n\n## 最後の節');
+    const doc = await stores.persona.append('log', '追記した1行');
+
+    expect(doc.content.split('\n')).toContain('## 最後の節');
+    expect(doc.content).toContain('追記した1行');
+  });
+
   it('同時に追記しても取りこぼさない（蒸留は並行して同じ文書に書く）', async () => {
     await stores.persona.write('log', '# ログ\n');
 

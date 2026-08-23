@@ -929,7 +929,23 @@ export function renderMemoryListing(entries: readonly MemoryListingEntry[]): str
  * そのものがツール呼び出しの中で切れれば、足りない分は静かに失われる。
  * ただし append は既存を消さないので、「消えた見出し」は理屈のうえでは
  * 常に 0 件のはずである——0 件でないなら append の異常（呼び手のバグや
- * ストア側の想定外の挙動）を疑う根拠になる（歯は `tools.test.ts` にある）。
+ * ストア側の想定外の挙動）を疑う根拠になる。
+ *
+ * **この「常に」が何に依っているかを書いておく（#354）。** 依っているのは
+ * 「消さない」ことではなく、**追記が `before` を*行の境界を保ったまま*
+ * 前置きすること**である。`PersonaStore.append` の実装が
+ * `${existing.content}${content}`（あいだに改行を挟まない形）になると、
+ * **末尾の行が見出しだった文書でその見出しが追記の1行目と融合し、消えた
+ * 見出しとして名指しされる**——`tsc` は落ちず、説明文（`memory_append`）
+ * だけが静かに嘘になる。
+ *
+ * **実装は3つ在るので、歯も3つに置いてある**（1つを測って3つとも測った
+ * ことにしない）: `tools.test.ts`（`testing.ts` のインメモリ実装。道具の
+ * 応答まで通す）・`packages/storage-fs/src/index.test.ts`・
+ * `packages/storage-pg/src/index.test.ts`。**fs と pg は書き込みのたびに
+ * 本文を `ensureTrailingNewline` に通すので二重に守られており、`append`
+ * 側の連結だけを壊しても落ちない**（#354 の変異試験で実測した）。
+ * **単一点なのは `testing.ts` のインメモリ実装だけである。**
  *
  * **単位は文字数で統一する**（`content.length`）。日誌の `bytesBefore` /
  * `bytesAfter`（バイト）はそのまま——機械可読な面はバイト、人が読む面は
