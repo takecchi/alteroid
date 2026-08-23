@@ -94,6 +94,11 @@ const testFiles = allFiles.filter((f) => includeGlobs.some((g) => path.matchesGl
  * - フィルタの先に、root の include と一致するファイルが1本も無い（「テストが在る」と
  *   思っている場所が空になっている。vitest 自身は0件で exit 1 になるが、それに気づく前に
  *   別の変更でここが壊れたことは検出できる）
+ *
+ * **この歯が保証するのは「テストが走ること」までで、「走ったテストが何か測っていること」
+ * ではない。** `describe.skip` / `it.skip` で中身を全部飛ばしたファイルは、この歯が見る
+ * 3条件をすべて満たしたまま（`test` script は在る・自分を指す・ファイルも実在する）
+ * exit 0 で緑になる。これは別原因の別穴として #311 に切ってある。
  */
 describe('workspace の test script が同じ穴を開けていないか（#246）', () => {
   it('少なくとも1つの workspace package を見つけている（このテストの前提）', () => {
@@ -134,11 +139,13 @@ describe('workspace の test script が同じ穴を開けていないか（#246�
     (pkgDir) => {
       const pkg = JSON.parse(readFileSync(path.join(ROOT, pkgDir, 'package.json'), 'utf8'));
       const script = pkg.scripts?.test;
-      const match = (script as string | undefined)?.match(TEST_SCRIPT_SHAPE);
+      expect(script, `${pkgDir}/package.json の scripts.test が無い`).toBeTruthy();
+
+      const match = (script as string).match(TEST_SCRIPT_SHAPE);
       expect(
         match,
         `${pkgDir} の test script の形が想定外: ${JSON.stringify(script)}`,
-      ).not.toBeNull();
+      ).toBeTruthy();
 
       const filterPath = match![1];
       const matched = testFiles.filter((f) => f === filterPath || f.startsWith(`${filterPath}/`));
