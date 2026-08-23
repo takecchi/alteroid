@@ -286,9 +286,7 @@ describe('折り返しの付け忘れ（本2）', () => {
  */
 describe('本文を origin で Markdown / 素のテキストへ切り分ける', () => {
   it('起点が自分（self）の本文は Markdown の描画経路を通る', async () => {
-    stubCommitments([
-      commitment({ origin: 'self', body: '## 引き受けた見出し\n\nこれは本文' }),
-    ]);
+    stubCommitments([commitment({ origin: 'self', body: '## 引き受けた見出し\n\nこれは本文' })]);
     renderPage();
 
     expect(await screen.findByRole('heading', { name: '引き受けた見出し' })).toBeTruthy();

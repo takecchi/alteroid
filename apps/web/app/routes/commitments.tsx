@@ -242,9 +242,7 @@ function CommitmentBody({ commitment }: { commitment: Commitment }) {
     const { prefix, rest } = splitManagerPrefix(commitment.body);
     return (
       <div className="min-w-0">
-        {prefix !== null && (
-          <span className="mr-1 font-mono text-[11px] text-muted">{prefix}</span>
-        )}
+        {prefix !== null && <span className="mr-1 font-mono text-[11px] text-muted">{prefix}</span>}
         <Markdown>{rest}</Markdown>
       </div>
     );
