@@ -22,7 +22,8 @@
   ],
   "scripts": {
     "build": "node ./scripts/write-canon.mjs && tsup",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --root=../.. packages/core/src"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "catalog:",

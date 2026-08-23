@@ -415,6 +415,9 @@ export function buildAndCheckArtifact(spec) {
     return { buildSkipped: true, artifactState: 'not-applicable' };
   }
 
+  // #246: pnpm-workspace.yaml に failIfNoMatch: true があるので、spec.target の打ち間違い
+  // （実在しないパッケージ名）は「一致するプロジェクトが無い」として exit 非0 で落ちる。
+  // 以前はここが exit 0（何もビルドされないまま「成功」）に化けていた。
   const result = spawnSync('pnpm', ['--filter', spec.target, 'build'], {
     cwd: ROOT,
     encoding: 'utf8',

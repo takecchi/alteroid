@@ -159,3 +159,32 @@ catalog:
 # 版そのものを上げるのは `.github/workflows/update-claude-sdk.yml`（毎日）。
 minimumReleaseAgeExclude:
   - '@anthropic-ai/claude-agent-sdk*'
+
+# #246: `pnpm --filter <存在しないパッケージ名>` が黙って exit 0 を返す穴を塞ぐ。
+# `test` script の有無とは無関係の別穴（パッケージ名の誤字・コピペミス）で、
+# 実測（2026-08-23T07:3xZ）: `pnpm --filter @alteroid/nope test` は
+# 「No projects matched...」と表示しつつ exit 0 だった。これを立てると exit 1 になる。
+#
+# **置き場所は `.npmrc` ではなくここ（`pnpm-workspace.yaml`）であること。**
+# `.npmrc` に `fail-if-no-match=true` を置いても黙って無視される（実測
+# 2026-08-23T07:36Z, pnpm 11.21.0）:
+#   $ pnpm --filter @alteroid/nope --fail-if-no-match test    → EXIT:1
+#   $ .npmrc に fail-if-no-match=true → 同じコマンド           → EXIT:0（無視される）
+#   $ ここ（pnpm-workspace.yaml）に failIfNoMatch: true → 同じコマンド → EXIT:1（効く）
+# `.npmrc` へ「移したほうが素直」に見えても移さないこと — 移した瞬間にこの穴が戻る。
+#
+# **⚠️ ここが塞ぐのは「その名前がワークスペースのどこにも無い」場合だけである。**
+# 名前がどこかには在って、絞り込んだ先のパッケージには無い場合は、いまも exit 0 で
+# 黙って通る。実測（2026-08-23T07:56Z, pnpm 11.21.0）:
+#   $ pnpm --filter @alteroid/web zzz-nonexistent-script   → EXIT:1（どこにも無い）
+#   $ apps/web/package.json から scripts.test を外して
+#     pnpm --filter @alteroid/web test                     → EXIT:0（他の7つには在る）
+# 9個目のワークスペースが `test` を書き忘れると、そのパッケージへの
+# `pnpm --filter <新パッケージ> test` は黙ったまま exit 0 になる —— この設定では
+# 直せない（pnpm の挙動そのもの）。捕まえるのは root の `pnpm test` に含まれる
+# `scripts/workspace-test-scripts.test.ts` だけである。
+#
+# 変異試験の文脈での同じ話（`pnpm --filter` を変異試験で使うときにこの罠を踏む形）は
+# `.claude/skills/mutation-testing/SKILL.md` に在る。**片方だけ直して終わらせないこと**
+# — この設定の挙動が変わったら、あちらの実測も古くなる。
+failIfNoMatch: true

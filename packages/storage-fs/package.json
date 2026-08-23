@@ -14,7 +14,8 @@
   ],
   "scripts": {
     "build": "tsup",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --root=../.. packages/storage-fs/src"
   },
   "dependencies": {
     "@alteroid/core": "workspace:*",
