@@ -772,6 +772,105 @@ describe('資源による配置の材料', () => {
     expect(await client.resources?.()).toEqual({ managers: 2 });
   });
 
+  /**
+   * `pendingEvents` / `oldestPendingAt`（#358）が `/health` から `resources()`
+   * まで渡ること。**この欄が `HealthBody` に無かったせいで、runner が正しい値を
+   * 返しても読まれずに落ちていた**（Issue #358 の訂正の下流側）。
+   *
+   * 本物の `Outbox` と `createRunnerApp` を通す——`managers` と同じく、
+   * ここも実際の境界を越えさせないと「渡ることの証明」にならない
+   * （直上の「runner の /health が資源を名乗り、デーモンがそれを採る」と同じ理由）。
+   */
+  it('runner の /health が pendingEvents/oldestPendingAt を名乗り、デーモンがそれを採る', async () => {
+    const outbox = new Outbox();
+    // listener を付けない（＝デーモンが繋いでいない状態）ので `Outbox.#queue`
+    // にそのまま溜まる——`resources()` を呼ぶだけなら `/events` を開く必要は無い。
+    outbox.push({ type: 'session', managerId: 'mgr-1', sessionId: 'sess-1' });
+    outbox.push({ type: 'session', managerId: 'mgr-2', sessionId: 'sess-2' });
+    const host = createRunnerHost({
+      runnerId: 'runner-primary',
+      workspacePath: '/workspace',
+      emit: (event) => outbox.push(event),
+      queryFn: fakeSdk().fn,
+    });
+    const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn: fetchInto(app),
+    });
+
+    const resources = await client.resources?.();
+
+    expect(resources?.pendingEvents).toBe(2);
+    expect(typeof resources?.oldestPendingAt).toBe('string');
+
+    await host.shutdown();
+  });
+
+  /**
+   * `pendingEvents` は0件でも「測れる値」なのでそのまま0が渡る（`managers` と
+   * 同じ扱い）。**`oldestPendingAt` だけが違う**——0件のときは「いちばん古い
+   * もの」自体が存在しないので、欄ごと出ない（`runnerPlacementResourcesSchema`
+   * の doc）。ここを混同すると「0の行を作らない」を pendingEvents にも
+   * 誤って当ててしまう（実際に一度、この取り違えでこのテスト自身が壊れた）。
+   */
+  it('未送出が0件のとき、pendingEvents は0のまま渡り oldestPendingAt だけ出ない', async () => {
+    const outbox = new Outbox();
+    const host = createRunnerHost({
+      runnerId: 'runner-primary',
+      workspacePath: '/workspace',
+      emit: (event) => outbox.push(event),
+      queryFn: fakeSdk().fn,
+    });
+    const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn: fetchInto(app),
+    });
+
+    const resources = await client.resources?.();
+
+    expect(resources?.pendingEvents).toBe(0);
+    expect(resources).not.toHaveProperty('oldestPendingAt');
+
+    await host.shutdown();
+  });
+
+  it('pendingEvents/oldestPendingAt を返さない古い runner からも他の材料は渡る（締め出さない）', async () => {
+    const client = await createHttpRunner({
+      baseUrl: 'http://legacy.test',
+      token: TOKEN,
+      fetchFn: fetchHealth({
+        ok: true,
+        runnerId: 'runner-legacy',
+        workspacePath: '/workspace',
+        managers: 3,
+        // pendingEvents / oldestPendingAt を欄ごと持たない（この機能より前の runner）。
+      }),
+    });
+
+    expect(await client.resources?.()).toEqual({ managers: 3 });
+  });
+
+  it('pendingEvents の形が壊れていても、他の材料は落とさない（managers と同じ扱い）', async () => {
+    const client = await createHttpRunner({
+      baseUrl: 'http://broken.test',
+      token: TOKEN,
+      fetchFn: fetchHealth({
+        ok: true,
+        runnerId: 'runner-broken',
+        workspacePath: '/workspace',
+        managers: 2,
+        pendingEvents: 'たくさん',
+        oldestPendingAt: 'ちょっと前',
+      }),
+    });
+
+    expect(await client.resources?.()).toEqual({ managers: 2 });
+  });
+
   it('resources() は runnerId を採らない（器が入れ替わっても宛先を書き換えない）', async () => {
     let runnerId = 'runner-primary';
     const client = await createHttpRunner({

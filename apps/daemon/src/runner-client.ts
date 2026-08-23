@@ -440,6 +440,16 @@ interface HealthBody {
   managers?: unknown;
   resources?: unknown;
   revision?: unknown;
+  /**
+   * まだデーモンへ送り出せていない出来事の件数（#358）。**この欄がここに
+   * 無かったせいで、runner 側が正しい値を返しても読まれずに落ちていた**
+   * （`resources()` は `body.managers` と同じく `/health` 直下から拾う——
+   * `body.resources` の中身ではない。`apps/runner/src/app.ts` の `/health`
+   * が実際に置く場所に合わせてある）。
+   */
+  pendingEvents?: unknown;
+  /** 未送出のうち、いちばん古いものが積まれた時刻（#358）。同上の理由で足す。 */
+  oldestPendingAt?: unknown;
 }
 
 /**
@@ -717,9 +727,25 @@ class HttpRunner implements RunnerClient {
     const body = (await response.json()) as HealthBody;
     const parsed = runnerExecutionResourcesSchema.safeParse(body.resources ?? {});
     const managers = runnerPlacementResourcesSchema.shape.managers.safeParse(body.managers);
+    // **`managers` と同じ扱い**（#358）——`/health` 直下から1つずつ検証する。
+    // まとめて弾くと、`resources` の形が崩れただけで `pendingEvents` /
+    // `oldestPendingAt` まで落ち、値を出している runner が「何も報告しない器」
+    // に見える。
+    const pendingEvents = runnerPlacementResourcesSchema.shape.pendingEvents.safeParse(
+      body.pendingEvents,
+    );
+    const oldestPendingAt = runnerPlacementResourcesSchema.shape.oldestPendingAt.safeParse(
+      body.oldestPendingAt,
+    );
     return {
       ...(parsed.success ? parsed.data : {}),
       ...(managers.success && managers.data !== undefined ? { managers: managers.data } : {}),
+      ...(pendingEvents.success && pendingEvents.data !== undefined
+        ? { pendingEvents: pendingEvents.data }
+        : {}),
+      ...(oldestPendingAt.success && oldestPendingAt.data !== undefined
+        ? { oldestPendingAt: oldestPendingAt.data }
+        : {}),
     };
   }
 

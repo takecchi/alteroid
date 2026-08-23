@@ -459,6 +459,15 @@ export const managerSummarySchema = z.object({
   sessionId: z.string().optional(),
   lastReport: z.string().optional(),
   /**
+   * `lastReport` を**デーモンが受け取った時刻**（#358）。
+   *
+   * 「マネージャーが報告を生成した時刻」でも「クローンのターンへ配られた
+   * 時刻」でもない——`packages/core/src/manager.ts` の `ManagerSummary.
+   * lastReportAt` の doc と同じ断り。宣言しなければ `.parse()` がここで
+   * 黙って落とす（同じ穴を openapi 側にも作らない）。
+   */
+  lastReportAt: z.string().optional(),
+  /**
    * 直近の1ターンが**報告ではなく失敗**で終わったこと。
    *
    * **`jobSchema` の枝をそのまま借りる（ここで書き直さない）。** これは台帳の値を
