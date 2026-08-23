@@ -43,6 +43,10 @@ export async function accessListCommand(): Promise<void> {
     const name = account.email ?? account.displayName ?? '(名前なし)';
     stdout.write(`${account.granted ? '[許可]' : '[未許可]'} ${name}\n`);
     stdout.write(`  id: ${account.id}\n`);
+    // **作成（`createdAt`）を足す。** `AccountView` は元から持っていて（型に
+    // 在る）、ここが出していなかっただけである（#214）。`createdAt` は必須
+    // なので null チェックは要らない。
+    stdout.write(`  作成: ${account.createdAt}\n`);
     const via = account.identities
       .map(
         (identity) =>

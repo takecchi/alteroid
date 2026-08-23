@@ -25,8 +25,17 @@ import { resolveTarget } from './target.js';
  * 使えることのほうが、コマンド名の短さより効く。
  */
 
-/** 一覧に出す1件（`GET /memory` の要素）。 */
-interface MemorySummary {
+/**
+ * 一覧に出す1件（`GET /memory` の要素）。
+ *
+ * **`export` してあるのは `chat.ts` の `/memory` から使うため。** あちらは
+ * 同じ `GET /memory` を見ながら、この一覧が持つ4項目（概要・作成・更新・
+ * 鮮度の印）を1つも出していなかった（#235 はトップレベルの
+ * `alteroid memory list` だけを直し、`chat` の中の重複実装は残っていた）。
+ * 型と整形ロジック（`formatCreatedAt` / `freshnessMarker`）をここから
+ * 再利用し、`chat.ts` 側で新しい言い方を発明しないようにする。
+ */
+export interface MemorySummary {
   slug: string;
   title: string;
   kind: 'premise' | 'fact';
@@ -50,8 +59,10 @@ interface MemorySummary {
  * クローンの `memory_list`（`packages/core/src/memory.ts` の
  * `formatMemoryCreatedAt`）と同じ言葉にしてある。**片方だけ空欄にすると、
  * 人間とクローンが同じ記憶を見て違う判断をする。**
+ *
+ * `export` してあるのは `chat.ts` の `/memory` から使うため（同上）。
  */
-function formatCreatedAt(createdAt: MemorySummary['createdAt']): string {
+export function formatCreatedAt(createdAt: MemorySummary['createdAt']): string {
   return createdAt.kind === 'known' ? createdAt.at : '不明';
 }
 
@@ -87,8 +98,10 @@ export async function memoryListCommand(): Promise<void> {
  * 印は要旨の前に置く（`memory_list` ツール・プロンプトの目次と同じ約束。
  * `packages/core/src/memory.ts` の doc）。**代理指標である** — `fresh` は
  * 「要旨が最後の本文変更以降に書かれた」ことしか意味しない。
+ *
+ * `export` してあるのは `chat.ts` の `/memory` から使うため（同上）。
  */
-function freshnessMarker(kind: 'fresh' | 'stale' | 'unknown' | 'absent'): string {
+export function freshnessMarker(kind: 'fresh' | 'stale' | 'unknown' | 'absent'): string {
   switch (kind) {
     case 'stale':
       return '⚠古い要旨: ';

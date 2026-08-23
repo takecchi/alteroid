@@ -94,6 +94,35 @@ describe('alteroid conversations list', () => {
     expect(text).toContain('conversations show');
   });
 
+  /**
+   * #214: `startedAt`（作成）は `ConversationSummary` に元から在り、応答にも
+   * 元から入っている。ここが出していなかっただけである。
+   */
+  it('作成（startedAt）を出す', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: {
+        conversations: [
+          {
+            conversationId: 'conv-1',
+            startedAt: '2026-08-16T10:00:00.000Z',
+            updatedAt: '2026-08-16T10:05:00.000Z',
+            messages: 3,
+            preview: '設計の相談',
+          },
+        ],
+        scanned: 512,
+      },
+    });
+
+    await conversationsListCommand();
+
+    const text = read();
+    expect(text).toContain('作成: 2026-08-16T10:00:00.000Z');
+    expect(text).toContain('更新: 2026-08-16T10:05:00.000Z');
+  });
+
   it('--limit / --scan をクエリへそのまま渡す', async () => {
     replies.push({ status: 200, body: { conversations: [], scanned: 0 } });
 
