@@ -503,8 +503,22 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * 持たせると、日誌を辿って「消した記録」を数えたい側が文言に一致させる
      * しかなくなる）。**`summary` の自由文は削らない**（人が読む説明を減らす
      * ことと機械可読な区別を足すことは別である）。
+     *
+     * **`'describe'`** — `memory_frontmatter_set`（#318 案 (a)）が frontmatter
+     * のキー（`description` / `type` / `parent`）だけを差し替えたときに書く。
+     * **`'write'` に畳まない** — `write` に畳むと「本文を全文置換した」と
+     * 「frontmatter のキーだけ直した」の区別が `summary` の自由文だけに
+     * 落ち、ここまでの3値がそうしてきたのと同じ理由で数え上げにくくなる
+     * （このコメント自身がその理由を書いている）。この値を読むのは3箇所
+     * だけである——`deriveHumanTouchedAtFromJournal`（`memory.ts`。`remove`
+     * だけ除外するので `describe` は対象に含まれる。`memory_frontmatter_set`
+     * は `cause:'human'` を書ける経路ではないので実際には影響しない）、
+     * `deriveMemoryCreatedAtFromJournal`（`memory.ts`。`write` だけを対象に
+     * するので `describe` は自動で対象外——`memory_frontmatter_set` は
+     * 文書を作らない口なので、これは正しい）、`dropped-record.ts`（文字列に
+     * 混ぜるだけ）。網羅的に分岐する `switch` は無い。
      */
-    action: z.enum(['write', 'append', 'remove']).optional(),
+    action: z.enum(['write', 'append', 'remove', 'describe']).optional(),
     /**
      * 「どれだけ失ったか」の機械可読な面。バイト数（`Buffer.byteLength` 相当）。
      *
@@ -523,6 +537,9 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * - `write`: 置き換え前の文書のバイト数（無ければ新規作成なので `0`）
      * - `append`: 追記前の文書のバイト数（無ければ `0`）
      * - `remove`: 消す直前のバイト数
+     * - `describe`: frontmatter を差し替える前の文書のバイト数
+     *   （`memory_frontmatter_set` は既存文書にしか使えないので、新規作成は
+     *   起こらない）
      */
     bytesBefore: z.number().int().nonnegative().optional(),
     /**
@@ -530,6 +547,7 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      *
      * - `write` / `append`: 書き込み後の文書のバイト数
      * - `remove`: 常に `0`（実体が無くなるため）
+     * - `describe`: frontmatter を差し替えた後の文書のバイト数
      */
     bytesAfter: z.number().int().nonnegative().optional(),
     summary: z.string(),
