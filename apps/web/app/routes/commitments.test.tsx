@@ -361,6 +361,69 @@ describe('本文を origin で Markdown / 素のテキストへ切り分ける',
   );
 
   /**
+   * **⭐ issue #287 で名指しされた歯。** 人間が `manager_stop` /
+   * `DELETE /managers/:id` の停止理由へ自由記述で `*` や `#` を打った回
+   * （`packages/core/src/manager.ts:1333`）が化けないことを固定する。
+   * `bodyMarkup === 'none'` は `commitmentFor`（`packages/core/src/clone.ts`）
+   * が `manager_message.markup` をそのまま持ち越した印である。
+   */
+  it("manager の本文は bodyMarkup === 'none' のとき、* を含んでいても強調に化けない（人間の停止理由が化ける回帰）", async () => {
+    stubCommitments([
+      commitment({
+        origin: 'manager',
+        body: '[report] *思いつきで* 止めた',
+        bodyMarkup: 'none',
+      }),
+    ]);
+    renderPage();
+
+    const body = await screen.findByText('*思いつきで* 止めた');
+    // Markdown を通っていれば `*…*` は <em> になる。通っていないことを確かめる。
+    expect(body.textContent).toBe('*思いつきで* 止めた');
+    const row = body.closest('li');
+    expect(row).not.toBeNull();
+    expect(row!.querySelector('strong, em')).toBeNull();
+    // `PlainBody` と同じ形（改行を潰さない）を保っている。
+    const tokens = body.className.split(/\s+/);
+    expect(tokens).toContain('whitespace-pre-wrap');
+  });
+
+  /**
+   * `bodyMarkup === undefined`（印を立てていない回）は今日と同じく
+   * Markdown の描画経路を通る。**「印が無い＝安全」の推論ではなく、いまの
+   * 既定を変えないという方針の結果である**（`textMarkupSchema` の doc）。
+   */
+  it('manager の本文は bodyMarkup が無いとき、今日どおり Markdown の描画経路を通る', async () => {
+    stubCommitments([commitment({ origin: 'manager', body: '[report] *強調される* はず' })]);
+    renderPage();
+
+    const em = await screen.findByText('強調される');
+    expect(em.tagName).toBe('EM');
+  });
+
+  /**
+   * **実行時の網羅性の倒れ先（`bodyMarkup` 版）を固定する歯。**
+   * `textMarkupSchema`（`packages/core/src/schema.ts`）に無い値が来ても、
+   * 空白にせず安全側（素のテキスト）へ倒し、本文を1文字も消さない
+   * （`ManagerRestBody` の doc）。
+   */
+  it('manager の本文は schema に無い bodyMarkup が来ても、消さず素のテキストとして出す', async () => {
+    stubCommitments([
+      commitment({
+        origin: 'manager',
+        body: '[report] ## 未知の記法の本文',
+        bodyMarkup: 'html',
+      }),
+    ]);
+    renderPage();
+
+    const body = await screen.findByText('## 未知の記法の本文');
+    expect(screen.queryByRole('heading', { name: '未知の記法の本文' })).toBeNull();
+    const tokens = body.className.split(/\s+/);
+    expect(tokens).toContain('whitespace-pre-wrap');
+  });
+
+  /**
    * **⭐ 人間の指示で名指しされた歯。** 「AIが書いたものはマークダウンで
    * 表示する」の裏返しとして、人間が書いた本文は化けさせない
    * （`apps/web/app/routes/chat.tsx:710` と同じ線）。

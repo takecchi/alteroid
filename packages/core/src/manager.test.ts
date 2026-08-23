@@ -3116,6 +3116,82 @@ describe('止めた結果を確かめる', () => {
     await s.pool.stop();
   });
 
+  /**
+   * `markup: 'none'` は、人間が停止理由へ自由記述で打った `reason` が実際に
+   * `messageText` へ埋め込まれる回にだけ立つ（issue #287）。条件は
+   * `by === 'human' && reason !== undefined` の2つで、**どちらか片方だけ
+   * 満たしても立たないことを別々の歯で確かめる。**
+   *
+   * `outcome === 'stopped'` にしないと `reason` が `messageText` へ埋め込ま
+   * れない（`abort()` の `stoppedBase`）ので、「セッションが畳まれたら、
+   * 止まったと言い切る」と同じ形（`stop()` がセッションを一覧から消す偽の
+   * runner）で `outcome: 'stopped'` を作る。
+   */
+  async function stoppableSetup(): Promise<Setup> {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job);
+    const fake = swappableRunner();
+    fake.state.alive.push({
+      managerId: job.id,
+      status: 'running',
+      cwd: job.cwd,
+      request: job.request,
+      waiting: [],
+      sessionId: job.sessionId,
+    });
+    const runner = {
+      ...fake.runner,
+      async stop(managerId: string) {
+        fake.state.alive = fake.state.alive.filter((s) => s.managerId !== managerId);
+      },
+    };
+    return setup(undefined, { stores, runner });
+  }
+
+  function findStopMessage(inbox: InboxEvent[], needle: string) {
+    return inbox.find(
+      (event): event is Extract<InboxEvent, { type: 'manager_message' }> =>
+        event.type === 'manager_message' && event.text.includes(needle),
+    );
+  }
+
+  it("人間が reason 付きで止めたら、manager_message に markup: 'none' が立つ", async () => {
+    const s = await stoppableSetup();
+
+    await s.pool.abort(job.id, '*思いつきで* 止めた', 'human');
+
+    const stopped = findStopMessage(s.inbox, '*思いつきで* 止めた');
+    expect(stopped).toBeDefined();
+    expect(stopped?.markup).toBe('none');
+
+    await s.pool.stop();
+  });
+
+  it('クローンが reason 付きで止めても markup は立たない（by === "clone"）', async () => {
+    const s = await stoppableSetup();
+
+    await s.pool.abort(job.id, '報告は出たのに終わらない', 'clone');
+
+    const stopped = findStopMessage(s.inbox, '報告は出たのに終わらない');
+    expect(stopped).toBeDefined();
+    expect(stopped?.markup).toBeUndefined();
+
+    await s.pool.stop();
+  });
+
+  it('人間が reason 無しで止めても markup は立たない（reason === undefined）', async () => {
+    const s = await stoppableSetup();
+
+    // `by` を省略すると既定は 'human'（`abort()` のシグネチャ）。
+    await s.pool.abort(job.id);
+
+    const stopped = findStopMessage(s.inbox, '停止させました');
+    expect(stopped).toBeDefined();
+    expect(stopped?.markup).toBeUndefined();
+
+    await s.pool.stop();
+  });
+
   it('居ないマネージャーを止めても、黙って成功にしない', async () => {
     const s = setup(undefined, { stores: createMemoryStores(), runner: swappableRunner().runner });
 

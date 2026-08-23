@@ -5,7 +5,7 @@ import { Page } from '~/components/page';
 import { Badge, Button, Card, CardHeader, Empty, ErrorNote, Input, Spinner } from '~/components/ui';
 import { useCloseCommitment, usePushCommitment } from '~/hooks/mutations';
 import { useCommitments } from '~/hooks/queries';
-import { commitmentClosedBySchema } from '@alteroid/core';
+import { commitmentClosedBySchema, textMarkupSchema } from '@alteroid/core';
 import type { Commitment, CommitmentOrigin } from '@alteroid/core';
 import { formatDateTime, formatRelative } from '~/lib/format';
 
@@ -247,6 +247,77 @@ function assertClosedByHandled(closedBy: never): void {
 }
 
 /**
+ * **網羅性チェック専用（ビルド時）。** `ManagerRestBody` の `switch` の
+ * `default` から呼ぶ。`assertOriginHandled` / `assertClosedByHandled` と
+ * 同型 — 引数の型は `never` で、`textMarkupSchema`
+ * （`packages/core/src/schema.ts`）に新しい値が足されたのに上の `case` が
+ * その値を決めていないと、`known.data` はここで `never` にならず、この
+ * 呼び出し自体が型エラーになる。**新しい markup を足した人は、ここで
+ * 分岐を決めるまで `pnpm typecheck` を通せない。**
+ *
+ * **呼ぶこと自体が保証であって、戻り値は使わない。** `never` 型の変数を
+ * そのまま本文として描かないこと（issue #285 で実際に踏まれた実装ミスと
+ * 同じ形。`never` も `string` を要求する prop に代入できるので型では
+ * 捕まらない）。
+ *
+ * **実行時にここへ来ることは、`commitmentSchema.bodyMarkup` が
+ * `z.string()` で緩く持たれている（保存層は未知の値を拒否しない）ため、
+ * `assertOriginHandled` より現実的に起こりうる。** 未知の値は
+ * `ManagerRestBody` が `textMarkupSchema.safeParse` で弾いた時点で別に
+ * `console.warn` している（この関数より手前）。**この関数が実際に呼ばれる
+ * のは、`textMarkupSchema` に値が足されたのに `switch` 側の `case` が
+ * 追いついていない、という版のずれのときだけである。**
+ */
+function assertMarkupHandled(markup: never): void {
+  console.warn(`commitments.tsx: switch が決めていない commitment.bodyMarkup: ${String(markup)}`);
+}
+
+/**
+ * `origin: 'manager'` の本文の**接頭辞を除いた本体**（`rest`）を、
+ * `bodyMarkup`（`rest` がどの記法で書かれているか。issue #287）で
+ * 切り分ける。`ClosedReasonBody` と同じ形（narrow してから switch）。
+ *
+ * **実行時に区別すべき状態は4つ:**
+ *
+ * | `bodyMarkup` | 描き方 | 理由 |
+ * | --- | --- | --- |
+ * | `'markdown'` | `<Markdown>` | 今日と同じ |
+ * | `undefined` | `<Markdown>` | **今日と同じ。** 「印が無い＝安全」の推論ではなく、いまの既定を変えないという方針の結果（`textMarkupSchema` の doc） |
+ * | `'none'` | 素テキスト（`whitespace-pre-wrap` を保つ。改行を潰さない） | `text` が Markdown の記法として書かれていない（例: 人間が打った停止理由） |
+ * | 上記以外（実行時のみ来うる） | 素テキスト＋`console.warn` | デーモンが先に新しい値を返す順序に備える。安全側（素テキスト）へ倒す |
+ *
+ * **保存層（`commitmentSchema.bodyMarkup`）は `z.string()` で緩く持つ。**
+ * `closedBy` と同じ理由（`commitmentSchema` の doc）。**表示側までその
+ * 緩さを引き継がない** — ここでは `textMarkupSchema.safeParse` で狭めて
+ * から分岐する。
+ */
+function ManagerRestBody({ rest, bodyMarkup }: { rest: string; bodyMarkup: string | undefined }) {
+  if (bodyMarkup === undefined) return <Markdown>{rest}</Markdown>;
+
+  const known = textMarkupSchema.safeParse(bodyMarkup);
+  if (!known.success) {
+    // **`undefined` とは別扱い。** ここでだけ warn する（`undefined` は warn しない）。
+    console.warn(
+      `commitments.tsx: 未知の commitment.bodyMarkup が来た（undefined とは別扱い）: ${String(bodyMarkup)}`,
+    );
+    return <PlainBody body={rest} />;
+  }
+
+  const markup = known.data;
+  switch (markup) {
+    case 'markdown':
+      return <Markdown>{rest}</Markdown>;
+
+    case 'none':
+      return <PlainBody body={rest} />;
+
+    default:
+      assertMarkupHandled(markup);
+      return <PlainBody body={rest} />;
+  }
+}
+
+/**
  * 本文の描き方を `origin`（誰が書いたか）で切り分ける。`OpenRow` と
  * `ClosedRow` が同じ本文の `<p>` を2箇所に持っていたのを、ここへ集める。
  *
@@ -263,7 +334,7 @@ function assertClosedByHandled(closedBy: never): void {
  * | origin | body の中身 | 描き方 |
  * | --- | --- | --- |
  * | `self` | `commitment_open` のツール引数そのまま（クローンが書いた） | `<Markdown>` |
- * | `manager` | `[kind] text`。`kind` は閉じた3値、`text` は下記の3種が混ざる | 接頭辞は素、残りは `<Markdown>` |
+ * | `manager` | `[kind] text`。`kind` は閉じた3値、`text` は下記の3種が混ざる | 接頭辞は素、残りは `bodyMarkup` で分岐（`ManagerRestBody`。既定は `<Markdown>`） |
  * | `human` | 3経路とも人間の文字（チャット本文・承認待ちの回答・`POST /commitments`） | 素のテキスト（いまのまま） |
  * | `external` | `renderPayload` が整形した外部の中身 | 素のテキスト（いまのまま） |
  *
@@ -334,6 +405,13 @@ function assertClosedByHandled(closedBy: never): void {
  * クローンが片付けることも、その逆もある。**`closedReason` の描き分けは
  * `commitment.closedBy`（issue #286 で型に足した、別軸の欄）を見る
  * `ClosedReasonBody` が持つ。** 詳細はそちらの doc を見よ。
+ *
+ * **`manager` の `rest`（接頭辞を除いた本体）の描き方は `bodyMarkup`
+ * （issue #287 で型に足した欄）でさらに分岐する。** `bodyMarkup` が指す
+ * 対象は `rest` であって `commitment.body`（接頭辞込み）ではない —
+ * `packages/core/src/clone.ts` の `commitmentFor` が接頭辞を前置する前の
+ * `event.text` に対して立てた印だから（`commitmentSchema.bodyMarkup` の
+ * doc）。詳細は `ManagerRestBody` の doc を見よ。
  */
 function CommitmentBody({ commitment }: { commitment: Commitment }) {
   switch (commitment.origin) {
@@ -347,7 +425,7 @@ function CommitmentBody({ commitment }: { commitment: Commitment }) {
           {prefix !== null && (
             <span className="mr-1 font-mono text-[11px] text-muted">{prefix}</span>
           )}
-          <Markdown>{rest}</Markdown>
+          <ManagerRestBody rest={rest} bodyMarkup={commitment.bodyMarkup} />
         </div>
       );
     }

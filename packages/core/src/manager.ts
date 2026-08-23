@@ -1359,7 +1359,8 @@ class Pool implements ManagerPool {
     // 立ててあった箇所だけが確かめていない推定を方針変更の外へ生き残らせて
     // しまう。`undefined` なら「ここは決めていない」が目に見える形で残る
     // （`textMarkupSchema` の doc、`packages/core/src/schema.ts`）。
-    const markup: TextMarkup | undefined = by === 'human' && reason !== undefined ? 'none' : undefined;
+    const markup: TextMarkup | undefined =
+      by === 'human' && reason !== undefined ? 'none' : undefined;
     this.#post({
       type: 'manager_message',
       id: randomUUID(),

@@ -273,6 +273,32 @@ describe('引き受けたまま終わっていない仕事', () => {
     expect(commitmentFor({ type: 'distill', id: 'e5', at, reason: 'conversation_end' })).toBeNull();
   });
 
+  /**
+   * `manager_message.markup`（issue #287）が `Commitment.bodyMarkup` へ
+   * そのまま持ち越されること。**印が無いイベントでは `bodyMarkup` が
+   * `undefined` のままで、既定（`'markdown'` や `'none'`）へ倒れないこと**
+   * を別々の歯で確かめる — `close は closedBy を記録し…` （直上の describe 内
+   * のテスト）が `closedBy` で固定しているのと同じ形の保証を、`bodyMarkup`
+   * について問う。
+   */
+  it('manager_message.markup は Commitment.bodyMarkup へそのまま持ち越る', () => {
+    const at = new Date().toISOString();
+
+    const withMarkup = commitmentFor({
+      type: 'manager_message',
+      id: 'evt-mgr-marked',
+      at,
+      managerId: 'mgr-1',
+      kind: 'report',
+      text: '*思いつきで* 止めた',
+      markup: 'none',
+    });
+    expect(withMarkup?.bodyMarkup).toBe('none');
+
+    const withoutMarkup = commitmentFor(managerMessage('終わった'));
+    expect(withoutMarkup?.bodyMarkup).toBeUndefined();
+  });
+
   it('マネージャーからの報告も台帳に載る（受け取っただけでは始末がついていない）', async () => {
     const s = setup();
 

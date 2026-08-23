@@ -3948,6 +3948,9 @@
                             "description": "既知の値は 'clone' | 'human'（commitmentClosedBySchema）。無いこともある（この欄が入る前の行）。台帳の完全性より由来の注記の厳密さを優先しないため、型としては任意の文字列を許す。",
                             "type": "string"
                           },
+                          "bodyMarkup": {
+                            "type": "string"
+                          },
                           "updatedAt": {
                             "type": "string",
                             "format": "date-time",
