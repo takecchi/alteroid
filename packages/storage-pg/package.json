@@ -15,7 +15,7 @@
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --root=../.. packages/storage-pg/src"
+    "test": "node ../../scripts/test.mjs --root=../.. packages/storage-pg/src"
   },
   "dependencies": {
     "@alteroid/core": "workspace:*",
