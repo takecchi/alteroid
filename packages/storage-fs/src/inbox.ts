@@ -79,6 +79,23 @@ export class FsInboxStore implements InboxStore {
     });
   }
 
+  /**
+   * 残っている未読の件数と、いちばん古いものが積まれた時刻（#358）。
+   * **`claimPending` と違い、読むだけで書かない** — `#update` を通さない
+   * ので `deliveries` は1つも進まない。
+   */
+  async pending(): Promise<{ count: number; oldestAt?: string }> {
+    const file = await this.#read();
+    const oldest = file.events.reduce<string | undefined>(
+      (min, entry) => (min === undefined || entry.at < min ? entry.at : min),
+      undefined,
+    );
+    return {
+      count: file.events.length,
+      ...(oldest === undefined ? {} : { oldestAt: oldest }),
+    };
+  }
+
   async #read(): Promise<InboxFile> {
     try {
       const raw = await readFile(this.#path, 'utf8');
