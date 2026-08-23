@@ -223,6 +223,18 @@ export {
   type RunnerRevisionReport,
 } from './revision.js';
 export { CRON_EXPRESSION_MAX, isCronExpression, parseCron, type CronSchedule } from './cron.js';
+/**
+ * SSE のコメント行 heartbeat。**SSE を出す側が3経路（デーモンの `POST /chat` と
+ * `GET /journal/stream`、runner の `GET /events`）に分かれているので、ここに置く。**
+ * `apps/*` の片側に置くと、もう片側がそれを読むために逆向きの依存を作ることになる
+ * （`./sse-heartbeat.ts` の「なぜ `packages/core` に在るか」）。
+ */
+export {
+  DEFAULT_SSE_HEARTBEAT_MS,
+  HEARTBEAT_FRAME,
+  startSseHeartbeat,
+  type SseHeartbeatStream,
+} from './sse-heartbeat.js';
 export {
   DAILY_REPORT_KIND,
   RESERVED_SCHEDULE_KINDS,

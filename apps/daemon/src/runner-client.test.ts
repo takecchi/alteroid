@@ -14,6 +14,7 @@ import {
   createRunnerHost,
   createRunnerRegistry,
   createMemoryStores,
+  HEARTBEAT_FRAME,
   type ManagerPool,
   type InboxEvent,
   type Stores,
@@ -1267,6 +1268,93 @@ describe('解釈できずに捨てた出来事の跡', () => {
       throw new Error(`想定していない path: ${path}`);
     }) as typeof fetch;
   }
+
+  /**
+   * `fetchFramesOnce` と同じ形だが、`data: ` で包まない——生のフレームを
+   * そのまま `/events` の本文として流す。heartbeat のコメント行
+   * （`HEARTBEAT_FRAME` そのもの）を挟みたいテストのためのもので、
+   * `data:` を前置きしてしまうと `: hb` が `data: : hb` になり、
+   * 実物の runner が出す形と違ってしまう。
+   *
+   * **2回目以降の `/events` は返らない**（`fetchFramesOnce` と同じ理由）。
+   */
+  function fetchRawFramesOnce(rawFrames: string[]): typeof fetch {
+    let served = false;
+    return (async (input: string | URL | Request) => {
+      const path = new URL(typeof input === 'string' ? input : input.toString()).pathname;
+      if (path === '/health') {
+        return Response.json({ runnerId: 'runner-noisy', workspacePath: '/workspace' });
+      }
+      if (path === '/events') {
+        if (served) return new Promise<Response>(() => undefined);
+        served = true;
+        const body = new ReadableStream<Uint8Array>({
+          start: (controller) => {
+            const encoder = new TextEncoder();
+            for (const rawFrame of rawFrames) controller.enqueue(encoder.encode(rawFrame));
+            controller.close();
+          },
+        });
+        return new Response(body, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        });
+      }
+      throw new Error(`想定していない path: ${path}`);
+    }) as typeof fetch;
+  }
+
+  async function collectRaw(rawFrames: string[]) {
+    const dropped: RunnerDroppedEventReport[] = [];
+    const events: unknown[] = [];
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn: fetchRawFramesOnce(rawFrames),
+      sleepFn: async () => undefined,
+      onDroppedEvent: (report) => dropped.push(report),
+    });
+    await client.connect((event) => events.push(event));
+    // `collect` と同じ待ち方。捨てたものが在れば `closed` のまとめが来るし、
+    // 全部正常なら `onEvent` が呼ばれている。
+    await expect
+      .poll(() => dropped.some((r) => r.phase === 'closed') || events.length > 0, { timeout: 2000 })
+      .toBe(true);
+    await client.close();
+    return { dropped, events };
+  }
+
+  /**
+   * **`HEARTBEAT_FRAME` そのものを固定する。** `': hb\n\n'` から変わると、
+   * 直下の「heartbeat は跡を残さない」の根拠（`data:` 行を1つも持たない
+   * コメント行である、という前提）が黙って崩れる。フレームの形を変えた日に
+   * 気づけるよう、値そのものをここでも固定する。
+   */
+  it('HEARTBEAT_FRAME は ": hb\\n\\n" そのもの', () => {
+    expect(HEARTBEAT_FRAME).toBe(': hb\n\n');
+  });
+
+  /**
+   * **この歯が単独で守るもの**: runner の実物の `#read` を通しても、
+   * heartbeat のコメント行が「解釈できずに捨てた」として拾われないこと。
+   *
+   * `HEARTBEAT_FRAME` は `data:` 行を1つも持たない SSE コメント行なので、
+   * `#read` の `data:` フィルタを通すと空文字列になり `if (data.length > 0)`
+   * を満たさない——つまり跡そのものが作られない設計である。ここが崩れると、
+   * runner が15秒ごとに書く heartbeat の分だけ `dropped` が積み上がり、
+   * 本物の「解釈できない出来事」の跡がその中へ埋もれる。
+   */
+  it('heartbeat のコメント行を挟んでも、跡は残らず hello は届く', async () => {
+    const { dropped, events } = await collectRaw([
+      HEARTBEAT_FRAME,
+      HEARTBEAT_FRAME,
+      HEARTBEAT_FRAME,
+      'data: {"type":"hello","runnerId":"r1"}\n\n',
+    ]);
+
+    expect(events).toHaveLength(1);
+    expect(dropped).toHaveLength(0);
+  });
 
   async function collect(frames: string[]) {
     const dropped: RunnerDroppedEventReport[] = [];

@@ -314,7 +314,7 @@ describe('HTTP API', () => {
    *
    * ここで見たいのは「TCP が切れずデータも流れない切断」を掃除する契機が
    * サーバ側に在ることで、その契機が heartbeat の書き込みそのものである
-   * （`./sse-heartbeat.ts` の JSDoc）。**掃除が起きたことはここでは見ていない**
+   * （`@alteroid/core` の `sse-heartbeat.ts` の JSDoc）。**掃除が起きたことはここでは見ていない**
    * —— 掃除は Node の `outgoing` の `close` / `error` を経由する経路で、
    * `app.request()`（実際の socket を持たない）では再現できない。**見ているのは
    * 「無音のときに書き込みが発生するか」までである。**

@@ -16,6 +16,7 @@ import type {
 } from '@alteroid/core';
 import {
   RESERVED_SCHEDULE_KINDS,
+  DEFAULT_SSE_HEARTBEAT_MS,
   approvalUpdatedAt,
   chatStreamEventSchema,
   collectConversations,
@@ -37,6 +38,7 @@ import {
   accountUsageStateSchema,
   scheduleKindSchema,
   scheduleSpecSchema,
+  startSseHeartbeat,
   summarizeUsage,
   usageAggregateSchema,
   usageBreakdownSchema,
@@ -49,7 +51,6 @@ import {
 
 import { bearerOf, isOperator, type AuthPlan, type AuthVariables } from './auth.js';
 import type { JournalBus } from './journal-bus.js';
-import { DEFAULT_SSE_HEARTBEAT_MS, startSseHeartbeat } from './sse-heartbeat.js';
 import { Scalar } from '@scalar/hono-api-reference';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
@@ -200,7 +201,7 @@ export interface AppDeps {
   profile?: ProfileService;
   /**
    * SSE のコメント行 heartbeat の間隔（ms）。省略時は `DEFAULT_SSE_HEARTBEAT_MS`
-   * （`./sse-heartbeat.ts`）。**環境変数は増やさない** —— テストで短くする以外に
+   * （`@alteroid/core` の `sse-heartbeat.ts`）。**環境変数は増やさない** —— テストで短くする以外に
    * 差し替える理由が無い設定なので、実行環境プロファイルの対象にもしない。
    */
   sseHeartbeatMs?: number;
@@ -828,7 +829,7 @@ export function createApp(deps: AppDeps) {
             });
 
             // heartbeat は SSE のコメント行を流す（クライアントは読み捨てる）。
-            // 死んだ接続の掃除の契機でもある（詳細は `./sse-heartbeat.ts`）。
+            // 死んだ接続の掃除の契機でもある（詳細は `@alteroid/core` の `sse-heartbeat.ts`）。
             const stopHeartbeat = startSseHeartbeat(stream, sseHeartbeatMs, () => wake?.());
 
             try {
@@ -1121,7 +1122,7 @@ export function createApp(deps: AppDeps) {
             });
 
             // heartbeat は SSE のコメント行を流す（クライアントは読み捨てる）。
-            // 死んだ接続の掃除の契機でもある（詳細は `./sse-heartbeat.ts`）。
+            // 死んだ接続の掃除の契機でもある（詳細は `@alteroid/core` の `sse-heartbeat.ts`）。
             const stopHeartbeat = startSseHeartbeat(stream, sseHeartbeatMs, () => wake?.());
 
             try {

@@ -1,5 +1,3 @@
-import type { SSEStreamingApi } from 'hono/streaming';
-
 /**
  * SSE のコメント行 heartbeat（無音死の掃除）。
  *
@@ -56,6 +54,22 @@ import type { SSEStreamingApi } from 'hono/streaming';
  * 別途入れるならこの経路を代替するのではなく、**アイドル中でも OS が
  * 相手の生死を確かめにいく**という別の検知経路を足す形になる。
  *
+ * ## なぜ `packages/core` に在るか
+ *
+ * SSE を**出す側**は2つある —— デーモンが CLI/Web へ出す経路（`apps/daemon` の
+ * `POST /chat` と `GET /journal/stream`）と、runner がデーモンへ出す経路
+ * （`apps/runner` の `GET /events`）である。**どちらか一方の `apps/*` に置くと、
+ * もう一方がそれを読むために逆向きの依存を作ることになる** —— とくに
+ * `apps/runner` は `apps/daemon` を知らない設計で、そこは意図して引いてある線
+ * である（`apps/runner/src/app.ts` 冒頭「叩くのはデーモンだけである」）。
+ * 両方が既に依存している `@alteroid/core` へ置けば、線を跨がずに1つの実装を
+ * 共有できる。
+ *
+ * **そのぶん、この層は `hono` を知らない。** `@alteroid/core` の依存に `hono` は
+ * 無く、足すつもりも無い（core は transport を持たない層である）。だから引数は
+ * {@link SseHeartbeatStream} という**構造的な型**で受ける —— hono の
+ * `SSEStreamingApi` はこの形を満たすので、呼ぶ側は何も包まずにそのまま渡せる。
+ *
  * ## 念のための自衛
  *
  * 上の経路が何らかの理由で `aborted` / `closed` を立てても `onAbort` の
@@ -71,7 +85,26 @@ export const DEFAULT_SSE_HEARTBEAT_MS = 15_000;
  * 無いと、直後にバッファされている次のフィールド行と1メッセージに混ざって
  * 解釈されうる（SSE はメッセージの区切りを空行で決める）。
  */
-const HEARTBEAT_FRAME = ': hb\n\n';
+export const HEARTBEAT_FRAME = ': hb\n\n';
+
+/**
+ * heartbeat が要求する SSE ストリームの形。**hono の型を import しない。**
+ *
+ * これは hono の `SSEStreamingApi` を狭めたもの（かつては
+ * `Pick<SSEStreamingApi, 'aborted' | 'closed' | 'write'>` と書いてあった）で、
+ * **同じ3つを、hono を知らずに言い直しただけである。** 実体は変わらないので
+ * 呼ぶ側は `streamSSE(c, async (stream) => …)` の `stream` をそのまま渡せる。
+ *
+ * `write` の戻りを `Promise<unknown>` にしてあるのは、hono の `write` が返す
+ * `StreamingApi` を core が名指ししないためである（heartbeat はこの戻り値を
+ * 使わない —— 使えないことの理由は冒頭の JSDoc「write() は死んだ接続へ書いても
+ * 「表向きは」何も起こさない」）。
+ */
+export interface SseHeartbeatStream {
+  readonly aborted: boolean;
+  readonly closed: boolean;
+  write(input: string): Promise<unknown>;
+}
 
 /**
  * SSE 経路に heartbeat を仕込む。
@@ -86,7 +119,7 @@ const HEARTBEAT_FRAME = ': hb\n\n';
  * 自衛」を参照）。
  */
 export function startSseHeartbeat(
-  stream: Pick<SSEStreamingApi, 'aborted' | 'closed' | 'write'>,
+  stream: SseHeartbeatStream,
   intervalMs: number,
   wake: () => void,
 ): () => void {
