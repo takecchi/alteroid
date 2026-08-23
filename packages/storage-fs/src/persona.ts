@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   deriveHumanTouchedAtFromJournal,
   deriveMemoryFrontmatter,
+  ensureTrailingNewline,
   memorySlugSchema,
   memoryProtectionRebuildDecision,
   nextDescribedAt,
@@ -478,10 +479,6 @@ function titleOf(content: string, fallback: string): string {
     if (heading?.[1]) return heading[1];
   }
   return fallback;
-}
-
-function ensureTrailingNewline(text: string): string {
-  return text.endsWith('\n') ? text : `${text}\n`;
 }
 
 function isNotFound(error: unknown): boolean {
