@@ -416,6 +416,20 @@ class HttpRunner implements RunnerClient {
    */
   instanceId?: string;
   readonly #baseUrl: string;
+  /**
+   * ログの名乗りに出す URL。**`options.baseUrl` の原文**——`#baseUrl` とは
+   * わざと別に持つ。
+   *
+   * `#baseUrl` は unix ソケットのとき、コンストラクタで `'http://runner'`
+   * （ホスト名が使われないダミー）へ書き換えられる。そのままログへ出すと、
+   * unix ソケットで繋ぐ runner がすべて同じ文字列で名乗ることになり、
+   * どの器の行かを分ける識別子として機能しない。**識別子には常に本物の
+   * 宛先を出す**——`index.ts` の `runnerSeeds()` が `label: url` に積むのも
+   * 同じ原文（`parseRunnerUrls` が返す、空白と重複だけを落として書かれた
+   * まま使う値）なので、ここを揃えておくと同じ runner を指す行が
+   * `onSwap` / `onLost` の行とこのファイルの行とで同じ文字列になる。
+   */
+  readonly #displayBaseUrl: string;
   readonly #socketPath: string | null;
   readonly #token: string;
   readonly #fetch: typeof fetch;
@@ -454,9 +468,21 @@ class HttpRunner implements RunnerClient {
    * この項目が無くても既存の間引き（待ち時間ベース）の挙動は変わらない。
    */
   #lastLoggedCauseCode = '';
+  /**
+   * `hello()` が `/health` から実際に `runnerId` を受け取ったか。
+   *
+   * **`this.runnerId` の既定値（`'runner-primary'`）は、一度も接続できて
+   * いない段階から入っている。** この既定値をそのままログへ出すと、取れて
+   * いない値が取れた値の顔をして出る（AGENTS.md「取れない軸に 0 の行を
+   * 作る」と同じ形）。だから「聞けたか」は `runnerId` そのものではなく、
+   * この別のフラグで持つ——`hello()` が空文字でない `body.runnerId` を
+   * 読めたときだけ立てる。
+   */
+  #runnerIdKnown = false;
 
   constructor(options: HttpRunnerOptions) {
     this.#socketPath = socketPathOf(options.baseUrl);
+    this.#displayBaseUrl = options.baseUrl;
     // ソケットのときも URL の形は要る（ホスト名は使われない）
     this.#baseUrl =
       this.#socketPath === null ? options.baseUrl.replace(/\/$/, '') : 'http://runner';
@@ -491,6 +517,7 @@ class HttpRunner implements RunnerClient {
     const body = (await response.json()) as HealthBody;
     if (typeof body.runnerId === 'string' && body.runnerId.length > 0) {
       this.runnerId = body.runnerId;
+      this.#runnerIdKnown = true;
     }
     if (typeof body.workspacePath === 'string') this.workspacePath = body.workspacePath;
     // **`revision` フィールド自体が無ければ触らない**（`undefined` のまま）。
@@ -648,6 +675,30 @@ class HttpRunner implements RunnerClient {
    * 呼び出しでは `#backingOff` が既に `false` になっており、**1接続につき
    * 最大1行に保たれる。**
    */
+  /**
+   * `#pump` が書く2行が名乗る宛先。**`runner (<url>[ / <runnerId>])` の形**
+   * ——`index.ts` の `onSwap` / `onLost` が書く行と同じ組み立てである。
+   *
+   * **URL は常に本物を出す**（{@link #displayBaseUrl} の doc）。**`runnerId` は
+   * `/health` から実際に受け取れたとき（{@link #runnerIdKnown}）だけ出す**——
+   * 受け取れていなければ `this.runnerId` は一度も接続できていない段階からの
+   * 既定値 `'runner-primary'` なので、それをそのまま出すと取れていない値が
+   * 取れた値の顔をして出る。
+   *
+   * **なぜこの識別子が要るか（#274）。** 本番には runner が複数台あり、
+   * それぞれ独立した stream と独立した backoff 状態を持つ。この2行
+   * （切断・再接続）が runner を名乗らないと、`16000ms → 4000ms` のような
+   * 待ちの下降が「1台でリセットが起きた証拠」なのか「単に別の台の行」
+   * なのかが、ログからは判定できない。同時刻に並ぶ2行が「2台の同時
+   * タイムアウト」なのか「1台の二重記録」なのかも同様に分けられない。
+   * この PR（#309）が売っている契約（接続が持続してからリセットする）は
+   * runner ごとに成立する条件なので、ログも runner ごとに読めなければ
+   * 本番でその契約が踏めているかを検証できない。
+   */
+  #describeSelf(): string {
+    return `runner (${this.#displayBaseUrl}${this.#runnerIdKnown ? ` / ${this.runnerId}` : ''})`;
+  }
+
   async #pump(onEvent: (event: RunnerEvent) => void): Promise<void> {
     while (!this.#closed) {
       let failed = false;
@@ -659,7 +710,7 @@ class HttpRunner implements RunnerClient {
           // **健全と判定した瞬間に書く。** `#stream()` がまだ終わっていなくても
           // （＝接続がまだ生きていても）ここへ来る——`#pump` の doc を参照。
           if (this.#backingOff) {
-            process.stderr.write(`alteroidd: runner のストリームに繋ぎ直せた\n`);
+            process.stderr.write(`alteroidd: ${this.#describeSelf()} のストリームに繋ぎ直せた\n`);
             this.#backingOff = false;
           }
         });
@@ -678,7 +729,7 @@ class HttpRunner implements RunnerClient {
         const causeCode = causeInfo?.code ?? '';
         if (this.#lastLoggedDelayMs !== waitMs || this.#lastLoggedCauseCode !== causeCode) {
           process.stderr.write(
-            `alteroidd: runner のストリームが切れました: ${reasonOf(failure)}${causeSuffixOf(causeInfo)}（次は${waitMs}ms後に再試行）\n`,
+            `alteroidd: ${this.#describeSelf()} のストリームが切れました: ${reasonOf(failure)}${causeSuffixOf(causeInfo)}（次は${waitMs}ms後に再試行）\n`,
           );
           this.#lastLoggedDelayMs = waitMs;
           this.#lastLoggedCauseCode = causeCode;

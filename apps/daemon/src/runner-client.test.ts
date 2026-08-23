@@ -1460,6 +1460,158 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
       expect(failureLines[6]).toContain('code=UND_ERR_BODY_TIMEOUT');
     });
   });
+
+  /**
+   * **本番には runner が複数台あり、それぞれ独立した stream と独立した backoff
+   * 状態を持つ（#274 issue コメント、2026-08-23T09:03:36Z）。** ところが
+   * 「切れました」「繋ぎ直せた」の2行は runner を名乗らないので、`16000ms →
+   * 4000ms` のような待ちの下降が「1台でリセットが起きた証拠」か「単に別の台の
+   * 行」かが、ログからは判定できない——この PR（#309）が守る契約（接続が
+   * 持続してからリセットする）は runner ごとに成立する条件なので、ログも
+   * runner ごとに読めなければ本番で検証できない。ここではその識別子が
+   * 実際に2行へ出ることと、**取れていないのに取れた顔をして出ない**ことを
+   * 別々の歯で確かめる。
+   */
+  describe('ログの宛先識別子（#274 issue コメント）', () => {
+    /**
+     * `/health` の応答本文だけを差し替えられる `fetchEvents` の変種。
+     *
+     * **本体の `fetchEvents`（このファイルの上のほう）は変えない**——
+     * `runnerId: 'runner-flaky'` を前提にした既存の歯がある。ここで見たいのは
+     * `/health` が `runnerId` を返す／返さないの差だけなので、専用の
+     * ヘルパーをこの describe に閉じて置く。
+     */
+    function fetchEventsWithHealth(
+      healthBody: Record<string, unknown>,
+      outcome: (callIndex: number) => 'fail' | 'ok' | 'healthy',
+    ): { fetchFn: typeof fetch } {
+      let calls = 0;
+      const fetchFn = (async (input: string | URL | Request) => {
+        const path = pathOf(input);
+        if (path === '/health') {
+          return Response.json(healthBody);
+        }
+        if (path === '/events') {
+          const result = outcome(calls);
+          calls += 1;
+          if (result === 'fail') return new Response(null, { status: 503 });
+          if (result === 'healthy') {
+            return new Response(
+              new ReadableStream<Uint8Array>({
+                start: (controller) => {
+                  controller.enqueue(new TextEncoder().encode(HEARTBEAT_FRAME));
+                  controller.close();
+                },
+              }),
+              { status: 200, headers: { 'content-type': 'text/event-stream' } },
+            );
+          }
+          return new Response(new ReadableStream({ start: (controller) => controller.close() }), {
+            status: 200,
+            headers: { 'content-type': 'text/event-stream' },
+          });
+        }
+        throw new Error(`想定していない path: ${path}`);
+      }) as typeof fetch;
+      return { fetchFn };
+    }
+
+    /** 1敗目→成功（閾値超えでバイト到着）→2敗目、の順で「切れました」1行と「繋ぎ直せた」1行を作る。 */
+    async function runFailThenHealthyThenFail(
+      fetchFn: typeof fetch,
+    ): Promise<{ failureLines: string[]; reconnectLines: string[] }> {
+      const waits: number[] = [];
+      let notifyEnough: () => void = () => undefined;
+      const enough = new Promise<void>((resolve) => {
+        notifyEnough = resolve;
+      });
+      const sleepFn = async (ms: number): Promise<void> => {
+        waits.push(ms);
+        if (waits.length >= 3) notifyEnough();
+      };
+
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+        sleepFn,
+        nowFn: nowFnAtExactThreshold(),
+      });
+      await client.connect(() => undefined);
+      await enough;
+      await client.close();
+
+      const lines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      return {
+        failureLines: lines.filter((line: string) => line.includes('ストリームが切れました')),
+        reconnectLines: lines.filter((line: string) => line.includes('繋ぎ直せた')),
+      };
+    }
+
+    it('/health が runnerId を返す runner では、切断・再接続の両方の行にその識別子が出る', async () => {
+      const { fetchFn } = fetchEventsWithHealth(
+        { runnerId: 'runner-flaky', workspacePath: '/workspace' },
+        (i) => (i === 0 ? 'fail' : i === 1 ? 'healthy' : 'fail'),
+      );
+
+      const { failureLines, reconnectLines } = await runFailThenHealthyThenFail(fetchFn);
+
+      expect(failureLines.length).toBeGreaterThan(0);
+      expect(reconnectLines).toHaveLength(1);
+      // 器の入れ替えの行（`index.ts` の `onSwap`）と同じ組み立て
+      // （`runner (<url> / <runnerId>)`）で出る。
+      for (const line of [...failureLines, ...reconnectLines]) {
+        expect(line).toContain('runner (http://runner.test / runner-flaky)');
+      }
+    });
+
+    it('/health が runnerId を返さない（古い runner）ときは、既定値 runner-primary がログに出ない', async () => {
+      // `runnerId` フィールド自体が無い応答——`hello()` の doc が言う
+      // 「フィールド自体が無い古い runner」を模す。
+      const { fetchFn } = fetchEventsWithHealth({ workspacePath: '/workspace' }, (i) =>
+        i === 0 ? 'fail' : i === 1 ? 'healthy' : 'fail',
+      );
+      const waits: number[] = [];
+      let notifyEnough: () => void = () => undefined;
+      const enough = new Promise<void>((resolve) => {
+        notifyEnough = resolve;
+      });
+      const sleepFn = async (ms: number): Promise<void> => {
+        waits.push(ms);
+        if (waits.length >= 3) notifyEnough();
+      };
+
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+        sleepFn,
+        nowFn: nowFnAtExactThreshold(),
+      });
+      // **罠の歯。** `client.runnerId` 自体は既定値を持ったままである
+      // （`RunnerClient.runnerId` は non-optional で、`hello()` は聞けなければ
+      // 書き換えない）。この既定値をそのままログへ出すと、取れていない値が
+      // 取れた値の顔をして出る——それを下で確かめる。
+      expect(client.runnerId).toBe('runner-primary');
+
+      await client.connect(() => undefined);
+      await enough;
+      await client.close();
+
+      const lines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      const failureLines = lines.filter((line: string) => line.includes('ストリームが切れました'));
+      const reconnectLines = lines.filter((line: string) => line.includes('繋ぎ直せた'));
+
+      expect(failureLines.length).toBeGreaterThan(0);
+      expect(reconnectLines).toHaveLength(1);
+      for (const line of [...failureLines, ...reconnectLines]) {
+        expect(line).not.toContain('runner-primary');
+        // URL は出るが、` / <runnerId>` の部分ごと無い。
+        expect(line).toContain('runner (http://runner.test)');
+        expect(line).not.toMatch(/runner \(http:\/\/runner\.test \/ /);
+      }
+    });
+  });
 });
 
 /**
