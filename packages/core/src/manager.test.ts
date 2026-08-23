@@ -3192,6 +3192,45 @@ describe('止めた結果を確かめる', () => {
     await s.pool.stop();
   });
 
+  /**
+   * **`outcome !== 'stopped'` では `reason` が本文へ入らない**（`abort()` は
+   * `stopped` の枝でだけ `理由: ${reason}` を前置する）。人間が `reason` を
+   * 書いていても、その文字が1文字も入っていないメッセージに印を立てるのは嘘で
+   * ある — 印は「この text が Markdown として書かれていない」という**その text
+   * についての事実**を名乗るものだから（`textMarkupSchema` の doc、
+   * `packages/core/src/schema.ts`）。
+   *
+   * **本文に人間の文字が入っていないことまで見る。** `markup` が立たないこと
+   * だけを見ると、「`reason` が入っているのに印だけ落ちた」場合と区別が付かない。
+   */
+  it('人間が reason 付きでも、止まっていなければ markup は立たない（reason が本文に入らない回）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({ ...job, status: 'waiting_human' });
+    // `swappableRunner` の `stop` は何もしない ＝ 受理はするが畳まない器。
+    const fake = swappableRunner();
+    fake.state.alive.push({
+      managerId: job.id,
+      status: 'waiting_human',
+      cwd: job.cwd,
+      request: job.request,
+      waiting: [],
+      sessionId: job.sessionId,
+    });
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    const result = await s.pool.abort(job.id, '*思いつきで* 止めた', 'human');
+    expect(result.outcome).toBe('not_stopped');
+
+    const notStopped = findStopMessage(s.inbox, 'まだ止まっていません');
+    expect(notStopped).toBeDefined();
+    // 人間の文字が本文に1文字も入っていないこと（印を立てない根拠そのもの）
+    expect(notStopped?.text).not.toContain('*思いつきで* 止めた');
+    expect(notStopped?.markup).toBeUndefined();
+
+    await s.pool.stop();
+  });
+
   it('居ないマネージャーを止めても、黙って成功にしない', async () => {
     const s = setup(undefined, { stores: createMemoryStores(), runner: swappableRunner().runner });
 

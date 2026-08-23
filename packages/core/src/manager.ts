@@ -1337,8 +1337,14 @@ class Pool implements ManagerPool {
             `（runner にセッションが残っています）。`
           : `${managerId} を${who}が止めようとしましたが、止まったかどうか確認が取れませんでした。`;
     // **`markup: 'none'` は、人間が打った自由記述 `reason` が実際にこの
-    // `messageText` へ埋め込まれる回にだけ立てる。** 条件は `by === 'human'`
-    // かつ `reason !== undefined` の2つ:
+    // `messageText` へ埋め込まれる回にだけ立てる。** 条件は3つ:
+    //
+    // - **`outcome === 'stopped'` のときだけ立てる。** `reason` が
+    //   `messageText` へ前置されるのはこの枝だけで、`not_stopped` /
+    //   `unknown` の文にはデーモンの定型文しか入らない。人間が `reason` を
+    //   書いていても、その文字が1文字も入っていないメッセージに印を立てるのは
+    //   嘘である — 印は「この text が Markdown として書かれていない」という
+    //   **その text についての事実**を名乗るものだからである。
     //
     // - **`by === 'clone'` のときは立てない。** クローンの `reason`
     //   （`packages/core/src/tools.ts` の `manager_stop`）は AI が書いた自由
@@ -1360,7 +1366,7 @@ class Pool implements ManagerPool {
     // しまう。`undefined` なら「ここは決めていない」が目に見える形で残る
     // （`textMarkupSchema` の doc、`packages/core/src/schema.ts`）。
     const markup: TextMarkup | undefined =
-      by === 'human' && reason !== undefined ? 'none' : undefined;
+      outcome === 'stopped' && by === 'human' && reason !== undefined ? 'none' : undefined;
     this.#post({
       type: 'manager_message',
       id: randomUUID(),
