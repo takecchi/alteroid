@@ -2411,10 +2411,10 @@ describe('システムプロンプトの道具一覧', () => {
  * 終わる名前を足した人は、この試験に何も書き足さなくても捕まる。
  *
  * ⚠️ **この掃き方が拾えない範囲を明示しておく。** 集めているのは名前が
- * `_list` で終わるものだけで、`journal_read` / `usage_read` / `conversation_read`
- * は一覧を返すのにこの網に入らない（下で名指しして足してある）。**別の名前で
- * 新しい一覧を足した人は、やはり自分で書き足す必要がある** — 網が全部を覆って
- * いると読まれるほうが、覆っていないと分かっているより悪い。
+ * `_list` で終わるものだけで、`journal_read` / `usage_read` / `conversation_read` /
+ * `self_status` は一覧を返すのにこの網に入らない（下で名指しして足してある）。
+ * **別の名前で新しい一覧を足した人は、やはり自分で書き足す必要がある** —
+ * 網が全部を覆っていると読まれるほうが、覆っていないと分かっているより悪い。
  *
  * **1つの道具が複数の一覧モードを持つなら、モードごとに名指しすること。**
  * `conversation_read` は積む向きの違う3モードを持つので4件に分けてある
@@ -2468,6 +2468,22 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       args: { conversationId: 'conv-long' },
     },
     { label: 'conversation_read（語で探す）', name: 'conversation_read', args: { q: '発言' } },
+    /*
+     * **`self_status` は名前が `_list` で終わらないが、「記憶の大きさ」の節に
+     * 一覧（文書ごとの内訳）を持つ。** ここで測るのは節全体の出力（P1/P2 は
+     * 下で別に、節だけを切り出して測る — `self_status` は道具全体が一覧では
+     * ないので、この2本（OUTPUT_CAP 未満・切ったら合図）だけがこの一覧の
+     * 存在をそのまま測れる）。
+     *
+     * `self_status` は `runtime`（`ToolContext.runtime`）が無いと「読めない
+     * 場面である」という定型文だけを返し、記憶の内訳を含む本体を組み立てない
+     * ——だから `flooded()` は `harness()` に runtime を渡す（下の
+     * `LISTING_SWEEP_RUNTIME`）。他の道具は `context.runtime` を一切読まない
+     * ので（`tools.ts` を grep して確認済み: `context.runtime` の参照は
+     * `self_status` の1箇所だけ）、runtime を渡しても他のケースの挙動には
+     * 影響しない。
+     */
+    { label: 'self_status', name: 'self_status', args: {} },
   ];
 
   /**
@@ -2503,13 +2519,47 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
   });
 
   /**
+   * `flooded()` が作る `harness()` へ渡す runtime。
+   *
+   * **`self_status` をこの掃き出しの対象に足すために要る。** runtime を
+   * 渡さない既定の `harness()` では `self_status` は「いまは自分の実行時の
+   * 事実を読めない場面である」という定型文だけを返し、記憶の内訳を含む
+   * 本体を一切組み立てない——それでは OUTPUT_CAP も TRUNCATION_MARK も
+   * 何も測れない。値そのものは `describe('self_status…')` の `RUNTIME` と
+   * 同じ形（このテストが見るのは `stores` との噛み合わせであって
+   * `CloneRuntimeFacts` の整形自体ではないので、値の中身に意味は無い）。
+   *
+   * **他の道具は `context.runtime` を読まないので、この定数を足しても他の
+   * ケースの挙動は変わらない**（`tools.ts` を `grep -n 'context.runtime'` で
+   * 確認済み——参照は `self_status` のハンドラ1箇所だけ）。
+   */
+  const LISTING_SWEEP_RUNTIME: CloneRuntimeFacts = {
+    revision: { commit: null, short: null, source: null },
+    declaredModel: 'fable',
+    modelOverridden: false,
+    modelEnvKey: 'ALTEROID_CLONE_MODEL',
+    sdkModel: null,
+    effort: null,
+    requestedEffort: null,
+    claudeCodeVersion: null,
+    apiKeySource: null,
+    permissionMode: null,
+    requestedPermissionMode: 'auto',
+    mcpServers: [],
+    sessionId: null,
+    resumedFrom: null,
+    injectedMemoryChars: 0,
+    systemPromptChars: 0,
+  };
+
+  /**
    * どの一覧も「溢れる手前」まで積んだ器を作る。
    *
    * **1つの器で全部の一覧を撃つ。** 一覧ごとに別の器を作ると、積み忘れた
    * ストアの一覧が「0件だから短い」で通ってしまう（それは上限の保証ではない）。
    */
   async function flooded(count: number): Promise<Harness> {
-    const h = harness();
+    const h = harness(() => LISTING_SWEEP_RUNTIME);
     const long = 'あ'.repeat(1_500);
 
     for (let index = 0; index < count; index += 1) {
@@ -2676,21 +2726,35 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
    *
    * 散文の理由を書くのはここまでにする——下の自己測定の歯が、この除外が
    * まだ正しいこと（＝いまも P1 を満たしていないこと）を毎回測り直す。
+   *
+   * **「軸が未決」は、いまも経過ではなく結論であるものがある。** `runner_list`
+   * はかつて「#211 待ち」（判断待ち）だったが、**人間が「出さない」と決めた**
+   * （2026-08-23。理由は下のコメント）。それでも軸の意味そのもの（(a)/(b) の
+   * どちらを作成時刻と呼ぶか）はいまも未定義のままである——決まったのは
+   * 「未定義のまま出さない」が**最終形である**ことで、「いずれ決めて出す」の
+   * 途中ではない。**だから変数名・doc の主張（軸が未決で P1 を測れない）は
+   * そのまま正しく、変える必要が無い。**
    */
   const AXIS_UNDECIDED = new Map<string, string>([
     [
       'runner_list',
-      // **こちらは時間では解決しない。判断が要る。** #211 — 器は永続化層を持たず
-      // （名簿は `runner-protocol.ts` の `Registry` が持つインメモリの Map で、
-      // デーモンを再起動すれば全部消える）、`since` は「この状態になった時刻」で
-      // **状態が変わるたびに更新される**（= created_at ではない）。そして
-      // 「作成時刻」が (a) 器の定義が置かれた時刻 (b) いまの接続が確立した時刻 の
-      // どちらを指すのかが**決まっていない。**
+      // 器は永続化層を持たず（名簿は `runner-protocol.ts` の `Registry` が
+      // 持つインメモリの Map で、デーモンを再起動すれば全部消える）、`since` は
+      // 「この状態になった時刻」で**状態が変わるたびに更新される**（=
+      // created_at ではない）。そして「作成時刻」が (a) 器の定義が置かれた時刻
+      // (b) いまの接続が確立した時刻 のどちらを指すのかが**決まっていなかった。**
       //
       // **`unknown` で埋めないこと。** `unknown` は「在るはずだが根拠が無い」を
       // 表す値である。ここは**そもそも何を作成時刻と呼ぶかが未決**で、前者は
       // 決めれば答えが出るが後者は決めても出ない。**混ぜると、未決が不明に化ける。**
-      '#211 待ち（作成の軸そのものが未決。unknown で埋めない）',
+      //
+      // **人間が決めた（2026-08-23）。** (a)/(b) のどちらかに決める／(c)
+      // そもそも `runner_list` には作成時刻を出さない、の3案を諮ったところ、
+      // 人間の回答は逐語で:「まぁ、無理に置く必要はありません。runner_list は
+      // なくても良いこととします」——(c) を選んだ。他の一覧と揃わないことを
+      // 人間が明示的に受け入れている。**実装しなかったのではなく、出さないと
+      // 決まった。**
+      '人間が出さないと決めた（2026-08-23。runner_list には作成時刻を置かない。unknown で埋めない）',
     ],
   ]);
 
@@ -2836,6 +2900,80 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       }
     },
   );
+
+  /**
+   * **`self_status` の P1 は `FIVE_FIELD_SWEPT` の `it.each` に混ぜない。**
+   * `FIVE_FIELD_SWEPT` は `SWEPT`（`_list` で終わる名前の機械的な集合）から
+   * 作られていて、`self_status` はそこに入らない（`_list` で終わらない）。
+   * ここに手で名前を足すと、`SWEPT` の総当たりという性質が壊れる——だから
+   * 別の名指しの `it()` として立てる。
+   *
+   * **`self_status` は道具全体が一覧ではない。** `describeCloneRuntime` の
+   * 出力にも `- ` で始まる行がある（MCP サーバ一覧など）ので、
+   * `splitListingEntries(reply)` を丸ごと当てると、一覧でない行まで P1 の
+   * 違反として数えてしまう。だから「記憶の大きさ」の節（`## 記憶の大きさ`
+   * から次の `## ` の直前まで）だけを切り出してから測る。節の先頭にある
+   * `- 総文字数: …` の行は詳細を取りに行く鍵（id）を持たない集計行であって
+   * 一覧の1件ではないので、切り出しの中で除く。
+   */
+  function extractMemorySizeEntries(reply: string): string[] {
+    const heading = '## 記憶の大きさ';
+    const start = reply.indexOf(heading);
+    if (start === -1) return [];
+    const rest = reply.slice(start);
+    // 見出し自身（0文字目）は無視して、次の `## ` を探す。
+    const nextHeadingAt = rest.indexOf('\n## ', heading.length);
+    const section = nextHeadingAt === -1 ? rest : rest.slice(0, nextHeadingAt);
+    return splitListingEntries(section).filter(
+      (entry) => !entry.trimStart().startsWith('- 総文字数'),
+    );
+  }
+
+  it('self_status — 記憶の内訳のどの1件も id + 名前 / 作成 + 更新 / 概要 を出す（P1）', async () => {
+    const h = await flooded(60);
+
+    const reply = await h.call('self_status', {});
+    const entries = extractMemorySizeEntries(reply);
+    expect(entries.length).toBeGreaterThan(0);
+
+    for (const entry of entries) {
+      expect(fiveFieldViolations(entry)).toEqual([]);
+      // **`fiveFieldViolations` の id+名前チェックは形（2トークン在るか）しか
+      // 見ない——値が本当に `title` かどうかまでは判定しない。** 変異試験で
+      // 確かめた: `renderMemorySize` から `${doc.title}` を丸ごと落としても、
+      // 直後の `(作成: …` が2つ目のトークンとして数えられ、上の
+      // `fiveFieldViolations` だけでは検出できずに生存した。`flooded()` が
+      // 書く記憶は `# 題<pad>` という見出しを持つ（`persona.write` の
+      // タイトル抽出）ので、その文字列が実際に出ているかも確かめる——
+      // これで `title` を落とす変異が検出できる。
+      expect(entry).toMatch(/題\d{4}/);
+    }
+  });
+
+  /**
+   * **`self_status` の記憶内訳は、共通の `TRUNCATION_MARK`（CASES の
+   * 「切ったなら黙らない」試験）だけでは、一覧の予算（`renderListing` の
+   * `budget` / `omitted`）が効いていることを測れない。**
+   *
+   * 変異試験で確かめた: `renderMemorySize` の `omitted` を `() => ''` に
+   * 差し替えて省略の断り書きを消しても、`flooded()` が書く記憶の
+   * `description` は1件ごとに `SELF_STATUS_MEMORY_DESCRIPTION_LIMIT`
+   * （120字）を超えるため、`excerptLine` が1件ごとに「…（N 文字省略。全
+   * M 文字）」を出し続け、`TRUNCATION_MARK`（`/省略|残り \d|文字目/`）は
+   * それだけで満たされてしまう——一覧の側の断り書きが消えたことは、共通の
+   * 歯では検出できずに生存した。
+   *
+   * だから一覧レベルの断り書きの中身（件数と続きの取り方）を直接見る。
+   */
+  it('self_status — 記憶の内訳を切ったら、件数と続きの取り方（memory_list / memory_read）が出る', async () => {
+    const h = await flooded(60);
+
+    const reply = await h.call('self_status', {});
+
+    expect(reply).toMatch(/…ほか \d+ 文書は省略（全 \d+ 文書のうち \d+ 文書だけ出した）。/);
+    expect(reply).toContain('memory_list');
+    expect(reply).toContain('memory_read slug=<slug>');
+  });
 
   it.each(STRICT_SHAPE_SWEPT)(
     '%s — どの1件も id + 名前 / 作成 + 更新 / 概要 を決まった順で出す（P2）',
