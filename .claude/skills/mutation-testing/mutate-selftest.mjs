@@ -42,6 +42,8 @@ export const SELFTEST_SCENARIOS = [
   'judgement-id-integrity',
   'rebuild-failure',
   'spec-validation',
+  'judgement-forbidden-word-boundary',
+  'restore-status-comparison',
   'all',
 ];
 
@@ -858,6 +860,256 @@ function scenarioSpecValidation() {
   };
 }
 
+// ── 8. 判定の禁止語検査が id の部分文字列に当たらないこと（#348） ─────
+//
+// 実測（#348 本文）: `bypass` の中の `pass`、`broken` の中の `ok`、`lookup` の
+// 中の `ok` が禁止語判定に当たり、ごく自然な変異 id が `judge()` で拒否
+// されていた。**検査そのものを外してはいけない**（Issue に明記）ので、
+// 両方向を確認する:
+//   (a) bypass を含む自然な id は通ること（#348 の回帰確認そのもの）
+//   (b) `ok` / `pass` が単独の語として現れる id（`m1-ok` のような、`-` や
+//       端で区切られた形）は、依然として拒否されること
+// (b) が無いと、この歯は「検査を弱めて壊す」方向の回帰（例: 検査を丸ごと
+// 外す）を検出できない——(a) だけでは「常に通る」実装でも緑になってしまう。
+function scenarioJudgementForbiddenWordBoundary() {
+  section('selftest: 8. 判定の禁止語検査が id の部分文字列に当たらないこと（#348）');
+  requireNoMarker('judgement-forbidden-word-boundary');
+  ensureFixtureClean();
+
+  function runJudgementFor(id) {
+    const spec = {
+      id,
+      file: 'apps/cli/src/conversations.ts',
+      from: '会話はまだありません。',
+      to: `SELFTEST_348_${id.replace(/[^A-Za-z0-9]/g, '_')}_MUTATED。`,
+      expect: 1,
+      target: null,
+      testFilter: 'apps/cli/src/conversations',
+    };
+    log('');
+    log(`== id="${id}" を通す ==`);
+    applyMutation(spec);
+    try {
+      const artifactResult = buildAndCheckArtifact(spec);
+      const testResult = runTests([spec.testFilter]);
+      log('--- test 生ログ ここから ---');
+      log(testResult.raw);
+      log('--- test 生ログ ここまで ---');
+      try {
+        const judgement = judge(spec, artifactResult, testResult);
+        log(`judge() が例外を投げずに終わった: ${judgement.text}`);
+        return { threw: false, category: judgement.category, text: judgement.text };
+      } catch (err) {
+        log(`judge() が例外で拒否した: ${err.message}`);
+        return { threw: true, message: err.message };
+      }
+    } finally {
+      restoreMutation();
+    }
+  }
+
+  // (a) 自然な id — bypass / broken / lookup を部分文字列に含むが、
+  //     禁止語（ok / pass）は英数字に挟まれている。通るはず。
+  const naturalIds = ['m318a-01-guard-bypass', 'm-broken-guard', 'lookup-drop'];
+  const naturalResults = {};
+  for (const id of naturalIds) {
+    naturalResults[id] = runJudgementFor(id);
+  }
+
+  // (b) 単独の語として ok / pass が現れる id — `-` や文字列の端で区切られて
+  //     いる。禁止語検査が生きているなら拒否されるはず。
+  const boundaryIds = ['token-ok', 'm1-ok'];
+  const boundaryResults = {};
+  for (const id of boundaryIds) {
+    boundaryResults[id] = runJudgementFor(id);
+  }
+
+  for (const id of naturalIds) {
+    if (naturalResults[id].threw) {
+      throw new HarnessError(
+        `id="${id}"（自然な変異名。bypass/broken/lookup を含む）が禁止語検査で拒否された` +
+          `（#348 の回帰）: ${naturalResults[id].message}`,
+      );
+    }
+  }
+  for (const id of boundaryIds) {
+    const result = boundaryResults[id];
+    if (!result.threw) {
+      throw new HarnessError(
+        `id="${id}"（ok/pass が単独の語として現れる）が禁止語検査を素通りした` +
+          '（検査を外す方向の回帰。#348 は検査を外してはいけないと明示している）',
+      );
+    }
+    // 拒否メッセージが id 由来と分かる形になっているか（#348 の要求）。
+    if (!result.message.includes(id)) {
+      throw new HarnessError(
+        `id="${id}" の拒否メッセージが id 由来と分かる形になっていない: ${result.message}`,
+      );
+    }
+  }
+
+  return {
+    scenario: 'judgement-forbidden-word-boundary',
+    naturalIds: Object.fromEntries(
+      naturalIds.map((id) => [
+        id,
+        { passed: !naturalResults[id].threw, category: naturalResults[id].category },
+      ]),
+    ),
+    boundaryIds: Object.fromEntries(
+      boundaryIds.map((id) => [
+        id,
+        {
+          rejected: boundaryResults[id].threw,
+          messageMentionsId: boundaryResults[id].message?.includes(id) ?? false,
+        },
+      ]),
+    ),
+  };
+}
+
+// ── 9. restore の12c: 変異前の git status と比較する（HEAD ではない）（#321） ──
+//
+// 受け入れ条件:
+//   (a) 対象ファイル自身に、変異とは無関係な正当な未コミット変更が在っても、
+//       復元は完全に成功し、印は消える（#321 の症状そのものの回帰確認。
+//       直す前はここで印が `stage: 'source-mutated'` のまま残っていた）
+//   (b) 12c が本当に落ちるべきとき（復元後に対象ファイルの git 管理状態が
+//       変異前と食い違ったとき）には、依然として落ちること。塞ぎすぎて
+//       検査が死んでいないことの裏取り。このとき印は
+//       `stage: 'dist-unverified'` を名乗っていること（12b の直後に印を
+//       進めるようにした、この PR のもう一つの変更点の確認）——
+//       `stage: 'source-mutated'` のままだと、次に来た人が #321 と同じ形で
+//       誤読する
+function scenarioRestoreStatusComparison() {
+  section('selftest: 9. restore の12cが変異前の git status と比較すること（#321）');
+  requireNoMarker('restore-status-comparison');
+  ensureFixtureClean();
+
+  // (a) 対象ファイル自身に無関係な未コミット変更を先に作る。
+  const foreignChangeContent = `${FIXTURE_ORIGINAL}// SELFTEST-321-FOREIGN-UNCOMMITTED-CHANGE\n`;
+  writeRepoFile(FIXTURE_REL, foreignChangeContent);
+  const statusWithForeignChange = gitStatusPorcelainFor(FIXTURE_REL);
+  log(
+    `-- 9a. 変異とは無関係な未コミット変更を入れた。git status: ${JSON.stringify(statusWithForeignChange)} --`,
+  );
+  if (statusWithForeignChange.trim() === '') {
+    throw new HarnessError(
+      'selftest の前提が崩れている: 未コミット変更を入れたのに git status --porcelain が空。' +
+        '.gitignore や fixture の場所を確認すること。',
+    );
+  }
+
+  const spec = {
+    id: 'selftest-321-foreign-change',
+    file: FIXTURE_REL,
+    from: 'LINE-TWO',
+    to: 'LINE-TWO-321TEST',
+    expect: 1,
+    target: null,
+  };
+  applyMutation(spec);
+  log('-- 9b. apply → restore を通す。対象ファイルへの無関係な変更があっても復元は成功するはず --');
+  restoreMutation();
+  const contentAfterRestore = readRepoFile(FIXTURE_REL);
+  const restoredWithForeignChangeIntact = contentAfterRestore === foreignChangeContent;
+  const markerGoneAfterRestore = !markerExists();
+  log(`復元後、無関係な未コミット変更が残っているか（残るはず）: ${restoredWithForeignChangeIntact}`);
+  log(`復元後、印は消えているか（消えるはず）: ${markerGoneAfterRestore}`);
+
+  // 後始末: selftest 用の無関係な変更を取り除き、fixture を元に戻す。
+  writeRepoFile(FIXTURE_REL, FIXTURE_ORIGINAL);
+  const statusAfterCleanupA = gitStatusPorcelainFor(FIXTURE_REL);
+  log(`selftest 後始末後の git status: ${JSON.stringify(statusAfterCleanupA)}`);
+
+  if (!restoredWithForeignChangeIntact || !markerGoneAfterRestore) {
+    throw new HarnessError(
+      '対象ファイルに正当な未コミット変更が在ると、復元が完全に成功しても印が残る（#321 の回帰）。',
+    );
+  }
+
+  // (b) 対比: 12c が本当に落ちるべきときに落ちることを確認する。復元の
+  //     「最中」に対象ファイルの git 管理状態を外から変える（`git add`）
+  //     ——`restoreMutation` はワークツリーの中身を常に原文へ書き戻すので、
+  //     この介入は「復元後に、そのファイルの git 管理状態が変異前と食い
+  //     違った」という状況を作る（SKILL.md「同じツリーで HEAD を動かすのも
+  //     汚染に見える」と同型の、ファイルの staging 版）。
+  ensureFixtureClean();
+  applyMutation(spec);
+  log('');
+  log('-- 9c. 対比: 変異が当たっている最中に、外から対象ファイルを git add する（意図的な注入） --');
+  execFileSync('git', ['add', '--', FIXTURE_REL], { cwd: ROOT });
+  const statusAfterForeignAdd = gitStatusPorcelainFor(FIXTURE_REL);
+  log(`git add 直後の git status: ${JSON.stringify(statusAfterForeignAdd)}`);
+
+  let restoreThrew = false;
+  let restoreErrorMessage = null;
+  try {
+    restoreMutation();
+    log('⚠ restore が例外を投げずに終わった（想定外）');
+  } catch (err) {
+    restoreThrew = true;
+    restoreErrorMessage = err.message;
+    log(`restore は12cで例外を投げた（想定どおり）:\n${err.message}`);
+  }
+
+  // このとき印は残るが、`stage` が `dist-unverified` を名乗っているはず
+  // （12b の直後に進めるようにしたため）。`source-mutated` のままだと
+  // #321 と同じ形で「変異が当たったまま」と誤読される。
+  let stageAfterFailure = null;
+  if (markerExists()) {
+    const marker = JSON.parse(fs.readFileSync(path.join(ROOT, 'MUTATION-IN-PROGRESS.json'), 'utf8'));
+    stageAfterFailure = marker.stage ?? 'source-mutated';
+  }
+  log(`12cで落ちた後、印の stage: ${stageAfterFailure}`);
+  log(
+    `12cで落ちた後、対象ファイルの内容は既に原文に戻っているはず（md5照合はこの前に通っている）: ` +
+      `${readRepoFile(FIXTURE_REL) === FIXTURE_ORIGINAL}`,
+  );
+
+  // 片付ける: 外から加えた git add を取り消し、正しい状態で restore を
+  // やり直す（rebuildAndVerify は target: null なので即 ok。べき等性の確認
+  // でもある）。
+  execFileSync('git', ['restore', '--staged', '--', FIXTURE_REL], { cwd: ROOT });
+  const statusAfterUnstage = gitStatusPorcelainFor(FIXTURE_REL);
+  log('');
+  log(`-- 9d. git add を取り消した。git status: ${JSON.stringify(statusAfterUnstage)} --`);
+  const retryResult = restoreMutation();
+  const cleanAfterRetry = gitStatusPorcelainFor(FIXTURE_REL).trim() === '' && !markerExists();
+  log(`やり直した restore の後始末: ${retryResult.rebuildCheck.reason}`);
+  log(`最終的にツリーはクリーンか: ${cleanAfterRetry}`);
+
+  if (!restoreThrew) {
+    throw new HarnessError(
+      '12cが本当に落ちるべき状況（復元後に対象ファイルの git 管理状態が変異前と食い違った）で' +
+        '落ちなかった。塞ぎすぎて検査が死んでいる疑いがある。',
+    );
+  }
+  if (stageAfterFailure !== 'dist-unverified') {
+    throw new HarnessError(
+      `12cで落ちたとき、印の stage が 'dist-unverified' を名乗っていない（実際: ${stageAfterFailure}）。` +
+        'ソース復元（12b）は成功しているのに、印が古い段階のままだと #321 と同じ誤読が起きる。',
+    );
+  }
+  if (!cleanAfterRetry) {
+    throw new HarnessError('片付け後の再 restore でツリーが完全にクリーンにならなかった。');
+  }
+
+  return {
+    scenario: 'restore-status-comparison',
+    foreignUncommittedChange: {
+      restoredWithForeignChangeIntact,
+      markerGoneAfterRestore,
+    },
+    legitimateFailure: {
+      restoreThrew,
+      stageAfterFailure,
+      messageIncludes12c: restoreErrorMessage?.includes('[12c]') ?? false,
+      cleanAfterRetry,
+    },
+  };
+}
+
 const SCENARIO_FNS = {
   'backup-corruption': scenarioBackupCorruption,
   'weak-tooth': scenarioWeakTooth,
@@ -867,6 +1119,8 @@ const SCENARIO_FNS = {
   'judgement-id-integrity': scenarioJudgementIdIntegrity,
   'rebuild-failure': scenarioRebuildFailure,
   'spec-validation': scenarioSpecValidation,
+  'judgement-forbidden-word-boundary': scenarioJudgementForbiddenWordBoundary,
+  'restore-status-comparison': scenarioRestoreStatusComparison,
 };
 
 export function runSelftestScenario(scenario) {
