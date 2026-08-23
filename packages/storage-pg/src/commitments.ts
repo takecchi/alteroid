@@ -17,6 +17,11 @@ import { commitments } from './schema.js';
  * クローンは引き受けたことを二度と思い出さない ＝ **この器が塞いでいる穴がそのまま
  * 開く**（しかも「忘れた」ことに誰も気づけない。fs 版なら例外で表に出る）。
  * fs 版（ファイル全体を `parse` する）と同じく、壊れた永続状態は表に出す。
+ *
+ * **⚠️ throw そのものは意図的である（理由は上の段落）。問題はそこではなく、
+ * 未知の enum 値（例えば `origin`）でもここへ落ちること。** `list()`（下）は
+ * try/catch なしで `map` しているため、未知の enum 値が1件でも入ると、
+ * 1行ではなく一覧が丸ごと落ちる。→ issue #296
  */
 function parseCommitment(id: string, value: unknown): Commitment {
   const parsed = commitmentSchema.safeParse(value);
