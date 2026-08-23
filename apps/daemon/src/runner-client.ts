@@ -133,6 +133,92 @@ const RUNNER_STREAM_RETRY_MAX_MS = 30_000;
  */
 const CONNECTION_HEALTHY_THRESHOLD_MS = DEFAULT_SSE_HEARTBEAT_MS * 2;
 
+/**
+ * **無音のまま固着した `/events` を切るまでの長さ**（#323）。ここも新しい
+ * マジックナンバーを置かない —— {@link DEFAULT_SSE_HEARTBEAT_MS} の3倍として導く。
+ *
+ * ## なぜこれが要るか
+ *
+ * **`/events` だけが、返らない相手を見切る仕組みを1つも持っていなかった。**
+ * 制御面（`hello` / `ping` / `GET /managers` …）は全部 {@link #call} を経由して
+ * {@link RUNNER_CALL_DEADLINE_MS} が掛かるが、`/events` は `connect()` が
+ * `void this.#pump(...)` として切り離す背景タスクの中に在り、`#stream` の
+ * `await this.#fetch(...)` にも `#read` の `for(;;) await reader.read()` にも
+ * 期限が無い。**解決も棄却もしない `read()` は `#pump` を丸ごと止める** ——
+ * `#pump` は自分の中に再接続ループを持っているので、**そのループごと止まり、
+ * バックオフは一度も回らない。**
+ *
+ * 名簿の生存確認（`runner-protocol.ts` の `#probe`）はこれを検出できない ——
+ * あれが叩く `/health` は {@link #call} 系の**別の接続**で、そちらが答え続けて
+ * いる限り `entry.alive` は動かない。**見張る対象と壊れる対象が別の接続に
+ * なっている。**
+ *
+ * **いま無音を切っているのは、トランスポートの既定値だけである。しかも片方に
+ * しか無い。**
+ *
+ * | 経路 | 無音を切るもの |
+ * | --- | --- |
+ * | TCP（`http://runner:4518`） | undici の既定 `bodyTimeout`＝300000ms（`apps/runner/src/app.ts` の `/events` の doc に実測が在る） |
+ * | Unix ソケット（`unix:/run/alteroid/runner.sock`） | **無い。**{@link requestOverSocket} は素の `node:http` で、`timeout` も `res.setTimeout` も置いていない |
+ *
+ * TCP keepalive も当てにできない —— `index.ts` の {@link TCP_KEEPALIVE_DELAY_MS} は
+ * デーモンが**受ける**側の設定で、この口（デーモンが**繋ぎに行く**側）には
+ * 張っていない。そもそも Unix ソケットに TCP は無いので、OS が生死を確かめに
+ * 行く経路が原理的に存在しない。
+ *
+ * ## これは「静かな接続を時間で切る」ではない
+ *
+ * `index.ts` の {@link TCP_KEEPALIVE_DELAY_MS} の doc は `server.timeout` を
+ * 入れない理由として「掃除したいのは**死んだ接続**であって**静かな接続**では
+ * ない——静かなことを理由に切るのは、長時間つないでおく能力を削ることになる
+ * （north_star 禁止2）」と書いている。**その線はここでも守っている。**
+ *
+ * 違うのは**相手が黙る自由を持つかどうか**である。あちらはデーモンが受ける
+ * 側の全経路が対象で、heartbeat を持たない経路が将来増えれば「イベントが
+ * 来ないだけの健全な長時間接続」を切ってしまう。**こちらは `/events` ただ1本
+ * で、相手（runner）は接続のたびに無条件で `startSseHeartbeat` を回す**
+ * （`apps/runner/src/app.ts` の `/events`。`hello` を書いた直後、分岐無しに開始
+ * する）。**＝ この経路の健全な接続は、契約として無音にならない。** だから
+ * ここでの無音は「静か」ではなく「死んでいる」の観測である。
+ *
+ * ## なぜ3倍か
+ *
+ * runner は {@link DEFAULT_SSE_HEARTBEAT_MS} ごとにコメント行を書く。
+ *
+ * - **2倍（＝{@link CONNECTION_HEALTHY_THRESHOLD_MS} と同じ30秒）では狭い。**
+ *   heartbeat が1回遅れただけの健全な接続を切る（GC・輻輳で起こりうる）
+ * - **3倍なら、heartbeat が1回まるごと落ちても耐え、続けて落ちたら切る。**
+ *   この閾値が名指ししている性質はそれである
+ * - 副次的に {@link CONNECTION_HEALTHY_THRESHOLD_MS} より厳密に大きいので、
+ *   「持続した」の判定窓が「無音」の判定窓より先に閉じる。2つの判定が競合しない
+ *
+ * **60000ms（＝{@link RUNNER_CALL_DEADLINE_MS} と同じ長さ）にする案は退けた。**
+ * 「制御面と同じ期限を `/events` にも」と読める見た目の良さがあるが、**それは
+ * 偶然の一致であって理由ではない**（{@link CONNECTION_HEALTHY_THRESHOLD_MS} の
+ * doc が同じ罠について書いているのと同じ形）。しかも掛かり方が違う —— あちらは
+ * **呼び出し1回の全体**に対する期限、こちらは**バイトとバイトの間隔**である。
+ * 同じ数にすると、読む人がその違いを消して読む。
+ *
+ * **300000ms（undici の既定値）に揃える案も退けた。** 揃えると Unix ソケット側
+ * だけ「既定値を写した数」になり、**なぜその数なのかがこのシステムの中から
+ * 導けなくなる。**
+ */
+const RUNNER_STREAM_SILENCE_TIMEOUT_MS = DEFAULT_SSE_HEARTBEAT_MS * 3;
+
+/**
+ * 無音の見張りのタイマー。**`setTimeout` を `unref` して張り、取り消す口を返す。**
+ *
+ * `unref` は {@link defaultSleep} と同じ理由 —— 見張りは「接続が在るあいだ回る」
+ * ものであって、止めたはずのデーモンの終了を引き延ばすものではない。
+ */
+function defaultSetTimer(ms: number, onFire: () => void): () => void {
+  const timer = setTimeout(onFire, ms);
+  timer.unref?.();
+  return () => {
+    clearTimeout(timer);
+  };
+}
+
 /** `setTimeout` を `unref` して待つ（既定の `sleepFn`）。 */
 function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -195,6 +281,30 @@ export interface HttpRunnerOptions {
    * `vi.useFakeTimers()` は使わない（このファイルの既存の作法を踏襲する）。
    */
   nowFn?: () => number;
+  /**
+   * `/events` が無音のまま何 ms 続いたら切るか（既定
+   * {@link RUNNER_STREAM_SILENCE_TIMEOUT_MS}）。**主にテスト用。**
+   *
+   * **運用でここを縮めないこと。** 縮めると heartbeat の遅れだけで健全な接続を
+   * 切り始め、切るたびに runner が `hello` を書き直して `#reattach` が走る
+   * （`apps/runner/src/app.ts` の `/events` の doc）。
+   */
+  silenceTimeoutMs?: number;
+  /**
+   * 無音の見張りのタイマーを差し替える口。**主にテスト用**（`sleepFn` /
+   * `nowFn` と同じ位置づけ——外から差し替えられる依存であって、本体に
+   * 「テスト中か」の分岐は作らない）。既定は {@link defaultSetTimer}。
+   *
+   * **`sleepFn` を流用しなかったのは、取り消せる必要があるからである。**
+   * `sleepFn` が返すのは解決を待つだけの Promise で、途中でやめる口が無い ——
+   * 読むたびに新しい `sleepFn` を張る形にすると、バイトが来るたびに取り消せない
+   * タイマーが1つ積まれる。ここは `ms` と発火時の処理を受け取り、**取り消す
+   * 関数を返す**形にしてある。
+   *
+   * `vi.useFakeTimers()` は使わない（このファイルの既存の作法を踏襲する。
+   * `nowFn` の doc）。
+   */
+  setTimerFn?: (ms: number, onFire: () => void) => () => void;
   /**
    * 制御面の応答を待つ期限（既定 {@link RUNNER_CALL_DEADLINE_MS}）。**主にテスト用。**
    *
@@ -438,6 +548,8 @@ class HttpRunner implements RunnerClient {
   readonly #sleepFn: (ms: number) => Promise<void>;
   readonly #nowFn: () => number;
   readonly #deadlineMs: number;
+  readonly #silenceTimeoutMs: number;
+  readonly #setTimerFn: (ms: number, onFire: () => void) => () => void;
   readonly #onUnknown: ((report: RunnerUnknownReport) => void) | undefined;
   readonly #onDroppedEvent: ((report: RunnerDroppedEventReport) => void) | undefined;
   #controller: AbortController | null = null;
@@ -494,6 +606,8 @@ class HttpRunner implements RunnerClient {
     this.#nowFn = options.nowFn ?? Date.now;
     this.#nextDelayMs = this.#retryBaseMs;
     this.#deadlineMs = options.deadlineMs ?? RUNNER_CALL_DEADLINE_MS;
+    this.#silenceTimeoutMs = options.silenceTimeoutMs ?? RUNNER_STREAM_SILENCE_TIMEOUT_MS;
+    this.#setTimerFn = options.setTimerFn ?? defaultSetTimer;
     this.#onUnknown = options.onUnknown;
     this.#onDroppedEvent = options.onDroppedEvent;
   }
@@ -725,15 +839,22 @@ class HttpRunner implements RunnerClient {
 
       if (failed) {
         this.#backingOff = true;
-        const causeInfo = causeInfoOf(failure);
-        const causeCode = causeInfo?.code ?? '';
-        if (this.#lastLoggedDelayMs !== waitMs || this.#lastLoggedCauseCode !== causeCode) {
-          process.stderr.write(
-            `alteroidd: ${this.#describeSelf()} のストリームが切れました: ${reasonOf(failure)}${causeSuffixOf(causeInfo)}（次は${waitMs}ms後に再試行）\n`,
-          );
-          this.#lastLoggedDelayMs = waitMs;
-          this.#lastLoggedCauseCode = causeCode;
-        }
+        // **ログが書けないことを理由に再接続をやめない**（#323）。ここは
+        // `#stream` を包む `catch` の**外側**なので、投げれば `#pump` ごと死ぬ
+        // ——そして死ねば、この runner へ二度と繋ぎ直されない（下の
+        // `#neverEscapes` の doc）。`process.stderr.write` は宛先が壊れていれば
+        // 投げうる（`ERR_STREAM_DESTROYED` / EPIPE）。
+        this.#neverEscapes(() => {
+          const causeInfo = causeInfoOf(failure);
+          const causeCode = causeInfo?.code ?? '';
+          if (this.#lastLoggedDelayMs !== waitMs || this.#lastLoggedCauseCode !== causeCode) {
+            process.stderr.write(
+              `alteroidd: ${this.#describeSelf()} のストリームが切れました: ${reasonOf(failure)}${causeSuffixOf(causeInfo)}（次は${waitMs}ms後に再試行）\n`,
+            );
+            this.#lastLoggedDelayMs = waitMs;
+            this.#lastLoggedCauseCode = causeCode;
+          }
+        });
       } else if (healthy) {
         this.#lastLoggedDelayMs = null;
         this.#lastLoggedCauseCode = '';
@@ -743,53 +864,178 @@ class HttpRunner implements RunnerClient {
       // (失敗でも、閾値未満で終わった「静かな」接続でも) 倍々に伸ばして頭打ち。
       this.#nextDelayMs = healthy ? this.#retryBaseMs : Math.min(waitMs * 2, this.#retryMaxMs);
 
-      await this.#sleepFn(waitMs);
+      // **差し替えられた待ちが投げても、`#pump` を殺さない**（#323）。ただし
+      // **待たずに回り続けもしない** —— それは秒間に何度も runner を叩く形に
+      // なる。既定の待ち（{@link defaultSleep}）へ落として、間隔だけは守る。
+      try {
+        await this.#sleepFn(waitMs);
+      } catch {
+        await defaultSleep(waitMs);
+      }
     }
   }
 
+  /**
+   * **`#pump` の周回を殺しうる処理を包む**（#323）。
+   *
+   * `#pump` は `connect()` が `void this.#pump(onEvent)` として切り離す背景
+   * タスクである。**ここから例外が抜けると、ループが終わって二度と戻らない。**
+   * しかも `packages/core/src/manager.ts` の `ManagerPool#connectTo` は
+   * `#connections` に持った promise の有無で二度目の `connect()` を弾き、旗が
+   * 外れるのは `.catch()` のときだけ —— **`connect()` は中身が fire-and-forget
+   * なので既に成功として解決しており、旗は永久に立ったままになる。**
+   *
+   * **＝ `#read` の固着とまったく同じ症状（この runner へ再接続が一度も試され
+   * ない）を、別の枝から作る。** #323 が請け負った穴はその症状そのものなので、
+   * 枝を1つだけ塞いで終わりにしない。
+   *
+   * **握り潰した先を報告しない**のは意図である —— ここで包んでいるのは
+   * 「知らせる」処理そのもの（stderr への1行）で、その宛先が壊れているから
+   * 例外になっている。**別の宛先を新しく作ると、壊れ方が1つ増えるだけである。**
+   */
+  #neverEscapes(body: () => void): void {
+    try {
+      body();
+    } catch {
+      // 何もしない（doc を参照）。
+    }
+  }
+
+  /**
+   * 1本ぶんの `/events`。**開こうとした瞬間から、無音の見張りが張られている。**
+   *
+   * 見張りの中身は {@link RUNNER_STREAM_SILENCE_TIMEOUT_MS} の doc に在る。ここに
+   * 書くのは**掛ける範囲**である。
+   *
+   * **`fetch()` の前に張る。** 固着は本文を読み始めてからだけではなく、応答
+   * ヘッダが返る前にも起こる —— Unix ソケット経路（{@link requestOverSocket}）は
+   * 素の `node:http` で期限を持たないので、相手が accept だけして何も書かなければ
+   * `await this.#fetch(...)` がそのまま無限に待つ。**`#read` の中だけを見張ると、
+   * そこへ到達しない固着がまるごと残る。**
+   *
+   * **切ったことは例外にして投げる。`abort()` の効き方に賭けない。**
+   * `controller.abort()` の後に `reader.read()` が棄却で終わるか `done` で
+   * 正常終了するかは経路によって違いうる（TCP は `fetch` の `signal`、Unix
+   * ソケットは `req.destroy()`）。**どちらでも `#pump` が「失敗」として扱える
+   * よう、旗を見て自分で投げ直す** —— 正常終了として返すと `#pump` は失敗と
+   * 数えず、`切れました` の行も出ない（固着が起きたことがログから消える）。
+   */
   async #stream(onEvent: (event: RunnerEvent) => void, markHealthy: () => void): Promise<void> {
     const controller = new AbortController();
     this.#controller = controller;
-    const response = await this.#fetch(`${this.#baseUrl}/events`, {
-      headers: { accept: 'text/event-stream', authorization: `Bearer ${this.#token}` },
-      signal: controller.signal,
-    });
-    if (!response.ok || response.body === null) {
-      throw new Error(`runner の /events に繋げない (${response.status})`);
-    }
 
-    // **「接続してから」の起点。** ここから `CONNECTION_HEALTHY_THRESHOLD_MS`
-    // だけ経ってからバイトが届いたら、その接続を持続したとみなす（`#pump` の
-    // doc）。
-    const connectedAt = this.#nowFn();
-    const reader = response.body.getReader();
     /**
-     * この接続で捨てたフレームの数（種別ごと）。**接続1本ぶんである。**
+     * 最後にこの接続からバイトを受け取った時刻。**まだ1バイトも来ていなければ
+     * `null`。**
      *
-     * 器が入れ替われば数え直す——プロセス単位で畳むと、新しい runner が同じ
-     * `type` を出し始めたときに「前に見たから」で黙る。
+     * **ここで `#nowFn()` を呼ばないのは意図である。** このファイルの既存の歯は
+     * `nowFn` が**何回目の呼び出しか**で値を返す形の足場を使っており
+     * （`runner-client.test.ts` の `nowFnAtExactThreshold`。1回目＝`connectedAt`
+     * が0、以降が閾値）、ここで1回呼ぶとその番号が全部ずれて、**測っている
+     * 対象とは無関係に足場のほうが壊れる。** 見張りが「まだ1バイトも来て
+     * いない」を表すのに時刻は要らない —— `null` で足りる。
      */
-    const dropped = new Map<string, number>();
-    /** 閉じるときに、量をまとめて1行。**存在は初出が既に出している。** */
-    const summarize = (): void => {
-      if (dropped.size === 0) return;
-      this.#onDroppedEvent?.({
-        phase: 'closed',
-        dropped: [...dropped].map(([key, count]) => ({ key, count })),
+    let lastByteAt: number | null = null;
+    /** 見張りが切ったか。**例外の出所を `#pump` へ正しく伝えるために持つ。** */
+    let silent = false;
+    /**
+     * 生きている見張りタイマーを取り消す口。**入れ物に包んでいるのは型の
+     * 都合である** —— 素の `let` にすると、代入が `armWatchdog` の中（＝閉包の
+     * 中）でしか起きないため、TypeScript の絞り込みが `finally` の時点でも
+     * `null` のままだと判断して `never` になる（実測: TS2349）。
+     */
+    const watchdog: { cancel: (() => void) | null } = { cancel: null };
+    /**
+     * 見張りを張る（張り直す）。
+     *
+     * **バイトが届くたびにタイマーを作り直さない。** 発火したときに「最後の
+     * バイトからどれだけ経ったか」を {@link #nowFn} で測り直し、まだ窓の中なら
+     * **残りぶんだけ張り直す。** これで生きているタイマーは常に1本で、
+     * 流量に関係なく一定である（フレームごとに `clearTimeout`+`setTimeout` を
+     * 回す形は、忙しいストリームでその回数ぶんの仕事になる）。
+     */
+    const armWatchdog = (ms: number): void => {
+      watchdog.cancel = this.#setTimerFn(ms, () => {
+        // **1バイトも来ていなければ、測るまでもなく無音である。**
+        if (lastByteAt !== null) {
+          const idleMs = this.#nowFn() - lastByteAt;
+          if (idleMs < this.#silenceTimeoutMs) {
+            armWatchdog(this.#silenceTimeoutMs - idleMs);
+            return;
+          }
+        }
+        silent = true;
+        controller.abort();
       });
     };
+    /** 無音で切ったことを示す例外。**「繋げない」とは別の形で名乗る。** */
+    const silenceFailure = (): Error =>
+      new Error(
+        `runner の /events が ${String(this.#silenceTimeoutMs)}ms のあいだ無音だった（heartbeat が途絶えた）`,
+      );
 
+    armWatchdog(this.#silenceTimeoutMs);
     try {
-      await this.#read(reader, onEvent, dropped, () => {
-        // **バイトの中身は一切見ない。** `reader.read()` が中身を返したという
-        // 事実だけを使う（`#pump` の doc）。閾値を跨いだ後は何度呼ばれても
-        // 結果は変わらない——`markHealthy` は冪等である。
-        if (this.#nowFn() - connectedAt >= CONNECTION_HEALTHY_THRESHOLD_MS) markHealthy();
+      const response = await this.#fetch(`${this.#baseUrl}/events`, {
+        headers: { accept: 'text/event-stream', authorization: `Bearer ${this.#token}` },
+        signal: controller.signal,
       });
+      if (!response.ok || response.body === null) {
+        throw new Error(`runner の /events に繋げない (${response.status})`);
+      }
+
+      // **「接続してから」の起点。** ここから `CONNECTION_HEALTHY_THRESHOLD_MS`
+      // だけ経ってからバイトが届いたら、その接続を持続したとみなす（`#pump` の
+      // doc）。
+      const connectedAt = this.#nowFn();
+      const reader = response.body.getReader();
+      /**
+       * この接続で捨てたフレームの数（種別ごと）。**接続1本ぶんである。**
+       *
+       * 器が入れ替われば数え直す——プロセス単位で畳むと、新しい runner が同じ
+       * `type` を出し始めたときに「前に見たから」で黙る。
+       */
+      const dropped = new Map<string, number>();
+      /** 閉じるときに、量をまとめて1行。**存在は初出が既に出している。** */
+      const summarize = (): void => {
+        if (dropped.size === 0) return;
+        this.#onDroppedEvent?.({
+          phase: 'closed',
+          dropped: [...dropped].map(([key, count]) => ({ key, count })),
+        });
+      };
+
+      try {
+        await this.#read(reader, onEvent, dropped, () => {
+          // **バイトの中身は一切見ない。** `reader.read()` が中身を返したという
+          // 事実だけを使う（`#pump` の doc）。閾値を跨いだ後は何度呼ばれても
+          // 結果は変わらない——`markHealthy` は冪等である。
+          //
+          // **無音の見張りの窓も、同じ1つの事実で張り直す**（#323）——
+          // heartbeat のフレームかどうかは見ない。runner の heartbeat の実装が
+          // 変わっても、この判定は変わらない。
+          //
+          // **`#nowFn()` の呼び出しは1バイトにつき1回のまま**（#323 で増やして
+          // いない）。増やすと `nowFnAtExactThreshold` 型の足場が壊れる
+          // ——`lastByteAt` の doc を参照。
+          const now = this.#nowFn();
+          lastByteAt = now;
+          if (now - connectedAt >= CONNECTION_HEALTHY_THRESHOLD_MS) markHealthy();
+        });
+      } finally {
+        // **例外で抜けても量を出す。** ただしプロセスごと落ちたときは走らない
+        // ——だから存在のほうは初出で先に出してある。
+        summarize();
+      }
+      // `abort()` が `done` として畳まれた経路。**黙って正常終了にしない。**
+      if (silent) throw silenceFailure();
+    } catch (error) {
+      // `abort()` が棄却として現れた経路。**`AbortError` のままにしない** ——
+      // `#pump` が stderr へ書く `切れました` の行が「何が起きたか」を名乗れなくなる。
+      if (silent) throw silenceFailure();
+      throw error;
     } finally {
-      // **例外で抜けても量を出す。** ただしプロセスごと落ちたときは走らない
-      // ——だから存在のほうは初出で先に出してある。
-      summarize();
+      watchdog.cancel?.();
     }
   }
 

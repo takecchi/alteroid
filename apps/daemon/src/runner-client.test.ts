@@ -1959,3 +1959,605 @@ describe('解釈できずに捨てた出来事の跡', () => {
     );
   });
 });
+
+/**
+ * **`/events` が無音のまま固着したら切る**（#323）。
+ *
+ * ## この describe が守っている性質
+ *
+ * `/events` だけが、返らない相手を見切る仕組みを持っていなかった。制御面は
+ * `#call()` の `RUNNER_CALL_DEADLINE_MS` で見切るが、`/events` は `connect()` が
+ * 切り離す背景タスクの中で `for(;;) await reader.read()` を回すだけである。
+ * **解決も棄却もしない `read()` は `#pump` を丸ごと止める** ——`#pump` は自分の
+ * 中に再接続ループを持っているので、そのループごと止まり、バックオフは一度も
+ * 回らない。#323 の実測では4時間止まり、回復の契機はプロセスの再起動だった。
+ *
+ * ## ⚠️ この歯が再現していないもの
+ *
+ * **本物のソケットが半開き（half-open）になるところは再現していない。** ここで
+ * 作っているのは「`reader.read()` が解決も棄却もしない `ReadableStream`」で
+ * あって、TCP や Unix ソケットの実物ではない。runner ⇔ daemon の境界を実際に
+ * 跨ぐ試験はこのリポジトリに無い（`clone.test.ts` も in-process のフェイクで
+ * この境界を跨がない）。
+ *
+ * **だから `signal` から本文の終わり方への配線も、ここでは自分で書いている** ——
+ * 本物の `fetch` は `signal` の abort で本文を error させ、`requestOverSocket` は
+ * `req.destroy()` を呼ぶ。**その2つが `reader.read()` の側にどう現れるかは経路に
+ * よって違いうるので、両方（棄却／`done`）を模した歯を並べてある。**
+ */
+describe('/events が無音のまま固着したら切る（#323）', () => {
+  let stderrSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  });
+  afterEach(() => {
+    stderrSpy.mockRestore();
+  });
+
+  /**
+   * 本体（`runner-client.ts` の `RUNNER_STREAM_SILENCE_TIMEOUT_MS`）と**同じ
+   * 公開定数から導く。別の値を手で書かない** ——`HEALTHY_THRESHOLD_MS` と同じ作法。
+   */
+  const SILENCE_MS = DEFAULT_SSE_HEARTBEAT_MS * 3;
+
+  /** 差し替えたタイマー。**張られた窓を全部覚えておき、テストが手で発火させる。** */
+  interface FakeTimers {
+    setTimerFn: (ms: number, onFire: () => void) => () => void;
+    /** 張られた窓の ms を張られた順に。 */
+    armed: () => number[];
+    /** 取り消された窓の ms を取り消された順に。 */
+    cancelled: () => number[];
+    /** **まだ生きている最後の窓**を発火させる。無ければ投げる。 */
+    fire: () => void;
+  }
+
+  function fakeTimers(): FakeTimers {
+    const armed: number[] = [];
+    const cancelled: number[] = [];
+    const live: { ms: number; onFire: () => void }[] = [];
+    return {
+      setTimerFn: (ms, onFire) => {
+        armed.push(ms);
+        const entry = { ms, onFire };
+        live.push(entry);
+        return () => {
+          const at = live.indexOf(entry);
+          if (at === -1) return;
+          live.splice(at, 1);
+          cancelled.push(ms);
+        };
+      },
+      armed: () => [...armed],
+      cancelled: () => [...cancelled],
+      fire: () => {
+        const entry = live.pop();
+        if (entry === undefined) throw new Error('生きている見張りが無い');
+        entry.onFire();
+      },
+    };
+  }
+
+  /** 何も流さず、閉じもしない本文。**これが「無音のまま固着した接続」である。** */
+  type OnAbort = 'reject' | 'done';
+  function silentBody(signal: AbortSignal | null | undefined, onAbort: OnAbort): Response {
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        start: (controller) => {
+          // **`enqueue` も `close` もしない。** `reader.read()` は解決も棄却も
+          // しないまま残る —— `#read` の `for(;;)` がそこで止まる形そのもの。
+          signal?.addEventListener(
+            'abort',
+            () => {
+              if (onAbort === 'done') controller.close();
+              else controller.error(new Error('The operation was aborted'));
+            },
+            { once: true },
+          );
+        },
+      }),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } },
+    );
+  }
+
+  /** 1フレーム流してから、閉じずにぶら下がり続ける本文。**生きている接続。** */
+  function bodyThen(frames: string[], signal: AbortSignal | null | undefined): Response {
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        start: (controller) => {
+          for (const frame of frames) controller.enqueue(new TextEncoder().encode(frame));
+          signal?.addEventListener('abort', () => controller.close(), { once: true });
+        },
+      }),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } },
+    );
+  }
+
+  function pathOf(input: string | URL | Request): string {
+    return new URL(typeof input === 'string' ? input : input.toString()).pathname;
+  }
+
+  /**
+   * `/events` へ行くたびに `body()` を呼んで応答を組み立てる `fetch`。
+   *
+   * `signal` を本文へ渡すのは、**本物の `fetch` が `signal` を本文の終わり方へ
+   * 配線しているのを模しているから**である（この describe の doc）。
+   */
+  function eventsFetch(
+    body: (callIndex: number, signal: AbortSignal | null | undefined) => Response,
+  ): {
+    fetchFn: typeof fetch;
+    eventsCalls: () => number;
+    lastSignal: () => AbortSignal | null | undefined;
+  } {
+    let calls = 0;
+    let lastSignal: AbortSignal | null | undefined;
+    const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
+      const path = pathOf(input);
+      if (path === '/health') {
+        return Response.json({ runnerId: 'runner-stuck', workspacePath: '/workspace' });
+      }
+      if (path === '/events') {
+        lastSignal = init?.signal;
+        const response = body(calls, init?.signal);
+        calls += 1;
+        return response;
+      }
+      throw new Error(`想定していない path: ${path}`);
+    }) as typeof fetch;
+    return { fetchFn, eventsCalls: () => calls, lastSignal: () => lastSignal };
+  }
+
+  /**
+   * **`#pump` が次の周回へ進むまで、微小タスクを回す。**
+   *
+   * `sleepFn` が解決しても、`#pump` の続き（次の `#stream`）はその場では走らない
+   * ——テスト側の `await` と `#pump` の `await` は同じ待ち行列に並ぶだけである。
+   * **`enough` を待っただけで数え上げると、まだ起きていないことを「起きなかった」
+   * と読む。**
+   *
+   * 条件が満たされたら即座に抜ける（回数は上限であって歩調ではない）。
+   */
+  async function settleUntil(done: () => boolean, turns = 200): Promise<void> {
+    for (let i = 0; i < turns; i += 1) {
+      if (done()) return;
+      await Promise.resolve();
+    }
+  }
+
+  /** `#pump` の `sleepFn`。**待ちを記録し、N 回目で合図する。** */
+  function countingSleep(until: number): {
+    sleepFn: (ms: number) => Promise<void>;
+    waits: number[];
+    enough: Promise<void>;
+  } {
+    const waits: number[] = [];
+    let notify: () => void = () => undefined;
+    const enough = new Promise<void>((resolve) => {
+      notify = resolve;
+    });
+    const sleepFn = async (ms: number): Promise<void> => {
+      waits.push(ms);
+      if (waits.length >= until) notify();
+    };
+    return { sleepFn, waits, enough };
+  }
+
+  /**
+   * **この歯が単独で守るもの**: 見張りの窓が heartbeat の間隔から導かれていること。
+   *
+   * `DEFAULT_SSE_HEARTBEAT_MS * 3` を `* 2` や `* 4` へ変えれば、この
+   * `toEqual` が落ちる。**そして「持続の判定窓より広い」も併せて名指しする** ——
+   * この2つが逆転すると、無音の判定が持続の判定より先に閉じて競合する。
+   */
+  it('見張りの窓は heartbeat の間隔の3倍で、持続の判定窓より広い', async () => {
+    const timers = fakeTimers();
+    const { fetchFn } = eventsFetch((_, signal) => silentBody(signal, 'reject'));
+    const { sleepFn } = countingSleep(Number.POSITIVE_INFINITY);
+
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn,
+      sleepFn,
+      setTimerFn: timers.setTimerFn,
+    });
+    await client.connect(() => undefined);
+    await client.close();
+
+    expect(timers.armed()[0]).toEqual(DEFAULT_SSE_HEARTBEAT_MS * 3);
+    expect(timers.armed()[0]).toBeGreaterThan(DEFAULT_SSE_HEARTBEAT_MS * 2);
+  });
+
+  /**
+   * **この歯が単独で守るもの**: 見張りが `fetch()` の前に張られていること。
+   *
+   * 固着は本文を読み始めてからだけではなく、**応答ヘッダが返る前にも起こる**
+   * （Unix ソケット経路は素の `node:http` で期限を持たない）。`#read` の中だけを
+   * 見張る実装だと、ここへ到達しない固着がまるごと残る。
+   *
+   * ここでは `fetch` そのものが永久に解決しない形にしてあるので、**見張りが
+   * `fetch` より前に張られていなければ、そもそも1つも張られない。**
+   */
+  it('応答ヘッダが返る前に固着しても、見張りは張られていて切りに行く', async () => {
+    const timers = fakeTimers();
+    let hangingSignal: AbortSignal | null | undefined;
+    const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (pathOf(input) === '/health') {
+        return Response.json({ runnerId: 'runner-stuck', workspacePath: '/workspace' });
+      }
+      hangingSignal = init?.signal;
+      // **返らない。** `await this.#fetch(...)` がここで止まる。
+      return new Promise<Response>(() => undefined);
+    }) as typeof fetch;
+    const { sleepFn } = countingSleep(Number.POSITIVE_INFINITY);
+
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn,
+      sleepFn,
+      setTimerFn: timers.setTimerFn,
+    });
+    await client.connect(() => undefined);
+
+    expect(timers.armed()).toEqual([SILENCE_MS]);
+    expect(hangingSignal?.aborted).toBe(false);
+    timers.fire();
+    expect(hangingSignal?.aborted).toBe(true);
+
+    await client.close();
+  });
+
+  /**
+   * **この歯が単独で守るもの**: 固着した接続が実際に切られ、`#pump` の再接続が
+   * 動き出すこと。**#323 の症状1そのものである。**
+   */
+  it('無音のまま固着した接続は切られ、/events が張り直される', async () => {
+    const timers = fakeTimers();
+    const { fetchFn, eventsCalls } = eventsFetch((_, signal) => silentBody(signal, 'reject'));
+    const { sleepFn, enough } = countingSleep(1);
+
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn,
+      sleepFn,
+      setTimerFn: timers.setTimerFn,
+    });
+    await client.connect(() => undefined);
+
+    // 固着している間は1本目のまま。**誰も繋ぎ直さない。**
+    expect(eventsCalls()).toBe(1);
+
+    timers.fire();
+    await enough;
+    await settleUntil(() => eventsCalls() >= 2);
+    await client.close();
+
+    expect(eventsCalls()).toBeGreaterThanOrEqual(2);
+  });
+
+  /**
+   * **この歯が単独で守るもの**: 切って繋ぎ直した先で、**溜まっていた出来事が
+   * 実際に降りてくる**こと。
+   *
+   * #323 で失われかけていたのはこれである —— runner の `Outbox` は上限なしで
+   * 溜め続け、`attach()`（＝新しい `GET /events`）が来たときにまとめて流す。
+   * **切る歯だけでは「切れた」までしか言えない。** 報告が届くところまでを
+   * 名指しする。
+   */
+  it('繋ぎ直した先で、溜まっていた報告が届く', async () => {
+    const timers = fakeTimers();
+    // **`runnerEventSchema` が要求する形をそのまま満たすこと。** 欠けていると
+    // `safeParse` が落ちて `unknown-shape` として捨てられ、`onEvent` は呼ばれない
+    // ——「届かない」が実装の欠陥ではなくフィクスチャの欠陥として出る。
+    const report = {
+      type: 'report',
+      managerId: 'mgr-stuck',
+      text: '溜まっていた報告',
+      status: 'done',
+    };
+    const { fetchFn } = eventsFetch((call, signal) =>
+      call === 0
+        ? silentBody(signal, 'reject')
+        : bodyThen([`data: ${JSON.stringify(report)}\n\n`], signal),
+    );
+    const { sleepFn, enough } = countingSleep(1);
+
+    const received: unknown[] = [];
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn,
+      sleepFn,
+      setTimerFn: timers.setTimerFn,
+    });
+    await client.connect((event) => received.push(event));
+
+    // 固着している間は1件も届かない。
+    expect(received).toEqual([]);
+
+    timers.fire();
+    await enough;
+    await settleUntil(() => received.length > 0);
+    await client.close();
+
+    expect(received).toEqual([report]);
+  });
+
+  /**
+   * **この歯が単独で守るもの**: 切ったことが「失敗」として扱われ、**何が起きたかを
+   * 名乗る**こと。
+   *
+   * 黙って正常終了として返すと `#pump` は失敗と数えず `切れました` の行も出ない
+   * ——**固着が起きたことがログから消える。** 4時間止まった原因が後から追えなく
+   * なるのがまさにこの形である。
+   */
+  it('無音で切ったことは、失敗として stderr に名乗る', async () => {
+    const timers = fakeTimers();
+    const { fetchFn } = eventsFetch((_, signal) => silentBody(signal, 'reject'));
+    const { sleepFn, enough } = countingSleep(1);
+
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn,
+      sleepFn,
+      setTimerFn: timers.setTimerFn,
+    });
+    await client.connect(() => undefined);
+    timers.fire();
+    await enough;
+    await client.close();
+
+    const lines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    const failures = lines.filter((line: string) => line.includes('ストリームが切れました'));
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain('無音');
+    expect(failures[0]).toContain(String(SILENCE_MS));
+  });
+
+  /**
+   * **この歯が単独で守るもの**: `abort()` が**棄却ではなく `done`** として現れる
+   * 経路でも、正常終了として黙らないこと。
+   *
+   * `controller.abort()` の後に `reader.read()` がどちらの形で終わるかは経路に
+   * よって違いうる（TCP は `fetch` の `signal`、Unix ソケットは `req.destroy()`）。
+   * **`abort()` の効き方に賭けない**という設計判断を、この歯が固定する。
+   */
+  it('abort が done として畳まれても、正常終了として黙らない', async () => {
+    const timers = fakeTimers();
+    const { fetchFn, eventsCalls } = eventsFetch((_, signal) => silentBody(signal, 'done'));
+    const { sleepFn, enough } = countingSleep(1);
+
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn,
+      sleepFn,
+      setTimerFn: timers.setTimerFn,
+    });
+    await client.connect(() => undefined);
+    timers.fire();
+    await enough;
+    await settleUntil(() => eventsCalls() >= 2);
+    await client.close();
+
+    const lines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(lines.filter((line: string) => line.includes('無音'))).toHaveLength(1);
+    expect(eventsCalls()).toBeGreaterThanOrEqual(2);
+  });
+
+  /**
+   * **この歯が単独で守るもの**: **バイトが届いているあいだは切らない。**
+   *
+   * これが落ちる実装は、正常に張られている長命な SSE を一定周期で切る ——
+   * 切るたびに runner が `hello` を書き直して `#reattach` が走るので、
+   * `apps/runner/src/app.ts` の `/events` の doc が名指しで避けている症状を
+   * 作り直すことになる。**「静かな接続を時間で切らない」（north_star 禁止2）は
+   * ここで守られている。**
+   *
+   * 併せて、**残りぶんだけ張り直す**ことも名指しする（窓の起点が最後のバイトで
+   * あって、接続の開始ではないこと）。
+   */
+  it('バイトが届いているあいだは切らず、見張りは残りぶんだけ張り直す', async () => {
+    const timers = fakeTimers();
+    const { fetchFn, eventsCalls, lastSignal } = eventsFetch((_, signal) =>
+      bodyThen([HEARTBEAT_FRAME], signal),
+    );
+    const { sleepFn } = countingSleep(Number.POSITIVE_INFINITY);
+
+    // **4つの時刻を全部違う値にしてある。** 揃えると「残りぶん」の式
+    // （`最後のバイト + 窓 - いま`）が偶然の一致で通り、式を取り違えた実装を
+    // 見逃す（実際、この歯を書いた最初の版はそれで期待値のほうを間違えた）。
+    const connectedAt = 0;
+    const firstByteAt = 10_000;
+    const firedAt = 50_000;
+    let nowCalls = 0;
+    const nowFn = (): number => {
+      // 1回目 = `connectedAt`、2回目 = heartbeat の到着、3回目 = 見張りの発火。
+      nowCalls += 1;
+      if (nowCalls === 1) return connectedAt;
+      if (nowCalls === 2) return firstByteAt;
+      return firedAt;
+    };
+
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn,
+      sleepFn,
+      nowFn,
+      setTimerFn: timers.setTimerFn,
+    });
+    await client.connect(() => undefined);
+    // 本文（heartbeat 1本）が読まれるまで進める。
+    await settleUntil(() => nowCalls >= 2);
+
+    timers.fire();
+
+    // **切っていない。** 窓の起点は接続の開始ではなく**最後のバイト**なので、
+    // 閉じるのは `firstByteAt + SILENCE_MS`＝55000。発火した 50000 の時点では
+    // まだ 5000 残っており、その残りぶんで張り直す。
+    expect(lastSignal()?.aborted).toBe(false);
+    expect(eventsCalls()).toBe(1);
+    expect(timers.armed()).toEqual([SILENCE_MS, firstByteAt + SILENCE_MS - firedAt]);
+
+    await client.close();
+  });
+
+  /**
+   * **この歯が単独で守るもの**: 接続が終われば見張りは取り消されること。
+   *
+   * 取り消さないと、切れた接続ぶんのタイマーが接続のたびに積まれる。
+   */
+  it('接続が終わったら見張りは取り消される', async () => {
+    const timers = fakeTimers();
+    const { fetchFn } = eventsFetch(() => new Response(null, { status: 503 }));
+    const { sleepFn, enough } = countingSleep(2);
+
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn,
+      sleepFn,
+      setTimerFn: timers.setTimerFn,
+    });
+    await client.connect(() => undefined);
+    await enough;
+    await client.close();
+
+    // 張った数と取り消した数が揃っている（＝置き去りにしていない）。
+    expect(timers.cancelled().length).toBe(timers.armed().length);
+  });
+});
+
+/**
+ * **`#pump` は、周回の途中で何が投げても止まらない**（#323）。
+ *
+ * ## なぜ `/events` の固着と同じ穴か
+ *
+ * `#pump` は `connect()` が `void` で切り離す背景タスクで、`ManagerPool#connectTo`
+ * は `#connections` の旗で二度目の `connect()` を弾く。**旗が外れるのは
+ * `connect()` が棄却したときだけ**で、`connect()` は中身が fire-and-forget なので
+ * 既に成功として解決している。**＝ `#pump` から例外が抜けた瞬間、この runner へ
+ * 再接続が二度と試されない。**
+ *
+ * #323 の症状はまさにそれ（4時間、再接続が一度も試されなかった）である。
+ * **`#read` の固着だけを塞いで、同じ症状を作る他の枝を残さない。**
+ */
+describe('#pump は周回の途中で投げられても止まらない（#323）', () => {
+  function pathOf(input: string | URL | Request): string {
+    return new URL(typeof input === 'string' ? input : input.toString()).pathname;
+  }
+
+  /** `/events` が必ず 503 で失敗する runner。**`#pump` は延々と挑み直すはず。** */
+  function failingFetch(): { fetchFn: typeof fetch; eventsCalls: () => number } {
+    let calls = 0;
+    const fetchFn = (async (input: string | URL | Request) => {
+      const path = pathOf(input);
+      if (path === '/health') {
+        return Response.json({ runnerId: 'runner-noisy', workspacePath: '/workspace' });
+      }
+      if (path === '/events') {
+        calls += 1;
+        return new Response(null, { status: 503 });
+      }
+      throw new Error(`想定していない path: ${path}`);
+    }) as typeof fetch;
+    return { fetchFn, eventsCalls: () => calls };
+  }
+
+  /**
+   * **この歯が単独で守るもの**: stderr が書けなくても再接続をやめないこと。
+   *
+   * `process.stderr.write` は宛先が壊れていれば投げうる（`ERR_STREAM_DESTROYED`
+   * / EPIPE）。**この1行は `#stream` を包む `catch` の外側に在る**ので、包んで
+   * いなければ最初の失敗で `#pump` ごと死ぬ。
+   */
+  it('stderr が書けなくても、挑み直しは続く', async () => {
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => {
+      throw new Error('ERR_STREAM_DESTROYED');
+    });
+    try {
+      const { fetchFn, eventsCalls } = failingFetch();
+      const waits: number[] = [];
+      let notify: () => void = () => undefined;
+      const enough = new Promise<void>((resolve) => {
+        notify = resolve;
+      });
+      const sleepFn = async (ms: number): Promise<void> => {
+        waits.push(ms);
+        if (waits.length >= 3) notify();
+      };
+
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+        sleepFn,
+      });
+      await client.connect(() => undefined);
+      await enough;
+      await client.close();
+
+      // 1回目で死んでいれば `/events` は1本しか開かれない。
+      expect(eventsCalls()).toBeGreaterThanOrEqual(3);
+      expect(waits.slice(0, 3)).toEqual([1000, 2000, 4000]);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  /**
+   * **この歯が単独で守るもの**: 差し替えられた待ちが投げても、`#pump` が死なず、
+   * **かつ待たずに回り続けない**こと。
+   *
+   * 後半が要る —— 例外を握り潰すだけの実装は、待ちを飛ばして秒間に何度も
+   * runner を叩く形になる。**それはバックオフを持っている意味を消す。**
+   */
+  it('差し替えた待ちが投げても止まらず、待ちそのものは飛ばさない', async () => {
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const { fetchFn, eventsCalls } = failingFetch();
+      const asked: number[] = [];
+      const sleepFn = async (ms: number): Promise<void> => {
+        asked.push(ms);
+        throw new Error('待ちの差し替えが壊れている');
+      };
+
+      // **既定の待ちへ落ちたときは実時間で待つ**ので、基準と上限は小さくする。
+      // ただし 0 にはしない —— 下の経過時間の下限が測れなくなる。
+      const base = 20;
+      const max = 40;
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+        sleepFn,
+        retryDelayMs: base,
+        retryMaxDelayMs: max,
+      });
+      const startedAt = Date.now();
+      await client.connect(() => undefined);
+      for (let i = 0; i < 400 && asked.length < 3; i += 1)
+        await new Promise((r) => setTimeout(r, 1));
+      const elapsedMs = Date.now() - startedAt;
+      await client.close();
+
+      expect(eventsCalls()).toBeGreaterThanOrEqual(3);
+      // 投げた待ちを、次の周回でもちゃんと呼びに行っている（列も伸びている）。
+      expect(asked.slice(0, 3)).toEqual([base, max, max]);
+      // **待ちそのものを飛ばしていない。**
+      //
+      // `asked` の中身だけでは、これは測れない —— 例外を握り潰して**待たずに**
+      // 回り続けても `asked` は同じ列になる。**測れるのは実時間だけである。**
+      // `asked` が3本たまるまでに既定の待ちが2回（`base` と `max`）完了して
+      // いるので、下限は `base + max`。**下限にしてあるので、器が遅い側へ
+      // ぶれても落ちない**（速い側へはぶれようが無い）。
+      expect(elapsedMs).toBeGreaterThanOrEqual(base + max - 15);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+});
