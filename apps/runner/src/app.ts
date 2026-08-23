@@ -2,8 +2,10 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 
 import type { BuildRevision, RunnerEvent, RunnerHost } from '@alteroid/core';
 import {
+  DEFAULT_SSE_HEARTBEAT_MS,
   readExecutionResources,
   resolveBuildRevision,
+  startSseHeartbeat,
   RunnerFenceError,
   runnerAnswerCommandSchema,
   runnerMessageCommandSchema,
@@ -63,6 +65,13 @@ export interface RunnerAppDeps {
    * 内の daemon 等から見える（`private: true` で npm へは publish されない）。
    */
   revision?: BuildRevision;
+  /**
+   * `GET /events` の heartbeat の間隔（ms）。省略時は `DEFAULT_SSE_HEARTBEAT_MS`
+   * （`@alteroid/core` の `sse-heartbeat.ts`）。**環境変数は増やさない** ——
+   * デーモン側の `AppDeps.sseHeartbeatMs` と同じ理由で、テストで短くする以外に
+   * 差し替える理由が無い。
+   */
+  sseHeartbeatMs?: number;
 }
 
 const AUTH_SCHEME = /^Bearer\s+(.+)$/i;
@@ -135,6 +144,7 @@ const INSTANCE_ID = randomUUID();
 
 export function createRunnerApp(deps: RunnerAppDeps) {
   const { host, outbox } = deps;
+  const sseHeartbeatMs = deps.sseHeartbeatMs ?? DEFAULT_SSE_HEARTBEAT_MS;
   // **プロセスの生存期間ぶん1回だけ解決する**（`INSTANCE_ID` と同じ理由——
   // 焼き込み・実行時の環境変数はどちらもプロセスの寿命の間に変わらない）。
   const revision = deps.revision ?? resolveBuildRevision();
@@ -265,6 +275,18 @@ export function createRunnerApp(deps: RunnerAppDeps) {
      *
      * 1本だけが購読する前提（デーモンは1つ）。繋ぎ直しのたびに、溜まっていた分から
      * 流し直す。
+     *
+     * **heartbeat が要る。** この経路は `hello` を1回書いたあと、`outbox` に何か
+     * 積まれるまで文字通り1バイトも流れない —— マネージャーが黙っていれば無音は
+     * いくらでも続く。読む側（デーモン）は Node 内蔵の `fetch`（undici）で、
+     * その既定 `bodyTimeout` は 300000ms である。**無音が5分続くと必ず切れる**
+     * （実測: `TypeError: terminated` / `cause.code = UND_ERR_BODY_TIMEOUT` /
+     * `elapsed_ms = 300826`）。undici のタイマーは**1バイトでも届けば延長される**
+     * ので、コメント行の heartbeat で塞げる。
+     *
+     * 切れると runner は繋ぎ直しのたびに `hello` を書き、デーモンはそれを全部
+     * `#reattach` へ通す（`packages/core/src/manager.ts`）ので、**5分ごとの切断は
+     * そのまま5分ごとの `#reattach` になる。** 塞ぐのはその両方である。
      */
     .get('/events', (c) =>
       streamSSE(c, async (stream) => {
@@ -286,6 +308,11 @@ export function createRunnerApp(deps: RunnerAppDeps) {
           data: JSON.stringify({ type: 'hello', runnerId: host.runnerId }),
         });
 
+        // heartbeat は SSE のコメント行を流す（読む側は読み捨てる —— デーモンの
+        // `#read` は `data:` で始まる行だけを拾うので、跡にも数えられない）。
+        // 死んだ接続の掃除の契機でもある（詳細は `@alteroid/core` の `sse-heartbeat.ts`）。
+        const stopHeartbeat = startSseHeartbeat(stream, sseHeartbeatMs, () => wake?.());
+
         try {
           for (;;) {
             if (closed || stream.aborted || stream.closed) break;
@@ -300,6 +327,10 @@ export function createRunnerApp(deps: RunnerAppDeps) {
             await stream.writeSSE({ event: event.type, data: JSON.stringify(event) });
           }
         } finally {
+          // **タイマーを先に止める。** 止めないと、ストリームが終わった後も
+          // 15秒ごとに死んだ相手へ書き続ける（`write()` は例外を出さないので
+          // 残っていても壊れて見えない）。
+          stopHeartbeat();
           detach();
           // 流し切れなかった分は箱へ戻す（次に繋がったときに届く）
           for (const event of queue) outbox.push(event);
