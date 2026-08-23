@@ -5,8 +5,7 @@ import { Page } from '~/components/page';
 import { Badge, Button, Card, CardHeader, Empty, ErrorNote, Input, Spinner } from '~/components/ui';
 import { useCloseCommitment, usePushCommitment } from '~/hooks/mutations';
 import { useCommitments } from '~/hooks/queries';
-import { commitmentClosedBySchema, textMarkupSchema } from '@alteroid/core';
-import type { Commitment, CommitmentOrigin } from '@alteroid/core';
+import type { Commitment, CommitmentClosedBy, CommitmentOrigin, TextMarkup } from '@alteroid/core';
 import { formatDateTime, formatRelative } from '~/lib/format';
 
 /**
@@ -237,13 +236,54 @@ function assertOriginHandled(origin: never): void {
  * **実行時にここへ来ることは、`commitmentSchema.closedBy` が `z.string()`
  * で緩く持たれている（保存層は未知の値を拒否しない）ため、
  * `assertOriginHandled` より現実的に起こりうる。** 未知の値は
- * `ClosedReasonBody` が `commitmentClosedBySchema.safeParse` で弾いた
+ * `ClosedReasonBody` が `isKnownCommitmentClosedBy`（`commitmentClosedBySchema`
+ * の値を複製した narrow。理由は `isKnownCommitmentClosedBy` の doc）で弾いた
  * 時点で別に `console.warn` している（この関数より手前）。**この関数が
  * 実際に呼ばれるのは、`commitmentClosedBySchema` に値が足されたのに
  * `switch` 側の `case` が追いついていない、という版のずれのときだけである。**
  */
 function assertClosedByHandled(closedBy: never): void {
   console.warn(`commitments.tsx: switch が決めていない commitment.closedBy: ${String(closedBy)}`);
+}
+
+/**
+ * `commitmentClosedBySchema`（`packages/core/src/schema.ts`）の閉じた2値を
+ * ここへ複製する。**なぜ `@alteroid/core` から値として import しないか** —
+ * `@alteroid/core` の `index.ts` は `export * from './schema.js'` に加えて
+ * `usage-snapshot.js` / `usage-probe.js` などサーバ専用のドメイン層を丸ごと
+ * 再エクスポートしている。**値**を1つでも import すると、そのサーバ専用
+ * コードごとブラウザバンドルへ入る — 実際に #294 / #306 でこの2つの値 import
+ * （このコメントの直下にあった `commitmentClosedBySchema.safeParse` /
+ * `textMarkupSchema.safeParse`）が入り、この `commitments` ルートのチャンクが
+ * 1.2MB（他ルートの1万〜2万バイト台に対して約80倍）に膨らんだうえ、
+ * `node:module` の `createRequire` 呼び出しがブラウザでのモジュール評価
+ * 時点で例外を投げ、**このルートが本番で一度も開けなくなった。** この doc の
+ * 直後の直し（値 import を外してここへ複製）はその事故の修正である。
+ *
+ * `@alteroid/core/usage` / `@alteroid/core/revision` はこの画面が既に使って
+ * いる「ブラウザへ出す軽い口」（`packages/core/src/revision.ts` の doc）だが、
+ * `commitmentClosedBySchema` / `textMarkupSchema` にはその口が無いので、
+ * ここでは値そのものをこのファイル内に複製する。
+ *
+ * **型（`CommitmentClosedBy` / `TextMarkup`）は `import type` のまま core から
+ * 引く。** 網羅性の保証（`assertClosedByHandled` / `assertMarkupHandled` の
+ * `never` 倒れ先）は型でしか効かないので、そちらは1文字も緩めていない。この
+ * 配列が担うのは「保存層の緩い `z.string()` を実行時に狭める」ことだけである。
+ *
+ * **⚠️ core 側の `z.enum` に値が足されても、この複製は自動では追随しない。**
+ * 追随しなくても安全側に倒れる — 新しい値は「未知」として `console.warn` 付き
+ * の分岐（下記 `switch` の `default`）へ落ちるだけで、データは1文字も失わない
+ * （AGENTS.md「型で塞いだ分岐にも、実行時の倒れ先の歯を足す」と同じ設計）。
+ * ずれに気づく手立ては「本番でこのラベルが古いまま」という見え方だけなので、
+ * `commitmentClosedBySchema` を変えたら、この配列も手で更新すること。
+ */
+const KNOWN_COMMITMENT_CLOSED_BY = [
+  'clone',
+  'human',
+] as const satisfies readonly CommitmentClosedBy[];
+
+function isKnownCommitmentClosedBy(value: string): value is CommitmentClosedBy {
+  return (KNOWN_COMMITMENT_CLOSED_BY as readonly string[]).includes(value);
 }
 
 /**
@@ -263,13 +303,21 @@ function assertClosedByHandled(closedBy: never): void {
  * **実行時にここへ来ることは、`commitmentSchema.bodyMarkup` が
  * `z.string()` で緩く持たれている（保存層は未知の値を拒否しない）ため、
  * `assertOriginHandled` より現実的に起こりうる。** 未知の値は
- * `ManagerRestBody` が `textMarkupSchema.safeParse` で弾いた時点で別に
- * `console.warn` している（この関数より手前）。**この関数が実際に呼ばれる
+ * `ManagerRestBody` が `isKnownTextMarkup`（`textMarkupSchema` の値を複製した
+ * narrow。理由は `isKnownTextMarkup` の doc）で弾いた時点で別に `console.warn`
+ * している（この関数より手前）。**この関数が実際に呼ばれる
  * のは、`textMarkupSchema` に値が足されたのに `switch` 側の `case` が
  * 追いついていない、という版のずれのときだけである。**
  */
 function assertMarkupHandled(markup: never): void {
   console.warn(`commitments.tsx: switch が決めていない commitment.bodyMarkup: ${String(markup)}`);
+}
+
+/** `textMarkupSchema` の閉じた2値の複製。理由・追随の扱いは `isKnownCommitmentClosedBy` の doc と同じ。 */
+const KNOWN_TEXT_MARKUP = ['markdown', 'none'] as const satisfies readonly TextMarkup[];
+
+function isKnownTextMarkup(value: string): value is TextMarkup {
+  return (KNOWN_TEXT_MARKUP as readonly string[]).includes(value);
 }
 
 /**
@@ -288,14 +336,14 @@ function assertMarkupHandled(markup: never): void {
  *
  * **保存層（`commitmentSchema.bodyMarkup`）は `z.string()` で緩く持つ。**
  * `closedBy` と同じ理由（`commitmentSchema` の doc）。**表示側までその
- * 緩さを引き継がない** — ここでは `textMarkupSchema.safeParse` で狭めて
- * から分岐する。
+ * 緩さを引き継がない** — ここでは `isKnownTextMarkup` で狭めてから分岐する
+ * （`textMarkupSchema` の値をこのファイル内に複製したもの。理由は
+ * `isKnownTextMarkup` の doc）。
  */
 function ManagerRestBody({ rest, bodyMarkup }: { rest: string; bodyMarkup: string | undefined }) {
   if (bodyMarkup === undefined) return <Markdown>{rest}</Markdown>;
 
-  const known = textMarkupSchema.safeParse(bodyMarkup);
-  if (!known.success) {
+  if (!isKnownTextMarkup(bodyMarkup)) {
     // **`undefined` とは別扱い。** ここでだけ warn する（`undefined` は warn しない）。
     console.warn(
       `commitments.tsx: 未知の commitment.bodyMarkup が来た（undefined とは別扱い）: ${String(bodyMarkup)}`,
@@ -303,7 +351,7 @@ function ManagerRestBody({ rest, bodyMarkup }: { rest: string; bodyMarkup: strin
     return <PlainBody body={rest} />;
   }
 
-  const markup = known.data;
+  const markup = bodyMarkup;
   switch (markup) {
     case 'markdown':
       return <Markdown>{rest}</Markdown>;
@@ -556,7 +604,9 @@ function PlainClosedReason({ reason }: { reason: string }) {
  * 行で throw し `list()` がそれを try/catch 無しで map するため、未知の
  * 値が1つ入っただけで台帳の一覧が丸ごと読めなくなるのを避けるためである
  * （`commitmentSchema` の doc）。**表示側までその緩さを引き継がない** —
- * ここでは `commitmentClosedBySchema.safeParse` で狭めてから分岐する。
+ * ここでは `isKnownCommitmentClosedBy` で狭めてから分岐する
+ * （`commitmentClosedBySchema` の値をこのファイル内に複製したもの。理由は
+ * `isKnownCommitmentClosedBy` の doc）。
  */
 function ClosedReasonBody({ commitment }: { commitment: Commitment }) {
   if (commitment.closedReason === undefined || commitment.closedReason === null) return null;
@@ -565,8 +615,7 @@ function ClosedReasonBody({ commitment }: { commitment: Commitment }) {
   // **「そもそも無い」。** 既定へ倒さない（`'clone'` にも `'human'` にもしない）。
   if (commitment.closedBy === undefined) return <PlainClosedReason reason={reason} />;
 
-  const known = commitmentClosedBySchema.safeParse(commitment.closedBy);
-  if (!known.success) {
+  if (!isKnownCommitmentClosedBy(commitment.closedBy)) {
     // **`undefined` とは別扱い。** ここでだけ warn する（`undefined` は warn しない）。
     console.warn(
       `commitments.tsx: 未知の commitment.closedBy が来た（undefined とは別扱い）: ${String(commitment.closedBy)}`,
@@ -574,7 +623,7 @@ function ClosedReasonBody({ commitment }: { commitment: Commitment }) {
     return <PlainClosedReason reason={reason} />;
   }
 
-  const closedBy = known.data;
+  const closedBy = commitment.closedBy;
   switch (closedBy) {
     case 'clone':
       return (

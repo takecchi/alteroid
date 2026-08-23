@@ -122,6 +122,15 @@ const RECORD = recordPathFor(REPO);
 const STEPS = [
   { name: 'build', cmd: 'pnpm', args: ['build'] },
   {
+    name: 'web-bundle-node-traces',
+    cmd: 'pnpm',
+    args: ['check:web-bundle-node-traces'],
+    hint:
+      'apps/web の生成物に Node 専用の痕跡（createRequire / node: 指定子 / process.cwd / Bun.）が' +
+      '混入している。@alteroid/core（や他の依存）から値を import してサーバ専用コードを引き込んで' +
+      'いないか確認すること（scripts/check-web-bundle-node-traces.mjs の doc）',
+  },
+  {
     name: 'openapi',
     cmd: 'git',
     args: ['diff', '--exit-code', 'HEAD', '--', 'apps/daemon/openapi.json'],
