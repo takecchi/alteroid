@@ -2975,6 +2975,156 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     expect(reply).toContain('memory_read slug=<slug>');
   });
 
+  /**
+   * **#284: `fiveFieldViolations` の id+名前チェックは「先頭行に非空トークンが
+   * 2つ並ぶか」という形しか見ない——2つ目のトークンが本当に `title` かどうかは
+   * 見ていない。** `self_status`（上）は #280 でこれを塞いだが、残る4つの
+   * `_list`（approvals / schedule / commitment / manager）は塞いでいなかった。
+   *
+   * **変異試験で確かめた**（`packages/core/src/tools.ts` の呼び出し側、
+   * `title:` に渡す式を、同じ `renderListingEntry` 呼び出しの中で既に使っている
+   * 別の値——`entry.id` 相当——へ丸ごと差し替える変異）。2トークンの形は保たれる
+   * ので、上の P1（id+名前チェック）・下の P2（`matchesStrictBlockShape`）の
+   * どちらも生存した（4本とも）。**`title` を空文字へ落とす変異は、この4本では
+   * 検出できる**（先頭行が `- <id> ` で終わり2つ目のトークンが無くなるため）。
+   * 生存するのは「値の置き換え」のほうだけである。
+   *
+   * だから `self_status` の `題\d{4}`（#280）と同じ手当てを、値の置き換えで
+   * 検出できる形で足す。**`flooded()` が積む値のうち、id 側には出ず title 側
+   * にだけ出る文字列**を選ぶ:
+   *
+   * - `approvals_list`: 質問の1行目（`質問${pad}`）がそのまま `approvalTitle`
+   *   の出力になる。id（`ap-${pad}`）には出ない
+   * - `schedule_list`: `flooded()` は `everyMinutes: 60` で固定するので、
+   *   `describeScheduleSpec` の出力は毎回 `60 分ごと`。id（`kind=watch-${pad}`）
+   *   には出ない
+   * - `commitment_list`: `flooded()` は `commitment_open({ body })` だけを呼ぶので
+   *   `origin` は必ず `'self'`（`source` も無い）。`commitmentOriginBadge` の
+   *   出力は毎回 `[自分で気づいた宿題]`。id（UUID）には出ない
+   * - `manager_list`: `flooded()` は `manager_start` だけを呼ぶので、どの
+   *   マネージャーも起動直後の `running`（セッション切断なし）。タイトルは
+   *   毎回 `[running]`。id（managerId）には出ない
+   *
+   * **`memory_list` は別枠にする。** `title` を空へ落とす変異も置き換える変異も
+   * どちらも生存した——`memory_list` の1行は `- [kind] slug: title (作成:…) —
+   * 概要` という形で、`kindTag`（`[fact] ` 等）と `slug` だけで2トークンの
+   * 判定を満たしてしまうため、`title` が空でも置き換わっても崩れない
+   * （#264 が自己申告していた弱さと同じ形）。
+   */
+  const TITLE_IS_REAL_CONTENT_CASES: {
+    name: string;
+    check: (firstLine: string) => void;
+  }[] = [
+    {
+      name: 'approvals_list',
+      check: (firstLine) =>
+        expect(firstLine, `id の隣に質問の1行目が無い: ${firstLine}`).toMatch(/^- \S+ 質問\d{4}/),
+    },
+    {
+      name: 'schedule_list',
+      check: (firstLine) =>
+        expect(firstLine, `id の隣に周期の説明（60 分ごと）が無い: ${firstLine}`).toContain(
+          '60 分ごと',
+        ),
+    },
+    {
+      name: 'commitment_list',
+      check: (firstLine) =>
+        expect(
+          firstLine,
+          `id の隣に出所の札（[自分で気づいた宿題]）が無い: ${firstLine}`,
+        ).toContain('[自分で気づいた宿題]'),
+    },
+    {
+      name: 'manager_list',
+      check: (firstLine) =>
+        expect(firstLine, `id の隣に状態の札（[running]）が無い: ${firstLine}`).toContain(
+          '[running]',
+        ),
+    },
+  ];
+
+  it.each(TITLE_IS_REAL_CONTENT_CASES)(
+    '$name — id の隣は id そのものではなく、その一覧固有のタイトルである（#284）',
+    async ({ name, check }) => {
+      const h = await flooded(60);
+      const reply = await h.call(name, {});
+      const entries = splitListingEntries(reply);
+      expect(entries.length).toBeGreaterThan(0);
+
+      for (const entry of entries) {
+        check(entry.split('\n')[0] ?? '');
+      }
+    },
+  );
+
+  it('memory_list — タイトルは id や slug の繰り返しではなく、記憶の見出しである（#284）', async () => {
+    const h = await flooded(60);
+
+    const reply = await h.call('memory_list', {});
+    const entries = splitListingEntries(reply);
+    expect(entries.length).toBeGreaterThan(0);
+
+    for (const entry of entries) {
+      // flooded() が書く記憶は `# 題<pad>` という見出しを持つ（persona.write の
+      // タイトル抽出）。self_status の同種の歯（#280、題\d{4}）と同じ実測を
+      // memory_list 自身（renderMemoryListing）にも足す——self_status の歯は
+      // renderMemorySize（tools.ts）を測るだけで、renderMemoryListing
+      // （memory.ts）は測っていない。
+      expect(entry, `記憶の見出し（題NNNN）が出ていない: ${entry}`).toMatch(/題\d{4}/);
+    }
+  });
+
+  /**
+   * **タイトルの歯（`TITLE_IS_REAL_CONTENT_CASES` と、直上の `memory_list`
+   * 名指しの `it()`）が `FIVE_FIELD_SWEPT` を漏れなく覆っていることを測る歯。**
+   *
+   * 上の2つはどちらも手で書いた名前の表である——タイトルの実測（何を
+   * `check` するか）そのものは一覧ごとに固有で、機械的には作れない。
+   * けれど「表が抜けている」ことは測れる。`CLONE_TOOL_NAMES` に新しい
+   * `_list` が足されたとき、件数の歯（`CASES`）や P1/P2 の歯
+   * （`FIVE_FIELD_SWEPT` / `STRICT_SHAPE_SWEPT`）は `SWEPT` から機械的に
+   * 作り直されるので新顔を自動的に捕まえるが、**タイトルの表だけは
+   * 足し忘れても何も落ちない**まま静かに通ってしまう。
+   *
+   * 直上の「P1/P2 それぞれの網が空にならず、除外は実在する道具を指している」
+   * （`AXIS_UNDECIDED` / `SHAPE_DIFFERENT` の自己測定）と同じ形にする——
+   * 除外を作るなら理由の文字列を持たせ、その除外が実在する道具を指している
+   * ことも測る。
+   */
+  const TITLE_CHECK_NAMES = new Set<string>([
+    ...TITLE_IS_REAL_CONTENT_CASES.map((c) => c.name),
+    'memory_list',
+  ]);
+
+  /**
+   * タイトルの歯を意図的に足さないと決めたもの。**いまは空。**
+   * `FIVE_FIELD_SWEPT` の全件が `TITLE_CHECK_NAMES` で覆われているため。
+   * ここへ足すときは `AXIS_UNDECIDED` / `SHAPE_DIFFERENT` と同じく理由の
+   * 文字列を添えること——散文の理由だけを書いて自己測定を伴わないと、
+   * 「#220 待ち」がマージ後も残ったのと同じ形で嘘になる（直上のコメント）。
+   */
+  const TITLE_CHECK_EXCLUDED = new Map<string, string>([]);
+
+  it('タイトルの歯が FIVE_FIELD_SWEPT を漏れなく覆っている（新しい _list の足し忘れを検出する）', () => {
+    // 除外の綴りが違えば、除外は効かないまま「除外したつもり」になる。
+    for (const name of TITLE_CHECK_EXCLUDED.keys()) {
+      expect(SWEPT, `除外 ${name} が実在する道具を指していない`).toContain(name);
+    }
+
+    // FIVE_FIELD_SWEPT のうち、TITLE_CHECK_NAMES にも TITLE_CHECK_EXCLUDED
+    // にも入っていない名前 = タイトルの歯が無いまま網の外へ落ちているもの。
+    const uncovered = FIVE_FIELD_SWEPT.filter(
+      (name) => !TITLE_CHECK_NAMES.has(name) && !TITLE_CHECK_EXCLUDED.has(name),
+    );
+    expect(
+      uncovered,
+      'タイトルの歯（TITLE_IS_REAL_CONTENT_CASES への追加 / memory_list のような ' +
+        '名指しの it() / 理由つきの TITLE_CHECK_EXCLUDED のいずれか）が無い一覧: ' +
+        `${uncovered.join(', ')}`,
+    ).toEqual([]);
+  });
+
   it.each(STRICT_SHAPE_SWEPT)(
     '%s — どの1件も id + 名前 / 作成 + 更新 / 概要 を決まった順で出す（P2）',
     async (name) => {
