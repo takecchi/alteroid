@@ -34,6 +34,67 @@ import { usageCommand } from './usage.js';
  * （docs/architecture.md「脳は1インスタンス」）。init だけはデーモン起動前に
  * 動く必要があるので、ストレージ層（記憶の置き場を作るだけ）に直接触る。
  */
+/**
+ * `alteroid init` — 人格データディレクトリ（`~/.alteroid`）を初期化する。
+ *
+ * **テストのために切り出してある。** 元は `program.command('init').action(...)`
+ * の中に直書きされていて、他のコマンド（`access` / `conversations` / `memory` /
+ * `profile` など）が exported な `*Command` 関数を持つのに対し、ここだけ
+ * その導線が無かった（#333）。挙動・出力は1文字も変えていない —
+ * `program` 側は `await initCommand()` を呼ぶだけの薄い配線に変わっただけである。
+ */
+export async function initCommand(): Promise<void> {
+  const { paths, created } = await initWorkspace();
+  stdout.write(`${paths.root} を初期化しました\n`);
+  for (const path of created) stdout.write(`  作成: ${path}\n`);
+  if (created.length === 0)
+    stdout.write('  （既に初期化済み。既存のファイルには触れていません）\n');
+  stdout.write('\n次: alteroid chat\n');
+}
+
+/** `alteroid daemon start`。切り出した理由は {@link initCommand} と同じ（#333）。 */
+export async function daemonStartCommand(): Promise<void> {
+  const info = await daemon.start();
+  stdout.write(`alteroidd を起動しました (pid ${info.pid}, port ${info.port})\n`);
+}
+
+/** `alteroid daemon stop`。切り出した理由は {@link initCommand} と同じ（#333）。 */
+export async function daemonStopCommand(): Promise<void> {
+  switch (await daemon.stop()) {
+    case 'stopped':
+      stdout.write('alteroidd を停止しました\n');
+      return;
+    case 'not-running':
+      stdout.write('alteroidd は動いていません\n');
+      return;
+    case 'stale':
+      // 本人確認できない PID にシグナルは送らない（別プロセスを殺しうる）
+      stdout.write(
+        'alteroidd は応答しません。古い状態ファイルを片付けました。\n' +
+          'プロセスが残っている場合は手で確認して終了してください。\n',
+      );
+      return;
+    case 'unresponsive':
+      stdout.write('alteroidd が停止要求に応じません。ログを確認してください。\n');
+      return;
+  }
+}
+
+/** `alteroid daemon status`。切り出した理由は {@link initCommand} と同じ（#333）。 */
+export async function daemonStatusCommand(): Promise<void> {
+  const { running, info } = await daemon.status();
+  if (running && info) {
+    stdout.write(`稼働中: pid ${info.pid}, http://127.0.0.1:${info.port}\n`);
+    stdout.write(`  起動: ${info.startedAt}\n`);
+  } else {
+    stdout.write('停止中\n');
+  }
+  // 記憶がどこにあるかは**デーモンに聞く**。クラウド構成では PostgreSQL に
+  // あるので、CLI 側のパスを表示すると人間が器を取り違える。
+  const storage = running ? await daemon.storageOf(info) : null;
+  stdout.write(`  記憶: ${storage ?? alteroidRoot()}\n`);
+}
+
 const program = new Command();
 
 program.name('alteroid').description('クローンと会話し、クローンに仕事を任せる').version('0.1.0');
@@ -42,12 +103,7 @@ program
   .command('init')
   .description('人格データディレクトリ（~/.alteroid）を初期化する')
   .action(async () => {
-    const { paths, created } = await initWorkspace();
-    stdout.write(`${paths.root} を初期化しました\n`);
-    for (const path of created) stdout.write(`  作成: ${path}\n`);
-    if (created.length === 0)
-      stdout.write('  （既に初期化済み。既存のファイルには触れていません）\n');
-    stdout.write('\n次: alteroid chat\n');
+    await initCommand();
   });
 
 program
@@ -291,49 +347,21 @@ daemonCommand
   .command('start')
   .description('デーモンを起こす')
   .action(async () => {
-    const info = await daemon.start();
-    stdout.write(`alteroidd を起動しました (pid ${info.pid}, port ${info.port})\n`);
+    await daemonStartCommand();
   });
 
 daemonCommand
   .command('stop')
   .description('デーモンを止める')
   .action(async () => {
-    switch (await daemon.stop()) {
-      case 'stopped':
-        stdout.write('alteroidd を停止しました\n');
-        return;
-      case 'not-running':
-        stdout.write('alteroidd は動いていません\n');
-        return;
-      case 'stale':
-        // 本人確認できない PID にシグナルは送らない（別プロセスを殺しうる）
-        stdout.write(
-          'alteroidd は応答しません。古い状態ファイルを片付けました。\n' +
-            'プロセスが残っている場合は手で確認して終了してください。\n',
-        );
-        return;
-      case 'unresponsive':
-        stdout.write('alteroidd が停止要求に応じません。ログを確認してください。\n');
-        return;
-    }
+    await daemonStopCommand();
   });
 
 daemonCommand
   .command('status')
   .description('デーモンの状態を見る')
   .action(async () => {
-    const { running, info } = await daemon.status();
-    if (running && info) {
-      stdout.write(`稼働中: pid ${info.pid}, http://127.0.0.1:${info.port}\n`);
-      stdout.write(`  起動: ${info.startedAt}\n`);
-    } else {
-      stdout.write('停止中\n');
-    }
-    // 記憶がどこにあるかは**デーモンに聞く**。クラウド構成では PostgreSQL に
-    // あるので、CLI 側のパスを表示すると人間が器を取り違える。
-    const storage = running ? await daemon.storageOf(info) : null;
-    stdout.write(`  記憶: ${storage ?? alteroidRoot()}\n`);
+    await daemonStatusCommand();
   });
 
 program.parseAsync(process.argv).catch((error: unknown) => {
