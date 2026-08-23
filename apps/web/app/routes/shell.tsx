@@ -228,7 +228,7 @@ function MobileTopBar({
   onOpenNav: () => void;
 }) {
   return (
-    <header className="shrink-0 border-b border-border bg-surface pt-[var(--safe-top)]">
+    <header className="shrink-0 border-b border-border bg-surface pt-[var(--safe-top)] pl-[var(--safe-left)] pr-[var(--safe-right)]">
       <div className="flex items-center gap-1 px-2 py-1.5">
         <button
           type="button"

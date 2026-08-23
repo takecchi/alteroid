@@ -621,7 +621,7 @@ export function ChatPane({
 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
-      <header className="flex shrink-0 items-center justify-between gap-4 border-b border-border px-4 py-4 md:px-6">
+      <header className="flex shrink-0 items-center justify-between gap-4 border-b border-border py-4 pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]">
         {onOpenList !== undefined && (
           <button
             type="button"
@@ -652,7 +652,7 @@ export function ChatPane({
         )}
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-6">
+      <div className="min-h-0 flex-1 overflow-y-auto py-4 pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]">
         {/*
           **遡り切れていないことを言う。** サーバは日誌の新しい方から `scan` 件しか
           見ないので、古い会話は「続きがあるのに出ていない」状態になりうる。ここが
@@ -739,7 +739,7 @@ export function ChatPane({
         <div ref={bottomRef} />
       </div>
 
-      <div className="shrink-0 border-t border-border px-4 pt-3 pb-[calc(0.75rem+var(--safe-bottom))] md:px-6">
+      <div className="shrink-0 border-t border-border pt-3 pb-[calc(0.75rem+var(--safe-bottom))] pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]">
         <ErrorNote error={failure} className="mb-2" />
         <div className="flex items-end gap-2">
           <div className="min-w-0 flex-1">
