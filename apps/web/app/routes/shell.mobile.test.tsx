@@ -180,3 +180,30 @@ describe('承認待ちの見え方', () => {
     expect(await screen.findByRole('link', { name: '承認待ち 1 件' })).toBeTruthy();
   });
 });
+
+/**
+ * 狭い画面の上端の帯（`MobileTopBar`）の横向き safe-area inset（Issue #247 の4）。
+ *
+ * **これは「切り欠きの側で欠けなくなった」ことの試験ではない。** jsdom は
+ * `env(safe-area-inset-*)` を評価できないので、実際に何 px になるかはここでは
+ * 測れない。固定できるのは、帯にそのクラス名が書かれていることまでである。
+ *
+ * この帯は `--safe-top` は既に持っていた（縦向き）。ここで見るのは横向きぶん
+ * （`--safe-left` / `--safe-right`）で、`page.test.tsx` の本文側と対になる。
+ */
+describe('上端の帯の横向き safe-area inset（本4）', () => {
+  it('狭い画面の上端の帯（header）が pl / pr の safe-area クラスを持つ（クラス名の存在のみ）', async () => {
+    setViewportWidth(NARROW_WIDTH);
+    stubAuthedShell();
+
+    renderShell();
+    await screen.findByText('ダッシュボードの中身');
+
+    const header = screen.getByRole('banner');
+    const classes = header.className.split(/\s+/);
+    expect(classes).toContain('pl-[var(--safe-left)]');
+    expect(classes).toContain('pr-[var(--safe-right)]');
+    // 既存の縦の safe-area（本4の対象外だが、消していないことも一緒に見ておく）。
+    expect(classes).toContain('pt-[var(--safe-top)]');
+  });
+});
