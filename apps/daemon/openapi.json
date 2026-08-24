@@ -5743,6 +5743,22 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "保存に失敗した。**理由の本文は返さない**（ドライバの例外は失敗したクエリの束縛パラメータを添えてくることがあるため）。跡は stderr に残る。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
           }
         },
         "requestBody": {
@@ -5817,6 +5833,22 @@
                     }
                   },
                   "required": ["rotateOn", "cooldownMs"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "トークンのプールの器が配線されていない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
                 }
               }
             }

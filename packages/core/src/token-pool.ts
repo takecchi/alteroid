@@ -238,6 +238,36 @@ export interface NormalizeTokenPoolOptions {
 }
 
 /**
+ * {@link normalizeTokenPool} が入力を受け付けなかったこと。
+ *
+ * **この型は「`message` をそのまま HTTP の応答へ返してよい」ことを意味する。**
+ * 呼び出し側（`apps/daemon/src/app.ts` の `PUT /tokens`）は、この型のときだけ
+ * 400 の本文へ `message` を載せ、それ以外の例外（保存の失敗など）は本文を
+ * 1文字も返さない。
+ *
+ * **⟹ `message` に、保存対象の値・資格・入力の本文を含めてはいけない。** 含めて
+ * よいのは `id` / `label` のような**呼び出し側が既に知っている識別子**だけである。
+ *
+ * **⚠️ 「返したいメッセージが在るから」でこの型を使わないこと。** 返してよいか
+ * どうかは、メッセージの中身で決まる。中身を確かめられないもの（ドライバや
+ * ライブラリが投げた例外）をこの型で包み直すと、**この型が持っている「返して
+ * よい」という約束だけが残り、中身の検査が消える。** 実測（2026-08-24 観測、
+ * `drizzle-orm@0.45.2`）: `PgPreparedQuery` の `queryWithCache` は失敗した
+ * クエリの束縛パラメータを `message` に添えて投げる——`agent_tokens` への
+ * insert なら、そこにトークンの値がそのまま並ぶ。
+ *
+ * **これは {@link AgentToken.invalidatedReason} が「解釈しない文字列であって
+ * 分岐に使ってよい enum ではない」のと同じ形である**——腐りにくい形を選ぶと、
+ * その形が次に読む人へ新しい誘引を生む。誘引はここで名指ししておく。
+ */
+export class TokenPoolInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TokenPoolInputError';
+  }
+}
+
+/**
  * `PUT /tokens` の入力を、保存できる正本（{@link AgentToken}[]）へ正規化する。
  *
  * **純粋関数。** 器（fs / pg）にもサービス（`token-pool-service.ts`）にも依存
@@ -261,6 +291,10 @@ export interface NormalizeTokenPoolOptions {
  *   `now()`。`disabled: false` → `disabledAt` を落とす。`disabled` 省略 →
  *   既存のまま変えない
  * - **入力に現れなかった既存の行は消える**（`PUT /tokens` は全文置換である）
+ *
+ * **投げるのは {@link TokenPoolInputError} だけである。** そのメッセージは
+ * `id` / `label` しか含まない——呼び出し側がそのまま応答へ返してよい、という
+ * 約束がその型に付いている（その型の doc）。
  */
 export function normalizeTokenPool(
   inputs: readonly AgentTokenInput[],
@@ -273,19 +307,21 @@ export function normalizeTokenPool(
   const built = inputs.map((input, index) => {
     if (input.id !== undefined) {
       if (seenIds.has(input.id)) {
-        throw new Error(`トークンの id が入力の中で重複している: ${input.id}`);
+        throw new TokenPoolInputError(`トークンの id が入力の中で重複している: ${input.id}`);
       }
       seenIds.add(input.id);
     }
 
     const current = input.id === undefined ? undefined : byId.get(input.id);
     if (input.id !== undefined && current === undefined) {
-      throw new Error(`id ${input.id} のトークンは既存の行に無い（消えた行を静かに作り直さない）`);
+      throw new TokenPoolInputError(
+        `id ${input.id} のトークンは既存の行に無い（消えた行を静かに作り直さない）`,
+      );
     }
 
     const value = input.value ?? current?.value;
     if (value === undefined) {
-      throw new Error(
+      throw new TokenPoolInputError(
         `新しいトークン（${input.label}）には value が要る` +
           '（省略できるのは、id で既存の行を指しているときだけ）',
       );

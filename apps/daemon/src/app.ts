@@ -19,6 +19,7 @@ import {
   RESERVED_SCHEDULE_KINDS,
   DEFAULT_SSE_HEARTBEAT_MS,
   DEFAULT_TOKEN_ROTATION_SETTINGS,
+  TokenPoolInputError,
   approvalUpdatedAt,
   chatStreamEventSchema,
   collectConversations,
@@ -33,6 +34,7 @@ import {
   localDayRange,
   memorySlugSchema,
   fingerprintOf,
+  noteDroppedRecord,
   reasonOf,
   reportRunnerRevision,
   resolveBuildRevision,
@@ -2533,6 +2535,12 @@ export function createApp(deps: AppDeps) {
             description: '入力が壊れている（保存していない）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          500: {
+            description:
+              '保存に失敗した。**理由の本文は返さない**（ドライバの例外は失敗した' +
+              'クエリの束縛パラメータを添えてくることがあるため）。跡は stderr に残る。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
           403: {
             description: '実行環境の持ち主ではない。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
@@ -2540,7 +2548,34 @@ export function createApp(deps: AppDeps) {
         },
       }),
       requireOperator,
-      validator('json', tokensUpdateRequestSchema),
+      /**
+       * **既定の 400 を使わない。** `hook` を渡さないと
+       * `@hono/standard-validator` は
+       * `c.json({ data: <リクエスト本文そのもの>, error, success: false }, 400)`
+       * を返す（実測 2026-08-24 観測、`@hono/standard-validator@0.4.0` の
+       * `dist/index.mjs`。`sanitizeIssues` が見る `RESTRICTED_DATA_FIELDS` は
+       * `header: ['cookie']` だけで、`json` は素通しになる）。
+       *
+       * **⟹ `label` を1つ書き忘れただけで、その回に送った *全部* の値が
+       * 応答へ載る。** ここはトークンの本体を運ぶ唯一の口なので、既定の
+       * 形をそのまま使えない。**どこが不正だったかは返す（`path` だけ）が、
+       * 送られてきた本文は1文字も返さない。**
+       */
+      validator('json', tokensUpdateRequestSchema, (result, c) => {
+        if (result.success) return;
+        const where = result.error
+          .map((issue) => issue.path?.map((part) => String(part)).join('.') ?? '')
+          .filter((path) => path.length > 0)
+          .join(', ');
+        return c.json(
+          {
+            error:
+              'トークンのプールの入力の形が不正（保存していない）' +
+              (where === '' ? '' : `: ${where}`),
+          },
+          400,
+        );
+      }),
       async (c) => {
         if (deps.tokens === undefined) {
           return c.json({ error: 'トークンのプールの器が無い' as const }, 400);
@@ -2549,9 +2584,32 @@ export function createApp(deps: AppDeps) {
           const { tokens, settings } = await deps.tokens.replace(c.req.valid('json').tokens);
           return c.json(tokensResponseSchema.parse({ tokens, settings }));
         } catch (error) {
-          // **理由にトークンの値を含めない。** `normalizeTokenPool` が投げる
-          // メッセージは id / label だけを含み、値は1文字も含まない。
-          return c.json({ error: String(error) }, 400);
+          // **返してよい例外だけを返す。型で分ける。**
+          //
+          // `TokenPoolInputError` は「`message` をそのまま応答へ返してよい」と
+          // いう約束が型に付いている（`token-pool.ts` のその型の doc）。それ以外
+          // ——保存の失敗——は**本文を1文字も返さない**。ドライバの例外は失敗した
+          // クエリの束縛パラメータを添えてくるので（実測 2026-08-24 観測、
+          // `drizzle-orm@0.45.2` の `PgPreparedQuery` が `Failed query: …` の
+          // 次の行に `params: …` を置く）、素の `String(error)` を返すと
+          // トークンの値がそのまま 400 の本文に載る。
+          //
+          // **`reasonOf` を通すだけにしないのは、それが偶然で効いているからである。**
+          // `reasonOf` は1行目だけを採るので上の形では値が落ちるが、それは
+          // ドライバがメッセージのどこで改行するかに依存していて、こちらが
+          // 制御していない。**投げ直すのも駄目である**——`.onError` が無いので
+          // 既定のハンドラへ回るだけで、本文を出さない保証がここから消える。
+          if (error instanceof TokenPoolInputError) {
+            return c.json({ error: error.message }, 400);
+          }
+          // **跡は残す。ただし本文は出さない**（`dropped-record.ts` の作法）。
+          // detail は**本文を含まない見分け**だけ（`dropped-record.ts` の doc）。
+          noteDroppedRecord(
+            '認証トークンのプール',
+            `count=${String(c.req.valid('json').tokens.length)}`,
+            error,
+          );
+          return c.json({ error: 'トークンのプールを保存できなかった' as const }, 500);
         }
       },
     )
@@ -2571,6 +2629,10 @@ export function createApp(deps: AppDeps) {
           200: {
             description: '更新後の設定。',
             content: { 'application/json': { schema: resolver(tokenRotationSettingsSchema) } },
+          },
+          400: {
+            description: 'トークンのプールの器が配線されていない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           403: {
             description: '実行環境の持ち主ではない。',

@@ -16,6 +16,7 @@ import type {
   Stores,
 } from '@alteroid/core';
 import {
+  captureStderr,
   createAuthProviderRegistry,
   createAuthService,
   createManagerPool,
@@ -2246,6 +2247,97 @@ describe('認証トークンのプール', () => {
     expect(text).not.toContain(SECRET);
 
     expect(await stores.tokens.list()).toEqual([]);
+  });
+
+  /**
+   * **スキーマ検証（`validator('json', …)`）で落ちた 400 にも値を出さない。**
+   *
+   * 実測（2026-08-24 観測、`@hono/standard-validator@0.4.0` の `dist/index.mjs`）:
+   * `hook` を渡さないと `c.json({ data: value, error, success: false }, 400)` を
+   * 返し、この `data` は**リクエスト本文そのもの**である。`sanitizeIssues` が
+   * 見る `RESTRICTED_DATA_FIELDS` は `header: ['cookie']` だけなので、`json` は
+   * 素通しになる。
+   *
+   * **⟹ `label` を1つ書き忘れただけで、その回に送った *全部* の値が応答へ載る。**
+   * 下で2本送っているのはそのためで、**壊れていないほうの値まで漏れる**ことを
+   * 固定する（1本だけだと「壊れた行だけ出さない」形の直しでも緑になる）。
+   */
+  it('スキーマ検証で落ちた 400 にも、同じ回に送った値が1つも出ない', async () => {
+    const withTokens = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      tokens: createTokenPoolService({ stores }),
+    });
+    const GOOD = 'tok-valid-row-value';
+    const BAD = 'tok-row-without-label';
+
+    const response = await withTokens.request('/tokens', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      // 2本目に label が無い＝トップレベルのスキーマ検証で落ちる。
+      body: JSON.stringify({ tokens: [{ label: 'primary', value: GOOD }, { value: BAD }] }),
+    });
+
+    expect(response.status).toBe(400);
+    const text = await response.text();
+    expect(text).not.toContain(GOOD);
+    expect(text).not.toContain(BAD);
+
+    expect(await stores.tokens.list()).toEqual([]);
+  });
+
+  /**
+   * **保存が「値を含むメッセージ」で落ちても、応答にも stderr にも値を出さない。**
+   *
+   * ドライバの例外は失敗したクエリの束縛パラメータを添えてくることがある
+   * （`dropped-record.ts` の `reasonOf` の doc）。実測（2026-08-24 観測、
+   * `drizzle-orm@0.45.2`）: `PgPreparedQuery` の `queryWithCache` が
+   * `DrizzleQueryError(queryString, params, e)` で包み直し、その `message` は
+   * `Failed query: <sql>` の次の行に `params: <params>` を持つ。`agent_tokens`
+   * への insert なら、そこにトークンの値がそのまま並ぶ。
+   *
+   * 下の偽物のストアが投げる文言は、その実測した形を写したものである。
+   */
+  it('保存が値を含むメッセージで落ちても、応答にも stderr にも値が出ない', async () => {
+    const SECRET = 'tok-inside-driver-error';
+    const failing: Stores = {
+      ...stores,
+      tokens: {
+        ...stores.tokens,
+        replace: () => {
+          throw new Error(
+            'Failed query: insert into "agent_tokens" ("id", "label", "value") values ($1, $2, $3)\n' +
+              `params: x1,primary,${SECRET}`,
+          );
+        },
+      },
+    };
+    const withTokens = createApp({
+      clone: fake.clone,
+      stores: failing,
+      token: 'test-token',
+      shutdown: () => undefined,
+      tokens: createTokenPoolService({ stores: failing }),
+    });
+
+    let response: Response | undefined;
+    const lines = await captureStderr(async () => {
+      response = await withTokens.request('/tokens', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ tokens: [{ label: 'primary', value: SECRET }] }),
+      });
+    });
+
+    // **入力は正しいので 400 ではない。** 落ちたのは保存であり、入力のせいにしない。
+    expect(response?.status).toBe(500);
+    const text = await (response as Response).text();
+    expect(text).not.toContain(SECRET);
+    // **跡は残す。ただし本文は出さない**（`dropped-record.ts` の作法）。
+    expect(lines.join('\n')).not.toContain(SECRET);
+    expect(lines.join('\n')).not.toBe('');
   });
 
   it('PUT /tokens/policy で回す契機・冷却を変えられる（部分更新）', async () => {

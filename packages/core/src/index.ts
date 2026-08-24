@@ -367,6 +367,7 @@ export {
   DEFAULT_TOKEN_COOLDOWN_MS,
   DEFAULT_TOKEN_ROTATION_POLICY,
   DEFAULT_TOKEN_ROTATION_SETTINGS,
+  TokenPoolInputError,
   normalizeTokenPool,
   toAgentTokenView,
   tokenRotationPolicySchema,
