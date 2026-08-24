@@ -136,6 +136,7 @@ describe('解決済みの許可確認が再送されたとき', () => {
     const runner: RunnerClient = {
       runnerId: 'runner-primary',
       runnerIdKnown: true,
+      workspacePathKnown: true,
       workspacePath: '/work',
       async connect(onEvent) {
         emit = onEvent;
