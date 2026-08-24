@@ -29,7 +29,9 @@ node .claude/skills/mutation-testing/mutate.mjs run --plan <plan.json>     # 本
 # baseline / run は `--max-workers <n>` と `--max-workers=<n>` の両方を受ける（#331）。
 # 器が混んでいて並列度を下げるよう指示されている場面向け。省略時は既定の 4 のまま
 # （`mutate-core.mjs` の DEFAULT_MAX_WORKERS）。
-node .claude/skills/mutation-testing/mutate.mjs selftest --scenario <name> # 自己検証（受け入れ条件の3つ+1に加え、レビューで見つかった欠陥2件の回帰確認）。省略で一覧を出す
+# selftest --scenario <name>: 自己検証（受け入れ条件とレビューで見つかった欠陥の回帰確認）。
+# 本数と内訳は数えない — 省略した出力が名乗る一覧（mutate-selftest.mjs の SELFTEST_SCENARIOS）が本籍である。
+node .claude/skills/mutation-testing/mutate.mjs selftest --scenario <name>
 ```
 
 `baseline` / `run` は、印（`MUTATION-IN-PROGRESS.json`）が残っている状態では測定を始めずに落ちる
