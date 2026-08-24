@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto';
 
-import { journalEntryShape, noteDroppedRecord, noteUnreadableRecord } from './dropped-record.js';
+import {
+  journalEntryShape,
+  noteDroppedRecord,
+  noteManagerIdCollision,
+  noteUnreadableRecord,
+} from './dropped-record.js';
 import { excerptLine } from './excerpt.js';
 import {
   LEASE_TTL_MS,
@@ -475,6 +480,16 @@ export interface ManagerPoolOptions {
    * 制限であって、二重実行を止めるための期限ではない）。
    */
   leaseTtlMs?: number;
+  /**
+   * 新しい managerId を発行する（既定は `mgr-` に `randomUUID()` を続けたもの。
+   * 切り詰めない — #238）。
+   *
+   * **`now` と同じ理由で口を開けてある。** `randomUUID` を差し替える前例は
+   * この repo に無い（`vi.mock('node:crypto')` は使わない）ので、衝突を再現する
+   * 試験はここを差し替えるしかない。テストが乱数に依存した判定を書かないため
+   * であって、本番の既定を変えるためのものではない。
+   */
+  generateManagerId?: () => string;
 }
 
 export function createManagerPool(options: ManagerPoolOptions): ManagerPool {
@@ -622,6 +637,22 @@ const DENIED_TOOL_LIMIT = 64;
 const DENIED_ESCALATE_AT = 3;
 
 /**
+ * managerId の発行で、衝突を引き直す回数の上限（#238）。
+ *
+ * **非対称だから安全側へ倒す**（`lease.ts` の `mayClaim` の doc と同じ理由）。
+ * 引き直しをここで打ち切って例外にしても、断られた側は `start()` を呼び直せば
+ * 済む。誤って上書きすると、走行中の別の委譲の記録が**黙って**消える —
+ * どちらへ倒すかは対称ではないので、疑わしい側（上書き）を止める。
+ *
+ * `randomUUID()` を切り詰めずに使う既定の発行器では、ここに達することは
+ * まず無い（122 ビットの空間で複数回連続して同じ値を引く確率は無視できる）。
+ * 達するとすれば、注入された発行器（テスト、または将来の別実装）が衝突を
+ * 起こしやすい値しか返していないということであり、**その異常を上書きで
+ * 隠さない。**
+ */
+const MAX_MANAGER_ID_ATTEMPTS = 5;
+
+/**
  * 上限の文言を、種類ごとに何通り覚えておくか。
  *
  * **これは配達の制限ではない。** 覚えているのは「もうクローンへ配った文言」だけで、
@@ -669,6 +700,11 @@ class Pool implements ManagerPool {
   readonly #now: () => number;
   /** 貸し出しの猶予。runner へ渡し、runner はこの長さで自己失効する。 */
   readonly #leaseTtlMs: number;
+  /**
+   * 新しい managerId を発行する。**器の乱数を直に読まない**（テストが衝突を
+   * 再現できるようにする。`#now` と同じ理由）。
+   */
+  readonly #generateManagerId: () => string;
   /**
    * 直近の枠の事実（種類ごと）。**アカウント単位なのでマネージャーに紐づけない。**
    *
@@ -735,13 +771,22 @@ class Pool implements ManagerPool {
   readonly #unsubscribe: () => void;
   #stopped = false;
 
-  constructor({ stores, post, runners, profile, now, leaseTtlMs }: ManagerPoolOptions) {
+  constructor({
+    stores,
+    post,
+    runners,
+    profile,
+    now,
+    leaseTtlMs,
+    generateManagerId,
+  }: ManagerPoolOptions) {
     this.#stores = stores;
     this.#post = post;
     this.#runners = runners;
     this.#profile = profile;
     this.#now = now ?? (() => Date.now());
     this.#leaseTtlMs = leaseTtlMs ?? LEASE_TTL_MS;
+    this.#generateManagerId = generateManagerId ?? (() => `mgr-${randomUUID()}`);
     // **後から載った runner に自分から繋ぐ。** 名簿が動的である以上、受け口を開く
     // 契機を起動時にしか持たないと、後から現れた runner は永久に無言のままになる。
     this.#unsubscribe = runners.subscribe((runner) => {
@@ -753,6 +798,43 @@ class Pool implements ManagerPool {
   // -------------------------------------------------------------------------
   // 委譲
   // -------------------------------------------------------------------------
+
+  /**
+   * 新しい managerId を発行する。**「いま作った乱数だから空いている」を仮定
+   * せず、`#records` を引いて確かめる**（#238）。
+   *
+   * **`#records` にしか照合しない。** 台帳（`#stores.jobs`）を引かないのは
+   * 意図した設計であって漏れではない — `start()` のこの手前は台帳を引かない
+   * ことにしてある（下の `lease` を組む箇所の doc「台帳へ書けたことも条件に
+   * しない」を見よ）。ここで台帳読みを足すと、台帳が読めないときに新規の
+   * 委譲そのものが起こせなくなり、その既存の判断を裏返すことになる。
+   * ⟹ **終わって `#records` から外れた id・台帳にしか残っていない id との
+   * 衝突はここでは検出しない**（残る穴。PR 本文の「言えないこと」）。
+   *
+   * **他の4か所の `#records.set` には同じ検出を置かない。** あちらは
+   * `job.id`（台帳・runner の名乗りから来た、既に存在する id）を使う復元経路で
+   * あり、新しい乱数を作っていない。復元先の id と衝突するのは「同じ委譲を
+   * 二重に持っている」という別の異常であって、ここが直す「乱数の衝突」とは
+   * 種類が違う。ここに検出を足しても、復元経路の異常は捕まえない。
+   */
+  #claimManagerId(): string {
+    for (let attempt = 1; attempt <= MAX_MANAGER_ID_ATTEMPTS; attempt++) {
+      const candidate = this.#generateManagerId();
+      if (!this.#records.has(candidate)) return candidate;
+      // **上書きしない。跡だけ残して引き直す。** `#records` に既に居るという
+      // ことは、それはいま作った乱数ではなく、いま走っている別の委譲の記録で
+      // ある。`noteDroppedRecord` を流用しないのは、あれが「記録できません
+      // でした」と書くからである（この状況は「記録できなかった」でも
+      // 「読み出せなかった」でもない第三の状況）。
+      noteManagerIdCollision(candidate, attempt);
+    }
+    // **黙って上書きするより、起こさないほうが安全側である**
+    // （`lease.ts` の `mayClaim` の doc「非対称だから安全側へ倒す」と同じ理由）。
+    throw new Error(
+      `managerId の発行が ${MAX_MANAGER_ID_ATTEMPTS} 回連続で衝突したため、` +
+        '委譲を起こすのを止めた（走行中の別の委譲の記録を上書きしないため）。',
+    );
+  }
 
   async start(input: ManagerStartInput): Promise<ManagerSummary> {
     if (this.#stopped) throw new Error('デーモンが停止中のためマネージャーを起こせない');
@@ -766,7 +848,7 @@ class Pool implements ManagerPool {
     // すると、受け口の開いていない runner でマネージャーが走り出し、報告も許可確認も
     // 誰にも届かない（黙って止まっているように見える）。
     await this.#connectTo(runner);
-    const managerId = `mgr-${randomUUID().slice(0, 8)}`;
+    const managerId = this.#claimManagerId();
     const cwd = input.cwd ?? runner.workspacePath;
     const now = this.#now();
     const at = new Date(now).toISOString();
@@ -775,7 +857,9 @@ class Pool implements ManagerPool {
      * **新しい委譲の貸し出しは、関門を通さずに立てる。**
      *
      * `#claimForResume` が守っているのは「他のプロセスが握っている仕事を奪わない」
-     * ことで、この `managerId` はいま作った乱数なので握っている者が存在しない。
+     * ことで、この `managerId` は `#claimManagerId` が `#records` に無いことを
+     * 確かめてから返した値なので、握っている者が存在しない（#238 以前はここが
+     * 「乱数だから」という確かめていない仮定だった）。
      * 台帳へ書けたことも条件にしない — 新規の委譲は台帳が書けなくても走らせる、
      * という既存の判断（`#persist`）をここで覆さない（奪う操作ではないので、
      * 書けないことで危うくなるものが無い）。
