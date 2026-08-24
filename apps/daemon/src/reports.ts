@@ -105,3 +105,70 @@ function dayAfter(at: string): string {
   if (Number.isNaN(parsed)) return '9999-12-31';
   return new Date(parsed + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
+
+/**
+ * `before` より**厳密に後ろ**（＝より古い側）か——`compareDailyReportsNewestFirst`
+ * と同じ比較軸（`date` → 同日なら `at`）で判定する。**ちょうど一致する行は
+ * 含めない**（同じ行を次の頁で二重に返さないため）。
+ */
+function isOlderThanBoundary(
+  report: Pick<DailyReport, 'date' | 'at'>,
+  before: { date: string; at: string },
+): boolean {
+  if (report.date !== before.date) return report.date < before.date;
+  return report.at < before.at;
+}
+
+/**
+ * `before`（`GET /reports` の `beforeDate` ＋ `beforeAt`）より後ろの日報を
+ * 日付の新しい順に `limit` 件返す（issue #432。可視の複合キーでのページング）。
+ *
+ * **`(date, at)` の実在は要求しない。** 呼び出し側（`app.ts`）も検査しない——
+ * 境界は比較で決まるので、指していた日報が（万が一）見当たらなくても続きは
+ * 正しく定まる。
+ *
+ * **`listDailyReports` と同じ「窓を広めに取って足りたか確かめる」形に乗るが、
+ * 素朴に同じ判定（`isSettled`）だけに頼ると穴が開く。** `isSettled` は
+ * `picked` が空なら無条件に `true`（動かせない）を返す——「窓の中に1件も無い」
+ * と「境界の外側（＝もっと後ろ）にまだ在る」を区別できない。境界が窓の
+ * 終わり近くを指していると、`picked`（境界より後ろだけに絞った結果）が
+ * `limit` 未満（または空）になるが、**窓を読み切っていなければ、境界より
+ * さらに後ろの行が窓の外にまだ残っている可能性がある。**
+ *
+ * ⟹ **窓を読み切っていない（`entries.length === window`）のに
+ * `picked.length < limit` なら、`isSettled` を見る前に窓を倍にして読み直す。**
+ * （`listDailyReports` 側にこの分岐が要らない理由: 境界フィルタが無いその関数
+ * では `picked = reports.slice(0, limit)` なので、`entries.length === window`
+ * かつ `window >= limit`（`REPORT_WINDOW_SLACK` を足した初期値からしか増えない
+ * ので常に成り立つ）のとき `picked.length` は必ず `limit` に達しており、この
+ * 分岐は数学的に到達しない。境界フィルタがあるここだけ、`picked` が `limit`
+ * より少なく終わりうる。）
+ */
+export async function listDailyReportsBefore(
+  journal: JournalStore,
+  limit: number,
+  before: { date: string; at: string },
+): Promise<DailyReport[]> {
+  let window = limit + REPORT_WINDOW_SLACK;
+
+  for (;;) {
+    const entries = await journal.list({ types: ['daily_report'], limit: window });
+    const reports = entries.filter(isDailyReport).sort(compareDailyReportsNewestFirst);
+    const picked = reports.filter((report) => isOlderThanBoundary(report, before)).slice(0, limit);
+
+    // 窓より少なく返ったなら日誌を読み切っている（これ以上は存在しない）。
+    if (entries.length < window) return picked;
+
+    // **窓は読み切っていないのに limit 未満 —— isSettled の前にここで倒す。**
+    // 境界の外側にまだ行があるかもしれないのに、`picked` が空（または少ない）
+    // ことだけを見て「もう無い」と判定しない。
+    if (picked.length < limit) {
+      window *= 2;
+      continue;
+    }
+
+    if (isSettled(picked, entries)) return picked;
+
+    window *= 2;
+  }
+}

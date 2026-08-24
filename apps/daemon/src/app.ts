@@ -107,7 +107,11 @@ import {
   validationErrorResponseSchema,
 } from './openapi.js';
 import { InvalidCursorError, decodeCursor, encodeCursor } from './cursor.js';
-import { compareDailyReportsNewestFirst, listDailyReports } from './reports.js';
+import {
+  compareDailyReportsNewestFirst,
+  listDailyReports,
+  listDailyReportsBefore,
+} from './reports.js';
 
 /**
  * HTTP API（hono）。CLI も外部アプリもここを叩く。
@@ -283,7 +287,28 @@ const eventBody = z.object({
   source: z.string().min(1),
   payload: z.unknown().optional(),
 });
-const reportsQuery = z.object({ limit: z.coerce.number().int().min(1).max(365).default(7) });
+/**
+ * `beforeDate` / `beforeAt`（issue #432）。**可視の複合キーでページングする
+ * ——不透明な `cursor` は使わない。**
+ *
+ * 応答（`reportsResponseSchema`）には既に `date` と `at` が載っている
+ * （`journalVariant('daily_report')` そのままの枝。`apps/daemon/src/openapi.ts`）
+ * ので、呼ぶ側は前の頁の最後の日報の `date`/`at` を読んで次の要求を自分で
+ * 組み立てられる——**応答に新しい欄を1つも足さなくてよい。**
+ *
+ * **封筒（`total` / `nextCursor`）を持たない。** 続きが在るかは
+ * 「`limit` 件ちょうど返ったか」で呼ぶ側が判る。この形の先例は同じファイルの
+ * `journalQuery` の `since`（`grep -n 'ここより古いエントリまで遡って読むための足がかり' apps/daemon/src/app.ts`）
+ * ——あちらも応答に打ち切りの印を持たず、窓の境界を呼ぶ側が渡す形である。
+ *
+ * **`order` は足さない。** `/reports` は常に日付の新しい順
+ * （`compareDailyReportsNewestFirst`）。
+ */
+const reportsQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(365).default(7),
+  beforeDate: z.string().optional(),
+  beforeAt: z.string().optional(),
+});
 const journalQuery = z.object({
   limit: z.coerce.number().int().min(1).max(1000).default(50),
   /** ISO 8601。ここより古いエントリまで遡って読むための足がかり。 */
@@ -1615,24 +1640,69 @@ export function createApp(deps: AppDeps) {
         tags: ['reports'],
         summary: '日報の一覧',
         description:
-          '日報（可観測性の最上段）を**日付の新しい順**に読む（同じ日に複数あれば書いた時刻の新しい方が先）。日誌の並び（書いた順）とは一致しない — 遡り生成では前の日ぶんの日報が今日書かれる（`reports.ts`）。',
+          '日報（可観測性の最上段）を**日付の新しい順**に読む（同じ日に複数あれば書いた時刻の新しい方が先）。' +
+          '日誌の並び（書いた順）とは一致しない — 遡り生成では前の日ぶんの日報が今日書かれる（`reports.ts`）。' +
+          '`beforeDate` と `beforeAt` を両方渡すと、前の頁の最後の日報より後ろ' +
+          '（＝より古い側）を返す（可視の複合キー。応答に `date`/`at` が既に載っている' +
+          'のでそこから組み立てる）。**封筒は持たない** — 続きが在るかは `limit` 件' +
+          'ちょうど返ったかで判る。',
         responses: {
           200: {
             description: '日報の一覧（日付の新しい順）。',
             content: { 'application/json': { schema: resolver(reportsResponseSchema) } },
           },
           400: {
-            description: 'クエリが不正。',
-            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+            description:
+              'クエリが不正、または `beforeDate` / `beforeAt` の片方だけが渡された・形式が不正。',
+            content: {
+              'application/json': {
+                schema: resolver(z.union([validationErrorResponseSchema, errorResponseSchema])),
+              },
+            },
           },
         },
       }),
       validator('query', reportsQuery),
       async (c) => {
+        const { limit, beforeDate, beforeAt } = c.req.valid('query');
+
         // **並べ直しはここが持つ**（`reports.ts`）。日誌の並びは書いた順なので、
         // そのまま返すと遡り生成の日報が新しい日の上に来る。画面や CLI の側で
         // 並べ直すと「最新の日報」が口ごとに食い違う。
-        const reports = await listDailyReports(stores.journal, c.req.valid('query').limit);
+        if (beforeDate === undefined && beforeAt === undefined) {
+          const reports = await listDailyReports(stores.journal, limit);
+          return c.json({ reports });
+        }
+
+        // **片方だけでは境界が決まらない。** `beforeAt` 単独では日付順の主キーが
+        // 埋まらず、`beforeDate` 単独では同じ日の複数（締めと遡り生成）を切れない。
+        // 直上の分岐で「両方無い」は片付けたので、ここに来るのは「片方だけ」か
+        // 「両方在る」のどちらか——前者を 400 にする。この2つの if で
+        // TypeScript が `beforeDate` / `beforeAt` を以降 `string` に絞る。
+        if (beforeDate === undefined || beforeAt === undefined) {
+          return c.json(
+            { error: 'beforeDate と beforeAt は両方一緒に渡す（片方だけでは境界が決まらない）' },
+            400,
+          );
+        }
+
+        // `beforeDate` の形式検査は `/reports/:date` と同じ `localDayRange` に
+        // 揃える（現物のカレンダー妥当性まで見る——2月30日のような日を通さない）。
+        if (localDayRange(beforeDate) === null) {
+          return c.json({ error: 'beforeDate は YYYY-MM-DD で指定する' }, 400);
+        }
+        if (Number.isNaN(Date.parse(beforeAt))) {
+          return c.json({ error: 'beforeAt は ISO 8601 で指定する' }, 400);
+        }
+
+        // **`(beforeDate, beforeAt)` の日報が実在することは要求しない。** 境界は
+        // 比較で決まるので、指していた日報が万が一見当たらなくても続きは正しく
+        // 定まる（`/approvals` のカーソルと同じ理由。`reports.ts` の
+        // `listDailyReportsBefore` の doc）。
+        const reports = await listDailyReportsBefore(stores.journal, limit, {
+          date: beforeDate,
+          at: beforeAt,
+        });
         return c.json({ reports });
       },
     )
@@ -1715,7 +1785,7 @@ export function createApp(deps: AppDeps) {
         const { pending, order, limit, cursor } = c.req.valid('query');
         // **opt-in の判定は生のクエリで行う。** `order` は既定値を持つので
         // `c.req.valid('query')` だけでは「渡されたか」が分からない
-        // （AGENTS.md「地雷」#96 と同じ形——取れない軸を 0 で埋めない、の裏側で
+        // （`grep -n '取れない軸に 0 の行を作る' AGENTS.md` の地雷と同じ形——
         // 「渡されなかった」を「既定値と同じ値が渡された」と混同しないこと）。
         const optedIn =
           c.req.query('order') !== undefined ||

@@ -2965,7 +2965,7 @@
         "operationId": "getReports",
         "tags": ["reports"],
         "summary": "日報の一覧",
-        "description": "日報（可観測性の最上段）を**日付の新しい順**に読む（同じ日に複数あれば書いた時刻の新しい方が先）。日誌の並び（書いた順）とは一致しない — 遡り生成では前の日ぶんの日報が今日書かれる（`reports.ts`）。",
+        "description": "日報（可観測性の最上段）を**日付の新しい順**に読む（同じ日に複数あれば書いた時刻の新しい方が先）。日誌の並び（書いた順）とは一致しない — 遡り生成では前の日ぶんの日報が今日書かれる（`reports.ts`）。`beforeDate` と `beforeAt` を両方渡すと、前の頁の最後の日報より後ろ（＝より古い側）を返す（可視の複合キー。応答に `date`/`at` が既に載っているのでそこから組み立てる）。**封筒は持たない** — 続きが在るかは `limit` 件ちょうど返ったかで判る。",
         "responses": {
           "200": {
             "description": "日報の一覧（日付の新しい順）。",
@@ -3011,23 +3011,36 @@
             }
           },
           "400": {
-            "description": "クエリが不正。",
+            "description": "クエリが不正、または `beforeDate` / `beforeAt` の片方だけが渡された・形式が不正。",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {},
-                    "error": {
-                      "type": "array",
-                      "items": {}
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {},
+                        "error": {
+                          "type": "array",
+                          "items": {}
+                        },
+                        "success": {
+                          "type": "boolean",
+                          "const": false
+                        }
+                      },
+                      "required": ["data", "error", "success"]
                     },
-                    "success": {
-                      "type": "boolean",
-                      "const": false
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["error"]
                     }
-                  },
-                  "required": ["data", "error", "success"]
+                  ]
                 }
               }
             }
@@ -3042,6 +3055,20 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 365
+            }
+          },
+          {
+            "in": "query",
+            "name": "beforeDate",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "beforeAt",
+            "schema": {
+              "type": "string"
             }
           }
         ]
