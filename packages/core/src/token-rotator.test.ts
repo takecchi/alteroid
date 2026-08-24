@@ -389,3 +389,55 @@ describe('直列化（同時に2本来てもプールを食い潰さない）', 
     expect(await h.stores.tokens.readActive()).toMatchObject({ tokenId: 'tok-b', generation: 2 });
   });
 });
+
+describe('降りた本人へ「回す」を作らない（resetsAt が過去で来る形）', () => {
+  /**
+   * **変異試験でこの歯の必要性が判った。** `exclude` を渡すのをやめる変異を当てても
+   * 17本すべて緑だった——降りた本人は `coolDown` で冷却へ入るので、**普通の場合は
+   * `exclude` が無くても飛ばされる。**
+   *
+   * ⟹ `exclude` が実際に効くのは **`resetsAt` が既に過ぎている値で来たとき**だけ
+   * である（過去の値を未来へ丸めないので、冷却へ入れた直後から `ready` になる）。
+   * その場合、降りた本人が最初の候補として選び直され、**日誌には「回した」と残るのに
+   * 撒いた先は1文字も変わらない。** ここを測る歯が無いと、`exclude` は誰にも
+   * 守られていないことになる。
+   */
+  it('resetsAt が過去でも、降りた本人は選ばれない', async () => {
+    const h = harness();
+    await h.stores.tokens.replace([
+      { id: 'tok-a', label: 'first', value: 'value-a', order: 0 },
+      { id: 'tok-b', label: 'second', value: 'value-b', order: 1 },
+    ]);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
+
+    const outcome = await h.rotator.observe({
+      notice: reached,
+      // **既に過ぎている期限。** 冷却へ入れた直後から ready になる。
+      facts: { kind: 'five_hour', status: 'rejected', resetsAt: Date.parse(AT) - 1 },
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(outcome.kind).toBe('rotated');
+    if (outcome.kind !== 'rotated') return;
+    // **自分自身ではない。**
+    expect(outcome.toTokenId).toBe('tok-b');
+    expect(h.spreadCalls).toEqual([{ id: 'tok-b', value: 'value-b' }]);
+  });
+
+  it('resetsAt が過去で、他に候補が無ければ「候補が無い」へ倒れる（自分へ戻らない）', async () => {
+    const h = harness();
+    await h.stores.tokens.replace([{ id: 'tok-a', label: 'only', value: 'value-a', order: 0 }]);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
+
+    const outcome = await h.rotator.observe({
+      notice: reached,
+      facts: { kind: 'five_hour', status: 'rejected', resetsAt: Date.parse(AT) - 1 },
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(outcome.kind).toBe('exhausted');
+    expect(h.spreadCalls).toEqual([]);
+    // 世代が増えていない＝「回した」という嘘を残していない。
+    expect(await h.stores.tokens.readActive()).toMatchObject({ generation: 1 });
+  });
+});
