@@ -414,6 +414,13 @@ export {
   type TokenRotationSettings,
 } from './token-pool.js';
 export {
+  cooldownUntilFrom,
+  decideTokenRotation,
+  type TokenRotationDecision,
+  type TokenRotationObservation,
+  type TokenRotationSignal,
+} from './token-rotation.js';
+export {
   createTokenPoolService,
   type TokenPoolService,
   type TokenPoolServiceOptions,
