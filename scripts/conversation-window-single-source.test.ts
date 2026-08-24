@@ -30,14 +30,7 @@ import { describe, expect, it } from 'vitest';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 /** 変異試験・生成物・依存を対象から外す。 */
-const EXCLUDE_DIRS = new Set([
-  'node_modules',
-  '.git',
-  'dist',
-  'build',
-  '.react-router',
-  '.vite',
-]);
+const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.react-router', '.vite']);
 
 /**
  * 窓を組み立ててよい場所。
@@ -82,7 +75,8 @@ function collectFiles(dir: string, out: string[]): void {
  * 混入（`clone.ts` がクローンへ案内する文言としてこの文字列を持つ——`journal_read`
  * の使い方であって `journal.list` の呼び出しではない）を除く。
  */
-const HAND_BUILT_WINDOW = /[A-Za-z_$][\w$]*\.list\(\s*\{[\s\S]{0,240}?types:\s*\[\s*(['"])exchange\1\s*\][\s\S]{0,240}?\}\s*\)/g;
+const HAND_BUILT_WINDOW =
+  /[A-Za-z_$][\w$]*\.list\(\s*\{[\s\S]{0,240}?types:\s*\[\s*(['"])exchange\1\s*\][\s\S]{0,240}?\}\s*\)/g;
 
 export interface HandBuiltWindowHit {
   file: string;
@@ -121,7 +115,7 @@ describe('会話の走査窓は conversation.ts の readConversationWindow 1か�
     ).toBeGreaterThan(0);
   });
 
-  it('conversation.ts 以外に types:[\'exchange\'] を持つ journal.list(...) の手組みが無い', () => {
+  it("conversation.ts 以外に types:['exchange'] を持つ journal.list(...) の手組みが無い", () => {
     const hits = findHandBuiltConversationWindows(allFiles);
     expect(
       hits,

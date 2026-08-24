@@ -27,14 +27,7 @@ import { describe, expect, it } from 'vitest';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
-const EXCLUDE_DIRS = new Set([
-  'node_modules',
-  '.git',
-  'dist',
-  'build',
-  '.react-router',
-  '.vite',
-]);
+const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.react-router', '.vite']);
 
 function collectFiles(dir: string, out: string[]): void {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -68,7 +61,9 @@ export interface DetectedImplementation {
   form: 'class' | 'typed-object-literal';
 }
 
-export function findJournalStoreImplementations(files: readonly string[]): DetectedImplementation[] {
+export function findJournalStoreImplementations(
+  files: readonly string[],
+): DetectedImplementation[] {
   const out: DetectedImplementation[] = [];
   for (const file of files) {
     if (!file.endsWith('.ts') && !file.endsWith('.tsx')) continue;
@@ -137,9 +132,10 @@ describe('JournalStore 実装の一覧が with 契約の登録から漏れてい
 
   it('前提: 登録した4つの実装がすべて実在する（ファイルそのものが動いていないか）', () => {
     for (const file of Object.keys(KNOWN_IMPLEMENTATIONS)) {
-      expect(detected.some((d) => d.file === file), `${file} が実装として検出されなかった`).toBe(
-        true,
-      );
+      expect(
+        detected.some((d) => d.file === file),
+        `${file} が実装として検出されなかった`,
+      ).toBe(true);
     }
   });
 

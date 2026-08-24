@@ -61,9 +61,7 @@ export class PgJournalStore implements JournalStore {
       // `sql/expressions/conditions.js` の `inArray` 実装。空配列を
       // `in ()` という不正な SQL へ落とさないための特別扱い）ので、
       // 0件という契約がそのまま満たされる。
-      ...(query.with === undefined
-        ? []
-        : [inArray(sql`(${journal.entry}->>'with')`, query.with)]),
+      ...(query.with === undefined ? [] : [inArray(sql`(${journal.entry}->>'with')`, query.with)]),
     ];
 
     const rows = await this.#db

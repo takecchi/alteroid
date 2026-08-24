@@ -277,7 +277,7 @@ describe('readConversationWindow（issue #418）', () => {
     ]);
   });
 
-  it('types: [\'exchange\'] と with: [\'human\'] を渡す（with が limit より前で効くための前提）', async () => {
+  it("types: ['exchange'] と with: ['human'] を渡す（with が limit より前で効くための前提）", async () => {
     const calls: unknown[] = [];
     const stub = {
       list: async (query?: unknown) => {

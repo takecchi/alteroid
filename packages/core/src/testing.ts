@@ -291,7 +291,9 @@ export function createMemoryStores(): Stores {
       // `types` を明示していなくても、`with` を指定した時点で絞られる。
       if (query.with !== undefined) {
         const withValues = query.with;
-        found = found.filter((entry) => entry.type === 'exchange' && withValues.includes(entry.with));
+        found = found.filter(
+          (entry) => entry.type === 'exchange' && withValues.includes(entry.with),
+        );
       }
       if (query.since !== undefined) {
         const since = query.since;
