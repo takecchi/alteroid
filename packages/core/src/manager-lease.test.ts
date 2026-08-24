@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { LEASE_DRAIN_MS, LEASE_MARGIN_MS } from './lease.js';
 import { createManagerPool, type ManagerPool } from './manager.js';
+import { createProfileService } from './profile-service.js';
 import {
   createRunnerRegistry,
   RunnerHttpError,
@@ -59,6 +60,11 @@ class LeasedRunner implements RunnerClient {
   instanceId: string | undefined = 'boot-2';
   /** 次の resume で投げる失敗（世代で拒む 409 を作るため）。 */
   resumeFailure: unknown;
+  // **#390: `#reattach` が関門より前で走らせる2つの副作用を数える。**
+  // `setProfile` は `#pushProfile` が誤解決した相手へ環境プロファイルを
+  // 押し込んでいないかを、`list` は誤った `alive` を作っていないかを見るため。
+  setProfileCalled = 0;
+  listCalled = 0;
 
   constructor(runnerId = 'runner-primary') {
     this.runnerId = runnerId;
@@ -103,6 +109,7 @@ class LeasedRunner implements RunnerClient {
     this.sessions.delete(managerId);
   }
   async list(): Promise<RunnerManagerState[]> {
+    this.listCalled += 1;
     return [...this.sessions.values()];
   }
   async transcript(): Promise<string | null> {
@@ -118,6 +125,7 @@ class LeasedRunner implements RunnerClient {
     return undefined;
   }
   async setProfile(): Promise<RunnerProfileResult> {
+    this.setProfileCalled += 1;
     return { ok: true };
   }
   async close(): Promise<void> {}
@@ -170,6 +178,10 @@ async function harnessOf(options: { silent?: boolean } = {}): Promise<Harness> {
     stores,
     post: (event) => inbox.push(event),
     runners: registry,
+    // **既定では何も置かれていないので中立。** `stores.profile.write(...)` で
+    // 本文を置いたテストだけが `#pushProfile` に実際の `setProfile` 呼び出しを
+    // させられる（`syncRunner` は空文字を「既に同じ」として素通しする）。
+    profile: createProfileService({ stores, runners: registry }),
     now: () => clock,
   });
   return {
@@ -467,6 +479,34 @@ describe('引き取りの関門（貸し出し期限）', () => {
   });
 
   /**
+   * **#390 対照試験（併存していないときの経路が変わっていないこと）。**
+   *
+   * 併存を検出したときだけ `#pushProfile` と `runner.list()` を関門より前で
+   * 止める——併存していない通常の取り直しでは、これまでどおり両方を呼ぶ。
+   * ここを固定しないと、「呼ばない」側の変異（常に早期リターンする実装）が
+   * この対照が無いテスト集合をすり抜ける。
+   */
+  it('併存していない通常の取り直しでは、pushProfile と list を今までどおり呼ぶ（対照）', async () => {
+    const h = await harnessOf();
+    await h.stores.profile.write('export SOME_TOKEN=abc');
+    await h.stores.jobs.putJob(runningJob(leaseHeldBy('boot-1')));
+
+    await h.pool.list();
+    expect(h.runner.emit).toBeTypeOf('function');
+    // 直前の `list()` / 接続時の `#pushProfile` ぶんを引く。
+    h.runner.setProfileCalled = 0;
+    h.runner.listCalled = 0;
+
+    h.runner.emit?.({ type: 'hello', runnerId: 'runner-primary' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(h.runner.setProfileCalled).toBeGreaterThan(0);
+    expect(h.runner.listCalled).toBeGreaterThan(0);
+
+    await h.close();
+  });
+
+  /**
    * **世代で拒まれた（409）を「戻せなかった」と同じ扱いにしない。**
    *
    * 409 が返るのは、その委譲を**自分より新しい世代の誰かが握っている**ときである
@@ -661,6 +701,86 @@ describe('引き取りの関門（貸し出し期限）', () => {
       expect(result.detail).not.toContain('期限が切れれば自動で引き取る');
       // 直し方（何をすれば解けるか）まで届く。
       expect(result.detail).toContain('ALTEROID_RUNNER_ID');
+
+      await h.close();
+    });
+
+    /**
+     * **#390 (i)。** `#reattach` は `runnerId` の文字列一致で相手を決めた**後**
+     * （＝名簿の重複のどちらか一方が resolve された後）、関門（`#claimForResume`）
+     * より前で `#pushProfile` と `runner.list()` を走らせていた。相手が誤解決
+     * されている可能性がある以上、この2つは「誤った相手への副作用」になりうる
+     * （`#pushProfile` は冗長な書き込み、`runner.list()` は誤った `alive` を
+     * 作って断りの churn を生む）。**関門より前で併存を検出し、どちらの相手にも
+     * 副作用を走らせない**ことをここで固定する。
+     */
+    it('併存下では #pushProfile も runner.list() も、名寄せで解決したどちらの相手へも走らない', async () => {
+      const h = await harnessOf();
+      const duplicate = await withDuplicate(h);
+      await h.stores.profile.write('export SOME_TOKEN=abc');
+      await h.stores.jobs.putJob(runningJob(leaseHeldBy('boot-1')));
+
+      await h.pool.list();
+      expect(h.runner.emit).toBeTypeOf('function');
+      // 接続時（`#connectTo`）に降ろした分を引く——ここは併存とは無関係の
+      // 正当な1回である。
+      h.runner.setProfileCalled = 0;
+      duplicate.setProfileCalled = 0;
+      h.runner.listCalled = 0;
+      duplicate.listCalled = 0;
+
+      h.runner.emit?.({ type: 'hello', runnerId: 'runner-primary' });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(h.runner.setProfileCalled).toBe(0);
+      expect(duplicate.setProfileCalled).toBe(0);
+      expect(h.runner.listCalled).toBe(0);
+      expect(duplicate.listCalled).toBe(0);
+      // resume も出ていない（`#claimForResume` を複製せず、ここは関門の手前で
+      // 引き返しているだけであることの傍証）。
+      expect(h.runner.resumes).toEqual([]);
+      expect(duplicate.resumes).toEqual([]);
+
+      await h.close();
+    });
+
+    /**
+     * **#390 (ii)。これが本題の歯である。**
+     *
+     * 併存は `held` と違って時間では解けない（人間が `ALTEROID_RUNNER_ID` を
+     * 直すまで解けない）。**「初回だけ言う」（edge-triggered）にすると、人間が
+     * その1回を見逃した後・デーモンを再起動した後は永久に見えなくなる**
+     * （`apps/daemon/src/runner-client.ts` の再接続ログが `#lastLoggedDelayMs`
+     * の dedup で同じ壊れ方をしている——本文参照）。だから併存の合図は `hello`
+     * のたびに走る `#reattach` の**呼び出し回数ぶん**繰り返し出る必要がある
+     * ——ここでは2回目の `hello` でも出ることを固定する。
+     */
+    it('併存の合図は2回目の #reattach（hello）でも出る（初回だけで終わらない）', async () => {
+      const h = await harnessOf();
+      await withDuplicate(h);
+      await h.stores.jobs.putJob(runningJob(leaseHeldBy('boot-1')));
+
+      await h.pool.list();
+      expect(h.runner.emit).toBeTypeOf('function');
+
+      h.runner.emit?.({ type: 'hello', runnerId: 'runner-primary' });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const first = (await h.journal()).filter((entry) => entry.type === 'decision');
+      expect(first).toHaveLength(1);
+      const firstText = first
+        .map((entry) => (entry.type === 'decision' ? `${entry.decision}\n${entry.grounds}` : ''))
+        .join('\n');
+      expect(firstText).toContain('時間では解けない');
+      expect(firstText).toContain('直し方: 器ごとに違う ALTEROID_RUNNER_ID');
+
+      // **`held` の断り（`refusedBefore` の dedup）はここに乗せない。** 乗せると
+      // 「初回だけ言う」に戻ってしまい、この歯が落ちなくなる。
+      h.runner.emit?.({ type: 'hello', runnerId: 'runner-primary' });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const second = (await h.journal()).filter((entry) => entry.type === 'decision');
+      expect(second).toHaveLength(2);
+
+      expect(h.runner.resumes).toEqual([]);
 
       await h.close();
     });

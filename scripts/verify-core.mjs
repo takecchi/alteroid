@@ -156,14 +156,48 @@ export function decideSkip({ repo, recordPath, force = false }) {
 }
 
 /**
+ * ANSI エスケープシーケンス（色付け）を取り除く。
+ *
+ * #392: `testRan` は以前、剥がさずに `^\s*Test Files\s+/m` へ直接掛けていた。
+ * `^\s*` は行頭の空白しか許さないので、色が付くと行頭の SGR に一致せず、
+ * **完走して緑でも「1本も走っていない」（`not-run`）に化ける** —— しかも
+ * `classifyTest` の doc 自身が名指しで禁じている倒れ方（「器が混んでいる。
+ * 並列度を下げろ」という原因と無関係な助言）をこの経路から出す。
+ *
+ * **同じ穴は既に2箇所で直っている**（`scripts/test-guard-core.mjs` の
+ * `stripAnsi` — #311 / PR #355、`.claude/skills/mutation-testing/mutate-core.mjs`
+ * の `stripAnsi` — #372 / PR #374）。**ここも同じ正規表現・同じ関数名・同じ順序
+ * （剥がしてから match）に揃える。** 揃える理由は「3箇所が別々の形にならないこと」
+ * そのものであり、**この形が最善だと確かめたわけではない** —— 確かめたのは
+ * 他2箇所の現物の形であって、その形の妥当性ではない（PR #374 が #355 に対して
+ * 採った立場と同じ）。
+ *
+ * **⚠️ この経路（`verify.mjs` → `runTest` → `testRan`）で実際に色付きの出力を
+ * 受け取ったという観測は無い。** Issue #392 自身が「根拠は静的な読み（同じ
+ * 正規表現・ANSI 除去なし）だけである」「踏んだ観測は無い」と断っている。
+ * ここで固定しているのは「色が付いても倒れない」であって「実際に色が付く」
+ * ではない（`scripts/verify-core.test.ts` のフィクスチャの doc も参照）。
+ */
+function stripAnsi(s) {
+  // eslint-disable-next-line no-control-regex -- ANSI エスケープの検出そのものが目的
+  return s.replace(/\x1b\[[0-9;]*m/g, '');
+}
+
+/**
  * テストが「走った」かを、件数ではなく**行の不在**で見る。
  *
  * **「落ちた」と「1本も走らなかった」はどちらも exit 1 である**（`AGENTS.md`「自分が
  * 走っている器」）。`Test Files` / `Tests` の行が出ていなければ、通ったのでも落ちたのでも
  * なく**走っていない**。
+ *
+ * **剥がしてから match する（#392）。** ただし「剥がせば何でも読める」には緩めて
+ * いない —— 探す語（`Test Files` / `Tests`）は1文字も変えていないので、集計行が
+ * 本当に無い入力では剥がした後も `false` のままである（#311 が守っている性質。
+ * `scripts/verify-core.test.ts` の回帰）。
  */
 export function testRan(output) {
-  return /^\s*Test Files\s+/m.test(output) && /^\s*Tests\s+/m.test(output);
+  const plain = stripAnsi(output);
+  return /^\s*Test Files\s+/m.test(plain) && /^\s*Tests\s+/m.test(plain);
 }
 
 /**

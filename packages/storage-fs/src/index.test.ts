@@ -67,6 +67,21 @@ describe('FsPersonaStore', () => {
     expect(renderMemoryDocuments(await stores.persona.documents())).toContain('人間が書き換えた');
   });
 
+  /**
+   * `PersonaStore.write` の契約（`packages/core/src/store.ts`）を fs 側で測る。
+   *
+   * **同じ形の歯が3つ在る**（#370。1つで測って3つとも測ったことにしない）:
+   * fs（ここ）/ pg（`packages/storage-pg/src/index.test.ts`）/ インメモリ
+   * （`packages/core/src/persona-contract.test.ts`）。
+   */
+  it('write した本文は、末尾の改行が正規化されて読み戻る', async () => {
+    // 末尾に改行を持たない形で渡す（呼び手の側では正規化しない）。
+    const written = await stores.persona.write('values', '# 価値観');
+
+    expect(written.content).toBe('# 価値観\n');
+    expect((await stores.persona.read('values'))?.content).toBe('# 価値観\n');
+  });
+
   it('append は末尾に足す', async () => {
     await stores.persona.write('log', '# ログ\n');
     await stores.persona.append('log', '- 追記された学び\n');

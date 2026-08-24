@@ -4,6 +4,7 @@ import { journalEntryShape, noteDroppedRecord, noteUnreadableRecord } from './dr
 import { excerptLine } from './excerpt.js';
 import {
   LEASE_TTL_MS,
+  describeAmbiguousSighting,
   describeVerdict,
   grantLease,
   judgeLease,
@@ -1669,6 +1670,42 @@ class Pool implements ManagerPool {
         return null;
       });
       if (runner === null) return;
+
+      /*
+       * **併存は、相手を解決した直後・関門より前に分かる。** `runnerId` の文字列
+       * 一致（`this.#runners.get`）は名簿に同名の行が2つ以上あっても黙って
+       * どちらか一方を返す——その時点で `runner` が指している相手は「本当の
+       * 持ち主」だと確かめられていない。関門（`#claimForResume`）はこの後の
+       * `#resume` の中で `#sighting` を使ってまさにこれを見て `ambiguous` を
+       * 返すが、そこに着くまでに**関門より前の副作用**（`#pushProfile` と、
+       * 下で `runner.list()` から作る `alive`）が誤解決した相手に対して走って
+       * しまう（#390）。`#sighting` は関門と同じ判定材料
+       * （`this.#runners.entries()` の重複カウント）を関門より前でも読めるので、
+       * ここで先に確かめて、怪しい相手への副作用を止める。
+       *
+       * **関門を複製してはいない。** ここで見送っても `#claimForResume` は
+       * 消えていない——`restore()` / `manager_send` からの引き取りは相変わらず
+       * そこ1本を通る。ここは「関門へ進む前に、進んでよい状態かを覗く」だけで
+       * あり、`mayClaim` の判定そのもの（許す/断る）はまだ何も下していない。
+       *
+       * **`held` と違って、この断りは時間で解けない**（`lease.ts` の
+       * `ambiguous` の doc）。だから下の「遷移のときだけ書く」dedup
+       * （`refusedBefore`）には乗せない——`hello` のたびに `#reattach` が
+       * 走るので、併存が続く限りここも繰り返し届く。**初回だけ言う設計にすると、
+       * 見逃した後・デーモン再起動後は永久に見えなくなる**（`apps/daemon/src/
+       * runner-client.ts` の再接続ログが `#lastLoggedDelayMs` で同じ壊れ方を
+       * している）。減らすのは「ジョブの本数ぶん立っていた断りの記録」であって、
+       * 「併存が起きている」という合図そのものではない。
+       */
+      const sighting = this.#sighting(runnerId);
+      if (sighting.duplicates !== undefined && sighting.duplicates > 1) {
+        await this.#journal({
+          type: 'decision',
+          decision: `runnerId=${runnerId} の取り直しを見送った（併存を関門より前で検出。#pushProfile と runner.list() は誤解決した相手へ走らせていない）`,
+          grounds: describeAmbiguousSighting(runnerId, sighting.duplicates),
+        });
+        return;
+      }
 
       // **取り直しの前に環境を整える。** 器が入れ替わっていれば置いたものは
       // 消えているので、resume して走り出す前に降ろし直す（走り出してから
