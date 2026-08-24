@@ -658,6 +658,106 @@ describe('遡り切れていないことを言う', () => {
 });
 
 /**
+ * **#418 の裏返し。** `GET /conversations` は `scan` の窓に加えて `limit`
+ * （既定20、画面は30固定）でも黙って会話数を切っていた。上の
+ * 「遡り切れていないことを言う」（`ChatPane`・個別会話）と同じ作法で、
+ * 一覧側（`ConversationList`）にも `reachedStart` / `hiddenByLimit` の
+ * 断り書きを足した。**2つは別の条件なので、両方出ることも片方だけの
+ * こともある** — ここでは4通り（両方出る／片方ずつ／両方出ない）を測る。
+ */
+describe('会話一覧の断り書き（#418 の裏返し）', () => {
+  function stubList(list: unknown) {
+    return stubFetch((url, init) => {
+      if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
+      if (url.includes(`/conversations/${CONVERSATION_ID}`)) {
+        return json({ conversationId: CONVERSATION_ID, messages: [] });
+      }
+      if (url.includes('/conversations')) return json(list);
+      return undefined;
+    });
+  }
+
+  const CONVERSATION = {
+    conversationId: 'conv-x',
+    startedAt: '2026-08-20T00:00:00Z',
+    updatedAt: '2026-08-20T00:00:00Z',
+    messages: 1,
+    preview: '一覧の1件',
+  };
+
+  it('reachedStart が偽なら、先頭に届いていないと書く', async () => {
+    stubList({
+      conversations: [CONVERSATION],
+      scanned: 2000,
+      reachedStart: false,
+      hiddenByLimit: 0,
+    });
+    renderChat();
+
+    expect(
+      await screen.findByText(/人間との往復を 2000 件遡ったが、先頭には届いていない/),
+    ).toBeTruthy();
+    // hiddenByLimit は0なので、こちらの断り書きは出ない（2つは別の条件）。
+    expect(screen.queryByText(/…ほか/)).toBeNull();
+  });
+
+  it('reachedStart が真なら、先頭に届いていないとは書かない（不在の側）', async () => {
+    stubList({
+      conversations: [CONVERSATION],
+      scanned: 1,
+      reachedStart: true,
+      hiddenByLimit: 0,
+    });
+    renderChat();
+
+    await screen.findByText('一覧の1件');
+    expect(screen.queryByText(/先頭には届いていない/)).toBeNull();
+  });
+
+  it('hiddenByLimit が正なら、省いた件数を書く', async () => {
+    stubList({
+      conversations: [CONVERSATION],
+      scanned: 30,
+      reachedStart: true,
+      hiddenByLimit: 5,
+    });
+    renderChat();
+
+    expect(await screen.findByText(/…ほか 5 件は省略/)).toBeTruthy();
+    // reachedStart は真なので、こちらの断り書きは出ない（2つは別の条件）。
+    expect(screen.queryByText(/先頭には届いていない/)).toBeNull();
+  });
+
+  it('hiddenByLimit が0なら、省いた件数は書かない（不在の側）', async () => {
+    stubList({
+      conversations: [CONVERSATION],
+      scanned: 1,
+      reachedStart: true,
+      hiddenByLimit: 0,
+    });
+    renderChat();
+
+    await screen.findByText('一覧の1件');
+    expect(screen.queryByText(/…ほか/)).toBeNull();
+  });
+
+  it('両方の条件が成り立てば、両方書く', async () => {
+    stubList({
+      conversations: [CONVERSATION],
+      scanned: 2000,
+      reachedStart: false,
+      hiddenByLimit: 5,
+    });
+    renderChat();
+
+    expect(
+      await screen.findByText(/人間との往復を 2000 件遡ったが、先頭には届いていない/),
+    ).toBeTruthy();
+    expect(await screen.findByText(/…ほか 5 件は省略/)).toBeTruthy();
+  });
+});
+
+/**
  * 折り返しの付け忘れ（本2）。
  *
  * 人間・システムの行は `Markdown`（components/markdown.tsx）を経由しない

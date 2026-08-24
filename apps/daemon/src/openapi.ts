@@ -216,6 +216,31 @@ export const conversationsResponseSchema = z.object({
    * （`scan` を増やせば見える）。
    */
   scanned: z.number().int(),
+  /**
+   * 窓（`scan`）が日誌の先頭に届いたか。**`GET /conversations/:id` と同じ
+   * 意味・同じ名前で揃えてある**（`@alteroid/core` の `reachedStart`）。
+   * `false` なら、`scanned` より古い人間との会話が残っている可能性がある。
+   */
+  reachedStart: z.boolean(),
+  /**
+   * **この窓の中で** `limit` に収まらず落とした会話の数（窓の外は数えて
+   * いない）。
+   *
+   * この一覧は `scan` で窓を切ったあと `limit` で更に会話数を切って
+   * いたが、それを黙ってやっていた（#418 の裏返し ——
+   * #418 は「他の種別に食われる」窓、こちらは「自分の種別で溢れる」窓。
+   * 人間との会話は増え続けるので、時間が経てば必ず踏む）。
+   *
+   * `collectConversations(entries)` は窓の全件を既に数え上げているので、
+   * この数を出すのに追加の走査は要らない（`slice` の前後の差）。
+   *
+   * **いつページングを足すか**: この値が実際に断り書きとして出るように
+   * なったら、ページング（あるいは `limit` を画面から動かせる形）を検討
+   * する時期である。出ていないなら要らない —— 判断の材料は断り書きの
+   * 有無であって、会話の本数ではない（依頼者の観測、2026-08-24: `scan=10000`
+   * で会話15件・先頭到達。`limit` の上限 200 にも画面の既定 30 にも遠い）。
+   */
+  hiddenByLimit: z.number().int(),
 });
 
 const conversationMessageSchema = z.object({

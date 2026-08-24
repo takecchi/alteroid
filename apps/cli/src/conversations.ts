@@ -67,23 +67,34 @@ export async function conversationsListCommand(
     stdout.write('会話の一覧を読めませんでした（--limit / --scan の値を確かめてください）\n');
     return;
   }
-  const { conversations, scanned } = await response.json();
+  const { conversations, scanned, reachedStart, hiddenByLimit } = await response.json();
   // `renderConversationsList` は改行で終わらずに返す（末尾に改行が無いことは
   // `.claude/skills/mutation-testing/mutate-selftest.mjs` が固定している）。
   // 端末の次のプロンプトや後続の書き込みが最終行へ食い込まないよう、ここで足す（#326）。
-  stdout.write(`${renderConversationsList(conversations, scanned)}\n`);
+  stdout.write(`${renderConversationsList(conversations, scanned, reachedStart, hiddenByLimit)}\n`);
 }
 
 /**
  * 一覧を、人間が読める形へ。
  *
  * **`scanned` は常に出す。** デーモンは「窓の外はある」と言っているだけで
- * 「窓の外は無い」とは言っていない（一覧の応答に `reachedStart` は無い）。
- * ここを省くと、返ってきた件数が「これで全部」に見えてしまう。
+ * 「窓の外は無い」とは言っていない。ここを省くと、返ってきた件数が
+ * 「これで全部」に見えてしまう。
+ *
+ * **`reachedStart` / `hiddenByLimit` も出す（#418 の裏返し）。** どちらも
+ * サーバ（`GET /conversations`）とクローンの道具（`conversation_read`）は
+ * 既に言っているのに、CLI だけが黙っていると端末では気づけなくなる
+ * （「片方でしかできないこと」を作らないのが PRD「インターフェース」の
+ * 要件）。`reachedStart` は窓（`scan`）が日誌の先頭に届いたか、
+ * `hiddenByLimit` はその窓の**中で** `--limit` に収まらず落とした会話の数
+ * （窓の外は数えていない）。2つは別の条件なので、両方出ることも片方だけの
+ * こともある。
  */
 export function renderConversationsList(
   conversations: ConversationSummary[],
   scanned: number,
+  reachedStart: boolean,
+  hiddenByLimit: number,
 ): string {
   const lines: string[] = [];
   if (conversations.length === 0) {
@@ -106,6 +117,23 @@ export function renderConversationsList(
     `（人間との往復を新しい方から ${scanned} 件見て集計した。これより古い会話・古い発言は窓の外に` +
       '残っているかもしれない（判定できない） — 広げるには --scan、表示件数を増やすには --limit）',
   );
+  // **`reachedStart` が真のときは出さない。** 窓が先頭に届いているなら、
+  // そこに但し書きを出すと「常に出ているもの」になって情報でなくなる
+  // （`apps/web/app/routes/chat.tsx` の `ChatPane` と同じ判断）。
+  if (!reachedStart) {
+    lines.push(
+      `（人間との往復を ${scanned} 件遡ったが、先頭には届いていない。これより古い会話が残っている` +
+        'かもしれない）',
+    );
+  }
+  // **`hiddenByLimit > 0` のときだけ出す。** 語彙はクローンの道具（`tools.ts`
+  // の「…ほか N 件は省略」）に寄せる。
+  if (hiddenByLimit > 0) {
+    lines.push(
+      `…ほか ${hiddenByLimit} 件は省略（この窓に ${conversations.length + hiddenByLimit} 件あり、` +
+        `新しい順に ${conversations.length} 件だけ出した）。--limit を増やせば出る。`,
+    );
+  }
   lines.push('中身を読むには: alteroid conversations show <id>');
   return lines.join('\n');
 }

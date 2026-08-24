@@ -39,7 +39,16 @@ export function useRecordOwnMessage() {
       const shortened = roughPreview(text);
       void mutate(
         (key) => isKeyOfType(key, 'conversations'),
-        (current: { conversations: ConversationSummary[]; scanned: number } | undefined) => {
+        (
+          current:
+            | {
+                conversations: ConversationSummary[];
+                scanned: number;
+                reachedStart: boolean;
+                hiddenByLimit: number;
+              }
+            | undefined,
+        ) => {
           // まだ一度も取得していないキャッシュに勝手に値を作らない。
           if (current === undefined) return current;
 
