@@ -404,7 +404,9 @@ export {
   tokenAvailabilityAt,
   tokenRecoveryOf,
   tokenRotationPolicySchema,
+  activeAgentTokenSchema,
   tokenRotationSettingsSchema,
+  type ActiveAgentToken,
   type AgentToken,
   type AgentTokenInput,
   type AgentTokenView,
@@ -416,9 +418,14 @@ export {
 export {
   cooldownUntilFrom,
   decideTokenRotation,
+  observationFreshness,
+  selectNextToken,
+  type ObservationFreshness,
+  type SelectNextTokenOptions,
   type TokenRotationDecision,
   type TokenRotationObservation,
   type TokenRotationSignal,
+  type TokenSelection,
 } from './token-rotation.js';
 export {
   createTokenPoolService,

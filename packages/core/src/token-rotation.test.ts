@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { cooldownUntilFrom, decideTokenRotation } from './token-rotation.js';
+import {
+  cooldownUntilFrom,
+  decideTokenRotation,
+  observationFreshness,
+  selectNextToken,
+} from './token-rotation.js';
+import type { ActiveAgentToken, AgentToken } from './token-pool.js';
 import type { RateLimitFacts, UsageLimitNotice } from './usage-limits.js';
 
 /**
@@ -220,5 +226,159 @@ describe('冷却の期限を事実から取る', () => {
   it('過去の値を未来へ丸めない', () => {
     // 既に過ぎていれば「もう戻っている」が正しい（`markTokenUnusable` の doc）。
     expect(cooldownUntilFrom({ resetsAt: 1 })).toBe(1);
+  });
+});
+
+/**
+ * 遅れて届いた通知を捨てる（世代の照合）。**受け入れ基準**: 同じ枠の当たりが
+ * 複数のマネージャーから同時に届いても、回るのは1回だけ。
+ */
+describe('observationFreshness', () => {
+  const active: ActiveAgentToken = {
+    tokenId: 'tok-a',
+    generation: 3,
+    rotatedAt: '2026-08-25T03:00:00.000Z',
+  };
+
+  it('現役と同じ身元なら current', () => {
+    expect(observationFreshness(active, { tokenId: 'tok-a', generation: 3 })).toBe('current');
+  });
+
+  it('世代が違えば stale（もう回した後の通知）', () => {
+    // **これが無いと、5本のマネージャーが同時に当たった回にプールを5個消費する。**
+    expect(observationFreshness(active, { tokenId: 'tok-a', generation: 2 })).toBe('stale');
+  });
+
+  it('id が違えば stale', () => {
+    expect(observationFreshness(active, { tokenId: 'tok-b', generation: 3 })).toBe('stale');
+  });
+
+  it('id は同じで世代だけ古い形も捕まえる（冷却明けに同じ本が選ばれた後）', () => {
+    // id だけで照合すると、ここが current になって「もう回した後の通知」で
+    // もう一度回る。
+    expect(observationFreshness(active, { tokenId: 'tok-a', generation: 1 })).toBe('stale');
+  });
+
+  it('身元が何も付いていなければ unknown（current と答えない）', () => {
+    // **2値にしない。** stale へ倒すと本物の当たりを飲み込み、しかもそれは
+    // 何も起きないので見えない。current へ倒すと「照合した」という嘘になる。
+    expect(observationFreshness(active, {})).toBe('unknown');
+  });
+
+  it('現役がまだ無ければ unknown（照合する相手が居ない）', () => {
+    // 器の環境変数だけで走っている状態。current と答えると嘘になる。
+    expect(observationFreshness(null, { tokenId: 'tok-a', generation: 3 })).toBe('unknown');
+    expect(observationFreshness(null, {})).toBe('unknown');
+  });
+
+  it('片方だけ付いていれば、その片方で照合する', () => {
+    expect(observationFreshness(active, { tokenId: 'tok-a' })).toBe('current');
+    expect(observationFreshness(active, { generation: 3 })).toBe('current');
+    expect(observationFreshness(active, { tokenId: 'tok-b' })).toBe('stale');
+    expect(observationFreshness(active, { generation: 9 })).toBe('stale');
+  });
+});
+
+describe('selectNextToken', () => {
+  const NOW = Date.parse('2026-08-25T03:00:00.000Z');
+  const token = (over: Partial<AgentToken> & { id: string; order: number }): AgentToken => ({
+    label: over.id,
+    value: `value-of-${over.id}`,
+    ...over,
+  });
+
+  it('order 昇順で最初の ready を選ぶ', () => {
+    const sel = selectNextToken(
+      [
+        token({ id: 'tok-c', order: 2 }),
+        token({ id: 'tok-a', order: 0 }),
+        token({ id: 'tok-b', order: 1 }),
+      ],
+      { at: NOW },
+    );
+    expect(sel.kind).toBe('candidate');
+    expect(sel.kind === 'candidate' && sel.token.id).toBe('tok-a');
+  });
+
+  it('外されている・失効している・冷却中は飛ばす', () => {
+    const sel = selectNextToken(
+      [
+        token({ id: 'disabled', order: 0, disabledAt: '2026-08-01T00:00:00.000Z' }),
+        token({ id: 'invalidated', order: 1, invalidatedAt: '2026-08-01T00:00:00.000Z' }),
+        token({ id: 'cooling', order: 2, cooldownUntil: NOW + 60_000 }),
+        token({ id: 'ready', order: 3 }),
+      ],
+      { at: NOW },
+    );
+    expect(sel.kind === 'candidate' && sel.token.id).toBe('ready');
+  });
+
+  it('降りた本人を候補から外す（自分自身へ「回す」を作らない）', () => {
+    // **resetsAt が既に過ぎている値で来ることがある**（過去の値を未来へ丸めない）。
+    // 過ぎていれば ready なので、外さないと降りた本人が最初の候補になり、
+    // **日誌には「回した」と残るのに撒いた先は1文字も変わらない。**
+    const outgoing = token({ id: 'tok-a', order: 0, cooldownUntil: NOW - 1 });
+    const sel = selectNextToken([outgoing, token({ id: 'tok-b', order: 1 })], {
+      at: NOW,
+      exclude: 'tok-a',
+    });
+    expect(sel.kind === 'candidate' && sel.token.id).toBe('tok-b');
+  });
+
+  it('全部冷却中なら、いちばん早く戻るものとその時刻を出す（先頭へ戻らない）', () => {
+    const sel = selectNextToken(
+      [
+        token({ id: 'late', order: 0, label: '遅いほう', cooldownUntil: NOW + 9_000 }),
+        token({ id: 'soon', order: 1, label: '早いほう', cooldownUntil: NOW + 1_000 }),
+      ],
+      { at: NOW },
+    );
+    expect(sel.kind).toBe('none');
+    expect(sel.kind === 'none' && sel.earliest).toEqual({
+      tokenId: 'soon',
+      label: '早いほう',
+      cooldownUntil: NOW + 1_000,
+    });
+    // 値は出さない。
+    expect(JSON.stringify(sel)).not.toContain('value-of-soon');
+  });
+
+  it('プールが空・降りた1本しか無い・全部外されている、を同じ出口へ倒す', () => {
+    // **3つを別々の分岐にしない**（Issue #393）。別にすると、呼ぶ側が3回同じ
+    // 「先頭へ戻らずに待つ」を書くことになり、1つ忘れた分岐だけが黙って戻る。
+    const empty = selectNextToken([], { at: NOW });
+    const onlyOutgoing = selectNextToken([token({ id: 'tok-a', order: 0 })], {
+      at: NOW,
+      exclude: 'tok-a',
+    });
+    const allDisabled = selectNextToken(
+      [token({ id: 'tok-a', order: 0, disabledAt: '2026-08-01T00:00:00.000Z' })],
+      { at: NOW },
+    );
+    for (const sel of [empty, onlyOutgoing, allDisabled]) {
+      expect(sel.kind).toBe('none');
+      // **戻る時刻を 0 や now で埋めない**（「すぐ戻る」と読める）。
+      expect(sel.kind === 'none' && sel.earliest).toBeUndefined();
+    }
+  });
+
+  it('冷却中のものが1本でもあれば、待てば戻ることが出口から読める', () => {
+    const allDisabledButOneCooling = selectNextToken(
+      [
+        token({ id: 'off', order: 0, disabledAt: '2026-08-01T00:00:00.000Z' }),
+        token({ id: 'cooling', order: 1, cooldownUntil: NOW + 5 }),
+      ],
+      { at: NOW },
+    );
+    expect(
+      allDisabledButOneCooling.kind === 'none' && allDisabledButOneCooling.earliest?.tokenId,
+    ).toBe('cooling');
+  });
+
+  it('冷却の期限が過ぎていれば ready として選ぶ（もう戻っている）', () => {
+    const sel = selectNextToken([token({ id: 'tok-a', order: 0, cooldownUntil: NOW - 1 })], {
+      at: NOW,
+    });
+    expect(sel.kind === 'candidate' && sel.token.id).toBe('tok-a');
   });
 });

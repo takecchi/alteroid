@@ -1,7 +1,7 @@
 import type { SessionStore } from '@anthropic-ai/claude-agent-sdk';
 
 import type { AuthStore } from './auth.js';
-import type { AgentToken, TokenRotationSettings } from './token-pool.js';
+import type { ActiveAgentToken, AgentToken, TokenRotationSettings } from './token-pool.js';
 import type {
   Commitment,
   CommitmentClosedBy,
@@ -536,6 +536,18 @@ export interface TokenPoolStore {
   /** 回す契機と冷却の既定。置かれていなければ core の既定（`DEFAULT_TOKEN_ROTATION_SETTINGS`）を返す。 */
   readSettings(): Promise<TokenRotationSettings>;
   writeSettings(settings: TokenRotationSettings): Promise<TokenRotationSettings>;
+  /**
+   * いま撒いてある現役の指名（Issue #393 PR3）。**まだ一度も指名していなければ
+   * `null`。**
+   *
+   * **`null` を「1本目が現役」で埋めないこと。** 器の環境変数だけで走っている
+   * 既定の構成と、プールの1本目を撒いた後は別の状態である——前者では runner にも
+   * クローンにも何も降ろしていない。埋めると、撒いていないものを撒いたことに
+   * なる（受け入れ基準7: 既定の構成の挙動を1文字も変えない）。
+   */
+  readActive(): Promise<ActiveAgentToken | null>;
+  /** 現役を指名し直す。**世代を増やすのは呼ぶ側**（この口は受けた値を書くだけ）。 */
+  writeActive(active: ActiveAgentToken): Promise<ActiveAgentToken>;
 }
 
 /**

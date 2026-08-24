@@ -2,8 +2,10 @@ import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import {
+  activeAgentTokenSchema,
   DEFAULT_TOKEN_ROTATION_SETTINGS,
   tokenRotationSettingsSchema,
+  type ActiveAgentToken,
   type AgentToken,
   type TokenPoolStore,
   type TokenRotationSettings,
@@ -33,6 +35,14 @@ const agentTokenRowSchema = z.object({
 const fileSchema = z.object({
   tokens: z.array(agentTokenRowSchema).default([]),
   settings: tokenRotationSettingsSchema.optional(),
+  /**
+   * いま撒いてある現役（Issue #393 PR3）。**まだ指名していなければ無い。**
+   *
+   * 設定（`settings`）と別の項目にしてあるのは、あちらの `updatedAt` が
+   * 「人間かクローンが設定を変えた時刻」という意味を背負っているからである
+   * （`ActiveAgentToken` の doc）。
+   */
+  active: activeAgentTokenSchema.optional(),
 });
 
 type TokenPoolFile = z.infer<typeof fileSchema>;
@@ -77,6 +87,18 @@ export class FsTokenPoolStore implements TokenPoolStore {
   async writeSettings(settings: TokenRotationSettings): Promise<TokenRotationSettings> {
     const parsed = tokenRotationSettingsSchema.parse(settings);
     await this.#update((file) => ({ ...file, settings: parsed }));
+    return parsed;
+  }
+
+  async readActive(): Promise<ActiveAgentToken | null> {
+    const file = await this.#read();
+    // **無いものを「1本目が現役」で埋めない**（`TokenPoolStore.readActive` の doc）。
+    return file.active ?? null;
+  }
+
+  async writeActive(active: ActiveAgentToken): Promise<ActiveAgentToken> {
+    const parsed = activeAgentTokenSchema.parse(active);
+    await this.#update((file) => ({ ...file, active: parsed }));
     return parsed;
   }
 

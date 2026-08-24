@@ -337,6 +337,15 @@ const STATEMENTS = [
   // （`@alteroid/core` の `AgentToken.createdAt` の doc）。
   `alter table agent_tokens add column if not exists created_at timestamptz`,
   `alter table agent_tokens add column if not exists updated_at timestamptz`,
+
+  // いま撒いてある現役の指名（Issue #393 PR3）。高々1行（id = 'default'）。
+  // **`agent_tokens` の列にしない** — 2行が同時に現役だと主張する形を作らない。
+  `create table if not exists agent_token_active (
+     id text primary key,
+     token_id text not null,
+     generation bigint not null,
+     rotated_at timestamptz not null
+   )`,
 ] as const;
 
 export async function migrate(db: Db): Promise<void> {

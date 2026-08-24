@@ -1,6 +1,7 @@
 import {
   DEFAULT_TOKEN_ROTATION_SETTINGS,
   tokenRotationPolicySchema,
+  type ActiveAgentToken,
   type AgentToken,
   type TokenPoolStore,
   type TokenRotationSettings,
@@ -8,10 +9,13 @@ import {
 import { asc, eq } from 'drizzle-orm';
 
 import type { Db } from './db.js';
-import { agentTokenSettings, agentTokens } from './schema.js';
+import { agentTokenActive, agentTokenSettings, agentTokens } from './schema.js';
 
 /** 高々1行しか持たない表なので、鍵は固定でよい（`env_profile` と同じ作法）。 */
 const SETTINGS_ID = 'default';
+
+/** 現役の指名も高々1行なので、鍵は固定でよい（設定と同じ作法）。 */
+const ACTIVE_ID = 'default';
 
 type AgentTokenRow = typeof agentTokens.$inferSelect;
 
@@ -97,6 +101,39 @@ export class PgTokenPoolStore implements TokenPoolStore {
       cooldownMs: row.cooldownMs,
       ...(row.updatedAt === null ? {} : { updatedAt: row.updatedAt.toISOString() }),
     };
+  }
+
+  async readActive(): Promise<ActiveAgentToken | null> {
+    const rows = await this.#db
+      .select()
+      .from(agentTokenActive)
+      .where(eq(agentTokenActive.id, ACTIVE_ID))
+      .limit(1);
+    const row = rows[0];
+    // **無いものを「1本目が現役」で埋めない**（`TokenPoolStore.readActive` の doc）。
+    if (row === undefined) return null;
+    return {
+      tokenId: row.tokenId,
+      generation: row.generation,
+      rotatedAt: row.rotatedAt.toISOString(),
+    };
+  }
+
+  async writeActive(active: ActiveAgentToken): Promise<ActiveAgentToken> {
+    const rotatedAt = new Date(active.rotatedAt);
+    await this.#db
+      .insert(agentTokenActive)
+      .values({
+        id: ACTIVE_ID,
+        tokenId: active.tokenId,
+        generation: active.generation,
+        rotatedAt,
+      })
+      .onConflictDoUpdate({
+        target: agentTokenActive.id,
+        set: { tokenId: active.tokenId, generation: active.generation, rotatedAt },
+      });
+    return active;
   }
 
   async writeSettings(settings: TokenRotationSettings): Promise<TokenRotationSettings> {

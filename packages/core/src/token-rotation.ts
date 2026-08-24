@@ -1,5 +1,10 @@
 import type { RateLimitFacts, UsageLimitNotice } from './usage-limits.js';
-import type { TokenRotationPolicy } from './token-pool.js';
+import {
+  tokenAvailabilityAt,
+  type ActiveAgentToken,
+  type AgentToken,
+  type TokenRotationPolicy,
+} from './token-pool.js';
 
 /**
  * 「いま回すか」の判定（Issue #393 PR3）。**純粋関数だけを置く。**
@@ -240,4 +245,139 @@ function signalOf(
 export function cooldownUntilFrom(facts: RateLimitFacts | undefined): number | undefined {
   if (facts === undefined) return undefined;
   return facts.resetsAt ?? facts.overageResetsAt;
+}
+
+// ---------------------------------------------------------------------------
+// 遅れて届いた通知を捨てる（世代の照合）
+// ---------------------------------------------------------------------------
+
+/**
+ * その観測が、いまの現役についてのものか。**2値にしない。**
+ *
+ * - `current`: いまの現役についての観測。効かせてよい
+ * - `stale`: **もう回した後の通知。捨てる**
+ * - `unknown`: **どちらとも言えない**（観測が身元を持っていない）
+ *
+ * ## なぜ `unknown` を作るか
+ *
+ * 2値にすると、身元を持たない観測がどちらかへ黙って倒れる。**どちらへ倒しても
+ * 害があり、しかも害の見え方が違う:**
+ *
+ * | 倒す先 | 何が起きるか | 見えるか |
+ * | --- | --- | --- |
+ * | `stale`（捨てる） | **本物の当たりを飲み込む。** 回るべきときに回らない | **見えない**（何も起きないので） |
+ * | `current`（効かせる） | 1回の当たりでトークンを2本以上消費しうる | **見える**（日誌に回した記録が並ぶ） |
+ *
+ * ⟹ **回し手は `unknown` を `current` として扱う**（飲み込むほうが悪い）。
+ * **ただしそれをこの関数が決めない** — 3つ目の値として返し、呼ぶ側が日誌へ
+ * 「身元が無い観測だった」と残せるようにする。**倒した事実が出力に残ることが、
+ * 2値にしないことの目的である。**
+ */
+export type ObservationFreshness = 'current' | 'stale' | 'unknown';
+
+/**
+ * 観測に付いている身元を、いまの現役と突き合わせる。
+ *
+ * **`tokenId` と `generation` の両方を見る。** id だけだと、**同じトークンが冷却
+ * 明けにもう一度選ばれた後**に届いた遅れた通知を「現役の通知」として受け取る
+ * （id は一致するので）。世代は回すたびに増えるので、そこで捕まる。
+ *
+ * **現役がまだ無いとき（`null`）は `unknown` である。** まだ一度も指名していない
+ * ＝器の環境変数だけで走っている状態で、照合する相手が存在しない。**`current` と
+ * 答えると「照合した」という嘘になる。**
+ */
+export function observationFreshness(
+  active: ActiveAgentToken | null,
+  observed: { tokenId?: string; generation?: number },
+): ObservationFreshness {
+  if (active === null) return 'unknown';
+  if (observed.generation !== undefined && observed.generation !== active.generation)
+    return 'stale';
+  if (observed.tokenId !== undefined && observed.tokenId !== active.tokenId) return 'stale';
+  // どちらも運ばれてこなかった＝身元が無い。**一致したとは言えない。**
+  if (observed.generation === undefined && observed.tokenId === undefined) return 'unknown';
+  return 'current';
+}
+
+// ---------------------------------------------------------------------------
+// 次の候補を選ぶ
+// ---------------------------------------------------------------------------
+
+/**
+ * 選んだ結果。**「候補が無い」を1つの出口に畳んである。**
+ *
+ * Issue #393 が明示している——プールが空 / 全部冷却中 / 1本しか無くてそれが冷却中
+ * の**3つを別々の分岐にしない。** 別にすると、呼ぶ側が3回同じ「先頭へ戻らずに
+ * 待つ」を書くことになり、1つ忘れた分岐だけが黙って先頭へ戻る。
+ */
+export type TokenSelection =
+  | { kind: 'candidate'; token: AgentToken }
+  | {
+      kind: 'none';
+      /**
+       * いちばん早く戻るもの。**プールが空・全部 disabled・全部失効なら無い。**
+       *
+       * 無いことを `0` や `now` で埋めないこと（AGENTS.md 地雷「取れない軸に 0 の
+       * 行を作る」）——埋めると「すぐ戻る」と読める。
+       */
+      earliest?: { tokenId: string; label: string; cooldownUntil: number };
+      /** 人間とクローンへ出す1行。**トークンの値を含まない。** */
+      why: string;
+    };
+
+export interface SelectNextTokenOptions {
+  /** 判定の基準時刻（epoch ミリ秒）。 */
+  at: number;
+  /**
+   * 降りたトークンの id。**これを候補から外す。**
+   *
+   * **外さないと「自分自身へ回した」が起きる。** 冷却の期限は `resetsAt` 由来で、
+   * **既に過ぎている値が来ることがある**（`markTokenUnusable` の doc: 過去の値を
+   * 未来へ丸めない）。過ぎていれば `tokenAvailabilityAt` は `ready` を返すので、
+   * 降りた本人が最初の候補として選び直される——**日誌には「回した」と残るのに、
+   * 撒いた先は1文字も変わらない。** Issue が禁じている「黙って先頭へ戻る」の
+   * いちばん静かな形である。
+   */
+  exclude?: string;
+}
+
+/**
+ * 次に試す候補を1本選ぶ。**純粋関数。**
+ *
+ * `order` の昇順で、記録の上で候補から外す理由が無い最初の1本
+ * （`tokenAvailabilityAt` が `ready`）。**「通る」ことは保証しない** — それは
+ * `probeTokenCandidate`（PR2）が観測する領域である。
+ */
+export function selectNextToken(
+  tokens: readonly AgentToken[],
+  options: SelectNextTokenOptions,
+): TokenSelection {
+  const ordered = [...tokens].sort((a, b) => a.order - b.order);
+  const eligible = ordered.filter((token) => token.id !== options.exclude);
+
+  const ready = eligible.find((token) => tokenAvailabilityAt(token, options.at) === 'ready');
+  if (ready !== undefined) return { kind: 'candidate', token: ready };
+
+  // **ここから下は1つの出口である。** 空・全部冷却中・全部外されている、を
+  // 分けない。
+  const cooling = eligible
+    .filter((token) => tokenAvailabilityAt(token, options.at) === 'cooling')
+    .sort((a, b) => (a.cooldownUntil ?? 0) - (b.cooldownUntil ?? 0));
+
+  const first = cooling[0];
+  if (first?.cooldownUntil === undefined) {
+    return {
+      kind: 'none',
+      why:
+        eligible.length === 0
+          ? '試せる候補が1本も無い（プールが空、または降りた1本しか無い）'
+          : '試せる候補が1本も無い（すべて人間が外したか失効している。冷却中のものは無いので、待っても戻らない）',
+    };
+  }
+
+  return {
+    kind: 'none',
+    earliest: { tokenId: first.id, label: first.label, cooldownUntil: first.cooldownUntil },
+    why: `候補が全部冷却中である。いちばん早く戻るのは「${first.label}」`,
+  };
 }
