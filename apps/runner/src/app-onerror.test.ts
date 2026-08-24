@@ -7,10 +7,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRunnerApp, Outbox } from './app.js';
 
 /**
- * `.onError`（Issue #249）専用の検証。runner 側には既存の `app.test.ts` は
- * 無い（`ls apps/runner/src` で確認済み）が、daemon 側と対にして独立ファイルへ
- * 置く——将来ここへ他のテストが増えたときに同じ理由（他 PR との衝突回避）で
- * 分けやすくしておく。
+ * `.onError`（Issue #249）専用の検証。runner 側には `app.ts` に対応する単一の
+ * test ファイルが無く（`ls apps/runner/src` で確認済み。`boundary.test.ts` /
+ * `events-*.test.ts` のように機能ごとに分かれている）、測っているのはアプリ
+ * 全体に1つだけ掛かる横断のハンドラの配線なので、daemon 側
+ * （`apps/daemon/src/app-onerror.test.ts`）と対になる独立ファイルへ置く。
  *
  * `/managers/:id/resume` を踏み台に使う。このルートは既に「`RunnerFenceError`
  * 以外は Hono の既定へ流す」と自分の doc に書いてある

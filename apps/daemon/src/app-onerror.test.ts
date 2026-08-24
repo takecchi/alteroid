@@ -13,10 +13,10 @@ import { createApp } from './app.js';
 /**
  * `.onError`（Issue #249）専用の検証。
  *
- * **`app.test.ts` には置かない。** 別の PR（#398）がそのファイルを編集中で、
- * 衝突を避けるためにここへ分けた（設計そのものはこの分離と無関係——検証したいのは
- * `createApp` が返す Hono アプリの `onError` の配線であって、既存のどのテスト
- * グループにも属さない新しい観点である）。
+ * **`app.test.ts` には置かない。** 測っているのは `createApp` が返す Hono
+ * アプリ全体に1つだけ掛かる横断のハンドラ（`onError`）の配線であって、
+ * `app.test.ts` が並べているルートごとの応答とは観点が違う。runner 側
+ * （`apps/runner/src/app-onerror.test.ts`）と対になる。
  *
  * `/access` を踏み台に使う。`GET /access` は `requireOperator` を通ったあと
  * `stores.auth.listAccounts()` を await するだけで、呼び出し側は try/catch を
