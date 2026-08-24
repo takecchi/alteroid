@@ -324,9 +324,18 @@ export const reportsResponseSchema = z.object({ reports: z.array(dailyReportEntr
  * と同じく「外向きの view を別に書く」問題（保存側にフィールドが増えた日に
  * 宣言ごと広がる）にも当たらない——土台が `pendingApprovalSchema` 自身なので、
  * 広がるとしてもそれは core 側の欄が増えたときだけである。
+ *
+ * **`total` / `nextCursor` は頁の封筒（issue #432）。** `order` / `limit` /
+ * `cursor` のいずれかを明示的に渡したときだけ載る——何も渡さない既定の呼びでは、
+ * この2欄は応答に**鍵として現れない**（`undefined` ではなく無い。
+ * `apps/daemon/src/app.ts` の `/approvals` ハンドラが `optedIn` のときだけ
+ * object へ足す）。opt-in の理由は `.claude/skills/listing-and-detail/SKILL.md`
+ * ——既存の呼び手（画面・CLI）の応答をこの変更で変えないため。
  */
 export const approvalsResponseSchema = z.object({
   approvals: z.array(pendingApprovalSchema.extend({ updatedAt: isoDateTimeSchema })),
+  total: z.number().int().optional(),
+  nextCursor: z.string().optional(),
 });
 
 export const approvalsAnswerResponseSchema = z.object({

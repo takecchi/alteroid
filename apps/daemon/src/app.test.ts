@@ -27,9 +27,10 @@ import {
   createRunnerRegistry,
   createTokenPoolService,
 } from '@alteroid/core';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp, parseAllowedOrigins } from './app.js';
+import { encodeCursor } from './cursor.js';
 import type { AuthPlan } from './auth.js';
 import { createJournalBus, type JournalBus } from './journal-bus.js';
 import { scheduleStatusSchema } from './openapi.js';
@@ -1566,6 +1567,307 @@ describe('HTTP API', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(shutdowns).toBe(1);
+  });
+});
+
+/**
+ * `GET /approvals` の `order` / `limit` / `cursor`（issue #432）。
+ *
+ * **既定の応答が1バイトも変わらないことが最重要の保証である。** opt-in
+ * （`order` / `limit` / `cursor` のいずれかを明示したときだけ `total` /
+ * `nextCursor` が応答へ載る）が壊れると、既存の呼び手（画面・CLI）の応答が
+ * 静かに変わる——`toMatchObject` ではなく `Object.keys` で鍵の集合そのものを
+ * 留める（`toMatchObject` は余分な鍵を見逃す。`AGENTS.md`「報告の形」と同じ
+ * 理由で、判定できることは判定できる形で書く）。
+ */
+describe('GET /approvals の order/limit/cursor（issue #432）', () => {
+  it('既定の呼び（order/limit/cursor を渡さない）では応答の鍵が増えない', async () => {
+    await stores.jobs.putApproval({
+      id: 'ap-1',
+      createdAt: new Date().toISOString(),
+      question: 'q',
+    });
+
+    const body = (await (await app.request('/approvals')).json()) as Record<string, unknown>;
+    expect(Object.keys(body)).toEqual(['approvals']);
+
+    // `pending=false` のような既存のパラメータを渡しても、opt-in の対象
+    // （order/limit/cursor）ではないので同じく増えない。
+    const withPending = (await (await app.request('/approvals?pending=false')).json()) as Record<
+      string,
+      unknown
+    >;
+    expect(Object.keys(withPending)).toEqual(['approvals']);
+  });
+
+  it('order=desc は order=asc の逆順', async () => {
+    const ids = ['ap-a', 'ap-b', 'ap-c'];
+    for (const [i, id] of ids.entries()) {
+      await stores.jobs.putApproval({
+        id,
+        createdAt: `2026-01-0${i + 1}T00:00:00.000Z`,
+        question: id,
+      });
+    }
+
+    const asc = (await (await app.request('/approvals?order=asc')).json()) as {
+      approvals: { id: string }[];
+    };
+    const desc = (await (await app.request('/approvals?order=desc')).json()) as {
+      approvals: { id: string }[];
+    };
+    expect(asc.approvals.map((a) => a.id)).toEqual(['ap-a', 'ap-b', 'ap-c']);
+    expect(desc.approvals.map((a) => a.id)).toEqual([...asc.approvals.map((a) => a.id)].reverse());
+  });
+
+  it('limit は件数を切り、total は全件、nextCursor が続きを示す', async () => {
+    for (let i = 0; i < 5; i += 1) {
+      await stores.jobs.putApproval({
+        id: `ap-${i}`,
+        createdAt: `2026-01-0${i + 1}T00:00:00.000Z`,
+        question: 'q',
+      });
+    }
+
+    const body = (await (await app.request('/approvals?limit=2')).json()) as {
+      approvals: { id: string }[];
+      total?: number;
+      nextCursor?: string;
+    };
+    expect(body.approvals.map((a) => a.id)).toEqual(['ap-0', 'ap-1']);
+    expect(body.total).toBe(5);
+    expect(body.nextCursor).toBeTruthy();
+  });
+
+  it('cursor を辿った結果は order=asc の全件と重複なく一致する', async () => {
+    for (let i = 0; i < 7; i += 1) {
+      await stores.jobs.putApproval({
+        id: `ap-${i}`,
+        createdAt: new Date(2026, 0, i + 1).toISOString(),
+        question: 'q',
+      });
+    }
+
+    const full = (await (await app.request('/approvals?order=asc')).json()) as {
+      approvals: { id: string }[];
+    };
+    expect(full.approvals).toHaveLength(7);
+
+    const collected: string[] = [];
+    let cursor: string | undefined;
+    for (;;) {
+      const qs = new URLSearchParams({ limit: '3' });
+      if (cursor !== undefined) qs.set('cursor', cursor);
+      const body = (await (await app.request(`/approvals?${qs.toString()}`)).json()) as {
+        approvals: { id: string }[];
+        nextCursor?: string;
+      };
+      collected.push(...body.approvals.map((a) => a.id));
+      if (body.nextCursor === undefined) break;
+      cursor = body.nextCursor;
+    }
+    expect(collected).toEqual(full.approvals.map((a) => a.id));
+  });
+
+  it('cursor が壊れていれば400', async () => {
+    const res = await app.request('/approvals?cursor=!!!not-a-valid-cursor!!!');
+    expect(res.status).toBe(400);
+  });
+
+  it('cursor の order がリクエストの order と食い違えば400', async () => {
+    await stores.jobs.putApproval({
+      id: 'ap-x',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      question: 'q',
+    });
+    const cursor = encodeCursor({
+      id: 'ap-x',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      order: 'asc',
+    });
+    const res = await app.request(`/approvals?order=desc&cursor=${encodeURIComponent(cursor)}`);
+    expect(res.status).toBe(400);
+  });
+
+  /**
+   * **位置ではなく `(createdAt, id)` の比較で辿ることの直接の効果。** カーソルが
+   * 指していた行が答えられて `pending` の絞りから消えても、400 にならず・
+   * 続きを飛ばさない。`packages/storage-fs` の実装がまさにこの形で行を動かす
+   * ことは `packages/storage-fs/src/index.test.ts` の歯が固定している。
+   */
+  it('カーソルが指す行が答えられて消えても、続きは400にならず飛ばさない', async () => {
+    for (let i = 0; i < 5; i += 1) {
+      await stores.jobs.putApproval({
+        id: `ap-${i}`,
+        createdAt: new Date(2026, 0, i + 1).toISOString(),
+        question: 'q',
+      });
+    }
+
+    const page1 = (await (await app.request('/approvals?limit=2')).json()) as {
+      approvals: { id: string }[];
+      nextCursor?: string;
+    };
+    expect(page1.approvals.map((a) => a.id)).toEqual(['ap-0', 'ap-1']);
+    const cursor1 = page1.nextCursor;
+    expect(cursor1).toBeTruthy();
+
+    // カーソルが指す行そのもの（ap-1）に答える —— pending の絞りから消える。
+    const existing = await stores.jobs.getApproval('ap-1');
+    await stores.jobs.putApproval({
+      ...(existing as NonNullable<typeof existing>),
+      answeredAt: new Date().toISOString(),
+      answer: 'よい',
+    });
+
+    const page2 = (await (
+      await app.request(`/approvals?limit=2&cursor=${encodeURIComponent(cursor1 as string)}`)
+    ).json()) as { approvals: { id: string }[] };
+    expect(page2.approvals.map((a) => a.id)).toEqual(['ap-2', 'ap-3']);
+  });
+});
+
+/**
+ * `GET /reports` の `beforeDate` / `beforeAt`（issue #432）。
+ *
+ * この口は封筒（`total` / `nextCursor`）を持たない——応答は
+ * `beforeDate`/`beforeAt` を渡しても渡さなくても`reports`の1鍵のまま。続きが
+ * 在るかは「`limit` 件ちょうど返ったか」で呼ぶ側が判る（`journalQuery` の
+ * `since` と同じ考え方）。
+ */
+describe('GET /reports の beforeDate/beforeAt（issue #432）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('既定の呼びでも beforeDate/beforeAt を渡した呼びでも、応答の鍵は増えない', async () => {
+    await stores.journal.append({ type: 'daily_report', date: '2026-01-01', body: '本文' });
+
+    const plain = (await (await app.request('/reports')).json()) as Record<string, unknown>;
+    expect(Object.keys(plain)).toEqual(['reports']);
+
+    const first = (await (await app.request('/reports?limit=1')).json()) as {
+      reports: { date: string; at: string }[];
+    };
+    const r0 = first.reports[0] as { date: string; at: string };
+    const qs = new URLSearchParams({ beforeDate: r0.date, beforeAt: r0.at });
+    const withBoundary = (await (await app.request(`/reports?${qs.toString()}`)).json()) as Record<
+      string,
+      unknown
+    >;
+    expect(Object.keys(withBoundary)).toEqual(['reports']);
+  });
+
+  it('beforeDate/beforeAtを辿った結果は、日付の新しい順の全件と重複なく一致する', async () => {
+    vi.useFakeTimers();
+    for (let i = 0; i < 5; i += 1) {
+      vi.setSystemTime(new Date(2026, 0, i + 1, 12, 0, 0));
+      await stores.journal.append({
+        type: 'daily_report',
+        date: `2026-01-0${i + 1}`,
+        body: `day ${i}`,
+      });
+    }
+    vi.useRealTimers();
+
+    const full = (await (await app.request('/reports?limit=100')).json()) as {
+      reports: { date: string }[];
+    };
+    expect(full.reports).toHaveLength(5);
+
+    const collected: string[] = [];
+    let before: { date: string; at: string } | undefined;
+    for (;;) {
+      const qs = new URLSearchParams({ limit: '2' });
+      if (before !== undefined) {
+        qs.set('beforeDate', before.date);
+        qs.set('beforeAt', before.at);
+      }
+      const body = (await (await app.request(`/reports?${qs.toString()}`)).json()) as {
+        reports: { date: string; at: string }[];
+      };
+      if (body.reports.length === 0) break;
+      collected.push(...body.reports.map((r) => r.date));
+      if (body.reports.length < 2) break;
+      const last = body.reports[body.reports.length - 1] as { date: string; at: string };
+      before = { date: last.date, at: last.at };
+    }
+    expect(collected).toEqual(full.reports.map((r) => r.date));
+  });
+
+  it('beforeDate/beforeAtは片方だけ渡すと400（両方向）', async () => {
+    await stores.journal.append({ type: 'daily_report', date: '2026-01-01', body: 'x' });
+    expect((await app.request('/reports?beforeDate=2026-01-01')).status).toBe(400);
+    expect(
+      (await app.request(`/reports?beforeAt=${encodeURIComponent('2026-01-01T00:00:00.000Z')}`))
+        .status,
+    ).toBe(400);
+  });
+
+  it('形の不正な beforeDate / beforeAt は400', async () => {
+    const badDate = await app.request(
+      `/reports?beforeDate=2026-13-40&beforeAt=${encodeURIComponent('2026-01-01T00:00:00.000Z')}`,
+    );
+    expect(badDate.status).toBe(400);
+
+    const badAt = await app.request(
+      `/reports?beforeDate=2026-01-01&beforeAt=${encodeURIComponent('not-a-datetime')}`,
+    );
+    expect(badAt.status).toBe(400);
+  });
+
+  it('order を渡しても無視されて200になる（厳格化していないことの記録）', async () => {
+    await stores.journal.append({ type: 'daily_report', date: '2026-01-01', body: 'x' });
+
+    const withOrder = await app.request('/reports?order=desc');
+    expect(withOrder.status).toBe(200);
+    const withOrderBody = (await withOrder.json()) as { reports: { id: string }[] };
+
+    const plainBody = (await (await app.request('/reports')).json()) as {
+      reports: { id: string }[];
+    };
+    expect(withOrderBody.reports.map((r) => r.id)).toEqual(plainBody.reports.map((r) => r.id));
+  });
+
+  /**
+   * **窓の穴（issue #432 の設計訂正で警告されたもの）。**
+   *
+   * `limit` の窓（`limit + REPORT_WINDOW_SLACK`）ぶんしか読んでいない状態で
+   * 境界がその窓のいちばん古い行を指すと、`picked`（境界より後ろだけに絞った
+   * 結果）が空になる。**素朴な `isSettled` だけに頼ると、`picked` が空なら
+   * 無条件で「動かせない」と判定して `[]` を返してしまう**——実際には窓の外
+   * （まだ読んでいない、もっと古い側）に続きが残っている。
+   *
+   * 40日分の日報を積み、`limit=1` で境界を「初回の窓（33件）のいちばん古い日
+   * （8日目）」に置く。窓の外に残っているのは1〜7日目の7件で、正しい応答は
+   * 「7日目の1件」——`[]` ではない。
+   */
+  it('境界が初回の窓のいちばん古い行を指しても、窓の外の続きを取りこぼさない', async () => {
+    vi.useFakeTimers();
+    let boundary: { date: string; at: string } | undefined;
+    for (let i = 1; i <= 40; i += 1) {
+      vi.setSystemTime(new Date(2026, 0, i, 12, 0, 0));
+      const entry = await stores.journal.append({
+        type: 'daily_report',
+        date: `2026-01-${String(i).padStart(2, '0')}`,
+        body: `day ${i}`,
+      });
+      // limit=1 の初回の窓は 1 + REPORT_WINDOW_SLACK(32) = 33 件——
+      // 直近33日（8日目〜40日目）だけを読む。窓のいちばん古い行は8日目。
+      if (i === 8) boundary = entry as unknown as { date: string; at: string };
+    }
+    vi.useRealTimers();
+
+    const qs = new URLSearchParams({
+      limit: '1',
+      beforeDate: (boundary as NonNullable<typeof boundary>).date,
+      beforeAt: (boundary as NonNullable<typeof boundary>).at,
+    });
+    const body = (await (await app.request(`/reports?${qs.toString()}`)).json()) as {
+      reports: { date: string }[];
+    };
+    // 窓の外（1〜7日目）のうち、いちばん新しい7日目が1件だけ返るはず。
+    expect(body.reports.map((r) => r.date)).toEqual(['2026-01-07']);
   });
 });
 
