@@ -2,7 +2,11 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { renderMemoryDocuments, verifyJournalStoreWithContract } from '@alteroid/core';
+import {
+  renderMemoryDocuments,
+  verifyJournalStoreOrderContract,
+  verifyJournalStoreWithContract,
+} from '@alteroid/core';
 import type { Commitment, InboxEvent } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -809,6 +813,63 @@ describe('FsJournalStore', () => {
     expect(entries.map((entry) => (entry as { decision?: string }).decision)).toEqual(['昔の分']);
   });
 
+  /**
+   * **`order: 'asc'` では早期打ち切りの向きが反転する（issue #432 の2本目、
+   * 5-3）。** desc の既定は「新しい日から走査するので `sinceDay` を下回ったら
+   * `break`、`untilDay` を上回ったら `continue`」。asc は走査が古い日から
+   * 始まるので、この2つの役割が入れ替わる——`untilDay` を上回ったら
+   * `break`、`sinceDay` を下回ったら `continue`。
+   *
+   * **ここを反転し忘れる（desc の向きのまま asc へ流用する）と、この歯が
+   * 落ちる。** 最初に読む最古のファイル（`sinceDay` より古い）で `break`
+   * してしまい、窓の中に在るはずの「今日の分」へ一生辿り着けず、結果が
+   * 黙って空になる——読み飛ばし（`continue`）であるべきところが欠落
+   * （`break`）に化ける。
+   */
+  it('asc: since より古い日のファイルは読み飛ばして続きを読む（早期打ち切りの向きが反転する。#432）', async () => {
+    await stores.journal.append({ type: 'decision', decision: '今日の分', grounds: 'g' });
+
+    // 最古のファイルを手で置く。sinceDay より古いので、asc では continue
+    // （読み飛ばす）べきであって break（打ち切る）してはいけない。
+    const journalDir = join(root, 'journal');
+    await writeFile(
+      join(journalDir, '2020-01-01.jsonl'),
+      `${JSON.stringify({
+        type: 'decision',
+        id: 'old',
+        at: '2020-01-01T00:00:00.000Z',
+        decision: '古すぎる分',
+        grounds: 'g',
+      })}\n`,
+      'utf8',
+    );
+
+    const since = '2020-06-01T00:00:00.000Z';
+    const entries = await stores.journal.list({ order: 'asc', since });
+    expect(entries.map((entry) => (entry as { decision?: string }).decision)).toEqual(['今日の分']);
+  });
+
+  it('asc: until より新しい日のファイルに当たったら打ち切る（早期打ち切りの向きが反転する。#432）', async () => {
+    await stores.journal.append({ type: 'decision', decision: '今日の分', grounds: 'g' });
+
+    const journalDir = join(root, 'journal');
+    await writeFile(
+      join(journalDir, '2020-01-01.jsonl'),
+      `${JSON.stringify({
+        type: 'decision',
+        id: 'old',
+        at: '2020-01-01T00:00:00.000Z',
+        decision: '古い分',
+        grounds: 'g',
+      })}\n`,
+      'utf8',
+    );
+
+    const until = '2020-01-02T00:00:00.000Z';
+    const entries = await stores.journal.list({ order: 'asc', until });
+    expect(entries.map((entry) => (entry as { decision?: string }).decision)).toEqual(['古い分']);
+  });
+
   it('id で1件引ける（一覧を抜粋にした先の全文の行き先）', async () => {
     const entry = await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
 
@@ -919,6 +980,24 @@ describe('FsJournalStore', () => {
 
       expect(entries).toHaveLength(1);
       expect(entries[0]).toMatchObject({ with: 'human', text: '人間の質問' });
+    });
+  });
+
+  /**
+   * `JournalStore` の `order` / `after` 契約（issue #432 の2本目）を、**fs
+   * 実装**に対して測る。同じ形の歯が3つ在る——インメモリ
+   * （`packages/core/src/journal-order-with-contract.test.ts`）/ fs（この
+   * テスト）/ pg（`packages/storage-pg/src/index.test.ts`）。1つで測って
+   * 3つとも測ったことにしない（#418 / with 契約と同じ作法）。
+   *
+   * **fs だけが持つ危険（5-3）— 昇順の早期打ち切り（`sinceDay` / `untilDay`
+   * の break/continue）の向きが反転する。** この契約はその反転を直接は
+   * 踏まない（`since`/`until` を渡していない）ので、**反転漏れを狙った歯は
+   * 別途 `until で窓の終端を閉じられる` の隣に asc 版として置く**（下）。
+   */
+  describe('order/after 契約（issue #432 の2本目）', () => {
+    it('order 未指定=desc／asc は正確な逆順／after は絞り・limit より前に効く／同着を飛ばさない', async () => {
+      await verifyJournalStoreOrderContract(stores.journal);
     });
   });
 });

@@ -1796,10 +1796,10 @@
         "operationId": "getJournal",
         "tags": ["journal"],
         "summary": "日誌を読む",
-        "description": "日誌（追記専用の記録）を新しい順に読む。`type` `since` `until` で掘れる。",
+        "description": "日誌（追記専用の記録）を読む。`type` `since` `until` で掘れる。既定は新しい順（`order:desc`）——`order:asc` で古い順にもできる。`afterId` と `afterAt` を両方渡すと、前の頁の最後の行より後ろ（＝返る順序における次）を返す（可視の複合キー。応答に `id`/`at` が既に載っているのでそこから組み立てる）。**`after` は返る順序の意味であって時間の意味ではない** —— `order:desc`（既定）では、指した行より**古い**行が返る。`order:asc` ではその逆（**新しい**行が返る）。**封筒は持たない** —— 続きが在るかは `limit` 件ちょうど返ったかで判る。",
         "responses": {
           "200": {
-            "description": "日誌エントリの一覧（新しい順）。",
+            "description": "日誌エントリの一覧。",
             "content": {
               "application/json": {
                 "schema": {
@@ -2227,23 +2227,36 @@
             }
           },
           "400": {
-            "description": "クエリが不正。",
+            "description": "クエリが不正、または `afterId` / `afterAt` の片方だけが渡された・`afterAt` の形式が不正、または `afterId`/`afterAt` が指す行が見当たらない。",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {},
-                    "error": {
-                      "type": "array",
-                      "items": {}
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {},
+                        "error": {
+                          "type": "array",
+                          "items": {}
+                        },
+                        "success": {
+                          "type": "boolean",
+                          "const": false
+                        }
+                      },
+                      "required": ["data", "error", "success"]
                     },
-                    "success": {
-                      "type": "boolean",
-                      "const": false
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["error"]
                     }
-                  },
-                  "required": ["data", "error", "success"]
+                  ]
                 }
               }
             }
@@ -2277,6 +2290,29 @@
           {
             "in": "query",
             "name": "type",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "order",
+            "schema": {
+              "default": "desc",
+              "type": "string",
+              "enum": ["asc", "desc"]
+            }
+          },
+          {
+            "in": "query",
+            "name": "afterId",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "afterAt",
             "schema": {
               "type": "string"
             }

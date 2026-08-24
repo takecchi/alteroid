@@ -1,4 +1,8 @@
-import { renderMemoryDocuments, verifyJournalStoreWithContract } from '@alteroid/core';
+import {
+  renderMemoryDocuments,
+  verifyJournalStoreOrderContract,
+  verifyJournalStoreWithContract,
+} from '@alteroid/core';
 import type { Commitment, InboxEvent } from '@alteroid/core';
 import { PGlite } from '@electric-sql/pglite';
 import { eq, sql } from 'drizzle-orm';
@@ -865,6 +869,20 @@ describe('PgJournalStore', () => {
 
       expect(entries).toHaveLength(1);
       expect(entries[0]).toMatchObject({ with: 'human', text: '人間の質問' });
+    });
+  });
+
+  /**
+   * `JournalStore` の `order` / `after` 契約（issue #432 の2本目）を、
+   * **pg 実装（PGlite = インプロセスの実 PostgreSQL）**に対して測る。同じ形の
+   * 歯が3つ在る——インメモリ
+   * （`packages/core/src/journal-order-with-contract.test.ts`）/ fs
+   * （`packages/storage-fs/src/index.test.ts`）/ pg（このテスト）。1つで
+   * 測って3つとも測ったことにしない（#418 / with 契約と同じ作法）。
+   */
+  describe('order/after 契約（issue #432 の2本目）', () => {
+    it('order 未指定=desc／asc は正確な逆順／after は絞り・limit より前に効く／同着を飛ばさない', async () => {
+      await verifyJournalStoreOrderContract(stores.journal);
     });
   });
 });
