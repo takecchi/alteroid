@@ -25,6 +25,7 @@ import type {
 class FakeRunner implements RunnerClient {
   readonly runnerId: string;
   readonly runnerIdKnown = true;
+  readonly workspacePathKnown = true;
   readonly workspacePath = '/work/project';
   report: RunnerPlacementResources | undefined;
   /** `/health` の応え方。生存判定で `lost` を作るために使う。 */

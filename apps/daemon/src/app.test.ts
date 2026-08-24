@@ -2215,7 +2215,10 @@ describe('宣言と実物の一致（/schedule）', () => {
   });
 });
 
-function fakeRunner(runnerId: string, options: { runnerIdKnown?: boolean } = {}) {
+function fakeRunner(
+  runnerId: string,
+  options: { runnerIdKnown?: boolean; workspacePathKnown?: boolean; workspacePath?: string } = {},
+) {
   const received: string[] = [];
   return {
     runnerId,
@@ -2223,7 +2226,11 @@ function fakeRunner(runnerId: string, options: { runnerIdKnown?: boolean } = {})
     // 「`/health` から一度も `runnerId` を受け取れていない」状態を再現できる
     // （#330 の歯のために足した）。
     runnerIdKnown: options.runnerIdKnown ?? true,
-    workspacePath: '/work',
+    // **既定は `true`（既存テストの前提を変えない）。** `false` を渡すと
+    // 「`/health` から一度も `workspacePath` を受け取れていない」状態を
+    // 再現できる（#389 の歯のために足した）。
+    workspacePathKnown: options.workspacePathKnown ?? true,
+    workspacePath: options.workspacePath ?? '/work',
     received,
     async setProfile(script: string) {
       received.push(script);
@@ -2466,6 +2473,78 @@ describe('runner の生死', () => {
     expect(body.runners).toMatchObject([{ label: '旧版の runner', state: 'connected' }]);
     // **既定値 `'runner-primary'` が「聞けた値」の顔で出ていないことを名指しで見る。**
     expect(body.runners[0]).not.toHaveProperty('runnerId');
+
+    await registry.stop();
+  });
+
+  /**
+   * **#330 と同じ形の罠が `workspacePath` にも在った（#389）。** `workspacePath`
+   * も常に文字列を持つ（`HttpRunner` の既定値 `''`）ので、`entry.client !== null`
+   * だけを根拠に出すと、`/health` から一度も `workspacePath` を受け取れていない
+   * 相手についても「受け取った値」の顔で出てしまう。繋がってはいる
+   * （`state: 'connected'`）が、まだ聞けていない runner が、既定値をそのまま
+   * 名乗って見えないことを確かめる。
+   */
+  it('繋がっていても workspacePath を聞けていない runner は、workspacePath を出さない（#389）', async () => {
+    const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
+    await registry.register({
+      label: '旧版の runner',
+      open: async () => fakeRunner('runner-primary', { workspacePathKnown: false }) as never,
+    });
+
+    const withRunners = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      runners: registry,
+    });
+
+    const body = (await (await withRunners.request('/runners')).json()) as {
+      runners: { label: string; state: string; workspacePath?: string }[];
+    };
+
+    expect(body.runners).toMatchObject([{ label: '旧版の runner', state: 'connected' }]);
+    // **既定値 `''` が「聞けた値」の顔で出ていないことを名指しで見る。**
+    expect(body.runners[0]).not.toHaveProperty('workspacePath');
+
+    await registry.stop();
+  });
+
+  /**
+   * **歯（iii）— 本当に `''` を名乗った相手については `''` が出ること（#389）。**
+   * 上のテストと `workspacePath` の値だけを見ると同じ（どちらも `''`）だが、
+   * `workspacePathKnown` が違う。ここを区別できないと、「聞けたか」の判定を
+   * 値そのもの（`=== ''`）で代用したときと同じ害に戻る——本当に空の作業
+   * ディレクトリを名乗る runner と、一度も聞けていない runner が見分けられ
+   * なくなる。
+   */
+  it('workspacePath を聞けていて、それが空文字なら、空文字のまま出す（#389）', async () => {
+    const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
+    await registry.register({
+      label: '空の作業ディレクトリを名乗る runner',
+      open: async () =>
+        fakeRunner('runner-primary', { workspacePathKnown: true, workspacePath: '' }) as never,
+    });
+
+    const withRunners = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      runners: registry,
+    });
+
+    const body = (await (await withRunners.request('/runners')).json()) as {
+      runners: { label: string; state: string; workspacePath?: string }[];
+    };
+
+    expect(body.runners).toMatchObject([
+      { label: '空の作業ディレクトリを名乗る runner', state: 'connected' },
+    ]);
+    // **聞けている以上、空文字であってもキー自体は出る。** 消えるのは
+    // 「聞けていない」ときだけである。
+    expect(body.runners[0]).toHaveProperty('workspacePath', '');
 
     await registry.stop();
   });
