@@ -1,6 +1,7 @@
 import type { SessionStore } from '@anthropic-ai/claude-agent-sdk';
 
 import type { AuthStore } from './auth.js';
+import type { AgentToken, TokenRotationSettings } from './token-pool.js';
 import type {
   Commitment,
   CommitmentClosedBy,
@@ -165,6 +166,13 @@ export interface PersonaStore {
   markCreatedAt(slug: string, at: string): Promise<boolean>;
 }
 
+/**
+ * `exchange` の `with`（誰との往復か）。`journalEntrySchema` の `exchange` 枝
+ * （`schema.ts`）から型だけを取り出す — 値の一覧をここへ複製しない。`with` を
+ * 持つのは `exchange` だけである。
+ */
+export type ExchangeWith = Extract<JournalEntry, { type: 'exchange' }>['with'];
+
 export interface JournalQuery {
   limit?: number;
   types?: JournalEntryType[];
@@ -179,6 +187,34 @@ export interface JournalQuery {
    * 窓の終端を閉じられて初めて、過去の一点を掘れる。
    */
   until?: string;
+  /**
+   * `exchange` を `with` で絞る（issue #418）。
+   *
+   * **契約（3実装 — `testing.ts` のインメモリ / `storage-fs` / `storage-pg` —
+   * で揃える。3つとも歯を持つ。`journal-with-contract.ts` の
+   * `verifyJournalStoreWithContract` が単一の契約として測る）:**
+   *
+   * - **未指定 = 絞らない。** 既存の挙動を1文字も変えない
+   * - **指定 = その値の `exchange` だけを返す。** `with` を持たない種別
+   *   （`decision` / `tool_use` 等）は `with` を持たないので、絞りを指定した
+   *   時点で1件も返らない — `types` でそれらを別途除く必要はない
+   * - **`[]`（空配列）= 0件。** 「どれにも当たらない」という指定として扱う。
+   *   ⚠️ これは `types: []` の挙動（実装間で食い違っている — インメモリ / fs
+   *   は0件、pg は絞らない。#418 の範囲外）とは**別に決めた**契約であって、
+   *   `types` の食い違いに倣ったものではない
+   * - **`limit` より前に効く。** ここが要点である — `GET /conversations` /
+   *   `GET /conversations/:id` / `conversation_read` はいずれも
+   *   `types: ['exchange']` で件数の窓を切ってから `with === 'human'` に
+   *   絞っていたため、`with: 'manager'` / `with: 'self'` の行が `scan` の
+   *   予算を食い尽くし、人間との会話が窓の外へ落ちていた（#418）。絞りを
+   *   `limit` より前（ストアの側）へ移すことで、`scan` の予算を食うのは
+   *   その `with` に当たる行だけになる。
+   *
+   * 組み立てるのは `conversation.ts` の `readConversationWindow` 1か所だけに
+   * すること — 呼び出し口ごとに手で組むと、直したほうと忘れたほうで挙動が
+   * ずれる（この issue の症状そのものの再発）。
+   */
+  with?: ExchangeWith[];
 }
 
 /** 日誌 = 追記専用の記録（PRD「可観測性」）。 */
@@ -486,6 +522,23 @@ export interface ProfileStore {
 }
 
 /**
+ * 認証トークンのプール（Issue #393「プールの器」）。**回さない。** 検知も切替も
+ * ここには無い——ここが持つのは置き場と、置いたものを読み書きする口だけである。
+ *
+ * `env_profile` と同じ形（正本はデーモンが持ち、器違い（fs / pg）は挙動を変えない）。
+ * `Stores` の一員として持つのは、環境を作り直しても残るという性質が同じだからである。
+ */
+export interface TokenPoolStore {
+  /** プールの全行（**値を含む**。正本を返す口はここだけである）。`order` 昇順。 */
+  list(): Promise<AgentToken[]>;
+  /** 全文置換。**入力に無い行は消える。** */
+  replace(tokens: readonly AgentToken[]): Promise<AgentToken[]>;
+  /** 回す契機と冷却の既定。置かれていなければ core の既定（`DEFAULT_TOKEN_ROTATION_SETTINGS`）を返す。 */
+  readSettings(): Promise<TokenRotationSettings>;
+  writeSettings(settings: TokenRotationSettings): Promise<TokenRotationSettings>;
+}
+
+/**
  * 利用状況の台帳（`usage.ts`）。
  *
  * **持つのはデーモンだけである。** runner に持たせると記憶ストアの鍵が要る
@@ -590,6 +643,15 @@ export interface Stores {
    * あり、用途が増えるたびに実装を直さずに済ませるためにここに置く。
    */
   profile: ProfileStore;
+  /**
+   * 認証トークンのプール（Issue #393）。
+   *
+   * **省略可能にしないこと**（`schedules` / `inbox` と同じ理由）。器が違うだけで
+   * 上の層が見るものは同じである、という約束をここでも保つ——ここを任意にすると、
+   * 片方の器でだけ「枠に当たったときに他のトークンへ回せる」という能力差が
+   * 生まれる（north_star 禁止1）。
+   */
+  tokens: TokenPoolStore;
   /**
    * 利用状況の台帳。
    *

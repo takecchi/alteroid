@@ -150,12 +150,13 @@ function ConversationList({
       </div>
 
       {/*
-        `scanned` は「日誌をどこまで遡ったか」。全部を見たとは限らないので、
+        `scanned` は「人間との往復をどこまで遡ったか」（マネージャーとの往復・
+        内部ターンは数えない。issue #418）。全部を見たとは限らないので、
         黙って切らずに出す（掘れば降りられる、が要件）。
       */}
       {data !== undefined && (
         <p className="border-t border-border px-3 py-2 text-[11px] text-muted">
-          日誌 {data.scanned} 件を走査
+          人間との往復 {data.scanned} 件を走査
         </p>
       )}
     </aside>
@@ -822,10 +823,11 @@ export function ChatPane({
         className="min-h-0 flex-1 overflow-y-auto py-4 pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]"
       >
         {/*
-          **遡り切れていないことを言う。** サーバは日誌の新しい方から `scan` 件しか
-          見ないので、古い会話は「続きがあるのに出ていない」状態になりうる。ここが
-          無いと、出ている分が全部だと読める（下の `Empty` は「まだ何も話していない」
-          と読めるので、空のときこそ効く）。
+          **遡り切れていないことを言う。** サーバは人間との往復の新しい方から
+          `scan` 件しか見ない（マネージャーとの往復・内部ターンは数えない。
+          issue #418）ので、古い会話は「続きがあるのに出ていない」状態になり
+          うる。ここが無いと、出ている分が全部だと読める（下の `Empty` は
+          「まだ何も話していない」と読めるので、空のときこそ効く）。
 
           `reachedStart` が真のときは出さない。**窓が先頭に届いているなら、出ている
           分が全部である**ことが言えていて、そこに但し書きを出すと「常に出ている
@@ -833,7 +835,7 @@ export function ChatPane({
         */}
         {history.data?.reachedStart === false && (
           <p className="mb-3 text-[11px] text-muted">
-            {`日誌を ${history.data.scanned} 件遡ったが、先頭には届いていない。これより古いやりとりが残っている可能性がある。`}
+            {`人間との往復を ${history.data.scanned} 件遡ったが、先頭には届いていない。これより古いやりとりが残っている可能性がある。`}
           </p>
         )}
         {/*

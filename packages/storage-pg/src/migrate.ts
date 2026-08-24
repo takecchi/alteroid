@@ -297,6 +297,40 @@ const STATEMENTS = [
   // どちらも区別せず `{ kind: 'unknown' }` として扱う（`schema.ts` の
   // `memory.createdAt` の doc）。安全な既定である——値を作らない。
   `alter table memory add column if not exists created_at timestamptz`,
+
+  // --- 会話の窓を with で絞る（journal.ts の list()。issue #418） -----------
+  // 絞りを limit より前へ移した結果、pg は「with に当たる行が scan 件見つかる
+  // まで seq を逆順に辿る」形になる。この式索引が無いと、type/at の索引では
+  // with の絞りにも seq の順序にも効かない（`schema.ts` の
+  // `journal_exchange_with_seq_idx` の doc）。新しい列を足すわけではないので、
+  // 既存行の意味は1つも変わらない。
+  `create index if not exists journal_exchange_with_seq_idx
+     on journal ((entry->>'with'), seq)`,
+
+  // --- 認証トークンのプール（Issue #393「PR1 プールの器」） -------------------
+  // **回さない。** ここが持つのは正本の置き場だけ。まだ誰の DB にも無い新規
+  // テーブルなので、他のテーブルのような「列を足す→鍵を差し替える」の順序は
+  // 要らず、最初から今の形で作ってよい。
+  `create table if not exists agent_tokens (
+     id text primary key,
+     label text not null,
+     value text not null,
+     order_index integer not null,
+     disabled_at timestamptz,
+     cooldown_until bigint,
+     last_rejected_at timestamptz,
+     last_rejected_reason text,
+     invalidated_at timestamptz,
+     invalidated_reason text
+   )`,
+
+  // 回す契機と冷却の既定。高々1行（id = 'default'）。
+  `create table if not exists agent_token_settings (
+     id text primary key,
+     rotate_on text not null,
+     cooldown_ms bigint not null,
+     updated_at timestamptz
+   )`,
 ] as const;
 
 export async function migrate(db: Db): Promise<void> {

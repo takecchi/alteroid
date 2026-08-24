@@ -60,6 +60,10 @@ export class FsJournalStore implements JournalStore {
         const entry = parseLine(lines[i]);
         if (!entry) continue;
         if (query.types && !query.types.includes(entry.type)) continue;
+        // **`with` は `limit` より前（この `continue` で候補から落とす時点）で
+        // 効かせる**（issue #418 の穴の本体）。`with` を持つのは `exchange`
+        // だけなので、非 exchange は `types` を明示していなくてもここで落ちる。
+        if (query.with && (entry.type !== 'exchange' || !query.with.includes(entry.with))) continue;
         if (query.since && entry.at < query.since) continue;
         if (query.until && entry.at > query.until) continue;
         found.push(entry);

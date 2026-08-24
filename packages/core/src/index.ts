@@ -186,12 +186,23 @@ export {
   humanExchanges,
   preview,
   reachedStart,
+  readConversationWindow,
   searchExchanges,
   toMessage,
   type ConversationMessage,
   type ConversationSummary,
   type Exchange,
 } from './conversation.js';
+/**
+ * `JournalStore` の `with` 絞りの契約（issue #418）。3実装（インメモリ /
+ * `storage-fs` / `storage-pg`）それぞれの歯がこれを呼んで揃っていることを測る
+ * — 1つで測って3つとも測ったことにしない（`persona-contract.test.ts` と
+ * 同じ作法）。
+ */
+export {
+  verifyJournalStoreWithContract,
+  type JournalStoreWithContractSubject,
+} from './journal-with-contract.js';
 /**
  * クローンの自己認識。正典（`docs/*.md`）の全文はビルド時に焼き込まれる
  * （`scripts/write-canon.mjs`）。要約を手書きしないこと — docs と二重管理になる。
@@ -357,6 +368,33 @@ export {
   type ProfileService,
   type ProfileServiceOptions,
 } from './profile-service.js';
+/**
+ * 認証トークンのプール（Issue #393「PR1 プールの器」）。**回さない。** 検知も
+ * 切替もここには無い——器・設定・入出力の口だけを持つ。
+ */
+export {
+  agentTokenInputSchema,
+  agentTokenViewSchema,
+  DEFAULT_TOKEN_COOLDOWN_MS,
+  DEFAULT_TOKEN_ROTATION_POLICY,
+  DEFAULT_TOKEN_ROTATION_SETTINGS,
+  TokenPoolInputError,
+  normalizeTokenPool,
+  toAgentTokenView,
+  tokenRotationPolicySchema,
+  tokenRotationSettingsSchema,
+  type AgentToken,
+  type AgentTokenInput,
+  type AgentTokenView,
+  type NormalizeTokenPoolOptions,
+  type TokenRotationPolicy,
+  type TokenRotationSettings,
+} from './token-pool.js';
+export {
+  createTokenPoolService,
+  type TokenPoolService,
+  type TokenPoolServiceOptions,
+} from './token-pool-service.js';
 export {
   createRunnerRegistry,
   isFencedRunnerError,

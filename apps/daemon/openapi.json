@@ -71,6 +71,10 @@
     {
       "name": "access",
       "description": "アクセス許可の付与・剥奪。実行環境の持ち主（状態ファイルを読める者）だけが叩ける"
+    },
+    {
+      "name": "tokens",
+      "description": "認証トークンのプール（Issue #393）。**回さない**——枠に当たったときに回す候補を置くだけの器。値は決して出さない（label と指紋だけ）"
     }
   ],
   "components": {
@@ -383,7 +387,7 @@
         "operationId": "getConversations",
         "tags": ["conversations"],
         "summary": "会話の一覧",
-        "description": "`POST /chat` の SSE は流すだけで読み直す口が無かった。器（端末・タブ・アプリ）を替えても続きから話せるための一覧。日誌から組み立てるので新しい状態は持たない。新しい順。`scanned` で遡り切れていないことが分かる（黙って打ち切らない）。",
+        "description": "`POST /chat` の SSE は流すだけで読み直す口が無かった。器（端末・タブ・アプリ）を替えても続きから話せるための一覧。日誌から組み立てるので新しい状態は持たない。新しい順。`scanned` は人間との往復を何件遡ったか（マネージャーとの往復・内部ターンは数えない。issue #418）で、遡り切れていないことが分かる（黙って打ち切らない）。",
         "responses": {
           "200": {
             "description": "会話の一覧（新しい順）。",
@@ -487,7 +491,7 @@
         "operationId": "getConversationsById",
         "tags": ["conversations"],
         "summary": "1つの会話の中身（古い順）",
-        "description": "1つの会話の中身（古い順）。器を替えても続きから話せるための口。**黙って打ち切らない** — `scanned` でどこまで遡ったか、`reachedStart` で窓が日誌の先頭に届いたかを返す。`404` は `reachedStart` が真のときだけ返る（「無い」と「遡り切れていない」を同じ応答にしないため）。",
+        "description": "1つの会話の中身（古い順）。器を替えても続きから話せるための口。**黙って打ち切らない** — `scanned`（人間との往復を何件遡ったか。マネージャーとの往復・内部ターンは数えない。issue #418）でどこまで遡ったか、`reachedStart` で窓が日誌の先頭に届いたかを返す。`404` は `reachedStart` が真のときだけ返る（「無い」と「遡り切れていない」を同じ応答にしないため）。",
         "responses": {
           "200": {
             "description": "会話の中身。`reachedStart` が偽なら、窓の外に続きが残っている可能性がある。`messages` が空でこれが偽の場合は「無い」ではなく**判定できない**。",
@@ -5527,6 +5531,362 @@
                   }
                 },
                 "required": ["script"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tokens": {
+      "get": {
+        "operationId": "getTokens",
+        "tags": ["tokens"],
+        "summary": "認証トークンのプールと設定を読む",
+        "description": "プールが空でも 200 を返し、既定の設定（`free_exhausted`）を返す（受け入れ基準7: プールが空の既定構成の挙動を変えない）。",
+        "responses": {
+          "200": {
+            "description": "プール（値は出さない）と設定。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tokens": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "order": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "sha256": {
+                            "type": "string"
+                          },
+                          "disabledAt": {
+                            "type": "string"
+                          },
+                          "cooldownUntil": {
+                            "type": "number"
+                          },
+                          "lastRejectedAt": {
+                            "type": "string"
+                          },
+                          "lastRejectedReason": {
+                            "type": "string"
+                          },
+                          "invalidatedAt": {
+                            "type": "string"
+                          },
+                          "invalidatedReason": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["id", "label", "order", "sha256"]
+                      }
+                    },
+                    "settings": {
+                      "type": "object",
+                      "properties": {
+                        "rotateOn": {
+                          "type": "string",
+                          "enum": ["free_exhausted", "overage_exhausted", "off"]
+                        },
+                        "cooldownMs": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "updatedAt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["rotateOn", "cooldownMs"]
+                    }
+                  },
+                  "required": ["tokens", "settings"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "実行環境の持ち主ではない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "putTokens",
+        "tags": ["tokens"],
+        "summary": "認証トークンのプールを全文置換する",
+        "description": "入力に無い行は消える。壊れた入力（新規行に value が無い・消えた id を指す・id 重複）は 400 で理由を返し、保存しない。",
+        "responses": {
+          "200": {
+            "description": "置き換え後のプール（値は出さない）と設定。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tokens": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "order": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "sha256": {
+                            "type": "string"
+                          },
+                          "disabledAt": {
+                            "type": "string"
+                          },
+                          "cooldownUntil": {
+                            "type": "number"
+                          },
+                          "lastRejectedAt": {
+                            "type": "string"
+                          },
+                          "lastRejectedReason": {
+                            "type": "string"
+                          },
+                          "invalidatedAt": {
+                            "type": "string"
+                          },
+                          "invalidatedReason": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["id", "label", "order", "sha256"]
+                      }
+                    },
+                    "settings": {
+                      "type": "object",
+                      "properties": {
+                        "rotateOn": {
+                          "type": "string",
+                          "enum": ["free_exhausted", "overage_exhausted", "off"]
+                        },
+                        "cooldownMs": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "updatedAt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["rotateOn", "cooldownMs"]
+                    }
+                  },
+                  "required": ["tokens", "settings"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "入力が壊れている（保存していない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "実行環境の持ち主ではない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "保存に失敗した。**理由の本文は返さない**（ドライバの例外は失敗したクエリの束縛パラメータを添えてくることがあるため）。跡は stderr に残る。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tokens": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "label": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "value": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "order": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "disabled": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": ["label"]
+                    }
+                  }
+                },
+                "required": ["tokens"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tokens/policy": {
+      "put": {
+        "operationId": "putTokensPolicy",
+        "tags": ["tokens"],
+        "summary": "回す契機・冷却の既定を変える",
+        "description": "省略した項目は現状のまま変えない。",
+        "responses": {
+          "200": {
+            "description": "更新後の設定。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "rotateOn": {
+                      "type": "string",
+                      "enum": ["free_exhausted", "overage_exhausted", "off"]
+                    },
+                    "cooldownMs": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["rotateOn", "cooldownMs"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "トークンのプールの器が配線されていない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "実行環境の持ち主ではない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "rotateOn": {
+                    "type": "string",
+                    "enum": ["free_exhausted", "overage_exhausted", "off"]
+                  },
+                  "cooldownMs": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                }
               }
             }
           }

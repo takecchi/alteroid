@@ -6,11 +6,13 @@ import {
   conversationMessages,
   humanExchanges,
   reachedStart,
+  readConversationWindow,
   searchExchanges,
   toMessage,
 } from './conversation.js';
 import type { Exchange } from './conversation.js';
 import type { JournalEntry } from './schema.js';
+import { createMemoryStores } from './testing.js';
 
 /**
  * `conversation.ts` — 日誌の並びを会話へ畳み直す規則の純粋関数。
@@ -223,5 +225,99 @@ describe('reachedStart', () => {
 
   it('0件でも scan を下回っていれば届いている', () => {
     expect(reachedStart(0, 2000)).toBe(true);
+  });
+});
+
+/**
+ * `readConversationWindow` — `GET /conversations` / `GET /conversations/:id` /
+ * `conversation_read` が共有する、唯一の窓の組み立て（issue #418）。
+ *
+ * **これが #418 の症状そのものを再現・固定する歯である。** 「絞りが効いている」
+ * だけでは弱い（`with` を返却後に絞る旧実装でも、`scan` が十分大きければ同じ
+ * 結果になる）。ここで測るのは**窓に食われないこと** — `scan` を症状が出るほど
+ * 小さくし、manager との往復を `scan` より多く積んでも、human の会話が消えない
+ * ことを確かめる。
+ */
+describe('readConversationWindow（issue #418）', () => {
+  it('manager の往復を scan より多く積んでも、human の会話は窓に食われない', async () => {
+    const stores = createMemoryStores();
+    // human を先に3件積む（古い側）。
+    for (let i = 0; i < 3; i += 1) {
+      await stores.journal.append({
+        type: 'exchange',
+        with: 'human',
+        role: 'inbound',
+        text: `human-${i}`,
+        conversationId: 'conv-1',
+      });
+    }
+    // manager / self を、human よりずっと多く（scan を超える数）積む（新しい側）。
+    for (let i = 0; i < 50; i += 1) {
+      await stores.journal.append({
+        type: 'exchange',
+        with: i % 2 === 0 ? 'manager' : 'self',
+        role: 'inbound',
+        text: `noise-${i}`,
+      });
+    }
+
+    // scan=3 という、症状が出るほど小さい窓。
+    // 旧実装（`types: ['exchange']` だけで窓を切ってから `with` を絞る）だと、
+    // 新しい3件はすべて manager/self なので、ここは0件になっていた。
+    const entries = await readConversationWindow(stores.journal, { scan: 3 });
+
+    expect(entries).toHaveLength(3);
+    expect(entries.every((entry) => entry.type === 'exchange' && entry.with === 'human')).toBe(
+      true,
+    );
+    expect(entries.map((entry) => (entry as Exchange).text)).toEqual([
+      'human-2',
+      'human-1',
+      'human-0',
+    ]);
+  });
+
+  it("types: ['exchange'] と with: ['human'] を渡す（with が limit より前で効くための前提）", async () => {
+    const calls: unknown[] = [];
+    const stub = {
+      list: async (query?: unknown) => {
+        calls.push(query);
+        return [];
+      },
+    };
+
+    await readConversationWindow(stub, { scan: 42 });
+
+    expect(calls).toEqual([{ limit: 42, types: ['exchange'], with: ['human'] }]);
+  });
+
+  it('since / until が指定されたときだけ渡す（未指定と空文字を混同しない）', async () => {
+    const calls: unknown[] = [];
+    const stub = {
+      list: async (query?: unknown) => {
+        calls.push(query);
+        return [];
+      },
+    };
+
+    await readConversationWindow(stub, {
+      scan: 10,
+      since: '2026-08-01T00:00:00.000Z',
+      until: '2026-08-20T00:00:00.000Z',
+    });
+
+    expect(calls).toEqual([
+      {
+        limit: 10,
+        types: ['exchange'],
+        with: ['human'],
+        since: '2026-08-01T00:00:00.000Z',
+        until: '2026-08-20T00:00:00.000Z',
+      },
+    ]);
+
+    await readConversationWindow(stub, { scan: 10 });
+    expect(calls[1]).not.toHaveProperty('since');
+    expect(calls[1]).not.toHaveProperty('until');
   });
 });

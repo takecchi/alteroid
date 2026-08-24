@@ -55,6 +55,30 @@ export function noteUnreadableRecord(what: string, detail: string, error: unknow
 }
 
 /**
+ * 発行した id が既に使われていて、引き直したことを stderr へ1行だけ残す（#238）。
+ *
+ * **`noteDroppedRecord` を流用しないのは、あれが「記録できませんでした」と
+ * 書くからである。** id の衝突は「記録できなかった」でも「読み出せなかった」
+ * でもない第三の状況 — 発行しようとした id に、いま走っている別の委譲の記録が
+ * **既に在った**、というものである。そこにこの2つの文を当てると、跡そのものが
+ * 何が起きたかを取り違えさせる（この2関数が防ごうとしているものと同じ形になる）。
+ *
+ * **本文は出さない。** 理由は `noteDroppedRecord` / `noteUnreadableRecord` と
+ * 同じで、ここへ渡ってくる値には外の世界から拾ってきた任意の文字列は入らない
+ * が（`managerId` はこちらが発行した id）、跡を残す口を1つに揃えるという
+ * このファイルの作法（`note()`）に従う。
+ *
+ * @param managerId 衝突した（＝既に `#records` に在った）id。こちらが発行した
+ *   id であって自由文ではないので、そのまま載せてよい。
+ * @param attempt 何回目の発行でこの衝突が起きたか（1始まり）。
+ */
+export function noteManagerIdCollision(managerId: string, attempt: number): void {
+  note(
+    `managerId の発行が衝突したので引き直しました（managerId=${tag(managerId)} attempt=${attempt}）`,
+  );
+}
+
+/**
  * 受信箱が閉じた後に届いた合図を、このプロセスでは処理しなかったことを
  * stderr へ1行だけ残す。
  *
@@ -291,9 +315,20 @@ const TAG_LIMIT = 64;
  * パラメータを添えてくることがある（＝本文が裏口から戻ってくる）ので、
  * **1行目だけ・長さも切る**。
  *
- * **記録の失敗をログへ出すところは、すべてここを通すこと。** いま漏れる例外を
- * 投げるストアが無くても、素の `String(error)` を1か所でも残すと、その1か所だけ
- * 将来のストア実装に無防備なまま置き去りになる（そして誰も気づかない）。
+ * **記録の失敗をログへ出すところは、すべてここを通すこと。** 素の
+ * `String(error)` を1か所でも残すと、その1か所だけストア実装に無防備なまま
+ * 置き去りになる（そして誰も気づかない）。
+ *
+ * **⚠️ これは仮想の危険ではない。実測（2026-08-24 観測）:** `drizzle-orm@0.45.2`
+ * の `PgPreparedQuery` は失敗したクエリを `DrizzleQueryError` で包み直し、その
+ * `message` は `Failed query: <sql>` の**次の行**に `params: <束縛パラメータ>` を
+ * 置く。PGlite に当てて確かめたところ、insert の失敗で列の値がそのまま並んだ。
+ *
+ * **⚠️ そして、いまここで値が落ちているのはその「2行目」という位置のおかげで
+ * あって、設計上の保証ではない。** ドライバが改行の位置を変えれば破れる——それは
+ * こちらが制御していない。**⟹ 応答へ返す本文の安全を、この関数に肩代わりさせない
+ * こと。** 返してよい例外かどうかは型で分ける（例: `token-pool.ts` の
+ * `TokenPoolInputError`）。ここが受け持つのは stderr へ残す跡の側だけである。
  */
 export function reasonOf(error: unknown): string {
   const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error);

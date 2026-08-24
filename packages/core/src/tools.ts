@@ -8,6 +8,7 @@ import {
   collectConversations,
   humanExchanges,
   reachedStart,
+  readConversationWindow,
   searchExchanges,
   toMessage,
 } from './conversation.js';
@@ -2775,7 +2776,10 @@ export function createCloneTools(context: ToolContext) {
           .min(1)
           .max(10_000)
           .optional()
-          .describe('日誌を何件遡るか（既定 2000）。遡り切れたかは応答の注記で分かる'),
+          .describe(
+            '人間との往復を何件遡るか（既定 2000。マネージャーとの往復・内部ターンは' +
+              '数えない。issue #418）。遡り切れたかは応答の注記で分かる',
+          ),
         limit: z
           .number()
           .int()
@@ -2826,18 +2830,23 @@ export function createCloneTools(context: ToolContext) {
 
         // --- ここから一覧系。まず窓を取り、遡った件数と先頭到達を毎回言う ---
         const scanLimit = scan ?? 2000;
-        const entries = await stores.journal.list({
-          limit: scanLimit,
-          types: ['exchange'],
+        /**
+         * 窓の組み立ては `readConversationWindow` 1か所に閉じる（issue #418）。
+         * `types: ['exchange']` と `with: ['human']` をここで手組みし直さない
+         * — 手組みし直した場所ができるたびに `with` を絞り忘れる余地が生まれる
+         * （`GET /conversations` / `GET /conversations/:id` と同じ理由）。
+         */
+        const entries = await readConversationWindow(stores.journal, {
+          scan: scanLimit,
           ...(since === undefined ? {} : { since }),
           ...(until === undefined ? {} : { until }),
         });
         // **`since` を渡されたら「先頭に届いた」とは言えない。**
         //
         // `reachedStart` が答えるのは「ストアが行を出し切ったか」だけである。
-        // ところが `since` は LIMIT より先に効く（fs / pg / memory とも
-        // WHERE → LIMIT の順。`storage-pg/src/journal.ts` は `where()` の後に
-        // `.limit()` を呼ぶ）ので、件数が `scan` に届かないのは
+        // ところが `since`（と #418 で足した `with`）は LIMIT より先に効く
+        // （fs / pg / memory とも WHERE → LIMIT の順。`storage-pg/src/journal.ts`
+        // は `where()` の後に `.limit()` を呼ぶ）ので、件数が `scan` に届かないのは
         // 「日誌の先頭まで見た」ではなく「`since` より新しい範囲を出し切った」
         // でしかない。**ここを混ぜると「無い」と言い切ってしまう** —
         // 実際には `since` より古い側に在りうるのに、下の分岐が
@@ -2845,8 +2854,13 @@ export function createCloneTools(context: ToolContext) {
         // （観測の欠落を「無い」と報告する形）そのものである。
         const exhausted = reachedStart(entries.length, scanLimit);
         const reached = exhausted && since === undefined;
+        // **「日誌を」ではなく「人間との往復を」。** #418 より前は `entries` に
+        // マネージャー / 内部ターンとの往復も混ざっていたので「日誌を N 件」が
+        // そのまま `scan` の意味と一致していた。いまは `readConversationWindow`
+        // が `with: ['human']` を先に効かせるので、`entries.length` は人間との
+        // 往復の件数である——文言もそれに合わせる。
         const scanNote =
-          `（日誌を ${entries.length} 件遡った。` +
+          `（人間との往復を ${entries.length} 件遡った。` +
           (reached
             ? '先頭に届いている）'
             : exhausted

@@ -14,6 +14,7 @@ import { FsProfileStore } from './profile.js';
 import { resolvePaths, type AlteroidPaths } from './paths.js';
 import { FsScheduleStore } from './schedules.js';
 import { FsSessionRegistry } from './sessions.js';
+import { FsTokenPoolStore } from './token-pool.js';
 import { FsUsageStore } from './usage.js';
 
 export { FsTranscriptArchive } from './archive.js';
@@ -26,6 +27,7 @@ export { FsPersonaStore } from './persona.js';
 export { FsProfileStore } from './profile.js';
 export { FsScheduleStore } from './schedules.js';
 export { FsSessionRegistry } from './sessions.js';
+export { FsTokenPoolStore } from './token-pool.js';
 export { FsUsageStore } from './usage.js';
 export { ALTEROID_HOME_ENV, defaultRoot, resolvePaths, type AlteroidPaths } from './paths.js';
 
@@ -47,6 +49,7 @@ export function createFsStores(root?: string): Stores & { paths: AlteroidPaths }
     sessions: new FsSessionRegistry(paths.state),
     auth: new FsAuthStore(paths.auth),
     profile: new FsProfileStore(paths.profile),
+    tokens: new FsTokenPoolStore(paths.tokens),
     usage: new FsUsageStore(paths.usage),
   };
 }
@@ -112,6 +115,7 @@ alteroid のクローンの人格データ。**すべて人間が直接読んで
 | \`auth/\` | ログインしたアカウントと、alteroid を使ってよいかの許可。**手で編集しない**（許可の付与は \`alteroid access grant\`） |
 | \`profile.sh\` | 実行環境プロファイル（\`.zprofile\` 相当）。ここに \`export\` を書けば、クローンにもマネージャーにも作業者にも届く。器を作り直す必要は無い |
 | \`usage/\` | 利用状況の台帳（alteroid 自身が使った Claude のトークン・費用の推定）。**手で編集しない**（差分の基準がずれる） |
+| \`tokens.json\` | 認証トークンのプール（枠に当たったときに回す候補）。**手で編集しない**（\`alteroid token\` / \`PUT /tokens\` を経由する） |
 
 書き換えるのは \`memory/\` だけでよい。日誌を読んで「それは違う」と伝えれば、
 その否定が次の記憶になる。

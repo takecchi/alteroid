@@ -1,4 +1,6 @@
 import {
+  agentTokenInputSchema,
+  agentTokenViewSchema,
   commitmentSchema,
   createMemoryStores,
   jobSchema,
@@ -9,6 +11,8 @@ import {
   pendingApprovalSchema,
   runnerCredentialFingerprintSchema,
   runnerProfileFingerprintSchema,
+  tokenRotationPolicySchema,
+  tokenRotationSettingsSchema,
   unreadableCommitmentSchema,
   waitingKindSchema,
   workspaceLocatorSchema,
@@ -206,7 +210,11 @@ const conversationSchema = z.object({
 
 export const conversationsResponseSchema = z.object({
   conversations: z.array(conversationSchema),
-  /** 遡った範囲。ここより古い会話は出てこない（`scan` を増やせば見える）。 */
+  /**
+   * 遡った範囲。**人間との往復を何件遡ったか**（マネージャーとの往復・内部
+   * ターンは数えない。issue #418）。ここより古い**人間との**会話は出てこない
+   * （`scan` を増やせば見える）。
+   */
   scanned: z.number().int(),
 });
 
@@ -222,9 +230,9 @@ export const conversationDetailResponseSchema = z.object({
   conversationId: z.string(),
   messages: z.array(conversationMessageSchema),
   /**
-   * 日誌を何件遡ったか。**一覧（`scanned`）と同じ意味で、詳細にも要る** — この口も
-   * 新しい方から `scan` 件しか見ないので、ここが無いと「この会話はこれで全部」と
-   * 読める応答になる。
+   * 人間との往復を何件遡ったか。**一覧（`scanned`）と同じ意味で、詳細にも要る**
+   * — この口も新しい方から `scan` 件（人間との往復だけを数えて。issue #418）
+   * しか見ないので、ここが無いと「この会話はこれで全部」と読める応答になる。
    */
   scanned: z.number().int(),
   /**
@@ -764,6 +772,40 @@ export const profileUpdateResponseSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// 認証トークンのプール（/tokens）——Issue #393「PR1 プールの器」。**回さない。**
+// ---------------------------------------------------------------------------
+
+/**
+ * `GET /tokens` `PUT /tokens` の応答。
+ *
+ * `agentTokenViewSchema`（core）をそのまま使う——`AgentTokenView` は最初から
+ * *外向き*に書かれた型で（`value` を持たない指紋の形）、`runnerCredentialFingerprintSchema`
+ * と同じ理由でここに書き直さない。`tokenRotationSettingsSchema` も同様——
+ * 秘密を持たない設定行そのものなので、そのまま外へ出してよい。
+ */
+export const tokensResponseSchema = z.object({
+  tokens: z.array(agentTokenViewSchema),
+  settings: tokenRotationSettingsSchema,
+});
+
+/**
+ * `PUT /tokens` の body。`agentTokenInputSchema`（core）をそのまま使う——
+ * `value` を省略できる形そのものが、人間・CLI・クローンの道具が共有する入力
+ * 契約であって、ここで別の形に書き直す理由が無い。
+ */
+export const tokensUpdateRequestSchema = z.object({
+  tokens: z.array(agentTokenInputSchema),
+});
+
+/**
+ * `PUT /tokens/policy` の body。3つとも省略可（部分更新）。
+ */
+export const tokensPolicyUpdateRequestSchema = z.object({
+  rotateOn: tokenRotationPolicySchema.optional(),
+  cooldownMs: z.number().int().positive().optional(),
+});
+
+// ---------------------------------------------------------------------------
 // アーカイブ（/archive）
 // ---------------------------------------------------------------------------
 
@@ -840,6 +882,12 @@ export const openApiDocumentation: GenerateSpecOptions['documentation'] = {
       name: 'access',
       description:
         'アクセス許可の付与・剥奪。実行環境の持ち主（状態ファイルを読める者）だけが叩ける',
+    },
+    {
+      name: 'tokens',
+      description:
+        '認証トークンのプール（Issue #393）。**回さない**——枠に当たったときに回す' +
+        '候補を置くだけの器。値は決して出さない（label と指紋だけ）',
     },
   ],
   components: {

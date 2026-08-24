@@ -221,6 +221,8 @@ interface SetupOptions {
   withheldEnvKeys?: readonly string[];
   /** 差し替えると runner ごと入れ替えられる（HTTP 越しの検証に使う）。 */
   runner?: RunnerClient;
+  /** 衝突を再現する試験のための注入口（`ManagerPoolOptions.generateManagerId`）。 */
+  generateManagerId?: () => string;
 }
 
 /**
@@ -255,6 +257,9 @@ function setup(
     // **本番と同じ1本道を通す。** 降ろし直しは更新と同じ列に入る必要があるので、
     // ここを省くと「重なったら壊れる」経路をテストが見なくなる。
     profile: createProfileService({ stores, runners: registry }),
+    ...(options.generateManagerId === undefined
+      ? {}
+      : { generateManagerId: options.generateManagerId }),
   });
   return { pool, stores, sessions, inbox, runner };
 }
@@ -1118,6 +1123,95 @@ describe('マネージャー', () => {
     // ただ動かなくなる = デグレードであって境界ではない。
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('token-for-the-sdk');
     expect(env.PATH).toBe('/usr/bin');
+
+    await s.pool.stop();
+  });
+});
+
+/**
+ * managerId の発行 — **切り詰めない。仮定ではなく `#records` を引いて確かめる**
+ * （#238）。
+ *
+ * `randomUUID` を差し替える前例がこの repo に無いので（`vi.mock('node:crypto')`
+ * は使わない）、`ManagerPoolOptions.generateManagerId` で差し替える。`now` と
+ * 同じ形の注入口である。
+ */
+describe('managerId の発行（#238）', () => {
+  it('切り詰めない — 既定の発行器は `mgr-` に UUID 全体を続ける', async () => {
+    const s = setup();
+    const summary = await s.pool.start({ request: '調べて' });
+
+    // UUIDv4 全体（36文字）。旧実装は先頭8桁で切り詰めていた
+    // （`mgr-${randomUUID().slice(0, 8)}`）。
+    expect(summary.managerId).toMatch(
+      /^mgr-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+
+    await s.pool.stop();
+  });
+
+  it('発行した id が既に走っている委譲のものなら、上書きせず引き直し、跡を残す（本文は出さない）', async () => {
+    const generateManagerId = vi
+      .fn<() => string>()
+      .mockReturnValueOnce('mgr-dup')
+      .mockReturnValueOnce('mgr-dup') // 2本目の1回目の発行。1本目と衝突する
+      .mockReturnValueOnce('mgr-fresh'); // 引き直し
+    const s = setup(undefined, { generateManagerId });
+
+    const first = await s.pool.start({
+      request: `一本目 秘密は ghp_000000000000000000000000000000000000 だ`,
+    });
+    expect(first.managerId).toBe('mgr-dup');
+
+    const lines = await captureStderr(async () => {
+      const second = await s.pool.start({ request: '二本目' });
+      // **上書きされず、引き直した id が使われる。**
+      expect(second.managerId).toBe('mgr-fresh');
+    });
+
+    // **跡が残る。** id と試行回数だけで、本文（依頼文）は載らない。
+    const text = lines.join('');
+    expect(text).toContain('managerId の発行が衝突したので引き直しました');
+    expect(text).toContain('managerId=mgr-dup');
+    expect(text).toContain('attempt=1');
+    expect(text).not.toContain('ghp_');
+    expect(text).not.toContain('一本目');
+    expect(text).not.toContain('二本目');
+
+    // **1本目の記録は上書きされていない。** `#records.set` が黙って潰していれば
+    // ここが二本目の request で上書きされる。
+    const listed = await s.pool.list();
+    expect(listed.find((m) => m.managerId === 'mgr-dup')?.request).toContain('一本目');
+    expect(listed.find((m) => m.managerId === 'mgr-fresh')?.request).toBe('二本目');
+
+    await s.pool.stop();
+  });
+
+  it('引き直しが上限に達したら、上書きせず例外で止める', async () => {
+    // 常に同じ id しか返さない壊れた発行器。上限回数ぶん必ず衝突し続ける。
+    const generateManagerId = vi.fn<() => string>().mockReturnValue('mgr-stuck');
+    const s = setup(undefined, { generateManagerId });
+
+    const first = await s.pool.start({ request: '一本目' });
+    expect(first.managerId).toBe('mgr-stuck');
+
+    const lines = await captureStderr(async () => {
+      await expect(s.pool.start({ request: '二本目' })).rejects.toThrow(
+        /managerId の発行が.*回連続で衝突/,
+      );
+    });
+
+    // 上限回数ぶん、引き直しの跡が残っている（黙って諦めていない）。
+    const text = lines.join('');
+    expect(text).toContain('managerId の発行が衝突したので引き直しました');
+
+    // **1本目の記録は無傷。二本目は影も形も残らない**（例外を投げる前に
+    // `#records.set` していれば、ここに `mgr-stuck` の request が「二本目」に
+    // 書き換わっている）。
+    const listed = await s.pool.list();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.managerId).toBe('mgr-stuck');
+    expect(listed[0]?.request).toBe('一本目');
 
     await s.pool.stop();
   });
