@@ -65,6 +65,7 @@ import { createMemoryStores } from './testing.js';
 class StickyRunner implements RunnerClient {
   readonly runnerId: string;
   readonly runnerIdKnown = true;
+  readonly workspacePathKnown = true;
   readonly workspacePath = '/work/project';
   /** この器が抱えているセッション（`list()` がそのまま返す）。 */
   readonly sessions = new Map<string, RunnerManagerState>();

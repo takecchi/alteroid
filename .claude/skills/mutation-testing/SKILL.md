@@ -29,7 +29,9 @@ node .claude/skills/mutation-testing/mutate.mjs run --plan <plan.json>     # 本
 # baseline / run は `--max-workers <n>` と `--max-workers=<n>` の両方を受ける（#331）。
 # 器が混んでいて並列度を下げるよう指示されている場面向け。省略時は既定の 4 のまま
 # （`mutate-core.mjs` の DEFAULT_MAX_WORKERS）。
-node .claude/skills/mutation-testing/mutate.mjs selftest --scenario <name> # 自己検証（受け入れ条件の3つ+1に加え、レビューで見つかった欠陥2件の回帰確認）。省略で一覧を出す
+# selftest --scenario <name>: 自己検証（受け入れ条件とレビューで見つかった欠陥の回帰確認）。
+# 本数と内訳は数えない — 省略した出力が名乗る一覧（mutate-selftest.mjs の SELFTEST_SCENARIOS）が本籍である。
+node .claude/skills/mutation-testing/mutate.mjs selftest --scenario <name>
 ```
 
 `baseline` / `run` は、印（`MUTATION-IN-PROGRESS.json`）が残っている状態では測定を始めずに落ちる
@@ -176,7 +178,7 @@ node .claude/skills/mutation-testing/mutate.mjs selftest --scenario <name> # 自
     | `process.stderr.write`（既定の reporter） | `Tests  1 passed (1)` | **生存**（正しい） | 見えた       |
 
   - **`process.stdout.write` の中身が見えなくなったわけではない。** 歯は握り潰さず本物の stdout へ通すので出力自体は出るし、失敗の差分にも書いた内容が載る。**見えるのに測定が壊れる、というのがこの形の質の悪さである** — 「出た」を確認して安心すると、判定のほうが反転していることに気づかない。
-  - **ハーネス自身（`mutate.mjs` / `mutate-core.mjs` / `mutate-selftest.mjs`）はこの歯を通らない。** `setupFiles` は vitest が読むもので、ハーネスは素の node プロセスだからである。だから `mutate-core.mjs` の `log()` が `process.stdout.write` を使っているのは**そのままでよい**（実測: `selftest --scenario all` が8シナリオ全部通って exit 0。`mutate-selftest.mjs` が書き出す一時テストも純粋関数しか呼ばないので鳴らない）。**歯が掛かるのは vitest が走らせるテストの中だけである。**
+  - **ハーネス自身（`mutate.mjs` / `mutate-core.mjs` / `mutate-selftest.mjs`）はこの歯を通らない。** `setupFiles` は vitest が読むもので、ハーネスは素の node プロセスだからである。だから `mutate-core.mjs` の `log()` が `process.stdout.write` を使っているのは**そのままでよい**（実測: この節を書いた PR #319 の時点、当時の全シナリオ8件で `selftest --scenario all` が全部通って exit 0。**シナリオは #353 で10件に増えており、この「8」はいまの本数ではなく当時の記録である**。`mutate-selftest.mjs` が書き出す一時テストも純粋関数しか呼ばないので鳴らない）。**歯が掛かるのは vitest が走らせるテストの中だけである。**
 
 **そして直した後、落ちることを確かめる。そのとき「アサーションの不一致で落ちた」のか「タイムアウトで落ちた」のかを見分ける。**
 

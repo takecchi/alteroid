@@ -621,6 +621,36 @@ class HttpRunner implements RunnerClient {
     return this.#runnerIdKnown;
   }
 
+  /**
+   * `hello()` が `/health` から実際に `workspacePath` を受け取ったか（#389）。
+   *
+   * **`this.workspacePath` の既定値（`''`）は、一度も接続できていない段階から
+   * 入っている。** `runnerId` の既定値 `'runner-primary'` と違って*それらしい
+   * 名前*ではないぶん、「空の作業ディレクトリ」と「まだ聞けていない」が同じ
+   * 見た目になる——`#runnerIdKnown` と同じ理由で、この別のフラグで持つ。
+   * **判定は値（`=== ''`）で代用しない**——本当に空文字を名乗る runner と、
+   * 一度も聞けていない runner を区別するのがこのフラグの役目そのものである。
+   * `hello()` が `body.workspacePath` を文字列として読めたときだけ立てる
+   * （空文字列であっても、型が合っていれば「聞けた」——`runnerId` は空文字を
+   * 「聞けていない」として弾くが、`workspacePath` は弾かない。理由は
+   * {@link hello} 内の分岐に書いてある）。
+   */
+  #workspacePathKnown = false;
+
+  /**
+   * {@link #workspacePathKnown} を `RunnerClient` の外から読める形にした口
+   * （#389。{@link runnerIdKnown} と同じ作法）。
+   *
+   * `GET /runners`（`packages/core/src/runner-protocol.ts` の
+   * `heardWorkspacePathOf`）はこれを見て、聞けていない `workspacePath` を
+   * 出さない。`onSwap` / `onLost` は `workspacePath` をそもそも運ばないので
+   * （`RunnerRegistryOptions` の型に欄が無い）、この口を読むのは `entries()`
+   * だけである——`runnerId` の3出口とはここが違う。
+   */
+  get workspacePathKnown(): boolean {
+    return this.#workspacePathKnown;
+  }
+
   constructor(options: HttpRunnerOptions) {
     this.#socketPath = socketPathOf(options.baseUrl);
     this.#displayBaseUrl = options.baseUrl;
@@ -662,7 +692,15 @@ class HttpRunner implements RunnerClient {
       this.runnerId = body.runnerId;
       this.#runnerIdKnown = true;
     }
-    if (typeof body.workspacePath === 'string') this.workspacePath = body.workspacePath;
+    // **空文字を「聞けていない」とは弾かない。** `runnerId` は空文字を弾く
+    // （空文字の宛先名はそもそも意味を持たない）が、`workspacePath` は
+    // 本当に空の作業ディレクトリを名乗る runner がありうる——弾くと、その
+    // 相手と「一度も聞けていない」相手が `''` という同じ値に潰れて区別が
+    // 消える。だからここは型（`typeof === 'string'`）だけを見る。
+    if (typeof body.workspacePath === 'string') {
+      this.workspacePath = body.workspacePath;
+      this.#workspacePathKnown = true;
+    }
     // **`revision` フィールド自体が無ければ触らない**（`undefined` のまま）。
     // 古い runner（この機能より前の版）は「まだ何も言っていない」として扱い、
     // 名簿は `unheard` のまま保つ——`revisionReportOf(undefined)` を無条件で
