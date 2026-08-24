@@ -625,7 +625,9 @@ describe('遡り切れていないことを言う', () => {
     });
     renderChat(`/chat/${CONVERSATION_ID}`);
 
-    expect(await screen.findByText(/日誌を 2000 件遡ったが、先頭には届いていない/)).toBeTruthy();
+    expect(
+      await screen.findByText(/人間との往復を 2000 件遡ったが、先頭には届いていない/),
+    ).toBeTruthy();
     expect(screen.getByText('古い発言')).toBeTruthy();
   });
 

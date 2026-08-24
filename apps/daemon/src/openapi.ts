@@ -206,7 +206,11 @@ const conversationSchema = z.object({
 
 export const conversationsResponseSchema = z.object({
   conversations: z.array(conversationSchema),
-  /** 遡った範囲。ここより古い会話は出てこない（`scan` を増やせば見える）。 */
+  /**
+   * 遡った範囲。**人間との往復を何件遡ったか**（マネージャーとの往復・内部
+   * ターンは数えない。issue #418）。ここより古い**人間との**会話は出てこない
+   * （`scan` を増やせば見える）。
+   */
   scanned: z.number().int(),
 });
 
@@ -222,9 +226,9 @@ export const conversationDetailResponseSchema = z.object({
   conversationId: z.string(),
   messages: z.array(conversationMessageSchema),
   /**
-   * 日誌を何件遡ったか。**一覧（`scanned`）と同じ意味で、詳細にも要る** — この口も
-   * 新しい方から `scan` 件しか見ないので、ここが無いと「この会話はこれで全部」と
-   * 読める応答になる。
+   * 人間との往復を何件遡ったか。**一覧（`scanned`）と同じ意味で、詳細にも要る**
+   * — この口も新しい方から `scan` 件（人間との往復だけを数えて。issue #418）
+   * しか見ないので、ここが無いと「この会話はこれで全部」と読める応答になる。
    */
   scanned: z.number().int(),
   /**

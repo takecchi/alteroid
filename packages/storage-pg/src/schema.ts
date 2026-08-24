@@ -106,6 +106,17 @@ export const journal = pgTable(
   (table) => [
     index('journal_at_idx').on(table.at),
     index('journal_type_at_idx').on(table.type, table.at),
+    /**
+     * `journal.ts` の `list()` が `with` を `seq` の降順（新しい順）と
+     * 組み合わせて絞るための式索引（issue #418）。
+     *
+     * 絞りを `limit` より前へ移した結果、pg は「`with` に当たる行が `scan`
+     * 件見つかるまで `seq` を逆順に辿る」形になる。既定 `scan=2000` でも、
+     * マネージャーとの往復が多い日誌では実質フルスキャンになりうる —
+     * この索引が無いと `journal_type_at_idx`（`type, at`）では `with` の
+     * 絞りにも `seq` の順序にも効かない。
+     */
+    index('journal_exchange_with_seq_idx').on(sql`(${table.entry}->>'with')`, table.seq),
   ],
 );
 
