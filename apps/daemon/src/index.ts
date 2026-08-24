@@ -28,6 +28,7 @@ import {
   resolveManagerModel,
   resolveWorkerModel,
   WITHHELD_ENV_KEYS,
+  writeStderrSync,
   type RunnerClient,
   type RunnerSource,
   type SelfFacts,
@@ -771,7 +772,10 @@ export async function main(): Promise<void> {
   });
 
   server.on('error', (error: unknown) => {
-    process.stderr.write(`alteroidd: 待ち受けに失敗しました (port ${port}): ${String(error)}\n`);
+    // 直後に process.exit(1) が来るので `process.stderr.write` は使わない
+    // （fd がパイプだと POSIX 上は非同期で、書いた行が exit に巻き込まれて
+    // 失われることがある。#248）。`writeStderrSync` は fd 2 へ同期で書く。
+    writeStderrSync(`alteroidd: 待ち受けに失敗しました (port ${port}): ${String(error)}\n`);
     process.exit(1);
   });
 
@@ -886,7 +890,8 @@ function invokedDirectly(): boolean {
 
 if (invokedDirectly()) {
   main().catch((error: unknown) => {
-    process.stderr.write(`alteroidd: 起動に失敗しました: ${String(error)}\n`);
+    // 同じ理由で `writeStderrSync` を使う（直上の `server.on('error')` と同型。#248）。
+    writeStderrSync(`alteroidd: 起動に失敗しました: ${String(error)}\n`);
     process.exit(1);
   });
 }

@@ -13,6 +13,7 @@ import {
   resolveManagerModel,
   resolveWorkerModel,
   WITHHELD_ENV_KEYS,
+  writeStderrSync,
   type RunnerChildUser,
 } from '@alteroid/core';
 import { createAdaptorServer } from '@hono/node-server';
@@ -215,7 +216,10 @@ export async function main(): Promise<void> {
   const server = createAdaptorServer({ fetch: app.fetch });
 
   server.on('error', (error: unknown) => {
-    process.stderr.write(`alteroid-runner: 待ち受けに失敗しました: ${String(error)}\n`);
+    // 直後に process.exit(1) が来るので `process.stderr.write` は使わない
+    // （fd がパイプだと POSIX 上は非同期で、書いた行が exit に巻き込まれて
+    // 失われることがある。#248）。`writeStderrSync` は fd 2 へ同期で書く。
+    writeStderrSync(`alteroid-runner: 待ち受けに失敗しました: ${String(error)}\n`);
     process.exit(1);
   });
 
@@ -298,7 +302,8 @@ function invokedDirectly(): boolean {
 
 if (invokedDirectly()) {
   main().catch((error: unknown) => {
-    process.stderr.write(`alteroid-runner: 起動に失敗しました: ${String(error)}\n`);
+    // 同じ理由で `writeStderrSync` を使う（直上の `server.on('error')` と同型。#248）。
+    writeStderrSync(`alteroid-runner: 起動に失敗しました: ${String(error)}\n`);
     process.exit(1);
   });
 }
