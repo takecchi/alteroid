@@ -6968,3 +6968,120 @@ describe('台帳で片付け済みの報告には印が付く（#391）', () => 
     );
   });
 });
+
+/**
+ * 認証トークンのプールの現役をクローンへ届ける口（Issue #393 PR3）。
+ *
+ * **ここで固定するのは3つ** — 呼ばれるたびに読み直すこと（凍らないこと）、
+ * 渡さなければ今までどおりであること、そして**プロファイルが同じ名前を宣言して
+ * いると鍵が上書きされること**（塞がない代わりに測っておく）。
+ */
+describe('credentials（SDK 子プロセスへ重ねる鍵の現在値）', () => {
+  let postSeq = 0;
+
+  function cloneWithCredentials(input: {
+    credentials?: () => Record<string, string>;
+    profileEnv?: Record<string, string>;
+    env?: NodeJS.ProcessEnv;
+  }) {
+    const { fn, calls } = fakeSdk();
+    const clone = createClone({
+      stores: createMemoryStores(),
+      queryFn: fn,
+      env: input.env ?? {},
+      ...(input.credentials === undefined ? {} : { credentials: input.credentials }),
+      ...(input.profileEnv === undefined
+        ? {}
+        : {
+            profile: {
+              env: () => input.profileEnv as Record<string, string>,
+            } as unknown as Parameters<typeof createClone>[0]['profile'],
+          }),
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    return { clone, calls };
+  }
+
+  it('渡さなければ、env とプロファイルだけ（既定の構成の挙動を変えない）', async () => {
+    const { clone, calls } = cloneWithCredentials({ env: { FROM_ENV: 'yes' } });
+    clone.post({
+      type: 'human_message',
+      id: `evt-cred-${String(++postSeq)}`,
+      at: new Date().toISOString(),
+      text: 'こんにちは',
+      conversationId: 'conv-1',
+    });
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.env?.FROM_ENV).toBe('yes');
+    expect(calls[0]?.options.env).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN');
+  });
+
+  it('渡した鍵が、凍った env に勝って子へ届く', async () => {
+    const { clone, calls } = cloneWithCredentials({
+      env: { CLAUDE_CODE_OAUTH_TOKEN: 'frozen-at-startup' },
+      credentials: () => ({ CLAUDE_CODE_OAUTH_TOKEN: 'rotated-now' }),
+    });
+    clone.post({
+      type: 'human_message',
+      id: `evt-cred-${String(++postSeq)}`,
+      at: new Date().toISOString(),
+      text: 'こんにちは',
+      conversationId: 'conv-1',
+    });
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    // **凍った env に勝つ。** 順番を逆にすると鍵が回らない（`runner.ts` と同じ規則）。
+    expect(calls[0]?.options.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('rotated-now');
+  });
+
+  it('セッションを起こすたびに読み直す（値を持たず関数を持つ理由）', async () => {
+    let current = 'first';
+    const { clone, calls } = cloneWithCredentials({
+      credentials: () => ({ CLAUDE_CODE_OAUTH_TOKEN: current }),
+    });
+    clone.post({
+      type: 'human_message',
+      id: `evt-cred-${String(++postSeq)}`,
+      at: new Date().toISOString(),
+      text: 'こんにちは',
+      conversationId: 'conv-1',
+    });
+    await waitFor(() => calls.length > 0, '1本目のセッションが開くこと');
+    expect(calls[0]?.options.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('first');
+
+    // **走っているセッションには届かない**（env は起動時に凍る）。届くのは
+    // 次に起こすセッションからである。
+    current = 'second';
+    expect(calls[0]?.options.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('first');
+    clone.stop();
+  });
+
+  it('⚠️ プロファイルが同じ名前を宣言していると、鍵が上書きされる', async () => {
+    // **これは塞いでいない挙動を測る歯である。** 重ね順は `runner.ts` と揃えて
+    // あり（プロファイルが鍵より後）、動かすと `GH_TOKEN` のほうが壊れる。
+    // 塞ぐのは検出のほう（`credentialNamesShadowedByProfile`）。
+    //
+    // **測っておく理由は、順序を「直した」つもりで動かす人を止めるためである。**
+    // ここが赤くなったら、それは規則が変わったということである。
+    const { clone, calls } = cloneWithCredentials({
+      credentials: () => ({ CLAUDE_CODE_OAUTH_TOKEN: 'rotated-now' }),
+      profileEnv: { CLAUDE_CODE_OAUTH_TOKEN: 'declared-in-profile' },
+    });
+    clone.post({
+      type: 'human_message',
+      id: `evt-cred-${String(++postSeq)}`,
+      at: new Date().toISOString(),
+      text: 'こんにちは',
+      conversationId: 'conv-1',
+    });
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('declared-in-profile');
+  });
+});

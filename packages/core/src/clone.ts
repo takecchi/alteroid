@@ -326,6 +326,17 @@ export interface CloneOptions {
    */
   env?: NodeJS.ProcessEnv;
   /**
+   * SDK 子プロセスへ重ねる鍵の現在値を返す関数（Issue #393 PR3）。
+   *
+   * **クローンにも認証トークンのプールの現在値を届けるための口である。** 渡さなければ
+   * 今までどおり `env` とプロファイルだけになる（既定の構成の挙動を変えない）。
+   *
+   * **呼ばれるのは SDK セッションを起こす直前だけである** ⟹ **走っている
+   * セッションには届かない。** 畳んで作り直す経路は PR4 で足す（Issue #393
+   * 追記5「ターンの途中では畳まない」）。
+   */
+  credentials?: () => Record<string, string>;
+  /**
    * 権限モード。省略すると `env` の `ALTEROID_CLONE_PERMISSION_MODE`、
    * それも無ければ `auto`（`permission-mode.ts`）。主にテスト用の直渡しで、
    * runner の `RunnerHostOptions.permissionMode` と同じ形である。
@@ -791,6 +802,14 @@ class Clone implements CloneHost {
   #resumedFrom: string | null = null;
   #sawInit = false;
   readonly #env: NodeJS.ProcessEnv;
+  /**
+   * SDK 子プロセスへ重ねる鍵の**現在値を返す関数**（Issue #393 PR3）。
+   *
+   * **値そのものではなく関数を持つ。** 値を持つと構築時に凍り、回し手が差し替えた
+   * トークンが永久に届かない——`#env` がすでにそうなっている問題を、もう1つ作ることに
+   * なる。
+   */
+  readonly #credentials: (() => Record<string, string>) | undefined;
   readonly #profile: ProfileApplier | undefined;
   readonly #profileService: ProfileService | undefined;
   readonly #accountUsage: (() => AccountUsageState) | undefined;
@@ -804,6 +823,7 @@ class Clone implements CloneHost {
       sessionStore,
       managers,
       env,
+      credentials,
       permissionMode,
       humanPriority,
       profile,
@@ -822,6 +842,7 @@ class Clone implements CloneHost {
     this.#permissionMode = permissionMode ?? resolveClonePermissionMode(envSource);
     this.#humanPriority = humanPriority ?? resolveCloneHumanPriority(envSource);
     this.#env = envSource;
+    this.#credentials = credentials;
     this.#profile = profile;
     this.#profileService = profileService;
     this.#accountUsage = accountUsage;
@@ -2911,7 +2932,23 @@ class Clone implements CloneHost {
    * 取り上げるためではない。取り上げれば、それはただのデグレードになる。
    */
   #childEnv(): NodeJS.ProcessEnv {
-    return { ...this.#env, ...(this.#profile?.env() ?? {}) };
+    // **鍵は呼ばれるたびに読み直す。** `this.#env` は構築時のスナップショットなので、
+    // そのまま配ると人間（や回し手）が後から差し替えた鍵が永久に届かない
+    // （`credentials.ts` / `runner.ts` の `#childEnv()` と同じ理由）。
+    //
+    // **重ね順は runner.ts と揃えてある** ——`env` → 鍵 → プロファイル。あちらの
+    // doc が「プロファイルは鍵より後。人間が明示的に書いたほうが勝つ」と言っており、
+    // **層ごとに順序が違うと「マネージャーには回るのにクローンには回らない」
+    // （あるいは逆）が生まれる。** 規則は1つにする。
+    //
+    // **⚠️ この順序の帰結として、プロファイルが鍵と同じ名前を宣言していると
+    // 鍵が黙って上書きされる。** 塞ぐのは順序ではなく検出のほうである
+    // （`credentialNamesShadowedByProfile`。理由はあちらの doc）。
+    return {
+      ...this.#env,
+      ...(this.#credentials?.() ?? {}),
+      ...(this.#profile?.env() ?? {}),
+    };
   }
 
   /**
