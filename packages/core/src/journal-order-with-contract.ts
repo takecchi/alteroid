@@ -158,7 +158,7 @@ export async function verifyJournalStoreOrderContract(
     decision: 'journal-order-contract: a',
     grounds: 'journal-order-with-contract',
   });
-  await journal.append({
+  const b = await journal.append({
     type: 'decision',
     decision: 'journal-order-contract: b',
     grounds: 'journal-order-with-contract',
@@ -169,7 +169,7 @@ export async function verifyJournalStoreOrderContract(
     role: 'inbound',
     text: 'journal-order-contract: c',
   });
-  await journal.append({
+  const d = await journal.append({
     type: 'exchange',
     with: 'manager',
     role: 'inbound',
@@ -232,6 +232,32 @@ export async function verifyJournalStoreOrderContract(
       'JournalStore の order 契約（5: after は types/with より前に効く）が破れている — ' +
         `types:['decision'] の全件=${idSequence(decisionFull)}、` +
         `絞りを付けたまま頁を辿った連結=${idSequence(decisionPaged)}。`,
+    );
+  }
+
+  // --- 契約5b: 錨自体が絞りに当たらない種別でも、絞り込み前の全順序で位置が
+  // 決まる（5 の一般形をより強く確かめる）。**この形が重要な理由**: 上の
+  // 5 は「頁を辿るあいだ錨も常に絞りに当たる種別」だけを積んだ場合、実装が
+  // 「絞り込んでから錨を探す」（絞りが `after` より前）でも、錨自身が
+  // 絞り込み後の集合に残っていればたまたま正しい答えを返してしまい、
+  // 順序契約の違反を検出できない。ここでは d（type: exchange, with: manager）
+  // を錨にして types:['decision'] を掛ける——d 自身は絞りに当たらない種別
+  // なので、「絞ってから錨を探す」実装は d を見つけられず
+  // `JournalAnchorNotFoundError` を誤って投げるか、位置がずれる。正しい
+  // 実装は全順序（e,d,c,b,a）の中で d の位置を決め、そこから先を
+  // types:['decision'] で絞るので b（d の直後にある decision）が返る。
+  const afterD = await journal.list({
+    order: 'desc',
+    after: { id: d.id, at: d.at },
+    types: ['decision'],
+    limit: 1,
+  });
+  if (afterD.length !== 1 || afterD[0]?.id !== b.id) {
+    throw new Error(
+      'JournalStore の order 契約（5b: 錨自体が絞りに当たらなくても全順序で位置が決まる）が' +
+        `破れている — d（type:exchange, id=${d.id}）を錨に types:['decision'] を掛けると ` +
+        `b（id=${b.id}）が返るはずが、実際には ` +
+        `${JSON.stringify(afterD.map((entry) => entry.id))} が返った（あるいは投げた）。`,
     );
   }
 
