@@ -1888,6 +1888,32 @@ describe('FsTokenPoolStore', () => {
       invalidatedReason: 'account_on_hold',
     });
   });
+
+  it('createdAt / updatedAt も往復する（Issue #393）', async () => {
+    await stores.tokens.replace([
+      {
+        id: 'tok-a',
+        label: 'a',
+        value: 'tok-aaa',
+        order: 0,
+        createdAt: '2026-08-01T00:00:00.000Z',
+        updatedAt: '2026-08-02T03:04:05.000Z',
+      },
+    ]);
+    const [row] = await stores.tokens.list();
+    expect(row).toMatchObject({
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-02T03:04:05.000Z',
+    });
+  });
+
+  it('createdAt / updatedAt が無い行は無いまま往復する', async () => {
+    // **PR1 の版が書いた `tokens.json` がこの形である。** 器の側で埋めない。
+    await stores.tokens.replace([{ id: 'tok-a', label: 'a', value: 'tok-aaa', order: 0 }]);
+    const [row] = await stores.tokens.list();
+    expect(row).not.toHaveProperty('createdAt');
+    expect(row).not.toHaveProperty('updatedAt');
+  });
 });
 
 describe('FsSessionRegistry', () => {

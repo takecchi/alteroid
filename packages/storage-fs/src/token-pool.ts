@@ -26,6 +26,8 @@ const agentTokenRowSchema = z.object({
   lastRejectedReason: z.string().optional(),
   invalidatedAt: z.string().optional(),
   invalidatedReason: z.string().optional(),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
 });
 
 const fileSchema = z.object({

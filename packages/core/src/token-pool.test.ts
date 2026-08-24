@@ -4,8 +4,12 @@ import {
   agentTokenInputSchema,
   DEFAULT_TOKEN_ROTATION_POLICY,
   DEFAULT_TOKEN_ROTATION_SETTINGS,
+  markTokenUnusable,
+  markTokenUsable,
   normalizeTokenPool,
   toAgentTokenView,
+  tokenAvailabilityAt,
+  tokenRecoveryOf,
   type AgentToken,
 } from './token-pool.js';
 
@@ -60,6 +64,11 @@ describe('normalizeTokenPool', () => {
         lastRejectedReason: 'rate_limit',
         invalidatedAt: '2026-08-02T00:00:00.000Z',
         invalidatedReason: 'disabled_by_org',
+        // **後から足した列**（Issue #393）。`label` が変わっているので判が押される。
+        // 期待値をここへ書き足しているのは、`toEqual` を緩めずに済ませるため
+        // ——`toMatchObject` へ替えると「他に何も付いていない」という保証が消え、
+        // 値（`value`）が思わぬ形で増えたときにも通ってしまう。
+        updatedAt: '2026-08-24T00:00:00.000Z',
       },
     ]);
   });
@@ -276,5 +285,260 @@ describe('toAgentTokenView', () => {
     const view = toAgentTokenView(token);
     expect(view.sha256).toHaveLength(12);
     expect(view.sha256).toMatch(/^[0-9a-f]{12}$/);
+  });
+});
+
+/**
+ * 置いた時刻 / 変わった時刻（Issue #393）。**判を押すのは変わった行だけ**という
+ * ことが、この列の意味そのものである（`AgentToken.updatedAt` の doc）。
+ */
+describe('createdAt / updatedAt', () => {
+  const NOW = '2026-08-24T00:00:00.000Z';
+
+  it('新規行には createdAt と updatedAt の両方が立つ', () => {
+    const [token] = normalizeTokenPool([{ label: 'a', value: 'v' }], [], opts(['tok-a']));
+    expect(token?.createdAt).toBe(NOW);
+    expect(token?.updatedAt).toBe(NOW);
+  });
+
+  it('既存の行を変えなければ updatedAt は動かない（全文置換でも判を押さない）', () => {
+    // **これがこの列の存在理由である。** 全行に押すと「最後に誰かが PUT を
+    // 打った時刻」に化けて、どの行がいつ変わったかが取れなくなる。
+    const existing: AgentToken[] = [
+      {
+        id: 'tok-a',
+        label: 'a',
+        value: 'v',
+        order: 0,
+        createdAt: '2026-08-01T00:00:00.000Z',
+        updatedAt: '2026-08-02T00:00:00.000Z',
+      },
+      { id: 'tok-b', label: 'b', value: 'w', order: 1 },
+    ];
+    // b の label だけ変える。a は素通り。
+    const result = normalizeTokenPool(
+      [
+        { id: 'tok-a', label: 'a' },
+        { id: 'tok-b', label: 'b-renamed' },
+      ],
+      existing,
+      opts(),
+    );
+    expect(result[0]?.updatedAt).toBe('2026-08-02T00:00:00.000Z');
+    expect(result[1]?.updatedAt).toBe(NOW);
+  });
+
+  it('createdAt は既存の行では引き継ぐ（無い行を now() で埋め直さない）', () => {
+    // PR1 の版が書いた行には createdAt が無い。**「いま作られた」と書かない。**
+    const existing: AgentToken[] = [{ id: 'tok-a', label: 'a', value: 'v', order: 0 }];
+    const [token] = normalizeTokenPool([{ id: 'tok-a', label: 'renamed' }], existing, opts());
+    expect(token).not.toHaveProperty('createdAt');
+    // 変わったので updatedAt のほうは立つ。
+    expect(token?.updatedAt).toBe(NOW);
+  });
+
+  it('value / order / disabled の変更も「変わった」として数える', () => {
+    const base: AgentToken = { id: 'tok-a', label: 'a', value: 'v', order: 0 };
+    const changedValue = normalizeTokenPool(
+      [{ id: 'tok-a', label: 'a', value: 'v2' }],
+      [base],
+      opts(),
+    );
+    expect(changedValue[0]?.updatedAt).toBe(NOW);
+    const changedOrder = normalizeTokenPool(
+      [{ id: 'tok-a', label: 'a', order: 5 }],
+      [base],
+      opts(),
+    );
+    expect(changedOrder[0]?.updatedAt).toBe(NOW);
+    const disabled = normalizeTokenPool(
+      [{ id: 'tok-a', label: 'a', disabled: true }],
+      [base],
+      opts(),
+    );
+    expect(disabled[0]?.updatedAt).toBe(NOW);
+    // 何も変えなければ立たない（そもそも前も無かったので、無いまま）。
+    const untouched = normalizeTokenPool([{ id: 'tok-a', label: 'a' }], [base], opts());
+    expect(untouched[0]).not.toHaveProperty('updatedAt');
+  });
+});
+
+/**
+ * 止まった事実の記録と、その取り消し（Issue #393）。
+ *
+ * **回さない。** ここが固定するのは「1行に何を書くか / 何を書かないか」だけで、
+ * 次の候補を選ぶ側（PR3）はここに無い。
+ */
+describe('markTokenUnusable / markTokenUsable', () => {
+  const AT = '2026-08-25T03:00:00.000Z';
+  const FALLBACK = 5 * 60 * 60 * 1000;
+  const base: AgentToken = { id: 'tok-a', label: 'a', value: 'secret-value', order: 0 };
+  const MESSAGE = "You've hit your org's monthly spend limit";
+
+  it('いつ・何と言われたか・いつ戻る見込みかの3つを書く', () => {
+    const marked = markTokenUnusable(base, {
+      at: AT,
+      message: MESSAGE,
+      resetsAt: 1_800_000_000_000,
+      fallbackCooldownMs: FALLBACK,
+    });
+    expect(marked.lastRejectedAt).toBe(AT);
+    expect(marked.lastRejectedReason).toBe(MESSAGE);
+    expect(marked.cooldownUntil).toBe(1_800_000_000_000);
+    expect(marked.updatedAt).toBe(AT);
+  });
+
+  it('文言をそのまま持つ（言い換えると分類が unknown へ落ちる）', () => {
+    const marked = markTokenUnusable(base, {
+      at: AT,
+      message: MESSAGE,
+      fallbackCooldownMs: FALLBACK,
+    });
+    // 生の文言が残っているので、分類がそこから導ける。
+    expect(tokenRecoveryOf(marked)).toBe('time');
+    // 言い換えた（＝接頭辞を壊した）形では導けなくなることを、同じ歯で示す。
+    const paraphrased = markTokenUnusable(base, {
+      at: AT,
+      message: '月間の支出上限に達しました',
+      fallbackCooldownMs: FALLBACK,
+    });
+    expect(tokenRecoveryOf(paraphrased)).toBe('unknown');
+  });
+
+  it('resetsAt が取れなければ、渡された既定で冷やす（関数の中に既定を持たない）', () => {
+    const marked = markTokenUnusable(base, {
+      at: AT,
+      message: MESSAGE,
+      fallbackCooldownMs: FALLBACK,
+    });
+    expect(marked.cooldownUntil).toBe(Date.parse(AT) + FALLBACK);
+  });
+
+  it('resetsAt が過去でも未来へ丸めない（「もう戻っている」を正しく表す）', () => {
+    const past = Date.parse('2026-08-01T00:00:00.000Z');
+    const marked = markTokenUnusable(base, {
+      at: AT,
+      message: MESSAGE,
+      resetsAt: past,
+      fallbackCooldownMs: FALLBACK,
+    });
+    expect(marked.cooldownUntil).toBe(past);
+    expect(tokenAvailabilityAt(marked, Date.parse(AT))).toBe('ready');
+  });
+
+  it('人間が外した印（disabledAt）と失効の印は観測で上書きしない', () => {
+    const human: AgentToken = {
+      ...base,
+      disabledAt: '2026-08-10T00:00:00.000Z',
+      invalidatedAt: '2026-08-11T00:00:00.000Z',
+      invalidatedReason: 'account_on_hold',
+    };
+    const marked = markTokenUnusable(human, {
+      at: AT,
+      message: MESSAGE,
+      fallbackCooldownMs: FALLBACK,
+    });
+    expect(marked.disabledAt).toBe('2026-08-10T00:00:00.000Z');
+    expect(marked.invalidatedAt).toBe('2026-08-11T00:00:00.000Z');
+    expect(marked.invalidatedReason).toBe('account_on_hold');
+  });
+
+  it('action と判定される文言でも冷却へ倒す（当面は一律。分類は記録するだけ）', () => {
+    // **人間の決定（2026-08-25）**: 種類で分けるのは記録までにして、扱いは
+    // 一律で「時間で戻る」と仮定する。⟹ `invalidatedAt` はここでは立たない。
+    const marked = markTokenUnusable(base, {
+      at: AT,
+      message: 'Your usage allocation has been disabled by your admin',
+      fallbackCooldownMs: FALLBACK,
+    });
+    expect(tokenRecoveryOf(marked)).toBe('action');
+    expect(marked).not.toHaveProperty('invalidatedAt');
+    expect(marked.cooldownUntil).toBe(Date.parse(AT) + FALLBACK);
+    expect(tokenAvailabilityAt(marked, Date.parse(AT))).toBe('cooling');
+  });
+
+  it('使えることを確かめられたら、止まっていた記録を消す（人間の印は残す）', () => {
+    const stuck: AgentToken = {
+      ...base,
+      disabledAt: '2026-08-10T00:00:00.000Z',
+      cooldownUntil: 1_800_000_000_000,
+      lastRejectedAt: AT,
+      lastRejectedReason: MESSAGE,
+      invalidatedAt: '2026-08-11T00:00:00.000Z',
+      invalidatedReason: 'account_on_hold',
+    };
+    const cleared = markTokenUsable(stuck, '2026-08-25T09:00:00.000Z');
+    expect(cleared).not.toHaveProperty('cooldownUntil');
+    expect(cleared).not.toHaveProperty('lastRejectedAt');
+    expect(cleared).not.toHaveProperty('lastRejectedReason');
+    // 通ったのに「恒常的に通らない」印が残るのは、それ自体が嘘である。
+    expect(cleared).not.toHaveProperty('invalidatedAt');
+    expect(cleared).not.toHaveProperty('invalidatedReason');
+    // 人間が外した印は消さない。
+    expect(cleared.disabledAt).toBe('2026-08-10T00:00:00.000Z');
+    expect(cleared.updatedAt).toBe('2026-08-25T09:00:00.000Z');
+    // 値は保つ（記録の消去は資格の消去ではない）。
+    expect(cleared.value).toBe('secret-value');
+  });
+});
+
+describe('tokenAvailabilityAt', () => {
+  const base: AgentToken = { id: 'tok-a', label: 'a', value: 'v', order: 0 };
+  const NOW = Date.parse('2026-08-25T03:00:00.000Z');
+
+  it('何も無ければ ready', () => {
+    expect(tokenAvailabilityAt(base, NOW)).toBe('ready');
+  });
+
+  it('冷却の期限が未来なら cooling、過ぎていれば ready', () => {
+    expect(tokenAvailabilityAt({ ...base, cooldownUntil: NOW + 1 }, NOW)).toBe('cooling');
+    expect(tokenAvailabilityAt({ ...base, cooldownUntil: NOW }, NOW)).toBe('ready');
+    expect(tokenAvailabilityAt({ ...base, cooldownUntil: NOW - 1 }, NOW)).toBe('ready');
+  });
+
+  it('人間が外した印がいちばん強い（冷却中でも disabled と答える）', () => {
+    const both = { ...base, disabledAt: '2026-08-10T00:00:00.000Z', cooldownUntil: NOW + 1 };
+    expect(tokenAvailabilityAt(both, NOW)).toBe('disabled');
+  });
+
+  it('失効は冷却より強い（待てば戻ると読ませない）', () => {
+    const both = { ...base, invalidatedAt: '2026-08-11T00:00:00.000Z', cooldownUntil: NOW + 1 };
+    expect(tokenAvailabilityAt(both, NOW)).toBe('invalidated');
+  });
+});
+
+describe('外向きの顔に載る回復の見込み', () => {
+  const SECRET_VALUE = 'sk-do-not-leak';
+
+  it('拒否の記録が無ければ recovery も無い（unknown へ潰さない）', () => {
+    const view = toAgentTokenView({ id: 'tok-a', label: 'a', value: SECRET_VALUE, order: 0 });
+    expect(view).not.toHaveProperty('recovery');
+  });
+
+  it('生の文言から毎回導く（保存しない）', () => {
+    const view = toAgentTokenView({
+      id: 'tok-a',
+      label: 'a',
+      value: SECRET_VALUE,
+      order: 0,
+      lastRejectedReason: "You've hit your org's monthly spend limit",
+    });
+    expect(view.recovery).toBe('time');
+  });
+
+  it('createdAt / updatedAt は出す（秘密ではない）が、値は出さない', () => {
+    const view = toAgentTokenView({
+      id: 'tok-a',
+      label: 'a',
+      value: SECRET_VALUE,
+      order: 0,
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-02T00:00:00.000Z',
+      lastRejectedReason: 'Your org is out of usage · contact your admin',
+    });
+    expect(view.createdAt).toBe('2026-08-01T00:00:00.000Z');
+    expect(view.updatedAt).toBe('2026-08-02T00:00:00.000Z');
+    expect(view.recovery).toBe('action');
+    expect(JSON.stringify(view)).not.toContain(SECRET_VALUE);
   });
 });

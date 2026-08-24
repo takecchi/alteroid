@@ -2319,6 +2319,37 @@ describe('認証トークンのプール', () => {
     });
   });
 
+  it('止まった記録が付いた行は、回復の見込みまで GET から読める（Issue #393）', async () => {
+    // **HTTP の応答に載ることまで見る。** core 側で導けていても、外向きの顔の
+    // schema が `recovery` を落としていれば人間には届かない（`tokensResponseSchema`
+    // は `agentTokenViewSchema` をそのまま使うので、落ちるとしたらここで出る）。
+    const service = createTokenPoolService({ stores, newId: () => 'tok-a' });
+    const withTokens = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      tokens: service,
+    });
+    await service.replace([{ label: 'work', value: 'tok-secret-value' }]);
+    await service.noteUnusable({
+      id: 'tok-a',
+      message: "You've hit your org's monthly spend limit",
+    });
+
+    const response = await withTokens.request('/tokens');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      tokens: { recovery?: string; createdAt?: string; lastRejectedReason?: string }[];
+    };
+    expect(body.tokens[0]?.recovery).toBe('time');
+    expect(body.tokens[0]?.createdAt).toBeDefined();
+    // 文言はそのまま出す（人間が claude.ai と突き合わせられる形）。
+    expect(body.tokens[0]?.lastRejectedReason).toBe("You've hit your org's monthly spend limit");
+    // 値はどこにも出ない。
+    expect(JSON.stringify(body)).not.toContain('tok-secret-value');
+  });
+
   it('deps.tokens が無くても 200 を返す（配線されていないことを黙って隠さない形で既定を返す）', async () => {
     const response = await app.request('/tokens');
     expect(response.status).toBe(200);
@@ -2351,7 +2382,17 @@ describe('認証トークンのプール', () => {
     expect(getText).not.toContain(SECRET);
     const body = JSON.parse(getText) as { tokens: { label: string; sha256: string }[] };
     expect(body.tokens).toEqual([
-      { id: expect.any(String), label: 'primary', order: 0, sha256: expect.any(String) },
+      {
+        id: expect.any(String),
+        label: 'primary',
+        order: 0,
+        sha256: expect.any(String),
+        // **後から足した列**（Issue #393）。新規行なので両方立つ。**`toEqual` の
+        // ままにしてある**——ここは「これ以外の項目が付いていない」ことを見る歯で
+        // あり、`toMatchObject` へ替えると `value` が混ざっても通ってしまう。
+        createdAt: expect.any(String),
+        updatedAt: expect.any(String),
+      },
     ]);
   });
 

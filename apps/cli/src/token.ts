@@ -27,6 +27,13 @@ interface AgentTokenView {
   lastRejectedReason?: string;
   invalidatedAt?: string;
   invalidatedReason?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  /**
+   * 最後の拒否が時間で戻るものか（デーモンが `lastRejectedReason` から導いた
+   * **分類**。実測ではない。`@alteroid/core` の `limitRecoveryOf`）。
+   */
+  recovery?: 'time' | 'action' | 'unknown';
 }
 
 interface TokenRotationSettings {
@@ -68,9 +75,25 @@ export async function tokenListCommand(): Promise<void> {
     stdout.write(
       `${String(token.order)}. ${token.label}  id=${token.id}  sha256=${token.sha256}\n`,
     );
+    const stamps = describeStamps(token);
+    if (stamps !== null) stdout.write(`   ${stamps}\n`);
     const status = describeStatus(token, now);
     if (status !== null) stdout.write(`   ${status}\n`);
   }
+}
+
+/**
+ * 置いた時刻と最後に変わった時刻。
+ *
+ * **どちらも「無い」ことがある**——プールの器（#393 PR1）が入った版で置かれた行
+ * には列そのものが無い。無いものを「不明」と書くより、**その行だけ出さない**
+ * （取れなかったことを埋めない）。
+ */
+function describeStamps(token: AgentTokenView): string | null {
+  const parts: string[] = [];
+  if (token.createdAt !== undefined) parts.push(`置いた ${token.createdAt}`);
+  if (token.updatedAt !== undefined) parts.push(`最後の更新 ${token.updatedAt}`);
+  return parts.length === 0 ? null : parts.join(' / ');
 }
 
 /** 値は一切扱わない——見せるのは label・指紋・状態だけ。 */
@@ -91,7 +114,20 @@ function describeStatus(token: AgentTokenView, now: number): string | null {
   if (token.lastRejectedReason !== undefined) {
     parts.push(`最後の拒否: ${token.lastRejectedReason}（${token.lastRejectedAt ?? '?'}）`);
   }
+  // **断りを同じ行に置く。** 実測（文言・時刻）の隣に判定を並べると、行ごと
+  // 実測として読まれる（AGENTS.md「報告の形」の表の一件と同じ形）。
+  if (token.recovery !== undefined) {
+    parts.push(`見込み: ${describeRecovery(token.recovery)}（文言からの分類。実測ではない）`);
+  }
   return parts.length === 0 ? null : parts.join(' / ');
+}
+
+function describeRecovery(recovery: 'time' | 'action' | 'unknown'): string {
+  return recovery === 'time'
+    ? '時間で戻る'
+    : recovery === 'action'
+      ? '人間が動かないと戻らない（入金・管理者・座席種別）'
+      : '分からない';
 }
 
 /**

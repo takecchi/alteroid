@@ -5595,6 +5595,16 @@
                           },
                           "invalidatedReason": {
                             "type": "string"
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "type": "string"
+                          },
+                          "recovery": {
+                            "type": "string",
+                            "enum": ["time", "action", "unknown"]
                           }
                         },
                         "required": ["id", "label", "order", "sha256"]
@@ -5691,6 +5701,16 @@
                           },
                           "invalidatedReason": {
                             "type": "string"
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "type": "string"
+                          },
+                          "recovery": {
+                            "type": "string",
+                            "enum": ["time", "action", "unknown"]
                           }
                         },
                         "required": ["id", "label", "order", "sha256"]
