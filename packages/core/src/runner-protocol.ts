@@ -1060,6 +1060,38 @@ export interface RunnerClient {
   /** この runner の既定の作業ディレクトリ（workspace locator の path になる）。 */
   readonly workspacePath: string;
   /**
+   * `workspacePath` が `/health` から実際に受け取れたかどうか（#389。`runnerId` /
+   * {@link runnerIdKnown} と同じ形）。
+   *
+   * **`workspacePath` は常に文字列を持つ**（既定値 `''` が入っていることがある）
+   * ので、この欄の有無だけでは「聞けたか」を判定できない。`false` のときの
+   * `workspacePath` は一度も接続できていない段階からの既定値であって、
+   * `/health` が答えた値ではない——出す側はこの欄を先に見て、`false` なら
+   * `workspacePath` そのものを出さないこと。
+   *
+   * **`''` は `'runner-primary'` より紛らわしい。** `runnerId` の既定値は
+   * それらしい名前が付いているので「何か入っている」ことだけは見えるが、
+   * `workspacePath` の既定値 `''` は「空の作業ディレクトリを本当に名乗って
+   * いる」場合と見た目が同じになる——**判定を値そのもの（`=== ''`）に代用
+   * させないこと。** 本当に空文字を名乗った runner ではこの欄が `true` のまま
+   * `workspacePath` に `''` が入る。
+   *
+   * `GET /runners`（`entries()`）はこの欄が入るまで、`entry.client !== null`
+   * だけを根拠に `workspacePath` を無条件で出していた——`entry.client !== null`
+   * は `hello()` が解決したことしか意味せず、応答に `workspacePath` が入って
+   * いたとは限らない（`runnerId` の3出口と同じ穴。#330 はそちらだけを塞ぎ、
+   * こちらは #389 として切り出されていた）。
+   *
+   * **`onSwap` / `onLost` はこの欄を読まない。** 両者の通知は `workspacePath`
+   * をそもそも運ばない（`RunnerRegistryOptions` の型を参照）ので、`runnerId`
+   * の3出口とは違い、この欄を読む出口は `entries()` の1本だけである。
+   *
+   * **常に `true` を返してよい実装もある。** `LocalRunner`（同一プロセス構成）は
+   * `workspacePath` を接続前から自分で確定させているので、「聞けていない」
+   * 状態がそもそも存在しない（`runnerIdKnown` と同じ理由）。
+   */
+  readonly workspacePathKnown: boolean;
+  /**
    * 名乗りの中身（`runnerId` / `workspacePath` と同じ応答 = `hello()` が読む
    * `GET /health`）に含まれていた版。**接続した瞬間に一度だけ読む値であって、
    * heartbeat では更新しない**——それは `identity()` の役目である。新しい口も
@@ -1563,6 +1595,41 @@ function heardRunnerIdOf(client: RunnerClient | null): { runnerId?: string } {
 }
 
 /**
+ * `workspacePath` を、聞けたときだけ含む形で組み立てる（#389）。
+ *
+ * **`heardRunnerIdOf` を広げず、別関数にした。** 名前を素直に読めば分かる形を
+ * 保つほうを選んだ——理由は2つある。
+ *
+ * 1. **軸ごとに出口の数が違う。** `runnerId` は `entries()` / `onSwap` /
+ *    `onLost` の3出口を持つが、`workspacePath` を運ぶのは `entries()` だけ
+ *    である（`onSwap` / `onLost` の通知の型に `workspacePath` の欄が無い——
+ *    `RunnerRegistryOptions` を参照）。`heardRunnerIdOf` を「`runnerId` と
+ *    `workspacePath` を両方聞けたときだけ含む」形に広げると、3出口のうち
+ *    2出口（`onSwap` / `onLost`）が要求していない `workspacePath` の判定を
+ *    無意味に運ぶことになる。
+ * 2. **2つの欄は独立に「聞けたか」が決まる。** `hello()` は `runnerId` と
+ *    `workspacePath` を同じ応答から読むが、片方だけが型に合っていて片方が
+ *    合っていない応答はありうる（相手の実装次第）——2値をまとめて1つの
+ *    真偽値にすると、この独立性が消える。
+ *
+ * だから `entries()` は `heardRunnerIdOf` と `heardWorkspacePathOf` を別々に
+ * spread する。**呼び出し側が増えたときに同じ分岐を書かないための1本**という
+ * `heardRunnerIdOf` の存在理由はここでも変わらない——`workspacePath` を読む
+ * 出口が増えたら、その出口もここを通せばよい。
+ *
+ * `entry.client !== null` は `hello()` が解決したことしか意味さない。その応答に
+ * `workspacePath` が実際に入っていたかどうかは `RunnerClient.workspacePathKnown`
+ * を見ないと分からない——見ずに `entry.client.workspacePath` を出すと、一度も
+ * 聞けていない相手について既定値 `''` が「受け取った値」の顔で出る
+ * （`entries()` が #330 の修正後もこの形のまま残っていたのが #389 の本体）。
+ */
+function heardWorkspacePathOf(client: RunnerClient | null): { workspacePath?: string } {
+  return client !== null && client.workspacePathKnown
+    ? { workspacePath: client.workspacePath }
+    : {};
+}
+
+/**
  * 1台に名乗らせるときの期限。
  *
  * **返らない1台が名簿全体を止めないため**にある。黙って死んだ器は「拒否する」の
@@ -1752,9 +1819,9 @@ class Registry implements RunnerRegistry {
       state: entry.state,
       since: entry.since,
       revision: entry.revision,
-      // ⚠️ `workspacePath` にも同じ形の既定値（`HttpRunner` の `''`）があるが、
-      // この PR の対象は #330（`runnerId` の3出口）に限る。範囲外として #389 へ切った。
-      ...(entry.client === null ? {} : { workspacePath: entry.client.workspacePath }),
+      // **聞けたときだけ渡す（#389）** — `heardWorkspacePathOf` の doc を参照。
+      ...heardWorkspacePathOf(entry.client),
+      // **聞けたときだけ渡す（#330）** — `heardRunnerIdOf` の doc を参照。
       ...heardRunnerIdOf(entry.client),
       ...(entry.error === undefined ? {} : { error: entry.error }),
       // **開けていなくても、最後に名乗ったプロセスは出す。** 黙った器について

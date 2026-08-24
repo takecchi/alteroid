@@ -50,6 +50,7 @@ class LeasedRunner implements RunnerClient {
   // 期待値は1つも変わらない。
   readonly runnerId: string;
   readonly runnerIdKnown = true;
+  readonly workspacePathKnown = true;
   readonly workspacePath = '/work/project';
   readonly sessions = new Map<string, RunnerManagerState>();
   readonly resumes: RunnerResumeCommand[] = [];
