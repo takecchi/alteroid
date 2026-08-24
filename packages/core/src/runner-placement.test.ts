@@ -27,6 +27,7 @@ import type {
 class FakeRunner implements RunnerClient {
   readonly runnerId: string;
   readonly runnerIdKnown = true;
+  readonly workspacePathKnown = true;
   readonly workspacePath = '/work/project';
   /** `undefined` = 資源を報告しない runner（古い器）。 */
   report: RunnerPlacementResources | undefined;

@@ -1979,6 +1979,80 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
       expect(client.runnerIdKnown).toBe(false);
     });
   });
+
+  /**
+   * **`RunnerClient.workspacePathKnown` そのものを直接測る（#389）。**
+   *
+   * `runnerIdKnown（#330）` と同じ形の罠が `workspacePath` にも在った——
+   * `entries()`（`packages/core/src/runner-protocol.ts`）は #330 の修正後も
+   * `entry.client !== null` だけを根拠に `workspacePath` を無条件で出しており、
+   * `/health` から一度も受け取れていない相手について既定値 `''` が「受け取った
+   * 値」の顔で出ていた。ここではその判定材料そのもの（`workspacePathKnown`）を
+   * 直接読んで確かめる。
+   */
+  describe('workspacePathKnown（#389）', () => {
+    it('/health が workspacePath を返せば true になる', async () => {
+      const fetchFn = (async (input: string | URL | Request) => {
+        if (pathOf(input) === '/health') {
+          return Response.json({ runnerId: 'runner-x', workspacePath: '/workspace' });
+        }
+        throw new Error(`想定していない path: ${pathOf(input)}`);
+      }) as typeof fetch;
+
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+      });
+
+      expect(client.workspacePath).toBe('/workspace');
+      expect(client.workspacePathKnown).toBe(true);
+    });
+
+    it('/health が workspacePath を返さなければ false のまま（既定値の空文字は聞けた値ではない）', async () => {
+      const fetchFn = (async (input: string | URL | Request) => {
+        if (pathOf(input) === '/health') {
+          return Response.json({ runnerId: 'runner-x' });
+        }
+        throw new Error(`想定していない path: ${pathOf(input)}`);
+      }) as typeof fetch;
+
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+      });
+
+      expect(client.workspacePath).toBe('');
+      expect(client.workspacePathKnown).toBe(false);
+    });
+
+    /**
+     * **`runnerId` とは扱いが違う分岐。** `runnerId` は空文字を「聞けていない」
+     * として弾くが、`workspacePath` は弾かない——本当に空の作業ディレクトリを
+     * 名乗る runner がありうるからである（`hello()` の doc）。この直前のテストと
+     * `workspacePath` の値だけを比べると同じ（どちらも `''`）だが、
+     * `workspacePathKnown` は逆になる。値そのもの（`=== ''`）では
+     * この2つを区別できないことを、ここで固定する。
+     */
+    it('/health が空文字の workspacePath を返せば true になる（runnerId とは違う）', async () => {
+      const fetchFn = (async (input: string | URL | Request) => {
+        if (pathOf(input) === '/health') {
+          return Response.json({ runnerId: 'runner-x', workspacePath: '' });
+        }
+        throw new Error(`想定していない path: ${pathOf(input)}`);
+      }) as typeof fetch;
+
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+      });
+
+      expect(client.workspacePath).toBe('');
+      expect(client.workspacePathKnown).toBe(true);
+    });
+  });
 });
 
 /**

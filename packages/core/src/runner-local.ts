@@ -63,6 +63,12 @@ class LocalRunner implements RunnerClient {
    * 上のコンストラクタを参照）。「聞けていない」状態がそもそも存在しない（#330）。
    */
   readonly runnerIdKnown = true;
+  /**
+   * **常に `true`。** `runnerIdKnown` と同じ理由——同一プロセスなので、
+   * コンストラクタの時点で自分の `workspacePath`（呼び出し元が渡した値）を
+   * 確定させている。「聞けていない」状態がそもそも存在しない（#389）。
+   */
+  readonly workspacePathKnown = true;
   readonly workspacePath: string;
   readonly #host: RunnerHost;
   readonly #queue: RunnerEvent[] = [];

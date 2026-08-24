@@ -37,6 +37,7 @@ class IdentifyingRunner implements RunnerClient {
    * （#330 の歯のために足した）。
    */
   runnerIdKnown = true;
+  readonly workspacePathKnown = true;
   readonly workspacePath = '/work/project';
   /** `/health` を叩かれた回数。 */
   probes = 0;
