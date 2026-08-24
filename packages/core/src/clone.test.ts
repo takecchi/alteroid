@@ -6811,3 +6811,160 @@ describe('クローン — 割り込める起点は、人間の速さで来る�
     }
   });
 });
+
+/**
+ * **台帳で片付け済みの報告に印を付ける**（#391）。
+ *
+ * ## この describe が守っている性質
+ *
+ * クローンは、報告が**ターンへ配られる前に**台帳（`commitment_list`）で全文を
+ * 読める —— `Clone#post()` は受信箱へ積む**前**に `#commit` を呼ぶからである。
+ * だから「読んで答えた」つもりで閉じられ、**その後に来る配達が新規と見分けが
+ * 付かない**（#391 で6例観測されている）。
+ *
+ * ## ⚠️ 「配り直しかどうか」は測っていない
+ *
+ * この印は配り直しの機構（`#redelivered` / `#redeliveredClosed`）を一切見ず、
+ * **台帳が閉じているかだけを見る。** だからこの歯も、初回配達か再配達かを
+ * 作り分けていない —— **作り分ける必要が無いことそのものが、この設計の要点で
+ * ある。**
+ *
+ * ## 足場について
+ *
+ * 台帳の状態は `commitments.get` を差し替えて作る。**`post` してから閉じる形に
+ * しないのは、配達との競争になるからである** —— 閉じる前に配られてしまえば、
+ * 測りたい状態が作れていないのに緑になる（足場が測定対象と重なる形）。
+ */
+describe('台帳で片付け済みの報告には印が付く（#391）', () => {
+  const REPORT_ID = 'evt-report-closed';
+
+  /** `commitments.get` だけを差し替えた `Stores`。他の面は本物のまま。 */
+  function storesWithGet(get: (id: string) => Promise<unknown>): Stores {
+    const base = createMemoryStores();
+    return {
+      ...base,
+      commitments: { ...base.commitments, get: get as Stores['commitments']['get'] },
+    };
+  }
+
+  /** 台帳の1件を組み立てる。`closedAt` を渡さなければ未了。 */
+  function commitment(fields: { closedAt?: string; closedReason?: string }) {
+    return {
+      id: REPORT_ID,
+      at: '2026-08-24T00:00:00.000Z',
+      origin: 'manager' as const,
+      body: '[report] 本文',
+      ...fields,
+    };
+  }
+
+  async function deliverReport(stores: Stores): Promise<string> {
+    const s = setup(undefined, stores);
+    s.clone.post({
+      type: 'manager_message',
+      id: REPORT_ID,
+      at: new Date().toISOString(),
+      managerId: 'mgr-closed',
+      kind: 'report',
+      text: '本文の前半。……そして後半に依頼が入っている。',
+    });
+    const inputs = (): string[] => (s.calls[0] as FakeCall).inputs;
+    const delivered = await expect
+      .poll(() => inputs().find((input) => input.includes('本文の前半')), { timeout: 3000 })
+      .toBeTruthy()
+      .then(() => inputs().find((input) => input.includes('本文の前半')) ?? '');
+    await s.clone.stop();
+    return delivered;
+  }
+
+  /**
+   * **この歯が単独で守るもの**: 閉じている報告に印が付き、**閉じた理由まで運ぶ**こと。
+   *
+   * 理由を運ぶのは、**誤って閉じたときに誤りが理由の側に出る**からである
+   * （実例: 「判断は求めていない」と書いて閉じた報告の本文後半に依頼が在った）。
+   */
+  it('閉じた報告には印が付き、閉じた理由も一緒に届く', async () => {
+    const delivered = await deliverReport(
+      storesWithGet(async (id) =>
+        id === REPORT_ID
+          ? commitment({
+              closedAt: '2026-08-24T00:05:00.000Z',
+              closedReason: '判断は求めていないので閉じる',
+            })
+          : null,
+      ),
+    );
+
+    expect(delivered).toContain('この報告は台帳で既に片付けている');
+    expect(delivered).toContain('判断は求めていないので閉じる');
+  });
+
+  /**
+   * **この歯が単独で守るもの**: **本文を短くしない**こと。
+   *
+   * #391 が頼んだのは「見分けが付くこと」であって「短くすること」ではない。
+   * そして実例（台帳 `801f5ee7`）では、**全文がもう一度届いたからこそ**
+   * 「判断は求めていない」と誤って閉じたことに気づけた。**短くすると、その
+   * 二度目の機会が消える。**
+   */
+  it('印が付いても本文は全文のまま届く（二度目の機会を消さない）', async () => {
+    const delivered = await deliverReport(
+      storesWithGet(async (id) =>
+        id === REPORT_ID ? commitment({ closedAt: '2026-08-24T00:05:00.000Z' }) : null,
+      ),
+    );
+
+    expect(delivered).toContain('本文の前半');
+    expect(delivered).toContain('そして後半に依頼が入っている');
+    // 閉じた理由が無ければ、括弧ごと出さない（取れない軸に値を作らない）。
+    expect(delivered).not.toContain('閉じた理由');
+  });
+
+  /**
+   * **この歯が単独で守るもの**: 閉じていない報告に印を付けないこと。
+   *
+   * 付けると「片付け済みだから読まなくてよい」を、**まだ片付けていないものへ**
+   * 出すことになる。
+   */
+  it('閉じていない報告には印が付かない', async () => {
+    const delivered = await deliverReport(
+      storesWithGet(async (id) => (id === REPORT_ID ? commitment({}) : null)),
+    );
+
+    expect(delivered).not.toContain('既に片付けている');
+  });
+
+  /**
+   * **この歯が単独で守るもの**: 台帳が引けなかったときに**安全側（雑音側）へ**
+   * 倒れること。
+   *
+   * 3値の `'unknown'` は `'open'` の言い換えではないが、**出す文言としては同じ**
+   * （ふつうに全文を出す）。**引けなかったことを「閉じている」と読まない。**
+   */
+  it('台帳が引けなかったら印を付けない（unknown は雑音側へ倒す）', async () => {
+    const delivered = await deliverReport(
+      storesWithGet(() => Promise.reject(new Error('台帳が読めない'))),
+    );
+
+    expect(delivered).toContain('本文の前半');
+    expect(delivered).not.toContain('既に片付けている');
+  });
+
+  /**
+   * **この歯が単独で守るもの**: 印は**本文の後ろ**に出ること。
+   *
+   * 本文より前に置くと「読まなくてよい」と読まれて本文を飛ばされる ——
+   * 本文を残した意味が消える。
+   */
+  it('印は本文より後ろに出る', async () => {
+    const delivered = await deliverReport(
+      storesWithGet(async (id) =>
+        id === REPORT_ID ? commitment({ closedAt: '2026-08-24T00:05:00.000Z' }) : null,
+      ),
+    );
+
+    expect(delivered.indexOf('本文の前半')).toBeLessThan(
+      delivered.indexOf('この報告は台帳で既に片付けている'),
+    );
+  });
+});
