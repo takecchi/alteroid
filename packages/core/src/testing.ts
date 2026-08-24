@@ -39,6 +39,7 @@ import type {
   TranscriptArchive,
   UsageStore,
 } from './store.js';
+import { ensureTrailingNewline } from './store.js';
 import {
   foldOneshotUsage,
   foldUsageSnapshot,
@@ -167,6 +168,15 @@ export function createMemoryStores(): Stores {
     async write(slug, content) {
       const before = documents.get(slug);
       const updatedAt = new Date().toISOString();
+      // **保存する形へ正規化してから、以降は正規化した本文だけを使う。**
+      // `PersonaStore.write` の契約（`store.ts`）であり、fs（`#writeNow` が
+      // `writeFile` へ渡す直前）/ pg（`write` が `body` を作る所）と同じ位置に
+      // ある。**ここが無かったせいで、同じ `write` に対して `read` が返す値が
+      // インメモリだけ違っていた**（#370）。派生値（title / bytes / 要旨 /
+      // ハッシュ）も本物と同じく正規化した後の本文から作る——`bytes` は fs では
+      // ファイルの `stats.size` なので、正規化前の長さを数えると本物と1バイト
+      // ずれる。
+      const body = ensureTrailingNewline(content);
       // **write() と append()（下）の唯一の通り道。** fs / pg と同じく、誰が
       // 書いたかを問わずここでハッシュ・describedAt を更新する。human 印には
       // 触らない。describedAt は書き手が書けない（`nextDescribedAt` の doc）。
@@ -178,20 +188,20 @@ export function createMemoryStores(): Stores {
       if (before === undefined && !createdAtStore.has(slug)) createdAtStore.set(slug, updatedAt);
       const next = nextDescribedAt({
         priorContent: before?.content ?? null,
-        nextContent: content,
+        nextContent: body,
         priorDescribedAt: describedAt.get(slug),
         writtenAt: updatedAt,
       });
       if (next === undefined) describedAt.delete(slug);
       else describedAt.set(slug, next);
-      const derived = deriveMemoryFrontmatter({ content, updatedAt, describedAt: next });
+      const derived = deriveMemoryFrontmatter({ content: body, updatedAt, describedAt: next });
       const doc: MemoryDocument = {
         slug,
-        title: /^#\s+(.+)$/m.exec(content)?.[1] ?? slug,
+        title: /^#\s+(.+)$/m.exec(body)?.[1] ?? slug,
         updatedAt,
         createdAt: toMemoryCreatedAt(createdAtStore.get(slug)),
-        bytes: Buffer.byteLength(content),
-        content,
+        bytes: Buffer.byteLength(body),
+        content: body,
         frontmatter: derived.frontmatter,
         kind: derived.kind,
         description: derived.description,
@@ -199,12 +209,22 @@ export function createMemoryStores(): Stores {
         descriptionFreshness: derived.descriptionFreshness,
       };
       documents.set(slug, doc);
-      contentSha256.set(slug, sha256Hex(content));
+      contentSha256.set(slug, sha256Hex(body));
       return doc;
     },
     async append(slug, content) {
       const existing = documents.get(slug);
-      return persona.write(slug, existing ? `${existing.content}\n${content}` : content);
+      // **既存の本文を `ensureTrailingNewline` に通してから連結する。** 上の
+      // `write` が既に正規化しているので冗長に見えるが、fs
+      // （`ensureTrailingNewline(existing.content)` ＋ `#writeNow` の正規化）/
+      // pg（`right(content, 1) = E'\n'` の場合分け ＋ `write` の正規化）と
+      // 同じ二重の守りに揃えてある。**片方だけ外しても追記の歯は落ちない**
+      // ——落ちないことは「守られていない」ではなく、もう片方が効いていると
+      // いう意味である（#354 の変異試験が fs / pg で実測した形）。
+      return persona.write(
+        slug,
+        existing ? `${ensureTrailingNewline(existing.content)}\n${content}` : content,
+      );
     },
     async remove(slug) {
       documents.delete(slug);

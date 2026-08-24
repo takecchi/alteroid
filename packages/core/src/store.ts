@@ -36,13 +36,58 @@ import type {
  * マネージャー子プロセスへこれらの実装を渡してはいけない。
  */
 
+/**
+ * 記憶の本文を保存する形へ正規化する — 末尾に改行が1つある形にする。
+ *
+ * **`PersonaStore` を実装する側は、これを自分で書き直さないでここを呼ぶこと。**
+ * 出所がここに在るのは、複製された結果が実際に食い違ったからである（下の
+ * `write` の doc、および #370）。
+ */
+export function ensureTrailingNewline(text: string): string {
+  return text.endsWith('\n') ? text : `${text}\n`;
+}
+
 /** 記憶 = 人間がいつでも読んで直せる Markdown 文書群（提供価値1）。 */
 export interface PersonaStore {
   list(): Promise<MemoryDocumentMeta[]>;
   read(slug: string): Promise<MemoryDocument | null>;
-  /** 全文置換。存在しなければ作る。 */
+  /**
+   * 全文置換。存在しなければ作る。
+   *
+   * **契約: 書いた本文は、末尾の改行が正規化されて読み戻る。**
+   * `write(slug, '# X')` の直後の `read(slug)` が返す `content` は `'# X\n'`
+   * であって `'# X'` ではない。既に `\n` で終わっているなら足さない。
+   * `bytes` も `content_sha256` も、この正規化を通した後の本文に対して数える。
+   * **実装する側はこの正規化を自分で書かず、上の `ensureTrailingNewline` を
+   * 通すこと。**
+   *
+   * **この契約は、かつて3実装のうち1つで守られていなかった（#370）。**
+   * `ensureTrailingNewline` は `storage-fs` と `storage-pg` に逐語で複製されて
+   * いて共有の出所が無く、3つ目（`testing.ts` のインメモリ）はそれを持たない
+   * まま書かれた。結果、同じ `write(slug, '# X')` に対して `read()` が返す値が
+   * 実装ごとに違い（fs / pg は `'# X\n'`、インメモリは `'# X'`）、
+   * **`packages/core` の単体テストが当たるのは乖離を持っているインメモリの
+   * ほうだけだった** — 本番と違う形のものを測って、本番を測ったことにして
+   * いた。**同型の前科がもう1件、`memory.ts` の冒頭に記録されている**
+   * （見出しを付けるか否かで、やはりインメモリだけが違っていた）。
+   *
+   * **いまは3実装とも上の `ensureTrailingNewline` を通していて、この契約には
+   * 3実装それぞれに歯が当たっている**（fs: `packages/storage-fs/src/index.test.ts`
+   * / pg: `packages/storage-pg/src/index.test.ts` / インメモリ:
+   * `packages/core/src/persona-contract.test.ts`）。**4つ目を足すときは、
+   * その歯も4つ目にする。** 1つで測って3つとも測ったことにしないのが、
+   * この Issue の主題そのものである。
+   */
   write(slug: string, content: string): Promise<MemoryDocument>;
-  /** 末尾に追記。存在しなければ作る。 */
+  /**
+   * 末尾に追記。存在しなければ作る。
+   *
+   * **契約: 既存の本文と追記の本文のあいだには、必ず空行が1つ入る。**
+   * 既存が改行で終わっているかどうかで結果が変わってはいけない — 上の `write`
+   * の正規化に頼らず、`append` の側でも `ensureTrailingNewline` を通すこと
+   * （fs / pg はどちらもそうしている。#354 の変異試験は、この二重の守りの
+   * 片方だけを外しても歯が落ちないことを実測している）。
+   */
   append(slug: string, content: string): Promise<MemoryDocument>;
   remove(slug: string): Promise<void>;
   /**

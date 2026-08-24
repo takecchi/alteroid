@@ -273,8 +273,13 @@ describe('クローンの道具', () => {
 
     // 新しい順に返るので、先頭が2回目の書き込み。
     const [second, first] = await h.stores.journal.list({ types: ['memory_update'] });
-    expect(first).toMatchObject({ bytesBefore: 0, bytesAfter: 5 });
-    expect(second).toMatchObject({ bytesBefore: 5, bytesAfter: 10 });
+    // **数は末尾の改行を含む。** `PersonaStore.write` の契約（`store.ts`）で
+    // 書いた本文は末尾に改行が1つ足された形で保存される。**以前ここは改行を
+    // 含まない数（1つ少ない側）で緑だった** —— インメモリ実装だけが正規化して
+    // いなかったからで、fs / pg では最初からこの数だった（#370）。
+    // `12345`（5バイト）→ 保存は `12345\n`（6バイト）。
+    expect(first).toMatchObject({ bytesBefore: 0, bytesAfter: 6 });
+    expect(second).toMatchObject({ bytesBefore: 6, bytesAfter: 11 });
   });
 
   /**
@@ -302,7 +307,9 @@ describe('クローンの道具', () => {
       });
 
       expect(reply).toContain('新規作成');
-      expect(reply).toContain('5 文字');
+      // `12345`（5文字）は `12345\n`（6文字）として保存される（#370。下の
+      // 各件と同じ理由で、以前ここは 5 だった）。
+      expect(reply).toContain('6 文字');
       // 「前」が無いので矢印（増減の表現）は出ない。
       expect(reply).not.toContain('→');
     });
@@ -321,7 +328,9 @@ describe('クローンの道具', () => {
       // 文字数は一致するが、ここで測っているのは `content.length` が使われて
       // いること（`Buffer.byteLength` への取り違えでも同じ値になってしまう
       // 入力を避けるため、次のテストでは全角を使って区別する）。
-      expect(reply).toContain('12,345 → 4,567 文字（-7,778）');
+      // 前後とも末尾の改行のぶん1文字多い（#370）。増減（-7,778）は変わらない
+      // ——桁区切りと「文字（バイトではない）」を測る歯は、そのまま効いている。
+      expect(reply).toContain('12,346 → 4,568 文字（-7,778）');
     });
 
     it('全角文字では文字数とバイト数が一致しない。応答は文字数（バイトではない）', async () => {
@@ -335,8 +344,12 @@ describe('クローンの道具', () => {
         summary: '書いた',
       });
 
-      // 「価値観です」は5文字・15バイト。バイト数（15）ではなく文字数（5）が出る。
-      expect(reply).toContain('0 → 5 文字（+5）');
+      // 「価値観です」は5文字・15バイト。バイト数ではなく文字数が出る。
+      // 前は空文字を書いたので保存は `\n`（1文字・1バイト）、後は
+      // `価値観です\n`（6文字・16バイト）である（#370）。バイト数で数える実装
+      // なら `1 → 16 文字（+15）` になるので、下の `not.toContain('15')` が
+      // 引き続き取り違えを撃つ。
+      expect(reply).toContain('1 → 6 文字（+5）');
       expect(reply).not.toContain('15');
     });
 
@@ -350,7 +363,8 @@ describe('クローンの道具', () => {
         summary: '増やした',
       });
 
-      expect(reply).toContain('5 → 10 文字（+5）');
+      // 前後とも末尾の改行のぶん1文字多い（#370）。
+      expect(reply).toContain('6 → 11 文字（+5）');
     });
 
     it('消えた見出しを名指しで列挙する', async () => {
@@ -865,9 +879,12 @@ describe('クローンの道具', () => {
     await h.call('memory_append', { slug: 'values', content: '67890', summary: '追記' });
 
     const [entry] = await h.stores.journal.list({ types: ['memory_update'], limit: 1 });
-    // append は改行を挟んで足す（testing.ts の append 実装）ので
-    // 5（前の内容）+ 1（改行）+ 5（追記）= 11。
-    expect(entry).toMatchObject({ action: 'append', bytesBefore: 5, bytesAfter: 11 });
+    // append は空行を挟んで足す。**数は末尾の改行を含む**（`PersonaStore` の
+    // 契約。`store.ts`）ので、前は `12345\n` の 6、後は
+    // `12345\n` + `\n` + `67890` + 末尾の改行 = 13 である。
+    // **以前ここは 5 / 11 で緑だった** —— インメモリ実装だけが正規化して
+    // いなかったからで、fs / pg では最初から 6 / 13 だった（#370）。
+    expect(entry).toMatchObject({ action: 'append', bytesBefore: 6, bytesAfter: 13 });
   });
 
   /**
@@ -900,7 +917,10 @@ describe('クローンの道具', () => {
 
     it('削除が日誌に残る（slug と消す直前の文字数）', async () => {
       const h = harness();
-      const body = '# メモ\n\n' + 'あ'.repeat(42);
+      // 末尾の改行込みで書く（#370。`String(body.length)` と読み戻した本文の
+      // 文字数を一致させるため——書いた文字列が改行で終わっていないと、契約の
+      // 正規化のぶん 1 文字ずれる）。
+      const body = '# メモ\n\n' + 'あ'.repeat(42) + '\n';
       await h.stores.persona.write('temp-note', body);
 
       await h.call('memory_delete', { slug: 'temp-note', summary: '片付け' });
@@ -917,7 +937,8 @@ describe('クローンの道具', () => {
       await h.call('memory_delete', { slug: 'temp-note', summary: '片付け' });
 
       const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
-      expect(entry).toMatchObject({ bytesBefore: 5, bytesAfter: 0 });
+      // `12345` は `12345\n`（6バイト）として保存される（#370）。
+      expect(entry).toMatchObject({ bytesBefore: 6, bytesAfter: 0 });
     });
 
     it('削除の日誌に本文が写っていない', async () => {
@@ -957,23 +978,29 @@ describe('クローンの道具', () => {
       await h.stores.persona.markHumanTouched(slug, new Date().toISOString());
     }
 
-    const longBody = [
-      '# 価値観',
-      '',
-      '## 判断の基準',
-      '',
-      '本文1行目。',
-      '本文2行目。',
-      '',
-      '## 好み',
-      '',
-      '- 箇条書き1',
-      '- 箇条書き2',
-      '',
-      '### 細目',
-      '',
-      '最後の段落。',
-    ].join('\n');
+    // **末尾を改行で終える。** 記憶の文書は `PersonaStore.write` の契約
+    // （`packages/core/src/store.ts`）で末尾の改行が正規化されて保存されるので、
+    // 改行で終わらない文字列を「書いた本文」として持つと、読み戻した本文と
+    // 1文字ずれる。**以前ここは改行無しで、それでも緑だった** —— インメモリ実装
+    // だけが正規化していなかったからで、fs / pg では最初からずれていた（#370）。
+    const longBody =
+      [
+        '# 価値観',
+        '',
+        '## 判断の基準',
+        '',
+        '本文1行目。',
+        '本文2行目。',
+        '',
+        '## 好み',
+        '',
+        '- 箇条書き1',
+        '- 箇条書き2',
+        '',
+        '### 細目',
+        '',
+        '最後の段落。',
+      ].join('\n') + '\n';
 
     it('存在しない slug には断り、作られていない', async () => {
       const h = harness();
@@ -1245,7 +1272,8 @@ describe('クローンの道具', () => {
 
     it('malformed な frontmatter には断り、何も変わっていない', async () => {
       const h = harness();
-      const malformed = '---\nno colon here\n---\n本文';
+      // 末尾の改行は `PersonaStore.write` の契約（#370。上の longBody と同じ理由）。
+      const malformed = '---\nno colon here\n---\n本文\n';
       await h.stores.persona.write('values', malformed);
 
       const reply = await h.call('memory_frontmatter_set', {
@@ -3449,7 +3477,8 @@ describe('journal_read — memory_update の action / バイト数（#339）', (
     const reply = await h.call('journal_read', { id: entry.id });
 
     expect(reply).toContain('write');
-    expect(reply).toContain('bytes=0→5');
+    // `12345` は `12345\n`（6バイト）として保存される（#370）。
+    expect(reply).toContain('bytes=0→6');
   });
 
   it('action / バイト数を持たない古いエントリは「不明」と明示し、0 としては出さない', async () => {
@@ -3487,7 +3516,8 @@ describe('journal_read — memory_update の action / バイト数（#339）', (
     // 共通する既存の仕組みである。ここで確かめたいのはその混在ではなく、
     // memory_update 固有の自由文（summary、削除直前の文字数を含む）へ
     // `bytes=` が紛れ込まないことである。）
-    expect(headLine).toContain('bytes=5→0');
+    // `12345` は `12345\n`（6バイト）として保存される（#370）。
+    expect(headLine).toContain('bytes=6→0');
     // body（summary）には削除直前の文字数（「40 文字」等の自由文）が入るが、
     // 機械可読なバイトのラベル（`bytes=`）は出ない——単位の異なる2つの数値が
     // 同じ自由文へ混ざる経路を作らない。
@@ -4480,11 +4510,13 @@ describe('一覧を抜粋にしたものには、全文の行き先がある', (
 
   it('memory_read は切れていないとき注記を出さない（目印を効かせるため）', async () => {
     const h = harness();
-    await h.stores.persona.write('small', '# 題\n\n短い本文');
+    // 末尾の改行は `PersonaStore.write` の契約（#370）。書いたものがそのまま
+    // 読み戻る形にして、注記が付いていないことだけを測る。
+    await h.stores.persona.write('small', '# 題\n\n短い本文\n');
 
     const reply = await h.call('memory_read', { slug: 'small' });
 
-    expect(reply).toBe('# 題\n\n短い本文');
+    expect(reply).toBe('# 題\n\n短い本文\n');
   });
 
   it('self_read は長い正典を切って返し、続きの取り方を示す', async () => {
