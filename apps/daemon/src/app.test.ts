@@ -2716,6 +2716,76 @@ describe('宣言と実物の一致（/schedule）', () => {
   });
 });
 
+/**
+ * Issue #424。`validator('json', …)` に `hook` を渡していない経路は、hono の
+ * 既定の 400（`@hono/standard-validator` の `sanitizeIssues`）が
+ * `c.json({ data: <リクエスト本文そのもの>, error, success: false }, 400)` を
+ * 返す——`data` は本文の丸写しで、`RESTRICTED_DATA_FIELDS` は
+ * `header: ['cookie']` だけなので `json` は素通しになる（#422 が `PUT /tokens`
+ * に足した歯・実装と同じ実測）。ここは資格そのものを運ぶ2経路
+ * （`POST /runners/credentials` と `PUT /profile`）で同じ穴を塞ぐ。
+ *
+ * **2本の値を送るのは「壊れた行だけ伏せる」直しでも緑になるのを防ぐため**
+ * （#422 の「スキーマ検証で落ちた 400 にも、同じ回に送った値が1つも出ない」の
+ * doc と同じ理由）——1本だけだと、壊れた行の値だけを消す直しでも通ってしまう。
+ */
+describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値が漏れない（#424）', () => {
+  it('POST /runners/credentials: 2本目の name が不正でも、同じ回に送った値が1つも出ない', async () => {
+    const FIRST = 'CRED-FIRST-DUMMY';
+    const SECOND = 'CRED-SECOND-DUMMY';
+
+    const response = await app.request(
+      '/runners/credentials',
+      json({
+        credentials: [
+          { name: 'GH_TOKEN', value: FIRST },
+          // `name` が `/^[A-Z][A-Z0-9_]*$/`（`runnerCredentialSchema`）に落ちる。
+          { name: 'not-upper-case', value: SECOND },
+        ],
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    const text = await response.text();
+    expect(text).not.toContain(FIRST);
+    expect(text).not.toContain(SECOND);
+
+    // **既定の `{ data, error, success }` の形が返っていないこと。** `data` が
+    // 無く、`error` が配列ではなく文字列であることまで見る——`data` キーだけを
+    // 消して `error`（issue の配列）をそのまま残す直しでも、配列の中に
+    // 送った値が残っていることがある。
+    const body = JSON.parse(text) as Record<string, unknown>;
+    expect(body).not.toHaveProperty('data');
+    expect(typeof body.error).toBe('string');
+  });
+
+  it('PUT /profile: script を打ち間違えた本文でも、送った値が1つも出ない', async () => {
+    const SECRET = 'CRED-PROFILE-DUMMY';
+
+    // **`requireOperator` を先に通す必要がある。** 上の `beforeEach` が作る
+    // `app` は `auth` を渡していないので `authPlan.enabled` が false になり
+    // （`app.ts` の `authenticate` の doc）、全リクエストが `operator` として
+    // 通る——`実行環境プロファイル` describe の既存テスト（`PUT /profile` を
+    // 素のヘッダだけで叩いて 200 を得ている）と同じ前提であることを、ここでも
+    // その既存テストの結果（200 が返ること）を根拠に流用する。
+    const response = await app.request('/profile', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      // `script` を書き忘れた本文。`profileUpdateRequestSchema` は
+      // `{ script: string }` を要求するので、必須項目の欠落で落ちる。
+      body: JSON.stringify({ notScript: `export SECRET_IN_PROFILE=${SECRET}` }),
+    });
+
+    expect(response.status).toBe(400);
+    const text = await response.text();
+    expect(text).not.toContain(SECRET);
+
+    const body = JSON.parse(text) as Record<string, unknown>;
+    expect(body).not.toHaveProperty('data');
+    expect(typeof body.error).toBe('string');
+  });
+});
+
 function fakeRunner(
   runnerId: string,
   options: { runnerIdKnown?: boolean; workspacePathKnown?: boolean; workspacePath?: string } = {},
