@@ -4,6 +4,7 @@ import type { BuildRevision, RunnerEvent, RunnerHost } from '@alteroid/core';
 import {
   DEFAULT_SSE_HEARTBEAT_MS,
   readExecutionResources,
+  reasonOf,
   resolveBuildRevision,
   startSseHeartbeat,
   RunnerFenceError,
@@ -238,6 +239,31 @@ export function createRunnerApp(deps: RunnerAppDeps) {
   });
 
   const app = new Hono()
+    /**
+     * Hono の既定のエラーハンドラを、本文を出さない規律に合わせて置き換える
+     * （Issue #249）。
+     *
+     * **応答（500 / `Internal Server Error`）と `HTTPException` の分岐
+     * （`getResponse()` を返す枝）は既定と同じに保つ。** 変えるのは
+     * `console.error(err)` の枝だけである。デーモン側（`apps/daemon/src/
+     * app.ts` の `createApp` 冒頭）と同じ判断で、実物（`hono@4.13.1`、
+     * `node_modules/.pnpm/hono@4.13.1/node_modules/hono/dist/hono-base.js`
+     * の `errorHandler`）の逐語も同じくそちらに引いてある。
+     *
+     * ここが踏む実例は `/managers/:id/resume` の `throw error`（`RunnerFenceError`
+     * 以外）である——世代の古い resume 以外の失敗は、これまで Hono の既定
+     * ハンドラを未捕捉のまま抜けていた。
+     */
+    .onError((err, c) => {
+      if ('getResponse' in err) {
+        const res = err.getResponse();
+        return c.newResponse(res.body, res);
+      }
+      process.stderr.write(
+        `alteroid-runner: HTTP 経路で例外を捕まえました（本文は出しません）: ${reasonOf(err)}\n`,
+      );
+      return c.text('Internal Server Error', 500);
+    })
     /** 器の生存確認だけ。制御面の情報は何も返さない（だから鍵を要求しない）。 */
     .get('/livez', (c) => c.json({ ok: true }))
 
