@@ -1749,6 +1749,31 @@ describe('PgTokenPoolStore', () => {
     });
   });
 
+  it('createdAt / updatedAt も往復する（Issue #393）', async () => {
+    await stores.tokens.replace([
+      {
+        id: 'tok-a',
+        label: 'a',
+        value: 'tok-aaa',
+        order: 0,
+        createdAt: '2026-08-01T00:00:00.000Z',
+        updatedAt: '2026-08-02T03:04:05.000Z',
+      },
+    ]);
+    const [row] = await stores.tokens.list();
+    expect(row?.createdAt).toBe('2026-08-01T00:00:00.000Z');
+    expect(row?.updatedAt).toBe('2026-08-02T03:04:05.000Z');
+  });
+
+  it('createdAt / updatedAt が無い行は無いまま往復する（default now() で埋めない）', async () => {
+    // **PR1 の版が書いた行がこの形である。** 器の側が `now()` で埋めると、
+    // 「いま作られた」という嘘が入る（`AgentToken.createdAt` の doc）。
+    await stores.tokens.replace([{ id: 'tok-a', label: 'a', value: 'tok-aaa', order: 0 }]);
+    const [row] = await stores.tokens.list();
+    expect(row).not.toHaveProperty('createdAt');
+    expect(row).not.toHaveProperty('updatedAt');
+  });
+
   it('設定は置かれていなければ core の既定を返す', async () => {
     expect(await stores.tokens.readSettings()).toEqual({
       rotateOn: 'free_exhausted',

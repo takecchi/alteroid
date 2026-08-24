@@ -331,6 +331,12 @@ const STATEMENTS = [
      cooldown_ms bigint not null,
      updated_at timestamptz
    )`,
+
+  // 行がいつ作られ、いつ変わったか（Issue #393）。**`default now()` を付けない**
+  // ——付けると PR1 の版で入った既存の行が「いま作られた」ことになる
+  // （`@alteroid/core` の `AgentToken.createdAt` の doc）。
+  `alter table agent_tokens add column if not exists created_at timestamptz`,
+  `alter table agent_tokens add column if not exists updated_at timestamptz`,
 ] as const;
 
 export async function migrate(db: Db): Promise<void> {

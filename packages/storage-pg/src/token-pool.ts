@@ -27,6 +27,8 @@ function toRow(token: AgentToken) {
     lastRejectedReason: token.lastRejectedReason ?? null,
     invalidatedAt: token.invalidatedAt === undefined ? null : new Date(token.invalidatedAt),
     invalidatedReason: token.invalidatedReason ?? null,
+    createdAt: token.createdAt === undefined ? null : new Date(token.createdAt),
+    updatedAt: token.updatedAt === undefined ? null : new Date(token.updatedAt),
   };
 }
 
@@ -42,6 +44,8 @@ function fromRow(row: AgentTokenRow): AgentToken {
     ...(row.lastRejectedReason === null ? {} : { lastRejectedReason: row.lastRejectedReason }),
     ...(row.invalidatedAt === null ? {} : { invalidatedAt: row.invalidatedAt.toISOString() }),
     ...(row.invalidatedReason === null ? {} : { invalidatedReason: row.invalidatedReason }),
+    ...(row.createdAt === null ? {} : { createdAt: row.createdAt.toISOString() }),
+    ...(row.updatedAt === null ? {} : { updatedAt: row.updatedAt.toISOString() }),
   };
 }
 

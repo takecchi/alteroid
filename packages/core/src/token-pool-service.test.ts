@@ -108,3 +108,118 @@ describe('既定（プールが空のとき）', () => {
     expect(settings.rotateOn).toBe('free_exhausted');
   });
 });
+
+/**
+ * 止まった事実の記録（Issue #393）。**回さない**——記録するだけである。
+ */
+describe('noteUnusable / noteUsable', () => {
+  const AT = '2026-08-25T03:00:00.000Z';
+  const MESSAGE = "You've hit your org's monthly spend limit";
+
+  async function seeded() {
+    const stores = createMemoryStores();
+    const ids = ['tok-a', 'tok-b'];
+    const service = createTokenPoolService({
+      stores,
+      now: () => new Date(AT),
+      newId: () => ids.shift() ?? 'tok-fallback',
+    });
+    await service.replace([
+      { label: 'first', value: 'tok-aaa' },
+      { label: 'second', value: 'tok-bbb' },
+    ]);
+    return { stores, service };
+  }
+
+  it('指した1行にだけ記録する（他の行は動かない）', async () => {
+    const { service } = await seeded();
+
+    const noted = await service.noteUnusable({ id: 'tok-a', message: MESSAGE });
+
+    expect(noted?.lastRejectedAt).toBe(AT);
+    expect(noted?.lastRejectedReason).toBe(MESSAGE);
+    // 文言から導いた見込み（保存しない。読むたびに導く）。
+    expect(noted?.recovery).toBe('time');
+
+    const { tokens } = await service.list();
+    const other = tokens.find((token) => token.id === 'tok-b');
+    expect(other).not.toHaveProperty('lastRejectedAt');
+    expect(other).not.toHaveProperty('cooldownUntil');
+  });
+
+  it('resetsAt が無いときは、その列の中で読んだ設定の既定で冷やす', async () => {
+    const { service } = await seeded();
+    // 既定を変えてから記録する——**呼び出し側が既定を渡す形にしていない**ので、
+    // 変えた直後の値がそのまま効く。
+    await service.setSettings({ cooldownMs: 60_000 });
+
+    const noted = await service.noteUnusable({ id: 'tok-a', message: MESSAGE });
+
+    expect(noted?.cooldownUntil).toBe(Date.parse(AT) + 60_000);
+  });
+
+  it('resetsAt が取れていればそちらを使う（権威ある期限）', async () => {
+    const { service } = await seeded();
+
+    const noted = await service.noteUnusable({
+      id: 'tok-a',
+      message: MESSAGE,
+      resetsAt: 1_800_000_000_000,
+    });
+
+    expect(noted?.cooldownUntil).toBe(1_800_000_000_000);
+  });
+
+  it('使えたことを確かめられたら記録を消す', async () => {
+    const { service } = await seeded();
+    await service.noteUnusable({ id: 'tok-a', message: MESSAGE });
+
+    const cleared = await service.noteUsable('tok-a');
+
+    expect(cleared).not.toHaveProperty('lastRejectedAt');
+    expect(cleared).not.toHaveProperty('lastRejectedReason');
+    expect(cleared).not.toHaveProperty('cooldownUntil');
+    expect(cleared).not.toHaveProperty('recovery');
+  });
+
+  it('居ない行を指したら undefined を返す（投げない）', async () => {
+    const { service } = await seeded();
+
+    // 通知が届くまでの間に人間がその行を消していることは普通に起こる。
+    expect(await service.noteUnusable({ id: 'ghost', message: MESSAGE })).toBeUndefined();
+    expect(await service.noteUsable('ghost')).toBeUndefined();
+  });
+
+  it('返り値に value が無い（記録の経路も値を外へ出さない）', async () => {
+    const stores = createMemoryStores();
+    const SECRET = 'tok-secret-in-note-path';
+    const service = createTokenPoolService({
+      stores,
+      now: () => new Date(AT),
+      newId: () => 'tok-a',
+    });
+    await service.replace([{ label: 'a', value: SECRET }]);
+
+    const noted = await service.noteUnusable({ id: 'tok-a', message: MESSAGE });
+
+    expect(noted).not.toHaveProperty('value');
+    expect(JSON.stringify(noted)).not.toContain(SECRET);
+    // 正本の側では値が保たれている（記録の消去は資格の消去ではない）。
+    expect((await stores.tokens.list())[0]?.value).toBe(SECRET);
+  });
+
+  it('同じ列を通る（記録と全文置換が混ざらない）', async () => {
+    const { service } = await seeded();
+
+    // 記録と、その行を含む全文置換を同時に投げる。直列化されていれば、後から
+    // 入った replace は記録済みの行を読んで `lastRejectedReason` を引き継ぐ。
+    const noting = service.noteUnusable({ id: 'tok-a', message: MESSAGE });
+    const replacing = service.replace([{ id: 'tok-a', label: 'renamed' }]);
+    await Promise.all([noting, replacing]);
+
+    const { tokens } = await service.list();
+    expect(tokens).toHaveLength(1);
+    expect(tokens[0]?.label).toBe('renamed');
+    expect(tokens[0]?.lastRejectedReason).toBe(MESSAGE);
+  });
+});

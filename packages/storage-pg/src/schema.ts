@@ -496,6 +496,13 @@ export const agentTokens = pgTable('agent_tokens', {
    * （`@alteroid/core` の `AgentToken.invalidatedReason` の doc）。
    */
   invalidatedReason: text('invalidated_reason'),
+  /**
+   * 行が作られた時刻 / 最後に変わった時刻。**どちらも null を許す**——PR1 の版が
+   * 書いた行には無いので（`@alteroid/core` の `AgentToken.createdAt` の doc）、
+   * `default now()` で埋め直さない。埋めると「いま作られた」という嘘になる。
+   */
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }),
 });
 
 /**

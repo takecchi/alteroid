@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { fingerprintOf } from './credentials.js';
+import { limitRecoveryOf, limitRecoverySchema, type LimitRecovery } from './usage-limits.js';
 
 /**
  * 認証トークンのプール（Issue #393「PR1 プールの器」）。
@@ -166,6 +167,25 @@ export interface AgentToken {
    * `switch` や `includes` で判定しない。
    */
   invalidatedReason?: string;
+  /**
+   * この行が最初に作られた時刻（ISO 8601）。
+   *
+   * **PR1 の版が書いた行には無い**（後から足した列である）。無い行を `now()` で
+   * 埋め直さないこと——それは「いま作られた」という嘘になる。**無いことが読める
+   * のは「PR1 の版で書かれた行である」という事実だけである。**
+   */
+  createdAt?: string;
+  /**
+   * この行が最後に変わった時刻（ISO 8601）。
+   *
+   * **「プールが最後に書かれた時刻」ではない。** `PUT /tokens` は全文置換なので、
+   * 1行だけ直した書き込みでも全行がこの関数を通る。全行に判を押すと、この列は
+   * 「最後に誰かが `PUT` を打った時刻」に化けて、**どの行がいつ変わったかが
+   * 取れなくなる**（AGENTS.md 地雷「取れない軸に 0 の行を作る」の同型——値の側が
+   * 取れていないことを出力から消す）。⟹ {@link normalizeTokenPool} は
+   * **実際に変わった行だけ**に判を押す。
+   */
+  updatedAt?: string;
 }
 
 /**
@@ -185,6 +205,20 @@ export const agentTokenViewSchema = z.object({
   lastRejectedReason: z.string().optional(),
   invalidatedAt: z.string().optional(),
   invalidatedReason: z.string().optional(),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+  /**
+   * 最後の拒否の文言が「時間で戻る」ものかどうか（{@link limitRecoveryOf}）。
+   *
+   * **保存しない。読むたびに `lastRejectedReason` から導く。** 保存すると、
+   * 分類の表（`usage-limits.ts` の `LIMIT_RECOVERY_BY_PREFIX`）を直したときに
+   * 古い行だけ古い判定を持ち続ける——しかも**どの行が古い判定なのかが行から
+   * 読めない。** 正本は生の文言のほうであり、判定はその射影である。
+   *
+   * `lastRejectedReason` が無ければ**この項目も無い**（「拒否されていない」と
+   * 「拒否されたが分類できない」を `unknown` に潰さない）。
+   */
+  recovery: limitRecoverySchema.optional(),
 });
 export type AgentTokenView = z.infer<typeof agentTokenViewSchema>;
 
@@ -205,6 +239,11 @@ export function toAgentTokenView(token: AgentToken): AgentTokenView {
     ...(token.invalidatedReason === undefined
       ? {}
       : { invalidatedReason: token.invalidatedReason }),
+    ...(token.createdAt === undefined ? {} : { createdAt: token.createdAt }),
+    ...(token.updatedAt === undefined ? {} : { updatedAt: token.updatedAt }),
+    ...(token.lastRejectedReason === undefined
+      ? {}
+      : { recovery: limitRecoveryOf(token.lastRejectedReason) }),
   });
 }
 
@@ -291,6 +330,9 @@ export class TokenPoolInputError extends Error {
  *   `now()`。`disabled: false` → `disabledAt` を落とす。`disabled` 省略 →
  *   既存のまま変えない
  * - **入力に現れなかった既存の行は消える**（`PUT /tokens` は全文置換である）
+ * - `createdAt` は**新規行にだけ**立つ。既存の行は引き継ぐ（無い行は無いまま）
+ * - `updatedAt` は**実際に変わった行にだけ**立つ。変わっていない行は前の値を保つ
+ *   （全文置換だからといって全行に判を押さない。理由は {@link AgentToken.updatedAt}）
  *
  * **投げるのは {@link TokenPoolInputError} だけである。** そのメッセージは
  * `id` / `label` しか含まない——呼び出し側がそのまま応答へ返してよい、という
@@ -327,15 +369,32 @@ export function normalizeTokenPool(
       );
     }
 
+    const nowIso = options.now().toISOString();
+
     const disabledAt =
       input.disabled === undefined
         ? current?.disabledAt
         : input.disabled
-          ? (current?.disabledAt ?? options.now().toISOString())
+          ? (current?.disabledAt ?? nowIso)
           : undefined;
 
     const id = current?.id ?? input.id ?? options.newId();
     const order = input.order ?? index;
+
+    /**
+     * **判を押すのは実際に変わった行だけである**（{@link AgentToken.updatedAt} の doc）。
+     *
+     * 見るのは**この経路で変わりうる4つ**だけ——`label` / `value` / `order` /
+     * `disabledAt`。残り（`cooldownUntil` 以下）は下で「常に引き継ぐ」と書いてある
+     * とおり人間の入力からは動かないので、比べても必ず一致する。**比べる対象を
+     * 「全フィールド」と書くと、引き継ぎの側を直したときに黙って判定が変わる。**
+     */
+    const changed =
+      current === undefined ||
+      current.label !== input.label ||
+      current.value !== value ||
+      current.order !== order ||
+      current.disabledAt !== disabledAt;
 
     const token: AgentToken = {
       id,
@@ -353,6 +412,10 @@ export function normalizeTokenPool(
       ...(current?.invalidatedReason === undefined
         ? {}
         : { invalidatedReason: current.invalidatedReason }),
+      // 新規行だけ `createdAt` を立てる。既存の行は引き継ぐ——**無い行を
+      // `now()` で埋め直さない**（`AgentToken.createdAt` の doc）。
+      ...(current === undefined ? { createdAt: nowIso } : current.createdAt === undefined ? {} : { createdAt: current.createdAt }),
+      ...(changed ? { updatedAt: nowIso } : current?.updatedAt === undefined ? {} : { updatedAt: current.updatedAt }),
     };
     return { token, inputIndex: index };
   });
@@ -363,4 +426,139 @@ export function normalizeTokenPool(
   return built
     .sort((a, b) => a.token.order - b.token.order || a.inputIndex - b.inputIndex)
     .map((entry) => entry.token);
+}
+
+// ---------------------------------------------------------------------------
+// 枠に追い返された事実を1行へ記録する（Issue #393）
+// ---------------------------------------------------------------------------
+
+/**
+ * 「このトークンで止まった」1回の観測。
+ *
+ * **回す判断はここに無い。** ここが持つのは「何を見たか」だけで、次にどの候補へ
+ * 移るか（あるいは移らないか）は回し手（PR3）の領域である。
+ */
+export interface TokenFailureObservation {
+  /** 観測した時刻（ISO 8601）。 */
+  at: string;
+  /**
+   * 止まったときの文言。**SDK が出したものをそのまま入れる——言い換えない。**
+   *
+   * 言い換えると、`limitRecoveryOf` が見る接頭辞が消えて分類が `unknown` へ落ちる。
+   * そして落ちたことは、あとから行を見ても分からない（Issue #393「当たった文言は
+   * 言い換えずそのまま残す」）。
+   */
+  message: string;
+  /**
+   * 権威ある復帰時刻（epoch ミリ秒）。`toRateLimitFacts` の `resetsAt` を渡す。
+   *
+   * **取れなかったら省略する。`0` や `now` で埋めないこと**——埋めた値は
+   * 「そう観測した」と読める（AGENTS.md 地雷「取れない軸に 0 の行を作る」）。
+   */
+  resetsAt?: number;
+  /**
+   * `resetsAt` が取れなかったときに使う冷却（ミリ秒）。設定の既定
+   * （`TokenRotationSettings.cooldownMs`）を渡す。
+   *
+   * **ここで既定値を持たない。** 持つと、設定を変えたのに片方の経路だけ古い値で
+   * 動く形が作れる——`DEFAULT_TOKEN_COOLDOWN_MS` の doc が言うとおり、権威は
+   * `resetsAt` で、その次が「設定として1か所に置いた既定」である。
+   */
+  fallbackCooldownMs: number;
+}
+
+/**
+ * 止まった事実を1行へ書き込む（純粋関数。新しい行を返す）。
+ *
+ * 書くのは3つ——**いつ**（`lastRejectedAt`）・**何と言われたか**（`lastRejectedReason`）・
+ * **いつ戻る見込みか**（`cooldownUntil`）。加えて `updatedAt`。
+ *
+ * **触らないもの:**
+ *
+ * - `disabledAt` — 人間が明示的に外した印である。観測が人間の判断を上書きしない
+ * - `invalidatedAt` / `invalidatedReason` — 「恒常的に通らない」と確定した3つ目の
+ *   状態（{@link AgentToken.invalidatedAt}）。**当面はここへ値を入れない**
+ *   （人間の決定 2026-08-25: 種類で分けるのは記録までにして、扱いは一律で
+ *   「時間で戻る」と仮定する）。⟹ `limitRecoveryOf` が `action` を返す文言でも、
+ *   この関数は冷却へ倒す。**分類は記録されるが、まだ何も分岐させない**
+ *
+ * **`cooldownUntil` に過去の時刻が入りうる。** `resetsAt` が既に過ぎていれば
+ * そのまま過去になる——**丸めて未来へ押し出さない。** 選ぶ側（PR3）は「過ぎて
+ * いれば候補」として読むので、過去の値は「もう戻っている」を正しく表す。
+ */
+export function markTokenUnusable(
+  token: AgentToken,
+  observation: TokenFailureObservation,
+): AgentToken {
+  const cooldownUntil =
+    observation.resetsAt ?? Date.parse(observation.at) + observation.fallbackCooldownMs;
+  return {
+    ...token,
+    lastRejectedAt: observation.at,
+    lastRejectedReason: observation.message,
+    cooldownUntil,
+    updatedAt: observation.at,
+  };
+}
+
+/**
+ * 使えることを確かめられたので、止まっていた記録を**消す**（純粋関数）。
+ *
+ * 消すのは4つ+1——`lastRejectedAt` / `lastRejectedReason` / `cooldownUntil` /
+ * `invalidatedAt` / `invalidatedReason`。**`disabledAt` は消さない**（人間の判断）。
+ *
+ * **なぜ `invalidatedAt` まで消すのか。** 成功は権威ある証拠である——`clone.ts` が
+ * 成功した `result` で `#usageBlocked` を降ろしているのと同じ根拠（逐語は
+ * `grep -n 'ことの権威ある証拠なので' packages/core/src/clone.ts`）。通ったのに
+ * 「恒常的に通らない」という印が残っている行は、**それ自体が嘘である。**
+ *
+ * **⚠️ 「使えることを確かめられた」の意味を薄めないこと。** 呼んでよいのは
+ * 実際に通ったことを観測したときだけで、「たぶん戻ったはず」（冷却が明けた）で
+ * 呼ぶと、この関数は**観測していない成功を記録する。** 冷却が明けたかどうかは
+ * `cooldownUntil` を読めば分かるので、消す必要が無い。
+ */
+export function markTokenUsable(token: AgentToken, at: string): AgentToken {
+  const {
+    lastRejectedAt: _lastRejectedAt,
+    lastRejectedReason: _lastRejectedReason,
+    cooldownUntil: _cooldownUntil,
+    invalidatedAt: _invalidatedAt,
+    invalidatedReason: _invalidatedReason,
+    ...rest
+  } = token;
+  return { ...rest, updatedAt: at };
+}
+
+/**
+ * その行がいま使える見込みか。**観測ではなく、記録から読める範囲の判定である。**
+ *
+ * - `disabled`: 人間が外した（`disabledAt`）
+ * - `invalidated`: 恒常的に通らないと確定している（`invalidatedAt`）
+ * - `cooling`: 冷却中（`cooldownUntil` が `at` より後）
+ * - `ready`: 上のどれでもない
+ *
+ * **`ready` は「通る」ではない。** 通るかどうかは観測しないと分からない
+ * （Issue #393 の3値判定と `probeTokenCandidate` の領域）。ここが答えるのは
+ * 「記録の上で候補から外す理由が無い」までである。
+ */
+export function tokenAvailabilityAt(
+  token: AgentToken,
+  at: number,
+): 'disabled' | 'invalidated' | 'cooling' | 'ready' {
+  if (token.disabledAt !== undefined) return 'disabled';
+  if (token.invalidatedAt !== undefined) return 'invalidated';
+  if (token.cooldownUntil !== undefined && token.cooldownUntil > at) return 'cooling';
+  return 'ready';
+}
+
+/**
+ * その行の最後の拒否が「時間で戻る」ものだったか。拒否の記録が無ければ `undefined`。
+ *
+ * `toAgentTokenView` が外向きの顔へ載せるのと**同じ導き方**である（保存しない。
+ * 生の文言から毎回導く。理由は `agentTokenViewSchema` の `recovery` の doc）。
+ */
+export function tokenRecoveryOf(token: AgentToken): LimitRecovery | undefined {
+  return token.lastRejectedReason === undefined
+    ? undefined
+    : limitRecoveryOf(token.lastRejectedReason);
 }

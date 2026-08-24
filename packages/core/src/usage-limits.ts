@@ -55,9 +55,31 @@ export const usageLimitNoticeSchema = z.object({
 
 export type UsageLimitNotice = z.infer<typeof usageLimitNoticeSchema>;
 
-function startsWithAny(text: string, prefixes: readonly string[]): boolean {
+/**
+ * 当てはまった接頭辞のうち**いちばん長いもの**を返す。当てはまらなければ `undefined`。
+ *
+ * **長いほうを採るのは、短い接頭辞が長い接頭辞を食うからである。** SDK の
+ * {@link USAGE_LIMIT_ERROR_PREFIXES} には `"Your seat type doesn't include usage"` と
+ * `"Your seat type doesn't include usage credits"` の両方が在り、前者は後者の
+ * 接頭辞である。配列の順で最初に当たったものを採ると、**どちらの文言でも短い側が
+ * 当たる** — 判定を接頭辞ごとに分けている側（{@link limitRecoveryOf}）では、それが
+ * そのまま別の判定になる。
+ *
+ * 一致の規則（`startsWith` または `includes`）は {@link startsWithAny} と共有する
+ * ——あちらがこれを呼ぶ形にしてあるので、片方だけ規則が動くことがない。
+ */
+function longestMatchingPrefix(text: string, prefixes: readonly string[]): string | undefined {
   const trimmed = text.trimStart();
-  return prefixes.some((prefix) => trimmed.startsWith(prefix) || trimmed.includes(prefix));
+  let best: string | undefined;
+  for (const prefix of prefixes) {
+    if (!trimmed.startsWith(prefix) && !trimmed.includes(prefix)) continue;
+    if (best === undefined || prefix.length > best.length) best = prefix;
+  }
+  return best;
+}
+
+function startsWithAny(text: string, prefixes: readonly string[]): boolean {
+  return longestMatchingPrefix(text, prefixes) !== undefined;
 }
 
 /**
@@ -94,6 +116,127 @@ export function describeUsageNotice(notice: UsageLimitNotice): string {
           ? '利用上限に近づいている'
           : '組織の方針で止められている（利用上限ではないので、待っても増やしても直らない）';
   return `${head}: ${notice.text}`;
+}
+
+// ---------------------------------------------------------------------------
+// 待てば戻るのか、人間が動かないと戻らないのか（Issue #393）
+// ---------------------------------------------------------------------------
+
+/**
+ * 止まった原因が、**時間の経過だけで戻るか**。
+ *
+ * `kind`（{@link UsageLimitKind}）とは別の軸である。`reached` は「いま通らない」
+ * しか言わず、**戻るかどうかを言わない** — 同じ `reached` の中に、リセットを待てば
+ * 戻るものと、人間が入金や管理者への依頼をしないと永久に戻らないものが混ざっている。
+ *
+ * - `time`: リセット（5時間 / 週 / 請求期間）を待てば戻る
+ * - `action`: 人間が動かないと戻らない（入金・管理者の設定・座席種別の変更）
+ * - `unknown`: どちらとも言えない。**`action` の同義語ではない**（下記）
+ *
+ * ## `unknown` を「捨てる」側へ倒さないこと
+ *
+ * この値の消費者（Issue #393 PR3 の回し手）にとって、`action` と読むことは
+ * **候補を1本永久に降ろす**判断になりうる。`time` と読み違えたときの代償は
+ * 「冷却が明けてもう一度試して、また駄目で冷やし直す」だけで済むが、逆向きの
+ * 読み違えは**まだ戻るトークンを捨てる。** ⟹ 迷ったら `time` 側、少なくとも
+ * `unknown` へ倒し、`unknown` を `action` と同じ扱いにしない。
+ */
+export const limitRecoverySchema = z.enum(['time', 'action', 'unknown']);
+export type LimitRecovery = z.infer<typeof limitRecoverySchema>;
+
+/**
+ * {@link USAGE_LIMIT_ERROR_PREFIXES} の1本ごとの見込み。
+ *
+ * **⚠️ この表の判定は書き手の判定であって、Anthropic 側の仕様の主張ではない。**
+ * 唯一の例外は最初の1行で、それは人間の実測である（下）。他の11行は文言の
+ * 読みから当てたもので、**確認していない。**
+ *
+ * ## なぜ SDK の文字列をここへ書き写しているのか
+ *
+ * 検知そのものは今までどおり SDK の定数がやる（`classifyUsageNotice`）。ここで
+ * 要るのは**接頭辞ごとに違う注記**で、それを付けるには鍵として接頭辞そのものを
+ * 書くしかない。⟹ **書き写しは避けられないので、腐ったら赤くなる形にしてある**
+ * ——`usage-limits.test.ts` が「この表の鍵の集合と SDK の配列の集合が完全に一致
+ * すること」を両方向で見るので、SDK が1つ足しても1つ改名しても落ちる。
+ *
+ * **実行時の倒れ先は `unknown`** である（{@link limitRecoveryOf}）。型でもテストでも
+ * 捕まえるが、それでも本番で当たったときに候補を捨てない側へ倒す。
+ *
+ * ## `time` と判定した根拠
+ *
+ * - `"You've hit your"` — **人間の実測（2026-08-25 JST 報告）**:
+ *   `You've hit your org's monthly spend limit` は、無料枠を使い切って従量課金へ
+ *   切り替わったときに組織の課金上限へ達して出るもので、**請求期間が変われば戻る。**
+ *   この接頭辞は支出上限と時間枠の両方を含む族で、どちらもリセットで戻る
+ * - `"You've reached your"` — 上と同じ族の文言（`getLimitReachedText` の出力）。
+ *   **これは判定であって実測ではない**
+ *
+ * ## `unknown` にした3本
+ *
+ * クレジット（credits）が「買うもの」なのか「期間ごとに配られるもの」なのかを、
+ * こちらは知らない。**プランによって両方ありうる**と読んでいるので、当てずに
+ * `unknown` にしてある——`action` と書けば、実際には月初に戻るトークンを捨てる。
+ */
+const LIMIT_RECOVERY_BY_PREFIX = new Map<string, LimitRecovery>([
+  // 時間で戻る
+  ["You've hit your", 'time'],
+  ["You've reached your", 'time'],
+  // 人間が動かないと戻らない（入金 / 管理者 / 座席種別）
+  ['Your org is out of usage · add funds to continue', 'action'],
+  ['Your org is out of usage · contact your admin', 'action'],
+  ["Your seat type doesn't include usage credits", 'action'],
+  ["Your seat type doesn't include usage", 'action'],
+  ['Your usage allocation has been disabled by your admin', 'action'],
+  ["Your group's usage limit is set to $0", 'action'],
+  ["Your seat type doesn't include extra usage", 'action'],
+  // クレジットが買うものか配られるものかを知らない
+  ["You're out of usage credits", 'unknown'],
+  ['Fable 5 requires usage credits', 'unknown'],
+  ["You're out of extra usage", 'unknown'],
+]);
+
+/** テストが SDK の配列と突き合わせるための、この表の鍵の一覧。 */
+export function knownLimitRecoveryPrefixes(): string[] {
+  return [...LIMIT_RECOVERY_BY_PREFIX.keys()];
+}
+
+/**
+ * その文言が {@link USAGE_LIMIT_ERROR_PREFIXES} のどれに当たったか（いちばん長い
+ * 一致）。当たらなければ `undefined`。
+ *
+ * **{@link limitRecoveryOf} から切り出してある。挙動は1文字も変えていない**
+ * ——あちらはこの関数の返り値を表の鍵として引くだけである。
+ *
+ * **切り出した理由は、そうしないと「どの鍵に当たったか」を測れないことである。**
+ * `longestMatchingPrefix` の取り違え（短い側を採る）は、いま表の上では
+ * `"Your seat type doesn't include usage"` と `"…usage credits"` が同じ注記を
+ * 持つので、**`limitRecoveryOf` の返り値だけを見ても現れない。** 返り値で測る
+ * 形にすると、その歯は「両方 `action` である」ことしか確かめていないことになる
+ * （AGENTS.md「テストが書けない構造は、テストが無いのと同じ」）。
+ *
+ * **次に読む人へ: これは無駄な間接層ではない。** 潰すと、長短の取り違えを
+ * 捕まえている歯がそのまま無力化する。
+ */
+export function matchedUsageLimitPrefix(text: string): string | undefined {
+  return longestMatchingPrefix(text, USAGE_LIMIT_ERROR_PREFIXES);
+}
+
+/**
+ * 文言から回復の見込みを読む。**当てはまらなければ `unknown`。**
+ *
+ * `classifyUsageNotice` と**同じ順序で見る**——組織方針を先に見る。SDK 自身が
+ * 「上限のカードへ回すな」と言っているものであり、待っても直らない
+ * （`ORG_POLICY_LIMIT_PREFIXES` の doc: `This service is disabled for your org`）。
+ *
+ * **接近警告（`warning`）と課金枠への遷移（`transition`）は、ここへ来ても
+ * `unknown` になる。** どちらも「まだ動いている」状態で、回復の見込みを問う対象
+ * ではない——問われたときに `time` と答えると「止まっていて、待てば戻る」と読める。
+ */
+export function limitRecoveryOf(text: string): LimitRecovery {
+  if (longestMatchingPrefix(text, ORG_POLICY_LIMIT_PREFIXES) !== undefined) return 'action';
+  const prefix = matchedUsageLimitPrefix(text);
+  if (prefix === undefined) return 'unknown';
+  return LIMIT_RECOVERY_BY_PREFIX.get(prefix) ?? 'unknown';
 }
 
 // ---------------------------------------------------------------------------
