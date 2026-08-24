@@ -751,6 +751,46 @@ export function createApp(deps: AppDeps) {
 
   const base = new Hono<{ Variables: AuthVariables }>();
 
+  /**
+   * Hono の既定のエラーハンドラを、本文を出さない規律に合わせて置き換える
+   * （Issue #249）。
+   *
+   * **応答（500 / `Internal Server Error`）と `HTTPException` の分岐
+   * （`getResponse()` を返す枝）は既定と同じに保つ。** 変えるのは
+   * `console.error(err)` の枝だけである。実物（`hono@4.13.1`、
+   * `node_modules/.pnpm/hono@4.13.1/node_modules/hono/dist/hono-base.js` の
+   * `errorHandler`）は逐語で:
+   *
+   * ```
+   * var errorHandler = (err, c) => {
+   *   if ("getResponse" in err) {
+   *     const res = err.getResponse();
+   *     return c.newResponse(res.body, res);
+   *   }
+   *   console.error(err);
+   *   return c.text("Internal Server Error", 500);
+   * };
+   * ```
+   *
+   * `console.error(err)` はエラーオブジェクトを丸ごと stderr へ出す。ルート
+   * ハンドラが投げた例外がリクエストの値を抱えていれば（`fetch` / DB ドライバ
+   * / `execFile` の例外はそういう形を持ちうる）、それがそのまま器の外へ出る
+   * （`dropped-record.ts` の doc が言う「本文は出さない」の線）。
+   *
+   * **`reasonOf` は `dropped-record.ts` の既存の口をそのまま使う。** 同じ
+   * 判断（1行目だけ・200字で切る）を2箇所に持つと必ずずれる。
+   */
+  base.onError((err, c) => {
+    if ('getResponse' in err) {
+      const res = err.getResponse();
+      return c.newResponse(res.body, res);
+    }
+    process.stderr.write(
+      `alteroidd: HTTP 経路で例外を捕まえました（本文は出しません）: ${reasonOf(err)}\n`,
+    );
+    return c.text('Internal Server Error', 500);
+  });
+
   // **CORS は認証より先に登録する。** ブラウザの preflight（OPTIONS）は
   // `Authorization` を積んで来ないので、門番が先に立つと preflight が 401 になり、
   // 本リクエストが一度も飛ばない。hono の `cors()` は OPTIONS にその場で答えて
