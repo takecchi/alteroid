@@ -71,7 +71,9 @@ export function noteUnreadableRecord(what: string, detail: string, error: unknow
  * @param attempt 何回目の発行でこの衝突が起きたか（1始まり）。
  */
 export function noteManagerIdCollision(managerId: string, attempt: number): void {
-  note(`managerId の発行が衝突したので引き直しました（managerId=${tag(managerId)} attempt=${attempt}）`);
+  note(
+    `managerId の発行が衝突したので引き直しました（managerId=${tag(managerId)} attempt=${attempt}）`,
+  );
 }
 
 /**
