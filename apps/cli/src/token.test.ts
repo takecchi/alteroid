@@ -134,6 +134,58 @@ describe('alteroid token list', () => {
     // 値はどこにも出ない（本文にトークン本体を書かないという約束の検算）。
     expect(text).not.toContain('tok-aaa');
   });
+
+  it('置いた時刻・最後の更新・回復の見込みを出す。見込みには実測でない旨を同じ行に添える（Issue #393）', async () => {
+    setReply('GET', '/tokens', {
+      status: 200,
+      body: {
+        tokens: [
+          {
+            id: 'tok-a',
+            label: 'first',
+            order: 0,
+            sha256: 'aaaaaaaaaaaa',
+            createdAt: '2026-08-01T00:00:00.000Z',
+            updatedAt: '2026-08-25T03:00:00.000Z',
+            lastRejectedAt: '2026-08-25T03:00:00.000Z',
+            lastRejectedReason: "You've hit your org's monthly spend limit",
+            recovery: 'time',
+          },
+        ],
+        settings: EMPTY_SETTINGS,
+      },
+    });
+
+    const read = captureStdout();
+
+    await tokenListCommand();
+
+    const text = read();
+    expect(text).toContain('置いた 2026-08-01T00:00:00.000Z');
+    expect(text).toContain('最後の更新 2026-08-25T03:00:00.000Z');
+    expect(text).toContain('見込み: 時間で戻る');
+    // **断りは同じ行に在ること。** 実測（文言・時刻）の隣に置いた判定は、行ごと
+    // 実測として読まれる（AGENTS.md「報告の形」）。行を跨いだ断りでは効かない。
+    const verdictLine = text.split('\n').find((line) => line.includes('見込み: 時間で戻る'));
+    expect(verdictLine).toContain('実測ではない');
+  });
+
+  it('置いた時刻が無い行（PR1 の版で置かれた行）では、その行を出さない', async () => {
+    setReply('GET', '/tokens', {
+      status: 200,
+      body: {
+        tokens: [{ id: 'tok-a', label: 'first', order: 0, sha256: 'aaaaaaaaaaaa' }],
+        settings: EMPTY_SETTINGS,
+      },
+    });
+
+    const read = captureStdout();
+
+    await tokenListCommand();
+
+    // 取れなかったものを「不明」で埋めない。
+    expect(read()).not.toContain('置いた');
+  });
 });
 
 describe('alteroid token add', () => {

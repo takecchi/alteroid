@@ -6,6 +6,7 @@ import {
   describeUsageNotice,
   knownLimitRecoveryPrefixes,
   limitRecoveryOf,
+  longestMatchingPrefix,
   matchedUsageLimitPrefix,
   mergeRateLimitFacts,
   toRateLimitFacts,
@@ -238,7 +239,17 @@ describe('回復の見込みを読む', () => {
     }
   });
 
-  it('短い接頭辞が長い接頭辞を食わない（いちばん長い一致を採る）', () => {
+  it('いちばん長い一致を採る。**並び順に依らない**', () => {
+    // **SDK の配列の並び順では測れない。** 長いほうが先に在るので、「最初に
+    // 当たったものを採る」に取り違えても同じ値が返る（変異試験で実測。その変異は
+    // 生き残った）。⟹ 並び順を自分で決めて両方向から測る。
+    expect(longestMatchingPrefix('abc def', ['abc', 'abc def'])).toBe('abc def');
+    expect(longestMatchingPrefix('abc def', ['abc def', 'abc'])).toBe('abc def');
+    // 当たらなければ undefined（「短いほうが当たった」と混ざらない）。
+    expect(longestMatchingPrefix('zzz', ['abc', 'abc def'])).toBeUndefined();
+  });
+
+  it('短い接頭辞が長い接頭辞を食わない（SDK の実物で確かめる）', () => {
     // SDK には "Your seat type doesn't include usage" と "…usage credits" の
     // 両方が在り、前者は後者の接頭辞である。配列順で最初に当たったものを採ると、
     // 長いほうの文言でも短い側の鍵が選ばれる。

@@ -339,11 +339,23 @@ describe('createdAt / updatedAt', () => {
 
   it('value / order / disabled の変更も「変わった」として数える', () => {
     const base: AgentToken = { id: 'tok-a', label: 'a', value: 'v', order: 0 };
-    const changedValue = normalizeTokenPool([{ id: 'tok-a', label: 'a', value: 'v2' }], [base], opts());
+    const changedValue = normalizeTokenPool(
+      [{ id: 'tok-a', label: 'a', value: 'v2' }],
+      [base],
+      opts(),
+    );
     expect(changedValue[0]?.updatedAt).toBe(NOW);
-    const changedOrder = normalizeTokenPool([{ id: 'tok-a', label: 'a', order: 5 }], [base], opts());
+    const changedOrder = normalizeTokenPool(
+      [{ id: 'tok-a', label: 'a', order: 5 }],
+      [base],
+      opts(),
+    );
     expect(changedOrder[0]?.updatedAt).toBe(NOW);
-    const disabled = normalizeTokenPool([{ id: 'tok-a', label: 'a', disabled: true }], [base], opts());
+    const disabled = normalizeTokenPool(
+      [{ id: 'tok-a', label: 'a', disabled: true }],
+      [base],
+      opts(),
+    );
     expect(disabled[0]?.updatedAt).toBe(NOW);
     // 何も変えなければ立たない（そもそも前も無かったので、無いまま）。
     const untouched = normalizeTokenPool([{ id: 'tok-a', label: 'a' }], [base], opts());

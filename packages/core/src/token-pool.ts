@@ -414,8 +414,16 @@ export function normalizeTokenPool(
         : { invalidatedReason: current.invalidatedReason }),
       // 新規行だけ `createdAt` を立てる。既存の行は引き継ぐ——**無い行を
       // `now()` で埋め直さない**（`AgentToken.createdAt` の doc）。
-      ...(current === undefined ? { createdAt: nowIso } : current.createdAt === undefined ? {} : { createdAt: current.createdAt }),
-      ...(changed ? { updatedAt: nowIso } : current?.updatedAt === undefined ? {} : { updatedAt: current.updatedAt }),
+      ...(current === undefined
+        ? { createdAt: nowIso }
+        : current.createdAt === undefined
+          ? {}
+          : { createdAt: current.createdAt }),
+      ...(changed
+        ? { updatedAt: nowIso }
+        : current?.updatedAt === undefined
+          ? {}
+          : { updatedAt: current.updatedAt }),
     };
     return { token, inputIndex: index };
   });
@@ -518,15 +526,17 @@ export function markTokenUnusable(
  * `cooldownUntil` を読めば分かるので、消す必要が無い。
  */
 export function markTokenUsable(token: AgentToken, at: string): AgentToken {
-  const {
-    lastRejectedAt: _lastRejectedAt,
-    lastRejectedReason: _lastRejectedReason,
-    cooldownUntil: _cooldownUntil,
-    invalidatedAt: _invalidatedAt,
-    invalidatedReason: _invalidatedReason,
-    ...rest
-  } = token;
-  return { ...rest, updatedAt: at };
+  // **消す側を数え上げる（残す側ではない）。** 残す側を書き並べる形にすると、
+  // {@link AgentToken} へ列が1つ増えたときに**それが黙って落ちる** — しかも
+  // 落ちるのは「成功したとき」だけなので、いちばん気づきにくい経路で消える。
+  // 消す側の数え上げなら、増えた列は既定で残る。
+  const next: AgentToken = { ...token, updatedAt: at };
+  delete next.lastRejectedAt;
+  delete next.lastRejectedReason;
+  delete next.cooldownUntil;
+  delete next.invalidatedAt;
+  delete next.invalidatedReason;
+  return next;
 }
 
 /**

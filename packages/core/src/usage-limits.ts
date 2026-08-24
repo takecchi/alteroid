@@ -67,8 +67,26 @@ export type UsageLimitNotice = z.infer<typeof usageLimitNoticeSchema>;
  *
  * 一致の規則（`startsWith` または `includes`）は {@link startsWithAny} と共有する
  * ——あちらがこれを呼ぶ形にしてあるので、片方だけ規則が動くことがない。
+ *
+ * ## ⚠️ export してあるのは、SDK の配列の並び順に依存せずに測るためである
+ *
+ * **いまの {@link USAGE_LIMIT_ERROR_PREFIXES} の並び順では、この規則を壊しても
+ * 答えが変わらない。** 長いほう（`"…include usage credits"`）が配列で先に在るので、
+ * 「最初に当たったものを採る」に取り違えても同じ値が返る——**変異試験で実測した
+ * （その変異は生き残った）。**
+ *
+ * ⟹ **{@link matchedUsageLimitPrefix} 経由では測れない。** 並び順を自分で決められる
+ * 形で呼べないと、この規則を守っている歯が1本も無いことになる（AGENTS.md
+ * 「テストが書けない構造は、テストが無いのと同じ」）。だから引数で配列を受ける形の
+ * まま export してある。
+ *
+ * **次に読む人へ: これは「内部の関数がうっかり漏れている」のではない。** 畳むと、
+ * SDK が並び順を変えた瞬間に静かに壊れる側へ戻る。
  */
-function longestMatchingPrefix(text: string, prefixes: readonly string[]): string | undefined {
+export function longestMatchingPrefix(
+  text: string,
+  prefixes: readonly string[],
+): string | undefined {
   const trimmed = text.trimStart();
   let best: string | undefined;
   for (const prefix of prefixes) {
@@ -140,6 +158,23 @@ export function describeUsageNotice(notice: UsageLimitNotice): string {
  * 「冷却が明けてもう一度試して、また駄目で冷やし直す」だけで済むが、逆向きの
  * 読み違えは**まだ戻るトークンを捨てる。** ⟹ 迷ったら `time` 側、少なくとも
  * `unknown` へ倒し、`unknown` を `action` と同じ扱いにしない。
+ *
+ * ## ⚠️ 次に読む人へ: 散文より良い材料が既に来ている
+ *
+ * {@link RateLimitFacts.overageDisabledReason} は、SDK が**閉じた union として
+ * 型宣言している構造化された値**である（実測 2026-08-25 観測、
+ * `@anthropic-ai/claude-agent-sdk@0.3.241` の `sdk.d.ts`。逐語は
+ * `overageDisabledReason?: 'overage_not_provisioned'` で始まる行）。
+ * `org_level_disabled_until` のように、**時間の含みが値の名前に出ているもの**まで
+ * 在る。
+ *
+ * **⟹ 回復の見込みを見るなら、散文の接頭辞より先にそちらを見るべきである。**
+ * ここが文言を見ているのは、`classifyUsageNotice` が文言しか持たない経路
+ * （`system/notification` / 失敗した `result`）からも呼べるようにするためであって、
+ * **文言のほうが良い材料だからではない。**
+ *
+ * ただし `overageDisabledReason` が答えるのは「課金枠が使えない理由」だけで、
+ * 枠そのものの状態ではない。**片方だけで足りる、とも読まないこと。**
  */
 export const limitRecoverySchema = z.enum(['time', 'action', 'unknown']);
 export type LimitRecovery = z.infer<typeof limitRecoverySchema>;

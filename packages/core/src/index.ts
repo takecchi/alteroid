@@ -69,6 +69,7 @@ export {
   knownLimitRecoveryPrefixes,
   limitRecoveryOf,
   limitRecoverySchema,
+  longestMatchingPrefix,
   matchedUsageLimitPrefix,
   mergeRateLimitFacts,
   rateLimitFactsSchema,
