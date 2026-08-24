@@ -1,3 +1,5 @@
+import { writeSync } from 'node:fs';
+
 import type { InboxEvent, JournalEntryInput } from './schema.js';
 
 /**
@@ -163,9 +165,69 @@ export function inboxEventShape(event: InboxEvent): string {
  * **時刻は自分で付ける**（ホスティング先が付ける時刻に頼らない。付かない先が
  * ある）。跡を出す口をここ1本にしてあるのは、本文を出さないという判断が
  * このファイルの外へ散らないようにするためである。
+ *
+ * **`process.stderr.write` ではなく `writeStderrSync`（fd 2 への `fs.writeSync`）
+ * を通す。** `process.stderr.write` は fd がパイプのとき POSIX 上は非同期で、
+ * `stop()` → `storage.close()` → `process.exit(0)` のような「書いた直後に
+ * プロセスが消える窓」では、書いたはずの行がバッファに残ったまま失われる
+ * （Node 公式ドキュメント `doc/api/process.md`: "including I/O operations to
+ * `process.stdout` and `process.stderr`" は `process.exit()` に巻き込まれる、
+ * "Pipes (and sockets): … asynchronous on POSIX"）。**このファイルの docstring
+ * が言う「同期で1行書けば、窓のどこで捨てても同じ跡になる」という約束は、
+ * `process.stderr.write` では成り立たない。** `fs.writeSync` に替えるとこの
+ * 約束が戻る（#248）。
  */
 function note(text: string): void {
-  process.stderr.write(`alteroid: ${new Date().toISOString()} ${text}\n`);
+  stderrSink(`alteroid: ${new Date().toISOString()} ${text}\n`);
+}
+
+/**
+ * fd 2（stderr）へ、1行を同期で・全部書き終わるまで書く。
+ *
+ * **3つの但し書きがある（#248 で確かめた）。**
+ *
+ * 1. **fd 2 は非ブロッキングで、部分書き込みが起きる。** `fs.writeSync` は
+ *    例外を投げずに返り値（実際に書けたバイト数）が減るだけなので、**返り値を
+ *    見て書き切るまでループする**必要がある。1行の大きさなら（読み手が居る
+ *    限り）部分書き込みは起きなかったが、「起きなかった」は「起きない」では
+ *    ない——パイプが埋まっているときは危険が起きる。
+ * 2. **読み手が消えていると `EPIPE` を投げる。** 跡を書くためだけの関数が
+ *    例外で本筋（呼び出し元のターン）を殺してはいけないので、**投げたら
+ *    黙って諦める**（跡は残らないが、握り潰しはしない——という判断はこの
+ *    関数の外の話であって、ここでは「投げない」だけを守る）。
+ * 3. **本番のコンテナで同じ挙動かは確かめていない。** 手元の器（`node
+ *    v22.23.2`）で stderr をパイプへ繋いだ実測に基づく。
+ */
+export function writeStderrSync(line: string): void {
+  const buffer = Buffer.from(line, 'utf8');
+  let offset = 0;
+  try {
+    while (offset < buffer.length) {
+      offset += writeSync(2, buffer, offset, buffer.length - offset);
+    }
+  } catch {
+    // 読み手が消えている（EPIPE）等。跡のために本筋を殺さない。
+  }
+}
+
+/**
+ * `note()` が実際に書き込む先。**既定は `writeStderrSync`（本番と同じ経路）。**
+ *
+ * `fs.writeSync(2, …)` は `process.stderr.write` の差し替え（`testing.ts` の
+ * `captureStderr`）を通らないので、テストだけがここを差し替えて観測する。
+ * `captureStderr` 以外から呼ばないこと——本番の配線には出てこない。
+ */
+let stderrSink: (line: string) => void = writeStderrSync;
+
+/**
+ * テスト専用: `note()` の書き込み先を差し替える／戻す。
+ *
+ * **本番の書き込み方法（`writeStderrSync`）自体は1文字も変えていない。**
+ * `captureStderr` が `finally` で必ず `null` を渡して戻すこと（戻し忘れると
+ * 以降のテストの跡が消えたように見える）。
+ */
+export function setStderrSinkForTesting(sink: ((line: string) => void) | null): void {
+  stderrSink = sink ?? writeStderrSync;
 }
 
 /**

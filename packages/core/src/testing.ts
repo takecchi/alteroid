@@ -1,3 +1,4 @@
+import { setStderrSinkForTesting } from './dropped-record.js';
 import { deriveMemoryFrontmatter, nextDescribedAt } from './memory.js';
 import type {
   Commitment,
@@ -673,11 +674,18 @@ export function humanMessage(text: string, conversationId = 'conv-1'): InboxEven
 }
 
 /**
- * `process.stderr` へ出た行を集める。
+ * stderr へ出た行を集める。
  *
  * 記録の書き込みに失敗したときの跡は stderr にしか出ない（本文をログへ
  * 落とさないため、日誌にもストアにも残せない）。**そこを見る手段が無いと、
  * 「黙って消える」に戻っていても誰も気づけない。**
+ *
+ * **2本の経路を両方差し替える。**
+ * - `process.stderr.write`（`note()` 以外がまだ直接呼んでいる経路。今回は
+ *   これは無い想定だが、将来また増えても拾えるように残す）
+ * - `dropped-record.ts` の `note()` が使う `fs.writeSync(2, …)`（#248）。
+ *   これは `process.stderr.write` の差し替えを**通らない**ので、
+ *   `setStderrSinkForTesting` で別に差し替える。
  *
  * 差し替えは `finally` で必ず戻すこと。戻し忘れると以降のテストの出力が
  * 丸ごと消え、失敗の理由が読めなくなる。
@@ -689,10 +697,14 @@ export async function captureStderr(body: () => void | Promise<void>): Promise<s
     lines.push(String(chunk));
     return true;
   }) as typeof process.stderr.write;
+  setStderrSinkForTesting((line) => {
+    lines.push(line);
+  });
   try {
     await body();
   } finally {
     process.stderr.write = original;
+    setStderrSinkForTesting(null);
   }
   return lines;
 }

@@ -470,6 +470,7 @@ export {
   noteDroppedInboxEvent,
   noteDroppedRecord,
   reasonOf,
+  writeStderrSync,
 } from './dropped-record.js';
 
 /** テスト用ユーティリティ（本番の配線には出てこない）。 */
