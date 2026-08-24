@@ -292,6 +292,15 @@ export function createMemoryStores(): Stores {
     async list(query: JournalQuery = {}) {
       let found = [...entries].reverse();
       if (query.types) found = found.filter((entry) => query.types?.includes(entry.type));
+      // **`with` は `limit`（下の slice）より前で効かせる**（issue #418 の穴の本体）。
+      // `with` を持つのは `exchange` だけなので、非 exchange はここで落ちる —
+      // `types` を明示していなくても、`with` を指定した時点で絞られる。
+      if (query.with !== undefined) {
+        const withValues = query.with;
+        found = found.filter(
+          (entry) => entry.type === 'exchange' && withValues.includes(entry.with),
+        );
+      }
       if (query.since !== undefined) {
         const since = query.since;
         found = found.filter((entry) => entry.at >= since);

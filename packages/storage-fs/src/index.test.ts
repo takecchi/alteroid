@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { renderMemoryDocuments } from '@alteroid/core';
+import { renderMemoryDocuments, verifyJournalStoreWithContract } from '@alteroid/core';
 import type { Commitment, InboxEvent } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -870,6 +870,56 @@ describe('FsJournalStore', () => {
 
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({ id: written.id, actor: 'manager:mgr-1', tool: 'Bash' });
+  });
+
+  /**
+   * `JournalStore` の `with` 絞りの契約（issue #418）を、**fs 実装**に対して
+   * 測る。同じ形の歯が3つ在る——インメモリ（`packages/core/src/journal-with-contract.test.ts`）
+   * / fs（このテスト）/ pg（`packages/storage-pg/src/index.test.ts`）。1つで
+   * 測って3つとも測ったことにしない（#370 と同じ作法）。
+   */
+  describe('with 契約（issue #418）', () => {
+    it('未指定=絞らない／指定=その with だけ／[]=0件／limit より前に効く', async () => {
+      await verifyJournalStoreWithContract(stores.journal);
+    });
+
+    /**
+     * **契約4（limit より前に効く）そのものを、fs の実ファイルに対して直接
+     * 再現する。** 上の共有契約と重なるが、こちらは #418 の症状——「マネージャー
+     * との往復が `scan` の予算を食い尽くし、人間の会話が窓の外へ落ちる」——を
+     * fs の `.jsonl` を実際に書いて確かめる形にしてある。**「絞りが効いている」
+     * ではなく「窓に食われない」を測る**（`scan` を症状が出るほど小さくし、
+     * manager の行を `scan` より多く積む）。
+     */
+    it('manager の往復を scan より多く積んでも、human の発言は窓に食われない', async () => {
+      await stores.journal.append({
+        type: 'exchange',
+        with: 'human',
+        role: 'inbound',
+        text: '人間の質問',
+        conversationId: 'conv-1',
+      });
+      for (let i = 0; i < 10; i += 1) {
+        await stores.journal.append({
+          type: 'exchange',
+          with: i % 2 === 0 ? 'manager' : 'self',
+          role: 'inbound',
+          text: `noise-${i}`,
+        });
+      }
+
+      // scan=3 という小さい窓でも、絞りが limit より前で効いていれば human の
+      // 1件が返る。旧実装（with を返却後に絞る）だと、新しい3件はすべて
+      // manager/self なので0件になる。
+      const entries = await stores.journal.list({
+        limit: 3,
+        types: ['exchange'],
+        with: ['human'],
+      });
+
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({ with: 'human', text: '人間の質問' });
+    });
   });
 });
 

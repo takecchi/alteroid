@@ -110,6 +110,39 @@ describe('conversation_read — 存在理由（人間の発言が manager/self �
   });
 });
 
+/**
+ * **issue #418 の症状そのものを固定する歯。** 「絞りが効いている」だけでは
+ * 弱い（`with` を返却後に絞る旧実装でも、`scan` が十分大きければ同じ結果に
+ * なる）。ここで測るのは**窓に食われないこと** — `scan` を症状が出るほど
+ * 小さくし、manager との往復を `scan` より多く積んでも、人間の会話が消えない
+ * ことを確かめる。
+ */
+describe('conversation_read — 窓が小さくても manager の往復に食われない（issue #418）', () => {
+  it('scan より多い manager の往復を積んでも、既定より遥かに小さい scan で人間の会話が出る', async () => {
+    const stores = createMemoryStores();
+    await humanTurn(stores, 'conv-1', '人間の質問です', 'クローンの返答です');
+    // human の後に、scan（3）よりずっと多い manager/self の往復を積む
+    // （新しい順に返るストアでは、これらのほうが human より「新しい」）。
+    for (let i = 0; i < 20; i += 1) {
+      await stores.journal.append({
+        type: 'exchange',
+        with: i % 2 === 0 ? 'manager' : 'self',
+        role: 'inbound',
+        text: `noise-${i}`,
+      });
+    }
+    const call = tools(stores);
+
+    const reply = await call('conversation_read', { conversationId: 'conv-1', scan: 3 });
+
+    // 旧実装（with を limit の後で絞る）だと、scan=3 で返る3件はすべて
+    // manager/self になり、conv-1 は「窓には無い（判定できない）」になっていた。
+    expect(reply).toContain('人間の質問です');
+    expect(reply).toContain('クローンの返答です');
+    expect(reply).not.toContain('この窓には無い');
+  });
+});
+
 describe('conversation_read — since / until の伝播', () => {
   it('since / until が stores.journal.list へそのまま降りる', async () => {
     const stores = createMemoryStores();
@@ -129,6 +162,10 @@ describe('conversation_read — since / until の伝播', () => {
       until: '2026-08-20T00:00:00.000Z',
       limit: 500,
       types: ['exchange'],
+      // **issue #418 で足した。** 絞りを `limit` より前（ストアの側）で
+      // 効かせるための鍵——`readConversationWindow` を経由していることの
+      // 検算でもある（手組みに戻ると、この鍵が最初に落ちる）。
+      with: ['human'],
     });
   });
 

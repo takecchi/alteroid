@@ -36,6 +36,7 @@ import {
   fingerprintOf,
   noteDroppedRecord,
   reasonOf,
+  readConversationWindow,
   reportRunnerRevision,
   resolveBuildRevision,
   runnerSetCredentialsCommandSchema,
@@ -301,6 +302,11 @@ const approvalsQuery = z.object({ pending: z.enum(['true', 'false']).default('tr
  * 会話は日誌から組み立てる。`scan` はどこまで遡るかで、`limit` は返す本数。
  * **黙って打ち切らない** — 応答に `scanned` を返して、遡り切れていないことが
  * 呼ぶ側に見えるようにしてある。
+ *
+ * **`scan` が数えるのは人間との往復だけである**（`readConversationWindow` が
+ * `with: ['human']` を `limit` より前で効かせるため。issue #418）。マネージャー
+ * との往復・内部ターン（`self`）は同じ `exchange` として日誌に混ざっているが、
+ * この予算を食わない。
  */
 const conversationsQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(20),
@@ -948,7 +954,8 @@ export function createApp(deps: AppDeps) {
         description:
           '`POST /chat` の SSE は流すだけで読み直す口が無かった。器（端末・タブ・アプリ）' +
           'を替えても続きから話せるための一覧。日誌から組み立てるので新しい状態は持たない。' +
-          '新しい順。`scanned` で遡り切れていないことが分かる（黙って打ち切らない）。',
+          '新しい順。`scanned` は人間との往復を何件遡ったか（マネージャーとの往復・内部' +
+          'ターンは数えない。issue #418）で、遡り切れていないことが分かる（黙って打ち切らない）。',
         responses: {
           200: {
             description: '会話の一覧（新しい順）。',
@@ -963,7 +970,13 @@ export function createApp(deps: AppDeps) {
       validator('query', conversationsQuery),
       async (c) => {
         const { limit, scan } = c.req.valid('query');
-        const entries = await stores.journal.list({ limit: scan, types: ['exchange'] });
+        /**
+         * 窓の組み立て（`types: ['exchange']` と `with: ['human']`）は
+         * `@alteroid/core` の `readConversationWindow` 1か所に閉じる（issue
+         * #418）。ここで手組みし直さない — 手組みし直した場所ができるたびに
+         * `with` を絞り忘れる余地が生まれる（この issue の症状そのもの）。
+         */
+        const entries = await readConversationWindow(stores.journal, { scan });
 
         /**
          * 畳み直しの規則そのものは `@alteroid/core` の `conversation.ts` が持つ。
@@ -976,7 +989,13 @@ export function createApp(deps: AppDeps) {
          */
         return c.json({
           conversations: collectConversations(entries).slice(0, limit),
-          /** 遡った範囲。ここより古い会話は出てこない（`scan` を増やせば見える）。 */
+          /**
+           * 遡った範囲。**#418 より前は「日誌の `exchange` を何件見たか」
+           * だったが、いまは「人間との往復を何件見たか」である**
+           * （`readConversationWindow` が `with: ['human']` を `limit` より
+           * 前で効かせるため）。ここより古い**人間との**会話は出てこない
+           * （`scan` を増やせば見える）。
+           */
           scanned: entries.length,
         });
       },
@@ -990,9 +1009,10 @@ export function createApp(deps: AppDeps) {
         summary: '1つの会話の中身（古い順）',
         description:
           '1つの会話の中身（古い順）。器を替えても続きから話せるための口。' +
-          '**黙って打ち切らない** — `scanned` でどこまで遡ったか、`reachedStart` で' +
-          '窓が日誌の先頭に届いたかを返す。`404` は `reachedStart` が真のときだけ' +
-          '返る（「無い」と「遡り切れていない」を同じ応答にしないため）。',
+          '**黙って打ち切らない** — `scanned`（人間との往復を何件遡ったか。マネージャー' +
+          'との往復・内部ターンは数えない。issue #418）でどこまで遡ったか、' +
+          '`reachedStart` で窓が日誌の先頭に届いたかを返す。`404` は `reachedStart` が' +
+          '真のときだけ返る（「無い」と「遡り切れていない」を同じ応答にしないため）。',
         responses: {
           200: {
             description:
@@ -1018,7 +1038,9 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         const id = c.req.param('id');
         const { scan } = c.req.valid('query');
-        const entries = await stores.journal.list({ limit: scan, types: ['exchange'] });
+        // 窓の組み立ては `readConversationWindow` 1か所に閉じる（上の
+        // `GET /conversations` と同じ理由。issue #418）。
+        const entries = await readConversationWindow(stores.journal, { scan });
         /**
          * 絞り込みと並べ直しは `@alteroid/core` の `conversationMessages` が持つ
          * （クローンの `conversation_read` と同じ関数である。上の一覧と同じ理由）。
@@ -1044,6 +1066,18 @@ export function createApp(deps: AppDeps) {
          * 全件がぴったり `scan` 件だった場合に「判定できない」と答えるのは、
          * 実際には見切っているのに保守的に言いすぎるだけで、逆はやらない。
          *
+         * **#418 より前は `entries.length` が「日誌の `exchange` を何件見たか」
+         * だった。** この判定式（`reachedStart`）自体は昔から安全側 — `false`
+         * へ倒すだけで、実際には見切れていないのに `true` を返すことは無い。
+         * 変わったのは**中身**である。`readConversationWindow` が
+         * `with: ['human']` を `limit` より前で効かせるいまは、`entries` が
+         * 最初から人間との往復だけなので `entries.length` は「人間との往復を
+         * 何件見たか」になる。以前は `with: 'manager'` / `with: 'self'` の行が
+         * 同じ `scan` の予算を分け合っていたため、`scan` 件に達する（＝
+         * `reached: false` になる）のが実際の人間の会話をわずかしか遡らない
+         * うちに起きていた——`false` という答え自体は正しくても、その `scan`
+         * を「人間との会話をどこまで遡ったか」の目安には使えなかった。
+         *
          * 判定そのものは `reachedStart`（`@alteroid/core`）が持つ。
          */
         const reached = reachedStart(entries.length, scan);
@@ -1064,6 +1098,7 @@ export function createApp(deps: AppDeps) {
         return c.json({
           conversationId: id,
           messages,
+          /** 人間との往復を何件遡ったか（`scanned` の意味は上のコメントに書いた）。 */
           scanned: entries.length,
           reachedStart: reached,
         });

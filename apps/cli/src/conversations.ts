@@ -42,7 +42,10 @@ export interface ConversationMessage {
 export interface ConversationsListOptions {
   /** 返す最大件数（デーモンの既定 20、最大 200）。 */
   limit?: string;
-  /** 日誌をどこまで遡って集計するか（デーモンの既定 2000、最大 10000）。 */
+  /**
+   * 人間との往復をどこまで遡って集計するか（デーモンの既定 2000、最大
+   * 10000）。マネージャーとの往復・内部ターンは数えない（issue #418）。
+   */
   scan?: string;
 }
 
@@ -100,7 +103,7 @@ export function renderConversationsList(
   }
   lines.push('');
   lines.push(
-    `（日誌を新しい方から ${scanned} 件見て集計した。これより古い会話・古い発言は窓の外に` +
+    `（人間との往復を新しい方から ${scanned} 件見て集計した。これより古い会話・古い発言は窓の外に` +
       '残っているかもしれない（判定できない） — 広げるには --scan、表示件数を増やすには --limit）',
   );
   lines.push('中身を読むには: alteroid conversations show <id>');
@@ -108,7 +111,10 @@ export function renderConversationsList(
 }
 
 export interface ConversationsShowOptions {
-  /** 日誌をどこまで遡って探すか（デーモンの既定 2000、最大 10000）。 */
+  /**
+   * 人間との往復をどこまで遡って探すか（デーモンの既定 2000、最大 10000）。
+   * マネージャーとの往復・内部ターンは数えない（issue #418）。
+   */
   scan?: string;
 }
 
@@ -168,8 +174,8 @@ export function renderConversationDetail(
   lines.push('');
   lines.push(
     reachedStart
-      ? `（日誌を ${scanned} 件遡り、この会話の先頭まで届いた）`
-      : `（日誌を ${scanned} 件遡ったが、先頭には届いていない。これより古い発言が残っている` +
+      ? `（人間との往復を ${scanned} 件遡り、この会話の先頭まで届いた）`
+      : `（人間との往復を ${scanned} 件遡ったが、先頭には届いていない。これより古い発言が残っている` +
           'かもしれない — 広げるには --scan）',
   );
   return lines.join('\n');
