@@ -110,6 +110,18 @@ function dayAfter(at: string): string {
  * `before` より**厳密に後ろ**（＝より古い側）か——`compareDailyReportsNewestFirst`
  * と同じ比較軸（`date` → 同日なら `at`）で判定する。**ちょうど一致する行は
  * 含めない**（同じ行を次の頁で二重に返さないため）。
+ *
+ * **限界: `(date, at)` が完全に同値な日報が2件在ると、この2件の前後は
+ * この比較では決まらない。** 前の頁の境界がちょうどその2件のうち片方
+ * （A）で終わると、次の頁は `isOlderThanBoundary` で A 自身も、A と同値な
+ * もう一方（B）も除いてしまう——B を取りこぼす。**⚠️ これはこの変更が
+ * 作った穴ではない。** いまの `/reports`（`listDailyReports` /
+ * `compareDailyReportsNewestFirst`）も、同値な2件の前後を決めていない
+ * （比較関数が `0` を返すので `.sort()` の入力順＝日誌の順に依存する）。
+ * `beforeDate`/`beforeAt` はこの既存の曖昧さを引き継ぐだけで、悪くはして
+ * いない。**`id` を第3のキーに足して総順序にするのはやらない** —
+ * `compareDailyReportsNewestFirst` は `GET /reports/:date` の並びも決めて
+ * いるので、比較関数そのものを変えるとそちらの並びも変わる（範囲が広がる）。
  */
 function isOlderThanBoundary(
   report: Pick<DailyReport, 'date' | 'at'>,

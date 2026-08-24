@@ -1770,8 +1770,7 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(approvalsResponseSchema) } },
           },
           400: {
-            description:
-              'クエリが不正、または `cursor` が壊れている・`order` と食い違う。',
+            description: 'クエリが不正、または `cursor` が壊れている・`order` と食い違う。',
             content: {
               'application/json': {
                 schema: resolver(z.union([validationErrorResponseSchema, errorResponseSchema])),

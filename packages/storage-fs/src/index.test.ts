@@ -951,6 +951,49 @@ describe('FsJobStore', () => {
 
     expect(await stores.jobs.listApprovals()).toHaveLength(1);
   });
+
+  /**
+   * **`listApprovals` の並びに意味を持たせていないことの記録**（issue #432）。
+   *
+   * `putApproval` は「既存の id を filter で除いてから push する」形
+   * （`grep -n 'async putApproval' -A 5 packages/storage-fs/src/jobs.ts`）
+   * なので、**既存の id へ書くと配列の末尾へ移動する。** 承認への回答は
+   * まさに `putApproval` を呼ぶので、答えた行は末尾へ動く。
+   *
+   * これは直す対象ではない——`GET /approvals` のカーソル
+   * （`apps/daemon/src/app.ts` の `approvalsCursorSchema`）が位置ではなく
+   * `(createdAt, id)` の比較で辿るのは、この動きに対応するためである。
+   * **この歯は「fs の生の並びは createdAt の昇順という前提を置けない」ことを
+   * 固定するために置く** — インメモリ実装（`Map` は既存キーの位置を保つ）
+   * ではこの動きは絶対に再現しない。
+   */
+  it('既存の id へ書くと配列の末尾へ移動する（並びに意味は無いことの記録）', async () => {
+    await stores.jobs.putApproval({
+      id: 'ap-old',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      question: '先に作った方',
+    });
+    await stores.jobs.putApproval({
+      id: 'ap-new',
+      createdAt: '2026-01-02T00:00:00.000Z',
+      question: '後に作った方',
+    });
+
+    // 作成順（＝ createdAt 昇順）そのままなら [ap-old, ap-new] のはず。
+    expect((await stores.jobs.listApprovals()).map((a) => a.id)).toEqual(['ap-old', 'ap-new']);
+
+    // 先に作った方（ap-old）に答える —— putApproval が再度走る。
+    await stores.jobs.putApproval({
+      id: 'ap-old',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      question: '先に作った方',
+      answeredAt: '2026-01-03T00:00:00.000Z',
+      answer: 'よい',
+    });
+
+    // ⟹ createdAt の昇順なら変わらないはずの並びが、答えた行の移動で崩れる。
+    expect((await stores.jobs.listApprovals()).map((a) => a.id)).toEqual(['ap-new', 'ap-old']);
+  });
 });
 
 describe('FsScheduleStore', () => {
