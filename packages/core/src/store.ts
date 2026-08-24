@@ -215,12 +215,79 @@ export interface JournalQuery {
    * ずれる（この issue の症状そのものの再発）。
    */
   with?: ExchangeWith[];
+  /**
+   * 返す順序（issue #432 の2本目）。**既定 `'desc'`**（新しい順＝従来の挙動を
+   * 1バイトも変えない）。`'asc'` で古い順にできる。
+   */
+  order?: 'asc' | 'desc';
+  /**
+   * ページングの錨（issue #432 の2本目）。**この行の「次」（＝返る順序における
+   * 次）から返す。** `order: 'desc'`（既定）なら錨より**古い**側、
+   * `order: 'asc'` なら錨より**新しい**側が返る——「次」は時間の意味ではなく
+   * 返る順序の意味である。
+   *
+   * **なぜ位置ではなく `(id, at)` の値で錨を指すか。** 日誌は追記専用で
+   * `JournalStore`（本ファイル）に更新・削除の口が無い——既存の行どうしの
+   * 前後関係は永久に変わらない。だから値そのものを錨にしても、頁の間に
+   * 新しい行が追記されても位置がずれない（`/approvals` のカーソルが
+   * `putApproval` による行の移動に耐えるために `(createdAt, id)` を使うのと
+   * 同じ理由。あちらは移動に耐えるためだが、こちらは日誌が構造的に移動しない
+   * ことそのものが理由である）。
+   *
+   * **`id` だけでは足りない。** `id` の一致だけで錨を引くと、fs 実装は
+   * `at` からファイルを決める都合上 `at` に依存しており、pg / インメモリが
+   * `at` を見なければ同じ入力で実装ごとに答えが違いうる。だから3実装とも
+   * `id` **と** `at` の両方が一致する行を探すこと。
+   *
+   * **`at` だけでは足りない。** `at` はミリ秒精度の `new Date().toISOString()`
+   * なので、同じミリ秒に2行積まれることがある（`id` はその同着を割るための
+   * 補助キーである）。
+   *
+   * **契約（3実装 — `testing.ts` のインメモリ / `storage-fs` / `storage-pg` —
+   * で揃える。3つとも歯を持つ。`journal-order-with-contract.ts` の
+   * `verifyJournalStoreOrderContract` が単一の契約として測る）:**
+   *
+   * - **`id` と `at` の両方が一致する行が無ければ `JournalAnchorNotFoundError`
+   *   を投げる。** 黙って「先頭から」に倒さない——判定できないという第3の
+   *   状態を持つ（AGENTS.md「静かに失敗する道具」）。
+   * - **適用順序: `after` → `types` / `with` / `since` / `until` → `limit`。**
+   *   錨の位置は全順序（絞り込み前）の中で決め、そこから先を絞って、最後に
+   *   切る。この順序が逆だと、絞りに当たらない行が錨と `limit` のあいだに
+   *   挟まったとき（あるいは錨自体が絞りに当たらない種別のとき）に頁の連結が
+   *   壊れる。
+   */
+  after?: { id: string; at: string };
+}
+
+/**
+ * `JournalStore.list` の `after` で指定した錨（`{ id, at }`）が、`id` と `at`
+ * の両方が一致する行として見つからないときに投げる専用のエラー型
+ * （issue #432 の2本目）。
+ *
+ * **黙って「先頭から」に倒さないための型。** `after` が指す行は頁の継続点
+ * そのものなので、見つからないことは「判定できない」という第3の状態であって
+ * 「無かったので最初から返す」ではない（AGENTS.md「静かに失敗する道具」
+ * 「判定できないという3つ目の状態を持つ」）。呼び出し側（`apps/daemon/src/app.ts`
+ * の `GET /journal`）はこれを `instanceof` で捕まえて 400 へ変換する。
+ *
+ * `UnreadableCommitmentError` と同じ形（メッセージの文字列ではなく型で
+ * 判定できるようにする）。
+ */
+export class JournalAnchorNotFoundError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'JournalAnchorNotFoundError';
+  }
 }
 
 /** 日誌 = 追記専用の記録（PRD「可観測性」）。 */
 export interface JournalStore {
   append(entry: JournalEntryInput): Promise<JournalEntry>;
-  /** 新しい順に返す。 */
+  /**
+   * 既定は新しい順（`order: 'desc'`）。**未指定は従来の挙動と1バイトも
+   * 変わらない。** `order: 'asc'` で古い順に、`after` で頁の継続点を指定できる
+   * （issue #432 の2本目。`JournalQuery.order` / `JournalQuery.after` の doc）。
+   */
   list(query?: JournalQuery): Promise<JournalEntry[]>;
   /**
    * 1件を id で引く。

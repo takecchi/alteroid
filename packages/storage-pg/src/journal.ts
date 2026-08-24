@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 
-import { journalEntrySchema } from '@alteroid/core';
+import { journalEntrySchema, JournalAnchorNotFoundError } from '@alteroid/core';
 import type { JournalEntry, JournalEntryInput, JournalQuery, JournalStore } from '@alteroid/core';
-import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, lt, lte, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
-import { stripNulls } from './db.js';
+import { stripNulls, toNumber } from './db.js';
 import { journal } from './schema.js';
 
 /**
@@ -41,8 +41,42 @@ export class PgJournalStore implements JournalStore {
     return entry;
   }
 
-  /** 新しい順（＝追記の逆順）。同じ時刻に並んだ分も追記順が保たれる。 */
+  /**
+   * `order` に応じた順（既定 `desc` ＝新しい順＝追記の逆順）。同じ時刻に
+   * 並んだ分も `seq`（bigserial）が追記順を保つ。
+   *
+   * **`after`（issue #432 の2本目）は `where` 節の一部として、`types` /
+   * `with` / `since` / `until` と同じ `and(...)` へ足す。** SQL の
+   * `WHERE` は宣言した条件をまとめて1つの述語として評価してから
+   * `ORDER BY` / `LIMIT` を掛けるので、この形にするだけで「錨の位置は
+   * 絞り込みより前・`limit` より前で決まる」という契約が自然に満たされる
+   * ——`limit` の後で錨を探す・絞り込んだ後の集合の中だけで錨を探す、
+   * という壊れ方をする余地が構造的に無い。
+   */
   async list(query: JournalQuery = {}): Promise<JournalEntry[]> {
+    const order = query.order ?? 'desc';
+
+    // **錨の `seq` は絞り込み（types/with/since/until）を一切通さずに引く。**
+    // `id` と `at` の両方が一致する行が無ければ `JournalAnchorNotFoundError`
+    // を投げる——`id` だけの一致では fs（`at` からファイルを決める）と答えが
+    // 揃わない（`JournalQuery.after` の doc）。
+    let afterSeq: number | undefined;
+    if (query.after !== undefined) {
+      const after = query.after;
+      const rows = await this.#db
+        .select({ seq: journal.seq })
+        .from(journal)
+        .where(and(eq(journal.id, after.id), eq(journal.at, new Date(after.at))))
+        .limit(1);
+      const row = rows[0];
+      if (row === undefined) {
+        throw new JournalAnchorNotFoundError(
+          `after で指定された行（id=${after.id}, at=${after.at}）が見つからない`,
+        );
+      }
+      afterSeq = toNumber(row.seq);
+    }
+
     const filters = [
       ...(query.since === undefined ? [] : [gte(journal.at, new Date(query.since))]),
       ...(query.until === undefined ? [] : [lte(journal.at, new Date(query.until))]),
@@ -62,13 +96,18 @@ export class PgJournalStore implements JournalStore {
       // `in ()` という不正な SQL へ落とさないための特別扱い）ので、
       // 0件という契約がそのまま満たされる。
       ...(query.with === undefined ? [] : [inArray(sql`(${journal.entry}->>'with')`, query.with)]),
+      // **`order` の向きに応じて `gt` / `lt` を切り替える。** `desc` は錨より
+      // 古い側（`seq` が小さい側）、`asc` は錨より新しい側（`seq` が大きい側）。
+      ...(afterSeq === undefined
+        ? []
+        : [order === 'desc' ? lt(journal.seq, afterSeq) : gt(journal.seq, afterSeq)]),
     ];
 
     const rows = await this.#db
       .select({ entry: journal.entry })
       .from(journal)
       .where(filters.length === 0 ? undefined : and(...filters))
-      .orderBy(desc(journal.seq))
+      .orderBy(order === 'desc' ? desc(journal.seq) : asc(journal.seq))
       .limit(query.limit ?? Number.MAX_SAFE_INTEGER);
 
     const found: JournalEntry[] = [];

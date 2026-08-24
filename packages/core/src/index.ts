@@ -222,6 +222,16 @@ export {
   type JournalStoreWithContractSubject,
 } from './journal-with-contract.js';
 /**
+ * `JournalStore` の `order` / `after` の契約（issue #432 の2本目）。3実装
+ * （インメモリ / `storage-fs` / `storage-pg`）それぞれの歯がこれを呼んで
+ * 揃っていることを測る — 1つで測って3つとも測ったことにしない
+ * （`verifyJournalStoreWithContract` と同じ作法）。
+ */
+export {
+  verifyJournalStoreOrderContract,
+  type JournalStoreOrderContractSubject,
+} from './journal-order-with-contract.js';
+/**
  * クローンの自己認識。正典（`docs/*.md`）の全文はビルド時に焼き込まれる
  * （`scripts/write-canon.mjs`）。要約を手書きしないこと — docs と二重管理になる。
  */

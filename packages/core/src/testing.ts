@@ -41,7 +41,7 @@ import type {
   TranscriptArchive,
   UsageStore,
 } from './store.js';
-import { ensureTrailingNewline } from './store.js';
+import { ensureTrailingNewline, JournalAnchorNotFoundError } from './store.js';
 import {
   DEFAULT_TOKEN_ROTATION_SETTINGS,
   type AgentToken,
@@ -290,7 +290,28 @@ export function createMemoryStores(): Stores {
       return entry;
     },
     async list(query: JournalQuery = {}) {
-      let found = [...entries].reverse();
+      // **`order` は全順序を決めるところで最初に効かせる。** 既定 `desc` は
+      // 従来どおり push の逆順（新しい順）。`asc` は push 順そのまま。
+      const order = query.order ?? 'desc';
+      let found = order === 'desc' ? [...entries].reverse() : [...entries];
+
+      // **`after` は `types` / `with` / `since` / `until` / `limit` より前に
+      // 効かせる**（`JournalQuery.after` の doc、issue #432 の2本目）。錨の
+      // 位置は絞り込み前の全順序の中で決める——見つからなければ
+      // `JournalAnchorNotFoundError` を投げる（黙って先頭から返さない）。
+      if (query.after !== undefined) {
+        const after = query.after;
+        const anchorIndex = found.findIndex(
+          (entry) => entry.id === after.id && entry.at === after.at,
+        );
+        if (anchorIndex === -1) {
+          throw new JournalAnchorNotFoundError(
+            `after で指定された行（id=${after.id}, at=${after.at}）が見つからない`,
+          );
+        }
+        found = found.slice(anchorIndex + 1);
+      }
+
       if (query.types) found = found.filter((entry) => query.types?.includes(entry.type));
       // **`with` は `limit`（下の slice）より前で効かせる**（issue #418 の穴の本体）。
       // `with` を持つのは `exchange` だけなので、非 exchange はここで落ちる —
