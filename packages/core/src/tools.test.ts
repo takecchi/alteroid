@@ -4657,9 +4657,7 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     // 見出し自身（0文字目）は無視して、次の `## ` を探す。
     const nextHeadingAt = rest.indexOf('\n## ', heading.length);
     const section = nextHeadingAt === -1 ? rest : rest.slice(0, nextHeadingAt);
-    return splitListingEntries(section).filter(
-      (entry) => !entry.trimStart().startsWith('- 総文字数'),
-    );
+    return splitListingEntries(section).filter((entry) => /^ {2}-\s\S/.test(entry));
   }
 
   it('self_status — 記憶の内訳のどの1件も id + 名前 / 作成 + 更新 / 概要 を出す（P1）', async () => {
