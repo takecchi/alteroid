@@ -465,6 +465,53 @@ export const usageLedger = pgTable('usage_ledger', {
   layeredAt: timestamp('layered_at', { withTimezone: true, mode: 'date' }),
 });
 
+/**
+ * 認証トークンのプール（Issue #393「PR1 プールの器」）。**回さない**——ここが
+ * 持つのは正本の置き場だけで、検知・切替（後続の PR）はここに無い。
+ *
+ * `value` は素の文字列のまま入れる（sha256 化した鍵とは違う）——ここが正本を
+ * 持つ唯一の場所であり、外へ出す顔（`AgentTokenView`）は上の層が作る。
+ *
+ * `order` は SQL の予約語なので、列名は `order_index` に逃がす
+ * （JS 側のプロパティ名は `order` のまま——`AgentToken.order` と揃える）。
+ */
+export const agentTokens = pgTable('agent_tokens', {
+  id: text('id').primaryKey(),
+  label: text('label').notNull(),
+  value: text('value').notNull(),
+  order: integer('order_index').notNull(),
+  disabledAt: timestamp('disabled_at', { withTimezone: true, mode: 'date' }),
+  /** epoch ミリ秒（`AgentToken.cooldownUntil` と同じ単位）。 */
+  cooldownUntil: bigint('cooldown_until', { mode: 'number' }),
+  lastRejectedAt: timestamp('last_rejected_at', { withTimezone: true, mode: 'date' }),
+  lastRejectedReason: text('last_rejected_reason'),
+  /**
+   * トークンが恒常的に通らないと確定した時刻。`cooldownUntil`（戻る）とも
+   * `disabledAt`（人間が外した。戻らない）とも違う3つ目の状態
+   * （`@alteroid/core` の `AgentToken.invalidatedAt` の doc）。
+   */
+  invalidatedAt: timestamp('invalidated_at', { withTimezone: true, mode: 'date' }),
+  /**
+   * 上の理由。**解釈しない文字列**——SDK やプローブが返した語をそのまま持つ
+   * （`@alteroid/core` の `AgentToken.invalidatedReason` の doc）。
+   */
+  invalidatedReason: text('invalidated_reason'),
+});
+
+/**
+ * 回す契機と冷却の既定（Issue #393）。**高々1行**（`id = 'default'`）。
+ *
+ * `env_profile` と同じ形——用途ごとに行を増やせるようにしない（増やせる形に
+ * した瞬間、「どの行がどの層に効くか」の対応表が要るようになる）。
+ */
+export const agentTokenSettings = pgTable('agent_token_settings', {
+  id: text('id').primaryKey(),
+  rotateOn: text('rotate_on').notNull(),
+  /** ミリ秒。`bigint` にしてあるのは `usage_daily` のトークン数列と同じ理由（巨大になりうる値を number として扱う）。 */
+  cooldownMs: bigint('cooldown_ms', { mode: 'number' }).notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }),
+});
+
 /** 進行中のログイン試行（CLI とブラウザの往復を繋ぐ一時的な行）。 */
 export const authLoginRequests = pgTable(
   'auth_login_requests',

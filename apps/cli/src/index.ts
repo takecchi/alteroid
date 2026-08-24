@@ -27,6 +27,14 @@ import {
 } from './profile.js';
 import { alteroidRoot } from './paths.js';
 import { runnersCommand } from './runners.js';
+import {
+  tokenAddCommand,
+  tokenDisableCommand,
+  tokenEnableCommand,
+  tokenListCommand,
+  tokenPolicyCommand,
+  tokenRemoveCommand,
+} from './token.js';
 import { usageCommand } from './usage.js';
 
 /**
@@ -341,6 +349,70 @@ profileCommand
   .description('プロファイルを外す')
   .action(async () => {
     await profileClearCommand();
+  });
+
+/**
+ * 認証トークンのプール（Issue #393「PR1 プールの器」）。**回さない。**
+ *
+ * 枠に当たったときに人間が登録した候補へ回すための器を、ここから覗く・並べる・
+ * 外す。検知・切替（後続の PR）はここには無い。
+ */
+const tokenCommand = program
+  .command('token')
+  .description('認証トークンのプール（枠に当たったときに回す候補）を見る・書き換える');
+
+tokenCommand
+  .command('list')
+  .description('登録済みのトークンを一覧する（label・指紋・状態。値は出さない）')
+  .action(async () => {
+    await tokenListCommand();
+  });
+
+tokenCommand
+  .command('add')
+  .description('トークンを1本足す')
+  .requiredOption('-l, --label <名前>', '人間が読む名前（秘密ではない）')
+  .option('-f, --file <path>', '値を読むファイル（省略か - で標準入力）')
+  .addHelpText(
+    'after',
+    '\n値はコマンドライン引数では受け取りません（argv は同じ器の他のプロセスから' +
+      '見えるため）。ファイルか標準入力から渡してください:\n' +
+      '  alteroid token add --label work -f ./token.txt\n' +
+      '  echo -n "$TOKEN" | alteroid token add --label work\n',
+  )
+  .action(async (options: { label: string; file?: string }) => {
+    await tokenAddCommand(options);
+  });
+
+tokenCommand
+  .command('remove <id>')
+  .description('トークンを1本消す')
+  .action(async (id: string) => {
+    await tokenRemoveCommand(id);
+  });
+
+tokenCommand
+  .command('disable <id>')
+  .description('トークンを人間の判断で外す（戻すには enable）')
+  .action(async (id: string) => {
+    await tokenDisableCommand(id);
+  });
+
+tokenCommand
+  .command('enable <id>')
+  .description('外したトークンを戻す')
+  .action(async (id: string) => {
+    await tokenEnableCommand(id);
+  });
+
+tokenCommand
+  .command('policy [rotateOn]')
+  .description(
+    '回す契機・冷却の既定を見る（引数無し）／変える（free_exhausted|overage_exhausted|off）',
+  )
+  .option('--cooldown-ms <N>', 'resetsAt が取れないときの冷却の既定（ミリ秒）')
+  .action(async (rotateOn: string | undefined, options: { cooldownMs?: string }) => {
+    await tokenPolicyCommand(rotateOn, options);
   });
 
 const daemonCommand = program.command('daemon').description('常駐デーモンの操作');

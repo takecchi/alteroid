@@ -368,6 +368,33 @@ export {
   type ProfileService,
   type ProfileServiceOptions,
 } from './profile-service.js';
+/**
+ * 認証トークンのプール（Issue #393「PR1 プールの器」）。**回さない。** 検知も
+ * 切替もここには無い——器・設定・入出力の口だけを持つ。
+ */
+export {
+  agentTokenInputSchema,
+  agentTokenViewSchema,
+  DEFAULT_TOKEN_COOLDOWN_MS,
+  DEFAULT_TOKEN_ROTATION_POLICY,
+  DEFAULT_TOKEN_ROTATION_SETTINGS,
+  TokenPoolInputError,
+  normalizeTokenPool,
+  toAgentTokenView,
+  tokenRotationPolicySchema,
+  tokenRotationSettingsSchema,
+  type AgentToken,
+  type AgentTokenInput,
+  type AgentTokenView,
+  type NormalizeTokenPoolOptions,
+  type TokenRotationPolicy,
+  type TokenRotationSettings,
+} from './token-pool.js';
+export {
+  createTokenPoolService,
+  type TokenPoolService,
+  type TokenPoolServiceOptions,
+} from './token-pool-service.js';
 export {
   createRunnerRegistry,
   isFencedRunnerError,

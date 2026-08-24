@@ -37,10 +37,16 @@ import type {
   ScheduleStore,
   SessionRegistry,
   Stores,
+  TokenPoolStore,
   TranscriptArchive,
   UsageStore,
 } from './store.js';
 import { ensureTrailingNewline } from './store.js';
+import {
+  DEFAULT_TOKEN_ROTATION_SETTINGS,
+  type AgentToken,
+  type TokenRotationSettings,
+} from './token-pool.js';
 import {
   foldOneshotUsage,
   foldUsageSnapshot,
@@ -519,6 +525,30 @@ export function createMemoryStores(): Stores {
   };
 
   /**
+   * 認証トークンのプール（インメモリ）。**回さない**——ここも fs / pg と同じく
+   * 器と口だけを持つ（Issue #393「PR1 プールの器」）。
+   */
+  let tokenPool: AgentToken[] = [];
+  let tokenRotationSettings: TokenRotationSettings | null = null;
+
+  const tokens: TokenPoolStore = {
+    async list() {
+      return [...tokenPool].sort((a, b) => a.order - b.order);
+    },
+    async replace(next) {
+      tokenPool = [...next];
+      return tokens.list();
+    },
+    async readSettings() {
+      return tokenRotationSettings ?? DEFAULT_TOKEN_ROTATION_SETTINGS;
+    },
+    async writeSettings(settings) {
+      tokenRotationSettings = settings;
+      return settings;
+    },
+  };
+
+  /**
    * 利用状況の台帳（インメモリ）。
    *
    * **差分ロジックも鍵の作り方もドライバと共有する** — 差分は
@@ -627,6 +657,7 @@ export function createMemoryStores(): Stores {
     sessions,
     auth,
     profile,
+    tokens,
     usage,
   };
 }
