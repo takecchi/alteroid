@@ -55,6 +55,30 @@ export function noteUnreadableRecord(what: string, detail: string, error: unknow
 }
 
 /**
+ * 発行した id が既に使われていて、引き直したことを stderr へ1行だけ残す（#238）。
+ *
+ * **`noteDroppedRecord` を流用しないのは、あれが「記録できませんでした」と
+ * 書くからである。** id の衝突は「記録できなかった」でも「読み出せなかった」
+ * でもない第三の状況 — 発行しようとした id に、いま走っている別の委譲の記録が
+ * **既に在った**、というものである。そこにこの2つの文を当てると、跡そのものが
+ * 何が起きたかを取り違えさせる（この2関数が防ごうとしているものと同じ形になる）。
+ *
+ * **本文は出さない。** 理由は `noteDroppedRecord` / `noteUnreadableRecord` と
+ * 同じで、ここへ渡ってくる値には外の世界から拾ってきた任意の文字列は入らない
+ * が（`managerId` はこちらが発行した id）、跡を残す口を1つに揃えるという
+ * このファイルの作法（`note()`）に従う。
+ *
+ * @param managerId 衝突した（＝既に `#records` に在った）id。こちらが発行した
+ *   id であって自由文ではないので、そのまま載せてよい。
+ * @param attempt 何回目の発行でこの衝突が起きたか（1始まり）。
+ */
+export function noteManagerIdCollision(managerId: string, attempt: number): void {
+  note(
+    `managerId の発行が衝突したので引き直しました（managerId=${tag(managerId)} attempt=${attempt}）`,
+  );
+}
+
+/**
  * 受信箱が閉じた後に届いた合図を、このプロセスでは処理しなかったことを
  * stderr へ1行だけ残す。
  *
