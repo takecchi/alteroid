@@ -3146,7 +3146,7 @@
         "operationId": "getApprovals",
         "tags": ["approvals"],
         "summary": "承認待ちの一覧",
-        "description": "`ask_human` が積んだ承認待ち。既定では未回答のみ（`pending=false` で全部）。",
+        "description": "`ask_human` が積んだ承認待ち。既定では未回答のみ（`pending=false` で全部）。`order` / `limit` / `cursor` のいずれかを明示すると頁の封筒（`total` /`nextCursor`）が応答へ載る。**明示しない既定の呼びは、この変更の前と応答が1バイトも変わらない**（opt-in。`.claude/skills/listing-and-detail/SKILL.md`の考え方と同じ——足すのは能力であって、既存の呼び手に新しい欄を押し付けない）。並びは `order`（既定 `asc`）で、`(createdAt, id)` の比較で決める（ストアの生の並びには乗らない。理由は `apps/daemon/src/app.ts` の`approvalsCursorSchema` の doc）。",
         "responses": {
           "200": {
             "description": "承認待ちの一覧。",
@@ -3196,6 +3196,14 @@
                         },
                         "required": ["id", "createdAt", "question", "updatedAt"]
                       }
+                    },
+                    "total": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "nextCursor": {
+                      "type": "string"
                     }
                   },
                   "required": ["approvals"]
@@ -3204,23 +3212,36 @@
             }
           },
           "400": {
-            "description": "クエリが不正。",
+            "description": "クエリが不正、または `cursor` が壊れている・`order` と食い違う。",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {},
-                    "error": {
-                      "type": "array",
-                      "items": {}
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {},
+                        "error": {
+                          "type": "array",
+                          "items": {}
+                        },
+                        "success": {
+                          "type": "boolean",
+                          "const": false
+                        }
+                      },
+                      "required": ["data", "error", "success"]
                     },
-                    "success": {
-                      "type": "boolean",
-                      "const": false
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["error"]
                     }
-                  },
-                  "required": ["data", "error", "success"]
+                  ]
                 }
               }
             }
@@ -3234,6 +3255,31 @@
               "default": "true",
               "type": "string",
               "enum": ["true", "false"]
+            }
+          },
+          {
+            "in": "query",
+            "name": "order",
+            "schema": {
+              "default": "asc",
+              "type": "string",
+              "enum": ["asc", "desc"]
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "type": "string"
             }
           }
         ]
