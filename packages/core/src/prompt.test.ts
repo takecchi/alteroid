@@ -240,6 +240,97 @@ describe('器が共有であることの告知', () => {
 });
 
 /**
+ * バックグラウンドの完了を待つときの事実の告知（#357）。
+ *
+ * **上の2つ（所在の告知／`cwd` 共有）と同じ理由で歯を当てる。** この節を消しても型は
+ * 通り、`Options` も `agents` 定義も変わらないので、いまはどのテストも落ちない。
+ * そして症状（作業者が完了通知を待つ形でターンを閉じる）は実行時にも赤くならない
+ * ——空転したターン自体は「何も壊れていない」形で終わる。
+ *
+ * **マネージャーと作業者の両方に歯を当てる** — 片方だけだと、もう片方が消えても
+ * 落ちない（症状が出ているのは作業者側なので、そちらを削っても検知できない歯は
+ * 歯として意味が無い）。
+ */
+describe('バックグラウンドの完了を待つときの事実の告知（#357）', () => {
+  it('マネージャーに、完了通知を送る主体が居ないという事実を告げている', () => {
+    const prompt = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
+    expect(prompt).toContain('完了を知らせる通知は、この実行環境には無い');
+    expect(prompt).toContain('成果物が在るかを見て回る');
+  });
+
+  it('作業者にも、完了通知を送る主体が居ないという事実を告げている', () => {
+    const prompt = buildWorkerPrompt();
+    expect(prompt).toContain('完了を知らせる通知は無い');
+  });
+
+  it('マネージャーに、通知が実処理の完了と一致しないことがあるという事実を告げている', () => {
+    const prompt = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
+    expect(prompt).toContain('実処理の完了と一致しないことがある');
+  });
+
+  it('作業者にも同じ事実を告げている', () => {
+    const prompt = buildWorkerPrompt();
+    expect(prompt).toContain('実処理の完了と一致しないことがある');
+  });
+
+  it('マネージャーに、プロセス一覧の0本が「まだ見えていない」ことがあるという事実を告げている', () => {
+    const prompt = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
+    expect(prompt).toContain('まだ見えていない');
+    expect(prompt).toContain('同じ場所で2本走る');
+  });
+
+  it('作業者にも同じ事実を告げている', () => {
+    const prompt = buildWorkerPrompt();
+    expect(prompt).toContain('まだ見えていない');
+  });
+
+  it('検証コマンドの具体の書式を書いていない（運用スタイルにしない）', () => {
+    // grep のパターン・timeout の秒数・ログファイル名のような alteroid 固有の
+    // 運用スタイルは書かない（`prompt.ts` の doc の線）。書くのは「前景で成果物を
+    // 見る」という形までである。
+    const manager = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
+    const worker = buildWorkerPrompt();
+    for (const prompt of [manager, worker]) {
+      expect(prompt).not.toContain('grep');
+      expect(prompt).not.toContain('timeout');
+      expect(prompt).not.toContain('run.log');
+    }
+  });
+
+  it('通知が前後する原因の機構を断定していない（#357 コメント2の留保どおり）', () => {
+    // 報告した作業者自身が「二重にバックグラウンド化される」という説明を
+    // 自分の解釈であって観測ではないと断っている。書くのは「観測された」までで、
+    // 機構を断定しない。
+    const manager = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
+    const worker = buildWorkerPrompt();
+    for (const prompt of [manager, worker]) {
+      expect(prompt).not.toContain('二重');
+    }
+  });
+
+  it('`Monitor` という道具名を名指しで禁じていない（repo からは挙動を確かめられない道具）', () => {
+    const manager = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
+    const worker = buildWorkerPrompt();
+    expect(manager).not.toContain('Monitor');
+    expect(worker).not.toContain('Monitor');
+  });
+
+  it('回数を書いていない（固定した数は固定した瞬間から腐るため）', () => {
+    // マネージャー側の既存の委譲の指針には元から「1体も立たない」のような
+    // 数字が含まれているので、そこは対象にしない。**今回足した節だけ**を
+    // 切り出して見る（節の見出しは新設したものなので、これより後ろが対象）。
+    const manager = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
+    const addedSection = manager.slice(manager.indexOf('# バックグラウンドの完了を待つとき'));
+    expect(addedSection).not.toMatch(/\d+\s*(回|体)/);
+
+    // 作業者は固定4行の末尾に今回の3点を足しただけなので、そちらは全文を見る
+    // （既存4行に数字は無い）。
+    const worker = buildWorkerPrompt();
+    expect(worker).not.toMatch(/\d+\s*(回|体)/);
+  });
+});
+
+/**
  * branded type（4-14）— `renderMemoryDocuments` を通さずに `buildCloneSystemPrompt`
  * へ記憶を渡す経路を `tsc` で塞ぐ。
  *
