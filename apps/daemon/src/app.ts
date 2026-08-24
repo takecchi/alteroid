@@ -586,9 +586,7 @@ function isPublicPath(path: string): boolean {
  * ——そのものへの対処であり、この関数が万一 `message` や値を混ぜて返すと、
  * 対処そのものが無意味になる。
  */
-function whereValidationFailed(
-  issues: readonly { readonly path?: readonly unknown[] }[],
-): string {
+function whereValidationFailed(issues: readonly { readonly path?: readonly unknown[] }[]): string {
   return issues
     .map((issue) => issue.path?.map((part) => String(part)).join('.') ?? '')
     .filter((path) => path.length > 0)
@@ -2471,8 +2469,7 @@ export function createApp(deps: AppDeps) {
         const where = whereValidationFailed(result.error);
         return c.json(
           {
-            error:
-              '鍵の入力の形が不正（配布していない）' + (where === '' ? '' : `: ${where}`),
+            error: '鍵の入力の形が不正（配布していない）' + (where === '' ? '' : `: ${where}`),
           },
           400,
         );
