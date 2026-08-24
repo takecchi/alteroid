@@ -4,6 +4,7 @@ import { createManagerPool, type ManagerPool } from './manager.js';
 import {
   createRunnerRegistry,
   type RunnerAnswerCommand,
+  type RunnerAnswerOutcome,
   type RunnerClient,
   type RunnerCredentialFingerprint,
   type RunnerEvent,
@@ -143,12 +144,15 @@ class StickyRunner implements RunnerClient {
   async send(managerId: string, text: string): Promise<void> {
     this.sends.push({ managerId, text });
   }
-  async answer(managerId: string, answer: RunnerAnswerCommand): Promise<boolean> {
+  async answer(managerId: string, answer: RunnerAnswerCommand): Promise<RunnerAnswerOutcome> {
     this.answers.push({ managerId, answer });
-    // **解けたことにする。** `false` を返すと `Pool#send` は `outcome: 'unknown'`
-    // （「runner 側で既に解けている」）を返し、`answered` を主張するテストが
-    // 立たない。実 runner は解けていれば `true` を返す（`permission-resend.test.ts`
-    // の1本目と同じ約束）。
+    // **解けたことにする。** `delivered: false` を返すと `Pool#send` は
+    // `outcome: 'unknown'`（「runner 側で既に解けている」）を返し、`answered` を
+    // 主張するテストが立たない。実 runner は解けていれば `delivered: true` を
+    // 返す（`permission-resend.test.ts` の1本目と同じ約束）。**`decision` は
+    // このテストの主題（宛先の解決）と無関係なので付けない**——`manager.ts` 側は
+    // `[unknown]` として journal に残すが、それはこのファイルが測っている性質
+    // ではない（journal の decision 表記は `manager.test.ts` の役目）。
     //
     // **`settled` も流す。** `Pool#send` の `answered` 分岐は自分では
     // `record.waiting` から取り除かない — 実 runner（`runner.ts:1944`）が
@@ -157,7 +161,7 @@ class StickyRunner implements RunnerClient {
     // 流さないと、答えたのに `waiting` が残ったままになり「解けた」を
     // 主張できない。
     this.#onEvent?.({ type: 'settled', managerId, requestId: answer.requestId });
-    return true;
+    return { delivered: true };
   }
   async stop(managerId: string): Promise<void> {
     this.stops.push(managerId);

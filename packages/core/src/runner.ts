@@ -29,6 +29,7 @@ import { buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
 import { RunnerFenceError } from './runner-protocol.js';
 import type {
   RunnerAnswerCommand,
+  RunnerAnswerOutcome,
   RunnerEvent,
   RunnerLease,
   RunnerManagerState,
@@ -275,7 +276,11 @@ export interface RunnerHost {
   /** `RunnerFenceError` を投げうる（世代が古い。呼び出し側は 409 へ変換すること）。 */
   resume(command: RunnerResumeCommand): Promise<void>;
   send(managerId: string, text: string): Promise<boolean>;
-  answer(managerId: string, answer: RunnerAnswerCommand): Promise<boolean>;
+  /**
+   * `delivered: false` = その確認は runner 側に無い。`decision` は確定した
+   * allow/deny（#322。`decideAnswer` の doc）。同一プロセスなので常に付く。
+   */
+  answer(managerId: string, answer: RunnerAnswerCommand): Promise<RunnerAnswerOutcome>;
   stop(managerId: string): Promise<void>;
   list(): RunnerManagerState[];
   transcript(managerId: string): Promise<string | null>;
@@ -540,9 +545,9 @@ class Host implements RunnerHost {
     return true;
   }
 
-  async answer(managerId: string, answer: RunnerAnswerCommand): Promise<boolean> {
+  async answer(managerId: string, answer: RunnerAnswerCommand): Promise<RunnerAnswerOutcome> {
     const session = this.#sessions.get(managerId);
-    if (!session) return false;
+    if (!session) return { delivered: false };
     return session.answer(answer);
   }
 
@@ -1029,15 +1034,25 @@ class RunnerSession {
     this.#wakeInput();
   }
 
-  /** 返事の宛先は `requestId` で指す。推測しない（取り違えは拒否を承認に変える）。 */
-  answer(answer: RunnerAnswerCommand): boolean {
+  /**
+   * 返事の宛先は `requestId` で指す。推測しない（取り違えは拒否を承認に変える）。
+   *
+   * **確定した allow/deny を同期的に返す（#322）。** `decideAnswer` を
+   * `#onPermission` の `.then()`（SDK へ実際に返す `PermissionResult` を組み立てる
+   * 側）と共有しているので、ここが返す値と SDK へ返る値は常に同じ計算から出る
+   * ——2箇所に式を書くと、Issue #322 が候補2（`manager.ts` で `inferDecision` を
+   * 呼び直す）を却下した理由（「runner.ts 側が変わったときに黙ってずれる」）を
+   * 場所を変えて再現する。
+   */
+  answer(answer: RunnerAnswerCommand): RunnerAnswerOutcome {
     const pending = this.#pending.find((request) => request.id === answer.requestId);
-    if (!pending) return false;
+    if (!pending) return { delivered: false };
+    const decision = decideAnswer(pending.kind, answer.decision, answer.message);
     pending.settle({
       message: answer.message,
       ...(answer.decision === undefined ? {} : { decision: answer.decision }),
     });
-    return true;
+    return { delivered: true, decision };
   }
 
   async transcript(): Promise<string | null> {
@@ -1955,12 +1970,17 @@ class RunnerSession {
     });
 
     const result = answered.then((answer) => {
+      // **`decideAnswer` が決定の唯一の実装である（#322）。** `Session#answer()`
+      // が同じ関数を同じ引数（`kind` / `decision` / `message`）で呼んでいるので、
+      // クローンへ即座に返す値（`Pool#send` の `answered.decision`）と、SDK へ
+      // 実際に返る `behavior` は常に同じ計算から出る。
+      const decision = decideAnswer(kind, answer.decision, answer.message);
       const outcome: PermissionResult =
-        kind === 'question'
-          ? { behavior: 'allow', updatedInput: withAnswers(input, answer.message) }
-          : (answer.decision ?? inferDecision(answer.message)) === 'allow'
-            ? { behavior: 'allow' }
-            : { behavior: 'deny', message: answer.message };
+        decision === 'deny'
+          ? { behavior: 'deny', message: answer.message }
+          : kind === 'question'
+            ? { behavior: 'allow', updatedInput: withAnswers(input, answer.message) }
+            : { behavior: 'allow' };
       // **解けたことを覚えるのはここ1箇所。** 回答でも中断でも停止でも、解けた
       // 事実は同じように残る（経路ごとに覚え忘れる隙を作らない）。
       this.#resolved.set(id, outcome);
@@ -2330,6 +2350,30 @@ const DENIAL_WORDS = /\b(deny|denied|no|nope|don't|do not|stop|cancel)\b/i;
 export function inferDecision(message: string): 'allow' | 'deny' {
   if (DENIAL_PHRASES.some((phrase) => message.includes(phrase))) return 'deny';
   return DENIAL_WORDS.test(message) ? 'deny' : 'allow';
+}
+
+/**
+ * 確認の最終的な決定を計算する、**唯一の実装**（#322）。
+ *
+ * `Session#answer()`（クローンへ即座に返す値）と `#onPermission` の
+ * `answered.then()`（SDK へ実際に返す `PermissionResult` を組み立てる側）の
+ * **両方がこの関数を呼ぶ。** 式を2箇所に書くと、Issue #322 が候補2
+ * （`manager.ts` で `inferDecision` を呼び直す）を却下した理由と同じ形の穴に
+ * なる——場所を `runner.ts` の中に留めても、実装が2つあれば「runner.ts 側が
+ * 変わったときに黙ってずれる」は再現する。
+ *
+ * - `AskUserQuestion`（`kind === 'question'`）は **decision を一切見ず常に
+ *   allow**（既存の挙動そのまま。質問への回答に allow/deny という概念が無い）
+ * - それ以外（`kind === 'permission'`）は明示の `decision` を優先し、
+ *   無ければ `inferDecision(message)` に倒す
+ */
+export function decideAnswer(
+  kind: 'question' | 'permission',
+  decision: 'allow' | 'deny' | undefined,
+  message: string,
+): 'allow' | 'deny' {
+  if (kind === 'question') return 'allow';
+  return decision ?? inferDecision(message);
 }
 
 export function brief(value: unknown, limit = 200): string {

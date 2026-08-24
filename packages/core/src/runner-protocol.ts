@@ -381,6 +381,44 @@ export const runnerAnswerCommandSchema = z.object({
 
 export type RunnerAnswerCommand = z.infer<typeof runnerAnswerCommandSchema>;
 
+/**
+ * `POST /managers/:id/answers` の**応答**（#322）。
+ *
+ * **`decision` は省略されうる。** ローリング再デプロイの窓では、まだこの変更前の
+ * runner が `{ ok: true }` だけを返す——確定した decision を計算できていないの
+ * ではなく、**報告する欄そのものを持っていない。** 受け取る側（`runner-client.ts`
+ * の `HttpRunner`）は、欠けた回を allow/deny の既定値へ倒さず「報告されなかった」
+ * と読める形（`decision` キーを省いたまま）で運ぶこと——`Pool#send`（`manager.ts`）
+ * がその形のまま journal へ書く（`AGENTS.md`「取れない軸に0の行を作る」）。
+ */
+export const runnerAnswerResultSchema = z.object({
+  ok: z.boolean(),
+  decision: z.enum(['allow', 'deny']).optional(),
+});
+
+export type RunnerAnswerResult = z.infer<typeof runnerAnswerResultSchema>;
+
+/**
+ * `RunnerClient#answer()` / `RunnerHost#answer()` が返す形（#322）。
+ *
+ * **`runnerAnswerResultSchema` とは別の型である。** こちらは HTTP の外（同一
+ * プロセスの `RunnerLocal` を含む）でも使う業務上の形で、`ok` ではなく
+ * `delivered` を名乗る——ワイヤーの語彙（`{ ok, decision }`）と業務の語彙
+ * （`{ delivered, decision }`）を分けておくと、ワイヤーの形が変わっても
+ * こちらの意味は変わらずに済む。変換するのは `HttpRunner`（クライアント側）と
+ * `apps/runner/src/app.ts`（サーバー側）の境界1箇所だけである。
+ */
+export interface RunnerAnswerOutcome {
+  /** `false` = その確認は runner 側に無い（既に解けた / 別の宛先）。 */
+  delivered: boolean;
+  /**
+   * 確定した allow/deny。**`delivered` が true でも欠けうる**
+   * （`runnerAnswerResultSchema` の doc と同じ理由）。欠けた回を
+   * allow/deny の既定値へ倒さないこと。
+   */
+  decision?: 'allow' | 'deny';
+}
+
 // ---------------------------------------------------------------------------
 // runner → デーモン（出来事）
 // ---------------------------------------------------------------------------
@@ -1135,8 +1173,13 @@ export interface RunnerClient {
   start(command: RunnerStartCommand): Promise<void>;
   resume(command: RunnerResumeCommand): Promise<void>;
   send(managerId: string, text: string): Promise<void>;
-  /** `false` = その確認は runner 側に無い（既に解けた / 別の宛先）。 */
-  answer(managerId: string, answer: RunnerAnswerCommand): Promise<boolean>;
+  /**
+   * `delivered: false` = その確認は runner 側に無い（既に解けた / 別の宛先）。
+   * `decision` は runner.ts が確定した allow/deny（#322）——**`delivered` が
+   * true でも欠けうる**（`RunnerAnswerOutcome` の doc）。欠けた回を allow/deny
+   * の既定値へ倒さないこと（呼び出し側の journal 書き込みが「不明」として扱う）。
+   */
+  answer(managerId: string, answer: RunnerAnswerCommand): Promise<RunnerAnswerOutcome>;
   stop(managerId: string): Promise<void>;
   /** いま runner が抱えているセッション（再接続時の突き合わせに使う）。 */
   list(): Promise<RunnerManagerState[]>;

@@ -485,10 +485,21 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       return c.json({ ok: true });
     })
 
-    /** 止まっていた確認への回答。宛先は `requestId` で指す（推測しない）。 */
+    /**
+     * 止まっていた確認への回答。宛先は `requestId` で指す（推測しない）。
+     *
+     * **`decision` は 0 件のときキーごと省く（#322）。** `outcome.decision` が
+     * 無い（=届いていない）ときに `decision: undefined` を書くと、JSON では
+     * キー自体が消えるので実害は無いが、`runnerAnswerResultSchema` の doc が
+     * 言う「report する欄そのものを持たない」を意図どおりに保つため、明示的に
+     * 省く（`pendingEvents`/`oldestPendingAt` と同じ作法。#358）。
+     */
     .post('/managers/:id/answers', zValidator('json', runnerAnswerCommandSchema), async (c) => {
-      const settled = await host.answer(c.req.param('id'), c.req.valid('json'));
-      return c.json({ ok: settled });
+      const outcome = await host.answer(c.req.param('id'), c.req.valid('json'));
+      return c.json({
+        ok: outcome.delivered,
+        ...(outcome.decision === undefined ? {} : { decision: outcome.decision }),
+      });
     })
 
     .delete('/managers/:id', async (c) => {
