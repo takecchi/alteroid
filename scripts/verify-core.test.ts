@@ -365,6 +365,56 @@ describe('pnpm verify — テストの結末は4つある', () => {
       '実際の集計行はまだ出ていない。\n';
     expect(testRan(mentionOnly)).toBe(false);
   });
+
+  /**
+   * #392: `testRan` が ANSI エスケープを剥がさずに照合していたせいで、色が付いた
+   * 集計行では完走して緑でも「1本も走っていない」（`not-run`、exit 3）に化けていた。
+   *
+   * ## フィクスチャの出所（本物のバイトか、組み立てた文字列か）
+   *
+   * **本物のバイトである。** 下の2行は `scripts/test-guard-core.test.ts`（#311 / PR #355、
+   * 逐語は `grep -n 'ANSI エスケープで色付けされた集計行も読める' scripts/test-guard-core.test.ts`）
+   * および `scripts/mutate-core-strip-ansi.test.ts`（#372 / PR #374。`COLORED_FILES_LINE` /
+   * `COLORED_TESTS_LINE`）が固定しているものと**1バイトも違わないことを、この PR の
+   * 作業で実測して突き合わせてから**使っている（3ファイルの該当リテラルをソース
+   * レベルで比較し、完全一致を確認した）。**独立な3箇所目が同じバイト列を基準に
+   * 置く形である** —— 「3つが一致した」ことは正しさの証明にはならない（この
+   * 一致だけを見る歯は、3つとも同じように壊れる形を捕まえられない。下の
+   * `scripts/mutate-core-strip-ansi.test.ts` の doc を参照）ので、基準そのものは
+   * 元の2ファイルの doc が持つ実測（vitest 4.1.10 自身のフォーマッタ呼び出し、
+   * および GitHub Actions の raw log archive）に置いている。
+   */
+  it('ANSI エスケープで色付けされた集計行も読める（#392、本物のバイトで固定）', () => {
+    const ESC = '\x1b';
+    const colored =
+      `${ESC}[2m Test Files ${ESC}[22m ${ESC}[1m${ESC}[32m130 passed${ESC}[39m${ESC}[22m${ESC}[90m (130)${ESC}[39m\n` +
+      `${ESC}[2m      Tests ${ESC}[22m ${ESC}[1m${ESC}[32m2493 passed${ESC}[39m${ESC}[22m${ESC}[90m (2493)${ESC}[39m\n`;
+    expect(testRan(colored)).toBe(true);
+    expect(classifyTest({ status: 0, signal: null, output: colored })).toMatchObject({
+      state: 'passed',
+    });
+  });
+
+  it('色が付いていても、集計行そのものが無ければ false のまま（「剥がせば何でも読める」に緩めない）', () => {
+    const ESC = '\x1b';
+    const coloredButNoSummary = `${ESC}[31mError: write EPIPE${ESC}[39m\n${ESC}[2m   Duration ${ESC}[22m 201ms\n`;
+    expect(testRan(coloredButNoSummary)).toBe(false);
+    expect(classifyTest({ status: 0, signal: null, output: coloredButNoSummary })).toMatchObject({
+      state: 'not-run',
+    });
+  });
+
+  /**
+   * #392（探す語を緩めない）。`scripts/mutate-core-strip-ansi.test.ts` の
+   * `DECOY_OUTPUT` と同じ形 —— `Files changed: 3` / `Tests: none` はどちらも
+   * `Test Files` / `Tests\s+` の厳密な形には当たらない。ANSI を剥がす変更で
+   * 探す語のほうまで緩めていないことを固定する（#374 が実際に踏んだ「歯が無い」
+   * 穴と同じ穴を、ここで最初から塞ぐ）。
+   */
+  it('紛らわしい行（Files changed: / Tests: none）を集計行と読まない', () => {
+    const decoy = 'Files changed: 3\nTests: none\nError: write EPIPE\n';
+    expect(testRan(decoy)).toBe(false);
+  });
 });
 
 /**
