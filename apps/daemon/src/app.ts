@@ -418,6 +418,14 @@ function compareApprovalPagingKey(
  * **依頼者の観測（2026-08-24 時点、自分では測っていない）**: `scan=10000` で
  * 会話15件、先頭に到達。`limit` の上限 200 にも画面の既定 30 にも遠い —
  * だから、いまはページングを足さない。
+ *
+ * **依頼者の再測（2026-08-24T20:5xZ、`conversation_read` 経由。issue #432）**:
+ * `limit=20` `scan=10000` で会話18件、「人間との往復を58件遡った。先頭に
+ * 届いている」。`limit=20` でも `limit=30` でも `hiddenByLimit = 0`。⟹ doc が
+ * 定めた基準（`hiddenByLimit > 0` の断り書きが実際に出ること）は依然として
+ * 満たしていない——#432 の PR ではこの口に何も足していない。数は 15 → 18 と
+ * 動いたが、答えは変わっていない（数は腐るが、断り書きの有無は腐らないという
+ * 上の判断がそのまま効いている）。
  */
 const conversationsQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(20),

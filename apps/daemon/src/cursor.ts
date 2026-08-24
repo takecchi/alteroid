@@ -3,13 +3,15 @@ import { z } from 'zod';
 /**
  * カーソル（keyset paging）の共通の符号化（issue #432）。
  *
- * **口をまたいで形を揃える。** いま確実に使っているのは `GET /approvals` の
- * 1口だけである。`/journal` は別 PR で使う予定がある。`/commitments` と
- * `/conversations` はこの符号化を使わない（`.claude/skills/listing-and-detail/SKILL.md`
- * が言う理由でスコープから外れた）。`/reports` は口の形（不透明なカーソル＋
- * 応答を1バイトも変えない、を同時に満たせるか）がまだ決まっていない。
- * **「4口で揃える」だった時期があるが、いまはそう書けない** — 決まった口が
- * 増えるたびにここを更新すること。
+ * **口をまたいで形を揃える——ただし、いまこの PR で使っているのは
+ * `GET /approvals` の1口だけである。** `/journal` は別 PR で使う予定がある。
+ * `/reports` はこれを使わない——不透明なカーソルと「応答を1バイトも変えない」
+ * を同時に満たせなかったため、応答に既に載っている `date`/`at` をそのまま
+ * 使う可視の複合キー（`beforeDate` ＋ `beforeAt`）になった（`apps/daemon/src/reports.ts`
+ * の `listDailyReportsBefore`）。`/commitments` と `/conversations` はこの
+ * 符号化を使わない（`.claude/skills/listing-and-detail/SKILL.md` が言う理由
+ * でスコープから外れた）。**「4口で揃える」だった時期があるが、いまはそう
+ * 書けない** — 決まった口が増えるたびにここを更新すること。
  *
  * 中身のキーは口ごとに違う（`/approvals` は `{ id, createdAt, order }`）が、
  * 外から見た形はすべて「不透明な base64url 文字列」で揃えてある。呼ぶ側は
@@ -30,18 +32,29 @@ import { z } from 'zod';
  * 増えたら、そちらは別に検査すること——ここでは検査できない（口ごとにデータが
  * 違うため）。
  *
- * **offset という名前を使わない。** `packages/core/src/tools.ts` の
- * `page()` 呼び出し10箇所（`memory_read` / `journal_read` / `approvals_list` /
- * `schedule_list` / `commitment_list` / `profile_read` / `self_read` /
- * `manager_report` / `conversation_read` / `manager_transcript`）に既にある
- * `offset` は「一覧のページング」ではなく「本文を何文字目から読むか」であって、
- * 意味が違う。**ただし例外が1つある** — `usage_summary` の `axis` モードの
- * `offset`（`renderUsage` の中で `entries.slice(offset, offset + USAGE_AXIS_PAGE)`
- * を通る。`grep -n 'entries.slice(offset' packages/core/src/tools.ts` で当たる）
- * は、本文ではなく**軸の一覧の配列そのもの**を切っている。**「1件も無い」とは
- * 言えない** — 名指しした10箇所は本文のオフセットで正しいが、この1件だけは
- * 一覧のオフセットである。同じ名前で違う意味を作らないため、HTTP 側の一覧
- * ページングには `cursor` という別の名前を使う。
+ * **offset という名前を使わない。根拠は2つある。**
+ *
+ * 1. **HTTP の口には `offset` というクエリパラメータが1つも無い**
+ *    （`grep -c 'offset' apps/daemon/openapi.json` が `0`。NUL に隠れて
+ *    見えていないだけではないことは `grep -ac 'offset' apps/daemon/openapi.json`
+ *    も `0` であることで確かめてある）。ここで新しく `offset` を持ち出すと、
+ *    HTTP の口としては初めての意味になる。
+ * 2. **`packages/core/src/tools.ts` の `offset` は、11箇所のうち10箇所が
+ *    「`id` を指定した1件の本文を何文字目から読むか」である**（`page()`
+ *    呼び出し10箇所——`memory_read` / `journal_read` / `approvals_list` /
+ *    `schedule_list` / `commitment_list` / `profile_read` / `self_read` /
+ *    `manager_report` / `conversation_read` / `manager_transcript`。
+ *    `grep -n '= page(' packages/core/src/tools.ts` で当たる——`grep -n 'page('`
+ *    だと doc コメント中の言及2件も一致して12件になるので、実際に呼んでいる
+ *    行だけを取るこの形で数えること）。**残る1箇所だけが一覧の配列を切って
+ *    いる** — `usage_summary` の `axis` モード（`renderUsage` の中の
+ *    `entries.slice(offset, offset + USAGE_AXIS_PAGE)`。
+ *    `grep -n 'entries.slice(offset' packages/core/src/tools.ts` で当たる）。
+ *    **「一覧を切る呼びは1件も無い」とは言えない**（10/11 という比で言う）。
+ *
+ * ⟹ 同じ名前が2つの意味（本文のオフセット／一覧のオフセット）を持つ状態を
+ * これ以上広げないため、HTTP 側の一覧ページングには `cursor` という別の
+ * 名前を使う。
  */
 export function encodeCursor(payload: Record<string, string>): string {
   return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
