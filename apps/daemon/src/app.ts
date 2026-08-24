@@ -307,6 +307,24 @@ const approvalsQuery = z.object({ pending: z.enum(['true', 'false']).default('tr
  * `with: ['human']` を `limit` より前で効かせるため。issue #418）。マネージャー
  * との往復・内部ターン（`self`）は同じ `exchange` として日誌に混ざっているが、
  * この予算を食わない。
+ *
+ * **`GET /conversations` はもう1つ、別の窓で黙って切っていた（#418 の裏返し）。**
+ * `scan` は日誌側の窓（何件遡るか）だが、`limit`
+ * は組み立てた**会話**の窓（何件返すか）で、こちらは黙って `slice(0, limit)`
+ * していた。人間との会話は増え続ける一方なので、この窓は時間が経てば必ず
+ * 埋まる（#418 の駆動因だった並走の量とは違い、こちらは単調増加である）。
+ * `conversation_read`（クローンの道具。`tools.ts`）は同じ理由で `hiddenByLimit`
+ * を返しているのに、この人間向けの口だけが黙っていた。**応答に
+ * `reachedStart` と `hiddenByLimit` を足し、この口も言うようにした。**
+ *
+ * **いつページングを足すか — 数ではなく断り書きの有無で判断する。**
+ * `hiddenByLimit > 0` の断り書きが実際に画面や CLI に出るようになったら、
+ * ページング（あるいは `limit` を画面から動かせる形）を検討する時期である。
+ * 出ていないなら要らない。⟹ 判断の材料は「断り書きが出ているか」であって、
+ * 会話の本数ではない（数は腐るが、断り書きの有無は腐らない）。
+ * **依頼者の観測（2026-08-24 時点、自分では測っていない）**: `scan=10000` で
+ * 会話15件、先頭に到達。`limit` の上限 200 にも画面の既定 30 にも遠い —
+ * だから、いまはページングを足さない。
  */
 const conversationsQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(20),
@@ -955,7 +973,9 @@ export function createApp(deps: AppDeps) {
           '`POST /chat` の SSE は流すだけで読み直す口が無かった。器（端末・タブ・アプリ）' +
           'を替えても続きから話せるための一覧。日誌から組み立てるので新しい状態は持たない。' +
           '新しい順。`scanned` は人間との往復を何件遡ったか（マネージャーとの往復・内部' +
-          'ターンは数えない。issue #418）で、遡り切れていないことが分かる（黙って打ち切らない）。',
+          'ターンは数えない。issue #418）、`reachedStart` はその窓が日誌の先頭に届いたかで、' +
+          '遡り切れていないことが分かる（黙って打ち切らない）。`hiddenByLimit` は、その窓の' +
+          '**中で** `limit` に収まらず落とした会話の数（窓の外は数えていない）。',
         responses: {
           200: {
             description: '会話の一覧（新しい順）。',
@@ -987,8 +1007,10 @@ export function createApp(deps: AppDeps) {
          * なった欠陥そのものである。日誌の順序をそのまま会話の順序にする理由
          * （同じミリ秒の前後は時刻からは決められない）も、移設先に書いてある。
          */
+        const allConversations = collectConversations(entries);
+        const conversations = allConversations.slice(0, limit);
         return c.json({
-          conversations: collectConversations(entries).slice(0, limit),
+          conversations,
           /**
            * 遡った範囲。**#418 より前は「日誌の `exchange` を何件見たか」
            * だったが、いまは「人間との往復を何件見たか」である**
@@ -997,6 +1019,30 @@ export function createApp(deps: AppDeps) {
            * （`scan` を増やせば見える）。
            */
           scanned: entries.length,
+          /**
+           * 窓（`scan`）が日誌の先頭に届いたか。**`GET /conversations/:id`
+           * と同じ関数・同じ意味で揃えてある**（`reachedStart`。
+           * `@alteroid/core`）— 窓が出し切れているかを言うだけで、`limit`
+           * とは無関係（`limit` の側は `hiddenByLimit` が持つ）。
+           */
+          reachedStart: reachedStart(entries.length, scan),
+          /**
+           * **この窓の中で** `limit` に収まらず落とした会話の数。
+           *
+           * `collectConversations(entries)` は窓の全件を既に数え上げているので、
+           * `slice` の前後の差を取るだけでよい —— **この数を出すために追加の
+           * 走査は1件も要らない。** `limit` を置いた意味（応答を大きくしない）は
+           * 薄まらない。
+           *
+           * ⚠️ **窓の中の数であって、窓の外は数えていない。** `reachedStart` が
+           * 偽なら、この窓よりさらに古い会話が在りうる（それはこの数には
+           * 現れない — `scan` を増やして初めて見える）。
+           *
+           * `conversation_read`（`packages/core/src/tools.ts` の
+           * `hiddenByLimit`）が既に同じことを言っているのに、この人間向けの
+           * 口だけが黙っていた（#418 の裏返し）。名前もそちらに揃えてある。
+           */
+          hiddenByLimit: allConversations.length - conversations.length,
         });
       },
     )

@@ -159,6 +159,29 @@ function ConversationList({
           人間との往復 {data.scanned} 件を走査
         </p>
       )}
+      {/*
+        **窓（`scan`）が日誌の先頭に届いていないことを言う。** 下の `ChatPane`
+        の「先頭には届いていない」と同じ作法 — `reachedStart` が真のときは
+        出さない（窓が先頭に届いているなら、そこに但し書きを出すと「常に
+        出ているもの」になって情報でなくなる）。
+      */}
+      {data?.reachedStart === false && (
+        <p className="border-t border-border px-3 py-2 text-[11px] text-muted">
+          {`人間との往復を ${data.scanned} 件遡ったが、先頭には届いていない。これより古いやりとりが残っている可能性がある。`}
+        </p>
+      )}
+      {/*
+        **窓の中で `limit` に収まらず落とした会話があることを言う（#418 の
+        裏返し）。** #418 は「他の種別に食われる」窓、こちらは「自分の種別で
+        溢れる」窓 — 人間との会話は増え続けるので、時間が経てば必ず踏む。
+        語彙はクローンの道具（`tools.ts` の「…ほか N 件は省略」）に寄せる。
+        `reachedStart` とは別の条件なので、両方出ることも片方だけのこともある。
+      */}
+      {data !== undefined && data.hiddenByLimit > 0 && (
+        <p className="border-t border-border px-3 py-2 text-[11px] text-muted">
+          {`…ほか ${data.hiddenByLimit} 件は省略（この窓に ${data.conversations.length + data.hiddenByLimit} 件あり、新しい順に ${data.conversations.length} 件だけ出した）。`}
+        </p>
+      )}
     </aside>
   );
 }

@@ -601,9 +601,31 @@ interface ManagerRecord {
    *
    * プロセス内の像にしか置かない（台帳には書かない）。断った事実そのものは日誌と
    * 受信箱に残るので、ここは次の一手を決めるための一時的な材料である。
+   *
+   * **`kind` を持つ（#200）。** かつては `claimableAt` の有無で「時間で解けるか」を
+   * 見分けていたが、`claimableAt` が付くのは `LeaseVerdict` の `held` のときだけで、
+   * **貸し出しを台帳へ書けなかったとき**（`LeaseVerdict` の枝ではない。下の
+   * `#claimForResume` が自分で作る断り）も `claimableAt` を持たない。⟹
+   * `claimableAt === undefined` は「併存（`ambiguous`）」と「台帳の書き込み失敗」を
+   * 同じに扱ってしまい、書き込み失敗のときにも「人間が `ALTEROID_RUNNER_ID` 等を
+   * 直すまで解けない」と言ってしまう（存在しない設定の誤りを読んだクローンが
+   * 探しに行く）。`kind` はこの2つを取り違えないための専用の欄である。
    */
-  leaseRefusal?: { detail: string; claimableAt?: number };
+  leaseRefusal?: { detail: string; claimableAt?: number; kind: LeaseRefusalKind };
 }
+
+/**
+ * `leaseRefusal.kind` の値。**`claimableAt` の有無から推測しない**（上の doc）。
+ *
+ * - `held` — `LeaseVerdict` の `held`。時間が経てば自動で引き取れる
+ * - `ambiguous` — `LeaseVerdict` の `ambiguous`（#200）。時間では解けない。
+ *   人間が `ALTEROID_RUNNER_ID` 等を直すまで解けない
+ * - `persist-failed` — 貸し出しを台帳へ書けなかった。`LeaseVerdict` の枝では
+ *   ない（`judgeLease` より後、`#claimForResume` が書き込みの失敗から自分で
+ *   作る）。台帳の書き込みは一時的な障害であることが多く、`ALTEROID_RUNNER_ID`
+ *   の問題ではない — `ambiguous` と同じ言い方をしないための区別である
+ */
+type LeaseRefusalKind = 'held' | 'ambiguous' | 'persist-failed';
 
 /**
  * 「知らせ」（`#notifyRestored` / `#notifyUnresumable` / `#notifyResumeFallback`）が
@@ -761,6 +783,28 @@ class Pool implements ManagerPool {
    * 消える（別の器・別の runner なら結果が変わりうる）。
    */
   readonly #unresumable = new Set<string>();
+  /**
+   * 併存（同じ `runnerId` を名乗る器が2台以上）を受信箱へ通知済みの `runnerId`
+   * （#200）。**「入った」と「解けた」の両方をここ1つの状態から出す。**
+   *
+   * `record.leaseRefusal`（ジョブ単位）とは別に、`runnerId` 単位でここに持つ。
+   * 理由: 併存の検出は2箇所にある——`#claimForResume`（ジョブの `record` に触れる）
+   * と、`#reattach` が関門より前で行う早期検出（#390。併存を見つけた時点で
+   * `record` に触れずに `return` する）。後者は `hello` のたびに走り、併存が
+   * 続く限り `#claimForResume` を二度と呼ばない（誤解決した相手への副作用
+   * （`#pushProfile` / `runner.list()`）を止めるための設計であり、それ自体は
+   * 変えない）。ジョブ単位の状態だけで「解けた」を出そうとすると、この早期検出
+   * 経路が見つけた併存は `#claimForResume` に一度も届かず、「解けた」を言う機会が
+   * 無いまま残る。`runnerId` 単位でここに持てば、どちらの経路が先に見つけても
+   * 同じ1つの状態を読み書きするので、検出した経路によらず「入った」は1回、
+   * 「解けた」も1回だけ出る。
+   *
+   * **これが無いと沈黙の意味が確定しない。** 「入った」だけを遷移で出し「解けた」を
+   * 出さない設計だと、併存が続いている間も自然に解けた後も同じ「その後は何も
+   * 届かない」になり、読み手はどちらなのか受信箱からは区別できない（Issue #308
+   * と同じ形の穴）。
+   */
+  readonly #ambiguousRunnersNotified = new Set<string>();
   /**
    * 繋ぎ済み（か、いま繋いでいる最中）の宛先。**旗は宛先ごとに持つ。**
    *
@@ -1372,7 +1416,7 @@ class Pool implements ManagerPool {
           // 引き取らなかったことは判断であって欠落ではない（根拠も一緒に残す）。
           await this.#journal({
             type: 'decision',
-            decision: leaseRefusalDecision(job.id, record.leaseRefusal?.claimableAt),
+            decision: leaseRefusalDecision(job.id, record.leaseRefusal),
             grounds: record.leaseRefusal?.detail ?? '（根拠を取れなかった）',
           });
           this.#scheduleReattach(runner.runnerId);
@@ -1788,7 +1832,37 @@ class Pool implements ManagerPool {
           decision: `runnerId=${runnerId} の取り直しを見送った（併存を関門より前で検出。#pushProfile と runner.list() は誤解決した相手へ走らせていない）`,
           grounds: describeAmbiguousSighting(runnerId, sighting.duplicates),
         });
+        /*
+         * **受信箱にも知らせる（#200 段1後半）。** ここで `return` すると、この
+         * `runnerId` に紐づくジョブは併存が続く限り `#claimForResume` へ二度と
+         * 進まない（`#pushProfile` / `runner.list()` を誤解決した相手へ走らせない
+         * ための設計であり、それ自体は変えない）。`#claimForResume` 側の通知
+         * だけに任せると、実際に併存を検出する経路（runner の再接続＝`hello`）が
+         * ここで折り返され続け、クローンへ一度も届かない。dedup は `runnerId`
+         * 単位（`#ambiguousRunnersNotified`）を `#claimForResume` と共有するので、
+         * どちらの経路が先に見つけても二重には出ない。
+         *
+         * ジョブの一覧は store から引く——`this.#records`（プロセス内の像）は
+         * ここではまだこのジョブを持っていないことがある（例:
+         * デーモン再起動後、最初の `hello` がここへ来る前に `restore()` が
+         * 走っていない場合）。store の読みは `#pushProfile` / `runner.list()`
+         * のような「誤解決した相手への副作用」ではないので、ここで読んでも
+         * #390 が塞いだ穴には触れない。
+         */
+        const jobIds = (await this.#stores.jobs.listJobs().catch(() => []))
+          .filter((job) => job.runnerId === runnerId)
+          .map((job) => job.id);
+        this.#noteAmbiguousSighting(runnerId, sighting.duplicates, jobIds);
         return;
+      }
+      if (this.#ambiguousRunnersNotified.has(runnerId)) {
+        // **併存から戻った直後の1回だけ、ここに来る。** 通常はここに来ない
+        // （`#ambiguousRunnersNotified` に載っているのは過去に通知したときだけ）
+        // ので、store への余分な問い合わせを増やさない。
+        const jobIds = (await this.#stores.jobs.listJobs().catch(() => []))
+          .filter((job) => job.runnerId === runnerId)
+          .map((job) => job.id);
+        this.#noteAmbiguousResolved(runnerId, jobIds);
       }
 
       // **取り直しの前に環境を整える。** 器が入れ替わっていれば置いたものは
@@ -1885,7 +1959,7 @@ class Pool implements ManagerPool {
             if (!refusedBefore) {
               await this.#journal({
                 type: 'decision',
-                decision: leaseRefusalDecision(job.id, record.leaseRefusal?.claimableAt),
+                decision: leaseRefusalDecision(job.id, record.leaseRefusal),
                 grounds: record.leaseRefusal?.detail ?? '（根拠を取れなかった）',
               });
             }
@@ -2232,6 +2306,65 @@ class Pool implements ManagerPool {
   }
 
   /**
+   * 併存が始まったことを、`runnerId` 単位の**遷移のときだけ**受信箱へ知らせる
+   * （#200）。呼び出し元が2つある（`#claimForResume` / `#reattach` の早期検出）
+   * ので、dedup は `#ambiguousRunnersNotified` の doc が説明する理由でここに
+   * 集約してある。
+   *
+   * **文面を2箇所に散らさない。** 何が起きていて何をすれば直るかは
+   * `describeAmbiguousSighting`（`lease.ts`）が既に持っている——`describeVerdict`
+   * の `ambiguous` 枝もそれを呼ぶ。ここで別の説明を書くと、読んだ人間が「別の
+   * 問題が2つ在る」と誤解する（`describeAmbiguousSighting` 自身の doc と同じ
+   * 理由）。ここで足すのは、409（世代衝突）の前例と同じ「新しく起こし直すな」
+   * という行動の指示だけである。
+   *
+   * `jobIds` が空なら（この runnerId に紐づくジョブがまだ1つも分からない）
+   * 通知先（`manager_message.managerId`）が無いので見送り、**通知済みにも
+   * しない** — 次にジョブが分かった機会にもう一度試せるようにするため。
+   */
+  #noteAmbiguousSighting(runnerId: string, duplicates: number, jobIds: readonly string[]): void {
+    if (this.#ambiguousRunnersNotified.has(runnerId)) return;
+    const managerId = jobIds[0];
+    if (managerId === undefined) return;
+    this.#ambiguousRunnersNotified.add(runnerId);
+    this.#post({
+      type: 'manager_message',
+      id: randomUUID(),
+      at: new Date(this.#now()).toISOString(),
+      managerId,
+      kind: 'report',
+      text:
+        `${describeAmbiguousSighting(runnerId, duplicates)} ` +
+        '**新しく起こし直さないこと** — 起こし直すと同じ仕事が2本になりえます。',
+    });
+  }
+
+  /**
+   * 併存が解けたことを知らせる。**これが無いと「入った」だけの片道になり、
+   * 沈黙が「まだ併存している」のか「解けた」のかを区別しない**（#200。レビュー
+   * で訂正 — Issue #308 と同じ形の穴になるところだった）。
+   *
+   * 通知済みでない（＝そもそも「入った」を言っていない）ときは何もしない。
+   * `jobIds` が空のときは、通知済みの状態をまだ消さない——「解けた」と言える
+   * 相手（`managerId`）が無いまま状態だけ消すと、後から本当にジョブが見つかった
+   * ときに「解けた」を言う機会が失われる。
+   */
+  #noteAmbiguousResolved(runnerId: string, jobIds: readonly string[]): void {
+    if (!this.#ambiguousRunnersNotified.has(runnerId)) return;
+    const managerId = jobIds[0];
+    if (managerId === undefined) return;
+    this.#ambiguousRunnersNotified.delete(runnerId);
+    this.#post({
+      type: 'manager_message',
+      id: randomUUID(),
+      at: new Date(this.#now()).toISOString(),
+      managerId,
+      kind: 'report',
+      text: `runnerId=${runnerId} の併存は解けました（宛先が一意に戻りました）。以後は自動で引き取ります。`,
+    });
+  }
+
+  /**
    * 引き取り（と繋ぎ直し）の**唯一の関門**。貸し出しを見て、進んでよいかを決める。
    *
    * ## なぜ resume の中に置くか
@@ -2256,11 +2389,31 @@ class Pool implements ManagerPool {
     });
 
     if (!mayClaim(verdict)) {
+      /*
+       * **`mayClaim` のホワイトリストが断る判定は `held` と `ambiguous` の2つ
+       * だけである**（`lease.ts`: `unheld` / `released` / `same-holder` /
+       * `expired` / `undecidable` は許される——`mayClaim` の doc）。将来
+       * `LeaseVerdict` に判定が増えて未知のままここへ落ちても、`mayClaim` 自身の
+       * 「名指ししなかった判定は断る」という非対称の安全側と同じ向きに倒す
+       * ——`ambiguous` と同じ「時間では解けない」寄りの扱いにする（`held` だけを
+       * 名指しし、それ以外は安全側）。
+       */
+      const kind: LeaseRefusalKind = verdict.kind === 'held' ? 'held' : 'ambiguous';
       record.leaseRefusal = {
         detail: describeVerdict(verdict),
+        kind,
         ...(verdict.kind === 'held' ? { claimableAt: verdict.claimableAt } : {}),
       };
+      if (kind === 'ambiguous') {
+        const duplicates = verdict.kind === 'ambiguous' ? verdict.duplicates : 0;
+        this.#noteAmbiguousSighting(runner.runnerId, duplicates, [record.job.id]);
+      }
       return false;
+    }
+    // **併存から戻った遷移をここで捉える。** delete する前に「直前が併存だったか」
+    // を見ておかないと、`#noteAmbiguousResolved` が「解けた」を出す機会が無くなる。
+    if (record.leaseRefusal?.kind === 'ambiguous') {
+      this.#noteAmbiguousResolved(runner.runnerId, [record.job.id]);
     }
     delete record.leaseRefusal;
 
@@ -2302,6 +2455,9 @@ class Pool implements ManagerPool {
       record.job.updatedAt = beforeUpdatedAt;
       record.leaseRefusal = {
         detail: `貸し出しを台帳へ書けなかったので引き取らない（書けないまま走らせると、次の契機が同じ委譲を無条件で奪える）: ${String(error)}`,
+        // **`ambiguous` ではない。** `ALTEROID_RUNNER_ID` の設定は正しいままで、
+        // 落ちたのは台帳への書き込みだけである（#200 測った事実3）。
+        kind: 'persist-failed',
       };
       return false;
     }
@@ -3313,6 +3469,39 @@ function shouldEscalateDenial(count: number): boolean {
 }
 
 /**
+ * `leaseRefusal.kind` を「時間で解けるか」の1行にする。
+ *
+ * **`leaseRefusalDecision` と `resumeFailureDetail` の共有ヘルパ**（#200）。
+ * かつてはどちらも `claimableAt === undefined` で言い方を変えていたので、
+ * 貸し出しを台帳へ書けなかっただけのとき（`ALTEROID_RUNNER_ID` の問題では
+ * ない）にも「人間が `ALTEROID_RUNNER_ID` 等を直すまで解けない」と言って
+ * いた（測った事実3）。`kind` で分けたことで、この関数が2箇所の言い方を
+ * 揃えて持つ——ただし文言そのものはここでは1つに寄せない（呼び出し元の
+ * 文脈が違う。下の doc）。
+ *
+ * **`never` チェックを持つ。** `LeaseRefusalKind` に値が増えたのに ここを
+ * 直し忘れると、ビルド時に落ちる（AGENTS.md「型で塞いだ分岐にも実行時の
+ * 歯を足す」）。
+ */
+function describeRefusalResolution(kind: LeaseRefusalKind): string {
+  switch (kind) {
+    case 'held':
+      return '期限が切れたら自動で挑み直す';
+    case 'ambiguous':
+      return '時間では解けない（人間が ALTEROID_RUNNER_ID 等を直すまで解けない）。挑み直しは続ける';
+    case 'persist-failed':
+      return (
+        '台帳の書き込みが一時的に失敗しただけで、ALTEROID_RUNNER_ID の問題ではない。' +
+        '挑み直しは続ける'
+      );
+    default: {
+      const exhaustive: never = kind;
+      throw new Error(`未知の leaseRefusal.kind: ${JSON.stringify(exhaustive)}`);
+    }
+  }
+}
+
+/**
  * 貸し出し期限で引き取りを見送ったことを日誌へ残す1行。
  *
  * **`#restoreJobs`（起動時の引き取り）と `#reattach`（runner 入れ替え後の取り
@@ -3320,17 +3509,21 @@ function shouldEscalateDenial(count: number): boolean {
  * 片方だけ直る形になりえた（このヘルパを起こす前の姿がまさにそれだった —
  * どちらも逐語で同じ文字列を書いていた）。
  *
- * **`claimableAt` の有無で言い方を変える。** 在れば `held`（`judgeLease` が
- * 時間で解けると言っている）で、従来どおり「期限が切れたら自動で挑み直す」と
- * 言ってよい。無ければ `ambiguous` など時間では解けない判定（`lease.ts` の
- * `LeaseVerdict`）で、「期限が切れたら」と書くと、人間が `ALTEROID_RUNNER_ID`
- * を直すまで永久に来ない解決を待つだけの記録になる（#200）。
+ * **`leaseRefusal.kind` で言い方を変える**（`describeRefusalResolution`）。
+ * `held` なら「期限が切れたら自動で挑み直す」でよいが、`ambiguous` は時間では
+ * 解けない（人間が `ALTEROID_RUNNER_ID` を直すまで解けない）——ここを
+ * `claimableAt` の有無で判定していた版は、`persist-failed`（台帳の書き込み
+ * 失敗。`ALTEROID_RUNNER_ID` の問題ではない）も同じ `ambiguous` 側の言い方に
+ * 倒していた（#200 測った事実3）。
  */
-function leaseRefusalDecision(jobId: string, claimableAt: number | undefined): string {
+function leaseRefusalDecision(
+  jobId: string,
+  leaseRefusal: { kind: LeaseRefusalKind } | undefined,
+): string {
   const resolution =
-    claimableAt === undefined
-      ? '時間では解けない（人間が直すまで解けない）。挑み直しは続ける'
-      : '期限が切れたら自動で挑み直す';
+    leaseRefusal === undefined
+      ? '根拠を取れなかった。挑み直しは続ける'
+      : describeRefusalResolution(leaseRefusal.kind);
   return `[${jobId}] 引き取りを見送った（貸し出しの関門。${resolution}）`;
 }
 
@@ -3365,24 +3558,25 @@ function resumeFailureDetail(
    * `describeVerdict` が1行にしたもの、および `claimableAt` の有無）。取れな
    * かったことを黙って埋めない。
    *
-   * **`claimableAt` の有無で言い方を変える理由は`leaseRefusalDecision` と
+   * **`leaseRefusal.kind` で言い方を変える理由は `leaseRefusalDecision` と
    * 同じだが、ここはそれ以上に大事である。** これは `manager_send` の応答と
    * してクローンへ直接届く1行で、読んだ側はここに書かれた通りに行動する。
-   * `held`（`claimableAt` 在り）を「期限が切れれば自動で引き取る」と言うのは
-   * 正しいが、`ambiguous`（`claimableAt` 無し）でも同じ文言を返すと、読んだ
-   * 側は「待てば解ける」と誤って信じて待ち続ける — 実際には人間が
-   * `ALTEROID_RUNNER_ID` を直すまで永久に解けない。**「新しく起こし直さない
-   * こと」は両方で必ず言う**（消すと二重実行の入口になる）。
+   * `held` を「期限が切れれば自動で引き取る」と言うのは正しいが、`ambiguous`
+   * や `persist-failed` でも同じ文言を返すと、読んだ側は「待てば解ける」と
+   * 誤って信じて待ち続ける（`persist-failed` は実際には解けうるが、
+   * `ambiguous` は人間が `ALTEROID_RUNNER_ID` を直すまで解けない——両者を
+   * 混ぜるとどちらの言い方も嘘になる。#200 測った事実3）。**「新しく起こし
+   * 直さないこと」はどの `kind` でも必ず言う**（消すと二重実行の入口になる）。
    */
-  leaseRefusal?: { detail: string; claimableAt?: number },
+  leaseRefusal?: { detail: string; kind: LeaseRefusalKind },
 ): string {
   switch (outcome) {
     case 'held-by-lease': {
       const detail = leaseRefusal?.detail ?? '（根拠を取れなかった）';
       const resolution =
-        leaseRefusal?.claimableAt === undefined
-          ? '時間では解けない（人間が ALTEROID_RUNNER_ID 等を直すまで解けない）'
-          : '期限が切れれば自動で引き取る';
+        leaseRefusal === undefined
+          ? '根拠を取れなかった'
+          : describeRefusalResolution(leaseRefusal.kind);
       return (
         `${managerId} はまだ前の器が握っている（貸し出しの関門）。**新しく起こし直さないこと** — ` +
         `起こし直すと同じ仕事が2本になる。${resolution}: ${detail}`

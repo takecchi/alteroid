@@ -523,7 +523,7 @@ export async function runSlashCommand(
         stdout.write('会話の一覧を読めませんでした（limit= / scan= の値を確かめてください）\n');
         return 'ok';
       }
-      const { conversations, scanned } = await response.json();
+      const { conversations, scanned, reachedStart, hiddenByLimit } = await response.json();
       listed.conversations.length = 0;
       if (conversations.length === 0) {
         stdout.write('（会話はまだありません）\n');
@@ -557,6 +557,22 @@ export async function runSlashCommand(
           '`/conversations scan=<N>`（表示件数を増やすには limit=<N>。' +
           'alteroid conversations list --scan / --limit でも同じことができます）\n',
       );
+      // **`reachedStart` / `hiddenByLimit` も出す（#418 の裏返し）。**
+      // `conversations.ts` の `renderConversationsList` と同じ形（`false`
+      // のときだけ、`>0` のときだけ）。サーバとクローンの道具は既に言って
+      // いるので、この重複実装だけが黙っていると端末では気づけなくなる。
+      if (!reachedStart) {
+        stdout.write(
+          `  （人間との往復を ${scanned} 件遡ったが、先頭には届いていない。これより古い会話が` +
+            '残っているかもしれません）\n',
+        );
+      }
+      if (hiddenByLimit > 0) {
+        stdout.write(
+          `  …ほか ${hiddenByLimit} 件は省略（この窓に ${conversations.length + hiddenByLimit} 件あり、` +
+            `新しい順に ${conversations.length} 件だけ出した）。limit=<N> を増やせば出ます\n`,
+        );
+      }
       if (conversations.length > 0) {
         stdout.write('  /conversation <番号|id> で中身を読めます\n');
       }

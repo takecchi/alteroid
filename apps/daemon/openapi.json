@@ -387,7 +387,7 @@
         "operationId": "getConversations",
         "tags": ["conversations"],
         "summary": "会話の一覧",
-        "description": "`POST /chat` の SSE は流すだけで読み直す口が無かった。器（端末・タブ・アプリ）を替えても続きから話せるための一覧。日誌から組み立てるので新しい状態は持たない。新しい順。`scanned` は人間との往復を何件遡ったか（マネージャーとの往復・内部ターンは数えない。issue #418）で、遡り切れていないことが分かる（黙って打ち切らない）。",
+        "description": "`POST /chat` の SSE は流すだけで読み直す口が無かった。器（端末・タブ・アプリ）を替えても続きから話せるための一覧。日誌から組み立てるので新しい状態は持たない。新しい順。`scanned` は人間との往復を何件遡ったか（マネージャーとの往復・内部ターンは数えない。issue #418）、`reachedStart` はその窓が日誌の先頭に届いたかで、遡り切れていないことが分かる（黙って打ち切らない）。`hiddenByLimit` は、その窓の**中で** `limit` に収まらず落とした会話の数（窓の外は数えていない）。",
         "responses": {
           "200": {
             "description": "会話の一覧（新しい順）。",
@@ -432,9 +432,17 @@
                       "type": "integer",
                       "minimum": -9007199254740991,
                       "maximum": 9007199254740991
+                    },
+                    "reachedStart": {
+                      "type": "boolean"
+                    },
+                    "hiddenByLimit": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
                     }
                   },
-                  "required": ["conversations", "scanned"]
+                  "required": ["conversations", "scanned", "reachedStart", "hiddenByLimit"]
                 }
               }
             }

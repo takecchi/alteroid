@@ -69,6 +69,8 @@ describe('alteroid conversations list', () => {
           },
         ],
         scanned: 512,
+        reachedStart: true,
+        hiddenByLimit: 0,
       },
     });
 
@@ -85,6 +87,72 @@ describe('alteroid conversations list', () => {
     // scanned が無いと、返ってきた1件が「これで全部」に見えてしまう。
     expect(text).toContain('512');
     expect(text).toContain('conversations show');
+    // **不在の側を必ず測る。** `reachedStart: true` / `hiddenByLimit: 0`
+    // のときに断り書きが出ていたら、常時出ている注意書きになって意味が
+    // 消える（#418 の裏返し）。
+    expect(text).not.toContain('先頭には届いていない');
+    expect(text).not.toContain('…ほか');
+  });
+
+  /**
+   * **#418 の裏返し。** `GET /conversations` は `scan` の窓に加えて `limit`
+   * でも黙って会話数を切っていた。サーバ（`hiddenByLimit`）とクローンの道具
+   * （`conversation_read` の `hiddenByLimit`）は既に言っているので、CLI
+   * サブコマンドだけが黙っていると端末では気づけない。
+   */
+  it('reachedStart が偽なら、先頭に届いていないと言う', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: {
+        conversations: [
+          {
+            conversationId: 'conv-1',
+            startedAt: '2026-08-16T10:00:00.000Z',
+            updatedAt: '2026-08-16T10:05:00.000Z',
+            messages: 3,
+            preview: '設計の相談',
+          },
+        ],
+        scanned: 2000,
+        reachedStart: false,
+        hiddenByLimit: 0,
+      },
+    });
+
+    await conversationsListCommand();
+
+    const text = read();
+    expect(text).toContain('先頭には届いていない');
+    expect(text).not.toContain('…ほか');
+  });
+
+  it('hiddenByLimit が正なら、省いた件数を言う', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: {
+        conversations: [
+          {
+            conversationId: 'conv-1',
+            startedAt: '2026-08-16T10:00:00.000Z',
+            updatedAt: '2026-08-16T10:05:00.000Z',
+            messages: 3,
+            preview: '設計の相談',
+          },
+        ],
+        scanned: 512,
+        reachedStart: true,
+        hiddenByLimit: 4,
+      },
+    });
+
+    await conversationsListCommand();
+
+    const text = read();
+    expect(text).toContain('…ほか 4 件は省略');
+    expect(text).toContain('--limit を増やせば');
+    expect(text).not.toContain('先頭には届いていない');
   });
 
   /**
@@ -106,6 +174,8 @@ describe('alteroid conversations list', () => {
           },
         ],
         scanned: 512,
+        reachedStart: true,
+        hiddenByLimit: 0,
       },
     });
 
@@ -118,7 +188,10 @@ describe('alteroid conversations list', () => {
 
   it('--limit / --scan をクエリへそのまま渡す', async () => {
     captureStdout();
-    replies.push({ status: 200, body: { conversations: [], scanned: 0 } });
+    replies.push({
+      status: 200,
+      body: { conversations: [], scanned: 0, reachedStart: true, hiddenByLimit: 0 },
+    });
 
     await conversationsListCommand({ limit: '5', scan: '9000' });
 
@@ -130,7 +203,10 @@ describe('alteroid conversations list', () => {
 
   it('空でも、そう言う（黙って何も出さない形にしない）', async () => {
     const read = captureStdout();
-    replies.push({ status: 200, body: { conversations: [], scanned: 0 } });
+    replies.push({
+      status: 200,
+      body: { conversations: [], scanned: 0, reachedStart: true, hiddenByLimit: 0 },
+    });
 
     await conversationsListCommand();
 
@@ -166,6 +242,8 @@ describe('alteroid conversations list', () => {
           },
         ],
         scanned: 512,
+        reachedStart: true,
+        hiddenByLimit: 0,
       },
     });
 
@@ -176,7 +254,10 @@ describe('alteroid conversations list', () => {
 
   it('空の一覧でも出力は改行で終わる（#326）', async () => {
     const read = captureStdout();
-    replies.push({ status: 200, body: { conversations: [], scanned: 0 } });
+    replies.push({
+      status: 200,
+      body: { conversations: [], scanned: 0, reachedStart: true, hiddenByLimit: 0 },
+    });
 
     await conversationsListCommand();
 
