@@ -51,6 +51,18 @@ export {
   type UsageProbeOptions,
   type UsageProbeQuery,
 } from './usage-probe.js';
+/**
+ * 候補トークンを1本 probe で観測し、3値（使える／使えない／判定できない）で
+ * 判定する。**「使えない」＝ probe が `rejected` を返す、ではない** — `rejected`
+ * も認証失敗も probe からは観測できないので、その2つは `undecidable` に落ちる
+ * （`token-candidate.ts` の doc）。
+ */
+export {
+  EXHAUSTED_UTILIZATION,
+  judgeTokenCandidate,
+  probeTokenCandidate,
+  type TokenCandidateVerdict,
+} from './token-candidate.js';
 export {
   classifyUsageNotice,
   describeUsageNotice,
