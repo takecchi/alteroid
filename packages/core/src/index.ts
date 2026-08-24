@@ -345,6 +345,7 @@ export { createLocalRunner, type LocalRunnerOptions } from './runner-local.js';
 export {
   CREDENTIAL_NAME,
   DEFAULT_CREDENTIAL_DIR,
+  credentialNamesShadowedByProfile,
   ROTATABLE_CREDENTIAL_KEYS,
   isWithheldCredentialName,
   createCredentialStore,
