@@ -991,7 +991,8 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
 
     expect(scan.bodyStart).toBe(memoryBodyStart(withFrontmatter));
     // frontmatter の3行はどの節にも入らない。
-    for (const section of scan.sections) expect(section.start).toBeGreaterThanOrEqual(scan.bodyStart);
+    for (const section of scan.sections)
+      expect(section.start).toBeGreaterThanOrEqual(scan.bodyStart);
     expect(headingsOf(withFrontmatter)).toEqual([
       '# 私について',
       '## 経歴',
@@ -1048,9 +1049,9 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       const before = scanMemorySections(withFrontmatter).sections.find(
         (section) => section.heading === '## 例',
       );
-      const after = scanMemorySections(withFrontmatter.replace('本文E', '本文E（直した）')).sections.find(
-        (section) => section.heading === '## 例',
-      );
+      const after = scanMemorySections(
+        withFrontmatter.replace('本文E', '本文E（直した）'),
+      ).sections.find((section) => section.heading === '## 例');
 
       expect(before?.id).not.toBe(after?.id);
     });
@@ -1063,9 +1064,9 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       const before = scanMemorySections(withFrontmatter).sections.find(
         (section) => section.heading === '## 例',
       );
-      const after = scanMemorySections(withFrontmatter.replace('本文A', '本文A（別の節を直した）')).sections.find(
-        (section) => section.heading === '## 例',
-      );
+      const after = scanMemorySections(
+        withFrontmatter.replace('本文A', '本文A（別の節を直した）'),
+      ).sections.find((section) => section.heading === '## 例');
 
       expect(after?.id).toBe(before?.id);
     });
@@ -1155,9 +1156,17 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
    * 直接呼ぶより強い。
    */
   it('走査は2本である: 差分の要約はフェンスの中の見出しを拾い、節の境界は拾わない', () => {
-    const fenced = ['# ログ', '', '## 例', '```sh', '## これは見出しではない', 'echo hi', '```', '本文', ''].join(
-      '\n',
-    );
+    const fenced = [
+      '# ログ',
+      '',
+      '## 例',
+      '```sh',
+      '## これは見出しではない',
+      'echo hi',
+      '```',
+      '本文',
+      '',
+    ].join('\n');
 
     // (1) 節の境界の決定器 — フェンスの中の `##` を節にしない。
     expect(headingsOf(fenced)).toEqual(['# ログ', '## 例']);
@@ -1183,7 +1192,9 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       '本文F',
       '',
     ].join('\n');
-    const target = scanMemorySections(fenced).sections.find((section) => section.heading === '## 例');
+    const target = scanMemorySections(fenced).sections.find(
+      (section) => section.heading === '## 例',
+    );
     const { nextContent, cut } = cutMemorySection(fenced, target as never);
 
     // 切り取った側にフェンスが丸ごと入っている（開きと閉じが同数）。
@@ -1209,9 +1220,18 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
   describe('cutMemorySection は継ぎ足しである（frontmatter を書き直さない）', () => {
     it('frontmatter のバイト列が1バイトも変わらない（キーの順序も空白も含めて）', () => {
       // わざとキーの順序を `type` → `description` にし、余分な空白も入れる。
-      const doc = ['---', 'type:  premise', 'description:   私について', '---', '# A', '本文', '', '# B', '本文', ''].join(
-        '\n',
-      );
+      const doc = [
+        '---',
+        'type:  premise',
+        'description:   私について',
+        '---',
+        '# A',
+        '本文',
+        '',
+        '# B',
+        '本文',
+        '',
+      ].join('\n');
       const scan = scanMemorySections(doc);
       const target = scan.sections.find((section) => section.heading === '# A');
       const { nextContent } = cutMemorySection(doc, target as never);
@@ -1247,10 +1267,12 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
     for (const content of cases) {
       // `applyMemoryFrontmatterPatch` は本文をそのまま後ろへ繋ぎ直すので、
       // 「本文」の側が食い違えば必ずこの等式が破れる。
-      const patched = parseMemoryFrontmatter(content).kind === 'malformed'
-        ? null
-        : applyMemoryFrontmatterPatch(content, {});
-      if (patched !== null) expect(patched.endsWith(content.slice(memoryBodyStart(content)))).toBe(true);
+      const patched =
+        parseMemoryFrontmatter(content).kind === 'malformed'
+          ? null
+          : applyMemoryFrontmatterPatch(content, {});
+      if (patched !== null)
+        expect(patched.endsWith(content.slice(memoryBodyStart(content)))).toBe(true);
     }
   });
 
@@ -1297,9 +1319,10 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
     });
 
     it('件数ではなく文字数の予算で切り、切ったことを必ず言う', () => {
-      const many = Array.from({ length: 400 }, (_, index) => `## 節${index}\n${'あ'.repeat(50)}\n`).join(
-        '\n',
-      );
+      const many = Array.from(
+        { length: 400 },
+        (_, index) => `## 節${index}\n${'あ'.repeat(50)}\n`,
+      ).join('\n');
 
       const outline = renderMemoryOutline(scanMemorySections(many).sections);
 

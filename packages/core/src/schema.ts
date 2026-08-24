@@ -547,9 +547,7 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      *   `cause:'human'` を書ける経路ではないので実際には影響しない
      *   （`describe` と同じ）
      */
-    action: z
-      .enum(['write', 'append', 'remove', 'describe', 'move_in', 'move_out'])
-      .optional(),
+    action: z.enum(['write', 'append', 'remove', 'describe', 'move_in', 'move_out']).optional(),
     /**
      * 「どれだけ失ったか」の機械可読な面。バイト数（`Buffer.byteLength` 相当）。
      *

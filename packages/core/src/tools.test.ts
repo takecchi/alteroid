@@ -1549,9 +1549,18 @@ describe('クローンの道具', () => {
        */
       it('出どころの frontmatter がバイト同一である（キーの順序・空白も含めて）', async () => {
         const h = harness();
-        const odd = ['---', 'type:  premise', 'description:   私について', '---', '# A', '本文', '', '# B', '本文', ''].join(
-          '\n',
-        );
+        const odd = [
+          '---',
+          'type:  premise',
+          'description:   私について',
+          '---',
+          '# A',
+          '本文',
+          '',
+          '# B',
+          '本文',
+          '',
+        ].join('\n');
         await seed(h, 'odd', odd);
         const header = odd.slice(0, odd.indexOf('# A'));
         const id = await outlineId(h, 'odd', '# A');
@@ -1736,7 +1745,10 @@ describe('クローンの道具', () => {
         const id = await outlineId(h, 'about-me', '## 事例');
 
         // 目次を読んだ後、誰か（人間・別の走行）が同じ節を書き換えた。
-        await h.stores.persona.write('about-me', source.replace('事例の本文である', '事例の本文を直した'));
+        await h.stores.persona.write(
+          'about-me',
+          source.replace('事例の本文である', '事例の本文を直した'),
+        );
         const original = (await h.stores.persona.read('about-me'))?.content as string;
 
         const reply = await h.call('memory_section_move', {
@@ -1819,7 +1831,9 @@ describe('クローンの道具', () => {
         const dup = '# A\n本文\n\n# A\n本文\n\n# B\n終わり\n';
         await seed(h, 'dup', dup);
         const outline = await h.call('memory_outline', { slug: 'dup' });
-        const id = (/\[([0-9a-f]{8}-[0-9a-f]{8})\] # A/.exec(outline) as RegExpExecArray)[1] as string;
+        const id = (
+          /\[([0-9a-f]{8}-[0-9a-f]{8})\] # A/.exec(outline) as RegExpExecArray
+        )[1] as string;
         const original = (await h.stores.persona.read('dup'))?.content as string;
 
         // 目次の側でも、その id では動かせないと分かる。
