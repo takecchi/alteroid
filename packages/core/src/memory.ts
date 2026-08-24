@@ -18,6 +18,8 @@
  *    「どれが差し替わったか」を自分で対応付けられる。
  */
 
+import { createHash } from 'node:crypto';
+
 import { excerptLine, renderListing } from './excerpt.js';
 import type {
   MemoryCreatedAt,
@@ -305,13 +307,41 @@ export function assertNeverMemoryFrontmatterState(state: never): never {
  *   返す——ここに来ること自体が呼び手のバグであり、値の正しさは保証しない。
  */
 function frontmatterBody(content: string): string {
+  return content.slice(memoryBodyStart(content));
+}
+
+/**
+ * `content` の中で本文が始まる添字（frontmatter ブロックの閉じの `---` の
+ * 次の行の先頭）を返す。frontmatter が無い・閉じが無い（`malformed`）なら `0`。
+ *
+ * **`frontmatterBody` の唯一の実装である。** あちらはこの添字で `slice` する
+ * だけになっている——2つに分かれていると、片方だけ直したときに
+ * 「文字列としての本文」と「本文の始まる位置」が食い違い、**frontmatter を
+ * 添字で運ぶ側（`memory_section_move`）が本文の一部を frontmatter として
+ * 運ぶ**という形の壊れ方をする。だから1本にしてある。
+ *
+ * **この添字が `memory_section_move` の frontmatter 保護の第2層である。**
+ * 節の切り取りは `content.slice(0, memoryBodyStart(content)) + <新しい本文>`
+ * で組み立てるので、**frontmatter のバイト列は添字で運ばれるだけで一度も
+ * 書き直されない**——`serializeMemoryFrontmatter` を通さないので、キーの
+ * 順序の正規化すら起きない（`applyMemoryFrontmatterPatch` は正規化する。
+ * そちらの doc を読むこと）。
+ */
+export function memoryBodyStart(content: string): number {
   const lines = content.split('\n');
-  if (lines[0]?.trim() !== FRONTMATTER_DELIMITER) return content;
+  if (lines[0]?.trim() !== FRONTMATTER_DELIMITER) return 0;
   const closingIndex = lines.findIndex(
     (line, index) => index > 0 && line.trim() === FRONTMATTER_DELIMITER,
   );
-  if (closingIndex === -1) return content;
-  return lines.slice(closingIndex + 1).join('\n');
+  if (closingIndex === -1) return 0;
+  let offset = 0;
+  for (let index = 0; index <= closingIndex; index += 1) {
+    offset += (lines[index]?.length ?? 0) + 1;
+  }
+  // 閉じの `---` が最終行（その後ろに改行が無い）のとき、上の足し算は
+  // `content.length + 1` になる。`slice` は超過を許すが、`slice(0, n)` の側で
+  // 「本文が無いのに本文が在る」ように見えるのを避けるため、ここで詰める。
+  return Math.min(offset, content.length);
 }
 
 /** frontmatter の3キーのうち、渡したものだけを新しい値にする差分。 */
@@ -1112,4 +1142,326 @@ export function describeMemoryWriteDiff(before: string | null, after: string): s
   const delta = after.length - before.length;
   const charLine = `${formatMemoryCharCount(before.length)} → ${formatMemoryCharCount(after.length)} 文字（${formatMemoryCharDelta(delta)}）`;
   return [charLine, describeMemoryHeadingDiff(before, after)].join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// 節（section）— memory_outline / memory_section_move（#318 案 (b)）
+// ---------------------------------------------------------------------------
+
+/**
+ * 節1つ。**`start` / `end` は `content` そのものへの添字**（本文への相対では
+ * ない）で、`start` は必ず `memoryBodyStart(content)` 以上である。
+ *
+ * `end` は排他——「同じ深さ以下の次の見出しの行頭」か、無ければ
+ * `content.length`。だから**入れ子の子（`##` の下の `###`）は親の節に
+ * 含まれる**し、切り取った文字列は必ず行の境界で始まり行の境界で終わる。
+ */
+export interface MemorySection {
+  /** 節id（`memorySectionId` を読むこと）。 */
+  id: string;
+  /** 見出し行そのもの（改行を含まない生の1行）。 */
+  heading: string;
+  /** 見出しの深さ（`#` の数。1〜6）。 */
+  depth: number;
+  /** `content` の中での開始位置（見出し行の先頭）。 */
+  start: number;
+  /** `content` の中での終了位置（排他）。 */
+  end: number;
+  /** この節の文字数。**子込みである**（`end - start`）。 */
+  chars: number;
+}
+
+/** `scanMemorySections` の戻り値。 */
+export interface MemorySectionScan {
+  /** 本文が始まる位置（`memoryBodyStart`）。frontmatter を添字で運ぶために要る。 */
+  bodyStart: number;
+  /** 見つかった節（文書に現れる順）。 */
+  sections: MemorySection[];
+}
+
+/**
+ * 節id。
+ *
+ * ```
+ * 節id = <見出しの8桁> "-" <sha256(見出し行 + "\n" + その節の中身) の先頭8桁>
+ * ```
+ *
+ * ## ⭐ この値の役割は2つある
+ *
+ * > **id は「指し先」であると同時に「版の照合」である。**
+ *
+ * **節の中身が変われば id が変わる。** ⟹ `memory_outline` で目次を読んでから
+ * `memory_section_move` を呼ぶまでの間に、誰か（人間・統合の走行）がその節を
+ * 書き換えていたら、**id が一致せず断られる。＝ 楽観的排他そのものである。**
+ *
+ * ### ⚠️ 不便さが機能である。「毎回変わるのは不便だから見出しベースへ」と直さないこと
+ *
+ * 見出しの文字列で指す形にすると、**書き換えを検出する材料が引数の中から
+ * 消える**——同名の見出し（この repo の当事者の記憶には `### だから` が
+ * 何度も出る。#366）で曖昧になるうえ、曖昧でないときですら「読んだときの
+ * その節」と「いま動かそうとしているその節」が同じものだと言えなくなる。
+ * **この id が毎回変わることは欠陥ではなく、この道具が持っている唯一の
+ * 並行制御である。**
+ *
+ * ### そして他の節が変わっても id は変わらない
+ *
+ * ハッシュの材料はその節の見出し行と中身だけである。**文書全体のハッシュを
+ * ETag にする形と違い、無関係な変更で誤検出しない**——人間が別の節に1行
+ * 足しただけで移動が断られる、ということが起きない。歯（`tools.test.ts`）が
+ * この2つを別々に固定している（当たり＝断る／誤検出しない＝通る）。
+ *
+ * ### ⚠️ 例外を1つ: 入れ子の子を動かすと、親の id は変わる
+ *
+ * `##` の中に `###` が在るとき、節の範囲は子を含む（上の
+ * `MemorySection.end` の doc）。だから**子を移すと親の中身が実際に変わり、
+ * 親の id も変わる。** これは正しい振る舞い（親の中身は本当に変わった）だが、
+ * **呼び手は驚く**——目次を1回読んで2つの節を続けて移そうとすると、2つ目が
+ * 「その id は古い」で断られる。目次を読み直すのが正しい手当てである。
+ *
+ * ## なぜ2つに分かれているのか（依頼の設計からの逸脱と、その理由）
+ *
+ * **後半8桁は設計そのもの**（`sha256(見出し行 + "\n" + 中身)` の先頭8桁）。
+ * **前半8桁（`sha256(見出し行)` の先頭8桁）を足したのは、断りを2つに分けろ
+ * という要求と、単一の不透明なハッシュが両立しないからである:**
+ *
+ * | 断り | 意味 | 判定 |
+ * | --- | --- | --- |
+ * | **そんな id は無い** | 打ち間違い／別の文書／見出しごと書き換えられた | 前半が1つも一致しない |
+ * | **その id は古い** | 誰かが中身を書き換えた。読み直せ | 前半は一致するが後半が違う |
+ *
+ * 単一のハッシュだけを受け取ると、一致しなかったときに「見出しは一致するが
+ * 中身のハッシュが違う」を**計算する材料が無い**（過去の中身を知らないと
+ * 逆算できない）。前半を足しても、**中身まで完全に同一の節が2つ在れば
+ * id は依然として衝突する**（曖昧さの明示という役目は失われていない）。
+ */
+export function memorySectionId(heading: string, body: string): string {
+  const digest = (value: string): string =>
+    createHash('sha256').update(value, 'utf8').digest('hex').slice(0, 8);
+  return `${digest(heading)}-${digest(`${heading}\n${body}`)}`;
+}
+
+/** 節の見出しとして数える ATX 見出しの行。 */
+const SECTION_HEADING_PATTERN = /^(#{1,6})\s+(.+?)\s*$/;
+
+/**
+ * コードフェンスの開始／終了の行。行頭のインデントは3つまで許す（CommonMark）。
+ */
+const SECTION_FENCE_PATTERN = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+
+/**
+ * `content` を節に切り分ける。**frontmatter は節ではない**（`memoryBodyStart`
+ * より前は一度も見ない）。**最初の見出しより前の前書きも節ではない**——
+ * 指す値が発行されないので、この道具では動かせない。
+ *
+ * ## ⚠️⚠️ 走査は2本である。`extractMemoryHeadings` と1本にまとめないこと
+ *
+ * この関数は**コードフェンスの中の `## X` を見出しとして数えない**。
+ * `extractMemoryHeadings`（差分の要約が使う検出器）は**数える**。
+ * **食い違っているのではなく、向きが逆だから2本在る:**
+ *
+ * | 使い道 | 拾いすぎるとどうなるか | 安全な倒れ先 |
+ * | --- | --- | --- |
+ * | **`extractMemoryHeadings`**（消えた見出しの検出器） | 誤検出が増える。呼び手が1つ余計に確かめて終わる。**見落とす側には倒れない** | **拾いすぎる側** |
+ * | **この関数**（節の境界の決定器） | **フェンスが片方だけ残る。静かに壊れる** | **拾わない側** |
+ *
+ * 決定器が拾いすぎるとどうなるか、具体的に書く。フェンスの中の `## X` を
+ * 「次の見出し」と読むと、その手前で節が終わる——**移した後、出どころの
+ * 文書には開きの ``` だけが残り、そこから先が全部コードとして描かれる。**
+ * しかも**文字数の増減は妥当な値のままなので、差分の要約は何も言わない。**
+ *
+ * **`extractMemoryHeadings` を「直し」に行かないこと。** そちらの doc には
+ * PR #360 で「コードフェンスの中を除外する実装を足さないこと」が理由つきで
+ * 書いてある（フェンスの開閉が非対称な本文＝まさに途中で切れた本文で内外を
+ * 見誤り、**あの検出器がいちばん働くべき入力でいちばん壊れる**）。**この2本を
+ * 1本にまとめる変更は、どちらの向きへ寄せても片方を壊す。** 意図として固定
+ * するため、**同じ文書に対して片方は拾い片方は拾わないことを1つの `it()` で
+ * 並べて assert する歯**が `tools.test.ts` に在る。
+ *
+ * フェンスの数え方: 行頭（インデント3つまで）の ` ``` ` または `~~~` を3つ
+ * 以上。閉じるのは**同じ記号で、開いたときと同じ長さ以上で、後ろに情報文字列
+ * が無い行**だけである。開いたまま文書が終わったら、そこまで全部フェンスの
+ * 中とみなす（＝節の境界を作らない。**拾わない側へ倒す**）。
+ */
+export function scanMemorySections(content: string): MemorySectionScan {
+  const bodyStart = memoryBodyStart(content);
+  const body = content.slice(bodyStart);
+  const lines = body.split('\n');
+
+  // 行頭の絶対添字（`content` 基準）を先に作る。切り取りは添字で行うので、
+  // 行の再結合（`join`）を通さない——通すと改行コードの扱いで1バイト動く。
+  const lineStart: number[] = [];
+  let offset = bodyStart;
+  for (const line of lines) {
+    lineStart.push(offset);
+    offset += line.length + 1;
+  }
+
+  interface Open {
+    depth: number;
+    heading: string;
+    start: number;
+    bodyFrom: number;
+  }
+  const open: Open[] = [];
+  const sections: MemorySection[] = [];
+  let fence: { marker: string; length: number } | null = null;
+
+  const close = (upTo: number, minDepth: number): void => {
+    while (open.length > 0 && (open[open.length - 1] as Open).depth >= minDepth) {
+      const entry = open.pop() as Open;
+      const end = upTo;
+      sections.push({
+        id: memorySectionId(entry.heading, content.slice(Math.min(entry.bodyFrom, end), end)),
+        heading: entry.heading,
+        depth: entry.depth,
+        start: entry.start,
+        end,
+        chars: end - entry.start,
+      });
+    }
+  };
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] as string;
+    const fenceMatch = SECTION_FENCE_PATTERN.exec(line);
+    if (fenceMatch) {
+      const marker = fenceMatch[1] as string;
+      const info = fenceMatch[2] as string;
+      if (fence === null) {
+        // ` ``` ` の情報文字列にバックティックは置けない（CommonMark）。
+        // 置かれていたらフェンスではない＝ただの本文の行として扱う。
+        if (!(marker.startsWith('`') && info.includes('`'))) {
+          fence = { marker: marker[0] as string, length: marker.length };
+          continue;
+        }
+      } else if (
+        marker.startsWith(fence.marker) &&
+        marker.length >= fence.length &&
+        info.trim().length === 0
+      ) {
+        fence = null;
+        continue;
+      }
+    }
+    if (fence !== null) continue;
+
+    const headingMatch = SECTION_HEADING_PATTERN.exec(line);
+    if (!headingMatch) continue;
+    const depth = (headingMatch[1] as string).length;
+    const start = lineStart[index] as number;
+    // 「同じ深さ以下の次の見出しの直前」で閉じる。**「同じ深さ」に狭めない**
+    // ——`###` の節が次の `##` で終わらなくなり、子でないものを子として運ぶ。
+    close(start, depth);
+    open.push({
+      depth,
+      heading: line,
+      start,
+      bodyFrom: start + line.length + 1,
+    });
+  }
+  close(content.length, 1);
+
+  sections.sort((a, b) => a.start - b.start);
+  return { bodyStart, sections };
+}
+
+/** `lookupMemorySection` の結果。**「無い」と「古い」を畳まない。** */
+export type MemorySectionLookup =
+  | { kind: 'found'; section: MemorySection }
+  /** 中身まで同一の節が複数在り、この id では1つに決まらない。 */
+  | { kind: 'ambiguous'; sections: MemorySection[] }
+  /** 見出しは一致するが中身のハッシュが違う＝誰かが書き換えた。 */
+  | { kind: 'stale'; sections: MemorySection[] }
+  /** その id の節がこの文書に1つも無い。 */
+  | { kind: 'absent' };
+
+/**
+ * 節id で節を1つに決める。
+ *
+ * **「どちらか」を選ばない。** 中身まで同一の節が2つ在るときは
+ * `ambiguous` を返して呼び手に断らせる——片方を黙って選ぶと、**消える側が
+ * 観測できない**（応答は「移した」としか言わないので、呼び手は取り違えに
+ * 気づく手段を持たない）。
+ *
+ * **`stale` と `absent` を畳まない。** 疑う先が違う——前者は「誰かが書き
+ * 換えた。読み直せ」、後者は「打ち間違いか、別の文書か、見出しごと書き
+ * 換えられた」である。判定の材料は `memorySectionId` の doc に在る。
+ */
+export function lookupMemorySection(
+  sections: readonly MemorySection[],
+  id: string,
+): MemorySectionLookup {
+  const exact = sections.filter((section) => section.id === id);
+  if (exact.length === 1) return { kind: 'found', section: exact[0] as MemorySection };
+  if (exact.length > 1) return { kind: 'ambiguous', sections: exact };
+  const headingKey = `${id.split('-')[0] ?? ''}-`;
+  const sameHeading = sections.filter((section) => section.id.startsWith(headingKey));
+  if (sameHeading.length > 0) return { kind: 'stale', sections: sameHeading };
+  return { kind: 'absent' };
+}
+
+/**
+ * 節を切り取った後の `content` と、切り取った文字列を返す。
+ *
+ * **組み立ては継ぎ足しである。** `content.slice(0, section.start)` と
+ * `content.slice(section.end)` を繋ぐだけなので、**frontmatter のバイト列は
+ * 添字で運ばれるだけで一度も書き直されない**（`memoryBodyStart` の doc）。
+ * `section.start` は必ず `memoryBodyStart(content)` 以上なので、frontmatter が
+ * 切り取りの範囲に入ることは無い。
+ *
+ * **それでも書き込み前に検査すること**——この関数が正しいことと、次にここを
+ * 触る人が組み直す形に変えないことは別である（`memory_section_move` の
+ * 第3層。`tools.ts` を読むこと）。
+ */
+export function cutMemorySection(
+  content: string,
+  section: MemorySection,
+): { nextContent: string; cut: string } {
+  return {
+    nextContent: content.slice(0, section.start) + content.slice(section.end),
+    cut: content.slice(section.start, section.end),
+  };
+}
+
+/** 目次の予算（文字数）。件数では切らない（AGENTS.md の地雷表）。 */
+export const MEMORY_OUTLINE_BUDGET = 8_000;
+
+/**
+ * `memory_outline` の応答本体。
+ *
+ * **本文は1文字も出さない**（`memory_delete` が本文を日誌へ写さない線と
+ * 同じ。`tools.ts` の該当 doc）。出るのは節id・見出し行・文字数だけである。
+ * **frontmatter の行も1つも出ない**（`scanMemorySections` が
+ * `memoryBodyStart` より前を一度も見ないので、材料が存在しない）。
+ *
+ * インデントが見出しの深さを表す。文字数は**子込み**なので、
+ * **移したときに動く量が、呼ぶ前に数字で分かる。**
+ *
+ * **中身まで完全に同一の節が2つ在ると id が衝突する。** そのときはその id の
+ * 行に印を出す——黙って並べると、呼び手はどちらか一方を指したつもりで
+ * 断られる理由が分からない。
+ */
+export function renderMemoryOutline(sections: readonly MemorySection[]): string {
+  if (sections.length === 0) {
+    return (
+      '節が1つも無い（見出しが1つも無いか、最初の見出しより前の前書きしか無い）。' +
+      '前書きは節ではないので memory_section_move では動かせない。'
+    );
+  }
+  const counts = new Map<string, number>();
+  for (const section of sections) counts.set(section.id, (counts.get(section.id) ?? 0) + 1);
+  const items = sections.map((section) => {
+    const indent = '  '.repeat(section.depth - 1);
+    const ambiguous =
+      (counts.get(section.id) ?? 0) > 1
+        ? ' ⚠この id は複数箇所に当たる。この id では動かせない（memory_section_move は断る）'
+        : '';
+    return `${indent}[${section.id}] ${section.heading} — ${formatMemoryCharCount(section.chars)} 文字${ambiguous}`;
+  });
+  return renderListing(items, {
+    budget: MEMORY_OUTLINE_BUDGET,
+    omitted: ({ rest, shown, total }) =>
+      `…ほか ${rest} 節は省略（節は全 ${total} 件あり、${shown} 件だけ出した）。` +
+      '省略された節を動かしたいなら、先に上の節を減らすか、memory_read で本文を読むこと。',
+  });
 }
