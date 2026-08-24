@@ -316,11 +316,17 @@ describe('バックグラウンドの完了を待つときの事実の告知（#
   });
 
   it('回数を書いていない（固定した数は固定した瞬間から腐るため）', () => {
+    // マネージャー側の既存の委譲の指針には元から「1体も立たない」のような
+    // 数字が含まれているので、そこは対象にしない。**今回足した節だけ**を
+    // 切り出して見る（節の見出しは新設したものなので、これより後ろが対象）。
     const manager = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
+    const addedSection = manager.slice(manager.indexOf('# バックグラウンドの完了を待つとき'));
+    expect(addedSection).not.toMatch(/\d+\s*(回|体)/);
+
+    // 作業者は固定4行の末尾に今回の3点を足しただけなので、そちらは全文を見る
+    // （既存4行に数字は無い）。
     const worker = buildWorkerPrompt();
-    for (const prompt of [manager, worker]) {
-      expect(prompt).not.toMatch(/\d+\s*(回|体)/);
-    }
+    expect(worker).not.toMatch(/\d+\s*(回|体)/);
   });
 });
 
