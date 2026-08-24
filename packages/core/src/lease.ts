@@ -413,6 +413,27 @@ export function touchLease(lease: JobLease, now: number): JobLease {
 }
 
 /**
+ * 併存（同じ `runnerId` を名乗る器が2台以上）を人間とクローンへ伝える1行。
+ *
+ * **`describeVerdict` の `ambiguous` 枝と、`manager.ts` の `#reattach` が関門
+ * （`#claimForResume`）より前で併存を検出したときの両方から呼ぶ**——同じ状態を
+ * 別の文言で伝えると、読んだ人間が「別の問題が2つ在る」と誤解する。
+ *
+ * `runnerId` は呼び出し側が **`answering.runnerId`**（いま重複して問い合わせて
+ * いる宛先）を渡すこと。`lease.runnerId`（台帳の貸し出しが指す宛先）ではない
+ * ——両者は食い違いうる（`LeaseVerdict` の `ambiguous` の doc）。
+ */
+export function describeAmbiguousSighting(runnerId: string, duplicates: number): string {
+  return (
+    `runnerId=${runnerId} を名乗る器が ${duplicates} 台開いている（名前が一意でない）。` +
+    'どちらが持ち主か決められない（名簿は線形一致で先に見つかった方を黙って返すので、判定した相手と話す相手が食い違いうる）。' +
+    '**引き取らない。** 時間では解けない — このまま待っても宛先の一意性は自然には戻らない。' +
+    '直し方: 器ごとに違う ALTEROID_RUNNER_ID を設定すること（既定は runner-primary なので、2台目の置き忘れで重なる）。' +
+    'Railway なら ./railway/scale-runners.sh が id を振る。直れば自動で引き取る'
+  );
+}
+
+/**
  * 判定を人間とクローンへ出す1行にする。
  *
  * **「分からない」を「大丈夫」と書かない。** ここが要約になると、依頼者は
@@ -439,12 +460,6 @@ export function describeVerdict(verdict: LeaseVerdict): string {
       // ない** — 台帳の貸し出しが別の宛先を指している状態では両者が食い違い、
       // `lease.runnerId` を出すと重複していない方の名前を報告してしまう
       // （`LeaseVerdict` の `ambiguous` の doc）。
-      return (
-        `runnerId=${verdict.runnerId} を名乗る器が ${verdict.duplicates} 台開いている（名前が一意でない）。` +
-        'どちらが持ち主か決められない（名簿は線形一致で先に見つかった方を黙って返すので、判定した相手と話す相手が食い違いうる）。' +
-        '**引き取らない。** 時間では解けない — このまま待っても宛先の一意性は自然には戻らない。' +
-        '直し方: 器ごとに違う ALTEROID_RUNNER_ID を設定すること（既定は runner-primary なので、2台目の置き忘れで重なる）。' +
-        'Railway なら ./railway/scale-runners.sh が id を振る。直れば自動で引き取る'
-      );
+      return describeAmbiguousSighting(verdict.runnerId, verdict.duplicates);
   }
 }
