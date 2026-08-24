@@ -784,5 +784,157 @@ describe('引き取りの関門（貸し出し期限）', () => {
 
       await h.close();
     });
+
+    /**
+     * **受信箱（クローンの受け口）へ届くこと自体を固定する（#200 段1後半）。**
+     *
+     * これまでの併存の試験は日誌（`#journal`）だけを見ていた——`held-by-lease`
+     * の断りは日誌にしか書かれず、`#post`（受信箱）を一度も呼んでいなかった
+     * （測った事実1）。ここでは `#claimForResume`（`restore()` が通る経路）が
+     * 実際に `#post` を呼び、文面が answering 側の `runnerId` を使うこと
+     * （`lease.runnerId` ではない。#209 と同じ理由）を固定する。
+     */
+    it('併存では受信箱へ知らせ、answering 側の runnerId を使う（lease.runnerId ではない）', async () => {
+      const h = await harnessOf();
+      await withDuplicate(h);
+      // **台帳の貸し出しはわざと別の runnerId を指させる**（食い違いを作る）。
+      // `lease.ts` の `ambiguous` の doc: 名指しするのは `verdict.runnerId`
+      // （＝ answering 側）であって `lease.runnerId` ではない——食い違ったまま
+      // `lease.runnerId` を出すと、重複していない方の名前を報告してしまう。
+      await h.stores.jobs.putJob(
+        runningJob(leaseHeldBy('boot-1', 4, { runnerId: 'stale-runner-name' })),
+      );
+
+      await h.pool.restore();
+
+      const reports = h.inbox.filter(
+        (event): event is Extract<InboxEvent, { type: 'manager_message' }> =>
+          event.type === 'manager_message',
+      );
+      expect(reports).toHaveLength(1);
+      expect(reports[0]?.managerId).toBe('mgr-1');
+      expect(reports[0]?.text).toContain('runnerId=runner-primary');
+      expect(reports[0]?.text).not.toContain('stale-runner-name');
+      expect(reports[0]?.text).toContain('2 台');
+      expect(reports[0]?.text).toContain('新しく起こし直さないこと');
+      expect(reports[0]?.text).toContain('ALTEROID_RUNNER_ID');
+
+      await h.close();
+    });
+
+    it('held（時間で解ける）では受信箱へ出さない（併存だけの扱いである）', async () => {
+      const h = await harnessOf();
+      await h.stores.jobs.putJob(runningJob(leaseHeldBy('boot-1')));
+
+      await h.pool.restore();
+
+      expect(h.inbox.filter((event) => event.type === 'manager_message')).toEqual([]);
+
+      await h.close();
+    });
+
+    /**
+     * **入りだけでは沈黙の意味が確定しない（レビューでの訂正）。**
+     *
+     * 「遷移のときだけ書く」を受信箱の post にそのまま当てて「入り」だけを
+     * 出すと、併存が続いている間も、実際に解けた後も、同じ「その後は何も
+     * 届かない」になる。読み手は受信箱だけからはどちらか区別できない
+     * （Issue #308 と同じ形の穴）。ここでは「解けた」も出ること、かつ
+     * 梯子（`hello` の繰り返し）が回っても「入り」「出」がそれぞれ1回しか
+     * 出ないことを固定する。
+     */
+    it('併存が解けたら「解けた」を受信箱へ知らせる（入りと出、それぞれ1回ずつ）', async () => {
+      const h = await harnessOf();
+      await withDuplicate(h);
+      await h.stores.jobs.putJob(runningJob(leaseHeldBy('boot-1')));
+
+      await h.pool.list();
+      expect(h.runner.emit).toBeTypeOf('function');
+
+      h.runner.emit?.({ type: 'hello', runnerId: 'runner-primary' });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      let reports = h.inbox.filter((event) => event.type === 'manager_message');
+      expect(reports).toHaveLength(1);
+
+      // **梯子が回っても「入り」は増えない**（2回目の hello。churn を作らない）。
+      h.runner.emit?.({ type: 'hello', runnerId: 'runner-primary' });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      reports = h.inbox.filter((event) => event.type === 'manager_message');
+      expect(reports).toHaveLength(1);
+
+      // 併存が解ける（2台目が居なくなる）。
+      await h.registry.unregister('http://runner-dup:4518');
+      h.runner.emit?.({ type: 'hello', runnerId: 'runner-primary' });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      reports = h.inbox.filter(
+        (event): event is Extract<InboxEvent, { type: 'manager_message' }> =>
+          event.type === 'manager_message',
+      );
+      expect(reports).toHaveLength(2);
+      expect(reports[1]?.text).toContain('解けました');
+
+      // **「解けた」も遷移でしか出ない**（もう一度 hello が来ても重ねて出さない）。
+      h.runner.emit?.({ type: 'hello', runnerId: 'runner-primary' });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(h.inbox.filter((event) => event.type === 'manager_message')).toHaveLength(2);
+
+      await h.close();
+    });
+
+    /**
+     * **測った事実3の歯。** 貸し出しを台帳へ書けなかっただけのとき
+     * （`ALTEROID_RUNNER_ID` の問題ではない）に、併存と同じ「人間が
+     * `ALTEROID_RUNNER_ID` 等を直すまで解けない」という言い方をしていた
+     * （`claimableAt` の有無だけで見分けていたため。`leaseRefusal.kind` を
+     * 導入する前の姿）。ここでは日誌・`manager_send` の応答のどちらも、
+     * 台帳の書き込み失敗を併存の言い方と混ぜないことを固定する。
+     */
+    describe('台帳の書き込みが落ちただけのとき（併存ではない。測った事実3）', () => {
+      it('日誌の言い方を併存と混ぜない', async () => {
+        const h = await harnessOf();
+        await h.stores.jobs.putJob(runningJob(leaseHeldBy('boot-1')));
+        h.advance(LEASE_DRAIN_MS + LEASE_MARGIN_MS + 1_000);
+        h.breakWrites('ディスクが埋まっている');
+
+        await h.pool.restore();
+
+        const decided = (await h.journal()).filter((entry) => entry.type === 'decision');
+        const text = decided
+          .map((entry) => (entry.type === 'decision' ? entry.decision : ''))
+          .join('\n');
+        expect(text).toContain('引き取りを見送った');
+        // **積極的に否定する。** 黙って `ALTEROID_RUNNER_ID` を出さないだけでは
+        // 足りない——読み手が「触れていないから関係あるかも」と探しに行く余地が
+        // 残る（測った事実3の害はまさにこれだった）。「その設定の問題ではない」
+        // まで言い切ることで、存在しない設定の誤りを探しに行かせない。
+        expect(text).toContain('ALTEROID_RUNNER_ID の問題ではない');
+        expect(text).not.toContain('人間が ALTEROID_RUNNER_ID 等を直すまで解けない');
+        expect(text).not.toContain('時間では解けない（人間が');
+        expect(text).toContain('台帳の書き込みが一時的に失敗しただけ');
+
+        // **併存の扱い（受信箱の通知）を誤って引き継がない。**
+        expect(h.inbox.filter((event) => event.type === 'manager_message')).toEqual([]);
+
+        await h.close();
+      });
+
+      it('manager_send の応答でも ALTEROID_RUNNER_ID を名指ししない', async () => {
+        const h = await harnessOf();
+        await h.stores.jobs.putJob(runningJob(leaseHeldBy('boot-1')));
+        h.advance(LEASE_DRAIN_MS + LEASE_MARGIN_MS + 1_000);
+        h.breakWrites('ディスクが埋まっている');
+
+        const result = await h.pool.send('mgr-1', '続けて');
+
+        expect(result.outcome).toBe('unknown');
+        expect(result.detail).toContain('新しく起こし直さないこと');
+        expect(result.detail).toContain('ALTEROID_RUNNER_ID の問題ではない');
+        expect(result.detail).not.toContain('人間が ALTEROID_RUNNER_ID 等を直すまで解けない');
+        expect(result.detail).not.toContain('時間では解けない（人間が');
+        expect(result.detail).toContain('台帳の書き込みが一時的に失敗しただけ');
+
+        await h.close();
+      });
+    });
   });
 });
