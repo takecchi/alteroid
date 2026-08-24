@@ -15,6 +15,7 @@ import { PgProfileStore } from './profile.js';
 import { PgScheduleStore } from './schedules.js';
 import { PgSessionRegistry } from './sessions.js';
 import { PgSessionStore } from './session-store.js';
+import { PgTokenPoolStore } from './token-pool.js';
 import { PgUsageStore } from './usage.js';
 
 export { PgTranscriptArchive } from './archive.js';
@@ -28,6 +29,7 @@ export { PgProfileStore } from './profile.js';
 export { PgScheduleStore } from './schedules.js';
 export { PgSessionRegistry } from './sessions.js';
 export { PgSessionStore } from './session-store.js';
+export { PgTokenPoolStore } from './token-pool.js';
 export { PgUsageStore } from './usage.js';
 export { migrate } from './migrate.js';
 export type { Db } from './db.js';
@@ -85,6 +87,7 @@ export function createPgStoresFromDb(db: Db, close?: () => Promise<void>): PgSto
     sessions: new PgSessionRegistry(db),
     auth: new PgAuthStore(db),
     profile: new PgProfileStore(db),
+    tokens: new PgTokenPoolStore(db),
     usage: new PgUsageStore(db),
     sessionStore: new PgSessionStore(db),
     close: close ?? (async () => undefined),

@@ -19,6 +19,7 @@ import {
   createProfileVessel,
   createRunnerRegistry,
   createScheduler,
+  createTokenPoolService,
   dailyReportEvent,
   missingDailyReportDates,
   placedClonePermissionMode,
@@ -563,6 +564,16 @@ export async function main(): Promise<void> {
    */
   const profileService = createProfileService({ stores, applier: profile, runners });
 
+  /**
+   * 認証トークンのプール（Issue #393「PR1 プールの器」）。**回さない**——ここで
+   * 作るのは器の読み書きの口だけで、検知・切替は後続の PR が持つ。
+   *
+   * `profileService` と同じく**インスタンスは1つだけ**。人間の口（`PUT /tokens`）と
+   * クローンの道具（後続の PR が足す）が別インスタンスを持つと、直列化の意味が
+   * 消える。
+   */
+  const tokenPoolService = createTokenPoolService({ stores });
+
   // 置いてあるものを起動時に1度効かせる。**器を作り直しても環境が痩せない**
   // ことが、この仕組みを環境変数と別に持つ理由そのものである。
   {
@@ -749,6 +760,7 @@ export async function main(): Promise<void> {
     allowedOrigins,
     auth: { plan: authPlan },
     profile: profileService,
+    tokens: tokenPoolService,
   });
   // 開けたこと自体は方針の変更であって禁止事項ではない。ただし**黙って**外へ
   // 出さない — ここは叩けばクローンのターンが起きる実行の口である。

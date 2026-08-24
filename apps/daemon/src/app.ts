@@ -13,10 +13,12 @@ import type {
   RunnerRegistry,
   Scheduler,
   Stores,
+  TokenPoolService,
 } from '@alteroid/core';
 import {
   RESERVED_SCHEDULE_KINDS,
   DEFAULT_SSE_HEARTBEAT_MS,
+  DEFAULT_TOKEN_ROTATION_SETTINGS,
   approvalUpdatedAt,
   chatStreamEventSchema,
   collectConversations,
@@ -40,6 +42,7 @@ import {
   scheduleSpecSchema,
   startSseHeartbeat,
   summarizeUsage,
+  tokenRotationSettingsSchema,
   usageAggregateSchema,
   usageBreakdownSchema,
   usageDateSchema,
@@ -95,6 +98,9 @@ import {
   runnersCredentialsResponseSchema,
   runnersListResponseSchema,
   scheduleListResponseSchema,
+  tokensPolicyUpdateRequestSchema,
+  tokensResponseSchema,
+  tokensUpdateRequestSchema,
   validationErrorResponseSchema,
 } from './openapi.js';
 import { compareDailyReportsNewestFirst, listDailyReports } from './reports.js';
@@ -199,6 +205,14 @@ export interface AppDeps {
    * 直列化の意味が消え、同時更新で層ごとに違う本文が残る。
    */
   profile?: ProfileService;
+  /**
+   * 認証トークンのプール（Issue #393「PR1 プールの器」）。**回さない**——ここが
+   * 生やすのは器の読み書きの口だけで、検知・切替は無い。
+   *
+   * **人間の口（`PUT /tokens`）とクローンの道具（後続の PR）は同じインスタンスを
+   * 渡すこと。** `profile` と同じ理由——別々だと直列化の意味が消える。
+   */
+  tokens?: TokenPoolService;
   /**
    * SSE のコメント行 heartbeat の間隔（ms）。省略時は `DEFAULT_SSE_HEARTBEAT_MS`
    * （`@alteroid/core` の `sse-heartbeat.ts`）。**環境変数は増やさない** —— テストで短くする以外に
@@ -2446,6 +2460,132 @@ export function createApp(deps: AppDeps) {
             runners: result.runners,
           }),
         );
+      },
+    )
+
+    // --- 認証トークンのプール（/tokens） ------------------------------------
+    // Issue #393「PR1 プールの器」。**回さない。** 検知も切替もここには無い。
+
+    /**
+     * プールの一覧と、回す契機・冷却の設定。
+     *
+     * **実行環境の持ち主だけ**（`requireOperator`）——課金の主体を決める操作
+     * なので、`access grant` を通しただけのアカウントには開けない（`/profile`
+     * と同じ強さ）。
+     *
+     * **値は決して出さない。** `TokenPoolService.list()` が返すのは
+     * `AgentTokenView`（label と指紋だけ）で、`AgentToken`（`value` 付き）は
+     * サービスの外へ一度も出ない。
+     */
+    .get(
+      '/tokens',
+      describeRoute({
+        tags: ['tokens'],
+        summary: '認証トークンのプールと設定を読む',
+        description:
+          'プールが空でも 200 を返し、既定の設定（`free_exhausted`）を返す' +
+          '（受け入れ基準7: プールが空の既定構成の挙動を変えない）。',
+        responses: {
+          200: {
+            description: 'プール（値は出さない）と設定。',
+            content: { 'application/json': { schema: resolver(tokensResponseSchema) } },
+          },
+          403: {
+            description: '実行環境の持ち主ではない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      requireOperator,
+      async (c) => {
+        if (deps.tokens === undefined) {
+          return c.json(
+            tokensResponseSchema.parse({ tokens: [], settings: DEFAULT_TOKEN_ROTATION_SETTINGS }),
+          );
+        }
+        const { tokens, settings } = await deps.tokens.list();
+        return c.json(tokensResponseSchema.parse({ tokens, settings }));
+      },
+    )
+
+    /**
+     * プールを全文置換する。**`value` を省略できる**——並べ替え・改名・
+     * `disabled` の切り替えのたびに、他の行の秘密を貼り直さずに済む
+     * （`agentTokenInputSchema` の doc）。
+     *
+     * `normalizeTokenPool` が投げたら 400 で理由を返す——**理由の本文にトークン
+     * の値は含めない**（投げるメッセージは id / label だけを含む）。
+     */
+    .put(
+      '/tokens',
+      describeRoute({
+        tags: ['tokens'],
+        summary: '認証トークンのプールを全文置換する',
+        description:
+          '入力に無い行は消える。壊れた入力（新規行に value が無い・消えた id を' +
+          '指す・id 重複）は 400 で理由を返し、保存しない。',
+        responses: {
+          200: {
+            description: '置き換え後のプール（値は出さない）と設定。',
+            content: { 'application/json': { schema: resolver(tokensResponseSchema) } },
+          },
+          400: {
+            description: '入力が壊れている（保存していない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          403: {
+            description: '実行環境の持ち主ではない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      requireOperator,
+      validator('json', tokensUpdateRequestSchema),
+      async (c) => {
+        if (deps.tokens === undefined) {
+          return c.json({ error: 'トークンのプールの器が無い' as const }, 400);
+        }
+        try {
+          const { tokens, settings } = await deps.tokens.replace(c.req.valid('json').tokens);
+          return c.json(tokensResponseSchema.parse({ tokens, settings }));
+        } catch (error) {
+          // **理由にトークンの値を含めない。** `normalizeTokenPool` が投げる
+          // メッセージは id / label だけを含み、値は1文字も含まない。
+          return c.json({ error: String(error) }, 400);
+        }
+      },
+    )
+
+    /**
+     * 回す契機・冷却の既定を変える。3つとも部分更新（省略した項目は現状維持）。
+     *
+     * **実行環境の持ち主だけ**（`/tokens` と同じ強さ）。
+     */
+    .put(
+      '/tokens/policy',
+      describeRoute({
+        tags: ['tokens'],
+        summary: '回す契機・冷却の既定を変える',
+        description: '省略した項目は現状のまま変えない。',
+        responses: {
+          200: {
+            description: '更新後の設定。',
+            content: { 'application/json': { schema: resolver(tokenRotationSettingsSchema) } },
+          },
+          403: {
+            description: '実行環境の持ち主ではない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      requireOperator,
+      validator('json', tokensPolicyUpdateRequestSchema),
+      async (c) => {
+        if (deps.tokens === undefined) {
+          return c.json({ error: 'トークンのプールの器が無い' as const }, 400);
+        }
+        const settings = await deps.tokens.setSettings(c.req.valid('json'));
+        return c.json(tokenRotationSettingsSchema.parse(settings));
       },
     )
 

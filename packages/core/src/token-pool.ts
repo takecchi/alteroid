@@ -28,6 +28,23 @@ import { fingerprintOf } from './credentials.js';
  *
  * 判断の経緯は Issue #393「追記2」——**この PR はこの値を読まない**。回す側
  * （PR3）が読む契機の判定はここには無く、ここは型と既定を持つだけである。
+ *
+ * **回す契機は枠の2つだけである**（人間の決定 2026-08-24）。`invalidatedAt` /
+ * `invalidatedReason`（{@link AgentToken}）が立つ「トークンが恒常的に通らない」
+ * という状態は、`rotateOn` のどの値にも契機として含まれていない。
+ *
+ * **⟹ 現役のトークンが失効したときは回らない。** 枠に当たったとき（`cooldownUntil`）
+ * と違い、**全層が止まったままになる。** 人間が手で外す（`alteroid token disable`）
+ * まで復旧しない。
+ *
+ * **⚠️ 候補の側とは非対称である。** 候補（まだ現役でない行）が失効していれば
+ * 選ぶ側が飛ばせるが（`invalidatedAt` に記録が残っている）、**現役が失効しても
+ * 降ろす契機がここには無い。**
+ *
+ * **これを「未実装」ではなく「そう決めた」として読むこと。** 契機を足すかどうかは
+ * 人間の判断であり（一旦見送り。恒久の否定ではない）、足すなら `rotateOn` の
+ * `z.enum` に値を1つ加える形になる——**そのための余地を潰す特別扱いをしないこと**
+ * （分岐をここで先回りして作らない）。
  */
 export const tokenRotationPolicySchema = z.enum(['free_exhausted', 'overage_exhausted', 'off']);
 export type TokenRotationPolicy = z.infer<typeof tokenRotationPolicySchema>;
@@ -263,9 +280,7 @@ export function normalizeTokenPool(
 
     const current = input.id === undefined ? undefined : byId.get(input.id);
     if (input.id !== undefined && current === undefined) {
-      throw new Error(
-        `id ${input.id} のトークンは既存の行に無い（消えた行を静かに作り直さない）`,
-      );
+      throw new Error(`id ${input.id} のトークンは既存の行に無い（消えた行を静かに作り直さない）`);
     }
 
     const value = input.value ?? current?.value;

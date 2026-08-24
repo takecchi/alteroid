@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -1766,6 +1766,77 @@ describe('FsProfileStore', () => {
     await stores.profile.write('export WHICH=new\n');
     await stores.profile.revert(null);
     expect(await stores.profile.read()).toBeNull();
+  });
+});
+
+/**
+ * 認証トークンのプール（Issue #393「PR1」）。**回さない**——ここで固定するのは
+ * 器の振る舞い（往復・0600・既定の設定）だけで、検知・切替は無い。
+ */
+describe('FsTokenPoolStore', () => {
+  it('往復（replace → list）で値まで戻る', async () => {
+    expect(await stores.tokens.list()).toEqual([]);
+
+    const written = await stores.tokens.replace([
+      { id: 'tok-a', label: 'a', value: 'tok-aaa', order: 1 },
+      { id: 'tok-b', label: 'b', value: 'tok-bbb', order: 0 },
+    ]);
+    expect(written.map((t) => t.id)).toEqual(['tok-b', 'tok-a']);
+
+    const read = await stores.tokens.list();
+    expect(read).toEqual([
+      { id: 'tok-b', label: 'b', value: 'tok-bbb', order: 0 },
+      { id: 'tok-a', label: 'a', value: 'tok-aaa', order: 1 },
+    ]);
+  });
+
+  it('全文置換——入力に無い行は消える', async () => {
+    await stores.tokens.replace([{ id: 'tok-a', label: 'a', value: 'tok-aaa', order: 0 }]);
+    await stores.tokens.replace([{ id: 'tok-b', label: 'b', value: 'tok-bbb', order: 0 }]);
+    expect((await stores.tokens.list()).map((t) => t.id)).toEqual(['tok-b']);
+  });
+
+  it('書かれたファイルのモードが 0600（中身がトークン本体そのもの）', async () => {
+    await stores.tokens.replace([{ id: 'tok-a', label: 'a', value: 'tok-aaa', order: 0 }]);
+    const info = await stat(stores.paths.tokens);
+    expect(info.mode & 0o777).toBe(0o600);
+  });
+
+  it('設定は置かれていなければ core の既定を返す', async () => {
+    const settings = await stores.tokens.readSettings();
+    expect(settings).toEqual({ rotateOn: 'free_exhausted', cooldownMs: 5 * 60 * 60 * 1000 });
+  });
+
+  it('設定を書いて読み直せる', async () => {
+    const written = await stores.tokens.writeSettings({
+      rotateOn: 'overage_exhausted',
+      cooldownMs: 1_000,
+      updatedAt: '2026-08-24T00:00:00.000Z',
+    });
+    expect(written).toEqual({
+      rotateOn: 'overage_exhausted',
+      cooldownMs: 1_000,
+      updatedAt: '2026-08-24T00:00:00.000Z',
+    });
+    expect(await stores.tokens.readSettings()).toEqual(written);
+  });
+
+  it('invalidatedAt / invalidatedReason も往復する（3つ目の状態を落とさない）', async () => {
+    await stores.tokens.replace([
+      {
+        id: 'tok-a',
+        label: 'a',
+        value: 'tok-aaa',
+        order: 0,
+        invalidatedAt: '2026-08-02T00:00:00.000Z',
+        invalidatedReason: 'account_on_hold',
+      },
+    ]);
+    const [row] = await stores.tokens.list();
+    expect(row).toMatchObject({
+      invalidatedAt: '2026-08-02T00:00:00.000Z',
+      invalidatedReason: 'account_on_hold',
+    });
   });
 });
 

@@ -1,6 +1,7 @@
 import type { SessionStore } from '@anthropic-ai/claude-agent-sdk';
 
 import type { AuthStore } from './auth.js';
+import type { AgentToken, TokenRotationSettings } from './token-pool.js';
 import type {
   Commitment,
   CommitmentClosedBy,
@@ -486,6 +487,23 @@ export interface ProfileStore {
 }
 
 /**
+ * 認証トークンのプール（Issue #393「プールの器」）。**回さない。** 検知も切替も
+ * ここには無い——ここが持つのは置き場と、置いたものを読み書きする口だけである。
+ *
+ * `env_profile` と同じ形（正本はデーモンが持ち、器違い（fs / pg）は挙動を変えない）。
+ * `Stores` の一員として持つのは、環境を作り直しても残るという性質が同じだからである。
+ */
+export interface TokenPoolStore {
+  /** プールの全行（**値を含む**。正本を返す口はここだけである）。`order` 昇順。 */
+  list(): Promise<AgentToken[]>;
+  /** 全文置換。**入力に無い行は消える。** */
+  replace(tokens: readonly AgentToken[]): Promise<AgentToken[]>;
+  /** 回す契機と冷却の既定。置かれていなければ core の既定（`DEFAULT_TOKEN_ROTATION_SETTINGS`）を返す。 */
+  readSettings(): Promise<TokenRotationSettings>;
+  writeSettings(settings: TokenRotationSettings): Promise<TokenRotationSettings>;
+}
+
+/**
  * 利用状況の台帳（`usage.ts`）。
  *
  * **持つのはデーモンだけである。** runner に持たせると記憶ストアの鍵が要る
@@ -590,6 +608,15 @@ export interface Stores {
    * あり、用途が増えるたびに実装を直さずに済ませるためにここに置く。
    */
   profile: ProfileStore;
+  /**
+   * 認証トークンのプール（Issue #393）。
+   *
+   * **省略可能にしないこと**（`schedules` / `inbox` と同じ理由）。器が違うだけで
+   * 上の層が見るものは同じである、という約束をここでも保つ——ここを任意にすると、
+   * 片方の器でだけ「枠に当たったときに他のトークンへ回せる」という能力差が
+   * 生まれる（north_star 禁止1）。
+   */
+  tokens: TokenPoolStore;
   /**
    * 利用状況の台帳。
    *

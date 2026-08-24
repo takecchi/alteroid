@@ -42,6 +42,14 @@ export interface AlteroidPaths {
    * 基準がずれる）。
    */
   usage: string;
+  /**
+   * 認証トークンのプール: JSON（0600）。**回さない**（Issue #393「PR1」）。
+   *
+   * `auth` と同じ理由で `memory/` には置かない——値（トークン本体）を持つ場所で
+   * あって、人間が手で書き換える前提の場所ではない（`alteroid token` / `PUT
+   * /tokens` を経由する）。
+   */
+  tokens: string;
 }
 
 export const ALTEROID_HOME_ENV = 'ALTEROID_HOME';
@@ -63,5 +71,6 @@ export function resolvePaths(root: string = defaultRoot()): AlteroidPaths {
     auth: join(root, 'auth'),
     profile: join(root, 'profile.sh'),
     usage: join(root, 'usage'),
+    tokens: join(root, 'tokens.json'),
   };
 }

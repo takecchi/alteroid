@@ -1,4 +1,6 @@
 import {
+  agentTokenInputSchema,
+  agentTokenViewSchema,
   commitmentSchema,
   createMemoryStores,
   jobSchema,
@@ -9,6 +11,8 @@ import {
   pendingApprovalSchema,
   runnerCredentialFingerprintSchema,
   runnerProfileFingerprintSchema,
+  tokenRotationPolicySchema,
+  tokenRotationSettingsSchema,
   unreadableCommitmentSchema,
   waitingKindSchema,
   workspaceLocatorSchema,
@@ -764,6 +768,40 @@ export const profileUpdateResponseSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// 認証トークンのプール（/tokens）——Issue #393「PR1 プールの器」。**回さない。**
+// ---------------------------------------------------------------------------
+
+/**
+ * `GET /tokens` `PUT /tokens` の応答。
+ *
+ * `agentTokenViewSchema`（core）をそのまま使う——`AgentTokenView` は最初から
+ * *外向き*に書かれた型で（`value` を持たない指紋の形）、`runnerCredentialFingerprintSchema`
+ * と同じ理由でここに書き直さない。`tokenRotationSettingsSchema` も同様——
+ * 秘密を持たない設定行そのものなので、そのまま外へ出してよい。
+ */
+export const tokensResponseSchema = z.object({
+  tokens: z.array(agentTokenViewSchema),
+  settings: tokenRotationSettingsSchema,
+});
+
+/**
+ * `PUT /tokens` の body。`agentTokenInputSchema`（core）をそのまま使う——
+ * `value` を省略できる形そのものが、人間・CLI・クローンの道具が共有する入力
+ * 契約であって、ここで別の形に書き直す理由が無い。
+ */
+export const tokensUpdateRequestSchema = z.object({
+  tokens: z.array(agentTokenInputSchema),
+});
+
+/**
+ * `PUT /tokens/policy` の body。3つとも省略可（部分更新）。
+ */
+export const tokensPolicyUpdateRequestSchema = z.object({
+  rotateOn: tokenRotationPolicySchema.optional(),
+  cooldownMs: z.number().int().positive().optional(),
+});
+
+// ---------------------------------------------------------------------------
 // アーカイブ（/archive）
 // ---------------------------------------------------------------------------
 
@@ -840,6 +878,12 @@ export const openApiDocumentation: GenerateSpecOptions['documentation'] = {
       name: 'access',
       description:
         'アクセス許可の付与・剥奪。実行環境の持ち主（状態ファイルを読める者）だけが叩ける',
+    },
+    {
+      name: 'tokens',
+      description:
+        '認証トークンのプール（Issue #393）。**回さない**——枠に当たったときに回す' +
+        '候補を置くだけの器。値は決して出さない（label と指紋だけ）',
     },
   ],
   components: {

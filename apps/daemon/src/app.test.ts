@@ -16,16 +16,20 @@ import type {
   Stores,
 } from '@alteroid/core';
 import {
+  createAuthProviderRegistry,
+  createAuthService,
   createManagerPool,
   createMemoryStores,
   createProfileApplier,
   createProfileService,
   createProfileVessel,
   createRunnerRegistry,
+  createTokenPoolService,
 } from '@alteroid/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp, parseAllowedOrigins } from './app.js';
+import type { AuthPlan } from './auth.js';
 import { createJournalBus, type JournalBus } from './journal-bus.js';
 import { scheduleStatusSchema } from './openapi.js';
 
@@ -2156,6 +2160,241 @@ describe('宣言と実物の一致（/profile）', () => {
     } finally {
       cleanup();
     }
+  });
+});
+
+/**
+ * 認証トークンのプール（Issue #393「PR1 プールの器」）。
+ *
+ * **回さない。** ここで固定するのは器の口（`GET` / `PUT` / `PUT .../policy`）が
+ * 正しく `requireOperator` を通ること、値が応答のどこにも出ないこと、プールが
+ * 空の既定構成の挙動が変わらないことの3つである。検知・切替（PR2 以降）はここに
+ * 無い。
+ */
+describe('認証トークンのプール', () => {
+  it('プールが空でも 200 を返し、既定の設定（free_exhausted）を返す（受け入れ基準7）', async () => {
+    const withTokens = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      tokens: createTokenPoolService({ stores }),
+    });
+
+    const response = await withTokens.request('/tokens');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      tokens: [],
+      settings: { rotateOn: 'free_exhausted', cooldownMs: 5 * 60 * 60 * 1000 },
+    });
+  });
+
+  it('deps.tokens が無くても 200 を返す（配線されていないことを黙って隠さない形で既定を返す）', async () => {
+    const response = await app.request('/tokens');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { tokens: unknown[]; settings: { rotateOn: string } };
+    expect(body.tokens).toEqual([]);
+    expect(body.settings.rotateOn).toBe('free_exhausted');
+  });
+
+  it('PUT で置いたトークンが GET で読み直せる。値は応答のどこにも出ない', async () => {
+    const withTokens = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      tokens: createTokenPoolService({ stores }),
+    });
+    const SECRET = 'tok-super-secret-value';
+
+    const put = await withTokens.request('/tokens', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tokens: [{ label: 'primary', value: SECRET }] }),
+    });
+    expect(put.status).toBe(200);
+    const putText = await put.text();
+    expect(putText).not.toContain(SECRET);
+
+    const get = await withTokens.request('/tokens');
+    const getText = await get.text();
+    expect(getText).not.toContain(SECRET);
+    const body = JSON.parse(getText) as { tokens: { label: string; sha256: string }[] };
+    expect(body.tokens).toEqual([
+      { id: expect.any(String), label: 'primary', order: 0, sha256: expect.any(String) },
+    ]);
+  });
+
+  it('壊れた入力（消えた id を指す）は 400 を返し、保存しない。理由にトークンの値を含めない', async () => {
+    const withTokens = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      tokens: createTokenPoolService({ stores }),
+    });
+    const SECRET = 'tok-should-not-leak-in-error';
+
+    const response = await withTokens.request('/tokens', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tokens: [{ id: 'ghost', label: '幽霊', value: SECRET }] }),
+    });
+
+    expect(response.status).toBe(400);
+    const text = await response.text();
+    expect(text).not.toContain(SECRET);
+
+    expect(await stores.tokens.list()).toEqual([]);
+  });
+
+  it('PUT /tokens/policy で回す契機・冷却を変えられる（部分更新）', async () => {
+    const withTokens = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      tokens: createTokenPoolService({ stores }),
+    });
+
+    const response = await withTokens.request('/tokens/policy', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rotateOn: 'overage_exhausted' }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { rotateOn: string; cooldownMs: number };
+    expect(body.rotateOn).toBe('overage_exhausted');
+    // 省略した項目（cooldownMs）は既定のまま。
+    expect(body.cooldownMs).toBe(5 * 60 * 60 * 1000);
+  });
+
+  /**
+   * `requireOperator` に落ちること。`/profile` と同じ強さの口である
+   * （課金の主体を決める操作なので、`access grant` を通しただけのアカウントには
+   * 開けない）。認証境界そのものの網羅は `auth.test.ts` に寄せてあるので、ここでは
+   * 「この3経路が確かに `requireOperator` を通っている」ことだけを見る——
+   * **許可されたアカウントでも 403** になることまで確かめる（`OPERATOR` トークンだけ
+   * 通って「許可されてさえいれば通る」ように見えるのを防ぐため）。
+   */
+  describe('実行環境の持ち主だけ（403）', () => {
+    const FAKE_PROVIDER = {
+      kind: 'oauth2' as const,
+      id: 'fake',
+      label: 'Fake',
+      authorizationUrl: (request: { state: string }) =>
+        `https://example.test/authorize?state=${request.state}`,
+      exchange: async () => ({
+        subject: 'sub-tokens-test',
+        email: 'sub-tokens-test@example.test',
+        emailVerified: true,
+        displayName: 'sub-tokens-test',
+      }),
+    };
+    const post = { method: 'POST', headers: { 'content-type': 'application/json' } };
+    const OPERATOR = { authorization: 'Bearer operator-token' };
+
+    function buildAuthedApp() {
+      const authStores = createMemoryStores();
+      const resolved: AuthPlan = {
+        enabled: true,
+        providers: [FAKE_PROVIDER],
+        publicBaseUrl: 'http://127.0.0.1:4517',
+        tokenTtlDays: 30,
+        description: 'テスト',
+      };
+      return createApp({
+        clone: fake.clone,
+        stores: authStores,
+        token: 'operator-token',
+        shutdown: () => undefined,
+        tokens: createTokenPoolService({ stores: authStores }),
+        auth: {
+          plan: resolved,
+          service: createAuthService({
+            store: authStores.auth,
+            providers: createAuthProviderRegistry(resolved.providers),
+          }),
+        },
+      });
+    }
+
+    /** ログインさせて、実行環境の持ち主として許可（grant）まで通す。 */
+    async function grantedAccountToken(app: ReturnType<typeof createApp>): Promise<string> {
+      const started = (await (
+        await app.request('/auth/login', { ...post, body: JSON.stringify({ provider: 'fake' }) })
+      ).json()) as { requestId: string; authorizationUrl: string; claimSecret: string };
+      const state = new URL(started.authorizationUrl).searchParams.get('state') ?? '';
+      await app.request(`/auth/fake/callback?code=any&state=${encodeURIComponent(state)}`);
+      const claimed = (await (
+        await app.request(`/auth/login/${started.requestId}/claim`, {
+          ...post,
+          body: JSON.stringify({ claimSecret: started.claimSecret }),
+        })
+      ).json()) as { token: string; account: { id: string } };
+      await app.request(`/access/${claimed.account.id}/grant`, {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+      });
+      return claimed.token;
+    }
+
+    it('資格が無ければ 401', async () => {
+      const withAuth = buildAuthedApp();
+      expect((await withAuth.request('/tokens')).status).toBe(401);
+    });
+
+    it('許可されたアカウントでも 403（実行環境の持ち主だけが通る）', async () => {
+      const withAuth = buildAuthedApp();
+      const granted = { authorization: `Bearer ${await grantedAccountToken(withAuth)}` };
+
+      // 許可されている ＝ 他の経路（記憶）には触れる、という前提を先に確かめる。
+      expect((await withAuth.request('/memory', { headers: granted })).status).toBe(200);
+
+      expect((await withAuth.request('/tokens', { headers: granted })).status).toBe(403);
+      expect(
+        (
+          await withAuth.request('/tokens', {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json', ...granted },
+            body: JSON.stringify({ tokens: [] }),
+          })
+        ).status,
+      ).toBe(403);
+      expect(
+        (
+          await withAuth.request('/tokens/policy', {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json', ...granted },
+            body: JSON.stringify({}),
+          })
+        ).status,
+      ).toBe(403);
+    });
+
+    it('実行環境の持ち主は3経路とも通る', async () => {
+      const withAuth = buildAuthedApp();
+
+      expect((await withAuth.request('/tokens', { headers: OPERATOR })).status).toBe(200);
+      expect(
+        (
+          await withAuth.request('/tokens', {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json', ...OPERATOR },
+            body: JSON.stringify({ tokens: [] }),
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await withAuth.request('/tokens/policy', {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json', ...OPERATOR },
+            body: JSON.stringify({}),
+          })
+        ).status,
+      ).toBe(200);
+    });
   });
 });
 

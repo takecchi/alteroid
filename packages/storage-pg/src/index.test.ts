@@ -1641,6 +1641,101 @@ describe('PgProfileStore', () => {
   });
 });
 
+/**
+ * 認証トークンのプール（Issue #393「PR1」）。**回さない**——ここで固定するのは
+ * 器の振る舞い（往復・設定の既定・トランザクションでの全文置換）だけである。
+ */
+describe('PgTokenPoolStore', () => {
+  it('往復（replace → list）で値まで戻る。order 昇順で返す', async () => {
+    expect(await stores.tokens.list()).toEqual([]);
+
+    const written = await stores.tokens.replace([
+      { id: 'tok-a', label: 'a', value: 'tok-aaa', order: 1 },
+      { id: 'tok-b', label: 'b', value: 'tok-bbb', order: 0 },
+    ]);
+    expect(written.map((t) => t.id)).toEqual(['tok-b', 'tok-a']);
+
+    const read = await stores.tokens.list();
+    expect(read).toEqual([
+      { id: 'tok-b', label: 'b', value: 'tok-bbb', order: 0 },
+      { id: 'tok-a', label: 'a', value: 'tok-aaa', order: 1 },
+    ]);
+  });
+
+  it('全文置換——1トランザクションでの delete → insert（入力に無い行は消える）', async () => {
+    await stores.tokens.replace([{ id: 'tok-a', label: 'a', value: 'tok-aaa', order: 0 }]);
+    await stores.tokens.replace([{ id: 'tok-b', label: 'b', value: 'tok-bbb', order: 0 }]);
+    expect((await stores.tokens.list()).map((t) => t.id)).toEqual(['tok-b']);
+  });
+
+  it('空配列で置換すると全部消える', async () => {
+    await stores.tokens.replace([{ id: 'tok-a', label: 'a', value: 'tok-aaa', order: 0 }]);
+    await stores.tokens.replace([]);
+    expect(await stores.tokens.list()).toEqual([]);
+  });
+
+  it('invalidatedAt / invalidatedReason も往復する（3つ目の状態を落とさない）', async () => {
+    await stores.tokens.replace([
+      {
+        id: 'tok-a',
+        label: 'a',
+        value: 'tok-aaa',
+        order: 0,
+        cooldownUntil: 12345,
+        lastRejectedAt: '2026-08-01T00:00:00.000Z',
+        lastRejectedReason: 'rate_limit',
+        invalidatedAt: '2026-08-02T00:00:00.000Z',
+        invalidatedReason: 'account_on_hold',
+      },
+    ]);
+    const [row] = await stores.tokens.list();
+    expect(row).toEqual({
+      id: 'tok-a',
+      label: 'a',
+      value: 'tok-aaa',
+      order: 0,
+      cooldownUntil: 12345,
+      lastRejectedAt: '2026-08-01T00:00:00.000Z',
+      lastRejectedReason: 'rate_limit',
+      invalidatedAt: '2026-08-02T00:00:00.000Z',
+      invalidatedReason: 'account_on_hold',
+    });
+  });
+
+  it('設定は置かれていなければ core の既定を返す', async () => {
+    expect(await stores.tokens.readSettings()).toEqual({
+      rotateOn: 'free_exhausted',
+      cooldownMs: 5 * 60 * 60 * 1000,
+    });
+  });
+
+  it('設定を書いて読み直せる（2回目は upsert）', async () => {
+    await stores.tokens.writeSettings({ rotateOn: 'off', cooldownMs: 111 });
+    const written = await stores.tokens.writeSettings({
+      rotateOn: 'overage_exhausted',
+      cooldownMs: 1_000,
+      updatedAt: '2026-08-24T00:00:00.000Z',
+    });
+    expect(written).toEqual({
+      rotateOn: 'overage_exhausted',
+      cooldownMs: 1_000,
+      updatedAt: '2026-08-24T00:00:00.000Z',
+    });
+    expect(await stores.tokens.readSettings()).toEqual(written);
+  });
+
+  it('migrate を2回通しても壊れない（冪等）。記録済みの行を消さない', async () => {
+    await stores.tokens.replace([{ id: 'tok-a', label: 'a', value: 'tok-aaa', order: 0 }]);
+    await stores.tokens.writeSettings({ rotateOn: 'off', cooldownMs: 999 });
+
+    await migrate(db);
+    await migrate(db);
+
+    expect((await stores.tokens.list()).map((t) => t.id)).toEqual(['tok-a']);
+    expect((await stores.tokens.readSettings()).rotateOn).toBe('off');
+  });
+});
+
 describe('PgSessionRegistry', () => {
   it('セッション id を覚えて忘れられる', async () => {
     expect(await stores.sessions.getCloneSessionId()).toBeNull();
