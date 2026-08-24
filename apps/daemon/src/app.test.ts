@@ -1983,8 +1983,16 @@ describe('GET /journal の order/afterId/afterAt（issue #432 の2本目）', ()
   it('同じミリ秒に積んだ2行をまたいでも、afterId/afterAt が飛ばさず重複しない', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 0, 1, 12, 0, 0));
-    const first = await stores.journal.append({ type: 'decision', decision: 'same-ms-1', grounds: 'g' });
-    const second = await stores.journal.append({ type: 'decision', decision: 'same-ms-2', grounds: 'g' });
+    const first = await stores.journal.append({
+      type: 'decision',
+      decision: 'same-ms-1',
+      grounds: 'g',
+    });
+    const second = await stores.journal.append({
+      type: 'decision',
+      decision: 'same-ms-2',
+      grounds: 'g',
+    });
     vi.useRealTimers();
 
     expect(first.at).toBe(second.at);

@@ -99,15 +99,15 @@ export class FsJournalStore implements JournalStore {
       const anchorIndexInThisFile = anchor !== null && file === anchor.file ? anchor.index : null;
       const startIndex =
         order === 'desc'
-          ? (anchorIndexInThisFile !== null ? anchorIndexInThisFile - 1 : lines.length - 1)
-          : (anchorIndexInThisFile !== null ? anchorIndexInThisFile + 1 : 0);
+          ? anchorIndexInThisFile !== null
+            ? anchorIndexInThisFile - 1
+            : lines.length - 1
+          : anchorIndexInThisFile !== null
+            ? anchorIndexInThisFile + 1
+            : 0;
       const step = order === 'desc' ? -1 : 1;
 
-      for (
-        let i = startIndex;
-        order === 'desc' ? i >= 0 : i < lines.length;
-        i += step
-      ) {
+      for (let i = startIndex; order === 'desc' ? i >= 0 : i < lines.length; i += step) {
         const entry = parseLine(lines[i]);
         if (!entry) continue;
         if (query.types && !query.types.includes(entry.type)) continue;

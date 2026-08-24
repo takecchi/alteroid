@@ -196,6 +196,31 @@ describe('JournalStore 実装の一覧が with 契約の登録から漏れてい
     ).toEqual([]);
   });
 
+  /**
+   * **`contracts` を手で書いたエントリが痩せていても、下（実際に呼んでいるか
+   * を測る歯）は緑のまま通る**——あの歯が検算しているのは「`entry.contracts`
+   * に並んだものを呼んでいるか」までであって、**`entry.contracts` 自身が
+   * `REQUIRED_CONTRACTS` を全部含んでいるか**は誰も見ていない。4本目の実装を
+   * 足す人が `contracts: ['verifyJournalStoreWithContract']` とだけ書けば
+   * （新しい契約を書き忘れて）、下の歯は素通りする。**3つの歯は同じ穴の
+   * 3つの高さである** —— 実装の登録漏れ（上） / 契約の呼び忘れ（下） /
+   * **要求そのものの痩せ（この歯）**。
+   */
+  it('contract-tested の各エントリが REQUIRED_CONTRACTS を全部要求している（要求そのものが痩せていないか）', () => {
+    for (const [file, entry] of Object.entries(KNOWN_IMPLEMENTATIONS)) {
+      if (entry.status === 'delegates') continue;
+      const missing = REQUIRED_CONTRACTS.filter((contract) => !entry.contracts.includes(contract));
+      expect(
+        missing,
+        missing.length === 0
+          ? ''
+          : `${file} の contracts が REQUIRED_CONTRACTS を全部要求していない（欠けている: ` +
+              `${missing.join(', ')}）。REQUIRED_CONTRACTS に契約を足したなら、` +
+              `各エントリの contracts にも足すこと。`,
+      ).toEqual([]);
+    }
+  });
+
   it.each(Object.entries(KNOWN_IMPLEMENTATIONS))(
     '%s: 契約テストが実在し、REQUIRED_CONTRACTS の全部を実際に呼んでいる',
     (file, entry) => {
