@@ -178,7 +178,101 @@ export function inboxEventShape(event: InboxEvent): string {
  * 約束が戻る（#248）。
  */
 function note(text: string): void {
-  stderrSink(`alteroid: ${new Date().toISOString()} ${text}\n`);
+  notePrefixed('alteroid', text);
+}
+
+/**
+ * 接頭辞を呼び出し側から受け取って1行書く。
+ *
+ * **`note()` と同じ口である**（`stderrSink` を通るのはここ1本のまま）。分けて
+ * あるのは、`note()` が `alteroid:` を焼き込んでいるからで、**プロセス全体の網
+ * （`uncaught-net.ts`）は app ごとに別の接頭辞を出す**必要があるためである ——
+ * daemon は `alteroidd:`、runner は `alteroid-runner:`（`.onError` の先例が
+ * `apps/runner/src/app.ts` に在る）。**接頭辞が app ごとに違うのは、跡を読む者が
+ * どちらのプロセスが落ちたのかを1行目で見分けられるようにするためである。**
+ *
+ * **`note()` が出す行は1文字も変えていない。**
+ */
+function notePrefixed(prefix: string, text: string): void {
+  stderrSink(`${prefix}: ${new Date().toISOString()} ${text}\n`);
+}
+
+/**
+ * 未捕捉の例外・未処理の Promise 拒否を**観測した**ことを stderr へ1行だけ残す
+ * （#438）。
+ *
+ * **⚠️ この行は「プロセスが落ちる」と書かない。書かせないこと。** 呼び元
+ * （`uncaught-net.ts`）が使う `uncaughtExceptionMonitor` は、**誰かが
+ * `process.on('uncaughtException')` を登録していれば、落ちないまま発火する。**
+ * いまこの repo にその登録は無いが、それは配線の事実であってこの関数の保証では
+ * ない。断言すると、**登録された日にこの行だけが静かに嘘をつく。**
+ *
+ * **これは `noteDroppedInboxEvent` と同じ判断である**（あちらの doc の逐語:
+ * 「**それでも「残した」とも書かない。**…この行が主張するのは**このプロセスでは
+ * 処理しなかった**という、観測できたことだけである」）。ここが主張するのも
+ * **観測できたことだけ** —— 「未捕捉の例外が起きた」であって「だから死ぬ」では
+ * ない。**死んだかどうかは、この行の後に Node 既定のスタックが続くかで読める。**
+ *
+ * **文言を `origin` で分けるのは、このファイルが `noteDroppedRecord` /
+ * `noteUnreadableRecord` / `noteManagerIdCollision` を分けているのと同じ理由で
+ * ある** —— 違う出来事に同じ文を当てると、**跡そのものが何が起きたかを取り違え
+ * させる。**
+ *
+ * **⚠️ 「本文は出しません」とは書かない。** `.onError` の先例
+ * （`apps/daemon/src/app.ts` / `apps/runner/src/app.ts`）はそう書いているが、
+ * **あちらには出さずに済ませた本文が別に在る**（リクエスト本文）。**未捕捉の例外
+ * には、それが無い** —— 例外の `message` そのものが理由なので、`reasonOf` は
+ * **理由として message を出す**（あの関数の doc の逐語:「**理由だけは出す。**
+ * 『書けなかった』しか残らない行を読んだ者にできることは、ストアを一から疑うこと
+ * しかない」）。ここで「本文は出しません」と書くと、**在りもしない守りを名乗る**
+ * ことになる —— このファイルが繰り返し避けている「跡そのものが嘘をつく」形である。
+ *
+ * **実際に効いている守りは2つで、どちらも `reasonOf` が持っている。**
+ *
+ * 1. **1行目だけ**を取る —— ドライバの例外は失敗したクエリのパラメータを**次の行**へ
+ *    添えてくることがある（`reasonOf` の doc に `drizzle-orm@0.45.2` の実測が在る）。
+ * 2. **200字で切る。**
+ *
+ * **そして、この行が漏らしうるものは、いま既に漏れているものの部分集合である。**
+ * `uncaught-net.ts` は Node 既定の出力を止めないので、**同じ `message` は同じ
+ * stderr へ、スタックごと必ず出る。** ⟹ この行は器のログの漏洩面を1バイトも
+ * 広げない（**狭めもしない** —— 狭めるには既定の出力を止めるしかなく、それは
+ * `uncaught-net.ts` が捨てた道である）。
+ *
+ * 素の `String(error)` は書かない。**スタックも載せない** —— 載せると `reasonOf` を
+ * 通す意味が消える。
+ *
+ * @param prefix app ごとの接頭辞（`alteroidd` / `alteroid-runner`）。**末尾の
+ *   コロンは付けない**（`notePrefixed` が付ける）。
+ * @param origin Node が渡す出所（`uncaughtException` / `unhandledRejection`）。
+ * @param error 観測した例外・拒否の理由。
+ */
+export function noteUncaught(prefix: string, origin: string, error: unknown): void {
+  notePrefixed(
+    prefix,
+    `${describeUncaughtOrigin(origin)}を観測しました: ${reasonOf(error)}`,
+  );
+}
+
+/**
+ * `uncaughtExceptionMonitor` の `origin` を、跡に書く言葉へ直す。
+ *
+ * **知らない値を既知の2つのどちらかへ倒さない。** Node の型はいま2値だが、
+ * 倒すと「判別できない」が黙って片方に化ける（`AGENTS.md`「**『判定できない』と
+ * いう3つ目の状態を持つ。** 2値にすると、判定できない場合がどちらかへ黙って
+ * 倒れる」）。**`origin` は Node が決める値なので `tag()` に通してそのまま載せて
+ * よい** —— このファイルの判定基準は「自由文かどうか」ではなく「**値を誰が
+ * 決めるか**」である。
+ */
+function describeUncaughtOrigin(origin: string): string {
+  switch (origin) {
+    case 'uncaughtException':
+      return '未捕捉の例外';
+    case 'unhandledRejection':
+      return '未処理の Promise 拒否';
+    default:
+      return `出所を判別できないエラー（origin=${tag(origin)}）`;
+  }
 }
 
 /**
