@@ -128,8 +128,7 @@ const SHORT = '短い値';
  * **以前ここは正規化を織り込まずに緑だった** —— 当たっているのがインメモリ実装
  * だけで、それだけが正規化していなかったからである（#370）。
  */
-const asStored = (content: string): string =>
-  content.endsWith('\n') ? content : `${content}\n`;
+const asStored = (content: string): string => (content.endsWith('\n') ? content : `${content}\n`);
 
 describe('クローンの道具に渡した引数は、長さと位置によらず全部届く', () => {
   it('長い値がどの位置にあっても、後ろの引数まで1文字も欠けずに届く（journal_write）', async () => {
