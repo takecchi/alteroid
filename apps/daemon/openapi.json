@@ -5278,23 +5278,17 @@
             }
           },
           "400": {
-            "description": "本文が JSON として不正。",
+            "description": "本文の形が不正（配布していない）。**送られてきた本文は返さない**——ここは鍵の値そのものを運ぶ口なので、既定の 400 の形は使えない（下の`hook` の doc）。",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "data": {},
                     "error": {
-                      "type": "array",
-                      "items": {}
-                    },
-                    "success": {
-                      "type": "boolean",
-                      "const": false
+                      "type": "string"
                     }
                   },
-                  "required": ["data", "error", "success"]
+                  "required": ["error"]
                 }
               }
             }
@@ -5492,7 +5486,7 @@
             }
           },
           "400": {
-            "description": "プロファイルが読めなかった（保存していない）。",
+            "description": "プロファイルが読めなかった（保存していない）。**本文の形がそもそも不正だった場合も同じ 400 に乗る**（`script` を欠いた本文など）——どちらの場合も送られてきた本文は返さない（下の `hook` の doc）。",
             "content": {
               "application/json": {
                 "schema": {

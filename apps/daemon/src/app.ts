@@ -574,6 +574,26 @@ function isPublicPath(path: string): boolean {
 }
 
 /**
+ * `validator('json', ...)` の `hook` が受け取る issue 配列から、どこが壊れて
+ * いたかを人が読める形（`"credentials.1.name"` のような `path` の連結）に畳む。
+ *
+ * **不変: 値は1文字も含めない。含めてよいのは `path` だけである。** issue は
+ * `message` を持つが、そちらは zod が生成する文言に本文の値を埋め込むことが
+ * ある（正規表現の失敗理由など、実装によっては入力値そのものを引用する形が
+ * ありうる）ので、ここでは`path` だけを見る。呼び出し側（`/tokens` の
+ * `hook` の doc）にある実測がこの関数を要る理由——`hook` を渡さないと
+ * `@hono/standard-validator` の既定の 400 がリクエスト本文をまるごと返す
+ * ——そのものへの対処であり、この関数が万一 `message` や値を混ぜて返すと、
+ * 対処そのものが無意味になる。
+ */
+function whereValidationFailed(issues: readonly { readonly path?: readonly unknown[] }[]): string {
+  return issues
+    .map((issue) => issue.path?.map((part) => String(part)).join('.') ?? '')
+    .filter((path) => path.length > 0)
+    .join(', ');
+}
+
+/**
  * 一覧・詳細で返すマネージャー（状態に、確認へ上がらず止められた件数を**添える**）。
  *
  * **2つの出どころを外向きの面でだけ合流させる。** 状態は台帳から作った
@@ -2420,8 +2440,11 @@ export function createApp(deps: AppDeps) {
             },
           },
           400: {
-            description: '本文が JSON として不正。',
-            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+            description:
+              '本文の形が不正（配布していない）。**送られてきた本文は返さない**——' +
+              'ここは鍵の値そのものを運ぶ口なので、既定の 400 の形は使えない（下の' +
+              '`hook` の doc）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           503: {
             description: 'runner が登録されていない。',
@@ -2429,7 +2452,28 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      validator('json', runnerSetCredentialsCommandSchema),
+      /**
+       * **既定の 400 を使わない。** `hook` を渡さないと `@hono/standard-validator`
+       * は `c.json({ data: <リクエスト本文そのもの>, error, success: false }, 400)`
+       * を返す（`PUT /tokens` の同名の hook の doc に実測を書いてある。
+       * `sanitizeIssues` が見る `RESTRICTED_DATA_FIELDS` は `header: ['cookie']`
+       * だけで、`json` は素通しになる）。
+       *
+       * **⟹ 鍵を1本 `name` の形式ミスで書き間違えただけで、その回に送った
+       * *全部* の鍵の値が応答へ載る。** ここは runner へ配る鍵そのものを運ぶ
+       * 唯一の口なので、既定の形をそのまま使えない。**どこが不正だったかは
+       * 返す（`path` だけ）が、送られてきた本文は1文字も返さない。**
+       */
+      validator('json', runnerSetCredentialsCommandSchema, (result, c) => {
+        if (result.success) return;
+        const where = whereValidationFailed(result.error);
+        return c.json(
+          {
+            error: '鍵の入力の形が不正（配布していない）' + (where === '' ? '' : `: ${where}`),
+          },
+          400,
+        );
+      }),
       async (c) => {
         const registry = deps.runners;
         if (registry === undefined) {
@@ -2540,7 +2584,10 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(profileUpdateResponseSchema) } },
           },
           400: {
-            description: 'プロファイルが読めなかった（保存していない）。',
+            description:
+              'プロファイルが読めなかった（保存していない）。**本文の形がそもそも' +
+              '不正だった場合も同じ 400 に乗る**（`script` を欠いた本文など）——' +
+              'どちらの場合も送られてきた本文は返さない（下の `hook` の doc）。',
             content: { 'application/json': { schema: resolver(profileErrorResponseSchema) } },
           },
           403: {
@@ -2550,7 +2597,30 @@ export function createApp(deps: AppDeps) {
         },
       }),
       requireOperator,
-      validator('json', profileUpdateRequestSchema),
+      /**
+       * **既定の 400 を使わない。** `hook` を渡さないと `@hono/standard-validator`
+       * は `c.json({ data: <リクエスト本文そのもの>, error, success: false }, 400)`
+       * を返す（`PUT /tokens` の同名の hook の doc に実測を書いてある）。
+       *
+       * **⟹ ここは `GH_TOKEN` のような鍵をまるごと含みうるシェルスクリプトを
+       * 運ぶ口なので、`script` の綴りを1つ間違えただけで、その回に送った
+       * スクリプト全文（＝中の鍵の値まで）が応答へ載る。** 下の 400 は
+       * `profileErrorResponseSchema`（`{ error, detail }`。両方必須）で宣言済み
+       * なので、宣言を変えずに済むよう **hook もその形で返す**。`detail` に
+       * 載せてよいのは `path` だけで、送られてきた値は1文字も載せない
+       * （`apps/cli/src/profile.ts` がこの `detail` をそのまま人へ表示する）。
+       */
+      validator('json', profileUpdateRequestSchema, (result, c) => {
+        if (result.success) return;
+        const where = whereValidationFailed(result.error);
+        return c.json(
+          {
+            error: 'プロファイルの入力の形が不正（保存していない）',
+            detail: where === '' ? '本文の形が不正である' : `形が不正な項目: ${where}`,
+          },
+          400,
+        );
+      }),
       async (c) => {
         // **クローンの道具（`profile_write`）とまったく同じ経路を通る。** 別々に
         // 書くと、片方だけに検査が入って「人間が置くと弾かれるのにクローンが置くと
@@ -2684,10 +2754,7 @@ export function createApp(deps: AppDeps) {
        */
       validator('json', tokensUpdateRequestSchema, (result, c) => {
         if (result.success) return;
-        const where = result.error
-          .map((issue) => issue.path?.map((part) => String(part)).join('.') ?? '')
-          .filter((path) => path.length > 0)
-          .join(', ');
+        const where = whereValidationFailed(result.error);
         return c.json(
           {
             error:
