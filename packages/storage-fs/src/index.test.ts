@@ -2,7 +2,11 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { renderMemoryDocuments, verifyJournalStoreWithContract } from '@alteroid/core';
+import {
+  renderMemoryDocuments,
+  verifyJournalStoreOrderContract,
+  verifyJournalStoreWithContract,
+} from '@alteroid/core';
 import type { Commitment, InboxEvent } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -809,6 +813,63 @@ describe('FsJournalStore', () => {
     expect(entries.map((entry) => (entry as { decision?: string }).decision)).toEqual(['昔の分']);
   });
 
+  /**
+   * **`order: 'asc'` では早期打ち切りの向きが反転する（issue #432 の2本目、
+   * 5-3）。** desc の既定は「新しい日から走査するので `sinceDay` を下回ったら
+   * `break`、`untilDay` を上回ったら `continue`」。asc は走査が古い日から
+   * 始まるので、この2つの役割が入れ替わる——`untilDay` を上回ったら
+   * `break`、`sinceDay` を下回ったら `continue`。
+   *
+   * **ここを反転し忘れる（desc の向きのまま asc へ流用する）と、この歯が
+   * 落ちる。** 最初に読む最古のファイル（`sinceDay` より古い）で `break`
+   * してしまい、窓の中に在るはずの「今日の分」へ一生辿り着けず、結果が
+   * 黙って空になる——読み飛ばし（`continue`）であるべきところが欠落
+   * （`break`）に化ける。
+   */
+  it('asc: since より古い日のファイルは読み飛ばして続きを読む（早期打ち切りの向きが反転する。#432）', async () => {
+    await stores.journal.append({ type: 'decision', decision: '今日の分', grounds: 'g' });
+
+    // 最古のファイルを手で置く。sinceDay より古いので、asc では continue
+    // （読み飛ばす）べきであって break（打ち切る）してはいけない。
+    const journalDir = join(root, 'journal');
+    await writeFile(
+      join(journalDir, '2020-01-01.jsonl'),
+      `${JSON.stringify({
+        type: 'decision',
+        id: 'old',
+        at: '2020-01-01T00:00:00.000Z',
+        decision: '古すぎる分',
+        grounds: 'g',
+      })}\n`,
+      'utf8',
+    );
+
+    const since = '2020-06-01T00:00:00.000Z';
+    const entries = await stores.journal.list({ order: 'asc', since });
+    expect(entries.map((entry) => (entry as { decision?: string }).decision)).toEqual(['今日の分']);
+  });
+
+  it('asc: until より新しい日のファイルに当たったら打ち切る（早期打ち切りの向きが反転する。#432）', async () => {
+    await stores.journal.append({ type: 'decision', decision: '今日の分', grounds: 'g' });
+
+    const journalDir = join(root, 'journal');
+    await writeFile(
+      join(journalDir, '2020-01-01.jsonl'),
+      `${JSON.stringify({
+        type: 'decision',
+        id: 'old',
+        at: '2020-01-01T00:00:00.000Z',
+        decision: '古い分',
+        grounds: 'g',
+      })}\n`,
+      'utf8',
+    );
+
+    const until = '2020-01-02T00:00:00.000Z';
+    const entries = await stores.journal.list({ order: 'asc', until });
+    expect(entries.map((entry) => (entry as { decision?: string }).decision)).toEqual(['古い分']);
+  });
+
   it('id で1件引ける（一覧を抜粋にした先の全文の行き先）', async () => {
     const entry = await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
 
@@ -919,6 +980,101 @@ describe('FsJournalStore', () => {
 
       expect(entries).toHaveLength(1);
       expect(entries[0]).toMatchObject({ with: 'human', text: '人間の質問' });
+    });
+  });
+
+  /**
+   * `JournalStore` の `order` / `after` 契約（issue #432 の2本目）を、**fs
+   * 実装**に対して測る。同じ形の歯が3つ在る——インメモリ
+   * （`packages/core/src/journal-order-with-contract.test.ts`）/ fs（この
+   * テスト）/ pg（`packages/storage-pg/src/index.test.ts`）。1つで測って
+   * 3つとも測ったことにしない（#418 / with 契約と同じ作法）。
+   *
+   * **fs だけが持つ危険（5-3）— 昇順の早期打ち切り（`sinceDay` / `untilDay`
+   * の break/continue）の向きが反転する。** この契約はその反転を直接は
+   * 踏まない（`since`/`until` を渡していない）ので、**反転漏れを狙った歯は
+   * 別途 `until で窓の終端を閉じられる` の隣に asc 版として置く**（下）。
+   */
+  describe('order/after 契約（issue #432 の2本目）', () => {
+    it('order 未指定=desc／asc は正確な逆順／after は絞り・limit より前に効く／同着を飛ばさない', async () => {
+      await verifyJournalStoreOrderContract(stores.journal);
+    });
+
+    /**
+     * **`after` によるファイル単位の枝刈り（`journal.ts` の「ファイル単位の
+     * 枝刈り」コメント）を、日付をまたいだ複数ファイルで直接確かめる。**
+     *
+     * 契約関数（`journal-order-with-contract.ts`）が積む行は同じテスト内で
+     * 短時間に積むため、全部が同じ UTC 日＝同じ1ファイルに収まる。それでは
+     * 「錨の日と違う日のファイルを丸ごと飛ばす／含める」という、この枝刈り
+     * だけが持つ性質を踏めない——1ファイルしか無ければファイル単位の判定は
+     * 常に「錨のファイルそのもの」にしか当たらない。ここでは日付が違う
+     * 3つのファイルを手で置き、錨を中間の日（2つの行を持つ）に置いて、
+     * 錨より新しい日のファイルが丸ごと落ちること（desc）／古い日のファイルが
+     * 丸ごと落ちること（asc）を確かめる。
+     */
+    it('after はファイルをまたいでも正しく枝刈りする（錨より新しい日を desc で、古い日を asc で丸ごと落とす）', async () => {
+      const journalDir = join(root, 'journal');
+      await mkdir(journalDir, { recursive: true });
+
+      const day1 = {
+        type: 'decision' as const,
+        id: 'day1',
+        at: '2020-01-01T00:00:00.000Z',
+        decision: 'day1',
+        grounds: 'g',
+      };
+      const day2a = {
+        type: 'decision' as const,
+        id: 'day2a',
+        at: '2020-01-02T00:00:00.000Z',
+        decision: 'day2a',
+        grounds: 'g',
+      };
+      const day2b = {
+        type: 'decision' as const,
+        id: 'day2b',
+        at: '2020-01-02T12:00:00.000Z',
+        decision: 'day2b',
+        grounds: 'g',
+      };
+      const day3 = {
+        type: 'decision' as const,
+        id: 'day3',
+        at: '2020-01-03T00:00:00.000Z',
+        decision: 'day3',
+        grounds: 'g',
+      };
+
+      await writeFile(join(journalDir, '2020-01-01.jsonl'), `${JSON.stringify(day1)}\n`, 'utf8');
+      // day2a が先の行（古い）、day2b が後の行（新しい）——fs は追記した順に
+      // 行が並ぶので、この順で書けば append の実際の形と一致する。
+      await writeFile(
+        join(journalDir, '2020-01-02.jsonl'),
+        `${JSON.stringify(day2a)}\n${JSON.stringify(day2b)}\n`,
+        'utf8',
+      );
+      await writeFile(join(journalDir, '2020-01-03.jsonl'), `${JSON.stringify(day3)}\n`, 'utf8');
+
+      // desc: day2b を錨にすると、錨より新しい日（day3 のファイル丸ごと）が
+      // 落ち、錨と同じ日のうち錨より前の行（day2a）と、錨より古い日
+      // （day1 のファイル丸ごと）が残る。
+      const afterDay2bDesc = await stores.journal.list({
+        order: 'desc',
+        after: { id: day2b.id, at: day2b.at },
+        limit: 10,
+      });
+      expect(afterDay2bDesc.map((e) => e.id)).toEqual(['day2a', 'day1']);
+
+      // asc: day2a を錨にすると、錨より古い日（day1 のファイル丸ごと）が
+      // 落ち、錨と同じ日のうち錨より後の行（day2b）と、錨より新しい日
+      // （day3 のファイル丸ごと）が残る。
+      const afterDay2aAsc = await stores.journal.list({
+        order: 'asc',
+        after: { id: day2a.id, at: day2a.at },
+        limit: 10,
+      });
+      expect(afterDay2aAsc.map((e) => e.id)).toEqual(['day2b', 'day3']);
     });
   });
 });

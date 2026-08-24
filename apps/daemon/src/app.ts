@@ -19,6 +19,7 @@ import {
   RESERVED_SCHEDULE_KINDS,
   DEFAULT_SSE_HEARTBEAT_MS,
   DEFAULT_TOKEN_ROTATION_SETTINGS,
+  JournalAnchorNotFoundError,
   TokenPoolInputError,
   approvalUpdatedAt,
   chatStreamEventSchema,
@@ -309,6 +310,34 @@ const reportsQuery = z.object({
   beforeDate: z.string().optional(),
   beforeAt: z.string().optional(),
 });
+/**
+ * `order` / `afterId` / `afterAt`（issue #432 の2本目）。**可視の複合キーで
+ * ページングする——不透明な `cursor` は使わない。**
+ *
+ * 応答（`journalListResponseSchema`）には既に `id` と `at` が載っている
+ * ——日誌エントリそのものである（`journalEntrySchema` の共通枝）——ので、
+ * 呼ぶ側は前の頁の最後の行の `id`/`at` を読んで次の要求を自分で組み立てられる
+ * ——**応答に新しい欄を1つも足さなくてよい。** `total` / `nextCursor` も
+ * 持たない——続きが在るかは `limit` 件ちょうど返ったかで呼ぶ側が判る。
+ *
+ * **`GET /reports` は `beforeDate` / `beforeAt` なのに、ここは `afterId` /
+ * `afterAt`——揃え忘れではない。**
+ *
+ * `GET /reports` には `order` が無く、常に日付の新しい順である ⟹ 「次の頁」
+ * は必ず古い側なので、`before` はどんな呼びでも literally 正しい。
+ *
+ * `GET /journal` には `order` が在って両向きに動く ⟹ `before` は
+ * `order=asc` のとき嘘になる。だから方向に縛られない語を使う——**`after` は
+ * 「返る順序における次」の意味で使っている（時間の意味ではない）。
+ * `order=desc`（既定）では、`after` が指す先は *より古い* 行である。**
+ *
+ * `afterId` と `afterAt` は必ず組で渡す（片方だけは 400。理由は `/reports`
+ * の `beforeDate`/`beforeAt` と同じ形——`afterAt` 単独では同じミリ秒の
+ * 同着を割れず、`afterId` 単独では fs 実装が `at` からファイルを決める
+ * 都合上、同じ `id` でも実装によって答えが変わりうる。
+ * `JournalStore.list` の `after` の doc、`journal-order-with-contract.ts`
+ * を見よ）。
+ */
 const journalQuery = z.object({
   limit: z.coerce.number().int().min(1).max(1000).default(50),
   /** ISO 8601。ここより古いエントリまで遡って読むための足がかり。 */
@@ -322,6 +351,21 @@ const journalQuery = z.object({
   until: z.string().optional(),
   /** カンマ区切りの日誌エントリ種別。 */
   type: z.string().optional(),
+  /**
+   * 返す順序。既定 `'desc'`（新しい順＝従来の挙動）。**この既定値がある
+   * ことで、クエリを1つも渡さない既定の呼びも `order:'desc'` をストアへ
+   * 渡すことになるが、それは従来の挙動そのものであり応答は1バイトも
+   * 変わらない。**
+   */
+  order: z.enum(['asc', 'desc']).default('desc'),
+  /**
+   * ページングの足がかり（`afterAt` と組で渡す）。**「次」は返る順序の
+   * 意味——`order=desc`（既定）なら錨より古い側、`order=asc` なら錨より
+   * 新しい側が返る。時間の意味ではない。**
+   */
+  afterId: z.string().optional(),
+  /** ISO 8601。`afterId` と組で渡す（上の注意を見よ）。 */
+  afterAt: z.string().optional(),
 });
 /**
  * `order` / `limit` / `cursor`（issue #432）。
@@ -1558,31 +1602,73 @@ export function createApp(deps: AppDeps) {
       describeRoute({
         tags: ['journal'],
         summary: '日誌を読む',
-        description: '日誌（追記専用の記録）を新しい順に読む。`type` `since` `until` で掘れる。',
+        description:
+          '日誌（追記専用の記録）を読む。`type` `since` `until` で掘れる。' +
+          '既定は新しい順（`order:desc`）——`order:asc` で古い順にもできる。' +
+          '`afterId` と `afterAt` を両方渡すと、前の頁の最後の行より後ろ' +
+          '（＝返る順序における次）を返す（可視の複合キー。応答に `id`/`at` が' +
+          '既に載っているのでそこから組み立てる）。**`after` は返る順序の意味で' +
+          'あって時間の意味ではない** —— `order:desc`（既定）では、指した行より' +
+          '**古い**行が返る。`order:asc` ではその逆（**新しい**行が返る）。' +
+          '**封筒は持たない** —— 続きが在るかは `limit` 件ちょうど返ったかで判る。',
         responses: {
           200: {
-            description: '日誌エントリの一覧（新しい順）。',
+            description: '日誌エントリの一覧。',
             content: { 'application/json': { schema: resolver(journalListResponseSchema) } },
           },
           400: {
-            description: 'クエリが不正。',
-            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+            description:
+              'クエリが不正、または `afterId` / `afterAt` の片方だけが渡された・' +
+              '`afterAt` の形式が不正、または `afterId`/`afterAt` が指す行が見当たらない。',
+            content: {
+              'application/json': {
+                schema: resolver(z.union([validationErrorResponseSchema, errorResponseSchema])),
+              },
+            },
           },
         },
       }),
       validator('query', journalQuery),
       async (c) => {
-        const { limit, since, until, type } = c.req.valid('query');
+        const { limit, since, until, type, order, afterId, afterAt } = c.req.valid('query');
         const types = type?.split(',').filter((value) => value.length > 0) as
           JournalEntryType[] | undefined;
-        return c.json({
-          entries: await stores.journal.list({
-            limit,
-            ...(since === undefined ? {} : { since }),
-            ...(until === undefined ? {} : { until }),
-            ...(types === undefined || types.length === 0 ? {} : { types }),
-          }),
-        });
+
+        // **片方だけでは境界が決まらない**（`/reports` の `beforeDate`/`beforeAt`
+        // と同じ形。`journalQuery` の doc）。この2つの if で TypeScript が
+        // `afterId`/`afterAt` を以降 `string` に絞る。
+        if (afterId === undefined && afterAt !== undefined) {
+          return c.json({ error: 'afterId と afterAt は両方一緒に渡す' as const }, 400);
+        }
+        if (afterId !== undefined && afterAt === undefined) {
+          return c.json({ error: 'afterId と afterAt は両方一緒に渡す' as const }, 400);
+        }
+        if (afterId !== undefined && afterAt !== undefined && Number.isNaN(Date.parse(afterAt))) {
+          return c.json({ error: 'afterAt は ISO 8601 で指定する' as const }, 400);
+        }
+
+        try {
+          return c.json({
+            entries: await stores.journal.list({
+              limit,
+              order,
+              ...(since === undefined ? {} : { since }),
+              ...(until === undefined ? {} : { until }),
+              ...(types === undefined || types.length === 0 ? {} : { types }),
+              ...(afterId === undefined || afterAt === undefined
+                ? {}
+                : { after: { id: afterId, at: afterAt } }),
+            }),
+          });
+        } catch (error) {
+          // **`afterId`/`afterAt` が指す行が見当たらないのは、判定できないという
+          // 第3の状態である。** 黙って先頭から返さず 400 にする
+          // （`JournalAnchorNotFoundError` の doc、AGENTS.md「静かに失敗する道具」）。
+          if (error instanceof JournalAnchorNotFoundError) {
+            return c.json({ error: error.message }, 400);
+          }
+          throw error;
+        }
       },
     )
 

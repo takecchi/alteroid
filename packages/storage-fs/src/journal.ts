@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { appendFile, mkdir, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { journalEntrySchema } from '@alteroid/core';
+import { journalEntrySchema, JournalAnchorNotFoundError } from '@alteroid/core';
 import type { JournalEntry, JournalEntryInput, JournalQuery, JournalStore } from '@alteroid/core';
 
 /**
@@ -39,24 +39,75 @@ export class FsJournalStore implements JournalStore {
   }
 
   async list(query: JournalQuery = {}): Promise<JournalEntry[]> {
-    const files = await this.#files();
+    const order = query.order ?? 'desc';
     const found: JournalEntry[] = [];
     const limit = query.limit ?? Number.POSITIVE_INFINITY;
     // ファイル名は追記時の UTC 日付なので、`since` より古い日のファイルは開かなくてよい。
     // 件数指定の無い `since` 問い合わせ（日報・要約）は M3 から常時走るため、
     // ここで打ち切らないと日誌全部を毎回読むことになる。
     const sinceDay = query.since?.slice(0, 10);
-    // `until` より新しい日のファイルは開かなくてよい。**`break` ではなく `continue`**
-    // — 走査は新しい日から始まるので、ここで止めると窓そのものへ辿り着けない。
+    // `until` より新しい日のファイルは開かなくてよい。
     const untilDay = query.until?.slice(0, 10);
 
-    // 新しい日付のファイルから読み、必要な件数が揃ったら止める
+    // **`after`（issue #432 の2本目）は `types` / `with` / `since` / `until` /
+    // `limit` より前に効かせる。** 錨の行は `at` からファイル名が一発で決まる
+    // （`#file`）ので、そのファイルへ飛んで探す——見つからなければそのファイル
+    // だけで「無い」と確定できる（他のファイルを探す必要はない）。
+    let anchor: { file: string; index: number } | null = null;
+    let anchorDay: string | undefined;
+    if (query.after !== undefined) {
+      const after = query.after;
+      anchor = await this.#locateAnchor(after);
+      if (anchor === null) {
+        throw new JournalAnchorNotFoundError(
+          `after で指定された行（id=${after.id}, at=${after.at}）が見つからない`,
+        );
+      }
+      anchorDay = after.at.slice(0, 10);
+    }
+
+    const files = await this.#files(order);
+
     for (const file of files) {
-      if (sinceDay !== undefined && file.slice(0, 10) < sinceDay) break;
-      if (untilDay !== undefined && file.slice(0, 10) > untilDay) continue;
+      const fileDay = file.slice(0, 10);
+
+      // **早期打ち切りの向きは `order` で反転する。** 既定（desc）は新しい
+      // 日から走査するので `sinceDay` を下回ったら `break`、`untilDay` を
+      // 上回ったら（まだ窓に届いていないだけなので）`continue`。`asc` は
+      // 走査が古い日から始まるので、この2つの役割が入れ替わる——
+      // `untilDay` を上回ったら `break`、`sinceDay` を下回ったら `continue`。
+      // ⚠️ ここを反転し忘れると、asc は黙って窓の外を落とす。
+      if (order === 'desc') {
+        if (sinceDay !== undefined && fileDay < sinceDay) break;
+        if (untilDay !== undefined && fileDay > untilDay) continue;
+      } else {
+        if (untilDay !== undefined && fileDay > untilDay) break;
+        if (sinceDay !== undefined && fileDay < sinceDay) continue;
+      }
+
+      // **`after` によるファイル単位の枝刈り。** 錨より「前」（返す向きと逆側）
+      // の日付のファイルは丸ごと不要——desc なら錨の日より新しい日、asc なら
+      // 錨の日より古い日。
+      if (anchor !== null && anchorDay !== undefined) {
+        if (order === 'desc' && fileDay > anchorDay) continue;
+        if (order === 'asc' && fileDay < anchorDay) continue;
+      }
+
       const raw = await readFile(join(this.#dir, file), 'utf8');
       const lines = raw.split('\n').filter((line) => line.length > 0);
-      for (let i = lines.length - 1; i >= 0; i -= 1) {
+
+      const anchorIndexInThisFile = anchor !== null && file === anchor.file ? anchor.index : null;
+      const startIndex =
+        order === 'desc'
+          ? anchorIndexInThisFile !== null
+            ? anchorIndexInThisFile - 1
+            : lines.length - 1
+          : anchorIndexInThisFile !== null
+            ? anchorIndexInThisFile + 1
+            : 0;
+      const step = order === 'desc' ? -1 : 1;
+
+      for (let i = startIndex; order === 'desc' ? i >= 0 : i < lines.length; i += step) {
         const entry = parseLine(lines[i]);
         if (!entry) continue;
         if (query.types && !query.types.includes(entry.type)) continue;
@@ -74,14 +125,14 @@ export class FsJournalStore implements JournalStore {
   }
 
   /**
-   * id で1件引く。
+   * 1件を id で引く。
    *
    * 日付を持たない id なので、新しい日から順に開いて突き合わせる。掘るための
    * 一発引きであって定常経路ではないため、走査の重さは受け入れる（当たれば
    * その時点で止まる）。
    */
   async get(id: string): Promise<JournalEntry | null> {
-    for (const file of await this.#files()) {
+    for (const file of await this.#files('desc')) {
       const raw = await readFile(join(this.#dir, file), 'utf8');
       const lines = raw.split('\n').filter((line) => line.length > 0);
       for (let i = lines.length - 1; i >= 0; i -= 1) {
@@ -96,14 +147,49 @@ export class FsJournalStore implements JournalStore {
     return join(this.#dir, `${at.slice(0, 10)}.jsonl`);
   }
 
-  /** 新しい日付が先。 */
-  async #files(): Promise<string[]> {
+  /**
+   * `after` の錨（`{ id, at }`）を、`at` から一発で決まるファイルの中だけで
+   * 探す（issue #432 の2本目）。**`id` と `at` の両方が一致する行だけを錨と
+   * 認める** — `at` だけでは同一ミリ秒の同着を割れず、`id` だけでは fs が
+   * `at` に依存している事実（ファイル名がそこから決まる）と揃わない。
+   *
+   * 見つからなければ `null`（呼び出し側が `JournalAnchorNotFoundError` を
+   * 投げる）。**そのファイルに無ければ「無い」と確定できる** — 錨のファイルは
+   * `#file(at)` が一意に決めるので、他の日付のファイルを探す必要はない。
+   */
+  async #locateAnchor(after: {
+    id: string;
+    at: string;
+  }): Promise<{ file: string; index: number } | null> {
+    const file = `${after.at.slice(0, 10)}.jsonl`;
+    let raw: string;
+    try {
+      raw = await readFile(join(this.#dir, file), 'utf8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
+    const lines = raw.split('\n').filter((line) => line.length > 0);
+    for (let i = 0; i < lines.length; i += 1) {
+      const entry = parseLine(lines[i]);
+      if (entry !== null && entry.id === after.id && entry.at === after.at) {
+        return { file, index: i };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * ファイル名の一覧を、`order` に応じた走査順で返す。
+   *
+   * `desc`（既定・従来の挙動）は新しい日付が先。`asc` はその逆で古い日付が先
+   * （issue #432 の2本目）。
+   */
+  async #files(order: 'asc' | 'desc'): Promise<string[]> {
     try {
       const names = await readdir(this.#dir);
-      return names
-        .filter((name) => name.endsWith('.jsonl'))
-        .sort()
-        .reverse();
+      const sorted = names.filter((name) => name.endsWith('.jsonl')).sort();
+      return order === 'desc' ? sorted.reverse() : sorted;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
       throw error;

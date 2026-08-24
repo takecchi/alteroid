@@ -1872,6 +1872,140 @@ describe('GET /reports の beforeDate/beforeAt（issue #432）', () => {
 });
 
 /**
+ * `GET /journal` の `order` / `afterId` / `afterAt`（issue #432 の2本目）。
+ *
+ * この口も封筒（`total` / `nextCursor`）を持たない——応答は
+ * `afterId`/`afterAt` を渡しても渡さなくても `entries` の1鍵のまま。続きが
+ * 在るかは `limit` 件ちょうど返ったかで呼ぶ側が判る（`/reports` の
+ * `beforeDate`/`beforeAt` と同じ考え方）。
+ *
+ * **`before` ではなく `after` を使う理由**（`journalQuery` の doc）: `/journal`
+ * には `order` が在って両向きに動くので、`before` は `order=asc` のとき嘘に
+ * なる。`after` は返る順序における次を指し、時間の意味ではない
+ * ——`order=desc`（既定）では、指した行より**古い**行が返る。
+ */
+describe('GET /journal の order/afterId/afterAt（issue #432 の2本目）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('既定の呼びでも afterId/afterAt を渡した呼びでも、応答の鍵は増えない', async () => {
+    await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
+
+    const plain = (await (await app.request('/journal')).json()) as Record<string, unknown>;
+    expect(Object.keys(plain)).toEqual(['entries']);
+
+    const first = (await (await app.request('/journal?limit=1')).json()) as {
+      entries: { id: string; at: string }[];
+    };
+    const e0 = first.entries[0] as { id: string; at: string };
+    const qs = new URLSearchParams({ afterId: e0.id, afterAt: e0.at });
+    const withCursor = (await (await app.request(`/journal?${qs.toString()}`)).json()) as Record<
+      string,
+      unknown
+    >;
+    expect(Object.keys(withCursor)).toEqual(['entries']);
+  });
+
+  it('order=asc は order=desc の正確な逆順', async () => {
+    for (let i = 0; i < 5; i += 1) {
+      await stores.journal.append({ type: 'decision', decision: `d${i}`, grounds: 'g' });
+    }
+
+    const descBody = (await (await app.request('/journal?limit=100')).json()) as {
+      entries: { id: string }[];
+    };
+    const ascBody = (await (await app.request('/journal?limit=100&order=asc')).json()) as {
+      entries: { id: string }[];
+    };
+    expect(ascBody.entries.map((e) => e.id)).toEqual(
+      [...descBody.entries].reverse().map((e) => e.id),
+    );
+  });
+
+  it('afterId/afterAtを辿った結果は、全件（desc）と重複なく一致する', async () => {
+    for (let i = 0; i < 5; i += 1) {
+      await stores.journal.append({ type: 'decision', decision: `d${i}`, grounds: 'g' });
+    }
+
+    const full = (await (await app.request('/journal?limit=100')).json()) as {
+      entries: { id: string }[];
+    };
+    expect(full.entries.length).toBeGreaterThanOrEqual(5);
+
+    const collected: string[] = [];
+    let after: { id: string; at: string } | undefined;
+    for (;;) {
+      const qs = new URLSearchParams({ limit: '2' });
+      if (after !== undefined) {
+        qs.set('afterId', after.id);
+        qs.set('afterAt', after.at);
+      }
+      const body = (await (await app.request(`/journal?${qs.toString()}`)).json()) as {
+        entries: { id: string; at: string }[];
+      };
+      if (body.entries.length === 0) break;
+      collected.push(...body.entries.map((e) => e.id));
+      if (body.entries.length < 2) break;
+      const last = body.entries[body.entries.length - 1] as { id: string; at: string };
+      after = { id: last.id, at: last.at };
+    }
+    expect(collected).toEqual(full.entries.map((e) => e.id));
+  });
+
+  it('afterId/afterAtは片方だけ渡すと400（両方向）', async () => {
+    await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
+    expect((await app.request('/journal?afterId=some-id')).status).toBe(400);
+    expect(
+      (await app.request(`/journal?afterAt=${encodeURIComponent('2026-01-01T00:00:00.000Z')}`))
+        .status,
+    ).toBe(400);
+  });
+
+  it('afterAt の形式が不正なら400', async () => {
+    const res = await app.request('/journal?afterId=some-id&afterAt=not-a-datetime');
+    expect(res.status).toBe(400);
+  });
+
+  it('存在しない afterId/afterAt を渡すと400（黙って先頭からに倒さない）', async () => {
+    await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
+    const res = await app.request(
+      `/journal?afterId=no-such-id&afterAt=${encodeURIComponent('2020-01-01T00:00:00.000Z')}`,
+    );
+    expect(res.status).toBe(400);
+  });
+
+  /**
+   * **同じミリ秒に積んだ2行をまたいでも、飛ばさず重複しない（issue #432 の
+   * 2本目、契約9の HTTP 版）。** `vi.useFakeTimers()` + `vi.setSystemTime()`
+   * で時刻を固定し、確実に同じ `at` を持つ2行を作る。
+   */
+  it('同じミリ秒に積んだ2行をまたいでも、afterId/afterAt が飛ばさず重複しない', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 0, 1, 12, 0, 0));
+    const first = await stores.journal.append({
+      type: 'decision',
+      decision: 'same-ms-1',
+      grounds: 'g',
+    });
+    const second = await stores.journal.append({
+      type: 'decision',
+      decision: 'same-ms-2',
+      grounds: 'g',
+    });
+    vi.useRealTimers();
+
+    expect(first.at).toBe(second.at);
+
+    const qs = new URLSearchParams({ afterId: second.id, afterAt: second.at, limit: '1' });
+    const body = (await (await app.request(`/journal?${qs.toString()}`)).json()) as {
+      entries: { id: string }[];
+    };
+    expect(body.entries.map((e) => e.id)).toEqual([first.id]);
+  });
+});
+
+/**
  * OpenAPI の配信（Issue #20）。
  *
  * spec が経路の実装とずれたら「外から API を叩けます」という主張そのものが
