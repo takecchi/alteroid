@@ -41,6 +41,34 @@ interface Line {
   transient?: boolean;
 }
 
+/**
+ * この画面が見せている会話と、**その会話に属するもの**。
+ *
+ * **4つを1つの state として持つ。別々の `useState` に分けないこと**（#437。
+ * 理由は `ChatPane` の `shown` の doc）。
+ */
+interface Shown {
+  /**
+   * この画面が見せている会話。
+   *
+   * 新しい会話の id は受信の途中（`open`）で決まるので、**URL より先にここが決まる**。
+   * URL は後から追いつく。逆にすると、追いついた瞬間が「別の会話に変わった」と
+   * 区別できなくなる。
+   */
+  id: string | undefined;
+  /**
+   * 直近に見た URL 側の会話 id。**「どこまで捨てたか」の印**である。
+   *
+   * 下の「人間が別の会話を選んだときだけ状態を捨てる」が、これと `routeId` を
+   * 比べて切り替わりを見分ける。
+   */
+  lastRouteId: string | undefined;
+  /** この画面で流れてきた分（自分の発言・届いた本文・進行中の合図）。 */
+  lines: Line[];
+  /** この会話で起きた失敗。 */
+  failure: unknown;
+}
+
 export default function Chat({ loaderData }: Route.ComponentProps) {
   const { conversationId } = loaderData;
 
@@ -238,17 +266,53 @@ export function ChatPane({
   const recordOwnMessage = useRecordOwnMessage();
 
   /**
-   * この画面が見せている会話。
+   * いま見せている会話と、その会話に属するもの（`Shown`）。
    *
-   * 新しい会話の id は受信の途中（`open`）で決まるので、**URL より先にここが決まる**。
-   * URL は後から追いつく。逆にすると、追いついた瞬間が「別の会話に変わった」と
-   * 区別できなくなる。
+   * **中身（`id` / `lastRouteId` / `lines` / `failure`）は、前は4つの別々の
+   * `useState` だった。1つに畳んであるのは #437 のためである。**
+   *
+   * ⚠️ 実測（#437。生の観測は Issue 本文と PR）: 会話を切り替えると、下の
+   * 「人間が別の会話を選んだときだけ状態を捨てる」が描画の中で `lines` を空に
+   * する。**その捨て直しが確定した後で、React は「切り替えより前に積まれていた
+   * `lines` の更新関数」を基底の値から貼り直すことがある** — 前の会話の
+   * `lines` が丸ごと戻ってくる。分けて持っていると、このとき戻るのは
+   * `lines` だけで、印（`lastRouteId`）は進んだままになる。捨て直しの判定は
+   * `routeId !== lastRouteId` の**一度きり**なので二度と走らず、**前の会話の
+   * 中身（クローンの本文だけでなく、人間自身の発言も）が別の会話の画面に
+   * 残ったまま消えない。**
+   *
+   * **1つに畳むと、印と中身が割れない。** 貼り直しで中身が前の会話へ戻れば
+   * 印も一緒に戻るので、同じ描画で `routeId !== lastRouteId` が再び真になり、
+   * 捨て直しがもう一度かかる ——**一度きりの判定が、毎回の判定になる。**
+   *
+   * **`draft` / `sending` はここに入れない。** あれは入力欄の状態であって
+   * 会話に属するものではない（下の `finally` の「入力欄の状態は会話ではなく
+   * この画面のもの」と同じ線）。
    */
-  const [shownId, setShownId] = useState(routeId);
-  const [lines, setLines] = useState<Line[]>([]);
+  const [shown, setShown] = useState<Shown>(() => ({
+    id: routeId,
+    lastRouteId: routeId,
+    lines: [],
+    failure: undefined,
+  }));
+  const { id: shownId, lines, failure } = shown;
+  /**
+   * `lines` だけを差し替える。
+   *
+   * **更新関数しか受けない（値を渡せない）。** 値で渡せる形にすると、上の
+   * 貼り直しが起きたときに「いつの `lines` に対する結果か」が失われる。
+   */
+  const setLines = useCallback((update: (previous: Line[]) => Line[]) => {
+    setShown((previous) => {
+      const next = update(previous.lines);
+      return next === previous.lines ? previous : { ...previous, lines: next };
+    });
+  }, []);
+  const setFailure = useCallback((next: unknown) => {
+    setShown((previous) => (previous.failure === next ? previous : { ...previous, failure: next }));
+  }, []);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
-  const [failure, setFailure] = useState<unknown>(undefined);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   /** スクロールする器そのもの。「最下部にいるか」を見るのに要る（#247 の 1）。 */
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
@@ -308,14 +372,18 @@ export function ChatPane({
    * （React の「props が変わったら state を調整する」パターン。effect でやると
    * 一度古い内容を描いてから消すことになる。）
    */
-  const [lastRouteId, setLastRouteId] = useState(routeId);
-  if (routeId !== lastRouteId) {
-    setLastRouteId(routeId);
-    // URL が自分の採番に追いついただけなら、捨てるものは何も無い。
-    if (routeId !== shownId) {
-      setShownId(routeId);
+  if (routeId !== shown.lastRouteId) {
+    /*
+     * **1つの更新関数で動かす。** 印（`lastRouteId`）と中身（`lines` /
+     * `failure`）を別々の setter で動かすと、貼り直しで片方だけが戻りうる
+     * （上の `shown` の doc）。
+     */
+    setShown((previous) => {
+      if (routeId === previous.lastRouteId) return previous;
+      // URL が自分の採番に追いついただけなら、捨てるものは何も無い。
+      if (routeId === previous.id) return { ...previous, lastRouteId: routeId };
       /*
-       * **この `setLines([])` は、下の `owns()`/`stopped()`（`writable()` の
+       * **この捨て直し（`lines: []`）は、下の `owns()`/`stopped()`（`writable()` の
        * 中身）と同じ役目の二重書きではない。守っている失敗が違う。**
        *
        * - **ここ（render 時の同期リセット）** — 会話を切り替えた**瞬間**に、
@@ -328,18 +396,22 @@ export function ChatPane({
        *   を呼ぼうとするのを止める。**動いているストリームがあって初めて
        *   意味を持つ**、上とは別の失敗を防いでいる。
        *
-       * `git log -S` で確かめた限り、この3つ（この `setLines([])` /
-       * `owns()` / `stopped()`）は同じ初期コミット（`04c1049`、#27）で
-       * 同時に入った——「後から別の障害を踏んで1枚ずつ足した」歴史ではない。
-       * それでも上のとおり守備範囲は最初から別である。
+       * `git log -S` で確かめた限り、この3つ（この捨て直し / `owns()` /
+       * `stopped()`）は同じ初期コミット（`04c1049`、#27）で同時に入った
+       * ——「後から別の障害を踏んで1枚ずつ足した」歴史ではない。それでも
+       * 上のとおり守備範囲は最初から別である。
        *
        * **ただし変異試験（#363）は、この2つが実際には独立して働いていない
        * ことを見つけている。** 詳しい構造は下の `owns()`/`stopped()` の
        * doc（`writable()` の直前）にまとめてある。
+       *
+       * **⚠️ そして #437 は、この捨て直しの側が単独では効かない場面を
+       * 見つけている。** ここが空にしても、貼り直しで前の会話の `lines` が
+       * 戻ることがある（上の `shown` の doc）。**塞いでいるのは
+       * 「1つの state に畳んであること」であって、この行ではない。**
        */
-      setLines([]);
-      setFailure(undefined);
-    }
+      return { id: routeId, lastRouteId: routeId, lines: [], failure: undefined };
+    });
   }
 
   /*
@@ -689,7 +761,9 @@ export function ChatPane({
               // ref も同時に進める。effect が回るのは描き直しの後なので、
               // それを待つと、その隙間に届いた分が `owns()` に弾かれる。
               shownIdRef.current = stream.id;
-              setShownId(stream.id);
+              setShown((previous) =>
+                previous.id === stream.id ? previous : { ...previous, id: stream.id },
+              );
               // URL は後から追いつかせるだけ。作り直しは起きない（key を付けていない）。
               void navigate(`/chat/${stream.id}`, { replace: true });
             }
