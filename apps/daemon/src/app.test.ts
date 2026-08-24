@@ -1822,6 +1822,73 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     });
   });
 
+  /**
+   * **#418 の裏返し。** `GET /conversations` は `scan` の窓に加えて `limit`
+   * でも黙って会話数を切っていた（`collectConversations(entries).slice(0,
+   * limit)`）。個別会話側（`GET /conversations/:id`）とクローンの道具
+   * （`conversation_read` の `hiddenByLimit`）は既に言っているのに、この
+   * 一覧の口だけが黙っていた。`reachedStart` は `/conversations/:id` と
+   * 同じ関数・同じ意味で、`hiddenByLimit` はこの窓の中で `limit` に収まら
+   * なかった会話の数である。
+   */
+  describe('会話一覧が limit で切った件数を黙って捨てない（#418 の裏返し）', () => {
+    it('窓を出し切ったとき reachedStart: true', async () => {
+      await exchange('conv-a', 'inbound', '質問');
+
+      const body = (await (await app.request('/conversations?scan=10')).json()) as {
+        reachedStart: boolean;
+      };
+
+      // 日誌の human 往復は1件だけ＝既定の scan（10）に届かない＝先頭まで見た
+      expect(body.reachedStart).toBe(true);
+    });
+
+    it('窓が scan で埋まったとき reachedStart: false', async () => {
+      await exchange('conv-a', 'inbound', '1');
+      await exchange('conv-b', 'inbound', '2');
+      await exchange('conv-c', 'inbound', '3');
+
+      const body = (await (await app.request('/conversations?scan=2')).json()) as {
+        reachedStart: boolean;
+        scanned: number;
+      };
+
+      expect(body.scanned).toBe(2);
+      expect(body.reachedStart).toBe(false);
+    });
+
+    it('会話が limit を超えたとき hiddenByLimit が正しい数を返し、conversations は limit を超えない', async () => {
+      await exchange('conv-a', 'inbound', '1');
+      await exchange('conv-b', 'inbound', '2');
+      await exchange('conv-c', 'inbound', '3');
+      await exchange('conv-d', 'inbound', '4');
+      await exchange('conv-e', 'inbound', '5');
+
+      const body = (await (await app.request('/conversations?scan=100&limit=2')).json()) as {
+        conversations: { conversationId: string }[];
+        hiddenByLimit: number;
+      };
+
+      // **`conversations` の件数が `limit` を超えない。**
+      expect(body.conversations.length).toBe(2);
+      // 窓の中に5会話あり、そのうち2件を返した＝残り3件が limit で落ちた
+      expect(body.hiddenByLimit).toBe(3);
+    });
+
+    it('会話が limit を超えていないとき hiddenByLimit: 0', async () => {
+      await exchange('conv-a', 'inbound', '1');
+      await exchange('conv-b', 'inbound', '2');
+
+      const body = (await (await app.request('/conversations?scan=100&limit=20')).json()) as {
+        conversations: { conversationId: string }[];
+        hiddenByLimit: number;
+      };
+
+      expect(body.conversations.length).toBe(2);
+      expect(body.hiddenByLimit).toBe(0);
+    });
+  });
+
   it('日誌の追記がそのまま流れる（聞きに行かなくても気づける）', async () => {
     const response = await app.request('/journal/stream?type=escalation');
     expect(response.status).toBe(200);

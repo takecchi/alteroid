@@ -571,6 +571,10 @@ function stubClient(
     /** `GET /conversations` の応答。 */
     conversations?: ConversationSummaryLike[];
     conversationsScanned?: number;
+    /** 既定 `true`（＝窓は先頭に届いている＝断り書きを出さない）。 */
+    conversationsReachedStart?: boolean;
+    /** 既定 `0`（＝ limit で落ちた会話は無い＝断り書きを出さない）。 */
+    conversationsHiddenByLimit?: number;
     conversationsStatus?: number;
     /** `GET /conversations/:id` の応答。 */
     conversationDetailStatus?: number;
@@ -681,6 +685,8 @@ function stubClient(
           reply(options.conversationsStatus ?? 200, {
             conversations: options.conversations ?? [],
             scanned: options.conversationsScanned ?? 0,
+            reachedStart: options.conversationsReachedStart ?? true,
+            hiddenByLimit: options.conversationsHiddenByLimit ?? 0,
           }),
         );
       },
@@ -1519,6 +1525,68 @@ describe('chat の /conversations と /conversation', () => {
     // 打ち切られているかもしれないなら、広げる手の在り処（サブコマンド面）を示す。
     expect(text).toContain('alteroid conversations list --scan');
     expect(text).toContain('--limit');
+    // **不在の側を必ず測る。** `reachedStart: true` / `hiddenByLimit: 0`
+    // （既定）のときに断り書きが出ていたら、常時出ている注意書きになって
+    // 意味が消える（#418 の裏返し）。
+    expect(text).not.toContain('先頭には届いていない');
+    expect(text).not.toContain('…ほか');
+  });
+
+  /**
+   * **#418 の裏返し。** `GET /conversations` は `scan` の窓に加えて `limit`
+   * でも黙って会話数を切っていた（画面・CLI どちらも言っていなかった）。
+   * `reachedStart` は窓が先頭に届いたか、`hiddenByLimit` は窓の中で `limit`
+   * に収まらず落とした数——サーバとクローンの道具（`conversation_read` の
+   * `hiddenByLimit`）は既に言っているので、chat 側だけが黙っていると端末
+   * では気づけない。
+   */
+  it('/conversations は reachedStart が偽なら、先頭に届いていないと言う', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      conversations: [
+        {
+          conversationId: 'conv-1',
+          startedAt: '2026-08-16T10:00:00.000Z',
+          updatedAt: '2026-08-16T10:05:00.000Z',
+          messages: 4,
+          preview: '設計の相談',
+        },
+      ],
+      conversationsScanned: 2000,
+      conversationsReachedStart: false,
+    });
+
+    await runSlashCommand('/conversations', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain('先頭には届いていない');
+    // hiddenByLimit は既定の0なので、こちらは出ない（2つは別の条件）。
+    expect(text).not.toContain('…ほか');
+  });
+
+  it('/conversations は hiddenByLimit が正なら、省いた件数を言う', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      conversations: [
+        {
+          conversationId: 'conv-1',
+          startedAt: '2026-08-16T10:00:00.000Z',
+          updatedAt: '2026-08-16T10:05:00.000Z',
+          messages: 4,
+          preview: '設計の相談',
+        },
+      ],
+      conversationsScanned: 137,
+      conversationsHiddenByLimit: 3,
+    });
+
+    await runSlashCommand('/conversations', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain('…ほか 3 件は省略');
+    expect(text).toContain('limit=<N> を増やせば');
+    // reachedStart は既定の真なので、こちらは出ない（2つは別の条件）。
+    expect(text).not.toContain('先頭には届いていない');
   });
 
   it('/conversations は空でも、そう言う（黙って何も出さない形にしない）', async () => {
