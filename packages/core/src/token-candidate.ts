@@ -1,4 +1,9 @@
-import { fetchAccountUsage, type AccountUsageState, type UsageWindow } from './usage-snapshot.js';
+import {
+  fetchAccountUsage,
+  type AccountUsage,
+  type AccountUsageState,
+  type UsageWindow,
+} from './usage-snapshot.js';
 import type { UsageProbeQuery } from './usage-probe.js';
 
 /**
@@ -49,9 +54,12 @@ function isExhausted(window: UsageWindow): boolean {
   return window.utilization !== undefined && window.utilization >= EXHAUSTED_UTILIZATION;
 }
 
-function extraUsageUsable(usage: AccountUsageState & { state: 'ok' }): boolean {
-  const extra = usage.usage.extraUsage;
-  if (extra === undefined) return false;
+/**
+ * 課金枠が使えるか。**引数は「取れた」ものだけを受ける** —— `extraUsage` が
+ * `undefined`（＝取れなかった）ときにここへ来ないよう、呼ぶ側で分けてある。
+ * 取れなかったことを「無い」と読むと、**取れなかったものを事実として使う**ことになる。
+ */
+function extraUsageUsable(extra: NonNullable<AccountUsage['extraUsage']>): boolean {
   if (!extra.enabled) return false;
   if (extra.utilization !== undefined && extra.utilization >= EXHAUSTED_UTILIZATION) return false;
   return true;
@@ -100,7 +108,22 @@ export function judgeTokenCandidate(state: AccountUsageState): TokenCandidateVer
   if (!allWindowsExhausted) {
     return { verdict: 'usable' };
   }
-  if (extraUsageUsable(state)) {
+
+  // **「取れなかった」を「無い」と読まない。** `extraUsage` が undefined なのは
+  // 「課金枠が無い」ではなく「取れなかった」である（`usage-snapshot.ts` の
+  // `accountUsageSchema.extraUsage` の doc）。ここを `unusable` へ倒すと、
+  // **取れなかったことを根拠に候補を1本捨てる**ことになり、この関数自身が
+  // 掲げている「迷ったら unusable にしない」に反する。
+  const extra = state.usage.extraUsage;
+  if (extra === undefined) {
+    return {
+      verdict: 'undecidable',
+      reason:
+        '取れた枠は全部使い切っているが、課金枠が取れなかった' +
+        '（取れなかったことを「課金枠が無い」と読まない）',
+    };
+  }
+  if (extraUsageUsable(extra)) {
     return { verdict: 'usable' };
   }
 
@@ -127,10 +150,31 @@ export function judgeTokenCandidate(state: AccountUsageState): TokenCandidateVer
  * を持つことと、`sdk.mjs` が `CLAUDE_CODE_OAUTH_TOKEN` を認証 env の一覧に持つこと
  * （`grep -o '.\{40\}CLAUDE_CODE_OAUTH_TOKEN.\{40\}' node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs`
  * で当たる）は確かめたが、「その候補として認証される」ところは実測していない
- * （本物のトークンを扱わない枷があるので、実装側からは測れない）。**⟹ 偽だった
- * ときに壊れないよう、判定は必ず `undecidable` へ倒れる経路を残してある** —
- * 認証が通らなければ `fetchAccountUsage` は `state: 'failed'` か `'unavailable'`
- * を返し、`judgeTokenCandidate` はどちらも `undecidable` にする。
+ * （本物のトークンを扱わない枷があるので、実装側からは測れない）。
+ *
+ * **⚠️ そして「効かなかったとき」の形は2つあり、片方しか安全側へ倒れない。**
+ *
+ * | 効かなかった形 | この関数はどうなるか |
+ * | --- | --- |
+ * | 候補の値で**認証できない** | `fetchAccountUsage` が `state: 'failed'` か `'unavailable'` を返し、`judgeTokenCandidate` はどちらも `undecidable` にする ⟹ **安全側** |
+ * | `Options.env` が認証に**効かず、器に居る資格でそのまま通る** | `state: 'ok'` が返る。**ただしそれは候補ではなく、いま器が持っている資格のアカウントの枠である** ⟹ **`usable` / `unusable` を自信を持って返すが、対象が違う** |
+ *
+ * **⟹ 2つ目は `undecidable` へ倒れない。** 「判定できない」ではなく「**別のものを
+ * 測って、その答えを返す**」という壊れ方なので、呼ぶ側からは正常な観測と区別が付かない。
+ *
+ * **⚠️ そして列挙では塞げないことを確かめた**（2026-08-24 観測、`0.3.241`）。
+ * `sdk.mjs` は認証に使う env の名前を**複数の群に分けて**持っており
+ * （`grep -o 'var LO=\[[^]]*\]' sdk.mjs` で当たる群のほかに
+ * `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` / `CLAUDE_CODE_SESSION_ACCESS_TOKEN` /
+ * `CLAUDE_CODE_HOST_CREDS_FILE` などが別の群に在る）、**「他の資格を全部落とす」
+ * を名前の一覧で書くと、SDK が1つ足すたびに静かに穴が開く。** `AccountUsage` の
+ * `tokenSource` で「どの出所で認証したか」を検査することも考えたが、SDK の型は
+ * `tokenSource?: string`（自由文字列）で取りうる値を宣言していないので、
+ * **こちらも数え上げになる。**
+ *
+ * **⟹ この口の契約は「候補を観測する」ではなく「候補の env を渡して観測を試みる」
+ * である。** 観測した相手が本当に候補だったことは、**いまの SDK からは確かめられない。**
+ * 追跡は #429（probe が「何を観測したか」を持ち帰らない）。
  */
 export async function probeTokenCandidate(
   queryFn: UsageProbeQuery,
