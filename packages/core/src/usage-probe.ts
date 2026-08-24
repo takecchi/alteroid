@@ -47,6 +47,25 @@ export interface UsageProbeOptions {
   signal?: AbortSignal;
   /** 締め切りの上書き（既定 {@link USAGE_PROBE_TIMEOUT_MS}）。 */
   timeoutMs?: number;
+  /**
+   * probe のサブプロセスへ足す環境変数の上書き。
+   *
+   * **`@anthropic-ai/claude-agent-sdk@0.3.241` の `sdk.d.ts` は `Options.env` の doc に
+   * 逐語でこう書いている**（`grep -n 'REPLACES the subprocess environment entirely'
+   * node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts` で当たる）:
+   *
+   * > When set, this value REPLACES the subprocess environment entirely — it is
+   * > not merged with process.env.
+   *
+   * **だから、ここへ渡された値は素通しせず `{ ...process.env, ...env }` へ広げてから
+   * `Options.env` へ載せる。** 広げずに渡すと `PATH` も `HOME` も消え、probe の
+   * サブプロセスが起動できなくなる。
+   *
+   * **⚠️ ここへ渡す値は資格そのものになりうる（例: `CLAUDE_CODE_OAUTH_TOKEN`）。
+   * ログにも例外のメッセージにも出さないこと。** `runUsageProbe` 自身も、この値を
+   * 読み取って `Options.env` へ渡す以外の用途に使わない（保存しない・再送しない）。
+   */
+  env?: NodeJS.ProcessEnv;
 }
 
 /**
@@ -122,7 +141,16 @@ export async function runUsageProbe<T>(
         abortController: controller,
         // **人間の設定層まで読ませない。** probe は init と control channel しか
         // 読まないので、`user` 層を読むと観測のたびに人間の hook が走る。
+        // ⚠️ ここへ `'user'` を足さないこと（この PR でも変えていない） —
+        // 候補トークンの観測は普段より頻繁に走りうるので、足せば人間の hook が
+        // そのぶん多く走ることになる。
         settingSources: ['project'],
+        // **`options.env` が渡されたときだけ載せる。** 省略すれば `Options.env` 自体を
+        // 組み立てに含めない ⟹ SDK は省略時に `process.env` をそのまま継承するので、
+        // 既定の経路（`env` を渡さない呼び出し）の挙動は1文字も変わらない。
+        // 渡されたときは、上の doc のとおり必ず `process.env` と spread する
+        // （でなければ `PATH` / `HOME` が消えてサブプロセスが起動できない）。
+        ...(options.env !== undefined ? { env: { ...process.env, ...options.env } } : {}),
       },
     });
 

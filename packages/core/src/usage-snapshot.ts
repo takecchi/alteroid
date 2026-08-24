@@ -316,10 +316,14 @@ export const ACCOUNT_USAGE_READ_TIMEOUT_MS = 10_000;
  * 2つの口を**独立に**読む。片方が固まってももう片方を捨てないためで、実測でも
  * 「`accountInfo()` は答えるのに usage 側は `rate_limits: null`」という食い違いが
  * 出ている。実験的な control 要求は固まる可能性がいちばん高い種類のものである。
+ *
+ * `options.env` は `runUsageProbe`（`usage-probe.ts`）へそのまま渡すだけで、
+ * ここでは中身を見ない。**渡さなければ挙動は1文字も変わらない**（`usage-probe.ts`
+ * の doc のとおり）。
  */
 export async function fetchAccountUsage(
   queryFn: UsageProbeQuery,
-  options: { cwd: string; signal?: AbortSignal },
+  options: { cwd: string; signal?: AbortSignal; env?: NodeJS.ProcessEnv },
 ): Promise<AccountUsageState> {
   const at = new Date().toISOString();
 
