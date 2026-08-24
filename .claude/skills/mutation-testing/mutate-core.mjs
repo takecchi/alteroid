@@ -600,9 +600,89 @@ export function readMaxWorkers(args) {
   return n;
 }
 
+/**
+ * ANSI エスケープシーケンス（色付け）を取り除く。
+ *
+ * **なぜ剥がすか。** vitest は `Test Files` / `Tests` の集計行を色付きで出すことが
+ * ある（`\x1b[2m Test Files \x1b[22m …` のように、ラベルの前後をエスケープ
+ * シーケンスで挟む）。`^\s*Test Files` の `^\s*` は**エスケープシーケンスを空白
+ * として読まない**ので、色が付いた回だけ集計行が `null` になり、
+ * `testsRanCleanly` が false → `decideJudgementCategory` が `HarnessError` を
+ * 投げる。**`decideJudgementCategory` は `exitCode` を1文字も見ていない**ので、
+ * テストが完走して緑でも判定は出ず、しかも落ちる位置が「測り終えた後」なので
+ * **変異を当てたままハーネスが停止する。**
+ *
+ * **⚠️ この欠陥をここ（ハーネス側）で実際に踏んだ観測は無い。** `spawnSync` は
+ * TTY を作らないので、多くの場合 vitest は色を落とす。根拠は2つだけである:
+ *
+ * 1. **静的な読み** — 同じ正規表現・ANSI 除去なし（Issue #372。Issue 自身が
+ *    「`mutate-core.mjs` が実際に色付きの出力を受け取る場面が在るかは確認して
+ *    いない」「根拠は静的な読みだけである」と断っている）
+ * 2. **伝聞の実測** — **同じ正規表現を書いた `scripts/test-guard-core.mjs`
+ *    （#311 / PR #355）が CI で実際に踏んだ、と報告されている。** そちらの doc の
+ *    逐語によれば CI run `32665717865`、head sha `d26f5a4`、vitest 自身は
+ *    `Test Files 130 passed (130)` / `Tests 2493 passed (2493)` を出していたのに
+ *    集計行を見つけられず `EXIT_UNKNOWN` になった、とのことである。**この観測は
+ *    この修正の書き手が自分で取ったものではなく、PR #355 の記述からの引用である。**
+ *    ローカルではパイプ経由で色が付かないため再現しなかった、とも書かれている
+ *
+ * **だから「直った」とは書けない。** 言えるのは「色が付いても倒れない形にした」
+ * までである。
+ *
+ * **⚠️ ただし「色が付く条件」は1つ特定できた —— GitHub Actions の CI である。**
+ * 実測（**この PR の CI**。run `32671276901` と `32672700282` の2回で再現した。
+ * **⚠️ head sha ではなく run id で書いてある** —— sha は rebase で動くが run は動かない。job `ci` の
+ * step `Run pnpm test` の raw log archive を展開して取った生バイト。`gh run view --log`
+ * は ESC を `^[` へ均してしまうので、archive のバイトで数えた）: 集計行2本に
+ * **ESC(0x1B) が16個**入っており、形は `scripts/mutate-core-strip-ansi.test.ts` の
+ * フィクスチャと同型である。**その生バイトを、この修正の前の形（ANSI を剥がさない）へ
+ * 通すと `filesLine` / `testsLine` が両方 `null` になる** —— **欠陥は本物の出力で
+ * 再現する。**
+ *
+ * **⚠️ それでも「ハーネスが踏んだ」ではない。** ハーネスは器の中で `spawnSync` から
+ * `pnpm test` を起こすのであって、GitHub Actions の中では走らない。**測れたのは
+ * 「色が付く経路が実在する」までで、「ハーネスがその経路に乗る」は測れていない。**
+ *
+ * **形は `scripts/test-guard-core.mjs` の `stripAnsi` / `parseAggregateLines` に
+ * 揃えてある**（同じ正規表現・同じ関数名・「剥がしてから match する」同じ順序）。
+ * **共有の出所を作らない**のは、このハーネスが「依存なし・ビルド不要（node の
+ * 組み込みモジュールだけで動く。壊れた `pnpm build` の下でも使える必要があるため）」
+ * 「同じディレクトリの素の `import` で足しているだけで、`node_modules` には一切
+ * 依存しない」を要件として持っている（`SKILL.md` 逐語）ため。`scripts/` を
+ * `import` すると、**リポジトリが壊れているときにこそ使う道具**がリポジトリの
+ * 配置に結びつく。**代わりに、2箇所が食い違わないことを歯で見張る**
+ * （`scripts/mutate-core-strip-ansi.test.ts`）。
+ */
+export function stripAnsi(s) {
+  // eslint-disable-next-line no-control-regex -- ANSI エスケープの検出そのものが目的
+  return s.replace(/\x1b\[[0-9;]*m/g, '');
+}
+
+/**
+ * vitest の生出力（stdout + stderr）から `Test Files` / `Tests` の集計行を取り出す。
+ * どちらかが無ければ `null`（＝「判定できない」の材料。`testsRanCleanly`）。
+ *
+ * **⚠️ 剥がしても「集計行が無い」は `null` のままであること。** ここが「剥がせば
+ * 何でも読める」に緩むと、**「1本も走っていない」を検出する仕組みそのものが
+ * 壊れる**（#311 の歯A・`AGENTS.md`「『判定できない』という3つ目の状態を持つ」）。
+ * ANSI を剥がすのは行頭の空白判定を助けるためだけで、探す語（`Test Files` /
+ * `Tests`）は1文字も緩めていない。
+ */
+export function parseAggregateLines(rawOutput) {
+  const plain = stripAnsi(rawOutput);
+  const filesLine = plain.match(/^\s*Test Files\s+.+$/m)?.[0]?.trim() ?? null;
+  const testsLine = plain.match(/^\s*Tests\s+.+$/m)?.[0]?.trim() ?? null;
+  return { filesLine, testsLine };
+}
+
 /** 手順10: テストを走らせ、`Test Files ... passed` と `Tests ... passed` の
  * 両方の行を読む。行の不在は「走っていない」であって「通った/落ちた」ではない。
  * `maxWorkers` を渡さなければ `DEFAULT_MAX_WORKERS`（＝これまでどおり `4`）で走る。
+ *
+ * **`raw` は加工前のまま返す（ANSI を剥がさない）。** 歯7が「併せて
+ * `Tests N passed (N)` のような加工前の証跡もログへ残す — フラグが壊れても事後に
+ * derive し直せる」を要求している（`SKILL.md`）。**剥がすのは判定に使う側
+ * （`filesLine` / `testsLine`）だけである。**
  */
 export function runTests(extraArgs = [], maxWorkers = DEFAULT_MAX_WORKERS) {
   const result = spawnSync('pnpm', buildTestSpawnArgs(extraArgs, maxWorkers), {
@@ -611,8 +691,7 @@ export function runTests(extraArgs = [], maxWorkers = DEFAULT_MAX_WORKERS) {
     maxBuffer: 200 * 1024 * 1024,
   });
   const combined = (result.stdout ?? '') + (result.stderr ?? '');
-  const filesLine = combined.match(/^\s*Test Files\s+.+$/m)?.[0]?.trim() ?? null;
-  const testsLine = combined.match(/^\s*Tests\s+.+$/m)?.[0]?.trim() ?? null;
+  const { filesLine, testsLine } = parseAggregateLines(combined);
   return { exitCode: result.status, raw: combined, filesLine, testsLine };
 }
 
