@@ -7,6 +7,8 @@ import {
 } from '../.claude/skills/mutation-testing/mutate-core.mjs';
 // @ts-expect-error -- 素の .mjs（型宣言を持たない test-guard の中核）を読む
 import { parseAggregateLines as guardParseAggregateLines } from './test-guard-core.mjs';
+// @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
+import { testRan as verifyTestRan } from './verify-core.mjs';
 
 /**
  * #372: 変異試験ハーネス（`.claude/skills/mutation-testing/mutate-core.mjs`）の
@@ -200,62 +202,91 @@ describe('mutate-core: stripAnsi / parseAggregateLines (#372)', () => {
 });
 
 /**
- * **2箇所に同じ形が在ることを見張る歯**（#372 / #355）。
+ * **3箇所に同じ形が在ることを見張る歯**（#372 / #355 / #392）。
  *
- * `scripts/test-guard-core.mjs`（#311 / PR #355）と
- * `.claude/skills/mutation-testing/mutate-core.mjs`（この PR）は、**同じ問題に
- * 同じ形の解を別々に持っている** — 同じ正規表現（`/\x1b\[[0-9;]*m/g` と
- * `/^\s*Test Files\s+.+$/m` / `/^\s*Tests\s+.+$/m`）・同じ関数名
- * （`stripAnsi` / `parseAggregateLines`）・同じ順序（剥がしてから match）。
+ * `scripts/test-guard-core.mjs`（#311 / PR #355）・
+ * `.claude/skills/mutation-testing/mutate-core.mjs`（#372 / PR #374）・
+ * `scripts/verify-core.mjs`（この PR。#392）は、**同じ問題に同じ形の解を
+ * 別々に持っている** — 同じ正規表現（`/\x1b\[[0-9;]*m/g` と
+ * `/^\s*Test Files\s+.+$/m` / `/^\s*Tests\s+.+$/m`）・同じ関数名（`stripAnsi`）・
+ * 同じ順序（剥がしてから match）。**前者2つは `parseAggregateLines`（集計行
+ * そのものを返す）を持つが、`verify-core.mjs` の `testRan` は真偽値しか
+ * 返さない** —— インターフェースの形までは揃えていない（`verify-core.mjs`
+ * 側は集計行の中身を使う先が無いので、返り値の形を変える理由が無い）。
+ * だから3箇所の突き合わせは「集計行が見つかったかどうか」という共通の
+ * 意味だけを比べる（下の `hasSummary`）。
  *
- * **なぜ共有の出所（片方が他方を import する形）を作らないか。** ハーネスは
- * 「**依存なし・ビルド不要**（node の組み込みモジュールだけで動く。壊れた
- * `pnpm build` の下でも使える必要があるため）」「同じディレクトリの素の `import`
- * で足しているだけで、`node_modules` には一切依存しない」を要件として持つ
- * （`SKILL.md` の逐語）。`../../../scripts/test-guard-core.mjs` を import すると、
- * **リポジトリが壊れているときにこそ使う道具**が `scripts/` の配置に結びつく。
- * 逆向き（`scripts/` から skill を import）も採らない。
+ * **元々は #372 / #355 の2箇所だけを見張る `describe` だった。この PR で
+ * `verify-core` を3つ目として同じ `describe` へ足した** —— 別のファイル・
+ * 別の `describe` として2本目の「突き合わせ」を作ると、それ自体が
+ * 「同じ形が2箇所に在る」問題の再演になるため（この歯自身が禁じている形）。
  *
- * **⚠️ 跨いでいるのはこのテストだけで、ハーネスの実行時の依存は1つも増えていない。**
- * `scripts/mutate-max-workers.test.ts` が
+ * **なぜ共有の出所（他を import する形）を作らないか。** ハーネス側
+ * （`.claude/skills/mutation-testing/`）は「**依存なし・ビルド不要**（node の
+ * 組み込みモジュールだけで動く。壊れた `pnpm build` の下でも使える必要が
+ * あるため）」「同じディレクトリの素の `import` で足しているだけで、
+ * `node_modules` には一切依存しない」を要件として持つ（`SKILL.md` の逐語）。
+ * `../../../scripts/*.mjs` を import すると、**リポジトリが壊れているときに
+ * こそ使う道具**が `scripts/` の配置に結びつく。逆向き（`scripts/` から
+ * skill を import）も、`scripts/verify-core.mjs` から `test-guard-core.mjs`
+ * を import する形も採らない — 3つは意図して別々の場所に置かれた別解であり、
+ * このテストが読むために依存を足してよい理由にはならない。
+ *
+ * **⚠️ 跨いでいるのはこのテストだけで、各ハーネス／スクリプトの実行時の
+ * 依存は1つも増えていない。** `scripts/mutate-max-workers.test.ts` が
  * `../.claude/skills/mutation-testing/mutate-core.mjs` を import しているのと
  * 同じ形である。
  *
  * ## この歯が守らないこと（⚠️ 書いておかないと過信される）
  *
- * **両方が同じように壊れる形は捕まえられない。** ここが突き合わせているのは
- * 互いだけで、**正しさの基準は外に無い。** だから「本物の色付き出力の形」を
- * 固定する歯は、**それぞれの側に別途要る**（`scripts/test-guard-core.test.ts` が
- * 自分の側に持っており、この PR で上の `describe` がこちら側に持った）。
- * **この突き合わせはその代わりにならない。**
+ * **3つとも同じように壊れる形は捕まえられない。** ここが突き合わせているのは
+ * 互いだけであって、**正しさの基準はここには無い。** 3つが仲良く間違った
+ * 値へ着地しても、この `describe` は緑のまま通る。**だから「本物の色付き
+ * 出力の形」を固定する歯は、3つそれぞれの側に別途要る**（`scripts/
+ * test-guard-core.test.ts` が自分の側に、上の `describe`（#372）が
+ * `mutate-core.mjs` の側に、`scripts/verify-core.test.ts` が #392 でこの PR
+ * から `verify-core.mjs` の側に、それぞれ独立に本物のバイト列を固定して
+ * 持っている）。**この突き合わせはその代わりにならない。**
  *
- * **そして「両側から同じ正規表現リテラルを読んで `toEqual` で比べる」形にしない**
- * （Issue #372 のコメント / `SKILL.md`「比較の両側が同じ経路で同じ値へ強制されると、
- * 比較そのものが恒真になる」。#301 の教訓）。**測っているのは実装の文字列ではなく、
- * 同じ入力を両方へ通したときの出力である。**
+ * **そして「3箇所から同じ正規表現リテラルを読んで `toEqual` で比べる」形に
+ * しない**（Issue #372 のコメント / `SKILL.md`「比較の両側が同じ経路で同じ
+ * 値へ強制されると、比較そのものが恒真になる」。#301 の教訓）。**測っている
+ * のは実装の文字列ではなく、同じ入力を3つ全部へ通したときの出力である。**
  */
-describe('parseAggregateLines: 2箇所の実装が食い違わないこと (#372 / #355)', () => {
+describe('集計行の判定: 3箇所の実装が食い違わないこと (#372 / #355 / #392)', () => {
+  /** `parseAggregateLines` の結果を、`testRan` と同じ意味（集計行が見つかったか）
+   * に均す。3箇所を比べるための共通の物差しはこれだけである。 */
+  const hasSummary = (result: { filesLine: string | null; testsLine: string | null }) =>
+    result.filesLine !== null && result.testsLine !== null;
+
   it.each([
     ['色付きの生バイト', COLORED_OUTPUT],
     ['色の付いていない出力', PLAIN_OUTPUT],
     ['集計行が1つも無い出力', NO_SUMMARY_OUTPUT],
+    ['紛らわしい行のみ（探す語を緩めたら当たる形）', DECOY_OUTPUT],
     ['空文字列', ''],
-  ])('%s を両方へ通すと、同じ集計行が返る', (_name, input) => {
-    expect(harnessParseAggregateLines(input)).toEqual(guardParseAggregateLines(input));
+  ])('%s を3箇所へ通すと、同じ集計行が返る', (_name, input) => {
+    const harness = harnessParseAggregateLines(input);
+    const guard = guardParseAggregateLines(input);
+    expect(guard).toEqual(harness);
+    expect(verifyTestRan(input)).toBe(hasSummary(harness));
+    expect(verifyTestRan(input)).toBe(hasSummary(guard));
   });
 
-  it('集計行が無い入力では、両方とも null を返す（片方だけが「何でも読める」に倒れない）', () => {
+  it('集計行が無い入力では、3箇所とも「無い」を返す（1箇所だけが「何でも読める」に倒れない）', () => {
     const expected = { filesLine: null, testsLine: null };
     expect(harnessParseAggregateLines(NO_SUMMARY_OUTPUT)).toEqual(expected);
     expect(guardParseAggregateLines(NO_SUMMARY_OUTPUT)).toEqual(expected);
+    expect(verifyTestRan(NO_SUMMARY_OUTPUT)).toBe(false);
   });
 
-  it('色付きの生バイトでは、両方とも本物の集計行を返す（両方 null で「一致」しない）', () => {
+  it('色付きの生バイトでは、3箇所とも本物の集計行を認識する（全部 false/null で「一致」しない）', () => {
     const harness = harnessParseAggregateLines(COLORED_OUTPUT);
     const guard = guardParseAggregateLines(COLORED_OUTPUT);
-    // 一致だけを測ると「両方 null」でも緑になる。中身も名指しする。
+    // 一致だけを測ると「全部 null」でも緑になる。中身も名指しする。
     expect(harness.filesLine).toBe('Test Files  130 passed (130)');
     expect(harness.testsLine).toBe('Tests  2493 passed (2493)');
     expect(guard).toEqual(harness);
+    expect(verifyTestRan(COLORED_OUTPUT)).toBe(true);
   });
 });
