@@ -432,6 +432,20 @@ export {
   type TokenPoolService,
   type TokenPoolServiceOptions,
 } from './token-pool-service.js';
+/**
+ * 回し手（Issue #393 PR3）。**デーモンの中の1本。** 撒く先（runner / クローン）は
+ * 外から渡す（`TokenSpreadPort`）——core が `apps/*` に依存しない形にしてある。
+ */
+export {
+  createTokenRotator,
+  type TokenProbePort,
+  type TokenRotationOutcome,
+  type TokenRotator,
+  type TokenRotatorObservation,
+  type TokenRotatorOptions,
+  type TokenSpreadPort,
+  type TokenSpreadResult,
+} from './token-rotator.js';
 export {
   createRunnerRegistry,
   isFencedRunnerError,
