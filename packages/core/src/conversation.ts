@@ -10,9 +10,19 @@
  *
  * ここに置くのは日誌の並びを会話へ畳み直す規則だけで、状態は持たない
  * （`app.ts` の `/conversations` が持っている規則と同じものである）。
+ *
+ * **会話の走査窓を組み立てるのも、ここ1か所である**（`readConversationWindow`。
+ * issue #418）。`GET /conversations` / `GET /conversations/:id` / クローンの
+ * `conversation_read` の3口が、それぞれ手で `journal.list({ types: ['exchange'],
+ * ... })` を組み立てていたため、`with`（誰との往復か）を `types` の後にしか
+ * 絞れず、`scan` の予算をマネージャー / 内部ターンとの往復が食い尽くして
+ * 人間の会話が窓の外へ落ちていた。**窓の条件（`types` / `with` / `since` /
+ * `until`）を持つのはこの関数だけで、状態は持たない** — 呼ぶたびにストアへ
+ * 素通しするだけである。
  */
 
 import type { JournalEntry } from './schema.js';
+import type { JournalStore } from './store.js';
 
 /** 日誌の `exchange` 1件。 */
 export type Exchange = Extract<JournalEntry, { type: 'exchange' }>;
@@ -65,6 +75,41 @@ export function humanExchanges(entries: JournalEntry[]): Exchange[] {
   return entries.filter(
     (entry): entry is Exchange => entry.type === 'exchange' && entry.with === 'human',
   );
+}
+
+/**
+ * 人間との会話を読む3口（`GET /conversations` / `GET /conversations/:id` /
+ * `conversation_read`）が共有する、唯一の窓の組み立て（issue #418）。
+ *
+ * **`types: ['exchange']` と `with: ['human']` を持つのはここだけにする。**
+ * かつては3口それぞれが `journal.list({ limit: scan, types: ['exchange'] })`
+ * を手で組み立て、`with === 'human'` への絞りは返ってきた後（＝ `limit` の
+ * 内側）で `humanExchanges` にやらせていた。日誌には `with: 'manager'`（マネー
+ * ジャーとの往復）と `with: 'self'`（内部ターン）が同じ `exchange` として
+ * 混ざっており、実運用では件数の大半がそちらになる — 窓を `types` だけで
+ * 切ると、`scan` の予算をそれらが食い尽くし、人間の会話が窓の外へ押し出されて
+ * 見えなくなる。
+ *
+ * **直したのは絞りの順序である。** `with: ['human']` を `journal.list` へ渡し、
+ * ストアの側（`limit` より前）で絞らせる。`scan` の予算を食うのは、その時点で
+ * 人間との往復に絞り込まれた行だけになる。3実装（`testing.ts` のインメモリ /
+ * `storage-fs` / `storage-pg`）がこの契約を守ることは
+ * `journal-with-contract.ts` の `verifyJournalStoreWithContract` が測る。
+ *
+ * **状態は持たない。** `scan` / `since` / `until` を受け取ってストアへ渡すだけで、
+ * 呼ぶたびに独立している。
+ */
+export async function readConversationWindow(
+  journal: Pick<JournalStore, 'list'>,
+  options: { scan: number; since?: string; until?: string },
+): Promise<JournalEntry[]> {
+  return journal.list({
+    limit: options.scan,
+    types: ['exchange'],
+    with: ['human'],
+    ...(options.since === undefined ? {} : { since: options.since }),
+    ...(options.until === undefined ? {} : { until: options.until }),
+  });
 }
 
 /** `role` で更に絞る。`'both'` は絞らない。 */

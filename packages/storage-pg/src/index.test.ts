@@ -1,4 +1,4 @@
-import { renderMemoryDocuments } from '@alteroid/core';
+import { renderMemoryDocuments, verifyJournalStoreWithContract } from '@alteroid/core';
 import type { Commitment, InboxEvent } from '@alteroid/core';
 import { PGlite } from '@electric-sql/pglite';
 import { eq, sql } from 'drizzle-orm';
@@ -819,6 +819,53 @@ describe('PgJournalStore', () => {
 
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({ id: written.id, actor: 'manager:mgr-1', tool: 'Bash' });
+  });
+
+  /**
+   * `JournalStore` の `with` 絞りの契約（issue #418）を、**pg 実装
+   * （PGlite = インプロセスの実 PostgreSQL）**に対して測る。同じ形の歯が
+   * 3つ在る——インメモリ（`packages/core/src/journal-with-contract.test.ts`）
+   * / fs（`packages/storage-fs/src/index.test.ts`）/ pg（このテスト）。1つで
+   * 測って3つとも測ったことにしない（#370 と同じ作法）。
+   */
+  describe('with 契約（issue #418）', () => {
+    it('未指定=絞らない／指定=その with だけ／[]=0件／limit より前に効く', async () => {
+      await verifyJournalStoreWithContract(stores.journal);
+    });
+
+    /**
+     * **契約4（limit より前に効く）を、pg の実クエリに対して直接再現する。**
+     * `entry ->> 'with'` の式索引（`schema.ts` の `journal_exchange_with_seq_idx`）
+     * を使った `where` が `.limit()` より前に効いているかを、実際に PGlite へ
+     * 投げて確かめる。**「絞りが効いている」ではなく「窓に食われない」を測る**
+     * （`scan` を症状が出るほど小さくし、manager の行を `scan` より多く積む）。
+     */
+    it('manager の往復を scan より多く積んでも、human の発言は窓に食われない', async () => {
+      await stores.journal.append({
+        type: 'exchange',
+        with: 'human',
+        role: 'inbound',
+        text: '人間の質問',
+        conversationId: 'conv-1',
+      });
+      for (let i = 0; i < 10; i += 1) {
+        await stores.journal.append({
+          type: 'exchange',
+          with: i % 2 === 0 ? 'manager' : 'self',
+          role: 'inbound',
+          text: `noise-${i}`,
+        });
+      }
+
+      const entries = await stores.journal.list({
+        limit: 3,
+        types: ['exchange'],
+        with: ['human'],
+      });
+
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({ with: 'human', text: '人間の質問' });
+    });
   });
 });
 

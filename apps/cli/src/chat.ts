@@ -552,7 +552,7 @@ export async function runSlashCommand(
       // 手の在り処自体は常に示す。手を隠すと、人間は「広げる必要があるかも
       // しれない」ことにすら気づけなくなる。
       stdout.write(
-        `  （日誌を新しい方から ${scanned} 件見て集計した。これより古い会話は窓の外に` +
+        `  （人間との往復を新しい方から ${scanned} 件見て集計した。これより古い会話は窓の外に` +
           '残っているかもしれません — 判定できません。さらに見るには ' +
           '`/conversations scan=<N>`（表示件数を増やすには limit=<N>。' +
           'alteroid conversations list --scan / --limit でも同じことができます）\n',
@@ -608,8 +608,8 @@ export async function runSlashCommand(
       }
       stdout.write(
         reachedStart
-          ? `  （日誌を ${scanned} 件遡り、この会話の先頭まで届きました）\n`
-          : `  （日誌を ${scanned} 件遡りましたが先頭には届いていません。これより古い発言が` +
+          ? `  （人間との往復を ${scanned} 件遡り、この会話の先頭まで届きました）\n`
+          : `  （人間との往復を ${scanned} 件遡りましたが先頭には届いていません。これより古い発言が` +
               '残っているかもしれません — /conversation <番号|id> scan=<N>（または ' +
               'alteroid conversations show --scan）で広げられます）\n',
       );

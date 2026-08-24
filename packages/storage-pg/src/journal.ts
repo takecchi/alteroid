@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { journalEntrySchema } from '@alteroid/core';
 import type { JournalEntry, JournalEntryInput, JournalQuery, JournalStore } from '@alteroid/core';
-import { and, desc, eq, gte, inArray, lte } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { stripNulls } from './db.js';
@@ -49,6 +49,19 @@ export class PgJournalStore implements JournalStore {
       ...(query.types === undefined || query.types.length === 0
         ? []
         : [inArray(journal.type, query.types)]),
+      // **`with` は `.limit()` より前（この `where` 節）で効かせる**
+      // （issue #418 の穴の本体）。`entry` は jsonb なので `->>'with'` で
+      // 引く — `exchange` を持たない種別ではこの式が `null` を返すので、
+      // `inArray` の `IN (...)` には（NULL は何とも一致しない SQL の規則により）
+      // 自動で当たらない。`types` を明示しなくても非 exchange が落ちる理由は
+      // ここにある。
+      //
+      // `query.with` が `[]`（空配列）のとき、drizzle-orm の `inArray` は
+      // `sql\`false\`` を返す（`drizzle-orm@0.45.2` の
+      // `sql/expressions/conditions.js` の `inArray` 実装。空配列を
+      // `in ()` という不正な SQL へ落とさないための特別扱い）ので、
+      // 0件という契約がそのまま満たされる。
+      ...(query.with === undefined ? [] : [inArray(sql`(${journal.entry}->>'with')`, query.with)]),
     ];
 
     const rows = await this.#db

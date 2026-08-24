@@ -1755,6 +1755,68 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     expect((await app.request('/conversations/conv-a')).status).toBe(404);
   });
 
+  /**
+   * **issue #418 の症状そのものを固定する歯。**
+   *
+   * `GET /conversations` と `GET /conversations/:id` はどちらも `scan` で
+   * 日誌を遡ってから会話へ畳み直す。以前は `types: ['exchange']` だけで窓を
+   * 切ってから `with === 'human'` に絞っていたため、マネージャーとの往復
+   * （`with: 'manager'`）が `scan` の予算を食い尽くし、人間の会話が窓の外へ
+   * 落ちていた。**「絞りが効いている」だけでは弱い**（`scan` が十分大きければ
+   * 旧実装でも同じ結果になる）ので、ここでは `scan` を症状が出るほど小さくし、
+   * マネージャーとの往復を `scan` より多く積んでも、人間の会話が窓に食われない
+   * ことを両エンドポイントで確かめる。
+   */
+  describe('マネージャーとの往復に埋もれても、人間の会話は窓に食われない（issue #418）', () => {
+    async function fillManagerNoise(count: number) {
+      for (let i = 0; i < count; i += 1) {
+        await stores.journal.append({
+          type: 'exchange',
+          with: 'manager',
+          role: 'inbound',
+          text: `[noise-${i}] マネージャーとの往復`,
+        });
+      }
+    }
+
+    it('GET /conversations: scan より多いマネージャーの往復があっても、人間の会話が一覧に出る', async () => {
+      await exchange('conv-a', 'inbound', '人間の質問');
+      await exchange('conv-a', 'outbound', 'クローンの返答');
+      // conv-a の後に、scan（3）よりずっと多いマネージャーとの往復を積む
+      // （新しい順に返るストアでは、これらのほうが conv-a より「新しい」）。
+      await fillManagerNoise(10);
+
+      const body = (await (await app.request('/conversations?scan=3')).json()) as {
+        conversations: { conversationId: string }[];
+        scanned: number;
+      };
+
+      // 旧実装だと scan=3 で返る3件はすべてマネージャーとの往復になり、
+      // conv-a は一覧から消えていた。
+      expect(body.conversations.map((c) => c.conversationId)).toEqual(['conv-a']);
+      // scanned はいまや「人間との往復を何件見たか」——conv-a の2発言だけ。
+      expect(body.scanned).toBe(2);
+    });
+
+    it('GET /conversations/:id: scan より多いマネージャーの往復があっても、会話の中身が読める', async () => {
+      await exchange('conv-a', 'inbound', '人間の質問');
+      await exchange('conv-a', 'outbound', 'クローンの返答');
+      await fillManagerNoise(10);
+
+      const response = await app.request('/conversations/conv-a?scan=3');
+      const body = (await response.json()) as {
+        messages: { text: string }[];
+        scanned: number;
+        reachedStart: boolean;
+      };
+
+      expect(response.status).toBe(200);
+      expect(body.messages.map((m) => m.text)).toEqual(['人間の質問', 'クローンの返答']);
+      expect(body.scanned).toBe(2);
+      expect(body.reachedStart).toBe(true);
+    });
+  });
+
   it('日誌の追記がそのまま流れる（聞きに行かなくても気づける）', async () => {
     const response = await app.request('/journal/stream?type=escalation');
     expect(response.status).toBe(200);
