@@ -6,6 +6,7 @@ import type { CredentialStore } from './credentials.js';
 import type { ProfileVessel } from './profile.js';
 import type {
   RunnerAnswerCommand,
+  RunnerAnswerOutcome,
   RunnerClient,
   RunnerCredentialFingerprint,
   RunnerEvent,
@@ -138,7 +139,7 @@ class LocalRunner implements RunnerClient {
     await this.#host.send(managerId, text);
   }
 
-  async answer(managerId: string, answer: RunnerAnswerCommand): Promise<boolean> {
+  async answer(managerId: string, answer: RunnerAnswerCommand): Promise<RunnerAnswerOutcome> {
     return this.#host.answer(managerId, answer);
   }
 

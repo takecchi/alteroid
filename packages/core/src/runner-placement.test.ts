@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createRunnerRegistry } from './runner-protocol.js';
 import type {
+  RunnerAnswerOutcome,
   RunnerClient,
   RunnerCredentialFingerprint,
   RunnerManagerState,
@@ -53,8 +54,8 @@ class FakeRunner implements RunnerClient {
   }
   async resume(): Promise<void> {}
   async send(): Promise<void> {}
-  async answer(): Promise<boolean> {
-    return false;
+  async answer(): Promise<RunnerAnswerOutcome> {
+    return { delivered: false };
   }
   async stop(): Promise<void> {}
   async list(): Promise<RunnerManagerState[]> {

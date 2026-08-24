@@ -156,7 +156,7 @@ describe('解決済みの許可確認が再送されたとき', () => {
         /* この検証では使わない */
       },
       async answer() {
-        return true;
+        return { delivered: true };
       },
       async stop() {
         /* この検証では使わない */
