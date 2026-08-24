@@ -15,7 +15,9 @@
 //   apply --spec <file.json>        段階実行: 1つの変異を当てて印を置くところまで。
 //   restore [--restore-from-marker] 段階実行: 印を読んで復元する。
 //   run --plan <file.json> [--max-workers <n>]  本番: 複数の変異を順に回す。
-//   selftest --scenario <name>      自己検証（受け入れ条件の3つ+1に加え、レビューで見つかった欠陥2件の回帰確認）。省略で一覧を出す。
+//   selftest --scenario <name>      自己検証（受け入れ条件とレビューで見つかった欠陥の回帰確認）。
+//                                    本数と内訳は数えない — 省略した出力が名乗る一覧
+//                                    （`mutate-selftest.mjs` の SELFTEST_SCENARIOS）が本籍である。
 //
 // `baseline` / `run` は、印が残っている状態では測定を始めずに落ちる（既定）。
 // 中断されたツリーで新しい測定を始めると、生存も検出も意味を失うため。
