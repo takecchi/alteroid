@@ -1,4 +1,9 @@
-import { createManagerPool, createMemoryStores, createRunnerRegistry, reasonOf } from '@alteroid/core';
+import {
+  createManagerPool,
+  createMemoryStores,
+  createRunnerRegistry,
+  reasonOf,
+} from '@alteroid/core';
 import type { CloneHost, Stores } from '@alteroid/core';
 import { HTTPException } from 'hono/http-exception';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -36,6 +41,11 @@ function fakeCloneHost(stores: Stores): CloneHost {
   };
 }
 
+/** spy に積まれた呼び出しの1番目の引数を文字列化して並べる。 */
+function stderrLines(stderr: ReturnType<typeof vi.spyOn>): string[] {
+  return stderr.mock.calls.map((call: unknown[]) => String(call[0]));
+}
+
 describe('.onError（Issue #249: Hono の既定エラーハンドラの console.error(err) を、本文を出さない形に置き換える）', () => {
   let stores: Stores;
   let stderr: ReturnType<typeof vi.spyOn>;
@@ -69,8 +79,7 @@ describe('.onError（Issue #249: Hono の既定エラーハンドラの console.
     expect(res.status).toBe(500);
     expect(await res.text()).toBe('Internal Server Error');
 
-    const lines = stderr.mock.calls.map((call) => String(call[0]));
-    const matching = lines.filter((line) => line.includes('alteroidd:'));
+    const matching = stderrLines(stderr).filter((line) => line.includes('alteroidd:'));
     expect(matching).toHaveLength(1);
     const line = matching[0]!;
 
@@ -102,6 +111,6 @@ describe('.onError（Issue #249: Hono の既定エラーハンドラの console.
 
     expect(res.status).toBe(418);
     expect(await res.text()).toBe('teapot');
-    expect(stderr.mock.calls.some((call) => String(call[0]).includes('alteroidd:'))).toBe(false);
+    expect(stderrLines(stderr).some((line) => line.includes('alteroidd:'))).toBe(false);
   });
 });
