@@ -76,7 +76,7 @@ export const ROTATABLE_CREDENTIAL_KEYS = [
  * ## なぜこの検査が要るか
  *
  * `runner.ts` の `#childEnv()` は**プロファイルを鍵より後に重ねる**（逐語は
- * `grep -n 'プロファイルは鍵より後' packages/core/src/runner.ts`）。「人間が明示的に
+ * `grep -Fn -- 'プロファイルは鍵より後' packages/core/src/runner.ts`）。「人間が明示的に
  * 書いたほうが勝つ」という判断で、`GH_TOKEN` については正しい。
  *
  * **⟹ プロファイルに `CLAUDE_CODE_OAUTH_TOKEN` が書かれていると、回した鍵が

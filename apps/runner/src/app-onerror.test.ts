@@ -15,7 +15,7 @@ import { createRunnerApp, Outbox } from './app.js';
  *
  * `/managers/:id/resume` を踏み台に使う。このルートは既に「`RunnerFenceError`
  * 以外は Hono の既定へ流す」と自分の doc に書いてある
- * （`grep -n 'Hono の既定 500 に落とさない' apps/runner/src/app.ts` の近傍）ので、
+ * （`grep -Fn -- 'Hono の既定 500 に落とさない' apps/runner/src/app.ts` の近傍）ので、
  * `.onError` を検証する実在の経路として最も素直である。
  */
 

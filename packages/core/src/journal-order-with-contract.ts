@@ -27,7 +27,7 @@ import { JournalAnchorNotFoundError } from './store.js';
  *
  * **⚠️ 同じ repo に、壊れるほうの実例が在る。** `packages/storage-fs` の
  * 承認待ちは `putApproval` が既存の id への書き込みで行を配列の末尾へ動かす
- * （`grep -n 'approvals.push(pendingApprovalSchema.parse(approval))' packages/storage-fs/src/jobs.ts`
+ * （`grep -Fn -- 'approvals.push(pendingApprovalSchema.parse(approval))' packages/storage-fs/src/jobs.ts`
  * — 既存の id を `filter` で除いてから `push` するので、答えた行が末尾へ
  * 動く）。承認に答えるのがまさにその経路なので、あちら（`GET /approvals`、
  * issue #432 の1本目）は位置ではなく `(createdAt, id)` の**比較**で辿る形に
