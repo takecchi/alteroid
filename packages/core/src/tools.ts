@@ -3531,8 +3531,16 @@ function renderUsage(
   aggregate: UsageAggregate,
   view: { axis?: UsageAxis; offset?: number } = {},
 ): string {
-  const { rows, since, layersSince, tokensSince, beforeLedger, beforeLayers, beforeTokens, notice } =
-    aggregate;
+  const {
+    rows,
+    since,
+    layersSince,
+    tokensSince,
+    beforeLedger,
+    beforeLayers,
+    beforeTokens,
+    notice,
+  } = aggregate;
 
   if (since === null) {
     return [

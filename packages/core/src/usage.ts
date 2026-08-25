@@ -733,9 +733,7 @@ export const usageBreakdownSchema = z.object({
    * **出てこないトークンを 0 で補わないこと**は他の軸と同じ — プールに居るが
    * 使われていないトークンはここに現れない（現れたら「0 使った」に見える）。
    */
-  byToken: z.array(
-    z.object({ tokenId: z.string().min(1).nullable(), totals: usageTotalsSchema }),
-  ),
+  byToken: z.array(z.object({ tokenId: z.string().min(1).nullable(), totals: usageTotalsSchema })),
 });
 
 export type UsageBreakdown = z.infer<typeof usageBreakdownSchema>;

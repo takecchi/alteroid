@@ -4142,7 +4142,9 @@ describe('クローンの消費が台帳に載る（誰が・どこで）', () =
    */
   describe('認証トークンの帰属', () => {
     /** 帰属を渡すクローン。`setup` は `tokenIdentity` を受けないので直に組む。 */
-    function cloneWithIdentity(identity: () => { tokenId: string; generation: number } | undefined) {
+    function cloneWithIdentity(
+      identity: () => { tokenId: string; generation: number } | undefined,
+    ) {
       const stores = createMemoryStores();
       // **固定値にしない。** 呼ぶ回ごとに増える累積を返すので、同じセッションの
       // 2ターン目にも増分が立つ（固定値だと差が 0 になり、2ターン目が台帳に
@@ -4214,7 +4216,10 @@ describe('クローンの消費が台帳に載る（誰が・どこで）', () =
       // セッションは開いたまま、現役だけが入れ替わる。
       current = { tokenId: 'tok-b', generation: 2 };
       s.clone.post(humanMessage('2回目'));
-      await waitFor(async () => (await s.stores.usage.aggregate({})).rows[0]?.totals.costUsd === 1, '2ターン目が台帳へ載ること');
+      await waitFor(
+        async () => (await s.stores.usage.aggregate({})).rows[0]?.totals.costUsd === 1,
+        '2ターン目が台帳へ載ること',
+      );
 
       const { rows } = await s.stores.usage.aggregate({});
       // **行は1つのまま。** 読み直していれば `tok-b` の行が別に立つ。

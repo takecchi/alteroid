@@ -872,10 +872,12 @@ describe('既にある DB への移行（層の列は在るがトークンの列
   it('旧名の索引が実際に消え、新しい名前の索引が在る（no-op で通していない）', async () => {
     await migrate(layeredDb);
 
-    const result = await layeredDb.execute(
+    // `execute` の戻りは `unknown`（drizzle の pglite ドライバはこの口に型を
+    // 付けていない）。**素の SQL を打つ側で形を宣言する。**
+    const result = (await layeredDb.execute(
       sql.raw(`select indexname from pg_indexes where tablename = 'usage_daily'`),
-    );
-    const names = (result.rows as Array<{ indexname: string }>).map((row) => row.indexname).sort();
+    )) as { rows: Array<{ indexname: string }> };
+    const names = result.rows.map((row) => row.indexname).sort();
     // **上のテストだけでは足りない。** 行が2つ立つことは、旧索引が消えたことでも
     // 新索引が在ることでも説明できてしまう（`create unique index` が別名で作られ、
     // 旧索引が残っていても、6列の側が先に当たれば通る形がありうる）。名前で直接見る。

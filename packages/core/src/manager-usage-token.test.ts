@@ -119,7 +119,7 @@ function usageRunner() {
       return undefined;
     },
     async setProfile(): Promise<RunnerProfileResult> {
-      return { applied: false, reason: 'この検証では使わない' };
+      return { ok: false, error: 'この検証では使わない' };
     },
     async close() {
       /* この検証では使わない */
