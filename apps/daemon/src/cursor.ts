@@ -44,12 +44,12 @@ import { z } from 'zod';
  *    呼び出し10箇所——`memory_read` / `journal_read` / `approvals_list` /
  *    `schedule_list` / `commitment_list` / `profile_read` / `self_read` /
  *    `manager_report` / `conversation_read` / `manager_transcript`。
- *    `grep -n '= page(' packages/core/src/tools.ts` で当たる——`grep -n 'page('`
+ *    `grep -Fn -- '= page(' packages/core/src/tools.ts` で当たる——`grep -Fn -- 'page('`
  *    だと doc コメント中の言及2件も一致して12件になるので、実際に呼んでいる
  *    行だけを取るこの形で数えること）。**残る1箇所だけが一覧の配列を切って
  *    いる** — `usage_summary` の `axis` モード（`renderUsage` の中の
  *    `entries.slice(offset, offset + USAGE_AXIS_PAGE)`。
- *    `grep -n 'entries.slice(offset' packages/core/src/tools.ts` で当たる）。
+ *    `grep -Fn -- 'entries.slice(offset' packages/core/src/tools.ts` で当たる）。
  *    **「一覧を切る呼びは1件も無い」とは言えない**（10/11 という比で言う）。
  *
  * ⟹ 同じ名前が2つの意味（本文のオフセット／一覧のオフセット）を持つ状態を

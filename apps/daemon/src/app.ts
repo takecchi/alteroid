@@ -299,7 +299,7 @@ const eventBody = z.object({
  *
  * **封筒（`total` / `nextCursor`）を持たない。** 続きが在るかは
  * 「`limit` 件ちょうど返ったか」で呼ぶ側が判る。この形の先例は同じファイルの
- * `journalQuery` の `since`（`grep -n 'ここより古いエントリまで遡って読むための足がかり' apps/daemon/src/app.ts`）
+ * `journalQuery` の `since`（`grep -Fn -- 'ここより古いエントリまで遡って読むための足がかり' apps/daemon/src/app.ts`）
  * ——あちらも応答に打ち切りの印を持たず、窓の境界を呼ぶ側が渡す形である。
  *
  * **`order` は足さない。** `/reports` は常に日付の新しい順
@@ -391,7 +391,7 @@ const approvalsQuery = z.object({
  * 比較で辿る（本物の keyset）。**
  *
  * **なぜ位置で辿らないか。** `packages/storage-fs` の `putApproval` は既存の id
- * への書き込みで配列の末尾へ移動する（`grep -n 'putApproval' packages/storage-fs/src/jobs.ts`
+ * への書き込みで配列の末尾へ移動する（`grep -Fn -- 'putApproval' packages/storage-fs/src/jobs.ts`
  * — filter して除いてから push するので、答えた行が末尾へ動く）。承認への回答は
  * まさに `putApproval` を呼ぶので、頁の間に誰かが答えると位置がずれる——前半の
  * 行が答えられて末尾へ動けば、後続の行の位置が1つ前へずれて1件飛ばす。動いた
@@ -1878,7 +1878,7 @@ export function createApp(deps: AppDeps) {
         const { pending, order, limit, cursor } = c.req.valid('query');
         // **opt-in の判定は生のクエリで行う。** `order` は既定値を持つので
         // `c.req.valid('query')` だけでは「渡されたか」が分からない
-        // （`grep -n '取れない軸に 0 の行を作る' AGENTS.md` の地雷と同じ形——
+        // （`grep -Fn -- '取れない軸に 0 の行を作る' AGENTS.md` の地雷と同じ形——
         // 「渡されなかった」を「既定値と同じ値が渡された」と混同しないこと）。
         const optedIn =
           c.req.query('order') !== undefined ||

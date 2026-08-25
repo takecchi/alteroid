@@ -373,7 +373,7 @@ describe('pnpm verify — テストの結末は4つある', () => {
    * ## フィクスチャの出所（本物のバイトか、組み立てた文字列か）
    *
    * **本物のバイトである。** 下の2行は `scripts/test-guard-core.test.ts`（#311 / PR #355、
-   * 逐語は `grep -n 'ANSI エスケープで色付けされた集計行も読める' scripts/test-guard-core.test.ts`）
+   * 逐語は `grep -Fn -- 'ANSI エスケープで色付けされた集計行も読める' scripts/test-guard-core.test.ts`）
    * および `scripts/mutate-core-strip-ansi.test.ts`（#372 / PR #374。`COLORED_FILES_LINE` /
    * `COLORED_TESTS_LINE`）が固定しているものと**1バイトも違わないことを、この PR の
    * 作業で実測して突き合わせてから**使っている（3ファイルの該当リテラルをソース
