@@ -187,7 +187,12 @@ describe('/usage 画面', () => {
       </Providers>,
     );
 
-    expect(await screen.findByText('$3.00')).toBeTruthy();
+    // **合計の $3.00 を「画面に1つだけある」で特定しない。** 軸のカードにも同じ
+    // 金額が出る（この土台は行が2件しかないので、1件に畳まれた軸のカードは
+    // 合計と同額になる）。**緩めるのではなく、どこの $3.00 かを言う。**
+    await screen.findByRole('heading', { name: '合計' });
+    const total = axisCard('合計');
+    expect(within(total).getByText('$3.00')).toBeTruthy();
     expect(screen.getByText('日別')).toBeTruthy();
     expect(screen.getByText('マネージャー別')).toBeTruthy();
     expect(screen.getByText('モデル別')).toBeTruthy();
@@ -350,8 +355,11 @@ describe('/usage 画面', () => {
       </Providers>,
     );
 
-    const fromInput = await screen.findByLabelText(/from/);
-    const toInput = screen.getByLabelText(/to/);
+    // **ラベルは前後を固定して当てる。** `/to/` は部分一致なので、`token` という
+    // ラベルが増えた瞬間に2件へ当たって落ちた。**緩めるのではなく、どのラベルか
+    // を言う** — 前後を固定すれば、似た名前のラベルが増えても当たり続ける。
+    const fromInput = await screen.findByLabelText(/^from$/);
+    const toInput = screen.getByLabelText(/^to$/);
     for (const input of [fromInput, toInput]) {
       const tokens = input.className.split(/\s+/);
       expect(tokens).toContain('min-w-0');
