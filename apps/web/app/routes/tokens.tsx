@@ -56,8 +56,9 @@ function PoolAndSettings() {
       <Card>
         <CardHeader title="プール一覧・回転の設定" />
         <div className="px-4 py-3 text-sm text-muted">
-          この一覧は実行環境の持ち主だけが見られる（<code className="font-mono">alteroid
-          token list</code> と同じ資格）。いま繋いでいるアカウントには、この資格が無い。
+          この一覧は実行環境の持ち主だけが見られる（
+          <code className="font-mono">alteroid token list</code>{' '}
+          と同じ資格）。いま繋いでいるアカウントには、この資格が無い。
         </div>
       </Card>
     );
@@ -94,7 +95,11 @@ function PoolAndSettings() {
  */
 function tokenAvailabilityAt(
   token: Pick<AgentTokenView, 'disabledAt' | 'invalidatedAt' | 'cooldownUntil'>,
-  at: number,
+  // **既定引数として `Date.now()` を持つ**（呼び出し側の render 本体で直接
+  // 呼ばない）。`~/lib/format.ts` の `formatRelative(iso, now = Date.now())`
+  // と同じ形——コンポーネント本体で直接 `Date.now()` を呼ぶと
+  // `react-hooks/purity`（不純な関数呼び出し）に落ちる。
+  at: number = Date.now(),
 ): TokenAvailability {
   if (token.disabledAt !== undefined) return 'disabled';
   if (token.invalidatedAt !== undefined) return 'invalidated';
@@ -106,9 +111,10 @@ function assertNever(value: never, label: string): never {
   throw new Error(`未知の${label}: ${JSON.stringify(value)}`);
 }
 
-function describeAvailability(
-  state: TokenAvailability,
-): { label: string; tone: 'ok' | 'warn' | 'neutral' | 'danger' } {
+function describeAvailability(state: TokenAvailability): {
+  label: string;
+  tone: 'ok' | 'warn' | 'neutral' | 'danger';
+} {
   switch (state) {
     case 'ready':
       return { label: '使用可能', tone: 'ok' };
@@ -191,7 +197,7 @@ function PoolCard({ tokens }: { tokens: readonly AgentTokenView[] }) {
 }
 
 function TokenRow({ token }: { token: AgentTokenView }) {
-  const availability = tokenAvailabilityAt(token, Date.now());
+  const availability = tokenAvailabilityAt(token);
   const state = describeAvailability(availability);
   const rejected = token.lastRejectedAt !== undefined || token.lastRejectedReason !== undefined;
 
@@ -310,7 +316,8 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
           {(settings.cooldownMs / (60 * 60 * 1000)).toLocaleString('ja-JP', {
             maximumFractionDigits: 2,
           })}
-          時間（{settings.cooldownMs.toLocaleString('en-US')} ミリ秒）。<br />
+          時間（{settings.cooldownMs.toLocaleString('en-US')} ミリ秒）。
+          <br />
           <span className="text-xs text-muted">
             `resetsAt` が取れなかったときだけ使うフォールバック。権威ある期限は行ごとの
             「冷却の期限」のほう。
@@ -335,9 +342,10 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
 /** 表示上限。**打ち切ったら必ずそう書く**（黙って切り捨てない）。 */
 const JOURNAL_LIMIT = 50;
 
-function describeEvent(
-  event: TokenRotationEntry['event'],
-): { label: string; tone: 'ok' | 'warn' | 'neutral' | 'danger' } {
+function describeEvent(event: TokenRotationEntry['event']): {
+  label: string;
+  tone: 'ok' | 'warn' | 'neutral' | 'danger';
+} {
   switch (event) {
     case 'rotated':
       return { label: '回した（撒いた。走行中のセッションには未反映）', tone: 'warn' };
