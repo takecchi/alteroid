@@ -4982,9 +4982,7 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       // （`- <id> ` の後ろが消えても、そもそも短い語なので気づきにくい）。
       name: 'token_list',
       check: (firstLine) =>
-        expect(firstLine, `id の隣に状態（cooling）が無い: ${firstLine}`).toMatch(
-          /^- \S+ cooling/,
-        ),
+        expect(firstLine, `id の隣に状態（cooling）が無い: ${firstLine}`).toMatch(/^- \S+ cooling/),
     },
   ];
 
@@ -5947,7 +5945,13 @@ describe('token_list（読むだけ。値は返らない）', () => {
         cooldownUntil: Date.now() + 3_600_000,
         lastRejectedReason: "You've hit your usage limit",
       },
-      { id: 'tok-off', label: '外した', value: 'v2', order: 1, disabledAt: '2026-08-25T00:00:00.000Z' },
+      {
+        id: 'tok-off',
+        label: '外した',
+        value: 'v2',
+        order: 1,
+        disabledAt: '2026-08-25T00:00:00.000Z',
+      },
       { id: 'tok-ok', label: '使える', value: 'v3', order: 2 },
     ]);
 
