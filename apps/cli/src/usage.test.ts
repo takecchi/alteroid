@@ -93,6 +93,9 @@ function aggregate(over: Partial<UsageView>): UsageView {
     beforeTokens: false,
     notice: USAGE_ESTIMATE_NOTICE,
     account: { state: 'unknown' },
+    // **既定で「取りこぼしは無い」側にしてある**（他の軸と同じ理由）。この軸を
+    // 測るテストは自分で渡す。
+    unrecordedManagers: [],
     ...over,
   };
 }

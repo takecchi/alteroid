@@ -719,6 +719,34 @@ export interface UsageStore {
    * 来たときに別の累積が1つの基準を共有し、差分がまるごと嘘になる。
    */
   baseline(layer: UsageLayer, managerId: string): Promise<UsageBaseline | null>;
+
+  /**
+   * 台帳（`usage_daily`）に1行でも行が在る managerId の集合（Issue #98
+   * 「台帳が取りこぼした委譲」）。
+   *
+   * **引数を持たない。** `aggregate()` のように `from` / `to` で絞れる形にすると、
+   * 呼ぶ側が誤って絞り込んだ結果を「行が在る managerId の集合」として使いうる —
+   * それをやると、照会範囲の外で記録された委譲が「記録が無い」に化ける（5月に
+   * 走った委譲を今日の範囲で照会したときに取りこぼしとして数えられる）。**この
+   * 判定は全期間でなければ成り立たない**ので、引数を持たせないこと自体で
+   * その事故を構造的に防ぐ。
+   *
+   * **`aggregate()` の `rows` から作らないこと。** 呼び出し側が `aggregate({})`
+   * （絞り込み無し）を呼べば同じ集合が作れるように見えるが、それは「今この瞬間の
+   * 全件」を毎回読み直す高コストな経路になる。ここは器（fs / pg）が持つ索引や
+   * 集合演算で答えられる別の口として持つ——pg なら `usage_daily` の
+   * `(manager_id, date)` 索引を使った `distinct` で足りる。
+   *
+   * **基準（`usage_baseline`）ではなく行（`usage_daily`）を見ること。** 基準は
+   * ゼロだけのスナップショットからでも作られうる（`foldUsageSnapshot` の
+   * doc）ので、基準の有無で数えると「記録が無い」と「$0.00 使った」が混ざる。
+   *
+   * 使うのは `ManagerPool.list()` で得た全委譲との突き合わせ
+   * （{@link findUnrecordedManagers}、`usage-format.ts`）だけである——`UsageStore`
+   * は `ManagerPool` を知らないので、突き合わせそのものは呼び出し側（`app.ts` /
+   * `tools.ts`）が行う。
+   */
+  recordedManagerIds(): Promise<Set<string>>;
 }
 
 /** クローンのセッション id を跨いで覚えておくための最小の永続化。 */

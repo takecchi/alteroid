@@ -29,6 +29,7 @@ import {
   createAuthProviderRegistry,
   createAuthService,
   reachedStart,
+  findUnrecordedManagers,
   isAccountGranted,
   isDailyReport,
   journalEntrySchema,
@@ -41,14 +42,11 @@ import {
   reportRunnerRevision,
   resolveBuildRevision,
   runnerSetCredentialsCommandSchema,
-  accountUsageStateSchema,
   scheduleKindSchema,
   scheduleSpecSchema,
   startSseHeartbeat,
   summarizeUsage,
   tokenRotationSettingsSchema,
-  usageAggregateSchema,
-  usageBreakdownSchema,
   usageDateSchema,
   usageLayerSchema,
   usageSiteSchema,
@@ -105,6 +103,7 @@ import {
   tokensPolicyUpdateRequestSchema,
   tokensResponseSchema,
   tokensUpdateRequestSchema,
+  usageResponseSchema,
   validationErrorResponseSchema,
 } from './openapi.js';
 import { InvalidCursorError, decodeCursor, encodeCursor } from './cursor.js';
@@ -504,16 +503,6 @@ const usageQuery = z.object({
    * 取れていない分を数えたいなら絞らずに引いて `breakdown.byToken` の `null` を見る。
    */
   tokenId: z.string().min(1).optional(),
-});
-const usageResponseSchema = usageAggregateSchema.extend({
-  breakdown: usageBreakdownSchema,
-  /**
-   * アカウント全体の残り（claude.ai 側が言っている値）。
-   *
-   * **台帳と足さない。** こちらは向こうが言っている値で、台帳は自分で数えた
-   * 推定値である。`state` が `ok` 以外なら「取れなかった」であって「0」ではない。
-   */
-  account: accountUsageStateSchema,
 });
 const journalStreamQuery = z.object({
   /** カンマ区切りの種別。指定しなければ全部流れる。 */
@@ -1706,7 +1695,9 @@ export function createApp(deps: AppDeps) {
           '**null の意味が1つ多い** — 記録が1件も無いときだけでなく、' +
           '**プールを使っていない構成では最後まで null である**（`since` が非 null でも起きる）。' +
           'そのときの `breakdown.byToken` は `tokenId: null` の1件だけを返す。' +
-          'それは「1本のトークンで全部使った」ではなく「帰属が取れていない」である。',
+          'それは「1本のトークンで全部使った」ではなく「帰属が取れていない」である。' +
+          '`unrecordedManagers` は消費の記録が1件も無い委譲（Issue #98）——' +
+          '`from` / `to` などの絞り込みには影響されない（全期間で判定する）。',
         responses: {
           200: {
             description: '台帳の集計。',
@@ -1729,6 +1720,24 @@ export function createApp(deps: AppDeps) {
           ...(site === undefined ? {} : { site }),
           ...(tokenId === undefined ? {} : { tokenId }),
         });
+        /*
+         * **台帳に1行も無い委譲（Issue #98）。** `clone.managers.list()` は追加の
+         * 配線なしで呼べる（`clone` は上で既に destructure 済み。既存の
+         * `GET /managers` が同じものを呼んでいるのと同じ形）。
+         *
+         * **全期間・絞り込み無しの2つを突き合わせる。** `managers.list()` に
+         * `from` / `to` を渡す口は無く、`recordedManagerIds()` も引数を持たない
+         * （どちらも `store.ts` / `manager.ts` の doc のとおり）——この応答の
+         * クエリの絞り込みで狭めた `aggregate.rows` から作ってはならない
+         * （照会範囲の外で記録された委譲が「記録が無い」に化ける）。
+         */
+        const allManagers = await clone.managers.list();
+        const recordedManagerIds = await stores.usage.recordedManagerIds();
+        const unrecordedManagers = findUnrecordedManagers(
+          allManagers,
+          recordedManagerIds,
+          aggregate.since,
+        );
         return c.json({
           ...aggregate,
           // 内訳は core の1つの実装で作る（口ごとに足し直すと食い違う）。
@@ -1736,6 +1745,7 @@ export function createApp(deps: AppDeps) {
           // **配線されていなければ「まだ分からない」を返す。** 0 や null にすると
           // 「枠を使っていない」と読める（テストの HTTP 層検証では省略できる）。
           account: deps.accountUsage?.() ?? { state: 'unknown' as const },
+          unrecordedManagers,
         });
       },
     )

@@ -76,6 +76,8 @@ import type { AccountUsageState } from './usage-snapshot.js';
 import {
   ACCOUNT_USAGE_TITLE,
   describeAccountUsage,
+  describeUnrecordedManagers,
+  findUnrecordedManagers,
   formatUsd,
   summarizeUsage,
   usageLayerSchema,
@@ -1748,12 +1750,13 @@ export function createCloneTools(context: ToolContext) {
             renderUsage(aggregate, { axis, ...(offset === undefined ? {} : { offset }) }),
           );
         }
+        const unrecordedManagers = await unrecordedManagersLines(context, stores, aggregate.since);
         return text(
           [
             renderAccountUsage(context.accountUsage?.() ?? { state: 'unknown' }),
             '',
             '## alteroid が使った分（台帳）',
-            renderUsage(aggregate),
+            renderUsage(aggregate, { unrecordedManagers }),
           ].join('\n'),
         );
       },
@@ -3687,9 +3690,55 @@ function renderAccountUsage(state: AccountUsageState): string {
   return [`## ${ACCOUNT_USAGE_TITLE}`, ...describeAccountUsage(state)].join('\n');
 }
 
+/**
+ * 台帳に1行も無い委譲（Issue #98）を、`usage_read` が読む行へ。
+ *
+ * **`context.managers` が `undefined` のとき、0 と出さない。** これは蒸留の
+ * サイドクエリ（`clone.ts` の `#distillFromTranscript`）でだけ起こる —
+ * `ToolContext.managers` はそこでは委譲そのものを起こさせないために省略されて
+ * いる（`ToolContext.managers` の doc）。**「確かめられなかった」と明示する**
+ * ——空配列（取りこぼしが無い）と同じ形にすると、蒸留の場では常に「取りこぼしは
+ * 無い」と嘘をつくことになる。
+ *
+ * **⚠️ `apps/daemon/src/app.ts` の `GET /usage` とは前提が違う。** そちらの
+ * `clone.managers` は non-optional（`CloneHost.managers: ManagerPool`）なので、
+ * この分岐に対応する枝を持たない——**app.ts 側では「確かめられなかった」は
+ * 起こらない。この doc の断りは `usage_read` だけの事情である。**
+ */
+async function unrecordedManagersLines(
+  context: ToolContext,
+  stores: Stores,
+  since: string | null,
+): Promise<string[]> {
+  if (context.managers === undefined) {
+    return [
+      '⚠ 台帳に1行も記録が無い委譲: 確かめられなかった' +
+        '（この場ではマネージャーの一覧が読めない。0 件ではない）。',
+    ];
+  }
+  const [managers, recordedManagerIds] = await Promise.all([
+    context.managers.list(),
+    stores.usage.recordedManagerIds(),
+  ]);
+  return describeUnrecordedManagers(findUnrecordedManagers(managers, recordedManagerIds, since));
+}
+
 function renderUsage(
   aggregate: UsageAggregate,
-  view: { axis?: UsageAxis; offset?: number } = {},
+  view: {
+    axis?: UsageAxis;
+    offset?: number;
+    /**
+     * 台帳に1行も無い委譲（Issue #98）を、すでに整形した行として渡す。
+     *
+     * **`undefined` は「軸モードなので出さない」であって「取りこぼしが無い」
+     * ではない。** 軸モードは「打ち切りの続き」だけを返す設計（下のコメント）
+     * なので、まとめ表示・アカウント全体の残りと同じくここも出さない。
+     * まとめ表示のときは、呼び出し側（`usage_read` ハンドラ）が必ず
+     * {@link describeUnrecordedManagers} の結果（0件でも1行以上ある配列）を渡す。
+     */
+    unrecordedManagers?: readonly string[];
+  } = {},
 ): string {
   const {
     rows,
@@ -3706,6 +3755,7 @@ function renderUsage(
     return [
       '台帳にはまだ1件も記録が無い。',
       '（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）',
+      ...(view.unrecordedManagers === undefined ? [] : ['', ...view.unrecordedManagers]),
     ].join('\n');
   }
 
@@ -3739,6 +3789,9 @@ function renderUsage(
     }
   } else if (rows.length === 0) {
     lines.push('その範囲には記録が無い。');
+    // **取りこぼしは照会範囲と無関係に全期間で判定する**（`findUnrecordedManagers`
+    // の doc）ので、この範囲に台帳の行が無くても出す。
+    if (view.unrecordedManagers !== undefined) lines.push('', ...view.unrecordedManagers);
   } else {
     lines.push(`合計 ${formatUsd(summary.total.costUsd)}`);
     lines.push(
@@ -3747,6 +3800,8 @@ function renderUsage(
         `キャッシュ読み ${summary.total.cacheReadInputTokens.toLocaleString('en-US')} / ` +
         `キャッシュ書き ${summary.total.cacheCreationInputTokens.toLocaleString('en-US')}`,
     );
+    // **合計値の隣に必ず出す（Issue #98）。**
+    if (view.unrecordedManagers !== undefined) lines.push(...view.unrecordedManagers);
 
     for (const axis of USAGE_AXES) {
       const entries = usageAxisEntries(summary, axis);
