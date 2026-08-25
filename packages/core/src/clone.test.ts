@@ -25,6 +25,7 @@ import {
   resolveClonePermissionMode,
 } from './clone.js';
 import type { HumanMessage } from './clone.js';
+import type { TokenRotatorObservation } from './token-rotator.js';
 import type { CloneHost } from './host.js';
 import type { ManagerPool } from './manager.js';
 import { renderMemoryDocuments } from './memory.js';
