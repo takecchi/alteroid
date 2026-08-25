@@ -2325,7 +2325,7 @@
         "operationId": "getUsage",
         "tags": ["usage"],
         "summary": "利用状況（alteroid が使った分）",
-        "description": "SDK の `result.modelUsage` を積んだ台帳を、日 × マネージャー × モデルで返す。**推定値であり請求明細ではない**（`notice` に同じ但し書きが載る）。台帳の始点は `since`、照会範囲が始点より前にかかっていれば `beforeLedger` が真になる — そのときは 0 ではなく「記録が無い」と読むこと（過去分の掘り起こしはしていない）。層と場所の軸は台帳より後から入ったので、始点は `layersSince`、照会範囲がそれより前にかかっていれば `beforeLayers` が真になる — そのときの `layer` / `site` は既定値であって観測ではない。",
+        "description": "SDK の `result.modelUsage` を積んだ台帳を、日 × マネージャー × モデルで返す。**推定値であり請求明細ではない**（`notice` に同じ但し書きが載る）。台帳の始点は `since`、照会範囲が始点より前にかかっていれば `beforeLedger` が真になる — そのときは 0 ではなく「記録が無い」と読むこと（過去分の掘り起こしはしていない）。層と場所の軸は台帳より後から入ったので、始点は `layersSince`、照会範囲がそれより前にかかっていれば `beforeLayers` が真になる — そのときの `layer` / `site` は既定値であって観測ではない。認証トークンの軸も同じ形で `tokensSince` / `beforeTokens` を返すが、**null の意味が1つ多い** — 記録が1件も無いときだけでなく、**プールを使っていない構成では最後まで null である**（`since` が非 null でも起きる）。そのときの `breakdown.byToken` は `tokenId: null` の1件だけを返す。それは「1本のトークンで全部使った」ではなく「帰属が取れていない」である。",
         "responses": {
           "200": {
             "description": "台帳の集計。",
@@ -3082,6 +3082,14 @@
             "schema": {
               "type": "string",
               "enum": ["session", "distill"]
+            }
+          },
+          {
+            "in": "query",
+            "name": "tokenId",
+            "schema": {
+              "type": "string",
+              "minLength": 1
             }
           }
         ]
