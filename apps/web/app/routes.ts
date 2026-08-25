@@ -24,6 +24,7 @@ export default [
     // 同じ日に複数あるので、日付だけでは1件に定まらない（`reports.tsx` の選択の doc）。
     route('reports/:date?/:reportId?', 'routes/reports.tsx'),
     route('usage', 'routes/usage.tsx'),
+    route('tokens', 'routes/tokens.tsx'),
     route('schedule', 'routes/schedule.tsx'),
     route('settings', 'routes/settings.tsx'),
     route('*', 'routes/not-found.tsx'),

@@ -11,7 +11,7 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { useManager, useManagerTranscript } from '~/hooks/queries';
+import { useManager, useManagerTranscript, useTokens } from '~/hooks/queries';
 import { useJournalLive } from '~/hooks/use-journal-live';
 import { json, Providers, sse, stubFetch, storeTestBaseUrl, type FetchStub } from '~/test-support';
 
@@ -207,5 +207,119 @@ describe('マネージャー詳細と生ログの無効化', () => {
       expect(after.manager).toBeGreaterThan(before.manager);
       expect(after.transcript).toBeGreaterThan(before.transcript);
     });
+  });
+});
+
+/**
+ * プールの状態（`GET /tokens`）の取り直し漏れ（Issue #464 の3点目）。
+ *
+ * `/tokens` 画面は「いま現役はこれ」と断定して出すので、回った直後に開いた
+ * ままの画面が前のトークンを表示し続けると、日誌の一覧だけが新しくなって
+ * 同じ画面の中に2つの版が並ぶ。これを防ぐには `token_rotation` が届いた
+ * ときに `KEY.tokens` を取り直す必要がある——他の種別（`turn_usage` 等）で
+ * 取り直さないことも同時に固定し、「全部の到着で全部を取り直す」という
+ * 壊れた設計に流れていないかを見る。
+ */
+const TOKENS_RESPONSE = {
+  tokens: [],
+  settings: { rotateOn: 'free_exhausted', cooldownMs: 18_000_000 },
+};
+
+function TokensProbe() {
+  useJournalLive();
+  const tokens = useTokens();
+  return <div data-testid="tokens-count">{tokens.data?.tokens.length ?? -1}</div>;
+}
+
+function tokensCallCount(stub: FetchStub): number {
+  // **`endsWith` で厳密に絞る。** `/tokens/policy` のような別経路まで
+  // 拾ってしまうと、この歯が測っているものが曖昧になる。
+  return stub.calls.filter((url) => url.endsWith('/tokens')).length;
+}
+
+function renderTokensProbe(frames: { event: string; data: unknown }[]) {
+  const stub = stubFetch((url, init) => {
+    if (url.endsWith('/journal/stream'))
+      return sse(frames, { keepOpen: true, signal: init?.signal });
+    if (url.endsWith('/tokens')) return json(TOKENS_RESPONSE);
+    return undefined;
+  });
+  render(
+    <Providers>
+      <TokensProbe />
+    </Providers>,
+  );
+  return stub;
+}
+
+describe('プールの状態（GET /tokens）の取り直し', () => {
+  it('token_rotation が届くと KEY.tokens を取り直す', async () => {
+    const stub = renderTokensProbe([
+      { event: 'open', data: { ok: true } },
+      {
+        event: 'token_rotation',
+        data: {
+          type: 'token_rotation',
+          id: 'jr-1',
+          at: '2026-08-25T00:00:00.000Z',
+          event: 'rotated',
+          tokenId: 't2',
+          fromTokenId: 't1',
+          generation: 2,
+          text: 't1 から t2 へ回した',
+        },
+      },
+    ]);
+
+    await screen.findByText('0');
+    const before = tokensCallCount(stub);
+    expect(before).toBeGreaterThan(0);
+
+    await waitFor(() => {
+      expect(tokensCallCount(stub)).toBeGreaterThan(before);
+    });
+  });
+
+  /**
+   * **「全部の到着で全部を取り直す」形にしない。** `turn_usage` は台帳
+   * （利用状況）向けの種別で、プールの状態とは無関係——ここで一緒に落とすと
+   * `invalidate()` が種別ごとに落とす先を選ぶ設計そのものが壊れる。
+   */
+  it('turn_usage が届いても KEY.tokens は取り直さない', async () => {
+    const stub = renderTokensProbe([
+      { event: 'open', data: { ok: true } },
+      {
+        event: 'turn_usage',
+        data: {
+          type: 'turn_usage',
+          id: 'tu-1',
+          at: '2026-08-25T00:00:00.000Z',
+          layer: 'manager',
+          site: 'session',
+          managerId: MANAGER_ID,
+          models: {
+            'claude-opus-4': {
+              costUsd: 0,
+              inputTokens: 0,
+              outputTokens: 0,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+            },
+          },
+        },
+      },
+    ]);
+
+    await screen.findByText('0');
+    const before = tokensCallCount(stub);
+    expect(before).toBeGreaterThan(0);
+
+    // **「増えないこと」は待って確かめる。** 直後に見るだけでは、まだ届いて
+    // いないだけの状態を「増えなかった」と読んでしまう（他のテストと同じ作法）。
+    await waitFor(() => {
+      expect(stub.calls.filter((url) => url.endsWith('/journal/stream')).length).toBeGreaterThan(0);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(tokensCallCount(stub)).toBe(before);
   });
 });

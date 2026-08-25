@@ -82,3 +82,25 @@ export type UsageSite = UsageRow['site'];
  * 画面で `null` へ潰さないこと。
  */
 export type AccountUsageState = UsageAggregate['account'];
+
+/**
+ * 認証トークンのプールと、回す契機・冷却の設定（`GET /tokens`）。
+ *
+ * **`value`（本体）は型に無い。** サーバ側（`AgentTokenView`）が最初から
+ * 持たない列なので、画面側で「消し忘れて出す」形がそもそも作れない。
+ */
+export type TokensState = Ok<paths['/tokens']['get']>;
+export type AgentTokenView = TokensState['tokens'][number];
+export type TokenRotationSettings = TokensState['settings'];
+/** `disabled` > `invalidated` > `cooling` > `ready` の4値。3値に潰さないこと。 */
+export type TokenAvailability = 'disabled' | 'invalidated' | 'cooling' | 'ready';
+/**
+ * 拒否の文言が時間で戻るか（`time` / `action` / `unknown`）。
+ *
+ * `lastRejectedReason` が無い行にはこの項目自体が無い——「拒否されていない」と
+ * 「拒否されたが分類できない（`unknown`）」を同じ表示に潰さないこと
+ * （`.claude/skills/token-pool/SKILL.md`）。
+ */
+export type TokenRecovery = NonNullable<AgentTokenView['recovery']>;
+/** 日誌の `token_rotation` 種別1件。`event` の5値を潰さずに読むこと。 */
+export type TokenRotationEntry = Extract<JournalEntry, { type: 'token_rotation' }>;
