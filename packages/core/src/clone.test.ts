@@ -4132,6 +4132,99 @@ describe('クローンの消費が台帳に載る（誰が・どこで）', () =
     const ledgerLines = stderr.filter((line) => line.includes('利用状況の台帳'));
     expect(ledgerLines).toHaveLength(2);
   });
+
+  /**
+   * **どの認証トークンで使ったか**（Issue #393 受け入れ基準6）。
+   *
+   * ここが固定するのは「クローンが何を渡すか」だけである。列の意味・鍵・軸の始点は
+   * storage の2つの器（`@alteroid/storage-fs` / `@alteroid/storage-pg` の
+   * `usage.test.ts`）が持つ。
+   */
+  describe('認証トークンの帰属', () => {
+    /** 帰属を渡すクローン。`setup` は `tokenIdentity` を受けないので直に組む。 */
+    function cloneWithIdentity(identity: () => { tokenId: string; generation: number } | undefined) {
+      const stores = createMemoryStores();
+      // **固定値にしない。** 呼ぶ回ごとに増える累積を返すので、同じセッションの
+      // 2ターン目にも増分が立つ（固定値だと差が 0 になり、2ターン目が台帳に
+      // 現れないので「読み直していないこと」を測れない）。
+      let nth = 0;
+      const { fn } = fakeSdk(undefined, {
+        modelUsage: () => usage('claude-fable-5', ++nth * 0.5),
+      });
+      const clone = createClone({
+        stores,
+        queryFn: fn,
+        env: {},
+        tokenIdentity: identity,
+        runners: createRunnerRegistry([
+          createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+        ]),
+      });
+      const { events } = wireEvents(clone, 'conv-1');
+      return { clone, stores, events };
+    }
+
+    it('現役の指名が在れば、その tokenId が行に載る', async () => {
+      const s = cloneWithIdentity(() => ({ tokenId: 'tok-a', generation: 3 }));
+
+      s.clone.post(humanMessage('やあ'));
+      await waitForDone(s.events);
+
+      const { rows, tokensSince } = await s.stores.usage.aggregate({});
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.tokenId).toBe('tok-a');
+      // 帰属が1件入ったので、トークンの軸が始まっている。
+      //
+      // **`beforeTokens` は見ない。** 下限の無い照会（`from` 省略）は常に始点より
+      // 前を含みうるので真である（`beforeLedger` / `beforeLayers` と同じ契約）。
+      // ここで偽を期待すると、契約と逆のものを固定してしまう。
+      expect(tokensSince).not.toBeNull();
+
+      await s.clone.stop();
+    });
+
+    it('現役の指名が無ければ帰属を渡さない（プールが空の器で軸が始まらない）', async () => {
+      // **受け入れ基準7 の側である。** ここで何かを埋めると、プールを1本も
+      // 持っていない器が「そのトークンで使った」と名乗る。
+      const s = cloneWithIdentity(() => undefined);
+
+      s.clone.post(humanMessage('やあ'));
+      await waitForDone(s.events);
+
+      const { rows, since, tokensSince, beforeTokens } = await s.stores.usage.aggregate({});
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.tokenId).toBeUndefined();
+      // 台帳は始まっているのに、トークンの軸だけ始まっていない。
+      expect(since).not.toBeNull();
+      expect(tokensSince).toBeNull();
+      expect(beforeTokens).toBe(true);
+
+      await s.clone.stop();
+    });
+
+    it('帰属は「セッションが起きた瞬間の身元」である（record のたびに読み直さない）', async () => {
+      // **読み直すと、回した直後に届いた前のセッションぶんの消費が新しいトークンに
+      // 付く。** `#tokenIdentities`（マネージャー側）が在るのと同じ理由である。
+      let current = { tokenId: 'tok-a', generation: 1 };
+      const s = cloneWithIdentity(() => current);
+
+      s.clone.post(humanMessage('1回目'));
+      await waitForDone(s.events);
+
+      // セッションは開いたまま、現役だけが入れ替わる。
+      current = { tokenId: 'tok-b', generation: 2 };
+      s.clone.post(humanMessage('2回目'));
+      await waitFor(async () => (await s.stores.usage.aggregate({})).rows[0]?.totals.costUsd === 1, '2ターン目が台帳へ載ること');
+
+      const { rows } = await s.stores.usage.aggregate({});
+      // **行は1つのまま。** 読み直していれば `tok-b` の行が別に立つ。
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.tokenId).toBe('tok-a');
+      expect(rows[0]?.totals.costUsd).toBe(1);
+
+      await s.clone.stop();
+    });
+  });
 });
 
 /**
