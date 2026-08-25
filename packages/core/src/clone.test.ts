@@ -7231,3 +7231,301 @@ describe('onUsageObservation（回し手へ渡す観測）', () => {
     expect(calls.length).toBeGreaterThan(0);
   });
 });
+
+/**
+ * 認証トークンを回した後のセッション作り直し（Issue #393 PR4）。
+ *
+ * **Issue が「実装者が決めると必ず壊れる」と名指しした箇所である。** 畳む位置を
+ * ターンの境界に置かないと、既定の設定で必ず2つ踏む —— 通るはずだった仕事を殺すか、
+ * 回したことが「セッションが終了した」という失敗として依頼者へ届くか。
+ */
+describe('recycleSessionForToken（回した後のセッション作り直し）', () => {
+  let seq = 0;
+
+  /**
+   * **読み先行する偽 SDK。** 結果を出す前に、次の入力を取りに行く。
+   *
+   * ## なぜ専用の偽物が要るか
+   *
+   * 共有の `fakeSdk` は `for await (const message of prompt)` で1件ずつ処理する
+   * ——**ターンが走っているあいだ、入力ストリームに次を要求しない。** ⟹ そこでは
+   * `#inputStream` が `#turn !== null` の状態で判定へ到達しないので、
+   * **「ターンの境界でだけ畳む」という条件が一度も発火しない。**
+   *
+   * **実測: 共有の偽物で書いた歯は、変異（`#turn === null` の条件を外す）を
+   * 当てても3本とも緑のままだった。** 測っていなかったということである。
+   *
+   * ここが再現するのは「SDK が読み先行する」形で、**守っている条件が実際に効く
+   * 唯一の場面**である。
+   */
+  function lookaheadSdk(turnDelayMs = 20) {
+    const sessions: { inputs: string[] }[] = [];
+    const fn = ((params: { prompt: unknown; options?: Options }) => {
+      const session = { inputs: [] as string[] };
+      sessions.push(session);
+      async function* generate(): AsyncGenerator<SDKMessage, void> {
+        yield {
+          type: 'system',
+          subtype: 'init',
+          session_id: `sess-lookahead-${String(sessions.length)}`,
+          uuid: `uuid-init-${String(sessions.length)}`,
+          model: 'claude-fake',
+          claude_code_version: '9.9.9-fake',
+          apiKeySource: 'user',
+          permissionMode: 'default',
+          mcp_servers: [{ name: 'alteroid', status: 'connected' }],
+        } as unknown as SDKMessage;
+
+        const iterator = (params.prompt as AsyncIterable<{ message: { content: unknown } }>)[
+          Symbol.asyncIterator
+        ]();
+
+        for (;;) {
+          const current = await iterator.next();
+          if (current.done === true) return;
+          session.inputs.push(String(current.value.message.content));
+
+          // **結果を出す前に次を要求する。** この時点で `#turn` はまだ立って
+          // いるので、`#inputStream` は「ターンの境界ではない」と判定しなければ
+          // ならない。
+          const lookahead = iterator.next();
+
+          await new Promise((resolve) => setTimeout(resolve, turnDelayMs));
+          yield {
+            type: 'result',
+            subtype: 'success',
+            result: 'わかった',
+            session_id: `sess-lookahead-${String(sessions.length)}`,
+            uuid: `uuid-result-${String(session.inputs.length)}`,
+          } as unknown as SDKMessage;
+
+          const next = await lookahead;
+          if (next.done === true) return;
+          // 読み先行で取った分をこのまま処理する。
+          session.inputs.push(String(next.value.message.content));
+          await new Promise((resolve) => setTimeout(resolve, turnDelayMs));
+          yield {
+            type: 'result',
+            subtype: 'success',
+            result: 'わかった',
+            session_id: `sess-lookahead-${String(sessions.length)}`,
+            uuid: `uuid-result-b-${String(session.inputs.length)}`,
+          } as unknown as SDKMessage;
+        }
+      }
+      const generator = generate();
+      return Object.assign(generator, {
+        close: () => undefined,
+        interrupt: async () => undefined,
+      }) as unknown as Query;
+    }) as unknown as typeof sdkQuery;
+    return { fn, sessions };
+  }
+
+  function say(clone: ReturnType<typeof createClone>): void {
+    clone.post({
+      type: 'human_message',
+      id: `evt-recycle-${String(++seq)}`,
+      at: new Date().toISOString(),
+      text: 'こんにちは',
+      conversationId: 'conv-1',
+    });
+  }
+
+  function setupRecycle(sdkOptions: Parameters<typeof fakeSdk>[1] = {}) {
+    const { fn, calls } = fakeSdk(undefined, sdkOptions);
+    const clone = createClone({
+      stores: createMemoryStores(),
+      queryFn: fn,
+      env: {},
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    return { clone, calls };
+  }
+
+  /**
+   * **入力ストリームが閉じたら、走っているターンを捨てて終わる偽 SDK。**
+   *
+   * ## なぜこれが要るか
+   *
+   * 上の `lookaheadSdk` は、入力が尽きても**そのターンの結果は必ず出す。** ⟹
+   * ターンの途中で畳んでも `#turn` は結果の到着で片付き、`#read` の `finally`
+   * に届く頃には `null` になっている ——**危険が現れない。**
+   *
+   * **実測: `lookaheadSdk` だけで書いた歯は、「ターンの境界でだけ畳む」条件を
+   * 外す変異を当てても緑のままだった。** 測っていなかったということである。
+   *
+   * ここが模すのは「**入力の口が閉じた＝畳めという合図**」と読む SDK である。
+   * そのとき走っていたターンは結果を返さないので、`#read` の `finally` が
+   * `#turn` を見つけて**「クローンのセッションが終了した」を依頼者へ報告する**
+   * ——Issue #393 追記5 が名指ししている壊れ方そのものである。
+   *
+   * **⚠️ 本物の SDK がどちらの側かは測っていない。** この歯が守っているのは
+   * 「どちらでも壊れない」ことであって、「本物がこう振る舞う」ではない。
+   */
+  function abortOnStreamEndSdk(turnDelayMs = 40) {
+    const sessions: { inputs: string[] }[] = [];
+    const fn = ((params: { prompt: unknown; options?: Options }) => {
+      const session = { inputs: [] as string[] };
+      sessions.push(session);
+      const label = `sess-abort-${String(sessions.length)}`;
+      async function* generate(): AsyncGenerator<SDKMessage, void> {
+        yield {
+          type: 'system',
+          subtype: 'init',
+          session_id: label,
+          uuid: `uuid-init-${label}`,
+          model: 'claude-fake',
+          claude_code_version: '9.9.9-fake',
+          apiKeySource: 'user',
+          permissionMode: 'default',
+          mcp_servers: [{ name: 'alteroid', status: 'connected' }],
+        } as unknown as SDKMessage;
+
+        const iterator = (params.prompt as AsyncIterable<{ message: { content: unknown } }>)[
+          Symbol.asyncIterator
+        ]();
+
+        for (;;) {
+          const current = await iterator.next();
+          if (current.done === true) return;
+          session.inputs.push(String(current.value.message.content));
+
+          // 読み先行。**入力の口が閉じたら、このターンを捨てて終わる。**
+          const lookahead = iterator.next();
+          const finished = await Promise.race([
+            lookahead.then((next) =>
+              next.done === true ? ('closed' as const) : ('next' as const),
+            ),
+            new Promise<'turn'>((resolve) => setTimeout(() => resolve('turn'), turnDelayMs)),
+          ]);
+          if (finished === 'closed') return;
+
+          yield {
+            type: 'result',
+            subtype: 'success',
+            result: 'わかった',
+            session_id: label,
+            uuid: `uuid-result-${String(session.inputs.length)}`,
+          } as unknown as SDKMessage;
+
+          const next = await lookahead;
+          if (next.done === true) return;
+          session.inputs.push(String(next.value.message.content));
+          await new Promise((resolve) => setTimeout(resolve, turnDelayMs));
+          yield {
+            type: 'result',
+            subtype: 'success',
+            result: 'わかった',
+            session_id: label,
+            uuid: `uuid-result-b-${String(session.inputs.length)}`,
+          } as unknown as SDKMessage;
+        }
+      }
+      const generator = generate();
+      return Object.assign(generator, {
+        close: () => undefined,
+        interrupt: async () => undefined,
+      }) as unknown as Query;
+    }) as unknown as typeof sdkQuery;
+    return { fn, sessions };
+  }
+
+  function cloneWith(fn: typeof sdkQuery) {
+    return createClone({
+      stores: createMemoryStores(),
+      queryFn: fn,
+      env: {},
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+  }
+
+  /**
+   * **受け入れ基準（Issue #393 追記5）**: 回すと決めた時点で走っていたターンが、
+   * 最後まで走って結果を返す —— 依頼者に「セッションが終了した」が届かない。
+   *
+   * **読み先行する偽 SDK でしか測れない**（上の `lookaheadSdk` の doc）。共有の
+   * 偽物では、ターン中に入力ストリームへ到達しないので条件が発火しない。
+   */
+  it('⚠️ ターンの途中では畳まない。走っているターンは最後まで走る', async () => {
+    // **捨てる SDK で測る**（`lookaheadSdk` では危険が現れない。あちらの doc）。
+    const { fn, sessions } = abortOnStreamEndSdk(40);
+    const clone = cloneWith(fn);
+    const events: string[] = [];
+    clone.subscribe('conv-1', (event) => events.push(event.type));
+
+    say(clone);
+    await waitFor(() => sessions.length > 0, 'セッションが開くこと');
+    // 読み先行で入力ストリームが判定へ到達している状態で、ターンの途中に回す。
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    clone.recycleSessionForToken();
+
+    await waitFor(() => events.includes('done'), 'ターンが最後まで走ること');
+    await clone.stop();
+
+    // **「クローンのセッションが終了した」が届いていない。**
+    expect(events).toContain('done');
+    expect(events).not.toContain('error');
+  });
+
+  /**
+   * **境界で起こさないと、古いセッションのまま止まる。** 読み先行の SDK は、
+   * ターンが終わっても自分から取りに来ない（既に要求済みで、その約束が解けるのを
+   * 待っている）。
+   */
+  it('ターンが終わった境界で畳まれ、次は新しいセッションになる', async () => {
+    const { fn, sessions } = lookaheadSdk(20);
+    const clone = cloneWith(fn);
+
+    say(clone);
+    await waitFor(() => sessions.length > 0, '1本目が開くこと');
+    clone.recycleSessionForToken();
+    // 境界で畳まれるので、次の入力は**新しいセッション**で走る。
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    say(clone);
+
+    await waitFor(() => sessions.length > 1, '2本目が開くこと');
+    await clone.stop();
+    expect(sessions.length).toBeGreaterThan(1);
+  });
+
+  /**
+   * セッションがまだ無いときに印を立てると、**次に作られるセッション（もう新しい
+   * 鍵で起きたもの）がいきなり畳まれる。**
+   */
+  it('セッションがまだ無ければ印を立てない', async () => {
+    const { fn, sessions } = lookaheadSdk(5);
+    const clone = cloneWith(fn);
+
+    // セッションが1本も無い状態で呼ぶ。
+    clone.recycleSessionForToken();
+
+    say(clone);
+    await waitFor(() => sessions.length > 0, '1本目が開くこと');
+    // **同じセッションが使い回される**（印が立っていれば、ここで2本目になる）。
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    say(clone);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    await clone.stop();
+
+    expect(sessions).toHaveLength(1);
+  });
+
+  it('クローン全体の停止（stop）とは別物である', async () => {
+    // 混ぜると「トークンを回したらクローンが止まる」になる。
+    const { clone, calls } = setupRecycle();
+    say(clone);
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+
+    clone.recycleSessionForToken();
+    say(clone);
+
+    // 止まっていないので、次のターンが走る。
+    await waitFor(() => calls.length > 1, '止まらずに次が走ること');
+    clone.stop();
+  });
+});

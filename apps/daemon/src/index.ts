@@ -757,6 +757,14 @@ export async function main(): Promise<void> {
       const line = describeTokenRotation(outcome, {
         ...(observation.notice === undefined ? {} : { noticeText: observation.notice.text }),
       });
+      // **回ったらクローンのセッションを畳んで作り直す**（Issue #393 PR4）。
+      // env は起動時に凍るので、これをやらないとクローンは古いトークンのまま
+      // 再挑戦して、同じところで止まる。
+      //
+      // **印を立てるだけである** —— いま走っているターンは最後まで走る
+      // （`recycleSessionForToken` の doc）。
+      if (outcome.kind === 'rotated') clone.recycleSessionForToken();
+
       if (line !== null) {
         process.stderr.write(`alteroidd: ${line.split('\n')[0] ?? line}\n`);
         // **日誌への追記が落ちても回した事実は消えない**（正本は記憶ストアの

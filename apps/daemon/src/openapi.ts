@@ -997,6 +997,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
 
   const stubClone: CloneHost = {
     managers: stubManagers,
+    recycleSessionForToken() {
+      throw new Error('spec 生成専用のスタブ: セッションは作らない');
+    },
     post() {
       throw new Error('spec 生成専用のスタブ: 受信箱には積まない');
     },

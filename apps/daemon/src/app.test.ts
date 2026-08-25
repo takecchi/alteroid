@@ -116,6 +116,8 @@ function fakeClone() {
 
   const clone: CloneHost = {
     managers,
+    // 認証トークンの切替（#393 PR4）。HTTP 境界の検証では触らない。
+    recycleSessionForToken() {},
     post(event) {
       posted.push(event);
       if (event.type !== 'human_message') return;
