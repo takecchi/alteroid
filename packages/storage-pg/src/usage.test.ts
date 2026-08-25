@@ -934,6 +934,96 @@ describe('既にある DB への移行（層の列は在るがトークンの列
 });
 
 /**
+ * **起動が2回目でも通るか。** ＝ 本番のデーモンが2度と上がらなくなった形
+ * （2026-08-25）。
+ *
+ * `migrate` は起動のたびに配列を頭から通す。**2周目が古い鍵を作りに行く**のが
+ * この事故の本体である — 1周目で `usage_daily_key_idx`（5列）が作られ、6列の鍵が
+ * できたあと `drop index` で消える。消えているので2周目の `create unique index
+ * if not exists` は名前で一致せず、**本当に作りに行く。** そのときには
+ * `token_id` だけが違う行（6列の鍵が許し、5列の鍵が拒む行）が既に積まれていて、
+ * `could not create unique index "usage_daily_key_idx" … is duplicated` で落ちる。
+ *
+ * **上の describe 群では捕まらない。** どれも「migrate を2回当てる」は問うが、
+ * **その間に新しい鍵でだけ立つ行を挟んでいない** — 行が1つしか無ければ5列でも
+ * 一意なので、2周目の create が通ってしまう。**2周目を通すだけでは足りず、
+ * 「新しい鍵が許して古い鍵が拒む行」を挟むところまでが歯である。**
+ */
+describe('起動を2回通す（`migrate` の周回が、古い鍵を作りに戻らない）', () => {
+  /** 同じ日・actor・モデル・層・場所で、トークンだけが違う2行を積む。 */
+  async function putTwoTokens(target: PgUsageStore): Promise<void> {
+    for (const tokenId of ['', 'tok-a']) {
+      await target.record({
+        layer: 'manager',
+        site: 'session',
+        accumulation: 'oneshot',
+        managerId: 'mgr-1',
+        date: '2026-08-25',
+        at: '2026-08-25T10:00:00.000Z',
+        snapshot: snapshot({ opus: totals({ costUsd: 1 }) }),
+        tokenId,
+      });
+    }
+  }
+
+  it('空の DB から: 記録してから2周目を通しても落ちず、行が消えない', async () => {
+    await putTwoTokens(store);
+    expect((await store.aggregate({})).rows).toHaveLength(2);
+
+    await migrate(db);
+    await migrate(db);
+
+    const { rows } = await store.aggregate({});
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.tokenId ?? '').sort()).toEqual(['', 'tok-a']);
+  });
+
+  it('5列の鍵が既に在る DB から: 移行して記録してから2周目を通しても落ちない', async () => {
+    const legacyClient = new PGlite();
+    const legacyDb: Db = drizzle(legacyClient);
+    try {
+      await legacyDb.execute(
+        sql.raw(`create table if not exists usage_daily (
+           date text not null,
+           manager_id text not null,
+           model text not null,
+           input_tokens bigint not null default 0,
+           output_tokens bigint not null default 0,
+           cache_read_input_tokens bigint not null default 0,
+           cache_creation_input_tokens bigint not null default 0,
+           web_search_requests bigint not null default 0,
+           cost_usd double precision not null default 0,
+           layer text not null default 'manager',
+           site text not null default 'session',
+           updated_at timestamptz not null
+         )`),
+      );
+      await legacyDb.execute(
+        sql.raw(`create unique index if not exists usage_daily_key_idx
+                   on usage_daily (date, manager_id, model, layer, site)`),
+      );
+
+      await migrate(legacyDb);
+      await putTwoTokens(new PgUsageStore(legacyDb));
+      await migrate(legacyDb);
+
+      const names = (
+        (await legacyDb.execute(
+          sql.raw(`select indexname from pg_indexes where tablename = 'usage_daily'`),
+        )) as { rows: Array<{ indexname: string }> }
+      ).rows.map((row) => row.indexname);
+      // **2周目が古い鍵を作り直していないこと。** 落ちなかっただけでは足りない
+      // （行が1つしか無ければ5列でも作れてしまう）。名前で直接見る。
+      expect(names).not.toContain('usage_daily_key_idx');
+      expect(names).toContain('usage_daily_token_key_idx');
+      expect((await new PgUsageStore(legacyDb).aggregate({})).rows).toHaveLength(2);
+    } finally {
+      await legacyClient.close();
+    }
+  });
+});
+
+/**
  * `recordedManagerIds`（Issue #98「台帳が取りこぼした委譲」）。fs 版
  * （`@alteroid/storage-fs` の `usage.test.ts`）と同じ受け入れ項目を pg 経由で問う。
  *
