@@ -74,6 +74,51 @@ export function ownedBy(lines: Line[], shownId: string | undefined): Line[] {
   return lines.filter((line) => line.of === shownId);
 }
 
+/**
+ * **`lines` に保ち続けてよい行を、いま見ている会話・直前に見ていた会話・
+ * まだ持ち主の決まっていない行に絞る**（issue #446）。
+ *
+ * ⚠️ **`ownedBy` と役目が違う。** `ownedBy` は「いま画面に出す」を決め、
+ * こちらは「state（`lines`）に保ち続けてよいか」を決める。会話を何度も
+ * 行き来すると `lines` が単調に増え続けたのが #446 の症状で、これは
+ * その上限を「持ち主の集合」で切る側である。使い方は下の `ChatPane` の
+ * 不変条件チェックを参照。
+ *
+ * **なぜ「いま」だけでなく「直前」も残すか。** 会話を切り替える処理
+ * （下の `routeId !== lastRouteId` のブロック）は、`shownId` を進めるのと
+ * **同じ render で** `previousShownId` も進める。だから React が
+ * 「切り替えの直前まで積まれていた更新」を古い基底から貼り直しても
+ * （#437 の実測: 60回中11回）、貼り直された回でも `shownId`／
+ * `previousShownId` の組は直前の会話をまだ憶えている。**もし直前を
+ * 落として「いま」だけで刈ると、貼り直しで `shownId` が一瞬古い値へ
+ * 戻る回（`main` で40記録中7回観測）に「いま見ている会話」そのものが
+ * 入れ替わり、その回の刈りが本物の行まで落としてしまう** — #437 の
+ * 回帰テスト「古い routeId で描き直されても、送った発言も届いた本文も
+ * 消えない」が守っているのはまさにこの経路である。
+ *
+ * **なぜ `of === undefined` を残すか。** 新しい会話では、送った発言の
+ * ほうが会話 id より先に画面へ乗る（`open` が届いて `of` を付け直すまでの
+ * 窓。下の「まだ持ち主の無い行に、決まった id を付け直す」参照）。ここを
+ * 落とすと、送ったばかりの発言が消える — #437 で実際に踏んだ形そのもの
+ * である。
+ *
+ * **同じ会話へ戻って続けた分の手元の写しは、ここでは刈らない。** 上限は
+ * 「見ている会話の数」であって「行の古さ」ではないので、同じ2つの会話を
+ * 何度往復しても手元の写しは増え続けうる（issue #446 の筋書き2）。
+ * 刈るには「サーバの履歴が既にその行を引き取ったか」を見るしかないが、
+ * それは履歴の再取得がまだ空を返している窓で、届いたばかりの行を画面
+ * から消す形になる — 別の失敗を持ち込むので、今回は入れない。
+ */
+export function retainedBy(
+  lines: Line[],
+  shownId: string | undefined,
+  previousShownId: string | undefined,
+): Line[] {
+  return lines.filter(
+    (line) => line.of === undefined || line.of === shownId || line.of === previousShownId,
+  );
+}
+
 export default function Chat({ loaderData }: Route.ComponentProps) {
   const { conversationId } = loaderData;
 
@@ -331,6 +376,18 @@ export function ChatPane({
   const shownIdRef = useRef(shownId);
 
   /**
+   * 直前に見ていた会話。`retainedBy`（上）が「いま」に加えて残す2つ目の持ち主。
+   *
+   * **`shownId` を進めるのと同じ、この下のブロックでだけ更新する。**
+   * `open`（新しい会話の id が決まるところ）では触らない — 触る箇所を
+   * 増やすほど #437 の再発面が広がる。この結果、保つ持ち主は「いま」
+   * 「直前」に加えて `of === undefined`（まだ id の付いていない、送った
+   * ばかりの発言）を合わせて一時的に3つになることがあるが、それ以上には
+   * 増えない（このブロックが走るたびに1つ前の `shownId` で上書きされる
+   * だけで、積み上がらない）。
+   */
+  const [previousShownId, setPreviousShownId] = useState<string | undefined>(undefined);
+  /**
    * 人間が別の会話を選んだときだけ状態を捨てる。
    *
    * **見るのは「URL が変わったか」であって「shownId と一致するか」ではない。**
@@ -346,6 +403,7 @@ export function ChatPane({
     setLastRouteId(routeId);
     // URL が自分の採番に追いついただけなら、捨てるものは何も無い。
     if (routeId !== shownId) {
+      setPreviousShownId(shownId);
       setShownId(routeId);
       /*
        * **この `setLines([])` は、下の `owns()`/`stopped()`（`writable()` の
@@ -389,9 +447,40 @@ export function ChatPane({
        *
        * **`setFailure(undefined)` は残す。** 失敗の表示は次の送信で立て直せる
        * （消えても情報が失われない）ので、`lines` とは事情が違う。
+       *
+       * **`lines` 自体が増え続けないことは、下の不変条件チェック（`retainedBy`）
+       * が別に持つ（#446）。** ここは「出す/出さない」だけで「保つ/捨てる」を
+       * 持たないので、会話を行き来するたびに手元へ積まれた行そのものは、
+       * この render リセットだけでは減らない。
        */
       setFailure(undefined);
     }
+  }
+
+  /**
+   * **不変条件として毎 render 確かめる（issue #446。#440 の指摘への直接の答え）。**
+   *
+   * #440 は「一度きりの edge を印で見分けて、当たったら破壊する形は、React の
+   * 貼り直しに対して成立しない」と指摘していた——直上の旧 `setLines([])` が
+   * #437 でまさにこの形で壊れている。ここは逆に、**毎 render で `retainedBy`
+   * の結果と現在の `lines` を比べるだけ**にしてある。貼り直しで前の会話の
+   * 行が戻ってきても、次の render でまた同じ比較を通るので自己修復する——
+   * 一度きりの `setLines([])` との決定的な違いはここにある。
+   *
+   * **刈っても、その render で画面に出せる行は1つも減らない。** `ownedBy`
+   * が出すのは `of === shownId` の行だけで、`retainedBy` はそれに加えて
+   * `previousShownId` と `undefined` の行を残すので、刈った後の集合は常に
+   * `ownedBy` の出力を（部分集合として）含む。
+   *
+   * `previous` をそのまま返す分岐は、`retainedBy` が何も落とさなかった
+   * render で `setLines` を無意味に呼んで再描画を増やさないためのもの
+   * （長さが変わらない＝何も落ちていない、で判定する）。
+   */
+  if (retainedBy(lines, shownId, previousShownId).length !== lines.length) {
+    setLines((previous) => {
+      const next = retainedBy(previous, shownId, previousShownId);
+      return next.length === previous.length ? previous : next;
+    });
   }
 
   /*
