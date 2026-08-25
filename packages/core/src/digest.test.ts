@@ -509,6 +509,12 @@ describe('4軸の合図を1つの関数に閉じる（#415）', () => {
     expect(digest).toContain(
       '…ほか 1 件（`usage_read` に axis="model", offset=0 を渡すと続きから辿れる）',
     );
+    // **切ったときに残る側が「高い順の上位」であることまで見る。** 合図が在る
+    // かどうかだけを測ると、`top()` の並びが逆になっても通ってしまう——そのとき
+    // 出力は「安い15件」になり、**合図は正しいまま中身が入れ替わる。** 読んだ側
+    // からは、どちらの15件を見せられているのか区別が付かない。
+    expect(digest).toContain('model-0 $100.00');
+    expect(digest).not.toContain(`model-${MAX_ITEMS} `);
   });
 
   it('高かった委譲: MAX_ITEMS を超えたら合図が出る（既存の文言のまま。axis="manager"）', async () => {
@@ -532,6 +538,9 @@ describe('4軸の合図を1つの関数に閉じる（#415）', () => {
     expect(digest).toContain(
       '  - …ほか 1 本（`usage_read` に axis="manager", offset=0 を渡すと続きから辿れる）',
     );
+    // モデル別と同じ理由——残る側が高い順の上位であることを見る。
+    expect(digest).toContain('mgr-0: $100.00');
+    expect(digest).not.toContain(`mgr-${MAX_ITEMS}: `);
   });
 
   it('ちょうど MAX_ITEMS 件（超えていない）なら、どの軸にも合図が出ない', async () => {
@@ -795,6 +804,99 @@ describe('digest 全体の大きさを測る歯（#414）', () => {
     '## 使った分',
   ];
 
+  /**
+   * **逆向きの歯（全節ぶん）。** 切っていない節が黙っていることを、ここで
+   * まとめて測る。
+   *
+   * **なぜ要るか。** 他の歯は「超えたら言う」側だけを測っていて、この向きは
+   * 使用量の4軸にしか歯が無かった——実際に、`omitted()` の `total <= shown`
+   * の門を外す変異を当てても**どのテストも落ちなかった**（そのとき9節は
+   * 「…ほか 0 件」を出し続ける）。**穴を塞いだのではなく向きを変えただけに
+   * ならないよう、両向きを同じ入力で測る。**
+   */
+  it(`どの節も ${MAX_ITEMS} 件以下なら、合図（…ほか）が1つも出ない`, async () => {
+    const stores = createMemoryStores();
+    const now = new Date().toISOString();
+    const at = new Date();
+    // **全節を「上限ちょうど」で埋める。** 1件でも超えると、その節の合図が
+    // 出るのが正しい挙動になり、この歯が測ろうとしているものが消える。
+    for (let i = 0; i < MAX_ITEMS; i += 1) {
+      await stores.commitments.open({
+        id: `q-open-${i}`,
+        at: now,
+        origin: 'human',
+        body: `未了 ${i}`,
+      });
+      const closedId = `q-closed-${i}`;
+      await stores.commitments.open({
+        id: closedId,
+        at: now,
+        origin: 'human',
+        body: `片付け ${i}`,
+      });
+      await stores.commitments.close(closedId, now, `理由 ${i}`, 'clone');
+      await stores.schedules.put({
+        kind: `q-kind-${i}`,
+        spec: { type: 'daily', at: '09:00' },
+        request: `継続 ${i}`,
+        createdAt: now,
+        updatedAt: now,
+      });
+      await stores.jobs.putJob({
+        id: `q-mgr-${i}`,
+        createdAt: now,
+        updatedAt: now,
+        status: 'done',
+        summary: `仕事 ${i}`,
+        request: `依頼 ${i}`,
+      });
+      await stores.jobs.putApproval({ id: `q-ap-${i}`, createdAt: now, question: `確認 ${i}` });
+      await stores.journal.append({ type: 'decision', decision: `決めた ${i}`, grounds: '記憶' });
+      await stores.journal.append({
+        type: 'escalation',
+        question: `聞いた ${i}`,
+        approvalId: `q-esc-${i}`,
+      });
+      await stores.journal.append({
+        type: 'memory_update',
+        slug: 'values',
+        cause: 'clone',
+        action: 'write',
+        bytesBefore: i,
+        bytesAfter: i + 1,
+        summary: `直した ${i}`,
+      });
+      await stores.journal.append({ type: 'external_event', source: 'ci', summary: `届いた ${i}` });
+      await stores.usage.record({
+        layer: i % 2 === 0 ? 'clone' : 'manager',
+        site: i % 2 === 0 ? 'session' : 'distill',
+        accumulation: 'oneshot',
+        managerId: `q-usage-${i}`,
+        date: usageDate(at),
+        at: at.toISOString(),
+        snapshot: { models: { [`q-model-${i}`]: totals(10 - i / 100) } },
+      });
+    }
+    // 読めない行も「上限ちょうど」で入れる（こちらの合図は別の経路である）。
+    const unreadable = Array.from({ length: MAX_ITEMS }, (_, i) => ({
+      id: `q-unreadable-${i}`,
+      at: now,
+      reason: `壊れている ${i}`,
+    }));
+    const originalList = stores.commitments.list.bind(stores.commitments);
+    stores.commitments.list = async (options) => {
+      const base = await originalList(options);
+      return { ...base, unreadable };
+    };
+
+    const digest = await buildActivityDigest(stores, { since: new Date(Date.now() - 60_000) });
+
+    // まず、測る気でいた節が本当に出ていることを確かめる（空の digest を測って
+    // 「合図が無い」と言う形を避ける)。
+    for (const heading of DECLARED_SECTIONS) expect(digest).toContain(heading);
+    // そのうえで、合図が1つも無いことを見る。
+    expect(digest).not.toContain('…ほか');
+  });
   /**
    * (b) 節の数の歯。
    *

@@ -228,9 +228,10 @@ export async function buildActivityDigest(stores: Stores, window: DigestWindow):
       // 読めない行の id を出す節は `ids.join(', ')` をそのまま使っており、件数の
       // 上限を掛けていない（実装を読んで確認した。まだ上限が無い時点の話なので、
       // 後で上限が付いたらこの文言も直す必要がある）。
+      // 省いた件数は、他の節と同じく**出した件数から引く**（`omitted()` の doc）。
       const idsExtra =
-        idsAll.length > MAX_ITEMS
-          ? `（…ほか ${idsAll.length - MAX_ITEMS} 件。id は commitment_list（id を指定しない一覧モード）を呼べば読めない行の id が全部出る）`
+        idsAll.length > ids.length
+          ? `（…ほか ${idsAll.length - ids.length} 件。id は commitment_list（id を指定しない一覧モード）を呼べば読めない行の id が全部出る）`
           : '';
       sections.push(
         `**読めない行が ${unreadableCommitments.length} 件ある（片付いたのではない）。**` +
