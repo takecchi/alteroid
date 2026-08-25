@@ -4,6 +4,7 @@ import type {
   AccountUsageState,
   ChatStreamEvent,
   CloneHost,
+  Commitment,
   JournalEntry,
   JournalEntryType,
   ManagerPool,
@@ -556,8 +557,86 @@ const commitmentCloseBody = z.object({ reason: z.string().min(1) });
  * **`z.coerce.boolean()` を使わない。** あれは空でない文字列をすべて true にするので、
  * `?includeClosed=false` が true になる（＝既定は未了だけ、という約束が黙って壊れ、
  * 一覧が片付いたもので埋まる）。`/approvals` の `pending` と同じ形に揃えてある。
+ *
+ * **`limit` / `cursor`（窓。issue #432 の考え方を踏襲）。** 並べ替え・絞り込みは
+ * 依然として足さない（理由: 判断がクローンから器へ移る）。窓（`limit`/`cursor`）は
+ * 2026-08-25 に人間の明示の「はい」を受けて足した——`limit`/`cursor` は順序・
+ * 絞り込みを何も決めない。並びは `CommitmentStore.list` の契約
+ * （`packages/core/src/store.ts` の doc）が既に固定していて（未了は古い順、片付いた
+ * ものは新しい順で未了の後ろ）、窓はその固定された順序の上に載るだけである。
+ *
+ * **`limit` に上限（`max`）を付けない。** 理由は `approvalsQuery` の doc と同じ
+ * （この HTTP の口は人間がブラウザで扱う前提で、既定は全件——
+ * `.claude/skills/listing-and-detail/SKILL.md`「いま揃っていないもの」の
+ * `/commitments` の扱い）。
+ *
+ * **`order` は足さない。** すぐ上の route のコメント（「並べ替えや絞り込みの引数を
+ * ここへ足さないこと」）がそのまま生きている——順序は器の持ち物ではない。
  */
-const commitmentsQuery = z.object({ includeClosed: z.enum(['true', 'false']).default('false') });
+const commitmentsQuery = z.object({
+  includeClosed: z.enum(['true', 'false']).default('false'),
+  limit: z.coerce.number().int().min(1).optional(),
+  cursor: z.string().optional(),
+});
+
+/**
+ * `/commitments` のカーソルの中身。**段（segment）を持つ keyset。**
+ *
+ * 一覧は2段でできている（`CommitmentStore.list` の契約。3実装 —
+ * `packages/core/src/testing.ts` のインメモリ / `packages/storage-fs/src/commitments.ts`
+ * / `packages/storage-pg/src/commitments.ts` — とも同じ）: 未了（`closedAt === undefined`）
+ * を `at` の**昇順**、片付き（`closedAt !== undefined`）を `closedAt` の**降順**で、
+ * その順に連結したもの。
+ *
+ * **2段を跨ぐ錨は作らない。** 境界を跨ぐ錨の意味を新しく決めることになり、ストアの
+ * 契約（`CommitmentStore`）に手が入ることになる——これは却下されている（この PR の
+ * 設計）。代わりに**錨が自分の段を名乗る**（`segment`）。`key` は段の中の並びの
+ * キー（`open` は `at`、`closed` は `closedAt`）で、`id` は同時刻の同着を割るための
+ * 補助キー（`at` / `closedAt` はミリ秒精度の `toISOString()` で、同値がありえない
+ * わけではない——`approvalsCursorSchema` の doc と同じ理由）。
+ *
+ * `includeClosed` は、この錨を刷った一覧がどちらだったかを持つ。錨は刷られた一覧の
+ * 中でしか意味を持たないので、リクエストの `includeClosed` と食い違えば 400 にする
+ * （下のハンドラ。`/approvals` が `order` の食い違いを 400 にしているのと同じ理由）。
+ */
+const commitmentsCursorSchema = z.object({
+  segment: z.enum(['open', 'closed']),
+  /** 段の中の並びのキー。`open` は `at`、`closed` は `closedAt`。 */
+  key: z.string().min(1),
+  id: z.string().min(1),
+  /** 錨を刷った一覧が `includeClosed` のどちらだったか。 */
+  includeClosed: z.enum(['true', 'false']),
+});
+
+type CommitmentPos = { segment: 'open' | 'closed'; key: string; id: string };
+
+/** `Commitment` から、頁の錨として使う位置を取り出す。 */
+function commitmentPos(entry: Pick<Commitment, 'id' | 'at' | 'closedAt'>): CommitmentPos {
+  return entry.closedAt === undefined
+    ? { segment: 'open', key: entry.at, id: entry.id }
+    : { segment: 'closed', key: entry.closedAt, id: entry.id };
+}
+
+/**
+ * 段（segment）を持つ keyset の比較。**未了(open) が先、片付き(closed) が後。**
+ * `open` の中は `key`（＝ `at`）昇順 → 同値は `id` 昇順。`closed` の中は `key`
+ * （＝ `closedAt`）降順 → 同値は `id` 昇順。
+ *
+ * **opt-in しなければこの比較は1回も通らない**（後述のハンドラで `optedIn` の
+ * ときにしか呼ばれない）——ストアの生の並びに乗るだけなら、この関数を通す理由が
+ * 無い。既定の呼びの応答が opt-in の前後でバイト単位で一致するのは、この形が
+ * 支えている。
+ */
+function compareCommitmentPos(a: CommitmentPos, b: CommitmentPos): number {
+  if (a.segment !== b.segment) return a.segment === 'open' ? -1 : 1;
+  if (a.segment === 'open') {
+    if (a.key !== b.key) return a.key < b.key ? -1 : 1;
+  } else {
+    if (a.key !== b.key) return a.key > b.key ? -1 : 1;
+  }
+  if (a.id !== b.id) return a.id < b.id ? -1 : 1;
+  return 0;
+}
 
 const loginBody = z.object({
   provider: z.string().min(1),
@@ -2317,6 +2396,11 @@ export function createApp(deps: AppDeps) {
     // **これは「やることの一覧」ではない。** 器が持つのは「何を頼まれたか」と
     // 「まだ片付いていない」の2値だけで、順序も優先度も締切も持たない。だから
     // 並べ替えや絞り込みの引数をここへ足さないこと（判断がクローンから器へ移る）。
+    // **並べ替え・絞り込みは依然として足さない（理由: 判断がクローンから器へ移る）。
+    // 窓（`limit`/`cursor`）は 2026-08-25 に人間の明示の「はい」を受けて足した。**
+    // `limit`/`cursor` は固定された並び（`CommitmentStore.list` の契約）の上に
+    // 頁を切るだけで、何が先か・何が重要かを何も決めない——だから上の禁止と
+    // 衝突しない（`commitmentsQuery` の doc、`commitmentsCursorSchema` の doc）。
     .get(
       '/commitments',
       describeRoute({
@@ -2327,33 +2411,119 @@ export function createApp(deps: AppDeps) {
           '古い順に返る（齢が判断の材料なので、古いものから見せる）。`includeClosed=true` を' +
           '付けると片付けたものが未了の後ろに新しい順で続く。順序や優先度は器が持たない。' +
           '`unreadable` は台帳の行が読めなかったもの（issue #296）。**「無い」でも' +
-          '「片付いた」でもない第3の状態**で、0件でも欄自体は必ず返る。',
+          '「片付いた」でもない第3の状態**で、0件でも欄自体は必ず返る。**窓では絶対に' +
+          '切らない**（issue #296 が塞いだ穴——読めない行が2頁目以降から消える——が' +
+          '再び開くため）。' +
+          '`limit` / `cursor` のいずれかを明示すると頁の封筒（`total` / `nextCursor`）が' +
+          '応答へ載る。**明示しない既定の呼びは、この変更の前と応答が1バイトも変わらない**' +
+          '（opt-in。`.claude/skills/listing-and-detail/SKILL.md` の考え方と同じ——足すのは' +
+          '能力であって、既存の呼び手に新しい欄を押し付けない）。並びは固定（未了は `at` ' +
+          '昇順・片付きは `closedAt` 降順で、その順に連結）で、ここでは選べない——' +
+          '窓はその上に頁を切るだけである（`commitmentsCursorSchema` の doc）。',
         responses: {
           200: {
             description: '台帳の中身。',
             content: { 'application/json': { schema: resolver(commitmentListResponseSchema) } },
           },
           400: {
-            description: 'クエリが不正（`includeClosed` は `true` / `false` だけ）。',
-            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+            description:
+              'クエリが不正（`includeClosed` は `true` / `false` だけ、`limit` は1以上の整数）、' +
+              'または `cursor` が壊れている・`includeClosed` と食い違う。',
+            content: {
+              'application/json': {
+                schema: resolver(z.union([validationErrorResponseSchema, errorResponseSchema])),
+              },
+            },
           },
         },
       }),
       validator('query', commitmentsQuery),
       async (c) => {
+        const { includeClosed, limit, cursor } = c.req.valid('query');
+        // **opt-in の判定は生のクエリで行う。** `includeClosed` は既定値を持つので
+        // `c.req.valid('query')` だけでは「渡されたか」が分からない
+        // （`approvalsQuery` のハンドラの同じコメントと同じ理由——「渡されなかった」を
+        // 「既定値と同じ値が渡された」と混同しないこと。`includeClosed` は窓の
+        // opt-in には含めない——窓とは別の、既存の絞り込みだからである）。
+        const optedIn = c.req.query('limit') !== undefined || c.req.query('cursor') !== undefined;
+
         // **`list()` は `{ entries, unreadable }` を返す（issue #296）。**
         // `unreadable` もそのまま応答へ含める — 人間の側（Web UI・API を
         // 直接叩く側）にもクローンと同じ「読めない行が在る」という事実が
         // 見えるようにする（`commitmentListResponseSchema` の doc）。
         const { entries, unreadable } = await stores.commitments.list(
-          c.req.valid('query').includeClosed === 'true' ? { includeClosed: true } : undefined,
+          includeClosed === 'true' ? { includeClosed: true } : undefined,
         );
-        return c.json(
-          commitmentListResponseSchema.parse({
-            entries: entries.map((entry) => ({ ...entry, updatedAt: commitmentUpdatedAt(entry) })),
-            unreadable,
-          }),
-        );
+        // **`total` は窓を当てる前の件数。** opt-in していないときは応答に載せない
+        // ので、ここで数えておくだけで並べ替えは行わない。
+        const total = entries.length;
+
+        let cursorPayload: z.infer<typeof commitmentsCursorSchema> | undefined;
+        if (cursor !== undefined) {
+          try {
+            cursorPayload = decodeCursor(cursor, commitmentsCursorSchema);
+          } catch (error) {
+            if (error instanceof InvalidCursorError) {
+              return c.json({ error: error.message }, 400);
+            }
+            throw error;
+          }
+          // **黙って別の一覧の続きを返さない。** 錨は刷られた一覧（`includeClosed`）
+          // の中でしか意味を持たない値なので、食い違えば作り直す以外に正しい続きが
+          // 無い（`/approvals` が `order` の食い違いを 400 にしているのと同じ理由）。
+          if (cursorPayload.includeClosed !== includeClosed) {
+            return c.json(
+              { error: 'カーソルの includeClosed がリクエストの includeClosed と食い違う' },
+              400,
+            );
+          }
+          // **id（行）の実在は検査しない。** `(segment, key, id)` の比較で辿るので、
+          // 指していた行が閉じられて段（segment）を移っていても比較は成立し、続きは
+          // 正しく決まる（`apps/daemon/src/cursor.ts` の `decodeCursor` の doc —
+          // 「位置ではなく比較（keyset）で辿る口では実在検査は要らない」）。
+        }
+
+        // **窓は `entries` にだけ当てる。`unreadable` は絶対に窓で切らない。**
+        // これは「無い」でも「片付いた」でもない第3の状態（issue #296）で、
+        // 窓で切ると2頁目以降から読めない行が消え、まさに #296 が塞いだ穴が
+        // 再び開く。
+        let view = entries;
+        if (optedIn) {
+          view = [...entries].sort((a, b) => compareCommitmentPos(commitmentPos(a), commitmentPos(b)));
+          if (cursorPayload !== undefined) {
+            const pivot = cursorPayload;
+            view = view.filter(
+              (entry) => compareCommitmentPos(commitmentPos(entry), pivot) > 0,
+            );
+          }
+        }
+
+        const page = optedIn && limit !== undefined ? view.slice(0, limit) : view;
+        const hasMore = optedIn && page.length < view.length;
+        const lastOfPage = page[page.length - 1];
+
+        const responseBody: {
+          entries: unknown[];
+          unreadable: unknown[];
+          total?: number;
+          nextCursor?: string;
+        } = {
+          entries: page.map((entry) => ({ ...entry, updatedAt: commitmentUpdatedAt(entry) })),
+          unreadable,
+        };
+        if (optedIn) {
+          responseBody.total = total;
+          if (hasMore && lastOfPage !== undefined) {
+            const pos = commitmentPos(lastOfPage);
+            responseBody.nextCursor = encodeCursor({
+              segment: pos.segment,
+              key: pos.key,
+              id: pos.id,
+              includeClosed,
+            });
+          }
+        }
+        return c.json(commitmentListResponseSchema.parse(responseBody));
       },
     )
 
