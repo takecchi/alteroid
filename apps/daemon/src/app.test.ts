@@ -1968,9 +1968,9 @@ describe('GET /commitments の limit/cursor（窓。2026-08-25 opt-in）', () =>
       await stores.commitments.close(id, `2026-03-0${i}T00:00:00.000Z`, '終わった', 'human');
     }
 
-    const full = (await (
-      await app.request('/commitments?includeClosed=true')
-    ).json()) as { entries: { id: string }[] };
+    const full = (await (await app.request('/commitments?includeClosed=true')).json()) as {
+      entries: { id: string }[];
+    };
     // 未了は at 昇順（open-1, open-2, open-3）、片付きは closedAt 降順
     // （closed-3, closed-2, closed-1）で、その順に連結される。
     expect(full.entries.map((e) => e.id)).toEqual([
@@ -2042,9 +2042,10 @@ describe('GET /commitments の limit/cursor（窓。2026-08-25 opt-in）', () =>
       });
     }
 
-    const page1 = (await (
-      await app.request('/commitments?includeClosed=true&limit=1')
-    ).json()) as { entries: { id: string }[]; nextCursor?: string };
+    const page1 = (await (await app.request('/commitments?includeClosed=true&limit=1')).json()) as {
+      entries: { id: string }[];
+      nextCursor?: string;
+    };
     expect(page1.entries.map((e) => e.id)).toEqual(['cm-1']);
     const cursor1 = page1.nextCursor;
     expect(cursor1).toBeTruthy();

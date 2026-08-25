@@ -2491,12 +2491,12 @@ export function createApp(deps: AppDeps) {
         // 再び開く。
         let view = entries;
         if (optedIn) {
-          view = [...entries].sort((a, b) => compareCommitmentPos(commitmentPos(a), commitmentPos(b)));
+          view = [...entries].sort((a, b) =>
+            compareCommitmentPos(commitmentPos(a), commitmentPos(b)),
+          );
           if (cursorPayload !== undefined) {
             const pivot = cursorPayload;
-            view = view.filter(
-              (entry) => compareCommitmentPos(commitmentPos(entry), pivot) > 0,
-            );
+            view = view.filter((entry) => compareCommitmentPos(commitmentPos(entry), pivot) > 0);
           }
         }
 
