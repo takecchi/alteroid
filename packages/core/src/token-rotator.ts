@@ -58,7 +58,12 @@ export interface TokenSpreadResult {
  * 回ったことの権威ある証拠は、次のターンが成功することだけである。
  */
 export interface TokenSpreadPort {
-  spread(token: { id: string; value: string }): Promise<TokenSpreadResult[]>;
+  /**
+   * `generation` も渡す。**撒く先が「どの世代の鍵を持っているか」を名乗れないと、
+   * 世代の照合（{@link observationFreshness}）が成立しない** — クローンは
+   * セッションを起こす瞬間にこれを捕まえて、そのセッションの観測へ添える。
+   */
+  spread(token: { id: string; value: string; generation: number }): Promise<TokenSpreadResult[]>;
 }
 
 /** 候補を1本試す口（PR2 の `probeTokenCandidate` を包んで渡す）。 */
@@ -298,6 +303,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         const spreadResults = await spread.spread({
           id: selection.token.id,
           value: selection.token.value,
+          generation,
         });
 
         return {

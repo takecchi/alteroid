@@ -20,6 +20,8 @@ import {
   createRunnerRegistry,
   createScheduler,
   createTokenPoolService,
+  createTokenRotator,
+  probeTokenCandidate,
   dailyReportEvent,
   installUncaughtNet,
   missingDailyReportDates,
@@ -52,6 +54,7 @@ import {
 } from './runner-client.js';
 import { clearRuntimeInfo, writeRuntimeInfo } from './runtime.js';
 import { buildSchedule, readScheduleConfig } from './schedule.js';
+import { createAgentTokenHolder, createTokenSpread } from './token-spread.js';
 import { openStorage } from './storage.js';
 
 export { createApp, parseAllowedOrigins, type AppDeps, type AppType } from './app.js';
@@ -640,6 +643,36 @@ export async function main(): Promise<void> {
    */
   const usagePoller = startUsagePolling({ queryFn: query, cwd: paths.root });
 
+  /**
+   * 認証トークンの回し手（Issue #393 PR3）。**デーモンの中の1本。**
+   *
+   * ここで組み立てる部品は3つ——現役をクローンへ渡す箱、撒く口、そして回し手
+   * 本体。**判定も選択も回し手が持つ**ので、クローンとマネージャーは観測を
+   * 渡すだけになる。
+   */
+  const agentTokenHolder = createAgentTokenHolder();
+  const tokenRotator = createTokenRotator({
+    stores,
+    probe: {
+      // **本番の仕事で試さない**（Issue #393 の設計の骨）。推論が走らない probe。
+      probe: (token) => probeTokenCandidate(query, { token: token.value, cwd: paths.root }),
+    },
+    spread: createTokenSpread({
+      runners,
+      clone: agentTokenHolder,
+      // **プロファイルが評価済みで持っている env の名前**。取れなければ空を返す
+      // ——その場合は影を検出できないが、「影が無い」とは主張しない
+      // （`createTokenSpread` の doc）。
+      profileEnvNames: () => Promise.resolve(Object.keys(profile.env())),
+      onShadowed: (names) => {
+        process.stderr.write(
+          `alteroidd: 実行環境プロファイルが認証の鍵と同じ名前を宣言しています。` +
+            `回した鍵はこれで上書きされます: ${names.join(', ')}\n`,
+        );
+      },
+    }),
+  });
+
   const clone = createClone({
     stores,
     accountUsage: () => usagePoller.state(),
@@ -648,6 +681,18 @@ export async function main(): Promise<void> {
     profile,
     profileService,
     self,
+    // 現役のトークン。**値ではなく関数**——構築時に凍らせない（`CloneOptions` の doc）。
+    credentials: () => agentTokenHolder.values(),
+    tokenIdentity: () => agentTokenHolder.identity(),
+    onUsageObservation: async (observation) => {
+      const outcome = await tokenRotator.observe(observation);
+      // **回した / 回さなかったを黙って捨てない。** 日誌へ載せるのは PR5 の
+      // 仕事だが、それまでのあいだも stderr には出す——**回ったかどうかが
+      // どこからも見えない期間を作らない。**
+      if (outcome.kind !== 'ignored') {
+        process.stderr.write(`alteroidd: 認証トークン: ${outcome.why}\n`);
+      }
+    },
     ...(storage.sessionStore === undefined ? {} : { sessionStore: storage.sessionStore }),
   });
 

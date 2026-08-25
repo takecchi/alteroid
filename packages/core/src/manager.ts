@@ -56,6 +56,7 @@ import {
   usageTransitionOf,
   type RateLimitFacts,
 } from './usage-limits.js';
+import type { TokenRotatorObservation } from './token-rotator.js';
 import { usageDate } from './usage.js';
 
 /**
@@ -456,6 +457,16 @@ export interface ManagerPool {
 }
 
 export interface ManagerPoolOptions {
+  /**
+   * いま撒かれている認証トークンの身元（Issue #393 PR3）。**マネージャーの
+   * セッションを起こす瞬間に1度だけ読む。**
+   */
+  tokenIdentity?: () => { tokenId: string; generation: number } | undefined;
+  /**
+   * 枠の観測を回し手へ渡す口（Issue #393 PR3）。**このプールは回すかどうかを
+   * 判断しない。**
+   */
+  onUsageObservation?: (observation: TokenRotatorObservation) => Promise<void>;
   stores: Stores;
   /** マネージャーからの出来事をクローンの受信箱へ流す。 */
   post: (event: InboxEvent) => void;
@@ -735,7 +746,24 @@ class Pool implements ManagerPool {
    * 走行中は `rate_limit_event` がターンの頭ごとに来るので、ここが最新になる。
    * 揮発してよい — デーモンを作り直したら、使い捨ての probe が取り直す。
    */
+  readonly #tokenIdentity: (() => { tokenId: string; generation: number } | undefined) | undefined;
+  readonly #onUsageObservation:
+    ((observation: TokenRotatorObservation) => Promise<void>) | undefined;
   readonly #rateLimits = new Map<string, RateLimitFacts>();
+  /**
+   * **そのマネージャーのセッションが起きたときの**認証トークンの身元
+   * （Issue #393 PR3）。managerId → 身元。
+   *
+   * **観測のたびに読み直さない。** 読み直すと、回した後に届いた「前のセッションの
+   * 観測」が新しい身元を名乗り、世代の照合がそのまま素通しになる——**それは
+   * 5本のマネージャーが同時に当たった回にプールを5個消費する、という
+   * この照合が存在する理由そのものである。**
+   *
+   * **記録（`#records`）へ足さずに別の箱にしてあるのは、`#records.set` が5箇所
+   * あるからである。** 1箇所忘れると、そのマネージャーの観測だけが身元を失う
+   * ——しかもそれは「回りすぎる」形で出るので、テストでは気づきにくい。
+   */
+  readonly #tokenIdentities = new Map<string, { tokenId: string; generation: number }>();
   /**
    * 種類ごとに、**もうクローンへ配った上限の文言**と、配らずに畳んだ件数。
    *
@@ -825,6 +853,8 @@ class Pool implements ManagerPool {
     now,
     leaseTtlMs,
     generateManagerId,
+    tokenIdentity,
+    onUsageObservation,
   }: ManagerPoolOptions) {
     this.#stores = stores;
     this.#post = post;
@@ -833,6 +863,8 @@ class Pool implements ManagerPool {
     this.#now = now ?? (() => Date.now());
     this.#leaseTtlMs = leaseTtlMs ?? LEASE_TTL_MS;
     this.#generateManagerId = generateManagerId ?? (() => `mgr-${randomUUID()}`);
+    this.#tokenIdentity = tokenIdentity;
+    this.#onUsageObservation = onUsageObservation;
     // **後から載った runner に自分から繋ぐ。** 名簿が動的である以上、受け口を開く
     // 契機を起動時にしか持たないと、後から現れた runner は永久に無言のままになる。
     this.#unsubscribe = runners.subscribe((runner) => {
@@ -951,6 +983,8 @@ class Pool implements ManagerPool {
       attached: true,
     };
     this.#records.set(managerId, record);
+    // **セッションが起きるこの瞬間の身元を捕まえる**（`#tokenIdentities` の doc）。
+    this.#rememberTokenIdentity(managerId);
 
     // 委譲はノンブロッキング。起こして即返し、クローンは次の判断へ移る。
     try {
@@ -1366,6 +1400,8 @@ class Pool implements ManagerPool {
           attached,
         };
         this.#records.set(job.id, record);
+        // 引き取ったセッションも、この瞬間の身元で観測を名乗る。
+        this.#rememberTokenIdentity(job.id);
         await this.#persist(record);
         // 「runner の中で走り続けている」は `lost` にも `failed` にも言えない。
         if (attached) this.#notifyRestored(record, 'attached');
@@ -2927,6 +2963,13 @@ class Pool implements ManagerPool {
         //
         // **判定は文字列の一致ではなく「もう配ったか」で行う。** 理由と、直す前に
         // 何が起きていたかは `#usageNotices` の doc にある。
+        // **回し手へ渡す。** これは runner が `classifyUsageNotice` に通した
+        // 文言由来の通知である（`runner.ts` の `usage_notice`）。**受信箱の畳み
+        // （下の `delivered`）より先に渡す** — あれはクローンへ同じ知らせを何度も
+        // 配らないための仕組みであって、回し手の契機とは別の話である。畳みの後ろに
+        // 置くと、2本目のマネージャーが同じ文言で当たった回に回し手が呼ばれない。
+        await this.#observeForTokenRotation(event.managerId, { notice: event.notice });
+
         const text = describeUsageNotice(event.notice);
         const memory = this.#usageNoticeMemoryOf(event.notice.kind);
         if (memory.delivered.has(event.notice.text)) {
@@ -2983,6 +3026,15 @@ class Pool implements ManagerPool {
         const transition = usageTransitionOf(previous, event.facts);
         this.#rateLimits.set(event.facts.kind ?? '', mergeRateLimitFacts(previous, event.facts));
         if (transition === undefined) return;
+
+        // **回し手へは事実と遷移で渡す**（通知の形へ仕立て直さない）。`rejected` は
+        // 「その枠が尽きた」であって「仕事が止まった」ではないので、`reached` の
+        // 形にして渡すと `overage_exhausted` の設定でも課金枠を使わずに回る
+        // （Issue #393 追記1 の訂正）。
+        await this.#observeForTokenRotation(event.managerId, {
+          facts: this.#rateLimits.get(event.facts.kind ?? '') ?? event.facts,
+          transition,
+        });
 
         // 「移った」「追い返された」の**瞬間だけ**を知らせる（状態を毎回流さない）。
         const reason =
@@ -3277,6 +3329,35 @@ class Pool implements ManagerPool {
    * を後から辿れない。ここは `managerId` を持たない（枠の事実はアカウント単位で、
    * どのマネージャーのターンで気づいたかは記憶の側の軸ではない）。
    */
+  /** そのマネージャーのセッションが起きた瞬間の身元を覚える。 */
+  #rememberTokenIdentity(managerId: string): void {
+    const identity = this.#tokenIdentity?.();
+    if (identity === undefined) return;
+    this.#tokenIdentities.set(managerId, identity);
+  }
+
+  /**
+   * 枠の観測を回し手へ渡す（Issue #393 PR3）。**判断はしない。**
+   *
+   * **投げてもマネージャーの経路を壊さない。** 回せなかったことは枠に当たった
+   * こととは別の失敗であり、後者の報告を前者で置き換えない。
+   */
+  async #observeForTokenRotation(
+    managerId: string,
+    observation: Omit<TokenRotatorObservation, 'observedBy'>,
+  ): Promise<void> {
+    if (this.#onUsageObservation === undefined) return;
+    const observedBy = this.#tokenIdentities.get(managerId);
+    try {
+      await this.#onUsageObservation({
+        ...observation,
+        ...(observedBy === undefined ? {} : { observedBy }),
+      });
+    } catch (error) {
+      noteDroppedRecord('認証トークンの切替', `manager ${managerId}`, error);
+    }
+  }
+
   #usageNoticeMemoryOf(kind: string): UsageNoticeMemory {
     const existing = this.#usageNotices.get(kind);
     if (existing !== undefined) return existing;
