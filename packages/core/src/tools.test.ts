@@ -558,6 +558,107 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * ⭐ 記憶の肥大への恒久対策——`memory_write` / `memory_append` /
+   * `memory_frontmatter_set` / `memory_section_move` の応答の末尾に足す
+   * 「毎ターンの床」（`describeMemoryFloor`）。
+   *
+   * **`describeMemoryWriteDiff` の出力（上の78件級の `expect(reply)`）とは別の
+   * 追加行なので、ここでは新しく足した行だけを測る。**
+   */
+  describe('書く4口の応答に足す「毎ターンの床」（describeMemoryFloor、記憶の肥大への恒久対策）', () => {
+    it('⭐ premise を新規作成すると、区分・床の遷移（文字）・「毎ターン全文が焼かれる」の3つが出る', async () => {
+      const h = harness();
+
+      const reply = await h.call('memory_write', {
+        slug: 'about-me-core',
+        content: '# 私の芯\n\n'.concat('大事にしていること。'.repeat(50)),
+        summary: '新しい芯を作った',
+      });
+
+      expect(reply).toContain('premise');
+      expect(reply).toContain('毎ターンの床');
+      expect(reply).toContain('全文がそのままクローンの文脈へ焼かれる');
+      // 床は 0 文字から動く（この器では他に記憶が無い）。
+      expect(reply).toMatch(/0 文字から [\d,]+ 文字へ/);
+    });
+
+    it('fact を新規作成しても「全文が焼かれる」の1行は出ない', async () => {
+      const h = harness();
+
+      const reply = await h.call('memory_write', {
+        slug: 'fact-doc',
+        content: '---\ntype: fact\ndescription: 事実\n---\n# 事実\n本文',
+        summary: '新規',
+      });
+
+      expect(reply).toContain('fact');
+      expect(reply).toContain('毎ターンの床');
+      expect(reply).not.toContain('全文がそのままクローンの文脈へ焼かれる');
+    });
+
+    it('memory_append の新規作成でも同じ3要素が出る（premise）', async () => {
+      const h = harness();
+
+      const reply = await h.call('memory_append', {
+        slug: 'appended-premise',
+        content: '最初の1行',
+        summary: '新規',
+      });
+
+      expect(reply).toContain('premise');
+      expect(reply).toContain('毎ターンの床');
+      expect(reply).toContain('全文がそのままクローンの文脈へ焼かれる');
+    });
+
+    it('memory_frontmatter_set（既存文書の更新）では「全文が焼かれる」は出ない（新規作成ではないため）', async () => {
+      const h = harness();
+      await h.stores.persona.write('values', '---\ntype: premise\n---\n# 価値観\n本文');
+
+      const reply = await h.call('memory_frontmatter_set', {
+        slug: 'values',
+        description: '要旨を足した',
+        summary: '要旨だけ',
+      });
+
+      expect(reply).toContain('毎ターンの床');
+      expect(reply).not.toContain('全文がそのままクローンの文脈へ焼かれる');
+    });
+
+    it('単位は文字である（bytes を出していない）', async () => {
+      const h = harness();
+
+      const reply = await h.call('memory_write', {
+        slug: 'zenkaku',
+        content: '価値観です',
+        summary: '全角',
+      });
+
+      expect(reply).toContain('毎ターンの床');
+      // 床の行に bytes という語は出ない（総文字数の既存の歯とは別に、
+      // ここで足した行だけを測る）。
+      const floorLine = (reply.split('\n').find((line) => line.includes('毎ターンの床')) ??
+        '') as string;
+      expect(floorLine).not.toContain('bytes');
+      expect(floorLine).toContain('文字');
+    });
+
+    it('⭐ 床を測る経路は persona.write / append / remove を呼ばない（読み直すだけ）', async () => {
+      const h = harness();
+      await h.stores.persona.write('doc', '# 総論\n本文');
+
+      const writeSpy = vi.spyOn(h.stores.persona, 'write');
+      const appendSpy = vi.spyOn(h.stores.persona, 'append');
+      const removeSpy = vi.spyOn(h.stores.persona, 'remove');
+
+      await h.call('memory_write', { slug: 'doc', content: '# 総論\n本文を増やした', summary: 'x' });
+
+      expect(writeSpy).toHaveBeenCalledTimes(1);
+      expect(appendSpy).not.toHaveBeenCalled();
+      expect(removeSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
    * `memory_list`（#170「記憶の目次化」）。要旨・鮮度・区分・階層を出す。
    * `memory_write` が frontmatter を書けること自体はストア層の歯
    * （`memory.test.ts` / `storage-fs` / `storage-pg` のテスト）で確かめてあるので、
@@ -1539,6 +1640,35 @@ describe('クローンの道具', () => {
         // 動かしていない節は残る。
         expect(from?.content).toContain('## 次');
         expect(reply).toContain('移した');
+      });
+
+      /**
+       * ⭐ 記憶の肥大への恒久対策——節の移動で「毎ターンの床」がどう動くかは
+       * 移し先（`toSlug`）の区分で決まる。移し先が既に `type: fact` なら、
+       * 移した本文はその文書の目次の1行にしか影響しない（本文は焼かれない）
+       * ので、出どころ（premise）の全文からその分が消えたぶん、床は**減る**。
+       */
+      it('⭐ premise から既存の fact へ節を移すと、毎ターンの床は減ると応答が言う', async () => {
+        const h = harness();
+        await seed(h);
+        // 移し先を先に fact として作っておく。
+        await h.stores.persona.write(
+          'about-me-appendix',
+          '---\ntype: fact\ndescription: 付録\n---\n# 付録\n既存の本文\n',
+        );
+        const id = await outlineId(h, 'about-me', '## 事例');
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'about-me',
+          section: id,
+          toSlug: 'about-me-appendix',
+          summary: '事例を付録へ移した',
+        });
+
+        expect(reply).toContain('毎ターンの床');
+        expect(reply).toContain('fact');
+        // delta が符号つきの負の数（減った）で出る。
+        expect(reply).toMatch(/毎ターンの床（焼き込み全体）: [\d,]+ 文字から [\d,]+ 文字へ（-[\d,]+）/);
       });
 
       /**
