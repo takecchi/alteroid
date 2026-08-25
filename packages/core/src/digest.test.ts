@@ -217,7 +217,8 @@ describe('上限で切ったことを黙らない', () => {
   it('マネージャー節（この節が黙って切れていた）', async () => {
     const stores = createMemoryStores();
     const now = new Date().toISOString();
-    for (let i = 0; i < MAX_ITEMS + 3; i += 1) {
+    const total = MAX_ITEMS + 3;
+    for (let i = 0; i < total; i += 1) {
       await stores.jobs.putJob({
         id: `mgr-${i}`,
         createdAt: now,
@@ -230,9 +231,21 @@ describe('上限で切ったことを黙らない', () => {
 
     const digest = await buildActivityDigest(stores, { since: since() });
 
-    expect(digest).toContain(`マネージャーへの委譲（この期間に動いたもの）: ${MAX_ITEMS + 3} 本`);
+    expect(digest).toContain(`マネージャーへの委譲（この期間に動いたもの）: ${total} 本`);
     expect(digest).toContain('…ほか 3 件');
     expect(digest).toContain('manager_list');
+    // **drift の歯（#415 の隣の穴。omitted() 側）。** 「合図は在る」だけでは、
+    // 出した件数が `MAX_ITEMS` から離れても（例えば `.slice(0, 5)` に変わって
+    // も）気づけない——`omitted()` はいまは「実際に出した件数」から引くので、
+    // 合図の数はどんな `shown` でも自動的に総数と整合してしまう。だから
+    // 「実際に出した件数そのもの」を数えて `MAX_ITEMS` と比較する。
+    // `mgr-${i} [` の形で数える（`mgr-1 [` は `mgr-10 [` の部分文字列にならない
+    // ——次の文字が空白か `[` かで区切れる）。
+    const shownIds = Array.from({ length: total }, (_, i) => i).filter((i) =>
+      digest.includes(`mgr-${i} [`),
+    );
+    expect(shownIds).toHaveLength(MAX_ITEMS);
+    expect(shownIds.length + 3).toBe(total);
   });
 
   /**
@@ -271,7 +284,8 @@ describe('上限で切ったことを黙らない', () => {
   it('人間の回答待ち節', async () => {
     const stores = createMemoryStores();
     const now = new Date().toISOString();
-    for (let i = 0; i < MAX_ITEMS + 1; i += 1) {
+    const total = MAX_ITEMS + 1;
+    for (let i = 0; i < total; i += 1) {
       await stores.jobs.putApproval({
         id: `ap-${i}`,
         createdAt: now,
@@ -284,6 +298,13 @@ describe('上限で切ったことを黙らない', () => {
     expect(digest).toContain('…ほか 1 件');
     // 打ち切らない道具なので、ここだけは「全部見える」と書ける。
     expect(digest).toContain('approvals_list');
+    // **drift の歯。** 上のマネージャー節と同じ理由——`ap-${i}（` の形で数える
+    // （`ap-1（` は `ap-10（` の部分文字列にならない）。
+    const shownIds = Array.from({ length: total }, (_, i) => i).filter((i) =>
+      digest.includes(`ap-${i}（`),
+    );
+    expect(shownIds).toHaveLength(MAX_ITEMS);
+    expect(shownIds.length + 1).toBe(total);
   });
 
   /**
@@ -327,18 +348,25 @@ describe('上限で切ったことを黙らない', () => {
 
   // 日誌から作る節。**どれも同じ形で黙って切れていた**ので、節ごとに1本立てる
   // （1つのテストにまとめると、最初の1件で止まって残りが測れない）。
+  // `label(i)` は、実際に出した件数を数えるための一意な部分文字列
+  // （drift の歯。下の it.each の doc を見ること）。次の文字までを含めて
+  // 境界を作る——`決めた 1` だけだと `決めた 10` の部分文字列として誤って
+  // 一致するため（AGENTS.md「静かに失敗する道具」の複合語の取りこぼしと
+  // 同じ形）。
   const journalSections = [
     {
       name: '聞かずに決めたこと',
       entry: (i: number) =>
         ({ type: 'decision', decision: `決めた ${i}`, grounds: '記憶' }) as const,
       types: 'types=["decision"]',
+      label: (i: number) => `決めた ${i}（`,
     },
     {
       name: 'エスカレーション',
       entry: (i: number) =>
         ({ type: 'escalation', question: `聞いた ${i}`, approvalId: `ap-${i}` }) as const,
       types: 'types=["escalation"]',
+      label: (i: number) => `聞いた ${i} →`,
     },
     {
       name: '記憶の更新',
@@ -350,18 +378,30 @@ describe('上限で切ったことを黙らない', () => {
           summary: `直した ${i}`,
         }) as const,
       types: 'types=["memory_update"]',
+      label: (i: number) => `直した ${i}\n`,
     },
     {
       name: '届いた外部イベント',
       entry: (i: number) =>
         ({ type: 'external_event', source: 'ci', summary: `届いた ${i}` }) as const,
       types: 'types=["external_event"]',
+      label: (i: number) => `届いた ${i}\n`,
     },
   ];
 
-  it.each(journalSections)('$name 節', async ({ entry, types }) => {
+  /**
+   * **drift の歯。** 合図（「…ほか N 件」）が在ることだけを見るテストでは、
+   * `.slice(0, MAX_ITEMS)` の件数が `MAX_ITEMS` から離れても気づけない——
+   * `omitted()`（#415 の隣で直した）はいまは「実際に出した件数」から引くので、
+   * 合図の数はどんな `shown` でも自動的に総数と整合してしまう（合図そのものが
+   * 嘘になる形は直った。だが「常に `MAX_ITEMS` 件出す」という意図が崩れても、
+   * 合図だけを見ている限り気づけない）。だから実際に出した件数そのものを
+   * 数えて `MAX_ITEMS` と比較する。
+   */
+  it.each(journalSections)('$name 節', async ({ entry, types, label }) => {
     const stores = createMemoryStores();
-    for (let i = 0; i < MAX_ITEMS + 2; i += 1) await stores.journal.append(entry(i));
+    const total = MAX_ITEMS + 2;
+    for (let i = 0; i < total; i += 1) await stores.journal.append(entry(i));
 
     const digest = await buildActivityDigest(stores, { since: since() });
 
@@ -369,6 +409,11 @@ describe('上限で切ったことを黙らない', () => {
     // **行き先は「打ち切る道具」であることまで書く。** `journal_read` も予算で
     // 切るので、「全部見える」と書けば嘘になる。
     expect(digest).toContain(types);
+    const shown = Array.from({ length: total }, (_, i) => i).filter((i) =>
+      digest.includes(label(i)),
+    );
+    expect(shown).toHaveLength(MAX_ITEMS);
+    expect(shown.length + 2).toBe(total);
   });
 });
 
