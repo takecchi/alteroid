@@ -45,7 +45,12 @@ describe('撒く先が両方とも出力に残る', () => {
       profileEnvNames: async () => [],
     });
 
-    const results = await spread.spread({ id: 'tok-a', value: SECRET, generation: 2 });
+    const results = await spread.spread({
+      id: 'tok-a',
+      generation: 2,
+      kind: 'stored',
+      value: SECRET,
+    });
 
     expect(results).toEqual([
       { target: 'runner-primary', ok: true },
@@ -67,7 +72,12 @@ describe('撒く先が両方とも出力に残る', () => {
       profileEnvNames: async () => [],
     });
 
-    const results = await spread.spread({ id: 'tok-a', value: SECRET, generation: 2 });
+    const results = await spread.spread({
+      id: 'tok-a',
+      generation: 2,
+      kind: 'stored',
+      value: SECRET,
+    });
 
     expect(results.find((r) => r.target === 'runner-primary')?.ok).toBe(true);
     expect(results.find((r) => r.target === 'runner-2')?.ok).toBe(false);
@@ -83,7 +93,12 @@ describe('撒く先が両方とも出力に残る', () => {
       profileEnvNames: async () => [],
     });
 
-    const results = await spread.spread({ id: 'tok-a', value: SECRET, generation: 2 });
+    const results = await spread.spread({
+      id: 'tok-a',
+      generation: 2,
+      kind: 'stored',
+      value: SECRET,
+    });
 
     const runner = results.find((r) => r.target === 'runner');
     expect(runner?.ok).toBe(false);
@@ -99,7 +114,12 @@ describe('撒く先が両方とも出力に残る', () => {
       profileEnvNames: async () => [],
     });
 
-    const results = await spread.spread({ id: 'tok-a', value: SECRET, generation: 2 });
+    const results = await spread.spread({
+      id: 'tok-a',
+      generation: 2,
+      kind: 'stored',
+      value: SECRET,
+    });
 
     expect(results.find((r) => r.target === 'runner')?.ok).toBe(false);
     expect(results.find((r) => r.target === 'clone')?.ok).toBe(true);
@@ -114,7 +134,12 @@ describe('値がどこにも出ない', () => {
       profileEnvNames: async () => ['CLAUDE_CODE_OAUTH_TOKEN'],
     });
 
-    const results = await spread.spread({ id: 'tok-a', value: SECRET, generation: 2 });
+    const results = await spread.spread({
+      id: 'tok-a',
+      generation: 2,
+      kind: 'stored',
+      value: SECRET,
+    });
 
     expect(JSON.stringify(results)).not.toContain(SECRET);
   });
@@ -131,7 +156,12 @@ describe('プロファイルが鍵を影にしている形', () => {
       onShadowed: (names) => seen.push([...names]),
     });
 
-    const results = await spread.spread({ id: 'tok-a', value: SECRET, generation: 2 });
+    const results = await spread.spread({
+      id: 'tok-a',
+      generation: 2,
+      kind: 'stored',
+      value: SECRET,
+    });
 
     // 撒いてはいる。
     expect(results.find((r) => r.target === 'runner-primary')?.ok).toBe(true);
@@ -149,7 +179,12 @@ describe('プロファイルが鍵を影にしている形', () => {
       profileEnvNames: async () => ['PATH'],
     });
 
-    const results = await spread.spread({ id: 'tok-a', value: SECRET, generation: 2 });
+    const results = await spread.spread({
+      id: 'tok-a',
+      generation: 2,
+      kind: 'stored',
+      value: SECRET,
+    });
 
     expect(results.find((r) => r.target === 'profile-shadow')).toBeUndefined();
   });
@@ -164,7 +199,12 @@ describe('プロファイルが鍵を影にしている形', () => {
       profileEnvNames: async () => Promise.reject(new Error('プロファイルが読めない')),
     });
 
-    const results = await spread.spread({ id: 'tok-a', value: SECRET, generation: 2 });
+    const results = await spread.spread({
+      id: 'tok-a',
+      generation: 2,
+      kind: 'stored',
+      value: SECRET,
+    });
 
     expect(results.find((r) => r.target === 'runner-primary')?.ok).toBe(true);
     expect(results.find((r) => r.target === 'profile-shadow')).toBeUndefined();

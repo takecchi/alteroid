@@ -9,6 +9,7 @@ import {
 } from './token-rotator.js';
 import type { Stores } from './store.js';
 import type { UsageLimitNotice } from './usage-limits.js';
+import type { ActiveAgentToken, AgentToken, TokenCredential } from './token-pool.js';
 
 /**
  * 回し手（Issue #393 PR3）。**受け入れ基準を直接固定する場所である。**
@@ -27,8 +28,8 @@ const reached: UsageLimitNotice = {
 
 interface Harness {
   stores: Stores;
-  spreadCalls: { id: string; value: string; generation: number }[];
-  probeCalls: { id: string; value: string }[];
+  spreadCalls: ({ id: string; generation: number } & TokenCredential)[];
+  probeCalls: ({ id: string } & TokenCredential)[];
   rotator: ReturnType<typeof createTokenRotator>;
 }
 
@@ -39,8 +40,8 @@ function harness(
   } = {},
 ): Harness {
   const stores = createMemoryStores();
-  const spreadCalls: { id: string; value: string; generation: number }[] = [];
-  const probeCalls: { id: string; value: string }[] = [];
+  const spreadCalls: ({ id: string; generation: number } & TokenCredential)[] = [];
+  const probeCalls: ({ id: string } & TokenCredential)[] = [];
 
   const probe: TokenProbePort = {
     async probe(token) {
@@ -114,7 +115,9 @@ describe('受け入れ基準1: 1本目が止まったら2本目へ回る', () =>
       rotatedAt: AT,
     });
     // 撒いたのは新しいほうの値。
-    expect(h.spreadCalls).toEqual([{ id: 'tok-b', value: 'value-b', generation: 2 }]);
+    expect(h.spreadCalls).toEqual([
+      { id: 'tok-b', generation: 2, kind: 'stored', value: 'value-b' },
+    ]);
   });
 
   it('降りたトークンに、止まった文言と冷却の期限が記録される', async () => {
@@ -253,7 +256,7 @@ describe('候補を本番の仕事で試さない（probe の3値）', () => {
     const h = harness({ verdict: { verdict: 'usable' } });
     await seedTwo(h);
     await h.rotator.observe({ notice: reached, observedBy: { tokenId: 'tok-a', generation: 1 } });
-    expect(h.probeCalls).toEqual([{ id: 'tok-b', value: 'value-b' }]);
+    expect(h.probeCalls).toEqual([{ id: 'tok-b', kind: 'stored', value: 'value-b' }]);
     expect(h.spreadCalls).toHaveLength(1);
   });
 
@@ -421,7 +424,9 @@ describe('降りた本人へ「回す」を作らない（resetsAt が過去で�
     if (outcome.kind !== 'rotated') return;
     // **自分自身ではない。**
     expect(outcome.toTokenId).toBe('tok-b');
-    expect(h.spreadCalls).toEqual([{ id: 'tok-b', value: 'value-b', generation: 2 }]);
+    expect(h.spreadCalls).toEqual([
+      { id: 'tok-b', generation: 2, kind: 'stored', value: 'value-b' },
+    ]);
   });
 
   it('resetsAt が過去で、他に候補が無ければ「候補が無い」へ倒れる（自分へ戻らない）', async () => {
@@ -474,7 +479,9 @@ describe('restore（起動時の引き取り）', () => {
     if (outcome.kind !== 'restored') return;
     expect(outcome.tokenId).toBe('tok-b');
     expect(outcome.cooling).toBe(false);
-    expect(h.spreadCalls).toEqual([{ id: 'tok-b', value: 'value-b', generation: 5 }]);
+    expect(h.spreadCalls).toEqual([
+      { id: 'tok-b', generation: 5, kind: 'stored', value: 'value-b' },
+    ]);
   });
 
   it('世代を増やさない（引き取りは回転ではない）', async () => {
@@ -523,7 +530,9 @@ describe('restore（起動時の引き取り）', () => {
     if (outcome.kind !== 'restored') return;
     expect(outcome.cooling).toBe(true);
     // 冷却中の tok-a を撒いている（tok-b へ勝手に移らない）。
-    expect(h.spreadCalls).toEqual([{ id: 'tok-a', value: 'value-a', generation: 2 }]);
+    expect(h.spreadCalls).toEqual([
+      { id: 'tok-a', generation: 2, kind: 'stored', value: 'value-a' },
+    ]);
     expect(outcome.why).toContain('冷却中');
   });
 

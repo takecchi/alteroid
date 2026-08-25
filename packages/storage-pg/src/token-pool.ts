@@ -23,7 +23,10 @@ function toRow(token: AgentToken) {
   return {
     id: token.id,
     label: token.label,
-    value: token.value,
+    value: token.value ?? null,
+    // **null は `stored`**（後から足した列なので既存の行は null）。既定を書き戻して
+    // 「'stored' の行」と「列が無い行」を混在させない。
+    source: token.source === 'env' ? 'env' : null,
     order: token.order,
     disabledAt: token.disabledAt === undefined ? null : new Date(token.disabledAt),
     cooldownUntil: token.cooldownUntil ?? null,
@@ -40,7 +43,8 @@ function fromRow(row: AgentTokenRow): AgentToken {
   return {
     id: row.id,
     label: row.label,
-    value: row.value,
+    ...(row.value === null ? {} : { value: row.value }),
+    ...(row.source === 'env' ? { source: 'env' as const } : {}),
     order: row.order,
     ...(row.disabledAt === null ? {} : { disabledAt: row.disabledAt.toISOString() }),
     ...(row.cooldownUntil === null ? {} : { cooldownUntil: row.cooldownUntil }),

@@ -2,6 +2,7 @@ import {
   credentialNamesShadowedByProfile,
   ROTATABLE_CREDENTIAL_KEYS,
   type RunnerRegistry,
+  type TokenCredential,
   type TokenSpreadPort,
   type TokenSpreadResult,
 } from '@alteroid/core';
@@ -36,6 +37,14 @@ export interface AgentTokenHolder {
    */
   identity(): { tokenId: string; generation: number } | undefined;
   set(value: string, identity?: { tokenId: string; generation: number }): void;
+  /**
+   * 値を落として**器の環境変数へ戻す**（`source: 'env'` の行を撒くとき）。
+   *
+   * **空文字を `set` しない。** 空文字は `#childEnv()` へ空の `CLAUDE_CODE_OAUTH_TOKEN`
+   * を重ね、**器の環境変数を「空で上書き」してしまう**（＝資格が消える）。落とすのは
+   * キーごとである。
+   */
+  clear(identity?: { tokenId: string; generation: number }): void;
 }
 
 export function createAgentTokenHolder(): AgentTokenHolder {
@@ -45,6 +54,10 @@ export function createAgentTokenHolder(): AgentTokenHolder {
     values: (): Record<string, string> =>
       current === undefined ? {} : { CLAUDE_CODE_OAUTH_TOKEN: current },
     identity: () => currentIdentity,
+    clear: (identity?: { tokenId: string; generation: number }) => {
+      current = undefined;
+      if (identity !== undefined) currentIdentity = identity;
+    },
     set: (value: string, identity?: { tokenId: string; generation: number }) => {
       current = value;
       // **身元は渡されたときだけ更新する。** 渡されなかったからといって消すと、
@@ -83,11 +96,9 @@ export function createTokenSpread(options: TokenSpreadOptions): TokenSpreadPort 
   const { runners, clone, profileEnvNames, onShadowed } = options;
 
   return {
-    async spread(token: {
-      id: string;
-      value: string;
-      generation: number;
-    }): Promise<TokenSpreadResult[]> {
+    async spread(
+      token: { id: string; generation: number } & TokenCredential,
+    ): Promise<TokenSpreadResult[]> {
       const results: TokenSpreadResult[] = [];
 
       // **プロファイルが同じ名前を宣言していたら、撒く前に出す。**
@@ -105,7 +116,15 @@ export function createTokenSpread(options: TokenSpreadOptions): TokenSpreadPort 
         // **どの宛先の話かを人間が見分けられること**までで、識別子としての
         // 権威は要らない（`RunnerClient.runnerId` の注意書き）。
         try {
-          await client.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: token.value }]);
+          // **env の行は「鍵を消す」ことで表す。** 空文字を渡すと器が鍵の
+          // ファイルを消し（`credentials.ts` の `#commit`）、`#childEnv()` が
+          // 器の環境変数へ落ちる。**リテラルを撒かずに「env を使え」を表現できる。**
+          await client.setCredentials([
+            {
+              name: 'CLAUDE_CODE_OAUTH_TOKEN',
+              value: token.kind === 'env' ? '' : token.value,
+            },
+          ]);
           results.push({ target: client.runnerId, ok: true });
         } catch (error) {
           // **理由は1行目だけ採る。** ドライバやネットワークの例外は本文へ
@@ -131,7 +150,9 @@ export function createTokenSpread(options: TokenSpreadOptions): TokenSpreadPort 
 
       // クローン側は同じプロセス内なので落ちない。**身元も一緒に置く** —
       // 置かないと、クローンの観測が身元を名乗れず世代の照合が素通しになる。
-      clone.set(token.value, { tokenId: token.id, generation: token.generation });
+      const identity = { tokenId: token.id, generation: token.generation };
+      if (token.kind === 'env') clone.clear(identity);
+      else clone.set(token.value, identity);
       results.push({ target: 'clone', ok: true });
 
       if (shadowed.length > 0) {

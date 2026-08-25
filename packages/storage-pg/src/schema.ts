@@ -478,7 +478,13 @@ export const usageLedger = pgTable('usage_ledger', {
 export const agentTokens = pgTable('agent_tokens', {
   id: text('id').primaryKey(),
   label: text('label').notNull(),
-  value: text('value').notNull(),
+  /**
+   * 本体。**`source = 'env'` の行は持たない**ので null を許す
+   * （`@alteroid/core` の `AgentToken.value` の doc）。
+   */
+  value: text('value'),
+  /** 資格の出所。null は `stored`（後から足した列なので、既存の行は null である）。 */
+  source: text('source'),
   order: integer('order_index').notNull(),
   disabledAt: timestamp('disabled_at', { withTimezone: true, mode: 'date' }),
   /** epoch ミリ秒（`AgentToken.cooldownUntil` と同じ単位）。 */

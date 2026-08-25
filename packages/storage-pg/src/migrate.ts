@@ -338,6 +338,13 @@ const STATEMENTS = [
   `alter table agent_tokens add column if not exists created_at timestamptz`,
   `alter table agent_tokens add column if not exists updated_at timestamptz`,
 
+  // 資格の出所（Issue #393）。**null は `stored`** ——後から足した列なので、
+  // 既存の行は null である。**`default 'stored'` を付けない**（付けても意味は
+  // 同じだが、null と 'stored' の2通りが混在するより、読む側の分岐が1つで済む）。
+  `alter table agent_tokens add column if not exists source text`,
+  // **`value` の not null を外す。** `source = 'env'` の行は値を持たない。
+  `alter table agent_tokens alter column value drop not null`,
+
   // いま撒いてある現役の指名（Issue #393 PR3）。高々1行（id = 'default'）。
   // **`agent_tokens` の列にしない** — 2行が同時に現役だと主張する形を作らない。
   `create table if not exists agent_token_active (

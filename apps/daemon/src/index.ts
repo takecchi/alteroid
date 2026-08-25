@@ -659,7 +659,22 @@ export async function main(): Promise<void> {
     stores,
     probe: {
       // **本番の仕事で試さない**（Issue #393 の設計の骨）。推論が走らない probe。
-      probe: (token) => probeTokenCandidate(query, { token: token.value, cwd: paths.root }),
+      probe: (token) => {
+        // **env の行は器の環境変数の値で試す。** リテラルや空文字で試すと、
+        // **その行を「使えない」と誤って冷却する**（＝いま走っているトークンを
+        // 自分で降ろす）。
+        const value = token.kind === 'env' ? process.env.CLAUDE_CODE_OAUTH_TOKEN : token.value;
+        if (value === undefined || value.length === 0) {
+          // **env の行なのに環境変数が無い。** 器を作り直すときに `.env` から
+          // 落ちた、という形で実際に起こりうる。**「判定できない」ではなく
+          // 「使えない」である** —— 撒くと鍵を消して全層が資格を失う。
+          return Promise.resolve({
+            verdict: 'unusable' as const,
+            reason: '器の環境変数（CLAUDE_CODE_OAUTH_TOKEN）が置かれていない',
+          });
+        }
+        return probeTokenCandidate(query, { token: value, cwd: paths.root });
+      },
     },
     spread: createTokenSpread({
       runners,

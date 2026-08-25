@@ -1,6 +1,8 @@
 import {
+  credentialOf,
   markTokenUnusable,
   tokenAvailabilityAt,
+  type TokenCredential,
   type ActiveAgentToken,
   type AgentToken,
   type TokenRotationSettings,
@@ -64,15 +66,14 @@ export interface TokenSpreadPort {
    * 世代の照合（{@link observationFreshness}）が成立しない** — クローンは
    * セッションを起こす瞬間にこれを捕まえて、そのセッションの観測へ添える。
    */
-  spread(token: { id: string; value: string; generation: number }): Promise<TokenSpreadResult[]>;
+  spread(token: { id: string; generation: number } & TokenCredential): Promise<TokenSpreadResult[]>;
 }
 
 /** 候補を1本試す口（PR2 の `probeTokenCandidate` を包んで渡す）。 */
 export interface TokenProbePort {
-  probe(token: {
-    id: string;
-    value: string;
-  }): Promise<
+  probe(
+    token: { id: string } & TokenCredential,
+  ): Promise<
     | { verdict: 'usable' }
     | { verdict: 'unusable'; reason: string; retryAt?: number }
     | { verdict: 'undecidable'; reason: string }
@@ -291,10 +292,10 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         const cooling = availability === 'cooling';
         const spreadResults = await spread.spread({
           id: row.id,
-          value: row.value,
           // **保存されていた世代をそのまま渡す。** ここで増やすと、まだ有効な
           // 観測が `stale` として捨てられる。
           generation: active.generation,
+          ...credentialOf(row),
         });
         return {
           kind: 'restored' as const,
@@ -378,7 +379,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         // probe で確かめる。3値のうち `unusable` だけが候補を1本飛ばす。
         const verdict = await probe.probe({
           id: selection.token.id,
-          value: selection.token.value,
+          ...credentialOf(selection.token),
         });
         if (verdict.verdict === 'unusable') {
           // **飛ばした候補も冷却へ入れる。** 入れないと次の観測で同じものが
@@ -421,8 +422,8 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
 
         const spreadResults = await spread.spread({
           id: selection.token.id,
-          value: selection.token.value,
           generation,
+          ...credentialOf(selection.token),
         });
 
         return {

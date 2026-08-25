@@ -20,7 +20,9 @@ import { z } from 'zod';
 const agentTokenRowSchema = z.object({
   id: z.string(),
   label: z.string(),
-  value: z.string(),
+  /** `source: 'env'` の行は持たない（器の環境変数を指すだけなので）。 */
+  value: z.string().optional(),
+  source: z.enum(['stored', 'env']).optional(),
   order: z.number().int(),
   disabledAt: z.string().optional(),
   cooldownUntil: z.number().optional(),
