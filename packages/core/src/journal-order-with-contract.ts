@@ -149,6 +149,39 @@ async function appendPairAtSameMillisecond(
   }
 }
 
+/**
+ * 壁時計が1ミリ秒進むまで待つ（issue #449）。
+ *
+ * ## なぜ要るか
+ *
+ * この契約の `a`..`e` は「別々の時刻を持つ5件」として書かれている（契約8 が
+ * `e.at` を「`a.at` とは異なる時刻」として使う）。**だがその前提は何にも
+ * 守られていなかった。** `JournalEntryInput` は `at` を持たない
+ * （`schema.ts` の `DistributiveOmit<JournalEntry, 'id' | 'at'>`）ので時刻は器が
+ * 付け、**3実装とも `new Date().toISOString()` である。** ⟹ 連続した `append` は
+ * 普通に同じミリ秒へ落ちる。
+ *
+ * **実測（2026-08-25、darwin）: 素の `append` を5回で、`a.at === e.at` が
+ * 20試行中11回。** そのとき契約8 が渡すアンカーは「食い違うアンカー」ではなく
+ * **実在する有効なアンカー**になり、投げないのが正しい挙動になる——**歯のほうが
+ * 間違って赤くなる。** しかも赤の文言は「id だけで引いている疑いがある」と
+ * 実装を疑う向きに書かれているので、**濡れ衣のまま調査が始まる。**
+ *
+ * **CI（Linux）では緑だった**ので、「CI が緑だから直っている」とは読めない
+ * （AGENTS.md「CI が Linux だけなので、OS 固有の振る舞いは緑として観測される」）。
+ *
+ * ## なぜ固定の `sleep` にしないか
+ *
+ * 「何ミリ秒待てば足りるか」は器の分解能に依存する。**進んだことを見て抜ける**
+ * ほうが、待ちすぎも待ち足りなさも起きない。
+ */
+async function awaitNextMillisecond(): Promise<void> {
+  const start = Date.now();
+  while (Date.now() === start) {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
+
 export async function verifyJournalStoreOrderContract(
   journal: JournalStoreOrderContractSubject,
 ): Promise<void> {
@@ -158,23 +191,27 @@ export async function verifyJournalStoreOrderContract(
     decision: 'journal-order-contract: a',
     grounds: 'journal-order-with-contract',
   });
+  await awaitNextMillisecond();
   const b = await journal.append({
     type: 'decision',
     decision: 'journal-order-contract: b',
     grounds: 'journal-order-with-contract',
   });
+  await awaitNextMillisecond();
   await journal.append({
     type: 'exchange',
     with: 'human',
     role: 'inbound',
     text: 'journal-order-contract: c',
   });
+  await awaitNextMillisecond();
   const d = await journal.append({
     type: 'exchange',
     with: 'manager',
     role: 'inbound',
     text: 'journal-order-contract: d',
   });
+  await awaitNextMillisecond();
   const e = await journal.append({
     type: 'decision',
     decision: 'journal-order-contract: e',
@@ -306,6 +343,23 @@ export async function verifyJournalStoreOrderContract(
   }
 
   // --- 契約8: id は在るが at が違うときも投げる ---
+  //
+  // **前提を先に確かめる（issue #449）。** ここは `e.at` を「`a.at` とは異なる
+  // 時刻」として使うが、その前提が崩れると渡したアンカーは**実在する有効な
+  // アンカー**になり、投げないのが正しい挙動になる。
+  //
+  // **崩れたときに、実装ではなく前提を名指しさせる。** 下の契約8 の文言は
+  // 「id だけで引いている疑いがある」と実装を疑う向きに書かれているので、
+  // ここで止めないと**濡れ衣のまま調査が始まる**（実際に一度そうなった）。
+  if (a.at === e.at) {
+    throw new Error(
+      'JournalStore の order 契約を測れない（歯の前提が崩れている。実装の問題ではない） — ' +
+        `5件の append が同じ時刻になった（a.at = e.at = ${a.at}）。` +
+        '契約8 は「a.id は実在するが at が食い違う」アンカーを作るために e.at を' +
+        '借りているので、両者が同じだとそれが有効なアンカーになってしまう。' +
+        'awaitNextMillisecond() が効いているかを見ること（issue #449）。',
+    );
+  }
   let threwForMismatchedAt = false;
   try {
     // a.id は実在するが、e.at（別行の時刻。a.at とは異なる）と組み合わせる。
