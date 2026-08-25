@@ -60,6 +60,8 @@ function fakeClone(stores: Stores) {
 
   const clone: CloneHost = {
     managers,
+    // 認証トークンの切替（#393 PR4）。この歯では触らない。
+    recycleSessionForToken() {},
     post(event) {
       if (event.type !== 'human_message') return;
       const conversationId = event.conversationId;

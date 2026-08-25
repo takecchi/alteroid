@@ -752,6 +752,15 @@ class Clone implements CloneHost {
   /** SDK へ流す入力の待ち行列。 */
   readonly #input: SDKUserMessage[] = [];
   #inputWaiter: (() => void) | null = null;
+  /**
+   * 認証トークンを回したので、**次のターンの境界で** SDK セッションを畳んで作り直す
+   * （Issue #393 PR4）。
+   *
+   * **印だけを持つ。** 回すと決めた時点ではセッションに触らない —— 触ると、
+   * そのとき走っていたターンを殺すか、失敗として報告するかのどちらかになる
+   * （`#inputStream` の doc）。
+   */
+  #recycleForToken = false;
 
   #query: Query | null = null;
   #reader: Promise<void> | null = null;
@@ -926,6 +935,41 @@ class Clone implements CloneHost {
       noteBackgroundFailure('クローンの受信箱のループ', '', error);
       throw error;
     });
+  }
+
+  /**
+   * 認証トークンを回したので、**次のターンの境界で**セッションを畳んで作り直す
+   * （Issue #393 PR4）。
+   *
+   * ## なぜ要るか
+   *
+   * SDK 子プロセスの env は**起動時に凍る**ので、回した鍵は走っているセッションに
+   * 届かない（`credentials.ts` / `profile.ts` の doc が同じ境界を何度も書いている）。
+   * ⟹ **畳んで作り直すまで、クローンは古いトークンのまま**である。
+   *
+   * 枠に当たったクローンは `#usageBlocked` が立ってターンを回さないが、再挑戦の
+   * 経路は在る（`grep -n '枠の解除を試す' packages/core/src/clone.ts`）。**作り直さ
+   * ないと、その再挑戦が古いトークンで走って同じところで止まる。**
+   *
+   * ## 会話は切れない
+   *
+   * 次の `#ensureQuery()` が `getCloneSessionId()` の `resume` で作り直すので、
+   * **セッション id は引き継がれる。** 畳むのは SDK の子プロセスであって、
+   * 会話でも記憶でもない。
+   *
+   * ## ここではセッションに触らない
+   *
+   * 立てるのは印だけである。**いま走っているターンは最後まで走って結果を返す**
+   * （受け入れ基準。理由は `#inputStream` の doc）。
+   *
+   * **セッションがまだ無ければ何もしない。** 印を立てると、次に作られる
+   * セッション（＝もう新しい鍵で起きたもの）がいきなり畳まれる。
+   */
+  recycleSessionForToken(): void {
+    if (this.#query === null) return;
+    this.#recycleForToken = true;
+    // 入力待ちで止まっているなら、そこから抜けさせる（ターンの境界に居る場合）。
+    this.#wakeInput();
   }
 
   /** デーモンの HTTP 層から一覧・生ログへ降りるための口。 */
@@ -2693,6 +2737,27 @@ class Clone implements CloneHost {
         continue;
       }
       if (this.#stopped) return;
+      // **認証トークンを回したので、このセッションを畳んで作り直す**（Issue #393 PR4）。
+      //
+      // **ここが「ターンの境界」である** —— 積まれた入力が無く（上の `shift` が
+      // `undefined`）、走っているターンも無い（`#turn === null`）。
+      //
+      // ## 途中で畳んではいけない理由は2つあり、どちらも既定の設定で必ず踏む
+      //
+      // 1. **既定（`free_exhausted`）は `rejected` で回すが、そのターンは成功しうる**
+      //    （課金枠で通る。`usage-limits.ts` の「1つぶんの状態でしかない」）。
+      //    途中で畳むと**通るはずだった仕事を殺す**
+      // 2. **`#read` の `finally` は、未完のターンが在ると失敗を報告する**
+      //    （すぐ上の `if (turn) { … 'クローンのセッションが終了した' }`）。
+      //    ⟹ 途中で畳むと、**回したことが依頼者には「セッションが終了した」という
+      //    失敗として届く**
+      //
+      // **`#stopped` に相乗りしないこと。** あれはクローン全体の停止であり、
+      // 混ぜると「トークンを回したらクローンが止まる」になる。
+      if (this.#recycleForToken && this.#turn === null) {
+        this.#recycleForToken = false;
+        return;
+      }
       await new Promise<void>((resolve) => {
         this.#inputWaiter = resolve;
       });
@@ -3620,6 +3685,10 @@ class Clone implements CloneHost {
     const turn = this.#turn;
     this.#turn = null;
     turn?.resolve();
+    // **ここがターンの境界になった。** 回す印が立っていれば、入力待ちで止まって
+    // いる `#inputStream` を起こして畳ませる（Issue #393 PR4）。起こさないと、
+    // **次に入力が届くまで古いトークンのまま走り続ける。**
+    if (this.#recycleForToken) this.#wakeInput();
   }
 
   #emit(conversationId: string | null, event: ChatStreamEvent): void {

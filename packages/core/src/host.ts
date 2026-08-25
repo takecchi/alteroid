@@ -29,6 +29,18 @@ export interface CloneHost {
    */
   readonly managers: ManagerPool;
 
+  /**
+   * 認証トークンを回したので、**次のターンの境界で** SDK セッションを畳んで
+   * 作り直す（Issue #393 PR4）。
+   *
+   * **`stop()` とは別物である。** あちらはクローン全体の停止で、こちらは
+   * 子プロセスだけの入れ替えである（会話は `resume` で続く）。**混ぜると
+   * 「トークンを回したらクローンが止まる」になる。**
+   *
+   * 呼ぶのは回し手（デーモンの1本）だけで、**回ったときにだけ**呼ぶ。
+   */
+  recycleSessionForToken(): void;
+
   /** 走行中のターンを止めて片付ける。 */
   stop(): Promise<void>;
 }
