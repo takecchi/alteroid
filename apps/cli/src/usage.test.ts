@@ -213,6 +213,83 @@ describe('renderUsage', () => {
 });
 
 /**
+ * 台帳に1行も無い委譲（Issue #98「台帳が取りこぼした委譲」）。
+ *
+ * **合計値の隣に必ず出す。** 文言そのものは `describeUnrecordedManagers`
+ * （core）が1箇所で持つので、ここで測るのは「渡された内容がそのまま出るか」と
+ * 「合計の近くという位置」である。
+ */
+describe('renderUsage は台帳に1行も無い委譲を合計値の隣に出す', () => {
+  it('1件以上あれば、合計の直後に managerId と status と起こした時刻を出す', () => {
+    const text = renderUsage(
+      aggregate({
+        rows: [row({ managerId: 'm1', costUsd: 1 })],
+        unrecordedManagers: [
+          { managerId: 'mgr-unrecorded', status: 'running', startedAt: '2026-08-25T12:00:00.000Z' },
+        ],
+      }),
+    );
+
+    expect(text).toContain('mgr-unrecorded');
+    expect(text).toContain('running');
+    expect(text).toContain('2026-08-25T12:00:00.000Z');
+
+    // **合計値の隣**——「合計 …」の行より後、マネージャー別などの軸の見出しより
+    // 前に出ることを、出現位置の順序で確かめる。
+    const totalIndex = text.indexOf('合計 $1.00');
+    const unrecordedIndex = text.indexOf('mgr-unrecorded');
+    const managerAxisIndex = text.indexOf('マネージャー別:');
+    expect(totalIndex).toBeGreaterThanOrEqual(0);
+    expect(unrecordedIndex).toBeGreaterThan(totalIndex);
+    expect(unrecordedIndex).toBeLessThan(managerAxisIndex);
+  });
+
+  /**
+   * **0件のときも黙らない。** 空配列は「取りこぼしが無い」であって「調べていない」
+   * ではない——そう読める形で、0件でも必ず1行出す。
+   */
+  it('0件のときは「0件」と明示する（黙らない）', () => {
+    const text = renderUsage(
+      aggregate({
+        rows: [row({ managerId: 'm1', costUsd: 1 })],
+        unrecordedManagers: [],
+      }),
+    );
+
+    expect(text).toContain('0件');
+  });
+
+  it('rows が空でも、取りこぼしがあれば出す（照会範囲と無関係に全期間で判定するため）', () => {
+    const text = renderUsage(
+      aggregate({
+        rows: [],
+        unrecordedManagers: [
+          { managerId: 'mgr-unrecorded', status: 'done', startedAt: '2026-08-25T12:00:00.000Z' },
+        ],
+      }),
+    );
+
+    expect(text).toContain('その範囲には記録が無い');
+    expect(text).toContain('mgr-unrecorded');
+  });
+
+  it('台帳がまだ空（since が null）でも、取りこぼしがあれば出す', () => {
+    const text = renderUsage(
+      aggregate({
+        rows: [],
+        since: null,
+        unrecordedManagers: [
+          { managerId: 'mgr-unrecorded', status: 'running', startedAt: '2026-08-25T12:00:00.000Z' },
+        ],
+      }),
+    );
+
+    expect(text).toContain('まだ1件も記録が無い');
+    expect(text).toContain('mgr-unrecorded');
+  });
+});
+
+/**
  * アカウント全体の残り（claude.ai 側の値）を、**人間の面にも出す。**
  *
  * `GET /usage` は最初からこれを返していたが、読んでいたのはクローンの

@@ -63,6 +63,11 @@ function stubUsage(body: {
    * それを見たいテストだけが `null` を渡す（`account` を省く）。
    */
   account?: unknown;
+  /**
+   * 台帳に1行も無い委譲（Issue #98）。**既定は空配列**——この軸を測るテストだけが
+   * 自分で渡す（他の軸と同じ形）。
+   */
+  unrecordedManagers?: unknown[];
 }) {
   // **`account` は spread から外して組み立てる。** `...body` に混ぜると、
   // 「応答に無い」を作るために `null` を渡した場合、その `null` が応答へ残る
@@ -76,6 +81,7 @@ function stubUsage(body: {
           beforeLayers: body.beforeLayers ?? false,
           notice: body.notice ?? USAGE_ESTIMATE_NOTICE,
           breakdown: null,
+          unrecordedManagers: body.unrecordedManagers ?? [],
           ...(account === null ? {} : { account: account ?? { state: 'unknown' } }),
         })
       : undefined,
@@ -295,6 +301,7 @@ describe('/usage 画面', () => {
         beforeLayers: false,
         notice: USAGE_ESTIMATE_NOTICE,
         breakdown: null,
+        unrecordedManagers: [],
       });
     });
 
@@ -364,6 +371,105 @@ describe('/usage 画面', () => {
       const tokens = input.className.split(/\s+/);
       expect(tokens).toContain('min-w-0');
     }
+  });
+});
+
+/**
+ * 台帳に1行も無い委譲（Issue #98「台帳が取りこぼした委譲」）。
+ *
+ * 文言そのものの試験は core（`describeUnrecordedManagers`）が持つ。ここで見るのは
+ * 「この画面に出ていること」と「合計値の隣であること」と「0件でも省略しないこと」。
+ */
+describe('/usage 画面の台帳に1行も無い委譲', () => {
+  it('1件以上あれば、この画面にも出す', async () => {
+    stubUsage({
+      rows: [row(1)],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+      unrecordedManagers: [
+        { managerId: 'mgr-unrecorded', status: 'running', startedAt: '2026-08-25T12:00:00.000Z' },
+      ],
+    });
+
+    render(
+      <Providers>
+        <Usage />
+      </Providers>,
+    );
+
+    expect(await screen.findByText(/台帳に1行も無い委譲/)).toBeTruthy();
+    expect(await screen.findByText(/mgr-unrecorded/)).toBeTruthy();
+    expect(screen.getByText(/mgr-unrecorded/).textContent).toContain('running');
+  });
+
+  /**
+   * **0件のときも黙らない。** 空配列は「取りこぼしが無い」であって「調べていない」
+   * ではない——カード自体は常に出て、0件と明示する。
+   */
+  it('0件のときも「0件」と明示する（カードごと消さない）', async () => {
+    stubUsage({
+      rows: [row(1)],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+      unrecordedManagers: [],
+    });
+
+    render(
+      <Providers>
+        <Usage />
+      </Providers>,
+    );
+
+    const heading = await screen.findByText(/台帳に1行も無い委譲/);
+    expect(heading).toBeTruthy();
+    expect(await screen.findByText(/0件/)).toBeTruthy();
+  });
+
+  it('台帳がまだ空（since が null）でも、取りこぼしがあれば出す', async () => {
+    stubUsage({
+      rows: [],
+      since: null,
+      beforeLedger: false,
+      unrecordedManagers: [
+        { managerId: 'mgr-unrecorded', status: 'lost', startedAt: '2026-08-25T12:00:00.000Z' },
+      ],
+    });
+
+    render(
+      <Providers>
+        <Usage />
+      </Providers>,
+    );
+
+    expect(await screen.findByText(/台帳にはまだ1件も記録が無い/)).toBeTruthy();
+    expect(await screen.findByText(/mgr-unrecorded/)).toBeTruthy();
+  });
+
+  /**
+   * **合計値の隣。** 「合計」カードのすぐ後に「台帳に1行も無い委譲」カードが
+   * 続くことを、DOM 上の並びで確かめる。
+   */
+  it('「合計」カードの直後に置く', async () => {
+    stubUsage({
+      rows: [row(1)],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+      unrecordedManagers: [
+        { managerId: 'mgr-unrecorded', status: 'running', startedAt: '2026-08-25T12:00:00.000Z' },
+      ],
+    });
+
+    render(
+      <Providers>
+        <Usage />
+      </Providers>,
+    );
+
+    const totalHeading = await screen.findByRole('heading', { name: '合計' });
+    const totalCard = totalHeading.closest('div.rounded-lg');
+    if (totalCard === null) throw new Error('合計カードが見つからない');
+    const nextCard = totalCard.nextElementSibling;
+    expect(nextCard?.textContent).toContain('台帳に1行も無い委譲');
   });
 });
 

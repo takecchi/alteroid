@@ -180,6 +180,9 @@ export function renderUsage(view: UsageView): string {
 
   if (rows.length === 0) {
     lines.push('その範囲には記録が無い。');
+    // **取りこぼしは照会範囲と無関係に全期間で判定する。** この範囲に台帳の行が
+    // 無くても出す（`findUnrecordedManagers` の doc）。
+    lines.push('', ...describeUnrecordedManagers(unrecordedManagers));
   } else {
     // **算術はここで足し直さない。** `summarizeUsage` の結果をそのまま出す。
     const summary = summarizeUsage(rows);

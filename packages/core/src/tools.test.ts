@@ -3556,6 +3556,144 @@ describe('usage_read（人間が見られるものはクローンからも見ら
   });
 });
 
+/**
+ * 台帳に1行も無い委譲（Issue #98「台帳が取りこぼした委譲」）。
+ *
+ * **判定は「台帳に1行も無いか」の1つだけ。** `status` では絞らない。
+ */
+describe('usage_read の台帳に1行も無い委譲（Issue #98）', () => {
+  const models = {
+    'claude-opus-5': {
+      inputTokens: 10,
+      outputTokens: 100,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      webSearchRequests: 0,
+      costUsd: 2,
+    },
+  };
+
+  async function spent(h: Harness, managerId: string, date: string, at: string) {
+    await h.stores.usage.record({
+      layer: 'manager',
+      site: 'session',
+      accumulation: 'cumulative',
+      managerId,
+      date,
+      at,
+      snapshot: { models },
+    });
+  }
+
+  it('台帳に行が無いマネージャーを、managerId と status と起こした時刻付きで出す', async () => {
+    const h = harness();
+    h.running.push({
+      managerId: 'mgr-unrecorded',
+      status: 'running',
+      live: true,
+      cwd: '/work',
+      request: '長く走っている',
+      startedAt: '2026-08-25T12:00:00.000Z',
+      updatedAt: '2026-08-25T12:00:00.000Z',
+      waiting: [],
+    });
+    await spent(h, 'mgr-recorded', '2026-08-14', '2026-08-14T10:00:00.000Z');
+
+    const reply = await h.call('usage_read', {});
+
+    expect(reply).toContain('mgr-unrecorded');
+    expect(reply).toContain('running');
+    expect(reply).toContain('2026-08-25T12:00:00.000Z');
+  });
+
+  /**
+   * ⚠️ **期間で絞ると壊れることを測る歯。** 台帳の行そのものが照会範囲の外に
+   * あっても、その managerId は「記録が無い」に化けてはいけない。
+   */
+  it('期間で絞っても、範囲の外で記録された委譲は取りこぼしとして出ない', async () => {
+    const h = harness();
+    // 台帳の since を1月に固定する（since の cutoff とこのテストの主題を
+    // 混同しないため、別の managerId で先に record する）。
+    await spent(h, 'mgr-anchor', '2026-01-01', '2026-01-01T00:00:00.000Z');
+    h.running.push({
+      managerId: 'mgr-old-record',
+      status: 'done',
+      live: false,
+      cwd: '/work',
+      request: '5月に走った',
+      startedAt: '2026-05-01T00:00:00.000Z',
+      updatedAt: '2026-05-01T01:00:00.000Z',
+      waiting: [],
+    });
+    await spent(h, 'mgr-old-record', '2026-05-01', '2026-05-01T00:30:00.000Z');
+
+    // 8月だけを狭く照会する——1月・5月の行は範囲の外に落ちる。
+    const reply = await h.call('usage_read', { from: '2026-08-01', to: '2026-08-31' });
+
+    expect(reply).toContain('その範囲には記録が無い');
+    expect(reply).not.toContain('mgr-old-record');
+  });
+
+  it('since より前に createdAt を持つ委譲は出さない', async () => {
+    const h = harness();
+    // 台帳の since はこの record で 2026-08-20 に決まる。
+    await spent(h, 'mgr-recorded', '2026-08-20', '2026-08-20T00:00:00.000Z');
+    h.running.push({
+      managerId: 'mgr-before-ledger',
+      status: 'lost',
+      live: false,
+      cwd: '/work',
+      request: '台帳より前に立った',
+      startedAt: '2026-07-01T00:00:00.000Z',
+      updatedAt: '2026-07-01T01:00:00.000Z',
+      waiting: [],
+    });
+
+    const reply = await h.call('usage_read', {});
+
+    expect(reply).toContain('台帳の始点: 2026-08-20');
+    expect(reply).not.toContain('mgr-before-ledger');
+  });
+
+  it('取りこぼしが0件のときは「0件」と明示する（黙らない）', async () => {
+    const h = harness();
+    await spent(h, 'mgr-recorded', '2026-08-14', '2026-08-14T10:00:00.000Z');
+
+    const reply = await h.call('usage_read', {});
+
+    expect(reply).toContain('0件');
+  });
+
+  /**
+   * **`context.managers` が `undefined` のとき、0 と出さない。** 蒸留の
+   * サイドクエリでだけ起こる（`ToolContext.managers` の doc）。「確かめられ
+   * なかった」と明示し、「取りこぼしは無い」（0件）と同じ形にしない。
+   *
+   * ⚠️ **`apps/daemon/src/app.ts` の `GET /usage` とは前提が違う。** そちらの
+   * `clone.managers` は non-optional なので、この分岐は起こらない
+   * （`unrecordedManagersLines` の doc）。
+   */
+  it('context.managers が無いときは「確かめられなかった」と言い、0 とは言わない', async () => {
+    const stores = createMemoryStores();
+    await stores.usage.record({
+      layer: 'manager',
+      site: 'session',
+      accumulation: 'cumulative',
+      managerId: 'mgr-recorded',
+      date: '2026-08-14',
+      at: '2026-08-14T10:00:00.000Z',
+      snapshot: { models },
+    });
+    const tools = createCloneTools({ stores, emit: () => undefined });
+    const found = tools.find((t) => t.name === 'usage_read');
+    const result = await found!.handler({} as never, {} as never);
+    const reply = result.content.map((part) => ('text' in part ? part.text : '')).join('\n');
+
+    expect(reply).toContain('確かめられなかった');
+    expect(reply).not.toContain('0件');
+  });
+});
+
 describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
   const one = (costUsd: number) => ({
     'claude-opus-5': {
