@@ -32,6 +32,11 @@ const TONE: Record<JournalEntryType, 'neutral' | 'ok' | 'warn' | 'danger' | 'acc
   external_event: 'warn',
   worker_wait: 'neutral',
   turn_usage: 'neutral',
+  // **`warn` にしてある。** この種別が出るのは枠に当たったときで、`rotated` でも
+  // 「撒いた（走行中には届いていない）」までしか意味しない。`neutral` にすると
+  // `exhausted`（全層が止まる）が普通の行と同じ色で並ぶ。**色は種別ごとに1つしか
+  // 選べないので、いちばん重い側に合わせる。**
+  token_rotation: 'warn',
 };
 
 /**

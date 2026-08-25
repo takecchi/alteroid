@@ -409,6 +409,74 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     /** 記憶のどこに根拠があったか（無ければ人間に聞いたはず） */
     grounds: z.string(),
   }),
+  /**
+   * 認証トークンのプールが回った / 回らなかった（Issue #393）。
+   *
+   * **`exchange` では区別できないので種別を分けてある。** 直す前はここが
+   * `{ type: 'exchange', with: 'self' }` で、`exchange` は**非テストで53箇所**が
+   * 書く雑多入れだった。`journal_read` は `types` で絞れるのに、絞る先が無いので
+   * **クローンは53種類の出どころが混ざった中を漁ることになる**——「回ったか」を
+   * 引くのに1回では当たらない。
+   *
+   * **⚠️ ここへ値（`value`）を入れない。** 載せてよいのは `GET /tokens` が既に
+   * 外へ出しているもの（id・ラベル・指紋）だけである。日誌は Web にもクローンにも
+   * 流れるので、ここが漏れれば全部漏れる（受け入れ基準5）。
+   *
+   * **`text` と構造の両方を持つ。** `text` は人間が読む1行
+   * （`describeTokenRotation` / `describeTokenRestore` の出力そのまま）で、構造の側は
+   * クローンが分岐に使う。**`noticeText` が両方に出るのは重複ではない**——整形の
+   * 都合で `text` の言い方が変わっても、当たった文言そのものは残る側に居る必要が
+   * ある（受け入れ基準8「当たった文言をそのまま残す」）。
+   */
+  z.object({
+    type: z.literal('token_rotation'),
+    id: z.string(),
+    at: isoDateTime,
+    /**
+     * 何が起きたか。**5値を潰さないこと。**
+     *
+     * とくに `not_rotated`（契機ではなかった）と `exhausted`（回そうとしたが
+     * 候補が無かった）は**別の事実**である。前者は正常で、後者は全層が止まる。
+     * 2値へ潰すと、いちばん重い状態がいちばん普通の状態と同じ顔になる。
+     */
+    event: z.enum(['rotated', 'not_rotated', 'exhausted', 'restored', 'restore_failed']),
+    /** 契機（`TokenRotationSignal`）。起動時の撒き直しには無い。 */
+    signal: z
+      .enum([
+        'reached',
+        'quota_rejected',
+        'overage_closed',
+        'entered_overage',
+        'org_policy',
+        'warning',
+        'none',
+      ])
+      .optional(),
+    /**
+     * 観測の新しさ（`ObservationFreshness`）。**3値のまま持つ**——`unknown` は
+     * 「身元を運べない検知点から来た」であって `stale` ではない。
+     */
+    freshness: z.enum(['current', 'stale', 'unknown']).optional(),
+    /** 移った先 / 撒き直した先の id。 */
+    tokenId: z.string().optional(),
+    /** その label。**値ではない。** */
+    label: z.string().optional(),
+    /** 降りた側。**まだ一度も指名していなければ無い。** */
+    fromTokenId: z.string().optional(),
+    /** 世代。撒き直し（`restored`）では増えていない。 */
+    generation: z.number().int().nonnegative().optional(),
+    /**
+     * 全部冷却中のとき、いちばん早く戻る時刻。
+     *
+     * **`exhausted` でも無いことがある**（プールが空・全部外された）。無いことと
+     * 「すぐ戻る」を混ぜないために省略可能にしてある。
+     */
+    earliestAt: isoDateTime.optional(),
+    /** 当たった文言。**言い換えずそのまま**（受け入れ基準8）。 */
+    noticeText: z.string().optional(),
+    /** 人間が読む1行（整形済み）。 */
+    text: z.string(),
+  }),
   z.object({
     type: z.literal('escalation'),
     id: z.string(),
@@ -810,6 +878,7 @@ const journalEntryTypeNames = {
   external_event: true,
   worker_wait: true,
   turn_usage: true,
+  token_rotation: true,
 } satisfies Record<JournalEntryType, true>;
 
 export const JOURNAL_ENTRY_TYPES = Object.keys(journalEntryTypeNames) as [

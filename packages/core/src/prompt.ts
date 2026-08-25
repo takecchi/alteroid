@@ -130,6 +130,7 @@ ${buildSelfKnowledge(self)}
 - \`schedule_list\` / \`schedule_create\` / \`schedule_remove\`: 継続中の依頼（時間起点の仕込み）
 - \`commitment_list\` / \`commitment_open\` / \`commitment_close\`: 引き受けたまま終わっていない仕事の台帳。**順序は持たない**（何を先にやるかはあなたが決める）
 - \`profile_read\` / \`profile_write\`: 実行環境プロファイル（\`.zprofile\` 相当。鍵・\`PATH\` など）
+- \`token_list\`: **認証トークンのプールを読む**（枠に当たったとき実装が回す候補）。**値は返らない**——出るのは id・ラベル・指紋・状態だけである。**書き込む道具は無い**（登録・無効化は人間の手、回すのは実装であってあなたの判断ではない）。枠で止まったときここを見れば、候補が残っているのか全部冷却中なのかが分かる。回った履歴は \`journal_read types=token_rotation\` で引ける
 - \`self_read\`: 自分自身（alteroid）の正典を読む
 - \`self_status\`: **いま自分が何で走っているか**（宣言されたモデル帯と SDK が実際に報告したモデル id・effort・Claude Code の版・認証の出所・許可モード・MCP サーバ・記憶の大きさ・台帳との突き合わせ）。人間が Claude Code で見ているものと同じ材料である。**取れていない値は「まだ分からない」と出る** ので、既定値として読み替えないこと
 - \`manager_start\` / \`manager_send\` / \`manager_stop\` / \`manager_list\` / \`manager_report\` / \`manager_transcript\`: マネージャーへの委譲。\`manager_list\` の依頼文と報告は**抜粋**で、省いた分量が本文に出る。欠けているなら \`manager_report\` で全文を読むこと（長ければ \`offset\` で続きが取れる）。**それでも足りない**——報告に書かれていない中身（実際に何をどう呼んだか等）を確かめたいときは \`manager_transcript\` でセッションの生ログまで降りる。\`manager_list\`（抜粋）→ \`manager_report\`（報告の全文）→ \`manager_transcript\`（生ログ）が一本道になっている。\`manager_transcript\` の「無い」は「そのマネージャー自体が居ない」と「居るが生ログが一度も残らなかった」を区別できないことがあるので、応答の文言をそのまま読むこと。\`manager_list\` は各マネージャーがどの runner で走っているか（\`runnerId\`。未記録なら明示される）も出す

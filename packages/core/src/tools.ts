@@ -13,6 +13,7 @@ import {
   toMessage,
 } from './conversation.js';
 import { isCronExpression } from './cron.js';
+import { toAgentTokenView, tokenAvailabilityAt } from './token-pool.js';
 import {
   describePage,
   excerpt,
@@ -183,6 +184,7 @@ export const CLONE_TOOL_NAMES = [
   'commitment_close',
   'profile_read',
   'profile_write',
+  'token_list',
   'self_read',
   'self_status',
   'manager_start',
@@ -372,6 +374,25 @@ const JOURNAL_PAGE = 8_000;
  * 質問の全文は `approvals_list id=<id>` で取れる。
  */
 const APPROVAL_LIST_BUDGET = 8_000;
+/**
+ * 認証トークンのプールの一覧の予算。
+ *
+ * **`APPROVAL_LIST_BUDGET` を使い回さない**（値が同じでも由来が違う。AGENTS.md
+ * 「値が同じでも使い回さない」）。あちらは人間が席を外した長さで増えるが、こちらは
+ * **人間が登録した本数**で決まる。**「ふつう数本だから溢れない」を根拠にしない** ——
+ * 溢れた応答は1文字も届かないので、件数の見積りを根拠にすると、外れたときに
+ * 一覧が丸ごと使えなくなる（禁止1）。
+ */
+const TOKEN_LIST_BUDGET = 6_000;
+/**
+ * 止まった理由（原文）の抜粋の厚み。
+ *
+ * **原文をそのまま出すことと、件数で溢れないことは両立させる。** provider の
+ * 英文は長くなりうる（`USAGE_LIMIT_ERROR_PREFIXES` は文の**接頭辞**でしかない）。
+ * **全文が要るときは日誌の側に在る**（`journal_read types=token_rotation` の
+ * `noticeText`）ので、ここは目で走らせるための厚みでよい。
+ */
+const TOKEN_REASON_EXCERPT = 200;
 const APPROVAL_QUESTION_EXCERPT = 200;
 /** 承認待ち1件の全文を取りに来たときの1回分。続きは `offset` で取れる。 */
 const APPROVAL_PAGE = 8_000;
@@ -2196,6 +2217,115 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
+    // --- 認証トークンのプール（読むだけ） --------------------------------
+    //
+    // **書き込みは渡さない**（人間の決定 2026-08-25）。回すのは実装（回し手）で
+    // あって、クローンの判断を待たない —— PRD「provider」が逐語でそう書いている
+    // （枠に当たったクローンはターンを回さないので、判断を待つ設計はいちばん要る
+    // ときにいちばん動かない）。**だから `token_add` / `token_disable` は無い。**
+    //
+    // **読み取りだけ渡すのは、人間が3つの口から見られるものである**（`GET /tokens`
+    // / `alteroid token list` / ——Web はまだ頁が無い）。クローンが自分の走っている
+    // 資格の状態を見られないのは能力の削除である（north_star 禁止1）。
+    tool(
+      'token_list',
+      [
+        '認証トークンのプールを読む（枠に当たったとき実装が回す候補の一覧）。',
+        '**値は返らない。** 出るのは id・ラベル・指紋・状態だけである。',
+        '**この道具に書き込みは無い。** 回すのは実装であってあなたの判断ではないし、',
+        '登録・無効化は人間の手（alteroid token / PUT /tokens）に属する。',
+        '枠で止まったときここを見れば、候補が残っているのか全部冷却中なのかが分かる。',
+        '回った履歴のほうは journal_read types=token_rotation で引ける。',
+      ].join(' '),
+      {},
+      async () => {
+        const [tokens, settings, active] = await Promise.all([
+          stores.tokens.list(),
+          stores.tokens.readSettings(),
+          stores.tokens.readActive(),
+        ]);
+        // **`toAgentTokenView` を通す。** ここで自分で組むと、値を含む
+        // `AgentToken` から拾う形になり、いつか `value` が混ざる（禁止の在り処は
+        // `token-pool.ts` の `AgentTokenView` の doc 1つだけにしておく）。
+        const views = tokens.map((token) => toAgentTokenView(token));
+        const now = Date.now();
+        const head = [
+          `回す契機: ${settings.rotateOn} / 冷却 ${String(settings.cooldownMs)}ms`,
+          active === null
+            ? // **`null` を「1本目が現役」と書かない。** 器の環境変数だけで走って
+              // いる既定の構成と、1本目を撒いた後は別の状態である
+              // （`store.ts` の `readActive` の doc）。
+              '現役の指名: **まだ一度も無い**（器の環境変数のまま走っている）'
+            : `現役の指名: ${active.tokenId}（世代 ${String(active.generation)}、${active.rotatedAt}）`,
+        ];
+        if (views.length === 0) {
+          return text(
+            [
+              ...head,
+              '',
+              'プールは空である。**この状態では回らない**——枠に当たっても次の候補が無い。',
+              '登録は人間の手で（`alteroid token add --label <名前> --file <path>`）。',
+            ].join('\n'),
+          );
+        }
+        const items = views.map((view) => {
+          // `tokenAvailabilityAt` は状態の3列だけを受ける形にしてある（値は見ない）。
+          // **キャストを挟まないこと** —— 挟むと「値を持つ型として扱ってよい」が
+          // 既成事実になる（`token-pool.ts` の該当 doc）。
+          const state = tokenAvailabilityAt(view, now);
+          // **`title` は「最初に知りたいこと」を置く欄である**（`excerpt.ts` の
+          // `ListingEntryFields` の doc）。ここでは**いま使えるか**であって
+          // ラベルではない——ラベルは `summary` が持つ。
+          const title = `${state}${active?.tokenId === view.id ? ' ← 現役' : ''}`;
+          return renderListingEntry({
+            id: view.id,
+            title,
+            summary: `${view.label}（order ${String(view.order)}）`,
+            // **作成・更新が無い行が実在する。** PR1 の版が書いた行はこの2列を
+            // 持たない（`token-pool.ts` の `AgentToken.createdAt` の doc）。
+            // **`now` で埋めないこと** ——「いま作られた」という嘘になる。
+            createdAt: view.createdAt ?? '（記録が無い）',
+            updatedAt: view.updatedAt ?? '（記録が無い）',
+            extra: [
+              view.source === 'env' ? '  器の環境変数を指す行（値を持たない）' : null,
+              view.sha256 === undefined ? null : `  指紋 ${view.sha256}`,
+              view.cooldownUntil === undefined
+                ? null
+                : `  冷却明け ${new Date(view.cooldownUntil).toISOString()}`,
+              view.disabledAt === undefined ? null : `  人間が外した ${view.disabledAt}`,
+              view.lastRejectedReason === undefined
+                ? null
+                : // **文言はそのまま出す**（言い換えない。受け入れ基準8）。回復の
+                  // 見込みは**分類であって実測ではない**ので、そう断って添える。
+                  `  止まった理由（原文）: ${excerptLine(view.lastRejectedReason, TOKEN_REASON_EXCERPT)}` +
+                  (view.recovery === undefined ? '' : ` / 回復の見込み（分類）: ${view.recovery}`),
+              view.invalidatedReason === undefined
+                ? null
+                : `  失効（原文）: ${excerptLine(view.invalidatedReason, TOKEN_REASON_EXCERPT)}`,
+            ],
+          });
+        });
+        return text(
+          [
+            ...head,
+            '',
+            renderListing(items, {
+              budget: TOKEN_LIST_BUDGET,
+              omitted: ({ rest, shown, total }) =>
+                `…ほか ${rest} 件は省略（プールは ${total} 件あり、order の昇順に ${shown} 件だけ出した）。` +
+                '**残りを見る手はこの道具に無い** — 全件は `alteroid token list` か `GET /tokens` で読む。',
+            }),
+            // **欄の意味を出力に書く**（`excerpt.ts` の `ListingEntryFields.updatedAt`
+            // の doc が要求している）。**「作成と更新が同じ」は値を作ったのではなく
+            // 一度も変わっていないという観測である。**
+            '（作成 = 行を足した時刻 / 更新 = 最後に変わった時刻。同じなら一度も変わっていない。' +
+              'どちらも「記録が無い」ことがある——この2列より前に置かれた行である）',
+            '（止まった理由は抜粋。全文は journal_read types=token_rotation の noticeText に在る）',
+          ].join('\n'),
+        );
+      },
+    ),
+
     tool(
       'profile_write',
       [
@@ -3424,6 +3554,36 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
           `[turn_usage ${entry.layer}/${entry.site} ${entry.managerId}]` +
           (entry.reset === undefined ? '' : ' ⚠reset'),
         body: `${modelLines}${resetLine}`,
+      };
+    }
+    case 'token_rotation': {
+      // **見出しに `event` を出す。** クローンがこの種別で絞ったとき、いちばん
+      // 見たいのは「回ったのか」であって本文の言い回しではない。**とくに
+      // `exhausted`（回そうとしたが候補が無かった ＝ 全層が止まる）を、
+      // `not_rotated`（契機ではなかった ＝ 正常）と同じ顔にしない。**
+      const where =
+        entry.tokenId === undefined
+          ? ''
+          : ` → ${entry.tokenId}${entry.label === undefined ? '' : `「${entry.label}」`}`;
+      const gen = entry.generation === undefined ? '' : ` 世代${String(entry.generation)}`;
+      // **`earliestAt` が無いことを「すぐ戻る」と読ませない。** 無いのは
+      // 「戻る見込みの立っている候補が1本も無い」ときである。
+      const earliest =
+        entry.event !== 'exhausted'
+          ? ''
+          : entry.earliestAt === undefined
+            ? '\n⚠ 戻る見込みの立っている候補が1本も無い（プールが空か、全部外されている）'
+            : `\nいちばん早く戻るのは ${entry.earliestAt}`;
+      return {
+        head:
+          `[token_rotation ${entry.event}` +
+          (entry.signal === undefined ? '' : ` ${entry.signal}`) +
+          (entry.freshness === undefined ? '' : `/${entry.freshness}`) +
+          `${gen}]${where}`,
+        // **本文は整形済みの行をそのまま出す。** ここで組み直すと、人間が読む面
+        // （stderr / Web）と言い方が分かれる（`text` の持ち主は `token-rotator.ts`
+        // の `describeTokenRotation` 1つである）。
+        body: `${entry.text}${earliest}`,
       };
     }
   }

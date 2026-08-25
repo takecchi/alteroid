@@ -5,6 +5,8 @@ import {
   createTokenRotator,
   describeTokenRestore,
   describeTokenRotation,
+  tokenRestoreEntry,
+  tokenRotationEntry,
   type TokenProbePort,
   type TokenSpreadPort,
   type TokenSpreadResult,
@@ -949,5 +951,158 @@ describe('describeTokenRestore', () => {
     expect(
       describeTokenRestore({ kind: 'withheld', tokenId: 'x', label: 'y', why: '人間が外している' }),
     ).toContain('人間が外している');
+  });
+});
+
+/**
+ * 日誌の1件にする側（`tokenRotationEntry` / `tokenRestoreEntry`）。
+ *
+ * **ここが固定するのは「専用の種別に何が載るか」だけである。** 文言そのものは
+ * 上の describe が持ち、種別が `exchange` と分かれていることの意味（絞れる）は
+ * `schema.ts` の doc に在る。
+ */
+describe('tokenRotationEntry / tokenRestoreEntry', () => {
+  it('出す・出さないの判定を二重に持たない（describe が null なら null）', () => {
+    // **これが要点である。** 判定をここでもう一度書くと、stderr には出るのに
+    // 日誌には出ない（あるいは逆）という食い違いが静かに生まれる。
+    const stale = {
+      kind: 'ignored' as const,
+      signal: 'reached' as const,
+      freshness: 'stale' as const,
+      why: '前のトークンの通知',
+    };
+    expect(describeTokenRotation(stale)).toBeNull();
+    expect(tokenRotationEntry(stale)).toBeNull();
+
+    const none = { kind: 'none' as const, why: '一度も回していない' };
+    expect(describeTokenRestore(none)).toBeNull();
+    expect(tokenRestoreEntry(none)).toBeNull();
+  });
+
+  it('回ったら rotated として、移った先と世代と契機が載る', () => {
+    const entry = tokenRotationEntry(
+      {
+        kind: 'rotated',
+        fromTokenId: 'tok-a',
+        toTokenId: 'tok-b',
+        toLabel: '予備1',
+        generation: 4,
+        signal: 'quota_rejected',
+        freshness: 'current',
+        spread: [],
+        why: '枠に当たった',
+      },
+      { noticeText: "You've hit your usage limit" },
+    );
+
+    expect(entry).not.toBeNull();
+    expect(entry?.type).toBe('token_rotation');
+    expect(entry?.event).toBe('rotated');
+    expect(entry?.fromTokenId).toBe('tok-a');
+    expect(entry?.tokenId).toBe('tok-b');
+    expect(entry?.label).toBe('予備1');
+    expect(entry?.generation).toBe(4);
+    expect(entry?.signal).toBe('quota_rejected');
+    expect(entry?.freshness).toBe('current');
+    // **当たった文言が構造の側にも残る**（受け入れ基準8）。整形の言い方が
+    // 変わっても、原文は `text` の中だけに居ないようにしてある。
+    expect(entry?.noticeText).toBe("You've hit your usage limit");
+    expect(entry?.text).toContain("You've hit your usage limit");
+  });
+
+  it('回さなかった（not_rotated）と回せなかった（exhausted）を潰さない', () => {
+    // **2値へ潰すと、いちばん重い状態がいちばん普通の状態と同じ顔になる。**
+    const notRotated = tokenRotationEntry({
+      kind: 'ignored',
+      signal: 'warning',
+      freshness: 'current',
+      why: '警告は契機ではない',
+    });
+    const exhausted = tokenRotationEntry({
+      kind: 'exhausted',
+      earliest: { tokenId: 'tok-a', label: '予備1', cooldownUntil: 1_800_000_000_000 },
+      signal: 'reached',
+      freshness: 'current',
+      why: '全部冷却中',
+    });
+
+    expect(notRotated?.event).toBe('not_rotated');
+    expect(exhausted?.event).toBe('exhausted');
+    expect(exhausted?.earliestAt).toBe(new Date(1_800_000_000_000).toISOString());
+  });
+
+  it('戻る見込みの候補が1本も無いとき earliestAt を埋めない（「すぐ戻る」と混ぜない）', () => {
+    const entry = tokenRotationEntry({
+      kind: 'exhausted',
+      signal: 'reached',
+      freshness: 'current',
+      why: 'プールが空',
+    });
+
+    expect(entry?.event).toBe('exhausted');
+    // **無いことを作らない。** 埋めると「その時刻に戻る」と読める。
+    expect(entry?.earliestAt).toBeUndefined();
+    expect(entry?.tokenId).toBeUndefined();
+  });
+
+  it('起動時の撒き直しは restored（世代を増やさない）', () => {
+    const entry = tokenRestoreEntry({
+      kind: 'restored',
+      tokenId: 'tok-a',
+      label: '予備1',
+      generation: 7,
+      cooling: false,
+      spread: [],
+      why: '起動時',
+    });
+
+    expect(entry?.event).toBe('restored');
+    expect(entry?.tokenId).toBe('tok-a');
+    expect(entry?.generation).toBe(7);
+    // 契機は無い（撒き直しは枠の観測ではない）。
+    expect(entry?.signal).toBeUndefined();
+  });
+
+  it('撒き直せなかったときも、どの指名だったかは載せる', () => {
+    const dangling = tokenRestoreEntry({
+      kind: 'dangling',
+      tokenId: 'tok-gone',
+      why: '指名された行がもう無い',
+    });
+    expect(dangling?.event).toBe('restore_failed');
+    expect(dangling?.tokenId).toBe('tok-gone');
+    // `dangling` は label を持たない。**無いものを埋めない。**
+    expect(dangling?.label).toBeUndefined();
+
+    const withheld = tokenRestoreEntry({
+      kind: 'withheld',
+      tokenId: 'tok-off',
+      label: '外した分',
+      why: '人間が外している',
+    });
+    expect(withheld?.event).toBe('restore_failed');
+    expect(withheld?.label).toBe('外した分');
+  });
+
+  it('トークンの値をどのフィールドにも載せない（受け入れ基準5）', () => {
+    // **値が載る経路がそもそも無いことを、型ではなく実物で確かめる。**
+    // `TokenRotationOutcome` は値を持たないが、将来ここへ何かを足すときに
+    // 「値を混ぜた」が黙って通らないようにする歯である。
+    const entry = tokenRotationEntry(
+      {
+        kind: 'rotated',
+        toTokenId: 'tok-b',
+        toLabel: '予備1',
+        generation: 1,
+        signal: 'reached',
+        freshness: 'current',
+        spread: [],
+        why: '枠',
+      },
+      { noticeText: '上限です' },
+    );
+
+    expect(JSON.stringify(entry)).not.toContain('sk-ant');
+    expect(Object.keys(entry ?? {})).not.toContain('value');
   });
 });

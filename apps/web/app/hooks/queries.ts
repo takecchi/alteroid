@@ -282,5 +282,13 @@ export function summarizeJournalEntry(entry: JournalEntry): string {
         (entry.reset === undefined ? '' : ' ⚠ 数え直しを挟んだ回（models は差分ではない）')
       );
     }
+    case 'token_rotation':
+      // **`text` をそのまま出す。** ここで組み直すと、同じ事実を読む4つの面
+      // （stderr・この画面・クローンの `journal_read`・CLI）で言い方が分かれる。
+      // 文言の持ち主は `describeTokenRotation` 1つである。
+      //
+      // **見出しの `event` は落とさない** — 一覧の1行しか読まない人が、
+      // `exhausted`（全層が止まる）と `not_rotated`（正常）を見分けられなくなる。
+      return `[${entry.event}] ${entry.text}`;
   }
 }

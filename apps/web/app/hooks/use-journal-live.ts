@@ -171,6 +171,16 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
     // 取り直す必要はない。
     case 'turn_usage':
       break;
+    // **落とす先が「まだ」無い。** プールの状態（現役の指名・冷却・失効）は
+    // `GET /tokens` に在るのに、**この画面群にはそれを出す頁が1つも無い**
+    // （CLI と HTTP からしか見えない ＝ PRD「片方でしかできないことを作らない」に
+    // 反している既存の穴。この PR が作ったものではない）。
+    //
+    // **頁を足すときは、ここに `void mutate(KEY.tokens)` を足すこと。** 足さないと
+    // 「回った直後に開いた画面が、前のトークンを現役として表示し続ける」——
+    // しかも日誌の一覧だけは更新されるので、**同じ画面の中で2つの版が並ぶ。**
+    case 'token_rotation':
+      break;
     default: {
       // 網羅性チェック本体。ここへ来る値があれば、上の case が
       // `JournalEntryType` の全種別を尽くしていない（型エラーになる）。
