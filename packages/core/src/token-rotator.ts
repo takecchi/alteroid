@@ -523,3 +523,100 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
       }),
   };
 }
+
+// ---------------------------------------------------------------------------
+// 日誌へ出す（Issue #393 PR5）
+// ---------------------------------------------------------------------------
+
+/**
+ * 撒いた先の結果を1行に畳む。**失敗した先を落とさない。**
+ *
+ * 「2台のうち1台だけ落ちた」を消さないために、**成功だけを数えて `2/3` のように
+ * 書かない** —— どれが落ちたのかが読めなくなる。落ちた先は名前と理由をそのまま出す。
+ */
+function describeSpread(results: readonly TokenSpreadResult[]): string {
+  if (results.length === 0) return '撒いた先: 無し';
+  const failed = results.filter((result) => !result.ok);
+  const ok = results.filter((result) => result.ok).map((result) => result.target);
+  const parts: string[] = [];
+  if (ok.length > 0) parts.push(`置けた: ${ok.join(', ')}`);
+  for (const result of failed) {
+    parts.push(`**置けなかった: ${result.target}**（${result.error ?? '理由不明'}）`);
+  }
+  return parts.join(' / ');
+}
+
+/**
+ * 回した / 回せなかった結果を、日誌の1行にする。**出さないときは `null`。**
+ *
+ * ## 何を出さないか
+ *
+ * - **世代が合わない通知（`stale`）** —— 同じ当たりでマネージャーの数だけ届くので、
+ *   出すと1回の当たりで日誌が何行も埋まる。**捨てたこと自体は結果として返っている**
+ *   ので、必要ならそちらを見る
+ * - **`signal` が `none`（回す材料が何も無い観測）** —— 毎ターン届く `rate_limit_event`
+ *   がここへ落ちるので、出すと日誌が枠の状態で埋まる
+ *
+ * **⚠️ それ以外は出す。** 「回さないと決めた」も記録である（受け入れ基準8:
+ * 回した事実・回せなかった事実が日誌に残る）——設定が `off` のあいだに何回止まったか、
+ * `org_policy` で何回見送ったかは、後から効いてくる。
+ *
+ * ## 値を出さない
+ *
+ * {@link TokenRotationOutcome} は**そもそも値を持たない型**なので、ここで書き
+ * 忘れる余地が無い。出るのは `label` と `id` と、SDK が出した文言だけである。
+ *
+ * ## 文言はそのまま
+ *
+ * 当たった文言は呼ぶ側が `notice.text` として添える。**言い換えないこと**
+ * （Issue #393「当たった文言は言い換えずそのまま残す」）——人間が claude.ai と
+ * 突き合わせられる形であることと、`limitRecoveryOf` の分類が効くことの両方が
+ * ここに乗っている。
+ */
+export function describeTokenRotation(
+  outcome: TokenRotationOutcome,
+  observed?: { noticeText?: string },
+): string | null {
+  const tail = observed?.noticeText === undefined ? '' : `\n当たった文言: ${observed.noticeText}`;
+
+  if (outcome.kind === 'ignored') {
+    if (outcome.freshness === 'stale') return null;
+    if (outcome.signal === 'none') return null;
+    return `認証トークン: 回さなかった（${outcome.signal}）。${outcome.why}${tail}`;
+  }
+
+  if (outcome.kind === 'exhausted') {
+    const earliest =
+      outcome.earliest === undefined
+        ? '**戻る見込みの立っている候補が1本も無い**'
+        : `いちばん早く戻るのは「${outcome.earliest.label}」（${new Date(outcome.earliest.cooldownUntil).toISOString()}）`;
+    return `認証トークン: **回せなかった**（${outcome.signal}）。${outcome.why}。${earliest}${tail}`;
+  }
+
+  const from = outcome.fromTokenId === undefined ? '（指名なし）' : outcome.fromTokenId;
+  return (
+    `認証トークン: **回した**（${outcome.signal} / 世代 ${String(outcome.generation)}）。` +
+    `${from} → 「${outcome.toLabel}」（id ${outcome.toTokenId}）。${outcome.why}\n` +
+    `${describeSpread(outcome.spread)}\n` +
+    '**⚠️ 撒いたのであって、回ったのではない** — 走行中のセッションには届かない。' +
+    `回ったことの証拠は次のターンが成功することだけである${tail}`
+  );
+}
+
+/**
+ * 起動時の引き取りを、日誌の1行にする。**出さないときは `null`。**
+ *
+ * **`none`（一度も回していない）は出さない。** 既定の構成では毎回の起動で出る
+ * ことになり、意味のある行が埋もれる。
+ */
+export function describeTokenRestore(outcome: TokenRestoreOutcome): string | null {
+  if (outcome.kind === 'none') return null;
+  if (outcome.kind === 'restored') {
+    return (
+      `認証トークン: 起動時に現役を撒き直した（世代 ${String(outcome.generation)}、増やしていない）。` +
+      `「${outcome.label}」（id ${outcome.tokenId}）${outcome.cooling ? '。**冷却中である**' : ''}\n` +
+      describeSpread(outcome.spread)
+    );
+  }
+  return `認証トークン: 起動時に撒き直せなかった。${outcome.why}`;
+}

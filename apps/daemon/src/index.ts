@@ -21,6 +21,9 @@ import {
   createScheduler,
   createTokenPoolService,
   createTokenRotator,
+  describeTokenRestore,
+  describeTokenRotation,
+  noteDroppedRecord,
   probeTokenCandidate,
   dailyReportEvent,
   installUncaughtNet,
@@ -716,8 +719,17 @@ export async function main(): Promise<void> {
       .catch((error: unknown) => ({ kind: 'failed' as const, why: String(error) }));
     // **何も起きていないとき（`none`）は黙る。** 既定の構成では毎回の起動で出る
     // ことになり、意味のある行が埋もれる。
-    if (restored.kind !== 'none') {
-      process.stderr.write(`alteroidd: 認証トークン（起動時の引き取り）: ${restored.why}\n`);
+    // **日誌にも残す。** stderr は器のログへ流れて消えるが、日誌は記憶ストアに
+    // 残り、クローンも人間も後から辿れる。
+    const line =
+      restored.kind === 'failed'
+        ? `認証トークン: 起動時の撒き直しが落ちた。${restored.why}`
+        : describeTokenRestore(restored);
+    if (line !== null) {
+      process.stderr.write(`alteroidd: ${line.split('\n')[0] ?? line}\n`);
+      await stores.journal
+        .append({ type: 'exchange', with: 'self', role: 'outbound', text: line })
+        .catch(() => undefined);
     }
   }
 
@@ -739,8 +751,22 @@ export async function main(): Promise<void> {
       // **回した / 回さなかったを黙って捨てない。** 日誌へ載せるのは PR5 の
       // 仕事だが、それまでのあいだも stderr には出す——**回ったかどうかが
       // どこからも見えない期間を作らない。**
-      if (outcome.kind !== 'ignored') {
-        process.stderr.write(`alteroidd: 認証トークン: ${outcome.why}\n`);
+      // **当たった文言をそのまま添える**（Issue #393「言い換えずそのまま残す」）。
+      // 人間が claude.ai と突き合わせられることと、回復の見込みの分類が効くことの
+      // 両方がこれに乗っている。
+      const line = describeTokenRotation(outcome, {
+        ...(observation.notice === undefined ? {} : { noticeText: observation.notice.text }),
+      });
+      if (line !== null) {
+        process.stderr.write(`alteroidd: ${line.split('\n')[0] ?? line}\n`);
+        // **日誌への追記が落ちても回した事実は消えない**（正本は記憶ストアの
+        // `active` の側に在る）。ここで投げ直すと、回せたのに「回し手が落ちた」
+        // として報告されることになる。
+        await stores.journal
+          .append({ type: 'exchange', with: 'self', role: 'outbound', text: line })
+          .catch((error: unknown) => {
+            noteDroppedRecord('認証トークンの切替', 'journal', error);
+          });
       }
     },
     ...(storage.sessionStore === undefined ? {} : { sessionStore: storage.sessionStore }),

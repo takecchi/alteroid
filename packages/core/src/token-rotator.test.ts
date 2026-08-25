@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { createMemoryStores } from './testing.js';
 import {
   createTokenRotator,
+  describeTokenRestore,
+  describeTokenRotation,
   type TokenProbePort,
   type TokenSpreadPort,
   type TokenSpreadResult,
@@ -764,5 +766,188 @@ describe('ensureEnvToken（環境変数の行）', () => {
     expect(env?.cooldownUntil).toBeDefined();
     // 予備へ回っている。
     expect(await stores.tokens.readActive()).toMatchObject({ tokenId: 'tok-a', generation: 2 });
+  });
+});
+
+/**
+ * 日誌へ出す1行（Issue #393 PR5、受け入れ基準8）。
+ *
+ * **回した事実・回せなかった事実が残り、当たった文言がそのまま残ること。**
+ */
+describe('describeTokenRotation', () => {
+  const spread = [
+    { target: 'runner-primary', ok: true },
+    { target: 'clone', ok: true },
+  ];
+
+  it('回したら、どこからどこへ・何を根拠に・撒いた先を出す', () => {
+    const line = describeTokenRotation({
+      kind: 'rotated',
+      fromTokenId: 'env-1',
+      toTokenId: 'tok-b',
+      toLabel: 'spare1',
+      generation: 2,
+      signal: 'reached',
+      freshness: 'current',
+      spread,
+      why: '仕事が止まった文言が出た（設定に関わらず回す）',
+    });
+
+    expect(line).toContain('回した');
+    expect(line).toContain('env-1 → 「spare1」');
+    expect(line).toContain('世代 2');
+    expect(line).toContain('置けた: runner-primary, clone');
+  });
+
+  it('⚠️「撒いた」を「回った」と読ませない断りが入る', () => {
+    // 走行中のセッションには届かないので、撒いた時点では回っていない。
+    const line = describeTokenRotation({
+      kind: 'rotated',
+      toTokenId: 'tok-b',
+      toLabel: 'spare1',
+      generation: 2,
+      signal: 'reached',
+      freshness: 'current',
+      spread,
+      why: 'x',
+    });
+    expect(line).toContain('撒いたのであって、回ったのではない');
+  });
+
+  it('当たった文言をそのまま添える（言い換えない）', () => {
+    const text = "You've hit your org's monthly spend limit";
+    const line = describeTokenRotation(
+      {
+        kind: 'rotated',
+        toTokenId: 'tok-b',
+        toLabel: 'spare1',
+        generation: 2,
+        signal: 'reached',
+        freshness: 'current',
+        spread,
+        why: 'x',
+      },
+      { noticeText: text },
+    );
+    expect(line).toContain(text);
+  });
+
+  it('撒けなかった先を落とさない（成功だけ数えて 2/3 と書かない）', () => {
+    // 「2台のうち1台だけ落ちた」を消すと、どれが落ちたのかが読めなくなる。
+    const line = describeTokenRotation({
+      kind: 'rotated',
+      toTokenId: 'tok-b',
+      toLabel: 'spare1',
+      generation: 2,
+      signal: 'reached',
+      freshness: 'current',
+      spread: [
+        { target: 'runner-primary', ok: true },
+        { target: 'runner-2', ok: false, error: 'runner が応答しない' },
+      ],
+      why: 'x',
+    });
+    expect(line).toContain('置けなかった: runner-2');
+    expect(line).toContain('runner が応答しない');
+  });
+
+  it('回せなかったら、いちばん早く戻る時刻を出す', () => {
+    const line = describeTokenRotation({
+      kind: 'exhausted',
+      earliest: { tokenId: 'tok-b', label: 'spare1', cooldownUntil: Date.parse(AT) },
+      signal: 'reached',
+      freshness: 'current',
+      why: '候補が全部冷却中である',
+    });
+    expect(line).toContain('回せなかった');
+    expect(line).toContain('spare1');
+    expect(line).toContain(AT);
+  });
+
+  it('戻る見込みが取れないときは、それを言う（時刻を作らない）', () => {
+    const line = describeTokenRotation({
+      kind: 'exhausted',
+      signal: 'reached',
+      freshness: 'current',
+      why: '試せる候補が1本も無い',
+    });
+    expect(line).toContain('戻る見込みの立っている候補が1本も無い');
+  });
+
+  it('回さないと決めたことも記録する（受け入れ基準8）', () => {
+    // 設定が off のあいだに何回止まったかは、後から効いてくる。
+    const line = describeTokenRotation({
+      kind: 'ignored',
+      signal: 'reached',
+      freshness: 'current',
+      why: '回す契機の設定が off（記録だけする）',
+    });
+    expect(line).toContain('回さなかった');
+    expect(line).toContain('off');
+  });
+
+  it('世代の合わない通知は出さない（1回の当たりで日誌を埋めない）', () => {
+    // 同じ当たりでマネージャーの数だけ届く。
+    expect(
+      describeTokenRotation({
+        kind: 'ignored',
+        signal: 'reached',
+        freshness: 'stale',
+        why: 'もう回した後の通知',
+      }),
+    ).toBeNull();
+  });
+
+  it('材料が何も無い観測は出さない（毎ターン届くので日誌が埋まる）', () => {
+    expect(
+      describeTokenRotation({
+        kind: 'ignored',
+        signal: 'none',
+        freshness: 'unknown',
+        why: '回す契機に当たる観測が無い',
+      }),
+    ).toBeNull();
+  });
+});
+
+describe('describeTokenRestore', () => {
+  it('一度も回していなければ出さない（毎回の起動で出ると意味のある行が埋もれる）', () => {
+    expect(describeTokenRestore({ kind: 'none', why: 'x' })).toBeNull();
+  });
+
+  it('撒き直したら、世代を増やしていないことを明記する', () => {
+    const line = describeTokenRestore({
+      kind: 'restored',
+      tokenId: 'tok-b',
+      label: 'spare1',
+      generation: 5,
+      cooling: false,
+      spread: [{ target: 'clone', ok: true }],
+      why: 'x',
+    });
+    expect(line).toContain('世代 5、増やしていない');
+    expect(line).toContain('spare1');
+  });
+
+  it('冷却中だったことを出す', () => {
+    const line = describeTokenRestore({
+      kind: 'restored',
+      tokenId: 'tok-b',
+      label: 'spare1',
+      generation: 5,
+      cooling: true,
+      spread: [],
+      why: 'x',
+    });
+    expect(line).toContain('冷却中である');
+  });
+
+  it('撒き直さなかった理由を出す（dangling / withheld）', () => {
+    expect(describeTokenRestore({ kind: 'dangling', tokenId: 'ghost', why: '行が無い' })).toContain(
+      '行が無い',
+    );
+    expect(
+      describeTokenRestore({ kind: 'withheld', tokenId: 'x', label: 'y', why: '人間が外している' }),
+    ).toContain('人間が外している');
   });
 });
