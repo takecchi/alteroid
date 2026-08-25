@@ -9,7 +9,7 @@ import {
 } from './token-rotator.js';
 import type { Stores } from './store.js';
 import type { UsageLimitNotice } from './usage-limits.js';
-import type { ActiveAgentToken, AgentToken, TokenCredential } from './token-pool.js';
+import type { TokenCredential } from './token-pool.js';
 
 /**
  * 回し手（Issue #393 PR3）。**受け入れ基準を直接固定する場所である。**

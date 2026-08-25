@@ -399,8 +399,22 @@ export function normalizeTokenPool(
       );
     }
 
+    /**
+     * 資格の出所は**既存の行からだけ引き継ぐ。入力からは設定できない**
+     * （`invalidatedAt` と同じ扱い）。
+     *
+     * **人間が `source: 'env'` の行を作れる形にしないこと。** あの行は「器に
+     * 環境変数が置かれている」という事実の射影であって、人間が宣言するもの
+     * ではない——作れる形にすると、環境変数が無い器に「環境変数を指す行」が
+     * 立ち、撒いた瞬間に全層が資格を失う。
+     */
+    const source = current?.source;
+
     const value = input.value ?? current?.value;
-    if (value === undefined) {
+    // **env の行は値を持たない。** ここで値を要求すると、`PUT /tokens` を通る
+    // 操作（`token add` / `disable` / `enable` / `remove` はすべて「既存を
+    // 読み直して全文で書き戻す」形である）が**env の行が在るだけで全部落ちる。**
+    if (value === undefined && source !== 'env') {
       throw new TokenPoolInputError(
         `新しいトークン（${input.label}）には value が要る` +
           '（省略できるのは、id で既存の行を指しているときだけ）',
@@ -437,7 +451,8 @@ export function normalizeTokenPool(
     const token: AgentToken = {
       id,
       label: input.label,
-      value,
+      ...(source === undefined ? {} : { source }),
+      ...(value === undefined ? {} : { value }),
       order,
       ...(disabledAt === undefined ? {} : { disabledAt }),
       // **`disabled` 以外の派生値は人間の入力からは触れない——常に引き継ぐ。**
