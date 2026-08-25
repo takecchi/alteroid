@@ -901,6 +901,11 @@ class Clone implements CloneHost {
         // マネージャーからの報告・質問も、人間の発言と同じ受信箱を通る。
         post: (event) => this.post(event),
         runners: runners ?? createRunnerRegistry([]),
+        // 枠の観測は**マネージャー経由でも**回し手へ合流させる（Issue #393 PR3）。
+        // **クローンの側とプールの側で別々の回し手へ渡さないこと** — 同じ1本へ
+        // 集めるからこそ、世代の照合が「同じ当たりで1回だけ」を保証できる。
+        ...(tokenIdentity === undefined ? {} : { tokenIdentity }),
+        ...(onUsageObservation === undefined ? {} : { onUsageObservation }),
       });
     void this.#pump();
   }
