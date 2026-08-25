@@ -1,4 +1,4 @@
-import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { SDKAssistantMessageError, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -43,6 +43,40 @@ function result(fields: Record<string, unknown>): SDKMessage {
   } as unknown as SDKMessage;
 }
 
+/**
+ * SDK の `SDKAssistantMessageError` の全値。**数え上げなので、SDK が語を増やせば
+ * 腐る。** 腐ったことを `tsc` に言わせるために、下の型で全値を縛ってある
+ * （`assistantFailureOf` は語を列挙せず「空でない文字列」を印として通すので、
+ * **実行時に取りこぼす訳ではない。腐るのはこの網と doc のほうである**）。
+ *
+ * **⚠️ ここが赤くなるのは、たいてい `automation/claude-agent-sdk` の PR である**
+ * （`.github/workflows/update-claude-sdk.yml` が毎日出す、SDK を上げるだけの PR）。
+ * **その赤は「union が語を増やした」という合図であって、更新を止める理由ではない。**
+ * 増えた語をこの表と `sdk-failure.ts` の doc へ足し、その1コミットを同じ PR へ
+ * 積んでから緑にしてマージすること。**更新を見送らない。** 増えた語は `tsc` の
+ * エラー文が名指しする（`Property '<語>' is missing …` の形）。
+ *
+ * 型に名前を付けてあるのは、**その名前が `tsc` のエラー文にそのまま出る**からである。
+ * 上のワークフローは検証の生の出力を PR 本文へ貼るので、マージを判断する人が読む
+ * 場所に、増えた語とやることの両方が届く。
+ */
+type SDK_の_error_の語が増えた_この表と_sdk_failure_ts_の_doc_へ足して同じ_PR_で緑にする =
+  Record<SDKAssistantMessageError, true>;
+
+const SDK_ASSISTANT_ERROR_CODES: SDK_の_error_の語が増えた_この表と_sdk_failure_ts_の_doc_へ足して同じ_PR_で緑にする =
+  {
+    authentication_failed: true,
+    oauth_org_not_allowed: true,
+    billing_error: true,
+    rate_limit: true,
+    overloaded: true,
+    invalid_request: true,
+    model_not_found: true,
+    server_error: true,
+    unknown: true,
+    max_output_tokens: true,
+  };
+
 describe('assistantFailureOf — assistant メッセージの失敗の印', () => {
   it('印が無ければ undefined（普通の応答を失敗にしない）', () => {
     expect(assistantFailureOf(assistant({}), 'なにか')).toBeUndefined();
@@ -58,21 +92,10 @@ describe('assistantFailureOf — assistant メッセージの失敗の印', () =
   });
 
   it('SDK が持つ error の語をどれも取りこぼさない', () => {
-    // `SDKAssistantMessageError` の全値。**どれか1つでも読み落とすと、その種類の
-    // 失敗だけが「応答」として扱われる**（実機で当たったのは `billing_error`）。
-    const codes = [
-      'authentication_failed',
-      'oauth_org_not_allowed',
-      'billing_error',
-      'rate_limit',
-      'overloaded',
-      'invalid_request',
-      'model_not_found',
-      'server_error',
-      'unknown',
-      'max_output_tokens',
-    ];
-    for (const code of codes) {
+    // **どれか1つでも読み落とすと、その種類の失敗だけが「応答」として扱われる**
+    // （実機で当たったのは `billing_error`）。網は `SDK_ASSISTANT_ERROR_CODES` が
+    // 持っており、あちらは型で全値を縛ってある。
+    for (const code of Object.keys(SDK_ASSISTANT_ERROR_CODES)) {
       expect(assistantFailureOf(assistant({ error: code }), 'x')?.code).toBe(code);
     }
   });
