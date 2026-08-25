@@ -35,8 +35,33 @@ import type { Db } from './db.js';
  *
  * **順序は「列を足す → 新しい鍵 → 古い鍵を外す」。** 逆にすると、古い鍵を外した
  * 瞬間から新しい鍵ができるまでのあいだ重複を拒めない。
+ *
+ * ## ⚠️ 古い鍵の `create` は配列から消す（drop だけ残す）
+ *
+ * **`drop index` を足したら、その索引を作る文をこの配列から消すこと。** 消さずに
+ * 残すと、**次の起動でデーモンが上がらなくなる。**
+ *
+ * この配列は起動のたびに頭から通る。初回は「古い鍵を作る → 新しい鍵を作る →
+ * 古い鍵を drop する」で終わるので、**古い鍵はもう存在しない。** よって2周目の
+ * `create ... if not exists` は**名前で一致せず、本当に作りに行く** — そのときに
+ * は新しい鍵が許した行（古い鍵から見れば重複）が既に積まれていて、
+ * `could not create unique index … is duplicated` で落ちる。**`if not exists` は
+ * 「2回目は no-op」を約束しない。同じ配列の後ろで drop していれば no-op ではない。**
+ *
+ * 実際に踏んだ（2026-08-25、`usage_daily_key_idx`。本番のデーモンが起動不能に
+ * なった）。**空の DB から作るテストでは出ない** — 1周目しか通さないからである。
+ * 歯は「migrate を2回通す + 新しい鍵でだけ立つ行を挟む」の形で置く
+ * （`usage.test.ts` の `grep -Fn -- '2周目が古い鍵を作りに行く' packages/storage-pg/src/usage.test.ts`）。
+ *
+ * **`drop constraint` は同じ形ではない。** 外す先が `create table if not exists`
+ * の中で宣言された主キーなら、その create は2周目に本当の no-op になる
+ * （テーブルが在るから）。危ないのは `drop index` と対の `create index` だけ。
+ *
+ * **`export` しているのはテストのためである** — `migrate.test.ts` が、この配列に
+ * 「作ってから同じ名前を drop する索引」が無いことを構造で見る（直上の規則を、
+ * 次に `drop index` を足した人の手元で落とすため）。
  */
-const STATEMENTS = [
+export const STATEMENTS = [
   `create table if not exists memory (
      slug text primary key,
      content text not null,
@@ -221,20 +246,6 @@ const STATEMENTS = [
   // 期間はクローンが使っていなかった」と読める出力になる。
   `alter table usage_daily add column if not exists layer text not null default 'manager'`,
   `alter table usage_daily add column if not exists site text not null default 'session'`,
-  // 新しい鍵。**層と場所を鍵に入れる。** クローンは自分のセッション本体と要約の
-  // 蒸留の両方で使うので、同じ日・同じ actor・同じモデルで意味の違う行が2つ立つ。
-  // 3列の鍵のままだと2行目が拒まれ、`on conflict do update` が先にある行へ増分を
-  // 足し込む — そのとき layer / site は先に入った側の値のまま残り、**出力から
-  // 見分けられない誤帰属**になる。
-  `create unique index if not exists usage_daily_key_idx
-     on usage_daily (date, manager_id, model, layer, site)`,
-  // 古い3列の主キーを外す（新しい鍵を作ったあとに外す。migrate.ts 冒頭の順序）。
-  // 索引としても新しい鍵の前方一致に含まれるので、残しても冗長なだけである。
-  `alter table usage_daily drop constraint if exists usage_daily_pkey`,
-  // 新しい鍵の先頭が date なので、date だけの絞り込みは前方一致が効く（別に
-  // (date) 索引を足すのは冗長）。(manager_id, date) はその並びに無いので、
-  // 「この actor が期間中いくら使ったか」を date を先に決めずに引く経路として足す。
-  `create index if not exists usage_daily_manager_date_idx on usage_daily (manager_id, date)`,
   // --- 「どの認証トークンで」の軸を足す（Issue #393 受け入れ基準6） ---------
   //
   // **`not null default ''` である。null を許さない。** PostgreSQL の一意索引は
@@ -249,16 +260,49 @@ const STATEMENTS = [
   // より前の行がどのトークンで走ったかは、どこにも記録されていない。だから
   // `usage_ledger.tokens_at` を別に持ち、`aggregate` が `beforeTokens` で言う。
   `alter table usage_daily add column if not exists token_id text not null default ''`,
-  // **新しい鍵は名前も変える。** `create unique index if not exists` は**名前だけ**を
-  // 見るので、`usage_daily_key_idx` のまま列を足しても**既にある DB では何も起き
-  // ない**（鍵は5列のまま残り、別のトークンの増分が先にある行へ足し込まれて
+  // 新しい鍵。**層と場所とトークンを鍵に入れる。** クローンは自分のセッション本体と
+  // 要約の蒸留の両方で使うので、同じ日・同じ actor・同じモデルで意味の違う行が2つ
+  // 立つ。3列の鍵のままだと2行目が拒まれ、`on conflict do update` が先にある行へ
+  // 増分を足し込む — そのとき layer / site は先に入った側の値のまま残り、**出力から
+  // 見分けられない誤帰属**になる。トークンの軸も同じ理由で鍵に入る。
+  //
+  // **名前が `usage_daily_key_idx` ではないのは意図である。** `create unique index
+  // if not exists` は**名前だけ**を見るので、旧名のまま列を足しても**既にある DB
+  // では何も起きない**（鍵は古いままで、別のトークンの増分が先にある行へ足し込まれて
   // 誤帰属になる）。**そしてテストは空の DB から作るので通る** — 本番だけが古い鍵で
   // 走り、出力には何も出ない。名前を変えれば、既にある DB でも新しい索引が作られる。
   `create unique index if not exists usage_daily_token_key_idx
      on usage_daily (date, manager_id, model, layer, site, token_id)`,
-  // 古い5列の鍵を外す（**新しい鍵を作ったあとに外す。** migrate.ts 冒頭の順序）。
-  // 新しい鍵の前方一致に含まれるので、索引としても残す意味は無い。
+  // 古い3列の主キーを外す（新しい鍵を作ったあとに外す。migrate.ts 冒頭の順序）。
+  // 索引としても新しい鍵の前方一致に含まれるので、残しても冗長なだけである。
+  `alter table usage_daily drop constraint if exists usage_daily_pkey`,
+  // 古い5列の鍵（`usage_daily_key_idx`）を外す。**この drop には対になる create が
+  // 無い。無いのが正しい**（下の ⚠️）。
+  //
+  // ⚠️ **`create unique index if not exists usage_daily_key_idx on usage_daily
+  // (date, manager_id, model, layer, site)` をこの配列へ戻さないこと。** かつて
+  // この drop の上に在り、**デーモンが2度と起動できなくなった**（起動のたびに
+  // この配列は頭から通る）。初回の起動では5列の索引が作られ、6列の鍵ができた
+  // あとこの drop で消える。**次の起動では `if not exists` が名前で一致しないので
+  // 本当に作りに行き**、そのときには token_id だけが違う行が既に積まれている：
+  // `could not create unique index "usage_daily_key_idx" … Key (date, manager_id,
+  // model, layer, site)=(…) is duplicated`（実測 2026-08-25。本番のデーモンが
+  // 起動不能になった）。**6列の鍵が許す行が、5列の鍵では重複になる。**
+  //
+  // **一般形: 鍵を差し替えたら、古い鍵の create を配列から消すこと。** drop だけ
+  // 残す（既にある DB のために要る）。`if not exists` は「2回目は no-op」を約束
+  // しない — **同じ配列の後ろでそれを drop していれば、次の周回は no-op ではない。**
+  // migrate.ts 冒頭の doc「鍵を差し替える」も参照。
+  //
+  // **`usage_baseline` の側は同じ形ではない。** あちらが外すのは `create table if
+  // not exists` の中で宣言された主キー**制約**で、その create は2回目に本当の
+  // no-op になる（テーブルが在るから）。危ないのは `drop index` と対の
+  // `create index` だけである。
   `drop index if exists usage_daily_key_idx`,
+  // 新しい鍵の先頭が date なので、date だけの絞り込みは前方一致が効く（別に
+  // (date) 索引を足すのは冗長）。(manager_id, date) はその並びに無いので、
+  // 「この actor が期間中いくら使ったか」を date を先に決めずに引く経路として足す。
+  `create index if not exists usage_daily_manager_date_idx on usage_daily (manager_id, date)`,
 
   `create table if not exists usage_baseline (
      manager_id text not null,
