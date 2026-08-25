@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { json, Providers, sse, stubFetch, storeTestBaseUrl } from '~/test-support';
 
-import Chat, { ownedBy } from './chat';
+import Chat, { ownedBy, retainedBy } from './chat';
 
 const CONVERSATION_ID = 'conv-1';
 
@@ -705,6 +705,137 @@ describe('前の会話の行の扱い（#437）', () => {
     // **どちらも消えていない。**
     expect(within(transcript()).getByText('やあ')).toBeTruthy();
     expect(within(transcript()).getByText(/こんにちは、元気にやっている/)).toBeTruthy();
+  });
+});
+
+/**
+ * `retainedBy` の単体の歯（issue #446）。**`lines` に保ち続けてよい行**を
+ * 決める純関数そのものを、component を描かずに直接測る。
+ *
+ * `ownedBy`（#437）が「画面に出す」を測るのと対になる — こちらは「state に
+ * 保つ」を測る。数で書く（`toHaveLength`）。
+ */
+describe('保つ持ち主の上限（retainedBy。issue #446）', () => {
+  const 行 = (of: string | undefined, text: string) => ({
+    key: `k-${text}`,
+    role: 'clone' as const,
+    text,
+    of,
+  });
+
+  it('いま見ている会話・直前の会話・持ち主なし の3つが残る', () => {
+    const lines = [
+      行('conv-current', '現在の会話の行'),
+      行('conv-previous', '直前の会話の行'),
+      行(undefined, '持ち主がまだ決まっていない行'),
+    ];
+
+    expect(retainedBy(lines, 'conv-current', 'conv-previous')).toHaveLength(3);
+  });
+
+  it('それ以外（2つ前・無関係な会話）は落ちる', () => {
+    const lines = [
+      行('conv-current', '現在の会話の行'),
+      行('conv-previous', '直前の会話の行'),
+      行(undefined, '持ち主がまだ決まっていない行'),
+      行('conv-older', '2つ前の会話の行'),
+      行('conv-unrelated', '無関係な会話の行'),
+    ];
+
+    expect(retainedBy(lines, 'conv-current', 'conv-previous')).toHaveLength(3);
+  });
+
+  it('直前の会話が無い（undefined。会話の切り替えをまだ一度もしていない）ときは、いまと持ち主なしだけが残る', () => {
+    const lines = [
+      行('conv-current', '現在の会話の行'),
+      行(undefined, '持ち主がまだ決まっていない行'),
+      行('conv-older', '前に見ていた別の会話の行'),
+    ];
+
+    expect(retainedBy(lines, 'conv-current', undefined)).toHaveLength(2);
+  });
+});
+
+/**
+ * 配線の歯（本命。issue #446）。**`lines` の長さは外から見えないので、
+ * 観測できる帰結で測る** — 履歴（サーバ）に無い手元の行は、会話を2つ先まで
+ * 離れると消える（＝状態から刈られた）。逆に1つ先までなら残る（＝直前の
+ * 会話は保つ）。この2本で「保つ側」と「刈る側」の両方を固定する。
+ *
+ * 3つの会話（conv-a / conv-b / conv-c）はどれも既存の会話として扱う
+ * （サーバの履歴はどれも空を返す）。conv-a で送った発言への返信
+ * （`LOCAL_ONLY_REPLY`）は、この画面にしか手元に無く、履歴には決して
+ * 現れない —— だから conv-a へ戻ったときにこの文言が有るか無いかだけで、
+ * 手元の `lines` から刈られたかどうかを外から判定できる。
+ */
+describe('会話を跨いだ手元の行の生死（配線。issue #446）', () => {
+  const LOCAL_ONLY_REPLY = 'ローカルAだけの返信（履歴には無い）';
+
+  function stubThreeConversations() {
+    return stubFetch((url, init) => {
+      if (url.endsWith('/chat')) {
+        return sse(
+          [
+            { event: 'open', data: { conversationId: 'conv-a' } },
+            { event: 'text', data: { type: 'text', text: LOCAL_ONLY_REPLY } },
+            { event: 'done', data: { type: 'done' } },
+          ],
+          { signal: init?.signal },
+        );
+      }
+      if (url.includes('/conversations/conv-a')) {
+        return json({ conversationId: 'conv-a', messages: [] });
+      }
+      if (url.includes('/conversations/conv-b')) {
+        return json({ conversationId: 'conv-b', messages: [] });
+      }
+      if (url.includes('/conversations/conv-c')) {
+        return json({ conversationId: 'conv-c', messages: [] });
+      }
+      if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
+      return undefined;
+    });
+  }
+
+  it('直前の会話（1つ先）までは、履歴に無い手元の行が保たれる', async () => {
+    stubThreeConversations();
+    const { router } = renderChat('/chat/conv-a');
+
+    await send('やあ');
+    expect(await within(transcript()).findByText(LOCAL_ONLY_REPLY)).toBeTruthy();
+
+    // conv-a → conv-b → conv-a。conv-a は「直前」のまま一度も外れない。
+    // **各 navigate の後にヘッダの会話 id が切り替わるのを待つ。** 待たずに
+    // 連続で navigate すると、次の navigate が前の render 反映より先に走り、
+    // 途中の会話（ここでは conv-b）を経由したことにならない。
+    await router.navigate('/chat/conv-b');
+    await screen.findByText('conv-b');
+    await router.navigate('/chat/conv-a');
+    await screen.findByText('conv-a');
+
+    expect(within(transcript()).getByText(LOCAL_ONLY_REPLY)).toBeTruthy();
+  });
+
+  it('2つ先まで離れると、履歴に無い手元の行は状態から刈られて消える', async () => {
+    stubThreeConversations();
+    const { router } = renderChat('/chat/conv-a');
+
+    await send('やあ');
+    expect(await within(transcript()).findByText(LOCAL_ONLY_REPLY)).toBeTruthy();
+
+    // conv-a → conv-b → conv-c → conv-a。conv-c にいる時点で conv-a は
+    // 「いま」でも「直前」でもなくなっている（直前は conv-b）。
+    // **各 navigate の後にヘッダの会話 id が切り替わるのを待つ**（上のテストと同じ理由）。
+    await router.navigate('/chat/conv-b');
+    await screen.findByText('conv-b');
+    await router.navigate('/chat/conv-c');
+    await screen.findByText('conv-c');
+    await router.navigate('/chat/conv-a');
+    await screen.findByText('conv-a');
+
+    await waitFor(() => {
+      expect(screen.queryByText(LOCAL_ONLY_REPLY)).toBeNull();
+    });
   });
 });
 
