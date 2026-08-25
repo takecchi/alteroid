@@ -29,10 +29,12 @@ import {
   assertNeverMemoryProtectionStatus,
   containsMemoryFrontmatterLineBreak,
   cutMemorySection,
+  describeMemoryFloor,
   describeMemoryWriteDiff,
   formatMemoryCreatedAt,
   isKnownMemoryDocKind,
   lookupMemorySection,
+  measureMemoryFloor,
   parseMemoryFrontmatter,
   renderMemoryDocuments,
   renderMemoryListing,
@@ -40,7 +42,7 @@ import {
   resolveMemoryDocKind,
   scanMemorySections,
 } from './memory.js';
-import type { MemorySectionLookup } from './memory.js';
+import type { MemoryPart, MemorySectionLookup } from './memory.js';
 import type { ProfileService } from './profile-service.js';
 import {
   RESERVED_SCHEDULE_KINDS,
@@ -646,6 +648,36 @@ async function guardFullReplace(
 }
 
 /**
+ * `memory_write` / `memory_append` / `memory_frontmatter_set` /
+ * `memory_section_move` の4口が共有する、「毎ターンの床」の一言を組み立てる薄い
+ * 糊。`describeMemoryFloor`（`memory.ts`）自体は前後の `MemoryFloor` を渡される
+ * だけの純粋関数——ここで `measureMemoryFloor` と `resolveMemoryDocKind` へ
+ * 渡す形に揃える。
+ *
+ * **実費: 呼び手は書き込みの前後で `stores.persona.documents()` を1回ずつ、
+ * 合計2回追加で呼ぶ。** 元々この4口は `documents()` を呼んでいなかった——
+ * `self_status` だけが呼んでいた。`list()` も `documents()` も両ドライバとも
+ * 全文を読んでから捨てる（`packages/storage-fs/src/persona.ts` /
+ * `packages/storage-pg/src/persona.ts` の `stripContent`）ので、I/O の重さは
+ * `list()` を呼ぶのと同じである——実測は PR 本文に書く。
+ */
+function memoryFloorNote(
+  memoryBefore: readonly MemoryPart[],
+  memoryAfter: readonly MemoryPart[],
+  slug: string,
+  writtenContent: string,
+  created: boolean,
+): string {
+  return describeMemoryFloor({
+    before: measureMemoryFloor(memoryBefore),
+    after: measureMemoryFloor(memoryAfter),
+    slug,
+    kind: resolveMemoryDocKind(parseMemoryFrontmatter(writtenContent)),
+    created,
+  });
+}
+
+/**
  * 歯の断りの返答。**「保護されています」だけでは、クローンが次の手を推測する
  * ことになる。** 必ず4つを言う——(1) なぜ断ったか、(2) どうすれば通るか
  * （`ask_human` に何を積めばよいかまで）、(3) いま何も失われていないこと、
@@ -879,8 +911,12 @@ export function createCloneTools(context: ToolContext) {
         const cause = memoryCause();
         const denial = await guardFullReplace(stores, slug, cause, '全文置換');
         if (denial !== null) return text(denial);
-        const before = await stores.persona.read(slug);
+        const [before, memoryBefore] = await Promise.all([
+          stores.persona.read(slug),
+          stores.persona.documents(),
+        ]);
         const written = await stores.persona.write(slug, content);
+        const memoryAfter = await stores.persona.documents();
         await stores.journal.append({
           type: 'memory_update',
           slug,
@@ -894,7 +930,8 @@ export function createCloneTools(context: ToolContext) {
           before === null ? null : before.content,
           written.content,
         );
-        return text(`記憶 ${slug} を更新した。\n\n${diff}`);
+        const floor = memoryFloorNote(memoryBefore, memoryAfter, slug, written.content, before === null);
+        return text(`記憶 ${slug} を更新した。\n\n${diff}\n\n${floor}`);
       },
     ),
 
@@ -911,8 +948,12 @@ export function createCloneTools(context: ToolContext) {
         summary: z.string().describe('何を追記したかの一行要約（日誌に残る）'),
       },
       async ({ slug, content, summary }) => {
-        const before = await stores.persona.read(slug);
+        const [before, memoryBefore] = await Promise.all([
+          stores.persona.read(slug),
+          stores.persona.documents(),
+        ]);
         const written = await stores.persona.append(slug, content);
+        const memoryAfter = await stores.persona.documents();
         await stores.journal.append({
           type: 'memory_update',
           slug,
@@ -926,7 +967,8 @@ export function createCloneTools(context: ToolContext) {
           before === null ? null : before.content,
           written.content,
         );
-        return text(`記憶 ${slug} に追記した。\n\n${diff}`);
+        const floor = memoryFloorNote(memoryBefore, memoryAfter, slug, written.content, before === null);
+        return text(`記憶 ${slug} に追記した。\n\n${diff}\n\n${floor}`);
       },
     ),
 
@@ -1143,7 +1185,9 @@ export function createCloneTools(context: ToolContext) {
           type,
           parent,
         });
+        const memoryBefore = await stores.persona.documents();
         const written = await stores.persona.write(slug, nextContent);
+        const memoryAfter = await stores.persona.documents();
         const nextKind = resolveMemoryDocKind(parseMemoryFrontmatter(written.content));
 
         await stores.journal.append({
@@ -1166,8 +1210,11 @@ export function createCloneTools(context: ToolContext) {
               (nextKind === 'fact'
                 ? '次のターンから、この文書の本文はプロンプトの全文には載らない（目次の1行だけになる）。'
                 : '次のターンから、この文書の本文はプロンプトへ全文が載る。');
+        // `memory_frontmatter_set` は既存文書にしか使えない（上の `existing === null`
+        // の断り）ので `created` は常に false。
+        const floor = memoryFloorNote(memoryBefore, memoryAfter, slug, written.content, false);
 
-        return text(`記憶 ${slug} の frontmatter を更新した。\n\n${diff}${kindChangeNote}`);
+        return text(`記憶 ${slug} の frontmatter を更新した。\n\n${diff}${kindChangeNote}\n\n${floor}`);
       },
     ),
 
@@ -1360,7 +1407,12 @@ export function createCloneTools(context: ToolContext) {
         }
 
         // **先に足して、後で消す。** 上の doc「順序」を読むこと。
-        const toBefore = await stores.persona.read(toSlug);
+        // `memoryBefore` はここで取る——両方の書き込みより前の、記憶全体の
+        // スナップショットである（「毎ターンの床」の遷移を測る材料）。
+        const [toBefore, memoryBefore] = await Promise.all([
+          stores.persona.read(toSlug),
+          stores.persona.documents(),
+        ]);
         const toWritten = await stores.persona.append(toSlug, cut);
         await stores.journal.append({
           type: 'memory_update',
@@ -1397,6 +1449,21 @@ export function createCloneTools(context: ToolContext) {
           summary,
         });
 
+        // 両方の書き込みが終わった後の、記憶全体のスナップショット。
+        const memoryAfter = await stores.persona.documents();
+        // **床は「移した先」（`toSlug`）の視点で言う。** 移動で新しく生まれる
+        // か太るのは移し先であり、`toSlug` が frontmatter を持たない新規文書
+        // なら premise として全文が焼かれる——`memory_write` で新規に premise
+        // を作ったときと同じ枝を通す（依頼の重心。新規作成は稀なので声を
+        // いちばん大きくする）。
+        const floor = memoryFloorNote(
+          memoryBefore,
+          memoryAfter,
+          toSlug,
+          toWritten.content,
+          toBefore === null,
+        );
+
         // **古い本文を1文字も出さない。** 出せば文脈に入る（この道具の
         // 存在理由が消える）。名指しするのは見出しと節id だけ——呼び手が
         // 「意図した節か」を確かめるのに要る最小限である。
@@ -1409,6 +1476,8 @@ export function createCloneTools(context: ToolContext) {
             '',
             `出どころ ${fromSlug}:`,
             describeMemoryWriteDiff(existing.content, fromWritten.content),
+            '',
+            floor,
           ].join('\n'),
         );
       },
