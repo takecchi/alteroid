@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ManagerDenial, ManagerPool, ManagerSummary, RunnerFleetOverview } from './manager.js';
-import { renderMemoryDocuments } from './memory.js';
+import { measureMemoryFloor, renderMemoryDocuments } from './memory.js';
 import { createProfileService } from './profile-service.js';
 import { journalEntrySchema, type ChatStreamEvent } from './schema.js';
 import type { CloneRuntimeFacts } from './self.js';
@@ -4204,6 +4204,75 @@ describe('self_status（いま自分がどう走っているか）', () => {
     expect(reply).toContain('組み立てた時点）: 3 文字');
   });
 
+  /**
+   * ⭐ 記憶の肥大への恒久対策——`self_status` の記憶内訳に区分ごとの
+   * 小計（premise 合計 / fact 目次合計）を足す。
+   *
+   * **既存の `- 総文字数: N 文字（M 文書）` の行の文言は変えない**（歯で固定）。
+   */
+  describe('記憶内訳の区分ごとの小計（premise 合計 / fact 目次合計。記憶の肥大への恒久対策）', () => {
+    it('既存の「総文字数」の行の文言は変わっていない', async () => {
+      const h = harness(() => RUNTIME);
+      await h.call('memory_write', { slug: 'a', content: '# A\n本文', summary: '1' });
+      const totalMemory = renderMemoryDocuments(await h.stores.persona.documents());
+
+      const reply = await h.call('self_status', {});
+
+      expect(reply).toContain(
+        `- 総文字数: ${totalMemory.length.toLocaleString('en-US')} 文字（1 文書）`,
+      );
+    });
+
+    it('premise 合計・fact 目次合計が、measureMemoryFloor が返す値と一致する', async () => {
+      const h = harness(() => RUNTIME);
+      await h.call('memory_write', {
+        slug: 'premise-doc',
+        content: '# 前提\n判断の基準になる本文',
+        summary: '1',
+      });
+      await h.call('memory_write', {
+        slug: 'fact-doc',
+        content: '---\ntype: fact\ndescription: 事実の要旨\n---\n# 事実\n本文',
+        summary: '2',
+      });
+      const floor = measureMemoryFloor(await h.stores.persona.documents());
+
+      const reply = await h.call('self_status', {});
+
+      expect(reply).toContain(
+        `- premise 合計: ${floor.premiseChars.toLocaleString('en-US')} 文字（${floor.premiseDocs} 文書。毎ターン全文が焼かれる）`,
+      );
+      expect(reply).toContain(
+        `- fact 目次合計: ${floor.tocChars.toLocaleString('en-US')} 文字（${floor.factDocs} 文書。目次の1行だけが焼かれる）`,
+      );
+    });
+
+    it('文書ごとの行に [premise] / [fact] と、bytes・文字の両方の単位ラベルが出る（bytes は消さない）', async () => {
+      const h = harness(() => RUNTIME);
+      await h.call('memory_write', {
+        slug: 'premise-doc',
+        content: '# 前提\n本文',
+        summary: '1',
+      });
+      await h.call('memory_write', {
+        slug: 'fact-doc',
+        content: '---\ntype: fact\ndescription: 要旨\n---\n# 事実\n本文',
+        summary: '2',
+      });
+
+      const reply = await h.call('self_status', {});
+
+      expect(reply).toMatch(/\[premise\] premise-doc:/);
+      expect(reply).toMatch(/\[fact\] fact-doc:/);
+      expect(reply).toMatch(/\d[\d,]* bytes \/ [\d,]+ 文字/);
+    });
+
+    // **並びが寄与の大きい順であることの歯は `flooded()` を使うため、
+    // それが定義されているスコープ（下の
+    // `describe('一覧は例外なく件数で壊れない…')`）に置いてある——
+    // `grep -Fn -- '⭐ 並びは寄与の大きい順で' packages/core/src/tools.test.ts`。
+  });
+
   it('鍵・トークンの値を出さない（profile_write で置いた値が self_status に出ない）', async () => {
     const h = harness(() => RUNTIME);
     await h.call('profile_write', {
@@ -5171,6 +5240,30 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     expect(reply).toMatch(/…ほか \d+ 文書は省略（全 \d+ 文書のうち \d+ 文書だけ出した）。/);
     expect(reply).toContain('memory_list');
     expect(reply).toContain('memory_read slug=<slug>');
+  });
+
+  /**
+   * ⭐⭐ 並びの欠陥の修正（記憶の肥大への恒久対策の一部。案ではなく欠陥の
+   * 修正）。
+   *
+   * 旧版は `stores.persona.list()` の順（両ドライバとも slug 昇順）のまま
+   * `renderListing` へ渡していたので、予算（3,500 文字）に達すると**slug が
+   * 後ろの文書が、どれだけ大きい premise であっても黙って落ちていた。**
+   * `flooded(60)` が積む60件の fact は slug が `doc-0000`〜`doc-0059` で
+   * 先頭に来る。ここへ、slug が明確に最後に来る（`zzz-` 接頭辞）巨大な
+   * premise を1件足す——旧実装なら省略される側に確実に落ちるが、寄与の
+   * 大きい順に並べ替えた新実装では必ず一覧に出る。
+   */
+  it('⭐ 並びは寄与の大きい順で、予算で省略しても最大の premise は必ず出る', async () => {
+    const h = await flooded(60);
+    await h.stores.persona.write('zzz-huge-premise', `# 巨大な前提\n${'あ'.repeat(4_000)}`);
+
+    const reply = await h.call('self_status', {});
+
+    expect(reply).toContain('[premise] zzz-huge-premise:');
+    // 予算に収まらない分は引き続き省略される（一覧そのものが無上限に
+    // なったわけではない）。
+    expect(reply).toContain('は省略');
   });
 
   /**

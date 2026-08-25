@@ -2537,7 +2537,7 @@ export function createCloneTools(context: ToolContext) {
             '',
             // **クローンの文脈へ実際に載る形で数える。** 本文だけを足すと、見出しの
             // ぶんだけ本当より少ない数を「いまの総文字数」として名乗ることになる。
-            renderMemorySize(documents, renderMemoryDocuments(memoryDocuments)),
+            renderMemorySize(documents, memoryDocuments, renderMemoryDocuments(memoryDocuments)),
             '',
             renderLedgerCrossReference(runtime.sdkModel, aggregate),
           ].join('\n'),
@@ -3980,8 +3980,52 @@ const SELF_STATUS_MEMORY_LISTING_BUDGET = 3_500;
  * この節の主題（「記憶の大きさ」）なので残す。`createdAt` の整形は
  * `memory.ts` の `formatMemoryCreatedAt` をそのまま import して使う——同じ
  * 結果を返す関数を2つ書かない。
+ *
+ * **既存の `- 総文字数: N 文字（M 文書）` の行の文言は変えない**（歯が固定）。
+ * 下で足すのは、その下に続く新しい行だけである。
+ *
+ * ## ⭐ 区分ごとの小計（記憶の肥大への恒久対策）
+ *
+ * premise 合計 / fact 目次合計は `measureMemoryFloor`（`memory.ts`）をそのまま
+ * 使う——同じ計算を2本書かない。文書ごとの行にも `[premise]` / `[fact]` と
+ * 文字数を足す。**`bytes` は消さない**——この節の主題は「記憶の大きさ」で、
+ * bytes は実際のディスク上のサイズを言う値として引き続き意味がある。
+ * **単位のラベル（文字 / bytes）を両方に必ず付ける**——旧版は総＝文字・
+ * 文書ごと＝bytes で単位が混ざっており、依頼者は実際に bytes から文字数を
+ * 割り戻して読んでいた。ここで bytes を隠すと、次の人がまた割り戻す。
+ *
+ * 文書ごとの「文字数」は `measureMemoryFloor([その1文書])` で測る——premise
+ * ならその文書が単独でも実際に焼かれる全文の長さ、fact ならその1行が乗る
+ * 目次（見出し込み）の長さになる。**⚠️ fact 側は目次の見出し2行ぶん
+ * （`<!-- memory: index -->` と `## 記憶の目次…`）が数値に乗る**——実際の
+ * 焼き込みではこの2行は全 fact で共有されるので、複数の fact を合計すると
+ * `measureMemoryFloor(memoryDocuments).tocChars` より大きくなる（二重に
+ * 数えているわけではなく、「この1文書だけを載せるとしたら」という単独測定
+ * だからである）。**premise 同士・fact 同士の相対順序は壊れない**（全件に
+ * 同じ定数が乗るだけ）ので、この節の目的（寄与の大きい順に並べ、予算で
+ * 切られても最大の寄与を残す）には支障が無い。
+ *
+ * ## ⭐ 並びは「毎ターンの寄与が大きい順」（欠陥の修正。案の一部ではない）
+ *
+ * **旧版は `stores.persona.list()` が返す順（両ドライバとも slug 昇順——
+ * `packages/storage-fs/src/persona.ts` の `names.sort()` /
+ * `packages/storage-pg/src/persona.ts` の `orderBy(asc(memory.slug))`）の
+ * まま `renderListing` へ渡していた。** 予算（`SELF_STATUS_MEMORY_LISTING_BUDGET`
+ * = 3,500）に達すると、slug が後ろの文書が黙って省略される——**それがどれだけ
+ * 大きい premise であっても関係なく落ちる。** 呼び手は落ちた分に気づけない
+ * ＝「測れた0」ではなく「測れていない0」を、測ったつもりで読むことになる。
+ *
+ * **ここで寄与の大きい順に並べ替えることで直す。** `renderListing` は先頭から
+ * 予算に収まるだけ積む口なので、並べ替えるだけで「省略されるのは常に寄与の
+ * 小さい方から」になる。**`stores.persona.list()` 自体の並びは変えない**——
+ * 他の面（`memory_list` 等）がその順に依存しているため、並べ替えは
+ * ここ（`renderMemorySize` の中）だけで行う。
  */
-function renderMemorySize(documents: MemoryDocumentMeta[], totalMemory: string): string {
+function renderMemorySize(
+  documents: MemoryDocumentMeta[],
+  memoryDocuments: readonly MemoryPart[],
+  totalMemory: string,
+): string {
   const lines = [
     '## 記憶の大きさ（いま stores.persona を読み直した値）',
     '',
@@ -3989,15 +4033,32 @@ function renderMemorySize(documents: MemoryDocumentMeta[], totalMemory: string):
   ];
   if (documents.length === 0) return lines.join('\n');
 
-  const items = documents.map((doc) => {
+  const floor = measureMemoryFloor(memoryDocuments);
+
+  const contentBySlug = new Map(memoryDocuments.map((doc) => [doc.slug, doc]));
+  const contribution = new Map(
+    documents.map((doc) => {
+      const part = contentBySlug.get(doc.slug);
+      const chars = part === undefined ? 0 : measureMemoryFloor([part]).totalChars;
+      return [doc.slug, chars] as const;
+    }),
+  );
+  // ⭐ 寄与の大きい順（`Array#sort` は ES2019 以降、規格上安定ソート——
+  // 同点は `stores.persona.list()` が返した元の順のまま残る）。
+  const sorted = [...documents].sort(
+    (a, b) => (contribution.get(b.slug) ?? 0) - (contribution.get(a.slug) ?? 0),
+  );
+
+  const items = sorted.map((doc) => {
     const descriptor =
       doc.description === undefined
         ? ''
         : ` — ${excerptLine(doc.description, SELF_STATUS_MEMORY_DESCRIPTION_LIMIT)}`;
+    const chars = contribution.get(doc.slug) ?? 0;
     return (
-      `  - ${doc.slug}: ${doc.title} ` +
+      `  - [${doc.kind}] ${doc.slug}: ${doc.title} ` +
       `(作成: ${formatMemoryCreatedAt(doc.createdAt)} / 更新: ${doc.updatedAt}) ` +
-      `${doc.bytes.toLocaleString('en-US')} bytes${descriptor}`
+      `${doc.bytes.toLocaleString('en-US')} bytes / ${chars.toLocaleString('en-US')} 文字${descriptor}`
     );
   });
 
@@ -4008,6 +4069,16 @@ function renderMemorySize(documents: MemoryDocumentMeta[], totalMemory: string):
         `  …ほか ${rest} 文書は省略（全 ${total} 文書のうち ${shown} 文書だけ出した）。` +
         '全件は memory_list、本文は memory_read slug=<slug> で取れる。',
     }),
+  );
+  // **区分ごとの小計は、文書一覧の後ろへ0字下げで置く。** `- 総文字数`
+  // の兄弟（0字下げの箇条書き）にすることで、`tools.test.ts` の
+  // `extractMemorySizeEntries`（文書一覧を2字下げの連続行として拾う総当たり
+  // 試験の足場）がこの2行を「文書の1件」と誤認しない——2字下げのままだと、
+  // id + 名前 / 作成 + 更新 / 概要 を持たないこの2行が総当たり試験に
+  // 「5項目を満たさない文書」として撃たれる（実測済み）。
+  lines.push(
+    `- premise 合計: ${floor.premiseChars.toLocaleString('en-US')} 文字（${floor.premiseDocs} 文書。毎ターン全文が焼かれる）`,
+    `- fact 目次合計: ${floor.tocChars.toLocaleString('en-US')} 文字（${floor.factDocs} 文書。目次の1行だけが焼かれる）`,
   );
   return lines.join('\n');
 }
