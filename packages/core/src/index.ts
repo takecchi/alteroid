@@ -463,6 +463,8 @@ export {
  */
 export {
   createTokenRotator,
+  describeTokenRestore,
+  describeTokenRotation,
   type TokenProbePort,
   type TokenRestoreOutcome,
   type TokenRotationOutcome,
