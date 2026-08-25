@@ -112,28 +112,76 @@ export function findRowNumberCitations(lines: readonly ProseLine[]): RowNumberCi
 }
 
 export type VerbatimCitation = { line: number; pattern: string; target: string };
+export type LegacyVerbatimCitation = {
+  line: number;
+  pattern: string;
+  target: string;
+  form: string;
+};
 
 /**
- * ``` `grep -Fn -- '<逐語>' <path>` ``` の形（インラインのコードスパン）で書かれた出典を返す。
+ * ``` `grep -Fn -- '<逐語>' <path>` ``` の形（インラインのコードスパン）で書かれた出典を、
+ * **`-F` と `--` の有無を問わず**まとめて拾う内部ヘルパー（#408）。
  *
  * **この形だけを見る。** 引数にファイルを取らない `grep`（`grep -rn '<語>'`）や
- * `grep -c` は、出典ではなく道具の説明なので拾わない。
+ * `grep -c` は、出典ではなく道具の説明なので拾わない（＝逐語の後に空白区切りの
+ * path が続かない形は、そもそもこの正規表現に一致しない）。
  *
- * **`-Fn --` を要求する（#408）。** 素の `grep -n` はメタ文字入りの逐語を
- * 正規表現として解釈してしまい、規約が避けたいはずの「0件／誤爆」を自分で
- * 作る。`-F` は逐語をそのままの文字列として扱い、`--` は `-` で始まる逐語が
- * オプションの並びに誤読されるのを防ぐ。旧形式（`grep -n`、`--` 無し）の
- * 出典はここでは拾わない —— 拾わないこと自体が「まだ直っていない」の合図になる。
+ * **⚠️ なぜ「両方の形」を1つの正規表現で拾うか（#408 の裏返しの穴）。** 最初は
+ * `-Fn --` だけを拾う正規表現にしたが、それだと**旧形式（`grep -n`、`-F`/`--`
+ * 無し）で書かれた出典が歯の視界から丸ごと消える**——落ちない代わりに、
+ * 見ていないので何も守っていない緑になる（Issue #408 が「正しく直すと歯の
+ * 視界から外れる」と挙げていた懸念が、向きを変えて再現していた）。
+ * **見ないのではなく、見つけたら形で判定して落とす**ことにした。
  */
-export function findVerbatimCitations(lines: readonly ProseLine[]): VerbatimCitation[] {
-  const out: VerbatimCitation[] = [];
-  const pattern = /`\s*grep -Fn --\s+(['"])(.+?)\1\s+([^\s`]+)\s*`/g;
+function findAllGrepStyleCitations(
+  lines: readonly ProseLine[],
+): Array<{ line: number; hasF: boolean; hasDashDash: boolean; pattern: string; target: string }> {
+  const out: Array<{
+    line: number;
+    hasF: boolean;
+    hasDashDash: boolean;
+    pattern: string;
+    target: string;
+  }> = [];
+  const pattern = /`\s*grep -(F)?n(\s+--)?\s+(['"])(.+?)\3\s+([^\s`]+)\s*`/g;
   for (const { line, text } of lines) {
     for (const m of text.matchAll(pattern)) {
-      out.push({ line, pattern: m[2] ?? '', target: m[3] ?? '' });
+      out.push({
+        line,
+        hasF: m[1] === 'F',
+        hasDashDash: m[2] !== undefined,
+        pattern: m[4] ?? '',
+        target: m[5] ?? '',
+      });
     }
   }
   return out;
+}
+
+/**
+ * `grep -Fn -- '<逐語>' <path>`（正しい形。`-F` と `--` の両方が在る）で書かれた
+ * 出典だけを返す。
+ */
+export function findVerbatimCitations(lines: readonly ProseLine[]): VerbatimCitation[] {
+  return findAllGrepStyleCitations(lines)
+    .filter((c) => c.hasF && c.hasDashDash)
+    .map((c) => ({ line: c.line, pattern: c.pattern, target: c.target }));
+}
+
+/**
+ * **旧形式**（`-F` が無い、または `--` が無い——`grep -n '<逐語>' <path>` を含む）
+ * で書かれた出典を返す。呼び出し側はこれが空でないことを期待する（歯を赤くする側）。
+ */
+export function findLegacyVerbatimCitations(lines: readonly ProseLine[]): LegacyVerbatimCitation[] {
+  return findAllGrepStyleCitations(lines)
+    .filter((c) => !(c.hasF && c.hasDashDash))
+    .map((c) => ({
+      line: c.line,
+      pattern: c.pattern,
+      target: c.target,
+      form: `grep ${c.hasF ? '-F' : ''}n${c.hasDashDash ? ' --' : ''}`,
+    }));
 }
 
 /**
@@ -219,6 +267,24 @@ describe('AGENTS.md の参照の形（#369）', () => {
       ].join('\n'),
     ).toEqual([]);
   });
+
+  it('旧形式（`grep -n` など、`-F` か `--` が無い）で書かれた出典が無い（#408）', () => {
+    // ⚠️ この歯自体が一度、向きを変えて同じ穴を再現した——最初は findVerbatimCitations
+    // の正規表現を `-Fn --` だけに絞ったところ、旧形式で書かれた出典が「拾われない
+    // ＝検査されない」まま緑になった（Issue #408 が挙げていた「正しく直すと歯の
+    // 視界から外れる」の逆向き）。ここは「見ない」のではなく「見つけたら赤くする」
+    // ことで、新旧どちらの片手落ちも防ぐ。
+    const legacy = findLegacyVerbatimCitations(prose);
+    expect(
+      legacy.map((c) => `AGENTS.md:${c.line} ${c.form} '${c.pattern}' ${c.target}`),
+      [
+        "出典は `grep -Fn -- '<逐語>' <path>` の形で書くこと（#408）。",
+        '`grep -n`（`-F` 無し）は逐語のメタ文字を正規表現として解釈し、0件・誤爆を作る。',
+        '`--` が無いと、逐語が `-` から始まったときに道具ごと違う形で壊れる' +
+          '（固まる／exit 1 無出力／別ファイルの偽陽性。詳細は AGENTS.md 該当箇所）。',
+      ].join('\n'),
+    ).toEqual([]);
+  });
 });
 
 describe('参照を拾う側そのもの（歯が空振りしていないことの確認）', () => {
@@ -266,13 +332,45 @@ describe('参照を拾う側そのもの（歯が空振りしていないこと�
     ]);
   });
 
-  it('旧形式（`grep -n`、`-F --` 無し）はもう拾わない（#408）', () => {
-    // 移行の途中で旧形式の出典が残っていても、新しい形の歯には見えない
-    // ——それ自体が「まだ直っていない」の合図になる（本文の説明を参照）。
+  it('旧形式（`grep -n`）は findVerbatimCitations に拾われず、findLegacyVerbatimCitations に拾われる（#408）', () => {
+    // ⚠️ 「拾われない」で終わらせると、Issue #408 が挙げていた懸念
+    // （正しく直すと歯の視界から外れる）を向きを変えて再現するだけになる。
+    // findVerbatimCitations（正しい形専用）には見えない一方で、
+    // findLegacyVerbatimCitations（旧形式の検出）には見える——「見ない」のではなく
+    // 「別の関数が見つけて赤くする」ことを両方確かめる。
     const oldForm = proseLines(
       "逐語は `grep -n 'ここに在る文言' packages/core/src/schema.ts` で当たる。",
     );
     expect(findVerbatimCitations(oldForm)).toEqual([]);
+    expect(findLegacyVerbatimCitations(oldForm)).toEqual([
+      {
+        line: 1,
+        pattern: 'ここに在る文言',
+        target: 'packages/core/src/schema.ts',
+        form: 'grep n',
+      },
+    ]);
+  });
+
+  it('`-F` は在るが `--` が無い形も、旧形式として拾われる（#408）', () => {
+    // `-F` だけでは足りない——先頭が `-` の逐語はこの形でもオプション列に
+    // 誤読される（AGENTS.md 該当箇所の実測）。`--` が無ければ旧形式扱いにする。
+    const partialForm = proseLines(
+      "逐語は `grep -Fn 'ここに在る文言' packages/core/src/schema.ts` で当たる。",
+    );
+    expect(findVerbatimCitations(partialForm)).toEqual([]);
+    expect(findLegacyVerbatimCitations(partialForm)).toEqual([
+      {
+        line: 1,
+        pattern: 'ここに在る文言',
+        target: 'packages/core/src/schema.ts',
+        form: 'grep -Fn',
+      },
+    ]);
+  });
+
+  it('正しい形（`grep -Fn --`）は findLegacyVerbatimCitations に拾われない', () => {
+    expect(findLegacyVerbatimCitations(fixtureProse)).toEqual([]);
   });
 });
 
