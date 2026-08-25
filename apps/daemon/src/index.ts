@@ -577,10 +577,10 @@ export async function main(): Promise<void> {
 
   /**
    * 認証トークンのプール（Issue #393「PR1 プールの器」）。**回さない**——ここで
-   * 作るのは器の読み書きの口だけで、検知・切替は後続の PR が持つ。
+   * 作るのは器の読み書きの口だけで、検知・切替は回し手が持つ（`createTokenRotator`）。
    *
    * `profileService` と同じく**インスタンスは1つだけ**。人間の口（`PUT /tokens`）と
-   * クローンの道具（後続の PR が足す）が別インスタンスを持つと、直列化の意味が
+   * クローンの道具（まだ無い。Issue #456）が別インスタンスを持つと、直列化の意味が
    * 消える。
    */
   const tokenPoolService = createTokenPoolService({ stores });
