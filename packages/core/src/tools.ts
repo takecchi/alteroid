@@ -384,6 +384,15 @@ const APPROVAL_LIST_BUDGET = 8_000;
  * 一覧が丸ごと使えなくなる（禁止1）。
  */
 const TOKEN_LIST_BUDGET = 6_000;
+/**
+ * 止まった理由（原文）の抜粋の厚み。
+ *
+ * **原文をそのまま出すことと、件数で溢れないことは両立させる。** provider の
+ * 英文は長くなりうる（`USAGE_LIMIT_ERROR_PREFIXES` は文の**接頭辞**でしかない）。
+ * **全文が要るときは日誌の側に在る**（`journal_read types=token_rotation` の
+ * `noticeText`）ので、ここは目で走らせるための厚みでよい。
+ */
+const TOKEN_REASON_EXCERPT = 200;
 const APPROVAL_QUESTION_EXCERPT = 200;
 /** 承認待ち1件の全文を取りに来たときの1回分。続きは `offset` で取れる。 */
 const APPROVAL_PAGE = 8_000;
@@ -2264,27 +2273,37 @@ export function createCloneTools(context: ToolContext) {
           // **キャストを挟まないこと** —— 挟むと「値を持つ型として扱ってよい」が
           // 既成事実になる（`token-pool.ts` の該当 doc）。
           const state = tokenAvailabilityAt(view, now);
-          const marks = [
-            state === 'ready' ? null : `**${state}**`,
-            active?.tokenId === view.id ? '← 現役' : null,
-            view.source === 'env' ? '器の環境変数を指す行（値を持たない）' : null,
-            view.sha256 === undefined ? null : `指紋 ${view.sha256}`,
-            view.cooldownUntil === undefined
-              ? null
-              : `冷却明け ${new Date(view.cooldownUntil).toISOString()}`,
-            view.lastRejectedReason === undefined
-              ? null
-              : // **文言はそのまま出す**（言い換えない。受け入れ基準8）。回復の
-                // 見込みは**分類であって実測ではない**ので、そう断って添える。
-                `止まった理由（原文）: ${view.lastRejectedReason}` +
-                (view.recovery === undefined ? '' : ` / 回復の見込み（分類）: ${view.recovery}`),
-            view.invalidatedReason === undefined
-              ? null
-              : `失効（原文）: ${view.invalidatedReason}`,
-          ].filter((mark): mark is string => mark !== null);
-          return `${String(view.order)}. ${view.label}  id=${view.id}${
-            marks.length === 0 ? '' : `\n  ${marks.join(' / ')}`
-          }`;
+          // **`title` は「最初に知りたいこと」を置く欄である**（`excerpt.ts` の
+          // `ListingEntryFields` の doc）。ここでは**いま使えるか**であって
+          // ラベルではない——ラベルは `summary` が持つ。
+          const title = `${state}${active?.tokenId === view.id ? ' ← 現役' : ''}`;
+          return renderListingEntry({
+            id: view.id,
+            title,
+            summary: `${view.label}（order ${String(view.order)}）`,
+            // **作成・更新が無い行が実在する。** PR1 の版が書いた行はこの2列を
+            // 持たない（`token-pool.ts` の `AgentToken.createdAt` の doc）。
+            // **`now` で埋めないこと** ——「いま作られた」という嘘になる。
+            createdAt: view.createdAt ?? '（記録が無い）',
+            updatedAt: view.updatedAt ?? '（記録が無い）',
+            extra: [
+              view.source === 'env' ? '  器の環境変数を指す行（値を持たない）' : null,
+              view.sha256 === undefined ? null : `  指紋 ${view.sha256}`,
+              view.cooldownUntil === undefined
+                ? null
+                : `  冷却明け ${new Date(view.cooldownUntil).toISOString()}`,
+              view.disabledAt === undefined ? null : `  人間が外した ${view.disabledAt}`,
+              view.lastRejectedReason === undefined
+                ? null
+                : // **文言はそのまま出す**（言い換えない。受け入れ基準8）。回復の
+                  // 見込みは**分類であって実測ではない**ので、そう断って添える。
+                  `  止まった理由（原文）: ${excerptLine(view.lastRejectedReason, TOKEN_REASON_EXCERPT)}` +
+                  (view.recovery === undefined ? '' : ` / 回復の見込み（分類）: ${view.recovery}`),
+              view.invalidatedReason === undefined
+                ? null
+                : `  失効（原文）: ${excerptLine(view.invalidatedReason, TOKEN_REASON_EXCERPT)}`,
+            ],
+          });
         });
         return text(
           [
@@ -2293,8 +2312,15 @@ export function createCloneTools(context: ToolContext) {
             renderListing(items, {
               budget: TOKEN_LIST_BUDGET,
               omitted: ({ rest, shown, total }) =>
-                `…ほか ${rest} 件は省略（プールは ${total} 件あり、order の昇順に ${shown} 件だけ出した）。`,
+                `…ほか ${rest} 件は省略（プールは ${total} 件あり、order の昇順に ${shown} 件だけ出した）。` +
+                '**残りを見る手はこの道具に無い** — 全件は `alteroid token list` か `GET /tokens` で読む。',
             }),
+            // **欄の意味を出力に書く**（`excerpt.ts` の `ListingEntryFields.updatedAt`
+            // の doc が要求している）。**「作成と更新が同じ」は値を作ったのではなく
+            // 一度も変わっていないという観測である。**
+            '（作成 = 行を足した時刻 / 更新 = 最後に変わった時刻。同じなら一度も変わっていない。' +
+              'どちらも「記録が無い」ことがある——この2列より前に置かれた行である）',
+            '（止まった理由は抜粋。全文は journal_read types=token_rotation の noticeText に在る）',
           ].join('\n'),
         );
       },

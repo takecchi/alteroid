@@ -4443,6 +4443,27 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         },
       });
     }
+    // 認証トークンのプール（token_list）。**`replace` は全文置換なので、ループの
+    // 中で1本ずつ足すと毎回上書きになる** — 件数を作れないまま「1件だから短い」で
+    // 歯が通る（この器を1つにしてある理由そのもの）。だからループの外で一度に積む。
+    //
+    // **止まった理由に長い原文を入れておく。** ここが短いと、抜粋
+    // （`TOKEN_REASON_EXCERPT`）を外す変異が生き残る＝その部分は何も測れていない。
+    await h.stores.tokens.replace(
+      Array.from({ length: count }, (_, index) => {
+        const pad = String(index).padStart(4, '0');
+        return {
+          id: `tok-${pad}`,
+          label: `予備${pad}: ${long}`,
+          value: `fake-value-${pad}`,
+          order: index,
+          createdAt: '2026-08-01T00:00:00.000Z',
+          updatedAt: '2026-08-02T00:00:00.000Z',
+          cooldownUntil: Date.now() + 3_600_000,
+          lastRejectedReason: `止まった理由${pad}: ${long}`,
+        };
+      }),
+    );
     for (const summary of h.running) {
       summary.lastReport = `報告: ${'ほ'.repeat(3_000)}`;
       summary.waiting = [
@@ -4949,6 +4970,20 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       check: (firstLine) =>
         expect(firstLine, `id の隣に状態の札（[running]）が無い: ${firstLine}`).toContain(
           '[running]',
+        ),
+    },
+    {
+      // `flooded()` は全件へ `cooldownUntil`（未来）を入れるので、状態は毎回
+      // `cooling`。**id（`tok-0000`）にはこの語が出ない**ので、タイトルを空へ
+      // 落としても id へ置き換えても崩れる。
+      //
+      // **ここで `ready` を選ばないこと** —— `ready` は「状態の列が1つも立って
+      // いない」ときの値なので、`title` を空文字へ落とす変異と見分けが付きにくい
+      // （`- <id> ` の後ろが消えても、そもそも短い語なので気づきにくい）。
+      name: 'token_list',
+      check: (firstLine) =>
+        expect(firstLine, `id の隣に状態（cooling）が無い: ${firstLine}`).toMatch(
+          /^- \S+ cooling/,
         ),
     },
   ];
@@ -5811,5 +5846,143 @@ describe('commitment_list id=<id> で1件の全文が取れる（#218）', () =>
 
     expect(listing).toContain('c-still-open');
     expect(listing).not.toContain('c-already-closed');
+  });
+});
+
+/**
+ * 認証トークンのプールを**読む**道具（Issue #393。人間の決定 2026-08-25）。
+ *
+ * **書き込みは渡さない。** 回すのは実装であってクローンの判断ではない
+ * （PRD「provider」が逐語でそう書いている）。ここが固定するのは
+ * **「読めること」と「値が1文字も出ないこと」の2つ**である。
+ */
+describe('token_list（読むだけ。値は返らない）', () => {
+  /** プールに1本置く。**値は本物の形に似せた偽物である**（本物は使わない）。 */
+  async function put(
+    h: Harness,
+    over: Partial<Parameters<Stores['tokens']['replace']>[0][number]> = {},
+  ) {
+    await h.stores.tokens.replace([
+      {
+        id: 'tok-a',
+        label: '予備1',
+        value: 'sk-ant-oat01-FAKE-NOT-A-REAL-TOKEN',
+        order: 0,
+        ...over,
+      },
+    ]);
+  }
+
+  it('道具として配られている（クローンから見えないものを作らない）', () => {
+    expect(CLONE_ALLOWED_TOOLS).toContain(qualifiedToolName('token_list'));
+  });
+
+  it('**書き込みの道具は配られていない**（回すのは実装であってクローンではない）', () => {
+    // **これが「読み取りだけ」の実質である。** 一覧に無いことを直接見る —
+    // 実装の側で足しても、ここが落ちれば人間の決定と食い違ったことが分かる。
+    for (const name of ['token_add', 'token_remove', 'token_disable', 'token_enable']) {
+      expect(CLONE_TOOL_NAMES as readonly string[]).not.toContain(name);
+    }
+  });
+
+  it('値を1文字も返さない（受け入れ基準5）', async () => {
+    const h = harness();
+    await put(h);
+
+    const reply = await h.call('token_list', {});
+
+    // **正本には値が在る**（`list()` は値を含む口である）。それでも出ない。
+    expect((await h.stores.tokens.list())[0]?.value).toBe('sk-ant-oat01-FAKE-NOT-A-REAL-TOKEN');
+    expect(reply).not.toContain('sk-ant');
+    expect(reply).not.toContain('FAKE-NOT-A-REAL-TOKEN');
+    // 出るのは id・ラベル・指紋である（1件の形は `renderListingEntry` が持つ）。
+    expect(reply).toContain('- tok-a ');
+    expect(reply).toContain('予備1');
+    expect(reply).toContain('指紋 ');
+  });
+
+  it('プールが空なら「回らない」と言う（0本を静かに正常として見せない）', async () => {
+    const h = harness();
+
+    const reply = await h.call('token_list', {});
+
+    expect(reply).toContain('プールは空である');
+    expect(reply).toContain('回らない');
+  });
+
+  it('現役の指名が無いことを「1本目が現役」と書かない', async () => {
+    const h = harness();
+    await put(h);
+
+    const reply = await h.call('token_list', {});
+
+    // **器の環境変数のまま走っている状態と、1本目を撒いた後は別である。**
+    expect(reply).toContain('まだ一度も無い');
+    expect(reply).not.toContain('← 現役');
+  });
+
+  it('現役が在れば、どれが現役かと世代が出る', async () => {
+    const h = harness();
+    await put(h);
+    await h.stores.tokens.writeActive({
+      tokenId: 'tok-a',
+      generation: 3,
+      rotatedAt: '2026-08-25T10:00:00.000Z',
+    });
+
+    const reply = await h.call('token_list', {});
+
+    expect(reply).toContain('← 現役');
+    expect(reply).toContain('世代 3');
+  });
+
+  it('冷却中・失効・人間が外した行を、使える行と同じ顔にしない', async () => {
+    const h = harness();
+    await h.stores.tokens.replace([
+      {
+        id: 'tok-cool',
+        label: '冷却中',
+        value: 'v1',
+        order: 0,
+        cooldownUntil: Date.now() + 3_600_000,
+        lastRejectedReason: "You've hit your usage limit",
+      },
+      { id: 'tok-off', label: '外した', value: 'v2', order: 1, disabledAt: '2026-08-25T00:00:00.000Z' },
+      { id: 'tok-ok', label: '使える', value: 'v3', order: 2 },
+    ]);
+
+    const reply = await h.call('token_list', {});
+
+    // 状態は1件の `title` に出る（`renderListingEntry` の1行目）。
+    expect(reply).toContain('- tok-cool cooling');
+    expect(reply).toContain('- tok-off disabled');
+    expect(reply).toContain('- tok-ok ready');
+    // **止まった文言は言い換えずそのまま出す**（受け入れ基準8）。
+    expect(reply).toContain("You've hit your usage limit");
+    // 回復の見込みは**分類**であって実測ではない、と断ってある。
+    expect(reply).toContain('回復の見込み（分類）');
+  });
+
+  it('器の環境変数を指す行は、値を持たないことが分かる形で出る', async () => {
+    const h = harness();
+    await h.stores.tokens.replace([
+      { id: 'tok-env', label: '器の環境変数', source: 'env', order: -1 },
+      { id: 'tok-a', label: '予備1', value: 'v1', order: 0 },
+    ]);
+
+    const reply = await h.call('token_list', {});
+
+    expect(reply).toContain('器の環境変数を指す行');
+    expect(reply).toContain('値を持たない');
+  });
+
+  it('回す契機と冷却の既定も出る（なぜ回らなかったのかを1回で読めるように）', async () => {
+    const h = harness();
+    await put(h);
+
+    const reply = await h.call('token_list', {});
+
+    expect(reply).toContain('回す契機:');
+    expect(reply).toContain('冷却 ');
   });
 });
