@@ -679,3 +679,254 @@ describe('既にある DB への移行（層の列が無い状態から）', () 
     expect(rows[0]?.layer).toBe('manager');
   });
 });
+
+describe('認証トークンの軸（どの区間がどのトークンだったか。#393 受け入れ基準6）', () => {
+  /** 帰属を明示して1件積む（既定に寄りかからない）。 */
+  function put(over: { at: string; costUsd: number; tokenId?: string; date?: string }) {
+    return store.record({
+      layer: 'manager',
+      site: 'session',
+      accumulation: 'oneshot',
+      managerId: 'mgr-1',
+      date: over.date ?? '2026-08-25',
+      at: over.at,
+      snapshot: snapshot({ opus: totals({ costUsd: over.costUsd }) }),
+      ...(over.tokenId === undefined ? {} : { tokenId: over.tokenId }),
+    });
+  }
+
+  it('同じ日・同じ actor・同じモデル・同じ層でも、トークンが違えば別の行になる', async () => {
+    await put({ at: '2026-08-25T10:00:00.000Z', costUsd: 1, tokenId: 'tok-a' });
+    await put({ at: '2026-08-25T11:00:00.000Z', costUsd: 2, tokenId: 'tok-b' });
+
+    const { rows } = await store.aggregate({});
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => [row.tokenId, row.totals.costUsd])).toEqual([
+      ['tok-a', 1],
+      ['tok-b', 2],
+    ]);
+  });
+
+  it('帰属の無い行を2回積むと足し込まれる（空文字が鍵として効いている）', async () => {
+    // **これが `token_id` を null 許容にできない理由である。** PostgreSQL の一意
+    // 索引は既定で `nulls distinct` — null どうしを重複と見なさないので、null を
+    // 許すと `on conflict` に当たらず record のたびに新しい行が挿さる。そして
+    // それが起きるのは**プールを使っていない器 ＝ 既定の構成**である。
+    await put({ at: '2026-08-25T10:00:00.000Z', costUsd: 1 });
+    await put({ at: '2026-08-25T11:00:00.000Z', costUsd: 1 });
+
+    const { rows } = await store.aggregate({});
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.totals.costUsd).toBe(2);
+    // **空文字は外へ出さない。** 列が not null なのは鍵を成立させるためだけで、
+    // 空文字はトークンではない（出すと「id が空のトークン」が1件現れる）。
+    expect(rows[0]?.tokenId).toBeUndefined();
+  });
+
+  it('帰属の無い行は最後に並ぶ（空文字の昇順で先頭に来ない）', async () => {
+    await put({ at: '2026-08-25T10:00:00.000Z', costUsd: 1 });
+    await put({ at: '2026-08-25T11:00:00.000Z', costUsd: 2, tokenId: 'tok-a' });
+
+    const { rows } = await store.aggregate({});
+    expect(rows.map((row) => row.tokenId)).toEqual(['tok-a', undefined]);
+  });
+
+  it('tokenId で絞り込める', async () => {
+    await put({ at: '2026-08-25T10:00:00.000Z', costUsd: 1, tokenId: 'tok-a' });
+    await put({ at: '2026-08-25T10:00:00.000Z', costUsd: 2, tokenId: 'tok-b' });
+
+    const only = await store.aggregate({ tokenId: 'tok-b' });
+    expect(only.rows).toHaveLength(1);
+    expect(only.rows[0]?.tokenId).toBe('tok-b');
+  });
+
+  it('tokensSince は帰属が付いた record でだけ入る（プールを使わない器では最後まで null）', async () => {
+    await put({ at: '2026-08-25T10:00:00.000Z', costUsd: 1 });
+
+    const before = await store.aggregate({});
+    expect(before.since).toBe('2026-08-25T10:00:00.000Z');
+    expect(before.layersSince).toBe('2026-08-25T10:00:00.000Z');
+    // 台帳も層も始まっているのに、トークンの軸だけ始まっていない。
+    expect(before.tokensSince).toBeNull();
+    expect(before.beforeTokens).toBe(true);
+
+    await put({ at: '2026-08-26T10:00:00.000Z', costUsd: 1, tokenId: 'tok-a', date: '2026-08-26' });
+
+    const after = await store.aggregate({});
+    expect(after.tokensSince).toBe('2026-08-26T10:00:00.000Z');
+    expect(after.since).toBe('2026-08-25T10:00:00.000Z');
+  });
+
+  it('tokensSince は最初の帰属付き record でだけ入り、以後は上書きしない', async () => {
+    await put({ at: '2026-08-25T10:00:00.000Z', costUsd: 1, tokenId: 'tok-a' });
+    await put({ at: '2026-08-26T10:00:00.000Z', costUsd: 1, tokenId: 'tok-b', date: '2026-08-26' });
+
+    expect((await store.aggregate({})).tokensSince).toBe('2026-08-25T10:00:00.000Z');
+  });
+
+  it('トークンの軸の始点より前を照会したら beforeTokens: true になる', async () => {
+    await put({ at: '2026-08-25T10:00:00.000Z', costUsd: 1, tokenId: 'tok-a' });
+
+    expect((await store.aggregate({ from: '2026-08-25' })).beforeTokens).toBe(false);
+    expect((await store.aggregate({ from: '2026-08-24' })).beforeTokens).toBe(true);
+    expect((await store.aggregate({})).beforeTokens).toBe(true);
+  });
+});
+
+/**
+ * **層の列は在るがトークンの列が無い DB からの移行。** ＝ いまの本番がこれである。
+ *
+ * 上の describe（層の列が無い状態から）とは別に要る。**新しい鍵を旧名のまま
+ * 作ろうとする形は、そちらでは捕まらない** — 空の DB からなら `create unique
+ * index if not exists usage_daily_key_idx` が6列の索引を作って通ってしまう。
+ * 既に5列の `usage_daily_key_idx` が在る DB でだけ、`if not exists` が**名前で
+ * 一致して no-op になり、鍵が5列のまま残る。**
+ */
+describe('既にある DB への移行（層の列は在るがトークンの列が無い状態から）', () => {
+  /** トークンの列が入る前のスキーマ。`migrate.ts` から写したもの。 */
+  const LAYERED = [
+    `create table if not exists usage_daily (
+       date text not null,
+       manager_id text not null,
+       model text not null,
+       input_tokens bigint not null default 0,
+       output_tokens bigint not null default 0,
+       cache_read_input_tokens bigint not null default 0,
+       cache_creation_input_tokens bigint not null default 0,
+       web_search_requests bigint not null default 0,
+       cost_usd double precision not null default 0,
+       layer text not null default 'manager',
+       site text not null default 'session',
+       updated_at timestamptz not null
+     )`,
+    // **これが罠の本体である。** 5列の一意索引が、これから作りたい6列の索引と
+    // 同じ名前で既に在る。
+    `create unique index if not exists usage_daily_key_idx
+       on usage_daily (date, manager_id, model, layer, site)`,
+    `create table if not exists usage_baseline (
+       manager_id text not null,
+       layer text not null default 'manager',
+       session_id text,
+       models jsonb not null,
+       updated_at timestamptz not null,
+       resets integer not null default 0,
+       last_reset_at timestamptz
+     )`,
+    `create unique index if not exists usage_baseline_key_idx
+       on usage_baseline (layer, manager_id)`,
+    `create table if not exists usage_ledger (
+       id text primary key,
+       started_at timestamptz not null,
+       layered_at timestamptz
+     )`,
+  ];
+
+  let layeredClient: PGlite;
+  let layeredDb: Db;
+
+  beforeEach(async () => {
+    layeredClient = new PGlite();
+    layeredDb = drizzle(layeredClient);
+    for (const statement of LAYERED) {
+      await layeredDb.execute(sql.raw(statement));
+    }
+    await layeredDb.execute(
+      sql.raw(`insert into usage_daily (date, manager_id, model, layer, site, cost_usd, updated_at)
+               values ('2026-08-01', 'mgr-old', 'claude-opus-5', 'manager', 'session', 12.5, '2026-08-01T10:00:00Z')`),
+    );
+    await layeredDb.execute(
+      sql.raw(`insert into usage_ledger (id, started_at, layered_at)
+               values ('default', '2026-08-01T09:00:00Z', '2026-08-19T09:00:00Z')`),
+    );
+  });
+
+  afterEach(async () => {
+    await layeredClient.close();
+  });
+
+  it('移行後は同じ日・actor・モデル・層でトークンの違う行が2つ立てられる（旧名の5列索引が外れている）', async () => {
+    await migrate(layeredDb);
+    const layeredStore = new PgUsageStore(layeredDb);
+
+    // **索引名を変えずに列だけ足していたら、ここで落ちる。** 5列の鍵が残るので、
+    // 2件目は `on conflict` で1件目へ足し込まれ、行は1つのまま `token_id` は
+    // 先に入った側（'tok-a'）のままになる。
+    for (const tokenId of ['tok-a', 'tok-b']) {
+      await layeredStore.record({
+        layer: 'manager',
+        site: 'session',
+        accumulation: 'oneshot',
+        managerId: 'mgr-new',
+        date: '2026-08-25',
+        at: '2026-08-25T10:00:00.000Z',
+        snapshot: { models: { 'claude-opus-5': totals({ costUsd: 1 }) } },
+        tokenId,
+      });
+    }
+
+    const { rows } = await layeredStore.aggregate({ managerId: 'mgr-new' });
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.tokenId)).toEqual(['tok-a', 'tok-b']);
+  });
+
+  it('旧名の索引が実際に消え、新しい名前の索引が在る（no-op で通していない）', async () => {
+    await migrate(layeredDb);
+
+    const result = await layeredDb.execute(
+      sql.raw(`select indexname from pg_indexes where tablename = 'usage_daily'`),
+    );
+    const names = (result.rows as Array<{ indexname: string }>).map((row) => row.indexname).sort();
+    // **上のテストだけでは足りない。** 行が2つ立つことは、旧索引が消えたことでも
+    // 新索引が在ることでも説明できてしまう（`create unique index` が別名で作られ、
+    // 旧索引が残っていても、6列の側が先に当たれば通る形がありうる）。名前で直接見る。
+    expect(names).toContain('usage_daily_token_key_idx');
+    expect(names).not.toContain('usage_daily_key_idx');
+  });
+
+  it('既にある行はトークンの帰属を持たない（既定を観測として売らない）', async () => {
+    await migrate(layeredDb);
+    const layeredStore = new PgUsageStore(layeredDb);
+
+    const { rows, tokensSince, beforeTokens } = await layeredStore.aggregate({});
+    expect(rows).toHaveLength(1);
+    // **`layer` / `site` と違い、既定が「古い行にとって真」ではない。** この行が
+    // どのトークンで走ったかは、どこにも記録されていない。
+    expect(rows[0]?.tokenId).toBeUndefined();
+    expect(rows[0]?.totals.costUsd).toBe(12.5);
+    // 台帳と層の始点は残っているのに、トークンの軸だけ始まっていない。
+    expect(tokensSince).toBeNull();
+    expect(beforeTokens).toBe(true);
+  });
+
+  it('台帳と層の始点は動かさず、トークンの軸の始点だけが後から入る', async () => {
+    await migrate(layeredDb);
+    const layeredStore = new PgUsageStore(layeredDb);
+
+    await layeredStore.record({
+      layer: 'manager',
+      site: 'session',
+      accumulation: 'oneshot',
+      managerId: 'mgr-new',
+      date: '2026-08-25',
+      at: '2026-08-25T10:00:00.000Z',
+      snapshot: { models: { 'claude-opus-5': totals({ costUsd: 1 }) } },
+      tokenId: 'tok-a',
+    });
+
+    const aggregate = await layeredStore.aggregate({});
+    expect(aggregate.since).toBe('2026-08-01T09:00:00.000Z');
+    expect(aggregate.layersSince).toBe('2026-08-19T09:00:00.000Z');
+    expect(aggregate.tokensSince).toBe('2026-08-25T10:00:00.000Z');
+  });
+
+  it('migrate を2回当てても落ちない（鍵の差し替えが冪等である）', async () => {
+    await migrate(layeredDb);
+    await migrate(layeredDb);
+    await migrate(layeredDb);
+
+    const layeredStore = new PgUsageStore(layeredDb);
+    const { rows } = await layeredStore.aggregate({});
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.tokenId).toBeUndefined();
+  });
+});
