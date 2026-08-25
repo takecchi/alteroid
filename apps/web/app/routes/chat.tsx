@@ -376,17 +376,6 @@ export function ChatPane({
   const shownIdRef = useRef(shownId);
 
   /**
-   * 人間が別の会話を選んだときだけ状態を捨てる。
-   *
-   * **見るのは「URL が変わったか」であって「shownId と一致するか」ではない。**
-   * `open` で id を決めてから URL が追いつくまでのあいだ、shownId は URL より
-   * 先へ進んでいる。そこで一致だけを見ると、その隙間を「別の会話へ移った」と
-   * 誤って読み、送ったばかりの発言ごと消してしまう。
-   *
-   * （React の「props が変わったら state を調整する」パターン。effect でやると
-   * 一度古い内容を描いてから消すことになる。）
-   */
-  /**
    * 直前に見ていた会話。`retainedBy`（上）が「いま」に加えて残す2つ目の持ち主。
    *
    * **`shownId` を進めるのと同じ、この下のブロックでだけ更新する。**
@@ -398,6 +387,17 @@ export function ChatPane({
    * だけで、積み上がらない）。
    */
   const [previousShownId, setPreviousShownId] = useState<string | undefined>(undefined);
+  /**
+   * 人間が別の会話を選んだときだけ状態を捨てる。
+   *
+   * **見るのは「URL が変わったか」であって「shownId と一致するか」ではない。**
+   * `open` で id を決めてから URL が追いつくまでのあいだ、shownId は URL より
+   * 先へ進んでいる。そこで一致だけを見ると、その隙間を「別の会話へ移った」と
+   * 誤って読み、送ったばかりの発言ごと消してしまう。
+   *
+   * （React の「props が変わったら state を調整する」パターン。effect でやると
+   * 一度古い内容を描いてから消すことになる。）
+   */
   const [lastRouteId, setLastRouteId] = useState(routeId);
   if (routeId !== lastRouteId) {
     setLastRouteId(routeId);
