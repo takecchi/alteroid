@@ -612,3 +612,157 @@ describe('restore（起動時の引き取り）', () => {
     expect(await h.stores.tokens.readActive()).toMatchObject({ generation: 3 });
   });
 });
+
+/**
+ * 器の環境変数を指す行（Issue #393）。
+ *
+ * **これが無いと、環境変数のトークンが止まっても記録が残らない** — 回し手は現役の
+ * 行を冷却へ入れるが、環境変数は行を持たないので入れる先が無い。**最初に止まった
+ * 1本だけが台帳から消える。**
+ */
+describe('ensureEnvToken（環境変数の行）', () => {
+  function withEnv(present: boolean) {
+    const stores = createMemoryStores();
+    let seq = 0;
+    const rotator = createTokenRotator({
+      stores,
+      probe: { probe: async () => ({ verdict: 'usable' }) },
+      spread: { spread: async () => [] },
+      now: () => new Date(AT),
+      hasEnvToken: () => present,
+      newId: () => `env-${String(++seq)}`,
+    });
+    return { stores, rotator };
+  }
+
+  it('⚠️ プールが空なら足さない（受け入れ基準7 を字義どおり守る）', async () => {
+    const { stores, rotator } = withEnv(true);
+
+    const outcome = await rotator.ensureEnvToken();
+
+    expect(outcome.kind).toBe('skipped');
+    // **記憶ストアに1行も生えない。**
+    expect(await stores.tokens.list()).toEqual([]);
+  });
+
+  it('人間が1本でも登録していれば足す', async () => {
+    const { stores, rotator } = withEnv(true);
+    await stores.tokens.replace([{ id: 'tok-a', label: 'spare', value: 'value-a', order: 0 }]);
+
+    const outcome = await rotator.ensureEnvToken();
+
+    expect(outcome.kind).toBe('added');
+    const tokens = await stores.tokens.list();
+    const env = tokens.find((t) => t.source === 'env');
+    expect(env).toBeDefined();
+    // **値を持たない**（器の環境変数を指すだけ）。
+    expect(env).not.toHaveProperty('value');
+  });
+
+  it('環境変数の行は既存のどれよりも先に試される', async () => {
+    // 環境変数のトークンは*いま走っている*ものなので、その残枠を使い切ってから
+    // 予備へ回るのが自然な順序である。
+    const { stores, rotator } = withEnv(true);
+    await stores.tokens.replace([{ id: 'tok-a', label: 'spare', value: 'value-a', order: 0 }]);
+
+    await rotator.ensureEnvToken();
+
+    const tokens = await stores.tokens.list();
+    expect(tokens[0]?.source).toBe('env');
+    expect(tokens[1]?.id).toBe('tok-a');
+  });
+
+  it('既存の行の order を振り直さない（updatedAt を一斉に動かさない）', async () => {
+    const { stores, rotator } = withEnv(true);
+    await stores.tokens.replace([
+      {
+        id: 'tok-a',
+        label: 'a',
+        value: 'value-a',
+        order: 0,
+        updatedAt: '2026-08-01T00:00:00.000Z',
+      },
+      {
+        id: 'tok-b',
+        label: 'b',
+        value: 'value-b',
+        order: 1,
+        updatedAt: '2026-08-01T00:00:00.000Z',
+      },
+    ]);
+
+    await rotator.ensureEnvToken();
+
+    const tokens = await stores.tokens.list();
+    expect(tokens.find((t) => t.id === 'tok-a')?.order).toBe(0);
+    expect(tokens.find((t) => t.id === 'tok-a')?.updatedAt).toBe('2026-08-01T00:00:00.000Z');
+    expect(tokens.find((t) => t.id === 'tok-b')?.updatedAt).toBe('2026-08-01T00:00:00.000Z');
+  });
+
+  it('環境変数が置かれていなければ足さない（指す先が無い）', async () => {
+    const { stores, rotator } = withEnv(false);
+    await stores.tokens.replace([{ id: 'tok-a', label: 'spare', value: 'value-a', order: 0 }]);
+
+    expect((await rotator.ensureEnvToken()).kind).toBe('skipped');
+    expect((await stores.tokens.list()).some((t) => t.source === 'env')).toBe(false);
+  });
+
+  it('2回呼んでも増えない（起動のたびに行が増えない）', async () => {
+    const { stores, rotator } = withEnv(true);
+    await stores.tokens.replace([{ id: 'tok-a', label: 'spare', value: 'value-a', order: 0 }]);
+
+    await rotator.ensureEnvToken();
+    const second = await rotator.ensureEnvToken();
+
+    expect(second.kind).toBe('exists');
+    expect((await stores.tokens.list()).filter((t) => t.source === 'env')).toHaveLength(1);
+  });
+
+  it('人間が外した行でも「在る」として扱う（外した判断を無視して足し直さない）', async () => {
+    const { stores, rotator } = withEnv(true);
+    await stores.tokens.replace([
+      { id: 'tok-a', label: 'spare', value: 'value-a', order: 0 },
+      { id: 'env-old', label: '器の環境変数', source: 'env', order: -1, disabledAt: AT },
+    ]);
+
+    const outcome = await rotator.ensureEnvToken();
+
+    expect(outcome.kind).toBe('exists');
+    expect((await stores.tokens.list()).filter((t) => t.source === 'env')).toHaveLength(1);
+  });
+
+  /** **この修正の本体** — 環境変数のトークンが止まったことが記録に残る。 */
+  it('環境変数の行が止まったら、文言と復帰予定時刻が残る', async () => {
+    const stores = createMemoryStores();
+    const spreadCalls: unknown[] = [];
+    const rotator = createTokenRotator({
+      stores,
+      probe: { probe: async () => ({ verdict: 'usable' }) },
+      spread: {
+        spread: async (t) => {
+          spreadCalls.push(t);
+          return [];
+        },
+      },
+      now: () => new Date(AT),
+      hasEnvToken: () => true,
+      newId: () => 'env-1',
+    });
+    await stores.tokens.replace([{ id: 'tok-a', label: 'spare', value: 'value-a', order: 0 }]);
+    await rotator.ensureEnvToken();
+    // 環境変数の行が現役だとして始める（起動時の撒き直しが指名した状態）。
+    await stores.tokens.writeActive({ tokenId: 'env-1', generation: 1, rotatedAt: AT });
+
+    await rotator.observe({
+      notice: { kind: 'reached', text: "You've hit your org's monthly spend limit" },
+      observedBy: { tokenId: 'env-1', generation: 1 },
+    });
+
+    const env = (await stores.tokens.list()).find((t) => t.id === 'env-1');
+    // **止まった事実が残る。これが行を作った理由そのものである。**
+    expect(env?.lastRejectedReason).toBe("You've hit your org's monthly spend limit");
+    expect(env?.cooldownUntil).toBeDefined();
+    // 予備へ回っている。
+    expect(await stores.tokens.readActive()).toMatchObject({ tokenId: 'tok-a', generation: 2 });
+  });
+});

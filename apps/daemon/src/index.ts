@@ -657,6 +657,8 @@ export async function main(): Promise<void> {
   const agentTokenHolder = createAgentTokenHolder();
   const tokenRotator = createTokenRotator({
     stores,
+    // **値ではなく「在るか」だけを渡す**（`TokenRotatorOptions.hasEnvToken` の doc）。
+    hasEnvToken: () => (process.env.CLAUDE_CODE_OAUTH_TOKEN ?? '').length > 0,
     probe: {
       // **本番の仕事で試さない**（Issue #393 の設計の骨）。推論が走らない probe。
       probe: (token) => {
@@ -697,6 +699,17 @@ export async function main(): Promise<void> {
   //
   // **繋がっていない runner へは、ここでは届かない。** 後から上がってくる分は
   // `syncRunnerToken`（`ManagerPool#connectTo`）が追いつかせる。
+  {
+    // **行を足すのが先、撒き直しが後。** 逆にすると、環境変数の行が足された回だけ
+    // 撒き直しがその行を見ないまま終わる（1回ぶん遅れる）。
+    const ensured = await tokenRotator
+      .ensureEnvToken()
+      .catch((error: unknown) => ({ kind: 'failed' as const, why: String(error) }));
+    if (ensured.kind === 'added' || ensured.kind === 'failed') {
+      process.stderr.write(`alteroidd: 認証トークン: ${ensured.why}\n`);
+    }
+  }
+
   {
     const restored = await tokenRotator
       .restore()
