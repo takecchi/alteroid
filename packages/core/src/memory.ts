@@ -1316,10 +1316,23 @@ function formatMemoryFloorTransition(beforeChars: number, afterChars: number): s
  * 言うことは3つ:
  * 1. 書いた文書の区分（`premise` / `fact`。書いた**後**の区分）
  * 2. 焼き込み全体の文字数が `before.totalChars` → `after.totalChars` へ
- *    どう動いたか（文字。`renderMemoryDocuments(documents).length` と一致する値）
+ *    どう動いたか（文字。`renderMemoryDocuments(documents).length` と一致する値。
+ *    **`stores.persona.documents()` をいま読み直した値であることを短く名乗る**
+ *    ——`read()` から `write()` までの間に人間が `PUT /memory/:slug` で
+ *    書き換える窓があり、ここに出る値と次のターンに実際に焼かれる量が
+ *    一致しない可能性があるため。`self_status` が既に採っている形
+ *    「記憶の大きさ（いま stores.persona を読み直した値）」に揃える）
  * 3. **`premise` を新規作成したときだけ**、それが「毎ターン全文が焼かれる」
  *    ことを1行で言う——premise の新規作成は稀である（習慣化しない）ので、
- *    ここだけ他の枝より明確に強い言い方にしてある。
+ *    ここだけ他の枝より明確に強い言い方にしてある。**この枝にはさらに2つ
+ *    足す**（依頼者の決裁。#318 の議論で「線が無くても、稀にしか出ない枝には
+ *    置ける」とされた手当てを、稀にしか出ないこの枝へ畳んだもの）:
+ *    - **いま最大の premise を名指しする**（`after.largestPremise`。書いた
+ *      直後の状態で「どこを見ればよいか」にその場で答える——依頼者はまさに
+ *      これが無くて詰まった。`about-me-core` を作った夜、応答は文字数だけ
+ *      だった）
+ *    - **縮めるのに全文置換は要らないこと**と、その3手順の道具名
+ *      （`memory_outline` → `memory_section_move` → `memory_frontmatter_set`）
  *
  * ⛔ 既存の語「区分が変わった」（`memory_frontmatter_set` の `kindChangeNote`）を
  * 使い回さない。`tools.test.ts` に
@@ -1335,6 +1348,11 @@ function formatMemoryFloorTransition(beforeChars: number, afterChars: number): s
  * 機構ではない。** 行動を変えるのは、稀にしか出ない側（新規作成・区分の変更・
  * 線を越えたとき）である。**「効かない場面」をここに書かずに入れると、次に
  * 読む人は「対策済み」と読む——だから書く。**
+ *
+ * **⚠️ 上の2要素（最大の premise・3手順）を `fact` の新規作成や `created === false`
+ * の枝へは足さないこと。** あの枝を強くしている理由は「premise の新規作成は
+ * 稀だから習慣化しない」であり、全部の枝に足すと稀ではなくなる——毎回出る側は
+ * 「効かない機構」のままにしておく（直上の限界のとおり）。
  */
 export function describeMemoryFloor(input: {
   before: MemoryFloor;
@@ -1345,14 +1363,25 @@ export function describeMemoryFloor(input: {
 }): string {
   const { before, after, slug, kind, created } = input;
   const transition = formatMemoryFloorTransition(before.totalChars, after.totalChars);
-  const floorLine = `毎ターンの床（焼き込み全体）: ${transition}。`;
+  const floorLine = `毎ターンの床（焼き込み全体。いま読み直した値）: ${transition}。`;
 
   if (created && kind === 'premise') {
-    return [
+    const lines = [
       `⭐ 新規作成: ${slug}（区分: premise）。`,
       floorLine,
       '⚠️ premise は毎ターン全文がそのままクローンの文脈へ焼かれる（切り詰めない）。',
-    ].join('\n');
+    ];
+    const largest = after.largestPremise;
+    if (largest !== null) {
+      lines.push(
+        `いま最も大きい premise: ${largest.slug}（${formatMemoryCharCount(largest.chars)} 文字）。`,
+      );
+    }
+    lines.push(
+      '縮めるのに全文置換は要らない: memory_outline で節を確かめ、' +
+        'memory_section_move で付録の文書へ移し、memory_frontmatter_set でその付録を fact にする。',
+    );
+    return lines.join('\n');
   }
 
   const actionLabel = created ? '新規作成' : '更新';

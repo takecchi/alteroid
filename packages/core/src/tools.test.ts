@@ -580,6 +580,35 @@ describe('クローンの道具', () => {
       expect(reply).toContain('全文がそのままクローンの文脈へ焼かれる');
       // 床は 0 文字から動く（この器では他に記憶が無い）。
       expect(reply).toMatch(/0 文字から [\d,]+ 文字へ/);
+      // 読み直した値であることを名乗る。
+      expect(reply).toContain('いま読み直した値');
+    });
+
+    /**
+     * ⭐ premise の新規作成の枝には、最大の premise の名指しと、縮める3手順
+     * （memory_outline → memory_section_move → memory_frontmatter_set）が
+     * 実際の道具呼び出しの応答にも出ることを、`memory_write` 経由で確かめる
+     * （`memory.test.ts` は `describeMemoryFloor` を直接呼ぶ単体の歯。ここは
+     * ハンドラの配線まで含めて測る）。
+     */
+    it('⭐ premise を新規作成すると、いま最大の premise の名指しと、縮める3手順の道具名が出る', async () => {
+      const h = harness();
+      await h.call('memory_write', {
+        slug: 'small-premise',
+        content: '# 小さい前提\n短い',
+        summary: '先に小さい premise を作る',
+      });
+
+      const reply = await h.call('memory_write', {
+        slug: 'about-me-core',
+        content: '# 私の芯\n\n'.concat('大事にしていること。'.repeat(50)),
+        summary: '新しい芯を作った',
+      });
+
+      expect(reply).toContain('いま最も大きい premise: about-me-core');
+      expect(reply).toContain('memory_outline');
+      expect(reply).toContain('memory_section_move');
+      expect(reply).toContain('memory_frontmatter_set');
     });
 
     it('fact を新規作成しても「全文が焼かれる」の1行は出ない', async () => {
@@ -594,6 +623,12 @@ describe('クローンの道具', () => {
       expect(reply).toContain('fact');
       expect(reply).toContain('毎ターンの床');
       expect(reply).not.toContain('全文がそのままクローンの文脈へ焼かれる');
+      // ⭐ 稀にしか出ない枝専用の要素（最大の premise の名指し・3手順）は、
+      // fact の新規作成には出ない。
+      expect(reply).not.toContain('いま最も大きい premise');
+      expect(reply).not.toContain('memory_outline');
+      expect(reply).not.toContain('memory_section_move');
+      expect(reply).not.toContain('memory_frontmatter_set');
     });
 
     it('memory_append の新規作成でも同じ3要素が出る（premise）', async () => {
@@ -622,6 +657,9 @@ describe('クローンの道具', () => {
 
       expect(reply).toContain('毎ターンの床');
       expect(reply).not.toContain('全文がそのままクローンの文脈へ焼かれる');
+      expect(reply).not.toContain('いま最も大きい premise');
+      expect(reply).not.toContain('memory_outline');
+      expect(reply).not.toContain('memory_section_move');
     });
 
     it('単位は文字である（bytes を出していない）', async () => {
@@ -1668,7 +1706,7 @@ describe('クローンの道具', () => {
         expect(reply).toContain('毎ターンの床');
         expect(reply).toContain('fact');
         // delta が符号つきの負の数（減った）で出る。
-        expect(reply).toMatch(/毎ターンの床（焼き込み全体）: [\d,]+ 文字から [\d,]+ 文字へ（-[\d,]+）/);
+        expect(reply).toMatch(/毎ターンの床（焼き込み全体。いま読み直した値）: [\d,]+ 文字から [\d,]+ 文字へ（-[\d,]+）/);
       });
 
       /**

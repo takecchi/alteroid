@@ -1647,4 +1647,88 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
     expect(reply).toContain('文字');
     expect(reply).not.toContain('bytes');
   });
+
+  it('床の行は「いま読み直した値」であることを名乗る（read→write の間の書き換え窓があるため）', () => {
+    const after = measureMemoryFloor([premise('doc', '本文')]);
+    const reply = describeMemoryFloor({
+      before: emptyFloor,
+      after,
+      slug: 'doc',
+      kind: 'premise',
+      created: true,
+    });
+    expect(reply).toContain('いま読み直した値');
+  });
+
+  /**
+   * ⭐ premise の新規作成の枝には、「どこを見ればよいか」への回答（最大の
+   * premise を名指しする）と、「縮めるのに全文置換は要らないこと」（3手順の
+   * 道具名）を足す——依頼者が実際にこの枝で詰まった経験（`about-me-core` を
+   * 作った夜、応答が文字数だけだった）を踏まえた決裁。
+   *
+   * **稀にしか出ない枝だけに足す。** fact の新規作成・既存文書の更新には
+   * 足さない——別の `it()` で「出ない」ことを固定する（畳むと変異が生存する）。
+   */
+  it('⭐ premise の新規作成では、いま最大の premise の slug と文字数が出る', () => {
+    const after = measureMemoryFloor([
+      premise('small', '短い'),
+      premise('new-doc', 'あ'.repeat(500)),
+    ]);
+    const reply = describeMemoryFloor({
+      before: emptyFloor,
+      after,
+      slug: 'new-doc',
+      kind: 'premise',
+      created: true,
+    });
+
+    expect(after.largestPremise?.slug).toBe('new-doc');
+    expect(reply).toContain('いま最も大きい premise: new-doc');
+    expect(reply).toContain(`${after.largestPremise?.chars.toLocaleString('en-US')} 文字`);
+  });
+
+  it('⭐ premise の新規作成では、縮める3手順（memory_outline → memory_section_move → memory_frontmatter_set）の道具名が全部出る', () => {
+    const after = measureMemoryFloor([premise('new-doc', 'あ'.repeat(500))]);
+    const reply = describeMemoryFloor({
+      before: emptyFloor,
+      after,
+      slug: 'new-doc',
+      kind: 'premise',
+      created: true,
+    });
+
+    expect(reply).toContain('memory_outline');
+    expect(reply).toContain('memory_section_move');
+    expect(reply).toContain('memory_frontmatter_set');
+  });
+
+  it('⛔ fact の新規作成には、最大の premise の名指しも3手順も出ない（稀にしか出ない枝専用）', () => {
+    const after = measureMemoryFloor([
+      premise('some-premise', 'あ'.repeat(500)),
+      fact('new-fact', { description: '要旨', freshness: { kind: 'fresh' } }),
+    ]);
+    const reply = describeMemoryFloor({
+      before: emptyFloor,
+      after,
+      slug: 'new-fact',
+      kind: 'fact',
+      created: true,
+    });
+
+    expect(reply).not.toContain('いま最も大きい premise');
+    expect(reply).not.toContain('memory_outline');
+    expect(reply).not.toContain('memory_section_move');
+    expect(reply).not.toContain('memory_frontmatter_set');
+  });
+
+  it('⛔ 既存文書の更新（created: false）には、最大の premise の名指しも3手順も出ない', () => {
+    const before = measureMemoryFloor([premise('doc', '短い本文')]);
+    const after = measureMemoryFloor([premise('doc', '短い本文をもっと増やした')]);
+    const reply = describeMemoryFloor({ before, after, slug: 'doc', kind: 'premise', created: false });
+
+    expect(reply).not.toContain('いま最も大きい premise');
+    expect(reply).not.toContain('memory_outline');
+    expect(reply).not.toContain('memory_section_move');
+    expect(reply).not.toContain('memory_frontmatter_set');
+  });
 });
