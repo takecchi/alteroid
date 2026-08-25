@@ -419,7 +419,7 @@ export function ChatPane({
         text: message.text,
         of: shownId,
       })),
-    [history.data],
+    [history.data, shownId],
   );
 
   /*
