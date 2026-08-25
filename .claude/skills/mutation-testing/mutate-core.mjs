@@ -222,8 +222,22 @@ export function checkJudgementVocabulary() {
  * 拒否されていた。禁止語検査そのものは判定の語彙を守るために在り続ける —
  * 外したのではなく、掛ける対象を「判定の語彙」と「id」に分けて、それぞれに
  * 合った基準（部分文字列 / 語の境界）を使うようにした。
+ *
+ * **`context.artifactState` / `context.gateNote`（#444）**: 判定行の末尾に
+ * 追記する。`context` を渡さない既存の呼び方は、末尾に何も付かず元の文言と
+ * 1文字も変わらない（後方互換）。
+ *
+ * **⚠️ 追記部の禁止語検査は、`base`（id を差し込んだ後の完成文）を含めずに
+ * `suffixText` 単独へ掛ける。** 最初の実装は `[base, ...suffixLines].join('\n')`
+ * を丸ごと検査していたため、`base` に埋め込まれた `mutationId` の部分文字列
+ * （`m318a-01-guard-bypass` の中の `pass` 等）が誤って拒否された——まさに
+ * この関数の doc が説明している #348 の欠陥を、追記部の検査で再生産していた
+ * （`mutate-selftest.mjs --scenario judgement-forbidden-word-boundary` が
+ * 実際に検出した。回帰）。`suffixText` は id を含まない（`artifactState` は
+ * 4値の固定語彙、`gateNote` はこちらが書いた固定文言）ので、単純な部分文字列
+ * 検査で安全に守れる。
  */
-export function formatJudgement(category, mutationId) {
+export function formatJudgement(category, mutationId, context = {}) {
   const template = JUDGEMENT_TEMPLATES[category];
   if (!template) throw new HarnessError(`未知の判定種別: ${category}`);
 
@@ -232,12 +246,82 @@ export function formatJudgement(category, mutationId) {
   const templateOnly = template('␀id-placeholder␀');
   assertNoForbiddenWords(templateOnly, `JUDGEMENT_TEMPLATES.${category}（id 差し込み前）`);
 
-  return template(mutationId);
+  const base = template(mutationId);
+
+  const suffixLines = [];
+  if (context.artifactState !== undefined) {
+    suffixLines.push(`artifactState: ${context.artifactState}`);
+  }
+  if (context.gateNote) {
+    suffixLines.push(context.gateNote);
+  }
+  if (suffixLines.length === 0) return base;
+
+  const suffixText = suffixLines.join('\n');
+  assertNoForbiddenWords(suffixText, `judge(${mutationId}) の追記部（artifactState/gateNote）`);
+  return [base, suffixText].join('\n');
 }
 
-/** 生存/検出/不明のどれかを、成果物検査とテスト結果から決める（id とは無関係）。 */
+/**
+ * `undelivered` の中で、テスト結果に委ねてよい狭い条件（gate）を通っているかを見て、
+ * 通っていればその旨と spec 側の誤りの可能性を警告する注記を返す（#444）。
+ * `undelivered` でない、または gate を通っていなければ `null`。
+ *
+ * **#444 の案 (1)(2)(3) のどれでもない。** (1) は「判定カテゴリを変えずにテスト結果を
+ * 併記する」案だが、この実装は `undelivered` の一部で判定カテゴリ自体を `不明` から
+ * `検出`/`生存` へ変える。この注記は、その代わりに (1)(3) が守ろうとしていたもの
+ * （テスト結果を捨てない・測れていないことを黙らせない）を判定行で担保する部分である。
+ *
+ * **この注記は判定を緩めるものではない。** gate を通った判定（検出/生存）は、
+ * 変異がこの成果物へ本当に届いたことを確認したわけではなく、テスト結果に
+ * 委ねただけである——それを判定行に残すことで、この gate 自体が開けた穴
+ * （`spec.artifact.contains` の誤字が `不明` ではなく `検出` に化けて黙る可能性）を隠さない。
+ *
+ * **⚠️ この注記は判定行にしか出ない。** `mutate.mjs` の `run: まとめ` は
+ * `変異 <id>: <判定>` しか出さないので、まとめ行だけを読む使い方ではこの警告は見えない。
+ */
+function describeUndeliveredTestResultGate(artifactResult) {
+  if (artifactResult.artifactState !== 'undelivered') return null;
+  if (!undeliveredGatePassed(artifactResult)) return null;
+  return (
+    '⚠️ build は exit 0 で終わり、対象ファイルの存在も確認できたが、' +
+    'spec.artifact.contains の照合だけが外れたため、この判定はテスト結果に委ねている（#444）。' +
+    '変異がこの成果物へ本当に届いたことまでは確認できていない。' +
+    'spec.artifact.contains の誤字・死コード除去等、spec 側の誤りの可能性がある。'
+  );
+}
+
+/**
+ * `undelivered` を「テスト結果に委ねてよいか」で狭く gate する（#444）。
+ *
+ * `undelivered` は3つの原因を1つに潰した状態である（実測。#444 の報告に添えた
+ * 再現3本）: (a) build 自体が失敗した（`buildExitCode !== 0`。tsup の clean が
+ * 先に走るため成果物ファイルごと消える） (b) build は exit 0 だが
+ * `spec.artifact.file` の指すファイルがそもそも存在しない（spec の誤り。
+ * パスの取り違え等） (c) build は exit 0 でファイルも存在するが、
+ * `spec.artifact.contains` の照合だけが外れた。**このうち (c) だけが、
+ * 「build は成功し狙った成果物も実在するが、文字列照合だけが外れた」という、
+ * テスト結果を信用してよい形である。** (a)(b) は「変異がその成果物へ本当に
+ * 届いたか」自体が確認できていないので、`不明` のままにする。
+ */
+function undeliveredGatePassed(artifactResult) {
+  return artifactResult.buildExitCode === 0 && artifactResult.artifactFileExists === true;
+}
+
+/**
+ * 生存/検出/不明のどれかを、成果物検査とテスト結果から決める（id とは無関係）。
+ *
+ * **#444: `undelivered` を無条件に `不明` へ倒さない。** `undeliveredGatePassed`
+ * が真のときだけ（build が exit 0 で、狙った成果物ファイルも実在する場合だけ）、
+ * 以降の共通ロジック（テスト結果に基づく検出/生存の判定）へ処理を渡す。
+ * それ以外の `undelivered`（build 失敗・ファイル不在）は、これまでと同じく
+ * 無条件に `不明` を返す——「build の終了コードでは判定しない」という
+ * `delivered`/`undelivered` そのものの決定方法は1文字も変えていない
+ * （成果物の内容検査のみで決まる）。変えたのは、`undelivered` と決まった
+ * *後*に、テスト結果を見てよいかどうかの判断だけである。
+ */
 export function decideJudgementCategory(artifactResult, testResult) {
-  if (artifactResult.artifactState === 'undelivered') {
+  if (artifactResult.artifactState === 'undelivered' && !undeliveredGatePassed(artifactResult)) {
     return '不明';
   }
   if (!testsRanCleanly(testResult)) {
@@ -522,20 +606,28 @@ export function buildAndCheckArtifact(spec) {
   }
 
   const artifactAbs = absPath(spec.artifact.file);
+  // #444: ファイルの存在有無を、内容照合（delivered）と別に保持する。
+  // 「ファイルが無い」（build が失敗した／spec.artifact.file が誤っている）と
+  // 「ファイルは在るが contains が当たらない」は、どちらも delivered=false に
+  // 潰れるが、undelivered と決まった*後*にテスト結果へ委ねてよいかどうかを
+  // 決める側（`undeliveredGatePassed`）には別の入力として要る。
+  const artifactFileExists = fs.existsSync(artifactAbs);
   let delivered = false;
-  if (fs.existsSync(artifactAbs)) {
+  if (artifactFileExists) {
     const artifactContent = fs.readFileSync(artifactAbs, 'utf8');
     delivered = artifactContent.includes(spec.artifact.contains);
   }
   log(
     `[9] 成果物検査: ${spec.artifact.file} を実際に読んで "${spec.artifact.contains}" を探した ` +
-      `→ ${delivered ? '見つかった（届いている）' : '見つからなかった（届いていない）'}`,
+      `→ ${delivered ? '見つかった（届いている）' : '見つからなかった（届いていない）'}` +
+      `（ファイル自体の存在: ${artifactFileExists}）`,
   );
 
   return {
     buildSkipped: false,
     buildExitCode: result.status,
     artifactState: delivered ? 'delivered' : 'undelivered',
+    artifactFileExists,
   };
 }
 
@@ -714,10 +806,21 @@ export function testsAllPassed(testResult) {
  * あるのは、`cmdRun` のまとめが「種別」だけを欲しがる場面と、人間が読む
  * 判定行が「id + 種別」を欲しがる場面の両方があるため。戻り値は
  * `{ category, text }` — `category` は `'検出' | '生存' | '不明'`。
+ *
+ * **#444: `text` に `artifactState`（4値のどれで通ったか）を必ず添える。**
+ * `not-checked`（`spec.artifact` 未指定で testResult をそのまま信用する）と
+ * `undelivered`（成果物検査で疑わしいと分かった上で `不明` にする、または
+ * 狭い gate を通ってテスト結果に委ねる）は非対称な扱いのままだが、この
+ * 非対称は直していない——`artifactState` を判定行から読み取れるようにして、
+ * 非対称そのものを隠さないことだけをやっている。gate を通ってテスト結果に
+ * 委ねた場合は、加えて `describeUndeliveredTestResultGate` の警告も添える。
  */
 export function judge(spec, artifactResult, testResult) {
   const category = decideJudgementCategory(artifactResult, testResult);
-  const text = formatJudgement(category, spec.id);
+  const text = formatJudgement(category, spec.id, {
+    artifactState: artifactResult.artifactState,
+    gateNote: describeUndeliveredTestResultGate(artifactResult),
+  });
   return { category, text };
 }
 
