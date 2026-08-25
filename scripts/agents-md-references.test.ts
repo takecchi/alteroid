@@ -180,7 +180,7 @@ export function findLegacyVerbatimCitations(lines: readonly ProseLine[]): Legacy
       line: c.line,
       pattern: c.pattern,
       target: c.target,
-      form: `grep ${c.hasF ? '-F' : ''}n${c.hasDashDash ? ' --' : ''}`,
+      form: `grep -${c.hasF ? 'F' : ''}n${c.hasDashDash ? ' --' : ''}`,
     }));
 }
 
@@ -347,7 +347,7 @@ describe('参照を拾う側そのもの（歯が空振りしていないこと�
         line: 1,
         pattern: 'ここに在る文言',
         target: 'packages/core/src/schema.ts',
-        form: 'grep n',
+        form: 'grep -n',
       },
     ]);
   });
