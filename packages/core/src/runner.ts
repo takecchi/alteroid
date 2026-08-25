@@ -15,6 +15,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 
 import { buildManagerSessionOptions } from './claude-provider.js';
+import { noteBackgroundFailure } from './dropped-record.js';
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
 import { placedModelTier, resolveModelTier } from './model-tier.js';
 import {
@@ -1667,7 +1668,23 @@ class RunnerSession {
       // クローンは「まだ続けられるもの」を見せられ、話しかけるたびに失敗する。
       // 手が動いていないのだから、ここは畳むのが正しい。
       if (outcome === 'unresumable') {
-        void this.#finish('lost', `結果なしで終了: ${resultText(message).text}`);
+        // **落ち方は変えない。「どこで」だけを足す（#438 案D）。**
+        //
+        // **他5箇所（1122 / 1297 / 1300 / 1313 / 1319）のように `await` へ
+        // 揃えることはしていない。** ここを囲む `#dispatch` は同期メソッドで、
+        // 呼び出し元（`#read` の `for await`）も `await` せずに呼んでいる。
+        // 揃えるには両方を非同期へ変えることになり、**メッセージ処理に直列化点が
+        // 1つ増える** —— その影響は測っていないので、この変更には含めない。
+        void this.#finish('lost', `結果なしで終了: ${resultText(message).text}`).catch(
+          (error: unknown) => {
+            noteBackgroundFailure(
+              'セッションの片付け',
+              `managerId=${this.#id} outcome=lost`,
+              error,
+            );
+            throw error;
+          },
+        );
         return;
       }
     }

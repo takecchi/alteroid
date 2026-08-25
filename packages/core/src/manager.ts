@@ -2,9 +2,11 @@ import { randomUUID } from 'node:crypto';
 
 import {
   journalEntryShape,
+  noteBackgroundFailure,
   noteDroppedRecord,
   noteManagerIdCollision,
   noteUnreadableRecord,
+  runnerEventShape,
 } from './dropped-record.js';
 import { excerptLine } from './excerpt.js';
 import {
@@ -1748,7 +1750,25 @@ class Pool implements ManagerPool {
     const already = this.#connections.get(runner);
     if (already !== undefined) return already;
     const opening = (async () => {
-      await runner.connect((event) => void this.#onEvent(event));
+      // **落ち方は変えない。「どの合図で」だけを足す（#438 案D）。**
+      //
+      // この `.catch` は投げ直すので、今日と同じく未処理の拒否になって死ぬ。
+      // **握り潰さないのは、死ぬ側のほうが復旧力が高いからである** —— 起動時の
+      // `#restoreJobs` が `runner.list()` の実物から `waiting` ごと状態を作り直し、
+      // lease は同じ runner インスタンスなら `same-holder` で TTL を待たずに
+      // 引き取れる（`lease.ts`）。生き残ったまま `closed` を1件落とすと、
+      // その経路は一度も起動せず、**lease は TTL まで誰も解放しない。**
+      //
+      // 見分けに載せるのは列挙値とこちらが発行した id だけ（`dropped-record.ts` の
+      // 判定基準は「自由文かどうか」ではなく「**値を誰が決めるか**」）。`report` の
+      // 本文・`ask` の要旨・`closed` の理由は外から来るので載せない。
+      await runner.connect(
+        (event) =>
+          void this.#onEvent(event).catch((error: unknown) => {
+            noteBackgroundFailure('runner からの合図の処理', runnerEventShape(event), error);
+            throw error;
+          }),
+      );
       // **委譲を始める前に環境を整える。** ここを名乗り（`hello`）任せにすると、
       // 最初のマネージャーがプロファイルの届く前に走り出しうる。届いていない
       // ことは本人には見えないので、「たまに鍵が無い」という形で現れる。

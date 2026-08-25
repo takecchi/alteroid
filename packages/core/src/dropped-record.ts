@@ -1,5 +1,6 @@
 import { writeSync } from 'node:fs';
 
+import type { RunnerEvent } from './runner-protocol.js';
 import type { InboxEvent, JournalEntryInput } from './schema.js';
 
 /**
@@ -79,6 +80,38 @@ export function noteManagerIdCollision(managerId: string, attempt: number): void
 }
 
 /**
+ * **背景で起こした処理**（`void f()` の形で切り離したもの）が例外で終わったことを
+ * stderr へ1行だけ残す（#438 案D）。
+ *
+ * **落ち方は1ビットも変えない。** 呼び出し側はこの跡を出した後、受け取った例外を
+ * **そのまま投げ直す** —— 投げ直した先は未処理の拒否になり、今日と同じように
+ * Node 既定のスタックが出てプロセスが死ぬ（実測は `uncaught-net.ts` の表）。
+ * **ここが足すのは「どこで」だけである。**
+ *
+ * **なぜ「どこで」だけで足りるのか。** プロセス全体の網（`uncaught-net.ts`）は
+ * 例外を1行に畳めるが、**どの背景処理から来たのかは言えない** —— `reasonOf` が
+ * 出すのは例外の1行目だけで、`void` で切り離した時点で呼び出し元の文脈は
+ * スタックにしか残らない。#438 が言う「落ちたことを追えない」は、**回数**の話と
+ * **出所**の話の両方であり、網は前者、この跡は後者を埋める。
+ *
+ * **⚠️ ここで握り潰さないこと。** 「跡を残したのだから続けてよい」は成り立たない。
+ * この repo の復旧機構は**プロセスの消滅を契機に組んである**（起動時の
+ * `#restoreJobs` が `runner.list()` の実物から状態を作り直し、`#restoreUnread` が
+ * 未読を配り直す）。生き残ったまま握り潰すと、**その復旧経路が一度も起動しない。**
+ * 握り潰してよい先例（`runner-client.ts` の `#neverEscapes`）が覆っているのは
+ * **跡を残す処理そのものの失敗**であって、本筋の処理ではない。
+ *
+ * @param what どの背景処理か（固定文言。呼び出し側が書く）
+ * @param detail 本文を含まない見分け（**値を誰が決めるか**で選ぶ。このファイルの
+ *   `journalEntryShape` と同じ基準 —— 列挙値とこちらが発行した id は載せてよく、
+ *   外から来た自由文は載せない）。無ければ空文字。
+ */
+export function noteBackgroundFailure(what: string, detail: string, error: unknown): void {
+  const tail = detail === '' ? '' : `（${detail}）`;
+  note(`${what}が例外で終わりました${tail}: ${reasonOf(error)}`);
+}
+
+/**
  * 受信箱が閉じた後に届いた合図を、このプロセスでは処理しなかったことを
  * stderr へ1行だけ残す。
  *
@@ -113,6 +146,30 @@ export function noteDroppedInboxEvent(event: InboxEvent): void {
     `受信箱を閉じた後に届いた合図はこのプロセスでは処理しませんでした` +
       `（器へ残せていれば次の起動で配り直されます）: ${inboxEventShape(event)}`,
   );
+}
+
+/**
+ * runner から届いた合図から、本文を含まない見分けだけを取り出す（#438 案D）。
+ *
+ * **ここだけ `journalEntryShape` / `inboxEventShape` と作りが違う。** あの2つは
+ * 型ごとの網羅 `switch` で、**新しい型が増えたら書き手に判断を強制する**形になって
+ * いる。ここは逆に、**載せてよい2つだけを名指しする許可制**にしてある。
+ *
+ * **理由は、この関数の使われ方である。** ここは記録の跡ではなく**落ちた場所の跡**で、
+ * 要るのは「どの合図で落ちたか」だけである。`RunnerEvent` はいま17種あり、網羅
+ * `switch` にすると型が増えるたびに17→18の分岐が生え、**そのたびに「この型なら
+ * これくらい載せてよいだろう」という判断が1つずつ増える。** 許可制なら、型が
+ * 増えても載るものは増えない —— **漏れうる面が構造として広がらない。**
+ *
+ * **載せる2つ**: `type`（`runnerEventSchema` の discriminator ＝ 列挙値）と、
+ * 在れば `managerId`（こちらが発行した id）。**判定基準はこのファイルの他と同じで、
+ * 「自由文かどうか」ではなく「値を誰が決めるか」である。** `report` の `text`・
+ * `ask` の要旨・`closed` の `reason` は外から来るので載せない（長さも出さない ——
+ * 跡に要るのは出所であって、中身の量ではない）。
+ */
+export function runnerEventShape(event: RunnerEvent): string {
+  const owner = 'managerId' in event ? ` managerId=${tag(event.managerId)}` : '';
+  return `type=${tag(event.type)}${owner}`;
 }
 
 /**
@@ -248,10 +305,7 @@ function notePrefixed(prefix: string, text: string): void {
  * @param error 観測した例外・拒否の理由。
  */
 export function noteUncaught(prefix: string, origin: string, error: unknown): void {
-  notePrefixed(
-    prefix,
-    `${describeUncaughtOrigin(origin)}を観測しました: ${reasonOf(error)}`,
-  );
+  notePrefixed(prefix, `${describeUncaughtOrigin(origin)}を観測しました: ${reasonOf(error)}`);
 }
 
 /**

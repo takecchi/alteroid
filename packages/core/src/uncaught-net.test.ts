@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 
 import { describe, expect, it } from 'vitest';
 
+import { noteUncaught } from './dropped-record.js';
 import { captureStderr } from './testing.js';
 import { installUncaughtNet } from './uncaught-net.js';
 
@@ -26,21 +27,12 @@ describe('未捕捉の例外の網（#438）', () => {
   const secret = 'ghp_000000000000000000000000000000000000';
 
   it('出所（origin）ごとに違う文言で、接頭辞つきの1行だけ残す', async () => {
-    const uninstall = installUncaughtNet('alteroidd');
-    try {
-      const lines = await captureStderr(() => {
-        process.emit(
-          'uncaughtExceptionMonitor',
-          new Error(`鍵は ${secret} だった`),
-          'uncaughtException',
-        );
-        process.emit(
-          'uncaughtExceptionMonitor',
-          new Error(`鍵は ${secret} だった`),
-          'unhandledRejection',
-        );
-      });
+    const lines = await captureStderr(() => {
+      noteUncaught('alteroidd', 'uncaughtException', new Error('boom'));
+      noteUncaught('alteroidd', 'unhandledRejection', new Error('boom'));
+    });
 
+    {
       expect(lines).toHaveLength(2);
       const [thrown, rejected] = lines as [string, string];
 
@@ -63,8 +55,6 @@ describe('未捕捉の例外の網（#438）', () => {
       for (const line of lines) {
         expect(line).not.toContain('落ち');
       }
-    } finally {
-      uninstall();
     }
   });
 
@@ -78,17 +68,16 @@ describe('未捕捉の例外の網（#438）', () => {
    * 落ちることを見る。**
    */
   it('理由は1行目だけ・200字で切る（2行目に添えられた値は跡へ出さない）', async () => {
-    const uninstall = installUncaughtNet('alteroidd');
-    try {
-      const lines = await captureStderr(() => {
-        process.emit(
-          'uncaughtExceptionMonitor',
-          new Error(`Failed query: select 1\nparams: ${secret}`),
-          'uncaughtException',
-        );
-        process.emit('uncaughtExceptionMonitor', new Error('x'.repeat(500)), 'uncaughtException');
-      });
+    const lines = await captureStderr(() => {
+      noteUncaught(
+        'alteroidd',
+        'uncaughtException',
+        new Error(`Failed query: select 1\nparams: ${secret}`),
+      );
+      noteUncaught('alteroidd', 'uncaughtException', new Error('x'.repeat(500)));
+    });
 
+    {
       const [twoLine, long] = lines as [string, string];
       // 2行目に添えられた値は跡へ出ない。
       expect(twoLine).toContain('Failed query: select 1');
@@ -98,8 +87,6 @@ describe('未捕捉の例外の網（#438）', () => {
       // 200字で切られている。
       expect(long).toContain('…');
       expect(long.length).toBeLessThan(400);
-    } finally {
-      uninstall();
     }
   });
 
