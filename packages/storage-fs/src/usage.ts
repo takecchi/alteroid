@@ -371,6 +371,17 @@ export class FsUsageStore implements UsageStore {
     return file.baselines[baselineKey(layer, managerId)] ?? null;
   }
 
+  /**
+   * `store.ts` の `UsageStore.recordedManagerIds` の doc のとおり、**引数を持たず
+   * 全期間から作る。** `aggregate()` のように `from` / `to` を渡せる形にしないのは、
+   * 呼び出し側の絞り込みが「行が在る managerId の集合」へ紛れ込む余地を、口の
+   * 形そのもので無くすためである。
+   */
+  async recordedManagerIds(): Promise<Set<string>> {
+    const file = await this.#read();
+    return new Set(Object.values(file.rows).map((row) => row.managerId));
+  }
+
   async #read(): Promise<UsageFile> {
     try {
       const raw = await readFile(this.#path, 'utf8');

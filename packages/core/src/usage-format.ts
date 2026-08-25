@@ -1,3 +1,4 @@
+import type { JobStatus } from './schema.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import type { UsageBreakdown, UsageRow, UsageTotals } from './usage.js';
 
@@ -293,5 +294,124 @@ export function describeAccountUsage(
     );
   }
   lines.push(`観測時刻: ${usage.at}`);
+  return lines;
+}
+
+// ---------------------------------------------------------------------------
+// 台帳に1行も無い委譲（Issue #98）
+// ---------------------------------------------------------------------------
+
+/**
+ * 「台帳に1行も無いか」を判定するための最小の入力。
+ *
+ * **`ManagerSummary`（`manager.ts`）をそのまま import しない。** `manager.ts` は
+ * `usage.ts` を値として import している（`usageDate` を呼ぶ）ので、ここが値として
+ * `manager.ts` を読み返すと循環になる（`usage.ts` → `usage-format.ts` →
+ * `manager.ts` → `usage.ts`）。**この形は `ManagerSummary` のうち判定に要る3つの
+ * フィールドだけを型として書き写す** — `ManagerSummary` にフィールドが増えても、
+ * ここが要求するのはこの3つだけなので壊れない。
+ */
+export interface UnrecordedManagerCandidate {
+  managerId: string;
+  /**
+   * **絞り込みには使わない。** 判定は「台帳に1行も無いか」の1つだけである
+   * （Issue #98 が既に決めている制約）。ここに持つのは、取りこぼした委譲を
+   * 一覧に並べるときに `[running]` のような注記を添えるためだけである——
+   * 読む側が「走行中の分がまだ入っていない」と分かる材料になる。
+   */
+  status: JobStatus;
+  /** `ManagerSummary.startedAt`（= `Job.createdAt`）。ISO 8601。 */
+  startedAt: string;
+}
+
+/**
+ * 判定した結果。**入力（{@link UnrecordedManagerCandidate}）と形は同じだが役割が
+ * 違う** ——呼び出し側が「これから判定する候補」と「判定済みの結果」を型で
+ * 取り違えないように分けてある。
+ */
+export type UnrecordedManager = UnrecordedManagerCandidate;
+
+/**
+ * 消費の台帳に1行も無い委譲を数える（Issue #98）。**唯一の判定軸は「台帳に1行も
+ * 無いか」——`status`（`running` / `done` / `lost` …）では絞らない。** 途中まで
+ * 記録が在る委譲（`result` が来る前に畳まれた分だけ取りこぼした委譲）は、この
+ * 判定では「取りこぼし」ではない——取れている分は台帳に載っているし、そこから
+ * 先がいくらだったかはこの層は知らないし推定しない。
+ *
+ * 3引数それぞれに、呼び出し側が守るべき契約がある:
+ *
+ * 1. `managers` — 全委譲（`ManagerPool.list()` の戻り値そのもの。`from` / `to` の
+ *    ような期間で絞ったものを渡さないこと）
+ * 2. `recordedManagerIds` — 台帳（`usage_daily`）に1行でも行が在る managerId の
+ *    集合。**全期間・絞り込み無しで取ったものであること**（`UsageStore.
+ *    recordedManagerIds()` の doc）。`aggregate()` の `rows` から作ると、照会
+ *    範囲の外で記録された委譲が「記録が無い」に化ける——`aggregate()` の `rows`
+ *    は呼び出し側の `from` / `to` で絞られているので、ここへ渡してはならない
+ * 3. `since` — `usageAggregate.since`（台帳が記録を始めた時刻）。これより古い
+ *    `createdAt` の委譲は数えない——あれは「記録が無い」ではなく「台帳が
+ *    無かった」で、その但し書きは既に `beforeLedger` が持っている
+ *
+ * `since` が `null`（台帳がまだ1件も記録していない）のときは、比べる相手が
+ * 無いので誰も除外しない——その場合 `recordedManagerIds` も必ず空集合になる
+ * （1件も record していないのだから、行が在る managerId も存在しない）ので、
+ * 渡された `managers` 全員がそのまま対象になる。
+ *
+ * **`query.from` / `query.to` / `query.managerId` などの照会の絞り込みは見ない。**
+ * `since` は照会に関わらず台帳の始点という1つの値なので、この判定も照会の
+ * 絞り込みとは独立している——期間を絞っても取りこぼしの数は変わらない
+ * （変わったら、それこそが「照会範囲の外の委譲が記録が無いに化けた」という
+ * 壊れ方である）。
+ */
+export function findUnrecordedManagers(
+  managers: readonly UnrecordedManagerCandidate[],
+  recordedManagerIds: ReadonlySet<string>,
+  since: string | null,
+): UnrecordedManager[] {
+  const cutoff = since === null ? null : Date.parse(since);
+  return (
+    managers
+      .filter((manager) => !recordedManagerIds.has(manager.managerId))
+      .filter((manager) => cutoff === null || Date.parse(manager.startedAt) >= cutoff)
+      // **3フィールドへ写す（フィルタしただけで返さない）。** 呼び出し側
+      // （`ManagerPool.list()`）が渡してくるのは `ManagerSummary` 丸ごとで、
+      // 型（`UnrecordedManagerCandidate`）は3フィールドしか要求していないが、
+      // 構造的部分型なので実際の値は残りのフィールドも持ったままである。ここで
+      // 写し取らずに返すと、`.parse()` を通さない口（`GET /usage` の応答は
+      // `usageResponseSchema` を `.parse()` していない）では `ManagerSummary`
+      // 丸ごとが黙って外へ出る——`openapi.ts` の `unrecordedManagerSchema` の doc
+      // が「宣言と実物を繋ぐのは `.parse()` だけ」と言っている、まさにその穴。
+      .map((manager) => ({
+        managerId: manager.managerId,
+        status: manager.status,
+        startedAt: manager.startedAt,
+      }))
+      .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+  );
+}
+
+/**
+ * 台帳に1行も無い委譲を、人間・クローンが読む行へ（Issue #98）。
+ *
+ * **文言をここ1つに持つ理由は {@link describeAccountUsage} と同じ。** この値を
+ * 読む口は4つある（`GET /usage` / CLI の `alteroid usage` と chat の `/usage` /
+ * Web の `/usage` 画面 / クローンの `usage_read`）。面ごとに書くと、「0件」の
+ * 言い方が食い違い、いつか片方だけが黙って何も出さない日が来る。
+ *
+ * **0件のときも黙らない。** 空配列は「取りこぼしが無い」であって「調べていない」
+ * ではない（AGENTS.md の地雷表）——そう読める形で、0件でも必ず1行返す。
+ */
+export function describeUnrecordedManagers(unrecorded: readonly UnrecordedManager[]): string[] {
+  if (unrecorded.length === 0) {
+    return [
+      '台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、' +
+        '全部台帳に最低1行ある。照会の期間では絞っていない）。',
+    ];
+  }
+  const lines = [
+    `⚠ 台帳に1行も記録が無い委譲: ${unrecorded.length}件。上の合計にはまだ入っていない。`,
+  ];
+  for (const manager of unrecorded) {
+    lines.push(`  ${manager.managerId} [${manager.status}]（起こした時刻: ${manager.startedAt}）`);
+  }
   return lines;
 }

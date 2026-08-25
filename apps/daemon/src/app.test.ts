@@ -547,6 +547,138 @@ describe('HTTP API', () => {
     expect((await app.request('/usage?site=compaction')).status).toBe(400);
   });
 
+  /**
+   * 台帳に1行も無い委譲（Issue #98「台帳が取りこぼした委譲」）。
+   *
+   * **判定は「台帳に1行も無いか」の1つだけ。** `status` では絞らない——`running`
+   * のまま台帳に行が無い委譲も、`done` / `lost` のまま行が無い委譲も、同じく
+   * 取りこぼしとして数える。
+   */
+  describe('台帳に1行も無い委譲（Issue #98）', () => {
+    async function record(managerId: string, date: string, at: string, costUsd: number) {
+      await stores.usage.record({
+        layer: 'manager',
+        site: 'session',
+        accumulation: 'cumulative',
+        managerId,
+        date,
+        at,
+        snapshot: {
+          models: {
+            'claude-opus-5': {
+              inputTokens: 1,
+              outputTokens: 1,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+              webSearchRequests: 0,
+              costUsd,
+            },
+          },
+        },
+      });
+    }
+
+    it('台帳に行が無いマネージャーを unrecordedManagers として返す', async () => {
+      fake.managerList.push({
+        managerId: 'mgr-unrecorded',
+        status: 'running',
+        live: true,
+        cwd: '/work',
+        request: 'とても長く走っている',
+        startedAt: '2026-08-25T12:00:00.000Z',
+        updatedAt: '2026-08-25T12:00:00.000Z',
+        waiting: [],
+      });
+      await record('mgr-recorded', '2026-08-25', '2026-08-25T10:00:00.000Z', 1);
+
+      const body = (await (await app.request('/usage')).json()) as {
+        unrecordedManagers: { managerId: string; status: string; startedAt: string }[];
+      };
+
+      expect(body.unrecordedManagers).toEqual([
+        {
+          managerId: 'mgr-unrecorded',
+          status: 'running',
+          startedAt: '2026-08-25T12:00:00.000Z',
+        },
+      ]);
+    });
+
+    /**
+     * ⚠️ **期間で絞ると壊れることを測る歯。** 照会範囲の外（古い日付）で記録された
+     * 委譲は、狙って狭い `from` / `to` を渡しても「記録が無い」に化けてはならない
+     * ——`aggregate.rows` から「行が在る managerId の集合」を作っていたら、この
+     * テストは red になる。
+     */
+    it('期間で絞っても、範囲の外で記録された委譲は unrecordedManagers に出ない', async () => {
+      // 台帳の since を1月に固定する（この委譲自体は範囲外の記録が在ることの
+      // 主役ではない——since の cutoff とこのテストの主題を混同しないため）。
+      await record('mgr-anchor', '2026-01-01', '2026-01-01T00:00:00.000Z', 1);
+
+      fake.managerList.push({
+        managerId: 'mgr-old-record',
+        status: 'done',
+        live: false,
+        cwd: '/work',
+        request: '5月に走った',
+        startedAt: '2026-05-01T00:00:00.000Z',
+        updatedAt: '2026-05-01T01:00:00.000Z',
+        waiting: [],
+      });
+      // since（1月）より後、かつ照会する8月より前の5月に record する——
+      // 「since より前だから除外される」のではなく「行が範囲の外に在る」ことを
+      // 単独で確かめるための配置。
+      await record('mgr-old-record', '2026-05-01', '2026-05-01T00:30:00.000Z', 3);
+
+      // 8月だけを狭く照会する——1月・5月の行は範囲の外に落ちる。
+      const narrow = (await (await app.request('/usage?from=2026-08-01&to=2026-08-31')).json()) as {
+        rows: unknown[];
+        unrecordedManagers: { managerId: string }[];
+      };
+
+      expect(narrow.rows).toHaveLength(0);
+      expect(narrow.unrecordedManagers).toEqual([]);
+    });
+
+    /**
+     * `usageAggregate.since` より前に立った委譲（`createdAt` が古いもの）は
+     * 数えない。あれは「記録が無い」ではなく「台帳が無かった」で、その但し書きは
+     * すでに `beforeLedger` が持っている。
+     */
+    it('since より前に createdAt を持つ委譲は unrecordedManagers に出さない', async () => {
+      // 台帳の since はこの record で 2026-08-20 に決まる。
+      await record('mgr-recorded', '2026-08-20', '2026-08-20T00:00:00.000Z', 1);
+      fake.managerList.push({
+        managerId: 'mgr-before-ledger',
+        status: 'lost',
+        live: false,
+        cwd: '/work',
+        request: '台帳より前に立った',
+        startedAt: '2026-07-01T00:00:00.000Z',
+        updatedAt: '2026-07-01T01:00:00.000Z',
+        waiting: [],
+      });
+
+      const body = (await (await app.request('/usage')).json()) as {
+        since: string | null;
+        unrecordedManagers: { managerId: string }[];
+      };
+
+      expect(body.since).toBe('2026-08-20T00:00:00.000Z');
+      expect(body.unrecordedManagers).toEqual([]);
+    });
+
+    it('取りこぼしが0件のときは空配列を返す（省略しない）', async () => {
+      await record('mgr-recorded', '2026-08-25', '2026-08-25T10:00:00.000Z', 1);
+
+      const body = (await (await app.request('/usage')).json()) as {
+        unrecordedManagers: unknown[];
+      };
+
+      expect(body.unrecordedManagers).toEqual([]);
+    });
+  });
+
   it('不正なスラッグへの書き込みは 400（500 にしない）', async () => {
     const response = await app.request('/memory/..%2Fescape', {
       ...json({ content: 'x' }),

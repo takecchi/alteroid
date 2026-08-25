@@ -1,4 +1,5 @@
 import {
+  accountUsageStateSchema,
   agentTokenInputSchema,
   agentTokenViewSchema,
   commitmentSchema,
@@ -14,6 +15,8 @@ import {
   tokenRotationPolicySchema,
   tokenRotationSettingsSchema,
   unreadableCommitmentSchema,
+  usageAggregateSchema,
+  usageBreakdownSchema,
   waitingKindSchema,
   workspaceLocatorSchema,
   type CloneHost,
@@ -563,6 +566,66 @@ export const managersListResponseSchema = z.object({
 });
 
 export const managerDetailResponseSchema = z.object({ manager: managerSummarySchema });
+
+/**
+ * 台帳に1行も無い委譲（Issue #98「台帳が取りこぼした委譲」）。`GET /usage` が
+ * `unrecordedManagers` として返す1件の形。
+ *
+ * **`managerSummarySchema` を再利用しない。** あちらは `ManagerSummary` を丸ごと
+ * 写す一覧・詳細用の形で、ここに要るのは判定に使った3フィールド（`managerId` /
+ * `status` / `startedAt`）だけである。`ManagerSummary` にフィールドが増えても、
+ * この応答が増える理由は無い——core 側の対（`packages/core/src/usage-format.ts`
+ * の `UnrecordedManagerCandidate`）と同じ絞り方にしてある。
+ *
+ * **`status` は絞り込みに使った軸ではない。** 判定は「台帳に1行も無いか」の
+ * 1つだけで、これは読む側へ添える注記——`running` のまま出ている委譲は、
+ * まだ記録される見込みが残っていると分かる。
+ */
+export const unrecordedManagerSchema = z.object({
+  managerId: z.string(),
+  status: jobStatusSchema,
+  startedAt: z.string(),
+});
+
+/**
+ * `GET /usage` の応答。
+ *
+ * **ここで組む（`app.ts` では組まない）。** `app.ts` はこのファイル（`openapi.ts`）
+ * を import し、このファイルは `app.ts` から `createApp` を import している
+ * （`buildOpenApiDocument` が `createApp` にスタブの deps を渡して spec を作るため）
+ * ——つまり2ファイルは循環 import の関係にある。**循環の一方（`app.ts`）の
+ * モジュール最上位で、もう一方（このファイル）から取った値を使って `.extend()` を
+ * 呼ぶと、どちらが先に評価されるかで `unrecordedManagerSchema` が未定義のまま
+ * `z.array()` へ渡り、`zod` が `undefined._zod` を読んで例外になることがある**
+ * （実測: `openapi.ts` を entry にした `write-openapi.mjs` からの評価順で再現。
+ * `app.ts` を entry にする本物のデーモン起動では再現しなかった——評価順に依存する
+ * 不安定な壊れ方なので、依存する側を無くす）。`usageAggregateSchema` /
+ * `usageBreakdownSchema` / `accountUsageStateSchema` はどれも `@alteroid/core`
+ * （circular ではない）から来るので、この合成そのものをこちらへ移し、`app.ts` は
+ * 完成品をそのまま import するだけにしてある。
+ */
+export const usageResponseSchema = usageAggregateSchema.extend({
+  breakdown: usageBreakdownSchema,
+  /**
+   * アカウント全体の残り（claude.ai 側が言っている値）。
+   *
+   * **台帳と足さない。** こちらは向こうが言っている値で、台帳は自分で数えた
+   * 推定値である。`state` が `ok` 以外なら「取れなかった」であって「0」ではない。
+   */
+  account: accountUsageStateSchema,
+  /**
+   * 消費の記録が1件も無い委譲（Issue #98「台帳が取りこぼした委譲」）。
+   *
+   * **`ManagerPool.list()`（全期間・絞り込み無し）と `UsageStore.
+   * recordedManagerIds()`（同じく全期間）を突き合わせた結果であって、この応答の
+   * `from` / `to` などの絞り込みには影響されない** — 期間を絞っても件数は
+   * 変わらない（変わったら、それこそが「照会範囲の外の委譲が記録が無いに化けた」
+   * という壊れ方である）。判定そのものは `findUnrecordedManagers`
+   * （`@alteroid/core`）が1箇所に持つ（`usageQuerySchema` のコメントに合わせて
+   * CLI・Web・クローンの `usage_read` も同じ判定を返す）。
+   */
+  unrecordedManagers: z.array(unrecordedManagerSchema),
+});
 
 export const managerActionResponseSchema = z.object({
   /**

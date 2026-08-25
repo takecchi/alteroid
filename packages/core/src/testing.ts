@@ -701,6 +701,15 @@ export function createMemoryStores(): Stores {
     async baseline(layer, managerId) {
       return usageBaselines.get(usageBaselineKey(layer, managerId)) ?? null;
     },
+    /**
+     * **ドライバと同じく、引数を持たず全期間から作る**（`store.ts` の
+     * `UsageStore.recordedManagerIds` の doc）。ここが `aggregate()` の絞り込みを
+     * 受け付ける形だと、テストの器だけが「照会範囲の外の委譲を記録が無いに
+     * 数える」事故を検出できなくなる。
+     */
+    async recordedManagerIds() {
+      return new Set([...usageRows.values()].map((row) => row.managerId));
+    },
   };
 
   return {

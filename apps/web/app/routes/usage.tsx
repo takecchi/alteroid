@@ -1,6 +1,7 @@
 import {
   ACCOUNT_USAGE_TITLE,
   describeAccountUsage,
+  describeUnrecordedManagers,
   formatUsd,
   summarizeUsage,
   USAGE_LAYERS,
@@ -21,7 +22,13 @@ import {
   TruncationNote,
 } from '~/components/ui';
 import { useUsage, type UsageQuery } from '~/hooks/queries';
-import type { AccountUsageState, UsageLayer, UsageRow, UsageSite } from '~/lib/types';
+import type {
+  AccountUsageState,
+  UnrecordedManager,
+  UsageLayer,
+  UsageRow,
+  UsageSite,
+} from '~/lib/types';
 
 /**
  * `/usage` — alteroid が使った分（トークンと費用）。
@@ -169,12 +176,15 @@ export default function Usage() {
           */}
           <AccountCard account={data.account} />
           {data.since === null ? (
-            // **`$0.00` と出さない。** まだ台帳に1件も無いのを「使っていない」に見せない。
-            <Card>
-              <Empty>
-                台帳にはまだ1件も記録が無い。（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）
-              </Empty>
-            </Card>
+            <>
+              {/* **`$0.00` と出さない。** まだ台帳に1件も無いのを「使っていない」に見せない。 */}
+              <Card>
+                <Empty>
+                  台帳にはまだ1件も記録が無い。（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）
+                </Empty>
+              </Card>
+              <UnrecordedManagersCard unrecordedManagers={data.unrecordedManagers} />
+            </>
           ) : (
             <UsageBody
               rows={data.rows}
@@ -185,6 +195,7 @@ export default function Usage() {
               beforeLayers={data.beforeLayers}
               beforeTokens={data.beforeTokens}
               notice={data.notice}
+              unrecordedManagers={data.unrecordedManagers}
             />
           )}
         </div>
@@ -240,6 +251,42 @@ function AccountCard({ account }: { account: AccountUsageState | undefined }) {
   );
 }
 
+/**
+ * 台帳に1行も無い委譲（Issue #98「台帳が取りこぼした委譲」）。
+ *
+ * **文言を画面で書き直さない。** `describeUnrecordedManagers`（core）が出した行を
+ * そのまま並べる——CLI（`alteroid usage`）・クローンの `usage_read` と同じ言葉に
+ * なる（片方だけ「0件」の言い方が違う、が起きないようにするため）。
+ *
+ * **0件でも必ず出す。** 空配列は「取りこぼしが無い」であって「調べていない」では
+ * ないので、そう読める形で1行返る（`describeUnrecordedManagers` の doc）。
+ */
+function UnrecordedManagersCard({
+  unrecordedManagers,
+}: {
+  unrecordedManagers: readonly UnrecordedManager[];
+}) {
+  return (
+    <Card>
+      <CardHeader
+        title="台帳に1行も無い委譲"
+        subtitle="全期間で判定する。from / to の絞り込みには影響されない"
+        action={<Badge>{unrecordedManagers.length}</Badge>}
+      />
+      <ul className="flex flex-col gap-0.5 px-4 py-3">
+        {describeUnrecordedManagers(unrecordedManagers).map((line, index) => (
+          <li
+            key={`${index}-${line}`}
+            className="font-mono text-[11px] break-words whitespace-pre-wrap text-muted"
+          >
+            {line}
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
 function UsageBody({
   rows,
   since,
@@ -249,6 +296,7 @@ function UsageBody({
   beforeLayers,
   beforeTokens,
   notice,
+  unrecordedManagers,
 }: {
   rows: readonly UsageRow[];
   since: string;
@@ -258,6 +306,7 @@ function UsageBody({
   beforeLayers: boolean;
   beforeTokens: boolean;
   notice: string;
+  unrecordedManagers: readonly UnrecordedManager[];
 }) {
   const summary = summarizeUsage(rows);
 
@@ -311,6 +360,9 @@ function UsageBody({
           )}
         </div>
       </Card>
+
+      {/* **合計値の隣に必ず出す（Issue #98）。** */}
+      <UnrecordedManagersCard unrecordedManagers={unrecordedManagers} />
 
       {rows.length > 0 && (
         // ⚠️ #295: この grid には基底の `grid-cols-*` が無いので、暗黙トラック

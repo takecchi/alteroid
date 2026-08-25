@@ -3,11 +3,13 @@ import { stdout } from 'node:process';
 import {
   ACCOUNT_USAGE_TITLE,
   describeAccountUsage,
+  describeUnrecordedManagers,
   formatUsd,
   summarizeUsage,
   usageLayerSchema,
   usageSiteSchema,
   type AccountUsageState,
+  type UnrecordedManager,
   type UsageAggregate,
   type UsageLayer,
   type UsageSite,
@@ -126,6 +128,14 @@ const AXIS_LIMIT = 20;
  */
 export interface UsageView extends UsageAggregate {
   account: AccountUsageState | undefined;
+  /**
+   * 消費の記録が1件も無い委譲（Issue #98）。
+   *
+   * **キーは必須にしておく**（`account` と同じ理由）。渡し忘れた口が黙って
+   * 「取りこぼしは無い」を出せてしまうと、`[]` と「まだ計算していない」が
+   * 同じ形に潰れる。
+   */
+  unrecordedManagers: readonly UnrecordedManager[];
 }
 
 export function renderUsage(view: UsageView): string {
@@ -139,6 +149,7 @@ export function renderUsage(view: UsageView): string {
     beforeTokens,
     notice,
     account,
+    unrecordedManagers,
   } = view;
 
   /**
@@ -158,6 +169,8 @@ export function renderUsage(view: UsageView): string {
       '台帳にはまだ1件も記録が無い。',
       '（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）',
       '',
+      ...describeUnrecordedManagers(unrecordedManagers),
+      '',
       notice,
       ...accountLines(),
     ].join('\n');
@@ -167,6 +180,9 @@ export function renderUsage(view: UsageView): string {
 
   if (rows.length === 0) {
     lines.push('その範囲には記録が無い。');
+    // **取りこぼしは照会範囲と無関係に全期間で判定する。** この範囲に台帳の行が
+    // 無くても出す（`findUnrecordedManagers` の doc）。
+    lines.push('', ...describeUnrecordedManagers(unrecordedManagers));
   } else {
     // **算術はここで足し直さない。** `summarizeUsage` の結果をそのまま出す。
     const summary = summarizeUsage(rows);
@@ -178,6 +194,9 @@ export function renderUsage(view: UsageView): string {
         `キャッシュ読み ${summary.total.cacheReadInputTokens.toLocaleString('en-US')} / ` +
         `キャッシュ書き ${summary.total.cacheCreationInputTokens.toLocaleString('en-US')}`,
     );
+    // **合計値の隣に必ず出す（Issue #98）。** 台帳に1行も無い委譲は上の合計に
+    // 入っていないので、合計を読んだ直後にそれが分かる位置へ置く。
+    lines.push(...describeUnrecordedManagers(unrecordedManagers));
 
     const axis = (title: string, entries: Array<{ label: string; costUsd: number }>) => {
       lines.push('', title);

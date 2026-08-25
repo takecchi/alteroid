@@ -60,10 +60,14 @@ export {
   USAGE_ESTIMATE_NOTICE,
   ZERO_USAGE,
   describeAccountUsage,
+  describeUnrecordedManagers,
+  findUnrecordedManagers,
   formatUsd,
   sumUsageRows,
   summarizeUsage,
   usageDate,
+  type UnrecordedManager,
+  type UnrecordedManagerCandidate,
 } from './usage-format.js';
 
 const isoDateTime = z.string().datetime({ offset: true });

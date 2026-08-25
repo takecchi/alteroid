@@ -932,3 +932,99 @@ describe('既にある DB への移行（層の列は在るがトークンの列
     expect(rows[0]?.tokenId).toBeUndefined();
   });
 });
+
+/**
+ * `recordedManagerIds`（Issue #98「台帳が取りこぼした委譲」）。fs 版
+ * （`@alteroid/storage-fs` の `usage.test.ts`）と同じ受け入れ項目を pg 経由で問う。
+ *
+ * **引数を持たない。** `aggregate()` の `from` / `to` のような絞り込みを渡す口が
+ * 無いこと自体で、「照会範囲の外で記録された委譲が記録が無いに化ける」事故を
+ * 構造的に防ぐ（`store.ts` の doc）。
+ */
+describe('PgUsageStore.recordedManagerIds', () => {
+  it('1件も record していなければ空集合', async () => {
+    expect(await store.recordedManagerIds()).toEqual(new Set());
+  });
+
+  /**
+   * ⚠️ **期間で絞ると壊れることを測る歯。** `aggregate({ from, to })` の `rows` から
+   * 「行が在る managerId の集合」を作ると、狭い範囲を照会した瞬間に、範囲の外で
+   * 記録された委譲が「記録が無い」に化ける。**古い日付の行しか無い managerId が、
+   * 後で狭い範囲を `aggregate` しても消えないこと**を見る。
+   */
+  it('狭い範囲を aggregate しても、それより古い日付の行の managerId は消えない', async () => {
+    await record({
+      managerId: 'mgr-old',
+      date: '2026-05-01',
+      at: '2026-05-01T00:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 1 }) }),
+    });
+
+    const narrow = await store.aggregate({ from: '2026-08-01', to: '2026-08-31' });
+    expect(narrow.rows).toHaveLength(0);
+
+    expect(await store.recordedManagerIds()).toEqual(new Set(['mgr-old']));
+  });
+
+  /**
+   * **基準（`usage_baseline`）ではなく行（`usage_daily`）を見ること。** 基準は
+   * ゼロだけのスナップショットからでも作られうる（`foldUsageSnapshot` の doc）ので、
+   * 基準だけが在って行が無い managerId を「記録が在る」と数えてはいけない。
+   */
+  it('基準だけが在って行が無い managerId は数えない（全部ゼロの最初のスナップショット）', async () => {
+    const result = await record({
+      managerId: 'mgr-baseline-only',
+      date: '2026-08-14',
+      at: '2026-08-14T10:00:00.000Z',
+      snapshot: snapshot({ opus: totals({}) }),
+    });
+    expect(result.delta).toEqual({});
+    expect(result.baseline).not.toBeNull();
+
+    expect(await store.baseline('manager', 'mgr-baseline-only')).not.toBeNull();
+    expect((await store.aggregate({})).rows).toHaveLength(0);
+    expect(await store.recordedManagerIds()).toEqual(new Set());
+  });
+
+  /**
+   * **逆方向。** 行が在って基準が無い managerId は数える——`oneshot`（蒸留）は
+   * 基準を持たないが、行はそのまま usage_daily に残る。
+   */
+  it('行が在って基準が無い managerId は数える（oneshot）', async () => {
+    await store.record({
+      layer: 'clone',
+      site: 'distill',
+      accumulation: 'oneshot',
+      managerId: 'clone',
+      date: '2026-08-14',
+      at: '2026-08-14T10:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 0.5 }) }),
+    });
+
+    expect(await store.baseline('clone', 'clone')).toBeNull();
+    expect(await store.recordedManagerIds()).toEqual(new Set(['clone']));
+  });
+
+  it('複数の managerId・複数の行があっても、集合として一意にまとまる', async () => {
+    await record({
+      managerId: 'mgr-1',
+      date: '2026-08-14',
+      at: '2026-08-14T10:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 1 }) }),
+    });
+    await record({
+      managerId: 'mgr-1',
+      date: '2026-08-15',
+      at: '2026-08-15T10:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 2 }) }),
+    });
+    await record({
+      managerId: 'mgr-2',
+      date: '2026-08-14',
+      at: '2026-08-14T10:00:00.000Z',
+      snapshot: snapshot({ sonnet: totals({ costUsd: 3 }) }),
+    });
+
+    expect(await store.recordedManagerIds()).toEqual(new Set(['mgr-1', 'mgr-2']));
+  });
+});

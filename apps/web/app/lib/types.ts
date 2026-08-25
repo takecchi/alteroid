@@ -82,6 +82,12 @@ export type UsageSite = UsageRow['site'];
  * 画面で `null` へ潰さないこと。
  */
 export type AccountUsageState = UsageAggregate['account'];
+/**
+ * 台帳に1行も無い委譲（Issue #98）。**全期間で判定する**——`from` / `to` などの
+ * 絞り込みには影響されない（`apps/daemon/src/openapi.ts` の
+ * `unrecordedManagerSchema` の doc）。
+ */
+export type UnrecordedManager = UsageAggregate['unrecordedManagers'][number];
 
 /**
  * 認証トークンのプールと、回す契機・冷却の設定（`GET /tokens`）。

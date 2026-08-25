@@ -305,6 +305,22 @@ export class PgUsageStore implements UsageStore {
     return row === undefined ? null : this.#toBaseline(row);
   }
 
+  /**
+   * `store.ts` の `UsageStore.recordedManagerIds` の doc のとおり、**引数を持たず
+   * 全期間から作る。** `where` を持たない `select distinct` なので、`from` / `to`
+   * を渡す余地が口の形そのもので無い。
+   *
+   * **`usage_daily_manager_date_idx`（`schema.ts`）に乗る。** 索引は
+   * `(manager_id, date)` の順で、`distinct` が `manager_id` だけを見るこの照会は
+   * その先頭列に一致するので、全表走査ではなく索引を使える。
+   */
+  async recordedManagerIds(): Promise<Set<string>> {
+    const rows = await this.#db
+      .selectDistinct({ managerId: usageDaily.managerId })
+      .from(usageDaily);
+    return new Set(rows.map((row) => row.managerId));
+  }
+
   #toRow(row: typeof usageDaily.$inferSelect): UsageRow {
     return {
       date: row.date,
