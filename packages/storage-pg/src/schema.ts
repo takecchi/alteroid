@@ -511,6 +511,22 @@ export const agentTokens = pgTable('agent_tokens', {
  * `env_profile` と同じ形——用途ごとに行を増やせるようにしない（増やせる形に
  * した瞬間、「どの行がどの層に効くか」の対応表が要るようになる）。
  */
+/**
+ * いま撒いてある現役の指名（Issue #393 PR3）。**高々1行**（`id = 'default'`）。
+ *
+ * **`agent_tokens` に `active` の列を置かない。** 置くと2行が同時に現役だと主張
+ * する形が作れる。**`agent_token_settings` にも混ぜない** — あちらの `updated_at`
+ * は「人間かクローンが設定を変えた時刻」で、回し手の書き込みを混ぜるとその意味が
+ * 壊れる（`@alteroid/core` の `ActiveAgentToken` の doc）。
+ */
+export const agentTokenActive = pgTable('agent_token_active', {
+  id: text('id').primaryKey(),
+  tokenId: text('token_id').notNull(),
+  /** 回すたびに1つ増える。`bigint` は `cooldown_ms` と同じ理由。 */
+  generation: bigint('generation', { mode: 'number' }).notNull(),
+  rotatedAt: timestamp('rotated_at', { withTimezone: true, mode: 'date' }).notNull(),
+});
+
 export const agentTokenSettings = pgTable('agent_token_settings', {
   id: text('id').primaryKey(),
   rotateOn: text('rotate_on').notNull(),

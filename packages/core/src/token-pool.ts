@@ -572,3 +572,35 @@ export function tokenRecoveryOf(token: AgentToken): LimitRecovery | undefined {
     ? undefined
     : limitRecoveryOf(token.lastRejectedReason);
 }
+
+// ---------------------------------------------------------------------------
+// いま撒いてある現役（Issue #393 PR3）
+// ---------------------------------------------------------------------------
+
+/**
+ * いま2か所（runner とクローン）へ撒いてあるトークンの指名。**高々1つ。**
+ *
+ * **プールの行とは別に持つ。** 行の側に `active: boolean` を置くと、**2行が同時に
+ * 現役だと主張する形**が作れてしまう——「高々1つ」は行の集合では表せない。
+ *
+ * **設定（{@link TokenRotationSettings}）とも別に持つ。** あちらの `updatedAt` は
+ * 「最後に人間かクローンが**設定**を変えた時刻」という意味を doc で背負っている
+ * ので、回し手の書き込みを同じ行へ混ぜると、その意味が静かに壊れる
+ * （デーモンが回すたびに「人間が設定を変えた」ことになる）。
+ */
+export const activeAgentTokenSchema = z.object({
+  /** 現役のトークンの id。 */
+  tokenId: z.string().min(1),
+  /**
+   * 世代。**回すたびに1つ増える。**
+   *
+   * これが要るのは、**同じ当たりで複数のマネージャーから通知が来ても回るのは
+   * 1回だけ**にするためである（受け入れ基準）。id だけで照合すると、同じ
+   * トークンが冷却明けにもう一度選ばれた後の遅れた通知を、**現役の通知として
+   * 受け取ってしまう。**
+   */
+  generation: z.number().int().nonnegative(),
+  /** 最後に回した（または最初に指名した）時刻（ISO 8601）。 */
+  rotatedAt: z.string(),
+});
+export type ActiveAgentToken = z.infer<typeof activeAgentTokenSchema>;

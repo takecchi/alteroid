@@ -355,6 +355,7 @@ export { createLocalRunner, type LocalRunnerOptions } from './runner-local.js';
 export {
   CREDENTIAL_NAME,
   DEFAULT_CREDENTIAL_DIR,
+  credentialNamesShadowedByProfile,
   ROTATABLE_CREDENTIAL_KEYS,
   isWithheldCredentialName,
   createCredentialStore,
@@ -414,7 +415,9 @@ export {
   tokenAvailabilityAt,
   tokenRecoveryOf,
   tokenRotationPolicySchema,
+  activeAgentTokenSchema,
   tokenRotationSettingsSchema,
+  type ActiveAgentToken,
   type AgentToken,
   type AgentTokenInput,
   type AgentTokenView,
@@ -424,10 +427,36 @@ export {
   type TokenRotationSettings,
 } from './token-pool.js';
 export {
+  cooldownUntilFrom,
+  decideTokenRotation,
+  observationFreshness,
+  selectNextToken,
+  type ObservationFreshness,
+  type SelectNextTokenOptions,
+  type TokenRotationDecision,
+  type TokenRotationObservation,
+  type TokenRotationSignal,
+  type TokenSelection,
+} from './token-rotation.js';
+export {
   createTokenPoolService,
   type TokenPoolService,
   type TokenPoolServiceOptions,
 } from './token-pool-service.js';
+/**
+ * 回し手（Issue #393 PR3）。**デーモンの中の1本。** 撒く先（runner / クローン）は
+ * 外から渡す（`TokenSpreadPort`）——core が `apps/*` に依存しない形にしてある。
+ */
+export {
+  createTokenRotator,
+  type TokenProbePort,
+  type TokenRotationOutcome,
+  type TokenRotator,
+  type TokenRotatorObservation,
+  type TokenRotatorOptions,
+  type TokenSpreadPort,
+  type TokenSpreadResult,
+} from './token-rotator.js';
 export {
   createRunnerRegistry,
   isFencedRunnerError,

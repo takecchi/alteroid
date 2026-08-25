@@ -2106,6 +2106,36 @@ describe('FsTokenPoolStore', () => {
     });
   });
 
+  it('現役の指名は、まだ無ければ null（1本目で埋めない）', async () => {
+    // 器の環境変数だけで走っている既定の構成と、1本目を撒いた後は別の状態である
+    // （`TokenPoolStore.readActive` の doc）。埋めると、撒いていないものを
+    // 撒いたことになる。
+    await stores.tokens.replace([{ id: 'tok-a', label: 'a', value: 'tok-aaa', order: 0 }]);
+    expect(await stores.tokens.readActive()).toBeNull();
+  });
+
+  it('現役の指名は世代ごと往復する', async () => {
+    const written = await stores.tokens.writeActive({
+      tokenId: 'tok-a',
+      generation: 7,
+      rotatedAt: '2026-08-25T03:00:00.000Z',
+    });
+    expect(await stores.tokens.readActive()).toEqual(written);
+  });
+
+  it('指名し直しても高々1つのまま（2つが同時に現役だと主張しない）', async () => {
+    await stores.tokens.writeActive({
+      tokenId: 'tok-a',
+      generation: 1,
+      rotatedAt: '2026-08-25T03:00:00.000Z',
+    });
+    await stores.tokens.writeActive({
+      tokenId: 'tok-b',
+      generation: 2,
+      rotatedAt: '2026-08-25T04:00:00.000Z',
+    });
+    expect(await stores.tokens.readActive()).toMatchObject({ tokenId: 'tok-b', generation: 2 });
+  });
   it('createdAt / updatedAt が無い行は無いまま往復する', async () => {
     // **PR1 の版が書いた `tokens.json` がこの形である。** 器の側で埋めない。
     await stores.tokens.replace([{ id: 'tok-a', label: 'a', value: 'tok-aaa', order: 0 }]);

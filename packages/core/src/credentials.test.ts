@@ -4,7 +4,15 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { createCredentialStore, fingerprintOf } from './credentials.js';
+import {
+  createCredentialStore,
+  credentialNamesShadowedByProfile,
+  CREDENTIAL_NAME,
+  fingerprintOf,
+  isWithheldCredentialName,
+  ROTATABLE_CREDENTIAL_KEYS,
+} from './credentials.js';
+import { WITHHELD_ENV_KEYS } from './runner.js';
 
 /**
  * 鍵は器を作り直さずに回せること。
@@ -307,5 +315,84 @@ describe('途中で失敗したバッチ', () => {
         { name: 'GITHUB_TOKEN', value: 'github-new' },
       ]),
     ).rejects.toThrow(/適用済み: GH_TOKEN/);
+  });
+});
+
+/**
+ * Claude の認証を回せる鍵にした（Issue #393 PR3）。**足したことで変わるのは
+ * 2つだけである**——値が器のファイルになり、所在の env が1つ増える。
+ */
+describe('CLAUDE_CODE_OAUTH_TOKEN を回せる鍵にする', () => {
+  it('回せる鍵の一覧に入っている', () => {
+    expect(ROTATABLE_CREDENTIAL_KEYS).toContain('CLAUDE_CODE_OAUTH_TOKEN');
+  });
+
+  it('伏せる鍵ではないので、名前の検査で落とされない', () => {
+    // `WITHHELD_ENV_KEYS` に在る名前は種の時点で落ちる（伏せる仕組みを配る仕組みが
+    // 越えないようにするため）。ここが落ちていたら、足しても静かに効かない。
+    expect(CREDENTIAL_NAME.test('CLAUDE_CODE_OAUTH_TOKEN')).toBe(true);
+    expect(isWithheldCredentialName('CLAUDE_CODE_OAUTH_TOKEN', WITHHELD_ENV_KEYS)).toBe(false);
+  });
+
+  it('器の env に在れば種として取り込み、値として子へ渡す', () => {
+    const store = createCredentialStore({
+      dir: '/tmp/does-not-matter',
+      seed: { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat-seeded' },
+    });
+    expect(store.values().CLAUDE_CODE_OAUTH_TOKEN).toBe('sk-ant-oat-seeded');
+  });
+
+  it('所在の env が増える（値ではない）', () => {
+    const store = createCredentialStore({ dir: '/run/alteroid/credentials', seed: {} });
+    const env = store.env();
+    expect(env.ALTEROID_CLAUDE_CODE_OAUTH_TOKEN_FILE).toBe(
+      '/run/alteroid/credentials/CLAUDE_CODE_OAUTH_TOKEN',
+    );
+    // **値は所在の env に出さない。**
+    expect(JSON.stringify(env)).not.toContain('sk-ant-oat');
+  });
+
+  it('指紋には出るが、値そのものは出ない', () => {
+    const store = createCredentialStore({
+      dir: '/tmp/does-not-matter',
+      seed: { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat-seeded' },
+    });
+    const fingerprints = store.fingerprints();
+    expect(fingerprints.map((f) => f.name)).toContain('CLAUDE_CODE_OAUTH_TOKEN');
+    expect(JSON.stringify(fingerprints)).not.toContain('sk-ant-oat-seeded');
+  });
+});
+
+/**
+ * プロファイルが鍵を影にする形（Issue #393 PR3）。
+ *
+ * **`runner.ts` の `#childEnv()` はプロファイルを鍵より後に重ねる。** ⟹ プロファイルに
+ * 同じ名前が在ると、回した鍵が黙って上書きされる。**しかもプロファイルはクローン
+ * 自身が書けるので、クローンが自分でローテーションを無効化できる。**
+ */
+describe('credentialNamesShadowedByProfile', () => {
+  it('プロファイルが同じ名前を宣言していたら、その名前を返す', () => {
+    expect(
+      credentialNamesShadowedByProfile(ROTATABLE_CREDENTIAL_KEYS, [
+        'PATH',
+        'CLAUDE_CODE_OAUTH_TOKEN',
+      ]),
+    ).toEqual(['CLAUDE_CODE_OAUTH_TOKEN']);
+  });
+
+  it('影が無ければ空（無いことを「不明」にしない）', () => {
+    expect(credentialNamesShadowedByProfile(ROTATABLE_CREDENTIAL_KEYS, ['PATH', 'EDITOR'])).toEqual(
+      [],
+    );
+  });
+
+  it('複数あれば全部返す（1つ見つけて打ち切らない）', () => {
+    // 1つで止めると、2つ目の影が黙って残る。
+    expect(
+      credentialNamesShadowedByProfile(ROTATABLE_CREDENTIAL_KEYS, [
+        'GH_TOKEN',
+        'CLAUDE_CODE_OAUTH_TOKEN',
+      ]),
+    ).toEqual(['GH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN']);
   });
 });

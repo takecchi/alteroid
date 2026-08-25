@@ -44,6 +44,7 @@ import type {
 import { ensureTrailingNewline, JournalAnchorNotFoundError } from './store.js';
 import {
   DEFAULT_TOKEN_ROTATION_SETTINGS,
+  type ActiveAgentToken,
   type AgentToken,
   type TokenRotationSettings,
 } from './token-pool.js';
@@ -551,6 +552,7 @@ export function createMemoryStores(): Stores {
    */
   let tokenPool: AgentToken[] = [];
   let tokenRotationSettings: TokenRotationSettings | null = null;
+  let activeAgentToken: ActiveAgentToken | null = null;
 
   const tokens: TokenPoolStore = {
     async list() {
@@ -566,6 +568,16 @@ export function createMemoryStores(): Stores {
     async writeSettings(settings) {
       tokenRotationSettings = settings;
       return settings;
+    },
+    async readActive() {
+      // **無いものを「1本目が現役」で埋めない**（`TokenPoolStore.readActive` の doc）。
+      // 3実装（インメモリ / fs / pg）で同じ答えでなければ、上の層が器によって
+      // 違う挙動になる。
+      return activeAgentToken;
+    },
+    async writeActive(active) {
+      activeAgentToken = active;
+      return active;
     },
   };
 

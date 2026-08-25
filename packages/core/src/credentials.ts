@@ -33,7 +33,75 @@ export const DEFAULT_CREDENTIAL_DIR = '/run/alteroid/credentials';
  * ここに挙げたものだけを扱う。**環境変数を総なめにしない** — 何が鍵かを推測で
  * 決めると、鍵でないものを鍵として晒すか、鍵を取りこぼすかのどちらかになる。
  */
-export const ROTATABLE_CREDENTIAL_KEYS = ['GH_TOKEN', 'GITHUB_TOKEN'] as const;
+export const ROTATABLE_CREDENTIAL_KEYS = [
+  'GH_TOKEN',
+  'GITHUB_TOKEN',
+  /**
+   * Claude の認証（Issue #393 PR3）。**枠に当たったときに人間が登録した次の
+   * トークンへ差し替えるために、この口へ乗せる。**
+   *
+   * ## 足したことで実際に変わるのは2つだけである
+   *
+   * 1. **値が器のファイルになる**（`/run/alteroid/credentials/CLAUDE_CODE_OAUTH_TOKEN`、
+   *    mode 0400、読み手の UID へ chown）。**マネージャーの UID から読める。**
+   *    ただし**新しい露出ではない** — マネージャーは元から `#childEnv()` 経由で
+   *    同じ値を env に持っている（`compose.yaml` の `x-shared-env` が runner へ
+   *    渡している）。増えたのは「同じ値の、ディスク上の複製」である
+   * 2. 子へ `ALTEROID_CLAUDE_CODE_OAUTH_TOKEN_FILE`（**所在だけ。値ではない**）が
+   *    増える
+   *
+   * ## ⚠️ 複製は器の再起動を越えて残る
+   *
+   * `compose.yaml` はこの置き場を名前付き volume（`control`）に載せているので、
+   * **書いたファイルはコンテナを作り直しても残る。** env にしか無かったものが、
+   * 平文でディスクに残るようになる、という差である。`GH_TOKEN` は既に同じ扱いだが、
+   * **こちらは Claude の資格そのものなので、断りをここに書いておく。**
+   *
+   * 消えるのは `set()` に空を渡したときだけである（`#write` の `rm`）。
+   *
+   * ## ⚠️ そして走っているセッションには届かない
+   *
+   * `GH_TOKEN` には呼び出しごとにファイルを読み直す `gh` シムが在るが、**こちらには
+   * それに当たるものが無い。** SDK は起動時の env を読むので、**この鍵をここへ
+   * 足しても、走行中のマネージャーが新しいトークンで走り直すことはない**
+   * （Issue #393「走行中のセッションには届かない」）。効くのは
+   * **これから起こす**マネージャーと作業者だけである。
+   */
+  'CLAUDE_CODE_OAUTH_TOKEN',
+] as const;
+
+/**
+ * プロファイルが、鍵と同じ名前を宣言してしまっていないか。**名前だけを返す。**
+ *
+ * ## なぜこの検査が要るか
+ *
+ * `runner.ts` の `#childEnv()` は**プロファイルを鍵より後に重ねる**（逐語は
+ * `grep -n 'プロファイルは鍵より後' packages/core/src/runner.ts`）。「人間が明示的に
+ * 書いたほうが勝つ」という判断で、`GH_TOKEN` については正しい。
+ *
+ * **⟹ プロファイルに `CLAUDE_CODE_OAUTH_TOKEN` が書かれていると、回した鍵が
+ * 黙って上書きされる。** 回し手は「撒いた」と報告し、正本も書き換わり、日誌にも
+ * 残るのに、**子プロセスが受け取るのは古い値である。**
+ *
+ * **しかもプロファイルはクローン自身が `profile_write` で書ける。** ⟹ 意図せず
+ * （あるいは意図して）**クローンが自分でローテーションを無効化できる。**
+ *
+ * ## 直し方をここで選ばない
+ *
+ * **重ね順を変えない。** `GH_TOKEN` のために正しい順序であり、動かすとそちらが
+ * 壊れる。**プロファイルの側で名前を禁じることもしない** — 追加制限にあたる
+ * （north_star 禁止2）。⟹ **検出して出す**だけにしてある。撒く側がこれを呼び、
+ * 影になっている名前を日誌と報告へ載せる。
+ *
+ * **「撒いたのに効かない」を黙って起こさないことがこの関数の全部である。**
+ */
+export function credentialNamesShadowedByProfile(
+  names: readonly string[],
+  profileEnvNames: readonly string[],
+): string[] {
+  const declared = new Set(profileEnvNames);
+  return names.filter((name) => declared.has(name));
+}
 
 /**
  * 鍵の名前として認めるかたち。**環境変数の名前そのものである。**
