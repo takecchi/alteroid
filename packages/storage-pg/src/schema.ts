@@ -395,6 +395,26 @@ export const usageDaily = pgTable(
     layer: text('layer').notNull().default('manager'),
     /** **どこで**使ったか（`session` / `distill`）。既定は `session`。 */
     site: text('site').notNull().default('session'),
+    /**
+     * **どの認証トークンで**使ったか（`agent_tokens.id`。Issue #393 受け入れ基準6）。
+     *
+     * **`not null default ''` である。null にしない。** PostgreSQL の一意索引は
+     * null を互いに重複と見なさないので（`nulls distinct` が既定）、null を許すと
+     * **帰属の無い行が `on conflict` に当たらず、record のたびに新しい行が挿さって
+     * 積み上がらなくなる。** それはプールを使っていない器 ＝ 既定の構成で起きる
+     * （受け入れ基準7 を真正面から壊す）。
+     *
+     * **空文字は「トークンが無い」の印であって、トークンではない。** 読むときに
+     * `undefined` へ戻し（`PgUsageStore` の `#toRow`）、外へ出す顔には現れない。
+     * **`agent_tokens.id` に空文字は無い**（`AgentToken.id` は `min(1)`）ので、
+     * 本物の id とぶつからない。
+     *
+     * **既定は「古い行にとって真」ではない。** `layer` / `site` は暗黙だったものを
+     * 明示しただけだったが、こちらは**真になる値が存在しない** — この列より前の
+     * 行がどのトークンで走ったかは、どこにも記録されていない。だから
+     * `usage_ledger.tokens_at` が別に要る（そちらの doc）。
+     */
+    tokenId: text('token_id').notNull().default(''),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
   },
   (table) => [
@@ -404,12 +424,18 @@ export const usageDaily = pgTable(
     // はデーモンが起動するたびに索引を作り直す（毎回 ACCESS EXCLUSIVE を取る）。
     // 意味は同じである — 5列すべて not null なので、一意索引は主キーと同じ強さで
     // 重複を拒む。`on conflict` の推論もこの索引が受ける。
-    uniqueIndex('usage_daily_key_idx').on(
+    // **索引の名前を変えてある**（`usage_daily_key_idx` → `usage_daily_token_key_idx`）。
+    // `create unique index if not exists` は**名前だけ**を見るので、同じ名前のまま
+    // 列を足しても**既にある DB では何も起きない** — 鍵は5列のまま残り、
+    // `on conflict` は別のトークンの増分を先にある行へ足し込む。テストは空の DB から
+    // 作るので通り、**本番だけが古い鍵で走る**（`migrate.ts` の該当箇所を参照）。
+    uniqueIndex('usage_daily_token_key_idx').on(
       table.date,
       table.managerId,
       table.model,
       table.layer,
       table.site,
+      table.tokenId,
     ),
     // pk の先頭が date なので、date だけの絞り込みは pk の索引がそのまま前方一致で
     // 効く（別に (date) 索引を足すのは冗長）。(manager_id, date) は pk に無い並びで、
@@ -463,6 +489,17 @@ export const usageLedger = pgTable('usage_ledger', {
    * 読める（`aggregate` はここから `beforeLayers` を返す）。
    */
   layeredAt: timestamp('layered_at', { withTimezone: true, mode: 'date' }),
+  /**
+   * **認証トークンの軸**が記録を始めた時刻。まだ1件も**帰属付きで**記録して
+   * いなければ null（Issue #393 受け入れ基準6）。
+   *
+   * **`layered_at` と入れる時機が違う。** あちらは最初の record で入る（層と場所は
+   * 必ず取れる）。こちらは **`token_id` が付いた record で初めて入る** — プールを
+   * 使っていない器では最後まで null である。揃えて入れると、トークンを1本も
+   * 持っていない器が「トークン軸を観測している」と名乗り、`byToken` が返す
+   * `null` の1件が「1本のトークンで全部使った」と読める。
+   */
+  tokensAt: timestamp('tokens_at', { withTimezone: true, mode: 'date' }),
 });
 
 /**

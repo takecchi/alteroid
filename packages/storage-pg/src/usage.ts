@@ -60,6 +60,21 @@ function isBeforeLayers(layersSince: string | null, from: string | undefined): b
 }
 
 /**
+ * 照会範囲の一部でも**認証トークンの軸**の始点より前にかかっていたか。
+ *
+ * 上の2つと同じ形だが、**null で真を返す道がいちばんよく通る。** 層の軸は最初の
+ * record で始まるので `layersSince` が null なのは記録が1件も無いときだけだが、
+ * トークンの軸は**プールを使っていない器では最後まで始まらない**
+ * （`schema.ts` の `usageLedger.tokensAt`）。だからここは「まだ始まっていない」
+ * ではなく「この器では取れない」の意味で真になることがある。
+ */
+function isBeforeTokens(tokensSince: string | null, from: string | undefined): boolean {
+  if (tokensSince === null) return true;
+  if (from === undefined) return true;
+  return from < usageDate(new Date(tokensSince));
+}
+
+/**
  * 利用状況の台帳（PostgreSQL）。fs ドライバ（`@alteroid/storage-fs`）と同じ IF を
  * 満たす別の器であって、能力の差を作らない（`store.ts`「省略可能にしないこと」）。
  *
@@ -83,18 +98,34 @@ export class PgUsageStore implements UsageStore {
     at: string;
     snapshot: UsageSnapshot;
     accumulation: UsageAccumulation;
+    tokenId?: string;
   }): Promise<UsageFold> {
     return this.#db.transaction(async (tx) => {
       // 台帳の開始時刻。**最初の record で1度だけ**入れる（衝突すれば何もしない
       // ＝既にあれば上書きしない）。層の軸の始点は別に持つ — 台帳が先に始まって
       // いる DB では別の時刻になるので、`coalesce` で「まだ無ければ入れる」にする。
+      //
+      // **トークンの軸は `token_id` が付いた1件目でだけ始まる。** ここを層と
+      // 揃えて毎回入れると、プールを1本も持っていない器が「トークン軸を観測
+      // している」と名乗る（`schema.ts` の `usageLedger.tokensAt`）。だから
+      // 値の側で null を渡し、`coalesce` は「まだ無ければ入れる」のまま使う
+      // （null を coalesce しても null なので、始点は動かない）。
+      const tokensAt = input.tokenId === undefined ? null : new Date(input.at);
       await tx
         .insert(usageLedger)
-        .values({ id: LEDGER_ID, startedAt: new Date(input.at), layeredAt: new Date(input.at) })
+        .values({
+          id: LEDGER_ID,
+          startedAt: new Date(input.at),
+          layeredAt: new Date(input.at),
+          tokensAt,
+        })
         .onConflictDoUpdate({
           target: usageLedger.id,
           // **`startedAt` は触らない。** 触ると台帳の始点が毎回いまになる。
-          set: { layeredAt: sql`coalesce(${usageLedger.layeredAt}, excluded.layered_at)` },
+          set: {
+            layeredAt: sql`coalesce(${usageLedger.layeredAt}, excluded.layered_at)`,
+            tokensAt: sql`coalesce(${usageLedger.tokensAt}, excluded.tokens_at)`,
+          },
         });
 
       // **累積の器は `query()` 呼び出しの寿命で閉じる**（`usage.ts` の
@@ -158,6 +189,12 @@ export class PgUsageStore implements UsageStore {
           model,
           layer: input.layer,
           site: input.site,
+          // **無いときは空文字。** 列は `not null` なので（null を許すと一意索引が
+          // 帰属の無い行を重複と見なさず、record のたびに新しい行が挿さる —
+          // `schema.ts` の `usageDaily.tokenId`）。`stripNulls` に undefined を
+          // 渡すと列が省かれ、既定の `''` が入る形にもなるが、**書く値を明示する**
+          // ほうが「省いたら何が入るか」を読む人が追わなくてよい。
+          tokenId: input.tokenId ?? '',
           inputTokens: totals.inputTokens,
           outputTokens: totals.outputTokens,
           cacheReadInputTokens: totals.cacheReadInputTokens,
@@ -179,6 +216,11 @@ export class PgUsageStore implements UsageStore {
               usageDaily.model,
               usageDaily.layer,
               usageDaily.site,
+              // **トークンも鍵に入れる。** 外すと回した前後の増分が同じ行へ
+              // 足し込まれ、`token_id` は先に入った側の値のまま残る — 受け入れ
+              // 基準6 が引きたい「どの区間がどのトークンだったか」が、出力から
+              // 見分けられない誤帰属に化ける。
+              usageDaily.tokenId,
             ],
             set: {
               // **足し込む（上書きではない）。** 同じ日にもう1回 result が来ても、
@@ -205,6 +247,7 @@ export class PgUsageStore implements UsageStore {
       ...(query.managerId === undefined ? [] : [eq(usageDaily.managerId, query.managerId)]),
       ...(query.layer === undefined ? [] : [eq(usageDaily.layer, query.layer)]),
       ...(query.site === undefined ? [] : [eq(usageDaily.site, query.site)]),
+      ...(query.tokenId === undefined ? [] : [eq(usageDaily.tokenId, query.tokenId)]),
     ];
 
     const rows = await this.#db
@@ -217,6 +260,15 @@ export class PgUsageStore implements UsageStore {
         asc(usageDaily.model),
         asc(usageDaily.layer),
         asc(usageDaily.site),
+        // **帰属の無い行を最後に置く。`asc(tokenId)` だけでは先頭に来る** —
+        // 列は `not null default ''` なので、空文字は昇順のいちばん小さい値である
+        // （null なら `asc` の既定が nulls last で最後に来るが、null は使えない
+        // ——`schema.ts` の `usageDaily.tokenId`）。だから `nullif` で空文字を
+        // null へ戻してから並べる。
+        //
+        // **fs 側（`@alteroid/storage-fs` の `compareTokenId`）と向きを揃えること。**
+        // 器が違うだけで行の並びが変わると、同じ照会が口によって違う順で出る。
+        sql`nullif(${usageDaily.tokenId}, '') asc nulls last`,
       );
 
     const ledgerRows = await this.#db
@@ -228,13 +280,17 @@ export class PgUsageStore implements UsageStore {
     const since = ledger === undefined ? null : toIso(ledger.startedAt);
     const layersSince =
       ledger === undefined || ledger.layeredAt === null ? null : toIso(ledger.layeredAt);
+    const tokensSince =
+      ledger === undefined || ledger.tokensAt === null ? null : toIso(ledger.tokensAt);
 
     return {
       rows: rows.map((row) => this.#toRow(row)),
       since,
       layersSince,
+      tokensSince,
       beforeLedger: isBeforeLedger(since, query.from),
       beforeLayers: isBeforeLayers(layersSince, query.from),
+      beforeTokens: isBeforeTokens(tokensSince, query.from),
       notice: USAGE_ESTIMATE_NOTICE,
     };
   }
@@ -258,6 +314,11 @@ export class PgUsageStore implements UsageStore {
       // 一度通す（想定外の値が入っていれば黙って通さずここで落ちる）。
       layer: usageLayerSchema.parse(row.layer),
       site: usageSiteSchema.parse(row.site),
+      // **空文字は `undefined` へ戻す。** 列が `not null` なのは一意索引を成立
+      // させるためだけで（`schema.ts` の `usageDaily.tokenId`）、空文字は
+      // トークンではない。ここで戻さないと、外へ出す顔に「id が空文字のトークン」
+      // が1件現れる（`byToken` に並び、絞り込みの候補にも見える）。
+      ...(row.tokenId === '' ? {} : { tokenId: row.tokenId }),
       totals: {
         // bigint 列は toNumber を必ず通す（db.ts のコメント参照）。素通しで返すと
         // 文字列のままの経路が残り、sumUsageRows の `+` が連結になりかねない。

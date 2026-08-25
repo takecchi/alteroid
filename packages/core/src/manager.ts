@@ -2886,6 +2886,10 @@ class Pool implements ManagerPool {
         // 記憶ストアの鍵を持たないので書けない）。読む→畳む→書くはストアの
         // 1操作に閉じてある。
         const at = new Date();
+        // **1回だけ引いて使い回す。** 2回引く形にすると、間に回し手が
+        // `#tokenIdentities` を書き換えたときに「有無の判定」と「使う値」が
+        // 別の世代を見る（有ると判定してから消える形は起きないが、逆は起きる）。
+        const tokenIdentity = this.#tokenIdentities.get(event.managerId);
         let fold;
         try {
           fold = await this.#stores.usage.record({
@@ -2903,6 +2907,13 @@ class Pool implements ManagerPool {
             snapshot: { sessionId: event.sessionId, models: event.models },
             // streaming-input の長寿命セッションなので、降りてくるのは走行合計。
             accumulation: 'cumulative',
+            // **そのマネージャーのセッションが起きた瞬間の身元**（`#tokenIdentities`）。
+            // `#tokenIdentity?.()` を読み直さないのは、枠の観測と同じ理由である —
+            // 回した後に届いた前のセッションぶんの消費が、新しいトークンに付く。
+            //
+            // **無いときは渡さない。** プールが空の器では毎回 undefined になる
+            // ＝ 受け入れ基準7（既定の構成の挙動を1文字も変えない）。
+            ...(tokenIdentity === undefined ? {} : { tokenId: tokenIdentity.tokenId }),
           });
         } catch {
           // 台帳に積めないことで仕事は止めない。ただし黙って消さない。

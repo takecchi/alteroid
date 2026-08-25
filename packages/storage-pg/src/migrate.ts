@@ -235,6 +235,30 @@ const STATEMENTS = [
   // (date) 索引を足すのは冗長）。(manager_id, date) はその並びに無いので、
   // 「この actor が期間中いくら使ったか」を date を先に決めずに引く経路として足す。
   `create index if not exists usage_daily_manager_date_idx on usage_daily (manager_id, date)`,
+  // --- 「どの認証トークンで」の軸を足す（Issue #393 受け入れ基準6） ---------
+  //
+  // **`not null default ''` である。null を許さない。** PostgreSQL の一意索引は
+  // 既定で `nulls distinct` — null どうしを重複と見なさない。null を許すと
+  // **帰属の無い行が `on conflict` に当たらず、record のたびに新しい行が挿さって
+  // 積み上がらない。** そしてそれが起きるのはプールを使っていない器 ＝ 既定の
+  // 構成である（受け入れ基準7 を真正面から壊す）。空文字は鍵を成立させるための
+  // 「値が無い」の印で、読むときに undefined へ戻す（`usage.ts` の `#toRow`）。
+  //
+  // **この既定は `layer` / `site` と違って「古い行にとって真」ではない。** あちらは
+  // 暗黙だったものを明示しただけだが、こちらは**真になる値が存在しない** — この列
+  // より前の行がどのトークンで走ったかは、どこにも記録されていない。だから
+  // `usage_ledger.tokens_at` を別に持ち、`aggregate` が `beforeTokens` で言う。
+  `alter table usage_daily add column if not exists token_id text not null default ''`,
+  // **新しい鍵は名前も変える。** `create unique index if not exists` は**名前だけ**を
+  // 見るので、`usage_daily_key_idx` のまま列を足しても**既にある DB では何も起き
+  // ない**（鍵は5列のまま残り、別のトークンの増分が先にある行へ足し込まれて
+  // 誤帰属になる）。**そしてテストは空の DB から作るので通る** — 本番だけが古い鍵で
+  // 走り、出力には何も出ない。名前を変えれば、既にある DB でも新しい索引が作られる。
+  `create unique index if not exists usage_daily_token_key_idx
+     on usage_daily (date, manager_id, model, layer, site, token_id)`,
+  // 古い5列の鍵を外す（**新しい鍵を作ったあとに外す。** migrate.ts 冒頭の順序）。
+  // 新しい鍵の前方一致に含まれるので、索引としても残す意味は無い。
+  `drop index if exists usage_daily_key_idx`,
 
   `create table if not exists usage_baseline (
      manager_id text not null,
@@ -262,6 +286,12 @@ const STATEMENTS = [
   // 層と場所の軸が記録を始めた時刻。**null を許す** — 台帳が始まっていても層の
   // 軸はまだ始まっていない、という状態が実際に在る（この移行が当たった直後）。
   `alter table usage_ledger add column if not exists layered_at timestamptz`,
+  // 認証トークンの軸が記録を始めた時刻。**null を許す**うえに、`layered_at` と
+  // 違って**プールを使っていない器では最後まで null のままである**（層と場所は
+  // 必ず取れるが、トークンの帰属は現役の指名が無ければ取れない）。だから
+  // `record` は「`token_id` が付いた1件目」でだけここを埋める。揃えて埋めると、
+  // トークンを1本も持っていない器が「トークン軸を観測している」と名乗る。
+  `alter table usage_ledger add column if not exists tokens_at timestamptz`,
 
   // --- 引き受けたまま終わっていない仕事（store.ts の CommitmentStore） --------
   // id が主キーなのは open の冪等性を SQL 側で強制するためである。「select して
