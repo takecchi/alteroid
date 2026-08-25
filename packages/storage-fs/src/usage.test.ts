@@ -600,3 +600,166 @@ describe('既にある usage.json の読み込み（層の列が無い状態か�
     expect((await store.aggregate({ from: '2026-08-01' })).beforeLayers).toBe(true);
   });
 });
+
+describe('認証トークンの軸（どの区間がどのトークンだったか。#393 受け入れ基準6）', () => {
+  it('同じ日・同じ actor・同じモデル・同じ層でも、トークンが違えば別の行になる', async () => {
+    // **これが受け入れ基準6 の本体である。** 鍵からトークンが漏れると、回した後の
+    // 増分が前のトークンの行へ足し込まれ、`tokenId` は先に入った側のまま残る
+    // ＝ 出力から見分けられない誤帰属になる。
+    await store.record({
+      layer: 'manager',
+      site: 'session',
+      accumulation: 'oneshot',
+      managerId: 'mgr-1',
+      date: '2026-08-25',
+      at: '2026-08-25T10:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 1 }) }),
+      tokenId: 'tok-a',
+    });
+    await store.record({
+      layer: 'manager',
+      site: 'session',
+      accumulation: 'oneshot',
+      managerId: 'mgr-1',
+      date: '2026-08-25',
+      at: '2026-08-25T11:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 2 }) }),
+      tokenId: 'tok-b',
+    });
+
+    const { rows } = await store.aggregate({});
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => [row.tokenId, row.totals.costUsd])).toEqual([
+      ['tok-a', 1],
+      ['tok-b', 2],
+    ]);
+  });
+
+  it('帰属の無い行と在る行が混ざっても足し込まれない（空が「どれか1本」に化けない）', async () => {
+    await store.record({
+      layer: 'manager',
+      site: 'session',
+      accumulation: 'oneshot',
+      managerId: 'mgr-1',
+      date: '2026-08-25',
+      at: '2026-08-25T10:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 1 }) }),
+    });
+    await store.record({
+      layer: 'manager',
+      site: 'session',
+      accumulation: 'oneshot',
+      managerId: 'mgr-1',
+      date: '2026-08-25',
+      at: '2026-08-25T11:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 2 }) }),
+      tokenId: 'tok-a',
+    });
+
+    const { rows } = await store.aggregate({});
+    expect(rows).toHaveLength(2);
+    // **帰属の無い行は `tokenId` を持たない**（空文字ではない）。空文字を持つと、
+    // 外へ出す顔に「id が空のトークン」が1件現れる。
+    const unattributed = rows.filter((row) => row.tokenId === undefined);
+    expect(unattributed).toHaveLength(1);
+    expect(unattributed[0]?.totals.costUsd).toBe(1);
+    // 並びは「帰属の在る行 → 無い行」（pg 側と揃えてある）。
+    expect(rows[1]?.tokenId).toBeUndefined();
+  });
+
+  it('帰属の無い行を2回積むと足し込まれる（鍵が毎回別にならない）', async () => {
+    // **`token_id` を null 許容にすると壊れる形をここで押さえる。** pg の一意索引は
+    // null どうしを重複と見なさないので、null を許すと record のたびに新しい行が
+    // 挿さって積み上がらない。fs にはその機構が無いが、**器で挙動が違わないこと**
+    // を両側で同じ問いとして固定する。
+    for (const at of ['2026-08-25T10:00:00.000Z', '2026-08-25T11:00:00.000Z']) {
+      await store.record({
+        layer: 'manager',
+        site: 'session',
+        accumulation: 'oneshot',
+        managerId: 'mgr-1',
+        date: '2026-08-25',
+        at,
+        snapshot: snapshot({ opus: totals({ costUsd: 1 }) }),
+      });
+    }
+
+    const { rows } = await store.aggregate({});
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.totals.costUsd).toBe(2);
+  });
+
+  it('tokenId で絞り込める', async () => {
+    for (const [tokenId, costUsd] of [
+      ['tok-a', 1],
+      ['tok-b', 2],
+    ] as const) {
+      await store.record({
+        layer: 'manager',
+        site: 'session',
+        accumulation: 'oneshot',
+        managerId: 'mgr-1',
+        date: '2026-08-25',
+        at: '2026-08-25T10:00:00.000Z',
+        snapshot: snapshot({ opus: totals({ costUsd }) }),
+        tokenId,
+      });
+    }
+
+    const only = await store.aggregate({ tokenId: 'tok-b' });
+    expect(only.rows).toHaveLength(1);
+    expect(only.rows[0]?.tokenId).toBe('tok-b');
+  });
+
+  it('tokensSince は帰属が付いた record でだけ入る（プールを使わない器では最後まで null）', async () => {
+    // **ここが `layersSince` と違うところである。** 層は最初の record で始まるが、
+    // トークンの軸は現役の指名が無ければ取れない。揃えて入れると、トークンを1本も
+    // 持っていない器が「トークン軸を観測している」と名乗る。
+    await record({
+      managerId: 'mgr-1',
+      date: '2026-08-25',
+      at: '2026-08-25T10:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 1 }) }),
+    });
+
+    const before = await store.aggregate({});
+    expect(before.since).toBe('2026-08-25T10:00:00.000Z');
+    expect(before.layersSince).toBe('2026-08-25T10:00:00.000Z');
+    // 台帳も層も始まっているのに、トークンの軸だけ始まっていない。
+    expect(before.tokensSince).toBeNull();
+    expect(before.beforeTokens).toBe(true);
+
+    await store.record({
+      layer: 'manager',
+      site: 'session',
+      accumulation: 'oneshot',
+      managerId: 'mgr-1',
+      date: '2026-08-26',
+      at: '2026-08-26T10:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 1 }) }),
+      tokenId: 'tok-a',
+    });
+
+    const after = await store.aggregate({});
+    expect(after.tokensSince).toBe('2026-08-26T10:00:00.000Z');
+    // 台帳の始点は動いていない（別の値として持っている）。
+    expect(after.since).toBe('2026-08-25T10:00:00.000Z');
+  });
+
+  it('トークンの軸の始点より前を照会したら beforeTokens: true になる', async () => {
+    await store.record({
+      layer: 'manager',
+      site: 'session',
+      accumulation: 'oneshot',
+      managerId: 'mgr-1',
+      date: '2026-08-25',
+      at: '2026-08-25T10:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 1 }) }),
+      tokenId: 'tok-a',
+    });
+
+    expect((await store.aggregate({ from: '2026-08-25' })).beforeTokens).toBe(false);
+    expect((await store.aggregate({ from: '2026-08-24' })).beforeTokens).toBe(true);
+    expect((await store.aggregate({})).beforeTokens).toBe(true);
+  });
+});
