@@ -39,6 +39,39 @@ interface Line {
   text: string;
   /** 進行中の合図（考え中・ツール実行中）。落ち着いたら消す。 */
   transient?: boolean;
+  /**
+   * **この行がどの会話のものか**（会話 id。まだ id が決まっていなければ `undefined`）。
+   *
+   * **画面に出すかどうかは、これといま見ている会話の一致だけで決まる**（下の
+   * `ownedBy`）。**省略できない形にしてあるのは、行を作る場所を型に数えさせる
+   * ためである** —— 足し忘れた行は「持ち主なし」として黙って混ざるのではなく、
+   * ビルドで落ちる。
+   *
+   * **⚠️ 画面の中だけのものである。** サーバの応答にも、保存される形にも、
+   * API の契約（`apps/daemon/openapi.json`）にも出ない。
+   */
+  of: string | undefined;
+}
+
+/**
+ * **いま見ている会話のものだけを返す。**
+ *
+ * ⚠️ **これが「前の会話の中身を出さない」ことの本体である**（#437）。
+ * 会話を切り替えたときに `lines` を捨てる処理（下の「人間が別の会話を選んだ
+ * ときだけ状態を捨てる」）は残してあるが、**保証はそちらが持っていない** ——
+ * 捨てた後に React が「切り替えより前に積まれていた更新」を基底の値から
+ * 貼り直すと、前の会話の `lines` が丸ごと戻ってくることがあるからである
+ * （実測: 60回中11回。既定の並列度の全スイートでも捕まえた。生の観測は #437）。
+ * **戻ってきても持ち主が違うので、ここで落ちる。**
+ *
+ * **⚠️ そして、ここは何も壊さない（filter であって破壊ではない）。** これが
+ * 2つ目の条件である —— React は**古い props で描き直す**ことがあり
+ * （実測: `main` で40記録中7回、`routeId` が定義済みの後に `undefined` へ
+ * 戻る描画が起きている）、その回に `lines` を壊す形にしていると、**人間が
+ * 送ったばかりの発言ごと消える。** ここは選ぶだけなので、次の描画で戻る。
+ */
+export function ownedBy(lines: Line[], shownId: string | undefined): Line[] {
+  return lines.filter((line) => line.of === shownId);
 }
 
 export default function Chat({ loaderData }: Route.ComponentProps) {
@@ -337,7 +370,26 @@ export function ChatPane({
        * ことを見つけている。** 詳しい構造は下の `owns()`/`stopped()` の
        * doc（`writable()` の直前）にまとめてある。
        */
-      setLines([]);
+      /*
+       * **⚠️ ここで `lines` を捨てない（#437 で外した）。**
+       *
+       * 前は `setLines([])` が在った。外したのは、**この判定が「一度きりの
+       * edge」だからである** —— `routeId !== lastRouteId` は切り替わった瞬間に
+       * 1回しか真にならないので、その1回の結果が失われると二度と走らない。
+       * そして実測（#437）で、失われる経路が2つあることが分かっている:
+       *
+       * - **貼り直しで無かったことにされる** — 切り替えより前に積まれていた
+       *   `lines` の更新が、捨てた後に基底の値から再適用される（60回中11回）
+       * - **古い props で描き直された回に誤って当たる** — React は `routeId` が
+       *   確定した後でも、古い基底から描き直すことがある（`main` で40記録中
+       *   7回観測）。そこで破壊すると、**人間が送ったばかりの発言ごと消える**
+       *
+       * **⟹ 前の会話の中身を出さないことは `ownedBy`（持ち主で絞る）が持つ。**
+       * あちらは選ぶだけで何も壊さないので、どちらの経路でも結果が変わらない。
+       *
+       * **`setFailure(undefined)` は残す。** 失敗の表示は次の送信で立て直せる
+       * （消えても情報が失われない）ので、`lines` とは事情が違う。
+       */
       setFailure(undefined);
     }
   }
@@ -365,8 +417,9 @@ export function ChatPane({
         key: message.id,
         role: message.role === 'inbound' ? 'human' : 'clone',
         text: message.text,
+        of: shownId,
       })),
-    [history.data],
+    [history.data, shownId],
   );
 
   /*
@@ -402,7 +455,7 @@ export function ChatPane({
       remaining.set(key, (remaining.get(key) ?? 0) + 1);
     }
     const pending: Line[] = [];
-    for (const line of lines) {
+    for (const line of ownedBy(lines, shownId)) {
       const key = `${line.role}\u0000${line.text}`;
       const count = remaining.get(key) ?? 0;
       // 履歴側に同じものがある＝サーバが既に持っているやりとりなので、手元の
@@ -414,7 +467,7 @@ export function ChatPane({
       pending.push(line);
     }
     return [...historyLines, ...pending];
-  }, [historyLines, lines]);
+  }, [historyLines, lines, shownId]);
 
   const handleScroll = useCallback(() => {
     const el = scrollContainerRef.current;
@@ -480,7 +533,12 @@ export function ChatPane({
     justSentOwnLineRef.current = true;
     setLines((previous) => [
       ...previous,
-      { key: `h-${previous.length}-${text.slice(0, 8)}`, role: 'human', text },
+      {
+        key: `h-${previous.length}-${text.slice(0, 8)}`,
+        role: 'human',
+        text,
+        of: shownIdRef.current,
+      },
     ]);
   }, []);
 
@@ -643,7 +701,7 @@ export function ChatPane({
           const withoutTransient = previous.filter((line) => line.transient !== true);
           return [
             ...withoutTransient,
-            { key: `t-${Date.now()}`, role: 'system', text, transient: true },
+            { key: `t-${Date.now()}`, role: 'system', text, transient: true, of: stream.id },
           ];
         });
       };
@@ -689,6 +747,22 @@ export function ChatPane({
               // ref も同時に進める。effect が回るのは描き直しの後なので、
               // それを待つと、その隙間に届いた分が `owns()` に弾かれる。
               shownIdRef.current = stream.id;
+              /*
+               * **まだ持ち主の無い行に、決まった id を付け直す。** 新しい会話では
+               * 送った発言のほうが id より先に画面へ乗るので、ここで揃えないと
+               * 「持ち主なし」の行が出なくなる（`ownedBy`）。
+               *
+               * **これは普通の更新なので、貼り直されても replay されるだけで
+               * 消えない**（render の中でやると、貼り直しで無かったことにされる）。
+               */
+              const settled = stream.id;
+              setLines((previous) =>
+                previous.some((line) => line.of === undefined)
+                  ? previous.map((line) =>
+                      line.of === undefined ? { ...line, of: settled } : line,
+                    )
+                  : previous,
+              );
               setShownId(stream.id);
               // URL は後から追いつかせるだけ。作り直しは起きない（key を付けていない）。
               void navigate(`/chat/${stream.id}`, { replace: true });
@@ -728,7 +802,7 @@ export function ChatPane({
                 const key = replyKey;
                 setLines((previous) => [
                   ...previous.filter((line) => line.transient !== true),
-                  { key, role: 'clone', text: '' },
+                  { key, role: 'clone', text: '', of: stream.id },
                 ]);
               }
               append(event.text);
@@ -739,6 +813,7 @@ export function ChatPane({
                 {
                   key: `a-${event.approvalId}`,
                   role: 'system',
+                  of: stream.id,
                   text: `確認したいことがある: ${event.question}\n（承認待ちの画面から答えられる）`,
                 },
               ]);
@@ -771,6 +846,7 @@ export function ChatPane({
                 {
                   key: `u-${Date.now()}`,
                   role: 'system',
+                  of: stream.id,
                   text: `${event.message}\n（この発言は保持されていて、次に枠が開いたときに配り直されて試し直される）`,
                 },
               ]);
@@ -793,9 +869,22 @@ export function ChatPane({
         // 進行中の合図は、**まだこの会話を見ているなら必ず**畳む。人間が止めた
         // 場合も畳む対象である（止めた瞬間に「考えている…」で固まらせない）。
         // 見ていない＝別の会話へ移った場合だけ、向こうの内容を触らない。
-        if (owns()) {
-          setLines((previous) => previous.filter((line) => line.transient !== true));
-        }
+        /*
+         * **自分の会話に積んだ進行中の合図だけを畳む。**
+         *
+         * 前は `owns()`（まだこの会話を見ているか）で囲っていた。理由は
+         * 「見ていない＝別の会話へ移った場合に、向こうの内容を触らない」で、
+         * **その理由はいまも正しい。変えたのは絞り方だけである** ——
+         * `line.of === stream.id` は「このストリームが積んだ行」だけを指すので、
+         * 向こうの内容には最初から届かない。
+         *
+         * **囲いを外したのは、#437 で `lines` を捨てなくなったからである。**
+         * 捨てていた頃は、別の会話へ移れば合図ごと消えていた。いまは残るので、
+         * 畳まないと「考えている…」が、その会話へ戻ったときに残ったまま出る。
+         */
+        setLines((previous) =>
+          previous.filter((line) => !(line.transient === true && line.of === stream.id)),
+        );
         // 入力欄の状態は会話ではなくこの画面のもの。ただし、切り替えた先で既に
         // 別の送信が始まっているなら、そちらの「受信中」を消さない。
         if (streamRef.current === stream) {
@@ -867,7 +956,7 @@ export function ChatPane({
           `open` の直後に履歴の取得が始まる。手元に流れてきた分があるのに
           スピナーへ差し替えると、受信中の本文が一度消えてから戻ることになる。
         */}
-        {history.isLoading && shownId !== undefined && lines.length === 0 ? (
+        {history.isLoading && shownId !== undefined && ownedBy(lines, shownId).length === 0 ? (
           <Spinner label="履歴を読み込み中" />
         ) : all.length === 0 ? (
           <Card>
