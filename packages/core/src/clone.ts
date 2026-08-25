@@ -73,10 +73,13 @@ import {
 import {
   classifyUsageNotice,
   describeUsageNotice,
+  mergeRateLimitFacts,
   toRateLimitFacts,
+  usageTransitionOf,
   type RateLimitFacts,
   type UsageLimitNotice,
 } from './usage-limits.js';
+import type { TokenRotatorObservation } from './token-rotator.js';
 import {
   assistantFailureOf,
   resultErrorLines,
@@ -336,6 +339,25 @@ export interface CloneOptions {
    * 追記5「ターンの途中では畳まない」）。
    */
   credentials?: () => Record<string, string>;
+  /**
+   * いま撒かれているトークンの身元（Issue #393 PR3）。**セッションを起こす瞬間に
+   * 1度だけ読み、そのセッションの観測すべてに添える。**
+   *
+   * これが無いと、回し手は「もう回した後の通知」を見分けられない
+   * （`observationFreshness` が `unknown` へ落ちる）。
+   */
+  tokenIdentity?: () => { tokenId: string; generation: number } | undefined;
+  /**
+   * 枠の観測を回し手へ渡す口（Issue #393 PR3）。
+   *
+   * **クローンは回すかどうかを判断しない。** 枠に当たった瞬間このループはターンを
+   * 回さない（`#usageBlocked`）ので、**判断をここへ置くといちばん要るときに
+   * いちばん動かない。** ここは観測を渡すだけで、判定も選択も撒きも回し手が持つ。
+   *
+   * **投げてもターンを壊さない**（呼ぶ側で握って報告する）。回せなかったことは
+   * 枠に当たったこととは別の失敗であり、後者の報告を前者で置き換えない。
+   */
+  onUsageObservation?: (observation: TokenRotatorObservation) => Promise<void>;
   /**
    * 権限モード。省略すると `env` の `ALTEROID_CLONE_PERMISSION_MODE`、
    * それも無ければ `auto`（`permission-mode.ts`）。主にテスト用の直渡しで、
@@ -810,6 +832,25 @@ class Clone implements CloneHost {
    * なる。
    */
   readonly #credentials: (() => Record<string, string>) | undefined;
+  readonly #tokenIdentity: (() => { tokenId: string; generation: number } | undefined) | undefined;
+  readonly #onUsageObservation:
+    ((observation: TokenRotatorObservation) => Promise<void>) | undefined;
+  /**
+   * **このセッションが起きたときの**トークンの身元（Issue #393 PR3）。
+   *
+   * `#childEnv()` で1度だけ捕まえる——**観測のたびに読み直さない。** 読み直すと、
+   * 回した後に届いた「前のセッションの観測」が新しい身元を名乗り、**世代の照合が
+   * そのまま素通しになる**（`observationFreshness` が `current` を返す）。
+   */
+  #sessionTokenIdentity: { tokenId: string; generation: number } | undefined;
+  /**
+   * 枠の事実を枠の種類ごとに覚える（`ManagerPool#onEvent` と同じ形）。
+   *
+   * **`rate_limit_event` はターンの頭ごとに来る。** 状態をそのまま回し手へ流すと
+   * 「同じ `rejected` で毎ターン回そうとする」になるので、`usageTransitionOf` が
+   * 遷移と認めた1回だけを渡す。
+   */
+  readonly #rateLimits = new Map<string, RateLimitFacts>();
   readonly #profile: ProfileApplier | undefined;
   readonly #profileService: ProfileService | undefined;
   readonly #accountUsage: (() => AccountUsageState) | undefined;
@@ -824,6 +865,8 @@ class Clone implements CloneHost {
       managers,
       env,
       credentials,
+      tokenIdentity,
+      onUsageObservation,
       permissionMode,
       humanPriority,
       profile,
@@ -843,6 +886,8 @@ class Clone implements CloneHost {
     this.#humanPriority = humanPriority ?? resolveCloneHumanPriority(envSource);
     this.#env = envSource;
     this.#credentials = credentials;
+    this.#tokenIdentity = tokenIdentity;
+    this.#onUsageObservation = onUsageObservation;
     this.#profile = profile;
     this.#profileService = profileService;
     this.#accountUsage = accountUsage;
@@ -1920,6 +1965,17 @@ class Clone implements CloneHost {
   async #noteUsageNotice(
     notice: UsageLimitNotice | undefined,
     conversationId: string | null,
+    /**
+     * この通知が**どこから来たか**（Issue #393 PR3）。
+     *
+     * - `text`: SDK が出した文言を `classifyUsageNotice` に通したもの
+     * - `rate_limit`: `rate_limit_event` の `rejected` を通知の形へ仕立て直したもの
+     *
+     * **回し手へ渡すのは `text` だけである**（下の分岐に理由がある）。日誌と
+     * `#usageBlocked` の扱いは今までどおり両方で同じ——**この引数で変わるのは
+     * 回し手へ渡すかどうかだけ**にしてある。
+     */
+    source: 'text' | 'rate_limit',
   ): Promise<void> {
     if (notice === undefined) return;
 
@@ -1934,6 +1990,18 @@ class Clone implements CloneHost {
         text: describeUsageNotice(notice),
       });
     }
+
+    // **回し手へ渡すのは、文言から分類した通知だけである。**
+    //
+    // **⚠️ `rate_limit_event` 由来のものを渡さないこと。** この関数はそちらからも
+    // 呼ばれ（`rejectedRateLimitNotice`）、そこで作られる `reached` は
+    // **「その枠が尽きた」を `reached` の形へ仕立て直したもの**であって
+    // 「仕事が止まった」ではない（Issue #393 追記1 の訂正。`clone.ts` に逐語で
+    // 在る「1つぶんの状態でしかない」）。回し手へ `reached` として渡すと、
+    // **`overage_exhausted` の設定でも課金枠を1円も使わずに回ってしまう。**
+    //
+    // ⟹ 出所を引数で受ける。`source` を足したのはこの1点のためである。
+    if (source === 'text') await this.#observeForTokenRotation({ notice });
 
     if (notice.kind !== 'reached') return;
 
@@ -2944,11 +3012,38 @@ class Clone implements CloneHost {
     // **⚠️ この順序の帰結として、プロファイルが鍵と同じ名前を宣言していると
     // 鍵が黙って上書きされる。** 塞ぐのは順序ではなく検出のほうである
     // （`credentialNamesShadowedByProfile`。理由はあちらの doc）。
+    // **セッションが起きるこの瞬間の身元を捕まえる**（`#sessionTokenIdentity` の doc）。
+    // ここ以外で読み直すと、世代の照合が素通しになる。
+    this.#sessionTokenIdentity = this.#tokenIdentity?.();
     return {
       ...this.#env,
       ...(this.#credentials?.() ?? {}),
       ...(this.#profile?.env() ?? {}),
     };
+  }
+
+  /**
+   * 枠の観測を回し手へ渡す（Issue #393 PR3）。**判断はしない。**
+   *
+   * **投げてもターンを壊さない。** 回せなかったことは枠に当たったこととは別の
+   * 失敗であり、後者の報告を前者で置き換えない——ここで投げ直すと、人間には
+   * 「上限に当たった」ではなく「回し手が落ちた」だけが届く。
+   */
+  async #observeForTokenRotation(
+    observation: Omit<TokenRotatorObservation, 'observedBy'>,
+  ): Promise<void> {
+    if (this.#onUsageObservation === undefined) return;
+    try {
+      await this.#onUsageObservation({
+        ...observation,
+        ...(this.#sessionTokenIdentity === undefined
+          ? {}
+          : { observedBy: this.#sessionTokenIdentity }),
+      });
+    } catch (error) {
+      // **黙って握り潰さない。** 跡は残すが、ターンは続ける。
+      noteDroppedRecord('認証トークンの切替', 'clone', error);
+    }
   }
 
   /**
@@ -3246,7 +3341,7 @@ class Clone implements CloneHost {
         if (typeof said === 'string') {
           const notice = classifyUsageNotice(said);
           if (notice !== undefined)
-            await this.#noteUsageNotice(notice, this.#turn?.conversationId ?? null);
+            await this.#noteUsageNotice(notice, this.#turn?.conversationId ?? null, 'text');
         }
         return;
       }
@@ -3255,10 +3350,29 @@ class Clone implements CloneHost {
       // 唯一の最新情報になる（`runner.ts` の同じ場面と同じ理由）。
       case 'rate_limit_event': {
         const facts = toRateLimitFacts((message as { rate_limit_info?: unknown }).rate_limit_info);
+        if (facts !== undefined) {
+          // **回し手へは事実と遷移で渡す**（通知の形へ仕立て直したものではない）。
+          // `#noteUsageNotice` の `source` の doc に理由がある。
+          //
+          // **状態ではなく遷移を渡す。** `rate_limit_event` はターンの頭ごとに
+          // 来るので、状態をそのまま流すと同じ `rejected` で毎ターン回そうと
+          // する。覚えるのは**重ねた形**（`mergeRateLimitFacts`）——届いた1件で
+          // 丸ごと置き換えると、`status` を運んでいない観測が「もう知らせた」と
+          // いう記憶を消す（あちらの doc）。
+          const kind = facts.kind ?? '';
+          const previous = this.#rateLimits.get(kind);
+          const transition = usageTransitionOf(previous, facts);
+          const merged = mergeRateLimitFacts(previous, facts);
+          this.#rateLimits.set(kind, merged);
+          if (transition !== undefined) {
+            await this.#observeForTokenRotation({ facts: merged, transition });
+          }
+        }
         if (facts?.status === 'rejected') {
           await this.#noteUsageNotice(
             rejectedRateLimitNotice(facts),
             this.#turn?.conversationId ?? null,
+            'rate_limit',
           );
         }
         return;
@@ -3403,7 +3517,7 @@ class Clone implements CloneHost {
           ]) {
             const notice = classifyUsageNotice(candidate);
             if (notice !== undefined) {
-              await this.#noteUsageNotice(notice, turn?.conversationId ?? null);
+              await this.#noteUsageNotice(notice, turn?.conversationId ?? null, 'text');
               break;
             }
           }

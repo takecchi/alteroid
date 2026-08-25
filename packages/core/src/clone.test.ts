@@ -7085,3 +7085,148 @@ describe('credentials（SDK 子プロセスへ重ねる鍵の現在値）', () =
     expect(calls[0]?.options.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('declared-in-profile');
   });
 });
+
+/**
+ * 枠の観測を回し手へ渡す口（Issue #393 PR3）。
+ *
+ * **ここが固定するのは「何を渡すか」である。** クローンは回すかどうかを判断しない
+ * ——判断も選択も撒きも回し手が持つ。
+ */
+describe('onUsageObservation（回し手へ渡す観測）', () => {
+  let seq = 0;
+
+  function cloneObserving(input: {
+    sdkOptions?: Parameters<typeof fakeSdk>[1];
+    identity?: { tokenId: string; generation: number };
+    onObserve?: (o: TokenRotatorObservation) => Promise<void>;
+  }) {
+    const seen: TokenRotatorObservation[] = [];
+    const { fn, calls } = fakeSdk(undefined, input.sdkOptions ?? {});
+    const clone = createClone({
+      stores: createMemoryStores(),
+      queryFn: fn,
+      env: {},
+      ...(input.identity === undefined ? {} : { tokenIdentity: () => input.identity }),
+      onUsageObservation:
+        input.onObserve ??
+        (async (o) => {
+          seen.push(o);
+        }),
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    return { clone, calls, seen };
+  }
+
+  function say(clone: ReturnType<typeof createClone>): void {
+    clone.post({
+      type: 'human_message',
+      id: `evt-obs-${String(++seq)}`,
+      at: new Date().toISOString(),
+      text: 'こんにちは',
+      conversationId: 'conv-1',
+    });
+  }
+
+  it('文言から分類した通知は、そのまま notice として渡る', async () => {
+    const { clone, seen } = cloneObserving({
+      sdkOptions: {
+        resultSubtype: 'error_during_execution',
+        resultText: "You've hit your org's monthly spend limit",
+      },
+    });
+    say(clone);
+    await waitFor(() => seen.length > 0, '観測が渡ること');
+    clone.stop();
+
+    expect(seen[0]?.notice?.kind).toBe('reached');
+    // **文言をそのまま持つ**（言い換えると回復の見込みの分類が効かなくなる）。
+    expect(seen[0]?.notice?.text).toContain("You've hit your");
+  });
+
+  /**
+   * **この歯がこの配線でいちばん重い。**
+   *
+   * `#noteUsageNotice` は `rate_limit_event` 経路からも呼ばれ、そこで
+   * `rejectedRateLimitNotice` が `reached` の形の通知を作る。**それを回し手へ
+   * `notice` として渡すと、`overage_exhausted` の設定でも課金枠を1円も使わずに
+   * 回る**（Issue #393 追記1 の訂正がまさにこの取り違えを直したものである）。
+   */
+  it('⚠️ rate_limit_event は notice ではなく、事実と遷移で渡る', async () => {
+    const { clone, seen } = cloneObserving({
+      sdkOptions: {
+        rateLimitEventAt: () => ({ status: 'rejected', rateLimitType: 'five_hour' }),
+      },
+    });
+    say(clone);
+    await waitFor(() => seen.length > 0, '観測が渡ること');
+    clone.stop();
+
+    const observation = seen[0];
+    // **notice を持たない。** 持っていたら、それは仕立て直した `reached` である。
+    expect(observation).not.toHaveProperty('notice');
+    expect(observation?.transition).toBe('rejected');
+    expect(observation?.facts?.status).toBe('rejected');
+  });
+
+  it('同じ rejected が毎ターン来ても、渡すのは遷移した1回だけ', async () => {
+    // `rate_limit_event` はターンの頭ごとに来る。状態をそのまま流すと、1回の
+    // 当たりでプールを何本も食う。
+    const { clone, seen } = cloneObserving({
+      sdkOptions: {
+        rateLimitEventAt: () => ({ status: 'rejected', rateLimitType: 'five_hour' }),
+      },
+    });
+    say(clone);
+    await waitFor(() => seen.length > 0, '1回目の観測');
+    say(clone);
+    say(clone);
+    await waitFor(() => seen.length > 0, '追加のターン');
+    clone.stop();
+
+    expect(seen.filter((o) => o.transition === 'rejected')).toHaveLength(1);
+  });
+
+  it('セッションが起きたときの身元を、その観測すべてに添える', async () => {
+    const { clone, seen } = cloneObserving({
+      identity: { tokenId: 'tok-a', generation: 3 },
+      sdkOptions: {
+        rateLimitEventAt: () => ({ status: 'rejected', rateLimitType: 'five_hour' }),
+      },
+    });
+    say(clone);
+    await waitFor(() => seen.length > 0, '観測が渡ること');
+    clone.stop();
+
+    expect(seen[0]?.observedBy).toEqual({ tokenId: 'tok-a', generation: 3 });
+  });
+
+  it('身元が無ければ添えない（unknown へ倒すのは回し手の側）', async () => {
+    const { clone, seen } = cloneObserving({
+      sdkOptions: {
+        rateLimitEventAt: () => ({ status: 'rejected', rateLimitType: 'five_hour' }),
+      },
+    });
+    say(clone);
+    await waitFor(() => seen.length > 0, '観測が渡ること');
+    clone.stop();
+
+    expect(seen[0]).not.toHaveProperty('observedBy');
+  });
+
+  it('回し手が投げてもターンを壊さない（別の失敗で上限の報告を置き換えない）', async () => {
+    const { clone, calls } = cloneObserving({
+      onObserve: () => Promise.reject(new Error('回し手が落ちた')),
+      sdkOptions: {
+        resultSubtype: 'error_during_execution',
+        resultText: "You've hit your org's monthly spend limit",
+      },
+    });
+    say(clone);
+    // セッションは開き、ターンは最後まで走る。
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+    expect(calls.length).toBeGreaterThan(0);
+  });
+});
