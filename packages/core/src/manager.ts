@@ -467,6 +467,18 @@ export interface ManagerPoolOptions {
    * 判断しない。**
    */
   onUsageObservation?: (observation: TokenRotatorObservation) => Promise<void>;
+  /**
+   * 名乗ってきた runner へ、いま撒いてある認証トークンを降ろす（Issue #393 PR3）。
+   *
+   * **プロファイル（`#pushProfile`）と同じ理由でここに要る** — runner は記憶
+   * ストアを読めないので、器が作り直されたときに降ろすのはデーモンの責任である。
+   *
+   * **これが無いと、起動時の撒き直しが「そのとき繋がっていた runner」にしか
+   * 届かない。** 後から上がってきた runner は器の環境変数のまま走り、そこで
+   * 起こしたマネージャーだけが古いトークンを使う——しかもその食い違いは、
+   * マネージャーの側からは見えない。
+   */
+  syncRunnerToken?: (runner: RunnerClient) => Promise<void>;
   stores: Stores;
   /** マネージャーからの出来事をクローンの受信箱へ流す。 */
   post: (event: InboxEvent) => void;
@@ -747,6 +759,7 @@ class Pool implements ManagerPool {
    * 揮発してよい — デーモンを作り直したら、使い捨ての probe が取り直す。
    */
   readonly #tokenIdentity: (() => { tokenId: string; generation: number } | undefined) | undefined;
+  readonly #syncRunnerToken: ((runner: RunnerClient) => Promise<void>) | undefined;
   readonly #onUsageObservation:
     ((observation: TokenRotatorObservation) => Promise<void>) | undefined;
   readonly #rateLimits = new Map<string, RateLimitFacts>();
@@ -855,6 +868,7 @@ class Pool implements ManagerPool {
     generateManagerId,
     tokenIdentity,
     onUsageObservation,
+    syncRunnerToken,
   }: ManagerPoolOptions) {
     this.#stores = stores;
     this.#post = post;
@@ -865,6 +879,7 @@ class Pool implements ManagerPool {
     this.#generateManagerId = generateManagerId ?? (() => `mgr-${randomUUID()}`);
     this.#tokenIdentity = tokenIdentity;
     this.#onUsageObservation = onUsageObservation;
+    this.#syncRunnerToken = syncRunnerToken;
     // **後から載った runner に自分から繋ぐ。** 名簿が動的である以上、受け口を開く
     // 契機を起動時にしか持たないと、後から現れた runner は永久に無言のままになる。
     this.#unsubscribe = runners.subscribe((runner) => {
@@ -1809,6 +1824,9 @@ class Pool implements ManagerPool {
       // 最初のマネージャーがプロファイルの届く前に走り出しうる。届いていない
       // ことは本人には見えないので、「たまに鍵が無い」という形で現れる。
       await this.#pushProfile(runner);
+      // **認証トークンも同じ位置で降ろす。** プロファイルと同じ理由——名乗り
+      // 任せにすると、最初のマネージャーが古いトークンで走り出しうる。
+      await this.#pushAgentToken(runner);
     })().catch((error: unknown) => {
       this.#connections.delete(runner);
       throw error;
@@ -3329,6 +3347,28 @@ class Pool implements ManagerPool {
    * を後から辿れない。ここは `managerId` を持たない（枠の事実はアカウント単位で、
    * どのマネージャーのターンで気づいたかは記憶の側の軸ではない）。
    */
+  /**
+   * 名乗ってきた runner へ、いま撒いてある認証トークンを降ろす。
+   *
+   * **失敗しても委譲は止めない**（`#pushProfile` と同じ）。ただし**黙って古い
+   * トークンで走らせない** — 跡を残す。
+   */
+  async #pushAgentToken(runner: RunnerClient): Promise<void> {
+    if (this.#stopped || this.#syncRunnerToken === undefined) return;
+    try {
+      await this.#syncRunnerToken(runner);
+    } catch (error) {
+      await this.#stores.journal
+        .append({
+          type: 'exchange',
+          with: 'self',
+          role: 'outbound',
+          text: `${runner.runnerId} に認証トークンを降ろせなかった（この runner で起こすマネージャーは器の環境変数のまま走る）: ${String(error)}`,
+        })
+        .catch(() => undefined);
+    }
+  }
+
   /** そのマネージャーのセッションが起きた瞬間の身元を覚える。 */
   #rememberTokenIdentity(managerId: string): void {
     const identity = this.#tokenIdentity?.();

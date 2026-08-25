@@ -441,3 +441,165 @@ describe('降りた本人へ「回す」を作らない（resetsAt が過去で�
     expect(await h.stores.tokens.readActive()).toMatchObject({ generation: 1 });
   });
 });
+
+/**
+ * 起動時の引き取り（Issue #393 PR3）。
+ *
+ * **これが無いと何が起きるか** — 撒いた先はプロセスと一緒に消えるが、現役の指名は
+ * 記憶ストアに残る。デーモンを再起動すると、**器の環境変数のトークンが走っているのに
+ * 記憶ストアは別のトークンを現役だと思っている**という食い違いが残り、次に枠へ
+ * 当たったとき**走ってもいないトークンを冷却へ入れて**候補を1本無駄に飛ばす。
+ */
+describe('restore（起動時の引き取り）', () => {
+  it('一度も回していなければ none（器の環境変数がそのまま効く）', async () => {
+    const h = harness();
+    await h.stores.tokens.replace([{ id: 'tok-a', label: 'first', value: 'value-a', order: 0 }]);
+
+    const outcome = await h.rotator.restore();
+
+    expect(outcome.kind).toBe('none');
+    // **撒かない。** 指名されていないものを起動時に撒くのは、回していないのに
+    // 回したことにする操作である。
+    expect(h.spreadCalls).toEqual([]);
+  });
+
+  it('現役として記録された行を撒き直す', async () => {
+    const h = harness();
+    await seedTwo(h);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-b', generation: 5, rotatedAt: AT });
+
+    const outcome = await h.rotator.restore();
+
+    expect(outcome.kind).toBe('restored');
+    if (outcome.kind !== 'restored') return;
+    expect(outcome.tokenId).toBe('tok-b');
+    expect(outcome.cooling).toBe(false);
+    expect(h.spreadCalls).toEqual([{ id: 'tok-b', value: 'value-b', generation: 5 }]);
+  });
+
+  it('世代を増やさない（引き取りは回転ではない）', async () => {
+    // **増やすと、まだ有効な観測が stale として捨てられる。**
+    const h = harness();
+    await seedTwo(h);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-b', generation: 5, rotatedAt: AT });
+
+    await h.rotator.restore();
+
+    expect(h.spreadCalls[0]?.generation).toBe(5);
+    expect(await h.stores.tokens.readActive()).toMatchObject({ generation: 5 });
+  });
+
+  it('記憶ストアへ書かない（updatedAt を動かさない）', async () => {
+    // 起動しただけで「変わった」ことにすると、どの行がいつ変わったかが取れなくなる。
+    const h = harness();
+    await seedTwo(h);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-b', generation: 5, rotatedAt: AT });
+    const before = await h.stores.tokens.list();
+
+    await h.rotator.restore();
+
+    expect(await h.stores.tokens.list()).toEqual(before);
+  });
+
+  it('冷却中でも撒き直す。ただし冷却中だったことを返す', async () => {
+    // **候補を選び直さない** — 選び直すのは枠に当たったときだけであり、起動を
+    // 新しい契機にしない。
+    const h = harness();
+    await h.stores.tokens.replace([
+      {
+        id: 'tok-a',
+        label: 'first',
+        value: 'value-a',
+        order: 0,
+        cooldownUntil: Date.parse(AT) + 5_000,
+      },
+      { id: 'tok-b', label: 'second', value: 'value-b', order: 1 },
+    ]);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 2, rotatedAt: AT });
+
+    const outcome = await h.rotator.restore();
+
+    expect(outcome.kind).toBe('restored');
+    if (outcome.kind !== 'restored') return;
+    expect(outcome.cooling).toBe(true);
+    // 冷却中の tok-a を撒いている（tok-b へ勝手に移らない）。
+    expect(h.spreadCalls).toEqual([{ id: 'tok-a', value: 'value-a', generation: 2 }]);
+    expect(outcome.why).toContain('冷却中');
+  });
+
+  it('指名の先の行が消えていたら dangling。撒かない', async () => {
+    const h = harness();
+    await seedTwo(h);
+    await h.stores.tokens.writeActive({ tokenId: 'ghost', generation: 3, rotatedAt: AT });
+
+    const outcome = await h.rotator.restore();
+
+    expect(outcome.kind).toBe('dangling');
+    expect(h.spreadCalls).toEqual([]);
+    // **記憶ストアへ書いて直さない**（次の当たりで回し手が正しい候補へ移る）。
+    expect(await h.stores.tokens.readActive()).toMatchObject({ tokenId: 'ghost' });
+  });
+
+  it('人間が外した行なら withheld。撒かない（人間の判断を実装が覆さない）', async () => {
+    const h = harness();
+    await h.stores.tokens.replace([
+      { id: 'tok-a', label: 'first', value: 'value-a', order: 0, disabledAt: AT },
+    ]);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
+
+    const outcome = await h.rotator.restore();
+
+    expect(outcome.kind).toBe('withheld');
+    expect(h.spreadCalls).toEqual([]);
+  });
+
+  it('失効している行も withheld', async () => {
+    const h = harness();
+    await h.stores.tokens.replace([
+      { id: 'tok-a', label: 'first', value: 'value-a', order: 0, invalidatedAt: AT },
+    ]);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
+
+    expect((await h.rotator.restore()).kind).toBe('withheld');
+    expect(h.spreadCalls).toEqual([]);
+  });
+
+  it('値が結果のどこにも出ない', async () => {
+    const h = harness();
+    await seedTwo(h);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-b', generation: 5, rotatedAt: AT });
+
+    const outcome = await h.rotator.restore();
+
+    expect(JSON.stringify(outcome)).not.toContain('value-b');
+  });
+
+  /**
+   * **これがこの修正の本体である。** 引き取りが無い場合の食い違いを、
+   * 「引き取った後は起きない」という形で測る。
+   */
+  it('引き取った後は、走ってもいないトークンを冷却へ入れない', async () => {
+    const h = harness();
+    await h.stores.tokens.replace([
+      { id: 'tok-a', label: 'first', value: 'value-a', order: 0 },
+      { id: 'tok-b', label: 'second', value: 'value-b', order: 1 },
+      { id: 'tok-c', label: 'third', value: 'value-c', order: 2 },
+    ]);
+    // 前回の稼働で tok-b まで回っていた、という状態。
+    await h.stores.tokens.writeActive({ tokenId: 'tok-b', generation: 2, rotatedAt: AT });
+
+    await h.rotator.restore();
+    // 引き取った後に枠へ当たる。
+    await h.rotator.observe({
+      notice: { kind: 'reached', text: "You've hit your org's monthly spend limit" },
+      observedBy: { tokenId: 'tok-b', generation: 2 },
+    });
+
+    const tokens = await h.stores.tokens.list();
+    // **冷却に入るのは、実際に走っていた tok-b だけである。**
+    expect(tokens.find((t) => t.id === 'tok-b')?.cooldownUntil).toBeDefined();
+    expect(tokens.find((t) => t.id === 'tok-a')).not.toHaveProperty('cooldownUntil');
+    // 次は tok-c（tok-a へ戻らない。order 順で tok-b の後ろ…ではなく ready の先頭）。
+    expect(await h.stores.tokens.readActive()).toMatchObject({ generation: 3 });
+  });
+});
