@@ -174,7 +174,34 @@ export interface PersonaStore {
 export type ExchangeWith = Extract<JournalEntry, { type: 'exchange' }>['with'];
 
 export interface JournalQuery {
+  /**
+   * 返す最大件数。
+   *
+   * **`0` = 0件（issue #425）。** 「絞らない」ではなく「0件くれ」という指定
+   * として扱う——`with: []` と同じ理由（下の `with` の doc）。**契約
+   * （3実装で揃える。`journal-query-edge-contract.ts` の
+   * `verifyJournalStoreQueryEdgeContract` が測る）:**
+   *
+   * - `limit: 0` = 0件
+   * - `limit: N`（`N >= 1`）は従来どおり N 件で切る——1文字も変えていない
+   */
   limit?: number;
+  /**
+   * エントリの種別で絞る。
+   *
+   * **`types: []`（空配列）= 0件（issue #425）。** 「絞らない」ではなく
+   * 「どれにも当たらない」という指定として扱う——`with: []` が #418 で
+   * 「0件」に決まっている（下の `with` の doc）ので、それに揃えた。
+   * **以前は pg だけが `types: []` を「絞らない」に倒していた**（`length
+   * === 0` を特別扱いする条件を持っていたのが `types` の pg 実装だけ
+   * だった。`packages/storage-pg/src/journal.ts` の `types` の行を参照）。
+   * **契約（3実装で揃える。`journal-query-edge-contract.ts` の
+   * `verifyJournalStoreQueryEdgeContract` が測る）:**
+   *
+   * - 未指定 = 絞らない（既存の挙動を1文字も変えない）
+   * - 指定 = その種別だけを返す
+   * - `[]` = 0件
+   */
   types?: JournalEntryType[];
   /** ISO 8601。この時刻以降のエントリだけ返す。 */
   since?: string;
@@ -199,9 +226,10 @@ export interface JournalQuery {
    *   （`decision` / `tool_use` 等）は `with` を持たないので、絞りを指定した
    *   時点で1件も返らない — `types` でそれらを別途除く必要はない
    * - **`[]`（空配列）= 0件。** 「どれにも当たらない」という指定として扱う。
-   *   ⚠️ これは `types: []` の挙動（実装間で食い違っている — インメモリ / fs
-   *   は0件、pg は絞らない。#418 の範囲外）とは**別に決めた**契約であって、
-   *   `types` の食い違いに倣ったものではない
+   *   **この issue（#418）の時点では `types: []` の挙動が実装間で食い違って
+   *   おり（インメモリ / fs は0件、pg は絞らない）、ここは`別に決めた`契約
+   *   だった。#425 で `types` もここへ揃えた**（上の `types` の doc）ので、
+   *   いまは同じ契約である
    * - **`limit` より前に効く。** ここが要点である — `GET /conversations` /
    *   `GET /conversations/:id` / `conversation_read` はいずれも
    *   `types: ['exchange']` で件数の窓を切ってから `with === 'human'` に

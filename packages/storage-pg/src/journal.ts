@@ -80,9 +80,13 @@ export class PgJournalStore implements JournalStore {
     const filters = [
       ...(query.since === undefined ? [] : [gte(journal.at, new Date(query.since))]),
       ...(query.until === undefined ? [] : [lte(journal.at, new Date(query.until))]),
-      ...(query.types === undefined || query.types.length === 0
-        ? []
-        : [inArray(journal.type, query.types)]),
+      // **`types: []`（空配列）も「絞らない」ではなく「どれにも当たらない」
+      // へ倒す（issue #425）。すぐ下の `with` と同じ形——`length === 0` を
+      // 特別扱いする条件を持っていたのは `types` だけだった。空配列が
+      // そのまま `inArray` へ渡り、drizzle-orm の `inArray` が空配列に対して
+      // `sql\`false\`` を返す（下の `with` のコメント参照）ので、0件という
+      // 契約が構造的に満たされる。
+      ...(query.types === undefined ? [] : [inArray(journal.type, query.types)]),
       // **`with` は `.limit()` より前（この `where` 節）で効かせる**
       // （issue #418 の穴の本体）。`entry` は jsonb なので `->>'with'` で
       // 引く — `exchange` を持たない種別ではこの式が `null` を返すので、

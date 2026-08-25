@@ -42,6 +42,13 @@ export class FsJournalStore implements JournalStore {
     const order = query.order ?? 'desc';
     const found: JournalEntry[] = [];
     const limit = query.limit ?? Number.POSITIVE_INFINITY;
+    // **`limit: 0` = 0件（issue #425）。** 下のループは「push してから件数を
+    // 判定する」形（`found.push(entry)` の直後に `found.length >= limit` を
+    // 見る）なので、`limit: 0` を素通しすると 1 件目を push した後で初めて
+    // 0 >= 0 に当たり、1件返ってしまう（0 件くれという指定なのに 1 件返る
+    // off-by-one）。ここで早期 return するのが最小の直し方——ループの中の
+    // 判定式（`limit >= 1` のときの挙動）は1文字も変えていない。
+    if (limit <= 0) return found;
     // ファイル名は追記時の UTC 日付なので、`since` より古い日のファイルは開かなくてよい。
     // 件数指定の無い `since` 問い合わせ（日報・要約）は M3 から常時走るため、
     // ここで打ち切らないと日誌全部を毎回読むことになる。

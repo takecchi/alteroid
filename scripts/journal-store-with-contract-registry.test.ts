@@ -127,6 +127,7 @@ type RegistryEntry =
 const REQUIRED_CONTRACTS = [
   'verifyJournalStoreWithContract',
   'verifyJournalStoreOrderContract',
+  'verifyJournalStoreQueryEdgeContract',
 ] as const;
 
 /**
@@ -145,6 +146,7 @@ const KNOWN_IMPLEMENTATIONS: Record<string, RegistryEntry> = {
     testFile: [
       'packages/core/src/journal-with-contract.test.ts',
       'packages/core/src/journal-order-with-contract.test.ts',
+      'packages/core/src/journal-query-edge-contract.test.ts',
     ],
     contracts: REQUIRED_CONTRACTS,
   },

@@ -232,6 +232,16 @@ export {
   type JournalStoreOrderContractSubject,
 } from './journal-order-with-contract.js';
 /**
+ * `JournalQuery` の退化した値（`types: []` / `limit: 0`）の契約（issue #425）。
+ * 3実装（インメモリ / `storage-fs` / `storage-pg`）それぞれの歯がこれを
+ * 呼んで揃っていることを測る — 1つで測って3つとも測ったことにしない
+ * （`verifyJournalStoreWithContract` と同じ作法）。
+ */
+export {
+  verifyJournalStoreQueryEdgeContract,
+  type JournalStoreQueryEdgeContractSubject,
+} from './journal-query-edge-contract.js';
+/**
  * クローンの自己認識。正典（`docs/*.md`）の全文はビルド時に焼き込まれる
  * （`scripts/write-canon.mjs`）。要約を手書きしないこと — docs と二重管理になる。
  */
