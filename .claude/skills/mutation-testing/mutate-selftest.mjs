@@ -44,6 +44,7 @@ export const SELFTEST_SCENARIOS = [
   'spec-validation',
   'judgement-forbidden-word-boundary',
   'restore-status-comparison',
+  'judgement-undelivered-gate',
   'all',
 ];
 
@@ -1116,6 +1117,207 @@ function scenarioRestoreStatusComparison() {
   };
 }
 
+// ── 10. undelivered の gate（#444） ──────────────────────────────────
+//
+// 受け入れ条件: `undelivered` を「テスト結果に委ねてよいか」で狭く gate する
+// 3分岐が意図どおりに分かれること。**そして gate を通ったとき、警告の注記が
+// 実際に生成されて判定行に載ること。**
+//
+// **なぜ build を1度も回さないか。** `judge()` は `spec` / `artifactResult` /
+// `testResult` を受け取るだけで、ファイルもプロセスも触らない。⟹ 合成した
+// `artifactResult` を渡せば全分岐を表で測れる。この器は資源が細く、build を
+// 挟むシナリオは pids が尽きて落ちうるので、**純関数として測れるものに build を
+// 挟まない**（`spec-validation` と同じ方針。あちらは fixture を書くが、ここは
+// ファイルを1つも触らない）。
+//
+// **⚠️ 注記の「中身」まで受け入れ条件に含めるのは意図である。** 分類
+// （検出/生存/不明）だけを見る歯は、注記が空文字や `null` に化けても緑のまま
+// になる。#444 が求めたのは「テスト結果に委ねたこと」と「spec 側の誤りの
+// 可能性」を出力に名乗らせることなので、名乗る中身そのものを測る。文言を
+// 変えるときはここも一緒に変えること — それは回帰ではなく契約の変更である。
+//
+// **⚠️ 「注記が0件だった」で緑にしない。** 期待が「注記が出ない」行ばかりでも
+// 表は全部通る。だから「gate を通った行が1件以上あり、そこで注記が実際に
+// 生成された」ことを別に assert する（下の `gateNoteGeneratedCount`）。
+// 測った0は「入らない」を保証しない。
+
+const GATE_TESTS_RED = {
+  exitCode: 1,
+  raw: 'Test Files  1 failed | 152 passed (153)\nTests  1 failed | 3094 passed (3095)\n',
+  filesLine: 'Test Files  1 failed | 152 passed (153)',
+  testsLine: 'Tests  1 failed | 3094 passed (3095)',
+};
+
+const GATE_TESTS_GREEN = {
+  exitCode: 0,
+  raw: 'Test Files  153 passed (153)\nTests  3095 passed (3095)\n',
+  filesLine: 'Test Files  153 passed (153)',
+  testsLine: 'Tests  3095 passed (3095)',
+};
+
+// 注記が「在る」と言うために必ず含まれていなければならない字句。
+// 存在だけでなく、名乗っている内容を見る（上の doc の理由）。
+const GATE_NOTE_MARKERS = ['この判定はテスト結果に委ねている', 'spec 側の誤りの可能性がある'];
+
+function scenarioJudgementUndeliveredGate() {
+  section('selftest: 10. undelivered の gate と、その警告の注記（#444）');
+  requireNoMarker('judgement-undelivered-gate');
+
+  const gatePassing = {
+    artifactState: 'undelivered',
+    buildExitCode: 0,
+    artifactFileExists: true,
+  };
+
+  const cases = [
+    {
+      id: 'selftest-gate-open-red',
+      label: '3条件を全部満たす（build exit 0 / ファイル実在 / 照合だけ外れ）+ テストが赤',
+      artifactResult: gatePassing,
+      testResult: GATE_TESTS_RED,
+      expectCategory: '検出',
+      expectGateNote: true,
+    },
+    {
+      id: 'selftest-gate-open-green',
+      label: '3条件を全部満たす + テストが緑',
+      artifactResult: gatePassing,
+      testResult: GATE_TESTS_GREEN,
+      expectCategory: '生存',
+      expectGateNote: true,
+    },
+    {
+      // **build が落ちた場合にファイルが残っているかは、コードは保証していない。**
+      // tsup の clean が先に走るので実際には消えることが多い、というだけである。
+      // だからここは `artifactFileExists: true` のまま build だけを落として、
+      // `buildExitCode` が独立した安全弁として効いていることを測る。
+      id: 'selftest-gate-build-failed',
+      label: 'build が失敗（buildExitCode !== 0）— テストが赤でも不明のまま',
+      artifactResult: { artifactState: 'undelivered', buildExitCode: 1, artifactFileExists: true },
+      testResult: GATE_TESTS_RED,
+      expectCategory: '不明',
+      expectGateNote: false,
+    },
+    {
+      id: 'selftest-gate-file-missing',
+      label: '成果物ファイルが存在しない（artifactFileExists === false）— テストが赤でも不明のまま',
+      artifactResult: { artifactState: 'undelivered', buildExitCode: 0, artifactFileExists: false },
+      testResult: GATE_TESTS_RED,
+      expectCategory: '不明',
+      expectGateNote: false,
+    },
+    // ── 対照: `undelivered` 以外は gate に触れない（検査が過剰でないこと） ──
+    {
+      id: 'selftest-gate-delivered-red',
+      label: '対照: delivered（届いたと確認できた）+ テストが赤',
+      artifactResult: { artifactState: 'delivered', buildExitCode: 0, artifactFileExists: true },
+      testResult: GATE_TESTS_RED,
+      expectCategory: '検出',
+      expectGateNote: false,
+    },
+    {
+      id: 'selftest-gate-delivered-green',
+      label: '対照: delivered + テストが緑',
+      artifactResult: { artifactState: 'delivered', buildExitCode: 0, artifactFileExists: true },
+      testResult: GATE_TESTS_GREEN,
+      expectCategory: '生存',
+      expectGateNote: false,
+    },
+    {
+      id: 'selftest-gate-not-checked',
+      label: '対照: not-checked（spec.artifact 未指定で build の成否しか見ていない）+ テストが赤',
+      artifactResult: { artifactState: 'not-checked', buildExitCode: 0 },
+      testResult: GATE_TESTS_RED,
+      expectCategory: '検出',
+      expectGateNote: false,
+    },
+    {
+      id: 'selftest-gate-not-applicable',
+      label: '対照: not-applicable（target が無く build を飛ばした）+ テストが緑',
+      artifactResult: { artifactState: 'not-applicable', buildSkipped: true },
+      testResult: GATE_TESTS_GREEN,
+      expectCategory: '生存',
+      expectGateNote: false,
+    },
+  ];
+
+  const results = [];
+  for (const c of cases) {
+    let category = null;
+    let text = null;
+    let error = null;
+    try {
+      const judgement = judge({ id: c.id }, c.artifactResult, c.testResult);
+      category = judgement.category;
+      text = judgement.text;
+    } catch (err) {
+      error = err.message;
+    }
+    const hasGateNote = text === null ? null : GATE_NOTE_MARKERS.every((m) => text.includes(m));
+    const mentionsArtifactState =
+      text === null ? null : text.includes(`artifactState: ${c.artifactResult.artifactState}`);
+    const categoryOk = category === c.expectCategory;
+    const gateNoteOk = hasGateNote === c.expectGateNote;
+    log(
+      `[${c.label}] 判定=${category ?? `(例外: ${error})`} 期待=${c.expectCategory} ` +
+        `/ 注記=${hasGateNote} 期待=${c.expectGateNote} ` +
+        `/ artifactState を名乗った=${mentionsArtifactState}`,
+    );
+    results.push({
+      id: c.id,
+      label: c.label,
+      category,
+      expectCategory: c.expectCategory,
+      categoryOk,
+      hasGateNote,
+      expectGateNote: c.expectGateNote,
+      gateNoteOk,
+      mentionsArtifactState,
+      error,
+    });
+  }
+
+  const bad = results.filter(
+    (r) => !r.categoryOk || !r.gateNoteOk || r.mentionsArtifactState !== true,
+  );
+  if (bad.length > 0) {
+    throw new HarnessError(
+      `undelivered の gate の回帰: ${bad.length}/${results.length} 件が期待と違う。` +
+        `詳細: ${JSON.stringify(bad)}`,
+    );
+  }
+
+  // **この表が「何も測っていない」形に退化していないことを、別に測る。**
+  // 期待が「注記が出ない」行だけになったり、注記の生成側が黙って `null` を
+  // 返すようになったりしても、上の照合だけなら全部通ってしまう。
+  const gateNoteGeneratedCount = results.filter((r) => r.hasGateNote === true).length;
+  if (gateNoteGeneratedCount === 0) {
+    throw new HarnessError(
+      '警告の注記が一度も生成されなかった。gate を通る行が表から消えたか、' +
+        'describeUndeliveredTestResultGate が黙って null を返している。' +
+        '「注記が0件」を緑にしないための歯である。',
+    );
+  }
+
+  // このシナリオはファイルを1つも触らない。no-op の歯だが安いので置く
+  // （`spec-validation` の `cleanAfterward` と同じ理由 — 確かめた値と
+  // 計算しただけの値を、読み手が見分けられるようにする）。
+  const markerAfter = markerExists();
+  if (markerAfter) {
+    throw new HarnessError(
+      'このシナリオはファイルを1つも触らないはずなのに、印が生まれた。' +
+        'judge() が副作用を持つようになった疑いがある。',
+    );
+  }
+
+  return {
+    scenario: 'judgement-undelivered-gate',
+    cases: results,
+    gateNoteGeneratedCount,
+    markerAfter,
+  };
+}
+
 const SCENARIO_FNS = {
   'backup-corruption': scenarioBackupCorruption,
   'weak-tooth': scenarioWeakTooth,
@@ -1127,6 +1329,7 @@ const SCENARIO_FNS = {
   'spec-validation': scenarioSpecValidation,
   'judgement-forbidden-word-boundary': scenarioJudgementForbiddenWordBoundary,
   'restore-status-comparison': scenarioRestoreStatusComparison,
+  'judgement-undelivered-gate': scenarioJudgementUndeliveredGate,
 };
 
 export function runSelftestScenario(scenario) {
