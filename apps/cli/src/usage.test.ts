@@ -84,8 +84,13 @@ function aggregate(over: Partial<UsageView>): UsageView {
     rows: [],
     since: '2026-08-01T00:00:00.000Z',
     layersSince: '2026-08-01T00:00:00.000Z',
+    // **トークンの軸も既定で「観測している」側にしてある。** ここを null にすると
+    // 全テストの出力に「まだ1件も記録していない」の行が入り、その行がある状態を
+    // 正常として固定してしまう（この軸を測るテストは自分で null を渡す）。
+    tokensSince: '2026-08-01T00:00:00.000Z',
     beforeLedger: false,
     beforeLayers: false,
+    beforeTokens: false,
     notice: USAGE_ESTIMATE_NOTICE,
     account: { state: 'unknown' },
     ...over,

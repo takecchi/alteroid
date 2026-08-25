@@ -2598,6 +2598,19 @@ class Pool implements ManagerPool {
     });
     record.attached = true;
     record.job.runnerId = runner.runnerId;
+    // **resume も「セッションが起きる瞬間」である**（`#tokenIdentities` の doc）。
+    //
+    // ここが抜けていた。`start` と、引き取りで**既に生きていた**セッション
+    // （`restore` の living の枝）では覚えていたのに、**resume を出して起こし直した
+    // セッションだけ身元を持たなかった。** 帰結は2つあり、どちらも静かである:
+    //
+    // 1. そのマネージャーの観測が `observedBy` を持たないので、**世代の照合が
+    //    素通しになる**（同時に枠へ当たった回に、プールを人数分消費しうる）
+    // 2. そのマネージャーの消費が台帳で**トークンの帰属を持たない**
+    //    （#393 受け入れ基準6 が、引き取られた委譲についてだけ答えられない）
+    //
+    // **どちらも合計を変えないので、出力を見ても気づけない。**
+    this.#rememberTokenIdentity(record.job.id);
     // 戻れたなら諦めを忘れる（人間やクローンが起こし直した後も自動で拾える）。
     this.#unresumable.delete(record.job.id);
     return 'resumed';
@@ -2886,6 +2899,10 @@ class Pool implements ManagerPool {
         // 記憶ストアの鍵を持たないので書けない）。読む→畳む→書くはストアの
         // 1操作に閉じてある。
         const at = new Date();
+        // **1回だけ引いて使い回す。** 2回引く形にすると、間に回し手が
+        // `#tokenIdentities` を書き換えたときに「有無の判定」と「使う値」が
+        // 別の世代を見る（有ると判定してから消える形は起きないが、逆は起きる）。
+        const tokenIdentity = this.#tokenIdentities.get(event.managerId);
         let fold;
         try {
           fold = await this.#stores.usage.record({
@@ -2903,6 +2920,13 @@ class Pool implements ManagerPool {
             snapshot: { sessionId: event.sessionId, models: event.models },
             // streaming-input の長寿命セッションなので、降りてくるのは走行合計。
             accumulation: 'cumulative',
+            // **そのマネージャーのセッションが起きた瞬間の身元**（`#tokenIdentities`）。
+            // `#tokenIdentity?.()` を読み直さないのは、枠の観測と同じ理由である —
+            // 回した後に届いた前のセッションぶんの消費が、新しいトークンに付く。
+            //
+            // **無いときは渡さない。** プールが空の器では毎回 undefined になる
+            // ＝ 受け入れ基準7（既定の構成の挙動を1文字も変えない）。
+            ...(tokenIdentity === undefined ? {} : { tokenId: tokenIdentity.tokenId }),
           });
         } catch {
           // 台帳に積めないことで仕事は止めない。ただし黙って消さない。

@@ -584,6 +584,20 @@ export const usageRowSchema = z.object({
   model: z.string(),
   layer: usageLayerSchema,
   site: usageSiteSchema,
+  /**
+   * **どの認証トークンで**使ったか（`AgentToken.id`。Issue #393 受け入れ基準6）。
+   *
+   * **無いことに意味がある。省略可能なのはそのためである。** プールを使っていない
+   * 器（器の環境変数だけ）では現役の指名が無いので、ここは埋まらない。埋めると
+   * 「そのトークンで使った」という**していない観測**を作ることになる（AGENTS.md
+   * 地雷表「取れない軸に 0 の行を作る」の同型 — 0 の代わりに id を捏造する形）。
+   *
+   * **どこからが観測かは {@link usageAggregateSchema} の `tokensSince` が持つ。**
+   * `layer` / `site` と違って、**この軸は「後から入った」だけでなく「構成によって
+   * そもそも取れない」。** だから始点は最初の record では入らず、**本物の帰属を
+   * 1件記録したときにだけ**入る（`layeredAt` との違い。storage 側の doc も参照）。
+   */
+  tokenId: z.string().min(1).optional(),
   totals: usageTotalsSchema,
   updatedAt: isoDateTime,
 });
@@ -606,6 +620,15 @@ export const usageQuerySchema = z.object({
   layer: usageLayerSchema.optional(),
   /** この場所だけ。 */
   site: usageSiteSchema.optional(),
+  /**
+   * この認証トークンだけ（`AgentToken.id`）。
+   *
+   * **帰属が無い行を引く手はここに作らない。** 「トークン軸が空の行だけ」を絞れる
+   * 形にすると、その集合が「そのトークンで使った分」と並んで1つの選択肢に見える。
+   * 取れていない分を数えたいなら、絞らずに引いて `byToken` の `null` を見る
+   * （{@link usageBreakdownSchema}）。
+   */
+  tokenId: z.string().min(1).optional(),
 });
 
 export type UsageQuery = z.infer<typeof usageQuerySchema>;
@@ -646,6 +669,25 @@ export const usageAggregateSchema = z.object({
    * 「合計が 0 なのか記録が無いのか」、こちらは「層の内訳が本物か既定値か」である。
    */
   beforeLayers: z.boolean(),
+  /**
+   * **認証トークンの軸**が記録を始めた時刻。まだ1件も**帰属付きで**記録して
+   * いなければ null（Issue #393 受け入れ基準6）。
+   *
+   * **`layersSince` と同じ形だが、null の意味が1つ多い。** あちらの null は
+   * 「台帳へまだ1件も積んでいない」だけだが、こちらは**それに加えて**「プールを
+   * 使っていないので、積んでいても帰属が取れない」を含む。だから
+   * **`since` が非 null でもここは null でありうる** — それが既定の構成である
+   * （受け入れ基準7: プールが空の器の挙動を1文字も変えない）。
+   */
+  tokensSince: isoDateTime.nullable(),
+  /**
+   * 照会された範囲の一部（または全部）が**認証トークンの軸**の始点より前だったか。
+   *
+   * **真なら「その範囲にトークンの帰属は無い」と言うこと。** `beforeLayers` は
+   * 「内訳が既定値である」と言うが、こちらは**内訳がそもそも無い**と言う。
+   * 0 でも既定値でもなく、**取れていない**である。
+   */
+  beforeTokens: z.boolean(),
   /** 数字に必ず添える但し書き。 */
   notice: z.literal(USAGE_ESTIMATE_NOTICE),
 });
@@ -678,6 +720,20 @@ export const usageBreakdownSchema = z.object({
    * — {@link usageSiteSchema}）。
    */
   bySite: z.array(z.object({ site: usageSiteSchema, totals: usageTotalsSchema })),
+  /**
+   * **どの認証トークンで**使ったか（Issue #393 受け入れ基準6）。
+   *
+   * **`tokenId` が `null` の要素は「取れていない分」であって、消さない。** 落とすと
+   * この軸だけ `total` に足し合わなくなり、**読み手からはそれが分からない**（どの
+   * 軸も出てこない値を 0 で補わない約束なので、「足りない」ことに気づく手がかりが
+   * 無い）。**値を作らず、取れないことを出力に出す**のがここの形である
+   * （AGENTS.md 地雷表）。`null` は行が実際に持っていない事実であって、捏造した
+   * 分類ではない。
+   *
+   * **出てこないトークンを 0 で補わないこと**は他の軸と同じ — プールに居るが
+   * 使われていないトークンはここに現れない（現れたら「0 使った」に見える）。
+   */
+  byToken: z.array(z.object({ tokenId: z.string().min(1).nullable(), totals: usageTotalsSchema })),
 });
 
 export type UsageBreakdown = z.infer<typeof usageBreakdownSchema>;

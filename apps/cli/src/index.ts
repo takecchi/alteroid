@@ -169,6 +169,7 @@ program
   // しかできない分析が生まれる（PRD「インターフェース」）。
   .option('--layer <layer>', '誰が（clone / manager）')
   .option('--site <site>', 'どこで（session / distill）')
+  .option('--token <id>', 'どの認証トークンで（alteroid token list の id）')
   .action(
     async (options: {
       from?: string;
@@ -176,6 +177,7 @@ program
       manager?: string;
       layer?: string;
       site?: string;
+      token?: string;
     }) => {
       await usageCommand(options);
     },

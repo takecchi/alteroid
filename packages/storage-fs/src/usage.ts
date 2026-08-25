@@ -69,11 +69,30 @@ const fileSchema = z.object({
    * 層を足す前の期間が「クローンは使っていなかった」と読める。
    */
   layeredAt: z.string().datetime({ offset: true }).nullable().default(null),
+  /**
+   * **認証トークンの軸**が記録を始めた時刻。まだ1件も**帰属付きで**記録して
+   * いなければ null（Issue #393 受け入れ基準6）。
+   *
+   * **`layeredAt` と入れる時機が違う。** あちらは最初の `record` で入る（層と場所は
+   * 必ず取れるので、記録が始まった時点で軸も始まっている）。こちらは
+   * **`tokenId` が付いた `record` で初めて入る** — プールを使っていない器では
+   * `record` が何万回来ても最後まで null である。ここを `layeredAt` と揃えて
+   * 入れると、**トークンを1本も持っていない器が「トークン軸を観測している」と
+   * 名乗る**（そして `byToken` は `null` の1件だけを返すので、出力からは
+   * 「1本のトークンで全部使った」と読める）。
+   */
+  tokensAt: z.string().datetime({ offset: true }).nullable().default(null),
 });
 
 type UsageFile = z.infer<typeof fileSchema>;
 
-const EMPTY: UsageFile = { rows: {}, baselines: {}, startedAt: null, layeredAt: null };
+const EMPTY: UsageFile = {
+  rows: {},
+  baselines: {},
+  startedAt: null,
+  layeredAt: null,
+  tokensAt: null,
+};
 
 function rowKey(
   date: string,
@@ -81,6 +100,7 @@ function rowKey(
   model: string,
   layer: UsageLayer,
   site: UsageSite,
+  tokenId: string | undefined,
 ): string {
   // date / managerId / model は人間や SDK が決める自由な文字列なので、区切りに
   // 使わない制御文字（U+0000）を挟む。layer / site は enum なので自由な文字列では
@@ -90,7 +110,13 @@ function rowKey(
   // git がこのファイルを binary と判定し、**PR の差分が1行も読めなくなる**（実際に
   // なっていた）。grep / sed も黙って外す。実行時の値はどちらでも同じなので、
   // 壊れていることが出力に出てこない側の失敗である。
-  return `${date}\u0000${managerId}\u0000${model}\u0000${layer}\u0000${site}`;
+  //
+  // **トークンは省略されうるので、空の区画として鍵へ入れる。** 鍵から外すと、
+  // 回した前後の増分が同じ行へ足し込まれ、`tokenId` は先に入った側の値のまま
+  // 残る ＝ 出力から見分けられない誤帰属になる（層と場所と同じ話）。**空文字を
+  // 「トークンが無い」の印として使うのは鍵の中だけで、値には持ち込まない**
+  // （`rows` の要素は `tokenId` を持たないままである）。
+  return `${date}\u0000${managerId}\u0000${model}\u0000${layer}\u0000${site}\u0000${tokenId ?? ''}`;
 }
 
 /**
@@ -121,13 +147,29 @@ function baselineKey(layer: UsageLayer, managerId: string): string {
 function normalizeKeys(file: UsageFile): UsageFile {
   const rows: UsageFile['rows'] = {};
   for (const row of Object.values(file.rows)) {
-    rows[rowKey(row.date, row.managerId, row.model, row.layer, row.site)] = row;
+    rows[rowKey(row.date, row.managerId, row.model, row.layer, row.site, row.tokenId)] = row;
   }
   const baselines: UsageFile['baselines'] = {};
   for (const baseline of Object.values(file.baselines)) {
     baselines[baselineKey(baseline.layer, baseline.managerId)] = baseline;
   }
   return { ...file, rows, baselines };
+}
+
+/**
+ * 帰属の無い行を最後に置く並び（`usage-format.ts` の `groupByToken` と同じ向き）。
+ *
+ * **番兵の文字で代用しないこと。** `??` で U+FFFF のような「いちばん大きい文字」へ
+ * 倒すと、その文字が実際に id に現れたときだけ静かに順序が壊れる（id の作り方は
+ * ここの管轄ではない）。**pg 側と向きを揃えること**（あちらは列が `not null` で
+ * 空文字が入るので、`nullif` を通してから nulls last で並べている）。器が違うだけで
+ * 行の並びが変わると、同じ照会が口によって違う順で出る。
+ */
+function compareTokenId(a: string | undefined, b: string | undefined): number {
+  if (a === b) return 0;
+  if (a === undefined) return 1;
+  if (b === undefined) return -1;
+  return a.localeCompare(b);
 }
 
 function addTotals(a: UsageTotals, b: UsageTotals): UsageTotals {
@@ -174,6 +216,21 @@ function isBeforeLayers(layeredAt: string | null, from: string | undefined): boo
 }
 
 /**
+ * 照会範囲の一部でも**認証トークンの軸**の始点より前にかかっていたか。
+ *
+ * 上の2つと同じ形だが、**null で真を返す道がいちばんよく通る。** 層の軸は最初の
+ * record で始まるので `layeredAt` が null なのは記録が1件も無いときだけだが、
+ * トークンの軸は**プールを使っていない器では最後まで始まらない**（`tokensAt` の
+ * doc）。だからここは「まだ始まっていない」ではなく「この器では取れない」の
+ * 意味で真になることがあり、それを出力に出すのは呼び出し側である。
+ */
+function isBeforeTokens(tokensAt: string | null, from: string | undefined): boolean {
+  if (tokensAt === null) return true;
+  if (from === undefined) return true;
+  return from < usageDate(new Date(tokensAt));
+}
+
+/**
  * 利用状況の台帳 = 1枚の JSON（`~/.alteroid/usage/usage.json`）。
  *
  * pg 版と同じ4つの概念を1ファイルに持つ: 日次の増分（`rows`）、累積を持つ主体
@@ -206,6 +263,7 @@ export class FsUsageStore implements UsageStore {
     at: string;
     snapshot: UsageSnapshot;
     accumulation: UsageAccumulation;
+    tokenId?: string;
   }): Promise<UsageFold> {
     return this.#mutate((file) => {
       // **累積の器は `query()` 呼び出しの寿命で閉じる**（`usage.ts` の
@@ -228,7 +286,14 @@ export class FsUsageStore implements UsageStore {
       // 増えていないモデルの行は作らない。fold が既に 0 のモデルを delta から
       // 落としているので、ここは delta にある分だけを足し込めばよい。
       for (const [model, delta] of Object.entries(fold.delta)) {
-        const key = rowKey(input.date, input.managerId, model, input.layer, input.site);
+        const key = rowKey(
+          input.date,
+          input.managerId,
+          model,
+          input.layer,
+          input.site,
+          input.tokenId,
+        );
         const existing = rows[key];
         rows[key] = {
           date: input.date,
@@ -236,6 +301,10 @@ export class FsUsageStore implements UsageStore {
           model,
           layer: input.layer,
           site: input.site,
+          // **無いときはキーそのものを置かない。** `tokenId: undefined` を書くと
+          // JSON へは出ないので同じに見えるが、`storedRowSchema` を通した後の
+          // オブジェクトの形が呼び出しごとに揺れる。取れない軸に値を作らない。
+          ...(input.tokenId === undefined ? {} : { tokenId: input.tokenId }),
           totals: existing === undefined ? delta : addTotals(existing.totals, delta),
           updatedAt: input.at,
         };
@@ -253,6 +322,10 @@ export class FsUsageStore implements UsageStore {
           // 層の軸が始まった時刻も同じく1度だけ。**`startedAt` と揃えて入れない**
           // — 台帳のほうが先に始まっている DB では別の時刻になる。
           layeredAt: file.layeredAt ?? input.at,
+          // **トークンの軸は「帰属が付いた record」でだけ始まる**（`tokensAt` の doc）。
+          // ここを `?? input.at` だけにすると、プールを1本も持っていない器が
+          // 「トークン軸を観測している」と名乗る。
+          tokensAt: file.tokensAt ?? (input.tokenId === undefined ? null : input.at),
         },
         result: { delta: fold.delta, baseline: nextBaseline, reset: fold.reset },
       };
@@ -268,6 +341,7 @@ export class FsUsageStore implements UsageStore {
         if (query.managerId !== undefined && row.managerId !== query.managerId) return false;
         if (query.layer !== undefined && row.layer !== query.layer) return false;
         if (query.site !== undefined && row.site !== query.site) return false;
+        if (query.tokenId !== undefined && row.tokenId !== query.tokenId) return false;
         return true;
       })
       .sort(
@@ -276,15 +350,18 @@ export class FsUsageStore implements UsageStore {
           a.managerId.localeCompare(b.managerId) ||
           a.model.localeCompare(b.model) ||
           a.layer.localeCompare(b.layer) ||
-          a.site.localeCompare(b.site),
+          a.site.localeCompare(b.site) ||
+          compareTokenId(a.tokenId, b.tokenId),
       );
 
     return usageAggregateSchema.parse({
       rows,
       since: file.startedAt,
       layersSince: file.layeredAt,
+      tokensSince: file.tokensAt,
       beforeLedger: isBeforeLedger(file.startedAt, query.from),
       beforeLayers: isBeforeLayers(file.layeredAt, query.from),
+      beforeTokens: isBeforeTokens(file.tokensAt, query.from),
       notice: USAGE_ESTIMATE_NOTICE,
     });
   }

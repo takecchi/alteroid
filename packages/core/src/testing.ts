@@ -74,10 +74,14 @@ function usageRowKey(
   model: string,
   layer: UsageLayer,
   site: UsageSite,
+  tokenId: string | undefined,
 ): string {
   // **区切りもドライバと同じ制御文字にする。** 空白にすると、id に空白を含む actor で
   // この器だけが鍵をぶつける（あるいはぶつけない）＝ 本物と違う結果を静かに返す。
-  return `${date}\u0000${managerId}\u0000${model}\u0000${layer}\u0000${site}`;
+  //
+  // **トークンも鍵に入れる**（ドライバと同じ）。外すと、回した前後の増分が同じ行へ
+  // 足し込まれる形をこの器だけが通してしまい、誤帰属のテストが緑になる。
+  return `${date}\u0000${managerId}\u0000${model}\u0000${layer}\u0000${site}\u0000${tokenId ?? ''}`;
 }
 
 /** 累積の基準の鍵。**主体は「層 × actor」である**（`usage.ts` の `usageBaselineSchema`）。 */
@@ -599,9 +603,10 @@ export function createMemoryStores(): Stores {
   const usageBaselines = new Map<string, UsageBaseline>();
   let usageStartedAt: string | null = null;
   let usageLayeredAt: string | null = null;
+  let usageTokensAt: string | null = null;
 
   const usage: UsageStore = {
-    async record({ layer, site, managerId, date, at, snapshot, accumulation }) {
+    async record({ layer, site, managerId, date, at, snapshot, accumulation, tokenId }) {
       // 累積の器は `query()` 呼び出しの寿命で閉じる（`usage.ts` の
       // `usageAccumulationSchema`）。1回で閉じる呼び出しに基準を持たせると、
       // 前回より高くついた回だけが差に縮んで黙って目減りする。
@@ -622,8 +627,12 @@ export function createMemoryStores(): Stores {
       // 層の軸の始点も1度だけ。**`usageStartedAt` と揃えて入れない** — 台帳の
       // ほうが先に始まっている器では別の時刻になる。
       usageLayeredAt ??= at;
+      // **トークンの軸は帰属が付いた record でだけ始まる**（ドライバと同じ）。
+      // `??= at` だけにすると、この器はプールを持たない構成でも「トークン軸を
+      // 観測している」と答え、`beforeTokens` が偽になる ＝ 本物より緩い。
+      if (tokenId !== undefined) usageTokensAt ??= at;
       for (const [model, delta] of Object.entries(fold.delta)) {
-        const key = usageRowKey(date, managerId, model, layer, site);
+        const key = usageRowKey(date, managerId, model, layer, site, tokenId);
         const before = usageRows.get(key)?.totals ?? ZERO_USAGE;
         usageRows.set(key, {
           date,
@@ -631,6 +640,7 @@ export function createMemoryStores(): Stores {
           model,
           layer,
           site,
+          ...(tokenId === undefined ? {} : { tokenId }),
           totals: {
             inputTokens: before.inputTokens + delta.inputTokens,
             outputTokens: before.outputTokens + delta.outputTokens,
@@ -653,6 +663,7 @@ export function createMemoryStores(): Stores {
           if (query.managerId !== undefined && row.managerId !== query.managerId) return false;
           if (query.layer !== undefined && row.layer !== query.layer) return false;
           if (query.site !== undefined && row.site !== query.site) return false;
+          if (query.tokenId !== undefined && row.tokenId !== query.tokenId) return false;
           return true;
         })
         .sort(
@@ -661,16 +672,29 @@ export function createMemoryStores(): Stores {
             a.managerId.localeCompare(b.managerId) ||
             a.model.localeCompare(b.model) ||
             a.layer.localeCompare(b.layer) ||
-            a.site.localeCompare(b.site),
+            a.site.localeCompare(b.site) ||
+            // 帰属の無い行は最後（ドライバ2つと同じ向き。`@alteroid/storage-fs` の
+            // `compareTokenId` / pg の `nullif(...) asc nulls last`）。
+            (a.tokenId === b.tokenId
+              ? 0
+              : a.tokenId === undefined
+                ? 1
+                : b.tokenId === undefined
+                  ? -1
+                  : a.tokenId.localeCompare(b.tokenId)),
         );
       return {
         rows,
         since: usageStartedAt,
         layersSince: usageLayeredAt,
+        tokensSince: usageTokensAt,
         // 台帳が始まる前を照会されたら、0 ではなく「記録が無い」と言えるように。
         beforeLedger: isBeforeUsageStart(usageStartedAt, query.from),
         // 層の軸が始まる前の行の layer / site は既定値であって観測ではない。
         beforeLayers: isBeforeUsageStart(usageLayeredAt, query.from),
+        // **トークンの軸は始まっていないことが正常でありうる**（プールを使って
+        // いない構成）。ここが偽を返すと「帰属が取れている」と読める。
+        beforeTokens: isBeforeUsageStart(usageTokensAt, query.from),
         notice: USAGE_ESTIMATE_NOTICE,
       };
     },

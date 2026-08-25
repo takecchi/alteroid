@@ -91,11 +91,45 @@ function groupBy<K extends string, V extends string = string>(
 }
 
 /**
- * 行を5軸（日 / actor / モデル / 層 / 場所）へ畳む。
+ * 認証トークンの軸だけ別に畳む。**`groupBy` を使えないのは `null` を保つためである。**
+ *
+ * あちらは `V extends string` で鍵を作る（`Map` の鍵にも並べ替えにも文字列を要る）
+ * ので、`tokenId` が無い行を通せない。**通すために空文字へ倒すと、それが1つの
+ * トークン id として並ぶ** — 取れていない分が「名前の無いトークンで使った分」に
+ * 化ける。だから鍵の型を `string | null` のまま持つ小さな畳み込みをここに置く。
+ *
+ * **並びは id の昇順で、`null` は最後。** 取れていない分を先頭に置くと、いちばん
+ * 目に入る位置が「分からない」で埋まる（他の軸と読み口が揃わなくなる）。
+ */
+function groupByToken(
+  rows: readonly UsageRow[],
+): Array<{ tokenId: string | null; totals: UsageTotals }> {
+  const buckets = new Map<string | null, UsageRow[]>();
+  for (const row of rows) {
+    const id = row.tokenId ?? null;
+    const found = buckets.get(id);
+    if (found) found.push(row);
+    else buckets.set(id, [row]);
+  }
+  return [...buckets.entries()]
+    .sort(([a], [b]) => {
+      if (a === null) return b === null ? 0 : 1;
+      if (b === null) return -1;
+      return a.localeCompare(b);
+    })
+    .map(([tokenId, group]) => ({ tokenId, totals: sumUsageRows(group) }));
+}
+
+/**
+ * 行を6軸（日 / actor / モデル / 層 / 場所 / 認証トークン）へ畳む。
  *
  * **層と場所を「無い値は 0」で補わないこと。** `groupBy` は行に現れた値だけを
  * 返す。1件も記録が無い層・場所は一覧に出ない ＝ 「0 使った」ではなく「記録が
  * 無い」として読める形である（`usage.ts` の `usageLayerSchema` / `usageSiteSchema`）。
+ *
+ * **トークンの軸だけは `null` の要素が出る**（`groupByToken`）。他の5軸は行が必ず
+ * 値を持つが、この軸は**構成によってそもそも取れない**ので、「取れていない分」を
+ * 落とすと合計に足し合わなくなる。落とさずに `null` として出す。
  */
 export function summarizeUsage(rows: readonly UsageRow[]): UsageBreakdown {
   return {
@@ -105,6 +139,7 @@ export function summarizeUsage(rows: readonly UsageRow[]): UsageBreakdown {
     byModel: groupBy(rows, (row) => row.model, 'model'),
     byLayer: groupBy(rows, (row) => row.layer, 'layer'),
     bySite: groupBy(rows, (row) => row.site, 'site'),
+    byToken: groupByToken(rows),
   };
 }
 

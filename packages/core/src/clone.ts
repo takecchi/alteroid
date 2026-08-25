@@ -3269,6 +3269,17 @@ class Clone implements CloneHost {
         at: at.toISOString(),
         snapshot,
         accumulation,
+        // **セッションが起きた瞬間の身元を使う**（`#sessionTokenIdentity`）。
+        // ここで `#tokenIdentity?.()` を読み直すと、回した直後に届いた**前の
+        // セッションぶんの消費**が新しいトークンに付く（`store.ts` の
+        // `UsageStore.record` の `tokenId` の doc）。
+        //
+        // **無いときは渡さない。** プールが空の器では毎回 undefined になり、
+        // 台帳のトークン軸は空のまま ＝ 受け入れ基準7（既定の構成の挙動を
+        // 1文字も変えない）。
+        ...(this.#sessionTokenIdentity === undefined
+          ? {}
+          : { tokenId: this.#sessionTokenIdentity.tokenId }),
       });
 
       // **ターン1回ぶんの増分を日誌へ残す。** 台帳は日 × actor × モデル ×

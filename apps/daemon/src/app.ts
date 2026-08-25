@@ -497,6 +497,13 @@ const usageQuery = z.object({
    */
   layer: usageLayerSchema.optional(),
   site: usageSiteSchema.optional(),
+  /**
+   * **どの認証トークンで**使った分だけ（`GET /tokens` の `id`）。
+   *
+   * **「帰属が無い分だけ」を絞る口は作らない**（`usage.ts` の `usageQuerySchema`）。
+   * 取れていない分を数えたいなら絞らずに引いて `breakdown.byToken` の `null` を見る。
+   */
+  tokenId: z.string().min(1).optional(),
 });
 const usageResponseSchema = usageAggregateSchema.extend({
   breakdown: usageBreakdownSchema,
@@ -1694,7 +1701,12 @@ export function createApp(deps: AppDeps) {
           'そのときは 0 ではなく「記録が無い」と読むこと（過去分の掘り起こしはしていない）。' +
           '層と場所の軸は台帳より後から入ったので、始点は `layersSince`、' +
           '照会範囲がそれより前にかかっていれば `beforeLayers` が真になる — ' +
-          'そのときの `layer` / `site` は既定値であって観測ではない。',
+          'そのときの `layer` / `site` は既定値であって観測ではない。' +
+          '認証トークンの軸も同じ形で `tokensSince` / `beforeTokens` を返すが、' +
+          '**null の意味が1つ多い** — 記録が1件も無いときだけでなく、' +
+          '**プールを使っていない構成では最後まで null である**（`since` が非 null でも起きる）。' +
+          'そのときの `breakdown.byToken` は `tokenId: null` の1件だけを返す。' +
+          'それは「1本のトークンで全部使った」ではなく「帰属が取れていない」である。',
         responses: {
           200: {
             description: '台帳の集計。',
@@ -1708,13 +1720,14 @@ export function createApp(deps: AppDeps) {
       }),
       validator('query', usageQuery),
       async (c) => {
-        const { from, to, managerId, layer, site } = c.req.valid('query');
+        const { from, to, managerId, layer, site, tokenId } = c.req.valid('query');
         const aggregate = await stores.usage.aggregate({
           ...(from === undefined ? {} : { from }),
           ...(to === undefined ? {} : { to }),
           ...(managerId === undefined ? {} : { managerId }),
           ...(layer === undefined ? {} : { layer }),
           ...(site === undefined ? {} : { site }),
+          ...(tokenId === undefined ? {} : { tokenId }),
         });
         return c.json({
           ...aggregate,

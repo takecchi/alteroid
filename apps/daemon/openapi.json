@@ -2325,7 +2325,7 @@
         "operationId": "getUsage",
         "tags": ["usage"],
         "summary": "利用状況（alteroid が使った分）",
-        "description": "SDK の `result.modelUsage` を積んだ台帳を、日 × マネージャー × モデルで返す。**推定値であり請求明細ではない**（`notice` に同じ但し書きが載る）。台帳の始点は `since`、照会範囲が始点より前にかかっていれば `beforeLedger` が真になる — そのときは 0 ではなく「記録が無い」と読むこと（過去分の掘り起こしはしていない）。層と場所の軸は台帳より後から入ったので、始点は `layersSince`、照会範囲がそれより前にかかっていれば `beforeLayers` が真になる — そのときの `layer` / `site` は既定値であって観測ではない。",
+        "description": "SDK の `result.modelUsage` を積んだ台帳を、日 × マネージャー × モデルで返す。**推定値であり請求明細ではない**（`notice` に同じ但し書きが載る）。台帳の始点は `since`、照会範囲が始点より前にかかっていれば `beforeLedger` が真になる — そのときは 0 ではなく「記録が無い」と読むこと（過去分の掘り起こしはしていない）。層と場所の軸は台帳より後から入ったので、始点は `layersSince`、照会範囲がそれより前にかかっていれば `beforeLayers` が真になる — そのときの `layer` / `site` は既定値であって観測ではない。認証トークンの軸も同じ形で `tokensSince` / `beforeTokens` を返すが、**null の意味が1つ多い** — 記録が1件も無いときだけでなく、**プールを使っていない構成では最後まで null である**（`since` が非 null でも起きる）。そのときの `breakdown.byToken` は `tokenId: null` の1件だけを返す。それは「1本のトークンで全部使った」ではなく「帰属が取れていない」である。",
         "responses": {
           "200": {
             "description": "台帳の集計。",
@@ -2356,6 +2356,10 @@
                           "site": {
                             "type": "string",
                             "enum": ["session", "distill"]
+                          },
+                          "tokenId": {
+                            "type": "string",
+                            "minLength": 1
                           },
                           "totals": {
                             "type": "object",
@@ -2444,6 +2448,21 @@
                       "type": "boolean"
                     },
                     "beforeLayers": {
+                      "type": "boolean"
+                    },
+                    "tokensSince": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "beforeTokens": {
                       "type": "boolean"
                     },
                     "notice": {
@@ -2767,9 +2786,79 @@
                             },
                             "required": ["site", "totals"]
                           }
+                        },
+                        "byToken": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "tokenId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "totals": {
+                                "type": "object",
+                                "properties": {
+                                  "inputTokens": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "outputTokens": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheReadInputTokens": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheCreationInputTokens": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "webSearchRequests": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "costUsd": {
+                                    "type": "number",
+                                    "minimum": 0
+                                  }
+                                },
+                                "required": [
+                                  "inputTokens",
+                                  "outputTokens",
+                                  "cacheReadInputTokens",
+                                  "cacheCreationInputTokens",
+                                  "webSearchRequests",
+                                  "costUsd"
+                                ]
+                              }
+                            },
+                            "required": ["tokenId", "totals"]
+                          }
                         }
                       },
-                      "required": ["total", "byDate", "byManager", "byModel", "byLayer", "bySite"]
+                      "required": [
+                        "total",
+                        "byDate",
+                        "byManager",
+                        "byModel",
+                        "byLayer",
+                        "bySite",
+                        "byToken"
+                      ]
                     },
                     "account": {
                       "oneOf": [
@@ -2921,6 +3010,8 @@
                     "layersSince",
                     "beforeLedger",
                     "beforeLayers",
+                    "tokensSince",
+                    "beforeTokens",
                     "notice",
                     "breakdown",
                     "account"
@@ -2991,6 +3082,14 @@
             "schema": {
               "type": "string",
               "enum": ["session", "distill"]
+            }
+          },
+          {
+            "in": "query",
+            "name": "tokenId",
+            "schema": {
+              "type": "string",
+              "minLength": 1
             }
           }
         ]
