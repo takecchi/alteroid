@@ -20,7 +20,10 @@ interface AgentTokenView {
   id: string;
   label: string;
   order: number;
-  sha256: string;
+  /** **`source: 'env'` の行には無い**（値を持たないので指紋も存在しない）。 */
+  sha256?: string;
+  /** 資格の出所。器の環境変数を指す行は `env`。 */
+  source?: 'stored' | 'env';
   disabledAt?: string;
   cooldownUntil?: number;
   lastRejectedAt?: string;
@@ -65,6 +68,10 @@ export async function tokenListCommand(): Promise<void> {
 
   if (view.tokens.length === 0) {
     stdout.write('トークンは登録されていません（器の環境変数1本だけの既定の構成）。\n');
+    stdout.write(
+      '**この状態では、枠に当たっても記録が残りません** — 器の環境変数の行は、' +
+        '予備を1本でも登録したときに自動で生えます。\n',
+    );
     stdout.write('登録するには: alteroid token add --label <名前> --file <path>\n');
     return;
   }
@@ -72,9 +79,14 @@ export async function tokenListCommand(): Promise<void> {
   const now = Date.now();
   stdout.write('\n');
   for (const token of [...view.tokens].sort((a, b) => a.order - b.order)) {
-    stdout.write(
-      `${String(token.order)}. ${token.label}  id=${token.id}  sha256=${token.sha256}\n`,
-    );
+    // **指紋が無い行がある。** `sha256=undefined` と出すと「取れなかった」に
+    // 見えるが、env の行は**そもそも値を持たない**（`credentialOf` の doc）。
+    // ⟹ 何の行かを名指しして、無いものの欄を作らない。
+    const identity =
+      token.source === 'env'
+        ? '器の環境変数（CLAUDE_CODE_OAUTH_TOKEN）'
+        : `sha256=${token.sha256 ?? '（指紋が取れていない）'}`;
+    stdout.write(`${String(token.order)}. ${token.label}  id=${token.id}  ${identity}\n`);
     const stamps = describeStamps(token);
     if (stamps !== null) stdout.write(`   ${stamps}\n`);
     const status = describeStatus(token, now);
@@ -163,9 +175,22 @@ export async function tokenRemoveCommand(id: string): Promise<void> {
     stdout.write(`id ${id} のトークンは見つかりません。\n`);
     return;
   }
+  const removed = current.tokens.find((token) => token.id === id);
   const inputs = current.tokens.filter((token) => token.id !== id).map(toInput);
   await putTokens(target, inputs);
   stdout.write(`トークン（id ${id}）を削除しました。\n`);
+
+  // **消えたままにならないことを言う。** env の行は「器に環境変数が置かれている」
+  // という事実の射影なので、消しても次の起動で戻る。**黙っていると、消したのに
+  // 戻っている理由が人間には分からない。**
+  if (removed?.source === 'env') {
+    stdout.write(
+      'ただしこの行は器の環境変数を指すものなので、**次の起動で戻ります**' +
+        '（環境変数が消えたわけではないため）。\n' +
+        'もう使わないようにするには: alteroid token disable ' +
+        `${id}\n`,
+    );
+  }
 }
 
 export async function tokenDisableCommand(id: string): Promise<void> {
