@@ -27,7 +27,7 @@ const reached: UsageLimitNotice = {
 
 interface Harness {
   stores: Stores;
-  spreadCalls: { id: string; value: string }[];
+  spreadCalls: { id: string; value: string; generation: number }[];
   probeCalls: { id: string; value: string }[];
   rotator: ReturnType<typeof createTokenRotator>;
 }
@@ -39,7 +39,7 @@ function harness(
   } = {},
 ): Harness {
   const stores = createMemoryStores();
-  const spreadCalls: { id: string; value: string }[] = [];
+  const spreadCalls: { id: string; value: string; generation: number }[] = [];
   const probeCalls: { id: string; value: string }[] = [];
 
   const probe: TokenProbePort = {
@@ -114,7 +114,7 @@ describe('受け入れ基準1: 1本目が止まったら2本目へ回る', () =>
       rotatedAt: AT,
     });
     // 撒いたのは新しいほうの値。
-    expect(h.spreadCalls).toEqual([{ id: 'tok-b', value: 'value-b' }]);
+    expect(h.spreadCalls).toEqual([{ id: 'tok-b', value: 'value-b', generation: 2 }]);
   });
 
   it('降りたトークンに、止まった文言と冷却の期限が記録される', async () => {
@@ -421,7 +421,7 @@ describe('降りた本人へ「回す」を作らない（resetsAt が過去で�
     if (outcome.kind !== 'rotated') return;
     // **自分自身ではない。**
     expect(outcome.toTokenId).toBe('tok-b');
-    expect(h.spreadCalls).toEqual([{ id: 'tok-b', value: 'value-b' }]);
+    expect(h.spreadCalls).toEqual([{ id: 'tok-b', value: 'value-b', generation: 2 }]);
   });
 
   it('resetsAt が過去で、他に候補が無ければ「候補が無い」へ倒れる（自分へ戻らない）', async () => {

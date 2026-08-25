@@ -28,16 +28,28 @@ export interface AgentTokenHolder {
    * 器の環境変数だけの既定の構成と1文字も変わらない（受け入れ基準7）。
    */
   values(): Record<string, string>;
-  set(value: string): void;
+  /**
+   * いま撒いてあるものの身元。**まだ撒いていなければ `undefined`。**
+   *
+   * クローンがセッションを起こす瞬間にこれを捕まえ、そのセッションの観測へ添える
+   * （世代の照合。`observationFreshness`）。
+   */
+  identity(): { tokenId: string; generation: number } | undefined;
+  set(value: string, identity?: { tokenId: string; generation: number }): void;
 }
 
 export function createAgentTokenHolder(): AgentTokenHolder {
   let current: string | undefined;
+  let currentIdentity: { tokenId: string; generation: number } | undefined;
   return {
     values: (): Record<string, string> =>
       current === undefined ? {} : { CLAUDE_CODE_OAUTH_TOKEN: current },
-    set: (value: string) => {
+    identity: () => currentIdentity,
+    set: (value: string, identity?: { tokenId: string; generation: number }) => {
       current = value;
+      // **身元は渡されたときだけ更新する。** 渡されなかったからといって消すと、
+      // 「値は新しいのに身元は無い」という、照合できない状態が作れてしまう。
+      if (identity !== undefined) currentIdentity = identity;
     },
   };
 }
@@ -71,7 +83,11 @@ export function createTokenSpread(options: TokenSpreadOptions): TokenSpreadPort 
   const { runners, clone, profileEnvNames, onShadowed } = options;
 
   return {
-    async spread(token: { id: string; value: string }): Promise<TokenSpreadResult[]> {
+    async spread(token: {
+      id: string;
+      value: string;
+      generation: number;
+    }): Promise<TokenSpreadResult[]> {
       const results: TokenSpreadResult[] = [];
 
       // **プロファイルが同じ名前を宣言していたら、撒く前に出す。**
@@ -113,8 +129,9 @@ export function createTokenSpread(options: TokenSpreadOptions): TokenSpreadPort 
         });
       }
 
-      // クローン側は同じプロセス内なので落ちない。
-      clone.set(token.value);
+      // クローン側は同じプロセス内なので落ちない。**身元も一緒に置く** —
+      // 置かないと、クローンの観測が身元を名乗れず世代の照合が素通しになる。
+      clone.set(token.value, { tokenId: token.id, generation: token.generation });
       results.push({ target: 'clone', ok: true });
 
       if (shadowed.length > 0) {
