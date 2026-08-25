@@ -388,3 +388,127 @@ describe('403（実行環境の持ち主だけ）', () => {
     await expect(tokenListCommand()).rejects.toThrow('実行環境の持ち主だけです');
   });
 });
+
+/**
+ * 器の環境変数を指す行の見え方（Issue #393）。
+ *
+ * **指紋が無い行がある。** `sha256=undefined` と出すと「取れなかった」に見えるが、
+ * env の行は**そもそも値を持たない**——無いものの欄を作らない。
+ */
+describe('環境変数の行', () => {
+  it('指紋の代わりに「器の環境変数」と名指しする', async () => {
+    setReply('GET', '/tokens', {
+      status: 200,
+      body: {
+        tokens: [
+          { id: 'env-1', label: '器の環境変数', order: -1, source: 'env' },
+          { id: 'tok-a', label: 'spare', order: 0, sha256: 'aaaaaaaaaaaa' },
+        ],
+        settings: EMPTY_SETTINGS,
+      },
+    });
+    const read = captureStdout();
+
+    await tokenListCommand();
+
+    const text = read();
+    expect(text).toContain('器の環境変数（CLAUDE_CODE_OAUTH_TOKEN）');
+    // **`sha256=undefined` を出さない。**
+    expect(text).not.toContain('sha256=undefined');
+    // 予備のほうは今までどおり指紋が出る。
+    expect(text).toContain('sha256=aaaaaaaaaaaa');
+  });
+
+  it('環境変数の行が先に並ぶ（order が小さい）', async () => {
+    setReply('GET', '/tokens', {
+      status: 200,
+      body: {
+        tokens: [
+          { id: 'tok-a', label: 'spare', order: 0, sha256: 'aaaaaaaaaaaa' },
+          { id: 'env-1', label: '器の環境変数', order: -1, source: 'env' },
+        ],
+        settings: EMPTY_SETTINGS,
+      },
+    });
+    const read = captureStdout();
+
+    await tokenListCommand();
+
+    const text = read();
+    expect(text.indexOf('器の環境変数')).toBeLessThan(text.indexOf('spare'));
+  });
+
+  it('環境変数の行が止まったら、他の行と同じように状態が出る', async () => {
+    setReply('GET', '/tokens', {
+      status: 200,
+      body: {
+        tokens: [
+          {
+            id: 'env-1',
+            label: '器の環境変数',
+            order: -1,
+            source: 'env',
+            lastRejectedAt: '2026-08-25T03:00:00.000Z',
+            lastRejectedReason: "You've hit your org's monthly spend limit",
+            recovery: 'time',
+            cooldownUntil: Date.now() + 3_600_000,
+          },
+        ],
+        settings: EMPTY_SETTINGS,
+      },
+    });
+    const read = captureStdout();
+
+    await tokenListCommand();
+
+    const text = read();
+    expect(text).toContain('冷却中');
+    expect(text).toContain("最後の拒否: You've hit your org's monthly spend limit");
+    expect(text).toContain('見込み: 時間で戻る');
+  });
+
+  it('プールが空のとき、記録が残らないことを言う', async () => {
+    setReply('GET', '/tokens', { status: 200, body: { tokens: [], settings: EMPTY_SETTINGS } });
+    const read = captureStdout();
+
+    await tokenListCommand();
+
+    // **黙っていると「記録が残る」と思われる。**
+    expect(read()).toContain('枠に当たっても記録が残りません');
+  });
+
+  it('環境変数の行を消したら、戻ることを言う', async () => {
+    // **黙っていると、消したのに戻っている理由が人間には分からない。**
+    setReply('GET', '/tokens', {
+      status: 200,
+      body: {
+        tokens: [{ id: 'env-1', label: '器の環境変数', order: -1, source: 'env' }],
+        settings: EMPTY_SETTINGS,
+      },
+    });
+    setReply('PUT', '/tokens', { status: 200, body: { tokens: [], settings: EMPTY_SETTINGS } });
+    const read = captureStdout();
+
+    await tokenRemoveCommand('env-1');
+
+    const text = read();
+    expect(text).toContain('次の起動で戻ります');
+    expect(text).toContain('alteroid token disable env-1');
+  });
+
+  it('普通の行を消したときは、その断りを出さない', async () => {
+    setReply('GET', '/tokens', {
+      status: 200,
+      body: {
+        tokens: [{ id: 'tok-a', label: 'spare', order: 0, sha256: 'aaaaaaaaaaaa' }],
+        settings: EMPTY_SETTINGS,
+      },
+    });
+    setReply('PUT', '/tokens', { status: 200, body: { tokens: [], settings: EMPTY_SETTINGS } });
+    const read = captureStdout();
+
+    await tokenRemoveCommand('tok-a');
+
+    expect(read()).not.toContain('次の起動で戻ります');
+  });
+});

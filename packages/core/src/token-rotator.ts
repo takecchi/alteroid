@@ -1,6 +1,12 @@
+import { randomUUID } from 'node:crypto';
+
 import {
+  buildEnvToken,
+  credentialOf,
+  isEnvToken,
   markTokenUnusable,
   tokenAvailabilityAt,
+  type TokenCredential,
   type ActiveAgentToken,
   type AgentToken,
   type TokenRotationSettings,
@@ -64,15 +70,14 @@ export interface TokenSpreadPort {
    * 世代の照合（{@link observationFreshness}）が成立しない** — クローンは
    * セッションを起こす瞬間にこれを捕まえて、そのセッションの観測へ添える。
    */
-  spread(token: { id: string; value: string; generation: number }): Promise<TokenSpreadResult[]>;
+  spread(token: { id: string; generation: number } & TokenCredential): Promise<TokenSpreadResult[]>;
 }
 
 /** 候補を1本試す口（PR2 の `probeTokenCandidate` を包んで渡す）。 */
 export interface TokenProbePort {
-  probe(token: {
-    id: string;
-    value: string;
-  }): Promise<
+  probe(
+    token: { id: string } & TokenCredential,
+  ): Promise<
     | { verdict: 'usable' }
     | { verdict: 'unusable'; reason: string; retryAt?: number }
     | { verdict: 'undecidable'; reason: string }
@@ -130,6 +135,16 @@ export interface TokenRotatorOptions {
   spread: TokenSpreadPort;
   /** 現在時刻。テストで固定するため。 */
   now?: () => Date;
+  /**
+   * 器の環境変数（`CLAUDE_CODE_OAUTH_TOKEN`）が置かれているか（Issue #393）。
+   *
+   * **値そのものを受けない。** core は正本を持つが、**器の環境変数は器のもの**で
+   * あって記憶ストアの正本ではない——値を持ち込むと「どちらが正か」が2つになる。
+   * 要るのは「指す先が在るか」だけである。
+   */
+  hasEnvToken?: () => boolean;
+  /** 新しい行の id を作る。テストで固定するため。 */
+  newId?: () => string;
 }
 
 /**
@@ -196,11 +211,46 @@ export interface TokenRotator {
    * `why` に出して見えるようにするだけにしてある。
    */
   restore(): Promise<TokenRestoreOutcome>;
+  /**
+   * 器の環境変数を指す行が無ければ足す（Issue #393）。**起動時に1度だけ。**
+   *
+   * ## なぜ要るか
+   *
+   * 器の環境変数のトークンには、これまでプールの行が無かった。⟹ **それが枠に
+   * 当たっても、いつ・何と言われたかがどこにも残らない。** 回し手は現役の行を
+   * 冷却へ入れるが、環境変数は行を持たないので入れる先が無い。**最初に止まった
+   * 1本だけが台帳から消える**——しかもそれは、たいてい人間が最初に踏む1本である。
+   *
+   * ## 人間が書いた行ではなく、事実の射影である
+   *
+   * 器に環境変数が置かれているという事実を1行として表しているだけなので、
+   * **消しても次の起動で戻る。** 「もう使わない」を表したいなら
+   * `alteroid token disable`（{@link AgentToken.disabledAt}）を使う——そちらは
+   * 人間の判断なので戻らない（この関数は行が在れば何もしない）。
+   *
+   * ## ⚠️ プールが空なら足さない
+   *
+   * **受け入れ基準7（プールが空の既定構成の挙動を1文字も変えない）を字義どおり
+   * 守るためである。** 人間が1本も登録していない＝プールを使うと決めていない器で、
+   * 記憶ストアに行が生えて日誌に線が増えるのは、たとえ挙動が同じでも「1文字も
+   * 変えない」ではない。**人間が1本でも登録した時点で**環境変数の行が生える。
+   *
+   * **環境変数が置かれていなければ足さない**（指す先が無いので）。
+   */
+  ensureEnvToken(): Promise<TokenEnsureEnvOutcome>;
 }
+
+/** {@link TokenRotator.ensureEnvToken} の結果。**足したかどうかを畳まない。** */
+export type TokenEnsureEnvOutcome =
+  | { kind: 'added'; tokenId: string; why: string }
+  | { kind: 'exists'; tokenId: string }
+  | { kind: 'skipped'; why: string };
 
 export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
   const { stores, probe, spread } = options;
   const now = options.now ?? (() => new Date());
+  const hasEnvToken = options.hasEnvToken ?? (() => false);
+  const newId = options.newId ?? (() => randomUUID());
 
   let tail: Promise<unknown> = Promise.resolve();
   function serial<T>(work: () => Promise<T>): Promise<T> {
@@ -247,6 +297,37 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
   }
 
   return {
+    ensureEnvToken: () =>
+      serial(async () => {
+        const tokens = await stores.tokens.list();
+        // **プールが空なら足さない**（受け入れ基準7。この関数の doc）。
+        if (tokens.length === 0) {
+          return {
+            kind: 'skipped' as const,
+            why: 'プールが空（人間がまだ1本も登録していない器では、行を作らない）',
+          };
+        }
+        const existing = tokens.find(isEnvToken);
+        // **人間が外した行でも「在る」である。** 外した判断を無視して足し直さない。
+        if (existing !== undefined) return { kind: 'exists' as const, tokenId: existing.id };
+        if (!hasEnvToken()) {
+          return {
+            kind: 'skipped' as const,
+            why: '器に CLAUDE_CODE_OAUTH_TOKEN が置かれていない（指す先が無い）',
+          };
+        }
+
+        const row = buildEnvToken(tokens, { id: newId(), at: now().toISOString() });
+        // **既存の行に触らない。** `buildEnvToken` が既存より小さい `order` を
+        // 選ぶので、振り直しが要らない（振り直すと全行の `updatedAt` が動く）。
+        await stores.tokens.replace([row, ...tokens]);
+        return {
+          kind: 'added' as const,
+          tokenId: row.id,
+          why: '器の環境変数を指す行をプールへ足した（枠に当たったときに記録が残るようになる）',
+        };
+      }),
+
     // **同じ列を通す。** 引き取りと観測が並ぶと、撒き直しの途中に回転が割り込んで
     // 「古い方を後から撒く」が起きる。
     restore: () =>
@@ -291,10 +372,10 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         const cooling = availability === 'cooling';
         const spreadResults = await spread.spread({
           id: row.id,
-          value: row.value,
           // **保存されていた世代をそのまま渡す。** ここで増やすと、まだ有効な
           // 観測が `stale` として捨てられる。
           generation: active.generation,
+          ...credentialOf(row),
         });
         return {
           kind: 'restored' as const,
@@ -378,7 +459,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         // probe で確かめる。3値のうち `unusable` だけが候補を1本飛ばす。
         const verdict = await probe.probe({
           id: selection.token.id,
-          value: selection.token.value,
+          ...credentialOf(selection.token),
         });
         if (verdict.verdict === 'unusable') {
           // **飛ばした候補も冷却へ入れる。** 入れないと次の観測で同じものが
@@ -421,8 +502,8 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
 
         const spreadResults = await spread.spread({
           id: selection.token.id,
-          value: selection.token.value,
           generation,
+          ...credentialOf(selection.token),
         });
 
         return {

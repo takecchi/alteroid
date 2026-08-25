@@ -5681,6 +5681,10 @@
                           "sha256": {
                             "type": "string"
                           },
+                          "source": {
+                            "type": "string",
+                            "enum": ["stored", "env"]
+                          },
                           "disabledAt": {
                             "type": "string"
                           },
@@ -5710,7 +5714,7 @@
                             "enum": ["time", "action", "unknown"]
                           }
                         },
-                        "required": ["id", "label", "order", "sha256"]
+                        "required": ["id", "label", "order"]
                       }
                     },
                     "settings": {
@@ -5787,6 +5791,10 @@
                           "sha256": {
                             "type": "string"
                           },
+                          "source": {
+                            "type": "string",
+                            "enum": ["stored", "env"]
+                          },
                           "disabledAt": {
                             "type": "string"
                           },
@@ -5816,7 +5824,7 @@
                             "enum": ["time", "action", "unknown"]
                           }
                         },
-                        "required": ["id", "label", "order", "sha256"]
+                        "required": ["id", "label", "order"]
                       }
                     },
                     "settings": {

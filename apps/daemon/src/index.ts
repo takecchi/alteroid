@@ -657,9 +657,26 @@ export async function main(): Promise<void> {
   const agentTokenHolder = createAgentTokenHolder();
   const tokenRotator = createTokenRotator({
     stores,
+    // **値ではなく「在るか」だけを渡す**（`TokenRotatorOptions.hasEnvToken` の doc）。
+    hasEnvToken: () => (process.env.CLAUDE_CODE_OAUTH_TOKEN ?? '').length > 0,
     probe: {
       // **本番の仕事で試さない**（Issue #393 の設計の骨）。推論が走らない probe。
-      probe: (token) => probeTokenCandidate(query, { token: token.value, cwd: paths.root }),
+      probe: (token) => {
+        // **env の行は器の環境変数の値で試す。** リテラルや空文字で試すと、
+        // **その行を「使えない」と誤って冷却する**（＝いま走っているトークンを
+        // 自分で降ろす）。
+        const value = token.kind === 'env' ? process.env.CLAUDE_CODE_OAUTH_TOKEN : token.value;
+        if (value === undefined || value.length === 0) {
+          // **env の行なのに環境変数が無い。** 器を作り直すときに `.env` から
+          // 落ちた、という形で実際に起こりうる。**「判定できない」ではなく
+          // 「使えない」である** —— 撒くと鍵を消して全層が資格を失う。
+          return Promise.resolve({
+            verdict: 'unusable' as const,
+            reason: '器の環境変数（CLAUDE_CODE_OAUTH_TOKEN）が置かれていない',
+          });
+        }
+        return probeTokenCandidate(query, { token: value, cwd: paths.root });
+      },
     },
     spread: createTokenSpread({
       runners,
@@ -682,6 +699,17 @@ export async function main(): Promise<void> {
   //
   // **繋がっていない runner へは、ここでは届かない。** 後から上がってくる分は
   // `syncRunnerToken`（`ManagerPool#connectTo`）が追いつかせる。
+  {
+    // **行を足すのが先、撒き直しが後。** 逆にすると、環境変数の行が足された回だけ
+    // 撒き直しがその行を見ないまま終わる（1回ぶん遅れる）。
+    const ensured = await tokenRotator
+      .ensureEnvToken()
+      .catch((error: unknown) => ({ kind: 'failed' as const, why: String(error) }));
+    if (ensured.kind === 'added' || ensured.kind === 'failed') {
+      process.stderr.write(`alteroidd: 認証トークン: ${ensured.why}\n`);
+    }
+  }
+
   {
     const restored = await tokenRotator
       .restore()

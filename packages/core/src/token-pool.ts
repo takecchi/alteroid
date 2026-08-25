@@ -110,8 +110,37 @@ export interface AgentToken {
   id: string;
   /** 人間が読む名前。**秘密ではない。** */
   label: string;
-  /** 本体。**API・CLI・Web・日誌・ログのどこにも出さない。** */
-  value: string;
+  /**
+   * この行の資格がどこから来るか（Issue #393）。
+   *
+   * - `stored`（既定）: {@link AgentToken.value} が本体を持つ
+   * - `env`: **器の環境変数（`CLAUDE_CODE_OAUTH_TOKEN`）を指す。`value` は持たない**
+   *
+   * ## なぜ「値としてリテラルを入れる」形にしないか
+   *
+   * 「`value` に `'CLAUDE_CODE_OAUTH_TOKEN'` という文字列を入れて env の代わりに
+   * する」は**3か所で壊れる** —— 撒くとリテラルが器のファイルに書かれて全層が
+   * 認証に失敗し、probe はリテラルで認証を試して失敗し（その行を誤って冷却する）、
+   * 外向きの顔にはリテラルのハッシュが**本物の指紋の顔をして**出る。
+   *
+   * **どれも特別扱いを足せば直るが、特別扱いが要ることが「型で表すべき」という
+   * 合図である。** マジック値のままだと、次に読む人が特別扱いを1つ忘れた瞬間に
+   * 穴が開く（しかも開き方が「全層が認証に失敗する」である）。
+   *
+   * ## この行は人間が書いたものではなく、事実の射影である
+   *
+   * 器に環境変数が置かれているという**事実**を、プールの中で1行として表しているだけ
+   * である。⟹ **消しても次の起動で戻る**（環境変数が消えたわけではないので）。
+   * 「もう使わない」を表したいなら {@link AgentToken.disabledAt}（`alteroid token
+   * disable`）を使う——そちらは人間の判断なので戻らない。
+   */
+  source?: 'stored' | 'env';
+  /**
+   * 本体。**API・CLI・Web・日誌・ログのどこにも出さない。**
+   *
+   * **`source: 'env'` の行は持たない**（器の環境変数を指すだけなので）。
+   */
+  value?: string;
   /** 試す順（小さいほど先）。 */
   order: number;
   /** 人間が明示的に外した（**戻らない側**）。 */
@@ -197,8 +226,15 @@ export const agentTokenViewSchema = z.object({
   id: z.string(),
   label: z.string(),
   order: z.number().int(),
-  /** 指紋。`fingerprintOf`（`credentials.ts`）と同じ形——値そのものは出さない。 */
-  sha256: z.string(),
+  /**
+   * 指紋。`fingerprintOf`（`credentials.ts`）と同じ形——値そのものは出さない。
+   *
+   * **`source: 'env'` の行には無い。** あの行は値を持たないので、指紋も存在しない
+   * ——**リテラルのハッシュを入れて「本物の指紋の顔をした偽物」を出さないこと。**
+   */
+  sha256: z.string().optional(),
+  /** 資格の出所。**器の環境変数を指す行は `env`。** */
+  source: z.enum(['stored', 'env']).optional(),
   disabledAt: z.string().optional(),
   cooldownUntil: z.number().optional(),
   lastRejectedAt: z.string().optional(),
@@ -228,7 +264,9 @@ export function toAgentTokenView(token: AgentToken): AgentTokenView {
     id: token.id,
     label: token.label,
     order: token.order,
-    sha256: fingerprintOf(token.value),
+    // **env の行には指紋を出さない**（値が無いので存在しない）。
+    ...(token.value === undefined ? {} : { sha256: fingerprintOf(token.value) }),
+    ...(token.source === undefined ? {} : { source: token.source }),
     ...(token.disabledAt === undefined ? {} : { disabledAt: token.disabledAt }),
     ...(token.cooldownUntil === undefined ? {} : { cooldownUntil: token.cooldownUntil }),
     ...(token.lastRejectedAt === undefined ? {} : { lastRejectedAt: token.lastRejectedAt }),
@@ -361,8 +399,22 @@ export function normalizeTokenPool(
       );
     }
 
+    /**
+     * 資格の出所は**既存の行からだけ引き継ぐ。入力からは設定できない**
+     * （`invalidatedAt` と同じ扱い）。
+     *
+     * **人間が `source: 'env'` の行を作れる形にしないこと。** あの行は「器に
+     * 環境変数が置かれている」という事実の射影であって、人間が宣言するもの
+     * ではない——作れる形にすると、環境変数が無い器に「環境変数を指す行」が
+     * 立ち、撒いた瞬間に全層が資格を失う。
+     */
+    const source = current?.source;
+
     const value = input.value ?? current?.value;
-    if (value === undefined) {
+    // **env の行は値を持たない。** ここで値を要求すると、`PUT /tokens` を通る
+    // 操作（`token add` / `disable` / `enable` / `remove` はすべて「既存を
+    // 読み直して全文で書き戻す」形である）が**env の行が在るだけで全部落ちる。**
+    if (value === undefined && source !== 'env') {
       throw new TokenPoolInputError(
         `新しいトークン（${input.label}）には value が要る` +
           '（省略できるのは、id で既存の行を指しているときだけ）',
@@ -399,7 +451,8 @@ export function normalizeTokenPool(
     const token: AgentToken = {
       id,
       label: input.label,
-      value,
+      ...(source === undefined ? {} : { source }),
+      ...(value === undefined ? {} : { value }),
       order,
       ...(disabledAt === undefined ? {} : { disabledAt }),
       // **`disabled` 以外の派生値は人間の入力からは触れない——常に引き継ぐ。**
@@ -604,3 +657,67 @@ export const activeAgentTokenSchema = z.object({
   rotatedAt: z.string(),
 });
 export type ActiveAgentToken = z.infer<typeof activeAgentTokenSchema>;
+
+// ---------------------------------------------------------------------------
+// 器の環境変数を指す行（Issue #393）
+// ---------------------------------------------------------------------------
+
+/** 器の環境変数から資格を取る行か。**既定（`source` が無い行）は `stored` である。** */
+export function isEnvToken(token: AgentToken): boolean {
+  return token.source === 'env';
+}
+
+/**
+ * その行を撒くときに、撒く側へ渡す形。**判別可能な union にしてある。**
+ *
+ * `value` を optional にしただけの形（`{ value?: string }`）にすると、**撒く側が
+ * `value === undefined` を「取れなかった」と読んで握り潰す**余地が残る。ここでは
+ * 「env を指している」ことが型として現れるので、撒く側は分岐を書かないと
+ * コンパイルが通らない。
+ */
+export type TokenCredential = { kind: 'stored'; value: string } | { kind: 'env' };
+
+/**
+ * 行から撒く形を作る。**`stored` なのに `value` が無い行は壊れているので投げる。**
+ *
+ * 器（fs / pg）は `value` を optional として持てるので、「`stored` なのに値が無い」
+ * 行が理屈の上では作れてしまう。**黙って env へ倒さないこと** —— 倒すと、値を
+ * 失った行が「環境変数を使う行」に化けて、**どのトークンで走っているかが記録と
+ * ずれる。**
+ */
+export function credentialOf(token: AgentToken): TokenCredential {
+  if (isEnvToken(token)) return { kind: 'env' };
+  if (token.value === undefined || token.value.length === 0) {
+    // **id と label しか含めない**（`TokenPoolInputError` と同じ約束）。
+    throw new TokenPoolInputError(
+      `トークン（id ${token.id} / ${token.label}）は stored なのに値を持っていない`,
+    );
+  }
+  return { kind: 'stored', value: token.value };
+}
+
+/**
+ * 器の環境変数を指す行を作る（まだ無いときだけ呼ぶ）。
+ *
+ * **`order` は既存のどれよりも小さくする。** 環境変数のトークンは*いま走っている*
+ * ものなので、**その残枠を使い切ってから予備へ回る**のが自然な順序である。逆に
+ * すると、人間が予備を1本登録しただけで環境変数側の残枠を捨てることになる。
+ *
+ * **既存の行の `order` を振り直さないこと。** 振り直すと全行が「変わった」ことに
+ * なり、`updatedAt` が一斉に動く（{@link AgentToken.updatedAt} が守っている意味が
+ * 消える）。
+ */
+export function buildEnvToken(
+  existing: readonly AgentToken[],
+  options: { id: string; at: string; label?: string },
+): AgentToken {
+  const lowest = existing.reduce((min, token) => Math.min(min, token.order), 0);
+  return {
+    id: options.id,
+    label: options.label ?? '器の環境変数',
+    source: 'env',
+    order: lowest - 1,
+    createdAt: options.at,
+    updatedAt: options.at,
+  };
+}
