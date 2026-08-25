@@ -194,6 +194,113 @@ describe('/tokens 画面 — 不明と、そもそも無いを混ぜない', () 
   });
 });
 
+describe('/tokens 画面 — recovery（回復の見込み）を潰さない', () => {
+  /**
+   * `recovery: 'unknown'` は実装が持つ**正規の値**（「どちらとも言えない」）で
+   * あって、「取れなかった」ではない。一方 `source: 'env'` の指紋欄は値を
+   * 持たないので「そもそも無い」——こちらは PoolCard 側の別の理由による欠落
+   * である。**この2つが将来同じ文言（例えば「不明」）へ潰れても、片方だけの
+   * テストでは検知できない** ので、同じ描画の中に両方を置いて別々の文字列で
+   * 出ることを見る。
+   */
+  it('recovery: unknown と source: env（指紋なし）が同じ描画の中で別々の文言のまま出る', async () => {
+    stubScreen({
+      tokens: [
+        {
+          id: 't-recovery-unknown',
+          label: 'recovery-unknown-token',
+          order: 0,
+          sha256: 'a'.repeat(12),
+          lastRejectedAt: '2026-08-25T00:00:00.000Z',
+          lastRejectedReason: 'some previously unseen limit message',
+          recovery: 'unknown',
+        },
+        {
+          id: 't-env-2',
+          label: 'env-token-2',
+          order: 1,
+          source: 'env',
+          createdAt: '2026-08-01T00:00:00.000Z',
+          updatedAt: '2026-08-01T00:00:00.000Z',
+        },
+      ],
+    });
+
+    render(
+      <Providers>
+        <Tokens />
+      </Providers>,
+    );
+
+    await waitForPoolLoaded();
+
+    // **exact match。** 実装が「不明」のような共通の言い方へ潰すと、この
+    // どちらの getByText も落ちる（見つからない、または曖昧に複数ヒットする）。
+    const recoveryText = screen.getByText(
+      '分類: どちらとも言えない（time でも action でもない。捨てる判断の根拠にしないこと）',
+    );
+    const fingerprintText = screen.getByText('（環境変数由来のため指紋は無い）');
+    expect(recoveryText).toBeTruthy();
+    expect(fingerprintText).toBeTruthy();
+    // 別々の要素であること（1つのノードが両方の役目を兼ねていない）。
+    expect(recoveryText).not.toBe(fingerprintText);
+    // 潰れた合成文言（例:「不明」のような共通語だけ）に短縮されていないこと。
+    expect(screen.queryByText('不明')).toBeNull();
+  });
+
+  it('time / action / unknown の3値が、それぞれ別の文言で出る', async () => {
+    stubScreen({
+      tokens: [
+        {
+          id: 't-time',
+          label: 'recovery-time-token',
+          order: 0,
+          sha256: 'b'.repeat(12),
+          lastRejectedAt: '2026-08-25T00:00:00.000Z',
+          lastRejectedReason: 'resets in 5 hours',
+          recovery: 'time',
+        },
+        {
+          id: 't-action',
+          label: 'recovery-action-token',
+          order: 1,
+          sha256: 'c'.repeat(12),
+          lastRejectedAt: '2026-08-25T00:00:00.000Z',
+          lastRejectedReason: 'payment required',
+          recovery: 'action',
+        },
+        {
+          id: 't-unknown-2',
+          label: 'recovery-unknown-token-2',
+          order: 2,
+          sha256: 'd'.repeat(12),
+          lastRejectedAt: '2026-08-25T00:00:00.000Z',
+          lastRejectedReason: 'unrecognized message',
+          recovery: 'unknown',
+        },
+      ],
+    });
+
+    render(
+      <Providers>
+        <Tokens />
+      </Providers>,
+    );
+
+    await waitForPoolLoaded();
+
+    expect(screen.getByText('分類: 時間で戻る見込み（リセットを待てば良い）')).toBeTruthy();
+    expect(
+      screen.getByText('分類: 人の対応が要る見込み（入金・管理者の設定・座席種別の変更など）'),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        '分類: どちらとも言えない（time でも action でもない。捨てる判断の根拠にしないこと）',
+      ),
+    ).toBeTruthy();
+  });
+});
+
 describe('/tokens 画面 — 冷却は原文と絶対時刻の両方を出す', () => {
   it('cooldownUntil の絶対時刻と lastRejectedReason の原文が両方出る', async () => {
     // 実測で報告されている桁の食い違い（冷却は5時間なのに理由の原文は
