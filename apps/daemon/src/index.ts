@@ -53,7 +53,11 @@ import {
 } from './runner-client.js';
 import { clearRuntimeInfo, writeRuntimeInfo } from './runtime.js';
 import { buildSchedule, readScheduleConfig } from './schedule.js';
-import { createAgentTokenHolder, createTokenSpread } from './token-spread.js';
+import {
+  createAgentTokenHolder,
+  createRunnerTokenSync,
+  createTokenSpread,
+} from './token-spread.js';
 import { openStorage } from './storage.js';
 
 export { createApp, parseAllowedOrigins, type AppDeps, type AppType } from './app.js';
@@ -672,6 +676,22 @@ export async function main(): Promise<void> {
     }),
   });
 
+  // **クローンを作る前に撒き直す。** `createClone` は構築の中でループを回し始める
+  // ので、後にすると最初のターンが器の環境変数のまま走る窓ができる。
+  //
+  // **繋がっていない runner へは、ここでは届かない。** 後から上がってくる分は
+  // `syncRunnerToken`（`ManagerPool#connectTo`）が追いつかせる。
+  {
+    const restored = await tokenRotator
+      .restore()
+      .catch((error: unknown) => ({ kind: 'failed' as const, why: String(error) }));
+    // **何も起きていないとき（`none`）は黙る。** 既定の構成では毎回の起動で出る
+    // ことになり、意味のある行が埋もれる。
+    if (restored.kind !== 'none') {
+      process.stderr.write(`alteroidd: 認証トークン（起動時の引き取り）: ${restored.why}\n`);
+    }
+  }
+
   const clone = createClone({
     stores,
     accountUsage: () => usagePoller.state(),
@@ -683,6 +703,8 @@ export async function main(): Promise<void> {
     // 現役のトークン。**値ではなく関数**——構築時に凍らせない（`CloneOptions` の doc）。
     credentials: () => agentTokenHolder.values(),
     tokenIdentity: () => agentTokenHolder.identity(),
+    // 後から上がってきた runner に追いつかせる（プロファイルの `syncRunner` と同じ位置）。
+    syncRunnerToken: createRunnerTokenSync(agentTokenHolder),
     onUsageObservation: async (observation) => {
       const outcome = await tokenRotator.observe(observation);
       // **回した / 回さなかったを黙って捨てない。** 日誌へ載せるのは PR5 の

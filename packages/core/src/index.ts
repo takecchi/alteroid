@@ -450,6 +450,7 @@ export {
 export {
   createTokenRotator,
   type TokenProbePort,
+  type TokenRestoreOutcome,
   type TokenRotationOutcome,
   type TokenRotator,
   type TokenRotatorObservation,
