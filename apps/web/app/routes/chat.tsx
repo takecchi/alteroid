@@ -69,6 +69,56 @@ interface Shown {
   failure: unknown;
 }
 
+/**
+ * 人間が別の会話を選んだときだけ、前の会話に属するものを捨てる。
+ *
+ * **見るのは「URL が変わったか」であって「`id` と一致するか」ではない。**
+ * `open` で id を決めてから URL が追いつくまでのあいだ、`id` は URL より
+ * 先へ進んでいる。そこで一致だけを見ると、その隙間を「別の会話へ移った」と
+ * 誤って読み、送ったばかりの発言ごと消してしまう。
+ *
+ * **⚠️ この関数は「一度きり」ではなく「毎回」呼ばれる前提で書いてある**（#437）。
+ * 渡された `previous` が貼り直しで前の会話の値へ戻っていれば、印
+ * （`lastRouteId`）も一緒に戻っているので、**同じ判定がもう一度効いて
+ * 捨て直しがかかる。** ここが `ChatPane` の外に在るのは、その「もう一度効く」
+ * ことを歯で直接測れるようにするためである（切り出しで出力は変えていない）。
+ *
+ * ---
+ * **この捨て直し（`lines: []`）は、下の `owns()`/`stopped()`（`writable()` の
+ * 中身）と同じ役目の二重書きではない。守っている失敗が違う。**
+ *
+ * - **ここ（render 時の同期リセット）** — 会話を切り替えた**瞬間**に、
+ *   前の会話の `lines`（自分の発言・受信中の合図・進行中の transient
+ *   な行）を消す。ストリームが動いているかどうかとは無関係——
+ *   ただ会話を切り替えただけで、静的にでも古い内容が新しい会話の
+ *   画面に残るのを防ぐのはこちらの役目。
+ * - **`owns()`/`stopped()`（`writable()`。この下の `send()` 参照）** —
+ *   切り替えた**後**に、前の会話のストリームがなおも `setLines(...)`
+ *   を呼ぼうとするのを止める。**動いているストリームがあって初めて
+ *   意味を持つ**、上とは別の失敗を防いでいる。
+ *
+ * `git log -S` で確かめた限り、この3つ（この捨て直し / `owns()` /
+ * `stopped()`）は同じ初期コミット（`04c1049`、#27）で同時に入った
+ * ——「後から別の障害を踏んで1枚ずつ足した」歴史ではない。それでも
+ * 上のとおり守備範囲は最初から別である。
+ *
+ * **ただし変異試験（#363）は、この2つが実際には独立して働いていない
+ * ことを見つけている。** 詳しい構造は下の `owns()`/`stopped()` の
+ * doc（`writable()` の直前）にまとめてある。
+ *
+ * **⚠️ そして #437 は、この捨て直しの側が単独では効かない場面を
+ * 見つけている。** ここが空にしても、貼り直しで前の会話の `lines` が
+ * 戻ることがある（上の `shown` の doc）。**塞いでいるのは
+ * 「1つの state に畳んであること」であって、この行ではない。**
+ *
+ */
+export function nextShown(previous: Shown, routeId: string | undefined): Shown {
+  if (routeId === previous.lastRouteId) return previous;
+  // URL が自分の採番に追いついただけなら、捨てるものは何も無い。
+  if (routeId === previous.id) return { ...previous, lastRouteId: routeId };
+  return { id: routeId, lastRouteId: routeId, lines: [], failure: undefined };
+}
+
 export default function Chat({ loaderData }: Route.ComponentProps) {
   const { conversationId } = loaderData;
 
@@ -372,47 +422,16 @@ export function ChatPane({
    * （React の「props が変わったら state を調整する」パターン。effect でやると
    * 一度古い内容を描いてから消すことになる。）
    */
-  if (routeId !== shown.lastRouteId) {
-    /*
-     * **1つの更新関数で動かす。** 印（`lastRouteId`）と中身（`lines` /
-     * `failure`）を別々の setter で動かすと、貼り直しで片方だけが戻りうる
-     * （上の `shown` の doc）。
-     */
-    setShown((previous) => {
-      if (routeId === previous.lastRouteId) return previous;
-      // URL が自分の採番に追いついただけなら、捨てるものは何も無い。
-      if (routeId === previous.id) return { ...previous, lastRouteId: routeId };
-      /*
-       * **この捨て直し（`lines: []`）は、下の `owns()`/`stopped()`（`writable()` の
-       * 中身）と同じ役目の二重書きではない。守っている失敗が違う。**
-       *
-       * - **ここ（render 時の同期リセット）** — 会話を切り替えた**瞬間**に、
-       *   前の会話の `lines`（自分の発言・受信中の合図・進行中の transient
-       *   な行）を消す。ストリームが動いているかどうかとは無関係——
-       *   ただ会話を切り替えただけで、静的にでも古い内容が新しい会話の
-       *   画面に残るのを防ぐのはこちらの役目。
-       * - **`owns()`/`stopped()`（`writable()`。この下の `send()` 参照）** —
-       *   切り替えた**後**に、前の会話のストリームがなおも `setLines(...)`
-       *   を呼ぼうとするのを止める。**動いているストリームがあって初めて
-       *   意味を持つ**、上とは別の失敗を防いでいる。
-       *
-       * `git log -S` で確かめた限り、この3つ（この捨て直し / `owns()` /
-       * `stopped()`）は同じ初期コミット（`04c1049`、#27）で同時に入った
-       * ——「後から別の障害を踏んで1枚ずつ足した」歴史ではない。それでも
-       * 上のとおり守備範囲は最初から別である。
-       *
-       * **ただし変異試験（#363）は、この2つが実際には独立して働いていない
-       * ことを見つけている。** 詳しい構造は下の `owns()`/`stopped()` の
-       * doc（`writable()` の直前）にまとめてある。
-       *
-       * **⚠️ そして #437 は、この捨て直しの側が単独では効かない場面を
-       * 見つけている。** ここが空にしても、貼り直しで前の会話の `lines` が
-       * 戻ることがある（上の `shown` の doc）。**塞いでいるのは
-       * 「1つの state に畳んであること」であって、この行ではない。**
-       */
-      return { id: routeId, lastRouteId: routeId, lines: [], failure: undefined };
-    });
-  }
+  /*
+   * **1つの更新関数で動かす。** 印（`lastRouteId`）と中身（`lines` /
+   * `failure`）を別々の setter で動かすと、貼り直しで片方だけが戻りうる
+   * （上の `shown` の doc）。
+   *
+   * 判定そのものは `nextShown` に切り出してある（**この描画でも、貼り直しの
+   * 後の描画でも、同じ判定が同じように効く**ことを直接測れるようにするため。
+   * 出力も呼ぶ順序も変えていない）。
+   */
+  if (routeId !== shown.lastRouteId) setShown((previous) => nextShown(previous, routeId));
 
   /*
    * **この画面で始めた会話でも履歴を読む（#92 で変えた）。**
