@@ -54,10 +54,16 @@ export const MAX_ITEMS = 15;
  * `approvals_list` はそう。`journal_read` / `manager_list` / `commitment_list` /
  * `usage_read` は予算や件数で打ち切るので、そう書けば嘘になる（`usage_read` に
  * ついて先に踏んだ轍である。下の `usageSection` のコメント参照）。
+ *
+ * **`total` からではなく「実際に出した件数（`shown`）」から引く。** 理由は
+ * 下の `usageOmitted` の doc（「省いた件数は `MAX_ITEMS` ではなく…」の段）と
+ * 同じである——呼ぶ側の `.slice(0, MAX_ITEMS)` の件数がこの定数から離れた日に、
+ * 出した数と合図の数が食い違う（合図そのものは在るので、読んだ側からは
+ * 気づけない）。呼ぶ側は切った配列の長さをそのまま渡すこと。
  */
-function omitted(total: number, where: string): string[] {
-  if (total <= MAX_ITEMS) return [];
-  return [`- …ほか ${total - MAX_ITEMS} 件（${where}）`];
+function omitted(total: number, shown: number, where: string): string[] {
+  if (total <= shown) return [];
+  return [`- …ほか ${total - shown} 件（${where}）`];
 }
 
 /**
@@ -72,6 +78,40 @@ function journalWhere(type: JournalEntry['type']): string {
   return (
     `新しい側だけ出している。続きは \`journal_read\` に types=["${type}"] と until を渡して掘る` +
     '（あちらも予算で打ち切り、残りの件数が本文に出る）'
+  );
+}
+
+/**
+ * `usageSection` の4軸（モデル・層・場所・委譲）を `top()` で切ったときの合図。
+ *
+ * **4軸ともここを通すこと。「3軸に if を3つ足す」形にしない。** 上の `omitted()`
+ * の doc が逐語で記録している轍——「節ごとに手で書いていたのをここへ寄せた。
+ * 後から足した6節が黙って切れていたのは、この行が各節の実装の側にあって、
+ * 書き忘れても何も落ちなかったから」——を、軸の側でも踏むことになる。合図を
+ * 作る場所を1つに閉じておけば、軸を足す人はこの関数を呼ぶだけで済み、書き
+ * 忘れる余地が無い。
+ *
+ * **到達可能性は軸で違うが、それを理由にここを通す/通さないを分けない。**
+ * `model`（`ALTEROID_*_MODEL` は値を検証しない `z.string()`）と `manager`
+ * （委譲ごとに `randomUUID()`）は `MAX_ITEMS` を超えうる。`layer` / `site`
+ * （`usage-format.ts` の `USAGE_LAYERS` / `USAGE_SITES`）はいまは2値の閉じた
+ * enum なので超ええない。**それでも4軸ともここを通すのは、値が増えた日に
+ * ここだけ書き忘れないためである。**
+ *
+ * 文言は `usage_read`（`tools.ts` の `USAGE_AXES`）の `axis` 引数と同じ名前を
+ * 使う——続きを辿る呼び方を渡す以上、そこで通る名前でなければ嘘になる。
+ *
+ * **省いた件数は `MAX_ITEMS` ではなく「実際に出した件数」から引く。** 定数から
+ * 引くと、`top()` が切る件数がこの定数から離れた日に、出した数と合図の数が
+ * 食い違う——**合図そのものは在るので、出力は黙って嘘になる**（合図が無いのと
+ * 違って、読んだ側からは食い違いに気づけない）。切った側が出した数を渡す形に
+ * しておけば、その食い違いが起きようがない。
+ */
+function usageOmitted(total: number, shown: number, axis: string, unit: string): string {
+  if (total <= shown) return '';
+  return (
+    `…ほか ${total - shown} ${unit}` +
+    `（\`usage_read\` に axis="${axis}", offset=0 を渡すと続きから辿れる）`
   );
 }
 
@@ -176,12 +216,26 @@ export async function buildActivityDigest(stores: Stores, window: DigestWindow):
       // **件数やログではなくここでも明言する。** 「片付いたのではない」を
       // 落とすと、読めない行が静かに未了から消えたのと区別が付かなくなる
       // （`store.ts` の `CommitmentList` の doc と同じ理由）。
-      const ids = unreadableCommitments
+      const idsAll = unreadableCommitments
         .map((entry) => entry.id)
         .filter((id): id is string => id !== undefined);
+      // **ここも上限を付ける。** `unreadableCommitments` は台帳の破損の度合いに
+      // 比例して伸びるので、`ids.join(', ')` を無制限にすると台帳が壊れるほど
+      // digest が伸びる（MAX_ITEMS で切っている他の一覧と同じ理由）。
+      const ids = idsAll.slice(0, MAX_ITEMS);
+      // **「commitment_list を呼べば全部出る」と書けるのは、実際に確かめたから
+      // である。** `tools.ts` の `commitment_list`（id を渡さない一覧モード）が
+      // 読めない行の id を出す節は `ids.join(', ')` をそのまま使っており、件数の
+      // 上限を掛けていない（実装を読んで確認した。まだ上限が無い時点の話なので、
+      // 後で上限が付いたらこの文言も直す必要がある）。
+      // 省いた件数は、他の節と同じく**出した件数から引く**（`omitted()` の doc）。
+      const idsExtra =
+        idsAll.length > ids.length
+          ? `（…ほか ${idsAll.length - ids.length} 件。id は commitment_list（id を指定しない一覧モード）を呼べば読めない行の id が全部出る）`
+          : '';
       sections.push(
         `**読めない行が ${unreadableCommitments.length} 件ある（片付いたのではない）。**` +
-          (ids.length === 0 ? '' : ` id: ${ids.join(', ')}。`) +
+          (ids.length === 0 ? '' : ` id: ${ids.join(', ')}${idsExtra}。`) +
           // **「全文が見られる」とは書かない。** `commitment_list id=<id>` の
           // 全文モードは `get(id)` が読めない行で throw するので、本文は
           // 返らない（`UnreadableCommitmentError` を捕まえて「読めない」と
@@ -190,7 +244,8 @@ export async function buildActivityDigest(stores: Stores, window: DigestWindow):
           '`commitment_list id=<id>` で状態は確かめられる（本文はここでは取れない）。',
       );
     }
-    for (const entry of commitments.slice(0, MAX_ITEMS)) {
+    const shownCommitments = commitments.slice(0, MAX_ITEMS);
+    for (const entry of shownCommitments) {
       sections.push(
         `- ${entry.id}（${entry.at} / ${entry.origin}${entry.source === undefined ? '' : ` / ${entry.source}`}）` +
           `\n  ${brief(entry.body)}`,
@@ -202,6 +257,7 @@ export async function buildActivityDigest(stores: Stores, window: DigestWindow):
       // （あちらは残り件数を本文に出す）。
       ...omitted(
         commitments.length,
+        shownCommitments.length,
         '`commitment_list` で古い順に辿れる。あちらも入る分までで、残りの件数が本文に出る',
       ),
     );
@@ -209,7 +265,8 @@ export async function buildActivityDigest(stores: Stores, window: DigestWindow):
 
   if (standing.length > 0) {
     sections.push('', '## 継続中の依頼（時刻が来れば届く。前回からの続きがあるか見ること）');
-    for (const plan of standing.slice(0, MAX_ITEMS)) {
+    const shownStanding = standing.slice(0, MAX_ITEMS);
+    for (const plan of shownStanding) {
       sections.push(
         `- ${plan.kind}（${describeScheduleSpec(plan.spec)}）${brief(plan.request)}` +
           `\n  前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}`,
@@ -217,24 +274,32 @@ export async function buildActivityDigest(stores: Stores, window: DigestWindow):
     }
     // 黙って切らない。他の節は期間で切った一部だが、ここは「常に材料である」ことが
     // 趣旨なので、切ったことを見せないと「あるのに見えない」になる。
-    sections.push(...omitted(standing.length, '`schedule_list` で全部見える'));
+    sections.push(
+      ...omitted(standing.length, shownStanding.length, '`schedule_list` で全部見える'),
+    );
   }
 
   if (settled.length > 0) {
     sections.push('', '## この期間に片付けた仕事');
-    for (const entry of settled.slice(0, MAX_ITEMS)) {
+    const shownSettled = settled.slice(0, MAX_ITEMS);
+    for (const entry of shownSettled) {
       sections.push(
         `- ${brief(entry.body, 120)}\n  片付いたとした理由: ${brief(entry.closedReason ?? '', 120)}`,
       );
     }
     sections.push(
-      ...omitted(settled.length, '`commitment_list` に includeClosed=true を渡すと辿れる'),
+      ...omitted(
+        settled.length,
+        shownSettled.length,
+        '`commitment_list` に includeClosed=true を渡すと辿れる',
+      ),
     );
   }
 
   if (managers.length > 0) {
     sections.push('', '## マネージャー（走行中・返事待ちから先に出す）');
-    for (const job of managers.slice(0, MAX_ITEMS)) {
+    const shownManagers = managers.slice(0, MAX_ITEMS);
+    for (const job of shownManagers) {
       sections.push(
         `- ${job.id} [${job.status}] ${brief(job.request ?? job.summary)}` +
           (job.lastReport === undefined ? '' : `\n  直近の報告: ${brief(job.lastReport)}`),
@@ -243,6 +308,7 @@ export async function buildActivityDigest(stores: Stores, window: DigestWindow):
     sections.push(
       ...omitted(
         managers.length,
+        shownManagers.length,
         '`manager_list` で状態を見る。あちらも入る分までで、残りの件数が本文に出る',
       ),
     );
@@ -250,36 +316,42 @@ export async function buildActivityDigest(stores: Stores, window: DigestWindow):
 
   if (decisions.length > 0) {
     sections.push('', '## 聞かずに決めたこと');
-    for (const entry of decisions.slice(0, MAX_ITEMS)) {
+    const shownDecisions = decisions.slice(0, MAX_ITEMS);
+    for (const entry of shownDecisions) {
       sections.push(`- ${entry.at} ${brief(entry.decision)}（根拠: ${brief(entry.grounds, 80)}）`);
     }
-    sections.push(...omitted(decisions.length, journalWhere('decision')));
+    sections.push(...omitted(decisions.length, shownDecisions.length, journalWhere('decision')));
   }
 
   if (escalations.length > 0) {
     sections.push('', '## エスカレーション');
-    for (const entry of escalations.slice(0, MAX_ITEMS)) {
+    const shownEscalations = escalations.slice(0, MAX_ITEMS);
+    for (const entry of shownEscalations) {
       const state = entry.answer === undefined ? '未回答' : `回答: ${brief(entry.answer, 80)}`;
       sections.push(`- ${brief(entry.question)} → ${state}`);
     }
-    sections.push(...omitted(escalations.length, journalWhere('escalation')));
+    sections.push(
+      ...omitted(escalations.length, shownEscalations.length, journalWhere('escalation')),
+    );
   }
 
   if (pending.length > 0) {
     sections.push('', '## 人間の回答待ち（保留中。他の仕事は進めてよい）');
-    for (const approval of pending.slice(0, MAX_ITEMS)) {
+    const shownPending = pending.slice(0, MAX_ITEMS);
+    for (const approval of shownPending) {
       sections.push(
         `- ${approval.id}（${approval.createdAt}）${brief(approval.question)}` +
           (approval.jobId === undefined ? '' : ` [マネージャー ${approval.jobId}]`),
       );
     }
     // ここだけは打ち切らない道具があるので「全部見える」と書ける。
-    sections.push(...omitted(pending.length, '`approvals_list` で全部見える'));
+    sections.push(...omitted(pending.length, shownPending.length, '`approvals_list` で全部見える'));
   }
 
   if (memoryUpdates.length > 0) {
     sections.push('', '## 記憶の更新');
-    for (const entry of memoryUpdates.slice(0, MAX_ITEMS)) {
+    const shownMemoryUpdates = memoryUpdates.slice(0, MAX_ITEMS);
+    for (const entry of shownMemoryUpdates) {
       // `queries.ts` の `summarizeJournalEntry` と同じ言い方に揃える
       // （`action`/`cause` を1つの括弧にまとめ、バイトの注記を `/` で続ける）。
       // 単位はバイト（`schema.ts` の `bytesBefore`/`bytesAfter` の doc）。
@@ -296,15 +368,20 @@ export async function buildActivityDigest(stores: Stores, window: DigestWindow):
         `- ${entry.slug}（${entry.cause}${action} / ${bytes}）${brief(entry.summary, 120)}`,
       );
     }
-    sections.push(...omitted(memoryUpdates.length, journalWhere('memory_update')));
+    sections.push(
+      ...omitted(memoryUpdates.length, shownMemoryUpdates.length, journalWhere('memory_update')),
+    );
   }
 
   if (externals.length > 0) {
     sections.push('', '## 届いた外部イベント');
-    for (const entry of externals.slice(0, MAX_ITEMS)) {
+    const shownExternals = externals.slice(0, MAX_ITEMS);
+    for (const entry of shownExternals) {
       sections.push(`- ${entry.source}: ${brief(entry.summary, 120)}`);
     }
-    sections.push(...omitted(externals.length, journalWhere('external_event')));
+    sections.push(
+      ...omitted(externals.length, shownExternals.length, journalWhere('external_event')),
+    );
   }
 
   sections.push('', ...(await usageSection(stores, window.since, until)));
@@ -356,35 +433,46 @@ async function usageSection(stores: Stores, since: Date, until: Date): Promise<s
     // 高い順。どの層・どの委譲に効くかを先に見せる。
     const top = <T extends { totals: { costUsd: number } }>(entries: readonly T[]) =>
       [...entries].sort((a, b) => b.totals.costUsd - a.totals.costUsd).slice(0, MAX_ITEMS);
+    // **合図は `usageOmitted` から取る（4軸とも同じ関数を通す）。** 超えて
+    // いなければ空文字が返るので、その行には何も足さない。
+    const shownModels = top(summary.byModel);
+    const modelExtra = usageOmitted(summary.byModel.length, shownModels.length, 'model', '件');
     lines.push(
-      `- モデル別: ${top(summary.byModel)
+      `- モデル別: ${shownModels
         .map((entry) => `${entry.model} ${formatUsd(entry.totals.costUsd)}`)
-        .join(' / ')}`,
+        .join(' / ')}${modelExtra === '' ? '' : ` / ${modelExtra}`}`,
     );
     // **誰が**使ったか。モデル別と別に出す — `ALTEROID_CLONE_MODEL` を置けば
     // クローンとマネージャーは同じモデル帯に並び、モデル名では層を見分けられない。
+    const shownLayers = top(summary.byLayer);
+    const layerExtra = usageOmitted(summary.byLayer.length, shownLayers.length, 'layer', '件');
     lines.push(
-      `- 層別（誰が）: ${top(summary.byLayer)
+      `- 層別（誰が）: ${shownLayers
         .map((entry) => `${entry.layer} ${formatUsd(entry.totals.costUsd)}`)
-        .join(' / ')}`,
+        .join(' / ')}${layerExtra === '' ? '' : ` / ${layerExtra}`}`,
     );
+    const shownSites = top(summary.bySite);
+    const siteExtra = usageOmitted(summary.bySite.length, shownSites.length, 'site', '件');
     lines.push(
-      `- 場所別（どこで）: ${top(summary.bySite)
+      `- 場所別（どこで）: ${shownSites
         .map((entry) => `${entry.site} ${formatUsd(entry.totals.costUsd)}`)
-        .join(' / ')}`,
+        .join(' / ')}${siteExtra === '' ? '' : ` / ${siteExtra}`}`,
     );
     lines.push('- 高かった委譲:');
-    for (const entry of top(summary.byManager)) {
+    const shownManagers = top(summary.byManager);
+    for (const entry of shownManagers) {
       lines.push(`  - ${entry.managerId}: ${formatUsd(entry.totals.costUsd)}`);
     }
-    if (summary.byManager.length > MAX_ITEMS) {
-      // **「`usage_read` で全部見える」と書かない。** あちらも軸ごとに打ち切るので
-      // 嘘になる。実際に打てる手（続きを辿る呼び方）をそのまま書く。
-      lines.push(
-        `  - …ほか ${summary.byManager.length - MAX_ITEMS} 本` +
-          '（`usage_read` に axis="manager", offset=0 を渡すと続きから辿れる）',
-      );
-    }
+    // **「`usage_read` で全部見える」と書かない。** あちらも軸ごとに打ち切るので
+    // 嘘になる。実際に打てる手（続きを辿る呼び方）をそのまま書く——文言は
+    // `usageOmitted` から取る（同じ関数を4軸とも通す理由は同関数の doc）。
+    const managerExtra = usageOmitted(
+      summary.byManager.length,
+      shownManagers.length,
+      'manager',
+      '本',
+    );
+    if (managerExtra !== '') lines.push(`  - ${managerExtra}`);
   }
 
   if (aggregate.beforeLedger) {
