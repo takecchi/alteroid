@@ -5976,6 +5976,33 @@ describe('token_list（読むだけ。値は返らない）', () => {
     expect(reply).toContain('値を持たない');
   });
 
+  it('止まった理由の原文が長くても、1件が一覧を食い潰さない', async () => {
+    // **`renderListing` の予算だけでは足りない。** あちらは全体を締めるので、
+    // 1件が長いままでも上限は守られる——**代わりにその1件だけが出て、他の候補が
+    // 全部消える。** 「候補が残っているのか全部冷却中なのか」を見に来た側には、
+    // それは一覧が壊れたのと同じである（skill: 上流のキャップを根拠にしない）。
+    //
+    // **この歯は変異で確かめて足した** —— `excerptLine` を外す変異が、これを
+    // 書く前は生き残った（＝抜粋については何も測れていなかった）。
+    const h = harness();
+    const long = 'り'.repeat(3_000);
+    await h.stores.tokens.replace([
+      { id: 'tok-a', label: '予備1', value: 'v1', order: 0, lastRejectedReason: long },
+      { id: 'tok-b', label: '予備2', value: 'v2', order: 1 },
+      { id: 'tok-c', label: '予備3', value: 'v3', order: 2 },
+    ]);
+
+    const reply = await h.call('token_list', {});
+
+    // 3件とも出る（1件目が予算を食い潰していない）。
+    for (const id of ['tok-a', 'tok-b', 'tok-c']) {
+      expect(reply, `${id} が出ていない（1件目が一覧を食い潰した）`).toContain(`- ${id} `);
+    }
+    // 原文はそのまま出さず、切ったことが出力に出る。
+    expect(reply).not.toContain(long);
+    expect(reply).toMatch(/…|文字/);
+  });
+
   it('回す契機と冷却の既定も出る（なぜ回らなかったのかを1回で読めるように）', async () => {
     const h = harness();
     await put(h);
