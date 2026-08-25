@@ -1,5 +1,6 @@
 import {
   markTokenUnusable,
+  tokenAvailabilityAt,
   type ActiveAgentToken,
   type AgentToken,
   type TokenRotationSettings,
@@ -131,6 +132,28 @@ export interface TokenRotatorOptions {
   now?: () => Date;
 }
 
+/**
+ * 起動時の引き取りの結果（Issue #393 PR3）。**回した結果とは別の型にしてある。**
+ *
+ * 同じ型に畳むと、日誌から「回った」と「起動時に戻しただけ」が区別できなくなる
+ * ——前者は枠に当たった証拠だが、後者は何も起きていない。
+ */
+export type TokenRestoreOutcome =
+  | { kind: 'none'; why: string }
+  | {
+      kind: 'restored';
+      tokenId: string;
+      label: string;
+      /** **増やさない。** 引き取りは回転ではないので、保存されていた値のまま。 */
+      generation: number;
+      /** 撒き直した相手が冷却中だったか。**撒くことは変えず、事実だけ返す。** */
+      cooling: boolean;
+      spread: TokenSpreadResult[];
+      why: string;
+    }
+  | { kind: 'dangling'; tokenId: string; why: string }
+  | { kind: 'withheld'; tokenId: string; label: string; why: string };
+
 export interface TokenRotator {
   /**
    * 観測を1つ受ける。**回すかどうかもここが決める。**
@@ -139,6 +162,40 @@ export interface TokenRotator {
    * ——6つの検知点が同じ1本へ合流する形にしてあるのが、この設計の骨である。
    */
   observe(observation: TokenRotatorObservation): Promise<TokenRotationOutcome>;
+  /**
+   * **起動時に1度だけ**、記憶ストアが「現役」と言っているトークンを撒き直す。
+   *
+   * ## なぜ要るか
+   *
+   * 撒いた先（runner の env・クローンの箱）は**プロセスと一緒に消える**が、現役の
+   * 指名は記憶ストアに残る。⟹ これが無いと、デーモンを再起動した直後は**器の
+   * 環境変数のトークンが走っているのに、記憶ストアは別のトークンを現役だと思って
+   * いる**という食い違いが残る。その状態で枠に当たると、**走ってもいないトークンを
+   * 冷却へ入れて**候補を1本無駄に飛ばす。
+   *
+   * ## 引き取りは回転ではない
+   *
+   * - **世代を増やさない**（増やすと、まだ有効な観測が `stale` として捨てられる）
+   * - **記憶ストアへ書かない**（`updatedAt` が動くと「変わっていないのに変わった」になる）
+   * - **候補を選び直さない。** 現役が冷却中でも**そのまま撒く** — 選び直すのは枠に
+   *   当たったときだけであり、**起動を新しい契機にしない**（Issue #393 が挙げる
+   *   契機は枠の2つだけである）。冷却中だったことは `cooling` で返す
+   *
+   * ## 4つの結果を畳まない
+   *
+   * | 結果 | 何が起きたか | この後どうなるか |
+   * | --- | --- | --- |
+   * | `none` | 一度も回していない | 器の環境変数がそのまま効く |
+   * | `restored` | 撒き直した | 記憶ストアと実際が揃う |
+   * | `dangling` | 指名の先の行が消えている | 環境変数が効く。**次に枠へ当たれば直る** |
+   * | `withheld` | 人間がその行を外した / 失効している | 同上 |
+   *
+   * **`dangling` と `withheld` では撒かない。** 人間が外したものを起動時に戻すのは、
+   * **人間の判断を実装が黙って覆すこと**である。食い違いは残るが、次の当たりで
+   * 回し手が正しい候補へ移る（消えた / 外された id は候補から外れる）——だから
+   * `why` に出して見えるようにするだけにしてある。
+   */
+  restore(): Promise<TokenRestoreOutcome>;
 }
 
 export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
@@ -190,6 +247,68 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
   }
 
   return {
+    // **同じ列を通す。** 引き取りと観測が並ぶと、撒き直しの途中に回転が割り込んで
+    // 「古い方を後から撒く」が起きる。
+    restore: () =>
+      serial(async () => {
+        const [tokens, active] = await Promise.all([
+          stores.tokens.list(),
+          stores.tokens.readActive(),
+        ]);
+
+        if (active === null) {
+          return {
+            kind: 'none' as const,
+            why: 'まだ一度も回していない（器の環境変数がそのまま効く）',
+          };
+        }
+
+        const row = tokens.find((token) => token.id === active.tokenId);
+        if (row === undefined) {
+          // **記憶ストアへ書いて直さない。** 次の当たりで回し手が正しい候補へ移る
+          // ので、ここで消すのは「見えなくする」だけの操作になる。
+          return {
+            kind: 'dangling' as const,
+            tokenId: active.tokenId,
+            why: '現役として記録された行がプールに無い（人間が消した）。器の環境変数が効いたままである',
+          };
+        }
+
+        const availability = tokenAvailabilityAt(row, now().getTime());
+        if (availability === 'disabled' || availability === 'invalidated') {
+          // **人間が外したものを起動時に戻さない。**
+          return {
+            kind: 'withheld' as const,
+            tokenId: row.id,
+            label: row.label,
+            why:
+              availability === 'disabled'
+                ? `現役として記録された「${row.label}」は人間が外している。撒き直さない（器の環境変数が効いたままである）`
+                : `現役として記録された「${row.label}」は失効している。撒き直さない（器の環境変数が効いたままである）`,
+          };
+        }
+
+        const cooling = availability === 'cooling';
+        const spreadResults = await spread.spread({
+          id: row.id,
+          value: row.value,
+          // **保存されていた世代をそのまま渡す。** ここで増やすと、まだ有効な
+          // 観測が `stale` として捨てられる。
+          generation: active.generation,
+        });
+        return {
+          kind: 'restored' as const,
+          tokenId: row.id,
+          label: row.label,
+          generation: active.generation,
+          cooling,
+          spread: spreadResults,
+          why: cooling
+            ? `現役の「${row.label}」を撒き直した。**ただし冷却中である**（次に枠へ当たれば回し手が次の候補へ移す）`
+            : `現役の「${row.label}」を撒き直した`,
+        };
+      }),
+
     observe: (observation: TokenRotatorObservation) =>
       serial(async () => {
         const [tokens, settings, active] = await Promise.all([

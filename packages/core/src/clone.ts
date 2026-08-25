@@ -22,7 +22,7 @@ import {
   noteDroppedRecord,
 } from './dropped-record.js';
 import type { CloneHost } from './host.js';
-import { createRunnerRegistry } from './runner-protocol.js';
+import { createRunnerRegistry, type RunnerClient } from './runner-protocol.js';
 import { Inbox } from './inbox.js';
 import { createManagerPool, type ManagerPool, type ManagerSummary } from './manager.js';
 import { renderMemoryDocuments } from './memory.js';
@@ -359,6 +359,11 @@ export interface CloneOptions {
    * 枠に当たったこととは別の失敗であり、後者の報告を前者で置き換えない。
    */
   onUsageObservation?: (observation: TokenRotatorObservation) => Promise<void>;
+  /**
+   * 名乗ってきた runner へ、いま撒いてある認証トークンを降ろす口（Issue #393 PR3）。
+   * **このクローンは使わない** — 作った `ManagerPool` へそのまま渡すだけである。
+   */
+  syncRunnerToken?: (runner: RunnerClient) => Promise<void>;
   /**
    * 権限モード。省略すると `env` の `ALTEROID_CLONE_PERMISSION_MODE`、
    * それも無ければ `auto`（`permission-mode.ts`）。主にテスト用の直渡しで、
@@ -868,6 +873,7 @@ class Clone implements CloneHost {
       credentials,
       tokenIdentity,
       onUsageObservation,
+      syncRunnerToken,
       permissionMode,
       humanPriority,
       profile,
@@ -907,6 +913,7 @@ class Clone implements CloneHost {
         // 集めるからこそ、世代の照合が「同じ当たりで1回だけ」を保証できる。
         ...(tokenIdentity === undefined ? {} : { tokenIdentity }),
         ...(onUsageObservation === undefined ? {} : { onUsageObservation }),
+        ...(syncRunnerToken === undefined ? {} : { syncRunnerToken }),
       });
     // **落ち方は変えない。「どこで」だけを足す（#438 案D）。**
     //

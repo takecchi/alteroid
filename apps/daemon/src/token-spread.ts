@@ -160,3 +160,31 @@ function firstLine(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error);
   return text.split('\n')[0] ?? '理由不明';
 }
+
+/**
+ * 名乗ってきた runner 1台へ、いま撒いてある認証トークンを降ろす（Issue #393 PR3）。
+ *
+ * **`createTokenSpread` の1台版ではない。** あちらは「回した / 引き取った」ときに
+ * 全台と クローンへ撒くもので、こちらは**後から上がってきた1台に追いつかせる**
+ * ものである。`ManagerPool` の `#connectTo` から呼ばれる（プロファイルの
+ * `syncRunner` と同じ位置）。
+ *
+ * **箱が空なら何もしない。** 器の環境変数だけで走っている既定の構成では、
+ * 降ろすものが無い（受け入れ基準7）。
+ */
+export function createRunnerTokenSync(
+  holder: AgentTokenHolder,
+): (runner: { setCredentials: RunnerLike['setCredentials'] }) => Promise<void> {
+  return async (runner) => {
+    const value = holder.values().CLAUDE_CODE_OAUTH_TOKEN;
+    if (value === undefined) return;
+    await runner.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value }]);
+  };
+}
+
+/** `setCredentials` だけを要求する最小の形（テストで偽物を渡せるようにするため）。 */
+interface RunnerLike {
+  setCredentials(
+    credentials: { name: string; value: string }[],
+  ): Promise<{ name: string; sha256: string; updatedAt: string }[]>;
+}
