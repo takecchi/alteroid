@@ -39,84 +39,39 @@ interface Line {
   text: string;
   /** 進行中の合図（考え中・ツール実行中）。落ち着いたら消す。 */
   transient?: boolean;
+  /**
+   * **この行がどの会話のものか**（会話 id。まだ id が決まっていなければ `undefined`）。
+   *
+   * **画面に出すかどうかは、これといま見ている会話の一致だけで決まる**（下の
+   * `ownedBy`）。**省略できない形にしてあるのは、行を作る場所を型に数えさせる
+   * ためである** —— 足し忘れた行は「持ち主なし」として黙って混ざるのではなく、
+   * ビルドで落ちる。
+   *
+   * **⚠️ 画面の中だけのものである。** サーバの応答にも、保存される形にも、
+   * API の契約（`apps/daemon/openapi.json`）にも出ない。
+   */
+  of: string | undefined;
 }
 
 /**
- * この画面が見せている会話と、**その会話に属するもの**。
+ * **いま見ている会話のものだけを返す。**
  *
- * **4つを1つの state として持つ。別々の `useState` に分けないこと**（#437。
- * 理由は `ChatPane` の `shown` の doc）。
+ * ⚠️ **これが「前の会話の中身を出さない」ことの本体である**（#437）。
+ * 会話を切り替えたときに `lines` を捨てる処理（下の「人間が別の会話を選んだ
+ * ときだけ状態を捨てる」）は残してあるが、**保証はそちらが持っていない** ——
+ * 捨てた後に React が「切り替えより前に積まれていた更新」を基底の値から
+ * 貼り直すと、前の会話の `lines` が丸ごと戻ってくることがあるからである
+ * （実測: 60回中11回。既定の並列度の全スイートでも捕まえた。生の観測は #437）。
+ * **戻ってきても持ち主が違うので、ここで落ちる。**
+ *
+ * **⚠️ そして、ここは何も壊さない（filter であって破壊ではない）。** これが
+ * 2つ目の条件である —— React は**古い props で描き直す**ことがあり
+ * （実測: `main` で40記録中7回、`routeId` が定義済みの後に `undefined` へ
+ * 戻る描画が起きている）、その回に `lines` を壊す形にしていると、**人間が
+ * 送ったばかりの発言ごと消える。** ここは選ぶだけなので、次の描画で戻る。
  */
-interface Shown {
-  /**
-   * この画面が見せている会話。
-   *
-   * 新しい会話の id は受信の途中（`open`）で決まるので、**URL より先にここが決まる**。
-   * URL は後から追いつく。逆にすると、追いついた瞬間が「別の会話に変わった」と
-   * 区別できなくなる。
-   */
-  id: string | undefined;
-  /**
-   * 直近に見た URL 側の会話 id。**「どこまで捨てたか」の印**である。
-   *
-   * 下の「人間が別の会話を選んだときだけ状態を捨てる」が、これと `routeId` を
-   * 比べて切り替わりを見分ける。
-   */
-  lastRouteId: string | undefined;
-  /** この画面で流れてきた分（自分の発言・届いた本文・進行中の合図）。 */
-  lines: Line[];
-  /** この会話で起きた失敗。 */
-  failure: unknown;
-}
-
-/**
- * 人間が別の会話を選んだときだけ、前の会話に属するものを捨てる。
- *
- * **見るのは「URL が変わったか」であって「`id` と一致するか」ではない。**
- * `open` で id を決めてから URL が追いつくまでのあいだ、`id` は URL より
- * 先へ進んでいる。そこで一致だけを見ると、その隙間を「別の会話へ移った」と
- * 誤って読み、送ったばかりの発言ごと消してしまう。
- *
- * **⚠️ この関数は「一度きり」ではなく「毎回」呼ばれる前提で書いてある**（#437）。
- * 渡された `previous` が貼り直しで前の会話の値へ戻っていれば、印
- * （`lastRouteId`）も一緒に戻っているので、**同じ判定がもう一度効いて
- * 捨て直しがかかる。** ここが `ChatPane` の外に在るのは、その「もう一度効く」
- * ことを歯で直接測れるようにするためである（切り出しで出力は変えていない）。
- *
- * ---
- * **この捨て直し（`lines: []`）は、下の `owns()`/`stopped()`（`writable()` の
- * 中身）と同じ役目の二重書きではない。守っている失敗が違う。**
- *
- * - **ここ（render 時の同期リセット）** — 会話を切り替えた**瞬間**に、
- *   前の会話の `lines`（自分の発言・受信中の合図・進行中の transient
- *   な行）を消す。ストリームが動いているかどうかとは無関係——
- *   ただ会話を切り替えただけで、静的にでも古い内容が新しい会話の
- *   画面に残るのを防ぐのはこちらの役目。
- * - **`owns()`/`stopped()`（`writable()`。この下の `send()` 参照）** —
- *   切り替えた**後**に、前の会話のストリームがなおも `setLines(...)`
- *   を呼ぼうとするのを止める。**動いているストリームがあって初めて
- *   意味を持つ**、上とは別の失敗を防いでいる。
- *
- * `git log -S` で確かめた限り、この3つ（この捨て直し / `owns()` /
- * `stopped()`）は同じ初期コミット（`04c1049`、#27）で同時に入った
- * ——「後から別の障害を踏んで1枚ずつ足した」歴史ではない。それでも
- * 上のとおり守備範囲は最初から別である。
- *
- * **ただし変異試験（#363）は、この2つが実際には独立して働いていない
- * ことを見つけている。** 詳しい構造は下の `owns()`/`stopped()` の
- * doc（`writable()` の直前）にまとめてある。
- *
- * **⚠️ そして #437 は、この捨て直しの側が単独では効かない場面を
- * 見つけている。** ここが空にしても、貼り直しで前の会話の `lines` が
- * 戻ることがある（上の `shown` の doc）。**塞いでいるのは
- * 「1つの state に畳んであること」であって、この行ではない。**
- *
- */
-export function nextShown(previous: Shown, routeId: string | undefined): Shown {
-  if (routeId === previous.lastRouteId) return previous;
-  // URL が自分の採番に追いついただけなら、捨てるものは何も無い。
-  if (routeId === previous.id) return { ...previous, lastRouteId: routeId };
-  return { id: routeId, lastRouteId: routeId, lines: [], failure: undefined };
+export function ownedBy(lines: Line[], shownId: string | undefined): Line[] {
+  return lines.filter((line) => line.of === shownId);
 }
 
 export default function Chat({ loaderData }: Route.ComponentProps) {
@@ -316,67 +271,17 @@ export function ChatPane({
   const recordOwnMessage = useRecordOwnMessage();
 
   /**
-   * いま見せている会話と、その会話に属するもの（`Shown`）。
+   * この画面が見せている会話。
    *
-   * **中身（`id` / `lastRouteId` / `lines` / `failure`）は、前は4つの別々の
-   * `useState` だった。1つに畳んであるのは #437 のためである。**
-   *
-   * ⚠️ 実測（#437。生の観測は Issue 本文と PR）: 会話を切り替えると、下の
-   * 「人間が別の会話を選んだときだけ状態を捨てる」が描画の中で `lines` を空に
-   * する。**その捨て直しが確定した後で、React は「切り替えより前に積まれていた
-   * `lines` の更新関数」を基底の値から貼り直すことがある** — 前の会話の
-   * `lines` が丸ごと戻ってくる。分けて持っていると、このとき戻るのは
-   * `lines` だけで、印（`lastRouteId`）は進んだままになる。捨て直しの判定は
-   * `routeId !== lastRouteId` の**一度きり**なので二度と走らず、**前の会話の
-   * 中身（クローンの本文だけでなく、人間自身の発言も）が別の会話の画面に
-   * 残ったまま消えない。**
-   *
-   * **1つに畳むと、印と中身が割れない。** 貼り直しで中身が前の会話へ戻れば
-   * 印も一緒に戻るので、同じ描画で `routeId !== lastRouteId` が再び真になり、
-   * 捨て直しがもう一度かかる ——**一度きりの判定が、毎回の判定になる。**
-   *
-   * **`draft` / `sending` はここに入れない。** あれは入力欄の状態であって
-   * 会話に属するものではない（下の `finally` の「入力欄の状態は会話ではなく
-   * この画面のもの」と同じ線）。
-   *
-   * ---
-   * **⚠️ ここより強い持ち方が在る。採らなかった理由を残す。**
-   *
-   * `useSyncExternalStore` へ寄せれば、この state は React の更新キューを
-   * 通らなくなるので、**この形の貼り直しは原理的に起きない。⚠️ ただしその
-   * 強さは測っていない**（#437 では変異も probe も当てていない）。
-   *
-   * いま「1つの `useState` に畳む」ほうを採っているのは、**既存の挙動を
-   * 壊す面積が桁で小さいから**である —— 畳む形は判定の条件を1文字も変えず、
-   * `shownId` / `lines` / `failure` の参照もそのまま残る。外部ストアへ
-   * 寄せると、この画面の state の持ち方を丸ごと作り替えることになる。
-   * **次にここを触る人へ: 弱いほうを選んだのは、強さを比べて負けたからでは
-   * なく、比べていないからである。**
+   * 新しい会話の id は受信の途中（`open`）で決まるので、**URL より先にここが決まる**。
+   * URL は後から追いつく。逆にすると、追いついた瞬間が「別の会話に変わった」と
+   * 区別できなくなる。
    */
-  const [shown, setShown] = useState<Shown>(() => ({
-    id: routeId,
-    lastRouteId: routeId,
-    lines: [],
-    failure: undefined,
-  }));
-  const { id: shownId, lines, failure } = shown;
-  /**
-   * `lines` だけを差し替える。
-   *
-   * **更新関数しか受けない（値を渡せない）。** 値で渡せる形にすると、上の
-   * 貼り直しが起きたときに「いつの `lines` に対する結果か」が失われる。
-   */
-  const setLines = useCallback((update: (previous: Line[]) => Line[]) => {
-    setShown((previous) => {
-      const next = update(previous.lines);
-      return next === previous.lines ? previous : { ...previous, lines: next };
-    });
-  }, []);
-  const setFailure = useCallback((next: unknown) => {
-    setShown((previous) => (previous.failure === next ? previous : { ...previous, failure: next }));
-  }, []);
+  const [shownId, setShownId] = useState(routeId);
+  const [lines, setLines] = useState<Line[]>([]);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
+  const [failure, setFailure] = useState<unknown>(undefined);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   /** スクロールする器そのもの。「最下部にいるか」を見るのに要る（#247 の 1）。 */
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
@@ -436,16 +341,39 @@ export function ChatPane({
    * （React の「props が変わったら state を調整する」パターン。effect でやると
    * 一度古い内容を描いてから消すことになる。）
    */
-  /*
-   * **1つの更新関数で動かす。** 印（`lastRouteId`）と中身（`lines` /
-   * `failure`）を別々の setter で動かすと、貼り直しで片方だけが戻りうる
-   * （上の `shown` の doc）。
-   *
-   * 判定そのものは `nextShown` に切り出してある（**この描画でも、貼り直しの
-   * 後の描画でも、同じ判定が同じように効く**ことを直接測れるようにするため。
-   * 出力も呼ぶ順序も変えていない）。
-   */
-  if (routeId !== shown.lastRouteId) setShown((previous) => nextShown(previous, routeId));
+  const [lastRouteId, setLastRouteId] = useState(routeId);
+  if (routeId !== lastRouteId) {
+    setLastRouteId(routeId);
+    // URL が自分の採番に追いついただけなら、捨てるものは何も無い。
+    if (routeId !== shownId) {
+      setShownId(routeId);
+      /*
+       * **この `setLines([])` は、下の `owns()`/`stopped()`（`writable()` の
+       * 中身）と同じ役目の二重書きではない。守っている失敗が違う。**
+       *
+       * - **ここ（render 時の同期リセット）** — 会話を切り替えた**瞬間**に、
+       *   前の会話の `lines`（自分の発言・受信中の合図・進行中の transient
+       *   な行）を消す。ストリームが動いているかどうかとは無関係——
+       *   ただ会話を切り替えただけで、静的にでも古い内容が新しい会話の
+       *   画面に残るのを防ぐのはこちらの役目。
+       * - **`owns()`/`stopped()`（`writable()`。この下の `send()` 参照）** —
+       *   切り替えた**後**に、前の会話のストリームがなおも `setLines(...)`
+       *   を呼ぼうとするのを止める。**動いているストリームがあって初めて
+       *   意味を持つ**、上とは別の失敗を防いでいる。
+       *
+       * `git log -S` で確かめた限り、この3つ（この `setLines([])` /
+       * `owns()` / `stopped()`）は同じ初期コミット（`04c1049`、#27）で
+       * 同時に入った——「後から別の障害を踏んで1枚ずつ足した」歴史ではない。
+       * それでも上のとおり守備範囲は最初から別である。
+       *
+       * **ただし変異試験（#363）は、この2つが実際には独立して働いていない
+       * ことを見つけている。** 詳しい構造は下の `owns()`/`stopped()` の
+       * doc（`writable()` の直前）にまとめてある。
+       */
+      setLines([]);
+      setFailure(undefined);
+    }
+  }
 
   /*
    * **この画面で始めた会話でも履歴を読む（#92 で変えた）。**
@@ -470,6 +398,7 @@ export function ChatPane({
         key: message.id,
         role: message.role === 'inbound' ? 'human' : 'clone',
         text: message.text,
+        of: shownId,
       })),
     [history.data],
   );
@@ -507,7 +436,7 @@ export function ChatPane({
       remaining.set(key, (remaining.get(key) ?? 0) + 1);
     }
     const pending: Line[] = [];
-    for (const line of lines) {
+    for (const line of ownedBy(lines, shownId)) {
       const key = `${line.role}\u0000${line.text}`;
       const count = remaining.get(key) ?? 0;
       // 履歴側に同じものがある＝サーバが既に持っているやりとりなので、手元の
@@ -519,7 +448,7 @@ export function ChatPane({
       pending.push(line);
     }
     return [...historyLines, ...pending];
-  }, [historyLines, lines]);
+  }, [historyLines, lines, shownId]);
 
   const handleScroll = useCallback(() => {
     const el = scrollContainerRef.current;
@@ -579,18 +508,20 @@ export function ChatPane({
   useEffect(() => () => streamRef.current?.controller.abort(), []);
 
   /** 打った本文を画面へ積む。送信の入口が2つ（新規・追送）あるので1本にしてある。 */
-  const showOwnLine = useCallback(
-    (text: string) => {
-      // 最下部にいなくても、送った直後だけは追従してよい（上の
-      // `justSentOwnLineRef` のコメント参照）。
-      justSentOwnLineRef.current = true;
-      setLines((previous) => [
-        ...previous,
-        { key: `h-${previous.length}-${text.slice(0, 8)}`, role: 'human', text },
-      ]);
-    },
-    [setLines],
-  );
+  const showOwnLine = useCallback((text: string) => {
+    // 最下部にいなくても、送った直後だけは追従してよい（上の
+    // `justSentOwnLineRef` のコメント参照）。
+    justSentOwnLineRef.current = true;
+    setLines((previous) => [
+      ...previous,
+      {
+        key: `h-${previous.length}-${text.slice(0, 8)}`,
+        role: 'human',
+        text,
+        of: shownIdRef.current,
+      },
+    ]);
+  }, []);
 
   /**
    * **受信中に続けて打った発言を、購読を張らずに投函だけする。**
@@ -638,7 +569,7 @@ export function ChatPane({
         setFailure(caught);
       }
     },
-    [api, recordOwnMessage, setFailure, showOwnLine],
+    [api, recordOwnMessage, showOwnLine],
   );
 
   const send = useCallback(
@@ -751,7 +682,7 @@ export function ChatPane({
           const withoutTransient = previous.filter((line) => line.transient !== true);
           return [
             ...withoutTransient,
-            { key: `t-${Date.now()}`, role: 'system', text, transient: true },
+            { key: `t-${Date.now()}`, role: 'system', text, transient: true, of: stream.id },
           ];
         });
       };
@@ -797,9 +728,23 @@ export function ChatPane({
               // ref も同時に進める。effect が回るのは描き直しの後なので、
               // それを待つと、その隙間に届いた分が `owns()` に弾かれる。
               shownIdRef.current = stream.id;
-              setShown((previous) =>
-                previous.id === stream.id ? previous : { ...previous, id: stream.id },
+              /*
+               * **まだ持ち主の無い行に、決まった id を付け直す。** 新しい会話では
+               * 送った発言のほうが id より先に画面へ乗るので、ここで揃えないと
+               * 「持ち主なし」の行が出なくなる（`ownedBy`）。
+               *
+               * **これは普通の更新なので、貼り直されても replay されるだけで
+               * 消えない**（render の中でやると、貼り直しで無かったことにされる）。
+               */
+              const settled = stream.id;
+              setLines((previous) =>
+                previous.some((line) => line.of === undefined)
+                  ? previous.map((line) =>
+                      line.of === undefined ? { ...line, of: settled } : line,
+                    )
+                  : previous,
               );
+              setShownId(stream.id);
               // URL は後から追いつかせるだけ。作り直しは起きない（key を付けていない）。
               void navigate(`/chat/${stream.id}`, { replace: true });
             }
@@ -838,7 +783,7 @@ export function ChatPane({
                 const key = replyKey;
                 setLines((previous) => [
                   ...previous.filter((line) => line.transient !== true),
-                  { key, role: 'clone', text: '' },
+                  { key, role: 'clone', text: '', of: stream.id },
                 ]);
               }
               append(event.text);
@@ -849,6 +794,7 @@ export function ChatPane({
                 {
                   key: `a-${event.approvalId}`,
                   role: 'system',
+                  of: stream.id,
                   text: `確認したいことがある: ${event.question}\n（承認待ちの画面から答えられる）`,
                 },
               ]);
@@ -881,6 +827,7 @@ export function ChatPane({
                 {
                   key: `u-${Date.now()}`,
                   role: 'system',
+                  of: stream.id,
                   text: `${event.message}\n（この発言は保持されていて、次に枠が開いたときに配り直されて試し直される）`,
                 },
               ]);
@@ -914,7 +861,7 @@ export function ChatPane({
         }
       }
     },
-    [api, shownId, navigate, recordOwnMessage, setFailure, setLines, showOwnLine, followUp],
+    [api, shownId, navigate, recordOwnMessage, showOwnLine, followUp],
   );
 
   return (

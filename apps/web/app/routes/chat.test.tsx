@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { json, Providers, sse, stubFetch, storeTestBaseUrl } from '~/test-support';
 
-import Chat, { nextShown } from './chat';
+import Chat from './chat';
 
 const CONVERSATION_ID = 'conv-1';
 
@@ -488,19 +488,6 @@ describe('会話の切り替え', () => {
    * 画面には出ない。**この構成（`delayMs: 0`・signal 無し・navigate と同じ
    * tick でゲートを外す）そのもので24回連続実測し、揺れずに通ることを
    * 確認済み**（2026-08-23 観測）。
-   *
-   * ⚠️ **#437 で、この歯が言えるのは「競わせた」までだと分かった。** 24回
-   * 連続で通ったのは実測だが、**通っていたのは勝った側の順序だけ**だった
-   * —— 既定の並列度の全スイートで実際に負けた側を通り、赤くなっている
-   * （生の観測は Issue #437）。そして負けた側では**アプリが誤っていた**。
-   * 誤っていたのは `owns()`/`stopped()` ではなく、**会話を切り替えたときの
-   * 捨て直しの側**である（`chat.tsx` の `nextShown` / `shown` の doc）。
-   *
-   * **⟹ この歯は残すが、性質の保証はこの歯が持っていない。** どちらが先に
-   * 走るかを実行環境に委ねている以上、**緑は「たまたま勝った側を通った」と
-   * 区別できず、赤も「別の理由で落ちた」と区別できない。** 保証を持つのは
-   * 下の `nextShown` の歯（決定的）である。ここが残っているのは、最悪条件を
-   * 組んだ構成そのものを捨てないためである。
    */
   it('navigate と同じ tick で、しかも abort が効かない前の会話のストリームから届いたチャンクは画面に出ない', async () => {
     let releaseStray: () => void = () => {};
@@ -606,98 +593,6 @@ describe('会話の切り替え', () => {
       },
       { timeout: 3000 },
     );
-  });
-});
-
-/**
- * #437 の回帰テスト。**上の「競わせる」歯とは、測っているものが違う。**
- *
- * 上は順序を実行環境に委ねている。ここは **#437 で実測した順序をそのまま値で
- * 組む** ので、毎回同じ経路を通る（実測の trace は Issue #437）。
- *
- * ⚠️ **画面を描いてこの順序を組むことはできなかった。** React 19 は、積まれた
- * 更新を**次のマイクロタスクの切れ目で流す** — テストの側から「積まれてから
- * 流れるまで」の隙間へ切り替えを差し込む手段が無い（`await` を挟んだ時点で
- * 既に流れている）。`act` で囲っても、`router.navigate` でも、会話一覧の
- * クリック（離散イベント）でも同じだった（4通り実測）。**だから判定そのもの
- * （`nextShown`）を切り出して、値で組んでいる。**
- */
-describe('会話を切り替えたときに捨てるもの（nextShown）', () => {
-  type Shown = Parameters<typeof nextShown>[0];
-
-  const 前の会話: Shown = {
-    id: CONVERSATION_ID,
-    lastRouteId: CONVERSATION_ID,
-    lines: [
-      { key: 'h-0-やあ', role: 'human', text: 'やあ' },
-      { key: 'c-1', role: 'clone', text: 'こんにちは' },
-    ],
-    failure: undefined,
-  };
-
-  it('人間が別の会話を選んだら、前の会話に属するものを捨てる', () => {
-    const 切り替え後 = nextShown(前の会話, 'other');
-
-    expect(切り替え後.id).toBe('other');
-    expect(切り替え後.lastRouteId).toBe('other');
-    expect(切り替え後.lines).toEqual([]);
-    expect(切り替え後.failure).toBeUndefined();
-  });
-
-  /**
-   * **これが #437 の本体である。**
-   *
-   * 切り替えの描画で一度は捨てたのに、**その後で React が「切り替えより前に
-   * 積まれていた `lines` の更新関数」を基底の値から貼り直す**ことがある
-   * （実測: 60回中11回。既定の並列度の全スイートでも1回捕まえた）。貼り直しで
-   * 戻ってくるのは**前の会話の `lines` そのもの**で、迷子のチャンクだけでは
-   * なく**人間自身の発言も一緒に戻る。**
-   *
-   * 印（`lastRouteId`）を別の state に持っていると、戻るのは `lines` だけで
-   * 印は進んだままになる ⟹ 捨て直しの判定は二度と走らず、**前の会話の中身が
-   * 別の会話の画面に残ったまま消えない**（3000ms 待っても消えないことを実測）。
-   *
-   * 1つの state に畳んであれば、印も一緒に戻る ⟹ **同じ判定がもう一度効く。**
-   */
-  it('貼り直しで前の会話の値が戻ってきても、同じ判定がもう一度捨てる', () => {
-    // React が貼り直しで作る値：**切り替え前の値**に、積まれていた更新を当てたもの。
-    const 貼り直された値: Shown = {
-      ...前の会話,
-      lines: [
-        { key: 'h-0-やあ', role: 'human', text: 'やあ' },
-        { key: 'c-1', role: 'clone', text: 'こんにちは追加チャンク' },
-      ],
-    };
-
-    const 直後の描画 = nextShown(貼り直された値, 'other');
-
-    expect(直後の描画.lines).toEqual([]);
-    expect(直後の描画.id).toBe('other');
-    expect(直後の描画.lastRouteId).toBe('other');
-  });
-
-  it('URL が自分の採番に追いついただけなら、何も捨てない', () => {
-    // `open` で id が決まった直後（id は URL より先へ進んでいる）。
-    const 採番直後: Shown = { ...前の会話, lastRouteId: undefined };
-
-    const 追いついた後 = nextShown(採番直後, CONVERSATION_ID);
-
-    // **同じ配列のまま**（作り直してもいない）。送ったばかりの発言が消えない。
-    expect(追いついた後.lines).toBe(採番直後.lines);
-    expect(追いついた後.id).toBe(CONVERSATION_ID);
-    expect(追いついた後.lastRouteId).toBe(CONVERSATION_ID);
-  });
-
-  it('URL が変わっていなければ、同じものをそのまま返す', () => {
-    expect(nextShown(前の会話, CONVERSATION_ID)).toBe(前の会話);
-  });
-
-  it('新しい会話（URL に id が無い）へ移っても捨てる', () => {
-    const 新しい会話 = nextShown(前の会話, undefined);
-
-    expect(新しい会話.id).toBeUndefined();
-    expect(新しい会話.lastRouteId).toBeUndefined();
-    expect(新しい会話.lines).toEqual([]);
   });
 });
 
