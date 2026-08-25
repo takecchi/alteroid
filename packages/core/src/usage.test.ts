@@ -299,10 +299,56 @@ describe('3軸の内訳', () => {
 
   it('どの軸で足しても合計は同じ（口ごとに食い違わない）', () => {
     const summary = summarizeUsage(rows);
-    for (const axis of [summary.byDate, summary.byManager, summary.byModel]) {
+    // **6軸すべてを通す。** ここは3軸しか見ていなかった — 軸を足すたびに
+    // 「その軸だけ合計に足し合わない」形が入りうるのに、それを止める歯が
+    // 足した軸には無かった。**トークンの軸はとくに落ちやすい**（帰属の無い
+    // 要素を落とすと、落とした分だけ静かに足りなくなる）。
+    for (const axis of [
+      summary.byDate,
+      summary.byManager,
+      summary.byModel,
+      summary.byLayer,
+      summary.bySite,
+      summary.byToken,
+    ]) {
       const sum = axis.reduce((acc, entry) => acc + entry.totals.costUsd, 0);
       expect(sum).toBeCloseTo(summary.total.costUsd, 10);
     }
+  });
+
+  it('トークンの軸は、帰属の無い分を null の要素として残す（落として合計から欠かせない）', () => {
+    const summary = summarizeUsage([
+      { ...rows[0]!, tokenId: 'tok-a' },
+      // 2件目は帰属が無い（プールを使っていない期間の行）。
+      rows[1]!,
+      { ...rows[2]!, tokenId: 'tok-a' },
+    ]);
+
+    // **`null` が消えていない。** 消えると byToken の合計だけが 0.25 少なくなり、
+    // しかも他の軸は「出てこない値を 0 で補わない」約束なので、読み手には
+    // 足りないことに気づく手がかりが無い。
+    expect(summary.byToken).toEqual([
+      { tokenId: 'tok-a', totals: totals({ costUsd: 3 }) },
+      { tokenId: null, totals: totals({ costUsd: 0.25 }) },
+    ]);
+  });
+
+  it('トークンの軸は id の昇順で、帰属の無い分が最後に来る', () => {
+    const summary = summarizeUsage([
+      rows[0]!,
+      { ...rows[1]!, tokenId: 'tok-b' },
+      { ...rows[2]!, tokenId: 'tok-a' },
+    ]);
+
+    expect(summary.byToken.map((entry) => entry.tokenId)).toEqual(['tok-a', 'tok-b', null]);
+  });
+
+  it('プールを使っていない構成では、トークンの軸は null の1件だけになる', () => {
+    // **これを「1本のトークンで全部使った」と読ませないための形である。**
+    // 要素が1つしか無いことは、`tokensSince` が null であることと合わせて
+    // 初めて「取れていない」と読める（口の側がその2つを並べて出す）。
+    const summary = summarizeUsage(rows);
+    expect(summary.byToken).toEqual([{ tokenId: null, totals: summary.total }]);
   });
 
   it('空なら全部空', () => {
