@@ -8,9 +8,9 @@ import { z } from 'zod';
  * （`limit`/`cursor`）を足したときにこちら側へ移った（`apps/daemon/src/app.ts` の
  * `commitmentsCursorSchema` の doc）。
  * **並べ替え・絞り込みは依然として足さない（理由: 判断がクローンから器へ移る）。窓（`limit`/`cursor`）は 2026-08-25 に人間の明示の「はい」を受けて足した。**
- * 窓はその固定された並びの上に頁を切る
- * だけである。`/journal` は別 PR で使う
- * 予定がある。`/reports` はこれを使わない——不透明なカーソルと「応答を1バイトも
+ * あの口の並びは `CommitmentStore.list` の契約（未了は `at` 昇順・片付いたものは
+ * `closedAt` 降順で未了の後ろ）が既に固定していて、窓はその上に頁を切るだけである。
+ * `/journal` は別 PR で使う予定がある。`/reports` はこれを使わない——不透明なカーソルと「応答を1バイトも
  * 変えない」を同時に満たせなかったため、応答に既に載っている `date`/`at` をそのまま
  * 使う可視の複合キー（`beforeDate` ＋ `beforeAt`）になった（`apps/daemon/src/reports.ts`
  * の `listDailyReportsBefore`）。`/conversations` はこの符号化を使わない
