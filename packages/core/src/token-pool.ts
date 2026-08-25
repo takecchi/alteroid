@@ -605,7 +605,14 @@ export function markTokenUsable(token: AgentToken, at: string): AgentToken {
  * 「記録の上で候補から外す理由が無い」までである。
  */
 export function tokenAvailabilityAt(
-  token: AgentToken,
+  // **`AgentToken` そのものではなく、実際に見る3つの列だけを受ける。**
+  // `AgentTokenView`（値を持たない外向きの顔）からも同じ判定を通せるようにする
+  // ためである。**二重キャスト（`as unknown as AgentToken`）で通さないこと** ——
+  // あれは片方に列が増えたときに黙って通り続ける（`AgentToken` は `value` を
+  // 持つので、キャストを認めると「値を持つ型として扱ってよい」が既成事実になる）。
+  //
+  // **広げても保証は落ちていない。** この関数は元から3つの列しか読んでいない。
+  token: Pick<AgentToken, 'disabledAt' | 'invalidatedAt' | 'cooldownUntil'>,
   at: number,
 ): 'disabled' | 'invalidated' | 'cooling' | 'ready' {
   if (token.disabledAt !== undefined) return 'disabled';
