@@ -338,6 +338,20 @@ export function ChatPane({
    * **`draft` / `sending` はここに入れない。** あれは入力欄の状態であって
    * 会話に属するものではない（下の `finally` の「入力欄の状態は会話ではなく
    * この画面のもの」と同じ線）。
+   *
+   * ---
+   * **⚠️ ここより強い持ち方が在る。採らなかった理由を残す。**
+   *
+   * `useSyncExternalStore` へ寄せれば、この state は React の更新キューを
+   * 通らなくなるので、**この形の貼り直しは原理的に起きない。⚠️ ただしその
+   * 強さは測っていない**（#437 では変異も probe も当てていない）。
+   *
+   * いま「1つの `useState` に畳む」ほうを採っているのは、**既存の挙動を
+   * 壊す面積が桁で小さいから**である —— 畳む形は判定の条件を1文字も変えず、
+   * `shownId` / `lines` / `failure` の参照もそのまま残る。外部ストアへ
+   * 寄せると、この画面の state の持ち方を丸ごと作り替えることになる。
+   * **次にここを触る人へ: 弱いほうを選んだのは、強さを比べて負けたからでは
+   * なく、比べていないからである。**
    */
   const [shown, setShown] = useState<Shown>(() => ({
     id: routeId,
@@ -565,15 +579,18 @@ export function ChatPane({
   useEffect(() => () => streamRef.current?.controller.abort(), []);
 
   /** 打った本文を画面へ積む。送信の入口が2つ（新規・追送）あるので1本にしてある。 */
-  const showOwnLine = useCallback((text: string) => {
-    // 最下部にいなくても、送った直後だけは追従してよい（上の
-    // `justSentOwnLineRef` のコメント参照）。
-    justSentOwnLineRef.current = true;
-    setLines((previous) => [
-      ...previous,
-      { key: `h-${previous.length}-${text.slice(0, 8)}`, role: 'human', text },
-    ]);
-  }, []);
+  const showOwnLine = useCallback(
+    (text: string) => {
+      // 最下部にいなくても、送った直後だけは追従してよい（上の
+      // `justSentOwnLineRef` のコメント参照）。
+      justSentOwnLineRef.current = true;
+      setLines((previous) => [
+        ...previous,
+        { key: `h-${previous.length}-${text.slice(0, 8)}`, role: 'human', text },
+      ]);
+    },
+    [setLines],
+  );
 
   /**
    * **受信中に続けて打った発言を、購読を張らずに投函だけする。**
@@ -621,7 +638,7 @@ export function ChatPane({
         setFailure(caught);
       }
     },
-    [api, recordOwnMessage, showOwnLine],
+    [api, recordOwnMessage, setFailure, showOwnLine],
   );
 
   const send = useCallback(
@@ -897,7 +914,7 @@ export function ChatPane({
         }
       }
     },
-    [api, shownId, navigate, recordOwnMessage, showOwnLine, followUp],
+    [api, shownId, navigate, recordOwnMessage, setFailure, setLines, showOwnLine, followUp],
   );
 
   return (
