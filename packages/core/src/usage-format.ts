@@ -368,23 +368,25 @@ export function findUnrecordedManagers(
   since: string | null,
 ): UnrecordedManager[] {
   const cutoff = since === null ? null : Date.parse(since);
-  return managers
-    .filter((manager) => !recordedManagerIds.has(manager.managerId))
-    .filter((manager) => cutoff === null || Date.parse(manager.startedAt) >= cutoff)
-    // **3フィールドへ写す（フィルタしただけで返さない）。** 呼び出し側
-    // （`ManagerPool.list()`）が渡してくるのは `ManagerSummary` 丸ごとで、
-    // 型（`UnrecordedManagerCandidate`）は3フィールドしか要求していないが、
-    // 構造的部分型なので実際の値は残りのフィールドも持ったままである。ここで
-    // 写し取らずに返すと、`.parse()` を通さない口（`GET /usage` の応答は
-    // `usageResponseSchema` を `.parse()` していない）では `ManagerSummary`
-    // 丸ごとが黙って外へ出る——`openapi.ts` の `unrecordedManagerSchema` の doc
-    // が「宣言と実物を繋ぐのは `.parse()` だけ」と言っている、まさにその穴。
-    .map((manager) => ({
-      managerId: manager.managerId,
-      status: manager.status,
-      startedAt: manager.startedAt,
-    }))
-    .sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+  return (
+    managers
+      .filter((manager) => !recordedManagerIds.has(manager.managerId))
+      .filter((manager) => cutoff === null || Date.parse(manager.startedAt) >= cutoff)
+      // **3フィールドへ写す（フィルタしただけで返さない）。** 呼び出し側
+      // （`ManagerPool.list()`）が渡してくるのは `ManagerSummary` 丸ごとで、
+      // 型（`UnrecordedManagerCandidate`）は3フィールドしか要求していないが、
+      // 構造的部分型なので実際の値は残りのフィールドも持ったままである。ここで
+      // 写し取らずに返すと、`.parse()` を通さない口（`GET /usage` の応答は
+      // `usageResponseSchema` を `.parse()` していない）では `ManagerSummary`
+      // 丸ごとが黙って外へ出る——`openapi.ts` の `unrecordedManagerSchema` の doc
+      // が「宣言と実物を繋ぐのは `.parse()` だけ」と言っている、まさにその穴。
+      .map((manager) => ({
+        managerId: manager.managerId,
+        status: manager.status,
+        startedAt: manager.startedAt,
+      }))
+      .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+  );
 }
 
 /**

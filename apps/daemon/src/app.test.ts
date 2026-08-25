@@ -631,9 +631,7 @@ describe('HTTP API', () => {
       await record('mgr-old-record', '2026-05-01', '2026-05-01T00:30:00.000Z', 3);
 
       // 8月だけを狭く照会する——1月・5月の行は範囲の外に落ちる。
-      const narrow = (await (
-        await app.request('/usage?from=2026-08-01&to=2026-08-31')
-      ).json()) as {
+      const narrow = (await (await app.request('/usage?from=2026-08-01&to=2026-08-31')).json()) as {
         rows: unknown[];
         unrecordedManagers: { managerId: string }[];
       };

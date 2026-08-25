@@ -64,7 +64,9 @@ describe('findUnrecordedManagers', () => {
    * `since` ちょうどの委譲は「台帳が始まった後」として数える（`>=`）。
    */
   it('startedAt が since と同じ瞬間なら数える（境界は含む）', () => {
-    const managers = [manager({ managerId: 'mgr-on-boundary', startedAt: '2026-08-01T00:00:00.000Z' })];
+    const managers = [
+      manager({ managerId: 'mgr-on-boundary', startedAt: '2026-08-01T00:00:00.000Z' }),
+    ];
     const result = findUnrecordedManagers(managers, new Set(), '2026-08-01T00:00:00.000Z');
 
     expect(result.map((m) => m.managerId)).toEqual(['mgr-on-boundary']);

@@ -315,7 +315,9 @@ export class PgUsageStore implements UsageStore {
    * その先頭列に一致するので、全表走査ではなく索引を使える。
    */
   async recordedManagerIds(): Promise<Set<string>> {
-    const rows = await this.#db.selectDistinct({ managerId: usageDaily.managerId }).from(usageDaily);
+    const rows = await this.#db
+      .selectDistinct({ managerId: usageDaily.managerId })
+      .from(usageDaily);
     return new Set(rows.map((row) => row.managerId));
   }
 
