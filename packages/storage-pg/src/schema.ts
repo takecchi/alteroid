@@ -504,7 +504,8 @@ export const usageLedger = pgTable('usage_ledger', {
 
 /**
  * 認証トークンのプール（Issue #393「PR1 プールの器」）。**回さない**——ここが
- * 持つのは正本の置き場だけで、検知・切替（後続の PR）はここに無い。
+ * 持つのは正本の置き場だけで、検知・切替はここに無い（`@alteroid/core` の
+ * `createTokenRotator`）。
  *
  * `value` は素の文字列のまま入れる（sha256 化した鍵とは違う）——ここが正本を
  * 持つ唯一の場所であり、外へ出す顔（`AgentTokenView`）は上の層が作る。

@@ -55,7 +55,7 @@ const EMPTY: TokenPoolFile = { tokens: [] };
  * 認証トークンのプールの置き場（既定 `~/.alteroid/tokens.json`）。
  *
  * **回さない**（Issue #393「PR1 プールの器」）。ここが持つのは正本の読み書きだけで、
- * 検知・切替は上の層（後続の PR）が持つ。
+ * 検知・切替は上の層が持つ（`@alteroid/core` の `createTokenRotator`）。
  *
  * `FsAuthStore`（`auth.ts`）と同じ書き方——**一時ファイルを 0600 で作ってから
  * rename する**。rename の後に絞ると、その隙間で他人が読める。

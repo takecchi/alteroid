@@ -7,7 +7,7 @@ import { describeAuthFailure, resolveTarget, type Target } from './target.js';
  * `alteroid token` — 認証トークンのプール（Issue #393「PR1 プールの器」）。
  *
  * **回さない。** ここにあるのは器を覗く・並べる・外す口だけで、枠に当たった
- * ときの検知・切替（後続の PR）はここには無い。
+ * ときの検知・切替はここには無い（デーモンの中の回し手が持つ）。
  *
  * `add` / `remove` / `disable` / `enable` はどれも「`GET /tokens` で現在の
  * 一覧を取り、加工して `PUT /tokens` へ戻す」形にしてある。`PUT /tokens` の
