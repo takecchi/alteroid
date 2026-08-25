@@ -40,6 +40,15 @@ export interface UsageOptions {
    */
   layer?: string;
   site?: string;
+  /**
+   * どの認証トークンで（`alteroid token list` の `id=`）。
+   *
+   * **`narrowUsageAxis` を通さない。** 値の集合が閉じていない（プールの中身は
+   * 器ごとに違う）ので、許された値の一覧を CLI が持てない。**通す先で存在しない
+   * id を弾かないこと** — 弾くと「そのトークンでは1件も使っていない」と
+   * 「そんなトークンは無い」が同じ空の結果に潰れる。空なら空と出す。
+   */
+  token?: string;
 }
 
 /**
@@ -83,6 +92,7 @@ export async function usageCommand(options: UsageOptions): Promise<void> {
       ...(options.manager === undefined ? {} : { managerId: options.manager }),
       ...(layer.value === undefined ? {} : { layer: layer.value }),
       ...(site.value === undefined ? {} : { site: site.value }),
+      ...(options.token === undefined ? {} : { tokenId: options.token }),
     },
   });
   if (!response.ok) {
@@ -119,7 +129,17 @@ export interface UsageView extends UsageAggregate {
 }
 
 export function renderUsage(view: UsageView): string {
-  const { rows, since, layersSince, beforeLedger, beforeLayers, notice, account } = view;
+  const {
+    rows,
+    since,
+    layersSince,
+    tokensSince,
+    beforeLedger,
+    beforeLayers,
+    beforeTokens,
+    notice,
+    account,
+  } = view;
 
   /**
    * アカウント全体の残り。**台帳がまだ空の経路にも同じものを付ける** — 台帳が
@@ -201,6 +221,17 @@ export function renderUsage(view: UsageView): string {
         .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
         .map((e) => ({ label: e.site, costUsd: e.totals.costUsd })),
     );
+    // **どの認証トークンで。** `null` は「取れていない分」であって、消さない
+    // （消すとこの軸だけ合計に足し合わなくなり、それが読み手から分からない）。
+    axis(
+      '認証トークン別:',
+      [...summary.byToken]
+        .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
+        .map((e) => ({
+          label: e.tokenId ?? '（トークンの帰属が無い分）',
+          costUsd: e.totals.costUsd,
+        })),
+    );
   }
 
   lines.push('', `台帳の始点: ${since}`);
@@ -220,6 +251,20 @@ export function renderUsage(view: UsageView): string {
     lines.push(
       '照会した範囲は層と場所の軸の始点より前にかかっている。' +
         'その分の層と場所は既定値であって観測ではない。',
+    );
+  }
+  // **トークンの軸の始点は、上の2つと意味が1つ違う。** ここが null なのは「まだ
+  // 1件も記録していない」だけでなく、**プールを使っていないので取れない**ことが
+  // ある。だから「まだ記録していない」で終わらせず、それが正常でありうると書く。
+  lines.push(
+    tokensSince === null
+      ? '認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常）。'
+      : `認証トークンの軸の始点: ${tokensSince}`,
+  );
+  if (beforeTokens) {
+    lines.push(
+      '照会した範囲は認証トークンの軸の始点より前にかかっている。' +
+        'その分にトークンの帰属は無い（0 でも既定値でもなく、取れていない）。',
     );
   }
   lines.push(notice);

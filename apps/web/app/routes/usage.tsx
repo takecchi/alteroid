@@ -43,6 +43,12 @@ export default function Usage() {
   const [managerId, setManagerId] = useState('');
   const [layer, setLayer] = useState<UsageLayer | ''>('');
   const [site, setSite] = useState<UsageSite | ''>('');
+  // **トークンは `Select` にしない。** 選択肢の集合が閉じていない（プールの中身は
+  // 器ごとに違う）ので、`USAGE_LAYERS` のような一覧を core から持ってこられない。
+  // ここで `GET /tokens` を引いて選択肢にすることもできるが、それは**この画面が
+  // プールの状態に依存する**という別の結び付きを作る（プールが読めないと絞り込みも
+  // 消える）。id は `alteroid token list` と `/tokens` から取れるので素の入力にする。
+  const [tokenId, setTokenId] = useState('');
 
   const query: UsageQuery = {
     ...(from === '' ? {} : { from }),
@@ -50,6 +56,7 @@ export default function Usage() {
     ...(managerId === '' ? {} : { managerId }),
     ...(layer === '' ? {} : { layer }),
     ...(site === '' ? {} : { site }),
+    ...(tokenId === '' ? {} : { tokenId }),
   };
   const { data, error, isLoading } = useUsage(query);
 
@@ -138,6 +145,14 @@ export default function Usage() {
               ))}
             </Select>
           </label>
+          <label className="flex flex-col gap-1 text-xs text-muted">
+            token（どの認証トークンで）
+            <Input
+              placeholder="token id"
+              value={tokenId}
+              onChange={(event) => setTokenId(event.target.value)}
+            />
+          </label>
         </div>
       </Card>
 
@@ -165,8 +180,10 @@ export default function Usage() {
               rows={data.rows}
               since={data.since}
               layersSince={data.layersSince}
+              tokensSince={data.tokensSince}
               beforeLedger={data.beforeLedger}
               beforeLayers={data.beforeLayers}
+              beforeTokens={data.beforeTokens}
               notice={data.notice}
             />
           )}
@@ -227,15 +244,19 @@ function UsageBody({
   rows,
   since,
   layersSince,
+  tokensSince,
   beforeLedger,
   beforeLayers,
+  beforeTokens,
   notice,
 }: {
   rows: readonly UsageRow[];
   since: string;
   layersSince: string | null;
+  tokensSince: string | null;
   beforeLedger: boolean;
   beforeLayers: boolean;
+  beforeTokens: boolean;
   notice: string;
 }) {
   const summary = summarizeUsage(rows);
@@ -272,6 +293,19 @@ function UsageBody({
               照会した範囲は層と場所の軸の始点
               {layersSince === null ? '（まだ1件も記録が無い）' : `（${layersSince}）`}
               より前にかかっている。その分の層と場所は既定値であって観測ではない。
+            </p>
+          )}
+          {beforeTokens && (
+            // **トークンの軸の null は、上の2つと意味が1つ違う。** 記録が1件も無い
+            // ときだけでなく、**プールを使っていない構成では最後まで null である。**
+            // だから「まだ記録が無い」で終わらせず、それが正常でありうると書く
+            // （黙ると「トークンを回していない」と読める）。
+            <p className="mt-3 text-xs text-warn">
+              照会した範囲は認証トークンの軸の始点
+              {tokensSince === null
+                ? '（まだ1件も記録が無い。プールを使っていない構成なら、これが正常）'
+                : `（${tokensSince}）`}
+              より前にかかっている。その分にトークンの帰属は無い（0 でも既定値でもなく、取れていない）。
             </p>
           )}
         </div>
@@ -337,6 +371,20 @@ function UsageBody({
             entries={[...summary.bySite]
               .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
               .map((entry) => ({ label: entry.site, costUsd: entry.totals.costUsd }))}
+          />
+          {/*
+            **`tokenId` が null の要素を落とさない。** 落とすとこの軸だけ合計に
+            足し合わなくなり、しかも他の軸は「出てこない値を 0 で補わない」約束
+            なので、読み手には足りないことに気づく手がかりが無い。
+          */}
+          <AxisCard
+            title="認証トークン別"
+            entries={[...summary.byToken]
+              .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
+              .map((entry) => ({
+                label: entry.tokenId ?? '（トークンの帰属が無い分）',
+                costUsd: entry.totals.costUsd,
+              }))}
           />
         </div>
       )}

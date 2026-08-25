@@ -1678,7 +1678,8 @@ export function createCloneTools(context: ToolContext) {
       'usage_read',
       [
         'alteroid が使った分（トークンと費用）を台帳から読む。',
-        '軸は5つ — 日・マネージャー（誰の分か）・モデル・layer（誰が: clone / manager）・site（どこで: session / distill）。',
+        '軸は6つ — 日・マネージャー（誰の分か）・モデル・layer（誰が: clone / manager）・site（どこで: session / distill）・token（どの認証トークンで）。',
+        'token の軸に「（トークンの帰属が無い分）」が出るのは、プールを使っていない構成では正常である（0 でも既定値でもなく、取れていない）。',
         '**推定値であり請求明細ではない。**',
         '記録は台帳を置いた日から始まっているので、それより前は 0 ではなく「記録が無い」と出る。',
         'まとめ表示は軸ごとに打ち切る。続きは axis と offset で辿れる（打ち切りの行にそのまま書いてある）。',
@@ -1692,6 +1693,11 @@ export function createCloneTools(context: ToolContext) {
           .describe('この actor の分だけ（マネージャーの id か "clone"）'),
         layer: usageLayerSchema.optional().describe('誰が使った分だけ（clone / manager）'),
         site: usageSiteSchema.optional().describe('どこで使った分だけ（session / distill）'),
+        tokenId: z
+          .string()
+          .min(1)
+          .optional()
+          .describe('この認証トークンで使った分だけ（token_list の id）'),
         axis: z
           .enum(USAGE_AXES)
           .optional()
@@ -1705,13 +1711,14 @@ export function createCloneTools(context: ToolContext) {
           .optional()
           .describe('axis と一緒に使う。その軸の何件目から出すか'),
       },
-      async ({ from, to, managerId, layer, site, axis, offset }) => {
+      async ({ from, to, managerId, layer, site, tokenId, axis, offset }) => {
         const aggregate = await stores.usage.aggregate({
           ...(from === undefined ? {} : { from }),
           ...(to === undefined ? {} : { to }),
           ...(managerId === undefined ? {} : { managerId }),
           ...(layer === undefined ? {} : { layer }),
           ...(site === undefined ? {} : { site }),
+          ...(tokenId === undefined ? {} : { tokenId }),
         });
         // **軸モードでは「続きの1軸」だけを返す。** アカウント全体の残りもまとめ表示も
         // 付けない — 続きを辿るほど同じ全体が積み増しで返ってくるのを避けるためである。
@@ -3447,7 +3454,7 @@ const USAGE_AXIS_LIMIT = 14;
  * 「全部出す」は採らない — 出力が伸びるとクローンの入力を毎ターン食う。代わりに
  * **打ち切りの行がそのまま次に打つ手を書く。**
  */
-const USAGE_AXES = ['date', 'manager', 'model', 'layer', 'site'] as const;
+const USAGE_AXES = ['date', 'manager', 'model', 'layer', 'site', 'token'] as const;
 type UsageAxis = (typeof USAGE_AXES)[number];
 
 /** `axis` を指定したときに1回で出す件数。 */
@@ -3459,6 +3466,7 @@ const USAGE_AXIS_TITLES: Record<UsageAxis, string> = {
   model: 'モデル別',
   layer: '層別（誰が）',
   site: '場所別（どこで）',
+  token: '認証トークン別',
 };
 
 interface UsageAxisEntry {
@@ -3494,6 +3502,16 @@ function usageAxisEntries(summary: UsageBreakdown, axis: UsageAxis): UsageAxisEn
       return byCost(summary.byLayer.map((e) => ({ label: e.layer, totals: e.totals })));
     case 'site':
       return byCost(summary.bySite.map((e) => ({ label: e.site, totals: e.totals })));
+    case 'token':
+      // **`null` を「記録が無い」と書く。id を捏造しない。** ここが空文字や
+      // `'unknown'` になると、クローンからは1本のトークンとして見え、費用を
+      // そこへ帰属させた話が始まる（`usage.ts` の `usageBreakdownSchema`）。
+      return byCost(
+        summary.byToken.map((e) => ({
+          label: e.tokenId ?? '（トークンの帰属が無い分）',
+          totals: e.totals,
+        })),
+      );
   }
 }
 
@@ -3513,7 +3531,8 @@ function renderUsage(
   aggregate: UsageAggregate,
   view: { axis?: UsageAxis; offset?: number } = {},
 ): string {
-  const { rows, since, layersSince, beforeLedger, beforeLayers, notice } = aggregate;
+  const { rows, since, layersSince, tokensSince, beforeLedger, beforeLayers, beforeTokens, notice } =
+    aggregate;
 
   if (since === null) {
     return [
@@ -3597,6 +3616,22 @@ function renderUsage(
       '照会した範囲は層と場所の軸の始点より前にかかっている。' +
         'その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、' +
         '蒸留が起きていなかった、とは読まないこと）。',
+    );
+  }
+  // **トークンの軸の始点を、上の2つと混ぜない。** ここが null なのは「まだ1件も
+  // 記録していない」だけではなく、**プールを使っていないので取れない**ことがある
+  // （`usage.ts` の `usageAggregateSchema` の `tokensSince`）。**「トークンを回して
+  // いない」と読ませないこと** — 回していないのではなく、記録が無いのである。
+  lines.push(
+    tokensSince === null
+      ? '認証トークンの軸はまだ1件も記録していない' +
+          '（プールを使っていない構成なら、これが正常である）。'
+      : `認証トークンの軸の始点: ${tokensSince}`,
+  );
+  if (beforeTokens) {
+    lines.push(
+      '照会した範囲は認証トークンの軸の始点より前にかかっている。' +
+        'その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。',
     );
   }
   lines.push(notice);
