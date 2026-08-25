@@ -3643,6 +3643,43 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
     expect(reply).toContain('axis="manager", offset=14 で続きが出る');
   });
 
+  /**
+   * **#406 の変異試験で確定させた向き。** 「切ったら黙らない」の逆——
+   * **切っていないのに断り書きが出る**方向は、いままでこの軸の打ち切りに
+   * 対する専用の歯を1本も持っていなかった（`renderListing` 側は
+   * `excerpt.test.ts` の「予算に収まるなら全件そのまま出す」が既に守って
+   * いるが、この軸ごとの打ち切りは `renderListing` を通らない手書きの
+   * ループ——`tools.ts` の `renderUsage` 内、`USAGE_AXIS_LIMIT` の直後の
+   * `if (entries.length > USAGE_AXIS_LIMIT)` ——なので、そちらの歯は
+   * ここには効かない）。
+   *
+   * **`'は出していない'` を目印にする理由**: `'残り'` だけだと
+   * `ACCOUNT_USAGE_TITLE`（「アカウント全体の残り」）に常に一致し、
+   * 打ち切りの有無と無関係に真になる（偽陽性）。`'は出していない'` は
+   * 打ち切りの断り書き（`tools.ts` の3箇所——usage_read の軸モード・
+   * usage_read のまとめ表示・self_status の台帳突き合わせ）だけが持つ
+   * 語なので、この断り書きの有無だけを見る。
+   */
+  it('打ち切っていないなら、断り書きは1つも出ない（USAGE_AXIS_LIMIT 未満）', async () => {
+    const h = harness();
+    // USAGE_AXIS_LIMIT(14) を下回る件数——正常系。どの軸も打ち切られない。
+    for (let i = 0; i < 5; i += 1) {
+      await record(h, {
+        layer: 'manager',
+        site: 'session',
+        managerId: `mgr-${String(i).padStart(2, '0')}`,
+        costUsd: 5 - i,
+      });
+    }
+
+    const reply = await h.call('usage_read', {});
+
+    // 中身そのものは出ていることの確認(0件で通っているのではない)。
+    expect(reply).toContain('マネージャー別:');
+    expect(reply).toContain('mgr-00');
+    expect(reply).not.toContain('は出していない');
+  });
+
   it('axis を指定すると、その軸だけを offset から出す', async () => {
     const h = harness();
     for (let i = 0; i < 20; i += 1) {
@@ -3947,6 +3984,54 @@ describe('self_status（いま自分がどう走っているか）', () => {
     expect(reply).toContain('managerId: "mgr-7"');
     // 「載っている／いない」という断定ではなく、軸（managerId 付きの行）を出す。
     expect(reply).not.toMatch(/あなたの消費が(台帳に)?載って/);
+  });
+
+  /**
+   * **#406 の変異試験（`renderLedgerCrossReference` の打ち切り断り書きを
+   * 空にする変異）は、いまの test 一式（本ファイル全件）で生存した——
+   * その理由は「歯が無い」であって「変異が届いていない」ではないことを、
+   * 到達性の証人（sdkModel を与えた器で USAGE_AXIS_LIMIT(14) を超えさせる
+   * 一時テスト）で別途確かめてある。この節は `renderListing` を通らない
+   * 手書きのループ（`tools.ts` の `renderLedgerCrossReference`、
+   * `if (entries.length > USAGE_AXIS_LIMIT)` 直下）なので、
+   * `excerpt.test.ts` 側の「予算に収まるなら全件そのまま出す」歯は
+   * ここには効かない。**
+   *
+   * ここが直接見るのは逆方向——**切っていないのに断り書きが出ないこと**。
+   * `USAGE_AXIS_LIMIT`(14) を下回る件数なら、`残り`/`は出していない`が
+   * 1つも出てはいけない。
+   */
+  it('台帳の突き合わせが USAGE_AXIS_LIMIT 未満なら、打ち切りの断り書きは出ない', async () => {
+    const h = harness(() => ({ ...RUNTIME, sdkModel: 'claude-fable-9000' }));
+    for (let i = 0; i < 5; i += 1) {
+      await h.stores.usage.record({
+        layer: 'manager',
+        site: 'session',
+        accumulation: 'cumulative',
+        managerId: `mgr-${String(i).padStart(2, '0')}`,
+        date: '2026-08-14',
+        at: '2026-08-14T10:00:00.000Z',
+        snapshot: {
+          models: {
+            'claude-fable-9000': {
+              inputTokens: 1,
+              outputTokens: 1,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+              webSearchRequests: 0,
+              costUsd: 1 + i,
+            },
+          },
+        },
+      });
+    }
+
+    const reply = await h.call('self_status', {});
+
+    // 中身そのものは出ていることの確認(0件で通っているのではない)。
+    expect(reply).toContain('claude-fable-9000');
+    expect(reply).toContain('managerId: "mgr-00"');
+    expect(reply).not.toContain('は出していない');
   });
 
   it('同じモデル id の行が無ければ、そう言う（0 件と嘘をつかない）', async () => {
