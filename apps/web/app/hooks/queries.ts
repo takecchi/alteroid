@@ -50,6 +50,7 @@ export const KEY = {
   conversations: (limit: number) => ({ type: 'conversations', limit }) as const,
   conversation: (id: string) => ({ type: 'conversation', id }) as const,
   runners: { type: 'runners' } as const,
+  tokens: { type: 'tokens' } as const,
 };
 
 /** デーモンが応答するか。接続先が合っているかの唯一の手がかりでもある。 */
@@ -210,6 +211,17 @@ export function useConversation(id: string | null) {
 export function useRunners() {
   const api = useApi();
   return useSWR(KEY.runners, () => api.api.GET('/runners').then(unwrap));
+}
+
+/**
+ * 認証トークンのプールと、回す契機・冷却の設定（`GET /tokens`）。
+ *
+ * **実行環境の持ち主だけ**（`requireOperator`）——`account grant` を通しただけの
+ * アカウントには 403 が返る。読み取り専用（`PUT /tokens` はこの画面からは呼ばない）。
+ */
+export function useTokens() {
+  const api = useApi();
+  return useSWR(KEY.tokens, () => api.api.GET('/tokens').then(unwrap));
 }
 
 /** 日誌エントリを人間が読む1行に潰す（一覧と通知で同じ文言を使うため）。 */
