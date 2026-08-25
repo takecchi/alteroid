@@ -94,11 +94,17 @@ function journalWhere(type: JournalEntry['type']): string {
  *
  * 文言は `usage_read`（`tools.ts` の `USAGE_AXES`）の `axis` 引数と同じ名前を
  * 使う——続きを辿る呼び方を渡す以上、そこで通る名前でなければ嘘になる。
+ *
+ * **省いた件数は `MAX_ITEMS` ではなく「実際に出した件数」から引く。** 定数から
+ * 引くと、`top()` が切る件数がこの定数から離れた日に、出した数と合図の数が
+ * 食い違う——**合図そのものは在るので、出力は黙って嘘になる**（合図が無いのと
+ * 違って、読んだ側からは食い違いに気づけない）。切った側が出した数を渡す形に
+ * しておけば、その食い違いが起きようがない。
  */
-function usageOmitted(total: number, axis: string, unit: string): string {
-  if (total <= MAX_ITEMS) return '';
+function usageOmitted(total: number, shown: number, axis: string, unit: string): string {
+  if (total <= shown) return '';
   return (
-    `…ほか ${total - MAX_ITEMS} ${unit}` +
+    `…ほか ${total - shown} ${unit}` +
     `（\`usage_read\` に axis="${axis}", offset=0 を渡すと続きから辿れる）`
   );
 }
@@ -399,34 +405,43 @@ async function usageSection(stores: Stores, since: Date, until: Date): Promise<s
       [...entries].sort((a, b) => b.totals.costUsd - a.totals.costUsd).slice(0, MAX_ITEMS);
     // **合図は `usageOmitted` から取る（4軸とも同じ関数を通す）。** 超えて
     // いなければ空文字が返るので、その行には何も足さない。
-    const modelExtra = usageOmitted(summary.byModel.length, 'model', '件');
+    const shownModels = top(summary.byModel);
+    const modelExtra = usageOmitted(summary.byModel.length, shownModels.length, 'model', '件');
     lines.push(
-      `- モデル別: ${top(summary.byModel)
+      `- モデル別: ${shownModels
         .map((entry) => `${entry.model} ${formatUsd(entry.totals.costUsd)}`)
         .join(' / ')}${modelExtra === '' ? '' : ` / ${modelExtra}`}`,
     );
     // **誰が**使ったか。モデル別と別に出す — `ALTEROID_CLONE_MODEL` を置けば
     // クローンとマネージャーは同じモデル帯に並び、モデル名では層を見分けられない。
-    const layerExtra = usageOmitted(summary.byLayer.length, 'layer', '件');
+    const shownLayers = top(summary.byLayer);
+    const layerExtra = usageOmitted(summary.byLayer.length, shownLayers.length, 'layer', '件');
     lines.push(
-      `- 層別（誰が）: ${top(summary.byLayer)
+      `- 層別（誰が）: ${shownLayers
         .map((entry) => `${entry.layer} ${formatUsd(entry.totals.costUsd)}`)
         .join(' / ')}${layerExtra === '' ? '' : ` / ${layerExtra}`}`,
     );
-    const siteExtra = usageOmitted(summary.bySite.length, 'site', '件');
+    const shownSites = top(summary.bySite);
+    const siteExtra = usageOmitted(summary.bySite.length, shownSites.length, 'site', '件');
     lines.push(
-      `- 場所別（どこで）: ${top(summary.bySite)
+      `- 場所別（どこで）: ${shownSites
         .map((entry) => `${entry.site} ${formatUsd(entry.totals.costUsd)}`)
         .join(' / ')}${siteExtra === '' ? '' : ` / ${siteExtra}`}`,
     );
     lines.push('- 高かった委譲:');
-    for (const entry of top(summary.byManager)) {
+    const shownManagers = top(summary.byManager);
+    for (const entry of shownManagers) {
       lines.push(`  - ${entry.managerId}: ${formatUsd(entry.totals.costUsd)}`);
     }
     // **「`usage_read` で全部見える」と書かない。** あちらも軸ごとに打ち切るので
     // 嘘になる。実際に打てる手（続きを辿る呼び方）をそのまま書く——文言は
     // `usageOmitted` から取る（同じ関数を4軸とも通す理由は同関数の doc）。
-    const managerExtra = usageOmitted(summary.byManager.length, 'manager', '本');
+    const managerExtra = usageOmitted(
+      summary.byManager.length,
+      shownManagers.length,
+      'manager',
+      '本',
+    );
     if (managerExtra !== '') lines.push(`  - ${managerExtra}`);
   }
 

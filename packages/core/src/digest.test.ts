@@ -538,6 +538,43 @@ describe('4軸の合図を1つの関数に閉じる（#415）', () => {
     expect(digest).not.toContain('axis="layer"');
     expect(digest).not.toContain('axis="site"');
   });
+
+  /**
+   * **出した件数と合図の件数が一致する。**
+   *
+   * 合図が在るかどうかだけを見る歯では、`top()` が切る件数が `MAX_ITEMS` から
+   * 離れた日に「15 件出したと言いながら 5 件しか出していない」形を通してしまう
+   * ——合図そのものは在るので、**読んだ側からは食い違いに気づけない。** 出した
+   * 件数と省いた件数の両方を同じ行から数えて、和が総数に戻ることを見る。
+   */
+  it('出した件数と「…ほか N 件」の和が総数に戻る（合図の数が出した数から離れない）', async () => {
+    const stores = createMemoryStores();
+    const at = new Date();
+    const total = MAX_ITEMS + 5;
+    for (let i = 0; i < total; i += 1) {
+      await stores.usage.record({
+        layer: 'clone',
+        site: 'session',
+        accumulation: 'oneshot',
+        managerId: 'shared-manager',
+        date: usageDate(at),
+        at: at.toISOString(),
+        snapshot: { models: { [`model-${i}`]: totals(100 - i) } },
+      });
+    }
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    const line = digest.split('\n').find((l) => l.startsWith('- モデル別: '));
+    expect(line).toBeDefined();
+    const parts = (line ?? '').slice('- モデル別: '.length).split(' / ');
+    const notice = parts.at(-1) ?? '';
+    const shown = parts.slice(0, -1);
+    // 出した件数そのもの（`top()` が切った数）。
+    expect(shown).toHaveLength(MAX_ITEMS);
+    // 省いた件数は「総数 − 出した件数」。両方をこの行から数えている。
+    expect(notice).toContain(`…ほか ${total - shown.length} 件`);
+  });
 });
 
 /**
