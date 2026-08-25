@@ -17,6 +17,7 @@ import { excerptLine } from './excerpt.js';
 import {
   inboxEventShape,
   journalEntryShape,
+  noteBackgroundFailure,
   noteDroppedInboxEvent,
   noteDroppedRecord,
 } from './dropped-record.js';
@@ -836,7 +837,17 @@ class Clone implements CloneHost {
         post: (event) => this.post(event),
         runners: runners ?? createRunnerRegistry([]),
       });
-    void this.#pump();
+    // **落ち方は変えない。「どこで」だけを足す（#438 案D）。**
+    //
+    // ここは daemon の生涯に1本だけ走る中枢ループで、投げれば `for await` ごと
+    // 抜けて受信箱のループが死ぬ（`#pump` の中のコメント）。**握り潰さない** ——
+    // 生き残ると HTTP は答え続け、受信箱は積まれ続けたまま誰も気づかない。
+    // 器が「壊れた」と判定できる材料はプロセスの終了しか無い（`uncaught-net.ts`）。
+    // いまは落ちて再起動し、`#restoreUnread` が未読を本文ごと配り直して戻る。
+    void this.#pump().catch((error: unknown) => {
+      noteBackgroundFailure('クローンの受信箱のループ', '', error);
+      throw error;
+    });
   }
 
   /** デーモンの HTTP 層から一覧・生ログへ降りるための口。 */

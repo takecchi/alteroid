@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { parseCron } from './cron.js';
+import { noteBackgroundFailure } from './dropped-record.js';
 import { isWrittenDailyReport } from './schema.js';
 import type { InboxEvent, SchedulePhase, ScheduleSpec, ScheduledRequest } from './schema.js';
 import type { JournalStore, ScheduleStore } from './store.js';
@@ -512,6 +513,17 @@ class TimerScheduler implements Scheduler {
           // 走り、マネージャーまで起きうる。
           if (!this.#started) return;
           this.tick();
+        } catch (error: unknown) {
+          // **`catch` が1つも無かった（#438 案D）。**「どこで」だけを足して、
+          // 落ち方は変えない —— 投げ直すので今日と同じく未処理の拒否になる。
+          //
+          // **握り潰さない。** 握り潰すと `#arm()`（`finally`）で時計だけが
+          // 次の時刻へ進み、**この刻みで配るはずだった「継続する依頼」が、この
+          // プロセスが生きているあいだ二度と来ない** —— 受信箱へ届く前に投げた
+          // 場合、`claimRun` を通っていないので `pendingRun` も立っていない。
+          // 落ちれば次の起動の `#reconcile()` が保存済みの時刻から追いつく。
+          noteBackgroundFailure('仕込みの刻み', '', error);
+          throw error;
         } finally {
           this.#arm();
         }

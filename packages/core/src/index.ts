@@ -579,9 +579,18 @@ export {
   journalEntryShape,
   noteDroppedInboxEvent,
   noteDroppedRecord,
+  noteUncaught,
   reasonOf,
   writeStderrSync,
 } from './dropped-record.js';
+
+/**
+ * 未捕捉の例外・未処理の Promise 拒否に**観測だけの網**を張る（#438）。
+ *
+ * **終了の挙動は1ビットも変えない。** なぜ `uncaughtException` ではなく
+ * `uncaughtExceptionMonitor` なのか（実測の表つき）は `uncaught-net.ts` に在る。
+ */
+export { installUncaughtNet } from './uncaught-net.js';
 
 /** テスト用ユーティリティ（本番の配線には出てこない）。 */
 export {

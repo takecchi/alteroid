@@ -1,3 +1,8 @@
+import { execFile } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -12,6 +17,8 @@ import {
   scheduledRequestEntry,
   selfInitiativeEntry,
 } from './schedule.js';
+
+const run = promisify(execFile);
 import type { InboxEvent, JournalEntry, ScheduledRequest } from './schema.js';
 import type { JournalQuery, JournalStore, ScheduleStore } from './store.js';
 import { createMemoryStores } from './testing.js';
@@ -1325,5 +1332,59 @@ describe('取りこぼした日報', () => {
     await expect(
       missingDailyReportDates({ journal, at: cutoff, now: at(2026, 8, 12, 9, 0), lookbackDays: 3 }),
     ).resolves.toEqual(['2026-08-10']);
+  });
+});
+
+/**
+ * 刻みの中で投げたときの跡（#438 案D）。
+ *
+ * 直す前、ここには **`catch` が1つも無かった** —— `try/finally` だけだったので、
+ * 時計は `finally` で次へ進むのに、**何が起きたかはどこにも残らなかった。**
+ *
+ * **⚠️ なぜ子プロセスで測るのか。** ここが足した `catch` は跡を残してから
+ * **投げ直す**（握り潰さない）。投げ直した先は未処理の拒否になるので、同じプロセスで
+ * 走らせると **vitest 自身の unhandled error の歯に必ず引っかかる** —— 実際に一度
+ * その形で書いて、`Unhandled Rejection` として報告された。**握り潰さないことが設計
+ * なのだから、それを同じプロセスで観測しようとするのが誤りである。**
+ *
+ * `dist` を読む理由と、`src` だけ直して build しないと古い `dist` に緑が出る話は
+ * `uncaught-net.test.ts` の同型のテストに在る。
+ */
+describe('刻みの中で投げたとき（#438）', () => {
+  it('跡を残してから投げ直す（握り潰さない）', async () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const entry = join(here, '..', 'dist', 'index.js');
+    // **必ず期限が来ている仕込みを渡す。** 既定の仕込み（日報・発意）だと最初の
+    // 発火まで実時間で待つことになり、テストが時間切れになる（実際に一度なった）。
+    const child = [
+      `import { createScheduler } from ${JSON.stringify(entry)};`,
+      `const clock = new Date('2026-08-12T22:00:00');`,
+      `const scheduler = createScheduler({`,
+      `  entries: [{`,
+      `    kind: 'probe',`,
+      `    description: 'probe',`,
+      `    nextAt: (after) => after,`,
+      `    event: (at) => ({ id: 'e1', at: at.toISOString(), type: 'timer', kind: 'probe' }),`,
+      `  }],`,
+      `  post: () => { throw new Error('受信箱が投げた'); },`,
+      `  now: () => clock,`,
+      `});`,
+      `scheduler.start();`,
+    ].join('\n');
+
+    const failure = await run(process.execPath, ['--input-type=module', '-e', child]).then(
+      () => null,
+      (error: unknown) => error as { code?: number; stderr?: string },
+    );
+
+    expect(failure).not.toBeNull();
+    expect(failure?.code).toBe(1);
+
+    const stderr = failure?.stderr ?? '';
+    // 跡が「どこで」を名指しする。
+    expect(stderr).toContain('仕込みの刻みが例外で終わりました');
+    // **握り潰していない** —— Node 既定のスタックがそのまま続く。
+    expect(stderr).toContain('受信箱が投げた');
+    expect(stderr).toMatch(/\n\s+at /u);
   });
 });

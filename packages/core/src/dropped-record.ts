@@ -1,5 +1,6 @@
 import { writeSync } from 'node:fs';
 
+import type { RunnerEvent } from './runner-protocol.js';
 import type { InboxEvent, JournalEntryInput } from './schema.js';
 
 /**
@@ -79,6 +80,38 @@ export function noteManagerIdCollision(managerId: string, attempt: number): void
 }
 
 /**
+ * **背景で起こした処理**（`void f()` の形で切り離したもの）が例外で終わったことを
+ * stderr へ1行だけ残す（#438 案D）。
+ *
+ * **落ち方は1ビットも変えない。** 呼び出し側はこの跡を出した後、受け取った例外を
+ * **そのまま投げ直す** —— 投げ直した先は未処理の拒否になり、今日と同じように
+ * Node 既定のスタックが出てプロセスが死ぬ（実測は `uncaught-net.ts` の表）。
+ * **ここが足すのは「どこで」だけである。**
+ *
+ * **なぜ「どこで」だけで足りるのか。** プロセス全体の網（`uncaught-net.ts`）は
+ * 例外を1行に畳めるが、**どの背景処理から来たのかは言えない** —— `reasonOf` が
+ * 出すのは例外の1行目だけで、`void` で切り離した時点で呼び出し元の文脈は
+ * スタックにしか残らない。#438 が言う「落ちたことを追えない」は、**回数**の話と
+ * **出所**の話の両方であり、網は前者、この跡は後者を埋める。
+ *
+ * **⚠️ ここで握り潰さないこと。** 「跡を残したのだから続けてよい」は成り立たない。
+ * この repo の復旧機構は**プロセスの消滅を契機に組んである**（起動時の
+ * `#restoreJobs` が `runner.list()` の実物から状態を作り直し、`#restoreUnread` が
+ * 未読を配り直す）。生き残ったまま握り潰すと、**その復旧経路が一度も起動しない。**
+ * 握り潰してよい先例（`runner-client.ts` の `#neverEscapes`）が覆っているのは
+ * **跡を残す処理そのものの失敗**であって、本筋の処理ではない。
+ *
+ * @param what どの背景処理か（固定文言。呼び出し側が書く）
+ * @param detail 本文を含まない見分け（**値を誰が決めるか**で選ぶ。このファイルの
+ *   `journalEntryShape` と同じ基準 —— 列挙値とこちらが発行した id は載せてよく、
+ *   外から来た自由文は載せない）。無ければ空文字。
+ */
+export function noteBackgroundFailure(what: string, detail: string, error: unknown): void {
+  const tail = detail === '' ? '' : `（${detail}）`;
+  note(`${what}が例外で終わりました${tail}: ${reasonOf(error)}`);
+}
+
+/**
  * 受信箱が閉じた後に届いた合図を、このプロセスでは処理しなかったことを
  * stderr へ1行だけ残す。
  *
@@ -113,6 +146,30 @@ export function noteDroppedInboxEvent(event: InboxEvent): void {
     `受信箱を閉じた後に届いた合図はこのプロセスでは処理しませんでした` +
       `（器へ残せていれば次の起動で配り直されます）: ${inboxEventShape(event)}`,
   );
+}
+
+/**
+ * runner から届いた合図から、本文を含まない見分けだけを取り出す（#438 案D）。
+ *
+ * **ここだけ `journalEntryShape` / `inboxEventShape` と作りが違う。** あの2つは
+ * 型ごとの網羅 `switch` で、**新しい型が増えたら書き手に判断を強制する**形になって
+ * いる。ここは逆に、**載せてよい2つだけを名指しする許可制**にしてある。
+ *
+ * **理由は、この関数の使われ方である。** ここは記録の跡ではなく**落ちた場所の跡**で、
+ * 要るのは「どの合図で落ちたか」だけである。`RunnerEvent` はいま17種あり、網羅
+ * `switch` にすると型が増えるたびに17→18の分岐が生え、**そのたびに「この型なら
+ * これくらい載せてよいだろう」という判断が1つずつ増える。** 許可制なら、型が
+ * 増えても載るものは増えない —— **漏れうる面が構造として広がらない。**
+ *
+ * **載せる2つ**: `type`（`runnerEventSchema` の discriminator ＝ 列挙値）と、
+ * 在れば `managerId`（こちらが発行した id）。**判定基準はこのファイルの他と同じで、
+ * 「自由文かどうか」ではなく「値を誰が決めるか」である。** `report` の `text`・
+ * `ask` の要旨・`closed` の `reason` は外から来るので載せない（長さも出さない ——
+ * 跡に要るのは出所であって、中身の量ではない）。
+ */
+export function runnerEventShape(event: RunnerEvent): string {
+  const owner = 'managerId' in event ? ` managerId=${tag(event.managerId)}` : '';
+  return `type=${tag(event.type)}${owner}`;
 }
 
 /**
@@ -178,7 +235,98 @@ export function inboxEventShape(event: InboxEvent): string {
  * 約束が戻る（#248）。
  */
 function note(text: string): void {
-  stderrSink(`alteroid: ${new Date().toISOString()} ${text}\n`);
+  notePrefixed('alteroid', text);
+}
+
+/**
+ * 接頭辞を呼び出し側から受け取って1行書く。
+ *
+ * **`note()` と同じ口である**（`stderrSink` を通るのはここ1本のまま）。分けて
+ * あるのは、`note()` が `alteroid:` を焼き込んでいるからで、**プロセス全体の網
+ * （`uncaught-net.ts`）は app ごとに別の接頭辞を出す**必要があるためである ——
+ * daemon は `alteroidd:`、runner は `alteroid-runner:`（`.onError` の先例が
+ * `apps/runner/src/app.ts` に在る）。**接頭辞が app ごとに違うのは、跡を読む者が
+ * どちらのプロセスが落ちたのかを1行目で見分けられるようにするためである。**
+ *
+ * **`note()` が出す行は1文字も変えていない。**
+ */
+function notePrefixed(prefix: string, text: string): void {
+  stderrSink(`${prefix}: ${new Date().toISOString()} ${text}\n`);
+}
+
+/**
+ * 未捕捉の例外・未処理の Promise 拒否を**観測した**ことを stderr へ1行だけ残す
+ * （#438）。
+ *
+ * **⚠️ この行は「プロセスが落ちる」と書かない。書かせないこと。** 呼び元
+ * （`uncaught-net.ts`）が使う `uncaughtExceptionMonitor` は、**誰かが
+ * `process.on('uncaughtException')` を登録していれば、落ちないまま発火する。**
+ * いまこの repo にその登録は無いが、それは配線の事実であってこの関数の保証では
+ * ない。断言すると、**登録された日にこの行だけが静かに嘘をつく。**
+ *
+ * **これは `noteDroppedInboxEvent` と同じ判断である**（あちらの doc の逐語:
+ * 「**それでも「残した」とも書かない。**…この行が主張するのは**このプロセスでは
+ * 処理しなかった**という、観測できたことだけである」）。ここが主張するのも
+ * **観測できたことだけ** —— 「未捕捉の例外が起きた」であって「だから死ぬ」では
+ * ない。**死んだかどうかは、この行の後に Node 既定のスタックが続くかで読める。**
+ *
+ * **文言を `origin` で分けるのは、このファイルが `noteDroppedRecord` /
+ * `noteUnreadableRecord` / `noteManagerIdCollision` を分けているのと同じ理由で
+ * ある** —— 違う出来事に同じ文を当てると、**跡そのものが何が起きたかを取り違え
+ * させる。**
+ *
+ * **⚠️ 「本文は出しません」とは書かない。** `.onError` の先例
+ * （`apps/daemon/src/app.ts` / `apps/runner/src/app.ts`）はそう書いているが、
+ * **あちらには出さずに済ませた本文が別に在る**（リクエスト本文）。**未捕捉の例外
+ * には、それが無い** —— 例外の `message` そのものが理由なので、`reasonOf` は
+ * **理由として message を出す**（あの関数の doc の逐語:「**理由だけは出す。**
+ * 『書けなかった』しか残らない行を読んだ者にできることは、ストアを一から疑うこと
+ * しかない」）。ここで「本文は出しません」と書くと、**在りもしない守りを名乗る**
+ * ことになる —— このファイルが繰り返し避けている「跡そのものが嘘をつく」形である。
+ *
+ * **実際に効いている守りは2つで、どちらも `reasonOf` が持っている。**
+ *
+ * 1. **1行目だけ**を取る —— ドライバの例外は失敗したクエリのパラメータを**次の行**へ
+ *    添えてくることがある（`reasonOf` の doc に `drizzle-orm@0.45.2` の実測が在る）。
+ * 2. **200字で切る。**
+ *
+ * **そして、この行が漏らしうるものは、いま既に漏れているものの部分集合である。**
+ * `uncaught-net.ts` は Node 既定の出力を止めないので、**同じ `message` は同じ
+ * stderr へ、スタックごと必ず出る。** ⟹ この行は器のログの漏洩面を1バイトも
+ * 広げない（**狭めもしない** —— 狭めるには既定の出力を止めるしかなく、それは
+ * `uncaught-net.ts` が捨てた道である）。
+ *
+ * 素の `String(error)` は書かない。**スタックも載せない** —— 載せると `reasonOf` を
+ * 通す意味が消える。
+ *
+ * @param prefix app ごとの接頭辞（`alteroidd` / `alteroid-runner`）。**末尾の
+ *   コロンは付けない**（`notePrefixed` が付ける）。
+ * @param origin Node が渡す出所（`uncaughtException` / `unhandledRejection`）。
+ * @param error 観測した例外・拒否の理由。
+ */
+export function noteUncaught(prefix: string, origin: string, error: unknown): void {
+  notePrefixed(prefix, `${describeUncaughtOrigin(origin)}を観測しました: ${reasonOf(error)}`);
+}
+
+/**
+ * `uncaughtExceptionMonitor` の `origin` を、跡に書く言葉へ直す。
+ *
+ * **知らない値を既知の2つのどちらかへ倒さない。** Node の型はいま2値だが、
+ * 倒すと「判別できない」が黙って片方に化ける（`AGENTS.md`「**『判定できない』と
+ * いう3つ目の状態を持つ。** 2値にすると、判定できない場合がどちらかへ黙って
+ * 倒れる」）。**`origin` は Node が決める値なので `tag()` に通してそのまま載せて
+ * よい** —— このファイルの判定基準は「自由文かどうか」ではなく「**値を誰が
+ * 決めるか**」である。
+ */
+function describeUncaughtOrigin(origin: string): string {
+  switch (origin) {
+    case 'uncaughtException':
+      return '未捕捉の例外';
+    case 'unhandledRejection':
+      return '未処理の Promise 拒否';
+    default:
+      return `出所を判別できないエラー（origin=${tag(origin)}）`;
+  }
 }
 
 /**

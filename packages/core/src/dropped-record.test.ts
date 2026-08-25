@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { inboxEventShape, journalEntryShape, noteDroppedRecord } from './dropped-record.js';
+import {
+  inboxEventShape,
+  journalEntryShape,
+  noteBackgroundFailure,
+  noteDroppedRecord,
+  runnerEventShape,
+} from './dropped-record.js';
+import type { RunnerEvent } from './runner-protocol.js';
 import type { InboxEvent, JournalEntryInput } from './schema.js';
 import { captureStderr } from './testing.js';
 
@@ -283,5 +290,56 @@ describe('捨てた合図の見分け', () => {
         requestId: 'req-9',
       }),
     ).toContain('requestId=req-9');
+  });
+});
+
+/**
+ * 背景で起こした処理が落ちたときの跡（#438 案D）。**ここで固定するのは2つ。**
+ *
+ * 1. 跡が「どこで」を名指しすること —— プロセス全体の網（`uncaught-net.ts`）は
+ *    出所を言えないので、この跡がその穴を埋める
+ * 2. **その見分けに本文が乗らないこと** —— `runnerEventShape` は許可制で、
+ *    `report` の `text` のような外から来る自由文を通さない
+ */
+describe('背景で落ちた処理の跡（#438）', () => {
+  const secret = 'ghp_000000000000000000000000000000000000';
+
+  it('どこで落ちたかを名指しし、理由は reasonOf を通す', async () => {
+    const lines = await captureStderr(() => {
+      noteBackgroundFailure('クローンの受信箱のループ', '', new Error('boom'));
+      noteBackgroundFailure(
+        'runner からの合図の処理',
+        'type=report managerId=mgr-1',
+        new Error(`Failed query: select 1\nparams: ${secret}`),
+      );
+    });
+
+    expect(lines).toHaveLength(2);
+    const [plain, detailed] = lines as [string, string];
+    expect(plain).toContain('クローンの受信箱のループが例外で終わりました: Error: boom');
+    // 見分けが在れば括弧で添える。
+    expect(detailed).toContain(
+      'runner からの合図の処理が例外で終わりました（type=report managerId=mgr-1）',
+    );
+    // **2行目に添えられた値は跡へ出さない**（`reasonOf` が1行目だけを取る）。
+    expect(detailed).not.toContain(secret);
+  });
+
+  it('runner の合図の見分けは、型とこちらが発行した id だけを載せる', () => {
+    const report: RunnerEvent = {
+      type: 'report',
+      managerId: 'mgr-1',
+      text: `鍵は ${secret} だった`,
+      status: 'done',
+    };
+    const shape = runnerEventShape(report);
+
+    expect(shape).toBe('type=report managerId=mgr-1');
+    // **本文は長さすら出さない。** 跡に要るのは出所であって中身の量ではない。
+    expect(shape).not.toContain(secret);
+    expect(shape).not.toContain('chars');
+
+    // `managerId` を持たない型でも落ちない（`hello` は runner の名乗り）。
+    expect(runnerEventShape({ type: 'hello', runnerId: 'runner-primary' })).toBe('type=hello');
   });
 });

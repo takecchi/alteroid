@@ -9,6 +9,7 @@ import {
   createProfileVessel,
   createRunnerHost,
   DEFAULT_PROFILE_PATH,
+  installUncaughtNet,
   placedManagerModels,
   resolveManagerModel,
   resolveWorkerModel,
@@ -301,6 +302,19 @@ function invokedDirectly(): boolean {
 }
 
 if (invokedDirectly()) {
+  // **未捕捉の例外・未処理の Promise 拒否に、観測だけの網を張る（#438）。**
+  //
+  // **ここに置くのは窓を最小にするためである。** module のトップレベルに置くと
+  // `main` を import するテストにまで網が張られ、`main()` の中に置くと `main()` の
+  // 頭までの窓が無駄に開く。**それでも import 中に投げた例外はこの網より前で、
+  // そこは今日と同じ（Node 既定のスタック + exit 1）である** — 悪化はしないが
+  // 覆ってもいない（`uncaught-net.ts`「覆っていない窓」）。
+  //
+  // **`uncaughtException` へ「上げない」こと。** 上げると既定の終了が止まり、
+  // 器が「壊れた」と判定できる唯一の材料（プロセスの終了）が消える。理由の全文と
+  // 実測の表は `uncaught-net.ts` に在る。
+  installUncaughtNet('alteroid-runner');
+
   main().catch((error: unknown) => {
     // 同じ理由で `writeStderrSync` を使う（直上の `server.on('error')` と同型。#248）。
     writeStderrSync(`alteroid-runner: 起動に失敗しました: ${String(error)}\n`);
