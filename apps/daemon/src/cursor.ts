@@ -3,14 +3,19 @@ import { z } from 'zod';
 /**
  * カーソル（keyset paging）の共通の符号化（issue #432）。
  *
- * **口をまたいで形を揃える——ただし、いまこの PR で使っているのは
- * `GET /approvals` の1口だけである。** `/journal` は別 PR で使う予定がある。
- * `/reports` はこれを使わない——不透明なカーソルと「応答を1バイトも変えない」
- * を同時に満たせなかったため、応答に既に載っている `date`/`at` をそのまま
+ * **口をまたいで形を揃える——いま使っているのは `GET /approvals` と
+ * `GET /commitments` の2口である。** `GET /commitments` は opt-in の窓
+ * （`limit`/`cursor`）を足したときにこちら側へ移った（`apps/daemon/src/app.ts` の
+ * `commitmentsCursorSchema` の doc）。
+ * **並べ替え・絞り込みは依然として足さない（理由: 判断がクローンから器へ移る）。窓（`limit`/`cursor`）は 2026-08-25 に人間の明示の「はい」を受けて足した。**
+ * 窓はその固定された並びの上に頁を切る
+ * だけである。`/journal` は別 PR で使う
+ * 予定がある。`/reports` はこれを使わない——不透明なカーソルと「応答を1バイトも
+ * 変えない」を同時に満たせなかったため、応答に既に載っている `date`/`at` をそのまま
  * 使う可視の複合キー（`beforeDate` ＋ `beforeAt`）になった（`apps/daemon/src/reports.ts`
- * の `listDailyReportsBefore`）。`/commitments` と `/conversations` はこの
- * 符号化を使わない（`.claude/skills/listing-and-detail/SKILL.md` が言う理由
- * でスコープから外れた）。**「4口で揃える」だった時期があるが、いまはそう
+ * の `listDailyReportsBefore`）。`/conversations` はこの符号化を使わない
+ * （`.claude/skills/listing-and-detail/SKILL.md` が言う理由でスコープから
+ * 外れた）。**「4口で揃える」だった時期があるが、いまはそう
  * 書けない** — 決まった口が増えるたびにここを更新すること。
  *
  * 中身のキーは口ごとに違う（`/approvals` は `{ id, createdAt, order }`）が、
