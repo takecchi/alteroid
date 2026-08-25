@@ -2598,6 +2598,19 @@ class Pool implements ManagerPool {
     });
     record.attached = true;
     record.job.runnerId = runner.runnerId;
+    // **resume も「セッションが起きる瞬間」である**（`#tokenIdentities` の doc）。
+    //
+    // ここが抜けていた。`start` と、引き取りで**既に生きていた**セッション
+    // （`restore` の living の枝）では覚えていたのに、**resume を出して起こし直した
+    // セッションだけ身元を持たなかった。** 帰結は2つあり、どちらも静かである:
+    //
+    // 1. そのマネージャーの観測が `observedBy` を持たないので、**世代の照合が
+    //    素通しになる**（同時に枠へ当たった回に、プールを人数分消費しうる）
+    // 2. そのマネージャーの消費が台帳で**トークンの帰属を持たない**
+    //    （#393 受け入れ基準6 が、引き取られた委譲についてだけ答えられない）
+    //
+    // **どちらも合計を変えないので、出力を見ても気づけない。**
+    this.#rememberTokenIdentity(record.job.id);
     // 戻れたなら諦めを忘れる（人間やクローンが起こし直した後も自動で拾える）。
     this.#unresumable.delete(record.job.id);
     return 'resumed';
