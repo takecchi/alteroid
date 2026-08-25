@@ -7,12 +7,12 @@
  * 二度と届かない — しかも「静かに終わった」ようにしか見えない。
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
+import { createMemoryRouter, MemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { json, Providers, sse, stubFetch, storeTestBaseUrl } from '~/test-support';
 
-import Chat from './chat';
+import Chat, { ownedBy } from './chat';
 
 const CONVERSATION_ID = 'conv-1';
 
@@ -488,6 +488,19 @@ describe('会話の切り替え', () => {
    * 画面には出ない。**この構成（`delayMs: 0`・signal 無し・navigate と同じ
    * tick でゲートを外す）そのもので24回連続実測し、揺れずに通ることを
    * 確認済み**（2026-08-23 観測）。
+   *
+   * ⚠️ **#437 で、この歯が言えるのは「競わせた」までだと分かった。** 24回
+   * 連続で通ったのは実測だが、**通っていたのは勝った側の順序だけ**だった
+   * —— 既定の並列度の全スイートで実際に負けた側を通り、赤くなっている
+   * （生の観測は Issue #437）。そして負けた側では**アプリが誤っていた**。
+   * 誤っていたのは `owns()`/`stopped()` ではなく、**捨てた後に前の会話の
+   * `lines` が貼り直しで戻ってくる**側である。
+   *
+   * **⟹ この歯は残すが、性質の保証はこの歯が持っていない。** どちらが先に
+   * 走るかを実行環境に委ねている以上、**緑は「たまたま勝った側を通った」と
+   * 区別できず、赤も「別の理由で落ちた」と区別できない。** 保証を持つのは
+   * 下の `ownedBy` の2本（決定的）である。ここが残っているのは、最悪条件を
+   * 組んだ構成そのものを捨てないためである。
    */
   it('navigate と同じ tick で、しかも abort が効かない前の会話のストリームから届いたチャンクは画面に出ない', async () => {
     let releaseStray: () => void = () => {};
@@ -593,6 +606,105 @@ describe('会話の切り替え', () => {
       },
       { timeout: 3000 },
     );
+  });
+});
+
+/**
+ * #437 の回帰テスト2本。**上の「競わせる」歯とは、測っているものが違う。**
+ *
+ * 上は順序を実行環境に委ねている。ここは**入力を直接与える**ので、毎回同じ
+ * 経路を通る。守っている性質は2つあり、**どちらも React の「貼り直し」に
+ * 対するものである**（実測は Issue #437 と PR）。
+ */
+describe('前の会話の行の扱い（#437）', () => {
+  const 行 = (of: string | undefined, text: string) => ({
+    key: `k-${text}`,
+    role: 'clone' as const,
+    text,
+    of,
+  });
+
+  /**
+   * **1本目: 前の会話の行は、画面に出ない。**
+   *
+   * 会話を切り替えたときに `lines` を空にする処理は残っているが、**捨てた後に
+   * React が「切り替えより前に積まれていた更新」を基底の値から貼り直すと、
+   * 前の会話の行が丸ごと戻ってくる**（実測: 60回中11回。3000ms 待っても
+   * 消えなかった）。**戻ってきても出ないこと**をここで固定する。
+   */
+  it('貼り直しで前の会話の行が戻ってきても、いま見ている会話には出ない', () => {
+    // 貼り直しで戻ってきた状態：前の会話（conv-1）の行が `lines` に在る。
+    const 戻ってきた = [行(CONVERSATION_ID, 'やあ'), 行(CONVERSATION_ID, 'こんにちは追加チャンク')];
+
+    expect(ownedBy(戻ってきた, 'other')).toEqual([]);
+    // 新しい会話（URL に id が無い）へ移った場合も同じ。
+    expect(ownedBy(戻ってきた, undefined)).toEqual([]);
+    // その会話へ戻れば、また出る（捨てていないので）。
+    expect(ownedBy(戻ってきた, CONVERSATION_ID)).toHaveLength(2);
+
+    /*
+     * **持ち主がまだ決まっていない行を、確定した会話に混ぜないこと。**
+     *
+     * 新しい会話では、送った発言のほうが id より先に画面へ乗る（`of` は
+     * `undefined`）。id が決まったら `open` が付け直す（`chat.tsx` の
+     * 「まだ持ち主の無い行に、決まった id を付け直す」）。**付け直しを
+     * 迂回して「持ち主なしはどこでも出す」形にすると、別の会話の画面に
+     * 前の下書きが混ざる。**
+     */
+    expect(ownedBy([行(undefined, 'まだ持ち主が決まっていない')], CONVERSATION_ID)).toEqual([]);
+    // ただし id が決まる前（`shownId` も undefined）は、これが唯一の出し方である。
+    expect(ownedBy([行(undefined, 'まだ持ち主が決まっていない')], undefined)).toHaveLength(1);
+  });
+
+  /**
+   * **2本目（本命）: 古い `routeId` で描き直されても、行が消えない。**
+   *
+   * ⚠️ **React は、`routeId` が確定した後でも古い基底から描き直すことがある**
+   * （実測: `main` で40記録中7回、`routeId` が定義済みの後に `undefined` へ
+   * 戻る描画が起きている）。**その回に `lines` を壊す形にしていると、人間が
+   * 送ったばかりの発言ごと消える** —— #437 を「印を1つにまとめる」形で直した
+   * ときに実際にそうなり、`chat.follow-up.test.tsx` が20回中8回落ちた
+   * （`main` は40回中0回）。
+   *
+   * **その落ち方は偶然踏んだものだった。ここで意図して固定する。**
+   *
+   * 与えているのは実測した順序そのものである —— `routeId` を1度戻し、次の
+   * 描画で戻す。**競走ではなく `rerender` なので、毎回同じ経路を通る。**
+   */
+  it('古い routeId で描き直されても、送った発言も届いた本文も消えない', async () => {
+    stubFetch((url, init) => {
+      if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
+      if (url.includes(`/conversations/${CONVERSATION_ID}`)) {
+        return json({ conversationId: CONVERSATION_ID, messages: [] });
+      }
+      if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
+      return undefined;
+    });
+
+    const 画面 = ({ routeId }: { routeId: string | undefined }) => (
+      <Providers>
+        <MemoryRouter initialEntries={['/chat']}>
+          <ChatRoute loaderData={{ conversationId: routeId }} />
+        </MemoryRouter>
+      </Providers>
+    );
+    const Screen = 画面;
+
+    // **確定した会話から始める。** ここが `undefined` だと、下の描き直しが
+    // 「切り替わった」と読まれず、捨て直しの経路そのものを通らない。
+    const { rerender } = render(<Screen routeId={CONVERSATION_ID} />);
+    await send('やあ');
+    await screen.findByText(/こんにちは、元気にやっている/);
+
+    // ⭐ 古い props で描き直す（React がやることを、こちらで与える）。
+    // ここで `lines` を壊す形にしていると、この1回で送った発言ごと消える。
+    rerender(<Screen routeId={undefined} />);
+    // そして次の描画で、確定した値に戻る。
+    rerender(<Screen routeId={CONVERSATION_ID} />);
+
+    // **どちらも消えていない。**
+    expect(within(transcript()).getByText('やあ')).toBeTruthy();
+    expect(within(transcript()).getByText(/こんにちは、元気にやっている/)).toBeTruthy();
   });
 });
 
