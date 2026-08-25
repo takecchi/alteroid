@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import {
   renderMemoryDocuments,
   verifyJournalStoreOrderContract,
+  verifyJournalStoreQueryEdgeContract,
   verifyJournalStoreWithContract,
 } from '@alteroid/core';
 import type { Commitment, InboxEvent } from '@alteroid/core';
@@ -1075,6 +1076,24 @@ describe('FsJournalStore', () => {
         limit: 10,
       });
       expect(afterDay2aAsc.map((e) => e.id)).toEqual(['day2b', 'day3']);
+    });
+  });
+
+  /**
+   * `JournalQuery` の退化した値（`types: []` / `limit: 0`）の契約
+   * （issue #425）を、**fs 実装**に対して測る。同じ形の歯が3つ在る——
+   * インメモリ（`packages/core/src/journal-query-edge-contract.test.ts`）/
+   * fs（このテスト）/ pg（`packages/storage-pg/src/index.test.ts`）。1つで
+   * 測って3つとも測ったことにしない（`with` 契約 / `order` 契約と同じ作法）。
+   *
+   * **fs だけが持っていた壊れ方**: `list()` は `found.push(entry)` の直後に
+   * `found.length >= limit` を判定する（push-then-check）ので、`limit: 0`
+   * でも1件目を push した後で初めて 0 >= 0 に当たり、1件返っていた
+   * （`journal.ts` の `if (limit <= 0) return found;` がこの歯を直した箇所）。
+   */
+  describe('query edge 契約（issue #425）', () => {
+    it('types: []=0件／limit: 0=0件／types 未指定=絞らない／指定=その種別だけ／limit:N(N>=1)はN件で切る／同時指定でも0件', async () => {
+      await verifyJournalStoreQueryEdgeContract(stores.journal);
     });
   });
 });

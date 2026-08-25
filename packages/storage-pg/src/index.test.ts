@@ -1,6 +1,7 @@
 import {
   renderMemoryDocuments,
   verifyJournalStoreOrderContract,
+  verifyJournalStoreQueryEdgeContract,
   verifyJournalStoreWithContract,
 } from '@alteroid/core';
 import type { Commitment, InboxEvent } from '@alteroid/core';
@@ -883,6 +884,24 @@ describe('PgJournalStore', () => {
   describe('order/after 契約（issue #432 の2本目）', () => {
     it('order 未指定=desc／asc は正確な逆順／after は絞り・limit より前に効く／同着を飛ばさない', async () => {
       await verifyJournalStoreOrderContract(stores.journal);
+    });
+  });
+
+  /**
+   * `JournalQuery` の退化した値（`types: []` / `limit: 0`）の契約
+   * （issue #425）を、**pg 実装（PGlite = インプロセスの実 PostgreSQL）**に
+   * 対して測る。同じ形の歯が3つ在る——インメモリ
+   * （`packages/core/src/journal-query-edge-contract.test.ts`）/ fs
+   * （`packages/storage-fs/src/index.test.ts`）/ pg（このテスト）。1つで
+   * 測って3つとも測ったことにしない（`with` 契約 / `order` 契約と同じ作法）。
+   *
+   * **pg だけが持っていた壊れ方**: `types` の絞りだけが
+   * `query.types.length === 0` を特別扱いして「絞らない」に倒していた
+   * （`journal.ts` の `with` の行はこの特別扱いを持たない）。
+   */
+  describe('query edge 契約（issue #425）', () => {
+    it('types: []=0件／limit: 0=0件／types 未指定=絞らない／指定=その種別だけ／limit:N(N>=1)はN件で切る／同時指定でも0件', async () => {
+      await verifyJournalStoreQueryEdgeContract(stores.journal);
     });
   });
 });
