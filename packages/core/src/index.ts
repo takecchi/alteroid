@@ -587,11 +587,15 @@ export {
 export {
   inboxEventShape,
   journalEntryShape,
+  journalRowType,
   noteDroppedInboxEvent,
+  noteDroppedJournalRow,
+  noteDroppedJournalRowsSummary,
   noteDroppedRecord,
   noteUncaught,
   reasonOf,
   writeStderrSync,
+  type DroppedJournalRowReason,
 } from './dropped-record.js';
 
 /**
