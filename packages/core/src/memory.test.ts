@@ -770,6 +770,42 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
     expect(rendered).toContain('親 not-exist が見つからない');
   });
 
+  /**
+   * ⭐ fact の parent が premise を指すと「見つからない」と出る欠陥の修正。
+   *
+   * `renderMemoryDocuments` の目次（`renderMemoryToc`）は fact だけを対象に
+   * 組む——premise は目次の `bySlug` に居ない。だから親が premise として
+   * 実在していても、目次だけを見ると「見つからない」になっていた（同じ
+   * データが `memory_list` では正常に解決するのに、面によって答えが違う
+   * 欠陥）。
+   *
+   * **⚠️ 器は必ず premise 2件 + fact 1件を持つ**（AGENTS.md「測るのは
+   * 呼び出し回数ではなく状態である」）。premise が0件の器では、
+   * 「親が premise」と「親がそもそも無い」の2分岐が両方「見つからない」に
+   * 畳まれてしまい、この歯が変異を検出できなくなる。
+   *
+   * **2つの `it()` に分ける**（畳むと、どちらか一方の分岐を潰す変異が生存する）。
+   */
+  it('⭐ 親が premise を指すときは「見つからない」ではなく「在るが、目次には出ない」と言う', () => {
+    const rendered = renderMemoryDocuments([
+      premise('core-a', '前提A'),
+      premise('core-b', '前提B'),
+      fact('child', { description: '子', freshness: { kind: 'fresh' }, parent: 'core-a' }),
+    ]);
+    expect(rendered).toContain('親 core-a は在るが、この目次は fact だけを列挙する');
+    expect(rendered).not.toContain('親 core-a が見つからない');
+  });
+
+  it('親が本当に存在しない slug なら、従来どおり「見つからない」のまま', () => {
+    const rendered = renderMemoryDocuments([
+      premise('core-a', '前提A'),
+      premise('core-b', '前提B'),
+      fact('child', { description: '子', freshness: { kind: 'fresh' }, parent: 'really-not-exist' }),
+    ]);
+    expect(rendered).toContain('親 really-not-exist が見つからない');
+    expect(rendered).not.toContain('在るが、この目次は fact だけを列挙する');
+  });
+
   it('循環する parent を黙って落とさない', () => {
     const rendered = renderMemoryDocuments([
       fact('cycle-a', { description: 'A', freshness: { kind: 'fresh' }, parent: 'cycle-b' }),
@@ -873,6 +909,48 @@ describe('renderMemoryListing — `memory_list` 用の一覧。全区分を対�
 
     expect(listing).toContain('作成: 2026-01-02T03:04:05.000Z');
     expect(listing).toContain('更新: 2026-08-21T00:00:00Z');
+  });
+
+  /**
+   * ⭐ 案4（`renderMemoryTocIssue` の `parent-not-listed`）の副作用が無いこと。
+   *
+   * `renderMemoryListing` は全区分（premise も fact も）を `entries` に含めて
+   * `resolveMemoryHierarchy(tocEntries)` を呼ぶ——`knownElsewhere` を渡さない。
+   * だから親が premise でも `bySlug` に直接見つかり、新しい3つ目の状態
+   * （`parent-not-listed`）は構造的に起こりえない（既定値が空集合なので、
+   * `renderMemoryToc` 側の変更はこの経路に一切効かない）。ここではそれを
+   * 実際の出力で確かめる——親が premise を指す fact が、印を1つも出さずに
+   * 通常どおり親子で解決されること。
+   */
+  it('⭐ 親が premise を指していても、一覧では通常どおり解決する（案4の副作用が無い）', () => {
+    const listing = renderMemoryListing([
+      {
+        slug: 'core',
+        title: 'Core',
+        kind: 'premise',
+        description: undefined,
+        descriptionFreshness: { kind: 'absent' },
+        parent: undefined,
+        updatedAt: '2026-08-21T00:00:00Z',
+        createdAt: { kind: 'unknown' },
+      },
+      {
+        slug: 'child',
+        title: 'Child',
+        kind: 'fact',
+        description: '子',
+        descriptionFreshness: { kind: 'fresh' },
+        parent: 'core',
+        updatedAt: '2026-08-21T00:00:00Z',
+        createdAt: { kind: 'unknown' },
+      },
+    ]);
+
+    expect(listing).toContain('[premise] core: Core');
+    expect(listing).toContain('[fact] child: Child');
+    expect(listing).not.toContain('見つからない');
+    expect(listing).not.toContain('列挙する');
+    expect(listing).not.toContain('循環');
   });
 
   it('createdAt が unknown なら「不明」と明言する（空文字で隠さない）', () => {

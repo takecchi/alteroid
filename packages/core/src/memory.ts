@@ -668,7 +668,7 @@ interface MemoryTocEntry {
 interface ResolvedTocNode {
   entry: MemoryTocEntry;
   depth: number;
-  issue?: 'missing-parent' | 'cycle';
+  issue?: 'missing-parent' | 'cycle' | 'parent-not-listed';
   children: ResolvedTocNode[];
 }
 
@@ -678,17 +678,43 @@ interface ResolvedTocNode {
  *
  * - 親が存在しない slug を指す → ルート扱いにし、`issue: 'missing-parent'`
  * - 親をたどると自分自身に戻る（循環） → ルート扱いにし、`issue: 'cycle'`
+ * - 親はこの `entries`（目次の対象）には無いが、`knownElsewhere` には在る
+ *   → ルート扱いにし、`issue: 'parent-not-listed'`
  *
- * どちらも文書自体は消えない——ルートとして目次に残り、印がつく。
+ * どれも文書自体は消えない——ルートとして目次に残り、印がつく。
+ *
+ * ## `knownElsewhere` — 「目次の外にも実在する slug」
+ *
+ * `renderMemoryDocuments` の目次（`renderMemoryToc`）は **fact だけ**を対象に
+ * 組む（premise は全文で別に載っている）。だから `entries`（fact の集合）
+ * だけを見て「親が無い」と判定すると、**親が premise として実在していても
+ * 「見つからない」と出る**——`memory_list`（`renderMemoryListing`。全区分を
+ * 対象にするので `bySlug` に premise も入っている）では同じ関係が正常に
+ * 解決するのに、面によって答えが変わる欠陥だった。
+ *
+ * `knownElsewhere` に「この `entries` には無いが、文書としては実在する
+ * slug」の集合（呼び手＝ `renderMemoryToc` が premise の slug 集合を渡す）を
+ * 渡すことで、この3つ目の状態を区別できるようにする。**渡さなければ
+ * （既定は空集合）、この状態は起こりえず、従来どおり `missing-parent` に
+ * 倒れる**——`renderMemoryListing`（全区分が既に `entries` に入っているので
+ * `knownElsewhere` を渡す必要が無い）の出力を1バイトも変えないための既定値
+ * である。
  */
-function resolveMemoryHierarchy(entries: readonly MemoryTocEntry[]): ResolvedTocNode[] {
+function resolveMemoryHierarchy(
+  entries: readonly MemoryTocEntry[],
+  knownElsewhere: ReadonlySet<string> = new Set(),
+): ResolvedTocNode[] {
   const bySlug = new Map(entries.map((entry) => [entry.slug, entry]));
   const parentOf = new Map(entries.map((entry) => [entry.slug, entry.parent]));
 
-  function effectiveParent(slug: string): { parent?: string; issue?: 'missing-parent' | 'cycle' } {
+  function effectiveParent(
+    slug: string,
+  ): { parent?: string; issue?: 'missing-parent' | 'cycle' | 'parent-not-listed' } {
     const direct = parentOf.get(slug);
     if (direct === undefined || direct === '') return {};
-    if (!bySlug.has(direct)) return { issue: 'missing-parent' };
+    if (!bySlug.has(direct)) {
+      return { issue: knownElsewhere.has(direct) ? 'parent-not-listed' : 'missing-parent' };
+    }
     if (direct === slug) return { issue: 'cycle' };
     const seen = new Set<string>([slug]);
     let cursor = direct;
@@ -793,10 +819,26 @@ function memoryFreshnessMarker(freshness: MemoryDescriptionFreshness): string {
   }
 }
 
-/** 循環・存在しない親を黙って落とさず、印として言葉にする。 */
+/**
+ * 循環・存在しない親・「目次の外に実在する親」を黙って落とさず、印として
+ * 言葉にする。
+ *
+ * **`missing-parent` と `parent-not-listed` を畳まない。** 前者は「その slug の
+ * 文書がそもそも無い（打ち間違いか、削除された）」、後者は「文書は実在するが、
+ * この目次（fact だけ）の対象ではない（premise として本文が上に全文で載って
+ * いる）」——疑う先が違う。本文の在り処は `renderMemoryDocuments` の doc が
+ * 保証する不変条件（「どの文書も、全文か目次行かのどちらか一方に必ず現れる」）
+ * そのものなので、ここでも同じ言葉で言う。
+ */
 function renderMemoryTocIssue(node: ResolvedTocNode): string {
   if (node.issue === 'missing-parent') return `［親 ${String(node.entry.parent)} が見つからない］`;
   if (node.issue === 'cycle') return `［親 ${String(node.entry.parent)} との間で循環］`;
+  if (node.issue === 'parent-not-listed') {
+    return (
+      `［親 ${String(node.entry.parent)} は在るが、この目次は fact だけを列挙する` +
+      '（premise として本文が上に全文で載っている）］'
+    );
+  }
   return '';
 }
 
@@ -815,9 +857,16 @@ function renderMemoryTocLine(node: ResolvedTocNode): string {
  * ことは構造的に起こりえない（4-1）。
  *
  * **件数で切ったら、切った件数を必ず出す**（`excerpt.ts` と同じ約束）。
+ *
+ * `knownElsewhere` はそのまま `resolveMemoryHierarchy` へ渡す（`parent` が
+ * この目次の外に実在するときの3つ目の状態を区別するため。呼び手
+ * （`buildMemoryDocumentSections`）が premise の slug 集合を渡す）。
  */
-function renderMemoryToc(entries: readonly MemoryTocEntry[]): string {
-  const flat = flattenMemoryToc(resolveMemoryHierarchy(entries));
+function renderMemoryToc(
+  entries: readonly MemoryTocEntry[],
+  knownElsewhere: ReadonlySet<string> = new Set(),
+): string {
+  const flat = flattenMemoryToc(resolveMemoryHierarchy(entries, knownElsewhere));
   const shown = flat.slice(0, MEMORY_TOC_ENTRY_LIMIT);
   const omitted = flat.length - shown.length;
   const lines = [
@@ -876,7 +925,11 @@ function buildMemoryDocumentSections(documents: readonly MemoryPart[]): {
 
   const premiseSection =
     premiseParts.length === 0 ? '' : premiseParts.map(renderPremisePart).join('\n\n');
-  const tocSection = tocEntries.length === 0 ? '' : renderMemoryToc(tocEntries);
+  // premise の slug 集合を渡す——fact だけの目次の外にも実在する slug を
+  // `resolveMemoryHierarchy` が区別できるようにする（`renderMemoryTocIssue`
+  // の 'parent-not-listed' を見よ）。
+  const premiseSlugs = new Set(premiseParts.map((part) => part.slug));
+  const tocSection = tocEntries.length === 0 ? '' : renderMemoryToc(tocEntries, premiseSlugs);
 
   return { premiseParts, premiseSection, tocEntries, tocSection };
 }
