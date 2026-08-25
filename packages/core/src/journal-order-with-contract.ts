@@ -102,6 +102,44 @@ function idSequence(entries: readonly JournalEntry[]): string {
 }
 
 /**
+ * 契約8専用: `anchorAt` と同じ UTC 日（`slice(0, 10)` が同じ）の中で、
+ * `existingAts` のどれとも一致しない `at` を1つ探す。見つからなければ
+ * `null`（呼び出し側が「前提が満たせなかった」として扱う）。
+ *
+ * **なぜ日をまたいで探さないか。** `packages/storage-fs/src/journal.ts` の
+ * `#locateAnchor` は `after.at.slice(0, 10)` からファイルを一意に決めて
+ * その中だけを探す実装になっている。別の日の `at` を渡すと、`id` だけで
+ * 引く壊れた実装であっても「そんな日のファイルは無い」という浅い理由
+ * （ENOENT）で `null` を返して例外を投げてしまい、この契約が「壊れて
+ * いても正しく見える」——つまり歯が抜ける。同じ日の中でだけ探すことで、
+ * fs が正しいファイルを開いたうえで `at` の不一致（またはその欠落）で
+ * 弾くかどうかを測れる。
+ *
+ * **なぜ「たまたま衝突しない値」で済ませないか。** この探索は必ず
+ * `existingAts` と突き合わせてから返す——値域から自明な値（例えば
+ * `anchorAt` の1ミリ秒後）を無条件に使うと、店に既にその値の行が
+ * 実在する場合に「実在する正しい錨」を渡すことになり、この契約全体が
+ * 意味を失う（下の doc、契約8の節を参照）。
+ */
+function findAtDistinctFromExistingOnSameDay(
+  anchorAt: string,
+  existingAts: ReadonlySet<string>,
+): string | null {
+  const day = anchorAt.slice(0, 10);
+  const anchorMs = new Date(anchorAt).getTime();
+  const dayStartMs = new Date(`${day}T00:00:00.000Z`).getTime();
+  const dayEndMs = dayStartMs + 24 * 60 * 60 * 1000; // 排他的な翌日0時（UTC）
+  for (let delta = 1; delta < dayEndMs - dayStartMs; delta += 1) {
+    for (const candidateMs of [anchorMs + delta, anchorMs - delta]) {
+      if (candidateMs < dayStartMs || candidateMs >= dayEndMs) continue;
+      const candidate = new Date(candidateMs).toISOString();
+      if (!existingAts.has(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+/**
  * 契約9専用: `Date` を一時的に固定して、同じミリ秒に2行を積む。
  *
  * **vitest の `vi.useFakeTimers()` を使わない。** この契約関数自体は
@@ -306,10 +344,72 @@ export async function verifyJournalStoreOrderContract(
   }
 
   // --- 契約8: id は在るが at が違うときも投げる ---
+  //
+  // ⚠️ 以前は e.at（5件目の行の at。a.at とは別行の値のはず）を借りて
+  // `{ id: a.id, at: e.at }` を作っていたが、これは壊れていた。`append` は
+  // 連続で呼ばれ、`at` は `new Date().toISOString()`（ミリ秒精度）なので、
+  // 5回の `append` が同じミリ秒に収まると `a.at === e.at` になる。そうなる
+  // と `{ id: a.id, at: e.at }` は「id も at も実在する a 自身の行」その
+  // ものになり、3実装とも正しく a を見つけて（例外を投げずに）返す ——
+  // つまり実装は正しいのに、この契約だけが「投げられなかった＝壊れて
+  // いる」という**嘘の赤**を出す（実測: 1プロセス1試行×40回で、
+  // a.at === e.at のとき26/26が赤、a.at !== e.at のとき0/14が赤）。
+  //
+  // 直したのは「e.at を借りる」のをやめ、構成的に衝突し得ない at を
+  // 都度組み立てて渡すこと。ただし「たまたま衝突しない値」では同じ再発が
+  // 起こり得るので、次の2つをコードの中に置く（PR 本文や頭の中だけに
+  // 置くと、次に触る人が「無駄に複雑だ」と思って e.at に戻しかねない）:
+  //   (1) 実行時に、いま店に在る全行の at と突き合わせて衝突しないことを
+  //       確かめる（`journal.list({})` で全件取得——値域からの決め打ちに
+  //       しない）
+  //   (2) 前提が満たせなかったら、契約8の文言ではなく「前提が満たせ
+  //       なかった」と分かる別の文言で投げる（契約9が
+  //       `first.at !== second.at` のときにやっている形の先例）。
+  //       **通ったことにしない。**
+  //
+  // ⭐ 組み立てる at は a.at と同じ UTC 日（`slice(0, 10)` が同じ）にする
+  // こと。理由は `findAtDistinctFromExistingOnSameDay` の doc を見よ ——
+  // 一言で言えば、`packages/storage-fs/src/journal.ts` の `#locateAnchor`
+  // が `after.at` の日からファイルを一意に決めて絞り込むため、日をまたぐと
+  // 「id だけで引く壊れた実装」ですら ENOENT で例外を投げてしまい、
+  // fs に対してだけこの契約の歯が抜ける。同じ日にしておけば、fs は正しい
+  // ファイルを開いたうえで at の不一致（またはその欠落）で弾くことになる。
+  const rowsBeforeContract8 = await journal.list({});
+  const atsInUseForContract8 = new Set(rowsBeforeContract8.map((entry) => entry.at));
+  const mismatchedAt = findAtDistinctFromExistingOnSameDay(a.at, atsInUseForContract8);
+  if (mismatchedAt === null) {
+    // 日をまたがずに空きのミリ秒が見つけられなかった（a.at が UTC 日の
+    // 末尾すれすれ、など）。**黙って日をまたがない** —— 日をまたぐと
+    // fs の #locateAnchor がファイルを取り違え、上のコメントで説明した
+    // 「歯が抜ける」形に戻ってしまう。
+    throw new Error(
+      'JournalStore の order 契約（8）を測る前提が満たせなかった — ' +
+        `a.at（${a.at}）と同じ UTC 日の中に、いま店に在るどの行の at とも ` +
+        '衝突しない値を1つも組み立てられなかった。日をまたげば見つかるかもしれないが、' +
+        '日をまたぐと packages/storage-fs の #locateAnchor がファイルを取り違えて別の ' +
+        '理由（ENOENT）で投げてしまうため、日をまたがずに諦める。',
+    );
+  }
+  // 実行時の再確認（歯そのもの）: 組み立てた at が、いま店に在るどの行の
+  // at とも一致しないことを、実際に使う直前でもう一度確かめる。
+  // `findAtDistinctFromExistingOnSameDay` は既にこれを保証して返している
+  // はずだが、ここを独立した最後の砦として残す —— 変異試験1（組み立てた
+  // at をわざと a.at / e.at のような衝突する値へ差し替える）は、この
+  // チェックが「契約8の文言」ではなく「前提未成立」の文言で赤くなることを
+  // 期待している。
+  if (atsInUseForContract8.has(mismatchedAt)) {
+    throw new Error(
+      'JournalStore の order 契約（8）を測る前提が満たせなかった — ' +
+        `組み立てた at（${mismatchedAt}）が、いま店に在る行の at と衝突している ` +
+        '（実在する行と同じ値を after に渡そうとしていた）。',
+    );
+  }
+
   let threwForMismatchedAt = false;
   try {
-    // a.id は実在するが、e.at（別行の時刻。a.at とは異なる）と組み合わせる。
-    await journal.list({ after: { id: a.id, at: e.at } });
+    // a.id は実在するが、上で組み立てた mismatchedAt（同じ UTC 日・store
+    // 内のどの行の at とも衝突しない値）と組み合わせる。
+    await journal.list({ after: { id: a.id, at: mismatchedAt } });
   } catch (error) {
     threwForMismatchedAt = error instanceof JournalAnchorNotFoundError;
   }
