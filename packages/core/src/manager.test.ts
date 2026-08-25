@@ -51,6 +51,7 @@ import {
   failingJobWrite,
   failingJournalAppend,
 } from './testing.js';
+import type { TokenRotatorObservation } from './token-rotator.js';
 import type { UsageTotals } from './usage.js';
 
 type WorkerWaitEvent = Extract<RunnerEvent, { type: 'worker_wait' }>;
@@ -90,6 +91,20 @@ interface FakeSession {
   report(text: string): Promise<void>;
   /** PostToolUse フックを鳴らす。 */
   usedTool(tool: string, extra?: Record<string, unknown>): Promise<void>;
+  /**
+   * SDK が上限の文言を通知として出す（Issue #393）。
+   *
+   * **この口が無かったせいで、`ManagerPool#onEvent` の `usage_notice` を測る歯が
+   * 1本も書けなかった**（`onEvent` は private で、runner のイベント経由でしか
+   * 届かない）。押し込む先は runner の `system/notification` の経路である。
+   */
+  noticeLimit(text: string): Promise<void>;
+  /**
+   * SDK が枠の事実を出す（Issue #393）。**ターンの頭ごとに来るもの。**
+   *
+   * これも上と同じ理由で口が無かった。
+   */
+  rateLimit(info: Record<string, unknown>): Promise<void>;
 }
 
 function fakeSdk() {
@@ -122,6 +137,25 @@ function fakeSdk() {
         } as never);
         if (result === null) throw new Error('canUseTool が null を返した（返事が届かない）');
         return result;
+      },
+      async noticeLimit(text) {
+        push({
+          type: 'system',
+          subtype: 'notification',
+          text,
+          session_id: 'sess-mgr',
+          uuid: `uuid-notice-${String(text.length)}`,
+        } as unknown as SDKMessage);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      },
+      async rateLimit(info) {
+        push({
+          type: 'rate_limit_event',
+          rate_limit_info: info,
+          session_id: 'sess-mgr',
+          uuid: `uuid-ratelimit-${String(Object.keys(info).length)}`,
+        } as unknown as SDKMessage);
+        await new Promise((resolve) => setTimeout(resolve, 0));
       },
       async say(text, sayOptions = {}) {
         push({
@@ -223,6 +257,12 @@ interface SetupOptions {
   runner?: RunnerClient;
   /** 衝突を再現する試験のための注入口（`ManagerPoolOptions.generateManagerId`）。 */
   generateManagerId?: () => string;
+  /** 枠の観測を回し手へ渡す口（Issue #393）。 */
+  onUsageObservation?: (observation: TokenRotatorObservation) => Promise<void>;
+  /** いま撒かれているトークンの身元（Issue #393）。 */
+  tokenIdentity?: () => { tokenId: string; generation: number } | undefined;
+  /** 名乗ってきた runner へ鍵を降ろす口（Issue #393）。 */
+  syncRunnerToken?: (runner: RunnerClient) => Promise<void>;
 }
 
 /**
@@ -260,6 +300,11 @@ function setup(
     ...(options.generateManagerId === undefined
       ? {}
       : { generateManagerId: options.generateManagerId }),
+    ...(options.onUsageObservation === undefined
+      ? {}
+      : { onUsageObservation: options.onUsageObservation }),
+    ...(options.tokenIdentity === undefined ? {} : { tokenIdentity: options.tokenIdentity }),
+    ...(options.syncRunnerToken === undefined ? {} : { syncRunnerToken: options.syncRunnerToken }),
   });
   return { pool, stores, sessions, inbox, runner };
 }
@@ -5654,3 +5699,158 @@ describe('起動時の生存判定で、聞けなかったことを「居ない�
  * 測ってある** — `clone.test.ts` の「⚠️ rate_limit_event は notice ではなく、
  * 事実と遷移で渡る」。**片側だけの保証であることを、この注記が持つ。**
  */
+
+/**
+ * マネージャー経由の枠の検知を回し手へ繋ぐ（Issue #393）。
+ *
+ * **この層の歯は、配線した PR では書けなかった。** `#onEvent` は private で、
+ * runner のイベント経由でしか届かず、当時の `setup()` は偽 SDK に通知を吐かせる
+ * 口を持っていなかった。**「テストが書けない構造は、テストが無いのと同じ」**
+ * （AGENTS.md）なので、口（`FakeSession#noticeLimit` / `#rateLimit`）を足して
+ * ここで測る。
+ */
+describe('onUsageObservation（マネージャー経由の観測）', () => {
+  const REACHED = "You've hit your org's monthly spend limit";
+
+  /** 器の中の待ちが片付くまで少しだけ回す（既存の歯と同じ作法）。 */
+  async function settle(ms = 20): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async function startManager(options: SetupOptions = {}) {
+    const s = setup(undefined, options);
+    await s.pool.start({ request: 'ログイン周りを直して' });
+    await settle();
+    return s;
+  }
+
+  it('文言から分類した通知は、そのまま notice として渡る', async () => {
+    const seen: TokenRotatorObservation[] = [];
+    const s = await startManager({
+      onUsageObservation: async (o) => {
+        seen.push(o);
+      },
+    });
+
+    await s.sessions[0]!.noticeLimit(REACHED);
+    await settle();
+
+    expect(seen[0]?.notice?.kind).toBe('reached');
+    // **文言をそのまま持つ**（言い換えると回復の見込みの分類が効かなくなる）。
+    expect(seen[0]?.notice?.text).toBe(REACHED);
+  });
+
+  /**
+   * **この歯がこの層でいちばん重い。**
+   *
+   * `rejected` は「その枠1つが尽きた」であって「仕事が止まった」ではない
+   * （Issue #393 追記1 の訂正）。`reached` の形へ仕立て直して回し手へ渡すと、
+   * **`overage_exhausted` の設定でも課金枠を1円も使わずに回る。**
+   */
+  it('⚠️ rate_limit は notice ではなく、事実と遷移で渡る', async () => {
+    const seen: TokenRotatorObservation[] = [];
+    const s = await startManager({
+      onUsageObservation: async (o) => {
+        seen.push(o);
+      },
+    });
+
+    await s.sessions[0]!.rateLimit({ status: 'rejected', rateLimitType: 'five_hour' });
+    await settle();
+
+    // **notice を持たない。** 持っていたら、それは仕立て直した `reached` である。
+    expect(seen[0]).not.toHaveProperty('notice');
+    expect(seen[0]?.transition).toBe('rejected');
+    expect(seen[0]?.facts?.status).toBe('rejected');
+  });
+
+  it('同じ rejected が毎ターン来ても、渡すのは遷移した1回だけ', async () => {
+    const seen: TokenRotatorObservation[] = [];
+    const s = await startManager({
+      onUsageObservation: async (o) => {
+        seen.push(o);
+      },
+    });
+
+    const info = { status: 'rejected', rateLimitType: 'five_hour' };
+    await s.sessions[0]!.rateLimit(info);
+    await settle();
+    await s.sessions[0]!.rateLimit(info);
+    await s.sessions[0]!.rateLimit(info);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    // **本数で数える。** `transition === 'rejected'` で絞ると、状態をそのまま
+    // 流す実装（`transition` が undefined で毎回渡る）を見逃す —— 実際、
+    // 絞る形で書いた歯はその変異を捕まえられなかった。
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.transition).toBe('rejected');
+  });
+
+  it('⚠️ 身元は「セッションが起きたとき」のもの。観測のたびに読み直さない', async () => {
+    // **読み直すと、回した後に届いた前のセッションの観測が新しい身元を名乗り、
+    // 世代の照合がそのまま素通しになる** —— 5本のマネージャーが同時に当たった回に
+    // プールを5個消費する、というこの照合が存在する理由そのものである。
+    //
+    // **固定値の `tokenIdentity` では測れない**（読み直しても同じ値が返る）。
+    // セッションが起きた後に変える。
+    let identity = { tokenId: 'tok-a', generation: 3 };
+    const seen: TokenRotatorObservation[] = [];
+    const s = await startManager({
+      tokenIdentity: () => identity,
+      onUsageObservation: async (o) => {
+        seen.push(o);
+      },
+    });
+
+    // セッションが起きた後に回った、という状況。
+    identity = { tokenId: 'tok-b', generation: 9 };
+
+    await s.sessions[0]!.noticeLimit(REACHED);
+    await settle();
+
+    // **起きたときの身元**が付く（いまの身元ではない）。
+    expect(seen[0]?.observedBy).toEqual({ tokenId: 'tok-a', generation: 3 });
+  });
+
+  it('身元が無ければ添えない（unknown へ倒すのは回し手の側）', async () => {
+    const seen: TokenRotatorObservation[] = [];
+    const s = await startManager({
+      onUsageObservation: async (o) => {
+        seen.push(o);
+      },
+    });
+
+    await s.sessions[0]!.noticeLimit(REACHED);
+    await settle();
+
+    expect(seen[0]).not.toHaveProperty('observedBy');
+  });
+
+  it('回し手が投げても、マネージャーの経路を壊さない', async () => {
+    // 回せなかったことは枠に当たったこととは別の失敗であり、後者の報告を
+    // 前者で置き換えない。
+    const s = await startManager({
+      onUsageObservation: () => Promise.reject(new Error('回し手が落ちた')),
+    });
+
+    await s.sessions[0]!.noticeLimit(REACHED);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    // 日誌には通知が残っている（マネージャーの経路は生きている）。
+    const entries = await s.stores.journal.list({});
+    expect(entries.some((entry) => JSON.stringify(entry).includes("You've hit your"))).toBe(true);
+  });
+
+  it('名乗ってきた runner へ鍵を降ろす（後から上がった runner に追いつかせる）', async () => {
+    // これが無いと、起動時の撒き直しが「そのとき繋がっていた runner」にしか
+    // 届かない。
+    const synced: string[] = [];
+    await startManager({
+      syncRunnerToken: async (runner) => {
+        synced.push(runner.runnerId);
+      },
+    });
+
+    expect(synced).toContain('runner-test');
+  });
+});
