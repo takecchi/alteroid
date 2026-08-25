@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest';
 import {
   inboxEventShape,
   journalEntryShape,
+  journalRowType,
   noteBackgroundFailure,
+  noteDroppedJournalRow,
+  noteDroppedJournalRowsSummary,
   noteDroppedRecord,
   runnerEventShape,
 } from './dropped-record.js';
@@ -341,5 +344,95 @@ describe('背景で落ちた処理の跡（#438）', () => {
 
     // `managerId` を持たない型でも落ちない（`hello` は runner の名乗り）。
     expect(runnerEventShape({ type: 'hello', runnerId: 'runner-primary' })).toBe('type=hello');
+  });
+});
+
+/**
+ * 日誌の読み出しでスキーマに合わない行を「飛ばすが、跡は残す」ための道具
+ * （Issue #224）。`storage-fs` / `storage-pg` の `journal.ts` はここの
+ * 関数を呼ぶだけで、stderr へ出す文言そのものはここに1本化されている。
+ *
+ * ここで固定するのは3つ——**跡が出ること**、**本文が乗らないこと**、
+ * **同じ種別は初出だけその場に出て、量は呼び出しの終わりでまとめて出ること**
+ * （`runner-client.ts` の `#noteDropped` と同じ形）。
+ */
+describe('日誌の読み出しで飛ばした行の跡（Issue #224）', () => {
+  const secret = 'ghp_000000000000000000000000000000000000';
+
+  it('journalRowType は type だけを取り、本文には触れない', () => {
+    expect(journalRowType({ type: 'future-type', summary: secret })).toBe('future-type');
+    // 構造を持たない・type が無い・type が文字列でない、はどれも undefined
+    // （埋め草を置かない——`'（不明）'` のような固定値にすると、それ自体が
+    // 種別として数えられてしまう）。
+    expect(journalRowType('not-an-object')).toBeUndefined();
+    expect(journalRowType(null)).toBeUndefined();
+    expect(journalRowType({ summary: secret })).toBeUndefined();
+    expect(journalRowType({ type: 123 })).toBeUndefined();
+  });
+
+  it('初出はその場で1行、同じ種別の2回目以降は増やすだけで出さない', async () => {
+    const dropped = new Map<string, number>();
+    const lines = await captureStderr(() => {
+      noteDroppedJournalRow(dropped, 'unknown-shape', 'future-type', 42);
+      noteDroppedJournalRow(dropped, 'unknown-shape', 'future-type', 99);
+      noteDroppedJournalRow(dropped, 'unknown-shape', 'future-type', 7);
+    });
+
+    expect(lines).toHaveLength(1);
+    const line = lines[0] as string;
+    expect(line).toContain('初出');
+    expect(line).toContain('type=future-type');
+    expect(line).toContain('bytes=42');
+    expect(dropped.get('unknown-shape:future-type')).toBe(3);
+  });
+
+  it('reason だけが違う・type だけが違う・type が無い、はそれぞれ別の種別として初出が出る', async () => {
+    const dropped = new Map<string, number>();
+    const lines = await captureStderr(() => {
+      noteDroppedJournalRow(dropped, 'unknown-shape', 'a', 1);
+      noteDroppedJournalRow(dropped, 'unparsable', 'a', 1);
+      noteDroppedJournalRow(dropped, 'unknown-shape', 'b', 1);
+      noteDroppedJournalRow(dropped, 'unparsable', undefined, 1);
+    });
+
+    expect(lines).toHaveLength(4);
+    expect(dropped.size).toBe(4);
+  });
+
+  it('本文は乗らない（type と bytes だけ）', async () => {
+    const dropped = new Map<string, number>();
+    const lines = await captureStderr(() => {
+      noteDroppedJournalRow(dropped, 'unknown-shape', journalRowType({ type: 'ok' }), 12);
+    });
+
+    const line = lines[0] as string;
+    expect(line).not.toContain(secret);
+  });
+
+  it('summary は何も飛ばしていなければ何も出さない', async () => {
+    const dropped = new Map<string, number>();
+    const lines = await captureStderr(() => {
+      noteDroppedJournalRowsSummary(dropped);
+    });
+
+    expect(lines).toHaveLength(0);
+  });
+
+  it('summary は呼び出しの終わりに、種別ごとの件数をまとめて1行で出す', async () => {
+    const dropped = new Map<string, number>();
+    const lines = await captureStderr(() => {
+      noteDroppedJournalRow(dropped, 'unknown-shape', 'future-type', 1);
+      noteDroppedJournalRow(dropped, 'unknown-shape', 'future-type', 1);
+      noteDroppedJournalRow(dropped, 'unknown-shape', 'future-type', 1);
+      noteDroppedJournalRow(dropped, 'unparsable', undefined, 1);
+      noteDroppedJournalRowsSummary(dropped);
+    });
+
+    // 初出2行（future-type / unparsable）+ summary 1行
+    expect(lines).toHaveLength(3);
+    const summary = lines[2] as string;
+    expect(summary).toContain('合計');
+    expect(summary).toContain('unknown-shape:future-type×3');
+    expect(summary).toContain('unparsable×1');
   });
 });

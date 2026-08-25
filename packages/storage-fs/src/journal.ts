@@ -2,7 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { appendFile, mkdir, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { journalEntrySchema, JournalAnchorNotFoundError } from '@alteroid/core';
+import {
+  journalEntrySchema,
+  JournalAnchorNotFoundError,
+  journalRowType,
+  noteDroppedJournalRow,
+  noteDroppedJournalRowsSummary,
+} from '@alteroid/core';
 import type { JournalEntry, JournalEntryInput, JournalQuery, JournalStore } from '@alteroid/core';
 
 /**
@@ -41,6 +47,9 @@ export class FsJournalStore implements JournalStore {
   async list(query: JournalQuery = {}): Promise<JournalEntry[]> {
     const order = query.order ?? 'desc';
     const found: JournalEntry[] = [];
+    // **この呼び出し1回ぶんのローカルな器。** インスタンスへ状態を持たせない
+    // （`list()` はここでループが完結するので、これで足りる。Issue #224）。
+    const dropped = new Map<string, number>();
     const limit = query.limit ?? Number.POSITIVE_INFINITY;
     // **`limit: 0` = 0件（issue #425）。** 下のループは「push してから件数を
     // 判定する」形（`found.push(entry)` の直後に `found.length >= limit` を
@@ -64,8 +73,11 @@ export class FsJournalStore implements JournalStore {
     let anchorDay: string | undefined;
     if (query.after !== undefined) {
       const after = query.after;
-      anchor = await this.#locateAnchor(after);
+      anchor = await this.#locateAnchor(after, dropped);
       if (anchor === null) {
+        // 錨が見つからず投げる前にも、ここまでで飛ばした分はまとめて出す
+        // （この呼び出しの跡を取りこぼさない）。
+        noteDroppedJournalRowsSummary(dropped);
         throw new JournalAnchorNotFoundError(
           `after で指定された行（id=${after.id}, at=${after.at}）が見つからない`,
         );
@@ -115,7 +127,7 @@ export class FsJournalStore implements JournalStore {
       const step = order === 'desc' ? -1 : 1;
 
       for (let i = startIndex; order === 'desc' ? i >= 0 : i < lines.length; i += step) {
-        const entry = parseLine(lines[i]);
+        const entry = parseLine(lines[i], dropped);
         if (!entry) continue;
         if (query.types && !query.types.includes(entry.type)) continue;
         // **`with` は `limit` より前（この `continue` で候補から落とす時点）で
@@ -125,9 +137,13 @@ export class FsJournalStore implements JournalStore {
         if (query.since && entry.at < query.since) continue;
         if (query.until && entry.at > query.until) continue;
         found.push(entry);
-        if (found.length >= limit) return found;
+        if (found.length >= limit) {
+          noteDroppedJournalRowsSummary(dropped);
+          return found;
+        }
       }
     }
+    noteDroppedJournalRowsSummary(dropped);
     return found;
   }
 
@@ -139,14 +155,21 @@ export class FsJournalStore implements JournalStore {
    * その時点で止まる）。
    */
   async get(id: string): Promise<JournalEntry | null> {
+    // `list()` と同じ道具（Issue #224）——器へ状態を持たせず、この呼び出し
+    // 1回ぶんのローカルな `Map` だけで足りる。
+    const dropped = new Map<string, number>();
     for (const file of await this.#files('desc')) {
       const raw = await readFile(join(this.#dir, file), 'utf8');
       const lines = raw.split('\n').filter((line) => line.length > 0);
       for (let i = lines.length - 1; i >= 0; i -= 1) {
-        const entry = parseLine(lines[i]);
-        if (entry?.id === id) return entry;
+        const entry = parseLine(lines[i], dropped);
+        if (entry?.id === id) {
+          noteDroppedJournalRowsSummary(dropped);
+          return entry;
+        }
       }
     }
+    noteDroppedJournalRowsSummary(dropped);
     return null;
   }
 
@@ -164,10 +187,13 @@ export class FsJournalStore implements JournalStore {
    * 投げる）。**そのファイルに無ければ「無い」と確定できる** — 錨のファイルは
    * `#file(at)` が一意に決めるので、他の日付のファイルを探す必要はない。
    */
-  async #locateAnchor(after: {
-    id: string;
-    at: string;
-  }): Promise<{ file: string; index: number } | null> {
+  async #locateAnchor(
+    after: {
+      id: string;
+      at: string;
+    },
+    dropped: Map<string, number>,
+  ): Promise<{ file: string; index: number } | null> {
     const file = `${after.at.slice(0, 10)}.jsonl`;
     let raw: string;
     try {
@@ -178,7 +204,7 @@ export class FsJournalStore implements JournalStore {
     }
     const lines = raw.split('\n').filter((line) => line.length > 0);
     for (let i = 0; i < lines.length; i += 1) {
-      const entry = parseLine(lines[i]);
+      const entry = parseLine(lines[i], dropped);
       if (entry !== null && entry.id === after.id && entry.at === after.at) {
         return { file, index: i };
       }
@@ -204,13 +230,26 @@ export class FsJournalStore implements JournalStore {
   }
 }
 
-function parseLine(line: string | undefined): JournalEntry | null {
+/**
+ * 1行を読む。**スキーマに合わなければ飛ばすが、飛ばしたことは `dropped` へ
+ * 残す**（Issue #224）——`runner-client.ts` の SSE フレーム処理と同じ形。
+ *
+ * 壊れた行があっても日誌全体を読めなくしないのは変えない（追記専用ゆえ先頭は
+ * 健全なはず）。**「読めなかった」と「そんな行は無い」を跡なしで混ぜない**
+ * ようにするのが、この関数が新しく持つ役割である。
+ */
+function parseLine(line: string | undefined, dropped: Map<string, number>): JournalEntry | null {
   if (!line) return null;
+  const bytes = Buffer.byteLength(line, 'utf8');
+  let raw: unknown;
   try {
-    const parsed = journalEntrySchema.safeParse(JSON.parse(line));
-    return parsed.success ? parsed.data : null;
+    raw = JSON.parse(line);
   } catch {
-    // 壊れた行があっても日誌全体を読めなくしない（追記専用ゆえ先頭は健全なはず）
+    noteDroppedJournalRow(dropped, 'unparsable', undefined, bytes);
     return null;
   }
+  const parsed = journalEntrySchema.safeParse(raw);
+  if (parsed.success) return parsed.data;
+  noteDroppedJournalRow(dropped, 'unknown-shape', journalRowType(raw), bytes);
+  return null;
 }

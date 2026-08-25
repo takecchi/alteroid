@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
 
-import { journalEntrySchema, JournalAnchorNotFoundError } from '@alteroid/core';
+import {
+  journalEntrySchema,
+  JournalAnchorNotFoundError,
+  journalRowType,
+  noteDroppedJournalRow,
+  noteDroppedJournalRowsSummary,
+} from '@alteroid/core';
 import type { JournalEntry, JournalEntryInput, JournalQuery, JournalStore } from '@alteroid/core';
 import { and, asc, desc, eq, gt, gte, inArray, lt, lte, sql } from 'drizzle-orm';
 
@@ -115,11 +121,26 @@ export class PgJournalStore implements JournalStore {
       .limit(query.limit ?? Number.MAX_SAFE_INTEGER);
 
     const found: JournalEntry[] = [];
+    // **この呼び出し1回ぶんのローカルな器。** `PgJournalStore` のインスタンスへ
+    // 状態を持たせない（この `for` でループが完結するので、これで足りる。
+    // Issue #224）。
+    const dropped = new Map<string, number>();
     for (const row of rows) {
-      // 壊れた行があっても日誌全体を読めなくしない（fs 版と同じ扱い）
+      // 壊れた行があっても日誌全体を読めなくしない（fs 版と同じ扱い）。
+      // ただし飛ばしたことは跡に残す——`get` と扱いを変えない。
       const parsed = journalEntrySchema.safeParse(row.entry);
-      if (parsed.success) found.push(parsed.data);
+      if (parsed.success) {
+        found.push(parsed.data);
+      } else {
+        noteDroppedJournalRow(
+          dropped,
+          'unknown-shape',
+          journalRowType(row.entry),
+          byteLength(row.entry),
+        );
+      }
     }
+    noteDroppedJournalRowsSummary(dropped);
     return found;
   }
 
@@ -133,6 +154,28 @@ export class PgJournalStore implements JournalStore {
     const row = rows[0];
     if (row === undefined) return null;
     const parsed = journalEntrySchema.safeParse(row.entry);
-    return parsed.success ? parsed.data : null;
+    if (parsed.success) return parsed.data;
+    // `list()` と同じ道具・同じ扱い（Issue #224）——1件だけでも「飛ばすが
+    // 跡は残す」を崩さない。
+    const dropped = new Map<string, number>();
+    noteDroppedJournalRow(
+      dropped,
+      'unknown-shape',
+      journalRowType(row.entry),
+      byteLength(row.entry),
+    );
+    noteDroppedJournalRowsSummary(dropped);
+    return null;
   }
+}
+
+/**
+ * jsonb から読み出した（既に解かれた）値のバイト数を測る。**pg の駆動子は
+ * `entry` を渡す時点で JSON を JS の値へ解いてしまっているので、fs 版
+ * （生の行文字列の長さ）とは測り方が違う** —— 一度 `JSON.stringify` へ
+ * 戻して、その UTF-8 バイト数を数える。**本文は載せない**という契約は保つ
+ * （ここで作るのは数値だけで、跡へ渡す文字列そのものはここで作らない）。
+ */
+function byteLength(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value) ?? 'null', 'utf8');
 }

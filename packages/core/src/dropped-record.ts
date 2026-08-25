@@ -112,6 +112,93 @@ export function noteBackgroundFailure(what: string, detail: string, error: unkno
 }
 
 /**
+ * 日誌の読み出し（`storage-fs` / `storage-pg` の `list()` / `get()`）が
+ * スキーマに合わない行を飛ばすときの理由。**`unparsable`** は構造すら持たない
+ * （fs 版の `JSON.parse` が投げた）。**`unknown-shape`** は構造としては正しい
+ * JSON（または pg が既に jsonb として解いた値）だが `journalEntrySchema` に
+ * 合わない。`apps/daemon/src/runner-client.ts` の `RunnerDroppedEventReport`
+ * と同じ2分（Issue #224）。
+ */
+export type DroppedJournalRowReason = 'unparsable' | 'unknown-shape';
+
+/**
+ * 読めなかった日誌の行から、本文を含まずに安全に取り出せる `type` らしき
+ * 文字列。取れるのは、値がオブジェクトで `type` キーが空でない文字列である
+ * ときだけ。
+ *
+ * **取れなければ `undefined` を返す（埋め草を置かない）。** `'（不明）'` の
+ * ような固定文字列を代わりに置くと、それ自体が `type` の1種として
+ * `noteDroppedJournalRow` に数えられてしまい、「型が分からない行が本当に
+ * 何種類あるか」を覆い隠す。
+ *
+ * **本文はここへ来ない。** 見るのは `journalEntrySchema` の判別子である
+ * `type` フィールドだけで、`decision` / `exchange` などの自由文フィールドには
+ * 一切触れない。
+ */
+export function journalRowType(raw: unknown): string | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const value = (raw as { type?: unknown }).type;
+  if (typeof value !== 'string' || value.length === 0) return undefined;
+  return tag(value);
+}
+
+/**
+ * 日誌の読み出しでスキーマに合わない行を1件、**飛ばすが跡には残す**
+ * （Issue #224）。`runner-client.ts` の `#noteDropped` と同じ形——
+ * **同じ種別（`reason` と `type` の組）は、この呼び出しで最初の1回だけその場で
+ * 1行 stderr へ出す。** 量は `noteDroppedJournalRowsSummary` が呼び出しの
+ * 終わりでまとめて出す。壊れた行が大量にあるとき行ごとに出すと、それ自体が
+ * 二次被害になる（跡でログを埋める）。
+ *
+ * **`dropped` は呼び出し1回ぶんのローカルな `Map` である。** `JournalStore`
+ * のインスタンスへ状態を持たせない——`list()` / `get()` はどちらも1回の
+ * 呼び出しの中でループが完結するので、呼び出し側のローカル変数で足りる。
+ * プロセス単位で畳むと、器が入れ替わって新しい書き手が同じ種別を吐き始めても
+ * 「前に見たから」で黙る、という同じ穴を作る（`#noteDropped` の doc）。
+ *
+ * **本文は載せない。** 載せてよいのは `journalRowType` で安全に取れた
+ * `type` とバイト数だけ——日誌の行にはマネージャーの報告が入りうる
+ * （報告本文に `GH_TOKEN` が全文で出た前例がある。#52）。**`safeParse` が返す
+ * `error.message` はここへ渡さないこと。** 検証に失敗した値そのものを引用
+ * することがあり、確かめずに跡へ流すと同じ事故になる。
+ *
+ * @param dropped 呼び出し1回ぶんの `Map<種別, 件数>`。
+ * @param reason {@link DroppedJournalRowReason}。
+ * @param type `journalRowType` で取れた `type`（取れなければ `undefined`）。
+ * @param bytes その行のバイト数。**取れない `type` の代わりに 0 を置かない
+ *   のと同じ理由で、常に実測を渡すこと。**
+ */
+export function noteDroppedJournalRow(
+  dropped: Map<string, number>,
+  reason: DroppedJournalRowReason,
+  type: string | undefined,
+  bytes: number,
+): void {
+  const key = type === undefined ? reason : `${reason}:${type}`;
+  const seen = dropped.get(key) ?? 0;
+  dropped.set(key, seen + 1);
+  if (seen > 0) return;
+  const what =
+    reason === 'unparsable' ? 'JSON として読めなかった' : 'こちらのスキーマに合わなかった';
+  const typeText = type === undefined ? '（type も読めない）' : `type=${type}`;
+  note(`日誌の行を読み出せずに飛ばした（初出）: ${what} ${typeText} bytes=${bytes}`);
+}
+
+/**
+ * `noteDroppedJournalRow` で溜めた件数を、呼び出しの終わりで1行にまとめて
+ * 出す。**何も飛ばしていなければ何も出さない。**
+ *
+ * `list()` / `get()` の**すべての**返り口（`return` / `throw` の手前）で
+ * これを呼ぶこと——早期 return を1つ忘れると、その経路だけ量が跡に出ない
+ * （初出の1行は既に出ているので存在は残るが、量が失われる）。
+ */
+export function noteDroppedJournalRowsSummary(dropped: Map<string, number>): void {
+  if (dropped.size === 0) return;
+  const detail = [...dropped.entries()].map(([key, count]) => `${key}×${count}`).join(' / ');
+  note(`日誌の行を読み出せずに飛ばした（この呼び出しの合計）: ${detail}`);
+}
+
+/**
  * 受信箱が閉じた後に届いた合図を、このプロセスでは処理しなかったことを
  * stderr へ1行だけ残す。
  *

@@ -3,12 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  captureStderr,
   renderMemoryDocuments,
   verifyJournalStoreOrderContract,
   verifyJournalStoreQueryEdgeContract,
   verifyJournalStoreWithContract,
 } from '@alteroid/core';
-import type { Commitment, InboxEvent } from '@alteroid/core';
+import type { Commitment, InboxEvent, JournalEntry } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { CLOSED_HISTORY_LIMIT, createFsStores, initWorkspace } from './index.js';
@@ -932,6 +933,144 @@ describe('FsJournalStore', () => {
 
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({ id: written.id, actor: 'manager:mgr-1', tool: 'Bash' });
+  });
+
+  /**
+   * **スキーマに合わない行を「飛ばすが、跡は残す」（Issue #224）。**
+   *
+   * `runner-client.ts` の `#noteDropped` と同じ形——本文は跡に乗らず、
+   * 読めた行は今までどおり返る。`get` と `list` で扱いを変えない。
+   */
+  describe('スキーマに合わない行の跡（Issue #224）', () => {
+    const secret = 'ghp_000000000000000000000000000000000000';
+
+    it('list(): スキーマに合わない行を跡に残しつつ、読めた行はそのまま返す', async () => {
+      await stores.journal.append({ type: 'decision', decision: '健全な行', grounds: 'g' });
+
+      const journalDir = join(root, 'journal');
+      const today = new Date().toISOString().slice(0, 10);
+      // 追記のあとに、スキーマに合わない行と、JSON にすらならない行を手で足す。
+      // 本文（secret）は `journalEntrySchema` に無いフィールドへ入れておく——
+      // 跡へ本文が混ざれば、ここで拾える。
+      await writeFile(
+        join(journalDir, `${today}.jsonl`),
+        `${JSON.stringify({
+          type: 'future-type',
+          id: 'broken-1',
+          at: `${today}T00:00:00.000Z`,
+          leakedBody: `秘密は ${secret} だった`,
+        })}\n` + `これは JSON ではない ${secret}\n`,
+        { flag: 'a' },
+      );
+
+      let entries: Awaited<ReturnType<typeof stores.journal.list>> = [];
+      const lines = await captureStderr(async () => {
+        entries = await stores.journal.list();
+      });
+
+      // 1. 読めた行（健全な1件）は今までどおり返る——回帰。
+      expect(entries.map((entry) => (entry as { decision?: string }).decision)).toEqual([
+        '健全な行',
+      ]);
+
+      // 2. 跡が stderr に出る。
+      expect(lines.length).toBeGreaterThan(0);
+      const joined = lines.join('');
+      expect(joined).toContain('日誌の行を読み出せずに飛ばした');
+      // スキーマに合わない行（type は読める）と、JSON にならない行の両方が跡に出る。
+      expect(joined).toContain('type=future-type');
+      expect(joined).toContain('（type も読めない）');
+
+      // 3. **本文は跡に混ざらない。**
+      expect(joined).not.toContain(secret);
+    });
+
+    it('get(): スキーマに合わない行を跡に残しつつ、探している行が読めれば返す', async () => {
+      const written = await stores.journal.append({
+        type: 'decision',
+        decision: '探している行',
+        grounds: 'g',
+      });
+
+      const journalDir = join(root, 'journal');
+      const today = new Date().toISOString().slice(0, 10);
+      await writeFile(
+        join(journalDir, `${today}.jsonl`),
+        `${JSON.stringify({
+          type: 'future-type',
+          id: 'broken-1',
+          at: `${today}T00:00:01.000Z`,
+          leakedBody: `秘密は ${secret} だった`,
+        })}\n`,
+        { flag: 'a' },
+      );
+
+      let found: JournalEntry | null = null;
+      const lines = await captureStderr(async () => {
+        found = await stores.journal.get(written.id);
+      });
+
+      expect(found).toMatchObject({ id: written.id, decision: '探している行' });
+      const joined = lines.join('');
+      expect(joined).toContain('日誌の行を読み出せずに飛ばした');
+      expect(joined).toContain('type=future-type');
+      expect(joined).not.toContain(secret);
+    });
+
+    it('get(): 見つからない id でも、途中で飛ばした行の跡は残る', async () => {
+      const journalDir = join(root, 'journal');
+      const today = new Date().toISOString().slice(0, 10);
+      await mkdir(journalDir, { recursive: true });
+      await writeFile(
+        join(journalDir, `${today}.jsonl`),
+        `${JSON.stringify({
+          type: 'future-type',
+          id: 'broken-1',
+          at: `${today}T00:00:00.000Z`,
+        })}\n`,
+        'utf8',
+      );
+
+      let found: JournalEntry | null = null;
+      const lines = await captureStderr(async () => {
+        found = await stores.journal.get('no-such-id');
+      });
+
+      expect(found).toBeNull();
+      expect(lines.join('')).toContain('type=future-type');
+    });
+
+    /**
+     * **跡でログを埋めない。** 壊れた行が大量にあるとき、同じ種別なら初出の
+     * 1行だけがその場で出て、量は呼び出しの終わりで1行にまとまる。
+     */
+    it('同じ種別の行が大量にあっても、初出は1行だけ・量は呼び出しの終わりに1行でまとまる', async () => {
+      const journalDir = join(root, 'journal');
+      const today = new Date().toISOString().slice(0, 10);
+      await mkdir(journalDir, { recursive: true });
+      const brokenLines = Array.from({ length: 20 }, (_, i) =>
+        JSON.stringify({
+          type: 'future-type',
+          id: `broken-${i}`,
+          at: `${today}T00:00:00.000Z`,
+        }),
+      ).join('\n');
+      await writeFile(join(journalDir, `${today}.jsonl`), `${brokenLines}\n`, 'utf8');
+
+      const lines = await captureStderr(async () => {
+        await stores.journal.list();
+      });
+
+      // 初出は1行だけ（`initial` の文言が複数回出ない）。
+      const firstLines = lines.filter((line) => line.includes('初出'));
+      expect(firstLines).toHaveLength(1);
+      // 量はまとめの1行に現れる（20件）。
+      const summaryLines = lines.filter((line) => line.includes('合計'));
+      expect(summaryLines).toHaveLength(1);
+      expect(summaryLines[0]).toContain('unknown-shape:future-type×20');
+      // 合わせて21行（初出1 + まとめ1... ではなく、初出1本 + まとめ1本 = 2行）。
+      expect(lines).toHaveLength(2);
+    });
   });
 
   /**

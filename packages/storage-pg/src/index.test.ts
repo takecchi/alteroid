@@ -1,10 +1,11 @@
 import {
+  captureStderr,
   renderMemoryDocuments,
   verifyJournalStoreOrderContract,
   verifyJournalStoreQueryEdgeContract,
   verifyJournalStoreWithContract,
 } from '@alteroid/core';
-import type { Commitment, InboxEvent } from '@alteroid/core';
+import type { Commitment, InboxEvent, JournalEntry } from '@alteroid/core';
 import { PGlite } from '@electric-sql/pglite';
 import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -824,6 +825,136 @@ describe('PgJournalStore', () => {
 
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({ id: written.id, actor: 'manager:mgr-1', tool: 'Bash' });
+  });
+
+  /**
+   * **スキーマに合わない行を「飛ばすが、跡は残す」（Issue #224）。**
+   *
+   * fs 版と同じ道具（`journalRowType` / `noteDroppedJournalRow` /
+   * `noteDroppedJournalRowsSummary`。`packages/core/src/dropped-record.ts`）を
+   * `list()` / `get()` の両方が呼ぶ——**扱いを変えない。**
+   *
+   * 生 SQL でスキーマ検証を経由せず insert する（`PgCommitmentStore` の
+   * 「未知の origin」テストと同じ手口——`append()` 経由では
+   * `journalEntrySchema.parse` を通ってしまい、壊れた行をそもそも作れない）。
+   */
+  describe('スキーマに合わない行の跡（Issue #224）', () => {
+    const secret = 'ghp_000000000000000000000000000000000000';
+
+    it('list(): スキーマに合わない行を跡に残しつつ、読めた行はそのまま返る', async () => {
+      await stores.journal.append({ type: 'decision', decision: '健全な行', grounds: 'g' });
+
+      await db.execute(
+        sql`insert into journal (id, at, type, entry)
+            values (
+              'broken-1',
+              '2026-08-12T00:00:00.000Z',
+              'future-type',
+              ${JSON.stringify({
+                type: 'future-type',
+                id: 'broken-1',
+                at: '2026-08-12T00:00:00.000Z',
+                leakedBody: `秘密は ${secret} だった`,
+              })}::jsonb
+            )`,
+      );
+
+      let entries: JournalEntry[] = [];
+      const lines = await captureStderr(async () => {
+        entries = await stores.journal.list();
+      });
+
+      // 1. 読めた行（健全な1件）は今までどおり返る——回帰。
+      expect(entries.map((entry) => (entry as { decision?: string }).decision)).toEqual([
+        '健全な行',
+      ]);
+
+      // 2. 跡が stderr に出る。type は安全に取れるので載る。
+      const joined = lines.join('');
+      expect(joined).toContain('日誌の行を読み出せずに飛ばした');
+      expect(joined).toContain('type=future-type');
+
+      // 3. **本文は跡に混ざらない。**
+      expect(joined).not.toContain(secret);
+    });
+
+    it('get(): スキーマに合わない行なら、跡を残して null を返す（無いのではなく読めない）', async () => {
+      await db.execute(
+        sql`insert into journal (id, at, type, entry)
+            values (
+              'broken-1',
+              '2026-08-12T00:00:00.000Z',
+              'future-type',
+              ${JSON.stringify({
+                type: 'future-type',
+                id: 'broken-1',
+                at: '2026-08-12T00:00:00.000Z',
+                leakedBody: `秘密は ${secret} だった`,
+              })}::jsonb
+            )`,
+      );
+
+      let found: JournalEntry | null = null;
+      const lines = await captureStderr(async () => {
+        found = await stores.journal.get('broken-1');
+      });
+
+      // `id` は在るが読めない——今までどおり null（`JournalStore.get` の
+      // 契約は変えない。存在の有無は id 列で判定できるが、それは別の話）。
+      expect(found).toBeNull();
+      const joined = lines.join('');
+      expect(joined).toContain('type=future-type');
+      expect(joined).not.toContain(secret);
+    });
+
+    it('get(): 読めた行は跡を残さずそのまま返る（回帰）', async () => {
+      const written = await stores.journal.append({
+        type: 'decision',
+        decision: '探している行',
+        grounds: 'g',
+      });
+
+      let found: JournalEntry | null = null;
+      const lines = await captureStderr(async () => {
+        found = await stores.journal.get(written.id);
+      });
+
+      expect(found).toMatchObject({ id: written.id, decision: '探している行' });
+      expect(lines).toHaveLength(0);
+    });
+
+    /**
+     * **跡でログを埋めない。** 壊れた行が大量にあるとき、同じ種別なら初出の
+     * 1行だけがその場で出て、量は呼び出しの終わりで1行にまとまる。
+     */
+    it('同じ種別の行が大量にあっても、初出は1行だけ・量は呼び出しの終わりに1行でまとまる', async () => {
+      for (let i = 0; i < 20; i += 1) {
+        await db.execute(
+          sql`insert into journal (id, at, type, entry)
+              values (
+                ${`broken-${i}`},
+                '2026-08-12T00:00:00.000Z',
+                'future-type',
+                ${JSON.stringify({
+                  type: 'future-type',
+                  id: `broken-${i}`,
+                  at: '2026-08-12T00:00:00.000Z',
+                })}::jsonb
+              )`,
+        );
+      }
+
+      const lines = await captureStderr(async () => {
+        await stores.journal.list();
+      });
+
+      const firstLines = lines.filter((line) => line.includes('初出'));
+      expect(firstLines).toHaveLength(1);
+      const summaryLines = lines.filter((line) => line.includes('合計'));
+      expect(summaryLines).toHaveLength(1);
+      expect(summaryLines[0]).toContain('unknown-shape:future-type×20');
+      expect(lines).toHaveLength(2);
+    });
   });
 
   /**
