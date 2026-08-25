@@ -682,6 +682,75 @@
                       "properties": {
                         "type": {
                           "type": "string",
+                          "const": "token_rotation"
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "event": {
+                          "type": "string",
+                          "enum": [
+                            "rotated",
+                            "not_rotated",
+                            "exhausted",
+                            "restored",
+                            "restore_failed"
+                          ]
+                        },
+                        "signal": {
+                          "type": "string",
+                          "enum": [
+                            "reached",
+                            "quota_rejected",
+                            "overage_closed",
+                            "entered_overage",
+                            "org_policy",
+                            "warning",
+                            "none"
+                          ]
+                        },
+                        "freshness": {
+                          "type": "string",
+                          "enum": ["current", "stale", "unknown"]
+                        },
+                        "tokenId": {
+                          "type": "string"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "fromTokenId": {
+                          "type": "string"
+                        },
+                        "generation": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "earliestAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "noticeText": {
+                          "type": "string"
+                        },
+                        "text": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["type", "id", "at", "event", "text"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
                           "const": "escalation"
                         },
                         "id": {
@@ -1864,6 +1933,75 @@
                               }
                             },
                             "required": ["type", "id", "at", "decision", "grounds"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "const": "token_rotation"
+                              },
+                              "id": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              },
+                              "event": {
+                                "type": "string",
+                                "enum": [
+                                  "rotated",
+                                  "not_rotated",
+                                  "exhausted",
+                                  "restored",
+                                  "restore_failed"
+                                ]
+                              },
+                              "signal": {
+                                "type": "string",
+                                "enum": [
+                                  "reached",
+                                  "quota_rejected",
+                                  "overage_closed",
+                                  "entered_overage",
+                                  "org_policy",
+                                  "warning",
+                                  "none"
+                                ]
+                              },
+                              "freshness": {
+                                "type": "string",
+                                "enum": ["current", "stale", "unknown"]
+                              },
+                              "tokenId": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "fromTokenId": {
+                                "type": "string"
+                              },
+                              "generation": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "earliestAt": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              },
+                              "noticeText": {
+                                "type": "string"
+                              },
+                              "text": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["type", "id", "at", "event", "text"]
                           },
                           {
                             "type": "object",

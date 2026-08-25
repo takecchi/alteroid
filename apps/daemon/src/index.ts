@@ -21,9 +21,9 @@ import {
   createScheduler,
   createTokenPoolService,
   createTokenRotator,
-  describeTokenRestore,
-  describeTokenRotation,
   noteDroppedRecord,
+  tokenRestoreEntry,
+  tokenRotationEntry,
   probeTokenCandidate,
   dailyReportEvent,
   installUncaughtNet,
@@ -40,6 +40,7 @@ import {
   type RunnerSource,
   type SelfFacts,
   type Stores,
+  type TokenRotationEntry,
 } from '@alteroid/core';
 
 import { createApp, parseAllowedOrigins } from './app.js';
@@ -721,15 +722,24 @@ export async function main(): Promise<void> {
     // ことになり、意味のある行が埋もれる。
     // **日誌にも残す。** stderr は器のログへ流れて消えるが、日誌は記憶ストアに
     // 残り、クローンも人間も後から辿れる。
-    const line =
+    // **`restore()` そのものが投げた場合と、`TokenRestoreOutcome` が返る場合を
+    // 分けたまま同じ種別へ載せる。** 前者は `TokenRestoreOutcome` ではないので
+    // `tokenRestoreEntry` を通せない（型が受けない）。
+    const entry =
       restored.kind === 'failed'
-        ? `認証トークン: 起動時の撒き直しが落ちた。${restored.why}`
-        : describeTokenRestore(restored);
-    if (line !== null) {
-      process.stderr.write(`alteroidd: ${line.split('\n')[0] ?? line}\n`);
-      await stores.journal
-        .append({ type: 'exchange', with: 'self', role: 'outbound', text: line })
-        .catch(() => undefined);
+        ? ({
+            type: 'token_rotation' as const,
+            event: 'restore_failed' as const,
+            text: `認証トークン: 起動時の撒き直しが落ちた。${restored.why}`,
+          } satisfies TokenRotationEntry)
+        : tokenRestoreEntry(restored);
+    if (entry !== null) {
+      process.stderr.write(`alteroidd: ${entry.text.split('\n')[0] ?? entry.text}\n`);
+      // **落ちても黙って消さない**（回した側と同じ作法）。直す前はここが
+      // `.catch(() => undefined)` で、追記が落ちたことがどこにも残らなかった。
+      await stores.journal.append(entry).catch((error: unknown) => {
+        noteDroppedRecord('認証トークンの撒き直し', 'journal', error);
+      });
     }
   }
 
@@ -754,7 +764,7 @@ export async function main(): Promise<void> {
       // **当たった文言をそのまま添える**（Issue #393「言い換えずそのまま残す」）。
       // 人間が claude.ai と突き合わせられることと、回復の見込みの分類が効くことの
       // 両方がこれに乗っている。
-      const line = describeTokenRotation(outcome, {
+      const entry = tokenRotationEntry(outcome, {
         ...(observation.notice === undefined ? {} : { noticeText: observation.notice.text }),
       });
       // **回ったらクローンのセッションを畳んで作り直す**（Issue #393 PR4）。
@@ -765,16 +775,14 @@ export async function main(): Promise<void> {
       // （`recycleSessionForToken` の doc）。
       if (outcome.kind === 'rotated') clone.recycleSessionForToken();
 
-      if (line !== null) {
-        process.stderr.write(`alteroidd: ${line.split('\n')[0] ?? line}\n`);
+      if (entry !== null) {
+        process.stderr.write(`alteroidd: ${entry.text.split('\n')[0] ?? entry.text}\n`);
         // **日誌への追記が落ちても回した事実は消えない**（正本は記憶ストアの
         // `active` の側に在る）。ここで投げ直すと、回せたのに「回し手が落ちた」
         // として報告されることになる。
-        await stores.journal
-          .append({ type: 'exchange', with: 'self', role: 'outbound', text: line })
-          .catch((error: unknown) => {
-            noteDroppedRecord('認証トークンの切替', 'journal', error);
-          });
+        await stores.journal.append(entry).catch((error: unknown) => {
+          noteDroppedRecord('認証トークンの切替', 'journal', error);
+        });
       }
     },
     ...(storage.sessionStore === undefined ? {} : { sessionStore: storage.sessionStore }),

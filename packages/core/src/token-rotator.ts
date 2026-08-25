@@ -19,6 +19,7 @@ import {
   type ObservationFreshness,
   type TokenRotationSignal,
 } from './token-rotation.js';
+import type { JournalEntryInput } from './schema.js';
 import type { RateLimitFacts, UsageLimitNotice } from './usage-limits.js';
 import type { Stores } from './store.js';
 
@@ -619,4 +620,96 @@ export function describeTokenRestore(outcome: TokenRestoreOutcome): string | nul
     );
   }
   return `認証トークン: 起動時に撒き直せなかった。${outcome.why}`;
+}
+
+/**
+ * 認証トークンの日誌エントリ（追記の入力の形）。
+ *
+ * **`JournalEntryInput` をそのまま返さない。** あちらは全種別の union なので、
+ * 呼ぶ側が `entry.text` を読めない（`text` を持たない種別が混ざっている）。
+ * stderr へ出す1行はこの `text` そのものなので、**union へ広げると呼ぶ側が
+ * 文言を自分で組み直すことになり、日誌と stderr で言い方が分かれる。**
+ */
+export type TokenRotationEntry = Extract<JournalEntryInput, { type: 'token_rotation' }>;
+
+/**
+ * 回した / 回さなかったを**日誌の1件**にする。**出さないときは `null`。**
+ *
+ * **出す・出さないの判定は {@link describeTokenRotation} 1つに任せる。** ここで
+ * もう一度書くと、stderr には出るのに日誌には出ない（あるいは逆）という食い違いが
+ * 静かに生まれる —— そして「出なかった」は、出ていないので気づけない。
+ *
+ * **`exchange` ではなく専用の種別を使う理由**は `schema.ts` の `token_rotation` の
+ * doc に在る（`exchange` は53箇所が書く雑多入れで、絞る先が無い）。
+ */
+export function tokenRotationEntry(
+  outcome: TokenRotationOutcome,
+  observed?: { noticeText?: string },
+): TokenRotationEntry | null {
+  const text = describeTokenRotation(outcome, observed);
+  if (text === null) return null;
+  const common = {
+    type: 'token_rotation' as const,
+    signal: outcome.signal,
+    freshness: outcome.freshness,
+    ...(observed?.noticeText === undefined ? {} : { noticeText: observed.noticeText }),
+    text,
+  };
+  if (outcome.kind === 'rotated') {
+    return {
+      ...common,
+      event: 'rotated',
+      tokenId: outcome.toTokenId,
+      label: outcome.toLabel,
+      ...(outcome.fromTokenId === undefined ? {} : { fromTokenId: outcome.fromTokenId }),
+      generation: outcome.generation,
+    };
+  }
+  if (outcome.kind === 'exhausted') {
+    return {
+      ...common,
+      event: 'exhausted',
+      // **無いことを埋めない。** 「戻る見込みの立っている候補が1本も無い」と
+      // 「すぐ戻る」を同じ形にしない（`earliest` の doc）。
+      ...(outcome.earliest === undefined
+        ? {}
+        : {
+            tokenId: outcome.earliest.tokenId,
+            label: outcome.earliest.label,
+            earliestAt: new Date(outcome.earliest.cooldownUntil).toISOString(),
+          }),
+    };
+  }
+  return { ...common, event: 'not_rotated' };
+}
+
+/**
+ * 起動時の引き取りを**日誌の1件**にする。**出さないときは `null`。**
+ *
+ * 判定を {@link describeTokenRestore} に任せる理由は {@link tokenRotationEntry} と
+ * 同じである。
+ */
+export function tokenRestoreEntry(outcome: TokenRestoreOutcome): TokenRotationEntry | null {
+  const text = describeTokenRestore(outcome);
+  if (text === null) return null;
+  if (outcome.kind === 'restored') {
+    return {
+      type: 'token_rotation',
+      event: 'restored',
+      tokenId: outcome.tokenId,
+      label: outcome.label,
+      // **増えていない**（引き取りは回転ではない。`TokenRestoreOutcome` の doc）。
+      generation: outcome.generation,
+      text,
+    };
+  }
+  // `dangling` / `withheld` / `failed`。**`tokenId` は在れば載せる** —— どの指名が
+  // 撒けなかったのかは、次に何を確かめるかを決める材料である。
+  return {
+    type: 'token_rotation',
+    event: 'restore_failed',
+    ...('tokenId' in outcome ? { tokenId: outcome.tokenId } : {}),
+    ...('label' in outcome ? { label: outcome.label } : {}),
+    text,
+  };
 }

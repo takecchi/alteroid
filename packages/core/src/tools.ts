@@ -3426,6 +3426,36 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
         body: `${modelLines}${resetLine}`,
       };
     }
+    case 'token_rotation': {
+      // **見出しに `event` を出す。** クローンがこの種別で絞ったとき、いちばん
+      // 見たいのは「回ったのか」であって本文の言い回しではない。**とくに
+      // `exhausted`（回そうとしたが候補が無かった ＝ 全層が止まる）を、
+      // `not_rotated`（契機ではなかった ＝ 正常）と同じ顔にしない。**
+      const where =
+        entry.tokenId === undefined
+          ? ''
+          : ` → ${entry.tokenId}${entry.label === undefined ? '' : `「${entry.label}」`}`;
+      const gen = entry.generation === undefined ? '' : ` 世代${String(entry.generation)}`;
+      // **`earliestAt` が無いことを「すぐ戻る」と読ませない。** 無いのは
+      // 「戻る見込みの立っている候補が1本も無い」ときである。
+      const earliest =
+        entry.event !== 'exhausted'
+          ? ''
+          : entry.earliestAt === undefined
+            ? '\n⚠ 戻る見込みの立っている候補が1本も無い（プールが空か、全部外されている）'
+            : `\nいちばん早く戻るのは ${entry.earliestAt}`;
+      return {
+        head:
+          `[token_rotation ${entry.event}` +
+          (entry.signal === undefined ? '' : ` ${entry.signal}`) +
+          (entry.freshness === undefined ? '' : `/${entry.freshness}`) +
+          `${gen}]${where}`,
+        // **本文は整形済みの行をそのまま出す。** ここで組み直すと、人間が読む面
+        // （stderr / Web）と言い方が分かれる（`text` の持ち主は `token-rotator.ts`
+        // の `describeTokenRotation` 1つである）。
+        body: `${entry.text}${earliest}`,
+      };
+    }
   }
 }
 

@@ -446,6 +446,32 @@ export function journalEntryShape(entry: JournalEntryInput): string {
         `managerId=${tag(entry.managerId)} models=${Object.keys(entry.models).length}` +
         (entry.reset === undefined ? '' : ' reset=yes')
       );
+    // **同じ判定基準（値を誰が決めるか）で3つに分かれる。**
+    //
+    // - 載せる: `event` / `signal` / `freshness` は列挙値、`generation` は整数、
+    //   `tokenId` / `fromTokenId` は**こちらが発行した id**（`managerId` と同じ）、
+    //   `earliestAt` はこちらが計算した時刻
+    // - 長さだけ: **`label` は人間が付けた自由文である**（`add --label` でそのまま
+    //   入る）。id に見えるものと並んでいるが、決めるのは外側なので `external_event`
+    //   の `source` と同じ扱いにする
+    // - 長さだけ: `noticeText` と `text` も自由文（前者は provider の英文、後者は
+    //   その両方を含む整形済みの行）
+    //
+    // **⚠️ トークンの値はこのエントリに存在しない**（`schema.ts` の
+    // `token_rotation` の doc）。ここで落とす心配をする対象がそもそも無い。
+    case 'token_rotation':
+      return (
+        `token_rotation event=${tag(entry.event)}` +
+        (entry.signal === undefined ? '' : ` signal=${tag(entry.signal)}`) +
+        (entry.freshness === undefined ? '' : ` freshness=${tag(entry.freshness)}`) +
+        (entry.tokenId === undefined ? '' : ` tokenId=${tag(entry.tokenId)}`) +
+        (entry.fromTokenId === undefined ? '' : ` fromTokenId=${tag(entry.fromTokenId)}`) +
+        (entry.generation === undefined ? '' : ` generation=${entry.generation}`) +
+        (entry.earliestAt === undefined ? '' : ` earliestAt=${tag(entry.earliestAt)}`) +
+        (entry.label === undefined ? '' : ` ${size(entry.label, 'label')}`) +
+        (entry.noticeText === undefined ? '' : ` ${size(entry.noticeText, 'noticeText')}`) +
+        ` ${size(entry.text)}`
+      );
   }
 }
 
