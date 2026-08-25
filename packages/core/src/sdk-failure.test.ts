@@ -60,13 +60,16 @@ function result(fields: Record<string, unknown>): SDKMessage {
  * 上のワークフローは検証の生の出力を PR 本文へ貼るので、マージを判断する人が読む
  * 場所に、増えた語とやることの両方が届く。
  */
-type SDK_の_error_の語が増えた_この表と_sdk_failure_ts_の_doc_へ足して同じ_PR_で緑にする =
-  Record<SDKAssistantMessageError, true>;
+type SDK_の_error_の語が増えた_この表と_sdk_failure_ts_の_doc_へ足して同じ_PR_で緑にする = Record<
+  SDKAssistantMessageError,
+  true
+>;
 
 const SDK_ASSISTANT_ERROR_CODES: SDK_の_error_の語が増えた_この表と_sdk_failure_ts_の_doc_へ足して同じ_PR_で緑にする =
   {
     authentication_failed: true,
     oauth_org_not_allowed: true,
+    account_on_hold: true,
     billing_error: true,
     rate_limit: true,
     overloaded: true,

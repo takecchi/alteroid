@@ -64,10 +64,19 @@ function nonEmpty(value: unknown): string | undefined {
  * `assistant` メッセージに付いた失敗の印。無ければ `undefined`。
  *
  * SDK の `SDKAssistantMessage.error` は
- * `'authentication_failed' | 'oauth_org_not_allowed' | 'billing_error' | 'rate_limit' |
- * 'overloaded' | 'invalid_request' | 'model_not_found' | 'server_error' | 'unknown' |
- * 'max_output_tokens'` である。**支出上限はこのうち `billing_error` として来る側**で、
- * つまり SDK は「これはモデルの発言ではない」と最初から言っている。
+ * `'authentication_failed' | 'oauth_org_not_allowed' | 'account_on_hold' | 'billing_error' |
+ * 'rate_limit' | 'overloaded' | 'invalid_request' | 'model_not_found' | 'server_error' |
+ * 'unknown' | 'max_output_tokens'` である。**支出上限はこのうち `billing_error` として
+ * 来る側**で、つまり SDK は「これはモデルの発言ではない」と最初から言っている。
+ *
+ * **この写しは数え上げなので腐る。** 腐ったことを `tsc` に言わせる歯は
+ * `sdk-failure.test.ts` の `SDK_ASSISTANT_ERROR_CODES` にあり、SDK が語を増やすと
+ * そこが落ちる。**落ちたら、増えた語をあちらの表とこの写しの両方へ足すこと**
+ * （片方だけ直すと、次に読む人には写しのほうが正しく見える）。
+ *
+ * **⚠️ ここを読み落としても、`assistantFailureOf` は語を取りこぼさない。** 下の実装は
+ * 語を列挙せず「空でない文字列」を印として通すので、**知らない語も印になる。**
+ * 数え上げているのはこの写しと歯だけである。
  *
  * **本文は呼び出し側が渡す。** ここで `message.message.content` を辿らないのは、
  * text ブロックの取り出しが `clone.ts` と `runner.ts` でそれぞれ既にあり
