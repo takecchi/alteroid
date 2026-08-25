@@ -425,8 +425,24 @@ export const commitmentListResponseSchema = z.object({
    * が末尾に足す断りと同じ材料を、人間の側（Web UI・API を直接叩く側）にも
    * 渡す——片方にしか無いと、人間が API で見た台帳とクローンが見る台帳が
    * 違う、という上の doc が塞ごうとしている形そのものになる。
+   *
+   * **窓（`limit`/`cursor`）では絶対に切らない。** `entries` とは違い、opt-in
+   * していても `unreadable` は常に全件を返す（`apps/daemon/src/app.ts` の
+   * `GET /commitments` ハンドラの doc）。
    */
   unreadable: z.array(unreadableCommitmentSchema),
+  /**
+   * **`total` / `nextCursor` は頁の封筒（2026-08-25、人間の明示の「はい」を受けて
+   * `limit`/`cursor` の opt-in で足した）。** `/approvals` の `total` / `nextCursor`
+   * と同じ形——`limit` / `cursor` のいずれかを明示的に渡したときだけ載る。何も
+   * 渡さない既定の呼びでは、この2欄は応答に**鍵として現れない**（`undefined`
+   * ではなく無い。`apps/daemon/src/app.ts` の `GET /commitments` ハンドラが
+   * `optedIn` のときだけ object へ足す）。opt-in の理由は `approvalsResponseSchema`
+   * の doc と同じ——既存の呼び手（画面・CLI・クローンの `commitment_list`）の
+   * 応答をこの変更で変えないため。
+   */
+  total: z.number().int().optional(),
+  nextCursor: z.string().optional(),
 });
 
 /**

@@ -1862,6 +1862,254 @@ describe('GET /approvals の order/limit/cursor（issue #432）', () => {
 });
 
 /**
+ * `GET /commitments` の `limit` / `cursor`（2026-08-25、人間の明示の「はい」を受けて
+ * opt-in で足した窓）。
+ *
+ * **既定の応答が1バイトも変わらないことが最重要の保証である**（`/approvals` の
+ * `order`/`limit`/`cursor` と同じ理由——`toMatchObject` ではなく `Object.keys` で
+ * 鍵の集合そのものを留める）。並びは `CommitmentStore.list` の契約が固定して
+ * いる（未了は `at` 昇順、片付いたものは `closedAt` 降順で未了の後ろ）ので、
+ * ここでは並べ替えを検査しない——窓（`limit`/`cursor`）だけを検査する。
+ */
+describe('GET /commitments の limit/cursor（窓。2026-08-25 opt-in）', () => {
+  it('既定の呼び（limit/cursor を渡さない）では応答の鍵が増えない', async () => {
+    await stores.commitments.open({
+      id: 'cm-1',
+      at: '2026-01-01T00:00:00.000Z',
+      origin: 'human',
+      body: 'x',
+    });
+
+    const body = (await (await app.request('/commitments')).json()) as Record<string, unknown>;
+    expect(Object.keys(body)).toEqual(['entries', 'unreadable']);
+
+    // `includeClosed=true` のような既存のパラメータを渡しても、窓の opt-in
+    // 対象（limit/cursor）ではないので同じく増えない。
+    const withIncludeClosed = (await (
+      await app.request('/commitments?includeClosed=true')
+    ).json()) as Record<string, unknown>;
+    expect(Object.keys(withIncludeClosed)).toEqual(['entries', 'unreadable']);
+  });
+
+  it('limit は件数を切り、total は全件、nextCursor が続きを示す', async () => {
+    for (let i = 0; i < 5; i += 1) {
+      await stores.commitments.open({
+        id: `cm-${i}`,
+        at: `2026-01-0${i + 1}T00:00:00.000Z`,
+        origin: 'human',
+        body: 'q',
+      });
+    }
+
+    const body = (await (await app.request('/commitments?limit=2')).json()) as {
+      entries: { id: string }[];
+      total?: number;
+      nextCursor?: string;
+    };
+    expect(body.entries.map((e) => e.id)).toEqual(['cm-0', 'cm-1']);
+    expect(body.total).toBe(5);
+    expect(body.nextCursor).toBeTruthy();
+  });
+
+  it('cursor を辿った結果は窓なしの全件（未了だけ）と同じ順序・同じ件数で一致する', async () => {
+    for (let i = 0; i < 7; i += 1) {
+      await stores.commitments.open({
+        id: `cm-${i}`,
+        at: new Date(2026, 0, i + 1).toISOString(),
+        origin: 'human',
+        body: 'q',
+      });
+    }
+
+    const full = (await (await app.request('/commitments')).json()) as {
+      entries: { id: string }[];
+    };
+    expect(full.entries).toHaveLength(7);
+
+    const collected: string[] = [];
+    let cursor: string | undefined;
+    for (;;) {
+      const qs = new URLSearchParams({ limit: '3' });
+      if (cursor !== undefined) qs.set('cursor', cursor);
+      const body = (await (await app.request(`/commitments?${qs.toString()}`)).json()) as {
+        entries: { id: string }[];
+        nextCursor?: string;
+      };
+      collected.push(...body.entries.map((e) => e.id));
+      if (body.nextCursor === undefined) break;
+      cursor = body.nextCursor;
+    }
+    expect(collected).toEqual(full.entries.map((e) => e.id));
+  });
+
+  /**
+   * **2段（open/closed）を跨いだ頁送りの直接の効果。** 未了3件・片付き3件を用意し、
+   * `limit=2` で頁の境界がちょうど段の境界に掛かるようにする（2頁目が
+   * `[未了の最後の1件, 片付きの最初の1件]` になる）。錨が `segment` を名乗る
+   * ことで、この跨ぎが正しく続くことを見る。
+   */
+  it('includeClosed=true で2段を跨いで辿れる（未了を古い順→片付きを新しい順）', async () => {
+    for (let i = 1; i <= 3; i += 1) {
+      await stores.commitments.open({
+        id: `open-${i}`,
+        at: `2026-01-0${i}T00:00:00.000Z`,
+        origin: 'human',
+        body: `未了${i}`,
+      });
+    }
+    for (let i = 1; i <= 3; i += 1) {
+      const id = `closed-${i}`;
+      await stores.commitments.open({
+        id,
+        at: `2025-01-0${i}T00:00:00.000Z`,
+        origin: 'human',
+        body: `片付き${i}`,
+      });
+      await stores.commitments.close(id, `2026-03-0${i}T00:00:00.000Z`, '終わった', 'human');
+    }
+
+    const full = (await (await app.request('/commitments?includeClosed=true')).json()) as {
+      entries: { id: string }[];
+    };
+    // 未了は at 昇順（open-1, open-2, open-3）、片付きは closedAt 降順
+    // （closed-3, closed-2, closed-1）で、その順に連結される。
+    expect(full.entries.map((e) => e.id)).toEqual([
+      'open-1',
+      'open-2',
+      'open-3',
+      'closed-3',
+      'closed-2',
+      'closed-1',
+    ]);
+
+    const collected: string[] = [];
+    let cursor: string | undefined;
+    for (;;) {
+      const qs = new URLSearchParams({ limit: '2', includeClosed: 'true' });
+      if (cursor !== undefined) qs.set('cursor', cursor);
+      const body = (await (await app.request(`/commitments?${qs.toString()}`)).json()) as {
+        entries: { id: string }[];
+        nextCursor?: string;
+      };
+      collected.push(...body.entries.map((e) => e.id));
+      if (body.nextCursor === undefined) break;
+      cursor = body.nextCursor;
+    }
+    expect(collected).toEqual(full.entries.map((e) => e.id));
+  });
+
+  it('includeClosed=false で刷った cursor を includeClosed=true へ渡すと400', async () => {
+    await stores.commitments.open({
+      id: 'cm-x',
+      at: '2026-01-01T00:00:00.000Z',
+      origin: 'human',
+      body: 'q',
+    });
+    const cursor = encodeCursor({
+      segment: 'open',
+      key: '2026-01-01T00:00:00.000Z',
+      id: 'cm-x',
+      includeClosed: 'false',
+    });
+    const res = await app.request(
+      `/commitments?includeClosed=true&cursor=${encodeURIComponent(cursor)}`,
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('cursor が壊れていれば400', async () => {
+    const res = await app.request('/commitments?cursor=notbase64!!');
+    expect(res.status).toBe(400);
+  });
+
+  it('limit=0 / limit=abc はバリデーションで400', async () => {
+    expect((await app.request('/commitments?limit=0')).status).toBe(400);
+    expect((await app.request('/commitments?limit=abc')).status).toBe(400);
+  });
+
+  /**
+   * **id（行）の実在は検査しない。** カーソルが指していた行が閉じられて段
+   * （segment）を移っていても、`(segment, key, id)` の比較さえできれば続きは
+   * 正しく決まる（`/approvals` の同種のテストと同じ理由）。
+   */
+  it('カーソルが指す行が閉じられて段を移っても、続きは400にならず飛ばさない', async () => {
+    for (let i = 1; i <= 3; i += 1) {
+      await stores.commitments.open({
+        id: `cm-${i}`,
+        at: `2026-01-0${i}T00:00:00.000Z`,
+        origin: 'human',
+        body: 'q',
+      });
+    }
+
+    const page1 = (await (await app.request('/commitments?includeClosed=true&limit=1')).json()) as {
+      entries: { id: string }[];
+      nextCursor?: string;
+    };
+    expect(page1.entries.map((e) => e.id)).toEqual(['cm-1']);
+    const cursor1 = page1.nextCursor;
+    expect(cursor1).toBeTruthy();
+
+    // カーソルが指す行そのもの（cm-1）を閉じる —— open 段から closed 段へ移る。
+    await stores.commitments.close('cm-1', '2026-05-01T00:00:00.000Z', '先に片付いた', 'human');
+
+    const page2 = (await (
+      await app.request(
+        `/commitments?includeClosed=true&limit=1&cursor=${encodeURIComponent(cursor1 as string)}`,
+      )
+    ).json()) as { entries: { id: string }[] };
+    // cm-1 は答えられて open 段から消えたが、比較（keyset）で辿るので cm-2 を
+    // 飛ばさずに続く。
+    expect(page2.entries.map((e) => e.id)).toEqual(['cm-2']);
+  });
+
+  /**
+   * **`unreadable` は絶対に窓で切らない。** これは「無い」でも「片付いた」でも
+   * ない第3の状態（issue #296）で、窓で切ると2頁目以降から読めない行が消え、
+   * まさに #296 が塞いだ穴が再び開く。
+   *
+   * `createMemoryStores` の commitment ストアは `unreadable` を常に空にする
+   * ので（`packages/core/src/testing.ts` の `commitmentStore.list` の doc）、
+   * この歯だけは `stores.commitments.list` を差し替えた偽物で書く。
+   */
+  it('unreadable は窓で切られない（limit=1 でも全件返る）', async () => {
+    const real = stores.commitments;
+    const unreadableRows = [
+      { id: 'broken-1', at: '2026-01-01T00:00:00.000Z', reason: '壊れている1' },
+      { id: 'broken-2', at: '2026-01-02T00:00:00.000Z', reason: '壊れている2' },
+      { id: 'broken-3', at: '2026-01-03T00:00:00.000Z', reason: '壊れている3' },
+    ];
+    stores.commitments = {
+      ...real,
+      async list(options) {
+        const { entries } = await real.list(options);
+        return { entries, unreadable: unreadableRows };
+      },
+    };
+
+    await stores.commitments.open({
+      id: 'cm-1',
+      at: '2026-02-01T00:00:00.000Z',
+      origin: 'human',
+      body: 'x',
+    });
+    await stores.commitments.open({
+      id: 'cm-2',
+      at: '2026-02-02T00:00:00.000Z',
+      origin: 'human',
+      body: 'y',
+    });
+
+    const body = (await (await app.request('/commitments?limit=1')).json()) as {
+      entries: { id: string }[];
+      unreadable: { id?: string }[];
+    };
+    expect(body.entries).toHaveLength(1);
+    expect(body.unreadable).toEqual(unreadableRows);
+  });
+});
+
+/**
  * `GET /reports` の `beforeDate` / `beforeAt`（issue #432）。
  *
  * この口は封筒（`total` / `nextCursor`）を持たない——応答は

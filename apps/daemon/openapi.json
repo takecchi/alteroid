@@ -4296,7 +4296,7 @@
         "operationId": "getCommitments",
         "tags": ["commitments"],
         "summary": "引き受けたまま終わっていない仕事の一覧",
-        "description": "クローンの `commitment_list` と同じものを人間の側から読む。既定は**未了だけ**で、古い順に返る（齢が判断の材料なので、古いものから見せる）。`includeClosed=true` を付けると片付けたものが未了の後ろに新しい順で続く。順序や優先度は器が持たない。`unreadable` は台帳の行が読めなかったもの（issue #296）。**「無い」でも「片付いた」でもない第3の状態**で、0件でも欄自体は必ず返る。",
+        "description": "クローンの `commitment_list` と同じものを人間の側から読む。既定は**未了だけ**で、古い順に返る（齢が判断の材料なので、古いものから見せる）。`includeClosed=true` を付けると片付けたものが未了の後ろに新しい順で続く。順序や優先度は器が持たない。**並べ替え・絞り込みは依然として足さない（理由: 判断がクローンから器へ移る）。窓（`limit`/`cursor`）は 2026-08-25 に人間の明示の「はい」を受けて足した。**`unreadable` は台帳の行が読めなかったもの（issue #296）。**「無い」でも「片付いた」でもない第3の状態**で、0件でも欄自体は必ず返る。**窓では絶対に切らない**（issue #296 が塞いだ穴——読めない行が2頁目以降から消える——が再び開くため）。`limit` / `cursor` のいずれかを明示すると頁の封筒（`total` / `nextCursor`）が応答へ載る。**明示しない既定の呼びは、この変更の前と応答が1バイトも変わらない**（opt-in。`.claude/skills/listing-and-detail/SKILL.md` の考え方と同じ——足すのは能力であって、既存の呼び手に新しい欄を押し付けない）。並びは固定（未了は `at` 昇順・片付きは `closedAt` 降順で、その順に連結）で、ここでは選べない——窓はその上に頁を切るだけである（`commitmentsCursorSchema` の doc）。",
         "responses": {
           "200": {
             "description": "台帳の中身。",
@@ -4371,6 +4371,14 @@
                         },
                         "required": ["reason"]
                       }
+                    },
+                    "total": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "nextCursor": {
+                      "type": "string"
                     }
                   },
                   "required": ["entries", "unreadable"]
@@ -4379,23 +4387,36 @@
             }
           },
           "400": {
-            "description": "クエリが不正（`includeClosed` は `true` / `false` だけ）。",
+            "description": "クエリが不正（`includeClosed` は `true` / `false` だけ、`limit` は1以上の整数）、または `cursor` が壊れている・`includeClosed` と食い違う。",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {},
-                    "error": {
-                      "type": "array",
-                      "items": {}
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {},
+                        "error": {
+                          "type": "array",
+                          "items": {}
+                        },
+                        "success": {
+                          "type": "boolean",
+                          "const": false
+                        }
+                      },
+                      "required": ["data", "error", "success"]
                     },
-                    "success": {
-                      "type": "boolean",
-                      "const": false
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["error"]
                     }
-                  },
-                  "required": ["data", "error", "success"]
+                  ]
                 }
               }
             }
@@ -4409,6 +4430,22 @@
               "default": "false",
               "type": "string",
               "enum": ["true", "false"]
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "type": "string"
             }
           }
         ]
