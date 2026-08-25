@@ -403,8 +403,8 @@ export function findUnrecordedManagers(
 export function describeUnrecordedManagers(unrecorded: readonly UnrecordedManager[]): string[] {
   if (unrecorded.length === 0) {
     return [
-      '台帳に1行も記録が無い委譲: 0件（この期間に台帳を持つようになった委譲は、' +
-        '全部台帳に最低1行ある）。',
+      '台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、' +
+        '全部台帳に最低1行ある。照会の期間では絞っていない）。',
     ];
   }
   const lines = [
