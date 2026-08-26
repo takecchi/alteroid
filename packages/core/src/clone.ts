@@ -1568,8 +1568,8 @@ class Clone implements CloneHost {
    * **失敗しても post を落とさない。** 未読を書けないことでその合図の処理まで
    * 止めたら、いま直そうとしているものより広い穴になる。跡は stderr へ1行だけ残す
    * （本文を出さない理由は `dropped-record.ts`。ここへ来る合図には人間の発言・
-   * webhook の本文・マネージャーの報告が入り、報告本文に `GH_TOKEN` が全文で出た
-   * 前例がある）。
+   * webhook の本文・マネージャーの報告が入り、テスト出力（`railway/setup.test.ts`
+   * の差分アサーション）に `GH_TOKEN` が全文で出た前例がある。#52）。
    */
   #remember(event: InboxEvent): void {
     this.#unread.set(
