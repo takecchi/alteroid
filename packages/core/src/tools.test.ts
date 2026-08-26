@@ -6108,7 +6108,11 @@ describe('commitment_list は物理削除された片付き行を隠さない（
         },
       },
     };
-    const tools = createCloneTools({ stores: withTrimmed, emit: () => undefined });
+    const tools = createCloneTools({
+      stores: withTrimmed,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+    });
     const opened = tools.find((entry) => entry.name === 'commitment_open');
     await opened?.handler({ body: '健全な依頼' } as never, {});
 
@@ -6136,7 +6140,11 @@ describe('commitment_list は物理削除された片付き行を隠さない（
         },
       },
     };
-    const tools = createCloneTools({ stores: withTrimmed, emit: () => undefined });
+    const tools = createCloneTools({
+      stores: withTrimmed,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+    });
     const found = tools.find((entry) => entry.name === 'commitment_list');
     const result = await found?.handler({} as never, {});
     const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
@@ -6146,7 +6154,11 @@ describe('commitment_list は物理削除された片付き行を隠さない（
   });
 
   it('0件のときは断りを足さない', async () => {
-    const tools = createCloneTools({ stores: createMemoryStores(), emit: () => undefined });
+    const tools = createCloneTools({
+      stores: createMemoryStores(),
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+    });
     const opened = tools.find((entry) => entry.name === 'commitment_open');
     await opened?.handler({ body: '健全な依頼' } as never, {});
 
