@@ -2,6 +2,7 @@ import { commitmentSchema, UnreadableCommitmentError } from '@alteroid/core';
 import type {
   Commitment,
   CommitmentClosedBy,
+  CommitmentEditedBy,
   CommitmentList,
   CommitmentStore,
   UnreadableCommitment,
@@ -213,6 +214,38 @@ export class PgCommitmentStore implements CommitmentStore {
     const updated = await this.#db
       .update(commitments)
       .set({ closedAt: new Date(at), commitment: closed })
+      .where(and(eq(commitments.id, id), isNull(commitments.closedAt)))
+      .returning({ id: commitments.id });
+    return updated.length > 0;
+  }
+
+  /**
+   * `body` を書き換える。**`close()` と同じく、条件付き UPDATE 1本へ畳む**
+   * （`where ... and closed_at is null`）——読んでから書く形にすると、並行
+   * 編集や「編集」と「片付け」の競合で後勝ちが黙って先の書き込みを踏み消す
+   * （AGENTS.md「不変条件はストアの1操作に閉じること」）。
+   *
+   * **`origin` が `'human'` かどうかの判定はここでは行わない**
+   * （`CommitmentStore.editBody` の doc）。`origin` は開いたときから決して
+   * 変わらない値なので並行 UPDATE と競合せず、SQL の `where` へ畳む必要が
+   * ない——判定は呼び出し側（`apps/daemon/src/app.ts` の
+   * `PATCH /commitments/:id`）が `get()` の結果を見て行う。
+   *
+   * jsonb の中も一緒に直す。読み出しは `commitment` からなので、`body` の
+   * 実体（jsonb 側）を直さないとクローンが見る値は古いままになる。列
+   * （`commitments.id` 等）には `body` に対応するものが無いので、`set()`
+   * では `commitment` だけを更新する（`closedAt` 列は触らない）。
+   *
+   * 依頼の本文は人間が書いた自由文なので、`open()` と同じ理由で
+   * `stripNulls` を通す（NUL が混ざりうる）。
+   */
+  async editBody(id: string, body: string, at: string, by: CommitmentEditedBy): Promise<boolean> {
+    const editedBody = stripNulls(body);
+    const edited = sql`jsonb_set(jsonb_set(jsonb_set(${commitments.commitment}, '{body}', ${JSON.stringify(editedBody)}::jsonb, true), '{editedAt}', ${JSON.stringify(at)}::jsonb, true), '{editedBy}', ${JSON.stringify(by)}::jsonb, true)`;
+
+    const updated = await this.#db
+      .update(commitments)
+      .set({ commitment: edited })
       .where(and(eq(commitments.id, id), isNull(commitments.closedAt)))
       .returning({ id: commitments.id });
     return updated.length > 0;

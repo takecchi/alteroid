@@ -4303,6 +4303,15 @@
                           "bodyMarkup": {
                             "type": "string"
                           },
+                          "editedAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "editedBy": {
+                            "description": "既知の値は 'human'（commitmentEditedBySchema）。無ければ一度も編集されていない。台帳の完全性より由来の注記の厳密さを優先しないため、型としては任意の文字列を許す。",
+                            "type": "string"
+                          },
                           "updatedAt": {
                             "type": "string",
                             "format": "date-time",
@@ -4567,6 +4576,124 @@
                   }
                 },
                 "required": ["reason"]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      }
+    },
+    "/commitments/{id}": {
+      "patch": {
+        "operationId": "patchCommitmentsById",
+        "tags": ["commitments"],
+        "summary": "引き受けた仕事の本文を後から直す",
+        "description": "編集できるのは `origin` が `human` かつまだ片付いていない行の `body` だけ。クローン（`self`）やマネージャー（`manager`）が立てた行は人間からは直せない。`origin` / `source` / `at` / `closedAt` / `closedReason` / `closedBy` は変わらない。編集の前後の本文は日誌（`decision`）へ逐語で残る。",
+        "responses": {
+          "200": {
+            "description": "直した。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": ["ok"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が JSON として不正（`body` は空にできない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "origin が human ではない——クローンやマネージャーが立てた行は人間からは直せない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "その id は台帳に無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "既に片付いている（いつ・どう片付いたかを本文に入れて返す）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "body": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": ["body"]
               }
             }
           }

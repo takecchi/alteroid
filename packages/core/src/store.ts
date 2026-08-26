@@ -5,6 +5,7 @@ import type { ActiveAgentToken, AgentToken, TokenRotationSettings } from './toke
 import type {
   Commitment,
   CommitmentClosedBy,
+  CommitmentEditedBy,
   InboxEvent,
   Job,
   JournalEntry,
@@ -566,6 +567,30 @@ export interface CommitmentStore {
    * 決めていない呼び出しはコンパイルエラーで立ち止まる（issue #286）。
    */
   close(id: string, at: string, reason: string, by: CommitmentClosedBy): Promise<boolean>;
+
+  /**
+   * `body` を書き換える。**まだ片付いていない行だけを書き換える** — 片付いて
+   * いる行・無い id は `false` を返す。
+   *
+   * **書き換えるのは `body` / `editedAt` / `editedBy` の3つだけである。**
+   * `origin` / `source` / `at` / `closedAt` / `closedReason` / `closedBy` には
+   * 触れない。
+   *
+   * **`origin` が `'human'` かどうかの判定はここでは行わない。** `origin` は
+   * 開いたときから決して変わらない値なので、並行に呼ばれても競合しない——
+   * 競合しうるのは「まだ閉じていない」という不変条件だけである。**競合する
+   * 不変条件だけを台帳の1操作へ畳み、競合しない方針判断（`origin` が
+   * `'human'` かどうか）は呼び出し側（`PATCH /commitments/:id`、
+   * `apps/daemon/src/app.ts`）へ残す**（AGENTS.md「不変条件はストアの1操作に
+   * 閉じること」と同じ考え方——`close()` が `where ... and closed_at is null`
+   * だけを SQL 側へ畳み、`by` の決定は呼び出し側に残しているのと対になる）。
+   *
+   * **`by` は必須である。** 理由は `close` の `by` と同じ（`close` の doc を
+   * 見よ）——optional にすると、呼び出し側が「誰が直したか」を決めずに通せて
+   * しまう。実際の呼び出し元（`PATCH /commitments/:id`）は常に `'human'` を
+   * 渡す（クローン向けの編集ツールは無い）。
+   */
+  editBody(id: string, body: string, at: string, by: CommitmentEditedBy): Promise<boolean>;
 }
 
 /**

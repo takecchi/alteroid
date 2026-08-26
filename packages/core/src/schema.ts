@@ -1094,6 +1094,26 @@ export const commitmentOriginSchema = z.enum(['human', 'manager', 'external', 's
 export const commitmentClosedBySchema = z.enum(['clone', 'human']);
 
 /**
+ * `body` を後から直したときの主体を**誰が書いたか**。
+ *
+ * `commitmentClosedBySchema`（`'clone' | 'human'`）と違い、**既知の値は
+ * `'human'` だけである。** 編集を許すのは `origin: 'human'` かつ未了の行の
+ * `body` に限ってあり（`commitmentSchema.editedAt` の doc）、その判定を行う
+ * のは `PATCH /commitments/:id`（`apps/daemon/src/app.ts`）だけである。
+ * クローン向けの編集ツールは無い（`tools.ts` に `commitment_edit` を
+ * 足していない——人間だけが直せればよい）ので、この器が実際に書く値は
+ * `'human'` の1つに限られる。
+ *
+ * **それでも `commitmentSchema.editedBy` の型はこの enum ではなく
+ * `z.string()` で緩く持つ。** 理由は `commitmentClosedBySchema` と全く同じ
+ * である（そちらの doc を見よ）——保存層（`parseCommitment`、
+ * `packages/storage-pg/src/commitments.ts`）は未知の enum 値1つで台帳の
+ * 一覧を丸ごと読めなくするので、書き込み側をこの enum で縛りつつ読み出し側
+ * は緩くする、という同じ非対称をここでも採る。
+ */
+export const commitmentEditedBySchema = z.enum(['human']);
+
+/**
  * 引き受けたまま終わっていない仕事1件（PRD「自律」の器を、単発の依頼へ広げたもの）。
  *
  * **なぜ受信箱と日誌だけでは足りないか。** 受信箱の未読はプロセスが死んでも残るが、
@@ -1211,10 +1231,49 @@ export const commitmentSchema = z.object({
    * `case` は `bodyMarkup` を書かないので、`undefined` のままである。
    */
   bodyMarkup: z.string().optional(),
+  /**
+   * `body` を最後に直した時刻。編集していなければ無い。
+   *
+   * **なぜ本文を後から直せるようにするか。** 人間が積んだ依頼
+   * （`origin: 'human'`）は、Web UI や API から一度送った後に誤字や
+   * 言葉足らずに気づくことがある。台帳の目的は「頼まれたことを忘れさせない
+   * こと」であって「一字一句を凍結すること」ではないので、まだ片付いて
+   * いない行の `body` だけは直せるようにする（`CommitmentStore.editBody`）。
+   *
+   * **なぜ `origin: 'human'` の行だけか。** `POST /commitments`
+   * （`apps/daemon/src/app.ts`）は `origin` を `'human'` に固定しているので、
+   * Web UI や API から積まれたものは必ず `human` である——人間の困りごとを
+   * 過不足なく覆う。この線で切ると、人間が書き換えられるのは常に人間自身の
+   * 言葉だけになり、クローンが自分で立てた行（`self`）やマネージャーの報告
+   * （`manager`）は誰にも書き換えられない。**台帳は「クローンが何を
+   * 引き受けたか」の記録であり、そこが静かに書き換わるとクローンが過去の
+   * 自分を追えなくなる。** `bodyMarkup`（接頭辞の記法）は `origin: 'manager'`
+   * のときだけ立つので、この線を引けばそちらへは触れずに済む。
+   *
+   * **原文は消えない。** `PATCH /commitments/:id` は編集の前後の本文を
+   * 日誌（`journal.append`。追記専用）へ逐語で残すので、この欄が上書き
+   * されても、直す前の本文は日誌から読み戻せる。
+   */
+  editedAt: isoDateTime.optional(),
+  /**
+   * `body` を誰が直したか。**既知の値は `commitmentEditedBySchema`
+   * （`'human'` のみ）だが、ここは `closedBy` と同じ理由で `z.string()` に
+   * 緩めてある**（そちらの doc を見よ——未知の値1件で台帳の一覧が丸ごと
+   * 読めなくなることを避けるため）。`undefined` は「一度も編集していない」
+   * であって、`closedBy` と同じく既定へは倒さない。
+   */
+  editedBy: z
+    .string()
+    .optional()
+    .describe(
+      "既知の値は 'human'（commitmentEditedBySchema）。無ければ一度も編集されていない。" +
+        '台帳の完全性より由来の注記の厳密さを優先しないため、型としては任意の文字列を許す。',
+    ),
 });
 
 export type CommitmentOrigin = z.infer<typeof commitmentOriginSchema>;
 export type CommitmentClosedBy = z.infer<typeof commitmentClosedBySchema>;
+export type CommitmentEditedBy = z.infer<typeof commitmentEditedBySchema>;
 export type Commitment = z.infer<typeof commitmentSchema>;
 
 /**

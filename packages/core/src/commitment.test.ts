@@ -252,6 +252,64 @@ describe('引き受けたまま終わっていない仕事', () => {
     expect((await stores.commitments.get('c-legacy'))?.closedBy).toBeUndefined();
   });
 
+  /**
+   * `editBody`（本 PR）。in-memory 実装（`testing.ts`）でも fs / pg 版と同じ
+   * 振る舞いになることを問う——`origin` が `'human'` かどうかの判定は
+   * ストアの責務ではない（`CommitmentStore.editBody` の doc）ので、ここでは
+   * 問わない。その判定は `apps/daemon/src/app.test.ts` の
+   * `PATCH /commitments/:id` のテストで別に問う。
+   */
+  it('editBody は未了の行だけ書き換え、片付いた行・無い id は false（他の欄は無傷）', async () => {
+    const stores = createMemoryStores();
+
+    await stores.commitments.open({
+      id: 'c-1',
+      at: '2026-08-12T00:00:00.000Z',
+      origin: 'human',
+      source: 'conv-1',
+      body: 'もとの依頼',
+    });
+    expect(
+      await stores.commitments.editBody('c-1', '直した依頼', '2026-08-13T00:00:00.000Z', 'human'),
+    ).toBe(true);
+    const edited = await stores.commitments.get('c-1');
+    expect(edited?.body).toBe('直した依頼');
+    expect(edited?.editedAt).toBe('2026-08-13T00:00:00.000Z');
+    expect(edited?.editedBy).toBe('human');
+    // 他の欄は無傷
+    expect(edited?.at).toBe('2026-08-12T00:00:00.000Z');
+    expect(edited?.origin).toBe('human');
+    expect(edited?.source).toBe('conv-1');
+
+    await stores.commitments.open({
+      id: 'c-closed',
+      at: '2026-08-12T00:00:00.000Z',
+      origin: 'human',
+      body: 'もう片付いた依頼',
+    });
+    await stores.commitments.close('c-closed', '2026-08-13T00:00:00.000Z', '片付けた', 'human');
+    expect(
+      await stores.commitments.editBody(
+        'c-closed',
+        '後から直したい',
+        '2026-08-14T00:00:00.000Z',
+        'human',
+      ),
+    ).toBe(false);
+    const closed = await stores.commitments.get('c-closed');
+    expect(closed?.body).toBe('もう片付いた依頼');
+    expect(closed?.closedReason).toBe('片付けた');
+
+    expect(
+      await stores.commitments.editBody(
+        'しらない',
+        '直したい',
+        '2026-08-14T00:00:00.000Z',
+        'human',
+      ),
+    ).toBe(false);
+  });
+
   it('渡されたものは起点を問わず載り、起こされただけの合図は載らない', async () => {
     // **判定の基準は「誰かが渡してきたか」である。** 発意 tick で1件増える形にすると
     // 台帳が数時間で読めなくなり、載っているのに見えない仕事が生まれる。

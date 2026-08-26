@@ -9,6 +9,7 @@ import {
 import type {
   Commitment,
   CommitmentClosedBy,
+  CommitmentEditedBy,
   CommitmentList,
   CommitmentStore,
   UnreadableCommitment,
@@ -367,6 +368,39 @@ export class FsCommitmentStore implements CommitmentStore {
           unreadable: file.unreadable,
           trimmedClosedCount: file.trimmedClosedCount,
         }),
+        result: true,
+      };
+    });
+  }
+
+  /**
+   * `body` を書き換える。**`open` / `close` と同じ排他区間（`#update`）で行う**
+   * — 読んでから書く形にすると、並行編集や「編集」と「片付け」の競合で
+   * 後勝ちが黙って先の書き込みを踏み消す。
+   *
+   * **`origin` が `'human'` かどうかの判定はここでは行わない**
+   * （`CommitmentStore.editBody` の doc）。呼び出し側（`apps/daemon/src/app.ts`
+   * の `PATCH /commitments/:id`）が確かめてから呼ぶ前提で、ここは「まだ
+   * 閉じていない」という不変条件だけを見る。
+   *
+   * **`trimClosed` は呼ばない。** 編集は既存の未了行を書き換えるだけで、
+   * 新しく片付いた行を作らないので、切り詰めの対象が増えない。
+   */
+  async editBody(id: string, body: string, at: string, by: CommitmentEditedBy): Promise<boolean> {
+    return this.#update((file) => {
+      const found = file.entries.find((entry) => entry.id === id);
+      // 無い / 既に閉じている。どちらも書き換えない
+      if (found === undefined || found.closedAt !== undefined) {
+        return { next: file, result: false };
+      }
+      return {
+        next: {
+          entries: file.entries.map((entry) =>
+            entry.id === id ? { ...entry, body, editedAt: at, editedBy: by } : entry,
+          ),
+          unreadable: file.unreadable,
+          trimmedClosedCount: file.trimmedClosedCount,
+        },
         result: true,
       };
     });

@@ -563,6 +563,12 @@ const commitmentBody = z.object({
 const commitmentCloseBody = z.object({ reason: z.string().min(1) });
 
 /**
+ * 編集後の本文。**空を許さない**（`commitmentBody.body` と同じ制約——空文字を
+ * 許すと「本文の無い依頼」を人間が自分で作れてしまう）。
+ */
+const commitmentEditBody = z.object({ body: z.string().min(1) });
+
+/**
  * 片付けたものも返すか。
  *
  * **`z.coerce.boolean()` を使わない。** あれは空でない文字列をすべて true にするので、
@@ -2706,6 +2712,109 @@ export function createApp(deps: AppDeps) {
           type: 'decision',
           decision: `人間が引き受けた仕事を片付けた（${id}）: ${reason}`,
           grounds: '人間が直接 API から閉じた',
+        });
+        return c.json(okResponseSchema.parse({ ok: true }));
+      },
+    )
+
+    /**
+     * 人間が1件の本文を後から直す。
+     *
+     * **編集できるのは `origin` が `human` かつまだ片付いていない行の `body`
+     * だけ。** `POST /commitments`（上）は `origin` を `human` に固定して
+     * いるので、Web UI / API から積まれたものは必ず `human` である——人間の
+     * 困りごとを過不足なく覆う。この線で切ると、人間が書き換えられるのは
+     * 常に人間自身の言葉だけになり、クローンが自分で立てた行（`self`）や
+     * マネージャーの報告（`manager`）は誰にも書き換えられない。**台帳は
+     * 「クローンが何を引き受けたか」の記録であり、そこが静かに書き換わると
+     * クローンが過去の自分を追えなくなる**（`bodyMarkup` は `manager` の
+     * ときだけ立つので、この線ならそちらへは触れずに済む）。`origin` /
+     * `source` / `at` / `closedAt` / `closedReason` / `closedBy` は直さない。
+     *
+     * **先に `get` で読んで `origin` を確かめてから `editBody` を呼ぶ。**
+     * `origin` は開いたときから決して変わらない値なので、ここを先に読んでも
+     * 競合しない——競合しうる「まだ閉じていない」という不変条件だけを
+     * `editBody` の1操作へ畳む（`CommitmentStore.editBody` の doc）。
+     * `close` と同じく、判定そのものは台帳（`editBody` の戻り値）に任せ、
+     * 読むのは 404 と 409 を書き分けるためだけにする。
+     *
+     * **原文は日誌へ逐語で残す。** 日誌は追記専用なので、編集の前後の本文を
+     * 両方書いておけば、台帳の行が上書きされても過去の自分をそこから読み
+     * 戻せる。
+     */
+    .patch(
+      '/commitments/:id',
+      describeRoute({
+        tags: ['commitments'],
+        summary: '引き受けた仕事の本文を後から直す',
+        description:
+          '編集できるのは `origin` が `human` かつまだ片付いていない行の `body` だけ。' +
+          'クローン（`self`）やマネージャー（`manager`）が立てた行は人間からは直せない。' +
+          '`origin` / `source` / `at` / `closedAt` / `closedReason` / `closedBy` は変わらない。' +
+          '編集の前後の本文は日誌（`decision`）へ逐語で残る。',
+        responses: {
+          200: {
+            description: '直した。',
+            content: { 'application/json': { schema: resolver(okResponseSchema) } },
+          },
+          400: {
+            description: '本文が JSON として不正（`body` は空にできない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          403: {
+            description:
+              'origin が human ではない——クローンやマネージャーが立てた行は人間からは直せない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description: 'その id は台帳に無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          409: {
+            description: '既に片付いている（いつ・どう片付いたかを本文に入れて返す）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      jsonBody(commitmentEditBody, (where) => ({
+        error: 'body の形が不正' + (where === '' ? '' : `: ${where}`),
+      })),
+      async (c) => {
+        const id = c.req.param('id');
+        const { body } = c.req.valid('json');
+
+        const existing = await stores.commitments.get(id);
+        if (existing === null) return c.json({ error: 'not found' as const }, 404);
+        if (existing.origin !== 'human') {
+          return c.json(
+            {
+              error:
+                `${id} は origin:'${existing.origin}' で、クローンやマネージャーが立てた行は` +
+                '人間からは直せない',
+            },
+            403,
+          );
+        }
+
+        const before = existing.body;
+        if (!(await stores.commitments.editBody(id, body, new Date().toISOString(), 'human'))) {
+          // 直せなかった理由は台帳に聞く（読んだ直後に閉じられた場合しかここへは来ない）
+          const after = await stores.commitments.get(id);
+          return c.json(
+            {
+              error:
+                `${id} は既に ${after?.closedAt ?? '不明な時刻'} に片付いている` +
+                `（${after?.closedReason ?? '理由の記録なし'}）`,
+            },
+            409,
+          );
+        }
+        await stores.journal.append({
+          type: 'decision',
+          decision:
+            `人間が引き受けた仕事の本文を直した（${id}）: ` +
+            `編集前「${before}」→ 編集後「${body}」`,
+          grounds: '人間が直接 API から編集した',
         });
         return c.json(okResponseSchema.parse({ ok: true }));
       },
