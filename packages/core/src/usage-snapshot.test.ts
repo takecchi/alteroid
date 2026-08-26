@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
+import { judgeTokenCandidate } from './token-candidate.js';
 import {
+  describeOuterFailure,
+  describeSilentChannels,
   fetchAccountUsage,
   hasAccountUsageDetail,
   isNotLoggedIn,
@@ -203,5 +206,118 @@ describe('取りに行く', () => {
       expect(state.usage.windows).toHaveLength(1);
       expect(state.usage.extraUsage?.monthlyLimit).toBe(50);
     }
+  });
+});
+
+describe('#429: 失敗の理由を構造化して持ち帰る（固定文言に畳まない）', () => {
+  it('probe の起動が例外で終わったら、理由をそのまま reason へ持ち帰る', async () => {
+    const throwing: UsageProbeQuery = () => {
+      throw new Error('spawn ENOENT: no such file');
+    };
+    const state = await fetchAccountUsage(throwing, { cwd: '/work' });
+    expect(state.state).toBe('failed');
+    if (state.state === 'failed') {
+      expect(state.reason).toContain('起動失敗');
+      expect(state.reason).toContain('spawn ENOENT: no such file');
+    }
+  });
+
+  it('accountInfo が reject したら、その理由を「2つの口」の内訳に載せる（usage 側は無音だと分かる）', async () => {
+    const rejecting: UsageProbeQuery = () => {
+      const handle: UsageProbeHandle = {
+        async *[Symbol.asyncIterator]() {
+          /* probe は control channel しか読まない */
+        },
+        accountInfo: () => Promise.reject(new Error('authentication failed')),
+        // usage 側の口はそもそも無い（SDK が改名したのと同じ状況）。
+      };
+      return handle;
+    };
+    const state = await fetchAccountUsage(rejecting, { cwd: '/work' });
+    expect(state.state).toBe('failed');
+    if (state.state === 'failed') {
+      expect(state.reason).toContain('2つの口のどちらも答えなかった');
+      expect(state.reason).toContain('accountInfo: 例外: Error: authentication failed');
+      expect(state.reason).toContain('usage: 応答なし');
+    }
+  });
+
+  it('#429 秘密の扱い: reject の理由に候補トークンの値が入っていても reason からは伏せる', async () => {
+    const secretToken = 'sk-ant-DUMMY-NOT-A-REAL-TOKEN-9876543210';
+    const rejecting: UsageProbeQuery = () => {
+      const handle: UsageProbeHandle = {
+        async *[Symbol.asyncIterator]() {
+          /* probe は control channel しか読まない */
+        },
+        accountInfo: () => Promise.reject(new Error(`rejected token ${secretToken}`)),
+      };
+      return handle;
+    };
+    const state = await fetchAccountUsage(rejecting, {
+      cwd: '/work',
+      env: { CLAUDE_CODE_OAUTH_TOKEN: secretToken },
+    });
+    expect(state.state).toBe('failed');
+    if (state.state === 'failed') {
+      expect(state.reason).not.toContain(secretToken);
+      expect(state.reason).toContain('[REDACTED]');
+    }
+  });
+
+  it('⭐ reason が詳しくなっても、判定（judgeTokenCandidate）の結果は1つも変わらない', async () => {
+    // 以前の固定文言（'probe が応答しなかった（起動失敗・締め切り・中断）'）で
+    // 判定していたのと同じ verdict が、詳しくなった reason でも出ることを確かめる。
+    const throwing: UsageProbeQuery = () => {
+      throw new Error('spawn ENOENT: no such file');
+    };
+    const state = await fetchAccountUsage(throwing, { cwd: '/work' });
+    expect(judgeTokenCandidate(state)).toEqual({
+      verdict: 'undecidable',
+      reason: expect.stringContaining('probe が失敗した'),
+    });
+  });
+});
+
+describe('describeOuterFailure（#429・単体）', () => {
+  it('exception ＝ 起動失敗', () => {
+    expect(describeOuterFailure({ kind: 'exception', reason: 'Error: boom' })).toBe(
+      'probe が応答しなかった（起動失敗: Error: boom）',
+    );
+  });
+
+  it('timeout ＝ 締め切り', () => {
+    expect(
+      describeOuterFailure({ kind: 'timeout', reason: '締め切り（20ms）に間に合わなかった' }),
+    ).toBe('probe が応答しなかった（締め切り: 締め切り（20ms）に間に合わなかった）');
+  });
+
+  it('aborted ＝ 中断', () => {
+    expect(describeOuterFailure({ kind: 'aborted', reason: '観測中に中断された' })).toBe(
+      'probe が応答しなかった（中断: 観測中に中断された）',
+    );
+  });
+});
+
+describe('describeSilentChannels（#429・単体）', () => {
+  it('両方とも無音（口が無いか締め切り）', () => {
+    expect(describeSilentChannels(undefined, undefined)).toBe(
+      '2つの口のどちらも答えなかった' +
+        '（accountInfo: 応答なし（口が無いか、締め切りに間に合わなかった） / ' +
+        'usage: 応答なし（口が無いか、締め切りに間に合わなかった））',
+    );
+  });
+
+  it('片方だけ例外', () => {
+    expect(describeSilentChannels('Error: auth failed', undefined)).toBe(
+      '2つの口のどちらも答えなかった' +
+        '（accountInfo: 例外: Error: auth failed / ' +
+        'usage: 応答なし（口が無いか、締め切りに間に合わなかった））',
+    );
+  });
+
+  it('両方とも例外', () => {
+    expect(describeSilentChannels('Error: a', 'Error: b')).toBe(
+      '2つの口のどちらも答えなかった（accountInfo: 例外: Error: a / usage: 例外: Error: b）',
+    );
   });
 });

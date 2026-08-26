@@ -1,6 +1,12 @@
 import { z } from 'zod';
 
-import { runUsageProbe, settleWithin, type UsageProbeQuery } from './usage-probe.js';
+import {
+  describeProbeError,
+  runUsageProbe,
+  settleWithin,
+  type UsageProbeFailure,
+  type UsageProbeQuery,
+} from './usage-probe.js';
 
 /**
  * アカウント全体の利用状況（claude.ai 側が言っている値）。
@@ -311,6 +317,55 @@ export function hasAccountUsageDetail(usage: AccountUsage): boolean {
 export const ACCOUNT_USAGE_READ_TIMEOUT_MS = 10_000;
 
 /**
+ * `runUsageProbe` が持ち帰った {@link UsageProbeFailure} を、`AccountUsageState`
+ * の `reason` へ落とす。**種別ごとの固定日本語ラベルは、以前の固定文言
+ * 「起動失敗・締め切り・中断」の内訳をそのまま名乗ったもの** — 呼び出し元
+ * （`judgeTokenCandidate` 等）はこの文字列を判定に使わないので、文言そのものを
+ * 変えても判定結果は動かない（`state: 'failed'` であることだけが効く）。
+ *
+ * **export してあるのはテストのため。** `fetchAccountUsage` を通す経路では
+ * `timeout` / `aborted` を作れない（`ACCOUNT_USAGE_READ_TIMEOUT_MS`
+ * ＜ `USAGE_PROBE_TIMEOUT_MS` なので、2つの口の読み取りが常に外側の締め切りより
+ * 先に終わる。`settleWithin` は reject も飲んで `undefined` にするので `read` 自体
+ * も投げない）。**この2値は `runUsageProbe` の一般契約としては要る**（他の
+ * 呼び出し元や将来の変更のため）ので、`fetchAccountUsage` 経由の統合テストでは
+ * 到達できない分、ここを直接呼ぶ単体テストで両方の分岐を確かめる。
+ */
+export function describeOuterFailure(failure: UsageProbeFailure): string {
+  const label: Record<UsageProbeFailure['kind'], string> = {
+    exception: '起動失敗',
+    timeout: '締め切り',
+    aborted: '中断',
+  };
+  return `probe が応答しなかった（${label[failure.kind]}: ${failure.reason}）`;
+}
+
+/**
+ * 2つの口（`accountInfo` / `usage_EXPERIMENTAL_...`）が両方とも `undefined` に
+ * 落ちたとき、どちらに何が起きたかを1行にする。
+ *
+ * **各口は3つの倒れ方を持つ** — (1) 口が SDK に無い（`?.()` が呼ばれず
+ * `settleWithin(undefined, …)` が即 `undefined`）(2) 呼んだが締め切りに間に合わ
+ * なかった（`onRejected` も呼ばれず `undefined`）(3) 呼んだら reject した
+ * （`onRejected` が理由を渡す）。**(1) と (2) はここでは区別できない** —
+ * `settleWithin` 自身が「口が無い」と「間に合わなかった」を区別する材料を
+ * 持たない（`promise === undefined` の分岐と、レースに負けた場合とで、渡って
+ * くる値がどちらも `undefined` で同じため）。区別できるのは reject した (3) だけ
+ * である。
+ */
+export function describeSilentChannels(
+  accountReject: string | undefined,
+  usageReject: string | undefined,
+): string {
+  const describe = (reject: string | undefined) =>
+    reject === undefined ? '応答なし（口が無いか、締め切りに間に合わなかった）' : `例外: ${reject}`;
+  return (
+    `2つの口のどちらも答えなかった` +
+    `（accountInfo: ${describe(accountReject)} / usage: ${describe(usageReject)}）`
+  );
+}
+
+/**
  * アカウント全体の利用状況を1回読む。**決して投げない。**
  *
  * 2つの口を**独立に**読む。片方が固まってももう片方を捨てないためで、実測でも
@@ -320,6 +375,12 @@ export const ACCOUNT_USAGE_READ_TIMEOUT_MS = 10_000;
  * `options.env` は `runUsageProbe`（`usage-probe.ts`）へそのまま渡すだけで、
  * ここでは中身を見ない。**渡さなければ挙動は1文字も変わらない**（`usage-probe.ts`
  * の doc のとおり）。
+ *
+ * **#429: 失敗の理由を構造化して持ち帰る。** 以前は `runUsageProbe` の失敗も
+ * 2つの口の rejection も揃って握り潰され、`reason` は固定文言1本に畳まれていた
+ * （認証失敗・通信断・締め切りの区別が付かなかった）。**この変更は `reason` の
+ * 中身を詳しくするだけで、`state` の値・判定（`judgeTokenCandidate`）の結果は
+ * 1件も変えていない。**
  */
 export async function fetchAccountUsage(
   queryFn: UsageProbeQuery,
@@ -327,22 +388,31 @@ export async function fetchAccountUsage(
 ): Promise<AccountUsageState> {
   const at = new Date().toISOString();
 
-  const read = await runUsageProbe(queryFn, options, async (handle) => {
+  let accountReject: string | undefined;
+  let usageReject: string | undefined;
+
+  const outcome = await runUsageProbe(queryFn, options, async (handle) => {
     const [account, usage] = await Promise.all([
-      settleWithin(handle.accountInfo?.(), ACCOUNT_USAGE_READ_TIMEOUT_MS),
+      settleWithin(handle.accountInfo?.(), ACCOUNT_USAGE_READ_TIMEOUT_MS, (error) => {
+        accountReject = describeProbeError(error, options.env);
+      }),
       settleWithin(
         handle.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?.(),
         ACCOUNT_USAGE_READ_TIMEOUT_MS,
+        (error) => {
+          usageReject = describeProbeError(error, options.env);
+        },
       ),
     ]);
     return { account, usage };
   });
 
-  if (read === undefined) {
-    return { state: 'failed', at, reason: 'probe が応答しなかった（起動失敗・締め切り・中断）' };
+  if (!outcome.ok) {
+    return { state: 'failed', at, reason: describeOuterFailure(outcome.failure) };
   }
+  const read = outcome.value;
   if (read.account === undefined && read.usage === undefined) {
-    return { state: 'failed', at, reason: '2つの口のどちらも答えなかった' };
+    return { state: 'failed', at, reason: describeSilentChannels(accountReject, usageReject) };
   }
 
   const usage = toAccountUsage(at, read.usage, read.account);
