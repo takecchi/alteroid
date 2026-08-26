@@ -1,3 +1,5 @@
+import { query } from '@anthropic-ai/claude-agent-sdk';
+import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -67,6 +69,154 @@ describe('runUsageProbe — env を渡す口', () => {
     );
     const options = captured[0] as { settingSources?: string[] };
     expect(options.settingSources).toEqual(['project']);
+  });
+});
+
+describe('runUsageProbe — withheldEnvKeys（#431）', () => {
+  it('withheldEnvKeys だけを渡しても（env は渡さなくても）Options.env が組み立てられ、キーが落ちる', async () => {
+    const { queryFn, captured } = capturingProbe();
+    const original = process.env.ALTEROID_DATABASE_URL;
+    process.env.ALTEROID_DATABASE_URL = 'postgres://unit-test-secret';
+    try {
+      await runUsageProbe(
+        queryFn,
+        { cwd: '/tmp/wherever', withheldEnvKeys: ['ALTEROID_DATABASE_URL'] },
+        async () => 'ignored',
+      );
+    } finally {
+      if (original === undefined) delete process.env.ALTEROID_DATABASE_URL;
+      else process.env.ALTEROID_DATABASE_URL = original;
+    }
+
+    const options = captured[0] as { env?: Record<string, string | undefined> };
+    expect(options.env).toBeDefined();
+    // 落としたキーは消えている。
+    expect('ALTEROID_DATABASE_URL' in (options.env ?? {})).toBe(false);
+    // ほかの環境変数（PATH）は残っている（丸ごと落ちてはいない）。
+    expect(options.env?.PATH).toBe(process.env.PATH);
+  });
+
+  it('withheldEnvKeys も env も無ければ、これまでどおり Options.env 自体を省略する', async () => {
+    const { queryFn, captured } = capturingProbe();
+    await runUsageProbe(queryFn, { cwd: '/tmp/wherever' }, async () => 'ignored');
+    const options = captured[0] as Record<string, unknown>;
+    expect('env' in options).toBe(false);
+  });
+
+  it('env と withheldEnvKeys を両方渡すと、上書き後に withheldEnvKeys を落とす', async () => {
+    const { queryFn, captured } = capturingProbe();
+    await runUsageProbe(
+      queryFn,
+      {
+        cwd: '/tmp/wherever',
+        env: { CLAUDE_CODE_OAUTH_TOKEN: 'DUMMY-NOT-A-REAL-TOKEN', ALTEROID_DATABASE_URL: 'x' },
+        withheldEnvKeys: ['ALTEROID_DATABASE_URL'],
+      },
+      async () => 'ignored',
+    );
+    const options = captured[0] as { env?: Record<string, string | undefined> };
+    expect(options.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('DUMMY-NOT-A-REAL-TOKEN');
+    expect('ALTEROID_DATABASE_URL' in (options.env ?? {})).toBe(false);
+  });
+});
+
+/**
+ * ここから下は #431 の「実測」——`queryFn` を偽物ではなく**実物の SDK の `query`**
+ * にして、`Options.spawnClaudeCodeProcess`（`sdk.d.ts` が公開しているフック。
+ * VM/コンテナ実行向けに、SDK が本来 `child_process` へ渡すはずの `{ command, args,
+ * cwd, env, signal }` をそのまま横取りできる）で、**SDK が実際に子プロセスへ渡す
+ * つもりだった生の `env` オブジェクト**を取り出す。
+ *
+ * 実際に読んだ `node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs` の該当行
+ * （`ProcessTransport#initialize`）は次を destructure している:
+ *
+ * ```
+ * let{...,env:c={...process.env},...}=this.options
+ * ```
+ *
+ * ⟹ `Options.env` を省略すると `c` の既定値は **`{ ...process.env }` そのもの**
+ * になり、それが1行も変換されずに `child_process.spawn` 相当（`spawnLocalProcess`）
+ * へ渡る。ここではその既定値の組み立てをドキュメントからの推論としてではなく、
+ * 実際に `query()` を呼んで確かめる。
+ */
+function realSdkCapturingProbe(): {
+  queryFn: UsageProbeQuery;
+  capturedEnv: () => NodeJS.ProcessEnv | undefined;
+} {
+  let capturedEnv: NodeJS.ProcessEnv | undefined;
+  const queryFn: UsageProbeQuery = ({ prompt, options }) =>
+    query({
+      prompt,
+      options: {
+        ...options,
+        // **実際の CLI は起こさない。** `env` を受け取った時点で捕まえ、
+        // SDK には「起動した体」で握りつぶした stdin/stdout を渡すだけ。
+        spawnClaudeCodeProcess: (spawnOptions) => {
+          capturedEnv = spawnOptions.env;
+          const stdin = new PassThrough();
+          const stdout = new PassThrough();
+          // すぐ EOF にして、SDK 側の待受けを長引かせない。
+          queueMicrotask(() => stdout.end());
+          let killed = false;
+          return {
+            stdin,
+            stdout,
+            get killed() {
+              return killed;
+            },
+            exitCode: null,
+            signalCode: null,
+            kill: () => {
+              killed = true;
+              return true;
+            },
+            on: () => {},
+            once: () => {},
+            off: () => {},
+          };
+        },
+      },
+    }) as unknown as UsageProbeHandle;
+  return { queryFn, capturedEnv: () => capturedEnv };
+}
+
+describe('runUsageProbe — 実測: 子プロセスへ渡る env（#431、実物の SDK を使う）', () => {
+  const SECRET_KEY = 'ALTEROID_DATABASE_URL';
+  const SECRET_VALUE = 'postgres://usage-probe-431-measured-secret';
+
+  it('withheldEnvKeys を渡さないと、SDK が組み立てる spawn 用 env に秘密がそのまま載る', async () => {
+    const original = process.env[SECRET_KEY];
+    process.env[SECRET_KEY] = SECRET_VALUE;
+    try {
+      const { queryFn, capturedEnv } = realSdkCapturingProbe();
+      await runUsageProbe(queryFn, { cwd: process.cwd() }, async () => 'ignored');
+      // ⟹ 実測: usage-poller のように env も withheldEnvKeys も渡さない呼び出しは、
+      // SDK の既定 { ...process.env } を丸ごと子へ渡す。
+      expect(capturedEnv()?.[SECRET_KEY]).toBe(SECRET_VALUE);
+    } finally {
+      if (original === undefined) delete process.env[SECRET_KEY];
+      else process.env[SECRET_KEY] = original;
+    }
+  });
+
+  it('withheldEnvKeys を渡すと、SDK が組み立てる spawn 用 env から実際に落ちる（回帰）', async () => {
+    const original = process.env[SECRET_KEY];
+    process.env[SECRET_KEY] = SECRET_VALUE;
+    try {
+      const { queryFn, capturedEnv } = realSdkCapturingProbe();
+      await runUsageProbe(
+        queryFn,
+        { cwd: process.cwd(), withheldEnvKeys: [SECRET_KEY] },
+        async () => 'ignored',
+      );
+      expect(capturedEnv()).toBeDefined();
+      expect(SECRET_KEY in (capturedEnv() ?? {})).toBe(false);
+      // 巻き添えで PATH まで消していないことも確かめる。
+      expect(capturedEnv()?.PATH).toBe(process.env.PATH);
+    } finally {
+      if (original === undefined) delete process.env[SECRET_KEY];
+      else process.env[SECRET_KEY] = original;
+    }
   });
 });
 

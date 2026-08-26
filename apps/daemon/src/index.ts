@@ -649,7 +649,13 @@ export async function main(): Promise<void> {
    * **未ログインでも止めない。** alteroid は鍵を走行中に回せる設計なので、
    * 「まだログインしていない」は通常の状態であり、後から鍵が届いたら取れる。
    */
-  const usagePoller = startUsagePolling({ queryFn: query, cwd: paths.root });
+  const usagePoller = startUsagePolling({
+    queryFn: query,
+    cwd: paths.root,
+    // **記憶ストアへ到達する鍵を probe の子プロセスへ渡さない（#431）。**
+    // `Runner` / `createProfileVessel` へ渡しているのと同じ `storage.withheldEnvKeys`。
+    withheldEnvKeys: storage.withheldEnvKeys,
+  });
 
   /**
    * 認証トークンの回し手（Issue #393 PR3）。**デーモンの中の1本。**
@@ -679,7 +685,12 @@ export async function main(): Promise<void> {
             reason: '器の環境変数（CLAUDE_CODE_OAUTH_TOKEN）が置かれていない',
           });
         }
-        return probeTokenCandidate(query, { token: value, cwd: paths.root });
+        return probeTokenCandidate(query, {
+          token: value,
+          cwd: paths.root,
+          // **同上（#431）。** 候補トークンの観測でも記憶ストアの鍵は渡さない。
+          withheldEnvKeys: storage.withheldEnvKeys,
+        });
       },
     },
     spread: createTokenSpread({

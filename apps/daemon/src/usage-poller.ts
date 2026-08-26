@@ -37,6 +37,16 @@ export interface UsagePollerOptions {
   unavailableIntervalMs?: number;
   /** 外から畳む（デーモンの終了時）。 */
   signal?: AbortSignal;
+  /**
+   * probe のサブプロセスへ渡さない環境変数（#431）。
+   *
+   * **`storage.withheldEnvKeys`（記憶ストアへ到達する鍵）をそのまま渡すこと。**
+   * ここを省略すると `fetchAccountUsage` は `env` を組み立てず、SDK の既定
+   * （`Options.env` 省略時は `process.env` をそのまま子へ継承）が働く ——
+   * つまり `usage-probe.ts` の `withheldEnvKeys` の doc が指す「一番広く
+   * process.env を晒す」経路になる。
+   */
+  withheldEnvKeys?: readonly string[];
 }
 
 export interface UsagePoller {
@@ -71,6 +81,9 @@ export function startUsagePolling(options: UsagePollerOptions): UsagePoller {
     inFlight = fetchAccountUsage(options.queryFn, {
       cwd: options.cwd,
       ...(options.signal === undefined ? {} : { signal: options.signal }),
+      ...(options.withheldEnvKeys === undefined
+        ? {}
+        : { withheldEnvKeys: options.withheldEnvKeys }),
     })
       .then((next) => {
         // **取れなかったことで、取れていた値を捨てない。** 一時的な失敗のたびに

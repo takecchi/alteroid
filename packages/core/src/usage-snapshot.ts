@@ -372,9 +372,9 @@ export function describeSilentChannels(
  * 「`accountInfo()` は答えるのに usage 側は `rate_limits: null`」という食い違いが
  * 出ている。実験的な control 要求は固まる可能性がいちばん高い種類のものである。
  *
- * `options.env` は `runUsageProbe`（`usage-probe.ts`）へそのまま渡すだけで、
- * ここでは中身を見ない。**渡さなければ挙動は1文字も変わらない**（`usage-probe.ts`
- * の doc のとおり）。
+ * `options.env` / `options.withheldEnvKeys` は `runUsageProbe`（`usage-probe.ts`）へ
+ * そのまま渡すだけで、ここでは中身を見ない。**渡さなければ挙動は1文字も変わらない**
+ * （`usage-probe.ts` の doc のとおり）。
  *
  * **#429: 失敗の理由を構造化して持ち帰る。** 以前は `runUsageProbe` の失敗も
  * 2つの口の rejection も揃って握り潰され、`reason` は固定文言1本に畳まれていた
@@ -384,7 +384,13 @@ export function describeSilentChannels(
  */
 export async function fetchAccountUsage(
   queryFn: UsageProbeQuery,
-  options: { cwd: string; signal?: AbortSignal; env?: NodeJS.ProcessEnv },
+  options: {
+    cwd: string;
+    signal?: AbortSignal;
+    env?: NodeJS.ProcessEnv;
+    /** `usage-probe.ts` の `UsageProbeOptions.withheldEnvKeys` へそのまま渡す（#431）。 */
+    withheldEnvKeys?: readonly string[];
+  },
 ): Promise<AccountUsageState> {
   const at = new Date().toISOString();
 

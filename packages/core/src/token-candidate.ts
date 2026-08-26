@@ -178,12 +178,19 @@ export function judgeTokenCandidate(state: AccountUsageState): TokenCandidateVer
  */
 export async function probeTokenCandidate(
   queryFn: UsageProbeQuery,
-  options: { cwd: string; token: string; signal?: AbortSignal },
+  options: {
+    cwd: string;
+    token: string;
+    signal?: AbortSignal;
+    /** `fetchAccountUsage` の `withheldEnvKeys` へそのまま渡す（#431）。 */
+    withheldEnvKeys?: readonly string[];
+  },
 ): Promise<TokenCandidateVerdict> {
   const state = await fetchAccountUsage(queryFn, {
     cwd: options.cwd,
     signal: options.signal,
     env: { CLAUDE_CODE_OAUTH_TOKEN: options.token },
+    withheldEnvKeys: options.withheldEnvKeys,
   });
   return judgeTokenCandidate(state);
 }
