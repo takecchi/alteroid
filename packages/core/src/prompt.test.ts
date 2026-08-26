@@ -3,9 +3,13 @@ import { describe, expect, it } from 'vitest';
 import { renderMemoryDocuments } from './memory.js';
 import {
   buildCloneSystemPrompt,
+  buildDailyReportPrompt,
   buildDistillPrompt,
   buildManagerSystemPrompt,
+  buildSelfInitiativePrompt,
+  buildTimerPrompt,
   buildWorkerPrompt,
+  PROMPT_CHARACTER_BUDGET,
 } from './prompt.js';
 
 /**
@@ -409,6 +413,68 @@ describe('buildDistillPrompt — 統合の指示（畳む・重複を消す・�
     // 理由の一文（why）だけが違うはずなので、統合の節はどちらにも同じ形で入る。
     expect(a).toContain('新しく書く前に、既存の記憶を');
     expect(b).toContain('新しく書く前に、既存の記憶を');
+  });
+});
+
+/**
+ * 連結後のプロンプト全体の文字数上限（#414）。
+ *
+ * `buildDailyReportPrompt` / `buildSelfInitiativePrompt` / `buildTimerPrompt` の
+ * 3関数はどれも `digest` を末尾へ生で連結するので、`digest` がどれだけ長く
+ * なっても**本体**（省略の合図を除いた部分）が `PROMPT_CHARACTER_BUDGET` を
+ * 超えないこと、超えたら省略の合図が**本文の中に**付くことをここで見る
+ * （合図がテストの出力やログにしか出ない形だと、それを読むクローンには
+ * 届かない）。
+ *
+ * **返り値の全長は `PROMPT_CHARACTER_BUDGET` と厳密には一致しない。**
+ * `excerpt()`（`excerpt.ts`）は本体を予算ちょうどで切ったあと、その末尾へ
+ * 省略の合図（`…（N 文字省略。全 M 文字）`）を足すので、返り値の全長は
+ * 予算 + 合図の分（数十文字）だけ上回る。ここでは「本体が予算ちょうどで
+ * 切られていること」と「合図が付いていること」を分けて見る。
+ */
+describe('プロンプト全体の文字数上限（#414）', () => {
+  // 予算の2倍にしておけば、どの関数の固定文（数百文字）を足しても必ず超える。
+  const hugeDigest = 'あ'.repeat(PROMPT_CHARACTER_BUDGET * 2);
+
+  it('digest が小さいときは切られない（合図も付かない）', () => {
+    const prompt = buildDailyReportPrompt({ date: '2026-08-27', digest: '短い digest' });
+    expect(prompt.length).toBeLessThanOrEqual(PROMPT_CHARACTER_BUDGET);
+    expect(prompt).not.toContain('文字省略');
+  });
+
+  it('buildDailyReportPrompt: digest だけで予算を超えても、本体は予算ちょうどに切られ、省略の合図が本文に付く', () => {
+    const prompt = buildDailyReportPrompt({ date: '2026-08-27', digest: hugeDigest });
+    expect(prompt.slice(0, PROMPT_CHARACTER_BUDGET).length).toBe(PROMPT_CHARACTER_BUDGET);
+    expect(prompt).toContain('文字省略');
+    // digest より前にある指示文（何をすべきか）は保たれている
+    // — excerpt() は末尾から切るので、digest を末尾に置いてある3関数では
+    // 削られるのは digest 側だけになる。
+    expect(prompt).toContain('この日の日報をまとめよ');
+    expect(prompt).toContain('daily_report_write');
+  });
+
+  it('buildSelfInitiativePrompt: 同様に本体は予算ちょうどに切られ、省略の合図が付く', () => {
+    const prompt = buildSelfInitiativePrompt({ reason: 'timer', digest: hugeDigest });
+    expect(prompt.slice(0, PROMPT_CHARACTER_BUDGET).length).toBe(PROMPT_CHARACTER_BUDGET);
+    expect(prompt).toContain('文字省略');
+    expect(prompt).toContain('次にやることがあるかを決めよ');
+  });
+
+  it('buildTimerPrompt: 継続中の依頼の本文（digest より前）は残り、digest 側だけが削られる', () => {
+    const prompt = buildTimerPrompt({
+      kind: 'custom',
+      request: 'この継続中の依頼の本文は絶対に残ってほしい目印',
+      digest: hugeDigest,
+    });
+    expect(prompt.slice(0, PROMPT_CHARACTER_BUDGET).length).toBe(PROMPT_CHARACTER_BUDGET);
+    expect(prompt).toContain('文字省略');
+    expect(prompt).toContain('この継続中の依頼の本文は絶対に残ってほしい目印');
+  });
+
+  it('切ったときの合図には、省いた文字数と全体の文字数の両方が出る（excerpt() の形式）', () => {
+    const prompt = buildDailyReportPrompt({ date: '2026-08-27', digest: hugeDigest });
+    // excerpt.ts の書式: `…（<omitted> 文字省略。全 <total> 文字）`
+    expect(prompt).toMatch(/…（[\d,]+ 文字省略。全 [\d,]+ 文字）$/);
   });
 });
 
