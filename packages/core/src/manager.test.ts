@@ -5853,4 +5853,28 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
 
     expect(synced).toContain('runner-test');
   });
+
+  it('繋ぎ直してきた runner にも鍵を降ろす（器が入れ替わっていれば鍵も消えている）', async () => {
+    // **プロファイルと同じ位置に無かった。** `#connectTo` は `#pushProfile` の
+    // 直後に `#pushAgentToken` を呼ぶが、`#reattach` は `#pushProfile` だけを
+    // 呼んでいた ⟹ 繋ぎ直してきた runner は**回す前のトークンのまま走る。**
+    //
+    // **見えない形で壊れる。** 走っているマネージャーからは、自分が古いトークンを
+    // 使っていることが分からない（`#pushAgentToken` の doc の逐語）。
+    const synced: string[] = [];
+    const s = await startManager({
+      syncRunnerToken: async (runner) => {
+        synced.push(runner.runnerId);
+      },
+    });
+    const atConnect = synced.length;
+    expect(atConnect).toBeGreaterThan(0);
+
+    // 器が入れ替わって名乗り直してきた（この関数の doc が拾いに来ている場合そのもの）。
+    await s.pool.reattachRunner('runner-test');
+    await settle();
+
+    expect(synced.length).toBeGreaterThan(atConnect);
+    expect(synced.at(-1)).toBe('runner-test');
+  });
 });
