@@ -1144,8 +1144,21 @@ export function ChatPane({
                   `event.isComposing` ではなく **`event.nativeEvent.isComposing` を見る** —
                   React の合成イベントの型は `isComposing` を持たない（DOM の
                   `KeyboardEvent` の側にしか無い）。
+
+                  **`keyCode === 229` を併せて見るのは、`isComposing` が false のまま
+                  変換確定の Enter を配る実装が在るからである**（Android の IME や古い
+                  WebKit で報告されている形。229 は「IME が処理中」を表す慣用の値）。
+                  PR #53 がこの項目を予告したときに挙げた既存実装（virchamate の
+                  `isIMEActive`）も、この2つを併用している。⚠️ **実機での確認はしていない**
+                  — 229 を配るブラウザをこの器から触れないので、ここで測れているのは
+                  「229 が来たら送らない」という分岐の存在だけである。
                 */
-                if (event.key === 'Enter' && event.nativeEvent.isComposing) return;
+                if (
+                  event.key === 'Enter' &&
+                  (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)
+                ) {
+                  return;
+                }
                 if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
                   event.preventDefault();
                   void send(draft);

@@ -6,7 +6,7 @@
  * だけで、Enter 単体で送る道が `chat.tsx` にまだ無いからである（#247 の 2）。
  * それでも歯を置くのは、**Enter 単体送信を足した瞬間に、門が無いと IME の
  * 「変換を確定する Enter」がそのまま誤送信になる**ためで、足す人がそのときに
- * 門の不在へ気づく契機を持たない。下の3本目（「Enter 単体では送らない」）が、
+ * 門の不在へ気づく契機を持たない。下の最後の1本（「Enter 単体では送らない」）が、
  * その人をここへ連れてくる網である。
  *
  * **いま既に効いている分もある**（1本目・2本目）— 変換中に `⌘/Ctrl + Enter` を
@@ -17,9 +17,11 @@
  * 立つか立たないかを見る。片側だけでは「そもそも送れていない」と区別が付かない
  * ので、**必ず両側を1本の中で通す**（変換中→0本、確定後→1本）。
  *
- * `isComposing` が jsdom の `KeyboardEvent` から React の `nativeEvent` まで
- * 実際に運ばれることは、この歯を書く前に別立てで実測してある（`fireEvent.keyDown`
- * の init に載せた値が、そのまま `event.nativeEvent.isComposing` に出る）。
+ * `isComposing` / `keyCode` が jsdom の `KeyboardEvent` から React の `nativeEvent`
+ * まで実際に運ばれることは、この歯を書く前に別立てで実測してある（`fireEvent.keyDown`
+ * の init に載せた値が、そのまま `event.nativeEvent.isComposing` /
+ * `event.nativeEvent.keyCode` に出る）。**レイアウト由来の値（`offsetWidth` 等）が
+ * jsdom で常に 0 になるのとは性質が違い、これらは素のデータプロパティである。**
  */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
@@ -166,6 +168,30 @@ describe('IME 変換中の Enter', () => {
     expect(JSON.parse(bodies[0] ?? '{}')).toEqual({
       text: 'へんかんちゅう',
       conversationId: CONVERSATION_ID,
+    });
+  });
+
+  /**
+   * `isComposing` が false のまま変換確定の Enter を配る実装への備え（`keyCode === 229`）。
+   *
+   * ⚠️ **測れているのは分岐の存在だけである。** 229 を実際に配るブラウザ（Android の
+   * IME・古い WebKit で報告されている形）をこの器から触れないので、「実機で助かる」
+   * ことの証拠にはならない。PR #53 がこの項目を予告したときに挙げた既存実装
+   * （virchamate の `isIMEActive`）が `isComposing` と 229 を併用していたのに合わせてある。
+   */
+  it('keyCode 229（isComposing は false）の ⌘ + Enter でも送らない', async () => {
+    const { bodies } = setUpChat();
+    renderChat(`/chat/${CONVERSATION_ID}`);
+    const box = await typeInto('へんかん');
+
+    fireEvent.keyDown(box, { key: 'Enter', metaKey: true, isComposing: false, keyCode: 229 });
+    await settle();
+    expect(bodies).toEqual([]);
+
+    // 229 でなくなれば送る（上が「そもそも送れない」で緑になっていない）。
+    fireEvent.keyDown(box, { key: 'Enter', metaKey: true, isComposing: false, keyCode: 13 });
+    await waitFor(() => {
+      expect(bodies.length).toBe(1);
     });
   });
 
