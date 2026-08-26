@@ -4676,17 +4676,68 @@ describe('システムプロンプトの道具一覧', () => {
  *
  * ⚠️ **この掃き方が拾えない範囲を明示しておく。** 集めているのは名前が
  * `_list` で終わるものだけで、`journal_read` / `usage_read` / `conversation_read` /
- * `self_status` は一覧を返すのにこの網に入らない（下で名指しして足してある）。
+ * `self_status` / `memory_outline` / `memory_write` は一覧を返す（あるいは応答の
+ * 中に一覧を1節持つ）のにこの網に入らない（下で名指しして足してある）。
  * **別の名前で新しい一覧を足した人は、やはり自分で書き足す必要がある** —
  * 網が全部を覆っていると読まれるほうが、覆っていないと分かっているより悪い。
  *
  * **1つの道具が複数の一覧モードを持つなら、モードごとに名指しすること。**
  * `conversation_read` は積む向きの違う3モードを持つので4件に分けてある
  * （1つ測っても他のモードは何も測れていない）。
+ *
+ * ## #212 の数え上げ（2026-08-26 に現物を読んで数えた）
+ *
+ * #212 は「名前で集めると埋め込まれた一覧が漏れる」を指し、直し方の候補に
+ * **(b)「一覧を名前ではなく形で（`renderListing` を通ったかで）集める」**を
+ * 挙げていた。人間の判断は **(a)（都度名指しで足す）** で、(b) は追わない。
+ * その判断を後から検算できるように、**(b) を採ったとしても拾えないものが
+ * いくつ在るか**をここへ残す。
+ *
+ * **`renderListing` / `renderListingFromEnd` を通していない一覧が 6 箇所ある。**
+ * いずれも予算を**件数**で持っていて、`renderListing` を1度も通らない
+ * ——⟹ **(b) はこの6箇所を1つも拾わない。**
+ *
+ * | 場所 | 予算 |
+ * | --- | --- |
+ * | `usage_read` 既定の6軸の内訳（`tools.ts` の `USAGE_AXES` のループ） | 件数 `USAGE_AXIS_LIMIT = 14` × 6軸 |
+ * | `usage_read` の `axis` 指定モードの頁 | 件数 `USAGE_AXIS_PAGE = 100` |
+ * | `self_status`「台帳との突き合わせ」（`renderLedgerCrossReference`）※ | 件数 `USAGE_AXIS_LIMIT = 14` |
+ * | `runner_list` 器ごとのマネージャー内訳 | 件数 `RUNNER_MANAGER_LIST_LIMIT = 20` |
+ * | `runner_list`「どの器か分からない」内訳 | 件数 同上 |
+ * | `manager_list` の `denialLine`（止められた道具） | 件数 `LIST_DENIED_TOOLS = 3` |
+ *
+ * ※ **この1行だけ、断り書きの帰属は測られている**（#497 が
+ * `self_status（台帳との突き合わせ）` を `section` + `mark` で足した）。
+ * 測られているのは「切ったならこの節の言葉で言う」であって、**予算が件数で
+ * あること自体は変わっていない。**
+ *
+ * **この6箇所を「歯が無い」と読まないこと。** 6箇所とも、それを含む道具は
+ * この網（`SWEPT` か `NAMED`）に在るので、**道具の応答全体が `OUTPUT_CAP`
+ * 未満であること**は測られている。**6箇所すべてについて測られていないのは、
+ * その埋め込み一覧が「1行が伸びたとき何件で壊れるか」を予算として持つこと**
+ * である（※ の1件も、断り書きは測られるが件数予算のままである）。件数予算は
+ * 「1行が伸びると何件で壊れるかが運任せになる」形なので（#170 / #192）、
+ * ここは**塞げているのではなく、いまの1行の長さでたまたま収まっている**。
+ *
+ * ⚠️ **`renderMemoryToc`（プロンプトへ焼く記憶の目次、`MEMORY_TOC_ENTRY_LIMIT
+ * = 300`）は上の表に入れていない。** それは道具の応答ではないうえ、
+ * `.claude/skills/listing-and-detail/SKILL.md` が「道具側の統一とは分けた」と
+ * 範囲外に置いている。**忘れているのではなく、外してある。**
  */
 describe('一覧は例外なく件数で壊れない（`*_list` の総当たり）', () => {
   /** 名前から集めた一覧。**ここに手で名前を書かない**（書けば数え上げが腐る）。 */
   const SWEPT = CLONE_TOOL_NAMES.filter((name) => name.endsWith('_list'));
+
+  /**
+   * 節の多い記憶の文書の slug と節数（`flooded()` が積む足場）。
+   *
+   * `memory_outline`（目次）と `memory_write`（消えた見出しの列挙）は
+   * **同じ文書を足場にする** — 前者はその節を並べ、後者はその節を全部
+   * 消したときの列挙を出すので、節が多いことが両方の予算を拘束条件にする。
+   */
+  const OUTLINE_FLOOD_SLUG = 'outline-flood';
+  const OUTLINE_FLOOD_SECTIONS = 240;
+
   /**
    * 名前が `_list` で終わらないのに一覧を返すもの。**網の外なので名指しする。**
    * 引数は「既定の呼び方」（一覧モード）を選ぶためのもの。
@@ -4702,8 +4753,13 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
      */
     section?: string;
     /**
-     * `section` を指定するときに**必ず添える**、その節の**一覧レベルの
-     * 断り書きだけが持つ**語彙（#406）。
+     * その一覧の**一覧レベルの断り書きだけが持つ**語彙（#406）。
+     *
+     * **`section` を指定するときは必ず添える。単独でも指定できる**（#212）
+     * ——`section` は「応答のどこを見るか」、`mark` は「何を探すか」で、
+     * 軸が違う。道具全体が一覧で節に分かれていないもの（`memory_outline`）
+     * や、節の見出し（`## `）を持たない一覧（`memory_write` の「消えた
+     * 見出し」）は、`section` を持たないまま `mark` だけを要る。
      *
      * 節をまるごと素の `TRUNCATION_MARK`（`/省略|残り \d|文字目/`）で見ると、
      * 1件ごとの `excerptLine` 抜粋（`…（N 文字省略。全 M 文字）`）も同じ
@@ -4823,6 +4879,52 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       args: {},
       section: '## 台帳との突き合わせ',
       mark: /…（残り \d+ 件は出していない）/,
+    },
+    /*
+     * **`memory_outline` は名前が `_list` で終わらないが、道具の応答そのものが
+     * 一覧である**（節id・見出し・文字数の1行1件。`renderMemoryOutline` が
+     * `MEMORY_OUTLINE_BUDGET` で締める）。**#212 が指した形の実例である** —
+     * `_list` で終わらない名前で一覧を足したのに、この網へ書き足されなかった。
+     *
+     * `mark` を添えて素の `TRUNCATION_MARK` に落としていないのは、応答の
+     * 前置き（`記憶 <slug> の目次（N 節）。本文は含まない。`）と、節ごとの
+     * ⚠（id が衝突した節の印）が、一覧レベルの断り書きとは別に語彙を
+     * 持ちうるためである。**測りたいのは「何か書いてある」ではなく
+     * 「この一覧が省いたことを、この一覧の言葉で言った」である**（#406 が
+     * `self_status` で通った道と同じ）。
+     */
+    {
+      label: 'memory_outline',
+      name: 'memory_outline',
+      args: { slug: OUTLINE_FLOOD_SLUG },
+      mark: /…ほか \d+ 節は省略（節は全 \d+ 件あり、\d+ 件だけ出した）。/,
+    },
+    /*
+     * **`memory_write` は一覧の道具ではない。応答の中に一覧が1節ある** —
+     * 「消えた見出し」の名指し（`describeMemoryHeadingDiff` が
+     * `MEMORY_MISSING_HEADINGS_BUDGET` で締める）。**#212 が「2 の形」と
+     * 呼んだもの（既存の道具の出力に一覧を1節足す）そのものである。**
+     *
+     * 引数は**節を全部消す全文置換**を選んでいる。見出しが1つも消えない
+     * 呼び方では「消えた見出し: なし。」しか返らず、この一覧については
+     * 何も測れないまま歯が通る（`journal_read` の既定が予算に届かないのと
+     * 同じ形）。
+     *
+     * ⚠️ **この道具は書き込みである。** 掃き出しの器（`flooded()`）は
+     * `it` ごとに作り直されるので、ここで潰した文書が他のケースへ漏れる
+     * ことはない。**ここへ書き込みの道具を足すときは、その前提を必ず
+     * 確かめること** — 器を共有する形にすると、この1件が他の全部の足場を
+     * 崩す。
+     */
+    {
+      label: 'memory_write（消えた見出しの列挙）',
+      name: 'memory_write',
+      args: {
+        slug: OUTLINE_FLOOD_SLUG,
+        content: '---\ndescription: 畳んだ\ntype: fact\n---\n# 残した節\n\n本文',
+        summary: '節を1つへ畳んだ',
+      },
+      mark: /…ほか \d+ 件は省略（消えた見出しは全 \d+ 件のうち \d+ 件だけ出した）。/,
     },
   ];
 
@@ -5037,6 +5139,35 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         },
       });
     }
+    // **節の多い記憶の文書**（`memory_outline` の目次と、`memory_write` が
+    // 返す「消えた見出し」の列挙）。
+    //
+    // **ループの中で作らない。** ここで要るのは「文書が何件あるか」ではなく
+    // 「1つの文書が何節持つか」であって、軸が違う——`flooded()` が積む
+    // `doc-<pad>` は1文書1節なので、何件積んでも
+    // `MEMORY_OUTLINE_BUDGET`（8,000字）は一度も拘束条件にならない。
+    // **足場が薄いと歯は生き残る**（`runner_list` を 12 台から 120 台へ
+    // 増やしたのと同じ形。`.claude/skills/listing-and-detail/SKILL.md`）。
+    //
+    // 節数は変異で確かめて決めた。1行はおよそ `[<id 8字>] 節<4字>: <40字> —
+    // <N> 文字` ≒ 70 字なので、240 節 ≒ 16,800 字で予算の 2 倍を超える。
+    //
+    // `type: fact` にしてあるのは、この文書が**プロンプトへ焼かれる量を
+    // 増やさない**ようにするためである（`fact` は目次の1行だけが焼かれる）。
+    // ここを `premise` にすると `self_status` の「記憶の大きさ」が測って
+    // いるものが、この足場の都合で動く。
+    //
+    // **節ごとに本文を変えてある。** 中身まで同一の節は節id が衝突し、
+    // `renderMemoryOutline` がその行へ ⚠ を付ける（＝測りたい形ではない
+    // 行が混じる）。
+    await h.stores.persona.write(
+      OUTLINE_FLOOD_SLUG,
+      `---\ndescription: 節の多い文書（目次と見出しの列挙の足場）\ntype: fact\n---\n` +
+        Array.from({ length: OUTLINE_FLOOD_SECTIONS }, (_, index) => {
+          const pad = String(index).padStart(4, '0');
+          return `# 節${pad}: ${'み'.repeat(40)}\n\n本文${pad}\n`;
+        }).join('\n'),
+    );
     // 認証トークンのプール（token_list）。**`replace` は全文置換なので、ループの
     // 中で1本ずつ足すと毎回上書きになる** — 件数を作れないまま「1件だから短い」で
     // 歯が通る（この器を1つにしてある理由そのもの）。だからループの外で一度に積む。
@@ -5130,19 +5261,26 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       // 後ろへ無関係な行が増えただけで壊れる（NAMED の `mark` の doc に実測を
       // 書いた）。`mark` は節の中のどこにあっても見つかれば合格とすることで、
       // entries の省略とも、無関係な行の増減とも、位置に依存せず区別する。
-      if (section !== undefined) {
-        if (mark === undefined) {
-          throw new Error(
-            `CASES: section を指定したケースは mark も必ず指定すること（label="${label}"）。` +
-              'mark 無しで素の TRUNCATION_MARK に落とすと、entries の省略が代わりに合格を出す' +
-              '欠陥（#406）へ逆戻りする。',
-          );
-        }
-        expect(extractSection(reply, section)).toMatch(mark);
-        return;
+      //
+      // **`mark` は `section` と独立に指定できる（#212）。** `section` は
+      // 「応答のどこを見るか」、`mark` は「何を探すか」で、軸が違う。
+      // 道具全体が一覧である（節へ分かれていない）のに、断り書きだけは
+      // その一覧の言葉で名指ししたい場合——`memory_outline` /
+      // `memory_write` がそれである——`section` を持たないまま `mark` だけ
+      // が要る。**`mark` を添えるのは常に締める方向であって、緩める方向へは
+      // 働かない**（`TRUNCATION_MARK` は `/省略|残り \d|文字目/` という
+      // 総称で、`mark` はその一覧に固有の逐語だから、`mark` を満たす出力は
+      // 必ず `TRUNCATION_MARK` も満たす）。
+      if (section !== undefined && mark === undefined) {
+        throw new Error(
+          `CASES: section を指定したケースは mark も必ず指定すること（label="${label}"）。` +
+            'mark 無しで素の TRUNCATION_MARK に落とすと、entries の省略が代わりに合格を出す' +
+            '欠陥（#406）へ逆戻りする。',
+        );
       }
+      const scope = section === undefined ? reply : extractSection(reply, section);
 
-      expect(reply).toMatch(TRUNCATION_MARK);
+      expect(scope).toMatch(mark ?? TRUNCATION_MARK);
     },
   );
 
