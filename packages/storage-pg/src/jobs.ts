@@ -49,7 +49,12 @@ export class PgJobStore implements JobStore {
       if (parsed.success) {
         found.push(parsed.data);
       } else {
-        noteDroppedJournalRow(dropped, 'unknown-shape', journalRowType(row.job), byteLength(row.job));
+        noteDroppedJournalRow(
+          dropped,
+          'unknown-shape',
+          journalRowType(row.job),
+          byteLength(row.job),
+        );
       }
     }
     noteDroppedJournalRowsSummary(dropped);
