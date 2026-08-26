@@ -85,7 +85,7 @@ export interface UsageProbeOptions {
    * probe のサブプロセスへ足す環境変数の上書き。
    *
    * **`@anthropic-ai/claude-agent-sdk@0.3.241` の `sdk.d.ts` は `Options.env` の doc に
-   * 逐語でこう書いている**（`grep -n 'REPLACES the subprocess environment entirely'
+   * 逐語でこう書いている**（`grep -Fn -- 'REPLACES the subprocess environment entirely'
    * node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts` で当たる）:
    *
    * > When set, this value REPLACES the subprocess environment entirely — it is
