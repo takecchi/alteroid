@@ -1295,7 +1295,8 @@ export type Commitment = z.infer<typeof commitmentSchema>;
  * **⚠️ `reason` に本文を混ぜないこと。** zod の `safeParse` が返すエラー
  * メッセージは欄名と型の食い違いしか含まないのでそのまま使ってよいが、
  * `JSON.stringify(生の値)` を足さないこと（`dropped-record.ts` の doc — #52 で
- * 依頼の本文が報告経路へ全文で漏れた事故が根拠である）。
+ * テスト出力（`railway/setup.test.ts` の差分アサーション）へ秘密が全文で
+ * 出た事故が根拠である）。
  */
 export const unreadableCommitmentSchema = z.object({
   /** 台帳の列 / 生の値から取れた id。取れないこともある（fs 版で本体が id を持たない形のとき）。 */

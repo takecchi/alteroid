@@ -267,7 +267,8 @@ describe('未読の永続化', () => {
     const trace = lines.filter((line) => line.includes('未読の合図を記録できませんでした'));
     expect(trace).toHaveLength(1);
     expect(trace[0]).toContain('器が閉じている');
-    // 本文は出さない（報告本文に GH_TOKEN が全文で出た前例がある。#52）。
+    // 本文は出さない（テスト出力に GH_TOKEN が全文で出た前例がある。
+    // railway/setup.test.ts の差分アサーション、#52）。
     expect(lines.join('')).not.toContain(secret);
     expect(lines.join('')).not.toContain('ghp_');
     // 長さだけは出す（「空だった」と「書けなかった」の区別が付く）。

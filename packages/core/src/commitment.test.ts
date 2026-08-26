@@ -464,7 +464,8 @@ describe('引き受けたまま終わっていない仕事', () => {
     expect(s.events.some((event) => event.type === 'done')).toBe(true);
     const stderr = lines.join('');
     expect(stderr).toContain('未了の記帳');
-    // 跡に本文を載せない（`dropped-record.ts`。報告本文に GH_TOKEN が全文で出た前例がある）
+    // 跡に本文を載せない（`dropped-record.ts`。テスト出力に GH_TOKEN が全文で
+    // 出た前例がある。railway/setup.test.ts の差分アサーション、#52）
     expect(stderr).not.toContain('秘密を含むかもしれない依頼');
 
     await s.clone.stop();

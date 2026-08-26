@@ -79,8 +79,8 @@ export interface RunnerUnknownReport {
  * 形（上の層が届け先を選ぶコールバック）だけを揃えてある。
  *
  * **本文は載せない。** ここへ来るフレームにはマネージャーの報告が入りうる
- * （報告本文に `GH_TOKEN` が全文で出た前例がある。#52）。載せるのは `type` と
- * バイト数だけである。
+ * （テスト出力に `GH_TOKEN` が全文で出た前例がある。`railway/setup.test.ts`
+ * の差分アサーション、#52）。載せるのは `type` とバイト数だけである。
  */
 export type RunnerDroppedEventReport =
   | {
