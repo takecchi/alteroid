@@ -277,6 +277,17 @@ const SCHEDULE_STORE_ATTEMPTS = 3;
 const SCHEDULE_STORE_RETRY_MS = 200;
 
 /**
+ * `#forget` が `inbox.remove` を拾い直す回数と間隔（issue #256）。
+ *
+ * **これも回数制限ではない**（`SCHEDULE_STORE_ATTEMPTS` と同じ理由）。器の
+ * 一瞬の揺れで消せなかっただけの合図を、次の起動を待たずに同じプロセスの中で
+ * 消し込むための拾い直しであって、諦めた合図を切り捨てるものではない——
+ * 全部失敗しても合図は失われない（`#forget` の doc）。
+ */
+const FORGET_RETRY_ATTEMPTS = 3;
+const FORGET_RETRY_MS = 200;
+
+/**
  * 版が入れ替わっていたときに読み直す回数。
  *
  * 人間が依頼を直した瞬間に発火が重なると1回ずれる。**古い本文で走らないことが最優先**
@@ -1747,23 +1758,57 @@ class Clone implements CloneHost {
    * **書き込みの完了を待ってから消す。** 待たないと、短いターンでは消し込みが
    * 書き込みを追い越し、消したはずの合図が後から書かれて**起動のたびに永久に
    * 配り直される**（この直しが一番作りやすい壊れ方である）。
+   *
+   * **`inbox.remove` が確定するまでメモリ上の印は消さない（issue #256）。**
+   * 以前は `#unread` / `#redelivered` / `#redeliveredClosed` を `remove` の
+   * **前**に消していた——`remove` が失敗しても印だけは先に消えるので、
+   * 「ストアにはまだ残っているのに `#unread` には無い」という、この関数自身の
+   * 前提（`#unread` ＝ まだ消せていない合図の集合、上の doc）と矛盾する状態を
+   * 自分で作っていた。`inbox.remove` は冪等（`InboxStore.remove` の doc
+   * 「無ければ何もしない」）なので、消せたと確定するまで印を残しておいても
+   * 安全に何度でも試せる。
+   *
+   * **一時的な失敗は `SCHEDULE_STORE_ATTEMPTS` と同じ理由で拾い直す
+   * （`FORGET_RETRY_ATTEMPTS`）。** `commitment_close`（`tools.ts`）と
+   * `inbox.remove`（ここ）は別のストア・別の時点（前者はターンの最中、後者は
+   * ターンの `finally`）の書き込みで、**両者を1本の DB トランザクションで
+   * 束ねることはできない**——束ねようとすると、トランザクションをターンの
+   * 残り（モデルの生成・他の道具呼び出し・人間への返信の送出）のあいだ開いた
+   * ままにすることになり、それ自体が新しい危険（長時間ロック・接続の占有）を
+   * 作る。**ここで拾い直すのは `remove` 単体の一時的な失敗（器の瞬断）に対して
+   * だけであり、`commitment_close` 成功後・この関数に到達する前にプロセス
+   * ごと落ちる窓（issue #256 が挙げる T1〜T3）は塞げない。** その窓は
+   * `#restoreUnread` の配り直し（`closedRedeliveryNotice`、issue #217）が
+   * 拾う——**「消せなかったものは次の起動で配り直される。それは設計どおりの
+   * 側の失敗（消えるより配り直す）」という下の判断を壊さないための境界線を
+   * ここに引く。**
    */
   async #forget(event: InboxEvent): Promise<void> {
     const written = this.#unread.get(event.id);
     // 器に置いていない合図（`#postAndWait` の蒸留）は消すものが無い。
     if (written === undefined) return;
-    this.#unread.delete(event.id);
-    this.#redelivered.delete(event.id);
-    this.#redeliveredClosed.delete(event.id);
 
     await written;
-    try {
-      await this.#stores.inbox.remove(event.id);
-    } catch (error) {
-      // 消せなかったものは次の起動で配り直される。**それは設計どおりの側の失敗**
-      // （消えるより配り直す）なので、跡だけ残して進む。
-      noteDroppedRecord('未読の消し込み', inboxEventShape(event), error);
+
+    let last: unknown;
+    for (let attempt = 0; attempt < FORGET_RETRY_ATTEMPTS; attempt += 1) {
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, FORGET_RETRY_MS * attempt));
+      }
+      try {
+        await this.#stores.inbox.remove(event.id);
+        this.#unread.delete(event.id);
+        this.#redelivered.delete(event.id);
+        this.#redeliveredClosed.delete(event.id);
+        return;
+      } catch (error) {
+        last = error;
+      }
     }
+    // 消せなかったものは次の起動で配り直される。**それは設計どおりの側の失敗**
+    // （消えるより配り直す）なので、印も残したまま跡だけ残して進む——印を消すと
+    // 「もう消せている」と嘘をつくことになる（上の doc）。
+    noteDroppedRecord('未読の消し込み', inboxEventShape(event), last);
   }
 
   /**
