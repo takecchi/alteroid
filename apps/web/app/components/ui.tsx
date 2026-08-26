@@ -10,6 +10,18 @@ import type { ButtonHTMLAttributes, ReactNode, TextareaHTMLAttributes } from 're
 
 import { cn } from '~/lib/cn';
 
+/**
+ * `radix-ui` の `Tabs.Trigger` に付ける見た目。
+ *
+ * **`memory-detail.tsx` から移設**（`schedule.tsx` の編集タブと共有するため）。
+ * 移設は「載る時機を変える」ことであって「読めるものを減らす」ことではないので、
+ * クラス文字列は1文字も変えていない（AGENTS.md「スキルへ移すときは移すだけで、
+ * 要約も短縮もしない」と同じ考え方）。
+ */
+export const TAB_TRIGGER_CLASS =
+  'border-b-2 border-transparent px-3 py-1.5 text-sm font-medium text-muted transition-colors hover:text-fg';
+export const TAB_TRIGGER_ACTIVE_CLASS = 'border-accent text-fg';
+
 export function Card({ className, children }: { className?: string; children: ReactNode }) {
   return (
     <div className={cn('rounded-lg border border-border bg-surface', className)}>{children}</div>
