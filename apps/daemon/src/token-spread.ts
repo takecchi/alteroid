@@ -192,13 +192,31 @@ function firstLine(error: unknown): string {
  *
  * **箱が空なら何もしない。** 器の環境変数だけで走っている既定の構成では、
  * 降ろすものが無い（受け入れ基準7）。
+ *
+ * **⚠️ 「箱が空」を `values()` の値の有無だけで見ないこと。** `AgentTokenHolder`
+ * には2つの「値が無い」がある——(1) `identity()` も `undefined`：まだ一度も
+ * 撒いていない（既定の構成。ここだけが本当の no-op） (2) `identity()` は在るが
+ * `values()` の値が無い：env 行（`source: 'env'`）が現役で、`clear()` されている
+ * （`AgentTokenHolder.clear` の doc: 「身元は渡されたときだけ更新する」ので
+ * `currentIdentity` は残る）。(2) を (1) と同じに扱うと、`spread()` が
+ * `value: ''` で表している「鍵を消せ」という指示を、後から繋ぎ直してきた
+ * runner（`ManagerPool#connectTo` / `#reattach`）にだけ伝え損ねる——その runner
+ * は器の再起動でしか鍵ファイルを作り直さない（`apps/runner/src/index.ts` の
+ * `credentials.flush()` はプロセス起動時の1回きりで、ストリームの繋ぎ直しでは
+ * 走らない）ので、古い（冷却中の）トークンの鍵ファイルを持ったまま走り続ける。
+ * `spread()` と同じ表現（空文字で「env を使え」を伝える）に揃えることで、
+ * この経路にも「鍵を消せ」が届くようにする。
  */
 export function createRunnerTokenSync(
   holder: AgentTokenHolder,
 ): (runner: { setCredentials: RunnerLike['setCredentials'] }) => Promise<void> {
   return async (runner) => {
-    const value = holder.values().CLAUDE_CODE_OAUTH_TOKEN;
-    if (value === undefined) return;
+    // まだ一度も撒いていない ⟹ 器の環境変数だけの既定の構成。1文字も変えない
+    // （受け入れ基準7）。
+    if (holder.identity() === undefined) return;
+    // 身元はあるのに値が無い ⟹ env 行が現役。`spread()` と同じ表現（空文字）で
+    // 「鍵を消せ」を降ろす。
+    const value = holder.values().CLAUDE_CODE_OAUTH_TOKEN ?? '';
     await runner.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value }]);
   };
 }
