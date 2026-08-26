@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { CLONE_MODEL_ENV_KEY, createClone } from './clone.js';
 import { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
+import { buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
 import {
   MANAGER_MODEL,
   MANAGER_MODEL_ENV_KEY,
@@ -269,6 +270,36 @@ describe('マネージャー（runner）へ渡す Options', () => {
     // --- ⭐ 「無いこと」の固定 ---
     expect(options.tools).toBeUndefined();
     expect(options.maxTurns).toBeUndefined();
+  });
+
+  it('systemPrompt.append と agents[WORKER_AGENT_NAME].prompt は、ビルダー関数の戻り値そのものである（#357 の残り1点）', async () => {
+    // `prompt.test.ts` の「バックグラウンドの完了を待つときの事実の告知（#357）」は
+    // `buildManagerSystemPrompt()` / `buildWorkerPrompt()` の戻り値までしか見ていない
+    // ——「その戻り値が SDK へ渡る Options に実際に載るか」という継ぎ目は誰も見ていな
+    // かった。ここではその継ぎ目だけを固定する。文言そのものは持たない（コピーすると
+    // 片方だけ直したときに腐る）— ビルダーを直接呼んで突き合わせる。
+    const { fn, started } = fakeRunnerSdk();
+    host = createRunnerHost({
+      runnerId: 'runner-primary',
+      workspacePath: dir,
+      emit: () => undefined,
+      queryFn: fn,
+      env: {},
+    });
+
+    await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const { options } = started[0] as Started;
+
+    // runner.ts の #buildOptions が渡す引数と同じ形で呼ぶ（managerId は
+    // host.start() に渡した値、workerName は WORKER_AGENT_NAME）。
+    const expectedManagerAppend = buildManagerSystemPrompt({
+      managerId: 'mgr-1',
+      workerName: WORKER_AGENT_NAME,
+    });
+    expect((options.systemPrompt as { append?: unknown }).append).toBe(expectedManagerAppend);
+
+    const worker = (options.agents ?? {})[WORKER_AGENT_NAME] as { prompt?: unknown };
+    expect(worker.prompt).toBe(buildWorkerPrompt());
   });
 
   it('ALTEROID_MANAGER_MODEL / ALTEROID_WORKER_MODEL を置くと差し替わる', async () => {
