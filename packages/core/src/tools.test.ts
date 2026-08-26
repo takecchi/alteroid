@@ -4,6 +4,7 @@ import type { ManagerDenial, ManagerPool, ManagerSummary, RunnerFleetOverview } 
 import { measureMemoryFloor, renderMemoryDocuments } from './memory.js';
 import { createProfileService } from './profile-service.js';
 import { journalEntrySchema, type ChatStreamEvent } from './schema.js';
+import type { ScheduleStatus } from './schedule.js';
 import type { CloneRuntimeFacts } from './self.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
@@ -65,7 +66,7 @@ interface Harness {
   call(name: string, args: Record<string, unknown>): Promise<string>;
 }
 
-function harness(runtime?: () => CloneRuntimeFacts): Harness {
+function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleStatus[]): Harness {
   const stores = createMemoryStores();
   const emitted: ChatStreamEvent[] = [];
   const sent: { managerId: string; message: string; decision?: string; requestId?: string }[] = [];
@@ -190,6 +191,7 @@ function harness(runtime?: () => CloneRuntimeFacts): Harness {
     // テストの外に出てしまう。
     profile: createProfileService({ stores, runners }),
     ...(runtime === undefined ? {} : { runtime }),
+    ...(scheduler === undefined ? {} : { scheduler }),
     memoryCause: () => memoryCause,
   });
 
@@ -890,6 +892,72 @@ describe('クローンの道具', () => {
 
     expect(reply).toContain('作成: 2026-01-02T03:04:05.000Z');
     expect(reply).toContain('更新: 2026-03-04T05:06:07.000Z');
+  });
+
+  // --- 次に動く時刻（Issue #237） --------------------------------------
+  // nextAt を計算しているのは Scheduler（`ToolContext.scheduler`）であって
+  // `stores.schedules` ではない。schedule_list はその写しを引いて出す。
+
+  it('schedule_list（一覧モード）は ToolContext.scheduler から次に動く時刻を出す', async () => {
+    const h = harness(undefined, () => [
+      {
+        kind: 'watch',
+        description: '毎日 09:00（ローカル時刻）',
+        nextAt: '2026-04-05T00:00:00.000Z',
+      },
+    ]);
+    await h.stores.schedules.put({
+      kind: 'watch',
+      spec: { type: 'daily', at: '09:00' },
+      request: 'いつもの見回り',
+      createdAt: '2026-01-02T03:04:05.000Z',
+      updatedAt: '2026-03-04T05:06:07.000Z',
+    });
+
+    const reply = await h.call('schedule_list', {});
+
+    expect(reply).toContain('次に動く時刻: 2026-04-05T00:00:00.000Z');
+  });
+
+  it('schedule_list kind=<kind>（全文モード）も同じ次に動く時刻を出す', async () => {
+    const h = harness(undefined, () => [
+      {
+        kind: 'watch',
+        description: '毎日 09:00（ローカル時刻）',
+        nextAt: '2026-04-05T00:00:00.000Z',
+      },
+    ]);
+    await h.stores.schedules.put({
+      kind: 'watch',
+      spec: { type: 'daily', at: '09:00' },
+      request: 'いつもの見回り',
+      createdAt: '2026-01-02T03:04:05.000Z',
+      updatedAt: '2026-03-04T05:06:07.000Z',
+    });
+
+    const reply = await h.call('schedule_list', { kind: 'watch' });
+
+    expect(reply).toContain('次に動く時刻: 2026-04-05T00:00:00.000Z');
+  });
+
+  it('ToolContext.scheduler が渡っていないときは、黙って行を消さず取れない理由を出す', async () => {
+    const h = harness();
+    await h.call('schedule_create', { kind: 'watch', request: '最初の依頼', everyMinutes: 30 });
+
+    const reply = await h.call('schedule_list', {});
+
+    expect(reply).toContain('次に動く時刻: （取れない — scheduler が渡っていない）');
+  });
+
+  it('scheduler は渡っているが、この kind をまだ仕込みへ反映していないときは反映待ちと言う', async () => {
+    // 仕込み直後は Scheduler#reconcile() がまだ読み直していない、という状況を
+    // 模す（`scheduleNextAtOf` の doc）。scheduler 自体は空配列を返す。
+    const h = harness(undefined, () => []);
+    await h.call('schedule_create', { kind: 'watch', request: '最初の依頼', everyMinutes: 30 });
+
+    const reply = await h.call('schedule_list', {});
+
+    expect(reply).toContain('次に動く時刻: （まだ計算されていない。少し待って呼び直すこと）');
   });
 
   it('同じ kind で仕込み直すと置き換わる（前回動いた時刻は保つ）', async () => {
