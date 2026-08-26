@@ -154,6 +154,33 @@ describe('/commitments 画面', () => {
   });
 
   /**
+   * **保持上限を超えて物理削除された片付き行の断り（issue #416）。**
+   *
+   * fs 実装は `CLOSED_HISTORY_LIMIT` を超えた古い片付き行を物理削除する
+   * （`packages/storage-fs/src/commitments.ts`）。「器は行を消さない」は契約で
+   * あって全実装が守れているわけではないので、破られた事実が人間から見えないと
+   * 上のテスト（「片付けたものは…」）が固定している前提そのものが嘘になる。
+   */
+  it('保持上限を超えて物理削除された片付き行があれば、一覧の上に断りが出る', async () => {
+    stubFetch((url) => {
+      if (!url.includes('/commitments')) return undefined;
+      return json({ entries: [commitment()], unreadable: [], trimmedClosed: 3 });
+    });
+    renderPage();
+
+    await screen.findByText('ドキュメントの誤りを直す');
+    expect(screen.getByText(/保持上限を超えて物理削除された片付き行が累計 3 件ある/)).toBeTruthy();
+  });
+
+  it('物理削除が0件なら断りを出さない', async () => {
+    stubCommitments([commitment()]);
+    renderPage();
+
+    await screen.findByText('ドキュメントの誤りを直す');
+    expect(screen.queryByText(/物理削除された/)).toBeNull();
+  });
+
+  /**
    * **「閉じた」だけを残さない。** 人間が後から否定できることが最終承認の実体で
    * あり、何をもって終わりとしたのかが無いと否定のしようがない（north_star）。
    */

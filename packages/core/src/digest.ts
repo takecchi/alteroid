@@ -130,11 +130,17 @@ export async function buildActivityDigest(stores: Stores, window: DigestWindow):
   // 切れば、2日前に頼まれてまだ手を付けていない仕事だけが静かに落ちる（それは
   // いちばん落としてはいけないものである）。
   //
-  // **`list()` は `{ entries, unreadable }` を返す（issue #296）。** 読めない行を
-  // 件数からもここからも消さないため、`unreadable` を別に持ち回り、下の節へ渡す。
+  // **`list()` は `{ entries, unreadable, trimmedClosed }` を返す
+  // （issue #296 / #416）。** 読めない行を件数からもここからも消さないため、
+  // `unreadable` を別に持ち回り、下の節へ渡す。`trimmedClosed`（保持上限を
+  // 超えて物理削除された片付き行の累計）も同じ理由で持ち回る——この節を
+  // 「この期間に片付けた仕事」の集計だと読む人に、fs 実装では歴史が
+  // `CLOSED_HISTORY_LIMIT` を超えた時点で古い期間の集計が静かに減っている
+  // ことを黙っていると、日報の材料としての信頼が静かに崩れる。
   const commitmentList = await stores.commitments.list();
   const commitments = commitmentList.entries;
   const unreadableCommitments = commitmentList.unreadable;
+  const trimmedClosedCount = commitmentList.trimmedClosed;
   // **片付けたものは期間で切る。** 未了と逆で、こちらは「この期間に何を終えたか」
   // だからである（日報の「今日何をしたか」の材料になる）。切らないと、日報が
   // 過去に片付けた分を毎日並べ直すことになる。
@@ -201,6 +207,11 @@ export async function buildActivityDigest(stores: Stores, window: DigestWindow):
     // 実際に取れている軸なので0を隠さない）。詳細は下の節（issue #296）。
     `- 読めない行（台帳が壊れている。片付いたのではない）: ${unreadableCommitments.length} 件`,
     `- この期間に片付けた仕事: ${settled.length} 件`,
+    // **0件でも出す**（`unreadableCommitments` の直上の行と同じ理由）。
+    // 保持上限を超えて物理削除された片付き行の累計（issue #416）。0件は
+    // 「削除が起きていない」であって「数えていない」ではない（`CommitmentList`
+    // の doc）。
+    `- 保持上限を超えて物理削除された片付き行（累計。この記憶ストアが最初から数えている分）: ${trimmedClosedCount} 件`,
   ];
 
   // **読めない行が在れば、件数と一緒に節を出す（issue #296）。** `commitments`

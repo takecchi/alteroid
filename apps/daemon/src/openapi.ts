@@ -432,6 +432,23 @@ export const commitmentListResponseSchema = z.object({
    */
   unreadable: z.array(unreadableCommitmentSchema),
   /**
+   * 保持上限を超えて物理削除された、片付いた行の累計件数（issue #416）。
+   *
+   * `CommitmentStore.list` が返す `CommitmentList.trimmedClosed`
+   * （`packages/core/src/store.ts`）をそのまま外へ出す——クローンの
+   * `commitment_list` が末尾に足す断りと同じ材料を、人間の側（Web UI・API を
+   * 直接叩く側）にも渡す。**理由は `unreadable` の直上の doc と同じ**（片方に
+   * しか無いと、人間が API で見た台帳とクローンが見る台帳が違うことになる）。
+   *
+   * **`unreadable` と同じく窓（`limit`/`cursor`）では切らない。** 頁ではなく
+   * 累計件数そのものなので、そもそも「切る」対象ではない。
+   *
+   * **契約を守れている実装（`storage-pg` / 現行の `storage-fs` 以外）は常に
+   * `0` を返す。** いまのところ `storage-fs` だけがこの値を増やしうる
+   * （`packages/core/src/store.ts` の `CommitmentList` の doc）。
+   */
+  trimmedClosed: z.number().int().nonnegative(),
+  /**
    * **`total` / `nextCursor` は頁の封筒（2026-08-25、人間の明示の「はい」を受けて
    * `limit`/`cursor` の opt-in で足した）。** `/approvals` の `total` / `nextCursor`
    * と同じ形——`limit` / `cursor` のいずれかを明示的に渡したときだけ載る。何も

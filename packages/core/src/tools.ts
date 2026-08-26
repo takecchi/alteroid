@@ -2169,13 +2169,17 @@ export function createCloneTools(context: ToolContext) {
         }
 
         // --- 一覧モード ---
-        // **`list()` は `{ entries, unreadable }` を返す（issue #296）。**
-        // 読める行（`entries`）が0件でも、読めない行（`unreadable`）だけは
-        // 在りうるので、「無い」と返してよいのは両方0件のときだけである。
-        const { entries, unreadable } = await stores.commitments.list(
+        // **`list()` は `{ entries, unreadable, trimmedClosed }` を返す
+        // （issue #296 / #416）。** 読める行（`entries`）が0件でも、読めない行
+        // （`unreadable`）だけは在りうるので、「無い」と返してよいのは3つとも
+        // 0件のときだけである。**`trimmedClosed` を外すと `unreadable` と同じ
+        // 形の穴が空く** — 開いている仕事も読めない行も無く、削除された片付き
+        // 行の履歴だけが在る状態で「無い」と返すと、削除された事実がいちばん
+        // 静かに握り潰される（issue #416）。
+        const { entries, unreadable, trimmedClosed } = await stores.commitments.list(
           includeClosed === true ? { includeClosed: true } : undefined,
         );
-        if (entries.length === 0 && unreadable.length === 0) {
+        if (entries.length === 0 && unreadable.length === 0 && trimmedClosed === 0) {
           return text('（引き受けたまま終わっていない仕事は無い）');
         }
         const items = entries.map((entry) =>
@@ -2237,6 +2241,17 @@ export function createCloneTools(context: ToolContext) {
             `**読めない行が ${unreadable.length} 件ある${
               ids.length > 0 ? `（id: ${ids.join(', ')}）` : ''
             }。片付いたのではない。**`,
+          );
+        }
+        // **保持上限を超えて物理削除された片付き行の累計も断る（issue #416）。**
+        // `unreadable` と同じ理由——ここが落ちると、削除された事実がクローンに
+        // 一切見えなくなる。**0件なら出さない**（常に出る断りは情報にならない。
+        // `unreadable` の分岐と同じ判定）。
+        if (trimmedClosed > 0) {
+          lines.push(
+            `**保持上限を超えて物理削除された片付き行が累計 ${trimmedClosed} 件ある。** ` +
+              'この記憶ストアは片付いた行を新しい順に一定件数までしか残さない。' +
+              '削除された分の内容はここでは二度と読めない（日誌側の記録が唯一の手掛かりになる）。',
           );
         }
         return text(lines.join('\n'));

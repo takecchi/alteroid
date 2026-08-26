@@ -440,6 +440,28 @@ export interface CommitmentList {
   entries: Commitment[];
   /** 読めなかった行。**「無い」でも「片付いた」でもない第3の状態。** */
   unreadable: UnreadableCommitment[];
+  /**
+   * `close()` の契約（「行は消さない」）を実装が守れなかった回数の累計 — 保持
+   * 上限を超えて物理削除された、片付いた行の件数（issue #416）。
+   *
+   * **`unreadable` と同じ理由で型に足す。** 削除という事象を件数やログではなく
+   * 型で持たせるのは、`CommitmentList` を受け取っておいて `unreadable` は読んで
+   * `trimmedClosed` は読み飛ばす、ということは書けても、このフィールドそのものが
+   * コンパイラの目に触れないことはできないからである。「合図が無い」
+   * （issue #416 の1点目）はこの欄が塞ぐ。
+   *
+   * **契約を守れている実装は常に `0` を返す。** いまのところ `storage-pg`
+   * （`PgCommitmentStore`）と in-memory（`packages/core/src/testing.ts`）が
+   * それで、`storage-fs`（`FsCommitmentStore`）だけが `CLOSED_HISTORY_LIMIT`
+   * （`packages/storage-fs/src/commitments.ts`）を超えた古い片付き行を物理削除
+   * するのでこの値を増やしうる。**0 は「削除を数えていない」ではなく「削除が
+   * 起きていない」を意味する** — 契約を守る実装には削除という事象自体が無い。
+   *
+   * **3実装の保持方針を揃えるかどうかは、この欄の追加では決まらない**
+   * （issue #416 のコメントに測った根拠を置いてある）。揃っていない事実を
+   * 隠さずに運ぶのがこの欄の役目であって、揃える判断そのものは別に要る。
+   */
+  trimmedClosed: number;
 }
 
 /**
@@ -489,8 +511,20 @@ export interface CommitmentStore {
   /**
    * 片付いたことを記録する。閉じたら `true`、無い id と既に閉じているものは `false`。
    *
-   * **行は消さない。** 消すと「何を片付けたか」が日報の材料から落ちる。人間が普段
-   * 読むのは日報だけである（PRD「可観測性」）。
+   * **契約は「行は消さない」である。** 消すと「何を片付けたか」が日報の材料から
+   * 落ちる。人間が普段読むのは日報だけである（PRD「可観測性」）。
+   *
+   * **⚠️ ただし `storage-fs`（`FsCommitmentStore`）はこの契約を完全には守れて
+   * いない（issue #416）。** fs 版は毎回ファイル全体を書き直す器なので、片付いた
+   * 行を無限に積むと1回の書き込み費用が台帳の齢に比例して増える——それを避ける
+   * ため `CLOSED_HISTORY_LIMIT`（`packages/storage-fs/src/commitments.ts`）件を
+   * 超えた古い片付き行を新しい順に切り詰め、超えた分は物理削除する（`trimClosed`）。
+   * **`storage-pg` と in-memory（`packages/core/src/testing.ts`）はこの上限を
+   * 持たず、契約どおり行を消さない。** 3実装の保持方針をどちらへ揃えるかは別途の
+   * 判断であって、この doc の修正だけでは揃わない。
+   * **実装が行を消したら、消した累計件数を `CommitmentList.trimmedClosed` で
+   * 申告すること** — 契約からの逸脱を型の外で握り潰さない（`CommitmentList`
+   * の doc）。
    *
    * **`by` は必須である。** optional にすると、呼び出し側が「誰が閉じたか」を
    * 決めずに通せてしまう — 実際には全ての呼び出し元（`commitment_close` ツール /

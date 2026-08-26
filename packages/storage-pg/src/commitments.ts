@@ -106,7 +106,13 @@ export class PgCommitmentStore implements CommitmentStore {
     // 見せると「未了の一覧」という前提が崩れる。fs 版は逆に、読めない行を
     // 常に未了扱いで安全側へ倒すため `includeClosed` の真偽に関わらず出す
     // （`storage-fs/src/commitments.ts` の doc に差を明記してある）。
-    if (options?.includeClosed !== true) return open;
+    //
+    // **`trimmedClosed` は常に `0`（issue #416）。** pg 版は片付いた行を
+    // 物理削除する経路を1つも持たない——`close()` の契約（「行は消さない」）
+    // を破っていないので、0 は「削除を数えていない」ではなく「削除が
+    // 起きていない」を正しく表す（`CommitmentList.trimmedClosed` の doc、
+    // `packages/core/src/store.ts`）。
+    if (options?.includeClosed !== true) return { ...open, trimmedClosed: 0 };
 
     const closedRows = await this.#db
       .select({ id: commitments.id, at: commitments.at, commitment: commitments.commitment })
@@ -117,6 +123,7 @@ export class PgCommitmentStore implements CommitmentStore {
     return {
       entries: [...open.entries, ...closed.entries],
       unreadable: [...open.unreadable, ...closed.unreadable],
+      trimmedClosed: 0,
     };
   }
 
@@ -161,6 +168,11 @@ export class PgCommitmentStore implements CommitmentStore {
 
   /**
    * 片付いたことを記録する。**行は消さない**（何を片付けたかが日報の材料から落ちる）。
+   *
+   * **ここは `CommitmentStore.close` の契約をそのまま守っている。** 保持上限も
+   * 削除経路も1つも持たないので、`list()` が返す `trimmedClosed` は常に `0`
+   * である。**fs 版（`storage-fs/src/commitments.ts`）はこの契約を守れていない
+   * ——`CLOSED_HISTORY_LIMIT` を超えた古い片付き行を物理削除する**（issue #416）。
    *
    * `where ... and closed_at is null` で「まだ閉じていない」の検査を更新そのものへ
    * 畳んである。読んでから書く形にすると、二重に届いた片付けが両方 `true` を返し、

@@ -346,6 +346,37 @@ describe('上限で切ったことを黙らない', () => {
     );
   });
 
+  /**
+   * 保持上限を超えて物理削除された片付き行の累計を digest の頭の集計に出す
+   * （issue #416）。**この節は「この期間に片付けた仕事」の集計をそのまま読む
+   * ものなので、fs 実装で歴史が `CLOSED_HISTORY_LIMIT` を超えた時点から古い
+   * 期間の集計が静かに減っている、という Issue 本文の指摘をここで塞ぐ。**
+   */
+  it('物理削除された片付き行の累計を頭の集計に出す（issue #416）', async () => {
+    const stores = createMemoryStores();
+    // 本物の memory store は `trimmedClosed` を常に0で返す（`testing.ts` の
+    // doc）ので、`list()` を差し替えて注入する。
+    const originalList = stores.commitments.list.bind(stores.commitments);
+    stores.commitments.list = async (options) => {
+      const base = await originalList(options);
+      return { ...base, trimmedClosed: 12 };
+    };
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    expect(digest).toContain('保持上限を超えて物理削除された片付き行');
+    expect(digest).toContain('12 件');
+  });
+
+  it('物理削除された片付き行が0件でも、その旨の行は出す（他の集計行と同じ扱い）', async () => {
+    const stores = createMemoryStores();
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    expect(digest).toContain(
+      '保持上限を超えて物理削除された片付き行（累計。この記憶ストアが最初から数えている分）: 0 件',
+    );
+  });
+
   // 日誌から作る節。**どれも同じ形で黙って切れていた**ので、節ごとに1本立てる
   // （1つのテストにまとめると、最初の1件で止まって残りが測れない）。
   // `label(i)` は、実際に出した件数を数えるための一意な部分文字列

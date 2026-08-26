@@ -1417,6 +1417,7 @@ describe('PgCommitmentStore', () => {
     expect(await stores.commitments.list()).toEqual({
       entries: [commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す')],
       unreadable: [],
+      trimmedClosed: 0,
     });
     expect((await stores.commitments.get('c-1'))?.body).toBe('PR を出す');
     expect(await stores.commitments.get('しらない')).toBeNull();
@@ -1429,7 +1430,11 @@ describe('PgCommitmentStore', () => {
       await stores.commitments.close('c-1', '2026-08-13T00:00:00.000Z', '#99 で出した', 'clone'),
     ).toBe(true);
 
-    expect(await stores.commitments.list()).toEqual({ entries: [], unreadable: [] });
+    expect(await stores.commitments.list()).toEqual({
+      entries: [],
+      unreadable: [],
+      trimmedClosed: 0,
+    });
     const all = (await stores.commitments.list({ includeClosed: true })).entries;
     expect(all).toHaveLength(1);
     // 列だけ直しても読み出しは jsonb からなので、クローンが見る側に入っていること
@@ -1605,7 +1610,11 @@ describe('PgCommitmentStore', () => {
       await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す')),
     ).toBe(false);
 
-    expect(await stores.commitments.list()).toEqual({ entries: [], unreadable: [] });
+    expect(await stores.commitments.list()).toEqual({
+      entries: [],
+      unreadable: [],
+      trimmedClosed: 0,
+    });
     expect((await stores.commitments.get('c-1'))?.closedAt).toBe('2026-08-13T00:00:00.000Z');
   });
 
@@ -1633,6 +1642,7 @@ describe('PgCommitmentStore', () => {
     expect(await stores.commitments.list({ includeClosed: true })).toEqual({
       entries: [],
       unreadable: [],
+      trimmedClosed: 0,
     });
   });
 
@@ -1678,7 +1688,11 @@ describe('PgCommitmentStore', () => {
     ]);
 
     expect(results.filter(Boolean)).toHaveLength(1);
-    expect(await stores.commitments.list()).toEqual({ entries: [], unreadable: [] });
+    expect(await stores.commitments.list()).toEqual({
+      entries: [],
+      unreadable: [],
+      trimmedClosed: 0,
+    });
   });
 
   /**
@@ -1725,6 +1739,38 @@ describe('PgCommitmentStore', () => {
     // 「無い」ことだけが null である
     expect(await stores.commitments.get('しらない')).toBeNull();
   });
+
+  /**
+   * **issue #416: pg 版は保持上限を持たず、`close()` の契約（「行は消さない」）を
+   * そのまま守る。** fs 版（`packages/storage-fs/src/index.test.ts` の
+   * 「閉じた行は上限で切られるが、未了は件数によらず1件も落ちない」）は
+   * `CLOSED_HISTORY_LIMIT`（`packages/storage-fs/src/commitments.ts` で
+   * 500 件）を超えると古い片付き行を物理削除するが、pg 版にはその経路が
+   * 無い——ここでは fs 版の上限を明確に超える件数（501件。fs 版のテストと
+   * パッケージを跨いで定数を共有すると結合が生まれるので、値はここへ複製する）
+   * を片付けても、1件も落ちず `trimmedClosed` が常に `0` のままであることを問う。
+   */
+  it('片付いた行を fs 版の保持上限を超えて積んでも、1件も落ちず trimmedClosed は 0 のまま', async () => {
+    const COUNT = 501;
+    for (let index = 0; index < COUNT; index += 1) {
+      const id = `closed-${String(index).padStart(4, '0')}`;
+      await stores.commitments.open(
+        commitment(id, '2026-08-01T00:00:00.000Z', `片付ける ${index}`),
+      );
+      await stores.commitments.close(
+        id,
+        new Date(Date.UTC(2026, 7, 2, 0, 0, 0) + index * 1000).toISOString(),
+        `片付けた ${index}`,
+        'clone',
+      );
+    }
+
+    const listed = await stores.commitments.list({ includeClosed: true });
+    expect(listed.entries).toHaveLength(COUNT);
+    expect(listed.trimmedClosed).toBe(0);
+    // 最初に片付けたもの（fs 版なら物理削除されている側）もまだ読める。
+    expect(await stores.commitments.get('closed-0000')).not.toBeNull();
+  }, 60_000);
 });
 
 /**

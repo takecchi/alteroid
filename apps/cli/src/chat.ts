@@ -1016,7 +1016,13 @@ export async function runSlashCommand(
      * いなくても片付いていない仕事はあるので、片方で他方は代用できない。
      *
      * 既定では未了だけを出す。`all` で片付けたものも出すのは、日報の材料に
-     * なるのが「何を片付けたか」の側だからである（器は行を消さない）。
+     * なるのが「何を片付けたか」の側だからである。
+     *
+     * **⚠️ 「器は行を消さない」は契約であって、fs 版が完全に守れているわけ
+     * ではない（issue #416）。** `CLOSED_HISTORY_LIMIT`（`packages/storage-fs/
+     * src/commitments.ts`）を超えた古い片付き行は物理削除される。削除された
+     * 累計件数は `trimmedClosed` として応答に載るので、`renderCommitments` へ
+     * 渡して人間にも見える形にする。
      */
     case '/commitments': {
       const includeClosed = rest[0] === 'all';
@@ -1027,8 +1033,8 @@ export async function runSlashCommand(
         stdout.write('台帳を読めませんでした\n');
         return 'ok';
       }
-      const { entries, unreadable } = await response.json();
-      const { text, ids } = renderCommitments(entries, Date.now(), unreadable);
+      const { entries, unreadable, trimmedClosed } = await response.json();
+      const { text, ids } = renderCommitments(entries, Date.now(), unreadable, trimmedClosed);
       listed.commitments.length = 0;
       listed.commitments.push(...ids);
       stdout.write(`${text}\n`);
@@ -1686,6 +1692,21 @@ function renderUnreadableNotice(unreadable: UnreadableCommitment[]): string {
 }
 
 /**
+ * 保持上限を超えて物理削除された片付き行の断り（issue #416）。0件なら空文字。
+ *
+ * **`renderUnreadableNotice` と同じ形にする。** どちらも `CommitmentList`
+ * （`packages/core/src/store.ts`）の「無い」でも「片付いた」でもない状態を運ぶ
+ * ——`unreadable` は読めなかった行、こちらは既に消えた行という違いだけである。
+ */
+function renderTrimmedClosedNotice(trimmedClosed: number): string {
+  if (trimmedClosed === 0) return '';
+  return (
+    `  ⚠ 保持上限を超えて物理削除された片付き行が累計 ${trimmedClosed} 件あります。` +
+    '削除された分の内容はここでは二度と読めません。'
+  );
+}
+
+/**
  * 台帳を、人間が読む形へ（`/commitments`）。
  *
  * **番号と id の対応をここで一緒に作って返す。** 表示側と `/done` 側で別々に
@@ -1699,6 +1720,7 @@ export function renderCommitments(
   commitments: Commitment[],
   now: number = Date.now(),
   unreadable: UnreadableCommitment[] = [],
+  trimmedClosed = 0,
 ): { text: string; ids: string[] } {
   // **読めない行の断りを、読める行が0件のときも出す（issue #296）。** これを
   // 下の早期 return より後ろへ置くと、台帳が読めない行だけになったときに
@@ -1710,21 +1732,24 @@ export function renderCommitments(
   // （`apps/web/app/routes/commitments.tsx` の `UnreadableNote`）と
   // クローン（`packages/core/src/tools.ts` の `commitment_list`）にだけ在って
   // ここに無いと、**CLI で台帳を読んだ人間だけが、読めない行の存在を知らない。**
-  const notice = renderUnreadableNotice(unreadable);
+  // **保持上限の削除（issue #416）も同じ理由で同じ扱いにする。**
+  const notices = [renderUnreadableNotice(unreadable), renderTrimmedClosedNotice(trimmedClosed)]
+    .filter((line) => line !== '')
+    .join('\n');
 
   if (commitments.length === 0) {
     return {
       text:
-        notice === ''
+        notices === ''
           ? '（引き受けたまま終わっていない仕事はありません）'
-          : `${notice}\n（読める行は無い）`,
+          : `${notices}\n（読める行は無い）`,
       ids: [],
     };
   }
 
   const lines: string[] = [];
   const ids: string[] = [];
-  if (notice !== '') lines.push(notice);
+  if (notices !== '') lines.push(notices);
 
   commitments.forEach((commitment, index) => {
     ids.push(commitment.id);

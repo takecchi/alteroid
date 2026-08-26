@@ -6007,6 +6007,7 @@ describe('commitment_list は読めない行を隠さない（issue #296）', ()
             unreadable: [
               { id: 'c-broken-1', at: '2026-08-01T00:00:00.000Z', reason: '型が合わない' },
             ],
+            trimmedClosed: 0,
           };
         },
       },
@@ -6062,6 +6063,7 @@ describe('commitment_list は読めない行を隠さない（issue #296）', ()
               // id が取れない行（fs 版で本体が id を持たない生の値のとき）。
               { reason: 'id も取れない行' },
             ],
+            trimmedClosed: 0,
           };
         },
       },
@@ -6079,6 +6081,92 @@ describe('commitment_list は読めない行を隠さない（issue #296）', ()
     expect(reply).toContain('読めない行が 2 件ある');
     // id が取れた分だけが (id: ...) に出る。
     expect(reply).toContain('（id: c-broken-1）');
+  });
+});
+
+/**
+ * issue #416（1点目：「合図が無い」）。`storage-fs` は保持上限を超えた古い
+ * 片付き行を物理削除するのに、その事実を運ぶ場所が出力にも型にも無かった。
+ * `CommitmentList.trimmedClosed` を足したので、`commitment_list` の一覧末尾に
+ * 累計件数が出ることを固定する——**ここが落ちると、削除された事実がクローンに
+ * 一切見えなくなる。**
+ *
+ * `createMemoryStores()` は物理削除を再現できない（`testing.ts` は常に
+ * `trimmedClosed: 0`）ので、`unreadable` のテストと同じ作法で
+ * `stores.commitments.list` を差し替えて模す。
+ */
+describe('commitment_list は物理削除された片付き行を隠さない（issue #416）', () => {
+  it('一覧の末尾に「保持上限を超えて物理削除された片付き行が累計 N 件ある」が出る', async () => {
+    const stores = createMemoryStores();
+    const withTrimmed: Stores = {
+      ...stores,
+      commitments: {
+        ...stores.commitments,
+        async list(options) {
+          const base = await stores.commitments.list(options);
+          return { ...base, trimmedClosed: 7 };
+        },
+      },
+    };
+    const tools = createCloneTools({
+      stores: withTrimmed,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+    });
+    const opened = tools.find((entry) => entry.name === 'commitment_open');
+    await opened?.handler({ body: '健全な依頼' } as never, {});
+
+    const found = tools.find((entry) => entry.name === 'commitment_list');
+    const result = await found?.handler({} as never, {});
+    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+
+    expect(reply).toContain('保持上限を超えて物理削除された片付き行が累計 7 件ある');
+  });
+
+  /**
+   * **いちばん危ない状態が、いちばん安心な文言で出る形を塞ぐ（`unreadable` の
+   * 同種のテストと同じ理由）。** 開いている仕事も読めない行も無く、削除された
+   * 片付き行の履歴だけが在る状態で「無い」と返すと、削除された事実が
+   * いちばん静かに握り潰される。
+   */
+  it('読める行・読めない行が0件でも、物理削除された片付き行が在れば「無い」とは言わない', async () => {
+    const stores = createMemoryStores();
+    const withTrimmed: Stores = {
+      ...stores,
+      commitments: {
+        ...stores.commitments,
+        async list() {
+          return { entries: [], unreadable: [], trimmedClosed: 2 };
+        },
+      },
+    };
+    const tools = createCloneTools({
+      stores: withTrimmed,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+    });
+    const found = tools.find((entry) => entry.name === 'commitment_list');
+    const result = await found?.handler({} as never, {});
+    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+
+    expect(reply).not.toBe('（引き受けたまま終わっていない仕事は無い）');
+    expect(reply).toContain('保持上限を超えて物理削除された片付き行が累計 2 件ある');
+  });
+
+  it('0件のときは断りを足さない', async () => {
+    const tools = createCloneTools({
+      stores: createMemoryStores(),
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+    });
+    const opened = tools.find((entry) => entry.name === 'commitment_open');
+    await opened?.handler({ body: '健全な依頼' } as never, {});
+
+    const found = tools.find((entry) => entry.name === 'commitment_list');
+    const result = await found?.handler({} as never, {});
+    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+
+    expect(reply).not.toContain('物理削除された');
   });
 });
 

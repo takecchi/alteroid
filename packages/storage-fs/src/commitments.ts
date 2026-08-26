@@ -27,9 +27,17 @@ import { z } from 'zod';
  * **行ごとに読むためには、まず「行の形をここでは決めない」ところまで緩めて
  * 読み込む必要がある。** 要素の妥当性は `splitFileRows`（下）が
  * `commitmentSchema.safeParse` で行ごとに判定する。
+ *
+ * **`trimmedClosedCount` は `trimClosed`（下）が物理削除した片付き行の累計件数
+ * （issue #416）。** 削除はプロセスをまたいで起き続けるので、`CommitmentList.
+ * trimmedClosed`（`packages/core/src/store.ts`）として申告するにはディスク側に
+ * 持たせて読み書きのたびに引き継ぐ必要がある。**古いファイル（この欄がまだ無い
+ * 版で書かれたもの）は `default(0)` で読める** — 「無いなら0件削除」であって、
+ * それより前に切り詰められた分を遡って数え直すことはできない。
  */
 const rawFileSchema = z.object({
   commitments: z.array(z.unknown()).default([]),
+  trimmedClosedCount: z.number().int().nonnegative().default(0),
 });
 
 /**
@@ -57,8 +65,16 @@ type UnreadableRow = { value: unknown; id?: string; at?: string; reason: string 
  * 1本の配列）とは別**であることに注意 — 読めた行と読めなかった行を分けて
  * 持つことで、`list()` / `get()` / `open()` の判定を型で書けるようにする。
  * ディスクへ戻すときは `#update` が両方をまた1本の配列へ合成する。
+ *
+ * **`trimmedClosedCount` は `rawFileSchema` の同名欄をそのまま引き継ぐ
+ * （issue #416）。** `trimClosed` が削除するたびに増やし、`toDiskShape` で
+ * また書き戻す — 累計なので、読んで書いてを繰り返すあいだ1度も減らない。
  */
-type CommitmentFile = { entries: Commitment[]; unreadable: UnreadableRow[] };
+type CommitmentFile = {
+  entries: Commitment[];
+  unreadable: UnreadableRow[];
+  trimmedClosedCount: number;
+};
 
 /**
  * `UnreadableRow`（書き戻し用の内部表現。`value` を持つ）を、公開する形
@@ -93,8 +109,12 @@ function stringFieldOf(value: unknown, key: 'id' | 'at'): string | undefined {
  * **`commitmentSchema.safeParse` を使う ＝ 1行が合わなくても投げない。**
  * ファイル全体を `parse` していた旧実装と違い、ここで落ちるのは1行の
  * 判定であって読み込みそのものではない。
+ *
+ * **`trimmedClosedCount` は持ち回らない。** ここが振り分けるのは `commitments`
+ * 配列の行だけで、削除の累計件数は別欄（`rawFileSchema.trimmedClosedCount`）
+ * にある。呼び出し側（`#read`）が合成する。
  */
-function splitFileRows(rows: unknown[]): CommitmentFile {
+function splitFileRows(rows: unknown[]): Omit<CommitmentFile, 'trimmedClosedCount'> {
   const entries: Commitment[] = [];
   const unreadable: UnreadableRow[] = [];
   for (const value of rows) {
@@ -135,9 +155,18 @@ function splitFileRows(rows: unknown[]): CommitmentFile {
  * どのみち `at` / `closedAt` で並べ直すので実害は無く、人間が
  * `commitments.json` を直接開いて読む場合も、失われるのは「どちらが先に
  * 積まれたか」という見た目の情報だけである。
+ *
+ * **`trimmedClosedCount` も書き戻す（issue #416）。** 累計件数なので、ここを
+ * 落とすと次回の起動で0へ戻り、それまでの削除が無かったことになる。
  */
-function toDiskShape(file: CommitmentFile): { commitments: unknown[] } {
-  return { commitments: [...file.entries, ...file.unreadable.map((row) => row.value)] };
+function toDiskShape(file: CommitmentFile): {
+  commitments: unknown[];
+  trimmedClosedCount: number;
+} {
+  return {
+    commitments: [...file.entries, ...file.unreadable.map((row) => row.value)],
+    trimmedClosedCount: file.trimmedClosedCount,
+  };
 }
 
 /**
@@ -203,13 +232,21 @@ export class FsCommitmentStore implements CommitmentStore {
     // 呼び出し側が実行時にアクセスできてしまう。`dropped-record.ts` の
     // 「本文を出さない」制約はログだけでなく、この型の境界でも保つ。
     const unreadable = file.unreadable.map(toPublicUnreadable);
+    // **`trimmedClosed` は毎回 `file.trimmedClosedCount` をそのまま出す
+    // （issue #416）。** `includeClosed` の真偽に関わらず同じ値 — 削除は
+    // 過去に一度でも起きていれば増えている事実であって、いま何を見せるか
+    // という絞り込みとは別の軸だからである（`unreadable` と同じ扱い）。
     if (options?.includeClosed !== true) {
-      return { entries: open, unreadable };
+      return { entries: open, unreadable, trimmedClosed: file.trimmedClosedCount };
     }
     const closed = file.entries
       .filter((entry) => entry.closedAt !== undefined)
       .sort((a, b) => (b.closedAt ?? '').localeCompare(a.closedAt ?? ''));
-    return { entries: [...open, ...closed], unreadable };
+    return {
+      entries: [...open, ...closed],
+      unreadable,
+      trimmedClosed: file.trimmedClosedCount,
+    };
   }
 
   /**
@@ -261,6 +298,7 @@ export class FsCommitmentStore implements CommitmentStore {
         next: trimClosed({
           entries: [...file.entries, commitmentSchema.parse(entry)],
           unreadable: file.unreadable,
+          trimmedClosedCount: file.trimmedClosedCount,
         }),
         result: true,
       };
@@ -268,7 +306,16 @@ export class FsCommitmentStore implements CommitmentStore {
   }
 
   /**
-   * 片付いたことを記録する。**行は消さない**（何を片付けたかが日報の材料から落ちる）。
+   * 片付いたことを記録する。
+   *
+   * **⚠️ `CommitmentStore.close` の契約（「行は消さない」）をここは完全には
+   * 守れていない（issue #416）。** ここが記録した片付き行は、`trimClosed`
+   * （このファイル下部）が `CLOSED_HISTORY_LIMIT`（500件）を超えた古い側から
+   * 新しい順に物理削除する。理由は fs 版が毎回ファイル全体を書き直す器だから
+   * である——片付いた行を無限に積むと1回の書き込み費用が台帳の齢に比例して
+   * 増えていく。**削除した累計件数は捨てずに `trimmedClosedCount` として持ち
+   * 回り、`list()` が `CommitmentList.trimmedClosed` として外へ出す** ——
+   * 契約から逸脱した事実そのものは、少なくとも合図としては消さない。
    *
    * ここも「読む→既に閉じていないか見る→書く」を同じ排他区間で行う。分けると、
    * 二重に届いた片付けが両方 `true` を返し、呼び出し側が「いま自分が閉じた」と
@@ -318,6 +365,7 @@ export class FsCommitmentStore implements CommitmentStore {
               : entry,
           ),
           unreadable: file.unreadable,
+          trimmedClosedCount: file.trimmedClosedCount,
         }),
         result: true,
       };
@@ -328,10 +376,13 @@ export class FsCommitmentStore implements CommitmentStore {
     try {
       const raw = await readFile(this.#path, 'utf8');
       const parsed = rawFileSchema.parse(JSON.parse(raw));
-      return splitFileRows(parsed.commitments);
+      return {
+        ...splitFileRows(parsed.commitments),
+        trimmedClosedCount: parsed.trimmedClosedCount,
+      };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT')
-        return { entries: [], unreadable: [] };
+        return { entries: [], unreadable: [], trimmedClosedCount: 0 };
       throw error;
     }
   }
@@ -377,6 +428,11 @@ export class FsCommitmentStore implements CommitmentStore {
  * **読めない行（`unreadable`）も1件も切らない（issue #296）。** `closedAt` が
  * そもそも読めていない以上、片付いたと見なす根拠が無い — 未了の行と同じ扱いで、
  * 上限にも `CLOSED_HISTORY_LIMIT` の計算にも入れない。
+ *
+ * **切った件数は捨てず `trimmedClosedCount` へ足す（issue #416）。** ここが
+ * `CommitmentStore.close` の契約（「行は消さない」）を破る唯一の場所であり、
+ * 破った回数の累計をここでしか数えられない——`list()` を呼んだ時点では、
+ * 既に削除された行がいつ・何件消えたかを逆算する材料がどこにも残っていない。
  */
 function trimClosed(file: CommitmentFile): CommitmentFile {
   const closed = file.entries.filter((entry) => entry.closedAt !== undefined);
@@ -388,8 +444,10 @@ function trimClosed(file: CommitmentFile): CommitmentFile {
       .slice(0, CLOSED_HISTORY_LIMIT)
       .map((entry) => entry.id),
   );
+  const removed = closed.length - kept.size;
   return {
     entries: file.entries.filter((entry) => entry.closedAt === undefined || kept.has(entry.id)),
     unreadable: file.unreadable,
+    trimmedClosedCount: file.trimmedClosedCount + removed,
   };
 }
