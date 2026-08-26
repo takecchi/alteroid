@@ -78,9 +78,10 @@ describe('実ビルドの検査（apps/web/build/client/assets/*.css）', () => 
       .map((name) => join(ASSETS_DIR, name))
       .filter((path) => statSync(path).isFile() && path.endsWith('.css'));
 
-    expect(cssPaths.length, `${ASSETS_DIR} に .css が1つも無い（build が壊れていないか）`).toBeGreaterThan(
-      0,
-    );
+    expect(
+      cssPaths.length,
+      `${ASSETS_DIR} に .css が1つも無い（build が壊れていないか）`,
+    ).toBeGreaterThan(0);
 
     const files = cssPaths.map((path) => ({ path, content: readFileSync(path, 'utf8') }));
     const hits = findInvalidCssHits(files);
@@ -88,7 +89,10 @@ describe('実ビルドの検査（apps/web/build/client/assets/*.css）', () => 
     expect(
       hits,
       hits
-        .map((h: { path: string; pattern: string; snippet: string }) => `${h.path} : ${h.pattern}\n  …${h.snippet}…`)
+        .map(
+          (h: { path: string; pattern: string; snippet: string }) =>
+            `${h.path} : ${h.pattern}\n  …${h.snippet}…`,
+        )
         .join('\n'),
     ).toEqual([]);
   });
