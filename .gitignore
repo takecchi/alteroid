@@ -41,6 +41,14 @@ packages/core/src/generated
 # compose の既定の作業ディレクトリ（マネージャーが実際に触る場所）
 workspace
 
+# 変異試験（`.claude/skills/mutation-testing/`）が走っているあいだ、リポジトリ直下に
+# 現れる控えと印。道具の側が実際にこの2つを作る
+# （`grep -Fn -- 'export const MARKER_PATH' .claude/skills/mutation-testing/mutate-core.mjs`）。
+# **いま汚染が起きているのではない。将来そこが開くことへの備えである** — 無視していないと、
+# 変異試験の最中に `git add -A` が控えと印を巻き込む。
+.mutation-testing
+MUTATION-IN-PROGRESS.json
+
 # misc
 *.log
 .DS_Store
