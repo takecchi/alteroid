@@ -5905,9 +5905,13 @@ describe('workspacePath を一度も聞けていない runner への cwd 省略�
     } catch (error) {
       caught = error;
     }
+    // **真因（workspacePath 未取得）を名指ししていることを見る。** 文言自体は
+    // 「cwd の形が不正なのではない」とも明示している（誤読防止）ので、
+    // 「cwd の形」という部分文字列そのものを禁止する assertion は立てない
+    // ——それを立てると、この否定の一文自体に引っかかって自己矛盾する
+    // （実際に CI で踏んだ）。ここで測るべきは「workspacePath という真因が
+    // 出ているか」であって「cwd という語が出ていないか」ではない。
     expect(String(caught)).toContain('workspacePath をまだ一度も聞けていない');
-    // **「cwd の形が不正」という runner 側の文言ではないこと自体も見る。**
-    expect(String(caught)).not.toContain('cwd の形');
 
     // **managerId を1つも消費していない。** ここで断らずに `runner.start()` まで
     // 進んでいたら、そちらが投げた時点で `#claimManagerId()` が発行した id は
@@ -5972,8 +5976,11 @@ describe('workspacePath を一度も聞けていない runner への cwd 省略�
 
     const result = await s.pool.send(id, '続けて');
     expect(result.outcome).toBe('unknown');
+    // **真因（workspacePath 未取得）を名指ししていることを見る。** 上の
+    // `start()` の歯と同じ理由で「cwd の形」という部分文字列そのものを
+    // 禁止する assertion は立てない（文言が「cwd の形が不正なのではない」と
+    // 明示するため、その否定文自体に引っかかって自己矛盾する）。
     expect(result.detail).toContain('workspacePath を一度も聞けていない');
-    expect(result.detail).not.toContain('cwd の形');
 
     // **resume が実際には呼ばれていないことも見る。** `cwd: ''` を組み立てて
     // runner へ渡していれば、ここが1件以上になる。
