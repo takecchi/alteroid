@@ -252,6 +252,7 @@ export {
   JOURNAL_SEARCH_FIELDS,
   journalSearchText,
   matchesJournalSearch,
+  type JournalSearchTarget,
 } from './journal-search.js';
 /**
  * `JournalStore` の `q`（本文を語で探す）の契約（issue #250）。3実装

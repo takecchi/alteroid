@@ -1054,7 +1054,6 @@ describe('PgJournalStore', () => {
       await verifyJournalStoreSearchContract(stores.journal);
     });
   });
-
 });
 
 describe('PgJobStore', () => {

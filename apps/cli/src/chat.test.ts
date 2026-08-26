@@ -1430,7 +1430,9 @@ describe('chat の /journal', () => {
 
     await runSlashCommand('/journal q=トマト', client, emptyListed());
 
-    expect(calls).toEqual([{ route: 'GET /journal', args: { query: { limit: '20', q: 'トマト' } } }]);
+    expect(calls).toEqual([
+      { route: 'GET /journal', args: { query: { limit: '20', q: 'トマト' } } },
+    ]);
   });
 
   /**
@@ -1455,7 +1457,9 @@ describe('chat の /journal', () => {
 
     await runSlashCommand('/journal 50 q=トマト', client, emptyListed());
 
-    expect(calls).toEqual([{ route: 'GET /journal', args: { query: { limit: '50', q: 'トマト' } } }]);
+    expect(calls).toEqual([
+      { route: 'GET /journal', args: { query: { limit: '50', q: 'トマト' } } },
+    ]);
   });
 
   it('q= を渡さない既存の呼びは1文字も変わらない', async () => {

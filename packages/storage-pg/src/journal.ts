@@ -247,7 +247,8 @@ function journalSearchMatches(q: string): SQL {
 function journalSearchTextSql(): SQL {
   return sql.join(
     JOURNAL_SEARCH_FIELDS.map(
-      (field) => sql`coalesce(${journal.entry}->>${sql.raw(`'${assertPlainFieldName(field)}'`)}, '')`,
+      (field) =>
+        sql`coalesce(${journal.entry}->>${sql.raw(`'${assertPlainFieldName(field)}'`)}, '')`,
     ),
     sql` || chr(10) || `,
   );

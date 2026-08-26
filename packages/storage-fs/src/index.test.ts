@@ -1295,7 +1295,6 @@ describe('FsJournalStore', () => {
       await verifyJournalStoreSearchContract(stores.journal);
     });
   });
-
 });
 
 describe('FsJobStore', () => {

@@ -2299,7 +2299,9 @@ describe('GET /journal の q（issue #250）', () => {
       text: 'TOMATO とも書く',
     });
 
-    const hit = (await (await app.request(`/journal?q=${encodeURIComponent('トマト')}`)).json()) as {
+    const hit = (await (
+      await app.request(`/journal?q=${encodeURIComponent('トマト')}`)
+    ).json()) as {
       entries: { type: string }[];
     };
     expect(hit.entries).toHaveLength(1);
@@ -2362,10 +2364,9 @@ describe('GET /journal の q（issue #250）', () => {
   it('q を渡しても応答の鍵は増えない', async () => {
     await stores.journal.append({ type: 'decision', decision: 'トマト', grounds: 'g' });
 
-    const body = (await (await app.request(`/journal?q=${encodeURIComponent('トマト')}`)).json()) as Record<
-      string,
-      unknown
-    >;
+    const body = (await (
+      await app.request(`/journal?q=${encodeURIComponent('トマト')}`)
+    ).json()) as Record<string, unknown>;
     expect(Object.keys(body)).toEqual(['entries']);
   });
 });

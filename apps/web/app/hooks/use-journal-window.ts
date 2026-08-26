@@ -23,6 +23,7 @@
  * リセットする」の形そのもの
  * （https://react.dev/learn/you-might-not-need-an-effect#resetting-all-state-when-a-prop-changes）。
  */
+import { matchesJournalSearch } from '@alteroid/core/journal-search';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useJournalFeed } from '~/hooks/journal-feed';
@@ -43,6 +44,7 @@ export const JOURNAL_PAGE = 100;
 interface JournalQueryParams {
   limit: number;
   type?: string;
+  q?: string;
   since?: string;
   until?: string;
 }
@@ -91,7 +93,17 @@ export interface JournalWindow {
   prepended: boolean;
 }
 
-export function useJournalWindow(selected: readonly JournalEntryType[]): JournalWindow {
+/**
+ * @param q 本文を語で探す（issue #250）。**空文字列は「絞らない」**
+ *   （`matchesJournalSearch` の doc）。**サーバへ投げる** —— 画面側で捨てると
+ *   「出していないだけ」の層ができる（このファイルの `buildQuery`、および
+ *   `journal.tsx` の「絞り込みはサーバに投げる」の逐語）。**呼び出し側で
+ *   debounce してから渡すこと**（打鍵ごとに撃たない。`journal.tsx` が持つ）。
+ *
+ *   **`q` が変わったら呼び出し側で `key` を変えて丸ごと作り直すこと**
+ *   （`selected` と同じ理由。このファイル冒頭の doc）。
+ */
+export function useJournalWindow(selected: readonly JournalEntryType[], q = ''): JournalWindow {
   const api = useApi();
   const { recent } = useJournalFeed();
   const joined = selected.join(',');
@@ -132,9 +144,13 @@ export function useJournalWindow(selected: readonly JournalEntryType[]): Journal
     (limit: number, extra?: { since?: string; until?: string }): JournalQueryParams => ({
       limit,
       ...(joined === '' ? {} : { type: joined }),
+      // **空のときは渡さない。** デーモン側は `q=`（空）も「絞らない」に
+      // 倒すので結果は同じだが（`app.ts` の `journalQuery` の `q`）、
+      // 渡さないほうが「絞っていない」という意図がクエリ文字列に出る。
+      ...(q === '' ? {} : { q }),
       ...extra,
     }),
-    [joined],
+    [joined, q],
   );
 
   // --- 初期読み込み（マウント時に1回）--------------------------------------
@@ -206,8 +222,22 @@ export function useJournalWindow(selected: readonly JournalEntryType[]): Journal
   // --- 新着方向（先頭へ）。SSE の recent を主経路として重ね、
   //     取りこぼし確認（since の撃ち直し）を補う ------------------------
   useEffect(() => {
-    const filtered =
-      selected.length === 0 ? recent : recent.filter((e) => selected.includes(e.type));
+    // **SSE で届く新着にも、いま画面に掛かっている絞りを同じだけ掛ける。**
+    // 掛けないと、検索中の画面へ当たらない行が割り込む（＝画面が「その語で
+    // 探した結果」でなくなる）。**照合は `@alteroid/core/journal-search` の
+    // 1つの実装を通す** —— 欄の一覧をここへ書き写すと、サーバ側と画面側で
+    // 「当たる」の意味が静かにずれる（`journal-search.ts` の doc）。
+    //
+    // **`@alteroid/core` 本体からではなく `/journal-search` から取ること。**
+    // 本体から**値**を import すると、サーバ専用のドメイン層ごとブラウザ
+    // バンドルへ入る（#294 / #306 で `/commitments` が 1.2MB になり本番で
+    // 開けなくなった。`routes/commitments.tsx` の doc）。この口は実行時の
+    // 依存を1つも持たない（`packages/core/tsup.config.ts`）。
+    const filtered = recent.filter(
+      (e) =>
+        (selected.length === 0 || selected.includes(e.type)) &&
+        (q === '' || matchesJournalSearch(e, q)),
+    );
     if (filtered.length === 0) return;
     const applied = applyNewerPage(entriesRef.current, filtered, filtered.length);
     if (applied.freshCount === 0) return;
@@ -218,7 +248,7 @@ export function useJournalWindow(selected: readonly JournalEntryType[]): Journal
     setNewerBlocked(false);
     // `selected` は呼び出し側の state 配列そのもの（toggle のたびに新しい
     // 参照になる）なので依存に入れてよい。`joined` と二重には持たない。
-  }, [recent, selected]);
+  }, [recent, selected, q]);
 
   function refreshNewerAt(limit: number): void {
     const since = newestAt(entriesRef.current);

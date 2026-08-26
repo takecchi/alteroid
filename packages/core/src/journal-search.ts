@@ -1,4 +1,20 @@
-import type { JournalEntry, JournalEntryType } from './schema.js';
+import type { JournalEntryType } from './schema.js';
+
+/**
+ * 照合にかける日誌1件。**`JournalEntry` そのものではなく、構造で受ける。**
+ *
+ * この口は4口すべてが通る（issue #250）が、`apps/web` が持っている日誌の型は
+ * `@alteroid/core` の `JournalEntry` ではなく **OpenAPI から生成した
+ * `@alteroid/api-client` の型**である（`apps/web/app/lib/types.ts`）。同じ形の
+ * 別の型なので、`JournalEntry` で受けると **web だけがキャストを書くことに
+ * なる** —— キャストは「本当に同じ形か」を誰も検算しないまま黙らせる。
+ *
+ * **この関数が実際に必要としているのは「文字列の欄を名前で引けること」だけ**
+ * なので、必要なぶんだけを型で言う。**どの欄を見るかの安全は
+ * `SEARCHABLE_FIELDS_BY_TYPE` の `satisfies Record<JournalEntryType, …>` が
+ * 持っていて、そちらは1文字も緩めていない。**
+ */
+export type JournalSearchTarget = Readonly<Record<string, unknown>>;
 
 /**
  * 日誌を語で探す（`JournalQuery.q`。issue #250）ときに、**どの欄を本文として
@@ -108,10 +124,9 @@ export const JOURNAL_SEARCH_FIELDS: readonly string[] = [
  * 何かしらの文字列を作れてしまい、pg 側（`->>` は JSON 値のテキスト化）と
  * ずれる。**作れてしまう側を先に塞いでおく。**
  */
-export function journalSearchText(entry: JournalEntry): string {
-  const record = entry as unknown as Record<string, unknown>;
+export function journalSearchText(entry: JournalSearchTarget): string {
   return JOURNAL_SEARCH_FIELDS.map((field) => {
-    const value = record[field];
+    const value = entry[field];
     return typeof value === 'string' ? value : '';
   }).join('\n');
 }
@@ -131,6 +146,6 @@ export function journalSearchText(entry: JournalEntry): string {
  * **画面の都合でもこちら側が正しい。** 検索欄を空にした人が見たいのは
  * 「0件」ではなく「絞っていない一覧」である。
  */
-export function matchesJournalSearch(entry: JournalEntry, q: string): boolean {
+export function matchesJournalSearch(entry: JournalSearchTarget, q: string): boolean {
   return journalSearchText(entry).toLowerCase().includes(q.toLowerCase());
 }

@@ -42,6 +42,7 @@
  */
 import { JOURNAL_ENTRY_TYPES } from '@alteroid/core';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { JournalFeedProvider } from '~/hooks/journal-feed';
@@ -133,14 +134,29 @@ const TURN_USAGE: JournalEntry = {
   },
 };
 
-function renderJournal(live: JournalLive) {
-  return render(
+/**
+ * **Router で包む（issue #250）。** `Journal` は検索語の正本を URL に置く
+ * （`useSearchParams`）ので、Router 無しでは描けなくなった。形は
+ * `dashboard.test.tsx` / `memory-detail.test.tsx` と同じ `createMemoryRouter`
+ * + `RouterProvider`。
+ *
+ * **`router` を返すのは、検索語が URL に載ったことを読むためである**
+ * （`router.state.location.search`）。画面の state を覗くのではなく URL を
+ * 見ることで、「開き直しても・共有しても同じ検索が再現できる」という
+ * 主張そのものを測れる。
+ */
+function renderJournal(live: JournalLive, initialEntries: string[] = ['/']) {
+  const router = createMemoryRouter([{ path: '/', Component: Journal }], {
+    initialEntries,
+  });
+  const result = render(
     <Providers>
       <JournalFeedProvider value={live}>
-        <Journal />
+        <RouterProvider router={router} />
       </JournalFeedProvider>
     </Providers>,
   );
+  return { ...result, router };
 }
 
 let originalFetch: typeof fetch;
@@ -475,5 +491,162 @@ describe('もっと遡る（過去方向のカーソル送り）', () => {
     // JOURNAL_MAX_LIMIT を素通しする変異（limit を上げずに撃ち直す）だと
     // ここが '100' のままになり落ちる。
     expect(new URL(thirdCall).searchParams.get('limit')).toBe('1000');
+  });
+});
+
+/**
+ * 日誌画面の検索欄（issue #250。**4口のうち Web UI のぶん**）。
+ *
+ * ここで測るのは3つ。**サーバへ投げること**（画面側で捨てない）、**打鍵ごとに
+ * 撃たないこと**（debounce）、**検索語が URL に載ること**（開き直し・共有で
+ * 同じ結果へ戻れる）。
+ *
+ * ⚠️ **一覧の行そのものは jsdom では1行も描かれない**（このファイル冒頭の
+ * virtua の断り）。だから「当たった行が見えること」はここでは測れない ——
+ * 測っているのは**サーバへ何を投げたか**までである。当たり方そのものは
+ * `packages/core/src/journal-search-contract.ts`（3実装）が持つ。
+ */
+describe('日誌画面の検索欄（issue #250）', () => {
+  /** `GET /journal` の呼びから `q` を取り出す（未指定は `null`）。 */
+  function searchTerms(calls: readonly string[]): (string | null)[] {
+    return calls
+      .filter((url) => url.includes('/journal'))
+      .map((url) => new URL(url).searchParams.get('q'));
+  }
+
+  it('入力した語が GET /journal?q= としてサーバへ届く', async () => {
+    const stub = stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      return json({ entries: [HISTORY_ONLY], scanned: 1 });
+    });
+
+    renderJournal({ status: 'live', recent: [] });
+    await waitForLoaded();
+
+    // 初回の取得には q が付いていない（既存の呼びを1文字も変えていない）。
+    expect(searchTerms(stub.calls)).toEqual([null]);
+
+    fireEvent.change(screen.getByLabelText('日誌を語で探す'), {
+      target: { value: 'トマト' },
+    });
+
+    await waitFor(() => {
+      expect(searchTerms(stub.calls)).toContain('トマト');
+    });
+  });
+
+  /**
+   * **打鍵ごとに撃たない**（`SEARCH_DEBOUNCE_MS`）。日誌の検索はストア全体を
+   * 舐めうるので、1文字ごとに撃つと打っている間ずっと重い問い合わせが並ぶ。
+   */
+  it('途中の打鍵ではサーバを撃たず、止まった後の語だけを撃つ', async () => {
+    const stub = stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      return json({ entries: [HISTORY_ONLY], scanned: 1 });
+    });
+
+    renderJournal({ status: 'live', recent: [] });
+    await waitForLoaded();
+
+    const input = screen.getByLabelText('日誌を語で探す');
+    fireEvent.change(input, { target: { value: 'ト' } });
+    fireEvent.change(input, { target: { value: 'トマ' } });
+    fireEvent.change(input, { target: { value: 'トマト' } });
+
+    await waitFor(() => {
+      expect(searchTerms(stub.calls)).toContain('トマト');
+    });
+
+    // 途中の2つは1度も撃たれていない。
+    expect(searchTerms(stub.calls)).not.toContain('ト');
+    expect(searchTerms(stub.calls)).not.toContain('トマ');
+  });
+
+  /**
+   * **検索語の正本は URL である。** 画面の state に閉じ込めると、その検索結果を
+   * 人へ渡せない（開き直すと消える・リンクで共有できない）。
+   */
+  it('検索語が URL のクエリに載る', async () => {
+    stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      return json({ entries: [HISTORY_ONLY], scanned: 1 });
+    });
+
+    const { router } = renderJournal({ status: 'live', recent: [] });
+    await waitForLoaded();
+
+    fireEvent.change(screen.getByLabelText('日誌を語で探す'), {
+      target: { value: 'トマト' },
+    });
+
+    await waitFor(() => {
+      expect(new URLSearchParams(router.state.location.search).get('q')).toBe('トマト');
+    });
+  });
+
+  it('URL に q が載った状態で開くと、その語で最初から探しに行く', async () => {
+    const stub = stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      return json({ entries: [HISTORY_ONLY], scanned: 1 });
+    });
+
+    renderJournal({ status: 'live', recent: [] }, [`/?q=${encodeURIComponent('トマト')}`]);
+    await waitForLoaded();
+
+    expect(searchTerms(stub.calls)).toEqual(['トマト']);
+    // 入力欄にもその語が入っている（URL を開いた人が何で絞られているか分かる）。
+    expect((screen.getByLabelText('日誌を語で探す') as HTMLInputElement).value).toBe('トマト');
+  });
+
+  /**
+   * **検索中は、当たらない新着が割り込まない。** SSE の `recent` は絞りを
+   * 通さずに届くので、ここを掛けないと画面が「その語で探した結果」でなくなる。
+   * 照合は `@alteroid/core/journal-search` の1つの実装を通る。
+   */
+  it('SSE で届く新着にも同じ語の絞りが掛かる', async () => {
+    stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      return json({ entries: [], scanned: 0 });
+    });
+
+    // `HISTORY_ONLY` / `RECENT_EXCHANGE` の本文は下の期待値で使う。
+    const { router } = renderJournal({ status: 'live', recent: [RECENT_EXCHANGE] }, [
+      `/?q=${encodeURIComponent('当たらない語')}`,
+    ]);
+    await waitForLoaded();
+
+    // URL の語はそのまま（画面が勝手に外していない）。
+    expect(new URLSearchParams(router.state.location.search).get('q')).toBe('当たらない語');
+    // 当たらない新着は画面に載らない（virtua が描かないので、ここで確かめられる
+    // のは「空の合図が出ていること」までである）。
+    expect(screen.queryByText(summarizeJournalEntry(RECENT_EXCHANGE))).toBeNull();
+  });
+
+  /**
+   * **探す対象に入っていない欄が在ることを、探している人にだけ見せる。**
+   * 常に出すと本当に効いているときの目印にならない。
+   */
+  it('検索していないときは、対象外の欄の断り書きを出さない', async () => {
+    stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      return json({ entries: [HISTORY_ONLY], scanned: 1 });
+    });
+
+    renderJournal({ status: 'live', recent: [] });
+    await waitForLoaded();
+
+    expect(screen.queryByText(/tool_use の input/)).toBeNull();
+  });
+
+  it('検索しているときは、対象外の欄の断り書きを出す', async () => {
+    stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      return json({ entries: [HISTORY_ONLY], scanned: 1 });
+    });
+
+    renderJournal({ status: 'live', recent: [] }, [`/?q=${encodeURIComponent('トマト')}`]);
+    await waitForLoaded();
+
+    expect(screen.getByText(/tool_use の input/)).toBeTruthy();
   });
 });

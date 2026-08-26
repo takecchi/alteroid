@@ -116,13 +116,13 @@ export async function verifyJournalStoreSearchContract(
   const percent = await ids('50%');
   if (!percent.includes(literal.id)) {
     throw new Error(
-      "JournalStore の q 契約（4: % はワイルドカードではない）が破れている — " +
+      'JournalStore の q 契約（4: % はワイルドカードではない）が破れている — ' +
         `本文に '50%' を含む行（id=${literal.id}）が、q: '50%' で返らなかった。`,
     );
   }
   if (percent.includes(target.id)) {
     throw new Error(
-      "JournalStore の q 契約（4: % はワイルドカードではない）が破れている — " +
+      'JournalStore の q 契約（4: % はワイルドカードではない）が破れている — ' +
         `q: '50%' が、本文に '50%' を含まない行（id=${target.id}）まで返した。` +
         'ILIKE のパターンで % がエスケープされていない疑いがある。',
     );
@@ -130,7 +130,7 @@ export async function verifyJournalStoreSearchContract(
   const underscore = await ids('50_');
   if (underscore.includes(literal.id)) {
     throw new Error(
-      "JournalStore の q 契約（4: _ はワイルドカードではない）が破れている — " +
+      'JournalStore の q 契約（4: _ はワイルドカードではない）が破れている — ' +
         `q: '50_' が '50%' を含む行（id=${literal.id}）に当たった。` +
         'ILIKE のパターンで _ がエスケープされていない疑いがある。',
     );
