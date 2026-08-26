@@ -260,6 +260,16 @@ const LIST_REPORT_EXCERPT = 240;
 const LIST_WAITING_EXCERPT = 200;
 const LIST_BUDGET = 8_000;
 /**
+ * 1本のマネージャーが同時に抱える返事待ちを、この件数まで出す（#409）。
+ *
+ * **1件ごとの厚みは `LIST_WAITING_EXCERPT` が締めるが、件数そのものには
+ * 上限が無かった。** `manager.waiting` は `push` のみで増える配列で、外側の
+ * `renderListing`（`items` 単位＝マネージャー1本ぶん）は全体の文字数予算しか
+ * 見ていない——この配列だけが伸びて1本のマネージャーの1件が予算を占有すると、
+ * 他のマネージャーが黙って押し出される。**切ったことは必ず言う。**
+ */
+const MANAGER_WAITING_LIST_LIMIT = 10;
+/**
  * 一覧に添える拒否は、**新しい側から**この件数まで。
  *
  * 上限で切るのは 1 本の異常が一覧を食い潰さないためだが、**切ったことは必ず
@@ -353,6 +363,25 @@ const TRANSCRIPT_PAGE = 8_000;
  */
 const COMMITMENT_LIST_BUDGET = 8_000;
 const COMMITMENT_BODY_LIMIT = 240;
+/**
+ * 読めない行の id を出すときの件数の上限（#409）。
+ *
+ * `digest.ts` の `buildActivityDigest` に在った同じ形の穴（台帳の破損の度合いに
+ * 比例して伸びる id の列挙で、上限も合図も無かった）を塞いだのと同じ理由で
+ * ここにも要る——あちらは直したが、この一覧モードの断り行は直っていなかった
+ * （同じ `unreadable` を別の場所でもう一度 `join` している）。
+ */
+const UNREADABLE_COMMITMENT_IDS_SHOWN = 20;
+/**
+ * `profile_write` が返す配布先の一覧（`配った先` / `配れなかった先`）を
+ * 抜粋する厚み（#409）。
+ *
+ * どちらも器の台数ぶん伸びる。`配れなかった先` は runnerId に加えて
+ * エラー本文も抱えるので、なおさら長さの見込みが立たない。`.join(', ')` に
+ * 上限も合図も無かった——この一覧の穴として最初に見つかった箇所であり、
+ * 成功側の `配った先` も同じ形をしていた。
+ */
+const PROFILE_DISTRIBUTION_EXCERPT = 400;
 /**
  * 台帳1件の全文を取りに来たときの1回分。続きは `offset` で取れる。
  *
@@ -507,6 +536,14 @@ function scheduleNextAtOf(context: ToolContext, kind: string): string {
  */
 const RUNNER_LIST_BUDGET = 8_000;
 const RUNNER_MANAGER_LIST_LIMIT = 20;
+/**
+ * 鍵の指紋行を抜粋する厚み（#409）。
+ *
+ * `runner.credentials` は器へ配った鍵の本数ぶん伸びる（`.map().join()` に
+ * 上限も合図も無かった）。#4（MCP 連携本数）と同じ形——設定駆動で現実には
+ * 小さいと見立てているが、それは実測ではないので上限を置く。
+ */
+const RUNNER_CREDENTIAL_FINGERPRINT_EXCERPT = 400;
 
 /** 記憶1件の本文を取りに来たときの1回分。続きは `offset` で取れる。 */
 const MEMORY_PAGE = 8_000;
@@ -2315,12 +2352,19 @@ export function createCloneTools(context: ToolContext) {
           // **id が取れない行は件数だけに数える。** `id` を持たない行を
           // 一覧から書き漏らすのではなく、そもそも id という材料が無いので
           // 出しようがない、という区別である。
-          const ids = unreadable
+          const idsAll = unreadable
             .map((entry) => entry.id)
             .filter((id): id is string => id !== undefined);
+          // **id の列挙にも上限を置く（#409）。** 台帳の破損の度合いに比例して
+          // 伸びる列挙で、件数そのものには合図が無かった。`digest.ts` の
+          // `buildActivityDigest` に在った同じ形の穴を塞いだのと同じ理由。
+          const ids = idsAll.slice(0, UNREADABLE_COMMITMENT_IDS_SHOWN);
+          const idsRest = idsAll.length - ids.length;
           lines.push(
             `**読めない行が ${unreadable.length} 件ある${
-              ids.length > 0 ? `（id: ${ids.join(', ')}）` : ''
+              ids.length > 0
+                ? `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`
+                : ''
             }。片付いたのではない。**`,
           );
         }
@@ -2610,10 +2654,15 @@ export function createCloneTools(context: ToolContext) {
         return text(
           [
             `実行環境プロファイルを更新した（sha256 ${result.sha256 ?? '外した'}）。`,
-            delivered.length === 0 ? null : `配った先: ${delivered.join(', ')}`,
+            delivered.length === 0
+              ? null
+              : `配った先: ${excerptLine(delivered.join(', '), PROFILE_DISTRIBUTION_EXCERPT)}`,
             failed.length === 0
               ? null
-              : `配れなかった先: ${failed.map((r) => `${r.runnerId}（${r.error ?? '理由不明'}）`).join(', ')}`,
+              : `配れなかった先: ${excerptLine(
+                  failed.map((r) => `${r.runnerId}（${r.error ?? '理由不明'}）`).join(', '),
+                  PROFILE_DISTRIBUTION_EXCERPT,
+                )}`,
             'これから起こす仕事には即座に効く。走行中の仕事は gh / git だけが次の呼び出しから拾う。',
           ]
             .filter((line) => line !== null)
@@ -3050,7 +3099,13 @@ export function createCloneTools(context: ToolContext) {
               // **どちらも省略されうる**（版のずれの窓。`describeWaitingKind` /
               // `describeAskedAt` の doc）——欠けていても「実行許可」「undefined
               // から」と嘘をつかず、`種別不明` にして時刻の断片を落とす。
-              ...manager.waiting.map((item) => {
+              // **件数そのものにも上限を置く（#409）。** 1件ごとの厚みは
+              // `LIST_WAITING_EXCERPT` が締めていたが、`manager.waiting` は
+              // `push` のみで増える配列で件数には上限が無かった——外側の
+              // `renderListing` は「マネージャー1本ぶん」を1件として文字数の
+              // 予算を見るので、この配列だけが伸びると1本のマネージャーだけで
+              // 予算を占有し、他のマネージャーが黙って押し出される。
+              ...manager.waiting.slice(0, MANAGER_WAITING_LIST_LIMIT).map((item) => {
                 const askedAtNote = describeAskedAt(item.askedAt);
                 return (
                   `  返事待ち(requestId: ${item.requestId}, ${describeWaitingKind(item.kind)}` +
@@ -3058,6 +3113,10 @@ export function createCloneTools(context: ToolContext) {
                   excerptLine(item.summary, LIST_WAITING_EXCERPT)
                 );
               }),
+              manager.waiting.length > MANAGER_WAITING_LIST_LIMIT
+                ? `  …ほか ${manager.waiting.length - MANAGER_WAITING_LIST_LIMIT} 件の返事待ちは省略` +
+                  `（全 ${manager.waiting.length} 件。manager_send に requestId を渡せば個別に答えられる）。`
+                : null,
               manager.lastReport === undefined
                 ? null
                 : // **時刻は既存の行に添えるだけ**（#358）。行を1本増やすと、
@@ -3663,7 +3722,10 @@ export function createCloneTools(context: ToolContext) {
             lines.push(
               runner.credentials.length === 0
                 ? '  鍵: 無し'
-                : `  鍵の指紋: ${runner.credentials.map((c) => `${c.name}=${c.sha256}`).join(', ')}`,
+                : `  鍵の指紋: ${excerptLine(
+                    runner.credentials.map((c) => `${c.name}=${c.sha256}`).join(', '),
+                    RUNNER_CREDENTIAL_FINGERPRINT_EXCERPT,
+                  )}`,
             );
           }
           if (fingerprints === true && runner.profile !== undefined) {

@@ -1,9 +1,18 @@
 import { z } from 'zod';
 
+import { excerptLine } from './excerpt.js';
 import { type RunnerRevisionReport } from './revision.js';
 import { jobStatusSchema } from './schema.js';
 import { rateLimitFactsSchema, usageLimitNoticeSchema } from './usage-limits.js';
 import { usageTotalsSchema } from './usage.js';
+
+/**
+ * `runnerId` の重複を報告するエラーの、一致した器の一覧を抜粋する厚み（#409）。
+ *
+ * `matches` は同じ `runnerId` を名乗って開いている器の台数ぶん伸びる。低頻度の
+ * 異常系だが、上限も合図も無いのは他の一覧と同じ穴なので締めておく。
+ */
+const DUPLICATE_RUNNER_ID_EXCERPT = 400;
 
 /** ISO8601 の日時（offset 必須）。`schema.ts` の同名の private const と同じ形。 */
 const isoDateTime = z.string().datetime({ offset: true });
@@ -2023,7 +2032,10 @@ class Registry implements RunnerRegistry {
         `runnerId=${runnerId} を名乗る器が ${matches.length} 台開けている（名前が一意でない）。` +
           'Registry#get は線形一致で先に見つかった方を返す実装なので、指名しても片方には' +
           '固定できない（roadmap M5 PR4 の fencing 待ちの既知のギャップ）: ' +
-          matches.map((entry) => `${entry.source.label}(${entry.state})`).join(' / '),
+          excerptLine(
+            matches.map((entry) => `${entry.source.label}(${entry.state})`).join(' / '),
+            DUPLICATE_RUNNER_ID_EXCERPT,
+          ),
       );
     }
 

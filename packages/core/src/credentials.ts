@@ -2,6 +2,18 @@ import { createHash, randomUUID } from 'node:crypto';
 import { chown, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { excerptLine } from './excerpt.js';
+
+/**
+ * `set()` が途中で止まったときの「適用済み」「未適用」の一覧を抜粋する厚み
+ * （#409）。
+ *
+ * どちらも1バッチで差し替える鍵の本数ぶん伸びる。呼び手は apps/cli（人間の
+ * 運用）と apps/daemon の管理 API から届くが、両方に上限が無かった——#1
+ * （`配れなかった先`）と同じ形の穴である。
+ */
+const CREDENTIAL_BATCH_LIST_EXCERPT = 400;
+
 /**
  * マネージャーの道具の鍵を、**走行中でも差し替えられる形**で持つ器。
  *
@@ -297,11 +309,18 @@ class Store implements CredentialStore {
         this.#lastWriteError = String(error);
         throw new Error(
           `鍵の差し替えが ${entry.name} で止まった` +
-            `（適用済み: ${applied.length === 0 ? 'なし' : applied.join(', ')}` +
-            ` / 未適用: ${entries
-              .slice(applied.length)
-              .map((rest) => rest.name)
-              .join(', ')}）: ${String(error)}`,
+            `（適用済み: ${
+              applied.length === 0
+                ? 'なし'
+                : excerptLine(applied.join(', '), CREDENTIAL_BATCH_LIST_EXCERPT)
+            }` +
+            ` / 未適用: ${excerptLine(
+              entries
+                .slice(applied.length)
+                .map((rest) => rest.name)
+                .join(', '),
+              CREDENTIAL_BATCH_LIST_EXCERPT,
+            )}）: ${String(error)}`,
           { cause: error },
         );
       }

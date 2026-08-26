@@ -329,6 +329,28 @@ describe('CloneRuntimeFacts の整形 — 観測した値と、取れていな�
   });
 
   /**
+   * **MCP 連携の本数にも上限が要る（#409）。** `mcpServers` は連携の本数ぶん
+   * 伸びる列挙で、`.map().join()` に上限も合図も無かった——ここはシステム
+   * プロンプトへそのまま焼き込まれる行なので、伸びれば毎ターンの土台が
+   * そのぶん膨らむ。**切ったら必ず合図を出す**（`excerpt.ts` の `excerptLine`
+   * と同じ約束）。
+   */
+  it('MCP サーバが極端に多くても、抜粋の合図を出して伸び続けない', () => {
+    const many = Array.from({ length: 500 }, (_, index) => ({
+      name: `mcp-server-${index}`,
+      status: 'connected',
+    }));
+    const section = describeCloneRuntime({ ...RUNTIME, mcpServers: many });
+    const line = section.split('\n').find((entry) => entry.includes('MCP サーバ'));
+
+    expect(line).toBeDefined();
+    // 500本ぶんの生の列挙をそのまま出せば数千文字になる。ここでは抜粋の
+    // 合図（「省略」「文字省略」）が出て、際限なく伸びていないことを見る。
+    expect(line!.length).toBeLessThan(1_000);
+    expect(line).toMatch(/省略/);
+  });
+
+  /**
    * **観測した許可モードと、alteroid が渡した許可モードを混ぜない。** 道具を持つ
    * ようになった（#32）以上、「使えるはずの道具が使えない」の切り分けはここから
    * 始まる。片方だけを出すと、頼んだ値が通っていないことに気づけない。

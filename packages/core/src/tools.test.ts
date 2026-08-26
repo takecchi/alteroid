@@ -799,6 +799,55 @@ describe('クローンの道具', () => {
     expect(h.distributed[0]).toContain('SOME_API_TOKEN');
   });
 
+  /**
+   * **配布先の一覧にも上限が要る（#409）。** `配った先` / `配れなかった先` は
+   * どちらも器の台数ぶん伸びる列挙で、`.join()` に上限も合図も無かった
+   * （`配れなかった先` は runnerId に加えてエラー本文も抱えるので、なおさら
+   * 長さの見込みが立たない）。器の台数が多い運用（M5 で runner が増える）を
+   * 想定して締めておく。
+   */
+  it('配布先が大量でも、配った先／配れなかった先は抜粋の合図で締まる', async () => {
+    const h = harness();
+    const count = 200;
+    const runners = {
+      async list() {
+        return Array.from({ length: count }, (_, index) => ({
+          runnerId: `runner-${index}`,
+          async setProfile() {
+            // 半分は失敗させ、エラー本文つきの列挙も伸びることを確かめる。
+            return index % 2 === 0
+              ? { ok: true as const }
+              : { ok: false as const, error: `runner-${index} は届かなかった（詳しい理由の本文）` };
+          },
+        }));
+      },
+      async get() {
+        return null;
+      },
+      async select() {
+        throw new Error('この検証では使わない');
+      },
+    } as never;
+    const tools = createCloneTools({
+      memoryCause: () => 'clone',
+      stores: h.stores,
+      emit: () => undefined,
+      profile: createProfileService({ stores: h.stores, runners }),
+    });
+    const write = tools.find((entry) => entry.name === 'profile_write');
+    const result = await write?.handler({ script: 'export A=1', summary: 'x' } as never, {});
+    const body = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+
+    const delivered = body.split('\n').find((line) => line.startsWith('配った先:'));
+    const failed = body.split('\n').find((line) => line.startsWith('配れなかった先:'));
+    expect(delivered).toBeDefined();
+    expect(failed).toBeDefined();
+    expect(delivered!.length).toBeLessThan(1_000);
+    expect(failed!.length).toBeLessThan(1_000);
+    expect(delivered).toMatch(/省略/);
+    expect(failed).toMatch(/省略/);
+  });
+
   it('profile_read で今の本文を取れる（足すだけの更新ができる）', async () => {
     const h = harness();
     await h.call('profile_write', { script: 'export A=1', summary: 'A' });
@@ -2792,6 +2841,34 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * **1本のマネージャーの返事待ちにも件数の上限が要る（#409）。** `waiting`
+   * は `push` のみで増える配列で、1件ごとの厚みは `LIST_WAITING_EXCERPT` が
+   * 締めていたが件数そのものには上限が無かった——1本のマネージャーだけで
+   * 外側の `renderListing`（マネージャー単位の文字数予算）を占有し、他の
+   * マネージャーが黙って押し出されうる。
+   */
+  it('1本のマネージャーの返事待ちが大量でも、件数で切って省略の合図を出す', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    const count = 40;
+    target.waiting = Array.from({ length: count }, (_, index) => ({
+      requestId: `req-${index}`,
+      summary: `質問その${index}`,
+      kind: 'question' as const,
+      askedAt: '2026-08-20T00:00:00.000Z',
+    }));
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('req-0');
+    // 全40件を出せば必ず載るはずの終盤の requestId が省かれていること。
+    expect(reply).not.toContain('req-39');
+    expect(reply).toMatch(/…ほか \d+ 件の返事待ちは省略/);
+  });
+
+  /**
    * **#334 が作りかけていた退行**（旧 runner とのバージョンのずれの窓では
    * `kind`/`askedAt` が届かない）に対する歯。`packages/core/src/runner-protocol.ts`
    * の `runnerWaitingSchema` は `kind`/`askedAt` を `.optional()` にしてある
@@ -3324,6 +3401,43 @@ describe('runner_list（器の一覧）', () => {
     expect(reply).toContain('deadbeef0000');
     expect(reply).toContain('cafef00dbabe');
     expect(h.runnersCalls).toEqual([{ fingerprints: true }]);
+  });
+
+  /**
+   * **鍵の指紋行にも上限が要る（#409）。** `runner.credentials` は器へ配った
+   * 鍵の本数ぶん伸びる列挙で、`.map().join()` に上限も合図も無かった。#4
+   * （MCP 連携本数）と同じ形の穴で、設定駆動なので現実には小さいと見立てて
+   * いるが実測ではない——上限を置いておく。
+   */
+  it('鍵の指紋が大量でも、抜粋の合図を出して伸び続けない', async () => {
+    const h = harness();
+    const many = Array.from({ length: 100 }, (_, index) => ({
+      name: `TOKEN_${index}`,
+      sha256: `sha-${index}`.padEnd(64, '0'),
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    }));
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-a',
+          revision: { status: 'unheard' },
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-a',
+          managers: [],
+          credentials: many,
+        },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', { fingerprints: true });
+
+    const line = reply.split('\n').find((entry) => entry.includes('鍵の指紋'));
+    expect(line).toBeDefined();
+    expect(line!.length).toBeLessThan(1_000);
+    expect(line).toMatch(/省略/);
   });
 
   /**
@@ -6496,6 +6610,49 @@ describe('commitment_list は読めない行を隠さない（issue #296）', ()
     expect(reply).toContain('読めない行が 2 件ある');
     // id が取れた分だけが (id: ...) に出る。
     expect(reply).toContain('（id: c-broken-1）');
+  });
+
+  /**
+   * **読めない行の id 列挙にも上限が要る（#409）。** 台帳の破損の度合いに
+   * 比例して伸びる列挙で、`.join()` に上限も合図も無かった。`digest.ts` の
+   * `buildActivityDigest` に在った同じ形の穴を塞いだのと同じ理由で、この
+   * 一覧モードの断り行にも要る。
+   */
+  it('読めない行が大量でも、id の列挙は上限で締まり省略の合図を出す', async () => {
+    const stores = createMemoryStores();
+    const count = 60;
+    const withUnreadable: Stores = {
+      ...stores,
+      commitments: {
+        ...stores.commitments,
+        async list() {
+          return {
+            entries: [],
+            unreadable: Array.from({ length: count }, (_, index) => ({
+              id: `c-broken-${index}`,
+              reason: '型が合わない',
+            })),
+            trimmedClosed: 0,
+          };
+        },
+      },
+    };
+    const tools = createCloneTools({
+      stores: withUnreadable,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+    });
+    const found = tools.find((entry) => entry.name === 'commitment_list');
+    const result = await found?.handler({} as never, {});
+    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+
+    expect(reply).toContain(`読めない行が ${count} 件ある`);
+    // 件数そのものは正しく60件と言うが、id の列挙は上限で切れて合図が出る。
+    const line = reply.split('\n').find((entry) => entry.includes('読めない行が'));
+    expect(line).toBeDefined();
+    expect(line).toContain('c-broken-0');
+    expect(line).not.toContain('c-broken-59');
+    expect(line).toMatch(/…ほか \d+ 件は省略/);
   });
 });
 

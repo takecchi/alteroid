@@ -704,6 +704,16 @@ type LeaseRefusalKind = 'held' | 'ambiguous' | 'persist-failed';
  */
 const NOTIFY_REPORT_EXCERPT = 240;
 
+/**
+ * `send()` が「複数の確認を同時に待っている」と断るときの、待ち一覧の抜粋の
+ * 厚み（#409）。
+ *
+ * `record.waiting` は返事待ちの件数ぶん伸び、各要素の `summary` は自由文なので
+ * 長さの見込みが立たない。`manager_send` の直接の返り値なのでページングを
+ * 経由せず、ここが伸びれば黙って全部そのまま agent へ渡ることになる。
+ */
+const AMBIGUOUS_WAITING_EXCERPT = 400;
+
 /** 1マネージャーぶんで覚えておく確認の件数。達したら**黙らずに日誌へ残す**。 */
 const ASKED_MEMORY_LIMIT = 512;
 
@@ -1142,7 +1152,10 @@ class Pool implements ManagerPool {
         outcome: 'unknown',
         detail:
           `${managerId} は複数の確認を同時に待っている。requestId を指定して答えること: ` +
-          record.waiting.map((item) => `${item.requestId}（${item.summary}）`).join(' / '),
+          excerptLine(
+            record.waiting.map((item) => `${item.requestId}（${item.summary}）`).join(' / '),
+            AMBIGUOUS_WAITING_EXCERPT,
+          ),
       };
     }
     if (pending === 'gone') {
