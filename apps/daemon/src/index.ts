@@ -500,7 +500,7 @@ export async function main(): Promise<void> {
   // ときだけ起きるべきで、起動ログに出ていなければ誰も気づけない。
   const cloneModel = resolveCloneModel();
   if (cloneModel !== CLONE_MODEL) {
-    process.stderr.write(
+    process.stdout.write(
       `alteroidd: クローンのモデル帯を ${CLONE_MODEL} から ${cloneModel} へ差し替えています` +
         `（${CLONE_MODEL_ENV_KEY}）。既定へ戻すにはこの環境変数を外してください\n`,
     );
@@ -517,7 +517,7 @@ export async function main(): Promise<void> {
    */
   const placedClonePermission = placedClonePermissionMode();
   if (placedClonePermission !== null) {
-    process.stderr.write(
+    process.stdout.write(
       `alteroidd: ${CLONE_PERMISSION_MODE_ENV_KEY} が置かれています` +
         `（既定 ${DEFAULT_PERMISSION_MODE} → ${placedClonePermission}）。` +
         `これは実行環境の設定であって、クローンの道具を減らすものではありません\n`,
@@ -537,7 +537,7 @@ export async function main(): Promise<void> {
    */
   const placedManagerTiers = placedManagerModels();
   for (const { key, value, fallback } of placedManagerTiers) {
-    process.stderr.write(
+    process.stdout.write(
       `alteroidd: ${key} が置かれています（既定 ${fallback} → ${value}）。` +
         `実際にセッションへ渡すのは runner なので、効いているかは runner の起動ログで確かめてください\n`,
     );
@@ -610,7 +610,7 @@ export async function main(): Promise<void> {
   // 入口の認証。**設定されていなければ従来どおり要求しない** — 境界の導入が
   // 実質のデグレードにならないようにする（north_star「立ち戻るための問い」）。
   const authPlan = planAuth(process.env, { port });
-  process.stderr.write(`alteroidd: ${authPlan.description}\n`);
+  process.stdout.write(`alteroidd: ${authPlan.description}\n`);
 
   // クローンが自分自身を把握するための材料。**事実を知っているのはここだけ**なので
   // ここで組み立てる（core 側で環境変数を読み直すと出所が2つになる）。
@@ -880,7 +880,7 @@ export async function main(): Promise<void> {
     );
   }
   if (allowedOrigins.length > 0) {
-    process.stderr.write(
+    process.stdout.write(
       `alteroidd: 次のオリジンからのブラウザ呼び出しを許可します: ${allowedOrigins.join(', ')}\n`,
     );
   }
