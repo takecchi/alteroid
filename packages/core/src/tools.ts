@@ -142,22 +142,39 @@ export interface ToolContext {
   /**
    * この道具を通した記憶の書き換えが、日誌の `memory_update.cause` でどう名乗るか。
    *
-   * **省略時は `'clone'`。** クローンの道具は人間の口ではないので、ここから
-   * `'human'` は出ない（`'human'` を書くのは `app.ts` の `PUT` / `DELETE /memory/:slug`
-   * の2箇所だけである）。
+   * クローンの道具は人間の口ではないので、ここから `'human'` は出ない
+   * （`'human'` を書くのは `app.ts` の `PUT` / `DELETE /memory/:slug` の2箇所だけである）。
    *
-   * **省略できるのはテストのためだけである。** 本番の配線（`clone.ts`）は
-   * 本セッション（`#toolContext`）と蒸留のサイドクエリ（`#distillFromTranscript`
-   * のインライン context）の両方へ渡す。片方へ渡し忘れると、渡し忘れた側は
-   * 黙って既定の `'clone'` に落ちる ＝ 蒸留が書いた記憶なのに `cause: 'clone'`
-   * と名乗ることになる（`runtime` と同じ「渡し忘れた側だけ静かに壊れる」形）。
+   * ## ⛔ 必須である。省略できない（既定値を持たない）
+   *
+   * **かつてこれは optional で、省略時は `'clone'` へ倒れていた。** その形は
+   * `guardFullReplace` を fail-open にしていた —— 歯の本体1文目が
+   * `cause !== 'distill'` で素通りするので（`guardFullReplace` の doc）、
+   * **配線を忘れた新しい書き口は、`guardFullReplace` を呼んでいても素通りし、
+   * 人間が一度でも書いた記憶の文書を黙って全文置換できた。** `tsc` も既存の
+   * 歯も捕まえない（optional なので型が通る）。
+   *
+   * **⛔ 既定を `'distill'`（守る側）へ倒す形は採らなかった。** 守りは閉じるが、
+   * **日誌の `cause` が嘘になる** —— `memory_update.cause` は
+   * `guardFullReplace` 以外にも読み手が居る（`memory.ts` の
+   * `deriveHumanTouchedAtFromJournal` / `deriveMemoryCreatedAtFromJournal`）。
+   * **既定値は「取れなかった」を「別の値だった」に変える** ——「呼び手が名乗ら
+   * なかった」を「蒸留の走行だった」として記録することになる。**日誌は追記
+   * 専用で、人間が後から読んで否定するための場所である**（`north_star`）。
+   * そこへ機械の推測を書き込ませない。
+   *
+   * **⟹ 必須にして、型の抜け道から届かなかったときは throw する**
+   * （`createCloneTools` の中。倒れ先を作らない）。本番の構築点は2つだけで
+   * （`clone.ts` の `#toolContext()` と `#distillFromTranscript` のインライン
+   * context）どちらも明示しているので、**TS で検査された経路から throw へは
+   * 到達しない。**
    *
    * **ターンごとに変わる値なので、道具の実行時（ハンドラの中）で呼ぶこと。**
    * `createCloneTools` の呼び出し時に1回だけ評価すると、本セッションの MCP
    * サーバはセッションごとに1回しか組まれないため、セッション中ずっと最初の
    * ターンの種類のまま固定されてしまう。
    */
-  memoryCause?: () => 'distill' | 'clone';
+  memoryCause: () => 'distill' | 'clone';
 }
 
 export function qualifiedToolName(name: string): string {
@@ -846,7 +863,20 @@ export function createCloneTools(context: ToolContext) {
   // セッション中ずっと最初のターンの種類に固定されてしまう
   // （`ToolContext.memoryCause` の doc）。3箇所の道具ハンドラの中で
   // その都度呼ぶ。
-  const memoryCause = context.memoryCause ?? ((): 'distill' | 'clone' => 'clone');
+  // **倒れ先を作らない。** `memoryCause` は型として必須だが、型の抜け道
+  // （`as unknown as ToolContext` / JS からの呼び）では届かないことがありうる。
+  // 既定へ倒すと日誌の `cause` が嘘になるので、落とす（`ToolContext.memoryCause`
+  // の doc）。**⚠️ 届かなかった値そのものは書かない** —— 記憶の本文が例外の
+  // メッセージへ漏れる経路を作らない（`noteDroppedRecord` が `safeParse` の
+  // `error.message` を跡へ渡さないのと同じ線）。
+  if (typeof context.memoryCause !== 'function') {
+    throw new Error(
+      'memoryCause が届いていない。ToolContext を組む側で明示すること' +
+        '（既定値へ倒すと、呼び手が名乗らなかったことを「蒸留の走行だった」として' +
+        '日誌に記録することになる）。',
+    );
+  }
+  const memoryCause = context.memoryCause;
 
   return [
     // --- 記憶 -----------------------------------------------------------

@@ -39,7 +39,11 @@ interface Rpc {
 
 /** 本物の MCP サーバを組み、JSON の往復を通す口を返す。 */
 async function connect(stores: ReturnType<typeof createMemoryStores>): Promise<Rpc> {
-  const server = createCloneMcpServer({ stores, emit: () => undefined });
+  const server = createCloneMcpServer({
+    stores,
+    emit: () => undefined,
+    memoryCause: () => 'clone',
+  });
   const pending = new Map<number, (message: Record<string, unknown>) => void>();
   let deliver: ((message: unknown) => void) | undefined;
 

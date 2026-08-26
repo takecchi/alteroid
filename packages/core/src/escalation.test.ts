@@ -111,7 +111,12 @@ function fakeCloneSdk() {
 
 /** クローンが道具を呼ぶところ（＝モデルの手）を、手で再現する。 */
 function handsOf(stores: Stores, managers: ManagerPool) {
-  const tools = createCloneTools({ stores, emit: () => undefined, managers });
+  const tools = createCloneTools({
+    stores,
+    emit: () => undefined,
+    managers,
+    memoryCause: () => 'clone',
+  });
   const call = async (name: string, args: Record<string, unknown>) => {
     const tool = tools.find((entry) => entry.name === name);
     if (!tool) throw new Error(`ツール ${name} が無い`);
