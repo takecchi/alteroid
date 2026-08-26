@@ -70,21 +70,21 @@ import { createApp } from './app.js';
 export const errorResponseSchema = z.object({ error: z.string() });
 
 /**
- * `validator('json' | 'query', ...)` が検査に落ちたときの応答（hono-openapi の
- * 既定フック）。`@hono/zod-validator` の 400 とは形が違う（`error` が issue の
- * 配列で入る）ので、手書きの `errorResponseSchema` とは別に持つ。
+ * `validator('query', ...)` が検査に落ちたときの応答（hono-openapi の既定フック）。
+ * `@hono/zod-validator` の 400 とは形が違う（`error` が issue の配列で入る）ので、
+ * 手書きの `errorResponseSchema` とは別に持つ。
+ *
+ * **`json` の経路はもうこの形を返さない（#424）。** `data` にリクエスト本文が
+ * 丸写しされる既定であり、資格を運ぶ経路でそれが実際に秘密を応答へ出していた。
+ * `app.ts` の `jsonBody` が全経路で `hook` を挟み、`{ error: string }`
+ * （＝`errorResponseSchema`）へ畳んでいる。**この形を `json` の経路の 400 の
+ * 宣言に書かないこと** —— 書くと spec だけが「まだ `data` が返る」と言い続ける。
  */
 export const validationErrorResponseSchema = z.object({
   data: z.unknown(),
   error: z.array(z.unknown()),
   success: z.literal(false),
 });
-
-/** 検査落ちと業務エラーの両方が同じ 400 に乗る経路のための合わせ技。 */
-export const badRequestResponseSchema = z.union([
-  validationErrorResponseSchema,
-  errorResponseSchema,
-]);
 
 // ---------------------------------------------------------------------------
 // /health
