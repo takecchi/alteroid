@@ -1125,6 +1125,27 @@ export function ChatPane({
               placeholder="クローンに話しかける（⌘/Ctrl + Enter で送信）"
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={(event) => {
+                /*
+                  **IME で変換している最中の Enter では送らない。**
+
+                  ⭐ **いまこの門を踏む経路は無い。** 送信条件は `⌘/Ctrl + Enter` だけで、
+                  Enter 単体で送る道がまだ存在しないからである（#247 の 2）。それでも
+                  先に置くのは、**Enter 単体送信を足した瞬間に、この門が無いと IME の
+                  「変換を確定する Enter」がそのまま誤送信になる**からで、しかも足す人が
+                  そのときに門の不在へ気づく契機を持たない（この Issue を読む理由が無い）。
+                  ＝ **後から足すものではなく、Enter 単体送信の前提条件として先に満たして
+                  おくものである。** 下の `chat.ime-enter.test.tsx` の「Enter 単体では
+                  送らない」が、Enter 単体送信を足した人をここへ連れてくる網である。
+
+                  **いま既に効く分もある** — `⌘/Ctrl + Enter` を変換中に打った場合である。
+                  変換中でも `input` は飛ぶ（Chrome）ので `draft` には確定前の途中の文字列
+                  （「こんにちh」のような）が入っており、そのまま投函されていた。
+
+                  `event.isComposing` ではなく **`event.nativeEvent.isComposing` を見る** —
+                  React の合成イベントの型は `isComposing` を持たない（DOM の
+                  `KeyboardEvent` の側にしか無い）。
+                */
+                if (event.key === 'Enter' && event.nativeEvent.isComposing) return;
                 if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
                   event.preventDefault();
                   void send(draft);
