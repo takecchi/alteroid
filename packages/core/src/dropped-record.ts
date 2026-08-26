@@ -15,7 +15,8 @@ import type { InboxEvent, JournalEntryInput } from './schema.js';
  *
  * **本文は出さない。** ここへ渡ってくる記録には、マネージャーの報告
  * （＝外の世界から拾ってきた任意の文字列）がそのまま入る。過去に `GH_TOKEN` が
- * 報告経路へ全文で出た事故があり（#52）、書けなかった本文を丸ごとログへ吐くと
+ * テスト出力（`railway/setup.test.ts` の差分アサーション）へ全文で出た事故が
+ * あり（#52）、書けなかった本文を丸ごとログへ吐くと
  * **日誌にすら入らなかった秘密がホスティング先のログには残る**という逆転が起きる。
  * 日誌はまだ持ち主しか読まないが、stderr は器の外へ出ていく。
  *
@@ -158,7 +159,8 @@ export function journalRowType(raw: unknown): string | undefined {
  *
  * **本文は載せない。** 載せてよいのは `journalRowType` で安全に取れた
  * `type` とバイト数だけ——日誌の行にはマネージャーの報告が入りうる
- * （報告本文に `GH_TOKEN` が全文で出た前例がある。#52）。**`safeParse` が返す
+ * （テスト出力に `GH_TOKEN` が全文で出た前例がある。`railway/setup.test.ts`
+ * の差分アサーション、#52）。**`safeParse` が返す
  * `error.message` はここへ渡さないこと。** 検証に失敗した値そのものを引用
  * することがあり、確かめずに跡へ流すと同じ事故になる。
  *
@@ -209,7 +211,8 @@ export function noteDroppedJournalRow(
  * ## 何を載せるか
  *
  * **`text` を載せない。** あれは SDK が出した文言そのままで、マネージャーの
- * 報告が混ざりうる（報告本文に `GH_TOKEN` が全文で出た前例がある。#52）。
+ * 報告が混ざりうる（テスト出力に `GH_TOKEN` が全文で出た前例がある。
+ * `railway/setup.test.ts` の差分アサーション、#52）。
  * 載せるのは `via` と `code` だけである —— どちらも**値を決めるのが SDK か
  * こちら**で、外から来た自由文ではない（判定基準は `noteDroppedInboxEvent` の
  * doc と同じ「値を誰が決めるか」）。
@@ -304,8 +307,9 @@ export function noteDroppedJournalRowsSummary(dropped: Map<string, number>): voi
  * ＝外向きの API 面が動く。跡を残すためだけに外へ出す面を広げない。
  *
  * **見分けは呼び出し側に選ばせない。** ここへ来る合図には人間の発言・webhook の
- * 本文・マネージャーの報告が入る（報告本文に `GH_TOKEN` が全文で出た前例が
- * ある。#52）。何を載せてよいかの判断は `inboxEventShape` の1か所に閉じる。
+ * 本文・マネージャーの報告が入る（テスト出力に `GH_TOKEN` が全文で出た前例が
+ * ある。`railway/setup.test.ts` の差分アサーション、#52）。何を載せてよいかの
+ * 判断は `inboxEventShape` の1か所に閉じる。
  */
 export function noteDroppedInboxEvent(event: InboxEvent): void {
   note(

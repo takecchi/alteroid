@@ -220,7 +220,8 @@ describe('分類できなかった失敗の跡（回し手には届かない側�
     expect(first).toHaveLength(1);
     expect(first[0]).toContain('via=result_is_error');
     expect(first[0]).toContain('code=success');
-    // **本文を載せていない**（報告本文に秘密が混ざった前例がある。#52）。
+    // **本文を載せていない**（テスト出力に秘密が混ざった前例がある。
+    // railway/setup.test.ts の差分アサーション、#52）。
     expect(first[0]).not.toContain(ORG_SPEND_LIMIT);
   });
 
