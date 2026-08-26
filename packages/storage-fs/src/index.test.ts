@@ -1330,7 +1330,7 @@ describe('FsJobStore', () => {
    * **`listApprovals` の並びに意味を持たせていないことの記録**（issue #432）。
    *
    * `putApproval` は「既存の id を filter で除いてから push する」形
-   * （`grep -n 'async putApproval' -A 5 packages/storage-fs/src/jobs.ts`）
+   * （`grep -Fn -A 5 -- 'async putApproval' packages/storage-fs/src/jobs.ts`）
    * なので、**既存の id へ書くと配列の末尾へ移動する。** 承認への回答は
    * まさに `putApproval` を呼ぶので、答えた行は末尾へ動く。
    *

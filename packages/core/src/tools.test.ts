@@ -5181,7 +5181,7 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
    * `CloneRuntimeFacts` の整形自体ではないので、値の中身に意味は無い）。
    *
    * **他の道具は `context.runtime` を読まないので、この定数を足しても他の
-   * ケースの挙動は変わらない**（`tools.ts` を `grep -n 'context.runtime'` で
+   * ケースの挙動は変わらない**（`tools.ts` を `grep -Fn -- 'context.runtime'` で
    * 確認済み——参照は `self_status` のハンドラ1箇所だけ）。
    *
    * **`sdkModel` を `null` のままにしない（#406）。** `null` だと

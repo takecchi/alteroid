@@ -570,7 +570,7 @@ export function markTokenUnusable(
  *
  * **なぜ `invalidatedAt` まで消すのか。** 成功は権威ある証拠である——`clone.ts` が
  * 成功した `result` で `#usageBlocked` を降ろしているのと同じ根拠（逐語は
- * `grep -n 'ことの権威ある証拠なので' packages/core/src/clone.ts`）。通ったのに
+ * `grep -Fn -- 'ことの権威ある証拠なので' packages/core/src/clone.ts`）。通ったのに
  * 「恒常的に通らない」という印が残っている行は、**それ自体が嘘である。**
  *
  * **⚠️ 「使えることを確かめられた」の意味を薄めないこと。** 呼んでよいのは

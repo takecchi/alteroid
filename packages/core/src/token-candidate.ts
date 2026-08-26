@@ -22,7 +22,7 @@ import type { UsageProbeQuery } from './usage-probe.js';
  *
  * - `rejected` は `rate_limit_event` 由来で、それが届くにはターンが要る。だが
  *   `usage-probe.ts` の probe は**プロンプトを1つも送らない**（`idleUsagePrompt` の
- *   doc・`grep -n 'yield が無いことがこの関数の要件そのもの' packages/core/src/usage-probe.ts`）
+ *   doc・`grep -Fn -- 'yield が無いことがこの関数の要件そのもの' packages/core/src/usage-probe.ts`）
  *   ので、ターンは1つも回らず `rate_limit_event` は届かない。
  * - 認証失敗は `AccountUsageState` の `state: 'failed'` に落ちるが、そこには
  *   **通信断・締め切りも同じ形で混ざる**（`runUsageProbe` が全失敗を `undefined` へ
