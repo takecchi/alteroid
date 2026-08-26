@@ -34,12 +34,20 @@ interface Harness {
   stores: Stores;
   spreadCalls: ({ id: string; generation: number } & TokenCredential)[];
   probeCalls: ({ id: string } & TokenCredential)[];
+  /** `tokens.replace` を呼んだ回数。**まとめて1回**を固定するために数える。 */
+  replaceCalls: () => number;
   rotator: ReturnType<typeof createTokenRotator>;
 }
 
+type Verdict = TokenProbePort['probe'] extends (t: never) => Promise<infer V> ? V : never;
+
 function harness(
   options: {
-    verdict?: TokenProbePort['probe'] extends (t: never) => Promise<infer V> ? V : never;
+    verdict?: Verdict;
+    /** 候補ごとに違う判定を返す口。**`verdict` より優先する。** */
+    verdictOf?: (id: string) => Verdict;
+    /** probe 1本ぶんの見かけの所要時間（ミリ秒）。持ち時間の検査で使う。 */
+    probeTakesMs?: number;
     spreadResults?: TokenSpreadResult[];
   } = {},
 ): Harness {
@@ -47,10 +55,22 @@ function harness(
   const spreadCalls: ({ id: string; generation: number } & TokenCredential)[] = [];
   const probeCalls: ({ id: string } & TokenCredential)[] = [];
 
+  // **時計は動かせる形にしておく。** 持ち時間は壁時計で切るので、止まった時計では
+  // 「使い切った」を1回も作れない。
+  let nowMs = Date.parse(AT);
+
+  let replaceCount = 0;
+  const realReplace = stores.tokens.replace.bind(stores.tokens);
+  stores.tokens.replace = async (tokens) => {
+    replaceCount += 1;
+    return await realReplace(tokens);
+  };
+
   const probe: TokenProbePort = {
     async probe(token) {
       probeCalls.push(token);
-      return options.verdict ?? { verdict: 'usable' };
+      nowMs += options.probeTakesMs ?? 0;
+      return options.verdictOf?.(token.id) ?? options.verdict ?? { verdict: 'usable' };
     },
   };
   const spread: TokenSpreadPort = {
@@ -64,9 +84,26 @@ function harness(
     stores,
     probe,
     spread,
-    now: () => new Date(AT),
+    now: () => new Date(nowMs),
   });
-  return { stores, spreadCalls, probeCalls, rotator };
+  return { stores, spreadCalls, probeCalls, replaceCalls: () => replaceCount, rotator };
+}
+
+/** プールに4本置いて、1本目を現役に指名する（候補は3本残る）。 */
+async function seedFour(h: Harness): Promise<void> {
+  await h.stores.tokens.replace([
+    { id: 'tok-a', label: 'first', value: 'value-a', order: 0 },
+    { id: 'tok-b', label: 'second', value: 'value-b', order: 1 },
+    { id: 'tok-c', label: 'third', value: 'value-c', order: 2 },
+    { id: 'tok-d', label: 'fourth', value: 'value-d', order: 3 },
+  ]);
+  await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
+}
+
+/** その id の行が冷却へ入っているか（記録から読める範囲）。 */
+async function isCooling(h: Harness, id: string): Promise<boolean> {
+  const row = (await h.stores.tokens.list()).find((token) => token.id === id);
+  return row?.cooldownUntil !== undefined;
 }
 
 /** プールに2本置いて、1本目を現役に指名する。 */
@@ -167,6 +204,124 @@ describe('受け入れ基準1: 1本目が止まったら2本目へ回る', () =>
       h.rotator.observe({ notice: reached, observedBy: { tokenId: 'tok-a', generation: 1 } }),
     ).rejects.toThrow('保存できない');
     expect(h.spreadCalls).toEqual([]);
+  });
+});
+
+/**
+ * **候補を1本ずつ試し切る（Issue #393「回し方」の 2〜4 の繰り返し）。**
+ *
+ * Issue 本文の逐語は「`使えない` → **2 へ戻って次の候補**」。ここが1本で打ち切って
+ * いたので、**候補が残っていても `exhausted`（＝全層が止まる、の顔）**になっていた。
+ */
+describe('候補を試し切る', () => {
+  it('1本目が使えなければ次の候補へ進む（1本で打ち切らない）', async () => {
+    const h = harness({
+      verdictOf: (id) =>
+        id === 'tok-b' ? { verdict: 'unusable', reason: '枠が尽きている' } : { verdict: 'usable' },
+    });
+    await seedFour(h);
+
+    const outcome = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(outcome).toMatchObject({ kind: 'rotated', toTokenId: 'tok-c' });
+    // **order 昇順に、飛ばしながら進んでいる。**
+    expect(h.probeCalls.map((call) => call.id)).toEqual(['tok-b', 'tok-c']);
+    // 飛ばした候補は冷却へ入る（次の観測で probe を焼き直さない）。
+    expect(await isCooling(h, 'tok-b')).toBe(true);
+    // まだ試していない候補には触っていない。
+    expect(await isCooling(h, 'tok-d')).toBe(false);
+    expect(h.spreadCalls).toHaveLength(1);
+  });
+
+  it('全部使えなければ exhausted。**試した分だけ**冷却へ入り、保存は1回きり', async () => {
+    const h = harness({ verdict: { verdict: 'unusable', reason: '枠が尽きている' } });
+    await seedFour(h);
+    // **種を置くのも `replace` である。** 差で数えないと、置き方を変えた回に
+    // この数だけが黙ってずれる。
+    const beforeObserve = h.replaceCalls();
+
+    const outcome = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(outcome.kind).toBe('exhausted');
+    // **打ち切りではないので `stoppedBy` は付かない**（「試し切って全部だめ」である）。
+    expect(outcome).not.toHaveProperty('stoppedBy');
+    expect(h.probeCalls.map((call) => call.id)).toEqual(['tok-b', 'tok-c', 'tok-d']);
+    for (const id of ['tok-b', 'tok-c', 'tok-d']) expect(await isCooling(h, id)).toBe(true);
+    expect(h.spreadCalls).toEqual([]);
+    // **「プールが空」と読める行を出さない。** 候補は4本在った。
+    expect(outcome.why).not.toContain('プールが空');
+    expect(outcome.why).toContain('試した候補「second」「third」「fourth」');
+    // **周ごとに保存しない。** 3本を `unusable` と判定しても保存は
+    // **降りる側の `coolDown` で1回 ＋ 試した分をまとめて1回 ＝ 2回**きりである。
+    // 途中で落ちたときに「一部だけ冷却が付いて結果は届かない」版を残さないための形。
+    expect(h.replaceCalls() - beforeObserve).toBe(2);
+  });
+
+  it('持ち時間を使い切ったら打ち切り、その事実を出力に残す', async () => {
+    // probe 1本が 40 秒かかる見かけにする ⟹ 2本目までは通り、3本目の手前で
+    // 経過が持ち時間（60 秒）を越える。
+    const h = harness({
+      verdict: { verdict: 'unusable', reason: '枠が尽きている' },
+      probeTakesMs: 40_000,
+    });
+    await seedFour(h);
+
+    const outcome = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(outcome).toMatchObject({ kind: 'exhausted', stoppedBy: 'budget' });
+    // **1本目は必ず試している**（経過 0 で止まらない）。
+    expect(h.probeCalls.map((call) => call.id)).toEqual(['tok-b', 'tok-c']);
+    // **試していない候補を冷却へ入れない**（試したことにしない）。
+    expect(await isCooling(h, 'tok-d')).toBe(false);
+    // **黙って打ち切らない。**
+    expect(outcome.why).toContain('持ち時間');
+  });
+
+  it('打ち切った回に「戻る見込みが1本も無い」と言わない', async () => {
+    // **既定の文言は「試し切って、どれも戻る見込みが無かった」を意味する。**
+    // 打ち切った回にそれを出すと、まだ試していない候補が在るのに嘘になる。
+    const line = describeTokenRotation({
+      kind: 'exhausted',
+      stoppedBy: 'budget',
+      signal: 'reached',
+      freshness: 'current',
+      why: '候補を試す持ち時間（60000ms）を使い切った',
+    });
+    expect(line).toContain('まだ試していない候補が残っている');
+    expect(line).not.toContain('戻る見込みの立っている候補が1本も無い');
+  });
+
+  it('試し切ったときは、いちばん早く戻る候補が出る', async () => {
+    // 1本しか候補が無く、それが冷却中 ⟹ `selectNextToken` の `none` へ合流する。
+    const h = harness();
+    await h.stores.tokens.replace([
+      { id: 'tok-a', label: 'first', value: 'value-a', order: 0 },
+      {
+        id: 'tok-b',
+        label: 'second',
+        value: 'value-b',
+        order: 1,
+        cooldownUntil: Date.parse(AT) + 60 * 60 * 1000,
+      },
+    ]);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
+
+    const outcome = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(outcome).toMatchObject({ kind: 'exhausted', earliest: { tokenId: 'tok-b' } });
+    expect(h.probeCalls).toEqual([]);
   });
 });
 
