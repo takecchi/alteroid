@@ -664,6 +664,52 @@ describe('マネージャー', () => {
   });
 
   /**
+   * **複数の確認が同時に待っているときの断りにも上限が要る（#409）。**
+   * `send()` が requestId 無しで呼ばれ複数件が待っていると「複数の確認を
+   * 同時に待っている」と断って `record.waiting` を列挙するが、この列挙に
+   * 上限も合図も無かった——1件ごとの `summary` は自由文（質問文）なので、
+   * 大量に同時待ちがあれば直接の返り値がそのまま伸びる。ここでは抜粋の
+   * 合図（`excerptLine` の「省略」）が出て、伸び続けないことを見る。
+   */
+  it('大量の確認が同時に待っていても、あいまいさの断りは抜粋の合図で締まる', async () => {
+    const s = setup();
+    const { managerId } = await s.pool.start({ request: '設計を相談したい' });
+    const session = s.sessions[0] as FakeSession;
+
+    const count = 30;
+    for (let index = 0; index < count; index += 1) {
+      session.ask(
+        'AskUserQuestion',
+        {
+          questions: [
+            {
+              question: `質問その${index}はどうしますか、長めの本文で埋めておく`,
+              header: 'Q',
+              options: [],
+              multiSelect: false,
+            },
+          ],
+        },
+        undefined,
+        `req-ambiguous-${index}`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // requestId を渡さない——複数件が同時に待っているので「あいまい」に落ちる。
+    // `decision` が無いと「追加指示」として流れるだけなので（`#choosePending`
+    // の doc）、あいまい分岐に届かせるためにここでは明示する。
+    const result = await s.pool.send(managerId, 'どれのこと？', { decision: 'allow' });
+    expect(result.outcome).toBe('unknown');
+    // 30件の生の列挙をそのまま出せば数千文字になる。ここでは合図が出て、
+    // 際限なく伸びていないことを見る。
+    expect(result.detail?.length).toBeLessThan(1_000);
+    expect(result.detail).toMatch(/省略/);
+
+    await s.pool.stop();
+  });
+
+  /**
    * **一覧が種別を持つこと自体を測る（#334）。** 直前のテストは「質問への
    * 回答がそのまま answers に入る」という別の性質を測っており、`kind` の
    * 値そのものは `toMatchObject` で1回しか通していない。ここでは

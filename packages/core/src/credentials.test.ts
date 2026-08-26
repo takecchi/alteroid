@@ -316,6 +316,37 @@ describe('途中で失敗したバッチ', () => {
       ]),
     ).rejects.toThrow(/適用済み: GH_TOKEN/);
   });
+
+  /**
+   * **適用済み／未適用の一覧にも上限が要る（#409）。** どちらも1バッチで
+   * 差し替える鍵の本数ぶん伸びる列挙で、`.join()` に上限も合図も無かった。
+   * #1（`配れなかった先`）と同じ形の穴として見つかったので、大きなバッチで
+   * 締まることを固定する。
+   */
+  it('大きなバッチが途中で止まっても、適用済み／未適用の列挙は抜粋の合図で締まる', async () => {
+    const count = 120;
+    const names = Array.from({ length: count }, (_, index) => `TOKEN_${index}`);
+    const store = createCredentialStore({ dir, seed: {}, names });
+    await store.flush();
+    // 真ん中の1本だけ rename を失敗させる（適用済み・未適用の両側を60件ずつにする）。
+    const blockedIndex = 60;
+    block(names[blockedIndex]!);
+
+    let caught: unknown;
+    try {
+      await store.set(names.map((name) => ({ name, value: `${name}-new` })));
+    } catch (error) {
+      caught = error;
+    }
+    const message = String((caught as Error | undefined)?.message);
+    expect(message).toContain(names[blockedIndex]!);
+    expect(message).toContain('適用済み');
+    expect(message).toContain('未適用');
+    // 120件ぶんの生の列挙をそのまま出せば数千文字になる。ここでは合図が出て、
+    // 際限なく伸びていないことを見る。
+    expect(message.length).toBeLessThan(1_500);
+    expect(message).toMatch(/省略/);
+  });
 });
 
 /**

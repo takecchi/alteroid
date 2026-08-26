@@ -3137,6 +3137,38 @@ describe('クローン — 記憶を二重に載せない', () => {
   });
 
   /**
+   * **削除された記憶の列挙にも上限が要る（#409）。** `removed` は一度に消えた
+   * 文書の件数ぶん伸びる列挙で、`.map().join()` に上限も合図も無かった。
+   * 60件をまとめて消すと、切っていない実装ではこの1行だけで数百文字になる
+   * ——ここでは抜粋の合図（`excerptLine` の「省略」）が出て、伸び続けないことを
+   * 見る。
+   */
+  it('大量の記憶を一度に消しても、削除された記憶の列挙は抜粋の合図で締まる', async () => {
+    const stores = createMemoryStores();
+    const slugs = Array.from({ length: 60 }, (_, index) => `doc-${index}`);
+    for (const slug of slugs) {
+      await stores.persona.write(slug, `# ${slug}\n\nbody\n`);
+    }
+    const s = setup(undefined, stores);
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    for (const slug of slugs) {
+      await stores.persona.remove(slug);
+    }
+    const second = await secondTurn(s);
+
+    const line = second.split('\n').find((entry) => entry.startsWith('削除された記憶:'));
+    expect(line).toBeDefined();
+    // 60件の生の列挙をそのまま出せば数百文字になる。ここでは合図が出て、
+    // 際限なく伸びていないことを見る。
+    expect(line!.length).toBeLessThan(600);
+    expect(line).toMatch(/省略/);
+
+    await s.clone.stop();
+  });
+
+  /**
    * **ここが resume の側の穴だった。**
    *
    * 前のセッションが載せ直した塊は、履歴として残る。それは
@@ -6568,6 +6600,38 @@ describe('クローン — 処理待ちのあいだに積み上がった発言',
     expect(merged).toContain('evt-続き1');
     expect(merged).toContain('evt-続き2');
     expect(merged).toContain('閉じるのは id ごとである');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  /**
+   * **未了 id の列挙にも上限が要る（#409）。** `idList` はまとめて届いた件数
+   * ぶん伸びる列挙で、`.map().join()` に上限も合図も無かった。大量にまとめて
+   * 届くと、切っていない実装ではこの1行だけで数百文字になる——ここでは
+   * 抜粋の合図（`excerptLine` の「省略」）が出て、伸び続けないことを見る。
+   */
+  it('まとめて届いた未了が大量でも、id の列挙は抜粋の合図で締まる', async () => {
+    const stores = createMemoryStores();
+    const s = setup(() => 'わかった', stores, { delayMs: 200 });
+
+    s.clone.post(humanMessage('先客'));
+    await waitForFirstTurn(s);
+    const count = 50;
+    for (let index = 0; index < count; index += 1) {
+      s.clone.post(humanMessage(`続き${index}`));
+    }
+
+    await waitForDelivered(s, `続き${count - 1}`);
+    await settle();
+
+    const merged = s.calls[0]?.inputs[1] ?? '';
+    expect(merged).toContain(`${count} 件も台帳に載せた`);
+    const line = merged.split('\n').find((entry) => entry.includes('台帳に載せた（id:'));
+    expect(line).toBeDefined();
+    // 50件の生の id をそのまま出せば数百文字になる。ここでは合図が出て、
+    // 際限なく伸びていないことを見る。
+    expect(line!.length).toBeLessThan(600);
+    expect(line).toMatch(/省略/);
 
     await s.clone.stop();
   }, 15_000);

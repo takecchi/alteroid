@@ -170,4 +170,34 @@ describe('指名（select({ runnerId })）', () => {
 
     await registry.stop();
   });
+
+  /**
+   * **一致した器の一覧にも上限が要る（#409）。** `matches` は同じ `runnerId`
+   * を名乗って開いている器の台数ぶん伸びる列挙で、`.map().join()` に上限も
+   * 合図も無かった。低頻度の異常系だが、他の一覧と同じ形の穴なので締めて
+   * おく。
+   */
+  it('同じ名前を名乗る器が大量に開けていても、一覧は抜粋の合図で締まる', async () => {
+    const registry = createRunnerRegistry();
+    const count = 30;
+    for (let index = 0; index < count; index += 1) {
+      await registry.register({
+        label: `label-${index}`,
+        open: async () => new FakeRunner('dup-name-many'),
+      });
+    }
+
+    let caught: unknown;
+    try {
+      await registry.select({ runnerId: 'dup-name-many' });
+    } catch (error) {
+      caught = error;
+    }
+    const message = String((caught as Error | undefined)?.message);
+    expect(message).toMatch(/一意でない/);
+    expect(message.length).toBeLessThan(1_000);
+    expect(message).toMatch(/省略/);
+
+    await registry.stop();
+  });
 });

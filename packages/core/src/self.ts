@@ -18,8 +18,18 @@
  * （prompt.ts 冒頭の約束と同じ）。
  */
 
+import { excerptLine } from './excerpt.js';
 import { CANON_DOCUMENTS, CANON_REVISION, type CanonDocument } from './generated/canon.js';
 import { describeBuildRevision, type BuildRevision } from './revision.js';
+
+/**
+ * `MCP サーバ:` 行を抜粋する厚み（#409）。
+ *
+ * `facts.mcpServers` はクローンへ渡した MCP 連携の本数ぶん伸びる
+ * （`.map().join()` に上限も合図も無かった）。ここはシステムプロンプトへ
+ * そのまま焼き込まれる行なので、伸びれば毎ターンの土台がそのぶん膨らむ。
+ */
+const SELF_MCP_SERVERS_EXCERPT = 400;
 
 export { CANON_DOCUMENTS, CANON_REVISION, type CanonDocument };
 
@@ -211,7 +221,10 @@ export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
       ? unknownBecause(INIT_NOT_OBSERVED)
       : facts.mcpServers.length === 0
         ? '0本（init は観測済み）'
-        : facts.mcpServers.map((server) => `${server.name}(${server.status})`).join(', ');
+        : excerptLine(
+            facts.mcpServers.map((server) => `${server.name}(${server.status})`).join(', '),
+            SELF_MCP_SERVERS_EXCERPT,
+          );
 
   return [
     '## いまどう走っているか',

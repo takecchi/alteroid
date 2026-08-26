@@ -144,10 +144,19 @@ function isClosed(commitment: Commitment): boolean {
  *
  * **id が取れない行は件数だけに数える**（`commitment_list` ツール・digest と
  * 同じ扱い。`packages/core/src/tools.ts` / `digest.ts`）。
+ *
+ * **id の列挙にも上限を置く（#409）。** 台帳の破損の度合いに比例して伸びる
+ * 列挙で、`packages/core/src/tools.ts` の `commitment_list`（一覧モード）に
+ * 在った同じ形の穴の画面側。`ManagerDenialNote`（`managers.tsx`）の
+ * `LIST_DENIED_TOOLS` と同じ考え方——**切ったら必ず言う**。
  */
+const UNREADABLE_IDS_SHOWN = 20;
+
 function UnreadableNote({ unreadable }: { unreadable: UnreadableCommitment[] }) {
   if (unreadable.length === 0) return null;
-  const ids = unreadable.map((entry) => entry.id).filter((id): id is string => id != null);
+  const idsAll = unreadable.map((entry) => entry.id).filter((id): id is string => id != null);
+  const ids = idsAll.slice(0, UNREADABLE_IDS_SHOWN);
+  const idsRest = idsAll.length - ids.length;
   return (
     <div
       role="status"
@@ -155,8 +164,10 @@ function UnreadableNote({ unreadable }: { unreadable: UnreadableCommitment[] }) 
     >
       <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
       <span className="min-w-0 break-words">
-        読めない行が {unreadable.length} 件ある{ids.length > 0 && `（id: ${ids.join(', ')}）`}。
-        <strong>片付いたのではない。</strong>
+        読めない行が {unreadable.length} 件ある
+        {ids.length > 0 &&
+          `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
+        。<strong>片付いたのではない。</strong>
       </span>
     </div>
   );

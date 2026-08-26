@@ -172,6 +172,35 @@ describe('/commitments 画面', () => {
     expect(screen.getByText(/保持上限を超えて物理削除された片付き行が累計 3 件ある/)).toBeTruthy();
   });
 
+  /**
+   * **読めない行の id 列挙にも上限が要る（#409）。** 台帳の破損の度合いに
+   * 比例して伸びる列挙で、`packages/core/src/tools.ts` の `commitment_list`
+   * に在った同じ形の穴の画面側。大量の読めない行があっても、id の列挙が
+   * 上限で締まり省略の合図が出ることを固定する。
+   */
+  it('読めない行が大量でも、id の列挙は上限で締まり省略の合図を出す', async () => {
+    const count = 60;
+    stubFetch((url) => {
+      if (!url.includes('/commitments')) return undefined;
+      return json({
+        entries: [commitment()],
+        unreadable: Array.from({ length: count }, (_, index) => ({
+          id: `c-broken-${index}`,
+          at: new Date().toISOString(),
+          reason: '型が合わない',
+        })),
+        trimmedClosed: 0,
+      });
+    });
+    renderPage();
+
+    await screen.findByText('ドキュメントの誤りを直す');
+    expect(screen.getByText(new RegExp(`読めない行が ${count} 件ある`))).toBeTruthy();
+    expect(screen.getByText(/c-broken-0/)).toBeTruthy();
+    expect(screen.queryByText(/c-broken-59/)).toBeNull();
+    expect(screen.getByText(/…ほか \d+ 件は省略/)).toBeTruthy();
+  });
+
   it('物理削除が0件なら断りを出さない', async () => {
     stubCommitments([commitment()]);
     renderPage();

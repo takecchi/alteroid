@@ -250,6 +250,15 @@ const DAILY_REPORT_LOOKUP = 30;
 const EXTERNAL_PAYLOAD_LIMIT = 8_000;
 
 /**
+ * 未了イベントの id 一覧・削除された記憶の一覧を抜粋する厚み（#409）。
+ *
+ * どちらも「今回まとめて届いた分」の件数ぶん伸びる列挙で、`.join()` に
+ * 上限も合図も無かった。1件ごとの id / slug は短いが、まとめて届く量に
+ * 上限を課している場所が無い以上、ここで締めておく。
+ */
+const CLONE_ID_LIST_EXCERPT = 400;
+
+/**
  * 観測できなかった名前の言い方。
  *
  * **空文字や省略で表さない。** 読めなかったことを黙って落とすと、監査の穴が
@@ -1713,7 +1722,10 @@ class Clone implements CloneHost {
     // 1件しか渡さないと、残りは id を渡されないまま未了として溜まる。
     const ids = new Set(events.map((pending) => pending.id));
     const mine = open.filter((entry) => ids.has(entry.id));
-    const idList = mine.map((entry) => `\`${entry.id}\``).join(', ');
+    const idList = excerptLine(
+      mine.map((entry) => `\`${entry.id}\``).join(', '),
+      CLONE_ID_LIST_EXCERPT,
+    );
     const oldest = open[0];
     const lines = [
       `[system] 引き受けたまま終わっていない仕事は **${open.length} 件** ある` +
@@ -2762,7 +2774,13 @@ class Clone implements CloneHost {
       ...(changed.length === 0 ? [] : ['', renderMemoryDocuments(changed)]),
       ...(removed.length === 0
         ? []
-        : ['', `削除された記憶: ${removed.map((slug) => `${slug}.md`).join(' / ')}`]),
+        : [
+            '',
+            `削除された記憶: ${excerptLine(
+              removed.map((slug) => `${slug}.md`).join(' / '),
+              CLONE_ID_LIST_EXCERPT,
+            )}`,
+          ]),
       ...(documents.length === 0 ? ['', '（記憶は空になった）'] : []),
       '',
       '---',
