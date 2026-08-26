@@ -905,6 +905,33 @@ describe('renderCommitments', () => {
 
     expect(text).not.toContain('読めない行');
   });
+
+  /**
+   * **保持上限を超えて物理削除された片付き行の断り（issue #416）。**
+   *
+   * `renderUnreadableNotice` と同じ理由で CLI にも出す——Web
+   * （`apps/web/app/routes/commitments.tsx` の `TrimmedClosedNote`）とクローン
+   * （`packages/core/src/tools.ts` の `commitment_list`）にだけ在ってここに無いと、
+   * CLI で台帳を読んだ人間だけが、fs 実装が片付き行を物理削除している事実を知らない。
+   */
+  it('物理削除された片付き行が在れば、累計件数を断る', () => {
+    const { text } = renderCommitments([commitment({ id: 'a' })], NOW, [], 3);
+
+    expect(text).toContain('保持上限を超えて物理削除された片付き行が累計 3 件あります');
+  });
+
+  it('物理削除された片付き行が0件なら、断りを足さない', () => {
+    const { text } = renderCommitments([commitment({ id: 'a' })], NOW, [], 0);
+
+    expect(text).not.toContain('物理削除された');
+  });
+
+  it('読める行が0件でも、物理削除された片付き行が在れば断りを出す', () => {
+    const { text } = renderCommitments([], NOW, [], 5);
+
+    expect(text).toContain('保持上限を超えて物理削除された片付き行が累計 5 件あります');
+    expect(text).not.toContain('引き受けたまま終わっていない仕事はありません');
+  });
 });
 
 describe('chat の台帳コマンド', () => {

@@ -5,7 +5,7 @@ import {
   verifyJournalStoreQueryEdgeContract,
   verifyJournalStoreWithContract,
 } from '@alteroid/core';
-import type { Commitment, InboxEvent, JournalEntry } from '@alteroid/core';
+import type { Commitment, InboxEvent, Job, JournalEntry } from '@alteroid/core';
 import { PGlite } from '@electric-sql/pglite';
 import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -1095,6 +1095,78 @@ describe('PgJobStore', () => {
     expect(await stores.jobs.listApprovals({ pendingOnly: true })).toHaveLength(0);
     expect((await stores.jobs.getApproval('ap-1'))?.answer).toBe('よい');
   });
+
+  /**
+   * **`listJobs` もスキーマに合わない行を「飛ばすが、跡は残す」（Issue #224）。**
+   *
+   * `PgJournalStore#list` の「スキーマに合わない行の跡」テストと同じ道具・
+   * 同じ手口（生 SQL で `jobSchema.parse` を経由せず挿入する）で揃える。
+   * `Job` は判別子の `type` を持たないので、`journalRowType` は
+   * `undefined` を返し跡の見分けは `unknown-shape`（type 無し）1本になる。
+   */
+  describe('スキーマに合わない行の跡（Issue #224）', () => {
+    const secret = 'ghp_000000000000000000000000000000000000';
+
+    it('listJobs(): スキーマに合わない行を跡に残しつつ、読めた行はそのまま返る', async () => {
+      const now = new Date().toISOString();
+      await stores.jobs.putJob({
+        id: 'mgr-ok',
+        createdAt: now,
+        updatedAt: now,
+        status: 'running',
+        summary: '健全な行',
+      });
+
+      await db.execute(
+        sql`insert into jobs (id, status, created_at, updated_at, job)
+            values (
+              'broken-1',
+              'future-status',
+              '2026-08-12T00:00:00.000Z',
+              '2026-08-12T00:00:00.000Z',
+              ${JSON.stringify({
+                id: 'broken-1',
+                status: 'future-status',
+                createdAt: '2026-08-12T00:00:00.000Z',
+                updatedAt: '2026-08-12T00:00:00.000Z',
+                request: `秘密は ${secret} だった`,
+              })}::jsonb
+            )`,
+      );
+
+      let found: Job[] = [];
+      const lines = await captureStderr(async () => {
+        found = await stores.jobs.listJobs();
+      });
+
+      // 1. 読めた行（健全な1件）は今までどおり返る——回帰。
+      expect(found.map((job) => job.summary)).toEqual(['健全な行']);
+
+      // 2. 跡が stderr に出る。
+      const joined = lines.join('');
+      expect(joined).toContain('日誌の行を読み出せずに飛ばした');
+
+      // 3. **本文は跡に混ざらない。**
+      expect(joined).not.toContain(secret);
+    });
+
+    it('listJobs(): 壊れた行が無ければ跡は出ない（回帰）', async () => {
+      const now = new Date().toISOString();
+      await stores.jobs.putJob({
+        id: 'mgr-ok2',
+        createdAt: now,
+        updatedAt: now,
+        status: 'running',
+        summary: '健全な行のみ',
+      });
+
+      const lines = await captureStderr(async () => {
+        await stores.jobs.listJobs();
+      });
+
+      expect(lines.join('')).not.toContain('日誌の行を読み出せずに飛ばした');
+    });
+  });
 });
 
 describe('PgScheduleStore', () => {
@@ -1345,6 +1417,7 @@ describe('PgCommitmentStore', () => {
     expect(await stores.commitments.list()).toEqual({
       entries: [commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す')],
       unreadable: [],
+      trimmedClosed: 0,
     });
     expect((await stores.commitments.get('c-1'))?.body).toBe('PR を出す');
     expect(await stores.commitments.get('しらない')).toBeNull();
@@ -1357,7 +1430,11 @@ describe('PgCommitmentStore', () => {
       await stores.commitments.close('c-1', '2026-08-13T00:00:00.000Z', '#99 で出した', 'clone'),
     ).toBe(true);
 
-    expect(await stores.commitments.list()).toEqual({ entries: [], unreadable: [] });
+    expect(await stores.commitments.list()).toEqual({
+      entries: [],
+      unreadable: [],
+      trimmedClosed: 0,
+    });
     const all = (await stores.commitments.list({ includeClosed: true })).entries;
     expect(all).toHaveLength(1);
     // 列だけ直しても読み出しは jsonb からなので、クローンが見る側に入っていること
@@ -1533,7 +1610,11 @@ describe('PgCommitmentStore', () => {
       await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す')),
     ).toBe(false);
 
-    expect(await stores.commitments.list()).toEqual({ entries: [], unreadable: [] });
+    expect(await stores.commitments.list()).toEqual({
+      entries: [],
+      unreadable: [],
+      trimmedClosed: 0,
+    });
     expect((await stores.commitments.get('c-1'))?.closedAt).toBe('2026-08-13T00:00:00.000Z');
   });
 
@@ -1561,6 +1642,7 @@ describe('PgCommitmentStore', () => {
     expect(await stores.commitments.list({ includeClosed: true })).toEqual({
       entries: [],
       unreadable: [],
+      trimmedClosed: 0,
     });
   });
 
@@ -1606,7 +1688,11 @@ describe('PgCommitmentStore', () => {
     ]);
 
     expect(results.filter(Boolean)).toHaveLength(1);
-    expect(await stores.commitments.list()).toEqual({ entries: [], unreadable: [] });
+    expect(await stores.commitments.list()).toEqual({
+      entries: [],
+      unreadable: [],
+      trimmedClosed: 0,
+    });
   });
 
   /**
@@ -1653,6 +1739,38 @@ describe('PgCommitmentStore', () => {
     // 「無い」ことだけが null である
     expect(await stores.commitments.get('しらない')).toBeNull();
   });
+
+  /**
+   * **issue #416: pg 版は保持上限を持たず、`close()` の契約（「行は消さない」）を
+   * そのまま守る。** fs 版（`packages/storage-fs/src/index.test.ts` の
+   * 「閉じた行は上限で切られるが、未了は件数によらず1件も落ちない」）は
+   * `CLOSED_HISTORY_LIMIT`（`packages/storage-fs/src/commitments.ts` で
+   * 500 件）を超えると古い片付き行を物理削除するが、pg 版にはその経路が
+   * 無い——ここでは fs 版の上限を明確に超える件数（501件。fs 版のテストと
+   * パッケージを跨いで定数を共有すると結合が生まれるので、値はここへ複製する）
+   * を片付けても、1件も落ちず `trimmedClosed` が常に `0` のままであることを問う。
+   */
+  it('片付いた行を fs 版の保持上限を超えて積んでも、1件も落ちず trimmedClosed は 0 のまま', async () => {
+    const COUNT = 501;
+    for (let index = 0; index < COUNT; index += 1) {
+      const id = `closed-${String(index).padStart(4, '0')}`;
+      await stores.commitments.open(
+        commitment(id, '2026-08-01T00:00:00.000Z', `片付ける ${index}`),
+      );
+      await stores.commitments.close(
+        id,
+        new Date(Date.UTC(2026, 7, 2, 0, 0, 0) + index * 1000).toISOString(),
+        `片付けた ${index}`,
+        'clone',
+      );
+    }
+
+    const listed = await stores.commitments.list({ includeClosed: true });
+    expect(listed.entries).toHaveLength(COUNT);
+    expect(listed.trimmedClosed).toBe(0);
+    // 最初に片付けたもの（fs 版なら物理削除されている側）もまだ読める。
+    expect(await stores.commitments.get('closed-0000')).not.toBeNull();
+  }, 60_000);
 });
 
 /**

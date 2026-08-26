@@ -2416,6 +2416,9 @@ export function createApp(deps: AppDeps) {
           '「片付いた」でもない第3の状態**で、0件でも欄自体は必ず返る。**窓では絶対に' +
           '切らない**（issue #296 が塞いだ穴——読めない行が2頁目以降から消える——が' +
           '再び開くため）。' +
+          '`trimmedClosed` は保持上限を超えて物理削除された片付き行の累計件数' +
+          '（issue #416）。`unreadable` と同じく窓では切らない。契約を守れている' +
+          '実装は常に `0`（`CommitmentList` の doc、`packages/core/src/store.ts`）。' +
           '`limit` / `cursor` のいずれかを明示すると頁の封筒（`total` / `nextCursor`）が' +
           '応答へ載る。**明示しない既定の呼びは、この変更の前と応答が1バイトも変わらない**' +
           '（opt-in。`.claude/skills/listing-and-detail/SKILL.md` の考え方と同じ——足すのは' +
@@ -2449,11 +2452,12 @@ export function createApp(deps: AppDeps) {
         // opt-in には含めない——窓とは別の、既存の絞り込みだからである）。
         const optedIn = c.req.query('limit') !== undefined || c.req.query('cursor') !== undefined;
 
-        // **`list()` は `{ entries, unreadable }` を返す（issue #296）。**
-        // `unreadable` もそのまま応答へ含める — 人間の側（Web UI・API を
-        // 直接叩く側）にもクローンと同じ「読めない行が在る」という事実が
+        // **`list()` は `{ entries, unreadable, trimmedClosed }` を返す
+        // （issue #296 / #416）。** `unreadable` と `trimmedClosed` もそのまま
+        // 応答へ含める — 人間の側（Web UI・API を直接叩く側）にもクローンと
+        // 同じ「読めない行が在る」「物理削除された片付き行が在る」という事実が
         // 見えるようにする（`commitmentListResponseSchema` の doc）。
-        const { entries, unreadable } = await stores.commitments.list(
+        const { entries, unreadable, trimmedClosed } = await stores.commitments.list(
           includeClosed === 'true' ? { includeClosed: true } : undefined,
         );
         // **`total` は窓を当てる前の件数。** opt-in していないときは応答に載せない
@@ -2507,11 +2511,13 @@ export function createApp(deps: AppDeps) {
         const responseBody: {
           entries: unknown[];
           unreadable: unknown[];
+          trimmedClosed: number;
           total?: number;
           nextCursor?: string;
         } = {
           entries: page.map((entry) => ({ ...entry, updatedAt: commitmentUpdatedAt(entry) })),
           unreadable,
+          trimmedClosed,
         };
         if (optedIn) {
           responseBody.total = total;
@@ -2597,9 +2603,11 @@ export function createApp(deps: AppDeps) {
         tags: ['commitments'],
         summary: '引き受けた仕事を片付いたことにする',
         description:
-          'クローンの `commitment_close` と同じものを人間の手から。**行は消さない** — ' +
+          'クローンの `commitment_close` と同じものを人間の手から。**契約は「行は消さない」** — ' +
           '消すと「何を片付けたか」が日報の材料から落ちる。`reason` は必須で、' +
-          '人間はこれを読んで後から否定する。',
+          '人間はこれを読んで後から否定する。**⚠️ fs 実装は保持上限を超えた古い片付き行を' +
+          '物理削除するので、この契約を完全には守れていない（issue #416）。** 削除された' +
+          '累計件数は `GET /commitments` の `trimmedClosed` で見える。',
         responses: {
           200: {
             description: '閉じた。以後は `includeClosed=true` でだけ見える。',
