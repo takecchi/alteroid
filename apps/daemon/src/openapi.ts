@@ -12,6 +12,7 @@ import {
   pendingApprovalSchema,
   runnerCredentialFingerprintSchema,
   runnerProfileFingerprintSchema,
+  scheduleSpecSchema,
   tokenRotationPolicySchema,
   tokenRotationSettingsSchema,
   unreadableCommitmentSchema,
@@ -369,6 +370,22 @@ export const scheduleStatusSchema = z.object({
    * ここが出ているものは `DELETE /schedule/:kind` で外せる。
    */
   request: z.string().optional(),
+  /**
+   * 依頼を仕込んだときの周期そのもの。**`request` と同じく、仕込まれたものだけが持つ。**
+   *
+   * `description` は散文（「毎日 09:00（ローカル時刻）: …」）で、機械が読み戻せる形では
+   * ない。編集画面が周期を prefill するにはこの値が要る — `POST /schedule` は
+   * upsert なので（同じ kind なら置き換わる）、これが無いと編集フォームは周期を
+   * 既定値から始めるしかなく、**本文だけ直したつもりの保存が周期を黙って書き換える。**
+   *
+   * **既定の日報・発意 tick には無い。それは「分からない」ではなく「無い」である**
+   * — あれはコードに書かれた既定で、`spec` という値そのものが存在しない
+   * （下の `createdAt` の doc と同じ理由）。
+   *
+   * **加算のみの変更である**（#235 の `createdAt` / `updatedAt` と同じ形）。既存の欄は
+   * 1つも変えていないので、いまの消費側は壊れない。
+   */
+  spec: scheduleSpecSchema.optional(),
   /**
    * 仕込まれた時刻 / 最後に仕込み直された時刻（ISO 8601）。
    *

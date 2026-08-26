@@ -49,6 +49,20 @@ export interface ScheduleStatus {
   nextAt: string;
   /** 定期の依頼として仕込まれたものだけ（既定の日報・発意には無い）。 */
   request?: string;
+  /**
+   * 依頼を仕込んだときの周期そのもの。**`request` と同じく、仕込まれたものだけが持つ。**
+   *
+   * `description` は散文（`describeScheduleSpec` が組む「毎日 09:00（ローカル時刻）: …」）
+   * で、機械が読み戻せる形ではない。編集画面が周期を prefill するにはこの値が要る
+   * — 無いと編集フォームは周期を既定値（例: daily 09:00）から始めるしかなく、
+   * `POST /schedule` は upsert なので、**本文だけ直したつもりの保存が周期を黙って
+   * 書き換える**（`apps/daemon/src/app.ts` の `POST /schedule` ハンドラの doc）。
+   *
+   * **既定の日報・発意 tick には無い。それは「分からない」ではなく「無い」である**
+   * — あれはコードに書かれた既定であって、`spec` という値自体が存在しない
+   * （下の `createdAt` の doc と同じ理由）。
+   */
+  spec?: ScheduleSpec;
   /** 前回この kind で発火した時刻。 */
   lastRunAt?: string;
   /**
@@ -249,7 +263,12 @@ class TimerScheduler implements Scheduler {
         nextAt: new Date(this.#due.get(entry.kind) ?? entry.nextAt(now).getTime()).toISOString(),
         ...(plan === undefined
           ? {}
-          : { request: plan.request, createdAt: plan.createdAt, updatedAt: plan.updatedAt }),
+          : {
+              request: plan.request,
+              spec: plan.spec,
+              createdAt: plan.createdAt,
+              updatedAt: plan.updatedAt,
+            }),
         ...(lastRunAt === undefined ? {} : { lastRunAt }),
       };
     });
