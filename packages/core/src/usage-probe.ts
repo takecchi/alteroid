@@ -179,8 +179,7 @@ export interface UsageProbeFailure {
 
 /** `runUsageProbe` の結果。**決して投げない**契約を、型でも表す。 */
 export type UsageProbeOutcome<T> =
-  | { ok: true; value: T }
-  | { ok: false; failure: UsageProbeFailure };
+  { ok: true; value: T } | { ok: false; failure: UsageProbeFailure };
 
 /**
  * 使い捨ての probe で `read` を1回走らせる。

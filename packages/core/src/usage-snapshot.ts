@@ -322,8 +322,16 @@ export const ACCOUNT_USAGE_READ_TIMEOUT_MS = 10_000;
  * 「起動失敗・締め切り・中断」の内訳をそのまま名乗ったもの** — 呼び出し元
  * （`judgeTokenCandidate` 等）はこの文字列を判定に使わないので、文言そのものを
  * 変えても判定結果は動かない（`state: 'failed'` であることだけが効く）。
+ *
+ * **export してあるのはテストのため。** `fetchAccountUsage` を通す経路では
+ * `timeout` / `aborted` を作れない（`ACCOUNT_USAGE_READ_TIMEOUT_MS`
+ * ＜ `USAGE_PROBE_TIMEOUT_MS` なので、2つの口の読み取りが常に外側の締め切りより
+ * 先に終わる。`settleWithin` は reject も飲んで `undefined` にするので `read` 自体
+ * も投げない）。**この2値は `runUsageProbe` の一般契約としては要る**（他の
+ * 呼び出し元や将来の変更のため）ので、`fetchAccountUsage` 経由の統合テストでは
+ * 到達できない分、ここを直接呼ぶ単体テストで両方の分岐を確かめる。
  */
-function describeOuterFailure(failure: UsageProbeFailure): string {
+export function describeOuterFailure(failure: UsageProbeFailure): string {
   const label: Record<UsageProbeFailure['kind'], string> = {
     exception: '起動失敗',
     timeout: '締め切り',
@@ -345,7 +353,7 @@ function describeOuterFailure(failure: UsageProbeFailure): string {
  * くる値がどちらも `undefined` で同じため）。区別できるのは reject した (3) だけ
  * である。
  */
-function describeSilentChannels(
+export function describeSilentChannels(
   accountReject: string | undefined,
   usageReject: string | undefined,
 ): string {
