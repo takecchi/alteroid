@@ -474,9 +474,15 @@ export interface ManagerPoolOptions {
    * ストアを読めないので、器が作り直されたときに降ろすのはデーモンの責任である。
    *
    * **これが無いと、起動時の撒き直しが「そのとき繋がっていた runner」にしか
-   * 届かない。** 後から上がってきた runner は器の環境変数のまま走り、そこで
-   * 起こしたマネージャーだけが古いトークンを使う——しかもその食い違いは、
-   * マネージャーの側からは見えない。
+   * 届かない。** 後から上がってきた runner がどう走るかは、**器の環境変数に
+   * 認証トークンが入っているかどうかで割れる**（`createCredentialStore` の
+   * `seed`——既定 `process.env`——がその runner の器そのものだから）。入っていれば
+   * （例: `compose.yaml` の `*shared-env` で runner にも同じ env を渡している
+   * 構成）**器の環境変数へ戻り**、そこで起こしたマネージャーは古いトークンを
+   * 使い続ける。入っていなければ（例: Railway の runner サービスに
+   * `CLAUDE_CODE_OAUTH_TOKEN` を渡していない構成）**資格を1つも持たずに走る**
+   * ——古いトークンで動くよりも重い壊れ方である。**どちらの場合も、その食い違い
+   * や欠落はマネージャーの側からは見えない。**
    */
   syncRunnerToken?: (runner: RunnerClient) => Promise<void>;
   stores: Stores;
@@ -3612,7 +3618,7 @@ class Pool implements ManagerPool {
           type: 'exchange',
           with: 'self',
           role: 'outbound',
-          text: `${runner.runnerId} に認証トークンを降ろせなかった（この runner で起こすマネージャーは器の環境変数のまま走る）: ${String(error)}`,
+          text: `${runner.runnerId} に認証トークンを降ろせなかった（この runner で起こすマネージャーは、器の環境変数に認証トークンが入っていればそれで走り、入っていなければ資格を1つも持たずに走る——どちらになるかは器の env 次第で、ここからは分からない）: ${String(error)}`,
         })
         .catch(() => undefined);
     }
