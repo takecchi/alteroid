@@ -15,7 +15,11 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 
 import { buildManagerSessionOptions } from './claude-provider.js';
-import { noteBackgroundFailure } from './dropped-record.js';
+import {
+  noteBackgroundFailure,
+  noteUnclassifiedFailure,
+  noteUnclassifiedFailuresSummary,
+} from './dropped-record.js';
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
 import { placedModelTier, resolveModelTier } from './model-tier.js';
 import {
@@ -894,6 +898,17 @@ class RunnerSession {
   #reader: Promise<void> | null = null;
   #status: JobStatus = 'running';
   #sessionId: string | undefined;
+  /**
+   * SDK が失敗として出したのに、枠の文言としては分類できなかった回の帳面
+   * （Issue #393。`種別 → 件数`）。
+   *
+   * **セッション1本ぶんである。** プロセス単位で畳むと、器が入れ替わって新しい
+   * 失敗が始まっても「前に見たから」で黙る（`noteUnclassifiedFailure` の doc）。
+   *
+   * **これは計器であって、何も分岐させない。** 分類できたときに `usage_notice`
+   * を出す判断も、回し手へ渡すものも、1文字も変えていない。
+   */
+  readonly #unclassifiedFailures = new Map<string, number>();
   #transcriptPath: string | undefined;
   #stopped = false;
   /**
@@ -1080,6 +1095,12 @@ class RunnerSession {
     // （`#finish` の doc と同じ判断）。`settled` は渡さない — 中で
     // `#openTasks` の状態から導く（`#closeWorkerWaitWindow` の doc）。
     this.#closeWorkerWaitWindow();
+
+    // **分類できなかった失敗の件数も、同じ理由でここで出す（Issue #393）。**
+    // 直上の `worker_wait` とまったく同じ穴である —— `#finish` にだけ置くと、
+    // **器の入れ替えと `manager_stop` で畳まれたセッションのぶんが黙って消える。**
+    // 初出の1行は既に出ているので存在は残るが、**量が失われる**。
+    noteUnclassifiedFailuresSummary(this.#unclassifiedFailures, this.#id);
 
     // 止まる前に全文を返す。runner のディスクは器と一緒に消えるので、ここで
     // 渡し損ねると manager_id から生ログへ降りる経路が切れる。
@@ -1646,6 +1667,7 @@ class RunnerSession {
     // 書いた本文 `said` は通さない — `classifyUsageNotice` は部分一致なので、
     // 「上限に当たった」と報告に書いた瞬間に上限と誤判定する）。
     if (failure !== undefined) {
+      let classified = false;
       for (const candidate of [
         failure.text,
         resultText(message).text,
@@ -1654,8 +1676,18 @@ class RunnerSession {
         const notice = classifyUsageNotice(candidate);
         if (notice !== undefined) {
           this.#emit({ type: 'usage_notice', managerId: this.#id, notice });
+          classified = true;
           break;
         }
+      }
+      // **1件も分類できなかった回に跡を残す（Issue #393）。** ここを黙って
+      // 抜けると、**回し手が原理的に聞けない失敗**が何回起きているかがどこにも
+      // 残らない —— 資格が1つも無い器で起こしたときがその形で、マネージャーが
+      // 落ち続けてもプールは何も検知しない。**出す判断は変えていない**
+      // （分類できたら従来どおり `usage_notice` を出し、できなければ従来どおり
+      // 何も出さない）。足したのは数えることだけである。
+      if (!classified) {
+        noteUnclassifiedFailure(this.#unclassifiedFailures, this.#id, failure.via, failure.code);
       }
     }
 
@@ -1911,6 +1943,10 @@ class RunnerSession {
     options: { selfFenced?: true } = {},
   ): Promise<void> {
     this.#stopped = true;
+    // **量はここで1行にまとめる。** `#finish` はこのセッションの終わり口が
+    // 1本に集まる場所なので、経路ごとに書き忘れる余地が無い
+    // （`noteUnclassifiedFailuresSummary` の doc）。
+    noteUnclassifiedFailuresSummary(this.#unclassifiedFailures, this.#id);
     // **`close()` より先に読む。** 閉じた後の control channel からは何も取れない。
     // ここを通るのはクラッシュ・`lost`・`failed`、つまり `result` が出ないまま
     // 終わる経路そのものである。
