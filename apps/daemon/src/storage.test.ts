@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { WITHHELD_ENV_KEYS } from '@alteroid/core';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DATABASE_URL_ENV, openStorage, planStorage } from './storage.js';
 
@@ -62,6 +62,20 @@ describe('planStorage', () => {
 });
 
 describe('openStorage', () => {
+  // `backfillMemoryCreatedAt` は成功時の1行を `process.stdout.write` で出す
+  // （Issue 420 の残件のうち、成功時のメッセージを `stderr` から揃えたもの）。
+  // 差し替える前は `stderr` だったので `vitest.setup.ts` の歯（#314）に掛からず
+  // 素通りしていたが、いまは `openStorage` を呼ぶこのブロックの全テストが
+  // 本物の stdout へ書く。ここで spy を張って握り潰す — 内容を確かめたい
+  // テストではないので `captureStdout()`（`apps/cli/src/test-support.ts`）ほど
+  // 厚い形は要らない。
+  beforeEach(() => {
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('fs 構成では人格データディレクトリを用意して返す', async () => {
     const root = await mkdtemp(join(tmpdir(), 'alteroid-storage-'));
 

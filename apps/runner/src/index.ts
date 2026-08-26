@@ -172,7 +172,7 @@ export async function main(): Promise<void> {
     withheldEnvKeys: WITHHELD_ENV_KEYS,
   });
   const seeded = await credentials.flush();
-  process.stderr.write(
+  process.stdout.write(
     `alteroid-runner: 鍵 ${seeded.length} 件を器へ置きました${seeded
       .map((entry) => ` ${entry.name}=${entry.sha256}`)
       .join('')}\n`,
@@ -247,7 +247,7 @@ export async function main(): Promise<void> {
     listeningOn = `http://${hostname}:${port}`;
     // TCP は開発用の逃げ道である。マネージャーは同じ器の中に居るので、鍵が漏れれば
     // 制御面に手が届く。**本番はソケットにすること。**
-    process.stderr.write(
+    process.stdout.write(
       'alteroid-runner: TCP で待ち受けています。マネージャーと同じ器から届く口なので、' +
         '本番では ALTEROID_RUNNER_SOCKET を使ってください。\n',
     );
@@ -276,7 +276,7 @@ export async function main(): Promise<void> {
   // 同じ行が出るが、あちらが読んでいるのは自己認識に載せる宣言であって、実際に
   // SDK セッションへ渡っているのはこのプロセスが解いた値である。
   for (const { key, value, fallback } of placedManagerModels(process.env)) {
-    process.stderr.write(
+    process.stdout.write(
       `alteroid-runner: ${key} が置かれています（既定 ${fallback} → ${value}）。` +
         `以後この runner が起こすセッションはこの帯で走ります。` +
         `既定へ戻すにはこの環境変数を外してください\n`,

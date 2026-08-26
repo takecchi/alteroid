@@ -184,7 +184,7 @@ async function backfillMemoryCreatedAt(stores: Stores): Promise<void> {
     }
     const metas = await stores.persona.list();
     const unknown = metas.filter((meta) => meta.createdAt.kind === 'unknown').length;
-    process.stderr.write(
+    process.stdout.write(
       `alteroidd: 記憶の created_at backfill: ${filled} 件を新たに埋めた` +
         `（記憶は全 ${metas.length} 件、うち unknown ${unknown} 件）。\n`,
     );
