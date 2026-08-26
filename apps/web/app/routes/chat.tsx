@@ -434,8 +434,18 @@ export function ChatPane({
    * （`findIndex` が `-1` を返す no-op）。**人間の発言（`showOwnLine`）は
    * 一度作ったら書き換えないので、この危険が無い** —— 除外するのはクローン
    * の返信の、いままさに継ぎ足され得るものだけで足りる。
+   *
+   * ⚠️ **`useRef` ではなく `useState` にしてある。** 下の刈り込みの不変条件
+   * チェックは `retainedBy`（上）と同じ「render のたびに確認し、貼り直しにも
+   * 自己修復する」形にする必要があり（doc は下）、そのためにはこの値を
+   * **render 中に読む**必要がある。ref の `.current` を render 中に読むのは
+   * React の前提（render は ref に依存しない）に反し、`react-hooks/refs` の
+   * 歯が検出する。**state にしても余計な再描画は増えない** —— 値を書き換える
+   * 箇所（下の `case 'text'` / ストリーム終了時の `finally`）は、どちらも
+   * 同じ tick で `setLines` を呼んでいる箇所であり、React は同じコミットへ
+   * まとめる。
    */
-  const activeReplyKeyRef = useRef<string | undefined>(undefined);
+  const [activeReplyKey, setActiveReplyKey] = useState<string | undefined>(undefined);
 
   /**
    * 直前に見ていた会話。`retainedBy`（上）が「いま」に加えて残す2つ目の持ち主。
@@ -588,24 +598,48 @@ export function ChatPane({
    * 何もしない —— 届いたばかりの行が画面から消える形にはならない。刈るのは
    * 「サーバが引き取ったと確認できた」ときだけである。
    *
-   * ⚠️ **`activeReplyKeyRef` の行だけは対象から外す**（同 ref の doc）。
-   * ここも `retainedBy` と同じ「毎 render の不変条件」であって「一度きりの
-   * edge」ではないので、貼り直しで一致済みの行が戻ってきても自己修復する。
+   * ⚠️ **`activeReplyKey`（state。上）の行だけは対象から外す**（同 state の
+   * doc）。ここも `retainedBy` と同じ「毎 render の不変条件」であって
+   * 「一度きりの edge」ではないので、貼り直しで一致済みの行が戻ってきても
+   * 自己修復する——**この自己修復を保つために、`useEffect` ではなく render
+   * 中で直接行う。** `useEffect` に移す形も試したが、コミットの後まで
+   * 刈り込みが遅れることで、ストリーミングの2チャンク目が届くより前に
+   * 刈り込みが間に合うとは限らなくなり、**`activeReplyKey` を外した変異を
+   * 当てても歯が落ちなくなった**（下のテストの変異試験で実際に確認した）。
+   * render 中で同期的に行えば、コミットより前に必ず一度は確認される。
    *
    * `previous`（旧い会話・持ち主なしの行）にはここでは触れない ——
    * `pendingOwnLines` が見るのは `ownedBy(lines, shownId)`（いま見ている分）
    * だけであり、直前の会話の分は次にその会話が「いま」になったときに
    * 同じ形で刈られる（`historyLines` がその時点の `shownId` 向けに読み直
    * されるため）。
+   *
+   * ⚠️ **`settled` の判定に `activeReplyKey` を必ず含める。** 最初は
+   * 「`pendingOwnLines` の結果が `ownedBy` と長さで違えば呼ぶ」という荒い
+   * 判定にしていたが、それだと「一致した行がちょうど `activeReplyKey`
+   * 自身だけ」の render でも毎回 `setLines` を呼んでしまい、中で結局
+   * 何も落とさず `previous` をそのまま返す no-op のはずが、**render 中の
+   * state 更新として実際に「無限に呼び直される」形になった**（jsdom の
+   * 実機で `Too many re-renders` を再現して見つけた）。**呼ぶかどうかの
+   * 判定自体に、中で保護する対象（`activeReplyKey`）を含めておかないと、
+   * 「呼んでも中で何もしない」はずの render で無限に setState を呼び続ける
+   * ことがある**——だから外側の判定と内側の filter は同じ集合（保つ理由）
+   * を見るように揃えてある。
    */
-  const pendingCurrent = pendingOwnLines(lines, shownId, historyLines);
-  if (pendingCurrent.length !== ownedBy(lines, shownId).length) {
+  const pendingCurrentKeys = new Set(
+    pendingOwnLines(lines, shownId, historyLines).map((line) => line.key),
+  );
+  const settled = ownedBy(lines, shownId).some(
+    (line) => !pendingCurrentKeys.has(line.key) && line.key !== activeReplyKey,
+  );
+  if (settled) {
     setLines((previous) => {
-      const stillPending = pendingOwnLines(previous, shownId, historyLines);
-      const keep = new Set(stillPending.map((line) => line.key));
-      const activeKey = activeReplyKeyRef.current;
+      const stillPendingKeys = new Set(
+        pendingOwnLines(previous, shownId, historyLines).map((line) => line.key),
+      );
       const next = previous.filter(
-        (line) => line.of !== shownId || keep.has(line.key) || line.key === activeKey,
+        (line) =>
+          line.of !== shownId || stillPendingKeys.has(line.key) || line.key === activeReplyKey,
       );
       return next.length === previous.length ? previous : next;
     });
@@ -964,8 +998,8 @@ export function ChatPane({
                 replyKey = `c-${Date.now()}`;
                 const key = replyKey;
                 // `pendingOwnLines` による刈り込みから、この行が完成するまで
-                // 守る（`activeReplyKeyRef` の doc）。
-                activeReplyKeyRef.current = key;
+                // 守る（`activeReplyKey` の doc）。
+                setActiveReplyKey(key);
                 setLines((previous) => [
                   ...previous.filter((line) => line.transient !== true),
                   { key, role: 'clone', text: '', of: stream.id },
@@ -1059,7 +1093,7 @@ export function ChatPane({
           // このストリームが積んだ返信は、もう `append` から継ぎ足されない
           // （このストリームのやりとりが終わったので）——刈り込みから守る
           // 理由が消えたので、`pendingOwnLines` の対象に戻す。
-          activeReplyKeyRef.current = undefined;
+          setActiveReplyKey(undefined);
         }
       }
     },

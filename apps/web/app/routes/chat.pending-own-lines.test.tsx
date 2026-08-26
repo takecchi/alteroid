@@ -64,13 +64,18 @@ describe('pendingOwnLines（issue #446 の筋書き2）', () => {
     expect(pending).toHaveLength(2);
   });
 
-  it('いま見ている会話（shownId）以外の行は対象にしない（ownedBy と同じ絞り）', () => {
-    const lines = [行('やあ', 'human', 'conv-a'), 行('やあ', 'human', 'conv-b')];
-    // conv-b 向けの historyLines に conv-a の行の本文と同じものがあっても、
-    // shownId が conv-a なら conv-b の行はそもそも見ない。
-    const historyLines = [行('やあ', 'human', 'conv-b')];
+  it('いま見ている会話（shownId）以外の行は、一致のいかんによらず結果に出さない（ownedBy と同じ絞り）', () => {
+    // `pendingOwnLines` は `ownedBy(lines, shownId)` から出発する——conv-b の
+    // 行は shownId が conv-a である限り、そもそも候補にすら入らない
+    // （`historyLines` 側の `of` は見ない。「いま見ている会話向け」を渡す
+    // 責務は呼び出し側にある）。historyLines を空にして、conv-b の行が
+    // 「一致が無いから残る」形で紛れ込んでいないことを確かめる。
+    const lines = [行('やあ', 'human', 'conv-a'), 行('別の話', 'human', 'conv-b')];
 
-    expect(pendingOwnLines(lines, 'conv-a', historyLines)).toHaveLength(1);
+    const pending = pendingOwnLines(lines, 'conv-a', []);
+
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.text).toBe('やあ');
   });
 });
 
