@@ -3709,9 +3709,11 @@ describe('宣言と実物の一致（/schedule）', () => {
       lastRunAt: '2026-08-11T13:00:00.000Z',
       // **宣言に在る欄は全部埋める。** この試験は応答のキー集合と宣言のキー集合の
       // **一致**を見る（`toEqual`）ので、足場が宣言済みの欄を欠くと、漏れでも
-      // 落ちるが**欠けでも落ちる。** `createdAt` / `updatedAt` は #235 で
-      // `optional` として宣言に加わったもので、**アサーションは1文字も変えて
-      // いない**（緩めると「余分なフィールドは外へ出ない」の保証が消える）。
+      // 落ちるが**欠けでも落ちる。** `createdAt` / `updatedAt` は #235 で、
+      // `spec` は編集画面の prefill 用に `optional` として宣言に加わったもので、
+      // **アサーションは1文字も変えていない**（緩めると「余分なフィールドは
+      // 外へ出ない」の保証が消える）。
+      spec: { type: 'daily', at: '09:00' },
       createdAt: '2026-08-01T00:00:00.000Z',
       updatedAt: '2026-08-05T00:00:00.000Z',
       // 宣言（scheduleStatusSchema）に無いフィールド。
@@ -3740,6 +3742,46 @@ describe('宣言と実物の一致（/schedule）', () => {
     const declaredKeys = Object.keys(scheduleStatusSchema.shape).sort();
     const actualKeys = Object.keys(entry as Record<string, unknown>).sort();
     expect(actualKeys).toEqual(declaredKeys);
+  });
+
+  /**
+   * 編集画面が周期を prefill するための `spec`（#496）が、経路の途中で
+   * 落とされずに届くこと。仕込まれた依頼には出て、既定の日報・発意 tick には
+   * 出ないこと（`ScheduleStatus.spec` の doc「あれはコードに書かれた既定で、
+   * `spec` という値そのものが存在しない」）。
+   */
+  it('仕込まれた依頼には spec が出て、既定の日報・発意には出ない', async () => {
+    const seeded = {
+      kind: 'issue-round',
+      description: '毎日 09:00（ローカル時刻）: open issue を見て実装を進める',
+      nextAt: '2026-08-12T00:00:00.000Z',
+      request: 'open issue を見て実装を進める',
+      spec: { type: 'daily', at: '09:00' },
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+    } as unknown as ScheduleStatus;
+    const withSpec: Scheduler = {
+      ...schedule.scheduler,
+      list: () => [seeded, ...schedule.scheduler.list()],
+    };
+    const withSpecApp = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      scheduler: withSpec,
+    });
+
+    const body = (await (await withSpecApp.request('/schedule')).json()) as {
+      entries: Record<string, unknown>[];
+    };
+
+    const issueRound = body.entries.find((entry) => entry.kind === 'issue-round');
+    expect(issueRound).toMatchObject({ spec: { type: 'daily', at: '09:00' } });
+
+    const dailyReport = body.entries.find((entry) => entry.kind === 'daily_report');
+    expect(dailyReport).toBeDefined();
+    expect(dailyReport).not.toHaveProperty('spec');
   });
 });
 

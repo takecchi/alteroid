@@ -3946,6 +3946,53 @@
                           "request": {
                             "type": "string"
                           },
+                          "spec": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "daily"
+                                  },
+                                  "at": {
+                                    "type": "string",
+                                    "pattern": "^(?:[01]?\\d|2[0-3]):[0-5]\\d$"
+                                  }
+                                },
+                                "required": ["type", "at"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "every"
+                                  },
+                                  "minutes": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": ["type", "minutes"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "cron"
+                                  },
+                                  "expression": {
+                                    "type": "string",
+                                    "maxLength": 120
+                                  }
+                                },
+                                "required": ["type", "expression"]
+                              }
+                            ]
+                          },
                           "createdAt": {
                             "type": "string"
                           },
