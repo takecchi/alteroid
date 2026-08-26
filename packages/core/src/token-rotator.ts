@@ -529,6 +529,18 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         let sweptTokens = afterCoolDown;
         const unusableLabels: string[] = [];
         let chosen: { token: AgentToken; verdict: TokenCandidateVerdict } | undefined;
+        /**
+         * **判定できなかった候補のうち、いちばん先に出会ったもの。**
+         *
+         * `undecidable` は**順位を下げるのであって、捨てるのではない**
+         * （`judgeTokenCandidate` の「迷ったら `unusable` にしない」）。`usable` と
+         * 確かめられたものが1本でも在ればそちらが勝つが、**1本も無ければここへ倒す。**
+         *
+         * **列は order 昇順なので、ここに入るのは「判定できなかった中で order が
+         * いちばん小さいもの」である** ⟹ 全部 `undecidable` のときの結果は、
+         * 順位を下げる前と同じになる。
+         */
+        let undecided: { token: AgentToken; verdict: TokenCandidateVerdict } | undefined;
         let ranOut: Extract<TokenSelection, { kind: 'none' }> | undefined;
         let stoppedByBudget = false;
 
@@ -555,9 +567,22 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
             id: selection.token.id,
             ...credentialOf(selection.token),
           });
-          if (verdict.verdict !== 'unusable') {
+          // **`usable` と確かめられたものだけが、ここで列を止める。**
+          //
+          // **`undecidable` で止めていた**ので、`usable` が後ろに居ても届かなかった
+          // ——「判定できなかった候補を撒いて本番で確かめる」が、**確かめられた候補
+          // より先に選ばれていた。** 2026-08-25 の回転はこの形である（order -1 の
+          // 行が `undecidable` を返し、そこで確定した）。
+          if (verdict.verdict === 'usable') {
             chosen = { token: selection.token, verdict };
             break;
+          }
+          if (verdict.verdict === 'undecidable') {
+            // **捨てない。順位を下げるだけである。** 先に出会ったものを覚えておき、
+            // `usable` が1本も見つからなければここへ倒す。**上書きしない**
+            // （order 昇順なので、最初のものがいちばん小さい）。
+            undecided ??= { token: selection.token, verdict };
+            continue;
           }
 
           // **飛ばした候補も冷却へ入れる。** 入れないと次の観測で同じものが
@@ -591,6 +616,16 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         // が固定している形）。
         if (unusableLabels.length > 0) await stores.tokens.replace(sweptTokens);
 
+        // **`usable` が見つからなければ、判定できなかった候補へ倒す。**
+        //
+        // **手元に撒ける候補が在るのに何もしない、を作らない。** ここを省くと、
+        // 「`usable` を探しているうちに持ち時間を使い切って、見つけてあった
+        // `undecidable` を捨てる」が起きる —— **順位を下げたことが、捨てたことに
+        // 化ける。** 打ち切り（`stoppedByBudget`）でも同じで、**倒せる先が在るなら
+        // 倒す。**
+        const fellBackToUndecided = chosen === undefined && undecided !== undefined;
+        if (fellBackToUndecided) chosen = undecided;
+
         if (chosen === undefined) {
           const skipped =
             unusableLabels.length === 0
@@ -623,7 +658,8 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         const verdict = chosen.verdict;
 
         // `undecidable` は**撒く側へ倒す**（Issue #393「回し方」の3値）。判定でき
-        // ないことを理由に候補を捨てない。
+        // ないことを理由に候補を捨てない。**ただし `usable` より後ろに置く**
+        // （上の `undecided`）。
         const generation = (active?.generation ?? 0) + 1;
         const rotatedAt = now().toISOString();
 
@@ -652,10 +688,29 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           signal: decision.signal,
           freshness,
           spread: spreadResults,
-          why:
-            verdict.verdict === 'usable'
-              ? `${decision.why}。候補「${selection.token.label}」は観測できた`
-              : `${decision.why}。候補「${selection.token.label}」は判定できなかったので撒いて本番で確かめる（${verdict.reason}）`,
+          // **倒したことを言い分ける。** 黙って倒すと、「`usable` を選んだ」と
+          // 「探しきれずに妥協した」が同じ顔になる —— 打ち切りに `sweep_stopped` を
+          // 与えたのと同じ理由である。**言い分けるのは `why`（＝日誌の `text`）で、
+          // `event` は `rotated` のままにしてある** —— `event` の軸は「何が起きたか」
+          // で、**候補をどう選んだかは別の軸**である（そしてその軸は、この変更より前から
+          // `why` が運んでいる）。
+          why: (() => {
+            const head = `${decision.why}。`;
+            if (verdict.verdict === 'usable') {
+              return `${head}候補「${selection.token.label}」は観測できた`;
+            }
+            const stopped = stoppedByBudget
+              ? `（候補を試す持ち時間（${String(CANDIDATE_SWEEP_BUDGET_MS)}ms）を使い切ったところで倒した）`
+              : '';
+            if (fellBackToUndecided) {
+              return (
+                `${head}**\`usable\` と確かめられた候補は見つからなかった**ので、` +
+                `判定できなかった候補「${selection.token.label}」へ倒した${stopped}` +
+                `——撒いて本番で確かめる（${verdict.reason}）`
+              );
+            }
+            return `${head}候補「${selection.token.label}」は判定できなかったので撒いて本番で確かめる（${verdict.reason}）`;
+          })(),
         };
       }),
   };

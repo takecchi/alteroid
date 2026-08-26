@@ -325,6 +325,113 @@ describe('候補を試し切る', () => {
   });
 });
 
+/**
+ * **確かめられた候補を、判定できなかった候補より先に選ぶ。**
+ *
+ * 2026-08-25 の回転はこの形で外れた —— order -1 の行が `undecidable` を返し、
+ * **そこで確定した**ので、後ろに居た未使用の候補は評価すらされなかった。
+ *
+ * **⚠️ `undecidable` を捨てるのではない。順位を下げるだけである**
+ * （`judgeTokenCandidate` の「迷ったら `unusable` にしない」）。
+ */
+describe('usable を undecidable より先に選ぶ', () => {
+  it('先頭が判定できなくても、後ろの確かめられた候補を選ぶ', async () => {
+    const h = harness({
+      verdictOf: (id) =>
+        id === 'tok-b'
+          ? { verdict: 'undecidable', reason: 'この認証では原理的に枠が取れない' }
+          : { verdict: 'usable' },
+    });
+    await seedFour(h);
+
+    const outcome = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    // **tok-b で確定しない。** 確かめられた tok-c が勝つ。
+    expect(outcome).toMatchObject({ kind: 'rotated', toTokenId: 'tok-c' });
+    expect(h.probeCalls.map((call) => call.id)).toEqual(['tok-b', 'tok-c']);
+    // **順位を下げただけなので、冷却へは入れない**（捨てていない）。
+    expect(await isCooling(h, 'tok-b')).toBe(false);
+    expect(outcome.why).toContain('観測できた');
+  });
+
+  it('全部が判定できなければ、order のいちばん小さいものを撒く（前と同じ結果）', async () => {
+    const h = harness({
+      verdict: { verdict: 'undecidable', reason: 'この認証では原理的に枠が取れない' },
+    });
+    await seedFour(h);
+
+    const outcome = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    // **捨てていない。** 順位を下げた先で、いちばん order の小さい tok-b へ倒る。
+    expect(outcome).toMatchObject({ kind: 'rotated', toTokenId: 'tok-b' });
+    // 全部試してから倒している（`usable` が居ないことを確かめたうえで）。
+    expect(h.probeCalls.map((call) => call.id)).toEqual(['tok-b', 'tok-c', 'tok-d']);
+    for (const id of ['tok-b', 'tok-c', 'tok-d']) expect(await isCooling(h, id)).toBe(false);
+  });
+
+  it('倒したことを言い分ける（「選んだ」と「妥協した」を同じ顔にしない）', async () => {
+    const h = harness({
+      verdict: { verdict: 'undecidable', reason: 'この認証では原理的に枠が取れない' },
+    });
+    await seedFour(h);
+
+    const outcome = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(outcome.why).toContain('確かめられた候補は見つからなかった');
+    expect(outcome.why).toContain('へ倒した');
+    // **「観測できた」とは言わない。**
+    expect(outcome.why).not.toContain('は観測できた');
+  });
+
+  it('持ち時間を使い切っても、見つけてあった候補へ倒す（手元に在るのに何もしない、を作らない）', async () => {
+    // probe 1本が 40 秒かかる見かけ ⟹ 2本目までで持ち時間（60秒）を越える。
+    // **1本目が `undecidable` なので、倒せる先が手元に在る。**
+    const h = harness({
+      verdict: { verdict: 'undecidable', reason: 'この認証では原理的に枠が取れない' },
+      probeTakesMs: 40_000,
+    });
+    await seedFour(h);
+
+    const outcome = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    // **`sweep_stopped` にしない。** 倒せる先が在るなら倒す。
+    expect(outcome).toMatchObject({ kind: 'rotated', toTokenId: 'tok-b' });
+    expect(h.probeCalls.map((call) => call.id)).toEqual(['tok-b', 'tok-c']);
+    // **打ち切ったことも言う**（倒した理由が「探し切った」ではないので）。
+    expect(outcome.why).toContain('持ち時間');
+    expect(tokenRotationEntry(outcome)?.event).toBe('rotated');
+  });
+
+  it('倒せる先が1本も無ければ、これまでどおり打ち切りとして残る', async () => {
+    // 全部 `unusable` ＝ 順位を下げる先が無い。
+    const h = harness({
+      verdict: { verdict: 'unusable', reason: '枠が尽きている' },
+      probeTakesMs: 40_000,
+    });
+    await seedFour(h);
+
+    const outcome = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(outcome).toMatchObject({ kind: 'exhausted', stoppedBy: 'budget' });
+    expect(tokenRotationEntry(outcome)?.event).toBe('sweep_stopped');
+  });
+});
+
 describe('世代の照合（受け入れ基準: 同時に届いても回るのは1回だけ）', () => {
   it('捨てた回数を数え、日誌へ出す側へ渡す（0件では届かなかったのと見分けが付かない）', async () => {
     const h = harness();
