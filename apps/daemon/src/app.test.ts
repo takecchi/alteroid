@@ -1499,11 +1499,13 @@ describe('HTTP API', () => {
     expect(await (await app.request('/commitments')).json()).toEqual({
       entries: [],
       unreadable: [],
+      trimmedClosed: 0,
     });
     // **`false` が `false` として効く**（`z.coerce.boolean()` だと真になる）
     expect(await (await app.request('/commitments?includeClosed=false')).json()).toEqual({
       entries: [],
       unreadable: [],
+      trimmedClosed: 0,
     });
 
     const all = await app.request('/commitments?includeClosed=true');
@@ -1630,6 +1632,7 @@ describe('HTTP API', () => {
         { id: 'cm-1', at: '2026-08-12T00:00:00.000Z', origin: 'human', body: '人間が頼んだこと' },
       ],
       unreadable: [],
+      trimmedClosed: 0,
     });
   });
 
@@ -2083,7 +2086,7 @@ describe('GET /commitments の limit/cursor（窓。2026-08-25 opt-in）', () =>
       ...real,
       async list(options) {
         const { entries } = await real.list(options);
-        return { entries, unreadable: unreadableRows };
+        return { entries, unreadable: unreadableRows, trimmedClosed: 9 };
       },
     };
 
@@ -2103,9 +2106,13 @@ describe('GET /commitments の limit/cursor（窓。2026-08-25 opt-in）', () =>
     const body = (await (await app.request('/commitments?limit=1')).json()) as {
       entries: { id: string }[];
       unreadable: { id?: string }[];
+      trimmedClosed: number;
     };
     expect(body.entries).toHaveLength(1);
     expect(body.unreadable).toEqual(unreadableRows);
+    // **`trimmedClosed` も窓の影響を受けない（issue #416）。** 頁ではなく
+    // 累計件数そのものなので、`unreadable` と同じくそもそも切る対象ではない。
+    expect(body.trimmedClosed).toBe(9);
   });
 });
 

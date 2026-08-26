@@ -38,6 +38,11 @@ export default function Commitments() {
   const closed = all.filter(isClosed);
   // **読めない行（issue #296）。**「無い」でも「片付いた」でもない第3の状態。
   const unreadable = data?.unreadable ?? [];
+  // **保持上限を超えて物理削除された片付き行の累計（issue #416）。**
+  // `unreadable` と同じ理由で読む——`data` が無ければ0件として扱う
+  // （読み込み中・エラー時に「削除が0件」と誤読させる意図ではなく、後段の
+  // `TrimmedClosedNote` は `isLoading` の外では描かれないので実害は無い）。
+  const trimmedClosed = data?.trimmedClosed ?? 0;
 
   return (
     <Page
@@ -59,6 +64,7 @@ export default function Commitments() {
         <>
           {/* 一覧の上に置く。読める行の中身を見る前に、まず断りが目に入るように。 */}
           <UnreadableNote unreadable={unreadable} />
+          <TrimmedClosedNote trimmedClosed={trimmedClosed} />
 
           <Card className="mb-4">
             <CardHeader
@@ -77,8 +83,10 @@ export default function Commitments() {
           </Card>
 
           {/*
-            片付けたものは、押されたときだけ取りに行く。器は行を消さないので
-            （「何を片付けたか」は日報の材料である）、読む手立てを画面にも置く。
+            片付けたものは、押されたときだけ取りに行く。器は行を消さない契約
+            なので（「何を片付けたか」は日報の材料である）、読む手立てを画面にも
+            置く。**ただし fs 実装は保持上限を超えた古い片付き行を物理削除する
+            （issue #416）——削除された累計件数は上の TrimmedClosedNote が持つ。**
           */}
           {showClosed && (
             <Card>
@@ -137,6 +145,32 @@ function UnreadableNote({ unreadable }: { unreadable: UnreadableCommitment[] }) 
       <span className="min-w-0 break-words">
         読めない行が {unreadable.length} 件ある{ids.length > 0 && `（id: ${ids.join(', ')}）`}。
         <strong>片付いたのではない。</strong>
+      </span>
+    </div>
+  );
+}
+
+/**
+ * 保持上限を超えて物理削除された片付き行が在ることを、一覧の上で断る
+ * （issue #416）。
+ *
+ * **`UnreadableNote` と同じ形にする。** どちらも `CommitmentList`
+ * （`packages/core/src/store.ts`）が運ぶ「無い」でも「片付いた」でもない状態
+ * ——`unreadable` は読めなかった行、こちらは既に消えた行という違いだけである。
+ *
+ * **0件なら描かない**（`UnreadableNote` と同じ判定。常に出る断りは情報にならない）。
+ */
+function TrimmedClosedNote({ trimmedClosed }: { trimmedClosed: number }) {
+  if (trimmedClosed === 0) return null;
+  return (
+    <div
+      role="status"
+      className="mb-4 flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn"
+    >
+      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
+      <span className="min-w-0 break-words">
+        保持上限を超えて物理削除された片付き行が累計 {trimmedClosed} 件ある。
+        <strong>削除された分の内容はここでは二度と読めない。</strong>
       </span>
     </div>
   );

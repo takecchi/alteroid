@@ -418,11 +418,17 @@ export function createMemoryStores(): Stores {
       // 保存層のように行が壊れた形で入る経路が無い。`entries` /
       // `unreadable` という型そのものは本物と揃えること（issue #296。
       // `CommitmentStore.list` の返り値、`store.ts` の `CommitmentList`）。
-      if (options?.includeClosed !== true) return { entries: open, unreadable: [] };
+      //
+      // **`trimmedClosed` も常に `0`。** ここは `Map` に溜まるだけで、
+      // 保持上限も削除経路も無い——fs 版（`storage-fs/src/commitments.ts`）
+      // だけが `CLOSED_HISTORY_LIMIT` を超えた片付き行を物理削除する
+      // （issue #416）。ここを揃えていないので、fs だけを踏む歯はこの
+      // 偽物では書けない（`packages/storage-fs/src/index.test.ts` 側で書く）。
+      if (options?.includeClosed !== true) return { entries: open, unreadable: [], trimmedClosed: 0 };
       const closed = all
         .filter((entry) => entry.closedAt !== undefined)
         .sort((a, b) => (b.closedAt ?? '').localeCompare(a.closedAt ?? ''));
-      return { entries: [...open, ...closed], unreadable: [] };
+      return { entries: [...open, ...closed], unreadable: [], trimmedClosed: 0 };
     },
     async get(id) {
       return commitments.get(id) ?? null;

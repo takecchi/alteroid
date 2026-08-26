@@ -1611,6 +1611,7 @@ describe('FsCommitmentStore', () => {
     expect(await stores.commitments.list()).toEqual({
       entries: [commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す')],
       unreadable: [],
+      trimmedClosed: 0,
     });
     expect((await stores.commitments.get('c-1'))?.body).toBe('PR を出す');
     expect(await stores.commitments.get('しらない')).toBeNull();
@@ -1623,7 +1624,7 @@ describe('FsCommitmentStore', () => {
       await stores.commitments.close('c-1', '2026-08-13T00:00:00.000Z', '#99 で出した', 'clone'),
     ).toBe(true);
 
-    expect(await stores.commitments.list()).toEqual({ entries: [], unreadable: [] });
+    expect(await stores.commitments.list()).toEqual({ entries: [], unreadable: [], trimmedClosed: 0 });
     const all = (await stores.commitments.list({ includeClosed: true })).entries;
     expect(all).toHaveLength(1);
     // 「閉じた」だけを残さない（何をもって終わりとしたかが無いと人間が否定できない）
@@ -1827,6 +1828,44 @@ describe('FsCommitmentStore', () => {
     expect(after.entries.map((entry) => entry.id)).toContain('c-new');
   });
 
+  /**
+   * **issue #416: `trimmedClosedCount` は累計であって、プロセスをまたいでも
+   * 0へ戻らない。** インメモリのカウンタなら再起動のたびに消えるので、
+   * `rawFileSchema` の同名欄としてディスクへ持たせてある
+   * （`packages/storage-fs/src/commitments.ts` の doc）。ここではファイルへ
+   * 直接値を書き、デーモンを作り直しても（＝新しい `FsCommitmentStore` を
+   * 作っても）読み戻せることを見る。
+   */
+  it('trimmedClosedCount はディスクへ持ち回り、デーモンを作り直しても残る', async () => {
+    const path = join(stores.paths.jobs, 'commitments.json');
+    await mkdir(stores.paths.jobs, { recursive: true });
+    await writeFile(path, JSON.stringify({ commitments: [], trimmedClosedCount: 42 }), 'utf8');
+
+    expect((await stores.commitments.list()).trimmedClosed).toBe(42);
+
+    // 作り直しても消えない（プロセスの再起動を模す）。
+    const restarted = createFsStores(root);
+    expect((await restarted.commitments.list()).trimmedClosed).toBe(42);
+
+    // open() のような無関係な書き込みでも減らない・変わらない。
+    await restarted.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', '新しい依頼'));
+    expect((await restarted.commitments.list()).trimmedClosed).toBe(42);
+  });
+
+  /**
+   * **旧い版が書いたファイル（`trimmedClosedCount` を持たない）でも読める。**
+   * `rawFileSchema.trimmedClosedCount` の `default(0)` を問う——「無いなら
+   * 0件削除」であって、それより前の削除を遡って数え直せるという意味では
+   * ない（`rawFileSchema` の doc）。
+   */
+  it('trimmedClosedCount の無い旧い形式のファイルは、0件として読める', async () => {
+    const path = join(stores.paths.jobs, 'commitments.json');
+    await mkdir(stores.paths.jobs, { recursive: true });
+    await writeFile(path, JSON.stringify({ commitments: [] }), 'utf8');
+
+    expect((await stores.commitments.list()).trimmedClosed).toBe(0);
+  });
+
   it('同じ id で二度 open しても上書きされない（1回目の本文が残る）', async () => {
     expect(
       await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', '最初の依頼')),
@@ -1852,7 +1891,7 @@ describe('FsCommitmentStore', () => {
       await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す')),
     ).toBe(false);
 
-    expect(await stores.commitments.list()).toEqual({ entries: [], unreadable: [] });
+    expect(await stores.commitments.list()).toEqual({ entries: [], unreadable: [], trimmedClosed: 0 });
     expect((await stores.commitments.get('c-1'))?.closedAt).toBe('2026-08-13T00:00:00.000Z');
   });
 
@@ -1880,6 +1919,7 @@ describe('FsCommitmentStore', () => {
     expect(await stores.commitments.list({ includeClosed: true })).toEqual({
       entries: [],
       unreadable: [],
+      trimmedClosed: 0,
     });
   });
 
@@ -1976,6 +2016,12 @@ describe('FsCommitmentStore', () => {
     );
     expect(closed.at(-1)?.id).toBe(`closed-${String(overflow).padStart(4, '0')}`);
     expect(await stores.commitments.get('closed-0000')).toBeNull();
+    // **issue #416: 切り詰めた件数の合図。** 上限（`CLOSED_HISTORY_LIMIT`）を
+    // 超えた分＝ `overflow` 件が物理削除され、`list()` の `trimmedClosed` へ
+    // その累計が出る。これが無いと、上の「1件も落ちない」はずの assertion 群と
+    // 矛盾する「行は消さない」という doc（`CommitmentStore.close` の doc）が
+    // fs 版に限って偽になっていることを、呼び出し側は一切知りようがなかった。
+    expect((await stores.commitments.list({ includeClosed: true })).trimmedClosed).toBe(overflow);
   }, 60_000);
 });
 
