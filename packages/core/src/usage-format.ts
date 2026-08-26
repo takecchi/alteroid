@@ -159,6 +159,25 @@ export function formatUsd(usd: number): string {
  *
  * **UTC で切らない。** 日報（`ALTEROID_DAILY_REPORT_AT`）がローカル時刻で動くので、
  * ここを UTC にすると「今日いくら使ったか」と日報の「今日」がずれる。
+ *
+ * ## ⚠️ 「ローカル」が本番で何になるか（読み手が日を比べるときに要る）
+ *
+ * **プロセスの `TZ` である。本番の既定は `Asia/Tokyo`** —— `railway/setup.sh` が
+ * `TZ` を `shared_pairs` に入れ、それが app（台帳へ書くデーモン）の変数にも入る
+ * （`grep -Fn -- 'TZ "$TZ_VALUE"' railway/setup.sh` と
+ * `grep -Fn -- 'app_pairs=("${shared_pairs[@]}"' railway/setup.sh`）。
+ * `compose.yaml` も同じ既定である（`grep -Fn -- 'TZ: ${TZ:-Asia/Tokyo}' compose.yaml`）。
+ * **⚠️ `TZ` を明示しないで動かすと UTC 日になる**（`railway/README.md` の
+ * 「日報が想定と違う時刻に出る」の行が同じ落ち方を記録している）。
+ *
+ * **⟹ 日別の合計を外の暦と比べるときは、まずどちらの暦かを決めること。**
+ * 実害の形: JST 12:00 に「今日」を読むと、JST 日なら12時間ぶん・UTC 日なら3時間ぶん
+ * を見ていることになり、**同じ数字が4倍ずれて読める。**
+ *
+ * **書く側と読む側は同じ関数を通る**（書くのは `clone.ts` と `manager.ts` の
+ * `date: usageDate(at)` の2箇所だけ。読む側は畳むだけで日付を作り直さない —
+ * `grep -Fn -- 'byDate: groupBy(rows, (row) => row.date,' packages/core/src/usage-format.ts`）
+ * ので、**書きと読みで暦が食い違う経路は無い。**
  */
 export function usageDate(at: Date): string {
   const y = at.getFullYear();
