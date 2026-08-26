@@ -2723,9 +2723,7 @@ export function createCloneTools(context: ToolContext) {
       async ({ limit = SELF_DROPPED_DEFAULT_LIMIT }) => {
         const all = recentDroppedTraces();
         if (all.length === 0) {
-          return text(
-            'このプロセスではまだ跡（記録・読み出しの握り潰し）が1件も残っていない。',
-          );
+          return text('このプロセスではまだ跡（記録・読み出しの握り潰し）が1件も残っていない。');
         }
         const traces = all.slice(-limit);
         return text(

@@ -504,9 +504,9 @@ describe('直近の跡を器の中から読み戻す帳面（#242）', () => {
     expect(traces.some((line) => line.includes('managerId=mgr-0 '))).toBe(false);
     expect(traces.some((line) => line.includes('managerId=mgr-9 '))).toBe(false);
     // 直近（最後に積んだ1件）は残っている。
-    expect(
-      traces.some((line) => line.includes(`managerId=mgr-${RECENT_TRACE_LIMIT + 9} `)),
-    ).toBe(true);
+    expect(traces.some((line) => line.includes(`managerId=mgr-${RECENT_TRACE_LIMIT + 9} `))).toBe(
+      true,
+    );
   });
 
   it('recentDroppedTraces() は控えを返す（呼び手が触っても帳面は動かない）', async () => {
