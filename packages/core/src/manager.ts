@@ -2241,6 +2241,22 @@ class Pool implements ManagerPool {
     cause: 'runner' | 'session' = 'runner',
   ): void {
     const { job } = record;
+    // **日誌は呼び出し元に委ねない（#240）。** この関数は複数の経路から呼ばれ、
+    // 呼び出し元が事前に `#journal` するかどうかは経路ごとに違う（例:
+    // 世代衝突からの取り直し断念はしない、`session` 原因の resume 失敗はする）。
+    // 「日誌に無い＝この経路を通っていない」を判別器として使えるようにするには、
+    // `#post` する側が経路によらず必ず1本書く必要がある。
+    void this.#journal({
+      type: 'exchange',
+      with: 'manager',
+      role: 'outbound',
+      text:
+        `[${job.id}] （戻せなかった）` +
+        (cause === 'session'
+          ? '前のセッションから戻せなかった（SDK に会話が残っていない）。'
+          : 'runner の器が作り直されたが、前のセッションから戻せなかった。') +
+        ` 理由: ${String(error)}`,
+    });
     this.#post({
       type: 'manager_message',
       id: randomUUID(),
@@ -2461,6 +2477,15 @@ class Pool implements ManagerPool {
     const managerId = jobIds[0];
     if (managerId === undefined) return;
     this.#ambiguousRunnersNotified.add(runnerId);
+    // **日誌は呼び出し元に委ねない（#240）。** 呼び出し元は2つ（`hello` の
+    // 併存検知 / `#claimForResume` の `mayClaim` 拒否）あり、どちらも `#post`
+    // の前に `#journal` していない。経路によらず「知らせた」の跡を必ず1本残す。
+    void this.#journal({
+      type: 'exchange',
+      with: 'manager',
+      role: 'outbound',
+      text: `[${managerId}] ${describeAmbiguousSighting(runnerId, duplicates)}`,
+    });
     this.#post({
       type: 'manager_message',
       id: randomUUID(),
@@ -2488,6 +2513,15 @@ class Pool implements ManagerPool {
     const managerId = jobIds[0];
     if (managerId === undefined) return;
     this.#ambiguousRunnersNotified.delete(runnerId);
+    // **日誌は呼び出し元に委ねない（#240）。** 呼び出し元は2つ（`hello` の
+    // 併存解消検知 / `#claimForResume` の遷移検知）あり、どちらも `#post`
+    // の前に `#journal` していない。経路によらず「知らせた」の跡を必ず1本残す。
+    void this.#journal({
+      type: 'exchange',
+      with: 'manager',
+      role: 'outbound',
+      text: `[${managerId}] runnerId=${runnerId} の併存は解けました（宛先が一意に戻りました）。`,
+    });
     this.#post({
       type: 'manager_message',
       id: randomUUID(),
@@ -3558,6 +3592,20 @@ class Pool implements ManagerPool {
   ): void {
     const { job } = record;
     const head = cause === 'runner' ? 'runner の器が作り直された' : 'デーモンが再起動した';
+    // **日誌は呼び出し元に委ねない（#240）。** `how === 'attached'` の呼び出し元
+    // （`restore()` の attach 分岐）は `#post` の前に `#journal` していない —
+    // `resumed` 側の呼び出し元（同じ関数内 / `#reattach`）はしているが、それは
+    // 別の事実（「再開の指示を送った」）を書いているのであって、この関数が
+    // 送る知らせ自体の跡ではない。経路によらず「送った」の跡を必ず1本残す。
+    void this.#journal({
+      type: 'exchange',
+      with: 'manager',
+      role: 'outbound',
+      text:
+        how === 'attached'
+          ? `[${job.id}] （走行中を確認）${head}。runner の中で走り続けている。`
+          : `[${job.id}] （再開を知らせた）${head}。前のセッションから再開させた。`,
+    });
     this.#post({
       type: 'manager_message',
       id: randomUUID(),

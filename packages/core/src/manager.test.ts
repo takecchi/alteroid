@@ -1838,6 +1838,46 @@ describe('デーモン再起動後（M4）', () => {
     await s.pool.stop();
   });
 
+  /**
+   * **Issue #240。** 直上のテストと同じ経路（`restore()` が runner に生きた
+   * セッションを見つけ、`#notifyRestored(record, 'attached')` を呼ぶ）だが、
+   * こちらは受信箱ではなく**日誌**を見る。
+   *
+   * この呼び出し元（`#restoreJobs` の attach 分岐）は `#notifyRestored` を
+   * 呼ぶ前に自分では `#journal` していない——`resumed` 側の呼び出し元
+   * （同じ `restore()` 内 / `#reattach`）はしているが、あちらは「再開の指示を
+   * 送った」という別の事実を書いているのであって、`attached` 側の跡ではない。
+   * 日誌を「無い＝この経路を通っていない」の判別に使うには、`#notifyRestored`
+   * 自身が呼び出し元によらず必ず1本残す必要がある。
+   */
+  it('runner が waiting_human と名乗ったセッションを引き取ったとき、日誌にも跡が残る（#240）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({ ...runningJob, status: 'waiting_human' });
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push({
+      managerId: runningJob.id,
+      status: 'waiting_human',
+      cwd: '/work/project',
+      request: 'DB の移行をやって',
+      waiting: [],
+      sessionId: 'sess-before-restart',
+    });
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    await s.pool.restore();
+
+    const entries = await stores.journal.list({ types: ['exchange'] });
+    const line = entries.find(
+      (entry) =>
+        'text' in entry &&
+        entry.text.includes(runningJob.id) &&
+        entry.text.includes('走り続けている'),
+    );
+    expect(line).toBeDefined();
+
+    await s.pool.stop();
+  });
+
   it('戻る先が無い仕事は、話しかけた後も live: false のままである', async () => {
     // 上の `unknown` は「届かなかった」という**その場の返事**でしかない。届け
     // られなかった相手を一覧が `live: true` で見せ続けるなら、人間もクローンも
@@ -4741,6 +4781,44 @@ describe('#records の寿命（終端で外れる）', () => {
       })
       .toBe('lost');
     await expect.poll(() => s.pool.denials(id), { timeout: 2000 }).toEqual([]);
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **Issue #240。** 直上のテストと同じ経路（`#reattach` が
+   * `isRetryableRunnerError` を偽と判定して諦める、`cause: 'runner'` が既定の
+   * `#notifyUnresumable`）だが、こちらは受信箱ではなく**日誌**を見る。
+   *
+   * この呼び出し元（`manager.ts` の `#reattach`）は `#notifyUnresumable` を
+   * 呼ぶ前に自分では `#journal` していない——409（世代衝突）の枝や `session`
+   * 原因の枝とは違う。日誌を「無い＝この経路を通っていない」の判別に使うには、
+   * `#notifyUnresumable` 自身が呼び出し元によらず必ず1本残す必要がある。
+   */
+  it('reattach で挑み直しを諦めたとき、日誌にも跡が残る（#240）', async () => {
+    const id = 'mgr-reattach-giveup-journal';
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job(id));
+    const fake = swappableRunner('runner-test');
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.runner.resume = async () => {
+      throw new RunnerHttpError('runner POST resume が失敗した (400)', 400);
+    };
+    fake.swap();
+
+    await expect
+      .poll(async () => (await stores.jobs.listJobs()).find((j) => j.id === id)?.status, {
+        timeout: 2000,
+      })
+      .toBe('lost');
+
+    const entries = await stores.journal.list({ types: ['exchange'] });
+    const line = entries.find(
+      (entry) => 'text' in entry && entry.text.includes(id) && entry.text.includes('戻せなかった'),
+    );
+    expect(line).toBeDefined();
 
     await s.pool.stop();
   });
