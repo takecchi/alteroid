@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import type { RunnerClient, RunnerRegistry } from '@alteroid/core';
 
-import { createAgentTokenHolder, createTokenSpread } from './token-spread.js';
+import {
+  createAgentTokenHolder,
+  createRunnerTokenSync,
+  createTokenSpread,
+} from './token-spread.js';
 
 /**
  * 現役を2か所へ撒く（Issue #393 PR3 の6段目）。
@@ -223,5 +227,52 @@ describe('クローンへの箱', () => {
     expect(holder.values()).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: 'first' });
     holder.set('second');
     expect(holder.values()).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: 'second' });
+  });
+});
+
+describe('createRunnerTokenSync（後から繋いだ runner を追いつかせる）', () => {
+  function fakeRunner(): {
+    setCredentials: (
+      credentials: { name: string; value: string }[],
+    ) => Promise<{ name: string; sha256: string; updatedAt: string }[]>;
+    calls: { name: string; value: string }[][];
+  } {
+    const calls: { name: string; value: string }[][] = [];
+    return {
+      calls,
+      async setCredentials(credentials) {
+        calls.push(credentials);
+        return [];
+      },
+    };
+  }
+
+  it('一度も撒いていなければ setCredentials を呼ばない（器の環境変数だけの既定の構成のまま）', async () => {
+    const holder = createAgentTokenHolder();
+    const runner = fakeRunner();
+    await createRunnerTokenSync(holder)(runner);
+    expect(runner.calls).toEqual([]);
+  });
+
+  it('stored を撒いた後はその値を降ろす', async () => {
+    const holder = createAgentTokenHolder();
+    holder.set(SECRET, { tokenId: 'tok-a', generation: 1 });
+    const runner = fakeRunner();
+    await createRunnerTokenSync(holder)(runner);
+    expect(runner.calls).toEqual([[{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: SECRET }]]);
+  });
+
+  it('env 行を撒いた後は空文字（鍵を消す指示）を降ろす', async () => {
+    // **これが直す穴である。** `clear()` は `current` だけを落とし `currentIdentity`
+    // は残す——つまり「一度も撒いていない」と「env 行が現役」は holder 側では
+    // 区別できるのに、直す前の `createRunnerTokenSync` はそれを見ずに `values()` の
+    // 値の有無だけで判定していたので、ここで no-op になっていた
+    // （繋ぎ直してきた runner の古い鍵ファイルを消せない、という穴）。
+    const holder = createAgentTokenHolder();
+    holder.set(SECRET, { tokenId: 'tok-a', generation: 1 });
+    holder.clear({ tokenId: 'tok-a', generation: 2 });
+    const runner = fakeRunner();
+    await createRunnerTokenSync(holder)(runner);
+    expect(runner.calls).toEqual([[{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: '' }]]);
   });
 });
