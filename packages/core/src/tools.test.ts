@@ -4789,11 +4789,40 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
      * 区別できる。
      */
     {
-      label: 'self_status',
+      label: 'self_status（記憶の大きさ）',
       name: 'self_status',
       args: {},
       section: '## 記憶の大きさ',
       mark: /…ほか \d+ 文書は省略（全 \d+ 文書のうち \d+ 文書だけ出した）。/,
+    },
+    /*
+     * **「台帳との突き合わせ」節（`renderLedgerCrossReference`）は、#406 が
+     * 直った後もこの掃き出しの対象になっていなかった。** 理由はフィクスチャ
+     * 側にある——`LISTING_SWEEP_RUNTIME.sdkModel` が `null` だと、この節は
+     * 「まだ init を観測していない」という早期 return の定型文しか返さず、
+     * `USAGE_AXIS_LIMIT`（14）を超える打ち切りがそもそも発生しない
+     * （`renderLedgerCrossReference` の `if (sdkModel === null)` 分岐）。
+     * つまり「記憶の大きさ」節だけを `section`/`mark` で直しても、この節に
+     * ついては「網の中で、別の節が代わりに合格を出す」という #406 の構造が
+     * 手つかずのまま残っていた（実測は Issue #406 のコメント参照）。
+     *
+     * だから `LISTING_SWEEP_RUNTIME.sdkModel` に `LEDGER_SDK_MODEL` を与え、
+     * `flooded()` の各周回で同じモデル id の使用量行を1本ずつ積む
+     * （`managerId` は周回ごとに違うので、`USAGE_AXIS_LIMIT` を超える
+     * バケット数を作れる——下の `flooded()` を見ること）。これで初めて
+     * この節が実際に打ち切りを起こす。
+     *
+     * `mark` はこの節の一覧レベルの断り書きだけが持つ語彙
+     * （`renderLedgerCrossReference` の `…（残り N 件は出していない）`。
+     * `usage_read` 側の「…続きが出る」を含む言い方とは文言が違うので、
+     * 取り違えない）。
+     */
+    {
+      label: 'self_status（台帳との突き合わせ）',
+      name: 'self_status',
+      args: {},
+      section: '## 台帳との突き合わせ',
+      mark: /…（残り \d+ 件は出していない）/,
     },
   ];
 
@@ -4873,13 +4902,22 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
    * **他の道具は `context.runtime` を読まないので、この定数を足しても他の
    * ケースの挙動は変わらない**（`tools.ts` を `grep -n 'context.runtime'` で
    * 確認済み——参照は `self_status` のハンドラ1箇所だけ）。
+   *
+   * **`sdkModel` を `null` のままにしない（#406）。** `null` だと
+   * `renderLedgerCrossReference`（「台帳との突き合わせ」節）は早期 return の
+   * 定型文しか返さず、この掃き出しでは同節の打ち切りを一度も踏めない。
+   * `LEDGER_SDK_MODEL` を与え、`flooded()` 側で同じモデル id の使用量行を
+   * `managerId` 違いで積むことで、`USAGE_AXIS_LIMIT` を超える打ち切りを
+   * 実際に起こす。
    */
+  const LEDGER_SDK_MODEL = 'claude-listing-sweep-model';
+
   const LISTING_SWEEP_RUNTIME: CloneRuntimeFacts = {
     revision: { commit: null, short: null, source: null },
     declaredModel: 'fable',
     modelOverridden: false,
     modelEnvKey: 'ALTEROID_CLONE_MODEL',
-    sdkModel: null,
+    sdkModel: LEDGER_SDK_MODEL,
     effort: null,
     requestedEffort: null,
     claudeCodeVersion: null,
@@ -4959,7 +4997,17 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         text: `長い会話の発言${pad}: ${long}`,
         conversationId: 'conv-long',
       });
-      // 使用量の台帳（usage_read）— 委譲別の軸が件数で伸びる
+      // 使用量の台帳（usage_read）— 委譲別の軸が件数で伸びる。
+      // **`LEDGER_SDK_MODEL` を同じ record 呼び出しへ同居させてある（#406）。**
+      // モデル id ごとに別の行になる（`testing.ts` の `usage.record` は
+      // `date × managerId × model × layer × site` を鍵にする）ので、
+      // `claude-model-${pad}`（周回ごとに違う——`usage_read` 側の軸試験用）とは
+      // 別に、`LEDGER_SDK_MODEL`（固定）の行を `managerId` 違いで積み重ねる。
+      // `self_status` の「台帳との突き合わせ」節は `sdkModel` と一致する行だけを
+      // 拾って `managerId × layer × site` で畳むので、これで
+      // `USAGE_AXIS_LIMIT`（14）を超えるバケット数（60）を作れる——`sdkModel`
+      // が `null` のままだと、この節は早期 return して一度も打ち切りを踏まない
+      // （`LISTING_SWEEP_RUNTIME` の doc を見ること）。
       await h.stores.usage.record({
         layer: 'manager',
         site: 'session',
@@ -4970,6 +5018,14 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         snapshot: {
           models: {
             [`claude-model-${pad}`]: {
+              inputTokens: 10,
+              outputTokens: 100,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+              webSearchRequests: 0,
+              costUsd: 1 + index,
+            },
+            [LEDGER_SDK_MODEL]: {
               inputTokens: 10,
               outputTokens: 100,
               cacheReadInputTokens: 0,
