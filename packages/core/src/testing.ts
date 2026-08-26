@@ -424,7 +424,8 @@ export function createMemoryStores(): Stores {
       // だけが `CLOSED_HISTORY_LIMIT` を超えた片付き行を物理削除する
       // （issue #416）。ここを揃えていないので、fs だけを踏む歯はこの
       // 偽物では書けない（`packages/storage-fs/src/index.test.ts` 側で書く）。
-      if (options?.includeClosed !== true) return { entries: open, unreadable: [], trimmedClosed: 0 };
+      if (options?.includeClosed !== true)
+        return { entries: open, unreadable: [], trimmedClosed: 0 };
       const closed = all
         .filter((entry) => entry.closedAt !== undefined)
         .sort((a, b) => (b.closedAt ?? '').localeCompare(a.closedAt ?? ''));

@@ -1624,7 +1624,11 @@ describe('FsCommitmentStore', () => {
       await stores.commitments.close('c-1', '2026-08-13T00:00:00.000Z', '#99 で出した', 'clone'),
     ).toBe(true);
 
-    expect(await stores.commitments.list()).toEqual({ entries: [], unreadable: [], trimmedClosed: 0 });
+    expect(await stores.commitments.list()).toEqual({
+      entries: [],
+      unreadable: [],
+      trimmedClosed: 0,
+    });
     const all = (await stores.commitments.list({ includeClosed: true })).entries;
     expect(all).toHaveLength(1);
     // 「閉じた」だけを残さない（何をもって終わりとしたかが無いと人間が否定できない）
@@ -1891,7 +1895,11 @@ describe('FsCommitmentStore', () => {
       await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す')),
     ).toBe(false);
 
-    expect(await stores.commitments.list()).toEqual({ entries: [], unreadable: [], trimmedClosed: 0 });
+    expect(await stores.commitments.list()).toEqual({
+      entries: [],
+      unreadable: [],
+      trimmedClosed: 0,
+    });
     expect((await stores.commitments.get('c-1'))?.closedAt).toBe('2026-08-13T00:00:00.000Z');
   });
 

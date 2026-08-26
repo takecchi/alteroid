@@ -1430,7 +1430,11 @@ describe('PgCommitmentStore', () => {
       await stores.commitments.close('c-1', '2026-08-13T00:00:00.000Z', '#99 で出した', 'clone'),
     ).toBe(true);
 
-    expect(await stores.commitments.list()).toEqual({ entries: [], unreadable: [], trimmedClosed: 0 });
+    expect(await stores.commitments.list()).toEqual({
+      entries: [],
+      unreadable: [],
+      trimmedClosed: 0,
+    });
     const all = (await stores.commitments.list({ includeClosed: true })).entries;
     expect(all).toHaveLength(1);
     // 列だけ直しても読み出しは jsonb からなので、クローンが見る側に入っていること
@@ -1606,7 +1610,11 @@ describe('PgCommitmentStore', () => {
       await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'PR を出す')),
     ).toBe(false);
 
-    expect(await stores.commitments.list()).toEqual({ entries: [], unreadable: [], trimmedClosed: 0 });
+    expect(await stores.commitments.list()).toEqual({
+      entries: [],
+      unreadable: [],
+      trimmedClosed: 0,
+    });
     expect((await stores.commitments.get('c-1'))?.closedAt).toBe('2026-08-13T00:00:00.000Z');
   });
 
@@ -1680,7 +1688,11 @@ describe('PgCommitmentStore', () => {
     ]);
 
     expect(results.filter(Boolean)).toHaveLength(1);
-    expect(await stores.commitments.list()).toEqual({ entries: [], unreadable: [], trimmedClosed: 0 });
+    expect(await stores.commitments.list()).toEqual({
+      entries: [],
+      unreadable: [],
+      trimmedClosed: 0,
+    });
   });
 
   /**
@@ -1742,7 +1754,9 @@ describe('PgCommitmentStore', () => {
     const COUNT = 501;
     for (let index = 0; index < COUNT; index += 1) {
       const id = `closed-${String(index).padStart(4, '0')}`;
-      await stores.commitments.open(commitment(id, '2026-08-01T00:00:00.000Z', `片付ける ${index}`));
+      await stores.commitments.open(
+        commitment(id, '2026-08-01T00:00:00.000Z', `片付ける ${index}`),
+      );
       await stores.commitments.close(
         id,
         new Date(Date.UTC(2026, 7, 2, 0, 0, 0) + index * 1000).toISOString(),

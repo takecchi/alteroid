@@ -376,7 +376,10 @@ export class FsCommitmentStore implements CommitmentStore {
     try {
       const raw = await readFile(this.#path, 'utf8');
       const parsed = rawFileSchema.parse(JSON.parse(raw));
-      return { ...splitFileRows(parsed.commitments), trimmedClosedCount: parsed.trimmedClosedCount };
+      return {
+        ...splitFileRows(parsed.commitments),
+        trimmedClosedCount: parsed.trimmedClosedCount,
+      };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT')
         return { entries: [], unreadable: [], trimmedClosedCount: 0 };

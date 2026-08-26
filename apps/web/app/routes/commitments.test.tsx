@@ -169,9 +169,7 @@ describe('/commitments 画面', () => {
     renderPage();
 
     await screen.findByText('ドキュメントの誤りを直す');
-    expect(
-      screen.getByText(/保持上限を超えて物理削除された片付き行が累計 3 件ある/),
-    ).toBeTruthy();
+    expect(screen.getByText(/保持上限を超えて物理削除された片付き行が累計 3 件ある/)).toBeTruthy();
   });
 
   it('物理削除が0件なら断りを出さない', async () => {
