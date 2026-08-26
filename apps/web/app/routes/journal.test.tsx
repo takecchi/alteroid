@@ -599,27 +599,53 @@ describe('日誌画面の検索欄（issue #250）', () => {
   });
 
   /**
-   * **検索中は、当たらない新着が割り込まない。** SSE の `recent` は絞りを
-   * 通さずに届くので、ここを掛けないと画面が「その語で探した結果」でなくなる。
-   * 照合は `@alteroid/core/journal-search` の1つの実装を通る。
+   * **当たらなかったとき、「記録が無い」と言わずに「その語では無い」と言う。**
+   * 検索で 0 件なのに「この条件では何も記録されていない」と出ると、日誌が
+   * 空になったように読める。
+   *
+   * **`Empty` は `Virtualizer` の外に在るので jsdom でも描かれる** ——
+   * 一覧の行そのものは1行も描かれない（このファイル冒頭の virtua の断り）が、
+   * この分岐は画面越しに測れる数少ない場所である。
    */
-  it('SSE で届く新着にも同じ語の絞りが掛かる', async () => {
+  it('当たらなかったら、その語では無いと言う（記録が無いとは言わない）', async () => {
     stubFetch((url) => {
       if (!url.includes('/journal')) return undefined;
       return json({ entries: [], scanned: 0 });
     });
 
-    // `HISTORY_ONLY` / `RECENT_EXCHANGE` の本文は下の期待値で使う。
+    renderJournal({ status: 'live', recent: [] }, [`/?q=${encodeURIComponent('当たらない語')}`]);
+    await waitForLoaded();
+
+    expect(
+      screen.getByText('「当たらない語」に当たる記録は無い（この条件の中では）。'),
+    ).toBeTruthy();
+    expect(screen.queryByText('この条件では何も記録されていない。')).toBeNull();
+  });
+
+  /**
+   * **検索中は、当たらない新着（SSE の `recent`）が割り込まない。**
+   *
+   * ⚠️ **その保証そのものはここでは測れない** —— jsdom は日誌の行を1行も
+   * 描かないので、「割り込んだ行が画面に出ていないこと」は絞りが効いていても
+   * いなくても等しく成り立つ（＝この画面越しの確認は何も区別しない）。
+   * **だから絞りの規則は純粋な関数へ切り出してあり、そちらの歯が測る**
+   * （`apps/web/app/lib/journal-window.ts` の `filterRecent` と
+   * `journal-window.test.ts`）。ここに残すのは、**その関数へ実際に検索語が
+   * 渡る配線が生きていること**の確認だけである（URL の語が画面の描画を
+   * 一巡しても保たれる）。
+   */
+  it('検索語が、新着が届いた後も URL に保たれる（絞りの当否は filterRecent 側で測る）', async () => {
+    stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      return json({ entries: [], scanned: 0 });
+    });
+
     const { router } = renderJournal({ status: 'live', recent: [RECENT_EXCHANGE] }, [
       `/?q=${encodeURIComponent('当たらない語')}`,
     ]);
     await waitForLoaded();
 
-    // URL の語はそのまま（画面が勝手に外していない）。
     expect(new URLSearchParams(router.state.location.search).get('q')).toBe('当たらない語');
-    // 当たらない新着は画面に載らない（virtua が描かないので、ここで確かめられる
-    // のは「空の合図が出ていること」までである）。
-    expect(screen.queryByText(summarizeJournalEntry(RECENT_EXCHANGE))).toBeNull();
   });
 
   /**

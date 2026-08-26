@@ -14,6 +14,8 @@
  * 規則をそのまま関数に切り出しただけである。変わったのは「誰が呼ぶか」で
  * あって「何をするか」ではない。
  */
+import { matchesJournalSearch } from '@alteroid/core/journal-search';
+
 import type { JournalEntry } from '~/lib/types';
 
 /** ページ（1回の `GET /journal` 応答）を、既にある一覧の**先頭**へ差し込む。 */
@@ -164,6 +166,40 @@ export function filterByType(
   selected: readonly JournalEntry['type'][],
 ): JournalEntry[] {
   return selected.length === 0 ? entries : entries.filter((entry) => selected.includes(entry.type));
+}
+
+/**
+ * 画面にいま掛かっている絞りを、`recent`（SSE で届いた生の受信）へも掛け直す
+ * （種別チップ + 語で探す。issue #250）。
+ *
+ * **`filterByType` と同じ理由で在る。** サーバへ投げた絞りは履歴側にしか
+ * 効かず、`recent` は絞られていない生の受信なので、掛け直さないと
+ * **検索中の画面へ当たらない行が割り込む**（＝画面が「その語で探した結果」
+ * でなくなる）。
+ *
+ * **DOM にも virtua にも触れない純粋な関数としてここに置く。** 呼び出し元
+ * （`use-journal-window.ts`）の中にインラインで書くと、**jsdom が日誌の行を
+ * 1行も描かない**ため画面越しには測れなくなる（`journal.test.tsx` 冒頭の
+ * virtua の断り）——このファイルの他の規則をここへ切り出したのと同じ理由
+ * である。
+ *
+ * **照合は `@alteroid/core/journal-search` の1つの実装を通す。** 欄の一覧を
+ * 画面側へ書き写すと、サーバ側と「当たる」の意味が静かにずれる
+ * （`packages/core/src/journal-search.ts` の doc）。**本体の
+ * `@alteroid/core` からではなくこの軽い口から取る**のは、本体から値を
+ * import するとサーバ専用のドメイン層ごとブラウザバンドルへ入るからである
+ * （#294 / #306 で `/commitments` が 1.2MB になり本番で開けなくなった。
+ * `routes/commitments.tsx` の doc）。
+ *
+ * `q` が空文字列なら語では絞らない（`matchesJournalSearch` の doc）。
+ */
+export function filterRecent(
+  entries: JournalEntry[],
+  selected: readonly JournalEntry['type'][],
+  q: string,
+): JournalEntry[] {
+  const byType = filterByType(entries, selected);
+  return q === '' ? byType : byType.filter((entry) => matchesJournalSearch(entry, q));
 }
 
 /**

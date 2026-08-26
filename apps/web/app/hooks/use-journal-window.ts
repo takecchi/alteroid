@@ -23,7 +23,6 @@
  * リセットする」の形そのもの
  * （https://react.dev/learn/you-might-not-need-an-effect#resetting-all-state-when-a-prop-changes）。
  */
-import { matchesJournalSearch } from '@alteroid/core/journal-search';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useJournalFeed } from '~/hooks/journal-feed';
@@ -31,6 +30,7 @@ import { unwrap, useApi } from '~/lib/api';
 import {
   applyNewerPage,
   applyOlderPage,
+  filterRecent,
   JOURNAL_MAX_LIMIT,
   newestAt,
   oldestAt,
@@ -233,11 +233,7 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
     // バンドルへ入る（#294 / #306 で `/commitments` が 1.2MB になり本番で
     // 開けなくなった。`routes/commitments.tsx` の doc）。この口は実行時の
     // 依存を1つも持たない（`packages/core/tsup.config.ts`）。
-    const filtered = recent.filter(
-      (e) =>
-        (selected.length === 0 || selected.includes(e.type)) &&
-        (q === '' || matchesJournalSearch(e, q)),
-    );
+    const filtered = filterRecent(recent, selected, q);
     if (filtered.length === 0) return;
     const applied = applyNewerPage(entriesRef.current, filtered, filtered.length);
     if (applied.freshCount === 0) return;
