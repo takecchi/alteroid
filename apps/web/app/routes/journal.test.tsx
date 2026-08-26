@@ -701,6 +701,53 @@ describe('日誌画面の検索欄（issue #250）', () => {
    * **探す対象に入っていない欄が在ることを、探している人にだけ見せる。**
    * 常に出すと本当に効いているときの目印にならない。
    */
+  /**
+   * **絞ったまま遡れること**（`q` と `until` が同じ要求に載る）。
+   *
+   * ⚠️ **これは2つの PR が同じファイルで出会ったところを名指しで測る歯である。**
+   * #501 が「一覧のどちらの端をどちらのクエリ引数へ載せるか」を
+   * `olderPageQuery` として純粋関数へ出し、#250（この PR）が `buildQuery` へ
+   * `q` を足した。**両者は `buildQuery(limit, olderPageQuery(...))` という1点で
+   * 出会っている** —— `q` を足す側が `extra` を潰すか、`extra` を渡す側が `q` を
+   * 潰すかのどちらでも、**「検索したまま遡ると、2頁目から絞りが外れる」**という
+   * 壊れ方になる。git は自動で解いたが、*意味の上で* 両立していることは
+   * どちらの PR の歯も測っていなかった。
+   *
+   * 2頁目に `q` が無ければ、その頁だけ全種別・全文が混ざって返る。**画面は
+   * 何も言わずにそれを継ぎ足す**ので、読む側からは「検索結果の続き」に見える。
+   */
+  it('検索したまま遡ると、2頁目の要求に q と until の両方が載る', async () => {
+    const base = new Date('2026-08-20T00:00:00.000Z').getTime();
+    const page: JournalEntry[] = Array.from({ length: 100 }, (_, i) => ({
+      type: 'decision',
+      id: `q-p${i}`,
+      at: new Date(base - i * 60_000).toISOString(),
+      decision: 'トマトの水やり',
+      grounds: 'g',
+    }));
+
+    const stub = stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      if (new URL(url).searchParams.has('until')) return json({ entries: [], scanned: 0 });
+      return json({ entries: page, scanned: page.length });
+    });
+
+    renderJournal({ status: 'live', recent: [] }, [`/?q=${encodeURIComponent('トマト')}`]);
+    await waitForLoaded();
+
+    fireEvent.click(await screen.findByRole('button', { name: /もっと遡る/ }));
+
+    await waitFor(() => {
+      expect(stub.calls.filter((url) => url.includes('/journal'))).toHaveLength(2);
+    });
+
+    const second = new URL(stub.calls.filter((url) => url.includes('/journal'))[1]!);
+    // #501 側（端と引数の対応）が生きている。
+    expect(second.searchParams.get('until')).toBe(page.at(-1)!.at);
+    // #250 側（絞り）も同じ要求に載っている。どちらかが他方を潰したら落ちる。
+    expect(second.searchParams.get('q')).toBe('トマト');
+  });
+
   it('検索していないときは、対象外の欄の断り書きを出さない', async () => {
     stubFetch((url) => {
       if (!url.includes('/journal')) return undefined;
