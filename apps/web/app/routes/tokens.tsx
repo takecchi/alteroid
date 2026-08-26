@@ -107,6 +107,35 @@ function tokenAvailabilityAt(
   return 'ready';
 }
 
+/**
+ * **網羅していない値が実行時に届いたときに、投げずに1行へ落とす。**
+ *
+ * `assertNever` との使い分けは「**その値を誰が作るか**」である:
+ *
+ * - **この画面が自分で作る値** → `assertNever`。増えたらこのファイルが一緒に
+ *   変わるので、実行時に未知が届く経路が無い（{@link tokenAvailabilityAt} が
+ *   その形）。**投げてよい**
+ * - **デーモンが作って送ってくる値** → こちら。`apps/web` は Vercel、デーモンは
+ *   Railway で**別に配られる**ので、**サーバのほうが新しい窓が必ず在る。**
+ *   そこで投げると、**1行の未知が一覧を丸ごと消す**（`AGENTS.md` の禁止1と同じ形）
+ *
+ * **網羅性はコンパイル時に守る**（引数が `never` なので、値が増えれば型検査が落ちる）。
+ * **そして未知の値は「未知である」とそのまま出す** —— 黙って既知のどれかへ寄せない。
+ * 寄せると、読む側は**嘘の状態**を見る。
+ *
+ * **⚠️ これは実際に起きた形である。** `token_rotation` の `event` は「5値」として
+ * 書かれていたが、2026-08-26 に6値目（`sweep_stopped`）が足された。**固定に見える
+ * 数え上げでも増える。**
+ */
+function describeUnknown(value: never, label: string): string {
+  return `未知の${label}（${String(value)}）。この画面より新しいデーモンが送った値である`;
+}
+
+/**
+ * **この画面が自分で作る値**の網羅性を実行時にも守る。
+ *
+ * **送られてくる値へ使わないこと**（{@link describeUnknown} の使い分け）。
+ */
 function assertNever(value: never, label: string): never {
   throw new Error(`未知の${label}: ${JSON.stringify(value)}`);
 }
@@ -155,7 +184,9 @@ function describeRecovery(recovery: TokenRecovery): string {
     case 'unknown':
       return '分類: どちらとも言えない（time でも action でもない。捨てる判断の根拠にしないこと）';
     default:
-      return assertNever(recovery, '回復の見込み');
+      // **送られてくる値である**（`agentTokenViewSchema` の `recovery` は
+      // デーモンが `limitRecoveryOf` で導いて載せる）。⟹ 投げない。
+      return describeUnknown(recovery, '回復の見込み');
   }
 }
 
@@ -296,7 +327,8 @@ function describeRotateOn(policy: TokenRotationSettings['rotateOn']): string {
     case 'off':
       return '回さない（記録だけする）';
     default:
-      return assertNever(policy, '回す契機');
+      // **送られてくる値である**（`GET /tokens` の `settings.rotateOn`）。⟹ 投げない。
+      return describeUnknown(policy, '回す契機');
   }
 }
 
@@ -356,9 +388,10 @@ const JOURNAL_LIMIT = 50;
  * そのまま出す —— **黙って既知のどれかへ寄せない**（寄せると、読む側は嘘の状態を
  * 見る。上の `sweep_stopped` を `exhausted` へ潰すのと同じ誤り）。
  *
- * **⚠️ この関数の兄弟（`describeAvailability` / `describeRecovery` /
- * `describePolicy` / `describeFreshness`）はまだ `assertNever` のままである。**
- * 同じ理屈が当たるが、**この変更では触っていない** —— 直すなら別に測ってからにする。
+ * **兄弟のうち送られてくる値を読む3つ（`describeRecovery` / `describeRotateOn` /
+ * `describeFreshness`）も同じ形にしてある。** `describeAvailability` だけは
+ * `assertNever` のままで、**それが正しい** —— あの値は送られてこない
+ * （{@link tokenAvailabilityAt} がこのファイルの中で作る）。
  */
 function describeEvent(event: TokenRotationEntry['event']): {
   label: string;
@@ -380,15 +413,9 @@ function describeEvent(event: TokenRotationEntry['event']): {
       return { label: '起動時に現役を撒き直した', tone: 'neutral' };
     case 'restore_failed':
       return { label: '起動時の撒き直しに失敗', tone: 'danger' };
-    default: {
-      // **網羅性はここで守る**（値が増えたらコンパイルが落ちる）。
-      const unknown: never = event;
-      // **落とさない。** この画面より新しいデーモンが書いた行である。
-      return {
-        label: `未知の event（${String(unknown)}）。この画面より新しいデーモンが書いた行である`,
-        tone: 'neutral',
-      };
-    }
+    default:
+      // **落とさない**（`describeUnknown` の doc）。網羅性は引数の `never` が守る。
+      return { label: describeUnknown(event, '回転の event'), tone: 'neutral' };
   }
 }
 
@@ -401,7 +428,8 @@ function describeFreshness(freshness: NonNullable<TokenRotationEntry['freshness'
     case 'unknown':
       return '不明（身元を運べない検知点由来。stale とは別の意味）';
     default:
-      return assertNever(freshness, '観測の新しさ');
+      // **送られてくる値である**（日誌の行の `freshness`）。⟹ 投げない。
+      return describeUnknown(freshness, '観測の新しさ');
   }
 }
 

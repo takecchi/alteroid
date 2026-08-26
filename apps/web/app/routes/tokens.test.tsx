@@ -301,6 +301,81 @@ describe('/tokens 画面 — recovery（回復の見込み）を潰さない', (
   });
 });
 
+/**
+ * **送られてくる値が、この画面の知らないものだったとき。**
+ *
+ * `apps/web` は Vercel、デーモンは Railway で**別に配られる**ので、
+ * **サーバのほうが新しい窓が必ず在る。** 実際 `token_rotation` の `event` は
+ * 「5値」として書かれていたのに 2026-08-26 に6値目が足された。
+ *
+ * **⚠️ そこで投げると、1行の未知が一覧を丸ごと消す。**
+ */
+describe('/tokens 画面 — 知らない値が届いても落ちない', () => {
+  it('recovery が知らない値でも、画面は出て、知らないことをそのまま言う', async () => {
+    stubScreen({
+      tokens: [
+        {
+          id: 't-known',
+          label: 'known-token',
+          order: 0,
+          sha256: 'e'.repeat(12),
+        },
+        {
+          id: 't-future',
+          label: 'from-newer-daemon',
+          order: 1,
+          sha256: 'f'.repeat(12),
+          lastRejectedAt: '2026-08-25T00:00:00.000Z',
+          lastRejectedReason: 'something new',
+          // **この画面が知らない値。** 新しいデーモンが足したもの、という想定。
+          recovery: 'a_value_this_bundle_does_not_know',
+        },
+      ],
+    });
+
+    render(
+      <Providers>
+        <Tokens />
+      </Providers>,
+    );
+
+    await waitForPoolLoaded();
+
+    // **一覧が消えていない。** 知っている行はそのまま出る。
+    expect(screen.getByText('known-token')).toBeTruthy();
+    expect(screen.getByText('from-newer-daemon')).toBeTruthy();
+    // **黙って既知のどれかへ寄せない。** 知らないと言う。
+    expect(screen.getByText(/未知の回復の見込み/)).toBeTruthy();
+    expect(screen.getByText(/a_value_this_bundle_does_not_know/)).toBeTruthy();
+  });
+
+  it('回転の event が知らない値でも、履歴は出る', async () => {
+    stubScreen({
+      tokens: [{ id: 't-1', label: 'token-1', order: 0, sha256: 'a'.repeat(12) }],
+      journalEntries: [
+        {
+          type: 'token_rotation',
+          id: 'j-future',
+          at: '2026-08-26T00:00:00.000Z',
+          event: 'a_future_event',
+          text: '新しいデーモンが書いた行',
+        },
+      ],
+    });
+
+    render(
+      <Providers>
+        <Tokens />
+      </Providers>,
+    );
+
+    await waitForPoolLoaded();
+
+    expect(await screen.findByText(/未知の回転の event/)).toBeTruthy();
+    expect(screen.getByText(/a_future_event/)).toBeTruthy();
+  });
+});
+
 describe('/tokens 画面 — 冷却は原文と絶対時刻の両方を出す', () => {
   it('cooldownUntil の絶対時刻と lastRejectedReason の原文が両方出る', async () => {
     // 実測で報告されている桁の食い違い（冷却は5時間なのに理由の原文は
