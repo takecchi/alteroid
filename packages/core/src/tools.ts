@@ -656,10 +656,29 @@ async function guardFullReplace(
  *
  * **実費: 呼び手は書き込みの前後で `stores.persona.documents()` を1回ずつ、
  * 合計2回追加で呼ぶ。** 元々この4口は `documents()` を呼んでいなかった——
- * `self_status` だけが呼んでいた。`list()` も `documents()` も両ドライバとも
- * 全文を読んでから捨てる（`packages/storage-fs/src/persona.ts` /
- * `packages/storage-pg/src/persona.ts` の `stripContent`）ので、I/O の重さは
- * `list()` を呼ぶのと同じである——実測は PR 本文に書く。
+ * `self_status` だけが呼んでいた。**2回なのは設計である**——1回にして「前の床」を
+ * 「後の床」から逆算すると、数え方が実装として2本に割れる（`measureMemoryFloor`
+ * の doc の「共有の下ごしらえから両方が呼ぶ」という条件そのものと矛盾する）。
+ *
+ * ## ⚠️ `documents()` と `list()` の重さは、ドライバによって違う
+ *
+ * **pg（本番）は同じである。** どちらも `content` 列を選ぶ
+ * `SELECT ... ORDER BY slug` 1本である
+ * （`grep -Fn -- 'async documents()' packages/storage-pg/src/persona.ts`）。
+ *
+ * **⚠️ fs（ローカル / 開発）は違う。`documents()` が全ファイルを2回読む**——
+ * `list()` を呼んで（その中で全ファイルを読む）、返ってきた slug ごとに
+ * `read()` でもう一度読む
+ * （`grep -Fn -- 'async documents()' packages/storage-fs/src/persona.ts`）。
+ * 実測で `documents()` 166.7ms 対 `list()` 80.7ms（110文書・1.1MB・N=20）。
+ *
+ * **⟹ 書き込み1回あたり `documents()` を2回呼ぶので、fs では全ファイルの
+ * 読み出し4回ぶんになる。** pg では2クエリである。
+ *
+ * **⚠️ `FsPersonaStore.documents()` の二重読みは、この変更では直していない。
+ * 観測として記録するにとどめる**（記憶ストアの実装であり、直すかどうかは
+ * 別の判断である）。**書いておかないと、次に読む人が「知らなかったのか、
+ * 意図して残したのか」を区別できない。**
  */
 function memoryFloorNote(
   memoryBefore: readonly MemoryPart[],
