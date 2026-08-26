@@ -329,7 +329,9 @@ export interface SelectNextTokenOptions {
   /** 判定の基準時刻（epoch ミリ秒）。 */
   at: number;
   /**
-   * 降りたトークンの id。**これを候補から外す。**
+   * 候補から外す id。**1本でも、複数でも渡せる。**
+   *
+   * ## 1本目 — 降りたトークン
    *
    * **外さないと「自分自身へ回した」が起きる。** 冷却の期限は `resetsAt` 由来で、
    * **既に過ぎている値が来ることがある**（`markTokenUnusable` の doc: 過去の値を
@@ -337,8 +339,16 @@ export interface SelectNextTokenOptions {
    * 降りた本人が最初の候補として選び直される——**日誌には「回した」と残るのに、
    * 撒いた先は1文字も変わらない。** Issue が禁じている「黙って先頭へ戻る」の
    * いちばん静かな形である。
+   *
+   * ## 複数を受けるのはなぜか — **同じ当たりの中で順に試すため**
+   *
+   * Issue #393 の「回し方」は `使えない` → **2 へ戻って次の候補**と書いている。
+   * その繰り返しの中では、**すでに `unusable` と分かった候補を積んで外し続ける**
+   * 必要がある。**「冷却の印を配列へ反映したから次は選ばれない」では足りない** ——
+   * 上と同じ理由で、`resetsAt` が既に過去なら印を付けた直後でも `ready` に見える。
+   * ⟹ **記録ではなく、その場の集合で外す。**
    */
-  exclude?: string;
+  exclude?: string | readonly string[];
 }
 
 /**
@@ -353,7 +363,13 @@ export function selectNextToken(
   options: SelectNextTokenOptions,
 ): TokenSelection {
   const ordered = [...tokens].sort((a, b) => a.order - b.order);
-  const eligible = ordered.filter((token) => token.id !== options.exclude);
+  // **1本でも複数でも同じ道を通す。** 片方だけの経路を作ると、増えたほうの
+  // 判定だけが抜ける（`SelectNextTokenOptions.exclude` の doc）。
+  const excluded =
+    options.exclude === undefined
+      ? new Set<string>()
+      : new Set(typeof options.exclude === 'string' ? [options.exclude] : options.exclude);
+  const eligible = ordered.filter((token) => !excluded.has(token.id));
 
   const ready = eligible.find((token) => tokenAvailabilityAt(token, options.at) === 'ready');
   if (ready !== undefined) return { kind: 'candidate', token: ready };

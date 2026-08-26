@@ -18,9 +18,11 @@ import {
   selectNextToken,
   type ObservationFreshness,
   type TokenRotationSignal,
+  type TokenSelection,
 } from './token-rotation.js';
 import type { JournalEntryInput } from './schema.js';
 import type { RateLimitFacts, UsageLimitNotice } from './usage-limits.js';
+import type { TokenCandidateVerdict } from './token-candidate.js';
 import type { Stores } from './store.js';
 
 /**
@@ -126,6 +128,20 @@ export type TokenRotationOutcome =
       kind: 'exhausted';
       /** いちばん早く戻るもの。**無いことがある**（プールが空・全部外された）。 */
       earliest?: { tokenId: string; label: string; cooldownUntil: number };
+      /**
+       * **候補を試し切る前に打ち切ったか**（Issue #393）。付くのは
+       * `'budget'`（壁時計の持ち時間を使い切った）のときだけである。
+       *
+       * **これが無いときの `exhausted` は「試し切って、どれも駄目だった」を意味する。**
+       * 付いているときは**まだ試していない候補が残っている** —— 両者を同じ顔にすると、
+       * 「全部だめ」と「時間切れ」が出力から区別できなくなる。
+       *
+       * **⚠️ 日誌の `event` はどちらも `exhausted` である。** あちらは
+       * `schema.ts` の `z.enum` 5値で、増やすと外向きの面（`openapi.json`）が動く。
+       * ⟹ **構造の側はまだ粗い。** 区別が要るなら `text` を読むこと
+       * （{@link describeTokenRotation} が打ち切りを言い分けている）。
+       */
+      stoppedBy?: 'budget';
       signal: TokenRotationSignal;
       freshness: ObservationFreshness;
       why: string;
@@ -262,6 +278,26 @@ export type TokenEnsureEnvOutcome =
   | { kind: 'added'; tokenId: string; why: string }
   | { kind: 'exists'; tokenId: string }
   | { kind: 'skipped'; why: string };
+
+/**
+ * 1回の観測で、候補を試すことに使ってよい壁時計の持ち時間（ミリ秒）。
+ *
+ * **件数ではなく時間で切る。** 件数の上限は**占有する時間を縛らない** ——
+ * probe は1本あたり最大 `USAGE_PROBE_TIMEOUT_MS`（20秒）待つので、
+ * 「3本まで」は「最悪60秒まで」であって、守りたいものを守っていない。
+ *
+ * **何を守っているか。** `observe` は `serial()` の1本の列を通るので、ここで
+ * 止まっているあいだ**他の観測が全部待たされる** —— 枠に当たった知らせが列の
+ * 後ろで待つ、という形になる。
+ *
+ * **1本目は必ず試す。** 判定は「選んでから、probe を始める前」に見るので、
+ * 経過が 0 の初回はここで止まらない。**持ち時間を 0 にしても、1本は試す。**
+ *
+ * **打ち切ったことは黙らない**（`TokenRotationOutcome` の `stoppedBy`）。
+ * 黙って打ち切ると「候補を全部試した」と「時間切れでやめた」が出力から
+ * 区別できなくなる。
+ */
+export const CANDIDATE_SWEEP_BUDGET_MS = 60_000;
 
 export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
   const { stores, probe, spread } = options;
@@ -475,50 +511,116 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
             ? tokens
             : await coolDown(tokens, outgoingId, settings, observation);
 
-        const selection = selectNextToken(afterCoolDown, {
-          at: now().getTime(),
-          ...(outgoingId === undefined ? {} : { exclude: outgoingId }),
-        });
+        // **候補を1本ずつ試す（Issue #393「回し方」の 2〜4 の繰り返し）。**
+        //
+        // Issue 本文は逐語で「`使えない` → **2 へ戻って次の候補**」と書いている。
+        // ここが1本で打ち切っていたので、**候補が残っていても `exhausted`（＝全層が
+        // 止まる、の顔）になっていた。**
+        //
+        // **外すのは記録ではなく、その場の集合である。** 冷却の印を配列へ反映した
+        // だけでは次の周でまた選ばれうる —— `resetsAt` が既に過去なら印を付けた
+        // 直後でも `ready` に見える（`markTokenUnusable` の doc: 過去の値を未来へ
+        // 丸めない）。
+        const tried = new Set<string>();
+        if (outgoingId !== undefined) tried.add(outgoingId);
+        const sweepStartedAt = now().getTime();
 
-        if (selection.kind === 'none') {
-          return {
-            kind: 'exhausted' as const,
-            ...(selection.earliest === undefined ? {} : { earliest: selection.earliest }),
-            signal: decision.signal,
-            freshness,
-            why: selection.why,
-          };
-        }
+        // **冷却の印はここに積むだけで、まだ保存しない**（保存はループの後で1回）。
+        let sweptTokens = afterCoolDown;
+        const unusableLabels: string[] = [];
+        let chosen: { token: AgentToken; verdict: TokenCandidateVerdict } | undefined;
+        let ranOut: Extract<TokenSelection, { kind: 'none' }> | undefined;
+        let stoppedByBudget = false;
 
-        // **候補を本番の仕事で試さない**（Issue #393 の設計の骨）。推論が走らない
-        // probe で確かめる。3値のうち `unusable` だけが候補を1本飛ばす。
-        const verdict = await probe.probe({
-          id: selection.token.id,
-          ...credentialOf(selection.token),
-        });
-        if (verdict.verdict === 'unusable') {
+        for (;;) {
+          const selection = selectNextToken(sweptTokens, {
+            at: now().getTime(),
+            exclude: [...tried],
+          });
+          if (selection.kind === 'none') {
+            ranOut = selection;
+            break;
+          }
+          // **持ち時間は「選んでから、probe を始める前」に見る。** 初回は経過が 0 なので
+          // 必ず1本は試す（`CANDIDATE_SWEEP_BUDGET_MS` の doc）。
+          if (now().getTime() - sweepStartedAt >= CANDIDATE_SWEEP_BUDGET_MS) {
+            stoppedByBudget = true;
+            break;
+          }
+          tried.add(selection.token.id);
+
+          // **候補を本番の仕事で試さない**（Issue #393 の設計の骨）。推論が走らない
+          // probe で確かめる。3値のうち `unusable` だけが候補を1本飛ばす。
+          const verdict = await probe.probe({
+            id: selection.token.id,
+            ...credentialOf(selection.token),
+          });
+          if (verdict.verdict !== 'unusable') {
+            chosen = { token: selection.token, verdict };
+            break;
+          }
+
           // **飛ばした候補も冷却へ入れる。** 入れないと次の観測で同じものが
           // 最初の候補として選ばれ、probe を毎回焼く。
           const at = now().toISOString();
-          await stores.tokens.replace(
-            afterCoolDown.map((token) =>
-              token.id === selection.token.id
-                ? markTokenUnusable(token, {
-                    at,
-                    message: verdict.reason,
-                    ...(verdict.retryAt === undefined ? {} : { resetsAt: verdict.retryAt }),
-                    fallbackCooldownMs: settings.cooldownMs,
-                  })
-                : token,
-            ),
+          sweptTokens = sweptTokens.map((token) =>
+            token.id === selection.token.id
+              ? markTokenUnusable(token, {
+                  at,
+                  message: verdict.reason,
+                  ...(verdict.retryAt === undefined ? {} : { resetsAt: verdict.retryAt }),
+                  fallbackCooldownMs: settings.cooldownMs,
+                })
+              : token,
           );
+          unusableLabels.push(selection.token.label);
+        }
+
+        // **冷却の印は、ここで1回だけ保存する。**
+        //
+        // **周ごとに保存すると、途中で落ちたときに「一部の候補にだけ冷却が付いて、
+        // 結果は誰にも届かない」版が残る** —— 保存の失敗はこの関数の外まで投げ、
+        // 呼ぶ側は跡を1行残してそのターンを捨てる（再送も再試行も無い）。
+        //
+        // **無駄と嘘を分ける。** まとめて1回にすると、落ちたときは印が丸ごと残らず、
+        // 次の観測が同じ候補をもう一度 probe する —— **それは無駄なだけで、記憶ストア
+        // と現実をずらさない。** 一部だけ残るほうは、ずらす。
+        //
+        // **回す前に保存する。** ここで落ちたら回さない —— `writeActive` が落ちた
+        // ときと同じ倒れ方である（`it('撒く前に正本を書く（保存が落ちたら撒かない）')`
+        // が固定している形）。
+        if (unusableLabels.length > 0) await stores.tokens.replace(sweptTokens);
+
+        if (chosen === undefined) {
+          const skipped =
+            unusableLabels.length === 0
+              ? ''
+              : `。試した候補「${unusableLabels.join('」「')}」はどれも使えなかった`;
           return {
             kind: 'exhausted' as const,
+            // **打ち切ったときは `earliest` を出さない。** 出せる材料が無い
+            // （まだ試していない候補は冷却中ではないので、`selectNextToken` の
+            // 見立てが取れていない）。**無いものを埋めない。**
+            ...(stoppedByBudget || ranOut?.earliest === undefined
+              ? {}
+              : { earliest: ranOut.earliest }),
+            ...(stoppedByBudget ? { stoppedBy: 'budget' as const } : {}),
             signal: decision.signal,
             freshness,
-            why: `候補「${selection.token.label}」も使えなかった（${verdict.reason}）`,
+            // **試した後は `selectNextToken` の文言をそのまま使わない。** あちらは
+            // 「プールが空、または降りた1本しか無い」と書く —— **試して外した分も
+            // 「無い」に見えているだけ**なので、そのまま出すと**候補が4本在ったのに
+            // 「プールが空」と読める行**になる。
+            why: stoppedByBudget
+              ? `候補を試す持ち時間（${String(CANDIDATE_SWEEP_BUDGET_MS)}ms）を使い切った${skipped}`
+              : unusableLabels.length > 0
+                ? `試せる候補を使い切った${skipped}`
+                : (ranOut?.why ?? '候補が無い'),
           };
         }
+
+        const selection = { token: chosen.token };
+        const verdict = chosen.verdict;
 
         // `undecidable` は**撒く側へ倒す**（Issue #393「回し方」の3値）。判定でき
         // ないことを理由に候補を捨てない。
@@ -662,10 +764,16 @@ export function describeTokenRotation(
   }
 
   if (outcome.kind === 'exhausted') {
+    // **打ち切ったときに「戻る見込みが1本も無い」と言わない。** 既定の文言は
+    // 「試し切って、どれも戻る見込みが無かった」を意味する —— 持ち時間で
+    // 打ち切った回にそれを出すと、**まだ試していない候補が在るのに「1本も無い」と
+    // 言う**ことになる（`stoppedBy` の doc）。
     const earliest =
-      outcome.earliest === undefined
-        ? '**戻る見込みの立っている候補が1本も無い**'
-        : `いちばん早く戻るのは「${outcome.earliest.label}」（${new Date(outcome.earliest.cooldownUntil).toISOString()}）`;
+      outcome.stoppedBy === 'budget'
+        ? '**まだ試していない候補が残っている**（戻る見込みは測っていない）'
+        : outcome.earliest === undefined
+          ? '**戻る見込みの立っている候補が1本も無い**'
+          : `いちばん早く戻るのは「${outcome.earliest.label}」（${new Date(outcome.earliest.cooldownUntil).toISOString()}）`;
     return `認証トークン: **回せなかった**（${outcome.signal}）。${outcome.why}。${earliest}${tail}`;
   }
 
