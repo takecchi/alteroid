@@ -1943,9 +1943,15 @@ class RunnerSession {
     options: { selfFenced?: true } = {},
   ): Promise<void> {
     this.#stopped = true;
-    // **量はここで1行にまとめる。** `#finish` はこのセッションの終わり口が
-    // 1本に集まる場所なので、経路ごとに書き忘れる余地が無い
-    // （`noteUnclassifiedFailuresSummary` の doc）。
+    // **量をここで1行にまとめる。終わり口はここだけではない（Issue #393）。**
+    // もう1本は `stop()`（器の入れ替えと `manager_stop` が通る道）で、**あちらは
+    // ここを通らない** —— だから同じ呼び出しが両方に在る（`stop()` の中の
+    // `#closeWorkerWaitWindow` の隣に、同じ理由で並べてある）。
+    //
+    // **片方だけにすると、存在は残るが量だけが失われる。** 初出の1行は経路に
+    // 関係なく出るので、**落ちていることに気づく手がかりが出力に無い。**
+    // 数え上げの持ち主は `noteUnclassifiedFailuresSummary` の doc に在り、
+    // そこは「すべての終わり口」ではなく現物の2本を名指ししている。
     noteUnclassifiedFailuresSummary(this.#unclassifiedFailures, this.#id);
     // **`close()` より先に読む。** 閉じた後の control channel からは何も取れない。
     // ここを通るのはクラッシュ・`lost`・`failed`、つまり `result` が出ないまま
