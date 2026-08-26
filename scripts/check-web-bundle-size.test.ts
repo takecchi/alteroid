@@ -76,13 +76,19 @@ describe('check-web-bundle-size: judgeBundleSize', () => {
 
   it('#335 の実測（単一チャンク 1,198,608 B）を通すと、単一チャンク・総量の両方の予算を超える', () => {
     // 実測: PR 本文・check-web-bundle-size.mjs の doc に同じ数字がある。
+    // 残り（726,545 B）は単一チャンクの予算未満の3ファイルに割って、
+    // 「単一チャンクの予算を超えたのは commitments.js だけ」を確かめられる形にする
+    // （1ファイルにまとめると、その1ファイル自体も単一チャンクの予算を超えてしまう）。
     const result = judgeBundleSize([
       { path: 'commitments.js', bytes: 1_198_608 },
-      { path: 'other.js', bytes: 726_545 }, // 合計を当時の総量（約1,925,153B）に寄せる
+      { path: 'other-1.js', bytes: 242_000 },
+      { path: 'other-2.js', bytes: 242_000 },
+      { path: 'other-3.js', bytes: 242_545 },
     ]);
     expect(result.ok).toBe(false);
     expect(result.oversized.map((h: { path: string }) => h.path)).toEqual(['commitments.js']);
     expect(result.totalOver).toBe(true);
+    expect(result.totalBytes).toBe(1_925_153);
   });
 
   it('使用率（%）を計算する', () => {
