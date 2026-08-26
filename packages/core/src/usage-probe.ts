@@ -16,6 +16,40 @@ import type { Options, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 export const USAGE_PROBE_TIMEOUT_MS = 20_000;
 
 /**
+ * `UsageProbeOptions.env` に渡した値（候補トークンなど）を、文字列から取り除く。
+ *
+ * **理由の文字列は、呼び出し元が保存したり画面に出したりしうる。** `env` の doc に
+ * 書いたとおり「ここへ渡す値は資格そのものになりうる」ので、SDK やその配下が
+ * 例外メッセージへ値をそのまま含めて返してきても、`reason` へ漏らさないための
+ * 最後の網である。**単純な文字列置換なので、値が変形されて出てきた場合までは
+ * 塞げない**（これは「塞げないと分かっていることを塞いだことにしない」ため、
+ * ここに明記する）。
+ */
+export function redactEnvSecrets(text: string, env: NodeJS.ProcessEnv | undefined): string {
+  if (env === undefined) return text;
+  let result = text;
+  for (const value of Object.values(env)) {
+    if (typeof value === 'string' && value.length > 0) {
+      result = result.split(value).join('[REDACTED]');
+    }
+  }
+  return result;
+}
+
+/**
+ * 例外・rejection の理由を、秘密を伏せた1行に丸める。
+ *
+ * **`error.message` をそのまま出さないのは、ここへ来る値の出所を選べないから
+ * である。** SDK やその配下が投げるものは呼び出し側の型宣言に無いので、
+ * `redactEnvSecrets` は最後の網として必ず通す。改行は1行目だけを見る
+ * （複数行のスタックトレースを理由として持ち帰らない）。
+ */
+export function describeProbeError(error: unknown, env: NodeJS.ProcessEnv | undefined): string {
+  const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  return redactEnvSecrets(text.split('\n', 1)[0] ?? text, env);
+}
+
+/**
  * probe が読む口だけを抜き出した顔。
  *
  * **すべて省略可能にしてある。** 実験的な口（長い名前のあれ）は SDK 側で改名・削除
@@ -94,14 +128,23 @@ export async function* idleUsagePrompt(signal: AbortSignal): AsyncGenerator<SDKU
  *
  * **片方の失敗や停滞で、もう片方の答えを捨てないため。** 実測で「`accountInfo()` は
  * 答えるのに usage 側は答えない」という食い違いが出ている。遅れて来た rejection は
- * ここで飲む（unhandled にしない）。
+ * ここで飲む（unhandled にしない）が、**戻り値はこれまでどおり `T | undefined` の
+ * ままにしてある** — 呼び出し元（`runner.ts` の `#flushUsage` 等）は理由を受け取る
+ * 気が無い呼び方のままでよい。
+ *
+ * **理由だけを別口で渡したい呼び出し元は、第3引数 `onRejected` を渡す。** 省略すれば
+ * 挙動もシグネチャの意味も1文字も変わらない（省略時は `undefined` を渡すのと同じ）。
  */
 export async function settleWithin<T>(
   promise: Promise<T> | undefined,
   ms: number,
+  onRejected?: (error: unknown) => void,
 ): Promise<T | undefined> {
   if (promise === undefined) return undefined;
-  const settled = promise.catch(() => undefined);
+  const settled = promise.catch((error: unknown) => {
+    onRejected?.(error);
+    return undefined;
+  });
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -117,8 +160,34 @@ export async function settleWithin<T>(
 }
 
 /**
- * 使い捨ての probe で `read` を1回走らせる。失敗・締め切り・中断は `undefined`。
+ * `runUsageProbe` が値を持ち帰れなかった理由の内訳。
+ *
+ * 呼ぶ側（`fetchAccountUsage`）が長らく「起動失敗・締め切り・中断」という固定文言
+ * 1本で畳んでいたのを構造化したもの。**この3値がその固定文言の内訳そのものである**
+ * （`exception` ＝ 起動失敗、`timeout` ＝ 締め切り、`aborted` ＝ 中断）。
+ */
+export type UsageProbeFailureKind = 'exception' | 'timeout' | 'aborted';
+
+export interface UsageProbeFailure {
+  kind: UsageProbeFailureKind;
+  /**
+   * 人が読める短い理由。**秘密は含まない** — `options.env` に渡した値は
+   * {@link redactEnvSecrets} で必ず伏せてある。
+   */
+  reason: string;
+}
+
+/** `runUsageProbe` の結果。**決して投げない**契約を、型でも表す。 */
+export type UsageProbeOutcome<T> =
+  | { ok: true; value: T }
+  | { ok: false; failure: UsageProbeFailure };
+
+/**
+ * 使い捨ての probe で `read` を1回走らせる。
  * **決して投げない**（probe は best-effort であって、呼ぶ側は必ずフォールバックする）。
+ * 失敗したときは `{ ok: false, failure }` を返す —— 以前はここで理由を捨てて
+ * `undefined` にしていたが、`fetchAccountUsage` 側が「なぜ取れなかったか」を
+ * 一切言えなくなる帰結を生んでいた（#429）。
  *
  * 締め切りは自分で持つ。**SDK が abort で reject してくれることに頼らない** —
  * 内部が変わったときに「取得中のまま永久に止まる」を作らないため。
@@ -127,14 +196,15 @@ export async function runUsageProbe<T>(
   queryFn: UsageProbeQuery,
   options: UsageProbeOptions,
   read: (handle: UsageProbeHandle) => Promise<T>,
-): Promise<T | undefined> {
+): Promise<UsageProbeOutcome<T>> {
   const controller = new AbortController();
   const abort = () => controller.abort();
   options.signal?.addEventListener('abort', abort, { once: true });
   let timer: ReturnType<typeof setTimeout> | undefined;
 
+  let handle: UsageProbeHandle;
   try {
-    const handle = queryFn({
+    handle = queryFn({
       prompt: idleUsagePrompt(controller.signal),
       options: {
         cwd: options.cwd,
@@ -153,7 +223,13 @@ export async function runUsageProbe<T>(
         ...(options.env !== undefined ? { env: { ...process.env, ...options.env } } : {}),
       },
     });
+  } catch (error) {
+    options.signal?.removeEventListener('abort', abort);
+    controller.abort();
+    return { ok: false, failure: { kind: 'exception', reason: describeProbeError(error, options.env) } };
+  }
 
+  try {
     const answer = read(handle);
     // 締め切りが勝った後に届いた rejection を unhandled にしない。
     answer.catch(() => {});
@@ -167,9 +243,22 @@ export async function runUsageProbe<T>(
         timer.unref?.();
       }),
     ]);
-    return result === timedOut ? undefined : result;
-  } catch {
-    return undefined;
+    if (result === timedOut) {
+      return controller.signal.aborted
+        ? { ok: false, failure: { kind: 'aborted', reason: '締め切り前に中断された' } }
+        : {
+            ok: false,
+            failure: {
+              kind: 'timeout',
+              reason: `締め切り（${options.timeoutMs ?? USAGE_PROBE_TIMEOUT_MS}ms）に間に合わなかった`,
+            },
+          };
+    }
+    return { ok: true, value: result };
+  } catch (error) {
+    return controller.signal.aborted
+      ? { ok: false, failure: { kind: 'aborted', reason: '観測中に中断された' } }
+      : { ok: false, failure: { kind: 'exception', reason: describeProbeError(error, options.env) } };
   } finally {
     if (timer !== undefined) clearTimeout(timer);
     options.signal?.removeEventListener('abort', abort);
