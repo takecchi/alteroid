@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import {
+  clearRecentTracesForTesting,
+  journalEntryShape,
+  noteDroppedRecord,
+  noteManagerIdCollision,
+  setStderrSinkForTesting,
+} from './dropped-record.js';
 import type { ManagerDenial, ManagerPool, ManagerSummary, RunnerFleetOverview } from './manager.js';
 import { measureMemoryFloor, renderMemoryDocuments } from './memory.js';
 import { createProfileService } from './profile-service.js';
@@ -4704,6 +4711,81 @@ describe('journal_read — memory_update の action / バイト数（#339）', (
 });
 
 /**
+ * `self_dropped`（#242）——クローンが自分の握り潰しの跡を器の中から読み戻す口。
+ *
+ * 帳面そのもの（何が乗り、何が乗らず、上限に達したら何が起きるか）は
+ * `dropped-record.test.ts`「直近の跡を器の中から読み戻す帳面（#242）」が持つ。
+ * ここで測るのは道具の側——空のときの応答・呼べば内容が読めること・`limit`
+ * の効き。予算で切ったときの挙動（`OUTPUT_CAP` / `TRUNCATION_MARK`）は下の
+ * 「一覧は例外なく件数で壊れない」の総当たりが持つ。
+ */
+describe('self_dropped（自分の跡を器の中から読み戻す。#242）', () => {
+  it('まだ何も落としていなければ、そう分かる形で返す（黙って空を返さない）', async () => {
+    const h = harness();
+    clearRecentTracesForTesting();
+
+    const reply = await h.call('self_dropped', {});
+
+    expect(reply).toContain('まだ');
+    expect(reply).not.toBe('');
+  });
+
+  it('落とした跡が実際に読み戻せる（本文は乗らない）', async () => {
+    const h = harness();
+    clearRecentTracesForTesting();
+    const secret = 'ghp_000000000000000000000000000000000000';
+    setStderrSinkForTesting(() => {});
+    try {
+      noteDroppedRecord(
+        '日誌',
+        journalEntryShape({ type: 'decision', decision: secret, grounds: secret }),
+        new Error('storage is closed'),
+      );
+    } finally {
+      setStderrSinkForTesting(null);
+    }
+
+    const reply = await h.call('self_dropped', {});
+
+    expect(reply).toContain('日誌を記録できませんでした');
+    expect(reply).toContain('storage is closed');
+    expect(reply).not.toContain(secret);
+  });
+
+  it('limit で直近何件かに絞れる（既定より少なく要求すれば、その件数だけ返る）', async () => {
+    const h = harness();
+    clearRecentTracesForTesting();
+    setStderrSinkForTesting(() => {});
+    try {
+      for (let index = 0; index < 5; index += 1) {
+        noteManagerIdCollision(`mgr-${index}`, 1);
+      }
+    } finally {
+      setStderrSinkForTesting(null);
+    }
+
+    const reply = await h.call('self_dropped', { limit: 2 });
+
+    // 直近2件（mgr-3 / mgr-4）だけが載り、古い3件は載らない。
+    expect(reply).toContain('managerId=mgr-3 ');
+    expect(reply).toContain('managerId=mgr-4 ');
+    expect(reply).not.toContain('managerId=mgr-0 ');
+    expect(reply).not.toContain('managerId=mgr-1 ');
+    expect(reply).not.toContain('managerId=mgr-2 ');
+    // 「もっと古い分は limit を上げて」の案内が出る（全5件のうち2件だけを渡した）。
+    expect(reply).toContain('limit を上げて');
+  });
+
+  it('HTTP には出していない道具である（`self_read` / `self_status` と同じ扱い）', () => {
+    // **`CLONE_ALLOWED_TOOLS` に載る＝MCP 経由でクローンに配られる、を見る。**
+    // HTTP 側に対応する経路が無いことは `apps/daemon/src/app.ts` の現物（触って
+    // いないファイル）で確認済みで、ここでは道具として配られていることだけを
+    // 固定する。
+    expect(CLONE_ALLOWED_TOOLS).toContain(qualifiedToolName('self_dropped'));
+  });
+});
+
+/**
  * **道具を足したら、システムプロンプトの道具一覧（`prompt.ts` の「# 道具」）にも載せる。**
  *
  * 関数呼び出しのスキーマ（`allowedTools`）に載っていれば呼べはするが、クローンが
@@ -4994,6 +5076,12 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       },
       mark: /…ほか \d+ 件は省略（消えた見出しは全 \d+ 件のうち \d+ 件だけ出した）。/,
     },
+    /*
+     * **`self_dropped`（#242）も名前が `_list` で終わらないが一覧である。**
+     * `flooded()` は各周回で `noteDroppedRecord` を1回呼び、帳面
+     * （`RECENT_TRACE_LIMIT`＝200件）を溢れさせる（下の `flooded()` を見ること）。
+     */
+    { label: 'self_dropped', name: 'self_dropped', args: {} },
   ];
 
   /**
@@ -5108,6 +5196,10 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
    * ストアの一覧が「0件だから短い」で通ってしまう（それは上限の保証ではない）。
    */
   async function flooded(count: number): Promise<Harness> {
+    // **`self_dropped` の帳面はプロセス（＝このテストファイル）の生存中ずっと
+    // 1つを共有する。** 前回の `flooded()` や他のテストが積んだ分と混ざらない
+    // よう、ここで空にしてから積む。
+    clearRecentTracesForTesting();
     const h = harness(() => LISTING_SWEEP_RUNTIME);
     const long = 'あ'.repeat(1_500);
 
@@ -5236,6 +5328,24 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
           return `# 節${pad}: ${'み'.repeat(40)}\n\n本文${pad}\n`;
         }).join('\n'),
     );
+    // 握り潰しの跡（`self_dropped`、#242）— 帳面（`recentDroppedTraces`）を
+    // 溢れさせるため `count` 件積む。**実物の stderr は汚さない**——
+    // `noteDroppedRecord` 自体が帳面へも積むので（`notePrefixed` の
+    // `prefix === 'alteroid'` 判定）、書き込み先を黙らせても `self_dropped` が
+    // 読む内容は1文字も変わらない。
+    setStderrSinkForTesting(() => {});
+    try {
+      for (let index = 0; index < count; index += 1) {
+        const pad = String(index).padStart(4, '0');
+        // **250文字は REASON_LIMIT（200、`dropped-record.ts`）を確実に超える。**
+        // `reasonOf` が200文字ちょうどへ切るので、pad の桁数によらず1件の長さが
+        // 揃う——予算（`SELF_DROPPED_BUDGET`）を外す変異を確実に殺せる大きさに
+        // 総量を届かせるため、揃えておく。
+        noteDroppedRecord('probe', `flood-${pad}`, new Error(`理由${pad}: ${'x'.repeat(250)}`));
+      }
+    } finally {
+      setStderrSinkForTesting(null);
+    }
     // 認証トークンのプール（token_list）。**`replace` は全文置換なので、ループの
     // 中で1本ずつ足すと毎回上書きになる** — 件数を作れないまま「1件だから短い」で
     // 歯が通る（この器を1つにしてある理由そのもの）。だからループの外で一度に積む。
