@@ -1419,6 +1419,70 @@ describe('chat の /journal', () => {
 
     expect(read()).toContain('日誌はまだ空');
   });
+
+  /**
+   * `q=`（本文を語で探す。issue #250）。**サーバへ投げる** —— 画面側・CLI 側で
+   * 捨てると「出していないだけ」の層ができる（`journal.tsx` の逐語と同じ判断）。
+   */
+  it('q= をそのまま GET /journal のクエリへ渡す', async () => {
+    captureStdout();
+    const { calls, client } = stubClient({ journalEntries: [] });
+
+    await runSlashCommand('/journal q=トマト', client, emptyListed());
+
+    expect(calls).toEqual([{ route: 'GET /journal', args: { query: { limit: '20', q: 'トマト' } } }]);
+  });
+
+  /**
+   * **`q=` は行末までを1つの語として取る**（`parseJournalSearchTokens`）。
+   * 行は空白で割られてから渡ってくるので、ここを詰めないと空白を含む語で
+   * 探せない（＝「語で探す」口として使いものにならない）。
+   */
+  it('q= の値に空白が含まれていても1つの語として渡す', async () => {
+    captureStdout();
+    const { calls, client } = stubClient({ journalEntries: [] });
+
+    await runSlashCommand('/journal q=トマト の 水やり', client, emptyListed());
+
+    expect(calls).toEqual([
+      { route: 'GET /journal', args: { query: { limit: '20', q: 'トマト の 水やり' } } },
+    ]);
+  });
+
+  it('件数と q= を併用できる（件数は従来どおり位置引数）', async () => {
+    captureStdout();
+    const { calls, client } = stubClient({ journalEntries: [] });
+
+    await runSlashCommand('/journal 50 q=トマト', client, emptyListed());
+
+    expect(calls).toEqual([{ route: 'GET /journal', args: { query: { limit: '50', q: 'トマト' } } }]);
+  });
+
+  it('q= を渡さない既存の呼びは1文字も変わらない', async () => {
+    captureStdout();
+    const { calls, client } = stubClient({ journalEntries: [] });
+
+    await runSlashCommand('/journal 5', client, emptyListed());
+
+    expect(calls).toEqual([{ route: 'GET /journal', args: { query: { limit: '5' } } }]);
+  });
+
+  /**
+   * **0件のとき「無い」で終わらせない。** `q` の照合対象に入っていない欄
+   * （`tool_use` の `input` 等）が在るので、黙ると「日誌にその語は無い」と
+   * 読める（AGENTS.md「静かに失敗する道具」）。
+   */
+  it('q= で0件なら、探す対象に入っていない欄が在ることまで言う', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({ journalEntries: [] });
+
+    await runSlashCommand('/journal q=ナス', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain('「ナス」に当たる日誌はありません');
+    expect(text).toContain('tool_use の input');
+    expect(text).not.toContain('日誌はまだ空');
+  });
 });
 
 /**

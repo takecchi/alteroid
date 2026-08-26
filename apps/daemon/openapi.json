@@ -1866,7 +1866,7 @@
         "operationId": "getJournal",
         "tags": ["journal"],
         "summary": "日誌を読む",
-        "description": "日誌（追記専用の記録）を読む。`type` `since` `until` で掘れる。既定は新しい順（`order:desc`）——`order:asc` で古い順にもできる。`afterId` と `afterAt` を両方渡すと、前の頁の最後の行より後ろ（＝返る順序における次）を返す（可視の複合キー。応答に `id`/`at` が既に載っているのでそこから組み立てる）。**`after` は返る順序の意味であって時間の意味ではない** —— `order:desc`（既定）では、指した行より**古い**行が返る。`order:asc` ではその逆（**新しい**行が返る）。**封筒は持たない** —— 続きが在るかは `limit` 件ちょうど返ったかで判る。",
+        "description": "日誌（追記専用の記録）を読む。`type` `since` `until` で掘れる。`q` で本文を語で探せる（大文字小文字を区別しない部分一致。他の絞りと併用できる）。**`q` が当たらないことは「日誌にその語が無い」を意味しない** —— `tool_use` の `input`・`worker_wait`・`turn_usage` は探す対象に入っていない。`q=`（空）は絞らない。既定は新しい順（`order:desc`）——`order:asc` で古い順にもできる。`afterId` と `afterAt` を両方渡すと、前の頁の最後の行より後ろ（＝返る順序における次）を返す（可視の複合キー。応答に `id`/`at` が既に載っているのでそこから組み立てる）。**`after` は返る順序の意味であって時間の意味ではない** —— `order:desc`（既定）では、指した行より**古い**行が返る。`order:asc` ではその逆（**新しい**行が返る）。**封筒は持たない** —— 続きが在るかは `limit` 件ちょうど返ったかで判る。",
         "responses": {
           "200": {
             "description": "日誌エントリの一覧。",
@@ -2430,6 +2430,13 @@
           {
             "in": "query",
             "name": "type",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
             "schema": {
               "type": "string"
             }

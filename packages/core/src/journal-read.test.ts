@@ -217,3 +217,109 @@ describe('journal_read', () => {
     expect(reply).toContain('数え直しを挟んだ回');
   });
 });
+
+/**
+ * `journal_read` の `q`（本文を語で探す。issue #250）。
+ *
+ * **ストア側の契約は `journal-search-contract.ts` が3実装ぶん測る。**
+ * ここで測るのは、**道具の口がそれを本当に通しているか**と、**当たらなかった
+ * ときに黙らないか**の2つだけである（同じことを2箇所で測らない）。
+ */
+describe('journal_read — q で本文を語で探す（issue #250）', () => {
+  it('本文にその語を含む行だけを返す（大文字小文字を区別しない部分一致）', async () => {
+    const stores = createMemoryStores();
+    const call = tools(stores);
+
+    await stores.journal.append({
+      type: 'decision',
+      decision: 'トマトの水やりを1日1回にする',
+      grounds: '前回の観測',
+    });
+    await tick();
+    await stores.journal.append({
+      type: 'decision',
+      decision: 'ナスの支柱を立てる',
+      grounds: '前回の観測',
+    });
+    await tick();
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: 'TOMATO は英語で書いても残る',
+    });
+
+    const hit = await call('journal_read', { q: 'トマト' });
+    expect(hit).toContain('トマトの水やりを1日1回にする');
+    expect(hit).not.toContain('ナスの支柱を立てる');
+
+    // 大文字小文字を区別しない（先例 `conversation_read` と同じ契約）。
+    const lowered = await call('journal_read', { q: 'tomato' });
+    expect(lowered).toContain('TOMATO は英語で書いても残る');
+  });
+
+  it('他の絞り（types）と併用できる', async () => {
+    const stores = createMemoryStores();
+    const call = tools(stores);
+
+    await stores.journal.append({
+      type: 'decision',
+      decision: '収穫はトマトから始める',
+      grounds: '熟し具合',
+    });
+    await tick();
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: 'トマトはいつ収穫する？',
+    });
+
+    const reply = await call('journal_read', { q: 'トマト', types: ['decision'] });
+    expect(reply).toContain('収穫はトマトから始める');
+    expect(reply).not.toContain('トマトはいつ収穫する？');
+  });
+
+  /**
+   * **0件のとき「無い」で終わらせない。**
+   *
+   * `q` の照合対象は自由文の欄だけで、`tool_use` の `input` は入っていない
+   * （`journal-search.ts`「対象にしていない欄」）。そこを黙ると、受け取った側は
+   * 「日誌にその語は無い」と読む——**判定できないことを2値へ潰す形そのもの**
+   * である（AGENTS.md「静かに失敗する道具」）。
+   */
+  it('当たらなかったら、探す対象に入っていない欄が在ることまで言う', async () => {
+    const stores = createMemoryStores();
+    const call = tools(stores);
+
+    await stores.journal.append({
+      type: 'tool_use',
+      actor: 'clone',
+      tool: 'Bash',
+      input: { command: 'echo ナス' },
+    });
+
+    const reply = await call('journal_read', { q: 'ナス' });
+    expect(reply).toContain('"ナス" に当たる日誌は無い');
+    expect(reply).toContain('tool_use の input');
+    // 「日誌はまだ空」と言わないこと（実際には1件在る）。
+    expect(reply).not.toContain('日誌はまだ空');
+  });
+
+  it('q が未指定なら絞らない（既存の呼びは1文字も変わらない）', async () => {
+    const stores = createMemoryStores();
+    const call = tools(stores);
+
+    await stores.journal.append({
+      type: 'decision',
+      decision: 'トマトの水やり',
+      grounds: 'a',
+    });
+    await tick();
+    await stores.journal.append({ type: 'decision', decision: 'ナスの支柱', grounds: 'b' });
+
+    const reply = await call('journal_read', {});
+    expect(reply).toContain('トマトの水やり');
+    expect(reply).toContain('ナスの支柱');
+  });
+});

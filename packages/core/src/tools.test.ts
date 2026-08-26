@@ -4731,6 +4731,29 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
      * 200 なので、これが「クローンが出せる最大の要求」である。
      */
     { label: 'journal_read（limit 最大）', name: 'journal_read', args: { limit: 200 } },
+    /*
+     * **`journal_read` の語検索（`q`）も一覧モードである（issue #250）。**
+     *
+     * 積む形そのものは既定モードと同じ `renderListing` / `JOURNAL_BUDGET` を
+     * 通るので、いまは既定モードと同じ切り口である。**それでも名指しするのは、
+     * この網が「名前が `_list` で終わらない一覧」を機械的には拾わないから**
+     * （`.claude/skills/listing-and-detail/SKILL.md`「この網が拾えない範囲」）。
+     * 積む向きや予算を q モードだけ別に持たせた瞬間、名指ししていなければ
+     * 誰も測らなくなる。
+     *
+     * `flooded()` は `決めた<連番>: あ×1500` の `decision` を count 件積む
+     * ので、`q: '決めた'` はその全件に当たる（＝件数で伸びる一覧になる）。
+     */
+    { label: 'journal_read（語で探す）', name: 'journal_read', args: { q: '決めた' } },
+    /*
+     * 既定は 20 件なので、`limit` を広げた呼びも測る（既定だけだと
+     * `JOURNAL_BUDGET` が一度も拘束条件にならない。上の既定モードと同じ理由）。
+     */
+    {
+      label: 'journal_read（語で探す・limit 最大）',
+      name: 'journal_read',
+      args: { q: '決めた', limit: 200 },
+    },
     { label: 'usage_read', name: 'usage_read', args: {} },
     /*
      * **`conversation_read` は3つの一覧モードを持ち、予算の切り口が別々である。**

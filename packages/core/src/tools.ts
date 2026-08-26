@@ -1586,6 +1586,9 @@ export function createCloneTools(context: ToolContext) {
         '日誌を新しい順に読む。過去の一点を掘るには since/until で窓を閉じること',
         '（新しい順に返るので、until を指定しないと最新分しか見えない）。',
         '一覧の本文は抜粋で、全文が要る1件は id を渡して取る。',
+        'q で本文を語で探せる（他の絞りと併用できる）。',
+        '**q が当たらないことは「日誌にその語が無い」を意味しない** —',
+        'tool_use の input・worker_wait・turn_usage は探す対象に入っていない。',
       ].join(' '),
       {
         limit: z.number().int().min(1).max(200).optional().describe('件数（既定 20）'),
@@ -1601,6 +1604,13 @@ export function createCloneTools(context: ToolContext) {
           .array(z.enum(JOURNAL_ENTRY_TYPES))
           .optional()
           .describe('種別で絞る。省略すると全種別'),
+        // **説明文は `conversation_read` の `q` と1文字も変えない。**
+        // 同じ語で探す口が2つ在るのに言い方が違うと、読む側は違う意味論を
+        // 疑うことになる（`journal-search.ts` の doc）。
+        q: z
+          .string()
+          .optional()
+          .describe('語で探す（大文字小文字を区別しない部分一致）。他の絞りと併用できる'),
         id: z
           .string()
           .optional()
@@ -1612,7 +1622,7 @@ export function createCloneTools(context: ToolContext) {
           .optional()
           .describe('id で全文を読むとき、何文字目から読むか'),
       },
-      async ({ limit, since, until, types, id, offset = 0 }) => {
+      async ({ limit, since, until, types, q, id, offset = 0 }) => {
         // --- 全文モード（1件だけ） ---
         if (id !== undefined) {
           const entry = await stores.journal.get(id);
@@ -1633,8 +1643,23 @@ export function createCloneTools(context: ToolContext) {
           ...(since === undefined ? {} : { since }),
           ...(until === undefined ? {} : { until }),
           ...(types === undefined || types.length === 0 ? {} : { types }),
+          ...(q === undefined ? {} : { q }),
         });
         if (entries.length === 0) {
+          // **`q` で0件だったとき、探す対象に入っていない欄が在ることまで言う。**
+          // 黙ると「日誌にその語は無い」と読めるが、実際には tool_use の input に
+          // 書かれているかもしれない（`journal-search.ts`「対象にしていない欄」）。
+          // **判定できないという第3の状態を「無かった」へ潰さない**
+          // （AGENTS.md「静かに失敗する道具」。`conversation_read` が窓を遡り
+          // 切れていないときに「この窓には無い（判定できない）」と言うのと同じ形で、
+          // こちらの取りこぼしの出所は窓ではなく欄である）。
+          if (q !== undefined) {
+            return text(
+              `"${q}" に当たる日誌は無い（この条件の中では）。` +
+                'ただし tool_use の input・worker_wait・turn_usage は探す対象に入っていないので、' +
+                'そこにだけ書かれている語はここでは当たらない。',
+            );
+          }
           return text(
             since === undefined && until === undefined && types === undefined
               ? '（日誌はまだ空）'
@@ -1658,7 +1683,7 @@ export function createCloneTools(context: ToolContext) {
               budget: JOURNAL_BUDGET,
               omitted: ({ rest, shown, total }) =>
                 `…ほか ${rest} 件は省略（この条件で ${total} 件あり、新しい順に ${shown} 件だけ出した）。` +
-                'さらに遡るなら until を、狭めるなら since / types を指定すること。',
+                'さらに遡るなら until を、狭めるなら since / types / q を指定すること。',
             }),
             '（本文は抜粋。全文は journal_read id=<id> で取れる）',
           ].join('\n'),
