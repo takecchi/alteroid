@@ -267,7 +267,7 @@ describe('createRunnerTokenSync（後から繋いだ runner を追いつかせ�
     // は残す——つまり「一度も撒いていない」と「env 行が現役」は holder 側では
     // 区別できるのに、直す前の `createRunnerTokenSync` はそれを見ずに `values()` の
     // 値の有無だけで判定していたので、ここで no-op になっていた
-    // （runner-2 が繋ぎ直したときに古い鍵ファイルを消せない、という穴）。
+    // （繋ぎ直してきた runner の古い鍵ファイルを消せない、という穴）。
     const holder = createAgentTokenHolder();
     holder.set(SECRET, { tokenId: 'tok-a', generation: 1 });
     holder.clear({ tokenId: 'tok-a', generation: 2 });
