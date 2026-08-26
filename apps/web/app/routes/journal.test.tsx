@@ -41,9 +41,9 @@
  * （テスト名で数える）。
  */
 import { JOURNAL_ENTRY_TYPES } from '@alteroid/core';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { JournalFeedProvider } from '~/hooks/journal-feed';
 import type { JournalLive } from '~/hooks/use-journal-live';
@@ -560,6 +560,55 @@ describe('日誌画面の検索欄（issue #250）', () => {
     // 途中の2つは1度も撃たれていない。
     expect(searchTerms(stub.calls)).not.toContain('ト');
     expect(searchTerms(stub.calls)).not.toContain('トマ');
+  });
+
+  /**
+   * **待つ長さそのものを測る。**
+   *
+   * ⚠️ **上の歯だけでは足りない**（実測: 変異試験で `SEARCH_DEBOUNCE_MS` を
+   * `0` に落とす変異が**生き残った**）。`fireEvent.change` を3連打しても、
+   * 3つとも同じ同期のかたまりの中で起きるので、待ちが 0 でもタイマは1度も
+   * 発火せず（毎回 cleanup が先に走る）**上の歯は緑のまま通る**。だが実際に
+   * 人が打つ速さでは打鍵ごとに撃たれる —— **上の歯が測っていたのは
+   * 「同期のかたまりの中でまとめられること」だけで、「待つ」ことではなかった。**
+   *
+   * ここでは時計を止めて、**待ちの手前では撃たれず・待ちを越えて初めて
+   * 撃たれる**ことを両側から挟む。**300 という数そのものを書き写している**
+   * ので、`journal.tsx` 側の値を変えるとこの歯が落ちる —— それは意図である
+   * （値は当てずっぽうだと `SEARCH_DEBOUNCE_MS` の doc が断っており、変える
+   * ときは両方を見てほしい）。
+   */
+  it('待ちの手前では撃たず、待ちを越えて初めて撃つ（時計を止めて測る）', async () => {
+    const stub = stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      return json({ entries: [HISTORY_ONLY], scanned: 1 });
+    });
+
+    renderJournal({ status: 'live', recent: [] });
+    await waitForLoaded();
+
+    // 初期取得が終わってから時計を止める（止めたまま fetch の解決を待つと
+    // 進まなくなる）。
+    vi.useFakeTimers();
+    try {
+      fireEvent.change(screen.getByLabelText('日誌を語で探す'), {
+        target: { value: 'トマト' },
+      });
+
+      // `journal.tsx` の `SEARCH_DEBOUNCE_MS` は 300ms。その手前では撃たない。
+      await act(async () => {
+        vi.advanceTimersByTime(299);
+      });
+      expect(searchTerms(stub.calls)).not.toContain('トマト');
+
+      // 1ms 越えたところで初めて撃つ。
+      await act(async () => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(searchTerms(stub.calls)).toContain('トマト');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   /**
