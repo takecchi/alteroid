@@ -4671,7 +4671,33 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
    * 名前が `_list` で終わらないのに一覧を返すもの。**網の外なので名指しする。**
    * 引数は「既定の呼び方」（一覧モード）を選ぶためのもの。
    */
-  const NAMED: { label: string; name: string; args: Record<string, unknown> }[] = [
+  const NAMED: {
+    label: string;
+    name: string;
+    args: Record<string, unknown>;
+    /**
+     * 応答が複数の節を連ねるとき、断り書きの合図をどの節へ帰属させて見るかを
+     * 指定する（`## <見出し>` の逐語。#406）。省略時は応答全体を見る
+     * （従来どおり）。
+     */
+    section?: string;
+    /**
+     * `section` を指定するときに**必ず添える**、その節の**一覧レベルの
+     * 断り書きだけが持つ**語彙（#406）。
+     *
+     * 節をまるごと素の `TRUNCATION_MARK`（`/省略|残り \d|文字目/`）で見ると、
+     * 1件ごとの `excerptLine` 抜粋（`…（N 文字省略。全 M 文字）`）も同じ
+     * 「省略」を含むので、一覧レベルの断り書きが丸ごと消えても代わりに
+     * 合格を出してしまう——`section` を足しただけでは直らない。だから
+     * 節の中の**どの行か**ではなく**どの語彙か**で断り書きそのものを
+     * 名指しする。位置（節の最後の行かどうか）には依存しない——最後の行に
+     * 依存する形は、断り書きの後ろへ無関係な行が足されただけで壊れる
+     * （実測: `main` が `renderMemorySize` へ `premise 合計` /
+     * `fact 目次合計` の2行を断り書きの後ろへ足した際に、「最後の行」で
+     * 見る旧実装が CI で壊れた）。
+     */
+    mark?: RegExp;
+  }[] = [
     { label: 'journal_read（既定）', name: 'journal_read', args: {} },
     /*
      * **`journal_read` は既定の引数では予算に届かない。**
@@ -4726,8 +4752,29 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
      * ので（`tools.ts` を grep して確認済み: `context.runtime` の参照は
      * `self_status` の1箇所だけ）、runtime を渡しても他のケースの挙動には
      * 影響しない。
+     *
+     * **`section` / `mark` を持たせてあるのは #406 の直しである。**
+     * `self_status` は「いまどう走っているか」「記憶の大きさ」「台帳との
+     * 突き合わせ」の3節を連ねて返す。`section` を指定しない他のケースと
+     * 同じく応答全体を `TRUNCATION_MARK` で検査すると、「記憶の大きさ」節の
+     * 中の**1件ごとの `excerptLine` 抜粋**（同じ「省略」という語彙を使う）
+     * が、節そのものの断り書き（`renderListing` の `omitted`）が丸ごと
+     * 消えても代わりに合格を出してしまう——実測（Issue #406 本文）で確認
+     * 済み: `renderMemorySize` の `omitted` を潰しても、応答全体を見る検査は
+     * 緑のままだった。`section: '## 記憶の大きさ'` はその節を切り出し、
+     * `mark` は一覧レベルの断り書きだけが持つ語彙（下の専用テスト
+     * 「`self_status` — 記憶の内訳を切ったら…」と同じ正規表現）を渡す——
+     * 節の**どこにあっても**この語彙が見つかれば合格とすることで、entries
+     * の省略とも、節の中に無関係な行が増えることとも、位置に依存せず
+     * 区別できる。
      */
-    { label: 'self_status', name: 'self_status', args: {} },
+    {
+      label: 'self_status',
+      name: 'self_status',
+      args: {},
+      section: '## 記憶の大きさ',
+      mark: /…ほか \d+ 文書は省略（全 \d+ 文書のうち \d+ 文書だけ出した）。/,
+    },
   ];
 
   /**
@@ -4750,6 +4797,36 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
    * - `文字目` — `describePage`（全文モードで何文字目までか）
    */
   const TRUNCATION_MARK = /省略|残り \d|文字目/;
+
+  /**
+   * 応答から `## <heading>` の節を切り出す（次の `## ` 行の手前、または末尾まで）。
+   *
+   * **複数の節を連ねる応答（`self_status`）で、ある節の合図を別の節・別の
+   * entries の合図と取り違えないための下ごしらえ（#406）。** `heading` は
+   * その節の見出し行の先頭一致（逐語）で探す。見つからなければ、節の対応
+   * 表そのものがずれている（見出しの文言が変わった等）ので、黙って空文字を
+   * 返さず落とす。
+   *
+   * **切り出した節の中の位置（何行目か・最後の行かどうか）には意味を
+   * 持たせない。** 呼び出し側（下の「切ったなら黙らない」試験）は、この
+   * 節のテキストに対して `mark`（一覧レベルの断り書きだけが持つ語彙）を
+   * 探すだけで、行の位置には依存しない——依存させると、断り書きの後ろへ
+   * 無関係な行が増えただけで壊れる（実測: `main` が `renderMemorySize` へ
+   * `premise 合計` / `fact 目次合計` の2行を断り書きの後ろへ足した際に、
+   * 「節の最後の行」で見る旧実装が CI で壊れた）。そのため、この関数は
+   * 素朴に「次の見出しの手前まで」を返すだけでよい——区切りの空行が
+   * 含まれていても、`mark` の正規表現マッチには影響しない。
+   */
+  function extractSection(reply: string, heading: string): string {
+    const lines = reply.split('\n');
+    const start = lines.findIndex((line) => line.startsWith(heading));
+    if (start === -1) {
+      throw new Error(`extractSection: 節が見つからない（heading="${heading}"）`);
+    }
+    const nextHeading = lines.findIndex((line, index) => index > start && line.startsWith('## '));
+    const end = nextHeading === -1 ? lines.length : nextHeading;
+    return lines.slice(start, end).join('\n');
+  }
 
   it('掃き出しが空にならない（検出器そのものが効いていることの確認）', () => {
     // 0件でも `it.each` は「通った」ように見える。数え上げが壊れたら落ちる。
@@ -4937,7 +5014,13 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     return h;
   }
 
-  const CASES = [
+  const CASES: {
+    label: string;
+    name: string;
+    args: Record<string, unknown>;
+    section?: string;
+    mark?: RegExp;
+  }[] = [
     ...SWEPT.map((name) => ({ label: name, name, args: {} as Record<string, unknown> })),
     ...NAMED,
   ];
@@ -4952,13 +5035,37 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
 
   it.each(CASES)(
     '$label — 切ったなら黙らない（省いたことが出力に出る）',
-    async ({ name, args }) => {
+    async ({ name, args, section, mark }) => {
       const h = await flooded(60);
 
       const reply = await h.call(name, args);
 
       // **「切った」と読める合図が出ていること。** 何も出ていなければ、
       // 受け取った側は「これで全部だ」と読んで全体像を組み立てる。
+      //
+      // **`section` が指定されているケース（#406）は、応答全体でも節全体でも
+      // なく、その節の**一覧レベルの断り書きだけが持つ語彙**（`mark`）だけを
+      // 見る。** `self_status` の「記憶の大きさ」節は、1件ごとの
+      // `excerptLine` 抜粋にも `TRUNCATION_MARK` と同じ語彙（「省略」）が
+      // 出るので、節全体を素の `TRUNCATION_MARK` で検査すると、その entries
+      // の省略が、節そのものの断り書きが丸ごと消えたときの代わりに合格を
+      // 出してしまう——断り書きがどの一覧に属するかを測れていない。**行の
+      // 位置（最後の行かどうか）にも依存させない**——依存させると、断り書きの
+      // 後ろへ無関係な行が増えただけで壊れる（NAMED の `mark` の doc に実測を
+      // 書いた）。`mark` は節の中のどこにあっても見つかれば合格とすることで、
+      // entries の省略とも、無関係な行の増減とも、位置に依存せず区別する。
+      if (section !== undefined) {
+        if (mark === undefined) {
+          throw new Error(
+            `CASES: section を指定したケースは mark も必ず指定すること（label="${name}"）。` +
+              'mark 無しで素の TRUNCATION_MARK に落とすと、entries の省略が代わりに合格を出す' +
+              '欠陥（#406）へ逆戻りする。',
+          );
+        }
+        expect(extractSection(reply, section)).toMatch(mark);
+        return;
+      }
+
       expect(reply).toMatch(TRUNCATION_MARK);
     },
   );
