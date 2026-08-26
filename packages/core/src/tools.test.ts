@@ -4781,6 +4781,21 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
    * その節の見出し行の先頭一致（逐語）で探す。見つからなければ、節の対応
    * 表そのものがずれている（見出しの文言が変わった等）ので、黙って空文字を
    * 返さず落とす。
+   *
+   * **次の節が在るなら、その手前の1行は必ず区切りの空行を落とす。**
+   * `tools.ts` の self_status ハンドラは節を `['…', '', '…', '', '…'].join('\n')`
+   * で連ねており、次の見出しの直前には必ず区切りの空行が1行入る（`self_status`
+   * ハンドラ本文の直読で確認済み）。**これを残したまま「節の最後の行」を見ると、
+   * 区切りの空行そのものが最後の行になってしまう** — 呼び出し側で空行を
+   * フィルタして読み飛ばす手当ても考えたが、それは事故る: 断り書き
+   * （`renderListing` の `omitted`）が空文字を返す変異が当たったとき、断り書きの
+   * 行そのものも空行になり、空行フィルタが**区切りの空行と断り書きの変異後の
+   * 空行を区別できず両方読み飛ばしてしまう**——結果、1つ手前の entry の行
+   * （1件ごとの `excerptLine` 抜粋。同じ「省略」語彙を持つ）が「節の最後の行」
+   * として読まれ、変異が生存する（実測で踏んだ。#406 の作業中）。**区切りの
+   * 空行は「入る位置が分かっている」ものなので、フィルタではなく決め打ちで
+   * 1行だけ落とす**——断り書きが変異で空文字になっても、区切りの空行と
+   * 取り違えずに「節の最後の行」として正しく読める。
    */
   function extractSection(reply: string, heading: string): string {
     const lines = reply.split('\n');
@@ -4788,8 +4803,9 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     if (start === -1) {
       throw new Error(`extractSection: 節が見つからない（heading="${heading}"）`);
     }
-    const end = lines.findIndex((line, index) => index > start && line.startsWith('## '));
-    return lines.slice(start, end === -1 ? lines.length : end).join('\n');
+    const nextHeading = lines.findIndex((line, index) => index > start && line.startsWith('## '));
+    const end = nextHeading === -1 ? lines.length : nextHeading - 1;
+    return lines.slice(start, end).join('\n');
   }
 
   it('掃き出しが空にならない（検出器そのものが効いていることの確認）', () => {
@@ -5015,9 +5031,12 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       // いない。断り書きは必ず節の最後の行として積まれるので、最後の行だけを
       // 見れば entries の省略と取り違えない。
       if (section !== undefined) {
-        const sectionLines = extractSection(reply, section)
-          .split('\n')
-          .filter((line) => line.trim() !== '');
+        // **空行をフィルタしない。** `extractSection` が節そのものの区切りの
+        // 空行を既に決め打ちで落としてあるので、ここで「空行を読み飛ばす」
+        // 手当てを重ねると、断り書きが変異で空文字になったときの空行までもが
+        // 読み飛ばされ、1つ手前の entry の行（それ自身が「省略」を含む）で
+        // 代わりに合格してしまう（extractSection の doc に実測を書いた）。
+        const sectionLines = extractSection(reply, section).split('\n');
         expect(sectionLines.at(-1)).toMatch(TRUNCATION_MARK);
         return;
       }
