@@ -256,15 +256,80 @@ describe('器が共有であることの告知', () => {
  * 歯として意味が無い）。
  */
 describe('バックグラウンドの完了を待つときの事実の告知（#357）', () => {
-  it('マネージャーに、完了通知を送る主体が居ないという事実を告げている', () => {
+  it('マネージャーに、層が2つ在ることと、追えない側は前景で見ることを告げている', () => {
     const prompt = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
-    expect(prompt).toContain('完了を知らせる通知は、この実行環境には無い');
+    expect(prompt).toContain('層が2つ在り');
+    expect(prompt).toContain('器が追っている処理の完了は、通知として届く');
+    expect(prompt).toContain('器が追えない形へ逃した処理は、通知の対象ではない');
     expect(prompt).toContain('成果物が在るかを見て回る');
   });
 
-  it('作業者にも、完了通知を送る主体が居ないという事実を告げている', () => {
+  it('作業者にも、層が2つ在ることを告げている', () => {
     const prompt = buildWorkerPrompt();
-    expect(prompt).toContain('完了を知らせる通知は無い');
+    expect(prompt).toContain('層が2つ在る');
+    expect(prompt).toContain('通知として届く');
+    expect(prompt).toContain('通知の対象ではない');
+  });
+
+  /**
+   * **全否定へ戻ることを塞ぐ歯（2026-08-27 の訂正）。**
+   *
+   * 本文はかつて「バックグラウンドへ回した処理の完了を知らせる通知は、この実行環境
+   * には無い」と**層を畳んだ全否定**を書いていた。実測でこれは偽だった（`Bash` の
+   * `run_in_background` と作業者への委譲の両方で完了通知が届いた。`prompt.ts` の
+   * doc に観測時刻つきで残してある）。
+   *
+   * **この歯が無いと、次に触る人が doc を読まずに全否定へ戻せる。** 戻しても型は
+   * 通り、他のどのテストも落ちない —— 上の describe の doc と同じ理由である。
+   */
+  it('「通知は無い」という層を畳んだ全否定へ戻っていない', () => {
+    const manager = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
+    const worker = buildWorkerPrompt();
+    for (const prompt of [manager, worker]) {
+      expect(prompt).not.toContain('完了を知らせる通知は、この実行環境には無い');
+      expect(prompt).not.toContain('完了を知らせる通知は無い');
+    }
+  });
+
+  /**
+   * **判定の形で書いてあることを固定する。** 「届く」と断定する形にしなかったのは、
+   * 実測がマネージャー層の器で取られたもので、runner の器では測っていないから
+   * である（`prompt.ts` の doc）。⟹ 読み手が自分の側を見れば当たる形を保つ。
+   */
+  it('通知が来ないことを環境の性質として読ませない（追える形で起こしたかを先に見させる）', () => {
+    const manager = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
+    const worker = buildWorkerPrompt();
+    for (const prompt of [manager, worker]) {
+      expect(prompt).toContain('追える形で起こしたか');
+    }
+  });
+
+  /**
+   * **「待つ形でターンを閉じてよい」を裸で置かせない歯。**
+   *
+   * この節は「通知は届く」という実測から書かれていて、そこまでは正しい。だが
+   * 実測から出せるのは**判定の材料**までで、「閉じてよい」は**許可**である。許可を
+   * 終了条件なしで置くと、#357 が扱う空転（**待つ対象を持たずにターンを閉じる**）と
+   * 見分けが付かなくなる —— どちらも「何もせずターンが終わる」という同じ顔をする。
+   *
+   * そして待ち側には、もう1つ別の壊れ方が在る。**待っている対象が消える経路**
+   * （枝が消えた・器が入れ替わった・仕事が要らなくなった）を抜ける条件に入れないと、
+   * 決着でも失敗でもなく**時間切れ**で終わる。時間切れは「まだ分からない」に見えるが、
+   * 実際には「もう決まっていたのに読めなかった」である。実際にそれで CI の監視が
+   * 1本、結果が出ていたのに時間切れで終わっている。
+   *
+   * ⟹ **この歯が無いと、許可の一文だけを残して条件を削れる。**削っても型は通り、
+   * 上の歯（層が2つ在る・追える形で起こしたか）も全部緑のままになる。
+   */
+  it('「閉じてよい」の許可に、終了条件と「対象が消えた」の抜け道が付いている', () => {
+    const manager = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
+    const worker = buildWorkerPrompt();
+    for (const prompt of [manager, worker]) {
+      // 許可がある以上、何を待っているかを名指しさせる（名指しできない＝追える形で起こしていない）
+      expect(prompt).toContain('何の完了を待っているか');
+      // 対象が消える経路を抜ける条件に入れさせる（入れないと時間切れになる）
+      expect(prompt).toContain('抜ける条件に入れ');
+    }
   });
 
   it('マネージャーに、通知が実処理の完了と一致しないことがあるという事実を告げている', () => {
