@@ -851,7 +851,10 @@ export function tokenRotationEntry(
   if (outcome.kind === 'exhausted') {
     return {
       ...common,
-      event: 'exhausted',
+      // **打ち切りを `exhausted` と名乗らせない。** `exhausted` は「候補が無い ＝
+      // 全層が止まる」で、`earliestAt` が無ければ「戻る見込みの立つ候補が1本も無い」
+      // を意味する（`schema.ts` の doc）。**打ち切った回は候補がまだ残っている。**
+      event: outcome.stoppedBy === 'budget' ? 'sweep_stopped' : 'exhausted',
       // **無いことを埋めない。** 「戻る見込みの立っている候補が1本も無い」と
       // 「すぐ戻る」を同じ形にしない（`earliest` の doc）。
       ...(outcome.earliest === undefined

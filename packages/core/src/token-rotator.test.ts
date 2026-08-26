@@ -1194,6 +1194,30 @@ describe('tokenRotationEntry / tokenRestoreEntry', () => {
     expect(tokenRestoreEntry(none)).toBeNull();
   });
 
+  it('打ち切りは exhausted ではなく sweep_stopped として載る', () => {
+    // **潰すと「候補が無い」と「まだ試していない候補が在る」が同じ顔になる。**
+    // 読む側は前者だと思って待つが、実際には次の観測で回りうる。
+    const stopped = tokenRotationEntry({
+      kind: 'exhausted',
+      stoppedBy: 'budget',
+      signal: 'reached',
+      freshness: 'current',
+      why: '候補を試す持ち時間（60000ms）を使い切った',
+    });
+    expect(stopped?.event).toBe('sweep_stopped');
+    // **打ち切りに `earliestAt` を付けない**（戻る見込みを測っていない）。
+    expect(stopped).not.toHaveProperty('earliestAt');
+
+    // 試し切ったほうは今までどおり `exhausted`。
+    const exhausted = tokenRotationEntry({
+      kind: 'exhausted',
+      signal: 'reached',
+      freshness: 'current',
+      why: '試せる候補を使い切った',
+    });
+    expect(exhausted?.event).toBe('exhausted');
+  });
+
   it('回ったら rotated として、移った先と世代と契機が載る', () => {
     const entry = tokenRotationEntry(
       {

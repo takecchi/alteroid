@@ -433,13 +433,25 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     id: z.string(),
     at: isoDateTime,
     /**
-     * 何が起きたか。**5値を潰さないこと。**
+     * 何が起きたか。**6値を潰さないこと。**
      *
      * とくに `not_rotated`（契機ではなかった）と `exhausted`（回そうとしたが
      * 候補が無かった）は**別の事実**である。前者は正常で、後者は全層が止まる。
      * 2値へ潰すと、いちばん重い状態がいちばん普通の状態と同じ顔になる。
+     *
+     * **そして `sweep_stopped`（候補を試し切る前に打ち切った）を `exhausted` へ
+     * 潰さないこと。** 潰すと**「候補が無い」と「まだ試していない候補が在る」が
+     * 同じ顔になる** —— 読む側は前者だと思って待つが、実際には次の観測で回りうる。
+     * これは「取れなかった」を「別の値だった」に変える形そのものである（#482）。
      */
-    event: z.enum(['rotated', 'not_rotated', 'exhausted', 'restored', 'restore_failed']),
+    event: z.enum([
+      'rotated',
+      'not_rotated',
+      'exhausted',
+      'restored',
+      'restore_failed',
+      'sweep_stopped',
+    ]),
     /** 契機（`TokenRotationSignal`）。起動時の撒き直しには無い。 */
     signal: z
       .enum([
