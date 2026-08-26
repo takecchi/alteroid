@@ -29,17 +29,15 @@ const ROOT = join(import.meta.dirname, '..');
  *    へ足す。`pnpm build` は要らない（`git ls-files` は追跡済みの source を
  *    見るだけなので、生成物に依存しない）。
  *
- * ## ⚠️ 3.は現時点で赤くなる（既知）
+ * ## 経緯: 3.は一時期、既知の理由で赤かった
  *
- * `apps/daemon/src/cursor.test.ts` に、既に1件 NUL バイトが混入している
- * （`check-tracked-nul-bytes-core.mjs` の doc に実測の詳細——`git blame` で
- * 単一コミット `e34dba9` が導入、コメントに意図の記載は無く #260 の事故と
- * 同じ見た目）。**この PR はそれを直さない**（#260 のオーナーコメントが
- * 「直し方を提案しない」前提であること、および本 PR の依頼が `scripts/`
- * 配下の新規ファイルに限定されていることの両方による）。**除外もしない**
- * ——除外すると、この検査が拾うべきものを自分で隠すことになる。
- * ⟹ このテストは merge 後も `pnpm test` を赤くし続ける。直す・除外する・
- * 別 Issue にするかはこの PR の範囲外の判断。
+ * `apps/daemon/src/cursor.test.ts` に、生の NUL バイトが1件混入していた
+ * （`check-tracked-nul-bytes-core.mjs` の doc に実測の詳細）。**この検査は
+ * それを除外しなかった**——除外すると、この検査が拾うべきものを自分で隠す
+ * ことになる。その1件は、生の NUL バイトを読める表記（JS のエスケープ表記）
+ * へ書き換えて解消した（文字列としての値は変えていない。意図か事故かは
+ * 判定できておらず、両論を `cursor.test.ts` 本体に注記してある）。
+ * ⟹ 除外リストは1件も無いまま、3.は現在は緑になる。
  */
 describe('check-tracked-nul-bytes: findNulByteHits', () => {
   it('NUL 無しなら0件を返す', () => {
@@ -128,8 +126,8 @@ describe('実リポジトリの検査（git ls-files が返す追跡済み全フ
             hits
               .map((h: { path: string; index: number }) => `  ${h.path} (offset ${h.index})`)
               .join('\n') +
-            '\n既知の1件（apps/daemon/src/cursor.test.ts）についてはこのファイル冒頭の' +
-            'doc コメントと #260 を参照。この PR では直さない・除外しない。',
+            '\n除外リストは無い（#260）。表記を読める形へ書き換えて解消するか、' +
+            '除外が本当に必要ならこのテストと doc の両方を更新すること。',
     ).toEqual([]);
   });
 });
