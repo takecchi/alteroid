@@ -5,7 +5,7 @@ import {
   verifyJournalStoreQueryEdgeContract,
   verifyJournalStoreWithContract,
 } from '@alteroid/core';
-import type { Commitment, InboxEvent, JournalEntry } from '@alteroid/core';
+import type { Commitment, InboxEvent, Job, JournalEntry } from '@alteroid/core';
 import { PGlite } from '@electric-sql/pglite';
 import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -1094,6 +1094,78 @@ describe('PgJobStore', () => {
 
     expect(await stores.jobs.listApprovals({ pendingOnly: true })).toHaveLength(0);
     expect((await stores.jobs.getApproval('ap-1'))?.answer).toBe('よい');
+  });
+
+  /**
+   * **`listJobs` もスキーマに合わない行を「飛ばすが、跡は残す」（Issue #224）。**
+   *
+   * `PgJournalStore#list` の「スキーマに合わない行の跡」テストと同じ道具・
+   * 同じ手口（生 SQL で `jobSchema.parse` を経由せず挿入する）で揃える。
+   * `Job` は判別子の `type` を持たないので、`journalRowType` は
+   * `undefined` を返し跡の見分けは `unknown-shape`（type 無し）1本になる。
+   */
+  describe('スキーマに合わない行の跡（Issue #224）', () => {
+    const secret = 'ghp_000000000000000000000000000000000000';
+
+    it('listJobs(): スキーマに合わない行を跡に残しつつ、読めた行はそのまま返る', async () => {
+      const now = new Date().toISOString();
+      await stores.jobs.putJob({
+        id: 'mgr-ok',
+        createdAt: now,
+        updatedAt: now,
+        status: 'running',
+        summary: '健全な行',
+      });
+
+      await db.execute(
+        sql`insert into jobs (id, status, created_at, updated_at, job)
+            values (
+              'broken-1',
+              'future-status',
+              '2026-08-12T00:00:00.000Z',
+              '2026-08-12T00:00:00.000Z',
+              ${JSON.stringify({
+                id: 'broken-1',
+                status: 'future-status',
+                createdAt: '2026-08-12T00:00:00.000Z',
+                updatedAt: '2026-08-12T00:00:00.000Z',
+                request: `秘密は ${secret} だった`,
+              })}::jsonb
+            )`,
+      );
+
+      let found: Job[] = [];
+      const lines = await captureStderr(async () => {
+        found = await stores.jobs.listJobs();
+      });
+
+      // 1. 読めた行（健全な1件）は今までどおり返る——回帰。
+      expect(found.map((job) => job.summary)).toEqual(['健全な行']);
+
+      // 2. 跡が stderr に出る。
+      const joined = lines.join('');
+      expect(joined).toContain('日誌の行を読み出せずに飛ばした');
+
+      // 3. **本文は跡に混ざらない。**
+      expect(joined).not.toContain(secret);
+    });
+
+    it('listJobs(): 壊れた行が無ければ跡は出ない（回帰）', async () => {
+      const now = new Date().toISOString();
+      await stores.jobs.putJob({
+        id: 'mgr-ok2',
+        createdAt: now,
+        updatedAt: now,
+        status: 'running',
+        summary: '健全な行のみ',
+      });
+
+      const lines = await captureStderr(async () => {
+        await stores.jobs.listJobs();
+      });
+
+      expect(lines.join('')).not.toContain('日誌の行を読み出せずに飛ばした');
+    });
   });
 });
 
