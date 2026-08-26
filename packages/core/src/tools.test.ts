@@ -13,6 +13,7 @@ import {
   CLONE_TOOL_NAMES,
   createCloneTools,
   qualifiedToolName,
+  type ToolContext,
 } from './tools.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import { usageDate } from './usage.js';
@@ -2172,6 +2173,51 @@ describe('クローンの道具', () => {
    * ハッシュの更新箇所）は `packages/storage-fs` / `packages/storage-pg` の
    * `FsPersonaStore` / `PgPersonaStore` のテストが持つ（実ファイル・実 DB が要る）。
    */
+  /**
+   * `ToolContext.memoryCause` が必須であることの歯。
+   *
+   * **測っているのは「配線を忘れたときに閉じるか」であって「明示したときに
+   * 通るか」ではない。** 既存の口を1つ書き換えて赤くする形では足りない ——
+   * それは「明示した側」しか動かさないからである。
+   *
+   * ## ⚠️ ここで `as unknown as ToolContext` を使う理由（読む人へ）
+   *
+   * **これは *型の抜け道から来た呼び* を再現している。実運用の経路ではない。**
+   * TS で検査されたコードから `memoryCause` を省いた `ToolContext` は組めない
+   * （`tsc` が落ちる。それがこの変更の主目的である）。だが型は実行時に無い
+   * ので、`as any` や JS からの呼び、あるいは将来の別 provider の配線が
+   * この形で届きうる —— **そこで倒れ先を作らないことを、ここで測る。**
+   *
+   * **⛔ この書き方を、他のテストの手本にしないこと。**
+   */
+  describe('ToolContext.memoryCause は必須（配線を忘れた口が守りを素通りしない）', () => {
+    /** 型の抜け道から来た呼びを再現した `ToolContext`（`memoryCause` が無い）。 */
+    const wiringForgotten = () =>
+      ({ stores: createMemoryStores(), emit: () => undefined }) as unknown as ToolContext;
+
+    it('⭐ 型の抜け道から memoryCause を省いて渡すと、既定へ倒さずに落ちる', () => {
+      expect(() => createCloneTools(wiringForgotten())).toThrow();
+    });
+
+    it('落ちるときのメッセージが、何を配線し忘れたかを名指しする', () => {
+      expect(() => createCloneTools(wiringForgotten())).toThrow(/memoryCause/);
+      expect(() => createCloneTools(wiringForgotten())).toThrow(/ToolContext/);
+    });
+
+    /**
+     * ⚠️ 対照。**能力を消していないこと**を測る —— 明示すれば従来どおり組める。
+     * これが緑でなければ、上の2本は「全部落ちるようになった」だけを見ている。
+     */
+    it('対照: memoryCause を明示すれば、従来どおり道具が組める', () => {
+      const tools = createCloneTools({
+        stores: createMemoryStores(),
+        emit: () => undefined,
+        memoryCause: () => 'clone',
+      });
+      expect(tools.length).toBeGreaterThan(0);
+    });
+  });
+
   describe('記憶の human guard（人間が書いた記憶を distill が壊せない）', () => {
     async function markHuman(h: Harness, slug: string, content: string): Promise<void> {
       // app.ts の PUT /memory/:slug と同じ手順を模す（write してから印を立てる）。
