@@ -593,6 +593,28 @@ class HttpRunner implements RunnerClient {
    */
   #lastLoggedCauseCode = '';
   /**
+   * 直前の接続で受け取れた、いちばん新しい SSE フレームの `id`（#275）。
+   *
+   * **`RunnerEvent`（JSON の中身）には一切載らない。** runner 側
+   * （`apps/runner/src/app.ts` の `Outbox`）が `writeSSE` の `id` フィールド
+   * にだけ乗せる連番で、ここではその値をフレームから直に読む——
+   * `runnerEventSchema` を経由しない、配送層だけで完結する値である。
+   *
+   * **1バイトも受け取れていなければ `null`。** 次に `/events` を開くとき
+   * （{@link #stream}）、`null` でなければ `Last-Event-ID` ヘッダへ乗せる。
+   * runner はそれより新しく「渡したはず」だった分を控え（`Outbox.sentSince`）
+   * から読み返す——`await stream.writeSSE()` が例外を投げずに正常返却した
+   * のに相手には届いていなかった1件（無音切断。Issue #275 本文）を拾う
+   * ための唯一の入口である。
+   *
+   * **runner が入れ替わっても壊れない。** 新しい runner の連番も1から
+   * 数え直す（`Outbox` の doc）ので、古い（高い）値を申告しても
+   * `sentSince` は単に何も返さない——「復元できない」へ倒れるだけで、
+   * 今後配られる分を取りこぼす方向には効かない。だから instanceId で
+   * 突き合わせて破棄する、といった手当ては意図的に入れていない。
+   */
+  #lastEventId: number | null = null;
+  /**
    * `hello()` が `/health` から実際に `runnerId` を受け取ったか。
    *
    * **`this.runnerId` の既定値（`'runner-primary'`）は、一度も接続できて
@@ -1060,7 +1082,14 @@ class HttpRunner implements RunnerClient {
     armWatchdog(this.#silenceTimeoutMs);
     try {
       const response = await this.#fetch(`${this.#baseUrl}/events`, {
-        headers: { accept: 'text/event-stream', authorization: `Bearer ${this.#token}` },
+        headers: {
+          accept: 'text/event-stream',
+          authorization: `Bearer ${this.#token}`,
+          // **無音切断からの復元（#275）。** 前回の接続で受け取れた最後の
+          // 連番を申告する——初回接続（`#lastEventId === null`）ではヘッダ
+          // 自体を付けない（`#lastEventId` の doc）。
+          ...(this.#lastEventId === null ? {} : { 'last-event-id': String(this.#lastEventId) }),
+        },
         signal: controller.signal,
       });
       if (!response.ok || response.body === null) {
@@ -1144,11 +1173,33 @@ class HttpRunner implements RunnerClient {
       while (boundary !== -1) {
         const frame = buffer.slice(0, boundary);
         buffer = buffer.slice(boundary + 2);
-        const data = frame
-          .split('\n')
+        const lines = frame.split('\n');
+        const data = lines
           .filter((line) => line.startsWith('data:'))
           .map((line) => line.slice(5).trim())
           .join('\n');
+
+        /**
+         * **`id:` は `data:` と独立に読む**（#275）。JSON（`data`）の中身とは
+         * 無関係な、配送層だけの値——runner 側（`apps/runner/src/app.ts` の
+         * `Outbox`）が `writeSSE` の `id` フィールドに乗せる連番をここで拾い、
+         * `#lastEventId` を進める。**受け取れたかどうかだけを見る。**
+         * `data` がスキーマに合わなかった／壊れていた場合でも、フレーム自体
+         * は届いているので進めてよい——同じフレームを取り直しても同じ結果に
+         * しかならない。
+         */
+        const idLine = lines.find((line) => line.startsWith('id:'));
+        if (idLine !== undefined) {
+          const seq = Number(idLine.slice(3).trim());
+          if (
+            Number.isInteger(seq) &&
+            seq >= 0 &&
+            (this.#lastEventId === null || seq > this.#lastEventId)
+          ) {
+            this.#lastEventId = seq;
+          }
+        }
+
         if (data.length > 0) {
           try {
             const raw: unknown = JSON.parse(data);

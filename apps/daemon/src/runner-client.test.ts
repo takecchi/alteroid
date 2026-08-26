@@ -2892,3 +2892,136 @@ describe('#pump は周回の途中で投げられても止まらない（#323）
     }
   });
 });
+
+/**
+ * Issue #275: `await stream.writeSSE()` が例外を投げずに正常返却したのに相手
+ * には届いていなかった1件（無音切断）を、SSE の `id` / `Last-Event-ID` で
+ * 配り直す。
+ *
+ * **ここが測るのはデーモン側の配線だけ**——「フレームの `id` を受け取ったら
+ * `#lastEventId` が進み、次の `/events` でそれを `Last-Event-ID` として申告
+ * する」という契約である。runner 側の契約（`Outbox.recordSent` /
+ * `Outbox.sentSince` が実際に読み返して配り直すこと）は
+ * `apps/runner/src/events-silent-disconnect.test.ts` が本物の `createRunnerApp`
+ * / `Outbox` を通して測る——**無音切断そのもの（書いている最中に相手が消える
+ * 競合）を両側つないで再現する歯はここには無い**（`/events が無音のまま固着
+ * したら切る（#323）」の describe の doc が断っている「本物のソケットの半開き
+ * は再現していない」と同じ理由——2つの実装を跨いだ競合を決定的に作るのは
+ * このリポジトリの他の歯もやっていない）。両側それぞれの契約を単独で測ることで
+ * 代える。
+ */
+describe('Last-Event-ID の申告（#275）', () => {
+  function pathOf(input: string | URL | Request): string {
+    return new URL(typeof input === 'string' ? input : input.toString()).pathname;
+  }
+
+  /**
+   * `/events` へ呼ばれるたびに `frame(callIndex)` の結果を返す `fetch`。
+   * `null` を返した回以降は掴んだままにする（`fetchFramesOnce` と同じ
+   * 「2回目以降の雑音を減らす」作法）。
+   *
+   * 受け取った `Last-Event-ID` ヘッダは呼び出し順に記録する。
+   */
+  function eventsFetchRecordingLastEventId(frame: (callIndex: number) => string[] | null): {
+    fetchFn: typeof fetch;
+    headersSeen: () => (string | undefined)[];
+  } {
+    const headersSeen: (string | undefined)[] = [];
+    let calls = 0;
+    const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
+      const path = pathOf(input);
+      if (path === '/health') {
+        return Response.json({ runnerId: 'runner-275', workspacePath: '/workspace' });
+      }
+      if (path === '/events') {
+        const headers = init?.headers as Record<string, string> | undefined;
+        headersSeen.push(headers?.['last-event-id']);
+        const callIndex = calls;
+        calls += 1;
+        const rawFrames = frame(callIndex);
+        if (rawFrames === null) return new Promise<Response>(() => undefined);
+        const body = new ReadableStream<Uint8Array>({
+          start: (controller) => {
+            const encoder = new TextEncoder();
+            for (const rawFrame of rawFrames) controller.enqueue(encoder.encode(rawFrame));
+            controller.close();
+          },
+        });
+        return new Response(body, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        });
+      }
+      throw new Error(`想定していない path: ${path}`);
+    }) as typeof fetch;
+    return { fetchFn, headersSeen: () => [...headersSeen] };
+  }
+
+  it('初回接続は Last-Event-ID を申告しない', async () => {
+    const { fetchFn, headersSeen } = eventsFetchRecordingLastEventId((callIndex) =>
+      callIndex === 0 ? [] : null,
+    );
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn,
+      sleepFn: async () => undefined,
+    });
+    await client.connect(() => undefined);
+    await expect.poll(() => headersSeen().length >= 1, { timeout: 1000 }).toBe(true);
+    await client.close();
+
+    expect(headersSeen()[0]).toBeUndefined();
+  });
+
+  it('受け取った SSE フレームの id を、次の /events で Last-Event-ID として申告する', async () => {
+    const { fetchFn, headersSeen } = eventsFetchRecordingLastEventId((callIndex) => {
+      if (callIndex === 0) {
+        return [
+          'event: session\ndata: {"type":"session","managerId":"m1","sessionId":"s1"}\nid: 7\n\n',
+        ];
+      }
+      if (callIndex === 1) return [];
+      return null;
+    });
+
+    const events: unknown[] = [];
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn,
+      sleepFn: async () => undefined,
+    });
+    await client.connect((event) => events.push(event));
+
+    await expect.poll(() => headersSeen().length >= 2, { timeout: 2000 }).toBe(true);
+    await client.close();
+
+    expect(events).toHaveLength(1);
+    expect(headersSeen()[0]).toBeUndefined();
+    // **これが要点。** 1本目で受け取れた `id: 7` を、2本目の `/events` で
+    // `Last-Event-ID: 7` として申告する。
+    expect(headersSeen()[1]).toBe('7');
+  });
+
+  it('id の無いフレーム（hello・heartbeat 相当）は申告を進めない', async () => {
+    const { fetchFn, headersSeen } = eventsFetchRecordingLastEventId((callIndex) => {
+      if (callIndex === 0) return ['data: {"type":"hello","runnerId":"r1"}\n\n'];
+      if (callIndex === 1) return [];
+      return null;
+    });
+
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn,
+      sleepFn: async () => undefined,
+    });
+    await client.connect(() => undefined);
+
+    await expect.poll(() => headersSeen().length >= 2, { timeout: 2000 }).toBe(true);
+    await client.close();
+
+    expect(headersSeen()[1]).toBeUndefined();
+  });
+});
