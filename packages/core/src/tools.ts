@@ -949,7 +949,13 @@ export function createCloneTools(context: ToolContext) {
           before === null ? null : before.content,
           written.content,
         );
-        const floor = memoryFloorNote(memoryBefore, memoryAfter, slug, written.content, before === null);
+        const floor = memoryFloorNote(
+          memoryBefore,
+          memoryAfter,
+          slug,
+          written.content,
+          before === null,
+        );
         return text(`記憶 ${slug} を更新した。\n\n${diff}\n\n${floor}`);
       },
     ),
@@ -986,7 +992,13 @@ export function createCloneTools(context: ToolContext) {
           before === null ? null : before.content,
           written.content,
         );
-        const floor = memoryFloorNote(memoryBefore, memoryAfter, slug, written.content, before === null);
+        const floor = memoryFloorNote(
+          memoryBefore,
+          memoryAfter,
+          slug,
+          written.content,
+          before === null,
+        );
         return text(`記憶 ${slug} に追記した。\n\n${diff}\n\n${floor}`);
       },
     ),
@@ -1233,7 +1245,9 @@ export function createCloneTools(context: ToolContext) {
         // の断り）ので `created` は常に false。
         const floor = memoryFloorNote(memoryBefore, memoryAfter, slug, written.content, false);
 
-        return text(`記憶 ${slug} の frontmatter を更新した。\n\n${diff}${kindChangeNote}\n\n${floor}`);
+        return text(
+          `記憶 ${slug} の frontmatter を更新した。\n\n${diff}${kindChangeNote}\n\n${floor}`,
+        );
       },
     ),
 

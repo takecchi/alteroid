@@ -800,7 +800,11 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
     const rendered = renderMemoryDocuments([
       premise('core-a', '前提A'),
       premise('core-b', '前提B'),
-      fact('child', { description: '子', freshness: { kind: 'fresh' }, parent: 'really-not-exist' }),
+      fact('child', {
+        description: '子',
+        freshness: { kind: 'fresh' },
+        parent: 'really-not-exist',
+      }),
     ]);
     expect(rendered).toContain('親 really-not-exist が見つからない');
     expect(rendered).not.toContain('在るが、この目次は fact だけを列挙する');
@@ -1618,7 +1622,13 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
   it('既存文書の更新（新規作成ではない）では「全文が焼かれる」も⭐も出ない', () => {
     const before = measureMemoryFloor([premise('doc', '短い本文')]);
     const after = measureMemoryFloor([premise('doc', '短い本文をもっと増やした')]);
-    const reply = describeMemoryFloor({ before, after, slug: 'doc', kind: 'premise', created: false });
+    const reply = describeMemoryFloor({
+      before,
+      after,
+      slug: 'doc',
+      kind: 'premise',
+      created: false,
+    });
 
     expect(reply).toContain('premise');
     expect(reply).not.toContain('全文がそのままクローンの文脈へ焼かれる');
@@ -1724,7 +1734,13 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
   it('⛔ 既存文書の更新（created: false）には、最大の premise の名指しも3手順も出ない', () => {
     const before = measureMemoryFloor([premise('doc', '短い本文')]);
     const after = measureMemoryFloor([premise('doc', '短い本文をもっと増やした')]);
-    const reply = describeMemoryFloor({ before, after, slug: 'doc', kind: 'premise', created: false });
+    const reply = describeMemoryFloor({
+      before,
+      after,
+      slug: 'doc',
+      kind: 'premise',
+      created: false,
+    });
 
     expect(reply).not.toContain('いま最も大きい premise');
     expect(reply).not.toContain('memory_outline');

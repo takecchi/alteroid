@@ -688,7 +688,11 @@ describe('クローンの道具', () => {
       const appendSpy = vi.spyOn(h.stores.persona, 'append');
       const removeSpy = vi.spyOn(h.stores.persona, 'remove');
 
-      await h.call('memory_write', { slug: 'doc', content: '# 総論\n本文を増やした', summary: 'x' });
+      await h.call('memory_write', {
+        slug: 'doc',
+        content: '# 総論\n本文を増やした',
+        summary: 'x',
+      });
 
       expect(writeSpy).toHaveBeenCalledTimes(1);
       expect(appendSpy).not.toHaveBeenCalled();
@@ -1706,7 +1710,9 @@ describe('クローンの道具', () => {
         expect(reply).toContain('毎ターンの床');
         expect(reply).toContain('fact');
         // delta が符号つきの負の数（減った）で出る。
-        expect(reply).toMatch(/毎ターンの床（焼き込み全体。いま読み直した値）: [\d,]+ 文字から [\d,]+ 文字へ（-[\d,]+）/);
+        expect(reply).toMatch(
+          /毎ターンの床（焼き込み全体。いま読み直した値）: [\d,]+ 文字から [\d,]+ 文字へ（-[\d,]+）/,
+        );
       });
 
       /**

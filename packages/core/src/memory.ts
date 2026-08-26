@@ -707,9 +707,10 @@ function resolveMemoryHierarchy(
   const bySlug = new Map(entries.map((entry) => [entry.slug, entry]));
   const parentOf = new Map(entries.map((entry) => [entry.slug, entry.parent]));
 
-  function effectiveParent(
-    slug: string,
-  ): { parent?: string; issue?: 'missing-parent' | 'cycle' | 'parent-not-listed' } {
+  function effectiveParent(slug: string): {
+    parent?: string;
+    issue?: 'missing-parent' | 'cycle' | 'parent-not-listed';
+  } {
     const direct = parentOf.get(slug);
     if (direct === undefined || direct === '') return {};
     if (!bySlug.has(direct)) {
