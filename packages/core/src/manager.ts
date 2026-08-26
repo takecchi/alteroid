@@ -718,6 +718,23 @@ const AMBIGUOUS_WAITING_EXCERPT = 400;
 const ASKED_MEMORY_LIMIT = 512;
 
 /**
+ * `#askedOf` が忘れた id の一覧を日誌へ書くときの厚み（#409）。
+ *
+ * `onForget` は最大 `ASKED_MEMORY_LIMIT` 件をまとめて渡しうるので、
+ * `ids.join(", ")` をそのまま繋ぐと**件数に比例して伸びるのに上限も
+ * 省略の合図も持たない列挙**になる。日誌は `journal_read` でクローンが
+ * 読むので、これはエージェントへ返る側である。
+ *
+ * **⚠️ 兄弟の `REPORTED_FORGOTTEN_BUDGET`（下）とは締め方が違う** ——
+ * こちらは `excerptLine` で**文字数**を締め、あちらは `renderListing` で
+ * **件数**を積む。どちらも「切ったら言う」は満たすが、出る合図の形が違う。
+ * **これは設計の判断ではなく、#206 と #409 が別々の枝で同時に書かれた
+ * 結果である**（#409 のコメントに残してある）。揃えるなら `renderListing`
+ * 側へ寄せるのが素直だが、ここでは倒していない。
+ */
+const ASKED_FORGOTTEN_EXCERPT = 400;
+
+/**
  * 1マネージャーぶんで覚えておく報告（`report`）の件数（#206）。
  *
  * `report` は `ask` と違って「解決」で消える口が無い（`settled` に相当する
@@ -731,7 +748,7 @@ const REPORTED_MEMORY_LIMIT = 512;
  * `#reportedOf` が忘れた id の一覧を日誌へ書くときの予算（文字数、#409）。
  *
  * `onForget` は最大 `REPORTED_MEMORY_LIMIT` 件をまとめて渡しうるので、
- * `ids.join(', ')` をそのまま繋ぐと上限も省略の合図も無い列挙になる
+ * `ids.join(", ")` をそのまま繋ぐと上限も省略の合図も無い列挙になる
  * （Issue #409 が塞いでいる形そのもの）。`excerpt.ts` の `renderListing` に
  * 寄せて、切ったら「何件省いたか」が必ず出るようにする。
  */
@@ -3493,7 +3510,7 @@ class Pool implements ManagerPool {
           role: 'inbound',
           text:
             `[${managerId}] 配り終えた確認の記憶が上限（${ASKED_MEMORY_LIMIT}件）に達したので、` +
-            `古い ${ids.length} 件を忘れた: ${ids.join(', ')}。` +
+            `古い ${ids.length} 件を忘れた: ${excerptLine(ids.join(', '), ASKED_FORGOTTEN_EXCERPT)}。` +
             'この id の確認が再送されると、新しい確認としてもう一度回る。',
         });
       },
