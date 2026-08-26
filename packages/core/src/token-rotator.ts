@@ -91,6 +91,22 @@ export type TokenRotationOutcome =
       kind: 'ignored';
       signal: TokenRotationSignal;
       freshness: ObservationFreshness;
+      /**
+       * `freshness` が `stale` のとき、**いまの現役に対して何件目の取りこぼしか**
+       * （この1件を含む）。それ以外では付かない。
+       *
+       * **これは計器であって、挙動を分岐させる値ではない。** 捨てる判断は
+       * {@link observationFreshness} が既にしていて、この数はその判断が**何回
+       * 効いたか**を後から数えられるようにするためだけに在る。
+       *
+       * **なぜ数が要るか。** `stale` は「1回の当たりでマネージャーの数だけ届く」
+       * ので全件を日誌へ出すと埋まるが、**1件も出さないと「届いていない」と
+       * 見分けが付かない**——2026-08-25 の2時間40分の停止では日誌が0件で、
+       * **観測が届かなかったのか `stale` で捨てられたのかを、後から誰も言えなかった。**
+       * 数を持たせて間引いて出すのは、その2つを分けるためである（間引き方は
+       * {@link describeTokenRotation}）。
+       */
+      staleRun?: number;
       why: string;
     }
   | {
@@ -253,6 +269,19 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
   const hasEnvToken = options.hasEnvToken ?? (() => false);
   const newId = options.newId ?? (() => randomUUID());
 
+  /**
+   * いまの現役に対して、`stale` で捨てた観測が続けて何件になったか。
+   *
+   * **鍵は「現役の身元」である**（id と世代の両方）——世代だけだと、同じ世代の
+   * まま指名が変わったときに数え続けてしまう。回れば鍵が変わるので、数は自然に
+   * 1 から数え直しになる。**明示的に消す経路を持たない**のはそのためである。
+   *
+   * **プロセスの寿命でしか持たない。** 記憶ストアへは書かない——これは「いま
+   * 走っているデーモンが何回捨てたか」の計器であって、事実の記録ではない
+   * （事実の側は日誌に出る）。
+   */
+  let staleRun: { key: string; count: number } | null = null;
+
   let tail: Promise<unknown> = Promise.resolve();
   function serial<T>(work: () => Promise<T>): Promise<T> {
     const next = tail.then(work, work);
@@ -405,10 +434,15 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         // **遅れて届いた通知は、判定より先に捨てる。** 判定が「回す」でも、
         // それは*前の現役*についての話である。
         if (freshness === 'stale') {
+          // **捨てた回数を数える。捨てる判断そのものは変えない。** ここで足して
+          // いるのは「その判断が何回効いたか」だけである（{@link staleRun}）。
+          const key = active === null ? 'none' : `${active.tokenId}#${String(active.generation)}`;
+          staleRun = staleRun?.key === key ? { key, count: staleRun.count + 1 } : { key, count: 1 };
           return {
             kind: 'ignored' as const,
             signal: decision.signal,
             freshness,
+            staleRun: staleRun.count,
             why: 'もう回した後の通知（世代が合わない）',
           };
         }
@@ -552,9 +586,18 @@ function describeSpread(results: readonly TokenSpreadResult[]): string {
  *
  * ## 何を出さないか
  *
- * - **世代が合わない通知（`stale`）** —— 同じ当たりでマネージャーの数だけ届くので、
- *   出すと1回の当たりで日誌が何行も埋まる。**捨てたこと自体は結果として返っている**
- *   ので、必要ならそちらを見る
+ * - **世代が合わない通知（`stale`）の2件目以降** —— 同じ当たりでマネージャーの数だけ
+ *   届くので、全件出すと1回の当たりで日誌が何行も埋まる。**間引いて出す**——
+ *   初出と、以降は10の冪（10件目・100件目…）だけ。数は `staleRun` が運ぶ
+ *
+ *   **⚠️ かつてここは1件も出していなかった。それをやめた理由を残す。**
+ *   `stale` は「本物の当たりを飲み込む」側の倒し方で、しかも
+ *   {@link observationFreshness} の doc 自身が「**見えない**（何も起きないので）」と
+ *   書いている。**実際に見えなくなった**——2026-08-25T22:03Z からの2時間40分、
+ *   マネージャー層が全滅しているあいだ日誌は0件で、**観測が回し手へ届かなかったのか、
+ *   届いて `stale` で捨てられたのかを、後から誰も言えなかった。** 間引きは
+ *   「埋まる」を避けるためのもので、**0件にすることは、その2つを見分ける手段を
+ *   捨てることだった**
  * - **`signal` が `none`（回す材料が何も無い観測）** —— 毎ターン届く `rate_limit_event`
  *   がここへ落ちるので、出すと日誌が枠の状態で埋まる
  *
@@ -574,6 +617,27 @@ function describeSpread(results: readonly TokenSpreadResult[]): string {
  * 突き合わせられる形であることと、`limitRecoveryOf` の分類が効くことの両方が
  * ここに乗っている。
  */
+/**
+ * 間引いて出す位置か。**初出（1件目）と、以降は10の冪だけ。**
+ *
+ * **件数で上限を切らない**（`AGENTS.md` の地雷「一覧の上限を件数だけで決める」と
+ * 同じ向き）——上限だと、越えた先が丸ごと見えなくなる。10の冪なら**桁が上がる
+ * たびに1行出る**ので、「まだ続いている」ことと「どれくらい続いたか」が両方残る。
+ *
+ * **落としたことは出力に書く**（呼ぶ側が「これは連番ではない」と添える）。
+ * 黙って間引くと、読み手には全件出ているように見える。
+ */
+function isThinnedMilestone(count: number): boolean {
+  if (count === 1) return true;
+  if (count < 10) return false;
+  // 10 / 100 / 1000 … だけ。**浮動小数の対数を使わない**（`Math.log10(1000)` が
+  // 2.9999… になる器が在り、桁が上がった回だけ静かに出なくなる）。
+  for (let milestone = 10; milestone <= count; milestone *= 10) {
+    if (milestone === count) return true;
+  }
+  return false;
+}
+
 export function describeTokenRotation(
   outcome: TokenRotationOutcome,
   observed?: { noticeText?: string },
@@ -581,7 +645,18 @@ export function describeTokenRotation(
   const tail = observed?.noticeText === undefined ? '' : `\n当たった文言: ${observed.noticeText}`;
 
   if (outcome.kind === 'ignored') {
-    if (outcome.freshness === 'stale') return null;
+    if (outcome.freshness === 'stale') {
+      const run = outcome.staleRun;
+      // **数が無ければ出さない**（この分岐へ数を付けない呼び方が在れば、そちらは
+      // 従来どおり黙る）。**数を 1 で埋めない**——埋めると「初出」が捏造される。
+      if (run === undefined || !isThinnedMilestone(run)) return null;
+      return (
+        `認証トークン: 回さなかった（${outcome.signal}）。${outcome.why}。` +
+        `いまの現役に対して${String(run)}件目である（**捨てた側の計器**。` +
+        '初出と10の冪だけ出しているので、これは連番ではない)' +
+        tail
+      );
+    }
     if (outcome.signal === 'none') return null;
     return `認証トークン: 回さなかった（${outcome.signal}）。${outcome.why}${tail}`;
   }

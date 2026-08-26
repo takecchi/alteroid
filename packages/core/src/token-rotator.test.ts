@@ -171,6 +171,35 @@ describe('受け入れ基準1: 1本目が止まったら2本目へ回る', () =>
 });
 
 describe('世代の照合（受け入れ基準: 同時に届いても回るのは1回だけ）', () => {
+  it('捨てた回数を数え、日誌へ出す側へ渡す（0件では届かなかったのと見分けが付かない）', async () => {
+    const h = harness();
+    await seedTwo(h);
+
+    const first = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+    expect(first.kind).toBe('rotated');
+
+    // 同じ当たりで遅れて届いた分。**捨てる判断は変わらない**（撒きは増えない）。
+    const stale1 = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+    const stale2 = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+    expect(stale1).toMatchObject({ kind: 'ignored', freshness: 'stale', staleRun: 1 });
+    expect(stale2).toMatchObject({ kind: 'ignored', freshness: 'stale', staleRun: 2 });
+    // **挙動は変わっていない。** 数えているだけで、撒いたのは最初の1回だけである。
+    expect(h.spreadCalls).toHaveLength(1);
+
+    // 初出は日誌に出る。2件目は間引かれる。
+    expect(tokenRotationEntry(stale1)?.event).toBe('not_rotated');
+    expect(tokenRotationEntry(stale2)).toBeNull();
+  });
+
   it('もう回した後の通知は捨てる', async () => {
     const h = harness();
     await seedTwo(h);
@@ -888,8 +917,8 @@ describe('describeTokenRotation', () => {
     expect(line).toContain('off');
   });
 
-  it('世代の合わない通知は出さない（1回の当たりで日誌を埋めない）', () => {
-    // 同じ当たりでマネージャーの数だけ届く。
+  it('世代の合わない通知は、数を持たなければ出さない', () => {
+    // **数を 1 で埋めない。** 埋めると、数を運べない呼び方の1件が「初出」に化ける。
     expect(
       describeTokenRotation({
         kind: 'ignored',
@@ -898,6 +927,37 @@ describe('describeTokenRotation', () => {
         why: 'もう回した後の通知',
       }),
     ).toBeNull();
+  });
+
+  it('世代の合わない通知は、初出と10の冪だけ出す（全件でも0件でもない）', () => {
+    // **0件にすると「届かなかった」と見分けが付かない**（2026-08-25 の2時間40分が
+    // まさにその形だった）。**全件出すと1回の当たりで日誌が埋まる。**
+    const at = (staleRun: number): string | null =>
+      describeTokenRotation({
+        kind: 'ignored',
+        signal: 'reached',
+        freshness: 'stale',
+        staleRun,
+        why: 'もう回した後の通知',
+      });
+
+    expect(at(1)).toContain('1件目');
+    for (const quiet of [2, 3, 9, 11, 99, 101]) expect(at(quiet)).toBeNull();
+    expect(at(10)).toContain('10件目');
+    expect(at(100)).toContain('100件目');
+    expect(at(1000)).toContain('1000件目');
+  });
+
+  it('間引いていることを出力に書く（連番だと読ませない）', () => {
+    // **黙って間引くと、読み手には全件出ているように見える。**
+    const line = describeTokenRotation({
+      kind: 'ignored',
+      signal: 'reached',
+      freshness: 'stale',
+      staleRun: 10,
+      why: 'もう回した後の通知',
+    });
+    expect(line).toContain('連番ではない');
   });
 
   it('材料が何も無い観測は出さない（毎ターン届くので日誌が埋まる）', () => {
