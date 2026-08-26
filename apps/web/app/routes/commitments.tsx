@@ -1,10 +1,21 @@
 import { AlertTriangle } from 'lucide-react';
 import { useState } from 'react';
+import { Tabs } from 'radix-ui';
 
 import { Markdown } from '~/components/markdown';
 import { Page } from '~/components/page';
-import { Badge, Button, Card, CardHeader, Empty, ErrorNote, Input, Spinner } from '~/components/ui';
-import { useCloseCommitment, usePushCommitment } from '~/hooks/mutations';
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  Empty,
+  ErrorNote,
+  Input,
+  Spinner,
+  Textarea,
+} from '~/components/ui';
+import { useCloseCommitment, useEditCommitment, usePushCommitment } from '~/hooks/mutations';
 import { useCommitments } from '~/hooks/queries';
 import type {
   Commitment,
@@ -13,6 +24,7 @@ import type {
   TextMarkup,
   UnreadableCommitment,
 } from '@alteroid/core';
+import { cn } from '~/lib/cn';
 import { formatDateTime, formatRelative } from '~/lib/format';
 
 /**
@@ -576,11 +588,168 @@ function CommitmentBody({ commitment }: { commitment: Commitment }) {
   }
 }
 
+/**
+ * `body` を後から直した行に出す印（issue 本文「編集された行に『編集済み』が
+ * 分かる印を出す」）。
+ *
+ * **`editedAt` の有無だけを見る。** 誰が直したか（`editedBy`）は現状 `'human'`
+ * 一択で（`commitmentEditedBySchema`）、`OpenRow` に編集の入口を出す条件
+ * （`origin: 'human'` かつ未了）を通った行しかサーバは書き換えないため、
+ * ここへ表示のためだけの網羅性チェック（`assertOriginHandled` 相当）を
+ * 足すほどの分岐は無い——`editedBy` の値そのものはラベルに使わない。
+ *
+ * **`OpenRow` / `ClosedRow` の両方に出す。** 編集できるのは未了の行だけだが、
+ * `editedAt` は編集後に片付けられても消えない（`commitmentSchema.editedAt`
+ * の doc）ので、片付いた行にも原文ではないという事実を残す必要がある。
+ */
+function EditedBadge({ commitment }: { commitment: Commitment }) {
+  if (commitment.editedAt === undefined) return null;
+  return <Badge tone="neutral">編集済み（{formatDateTime(commitment.editedAt)}）</Badge>;
+}
+
+const EDITOR_TAB_TRIGGER_CLASS =
+  'border-b-2 border-transparent px-2 py-1 text-xs font-medium text-muted transition-colors hover:text-fg';
+const EDITOR_TAB_TRIGGER_ACTIVE_CLASS = 'border-accent text-fg';
+
+/**
+ * 台帳の本文を人間が直接編集する（`origin: 'human'` かつ未了の行だけ、
+ * `OpenRow` が呼び出し元でその条件を確かめてから描く）。
+ *
+ * **`memory-detail.tsx` と同じ形。** プレビュー / 編集のタブ、既定はプレビュー、
+ * 下書き（`draft`）は `Tabs.Root` の外（この部品自身）に置く——非活性の
+ * `Tabs.Content` は unmount されるので、内側に置くとタブを切り替えた瞬間に
+ * 入力が消える（`memory-detail.tsx` の `draft` の doc と同じ理由）。
+ *
+ * **⚠️ プレビューは Markdown へ倒さない。** `memory-detail.tsx` は記憶
+ * （AI/人間どちらも書く自由記述）を `<Markdown>` で描くが、ここは
+ * `origin: 'human'` の行——`CommitmentBody` の描き分け（doc の表）で
+ * 「人間が打った文字を化けさせない」と決めた対象そのものなので、プレビューも
+ * `PlainBody` のまま描く。編集できるようにしたことが、表示の描き分けを
+ * 変える理由にはならない。
+ *
+ * **台帳の `body` は必ず非空**（`commitmentEditBody` が `z.string().min(1)`
+ * で弾く）ので、`memory-detail.tsx` のような「本文が空なら編集を既定にする」
+ * 分岐は要らない——常にプレビューを既定にできる。
+ *
+ * **一覧の重さ**: この部品は `OpenRow` が「編集」を押した行だけに mount する。
+ * 常時全行へ mount すると、行数に比例して Tabs / Textarea のインスタンスが
+ * 増える（AGENTS.md 系skill「一覧はタイトルと要旨だけ」と同じ発想——ここは
+ * 一覧の重さの話なので、開いた1件だけを実体化する）。
+ */
+function CommitmentBodyEditor({
+  commitment,
+  onCancel,
+}: {
+  commitment: Commitment;
+  onCancel: () => void;
+}) {
+  const editCommitment = useEditCommitment();
+  const [draft, setDraft] = useState<string | undefined>(undefined);
+  const [tab, setTab] = useState<string>('preview');
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<unknown>(undefined);
+
+  const value = draft ?? commitment.body;
+  const dirty = draft !== undefined && draft !== commitment.body;
+
+  function save() {
+    if (draft === undefined || draft.trim() === '') return;
+    setBusy(true);
+    setFailure(undefined);
+    editCommitment(commitment.id, draft)
+      // 成功したら編集モードを畳む。一覧は `useEditCommitment` の中で
+      // 取り直されるので、この行の `commitment` はすぐ新しい本文へ差し替わる。
+      .then(onCancel)
+      .catch(setFailure)
+      .finally(() => setBusy(false));
+  }
+
+  return (
+    <div className="mt-2 rounded-md border border-border">
+      <Tabs.Root value={tab} onValueChange={setTab}>
+        <Tabs.List className="flex gap-1 border-b border-border px-2">
+          <Tabs.Trigger
+            value="preview"
+            className={cn(
+              EDITOR_TAB_TRIGGER_CLASS,
+              tab === 'preview' && EDITOR_TAB_TRIGGER_ACTIVE_CLASS,
+            )}
+          >
+            プレビュー
+          </Tabs.Trigger>
+          <Tabs.Trigger
+            value="edit"
+            className={cn(
+              EDITOR_TAB_TRIGGER_CLASS,
+              tab === 'edit' && EDITOR_TAB_TRIGGER_ACTIVE_CLASS,
+            )}
+          >
+            編集
+          </Tabs.Trigger>
+        </Tabs.List>
+
+        {/*
+          `draft` はこの `Tabs.Root` の外（`CommitmentBodyEditor` 自身）に在る
+          （部品冒頭の doc）。プレビューが映すのは保存前の `value`
+          （= draft ?? commitment.body）そのもので、Markdown へは倒さない
+          （`PlainBody` — `origin: 'human'` の描き方をそのまま使う）。
+        */}
+        <Tabs.Content value="preview" className="px-2 py-2">
+          <PlainBody body={value} />
+        </Tabs.Content>
+
+        <Tabs.Content value="edit" className="px-2 py-2">
+          <Textarea
+            className="min-h-32 font-mono text-xs leading-relaxed"
+            value={value}
+            spellCheck={false}
+            // **Enter は改行のまま**（送信のキーにしない）。長文になりうる本文
+            // 欄なので、`Input`（片付ける理由・積む本文）と違って Enter 単体
+            // 送信にしていない——だからここには IME の門（`isComposing` /
+            // `keyCode === 229`）を付けていない。送信は保存ボタンか
+            // Cmd/Ctrl+S だけで、どちらも Enter 単体の確定と衝突しない
+            // （`memory-detail.tsx` と同じ設計）。
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if ((event.metaKey || event.ctrlKey) && event.key === 's') {
+                event.preventDefault();
+                save();
+              }
+            }}
+          />
+        </Tabs.Content>
+      </Tabs.Root>
+
+      <div className="flex items-center gap-2 px-2 py-2">
+        <Button
+          variant="primary"
+          size="sm"
+          loading={busy}
+          disabled={!dirty || value.trim() === ''}
+          onClick={save}
+        >
+          保存
+        </Button>
+        <Button size="sm" onClick={onCancel}>
+          やめる
+        </Button>
+      </div>
+
+      <ErrorNote error={failure} className="mx-2 mb-2" />
+    </div>
+  );
+}
+
 function OpenRow({ commitment }: { commitment: Commitment }) {
   const closeCommitment = useCloseCommitment();
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
+  // **編集できるのは `origin: 'human'` の行だけ**（サーバの線、
+  // `PATCH /commitments/:id` の doc に合わせる）。それ以外の行に編集の
+  // 入口を出すと、押しても 403 で断られるだけの死んだボタンになる。
+  const editable = commitment.origin === 'human';
+  const [editing, setEditing] = useState(false);
 
   async function submit() {
     if (reason.trim() === '') return;
@@ -600,13 +769,32 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
     <li className="border-b border-border px-4 py-3 last:border-b-0">
       <div className="mb-1.5 flex flex-wrap items-center gap-2 text-[11px] text-muted">
         <OriginBadge commitment={commitment} />
+        <EditedBadge commitment={commitment} />
         <span>{formatDateTime(commitment.at)}</span>
         {/* 齢。器は優先度も締切も持たないので、急ぎ方を決める材料はこれだけである。 */}
         <span>({formatRelative(commitment.at)})</span>
+        {editable && (
+          <button
+            type="button"
+            className="ml-auto text-[11px] text-muted underline hover:text-fg"
+            onClick={() => setEditing((current) => !current)}
+          >
+            {editing ? '編集をやめる' : '本文を編集'}
+          </button>
+        )}
       </div>
 
-      {/* 本文は器が全文を持つ（要約を持たせない）。畳まずにそのまま出す。 */}
-      <CommitmentBody commitment={commitment} />
+      {/*
+        本文は器が全文を持つ（要約を持たせない）。畳まずにそのまま出す。
+        **編集中の行だけ `CommitmentBodyEditor` を mount する**——一覧の
+        重さが行数に比例して増えないよう、Tabs / Textarea の実体を持つのは
+        開いている1件だけにする（`CommitmentBodyEditor` の doc）。
+      */}
+      {editing ? (
+        <CommitmentBodyEditor commitment={commitment} onCancel={() => setEditing(false)} />
+      ) : (
+        <CommitmentBody commitment={commitment} />
+      )}
 
       <div className="mt-2 flex items-center gap-2">
         <Input
@@ -656,6 +844,7 @@ function ClosedRow({ commitment }: { commitment: Commitment }) {
       <div className="mb-1.5 flex flex-wrap items-center gap-2 text-[11px]">
         <Badge tone="ok">片付いた</Badge>
         <OriginBadge commitment={commitment} />
+        <EditedBadge commitment={commitment} />
         <span>
           {formatDateTime(commitment.at)} → {formatDateTime(commitment.closedAt ?? '')}
         </span>

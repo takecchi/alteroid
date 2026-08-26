@@ -1692,8 +1692,13 @@ describe('HTTP API', () => {
    * 台帳の口も、人間が開いた任意のページから投げられる位置にある。積まれれば
    * クローンの次のターンに他人の宿題が載り、閉じられれば人間が頼んだことが
    * 黙って消える。`validator('json', ...)` を通っているのでハンドラまで届かない。
+   *
+   * **`PATCH /commitments/:id`（本文の編集）も同じ位置にある。** 積む・閉じる
+   * と同じ `jsonBody` を通っているので、`method` だけを変えて同じ形で撃つ
+   * （`simpleRequest` は既定で `POST` を返すので、この1件だけ `method` で
+   * 上書きする）。
    */
-  it('ブラウザの単純リクエストでは台帳を積めない・閉じられない', async () => {
+  it('ブラウザの単純リクエストでは台帳を積めない・閉じられない・本文も直せない', async () => {
     await stores.commitments.open({
       id: 'cm-1',
       at: '2026-08-12T00:00:00.000Z',
@@ -1701,11 +1706,15 @@ describe('HTTP API', () => {
       body: '人間が頼んだこと',
     });
 
-    for (const { path, body } of [
-      { path: '/commitments', body: '{"body":"注入された宿題"}' },
-      { path: '/commitments/cm-1/close', body: '{"reason":"注入"}' },
+    for (const { path, body, method } of [
+      { path: '/commitments', body: '{"body":"注入された宿題"}', method: undefined },
+      { path: '/commitments/cm-1/close', body: '{"reason":"注入"}', method: undefined },
+      { path: '/commitments/cm-1', body: '{"body":"改ざんされた本文"}', method: 'PATCH' as const },
     ]) {
-      expect((await app.request(path, simpleRequest(body))).status, path).toBe(400);
+      expect(
+        (await app.request(path, { ...simpleRequest(body), ...(method ? { method } : {}) })).status,
+        path,
+      ).toBe(400);
 
       // safelist に見せかけた content-type でも同じ（MIME essence で判定される）
       for (const contentType of [
@@ -1714,7 +1723,7 @@ describe('HTTP API', () => {
         'multipart/form-data; boundary=application/json',
       ]) {
         const disguised = await app.request(path, {
-          method: 'POST',
+          method: method ?? 'POST',
           headers: { 'content-type': contentType },
           body,
         });
@@ -1722,7 +1731,7 @@ describe('HTTP API', () => {
       }
     }
 
-    // 積まれても閉じられてもいない
+    // 積まれても閉じられても直されてもいない
     expect(await stores.commitments.list({ includeClosed: true })).toEqual({
       entries: [
         { id: 'cm-1', at: '2026-08-12T00:00:00.000Z', origin: 'human', body: '人間が頼んだこと' },
