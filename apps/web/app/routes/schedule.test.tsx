@@ -10,7 +10,7 @@
  * **これが無いと「仕込んだのに一度も動いていない」ことに気づけない**（#96 が直した
  * 位相の消失がまさにその形で出る）。
  */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { json, Providers, storeTestBaseUrl } from '~/test-support';
@@ -52,6 +52,20 @@ const REQUEST_ENTRY = {
   description: '毎日 09:00',
   nextAt: '2026-08-21T09:00:00.000Z',
   request: '朝いちで issue を見て、進められるものを進めておいて',
+};
+
+/**
+ * 編集の対象になる、周期（`spec`）も持つ継続中の依頼（#496）。
+ *
+ * `REQUEST_ENTRY` はわざと `spec` を持たない——「古いデーモン（#496 より前）と
+ * 話している」場合の歯に使う。
+ */
+const SPEC_ENTRY = {
+  kind: 'morning-issues',
+  description: '毎日 09:00（ローカル時刻）: 朝いちで issue を見て、進められるものを進めておいて',
+  nextAt: '2026-08-21T09:00:00.000Z',
+  request: '朝いちで issue を見て、進められるものを進めておいて',
+  spec: { type: 'daily', at: '09:00' },
 };
 
 /**
@@ -268,5 +282,110 @@ describe('横並びの積み替え（本4-B）: flex-wrap と break-words', () =
     const kind = await screen.findByText('daily_report');
     const tokens = kind.className.split(/\s+/);
     expect(tokens).toContain('break-words');
+  });
+});
+
+/**
+ * 仕込まれた依頼の周期・本文を画面から直せること（#496）。
+ *
+ * `POST /schedule` は upsert なので新しい HTTP verb は無い——`useCreateSchedule`
+ * をそのまま使う。守るのは3つ: (1) 仕込まれた依頼だけに「編集」が出る (2) 開くと
+ * いまの周期・本文が入っている (3) 保存すると同じ kind へ直した値が飛ぶ。
+ */
+describe('仕込まれた依頼を編集できる（#496）', () => {
+  it('仕込まれた依頼には「編集」が在り、既定の日報・発意には無い', async () => {
+    stubSchedule([DEFAULT_ENTRY, SPEC_ENTRY]);
+    renderSchedule();
+
+    // 仕込まれた依頼（SPEC_ENTRY）の行にだけ「編集」が出る。
+    await screen.findByText('daily_report');
+    expect(screen.getAllByRole('button', { name: '編集' })).toHaveLength(1);
+  });
+
+  it('開くと、いまの周期（時刻）と本文が入っている', async () => {
+    stubSchedule([SPEC_ENTRY]);
+    renderSchedule();
+
+    fireEvent.click(await screen.findByRole('button', { name: '編集' }));
+
+    const panel = await screen.findByRole('group', { name: `${SPEC_ENTRY.kind} を編集` });
+
+    // 周期: daily の時刻欄に、仕込まれた spec（09:00）が入っている。
+    const at = within(panel).getByLabelText('時刻') as HTMLInputElement;
+    expect(at.value).toBe('09:00');
+
+    // 本文: 既存の依頼なのでプレビューが既定（下のテストで別途確認）。
+    // ここでは「編集」タブへ切り替えて textarea の値そのものを見る。
+    fireEvent.mouseDown(within(panel).getByRole('tab', { name: '編集' }));
+    const textarea = (await within(panel).findByPlaceholderText(
+      /依頼の本文/,
+    )) as HTMLTextAreaElement;
+    expect(textarea.value).toBe(SPEC_ENTRY.request);
+  });
+
+  it('本文のタブは、既存の依頼を編集するときはプレビューが既定である', async () => {
+    stubSchedule([SPEC_ENTRY]);
+    renderSchedule();
+
+    fireEvent.click(await screen.findByRole('button', { name: '編集' }));
+    const panel = await screen.findByRole('group', { name: `${SPEC_ENTRY.kind} を編集` });
+
+    // プレビューが Markdown として本文を描いている（編集タブの textarea は
+    // 非活性なので、まだマウントされていない）。
+    await within(panel).findByText(SPEC_ENTRY.request);
+    expect(within(panel).queryByPlaceholderText(/依頼の本文/)).toBeNull();
+  });
+
+  it('保存すると、同じ kind と直した周期・本文が POST /schedule へ飛ぶ', async () => {
+    stubSchedule([SPEC_ENTRY]);
+    renderSchedule();
+
+    fireEvent.click(await screen.findByRole('button', { name: '編集' }));
+    const panel = await screen.findByRole('group', { name: `${SPEC_ENTRY.kind} を編集` });
+
+    // 周期を直す（09:00 → 18:30）。
+    fireEvent.change(within(panel).getByLabelText('時刻'), { target: { value: '18:30' } });
+
+    // 本文を直す（編集タブへ切り替えてから書き換える）。
+    fireEvent.mouseDown(within(panel).getByRole('tab', { name: '編集' }));
+    const textarea = await within(panel).findByPlaceholderText(/依頼の本文/);
+    fireEvent.change(textarea, { target: { value: '直した本文' } });
+
+    fireEvent.click(within(panel).getByRole('button', { name: '保存する' }));
+
+    await waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    expect(sent[0]?.method).toBe('POST');
+    expect(sent[0]?.url).toContain('/schedule');
+    await expect(sent[0]?.read()).resolves.toEqual({
+      kind: SPEC_ENTRY.kind,
+      request: '直した本文',
+      spec: { type: 'daily', at: '18:30' },
+    });
+  });
+
+  /**
+   * **`entry.spec` が無ければ、既定の周期を勝手に埋めて送らない。** この画面より
+   * 古いデーモンと話しているとき、`POST /schedule` は upsert なので、読めない
+   * 周期を推測で埋めて送ると本文だけ直したつもりの保存が周期を黙って書き換える
+   * （`ScheduleEditForm` の doc）。
+   */
+  it('entry.spec が無いときは、既定の周期で POST しない（保存自体を止める）', async () => {
+    stubSchedule([REQUEST_ENTRY]);
+    renderSchedule();
+
+    fireEvent.click(await screen.findByRole('button', { name: '編集' }));
+    const panel = await screen.findByRole('group', { name: `${REQUEST_ENTRY.kind} を編集` });
+
+    // 周期の入力欄そのものが出ない（読めないことを画面に書き、推測で埋めない）。
+    expect(within(panel).queryByLabelText('時刻')).toBeNull();
+    expect(within(panel).queryByLabelText('周期')).toBeNull();
+
+    const save = within(panel).getByRole('button', { name: '保存する' });
+    expect(save.hasAttribute('disabled')).toBe(true);
+
+    fireEvent.click(save);
+    expect(sent).toEqual([]);
   });
 });

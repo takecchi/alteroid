@@ -435,7 +435,11 @@ function ScheduleEditForm({
   }
 
   return (
-    <div className="mt-2 w-full rounded-md border border-border bg-surface-2 p-3">
+    <div
+      role="group"
+      aria-label={`${entry.kind} を編集`}
+      className="mt-2 w-full rounded-md border border-border bg-surface-2 p-3"
+    >
       <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-muted">
         <span>kind（変更不可。別の名前にしたいなら外して新しく仕込む）:</span>
         <span className="font-mono break-words">{entry.kind}</span>
