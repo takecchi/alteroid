@@ -72,7 +72,6 @@ import {
   approvalsResponseSchema,
   archiveListResponseSchema,
   authProvidersResponseSchema,
-  badRequestResponseSchema,
   commitmentListResponseSchema,
   commitmentOpenedResponseSchema,
   conversationDetailResponseSchema,
@@ -826,6 +825,32 @@ function whereValidationFailed(issues: readonly { readonly path?: readonly unkno
 }
 
 /**
+ * `validator('json', schema)` を常にこの形で呼ぶための薄いラッパー（issue #424
+ * ⭐3案目）。**`app.ts` の中で `validator('json', ...)` を直接書かないこと。**
+ * `hook` を渡し忘れた経路が1つでも残っていると、その経路だけ
+ * `@hono/standard-validator` の既定の 400（`{ data: <本文そのもの>, error, success: false }`）
+ * に落ちる——`whereValidationFailed` の doc に書いた実測そのものである。
+ * ここへ集約すれば、「付け忘れ」という状態そのものを作れない。
+ *
+ * 既定の `onInvalid` は `{ error: '入力の形が不正: <path>' }` を返す。**個別の
+ * 文言や `detail` のような追加のフィールドが要る経路（`PUT /profile` など）だけ
+ * `onInvalid` を上書きする。** どちらの形でも、混ぜてよいのは `where`
+ * （issue の `path` を畳んだもの）だけで、送られてきた値は1文字も混ぜない
+ * （`whereValidationFailed` の不変条件をそのまま受け継ぐ）。
+ */
+function jsonBody<Schema extends z.ZodTypeAny>(
+  schema: Schema,
+  onInvalid: (where: string) => Record<string, unknown> = (where) => ({
+    error: '入力の形が不正' + (where === '' ? '' : `: ${where}`),
+  }),
+) {
+  return validator('json', schema, (result, c) => {
+    if (result.success) return;
+    return c.json(onInvalid(whereValidationFailed(result.error)), 400);
+  });
+}
+
+/**
  * 一覧・詳細で返すマネージャー（状態に、確認へ上がらず止められた件数を**添える**）。
  *
  * **2つの出どころを外向きの面でだけ合流させる。** 状態は台帳から作った
@@ -1128,11 +1153,13 @@ export function createApp(deps: AppDeps) {
           },
           400: {
             description: '`text` が空、または本文が JSON として不正。',
-            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
       }),
-      validator('json', chatBody),
+      jsonBody(chatBody, (where) => ({
+        error: 'text が空、または本文の形が不正' + (where === '' ? '' : `: ${where}`),
+      })),
       async (c) => {
         const { text, conversationId: given } = c.req.valid('json');
         const conversationId = given ?? randomUUID();
@@ -1592,11 +1619,13 @@ export function createApp(deps: AppDeps) {
           },
           400: {
             description: '記憶のスラッグが不正、または本文が JSON として不正。',
-            content: { 'application/json': { schema: resolver(badRequestResponseSchema) } },
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
       }),
-      validator('json', memoryBody),
+      jsonBody(memoryBody, (where) => ({
+        error: '記憶の本文の形が不正' + (where === '' ? '' : `: ${where}`),
+      })),
       async (c) => {
         const slug = c.req.param('slug');
         if (!memorySlugSchema.safeParse(slug).success) {
@@ -2089,11 +2118,13 @@ export function createApp(deps: AppDeps) {
           },
           400: {
             description: '本文が JSON として不正。',
-            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
       }),
-      validator('json', answersBody),
+      jsonBody(answersBody, (where) => ({
+        error: 'answers の形が不正' + (where === '' ? '' : `: ${where}`),
+      })),
       async (c) => {
         const results: { id: string; ok: boolean; error?: string }[] = [];
         for (const { id, answer } of c.req.valid('json').answers) {
@@ -2132,7 +2163,7 @@ export function createApp(deps: AppDeps) {
           },
           400: {
             description: '本文が JSON として不正。',
-            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           404: {
             description: '該当する承認待ちが無い。',
@@ -2144,7 +2175,9 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      validator('json', answerBody),
+      jsonBody(answerBody, (where) => ({
+        error: 'answer の形が不正' + (where === '' ? '' : `: ${where}`),
+      })),
       async (c) => {
         const id = c.req.param('id');
         const approval = await stores.jobs.getApproval(id);
@@ -2179,11 +2212,13 @@ export function createApp(deps: AppDeps) {
           },
           400: {
             description: '本文が JSON として不正。',
-            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
       }),
-      validator('json', eventBody),
+      jsonBody(eventBody, (where) => ({
+        error: 'source/payload の形が不正' + (where === '' ? '' : `: ${where}`),
+      })),
       (c) => {
         const { source, payload } = c.req.valid('json');
         const id = randomUUID();
@@ -2275,7 +2310,7 @@ export function createApp(deps: AppDeps) {
           },
           400: {
             description: '本文が JSON として不正（kind の形・時刻の範囲もここで弾く）。',
-            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           409: {
             description: '既定の定期ジョブの名前。',
@@ -2283,7 +2318,9 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      validator('json', scheduleBody),
+      jsonBody(scheduleBody, (where) => ({
+        error: 'kind/request/spec の形が不正' + (where === '' ? '' : `: ${where}`),
+      })),
       async (c) => {
         const { kind, request, spec } = c.req.valid('json');
         if (RESERVED_SCHEDULE_KINDS.includes(kind)) {
@@ -2576,11 +2613,13 @@ export function createApp(deps: AppDeps) {
           },
           400: {
             description: '本文が JSON として不正（`body` は空にできない）。',
-            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
       }),
-      validator('json', commitmentBody),
+      jsonBody(commitmentBody, (where) => ({
+        error: 'body の形が不正' + (where === '' ? '' : `: ${where}`),
+      })),
       async (c) => {
         const { body, source } = c.req.valid('json');
         // **`origin` は本文から取らない。** ここを人間に選ばせると、人間が積んだものが
@@ -2632,7 +2671,7 @@ export function createApp(deps: AppDeps) {
           },
           400: {
             description: '本文が JSON として不正（`reason` は空にできない）。',
-            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           404: {
             description: 'その id は台帳に無い。',
@@ -2644,7 +2683,9 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      validator('json', commitmentCloseBody),
+      jsonBody(commitmentCloseBody, (where) => ({
+        error: 'reason の形が不正' + (where === '' ? '' : `: ${where}`),
+      })),
       async (c) => {
         const id = c.req.param('id');
         const { reason } = c.req.valid('json');
@@ -2790,7 +2831,7 @@ export function createApp(deps: AppDeps) {
           },
           400: {
             description: '本文が JSON として不正。',
-            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           404: {
             description: '該当するマネージャーが無い。',
@@ -2798,7 +2839,9 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      validator('json', managerMessageBody),
+      jsonBody(managerMessageBody, (where) => ({
+        error: 'text の形が不正' + (where === '' ? '' : `: ${where}`),
+      })),
       async (c) => {
         const { text, requestId, decision } = c.req.valid('json');
         const result = await clone.managers.send(c.req.param('id'), text, {
@@ -2835,7 +2878,7 @@ export function createApp(deps: AppDeps) {
           },
           400: {
             description: '本文が JSON として不正。',
-            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           404: {
             description: '該当するマネージャー（`absent`）が無い。',
@@ -2843,7 +2886,9 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      validator('json', abortBody),
+      jsonBody(abortBody, (where) => ({
+        error: 'reason の形が不正' + (where === '' ? '' : `: ${where}`),
+      })),
       async (c) => {
         const { reason } = c.req.valid('json');
         const result = await clone.managers.abort(
@@ -2988,16 +3033,9 @@ export function createApp(deps: AppDeps) {
        * 唯一の口なので、既定の形をそのまま使えない。**どこが不正だったかは
        * 返す（`path` だけ）が、送られてきた本文は1文字も返さない。**
        */
-      validator('json', runnerSetCredentialsCommandSchema, (result, c) => {
-        if (result.success) return;
-        const where = whereValidationFailed(result.error);
-        return c.json(
-          {
-            error: '鍵の入力の形が不正（配布していない）' + (where === '' ? '' : `: ${where}`),
-          },
-          400,
-        );
-      }),
+      jsonBody(runnerSetCredentialsCommandSchema, (where) => ({
+        error: '鍵の入力の形が不正（配布していない）' + (where === '' ? '' : `: ${where}`),
+      })),
       async (c) => {
         const registry = deps.runners;
         if (registry === undefined) {
@@ -3134,17 +3172,10 @@ export function createApp(deps: AppDeps) {
        * 載せてよいのは `path` だけで、送られてきた値は1文字も載せない
        * （`apps/cli/src/profile.ts` がこの `detail` をそのまま人へ表示する）。
        */
-      validator('json', profileUpdateRequestSchema, (result, c) => {
-        if (result.success) return;
-        const where = whereValidationFailed(result.error);
-        return c.json(
-          {
-            error: 'プロファイルの入力の形が不正（保存していない）',
-            detail: where === '' ? '本文の形が不正である' : `形が不正な項目: ${where}`,
-          },
-          400,
-        );
-      }),
+      jsonBody(profileUpdateRequestSchema, (where) => ({
+        error: 'プロファイルの入力の形が不正（保存していない）',
+        detail: where === '' ? '本文の形が不正である' : `形が不正な項目: ${where}`,
+      })),
       async (c) => {
         // **クローンの道具（`profile_write`）とまったく同じ経路を通る。** 別々に
         // 書くと、片方だけに検査が入って「人間が置くと弾かれるのにクローンが置くと
@@ -3276,18 +3307,10 @@ export function createApp(deps: AppDeps) {
        * 形をそのまま使えない。**どこが不正だったかは返す（`path` だけ）が、
        * 送られてきた本文は1文字も返さない。**
        */
-      validator('json', tokensUpdateRequestSchema, (result, c) => {
-        if (result.success) return;
-        const where = whereValidationFailed(result.error);
-        return c.json(
-          {
-            error:
-              'トークンのプールの入力の形が不正（保存していない）' +
-              (where === '' ? '' : `: ${where}`),
-          },
-          400,
-        );
-      }),
+      jsonBody(tokensUpdateRequestSchema, (where) => ({
+        error:
+          'トークンのプールの入力の形が不正（保存していない）' + (where === '' ? '' : `: ${where}`),
+      })),
       async (c) => {
         if (deps.tokens === undefined) {
           return c.json({ error: 'トークンのプールの器が無い' as const }, 400);
@@ -3353,7 +3376,9 @@ export function createApp(deps: AppDeps) {
         },
       }),
       requireOperator,
-      validator('json', tokensPolicyUpdateRequestSchema),
+      jsonBody(tokensPolicyUpdateRequestSchema, (where) => ({
+        error: '設定の入力の形が不正' + (where === '' ? '' : `: ${where}`),
+      })),
       async (c) => {
         if (deps.tokens === undefined) {
           return c.json({ error: 'トークンのプールの器が無い' as const }, 400);
@@ -3456,11 +3481,13 @@ export function createApp(deps: AppDeps) {
           },
           400: {
             description: '未知のログイン手段、または手段が1つも設定されていない。',
-            content: { 'application/json': { schema: resolver(badRequestResponseSchema) } },
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
       }),
-      validator('json', loginBody),
+      jsonBody(loginBody, (where) => ({
+        error: 'provider/label の形が不正' + (where === '' ? '' : `: ${where}`),
+      })),
       async (c) => {
         const { provider, label } = c.req.valid('json');
         if (authPlan.providers.length === 0) {
@@ -3551,11 +3578,13 @@ export function createApp(deps: AppDeps) {
           },
           400: {
             description: '秘密が違う、期限切れ、または既に引き取り済み。',
-            content: { 'application/json': { schema: resolver(badRequestResponseSchema) } },
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
       }),
-      validator('json', claimBody),
+      jsonBody(claimBody, (where) => ({
+        error: 'claimSecret の形が不正' + (where === '' ? '' : `: ${where}`),
+      })),
       async (c) => {
         const result = await authService.claim({
           requestId: c.req.param('requestId'),

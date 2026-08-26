@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -3705,6 +3705,145 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
     const body = JSON.parse(text) as Record<string, unknown>;
     expect(body).not.toHaveProperty('data');
     expect(typeof body.error).toBe('string');
+  });
+
+  /**
+   * **残り13経路（#424 の「終わる条件」の1点目）。** 題が名指しした2経路だけを
+   * 塞いでも穴は残る——`validator('json', …)` を素で書ける限り「hook を渡し
+   * 忘れた経路」が作れてしまい、実際 `PUT /tokens` は #422 のレビュー中に
+   * 見つかるまで塞がっていなかった。ここは `jsonBody` を通した**全経路**に
+   * ついて、検査に落ちた 400 の本文へ**送った値が1文字も出ない**ことを、
+   * `createApp` を実際に叩いて固定する。
+   *
+   * 各ケースは「**正しい形の項目に値を載せ、別の項目だけを壊す**」形にしてある
+   * ——既定のフックは `data` にリクエスト本文を丸写しするので、壊れていない
+   * ほうの項目に載せた値まで一緒に出る。これが Issue 本文の実測そのものである。
+   *
+   * **値はすべてダミーである**（`CRED-SECRET-VALUE`）。本物のトークンでは
+   * 試さない（AGENTS.md「秘密の扱い」）。
+   */
+  const DUMMY = 'CRED-SECRET-VALUE';
+  const hookedRoutes: { name: string; path: string; method: string; body: unknown }[] = [
+    {
+      name: 'POST /chat',
+      path: '/chat',
+      method: 'POST',
+      body: { text: DUMMY, conversationId: '' },
+    },
+    { name: 'PUT /memory/:slug', path: '/memory/note', method: 'PUT', body: { content: [DUMMY] } },
+    {
+      name: 'POST /approvals/answer',
+      path: '/approvals/answer',
+      method: 'POST',
+      // 2件目に `id` が無い＝トップレベルで落ちる。1件目の値まで出ることを見る。
+      body: { answers: [{ id: 'ap-1', answer: DUMMY }, { answer: DUMMY }] },
+    },
+    {
+      name: 'POST /approvals/:id/answer',
+      path: '/approvals/ap-1/answer',
+      method: 'POST',
+      body: { answer: [DUMMY] },
+    },
+    {
+      name: 'POST /events',
+      path: '/events',
+      method: 'POST',
+      // `payload` は `z.unknown()`＝何でも載る。webhook の中身がそのまま来る口である。
+      body: { source: '', payload: { token: DUMMY } },
+    },
+    {
+      name: 'POST /schedule',
+      path: '/schedule',
+      method: 'POST',
+      body: { kind: 'my_task', request: DUMMY },
+    },
+    {
+      name: 'POST /commitments',
+      path: '/commitments',
+      method: 'POST',
+      body: { body: DUMMY, source: '' },
+    },
+    {
+      name: 'POST /commitments/:id/close',
+      path: '/commitments/c-1/close',
+      method: 'POST',
+      body: { reason: [DUMMY] },
+    },
+    {
+      name: 'POST /managers/:id/messages',
+      path: '/managers/mgr-1/messages',
+      method: 'POST',
+      body: { text: DUMMY, decision: 'maybe' },
+    },
+    {
+      name: 'DELETE /managers/:id',
+      path: '/managers/mgr-1',
+      method: 'DELETE',
+      body: { reason: [DUMMY] },
+    },
+    {
+      name: 'PUT /tokens/policy',
+      path: '/tokens/policy',
+      method: 'PUT',
+      body: { cooldownMs: DUMMY },
+    },
+    {
+      name: 'POST /auth/login',
+      path: '/auth/login',
+      method: 'POST',
+      body: { provider: '', label: DUMMY },
+    },
+    {
+      name: 'POST /auth/login/:requestId/claim',
+      path: '/auth/login/req-1/claim',
+      method: 'POST',
+      body: { claimSecret: [DUMMY] },
+    },
+  ];
+
+  for (const route of hookedRoutes) {
+    it(`${route.name}: 検査に落ちた 400 の本文に、送った値が1つも出ない`, async () => {
+      const response = await app.request(route.path, {
+        method: route.method,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(route.body),
+      });
+
+      expect(response.status).toBe(400);
+      const text = await response.text();
+      expect(text).not.toContain(DUMMY);
+
+      // **`data` キーが無く、`error` が文字列であること。** ここまで見ないと、
+      // `data` だけ消して `error`（issue の配列）を残す直しで緑になる——issue の
+      // `path` は残ってよいが、`input` を含む形の issue を素通しにすると値が戻る。
+      const body = JSON.parse(text) as Record<string, unknown>;
+      expect(body).not.toHaveProperty('data');
+      expect(typeof body.error).toBe('string');
+    });
+  }
+
+  /**
+   * **⭐3案目（#424 の「終わる条件」の2点目）の歯。** 上の13本は「いま在る経路」
+   * しか見ない——**次に足される経路**が `validator('json', …)` を素で書けば、
+   * 何も鳴らないまま同じ穴が開く。ここは `app.ts` の原文を読んで、
+   * `jsonBody` の中の1箇所を除いて `validator('json'` の直書きが**0件**である
+   * ことを見る。**新しい経路を素の `validator` で足した瞬間に赤くなる。**
+   *
+   * 原文を読むのは、型でも実行時でもこの不変条件を表せないからである
+   * （`validator` は hono-openapi の公開 API なので、import を禁じる手が無い）。
+   */
+  it("app.ts に validator('json' の直書きが1件も無い（jsonBody の中の1箇所を除く）", () => {
+    const source = readFileSync(new URL('./app.ts', import.meta.url), 'utf8');
+    const bare = source
+      .split('\n')
+      .map((line, index) => ({ line: index + 1, text: line }))
+      .filter((entry) => entry.text.includes("validator('json'"))
+      // 注釈（`*` / `//` で始まる行）は経路ではない。
+      .filter((entry) => !/^\s*(\*|\/\/)/.test(entry.text))
+      // `jsonBody` の実体そのもの。ここだけが素の `validator` を呼んでよい。
+      .filter((entry) => !entry.text.includes('return validator('));
+
+    expect(bare).toEqual([]);
   });
 });
 

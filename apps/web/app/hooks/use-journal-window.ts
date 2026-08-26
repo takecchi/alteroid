@@ -32,8 +32,8 @@ import {
   applyOlderPage,
   filterRecent,
   JOURNAL_MAX_LIMIT,
-  newestAt,
-  oldestAt,
+  newerPageQuery,
+  olderPageQuery,
   type PageOutcome,
 } from '~/lib/journal-window';
 import type { JournalEntry, JournalEntryType } from '~/lib/types';
@@ -185,11 +185,11 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
   // （メモ化しない代わりに、再帰は毎回そのレンダーの `entriesRef`/`buildQuery`
   // をそのまま閉じ込めるので、古い束縛を掴む心配が無い）。
   function loadOlderAt(limit: number): void {
-    const until = oldestAt(entriesRef.current);
-    if (until === undefined) return;
+    const query = olderPageQuery(entriesRef.current);
+    if (query === undefined) return;
     setLoadingOlder(true);
     api.api
-      .GET('/journal', { params: { query: buildQuery(limit, { until }) } })
+      .GET('/journal', { params: { query: buildQuery(limit, query) } })
       .then(unwrap)
       .then((data) => {
         const applied = applyOlderPage(entriesRef.current, data.entries, limit, JOURNAL_MAX_LIMIT);
@@ -247,11 +247,11 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
   }, [recent, selected, q]);
 
   function refreshNewerAt(limit: number): void {
-    const since = newestAt(entriesRef.current);
-    if (since === undefined) return;
+    const query = newerPageQuery(entriesRef.current);
+    if (query === undefined) return;
     setLoadingNewer(true);
     api.api
-      .GET('/journal', { params: { query: buildQuery(limit, { since }) } })
+      .GET('/journal', { params: { query: buildQuery(limit, query) } })
       .then(unwrap)
       .then((data) => {
         const applied = applyNewerPage(entriesRef.current, data.entries, limit, JOURNAL_MAX_LIMIT);

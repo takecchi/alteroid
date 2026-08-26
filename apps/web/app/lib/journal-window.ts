@@ -114,6 +114,49 @@ export function newestAt(entries: JournalEntry[]): string | undefined {
   return entries[0]?.at;
 }
 
+/**
+ * 新着方向（先頭側）へ次に撃つときの、クエリの追加分。
+ *
+ * **「一覧のどちらの端を、どちらのクエリ引数へ載せるか」という決定をここに
+ * 置く。** 呼び出し側（`use-journal-window.ts`）はこの戻り値をそのまま
+ * `GET /journal` へ流すだけで、自分では端を選ばない。`shiftForPrepend` を
+ * ここへ置いたのと同じ形であり、理由も同じ — **測れる決定を、測れない場所に
+ * 置かない**（`AGENTS.md`「テストを弱めずに直す」）。
+ *
+ * ⚠️ **この関数が在る直接の理由は #262 である。** この決定が
+ * `use-journal-window.ts` の `refreshNewerAt` の中に在った間、`since` へ
+ * `oldestAt` を渡す変異（B4）は**変異試験で生存した** — `refreshNewer` は
+ * virtua の `onScroll` からしか呼ばれず、jsdom は virtua を描画しないので、
+ * フックの中に在る限りどんな取り違えも歯に当たらなかった。ここへ出すと、
+ * 同じ取り違えが `journal-window.test.ts`（jsdom すら要らない素の node
+ * 環境）から直接測れる。
+ *
+ * **測れるようになったのは「どちらの端をどちらの引数へ載せるか」までである。**
+ * この関数を呼ぶ条件（virtua が上端付近に居ると判定したときにだけ撃つ）は
+ * `journal.tsx` の `handleScroll` に残っていて、そちらは依然として jsdom
+ * から届かない。
+ *
+ * `undefined` は「撃つ材料が無い（一覧が空）」＝撃たない、の意味である。
+ */
+export function newerPageQuery(entries: JournalEntry[]): { since: string } | undefined {
+  const since = newestAt(entries);
+  return since === undefined ? undefined : { since };
+}
+
+/**
+ * 過去方向（末尾側）へ次に撃つときの、クエリの追加分。`newerPageQuery` の対。
+ *
+ * **#262 が名指ししたのは新着方向（B4）だけだが、対で置く。** 片側だけを
+ * 純粋関数へ出すと、「端と引数の対応はここが持つ」という規則ではなく
+ * 「この1箇所だけ例外的に外へ出してある」という但し書きになる。過去方向の
+ * 取り違え（B1）は「もっと遡る」ボタン経由で既に jsdom から届いているので、
+ * **ここへ出したことで新しく測れるようになったものは無い** — 揃えただけである。
+ */
+export function olderPageQuery(entries: JournalEntry[]): { until: string } | undefined {
+  const until = oldestAt(entries);
+  return until === undefined ? undefined : { until };
+}
+
 export interface PageApplication {
   entries: JournalEntry[];
   outcome: PageOutcome;
