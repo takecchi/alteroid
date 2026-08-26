@@ -103,11 +103,14 @@ export function ownedBy(lines: Line[], shownId: string | undefined): Line[] {
  * である。
  *
  * **同じ会話へ戻って続けた分の手元の写しは、ここでは刈らない。** 上限は
- * 「見ている会話の数」であって「行の古さ」ではないので、同じ2つの会話を
- * 何度往復しても手元の写しは増え続けうる（issue #446 の筋書き2）。
- * 刈るには「サーバの履歴が既にその行を引き取ったか」を見るしかないが、
- * それは履歴の再取得がまだ空を返している窓で、届いたばかりの行を画面
- * から消す形になる — 別の失敗を持ち込むので、今回は入れない。
+ * 「見ている会話の数」であって「行の古さ」ではないので、`retainedBy` 単体
+ * では同じ2つの会話を何度往復しても手元の写しは増え続けうる（issue #446
+ * の筋書き2）。**その刈り込みはこの関数の役目ではなく、下の
+ * `pendingOwnLines` が持つ。**「サーバの履歴が既にその行を引き取ったか」を
+ * 見て判断するのは変わらないが、**一致が確認できた行だけを落とし、確認
+ * できない限りは理由を問わず残す**（履歴の再取得がまだ空を返している窓も
+ * 「確認できない」に含まれる）ことで、届いたばかりの行を画面から消す形を
+ * 避けている。詳細は `pendingOwnLines` の doc を参照。
  */
 export function retainedBy(
   lines: Line[],
@@ -117,6 +120,49 @@ export function retainedBy(
   return lines.filter(
     (line) => line.of === undefined || line.of === shownId || line.of === previousShownId,
   );
+}
+
+/**
+ * **`ownedBy(lines, shownId)` のうち、`historyLines`（サーバの履歴、いま見て
+ * いる会話ぶん）に同じもの（`role` と本文の組の多重集合で照合）が無いものだけ
+ * を返す。** 「まだサーバの履歴に引き取られていない、手元にしか無い行」——
+ * 画面に出す `all`（下の `ChatPane`）と、`lines` 自体を刈る不変条件チェック
+ * （同じく `ChatPane`）の**両方から同じ関数を呼ぶ**。別々に書くと、どちらか
+ * だけ直して突き合わせがずれる将来を作る。
+ *
+ * ⚠️ **一致した行だけを「引き取られた」とみなす。一致が無ければ、理由を
+ * 問わず（履歴がまだ読み込まれていない・再取得の途中で一時的に空を返して
+ * いる・本当にまだ引き取られていない、のどれでも）その行は返り値に残る。**
+ * だから、届いたばかりの行が履歴再取得の窓で画面から消えることはない ——
+ * PR #467 が「サーバの履歴が引き取ったかで刈る形」を見送った理由（履歴の
+ * 再取得がまだ空を返す窓で新着行を消してしまう）は、「無いと確認できたら
+ * 落とす」構造でだけ起きる。ここは逆に「有ると確認できたときだけ落とす」
+ * 構造なので、その窓では単に何も起きない（一致0件のまま何も落ちない）。
+ *
+ * **同じ本文が複数あっても1件ずつしか消さない**（多重集合の照合。理由は
+ * `ChatPane` 内の `all` の doc に同じものがある）。
+ */
+export function pendingOwnLines(
+  lines: Line[],
+  shownId: string | undefined,
+  historyLines: Line[],
+): Line[] {
+  const remaining = new Map<string, number>();
+  for (const line of historyLines) {
+    const key = `${line.role}\u0000${line.text}`;
+    remaining.set(key, (remaining.get(key) ?? 0) + 1);
+  }
+  const pending: Line[] = [];
+  for (const line of ownedBy(lines, shownId)) {
+    const key = `${line.role}\u0000${line.text}`;
+    const count = remaining.get(key) ?? 0;
+    if (count > 0) {
+      remaining.set(key, count - 1);
+      continue;
+    }
+    pending.push(line);
+  }
+  return pending;
 }
 
 export default function Chat({ loaderData }: Route.ComponentProps) {
@@ -376,6 +422,22 @@ export function ChatPane({
   const shownIdRef = useRef(shownId);
 
   /**
+   * **いま `append`（下）が `key` で引いて中身を継ぎ足しうるクローンの返信の
+   * `key`。** 無ければ `undefined`。
+   *
+   * ⚠️ **`pendingOwnLines` による刈り込み（下の不変条件チェック）から、この
+   * `key` を持つ行だけを除外するために要る。** クローンの返信は完成するまで
+   * `append` が同じ `key` を探して中身を書き換え続けるので、**その途中で
+   * `pendingOwnLines` の内容一致（`role`＋本文）が偶然すでにある履歴行と
+   * 揃ってしまうと**（同じ短い返信を過去にもしていた場合など）、刈られた
+   * 瞬間に `append` は `key` を見失って以後のチャンクを静かに捨てる
+   * （`findIndex` が `-1` を返す no-op）。**人間の発言（`showOwnLine`）は
+   * 一度作ったら書き換えないので、この危険が無い** —— 除外するのはクローン
+   * の返信の、いままさに継ぎ足され得るものだけで足りる。
+   */
+  const activeReplyKeyRef = useRef<string | undefined>(undefined);
+
+  /**
    * 直前に見ていた会話。`retainedBy`（上）が「いま」に加えて残す2つ目の持ち主。
    *
    * **`shownId` を進めるのと同じ、この下のブロックでだけ更新する。**
@@ -511,52 +573,64 @@ export function ChatPane({
     [history.data, shownId],
   );
 
+  /**
+   * **同じ会話へ繰り返し戻った分も、`lines` 自体から刈る（issue #446 の
+   * 筋書き2。`retainedBy`（上）が持たない側）。**
+   *
+   * `retainedBy` の不変条件チェック（上）は「見ている会話の数」で切るので、
+   * 同じ1〜2個の会話を何度往復しても、その会話ぶんの手元の写しは
+   * `retainedBy` だけでは減らない。ここは「行の古さ」ではなく「サーバの
+   * 履歴が実際に引き取ったと確認できたか」で切る側 —— `pendingOwnLines`
+   * （上）を、画面に出す `all`（下）だけでなく `lines` 自体にも適用する。
+   *
+   * ⚠️ **一致していない行は絶対に落とさない**（`pendingOwnLines` の doc）。
+   * 履歴の再取得がまだ空を返している窓では一致が0件なので、この不変条件は
+   * 何もしない —— 届いたばかりの行が画面から消える形にはならない。刈るのは
+   * 「サーバが引き取ったと確認できた」ときだけである。
+   *
+   * ⚠️ **`activeReplyKeyRef` の行だけは対象から外す**（同 ref の doc）。
+   * ここも `retainedBy` と同じ「毎 render の不変条件」であって「一度きりの
+   * edge」ではないので、貼り直しで一致済みの行が戻ってきても自己修復する。
+   *
+   * `previous`（旧い会話・持ち主なしの行）にはここでは触れない ——
+   * `pendingOwnLines` が見るのは `ownedBy(lines, shownId)`（いま見ている分）
+   * だけであり、直前の会話の分は次にその会話が「いま」になったときに
+   * 同じ形で刈られる（`historyLines` がその時点の `shownId` 向けに読み直
+   * されるため）。
+   */
+  const pendingCurrent = pendingOwnLines(lines, shownId, historyLines);
+  if (pendingCurrent.length !== ownedBy(lines, shownId).length) {
+    setLines((previous) => {
+      const stillPending = pendingOwnLines(previous, shownId, historyLines);
+      const keep = new Set(stillPending.map((line) => line.key));
+      const activeKey = activeReplyKeyRef.current;
+      const next = previous.filter(
+        (line) => line.of !== shownId || keep.has(line.key) || line.key === activeKey,
+      );
+      return next.length === previous.length ? previous : next;
+    });
+  }
+
   /*
    * 履歴（サーバが日誌から再構成したもの）と、この画面で流れてきた分を重ねる。
    *
    * **同じやりとりが両側に載る。** 人間の発言は受理した時点で日誌へ載り
    * （`clone.ts` の `#record`）、クローンの返信もターンの終わりに載る。一方この
    * 画面は送った発言と届いた本文を手元の `lines` にも積んでいるので、履歴を
-   * 読み直した瞬間に同じものが2つになる。だから**重ねる時に消す。**
-   *
-   * 突き合わせるのは `role` と本文の組で、**同じ本文が複数あっても1件ずつしか
-   * 消さない**（多重集合の照合）。「ok」を2回送ったのに履歴側が1件しか返して
-   * いないなら、手元の2件目は残す — 集合として引くと、繰り返した発言が黙って
-   * 1件に潰れる。
-   *
-   * **id では突き合わせられない。** 履歴側の `key` は日誌の id、手元は
-   * `h-<index>-…` / `c-<時刻>` で、同じやりとりに同じ id が付く経路が無い
-   * （手元で採番した時点ではサーバの id を知らない）。
+   * 読み直した瞬間に同じものが2つになる。だから**重ねる時に消す**——照合の
+   * 中身（多重集合で突き合わせる理由・id では突き合わせられない理由・NUL を
+   * エスケープで書く理由）は `pendingOwnLines`（上）の doc にまとめてある。
+   * **表示側（ここ）と、下の `lines` 自体を刈る不変条件チェックの両方が同じ
+   * 関数を呼ぶ**ので、突き合わせ方はここではもう定義しない。
    *
    * 進行中の合図（`transient`）と `system` の行は履歴に相当するものが無いので
-   * そのまま残る（`role` が一致しないので照合の対象にならない）。
-   *
-   * **区切りの NUL は `\u0000` のエスケープで書く。生の NUL 文字をソースへ
-   * 置かないこと。** 本文に現れない区切りが要るのは正しいが、生のまま置くと
-   * その1バイトで grep / ripgrep がこのファイルを「バイナリ」と判定して丸ごと
-   * 飛ばす — `chat.tsx` が検索結果から静かに消え、「その実装は無い」と読める
-   * 状態になっていた（実際に一度そう読みかけた）。
+   * そのまま残る（`role` が一致しないので `pendingOwnLines` の照合対象にも
+   * ならない）。
    */
-  const all = useMemo(() => {
-    const remaining = new Map<string, number>();
-    for (const line of historyLines) {
-      const key = `${line.role}\u0000${line.text}`;
-      remaining.set(key, (remaining.get(key) ?? 0) + 1);
-    }
-    const pending: Line[] = [];
-    for (const line of ownedBy(lines, shownId)) {
-      const key = `${line.role}\u0000${line.text}`;
-      const count = remaining.get(key) ?? 0;
-      // 履歴側に同じものがある＝サーバが既に持っているやりとりなので、手元の
-      // 写しは落とす（履歴側の並び順の方が正しい。日誌の時刻で並んでいる）。
-      if (count > 0) {
-        remaining.set(key, count - 1);
-        continue;
-      }
-      pending.push(line);
-    }
-    return [...historyLines, ...pending];
-  }, [historyLines, lines, shownId]);
+  const all = useMemo(
+    () => [...historyLines, ...pendingOwnLines(lines, shownId, historyLines)],
+    [historyLines, lines, shownId],
+  );
 
   const handleScroll = useCallback(() => {
     const el = scrollContainerRef.current;
@@ -889,6 +963,9 @@ export function ChatPane({
               if (replyKey === undefined) {
                 replyKey = `c-${Date.now()}`;
                 const key = replyKey;
+                // `pendingOwnLines` による刈り込みから、この行が完成するまで
+                // 守る（`activeReplyKeyRef` の doc）。
+                activeReplyKeyRef.current = key;
                 setLines((previous) => [
                   ...previous.filter((line) => line.transient !== true),
                   { key, role: 'clone', text: '', of: stream.id },
@@ -979,6 +1056,10 @@ export function ChatPane({
         if (streamRef.current === stream) {
           setSending(false);
           streamRef.current = undefined;
+          // このストリームが積んだ返信は、もう `append` から継ぎ足されない
+          // （このストリームのやりとりが終わったので）——刈り込みから守る
+          // 理由が消えたので、`pendingOwnLines` の対象に戻す。
+          activeReplyKeyRef.current = undefined;
         }
       }
     },
