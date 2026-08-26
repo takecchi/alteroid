@@ -614,6 +614,17 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
           placeholder="何をもって片付いたか（後から否定できるように残す）"
           onChange={(event) => setReason(event.target.value)}
           onKeyDown={(event) => {
+            // IME 変換中の Enter を拾わない。ここは Enter 単体で送るので、
+            // 変換確定の Enter がそのまま誤送信になる（`chat.tsx` の
+            // ⌘/Ctrl+Enter より直接踏む形）。門の形と理由（`event.nativeEvent.isComposing`
+            // を見る理由・`keyCode === 229` を併用する理由）は `chat.tsx` の
+            // 「IME で変換している最中の Enter では送らない。」のコメントを参照。
+            if (
+              event.key === 'Enter' &&
+              (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)
+            ) {
+              return;
+            }
             if (event.key === 'Enter') {
               event.preventDefault();
               void submit();
@@ -759,6 +770,17 @@ function PushForm() {
           placeholder="何を引き受けたか（全文で書く。切るのは一覧側の仕事）"
           onChange={(event) => setBody(event.target.value)}
           onKeyDown={(event) => {
+            // IME 変換中の Enter を拾わない。ここは Enter 単体で送るので、
+            // 変換確定の Enter がそのまま誤送信になる（`chat.tsx` の
+            // ⌘/Ctrl+Enter より直接踏む形）。門の形と理由（`event.nativeEvent.isComposing`
+            // を見る理由・`keyCode === 229` を併用する理由）は `chat.tsx` の
+            // 「IME で変換している最中の Enter では送らない。」のコメントを参照。
+            if (
+              event.key === 'Enter' &&
+              (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)
+            ) {
+              return;
+            }
             if (event.key === 'Enter') {
               event.preventDefault();
               void submit();
