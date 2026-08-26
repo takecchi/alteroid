@@ -13,6 +13,7 @@ import {
   toMessage,
 } from './conversation.js';
 import { isCronExpression } from './cron.js';
+import { RECENT_TRACE_LIMIT, recentDroppedTraces } from './dropped-record.js';
 import { toAgentTokenView, tokenAvailabilityAt } from './token-pool.js';
 import {
   describePage,
@@ -51,6 +52,7 @@ import {
   localDayRange,
   parseTimeOfDay,
 } from './schedule.js';
+import type { ScheduleStatus } from './schedule.js';
 import {
   JOURNAL_ENTRY_TYPES,
   approvalUpdatedAt,
@@ -175,6 +177,23 @@ export interface ToolContext {
    * ターンの種類のまま固定されてしまう。
    */
   memoryCause: () => 'distill' | 'clone';
+  /**
+   * `Scheduler.list()` の写し（可観測性）。`schedule_list` が「次: <nextAt>」を
+   * 出すための材料。
+   *
+   * `nextAt` を計算しているのは `Scheduler`（`schedule.ts`）で、`stores.schedules`
+   * はストアの記録（周期・前回動いた時刻）しか持たない。ここが無いと道具の側は
+   * 「次にいつ動くか」を持てない。
+   *
+   * **省略できるのはテストのためだけである。** 本番の配線（`clone.ts`）は
+   * 本セッションと蒸留のサイドクエリの両方へ渡す（`runtime` / `memoryCause` と
+   * 同じ「渡し忘れた側だけ静かに壊れる」形）。
+   *
+   * **呼ぶたびに評価すること。** `Scheduler.list()` は呼んだ瞬間の `nextAt` を
+   * 返す（`Scheduler` の内部時計は動き続ける）ので、`createCloneTools` の
+   * 呼び出し時に1回だけ評価すると、セッション中ずっと最初の値のまま固定される。
+   */
+  scheduler?: () => ScheduleStatus[];
 }
 
 export function qualifiedToolName(name: string): string {
@@ -208,6 +227,7 @@ export const CLONE_TOOL_NAMES = [
   'token_list',
   'self_read',
   'self_status',
+  'self_dropped',
   'manager_start',
   'manager_send',
   'manager_stop',
@@ -457,6 +477,25 @@ const SCHEDULE_REQUEST_EXCERPT = 200;
 const SCHEDULE_PAGE = 8_000;
 
 /**
+ * `kind` 1件ぶんの「次に動く時刻」を、`ToolContext.scheduler`（`Scheduler.list()`
+ * の写し）から引く。**`stores.schedules` はこの値を持たない** — `nextAt` を
+ * 計算しているのは `Scheduler` 自身で、ストアは周期と前回動いた時刻の記録
+ * しか持たない（Issue #237）。
+ *
+ * **取れないときも黙って行を消さない**（AGENTS.md「取れない軸に0の行を作る」）。
+ * 2つの取れなさを分けて言う — `scheduler` そのものが渡っていない（テスト・
+ * 蒸留サイドクエリへの渡し忘れ）か、`Scheduler` がまだこの kind を仕込みへ
+ * 反映していない（`schedule_create` 直後は次の刻みまで反映が遅れる。
+ * `TimerScheduler#reconcile` の doc）かで、後者は一時的だが前者は配線の欠落
+ * である。読み手が原因を区別できるよう文言を分ける。
+ */
+function scheduleNextAtOf(context: ToolContext, kind: string): string {
+  if (context.scheduler === undefined) return '（取れない — scheduler が渡っていない）';
+  const status = context.scheduler().find((entry) => entry.kind === kind);
+  return status === undefined ? '（まだ計算されていない。少し待って呼び直すこと）' : status.nextAt;
+}
+
+/**
  * 器の一覧の予算と、器1台ぶんに並べるマネージャーの件数。
  *
  * **`LIST_BUDGET` を使い回さない。** あちらはマネージャーの一覧で、こちらは器の
@@ -480,6 +519,19 @@ const MEMORY_PAGE = 8_000;
 const CANON_PAGE = 8_000;
 /** プロファイル本文を取りに来たときの1回分。続きは `offset` で取れる。 */
 const PROFILE_PAGE = 8_000;
+
+/**
+ * `self_dropped` の一覧予算（文字数）。
+ *
+ * **他の一覧と値は揃えるが、定数は共有しない**（`excerpt.ts` の作法どおり
+ * 用途ごとに別に置く。片方だけ直したくなったときに一緒に動かないため）。
+ * `recentDroppedTraces()` の帳面自体に上限（`RECENT_TRACE_LIMIT`、
+ * `dropped-record.ts`）があるので、ここは「一度に読み戻すときの続きの
+ * 取り方」を守る側の予算である。
+ */
+const SELF_DROPPED_BUDGET = 8_000;
+/** `self_dropped` が `limit` を省略したときに返す件数（直近から）。 */
+const SELF_DROPPED_DEFAULT_LIMIT = 50;
 
 /**
  * `conversation_read` 専用の抜粋長・予算・ページ幅。
@@ -1923,7 +1975,7 @@ export function createCloneTools(context: ToolContext) {
     tool(
       'schedule_list',
       [
-        '仕込んである継続中の依頼の一覧。周期と、前回それで動いた時刻が分かる。',
+        '仕込んである継続中の依頼の一覧。周期と、前回それで動いた時刻・次に動く時刻が分かる。',
         '既定の日報・発意 tick はここには出ない（あれは設定で回っているもの）。',
         '一覧の依頼本文は抜粋で、全文が要る1件は kind を渡して取る。',
       ].join(' '),
@@ -1946,7 +1998,8 @@ export function createCloneTools(context: ToolContext) {
           if (!plan) return text(`継続中の依頼 ${kind} は無い（kind が違うか、もう外してある）。`);
           const head =
             `${plan.kind}（${describeScheduleSpec(plan.spec)}）` +
-            ` 前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}`;
+            ` 前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}` +
+            ` 次に動く時刻: ${scheduleNextAtOf(context, plan.kind)}`;
           const part = page(plan.request, offset, SCHEDULE_PAGE);
           const tail = part.more
             ? `\n\n…（ここで切れている。続きは schedule_list kind=${plan.kind} offset=${part.to}）`
@@ -1967,7 +2020,10 @@ export function createCloneTools(context: ToolContext) {
             createdAt: plan.createdAt,
             updatedAt: plan.updatedAt,
             summary: `依頼: ${excerptLine(plan.request, SCHEDULE_REQUEST_EXCERPT)}`,
-            extra: [`  前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}`],
+            extra: [
+              `  前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}`,
+              `  次に動く時刻: ${scheduleNextAtOf(context, plan.kind)}`,
+            ],
           }),
         );
         return text(
@@ -2643,6 +2699,70 @@ export function createCloneTools(context: ToolContext) {
             renderMemorySize(documents, memoryDocuments, renderMemoryDocuments(memoryDocuments)),
             '',
             renderLedgerCrossReference(runtime.sdkModel, aggregate),
+          ].join('\n'),
+        );
+      },
+    ),
+
+    /**
+     * 自分（クローン）が残した「握り潰しの跡」を、器の中から読み戻す（#242）。
+     *
+     * **#242 の前半（人間が Railway で stderr を読めるか）は既に決着している
+     * ——人間は読めている（#242 コメントの実測）。ここが埋めるのは後半だけ**
+     * ——クローン自身が器の中から自分の跡を1行も遡れなかった穴。
+     *
+     * **`journal_read` と二重に持たない。** 日誌は「起きたこと」を持ち、
+     * ここが持つのは「記録できなかった／読み出せなかった」という、日誌
+     * そのものへは書けなかった側である（`dropped-record.ts` 冒頭 doc の
+     * 「`journal` と二重に持たない線引きが要る」）。日誌の型を1つも増やして
+     * いない——増やせば `JOURNAL_ENTRY_TYPES` 経由で `openapi.json`（外向きの
+     * HTTP 面）が動く（`noteDroppedInboxEvent` の doc と同じ判断）。
+     *
+     * **HTTP には出さない。** `self_read` / `self_status` と同じ扱いの
+     * MCP 専用の口で、`apps/daemon/src/app.ts` に対応する経路は無い。
+     */
+    tool(
+      'self_dropped',
+      [
+        '自分（クローン）が記録・読み出しをしそこねた跡（`noteDroppedRecord` 等が',
+        'stderr へ残す行）を、このプロセスの中から読み戻す。',
+        '器の外（Railway 等のホスティング先のログ）へ出ている生の stderr の代わりではない',
+        '——そちらは既に人間が読める（#242）。ここは、器の中からは1行も遡れなかった',
+        '穴を塞ぐためのものである。',
+        'このプロセスが生きているあいだの直近の分だけを持つ（帳面の保持件数は',
+        `${RECENT_TRACE_LIMIT} 件。それより古い分はこのプロセスの中には無く、器の外の`,
+        'stderr を見るしかない）。再起動・デプロイの入れ替えでも消える。',
+      ].join(' '),
+      {
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(RECENT_TRACE_LIMIT)
+          .optional()
+          .describe(
+            `直近から何件返すか（既定 ${SELF_DROPPED_DEFAULT_LIMIT}、最大 ${RECENT_TRACE_LIMIT}` +
+              '＝帳面が保持している件数そのもの）。',
+          ),
+      },
+      async ({ limit = SELF_DROPPED_DEFAULT_LIMIT }) => {
+        const all = recentDroppedTraces();
+        if (all.length === 0) {
+          return text('このプロセスではまだ跡（記録・読み出しの握り潰し）が1件も残っていない。');
+        }
+        const traces = all.slice(-limit);
+        return text(
+          [
+            renderListingFromEnd(traces, {
+              budget: SELF_DROPPED_BUDGET,
+              omitted: ({ rest, shown, total }) =>
+                `…ほか古い ${rest} 件は省略（この呼び出しで渡した ${total} 件のうち直近 ${shown} 件だけ出した）。`,
+            }),
+            all.length > traces.length
+              ? `（帳面には全 ${all.length} 件のうち直近 ${traces.length} 件だけをここへ渡した。` +
+                `もっと古い分は limit を上げて呼ぶこと。ただし帳面の保持件数（${RECENT_TRACE_LIMIT}） ` +
+                'を超える分はこのプロセスの中には無く、器の外の stderr を見るしかない。）'
+              : '（このプロセスの生存中だけの記録。再起動・デプロイの入れ替えで消える。）',
           ].join('\n'),
         );
       },

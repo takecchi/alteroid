@@ -26,6 +26,7 @@ import {
 } from './clone.js';
 import type { HumanMessage } from './clone.js';
 import type { TokenRotatorObservation } from './token-rotator.js';
+import { fingerprintOf } from './credentials.js';
 import type { CloneHost } from './host.js';
 import type { ManagerPool } from './manager.js';
 import { renderMemoryDocuments } from './memory.js';
@@ -4229,6 +4230,101 @@ describe('クローンの消費が台帳に載る（誰が・どこで）', () =
 
       await s.clone.stop();
     });
+  });
+});
+
+/**
+ * PreCompact のサイドセッション（`#distillFromTranscript`）が起こすターンの
+ * 入力を日誌に残す（Issue #243 の7本目。既存6経路は `clone-turn-input.test.ts`
+ * が持つ）。
+ *
+ * この経路は `#runInternal` / `#runTurn` を経由せず `this.#queryFn` を直接
+ * 呼ぶので、あちらのテストが使う `bootClone`（ストリーミング入力専用の
+ * 簡約フェイク）では起こせない——ここは1つ上の「クローンの消費が台帳に載る」と
+ * 同じ `fakeSdk`（文字列プロンプトも扱える。`typeof prompt === 'string'` 分岐）
+ * と `firePreCompact` の骨格を使う。
+ */
+describe('クローン — PreCompact サイドセッションの入力を日誌に残す（#243）', () => {
+  const TRANSCRIPT = 'PRECOMPACT-TRANSCRIPT-MARKER-7f2a 要約に潰される直前の生ログの中身';
+
+  /** `PreCompact` フックを実際に叩いて蒸留のサイドクエリを走らせる。 */
+  async function firePreCompact(main: FakeCall, transcript = TRANSCRIPT): Promise<void> {
+    const dir = await mkdtemp(join(tmpdir(), 'alteroid-clone-precompact-turn-input-'));
+    try {
+      const transcriptPath = join(dir, 'transcript.jsonl');
+      await writeFile(transcriptPath, transcript, 'utf8');
+      const hook = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
+      if (hook === undefined) throw new Error('PreCompact フックが登録されていない');
+      await hook({ session_id: 'sess-fake', transcript_path: transcriptPath } as never, undefined, {
+        signal: new AbortController().signal,
+      } as never);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  /** 日誌から `pre_compact_distill` の1行を拾う（self/inbound で絞る）。 */
+  async function pickEntry(stores: Stores): Promise<string> {
+    const entries = await stores.journal.list({ types: ['exchange'] });
+    const hit = entries.find(
+      (entry) =>
+        entry.type === 'exchange' &&
+        entry.with === 'self' &&
+        entry.role === 'inbound' &&
+        entry.text.includes('ターンの入力: pre_compact_distill'),
+    );
+    expect(
+      hit,
+      '日誌に self/inbound の「ターンの入力: pre_compact_distill」の行が無い',
+    ).toBeDefined();
+    return hit?.type === 'exchange' ? hit.text : '';
+  }
+
+  it('chars と指紋が残り、生ログの本文そのものは載らない', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+    await firePreCompact(s.calls[0] as FakeCall);
+
+    const text = await pickEntry(s.stores);
+
+    // **先に、本文が実際にそのターン（SDK へ渡った側）には載っていることを
+    // 確かめる。** これが無いと下の `not.toContain` は空振りで真になる。
+    expect(s.calls[1]?.inputs[0]).toContain(TRANSCRIPT);
+
+    expect(text).toContain(`tail.chars=${TRANSCRIPT.length}`);
+    expect(text).toContain(`tail.fp=${fingerprintOf(TRANSCRIPT)}`);
+    // **本文そのもの（全文でも抜粋でも）は載らない。**
+    expect(text).not.toContain(TRANSCRIPT);
+    expect(text).not.toContain('PRECOMPACT-TRANSCRIPT-MARKER-7f2a');
+
+    await s.clone.stop();
+  });
+
+  it('長さが同じでも内容が違えば指紋が変わる（chars だけでは区別できない）', async () => {
+    const a = `${'A'.repeat(30)}-MARK-ONE`;
+    const b = `${'B'.repeat(30)}-MARK-TWO`;
+    expect(a.length).toBe(b.length);
+
+    async function recordedFingerprint(transcript: string): Promise<string> {
+      const s = setup();
+      s.clone.post(humanMessage('やあ'));
+      await waitForDone(s.events);
+      await firePreCompact(s.calls[0] as FakeCall, transcript);
+      const text = await pickEntry(s.stores);
+      await s.clone.stop();
+      const match = /tail\.fp=([0-9a-f]+)/u.exec(text);
+      if (match?.[1] === undefined) throw new Error('日誌の行に指紋が見つからない');
+      return match[1];
+    }
+
+    const fpA = await recordedFingerprint(a);
+    const fpB = await recordedFingerprint(b);
+
+    expect(fpA).toBe(fingerprintOf(a));
+    expect(fpB).toBe(fingerprintOf(b));
+    expect(fpA).not.toBe(fpB);
   });
 });
 

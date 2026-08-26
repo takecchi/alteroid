@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  clearRecentTracesForTesting,
   inboxEventShape,
   journalEntryShape,
   journalRowType,
@@ -8,6 +9,11 @@ import {
   noteDroppedJournalRow,
   noteDroppedJournalRowsSummary,
   noteDroppedRecord,
+  noteManagerIdCollision,
+  noteUncaught,
+  noteUnreadableRecord,
+  RECENT_TRACE_LIMIT,
+  recentDroppedTraces,
   runnerEventShape,
 } from './dropped-record.js';
 import type { RunnerEvent } from './runner-protocol.js';
@@ -434,5 +440,97 @@ describe('日誌の読み出しで飛ばした行の跡（Issue #224）', () => 
     expect(summary).toContain('合計');
     expect(summary).toContain('unknown-shape:future-type×3');
     expect(summary).toContain('unparsable×1');
+  });
+});
+
+/**
+ * #242 — クローンが自分の跡を器の中から読み戻すための帳面。
+ *
+ * ここが測るのは `self_dropped`（`tools.ts`）の材料そのもの
+ * （`recentDroppedTraces` / `clearRecentTracesForTesting`）。道具側の応答の
+ * 組み立て（予算・`limit`）は `tools.test.ts` が持つ——ここは帳面そのものの
+ * 契約（何が乗り、何が乗らず、上限に達したら何が起きるか）だけを見る。
+ */
+describe('直近の跡を器の中から読み戻す帳面（#242）', () => {
+  it('note() 経由（noteDroppedRecord 等）の行は帳面にも積まれる', async () => {
+    clearRecentTracesForTesting();
+
+    await captureStderr(() => {
+      noteDroppedRecord(
+        '日誌',
+        'exchange with=human role=inbound chars=3',
+        new Error('storage is closed'),
+      );
+    });
+
+    const traces = recentDroppedTraces();
+    expect(traces).toHaveLength(1);
+    expect(traces[0]).toContain('日誌を記録できませんでした');
+    expect(traces[0]).toContain('storage is closed');
+    // stderr へ実際に書く行と同じ形（`alteroid: <iso時刻> ...`）。改行は持たない
+    // （`renderListingFromEnd` が `\n` で連ねるので、ここに紛れ込むと1件が
+    // 2行に化ける）。
+    expect(traces[0]).toMatch(/^alteroid: \d{4}-\d{2}-\d{2}T[\d:.]+Z /u);
+    expect(traces[0]?.includes('\n')).toBe(false);
+  });
+
+  it('noteUncaught（alteroidd / alteroid-runner）の行は帳面に積まれない', async () => {
+    // **#242 が塞ぐのはクローン自身の跡（`alteroid:`）だけである。** デーモン／
+    // runner のプロセス全体の網は別の接頭辞で、そちらは Railway 経由で人間から
+    // 既に読めている（#242 のコメントの実測）ので、ここへ混ぜない。
+    clearRecentTracesForTesting();
+
+    await captureStderr(() => {
+      noteUncaught('alteroidd', 'uncaughtException', new Error('boom'));
+      noteUncaught('alteroid-runner', 'unhandledRejection', new Error('boom2'));
+    });
+
+    expect(recentDroppedTraces()).toHaveLength(0);
+  });
+
+  it('上限（RECENT_TRACE_LIMIT）を超えたら古い側から押し出される', async () => {
+    clearRecentTracesForTesting();
+
+    await captureStderr(() => {
+      for (let index = 0; index < RECENT_TRACE_LIMIT + 10; index += 1) {
+        noteManagerIdCollision(`mgr-${index}`, 1);
+      }
+    });
+
+    const traces = recentDroppedTraces();
+    // **無制限に持たない。** 210件積んでも帳面には上限ぶんしか残らない。
+    expect(traces).toHaveLength(RECENT_TRACE_LIMIT);
+    // 先頭10件（mgr-0〜mgr-9）は押し出されている。
+    expect(traces.some((line) => line.includes('managerId=mgr-0 '))).toBe(false);
+    expect(traces.some((line) => line.includes('managerId=mgr-9 '))).toBe(false);
+    // 直近（最後に積んだ1件）は残っている。
+    expect(traces.some((line) => line.includes(`managerId=mgr-${RECENT_TRACE_LIMIT + 9} `))).toBe(
+      true,
+    );
+  });
+
+  it('recentDroppedTraces() は控えを返す（呼び手が触っても帳面は動かない）', async () => {
+    clearRecentTracesForTesting();
+
+    await captureStderr(() => {
+      noteUnreadableRecord('runner のセッション一覧', 'runnerId=r-1', new Error('boom'));
+    });
+
+    const borrowed = recentDroppedTraces() as string[];
+    borrowed.push('偽の行を差し込む');
+
+    expect(recentDroppedTraces()).toHaveLength(1);
+  });
+
+  it('clearRecentTracesForTesting() で帳面を空にできる', async () => {
+    clearRecentTracesForTesting();
+    await captureStderr(() => {
+      noteBackgroundFailure('probe', '', new Error('boom'));
+    });
+    expect(recentDroppedTraces().length).toBeGreaterThan(0);
+
+    clearRecentTracesForTesting();
+
+    expect(recentDroppedTraces()).toHaveLength(0);
   });
 });
