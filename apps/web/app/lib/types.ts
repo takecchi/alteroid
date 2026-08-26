@@ -38,6 +38,12 @@ export type ApprovalAnswerResult = Ok<paths['/approvals/answer']['post']>['resul
 export type DailyReport = Ok<paths['/reports']['get']>['reports'][number];
 
 export type ScheduleEntry = Ok<paths['/schedule']['get']>['entries'][number];
+/**
+ * 周期そのもの（#496）。仕込まれた依頼だけが持つので `entry.spec` は
+ * optional — 編集画面はここが無いデーモン（この画面より古い版）と話すことが
+ * あるので、`undefined` を握り潰さないこと（`schedule.tsx` の doc）。
+ */
+export type ScheduleSpec = NonNullable<ScheduleEntry['spec']>;
 
 export type MemorySummary = Ok<paths['/memory']['get']>['documents'][number];
 export type MemoryDocument = Ok<paths['/memory/{slug}']['get']>['document'];

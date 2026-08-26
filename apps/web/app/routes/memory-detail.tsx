@@ -4,17 +4,20 @@ import { Tabs } from 'radix-ui';
 
 import { Markdown } from '~/components/markdown';
 import { Page } from '~/components/page';
-import { Button, ErrorNote, Spinner, Textarea } from '~/components/ui';
+import {
+  Button,
+  ErrorNote,
+  Spinner,
+  TAB_TRIGGER_ACTIVE_CLASS,
+  TAB_TRIGGER_CLASS,
+  Textarea,
+} from '~/components/ui';
 import { useDeleteMemory, useSaveMemory } from '~/hooks/mutations';
 import { useMemoryDocument } from '~/hooks/queries';
 import { cn } from '~/lib/cn';
 import { formatCreatedAt, formatDateTime } from '~/lib/format';
 
 import type { Route } from './+types/memory-detail';
-
-const TAB_TRIGGER_CLASS =
-  'border-b-2 border-transparent px-3 py-1.5 text-sm font-medium text-muted transition-colors hover:text-fg';
-const TAB_TRIGGER_ACTIVE_CLASS = 'border-accent text-fg';
 
 export function clientLoader({ params }: Route.ClientLoaderArgs) {
   return { slug: params.slug };

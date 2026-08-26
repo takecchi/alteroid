@@ -1155,6 +1155,28 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     expect(s.scheduler.list().map((item) => item.kind)).toEqual([DAILY_REPORT_KIND]);
   });
 
+  /**
+   * `spec`（周期そのもの）が `list()` に乗るか。
+   *
+   * 編集画面が周期を prefill するにはこれが要る（`ScheduleStatus.spec` の doc）。
+   * ここで壊れると、`description` の散文しか無くなり、画面は周期を毎回既定値
+   * から始めることになる。
+   */
+  it('仕込まれた依頼には spec（周期そのもの）が乗り、既定の日報には乗らない', async () => {
+    const s = setup(at(2026, 8, 12, 8, 0));
+    await s.stores.schedules.put(plan('issue-round', { type: 'daily', at: '09:00' }));
+    await s.scheduler.refresh();
+    s.scheduler.start();
+
+    const seeded = s.scheduler.list().find((item) => item.kind === 'issue-round');
+    expect(seeded).toMatchObject({ spec: { type: 'daily', at: '09:00' } });
+
+    const daily = s.scheduler.list().find((item) => item.kind === DAILY_REPORT_KIND);
+    expect(daily).not.toHaveProperty('spec');
+
+    s.scheduler.stop();
+  });
+
   it('ストアが読めなくても時計は止まらず、既に仕込んである予定は消えない', async () => {
     const s = setup(at(2026, 8, 12, 8, 0));
     await s.stores.schedules.put(plan('watch', { type: 'every', minutes: 30 }));
