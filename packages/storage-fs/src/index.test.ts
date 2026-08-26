@@ -1723,6 +1723,79 @@ describe('FsCommitmentStore', () => {
   });
 
   /**
+   * `editBody`（本 PR）。**まだ片付いていない行だけ書き換えられ、
+   * `origin` / `at` / `source` など他の欄には触れないこと**を固定する。
+   * `origin` が `'human'` かどうかの判定はストアの責務ではない
+   * （`CommitmentStore.editBody` の doc）ので、ここでは問わない——
+   * その判定は `apps/daemon/src/app.ts` の `PATCH /commitments/:id` の
+   * テストで別に問う。
+   */
+  describe('editBody（本文を後から直す）', () => {
+    it('未了の行は書き換えられる（body/editedAt/editedBy が入り、他の欄は壊れない）', async () => {
+      await stores.commitments.open({
+        id: 'c-1',
+        at: '2026-08-12T00:00:00.000Z',
+        origin: 'human',
+        source: 'conv-1',
+        body: 'もとの依頼',
+      });
+
+      expect(
+        await stores.commitments.editBody('c-1', '直した依頼', '2026-08-13T00:00:00.000Z', 'human'),
+      ).toBe(true);
+
+      const entry = await stores.commitments.get('c-1');
+      expect(entry?.body).toBe('直した依頼');
+      expect(entry?.editedAt).toBe('2026-08-13T00:00:00.000Z');
+      expect(entry?.editedBy).toBe('human');
+      // 他の欄は無傷
+      expect(entry?.at).toBe('2026-08-12T00:00:00.000Z');
+      expect(entry?.origin).toBe('human');
+      expect(entry?.source).toBe('conv-1');
+      expect(entry?.closedAt).toBeUndefined();
+    });
+
+    it('片付いた行は書き換えられない（false を返し、body はそのまま）', async () => {
+      await stores.commitments.open(commitment('c-1', '2026-08-12T00:00:00.000Z', 'もとの依頼'));
+      await stores.commitments.close('c-1', '2026-08-13T00:00:00.000Z', '片付けた', 'human');
+
+      expect(
+        await stores.commitments.editBody(
+          'c-1',
+          '後から直したい',
+          '2026-08-14T00:00:00.000Z',
+          'human',
+        ),
+      ).toBe(false);
+
+      const entry = await stores.commitments.get('c-1');
+      expect(entry?.body).toBe('もとの依頼');
+      expect(entry?.editedAt).toBeUndefined();
+      expect(entry?.editedBy).toBeUndefined();
+      // close() の記録も無傷
+      expect(entry?.closedAt).toBe('2026-08-13T00:00:00.000Z');
+      expect(entry?.closedReason).toBe('片付けた');
+    });
+
+    it('存在しない id は false（勝手に行を作らない）', async () => {
+      expect(
+        await stores.commitments.editBody(
+          'しらない',
+          '直したい',
+          '2026-08-13T00:00:00.000Z',
+          'human',
+        ),
+      ).toBe(false);
+
+      expect(await stores.commitments.list({ includeClosed: true })).toEqual({
+        entries: [],
+        unreadable: [],
+        trimmedClosed: 0,
+      });
+    });
+  });
+
+  /**
    * fs 版は `#read()` がファイル全体を `fileSchema.parse`（＝
    * `commitmentSchema` を要素に持つ配列）へ通す。`closedBy` が厳密な
    * enum だったら、未知の値を持つ行が1つでも在ると `#read()` 自体が

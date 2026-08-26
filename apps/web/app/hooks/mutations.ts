@@ -220,6 +220,34 @@ export function useCloseCommitment() {
   );
 }
 
+/**
+ * 台帳の本文を後から直す（人間の直接編集、`PATCH /commitments/:id`）。
+ *
+ * **可否の判定はサーバに聞く。** ここで先回りして弾かない — 画面側
+ * （`commitments.tsx`）は `origin: 'human'` かつ未了の行にだけ編集の入口を
+ * 出すので、この hook が実際に叩かれるのはその条件を満たす行だけだが、
+ * その間に片付けられる（409）・別行が争って origin が変わることはない
+ * ものの、**サーバの応答が最終判断であることに変わりはない**
+ * （`useCloseCommitment` と同じ原則）。呼び出し側（画面）は失敗を
+ * 握り潰さず `ErrorNote` 等で見せること。
+ */
+export function useEditCommitment() {
+  const api = useApi();
+  const refresh = useRefreshCommitments();
+  return useCallback(
+    async (id: string, body: string) => {
+      expectOk(
+        await api.api.PATCH('/commitments/{id}', {
+          params: { path: { id } },
+          body: { body },
+        }),
+      );
+      await refresh();
+    },
+    [api, refresh],
+  );
+}
+
 /** マネージャーへ話しかける（許可確認への `allow` / `deny` もここ）。 */
 export function useSendManagerMessage() {
   const api = useApi();

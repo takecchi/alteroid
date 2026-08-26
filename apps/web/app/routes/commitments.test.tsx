@@ -11,7 +11,7 @@
  * 4. CLI（`/commitments` `/commit` `/done`）と同じ経路を叩く — 片方でしかできない
  *    ことを作らない
  */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Commitment, CommitmentOrigin } from '@alteroid/core';
@@ -683,5 +683,212 @@ describe('本文を origin で Markdown / 素のテキストへ切り分ける',
     const tokens = body.className.split(/\s+/);
     expect(tokens).toContain('whitespace-pre-wrap');
     expect(tokens).toContain('break-words');
+  });
+});
+
+/**
+ * 本文の編集（`origin: 'human'` かつ未了の行だけ）。
+ *
+ * サーバ側（`PATCH /commitments/:id`）は前段のコミットで既に入っている——
+ * ここで固定するのは画面側の線引きとタブの形である（`memory-detail.tsx`
+ * に揃えた形。`commitments.tsx` の `CommitmentBodyEditor` の doc）。
+ *
+ * 1. 編集の入口が出るのは `origin: 'human'` かつ未了の行だけ
+ *    （それ以外は 403 で断られるだけの死んだボタンになるため）
+ * 2. 既定タブはプレビューで、中身は Markdown へ倒さない（`CommitmentBody` の
+ *    描き分けをそのまま守る——編集できることが描き分けを変える理由にはならない）
+ * 3. 下書きはタブの外に置くので、往復しても消えない
+ * 4. 保存は正しい id と本文で PATCH を叩き、失敗（409 等）は握り潰さず見せる
+ * 5. `editedAt` が在る行には「編集済み」の印が出る
+ */
+describe('本文の編集（origin: human かつ未了）', () => {
+  it('origin が human の未了行には「本文を編集」の入口が出る', async () => {
+    stubCommitments([commitment({ origin: 'human' })]);
+    renderPage();
+
+    await screen.findByText('ドキュメントの誤りを直す');
+    expect(screen.getByRole('button', { name: '本文を編集' })).toBeTruthy();
+  });
+
+  it.each(['self', 'manager', 'external'] as const)(
+    'origin が %s の行には編集の入口が出ない（403 で断られるだけの死んだボタンにしない）',
+    async (origin) => {
+      stubCommitments([commitment({ origin, body: `${origin} の本文` })]);
+      renderPage();
+
+      await screen.findByText(`${origin} の本文`);
+      expect(screen.queryByRole('button', { name: '本文を編集' })).toBeNull();
+    },
+  );
+
+  it('片付いた行には origin が human でも編集の入口が出ない', async () => {
+    stubCommitments(
+      [commitment({ id: 'open-1', body: 'まだ終わっていない' })],
+      [
+        commitment({
+          id: 'closed-1',
+          origin: 'human',
+          body: '片付いた本文',
+          closedAt: new Date().toISOString(),
+          closedReason: '直した',
+        }),
+      ],
+    );
+    renderPage();
+
+    await screen.findByText('まだ終わっていない');
+    fireEvent.click(screen.getByRole('button', { name: '片付けたものも見る' }));
+
+    await screen.findByText('片付いた本文');
+    // 未了の human 行の分（open-1）だけ在り、片付いた human 行（closed-1）には無い。
+    expect(screen.getAllByRole('button', { name: '本文を編集' })).toHaveLength(1);
+  });
+
+  it('編集を開くと既定タブはプレビューで、中身が素テキストのまま出る（Markdown へ倒さない）', async () => {
+    stubCommitments([commitment({ origin: 'human', body: '## 見出しではない' })]);
+    renderPage();
+
+    await screen.findByText('## 見出しではない');
+    fireEvent.click(screen.getByRole('button', { name: '本文を編集' }));
+
+    const previewTab = await screen.findByRole('tab', { name: 'プレビュー' });
+    expect(previewTab.getAttribute('aria-selected')).toBe('true');
+    // `##` が見出しとして解釈されず、リテラルのまま素テキストで出ている。
+    expect(screen.getByText('## 見出しではない')).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: '見出しではない' })).toBeNull();
+    /**
+     * **編集タブの textarea はまだ選んでいないので出ていない。**
+     *
+     * `screen.queryByRole('textbox')` を素で呼ぶと、この行の `Input`
+     * （片付ける理由）や `PushForm` の `Input`（積む本文）まで拾って
+     * 「複数一致」で例外になる——`<input>`（type 未指定）も `<textarea>` も
+     * 暗黙の role は同じ `textbox` である。**Tabs.Root の中だけを見る**
+     * ことで、無関係な `Input` を数えない。
+     */
+    const tabsRoot = screen.getByRole('tablist').parentElement!;
+    expect(within(tabsRoot).queryByRole('textbox')).toBeNull();
+  });
+
+  it('⭐ タブを往復しても下書きが消えない', async () => {
+    stubCommitments([commitment({ origin: 'human', body: 'もとの本文' })]);
+    renderPage();
+
+    await screen.findByText('もとの本文');
+    fireEvent.click(screen.getByRole('button', { name: '本文を編集' }));
+    // 無関係な `Input`（片付ける理由・積む本文）と役割が同じ（`textbox`）
+    // なので、textarea は Tabs.Root の中だけを見て取る（上のテストと同じ理由）。
+    const tabsRoot = screen.getByRole('tablist').parentElement!;
+
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    const textarea = (await within(tabsRoot).findByRole('textbox')) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: '書きかけの本文' } });
+
+    // プレビューへ切り替える → 書きかけがそのまま（素のテキストで）映る。
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'プレビュー' }));
+    expect(await screen.findByText('書きかけの本文')).toBeTruthy();
+
+    // 編集へ戻る → 入力した文字列がそのまま残っている（消えていない）。
+    fireEvent.mouseDown(screen.getByRole('tab', { name: '編集' }));
+    const textareaAgain = (await within(tabsRoot).findByRole('textbox')) as HTMLTextAreaElement;
+    expect(textareaAgain.value).toBe('書きかけの本文');
+  });
+
+  it('保存すると、正しい id と本文で PATCH /commitments/{id} が呼ばれる', async () => {
+    /**
+     * 共有の `stubFetch` は URL しか見ないので、method で GET（一覧）と
+     * PATCH（編集）を区別できない（`memory-detail.test.tsx` の保存試験と
+     * 同じ注記）。ここでは Request 本体から method と本文を読み直す。
+     */
+    let patchCalled = false;
+    let patchBody: unknown;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      const { url, method } = request;
+      if (method === 'PATCH' && url.includes('/commitments/cmt-42')) {
+        patchCalled = true;
+        patchBody = await request.json();
+        return json({ ok: true });
+      }
+      if (url.includes('/commitments')) {
+        return json({
+          entries: [commitment({ id: 'cmt-42', origin: 'human', body: 'もとの依頼' })],
+        });
+      }
+      return Promise.reject(new TypeError(`Failed to fetch: ${url}`));
+    }) as typeof fetch;
+    renderPage();
+
+    await screen.findByText('もとの依頼');
+    fireEvent.click(screen.getByRole('button', { name: '本文を編集' }));
+    // Tabs.Root の中だけを見て取る（無関係な `Input` と role が衝突するため。
+    // 上の「編集を開くと既定タブは…」テストの注記と同じ理由）。
+    const tabsRoot = screen.getByRole('tablist').parentElement!;
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    const textarea = await within(tabsRoot).findByRole('textbox');
+    fireEvent.change(textarea, { target: { value: '直した依頼' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => expect(patchCalled).toBe(true));
+    expect(patchBody).toEqual({ body: '直した依頼' });
+  });
+
+  /**
+   * **保存の失敗を握り潰さない。** 409（その間に片付けられた）・403・404 は
+   * `useEditCommitment` が `expectOk` で必ず投げるので、`ErrorNote` が
+   * 出ることを固定する（`OpenRow` の閉じる操作の失敗表示と同じ形）。
+   */
+  it('保存が 409（その間に片付けられた）で返ると、人間に見える形でエラーが出る', async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      const { url, method } = request;
+      if (method === 'PATCH' && url.includes('/commitments/cmt-42')) {
+        return json(
+          { error: 'cmt-42 は既に 2026-08-26T00:00:00.000Z に片付いている（直した）' },
+          409,
+        );
+      }
+      if (url.includes('/commitments')) {
+        return json({
+          entries: [commitment({ id: 'cmt-42', origin: 'human', body: 'もとの依頼' })],
+        });
+      }
+      return Promise.reject(new TypeError(`Failed to fetch: ${url}`));
+    }) as typeof fetch;
+    renderPage();
+
+    await screen.findByText('もとの依頼');
+    fireEvent.click(screen.getByRole('button', { name: '本文を編集' }));
+    // Tabs.Root の中だけを見て取る（無関係な `Input` と role が衝突するため。
+    // 上の「編集を開くと既定タブは…」テストの注記と同じ理由）。
+    const tabsRoot = screen.getByRole('tablist').parentElement!;
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    const textarea = await within(tabsRoot).findByRole('textbox');
+    fireEvent.change(textarea, { target: { value: '直した依頼' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(await screen.findByText(/既に.*に片付いている/)).toBeTruthy();
+  });
+
+  it('editedAt が在る行に「編集済み」の印が出る', async () => {
+    stubCommitments([
+      commitment({
+        origin: 'human',
+        body: '直した後の本文',
+        editedAt: '2026-08-26T00:00:00.000Z',
+      }),
+    ]);
+    renderPage();
+
+    await screen.findByText('直した後の本文');
+    expect(screen.getByText(/編集済み/)).toBeTruthy();
+  });
+
+  it('editedAt が無い行には「編集済み」の印が出ない（一度も編集していない）', async () => {
+    stubCommitments([commitment({ origin: 'human', body: '編集していない本文' })]);
+    renderPage();
+
+    await screen.findByText('編集していない本文');
+    expect(screen.queryByText(/編集済み/)).toBeNull();
   });
 });

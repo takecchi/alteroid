@@ -4,6 +4,7 @@ import { matchesJournalSearch } from './journal-search.js';
 import type {
   Commitment,
   CommitmentClosedBy,
+  CommitmentEditedBy,
   InboxEvent,
   Job,
   JournalEntry,
@@ -451,6 +452,14 @@ export function createMemoryStores(): Stores {
       const existing = commitments.get(id);
       if (!existing || existing.closedAt !== undefined) return false;
       commitments.set(id, { ...existing, closedAt: at, closedReason: reason, closedBy: by });
+      return true;
+    },
+    // **`origin` の判定はしない**（`CommitmentStore.editBody` の doc）。呼び出し側
+    // （`apps/daemon/src/app.ts` の `PATCH /commitments/:id`）が確かめてから呼ぶ。
+    async editBody(id, body, at, by: CommitmentEditedBy) {
+      const existing = commitments.get(id);
+      if (!existing || existing.closedAt !== undefined) return false;
+      commitments.set(id, { ...existing, body, editedAt: at, editedBy: by });
       return true;
     },
   };
