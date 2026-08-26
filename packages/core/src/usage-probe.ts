@@ -100,6 +100,27 @@ export interface UsageProbeOptions {
    * 読み取って `Options.env` へ渡す以外の用途に使わない（保存しない・再送しない）。
    */
   env?: NodeJS.ProcessEnv;
+  /**
+   * probe のサブプロセスへ渡さない環境変数（#431）。
+   *
+   * **`env` を省略しても、この省略は「何も渡さない」を意味しない。** SDK の
+   * `Options.env` の doc（上）のとおり、`Options.env` 自体を省略すると
+   * **SDK 側の既定 `{ ...process.env }` がそのまま子プロセスへ渡る**
+   * （実測: `spawnClaudeCodeProcess` フックで確かめてある。`usage-probe.test.ts`
+   * 「withheldEnvKeys」を参照）。**つまり `env` を渡さない呼び出し元（`usage-poller`
+   * の定期ポーリング等）ほど、実は一番広く process.env を晒している。**
+   *
+   * ここに1つでも渡すと、`runUsageProbe` は（`env` の指定の有無にかかわらず）
+   * `{ ...process.env, ...env }` を組み立てたうえで、この配列のキーを
+   * `delete` してから `Options.env` へ載せる。**`runner.ts` の `#baseChildEnv` /
+   * `#childEnv` と同じ「組み立ててから delete する」形**であり、新しい仕組みは
+   * 作っていない。
+   *
+   * **空 / 省略なら、組み立ての要否も含めて挙動は1文字も変わらない**
+   * （`env` も `withheldEnvKeys` も無いときは、これまでどおり `Options.env`
+   * 自体を省略する）。
+   */
+  withheldEnvKeys?: readonly string[];
 }
 
 /**
@@ -182,6 +203,20 @@ export type UsageProbeOutcome<T> =
   { ok: true; value: T } | { ok: false; failure: UsageProbeFailure };
 
 /**
+ * probe のサブプロセスへ実際に渡す env を組み立てる（#431）。
+ *
+ * `options.env` の doc のとおり `{ ...process.env, ...options.env }` へ広げた
+ * あと、**`runner.ts` の `#baseChildEnv` / `#childEnv` と同じ「組み立ててから
+ * delete する」形**で `withheldEnvKeys` を落とす。呼ぶのは `options.env` か
+ * `withheldEnvKeys` のどちらかが在るときだけ（呼び出し側の分岐）。
+ */
+function buildProbeEnv(options: UsageProbeOptions): NodeJS.ProcessEnv {
+  const env = { ...process.env, ...options.env };
+  for (const key of options.withheldEnvKeys ?? []) delete env[key];
+  return env;
+}
+
+/**
  * 使い捨ての probe で `read` を1回走らせる。
  * **決して投げない**（probe は best-effort であって、呼ぶ側は必ずフォールバックする）。
  * 失敗したときは `{ ok: false, failure }` を返す —— 以前はここで理由を捨てて
@@ -214,12 +249,13 @@ export async function runUsageProbe<T>(
         // 候補トークンの観測は普段より頻繁に走りうるので、足せば人間の hook が
         // そのぶん多く走ることになる。
         settingSources: ['project'],
-        // **`options.env` が渡されたときだけ載せる。** 省略すれば `Options.env` 自体を
-        // 組み立てに含めない ⟹ SDK は省略時に `process.env` をそのまま継承するので、
-        // 既定の経路（`env` を渡さない呼び出し）の挙動は1文字も変わらない。
-        // 渡されたときは、上の doc のとおり必ず `process.env` と spread する
-        // （でなければ `PATH` / `HOME` が消えてサブプロセスが起動できない）。
-        ...(options.env !== undefined ? { env: { ...process.env, ...options.env } } : {}),
+        // **`options.env` か `options.withheldEnvKeys` のどちらかが在るときだけ
+        // 組み立てる。** どちらも無ければ `Options.env` 自体を組み立てに含めない
+        // ⟹ SDK は省略時に `process.env` をそのまま継承するので、既定の経路
+        // （どちらも渡さない呼び出し）の挙動は1文字も変わらない。
+        ...(options.env !== undefined || (options.withheldEnvKeys?.length ?? 0) > 0
+          ? { env: buildProbeEnv(options) }
+          : {}),
       },
     });
   } catch (error) {

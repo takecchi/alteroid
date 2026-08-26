@@ -121,3 +121,56 @@ describe('アカウント全体の利用状況を取り直す', () => {
     expect(calls()).toBe(after);
   });
 });
+
+/** `queryFn` に渡された `options`（SDK の `Options`）を横から覗くための偽物。 */
+function capturingProbe(): { queryFn: UsageProbeQuery; captured: unknown[] } {
+  const captured: unknown[] = [];
+  const queryFn: UsageProbeQuery = ({ options }) => {
+    captured.push(options);
+    const handle: UsageProbeHandle = {
+      async *[Symbol.asyncIterator]() {
+        /* control channel しか読まない */
+      },
+      accountInfo: async () => LOGGED_IN.account,
+      usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => LOGGED_IN.usage,
+    };
+    return handle;
+  };
+  return { queryFn, captured };
+}
+
+describe('usage-poller — withheldEnvKeys を fetchAccountUsage まで届ける（#431）', () => {
+  it('withheldEnvKeys を渡すと、probe へ渡す Options.env からそのキーが落ちる', async () => {
+    const original = process.env.ALTEROID_DATABASE_URL;
+    process.env.ALTEROID_DATABASE_URL = 'postgres://usage-poller-431-test-secret';
+    try {
+      const { queryFn, captured } = capturingProbe();
+      const poller = startUsagePolling({
+        queryFn,
+        cwd: '/work',
+        intervalMs: 10_000,
+        withheldEnvKeys: ['ALTEROID_DATABASE_URL'],
+      });
+      await poller.refresh();
+      poller.stop();
+
+      expect(captured).toHaveLength(1);
+      const options = captured[0] as { env?: Record<string, string | undefined> };
+      expect(options.env).toBeDefined();
+      expect('ALTEROID_DATABASE_URL' in (options.env ?? {})).toBe(false);
+    } finally {
+      if (original === undefined) delete process.env.ALTEROID_DATABASE_URL;
+      else process.env.ALTEROID_DATABASE_URL = original;
+    }
+  });
+
+  it('withheldEnvKeys を渡さないと（既定）、Options.env 自体が省略される（#431 が直す前の形）', async () => {
+    const { queryFn, captured } = capturingProbe();
+    const poller = startUsagePolling({ queryFn, cwd: '/work', intervalMs: 10_000 });
+    await poller.refresh();
+    poller.stop();
+
+    const options = captured[0] as Record<string, unknown>;
+    expect('env' in options).toBe(false);
+  });
+});
