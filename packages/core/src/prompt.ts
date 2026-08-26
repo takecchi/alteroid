@@ -25,6 +25,7 @@
  * 復活する。#32 で直したのはまさにこの文である）。
  */
 
+import { excerpt } from './excerpt.js';
 import type { RenderedMemory } from './memory.js';
 import { buildSelfKnowledge, type SelfFacts } from './self.js';
 
@@ -219,6 +220,49 @@ export function buildDistillPrompt(reason: 'conversation_end' | 'pre_compact'): 
 // ---------------------------------------------------------------------------
 
 /**
+ * **連結後のプロンプト全体**の文字数上限（#414）。
+ *
+ * `buildDailyReportPrompt` / `buildSelfInitiativePrompt` / `buildTimerPrompt` は
+ * どれも固定の指示文の末尾へ `digest`（`digest.ts` の `buildActivityDigest`）を
+ * 生で連結する。**`digest.ts` 側には全体の文字数を締める仕組みが無い** —
+ * 節ごとの件数（`MAX_ITEMS`）と1項目の文字数（`brief()`）は締めているが、
+ * `brief()` を通らない列（id・`plan.kind`・モデル名など）には上限が無く、
+ * `digest.length` は伸び続けうる（実測: id を100文字にしただけで
+ * `digest.length` が 55,059 まで伸びる。digest.test.ts の `CHARACTER_BUDGET`
+ * はテストの中だけの観測の歯であって、本番コードには一切効かない）。
+ *
+ * だから**締めるのはここ、連結し終わったプロンプト全体に対してである。**
+ * `digest` がどれだけ伸びても、クローンに渡る文字数はここで頭打ちになる
+ * （厳密には `excerpt()` が本体を予算ちょうどで切ったあと省略の合図を
+ * 足すので、返り値の全長は予算 + 合図の分だけわずかに超える。予算が締めて
+ * いるのは本体のほうである）。
+ *
+ * **切ったら黙らない。** `excerpt()`（`excerpt.ts`）を通すので、切った場合は
+ * 省いた文字数と全体の文字数が本文の末尾に付く。これは digest 側の `omitted()`
+ * と同じ理由 — 合図はここでは**ログやテストではなく、プロンプト本文の中に
+ * 入れる。** プロンプトを直接読むのはクローン自身なので、本文の外に置いた
+ * 合図はクローンに届かない。
+ *
+ * `digest` はどの3関数でもテンプレートの最後尾に置かれているので、末尾から
+ * 切る `excerpt()` は実質的に digest の末尾だけを削る——digest より前にある
+ * 指示文（何をすべきか）は保たれる。
+ *
+ * **数値の出し方**（2026-08-27 観測、`main` 起点）。`digest.test.ts` の
+ * worst case fixture（各節 `MAX_ITEMS + 5` 件、`digest.length=42,369`）を
+ * そのまま3関数へ通した実測:
+ *
+ * | 関数 | 実測（文字） |
+ * | --- | --- |
+ * | `buildDailyReportPrompt` | 42,762 |
+ * | `buildSelfInitiativePrompt` | 42,729 |
+ * | `buildTimerPrompt`（`request` 無し） | 42,475 |
+ *
+ * 最大値 42,762 へ、`digest.ts` の `CHARACTER_BUDGET`（42,319 実測 → 47,000）と
+ * 同じ約11%の余裕を乗せて 47,500 とした。
+ */
+export const PROMPT_CHARACTER_BUDGET = 47_500;
+
+/**
  * 日報の指示（PRD「可観測性」の最上段 / 起点②の最初の実例）。
  *
  * 人間が普段読むのはこれだけである。したがって**何を書くかは要件**（今日何をしたか・
@@ -233,7 +277,8 @@ export interface DailyReportPromptInput {
 }
 
 export function buildDailyReportPrompt({ date, digest }: DailyReportPromptInput): string {
-  return `[system] ${date} を締める時刻になった。この日の日報をまとめよ。
+  return excerpt(
+    `[system] ${date} を締める時刻になった。この日の日報をまとめよ。
 
 人間が普段読むのは日報だけである。日報を読んだだけでその日が分かり、掘りたくなったら日誌へ降りられる、という粒度で書くこと。
 
@@ -248,7 +293,9 @@ export function buildDailyReportPrompt({ date, digest }: DailyReportPromptInput)
 
 以下はこの日の記録の要約である。
 
-${digest}`;
+${digest}`,
+    PROMPT_CHARACTER_BUDGET,
+  );
 }
 
 /**
@@ -263,7 +310,8 @@ export interface SelfInitiativePromptInput {
 }
 
 export function buildSelfInitiativePrompt({ reason, digest }: SelfInitiativePromptInput): string {
-  return `[system] 誰にも呼ばれていないが、あなた自身のために手が空いた時間である（${reason}）。
+  return excerpt(
+    `[system] 誰にも呼ばれていないが、あなた自身のために手が空いた時間である（${reason}）。
 
 記憶にある目的と、いまの状況を見て、次にやることがあるかを決めよ。
 
@@ -276,7 +324,9 @@ export function buildSelfInitiativePrompt({ reason, digest }: SelfInitiativeProm
 
 以下は直近の状況である。
 
-${digest}`;
+${digest}`,
+    PROMPT_CHARACTER_BUDGET,
+  );
 }
 
 /**
@@ -368,13 +418,16 @@ export function buildTimerPrompt({
           '聞かずに動いたなら `journal_write` に残せ。',
         ].join('\n');
 
-  return `${head}
+  return excerpt(
+    `${head}
 
 ${body}
 
 以下は直近の状況である。
 
-${digest}`;
+${digest}`,
+    PROMPT_CHARACTER_BUDGET,
+  );
 }
 
 // ---------------------------------------------------------------------------
