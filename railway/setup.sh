@@ -721,7 +721,7 @@ if [ -n "$GH_TOKEN_VALUE" ]; then
     マネージャーに頼む:
 
       alteroid chat
-      > alteroid リポジトリの M5 を実装して PR を出して。AGENTS.md と docs/roadmap.md を先に読んで。
+      > alteroid リポジトリの #485（M5）を実装して PR を出して。AGENTS.md を先に読んで。
 
     鍵の差し替えは変数を置き直すだけでは走行中のマネージャーに届かない。
     railway/README.md「鍵を回す（走行中でも）」を見る。

@@ -502,7 +502,7 @@ railway ssh --service runner -- su -s /bin/sh worker -c '
 ```bash
 railway ssh --service app
 alteroid chat
-> alteroid リポジトリの M5 を実装して PR を出して。AGENTS.md と docs/roadmap.md を先に読んで。
+> alteroid リポジトリの #485（M5）を実装して PR を出して。AGENTS.md を先に読んで。
 ```
 
 あとは閉じてよい。**人間の不在で止まるのは承認待ちだけ**なので、判断に迷ったものが `/approvals` に溜まる。溜まったら `alteroid chat` の `/approvals` → `/answer <番号> <回答>`。進み具合は `/managers` と `/manager <id>`（生ログ）で見える。
