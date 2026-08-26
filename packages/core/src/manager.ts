@@ -577,7 +577,25 @@ type ResumeOutcome =
    * **待てば通る。** 同じ文言にすると、クローンは待てば済む委譲を新しく起こし直し、
    * **同じ仕事が2本になる**（貸し出し期限が防ごうとしているものそのもの）。
    */
-  | 'held-by-lease';
+  | 'held-by-lease'
+  /**
+   * **`record.job.cwd` が記録に無く、resume 先の runner からも `workspacePath` を
+   * 一度も聞けていない（#402）。**
+   *
+   * `cwd ?? runner.workspacePath` へそのまま通すと、`workspacePath` の既定値
+   * `''`（`RunnerClient.workspacePathKnown` の doc）が `cwd` として組み立てられ、
+   * runner 側の `cwd: z.string().min(1)` に「cwd の形が不正」として弾かれる——
+   * 真因（workspacePath 未取得）がどこにも出ない。ここで区別できる形にして返す。
+   *
+   * **`no-session` とも `held-by-lease` とも違う。** `manager_send` に `cwd` を
+   * 渡す口は無いので、送り直しでは直らない（`no-session` と同じく起こし直す
+   * 以外に手が無い、が理由は別）。`held-by-lease` のように「待てば通る」とも
+   * 言い切れない——`workspacePathKnown` は `HttpRunner` の生成時に呼ばれる
+   * `hello()` 1回だけで決まり、その後は `ping()` / `identity()` / `resources()`
+   * のどれも書き換えない設計（`apps/daemon/src/runner-client.ts` の該当箇所の
+   * doc）ので、同じ runner インスタンスが繋がっている限り自然には解けない。
+   */
+  | 'workspace-path-unknown';
 
 /** デーモン側が持つ1マネージャーの像（正本は JobStore）。 */
 interface ManagerRecord {
@@ -941,6 +959,34 @@ class Pool implements ManagerPool {
     // すると、受け口の開いていない runner でマネージャーが走り出し、報告も許可確認も
     // 誰にも届かない（黙って止まっているように見える）。
     await this.#connectTo(runner);
+    /*
+     * **`cwd` を省いた依頼で、runner から `workspacePath` を一度も聞けていない
+     * ときは、ここで断る（#402）。**
+     *
+     * ここで断らずに `input.cwd ?? runner.workspacePath` へそのまま通すと、
+     * `HttpRunner` の既定値 `''`（一度も接続できていない段階からの値。
+     * `RunnerClient.workspacePathKnown` の doc）が `cwd` として組み立てられ、
+     * `runnerStartCommandSchema` の `cwd: z.string().min(1)`（`runner-protocol.ts`）
+     * に「cwd の形が不正」として弾かれる。しかも `runner.start()` が投げた後は
+     * `#claimManagerId()` が発行した `managerId` を `#records` へ書く前に失敗が
+     * 起きるので、この委譲は台帳にも `#records` にも跡を残さず消える（`start()`
+     * の `runner.start()` の doc「黙って失われる」）。
+     *
+     * ⟹ 真因（workspacePath 未取得）が「cwd の形」という別の顔で報告され、
+     * しかもその報告さえ台帳に残らない。`#claimManagerId()` を呼ぶ前に区別できる
+     * 理由で断れば、両方を避けられる——`managerId` を1つも消費せず、エラーが
+     * 原因を名指しする。
+     *
+     * `input.cwd` が明示されていれば、runner の `workspacePath` を知らなくても
+     * 起こせる（フォールバックを使わないので、この窓は関係ない）。
+     */
+    if (input.cwd === undefined && !runner.workspacePathKnown) {
+      throw new Error(
+        `runner（runnerId=${runner.runnerId}）から workspacePath をまだ一度も聞けていないため、` +
+          'cwd を省いてマネージャーを起こせない（cwd の形が不正なのではない）。' +
+          'cwd を明示して起こすか、runner が /health で workspacePath を名乗ってから起こすこと（#402）。',
+      );
+    }
     const managerId = this.#claimManagerId();
     const cwd = input.cwd ?? runner.workspacePath;
     const now = this.#now();
@@ -1461,8 +1507,9 @@ class Pool implements ManagerPool {
          * （台帳では走っているのに誰も走っていない仕事が残る）。挑み直しの梯子へ
          * 載せる — 梯子は間隔を伸ばすが**回数では諦めない**（`#scheduleReattach`）。
          *
-         * 他の理由（`no-session` / `unreadable` / `busy`）はここでは何もしない
-         * （それぞれ別の経路が持っている）。
+         * 他の理由（`no-session` / `unreadable` / `busy` / `workspace-path-unknown`）
+         * はここでは何もしない（それぞれ別の経路が持っている、または
+         * `manager_send` からの送り直しでしか解けない）。
          */
         if (ok === 'held-by-lease') {
           // **判断として残す。** 「何もしなかった」は日誌から消えやすいが、
@@ -2579,6 +2626,14 @@ class Pool implements ManagerPool {
   ): Promise<ResumeOutcome> {
     const { sessionId, cwd, request, projectKey } = record.job;
     if (sessionId === undefined) return 'no-session';
+
+    /*
+     * **`cwd` を記録しておらず、runner からも `workspacePath` を一度も聞けて
+     * いないなら、ここで断る（#402）。** `#claimForResume` / `#loadSession`
+     * より前に見るのは、後段が空振りする（貸し出しを立てる・生ログを引く）前に
+     * 分かる条件だからである——`ResumeOutcome.workspace-path-unknown` の doc。
+     */
+    if (cwd === undefined && !runner.workspacePathKnown) return 'workspace-path-unknown';
 
     // **貸し出しの関門はここ1つ。** 通らなければ resume そのものを出さない
     // （生きている器で走っている仕事を奪いに行かない）。
@@ -3771,6 +3826,13 @@ function resumeFailureDetail(
       );
     case 'busy':
       return `${managerId} は器の入れ替えから取り直している最中である。少し置いてから送り直すこと。`;
+    case 'workspace-path-unknown':
+      return (
+        `${managerId} は cwd を記録しておらず、runner からも workspacePath を一度も聞けていない` +
+        '（cwd の形が不正なのではない）。manager_send に cwd を渡す口は無いので、送り直しでは直らない。' +
+        '新しく起こし直すと続きは失われる——起こし直す前に、この runner が workspacePath を' +
+        '名乗れているか（別の runner への切り替えも含め）を確かめること。'
+      );
     default: {
       const exhaustive: never = outcome;
       throw new Error(`未知の resume の結果: ${JSON.stringify(exhaustive)}`);

@@ -5878,3 +5878,142 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
     expect(synced.at(-1)).toBe('runner-test');
   });
 });
+
+/**
+ * `workspacePath` を一度も聞けていない runner に対して、`cwd` を省いて
+ * マネージャーを起こす／取り直すと、既定値 `''` が `cwd` として組み立てられ、
+ * runner 側の `cwd: z.string().min(1)`（`runner-protocol.ts`）に「cwd の形が
+ * 不正」として弾かれる（#402）。真因（workspacePath 未取得）が別の顔で
+ * 報告される、というのがこの Issue の症状——ここでは、その手前で区別できる
+ * 形にして断ることを測る。
+ *
+ * **どちらの箇所も `RunnerClient.workspacePathKnown` を見る。** これは
+ * `HttpRunner` の生成時に呼ばれる `hello()` が1回だけ立てるフラグで
+ * （`apps/daemon/src/runner-client.ts`）、`createLocalRunner`（`setup()` の既定）
+ * は常に `true` を返すため、この歯は `workspacePathKnown: false` の
+ * 偽物（`swappableRunner` を上書きしたもの）でしか踏めない。
+ */
+describe('workspacePath を一度も聞けていない runner への cwd 省略（#402）', () => {
+  it('start(): cwd を省くと、cwd の形ではなく「workspacePath を聞けていない」で断り、managerId を消費しない', async () => {
+    const fake = swappableRunner('runner-primary');
+    const runner: RunnerClient = { ...fake.runner, workspacePathKnown: false, workspacePath: '' };
+    const s = setup(undefined, { runner });
+
+    let caught: unknown;
+    try {
+      await s.pool.start({ request: 'ログイン周りを直して' });
+    } catch (error) {
+      caught = error;
+    }
+    // **真因（workspacePath 未取得）を名指ししていることを見る。** 文言自体は
+    // 「cwd の形が不正なのではない」とも明示している（誤読防止）ので、
+    // 「cwd の形」という部分文字列そのものを禁止する assertion は立てない
+    // ——それを立てると、この否定の一文自体に引っかかって自己矛盾する
+    // （実際に CI で踏んだ）。ここで測るべきは「workspacePath という真因が
+    // 出ているか」であって「cwd という語が出ていないか」ではない。
+    expect(String(caught)).toContain('workspacePath をまだ一度も聞けていない');
+
+    // **managerId を1つも消費していない。** ここで断らずに `runner.start()` まで
+    // 進んでいたら、そちらが投げた時点で `#claimManagerId()` が発行した id は
+    // `#records.delete()` されて `list()` からは見えなくなる（`start()` の
+    // 「起こせなかったものを一覧に残さない」のコメントと同じ結果）——今回は
+    // それ以前で止まったことを、台帳・像のどちらにも1件も残っていないことで見る。
+    expect(await s.pool.list()).toHaveLength(0);
+
+    await s.pool.stop();
+  });
+
+  it('start(): cwd を明示すれば、workspacePath を聞けていない runner でも起こせる（フォールバックを使わないので窓に触れない）', async () => {
+    const fake = swappableRunner('runner-primary');
+    const runner: RunnerClient = { ...fake.runner, workspacePathKnown: false, workspacePath: '' };
+    const s = setup(undefined, { runner });
+
+    const started = await s.pool.start({
+      request: 'ログイン周りを直して',
+      cwd: '/work/explicit',
+    });
+    expect(started.cwd).toBe('/work/explicit');
+
+    await s.pool.stop();
+  });
+
+  it('start(): workspacePath を聞けている runner なら、cwd を省いても従来どおり runner.workspacePath へ倒す（回帰）', async () => {
+    const fake = swappableRunner('runner-primary'); // workspacePathKnown は既定で true
+    const s = setup(undefined, { runner: fake.runner });
+
+    const started = await s.pool.start({ request: 'ログイン周りを直して' });
+    expect(started.cwd).toBe('/work/project');
+
+    await s.pool.stop();
+  });
+
+  it('resume(): cwd を記録しておらず runner からも workspacePath を聞けていないと、「聞けていない」で断る（cwd の形ではない）', async () => {
+    const id = 'mgr-no-cwd';
+    const stores = createMemoryStores();
+    // **`cwd` を持たない委譲。** `jobSchema.cwd` は optional なので、これより
+    // 前の形式で作られた委譲、または一度も cwd 解決を経ていない記録を模す。
+    const record: Job = {
+      id,
+      managerId: id,
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      status: 'running',
+      summary: '長い仕事',
+      request: 'DB の移行をやって',
+      sessionId: `sess-${id}`,
+      runnerId: 'runner-test',
+    };
+    await stores.jobs.putJob(record);
+
+    const fake = swappableRunner('runner-test');
+    const runner: RunnerClient = { ...fake.runner, workspacePathKnown: false, workspacePath: '' };
+    const s = setup(undefined, { stores, runner });
+
+    await s.pool.restore();
+    // `#restoreJobs` は `held-by-lease` 以外の失敗（新設の
+    // `workspace-path-unknown` を含む）を黙って見送るので、`record.attached` は
+    // false のまま残る（「他の理由はここでは何もしない」のコメント）。
+
+    const result = await s.pool.send(id, '続けて');
+    expect(result.outcome).toBe('unknown');
+    // **真因（workspacePath 未取得）を名指ししていることを見る。** 上の
+    // `start()` の歯と同じ理由で「cwd の形」という部分文字列そのものを
+    // 禁止する assertion は立てない（文言が「cwd の形が不正なのではない」と
+    // 明示するため、その否定文自体に引っかかって自己矛盾する）。
+    expect(result.detail).toContain('workspacePath を一度も聞けていない');
+
+    // **resume が実際には呼ばれていないことも見る。** `cwd: ''` を組み立てて
+    // runner へ渡していれば、ここが1件以上になる。
+    expect(fake.state.resumes).toHaveLength(0);
+
+    await s.pool.stop();
+  });
+
+  it('resume(): cwd を記録していなくても、runner が workspacePath を聞けていれば従来どおり resume できる（回帰）', async () => {
+    const id = 'mgr-no-cwd-known';
+    const stores = createMemoryStores();
+    const record: Job = {
+      id,
+      managerId: id,
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      status: 'running',
+      summary: '長い仕事',
+      request: 'DB の移行をやって',
+      sessionId: `sess-${id}`,
+      runnerId: 'runner-test',
+    };
+    await stores.jobs.putJob(record);
+
+    const fake = swappableRunner('runner-test'); // workspacePathKnown は既定で true
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    await s.pool.restore();
+
+    expect(fake.state.resumes).toHaveLength(1);
+    // 記録に `cwd` が無いので、既存のフォールバック（`runner.workspacePath`）を通る。
+    expect(fake.state.resumes[0]?.cwd).toBe('/work/project');
+
+    await s.pool.stop();
+  });
+});
