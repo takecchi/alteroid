@@ -3070,7 +3070,15 @@ class Clone implements CloneHost {
    */
   async #noteDenial(source: unknown, via: 'live' | 'result'): Promise<void> {
     const denial = source as
-      { tool_name?: unknown; tool_use_id?: unknown; decision_reason?: unknown } | null | undefined;
+      | {
+          tool_name?: unknown;
+          tool_use_id?: unknown;
+          decision_reason?: unknown;
+          decision_reason_type?: unknown;
+          message?: unknown;
+        }
+      | null
+      | undefined;
     const tool = typeof denial?.tool_name === 'string' ? denial.tool_name : UNKNOWN_TOOL_NAME;
     // id が無ければ道具の名前で代用する。**取りこぼすより重複を許す。**
     const toolUseId =
@@ -3080,7 +3088,19 @@ class Clone implements CloneHost {
     if (this.#deniedToolUses.has(toolUseId)) return;
     this.#deniedToolUses.set(toolUseId, true);
 
-    const why = typeof denial?.decision_reason === 'string' ? `（${denial.decision_reason}）` : '';
+    // `decision_reason` / `decision_reason_type` / `message` は3つとも
+    // `via: 'result'` では必ず欠け、`via: 'live'` でも SDK が付けてこなければ
+    // 欠ける（`runner.ts` の `#noteDenial` と同じ前提）。**欠けているものは
+    // 作り物を出さず、そのまま行を省く**（`manager.ts` の `permission_denied`
+    // 受信での組み立てと同じ形）。
+    const denialDetails = [
+      typeof denial?.decision_reason_type === 'string'
+        ? `分類: ${denial.decision_reason_type}`
+        : undefined,
+      typeof denial?.decision_reason === 'string' ? `理由: ${denial.decision_reason}` : undefined,
+      typeof denial?.message === 'string' ? `モデルへの拒否文: ${denial.message}` : undefined,
+    ].filter((line): line is string => line !== undefined);
+    const why = denialDetails.length > 0 ? `（${denialDetails.join(' / ')}）` : '';
     await this.#journal({
       type: 'exchange',
       with: 'self',
