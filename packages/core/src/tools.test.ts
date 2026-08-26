@@ -2208,6 +2208,26 @@ describe('クローンの道具', () => {
      * ⚠️ 対照。**能力を消していないこと**を測る —— 明示すれば従来どおり組める。
      * これが緑でなければ、上の2本は「全部落ちるようになった」だけを見ている。
      */
+    /**
+     * ⭐ **型の側の歯。** 上の2本は「実行時に落ちるか」を測っているが、
+     * **必須化そのものを型で戻す変異（`memoryCause?:` に付け直す）を撃つ歯が
+     * 無かった** —— 型は歯ではないので、`tsc` が通ってしまえば誰も見ていない。
+     *
+     * `@ts-expect-error` は「次の行は型エラーになるはずだ」という主張で、
+     * **実際にエラーにならなければ `@ts-expect-error` 自身が「不要な抑制」として
+     * `pnpm typecheck` を落とす**（この作法と理由は `prompt.test.ts` に既に在る。
+     * `grep -Fn -- '「不要な抑制」として' packages/core/src/prompt.test.ts`）。
+     * ⟹ **`memoryCause` を optional に戻すと、ここが `pnpm typecheck` を落とす。**
+     */
+    it('⭐ 型の側: memoryCause を省いた ToolContext は、そもそも型として組めない', () => {
+      const wontTypeCheck = () =>
+        // @ts-expect-error memoryCause は必須。省いた形は型として組めない。
+        createCloneTools({ stores: createMemoryStores(), emit: () => undefined });
+      // 実行はしない（実行時に落ちることは上の2本が測っている）。ここが測るのは
+      // **型として組めないこと**だけである。
+      expect(typeof wontTypeCheck).toBe('function');
+    });
+
     it('対照: memoryCause を明示すれば、従来どおり道具が組める', () => {
       const tools = createCloneTools({
         stores: createMemoryStores(),
