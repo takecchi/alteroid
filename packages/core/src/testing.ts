@@ -872,6 +872,40 @@ export function failingInboxPut(stores: Stores, reason: string): Stores {
   };
 }
 
+/**
+ * `inbox.remove` を最初の `failCount` 回だけ失敗させ、それ以降は本物へ委ねる。
+ *
+ * **`#forget` の拾い直し（issue #256、`FORGET_RETRY_ATTEMPTS`）を試すためのもの。**
+ * `#forget` は「消せると確定するまでメモリ上の印を消さない」ので、`remove` が
+ * 一時的に失敗しても拾い直せば実際に消える——これを黒箱（`stores.inbox` の
+ * 中身）から確かめる。呼ばれた `id` は `calls` に積む。
+ */
+export function flakyInboxRemove(
+  stores: Stores,
+  failCount: number,
+  reason: string,
+): { stores: Stores; calls: string[] } {
+  const calls: string[] = [];
+  let remaining = failCount;
+  return {
+    calls,
+    stores: {
+      ...stores,
+      inbox: {
+        ...stores.inbox,
+        remove: (id: string) => {
+          calls.push(id);
+          if (remaining > 0) {
+            remaining -= 1;
+            return Promise.reject(new Error(reason));
+          }
+          return stores.inbox.remove(id);
+        },
+      },
+    },
+  };
+}
+
 /** ジョブ台帳の書き込みだけを失敗させる（読みは通す）。 */
 export function failingJobWrite(stores: Stores, reason: string): Stores {
   return {

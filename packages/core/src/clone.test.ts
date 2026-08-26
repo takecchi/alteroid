@@ -42,6 +42,7 @@ import {
   captureStderr,
   createMemoryStores,
   failingJournalAppend,
+  flakyInboxRemove,
   humanMessage,
 } from './testing.js';
 
@@ -2937,6 +2938,71 @@ describe('クローン — 壊れ方の回帰', () => {
 
     await s.clone.stop();
   });
+});
+
+/**
+ * `#forget` の消し込み（`inbox.remove`）まわりの直し（issue #256）。
+ *
+ * **終了条件は2つ**——(1) `commitment_close` と `inbox.remove` の間に失敗が
+ * 挟まっても検出できない状態を無くす（ここでは `remove` 単体の一時的な失敗を
+ * 拾い直す形で対応する。理由は `#forget` の doc を見よ——ターンをまたぐ
+ * トランザクションは安全に組めない） (2) `#forget` のメモリ上の印
+ * （`#unread` / `#redelivered` / `#redeliveredClosed`）のクリアが `remove`
+ * 成功後に回ること。(2) は private field なので直接は見えないが、**(2) が
+ * 直っていなければ (1) の拾い直しは成立しない**（印を先に消すと、拾い直しの
+ * 意味が無くなる）——なので下の「拾い直して実際に消える」テストは (2) の
+ * 間接証拠でもある。
+ */
+describe('クローン — commitment_close と inbox.remove の消し込み（issue #256）', () => {
+  it('inbox.remove が一時的に失敗しても、拾い直して実際に消える', async () => {
+    const base = createMemoryStores();
+    // 最初の2回だけ失敗させ、3回目（FORGET_RETRY_ATTEMPTS の最後）で成功させる。
+    const { stores, calls } = flakyInboxRemove(base, 2, '瞬断');
+    const s = setup(() => 'わかった', stores);
+
+    const event = humanMessage('やあ');
+    s.clone.post(event);
+    await waitForDone(s.events);
+
+    // `done` はターンの `try` の中で先に届く。`#forget` の拾い直し
+    // （`FORGET_RETRY_MS` の待ちを挟む）は `finally` 側の後始末なので、
+    // 消えるまで別に待つ。
+    await waitFor(async () => {
+      const pending = await stores.inbox.claimPending();
+      return !pending.some((p) => p.event.id === event.id);
+    }, '拾い直した末に inbox から消える');
+    expect(calls.length).toBe(3);
+
+    await s.clone.stop();
+  }, 10_000);
+
+  it('拾い直しても消せなければ、跡を残したうえで消さずに次の起動へ委ねる', async () => {
+    const base = createMemoryStores();
+    // `FORGET_RETRY_ATTEMPTS`（3）を超えて恒久的に失敗させる。
+    const { stores, calls } = flakyInboxRemove(base, 10, '恒久的な障害');
+    const s = setup(() => 'わかった', stores);
+
+    const event = humanMessage('やあ');
+    const lines = await captureStderr(async () => {
+      s.clone.post(event);
+      await waitForDone(s.events);
+      // 拾い直しの間隔（`FORGET_RETRY_MS` × (1+2) ≒ 600ms）ぶん待って
+      // 諦めきるのを待つ。
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+    });
+
+    // 消せなかったことが跡として残る（黙って消えていない）。
+    expect(lines.some((line) => line.includes('未読の消し込み'))).toBe(true);
+    // **消していない** — ストアにはまだ残っていて、次の起動
+    // （`#restoreUnread` の配り直し、issue #217）に委ねられる。issue #256 が
+    // 壊さないよう指示している「消せなかったものは次の起動で配り直される」
+    // 設計そのものである。
+    const pending = await stores.inbox.claimPending();
+    expect(pending.some((p) => p.event.id === event.id)).toBe(true);
+    expect(calls.length).toBe(3);
+
+    await s.clone.stop();
+  }, 10_000);
 });
 
 /**
