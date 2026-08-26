@@ -3177,6 +3177,12 @@ class Clone implements CloneHost {
     // 触らない。触ると本セッションの差分が消える。
     const memory = renderMemoryDocuments(await this.#stores.persona.documents());
 
+    // **このターンへ何が入ったかを残す**（#243 の7本目）。本文は会話の生ログの
+    // 末尾で、他の5経路の `digest` のように器から組み直せる寄せ集めではないので、
+    // 長さに加えて指紋も書く（何を載せるかの判断は `turnInputEntry` に1本化して
+    // ある）。
+    await this.#journal(turnInputEntry({ type: 'pre_compact_distill', transcriptTail }));
+
     const prompt = [
       buildDistillPrompt('pre_compact'),
       '',

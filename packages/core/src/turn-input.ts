@@ -1,10 +1,11 @@
+import { fingerprintOf } from './credentials.js';
 import type { JournalEntryInput } from './schema.js';
 
 /**
  * クローンのターンへ**何が入力されたか**を日誌の1行へ写す（Issue #243）。
  *
  * 日誌は「起きたこと」（応答・判断・記憶の更新・失敗）は持っていたが、
- * **そのターンが何を読んで動いたか**を持っていない経路が6本あった。とくに
+ * **そのターンが何を読んで動いたか**を持っていない経路が7本あった。とくに
  * `digest`（`digest.ts`）経由でマネージャーの `直近の報告:`（200字の抜粋）が
  * クローンのターンへ入るのに、日誌には1行も残らない。そのせいで
  * 「受け取ったと思っていた報告が、実際に出されていたか」が後から判定できない。
@@ -15,6 +16,7 @@ import type { JournalEntryInput } from './schema.js';
  * | --- | --- | --- |
  * | 人間の回答（`human_answer`） | **全文** | 入力そのものがそのターンにしか無い |
  * | `distill` / `timer` / `self_initiative` / `daily_report` | **形＋材料の id ＋ `chars=N`** | 中身は `digest` ＝**既存の記録（日誌と台帳）の寄せ集め**だから |
+ * | `pre_compact_distill`（PreCompact のサイドセッション、`#distillFromTranscript`） | **形＋`chars=N`＋指紋** | 材料は**会話の生ログの末尾**で、`digest` のように器から組み直せる寄せ集めではなく、任意の道具の出力を含みうる（#52 と同種の懸念）。全文も抜粋も採れないので、長さに加えて指紋を残す（決裁 2026-08-26） |
  *
  * **形と材料の id と長さだけを残せば、そのターンへ何が入ったかは後から組み直せる。**
  * digest は日誌・台帳・承認待ち・継続中の依頼・消費から組み直したもので、材料は
@@ -117,6 +119,23 @@ export type TurnInput =
    * 終わったのかは、後から見分けたい側である）。
    */
   | { type: 'distill'; reason: 'conversation_end' | 'shutdown'; prompt: string }
+  /**
+   * PreCompact のサイドセッション（`#distillFromTranscript`）が、要約に潰される
+   * 直前の会話ログの末尾を渡して起こすターン（Issue #243 の7本目）。
+   *
+   * **上の `distill` とは材料の性質が違う。** あちらの本文は `buildDistillPrompt`
+   * の定型文で、発火ごとに変わるのは `reason` だけだった。こちらの
+   * `transcriptTail` は**会話の生ログの末尾**そのものであり、`digest` のように
+   * 日誌・台帳・承認待ちから組み直した寄せ集めではない——任意の道具の出力を
+   * 含みうる（`dropped-record.ts` が退けている #52 と同種の懸念）。
+   *
+   * **だから `chars=N` だけでは足りない。** `chars` が同じ2つの入力が同じ内容とは
+   * 限らないので、内容が変わったこと自体を後から確かめる手段が要る。**全文も
+   * 抜粋も採らず、長さに加えて指紋（`credentials.ts` の `fingerprintOf` と同じ
+   * sha256 先頭12桁）を残す**（決裁 2026-08-26、Issue #243 のフォローアップ
+   * コメント）。
+   */
+  | { type: 'pre_compact_distill'; transcriptTail: string }
   /** 人間が承認待ちへ答えた分を配ったターン。 */
   | { type: 'human_answer'; approvalId: string; text: string }
   /** 片付け済みの配り直しで、本文の代わりに断り書きだけを配ったターン。 */
@@ -164,6 +183,15 @@ function describeTurnInput(input: TurnInput): string {
       return (
         `ターンの入力: distill reason=${tag(input.reason)} ${size(input.prompt, 'prompt')}` +
         '（本文は `buildDistillPrompt` の定型文で、この発火ごとに変わるものは reason だけである）'
+      );
+    // **`digest` の4本とは違い、`chars=N` だけでなく指紋も残す。** 材料が会話の
+    // 生ログの末尾で、器から組み直せる寄せ集めではないため（`TurnInput` の doc）。
+    case 'pre_compact_distill':
+      return (
+        `ターンの入力: pre_compact_distill ${size(input.transcriptTail, 'tail')} ` +
+        `tail.fp=${fingerprintOf(input.transcriptTail)}` +
+        '（本文は要約直前の会話ログの末尾で、任意の道具の出力を含みうる。' +
+        '全文も抜粋も載せず、長さと指紋だけを残す）'
       );
     // **全文を写す。** 人間の回答は、そのターンへ入った形（質問・回答・宛先を
     // 1本にしたもの）としてはここにしか無い。回答そのものは承認待ちの器
