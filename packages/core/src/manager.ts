@@ -619,6 +619,22 @@ interface ManagerRecord {
    */
   asked?: RecentMap<true>;
   /**
+   * **一度でも処理した報告（`report`）の id（#206）。`asked` と同型。**
+   *
+   * `report` には `waiting` に相当する「いま待っている」像が無い——1本の
+   * 報告は届いた瞬間に台帳・日誌・受信箱へ通り終える。だから `asked` のように
+   * 「まだ解決していないものだけを見る」形は要らず、**見た id をそのまま
+   * 覚えておいて、再送を弾く**だけでよい。
+   *
+   * **`event.reportId` が無い回（旧 runner）はここに載せない。** `case
+   * 'report':` のガードを参照——載せないのは「冪等化を諦める」判断で、
+   * 落とす判断ではない。
+   *
+   * 最初の `report` で作る。寿命と件数の蓋は `asked` と同じ理由
+   * （`REPORTED_MEMORY_LIMIT`）。
+   */
+  reported?: RecentMap<true>;
+  /**
    * **道具ごとの、確認へ上がらず止められた件数。**
    *
    * 拒否は正常な運用でも起きるので、1件ずつ受信箱へ流すとクローンの判断が雑音で
@@ -690,6 +706,16 @@ const NOTIFY_REPORT_EXCERPT = 240;
 
 /** 1マネージャーぶんで覚えておく確認の件数。達したら**黙らずに日誌へ残す**。 */
 const ASKED_MEMORY_LIMIT = 512;
+
+/**
+ * 1マネージャーぶんで覚えておく報告（`report`）の件数（#206）。
+ *
+ * `report` は `ask` と違って「解決」で消える口が無い（`settled` に相当する
+ * ものが無い）ので、`ASKED_MEMORY_LIMIT` と同じ値にしておく強い理由も無い。
+ * 1本のセッションが吐く report の回数は ask とおおむね同じ桁（1ターンに
+ * 高々数件）なので、まずは揃えておく——実測で偏りが分かったら値だけ分ける。
+ */
+const REPORTED_MEMORY_LIMIT = 512;
 
 /**
  * 1マネージャーぶんで拒否を数える道具の種類。達したら**黙らずに日誌へ残す**。
@@ -2809,6 +2835,22 @@ class Pool implements ManagerPool {
           });
           return;
         }
+        // **reportId で冪等に（#206）。** `ask` の `requestId`（直後の
+        // `case 'ask':` の `#askedOf` を参照）と同型 — 同じ報告が二度届いても、
+        // 台帳・日誌・クローンの受信箱のどれにも二度書かない。
+        //
+        // **旧 runner（`reportId` を送らない版）はここを素通りする。**
+        // `reportId` は `runnerEventSchema` にこの変更で足した `.optional()`
+        // の欄なので、無ければ「冪等化を諦める」——この分岐に入れず、これまで
+        // どおり毎回処理する。**黙って捨てる（拒む）方は選んでいない**——
+        // 旧 runner からの report を無条件に捨てると、この変更が入る前より
+        // 悪い挙動（本物の報告が消える）になる。id が無ければ二重配達を
+        // 見分けられないだけで、それはこの変更が入る前からの状態のままである。
+        if (event.reportId !== undefined) {
+          const reported = this.#reportedOf(record);
+          if (reported.has(event.reportId)) return;
+          reported.set(event.reportId, true);
+        }
         record.job.lastReport = event.text;
         // **デーモンが受け取った時刻**（#358）。runner がこの報告を包んだ時刻
         // でも、クローンのターンへ入った時刻でもない — `lastReportAt` の doc
@@ -3435,6 +3477,36 @@ class Pool implements ManagerPool {
     });
     record.asked = asked;
     return asked;
+  }
+
+  /**
+   * 処理済みの報告（`report`）の帳面（#206）。無ければここで作る。`#askedOf`
+   * と同型。
+   *
+   * 上限に達したら**黙って忘れない** — 忘れた id の `report` が再送されると、
+   * それは新しい報告としてもう一度クローンへ回る。日誌に残っていなければ、
+   * 「なぜ同じ報告が二度来たのか」を後から誰も辿れない。
+   */
+  #reportedOf(record: ManagerRecord): RecentMap<true> {
+    const existing = record.reported;
+    if (existing !== undefined) return existing;
+    const managerId = record.job.id;
+    const reported = createRecentMap<true>({
+      limit: REPORTED_MEMORY_LIMIT,
+      onForget: (ids) => {
+        void this.#journal({
+          type: 'exchange',
+          with: 'manager',
+          role: 'inbound',
+          text:
+            `[${managerId}] 処理済みの報告の記憶が上限（${REPORTED_MEMORY_LIMIT}件）に達したので、` +
+            `古い ${ids.length} 件を忘れた: ${ids.join(', ')}。` +
+            'この id の報告が再送されると、新しい報告としてもう一度回る。',
+        });
+      },
+    });
+    record.reported = reported;
+    return reported;
   }
 
   /**

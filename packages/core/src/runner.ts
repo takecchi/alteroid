@@ -1743,6 +1743,12 @@ class RunnerSession {
     this.#emit({
       type: 'report',
       managerId: this.#id,
+      // **#206: `message.uuid` を運ぶ。** SDK がこの `result` に払った id で、
+      // `#onPermission` が `extra.requestId` / `extra.toolUseID` をそのまま
+      // 使うのと同じ作法——runner が新しい値を振るのではなく、SDK 側の
+      // 識別子をそのまま `reportId` として運ぶ（`runnerEventSchema` の
+      // `report.reportId` の doc）。
+      reportId: message.uuid,
       text: outcome.text,
       status: this.#status,
       ...(failure === undefined ? {} : { failure: { code: failure.code, via: failure.via } }),

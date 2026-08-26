@@ -438,6 +438,32 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('report'),
     managerId: z.string(),
+    /**
+     * **この報告の一意な id（#206）。`ask` の `requestId` と同型。**
+     *
+     * `ask` 側は SDK が渡す `requestId` / `toolUseID`（無ければ `randomUUID()`）を
+     * `#onPermission` で1度だけ取り、それを再送のたびに使い回すことで、
+     * デーモン側の `RecentMap` が「もう配った確認」を見分けられる
+     * （`#askedOf` の doc）。`report` にはこれまで対応する id が無く、二重配達を
+     * 見分ける手が構造的に無かった——これが #206 の指す非対称そのものである。
+     *
+     * **runner 側で発行し、接続をまたいで安定する値を使う。** ここでは
+     * `runner.ts` の `#dispatch` が `result` メッセージそのものから取る
+     * `message.uuid`（SDK が result ごとに払う id）を渡す。`ask` の
+     * `requestId`/`toolUseID` と同じく、**runner が自分で新しい値を毎回
+     * 振るのではなく、SDK 側の識別子をそのまま運ぶ**——`manager.ts` の
+     * `ManagerPool#emit` が `randomUUID()` を毎回振ってしまうために `event.id`
+     * を鍵にした冪等化が効かなかった、という #206 の教訓（棚卸しコメント）を
+     * 踏まえた選び方である。
+     *
+     * **`.optional()` にしてあるのは、旧 runner（この欄を送らない版）を
+     * 壊さないため。** `kind` を除く `ask` の追加欄（`askedAt` 等）と同じ作法
+     * （`waitingKindSchema` の doc）。`reportId` が無い report を
+     * `manager.ts` の `case 'report':` がどう扱うかは、その分岐の doc を
+     * 参照——**黙って捨てはしない**（`AGENTS.md`「取れない軸に0の行を
+     * 作らない」）。
+     */
+    reportId: z.string().optional(),
     text: z.string(),
     status: jobStatusSchema,
     /**
