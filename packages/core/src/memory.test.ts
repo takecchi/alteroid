@@ -12,10 +12,12 @@ import {
   cutMemorySection,
   deriveMemoryCreatedAtFromJournal,
   deriveMemoryFrontmatter,
+  describeMemoryFloor,
   describeMemoryProtectionStatus,
   describeMemoryWriteDiff,
   isKnownMemoryDocKind,
   lookupMemorySection,
+  measureMemoryFloor,
   memoryBodyStart,
   memoryProtectionAllowsFullReplace,
   memorySectionId,
@@ -768,6 +770,46 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
     expect(rendered).toContain('親 not-exist が見つからない');
   });
 
+  /**
+   * ⭐ fact の parent が premise を指すと「見つからない」と出る欠陥の修正。
+   *
+   * `renderMemoryDocuments` の目次（`renderMemoryToc`）は fact だけを対象に
+   * 組む——premise は目次の `bySlug` に居ない。だから親が premise として
+   * 実在していても、目次だけを見ると「見つからない」になっていた（同じ
+   * データが `memory_list` では正常に解決するのに、面によって答えが違う
+   * 欠陥）。
+   *
+   * **⚠️ 器は必ず premise 2件 + fact 1件を持つ**（AGENTS.md「測るのは
+   * 呼び出し回数ではなく状態である」）。premise が0件の器では、
+   * 「親が premise」と「親がそもそも無い」の2分岐が両方「見つからない」に
+   * 畳まれてしまい、この歯が変異を検出できなくなる。
+   *
+   * **2つの `it()` に分ける**（畳むと、どちらか一方の分岐を潰す変異が生存する）。
+   */
+  it('⭐ 親が premise を指すときは「見つからない」ではなく「在るが、目次には出ない」と言う', () => {
+    const rendered = renderMemoryDocuments([
+      premise('core-a', '前提A'),
+      premise('core-b', '前提B'),
+      fact('child', { description: '子', freshness: { kind: 'fresh' }, parent: 'core-a' }),
+    ]);
+    expect(rendered).toContain('親 core-a は在るが、この目次は fact だけを列挙する');
+    expect(rendered).not.toContain('親 core-a が見つからない');
+  });
+
+  it('親が本当に存在しない slug なら、従来どおり「見つからない」のまま', () => {
+    const rendered = renderMemoryDocuments([
+      premise('core-a', '前提A'),
+      premise('core-b', '前提B'),
+      fact('child', {
+        description: '子',
+        freshness: { kind: 'fresh' },
+        parent: 'really-not-exist',
+      }),
+    ]);
+    expect(rendered).toContain('親 really-not-exist が見つからない');
+    expect(rendered).not.toContain('在るが、この目次は fact だけを列挙する');
+  });
+
   it('循環する parent を黙って落とさない', () => {
     const rendered = renderMemoryDocuments([
       fact('cycle-a', { description: 'A', freshness: { kind: 'fresh' }, parent: 'cycle-b' }),
@@ -871,6 +913,48 @@ describe('renderMemoryListing — `memory_list` 用の一覧。全区分を対�
 
     expect(listing).toContain('作成: 2026-01-02T03:04:05.000Z');
     expect(listing).toContain('更新: 2026-08-21T00:00:00Z');
+  });
+
+  /**
+   * ⭐ 案4（`renderMemoryTocIssue` の `parent-not-listed`）の副作用が無いこと。
+   *
+   * `renderMemoryListing` は全区分（premise も fact も）を `entries` に含めて
+   * `resolveMemoryHierarchy(tocEntries)` を呼ぶ——`knownElsewhere` を渡さない。
+   * だから親が premise でも `bySlug` に直接見つかり、新しい3つ目の状態
+   * （`parent-not-listed`）は構造的に起こりえない（既定値が空集合なので、
+   * `renderMemoryToc` 側の変更はこの経路に一切効かない）。ここではそれを
+   * 実際の出力で確かめる——親が premise を指す fact が、印を1つも出さずに
+   * 通常どおり親子で解決されること。
+   */
+  it('⭐ 親が premise を指していても、一覧では通常どおり解決する（案4の副作用が無い）', () => {
+    const listing = renderMemoryListing([
+      {
+        slug: 'core',
+        title: 'Core',
+        kind: 'premise',
+        description: undefined,
+        descriptionFreshness: { kind: 'absent' },
+        parent: undefined,
+        updatedAt: '2026-08-21T00:00:00Z',
+        createdAt: { kind: 'unknown' },
+      },
+      {
+        slug: 'child',
+        title: 'Child',
+        kind: 'fact',
+        description: '子',
+        descriptionFreshness: { kind: 'fresh' },
+        parent: 'core',
+        updatedAt: '2026-08-21T00:00:00Z',
+        createdAt: { kind: 'unknown' },
+      },
+    ]);
+
+    expect(listing).toContain('[premise] core: Core');
+    expect(listing).toContain('[fact] child: Child');
+    expect(listing).not.toContain('見つからない');
+    expect(listing).not.toContain('列挙する');
+    expect(listing).not.toContain('循環');
   });
 
   it('createdAt が unknown なら「不明」と明言する（空文字で隠さない）', () => {
@@ -1388,5 +1472,279 @@ describe('節の切り取りは frontmatter の解釈を変えない（乗っ取
         expect(cut.split('\n')[0]).toMatch(/^#{1,6}\s/);
       }
     }
+  });
+});
+
+// =============================================================================
+// 記憶の肥大への恒久対策 — measureMemoryFloor / describeMemoryFloor
+// =============================================================================
+
+/**
+ * `measureMemoryFloor` — 「記憶の肥大」を測る。
+ *
+ * **⚠️ 器に premise 2件 + fact 1件を必ず持たせる（AGENTS.md
+ * 「測るのは呼び出し回数ではなく状態である」）。** fact が0件だと
+ * `filter(d => d.kind === 'premise')` を外す変異が同値になって生存し、
+ * premise が0件だと逆側の分岐が測れない。
+ */
+describe('measureMemoryFloor — 焼き込みの大きさを測る（記憶の肥大への恒久対策）', () => {
+  /** premise 2件 + fact 1件。中核の歯は必ずこの形の器を使う。 */
+  function mixedDocs(): MemoryPart[] {
+    return [
+      premise('p-small', '短い前提'),
+      premise('p-large', 'あ'.repeat(500)),
+      fact('f-one', { description: '要旨', freshness: { kind: 'fresh' } }),
+    ];
+  }
+
+  it('⭐ totalChars は renderMemoryDocuments(documents).length と厳密に一致する（複数の器で）', () => {
+    const fixtures: MemoryPart[][] = [
+      [],
+      [premise('only-premise', '本文')],
+      [fact('only-fact', { description: '要旨', freshness: { kind: 'fresh' } })],
+      mixedDocs(),
+      // malformed な frontmatter（premise として扱われ、注記が前置される）。
+      [{ slug: 'broken', content: '---\nauthor: 未知のキー\n---\n# Broken\n本文' }],
+      // 親が存在しない fact（目次に印が付く）。
+      [fact('orphan', { description: '説明', freshness: { kind: 'fresh' }, parent: 'not-exist' })],
+    ];
+    for (const docs of fixtures) {
+      expect(measureMemoryFloor(docs).totalChars).toBe(renderMemoryDocuments(docs).length);
+    }
+  });
+
+  it('premise 合計は premise の文書だけの合計に一致し、fact の分を含まない（器に fact 1件必須）', () => {
+    const docs = mixedDocs();
+    const floor = measureMemoryFloor(docs);
+    const premiseOnlyRendered = renderMemoryDocuments(
+      docs.filter((doc) => doc.slug.startsWith('p-')),
+    );
+
+    expect(floor.premiseDocs).toBe(2);
+    expect(floor.factDocs).toBe(1);
+    expect(floor.premiseChars).toBe(premiseOnlyRendered.length);
+    // fact の目次ぶんが乗っているぶん、全体は premise 合計より必ず大きい
+    // ——premise 合計に fact が混ざっていれば、この不等号は成り立たない
+    // か、たまたま一致してしまう（fact を0件にした器では測れない理由）。
+    expect(floor.totalChars).toBeGreaterThan(floor.premiseChars);
+    expect(floor.tocChars).toBeGreaterThan(0);
+  });
+
+  it('largestPremise は最も大きい premise を指す（`renderPremisePart` の結果の長さで比べる）', () => {
+    const docs = mixedDocs();
+    const floor = measureMemoryFloor(docs);
+    expect(floor.largestPremise?.slug).toBe('p-large');
+    expect(floor.largestPremise?.chars).toBeGreaterThan(500);
+  });
+
+  it('premise が1件も無ければ largestPremise は null', () => {
+    const floor = measureMemoryFloor([
+      fact('only-fact', { description: '要旨', freshness: { kind: 'fresh' } }),
+    ]);
+    expect(floor.largestPremise).toBeNull();
+  });
+
+  it('malformed な frontmatter の premise は、注記込みの長さで数える（`content.length` ではない）', () => {
+    const broken: MemoryPart = {
+      slug: 'broken',
+      content: '---\nauthor: 未知のキー\n---\n# Broken\n本文',
+    };
+    const floor = measureMemoryFloor([broken]);
+    // `content` そのものより長い——frontmatter が壊れている注記が前置されるため。
+    expect(floor.totalChars).toBeGreaterThan(broken.content.length);
+    expect(floor.largestPremise?.chars).toBe(floor.totalChars);
+  });
+
+  it('単位は文字（String.length）であって bytes ではない', () => {
+    // 全角5文字（UTF-8では15バイト）。
+    const docs = [premise('zenkaku', '価値観です')];
+    const floor = measureMemoryFloor(docs);
+    const rendered = renderMemoryDocuments(docs);
+    expect(floor.totalChars).toBe(rendered.length);
+    expect(floor.totalChars).not.toBe(Buffer.byteLength(rendered, 'utf8'));
+  });
+
+  it('⭐ 記憶を1バイトも書き換えない（`MemoryPart[]` を受け取るだけの純粋関数）', () => {
+    const docs = mixedDocs();
+    const before = docs.map((doc) => doc.content);
+    measureMemoryFloor(docs);
+    expect(docs.map((doc) => doc.content)).toEqual(before);
+  });
+});
+
+/**
+ * `describeMemoryFloor` — 書く4口（`memory_write` / `memory_append` /
+ * `memory_frontmatter_set` / `memory_section_move`）の応答の末尾に添える、
+ * 「毎ターンの床」の一言。
+ *
+ * **⭐ 新規作成の枝がいちばん声を大きい。** premise を新規作成したときだけ
+ * 「毎ターン全文が焼かれる」ことを言う——他の枝（fact の新規作成・既存文書の
+ * 更新）では言わない。
+ */
+describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作成の枝がいちばん声を大きい）', () => {
+  const emptyFloor = measureMemoryFloor([]);
+
+  it('⭐ premise の新規作成では、区分・床の遷移（文字）・「毎ターン全文が焼かれる」の3つが出る', () => {
+    const after = measureMemoryFloor([premise('new-doc', 'あ'.repeat(100))]);
+    const reply = describeMemoryFloor({
+      before: emptyFloor,
+      after,
+      slug: 'new-doc',
+      kind: 'premise',
+      created: true,
+    });
+
+    expect(reply).toContain('premise');
+    expect(reply).toContain(
+      `${emptyFloor.totalChars.toLocaleString('en-US')} 文字から ${after.totalChars.toLocaleString('en-US')} 文字へ`,
+    );
+    expect(reply).toContain('全文がそのままクローンの文脈へ焼かれる');
+    // 他の枝より明確に強い言い方（依頼の重心）。
+    expect(reply).toContain('⭐');
+  });
+
+  it('fact の新規作成では「全文が焼かれる」の1行が出ない', () => {
+    const after = measureMemoryFloor([
+      fact('new-fact', { description: '要旨', freshness: { kind: 'fresh' } }),
+    ]);
+    const reply = describeMemoryFloor({
+      before: emptyFloor,
+      after,
+      slug: 'new-fact',
+      kind: 'fact',
+      created: true,
+    });
+
+    expect(reply).toContain('fact');
+    expect(reply).not.toContain('全文がそのままクローンの文脈へ焼かれる');
+  });
+
+  it('既存文書の更新（新規作成ではない）では「全文が焼かれる」も⭐も出ない', () => {
+    const before = measureMemoryFloor([premise('doc', '短い本文')]);
+    const after = measureMemoryFloor([premise('doc', '短い本文をもっと増やした')]);
+    const reply = describeMemoryFloor({
+      before,
+      after,
+      slug: 'doc',
+      kind: 'premise',
+      created: false,
+    });
+
+    expect(reply).toContain('premise');
+    expect(reply).not.toContain('全文がそのままクローンの文脈へ焼かれる');
+    expect(reply).not.toContain('⭐');
+  });
+
+  it('⛔ 既存の語「区分が変わった」を使い回さない（tools.test.ts の歯と同じ語を撃たない）', () => {
+    const before = measureMemoryFloor([premise('doc', 'a')]);
+    const after = measureMemoryFloor([
+      fact('doc', { type: 'fact', description: '要旨', freshness: { kind: 'fresh' } }),
+    ]);
+    const reply = describeMemoryFloor({ before, after, slug: 'doc', kind: 'fact', created: false });
+
+    expect(reply).not.toContain('区分が変わった');
+  });
+
+  it('単位は文字である（bytes を出していない）', () => {
+    const after = measureMemoryFloor([premise('zenkaku', '価値観です')]);
+    const reply = describeMemoryFloor({
+      before: emptyFloor,
+      after,
+      slug: 'zenkaku',
+      kind: 'premise',
+      created: true,
+    });
+    expect(reply).toContain('文字');
+    expect(reply).not.toContain('bytes');
+  });
+
+  it('床の行は「いま読み直した値」であることを名乗る（read→write の間の書き換え窓があるため）', () => {
+    const after = measureMemoryFloor([premise('doc', '本文')]);
+    const reply = describeMemoryFloor({
+      before: emptyFloor,
+      after,
+      slug: 'doc',
+      kind: 'premise',
+      created: true,
+    });
+    expect(reply).toContain('いま読み直した値');
+  });
+
+  /**
+   * ⭐ premise の新規作成の枝には、「どこを見ればよいか」への回答（最大の
+   * premise を名指しする）と、「縮めるのに全文置換は要らないこと」（3手順の
+   * 道具名）を足す——依頼者が実際にこの枝で詰まった経験（`about-me-core` を
+   * 作った夜、応答が文字数だけだった）を踏まえた決裁。
+   *
+   * **稀にしか出ない枝だけに足す。** fact の新規作成・既存文書の更新には
+   * 足さない——別の `it()` で「出ない」ことを固定する（畳むと変異が生存する）。
+   */
+  it('⭐ premise の新規作成では、いま最大の premise の slug と文字数が出る', () => {
+    const after = measureMemoryFloor([
+      premise('small', '短い'),
+      premise('new-doc', 'あ'.repeat(500)),
+    ]);
+    const reply = describeMemoryFloor({
+      before: emptyFloor,
+      after,
+      slug: 'new-doc',
+      kind: 'premise',
+      created: true,
+    });
+
+    expect(after.largestPremise?.slug).toBe('new-doc');
+    expect(reply).toContain('いま最も大きい premise: new-doc');
+    expect(reply).toContain(`${after.largestPremise?.chars.toLocaleString('en-US')} 文字`);
+  });
+
+  it('⭐ premise の新規作成では、縮める3手順（memory_outline → memory_section_move → memory_frontmatter_set）の道具名が全部出る', () => {
+    const after = measureMemoryFloor([premise('new-doc', 'あ'.repeat(500))]);
+    const reply = describeMemoryFloor({
+      before: emptyFloor,
+      after,
+      slug: 'new-doc',
+      kind: 'premise',
+      created: true,
+    });
+
+    expect(reply).toContain('memory_outline');
+    expect(reply).toContain('memory_section_move');
+    expect(reply).toContain('memory_frontmatter_set');
+  });
+
+  it('⛔ fact の新規作成には、最大の premise の名指しも3手順も出ない（稀にしか出ない枝専用）', () => {
+    const after = measureMemoryFloor([
+      premise('some-premise', 'あ'.repeat(500)),
+      fact('new-fact', { description: '要旨', freshness: { kind: 'fresh' } }),
+    ]);
+    const reply = describeMemoryFloor({
+      before: emptyFloor,
+      after,
+      slug: 'new-fact',
+      kind: 'fact',
+      created: true,
+    });
+
+    expect(reply).not.toContain('いま最も大きい premise');
+    expect(reply).not.toContain('memory_outline');
+    expect(reply).not.toContain('memory_section_move');
+    expect(reply).not.toContain('memory_frontmatter_set');
+  });
+
+  it('⛔ 既存文書の更新（created: false）には、最大の premise の名指しも3手順も出ない', () => {
+    const before = measureMemoryFloor([premise('doc', '短い本文')]);
+    const after = measureMemoryFloor([premise('doc', '短い本文をもっと増やした')]);
+    const reply = describeMemoryFloor({
+      before,
+      after,
+      slug: 'doc',
+      kind: 'premise',
+      created: false,
+    });
+
+    expect(reply).not.toContain('いま最も大きい premise');
+    expect(reply).not.toContain('memory_outline');
+    expect(reply).not.toContain('memory_section_move');
+    expect(reply).not.toContain('memory_frontmatter_set');
   });
 });

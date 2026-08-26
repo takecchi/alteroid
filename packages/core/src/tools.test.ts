@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ManagerDenial, ManagerPool, ManagerSummary, RunnerFleetOverview } from './manager.js';
-import { renderMemoryDocuments } from './memory.js';
+import { measureMemoryFloor, renderMemoryDocuments } from './memory.js';
 import { createProfileService } from './profile-service.js';
 import { journalEntrySchema, type ChatStreamEvent } from './schema.js';
 import type { CloneRuntimeFacts } from './self.js';
@@ -554,6 +554,149 @@ describe('クローンの道具', () => {
       expect(reply).toContain('なし');
       // 元の見出しは残っている。
       expect((await h.stores.persona.read('notes'))?.content).toContain('## 節1');
+    });
+  });
+
+  /**
+   * ⭐ 記憶の肥大への恒久対策——`memory_write` / `memory_append` /
+   * `memory_frontmatter_set` / `memory_section_move` の応答の末尾に足す
+   * 「毎ターンの床」（`describeMemoryFloor`）。
+   *
+   * **`describeMemoryWriteDiff` の出力（上の78件級の `expect(reply)`）とは別の
+   * 追加行なので、ここでは新しく足した行だけを測る。**
+   */
+  describe('書く4口の応答に足す「毎ターンの床」（describeMemoryFloor、記憶の肥大への恒久対策）', () => {
+    it('⭐ premise を新規作成すると、区分・床の遷移（文字）・「毎ターン全文が焼かれる」の3つが出る', async () => {
+      const h = harness();
+
+      const reply = await h.call('memory_write', {
+        slug: 'about-me-core',
+        content: '# 私の芯\n\n'.concat('大事にしていること。'.repeat(50)),
+        summary: '新しい芯を作った',
+      });
+
+      expect(reply).toContain('premise');
+      expect(reply).toContain('毎ターンの床');
+      expect(reply).toContain('全文がそのままクローンの文脈へ焼かれる');
+      // 床は 0 文字から動く（この器では他に記憶が無い）。
+      expect(reply).toMatch(/0 文字から [\d,]+ 文字へ/);
+      // 読み直した値であることを名乗る。
+      expect(reply).toContain('いま読み直した値');
+    });
+
+    /**
+     * ⭐ premise の新規作成の枝には、最大の premise の名指しと、縮める3手順
+     * （memory_outline → memory_section_move → memory_frontmatter_set）が
+     * 実際の道具呼び出しの応答にも出ることを、`memory_write` 経由で確かめる
+     * （`memory.test.ts` は `describeMemoryFloor` を直接呼ぶ単体の歯。ここは
+     * ハンドラの配線まで含めて測る）。
+     */
+    it('⭐ premise を新規作成すると、いま最大の premise の名指しと、縮める3手順の道具名が出る', async () => {
+      const h = harness();
+      await h.call('memory_write', {
+        slug: 'small-premise',
+        content: '# 小さい前提\n短い',
+        summary: '先に小さい premise を作る',
+      });
+
+      const reply = await h.call('memory_write', {
+        slug: 'about-me-core',
+        content: '# 私の芯\n\n'.concat('大事にしていること。'.repeat(50)),
+        summary: '新しい芯を作った',
+      });
+
+      expect(reply).toContain('いま最も大きい premise: about-me-core');
+      expect(reply).toContain('memory_outline');
+      expect(reply).toContain('memory_section_move');
+      expect(reply).toContain('memory_frontmatter_set');
+    });
+
+    it('fact を新規作成しても「全文が焼かれる」の1行は出ない', async () => {
+      const h = harness();
+
+      const reply = await h.call('memory_write', {
+        slug: 'fact-doc',
+        content: '---\ntype: fact\ndescription: 事実\n---\n# 事実\n本文',
+        summary: '新規',
+      });
+
+      expect(reply).toContain('fact');
+      expect(reply).toContain('毎ターンの床');
+      expect(reply).not.toContain('全文がそのままクローンの文脈へ焼かれる');
+      // ⭐ 稀にしか出ない枝専用の要素（最大の premise の名指し・3手順）は、
+      // fact の新規作成には出ない。
+      expect(reply).not.toContain('いま最も大きい premise');
+      expect(reply).not.toContain('memory_outline');
+      expect(reply).not.toContain('memory_section_move');
+      expect(reply).not.toContain('memory_frontmatter_set');
+    });
+
+    it('memory_append の新規作成でも同じ3要素が出る（premise）', async () => {
+      const h = harness();
+
+      const reply = await h.call('memory_append', {
+        slug: 'appended-premise',
+        content: '最初の1行',
+        summary: '新規',
+      });
+
+      expect(reply).toContain('premise');
+      expect(reply).toContain('毎ターンの床');
+      expect(reply).toContain('全文がそのままクローンの文脈へ焼かれる');
+    });
+
+    it('memory_frontmatter_set（既存文書の更新）では「全文が焼かれる」は出ない（新規作成ではないため）', async () => {
+      const h = harness();
+      await h.stores.persona.write('values', '---\ntype: premise\n---\n# 価値観\n本文');
+
+      const reply = await h.call('memory_frontmatter_set', {
+        slug: 'values',
+        description: '要旨を足した',
+        summary: '要旨だけ',
+      });
+
+      expect(reply).toContain('毎ターンの床');
+      expect(reply).not.toContain('全文がそのままクローンの文脈へ焼かれる');
+      expect(reply).not.toContain('いま最も大きい premise');
+      expect(reply).not.toContain('memory_outline');
+      expect(reply).not.toContain('memory_section_move');
+    });
+
+    it('単位は文字である（bytes を出していない）', async () => {
+      const h = harness();
+
+      const reply = await h.call('memory_write', {
+        slug: 'zenkaku',
+        content: '価値観です',
+        summary: '全角',
+      });
+
+      expect(reply).toContain('毎ターンの床');
+      // 床の行に bytes という語は出ない（総文字数の既存の歯とは別に、
+      // ここで足した行だけを測る）。
+      const floorLine = (reply.split('\n').find((line) => line.includes('毎ターンの床')) ??
+        '') as string;
+      expect(floorLine).not.toContain('bytes');
+      expect(floorLine).toContain('文字');
+    });
+
+    it('⭐ 床を測る経路は persona.write / append / remove を呼ばない（読み直すだけ）', async () => {
+      const h = harness();
+      await h.stores.persona.write('doc', '# 総論\n本文');
+
+      const writeSpy = vi.spyOn(h.stores.persona, 'write');
+      const appendSpy = vi.spyOn(h.stores.persona, 'append');
+      const removeSpy = vi.spyOn(h.stores.persona, 'remove');
+
+      await h.call('memory_write', {
+        slug: 'doc',
+        content: '# 総論\n本文を増やした',
+        summary: 'x',
+      });
+
+      expect(writeSpy).toHaveBeenCalledTimes(1);
+      expect(appendSpy).not.toHaveBeenCalled();
+      expect(removeSpy).not.toHaveBeenCalled();
     });
   });
 
@@ -1539,6 +1682,37 @@ describe('クローンの道具', () => {
         // 動かしていない節は残る。
         expect(from?.content).toContain('## 次');
         expect(reply).toContain('移した');
+      });
+
+      /**
+       * ⭐ 記憶の肥大への恒久対策——節の移動で「毎ターンの床」がどう動くかは
+       * 移し先（`toSlug`）の区分で決まる。移し先が既に `type: fact` なら、
+       * 移した本文はその文書の目次の1行にしか影響しない（本文は焼かれない）
+       * ので、出どころ（premise）の全文からその分が消えたぶん、床は**減る**。
+       */
+      it('⭐ premise から既存の fact へ節を移すと、毎ターンの床は減ると応答が言う', async () => {
+        const h = harness();
+        await seed(h);
+        // 移し先を先に fact として作っておく。
+        await h.stores.persona.write(
+          'about-me-appendix',
+          '---\ntype: fact\ndescription: 付録\n---\n# 付録\n既存の本文\n',
+        );
+        const id = await outlineId(h, 'about-me', '## 事例');
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'about-me',
+          section: id,
+          toSlug: 'about-me-appendix',
+          summary: '事例を付録へ移した',
+        });
+
+        expect(reply).toContain('毎ターンの床');
+        expect(reply).toContain('fact');
+        // delta が符号つきの負の数（減った）で出る。
+        expect(reply).toMatch(
+          /毎ターンの床（焼き込み全体。いま読み直した値）: [\d,]+ 文字から [\d,]+ 文字へ（-[\d,]+）/,
+        );
       });
 
       /**
@@ -4074,6 +4248,75 @@ describe('self_status（いま自分がどう走っているか）', () => {
     expect(reply).toContain('組み立てた時点）: 3 文字');
   });
 
+  /**
+   * ⭐ 記憶の肥大への恒久対策——`self_status` の記憶内訳に区分ごとの
+   * 小計（premise 合計 / fact 目次合計）を足す。
+   *
+   * **既存の `- 総文字数: N 文字（M 文書）` の行の文言は変えない**（歯で固定）。
+   */
+  describe('記憶内訳の区分ごとの小計（premise 合計 / fact 目次合計。記憶の肥大への恒久対策）', () => {
+    it('既存の「総文字数」の行の文言は変わっていない', async () => {
+      const h = harness(() => RUNTIME);
+      await h.call('memory_write', { slug: 'a', content: '# A\n本文', summary: '1' });
+      const totalMemory = renderMemoryDocuments(await h.stores.persona.documents());
+
+      const reply = await h.call('self_status', {});
+
+      expect(reply).toContain(
+        `- 総文字数: ${totalMemory.length.toLocaleString('en-US')} 文字（1 文書）`,
+      );
+    });
+
+    it('premise 合計・fact 目次合計が、measureMemoryFloor が返す値と一致する', async () => {
+      const h = harness(() => RUNTIME);
+      await h.call('memory_write', {
+        slug: 'premise-doc',
+        content: '# 前提\n判断の基準になる本文',
+        summary: '1',
+      });
+      await h.call('memory_write', {
+        slug: 'fact-doc',
+        content: '---\ntype: fact\ndescription: 事実の要旨\n---\n# 事実\n本文',
+        summary: '2',
+      });
+      const floor = measureMemoryFloor(await h.stores.persona.documents());
+
+      const reply = await h.call('self_status', {});
+
+      expect(reply).toContain(
+        `- premise 合計: ${floor.premiseChars.toLocaleString('en-US')} 文字（${floor.premiseDocs} 文書。毎ターン全文が焼かれる）`,
+      );
+      expect(reply).toContain(
+        `- fact 目次合計: ${floor.tocChars.toLocaleString('en-US')} 文字（${floor.factDocs} 文書。目次の1行だけが焼かれる）`,
+      );
+    });
+
+    it('文書ごとの行に [premise] / [fact] と、bytes・文字の両方の単位ラベルが出る（bytes は消さない）', async () => {
+      const h = harness(() => RUNTIME);
+      await h.call('memory_write', {
+        slug: 'premise-doc',
+        content: '# 前提\n本文',
+        summary: '1',
+      });
+      await h.call('memory_write', {
+        slug: 'fact-doc',
+        content: '---\ntype: fact\ndescription: 要旨\n---\n# 事実\n本文',
+        summary: '2',
+      });
+
+      const reply = await h.call('self_status', {});
+
+      expect(reply).toMatch(/\[premise\] premise-doc:/);
+      expect(reply).toMatch(/\[fact\] fact-doc:/);
+      expect(reply).toMatch(/\d[\d,]* bytes \/ [\d,]+ 文字/);
+    });
+
+    // **並びが寄与の大きい順であることの歯は `flooded()` を使うため、
+    // それが定義されているスコープ（下の
+    // `describe('一覧は例外なく件数で壊れない…')`）に置いてある——
+    // `grep -Fn -- '⭐ 並びは寄与の大きい順で' packages/core/src/tools.test.ts`。
+  });
+
   it('鍵・トークンの値を出さない（profile_write で置いた値が self_status に出ない）', async () => {
     const h = harness(() => RUNTIME);
     await h.call('profile_write', {
@@ -5041,6 +5284,30 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     expect(reply).toMatch(/…ほか \d+ 文書は省略（全 \d+ 文書のうち \d+ 文書だけ出した）。/);
     expect(reply).toContain('memory_list');
     expect(reply).toContain('memory_read slug=<slug>');
+  });
+
+  /**
+   * ⭐⭐ 並びの欠陥の修正（記憶の肥大への恒久対策の一部。案ではなく欠陥の
+   * 修正）。
+   *
+   * 旧版は `stores.persona.list()` の順（両ドライバとも slug 昇順）のまま
+   * `renderListing` へ渡していたので、予算（3,500 文字）に達すると**slug が
+   * 後ろの文書が、どれだけ大きい premise であっても黙って落ちていた。**
+   * `flooded(60)` が積む60件の fact は slug が `doc-0000`〜`doc-0059` で
+   * 先頭に来る。ここへ、slug が明確に最後に来る（`zzz-` 接頭辞）巨大な
+   * premise を1件足す——旧実装なら省略される側に確実に落ちるが、寄与の
+   * 大きい順に並べ替えた新実装では必ず一覧に出る。
+   */
+  it('⭐ 並びは寄与の大きい順で、予算で省略しても最大の premise は必ず出る', async () => {
+    const h = await flooded(60);
+    await h.stores.persona.write('zzz-huge-premise', `# 巨大な前提\n${'あ'.repeat(4_000)}`);
+
+    const reply = await h.call('self_status', {});
+
+    expect(reply).toContain('[premise] zzz-huge-premise:');
+    // 予算に収まらない分は引き続き省略される（一覧そのものが無上限に
+    // なったわけではない）。
+    expect(reply).toContain('は省略');
   });
 
   /**

@@ -50,6 +50,26 @@ export interface MemoryPart {
   descriptionFreshness?: MemoryDescriptionFreshness;
 }
 
+/**
+ * 「記憶の肥大」——毎ターンの焼き込みに実際に載る分量。`measureMemoryFloor`
+ * の戻り値。
+ *
+ * 単位はすべて**文字**（`String.length`）。bytes ではない
+ * （`measureMemoryFloor` の doc）。
+ */
+export interface MemoryFloor {
+  /** premise の全文が毎ターン焼かれる分の文字数。 */
+  premiseChars: number;
+  /** fact の目次が毎ターン焼かれる分の文字数。 */
+  tocChars: number;
+  /** 焼き込み全体の文字数。**`renderMemoryDocuments(documents).length` と必ず一致する。** */
+  totalChars: number;
+  premiseDocs: number;
+  factDocs: number;
+  /** 毎ターン最も大きい premise の1件（premise が無ければ null）。 */
+  largestPremise: { slug: string; chars: number } | null;
+}
+
 // ---------------------------------------------------------------------------
 // 記憶の保護状態（human guard）— 判定と描画
 // ---------------------------------------------------------------------------
@@ -648,7 +668,7 @@ interface MemoryTocEntry {
 interface ResolvedTocNode {
   entry: MemoryTocEntry;
   depth: number;
-  issue?: 'missing-parent' | 'cycle';
+  issue?: 'missing-parent' | 'cycle' | 'parent-not-listed';
   children: ResolvedTocNode[];
 }
 
@@ -658,17 +678,44 @@ interface ResolvedTocNode {
  *
  * - 親が存在しない slug を指す → ルート扱いにし、`issue: 'missing-parent'`
  * - 親をたどると自分自身に戻る（循環） → ルート扱いにし、`issue: 'cycle'`
+ * - 親はこの `entries`（目次の対象）には無いが、`knownElsewhere` には在る
+ *   → ルート扱いにし、`issue: 'parent-not-listed'`
  *
- * どちらも文書自体は消えない——ルートとして目次に残り、印がつく。
+ * どれも文書自体は消えない——ルートとして目次に残り、印がつく。
+ *
+ * ## `knownElsewhere` — 「目次の外にも実在する slug」
+ *
+ * `renderMemoryDocuments` の目次（`renderMemoryToc`）は **fact だけ**を対象に
+ * 組む（premise は全文で別に載っている）。だから `entries`（fact の集合）
+ * だけを見て「親が無い」と判定すると、**親が premise として実在していても
+ * 「見つからない」と出る**——`memory_list`（`renderMemoryListing`。全区分を
+ * 対象にするので `bySlug` に premise も入っている）では同じ関係が正常に
+ * 解決するのに、面によって答えが変わる欠陥だった。
+ *
+ * `knownElsewhere` に「この `entries` には無いが、文書としては実在する
+ * slug」の集合（呼び手＝ `renderMemoryToc` が premise の slug 集合を渡す）を
+ * 渡すことで、この3つ目の状態を区別できるようにする。**渡さなければ
+ * （既定は空集合）、この状態は起こりえず、従来どおり `missing-parent` に
+ * 倒れる**——`renderMemoryListing`（全区分が既に `entries` に入っているので
+ * `knownElsewhere` を渡す必要が無い）の出力を1バイトも変えないための既定値
+ * である。
  */
-function resolveMemoryHierarchy(entries: readonly MemoryTocEntry[]): ResolvedTocNode[] {
+function resolveMemoryHierarchy(
+  entries: readonly MemoryTocEntry[],
+  knownElsewhere: ReadonlySet<string> = new Set(),
+): ResolvedTocNode[] {
   const bySlug = new Map(entries.map((entry) => [entry.slug, entry]));
   const parentOf = new Map(entries.map((entry) => [entry.slug, entry.parent]));
 
-  function effectiveParent(slug: string): { parent?: string; issue?: 'missing-parent' | 'cycle' } {
+  function effectiveParent(slug: string): {
+    parent?: string;
+    issue?: 'missing-parent' | 'cycle' | 'parent-not-listed';
+  } {
     const direct = parentOf.get(slug);
     if (direct === undefined || direct === '') return {};
-    if (!bySlug.has(direct)) return { issue: 'missing-parent' };
+    if (!bySlug.has(direct)) {
+      return { issue: knownElsewhere.has(direct) ? 'parent-not-listed' : 'missing-parent' };
+    }
     if (direct === slug) return { issue: 'cycle' };
     const seen = new Set<string>([slug]);
     let cursor = direct;
@@ -773,10 +820,26 @@ function memoryFreshnessMarker(freshness: MemoryDescriptionFreshness): string {
   }
 }
 
-/** 循環・存在しない親を黙って落とさず、印として言葉にする。 */
+/**
+ * 循環・存在しない親・「目次の外に実在する親」を黙って落とさず、印として
+ * 言葉にする。
+ *
+ * **`missing-parent` と `parent-not-listed` を畳まない。** 前者は「その slug の
+ * 文書がそもそも無い（打ち間違いか、削除された）」、後者は「文書は実在するが、
+ * この目次（fact だけ）の対象ではない（premise として本文が上に全文で載って
+ * いる）」——疑う先が違う。本文の在り処は `renderMemoryDocuments` の doc が
+ * 保証する不変条件（「どの文書も、全文か目次行かのどちらか一方に必ず現れる」）
+ * そのものなので、ここでも同じ言葉で言う。
+ */
 function renderMemoryTocIssue(node: ResolvedTocNode): string {
   if (node.issue === 'missing-parent') return `［親 ${String(node.entry.parent)} が見つからない］`;
   if (node.issue === 'cycle') return `［親 ${String(node.entry.parent)} との間で循環］`;
+  if (node.issue === 'parent-not-listed') {
+    return (
+      `［親 ${String(node.entry.parent)} は在るが、この目次は fact だけを列挙する` +
+      '（premise として本文が上に全文で載っている）］'
+    );
+  }
   return '';
 }
 
@@ -795,9 +858,16 @@ function renderMemoryTocLine(node: ResolvedTocNode): string {
  * ことは構造的に起こりえない（4-1）。
  *
  * **件数で切ったら、切った件数を必ず出す**（`excerpt.ts` と同じ約束）。
+ *
+ * `knownElsewhere` はそのまま `resolveMemoryHierarchy` へ渡す（`parent` が
+ * この目次の外に実在するときの3つ目の状態を区別するため。呼び手
+ * （`buildMemoryDocumentSections`）が premise の slug 集合を渡す）。
  */
-function renderMemoryToc(entries: readonly MemoryTocEntry[]): string {
-  const flat = flattenMemoryToc(resolveMemoryHierarchy(entries));
+function renderMemoryToc(
+  entries: readonly MemoryTocEntry[],
+  knownElsewhere: ReadonlySet<string> = new Set(),
+): string {
+  const flat = flattenMemoryToc(resolveMemoryHierarchy(entries, knownElsewhere));
   const shown = flat.slice(0, MEMORY_TOC_ENTRY_LIMIT);
   const omitted = flat.length - shown.length;
   const lines = [
@@ -821,23 +891,20 @@ function renderPremisePart(part: MemoryPart): string {
 }
 
 /**
- * 記憶をクローンの文脈へ載せる、唯一の入口。
+ * `renderMemoryDocuments` と `measureMemoryFloor` の共有の下ごしらえ。
  *
- * **区分ごとに載り方を変える**（4-1「B. 区分と載せ方」）:
- * - `premise`（判断の前提。既定でもある） — **全文**。切り詰めない
- *   （切り詰めた前提は「持っていない前提」と区別できない）
- * - `fact`（事実と蓄積） — **目次の1行だけ**。本文は `memory_read` で開く
- *
- * **どの文書も、全文か目次行かの「どちらか一方」に必ず現れる**（二重に
- * 載せない・取りこぼさない）。文書の順序は呼び手（ストア）が決めた順
- * そのまま（`premise` は slug 昇順のまま連結、`fact` は目次側で
- * 階層・slug 昇順に並べ直す）。
- *
- * frontmatter を1つも持たない文書の集合（`kind: 'none'` のみ）に対しては、
- * 全件が `premise` に分類されるため、出力は frontmatter 導入前の
- * `renderMemoryDocuments` と1バイトも変わらない（受け入れ基準の最上位）。
+ * **数え方を2本に割らないためだけに存在する。** 焼き込みの本体
+ * （`renderMemoryDocuments`）と、その大きさだけを答える関数
+ * （`measureMemoryFloor`）が別々に「premise を集めて全文にし、fact を
+ * 集めて目次にする」処理を書くと、どちらか一方だけを直した瞬間に
+ * メーターが実物と食い違う——ここへ1本にまとめ、両方がこれを呼ぶ。
  */
-export function renderMemoryDocuments(documents: readonly MemoryPart[]): RenderedMemory {
+function buildMemoryDocumentSections(documents: readonly MemoryPart[]): {
+  premiseParts: MemoryPart[];
+  premiseSection: string;
+  tocEntries: MemoryTocEntry[];
+  tocSection: string;
+} {
   const premiseParts: MemoryPart[] = [];
   const tocEntries: MemoryTocEntry[] = [];
 
@@ -859,10 +926,85 @@ export function renderMemoryDocuments(documents: readonly MemoryPart[]): Rendere
 
   const premiseSection =
     premiseParts.length === 0 ? '' : premiseParts.map(renderPremisePart).join('\n\n');
-  const tocSection = tocEntries.length === 0 ? '' : renderMemoryToc(tocEntries);
+  // premise の slug 集合を渡す——fact だけの目次の外にも実在する slug を
+  // `resolveMemoryHierarchy` が区別できるようにする（`renderMemoryTocIssue`
+  // の 'parent-not-listed' を見よ）。
+  const premiseSlugs = new Set(premiseParts.map((part) => part.slug));
+  const tocSection = tocEntries.length === 0 ? '' : renderMemoryToc(tocEntries, premiseSlugs);
 
-  const sections = [premiseSection, tocSection].filter((section) => section.length > 0);
-  return brandRenderedMemory(sections.join('\n\n'));
+  return { premiseParts, premiseSection, tocEntries, tocSection };
+}
+
+/** `premiseSection` と `tocSection` を、実際に焼き込む1本の文字列へ繋ぐ。 */
+function joinMemorySections(premiseSection: string, tocSection: string): string {
+  return [premiseSection, tocSection].filter((section) => section.length > 0).join('\n\n');
+}
+
+/**
+ * 記憶をクローンの文脈へ載せる、唯一の入口。
+ *
+ * **区分ごとに載り方を変える**（4-1「B. 区分と載せ方」）:
+ * - `premise`（判断の前提。既定でもある） — **全文**。切り詰めない
+ *   （切り詰めた前提は「持っていない前提」と区別できない）
+ * - `fact`（事実と蓄積） — **目次の1行だけ**。本文は `memory_read` で開く
+ *
+ * **どの文書も、全文か目次行かの「どちらか一方」に必ず現れる**（二重に
+ * 載せない・取りこぼさない）。文書の順序は呼び手（ストア）が決めた順
+ * そのまま（`premise` は slug 昇順のまま連結、`fact` は目次側で
+ * 階層・slug 昇順に並べ直す）。
+ *
+ * frontmatter を1つも持たない文書の集合（`kind: 'none'` のみ）に対しては、
+ * 全件が `premise` に分類されるため、出力は frontmatter 導入前の
+ * `renderMemoryDocuments` と1バイトも変わらない（受け入れ基準の最上位）。
+ */
+export function renderMemoryDocuments(documents: readonly MemoryPart[]): RenderedMemory {
+  const { premiseSection, tocSection } = buildMemoryDocumentSections(documents);
+  return brandRenderedMemory(joinMemorySections(premiseSection, tocSection));
+}
+
+/**
+ * 「記憶の肥大」を測る——毎ターン焼き込みへ実際に載る分量。
+ *
+ * **`renderMemoryDocuments` と同じ下ごしらえ（`buildMemoryDocumentSections`）を
+ * 共有する。** 数え方を2本に割ると、どちらかだけを直したときにメーターが
+ * 黙って嘘をつく（このファイル冒頭の見出しの話と同じ形の前科——器ごとに
+ * 別々に書いていた載せ方が実際に食い違った）。
+ *
+ * **`totalChars` は `renderMemoryDocuments(documents).length` と厳密に一致する
+ * ことを歯で固定する。** 一致を「たぶん同じ」で済ませない——`joinMemorySections`
+ * を両方から呼ぶことで、実装として一致を強制する。
+ *
+ * **単位は文字（`String.length`）であって bytes ではない。** self_status が
+ * 総文字数と文書ごとの bytes を混在させていたことで、依頼者は実際に bytes から
+ * 文字数を割り戻して読んでいた——ここで bytes を返すと、対策自身がその誤りを
+ * 再生産する。
+ *
+ * **各 premise の文字数は `content.length` ではなく `renderPremisePart` の
+ * 結果の長さで数える**（`tools.ts` の「クローンの文脈へ実際に載る形で数える」と
+ * 同じ理由——malformed な frontmatter は説明の1行が前に付くので、`content` だけ
+ * を足すと実物より少ない数を「毎ターンの床」として名乗ることになる）。
+ */
+export function measureMemoryFloor(documents: readonly MemoryPart[]): MemoryFloor {
+  const { premiseParts, premiseSection, tocEntries, tocSection } =
+    buildMemoryDocumentSections(documents);
+  const totalChars = joinMemorySections(premiseSection, tocSection).length;
+
+  let largestPremise: { slug: string; chars: number } | null = null;
+  for (const part of premiseParts) {
+    const chars = renderPremisePart(part).length;
+    if (largestPremise === null || chars > largestPremise.chars) {
+      largestPremise = { slug: part.slug, chars };
+    }
+  }
+
+  return {
+    premiseChars: premiseSection.length,
+    tocChars: tocSection.length,
+    totalChars,
+    premiseDocs: premiseParts.length,
+    factDocs: tocEntries.length,
+    largestPremise,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1142,6 +1284,109 @@ export function describeMemoryWriteDiff(before: string | null, after: string): s
   const delta = after.length - before.length;
   const charLine = `${formatMemoryCharCount(before.length)} → ${formatMemoryCharCount(after.length)} 文字（${formatMemoryCharDelta(delta)}）`;
   return [charLine, describeMemoryHeadingDiff(before, after)].join('\n');
+}
+
+/**
+ * `N` から `M` へ動いたことを、矢印（`→`）を使わずに言う。
+ *
+ * **`describeMemoryWriteDiff` は矢印を使うのに、なぜここは使わないのか。**
+ * `tools.test.ts`（`memory_write` の新規作成の歯）に
+ * `expect(reply).not.toContain('→')` が固定で在り、これは「新規作成には
+ * 『前』が無いので増減の矢印が出ない」ことを測る歯である。`describeMemoryFloor`
+ * は新規作成のときも（premise が新規作成された場合は特に強く）床の遷移を言う
+ * ——同じ応答に矢印を持ち込むと、上の歯が「新規作成なのに増減の表現がある」を
+ * 誤って撃つ。**両立できないので、ここだけ矢印を使わない側へ倒した。**
+ */
+function formatMemoryFloorTransition(beforeChars: number, afterChars: number): string {
+  const delta = afterChars - beforeChars;
+  return (
+    `${formatMemoryCharCount(beforeChars)} 文字から ${formatMemoryCharCount(afterChars)} 文字へ` +
+    `（${formatMemoryCharDelta(delta)}）`
+  );
+}
+
+/**
+ * `memory_write` / `memory_append` / `memory_frontmatter_set` /
+ * `memory_section_move` の応答の末尾に添える、「毎ターンの床」の一言。
+ *
+ * **`describeMemoryWriteDiff` とは別の関数である。** あちらは4口が共有していて
+ * 出力を `tools.test.ts` が78件の `expect(reply)` で逐語に固定しているため、
+ * 機能を足せば全部を壊す。こちらは追加の1行として応答の末尾に足すためだけに
+ * 存在する。
+ *
+ * 言うことは3つ:
+ * 1. 書いた文書の区分（`premise` / `fact`。書いた**後**の区分）
+ * 2. 焼き込み全体の文字数が `before.totalChars` → `after.totalChars` へ
+ *    どう動いたか（文字。`renderMemoryDocuments(documents).length` と一致する値。
+ *    **`stores.persona.documents()` をいま読み直した値であることを短く名乗る**
+ *    ——`read()` から `write()` までの間に人間が `PUT /memory/:slug` で
+ *    書き換える窓があり、ここに出る値と次のターンに実際に焼かれる量が
+ *    一致しない可能性があるため。`self_status` が既に採っている形
+ *    「記憶の大きさ（いま stores.persona を読み直した値）」に揃える）
+ * 3. **`premise` を新規作成したときだけ**、それが「毎ターン全文が焼かれる」
+ *    ことを1行で言う——premise の新規作成は稀である（習慣化しない）ので、
+ *    ここだけ他の枝より明確に強い言い方にしてある。**この枝にはさらに2つ
+ *    足す**（依頼者の決裁。#318 の議論で「線が無くても、稀にしか出ない枝には
+ *    置ける」とされた手当てを、稀にしか出ないこの枝へ畳んだもの）:
+ *    - **いま最大の premise を名指しする**（`after.largestPremise`。書いた
+ *      直後の状態で「どこを見ればよいか」にその場で答える——依頼者はまさに
+ *      これが無くて詰まった。`about-me-core` を作った夜、応答は文字数だけ
+ *      だった）
+ *    - **縮めるのに全文置換は要らないこと**と、その3手順の道具名
+ *      （`memory_outline` → `memory_section_move` → `memory_frontmatter_set`）
+ *
+ * ⛔ 既存の語「区分が変わった」（`memory_frontmatter_set` の `kindChangeNote`）を
+ * 使い回さない。`tools.test.ts` に
+ * `expect(reply).not.toContain('区分が変わった')`（type を変えなかったときの歯）
+ * が固定であり、同じ語をここでも使うと、type を変えていない呼び出しでもこの
+ * 関数が毎回その文字列を返すことになって歯を撃つ。
+ *
+ * ## ⚠️ 「毎回出る行」の限界（doc に書く条件で採用された）
+ *
+ * `created` が `false`（既存文書への追記・上書き・frontmatter 変更・節の
+ * 移動）のときも、この行は出る。**この行は毎回出るので読み飛ばされる。それでも
+ * 置くのは、参照値がその場に在ることに価値が在るから。これは行動を変える
+ * 機構ではない。** 行動を変えるのは、稀にしか出ない側（新規作成・区分の変更・
+ * 線を越えたとき）である。**「効かない場面」をここに書かずに入れると、次に
+ * 読む人は「対策済み」と読む——だから書く。**
+ *
+ * **⚠️ 上の2要素（最大の premise・3手順）を `fact` の新規作成や `created === false`
+ * の枝へは足さないこと。** あの枝を強くしている理由は「premise の新規作成は
+ * 稀だから習慣化しない」であり、全部の枝に足すと稀ではなくなる——毎回出る側は
+ * 「効かない機構」のままにしておく（直上の限界のとおり）。
+ */
+export function describeMemoryFloor(input: {
+  before: MemoryFloor;
+  after: MemoryFloor;
+  slug: string;
+  kind: MemoryDocKind;
+  created: boolean;
+}): string {
+  const { before, after, slug, kind, created } = input;
+  const transition = formatMemoryFloorTransition(before.totalChars, after.totalChars);
+  const floorLine = `毎ターンの床（焼き込み全体。いま読み直した値）: ${transition}。`;
+
+  if (created && kind === 'premise') {
+    const lines = [
+      `⭐ 新規作成: ${slug}（区分: premise）。`,
+      floorLine,
+      '⚠️ premise は毎ターン全文がそのままクローンの文脈へ焼かれる（切り詰めない）。',
+    ];
+    const largest = after.largestPremise;
+    if (largest !== null) {
+      lines.push(
+        `いま最も大きい premise: ${largest.slug}（${formatMemoryCharCount(largest.chars)} 文字）。`,
+      );
+    }
+    lines.push(
+      '縮めるのに全文置換は要らない: memory_outline で節を確かめ、' +
+        'memory_section_move で付録の文書へ移し、memory_frontmatter_set でその付録を fact にする。',
+    );
+    return lines.join('\n');
+  }
+
+  const actionLabel = created ? '新規作成' : '更新';
+  return `${actionLabel}: ${slug}（区分: ${kind}）。\n${floorLine}`;
 }
 
 // ---------------------------------------------------------------------------

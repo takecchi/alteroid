@@ -29,10 +29,12 @@ import {
   assertNeverMemoryProtectionStatus,
   containsMemoryFrontmatterLineBreak,
   cutMemorySection,
+  describeMemoryFloor,
   describeMemoryWriteDiff,
   formatMemoryCreatedAt,
   isKnownMemoryDocKind,
   lookupMemorySection,
+  measureMemoryFloor,
   parseMemoryFrontmatter,
   renderMemoryDocuments,
   renderMemoryListing,
@@ -40,7 +42,7 @@ import {
   resolveMemoryDocKind,
   scanMemorySections,
 } from './memory.js';
-import type { MemorySectionLookup } from './memory.js';
+import type { MemoryPart, MemorySectionLookup } from './memory.js';
 import type { ProfileService } from './profile-service.js';
 import {
   RESERVED_SCHEDULE_KINDS,
@@ -646,6 +648,55 @@ async function guardFullReplace(
 }
 
 /**
+ * `memory_write` / `memory_append` / `memory_frontmatter_set` /
+ * `memory_section_move` の4口が共有する、「毎ターンの床」の一言を組み立てる薄い
+ * 糊。`describeMemoryFloor`（`memory.ts`）自体は前後の `MemoryFloor` を渡される
+ * だけの純粋関数——ここで `measureMemoryFloor` と `resolveMemoryDocKind` へ
+ * 渡す形に揃える。
+ *
+ * **実費: 呼び手は書き込みの前後で `stores.persona.documents()` を1回ずつ、
+ * 合計2回追加で呼ぶ。** 元々この4口は `documents()` を呼んでいなかった——
+ * `self_status` だけが呼んでいた。**2回なのは設計である**——1回にして「前の床」を
+ * 「後の床」から逆算すると、数え方が実装として2本に割れる（`measureMemoryFloor`
+ * の doc の「共有の下ごしらえから両方が呼ぶ」という条件そのものと矛盾する）。
+ *
+ * ## ⚠️ `documents()` と `list()` の重さは、ドライバによって違う
+ *
+ * **pg（本番）は同じである。** どちらも `content` 列を選ぶ
+ * `SELECT ... ORDER BY slug` 1本である
+ * （`grep -Fn -- 'async documents()' packages/storage-pg/src/persona.ts`）。
+ *
+ * **⚠️ fs（ローカル / 開発）は違う。`documents()` が全ファイルを2回読む**——
+ * `list()` を呼んで（その中で全ファイルを読む）、返ってきた slug ごとに
+ * `read()` でもう一度読む
+ * （`grep -Fn -- 'async documents()' packages/storage-fs/src/persona.ts`）。
+ * 実測で `documents()` 166.7ms 対 `list()` 80.7ms（110文書・1.1MB・N=20）。
+ *
+ * **⟹ 書き込み1回あたり `documents()` を2回呼ぶので、fs では全ファイルの
+ * 読み出し4回ぶんになる。** pg では2クエリである。
+ *
+ * **⚠️ `FsPersonaStore.documents()` の二重読みは、この変更では直していない。
+ * 観測として記録するにとどめる**（記憶ストアの実装であり、直すかどうかは
+ * 別の判断である）。**書いておかないと、次に読む人が「知らなかったのか、
+ * 意図して残したのか」を区別できない。**
+ */
+function memoryFloorNote(
+  memoryBefore: readonly MemoryPart[],
+  memoryAfter: readonly MemoryPart[],
+  slug: string,
+  writtenContent: string,
+  created: boolean,
+): string {
+  return describeMemoryFloor({
+    before: measureMemoryFloor(memoryBefore),
+    after: measureMemoryFloor(memoryAfter),
+    slug,
+    kind: resolveMemoryDocKind(parseMemoryFrontmatter(writtenContent)),
+    created,
+  });
+}
+
+/**
  * 歯の断りの返答。**「保護されています」だけでは、クローンが次の手を推測する
  * ことになる。** 必ず4つを言う——(1) なぜ断ったか、(2) どうすれば通るか
  * （`ask_human` に何を積めばよいかまで）、(3) いま何も失われていないこと、
@@ -879,8 +930,12 @@ export function createCloneTools(context: ToolContext) {
         const cause = memoryCause();
         const denial = await guardFullReplace(stores, slug, cause, '全文置換');
         if (denial !== null) return text(denial);
-        const before = await stores.persona.read(slug);
+        const [before, memoryBefore] = await Promise.all([
+          stores.persona.read(slug),
+          stores.persona.documents(),
+        ]);
         const written = await stores.persona.write(slug, content);
+        const memoryAfter = await stores.persona.documents();
         await stores.journal.append({
           type: 'memory_update',
           slug,
@@ -894,7 +949,14 @@ export function createCloneTools(context: ToolContext) {
           before === null ? null : before.content,
           written.content,
         );
-        return text(`記憶 ${slug} を更新した。\n\n${diff}`);
+        const floor = memoryFloorNote(
+          memoryBefore,
+          memoryAfter,
+          slug,
+          written.content,
+          before === null,
+        );
+        return text(`記憶 ${slug} を更新した。\n\n${diff}\n\n${floor}`);
       },
     ),
 
@@ -911,8 +973,12 @@ export function createCloneTools(context: ToolContext) {
         summary: z.string().describe('何を追記したかの一行要約（日誌に残る）'),
       },
       async ({ slug, content, summary }) => {
-        const before = await stores.persona.read(slug);
+        const [before, memoryBefore] = await Promise.all([
+          stores.persona.read(slug),
+          stores.persona.documents(),
+        ]);
         const written = await stores.persona.append(slug, content);
+        const memoryAfter = await stores.persona.documents();
         await stores.journal.append({
           type: 'memory_update',
           slug,
@@ -926,7 +992,14 @@ export function createCloneTools(context: ToolContext) {
           before === null ? null : before.content,
           written.content,
         );
-        return text(`記憶 ${slug} に追記した。\n\n${diff}`);
+        const floor = memoryFloorNote(
+          memoryBefore,
+          memoryAfter,
+          slug,
+          written.content,
+          before === null,
+        );
+        return text(`記憶 ${slug} に追記した。\n\n${diff}\n\n${floor}`);
       },
     ),
 
@@ -1143,7 +1216,9 @@ export function createCloneTools(context: ToolContext) {
           type,
           parent,
         });
+        const memoryBefore = await stores.persona.documents();
         const written = await stores.persona.write(slug, nextContent);
+        const memoryAfter = await stores.persona.documents();
         const nextKind = resolveMemoryDocKind(parseMemoryFrontmatter(written.content));
 
         await stores.journal.append({
@@ -1166,8 +1241,13 @@ export function createCloneTools(context: ToolContext) {
               (nextKind === 'fact'
                 ? '次のターンから、この文書の本文はプロンプトの全文には載らない（目次の1行だけになる）。'
                 : '次のターンから、この文書の本文はプロンプトへ全文が載る。');
+        // `memory_frontmatter_set` は既存文書にしか使えない（上の `existing === null`
+        // の断り）ので `created` は常に false。
+        const floor = memoryFloorNote(memoryBefore, memoryAfter, slug, written.content, false);
 
-        return text(`記憶 ${slug} の frontmatter を更新した。\n\n${diff}${kindChangeNote}`);
+        return text(
+          `記憶 ${slug} の frontmatter を更新した。\n\n${diff}${kindChangeNote}\n\n${floor}`,
+        );
       },
     ),
 
@@ -1360,7 +1440,12 @@ export function createCloneTools(context: ToolContext) {
         }
 
         // **先に足して、後で消す。** 上の doc「順序」を読むこと。
-        const toBefore = await stores.persona.read(toSlug);
+        // `memoryBefore` はここで取る——両方の書き込みより前の、記憶全体の
+        // スナップショットである（「毎ターンの床」の遷移を測る材料）。
+        const [toBefore, memoryBefore] = await Promise.all([
+          stores.persona.read(toSlug),
+          stores.persona.documents(),
+        ]);
         const toWritten = await stores.persona.append(toSlug, cut);
         await stores.journal.append({
           type: 'memory_update',
@@ -1397,6 +1482,21 @@ export function createCloneTools(context: ToolContext) {
           summary,
         });
 
+        // 両方の書き込みが終わった後の、記憶全体のスナップショット。
+        const memoryAfter = await stores.persona.documents();
+        // **床は「移した先」（`toSlug`）の視点で言う。** 移動で新しく生まれる
+        // か太るのは移し先であり、`toSlug` が frontmatter を持たない新規文書
+        // なら premise として全文が焼かれる——`memory_write` で新規に premise
+        // を作ったときと同じ枝を通す（依頼の重心。新規作成は稀なので声を
+        // いちばん大きくする）。
+        const floor = memoryFloorNote(
+          memoryBefore,
+          memoryAfter,
+          toSlug,
+          toWritten.content,
+          toBefore === null,
+        );
+
         // **古い本文を1文字も出さない。** 出せば文脈に入る（この道具の
         // 存在理由が消える）。名指しするのは見出しと節id だけ——呼び手が
         // 「意図した節か」を確かめるのに要る最小限である。
@@ -1409,6 +1509,8 @@ export function createCloneTools(context: ToolContext) {
             '',
             `出どころ ${fromSlug}:`,
             describeMemoryWriteDiff(existing.content, fromWritten.content),
+            '',
+            floor,
           ].join('\n'),
         );
       },
@@ -2468,7 +2570,7 @@ export function createCloneTools(context: ToolContext) {
             '',
             // **クローンの文脈へ実際に載る形で数える。** 本文だけを足すと、見出しの
             // ぶんだけ本当より少ない数を「いまの総文字数」として名乗ることになる。
-            renderMemorySize(documents, renderMemoryDocuments(memoryDocuments)),
+            renderMemorySize(documents, memoryDocuments, renderMemoryDocuments(memoryDocuments)),
             '',
             renderLedgerCrossReference(runtime.sdkModel, aggregate),
           ].join('\n'),
@@ -3911,8 +4013,52 @@ const SELF_STATUS_MEMORY_LISTING_BUDGET = 3_500;
  * この節の主題（「記憶の大きさ」）なので残す。`createdAt` の整形は
  * `memory.ts` の `formatMemoryCreatedAt` をそのまま import して使う——同じ
  * 結果を返す関数を2つ書かない。
+ *
+ * **既存の `- 総文字数: N 文字（M 文書）` の行の文言は変えない**（歯が固定）。
+ * 下で足すのは、その下に続く新しい行だけである。
+ *
+ * ## ⭐ 区分ごとの小計（記憶の肥大への恒久対策）
+ *
+ * premise 合計 / fact 目次合計は `measureMemoryFloor`（`memory.ts`）をそのまま
+ * 使う——同じ計算を2本書かない。文書ごとの行にも `[premise]` / `[fact]` と
+ * 文字数を足す。**`bytes` は消さない**——この節の主題は「記憶の大きさ」で、
+ * bytes は実際のディスク上のサイズを言う値として引き続き意味がある。
+ * **単位のラベル（文字 / bytes）を両方に必ず付ける**——旧版は総＝文字・
+ * 文書ごと＝bytes で単位が混ざっており、依頼者は実際に bytes から文字数を
+ * 割り戻して読んでいた。ここで bytes を隠すと、次の人がまた割り戻す。
+ *
+ * 文書ごとの「文字数」は `measureMemoryFloor([その1文書])` で測る——premise
+ * ならその文書が単独でも実際に焼かれる全文の長さ、fact ならその1行が乗る
+ * 目次（見出し込み）の長さになる。**⚠️ fact 側は目次の見出し2行ぶん
+ * （`<!-- memory: index -->` と `## 記憶の目次…`）が数値に乗る**——実際の
+ * 焼き込みではこの2行は全 fact で共有されるので、複数の fact を合計すると
+ * `measureMemoryFloor(memoryDocuments).tocChars` より大きくなる（二重に
+ * 数えているわけではなく、「この1文書だけを載せるとしたら」という単独測定
+ * だからである）。**premise 同士・fact 同士の相対順序は壊れない**（全件に
+ * 同じ定数が乗るだけ）ので、この節の目的（寄与の大きい順に並べ、予算で
+ * 切られても最大の寄与を残す）には支障が無い。
+ *
+ * ## ⭐ 並びは「毎ターンの寄与が大きい順」（欠陥の修正。案の一部ではない）
+ *
+ * **旧版は `stores.persona.list()` が返す順（両ドライバとも slug 昇順——
+ * `packages/storage-fs/src/persona.ts` の `names.sort()` /
+ * `packages/storage-pg/src/persona.ts` の `orderBy(asc(memory.slug))`）の
+ * まま `renderListing` へ渡していた。** 予算（`SELF_STATUS_MEMORY_LISTING_BUDGET`
+ * = 3,500）に達すると、slug が後ろの文書が黙って省略される——**それがどれだけ
+ * 大きい premise であっても関係なく落ちる。** 呼び手は落ちた分に気づけない
+ * ＝「測れた0」ではなく「測れていない0」を、測ったつもりで読むことになる。
+ *
+ * **ここで寄与の大きい順に並べ替えることで直す。** `renderListing` は先頭から
+ * 予算に収まるだけ積む口なので、並べ替えるだけで「省略されるのは常に寄与の
+ * 小さい方から」になる。**`stores.persona.list()` 自体の並びは変えない**——
+ * 他の面（`memory_list` 等）がその順に依存しているため、並べ替えは
+ * ここ（`renderMemorySize` の中）だけで行う。
  */
-function renderMemorySize(documents: MemoryDocumentMeta[], totalMemory: string): string {
+function renderMemorySize(
+  documents: MemoryDocumentMeta[],
+  memoryDocuments: readonly MemoryPart[],
+  totalMemory: string,
+): string {
   const lines = [
     '## 記憶の大きさ（いま stores.persona を読み直した値）',
     '',
@@ -3920,15 +4066,32 @@ function renderMemorySize(documents: MemoryDocumentMeta[], totalMemory: string):
   ];
   if (documents.length === 0) return lines.join('\n');
 
-  const items = documents.map((doc) => {
+  const floor = measureMemoryFloor(memoryDocuments);
+
+  const contentBySlug = new Map(memoryDocuments.map((doc) => [doc.slug, doc]));
+  const contribution = new Map(
+    documents.map((doc) => {
+      const part = contentBySlug.get(doc.slug);
+      const chars = part === undefined ? 0 : measureMemoryFloor([part]).totalChars;
+      return [doc.slug, chars] as const;
+    }),
+  );
+  // ⭐ 寄与の大きい順（`Array#sort` は ES2019 以降、規格上安定ソート——
+  // 同点は `stores.persona.list()` が返した元の順のまま残る）。
+  const sorted = [...documents].sort(
+    (a, b) => (contribution.get(b.slug) ?? 0) - (contribution.get(a.slug) ?? 0),
+  );
+
+  const items = sorted.map((doc) => {
     const descriptor =
       doc.description === undefined
         ? ''
         : ` — ${excerptLine(doc.description, SELF_STATUS_MEMORY_DESCRIPTION_LIMIT)}`;
+    const chars = contribution.get(doc.slug) ?? 0;
     return (
-      `  - ${doc.slug}: ${doc.title} ` +
+      `  - [${doc.kind}] ${doc.slug}: ${doc.title} ` +
       `(作成: ${formatMemoryCreatedAt(doc.createdAt)} / 更新: ${doc.updatedAt}) ` +
-      `${doc.bytes.toLocaleString('en-US')} bytes${descriptor}`
+      `${doc.bytes.toLocaleString('en-US')} bytes / ${chars.toLocaleString('en-US')} 文字${descriptor}`
     );
   });
 
@@ -3939,6 +4102,16 @@ function renderMemorySize(documents: MemoryDocumentMeta[], totalMemory: string):
         `  …ほか ${rest} 文書は省略（全 ${total} 文書のうち ${shown} 文書だけ出した）。` +
         '全件は memory_list、本文は memory_read slug=<slug> で取れる。',
     }),
+  );
+  // **区分ごとの小計は、文書一覧の後ろへ0字下げで置く。** `- 総文字数`
+  // の兄弟（0字下げの箇条書き）にすることで、`tools.test.ts` の
+  // `extractMemorySizeEntries`（文書一覧を2字下げの連続行として拾う総当たり
+  // 試験の足場）がこの2行を「文書の1件」と誤認しない——2字下げのままだと、
+  // id + 名前 / 作成 + 更新 / 概要 を持たないこの2行が総当たり試験に
+  // 「5項目を満たさない文書」として撃たれる（実測済み）。
+  lines.push(
+    `- premise 合計: ${floor.premiseChars.toLocaleString('en-US')} 文字（${floor.premiseDocs} 文書。毎ターン全文が焼かれる）`,
+    `- fact 目次合計: ${floor.tocChars.toLocaleString('en-US')} 文字（${floor.factDocs} 文書。目次の1行だけが焼かれる）`,
   );
   return lines.join('\n');
 }
