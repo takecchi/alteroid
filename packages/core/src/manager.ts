@@ -8,7 +8,7 @@ import {
   noteUnreadableRecord,
   runnerEventShape,
 } from './dropped-record.js';
-import { excerptLine } from './excerpt.js';
+import { excerptLine, renderListing } from './excerpt.js';
 import {
   LEASE_TTL_MS,
   describeAmbiguousSighting,
@@ -716,6 +716,16 @@ const ASKED_MEMORY_LIMIT = 512;
  * 高々数件）なので、まずは揃えておく——実測で偏りが分かったら値だけ分ける。
  */
 const REPORTED_MEMORY_LIMIT = 512;
+
+/**
+ * `#reportedOf` が忘れた id の一覧を日誌へ書くときの予算（文字数、#409）。
+ *
+ * `onForget` は最大 `REPORTED_MEMORY_LIMIT` 件をまとめて渡しうるので、
+ * `ids.join(', ')` をそのまま繋ぐと上限も省略の合図も無い列挙になる
+ * （Issue #409 が塞いでいる形そのもの）。`excerpt.ts` の `renderListing` に
+ * 寄せて、切ったら「何件省いたか」が必ず出るようにする。
+ */
+const REPORTED_FORGOTTEN_BUDGET = 2_000;
 
 /**
  * 1マネージャーぶんで拒否を数える道具の種類。達したら**黙らずに日誌へ残す**。
@@ -3486,6 +3496,12 @@ class Pool implements ManagerPool {
    * 上限に達したら**黙って忘れない** — 忘れた id の `report` が再送されると、
    * それは新しい報告としてもう一度クローンへ回る。日誌に残っていなければ、
    * 「なぜ同じ報告が二度来たのか」を後から誰も辿れない。
+   *
+   * **`#askedOf` とは違い、忘れた id の列挙に上限を置いてある（#409）。**
+   * `onForget` は最大 `REPORTED_MEMORY_LIMIT` 件を一度に渡しうるので、素直に
+   * 繋ぐと件数に比例して伸びる列挙になる——`renderListing`（`excerpt.ts`）に
+   * 通し、切ったら「何件省いたか」が必ず出るようにしてある。`#askedOf`（写し元）
+   * 自体はこの変更で触っていない——そちらは #409 の担当範囲である。
    */
   #reportedOf(record: ManagerRecord): RecentMap<true> {
     const existing = record.reported;
@@ -3494,13 +3510,18 @@ class Pool implements ManagerPool {
     const reported = createRecentMap<true>({
       limit: REPORTED_MEMORY_LIMIT,
       onForget: (ids) => {
+        const listing = renderListing(ids, {
+          budget: REPORTED_FORGOTTEN_BUDGET,
+          omitted: ({ rest, shown, total }) =>
+            `…ほか ${rest} 件省略（${total} 件中、古い順に ${shown} 件だけ出した）`,
+        });
         void this.#journal({
           type: 'exchange',
           with: 'manager',
           role: 'inbound',
           text:
             `[${managerId}] 処理済みの報告の記憶が上限（${REPORTED_MEMORY_LIMIT}件）に達したので、` +
-            `古い ${ids.length} 件を忘れた: ${ids.join(', ')}。` +
+            `古い ${ids.length} 件を忘れた: ${listing}。` +
             'この id の報告が再送されると、新しい報告としてもう一度回る。',
         });
       },
