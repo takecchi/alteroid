@@ -944,6 +944,47 @@ describe('FsJournalStore', () => {
   describe('スキーマに合わない行の跡（Issue #224）', () => {
     const secret = 'ghp_000000000000000000000000000000000000';
 
+    it('型は知っているが値だけ知らない行も、その行だけ飛ばす（版のずれ）', async () => {
+      // **これが「新しい値を足してよいか」を決めている性質である。**
+      // デーモンは複数の版が同時に走る（`main` / `release/prod` / 焼き込まれたイメージ）。
+      // ⟹ **新しい enum の値を持つ行を、その値を知らない古い版が読む窓が必ず在る。**
+      // ここで一覧そのものが読めなくなるなら、値は足せない。
+      //
+      // **既存の隣のテストは `type` ごと未知の行しか作っていない**（`future-type`）。
+      // 「型は既知で、フィールドの値だけ未知」は別の経路に見えるので、別に固定する。
+      await stores.journal.append({ type: 'decision', decision: '健全な行', grounds: 'g' });
+
+      const journalDir = join(root, 'journal');
+      const today = new Date().toISOString().slice(0, 10);
+      await writeFile(
+        join(journalDir, `${today}.jsonl`),
+        `${JSON.stringify({
+          type: 'token_rotation',
+          id: 'from-newer-daemon',
+          at: `${today}T00:00:00.000Z`,
+          event: 'a_value_this_version_does_not_know',
+          text: '新しい版が書いた行',
+        })}\n`,
+        { flag: 'a' },
+      );
+
+      let entries: Awaited<ReturnType<typeof stores.journal.list>> = [];
+      const lines = await captureStderr(async () => {
+        entries = await stores.journal.list();
+      });
+
+      // **一覧は読める。** 読めた行はそのまま返る。
+      expect(entries.map((entry) => (entry as { decision?: string }).decision)).toEqual([
+        '健全な行',
+      ]);
+      // **飛ばしたことは跡に残る。** しかも `type` は読めているので名乗れる。
+      const trace = lines.join('\n');
+      expect(trace).toContain('こちらのスキーマに合わなかった');
+      expect(trace).toContain('type=token_rotation');
+      // **本文は跡に載らない**（載せてよいのは `type` とバイト数だけ）。
+      expect(trace).not.toContain('新しい版が書いた行');
+    });
+
     it('list(): スキーマに合わない行を跡に残しつつ、読めた行はそのまま返す', async () => {
       await stores.journal.append({ type: 'decision', decision: '健全な行', grounds: 'g' });
 

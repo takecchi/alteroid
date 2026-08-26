@@ -699,7 +699,8 @@
                             "not_rotated",
                             "exhausted",
                             "restored",
-                            "restore_failed"
+                            "restore_failed",
+                            "sweep_stopped"
                           ]
                         },
                         "signal": {
@@ -1956,7 +1957,8 @@
                                   "not_rotated",
                                   "exhausted",
                                   "restored",
-                                  "restore_failed"
+                                  "restore_failed",
+                                  "sweep_stopped"
                                 ]
                               },
                               "signal": {

@@ -342,6 +342,24 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
 /** 表示上限。**打ち切ったら必ずそう書く**（黙って切り捨てない）。 */
 const JOURNAL_LIMIT = 50;
 
+/**
+ * 回転の `event` を人間の1行にする。
+ *
+ * **ここだけ `assertNever` を使わない。理由は「版のずれ」である。**
+ *
+ * この画面が読むのは**デーモンが書いた行**で、デーモンとこの画面は別に配られる
+ * （`vercel.json` / `railway/`）。⟹ **サーバのほうが新しい窓が必ず在る**
+ * —— そのとき、まだ知らない `event` が届く。`assertNever` は `throw` するので、
+ * **画面が丸ごと落ちる**（1行の未知が一覧全部を消す。`AGENTS.md` の禁止1と同じ形）。
+ *
+ * ⟹ **網羅性はコンパイル時に守り、実行時は落とさない。** 未知の値は「未知である」と
+ * そのまま出す —— **黙って既知のどれかへ寄せない**（寄せると、読む側は嘘の状態を
+ * 見る。上の `sweep_stopped` を `exhausted` へ潰すのと同じ誤り）。
+ *
+ * **⚠️ この関数の兄弟（`describeAvailability` / `describeRecovery` /
+ * `describePolicy` / `describeFreshness`）はまだ `assertNever` のままである。**
+ * 同じ理屈が当たるが、**この変更では触っていない** —— 直すなら別に測ってからにする。
+ */
 function describeEvent(event: TokenRotationEntry['event']): {
   label: string;
   tone: 'ok' | 'warn' | 'neutral' | 'danger';
@@ -351,14 +369,26 @@ function describeEvent(event: TokenRotationEntry['event']): {
       return { label: '回した（撒いた。走行中のセッションには未反映）', tone: 'warn' };
     case 'exhausted':
       return { label: '候補が無い（全層が止まる）', tone: 'danger' };
+    case 'sweep_stopped':
+      return {
+        label: '候補を試し切る前に打ち切った（まだ試していない候補が残っている）',
+        tone: 'warn',
+      };
     case 'not_rotated':
       return { label: '回さなかった（契機に当たらなかった。正常）', tone: 'neutral' };
     case 'restored':
       return { label: '起動時に現役を撒き直した', tone: 'neutral' };
     case 'restore_failed':
       return { label: '起動時の撒き直しに失敗', tone: 'danger' };
-    default:
-      return assertNever(event, '回転の event');
+    default: {
+      // **網羅性はここで守る**（値が増えたらコンパイルが落ちる）。
+      const unknown: never = event;
+      // **落とさない。** この画面より新しいデーモンが書いた行である。
+      return {
+        label: `未知の event（${String(unknown)}）。この画面より新しいデーモンが書いた行である`,
+        tone: 'neutral',
+      };
+    }
   }
 }
 
