@@ -117,9 +117,21 @@ export interface OutboxPending {
   oldestAt?: string;
 }
 
+/**
+ * `outbox.push()` が返す連番（#275）。**プロセスの寿命の間だけ単調増加する**
+ * ——runner が入れ替われば1から数え直す（`INSTANCE_ID` と同じ寿命）。
+ *
+ * **SSE のフレームの `id` フィールドにしか使わない。** `RunnerEvent`（`@alteroid/
+ * core` の `runnerEventSchema`）には一切載せない——JSON の中身を変えずに
+ * 「取りこぼしの手当て」を配送層だけで完結させるためである（`packages/core/src/
+ * runner-protocol.ts` は人間が差分を読む線であり、触らずに済むならそのほうが
+ * 望ましいという判断）。
+ */
+export type OutboxSeq = number;
+
 export class Outbox {
-  readonly #queue: { event: RunnerEvent; queuedAt: string }[] = [];
-  #listener: ((event: RunnerEvent) => void) | null = null;
+  readonly #queue: { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[] = [];
+  #listener: ((event: RunnerEvent, seq: OutboxSeq) => void) | null = null;
   /**
    * 購読側が抱えている分を数える口（#358）。**購読が始まったときだけ在る。**
    *
@@ -128,17 +140,39 @@ export class Outbox {
    */
   #probe: (() => OutboxPending) | null = null;
   readonly #now: () => string;
+  #nextSeq: OutboxSeq = 1;
+
+  /**
+   * 「`writeSSE` が例外を投げずに返った」出来事の控え（#275）。**上限あり**
+   * ——`#queue`（まだ一度も渡していない分）が上限を置かない理由（取りこぼし）
+   * とはここは違う。ここに積むのは**一度は渡した**分の予備で、上限に当たって
+   * 古い方から捨てても、直す前の挙動（無条件に消える）より悪くはならない。
+   *
+   * hono の `write()`（`hono/dist/utils/stream.js`）は死んだ接続へ書いても
+   * `catch {}` で例外を外へ出さない——runner 側からは「成功した」としか見えない
+   * （Issue #275 本文）。だから `writeSSE` が返った直後の1件は、本当に相手へ
+   * 届いたのか runner には確認できない。**確認できない代わりに、一定件数だけ
+   * 手元に残し**、次に張られた接続が `Last-Event-ID` を名乗ったら
+   * {@link sentSince} で読み返して配り直す。
+   */
+  readonly #sent: { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[] = [];
+
+  /** 控え（{@link #sent}）に残す上限件数。 */
+  static readonly SENT_HISTORY_LIMIT = 1000;
 
   constructor(now: () => string = () => new Date().toISOString()) {
     this.#now = now;
   }
 
-  push(event: RunnerEvent): void {
+  /** 割り振った連番を返す（#275）。呼び出し側が `id`（SSE フレーム）へそのまま使う。 */
+  push(event: RunnerEvent): OutboxSeq {
+    const seq = this.#nextSeq++;
     if (this.#listener !== null) {
-      this.#listener(event);
-      return;
+      this.#listener(event, seq);
+      return seq;
     }
-    this.#queue.push({ event, queuedAt: this.#now() });
+    this.#queue.push({ event, queuedAt: this.#now(), seq });
+    return seq;
   }
 
   /**
@@ -147,10 +181,13 @@ export class Outbox {
    * `pending` は**購読側が抱えている分を数える口**である（#358）。渡さなくても
    * 動くが、**渡さなければ購読中の滞留が {@link pending} から消える。**
    */
-  attach(listener: (event: RunnerEvent) => void, pending?: () => OutboxPending): () => void {
+  attach(
+    listener: (event: RunnerEvent, seq: OutboxSeq) => void,
+    pending?: () => OutboxPending,
+  ): () => void {
     while (this.#queue.length > 0) {
       const item = this.#queue.shift();
-      if (item !== undefined) listener(item.event);
+      if (item !== undefined) listener(item.event, item.seq);
     }
     this.#listener = listener;
     this.#probe = pending ?? null;
@@ -159,6 +196,32 @@ export class Outbox {
       this.#listener = null;
       this.#probe = null;
     };
+  }
+
+  /**
+   * `writeSSE` が例外を投げずに返った直後に呼ぶ（#275）。**この呼び出しが、
+   * 無音切断の唯一の手当てである。**
+   *
+   * 呼ぶのは「相手に本当に届いたことが確認できた」からではない——確認できて
+   * いないからこそ、次の接続の申告（`Last-Event-ID`）に賭けて一定量を手元に
+   * 残す。上限は {@link SENT_HISTORY_LIMIT}。古い方から捨てる。
+   */
+  recordSent(event: RunnerEvent, seq: OutboxSeq, queuedAt: string): void {
+    this.#sent.push({ event, seq, queuedAt });
+    while (this.#sent.length > Outbox.SENT_HISTORY_LIMIT) this.#sent.shift();
+  }
+
+  /**
+   * `lastEventId` より新しく「渡したはず」だった分を、古い順に返す（#275）。
+   *
+   * **`lastEventId` が控えの最古の連番より小さい場合、その間の分は復元でき
+   * ない**（{@link SENT_HISTORY_LIMIT} を超えて捨てられているため）。この
+   * 関数はその欠落を検知しない——黙って「残っている分だけ」を返す。呼び出し側
+   * （`/events`）もそれ以上のことはしない: 直す前の挙動（無条件に消える）より
+   * 悪くはならない、という上限の設計そのものである。
+   */
+  sentSince(lastEventId: OutboxSeq): { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[] {
+    return this.#sent.filter((item) => item.seq > lastEventId);
   }
 
   /**
@@ -388,10 +451,14 @@ export function createRunnerApp(deps: RunnerAppDeps) {
      * 切れると runner は繋ぎ直しのたびに `hello` を書き、デーモンはそれを全部
      * `#reattach` へ通す（`packages/core/src/manager.ts`）ので、**5分ごとの切断は
      * そのまま5分ごとの `#reattach` になる。** 塞ぐのはその両方である。
+     *
+     * **`Last-Event-ID` を受け取る（#275）。** `writeSSE` が例外を投げずに正常
+     * 返却したのに相手には届いていなかった1件（無音切断）を、outbox の控え
+     * （`Outbox.sentSince`）から読み返して配り直す。詳細は `Outbox` の doc。
      */
     .get('/events', (c) =>
       streamSSE(c, async (stream) => {
-        const queue: { event: RunnerEvent; queuedAt: string }[] = [];
+        const queue: { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[] = [];
         let wake: (() => void) | null = null;
         let closed = false;
 
@@ -402,10 +469,38 @@ export function createRunnerApp(deps: RunnerAppDeps) {
          * `await stream.writeSSE(...)` が返らない。**`queue` から出た後なので、
          * ここで持たないとどこにも数えられない。**
          */
-        let writing: { event: RunnerEvent; queuedAt: string } | null = null;
+        let writing: { event: RunnerEvent; queuedAt: string; seq: OutboxSeq } | null = null;
+
+        /**
+         * **無音切断からの復元（#275）。** デーモンは繋ぎ直すとき、直前までに
+         * 受け取れた最後の連番を `Last-Event-ID` ヘッダへ乗せてくる
+         * （`apps/daemon/src/runner-client.ts`）。runner はそれより新しく
+         * 「渡したはず」だった分を outbox の控え（{@link Outbox.sentSince}）
+         * から読み返し、この接続の `queue` の先頭へ積む——`await
+         * stream.writeSSE()` が例外を投げずに正常返却したのに相手には届いて
+         * いなかった1件が、跡なく消える窓を塞ぐ（Issue #275 本文）。
+         *
+         * **申告が無い（初回接続）か、数値として読めないときは何もしない。**
+         * 壊れた申告を理由にストリームを開けないより、控えを読まずに普段
+         * どおり始めるほうを選ぶ——`sentSince` を呼ばなければ実害は無い
+         * （控えは outbox 側に残ったままで、次の正しい申告を待てる）。
+         *
+         * **`queue` へ積む段階では、まだ outbox の通常の待ち行列（まだ一度も
+         * 渡していない分）を読んでいない。** 下の `outbox.attach(...)` が
+         * それを同期的に流し込むのはこの後——だから並び順は「控え（古い）→
+         * 通常の待ち行列（新しい）」のまま保たれる。
+         */
+        const lastEventIdHeader = c.req.header('Last-Event-ID');
+        if (lastEventIdHeader !== undefined) {
+          const lastEventId = Number(lastEventIdHeader);
+          if (Number.isInteger(lastEventId) && lastEventId >= 0) {
+            for (const item of outbox.sentSince(lastEventId)) queue.push(item);
+          }
+        }
+
         const detach = outbox.attach(
-          (event) => {
-            queue.push({ event, queuedAt: new Date().toISOString() });
+          (event, seq) => {
+            queue.push({ event, queuedAt: new Date().toISOString(), seq });
             wake?.();
           },
           // **この口を渡さないと、購読中の滞留が `outbox.pending` から消える**
@@ -448,7 +543,20 @@ export function createRunnerApp(deps: RunnerAppDeps) {
             // **書き終わるまで手放さない**（#358）。`queue` から出た瞬間に忘れると、
             // まさに固着している1件が数え上げから消える。
             writing = item;
-            await stream.writeSSE({ event: item.event.type, data: JSON.stringify(item.event) });
+            // **`id` に連番を乗せる**（#275）。JSON の中身（`RunnerEvent`）は
+            // 変えない——SSE のフレーム側だけで完結させる（`OutboxSeq` の doc）。
+            await stream.writeSSE({
+              event: item.event.type,
+              data: JSON.stringify(item.event),
+              id: String(item.seq),
+            });
+            // **投げずに返った直後、控えへ積む**（#275）。hono の `write()`
+            // （`hono/dist/utils/stream.js`）は死んだ接続へ書いても例外を出さ
+            // ない——ここに来たからといって相手に届いたとは限らない。届いた
+            // かどうかを runner 側では確認できないので、一定量だけ手元に
+            // 残し、次の接続の `Last-Event-ID` に賭ける（`Outbox.recordSent`
+            // の doc）。
+            outbox.recordSent(item.event, item.seq, item.queuedAt);
             // **`finally` で消さない。** 投げたときは `writing` に残したまま抜け、
             // 下の `finally` が箱へ戻す —— そうしないと、書けなかった1件だけが
             // 静かに失われる（この `finally` の意図は「流し切れなかった分は箱へ
