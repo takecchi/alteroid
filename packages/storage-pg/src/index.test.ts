@@ -3,6 +3,7 @@ import {
   renderMemoryDocuments,
   verifyJournalStoreOrderContract,
   verifyJournalStoreQueryEdgeContract,
+  verifyJournalStoreSearchContract,
   verifyJournalStoreWithContract,
 } from '@alteroid/core';
 import type { Commitment, InboxEvent, Job, JournalEntry } from '@alteroid/core';
@@ -1035,6 +1036,25 @@ describe('PgJournalStore', () => {
       await verifyJournalStoreQueryEdgeContract(stores.journal);
     });
   });
+
+  /**
+   * `JournalStore` の `q`（本文を語で探す）の契約（issue #250）を、**pg
+   * 実装**に対して測る。同じ形の歯が3つ在る——インメモリ
+   * （`packages/core/src/journal-search-contract.test.ts`）/ fs
+   * （`packages/storage-fs/src/index.test.ts`）/ pg
+   * （`packages/storage-pg/src/index.test.ts`）。1つで測って3つとも測ったことに
+   * しない（`with` 契約 / `order` 契約 / `query edge` 契約と同じ作法）。
+   *
+   * **pg だけが持ちうる壊れ方**: `ILIKE` のパターンで `%` / `_` を
+   * エスケープし忘れると、`q: '50%'` が全件を返す（契約4）。fs /
+   * インメモリでは素の部分一致なので、この穴はこの実装にしか開かない。
+   */
+  describe('q 契約（issue #250）', () => {
+    it('未指定=絞らない／部分一致／大文字小文字を区別しない／%_ はワイルドカードでない／""=絞らない／limit より前に効く', async () => {
+      await verifyJournalStoreSearchContract(stores.journal);
+    });
+  });
+
 });
 
 describe('PgJobStore', () => {

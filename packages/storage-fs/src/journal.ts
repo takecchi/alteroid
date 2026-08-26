@@ -6,6 +6,7 @@ import {
   journalEntrySchema,
   JournalAnchorNotFoundError,
   journalRowType,
+  matchesJournalSearch,
   noteDroppedJournalRow,
   noteDroppedJournalRowsSummary,
 } from '@alteroid/core';
@@ -134,6 +135,10 @@ export class FsJournalStore implements JournalStore {
         // 効かせる**（issue #418 の穴の本体）。`with` を持つのは `exchange`
         // だけなので、非 exchange は `types` を明示していなくてもここで落ちる。
         if (query.with && (entry.type !== 'exchange' || !query.with.includes(entry.with))) continue;
+        // **`q` も `limit` より前（この `continue` の段）で効かせる**（issue #250。
+        // `with` と同じ理由）。照合そのものは `journal-search.ts` が持つ —— 3実装が
+        // 同じ答えを出すために、欄の選び方をここへ書き写さない。
+        if (query.q !== undefined && !matchesJournalSearch(entry, query.q)) continue;
         if (query.since && entry.at < query.since) continue;
         if (query.until && entry.at > query.until) continue;
         found.push(entry);

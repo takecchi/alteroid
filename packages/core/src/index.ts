@@ -242,6 +242,28 @@ export {
   type JournalStoreQueryEdgeContractSubject,
 } from './journal-query-edge-contract.js';
 /**
+ * 日誌を語で探す（`JournalQuery.q`。issue #250）ときの、照合の唯一の正本。
+ * **どの欄を本文と見るか**を `journal-search.ts` が持ち、3実装（インメモリ /
+ * `storage-fs` は `matchesJournalSearch`、`storage-pg` は
+ * `JOURNAL_SEARCH_FIELDS` から SQL の式）がそこから組み立てる —— 欄の選び方を
+ * 実装側へ書き写さない。
+ */
+export {
+  JOURNAL_SEARCH_FIELDS,
+  journalSearchText,
+  matchesJournalSearch,
+} from './journal-search.js';
+/**
+ * `JournalStore` の `q`（本文を語で探す）の契約（issue #250）。3実装
+ * （インメモリ / `storage-fs` / `storage-pg`）それぞれの歯がこれを呼んで
+ * 揃っていることを測る — 1つで測って3つとも測ったことにしない
+ * （`verifyJournalStoreWithContract` と同じ作法）。
+ */
+export {
+  verifyJournalStoreSearchContract,
+  type JournalStoreSearchContractSubject,
+} from './journal-search-contract.js';
+/**
  * クローンの自己認識。正典（`docs/*.md`）の全文はビルド時に焼き込まれる
  * （`scripts/write-canon.mjs`）。要約を手書きしないこと — docs と二重管理になる。
  */

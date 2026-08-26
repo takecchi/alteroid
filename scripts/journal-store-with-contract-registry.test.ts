@@ -128,6 +128,7 @@ const REQUIRED_CONTRACTS = [
   'verifyJournalStoreWithContract',
   'verifyJournalStoreOrderContract',
   'verifyJournalStoreQueryEdgeContract',
+  'verifyJournalStoreSearchContract',
 ] as const;
 
 /**
@@ -147,6 +148,7 @@ const KNOWN_IMPLEMENTATIONS: Record<string, RegistryEntry> = {
       'packages/core/src/journal-with-contract.test.ts',
       'packages/core/src/journal-order-with-contract.test.ts',
       'packages/core/src/journal-query-edge-contract.test.ts',
+      'packages/core/src/journal-search-contract.test.ts',
     ],
     contracts: REQUIRED_CONTRACTS,
   },
