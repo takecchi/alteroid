@@ -5111,7 +5111,7 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
 
   it.each(CASES)(
     '$label — 切ったなら黙らない（省いたことが出力に出る）',
-    async ({ name, args, section, mark }) => {
+    async ({ label, name, args, section, mark }) => {
       const h = await flooded(60);
 
       const reply = await h.call(name, args);
@@ -5133,7 +5133,7 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       if (section !== undefined) {
         if (mark === undefined) {
           throw new Error(
-            `CASES: section を指定したケースは mark も必ず指定すること（label="${name}"）。` +
+            `CASES: section を指定したケースは mark も必ず指定すること（label="${label}"）。` +
               'mark 無しで素の TRUNCATION_MARK に落とすと、entries の省略が代わりに合格を出す' +
               '欠陥（#406）へ逆戻りする。',
           );
