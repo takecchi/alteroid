@@ -7,6 +7,7 @@ import {
   renderMemoryDocuments,
   verifyJournalStoreOrderContract,
   verifyJournalStoreQueryEdgeContract,
+  verifyJournalStoreSearchContract,
   verifyJournalStoreWithContract,
 } from '@alteroid/core';
 import type { Commitment, InboxEvent, JournalEntry } from '@alteroid/core';
@@ -1274,6 +1275,24 @@ describe('FsJournalStore', () => {
   describe('query edge 契約（issue #425）', () => {
     it('types: []=0件／limit: 0=0件／types 未指定=絞らない／指定=その種別だけ／limit:N(N>=1)はN件で切る／同時指定でも0件', async () => {
       await verifyJournalStoreQueryEdgeContract(stores.journal);
+    });
+  });
+
+  /**
+   * `JournalStore` の `q`（本文を語で探す）の契約（issue #250）を、**fs
+   * 実装**に対して測る。同じ形の歯が3つ在る——インメモリ
+   * （`packages/core/src/journal-search-contract.test.ts`）/ fs
+   * （`packages/storage-fs/src/index.test.ts`）/ pg
+   * （`packages/storage-pg/src/index.test.ts`）。1つで測って3つとも測ったことに
+   * しない（`with` 契約 / `order` 契約 / `query edge` 契約と同じ作法）。
+   *
+   * **fs 実装は素の `includes` なので、契約4（`%` / `_` はワイルドカード
+   * ではない）はここでは自明に通る。** 落ちうるのは `ILIKE` を使う pg だけ
+   * である——それでも3実装ぜんぶで測る理由は、インメモリ側の歯の doc に在る。
+   */
+  describe('q 契約（issue #250）', () => {
+    it('未指定=絞らない／部分一致／大文字小文字を区別しない／%_ はワイルドカードでない／""=絞らない／limit より前に効く', async () => {
+      await verifyJournalStoreSearchContract(stores.journal);
     });
   });
 });

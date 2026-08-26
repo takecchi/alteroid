@@ -2277,6 +2277,99 @@ describe('GET /reports の beforeDate/beforeAt（issue #432）', () => {
  * なる。`after` は返る順序における次を指し、時間の意味ではない
  * ——`order=desc`（既定）では、指した行より**古い**行が返る。
  */
+/**
+ * `GET /journal` の `q`（本文を語で探す。issue #250）。
+ *
+ * **ストア側の契約は `journal-search-contract.ts` が3実装ぶん測る。**
+ * ここで測るのは、**HTTP の口がそれを本当に通しているか**だけである
+ * ——「4口すべてに `q` が入る」の HTTP のぶんがこれに当たる。
+ */
+describe('GET /journal の q（issue #250）', () => {
+  it('本文にその語を含む行だけを返す（大文字小文字を区別しない部分一致）', async () => {
+    await stores.journal.append({
+      type: 'decision',
+      decision: 'トマトの水やりを1日1回にする',
+      grounds: '前回の観測',
+    });
+    await stores.journal.append({ type: 'decision', decision: 'ナスの支柱', grounds: 'g' });
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: 'TOMATO とも書く',
+    });
+
+    const hit = (await (
+      await app.request(`/journal?q=${encodeURIComponent('トマト')}`)
+    ).json()) as {
+      entries: { type: string }[];
+    };
+    expect(hit.entries).toHaveLength(1);
+
+    // 大文字小文字を区別しない（先例 `conversation_read` と同じ契約）。
+    const lowered = (await (await app.request('/journal?q=tomato')).json()) as {
+      entries: { id: string }[];
+    };
+    expect(lowered.entries).toHaveLength(1);
+  });
+
+  it('type と併用できる', async () => {
+    await stores.journal.append({ type: 'decision', decision: '収穫はトマトから', grounds: 'g' });
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: 'トマトはいつ？',
+    });
+
+    const url = `/journal?type=decision&q=${encodeURIComponent('トマト')}`;
+    const body = (await (await app.request(url)).json()) as { entries: { type: string }[] };
+    expect(body.entries).toHaveLength(1);
+    expect(body.entries[0]?.type).toBe('decision');
+  });
+
+  /**
+   * **`q=`（空）は絞らない。** 0件へ倒すと、検索欄を空にした画面が
+   * 「記録が消えた」ように見える（`journalQuery` の `q` の doc）。
+   */
+  it('q=（空文字列）は絞らない', async () => {
+    await stores.journal.append({ type: 'decision', decision: 'なんでもよい', grounds: 'g' });
+
+    const empty = (await (await app.request('/journal?q=')).json()) as { entries: unknown[] };
+    const none = (await (await app.request('/journal')).json()) as { entries: unknown[] };
+    expect(empty.entries).toHaveLength(none.entries.length);
+    expect(empty.entries.length).toBeGreaterThan(0);
+  });
+
+  /**
+   * **`%` はワイルドカードではない。** pg 実装が `ILIKE` を使うので、
+   * ここが崩れると pg でだけ全件が返る（`journal-search-contract.ts` の契約4）。
+   * **この歯はインメモリのストアを通るので pg の穴そのものは踏めない** ——
+   * ここで測っているのは「HTTP がクエリ文字列を素通しし、余計な解釈を
+   * 足していないか」までである。
+   */
+  it('q に % を渡しても全件にはならない', async () => {
+    await stores.journal.append({ type: 'decision', decision: '進捗は50%だった', grounds: 'g' });
+    await stores.journal.append({ type: 'decision', decision: '当たらない行', grounds: 'g' });
+
+    const url = `/journal?q=${encodeURIComponent('50%')}`;
+    const body = (await (await app.request(url)).json()) as { entries: unknown[] };
+    expect(body.entries).toHaveLength(1);
+  });
+
+  /**
+   * **応答の封筒を増やさない**（`journalQuery` の doc「応答に新しい欄を1つも
+   * 足さなくてよい」）。`q` は絞りであって、頁の話ではない。
+   */
+  it('q を渡しても応答の鍵は増えない', async () => {
+    await stores.journal.append({ type: 'decision', decision: 'トマト', grounds: 'g' });
+
+    const body = (await (
+      await app.request(`/journal?q=${encodeURIComponent('トマト')}`)
+    ).json()) as Record<string, unknown>;
+    expect(Object.keys(body)).toEqual(['entries']);
+  });
+});
 describe('GET /journal の order/afterId/afterAt（issue #432 の2本目）', () => {
   afterEach(() => {
     vi.useRealTimers();

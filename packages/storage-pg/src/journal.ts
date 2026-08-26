@@ -4,11 +4,12 @@ import {
   journalEntrySchema,
   JournalAnchorNotFoundError,
   journalRowType,
+  JOURNAL_SEARCH_FIELDS,
   noteDroppedJournalRow,
   noteDroppedJournalRowsSummary,
 } from '@alteroid/core';
 import type { JournalEntry, JournalEntryInput, JournalQuery, JournalStore } from '@alteroid/core';
-import { and, asc, desc, eq, gt, gte, inArray, lt, lte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, lt, lte, sql, type SQL } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { stripNulls, toNumber } from './db.js';
@@ -106,6 +107,9 @@ export class PgJournalStore implements JournalStore {
       // `in ()` という不正な SQL へ落とさないための特別扱い）ので、
       // 0件という契約がそのまま満たされる。
       ...(query.with === undefined ? [] : [inArray(sql`(${journal.entry}->>'with')`, query.with)]),
+      // **`q` も `where` 節（＝ `limit` より前）で効かせる**（issue #250。`with` と
+      // 同じ段）。組み立ては `journalSearchTextSql` / `likePattern`。
+      ...(query.q === undefined ? [] : [journalSearchMatches(query.q)]),
       // **`order` の向きに応じて `gt` / `lt` を切り替える。** `desc` は錨より
       // 古い側（`seq` が小さい側）、`asc` は錨より新しい側（`seq` が大きい側）。
       ...(afterSeq === undefined
@@ -178,4 +182,110 @@ export class PgJournalStore implements JournalStore {
  */
 function byteLength(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value) ?? 'null', 'utf8');
+}
+
+/**
+ * `q`（本文を語で探す。issue #250）を SQL の述語へ落とす。
+ *
+ * ## 意味論の決め方 —— `ILIKE`。全文検索は採らない
+ *
+ * **先例（`conversation_read` の `q`）が「大文字小文字を区別しない単純な部分
+ * 一致」だと決めており、それをそのまま踏襲する**（`packages/core/src/store.ts`
+ * の `JournalQuery.q`、`packages/core/src/conversation.ts` の
+ * `searchExchanges`）。**PostgreSQL の全文検索（`tsvector` / `to_tsquery`）は
+ * 部分一致ではない** —— 語に分けて正規化して照合するので、
+ *
+ * - 語の途中には当たらない（`"コミット"` で `"コミットメッセージ"` に当たらない）
+ * - 既定の parser は日本語を語に割れない（割るには `pg_bigm` / `pgroonga` 等の
+ *   拡張が要る。この repo の日誌はほぼ日本語である）
+ * - **fs / インメモリの実装と答えが揃わない**（3実装で揃える契約が成り立たない）
+ *
+ * ⟹ **「pg だけ検索の意味論が違う」ことになるので採らない。** 探し方を増やす
+ * より、3口で同じ答えが返るほうが効く（`searchExchanges` の doc と同じ判断）。
+ *
+ * ## 索引は張っていない（**「忘れた」ではなく、そう決めた**）
+ *
+ * `ILIKE '%…%'` は前方一致ではないので B-tree では効かない。効かせるなら
+ * `pg_trgm` の GIN 索引（拡張の作成 + `migrate.ts` への追記）が要るが、
+ * **今回は張っていない。** 理由:
+ *
+ * - **`q` は常に他の絞り（`types` / `since` / `until` / `after`）と同じ
+ *   `where` 節に並ぶ。** 既存の `journal_at_idx` / `journal_type_at_idx` が
+ *   先に効いた後の行にだけこの述語が当たる
+ * - **`pg_trgm` は拡張である。** `create extension` が要るので、権限の要求が
+ *   `migrate.ts` の現在の前提（`if not exists` の DDL だけ）より1段強くなる
+ * - **測っていない値のために構造を足さない。** 実データでの遅さはまだ観測して
+ *   いない（AGENTS.md「取れない軸に 0 の行を作らない」の裏面 —— 要ると分かって
+ *   から張る）
+ *
+ * ⚠️ **遅いと分かったらここへ戻ること。** 張るなら `pg_trgm` + GIN を
+ * `migrate.ts` の配列末尾へ足す（`migrate.ts` 冒頭の「⚠️ 古い鍵の `create` は
+ * 配列から消す」に当たらない、純粋な追加である）。
+ */
+function journalSearchMatches(q: string): SQL {
+  return sql`${journalSearchTextSql()} ilike ${likePattern(q)} escape ${sql.raw("'\\'")}`;
+}
+
+/**
+ * 照合の対象になる文字列を SQL の式として組み立てる。
+ *
+ * **`JOURNAL_SEARCH_FIELDS` から組み立てる。欄名をここへ書き写さない** ——
+ * JS 側（`journalSearchText`）と同じ定数・同じ順序・同じ区切り（改行1つ）で
+ * 繋ぐことで、両者が作る文字列そのものが1バイトも違わなくなる
+ * （`packages/core/src/journal-search.ts` の doc）。**書き写すと、片方だけ直して
+ * 他方を忘れる形ができ、食い違いは特定の種別 × 特定の語のときだけ出る。**
+ *
+ * `coalesce(…, '')` で無い欄を空文字列にするのも JS 側と揃えるためである
+ * （飛ばすと繋ぎ目の数が変わる）。改行は `chr(10)` で作る —— リテラルの
+ * `E'\n'` は `standard_conforming_strings` の設定に意味が依存する。
+ *
+ * **欄名は SQL リテラルとして直に埋める**（`sql.raw`）。`->>` の右辺を
+ * バインド変数にすると `jsonb ->> unknown` が `->>(jsonb,int)` と
+ * `->>(jsonb,text)` のどちらか決まらず落ちる。埋める値は**このモジュールの
+ * 定数だけ**で外から来ないが、それに依存しないよう下で形を検算している。
+ */
+function journalSearchTextSql(): SQL {
+  return sql.join(
+    JOURNAL_SEARCH_FIELDS.map(
+      (field) =>
+        sql`coalesce(${journal.entry}->>${sql.raw(`'${assertPlainFieldName(field)}'`)}, '')`,
+    ),
+    sql` || chr(10) || `,
+  );
+}
+
+/**
+ * 欄名が「英字だけ」であることを、SQL へ埋める直前に確かめる。
+ *
+ * **いま埋めている値はすべて `JOURNAL_SEARCH_FIELDS`（このリポジトリの定数）
+ * から来ていて外から来ない。** それでも検算するのは、`sql.raw` が「安全な値
+ * だけが来る」という**呼び出し側の性質**に頼っているからである —— 定数の
+ * 出所が将来変わったとき、頼っている性質が消えたことは呼び出し側からは
+ * 見えない。**判定できないという第3の状態を持たず、形が違ったら投げる**
+ * （AGENTS.md「静かに失敗する道具」）。
+ */
+function assertPlainFieldName(field: string): string {
+  if (!/^[A-Za-z]+$/.test(field)) {
+    throw new Error(`日誌の検索対象の欄名が英字だけではない: ${JSON.stringify(field)}`);
+  }
+  return field;
+}
+
+/**
+ * `q` を `ILIKE` のパターンへ包む。
+ *
+ * **`%` と `_` をワイルドカードとして通さない。** 塞がないと **pg だけ**が
+ * `q: '50%'` で全件を返す（fs / インメモリは素の部分一致なので当たらない）
+ * —— 3実装で揃える契約の一部そのものである（`JournalQuery.q` の doc、
+ * `journal-search-contract.ts` が測る）。`\` 自身も先に倍にする（順序が逆だと、
+ * 自分で足した `\` をもう一度倍にしてしまう）。
+ *
+ * **`ILIKE` の大文字小文字の畳み方は `lower()` と同じでロケールに依存し、
+ * JS の `toLowerCase()` と完全には同じではない**（例: トルコ語ロケールの
+ * `I`/`İ`）。日誌の本文（日本語・ASCII）では一致する。**ここは確認していない
+ * 差である** —— 揃わない例が出たら、揃えるのは pg 側ではなく「照合を SQL から
+ * 引き上げる」判断になる。
+ */
+function likePattern(q: string): string {
+  return `%${q.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
 }

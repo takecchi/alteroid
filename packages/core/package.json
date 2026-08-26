@@ -15,6 +15,10 @@
     "./revision": {
       "types": "./dist/revision-format.d.ts",
       "import": "./dist/revision-format.js"
+    },
+    "./journal-search": {
+      "types": "./dist/journal-search.d.ts",
+      "import": "./dist/journal-search.js"
     }
   },
   "files": [

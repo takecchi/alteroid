@@ -14,6 +14,7 @@ import {
   applyNewerPage,
   applyOlderPage,
   filterByType,
+  filterRecent,
   mergeBack,
   mergeFront,
   newerPageQuery,
@@ -206,6 +207,75 @@ describe('filterByType', () => {
 
   it('選択した種別だけ残す', () => {
     expect(filterByType([decision, tool], ['tool_use'])).toEqual([tool]);
+  });
+});
+
+/**
+ * `filterRecent` — 画面にいま掛かっている絞り（種別チップ + 語で探す）を、
+ * SSE で届いた生の `recent` へ掛け直す（issue #250）。
+ *
+ * **ここで測るのは、`journal.test.tsx` では測れない。** jsdom は日誌の行を
+ * 1行も描かない（virtua）ので、画面越しには「当たらない新着が割り込まない」
+ * ことを確かめられない —— 純粋な関数へ切り出してあるのはそのためである。
+ */
+describe('filterRecent（recent へ、種別と語の絞りを掛け直す）', () => {
+  const tomato = entry('a', '2026-08-20T00:01:00.000Z');
+  const eggplant: JournalEntry = {
+    type: 'decision',
+    id: 'b',
+    at: '2026-08-20T00:02:00.000Z',
+    decision: 'ナスの支柱を立てる',
+    grounds: 'g',
+  };
+  const withWord: JournalEntry = {
+    type: 'decision',
+    id: 'c',
+    at: '2026-08-20T00:03:00.000Z',
+    decision: 'トマトの水やり',
+    grounds: 'g',
+  };
+
+  it('q が空なら語では絞らない（種別の絞りだけが効く）', () => {
+    expect(filterRecent([tomato, eggplant], [], '')).toEqual([tomato, eggplant]);
+  });
+
+  it('当たらない新着は落とす（検索中の画面へ割り込ませない）', () => {
+    expect(filterRecent([withWord, eggplant], [], 'トマト')).toEqual([withWord]);
+  });
+
+  it('大文字小文字を区別しない部分一致（サーバ側と同じ照合を通る）', () => {
+    const shouted: JournalEntry = {
+      type: 'decision',
+      id: 'd',
+      at: '2026-08-20T00:04:00.000Z',
+      decision: 'TOMATO を植えた',
+      grounds: 'g',
+    };
+    expect(filterRecent([shouted, eggplant], [], 'tomato')).toEqual([shouted]);
+  });
+
+  it('種別と語の両方が効く（片方だけでは残らない）', () => {
+    const toolRow = entry('t2', '2026-08-20T00:06:00.000Z', 'tool_use');
+    expect(filterRecent([withWord, toolRow], ['decision'], 'トマト')).toEqual([withWord]);
+    expect(filterRecent([withWord, toolRow], ['tool_use'], 'トマト')).toEqual([]);
+  });
+
+  /**
+   * **対象外の欄（`tool_use` の `input`）には当たらない** ——
+   * サーバ側の契約（`journal-search-contract.ts`）と同じ線が画面側でも
+   * 引かれていること。ずれると、SSE で届いた行だけが画面に残り、
+   * 開き直すと消える（＝再現しない）。
+   */
+  it('tool_use の input は探す対象に入っていない', () => {
+    const toolUse: JournalEntry = {
+      type: 'tool_use',
+      id: 'e',
+      at: '2026-08-20T00:05:00.000Z',
+      actor: 'clone',
+      tool: 'Bash',
+      input: { command: 'echo トマト' },
+    };
+    expect(filterRecent([toolUse], [], 'トマト')).toEqual([]);
   });
 });
 

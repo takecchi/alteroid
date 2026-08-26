@@ -351,6 +351,18 @@ const journalQuery = z.object({
   /** カンマ区切りの日誌エントリ種別。 */
   type: z.string().optional(),
   /**
+   * 本文を語で探す（issue #250）。**大文字小文字を区別しない部分一致**
+   * ——意味論は `JournalQuery.q` が持つ（クローンの `journal_read` の `q` と
+   * 同じ1つの実装を通る。**画面のために別の口を足さない**）。
+   *
+   * **`q=`（空文字列）は絞らない。** 検索欄を空にした呼びが 0 件を返すと、
+   * 呼ぶ側は「消えた」と読む（`matchesJournalSearch` の doc）。だから
+   * `.min(1)` を掛けない——空文字列はそのままストアへ渡して「絞らない」に
+   * 倒す。**渡さないのと同じ結果になる**ので、呼ぶ側は空のときに
+   * パラメタを外す判断をしなくてよい。
+   */
+  q: z.string().optional(),
+  /**
    * 返す順序。既定 `'desc'`（新しい順＝従来の挙動）。**この既定値がある
    * ことで、クエリを1つも渡さない既定の呼びも `order:'desc'` をストアへ
    * 渡すことになるが、それは従来の挙動そのものであり応答は1バイトも
@@ -1708,6 +1720,10 @@ export function createApp(deps: AppDeps) {
         summary: '日誌を読む',
         description:
           '日誌（追記専用の記録）を読む。`type` `since` `until` で掘れる。' +
+          '`q` で本文を語で探せる（大文字小文字を区別しない部分一致。他の絞りと併用できる）。' +
+          '**`q` が当たらないことは「日誌にその語が無い」を意味しない** —— ' +
+          '`tool_use` の `input`・`worker_wait`・`turn_usage` は探す対象に入っていない。' +
+          '`q=`（空）は絞らない。' +
           '既定は新しい順（`order:desc`）——`order:asc` で古い順にもできる。' +
           '`afterId` と `afterAt` を両方渡すと、前の頁の最後の行より後ろ' +
           '（＝返る順序における次）を返す（可視の複合キー。応答に `id`/`at` が' +
@@ -1734,7 +1750,7 @@ export function createApp(deps: AppDeps) {
       }),
       validator('query', journalQuery),
       async (c) => {
-        const { limit, since, until, type, order, afterId, afterAt } = c.req.valid('query');
+        const { limit, since, until, type, q, order, afterId, afterAt } = c.req.valid('query');
         const types = type?.split(',').filter((value) => value.length > 0) as
           JournalEntryType[] | undefined;
 
@@ -1759,6 +1775,7 @@ export function createApp(deps: AppDeps) {
               ...(since === undefined ? {} : { since }),
               ...(until === undefined ? {} : { until }),
               ...(types === undefined || types.length === 0 ? {} : { types }),
+              ...(q === undefined ? {} : { q }),
               ...(afterId === undefined || afterAt === undefined
                 ? {}
                 : { after: { id: afterId, at: afterAt } }),

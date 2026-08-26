@@ -244,6 +244,40 @@ export interface JournalQuery {
    */
   with?: ExchangeWith[];
   /**
+   * 本文を語で探す（issue #250）。
+   *
+   * **意味論は `conversation_read` の `q` をそのまま踏襲する。新しい検索の
+   * 意味論を発明しない** —— `conversation.ts` の `searchExchanges`（「語で探す。
+   * **大文字小文字を区別しない単純な部分一致だけを持つ。**」）と同じである。
+   * 正規表現も AND/OR も無い。
+   *
+   * **どの欄を本文と見るかは `journal-search.ts` の
+   * `SEARCHABLE_FIELDS_BY_TYPE` が唯一の正本である**（3実装がそこから式を
+   * 組み立てる）。**`tool_use` の `input` / `worker_wait` / `turn_usage` は
+   * 対象外** —— 理由と、そこから来る「当たらない ≠ 日誌に無い」は同ファイルの
+   * doc が持つ。ここに書き写さない。
+   *
+   * **契約（3実装で揃える。`journal-search-contract.ts` の
+   * `verifyJournalStoreSearchContract` が測る）:**
+   *
+   * - **未指定 = 絞らない**（既存の挙動を1文字も変えない）
+   * - **指定 = 本文にその語を含む行だけを返す（大文字小文字を区別しない
+   *   部分一致）**
+   * - **`''`（空文字列）= 絞らない。** `types: []` / `with: []` の「0件」とは
+   *   逆に見えるが逆ではない（`matchesJournalSearch` の doc —— あちらは許す値
+   *   の集合で、空集合は何も許さない。こちらは探す語で、空の語はどの文字列にも
+   *   含まれる）
+   * - **`%` と `_` はワイルドカードではない。** pg 実装が `ILIKE` を使うので、
+   *   ここを塞がないと **pg だけ**が `q: '50%'` で全件を返す。3実装で揃える
+   *   対象そのものである
+   * - **`limit` より前に効く**（`with` と同じ。#418 の穴の本体）。ここが崩れて
+   *   いると、当たらない行が `limit` の予算を食い尽くし、狙った行が窓の外へ
+   *   落ちる
+   * - **適用順序は `types` / `with` / `since` / `until` と同じ段である**
+   *   （下の `after` の doc の「`after` → 絞り込み → `limit`」の、絞り込みの側）
+   */
+  q?: string;
+  /**
    * 返す順序（issue #432 の2本目）。**既定 `'desc'`**（新しい順＝従来の挙動を
    * 1バイトも変えない）。`'asc'` で古い順にできる。
    */
@@ -278,7 +312,7 @@ export interface JournalQuery {
    * - **`id` と `at` の両方が一致する行が無ければ `JournalAnchorNotFoundError`
    *   を投げる。** 黙って「先頭から」に倒さない——判定できないという第3の
    *   状態を持つ（AGENTS.md「静かに失敗する道具」）。
-   * - **適用順序: `after` → `types` / `with` / `since` / `until` → `limit`。**
+   * - **適用順序: `after` → `types` / `with` / `q` / `since` / `until` → `limit`。**
    *   錨の位置は全順序（絞り込み前）の中で決め、そこから先を絞って、最後に
    *   切る。この順序が逆だと、絞りに当たらない行が錨と `limit` のあいだに
    *   挟まったとき（あるいは錨自体が絞りに当たらない種別のとき）に頁の連結が

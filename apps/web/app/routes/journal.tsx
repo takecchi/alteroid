@@ -1,5 +1,6 @@
-import { AlertTriangle } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { AlertTriangle, Search } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router';
 import { Virtualizer, type VirtualizerHandle } from 'virtua';
 
 import { Page } from '~/components/page';
@@ -84,10 +85,74 @@ const EDGE_THRESHOLD_ITEMS = 20;
  */
 const AT_TOP_THRESHOLD_PX = 24;
 
+/**
+ * 検索欄の打鍵から `GET /journal` を撃つまでの待ち（ミリ秒。issue #250）。
+ *
+ * **打鍵ごとに撃たない。** 日誌の検索はストア全体を舐めうる（pg は
+ * `ILIKE` に索引を張っていない。`packages/storage-pg/src/journal.ts` の
+ * `journalSearchMatches` の doc）ので、1文字ごとに撃つと打っている間
+ * ずっと重い問い合わせが並ぶ。
+ *
+ * ⚠️ **この数字は実機で調整すべきもので、テストが通っても正しさの根拠には
+ * ならない**（このファイルの `EDGE_THRESHOLD_ITEMS` / `AT_TOP_THRESHOLD_PX`
+ * と同じ断り）。短すぎれば上の重さがそのまま出るし、長すぎれば「打ったのに
+ * 何も起きない」時間になる。**300ms は当てずっぽうで、実機での検証はして
+ * いない。**
+ */
+const SEARCH_DEBOUNCE_MS = 300;
+
+/**
+ * 検索語を載せる URL のクエリパラメタ名。**`GET /journal` の `q` と同じ名前**
+ * にしてある（画面の URL と API のクエリで名前が違うと、片方を見て他方を
+ * 組み立てられない）。
+ */
+const SEARCH_PARAM = 'q';
+
 export default function Journal() {
   const [selected, setSelected] = useState<readonly JournalEntryType[]>([]);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const [headerRef, headerHeight] = useMeasuredHeight();
+
+  /*
+   * **検索語の正本は URL である**（issue #250）。
+   *
+   * 画面の state に閉じ込めると、**その検索結果を人へ渡せない**（開き直すと
+   * 消える・戻るで戻れない・リンクで共有できない）。日誌は「あとから否定
+   * できる」ための記録なので、**見つけた1行を指して渡せること**そのものに
+   * 意味がある。
+   *
+   * **打っている途中の値（`draft`）と、実際に撃つ値（URL）を分けてある。**
+   * 入力欄は打鍵ごとに `draft` を更新して即座に反応し、URL は debounce
+   * （`SEARCH_DEBOUNCE_MS`）を通った後だけ書き換える。**`replace: true` に
+   * するのは、打鍵1つごとに履歴が積まれると「戻る」が使えなくなるから**で
+   * ある（検索語を1文字ずつ巻き戻すのは誰も望んでいない）。
+   *
+   * **種別チップ（`selected`）は URL に載せていない。** これは #250 の
+   * 終了条件（4口に `q` が入る）の外なので手を付けなかっただけで、
+   * 「載せるべきでない」と判断したのではない。**いま検索語だけが URL に
+   * 在り、チップは在る、という非対称がここに在る。**
+   */
+  const [searchParams, setSearchParams] = useSearchParams();
+  const committed = searchParams.get(SEARCH_PARAM) ?? '';
+  const [draft, setDraft] = useState(committed);
+
+  useEffect(() => {
+    if (draft === committed) return;
+    const timer = setTimeout(() => {
+      setSearchParams(
+        (previous) => {
+          const next = new URLSearchParams(previous);
+          if (draft === '') next.delete(SEARCH_PARAM);
+          else next.set(SEARCH_PARAM, draft);
+          return next;
+        },
+        { replace: true },
+      );
+    }, SEARCH_DEBOUNCE_MS);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [draft, committed, setSearchParams]);
 
   function toggle(type: JournalEntryType) {
     setSelected((previous) =>
@@ -110,6 +175,41 @@ export default function Journal() {
         申告する必要がある。
       */}
       <div ref={headerRef}>
+        {/*
+          **絞り込みはサーバに投げる**（下の型チップと同じ判断。この文言は
+          `TYPES` の doc に逐語で在る）。画面側で本文を突き合わせて捨てると、
+          「窓に読み込んだぶんの中でしか探せない」＝ **CLI やクローンでは
+          できることが Web でだけできない**、という層ができる。
+        */}
+        <div className="mb-3 flex items-center gap-2">
+          <div className="relative min-w-0 flex-1">
+            <Search
+              className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted"
+              aria-hidden
+            />
+            <input
+              type="search"
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              placeholder="本文を語で探す（大文字小文字を区別しない部分一致）"
+              aria-label="日誌を語で探す"
+              className="w-full rounded border border-border bg-bg py-1.5 pr-2 pl-8 text-sm text-fg placeholder:text-muted focus:border-accent focus:outline-none"
+            />
+          </div>
+        </div>
+        {/*
+          **探す対象に入っていない欄が在ることを、探している人に見せる。**
+          黙ると「当たらない＝日誌に無い」と読める（`journal-search.ts` の
+          「対象にしていない欄」、AGENTS.md「静かに失敗する道具」）。
+          **検索していないときは出さない** —— 常に出すと、本当に効いている
+          ときの目印にならない（`memory_read` の注記と同じ倒し方）。
+        */}
+        {committed !== '' && (
+          <p className="mb-3 text-[11px] text-muted">
+            tool_use の input・worker_wait・turn_usage
+            は探す対象に入っていない（そこにだけ書かれている語は当たらない）。
+          </p>
+        )}
         <div className="mb-4 flex flex-wrap items-center gap-1.5">
           {TYPES.map((type) => (
             <button
@@ -148,8 +248,9 @@ export default function Journal() {
         リセットになる。
       */}
       <JournalBody
-        key={selected.join(',')}
+        key={`${selected.join(',')}\u0000${committed}`}
         selected={selected}
+        q={committed}
         scrollAreaRef={scrollAreaRef}
         startMargin={headerHeight}
       />
@@ -159,14 +260,16 @@ export default function Journal() {
 
 function JournalBody({
   selected,
+  q,
   scrollAreaRef,
   startMargin,
 }: {
   selected: readonly JournalEntryType[];
+  q: string;
   scrollAreaRef: React.RefObject<HTMLDivElement | null>;
   startMargin: number;
 }) {
-  const journalWindow = useJournalWindow(selected);
+  const journalWindow = useJournalWindow(selected, q);
   const { entries, isLoadingInitial, error, olderStatus, isLoadingOlder, loadOlder } =
     journalWindow;
 
@@ -221,7 +324,11 @@ function JournalBody({
         {isLoadingInitial ? (
           <Spinner />
         ) : entries.length === 0 ? (
-          <Empty>この条件では何も記録されていない。</Empty>
+          <Empty>
+            {q === ''
+              ? 'この条件では何も記録されていない。'
+              : `「${q}」に当たる記録は無い（この条件の中では）。`}
+          </Empty>
         ) : (
           <Virtualizer
             ref={virtualizerRef}

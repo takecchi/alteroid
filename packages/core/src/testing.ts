@@ -1,5 +1,6 @@
 import { setStderrSinkForTesting } from './dropped-record.js';
 import { deriveMemoryFrontmatter, nextDescribedAt } from './memory.js';
+import { matchesJournalSearch } from './journal-search.js';
 import type {
   Commitment,
   CommitmentClosedBy,
@@ -326,6 +327,13 @@ export function createMemoryStores(): Stores {
         found = found.filter(
           (entry) => entry.type === 'exchange' && withValues.includes(entry.with),
         );
+      }
+      // **`q` も `limit`（下の slice）より前で効かせる**（issue #250。
+      // `with` と同じ段）。照合そのものは `journal-search.ts` が持つ —— 3実装が
+      // 同じ答えを出すために、欄の選び方をここへ書き写さない。
+      if (query.q !== undefined) {
+        const q = query.q;
+        found = found.filter((entry) => matchesJournalSearch(entry, q));
       }
       if (query.since !== undefined) {
         const since = query.since;

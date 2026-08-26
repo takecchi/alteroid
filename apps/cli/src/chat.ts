@@ -223,7 +223,7 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /reports [件数]       日報の一覧
 /memory              記憶の一覧
 /memory <slug>       記憶の中身（書き換えは alteroid memory edit <slug>）
-/journal [件数]      日誌（新しい順）
+/journal [件数] [q=<語>]  日誌（新しい順）。q= はそれ以降の行末までを1つの語として扱う
 /conversations [limit=<N>] [scan=<N>]  会話の一覧（新しい順、番号付き）
 /conversation <番号|id> [scan=<N>]  その会話の中身（古い順。番号は /conversations の並び）
 /managers            マネージャーの一覧（番号付き）と状態
@@ -481,14 +481,35 @@ export async function runSlashCommand(
     }
 
     case '/journal': {
-      const limit = rest[0] ?? '20';
-      const response = await client.journal.$get({ query: { limit } });
+      // **`q=` は行末までを1つの語として取る**（`parseJournalSearchTokens`）。
+      // 語で探す口に空白が入らないのは実用にならない — `/usage` /
+      // `/conversations` の `key=value` の慣習は保ったまま、値の側だけ
+      // 行末まで伸ばす。
+      const { limit: limitToken, q } = parseJournalSearchTokens(rest);
+      const limit = limitToken ?? '20';
+      const response = await client.journal.$get({
+        query: { limit, ...(q === undefined ? {} : { q }) },
+      });
       if (!response.ok) {
-        stdout.write('日誌を読めませんでした\n');
+        stdout.write('日誌を読めませんでした（件数 / q= の値を確かめてください）\n');
         return 'ok';
       }
       const { entries } = await response.json();
-      if (entries.length === 0) stdout.write('（日誌はまだ空）\n');
+      if (entries.length === 0) {
+        // **0件のとき、探す対象に入っていない欄が在ることまで言う**
+        // （`journal_read` の同じ場面と同じ扱い）。黙ると「日誌にその語は
+        // 無い」と読めるが、実際には tool_use の input に書かれているかも
+        // しれない（AGENTS.md「静かに失敗する道具」）。
+        if (q === undefined) {
+          stdout.write('（日誌はまだ空）\n');
+        } else {
+          stdout.write(
+            `「${q}」に当たる日誌はありません。` +
+              'ただし tool_use の input・worker_wait・turn_usage は探す対象に入っていないので、' +
+              'そこにだけ書かれている語はここでは当たりません\n',
+          );
+        }
+      }
       for (const entry of entries) {
         stdout.write(`  ${entry.at}  [${entry.type}] ${summarize(entry)}\n`);
         // **id を出す。** 全 variant が持っているのに、ここでは1度も出て
@@ -1471,6 +1492,38 @@ function parseKeyValueTokens(tokens: string[]): Record<string, string> {
     raw[key] = value;
   }
   return raw;
+}
+
+/**
+ * `/journal [件数] [q=<語>]` を解く。
+ *
+ * **`q=` は、そのトークンから行末までを1つの語として扱う。** 呼び出し元は
+ * 行を空白で割った後のトークン列を渡してくる（`line.split(/\s+/)`）ので、
+ * `parseKeyValueTokens` をそのまま使うと **空白を含む語で探せない** ——
+ * 「語で探す」口としては使いものにならない。`/usage` / `/conversations` の
+ * `key=value` の慣習は保ったまま、値の側だけ行末まで伸ばす。
+ *
+ * **件数は従来どおり先頭の位置引数である**（`/journal 50`）。既存の呼びを
+ * 1文字も変えないため、`q=` で始まらない最初のトークンを件数として読む。
+ *
+ * **`q=`（値が空）は `q` を渡さない**のと同じに倒す。HTTP 側は空文字列を
+ * 「絞らない」に倒すので結果は同じだが、渡さないほうが意図が読みやすい。
+ */
+export function parseJournalSearchTokens(tokens: string[]): {
+  limit?: string;
+  q?: string;
+} {
+  const qIndex = tokens.findIndex((token) => token.startsWith('q='));
+  const before = qIndex === -1 ? tokens : tokens.slice(0, qIndex);
+  const limit = before.find((token) => token.length > 0);
+  if (qIndex === -1) {
+    return limit === undefined ? {} : { limit };
+  }
+  const q = tokens.slice(qIndex).join(' ').slice('q='.length);
+  return {
+    ...(limit === undefined ? {} : { limit }),
+    ...(q.length === 0 ? {} : { q }),
+  };
 }
 
 /**
