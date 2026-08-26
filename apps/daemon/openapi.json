@@ -281,17 +281,11 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "data": {},
                     "error": {
-                      "type": "array",
-                      "items": {}
-                    },
-                    "success": {
-                      "type": "boolean",
-                      "const": false
+                      "type": "string"
                     }
                   },
-                  "required": ["data", "error", "success"]
+                  "required": ["error"]
                 }
               }
             }
@@ -1732,32 +1726,13 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "anyOf": [
-                    {
-                      "type": "object",
-                      "properties": {
-                        "data": {},
-                        "error": {
-                          "type": "array",
-                          "items": {}
-                        },
-                        "success": {
-                          "type": "boolean",
-                          "const": false
-                        }
-                      },
-                      "required": ["data", "error", "success"]
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "error": {
-                          "type": "string"
-                        }
-                      },
-                      "required": ["error"]
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
                     }
-                  ]
+                  },
+                  "required": ["error"]
                 }
               }
             }
@@ -3659,17 +3634,11 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "data": {},
                     "error": {
-                      "type": "array",
-                      "items": {}
-                    },
-                    "success": {
-                      "type": "boolean",
-                      "const": false
+                      "type": "string"
                     }
                   },
-                  "required": ["data", "error", "success"]
+                  "required": ["error"]
                 }
               }
             }
@@ -3740,17 +3709,11 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "data": {},
                     "error": {
-                      "type": "array",
-                      "items": {}
-                    },
-                    "success": {
-                      "type": "boolean",
-                      "const": false
+                      "type": "string"
                     }
                   },
-                  "required": ["data", "error", "success"]
+                  "required": ["error"]
                 }
               }
             }
@@ -3851,17 +3814,11 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "data": {},
                     "error": {
-                      "type": "array",
-                      "items": {}
-                    },
-                    "success": {
-                      "type": "boolean",
-                      "const": false
+                      "type": "string"
                     }
                   },
-                  "required": ["data", "error", "success"]
+                  "required": ["error"]
                 }
               }
             }
@@ -4033,17 +3990,11 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "data": {},
                     "error": {
-                      "type": "array",
-                      "items": {}
-                    },
-                    "success": {
-                      "type": "boolean",
-                      "const": false
+                      "type": "string"
                     }
                   },
-                  "required": ["data", "error", "success"]
+                  "required": ["error"]
                 }
               }
             }
@@ -4490,17 +4441,11 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "data": {},
                     "error": {
-                      "type": "array",
-                      "items": {}
-                    },
-                    "success": {
-                      "type": "boolean",
-                      "const": false
+                      "type": "string"
                     }
                   },
-                  "required": ["data", "error", "success"]
+                  "required": ["error"]
                 }
               }
             }
@@ -4560,17 +4505,11 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "data": {},
                     "error": {
-                      "type": "array",
-                      "items": {}
-                    },
-                    "success": {
-                      "type": "boolean",
-                      "const": false
+                      "type": "string"
                     }
                   },
-                  "required": ["data", "error", "success"]
+                  "required": ["error"]
                 }
               }
             }
@@ -5179,17 +5118,11 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "data": {},
                     "error": {
-                      "type": "array",
-                      "items": {}
-                    },
-                    "success": {
-                      "type": "boolean",
-                      "const": false
+                      "type": "string"
                     }
                   },
-                  "required": ["data", "error", "success"]
+                  "required": ["error"]
                 }
               }
             }
@@ -5319,17 +5252,11 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "data": {},
                     "error": {
-                      "type": "array",
-                      "items": {}
-                    },
-                    "success": {
-                      "type": "boolean",
-                      "const": false
+                      "type": "string"
                     }
                   },
-                  "required": ["data", "error", "success"]
+                  "required": ["error"]
                 }
               }
             }
@@ -6497,32 +6424,13 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "anyOf": [
-                    {
-                      "type": "object",
-                      "properties": {
-                        "data": {},
-                        "error": {
-                          "type": "array",
-                          "items": {}
-                        },
-                        "success": {
-                          "type": "boolean",
-                          "const": false
-                        }
-                      },
-                      "required": ["data", "error", "success"]
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "error": {
-                          "type": "string"
-                        }
-                      },
-                      "required": ["error"]
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
                     }
-                  ]
+                  },
+                  "required": ["error"]
                 }
               }
             }
@@ -6823,32 +6731,13 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "anyOf": [
-                    {
-                      "type": "object",
-                      "properties": {
-                        "data": {},
-                        "error": {
-                          "type": "array",
-                          "items": {}
-                        },
-                        "success": {
-                          "type": "boolean",
-                          "const": false
-                        }
-                      },
-                      "required": ["data", "error", "success"]
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "error": {
-                          "type": "string"
-                        }
-                      },
-                      "required": ["error"]
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
                     }
-                  ]
+                  },
+                  "required": ["error"]
                 }
               }
             }
