@@ -43,7 +43,6 @@ const CANON = [
   },
   { name: 'prd', file: 'PRD.md', summary: '正典から導出された要件' },
   { name: 'architecture', file: 'architecture.md', summary: '設計。プロセスモデルと境界' },
-  { name: 'roadmap', file: 'roadmap.md', summary: '実装計画と進捗。何が出来ていて何が未着手か' },
 ];
 
 /** 先頭の `# ` 見出し。無ければファイル名で代用する。 */

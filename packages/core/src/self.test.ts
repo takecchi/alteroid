@@ -25,8 +25,8 @@ const FACTS: SelfFacts = {
 };
 
 describe('自己認識 — 焼き込んだ正典', () => {
-  it('正典は4本、優先順位の順に並ぶ（矛盾したら上が勝つ）', () => {
-    expect(canonNames()).toEqual(['north_star', 'prd', 'architecture', 'roadmap']);
+  it('正典は3本、優先順位の順に並ぶ（矛盾したら上が勝つ）', () => {
+    expect(canonNames()).toEqual(['north_star', 'prd', 'architecture']);
   });
 
   /**
@@ -40,8 +40,8 @@ describe('自己認識 — 焼き込んだ正典', () => {
     expect(northStar?.content).toContain('デグレード禁止');
     expect(northStar?.content).toContain('追加制限禁止');
 
-    // 「いま何ができて何ができないか」の出所。未着手の節が残っていること。
-    expect(canonDocument('roadmap')?.content).toContain('M5');
+    // 残りの2本も、そこにしか無い一節で見る。
+    expect(canonDocument('prd')?.content).toContain('提供価値（コア3点）');
     expect(canonDocument('architecture')?.content).toContain('プロセスモデル');
   });
 

@@ -2540,7 +2540,7 @@ describe('クローンの道具', () => {
     const body = await h.call('self_read', { document: 'agents' });
 
     expect(body).toContain('north_star');
-    expect(body).toContain('roadmap');
+    expect(body).toContain('architecture');
   });
 
   /**
@@ -2556,10 +2556,10 @@ describe('クローンの道具', () => {
     });
     const found = tools.find((entry) => entry.name === 'self_read');
 
-    const result = await found?.handler({ document: 'roadmap' } as never, {});
+    const result = await found?.handler({ document: 'architecture' } as never, {});
     const body = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
 
-    expect(body).toContain('docs/roadmap.md');
+    expect(body).toContain('docs/architecture.md');
   });
 
   it('manager_start は起こして即返り、委譲の判断が日誌に残る', async () => {

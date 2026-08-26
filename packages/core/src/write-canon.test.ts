@@ -32,7 +32,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 const here = dirname(fileURLToPath(import.meta.url));
 const realScriptPath = join(here, '..', 'scripts', 'write-canon.mjs');
 const realDocsDir = join(here, '..', '..', '..', 'docs');
-const CANON_FILES = ['north_star.md', 'PRD.md', 'architecture.md', 'roadmap.md'];
+const CANON_FILES = ['north_star.md', 'PRD.md', 'architecture.md'];
 
 const tmpDirs: string[] = [];
 
