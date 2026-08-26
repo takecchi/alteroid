@@ -16,8 +16,10 @@ import {
   filterByType,
   mergeBack,
   mergeFront,
+  newerPageQuery,
   newestAt,
   oldestAt,
+  olderPageQuery,
   pageOutcome,
   shiftForPrepend,
 } from './journal-window';
@@ -157,6 +159,40 @@ describe('oldestAt / newestAt', () => {
   it('空配列なら undefined（撃つ材料が無い）', () => {
     expect(newestAt([])).toBeUndefined();
     expect(oldestAt([])).toBeUndefined();
+  });
+});
+
+describe('newerPageQuery / olderPageQuery（どちらの端を、どちらのクエリ引数へ載せるか）', () => {
+  /**
+   * ⚠️ **3件在ることがこの組の要である。** 1件だけの一覧では
+   * `newestAt` と `oldestAt` が同じ値を返すので、`since` と `until` を
+   * 取り違えても値が一致してしまい、**取り違えを測れない**。#262 が名指しした
+   * 変異（`refreshNewerAt` の `since` に `oldestAt` を渡す）を落とすのは、
+   * 両端が違う値になっている下の `entries` である。
+   */
+  const entries = [
+    entry('new', '2026-08-20T00:02:00.000Z'),
+    entry('mid', '2026-08-20T00:01:30.000Z'),
+    entry('old', '2026-08-20T00:01:00.000Z'),
+  ];
+
+  it('新着方向は、先頭（最新）の at を since に載せる', () => {
+    expect(newerPageQuery(entries)).toEqual({ since: '2026-08-20T00:02:00.000Z' });
+  });
+
+  it('過去方向は、末尾（最古）の at を until に載せる', () => {
+    expect(olderPageQuery(entries)).toEqual({ until: '2026-08-20T00:01:00.000Z' });
+  });
+
+  it('一覧が空なら undefined（撃つ材料が無い＝撃たない）', () => {
+    expect(newerPageQuery([])).toBeUndefined();
+    expect(olderPageQuery([])).toBeUndefined();
+  });
+
+  it('1件だけなら両方向とも同じ at を指す（境界は inclusive で、その1件が必ず再度返る）', () => {
+    const one = [entry('only', '2026-08-20T00:00:00.000Z')];
+    expect(newerPageQuery(one)).toEqual({ since: '2026-08-20T00:00:00.000Z' });
+    expect(olderPageQuery(one)).toEqual({ until: '2026-08-20T00:00:00.000Z' });
   });
 });
 
