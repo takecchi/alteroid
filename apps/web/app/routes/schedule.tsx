@@ -104,8 +104,9 @@ export default function Schedule() {
                     **本文は `line-clamp-3` で畳む**（#496。実測で本文が
                     932〜3,816字あり、畳まないと一覧の1行が画面外まで伸びる）。
                     **黙って切らない** — 「編集」で全文が読めることを隣に書く
-                    （`markdown.tsx` の「一覧の1行は Markdown 化の対象外」と
-                    同じ理由でここも `<Markdown>` は使わず生テキストのまま）。
+                    （`markdown.tsx` の `Markdown` の doc「一覧の1行（`truncate`
+                    / `line-clamp`）は Markdown 化の対象ではない」と同じ理由で、
+                    ここも `<Markdown>` は使わず生テキストのまま）。
                   */}
                   {entry.request !== undefined && (
                     <>
