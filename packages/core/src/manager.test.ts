@@ -114,6 +114,12 @@ function fakeSdk() {
     const options = params.options ?? {};
     let emit: ((message: SDKMessage) => void) | null = null;
     let asks = 0;
+    // **#206: `result` メッセージの `uuid` は実機では毎ターン別の値になる**
+    // （SDK が result ごとに払う）。`runner.ts` はこれを `reportId` として
+    // そのまま運ぶので、この fake が固定値を返すと2回目以降の `report()` が
+    // 冪等化で握りつぶされ、実機では起きない重複扱いになる。ターンごとに
+    // 別の値にして、この fake を実機の形へ寄せる。
+    let reports = 0;
     const buffered: SDKMessage[] = [];
     const inputs: string[] = [];
 
@@ -173,7 +179,7 @@ function fakeSdk() {
           subtype: 'success',
           result: text,
           session_id: 'sess-mgr',
-          uuid: 'uuid-result',
+          uuid: `uuid-result-${(reports += 1)}`,
         } as unknown as SDKMessage);
         await new Promise((resolve) => setTimeout(resolve, 0));
       },
@@ -2051,16 +2057,20 @@ function swappableRunner(runnerId = 'runner-primary') {
     /**
      * マネージャーの1ターンが終わって報告が上がる。
      *
-     * `fields` は `contentless` / `failure` を差し込むための口
-     * （`runner-protocol.ts` の `report` イベントの doc）。**固定値のスタブに
-     * しない** — 渡さなければ両方省略される既存の振る舞いのままなので、他の
-     * テストの挙動は1つも変わらない。
+     * `fields` は `contentless` / `failure` / `reportId`（#206）を差し込むための
+     * 口（`runner-protocol.ts` の `report` イベントの doc）。**固定値のスタブに
+     * しない** — 渡さなければ3つとも省略される既存の振る舞いのままなので、他の
+     * テストの挙動は1つも変わらない（`reportId` 無し＝旧 runner 相当）。
      */
     report(
       managerId: string,
       text: string,
       status: JobStatus = 'done',
-      fields: { contentless?: true; failure?: { code: string; via: string } } = {},
+      fields: {
+        contentless?: true;
+        failure?: { code: string; via: string };
+        reportId?: string;
+      } = {},
     ) {
       emit?.({ type: 'report', managerId, text, status, ...fields });
     },
@@ -3567,6 +3577,146 @@ describe('マネージャーの報告を黙って落とさない', () => {
     });
 
     expect(reports[reports.length - 1]?.text).not.toContain('1回目の答え');
+
+    await s.pool.stop();
+  });
+});
+
+/**
+ * **report の冪等化（#206）。**
+ *
+ * `ask` には `requestId` による冪等化（`#askedOf`）が在るのに、`report` には
+ * 対応するものが無かった、という非対称を埋める変更（`runnerEventSchema` の
+ * `report.reportId` と `manager.ts` の `case 'report':` の doc を参照）。
+ * ここでは `swappableRunner` で直接 `RunnerEvent` を組み立てて emit する
+ * ——SDK 層を経由しないので、`reportId` の有無を単体で制御できる。
+ */
+describe('report の冪等化（#206）', () => {
+  const job = {
+    id: 'mgr-report-idempotent',
+    managerId: 'mgr-report-idempotent',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T01:00:00.000Z',
+    status: 'running' as const,
+    summary: '調べ物',
+    request: '調べて',
+    cwd: '/work/project',
+    sessionId: 'sess-report-idempotent',
+    runnerId: 'runner-primary',
+  };
+
+  async function running() {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job);
+    const fake = swappableRunner();
+    fake.state.alive.push({
+      managerId: job.id,
+      status: 'running',
+      cwd: job.cwd,
+      request: job.request,
+      waiting: [],
+      sessionId: job.sessionId,
+    });
+    const s = setup(undefined, { stores, runner: fake.runner });
+    // **`swappableRunner#connect` は `#ensureConnected`（`restore()` の中）が
+    // 呼ぶまで `emit` を持たない。** ここを省くと `fake.report(...)` の
+    // `emit?.(...)` が無言で no-op になり、イベントは `#onEvent` へ一切
+    // 届かない（`stopped()` が `pool.abort()` を先に呼んでいるのと同じ理由）。
+    await s.pool.restore();
+    // **`restore()` は「runner の中で走り続けている」の知らせ（`#notifyRestored`）
+    // を fire-and-forget で受信箱へ積む。** ここを待たずに `before = s.inbox.length`
+    // を取ると、この知らせが後から紛れ込んで冪等化の歯を汚す
+    // （`journalHas` と同じ「処理が終わった合図が要る」形）。
+    await vi.waitFor(() => {
+      if (s.inbox.length === 0) throw new Error('reattach の知らせがまだ届いていない');
+    });
+    return { s, fake };
+  }
+
+  /** 台帳の1件を直接読む（`jobOf` と同じ理由 — 一覧は写し忘れうる）。 */
+  async function jobOf(s: Setup, managerId: string) {
+    return (await s.stores.jobs.listJobs()).find((entry) => entry.id === managerId);
+  }
+
+  it('同じ reportId の report が二度届いても、受信箱には一度しか積まれない', async () => {
+    const { s, fake } = await running();
+    const before = s.inbox.length;
+    // `restore()` の知らせも `#journal` を通るので、こちらも基準を後で取る
+    // （直上の `before` と同じ理由）。
+    const journalBefore = (await s.stores.journal.list({ types: ['exchange'] })).length;
+
+    fake.report(job.id, '1回目の届け', 'done', { reportId: 'rep-dup-1' });
+    fake.report(job.id, '1回目の届け（再送）', 'done', { reportId: 'rep-dup-1' });
+
+    await vi.waitFor(async () => {
+      const current = await jobOf(s, job.id);
+      if (current?.lastReport !== '1回目の届け') throw new Error('台帳がまだ更新されていない');
+    });
+    // 再送のぶんが後から紛れ込んでいないことまで、少し待って確かめる
+    // （fire-and-forget なので即座には判定できない——上の `settleAfterJournal`
+    // と同じ理由。ここは待ち切ってから数える）。
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // **`before` から後ろだけを見る。** `restore()` 自身が「runner の中で
+    // 走り続けている」の知らせを `kind: 'report'` で1件積んでいる
+    // （`running()` の doc）ので、種類だけで絞ると先頭にそれが混ざる。
+    const reports = s.inbox
+      .filter((event) => event.type === 'manager_message' && event.kind === 'report')
+      .slice(before);
+    expect(reports).toHaveLength(1);
+    expect((reports[0] as { text: string }).text).toBe('1回目の届け');
+
+    // 台帳にも再送の本文が乗っていない（1回目のまま）。
+    const current = await jobOf(s, job.id);
+    expect(current?.lastReport).toBe('1回目の届け');
+
+    // 日誌にも exchange が1件しか増えていない。
+    const entries = await s.stores.journal.list({ types: ['exchange'] });
+    expect(entries).toHaveLength(journalBefore + 1);
+
+    await s.pool.stop();
+  });
+
+  it('reportId が違えば、どちらも別の報告として届く', async () => {
+    const { s, fake } = await running();
+    const before = s.inbox.length;
+
+    fake.report(job.id, '1件目', 'done', { reportId: 'rep-a' });
+    fake.report(job.id, '2件目', 'done', { reportId: 'rep-b' });
+
+    const reports = await vi.waitFor(() => {
+      const found = s.inbox.filter(
+        (event) => event.type === 'manager_message' && event.kind === 'report',
+      );
+      if (found.length < before + 2) throw new Error('2件とも届いていない');
+      return found.slice(before);
+    });
+    expect(reports.map((event) => (event as { text: string }).text)).toEqual(['1件目', '2件目']);
+
+    await s.pool.stop();
+  });
+
+  it('reportId の無い report（旧 runner 相当）は、これまでどおり毎回処理される', async () => {
+    const { s, fake } = await running();
+    const before = s.inbox.length;
+
+    // **旧 runner はこの欄を送らない。** #206 の判断は「冪等化を諦める」——
+    // 拒んで捨てる方は選んでいない。この歯はその判断が実際にそう動くことを
+    // 固定する（`manager.ts` の `case 'report':` の doc）。
+    fake.report(job.id, '旧runnerの報告', 'done');
+    fake.report(job.id, '旧runnerの報告（2回目）', 'done');
+
+    const reports = await vi.waitFor(() => {
+      const found = s.inbox.filter(
+        (event) => event.type === 'manager_message' && event.kind === 'report',
+      );
+      if (found.length < before + 2) throw new Error('2件とも届いていない');
+      return found.slice(before);
+    });
+    expect(reports.map((event) => (event as { text: string }).text)).toEqual([
+      '旧runnerの報告',
+      '旧runnerの報告（2回目）',
+    ]);
 
     await s.pool.stop();
   });

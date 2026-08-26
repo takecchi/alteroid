@@ -42,6 +42,11 @@ function fakeSdk() {
     // 残る（テストが終わらない）。実績のある形を写す。
     let emit: ((message: SDKMessage | null) => void) | null = null;
     const buffered: SDKMessage[] = [];
+    // **#206: `result` の `uuid` は実機では毎ターン別の値になる。** `runner.ts`
+    // はこれを `reportId` としてそのまま運び、`manager.ts` はそれで冪等化する
+    // ので、この fake が固定値を返すと2回目以降の `finish()` が冪等化で
+    // 握りつぶされる（`manager.test.ts` の同種の fake と同じ直し方）。
+    let finishes = 0;
     const push = (message: SDKMessage) => {
       if (emit) emit(message);
       else buffered.push(message);
@@ -65,7 +70,7 @@ function fakeSdk() {
           subtype: finishOptions.subtype ?? 'success',
           result: text,
           session_id: 'sess-mgr',
-          uuid: 'uuid-result',
+          uuid: `uuid-result-${(finishes += 1)}`,
           ...(finishOptions.isError === undefined ? {} : { is_error: finishOptions.isError }),
         } as unknown as SDKMessage);
         await new Promise((resolve) => setTimeout(resolve, 0));
