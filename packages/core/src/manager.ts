@@ -892,6 +892,19 @@ class Pool implements ManagerPool {
   #restoreQueue: Promise<void> = Promise.resolve();
   /** 取り直しが走っている runner（同じ runner について重ねない）。 */
   readonly #reattaching = new Set<string>();
+  /**
+   * `#reattach` がいま降ろし直している最中の runner（`runnerId` → その降ろし
+   * 直しの完了）。**`#connectTo` に「まだ降ろし切っていない」を教えるためだけ
+   * の窓口。**
+   *
+   * `#connections`（繋ぎ済みの旗）とは別に持つ。`#reattach` が `#connections`
+   * を直接書き換えると、`#connectTo` 自身の失敗時の後始末
+   * （`this.#connections.delete(runner)`）が「いま入っているのが誰の Promise か」
+   * を見ずに消すため、`#reattach` が新しく置いた分を古い接続の失敗が巻き添えで
+   * 消しうる。ここを別に持てば、`#connectTo` は自分の旗をそのままに、
+   * `#reattach` の降ろし直しだけを追加で待てる。
+   */
+  readonly #reattachPushes = new Map<string, Promise<void>>();
   /** 取り直し中に届いた名乗り。**捨てずに、終わってからもう一度回す。** */
   readonly #reattachAgain = new Set<string>();
   /** 予約済みの取り直し（`hello` を待たずに自分で挑み直すため）。 */
@@ -1915,10 +1928,20 @@ class Pool implements ManagerPool {
    * 同じ runner に SSE が何本も張られ、同じイベントが二重に記録される。
    *
    * **失敗は覚えない。** 覚えると、瞬断で1度こけた runner に二度と繋がらなくなる。
+   *
+   * **繋ぎ済みでも、`#reattach` がいま鍵を降ろし直している最中なら、それも
+   * 待ってから返す。** ここが無いと、器が入れ替わって `#reattach` が
+   * `#pushAgentToken` を降ろし切る前に、委譲（`start()` 等）がこの runner を
+   * 選べてしまう——runner はまだ自分の器の環境変数から起きた古い値のままで、
+   * その委譲は古い資格で走り出す（`#pushAgentToken` の doc 「マネージャーの
+   * 側からは見えない」）。
    */
   #connectTo(runner: RunnerClient): Promise<void> {
     const already = this.#connections.get(runner);
-    if (already !== undefined) return already;
+    if (already !== undefined) {
+      const reattaching = this.#reattachPushes.get(runner.runnerId);
+      return reattaching === undefined ? already : already.then(() => reattaching);
+    }
     const opening = (async () => {
       // **落ち方は変えない。「どの合図で」だけを足す（#438 案D）。**
       //
@@ -2061,20 +2084,39 @@ class Pool implements ManagerPool {
       // **取り直しの前に環境を整える。** 器が入れ替わっていれば置いたものは
       // 消えているので、resume して走り出す前に降ろし直す（走り出してから
       // 降ろすと、その仕事の最初のコマンドだけが古い環境で走る）。
-      await this.#pushProfile(runner);
-      // **認証トークンも同じ位置で降ろす（Issue #393）。** 直上の理由がそのまま
-      // 効く —— **器が入れ替わっていれば置いた鍵も消えている。** この経路にだけ
-      // 無かったので、繋ぎ直してきた runner は`#connectTo`と違って鍵が降りず、
-      // **器の環境変数（＝回す前のトークン）のまま走っていた。** しかもその
-      // 食い違いは `#pushAgentToken` の doc が逐語で言うとおり
-      // 「マネージャーの側からは見えない」。
       //
-      // **「今日は実害が出にくい」を「要らない」と読まない。** 同じ `RunnerClient`
-      // が生きていれば初回に降ろした鍵が runner のメモリに残っているので、
-      // 表に出るのは**器を作り直した runner が繋ぎ直してきたとき**だけである
-      // —— そしてそれは、この関数の doc が逐語で「runner の器だけが入れ替わると」
-      // と書いている、**この経路がまさに拾いに来た場合そのもの**である。
-      await this.#pushAgentToken(runner);
+      // **降ろし切るまで、委譲にもここを待たせる（#connectTo の doc）。**
+      // `#connections`（繋ぎ済みの旗）はここでは触らない——`#connectTo` 自身の
+      // 失敗時の後始末が「いま入っているのが誰の Promise か」を見ずに消すため、
+      // ここで上書きすると古い接続の失敗がこの降ろし直しを巻き添えで消しうる。
+      // 別の窓口（`#reattachPushes`）に置き、`#connectTo` にはそちらも
+      // 見てもらう。
+      const push = (async () => {
+        await this.#pushProfile(runner);
+        // **認証トークンも同じ位置で降ろす（Issue #393）。** 直上の理由がそのまま
+        // 効く —— **器が入れ替わっていれば置いた鍵も消えている。** この経路にだけ
+        // 無かったので、繋ぎ直してきた runner は`#connectTo`と違って鍵が降りず、
+        // **器の環境変数（＝回す前のトークン）のまま走っていた。** しかもその
+        // 食い違いは `#pushAgentToken` の doc が逐語で言うとおり
+        // 「マネージャーの側からは見えない」。
+        //
+        // **「今日は実害が出にくい」を「要らない」と読まない。** 同じ `RunnerClient`
+        // が生きていれば初回に降ろした鍵が runner のメモリに残っているので、
+        // 表に出るのは**器を作り直した runner が繋ぎ直してきたとき**だけである
+        // —— そしてそれは、この関数の doc が逐語で「runner の器だけが入れ替わると」
+        // と書いている、**この経路がまさに拾いに来た場合そのもの**である。
+        await this.#pushAgentToken(runner);
+      })();
+      this.#reattachPushes.set(runnerId, push);
+      try {
+        await push;
+      } finally {
+        // **自分が置いたものだけを消す。** 後から来た取り直し（`#reattachAgain`
+        // 経由の再実行）が既に自分の分を新しく置いていたら、それを消さない。
+        if (this.#reattachPushes.get(runnerId) === push) {
+          this.#reattachPushes.delete(runnerId);
+        }
+      }
 
       // **台帳を先に、runner を後に読む。** 逆にすると、2つの読みの隙間で起こされた
       // 委譲が「runner に居ないのに台帳には居る」と見えて、走り出したばかりの仕事を

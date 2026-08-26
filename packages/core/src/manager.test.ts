@@ -6151,6 +6151,116 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
     expect(synced.length).toBeGreaterThan(atConnect);
     expect(synced.at(-1)).toBe('runner-test');
   });
+
+  /**
+   * ⚠️ **窓の仮説（直上2本の続き）。** 直上の歯は「`#reattach` がいずれ鍵を
+   * 降ろすか」だけを見ていて、**降ろし終える前に委譲がその runner を選べるか**
+   * は見ていない。`#connectTo`（`#ensureConnected` / `start()` が使う）は
+   * `#connections`（`WeakMap<RunnerClient, Promise<void>>`）に**繋ぎ済みの
+   * 旗**を持つが、`#reattach` は一度もこの旗を触らない——`#connectTo` が既に
+   * 一度その runner を繋ぎ終えていれば（初回接続で必ずそうなる）、
+   * `#connections.get(runner)` は**もう resolve 済みの Promise**を返すので、
+   * `#reattach` の `#pushAgentToken` がまだ走っている最中でも `#connectTo` は
+   * 即座に戻る。⟹ 器が入れ替わった直後、`#reattach` が新しい鍵を降ろし終える
+   * 前に `start()` が同じ runner を選べてしまい、その委譲は runner が
+   * **自分の器の環境変数から起きた古い値**のまま走り出す（この関数の doc
+   * 「マネージャーの側からは見えない」）。
+   *
+   * **測るのは「窓が無い」側。** 直したら緑、直す前は赤になるように、
+   * 「鍵を降ろし切ってから委譲が走る」ことを assert する（逆向きだと、直した
+   * 瞬間に赤くなるテストが残る）。
+   */
+  it('窓: #reattach が鍵を降ろし切る前に、委譲が同じ runner を選んで古い資格のまま走り出さない', async () => {
+    const stores = createMemoryStores();
+    const fake = swappableRunner('runner-test');
+
+    /**
+     * 「器がいま持っている資格」を表す外部の可変箱。本物は runner の器の
+     * 環境変数（`CLAUDE_CODE_OAUTH_TOKEN`）で、`RunnerClient` のインター
+     * フェースには現れない——`setCredentials` の呼び出しだけがこれを書き換える
+     * （`apps/daemon/src/token-spread.ts` の `createRunnerTokenSync`）。
+     */
+    const credential = { value: 'token-boot' };
+    const order: string[] = [];
+
+    // `#pushAgentToken` からの `setCredentials` を、こちらが離すまで止められる
+    // ようにする（初回接続では開けたままにしておき、器の入れ替え後だけ閉じる）。
+    let gate: Promise<void> = Promise.resolve();
+    let releaseGate: () => void = () => undefined;
+    fake.runner.setCredentials = async (credentials) => {
+      const value = credentials[0]?.value ?? 'unknown';
+      order.push(`setCredentials:start:${value}`);
+      await gate;
+      credential.value = value;
+      order.push(`setCredentials:done:${value}`);
+      return [];
+    };
+
+    // 委譲が「呼ばれた瞬間に runner が持っていた資格」を記録する。
+    fake.runner.start = async (command) => {
+      order.push(`start:${credential.value}`);
+      fake.state.alive.push({
+        managerId: command.managerId,
+        status: 'running',
+        cwd: command.cwd,
+        request: command.request,
+        waiting: [],
+      });
+    };
+
+    let generation = 0;
+    const s = setup(undefined, {
+      stores,
+      runner: fake.runner,
+      syncRunnerToken: async (runner) => {
+        generation += 1;
+        await runner.setCredentials([
+          { name: 'CLAUDE_CODE_OAUTH_TOKEN', value: `token-gen-${generation}` },
+        ]);
+      },
+    });
+
+    // 初回接続（`#connectTo`）。gate は開いているのですぐ終わる。
+    await s.pool.restore();
+    expect(credential.value).toBe('token-gen-1');
+
+    // **器が入れ替わった。** 新しい器は「回す前のトークン」＝自分の環境変数
+    // から起きた古い値を持っている（この関数の doc の逐語どおり）。次の
+    // `setCredentials`（＝`#reattach` の鍵降ろし）は、こちらが離すまで止める。
+    credential.value = 'token-stale-from-container-boot';
+    order.length = 0;
+    gate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+
+    // 名乗り直してきた（`#reattach` が非同期に発火。fire-and-forget）。
+    fake.swap();
+    await expect
+      .poll(() => order.includes('setCredentials:start:token-gen-2'), { timeout: 2000 })
+      .toBe(true);
+
+    // **鍵がまだ降り切っていない間に、同じ runner への委譲を投げる。**
+    const startPromise = s.pool.start({ request: '調べて' });
+
+    // **ここが本題。** 窓が無ければ、委譲は `#reattach` の鍵降ろしが終わる
+    // （`setCredentials` が resolve する）まで進めない——`start:` はまだ
+    // `order` に現れないはずである。
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(order.some((entry) => entry.startsWith('start:'))).toBe(false);
+
+    releaseGate();
+    await startPromise;
+
+    // 委譲は新しい資格で走り出している。古い資格（起動時の値・入れ替え後に
+    // 器が持っていた値）では一度も走っていない。
+    expect(order).toContain('setCredentials:done:token-gen-2');
+    expect(order).toContain('start:token-gen-2');
+    expect(order.some((entry) => entry === 'start:token-boot')).toBe(false);
+    expect(order.some((entry) => entry === 'start:token-stale-from-container-boot')).toBe(false);
+    expect(order.some((entry) => entry === 'start:token-gen-1')).toBe(false);
+
+    await s.pool.stop();
+  });
 });
 
 /**
