@@ -185,6 +185,85 @@ export function noteDroppedJournalRow(
 }
 
 /**
+ * SDK が失敗として出した1回を、**枠の文言としては分類できなかった**ことを
+ * stderr へ残す（Issue #393）。
+ *
+ * ## なぜ要るか — 回し手が原理的に聞けない失敗が在る
+ *
+ * 回し手（`TokenRotator`）の入口は `usage_notice` / `rate_limit` の2つだけで、
+ * **`classifyUsageNotice` が分類できなかった失敗は、そのどちらにもならない。**
+ * ⟹ マネージャーがそれで落ち続けても、**プールは何も検知しない。** 資格
+ * （`CLAUDE_CODE_OAUTH_TOKEN`）が1つも無い器で起こしたときがこの形である。
+ *
+ * **「無音」ではない** —— 落ちた理由は `closed` の `report` としてクローンの
+ * 受信箱へ届く（`manager.ts` の逐語 `if (event.status === 'failed') this.#emit(`）。
+ * 見えていないのは**回し手が何をしたか**の側だけである。ここが数えるのは
+ * 「回し手が聞けなかった回数」であって、失敗そのものの記録ではない。
+ *
+ * **なぜ日誌ではなく stderr か。** 日誌へ出すには回し手の `signal`
+ * （`schema.ts` の `z.enum` 7値）に「分類できなかった」を足すことになり、
+ * **跡を残すためだけに外向きの面を広げることになる**（`noteDroppedInboxEvent`
+ * の doc と同じ判断）。**まず数を取る。** 日誌へ上げる価値が在るかは、数が
+ * 出てから決まる。
+ *
+ * ## 何を載せるか
+ *
+ * **`text` を載せない。** あれは SDK が出した文言そのままで、マネージャーの
+ * 報告が混ざりうる（報告本文に `GH_TOKEN` が全文で出た前例がある。#52）。
+ * 載せるのは `via` と `code` だけである —— どちらも**値を決めるのが SDK か
+ * こちら**で、外から来た自由文ではない（判定基準は `noteDroppedInboxEvent` の
+ * doc と同じ「値を誰が決めるか」）。
+ *
+ * **同じ組は、この帳面で最初の1回だけその場で出す。** 量は
+ * {@link noteUnclassifiedFailuresSummary} が終わりでまとめて出す —— 失敗が
+ * 続くときに毎回出すと、跡それ自体がログを埋める。
+ *
+ * @param seen セッション1本ぶんの `Map<種別, 件数>`。**プロセス単位で畳まない**
+ *   （畳むと、器が入れ替わって新しい失敗が始まっても「前に見たから」で黙る）。
+ */
+export function noteUnclassifiedFailure(
+  seen: Map<string, number>,
+  managerId: string,
+  via: string,
+  code: string,
+): void {
+  const key = `${via}:${code}`;
+  const count = seen.get(key) ?? 0;
+  seen.set(key, count + 1);
+  if (count > 0) return;
+  note(
+    `SDK の失敗を枠の文言として分類できなかった（初出。**回し手には届かない**）: ` +
+      `manager=${managerId} via=${via} code=${code}`,
+  );
+}
+
+/**
+ * {@link noteUnclassifiedFailure} で溜めた件数を、セッションの終わりで1行に
+ * まとめて出す。**1件も無ければ何も出さない。**
+ *
+ * **セッションの終わり口は1本ではない。2本ある** —— `RunnerSession#finish()` と
+ * `RunnerSession#stop()` で、**後者は `#finish` を通らない**（器の入れ替えと
+ * `manager_stop` がそちらである）。**両方で呼ぶこと。** 1つ忘れると、その経路だけ
+ * 量が跡に出ない（初出の1行は出ているので存在は残るが、量が失われる）。
+ *
+ * **同じ穴を `#closeWorkerWaitWindow` が先に踏んでいる** —— `stop()` の中に
+ * 逐語で「この経路は `#finish` を通らないので、ここで閉じないと開いたままの
+ * 区間が黙って消える」と書いてある。**同じクラスの落とし穴なので、同じ場所に
+ * 並べてある。**
+ */
+export function noteUnclassifiedFailuresSummary(
+  seen: Map<string, number>,
+  managerId: string,
+): void {
+  if (seen.size === 0) return;
+  const detail = [...seen.entries()].map(([key, count]) => `${key}×${count}`).join(' / ');
+  note(
+    `SDK の失敗を枠の文言として分類できなかった（このセッションの合計）: ` +
+      `manager=${managerId} ${detail}`,
+  );
+}
+
+/**
  * `noteDroppedJournalRow` で溜めた件数を、呼び出しの終わりで1行にまとめて
  * 出す。**何も飛ばしていなければ何も出さない。**
  *
