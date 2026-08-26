@@ -604,6 +604,8 @@ describe('クローン', () => {
           subtype: 'permission_denied',
           ...denial,
           decision_reason: '分類器が止めた',
+          decision_reason_type: 'classifier',
+          message: 'Bash is not allowed right now',
         } as unknown as SDKMessage,
       ],
       permissionDenials: () => [denial],
@@ -618,12 +620,45 @@ describe('クローン', () => {
     expect(denied.length).toBe(1);
     const text = (denied[0] as { text: string }).text;
     expect(text).toContain('Bash');
-    expect(text).toContain('分類器が止めた');
+    // **分類・理由・モデルへの拒否文の3つとも読む。** #230 で `runner.ts` 側は
+    // 3つとも読むようになったが、`clone.ts` 側は `decision_reason` しか読んで
+    // いなかった（#229）。ここが赤くなれば、その非対称が戻ってきたということ。
+    expect(text).toContain('分類: classifier');
+    expect(text).toContain('理由: 分類器が止めた');
+    expect(text).toContain('モデルへの拒否文: Bash is not allowed right now');
     // 許可モードも添える（「なぜ確認が来ないのか」を後から読む人のために）
     expect(text).toContain('auto');
     // **拒否は `tool_use` として数えない** — 使えていない回数を「自分で手を動かした
     // 回数」に混ぜると、digest の材料がそのまま狂う。
     expect(await s.stores.journal.list({ types: ['tool_use'] })).toEqual([]);
+
+    await s.clone.stop();
+  });
+
+  it('確認へ上がらず止められた道具の分類・拒否文が欠けているときは作り物を出さず省く', async () => {
+    // `result.permission_denials`（`via: 'result'`）は理由を持たない。`via:
+    // 'live'` でも SDK がフィールドを付けてこなければ同じく欠ける。**欠けている
+    // ものを空文字や「不明」で埋めると、読み手が「そう答えが返ってきた」と誤読
+    // する。** 欠けていること自体を、ラベルごと出さないことで表す。
+    const denial = { tool_name: 'Bash', tool_use_id: 'tu-2', tool_input: { command: 'git push' } };
+    const s = setup(undefined, createMemoryStores(), {
+      permissionDenials: () => [denial],
+    });
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const denied = (await s.stores.journal.list({ types: ['exchange'] })).filter((entry) =>
+      (entry as { text: string }).text.includes('確認へ上がらずに止められた'),
+    );
+    expect(denied.length).toBe(1);
+    const text = (denied[0] as { text: string }).text;
+    expect(text).toContain('Bash');
+    expect(text).not.toContain('分類:');
+    expect(text).not.toContain('理由:');
+    expect(text).not.toContain('モデルへの拒否文:');
+    // 何も詰められなかったときは括弧そのものを出さない（空の括弧を残さない）。
+    expect(text).not.toContain('（）');
 
     await s.clone.stop();
   });
