@@ -51,6 +51,7 @@ import {
   localDayRange,
   parseTimeOfDay,
 } from './schedule.js';
+import type { ScheduleStatus } from './schedule.js';
 import {
   JOURNAL_ENTRY_TYPES,
   approvalUpdatedAt,
@@ -175,6 +176,23 @@ export interface ToolContext {
    * ターンの種類のまま固定されてしまう。
    */
   memoryCause: () => 'distill' | 'clone';
+  /**
+   * `Scheduler.list()` の写し（可観測性）。`schedule_list` が「次: <nextAt>」を
+   * 出すための材料。
+   *
+   * `nextAt` を計算しているのは `Scheduler`（`schedule.ts`）で、`stores.schedules`
+   * はストアの記録（周期・前回動いた時刻）しか持たない。ここが無いと道具の側は
+   * 「次にいつ動くか」を持てない。
+   *
+   * **省略できるのはテストのためだけである。** 本番の配線（`clone.ts`）は
+   * 本セッションと蒸留のサイドクエリの両方へ渡す（`runtime` / `memoryCause` と
+   * 同じ「渡し忘れた側だけ静かに壊れる」形）。
+   *
+   * **呼ぶたびに評価すること。** `Scheduler.list()` は呼んだ瞬間の `nextAt` を
+   * 返す（`Scheduler` の内部時計は動き続ける）ので、`createCloneTools` の
+   * 呼び出し時に1回だけ評価すると、セッション中ずっと最初の値のまま固定される。
+   */
+  scheduler?: () => ScheduleStatus[];
 }
 
 export function qualifiedToolName(name: string): string {
@@ -455,6 +473,25 @@ const SCHEDULE_LIST_BUDGET = 8_000;
 const SCHEDULE_REQUEST_EXCERPT = 200;
 /** 継続中の依頼1件の本文を取りに来たときの1回分。続きは `offset` で取れる。 */
 const SCHEDULE_PAGE = 8_000;
+
+/**
+ * `kind` 1件ぶんの「次に動く時刻」を、`ToolContext.scheduler`（`Scheduler.list()`
+ * の写し）から引く。**`stores.schedules` はこの値を持たない** — `nextAt` を
+ * 計算しているのは `Scheduler` 自身で、ストアは周期と前回動いた時刻の記録
+ * しか持たない（Issue #237）。
+ *
+ * **取れないときも黙って行を消さない**（AGENTS.md「取れない軸に0の行を作る」）。
+ * 2つの取れなさを分けて言う — `scheduler` そのものが渡っていない（テスト・
+ * 蒸留サイドクエリへの渡し忘れ）か、`Scheduler` がまだこの kind を仕込みへ
+ * 反映していない（`schedule_create` 直後は次の刻みまで反映が遅れる。
+ * `TimerScheduler#reconcile` の doc）かで、後者は一時的だが前者は配線の欠落
+ * である。読み手が原因を区別できるよう文言を分ける。
+ */
+function scheduleNextAtOf(context: ToolContext, kind: string): string {
+  if (context.scheduler === undefined) return '（取れない — scheduler が渡っていない）';
+  const status = context.scheduler().find((entry) => entry.kind === kind);
+  return status === undefined ? '（まだ計算されていない。少し待って呼び直すこと）' : status.nextAt;
+}
 
 /**
  * 器の一覧の予算と、器1台ぶんに並べるマネージャーの件数。
@@ -1898,7 +1935,7 @@ export function createCloneTools(context: ToolContext) {
     tool(
       'schedule_list',
       [
-        '仕込んである継続中の依頼の一覧。周期と、前回それで動いた時刻が分かる。',
+        '仕込んである継続中の依頼の一覧。周期と、前回それで動いた時刻・次に動く時刻が分かる。',
         '既定の日報・発意 tick はここには出ない（あれは設定で回っているもの）。',
         '一覧の依頼本文は抜粋で、全文が要る1件は kind を渡して取る。',
       ].join(' '),
@@ -1921,7 +1958,8 @@ export function createCloneTools(context: ToolContext) {
           if (!plan) return text(`継続中の依頼 ${kind} は無い（kind が違うか、もう外してある）。`);
           const head =
             `${plan.kind}（${describeScheduleSpec(plan.spec)}）` +
-            ` 前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}`;
+            ` 前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}` +
+            ` 次に動く時刻: ${scheduleNextAtOf(context, plan.kind)}`;
           const part = page(plan.request, offset, SCHEDULE_PAGE);
           const tail = part.more
             ? `\n\n…（ここで切れている。続きは schedule_list kind=${plan.kind} offset=${part.to}）`
@@ -1942,7 +1980,10 @@ export function createCloneTools(context: ToolContext) {
             createdAt: plan.createdAt,
             updatedAt: plan.updatedAt,
             summary: `依頼: ${excerptLine(plan.request, SCHEDULE_REQUEST_EXCERPT)}`,
-            extra: [`  前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}`],
+            extra: [
+              `  前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}`,
+              `  次に動く時刻: ${scheduleNextAtOf(context, plan.kind)}`,
+            ],
           }),
         );
         return text(

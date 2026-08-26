@@ -45,6 +45,7 @@ import {
   buildTimerPrompt,
 } from './prompt.js';
 import { DAILY_REPORT_KIND, localDate, localDayRange } from './schedule.js';
+import type { ScheduleStatus } from './schedule.js';
 import { isDailyReport, isWrittenDailyReport } from './schema.js';
 import type {
   ChatStreamEvent,
@@ -401,6 +402,14 @@ export interface CloneOptions {
    * 判断の材料である（重い委譲を続けてよいかは、残りを見ずには決められない）。
    */
   accountUsage?: () => AccountUsageState;
+  /**
+   * `Scheduler.list()` の写し。`ToolContext.scheduler`（`tools.ts`）へそのまま
+   * 渡す — `schedule_list` が「次: <nextAt>」を出す材料（Issue #237）。
+   *
+   * **省略できるのはテストのためだけである。** `Scheduler` はデーモン側（
+   * `apps/daemon/src/index.ts`）が組み立てるので、ここで作り直さない。
+   */
+  scheduler?: () => ScheduleStatus[];
   /**
    * いま自分がどう走っているかの事実（記憶の器・作業ディレクトリ・委譲先・
    * 入口・モデル帯）。システムプロンプトの自己認識の節に載る。
@@ -869,6 +878,7 @@ class Clone implements CloneHost {
   readonly #profile: ProfileApplier | undefined;
   readonly #profileService: ProfileService | undefined;
   readonly #accountUsage: (() => AccountUsageState) | undefined;
+  readonly #scheduler: (() => ScheduleStatus[]) | undefined;
 
   constructor(options: CloneOptions) {
     const {
@@ -888,6 +898,7 @@ class Clone implements CloneHost {
       profile,
       profileService,
       accountUsage,
+      scheduler,
       self,
       mcpServerFactory,
     } = options;
@@ -907,6 +918,7 @@ class Clone implements CloneHost {
     this.#profile = profile;
     this.#profileService = profileService;
     this.#accountUsage = accountUsage;
+    this.#scheduler = scheduler;
     this.#self = self;
     this.#mcpServerFactory = mcpServerFactory ?? createCloneMcpServer;
     this.#managers =
@@ -2881,6 +2893,7 @@ class Clone implements CloneHost {
       managers: this.#managers,
       ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
       ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
+      ...(this.#scheduler === undefined ? {} : { scheduler: this.#scheduler }),
       runtime: () => this.#runtimeFacts(),
       memoryCause: () => (this.#turn?.kind === 'distill' ? 'distill' : 'clone'),
     };
@@ -3207,6 +3220,7 @@ class Clone implements CloneHost {
           emit: () => undefined,
           ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
           ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
+          ...(this.#scheduler === undefined ? {} : { scheduler: this.#scheduler }),
           runtime: () => this.#runtimeFacts(),
           // このサイドクエリ自体が常に蒸留のターンなので、`#turn` を読む必要は
           // 無い（`#toolContext()` の doc）。**ここを削ると `memoryCause` は

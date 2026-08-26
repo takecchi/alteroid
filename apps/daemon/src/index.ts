@@ -746,6 +746,11 @@ export async function main(): Promise<void> {
   const clone = createClone({
     stores,
     accountUsage: () => usagePoller.state(),
+    // **`scheduler` はこの直後（下）に作る。** ここは同じ形の前方参照が既に
+    // 在る場所である — 数行下の `onUsageObservation` が `clone` 自身を
+    // 同じやり方で参照している（closure は呼ばれた瞬間の束縛を見るので、
+    // 呼ばれるより先に両方とも作られていれば壊れない）。
+    scheduler: () => scheduler.list(),
     cwd: paths.root,
     runners,
     profile,
