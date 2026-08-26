@@ -226,7 +226,10 @@ export async function runUsageProbe<T>(
   } catch (error) {
     options.signal?.removeEventListener('abort', abort);
     controller.abort();
-    return { ok: false, failure: { kind: 'exception', reason: describeProbeError(error, options.env) } };
+    return {
+      ok: false,
+      failure: { kind: 'exception', reason: describeProbeError(error, options.env) },
+    };
   }
 
   try {
@@ -258,7 +261,10 @@ export async function runUsageProbe<T>(
   } catch (error) {
     return controller.signal.aborted
       ? { ok: false, failure: { kind: 'aborted', reason: '観測中に中断された' } }
-      : { ok: false, failure: { kind: 'exception', reason: describeProbeError(error, options.env) } };
+      : {
+          ok: false,
+          failure: { kind: 'exception', reason: describeProbeError(error, options.env) },
+        };
   } finally {
     if (timer !== undefined) clearTimeout(timer);
     options.signal?.removeEventListener('abort', abort);
