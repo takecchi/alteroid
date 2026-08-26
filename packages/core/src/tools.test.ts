@@ -13,6 +13,7 @@ import {
   CLONE_TOOL_NAMES,
   createCloneTools,
   qualifiedToolName,
+  type ToolContext,
 } from './tools.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import { usageDate } from './usage.js';
@@ -803,6 +804,7 @@ describe('クローンの道具', () => {
     // 器が「読めない」と答える状況。置けなかったのはシステムの結果であって、
     // クローンの判断ではない（日誌の decision を汚さない）。
     const tools = createCloneTools({
+      memoryCause: () => 'clone',
       stores: h.stores,
       emit: () => undefined,
       profile: createProfileService({
@@ -2171,6 +2173,51 @@ describe('クローンの道具', () => {
    * ハッシュの更新箇所）は `packages/storage-fs` / `packages/storage-pg` の
    * `FsPersonaStore` / `PgPersonaStore` のテストが持つ（実ファイル・実 DB が要る）。
    */
+  /**
+   * `ToolContext.memoryCause` が必須であることの歯。
+   *
+   * **測っているのは「配線を忘れたときに閉じるか」であって「明示したときに
+   * 通るか」ではない。** 既存の口を1つ書き換えて赤くする形では足りない ——
+   * それは「明示した側」しか動かさないからである。
+   *
+   * ## ⚠️ ここで `as unknown as ToolContext` を使う理由（読む人へ）
+   *
+   * **これは *型の抜け道から来た呼び* を再現している。実運用の経路ではない。**
+   * TS で検査されたコードから `memoryCause` を省いた `ToolContext` は組めない
+   * （`tsc` が落ちる。それがこの変更の主目的である）。だが型は実行時に無い
+   * ので、`as any` や JS からの呼び、あるいは将来の別 provider の配線が
+   * この形で届きうる —— **そこで倒れ先を作らないことを、ここで測る。**
+   *
+   * **⛔ この書き方を、他のテストの手本にしないこと。**
+   */
+  describe('ToolContext.memoryCause は必須（配線を忘れた口が守りを素通りしない）', () => {
+    /** 型の抜け道から来た呼びを再現した `ToolContext`（`memoryCause` が無い）。 */
+    const wiringForgotten = () =>
+      ({ stores: createMemoryStores(), emit: () => undefined }) as unknown as ToolContext;
+
+    it('⭐ 型の抜け道から memoryCause を省いて渡すと、既定へ倒さずに落ちる', () => {
+      expect(() => createCloneTools(wiringForgotten())).toThrow();
+    });
+
+    it('落ちるときのメッセージが、何を配線し忘れたかを名指しする', () => {
+      expect(() => createCloneTools(wiringForgotten())).toThrow(/memoryCause/);
+      expect(() => createCloneTools(wiringForgotten())).toThrow(/ToolContext/);
+    });
+
+    /**
+     * ⚠️ 対照。**能力を消していないこと**を測る —— 明示すれば従来どおり組める。
+     * これが緑でなければ、上の2本は「全部落ちるようになった」だけを見ている。
+     */
+    it('対照: memoryCause を明示すれば、従来どおり道具が組める', () => {
+      const tools = createCloneTools({
+        stores: createMemoryStores(),
+        emit: () => undefined,
+        memoryCause: () => 'clone',
+      });
+      expect(tools.length).toBeGreaterThan(0);
+    });
+  });
+
   describe('記憶の human guard（人間が書いた記憶を distill が壊せない）', () => {
     async function markHuman(h: Harness, slug: string, content: string): Promise<void> {
       // app.ts の PUT /memory/:slug と同じ手順を模す（write してから印を立てる）。
@@ -2482,7 +2529,11 @@ describe('クローンの道具', () => {
    * 自己認識なしで行われる。
    */
   it('self_read は委譲できない場面でも使える', async () => {
-    const tools = createCloneTools({ stores: createMemoryStores(), emit: () => undefined });
+    const tools = createCloneTools({
+      stores: createMemoryStores(),
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+    });
     const found = tools.find((entry) => entry.name === 'self_read');
 
     const result = await found?.handler({ document: 'roadmap' } as never, {});
@@ -2828,7 +2879,7 @@ describe('クローンの道具', () => {
 
   it('委譲先が無い場面（蒸留の内部ターン）は、黙らずにそう返す', async () => {
     const stores = createMemoryStores();
-    const tools = createCloneTools({ stores, emit: () => undefined });
+    const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
     const found = tools.find((entry) => entry.name === 'manager_start');
     const result = await found?.handler({ request: 'x' } as never, {});
 
@@ -3858,7 +3909,7 @@ describe('usage_read の台帳に1行も無い委譲（Issue #98）', () => {
       at: '2026-08-14T10:00:00.000Z',
       snapshot: { models },
     });
-    const tools = createCloneTools({ stores, emit: () => undefined });
+    const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
     const found = tools.find((t) => t.name === 'usage_read');
     const result = await found!.handler({} as never, {} as never);
     const reply = result.content.map((part) => ('text' in part ? part.text : '')).join('\n');
@@ -4038,7 +4089,12 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
 describe('usage_read はアカウント全体の残りも返す（人間と同じものを見せる）', () => {
   function withAccount(accountUsage: () => AccountUsageState) {
     const stores = createMemoryStores();
-    const tools = createCloneTools({ stores, emit: () => undefined, accountUsage });
+    const tools = createCloneTools({
+      stores,
+      emit: () => undefined,
+      accountUsage,
+      memoryCause: () => 'clone',
+    });
     return async (args: Record<string, unknown> = {}) => {
       const found = tools.find((t) => t.name === 'usage_read');
       const result = await found!.handler(args as never, {} as never);
@@ -4198,7 +4254,11 @@ describe('self_status（いま自分がどう走っているか）', () => {
   });
 
   it('runtime を渡していない場面（蒸留のサイドクエリを模した形）では、落ちずに読めないと返す', async () => {
-    const tools = createCloneTools({ stores: createMemoryStores(), emit: () => undefined });
+    const tools = createCloneTools({
+      stores: createMemoryStores(),
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+    });
     const found = tools.find((entry) => entry.name === 'self_status');
     if (!found) throw new Error('self_status が無い');
     const result = await found.handler({} as never, {});
@@ -5844,7 +5904,11 @@ describe('commitment_list は読めない行を隠さない（issue #296）', ()
         },
       },
     };
-    const tools = createCloneTools({ stores: withUnreadable, emit: () => undefined });
+    const tools = createCloneTools({
+      stores: withUnreadable,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+    });
     const found = tools.find((entry) => entry.name === 'commitment_list');
 
     // 読める行が0件の状態でも、読めない行だけで断りが出ること
@@ -5862,7 +5926,11 @@ describe('commitment_list は読めない行を隠さない（issue #296）', ()
   });
 
   it('0件のときは断りを足さない', async () => {
-    const tools = createCloneTools({ stores: createMemoryStores(), emit: () => undefined });
+    const tools = createCloneTools({
+      stores: createMemoryStores(),
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+    });
     const opened = tools.find((entry) => entry.name === 'commitment_open');
     await opened?.handler({ body: '健全な依頼' } as never, {});
 
@@ -5891,7 +5959,11 @@ describe('commitment_list は読めない行を隠さない（issue #296）', ()
         },
       },
     };
-    const tools = createCloneTools({ stores: withUnreadable, emit: () => undefined });
+    const tools = createCloneTools({
+      stores: withUnreadable,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+    });
     const found = tools.find((entry) => entry.name === 'commitment_list');
     const result = await found?.handler({} as never, {});
     const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');

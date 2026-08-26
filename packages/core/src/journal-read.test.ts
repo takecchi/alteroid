@@ -20,7 +20,7 @@ import { createCloneTools } from './tools.js';
 const SAFE_OUTPUT = 20_000;
 
 function tools(stores: Stores) {
-  const list = createCloneTools({ stores, emit: () => undefined });
+  const list = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
   return async (name: string, args: Record<string, unknown>): Promise<string> => {
     const found = list.find((entry) => entry.name === name);
     if (!found) throw new Error(`道具 ${name} が無い`);

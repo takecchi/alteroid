@@ -18,7 +18,7 @@ import { createCloneTools } from './tools.js';
  */
 
 function tools(stores: Stores) {
-  const list = createCloneTools({ stores, emit: () => undefined });
+  const list = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
   return async (name: string, args: Record<string, unknown>): Promise<string> => {
     const found = list.find((entry) => entry.name === name);
     if (!found) throw new Error(`道具 ${name} が無い`);
@@ -471,6 +471,7 @@ describe('conversation_read — 会話の一覧', () => {
 describe('conversation_read — 出ないものを説明文が名指ししている', () => {
   it('ask_human の回答が出ないことと、その行き先が書いてある', () => {
     const found = createCloneTools({
+      memoryCause: () => 'clone',
       stores: createMemoryStores(),
       emit: () => undefined,
     }).find((entry) => entry.name === 'conversation_read');

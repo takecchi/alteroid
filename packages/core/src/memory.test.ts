@@ -1635,6 +1635,43 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
     expect(reply).not.toContain('⭐');
   });
 
+  /**
+   * ⭐ 増減の**符号**を単体で固定する。
+   *
+   * **なぜ単体で要るか（変異試験で見つかった脆さ）。** `formatMemoryFloorTransition`
+   * の `afterChars - beforeChars` を逆向きにする変異を当てたとき、赤くなったのは
+   * `tools.test.ts` の `memory_section_move` の統合の歯**1本だけ**だった ——
+   * このファイルの単体は1本も撃たなかった。**その1本を消すか条件を変えると、
+   * 符号は誰も見ていない状態になる。**
+   *
+   * **⚠️ 「変異が検出された」の内側に在る脆さである** —— 合格の数字（9/9・生存0）
+   * を見ているだけでは出てこない。だから本数まで数えて、ここへ足した。
+   */
+  it('⭐ 床が減ったときは増減が負で出る（増えたときは正。符号を単体で固定する）', () => {
+    const big = measureMemoryFloor([premise('doc', 'あ'.repeat(500))]);
+    const small = measureMemoryFloor([premise('doc', 'あ'.repeat(100))]);
+
+    const shrunk = describeMemoryFloor({
+      before: big,
+      after: small,
+      slug: 'doc',
+      kind: 'premise',
+      created: false,
+    });
+    expect(small.totalChars).toBeLessThan(big.totalChars);
+    expect(shrunk).toContain(`（${(small.totalChars - big.totalChars).toLocaleString('en-US')}）`);
+    expect(shrunk).toContain('-');
+
+    const grown = describeMemoryFloor({
+      before: small,
+      after: big,
+      slug: 'doc',
+      kind: 'premise',
+      created: false,
+    });
+    expect(grown).toContain(`（+${(big.totalChars - small.totalChars).toLocaleString('en-US')}）`);
+  });
+
   it('⛔ 既存の語「区分が変わった」を使い回さない（tools.test.ts の歯と同じ語を撃たない）', () => {
     const before = measureMemoryFloor([premise('doc', 'a')]);
     const after = measureMemoryFloor([
