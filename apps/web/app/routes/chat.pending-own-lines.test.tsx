@@ -244,7 +244,12 @@ describe('同じ会話へ繰り返し戻っても、届いたばかりの行は�
             ? {
                 conversationId: CONVERSATION_ID,
                 messages: [
-                  { id: 'm1', at: '2026-08-20T00:00:05.000Z', role: 'inbound', text: '1回目の発言' },
+                  {
+                    id: 'm1',
+                    at: '2026-08-20T00:00:05.000Z',
+                    role: 'inbound',
+                    text: '1回目の発言',
+                  },
                   { id: 'm2', at: '2026-08-20T00:00:06.000Z', role: 'outbound', text: 'はい' },
                 ],
               }
@@ -279,15 +284,11 @@ describe('同じ会話へ繰り返し戻っても、届いたばかりの行は�
 
     // 2往復目。まだサーバの履歴には無い、届いたばかりの発言。
     await send('2回目の発言（まだ履歴に無い）');
-    expect(
-      within(transcript()).getAllByText('2回目の発言（まだ履歴に無い）'),
-    ).toHaveLength(1);
+    expect(within(transcript()).getAllByText('2回目の発言（まだ履歴に無い）')).toHaveLength(1);
     await screen.findByText('はい', {}, { timeout: 3000 });
 
     // **1往復目・2往復目のどちらも、消えずに1回ずつ見えている。**
     expect(within(transcript()).getAllByText('1回目の発言')).toHaveLength(1);
-    expect(
-      within(transcript()).getAllByText('2回目の発言（まだ履歴に無い）'),
-    ).toHaveLength(1);
+    expect(within(transcript()).getAllByText('2回目の発言（まだ履歴に無い）')).toHaveLength(1);
   });
 });
