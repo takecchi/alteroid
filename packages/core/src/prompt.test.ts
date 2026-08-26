@@ -256,15 +256,52 @@ describe('器が共有であることの告知', () => {
  * 歯として意味が無い）。
  */
 describe('バックグラウンドの完了を待つときの事実の告知（#357）', () => {
-  it('マネージャーに、完了通知を送る主体が居ないという事実を告げている', () => {
+  it('マネージャーに、層が2つ在ることと、追えない側は前景で見ることを告げている', () => {
     const prompt = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
-    expect(prompt).toContain('完了を知らせる通知は、この実行環境には無い');
+    expect(prompt).toContain('層が2つ在り');
+    expect(prompt).toContain('器が追っている処理の完了は、通知として届く');
+    expect(prompt).toContain('器が追えない形へ逃した処理は、通知の対象ではない');
     expect(prompt).toContain('成果物が在るかを見て回る');
   });
 
-  it('作業者にも、完了通知を送る主体が居ないという事実を告げている', () => {
+  it('作業者にも、層が2つ在ることを告げている', () => {
     const prompt = buildWorkerPrompt();
-    expect(prompt).toContain('完了を知らせる通知は無い');
+    expect(prompt).toContain('層が2つ在る');
+    expect(prompt).toContain('通知として届く');
+    expect(prompt).toContain('通知の対象ではない');
+  });
+
+  /**
+   * **全否定へ戻ることを塞ぐ歯（2026-08-27 の訂正）。**
+   *
+   * 本文はかつて「バックグラウンドへ回した処理の完了を知らせる通知は、この実行環境
+   * には無い」と**層を畳んだ全否定**を書いていた。実測でこれは偽だった（`Bash` の
+   * `run_in_background` と作業者への委譲の両方で完了通知が届いた。`prompt.ts` の
+   * doc に観測時刻つきで残してある）。
+   *
+   * **この歯が無いと、次に触る人が doc を読まずに全否定へ戻せる。** 戻しても型は
+   * 通り、他のどのテストも落ちない —— 上の describe の doc と同じ理由である。
+   */
+  it('「通知は無い」という層を畳んだ全否定へ戻っていない', () => {
+    const manager = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
+    const worker = buildWorkerPrompt();
+    for (const prompt of [manager, worker]) {
+      expect(prompt).not.toContain('完了を知らせる通知は、この実行環境には無い');
+      expect(prompt).not.toContain('完了を知らせる通知は無い');
+    }
+  });
+
+  /**
+   * **判定の形で書いてあることを固定する。** 「届く」と断定する形にしなかったのは、
+   * 実測がマネージャー層の器で取られたもので、runner の器では測っていないから
+   * である（`prompt.ts` の doc）。⟹ 読み手が自分の側を見れば当たる形を保つ。
+   */
+  it('通知が来ないことを環境の性質として読ませない（追える形で起こしたかを先に見させる）', () => {
+    const manager = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
+    const worker = buildWorkerPrompt();
+    for (const prompt of [manager, worker]) {
+      expect(prompt).toContain('追える形で起こしたか');
+    }
   });
 
   it('マネージャーに、通知が実処理の完了と一致しないことがあるという事実を告げている', () => {
