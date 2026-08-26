@@ -960,7 +960,7 @@ class Clone implements CloneHost {
    * ⟹ **畳んで作り直すまで、クローンは古いトークンのまま**である。
    *
    * 枠に当たったクローンは `#usageBlocked` が立ってターンを回さないが、再挑戦の
-   * 経路は在る（`grep -n '枠の解除を試す' packages/core/src/clone.ts`）。**作り直さ
+   * 経路は在る（`grep -Fn -- '枠の解除を試す' packages/core/src/clone.ts`）。**作り直さ
    * ないと、その再挑戦が古いトークンで走って同じところで止まる。**
    *
    * ## 会話は切れない
