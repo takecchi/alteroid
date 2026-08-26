@@ -1868,14 +1868,18 @@ describe('GET /approvals の order/limit/cursor（issue #432）', () => {
  * `GET /commitments` の `limit` / `cursor`（2026-08-25、人間の明示の「はい」を受けて
  * opt-in で足した窓）。
  *
- * **既定の応答が1バイトも変わらないことが最重要の保証である**（`/approvals` の
- * `order`/`limit`/`cursor` と同じ理由——`toMatchObject` ではなく `Object.keys` で
- * 鍵の集合そのものを留める）。並びは `CommitmentStore.list` の契約が固定して
- * いる（未了は `at` 昇順、片付いたものは `closedAt` 降順で未了の後ろ）ので、
+ * **既定の応答に、窓（`limit`/`cursor`）由来の鍵（`total`/`nextCursor`）が
+ * 増えないことが最重要の保証である**（`/approvals` の `order`/`limit`/`cursor` と
+ * 同じ理由——`toMatchObject` ではなく `Object.keys` で鍵の集合そのものを留める）。
+ * **鍵の集合を永久に凍結する保証ではない** — `unreadable`（issue #296）と
+ * `trimmedClosed`（issue #416）は窓の opt-in とは無関係にどちらの呼びでも
+ * 常に載る鍵で、ここで固定しているのは「それ以外（`total`/`nextCursor`）が
+ * 増えないこと」である。並びは `CommitmentStore.list` の契約が固定している
+ * （未了は `at` 昇順、片付いたものは `closedAt` 降順で未了の後ろ）ので、
  * ここでは並べ替えを検査しない——窓（`limit`/`cursor`）だけを検査する。
  */
 describe('GET /commitments の limit/cursor（窓。2026-08-25 opt-in）', () => {
-  it('既定の呼び（limit/cursor を渡さない）では応答の鍵が増えない', async () => {
+  it('既定の呼び（limit/cursor を渡さない）では窓由来の鍵（total/nextCursor）が増えない', async () => {
     await stores.commitments.open({
       id: 'cm-1',
       at: '2026-01-01T00:00:00.000Z',
@@ -1884,14 +1888,14 @@ describe('GET /commitments の limit/cursor（窓。2026-08-25 opt-in）', () =>
     });
 
     const body = (await (await app.request('/commitments')).json()) as Record<string, unknown>;
-    expect(Object.keys(body)).toEqual(['entries', 'unreadable']);
+    expect(Object.keys(body)).toEqual(['entries', 'unreadable', 'trimmedClosed']);
 
     // `includeClosed=true` のような既存のパラメータを渡しても、窓の opt-in
     // 対象（limit/cursor）ではないので同じく増えない。
     const withIncludeClosed = (await (
       await app.request('/commitments?includeClosed=true')
     ).json()) as Record<string, unknown>;
-    expect(Object.keys(withIncludeClosed)).toEqual(['entries', 'unreadable']);
+    expect(Object.keys(withIncludeClosed)).toEqual(['entries', 'unreadable', 'trimmedClosed']);
   });
 
   it('limit は件数を切り、total は全件、nextCursor が続きを示す', async () => {
