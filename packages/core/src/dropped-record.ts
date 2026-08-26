@@ -405,6 +405,56 @@ function note(text: string): void {
 }
 
 /**
+ * 直近の跡（`note()` が書いた行）を、器の中から読み戻すための帳面（#242）。
+ *
+ * **上限つきの帳面である。無制限の列挙を新しく作らない**（#409 が指摘した
+ * 欠陥をここで繰り返さない——`RecentMap`（`recent.ts`）と同じ「溢れたら古い側
+ * から押し出す」形にしてある）。プロセスが生きているあいだだけの記憶で、
+ * 再起動・デプロイの入れ替えをまたいで残す仕組みは持たない。**持たせるなら
+ * 日誌と同じ「壊れても消えない」約束が要り、それは journal の役目である**
+ * （このファイルの冒頭 doc「日誌はまだ持ち主しか読まないが、stderr は器の外へ
+ * 出ていく」の逆を持ち込まない——ここは stderr の写しであって、日誌の代わりでは
+ * ない）。
+ *
+ * **`alteroidd:` / `alteroid-runner:`（`noteUncaught` が使う接頭辞）はここへは
+ * 乗らない。** 乗るのは `note()` が書く `alteroid:` の行だけである
+ * （`notePrefixed` の `prefix === 'alteroid'` 判定）——#242 が塞ぐのは
+ * **クローン自身が残した跡**であって、デーモン／runner のプロセス全体の網では
+ * ない（あちらは Railway 経由で人間からは既に読めている。#242 のコメントの
+ * 実測）。
+ *
+ * **本文は乗らない。** ここへ積むのは `note()` に渡された時点で既に
+ * 本文を含まない1行（`noteDroppedRecord` 等の doc が言う「本文は出さない」）
+ * なので、帳面の側で新たに漉す必要は無い。
+ */
+export const RECENT_TRACE_LIMIT = 200;
+const recentTraces: string[] = [];
+
+function rememberTrace(line: string): void {
+  recentTraces.push(line);
+  if (recentTraces.length > RECENT_TRACE_LIMIT) recentTraces.shift();
+}
+
+/**
+ * 直近の跡を古い順で返す（末尾がいちばん新しい）。`self_dropped`（`tools.ts`）
+ * の材料。**控えを返す**——呼び手が触っても帳面そのものは動かない
+ * （`RecentMap.entries()` と同じ形）。
+ */
+export function recentDroppedTraces(): readonly string[] {
+  return [...recentTraces];
+}
+
+/**
+ * テスト専用: 帳面を空にする（`setStderrSinkForTesting` と対）。
+ *
+ * 帳面はプロセス（＝テストファイル）の生存中ずっと1つを共有するので、
+ * 前のテストが積んだ行を次のテストが数え違えないよう、断言の前に呼ぶこと。
+ */
+export function clearRecentTracesForTesting(): void {
+  recentTraces.length = 0;
+}
+
+/**
  * 接頭辞を呼び出し側から受け取って1行書く。
  *
  * **`note()` と同じ口である**（`stderrSink` を通るのはここ1本のまま）。分けて
@@ -414,10 +464,14 @@ function note(text: string): void {
  * `apps/runner/src/app.ts` に在る）。**接頭辞が app ごとに違うのは、跡を読む者が
  * どちらのプロセスが落ちたのかを1行目で見分けられるようにするためである。**
  *
- * **`note()` が出す行は1文字も変えていない。**
+ * **`note()` が出す行は1文字も変えていない。** `prefix === 'alteroid'` の
+ * ときだけ {@link rememberTrace} で帳面へも積む（#242）——`alteroidd:` /
+ * `alteroid-runner:` は積まない（上の doc）。
  */
 function notePrefixed(prefix: string, text: string): void {
-  stderrSink(`${prefix}: ${new Date().toISOString()} ${text}\n`);
+  const line = `${prefix}: ${new Date().toISOString()} ${text}`;
+  if (prefix === 'alteroid') rememberTrace(line);
+  stderrSink(`${line}\n`);
 }
 
 /**

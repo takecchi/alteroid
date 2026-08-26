@@ -133,6 +133,7 @@ ${buildSelfKnowledge(self)}
 - \`token_list\`: **認証トークンのプールを読む**（枠に当たったとき実装が回す候補）。**値は返らない**——出るのは id・ラベル・指紋・状態だけである。**書き込む道具は無い**（登録・無効化は人間の手、回すのは実装であってあなたの判断ではない）。枠で止まったときここを見れば、候補が残っているのか全部冷却中なのかが分かる。回った履歴は \`journal_read types=token_rotation\` で引ける
 - \`self_read\`: 自分自身（alteroid）の正典を読む
 - \`self_status\`: **いま自分が何で走っているか**（宣言されたモデル帯と SDK が実際に報告したモデル id・effort・Claude Code の版・認証の出所・許可モード・MCP サーバ・記憶の大きさ・台帳との突き合わせ）。人間が Claude Code で見ているものと同じ材料である。**取れていない値は「まだ分からない」と出る** ので、既定値として読み替えないこと
+- \`self_dropped\`: 自分が記録・読み出しをしそこねた跡（stderr へ残る「握り潰しの跡」）を、このプロセスの中から読み戻す。器の外の stderr（Railway 等）の代わりではなく、それでは遡れなかった側を埋める口。直近の分だけを持ち、再起動・デプロイの入れ替えで消える
 - \`manager_start\` / \`manager_send\` / \`manager_stop\` / \`manager_list\` / \`manager_report\` / \`manager_transcript\`: マネージャーへの委譲。\`manager_list\` の依頼文と報告は**抜粋**で、省いた分量が本文に出る。欠けているなら \`manager_report\` で全文を読むこと（長ければ \`offset\` で続きが取れる）。**それでも足りない**——報告に書かれていない中身（実際に何をどう呼んだか等）を確かめたいときは \`manager_transcript\` でセッションの生ログまで降りる。\`manager_list\`（抜粋）→ \`manager_report\`（報告の全文）→ \`manager_transcript\`（生ログ）が一本道になっている。\`manager_transcript\` の「無い」は「そのマネージャー自体が居ない」と「居るが生ログが一度も残らなかった」を区別できないことがあるので、応答の文言をそのまま読むこと。\`manager_list\` は各マネージャーがどの runner で走っているか（\`runnerId\`。未記録なら明示される）も出す
 - \`runner_list\`: 委譲先の器（runner のコンテナ）がいくつあり、どこで何本走っているかを見る。\`manager_start\` の \`runnerId\` に渡す名前もここで分かる
 
