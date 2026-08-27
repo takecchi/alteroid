@@ -14,6 +14,7 @@ import {
   deriveMemoryFrontmatter,
   describeMemoryFloor,
   describeMemoryProtectionStatus,
+  describeMemoryReinjectionEstimate,
   describeMemoryWriteDiff,
   isKnownMemoryDocKind,
   lookupMemorySection,
@@ -1783,5 +1784,117 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
     expect(reply).not.toContain('memory_outline');
     expect(reply).not.toContain('memory_section_move');
     expect(reply).not.toContain('memory_frontmatter_set');
+  });
+});
+
+/**
+ * `describeMemoryReinjectionEstimate` — 「この書き込みによって、次のターンの
+ * 会話へ載る見込みの文字数」の一言（P2、#318 の続き）。
+ *
+ * **`describeMemoryFloor`（直上）とは別の量を測る歯である。** あちらは
+ * 「毎ターン焼き込まれ続ける総量」（記憶全体の before/after）、こちらは
+ * 「この書き込みの結果、`#withFreshMemory` が次の1ターンだけ差分として
+ * 載せ直す量」（`renderMemoryDocuments(changed)`、changed はこの書き込みで
+ * 変わった文書だけ）。**中心は区分で結果が変わること**——premise は全文、
+ * fact は目次1行ぶんしか返らない。
+ */
+describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ載る見込み」の一言', () => {
+  it('⭐ premise の文書へ書くと、renderMemoryDocuments([文書]) の全文ぶんの文字数が出る（全文が載る）', () => {
+    const doc = premise('about-me-core', 'あ'.repeat(500));
+    const reply = describeMemoryReinjectionEstimate([doc]);
+    const expectedChars = renderMemoryDocuments([doc]).length;
+
+    expect(reply).toContain(`${expectedChars.toLocaleString('en-US')} 文字`);
+    expect(reply).toContain('premise・全文');
+    // 全文が実際に載っていること（目次1行だけではない）を、本文の一部で確かめる。
+    expect(renderMemoryDocuments([doc])).toContain('あ'.repeat(500));
+  });
+
+  it('⭐ fact の文書へ書くと、目次1行ぶんしか出ない——同じ本文量でも premise よりずっと小さい', () => {
+    const factDoc = fact('runbook', {
+      description: '費用の推移',
+      freshness: { kind: 'fresh' },
+    });
+    // 本文が長くても、目次1行にしか影響しない（本文自体は载らない）。
+    const longFactDoc: MemoryPart = { ...factDoc, content: factDoc.content + 'あ'.repeat(5000) };
+    const reply = describeMemoryReinjectionEstimate([longFactDoc]);
+    const expectedChars = renderMemoryDocuments([longFactDoc]).length;
+
+    expect(reply).toContain(`${expectedChars.toLocaleString('en-US')} 文字`);
+    expect(reply).toContain('fact・目次1行');
+    // 5,000文字の本文は目次側には出ない（載る量は本文量に比例しない）。
+    expect(expectedChars).toBeLessThan(200);
+  });
+
+  it('⭐ 区分で結果が変わる——同じ本文量の premise と fact を比べると、fact のほうが小さい数を返す', () => {
+    const body = 'あ'.repeat(1000);
+    const premiseDoc = premise('doc-p', body);
+    const factDoc: MemoryPart = {
+      ...fact('doc-f', { description: '要旨', freshness: { kind: 'fresh' } }),
+      content: `---\ntype: fact\ndescription: 要旨\n---\n# doc-f\n${body}`,
+    };
+
+    const premiseChars = renderMemoryDocuments([premiseDoc]).length;
+    const factChars = renderMemoryDocuments([factDoc]).length;
+
+    expect(describeMemoryReinjectionEstimate([premiseDoc])).toContain(
+      `${premiseChars.toLocaleString('en-US')} 文字`,
+    );
+    expect(describeMemoryReinjectionEstimate([factDoc])).toContain(
+      `${factChars.toLocaleString('en-US')} 文字`,
+    );
+    expect(factChars).toBeLessThan(premiseChars);
+  });
+
+  it('⚠️「他に何も変わらなければ」という条件付きであることを明言する（単一文書でも複数文書でも）', () => {
+    const single = describeMemoryReinjectionEstimate([premise('a', '本文')]);
+    const multi = describeMemoryReinjectionEstimate([premise('a', '本文'), premise('b', '本文')]);
+
+    for (const reply of [single, multi]) {
+      expect(reply).toContain('予測であって実測ではない');
+      expect(reply).toContain('他に何も変わらなければ');
+      expect(reply).toContain('単純に合算しないこと');
+    }
+  });
+
+  it('⭐ memory_section_move の形（2文書）では、両方の合計が1つの数として出る（別々に render して足したものとは限らず、まとめて render した値と一致する）', () => {
+    const fromDoc = premise('about-me', 'あ'.repeat(300));
+    const toDoc = premise('about-me-appendix', 'い'.repeat(300));
+
+    const reply = describeMemoryReinjectionEstimate([toDoc, fromDoc]);
+    const combinedChars = renderMemoryDocuments([toDoc, fromDoc]).length;
+    const separateSum =
+      renderMemoryDocuments([toDoc]).length + renderMemoryDocuments([fromDoc]).length;
+
+    expect(reply).toContain(`${combinedChars.toLocaleString('en-US')} 文字`);
+    // まとめて render した値は、別々に render して足した値とは一致しない
+    // （premise 同士を繋ぐ区切り文字のぶん）——「合計」を選んだ理由そのもの。
+    expect(combinedChars).not.toBe(separateSum);
+    expect(reply).toContain('about-me-appendix と about-me の合計');
+  });
+
+  it('⚠️ memory_section_move（2文書）だけに「両方の合計である」の注記が出る——1文書のときは出ない', () => {
+    const single = describeMemoryReinjectionEstimate([premise('a', '本文')]);
+    const multi = describeMemoryReinjectionEstimate([premise('a', '本文'), premise('b', '本文')]);
+
+    expect(single).not.toContain('移動元と移動先の両方');
+    expect(multi).toContain('移動元と移動先の両方');
+    expect(multi).toContain('両方まとめて渡した結果');
+  });
+
+  it('内訳に文書ごとの区分（premise・全文 / fact・目次1行）が並ぶ', () => {
+    const premiseDoc = premise('about-me', '本文');
+    const factDoc: MemoryPart = {
+      ...fact('appendix', { description: '付録', freshness: { kind: 'fresh' } }),
+    };
+
+    const reply = describeMemoryReinjectionEstimate([factDoc, premiseDoc]);
+
+    expect(reply).toContain('appendix（fact・目次1行）');
+    expect(reply).toContain('about-me（premise・全文）');
+  });
+
+  it('parts が空なら呼び手の実装誤りとして例外を投げる', () => {
+    expect(() => describeMemoryReinjectionEstimate([])).toThrow();
   });
 });
