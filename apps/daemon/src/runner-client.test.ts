@@ -1448,7 +1448,9 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
 
     const stderrLines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
     const stdoutLines = stdoutSpy.mock.calls.map((call: unknown[]) => String(call[0]));
-    const failureLines = stderrLines.filter((line: string) => line.includes('ストリームが切れました'));
+    const failureLines = stderrLines.filter((line: string) =>
+      line.includes('ストリームが切れました'),
+    );
     const reconnectLines = stdoutLines.filter((line: string) => line.includes('繋ぎ直せた'));
 
     // 1000, 2000, 4000 は間隔が毎回変わるので書く。成功で列がリセットされた
@@ -1931,7 +1933,9 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
 
       const stderrLines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
       const stdoutLines = stdoutSpy.mock.calls.map((call: unknown[]) => String(call[0]));
-      const failureLines = stderrLines.filter((line: string) => line.includes('ストリームが切れました'));
+      const failureLines = stderrLines.filter((line: string) =>
+        line.includes('ストリームが切れました'),
+      );
       // **#420 で宛先が stderr から stdout へ移った。**
       const reconnectLines = stdoutLines.filter((line: string) => line.includes('繋ぎ直せた'));
 
@@ -2099,7 +2103,9 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
       const stderrLines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
       // **#420 で「繋ぎ直せた」の宛先が stderr から stdout へ移った。**
       const stdoutLines = stdoutSpy.mock.calls.map((call: unknown[]) => String(call[0]));
-      const failureLines = stderrLines.filter((line: string) => line.includes('ストリームが切れました'));
+      const failureLines = stderrLines.filter((line: string) =>
+        line.includes('ストリームが切れました'),
+      );
       const reconnectLines = stdoutLines.filter((line: string) => line.includes('繋ぎ直せた'));
 
       expect(failureLines.length).toBeGreaterThan(0);
