@@ -4500,6 +4500,29 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     expect(reply).toContain('journal_read');
   });
 
+  /**
+   * Issue #373 — マネージャー自身と作業者の拒否を同じ数へ畳まず、一覧の字面でも
+   * 3値（マネージャー／作業者／層不明）のまま出す。`層不明` を黙って消したり
+   * マネージャー側へ混ぜたりすると、クローンが誤った相手へ指示を出しうる
+   * （2026-08-24 コメント #5393921053 が記録した実害）。
+   */
+  it('拒否の層（マネージャー／作業者／層不明）が一覧の字面でも3値のまま出る', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.denied.set('mgr-1', [
+      { tool: 'Bash', count: 2, actor: 'manager' },
+      { tool: 'Edit', count: 1, actor: 'worker' },
+      // `via: 'result'` は SDK 側に判定材料が無いので `actor` キーそのものが無い。
+      { tool: 'Write', count: 3 },
+    ]);
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('Bash 2件 [マネージャー]');
+    expect(reply).toContain('Edit 1件 [作業者]');
+    expect(reply).toContain('Write 3件 [層不明]');
+  });
+
   it('拒否が無いマネージャーには何も足さない（雑音にしない）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });

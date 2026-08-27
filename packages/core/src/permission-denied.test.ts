@@ -119,6 +119,25 @@ function liveDenialAsSdkSends(tool: string, toolUseId: string): SDKMessage {
   } as unknown as SDKMessage;
 }
 
+/**
+ * 走行中の合図（`system/permission_denied`）を、**作業者（Task subagent）の
+ * 内側で拒否された形**で作る。SDK の `SDKPermissionDeniedMessage.agent_id`
+ * （サブエージェント起源のときだけ付く。`agent_id?: string` doc:
+ * "Subagent ID when the denied tool call originated inside a subagent."
+ * `@anthropic-ai/claude-agent-sdk@0.3.247` の型で確認済み）を模す。
+ */
+function liveDenialFromWorker(tool: string, toolUseId: string, agentId = 'agent-1'): SDKMessage {
+  return {
+    type: 'system',
+    subtype: 'permission_denied',
+    tool_name: tool,
+    tool_use_id: toolUseId,
+    agent_id: agentId,
+    session_id: 'sess-mgr',
+    uuid: `uuid-denied-${toolUseId}`,
+  } as unknown as SDKMessage;
+}
+
 /** ターン終わりの記録（`result.permission_denials`）。 */
 function resultWithDenials(
   text: string,
@@ -342,9 +361,11 @@ describe('確認へ上がらずに止められた実行（permissionMode: auto�
     await tick();
 
     // 古い順（＝一覧は末尾から採る）。Edit は入れ直しで新しい側へ寄る。
+    // `liveDenial` は `agent_id` を持たないので、層は `manager` に解決される
+    // （`#onPostToolUse` と同じ式。Issue #373 対応）。
     expect(s.pool.denials(managerId)).toEqual([
-      { tool: 'Bash', count: 1 },
-      { tool: 'Edit', count: 2 },
+      { tool: 'Bash', count: 1, actor: 'manager' },
+      { tool: 'Edit', count: 2, actor: 'manager' },
     ]);
 
     // **状態の値は増やさない。** `stalled` を新設すると `openapi.json` の
@@ -531,4 +552,130 @@ describe('確認へ上がらずに止められた実行（permissionMode: auto�
 
     await s.pool.stop();
   }, 15_000);
+});
+
+/**
+ * Issue #373 — マネージャー自身の拒否と作業者の拒否が同じ数に畳まれていて、
+ * クローンが誤った相手（例: マネージャー自身）へ指示を出した実害（2026-08-24
+ * コメント #5393921053）を再現しないことを固定する。
+ *
+ * 材料は SDK の `SDKPermissionDeniedMessage.agent_id`
+ * （`via: 'live'` のときだけ付く。`via: 'result'` の型 `SDKPermissionDenial`
+ * には存在しない——**判定材料が無い回は「取れていない」第3の状態のまま
+ * 運ぶ**。`manager` 側へ黙って寄せると、実際は作業者の拒否でもマネージャー
+ * の拒否として数えられ、クローンが誤った相手を止めに行く。
+ */
+describe('層の判定（Issue #373）', () => {
+  it('via: live + agent_id 在り → 作業者として数える', async () => {
+    const s = open();
+    const { managerId } = await s.pool.start({ request: 'テストを直して' });
+    const session = s.manager.sessions[0];
+    if (!session) throw new Error('マネージャーのセッションが無い');
+
+    session.push(liveDenialFromWorker('Edit', 'toolu_w1'));
+    await tick();
+
+    expect(s.pool.denials(managerId)).toEqual([{ tool: 'Edit', count: 1, actor: 'worker' }]);
+
+    await s.pool.stop();
+  }, 15_000);
+
+  it('via: live + agent_id 無し → マネージャー自身として数える', async () => {
+    const s = open();
+    const { managerId } = await s.pool.start({ request: 'テストを直して' });
+    const session = s.manager.sessions[0];
+    if (!session) throw new Error('マネージャーのセッションが無い');
+
+    session.push(liveDenial('Edit', 'toolu_m1', { file_path: 'a.tsx' }));
+    await tick();
+
+    expect(s.pool.denials(managerId)).toEqual([{ tool: 'Edit', count: 1, actor: 'manager' }]);
+
+    await s.pool.stop();
+  }, 15_000);
+
+  it('via: result → 層は取れない（マネージャー側へ黙って寄せない）', async () => {
+    const s = open();
+    const { managerId } = await s.pool.start({ request: '調べて' });
+    const session = s.manager.sessions[0];
+    if (!session) throw new Error('マネージャーのセッションが無い');
+
+    session.push(
+      resultWithDenials('終わった', [
+        { tool_name: 'Write', tool_use_id: 'toolu_r1', tool_input: { file_path: 'x.ts' } },
+      ]),
+    );
+    await tick();
+
+    // **`actor` キーそのものが無い。** 「マネージャーだった」への読み替えを
+    // しない——`toEqual` は欠けている欄と `undefined` を区別しないので、
+    // `not.toHaveProperty` で「キー自体が無い」ことも別に確かめる。
+    const denials = s.pool.denials(managerId);
+    expect(denials).toEqual([{ tool: 'Write', count: 1 }]);
+    expect(denials[0]).not.toHaveProperty('actor');
+
+    await s.pool.stop();
+  }, 15_000);
+
+  it('同じ道具でもマネージャー自身と作業者は別枠で数える（畳まれない）', async () => {
+    const s = open();
+    const { managerId } = await s.pool.start({ request: 'テストを直して' });
+    const session = s.manager.sessions[0];
+    if (!session) throw new Error('マネージャーのセッションが無い');
+
+    session.push(liveDenial('Edit', 'toolu_1', { file_path: 'a.tsx' }));
+    await tick();
+    session.push(liveDenialFromWorker('Edit', 'toolu_2'));
+    await tick();
+    session.push(liveDenialFromWorker('Edit', 'toolu_3', 'agent-2'));
+    await tick();
+
+    // マネージャー1件・作業者2件（別の agent_id でも同じ「作業者」枠へ集約）
+    // ——同じ「Edit」でも層が違えば別枠になる。これが崩れると、マネージャー
+    // 自身が2回止められただけに見える（Issue #373 の実害の形）。
+    const denials = s.pool.denials(managerId);
+    expect(denials).toContainEqual({ tool: 'Edit', count: 1, actor: 'manager' });
+    expect(denials).toContainEqual({ tool: 'Edit', count: 2, actor: 'worker' });
+
+    await s.pool.stop();
+  }, 15_000);
+
+  it('境界のスキーマは `actor` が無くても通る（旧い runner・result 経由の形）', () => {
+    const parsed = runnerEventSchema.safeParse(
+      JSON.parse(
+        JSON.stringify({
+          type: 'permission_denied',
+          managerId: 'mgr-1',
+          toolUseId: 'toolu_1',
+          tool: 'Edit',
+          via: 'result',
+          // actor を渡していない（旧い runner、または via: 'result' で
+          // 判定材料が無い回の実機の形と一致する）。
+        }),
+      ),
+    );
+    expect(parsed.success).toBe(true);
+    if (parsed.success && parsed.data.type === 'permission_denied') {
+      expect(parsed.data.actor).toBeUndefined();
+    }
+  });
+
+  it('境界のスキーマは `actor` が在れば値を保つ（`worker:<id>:<agent>` の形）', () => {
+    const parsed = runnerEventSchema.safeParse(
+      JSON.parse(
+        JSON.stringify({
+          type: 'permission_denied',
+          managerId: 'mgr-1',
+          toolUseId: 'toolu_1',
+          tool: 'Edit',
+          via: 'live',
+          actor: 'worker:mgr-1:worker',
+        }),
+      ),
+    );
+    expect(parsed.success).toBe(true);
+    if (parsed.success && parsed.data.type === 'permission_denied') {
+      expect(parsed.data.actor).toBe('worker:mgr-1:worker');
+    }
+  });
 });

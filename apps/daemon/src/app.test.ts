@@ -1021,6 +1021,52 @@ describe('HTTP API', () => {
   });
 
   /**
+   * **Issue #373 — `actor` を宣言しないと、値が在っても `.parse()` で黙って
+   * 落ちる。** `managerDenialSchema`（`openapi.ts`）にこの欄を足しただけで、
+   * ハンドラの `c.json(...)` 前に通す `.parse()` がここで確かに欄を通すことを
+   * 固定する（宣言だけして通し忘れる事故を防ぐ——`openapi.ts` 冒頭の doc の
+   * 「宣言していないものが載らないだけになる」という約束の裏返し）。
+   */
+  it('拒否の層（actor）が、状態を置き換えずに一覧と詳細へ載る', async () => {
+    fake.managerList.push({
+      managerId: 'mgr-denied-layered',
+      status: 'running',
+      live: true,
+      cwd: '/work/project',
+      request: '止められている仕事',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+      waiting: [],
+    });
+    fake.managerDenials.set('mgr-denied-layered', [
+      { tool: 'Bash', count: 3, actor: 'worker' },
+      { tool: 'Write', count: 1, actor: 'manager' },
+      // 層が取れていない回（`via: 'result'`）は `actor` キーそのものが無い。
+      { tool: 'Edit', count: 2 },
+    ]);
+
+    const list = (await (await app.request('/managers')).json()) as {
+      managers: { denials?: { tool: string; count: number; actor?: string }[] }[];
+    };
+    expect(list.managers[0]?.denials).toEqual([
+      { tool: 'Bash', count: 3, actor: 'worker' },
+      { tool: 'Write', count: 1, actor: 'manager' },
+      { tool: 'Edit', count: 2 },
+    ]);
+    // 「取れていない」がキーごと省かれたままで、`'manager'` へ化けていない。
+    expect(list.managers[0]?.denials?.[2]).not.toHaveProperty('actor');
+
+    const detail = (await (await app.request('/managers/mgr-denied-layered')).json()) as {
+      manager: { denials?: { tool: string; count: number; actor?: string }[] };
+    };
+    expect(detail.manager.denials).toEqual([
+      { tool: 'Bash', count: 3, actor: 'worker' },
+      { tool: 'Write', count: 1, actor: 'manager' },
+      { tool: 'Edit', count: 2 },
+    ]);
+  });
+
+  /**
    * **「数えていない」を「0 件だった」に見せない。**
    *
    * 拒否の帳面はデーモンのプロセス内にしかなく、器を作り直せば数え直しになる。
