@@ -3776,22 +3776,45 @@ class Pool implements ManagerPool {
         });
 
         // 「移った」「追い返された」の**瞬間だけ**を知らせる（状態を毎回流さない）。
-        const reason =
-          event.facts.overageDisabledReason === undefined
-            ? ''
-            : `（課金枠が使えない理由: ${event.facts.overageDisabledReason}）`;
-        const text =
-          transition === 'entered_overage'
-            ? `枠を使い切って課金枠から引き始めた（${event.facts.kind ?? '枠'}）。` +
-              `**まだ動くが、この先で止まる。**${reason}`
-            : `枠から追い返された（${event.facts.kind ?? '枠'}）。この枠ではもう通らない。${reason}`;
+        //
+        // **`event.facts.kind` と `overageDisabledReason` は SDK 由来の識別子である**
+        // （`usage-limits.ts` の `rateLimitFactsSchema` では両方とも `z.enum` ではなく
+        // `z.string()` — 境界が任意の字面を通す設計になっている。SDK の実際の値は
+        // `five_hour` / `seven_day_opus` / `out_of_credits` のような snake_case で、
+        // **いまはこれで化けることはない**。それでも素で通す理由が無いのは、PR #539
+        // が `case 'permission_denied'` で `event.tool`（SDK のツール名）を包んだのと
+        // 同じ理由——境界が任意の字面を許す以上、いま化けていないことは埋め込んで
+        // よい理由にならない。**化けを直しているのではない。**
+        //
+        // **`kind` が無いときのフォールバック `'枠'` は包まない。** あれはデーモンが
+        // 書いた日本語であって SDK の値ではない。包むと、デーモン自身の言葉が SDK の
+        // 値の顔をする——この issue が問題にしているのと逆向きの混ざり方になる。
+        // 包むのは値が実際に在るときだけ。
+        //
+        // **日誌（下の `#journal`）は包まない。** あちらは Markdown で描かれる面では
+        // ないので、包むと読み手に無いバッククォートが見える。**受信箱（`#emit`）は
+        // 包む**——こちらは `**強調**` を意図して持つ、デーモンが書いた Markdown の
+        // 文へ SDK の値を埋め込む面である。
+        //
+        // 定型文を2回書き写すと片方だけ直る事故が起きるので、包み方
+        // （`(s: string) => string`）を受け取って1本の組み立て関数にする。
+        const build = (wrap: (s: string) => string): string => {
+          const kind = event.facts.kind === undefined ? '枠' : wrap(event.facts.kind);
+          const reason =
+            event.facts.overageDisabledReason === undefined
+              ? ''
+              : `（課金枠が使えない理由: ${wrap(event.facts.overageDisabledReason)}）`;
+          return transition === 'entered_overage'
+            ? `枠を使い切って課金枠から引き始めた（${kind}）。**まだ動くが、この先で止まる。**${reason}`
+            : `枠から追い返された（${kind}）。この枠ではもう通らない。${reason}`;
+        };
         await this.#journal({
           type: 'exchange',
           with: 'manager',
           role: 'inbound',
-          text: `[${event.managerId}] ${text}`,
+          text: `[${event.managerId}] ${build((s) => s)}`,
         });
-        this.#emit(event.managerId, 'report', text);
+        this.#emit(event.managerId, 'report', build(codeSpan));
         return;
       }
 
