@@ -789,6 +789,22 @@ class RunnerSession {
    */
   #said: string[] = [];
   /**
+   * `#said` へ最後に積んだ assistant メッセージの `uuid`（SDK が払う id）。
+   *
+   * **`#flushUnreported()` が `reportId` として運ぶためだけに持つ。**
+   * 通常の報告は `result` メッセージの `message.uuid` を `reportId` に使う
+   * （`runner-protocol.ts` の `report.reportId` の doc — 「runner が新しい値を
+   * 毎回振るのではなく、SDK 側の識別子をそのまま運ぶ」）。**`result` が来ない
+   * まま畳む回には、その id が存在しない。** そこで `randomUUID()` を振ると
+   * その作法を破ることになるので、**同じ本文を運んできた assistant メッセージの
+   * id をそのまま使う** — SDK 側の識別子であることは変わらず、再送しても
+   * 同じ値になる。
+   *
+   * **`#said` と同じ区切りで畳む**（持ち越すと、前のターンの id が次の報告に
+   * 付く）。
+   */
+  #saidUuid: string | undefined;
+  /**
    * このターンで SDK が「これは応答ではない」と印を付けたメッセージ
    * （`assistant.error`）。
    *
@@ -1105,6 +1121,11 @@ class RunnerSession {
     // 止まる前に全文を返す。runner のディスクは器と一緒に消えるので、ここで
     // 渡し損ねると manager_id から生ログへ降りる経路が切れる。
     await this.#shipArchive();
+    // **`#finish` と同じ理由でここにも置く（#323）。** この経路は `closed` すら
+    // 出さないので、置かないと「マネージャーが既に書いた本文」が器と一緒に消える
+    // — 直上の `#shipArchive` / `#flushUsage` / `#closeWorkerWaitWindow` が
+    // ここに並んでいるのと同じ穴である。
+    this.#flushUnreported(reason, this.#status);
     this.#settleAll(reason);
     this.#wakeInput();
     try {
@@ -1556,7 +1577,12 @@ class RunnerSession {
           this.#rejected = rejected;
           return;
         }
-        if (said.length > 0) this.#said.push(said);
+        if (said.length > 0) {
+          this.#said.push(said);
+          // **`#flushUnreported()` のための材料**（`#saidUuid` の doc）。
+          // 通常の経路（`result` が来る回）はこの値を1度も読まない。
+          this.#saidUuid = messageUuid(message);
+        }
       }
       return;
     }
@@ -1567,6 +1593,8 @@ class RunnerSession {
     // 混ざって「言っていないことを言った」ことになる。
     const said = this.#said;
     this.#said = [];
+    // **`#said` と同じ区切りで畳む**（`#saidUuid` の doc）。
+    this.#saidUuid = undefined;
     // **印も同じ区切りで畳む。** 持ち越すと、次のターンが成功しても失敗として
     // 報告されることになる（`#said` を持ち越してはいけないのと同じ理由）。
     const rejected = this.#rejected;
@@ -1968,6 +1996,52 @@ class RunnerSession {
   }
 
   /**
+   * **`result` を受け取らないまま畳むとき、既に喋られていた本文を報告として出す（#323）。**
+   *
+   * 報告は `#dispatch` の `message.type === 'result'` の枝でしか作られない。
+   * assistant のメッセージは（`stop_reason` が `end_turn` でも）`#said` に
+   * 積まれるだけで、畳むのは `result` の到来だけである。**だから `result` が
+   * 来ないまま終わる回は、マネージャーが書き終えた本文が丸ごと消えていた** —
+   * 生ログ（`manager_transcript`）にだけ残り、台帳にも日誌にもクローンの
+   * 受信箱にも1文字も出ない。これは #323 が「生ログには `end_turn` まで在り、
+   * `manager_list` の直近の報告にも台帳にも出ない」と書いた症状そのものである。
+   *
+   * **`result` が来ない回は例外ではない。** `#finish` の doc が逐語で
+   * 「ここを通るのはクラッシュ・`lost`・`failed`、つまり `result` が出ない
+   * まま終わる経路そのものである」と書いており、`stop()`（器の入れ替えと
+   * `manager_stop`）も同じ穴を持つ（あちらは `closed` すら出さない）。
+   *
+   * **空なら1件も出さない。** 中身の無い報告はクローンのターンを1本焼く
+   * （`runner-protocol.ts` の `report.contentless` の doc）。ここは
+   * 「積んだ本文が在るときだけ出す」なので、`contentless` は構造上立たない
+   * — だからこのイベントに `contentless` は付けない。
+   *
+   * **畳んでから出す。** 二度呼ばれても二度は出ない（`stop()` の後に
+   * `#read` の catch から `#finish` が来る経路が実在する）。
+   *
+   * **`#rejected`（SDK が「応答ではない」と印を付けた事実）はここでは読まない。**
+   * あれはターンの終わり方を言う印で、その確定は `result` が運ぶ。
+   * `result` が来ていないこの経路では「失敗として終わった」と名乗れない
+   * ——名乗れないものを名乗らない（`AGENTS.md`「取れない軸に0の行を作る」）。
+   */
+  #flushUnreported(reason: string, status: JobStatus): void {
+    if (this.#said.length === 0) return;
+    const said = this.#said;
+    this.#said = [];
+    const reportId = this.#saidUuid;
+    this.#saidUuid = undefined;
+    this.#emit({
+      type: 'report',
+      managerId: this.#id,
+      // 無ければ付けない。デーモン側は `reportId` の無い report を「冪等化を
+      // 諦める」経路で受ける（`manager.ts` の `case 'report':`）——捨てはしない。
+      ...(reportId === undefined ? {} : { reportId }),
+      text: unreportedText(said, reason),
+      status,
+    });
+  }
+
+  /**
    * `selfFenced` は `RunnerSession#selfFence` からだけ渡す。
    *
    * **他の呼び出し元（resume 不能・クラッシュ）は渡さない**——渡さなければ
@@ -2012,6 +2086,10 @@ class RunnerSession {
     }
     this.#status = status;
     await this.#shipArchive();
+    // **生ログに在る本文を、報告としても渡してから閉じる（#323）。**
+    // `#shipArchive()` の後に置いてあるのは、この報告を読んだクローンが
+    // すぐ `manager_transcript` で裏を取れるようにするためである。
+    this.#flushUnreported(reason, status);
     this.#emit({
       type: 'closed',
       managerId: this.#id,
@@ -2345,6 +2423,38 @@ function reportText(
   if (body.length === 0) return { text: result.text, contentless: result.empty };
   if (body.includes(result.text.trim())) return { text: body, contentless: false };
   return { text: `${body}\n\n${result.text}`, contentless: false };
+}
+
+/**
+ * `result` を受け取らないまま畳まれた回の報告本文（#323）。
+ *
+ * **先頭で「畳まれた」と言い切る。** `failedReportText` と同じ作法である
+ * ——これを付けないと、読み手（クローン・台帳・日誌）には通常の報告と
+ * 区別が付かず、**ターンの途中で切られた本文を「マネージャーの結論」として
+ * 読むことになる。**
+ *
+ * **本文は言い換えず、そのまま全部載せる。** 途中まででも、マネージャーが
+ * 何を書いていたかは次に何を頼み直すかを決める材料である
+ * （`failedReportText` の「途中まで出ていた本文も捨てない」と同じ理由）。
+ */
+function unreportedText(said: readonly string[], reason: string): string {
+  const body = said.join('\n\n').trim();
+  return (
+    `（このターンは結果を受け取らないまま畳まれた: ${reason}）\n` +
+    `（以下は畳まれる前にマネージャーが書いていた本文である。ターンの途中の発言が混ざっていることがある）\n\n` +
+    body
+  );
+}
+
+/**
+ * SDK メッセージの `uuid`。**無ければ undefined**（作らない）。
+ *
+ * `assistantText` / `parentToolUseId` と同じ形——SDK の型に頼らず、
+ * 実際に在る値だけを取る。
+ */
+function messageUuid(message: SDKMessage): string | undefined {
+  const value = (message as { uuid?: unknown }).uuid;
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 /**
