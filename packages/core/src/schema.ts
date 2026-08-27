@@ -364,12 +364,19 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
      * 強さを持たせない。**書き込み側は `TextMarkup` の型で縛る**（欄自体は
      * 寛容、書き手は型で縛る）。
      *
-     * **立てるのは `packages/core/src/manager.ts` の `abort()`
-     * （`#post({ type: 'manager_message', … })`、停止通知）だけである。**
+     * **いま `'none'` を立てる書き手は2箇所である。**
+     *
+     * 1つは `packages/core/src/manager.ts` の `abort()`
+     * （`#post({ type: 'manager_message', … })`、停止通知）——
      * `by === 'human' && reason !== undefined` のときにだけ `'none'` を立てる
      * — 人間が停止理由に自由記述を打った回で、`*` や `#`
-     * を含んでいても化けないようにするため。**他の post 箇所・`#emit()` の
-     * 呼び出し元にはこの PR では立てない**（issue #287 の残りの範囲）。
+     * を含んでいても化けないようにするため。
+     *
+     * もう1つは `packages/core/src/manager.ts` の `#onRunnerEvent` の
+     * `case 'ask'` ——`kind === 'permission'` のときにだけ `'none'` を立てる
+     * （issue #287 / PR #559）。**`kind === 'question'` には立てない** —
+     * そちらの `text` は `describeQuestions(input)` が返す、モデル自身が
+     * 書いた文章（prose）であり、Markdown として描くのが正しいため。
      */
     markup: z.string().optional(),
   }),
