@@ -29,7 +29,12 @@ import {
   renderListingEntry,
   renderListingFromEnd,
 } from './excerpt.js';
-import type { ManagerDenial, ManagerPool, ManagerSummary } from './manager.js';
+import type {
+  ManagerDenial,
+  ManagerPool,
+  ManagerSummary,
+  RunnerBacklogSnapshot,
+} from './manager.js';
 import {
   applyMemoryFrontmatterPatch,
   assertNeverMemoryProtectionStatus,
@@ -330,6 +335,46 @@ function describeInboxBacklog(pending: { count: number; oldestAt?: string }): st
   const oldest =
     pending.oldestAt === undefined ? '' : `（最も古いものは ${pending.oldestAt} から）`;
   return `⚠ クローンの受信箱に未処理の合図が ${pending.count} 件ある${oldest}`;
+}
+
+/**
+ * runner→デーモンの脚（`Outbox` の滞留）が、直近に観測できた分だけ出す、
+ * 一覧末尾の行（#358 案b。`describeInboxBacklog` はデーモン→クローンの脚、
+ * こちらは runner→デーモンの脚——2本合わせて #358「答えない問い」に挙げた
+ * 3行のうちの2つになる）。
+ *
+ * **`ManagerPool.runnerBacklog()` はキャッシュであって現在値ではない**
+ * （`RunnerBacklogSnapshot` の doc）。だからここで出す行には、件数と最古の
+ * 時刻に加えて**「いつ観測できた値か」を必ず添える**——添えないと、この行を
+ * 読んだ側がキャッシュを現在値と取り違える（滞留はとうに解消しているのに
+ * 古い行だけが居座って見える、あるいはその逆）。
+ *
+ * **「まだ報告していない」ではなく「報告した（runner の Outbox には積んだ）が
+ * まだデーモンへ届いていない」ことを言う。** `pendingEvents` が数えているのは
+ * runner が既に `Outbox` へ積んだ出来事の件数であって、マネージャーがまだ
+ * 何も報告していない状態とは別である——字面を「未送出」にしているのは
+ * そのため（「未報告」ではない）。
+ *
+ * **観測していない runner はここへ渡らない**（`runnerBacklog()` の doc—
+ * 呼んでいなければ配列にそもそも載らない）ので、この関数の中では「0件だった」
+ * ものだけを filter で落とす。`describeInboxBacklog` と同じ理由（何も言う
+ * ことが無い行を一覧へ足さない）。
+ */
+function describeRunnerBacklog(snapshots: readonly RunnerBacklogSnapshot[]): string | null {
+  const lines = snapshots
+    .filter((snapshot) => snapshot.pendingEvents > 0)
+    .map((snapshot) => {
+      const oldest =
+        snapshot.oldestPendingAt === undefined
+          ? ''
+          : `（最も古いものは ${snapshot.oldestPendingAt} から）`;
+      return (
+        `⚠ runner ${snapshot.runnerId} に未送出の出来事が ${snapshot.pendingEvents} 件ある${oldest}。` +
+        `これは ${snapshot.observedAt} 時点に取った値で、いまの値ではない` +
+        '（runner_list を resources: true で呼び直すと更新できる）。'
+      );
+    });
+  return lines.length === 0 ? null : lines.join('\n');
 }
 
 /** 全文を取りに来たときの1回分。続きは `offset` で取れる。 */
@@ -3060,20 +3105,30 @@ export function createCloneTools(context: ToolContext) {
     ),
 
     /**
-     * **#358 のうち、runner→デーモンの脚の滞留は、この一覧にまだ出さない。**
+     * **#358 のうち、runner→デーモンの脚の滞留は、この一覧では観測できた分だけ出す（案b）。**
      *
      * `RunnerPlacementResources.pendingEvents` / `oldestPendingAt` は runner
-     * ごとに取れるようになった（`apps/daemon/src/runner-client.ts` の
-     * `resources()`）が、それを読むには `ManagerPool.runners({ resources: true })`
-     * を呼ぶ必要がある。**この一覧（`runner_list` ではなく `manager_list`）から
-     * 毎回それを呼ぶと、`runners()` の doc（`ManagerPool.runners` の JSDoc）が守っている
-     * 「既定では `resources()` を呼ばない＝この一覧のためにネットワーク往復を
-     * 足さない」を、`manager_list` 側から実質的に破ることになる**——
-     * `runner_list` の `resources: true` はクローンが明示的に選ぶ opt-in だが、
-     * ここで自動的に呼べば、呼ぶかどうかの判断がクローンから奪われる。
-     * 壊さずに値を取る方法が見つからなかったので、ここでは落とした
-     * （クローンの受信箱側 `describeInboxBacklog` はネットワーク往復が要らない
-     * ので落としていない）。runner 側を出したいなら、まずこの設計判断を諮る。
+     * ごとに取れる（`apps/daemon/src/runner-client.ts` の `resources()`）が、
+     * それを読むには `ManagerPool.runners({ resources: true })` を呼ぶ必要が
+     * ある。**この一覧（`runner_list` ではなく `manager_list`）から毎回それを
+     * 呼ぶ形は採らない**——`runners()` の doc（`ManagerPool.runners` の
+     * JSDoc）が守っている「既定では `resources()` を呼ばない＝この一覧のために
+     * ネットワーク往復を足さない」を破ることになり、かつ `runner_list` の
+     * `resources: true` というクローンの明示的な opt-in を、`manager_list`
+     * 側から自動で踏み潰すことにもなる（north_star 禁止2）。
+     *
+     * **代わりに、`ManagerPool.runnerBacklog()`（キャッシュ。往復を足さない）
+     * を読む。** `runners({ resources: true })` が呼ばれるたび（＝クローンが
+     * `runner_list resources: true` を明示的に選ぶたび）、その応答から
+     * `pendingEvents` / `oldestPendingAt` と観測時刻を runner ごとに保存して
+     * おき（`RunnerBacklogSnapshot`）、ここはそれを読むだけにした
+     * （`describeRunnerBacklog`）。
+     *
+     * **この形の限界: cold（一度も `resources: true` で呼ばれていない）
+     * runner は行が出ない。** 「行が無い＝滞留0」ではなく「0件だったか、
+     * まだ観測していないかのどちらか」——`describeRunnerBacklog` の doc、
+     * この道具の description の断りを参照。値が出ても**それは観測した時点の
+     * 値であって現在値ではない**ので、行には必ず観測時刻を添える。
      */
     tool(
       'manager_list',
@@ -3084,6 +3139,20 @@ export function createCloneTools(context: ToolContext) {
         // であって「仕事が終わった」ではない。⚠ の行がその差を埋める。
         '状態の名前はデーモンが観測できた範囲でしかないので、⚠ の行まで読むこと。',
         '依頼文と報告は抜粋なので、全文が要るなら manager_report で取ること。',
+        // #358 案b: runner 側の滞留はここでは自動で取りに行かない（往復を
+        // 増やさない）。**warm する契機は runner_list を resources: true で
+        // 呼ぶこと、それだけである。** manager_list 自身は呼ばないし、時間
+        // 経過や定期実行でも warm しない——だから「まだ一度も runner_list を
+        // resources: true で呼んでいない」がここでの既定状態であり、行が
+        // 出ないのはその既定（cold）にいる証拠でしかない。行が出ないことを
+        // 「滞留0」と読まないこと——0件だったか、まだ観測していないかの
+        // どちらかである。
+        '器（runner）側の未送出の滞留は、runner_list を resources: true で呼んだときにだけ' +
+          'キャッシュされる（それ以外の経路では一切更新されない）。まだ一度も' +
+          'そう呼んでいなければ、この一覧には行が出ない——「滞留0」ではなく' +
+          '「まだ観測していない」という既定状態である。出ている行も観測した' +
+          '時点の値であって現在値ではないので、最新の値が要るなら runner_list を' +
+          'resources: true で呼び直すこと。',
       ].join(' '),
       {},
       async () => {
@@ -3093,11 +3162,14 @@ export function createCloneTools(context: ToolContext) {
         // （#358）。マネージャーが1本も居なくても、受信箱には既に合図が溜まって
         // いることがあるので、早期リターンの前に確かめる。
         const inboxBacklog = describeInboxBacklog(await context.stores.inbox.pending());
+        // runner→デーモンの脚も同じ理由で本数と無関係（#358 案b）。
+        // `runnerBacklog()` はキャッシュを読むだけ——ここでも往復は増えない。
+        const runnerBacklog = describeRunnerBacklog(context.managers.runnerBacklog?.() ?? []);
         if (managers.length === 0) {
           return text(
-            inboxBacklog === null
-              ? '（マネージャーは1本も居ない）'
-              : `（マネージャーは1本も居ない）\n${inboxBacklog}`,
+            ['（マネージャーは1本も居ない）', inboxBacklog, runnerBacklog]
+              .filter((line): line is string => line !== null)
+              .join('\n'),
           );
         }
 
@@ -3197,6 +3269,7 @@ export function createCloneTools(context: ToolContext) {
             }),
             '（依頼と報告は抜粋。全文は manager_report <managerId> で取れる）',
             inboxBacklog,
+            runnerBacklog,
           ]
             .filter((line): line is string => line !== null)
             .join('\n'),

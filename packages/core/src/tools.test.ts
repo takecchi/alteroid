@@ -7,7 +7,13 @@ import {
   noteManagerIdCollision,
   setStderrSinkForTesting,
 } from './dropped-record.js';
-import type { ManagerDenial, ManagerPool, ManagerSummary, RunnerFleetOverview } from './manager.js';
+import type {
+  ManagerDenial,
+  ManagerPool,
+  ManagerSummary,
+  RunnerBacklogSnapshot,
+  RunnerFleetOverview,
+} from './manager.js';
 import { measureMemoryFloor, renderMemoryDocuments } from './memory.js';
 import { createProfileService } from './profile-service.js';
 import { journalEntrySchema, type ChatStreamEvent } from './schema.js';
@@ -56,6 +62,11 @@ interface Harness {
   /** `runner_list` が読む `ManagerPool.runners()` の返り値を差し替える。 */
   setRunnersOverview(overview: RunnerFleetOverview): void;
   /**
+   * `manager_list` の runner 側滞留行が読む `ManagerPool.runnerBacklog()` の
+   * 返り値を差し替える（#358 案b）。既定は空配列（＝まだ何も観測していない）。
+   */
+  setRunnerBacklog(snapshots: RunnerBacklogSnapshot[]): void;
+  /**
    * `manager_transcript` が読む `ManagerPool.transcript()` の返り値を差し替える。
    * 設定しなければ既定で `null`（3段のどこにも無い、を模している）。
    */
@@ -92,6 +103,7 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     daemonRevision: { status: 'unknown' },
   };
   const runnersCalls: { fingerprints?: boolean; resources?: boolean }[] = [];
+  let runnerBacklog: RunnerBacklogSnapshot[] = [];
   const transcripts = new Map<string, string>();
   let memoryCause: 'distill' | 'clone' = 'clone';
 
@@ -165,6 +177,9 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
       runnersCalls.push(options);
       return runnersOverview;
     },
+    runnerBacklog() {
+      return runnerBacklog;
+    },
     async stop() {},
   };
 
@@ -227,6 +242,9 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     },
     setRunnersOverview(overview) {
       runnersOverview = overview;
+    },
+    setRunnerBacklog(snapshots) {
+      runnerBacklog = snapshots;
     },
     setTranscript(managerId, body) {
       if (body === null) transcripts.delete(managerId);
@@ -3432,6 +3450,118 @@ describe('クローンの道具', () => {
     expect(reply).toContain('マネージャーは1本も居ない');
     expect(reply).toContain('受信箱');
     expect(reply).toContain('1 件');
+  });
+
+  /**
+   * runner→デーモンの脚（`Outbox` の滞留）は `ManagerPool.runnerBacklog()`
+   * （キャッシュ）が読む（#358 案b。デーモン→クローンの脚は上の受信箱の3本）。
+   * **`manager_list` は `resources()` を自動で呼ばない**——`runnerBacklog()`
+   * は往復無しで読める値しか返さないので、この一覧の中では`context.managers.
+   * runners()` を叩いていないことがそのまま裏取りになる（下の最後のテストで
+   * `runnersCalls` を直接見る）。
+   */
+  it('manager_list は runner の滞留キャッシュが cold なら、その注記を1文字も出さない（0件と嘘をつかない）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    // **既定で空配列**（cold）。0件を記録した snapshot とは別の状態。
+    // **`runner-test` 自体はマネージャーの内訳行（`runner: runner-test`）に
+    // 常に出るので、ここでは滞留の断り（`未送出`）だけを見る。**
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).not.toContain('未送出');
+  });
+
+  it('manager_list は runner の滞留が0件のキャッシュなら、その注記を1文字も出さない', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.setRunnerBacklog([
+      { runnerId: 'runner-test', pendingEvents: 0, observedAt: '2026-08-27T00:30:00.000Z' },
+    ]);
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).not.toContain('未送出');
+  });
+
+  it('manager_list は runner の滞留があれば、件数・最古の時刻・観測時刻を1行で出す', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.setRunnerBacklog([
+      {
+        runnerId: 'runner-test',
+        pendingEvents: 9,
+        oldestPendingAt: '2026-08-20T00:00:00.000Z',
+        observedAt: '2026-08-27T00:30:00.000Z',
+      },
+    ]);
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('未送出');
+    expect(reply).toContain('runner-test');
+    expect(reply).toContain('9 件');
+    expect(reply).toContain('2026-08-20T00:00:00.000Z');
+    // **観測時刻（キャッシュを取った時刻）が字面に含まれる** — キャッシュを
+    // 現在値のふりをさせないため（`RunnerBacklogSnapshot` の doc）。
+    expect(reply).toContain('2026-08-27T00:30:00.000Z');
+  });
+
+  it('manager_list はマネージャーが1本も居なくても、runner の滞留があれば出す', async () => {
+    const h = harness();
+    h.setRunnerBacklog([
+      {
+        runnerId: 'runner-test',
+        pendingEvents: 4,
+        observedAt: '2026-08-27T00:30:00.000Z',
+      },
+    ]);
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('マネージャーは1本も居ない');
+    expect(reply).toContain('未送出');
+    expect(reply).toContain('4 件');
+  });
+
+  /**
+   * **この Issue の設計判断そのものの歯。** `manager_list` から `resources()`
+   * を自動で呼ぶ形は採らない（north_star 禁止2「opt-in の判断をクローンから
+   * 奪わない」）——`runner_list` の `resources: true` はクローンが明示的に
+   * 選ぶときだけ通る経路である。ここでは `runners()` に渡った引数の記録
+   * （`runnersCalls`）を直接見て、`manager_list` がそれを1回も呼んでいない
+   * ことを固定する。
+   */
+  it('manager_list は runners()（resources() を含む）を一度も呼ばない（往復を増やさない）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.setRunnerBacklog([
+      {
+        runnerId: 'runner-test',
+        pendingEvents: 9,
+        observedAt: '2026-08-27T00:30:00.000Z',
+      },
+    ]);
+
+    await h.call('manager_list', {});
+
+    expect(h.runnersCalls).toEqual([]);
+  });
+
+  /**
+   * **道具の説明文（doc ではなく、クローンが毎回読む値そのもの）に、warm の
+   * 契機と cold が既定であることが読めること。** JSDoc に書いただけでは
+   * クローンには届かない——マネージャーからのコメント（2026-08-27）で、
+   * 「行が出ない＝滞留0を意味しない」までは指示済みだったが、「誰がいつ
+   * warm するのか」が説明文からは読めていなかった、という指摘を受けて足した。
+   */
+  it('manager_list の説明文に、warm の契機（runner_list resources: true）と cold が既定であることが読める', () => {
+    const stores = createMemoryStores();
+    const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+    const found = tools.find((entry) => entry.name === 'manager_list');
+
+    expect(found?.description).toContain('resources: true');
+    expect(found?.description).toContain('まだ観測していない');
   });
 
   it('委譲先が無い場面（蒸留の内部ターン）は、黙らずにそう返す', async () => {

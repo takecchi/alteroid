@@ -5544,6 +5544,104 @@ describe('runner の一覧（ManagerPool.runners）', () => {
 });
 
 /**
+ * runner→デーモンの脚（`Outbox` の滞留）のキャッシュ（#358 案b）。
+ *
+ * `ManagerPool.runnerBacklog()` は `runners({ resources: true })` が拾った
+ * `pendingEvents` / `oldestPendingAt` を、往復を増やさずに読めるようにした
+ * ものである（`RunnerBacklogSnapshot` の doc）。ここで見るのは「warm する
+ * 条件」「cold のときに出てこないこと」「往復が増えないこと」の3つ。
+ */
+describe('runner の滞留のキャッシュ（ManagerPool.runnerBacklog）', () => {
+  it('runners({ resources: true }) の後にキャッシュが warm し、観測時刻付きで値が返る', async () => {
+    const a = new FakePoolRunner('runner-a', {
+      managers: 0,
+      pendingEvents: 9,
+      oldestPendingAt: '2026-08-20T00:00:00.000Z',
+    });
+    const stores = createMemoryStores();
+    const registry = createRunnerRegistry([a]);
+    const observedAt = new Date('2026-08-27T00:30:00.000Z');
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: registry,
+      now: () => observedAt.getTime(),
+    });
+
+    expect(pool.runnerBacklog!()).toEqual([]);
+    await pool.runners({ resources: true });
+
+    expect(pool.runnerBacklog!()).toEqual([
+      {
+        runnerId: 'runner-a',
+        pendingEvents: 9,
+        oldestPendingAt: '2026-08-20T00:00:00.000Z',
+        observedAt: observedAt.toISOString(),
+      },
+    ]);
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  /**
+   * **往復を増やさないことの歯。** `resources: true` を渡さずに `runners()`
+   * を呼んでも、`resources()` そのものが呼ばれない（既存の「resources: true
+   * のときだけ resources() を呼ぶ」歯と同じ根拠）ので、キャッシュも warm し
+   * ようがない——`manager_list` が自動でこの往復を払わないという設計判断
+   * （`tools.ts` の `manager_list` の JSDoc）が、ここでも保たれていることを
+   * 直接確かめる。
+   */
+  it('resources を渡さずに runners() を呼んでもキャッシュは warm しない（往復を足さない）', async () => {
+    const a = new FakePoolRunner('runner-a', { managers: 0, pendingEvents: 9 });
+    const stores = createMemoryStores();
+    const registry = createRunnerRegistry([a]);
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    await pool.runners();
+    await pool.runners({ fingerprints: true });
+
+    expect(a.resourcesCalls).toBe(0);
+    expect(pool.runnerBacklog!()).toEqual([]);
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  it('pendingEvents が undefined の runner は記録しない（0で埋めない）', async () => {
+    // `report` 自体は返るが `pendingEvents` を持たない——この機能より前の
+    // runner を模す（`RunnerPlacementResources.pendingEvents` の doc）。
+    const a = new FakePoolRunner('runner-a', { managers: 0 });
+    const stores = createMemoryStores();
+    const registry = createRunnerRegistry([a]);
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    await pool.runners({ resources: true });
+
+    expect(pool.runnerBacklog!()).toEqual([]);
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  it('oldestPendingAt が無ければ欄ごと省く（0件の言い方を混ぜない）', async () => {
+    const a = new FakePoolRunner('runner-a', { managers: 0, pendingEvents: 3 });
+    const stores = createMemoryStores();
+    const registry = createRunnerRegistry([a]);
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    await pool.runners({ resources: true });
+
+    const snapshot = pool.runnerBacklog!()[0];
+    expect(snapshot?.pendingEvents).toBe(3);
+    expect(snapshot).not.toHaveProperty('oldestPendingAt');
+
+    await pool.stop();
+    await registry.stop();
+  });
+});
+
+/**
  * 宛先を引けなかったときに返す言葉（`ManagerPool` の `#runnerNotOpenDetail`。
  * `send()` と `abort()` の両方がこれを呼ぶ）。
  *
