@@ -315,6 +315,53 @@ function describeRunner(): string {
 }
 
 /**
+ * 認証トークン回りの日誌1行を、正常/異常のどちらの標準ストリームへ出すかを
+ * `event` から一意に決める（Issue #420 の残件）。
+ *
+ * **「正常は stdout・異常は stderr」の規則は既に決まっている。** ここが決めるのは
+ * 割り当てだけで、規則そのものを変える判断はここに持たせない——変えたくなったら
+ * 実装せず人間に確認する。
+ *
+ * `rotated` / `not_rotated` / `restored` は正常（プールが仕事をした、または
+ * 何もしないという判断が付いた）。`exhausted` / `sweep_stopped` / `restore_failed`
+ * は異常（全層が止まる・候補を試し切れていない・起動時の撒き直しが失敗した）。
+ * 詳細は `.claude/skills/token-pool/SKILL.md` の `event` の表。
+ *
+ * **6値に対して網羅的である。** `packages/core/src/schema.ts` の
+ * `token_rotation.event` へ新しい値が足されたら、`default` の
+ * `assertTokenRotationEventHandled` の引数が `never` を受けられなくなり、
+ * `pnpm typecheck` がここで落ちる。**既定へは倒さない** — 倒すと新しい event が
+ * 黙ってどちらかの標準ストリームへ流れてしまう。
+ */
+export function tokenRotationStream(event: TokenRotationEntry['event']): NodeJS.WritableStream {
+  switch (event) {
+    case 'rotated':
+    case 'not_rotated':
+    case 'restored':
+      return process.stdout;
+    case 'exhausted':
+    case 'sweep_stopped':
+    case 'restore_failed':
+      return process.stderr;
+    default:
+      return assertTokenRotationEventHandled(event);
+  }
+}
+
+/**
+ * `tokenRotationStream` の網羅性チェック専用。呼ばれること自体が保証で、
+ * `event` の型が `never` でなくなった時点（＝ 未対応の値が足された時点）で
+ * 呼び出し側が型エラーになる。実行時にここへ来ることは型が守っている限り
+ * 起こらないので、`console.warn` で安全側へ倒す代わりに例外にしてある——
+ * `entry.event` はこのプロセスが直前に組み立てた値であり、別デプロイを跨いで
+ * 読み直した値ではないため（`commitments.tsx` の `assertClosedByHandled` が
+ * 緩い保存層からの読み直し値を相手にするのとは前提が違う）。
+ */
+function assertTokenRotationEventHandled(event: never): never {
+  throw new Error(`alteroidd: 認証トークンの日誌で未知の event: ${String(event)}`);
+}
+
+/**
  * alteroidd — 常駐デーモン。
  *
  * 常駐は自律の前提であり、後から足す機能ではない（PRD）。M1 の時点で人間が
@@ -720,7 +767,12 @@ export async function main(): Promise<void> {
     const ensured = await tokenRotator
       .ensureEnvToken()
       .catch((error: unknown) => ({ kind: 'failed' as const, why: String(error) }));
-    if (ensured.kind === 'added' || ensured.kind === 'failed') {
+    // **`added`（正常。プールへ行を足した）と `failed`（異常）を同じ行き先に
+    // 潰さない**（Issue #420 の残件）。`skipped` は黙る——既定の構成では毎回の
+    // 起動で出ることになり、意味のある行が埋もれる。
+    if (ensured.kind === 'added') {
+      process.stdout.write(`alteroidd: 認証トークン: ${ensured.why}\n`);
+    } else if (ensured.kind === 'failed') {
       process.stderr.write(`alteroidd: 認証トークン: ${ensured.why}\n`);
     }
   }
@@ -731,8 +783,8 @@ export async function main(): Promise<void> {
       .catch((error: unknown) => ({ kind: 'failed' as const, why: String(error) }));
     // **何も起きていないとき（`none`）は黙る。** 既定の構成では毎回の起動で出る
     // ことになり、意味のある行が埋もれる。
-    // **日誌にも残す。** stderr は器のログへ流れて消えるが、日誌は記憶ストアに
-    // 残り、クローンも人間も後から辿れる。
+    // **日誌にも残す。** 標準出力・標準エラーは器のログへ流れて消えるが、日誌は
+    // 記憶ストアに残り、クローンも人間も後から辿れる。
     // **`restore()` そのものが投げた場合と、`TokenRestoreOutcome` が返る場合を
     // 分けたまま同じ種別へ載せる。** 前者は `TokenRestoreOutcome` ではないので
     // `tokenRestoreEntry` を通せない（型が受けない）。
@@ -745,7 +797,12 @@ export async function main(): Promise<void> {
           } satisfies TokenRotationEntry)
         : tokenRestoreEntry(restored);
     if (entry !== null) {
-      process.stderr.write(`alteroidd: ${entry.text.split('\n')[0] ?? entry.text}\n`);
+      // **`event` から行き先を決める**（Issue #420 の残件）。`restored`（正常）は
+      // stdout、`restore_failed`（異常）は stderr——`tokenRotationStream` に分類を
+      // 1箇所へ閉じてある。
+      tokenRotationStream(entry.event).write(
+        `alteroidd: ${entry.text.split('\n')[0] ?? entry.text}\n`,
+      );
       // **落ちても黙って消さない**（回した側と同じ作法）。直す前はここが
       // `.catch(() => undefined)` で、追記が落ちたことがどこにも残らなかった。
       await stores.journal.append(entry).catch((error: unknown) => {
@@ -775,8 +832,8 @@ export async function main(): Promise<void> {
     onUsageObservation: async (observation) => {
       const outcome = await tokenRotator.observe(observation);
       // **回した / 回さなかったを黙って捨てない。** 日誌へ載せるのは PR5 の
-      // 仕事だが、それまでのあいだも stderr には出す——**回ったかどうかが
-      // どこからも見えない期間を作らない。**
+      // 仕事だが、それまでのあいだも標準出力・標準エラーには出す——**回ったか
+      // どうかがどこからも見えない期間を作らない。**
       // **当たった文言をそのまま添える**（Issue #393「言い換えずそのまま残す」）。
       // 人間が claude.ai と突き合わせられることと、回復の見込みの分類が効くことの
       // 両方がこれに乗っている。
@@ -792,7 +849,12 @@ export async function main(): Promise<void> {
       if (outcome.kind === 'rotated') clone.recycleSessionForToken();
 
       if (entry !== null) {
-        process.stderr.write(`alteroidd: ${entry.text.split('\n')[0] ?? entry.text}\n`);
+        // **`event` から行き先を決める**（Issue #420 の残件）。`rotated` /
+        // `not_rotated` は正常で stdout、`exhausted` / `sweep_stopped` は異常で
+        // stderr——`tokenRotationStream` に分類を1箇所へ閉じてある。
+        tokenRotationStream(entry.event).write(
+          `alteroidd: ${entry.text.split('\n')[0] ?? entry.text}\n`,
+        );
         // **日誌への追記が落ちても回した事実は消えない**（正本は記憶ストアの
         // `active` の側に在る）。ここで投げ直すと、回せたのに「回し手が落ちた」
         // として報告されることになる。
