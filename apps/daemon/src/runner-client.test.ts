@@ -1758,6 +1758,90 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
       expect(failureLines[5]).toContain('code=UND_ERR_SOCKET');
       expect(failureLines[6]).toContain('code=UND_ERR_BODY_TIMEOUT');
     });
+
+    it('UND_ERR_BODY_TIMEOUT で頭打ち（30000ms）まで伸びた後、healthy へ回復すると「繋ぎ直せた」が出て基準へ戻る（#308）', async () => {
+      // **`#lastLoggedDelayMs` の doc（#308）が名指す穴。** 「待ち幅が頭打ちへ
+      // 張り付いたまま失敗し続ける区間では、同じ間隔で切れ続ける沈黙と
+      // 『直った』（繋ぎ直せたの行）が、ログの不在だけでは見分けが付かない」
+      // という懸念が書かれていたが、**頭打ちに達した後に実際に healthy へ
+      // 回復させて「繋ぎ直せた」が出るかは、一度も測っていなかった。**
+      //
+      // callIndex 0〜5 を UND_ERR_BODY_TIMEOUT で失敗させる（待ちが
+      // 1000→2000→4000→8000→16000→30000 と伸びて頭打ちになる）。6回目
+      // （callIndex 6）だけ healthy（閾値を超えてからバイトが届く）へ切り替える。
+      const bodyTimeout = Object.assign(new Error('Body Timeout Error'), {
+        name: 'BodyTimeoutError',
+        code: 'UND_ERR_BODY_TIMEOUT',
+      });
+
+      let calls = 0;
+      const fetchFn = (async (input: string | URL | Request) => {
+        const path = pathOf(input);
+        if (path === '/health') {
+          return Response.json({ runnerId: 'runner-flaky', workspacePath: '/workspace' });
+        }
+        if (path === '/events') {
+          const index = calls;
+          calls += 1;
+          if (index < 6) throw new TypeError('terminated', { cause: bodyTimeout });
+          // 7回目（index === 6）。閾値を超えてからバイトが届く「持続した」接続。
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start: (controller) => {
+                controller.enqueue(new TextEncoder().encode(HEARTBEAT_FRAME));
+                controller.close();
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'text/event-stream' } },
+          );
+        }
+        throw new Error(`想定していない path: ${path}`);
+      }) as typeof fetch;
+
+      const waits: number[] = [];
+      let notifyEnough: () => void = () => undefined;
+      const enough = new Promise<void>((resolve) => {
+        notifyEnough = resolve;
+      });
+      const sleepFn = async (ms: number): Promise<void> => {
+        waits.push(ms);
+        // 6敗目（頭打ちの30000ms）まで6回、回復した7周目の後にもう1回
+        // （基準へ戻った待ち）——計7回で止める。
+        if (waits.length >= 7) notifyEnough();
+      };
+
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+        sleepFn,
+        nowFn: nowFnAtExactThreshold(),
+      });
+      await client.connect(() => undefined);
+      await enough;
+      await client.close();
+
+      const lines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      const failureLines = lines.filter((line) => line.includes('ストリームが切れました'));
+      const reconnectLines = lines.filter((line) => line.includes('繋ぎ直せた'));
+
+      // 1〜6敗目は待ちが毎回変わる（1000→2000→4000→8000→16000→30000）ので
+      // 6行とも書く。cause の code（UND_ERR_BODY_TIMEOUT）も毎回付く。
+      expect(failureLines).toHaveLength(6);
+      for (const line of failureLines) {
+        expect(line).toContain('code=UND_ERR_BODY_TIMEOUT');
+      }
+      expect(waits.slice(0, 6)).toEqual([1000, 2000, 4000, 8000, 16000, 30000]);
+
+      // **本題1: 頭打ちから回復した時点で「繋ぎ直せた」がちょうど1回出る。**
+      // 「切れ続ける沈黙」と「直った」が見分けられない、という #308 の懸念が
+      // 実際には塞がっていることを、ここで初めて測る。
+      expect(reconnectLines).toHaveLength(1);
+
+      // **本題2: 回復直後の待ちは基準値（1000ms）へ戻る。** 頭打ち（30000）を
+      // 引き継いでいれば、7回目の待ちも 30000 のままになる。
+      expect(waits[6]).toBe(1000);
+    });
   });
 
   /**
