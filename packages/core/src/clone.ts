@@ -1911,7 +1911,13 @@ class Clone implements CloneHost {
       this.#commit(record.event);
       // `post` を通さないのは、tick の畳み込みで落ちた行が器に残り続けるからである
       // （落とした側は誰も消さないので、起動のたびに配られて回数だけが増える）。
-      this.#inbox.push(record.event);
+      // それでも `post` が効かせている人間優先（`insertAfterLast`）まで
+      // 一緒に落としてはいけない——`post` を通さない選択は「畳み込み」だけを
+      // 避けるためのもので、割り込みの規則まで避ける理由にはならない。
+      this.#inbox.push(
+        record.event,
+        this.#humanPriority && isHumanOriginated(record.event) ? isHumanOriginated : undefined,
+      );
     }
   }
 

@@ -6914,6 +6914,99 @@ describe('クローン — 処理待ちのあいだに積み上がった発言',
 
     await s.clone.stop();
   }, 15_000);
+
+  /**
+   * **`#restoreUnread` の配り直しも `post()` と同じ人間優先を効かせる。** `post()`
+   * は `Inbox#push` へ `insertAfterLast`（人間なら `isHumanOriginated`）を渡して
+   * 人間の発言を待ち行列の人間の最後尾へ入れるが、`#restoreUnread` はこれまで
+   * 第2引数を渡さずに `this.#inbox.push(record.event)` と呼んでいた（`post` を
+   * 通さない理由は tick の畳み込みで落ちた行が残り続けるためであり、それとは
+   * 別に人間優先まで一緒に落ちていた）。
+   *
+   * **先頭の1件だけでは測れない。** `#pump` は `#restoreUnread` を `void` で
+   * 起こしてから直後に `for await (const event of this.#inbox)` を張るので、
+   * 待ち手（`Inbox` の `#waiters`）は `claimPending` が返る前から既に登録
+   * 済みである。claim 順で**最初に配り直される1件は、待ち行列を経由せず
+   * 待ち手へ直接渡って即座に走行中のターンになる**（`insertAfterLast` は
+   * 「待ち手が居れば素通し」なので、ここには一切効かない —
+   * `Inbox#push` の doc「待ち手が居るときは順序の話にならない」）。実測
+   * （2026-08-27）: `[非人間, human, 非人間]` の3件だけで claim 順を
+   * `human` が中間に来るよう仕込んでも、直した実装を当てても当てなくても
+   * ターンの並びは1文字も変わらなかった——先頭の非人間が即座に走行中の
+   * ターンを奪い、残り2件（human・非人間）が積まれる先の待ち行列は
+   * 常に空で、`insertAfterLast` に飛び越す相手が居ないため。
+   *
+   * だからここでは**先頭に「奪われ役」の非人間を1件多く置く**：
+   * `非人間A`（claim 順で最初、走行中のターンを奪う）→ `非人間C`（待ち行列に
+   * 積まれて残る）→ `human`（`非人間C` を飛び越せるかが本題）→ `非人間B`
+   * （human より後なので、直しても飛び越されない）。飛び越す本題は
+   * `human` 対 `非人間C` の1組で足りる。
+   */
+  it('起動直後の配り直しでも、人間の発言は待ち行列に残っていた非人間より先に読まれる（#restoreUnread の人間優先）', async () => {
+    const stores = createMemoryStores();
+    const nonHumanA: InboxEvent = {
+      type: 'external',
+      id: 'evt-nonhuman-a',
+      at: '2026-08-20T10:00:00.000Z',
+      source: 'webhook-a',
+      payload: '非人間A（claim順で最初・走行中のターンを奪う）',
+    };
+    const nonHumanC: InboxEvent = {
+      type: 'external',
+      id: 'evt-nonhuman-c',
+      at: '2026-08-20T10:00:01.000Z',
+      source: 'webhook-c',
+      payload: '非人間C（待ち行列に積まれて残る）',
+    };
+    const human = humanMessage('人間の発言だ');
+    const nonHumanB: InboxEvent = {
+      type: 'external',
+      id: 'evt-nonhuman-b',
+      at: '2026-08-20T10:00:03.000Z',
+      source: 'webhook-b',
+      payload: '非人間B（human より後・飛び越されない）',
+    };
+
+    // claim 順（＝ `put` の第2引数。`stores.inbox.claimPending` が並べ替えに
+    // 使うのはこちらで、`event.at` ではない）で
+    // [非人間A, 非人間C, human, 非人間B] に並ぶよう仕込む。`humanMessage()` は
+    // `event.at` に呼び出し時の実時刻を積むので、`event.at` をそのまま claim
+    // 順へ使うと（今日の日付が2026-08-20より後になり）human が最後尾に落ちる
+    // ——claim 順は明示的に別で渡す。
+    await stores.inbox.put(nonHumanA, '2026-08-20T10:00:00.000Z');
+    await stores.inbox.put(nonHumanC, '2026-08-20T10:00:01.000Z');
+    await stores.inbox.put(human, '2026-08-20T10:00:02.000Z');
+    await stores.inbox.put(nonHumanB, '2026-08-20T10:00:03.000Z');
+
+    const s = setup(() => 'わかった', stores, { delayMs: 200 });
+
+    await waitForDelivered(s, '非人間B（human より後・飛び越されない）');
+    await settle();
+
+    const joined = (s.calls[0]?.inputs ?? []).join('\n');
+    const idxA = joined.indexOf('非人間A（claim順で最初・走行中のターンを奪う）');
+    const idxC = joined.indexOf('非人間C（待ち行列に積まれて残る）');
+    const idxHuman = joined.indexOf('人間の発言だ');
+    const idxB = joined.indexOf('非人間B（human より後・飛び越されない）');
+
+    // 4件とも実際に届いている（見つからない＝-1 を「先」と誤読しない）
+    expect(idxA).toBeGreaterThan(-1);
+    expect(idxC).toBeGreaterThan(-1);
+    expect(idxHuman).toBeGreaterThan(-1);
+    expect(idxB).toBeGreaterThan(-1);
+
+    // 本題: 待ち行列に積まれて残っていた非人間Cより、human が先に読まれる
+    expect(idxHuman).toBeLessThan(idxC);
+
+    // 非人間は1件も消えず、非人間どうしの到着順（A → C → B）は保たれる
+    expect(idxA).toBeLessThan(idxC);
+    expect(idxC).toBeLessThan(idxB);
+
+    // human より後に claim された非人間Bは、human を追い越さない
+    expect(idxHuman).toBeLessThan(idxB);
+
+    await s.clone.stop();
+  }, 15_000);
 });
 
 describe('humanTurnText（ターン本文の組み立て）', () => {
