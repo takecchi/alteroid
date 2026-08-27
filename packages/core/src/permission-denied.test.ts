@@ -485,4 +485,50 @@ describe('確認へ上がらずに止められた実行（permissionMode: auto�
 
     await s.pool.stop();
   }, 15_000);
+
+  /**
+   * **Markdown ではない字面が、Markdown で描かれる面で化けないこと**（issue #287）。
+   *
+   * この本文は台帳（`Commitment.body`）へ入り、`apps/web/app/routes/commitments.tsx`
+   * が `markup` の無い本文を `<Markdown>` で描く。そこへ `brief(event.input)` の
+   * JSON ダンプが素で入っていたので、**バッククォートを含む引数の回に実際に化けた**
+   * —— 実機と同じ設定のレンダラ（`react-markdown` ＋ `remark-gfm` ＋ `remark-breaks`）
+   * で `` `date` `` が本物の `<code>` になることを確認している（観測 2026-08-27）。
+   *
+   * **日誌の行は包まない。** あちらは Markdown で描かれる面ではないので、包めば
+   * 読み手に無いバッククォートが見える。ここでは**両方を1つのテストで固定する** ——
+   * 片方だけを見ると、包みを共通化して日誌まで巻き込む実装が黙って通るからである。
+   */
+  it('受信箱の本文では JSON ダンプが包まれ、日誌の行では素のまま残る', async () => {
+    const s = open();
+    const { managerId } = await s.pool.start({ request: 'ビルドを直して' });
+    const session = s.manager.sessions[0];
+    if (!session) throw new Error('マネージャーのセッションが無い');
+
+    // バッククォートを含む引数。包みが1本だと、ここで閉じて後続の本文まで巻き込む。
+    const input = { command: 'echo `date`' };
+    for (const id of ['toolu_1', 'toolu_2', 'toolu_3']) {
+      session.push(liveDenial('Bash', id, input));
+      await tick();
+    }
+
+    const message = s.inbox.filter((event) => event.type === 'manager_message')[0];
+    expect(message).toMatchObject({ managerId, kind: 'report' });
+    const text = message?.type === 'manager_message' ? message.text : '';
+
+    // 中身のバッククォートより1本長い包みが付く（可変長フェンス）。
+    expect(text).toContain('``{"command":"echo `date`"}``');
+    // ツール名も識別子として包む（本文の `journal_read` と扱いを揃える）。
+    expect(text).toContain('`Bash` の実行が');
+    // 後続のインラインコードが巻き込まれずに残っている。
+    expect(text).toContain('（`journal_read` で辿れる）');
+
+    // **日誌は変えていない。** 素の JSON がそのまま1行として残る。
+    const lines = await deniedLines(s.stores);
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toContain(': {"command":"echo `date`"}');
+    expect(lines[0]).not.toContain('``');
+
+    await s.pool.stop();
+  }, 15_000);
 });

@@ -7,30 +7,18 @@ import { codeSpan } from './markdown-span.js';
  *
  * **ここで測るのは「包まれたこと」ではなく「字面が残ること」である。** 前者だけを
  * 測ると、包んだ結果として中身が壊れる実装（1本のバッククォートで固定する等）が
- * そのまま通る —— 実際に壊れるのは JSON ダンプのようなバッククォートを含む入力
- * なので、その入力を明示的に置いてある。
+ * そのまま通る —— 実際に壊れるのはバッククォートを含む JSON ダンプなので、
+ * **実機のレンダラで化けることを確認できた入力**を先頭に置いてある。
  */
 describe('codeSpan（Markdown として書かれていない文字列を包む）', () => {
-  it('MCP のツール名のアンダースコアが強調に食われない形で残る', () => {
-    // `mcp__github__create_issue` は素で埋めると `__github__` が強調になる。
-    const wrapped = codeSpan('mcp__github__create_issue');
-
-    expect(wrapped).toBe('`mcp__github__create_issue`');
-  });
-
-  it('glob の `**` を含む JSON ダンプが、字面のまま包まれる', () => {
-    const dump = '{"command":"grep -n \'**/*.ts\' packages/"}';
+  it('Bash のコマンド置換を含む JSON ダンプが、そこで閉じない包みになる', () => {
+    // この入力は実機のレンダラ（react-markdown ＋ remark-gfm）で、包まないと
+    // `` `date` `` が本物の `<code>` になることを実測した回である。
+    const dump = '{"command":"echo `date` && rm -rf /"}';
     const wrapped = codeSpan(dump);
 
-    expect(wrapped).toBe(`\`${dump}\``);
-  });
-
-  it('中身にバッククォートが在れば、包みを1本長くする（そこで閉じない）', () => {
-    const wrapped = codeSpan('{"command":"echo `date`"}');
-
     // 中身の最長の連なりは1本なので、包みは2本になる。
-    expect(wrapped.startsWith('``')).toBe(true);
-    expect(wrapped.endsWith('``')).toBe(true);
+    expect(wrapped).toBe(`\`\`${dump}\`\``);
     expect(wrapped).toContain('echo `date`');
   });
 
@@ -39,6 +27,7 @@ describe('codeSpan（Markdown として書かれていない文字列を包む�
 
     expect(wrapped.startsWith('````')).toBe(true);
     expect(wrapped.endsWith('````')).toBe(true);
+    expect(wrapped).toContain('a ``` b');
   });
 
   it('端がバッククォートなら内側へ空白を足す（包みと中身が繋がらない）', () => {
@@ -52,6 +41,20 @@ describe('codeSpan（Markdown として書かれていない文字列を包む�
     const wrapped = codeSpan(' x ');
 
     expect(wrapped).toBe('`  x  `');
+  });
+
+  it('強調の記法になりうる字面を、記法として解かれない位置へ移す', () => {
+    // `*word*` は空白を挟まなければ `<em>` になる（実測）。
+    expect(codeSpan('{"glob":"*.ts","note":"a *bold* b"}')).toBe(
+      '`{"glob":"*.ts","note":"a *bold* b"}`',
+    );
+  });
+
+  it('SDK のツール名を識別子として包む（MCP の `mcp__…__…` を含む）', () => {
+    // **この形は包まなくても化けない**（CommonMark はアンダースコアの強調を語中で
+    // 発火させない）。包むのは本文の `` `journal_read` `` と扱いを揃えるためで、
+    // 化けを直しているのではない —— テストの名前もそう読めるようにしてある。
+    expect(codeSpan('mcp__github__create_issue')).toBe('`mcp__github__create_issue`');
   });
 
   it('空文字は包まない（無い事実を「空のコード」として描かない）', () => {
