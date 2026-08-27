@@ -4357,16 +4357,27 @@ describe('manager_list は件数が増えても壊れない', () => {
  * 判定できない）を1本ずつ固定する。
  */
 describe('manager_report: 報告が空のとき、生ログを見て言い分ける（#323）', () => {
-  /** JSONL の1行（assistant、本文つき）。 */
+  /**
+   * JSONL の1行（assistant、本文つき）。
+   *
+   * **`stopReason` は既定で付けない**（呼び手が明示しない限り、生ログの行に
+   * `stop_reason` 欄が無い状態を作る）。「本文がある＝終わっている」と決め
+   * つけない実装（#323 の偽陽性直し）を測るには、テスト側も「終わっている
+   * ことを示す行」と「そう示していない行」を作り分けで書く必要がある。
+   */
   function assistantLine(
     text: string,
-    options: { timestamp?: string; isSidechain?: boolean } = {},
+    options: { timestamp?: string; isSidechain?: boolean; stopReason?: string } = {},
   ) {
     return JSON.stringify({
       type: 'assistant',
       isSidechain: options.isSidechain ?? false,
       timestamp: options.timestamp ?? '2026-08-26T20:31:59.107Z',
-      message: { role: 'assistant', content: [{ type: 'text', text }] },
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text }],
+        ...(options.stopReason === undefined ? {} : { stop_reason: options.stopReason }),
+      },
     });
   }
 
@@ -4417,7 +4428,7 @@ describe('manager_report: 報告が空のとき、生ログを見て言い分け
     expect(reply).not.toContain('配られていない');
   });
 
-  it('生ログには本文が在るとき「⚠ 配られていない」と、timestamp・文字数・manager_transcript の案内を出す', async () => {
+  it('生ログの最後の発言が end_turn で終わっているとき「⚠ 配られていない」と、timestamp・文字数・manager_transcript の案内を出す', async () => {
     const h = harness();
     await h.call('manager_start', { request: '調べて' });
     const reportBody = '生成されたのに配られなかった報告の全文（テスト用）';
@@ -4428,7 +4439,10 @@ describe('manager_report: 報告が空のとき、生ログを見て言い分け
         timestamp: '2026-08-26T20:30:00.000Z',
         message: { role: 'user', content: 'ping' },
       }),
-      assistantLine(reportBody, { timestamp: '2026-08-26T20:31:59.107Z' }),
+      // **stop_reason: 'end_turn' を明示する。** これが無いと「そのターンが
+      // 終わったこと」を示せず、#323 として名乗ってはいけない
+      // （`describeMissingReport` の3分岐——直上の doc）。
+      assistantLine(reportBody, { timestamp: '2026-08-26T20:31:59.107Z', stopReason: 'end_turn' }),
     ].join('\n');
     h.setTranscript('mgr-1', transcript);
 
@@ -4436,11 +4450,58 @@ describe('manager_report: 報告が空のとき、生ログを見て言い分け
 
     expect(reply).toContain('⚠');
     expect(reply).toContain('配られていない');
+    expect(reply).toContain('#323');
     expect(reply).toContain('2026-08-26T20:31:59.107Z');
     expect(reply).toMatch(new RegExp(`約\\s*${reportBody.length}\\s*文字`));
     expect(reply).toContain('manager_transcript managerId=mgr-1 offset=');
     // 本文そのものは積まない（返すのは「在る」ことと timestamp・長さだけ）。
     expect(reply).not.toContain(reportBody);
+  });
+
+  it('生ログの最後の発言が end_turn ではない（ターン途中）とき、断定しない——⚠ も #323 も付けない', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    // 実測（コーディネーターの報告）: 本文（type: 'text'）を持つ行でも
+    // stop_reason が 'tool_use' のことがある——道具を挟む前の語り
+    // （ターンの途中）。健全に働いている最中を欠陥として名乗ってはいけない。
+    const midTurnBody = 'これから道具を呼ぶ前の語り（ターンはまだ終わっていない）';
+    const transcript = [
+      assistantLine(midTurnBody, { timestamp: '2026-08-26T20:31:59.107Z', stopReason: 'tool_use' }),
+    ].join('\n');
+    h.setTranscript('mgr-1', transcript);
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-1' });
+
+    expect(reply).not.toContain('⚠');
+    expect(reply).not.toContain('#323');
+    expect(reply).toContain('2026-08-26T20:31:59.107Z');
+    expect(reply).toContain('stop_reason=tool_use');
+    expect(reply).toContain('まだ終わっていない');
+    // 本文そのものは積まない。
+    expect(reply).not.toContain(midTurnBody);
+  });
+
+  it('生ログの最後の発言に stop_reason 欄が無いとき、終わっているかどちらとも名乗らない', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    // stopReason を渡さない＝ message に stop_reason 欄が無い行を作る
+    // （版が古い・欄が欠けている、を模す）。
+    const unknownBody = '古い形式か何かで stop_reason が欠けている行';
+    const transcript = [assistantLine(unknownBody, { timestamp: '2026-08-26T20:33:00.000Z' })].join(
+      '\n',
+    );
+    h.setTranscript('mgr-1', transcript);
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-1' });
+
+    // 「終わっていない」とも「終わった＝配られていない」とも言わない。
+    expect(reply).not.toContain('⚠');
+    expect(reply).not.toContain('#323');
+    expect(reply).not.toContain('まだ終わっていない');
+    expect(reply).toContain('2026-08-26T20:33:00.000Z');
+    expect(reply).toContain('判定できなかった');
+    expect(reply).toMatch(/stop_reason.*無い/);
+    expect(reply).not.toContain(unknownBody);
   });
 
   it('作業者（サブエージェント）の発言は混ぜない（isSidechain: true の行は無視する）', async () => {
@@ -4462,7 +4523,10 @@ describe('manager_report: 報告が空のとき、生ログを見て言い分け
     // その手前のマネージャー自身の行まで正しく遡れるかを見る
     // （末尾がたまたま一致するだけでは検算できないので、順序を逆にする）。
     const withManagerLine = [
-      assistantLine('マネージャー自身の発言', { timestamp: '2026-08-26T20:32:10.000Z' }),
+      assistantLine('マネージャー自身の発言', {
+        timestamp: '2026-08-26T20:32:10.000Z',
+        stopReason: 'end_turn',
+      }),
       workerOnly,
     ].join('\n');
     h.setTranscript('mgr-1', withManagerLine);

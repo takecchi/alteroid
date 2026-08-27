@@ -418,6 +418,25 @@ interface LastAssistantUtterance {
   timestamp: string | undefined;
   /** 本文の文字数（概算——このツールは全文を返さない）。 */
   length: number;
+  /**
+   * その行が持つ `message.stop_reason`（`string` のときだけ採る。**作らない**
+   * ——欄が無い・文字列でないときは `undefined`）。
+   *
+   * **本文（`type: 'text'`）を持つ行だからといって、そのターンが終わっている
+   * とは限らない。** 実測（この器で実際に生成された transcript の末尾）:
+   * ```
+   * {"stop_reason":"tool_use","types":["text"],"isSidechain":false}
+   * {"stop_reason":"tool_use","types":["tool_use"],"isSidechain":false}
+   * {"stop_reason":"tool_use","types":["thinking"],"isSidechain":false}
+   * ```
+   * ＝ 道具を挟む前の語り（ターンの途中の発言）も `type: 'text'` の assistant
+   * 行として現れ、その行の `stop_reason` は `end_turn` ではなく `tool_use` に
+   * なる。ここを見ずに「本文があった＝生成し終えた」と読むと、道具を挟みながら
+   * 普通に働いている最中のマネージャーを「配られていない」と誤検出する
+   * （偽陽性）。`describeMissingReport` はこの値で `end_turn` / それ以外 /
+   * 読めない、の3つを言い分ける。
+   */
+  stopReason: string | undefined;
 }
 
 type AssistantUtteranceProbe =
@@ -452,6 +471,12 @@ type AssistantUtteranceProbe =
  * JSON.parse しない**（定数の doc）。末尾から切り出した先頭の断片は行の
  * 途中で千切れている可能性があるので、遡り切っていない（`truncated`）ときは
  * 捨てる——壊れた JSON を無理に読まない。
+ *
+ * **本文があること（`kind: 'found'`）は「そのターンが終わった」を意味しない。**
+ * `stopReason`（`LastAssistantUtterance` の doc）に実測を書いた——見つけた
+ * ことと、そのターンが終わっていることは別の軸なので、ここでは両方を一緒に
+ * 返すだけで**判定はしない**。「配られていない」と言ってよいかの判断は
+ * 呼び出し側（`describeMissingReport`）が `stopReason` を見て行う。
  */
 function probeLastAssistantUtterance(transcript: string): AssistantUtteranceProbe {
   const truncated = transcript.length > REPORT_GENERATED_PROBE_CHARS;
@@ -472,7 +497,7 @@ function probeLastAssistantUtterance(transcript: string): AssistantUtteranceProb
       type?: unknown;
       isSidechain?: unknown;
       timestamp?: unknown;
-      message?: { content?: unknown };
+      message?: { content?: unknown; stop_reason?: unknown };
     };
     if (record.type !== 'assistant') continue;
     if (record.isSidechain === true) continue; // 作業者の発言（上の doc）
@@ -483,6 +508,8 @@ function probeLastAssistantUtterance(transcript: string): AssistantUtteranceProb
       utterance: {
         timestamp: typeof record.timestamp === 'string' ? record.timestamp : undefined,
         length: body.length,
+        stopReason:
+          typeof record.message?.stop_reason === 'string' ? record.message.stop_reason : undefined,
       },
     };
   }
@@ -554,14 +581,38 @@ async function describeMissingReport(
     );
   }
 
-  const { timestamp, length } = outcome.utterance;
+  const { timestamp, length, stopReason } = outcome.utterance;
   const when = timestamp ?? '時刻不明（生ログの行に timestamp が無かった）';
   const resumeOffset = Math.max(0, transcript.length - TRANSCRIPT_PAGE);
-  return (
-    `⚠ マネージャー ${managerId} からの報告としては届いていないが、生ログには ${when} に本文が在る` +
-    `（約 ${length.toLocaleString('ja-JP')} 文字）。＝ 生成されたが配られていない（#323）。` +
+  const found = `生ログには ${when} に本文が在る（約 ${length.toLocaleString('ja-JP')} 文字）`;
+  const howToDigIn =
     `manager_transcript managerId=${managerId} offset=${resumeOffset} で読める` +
-    '（作業者の発言は除いて探したが、混ざる余地が完全に無いとまでは確認していない）。'
+    '（作業者の発言は除いて探したが、混ざる余地が完全に無いとまでは確認していない）。';
+
+  // **本文が在ることと、そのターンが終わっていることは別の軸**（`stopReason`
+  // の doc の実測——`type: 'text'` の行でも `stop_reason` が `tool_use` の
+  // ことがある＝道具を挟む前の語り）。ここで3つに割る。「終わっていないと
+  // 分かった」と「分からなかった」を1つに畳まない
+  // （AGENTS.md 地雷「取れない軸に0の行を作る」）。
+  if (stopReason === 'end_turn') {
+    // これが #323 の形——ターンを終えた（`end_turn`）のに配られていない。
+    return (
+      `⚠ マネージャー ${managerId} からの報告としては届いていないが、${found}。` +
+      `＝ 生成されたが配られていない（#323）。${howToDigIn}`
+    );
+  }
+  if (stopReason !== undefined) {
+    // 読めた。かつ `end_turn` ではない——まだターンの途中（道具を挟んでいる
+    // 最中など）。「配られていない」とは断定しない（健全な途中経過かもしれない）。
+    return (
+      `マネージャー ${managerId} は${found}が、そのターンはまだ終わっていない` +
+      `（stop_reason=${stopReason}）。＝ まだ書き終えていない側である。${howToDigIn}`
+    );
+  }
+  // stop_reason が読めなかった——終わっているかどうか、どちらとも名乗らない。
+  return (
+    `マネージャー ${managerId} は${found}が、そのターンが終わっているかを判定できなかった` +
+    `（行に stop_reason が無い）。${howToDigIn}`
   );
 }
 
