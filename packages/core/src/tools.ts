@@ -69,6 +69,7 @@ import type { ScheduleStatus } from './schedule.js';
 import {
   JOURNAL_ENTRY_TYPES,
   approvalUpdatedAt,
+  commitmentOriginSchema,
   commitmentUpdatedAt,
   scheduleKindSchema,
   scheduleSpecSchema,
@@ -87,7 +88,7 @@ import type {
 import { describeRevisionStatus } from './revision.js';
 import { CANON_REVISION, canonDocument, canonNames, describeCloneRuntime } from './self.js';
 import type { CloneRuntimeFacts } from './self.js';
-import { UnreadableCommitmentError } from './store.js';
+import { EXCHANGE_WITH_VALUES, UnreadableCommitmentError } from './store.js';
 import type { Stores } from './store.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import {
@@ -1798,6 +1799,9 @@ export function createCloneTools(context: ToolContext) {
         'q で本文を語で探せる（他の絞りと併用できる）。',
         '**q が当たらないことは「日誌にその語が無い」を意味しない** —',
         'tool_use の input・worker_wait・turn_usage は探す対象に入っていない。',
+        'with で exchange の相手を絞れる（他の絞りと併用できる）。',
+        '**with を指定すると exchange 以外の種別は1件も返らない** —',
+        'types で別途除く必要はない。',
       ].join(' '),
       {
         limit: z.number().int().min(1).max(200).optional().describe('件数（既定 20）'),
@@ -1820,6 +1824,13 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe('語で探す（大文字小文字を区別しない部分一致）。他の絞りと併用できる'),
+        // **`with` は JS の予約語なので、ハンドラの側では `withFilter` へ
+        // 詰め替える（キー名そのものは `JournalQuery.with` に合わせて `with`
+        // のまま——新しい呼び方を作らない）。**
+        with: z
+          .array(z.enum(EXCHANGE_WITH_VALUES))
+          .optional()
+          .describe('exchange の相手（human/manager/self）で絞る。省略すると絞らない'),
         id: z
           .string()
           .optional()
@@ -1831,7 +1842,7 @@ export function createCloneTools(context: ToolContext) {
           .optional()
           .describe('id で全文を読むとき、何文字目から読むか'),
       },
-      async ({ limit, since, until, types, q, id, offset = 0 }) => {
+      async ({ limit, since, until, types, q, with: withFilter, id, offset = 0 }) => {
         // --- 全文モード（1件だけ） ---
         if (id !== undefined) {
           const entry = await stores.journal.get(id);
@@ -1853,6 +1864,13 @@ export function createCloneTools(context: ToolContext) {
           ...(until === undefined ? {} : { until }),
           ...(types === undefined || types.length === 0 ? {} : { types }),
           ...(q === undefined ? {} : { q }),
+          // **`types` と違い、`[]`（空配列）もそのまま転送する。** `with: []`
+          // は `store.ts` の `JournalQuery.with` の doc で「0件」に決まって
+          // いる契約——`length === 0` を `{}` へ落とすと、その契約を道具の
+          // 層で覆して「絞らない」に化けさせてしまう。すぐ上の `types` は
+          // `length === 0` を `{}` へ落としており、この2つは渡し方が違う
+          // （`types` 側は本 PR の範囲外の既存コード）。
+          ...(withFilter === undefined ? {} : { with: withFilter }),
         });
         if (entries.length === 0) {
           // **`q` で0件だったとき、探す対象に入っていない欄が在ることまで言う。**
@@ -1870,7 +1888,10 @@ export function createCloneTools(context: ToolContext) {
             );
           }
           return text(
-            since === undefined && until === undefined && types === undefined
+            since === undefined &&
+              until === undefined &&
+              types === undefined &&
+              withFilter === undefined
               ? '（日誌はまだ空）'
               : '（その条件に当たる日誌は無い）',
           );
@@ -1892,7 +1913,7 @@ export function createCloneTools(context: ToolContext) {
               budget: JOURNAL_BUDGET,
               omitted: ({ rest, shown, total }) =>
                 `…ほか ${rest} 件は省略（この条件で ${total} 件あり、新しい順に ${shown} 件だけ出した）。` +
-                'さらに遡るなら until を、狭めるなら since / types / q を指定すること。',
+                'さらに遡るなら until を、狭めるなら since / types / with / q を指定すること。',
             }),
             '（本文は抜粋。全文は journal_read id=<id> で取れる）',
           ].join('\n'),
@@ -2330,6 +2351,7 @@ export function createCloneTools(context: ToolContext) {
         '**載っているものは、あなたが閉じるまで消えない。**',
         'どれを先にやるかの順序はここには無い。記憶にある目的と価値観に照らして毎回決め直すこと。',
         '1件の全文（依頼本文と、片付けたならその理由）が要るなら id を渡す。片付いた件も id で読める。',
+        'origin で出所を絞れる（他の絞りと併用できる）。',
       ].join(' '),
       {
         id: z
@@ -2348,8 +2370,12 @@ export function createCloneTools(context: ToolContext) {
           .boolean()
           .optional()
           .describe('片付けたものも見る（既定は未了だけ）。何を片付けたかを振り返るとき用'),
+        origin: z
+          .array(z.enum(commitmentOriginSchema.options))
+          .optional()
+          .describe('出所（human/manager/external/self）で絞る。省略すると絞らない'),
       },
-      async ({ id, offset = 0, includeClosed }) => {
+      async ({ id, offset = 0, includeClosed, origin }) => {
         // --- 全文モード（1件だけ） ---
         if (id !== undefined) {
           // **片付いた件も読める。`includeClosed` は要求しない。** id で名指し
@@ -2414,12 +2440,27 @@ export function createCloneTools(context: ToolContext) {
         // 形の穴が空く** — 開いている仕事も読めない行も無く、削除された片付き
         // 行の履歴だけが在る状態で「無い」と返すと、削除された事実がいちばん
         // 静かに握り潰される（issue #416）。
-        const { entries, unreadable, trimmedClosed } = await stores.commitments.list(
+        const {
+          entries: allEntries,
+          unreadable,
+          trimmedClosed,
+        } = await stores.commitments.list(
           includeClosed === true ? { includeClosed: true } : undefined,
         );
-        if (entries.length === 0 && unreadable.length === 0 && trimmedClosed === 0) {
+        if (allEntries.length === 0 && unreadable.length === 0 && trimmedClosed === 0) {
           return text('（引き受けたまま終わっていない仕事は無い）');
         }
+        // **`origin` は、`renderListing` が文字数の予算で切る前（ここ）で
+        // 効かせる。** #418 の穴の本体は「絞りを予算／`limit` より後で掛けた
+        // ため、絞りに当たらない行が窓を食い尽くした」ことである。ここでも
+        // 同じ順序で塞ぐ——`items` を組む前、`entries` そのものを絞る。
+        // **未指定 = 絞らない。** `[]`（空配列）は「どれにも当たらない」
+        // という指定として扱う——`journal_read` の `with` / `types` と同じ
+        // 契約（`store.ts` の `JournalQuery.with` の doc）に揃えた。
+        const entries =
+          origin === undefined
+            ? allEntries
+            : allEntries.filter((entry) => origin.includes(entry.origin));
         const items = entries.map((entry) =>
           renderListingEntry({
             id: entry.id,
@@ -2438,7 +2479,14 @@ export function createCloneTools(context: ToolContext) {
         );
         const lines = [
           entries.length === 0
-            ? '（読める行は無い）'
+            ? // **原因を分ける。** `allEntries` が既に0件なら（読める行そのものが
+              // 無い＝残りは全部読めない行）従来どおり。`allEntries` は在るのに
+              // `origin` で絞った結果0件になったのは別の理由なので、別の文にする
+              // ——「読める行が無い」と読めると、台帳の破損（`unreadable`）を疑う
+              // ことになるが、実際には絞り込みが厳しかっただけである。
+              allEntries.length === 0
+              ? '（読める行は無い）'
+              : '（この origin の絞り込みに当たる行は無い）'
             : renderListing(items, {
                 budget: COMMITMENT_LIST_BUDGET,
                 // **続きの取り方を案内する（#218 で口ができた）。** かつてここには
@@ -2449,8 +2497,14 @@ export function createCloneTools(context: ToolContext) {
                 // **`includeClosed` のときは「未了は」と言わないこと。** `total` には
                 // 片付いたものも含まれるので、そのまま「未了は N 件」と言うと片付いた
                 // 分まで未了として数えた嘘になる（数が大きく出る方向の嘘）。
+                // **`origin` を指定したときも同じ理由で断る。** `total` はここでは
+                // 既に `entries`（`origin` で絞った後の母数）から来ているので値
+                // そのものは正しいが、断りが無いと「絞る前の全体」だと読める——
+                // それも数が大きく出る方向の同じ形の嘘になる。
                 omitted: ({ rest, shown, total }) =>
                   `…ほか ${rest} 件は省略（${
+                    origin === undefined ? '' : `origin: ${origin.join(', ')} に絞った、`
+                  }${
                     includeClosed === true
                       ? `片付けた分を含めて ${total} 件あり`
                       : `未了は ${total} 件あり`
