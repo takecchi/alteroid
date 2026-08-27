@@ -848,6 +848,216 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * ⭐ P3「記憶の大きさの変化を、閾値なしで、書く口の応答から見えるように
+   * する」（`describeMemorySessionDelta` / `describeMemoryPremiseRanking`、
+   * #318 の続き）。
+   *
+   * **中身の計算そのものの歯は `memory.test.ts` に在る。** ここでは「道具として
+   * 呼んだときに、`context.runtime` の配線まで含めて出るか」だけを見る——
+   * `self_status` のテストと同じ役割分担（`describe('self_status…')` の doc）。
+   */
+  describe('書く4口の応答に足す「セッション構築時点からの増分」と「premise の順位」（P3）', () => {
+    const RUNTIME_BASE: CloneRuntimeFacts = {
+      revision: { commit: null, short: null, source: null },
+      declaredModel: 'fable',
+      modelOverridden: false,
+      modelEnvKey: 'ALTEROID_CLONE_MODEL',
+      sdkModel: null,
+      effort: null,
+      requestedEffort: null,
+      claudeCodeVersion: null,
+      apiKeySource: null,
+      permissionMode: null,
+      requestedPermissionMode: 'auto',
+      mcpServers: [],
+      sessionId: null,
+      resumedFrom: null,
+      injectedMemoryChars: 0,
+      systemPromptChars: 0,
+    };
+
+    it('⭐ runtime が在れば、セッション構築時点との差（文字と割合）が出る', async () => {
+      const h = harness(() => ({ ...RUNTIME_BASE, injectedMemoryChars: 100 }));
+
+      const reply = await h.call('memory_write', {
+        slug: 'about-me-core',
+        content: '# 私の芯\n\n'.concat('大事にしていること。'.repeat(50)),
+        summary: '新しい芯を作った',
+      });
+
+      const docs = await h.stores.persona.documents();
+      const afterChars = measureMemoryFloor(docs).totalChars;
+
+      expect(reply).toContain('次に組み立て直されたら焼かれる量（セッション構築時点との差）');
+      expect(reply).toContain(`セッション構築時点 ${(100).toLocaleString('en-US')} 文字`);
+      expect(reply).toContain(`いま ${afterChars.toLocaleString('en-US')} 文字`);
+      expect(reply).toContain('増える見込み');
+    });
+
+    /**
+     * ⭐⭐ 依頼者が名指しした必須の歯——片側だけだと「常に増えたと言う実装」が
+     * 緑で通る。セッション構築時点の値と、書いた後の総文字数が偶然一致する
+     * 状況を作って確かめる。
+     */
+    it('⭐⭐ 増分が0のとき（何も変わっていないとき）に、増えたかのような文言を出さない', async () => {
+      let injected = 0;
+      const h = harness(() => ({ ...RUNTIME_BASE, injectedMemoryChars: injected }));
+
+      await h.call('memory_write', { slug: 'stable', content: '固定の本文', summary: '初回' });
+      const docs = await h.stores.persona.documents();
+      injected = measureMemoryFloor(docs).totalChars;
+
+      // 同じ内容で書き直す——記憶全体の総文字数は変わらない。
+      const reply = await h.call('memory_write', {
+        slug: 'stable',
+        content: '固定の本文',
+        summary: '同じ内容で書き直した',
+      });
+
+      expect(reply).toContain('変わっていない');
+      expect(reply).not.toMatch(/増え/);
+      expect(reply).not.toMatch(/減っ/);
+    });
+
+    it('runtime を渡していない場面（既定の harness）では、現在値であることを明記して現在値を出す', async () => {
+      const h = harness(); // runtime 省略——本番では起こらないが、型としては省略できる口
+
+      const reply = await h.call('memory_write', {
+        slug: 'about-me-core',
+        content: '# 私の芯\n本文',
+        summary: '新規',
+      });
+
+      expect(reply).toContain('現在値である');
+      expect(reply).not.toContain('次に組み立て直されたら焼かれる量（セッション構築時点との差）');
+    });
+
+    it('⭐ premise が複数あれば、大きい順に順位が出る', async () => {
+      const h = harness(() => RUNTIME_BASE);
+      await h.call('memory_write', { slug: 'doc-small', content: '# 小\n短い', summary: 's' });
+      await h.call('memory_write', {
+        slug: 'doc-large',
+        content: '# 大\n'.concat('長い本文。'.repeat(100)),
+        summary: 's',
+      });
+
+      const reply = await h.call('memory_write', {
+        slug: 'doc-medium',
+        content: '# 中\n'.concat('本文。'.repeat(10)),
+        summary: 's',
+      });
+
+      expect(reply).toContain('premise の大きさの順位');
+      const idxLarge = reply.indexOf('doc-large:');
+      const idxMedium = reply.indexOf('doc-medium:');
+      const idxSmall = reply.indexOf('doc-small:');
+      expect(idxLarge).toBeGreaterThan(-1);
+      expect(idxLarge).toBeLessThan(idxMedium);
+      expect(idxMedium).toBeLessThan(idxSmall);
+    });
+
+    it('premise がまだ無ければ、順位ではなくその旨を出す', async () => {
+      const h = harness(() => RUNTIME_BASE);
+      const reply = await h.call('memory_write', {
+        slug: 'fact-only',
+        content: '---\ntype: fact\ndescription: 事実\n---\n# 事実\n本文',
+        summary: '新規',
+      });
+
+      expect(reply).toContain('premise の大きさの順位');
+      expect(reply).toContain('premise はまだ無い');
+    });
+
+    /**
+     * ⭐ 一覧の上限は件数だけで決めない（AGENTS.md の地雷表）。省いた件数を
+     * 必ず言う——ここでは道具の配線を通して、実際に多数の premise が在る
+     * 状態で確かめる（`memory.test.ts` は `describeMemoryPremiseRanking` を
+     * 直接呼ぶ単体の歯。ここはハンドラの配線まで含めて測る）。
+     */
+    it('⭐ premise が多いと、順位は文字数の予算で切り、省いた件数を言う', async () => {
+      const h = harness(() => RUNTIME_BASE);
+      for (let i = 0; i < 300; i += 1) {
+        await h.stores.persona.write(`p${i.toString().padStart(3, '0')}`, `# 前提${i}\n本文`);
+      }
+
+      const reply = await h.call('memory_write', {
+        slug: 'latest',
+        content: '# 最新\n本文',
+        summary: '最後の1件',
+      });
+
+      expect(reply).toMatch(/…ほか \d+ 件は省略/);
+      expect(reply).toContain('全 301 件');
+    });
+
+    it('memory_append にも同じ2行が出る', async () => {
+      const h = harness(() => RUNTIME_BASE);
+      const reply = await h.call('memory_append', {
+        slug: 'x',
+        content: '本文',
+        summary: 's',
+      });
+
+      expect(reply).toContain('次に組み立て直されたら焼かれる量（セッション構築時点との差）');
+      expect(reply).toContain('premise の大きさの順位');
+    });
+
+    it('memory_frontmatter_set にも同じ2行が出る', async () => {
+      const h = harness(() => RUNTIME_BASE);
+      await h.stores.persona.write('values', '# 価値観\n本文');
+
+      const reply = await h.call('memory_frontmatter_set', {
+        slug: 'values',
+        description: '要旨',
+        summary: 's',
+      });
+
+      expect(reply).toContain('次に組み立て直されたら焼かれる量（セッション構築時点との差）');
+      expect(reply).toContain('premise の大きさの順位');
+    });
+
+    it('memory_section_move にも同じ2行が出る', async () => {
+      const h = harness(() => RUNTIME_BASE);
+      await h.stores.persona.write(
+        'about-me',
+        ['# 私について', '本文', '', '## 事例', '事例の本文'].join('\n'),
+      );
+      const outline = await h.call('memory_outline', { slug: 'about-me' });
+      const idMatch = /\[([0-9a-f]{8}-[0-9a-f]{8})\] ## 事例 — /.exec(outline);
+      expect(idMatch).not.toBeNull();
+      const id = (idMatch as RegExpExecArray)[1];
+
+      const reply = await h.call('memory_section_move', {
+        fromSlug: 'about-me',
+        section: id,
+        toSlug: 'about-me-appendix',
+        summary: '事例を付録へ移した',
+      });
+
+      expect(reply).toContain('次に組み立て直されたら焼かれる量（セッション構築時点との差）');
+      expect(reply).toContain('premise の大きさの順位');
+    });
+
+    /**
+     * 対照——既存の2行（`describeMemoryFloor` / `describeMemoryReinjectionEstimate`）
+     * を置き換えていないことを、4つの数がすべて別の文言で並ぶ1回の応答で確かめる。
+     */
+    it('⭐ 既存の2行を置き換えていない——4つの数がそれぞれ別の文言で区別できる', async () => {
+      const h = harness(() => RUNTIME_BASE);
+      const reply = await h.call('memory_write', {
+        slug: 'x',
+        content: '# 見出し\n本文',
+        summary: 's',
+      });
+
+      expect(reply).toContain('毎ターンの床');
+      expect(reply).toContain('次のターンの会話へ載る見込み');
+      expect(reply).toContain('次に組み立て直されたら焼かれる量（セッション構築時点との差）');
+      expect(reply).toContain('premise の大きさの順位');
+    });
+  });
+
+  /**
    * `memory_list`（#170「記憶の目次化」）。要旨・鮮度・区分・階層を出す。
    * `memory_write` が frontmatter を書けること自体はストア層の歯
    * （`memory.test.ts` / `storage-fs` / `storage-pg` のテスト）で確かめてあるので、
