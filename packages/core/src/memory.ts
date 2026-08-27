@@ -1389,6 +1389,94 @@ export function describeMemoryFloor(input: {
   return `${actionLabel}: ${slug}（区分: ${kind}）。\n${floorLine}`;
 }
 
+/**
+ * `memory_write` / `memory_append` / `memory_frontmatter_set` /
+ * `memory_section_move` の応答に添える、「**この書き込みによって、次の
+ * ターンの会話へ載る見込みの文字数**」の一言（P2、#318 の続き）。
+ *
+ * ## `describeMemoryFloor`（毎ターンの床）とは別の量である——置き換えない
+ *
+ * `describeMemoryFloor` が答えるのは「記憶全体が**毎ターン**焼き込まれ
+ * **続ける**総量」（before/after は書き込み前後の記憶全体のスナップショット）。
+ * こちらが答えるのは、`clone.ts` の `#withFreshMemory` がこの書き込みの
+ * 結果として**次の1ターンだけ**会話へ差分として載せ直す量
+ * （`renderMemoryDocuments(changed)`）——載った塊はその後会話の履歴として
+ * 残り続けるので、毎ターンの床（前者）とは別の現象である。**2つの数を
+ * 混ぜないよう、呼び手はこの関数の戻り値を `describeMemoryFloor` の行に
+ * 続けて足すだけにし、どちらの行かは文言そのもので区別できるようにする**
+ * （`floorLine` は「毎ターンの床」、こちらは「次のターンの会話へ載る見込み」
+ * と名乗る）。
+ *
+ * ## 計算は `renderMemoryDocuments` そのもの——数え方を2本に割らない
+ *
+ * `渡された文書（群）をそのまま同じ純粋関数（`renderMemoryDocuments`）に
+ * 通した文字数を返す。**区分で結果が変わることが要点である**——`premise`
+ * なら全文、`fact` なら目次1行ぶんしか返らない。`measureMemoryFloor` が
+ * 「後の床から逆算しない」のと同じ理由で、ここも `renderMemoryDocuments`
+ * を再実装しない。
+ *
+ * ## 引数は「1回のツール呼び出しで変わった文書すべて」
+ *
+ * `memory_write` / `memory_append` / `memory_frontmatter_set` は1文書しか
+ * 変えないので `[written]` の1要素配列を渡す。**`memory_section_move` だけ
+ * 移動元・移動先の両方を「変わった文書」にする**——`#withFreshMemory` は
+ * 次のターンにこの2つを**まとめて**載せ直すので、呼び手は両方を1回で
+ * この関数へ渡すこと（`[toWritten, fromWritten]`）。
+ *
+ * **⚠️ ここが「合計」を選んだ理由。** 2文書ぶんを別々に
+ * `renderMemoryDocuments([a])` / `renderMemoryDocuments([b])` で測って
+ * 単純に足すと、`joinMemorySections` が挟む区切り文字（premise 同士なら
+ * `\n\n`）のぶんだけ実物より少なく出る——**2本の render を足したもの**と
+ * **2文書をまとめて1回 render したもの**は同じ値にならない。だから
+ * ここは2文書をまとめて1回だけ `renderMemoryDocuments` に通し、**単一の
+ * 合計**として返す（内訳は文書ごとの区分を並べて示す）。
+ *
+ * ## ⚠️ これは予測であって実測ではない（依頼者の明示条件）
+ *
+ * 1. **「他に何も変わらなければ」という条件付きである。** ここで返す数は
+ *    「このツール呼び出しで変わった文書（群）だけが変わった」という前提で
+ *    計算している。**同じターンの中でこれ以外の文書も変われば、次の
+ *    ターンにはそれも合わせて載る**——書き込みごとに出るこの数を機械的に
+ *    合算して「次のターンに載る総量」を求めないこと（同じ文書を同じ
+ *    ターンで複数回書き換えた場合は特に、後の呼び出しが返す数はその文書の
+ *    最終状態の全部を含むので、前の呼び出しぶんまで足すと二重に数える）。
+ * 2. **`memory_section_move` は移動元と移動先の両方を「変わった文書」に
+ *    する。** 直上のとおり、ここでは両方をまとめた**合計**を1つの数で返す
+ *    （別々に出す選択肢もあったが採らなかった——理由は直上）。
+ */
+export function describeMemoryReinjectionEstimate(parts: readonly MemoryPart[]): string {
+  if (parts.length === 0) {
+    throw new Error('describeMemoryReinjectionEstimate: parts が空（呼び手の実装誤り）');
+  }
+
+  const chars = renderMemoryDocuments(parts).length;
+  const kindOf = (part: MemoryPart): MemoryDocKind =>
+    resolveMemoryDocKind(parseMemoryFrontmatter(part.content));
+  const kindLabel = (kind: MemoryDocKind): string =>
+    kind === 'premise' ? 'premise・全文' : 'fact・目次1行';
+  const breakdown = parts.map((part) => `${part.slug}（${kindLabel(kindOf(part))}）`).join(' + ');
+
+  const subjectLabel =
+    parts.length === 1
+      ? 'この書き込み'
+      : `この移動（${parts.map((part) => part.slug).join(' と ')} の合計）`;
+
+  const lines = [
+    `${subjectLabel}が次のターンの会話へ載る見込み: ${formatMemoryCharCount(chars)} 文字（${breakdown}）。`,
+    '⚠️ これは予測であって実測ではない。「他に何も変わらなければ」という前提が付く' +
+      '——同じターンで他の文書も変われば、次のターンにはそれも合わせて載るので、' +
+      '書き込みごとに出るこの数を単純に合算しないこと。',
+  ];
+  if (parts.length > 1) {
+    lines.push(
+      'memory_section_move は移動元と移動先の両方を「変わった文書」にするため、' +
+        'この数は両方の合計である（別々の値を足したものではなく、renderMemoryDocuments へ' +
+        '両方まとめて渡した結果——区切り文字のぶんの誤差が乗らない）。',
+    );
+  }
+  return lines.join('\n');
+}
+
 // ---------------------------------------------------------------------------
 // 節（section）— memory_outline / memory_section_move（#318 案 (b)）
 // ---------------------------------------------------------------------------

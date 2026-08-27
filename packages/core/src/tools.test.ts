@@ -711,6 +711,143 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * ⭐ P2「記憶へ書いたとき、その書き込みが**次のターンの会話へ**載せる文字数を、
+   * 応答に返す」（`describeMemoryReinjectionEstimate`、#318 の続き）。
+   *
+   * **直上の「毎ターンの床」（`describeMemoryFloor`）とは別の量を測る歯である。**
+   * あちらは記憶全体の恒久的な焼き込み量、こちらは `clone.ts` の
+   * `#withFreshMemory` が次の1ターンだけ差分として載せ直す量
+   * （`renderMemoryDocuments(changed)`）。ここでは「道具として呼んだときに、
+   * 配線（`stores.persona` が返した実際の文書 → 応答の文言）まで含めて出るか」
+   * だけを見る——中身の計算そのものの歯は `memory.test.ts` に在る。
+   */
+  describe('書く4口の応答に足す「次のターンの会話へ載る見込み」（describeMemoryReinjectionEstimate、P2）', () => {
+    it('⭐ memory_write（premise）は、renderMemoryDocuments([書いた後の文書]) と一致する文字数を返す', async () => {
+      const h = harness();
+
+      const reply = await h.call('memory_write', {
+        slug: 'about-me-core',
+        content: '# 私の芯\n\n'.concat('大事にしていること。'.repeat(50)),
+        summary: '新しい芯を作った',
+      });
+
+      const written = await h.stores.persona.read('about-me-core');
+      const expectedChars = renderMemoryDocuments([written as never]).length;
+
+      expect(reply).toContain('次のターンの会話へ載る見込み');
+      expect(reply).toContain(`${expectedChars.toLocaleString('en-US')} 文字`);
+      expect(reply).toContain('premise・全文');
+    });
+
+    it('⭐ memory_write（fact）は、目次1行ぶんの小さい文字数を返す（premise とは桁が違う）', async () => {
+      const h = harness();
+
+      const bigBody = '事実の記録。'.repeat(2000);
+      const reply = await h.call('memory_write', {
+        slug: 'fact-doc',
+        content: `---\ntype: fact\ndescription: 事実\n---\n# 事実\n${bigBody}`,
+        summary: '新規',
+      });
+
+      expect(reply).toContain('fact・目次1行');
+      // 本文が長くても目次の1行にしか出ないので、本文量よりずっと小さい。
+      const line = (reply.split('\n').find((row) => row.includes('次のターンの会話へ載る見込み')) ??
+        '') as string;
+      const match = /: ([\d,]+) 文字/.exec(line);
+      expect(match).not.toBeNull();
+      expect(Number(((match as RegExpExecArray)[1] ?? '').replace(/,/g, ''))).toBeLessThan(200);
+    });
+
+    it('memory_append にも同じ行が出る', async () => {
+      const h = harness();
+
+      const reply = await h.call('memory_append', {
+        slug: 'appended-premise',
+        content: '最初の1行',
+        summary: '新規',
+      });
+
+      expect(reply).toContain('次のターンの会話へ載る見込み');
+      expect(reply).toContain('premise・全文');
+    });
+
+    it('memory_frontmatter_set にも同じ行が出て、type を fact に変えると数値が小さくなる', async () => {
+      const h = harness();
+      await h.stores.persona.write('values', `# 価値観\n${'大事にしていること。'.repeat(50)}`);
+      const beforeReply = await h.call('memory_frontmatter_set', {
+        slug: 'values',
+        description: '要旨だけ足す',
+        summary: '要旨だけ',
+      });
+      expect(beforeReply).toContain('次のターンの会話へ載る見込み');
+      expect(beforeReply).toContain('premise・全文');
+
+      const afterReply = await h.call('memory_frontmatter_set', {
+        slug: 'values',
+        type: 'fact',
+        summary: '区分を変えた',
+      });
+      expect(afterReply).toContain('fact・目次1行');
+
+      const extractChars = (reply: string): number => {
+        const line = (reply
+          .split('\n')
+          .find((row) => row.includes('次のターンの会話へ載る見込み')) ?? '') as string;
+        const match = /: ([\d,]+) 文字/.exec(line);
+        return Number(((match as RegExpExecArray)[1] ?? '').replace(/,/g, ''));
+      };
+      expect(extractChars(afterReply)).toBeLessThan(extractChars(beforeReply));
+    });
+
+    /**
+     * ⭐ `memory_section_move` は移動元・移動先の**両方**を「変わった文書」に
+     * する（#withFreshMemory は次のターンに両方をまとめて載せ直す）。この
+     * リポジトリの選択は「合計」を1つの数で返すことである
+     * （`describeMemoryReinjectionEstimate` の doc）。
+     */
+    it('⭐ memory_section_move は、移動元・移動先の両方ぶんの合計を1つの数で返す', async () => {
+      const h = harness();
+      await h.stores.persona.write(
+        'about-me',
+        ['# 私について', '本文', '', '## 事例', '事例の本文'].join('\n'),
+      );
+      const outline = await h.call('memory_outline', { slug: 'about-me' });
+      const idMatch = /\[([0-9a-f]{8}-[0-9a-f]{8})\] ## 事例 — /.exec(outline);
+      expect(idMatch).not.toBeNull();
+      const id = (idMatch as RegExpExecArray)[1];
+
+      const reply = await h.call('memory_section_move', {
+        fromSlug: 'about-me',
+        section: id,
+        toSlug: 'about-me-appendix',
+        summary: '事例を付録へ移した',
+      });
+
+      expect(reply).toContain('次のターンの会話へ載る見込み');
+      expect(reply).toContain('about-me-appendix と about-me の合計');
+      expect(reply).toContain('移動元と移動先の両方');
+
+      const from = await h.stores.persona.read('about-me');
+      const to = await h.stores.persona.read('about-me-appendix');
+      const expectedChars = renderMemoryDocuments([to as never, from as never]).length;
+      const line = (reply.split('\n').find((row) => row.includes('次のターンの会話へ載る見込み')) ??
+        '') as string;
+      expect(line).toContain(`${expectedChars.toLocaleString('en-US')} 文字`);
+    });
+
+    it('単一文書への書き込みでは「移動元と移動先の両方」の注記は出ない', async () => {
+      const h = harness();
+      const reply = await h.call('memory_write', {
+        slug: 'solo',
+        content: '# 独立\n本文',
+        summary: '単独',
+      });
+
+      expect(reply).not.toContain('移動元と移動先の両方');
+    });
+  });
+
+  /**
    * `memory_list`（#170「記憶の目次化」）。要旨・鮮度・区分・階層を出す。
    * `memory_write` が frontmatter を書けること自体はストア層の歯
    * （`memory.test.ts` / `storage-fs` / `storage-pg` のテスト）で確かめてあるので、
