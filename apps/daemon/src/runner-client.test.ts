@@ -1959,6 +1959,192 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
   });
 
   /**
+   * **#308 が名指した穴そのもの。** `#pump` の1周は `failed` / `healthy` の
+   * 組で3通りに終わる——「失敗（例外）」と「持続した」はそれぞれ「切れました」
+   * 「繋ぎ直せた」を書いてきたが、**「閾値未満で、例外も投げずに静かに閉じた」
+   * だけはどちらの枝にも入らず、1行も書かれなかった。** 実測（このファイルを
+   * 直す前に取った生カウント）は `lines.length === 0` だった——`waits` は
+   * 通常の失敗と同じに 1000→…→30000 と伸びるのに、stderr からはそれを
+   * 一切追えなかった。
+   */
+  describe('静かに閉じた接続にも stderr が出る（#308）', () => {
+    it('静かに閉じ続けると、頭打ちへ張り付くまでの間隔ごとに書き、以後は黙る', async () => {
+      const { fetchFn } = fetchEvents(() => 'ok');
+      const waits: number[] = [];
+      let notifyEnough: () => void = () => undefined;
+      const enough = new Promise<void>((resolve) => {
+        notifyEnough = resolve;
+      });
+      const sleepFn = async (ms: number): Promise<void> => {
+        waits.push(ms);
+        if (waits.length >= 8) notifyEnough();
+      };
+
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+        sleepFn,
+      });
+      await client.connect(() => undefined);
+      await enough;
+      await client.close();
+
+      // バックオフの伸び方そのものは変えていない——既存の歯（1577行付近）と
+      // 同じ列。
+      expect(waits.slice(0, 8)).toEqual([1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000]);
+
+      const lines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      const quietLines = lines.filter((line: string) => line.includes('持続しないまま終わった'));
+
+      // 直す前は0行だった（測定Bの実測）。いまは失敗経路と同じ形（初回と
+      // 間隔が変わったときだけ）で6行出て、頭打ち（30000）の後は黙る。
+      expect(quietLines).toHaveLength(6);
+      expect(quietLines[0]).toContain('次は1000ms後に再試行');
+      expect(quietLines[5]).toContain('次は30000ms後に再試行');
+      // 「切れました」は例外の言い回しなので使わない。「繋ぎ直せた」も
+      // healthy になっていないので出ない。
+      expect(lines.some((line: string) => line.includes('ストリームが切れました'))).toBe(false);
+      expect(lines.some((line: string) => line.includes('繋ぎ直せた'))).toBe(false);
+    });
+
+    it('静かに閉じた経路と失敗経路の dedup は互いを消し合わない', async () => {
+      // 6敗（1000→…→30000、頭打ち）→ 静かに閉じる（30000のまま）→ 敗
+      // （30000のまま）→ 静かに閉じる（30000のまま）、の順。頭打ちに達した
+      // 後、経路が交互に入れ替わっても、それぞれの dedup が自分の直前の値
+      // としか比べないことを確かめる——同じフィールドを共有していれば、
+      // 静かな1行が挟まるだけで直後の敗北がまた書いてしまったり、逆に
+      // 静かな行の2回目以降が黙らなかったりする。
+      const { fetchFn } = fetchEvents((i) => {
+        if (i < 6) return 'fail';
+        if (i === 6) return 'ok';
+        if (i === 7) return 'fail';
+        return 'ok';
+      });
+      const waits: number[] = [];
+      let notifyEnough: () => void = () => undefined;
+      const enough = new Promise<void>((resolve) => {
+        notifyEnough = resolve;
+      });
+      const sleepFn = async (ms: number): Promise<void> => {
+        waits.push(ms);
+        if (waits.length >= 9) notifyEnough();
+      };
+
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+        sleepFn,
+      });
+      await client.connect(() => undefined);
+      await enough;
+      await client.close();
+
+      expect(waits.slice(0, 9)).toEqual([
+        1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000, 30000,
+      ]);
+
+      const lines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      const failureLines = lines.filter((line: string) => line.includes('ストリームが切れました'));
+      const quietLines = lines.filter((line: string) => line.includes('持続しないまま終わった'));
+
+      // 6敗目までは間隔が毎回変わるので6行。7敗目（index=7、頭打ちのまま・
+      // cause も同じ）は、間に静かな1行（index=6）が挟まっても黙る——
+      // 静かな行がこの dedup を乱していない証拠。
+      expect(failureLines).toHaveLength(6);
+      // 静かな行は index=6 で1回。index=8 は同じ待ち幅(30000)のままなので、
+      // 間に敗（index=7）が挟まっても静かな側の dedup は自分の直前の値
+      // （30000）としか比べず、黙る——合わせて1行。
+      expect(quietLines).toHaveLength(1);
+      expect(quietLines[0]).toContain('次は30000ms後に再試行');
+      for (const line of [...failureLines, ...quietLines]) {
+        expect(line).not.toContain('繋ぎ直せた');
+      }
+    });
+
+    it('静かに閉じ続けて頭打ちへ張り付いた後、healthy へ回復すると「繋ぎ直せた」が出る（出の端）', async () => {
+      // **入りの端（上の2本）だけでは #308 は半分しか塞がっていない。** 静かに
+      // 閉じ続けるだけでバックオフに入り、そこから実際に healthy へ回復した
+      // ときに「繋ぎ直せた」が出なければ、「切れ続ける沈黙」と「直った」を
+      // 見分けさせないという穴が、失敗経路から静かな経路へ移っただけになる。
+      // ここでその出の端を測る——`UND_ERR_BODY_TIMEOUT で頭打ち…` テスト
+      // （上の describe）と同じ形だが、ラウンドを埋めるのが例外ではなく
+      // 静かな終わり（'ok'）である点だけが違う。
+      const { fetchFn } = fetchEvents((i) => (i < 6 ? 'ok' : 'healthy'));
+
+      const waits: number[] = [];
+      let notifyEnough: () => void = () => undefined;
+      const enough = new Promise<void>((resolve) => {
+        notifyEnough = resolve;
+      });
+      const sleepFn = async (ms: number): Promise<void> => {
+        waits.push(ms);
+        // 6回（静かに閉じて頭打ちへ張り付く）+ 回復直後の1回 = 7回で止める。
+        if (waits.length >= 7) notifyEnough();
+      };
+
+      // **`nowFnAtExactThreshold()` はそのまま使えない。** あれは「1回目の
+      // 呼び出し（唯一の接続の connectedAt）は0、以降は閾値」という前提の
+      // 足場だが、ここでは 'ok'（静かに閉じる）接続も `connectedAt` を測る
+      // ために `#nowFn` を1回ずつ消費する（バイトが来ないので `onBytes` 側は
+      // 呼ばれない）。6本の 'ok' がその6回ぶんを先に使うので、7本目
+      // （'healthy'）の `connectedAt`（7回目の呼び出し）が0、その直後の
+      // `onBytes`（8回目の呼び出し）が閾値になるよう、呼び出し回数を直に
+      // 数える専用の `nowFn` を使う。
+      let nowCalls = 0;
+      const nowFn = (): number => {
+        const value = nowCalls === 7 ? HEALTHY_THRESHOLD_MS : 0;
+        nowCalls += 1;
+        return value;
+      };
+
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+        sleepFn,
+        nowFn,
+      });
+      await client.connect(() => undefined);
+      await enough;
+      await client.close();
+
+      // **入りの端は stderr、出の端は stdout。** 静かな閉じは「開いてすぐ
+      // 壊れる相手」＝異常なので stderr、回復は正常なので stdout ——
+      // `tokenRotationStream` の doc が確定させた「正常は stdout・異常は
+      // stderr」の割り当て（#420 / #551）にそのまま従う。**この2本を別々の
+      // ストリームから読むこと自体が歯である。**
+      const stderrLines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      const stdoutLines = stdoutSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      const quietLines = stderrLines.filter((line: string) =>
+        line.includes('持続しないまま終わった'),
+      );
+      const reconnectLines = stdoutLines.filter((line: string) => line.includes('繋ぎ直せた'));
+
+      expect(waits.slice(0, 6)).toEqual([1000, 2000, 4000, 8000, 16000, 30000]);
+      expect(quietLines).toHaveLength(6);
+
+      // **本題: 静かに閉じ続けただけの区間から回復しても、「繋ぎ直せた」が
+      // ちょうど1回出る。** 直す前はここが `#backingOff` が一度も立たない
+      // ため永久に出なかった。
+      expect(reconnectLines).toHaveLength(1);
+
+      // **異常（静かな閉じ）を stdout へ漏らしていないか。** #551 が切断の行
+      // に同じ形の歯を立てているので、足した行にも同じものを当てる ——
+      // 正常系の宛先を変えた拍子に異常系が付いていく事故は、片側だけ見て
+      // いると通ってしまう。
+      expect(stdoutLines.some((line: string) => line.includes('持続しないまま終わった'))).toBe(
+        false,
+      );
+
+      // 回復直後の待ちは基準値（1000ms）へ戻る——バックオフの計算そのもの
+      // (`#nextDelayMs`) は変えていないことの確認。
+      expect(waits[6]).toBe(1000);
+    });
+  });
+
+  /**
    * **本番には runner が複数台あり、それぞれ独立した stream と独立した backoff
    * 状態を持つ（#274 issue コメント、2026-08-23T09:03:36Z）。** ところが
    * 「切れました」「繋ぎ直せた」の2行は runner を名乗らないので、`16000ms →
