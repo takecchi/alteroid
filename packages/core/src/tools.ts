@@ -396,6 +396,176 @@ const REPORT_PAGE = 8_000;
 const TRANSCRIPT_PAGE = 8_000;
 
 /**
+ * `manager_report` が「報告はまだ無い」と答える直前に、生ログの末尾を遡って
+ * 「生成されたが配られていない」（#323）を探す幅。
+ *
+ * **末尾からこの文字数だけを見る。生ログ全体を JSON.parse しない。** 生ログは
+ * MB 級になりうる（実測で 319,141 文字の例がある。`TRANSCRIPT_PAGE` の doc）。
+ * ここまで遡って見つからなかったら「生ログにも本文が無い」ではなく
+ * 「上限まで遡ったが見つからなかった」と言う（それより前は見ていない。
+ * AGENTS.md 地雷「取れない軸に0の行を作る」）。
+ *
+ * `REPORT_PAGE` / `TRANSCRIPT_PAGE` より大きいのは、こちらは**返す**幅ではなく
+ * **走査する**幅だから — 直近の報告に相当する1件のイベントを見つけるには、
+ * 呼び出し側へ返す1ページぶんより広い範囲を読む必要がある（ツール呼び出し・
+ * 結果などが間に挟まるため）。
+ */
+const REPORT_GENERATED_PROBE_CHARS = 200_000;
+
+/** `probeLastAssistantUtterance` が生ログの末尾から見つけた、マネージャー自身の最後の発言。 */
+interface LastAssistantUtterance {
+  /** 生ログの行が持つ `timestamp`（無ければ `undefined`——古い形式は省略しうる）。 */
+  timestamp: string | undefined;
+  /** 本文の文字数（概算——このツールは全文を返さない）。 */
+  length: number;
+}
+
+type AssistantUtteranceProbe =
+  | { kind: 'found'; utterance: LastAssistantUtterance }
+  /** 走査した範囲（＝生ログ全体）のどこにも本文が無かった。 */
+  | { kind: 'empty' }
+  /** `REPORT_GENERATED_PROBE_CHARS` まで遡ったが見つからなかった。それより前は見ていない。 */
+  | { kind: 'truncated' };
+
+/**
+ * 生ログ（Claude Code の JSONL、1行1イベント）の末尾から、マネージャー自身の
+ * 発言（`type: 'assistant'` かつ `content` に `type: 'text'` の本文を持つもの）で
+ * 最後の1件を探す。
+ *
+ * **作業者（Task サブエージェント）の発言を混ぜない。** 実測（このリポジトリの
+ * 開発環境、`@anthropic-ai/claude-agent-sdk@0.3.247` 同梱 CLI が書いた実際の
+ * transcript ファイルを直接読んだ）では、Task が起こしたサブエージェントの
+ * 発言はマネージャー自身の transcript ファイルには一切現れず、
+ * `<session>/subagents/agent-*.jsonl` という別ファイルへ書かれる
+ * （`ManagerPool#transcript` が読むのはマネージャー自身のセッションファイル
+ * だけで、このサブエージェント用ファイルは読まない）。それでも防御的に、
+ * 行の `isSidechain` が `true` の行は除く。**この判定は `runner.ts` の
+ * `parentToolUseId()` と同じ意図だが、同じフィールドは見ていない** —
+ * あちらは SDK が流す `SDKMessage`（`parent_tool_use_id` を持つ）を見ており、
+ * こちらはディスク上の JSONL の生の行を見ている。実測した transcript
+ * ファイルには `parent_tool_use_id` という文字列が1度も現れず
+ * （`message.content` の中の引用文字列を除く）、行が持つのは代わりに
+ * `isSidechain` である。**それでも混ざる余地が完全に無いとまでは言い切れない
+ * ので、`manager_report` の応答はこの判定を経たことを明示する。**
+ *
+ * **末尾から `REPORT_GENERATED_PROBE_CHARS` 文字だけを見る。全行を
+ * JSON.parse しない**（定数の doc）。末尾から切り出した先頭の断片は行の
+ * 途中で千切れている可能性があるので、遡り切っていない（`truncated`）ときは
+ * 捨てる——壊れた JSON を無理に読まない。
+ */
+function probeLastAssistantUtterance(transcript: string): AssistantUtteranceProbe {
+  const truncated = transcript.length > REPORT_GENERATED_PROBE_CHARS;
+  const tail = truncated ? transcript.slice(-REPORT_GENERATED_PROBE_CHARS) : transcript;
+  const rawLines = tail.split('\n');
+  const lines = truncated ? rawLines.slice(1) : rawLines;
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index]!.trim();
+    if (line.length === 0) continue;
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const record = entry as {
+      type?: unknown;
+      isSidechain?: unknown;
+      timestamp?: unknown;
+      message?: { content?: unknown };
+    };
+    if (record.type !== 'assistant') continue;
+    if (record.isSidechain === true) continue; // 作業者の発言（上の doc）
+    const body = rawAssistantText(record.message?.content);
+    if (body.length === 0) continue;
+    return {
+      kind: 'found',
+      utterance: {
+        timestamp: typeof record.timestamp === 'string' ? record.timestamp : undefined,
+        length: body.length,
+      },
+    };
+  }
+  return truncated ? { kind: 'truncated' } : { kind: 'empty' };
+}
+
+/** 生ログの1行（parse 済み）から、assistant の本文（`content` の `type: 'text'`）だけを取り出す。 */
+function rawAssistantText(content: unknown): string {
+  if (typeof content === 'string') return content.trim();
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter(
+      (block): block is { type: 'text'; text: string } =>
+        typeof block === 'object' &&
+        block !== null &&
+        (block as { type?: unknown }).type === 'text' &&
+        typeof (block as { text?: unknown }).text === 'string',
+    )
+    .map((block) => block.text)
+    .join('\n')
+    .trim();
+}
+
+/**
+ * `manager_report` の `part: 'report'` で本文が空だったときに呼ぶ（#323）。
+ *
+ * **「まだ書いていない」と「書いたのに届いていない」を区別する。** 生ログ
+ * （`ManagerPool#transcript`。`/events` とは別の接続なので、`/events` が
+ * 詰まっていても読める）を見て、マネージャー自身の最後の発言を探す——
+ * 見つかれば「生成されたが配られていない」と言え、見つからなければ
+ * 「まだ書いていない」寄りだが、走査した範囲でしか言えないことも併せて言う。
+ *
+ * **読めなかったこと自体も、「無い」に潰さない**（AGENTS.md 地雷「取れない軸に
+ * 0の行を作る」）。
+ */
+async function describeMissingReport(
+  managers: ManagerPool,
+  managerId: string,
+  status: ManagerSummary['status'],
+): Promise<string> {
+  const base = `マネージャー ${managerId} からの報告はまだ無い（状態: ${status}）。`;
+  let transcript: string | null;
+  try {
+    transcript = await managers.transcript(managerId);
+  } catch (error) {
+    return (
+      `${base} 生ログは読めなかった（` +
+      (error instanceof Error ? error.message : String(error)) +
+      '）。「まだ書いていない」か「書いたのに届いていない」かは、これだけでは判定できない。'
+    );
+  }
+  if (transcript === null || transcript.length === 0) {
+    return (
+      `${base} 生ログにも本文は無い` +
+      '（走行中の runner のディスク・退避済みアーカイブ・預かった生ログ、3段のどこにも見当たらなかった）。'
+    );
+  }
+
+  const outcome = probeLastAssistantUtterance(transcript);
+  if (outcome.kind === 'empty') {
+    return `${base} 生ログにも本文は無い（生ログ全体を見た）。`;
+  }
+  if (outcome.kind === 'truncated') {
+    return (
+      `${base} 生ログの末尾 ${REPORT_GENERATED_PROBE_CHARS.toLocaleString('ja-JP')} 文字を遡ったが、` +
+      'マネージャー自身の発言（本文つき）は見つからなかった。' +
+      'それより前は見ていないので「無い」とは言い切れない——' +
+      `manager_transcript managerId=${managerId} で自分で遡って確かめられる。`
+    );
+  }
+
+  const { timestamp, length } = outcome.utterance;
+  const when = timestamp ?? '時刻不明（生ログの行に timestamp が無かった）';
+  const resumeOffset = Math.max(0, transcript.length - TRANSCRIPT_PAGE);
+  return (
+    `⚠ マネージャー ${managerId} からの報告としては届いていないが、生ログには ${when} に本文が在る` +
+    `（約 ${length.toLocaleString('ja-JP')} 文字）。＝ 生成されたが配られていない（#323）。` +
+    `manager_transcript managerId=${managerId} offset=${resumeOffset} で読める` +
+    '（作業者の発言は除いて探したが、混ざる余地が完全に無いとまでは確認していない）。'
+  );
+}
+
+/**
  * 未了の台帳の一覧の予算と、1件ぶんの本文の厚み。
  *
  * **件数の上限（かつての `COMMITMENT_LIST_LIMIT = 30`）は潜在的なバグだった。**
@@ -3424,11 +3594,13 @@ export function createCloneTools(context: ToolContext) {
 
         const body = part === 'request' ? found.request : found.lastReport;
         if (body === undefined || body.length === 0) {
-          return text(
-            part === 'request'
-              ? `マネージャー ${managerId} の依頼文が記録に無い。`
-              : `マネージャー ${managerId} からの報告はまだ無い（状態: ${found.status}）。`,
-          );
+          if (part === 'request') {
+            return text(`マネージャー ${managerId} の依頼文が記録に無い。`);
+          }
+          // #323: 依頼文（part === 'request'）では見に行かない——往復を無条件に
+          // 増やさない。「報告はまだ無い」を返す直前、report のときだけ生ログを
+          // 見て「まだ書いていない」と「書いたのに届いていない」を分ける。
+          return text(await describeMissingReport(context.managers, managerId, found.status));
         }
 
         const label = part === 'request' ? '依頼文' : '直近の報告';
