@@ -13,6 +13,11 @@ import {
   toMessage,
 } from './conversation.js';
 import { isCronExpression } from './cron.js';
+// **`manager_list` と digest の「マネージャー」節で同じ字面を出すための唯一の
+// 生成元。** 片方だけ変えられると区別が潰れる——実際にクローンがそれで誤り、
+// 終わった仕事へ3本目の委譲を出した（`digest.ts` の `describeManagerState` の
+// doc に実害の詳細がある）。
+import { describeManagerState } from './digest.js';
 import { RECENT_TRACE_LIMIT, recentDroppedTraces } from './dropped-record.js';
 import { toAgentTokenView, tokenAvailabilityAt } from './token-pool.js';
 import {
@@ -3016,7 +3021,7 @@ export function createCloneTools(context: ToolContext) {
           return text(
             `[${managerId}] ${result.detail}\n` +
               `**止まっていない。** runner には ${managerId} のセッションがまだ残っている。` +
-              `いまの状態: ${after === undefined ? '一覧から消えている' : `${after.status}${after.live ? '' : '/セッション切断'}`}。` +
+              `いまの状態: ${after === undefined ? '一覧から消えている' : describeManagerState(after.status, after.live)}。` +
               ' manager_list で確かめ、必要ならもう一度止めること。',
           );
         }
@@ -3048,7 +3053,7 @@ export function createCloneTools(context: ToolContext) {
         lines.push(
           after === undefined
             ? '一覧からも消えている。'
-            : `いまの状態: ${after.status}${after.live ? '' : '/セッション切断'}。`,
+            : `いまの状態: ${describeManagerState(after.status, after.live)}。`,
         );
         return text(lines.join('\n'));
       },
@@ -3102,7 +3107,7 @@ export function createCloneTools(context: ToolContext) {
         const items = managers.map((manager) =>
           renderListingEntry({
             id: manager.managerId,
-            title: `[${manager.status}${manager.live ? '' : '/セッション切断'}]`,
+            title: `[${describeManagerState(manager.status, manager.live)}]`,
             createdAt: manager.startedAt,
             updatedAt: manager.updatedAt,
             summary: `依頼: ${excerptLine(manager.request, LIST_REQUEST_EXCERPT)}`,

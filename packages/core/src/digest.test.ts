@@ -1,8 +1,28 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildActivityDigest, MAX_ITEMS } from './digest.js';
+import { buildActivityDigest, describeManagerState, MAX_ITEMS } from './digest.js';
 import { createMemoryStores } from './testing.js';
 import { usageDate } from './usage.js';
+
+/**
+ * `manager_list`（`tools.ts`）と digest の「マネージャー」節で同じ字面を出す
+ * ための唯一の生成元。3値の意味は `manager.ts` の `ManagerSummary.live` の
+ * doc と同じだが、ここでは `boolean | undefined` を受ける——省略（`undefined`）
+ * を `true` に倒さない（`digest.ts` の doc）。
+ */
+describe('describeManagerState', () => {
+  it('live: true は状態名だけ', () => {
+    expect(describeManagerState('running', true)).toBe('running');
+  });
+
+  it('live: false は「/セッション切断」を足す', () => {
+    expect(describeManagerState('running', false)).toBe('running/セッション切断');
+  });
+
+  it('live: undefined は「/セッション不明」——否定でも肯定でもない第三の値', () => {
+    expect(describeManagerState('running', undefined)).toBe('running/セッション不明');
+  });
+});
 
 /**
  * 日報と発意 tick の材料。ここに要るのは「全体が見えている」ことだけで、
@@ -115,6 +135,102 @@ describe('活動の要約', () => {
     expect(digest).toContain('原因まで分かった');
     expect(digest).toContain('いま人間の回答を待っているもの: 1 件');
     expect(digest).toContain('本番へ流してよいか');
+  });
+
+  /**
+   * `live`（＝いま話しかけられるか）が要約の側で潰れていた実害そのものを歯にする
+   * （#5243d633）。
+   *
+   * 定期 tick でクローンへ渡る要約は `- ${job.id} [${job.status}]` としか出しておらず、
+   * 「走行中」と「走行中だがセッションが切れている」が区別できなかった。実際に
+   * クローンがこれで誤り、**終わった仕事へ3本目の委譲を出した**。ここで測るのは
+   * 「片方が出る」ではなく「2本が互いに違う字面になる（区別される）」こと——
+   * それが潰れていた性質そのものだからである。
+   */
+  it('走行中のマネージャー2本を liveness で分けると、要約の行が互いに違う字面になる（実害の歯）', async () => {
+    const stores = createMemoryStores();
+    const now = new Date().toISOString();
+    await stores.jobs.putJob({
+      id: 'mgr-alive',
+      createdAt: now,
+      updatedAt: now,
+      status: 'running',
+      summary: '生きている仕事',
+      request: '生きている仕事',
+    });
+    await stores.jobs.putJob({
+      id: 'mgr-dead',
+      createdAt: now,
+      updatedAt: now,
+      status: 'running',
+      summary: 'セッションが切れた仕事',
+      request: 'セッションが切れた仕事',
+    });
+    const liveness = new Map([
+      ['mgr-alive', true],
+      ['mgr-dead', false],
+    ]);
+
+    const digest = await buildActivityDigest(
+      stores,
+      { since: new Date(Date.now() - 60_000) },
+      liveness,
+    );
+
+    const aliveLine = digest.split('\n').find((line) => line.includes('mgr-alive'));
+    const deadLine = digest.split('\n').find((line) => line.includes('mgr-dead'));
+    expect(aliveLine).toContain('[running]');
+    expect(deadLine).toContain('[running/セッション切断]');
+    // 「片方が出る」ではなく「2本が区別される」を測る——同じ status のまま
+    // 字面が割れなければ、この歯が守ろうとしている性質そのものが崩れている。
+    expect(aliveLine).not.toEqual(deadLine);
+  });
+
+  it('liveness に載っていない id は「セッション不明」になる（取れなかったことを黙らない）', async () => {
+    const stores = createMemoryStores();
+    const now = new Date().toISOString();
+    await stores.jobs.putJob({
+      id: 'mgr-unknown',
+      createdAt: now,
+      updatedAt: now,
+      status: 'running',
+      summary: '仕事',
+      request: '仕事',
+    });
+
+    const digest = await buildActivityDigest(
+      stores,
+      { since: new Date(Date.now() - 60_000) },
+      new Map(),
+    );
+
+    const line = digest.split('\n').find((row) => row.includes('mgr-unknown'));
+    expect(line).toContain('[running/セッション不明]');
+  });
+
+  /**
+   * `liveness` 引数を省略したときの既定は「肯定（`true`）」ではなく「不明」で
+   * ある。既定が肯定側にあると、呼び出し側が `liveness` を渡し忘れただけで
+   * 「繋がっている」と黙って名乗ってしまう（`digest.ts` の `describeManagerState`
+   * / `buildActivityDigest` の doc と同じ理由）。
+   */
+  it('liveness を省略すると「セッション不明」になる（既定が肯定側へ倒れていないことの歯）', async () => {
+    const stores = createMemoryStores();
+    const now = new Date().toISOString();
+    await stores.jobs.putJob({
+      id: 'mgr-omitted',
+      createdAt: now,
+      updatedAt: now,
+      status: 'running',
+      summary: '仕事',
+      request: '仕事',
+    });
+
+    const digest = await buildActivityDigest(stores, { since: new Date(Date.now() - 60_000) });
+
+    const line = digest.split('\n').find((row) => row.includes('mgr-omitted'));
+    expect(line).toContain('[running/セッション不明]');
+    expect(line).not.toContain('[running]');
   });
 
   it('期間の外の記録は数えない', async () => {

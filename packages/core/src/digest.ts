@@ -37,6 +37,38 @@ export interface DigestWindow {
 export const MAX_ITEMS = 15;
 
 /**
+ * マネージャーの id から「このデーモンから話しかけられるか」への写像。
+ *
+ * `ManagerPool` が実行時に `isLive()` で決める値（`manager.ts`）であって、
+ * ジョブ台帳の軸ではない。だから `buildActivityDigest` は自分では持てず、
+ * 呼び出し側（`clone.ts`）に渡してもらう。
+ */
+export type ManagerLiveness = ReadonlyMap<string, boolean>;
+
+/**
+ * マネージャー1本の状態を、`manager_list`（`tools.ts`）と**同じ字面**で言う。
+ *
+ * **`describeManagerState` を通す側と通さない側で字面が割れると、「走行中」と
+ * 「走行中だがセッションが切れている」が要約の側で潰れる。** 実際にクローンが
+ * これで誤り、終わった仕事へ3本目の委譲を出した（この関数を作る直接の理由）。
+ * `manager_list` 側（`tools.ts`）もこの関数を通すことで、生成を1箇所に閉じる。
+ *
+ * `live` を必須にせず3値で受けるのは、`buildActivityDigest` が `liveness` を
+ * 省略できることの裏返しである（そちらの doc を参照）。**`undefined` を
+ * `true` に倒さない。** 理由は `manager.ts` の `summaryOf` の doc が逐語で
+ * 持っている——`grep -Fn -- '省略した側が黙って「繋がっている」と名乗る' packages/core/src/manager.ts`。
+ * あちらは「引数を必須にして呼ぶ側に必ず書かせる」ことで省略そのものを防いだが、
+ * ここでは呼ぶ側（`liveness?.get(job.id)`）が構造的に `undefined` を返しうる
+ * ので、必須にする代わりに**否定でも肯定でもない第三の値**（`/セッション不明`）
+ * を既定にして、同じ轍（省略が黙って「繋がっている」と名乗ること）を避ける。
+ */
+export function describeManagerState(status: JobStatus, live: boolean | undefined): string {
+  if (live === true) return status;
+  if (live === false) return `${status}/セッション切断`;
+  return `${status}/セッション不明`;
+}
+
+/**
  * 上限で切ったことと、残りの件数と、続きの取り方を出す。
  *
  * **切ること自体は要件である** — 件数に比例して伸びる材料は MCP の出力上限を
@@ -115,7 +147,19 @@ function usageOmitted(total: number, shown: number, axis: string, unit: string):
   );
 }
 
-export async function buildActivityDigest(stores: Stores, window: DigestWindow): Promise<string> {
+/**
+ * @param liveness マネージャーの id から「話しかけられるか」への写像
+ * （`ManagerLiveness` の doc）。**必須にしない。** 省略時は
+ * `describeManagerState` が全件 `undefined` を受け取り、全件
+ * `/セッション不明` になる——**黙って「繋がっている」と名乗ることが
+ * 起こり得ない**ので、省略は静かに嘘をつかず、出力に「取れていない」と
+ * そのまま出る（`describeManagerState` の doc と同じ理由）。
+ */
+export async function buildActivityDigest(
+  stores: Stores,
+  window: DigestWindow,
+  liveness?: ManagerLiveness,
+): Promise<string> {
   const until = window.until ?? new Date(Date.now() + 1);
   const entries = (await stores.journal.list({ since: window.since.toISOString() })).filter(
     (entry) => entry.at < until.toISOString(),
@@ -312,7 +356,7 @@ export async function buildActivityDigest(stores: Stores, window: DigestWindow):
     const shownManagers = managers.slice(0, MAX_ITEMS);
     for (const job of shownManagers) {
       sections.push(
-        `- ${job.id} [${job.status}] ${brief(job.request ?? job.summary)}` +
+        `- ${job.id} [${describeManagerState(job.status, liveness?.get(job.id))}] ${brief(job.request ?? job.summary)}` +
           (job.lastReport === undefined ? '' : `\n  直近の報告: ${brief(job.lastReport)}`),
       );
     }
