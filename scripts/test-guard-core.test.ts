@@ -450,15 +450,11 @@ describe('isObservationFile（歯C: 名乗りの判定）', () => {
   });
 
   it('.observed. を含むパスは対象になる（孤児ブランチの実例そのもの）', () => {
-    expect(
-      isObservationFile('packages/core/src/inbox-delivery.observed.test.ts', ''),
-    ).toBe(true);
+    expect(isObservationFile('packages/core/src/inbox-delivery.observed.test.ts', '')).toBe(true);
   });
 
   it('-scratch. を含むパスは対象になる（生きている枝の実例そのもの）', () => {
-    expect(isObservationFile('apps/web/app/routes/chat.issue388-scratch.test.tsx', '')).toBe(
-      true,
-    );
+    expect(isObservationFile('apps/web/app/routes/chat.issue388-scratch.test.tsx', '')).toBe(true);
   });
 
   it('.scratch. を含むパスも対象になる', () => {
@@ -537,11 +533,9 @@ describe('findObservationDebts / judgeObservationScan（歯C: 3状態）', () =>
   });
 
   it('2項目が揃っていて期限が未来なら負債にならない', () => {
-    const content = [
-      '// @観測',
-      '// 終了条件: 直したら消す',
-      '// 見直し期限: 2099-01-01',
-    ].join('\n');
+    const content = ['// @観測', '// 終了条件: 直したら消す', '// 見直し期限: 2099-01-01'].join(
+      '\n',
+    );
     const debts = findObservationDebts([{ path: 'x.observed.test.ts', content }], '2026-08-27');
     expect(debts).toEqual([]);
   });
@@ -567,11 +561,7 @@ describe('findObservationDebts / judgeObservationScan（歯C: 3状態）', () =>
   });
 
   it('見直し期限の書式が壊れていれば EXIT_OBSERVATION_UNDECLARED（2026-9-1 のような書式）', () => {
-    const content = [
-      '// @観測',
-      '// 終了条件: 直したら消す',
-      '// 見直し期限: 2026-9-1',
-    ].join('\n');
+    const content = ['// @観測', '// 終了条件: 直したら消す', '// 見直し期限: 2026-9-1'].join('\n');
     const debts = findObservationDebts([{ path: 'x.observed.test.ts', content }], '2026-08-27');
     const judged = judgeObservationScan(['x.observed.test.ts'], debts);
     expect(judged.ok).toBe(false);
@@ -579,11 +569,9 @@ describe('findObservationDebts / judgeObservationScan（歯C: 3状態）', () =>
   });
 
   it('見直し期限が当日なら、まだ合格（> であって >= ではない）', () => {
-    const content = [
-      '// @観測',
-      '// 終了条件: 直したら消す',
-      '// 見直し期限: 2026-08-27',
-    ].join('\n');
+    const content = ['// @観測', '// 終了条件: 直したら消す', '// 見直し期限: 2026-08-27'].join(
+      '\n',
+    );
     const debts = findObservationDebts([{ path: 'x.observed.test.ts', content }], '2026-08-27');
     expect(debts).toEqual([]);
     const judged = judgeObservationScan(['x.observed.test.ts'], debts);
@@ -591,11 +579,9 @@ describe('findObservationDebts / judgeObservationScan（歯C: 3状態）', () =>
   });
 
   it('見直し期限の翌日なら EXIT_OBSERVATION_DUE（到達を見る番が来た）', () => {
-    const content = [
-      '// @観測',
-      '// 終了条件: 直したら消す',
-      '// 見直し期限: 2026-08-27',
-    ].join('\n');
+    const content = ['// @観測', '// 終了条件: 直したら消す', '// 見直し期限: 2026-08-27'].join(
+      '\n',
+    );
     const debts = findObservationDebts([{ path: 'x.observed.test.ts', content }], '2026-08-28');
     expect(debts).toHaveLength(1);
     expect(debts[0].kind).toBe('due');

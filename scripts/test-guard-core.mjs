@@ -449,7 +449,8 @@ export function findObservationDebts(files, today) {
       }
       debts.push({
         path: file.path,
-        line: findFieldLine(file.content, '見直し期限') ?? findFieldLine(file.content, '終了条件') ?? 1,
+        line:
+          findFieldLine(file.content, '見直し期限') ?? findFieldLine(file.content, '終了条件') ?? 1,
         kind: 'undeclared',
         detail: missing.join(' / '),
       });
