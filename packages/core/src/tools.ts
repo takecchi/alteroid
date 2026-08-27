@@ -3212,7 +3212,16 @@ export function createCloneTools(context: ToolContext) {
               // **runnerId は空欄にしない。** 取れていないことを「未記録」という
               // 文字列で読める形にする（AGENTS.md「取れない軸に0の行を作らない」と
               // 同じ理由——空欄だと「取れていない」のか「読み忘れ」なのか区別できない）。
-              `  runner: ${manager.runnerId ?? '未記録'}`,
+              // **`live: false` の理由を、分かる分だけ名指しする。** 状態名だけだと
+              // 「セッションが終わった」のか「宛先の器が消えた」のかが読めず、
+              // 打つ手（起こし直すのか、器の側を見るのか）が決まらない。
+              // **断定は「器が黙っている」までである** — その中で走っていたか
+              // どうかは、この観測からは言えない（`ManagerSummary.runnerLostSince`）。
+              `  runner: ${manager.runnerId ?? '未記録'}${
+                manager.runnerLostSince === undefined
+                  ? ''
+                  : `（この器は ${manager.runnerLostSince} 以降 名乗っていない。新しい委譲の宛先からも外れている ⟹ いま話しかけられない。**この委譲が失われたという意味ではない** — 黙っているのが器なのか経路なのかは、ここからは言えない）`
+              }`,
               `  cwd: ${manager.cwd}`,
               // **`lost` を状態名だけで済ませない。** 「終わった」と読まれると、
               // 完了していない仕事がそのまま片付く。何が起きたかと、次に何をすれば
@@ -3993,6 +4002,17 @@ export function createCloneTools(context: ToolContext) {
  * 確かめていないものを `lost` と名乗らせない代わりに、話しかけられるかを
  * 別の軸で持つ（`manager.ts` の `isLive()` / `ManagerSummary.live`）。
  *
+ * **⚠️ ただし、その補いは長らく効いていなかった。** `isLive()` が見ていたのは
+ * `status` / `attached` / `sessionId` の3つだけで、**どれもイベント駆動でしか
+ * 更新されない** — 器が合図を送らずに消えると `attached` は `true` のまま
+ * 残り、`live` もろとも上振れした。いまは名簿が10秒ごとの生存確認で立てた
+ * 判定（`state: 'lost'`）も材料にしているので、**黙った器に載っている委譲は
+ * `live: false` へ倒れる**（`manager.ts` の `#silentRunners()`）。
+ *
+ * **それでも `live` は「進んでいるか」ではない。** 器が生きていて合図も届いて
+ * いるのに手が止まっている委譲（拒否で詰まった分など）は `live: true` のまま
+ * である。この一覧が答えられるのは「話しかけられるか」までである。
+ *
  * **だから数えるときも2軸で数える。** 「走行中」の本数だけを出すと、
  * この一覧は上振れした数を自分の口で名乗ることになる。
  *
@@ -4008,6 +4028,10 @@ function describeManagerCounts(managers: readonly ManagerSummary[]): string {
     const reachable = running.filter((m) => m.live).length;
     parts.push(`走行中 ${running.length} 本（うち話しかけられる ${reachable} 本）`);
   }
+  // **0 の行は作らない**（上の doc と同じ理由）。黙った器が1台も無いのか、
+  // そもそも数えていないのかを読めなくしないため、在るときだけ書く。
+  const orphaned = managers.filter((m) => m.runnerLostSince !== undefined).length;
+  if (orphaned > 0) parts.push(`宛先の器が名乗らなくなった ${orphaned} 本`);
   const waiting = managers.filter((m) => m.status === 'waiting_human').length;
   if (waiting > 0) parts.push(`返事待ち ${waiting} 本`);
   return (

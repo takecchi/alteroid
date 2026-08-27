@@ -37,9 +37,11 @@ import {
   type RunnerCredentialFingerprint,
   type RunnerEvent,
   type RunnerManagerState,
+  type RunnerEntry,
   type RunnerPlacementResources,
   type RunnerProfileFingerprint,
   type RunnerProfileResult,
+  type RunnerRegistry,
   type RunnerResumeCommand,
 } from './runner-protocol.js';
 import type { InboxEvent, Job, JobStatus, JournalEntry } from './schema.js';
@@ -6792,5 +6794,153 @@ describe('workspacePath を一度も聞けていない runner への cwd 省略�
     expect(fake.state.resumes[0]?.cwd).toBe('/work/project');
 
     await s.pool.stop();
+  });
+});
+
+/**
+ * 宛先の器が黙ったとき、`live` がそれを見る（#358 の系列）。
+ *
+ * **ここが塞いでいる穴**: `isLive()` が見ていた材料（`status` / `attached` /
+ * `sessionId`）は**どれもイベント駆動でしか更新されない**。runner の器が
+ * `closed` も `resume_failed` も送らずに消えると `attached` は `true` のまま
+ * 残り、`manager_list` は「走行中／話しかけられる」と名乗り続けた。
+ *
+ * デーモンは10秒ごとの生存確認で黙った器を `state: 'lost'` と判定しており、
+ * その器は新しい委譲の宛先からも既に外れている（`RunnerRegistry#list()` の doc
+ * 「`lost` は並ばない」）。**置き先として数えない器へ「話しかけられる」と
+ * 名乗るほうが食い違っていた。**
+ *
+ * **`status` は動かさない。** 黙っているのが器なのか経路なのかは片側からは
+ * 決められないので、`lost`（resume を試して戻れなかったという確かめた事実）を
+ * ここで名乗らせない。
+ */
+describe('宛先の器が黙ったことを live が見る', () => {
+  /**
+   * 名簿の判定だけを差し替える薄い皮。
+   *
+   * **実物の heartbeat を回さないのは、`lost` の判定に30秒（`HEARTBEAT_LOST_MS`）
+   * が要るからである。** ここで見たいのは「`entries()` が `lost` を告げたとき
+   * `live` がどう出るか」であって、`lost` を立てるまでの時間の測り方ではない
+   * （そちらは `runner-heartbeat.test.ts` が持つ）。
+   */
+  function withEntryState(
+    registry: RunnerRegistry,
+    runnerId: string,
+    patch: Partial<RunnerEntry>,
+  ): RunnerRegistry {
+    return {
+      list: () => registry.list(),
+      get: (id) => registry.get(id),
+      select: (input) => registry.select(input),
+      register: (source) => registry.register(source),
+      unregister: (label) => registry.unregister(label),
+      subscribe: (onOpen) => registry.subscribe(onOpen),
+      stop: () => registry.stop(),
+      entries: () =>
+        registry
+          .entries()
+          .map((entry) => (entry.runnerId === runnerId ? { ...entry, ...patch } : entry)),
+    };
+  }
+
+  async function seed(stores: Stores, job: Partial<Job> & { id: string }): Promise<void> {
+    const at = new Date().toISOString();
+    await stores.jobs.putJob({
+      managerId: job.id,
+      createdAt: at,
+      updatedAt: at,
+      status: 'running',
+      summary: '仕事',
+      request: '仕事',
+      cwd: '/work/project',
+      ...job,
+    } as Job);
+  }
+
+  it('黙ったと判定された器に載っている委譲は live: false になり、その判定時刻を運ぶ', async () => {
+    const stores = createMemoryStores();
+    // **`sessionId` を持たせる。** これが在ると、いままでの `isLive()` は
+    // 「戻る先が在る」として `live: true` を返していた（この試験が守る差分）。
+    await seed(stores, { id: 'mgr-orphan', runnerId: 'runner-a', sessionId: 'sess-a' });
+    const a = new FakePoolRunner('runner-a', { managers: 0 });
+    const real = createRunnerRegistry([a]);
+    const registry = withEntryState(real, 'runner-a', {
+      state: 'lost',
+      since: '2026-08-27T09:00:00.000Z',
+    });
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    const listed = await pool.list();
+    const orphan = listed.find((m) => m.managerId === 'mgr-orphan');
+
+    expect(orphan?.live).toBe(false);
+    expect(orphan?.runnerLostSince).toBe('2026-08-27T09:00:00.000Z');
+    // **`status` は動かしていない。** 「黙った器に載っている」は「戻れなかった」
+    // ではないので、`lost` という名前をここで使わない。
+    expect(orphan?.status).toBe('running');
+
+    await pool.stop();
+    await real.stop();
+  });
+
+  it('同じ委譲は、器が黙っていなければ live: true のままで、欄も出ない', async () => {
+    const stores = createMemoryStores();
+    await seed(stores, { id: 'mgr-orphan', runnerId: 'runner-a', sessionId: 'sess-a' });
+    const a = new FakePoolRunner('runner-a', { managers: 0 });
+    const registry = createRunnerRegistry([a]);
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    const listed = await pool.list();
+    const orphan = listed.find((m) => m.managerId === 'mgr-orphan');
+
+    expect(orphan?.live).toBe(true);
+    // **欄ごと消える。** 「黙っていない」を `false` のような値で書かない。
+    expect(orphan).not.toHaveProperty('runnerLostSince');
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  it('宛先が書かれていない古い委譲は、黙った器の判定に巻き込まない', async () => {
+    const stores = createMemoryStores();
+    // `runnerId` を持たない世代。どの器に居たのかをこの情報だけでは決められない。
+    await seed(stores, { id: 'mgr-legacy', sessionId: 'sess-legacy' });
+    const a = new FakePoolRunner('runner-a', { managers: 0 });
+    const real = createRunnerRegistry([a]);
+    const registry = withEntryState(real, 'runner-a', {
+      state: 'lost',
+      since: '2026-08-27T09:00:00.000Z',
+    });
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    const listed = await pool.list();
+    const legacy = listed.find((m) => m.managerId === 'mgr-legacy');
+
+    expect(legacy?.live).toBe(true);
+    expect(legacy).not.toHaveProperty('runnerLostSince');
+
+    await pool.stop();
+    await real.stop();
+  });
+
+  it('runner_list の内訳にも同じ live が出る（2つの道具で字面が割れない）', async () => {
+    const stores = createMemoryStores();
+    await seed(stores, { id: 'mgr-orphan', runnerId: 'runner-a', sessionId: 'sess-a' });
+    const a = new FakePoolRunner('runner-a', { managers: 0 });
+    const real = createRunnerRegistry([a]);
+    const registry = withEntryState(real, 'runner-a', {
+      state: 'lost',
+      since: '2026-08-27T09:00:00.000Z',
+    });
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    const overview = await pool.runners();
+
+    expect(overview.runners.find((r) => r.runnerId === 'runner-a')?.managers).toEqual([
+      { managerId: 'mgr-orphan', status: 'running', live: false },
+    ]);
+
+    await pool.stop();
+    await real.stop();
   });
 });

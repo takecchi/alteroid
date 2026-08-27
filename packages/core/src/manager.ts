@@ -106,6 +106,22 @@ export interface ManagerSummary {
    * られない。この組を出さないのは `isLive()` の仕事である。
    */
   live: boolean;
+  /**
+   * 宛先の器を、名簿が「名乗らなくなった」と判定した時刻（ISO8601）。判定して
+   * いなければ**欄ごと消える**。
+   *
+   * **`live: false` の理由を1つだけ名指しする欄である。** `live` は「話しかけ
+   * られるか」しか言わないので、`false` を見た側は「セッションが終わったのか」
+   * 「宛先の器が消えたのか」を区別できない。区別できないと打つ手が決まらない
+   * （起こし直すのか、器の側を見るのか）。
+   *
+   * **`status` は動かさない。** ここに出るのは「宛先の器が黙った」という名簿の
+   * 判定であって、「この委譲が失われた」ではない — 黙っているのが器なのか経路
+   * なのかは片側からは決められず、器の中でまだ走っている可能性が残る
+   * （`RunnerRegistryOptions.onLost` の doc）。`lost` は resume を試して戻れ
+   * なかったという**確かめた事実**に付く名前なので、ここでその名前を使わない。
+   */
+  runnerLostSince?: string;
   cwd: string;
   request: string;
   startedAt: string;
@@ -1279,7 +1295,8 @@ class Pool implements ManagerPool {
       role: 'outbound',
       text: `[${managerId}] ${input.request}`,
     });
-    return summaryOf(record, isLive(record));
+    const silent = this.#silentRunners();
+    return summaryOf(record, isLive(record, silent), lostSinceOf(record, silent));
   }
 
   /**
@@ -1405,12 +1422,45 @@ class Pool implements ManagerPool {
     return { outcome: 'delivered', detail: '追加指示として届けた。' };
   }
 
+  /**
+   * 名簿が「名乗らなくなった」と判定した器（`runnerId` → その判定が立った時刻）。
+   *
+   * **ここで新たに runner を叩かない。** `RunnerRegistry#entries()` が10秒ごとの
+   * 生存確認で既に立てている判定をそのまま読むだけである（#543 が
+   * `#runnerBacklog` で採ったのと同じ形。一覧を出すたびに往復を増やさない）。
+   *
+   * **`state === 'lost'` だけを採る（ホワイトリスト）。** 残る3つ
+   * （`connecting` / `unreachable` / `unusable`）は「まだ一度も開けていない」側
+   * で、`entry.client === null` のまま立つ状態である。委譲の宛先として台帳に
+   * 書かれた `runnerId` は `select()` が選んだ後にしか付かない（＝一度は
+   * `connected` になった器）ので、**確かめた判定だけを数えるほうへ倒してある。**
+   * 数え漏らしたときに倒れる先は「今までどおり `live` を計算する」であって、
+   * 「黙った器を話しかけられると名乗る」より悪くはならない。
+   *
+   * **`runnerId` を名乗れていない行は数えない。** `RunnerEntry.runnerId` は
+   * 聞けたときだけ載る（`heardRunnerIdOf`）ので、無い行を数え入れると、
+   * どの委譲に当たるのかを決められないまま `live` を倒すことになる。
+   */
+  #silentRunners(): ReadonlyMap<string, string> {
+    const silent = new Map<string, string>();
+    for (const entry of this.#runners.entries()) {
+      if (entry.state !== 'lost') continue;
+      if (entry.runnerId === undefined) continue;
+      silent.set(entry.runnerId, entry.since);
+    }
+    return silent;
+  }
+
   async list(): Promise<ManagerSummary[]> {
     await this.#ensureConnected();
 
+    const silent = this.#silentRunners();
     const known = new Map<string, ManagerSummary>();
     for (const record of this.#records.values()) {
-      known.set(record.job.id, summaryOf(record, isLive(record)));
+      known.set(
+        record.job.id,
+        summaryOf(record, isLive(record, silent), lostSinceOf(record, silent)),
+      );
     }
     // 台帳にしか無い分も見せる。**`live: false` を決め打ちしない。** `#retire`
     // （終端した委譲を `#records` から外す）が入った後は、「台帳にしか無い」は
@@ -1421,7 +1471,10 @@ class Pool implements ManagerPool {
     for (const job of await this.#stores.jobs.listJobs()) {
       if (known.has(job.id)) continue;
       const fallback: ManagerRecord = { job, waiting: [], attached: false };
-      known.set(job.id, summaryOf(fallback, isLive(fallback)));
+      known.set(
+        job.id,
+        summaryOf(fallback, isLive(fallback, silent), lostSinceOf(fallback, silent)),
+      );
     }
     return [...known.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
   }
@@ -1689,6 +1742,7 @@ class Pool implements ManagerPool {
       }
     }
 
+    const silent = this.#silentRunners();
     const resumed: ManagerSummary[] = [];
     for (const job of await this.#stores.jobs.listJobs()) {
       if (this.#records.has(job.id)) continue;
@@ -1746,7 +1800,7 @@ class Pool implements ManagerPool {
         await this.#persist(record);
         // 「runner の中で走り続けている」は `lost` にも `failed` にも言えない。
         if (attached) this.#notifyRestored(record, 'attached');
-        resumed.push(summaryOf(record, isLive(record)));
+        resumed.push(summaryOf(record, isLive(record, silent), lostSinceOf(record, silent)));
         continue;
       }
 
@@ -1816,7 +1870,7 @@ class Pool implements ManagerPool {
         text: `[${job.id}] （再起動後の再開）${nudge}`,
       });
       this.#notifyRestored(record, 'resumed');
-      resumed.push(summaryOf(record, isLive(record)));
+      resumed.push(summaryOf(record, isLive(record, silent), lostSinceOf(record, silent)));
     }
     return resumed;
   }
@@ -4321,7 +4375,19 @@ function restartNudge(status: JobStatus, cause: RestartCause): string {
  * `status: lost`（前のセッションへ戻れなかった）と `live: true`（繋がっている）
  * という両立しない組が出る。
  */
-function isLive(record: ManagerRecord): boolean {
+/**
+ * 宛先の器について名簿が立てた「黙った」判定を引く。**宛先が書かれていない委譲は
+ * 引かない** — どの器に居たのかをこの情報だけでは決められない（`#restoreJobs` の
+ * 「宛先が書かれていないジョブはここでは触らない」と同じ扱い）。
+ */
+function lostSinceOf(
+  record: ManagerRecord,
+  silentRunners: ReadonlyMap<string, string>,
+): string | undefined {
+  return record.job.runnerId === undefined ? undefined : silentRunners.get(record.job.runnerId);
+}
+
+function isLive(record: ManagerRecord, silentRunners: ReadonlyMap<string, string>): boolean {
   // **`lost` は何より先に見る。** 「繋がっている（`attached`）なら live」を先に
   // 置くと、両立しない組を出さないことが「両者が同時に立つ代入が無い」という
   // 追跡結果に頼ることになる。実際に立つ隙間がある — 起動時の引き取りは runner が
@@ -4348,6 +4414,29 @@ function isLive(record: ManagerRecord): boolean {
   // 触る人は、新しい終端状態が「戻せないと確定している」ものなら、ここに
   // 足すのが正しい。
   if (record.job.status === 'lost' || record.job.status === 'stopped') return false;
+  // **宛先の器が黙ったなら、下の2つを見るまでもない。**
+  //
+  // ここから下の材料（`attached` / `sessionId`）は**どちらもイベント駆動でしか
+  // 更新されない**。器が合図（`closed` / resume 失敗）を送らずに消えると
+  // `attached` は `true` のまま残り、`isLive()` は「話しかけられる」と名乗り
+  // 続ける。**器が消えた委譲を `running` から動かす経路がデーモンに無いこと**
+  // （`tools.ts` の `describeManagerCounts` の doc）は `live` が補う前提で
+  // 書かれていたが、**その `live` 自身が同じ材料しか見ていなかった** — 補うと
+  // 名指しされていた層が、実際には補っていなかった。
+  //
+  // **足しているのは、デーモンが自分で既に確定させた判定だけである。** 名簿は
+  // 10秒ごとの生存確認で黙った器を `state: 'lost'` にしており
+  // （`runner-protocol.ts` の `#markSilent`。1回の取りこぼしでは動かさず
+  // `HEARTBEAT_LOST_MS` を超えてから倒す）、その器は新しい委譲の宛先からも
+  // 既に外れている（`RunnerRegistry#list()` の doc「`lost` は並ばない」）。
+  // **置き先として数えない器に対して「話しかけられる」と名乗るほうが、そもそも
+  // 食い違っていた。**
+  //
+  // **`status` は動かさない。** 黙っているのが器なのか経路なのかは片側からは
+  // 決められないので、`lost`（＝resume を試して戻れなかったという確かめた事実）
+  // をここで名乗らせることはしない。言えるのは「いま話しかけられない」だけで、
+  // それはまさに `live` が言う内容である。
+  if (record.job.runnerId !== undefined && silentRunners.has(record.job.runnerId)) return false;
   // runner にセッションが居るなら、そのまま送れる。
   if (record.attached) return true;
   // 繋がっていない像は「戻せるか」で決まる。session_id が無いものは戻る先が無い。
@@ -4365,12 +4454,19 @@ function isLive(record: ManagerRecord): boolean {
  * 今度は「繋がっているのに切れて見える」が黙って混ざる。**判断そのものを省略
  * させない**のが要点なので、引数を必須にして呼ぶ側に必ず書かせる。
  */
-function summaryOf(record: ManagerRecord, live: boolean): ManagerSummary {
+function summaryOf(
+  record: ManagerRecord,
+  live: boolean,
+  runnerLostSince: string | undefined,
+): ManagerSummary {
   const { job } = record;
   return {
     managerId: job.id,
     status: job.status,
     live,
+    // **`live` と同じ引数の作法で運ぶ（省略可能な引数にしない）。** 既定を置くと、
+    // 足す人が考えなかったことが「宛先の器は黙っていない」という主張になって外へ出る。
+    ...(runnerLostSince === undefined ? {} : { runnerLostSince }),
     cwd: job.cwd ?? '',
     request: job.request ?? job.summary,
     startedAt: job.createdAt,

@@ -3209,6 +3209,57 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * **`live: false` の理由を、分かる分だけ名指しする。**
+   *
+   * 状態名だけだと「セッションが終わった」のか「宛先の器が消えた」のかが読めず、
+   * 打つ手（起こし直すのか、器の側を見るのか）が決まらない。
+   *
+   * **断定は「器が黙っている」までである。** その中で走っていたかどうかは、この
+   * 観測からは言えない —— 落ちる直前にマージまで済ませていた仕事が `lost` に
+   * なって一覧が嘘をついた実例（`manager_list` の `lost` 行の注釈）と同じ形の
+   * 嘘を、ここで作らないため。
+   */
+  it('宛先の器が黙っている委譲は、その判定時刻と「失われたとは限らない」を行に添える', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const orphan = h.running[0];
+    if (!orphan) throw new Error('準備に失敗');
+    orphan.live = false;
+    orphan.runnerId = 'runner-a';
+    orphan.runnerLostSince = '2026-08-27T09:00:00.000Z';
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('runner: runner-a');
+    expect(reply).toContain('2026-08-27T09:00:00.000Z 以降 名乗っていない');
+    expect(reply).toContain('この委譲が失われたという意味ではない');
+  });
+
+  it('黙った器に載っている本数を件数の行にも出す', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    await h.call('manager_start', { request: 'B' });
+    const orphan = h.running[1];
+    if (!orphan) throw new Error('準備に失敗');
+    orphan.live = false;
+    orphan.runnerLostSince = '2026-08-27T09:00:00.000Z';
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('宛先の器が名乗らなくなった 1 本');
+  });
+
+  /** **0 の行を作らない**（該当が無いときは書かない）。 */
+  it('黙った器が1台も無ければ、その区分は件数の行に出さない', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).not.toContain('宛先の器が名乗らなくなった');
+  });
+
+  /**
    * **0 の行を作らない**（AGENTS.md の地雷表）。「返事待ち 0本」と書くと、
    * 数えて 0 だったのか、そもそも数えていないのかが読めなくなる。
    */
