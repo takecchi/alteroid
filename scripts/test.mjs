@@ -29,17 +29,19 @@
  * `pnpm test --maxWorkers=4` も `pnpm test <パスの一部>` も
  * `pnpm test --reporter=verbose` も、これまでどおり動く。
  *
- * ## exit code（5値。混ぜない）
+ * ## exit code（7値。混ぜない）
  *
- * | 出所                      | 意味                                             |
- * | ------------------------- | ------------------------------------------------ |
- * | vitest 自身の exit code   | **飲み込まない。そのまま返す**（`code !== 0`）    |
- * | `EXIT_ZERO_PASSED`（2）   | 歯A: 集計行はあるが passed が0                    |
- * | `EXIT_UNKNOWN`（3）       | 歯A: 集計行そのものが出ていない（判定できない）    |
- * | `EXIT_STATIC_SKIP`（4）   | 歯B: 無条件の静的 skip を検出                      |
- * | `EXIT_SCAN_EMPTY`（5）    | 歯B: 走査対象が0ファイル（判定できない）           |
+ * | 出所                                | 意味                                             |
+ * | ----------------------------------- | ------------------------------------------------ |
+ * | vitest 自身の exit code             | **飲み込まない。そのまま返す**（`code !== 0`）    |
+ * | `EXIT_ZERO_PASSED`（2）             | 歯A: 集計行はあるが passed が0                    |
+ * | `EXIT_UNKNOWN`（3）                 | 歯A: 集計行そのものが出ていない（判定できない）    |
+ * | `EXIT_STATIC_SKIP`（4）             | 歯B: 無条件の静的 skip を検出                      |
+ * | `EXIT_SCAN_EMPTY`（5）              | 歯B/歯C: 走査対象が0ファイル（判定できない）       |
+ * | `EXIT_OBSERVATION_UNDECLARED`（6）  | 歯C: 観測用テストの終了条件／見直し期限が無い、または書式が壊れている |
+ * | `EXIT_OBSERVATION_DUE`（7）         | 歯C: 観測用テストの見直し期限を過ぎた              |
  *
- * 歯A/歯Bは vitest が exit 0 を返した後にしか判定しない。**vitest が非0で
+ * 歯A/歯B/歯Cは vitest が exit 0 を返した後にしか判定しない。**vitest が非0で
  * 落ちたら、ラッパの検査は一切走らせず、その exit code をそのまま返す**
  * （「自分の検査は通った」で上書きしない）。**ラッパ自身が例外で落ちたときも
  * exit 0 にはならない**（末尾の `main().catch(...)` が exit code 1 で拾う。
@@ -49,7 +51,12 @@
 import { spawn } from 'node:child_process';
 import process from 'node:process';
 
-import { ROOT, judgeExecution, runStaticSkipGuard } from './test-guard-core.mjs';
+import {
+  ROOT,
+  judgeExecution,
+  runObservationGuard,
+  runStaticSkipGuard,
+} from './test-guard-core.mjs';
 
 /** vitest を起こし、標準出力・標準エラーを素通ししながら溜める。 */
 function runVitest(args) {
@@ -103,6 +110,15 @@ async function main() {
   if (!staticJudgement.ok) {
     process.stderr.write(`\n${staticJudgement.message}\n`);
     process.exitCode = staticJudgement.exitCode;
+    return;
+  }
+
+  // 歯C: 観測用テストの見直し期限（#396）。走査対象0ファイル／申告不備／
+  // 期限超過／合格の4値。today はここでだけ現在時刻から作る（既定引数）。
+  const observationJudgement = await runObservationGuard(ROOT);
+  if (!observationJudgement.ok) {
+    process.stderr.write(`\n${observationJudgement.message}\n`);
+    process.exitCode = observationJudgement.exitCode;
     return;
   }
 

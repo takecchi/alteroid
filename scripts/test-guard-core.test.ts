@@ -2,19 +2,27 @@ import { describe, expect, it } from 'vitest';
 
 // @ts-expect-error -- 素の .mjs（型宣言を持たない test-guard の中核）を読む
 import {
+  EXIT_OBSERVATION_DUE,
+  EXIT_OBSERVATION_UNDECLARED,
   EXIT_SCAN_EMPTY,
   EXIT_STATIC_SKIP,
   EXIT_UNKNOWN,
   EXIT_ZERO_PASSED,
   ROOT,
   collectMatchingTestFiles,
+  findObservationDebts,
   findUnconditionalSkips,
+  formatObservationGuardMessage,
   formatSkipGuardMessage,
+  isObservationFile,
   judgeExecution,
+  judgeObservationScan,
   judgeStaticSkipScan,
   parseAggregateLines,
   parsePassedCount,
   readIncludeGlobs,
+  readObservationDeclaration,
+  runObservationGuard,
   runStaticSkipGuard,
 } from './test-guard-core.mjs';
 
@@ -423,5 +431,235 @@ describe('runStaticSkipGuard（I/O込みの合成。実リポジトリに対し�
     if (!result.ok) {
       expect(result.exitCode).toBe(EXIT_SCAN_EMPTY);
     }
+  });
+});
+
+/**
+ * 歯C（Issue #396）: 観測用テストに終了条件と見直し期限を書かせ、期限を
+ * 過ぎたら赤くする。**今日の日付は 2026-08-27**（依頼時点）——ここで使う
+ * 「未来の期限」はすべてこれより後にしてある。
+ */
+describe('isObservationFile（歯C: 名乗りの判定）', () => {
+  it('名乗っていない普通のテストファイルは対象外（散文の「観測」を書いても素通り）', () => {
+    const content = [
+      '// これは観測記録である。書き捨てのテストではない。',
+      '// 終了条件: 直したら消す',
+      '// 見直し期限: 2020-01-01',
+    ].join('\n');
+    expect(isObservationFile('normal.test.ts', content)).toBe(false);
+  });
+
+  it('.observed. を含むパスは対象になる（孤児ブランチの実例そのもの）', () => {
+    expect(
+      isObservationFile('packages/core/src/inbox-delivery.observed.test.ts', ''),
+    ).toBe(true);
+  });
+
+  it('-scratch. を含むパスは対象になる（生きている枝の実例そのもの）', () => {
+    expect(isObservationFile('apps/web/app/routes/chat.issue388-scratch.test.tsx', '')).toBe(
+      true,
+    );
+  });
+
+  it('.scratch. を含むパスも対象になる', () => {
+    expect(isObservationFile('packages/core/src/x.scratch.test.ts', '')).toBe(true);
+  });
+
+  it('冒頭コメント領域の @観測 は対象になる', () => {
+    const content = [
+      '// @観測',
+      '// 終了条件: 直したら消す',
+      '// 見直し期限: 2099-01-01',
+      "import { it } from 'vitest';",
+    ].join('\n');
+    expect(isObservationFile('normal.test.ts', content)).toBe(true);
+  });
+
+  it('冒頭のコメント領域より後ろに書かれた @観測 は対象にならない', () => {
+    const content = [
+      '// 普通のコメント',
+      "import { it } from 'vitest';",
+      '// @観測 ← ここはコメント領域の外',
+    ].join('\n');
+    expect(isObservationFile('normal.test.ts', content)).toBe(false);
+  });
+});
+
+describe('readObservationDeclaration（歯C: 2項目を読む）', () => {
+  it('終了条件・見直し期限が両方揃っていれば両方読める', () => {
+    const content = [
+      '/**',
+      ' * @観測',
+      ' * 終了条件: 直したらこの記録を「基準」に書き換えるか捨てる',
+      ' * 見直し期限: 2099-01-01',
+      ' */',
+      "import { it } from 'vitest';",
+    ].join('\n');
+    expect(readObservationDeclaration(content)).toEqual({
+      終了条件: '直したらこの記録を「基準」に書き換えるか捨てる',
+      見直し期限: '2099-01-01',
+      見直し期限Raw: '2099-01-01',
+    });
+  });
+
+  it('全角コロンでも読める', () => {
+    const content = ['// 終了条件：直したら消す', '// 見直し期限：2099-01-01'].join('\n');
+    const decl = readObservationDeclaration(content);
+    expect(decl.終了条件).toBe('直したら消す');
+    expect(decl.見直し期限).toBe('2099-01-01');
+  });
+
+  it('終了条件が無ければ undefined', () => {
+    const content = '// 見直し期限: 2099-01-01';
+    expect(readObservationDeclaration(content).終了条件).toBeUndefined();
+  });
+
+  it('見直し期限が無ければ undefined（見直し期限Raw も undefined）', () => {
+    const content = '// 終了条件: 直したら消す';
+    const decl = readObservationDeclaration(content);
+    expect(decl.見直し期限).toBeUndefined();
+    expect(decl.見直し期限Raw).toBeUndefined();
+  });
+
+  it('見直し期限の書式が壊れている（ゼロ埋め無し）と 見直し期限 は undefined だが 見直し期限Raw には生の値が残る', () => {
+    const content = ['// 終了条件: 直したら消す', '// 見直し期限: 2026-9-1'].join('\n');
+    const decl = readObservationDeclaration(content);
+    expect(decl.見直し期限).toBeUndefined();
+    expect(decl.見直し期限Raw).toBe('2026-9-1');
+  });
+});
+
+describe('findObservationDebts / judgeObservationScan（歯C: 3状態）', () => {
+  it('名乗っていない普通のファイルは、2項目が無くても負債にならない（何を書いてあっても素通り）', () => {
+    const content = '// 何も申告していない、ただのテストファイル。';
+    const debts = findObservationDebts([{ path: 'normal.test.ts', content }], '2026-08-27');
+    expect(debts).toEqual([]);
+  });
+
+  it('2項目が揃っていて期限が未来なら負債にならない', () => {
+    const content = [
+      '// @観測',
+      '// 終了条件: 直したら消す',
+      '// 見直し期限: 2099-01-01',
+    ].join('\n');
+    const debts = findObservationDebts([{ path: 'x.observed.test.ts', content }], '2026-08-27');
+    expect(debts).toEqual([]);
+  });
+
+  it('終了条件が無ければ EXIT_OBSERVATION_UNDECLARED（judgeObservationScan 経由）', () => {
+    const content = ['// @観測', '// 見直し期限: 2099-01-01'].join('\n');
+    const debts = findObservationDebts([{ path: 'x.observed.test.ts', content }], '2026-08-27');
+    expect(debts).toHaveLength(1);
+    expect(debts[0].kind).toBe('undeclared');
+    const judged = judgeObservationScan(['x.observed.test.ts'], debts);
+    expect(judged.ok).toBe(false);
+    if (!judged.ok) {
+      expect(judged.exitCode).toBe(EXIT_OBSERVATION_UNDECLARED);
+    }
+  });
+
+  it('見直し期限が無ければ EXIT_OBSERVATION_UNDECLARED', () => {
+    const content = ['// @観測', '// 終了条件: 直したら消す'].join('\n');
+    const debts = findObservationDebts([{ path: 'x.observed.test.ts', content }], '2026-08-27');
+    const judged = judgeObservationScan(['x.observed.test.ts'], debts);
+    expect(judged.ok).toBe(false);
+    if (!judged.ok) expect(judged.exitCode).toBe(EXIT_OBSERVATION_UNDECLARED);
+  });
+
+  it('見直し期限の書式が壊れていれば EXIT_OBSERVATION_UNDECLARED（2026-9-1 のような書式）', () => {
+    const content = [
+      '// @観測',
+      '// 終了条件: 直したら消す',
+      '// 見直し期限: 2026-9-1',
+    ].join('\n');
+    const debts = findObservationDebts([{ path: 'x.observed.test.ts', content }], '2026-08-27');
+    const judged = judgeObservationScan(['x.observed.test.ts'], debts);
+    expect(judged.ok).toBe(false);
+    if (!judged.ok) expect(judged.exitCode).toBe(EXIT_OBSERVATION_UNDECLARED);
+  });
+
+  it('見直し期限が当日なら、まだ合格（> であって >= ではない）', () => {
+    const content = [
+      '// @観測',
+      '// 終了条件: 直したら消す',
+      '// 見直し期限: 2026-08-27',
+    ].join('\n');
+    const debts = findObservationDebts([{ path: 'x.observed.test.ts', content }], '2026-08-27');
+    expect(debts).toEqual([]);
+    const judged = judgeObservationScan(['x.observed.test.ts'], debts);
+    expect(judged.ok).toBe(true);
+  });
+
+  it('見直し期限の翌日なら EXIT_OBSERVATION_DUE（到達を見る番が来た）', () => {
+    const content = [
+      '// @観測',
+      '// 終了条件: 直したら消す',
+      '// 見直し期限: 2026-08-27',
+    ].join('\n');
+    const debts = findObservationDebts([{ path: 'x.observed.test.ts', content }], '2026-08-28');
+    expect(debts).toHaveLength(1);
+    expect(debts[0].kind).toBe('due');
+    const judged = judgeObservationScan(['x.observed.test.ts'], debts);
+    expect(judged.ok).toBe(false);
+    if (!judged.ok) {
+      expect(judged.exitCode).toBe(EXIT_OBSERVATION_DUE);
+      expect(judged.exitCode).not.toBe(EXIT_OBSERVATION_UNDECLARED);
+    }
+  });
+
+  it('matchedPaths が0件なら EXIT_SCAN_EMPTY（judgeObservationScan を直接呼ぶ。debts の中身に関係なく）', () => {
+    const judged = judgeObservationScan([], []);
+    expect(judged.ok).toBe(false);
+    if (!judged.ok) {
+      expect(judged.exitCode).toBe(EXIT_SCAN_EMPTY);
+      expect(judged.exitCode).not.toBe(EXIT_OBSERVATION_UNDECLARED);
+      expect(judged.exitCode).not.toBe(EXIT_OBSERVATION_DUE);
+    }
+  });
+});
+
+describe('formatObservationGuardMessage', () => {
+  it('undeclared: file:line・次の手（2項目を書くこと）を含む', () => {
+    const msg = formatObservationGuardMessage(
+      [{ path: 'x.observed.test.ts', line: 2, detail: '終了条件が無い' }],
+      'undeclared',
+    );
+    expect(msg).toContain('x.observed.test.ts:2');
+    expect(msg).toContain('終了条件');
+    expect(msg).toContain('見直し期限');
+  });
+
+  it('due: file:line・3つの次の手（基準へ書き換える／捨てる／延ばす）を含む', () => {
+    const msg = formatObservationGuardMessage(
+      [{ path: 'x.observed.test.ts', line: 3, detail: '終了条件: a / 見直し期限: 2026-08-27' }],
+      'due',
+    );
+    expect(msg).toContain('x.observed.test.ts:3');
+    expect(msg).toContain('基準');
+    expect(msg).toContain('捨てる');
+    expect(msg).toContain('延ばす');
+  });
+});
+
+describe('runObservationGuard（I/O込みの合成。実リポジトリに対して回す）', () => {
+  it('実在の ROOT に対して回すと合格になる（main に観測用テストが無い前提。#396 要件6の確認そのもの）', async () => {
+    const result = await runObservationGuard(ROOT, '2026-08-27');
+    expect(result.ok).toBe(true);
+  });
+
+  it('存在しないルートを渡すと「判定できない」に倒れる（0ファイル、EXIT_SCAN_EMPTY）', async () => {
+    const result = await runObservationGuard(
+      '/nonexistent-root-for-test-guard-core-test',
+      '2026-08-27',
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.exitCode).toBe(EXIT_SCAN_EMPTY);
+    }
+  });
+
+  it('today を渡さなければ既定値（現在時刻）で回る——例外を投げず、実在の ROOT で合格になる', async () => {
+    const result = await runObservationGuard(ROOT);
+    expect(result.ok).toBe(true);
   });
 });

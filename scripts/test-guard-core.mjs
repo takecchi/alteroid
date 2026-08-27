@@ -27,6 +27,22 @@
  * テストファイルを走査するので、歯Bの単体テスト自身（`test-guard-core.test.ts`）が
  * `.skip` されたら歯Bが捕まえる。** 判別器が自分を守る形になっている。
  *
+ * - **歯C（観測用テストの見直し期限）**: Issue #396。「観測用テスト」——
+ *   いまの挙動を記録しただけで受け入れ基準ではない、と自分で名乗るテスト——は、
+ *   終了条件を本文に書いていても腐る。実例（孤児ブランチ
+ *   `packages/core/src/inbox-delivery.observed.test.ts`）は「直すと決めた時点で
+ *   『基準』に書き換えるか捨てること」と書いていたが、その終了条件に到達した
+ *   後もアサーションが緑のまま残り、テスト名が嘘になった。**足りなかったのは
+ *   「終了条件を書かせること」ではなく「到達したかを誰が・いつ見るか」——だから
+ *   歯Cは、その「見る人」を `pnpm test` にする。** 観測用テストと名乗った
+ *   ファイル（パスの慣習 `.observed.` / `.scratch.` / `-scratch.`、または
+ *   冒頭コメントの `@観測`）にだけ「終了条件」「見直し期限」を書かせ、期限を
+ *   過ぎたら赤くする。**名乗っていない普通のテストファイルは対象外**
+ *   （散文の「観測」は137ファイルが別の意味で使っており、誤検出になる —
+ *   名乗りはパスの慣習と `@観測` の2形だけに絞る）。**走査対象0ファイル**
+ *   （見ていない）・**申告不備**（書かせる項目が書かれていない）・**期限超過**
+ *   （到達を見る番が来た）の3状態を混ぜない（歯Bと同じ作法）。
+ *
  * ## 変異試験ハーネスとの関係（実装前に実測して確定させたこと）
  *
  * `.claude/skills/mutation-testing/mutate-core.mjs` の `decideJudgementCategory` は
@@ -274,6 +290,224 @@ export function judgeStaticSkipScan(matchedPaths, hits) {
   return { ok: true, scanned: matchedPaths.length };
 }
 
+// ── 歯C: 観測用テストの見直し期限（#396） ──────────────────────────
+
+/** 歯Cが「申告不備」と判定したときの exit code（歯A/歯Bのどれとも混ざらない
+ * 新規の値）。「名乗ったのに終了条件／見直し期限が無い、または見直し期限の
+ * 書式が壊れている」——書かせる項目が書かれていない、という状態。 */
+export const EXIT_OBSERVATION_UNDECLARED = 6;
+
+/** 歯Cが「見直し期限を過ぎた」と判定したときの exit code。**到達を見る番が
+ * 来た**という状態であって、申告不備（`EXIT_OBSERVATION_UNDECLARED`）とは
+ * 別に扱う——前者は「書かれていない」、後者は「書かれてはいるが古い」。 */
+export const EXIT_OBSERVATION_DUE = 7;
+
+/** `YYYY-MM-DD`（ゼロ埋め4桁-2桁-2桁）にちょうど一致するか。`2026-9-1` の
+ * ようなゼロ埋め無しは弾く——文字列比較で日付順と一致させるための前提
+ * （下の `today > 見直し期限` の比較がこれに乗っている）。 */
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * ファイル先頭の「コメント領域」を切り出す。**コメントでも空行でもない
+ * 最初の行の直前まで**（`//`・`/*`・` *`・ブロックコメント終端（`*` に続けて
+ * `/`）で始まる行と空行だけを通す）。それより後ろは見ない——`@観測` の
+ * 名乗りも `終了条件` / `見直し期限` の申告も、この領域の中でだけ拾う。
+ */
+function leadingCommentArea(content) {
+  const areaLines = [];
+  for (const line of content.split('\n')) {
+    if (
+      line.trim() === '' ||
+      line.startsWith('//') ||
+      line.startsWith('/*') ||
+      line.startsWith(' *') ||
+      line.startsWith('*/')
+    ) {
+      areaLines.push(line);
+    } else {
+      break;
+    }
+  }
+  return areaLines.join('\n');
+}
+
+/** 行頭のコメント記号（`/**`・`/*`・ブロックコメント終端（`*` に続けて `/`）・
+ * `*`・`//`）と、それに続く空白を1つだけ剥がす。
+ * `" * 終了条件: xxx"` → `"終了条件: xxx"`。 */
+function stripCommentPrefix(line) {
+  return line.replace(/^\s*(\/\*\*|\/\*|\*\/|\*|\/\/)\s?/, '');
+}
+
+/** コメント領域の中から `<label>: <値>` / `<label>：<値>`（全角コロンも通す）
+ * の行を探し、値（前後の空白を除いたもの）を返す。見つからなければ
+ * `undefined`。 */
+function extractField(area, label) {
+  const re = new RegExp(`^${label}\\s*[:：]\\s*(.*)$`);
+  for (const line of area.split('\n')) {
+    const m = stripCommentPrefix(line).trim().match(re);
+    if (m) return m[1].trim();
+  }
+  return undefined;
+}
+
+/** コメント領域の中で `<label>: …` の行が現れる行番号（1始まり）。無ければ
+ * `null`（`findObservationDebts` がメッセージの `file:line` に使う）。 */
+function findFieldLine(content, label) {
+  const re = new RegExp(`^${label}\\s*[:：]`);
+  const lines = content.split('\n');
+  const areaLineCount = leadingCommentArea(content).split('\n').length;
+  for (let i = 0; i < areaLineCount; i++) {
+    if (re.test(stripCommentPrefix(lines[i]).trim())) return i + 1;
+  }
+  return null;
+}
+
+/**
+ * `path` / `content` が「観測用テスト」を名乗っているか。**名乗りは2形だけ**
+ * （散文の「観測」「書き捨て」等では判定しない——137ファイルが「観測」を
+ * 別の意味で使っており誤検出になることを実測済み）。
+ *
+ * 1. パスの慣習: ファイル名に `.observed.` / `.scratch.` / `-scratch.` を含む
+ *    （実在の2例: 孤児ブランチの `inbox-delivery.observed.test.ts`、
+ *    `origin/measure/fb1c80e3-388-signal-scaffold` の
+ *    `chat.issue388-scratch.test.tsx`）
+ * 2. 冒頭コメント領域に `@観測` という語が在る（領域より後ろは見ない）
+ */
+export function isObservationFile(path, content) {
+  if (path.includes('.observed.') || path.includes('.scratch.') || path.includes('-scratch.')) {
+    return true;
+  }
+  return leadingCommentArea(content).includes('@観測');
+}
+
+/**
+ * 冒頭コメント領域から「終了条件」「見直し期限」を読む。**見つからない欄は
+ * `undefined`**（`終了条件` は空文字列も `undefined` 扱い。`見直し期限` は
+ * `YYYY-MM-DD` に一致しなければ ── 書式が壊れていても ── `undefined` 扱い）。
+ * `見直し期限Raw` は書式検証前の生の値（見つからなければ `undefined`）——
+ * 「見つからない」と「書式が壊れている」をメッセージで書き分けるための
+ * 診断用の補助フィールドで、必須の2項目には含まれない。
+ */
+export function readObservationDeclaration(content) {
+  const area = leadingCommentArea(content);
+  const termRaw = extractField(area, '終了条件');
+  const deadlineRaw = extractField(area, '見直し期限');
+  return {
+    終了条件: termRaw && termRaw.length > 0 ? termRaw : undefined,
+    見直し期限: deadlineRaw !== undefined && DATE_RE.test(deadlineRaw) ? deadlineRaw : undefined,
+    見直し期限Raw: deadlineRaw,
+  };
+}
+
+/** 歯Cが落ちたときの文言。ファイル:行と、次の手を書く（`formatSkipGuardMessage`
+ * と同じ形）。`kind` ごとに次の手が違う——`undeclared` は「2項目を書くこと」
+ * だけだが、`due` は3つの選択肢がある。 */
+export function formatObservationGuardMessage(debts, kind) {
+  const lines = debts.map((d) => `  ${d.path}:${d.line}  ${d.detail}`);
+  const header =
+    kind === 'undeclared'
+      ? `test-guard: 観測用テストの申告不備 — 終了条件／見直し期限が無い、または書式が壊れているものが ${debts.length} 件:`
+      : `test-guard: 観測用テストの見直し期限超過 — 到達を見る番が来たものが ${debts.length} 件:`;
+  const footer =
+    kind === 'undeclared'
+      ? [
+          '',
+          '観測用テストと名乗るなら、冒頭コメント領域に',
+          '「終了条件: <空でない文字列>」「見直し期限: YYYY-MM-DD」の両方を書くこと。',
+        ]
+      : [
+          '',
+          '次の手（いずれか）: 終了条件に到達していれば「基準」に書き換える／捨てる／',
+          'まだ到達していないなら見直し期限を延ばす（延ばすなら、なぜ延ばすかも一緒に書く）。',
+        ];
+  return [header, ...lines, ...footer].join('\n');
+}
+
+/**
+ * `files`（`{ path, content }` の配列）のうち `isObservationFile` に当たる
+ * ものだけを見て、負債を返す。**名乗っていないファイルは中身を見ない**
+ * （何を書いてあっても素通り）。`today` は `'YYYY-MM-DD'` の文字列——**この
+ * 関数の中で `new Date()` を呼ばない**（呼べばテストが日付で腐る。それは
+ * この Issue が直そうとしている当のものである）。日付の比較は文字列比較
+ * （`today > 見直し期限`）でよい——`YYYY-MM-DD` は辞書順が日付順と一致する。
+ * **期限当日はまだ赤くしない**（`>` であって `>=` ではない）。
+ */
+export function findObservationDebts(files, today) {
+  const debts = [];
+  for (const file of files) {
+    if (!isObservationFile(file.path, file.content)) continue;
+    const decl = readObservationDeclaration(file.content);
+    if (decl.終了条件 === undefined || decl.見直し期限 === undefined) {
+      const missing = [];
+      if (decl.終了条件 === undefined) missing.push('終了条件が無い');
+      if (decl.見直し期限 === undefined) {
+        missing.push(
+          decl.見直し期限Raw !== undefined
+            ? `見直し期限の書式が壊れている（${decl.見直し期限Raw}）`
+            : '見直し期限が無い',
+        );
+      }
+      debts.push({
+        path: file.path,
+        line: findFieldLine(file.content, '見直し期限') ?? findFieldLine(file.content, '終了条件') ?? 1,
+        kind: 'undeclared',
+        detail: missing.join(' / '),
+      });
+      continue;
+    }
+    if (today > decl.見直し期限) {
+      debts.push({
+        path: file.path,
+        line: findFieldLine(file.content, '見直し期限') ?? 1,
+        kind: 'due',
+        detail: `終了条件: ${decl.終了条件} / 見直し期限: ${decl.見直し期限}（today=${today}）`,
+      });
+    }
+  }
+  return debts;
+}
+
+/**
+ * 歯Cの最終判定。3状態を混ぜない（`judgeStaticSkipScan` と同じ作法）:
+ * `matchedPaths.length === 0` → 判定できない（`EXIT_SCAN_EMPTY`、歯Bと同じ
+ * 値——「見ていない」という意味そのものが歯Bと同じ走査に乗っているため）／
+ * `undeclared` な負債が1件以上 → 申告不備（`EXIT_OBSERVATION_UNDECLARED`）／
+ * `due` な負債が1件以上 → 見直し期限超過（`EXIT_OBSERVATION_DUE`）／それ以外
+ * → 合格。**`undeclared` を `due` より先に見る**——申告そのものが壊れている
+ * ファイルは、期限の比較ができない（`見直し期限` が `undefined` のままでは
+ * `today > 見直し期限` が意味を持たない）ので、先に直すべき負債として優先する。
+ */
+export function judgeObservationScan(matchedPaths, debts) {
+  if (matchedPaths.length === 0) {
+    return {
+      ok: false,
+      exitCode: EXIT_SCAN_EMPTY,
+      message: [
+        'test-guard: 判定できない — 歯Cの走査対象が0ファイルだった。',
+        'root の vitest.config.ts の include に一致するテストファイルが1件も見つからない。',
+        '（見て0件だったのではなく、見ていない。歯Bと同じ理由・同じ exit code。）',
+      ].join('\n'),
+    };
+  }
+  const undeclared = debts.filter((d) => d.kind === 'undeclared');
+  if (undeclared.length > 0) {
+    return {
+      ok: false,
+      exitCode: EXIT_OBSERVATION_UNDECLARED,
+      message: formatObservationGuardMessage(undeclared, 'undeclared'),
+    };
+  }
+  const due = debts.filter((d) => d.kind === 'due');
+  if (due.length > 0) {
+    return {
+      ok: false,
+      exitCode: EXIT_OBSERVATION_DUE,
+      message: formatObservationGuardMessage(due, 'due'),
+    };
+  }
+  return { ok: true, scanned: matchedPaths.length };
+}
+
 // ── I/O: include globs の読み取りとファイル走査 ──────────────────────
 
 /**
@@ -344,4 +578,47 @@ export async function runStaticSkipGuard(root = ROOT) {
   const files = readFilesForScan(root, matchedPaths);
   const hits = findUnconditionalSkips(files);
   return judgeStaticSkipScan(matchedPaths, hits);
+}
+
+/** 今日の日付を `'YYYY-MM-DD'`（UTC）で作る。**I/O 層でだけ呼ぶ**——
+ * `runObservationGuard` の既定引数の中だけで使い、`findObservationDebts` /
+ * `judgeObservationScan` などの純粋関数の中では絶対に呼ばない。 */
+function todayUtc() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/**
+ * 歯Cを実際に1回分回す（I/O込みの薄い合成）。`test.mjs` はこれを呼ぶだけにする。
+ * `readIncludeGlobs` / `collectMatchingTestFiles` / `readFilesForScan` は歯Bと
+ * 完全に共用する——再実装しない（同じ include glob・同じ走査で「観測用テスト」
+ * を名乗ったファイルだけを絞り込む）。
+ *
+ * `today` は引数で受ける（既定値だけがここで `new Date()` を呼ぶ）。呼び出し側
+ * （`test.mjs`）は素の呼び出し（`runObservationGuard(ROOT)`）でよい。
+ */
+export async function runObservationGuard(root = ROOT, today = todayUtc()) {
+  let includeGlobs;
+  try {
+    includeGlobs = await readIncludeGlobs(root);
+  } catch (err) {
+    return {
+      ok: false,
+      exitCode: EXIT_SCAN_EMPTY,
+      message:
+        `test-guard: 判定できない — root の vitest.config.ts から include を読めなかった: ` +
+        `${err?.message ?? err}`,
+    };
+  }
+  if (!Array.isArray(includeGlobs) || includeGlobs.length === 0) {
+    return {
+      ok: false,
+      exitCode: EXIT_SCAN_EMPTY,
+      message:
+        'test-guard: 判定できない — vitest.config.ts の test.include が配列でない、または空だった。',
+    };
+  }
+  const matchedPaths = collectMatchingTestFiles(root, includeGlobs);
+  const files = readFilesForScan(root, matchedPaths);
+  const debts = findObservationDebts(files, today);
+  return judgeObservationScan(matchedPaths, debts);
 }
