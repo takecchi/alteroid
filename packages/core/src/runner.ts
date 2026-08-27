@@ -21,6 +21,7 @@ import {
   noteUnclassifiedFailuresSummary,
 } from './dropped-record.js';
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
+import { codeSpan } from './markdown-span.js';
 import { placedModelTier, resolveModelTier } from './model-tier.js';
 import {
   DEFAULT_PERMISSION_MODE,
@@ -2054,8 +2055,34 @@ class RunnerSession {
     if (resolved !== undefined) return resolved;
 
     const kind = toolName === 'AskUserQuestion' ? 'question' : 'permission';
+    // **`toolName` と `brief(input)` を Markdown のインラインコードとして包む
+    // （issue #287）。** この `summary` は少なくとも3経路を流れる——`ask` イベント
+    // → `manager.ts` の `#emit()` → 受信箱 →
+    // `apps/web/app/routes/commitments.tsx` が `<Markdown>` で描く経路、
+    // `record.waiting`（`Job.waiting`）→ デーモンの API 経路、`#journal` の
+    // `escalation` 経路——のうち、Markdown で描くのは最初の1つだけである
+    // （残りは `apps/web/app/routes/manager-detail.tsx` の `WaitingRow` /
+    // `apps/web/app/routes/managers.tsx` の一覧行 / `apps/cli/src/chat.ts` /
+    // `apps/web/app/routes/journal.tsx` のいずれも素テキストで描く。実測は
+    // このコミットの PR 本文）。**それでも包む** —— 素の面に見えるバック
+    // クォートは「余計な記号が見える」だけだが、Markdown の面で起きているのは
+    // `toolName`（SDK のツール名という識別子）や `brief(input)`（SDK のツール
+    // 引数という不透明なダンプ）の中の文字が**黙って消える**ことで、しかも
+    // それが起きているのは人間が allow / deny を判断する画面である。見える
+    // 雑音のほうが、黙った欠落より安い。
+    //
+    // **`markup` は立てない。** この `summary` は runner（この文字列そのもの）
+    // とデーモン・画面という複数の書き手の手を経て使われる1本の文字列で、
+    // `schema.ts` の `textMarkupSchema` の doc が言う「名乗れる値が無いから
+    // 立てられない」がそのまま当てはまる。
+    //
+    // **`kind === 'question'`（`describeQuestions(input)`）は包まない。** あちらは
+    // クローン自身が書いた prose（質問文）で、SDK のツール名や引数ダンプの
+    // ような不透明な字面ではない。
     const summary =
-      kind === 'question' ? describeQuestions(input) : `${toolName} の実行許可: ${brief(input)}`;
+      kind === 'question'
+        ? describeQuestions(input)
+        : `${codeSpan(toolName)} の実行許可: ${codeSpan(brief(input))}`;
     // **ここで1度だけ取る（#334）。** `state()` も `ask` イベントもこの値を
     // そのまま運ぶだけにする——経路ごとに取り直すと、同じ確認が経路によって
     // 違う「待ち始めた時刻」を名乗る。

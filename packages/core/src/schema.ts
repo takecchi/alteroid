@@ -267,10 +267,10 @@ export type MemoryProtectionStatus =
  * 確信が無い箇所には `'markdown'` も `'none'` も立てず、`undefined` のままにする。
  *
  * **立てられる場所にだけ立てる。** 複数の書き手・複数の由来の文字列が連結済みで
- * 届く経路（例: `packages/core/src/manager.ts` の `failedReportText` 由来の
- * メッセージ。デーモンの定型文・SDK の失敗文言・マネージャーの途中出力が1本の
- * 文字列に混ざる）には立てない。**立てられないから立てないのであって、安全だから
- * 立てないのではない**（issue #287）。
+ * 届く経路（例: `packages/core/src/runner.ts` の `function failedReportText(...)`
+ * 由来のメッセージ。デーモンの定型文・SDK の失敗文言・マネージャーの途中出力が
+ * 1本の文字列に混ざる）には立てない。**立てられないから立てないのであって、
+ * 安全だから立てないのではない**（issue #287）。
  */
 export const textMarkupSchema = z.enum(['markdown', 'none']);
 export type TextMarkup = z.infer<typeof textMarkupSchema>;
@@ -406,7 +406,16 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     at: isoDateTime,
     /** 何を判断したか */
     decision: z.string(),
-    /** 記憶のどこに根拠があったか（無ければ人間に聞いたはず） */
+    /**
+     * 記憶のどこに根拠があったか（無ければ人間に聞いたはず）
+     *
+     * **クローンの判断とは限らない。** 人間が API / CLI から直接操作した記録も
+     * ここへ入る（`apps/daemon/src/app.ts` の複数の口 — 定期の依頼の仕込み・
+     * 削除、引き受けた仕事の台帳への出し入れ・編集、`alteroid access grant` /
+     * `revoke` 等）。この場合 `grounds` は記憶の参照ではなく、「人間が直接
+     * API から～した」「実行環境の持ち主による操作」のように、操作の由来
+     * そのものを名乗る文になる。
+     */
     grounds: z.string(),
   }),
   /**
