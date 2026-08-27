@@ -613,6 +613,7 @@ describe('formatObservationGuardMessage', () => {
     expect(msg).toContain('x.observed.test.ts:2');
     expect(msg).toContain('終了条件');
     expect(msg).toContain('見直し期限');
+    expect(msg).toContain('.claude/skills/observation-tests/SKILL.md');
   });
 
   it('due: file:line・3つの次の手（基準へ書き換える／捨てる／延ばす）を含む', () => {
@@ -624,6 +625,7 @@ describe('formatObservationGuardMessage', () => {
     expect(msg).toContain('基準');
     expect(msg).toContain('捨てる');
     expect(msg).toContain('延ばす');
+    expect(msg).toContain('.claude/skills/observation-tests/SKILL.md');
   });
 });
 

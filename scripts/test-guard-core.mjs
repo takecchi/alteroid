@@ -414,11 +414,13 @@ export function formatObservationGuardMessage(debts, kind) {
           '',
           '観測用テストと名乗るなら、冒頭コメント領域に',
           '「終了条件: <空でない文字列>」「見直し期限: YYYY-MM-DD」の両方を書くこと。',
+          '運用ルールは .claude/skills/observation-tests/SKILL.md を見ること。',
         ]
       : [
           '',
           '次の手（いずれか）: 終了条件に到達していれば「基準」に書き換える／捨てる／',
           'まだ到達していないなら見直し期限を延ばす（延ばすなら、なぜ延ばすかも一緒に書く）。',
+          '運用ルールは .claude/skills/observation-tests/SKILL.md を見ること。',
         ];
   return [header, ...lines, ...footer].join('\n');
 }
