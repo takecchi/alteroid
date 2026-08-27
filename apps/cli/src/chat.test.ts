@@ -72,6 +72,45 @@ describe('renderManagerList', () => {
     expect(text).toContain('可能性があります');
   });
 
+  /**
+   * **字面の生成元を1つに保つ。** ここは同じ意味の字面（`/セッション切断`）を
+   * 自前で組んでいて、`live` を真偽値としてしか扱えなかった —— 「取れていない」
+   * （`undefined`）を表せず、取れていない回まで「話しかけられる」側へ倒れていた。
+   * クローンの `manager_list` と定期 tick の要約は既に
+   * `describeManagerState`（`@alteroid/core`）を通している。
+   */
+  it('状態の札は describeManagerState と同じ字面を出す（3値とも）', () => {
+    expect(renderManagerList([manager({ status: 'running', live: true })])).toContain('[running]');
+    expect(renderManagerList([manager({ status: 'running', live: false })])).toContain(
+      '[running/セッション切断]',
+    );
+    // **「取れていない」を「切断」へ畳まない。** 自前の三項演算子ではこの行が
+    // `/セッション切断` になっていた（取れていないことが観測として消える）。
+    expect(renderManagerList([manager({ status: 'running', live: undefined })])).toContain(
+      '[running/セッション不明]',
+    );
+  });
+
+  /**
+   * **`live: false` の理由を、分かる分だけ名指しする。** 状態名だけだと
+   * 「セッションが終わった」のか「宛先の器が消えた」のかが読めず、人間の打つ手が
+   * 決まらない。**断定は「器が黙っている」までである。**
+   */
+  it('宛先の器が黙っているときは、その判定時刻と「失われたとは限らない」を添える', () => {
+    const text = renderManagerList([
+      manager({ status: 'running', live: false, runnerLostSince: '2026-08-27T09:00:00.000Z' }),
+    ]);
+
+    expect(text).toContain('2026-08-27T09:00:00.000Z 以降 名乗っていない');
+    expect(text).toContain('この委譲が失われたという意味ではない');
+  });
+
+  it('宛先の器が黙っていなければ、その行は出さない', () => {
+    const text = renderManagerList([manager({ status: 'running', live: true })]);
+
+    expect(text).not.toContain('名乗っていない');
+  });
+
   it('拒否があっても [running] の札を置き換えない（状態に添えるだけ）', () => {
     const text = renderManagerList([
       manager({ status: 'running', denials: [{ tool: 'Bash', count: 1 }] }),

@@ -199,7 +199,13 @@ export {
   buildWorkerPrompt,
   type TimerPromptInput,
 } from './prompt.js';
-export { buildActivityDigest, type DigestWindow } from './digest.js';
+export {
+  buildActivityDigest,
+  // **字面の生成元を1つに保つために出す。** `apps/cli` が同じ意味の字面を
+  // 自前で組んでいて、`live === undefined`（取れていない）を表せていなかった。
+  describeManagerState,
+  type DigestWindow,
+} from './digest.js';
 /**
  * 日誌を人間との会話へ畳み直す規則。
  *

@@ -547,6 +547,18 @@ export const managerSummarySchema = z.object({
   status: jobStatusSchema,
   /** このデーモンから話しかけられるか（宛先を失った分だけ `false`）。 */
   live: z.boolean(),
+  /**
+   * 宛先の器を、名簿が「名乗らなくなった」と判定した時刻。`live: false` の理由を
+   * 1つだけ名指しする欄である（`packages/core/src/manager.ts` の
+   * `ManagerSummary.runnerLostSince`）。
+   *
+   * **ここに宣言しないと、値が在っても黙って落ちる。** このスキーマは
+   * `.parse()` として外向きの面を通っており、宣言していない欄は落ちる
+   * （真上の `lastFailure` / `lastReportAt` と同じ断り）。**落ちると CLI と
+   * Web の両方が同時に盲目になる** —— クローンの `manager_list` にだけ出て、
+   * 人間の入口には出ない形になる。
+   */
+  runnerLostSince: z.string().optional(),
   cwd: z.string(),
   request: z.string(),
   startedAt: z.string(),
