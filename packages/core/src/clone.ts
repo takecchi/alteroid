@@ -1122,12 +1122,23 @@ class Clone implements CloneHost {
 
   async endConversation(conversationId: string): Promise<void> {
     // 会話終了は蒸留の契機。受信箱を通すので、走行中のターンを踏み潰さない。
-    await this.#postAndWait({
-      type: 'distill',
-      id: randomUUID(),
-      at: new Date().toISOString(),
-      reason: 'conversation_end',
-    });
+    //
+    // **`interrupt: true` を渡す（Issue #43）。** `POST /chat/:conversationId/end`
+    // はこの完了を `await` してから応答を返すので、ここは「人間が画面の前で
+    // 待っている」場面である。それなのに待ち行列は末尾へ積むだけだったので、
+    // 先に積まれていた非人間（`timer` / `manager_message` 等）を全部読み終える
+    // まで人間が待たされていた。`stop()`（下）の `shutdown` は同じ待ちが無いので
+    // 渡さない —— 割り込ませるかどうかを型（`isHumanOriginated`）ではなく
+    // 呼び出し側で決める理由は `#postAndWait` の doc にある。
+    await this.#postAndWait(
+      {
+        type: 'distill',
+        id: randomUUID(),
+        at: new Date().toISOString(),
+        reason: 'conversation_end',
+      },
+      true,
+    );
     const set = this.#listeners.get(conversationId);
     if (set && set.size === 0) this.#listeners.delete(conversationId);
   }
@@ -1167,6 +1178,12 @@ class Clone implements CloneHost {
     // 分岐に1本化してある（ターンの起動口を受信箱の1か所に保つ設計と同じ理由。
     // `#hasUndistilledActivity` の doc）。ここで先に判定すると、判定が2か所に
     // 散り、`endConversation()` 側だけ判定を足し忘れるような穴が生まれる。
+    // **`interrupt` を渡さない（既定 `false`）。** ここは誰も画面の前で待って
+    // いない（プロセス終了）ので、`endConversation()` と違って割り込む理由が
+    // 無い。待ち行列に積んであるものより先に読ませると、有界性の根拠
+    // （`isHumanOriginated` の doc）を「型」ではなく「呼び出し側」で保っている
+    // 意味が無くなる —— ここで渡してしまえば、機械の速さで起きる shutdown が
+    // 人間の待ちと同じ扱いになる。
     if (this.#query) {
       await this.#postAndWait({
         type: 'distill',
@@ -1193,11 +1210,43 @@ class Clone implements CloneHost {
   // 受信箱のループ（ターンの起動口はここだけ）
   // -------------------------------------------------------------------------
 
-  #postAndWait(event: InboxEvent): Promise<void> {
+  /**
+   * 受信箱へ積んで、その完了を待つ（`endConversation` / `stop` の蒸留専用）。
+   *
+   * ## `interrupt` — 「割り込ませるか」を型ではなく呼び出し側で決める（Issue #43）
+   *
+   * **`isHumanOriginated`（`clone.ts:221`）は広げない。** `distill` を人間起点の
+   * 型にすると、`stop()` が投げる `reason: 'shutdown'`（プロセス終了時。誰も
+   * 待っていない）まで人間起点になり、有界性の根拠（`isHumanOriginated` の doc
+   * 「割り込みは人間の速さでしか来ない」）が崩れる。**だから型を増やさず、
+   * ここに引数を持たせて、呼び出し側（`endConversation` だけ）が渡す形にする。**
+   *
+   * `interrupt` が真で、かつ人間優先（`#humanPriority`）が有効なときだけ、
+   * `Inbox#push` の `insertAfterLast` へ「人間起点、または `conversation_end` の
+   * 蒸留」を真にする述語を渡す。**`conversation_end` を述語に含める理由**は、
+   * 待ち行列の**queued 側**（＝先に並んでいる要素）に同種の合図が居るときに、
+   * それを追い越さないようにするため（`post()` が人間どうしの FIFO を守って
+   * いるのと同じ形。`Inbox#push` の doc）。この reason を作る製品コードは
+   * `endConversation` の1箇所しか無い（`stop()` は `shutdown` を渡す）ので、
+   * 割り込みの量はここでも「HTTP で人間が待っている回数」に有界なままである。
+   *
+   * `interrupt` を渡さない（既定 `false`）呼び出しはこれまでと1文字も変わらず
+   * 常に末尾へ積む。`#humanPriority` が無効なときは `this.#humanPriority &&`
+   * が門を掛けているので、この割り込みも起きない（`post()` の
+   * `this.#humanPriority && isHumanOriginated(event)` と同じ形）。
+   */
+  #postAndWait(event: InboxEvent, interrupt = false): Promise<void> {
     if (this.#stopped) return Promise.resolve();
     return new Promise<void>((resolve) => {
       this.#completions.set(event.id, resolve);
-      this.#inbox.push(event);
+      this.#inbox.push(
+        event,
+        interrupt && this.#humanPriority
+          ? (queued) =>
+              isHumanOriginated(queued) ||
+              (queued.type === 'distill' && queued.reason === 'conversation_end')
+          : undefined,
+      );
     });
   }
 
