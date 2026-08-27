@@ -655,7 +655,7 @@ describe('マネージャー', () => {
    * ここでは `markup` という**キーそのものが無い**ことを見る
    * （`undefined` が値として入っているのではなく、`in` で見て無い）。
    */
-  it("AskUserQuestion の確認には manager_message に markup のキーが無い（#287）", async () => {
+  it('AskUserQuestion の確認には manager_message に markup のキーが無い（#287）', async () => {
     const s = setup();
     await s.pool.start({ request: '設計を相談したい' });
     const session = s.sessions[0] as FakeSession;
