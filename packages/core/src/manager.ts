@@ -3466,6 +3466,52 @@ class Pool implements ManagerPool {
         // いない。**`runner.ts` 側で `brief(input)` をバッククォート等で
         // 包んで直すと、化けていない5面に記号が増える。** 印はこの1面
         // だけに効く。
+        //
+        // **⚠️ `kind === 'question'` に残っている穴（issue #287、未決）。**
+        // 上で「立てない」根拠にしたのは `describeQuestions(input)` の通常
+        // 経路——`input.questions` が `{ question: string, … }[]` の形で来た
+        // 回は、そこから取り出した質問文（**モデル自身が書いた文章**）を
+        // ` / ` で連結して返す。ここは prose であり、Markdown として描くのが
+        // 正しい。
+        //
+        // **しかし `describeQuestions()` にはフォールバックが在る**
+        // （`runner.ts`、逐語）:
+        // ```ts
+        // function describeQuestions(input: Record<string, unknown>): string {
+        //   const questions = Array.isArray(input.questions) ? input.questions : [];
+        //   const texts = questions
+        //     .map((question) => (question as { question?: unknown }).question)
+        //     .filter((text): text is string => typeof text === 'string');
+        //   return texts.length > 0 ? texts.join(' / ') : brief(input);
+        // }
+        // ```
+        // `input.questions` が期待の形で来なかった回（配列でない／要素に
+        // `question` が無い／`question` が文字列でない）は `brief(input)` —
+        // **ツール呼び出し引数の JSON ダンプ**が返る。これは `kind === 'permission'`
+        // の `summary`（`` `${toolName} の実行許可: ${brief(input)}` ``）と同じ
+        // 生成元・同じ性質で、AI が文章として書いたものではない。
+        //
+        // **⟹ 実測すると化ける。** `apps/web/app/components/markdown.tsx` と
+        // 同じ設定（react-markdown 10.1.0 + remark-gfm 4.0.1 + remark-breaks
+        // 4.0.0、rehype-raw 無し）で `brief({"command":"echo \`date\` && rm -rf /"})`
+        // を通すと、` \`date\` ` が本物の `<code>` になった。`brief({"path":"src/_init_/x.ts"})`
+        // では `_init_` の `_..._` が `<em>` になった（観測 2026-08-28）。この回は
+        // `kind` が `'question'` のままなので `markup` は立たず、`permission` 側で
+        // PR #559 が塞いだのと同じ形の化けがここに残る。
+        //
+        // **なぜここで直さないか。** `ask` イベントが運ぶのは `summary` の1本と
+        // `kind` だけで、`describeQuestions()` が通常経路とフォールバックの
+        // どちらを通ったかはデーモン（`manager.ts`）からは分からない——`kind` は
+        // 両方の経路で等しく `'question'` である。**`manager.ts` にはこの2つを
+        // 分ける材料が無い。**
+        //
+        // **別の層でなら在りうる。** 塞ぐなら `runner.ts` の `describeQuestions()`
+        // がフォールバックを通ったことを呼び出し側へ伝えられる形にする必要が
+        // ある（例: `ask` イベントへ欄を1つ足す）。**⚠️ ただしそれは runner が
+        // 新しく名乗る値が増えるということであり、デーモンと runner を別々に
+        // デプロイする窓（`runner-protocol.ts` の versioning の話）が開く。**
+        // ここで印を1つ足すだけでは済まない、`runner-protocol.ts` を動かす
+        // 別の作業になる。
         const markup: TextMarkup | undefined = event.kind === 'permission' ? 'none' : undefined;
         this.#emit(event.managerId, event.kind, event.summary, event.requestId, markup);
         return;
