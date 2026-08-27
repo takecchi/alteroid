@@ -1252,15 +1252,20 @@ describe('hello() が拾う版', () => {
  * 応答だけを制御する。
  */
 describe('死んだ runner への SSE 再接続（バックオフ）', () => {
-  // **常に stderr を黙らせる。** 内容を見る必要がないテストでも実際の stderr へ
-  // 書かれるのはノイズなので、この describe の全テストで抑える。内容を見る
-  // テストは `stderrSpy` を直接読む。
+  // **常に stderr / stdout を黙らせる。** 内容を見る必要がないテストでも実際の
+  // 出力へ書かれるのはノイズなので、この describe の全テストで抑える
+  // （`stdout` を黙らせないと `vitest.setup.ts` の歯（#314）が「繋ぎ直せた」を
+  // stdout へ書くテストを落とす）。内容を見るテストは `stderrSpy` /
+  // `stdoutSpy` を直接読む。
   let stderrSpy: ReturnType<typeof vi.spyOn>;
+  let stdoutSpy: ReturnType<typeof vi.spyOn>;
   beforeEach(() => {
     stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
   });
   afterEach(() => {
     stderrSpy.mockRestore();
+    stdoutSpy.mockRestore();
   });
 
   function pathOf(input: string | URL | Request): string {
@@ -1405,7 +1410,7 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
     expect(waits.slice(0, 4)).toEqual([1000, 2000, 1000, 1000]);
   });
 
-  it('stderr は初回と間隔が変わったときだけ書き、繋ぎ直せたときは1行書く', async () => {
+  it('stderr は初回と間隔が変わったときだけ書き、繋ぎ直せたときは stdout に1行書く（切断の行は stdout に漏れない）', async () => {
     // 3敗 → 成功（閾値を超えてからバイトが届く） → 1敗、の順。3敗目は初回・
     // 2回目と違う間隔なのでその都度書き、成功で「繋ぎ直せた」を1行、直後の
     // 敗北は基準(1000)からまた書く。
@@ -1413,6 +1418,12 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
     // **#274 で成功の定義が変わった（上のテストと同じ理由）。** `'ok'` から
     // `'healthy'` へ変えたのはフィクスチャだけで、保証（初回と間隔が変わった
     // ときだけ書く／繋ぎ直せたら1行書く）そのものは変わっていない。
+    //
+    // **#420 で「繋ぎ直せた」の宛先が stderr から stdout へ移った。** 正常
+    // （回復）は stdout・異常（切断）は stderr という既に確定した割り当てへの
+    // 当てはめ（`tokenRotationStream` の doc、`#pump` の doc参照）。ここでは
+    // 「回復が stdout に出ること」と「正常系を移した拍子に切断の行まで stdout
+    // へ漏れていないこと」を同じテストで確かめる。
     const { fetchFn } = fetchEvents((i) => (i < 3 ? 'fail' : i === 3 ? 'healthy' : 'fail'));
     const waits: number[] = [];
     let notifyEnough: () => void = () => undefined;
@@ -1435,20 +1446,26 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
     await enough;
     await client.close();
 
-    const lines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
-    const failureLines = lines.filter((line: string) => line.includes('ストリームが切れました'));
-    const reconnectLines = lines.filter((line: string) => line.includes('繋ぎ直せた'));
+    const stderrLines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    const stdoutLines = stdoutSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    const failureLines = stderrLines.filter((line: string) =>
+      line.includes('ストリームが切れました'),
+    );
+    const reconnectLines = stdoutLines.filter((line: string) => line.includes('繋ぎ直せた'));
 
     // 1000, 2000, 4000 は間隔が毎回変わるので書く。成功で列がリセットされた
     // 直後の敗北（4敗目、基準の1000へ戻る）は「新しい列の初回」なのでまた書く
-    // — 黙るのは同じ値が続くときだけである。
+    // — 黙るのは同じ値が続くときだけである。**切断の行は stderr のまま。**
     expect(failureLines).toHaveLength(4);
     expect(failureLines[0]).toContain('次は1000ms後に再試行');
     expect(failureLines[1]).toContain('次は2000ms後に再試行');
     expect(failureLines[2]).toContain('次は4000ms後に再試行');
     expect(failureLines[3]).toContain('次は1000ms後に再試行');
-    // 繋ぎ直せた行は1回だけ。
+    // 繋ぎ直せた行は stdout に1回だけ出る。
     expect(reconnectLines).toHaveLength(1);
+    // **正常系を移した拍子に、異常系まで stdout へ流れていないか。** 切断の
+    // 行が stdout に1件も出ていないことを同じ回で確かめる。
+    expect(stdoutLines.some((line: string) => line.includes('ストリームが切れました'))).toBe(false);
   });
 
   it('待ちが変わらない間は stderr を書き直さない（頭打ち後は黙る）', async () => {
@@ -1622,7 +1639,8 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
       // **この歯が守るのは「時点」である。** 上の2本（hello直後／無音）は
       // 「出ないこと」を測っているが、こちらは「出るタイミング」を測る——
       // 接続を手で操作できるストリームにして、閉じずにバイトだけを流し、
-      // その時点で既に stderr へ書かれていることを確認する。
+      // その時点で既に stdout へ書かれていることを確認する（#420 で宛先が
+      // stderr から stdout へ移った）。
       //
       // **接続を閉じてから確認する形にしないこと。** 閉じてから確認すると、
       // 「`#stream()` が終わった後に書く」実装でも「健全と判定した瞬間に
@@ -1665,7 +1683,7 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(controllerRef).toBeDefined();
       expect(
-        stderrSpy.mock.calls.some((call: unknown[]) => String(call[0]).includes('繋ぎ直せた')),
+        stdoutSpy.mock.calls.some((call: unknown[]) => String(call[0]).includes('繋ぎ直せた')),
       ).toBe(false);
 
       // 閾値ちょうどでバイトを1つ流す。接続はまだ閉じていない
@@ -1674,7 +1692,7 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
 
       // **接続がまだ生きている時点で、既に書かれている。**
-      const lines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      const lines = stdoutSpy.mock.calls.map((call: unknown[]) => String(call[0]));
       expect(lines.filter((line: string) => line.includes('繋ぎ直せた'))).toHaveLength(1);
 
       // 後始末: ストリームを閉じてからクライアントも閉じる。
@@ -1913,9 +1931,13 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
       await enough;
       await client.close();
 
-      const lines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
-      const failureLines = lines.filter((line: string) => line.includes('ストリームが切れました'));
-      const reconnectLines = lines.filter((line: string) => line.includes('繋ぎ直せた'));
+      const stderrLines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      const stdoutLines = stdoutSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      const failureLines = stderrLines.filter((line: string) =>
+        line.includes('ストリームが切れました'),
+      );
+      // **#420 で宛先が stderr から stdout へ移った。**
+      const reconnectLines = stdoutLines.filter((line: string) => line.includes('繋ぎ直せた'));
 
       // 1〜6敗目は待ちが毎回変わる（1000→2000→4000→8000→16000→30000）ので
       // 6行とも書く。cause の code（UND_ERR_BODY_TIMEOUT）も毎回付く。
@@ -2016,10 +2038,12 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
       await enough;
       await client.close();
 
-      const lines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      const stderrLines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      // **#420 で「繋ぎ直せた」の宛先が stderr から stdout へ移った。**
+      const stdoutLines = stdoutSpy.mock.calls.map((call: unknown[]) => String(call[0]));
       return {
-        failureLines: lines.filter((line: string) => line.includes('ストリームが切れました')),
-        reconnectLines: lines.filter((line: string) => line.includes('繋ぎ直せた')),
+        failureLines: stderrLines.filter((line: string) => line.includes('ストリームが切れました')),
+        reconnectLines: stdoutLines.filter((line: string) => line.includes('繋ぎ直せた')),
       };
     }
 
@@ -2076,9 +2100,13 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
       await enough;
       await client.close();
 
-      const lines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
-      const failureLines = lines.filter((line: string) => line.includes('ストリームが切れました'));
-      const reconnectLines = lines.filter((line: string) => line.includes('繋ぎ直せた'));
+      const stderrLines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      // **#420 で「繋ぎ直せた」の宛先が stderr から stdout へ移った。**
+      const stdoutLines = stdoutSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      const failureLines = stderrLines.filter((line: string) =>
+        line.includes('ストリームが切れました'),
+      );
+      const reconnectLines = stdoutLines.filter((line: string) => line.includes('繋ぎ直せた'));
 
       expect(failureLines.length).toBeGreaterThan(0);
       expect(reconnectLines).toHaveLength(1);
