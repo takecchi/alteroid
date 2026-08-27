@@ -3166,6 +3166,44 @@ describe('クローンの道具', () => {
     expect(reply).toContain('running');
   });
 
+  /**
+   * **「いま何本走っているか」を、一覧を数えて答えさせない。**
+   *
+   * 一覧は文字数の予算で打ち切られるので、出ている行を数えた数は全体の本数
+   * ではない。そして `status` だけを数えると必ず上振れする——宛先の器が
+   * 黙って消えた委譲を `running` から動かす経路がデーモンに無いためで、
+   * これは `live` が在る理由そのものである（`describeManagerCounts` の doc）。
+   *
+   * クローンは実際にこれで誤り、終わった仕事へ委譲を重ねかけた。
+   */
+  it('走行中の本数と、そのうち話しかけられる本数を分けて出す', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    await h.call('manager_start', { request: 'B' });
+    const dead = h.running[1];
+    if (!dead) throw new Error('準備に失敗');
+    // 器が黙って消えた委譲。**`status` は `running` のままである。**
+    dead.live = false;
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('走行中 2 本（うち話しかけられる 1 本）');
+  });
+
+  /**
+   * **0 の行を作らない**（AGENTS.md の地雷表）。「返事待ち 0本」と書くと、
+   * 数えて 0 だったのか、そもそも数えていないのかが読めなくなる。
+   */
+  it('該当が無い区分は件数の行に書かない（0 の行を作らない）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('全 1 本');
+    expect(reply).not.toContain('返事待ち 0 本');
+  });
+
   it('manager_list は返事待ちの種別と時刻を出す（kind/askedAt が揃っているとき）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
