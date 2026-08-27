@@ -755,7 +755,7 @@ describe('クローンの道具', () => {
         '') as string;
       const match = /: ([\d,]+) 文字/.exec(line);
       expect(match).not.toBeNull();
-      expect(Number((match as RegExpExecArray)[1].replace(/,/g, ''))).toBeLessThan(200);
+      expect(Number(((match as RegExpExecArray)[1] ?? '').replace(/,/g, ''))).toBeLessThan(200);
     });
 
     it('memory_append にも同じ行が出る', async () => {
@@ -794,7 +794,7 @@ describe('クローンの道具', () => {
           .split('\n')
           .find((row) => row.includes('次のターンの会話へ載る見込み')) ?? '') as string;
         const match = /: ([\d,]+) 文字/.exec(line);
-        return Number((match as RegExpExecArray)[1].replace(/,/g, ''));
+        return Number(((match as RegExpExecArray)[1] ?? '').replace(/,/g, ''));
       };
       expect(extractChars(afterReply)).toBeLessThan(extractChars(beforeReply));
     });
