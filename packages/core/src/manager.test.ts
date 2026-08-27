@@ -2550,6 +2550,75 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     await s.pool.stop();
   });
 
+  it('#resumeOnce の短絡: 取り直している最中に重なった2つ目の契機を busy で断る（Issue #203）', async () => {
+    // **`#resumeOnce`（manager.ts の `if (this.#resuming.has(id)) return 'busy';`）
+    // は、これまで一度も測られていなかった**（`grep -n "resuming"
+    // packages/core/src/manager.test.ts` が0件）。`send()` 自身も同じ判定を
+    // 事前に持つ（`resumeFailureDetail` の doc の逐語「`send()` は `#resuming`
+    // を事前にも見る」）が、それは別の行であり、`send()` を2本重ねるだけでは
+    // 常にその事前チェックが先に答えてしまい、`#resumeOnce` 自身の短絡は
+    // 一度も実行されない。
+    //
+    // ここで確かめたいのは、`send()` の事前チェックを経由しない契機
+    // （`reattachRunner()` 経由の `#reattach`。呼び出し元は `manager.ts` の
+    // `#resumeOnce(record, runner, message)` 呼び出し、送り元は「hello」と
+    // 同一の1本）が重なったとき、それでも二重に resume されないことである。
+    // これを守っているのは `send()` 側の事前チェックではなく、`#resumeOnce`
+    // 自身の短絡だけである。
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+
+    // `#claimForResume` の中の `await this.#stores.jobs.putJob(record.job)`
+    // （貸し出しを台帳へ書く1回目の呼び）を止める。この await の間、
+    // `#resuming` には既に id が入っている——`#resumeOnce` はチェックと
+    // 追加のあいだに await を挟まない（doc「確かめてから立てるまでに `await`
+    // を挟まない」）。
+    let releasePutJob!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releasePutJob = resolve;
+    });
+    let putJobCalls = 0;
+    const originalPutJob = stores.jobs.putJob.bind(stores.jobs);
+    stores.jobs.putJob = async (job: Job) => {
+      putJobCalls += 1;
+      if (putJobCalls === 1) await gate;
+      return originalPutJob(job);
+    };
+
+    const fake = swappableRunner(); // runnerId: 'runner-primary'（runningJob と一致）
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    // 1つ目の契機: `manager_send`。`#resumeOnce` に入り、貸し出しを書く
+    // 直前で止まる（`#resuming` には既に id が入っている）。
+    const firstSend = s.pool.send(runningJob.id, '1つ目の指示');
+    await expect.poll(() => putJobCalls, { timeout: 2000 }).toBe(1);
+
+    // 2つ目の契機: runner の再接続（`#reattach`）。`send()` の事前チェックを
+    // 経由せず、直接 `#resumeOnce` を呼ぶ経路である。busy で断られたことは
+    // `reattachRunner()` の戻り値からは見えない（`#reattach` は
+    // `outcome !== 'resumed'` を黙って `continue` する）ので、
+    // 「resume が増えなかったこと」で観測する。
+    await s.pool.reattachRunner('runner-primary');
+    // 1本目はまだ止まっている。2本目が短絡されずに通っていれば、ここで
+    // 既に `runner.resume()` が呼ばれているはずである。
+    expect(fake.state.resumes).toHaveLength(0);
+
+    // 1本目を進ませて完了させる。
+    releasePutJob();
+    const first = await firstSend;
+
+    expect(first.outcome).toBe('delivered');
+    // **1本しか走っていない。** 2本目が busy を無視して通っていれば、ここが
+    // 2以上になる（変異: `#resumeOnce` の短絡を外す）。
+    expect(fake.state.resumes).toHaveLength(1);
+    expect(fake.state.resumes[0]).toMatchObject({
+      managerId: runningJob.id,
+      sessionId: runningJob.sessionId,
+    });
+
+    await s.pool.stop();
+  });
+
   it('返事待ちだったマネージャーの、死んだ確認を持ち越さない', async () => {
     // **持ち越すと、そのマネージャーには誰も届かなくなる。** 新しい器はその
     // request_id を知らないので確認は永久に解けず、以後の `manager_send` は
