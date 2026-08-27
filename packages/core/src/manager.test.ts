@@ -5308,6 +5308,46 @@ describe('runner の一覧（ManagerPool.runners）', () => {
     await registry.stop();
   });
 
+  /**
+   * **`live` を内訳へ運ぶ**（`RunnerManagerEntry`）。
+   *
+   * `runners()` は内訳を作る直前に `list()` を呼んでいて、そこには
+   * `isLive()` の結果が既に載っている。**それを落とすと `runner_list` の
+   * 側でだけ「走行中」と「走行中だがセッション切断」が潰れる**——#540 が
+   * 定期 tick の要約で直したのと同じ形の穴が、この一覧に残っていた。
+   *
+   * ここで見るのは値が運ばれることだけで、字面は `tools.test.ts` 側が見る。
+   */
+  it('器ごとの内訳に live を運ぶ（status だけに畳まない）', async () => {
+    const stores = createMemoryStores();
+    const at = new Date().toISOString();
+    await stores.jobs.putJob({
+      id: 'mgr-no-session',
+      managerId: 'mgr-no-session',
+      createdAt: at,
+      updatedAt: at,
+      status: 'running',
+      summary: 'セッションを持たない仕事',
+      request: 'セッションを持たない仕事',
+      cwd: '/work/project',
+      runnerId: 'runner-a',
+    });
+    const a = new FakePoolRunner('runner-a', { managers: 0 });
+    const registry = createRunnerRegistry([a]);
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    const overview = await pool.runners();
+
+    // 台帳にしか無く `sessionId` も無いので戻る先が無い（`isLive()`）。
+    // **`status` は `running` のままである** — だからこそ `live` が要る。
+    expect(overview.runners.find((r) => r.label === 'runner-a')?.managers).toEqual([
+      { managerId: 'mgr-no-session', status: 'running', live: false },
+    ]);
+
+    await pool.stop();
+    await registry.stop();
+  });
+
   it('runnerId の無いマネージャーを、どの器にも混ぜず unassigned 別枠へ出す', async () => {
     const stores = createMemoryStores();
     // **`runnerId` を書かない古いジョブを台帳に直接置く。** `manager_id → runner_id`
@@ -5331,7 +5371,11 @@ describe('runner の一覧（ManagerPool.runners）', () => {
 
     // **0 に畳まれていない。** `runner-only` の内訳には現れず、別枠に1件として出る。
     expect(overview.runners.find((r) => r.label === 'runner-only')?.managers).toEqual([]);
-    expect(overview.unassigned).toEqual([{ managerId: 'mgr-legacy', status: 'done' }]);
+    expect(overview.unassigned).toEqual([
+      // `live: false` — 台帳にしか無く `sessionId` も持たないので戻る先が無い
+      // （`isLive()`）。**`status` と一緒に必ず運ぶ**（`RunnerManagerEntry` の doc）。
+      { managerId: 'mgr-legacy', status: 'done', live: false },
+    ]);
 
     await pool.stop();
     await registry.stop();

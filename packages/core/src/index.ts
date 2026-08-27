@@ -357,6 +357,7 @@ export {
   type ManagerStopActor,
   type ManagerSummary,
   type RunnerFleetOverview,
+  type RunnerManagerEntry,
   type RunnerOverview,
 } from './manager.js';
 /**

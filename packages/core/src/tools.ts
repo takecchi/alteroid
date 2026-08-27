@@ -3185,6 +3185,11 @@ export function createCloneTools(context: ToolContext) {
         );
         return text(
           [
+            // **本数は一覧の外に出す。** 一覧は予算で打ち切られる（すぐ下の
+            // `omitted`）ので、**出ている行を数えても全体の本数にはならない。**
+            // クローンは実際にこれで誤り、「いま走っている」を数え上げて
+            // 終わった仕事へ委譲を重ねかけた。切られない場所に置くこと。
+            describeManagerCounts(managers),
             renderListing(items, {
               budget: LIST_BUDGET,
               omitted: ({ rest, total }) =>
@@ -3648,6 +3653,13 @@ export function createCloneTools(context: ToolContext) {
           '名乗る別の値で、この一覧とはずれうる——混ぜて配置の判断を予測しないこと。',
         'state は5値（connecting/connected/unreachable/unusable/lost）のまま出る。' +
           'unreachable（まだ開けていない）と lost（開けていたのに黙った）は別物である。',
+        // **マネージャーの状態の字面は manager_list と揃える。** 片方だけが
+        // 「セッション切断」を出すと、同じ相手を2つの道具で見たクローンが
+        // どちらが本当かを判定できない（#540 と同じ潰れ方）。
+        '器ごとの内訳に出るマネージャーの状態は manager_list と同じ字面である' +
+          '（running / running/セッション切断 / running/セッション不明）。' +
+          '「セッション切断」は、その委譲にこのデーモンからもう話しかけられないという意味で、' +
+          '仕事が終わったという意味ではない。',
         'デーモン自身の版と、各 runner が名乗った版（コミット sha）も出る。' +
           'デーモンと runner は別々にデプロイされるので、同じ main から起こしていても' +
           '別のコミットで走る窓がある——調べ物で「コードはこうなっている」と言う前に、' +
@@ -3766,7 +3778,14 @@ export function createCloneTools(context: ToolContext) {
             const rest = runner.managers.length - shown.length;
             lines.push(
               `  マネージャー(${runner.managers.length}): ` +
-                shown.map((m) => `${m.managerId}[${m.status}]`).join(', ') +
+                // **字面は `describeManagerState` から取る（唯一の生成元）。**
+                // `m.status` をそのまま書くと、`manager_list` が区別している
+                // 「走行中」と「走行中だがセッション切断」がここでだけ潰れ、
+                // 同じ状態が2つの道具で違う字面になる（#540 が digest で直した
+                // のと同じ潰れ方が、この一覧に残っていた）。
+                shown
+                  .map((m) => `${m.managerId}[${describeManagerState(m.status, m.live)}]`)
+                  .join(', ') +
                 (rest === 0 ? '' : `, …ほか ${rest} 本は省略（manager_list で全部見える）`),
             );
           }
@@ -3838,7 +3857,10 @@ export function createCloneTools(context: ToolContext) {
           const rest = overview.unassigned.length - shown.length;
           tail.push(
             `どの器か分からない: ${overview.unassigned.length}件（` +
-              shown.map((m) => `${m.managerId}[${m.status}]`).join(', ') +
+              // 器ごとの内訳と同じ生成元を通す（上の doc と同じ理由）。
+              shown
+                .map((m) => `${m.managerId}[${describeManagerState(m.status, m.live)}]`)
+                .join(', ') +
               (rest === 0 ? '' : `, …ほか ${rest} 本は省略（manager_list で全部見える）`) +
               '）。runnerId が記録されていない古いマネージャーで、どの器の内訳にも混ぜていない。',
           );
@@ -3858,6 +3880,45 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
   ];
+}
+
+/**
+ * `manager_list` の先頭に出す本数の内訳。
+ *
+ * **「いま何本走っているか」を、一覧を数えて答えさせない。** 一覧は文字数の
+ * 予算で打ち切られるので（`LIST_BUDGET`）、出ている行を数えた数は全体の
+ * 本数ではない。そして `status` だけを数えると必ず上振れする——**`running`
+ * は終端へ勝手には行かない。** ターンを報告で終えた委譲は `done` になるが、
+ * 宛先の器が黙って消えた委譲を `running` から動かす経路はデーモンに無い
+ * （周期的な棚卸しは存在せず、`onLost` は台帳を書き換えない）。**それは
+ * 欠陥ではなく、`live` が在る理由そのものである** — 「戻れなかった」と
+ * 確かめていないものを `lost` と名乗らせない代わりに、話しかけられるかを
+ * 別の軸で持つ（`manager.ts` の `isLive()` / `ManagerSummary.live`）。
+ *
+ * **だから数えるときも2軸で数える。** 「走行中」の本数だけを出すと、
+ * この一覧は上振れした数を自分の口で名乗ることになる。
+ *
+ * **0 の行は作らない**（AGENTS.md の地雷表）。無い区分は書かない——
+ * 「切断 0本」と書くと、切断を観測して 0 だったのか、そもそも数えていない
+ * のかが読めなくなる。
+ */
+function describeManagerCounts(managers: readonly ManagerSummary[]): string {
+  const live = managers.filter((m) => m.live).length;
+  const parts = [`全 ${managers.length} 本`];
+  const running = managers.filter((m) => m.status === 'running');
+  if (running.length > 0) {
+    const reachable = running.filter((m) => m.live).length;
+    parts.push(`走行中 ${running.length} 本（うち話しかけられる ${reachable} 本）`);
+  }
+  const waiting = managers.filter((m) => m.status === 'waiting_human').length;
+  if (waiting > 0) parts.push(`返事待ち ${waiting} 本`);
+  return (
+    `件数: ${parts.join(' / ')}。話しかけられる委譲は全体で ${live} 本である。` +
+    '**「走行中」は「進んでいる」ではない** — 宛先の器が黙って消えても ' +
+    'status は running のままで、それを終端へ動かす経路はデーモンに無い。' +
+    'いま何本動いているかを数えるなら、走行中の本数ではなく' +
+    '「話しかけられる」ほうを見ること。'
+  );
 }
 
 /** 会話の発言の `role` を人が読める形にする（`conversation_read` 専用）。 */
