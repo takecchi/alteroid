@@ -1087,6 +1087,98 @@ describe('器の入れ替えの判定材料', () => {
     expect(identity?.runnerId).toBe('runner-replaced');
     expect(client.runnerId).toBe('runner-primary');
   });
+
+  /**
+   * `pendingEvents` / `oldestPendingAt`（#358 案b の第2段）が `/health` から
+   * `identity()` まで渡ること。**`resources()` の同名の歯（`資源による配置の
+   * 材料` の「runner の /health が pendingEvents/oldestPendingAt を名乗り、
+   * デーモンがそれを採る」）と同じ理由で、本物の `Outbox` と
+   * `createRunnerApp` を通す**——狙いは「10秒ごとの heartbeat（`identity()`）
+   * からも同じ2欄が読める」ことの証明で、境界を越えさせないと証明にならない。
+   */
+  it('runner の /health が pendingEvents/oldestPendingAt を名乗り、identity() がそれを採る', async () => {
+    const outbox = new Outbox();
+    outbox.push({ type: 'session', managerId: 'mgr-1', sessionId: 'sess-1' });
+    outbox.push({ type: 'session', managerId: 'mgr-2', sessionId: 'sess-2' });
+    const host = createRunnerHost({
+      runnerId: 'runner-primary',
+      workspacePath: '/workspace',
+      emit: (event) => outbox.push(event),
+      queryFn: fakeSdk().fn,
+    });
+    const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn: fetchInto(app),
+    });
+    cleanups.push(() => client.close());
+
+    const identity = await client.identity?.();
+
+    expect(identity?.pendingEvents).toBe(2);
+    expect(typeof identity?.oldestPendingAt).toBe('string');
+
+    await host.shutdown();
+  });
+
+  /**
+   * 締め出さない側の歯——`pendingEvents` / `oldestPendingAt` を返さない
+   * 古い runner でも、`identity()` の他の材料（`runnerId` / `instanceId` /
+   * `revision`）は今まで通り渡る（`resources()` 側の「他の材料は渡る」歯と
+   * 同じ形。`:877` 付近）。
+   */
+  it('pendingEvents/oldestPendingAt を返さない古い runner からも他の材料は渡る（締め出さない）', async () => {
+    const client = await createHttpRunner({
+      baseUrl: 'http://legacy.test',
+      token: TOKEN,
+      fetchFn: (async () =>
+        Response.json({
+          ok: true,
+          runnerId: 'runner-legacy',
+          instanceId: 'boot-legacy',
+          workspacePath: '/workspace',
+          // pendingEvents / oldestPendingAt を欄ごと持たない（この機能より前の runner）。
+        })) as typeof fetch,
+    });
+    cleanups.push(() => client.close());
+
+    const identity = await client.identity?.();
+
+    expect(identity?.runnerId).toBe('runner-legacy');
+    expect(identity?.instanceId).toBe('boot-legacy');
+    expect(identity).not.toHaveProperty('pendingEvents');
+    expect(identity).not.toHaveProperty('oldestPendingAt');
+  });
+
+  /**
+   * `pendingEvents` の形が壊れていても、他の材料は落とさない
+   * （`resources()` 側の同名の歯 `:893` 付近と同じ形——1つずつ検証する
+   * ことの証拠）。
+   */
+  it('pendingEvents の形が壊れていても、他の材料は落とさない（identity() でも managers と同じ扱い）', async () => {
+    const client = await createHttpRunner({
+      baseUrl: 'http://broken.test',
+      token: TOKEN,
+      fetchFn: (async () =>
+        Response.json({
+          ok: true,
+          runnerId: 'runner-broken',
+          instanceId: 'boot-broken',
+          workspacePath: '/workspace',
+          pendingEvents: 'たくさん',
+          oldestPendingAt: 'ちょっと前',
+        })) as typeof fetch,
+    });
+    cleanups.push(() => client.close());
+
+    const identity = await client.identity?.();
+
+    expect(identity?.runnerId).toBe('runner-broken');
+    expect(identity?.instanceId).toBe('boot-broken');
+    expect(identity).not.toHaveProperty('pendingEvents');
+    expect(identity).not.toHaveProperty('oldestPendingAt');
+  });
 });
 
 /**

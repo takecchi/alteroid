@@ -9,7 +9,7 @@ import type {
   SDKMessage,
   SessionStoreEntry,
 } from '@anthropic-ai/claude-agent-sdk';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   MANAGER_MODEL,
@@ -5635,6 +5635,188 @@ describe('runner の滞留のキャッシュ（ManagerPool.runnerBacklog）', ()
     const snapshot = pool.runnerBacklog!()[0];
     expect(snapshot?.pendingEvents).toBe(3);
     expect(snapshot).not.toHaveProperty('oldestPendingAt');
+
+    await pool.stop();
+    await registry.stop();
+  });
+});
+
+/**
+ * `identity()` を持つ runner。`resources()` と `identity()` の両方を独立に
+ * 差し替えられる——runnerBacklog() が2つの由来（`resources()` 由来の
+ * `#runnerBacklog` map と、`identity()` 由来の `registry.entries()`）を
+ * 正しく合流させることを見るための最小限の偽物（`FakePoolRunner` に
+ * `identity()` を足しただけ）。
+ */
+class FakeBacklogMergeRunner implements RunnerClient {
+  readonly runnerId: string;
+  readonly runnerIdKnown = true;
+  readonly workspacePathKnown = true;
+  readonly workspacePath = '/work/project';
+  /** `resources()` が返す値（案b 第1段の由来）。 */
+  report: RunnerPlacementResources | undefined;
+  /** `identity()` が返す滞留の2欄（案b 第2段の由来）。 */
+  identityPendingEvents: number | undefined;
+  identityOldestPendingAt: string | undefined;
+
+  constructor(runnerId: string) {
+    this.runnerId = runnerId;
+  }
+
+  async resources(): Promise<RunnerPlacementResources | undefined> {
+    return this.report;
+  }
+  async identity(): Promise<
+    | { runnerId?: string; instanceId?: string; pendingEvents?: number; oldestPendingAt?: string }
+    | undefined
+  > {
+    return {
+      runnerId: this.runnerId,
+      ...(this.identityPendingEvents === undefined
+        ? {}
+        : { pendingEvents: this.identityPendingEvents }),
+      ...(this.identityOldestPendingAt === undefined
+        ? {}
+        : { oldestPendingAt: this.identityOldestPendingAt }),
+    };
+  }
+  async connect(): Promise<void> {}
+  async start(): Promise<void> {}
+  async resume(): Promise<void> {}
+  async send(): Promise<void> {}
+  async answer(): Promise<RunnerAnswerOutcome> {
+    return { delivered: false };
+  }
+  async stop(): Promise<void> {}
+  async list(): Promise<RunnerManagerState[]> {
+    return [];
+  }
+  async transcript(): Promise<string | null> {
+    return null;
+  }
+  async credentials(): Promise<RunnerCredentialFingerprint[]> {
+    return [];
+  }
+  async setCredentials(): Promise<RunnerCredentialFingerprint[]> {
+    return [];
+  }
+  async profile(): Promise<RunnerProfileFingerprint | undefined> {
+    return undefined;
+  }
+  async setProfile(): Promise<RunnerProfileResult> {
+    return { ok: true };
+  }
+  async close(): Promise<void> {}
+}
+
+/**
+ * `runnerBacklog()` が `resources()` 由来と `identity()`（heartbeat）由来を
+ * 合流させ、観測時刻の新しいほうを採ること（#358 案b の第2段）。
+ *
+ * **時計は手で進める**（`runner-swap.test.ts` と同じ理由——heartbeat の
+ * 10秒周期を実時間で待たない）。`now` オプションを渡さないので、`Pool` の
+ * `observedAt` も `Registry` の heartbeat の `at` も同じ `Date.now()`
+ * （フェイク時計）を見る——2つの由来が同じ時計の上で競える形にしてある。
+ */
+describe('runnerBacklog() が resources() 由来と identity() 由来を合流させる（#358 案b の第2段）', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-27T00:00:00.000Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('新しく観測できたほうを採る（heartbeat が resources() より後なら heartbeat 側、逆なら resources() 側）', async () => {
+    const runner = new FakeBacklogMergeRunner('runner-a');
+    runner.report = {
+      managers: 0,
+      pendingEvents: 9,
+      oldestPendingAt: '2026-08-20T00:00:00.000Z',
+    };
+    const stores = createMemoryStores();
+    const registry = createRunnerRegistry([runner]);
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    // t=0: resources() 由来（古い値）を warm する。
+    await pool.runners({ resources: true });
+    expect(pool.runnerBacklog!()).toEqual([
+      {
+        runnerId: 'runner-a',
+        pendingEvents: 9,
+        oldestPendingAt: '2026-08-20T00:00:00.000Z',
+        observedAt: '2026-08-27T00:00:00.000Z',
+      },
+    ]);
+
+    // t=10s: heartbeat が identity() 由来（新しい値）を warm する。
+    runner.identityPendingEvents = 4;
+    runner.identityOldestPendingAt = '2026-08-27T00:00:05.000Z';
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    // **新しいほう（heartbeat 側）が勝つ。**
+    expect(pool.runnerBacklog!()).toEqual([
+      {
+        runnerId: 'runner-a',
+        pendingEvents: 4,
+        oldestPendingAt: '2026-08-27T00:00:05.000Z',
+        observedAt: '2026-08-27T00:00:10.000Z',
+      },
+    ]);
+
+    // t=11s: resources() を呼び直す（さらに新しい値）。次の heartbeat 周（t=20s）
+    // には届かない範囲で時計を進める。
+    runner.report = {
+      managers: 0,
+      pendingEvents: 7,
+      oldestPendingAt: '2026-08-27T00:00:11.000Z',
+    };
+    await vi.advanceTimersByTimeAsync(1_000);
+    await pool.runners({ resources: true });
+
+    // **逆転する——今度は resources() 側（もっと新しい）が勝つ。** 合流が
+    // 「片方を常に優先する」実装ではないことの証拠になる。
+    expect(pool.runnerBacklog!()).toEqual([
+      {
+        runnerId: 'runner-a',
+        pendingEvents: 7,
+        oldestPendingAt: '2026-08-27T00:00:11.000Z',
+        observedAt: '2026-08-27T00:00:11.000Z',
+      },
+    ]);
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  it('resources() 由来しか無い runner はそのまま出て、identity() 由来しか無い runner とは混ざらない', async () => {
+    const resourcesOnly = new FakePoolRunner('runner-resources', {
+      managers: 0,
+      pendingEvents: 2,
+    });
+    const identityOnly = new FakeBacklogMergeRunner('runner-identity');
+    identityOnly.identityPendingEvents = 6;
+    const stores = createMemoryStores();
+    const registry = createRunnerRegistry([resourcesOnly, identityOnly]);
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    await pool.runners({ resources: true });
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect([...pool.runnerBacklog!()].sort((a, b) => a.runnerId.localeCompare(b.runnerId))).toEqual(
+      [
+        {
+          runnerId: 'runner-identity',
+          pendingEvents: 6,
+          observedAt: '2026-08-27T00:00:10.000Z',
+        },
+        {
+          runnerId: 'runner-resources',
+          pendingEvents: 2,
+          observedAt: '2026-08-27T00:00:00.000Z',
+        },
+      ],
+    );
 
     await pool.stop();
     await registry.stop();

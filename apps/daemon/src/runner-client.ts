@@ -448,6 +448,10 @@ interface HealthBody {
    * （`resources()` は `body.managers` と同じく `/health` 直下から拾う——
    * `body.resources` の中身ではない。`apps/runner/src/app.ts` の `/health`
    * が実際に置く場所に合わせてある）。
+   *
+   * **`identity()` もここから同じ欄を拾う（#358 案b）。** 新しい欄は足して
+   * いない——`resources()` が既に読んでいたものを、heartbeat が定期的に叩く
+   * `identity()` からも読めるようにしただけである。
    */
   pendingEvents?: unknown;
   /** 未送出のうち、いちばん古いものが積まれた時刻（#358）。同上の理由で足す。 */
@@ -769,14 +773,33 @@ class HttpRunner implements RunnerClient {
    * 省略できる情報ではない ——「応答は返ってきたのに版の状態が分からない」を
    * 作らないことで、名簿の側は「一度も名乗りを聞けていない」（`unheard`）と
    * 混同せずに済む。
+   *
+   * **`pendingEvents` / `oldestPendingAt` も同じ応答から拾う（#358 案b）。**
+   * `resources()` が読んでいるのとまったく同じ2欄で、**検証の作法も同じにする**
+   * ——`runnerPlacementResourcesSchema.shape` を1つずつ `safeParse` する。まとめて
+   * 弾くと、この2欄の形が崩れただけで `runnerId` / `instanceId` / `revision` まで
+   * 道連れになる（`resources()` の doc「材料は1つずつ検証する」と同じ理由）。
+   * 宣言していない形・古い runner（欄自体が無い）はここで静かに省かれる——
+   * 「取れなかった」であって「0」ではない。
    */
-  async identity(options?: {
-    signal?: AbortSignal;
-  }): Promise<
-    { runnerId?: string; instanceId?: string; revision: RunnerRevisionReport } | undefined
+  async identity(options?: { signal?: AbortSignal }): Promise<
+    | {
+        runnerId?: string;
+        instanceId?: string;
+        revision: RunnerRevisionReport;
+        pendingEvents?: number;
+        oldestPendingAt?: string;
+      }
+    | undefined
   > {
     const response = await this.#call('GET', '/health', undefined, options?.signal);
     const body = (await response.json()) as HealthBody;
+    const pendingEvents = runnerPlacementResourcesSchema.shape.pendingEvents.safeParse(
+      body.pendingEvents,
+    );
+    const oldestPendingAt = runnerPlacementResourcesSchema.shape.oldestPendingAt.safeParse(
+      body.oldestPendingAt,
+    );
     return {
       ...(typeof body.runnerId === 'string' && body.runnerId.length > 0
         ? { runnerId: body.runnerId }
@@ -785,6 +808,12 @@ class HttpRunner implements RunnerClient {
         ? { instanceId: body.instanceId }
         : {}),
       revision: revisionReportOf(body.revision),
+      ...(pendingEvents.success && pendingEvents.data !== undefined
+        ? { pendingEvents: pendingEvents.data }
+        : {}),
+      ...(oldestPendingAt.success && oldestPendingAt.data !== undefined
+        ? { oldestPendingAt: oldestPendingAt.data }
+        : {}),
     };
   }
   /**
