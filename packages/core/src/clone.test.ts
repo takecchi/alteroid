@@ -3361,6 +3361,81 @@ describe('クローン — ターンの失敗の跡', () => {
     await s.clone.stop();
   });
 
+  /**
+   * 文脈窓（コンテキストウィンドウ）超過の失敗だけ、日誌に目印が入るか（Issue
+   * #318 P4）。**対照（当たらない失敗には入らない）も見る** — 無いと、全部の
+   * 失敗に目印を付ける実装が生存する。
+   */
+  describe('文脈窓超過の失敗には目印が入る', () => {
+    it('該当する失敗: 目印（ASCII の検索語）と生の文言の両方が `with: self` に残る', async () => {
+      const stores = createMemoryStores();
+      const real = 'prompt is too long: 220000 tokens > 200000 maximum';
+      const s = setup(undefined, stores, { failWith: real });
+
+      s.clone.post(humanMessage('やあ', 'conv-9'));
+
+      await expect
+        .poll(
+          async () =>
+            (await exchanges(stores)).some(
+              (entry) =>
+                entry.with === 'self' && entry.text.startsWith('人間との対話ターンが失敗した'),
+            ),
+          { timeout: 3000 },
+        )
+        .toBe(true);
+
+      const failure = (await exchanges(stores)).find(
+        (entry) => entry.with === 'self' && entry.text.startsWith('人間との対話ターンが失敗した'),
+      );
+      // ASCII の検索語（`journal_read q=` で引ける形。条件1）。
+      expect(failure?.text).toContain('context_window_failure');
+      expect(failure?.text).toContain('prompt_too_long');
+      // 生の文言は逐語のまま（言い換えない）。
+      expect(failure?.text).toContain(real);
+      // 弱さ（条件2）: 「該当した」だけでなく型合わせであることを書く。
+      expect(failure?.text).toContain('契約ではない');
+
+      // 人間へ返す1行（`with: human`）は、他の失敗と同じ既存の文言のまま
+      // ——ここへ目印や生の文言を持ち込む変更ではない（範囲を広げない）。
+      const toHuman = (await exchanges(stores)).find(
+        (entry) => entry.with === 'human' && entry.role === 'outbound' && entry.text !== 'やあ',
+      );
+      expect(toHuman?.text).not.toContain('context_window_failure');
+      expect(toHuman?.text).not.toContain(real);
+
+      await s.clone.stop();
+    });
+
+    it('対照: 文脈窓と無関係な失敗には目印が入らない', async () => {
+      const stores = createMemoryStores();
+      // 枠（利用上限）の失敗——紛らわしいが別の種別（`usage-limits.ts` の対象）。
+      const real = "You've hit your individual spend limit";
+      const s = setup(undefined, stores, { failWith: real });
+
+      s.clone.post(humanMessage('やあ', 'conv-9'));
+
+      await expect
+        .poll(
+          async () =>
+            (await exchanges(stores)).some(
+              (entry) =>
+                entry.with === 'self' && entry.text.startsWith('人間との対話ターンが失敗した'),
+            ),
+          { timeout: 3000 },
+        )
+        .toBe(true);
+
+      const failure = (await exchanges(stores)).find(
+        (entry) => entry.with === 'self' && entry.text.startsWith('人間との対話ターンが失敗した'),
+      );
+      expect(failure?.text).toContain(real);
+      expect(failure?.text).not.toContain('context_window_failure');
+
+      await s.clone.stop();
+    });
+  });
+
   it('日誌にも書けなければ stderr に1行。ただし本文は出さない', async () => {
     // `#reportFailure` の `message` は `String(error)` ＝ SDK・API・ストアの
     // ドライバが決める文字列で、**こちらが値を決めていない**（ドライバは失敗した

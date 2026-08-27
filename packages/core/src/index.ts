@@ -91,6 +91,18 @@ export {
   type SdkFailureVia,
 } from './sdk-failure.js';
 /**
+ * 「文脈窓（コンテキストウィンドウ）に当たった」ことの検知（Issue #318 P4）。
+ * プロバイダの生の文言を型合わせで分類する。根拠と弱さは
+ * `context-window-failure.ts` の doc。
+ */
+export {
+  CONTEXT_WINDOW_FAILURE_KINDS,
+  classifyContextWindowFailure,
+  describeContextWindowFailure,
+  type ContextWindowFailure,
+  type ContextWindowFailureKind,
+} from './context-window-failure.js';
+/**
  * ログイン（誰がこの API を叩いているか）と、alteroid を使ってよいかの2値。
  *
  * **PRD「権限境界」とは別の層である。** あちらはクローンが記憶を根拠に
