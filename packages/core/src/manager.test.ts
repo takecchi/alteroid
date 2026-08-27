@@ -6944,3 +6944,96 @@ describe('宛先の器が黙ったことを live が見る', () => {
     await real.stop();
   });
 });
+
+/**
+ * 起動時の引き取り（`#restoreJobs`）で1本が投げても、後ろに並んだ委譲を道連れに
+ * しない。
+ *
+ * **この理由は発明ではない。** 同じクラスの走査を持つ `#reattach` のジョブループ
+ * には、同じ文言の理由が既に置いてある —— 「1本が戻せなくても、残りを道連れに
+ * しない。ここで抜けると、後ろに並んでいた仕事が誰にも拾われないまま `running`
+ * として残る」。**その理由が `#restoreJobs` に掛からない根拠は無い。**
+ *
+ * **こちらのほうが重い。** `#restoreJobs` はデーモンの起動時に台帳の**全ジョブ**を
+ * 1本の走査で回すので、1本が投げるとその回の引き取りが丸ごと止まり、後ろに並んだ
+ * 委譲は `#records` にすら載らないまま台帳に `running` で残る。呼び出し元
+ * （`apps/daemon/src/index.ts` の `takeOver()`）は例外を握り潰して空配列を返す
+ * ので、跡はログ1行しか残らない。
+ */
+describe('起動時の引き取りは、1本が投げても後ろを道連れにしない', () => {
+  const at = '2026-08-01T00:00:00.000Z';
+  function pending(id: string): Job {
+    return {
+      id,
+      managerId: id,
+      createdAt: at,
+      updatedAt: at,
+      status: 'running',
+      summary: id,
+      request: id,
+      cwd: '/work/project',
+      sessionId: `sess-${id}`,
+      runnerId: 'runner-test',
+    };
+  }
+
+  /**
+   * **挑み直せる種類の失敗**（`RunnerHttpError` でない＝経路が切れた等）。
+   * `isRetryableRunnerError` は `RunnerHttpError` 以外を `true` に倒す。
+   */
+  it('投げた1本の後ろに並んだ委譲も、同じ回で引き取られる', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(pending('mgr-poison'));
+    await stores.jobs.putJob(pending('mgr-behind'));
+    const s = setup(undefined, { stores });
+    const original = s.runner.resume.bind(s.runner);
+    s.runner.resume = async (command: RunnerResumeCommand) => {
+      if (command.managerId === 'mgr-poison') throw new Error('boom（経路が切れた）');
+      return original(command);
+    };
+
+    const restored = await s.pool.restore();
+
+    // **後ろの1本は拾われている。** 塞ぐ前はここが空だった（走査ごと止まるので）。
+    expect(restored.map((m) => m.managerId)).toContain('mgr-behind');
+    expect(s.sessions).toHaveLength(1);
+
+    // **投げた1本は `running` のままである。** 挑み直せる種類なので梯子へ載せた
+    // だけで、「戻れなかった」とは確かめていない —— `lost` を名乗らせない。
+    const listed = await s.pool.list();
+    expect(listed.find((m) => m.managerId === 'mgr-poison')?.status).toBe('running');
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **挑み直さないと決めた種類の失敗**（4xx の `RunnerHttpError`）。
+   * `#reattach` の同じ分岐と同じ扱いにする —— この1本は `lost` になる。
+   * resume を実際に試して戻れなかったので、ここでは `lost` は**確かめた事実**である。
+   */
+  it('挑み直さないと決めた1本は lost になり、後ろの委譲は引き取られる', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(pending('mgr-poison'));
+    await stores.jobs.putJob(pending('mgr-behind'));
+    const s = setup(undefined, { stores });
+    const original = s.runner.resume.bind(s.runner);
+    s.runner.resume = async (command: RunnerResumeCommand) => {
+      if (command.managerId === 'mgr-poison') {
+        throw new RunnerHttpError('runner POST /managers/mgr-poison/resume が失敗した (400)', 400);
+      }
+      return original(command);
+    };
+
+    const restored = await s.pool.restore();
+
+    expect(restored.map((m) => m.managerId)).toContain('mgr-behind');
+
+    const listed = await s.pool.list();
+    expect(listed.find((m) => m.managerId === 'mgr-poison')?.status).toBe('lost');
+    // **抜け殻のまま残さない。** `lost` は像からも外れる（`#retire`）ので、
+    // 一覧は「走行中」と数えない。
+    expect(listed.find((m) => m.managerId === 'mgr-poison')?.live).toBe(false);
+
+    await s.pool.stop();
+  });
+});

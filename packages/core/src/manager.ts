@@ -1833,44 +1833,107 @@ class Pool implements ManagerPool {
       if (!runner) continue;
 
       const nudge = restartNudge(job.status, 'daemon');
-      const ok = await this.#resumeOnce(record, runner, nudge);
-      if (ok !== 'resumed') {
-        /*
-         * **貸し出し期限で断られたのは「まだ」である。** 引き取りの契機は「runner が
-         * 開けたとき」しか無いので、ここで黙って諦めると次の契機が永久に来ない
-         * （台帳では走っているのに誰も走っていない仕事が残る）。挑み直しの梯子へ
-         * 載せる — 梯子は間隔を伸ばすが**回数では諦めない**（`#scheduleReattach`）。
-         *
-         * 他の理由（`no-session` / `unreadable` / `busy` / `workspace-path-unknown`）
-         * はここでは何もしない（それぞれ別の経路が持っている、または
-         * `manager_send` からの送り直しでしか解けない）。
-         */
-        if (ok === 'held-by-lease') {
-          // **判断として残す。** 「何もしなかった」は日誌から消えやすいが、
-          // 引き取らなかったことは判断であって欠落ではない（根拠も一緒に残す）。
+      // **1本が戻せなくても、残りを道連れにしない。** ここで抜けると、後ろに
+      // 並んでいた仕事が誰にも拾われないまま `running` として残る。
+      //
+      // **この理由は発明ではない。** 同じクラスの走査を持つ `#reattach` の
+      // ジョブループには、この対策と**同じ文言の理由**が既に置いてある。
+      // **その理由がこちらに掛からない根拠は無い** — むしろこちらのほうが重い。
+      // `#restoreJobs` はデーモンの起動時に**台帳の全ジョブ**を1本の走査で回すので、
+      // 1本が投げると**その回の引き取りが丸ごと止まり**、後ろに並んだ委譲は
+      // `#records` にすら載らないまま（＝プロセス内の像を持たないまま）台帳に
+      // `running` で残る。呼び出し元（`apps/daemon/src/index.ts` の `takeOver()`）は
+      // 例外を握り潰して空配列を返すので、跡はログ1行しか残らない。
+      //
+      // **投げうるのは `#resumeOnce` の中の実 I/O である。** `#resumeOnce` は
+      // try/**finally** しか持たず、その先の `#resume` も `await runner.resume(...)`
+      // を try の外で呼ぶ（HTTP の非2xx・時間切れ・経路断でそのまま投げる）。
+      //
+      // **分岐は `#reattach` の catch と同じ3つにしてある**（新しい方針を発明
+      // しない）。違うのは「挑み直しの予約」の書き方だけで、あちらは runner 単位の
+      // `retry` フラグを畳んでから予約するのに対し、こちらは同じ走査の
+      // `held-by-lease` が既に使っている `#scheduleReattach` をその場で呼ぶ。
+      try {
+        const ok = await this.#resumeOnce(record, runner, nudge);
+        if (ok !== 'resumed') {
+          /*
+           * **貸し出し期限で断られたのは「まだ」である。** 引き取りの契機は「runner が
+           * 開けたとき」しか無いので、ここで黙って諦めると次の契機が永久に来ない
+           * （台帳では走っているのに誰も走っていない仕事が残る）。挑み直しの梯子へ
+           * 載せる — 梯子は間隔を伸ばすが**回数では諦めない**（`#scheduleReattach`）。
+           *
+           * 他の理由（`no-session` / `unreadable` / `busy` / `workspace-path-unknown`）
+           * はここでは何もしない（それぞれ別の経路が持っている、または
+           * `manager_send` からの送り直しでしか解けない）。
+           */
+          if (ok === 'held-by-lease') {
+            // **判断として残す。** 「何もしなかった」は日誌から消えやすいが、
+            // 引き取らなかったことは判断であって欠落ではない（根拠も一緒に残す）。
+            await this.#journal({
+              type: 'decision',
+              decision: leaseRefusalDecision(job.id, record.leaseRefusal),
+              grounds: record.leaseRefusal?.detail ?? '（根拠を取れなかった）',
+            });
+            this.#scheduleReattach(runner.runnerId);
+          }
+          continue;
+        }
+        // **受理は「戻れた」ではない。** この `await` の間に「戻れなかった」が確定
+        // していることがある（runner は別プロセスで、失敗は SSE で追いかけてくる）。
+        // ここで無条件に上書きすると、書いたばかりの終端状態が `running` へ巻き戻る。
+        if (record.job.status === 'lost') continue;
+        record.job.status = 'running';
+        await this.#persist(record);
+        await this.#journal({
+          type: 'exchange',
+          with: 'manager',
+          role: 'outbound',
+          text: `[${job.id}] （再起動後の再開）${nudge}`,
+        });
+        this.#notifyRestored(record, 'resumed');
+        resumed.push(summaryOf(record, isLive(record, silent), lostSinceOf(record, silent)));
+      } catch (error) {
+        if (isFencedRunnerError(error)) {
+          /*
+           * **世代で拒まれた（409）。これは「戻せなかった」ではない**（`#reattach` の
+           * 同じ分岐と同じ理由）。runner が持っている世代のほうが新しい＝この委譲は
+           * 自分より新しい世代の誰かが握っていて、そのセッションは生きている。
+           * 下の枝（`lost` にして像から外す）へ落とすと、クローンが「戻せなかった」と
+           * 読んで新しく起こし直し、**fencing の失敗経路から二重実行へ到達する。**
+           *
+           * だから状態は動かさず、挑み直しもしない。**その代わり必ず知らせる。**
+           */
           await this.#journal({
             type: 'decision',
-            decision: leaseRefusalDecision(job.id, record.leaseRefusal),
-            grounds: record.leaseRefusal?.detail ?? '（根拠を取れなかった）',
+            decision: `[${job.id}] 起動時の引き取りを止めた（runner がより新しい世代を持っている＝別の誰かが握っている）`,
+            grounds: String(error),
           });
+          this.#post({
+            type: 'manager_message',
+            id: randomUUID(),
+            at: new Date(this.#now()).toISOString(),
+            managerId: job.id,
+            kind: 'report',
+            text:
+              `${job.id} の起動時の引き取りが世代で拒まれました（409）。この委譲は**自分より新しい世代の誰かが握っています**。` +
+              `終わったとは限らないので、**新しく起こし直さないでください** — ` +
+              `台帳の貸し出しと runner の世代が食い違っています（デーモンが2つ走っているか、貸し出しの書き込みが落ちた可能性）。人間へ相談すること: ${String(error)}`,
+          });
+        } else if (isRetryableRunnerError(error)) {
+          // **一時的なこけ方（起動直後・瞬断・5xx）。** 黙って引き下がると、
+          // 次の契機（runner が開けたとき）が永久に来ないことがある。梯子へ載せる。
           this.#scheduleReattach(runner.runnerId);
+        } else {
+          // 挑み直さないと決めたので、**ジョブ側に覚える**（`#reattach` と同じ形）。
+          // **この1本は `running` のままにしない** — resume を実際に試して戻れ
+          // なかったので、`lost` はここでは**確かめた事実**である。
+          this.#unresumable.add(job.id);
+          record.job.status = 'lost';
+          await this.#persist(record);
+          this.#notifyUnresumable(record, error);
+          this.#retire(job.id);
         }
-        continue;
       }
-      // **受理は「戻れた」ではない。** この `await` の間に「戻れなかった」が確定
-      // していることがある（runner は別プロセスで、失敗は SSE で追いかけてくる）。
-      // ここで無条件に上書きすると、書いたばかりの終端状態が `running` へ巻き戻る。
-      if (record.job.status === 'lost') continue;
-      record.job.status = 'running';
-      await this.#persist(record);
-      await this.#journal({
-        type: 'exchange',
-        with: 'manager',
-        role: 'outbound',
-        text: `[${job.id}] （再起動後の再開）${nudge}`,
-      });
-      this.#notifyRestored(record, 'resumed');
-      resumed.push(summaryOf(record, isLive(record, silent), lostSinceOf(record, silent)));
     }
     return resumed;
   }
