@@ -88,6 +88,10 @@ import {
   resultFailureOf,
   type SdkFailure,
 } from './sdk-failure.js';
+import {
+  classifyContextWindowFailure,
+  describeContextWindowFailure,
+} from './context-window-failure.js';
 
 /**
  * クローン = デーモン内の長寿命 SDK セッション1本（docs/architecture.md）。
@@ -2035,14 +2039,26 @@ class Clone implements CloneHost {
     // `conversationId` は呼び出し側が構造化フィールドとして持っている値なので
     // 載せる（#56 の線）。落とすと、失敗がどの会話のものだったかを時刻でしか
     // 突き合わせられなくなる — 日誌には列があるのに。
+    //
+    // **文脈窓（コンテキストウィンドウ）を超えた失敗だけ、末尾に目印を足す**
+    // （Issue #318 P4）。先頭（`内部ターンが失敗した:` / `人間との対話ターンが
+    // 失敗した:`）は変えない — 変えると `clone.test.ts` の
+    // `text.startsWith(...)` の歯を壊す。生の `message` は既に逐語で載って
+    // いるので、目印はその後ろに足すだけでよい（判定・弱さの断り書きは
+    // `context-window-failure.ts` の doc）。
+    const contextWindowFailure = classifyContextWindowFailure(message);
+    const failureText =
+      conversationId === null
+        ? `内部ターンが失敗した: ${message}`
+        : `人間との対話ターンが失敗した: ${message}`;
     await this.#journal({
       type: 'exchange',
       with: 'self',
       role: 'outbound',
       text:
-        conversationId === null
-          ? `内部ターンが失敗した: ${message}`
-          : `人間との対話ターンが失敗した: ${message}`,
+        contextWindowFailure === undefined
+          ? failureText
+          : `${failureText}${describeContextWindowFailure(contextWindowFailure)}`,
       ...(conversationId === null ? {} : { conversationId }),
     });
 
