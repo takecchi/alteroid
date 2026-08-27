@@ -6455,6 +6455,103 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
     expect(seen[0]?.transition).toBe('rejected');
   });
 
+  /**
+   * **`kind` / `overageDisabledReason` を受信箱（`#emit`）へ渡す前に包む**（issue #287）。
+   *
+   * `case 'rate_limit'` が組み立てる本文はデーモンが**意図して Markdown で書いた**もの
+   * （`**まだ動くが、この先で止まる。**`）で、そこへ SDK 由来の2つの値を素で埋めていた。
+   * `rateLimitFactsSchema`（`usage-limits.ts`）はどちらも `z.enum` ではなく `z.string()`
+   * ——境界が任意の字面を通す以上、いまの SDK の実際の値（`five_hour` 等の snake_case）が
+   * 化けないとしても、ここだけ素で通す理由が無い（`case 'permission_denied'` と同じ理由）。
+   *
+   * **包みが実際に効いていることまで見る。** 「包まれた」だけを測ると、1本の
+   * バッククォートで固定する実装（値にバッククォートが含まれると閉じてしまう）が
+   * そのまま通る。値そのものにバッククォートを含めて、可変長フェンスになることを見る。
+   */
+  it('⚠️ 受信箱へ渡る本文では、kind と overageDisabledReason が codeSpan で包まれる', async () => {
+    const s = await startManager();
+
+    // 値にバッククォートと `*` を仕込む。1本のバッククォートで固定する実装なら
+    // ここで閉じてしまい、以降の字面（`）。**まだ動くが…` 等）まで巻き込む。
+    await s.sessions[0]!.rateLimit({
+      rateLimitType: 'five_hour`*weird*`',
+      isUsingOverage: true,
+      overageDisabledReason: 'out_of_credits `rm -rf /`',
+    });
+
+    const report = await vi.waitFor(() => {
+      const found = s.inbox.find(
+        (event) => event.type === 'manager_message' && event.kind === 'report',
+      ) as { text: string } | undefined;
+      if (found === undefined) throw new Error('報告がまだ届いていない');
+      return found;
+    });
+
+    // 中身の最長のバッククォートの連なりは1本なので、包みは2本のはず。末尾が
+    // バッククォートの値は、CommonMark に取り除かれないよう両端に空白も足される
+    // （`codeSpan` の doc）。
+    expect(report.text).toContain('`` five_hour`*weird*` ``');
+    expect(report.text).toContain('`` out_of_credits `rm -rf /` ``');
+    // 定型文（デーモンの prose）はそのまま残っている。
+    expect(report.text).toContain('**まだ動くが、この先で止まる。**');
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **日誌（`#journal`）は包まない。** あちらは Markdown で描かれる面ではないので、
+   * 包むと読み手に無いバッククォートが見える。これが無いと、日誌を巻き込んだ
+   * 変異（受信箱と日誌の両方を包んでしまう実装）を見逃す。
+   */
+  it('日誌へ渡る本文では、kind と overageDisabledReason は包まれない', async () => {
+    const s = await startManager();
+
+    await s.sessions[0]!.rateLimit({
+      rateLimitType: 'five_hour`*weird*`',
+      isUsingOverage: true,
+      overageDisabledReason: 'out_of_credits `rm -rf /`',
+    });
+    await settle();
+
+    const entries = await s.stores.journal.list({});
+    const entry = entries.find((e) => JSON.stringify(e).includes('five_hour'));
+    expect(entry).toBeDefined();
+    const text = (entry as { text?: string }).text ?? '';
+    // 値そのものは残るが、包み（追加のバッククォート）は付かない。
+    expect(text).toContain('five_hour`*weird*`');
+    expect(text).not.toContain('`` five_hour`*weird*` ``');
+    expect(text).toContain('out_of_credits `rm -rf /`');
+    expect(text).not.toContain('`` out_of_credits `rm -rf /` ``');
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **`kind` が無いときのフォールバック `'枠'` は包まない。** あれはデーモンが書いた
+   * 日本語であって SDK の値ではない。包むと、デーモン自身の言葉が SDK の値の顔をする
+   * ——この issue が問題にしているのと逆向きの混ざり方になる。
+   */
+  it('kind が無い回のフォールバック「枠」は包まれない', async () => {
+    const s = await startManager();
+
+    // `rateLimitType` を渡さない＝ `kind` が undefined になる回。`status: 'rejected'`
+    // で `rejected` 遷移を起こす。
+    await s.sessions[0]!.rateLimit({ status: 'rejected' });
+
+    const report = await vi.waitFor(() => {
+      const found = s.inbox.find(
+        (event) => event.type === 'manager_message' && event.kind === 'report',
+      ) as { text: string } | undefined;
+      if (found === undefined) throw new Error('報告がまだ届いていない');
+      return found;
+    });
+
+    expect(report.text).toContain('（枠）');
+    expect(report.text).not.toContain('（`枠`）');
+
+    await s.pool.stop();
+  });
+
   it('⚠️ 身元は「セッションが起きたとき」のもの。観測のたびに読み直さない', async () => {
     // **読み直すと、回した後に届いた前のセッションの観測が新しい身元を名乗り、
     // 世代の照合がそのまま素通しになる** —— 5本のマネージャーが同時に当たった回に
