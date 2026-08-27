@@ -957,8 +957,11 @@ class HttpRunner implements RunnerClient {
           healthy = true;
           // **健全と判定した瞬間に書く。** `#stream()` がまだ終わっていなくても
           // （＝接続がまだ生きていても）ここへ来る——`#pump` の doc を参照。
+          // **stdout へ書く。** 回復は正常な出来事なので、`tokenRotationStream`
+          // の doc が確定させた「正常は stdout・異常は stderr」の割り当てに
+          // 従う（#420）——規則そのものはここでは論じ直さない。
           if (this.#backingOff) {
-            process.stderr.write(`alteroidd: ${this.#describeSelf()} のストリームに繋ぎ直せた\n`);
+            process.stdout.write(`alteroidd: ${this.#describeSelf()} のストリームに繋ぎ直せた\n`);
             this.#backingOff = false;
           }
         });
