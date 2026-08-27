@@ -1101,6 +1101,58 @@ describe('HTTP API', () => {
     });
   });
 
+  /**
+   * **宣言していない欄は外へ出ない**（この面の規約）。`ManagerSummary` に足した
+   * だけでは `.parse()` がここで黙って落とし、**CLI と Web の両方が同時に
+   * 盲目になる** —— クローンの `manager_list` にだけ出て、人間の入口には
+   * 出ない形になる（`lastFailure` / `lastReportAt` と同じ穴）。
+   */
+  it('宛先の器が黙ったという判定が、一覧と詳細の両方へ載る', async () => {
+    fake.managerList.push({
+      managerId: 'mgr-orphan',
+      status: 'running',
+      live: false,
+      runnerLostSince: '2026-08-27T09:00:00.000Z',
+      cwd: '/work/project',
+      request: '調べて',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+      waiting: [],
+    });
+
+    const list = (await (await app.request('/managers')).json()) as {
+      managers: { status: string; live: boolean; runnerLostSince?: string }[];
+    };
+    expect(list.managers[0]?.live).toBe(false);
+    expect(list.managers[0]?.runnerLostSince).toBe('2026-08-27T09:00:00.000Z');
+    // **`status` は動かさない。** 「黙った器に載っている」は「戻れなかった」ではない。
+    expect(list.managers[0]?.status).toBe('running');
+
+    const detail = (await (await app.request('/managers/mgr-orphan')).json()) as {
+      manager: { runnerLostSince?: string };
+    };
+    expect(detail.manager.runnerLostSince).toBe('2026-08-27T09:00:00.000Z');
+  });
+
+  /** 黙っていない回に空の値を載せない（「黙っていない」と「見ていない」を混ぜない）。 */
+  it('宛先の器が黙っていないマネージャーには runnerLostSince を載せない', async () => {
+    fake.managerList.push({
+      managerId: 'mgr-ok',
+      status: 'running',
+      live: true,
+      cwd: '/work/project',
+      request: '調べて',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+      waiting: [],
+    });
+
+    const list = (await (await app.request('/managers')).json()) as {
+      managers: Record<string, unknown>[];
+    };
+    expect(list.managers[0]).not.toHaveProperty('runnerLostSince');
+  });
+
   /** 失敗していない回に空の値を載せない（「失敗していない」と「見ていない」を混ぜない）。 */
   it('失敗していないマネージャーには lastFailure を載せない', async () => {
     fake.managerList.push({

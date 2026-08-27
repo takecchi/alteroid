@@ -4792,6 +4792,9 @@
                           "live": {
                             "type": "boolean"
                           },
+                          "runnerLostSince": {
+                            "type": "string"
+                          },
                           "cwd": {
                             "type": "string"
                           },
@@ -5029,6 +5032,9 @@
                         },
                         "live": {
                           "type": "boolean"
+                        },
+                        "runnerLostSince": {
+                          "type": "string"
                         },
                         "cwd": {
                           "type": "string"

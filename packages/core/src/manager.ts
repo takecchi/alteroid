@@ -4453,10 +4453,20 @@ function lostSinceOf(
 function isLive(record: ManagerRecord, silentRunners: ReadonlyMap<string, string>): boolean {
   // **`lost` は何より先に見る。** 「繋がっている（`attached`）なら live」を先に
   // 置くと、両立しない組を出さないことが「両者が同時に立つ代入が無い」という
-  // 追跡結果に頼ることになる。実際に立つ隙間がある — 起動時の引き取りは runner が
-  // 名乗った状態をそのまま採りつつ `attached: true` を固定する（`#restoreJobs`）
-  // ので、runner の側で resume 失敗が確定してからそのセッションが一覧から消える
-  // までの間に引き取ると、`lost` の像が `attached: true` で立つ。
+  // 追跡結果に頼ることになる。実際に立つ隙間がある — `#resume` は
+  // `await runner.resume(...)` が返った直後に `record.attached = true` を書く
+  // （受理と「戻れた」は別なので、これは楽観的な代入である）。その `await` の
+  // 間に `resume_failed` が届いていると、イベント側が先に `status: 'lost'` と
+  // `attached: false` を書き、その後で `#resume` が `attached` を `true` へ
+  // 戻す — `lost` の像が `attached: true` で立つ。
+  //
+  // **⚠️ ここに書く例は古びる。** かつてこの位置には「起動時の引き取りは runner が
+  // 名乗った状態をそのまま採りつつ `attached: true` を固定する（`#restoreJobs`）」
+  // と書いてあったが、`#restoreJobs` の `attached` 判定は 2026-08-18 に
+  // ブラックリストからホワイトリスト（`running` / `waiting_human` のときだけ
+  // `true`）へ変わっており、その例はもう成り立たない。**例が古びたことと、
+  // この判断（`lost` を `attached` より先に見る）が誤りであることは別である**
+  // —— 判断のほうは上の別の隙間に対していまも効いている。
   // **`stopped` も `lost` と同じ列に置く。** どちらも「戻せるか」を実際に確かめた
   // 結果として付く終端で、当て推量ではない — `lost` は resume を試して戻れな
   // かったという事実、`stopped` は `abort()` が `runner.list()` を探ってセッション

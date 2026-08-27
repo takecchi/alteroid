@@ -4,6 +4,7 @@ import { stdin, stdout } from 'node:process';
 import {
   approvalUpdatedAt,
   commitmentUpdatedAt,
+  describeManagerState,
   usageLayerSchema,
   usageSiteSchema,
   type Commitment,
@@ -1306,19 +1307,39 @@ export function renderManagerList(managers: ManagerListItem[]): string {
 
   const lines: string[] = [];
   managers.forEach((manager, index) => {
-    const live = manager.live ? '' : ' /セッション切断';
+    // **字面は `describeManagerState` から取る（唯一の生成元）。** ここは同じ
+    // 意味の字面を自前で組んでいて、`live` を真偽値としてしか扱えなかった——
+    // **「取れていない」（`undefined`）を表せず、取れていない回まで
+    // 「話しかけられる」側へ倒れていた。** クローンの `manager_list` と digest は
+    // 既にこの関数を通しており、人間の入口だけが別の字面を出していた。
+    //
     // **依頼文も抜粋にする。** 同じ関数の中で `waiting` と `lastReport` だけを
     // 畳んでいたので、数千字の依頼が来ると一覧そのものが流れて読めなくなった。
     //
     // **番号を振る。** `/manager` `/stop` `/msg` がこの並びを引く（#336）。
     lines.push(
-      `  [${index + 1}] ${manager.managerId}  [${manager.status}${live}]  ` +
+      `  [${index + 1}] ${manager.managerId}  ` +
+        `[${describeManagerState(manager.status, manager.live)}]  ` +
         `${summarizeText(manager.request)}`,
     );
     lines.push(`      cwd: ${manager.cwd}`);
     // **作成と更新。** 値は `GET /managers` が既に返していて、ここが出して
     // いなかっただけである（クローンの `manager_list` には #208 から出ている）。
     lines.push(`      作成: ${manager.startedAt}  更新: ${manager.updatedAt}`);
+    // **`live: false` の理由を、分かる分だけ名指しする。** 状態名だけだと
+    // 「セッションが終わった」のか「宛先の器が消えた」のかが読めず、人間の
+    // 打つ手（起こし直すのか、器の側を見るのか）が決まらない。
+    //
+    // **断定は「器が黙っている」までである** —— その中で走っていたかどうかは
+    // この観測からは言えない（`lost` の但し書きと同じ線引き）。
+    if (manager.runnerLostSince !== undefined) {
+      lines.push(
+        `      ⚠ 宛先の器は ${manager.runnerLostSince} 以降 名乗っていない。` +
+          '新しい委譲の宛先からも外れているので、いま話しかけられない。' +
+          '**この委譲が失われたという意味ではない** — ' +
+          '黙っているのが器なのか経路なのかは、ここからは言えない',
+      );
+    }
     // **`lost` を状態名だけで済ませない。** クローン（`manager_list`）と Web UI には
     // 但し書きが出るのに、ここだけ `[lost]` としか出ていなかった＝同じ状態を見て
     // 人間とクローンが違う判断をする形になっていた。
