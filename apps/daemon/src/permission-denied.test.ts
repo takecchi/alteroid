@@ -171,37 +171,7 @@ describe('確認へ上がらずに止められた実行（HTTP 境界）', () =>
     await expect.poll(async () => (await deniedLines(r.stores)).length, { timeout: 2000 }).toBe(1);
     expect((await deniedLines(r.stores))[0]).toContain('chat.test.tsx');
 
-    // **もう2件、走行中の合図でも見ておく（Issue #373 対応後の形）。**
-    // `#deniedOf` の帳面は道具＋層（マネージャー／作業者／層不明）の組で
-    // 数えるようになったので、`via: 'result'` だけの拒否（層が取れない）は
-    // 走行中の拒否（この回はどれも `agent_id` を持たないので層は
-    // `manager`）と別枠になり、合わせても閾値の3件に届かない。実機でも
-    // 走行中の合図は authoritative な `result` より先に来るのが普通なので、
-    // この2件も走行中の合図として先に見ておく——同じ層に揃えて escalation を
-    // 固定する。
-    session.push({
-      type: 'system',
-      subtype: 'permission_denied',
-      tool_name: 'Edit',
-      tool_use_id: 'toolu_2',
-      tool_input: { file_path: 'b.tsx' },
-      session_id: 'sess-1',
-      uuid: 'uuid-denied-2',
-    } as unknown as SDKMessage);
-    await expect.poll(async () => (await deniedLines(r.stores)).length, { timeout: 2000 }).toBe(2);
-
-    session.push({
-      type: 'system',
-      subtype: 'permission_denied',
-      tool_name: 'Edit',
-      tool_use_id: 'toolu_3',
-      tool_input: { file_path: 'c.tsx' },
-      session_id: 'sess-1',
-      uuid: 'uuid-denied-3',
-    } as unknown as SDKMessage);
-    await expect.poll(async () => (await deniedLines(r.stores)).length, { timeout: 2000 }).toBe(3);
-
-    // ターン終わりの記録。走行中に見た3件は二度上げない（`tool_use_id` で重複排除）。
+    // ターン終わりの記録。走行中に見た1件は二度上げず、見ていなかった1件を拾う
     session.push({
       type: 'result',
       subtype: 'success',
@@ -236,22 +206,15 @@ describe('確認へ上がらずに止められた実行（HTTP 境界）', () =>
     expect(alert).toMatchObject({ managerId, kind: 'report' });
     expect(alert?.text).toContain('3 件目');
 
-    // 日誌には3件（重複した toolu_1〜3 は1件のまま——3件とも走行中の合図で
-    // 既に見ているので、この result は新しい拒否を1件も追加しない）。
+    // 日誌には3件（重複した toolu_1 は1件のまま）
     expect(await deniedLines(r.stores)).toHaveLength(3);
-    // マネージャー自身の報告も従来どおり届く。**escalation のポーリングは
-    // この回では3件目の走行中の合図（result を待たずに）で先に満たされて
-    // しまうので、これとは別に result 本体の到達を待つ。**
-    await expect
-      .poll(
-        () =>
-          r.inbox.filter(
-            (event) =>
-              event.type === 'manager_message' && event.text === '編集できなかったので報告する',
-          ).length,
-        { timeout: 2000 },
-      )
-      .toBe(1);
+    // マネージャー自身の報告も従来どおり届く
+    expect(
+      r.inbox.filter(
+        (event) =>
+          event.type === 'manager_message' && event.text === '編集できなかったので報告する',
+      ),
+    ).toHaveLength(1);
   }, 15_000);
 
   /**

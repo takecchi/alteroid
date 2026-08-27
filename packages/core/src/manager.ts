@@ -3460,6 +3460,23 @@ class Pool implements ManagerPool {
         const count = (denied.get(key) ?? 0) + 1;
         denied.set(key, count);
 
+        // **escalation は道具ごとの合計で判定する（layer 別ではない）。**
+        // 持ち主の指摘（PR #549 レビュー）: 「この層のこのループが繰り返して
+        // いる」を知りたいなら層ごとが正しいが、**いまの escalation の目的は
+        // それではない**——「クローンに1件も上がらないほど頻度を下げてしまう」
+        // ことは #373 が守ろうとしている「止まっていることが見える」を裏切る。
+        // 表示（`ManagerDenial`/`denialLine`）は層ごとのまま、escalation の
+        // 判定材料だけを道具ごとの合計に戻す。
+        //
+        // **数字が嘘にならないこと。** 1件の拒否は必ずちょうど1つの
+        // `(tool, actor)` の組を +1 する（同じ `event` が2つの組へ二重計上
+        // されることは無い）ので、この合計も拒否1件ごとに必ず1ずつ増える。
+        // `shouldEscalateDenial` の exact-equality（`step === count`）は
+        // 「1ずつ増える数」を前提にしているので、そのまま渡してよい。
+        const toolTotal = denied
+          .entries()
+          .reduce((sum, [k, v]) => (decodeDenialKey(k).tool === event.tool ? sum + v : sum), 0);
+
         // 理由・分類・モデルへの拒否文は3つとも `via: 'result'` では必ず欠け、
         // `via: 'live'` でも SDK が付けてこなければ欠ける
         // （`runner-protocol.ts` の doc）。**欠けているものは作り物を出さず、
@@ -3491,7 +3508,7 @@ class Pool implements ManagerPool {
             `${brief(event.input)}${denialSuffix}`,
         });
 
-        if (!shouldEscalateDenial(count)) return;
+        if (!shouldEscalateDenial(toolTotal)) return;
         // **Markdown として書かれていない2つの欄を、埋め込む直前に包む**（issue #287）。
         //
         // この本文はデーモンが**意図して Markdown で書いた**ものである（`**…**` と
@@ -3544,7 +3561,7 @@ class Pool implements ManagerPool {
         this.#emit(
           event.managerId,
           'report',
-          `${codeSpan(event.tool)} の実行が確認へ上がらずに止められた（${actorLabel} / このマネージャーのこの組で ${count} 件目）。` +
+          `${codeSpan(event.tool)} の実行が確認へ上がらずに止められた（${actorLabel} / このマネージャーで ${toolTotal} 件目・道具ごとの合計）。` +
             'モデル分類器か deny 規則がその場で拒否しているので、**この確認はクローンには回ってきていない**。' +
             `${stuckWho}。` +
             `直近の入力: ${codeSpan(brief(event.input))}${denialSuffix}\n` +
