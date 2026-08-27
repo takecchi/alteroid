@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   MEMORY_LISTING_BUDGET,
+  MEMORY_PREMISE_RANKING_BUDGET,
   MEMORY_TOC_ENTRY_LIMIT,
   applyMemoryFrontmatterPatch,
   assertNeverMemoryCreatedAt,
@@ -13,8 +14,10 @@ import {
   deriveMemoryCreatedAtFromJournal,
   deriveMemoryFrontmatter,
   describeMemoryFloor,
+  describeMemoryPremiseRanking,
   describeMemoryProtectionStatus,
   describeMemoryReinjectionEstimate,
+  describeMemorySessionDelta,
   describeMemoryWriteDiff,
   isKnownMemoryDocKind,
   lookupMemorySection,
@@ -1894,7 +1897,214 @@ describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ�
     expect(reply).toContain('about-me（premise・全文）');
   });
 
-  it('parts が空なら呼び手の実装誤りとして例外を投げる', () => {
-    expect(() => describeMemoryReinjectionEstimate([])).toThrow();
+  it('parts が空なら呼び手の実装誤りとして例外を投げる（型を迂回した呼び手への最後の砦）', () => {
+    // **引数は非空タプル（`readonly [MemoryPart, ...MemoryPart[]]`）にしてある**
+    // ので、`tsc` は素の `[]` を拒む。ここで確かめたいのは「型を迂回して空を
+    // 渡した呼び手」への `throw` が残っていることそのものなので、意図して
+    // `as unknown as` で型を迂回する（`describeMemoryReinjectionEstimate` の doc
+    // 「引数を非空タプルにしてある理由」）。
+    const empty = [] as unknown as [MemoryPart, ...MemoryPart[]];
+    expect(() => describeMemoryReinjectionEstimate(empty)).toThrow();
+  });
+});
+
+/**
+ * `describeMemorySessionDelta` — 「セッション構築時点からの増分」の一言
+ * （P3、#318 の続き。閾値なし）。
+ *
+ * **`describeMemoryFloor` / `describeMemoryReinjectionEstimate`（上の2つ）とは
+ * 別の量を測る歯である。** あの2つは「毎ターン焼き込まれ続ける総量」と
+ * 「次のターンだけ差分として載る量」で、こちらは「次にセッションが**組み立て
+ * 直されたら**焼かれる量」——比較の相手は前回の書き込みではなく
+ * `CloneRuntimeFacts.injectedMemoryChars`（このセッションの構築時点の値）。
+ */
+describe('describeMemorySessionDelta — 「セッション構築時点からの増分」の一言（P3）', () => {
+  it('⭐ セッション構築時点から増えていれば、方向（増える）と割合が出る', () => {
+    const reply = describeMemorySessionDelta({ afterChars: 150, injectedMemoryChars: 100 });
+
+    expect(reply).toContain('次に組み立て直されたら焼かれる量（セッション構築時点との差）');
+    expect(reply).toContain('セッション構築時点 100 文字');
+    expect(reply).toContain('いま 150 文字');
+    expect(reply).toContain('+50 文字');
+    expect(reply).toContain('+50%');
+    expect(reply).toContain('増える見込み');
+  });
+
+  it('⭐ セッション構築時点から減っていれば、方向（減る）と負の割合が出る', () => {
+    const reply = describeMemorySessionDelta({ afterChars: 60, injectedMemoryChars: 100 });
+
+    expect(reply).toContain('-40 文字');
+    expect(reply).toContain('-40%');
+    expect(reply).toContain('減る見込み');
+    expect(reply).not.toContain('増える');
+  });
+
+  /**
+   * ⭐ 必須の歯（依頼者が名指し）。片側だけだと「常に増えたと言う実装」が
+   * 緑で通ってしまう——`afterChars === injectedMemoryChars` のとき、
+   * 「増える」「減る」のどちらにも読める語を出さないことを確かめる。
+   */
+  it('⭐⭐ 増分が0のとき（何も変わっていないとき）に、増えたかのような文言を出さない（必須の歯）', () => {
+    const reply = describeMemorySessionDelta({ afterChars: 100, injectedMemoryChars: 100 });
+
+    expect(reply).toContain('変わっていない');
+    expect(reply).not.toMatch(/増え/);
+    expect(reply).not.toMatch(/減っ/);
+  });
+
+  it('セッション構築時点が0文字だったときは、割合を捏造せず「出せない」と言う', () => {
+    const reply = describeMemorySessionDelta({ afterChars: 40, injectedMemoryChars: 0 });
+
+    expect(reply).toContain('+40 文字');
+    expect(reply).toContain('割合は出せない');
+    expect(reply).not.toMatch(/%/);
+  });
+
+  /**
+   * ⚠️ `injectedMemoryChars` が引けない呼び手のための代替経路（依頼者が
+   * 事後に承認）。**黙って差し替えない**——現在値であることを文言に明記する。
+   */
+  it('⚠️ injectedMemoryChars が null（引けない）なら、現在値であることを明記して現在値を出す', () => {
+    const reply = describeMemorySessionDelta({ afterChars: 12_345, injectedMemoryChars: null });
+
+    expect(reply).toContain('12,345 文字');
+    expect(reply).toContain('現在値である');
+    expect(reply).not.toContain('次に組み立て直されたら焼かれる量（セッション構築時点との差）');
+  });
+
+  it('閾値・警告に相当する語を使わない（判断はクローンが下す）', () => {
+    const grown = describeMemorySessionDelta({ afterChars: 999_999, injectedMemoryChars: 1 });
+    const fallback = describeMemorySessionDelta({ afterChars: 999_999, injectedMemoryChars: null });
+
+    for (const reply of [grown, fallback]) {
+      expect(reply).not.toContain('畳');
+      expect(reply).not.toContain('危な');
+      expect(reply).not.toContain('断る');
+      expect(reply).not.toContain('べきだ');
+    }
+  });
+});
+
+/**
+ * `describeMemoryPremiseRanking` — 「premise の大きさの順位」の一言
+ * （P3、#318 の続き）。
+ *
+ * **`describeMemoryFloor` の `largestPremise`（premise を新規作成した枝でしか
+ * 出ない、最大の1件だけの名指し）とは別物。** こちらは呼ぶたびに、いま在る
+ * 全 premise を大きい順に並べる——「どれが大きいか」ではなく「どういう順に
+ * 大きいか」まで見せる。
+ */
+describe('describeMemoryPremiseRanking — 「premise の大きさの順位」の一言（P3）', () => {
+  it('premise が無ければ、順位ではなくその旨を言う', () => {
+    const reply = describeMemoryPremiseRanking([]);
+    expect(reply).toContain('premise の大きさの順位');
+    expect(reply).toContain('いま premise はまだ無い');
+  });
+
+  it('fact しか無くても、順位ではなくその旨を言う（fact は対象にしない）', () => {
+    const reply = describeMemoryPremiseRanking([fact('runbook', { description: '事実' })]);
+    expect(reply).toContain('いま premise はまだ無い');
+  });
+
+  it('⭐ premise を大きい順に並べる', () => {
+    const small = premise('doc-small', 'あ'.repeat(10));
+    const large = premise('doc-large', 'い'.repeat(1000));
+    const medium = premise('doc-medium', 'う'.repeat(100));
+
+    const reply = describeMemoryPremiseRanking([small, large, medium]);
+
+    const idxLarge = reply.indexOf('doc-large:');
+    const idxMedium = reply.indexOf('doc-medium:');
+    const idxSmall = reply.indexOf('doc-small:');
+    expect(idxLarge).toBeGreaterThan(-1);
+    expect(idxMedium).toBeGreaterThan(-1);
+    expect(idxSmall).toBeGreaterThan(-1);
+    expect(idxLarge).toBeLessThan(idxMedium);
+    expect(idxMedium).toBeLessThan(idxSmall);
+    expect(reply).toContain('1. doc-large:');
+    expect(reply).toContain('全 3 件');
+  });
+
+  it('同じ大きさなら slug 昇順で決定的に並ぶ（呼ぶたびに順序が入れ替わらない）', () => {
+    const a = premise('aaa', 'おなじ本文');
+    const z = premise('zzz', 'おなじ本文');
+
+    const reply1 = describeMemoryPremiseRanking([z, a]);
+    const reply2 = describeMemoryPremiseRanking([a, z]);
+
+    expect(reply1).toBe(reply2);
+    expect(reply1.indexOf('aaa:')).toBeLessThan(reply1.indexOf('zzz:'));
+  });
+
+  it('fact は数えない——premise だけの順位になる', () => {
+    const p = premise('doc-p', '本文');
+    const f = fact('doc-f', { description: '要旨' });
+
+    const reply = describeMemoryPremiseRanking([p, f]);
+
+    expect(reply).toContain('doc-p:');
+    expect(reply).not.toContain('doc-f:');
+    expect(reply).toContain('全 1 件');
+  });
+
+  /**
+   * サイズの数え方は `measureMemoryFloor` と揃える——malformed な frontmatter
+   * には説明の1行が前に付くので、`content.length` だけを足すと実物より
+   * 少ない数を名乗ることになる（`measureMemoryFloor` の doc と同じ理由）。
+   */
+  it('malformed な frontmatter を持つ premise は、content.length ではなく実際に載る形で数える', () => {
+    const malformed: MemoryPart = {
+      slug: 'broken',
+      content: '---\nnot: [valid\n---\n# 壊れた\n本文',
+    };
+    expect(resolveMemoryDocKind(parseMemoryFrontmatter(malformed.content))).toBe('premise');
+
+    const reply = describeMemoryPremiseRanking([malformed]);
+    const match = /broken: ([\d,]+) 文字/.exec(reply);
+    expect(match).not.toBeNull();
+    const reportedChars = Number(((match as RegExpExecArray)[1] ?? '').replace(/,/g, ''));
+    expect(reportedChars).toBeGreaterThan(malformed.content.length);
+  });
+
+  /**
+   * ⭐ 一覧の上限は文字数で持つ（AGENTS.md の地雷表「一覧の上限を件数だけで
+   * 決める」）。切ったら省いた件数を必ず言う（`.claude/skills/listing-and-detail/`）。
+   */
+  it('⭐ 予算を超えたら、件数ではなく文字数で切り、省いた件数を必ず言う', () => {
+    const many = Array.from({ length: 200 }, (_, i) =>
+      premise(`p${i.toString().padStart(4, '0')}`, '本文'),
+    );
+
+    const reply = describeMemoryPremiseRanking(many);
+
+    expect(reply).toMatch(/…ほか \d+ 件は省略/);
+    expect(reply).toContain('全 200 件');
+    expect(reply).toContain('memory_list で確認できる');
+
+    const shownMatch = /大きい順に (\d+) 件だけ出した/.exec(reply);
+    expect(shownMatch).not.toBeNull();
+    const shown = Number((shownMatch as RegExpExecArray)[1]);
+    expect(shown).toBeGreaterThan(0);
+    expect(shown).toBeLessThan(200);
+
+    const restMatch = /…ほか (\d+) 件は省略/.exec(reply);
+    const rest = Number((restMatch as RegExpExecArray)[1]);
+    expect(shown + rest).toBe(200);
+  });
+
+  it('予算に収まる件数なら、省略の注記を出さない', () => {
+    const few = [premise('a', '本文'), premise('b', '本文')];
+    const reply = describeMemoryPremiseRanking(few);
+    expect(reply).not.toContain('省略');
+    expect(String(MEMORY_PREMISE_RANKING_BUDGET)).not.toBe('0'); // 定数が生きていることの最小確認
+  });
+
+  it('閾値・警告に相当する語を使わない（判断はクローンが下す）', () => {
+    const many = Array.from({ length: 5 }, (_, i) => premise(`p${i}`, 'あ'.repeat(1000)));
+    const reply = describeMemoryPremiseRanking(many);
+
+    expect(reply).not.toContain('畳');
+    expect(reply).not.toContain('危な');
+    expect(reply).not.toContain('大きすぎ');
   });
 });

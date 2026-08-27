@@ -31,7 +31,9 @@ import {
   containsMemoryFrontmatterLineBreak,
   cutMemorySection,
   describeMemoryFloor,
+  describeMemoryPremiseRanking,
   describeMemoryReinjectionEstimate,
+  describeMemorySessionDelta,
   describeMemoryWriteDiff,
   formatMemoryCreatedAt,
   isKnownMemoryDocKind,
@@ -804,6 +806,35 @@ function memoryFloorNote(
 }
 
 /**
+ * `memory_write` / `memory_append` / `memory_frontmatter_set` /
+ * `memory_section_move` の4口が共有する、「セッション構築時点からの増分」と
+ * 「premise の大きさの順位」の2行を組み立てる薄い糊（P3、#318 の続き）。
+ *
+ * **`memoryFloorNote` とは別の糊にしてある。** あちらが要求するのは書き込み
+ * 前後の `MemoryFloor`（before/after）だが、こちらが要るのは after 側の
+ * 総文字数と `CloneRuntimeFacts.injectedMemoryChars` だけ——引数の形が
+ * 違うので混ぜない（`measureMemoryFloor` の doc「数え方を2本に割ると
+ * 黙って嘘をつく」と同じ理由で、既存の糊を条件分岐だらけにしない）。
+ *
+ * `runtime` は `context.runtime?.()` の戻り値をそのまま渡すこと——蒸留の
+ * サイドクエリでも本番の配線は必ず値を渡すが（`describeMemorySessionDelta`
+ * の doc）、テストのために省略できる口である以上、ここでは `undefined` を
+ * 受けて `null` へ倒す。
+ */
+function memorySessionGrowthNote(
+  memoryAfter: readonly MemoryPart[],
+  runtime: CloneRuntimeFacts | undefined,
+): string {
+  const afterChars = measureMemoryFloor(memoryAfter).totalChars;
+  const sessionDelta = describeMemorySessionDelta({
+    afterChars,
+    injectedMemoryChars: runtime?.injectedMemoryChars ?? null,
+  });
+  const ranking = describeMemoryPremiseRanking(memoryAfter);
+  return [sessionDelta, ranking].join('\n\n');
+}
+
+/**
  * 歯の断りの返答。**「保護されています」だけでは、クローンが次の手を推測する
  * ことになる。** 必ず4つを言う——(1) なぜ断ったか、(2) どうすれば通るか
  * （`ask_human` に何を積めばよいかまで）、(3) いま何も失われていないこと、
@@ -1077,7 +1108,10 @@ export function createCloneTools(context: ToolContext) {
           before === null,
         );
         const reinjection = describeMemoryReinjectionEstimate([written]);
-        return text(`記憶 ${slug} を更新した。\n\n${diff}\n\n${floor}\n\n${reinjection}`);
+        const growth = memorySessionGrowthNote(memoryAfter, context.runtime?.());
+        return text(
+          `記憶 ${slug} を更新した。\n\n${diff}\n\n${floor}\n\n${reinjection}\n\n${growth}`,
+        );
       },
     ),
 
@@ -1121,7 +1155,10 @@ export function createCloneTools(context: ToolContext) {
           before === null,
         );
         const reinjection = describeMemoryReinjectionEstimate([written]);
-        return text(`記憶 ${slug} に追記した。\n\n${diff}\n\n${floor}\n\n${reinjection}`);
+        const growth = memorySessionGrowthNote(memoryAfter, context.runtime?.());
+        return text(
+          `記憶 ${slug} に追記した。\n\n${diff}\n\n${floor}\n\n${reinjection}\n\n${growth}`,
+        );
       },
     ),
 
@@ -1367,9 +1404,10 @@ export function createCloneTools(context: ToolContext) {
         // の断り）ので `created` は常に false。
         const floor = memoryFloorNote(memoryBefore, memoryAfter, slug, written.content, false);
         const reinjection = describeMemoryReinjectionEstimate([written]);
+        const growth = memorySessionGrowthNote(memoryAfter, context.runtime?.());
 
         return text(
-          `記憶 ${slug} の frontmatter を更新した。\n\n${diff}${kindChangeNote}\n\n${floor}\n\n${reinjection}`,
+          `記憶 ${slug} の frontmatter を更新した。\n\n${diff}${kindChangeNote}\n\n${floor}\n\n${reinjection}\n\n${growth}`,
         );
       },
     ),
@@ -1623,6 +1661,7 @@ export function createCloneTools(context: ToolContext) {
         // 次のターンに `#withFreshMemory` がこの2文書をまとめて載せ直す
         // （`describeMemoryReinjectionEstimate` の doc「合計を選んだ理由」）。
         const reinjection = describeMemoryReinjectionEstimate([toWritten, fromWritten]);
+        const growth = memorySessionGrowthNote(memoryAfter, context.runtime?.());
 
         // **古い本文を1文字も出さない。** 出せば文脈に入る（この道具の
         // 存在理由が消える）。名指しするのは見出しと節id だけ——呼び手が
@@ -1640,6 +1679,8 @@ export function createCloneTools(context: ToolContext) {
             floor,
             '',
             reinjection,
+            '',
+            growth,
           ].join('\n'),
         );
       },

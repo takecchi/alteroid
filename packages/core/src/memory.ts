@@ -1443,8 +1443,29 @@ export function describeMemoryFloor(input: {
  * 2. **`memory_section_move` は移動元と移動先の両方を「変わった文書」に
  *    する。** 直上のとおり、ここでは両方をまとめた**合計**を1つの数で返す
  *    （別々に出す選択肢もあったが採らなかった——理由は直上）。
+ *
+ * ## ⚠️ 引数を非空タプルにしてある理由（P3 の同乗、#318）
+ *
+ * 呼び手4箇所（`tools.ts` の `memory_write` / `memory_append` /
+ * `memory_frontmatter_set` / `memory_section_move`）は**全部、書き込みが
+ * 成功した後にこれを呼ぶ。** だから空配列を渡す呼び手は構造的に存在しない
+ * ——それを型で表すため、引数を `readonly [MemoryPart, ...MemoryPart[]]`
+ * （非空タプル）にしてある。**直下の `throw` は残す**——型を迂回した
+ * 呼び手（`as unknown as` 等）への最後の砦であって、正しく型を通る4箇所が
+ * ここへ来ることは無い。
+ *
+ * **なぜ空を渡しても投げっぱなしにしてよいのか。** 呼び手が書き込みの
+ * 成功**後**にここを呼ぶので、ここで投げると「記憶は書けているのに応答が
+ * エラーになる」形になる。クローンはそれを「書けなかった」と読んで
+ * 二重に書きうる（`memory_append` なら本文が二重になる）。**⟹ 空を渡し
+ * うる呼び手を新しく足すなら、投げる前に握り潰す側へ倒すかを再検討する
+ * こと。** いまの4呼び手は配列リテラル（`[written]` / `[toWritten, fromWritten]`）
+ * なので、この型変更で1文字も直す必要が無い——空を作りようがない形で
+ * 呼んでいる。
  */
-export function describeMemoryReinjectionEstimate(parts: readonly MemoryPart[]): string {
+export function describeMemoryReinjectionEstimate(
+  parts: readonly [MemoryPart, ...MemoryPart[]],
+): string {
   if (parts.length === 0) {
     throw new Error('describeMemoryReinjectionEstimate: parts が空（呼び手の実装誤り）');
   }
@@ -1475,6 +1496,181 @@ export function describeMemoryReinjectionEstimate(parts: readonly MemoryPart[]):
     );
   }
   return lines.join('\n');
+}
+
+/** `formatMemoryCharDelta` の百分率版。1桁で丸める。 */
+function formatMemoryPercentDelta(percent: number): string {
+  const rounded = Math.round(percent * 10) / 10;
+  if (rounded === 0) return '0%'; // `-0` を含む（`Object.is(-0, 0)` は false だが `-0 === 0` は true）。
+  return rounded > 0 ? `+${rounded}%` : `${rounded}%`;
+}
+
+/**
+ * `memory_write` / `memory_append` / `memory_frontmatter_set` /
+ * `memory_section_move` の応答に足す、「セッション構築時点からの増分」の
+ * 一言（P3、#318 の続き）。
+ *
+ * ## なぜ「セッション構築時点」を基準にするのか（依頼者の逐語）
+ *
+ * 「私が実際に毎ターン払っているのは組み立て時点の値である（畳んでも
+ * 追記しても、いま走っているセッションが払う額は変わらない）。⟹ そこ
+ * からの差は『次にセッションが組み立て直されたら、いくらになるか』を
+ * 意味する。⟹『前回の書き込みから』だと、その意味を持たない。」
+ *
+ * だから比較の相手は「1つ前の書き込み」でも「セッション開始の壁時計」でも
+ * なく、`CloneRuntimeFacts.injectedMemoryChars`
+ * （このセッションのシステムプロンプトへ実際に焼き込まれた文字数。
+ * セッションの間は固定 — `clone.ts` の `#promptMemoryChars` の doc）。
+ *
+ * ## `injectedMemoryChars` が引けないとき（依頼者が事後に承認した代替）
+ *
+ * `ToolContext.runtime` はテストのためだけに省略できる口で、本番の配線
+ * （`clone.ts` の `#toolContext` / `#distillFromTranscript`）は本セッションと
+ * 蒸留のサイドクエリの両方へ必ず渡す——両方とも `#runtimeFacts()` を経由し、
+ * `injectedMemoryChars` は `#buildOptions` がセッションを開く時点で確定
+ * するので、この4口のどのハンドラが呼ばれる時点でも既に値が入っている
+ * （`self_status` が同じ値を「システムプロンプトへ焼き込んだ記憶の文字数」
+ * として出しているのと同じ経路）。
+ *
+ * **それでも呼び手が `runtime` を渡さない場合に備え、黙って0や現在値へ
+ * 倒さない。** `injectedMemoryChars` が `null` のときは「いま読み直した
+ * 総量」を出すが、**それがセッション構築時点との差ではないことを文言に
+ * 明記する**——依頼者の条件そのもの（「黙って別の数に差し替えない
+ * でほしい。どちらの数かで、意味が変わる」）。
+ *
+ * ## 閾値を置かない（依頼者の明示条件）
+ *
+ * ここは「増えた／減った／変わらない」という事実だけを言う。「畳め」
+ * 「危ない」に相当する語は使わない——判断はクローンが下す
+ * （`docs/north_star.md` が要求する形）。
+ *
+ * ## ⚠️ 増分が 0 のときに「増えた」と読める文言を出さない
+ *
+ * `formatMemoryCharDelta` は 0 に `+` を付けるが、それをそのまま「増える」
+ * という動詞に埋め込むと、変化が無いのに増加の文として読めてしまう。
+ * ここでは delta === 0 のときだけ別の文（動詞を含まない）を返す
+ * （歯: `tools.test.ts` の「増分が0のとき、増えたかのような文言を出さない」）。
+ *
+ * ## この機能が効くかどうかは未検証である（依頼者の明示指定）
+ *
+ * クローンは一度、同じ「毎ターンの床」の数を見ながら止まらなかった
+ * （37,515 → 51,751 文字、+38%）。**⟹ 数を増やして見せることが、行動を
+ * 変えるとは限らない。** この関数と `describeMemoryPremiseRanking` を
+ * 足しても、それだけで記憶の肥大が止まる保証は無い——測っていない。
+ */
+export function describeMemorySessionDelta(input: {
+  /** いま `stores.persona.documents()` を読み直した後の、焼き込み全体の文字数。 */
+  afterChars: number;
+  /**
+   * `CloneRuntimeFacts.injectedMemoryChars`。引けないときは `null`
+   * （直上の「引けないとき」を読むこと）。
+   */
+  injectedMemoryChars: number | null;
+}): string {
+  const { afterChars, injectedMemoryChars } = input;
+
+  if (injectedMemoryChars === null) {
+    return (
+      `いまの記憶の総量（現在値）: ${formatMemoryCharCount(afterChars)} 文字。` +
+      ' ⚠️ これはセッション構築時点との差ではなく現在値である' +
+      '——セッション構築時点の値（`self_status` が「システムプロンプトへ焼き込んだ' +
+      '記憶の文字数」として出す数）がこの呼び出しからは引けなかったため、' +
+      '代わりに現在値だけを出している。'
+    );
+  }
+
+  const label = '次に組み立て直されたら焼かれる量（セッション構築時点との差）';
+  const delta = afterChars - injectedMemoryChars;
+
+  if (delta === 0) {
+    return (
+      `${label}: セッション構築時点（${formatMemoryCharCount(injectedMemoryChars)} 文字）から` +
+      '変わっていない。'
+    );
+  }
+
+  const direction = delta > 0 ? '増える' : '減る';
+  const percentNote =
+    injectedMemoryChars === 0
+      ? '（セッション構築時点が0文字だったため割合は出せない）'
+      : `（${formatMemoryPercentDelta((delta / injectedMemoryChars) * 100)}）`;
+
+  return (
+    `${label}: セッション構築時点 ${formatMemoryCharCount(injectedMemoryChars)} 文字 → ` +
+    `いま ${formatMemoryCharCount(afterChars)} 文字（${formatMemoryCharDelta(delta)} 文字` +
+    `${percentNote}、${direction}見込み）。`
+  );
+}
+
+/** `describeMemoryPremiseRanking` の一覧予算（文字数）。件数では切らない（AGENTS.md の地雷表）。 */
+export const MEMORY_PREMISE_RANKING_BUDGET = 2_000;
+
+/**
+ * `memory_write` / `memory_append` / `memory_frontmatter_set` /
+ * `memory_section_move` の応答に足す、「premise の大きさの順位」の一言
+ * （P3、#318 の続き）。
+ *
+ * ## なぜ要るか
+ *
+ * `describeMemoryFloor` が名指しするのは「いま最も大きい premise」1件だけで、
+ * しかも premise を新規作成した枝でしか出ない。それ以外の呼び出しでは
+ * 「総量が動いた」しか見えず、**どの文書が大きいのか**が分からない——
+ * 畳む判断に直接使える形にするには、全 premise の順位そのものが要る。
+ *
+ * ## サイズの数え方は `measureMemoryFloor` と揃える
+ *
+ * `content.length` ではなく `renderPremisePart` の結果の長さで数える——
+ * malformed な frontmatter は説明の1行が前に付くので、`content` だけを
+ * 足すと実物より少ない数を名乗ることになる（`measureMemoryFloor` の doc と
+ * 同じ理由）。
+ *
+ * ## 一覧の上限は文字数で持つ（件数ではない）
+ *
+ * `renderListing`（`excerpt.ts`）を通し、切ったら省いた件数を必ず言う
+ * （`.claude/skills/listing-and-detail/SKILL.md`。AGENTS.md の地雷表
+ * 「一覧の上限を件数だけで決める」——300件 × 200字のような掛け算の見落としを
+ * 避けるため、件数の上限は持たず文字数の予算だけで締める）。
+ *
+ * ## fact は対象にしない
+ *
+ * fact はプロンプトへ目次の1行しか載らない（`renderMemoryDocuments` が
+ * 組む `tocSection`）ので、「どれが大きいか」の対象は premise だけである。
+ *
+ * ## 閾値を置かない・畳むことを勧めない
+ *
+ * 出すのは順位と文字数だけである。「これは大きすぎる」「畳め」に相当する
+ * 語は使わない——`describeMemorySessionDelta` と同じ理由（判断はクローンが
+ * 下す）。
+ *
+ * ## この機能が効くかどうかは未検証である
+ *
+ * `describeMemorySessionDelta` の doc の「未検証」節を見よ——同じ限界が
+ * ここにも当てはまる。
+ */
+export function describeMemoryPremiseRanking(documents: readonly MemoryPart[]): string {
+  const { premiseParts } = buildMemoryDocumentSections(documents);
+  if (premiseParts.length === 0) {
+    return 'premise の大きさの順位: いま premise はまだ無い。';
+  }
+
+  const ranked = premiseParts
+    .map((part) => ({ slug: part.slug, chars: renderPremisePart(part).length }))
+    // 大きい順。同数なら slug 昇順（出力を決定的にする——同数の並びが
+    // 呼ぶたびに入れ替わると、変わっていないのに差分に見える）。
+    .sort((a, b) => b.chars - a.chars || a.slug.localeCompare(b.slug));
+
+  const items = ranked.map(
+    (entry, index) => `${index + 1}. ${entry.slug}: ${formatMemoryCharCount(entry.chars)} 文字`,
+  );
+
+  const listing = renderListing(items, {
+    budget: MEMORY_PREMISE_RANKING_BUDGET,
+    omitted: ({ rest, shown, total }) =>
+      `…ほか ${rest} 件は省略（大きい順に ${shown} 件だけ出した。全 ${total} 件。` +
+      '残りは memory_list で確認できる）。',
+  });
+
+  return `premise の大きさの順位（大きい順、全 ${ranked.length} 件）:\n${listing}`;
 }
 
 // ---------------------------------------------------------------------------
