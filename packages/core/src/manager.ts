@@ -3358,6 +3358,29 @@ class Pool implements ManagerPool {
         // 失われる」を作る（R4 のすぐ上の条件とは別の理由でここに置く。
         // R4 は「止めた後」、こちらは「止めていないが中身が無い」）。
         if (event.contentless === true) return;
+        // **`event.text` を包まずに渡す（issue #287）。**
+        //
+        // **書き手**: `runner.ts` の `reportText()` / `failedReportText()`
+        // （`event.failure` の有無で呼び分け）が作る。前者はマネージャー自身の
+        // 途中出力（`said`）＋ SDK の `result` 文言（時に runner 自身の
+        // フォールバック定型文「（報告なし）」等を含む）、後者はさらに runner
+        // 自身の定型文（「（このターンは応答を返さずに終わった: …）」）と SDK の
+        // 失敗文言（`failure.text`）を重ねる——**書き手はマネージャー・SDK・
+        // runner 自身の最大3人**で、デーモン（`manager.ts`）はどの経路でも
+        // 書いていない。
+        //
+        // **なぜ包まないか（理由: 包む単位が無い）。** この連結は
+        // `runner-protocol.ts` の境界を越える**前に** `runner.ts` の中で完了して
+        // おり（`runnerEventSchema` の `report.text` は `z.string()` の1本）、
+        // `manager.ts` が受け取る時点では複数の書き手の断片が既に混ざった1本の
+        // 文字列である。どこからどこまでが誰の断片かという境目がここには
+        // 残っていないので、`codeSpan()` で包む対象を選べない。**危ないから
+        // 見送っているのではなく、この層には包む材料が無い。**
+        //
+        // **別の層でなら在りうる。** 包むとすれば連結する側
+        // （`runner.ts` の `reportText()` / `failedReportText()`）で、SDK 由来の
+        // 断片を先に `codeSpan()` へ通してから連結する形になる。`manager.ts` の
+        // 中では覆らない。
         this.#emit(event.managerId, 'report', event.text);
         return;
       }
