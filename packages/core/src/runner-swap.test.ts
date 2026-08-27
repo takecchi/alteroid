@@ -51,6 +51,13 @@ class IdentifyingRunner implements RunnerClient {
    * （下の「一度も probe されていない」describe）のためだけに足した。
    */
   revision: { status: 'known'; commit: string; short: string; source: 'build' } | undefined;
+  /**
+   * 名乗る未送出件数（#358 案b の第2段）。既定は無し——`resources()` と同じく
+   * 「取れていない」を表す（0を既定にしない）。
+   */
+  pendingEvents: number | undefined;
+  /** 名乗る最古の未送出時刻。`pendingEvents` と同じ観測から出る想定。 */
+  oldestPendingAt: string | undefined;
 
   constructor(runnerId: string, instanceId: string | undefined) {
     this.runnerId = runnerId;
@@ -59,13 +66,22 @@ class IdentifyingRunner implements RunnerClient {
   }
 
   async identity(): Promise<
-    { runnerId?: string; instanceId?: string; revision?: IdentifyingRunner['revision'] } | undefined
+    | {
+        runnerId?: string;
+        instanceId?: string;
+        revision?: IdentifyingRunner['revision'];
+        pendingEvents?: number;
+        oldestPendingAt?: string;
+      }
+    | undefined
   > {
     this.probes += 1;
     return {
       runnerId: this.claimedRunnerId,
       ...(this.instanceId === undefined ? {} : { instanceId: this.instanceId }),
       ...(this.revision === undefined ? {} : { revision: this.revision }),
+      ...(this.pendingEvents === undefined ? {} : { pendingEvents: this.pendingEvents }),
+      ...(this.oldestPendingAt === undefined ? {} : { oldestPendingAt: this.oldestPendingAt }),
     };
   }
 
@@ -369,6 +385,113 @@ describe('器の入れ替えを見分ける', () => {
         revision: { status: 'known', commit: 'c'.repeat(40) },
       },
     ]);
+
+    await registry.stop();
+  });
+});
+
+/**
+ * runner→デーモンの脚（`Outbox` の滞留）を、heartbeat（`#probe`）からも
+ * warm できること（#358 案b の第2段）。
+ *
+ * `resources()` は `runner_list resources: true` を明示的に呼んだときにしか
+ * 叩かれないので、それを一度も呼んでいない runner の滞留キャッシュは cold の
+ * ままだった（案b の第1段の弱点）。ここで固定するのは、**同じ2欄
+ * （`pendingEvents` / `oldestPendingAt`）を `identity()` の応答からも拾い、
+ * 10秒ごとの heartbeat が自然に warm すること**——新しい往復は無い
+ * （`identity()` を叩く回数は変わらない。`runner.probes` で数える）。
+ */
+describe('runner→デーモンの脚の滞留を heartbeat からも warm する（#358 案b の第2段）', () => {
+  it('#probe が1周すると、値と観測時刻の両方が名簿に入る', async () => {
+    const runner = new IdentifyingRunner('runner-a', 'boot-1');
+    runner.pendingEvents = 5;
+    runner.oldestPendingAt = '2026-08-20T00:00:00.000Z';
+    const registry = createRunnerRegistry([], {});
+    await registry.register({ label: 'http://runner:4518', open: async () => runner });
+
+    // **開けた瞬間には warm しない。** `#open()` は `client.instanceId` /
+    // `client.revision`（プロパティ）しか読まない——`pendingEvents` は
+    // `identity()` の**呼び出し結果**からしか拾えないので、heartbeat を
+    // 待つ必要がある（`resources()` と同じく、繋がった瞬間には無い）。
+    expect(registry.entries()[0]).not.toHaveProperty('pendingEvents');
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(runner.probes).toBe(1);
+
+    const entry = registry.entries()[0];
+    expect(entry?.pendingEvents).toBe(5);
+    expect(entry?.oldestPendingAt).toBe('2026-08-20T00:00:00.000Z');
+    expect(entry?.pendingEventsObservedAt).toEqual(expect.any(String));
+
+    await registry.stop();
+  });
+
+  /**
+   * `pendingEvents` は0件でも「測れた値」なので、そのまま記録される
+   * （`resources()` 側の同じ規律——`managers` と同じ扱い）。**0を「取れて
+   * いない」に混同しないこと**——ここが `oldestPendingAt` と違う軸である。
+   */
+  it('pendingEvents が0のときも、そのまま記録される（0は「取れていない」ではない）', async () => {
+    const runner = new IdentifyingRunner('runner-a', 'boot-1');
+    runner.pendingEvents = 0;
+    const registry = createRunnerRegistry([], {});
+    await registry.register({ label: 'http://runner:4518', open: async () => runner });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    const entry = registry.entries()[0];
+    expect(entry?.pendingEvents).toBe(0);
+    expect(entry).not.toHaveProperty('oldestPendingAt');
+    expect(entry?.pendingEventsObservedAt).toEqual(expect.any(String));
+
+    await registry.stop();
+  });
+
+  /**
+   * **`identity()` を持たない runner（`ping()` しか無い旧来の実装）では、
+   * 名簿には何も入らない。** 0で埋めると「滞留0」と「取れていない」の区別が
+   * 消える（AGENTS.md「取れない軸に0の行を作る」）。生死の判定（`ping()`）は
+   * 今まで通り動くことも一緒に確かめる——締め出さない。
+   */
+  it('identity() を持たない runner では、pendingEvents は一切書かれない（0で埋めない）', async () => {
+    const runner = new PingOnlyRunner('runner-old', undefined);
+    const registry = createRunnerRegistry([], {});
+    await registry.register({ label: 'http://runner:4518', open: async () => runner });
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    // `ping()` へ落ちて、生死は今まで通り見えている（締め出していない）。
+    expect(runner.probes).toBe(3);
+    expect(registry.entries()).toMatchObject([{ state: 'connected' }]);
+    const entry = registry.entries()[0];
+    expect(entry).not.toHaveProperty('pendingEvents');
+    expect(entry).not.toHaveProperty('oldestPendingAt');
+    expect(entry).not.toHaveProperty('pendingEventsObservedAt');
+
+    await registry.stop();
+  });
+
+  /**
+   * **`identity()` はあるが、その回だけ `pendingEvents` を返さない**（応答の
+   * 形が壊れた・この機能より前の応答を模す）場合も、前回書いた値を消さない
+   * ——書かれるのは「取れたとき」だけで、取れなかった回に既存の値を消すのは
+   * 別の判断である（`#noteInstance` は「触らない」で、`undefined` 上書きは
+   * しない）。
+   */
+  it('pendingEvents を返さない回があっても、前回までの値は残る', async () => {
+    const runner = new IdentifyingRunner('runner-a', 'boot-1');
+    runner.pendingEvents = 3;
+    const registry = createRunnerRegistry([], {});
+    await registry.register({ label: 'http://runner:4518', open: async () => runner });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(registry.entries()[0]?.pendingEvents).toBe(3);
+
+    // 次の周では欄自体を返さなくなった。
+    runner.pendingEvents = undefined;
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(registry.entries()[0]?.pendingEvents).toBe(3);
 
     await registry.stop();
   });

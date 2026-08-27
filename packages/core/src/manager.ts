@@ -312,27 +312,37 @@ export interface RunnerFleetOverview {
 }
 
 /**
- * runner→デーモンの脚（`Outbox` の滞留）を最後に観測できた値（#358 案b）。
+ * runner→デーモンの脚（`Outbox` の滞留）を最後に観測できた値
+ * （#358 案b・案b の第2段）。
  *
  * **これはキャッシュであって現在値ではない。** `RunnerPlacementResources` の
  * `pendingEvents` / `oldestPendingAt` は runner が `GET /health` で無条件に
- * 返しているが、デーモン側でそれを拾うのは `runners({ resources: true })` を
- * 呼んだとき（＝クローンが `runner_list` を `resources: true` で明示的に
- * 呼んだとき）だけである。10秒ごとの生存確認（`RunnerRegistry` の `#probe`）は
- * `client.identity()` しか呼ばず、`identity()` の応答には `pendingEvents` の
- * 欄が無いので、**放っておいても定期的に拾われることはない**。
+ * 返している。デーモン側の入口は2つある。
  *
- * **だから、あるはずの runnerId がここに無いことは「滞留が0件」を意味
- * しない。** 「0件だった」と「まだ一度も観測していない」のどちらかである
- * ——読む側はこの2つを区別できるようにすること（`runnerBacklog()` の doc、
- * `tools.ts` の `describeRunnerBacklog` の doc）。
+ * 1. **`runners({ resources: true })`**（＝クローンが `runner_list` を
+ *    `resources: true` で明示的に呼んだとき）。`resources()` の応答から拾う
+ *    （`Pool#runners` の該当箇所）。
+ * 2. **10秒ごとの生存確認（`RunnerRegistry` の `#probe`）。** `identity()` を
+ *    持つ runner については、この heartbeat が同じ2欄を読む（
+ *    `RunnerClient.identity` の doc）ので、`runner_list` を一度も
+ *    `resources: true` で呼んでいなくても warm しうる（第2段の本体）。
  *
- * **このキャッシュを埋めるためだけの新しい往復は無い。** `runners({
- * resources: true })` は呼んだ時点で既に `resources()` の往復を払って
- * いる——ここはその応答の中から今までただ捨てられていた2つの欄を拾って
- * 保存するだけで、呼び出し回数は1つも増えない（#358 のコメント
+ * **それでも「あるはずの runnerId がここに無い」ことは「滞留が0件」を意味
+ * しない。** `identity()` を持たない runner（`LocalRunner`・古い器）は
+ * heartbeat からは一切 warm せず、1のクローンの明示呼びを待つしかない
+ * ——それを一度も呼んでいなければ、依然 cold のままである。「0件だった」
+ * と「まだ一度も観測していない」のどちらかは、読む側が区別できるように
+ * すること（`runnerBacklog()` の doc、`tools.ts` の `describeRunnerBacklog`
+ * の doc）。
+ *
+ * **どちらの入口も、これを埋めるためだけの新しい往復を払わない。** 1は
+ * `runners({ resources: true })` が既に払っている往復の結果を、2は
+ * heartbeat が既に払っている往復（`identity()`）の結果を、それぞれ今まで
+ * ただ捨てていた欄から拾って保存するだけである（#358 のコメント
  * 2026-08-27T00:26Z の判断: `manager_list` から自動で `resources()` を
- * 呼ぶ形は採らない。opt-in の判断がクローンから奪われる。north_star 禁止2）。
+ * 呼ぶ形は採らない。opt-in の判断がクローンから奪われる。north_star 禁止2。
+ * この判断は変わっていない——2の heartbeat はもとから10秒ごとに走っている
+ * ものへ乗せただけで、`manager_list` 側からは何も自動で呼んでいない）。
  */
 export interface RunnerBacklogSnapshot {
   runnerId: string;
@@ -494,14 +504,18 @@ export interface ManagerPool {
   runners(options?: { fingerprints?: boolean; resources?: boolean }): Promise<RunnerFleetOverview>;
   /**
    * runner→デーモンの脚（`Outbox` の滞留）について、最後に観測できた値
-   * （#358 案b）。**ネットワークを一切叩かない**——直近の `runners({
-   * resources: true })` が拾って保存しておいたものを読むだけである
+   * （#358 案b・案b の第2段）。**ネットワークを一切叩かない**——直近の
+   * `runners({ resources: true })` と、10秒ごとの heartbeat（`#probe`）が
+   * それぞれ拾って保存しておいたものを合流させて読むだけである
    * （`RunnerBacklogSnapshot` の doc）。
    *
-   * **一度も `runners({ resources: true })` を呼んでいない runner は
-   * 出てこない。** その runner の滞留が0件だからではなく、まだ観測して
-   * いないからである——呼び出し側（`tools.ts` の `manager_list`）は
-   * 「行が無い＝0件」と読まないこと。
+   * **`identity()` を持たない runner（`LocalRunner`・古い器）については、
+   * 一度も `runners({ resources: true })` を呼んでいなければ出てこない。**
+   * その runner の滞留が0件だからではなく、まだ観測していないからである
+   * ——呼び出し側（`tools.ts` の `manager_list`）は「行が無い＝0件」と
+   * 読まないこと。`identity()` を持つ runner は heartbeat が定期的に warm
+   * するので、こちらは cold のまま留まりにくい（それでも「常に新しい」とは
+   * 言えない——直近の heartbeat 周期のぶんは古い）。
    *
    * **省略可能（`?`）にしない。** 他のメンバと同じ非 optional である。
    *
@@ -940,13 +954,19 @@ class Pool implements ManagerPool {
     ((observation: TokenRotatorObservation) => Promise<void>) | undefined;
   readonly #rateLimits = new Map<string, RateLimitFacts>();
   /**
-   * `runnerBacklog()` の実体。runnerId → 最後に観測できた値
-   * （`RunnerBacklogSnapshot` の doc）。
+   * `runnerBacklog()` が読む2つの由来のうち、`resources()` 側（#358 案b）。
+   * runnerId → 最後に観測できた値（`RunnerBacklogSnapshot` の doc）。
    *
-   * **書くのは `runners()` が `options.resources` 付きで呼ばれ、runner から
-   * `resources` が実際に返ってきたときだけ。** ここへ書き込むためだけの
-   * 新しい呼び出しは無い——`runners()` が既に払った往復の結果を捨てずに
-   * 保存するだけである。
+   * **もう1つの由来は `#runners.entries()`（案b の第2段）——こちらは
+   * `Map` に保存しない。** `RunnerRegistry` の側が heartbeat のたびに
+   * `RegistryEntry` へ直接書いているので（`runner-protocol.ts` の
+   * `#noteInstance`）、Pool 側で二重に持つ必要が無い。`runnerBacklog()` は
+   * 呼ばれた時点で両方から読み、観測時刻の新しいほうを採る。
+   *
+   * **このフィールドへ書くのは `runners()` が `options.resources` 付きで
+   * 呼ばれ、runner から `resources` が実際に返ってきたときだけ。** ここへ
+   * 書き込むためだけの新しい呼び出しは無い——`runners()` が既に払った往復の
+   * 結果を捨てずに保存するだけである。
    *
    * `pendingEvents` が `undefined`（古い runner が欄自体を持たない・
    * `resources()` が失敗した）のときは書かない。0で埋めると、「滞留0」と
@@ -1519,11 +1539,46 @@ class Pool implements ManagerPool {
   }
 
   /**
-   * `ManagerPool.runnerBacklog` の実装。**ネットワークを一切叩かない** — `#runnerBacklog`
-   * を読むだけである（`RunnerBacklogSnapshot` の doc）。
+   * `ManagerPool.runnerBacklog` の実装（#358 案b・案b の第2段）。**ネットワークを
+   * 一切叩かない** — `#runnerBacklog`（`resources()` 由来）と
+   * `#runners.entries()`（heartbeat の `identity()` 由来。`RunnerRegistry` が
+   * 既に持っている値を読むだけで、ここでも往復は増えない）を合流させて読む。
+   *
+   * **同じ `runnerId` に両方の観測があるなら、`observedAt` が新しいほうを採る。**
+   * 両方とも `new Date(...).toISOString()`（UTC・`Z` 終端）で作っているので、
+   * 文字列の辞書式比較がそのまま時系列の比較になる（`RunnerBacklogSnapshot` /
+   * `RegistryEntry.pendingEventsObservedAt` のどちらも同じ形）。
    */
   runnerBacklog(): readonly RunnerBacklogSnapshot[] {
-    return [...this.#runnerBacklog.values()].sort((a, b) => a.runnerId.localeCompare(b.runnerId));
+    const merged = new Map<string, RunnerBacklogSnapshot>(
+      [...this.#runnerBacklog.values()].map((snapshot) => [snapshot.runnerId, snapshot]),
+    );
+    for (const entry of this.#runners.entries()) {
+      // **`pendingEvents` が無ければ、この runner は heartbeat からは
+      // 一度も warm していない**（`RunnerEntry.pendingEvents` の doc）。
+      // `pendingEventsObservedAt` も必ず一緒に書かれる（`#noteInstance`）ので、
+      // 片方だけ在ることは無いが、型は両方 optional なので両方確かめる。
+      if (
+        entry.runnerId === undefined ||
+        entry.pendingEvents === undefined ||
+        entry.pendingEventsObservedAt === undefined
+      ) {
+        continue;
+      }
+      const candidate: RunnerBacklogSnapshot = {
+        runnerId: entry.runnerId,
+        pendingEvents: entry.pendingEvents,
+        ...(entry.oldestPendingAt === undefined ? {} : { oldestPendingAt: entry.oldestPendingAt }),
+        observedAt: entry.pendingEventsObservedAt,
+      };
+      const existing = merged.get(entry.runnerId);
+      // **新しいほうを採る。同点（同一 observedAt）は resources() 側を残す**
+      // ——先に Map へ入れてあるので、`>` （厳密な超過）だけを入れ替え条件にする。
+      if (existing === undefined || candidate.observedAt > existing.observedAt) {
+        merged.set(entry.runnerId, candidate);
+      }
+    }
+    return [...merged.values()].sort((a, b) => a.runnerId.localeCompare(b.runnerId));
   }
 
   async transcript(managerId: string): Promise<string | null> {

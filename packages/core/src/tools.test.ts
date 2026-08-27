@@ -3564,6 +3564,27 @@ describe('クローンの道具', () => {
     expect(found?.description).toContain('まだ観測していない');
   });
 
+  /**
+   * **#358 案b の第2段。** cold が既定という(b-1)の弱点を埋めた——10秒ごとの
+   * 生存確認からも自動で warm するようになった。**この事実が説明文からも
+   * 読めること**を、上のテストとは別に固定する（(b-1) の文言はまだ「warm の
+   * 契機は resources: true だけ」と読める形だったので、そのままでは(b-2)の
+   * 後で嘘になる——直したことの歯）。**ただし「常に新しい」とまでは書いて
+   * いないこと**も一緒に見る——identity() を持たない runner は依然 cold に
+   * なりうる（`RunnerBacklogSnapshot` の doc）。
+   */
+  it('manager_list の説明文に、10秒ごとの生存確認からも自動で warm することが読める（(b-1) の cold 前提を上書きした証拠）', () => {
+    const stores = createMemoryStores();
+    const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+    const found = tools.find((entry) => entry.name === 'manager_list');
+
+    expect(found?.description).toContain('生存確認');
+    expect(found?.description).toContain('自動');
+    // **「常に新しい」とは書いていない**——古い runner は依然 cold になりうる
+    // ことも同じ説明文に残っている。
+    expect(found?.description).toContain('呼ばない限り一度も warm しない');
+  });
+
   it('委譲先が無い場面（蒸留の内部ターン）は、黙らずにそう返す', async () => {
     const stores = createMemoryStores();
     const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });

@@ -1236,11 +1236,34 @@ export interface RunnerClient {
    * 自身が自分の版を知らない）の2値のみを返す — **「そもそも訊けていない」は
    * ここでは表せない**（応答が無かったこと自体はこの口の外、名簿の側で分かる）。
    * `instanceId` と同じく省略できる。
+   *
+   * ## `pendingEvents` / `oldestPendingAt` — 同じ応答から拾う3つ目・4つ目の材料（#358 案b）
+   *
+   * `resources()` が読んでいるのと**まったく同じ2つの欄**（`RunnerPlacementResources`
+   * の doc）を、この口からも拾えるようにしてある。**新しい往復ではない** —
+   * `/health` は元々この2つを無条件で返しており（`apps/runner/src/app.ts`）、
+   * `identity()` はその応答を既に読んでいる。今まで読んでいなかった2欄を
+   * 追加で拾うだけである。
+   *
+   * **狙いは #probe（10秒ごとの heartbeat）からもこの値を warm できるようにする
+   * ことである。** `resources()` は `runners({ resources: true })` を明示的に
+   * 呼んだときにしか叩かれないため、それを一度も呼んでいない runner の滞留は
+   * 永久に cold のままだった。`identity()` は放っておいても heartbeat が
+   * 定期的に叩くので、ここに乗せれば同じ往復から自然に warm する。
+   *
+   * **`resources()` と同じく `pendingEvents` が `undefined` のときは「取れて
+   * いない」であって「0」ではない。** 呼び出し側（`#noteInstance`）はこの
+   * 区別を保ったまま記録する。
    */
-  identity?(options?: {
-    signal?: AbortSignal;
-  }): Promise<
-    { runnerId?: string; instanceId?: string; revision?: RunnerRevisionReport } | undefined
+  identity?(options?: { signal?: AbortSignal }): Promise<
+    | {
+        runnerId?: string;
+        instanceId?: string;
+        revision?: RunnerRevisionReport;
+        pendingEvents?: number;
+        oldestPendingAt?: string;
+      }
+    | undefined
   >;
   /**
    * 配置の材料を聞く（roadmap M5 PR3）。**`ping` に相乗りさせない。**
@@ -1438,6 +1461,23 @@ export interface RunnerEntry {
    * の doc）。
    */
   revision: RunnerRevisionStatus;
+  /**
+   * runner→デーモンの脚（`Outbox` の滞留）について、heartbeat（`#probe`）が
+   * 最後に聞けた値（#358 案b。`RegistryEntry.pendingEvents` の写し）。
+   *
+   * **`manager.ts` の `runnerBacklog()` が、`runners({ resources: true })`
+   * 由来のキャッシュと合流させる材料の1つである。** ここに出ているからと
+   * いって「常に新しい」わけではない——`identity()` を持たない runner
+   * （`LocalRunner`・古い器）は heartbeat からは一切 warm しないので、その
+   * runner は依然 cold（`undefined` のまま）でありうる。「行が出ない＝
+   * 滞留0」ではないことは、この道具についても変わらない
+   * （`RunnerBacklogSnapshot` の doc）。
+   */
+  pendingEvents?: number;
+  /** `pendingEvents` と同じ観測から拾う。1件も無ければ省かれる。 */
+  oldestPendingAt?: string;
+  /** `pendingEvents` / `oldestPendingAt` を観測できた時刻（ISO8601）。 */
+  pendingEventsObservedAt?: string;
 }
 
 /**
@@ -1777,6 +1817,29 @@ interface RegistryEntry {
    * になっても、ここは戻さない**（`#markSilent` は学習済みの情報を捨てない）。
    */
   revision: RunnerRevisionStatus;
+  /**
+   * runner→デーモンの脚（`Outbox` の滞留）について、heartbeat の `identity()`
+   * から最後に聞けた値（#358 案b。`manager.ts` の `RunnerBacklogSnapshot` と
+   * 同じ3つの材料を、こちらは `#probe` 経由で持つ）。
+   *
+   * **`instanceId` と同じ「前回の値」の形——ただし比較はしない。** 版
+   * （`revision`）と同じく「最後に聞けた値」をそのまま持つだけでよい。
+   *
+   * **`pendingEvents` が `undefined` のときは書かない**（`#noteInstance` の
+   * doc）。0で埋めると「滞留0」と「まだ観測していない」が区別できなくなる
+   * （AGENTS.md「取れない軸に0の行を作る」）。`identity()` を持たない
+   * runner（`LocalRunner`・古い器）では常に `undefined` のまま。
+   */
+  pendingEvents?: number;
+  /** `pendingEvents` と同じ観測から拾う。1件も無ければ省かれる。 */
+  oldestPendingAt?: string;
+  /**
+   * `pendingEvents` / `oldestPendingAt` をいつ観測できたか（heartbeat の
+   * `at`）。**これが無いと、`manager.ts` の `runnerBacklog()` が
+   * `resources()` 由来のキャッシュとの新旧を比べられない**（両方とも
+   * `RunnerBacklogSnapshot.observedAt` と同じ ISO8601 形式で持つ）。
+   */
+  pendingEventsObservedAt?: string;
 }
 
 /**
@@ -1889,6 +1952,19 @@ class Registry implements RunnerRegistry {
       // 突き合わせる材料である（消すと、黙っている間だけ判定材料が消える）。
       ...(entry.instanceId === undefined ? {} : { instanceId: entry.instanceId }),
       ...(entry.instanceSince === undefined ? {} : { instanceSince: entry.instanceSince }),
+      // runner→デーモンの脚の滞留（#358 案b）。**`pendingEvents` が無ければ
+      // 3つとも渡さない**（`RegistryEntry.pendingEvents` の doc）——0で埋めない。
+      ...(entry.pendingEvents === undefined
+        ? {}
+        : {
+            pendingEvents: entry.pendingEvents,
+            ...(entry.oldestPendingAt === undefined
+              ? {}
+              : { oldestPendingAt: entry.oldestPendingAt }),
+            ...(entry.pendingEventsObservedAt === undefined
+              ? {}
+              : { pendingEventsObservedAt: entry.pendingEventsObservedAt }),
+          }),
     }));
   }
 
@@ -2250,7 +2326,14 @@ class Registry implements RunnerRegistry {
 
     let failure: string | null = null;
     let identity:
-      { runnerId?: string; instanceId?: string; revision?: RunnerRevisionReport } | undefined;
+      | {
+          runnerId?: string;
+          instanceId?: string;
+          revision?: RunnerRevisionReport;
+          pendingEvents?: number;
+          oldestPendingAt?: string;
+        }
+      | undefined;
     try {
       /*
        * **`identity()` があればそちらを叩く。** 同じ `GET /health` なので生死は
@@ -2320,7 +2403,13 @@ class Registry implements RunnerRegistry {
     entry: RegistryEntry,
     at: number,
     client: RunnerClient,
-    identity?: { runnerId?: string; instanceId?: string; revision?: RunnerRevisionReport },
+    identity?: {
+      runnerId?: string;
+      instanceId?: string;
+      revision?: RunnerRevisionReport;
+      pendingEvents?: number;
+      oldestPendingAt?: string;
+    },
   ): void {
     entry.lastSeen = at;
     // 名乗りの中身（いま応えているプロセスと、その版）を覚えるのは1本に寄せてある
@@ -2353,7 +2442,14 @@ class Registry implements RunnerRegistry {
     entry: RegistryEntry,
     at: number,
     identity:
-      { runnerId?: string; instanceId?: string; revision?: RunnerRevisionReport } | undefined,
+      | {
+          runnerId?: string;
+          instanceId?: string;
+          revision?: RunnerRevisionReport;
+          pendingEvents?: number;
+          oldestPendingAt?: string;
+        }
+      | undefined,
   ): void {
     /*
      * **版は「最後に聞けた値」をそのまま覚える。** `instanceId` と違って前回との
@@ -2370,6 +2466,22 @@ class Registry implements RunnerRegistry {
      */
     if (identity?.revision !== undefined) {
       entry.revision = identity.revision;
+    }
+
+    /*
+     * **runner→デーモンの脚の滞留（#358 案b）。** `resources()` と同じ規律
+     * ——`pendingEvents` が `undefined`（`identity()` を持たない runner・
+     * 古い runner・応答の形が壊れていた）のときは一切触らない。0で埋めると
+     * 「滞留0」と「まだ観測していない」が区別できなくなる
+     * （`RegistryEntry.pendingEvents` の doc）。**`oldestPendingAt` は
+     * `pendingEvents` が定義されているときに限り、値をそのまま（無ければ
+     * `undefined` を含めて）上書きする** — 0件に戻った回では前回の
+     * `oldestPendingAt` を持ち越さない。
+     */
+    if (identity?.pendingEvents !== undefined) {
+      entry.pendingEvents = identity.pendingEvents;
+      entry.oldestPendingAt = identity.oldestPendingAt;
+      entry.pendingEventsObservedAt = new Date(at).toISOString();
     }
 
     const instanceId = identity?.instanceId;

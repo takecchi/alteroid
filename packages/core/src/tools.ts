@@ -339,9 +339,9 @@ function describeInboxBacklog(pending: { count: number; oldestAt?: string }): st
 
 /**
  * runner→デーモンの脚（`Outbox` の滞留）が、直近に観測できた分だけ出す、
- * 一覧末尾の行（#358 案b。`describeInboxBacklog` はデーモン→クローンの脚、
- * こちらは runner→デーモンの脚——2本合わせて #358「答えない問い」に挙げた
- * 3行のうちの2つになる）。
+ * 一覧末尾の行（#358 案b・案b の第2段。`describeInboxBacklog` はデーモン→
+ * クローンの脚、こちらは runner→デーモンの脚——2本合わせて #358「答えない
+ * 問い」に挙げた3行のうちの2つになる）。
  *
  * **`ManagerPool.runnerBacklog()` はキャッシュであって現在値ではない**
  * （`RunnerBacklogSnapshot` の doc）。だからここで出す行には、件数と最古の
@@ -371,7 +371,8 @@ function describeRunnerBacklog(snapshots: readonly RunnerBacklogSnapshot[]): str
       return (
         `⚠ runner ${snapshot.runnerId} に未送出の出来事が ${snapshot.pendingEvents} 件ある${oldest}。` +
         `これは ${snapshot.observedAt} 時点に取った値で、いまの値ではない` +
-        '（runner_list を resources: true で呼び直すと更新できる）。'
+        '（identity() を持つ runner なら10秒ごとの生存確認でも自動で更新されるが、' +
+        'それでも「いまの値」ではない。すぐ最新が要るなら runner_list を resources: true で呼び直す）。'
       );
     });
   return lines.length === 0 ? null : lines.join('\n');
@@ -3105,30 +3106,46 @@ export function createCloneTools(context: ToolContext) {
     ),
 
     /**
-     * **#358 のうち、runner→デーモンの脚の滞留は、この一覧では観測できた分だけ出す（案b）。**
+     * **#358 のうち、runner→デーモンの脚の滞留は、この一覧では観測できた分だけ出す
+     * （案b・案b の第2段）。**
      *
      * `RunnerPlacementResources.pendingEvents` / `oldestPendingAt` は runner
-     * ごとに取れる（`apps/daemon/src/runner-client.ts` の `resources()`）が、
-     * それを読むには `ManagerPool.runners({ resources: true })` を呼ぶ必要が
-     * ある。**この一覧（`runner_list` ではなく `manager_list`）から毎回それを
+     * ごとに取れる（`apps/daemon/src/runner-client.ts` の `resources()`）。
+     * これを読むには `ManagerPool.runners({ resources: true })` を呼ぶ必要が
+     * あり、**この一覧（`runner_list` ではなく `manager_list`）から毎回それを
      * 呼ぶ形は採らない**——`runners()` の doc（`ManagerPool.runners` の
      * JSDoc）が守っている「既定では `resources()` を呼ばない＝この一覧のために
      * ネットワーク往復を足さない」を破ることになり、かつ `runner_list` の
      * `resources: true` というクローンの明示的な opt-in を、`manager_list`
-     * 側から自動で踏み潰すことにもなる（north_star 禁止2）。
+     * 側から自動で踏み潰すことにもなる（north_star 禁止2）。**この判断は
+     * 案b の第2段でも変えていない**——`manager_list` 自身はいまも
+     * `resources()` を一度も呼ばない（`manager.test.ts` の歯）。
      *
      * **代わりに、`ManagerPool.runnerBacklog()`（キャッシュ。往復を足さない）
-     * を読む。** `runners({ resources: true })` が呼ばれるたび（＝クローンが
-     * `runner_list resources: true` を明示的に選ぶたび）、その応答から
-     * `pendingEvents` / `oldestPendingAt` と観測時刻を runner ごとに保存して
-     * おき（`RunnerBacklogSnapshot`）、ここはそれを読むだけにした
-     * （`describeRunnerBacklog`）。
+     * を読む。** ここが読む値には2つの由来があり、**どちらも往復を新しく
+     * 足していない。**
      *
-     * **この形の限界: cold（一度も `resources: true` で呼ばれていない）
-     * runner は行が出ない。** 「行が無い＝滞留0」ではなく「0件だったか、
-     * まだ観測していないかのどちらか」——`describeRunnerBacklog` の doc、
-     * この道具の description の断りを参照。値が出ても**それは観測した時点の
-     * 値であって現在値ではない**ので、行には必ず観測時刻を添える。
+     * 1. `runners({ resources: true })` が呼ばれるたび（＝クローンが
+     *    `runner_list resources: true` を明示的に選ぶたび）——`resources()`
+     *    の応答から拾う。
+     * 2. **10秒ごとの生存確認（`RunnerRegistry` の heartbeat）が、
+     *    `identity()` の応答から同じ2欄を拾う（案b の第2段）。** 元々10秒
+     *    ごとに走っている往復に乗せているだけなので、こちらも新しい往復では
+     *    ない。`identity()` を持つ runner については、`runner_list` を
+     *    一度も `resources: true` で呼んでいなくても、この経路で自然に
+     *    warm する。
+     *
+     * どちらの由来かは呼び出し側から区別しない（`RunnerBacklogSnapshot` は
+     * 同じ形）——`runnerBacklog()` が観測時刻の新しいほうを採って合流させる。
+     *
+     * **それでも「常に新しい」わけではない。** `identity()` を持たない
+     * runner（`LocalRunner`・古い器）は2の経路を一切通らないので、
+     * `runner_list resources: true` を一度も呼んでいなければ、その runner は
+     * 依然 cold（行が出ない）である。「行が無い＝滞留0」ではなく「0件
+     * だったか、まだ観測していないかのどちらか」——`describeRunnerBacklog`
+     * の doc、この道具の description の断りを参照。値が出ても**それは
+     * 観測した時点の値であって現在値ではない**ので、行には必ず観測時刻を
+     * 添える。
      */
     tool(
       'manager_list',
@@ -3139,19 +3156,21 @@ export function createCloneTools(context: ToolContext) {
         // であって「仕事が終わった」ではない。⚠ の行がその差を埋める。
         '状態の名前はデーモンが観測できた範囲でしかないので、⚠ の行まで読むこと。',
         '依頼文と報告は抜粋なので、全文が要るなら manager_report で取ること。',
-        // #358 案b: runner 側の滞留はここでは自動で取りに行かない（往復を
-        // 増やさない）。**warm する契機は runner_list を resources: true で
-        // 呼ぶこと、それだけである。** manager_list 自身は呼ばないし、時間
-        // 経過や定期実行でも warm しない——だから「まだ一度も runner_list を
-        // resources: true で呼んでいない」がここでの既定状態であり、行が
-        // 出ないのはその既定（cold）にいる証拠でしかない。行が出ないことを
-        // 「滞留0」と読まないこと——0件だったか、まだ観測していないかの
-        // どちらかである。
-        '器（runner）側の未送出の滞留は、runner_list を resources: true で呼んだときにだけ' +
-          'キャッシュされる（それ以外の経路では一切更新されない）。まだ一度も' +
-          'そう呼んでいなければ、この一覧には行が出ない——「滞留0」ではなく' +
-          '「まだ観測していない」という既定状態である。出ている行も観測した' +
-          '時点の値であって現在値ではないので、最新の値が要るなら runner_list を' +
+        // #358 案b の第2段: `manager_list` 自身はいまも `resources()` を
+        // 呼ばない（往復を増やさない、という設計判断は変えていない）。
+        // **ただしキャッシュは2つの経路で warm する** — (1) runner_list を
+        // resources: true で明示的に呼ぶ (2) 10秒ごとの生存確認が
+        // identity() を持つ runner から自動で拾う。**(2) を持たない runner
+        // （LocalRunner・古い器）は (1) を待つしかなく、依然 cold になりうる**
+        // ——「行が無い＝滞留0」ではなく「0件だったか、まだ観測していないか
+        // のどちらか」。出ている行も観測した時点の値であって「いま」ではない。
+        '器（runner）側の未送出の滞留は、runner_list を resources: true で明示的に呼んだとき、' +
+          'または10秒ごとの生存確認が対応する runner から自動で拾ったときに、それぞれ' +
+          'キャッシュされる（それ以外の経路では更新されない）。生存確認からの自動更新に' +
+          '対応しない古い runner・LocalRunner は、runner_list を resources: true で' +
+          '呼ばない限り一度も warm しない——この一覧に行が出ないことを「滞留0」と' +
+          '読まないこと。0件だったか、まだ観測していないかのどちらかである。出ている行も' +
+          '観測した時点の値であって現在値ではないので、最新の値が要るなら runner_list を' +
           'resources: true で呼び直すこと。',
       ].join(' '),
       {},
