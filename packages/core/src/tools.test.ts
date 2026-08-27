@@ -3558,7 +3558,7 @@ describe('runner_list（器の一覧）', () => {
           state: 'connected',
           since: '2026-01-01T00:00:00.000Z',
           runnerId: 'runner-a',
-          managers: [{ managerId: 'mgr-1', status: 'running' }],
+          managers: [{ managerId: 'mgr-1', status: 'running', live: true }],
         },
         {
           label: 'runner-b',
@@ -3644,8 +3644,8 @@ describe('runner_list（器の一覧）', () => {
           since: '2026-01-01T00:00:00.000Z',
           runnerId: 'runner-a',
           managers: [
-            { managerId: 'mgr-1', status: 'running' },
-            { managerId: 'mgr-2', status: 'done' },
+            { managerId: 'mgr-1', status: 'running', live: true },
+            { managerId: 'mgr-2', status: 'done', live: true },
           ],
         },
       ],
@@ -3658,6 +3658,73 @@ describe('runner_list（器の一覧）', () => {
     expect(reply).toContain('mgr-1');
     expect(reply).toContain('mgr-2');
     expect(reply).toContain('(2)');
+  });
+
+  /**
+   * **同じ状態を、2つの道具が別の字面で出さない。**
+   *
+   * `manager_list` は `describeManagerState`（`digest.ts`）を通して
+   * 「走行中」と「走行中だがセッション切断」を区別していたが、この一覧は
+   * `status` をそのまま書いていたので、**セッションが切れた委譲も
+   * `[running]` としか出なかった。** 読んだ側は2つの出力を突き合わせても
+   * どちらが本当かを判定できず、`runner_list` だけを見た側は「まだ走って
+   * いる」と読む——#540 が定期 tick の要約で直したのと同じ潰れ方が、ここに
+   * 残っていた。
+   *
+   * **字面そのものの固定は `digest.test.ts` の `describeManagerState` の歯が
+   * 持つ。** ここで見るのは、この一覧がその生成元を通っていることである。
+   */
+  it('内訳のマネージャーの状態を manager_list と同じ字面で出す（セッション切断を潰さない）', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-a',
+          revision: { status: 'unheard' },
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-a',
+          managers: [
+            { managerId: 'mgr-alive', status: 'running', live: true },
+            { managerId: 'mgr-dead', status: 'running', live: false },
+          ],
+        },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', {});
+
+    expect(reply).toContain('mgr-alive[running]');
+    expect(reply).toContain('mgr-dead[running/セッション切断]');
+  });
+
+  /**
+   * **別枠（`unassigned`）も同じ生成元を通す。** 器ごとの内訳だけを直すと、
+   * どの器か分からない委譲についてだけ `[running]` へ潰れたままになる——
+   * そこは「古い委譲」が集まる場所なので、いちばん切れている確率が高い。
+   */
+  it('別枠（どの器か分からない）のマネージャーも同じ字面で出す', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-a',
+          revision: { status: 'unheard' },
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-a',
+          managers: [],
+        },
+      ],
+      unassigned: [{ managerId: 'mgr-orphan', status: 'running', live: false }],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', {});
+
+    expect(reply).toContain('mgr-orphan[running/セッション切断]');
   });
 
   it('runnerId の無いマネージャーを、どの器にも混ぜず別枠で出す', async () => {
@@ -3673,7 +3740,7 @@ describe('runner_list（器の一覧）', () => {
           managers: [],
         },
       ],
-      unassigned: [{ managerId: 'mgr-legacy', status: 'done' }],
+      unassigned: [{ managerId: 'mgr-legacy', status: 'done', live: false }],
       daemonRevision: { status: 'unknown' },
     });
 

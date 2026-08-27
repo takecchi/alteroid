@@ -184,6 +184,31 @@ export interface ManagerDenial {
 }
 
 /**
+ * `runner_list` の内訳に出るマネージャー1本ぶん（器ごとの内訳と `unassigned` で
+ * 同じ形を使う）。
+ *
+ * **`live` を必ず持たせる。** `status`（ジョブ台帳の軸）だけを運ぶと、
+ * `manager_list` が区別している「走行中」と「走行中だがセッション切断」が
+ * `runner_list` の側でだけ潰れる——**同じ状態を2つの道具が別の字面で出す**
+ * ことになり、読んだ側は「どちらが本当か」を判定できない。#540 はこの潰れ方を
+ * 定期 tick の要約（`digest.ts`）で直したが、この一覧は直していなかった。
+ * 字面を作るのは `describeManagerState`（`digest.ts`）1箇所だけで、そこは
+ * `live` を要求する——だから材料の側にも必ず載せる。
+ *
+ * **省略可能（`live?`）にしないのは `summaryOf` の `live` と同じ理由である。**
+ * 足す人は `live` のことを考えていないのが普通で、欠けたまま通ると
+ * `describeManagerState` が「セッション不明」を出す——**取れているのに
+ * 「取れていない」と名乗る**側へ黙って倒れる。値は `ManagerPool#list()` が
+ * 既に計算済み（`isLive()`）なので、載せるのに追加の往復は要らない。
+ */
+export interface RunnerManagerEntry {
+  managerId: string;
+  status: JobStatus;
+  /** このデーモンから話しかけられるか（`ManagerSummary.live` の写し）。 */
+  live: boolean;
+}
+
+/**
  * 器（runner）1台の様子と、そこに紐づくマネージャー（`runner_list` の材料）。
  *
  * `label` / `state` / `since` / `error?` / `runnerId?` / `workspacePath?` は
@@ -220,7 +245,7 @@ export interface RunnerOverview {
    * managers`）で、**この一覧とは別物であり、ずれうる。** 混ぜて「配置はこの数を
    * 見て決めている」と読まないこと。
    */
-  managers: { managerId: string; status: JobStatus }[];
+  managers: RunnerManagerEntry[];
   /** 配られている鍵の指紋。`fingerprints: true` を渡したときだけ載る（値は sha256）。 */
   credentials?: RunnerCredentialFingerprint[];
   /** 置かれている実行環境プロファイルの指紋。`fingerprints: true` を渡したときだけ載る。 */
@@ -273,7 +298,7 @@ export interface RunnerFleetOverview {
    * 記録の無いマネージャーの分だけどこかの器の本数が水増しされる。捨てれば、
    * 「マネージャーは全部どこかの器に居る」という誤った前提を実装が持つことになる。
    */
-  unassigned: { managerId: string; status: JobStatus }[];
+  unassigned: RunnerManagerEntry[];
   /**
    * **デーモン自身の版。** `runners[].revision` と1回の読みで比較できるように、
    * 同じ応答の外側へ並べて出す——別々の場所に出すと、依頼者が手で突き合わせる
@@ -1317,10 +1342,17 @@ class Pool implements ManagerPool {
 
     // **`runnerId` が無い分は、どの器にも混ぜず別枠へ。** 0 に畳むと「記録が無い
     // マネージャーは存在しない」と読める（AGENTS.md「取れない軸に0の行を作らない」）。
-    const byRunner = new Map<string, { managerId: string; status: JobStatus }[]>();
-    const unassigned: { managerId: string; status: JobStatus }[] = [];
+    const byRunner = new Map<string, RunnerManagerEntry[]>();
+    const unassigned: RunnerManagerEntry[] = [];
     for (const manager of managers) {
-      const item = { managerId: manager.managerId, status: manager.status };
+      // **`live` をここで落とさない。** 材料はすぐ上の `list()` が既に計算して
+      // 持っている（`isLive()`）——落とすと `runner_list` の側でだけ
+      // 「走行中」と「走行中だがセッション切断」が潰れる（`RunnerManagerEntry` の doc）。
+      const item: RunnerManagerEntry = {
+        managerId: manager.managerId,
+        status: manager.status,
+        live: manager.live,
+      };
       if (manager.runnerId === undefined) {
         unassigned.push(item);
         continue;
