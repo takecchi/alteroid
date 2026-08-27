@@ -562,6 +562,31 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
+  /**
+   * **issue #287 の続き。** `case 'ask'` の `summary` は runner.ts の
+   * `#onPermission` が `` `${toolName} の実行許可: ${brief(input)}` `` の形
+   * で組み立てる（`brief()` は道具の呼び出し引数の JSON ダンプで、AI が
+   * 書いた文章ではない）。この `text` を `<Markdown>` で描く面
+   * （`apps/web` の `commitments.tsx`）でバッククォート等が `<code>` に
+   * 食われて消えるのを防ぐため、`kind === 'permission'` のときだけ
+   * `markup: 'none'` を立てる。
+   */
+  it("実行許可の確認は manager_message に markup: 'none' が立つ（#287）", async () => {
+    const s = setup();
+    await s.pool.start({ request: 'デプロイして' });
+    const session = s.sessions[0] as FakeSession;
+
+    // `command` にバッククォートを含めておく——立てなければ化ける入力の実例。
+    session.ask('Bash', { command: 'echo `date`' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const event = s.inbox.find((entry) => entry.type === 'manager_message');
+    expect(event).toMatchObject({ kind: 'permission' });
+    expect((event as { markup?: string }).markup).toBe('none');
+
+    await s.pool.stop();
+  });
+
   it('deny は理由付きでマネージャーへ返る（会話は続く。能力は削らない）', async () => {
     const s = setup();
     const { managerId } = await s.pool.start({ request: 'デプロイして' });
@@ -618,6 +643,38 @@ describe('マネージャー', () => {
       answer?: string;
     }[];
     expect(escalations[0]?.answer).toBe('[allow] PostgreSQL で');
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **issue #287 の続き。** `question` 側の `summary`
+   * （`describeQuestions(input)`）はモデル自身が書いた質問文であり、
+   * 「AI が書いたものは Markdown として描く」という既存の軸に乗る。
+   * `markup: 'none'` は `kind === 'permission'` のときにしか立てないので、
+   * ここでは `markup` という**キーそのものが無い**ことを見る
+   * （`undefined` が値として入っているのではなく、`in` で見て無い）。
+   */
+  it("AskUserQuestion の確認には manager_message に markup のキーが無い（#287）", async () => {
+    const s = setup();
+    await s.pool.start({ request: '設計を相談したい' });
+    const session = s.sessions[0] as FakeSession;
+
+    session.ask(
+      'AskUserQuestion',
+      {
+        questions: [
+          { question: 'DB はどちらにする？', header: 'DB', options: [], multiSelect: false },
+        ],
+      },
+      undefined,
+      'req-db-markup',
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const event = s.inbox.find((e) => e.type === 'manager_message');
+    expect(event).toMatchObject({ kind: 'question' });
+    expect(event && 'markup' in event).toBe(false);
 
     await s.pool.stop();
   });
