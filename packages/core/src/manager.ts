@@ -3358,6 +3358,29 @@ class Pool implements ManagerPool {
         // 失われる」を作る（R4 のすぐ上の条件とは別の理由でここに置く。
         // R4 は「止めた後」、こちらは「止めていないが中身が無い」）。
         if (event.contentless === true) return;
+        // **`event.text` を包まずに渡す（issue #287）。**
+        //
+        // **書き手**: `runner.ts` の `reportText()` / `failedReportText()`
+        // （`event.failure` の有無で呼び分け）が作る。前者はマネージャー自身の
+        // 途中出力（`said`）＋ SDK の `result` 文言（時に runner 自身の
+        // フォールバック定型文「（報告なし）」等を含む）、後者はさらに runner
+        // 自身の定型文（「（このターンは応答を返さずに終わった: …）」）と SDK の
+        // 失敗文言（`failure.text`）を重ねる——**書き手はマネージャー・SDK・
+        // runner 自身の最大3人**で、デーモン（`manager.ts`）はどの経路でも
+        // 書いていない。
+        //
+        // **なぜ包まないか（理由: 包む単位が無い）。** この連結は
+        // `runner-protocol.ts` の境界を越える**前に** `runner.ts` の中で完了して
+        // おり（`runnerEventSchema` の `report.text` は `z.string()` の1本）、
+        // `manager.ts` が受け取る時点では複数の書き手の断片が既に混ざった1本の
+        // 文字列である。どこからどこまでが誰の断片かという境目がここには
+        // 残っていないので、`codeSpan()` で包む対象を選べない。**危ないから
+        // 見送っているのではなく、この層には包む材料が無い。**
+        //
+        // **別の層でなら在りうる。** 包むとすれば連結する側
+        // （`runner.ts` の `reportText()` / `failedReportText()`）で、SDK 由来の
+        // 断片を先に `codeSpan()` へ通してから連結する形になる。`manager.ts` の
+        // 中では覆らない。
         this.#emit(event.managerId, 'report', event.text);
         return;
       }
@@ -3443,6 +3466,52 @@ class Pool implements ManagerPool {
         // いない。**`runner.ts` 側で `brief(input)` をバッククォート等で
         // 包んで直すと、化けていない5面に記号が増える。** 印はこの1面
         // だけに効く。
+        //
+        // **⚠️ `kind === 'question'` に残っている穴（issue #287、未決）。**
+        // 上で「立てない」根拠にしたのは `describeQuestions(input)` の通常
+        // 経路——`input.questions` が `{ question: string, … }[]` の形で来た
+        // 回は、そこから取り出した質問文（**モデル自身が書いた文章**）を
+        // ` / ` で連結して返す。ここは prose であり、Markdown として描くのが
+        // 正しい。
+        //
+        // **しかし `describeQuestions()` にはフォールバックが在る**
+        // （`runner.ts`、逐語）:
+        // ```ts
+        // function describeQuestions(input: Record<string, unknown>): string {
+        //   const questions = Array.isArray(input.questions) ? input.questions : [];
+        //   const texts = questions
+        //     .map((question) => (question as { question?: unknown }).question)
+        //     .filter((text): text is string => typeof text === 'string');
+        //   return texts.length > 0 ? texts.join(' / ') : brief(input);
+        // }
+        // ```
+        // `input.questions` が期待の形で来なかった回（配列でない／要素に
+        // `question` が無い／`question` が文字列でない）は `brief(input)` —
+        // **ツール呼び出し引数の JSON ダンプ**が返る。これは `kind === 'permission'`
+        // の `summary`（`` `${toolName} の実行許可: ${brief(input)}` ``）と同じ
+        // 生成元・同じ性質で、AI が文章として書いたものではない。
+        //
+        // **⟹ 実測すると化ける。** `apps/web/app/components/markdown.tsx` と
+        // 同じ設定（react-markdown 10.1.0 + remark-gfm 4.0.1 + remark-breaks
+        // 4.0.0、rehype-raw 無し）で `brief({"command":"echo \`date\` && rm -rf /"})`
+        // を通すと、` \`date\` ` が本物の `<code>` になった。`brief({"path":"src/_init_/x.ts"})`
+        // では `_init_` の `_..._` が `<em>` になった（観測 2026-08-28）。この回は
+        // `kind` が `'question'` のままなので `markup` は立たず、`permission` 側で
+        // PR #559 が塞いだのと同じ形の化けがここに残る。
+        //
+        // **なぜここで直さないか。** `ask` イベントが運ぶのは `summary` の1本と
+        // `kind` だけで、`describeQuestions()` が通常経路とフォールバックの
+        // どちらを通ったかはデーモン（`manager.ts`）からは分からない——`kind` は
+        // 両方の経路で等しく `'question'` である。**`manager.ts` にはこの2つを
+        // 分ける材料が無い。**
+        //
+        // **別の層でなら在りうる。** 塞ぐなら `runner.ts` の `describeQuestions()`
+        // がフォールバックを通ったことを呼び出し側へ伝えられる形にする必要が
+        // ある（例: `ask` イベントへ欄を1つ足す）。**⚠️ ただしそれは runner が
+        // 新しく名乗る値が増えるということであり、デーモンと runner を別々に
+        // デプロイする窓（`runner-protocol.ts` の versioning の話）が開く。**
+        // ここで印を1つ足すだけでは済まない、`runner-protocol.ts` を動かす
+        // 別の作業になる。
         const markup: TextMarkup | undefined = event.kind === 'permission' ? 'none' : undefined;
         this.#emit(event.managerId, event.kind, event.summary, event.requestId, markup);
         return;
@@ -3748,6 +3817,40 @@ class Pool implements ManagerPool {
         // 置くと、2本目のマネージャーが同じ文言で当たった回に回し手が呼ばれない。
         await this.#observeForTokenRotation(event.managerId, { notice: event.notice });
 
+        // **`describeUsageNotice()` が返す本文の末尾に `notice.text` を素で
+        // 補間する（issue #287）。**
+        //
+        // **書き手**: 頭（`head`）は `describeUsageNotice()`（`usage-limits.ts`）
+        // 自身が書く定型文で、Markdown を意図して含む（`transition` の枝は
+        // `**まだ動くが、この先で止まる**`）。末尾の `notice.text` は**SDK が
+        // 出した文言そのまま**——`usageLimitNoticeSchema` の `text` の doc が
+        // 逐語で「SDK が出した文言そのまま。**言い換えないこと**（人間が検索
+        // できる形で残す）」と言っている。ここはデーモンの組み立てでも runner の
+        // 組み立てでもなく、SDK の生 prose である。
+        //
+        // **なぜ包まないか（理由: SDK の prose を等幅にしたくない）。**
+        // `notice.text` は `usageLimitNoticeSchema` で `kind` とは別の欄として
+        // 届いており（`runnerEventSchema` の `usage_notice.notice`）、
+        // `codeSpan()` で包む単位そのものは在る——`permission_denied` の
+        // `denialSuffix` を包まない理由と同じで、「包む単位が無い」からではない。
+        // 包むと等幅になり「文章」ではなく「コード」として描かれる。SDK の prose
+        // をどの面でどう描くかは表示の方針の話（`reports.tsx` と issue #285 が
+        // 面ごとに別の判断を書いている）であり、`manager.ts` はそれを決める場所
+        // ではない。**方針が決まれば覆る種類の見送りである。**
+        //
+        // **実測（観測 2026-08-28、`apps/web/app/components/markdown.tsx` と
+        // 同じ react-markdown 10.1.0 + remark-gfm 4.0.1 + remark-breaks 4.0.0、
+        // rehype-raw 無し、版は `apps/web/node_modules` から引いた）**:
+        // `packages/core/src/*.test.ts` に実在する SDK 由来の実例
+        // （`"You've hit your individual spend limit for this account."` /
+        // `"You're now using extra usage until your limit resets."` /
+        // `"You've hit your org's monthly spend limit · ask your admin to raise
+        // it at claude.ai/settings/usage?from=cc_cli_limit_message"` 等）を
+        // `head` と連結して通したところ、**いずれも化けなかった**——アポストロフィ
+        // は `&#x27;` へエスケープされるだけで、URL のクエリ文字列も GFM の
+        // 自動リンクは発火しない（`http(s)://` / `www.` で始まらないため）。
+        // **この実測は観測時点のものである。SDK が文言を変えたら測り直しが要る**
+        // ——新しい接頭辞・記号を足す変更は SDK 側の変更履歴からは予告されない。
         const text = describeUsageNotice(event.notice);
         const memory = this.#usageNoticeMemoryOf(event.notice.kind);
         if (memory.delivered.has(event.notice.text)) {
@@ -4018,6 +4121,28 @@ class Pool implements ManagerPool {
           });
           // **クローンへも知らせる。** 黙って止まったように見えるのが一番まずい
           // （引き取りが走るまでの間、この委譲は誰の手も動いていない）。
+          //
+          // **末尾の `event.reason` を包まずに渡す（issue #287）。**
+          //
+          // **書き手**: `runner.ts` の `#checkLeaseExpiry()` が組み立てる runner
+          // 自身の定型文（「デーモンと連絡が取れないので貸し出し期限が切れた
+          // （自己失効）。最後に接触があったのは…、約束していた貸し出し期限は
+          // …ms。」）。SDK の断片もマネージャーの断片も混ざっていない——
+          // `selfFenced: true` が立つ経路は `RunnerSession#selfFence()` の1本
+          // だけで、渡ってくる `reason` は runner が書いた文字列リテラル（＋
+          // タイムスタンプの補間）のみである。
+          //
+          // **なぜ包まないか（理由: 包む単位が無い）。** `event.reason` は
+          // `runnerEventSchema` の `closed.reason`（`z.string()`）として
+          // `runner-protocol.ts` の境界を越えてくる1本の文字列で、`manager.ts`
+          // が受け取る時点で既に完成した1つの prose 文である——包む対象を切り
+          // 出す欄も、識別子・ダンプの断片も、ここには残っていない。危ないから
+          // 見送っているのではなく、この層に包む材料が無い。
+          //
+          // **別の層でなら在りうる。** 塞ぐなら `runner.ts` の
+          // `#checkLeaseExpiry()` 側で、識別子・ダンプの断片があれば先に
+          // `codeSpan()` へ通してから連結する形になる。`manager.ts` の中では
+          // 覆らない。
           this.#emit(
             event.managerId,
             'report',
@@ -4047,6 +4172,27 @@ class Pool implements ManagerPool {
           record.job.lease = releaseLease(record.job.lease, this.#now());
         }
         await this.#persist(record);
+        // **`event.reason` を包まずに渡す（issue #287）。**
+        //
+        // **書き手**: `event.status === 'failed'` になる経路は `runner.ts` の
+        // `#read()` の catch 節（``await this.#finish('failed', `マネージャーの
+        // セッションが落ちた: ${reason}`)``）だけで、内側の `reason` は
+        // `String(error)`——投げられた例外を文字列化したもの。**runner 自身の
+        // 接頭辞（「マネージャーのセッションが落ちた: 」）と、投げた側（SDK・
+        // Node・ネットワーク層のいずれか）の例外文言の連結**であり、どちらも
+        // デーモン（`manager.ts`）が書いたものではない。
+        //
+        // **なぜ包まないか（理由: 包む単位が無い）。** この連結は
+        // `runner-protocol.ts` の境界を越える前に `runner.ts` の中で完了して
+        // おり（`runnerEventSchema` の `closed.reason` は `z.string()` の1本）、
+        // `manager.ts` が受け取る時点では runner の接頭辞と例外文言が既に
+        // 混ざった1本の文字列である。境目がここには残っていないので
+        // `codeSpan()` で包む対象を選べない。危ないから見送っているのではなく、
+        // この層には包む材料が無い。
+        //
+        // **別の層でなら在りうる。** 包むとすれば `runner.ts` の `#read()` で、
+        // `String(error)` を先に `codeSpan()` へ通してから連結する形になる。
+        // `manager.ts` の中では覆らない。
         if (event.status === 'failed') this.#emit(event.managerId, 'report', event.reason);
         // **`closed` は runner 側の `RunnerSession#finish()` を通った印**であり、
         // done / lost / failed のどれであれ、この委譲はもう走っていない。
