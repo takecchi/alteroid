@@ -187,7 +187,7 @@ export interface ManagerSummary {
 }
 
 /**
- * 「確認へ上がらずに止められた」件数（道具ごと）。
+ * 「確認へ上がらずに止められた」件数（道具・層ごと）。
  *
  * **`status` では表せない。** 分類器か deny 規則がその場で拒否したとき、その仕事は
  * `running` のまま手が止まる — デーモンから見えるのは「拒否があった」という事実
@@ -197,6 +197,67 @@ export interface ManagerSummary {
 export interface ManagerDenial {
   tool: string;
   count: number;
+  /**
+   * どちらの手が止まったか。**`undefined` は「マネージャーだった」ではなく
+   * 「層が取れなかった」という第3の状態である。** `undefined` を `'manager'`
+   * 側へ寄せないこと——寄せると、`via: 'result'`（SDK 曰く authoritative な
+   * 記録。`agent_id` を持たないため層を判定できない）で拾った拒否が、実際は
+   * 作業者のものでも黙ってマネージャーの拒否として数えられてしまう
+   * （Issue #373、2026-08-24 コメント #5393921053 が指摘した実害と同じ形）。
+   *
+   * 材料は `runner.ts` の `#noteDenial` が読む SDK の `agent_id`
+   * （`SDKPermissionDeniedMessage.agent_id`）で、`via: 'live'` のときにしか
+   * 載らない。旧い runner（`actor` をまだ送ってこないデプロイのずれの窓）
+   * からの応答も、同じ「取れていない」に自然に落ちる。
+   */
+  actor?: 'manager' | 'worker';
+}
+
+/**
+ * `event.actor`（`RunnerEvent` の `tool_use` / `permission_denied` が運ぶ
+ * `manager:<id>` / `worker:<id>:<agent>` の生の文字列）から、`ManagerDenial`
+ * が持つ粗い層だけを取り出す。
+ *
+ * **`undefined` と、どちらの接頭辞にも一致しない文字列は同じ「取れていない」
+ * として扱う。** 判定できない形を推測でどちらかへ倒さない（このファイルが
+ * 繰り返し選んでいる規則——`ManagerDenial.actor` の doc と同じ）。
+ */
+function denialActorLayerOf(actor: string | undefined): 'manager' | 'worker' | undefined {
+  if (actor === undefined) return undefined;
+  if (actor.startsWith('worker:')) return 'worker';
+  if (actor.startsWith('manager:')) return 'manager';
+  return undefined;
+}
+
+/**
+ * `#deniedOf` の帳面（`RecentMap<number>`）のキーを「道具＋層」で作る。
+ *
+ * **値の型（`number`）は変えない。** 道具名だけをキーにしていた形から、
+ * 道具と層の組をキーにする形へ変えるだけで、`DENIED_TOOL_LIMIT` /
+ * `onForget` の仕組みはそのまま使い回せる——ただし**上限は「道具の種類数」
+ * ではなく「道具×層の組の種類数」に対して効くようになる**（同じ道具が
+ * マネージャーと作業者の両方で拒否されると、2組として数える）。
+ *
+ * 区切りに `'::'` を使う——道具名（SDK のツール名 / MCP の
+ * `mcp__<server>__<tool>`）にこの並びが現れることは無い（MCP の区切りは
+ * `__` であって `::` ではない）。層が取れていない回は空文字ではなく
+ * `'unresolved'` を置く——空文字だと、将来 `actor` の型が増えたときに
+ * 「取れていない」と「その名前の層」が偶然衝突しうる。
+ */
+const DENIAL_KEY_SEPARATOR = '::';
+const DENIAL_ACTOR_UNRESOLVED = 'unresolved';
+
+function denialKey(tool: string, actor: 'manager' | 'worker' | undefined): string {
+  return `${actor ?? DENIAL_ACTOR_UNRESOLVED}${DENIAL_KEY_SEPARATOR}${tool}`;
+}
+
+/** `denialKey` の逆変換。`onForget` が忘れた組を人間へ言うためだけに使う。 */
+function decodeDenialKey(key: string): { tool: string; actor: 'manager' | 'worker' | undefined } {
+  const separatorIndex = key.indexOf(DENIAL_KEY_SEPARATOR);
+  if (separatorIndex === -1) return { tool: key, actor: undefined };
+  const rawActor = key.slice(0, separatorIndex);
+  const tool = key.slice(separatorIndex + DENIAL_KEY_SEPARATOR.length);
+  return { tool, actor: rawActor === 'manager' || rawActor === 'worker' ? rawActor : undefined };
 }
 
 /**
@@ -760,7 +821,7 @@ interface ManagerRecord {
    */
   reported?: RecentMap<true>;
   /**
-   * **道具ごとの、確認へ上がらず止められた件数。**
+   * **道具×層ごとの、確認へ上がらず止められた件数。**
    *
    * 拒否は正常な運用でも起きるので、1件ずつ受信箱へ流すとクローンの判断が雑音で
    * 鈍る。**日誌には全部残し、受信箱へは繰り返しの形になったときだけ**上げる
@@ -771,8 +832,10 @@ interface ManagerRecord {
    * - **プロセス内のこの像だけに載る**（`Job` には書かない＝ストアへ持ち越さない）
    * - デーモンを作り直したら**消える**。数え直しから始まる — 拒否が続いていれば
    *   すぐまた閾値に届くし、止まっていれば黙るのが正しい
-   * - 覚えるのは**道具の名前**で、件数の蓋は `DENIED_TOOL_LIMIT`。溢れたら
-   *   `onForget` が日誌へ残す（黙って数え直さない）
+   * - 覚えるのは**道具の名前と層（`denialKey`）の組**で、件数の蓋は
+   *   `DENIED_TOOL_LIMIT`。溢れたら `onForget` が日誌へ残す（黙って数え直さない）。
+   *   **層を分けて数える理由**は `ManagerDenial.actor` の doc を見ること
+   *   （Issue #373 — マネージャー自身の拒否と作業者の拒否を同じ数へ畳まない）
    */
   denied?: RecentMap<number>;
   /**
@@ -1485,7 +1548,13 @@ class Pool implements ManagerPool {
     // 一覧側で「デーモンを作り直すと数え直しになる」と添えてある。
     const denied = this.#records.get(managerId)?.denied;
     if (denied === undefined) return [];
-    return denied.entries().map(([tool, count]) => ({ tool, count }));
+    // 鍵は `denialKey`（道具＋層）で作ってある。**`actor` が `undefined` の
+    // ものだけ、そのキーを外向きの形からも省く**（`ManagerDenial.actor` の
+    // doc と同じ——取れていないことを「その名前の層」として見せない）。
+    return denied.entries().map(([key, count]) => {
+      const { tool, actor } = decodeDenialKey(key);
+      return actor === undefined ? { tool, count } : { tool, count, actor };
+    });
   }
 
   async runners(
@@ -3379,9 +3448,17 @@ class Pool implements ManagerPool {
         // **受信箱へは繰り返しのときだけ。** 拒否は正常な運用でも起きるので、
         // 1件ずつ流すとクローンの判断が雑音で鈍る（同じ知らせで埋めない、は
         // `usage_notice` と同じ考え方）。
+        //
+        // **鍵は道具＋層。** 層を分けずに数えると、マネージャー自身の拒否と
+        // 作業者の拒否が同じ数へ畳まれる（Issue #373、2026-08-24 コメント
+        // #5393921053 が指摘した実害と同じ形）。`event.actor` が無い回
+        // （`via: 'result'`。SDK 側に判定材料が無い）は「取れていない」層
+        // として別枠で数える——マネージャー側へ黙って寄せない。
+        const actorLayer = denialActorLayerOf(event.actor);
         const denied = this.#deniedOf(record);
-        const count = (denied.get(event.tool) ?? 0) + 1;
-        denied.set(event.tool, count);
+        const key = denialKey(event.tool, actorLayer);
+        const count = (denied.get(key) ?? 0) + 1;
+        denied.set(key, count);
 
         // 理由・分類・モデルへの拒否文は3つとも `via: 'result'` では必ず欠け、
         // `via: 'live'` でも SDK が付けてこなければ欠ける
@@ -3393,6 +3470,15 @@ class Pool implements ManagerPool {
           event.message === undefined ? undefined : `モデルへの拒否文: ${event.message}`,
         ].filter((line): line is string => line !== undefined);
         const denialSuffix = denialDetails.length > 0 ? ` [${denialDetails.join(' / ')}]` : '';
+        // **層の字面も日誌に残す。** `undefined`（取れていない）を「マネージャー」
+        // へ読み替えない——journal_read で後から追う人が誤読しないように、
+        // 3値のまま言う。
+        const actorLabel =
+          actorLayer === 'manager'
+            ? 'マネージャー自身'
+            : actorLayer === 'worker'
+              ? '作業者'
+              : 'どちらの層か不明';
 
         await this.#journal({
           type: 'exchange',
@@ -3400,7 +3486,8 @@ class Pool implements ManagerPool {
           role: 'inbound',
           text:
             `[${event.managerId}] ${event.tool} の実行が確認へ上がらずに止められた` +
-            `（このマネージャーで ${count} 件目 / ${event.via === 'live' ? '走行中の合図' : 'result の記録'}）: ` +
+            `（${actorLabel} / このマネージャーのこの組で ${count} 件目 / ` +
+            `${event.via === 'live' ? '走行中の合図' : 'result の記録'}）: ` +
             `${brief(event.input)}${denialSuffix}`,
         });
 
@@ -3442,12 +3529,24 @@ class Pool implements ManagerPool {
         //
         // **日誌（上の `#journal`）は包まない。** あちらは別の文字列リテラルで、
         // Markdown で描かれる面ではない。包めば読み手に無いバッククォートが見える。
+        // **層が取れているなら、クローンへの一文もその層だけを名指しする。**
+        // 「マネージャーか作業者の手が止まっている可能性がある」という両論
+        // 併記のままだと、クローンは誤った相手（例: マネージャー自身）へ
+        // 指示を出しうる（Issue #373、2026-08-24 コメント #5393921053 が
+        // 記録した実害）。取れていない回（`via: 'result'`）だけ、従来どおり
+        // 両論を残す——分からないものを分かった顔で片方へ絞らない。
+        const stuckWho =
+          actorLayer === 'manager'
+            ? 'マネージャー自身の手が止まっている可能性がある'
+            : actorLayer === 'worker'
+              ? '作業者の手が止まっている可能性がある'
+              : 'マネージャーか作業者の手が止まっている可能性がある（どちらの層かはこの合図からは取れていない）';
         this.#emit(
           event.managerId,
           'report',
-          `${codeSpan(event.tool)} の実行が確認へ上がらずに止められた（このマネージャーで ${count} 件目）。` +
+          `${codeSpan(event.tool)} の実行が確認へ上がらずに止められた（${actorLabel} / このマネージャーのこの組で ${count} 件目）。` +
             'モデル分類器か deny 規則がその場で拒否しているので、**この確認はクローンには回ってきていない**。' +
-            'マネージャーか作業者の手が止まっている可能性がある。' +
+            `${stuckWho}。` +
             `直近の入力: ${codeSpan(brief(event.input))}${denialSuffix}\n` +
             '全件は日誌に残っている（`journal_read` で辿れる）。',
         );
@@ -3962,6 +4061,10 @@ class Pool implements ManagerPool {
    *
    * 上限に達したら**黙って忘れない** — 忘れた道具の件数は 0 から数え直しになり、
    * 「もう何十回も止められている」という形が受信箱に出るまでの距離が伸びる。
+   *
+   * **鍵は `denialKey`（道具＋層）で、`onForget` へ渡るのはその生の鍵である。**
+   * 人間・クローンへ言う段では `decodeDenialKey` で道具名へ戻す（生の鍵の
+   * 区切り文字を journal の文面に漏らさないため）。
    */
   #deniedOf(record: ManagerRecord): RecentMap<number> {
     const existing = record.denied;
@@ -3969,15 +4072,19 @@ class Pool implements ManagerPool {
     const managerId = record.job.id;
     const denied = createRecentMap<number>({
       limit: DENIED_TOOL_LIMIT,
-      onForget: (tools) => {
+      onForget: (keys) => {
+        const labels = keys.map((key) => {
+          const { tool, actor } = decodeDenialKey(key);
+          return actor === undefined ? tool : `${tool}（${actor}）`;
+        });
         void this.#journal({
           type: 'exchange',
           with: 'manager',
           role: 'inbound',
           text:
-            `[${managerId}] 拒否の件数を覚えている道具が上限（${DENIED_TOOL_LIMIT}種）に達したので、` +
-            `古い ${tools.length} 件を忘れた: ${tools.join(', ')}。` +
-            'この道具が次に止められたら 1 件目から数え直す（日誌には全件残っている）。',
+            `[${managerId}] 拒否の件数を覚えている道具×層の組が上限（${DENIED_TOOL_LIMIT}種）に` +
+            `達したので、古い ${keys.length} 件を忘れた: ${labels.join(', ')}。` +
+            'この組が次に止められたら 1 件目から数え直す（日誌には全件残っている）。',
         });
       },
     });

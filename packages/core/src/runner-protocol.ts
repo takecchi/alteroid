@@ -834,6 +834,26 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      */
     via: z.enum(['live', 'result']),
     /**
+     * 誰の手が止まったか。`tool_use` イベントの `actor`（このファイル上の
+     * `z.object({ type: z.literal('tool_use'), ... })` の `actor: z.string()`
+     * の doc）と**同じ形**（`manager:<id>` / `worker:<id>:<agent>`）で運ぶ。
+     *
+     * **`.optional()` は「まだ書いていない」ではなく「原理的に取れない回が
+     * ある」ことを表す。** `via: 'result'`（`result.permission_denials`。SDK
+     * 曰くこちらが authoritative）は `SDKPermissionDenial` 型そのものが
+     * `tool_name` / `tool_use_id` / `tool_input` の3つしか持たず、`agent_id`
+     * が存在しない——**判定する材料が無い**。`via: 'live'`
+     * （`SDKPermissionDeniedMessage`）には `agent_id`（サブエージェント起源の
+     * ときだけ付く）があるので、そちらでは載る。
+     *
+     * **`undefined` を「マネージャーだった」の既定値にしないこと。**
+     * `#noteDenial`（`runner.ts`）／`manager.ts` の `ManagerDenial.actor` の
+     * doc と同じ規則——無いものは無いまま運び、片方の層へ黙って寄せない。
+     * 同じ理由で、この欄をまだ送ってこない旧い runner（デプロイのずれの窓）
+     * からの応答も、自然に「取れていない」へ落ちる。
+     */
+    actor: z.string().optional(),
+    /**
      * なぜ止められたかの人が読める一文（SDK の `decision_reason`）。
      *
      * **`.optional()` は `input` と同じ理由である。** 値が無い回にキーごと落ち

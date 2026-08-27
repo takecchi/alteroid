@@ -1855,6 +1855,8 @@ class RunnerSession {
       decision_reason?: unknown;
       decision_reason_type?: unknown;
       message?: unknown;
+      agent_id?: unknown;
+      agent_type?: unknown;
     };
     const tool = typeof denial.tool_name === 'string' ? denial.tool_name : '(不明な道具)';
     const input = denial.tool_input;
@@ -1873,6 +1875,35 @@ class RunnerSession {
     // にせよ、型を保証しないまま runner-protocol.ts の `z.string().optional()`
     // へ渡すのは事故のもとである（SDK の型変化で数値や null が来ても黙って通す
     // ことになる）。無いものは作り物を出さず、キーごと省く。
+    //
+    // **`actor` は `via: 'live'` のときだけ載せる（`#onPostToolUse` と同じ式）。**
+    // `via: 'result'`（`result.permission_denials`）の SDK 型（`SDKPermissionDenial`）
+    // は `tool_name` / `tool_use_id` / `tool_input` の3つしか持たず、`agent_id`
+    // が原理的に存在しない。**「マネージャーだった」と決めつけないこと** ——
+    // それは「層が取れた」ではなく「取れなかった」であり、`actor` をキーごと
+    // 省いて第3の状態のまま runner-protocol.ts / manager.ts へ渡す
+    // （このメソッド既存の「無いものは作り物を出さず、キーごと省く」規則を
+    // そのまま延長しただけである）。**同じ扱いが、runner とデーモンの
+    // デプロイのずれの窓も塞ぐ** —— 古い runner がまだ `actor` を送ってこない
+    // 回も、同じ「取れていない」へ自然に落ちる。
+    //
+    // **`agent_type` は今のところ常に無い。** `SDKPermissionDeniedMessage`
+    // （`via: 'live'` の合図）は `agent_id` は持つが `agent_type` を持たない
+    // （`PostToolUseHookInput` にはあるが、この合図には無い。SDK
+    // `0.3.247` の型で確認済み）。だから作業者の拒否は `WORKER_AGENT_NAME`
+    // （`worker`）に落ちる ——`#onPostToolUse` のように呼び出した Task の
+    // 具体的な agent_type までは分からない。**揃えられなかった点であり、
+    // SDK の型に無い情報をここで作り物として埋めることはしない。** 将来
+    // SDK がこの欄を持たせてきた場合に備えて読みはするが、現状では
+    // 常に `undefined` である。
+    const agentId = typeof denial.agent_id === 'string' ? denial.agent_id : undefined;
+    const agentType = typeof denial.agent_type === 'string' ? denial.agent_type : undefined;
+    const actor =
+      via === 'live'
+        ? agentId === undefined
+          ? `manager:${this.#id}`
+          : `worker:${this.#id}:${agentType ?? WORKER_AGENT_NAME}`
+        : undefined;
     this.#emit({
       type: 'permission_denied',
       managerId: this.#id,
@@ -1880,6 +1911,7 @@ class RunnerSession {
       tool,
       input,
       via,
+      ...(actor === undefined ? {} : { actor }),
       ...(typeof denial.decision_reason === 'string' ? { reason: denial.decision_reason } : {}),
       ...(typeof denial.decision_reason_type === 'string'
         ? { reasonType: denial.decision_reason_type }
