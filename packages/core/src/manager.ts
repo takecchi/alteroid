@@ -3405,7 +3405,46 @@ class Pool implements ManagerPool {
           approvalId: event.requestId,
           managerId: event.managerId,
         });
-        this.#emit(event.managerId, event.kind, event.summary, event.requestId);
+        // **`markup: 'none'` は `kind === 'permission'` のときだけ立てる
+        // （issue #287 の続き）。**
+        //
+        // 立てる理由: `event.summary` は runner.ts の `#onPermission` が
+        // `` `${toolName} の実行許可: ${brief(input)}` `` の形で組み立てる
+        // （`brief()` はツール呼び出し引数の JSON ダンプ）。**中身は道具の
+        // 呼び出し引数であって、AI が文章として書いたものではない** —
+        // バッククォートや `*` が入っていても、それは Markdown の記法として
+        // 書かれたのではなく、たまたまその文字が引数に含まれていただけである。
+        // `apps/web` の `commitments.tsx` はこの `text` を `<Markdown>` で
+        // 描く（`manager_message` → `clone.ts` の `commitmentFor` →
+        // `Commitment.body`）ので、印が無いと引数中のバッククォートが
+        // `<code>` に食われて字面から消える。
+        //
+        // **⚠️ `kind === 'question'` では立てない。** そちらの `summary` は
+        // `describeQuestions(input)` — **モデル自身が書いた質問文**である。
+        // 「AI が書いたものは Markdown として描く」という既存の軸に乗る側で
+        // あり、立てると質問文中の意図した Markdown 記法が素で出る。
+        //
+        // **これは `kind === 'permission'` の本文は Markdown ではない、を
+        // デーモン側が runner の作りから推し量る形である。** 本文の中身は
+        // 見ていない（`kind` という構造化された欄で分岐している）ので、
+        // issue #287 が避けている「本文の先頭を読んで判定する」には当たら
+        // ない。**⚠️ しかし runner がその文面を Markdown に変えたら、黙って
+        // 外れる。** その外れを黙らせないための歯が
+        // `runner-permission-summary-markup.test.ts` に在る —
+        // `#onPermission` が組み立てる `summary` を、Markdown の特殊文字を
+        // 含まない良性の入力でバイト単位固定し、誰かが定型文へ `` ` `` や
+        // `**` を足した瞬間に落ちるようにしてある。
+        //
+        // **なぜ `runner.ts` 側で包まず、ここで印を立てるだけにするか。**
+        // `summary`（＝この `#emit` の `text`）の読み手を数え上げると6面
+        // あり、`<Markdown>` で描くのは `apps/web` の `commitments.tsx`
+        // だけである。残り5面（`manager-detail.tsx` の
+        // `PermissionWaitingRow` を含む）は素テキストで描いていて化けて
+        // いない。**`runner.ts` 側で `brief(input)` をバッククォート等で
+        // 包んで直すと、化けていない5面に記号が増える。** 印はこの1面
+        // だけに効く。
+        const markup: TextMarkup | undefined = event.kind === 'permission' ? 'none' : undefined;
+        this.#emit(event.managerId, event.kind, event.summary, event.requestId, markup);
         return;
       }
 
@@ -4307,6 +4346,10 @@ class Pool implements ManagerPool {
     kind: 'report' | 'question' | 'permission',
     text: string,
     requestId?: string,
+    // **`markup` は呼び出し元が「立てられる」と確信できたときだけ渡す口。**
+    // 既定は `undefined`（＝立てない）— `case 'ask'` 以外の呼び出し元は
+    // これまでどおり何も渡さない（挙動は変わらない）。
+    markup?: TextMarkup,
   ): void {
     this.#post({
       type: 'manager_message',
@@ -4316,6 +4359,10 @@ class Pool implements ManagerPool {
       kind,
       text,
       ...(requestId === undefined ? {} : { requestId }),
+      // **取れない軸に値を作らない**（AGENTS.md 地雷表）。`markup` が
+      // `undefined` のときはキーごと書かない — 上の `requestId` と同じ形
+      // （`abort()` の `markup` の扱いにも揃えてある）。
+      ...(markup === undefined ? {} : { markup }),
     });
   }
 
