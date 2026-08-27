@@ -652,6 +652,20 @@ function text(body: string) {
 }
 
 /**
+ * `ManagerDenial.actor` を一覧の1件に添える短い印にする。
+ *
+ * **3値が字面の上でも3値のまま出ること。** `undefined`（層が取れていない。
+ * `via: 'result'` はSDK側に判定材料が無いので常にここに落ちる）を、
+ * 黙って消したりマネージャー側へ混ぜたりしないこと（Issue #373、
+ * 2026-08-24 コメント #5393921053 が指摘した実害と同じ形を再現しないため）。
+ * `apps/cli/src/chat.ts` の同名の書式と揃えてある——片方だけ直すと、
+ * クローンが見る道具と人間が見る CLI で数字の意味がずれる。
+ */
+function denialActorTag(actor: ManagerDenial['actor']): string {
+  return actor === 'manager' ? ' [マネージャー]' : actor === 'worker' ? ' [作業者]' : ' [層不明]';
+}
+
+/**
  * 一覧に添える「確認へ上がらず止められた」件数の行。
  *
  * **`status` は「動いている」を意味しない。** 分類器か deny 規則がその場で拒否
@@ -663,6 +677,10 @@ function text(body: string) {
  * その結果マネージャーが止まったかどうかは見ていない（動きを見る手がデーモンに
  * 無い）。数は器を作り直せば消えるので、そのことも書く — 「0 件」を
  * 「止められていない」と読まれると、作り直し直後がいちばん静かに見える。
+ *
+ * **各件に `denialActorTag` で層を添える。** どちらの手が止まったかを畳んで
+ * 出すと、クローンが誤った相手（例: マネージャー自身）へ指示を出しうる
+ * （Issue #373）。
  */
 function denialLine(denials: ManagerDenial[]): string | null {
   if (denials.length === 0) return null;
@@ -672,7 +690,7 @@ function denialLine(denials: ManagerDenial[]): string | null {
   const rest = recent.length - shown.length;
   const total = denials.reduce((sum, entry) => sum + entry.count, 0);
   return (
-    `  ⚠ 確認へ上がらず止められた道具: ${shown.map((e) => `${e.tool} ${e.count}件`).join(' / ')}` +
+    `  ⚠ 確認へ上がらず止められた道具: ${shown.map((e) => `${e.tool} ${e.count}件${denialActorTag(e.actor)}`).join(' / ')}` +
     (rest > 0 ? `（ほか ${rest} 種、全 ${total} 件）` : '') +
     '。この確認はクローンには回ってきていないので、手が止まっている可能性がある' +
     '（全件は journal_read に残っている。件数はデーモンを作り直すと数え直しになる）。'

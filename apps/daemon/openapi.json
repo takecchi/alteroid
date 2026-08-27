@@ -4980,6 +4980,10 @@
                                   "type": "integer",
                                   "minimum": 0,
                                   "maximum": 9007199254740991
+                                },
+                                "actor": {
+                                  "type": "string",
+                                  "enum": ["manager", "worker"]
                                 }
                               },
                               "required": ["tool", "count"]
@@ -5221,6 +5225,10 @@
                                 "type": "integer",
                                 "minimum": 0,
                                 "maximum": 9007199254740991
+                              },
+                              "actor": {
+                                "type": "string",
+                                "enum": ["manager", "worker"]
                               }
                             },
                             "required": ["tool", "count"]

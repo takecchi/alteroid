@@ -1237,6 +1237,19 @@ type ManagerListItem = InferResponseType<DaemonClient['managers']['$get']>['mana
 type ManagerDenial = NonNullable<ManagerListItem['denials']>[number];
 
 /**
+ * `ManagerDenial.actor` を一行に添える短い印にする。
+ *
+ * **`packages/core/src/tools.ts` の `denialActorTag` と同じ書式に揃えてある。**
+ * 片方だけ直すと、クローンが見る `manager_list` と人間が見るこの CLI とで
+ * 同じ拒否を見て違う判断をする（Issue #373、2026-08-24 コメント
+ * #5393921053）。`undefined`（層が取れていない）を黙って消したり、
+ * マネージャー側へ混ぜたりしない——3値のまま出す。
+ */
+function denialActorTag(actor: ManagerDenial['actor']): string {
+  return actor === 'manager' ? ' [マネージャー]' : actor === 'worker' ? ' [作業者]' : ' [層不明]';
+}
+
+/**
  * 状態に添える「確認へ上がらず止められた」件数の一行。
  *
  * **状態を置き換えない。** 分類器か deny 規則がその場で拒否すると、その仕事は
@@ -1257,6 +1270,8 @@ type ManagerDenial = NonNullable<ManagerListItem['denials']>[number];
  * 端末は1本ぶんに割ける行が少ないので、但し書きは Web UI より短くしてある。
  * ただし「止まっている**可能性がある**」までは削らない — 数えているのは拒否
  * そのものであって、それで止まったかどうかはデーモンから見えていない。
+ *
+ * **各件に `denialActorTag` で層を添える**（Issue #373）。
  */
 function denialLine(denials: ManagerDenial[] | undefined): string | null {
   if (denials === undefined || denials.length === 0) return null;
@@ -1266,7 +1281,7 @@ function denialLine(denials: ManagerDenial[] | undefined): string | null {
   const rest = recent.length - shown.length;
   const total = denials.reduce((sum, entry) => sum + entry.count, 0);
   return (
-    `⚠ 確認へ上がらず止められた道具: ${shown.map((e) => `${e.tool} ${e.count}件`).join(' / ')}` +
+    `⚠ 確認へ上がらず止められた道具: ${shown.map((e) => `${e.tool} ${e.count}件${denialActorTag(e.actor)}`).join(' / ')}` +
     (rest > 0 ? `（ほか ${rest} 種、全 ${total} 件）` : '') +
     '。手が止まっている可能性があります'
   );

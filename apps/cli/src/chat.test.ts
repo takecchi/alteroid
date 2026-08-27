@@ -204,6 +204,29 @@ describe('renderManagerList', () => {
     }
   });
 
+  /**
+   * Issue #373 — マネージャー自身と作業者の拒否を同じ数へ畳まず、3値
+   * （マネージャー／作業者／層不明）のまま CLI にも出す。`packages/core/src/tools.ts`
+   * の `denialActorTag` と同じ書式——片方だけ直すと、クローンが見る
+   * `manager_list` と人間が見るこの CLI とで同じ拒否を見て違う判断をする。
+   */
+  it('拒否の層（マネージャー／作業者／層不明）が3値のまま出る', () => {
+    const text = renderManagerList([
+      manager({
+        denials: [
+          { tool: 'Bash', count: 2, actor: 'manager' },
+          { tool: 'Edit', count: 1, actor: 'worker' },
+          // `via: 'result'` は SDK 側に判定材料が無いので `actor` キーが無い。
+          { tool: 'Write', count: 3 },
+        ],
+      }),
+    ]);
+
+    expect(text).toContain('Bash 2件 [マネージャー]');
+    expect(text).toContain('Edit 1件 [作業者]');
+    expect(text).toContain('Write 3件 [層不明]');
+  });
+
   it('多いときは新しい側から3種だけ出し、切った分は種類数と総件数で言う', () => {
     const text = renderManagerList([
       manager({

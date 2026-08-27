@@ -526,10 +526,26 @@ const managerWaitingSchema = z.object({
  * — この PR で `.parse()` を通した以上、ここに書いた範囲がそのまま外向きの面の
  * 定義になる。既定の `z.number().int()` は `minimum: -9007199254740991` を吐くので、
  * 書かなければ「負でもありうる」と宣言したことになってしまう。
+ *
+ * **`actor` を宣言しないと、値が在っても `.parse()` で黙って落ちる**
+ * （`runnerLostSince` の doc、55行下と同じ断り）。**落ちると CLI と Web の
+ * 両方が同時に盲目になる**——クローンの `manager_list` にだけ層が見え、
+ * 人間の入口には出ない形になる（Issue #373）。
  */
 const managerDenialSchema = z.object({
   tool: z.string(),
   count: z.number().int().nonnegative(),
+  /**
+   * どちらの手が止まったか。**`undefined` は「マネージャーだった」ではなく
+   * 「層が取れなかった」という第3の状態である**
+   * （`packages/core/src/manager.ts` の `ManagerDenial.actor` の doc と同じ
+   * 規則。`via: 'result'` の拒否は SDK 側に判定材料が無いので、常にこの
+   * 状態になる）。**`.optional()` をこの第3の状態のために使う**——
+   * 「宣言していないから落ちた」と「観測できなかったので無い」を混同しない
+   * ため、`z.enum(['manager', 'worker']).optional()` のまま書き、既定値
+   * （例: `'manager'`）を持たせない。
+   */
+  actor: z.enum(['manager', 'worker']).optional(),
 });
 
 /**
