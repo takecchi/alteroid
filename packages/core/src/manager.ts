@@ -1457,7 +1457,10 @@ class Pool implements ManagerPool {
     const silent = this.#silentRunners();
     const known = new Map<string, ManagerSummary>();
     for (const record of this.#records.values()) {
-      known.set(record.job.id, summaryOf(record, isLive(record, silent), lostSinceOf(record, silent)));
+      known.set(
+        record.job.id,
+        summaryOf(record, isLive(record, silent), lostSinceOf(record, silent)),
+      );
     }
     // 台帳にしか無い分も見せる。**`live: false` を決め打ちしない。** `#retire`
     // （終端した委譲を `#records` から外す）が入った後は、「台帳にしか無い」は
