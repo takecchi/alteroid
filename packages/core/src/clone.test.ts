@@ -28,7 +28,7 @@ import type { HumanMessage } from './clone.js';
 import type { TokenRotatorObservation } from './token-rotator.js';
 import { fingerprintOf } from './credentials.js';
 import type { CloneHost } from './host.js';
-import type { ManagerPool } from './manager.js';
+import type { ManagerPool, ManagerSummary } from './manager.js';
 import { renderMemoryDocuments } from './memory.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -2130,6 +2130,107 @@ describe('クローン — 自律（人間以外の起点）', () => {
     expect(s.events).toEqual([]);
 
     await s.clone.stop();
+  });
+
+  /**
+   * 発意 tick の要約（digest）に `ManagerPool` の liveness が渡っていること
+   * （#5243d633）。
+   *
+   * `#recentDigest` は `digest.ts` の `buildActivityDigest` を呼ぶだけで、
+   * `live`（＝いま話しかけられるか）はジョブ台帳の軸ではなく
+   * `ManagerPool#list()` が実行時に返すものである。ここへ配線し忘れると、
+   * digest の「マネージャー」節は常に「セッション不明」（`liveness` 省略時の
+   * 既定）になり、`manager_list` の実際の状態（`live: false` ＝セッション
+   * 切断）とは違う文言のまま tick がクローンへ届く——今回直した実害
+   * （終わった仕事へ3本目の委譲を出した）と同じ形の穴が、配線側にも開き
+   * うる。
+   *
+   * `#dailyReport` 側の配線は `digest.test.ts` の `describeManagerState` の
+   * 歯と合わせてここでは測らない——`buildActivityDigest` へ `liveness` が
+   * 届けば `describeManagerState` は同じ字面を出すので、**tick 側の配線が
+   * 生きていること**をここでは見る。
+   */
+  it('発意 tick の要約に ManagerPool の liveness が渡る（#5243d633）', async () => {
+    const { fn, calls } = fakeSdk(() => '今回は動かない');
+    const stores = createMemoryStores();
+    const now = new Date().toISOString();
+    await stores.jobs.putJob({
+      id: 'mgr-alive',
+      createdAt: now,
+      updatedAt: now,
+      status: 'running',
+      summary: '生きている仕事',
+      request: '生きている仕事',
+    });
+    await stores.jobs.putJob({
+      id: 'mgr-dead',
+      createdAt: now,
+      updatedAt: now,
+      status: 'running',
+      summary: 'セッションが切れた仕事',
+      request: 'セッションが切れた仕事',
+    });
+
+    const summaryOf = (managerId: string, live: boolean): ManagerSummary => ({
+      managerId,
+      status: 'running',
+      live,
+      cwd: '/work',
+      request: '仕事',
+      startedAt: now,
+      updatedAt: now,
+      waiting: [],
+    });
+    // `throwingPool`（上の「managers.list() が投げても…」の歯）と同じ形の
+    // スタブ。このテストで使うのは `list()` だけなので、それ以外は
+    // 呼ばれない前提で投げる。
+    const pool: ManagerPool = {
+      start: () => {
+        throw new Error('not implemented');
+      },
+      send: () => {
+        throw new Error('not implemented');
+      },
+      abort: () => {
+        throw new Error('not implemented');
+      },
+      list: () => Promise.resolve([summaryOf('mgr-alive', true), summaryOf('mgr-dead', false)]),
+      denials: () => [],
+      runners: () => {
+        throw new Error('not implemented');
+      },
+      transcript: () => {
+        throw new Error('not implemented');
+      },
+      restore: () => Promise.resolve([]),
+      reattachRunner: () => Promise.resolve(),
+      stop: () => Promise.resolve(),
+    };
+
+    const clone = createClone({ stores, queryFn: fn, managers: pool });
+
+    clone.post({
+      type: 'self_initiative',
+      id: 'evt-self-liveness',
+      at: new Date().toISOString(),
+      reason: '定期 tick',
+    });
+
+    const inputs = () => (calls[0]?.inputs ?? []).join('\n');
+    await expect
+      .poll(() => inputs().includes('mgr-alive') && inputs().includes('mgr-dead'), {
+        timeout: 3000,
+      })
+      .toBe(true);
+
+    const text = inputs();
+    // `describeManagerState` と同じ字面（`digest.test.ts` で直接測っている）。
+    // ここで見るのは、配線を通ってその字面が tick のプロンプトまで実際に
+    // 届くことである。
+    expect(text).toContain('mgr-alive [running]');
+    expect(text).toContain('mgr-dead [running/セッション切断]');
+
+    await clone.stop();
   });
 
   it('外部イベントは日誌に残り、中身がクローンに渡る（起点③）', async () => {

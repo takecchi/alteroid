@@ -12,7 +12,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 
 import { buildCloneDistillOptions, buildCloneSessionOptions } from './claude-provider.js';
-import { buildActivityDigest } from './digest.js';
+import { buildActivityDigest, type ManagerLiveness } from './digest.js';
 import { excerptLine } from './excerpt.js';
 import {
   inboxEventShape,
@@ -2652,12 +2652,36 @@ class Clone implements CloneHost {
     };
   }
 
+  /**
+   * `manager_list`（`tools.ts`）が使う「話しかけられるか」を、digest の
+   * マネージャー節でも同じ字面で出すための材料。
+   *
+   * `ManagerPool#list()` は実行時に `isLive()`（`manager.ts`）を計算する——
+   * ジョブ台帳（`stores.jobs`）が持たない軸なので、`buildActivityDigest`
+   * 自身は取れない。**`list()` が失敗しても digest を壊さない** — 空の Map を
+   * 返す。空の Map は `describeManagerState` の既定どおり全件 `/セッション不明`
+   * になる（`liveness?.get(id)` が `undefined` を返すため）。これは「取れて
+   * いない」がそのまま出力に出る側であって、黙って「繋がっている」に倒れる
+   * 側ではない（`digest.ts` の `describeManagerState` / `buildActivityDigest`
+   * の doc と同じ理由）。
+   */
+  async #managerLiveness(): Promise<ManagerLiveness> {
+    try {
+      const managers = await this.#managers.list();
+      return new Map(managers.map((manager) => [manager.managerId, manager.live]));
+    } catch {
+      return new Map();
+    }
+  }
+
   /** 発意・定期ジョブに渡す直近の状況。 */
   async #recentDigest(): Promise<string> {
     try {
-      return await buildActivityDigest(this.#stores, {
-        since: new Date(Date.now() - RECENT_DIGEST_WINDOW_MS),
-      });
+      return await buildActivityDigest(
+        this.#stores,
+        { since: new Date(Date.now() - RECENT_DIGEST_WINDOW_MS) },
+        await this.#managerLiveness(),
+      );
     } catch (error) {
       return `（直近の状況をまとめられなかった: ${String(error)}）`;
     }
@@ -2686,7 +2710,7 @@ class Clone implements CloneHost {
     const digest =
       range === null
         ? await this.#recentDigest()
-        : await buildActivityDigest(this.#stores, range).catch(
+        : await buildActivityDigest(this.#stores, range, await this.#managerLiveness()).catch(
             (error: unknown) => `（この日の記録をまとめられなかった: ${String(error)}）`,
           );
 
