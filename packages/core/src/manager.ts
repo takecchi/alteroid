@@ -311,6 +311,39 @@ export interface RunnerFleetOverview {
   daemonRevision: RunnerRevisionReport;
 }
 
+/**
+ * runner→デーモンの脚（`Outbox` の滞留）を最後に観測できた値（#358 案b）。
+ *
+ * **これはキャッシュであって現在値ではない。** `RunnerPlacementResources` の
+ * `pendingEvents` / `oldestPendingAt` は runner が `GET /health` で無条件に
+ * 返しているが、デーモン側でそれを拾うのは `runners({ resources: true })` を
+ * 呼んだとき（＝クローンが `runner_list` を `resources: true` で明示的に
+ * 呼んだとき）だけである。10秒ごとの生存確認（`RunnerRegistry` の `#probe`）は
+ * `client.identity()` しか呼ばず、`identity()` の応答には `pendingEvents` の
+ * 欄が無いので、**放っておいても定期的に拾われることはない**。
+ *
+ * **だから、あるはずの runnerId がここに無いことは「滞留が0件」を意味
+ * しない。** 「0件だった」と「まだ一度も観測していない」のどちらかである
+ * ——読む側はこの2つを区別できるようにすること（`runnerBacklog()` の doc、
+ * `tools.ts` の `describeRunnerBacklog` の doc）。
+ *
+ * **このキャッシュを埋めるためだけの新しい往復は無い。** `runners({
+ * resources: true })` は呼んだ時点で既に `resources()` の往復を払って
+ * いる——ここはその応答の中から今までただ捨てられていた2つの欄を拾って
+ * 保存するだけで、呼び出し回数は1つも増えない（#358 のコメント
+ * 2026-08-27T00:26Z の判断: `manager_list` から自動で `resources()` を
+ * 呼ぶ形は採らない。opt-in の判断がクローンから奪われる。north_star 禁止2）。
+ */
+export interface RunnerBacklogSnapshot {
+  runnerId: string;
+  /** `RunnerPlacementResources.pendingEvents` の写し。 */
+  pendingEvents: number;
+  /** `RunnerPlacementResources.oldestPendingAt` の写し。1件も無ければ省かれる。 */
+  oldestPendingAt?: string;
+  /** この値をいつ観測できたか（`runners({ resources: true })` を呼んだ時刻）。 */
+  observedAt: string;
+}
+
 export type ManagerDecision = 'allow' | 'deny';
 
 export interface ManagerSendResult {
@@ -459,6 +492,36 @@ export interface ManagerPool {
    * とは区別すること（`RunnerOverview.resources` の doc の3値）。
    */
   runners(options?: { fingerprints?: boolean; resources?: boolean }): Promise<RunnerFleetOverview>;
+  /**
+   * runner→デーモンの脚（`Outbox` の滞留）について、最後に観測できた値
+   * （#358 案b）。**ネットワークを一切叩かない**——直近の `runners({
+   * resources: true })` が拾って保存しておいたものを読むだけである
+   * （`RunnerBacklogSnapshot` の doc）。
+   *
+   * **一度も `runners({ resources: true })` を呼んでいない runner は
+   * 出てこない。** その runner の滞留が0件だからではなく、まだ観測して
+   * いないからである——呼び出し側（`tools.ts` の `manager_list`）は
+   * 「行が無い＝0件」と読まないこと。
+   *
+   * **省略可能（`?`）にしない。** 他のメンバと同じ非 optional である。
+   *
+   * 一度は `?` を付けた——`apps/daemon/src/openapi.ts` の
+   * `buildOpenApiDocument()` が spec 生成のためだけに用意する `ManagerPool`
+   * のスタブ（`throw` を返すだけの構造的な実装）へ1行足すのを避けるため
+   * だった。**だがその形は、この道具が守っている区別そのものを壊す。**
+   *
+   * 省略可能にすると呼び出し側は `runnerBacklog?.() ?? []` と書くことになり、
+   * **「この口を持たない実装」と「持っているが1件も観測していない」が同じ
+   * `[]` に畳まれる。** どちらも「行が出ない」に落ちる——**「まだ観測して
+   * いない」と「滞留0」を区別することが #358 の主題であり、呼び出し口の型で
+   * それを潰しては意味が無い。** `${x:-0}` を禁じているのと同じ形である
+   * （取れなかったことを「0 だった」に変えない。AGENTS.md「取れない軸に
+   * 0 の行を作る」）。
+   *
+   * ⟹ スタブの側へ1行足すほうを選んだ。**スタブは spec 生成専用で走らない**
+   * ので、実行時の振る舞いは何も変わらない。
+   */
+  runnerBacklog(): readonly RunnerBacklogSnapshot[];
   /** manager_id からセッションの生ログへ降りる（可観測性の最下段）。 */
   transcript(managerId: string): Promise<string | null>;
   /**
@@ -876,6 +939,25 @@ class Pool implements ManagerPool {
   readonly #onUsageObservation:
     ((observation: TokenRotatorObservation) => Promise<void>) | undefined;
   readonly #rateLimits = new Map<string, RateLimitFacts>();
+  /**
+   * `runnerBacklog()` の実体。runnerId → 最後に観測できた値
+   * （`RunnerBacklogSnapshot` の doc）。
+   *
+   * **書くのは `runners()` が `options.resources` 付きで呼ばれ、runner から
+   * `resources` が実際に返ってきたときだけ。** ここへ書き込むためだけの
+   * 新しい呼び出しは無い——`runners()` が既に払った往復の結果を捨てずに
+   * 保存するだけである。
+   *
+   * `pendingEvents` が `undefined`（古い runner が欄自体を持たない・
+   * `resources()` が失敗した）のときは書かない。0で埋めると、「滞留0」と
+   * 「観測できていない」の区別がこの地図の中で最初から消える
+   * （AGENTS.md「取れない軸に0の行を作る」）。
+   *
+   * **揮発してよい。** デーモンを作り直したら空になり、次に誰かが
+   * `runner_list resources: true` を呼ぶまで、その runner の行は
+   * `runnerBacklog()` に出ない。
+   */
+  readonly #runnerBacklog = new Map<string, RunnerBacklogSnapshot>();
   /**
    * **そのマネージャーのセッションが起きたときの**認証トークンの身元
    * （Issue #393 PR3）。managerId → 身元。
@@ -1391,6 +1473,23 @@ class Pool implements ManagerPool {
             ? undefined
             : ((await client.resources?.().catch(() => undefined)) ?? undefined);
 
+        // #358 案b: `pendingEvents` / `oldestPendingAt` を `#runnerBacklog`
+        // へ書く。**新しい往復ではない**——直上で払った往復（`options.resources`
+        // が付いたときだけ通る）の結果を捨てずに保存するだけである
+        // （`RunnerBacklogSnapshot` の doc）。`pendingEvents` が `undefined`
+        // （古い runner・応答の形が壊れていた）のときは書かない — 0で
+        // 埋めない（`#runnerBacklog` の doc）。
+        if (entry.runnerId !== undefined && resources?.pendingEvents !== undefined) {
+          this.#runnerBacklog.set(entry.runnerId, {
+            runnerId: entry.runnerId,
+            pendingEvents: resources.pendingEvents,
+            ...(resources.oldestPendingAt === undefined
+              ? {}
+              : { oldestPendingAt: resources.oldestPendingAt }),
+            observedAt: new Date(this.#now()).toISOString(),
+          });
+        }
+
         const overview: RunnerOverview = {
           label: entry.label,
           state: entry.state,
@@ -1417,6 +1516,14 @@ class Pool implements ManagerPool {
     const daemonRevision = reportRunnerRevision(resolveBuildRevision());
 
     return { runners, unassigned, daemonRevision };
+  }
+
+  /**
+   * `ManagerPool.runnerBacklog` の実装。**ネットワークを一切叩かない** — `#runnerBacklog`
+   * を読むだけである（`RunnerBacklogSnapshot` の doc）。
+   */
+  runnerBacklog(): readonly RunnerBacklogSnapshot[] {
+    return [...this.#runnerBacklog.values()].sort((a, b) => a.runnerId.localeCompare(b.runnerId));
   }
 
   async transcript(managerId: string): Promise<string | null> {

@@ -42,6 +42,9 @@ function fakeClone(stores: Stores) {
     denials() {
       return [];
     },
+    runnerBacklog() {
+      return [];
+    },
     // 外部クライアントの経路（本ファイルの検証対象）に `runner_list` 相当の
     // HTTP は無い（クローンの道具専用）。型を満たすだけの空スタブで足りる。
     async runners() {

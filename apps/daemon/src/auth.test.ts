@@ -29,6 +29,7 @@ function stubClone(): CloneHost {
     abort: () => Promise.reject(new Error('止めない')),
     list: () => Promise.resolve([]),
     denials: () => [],
+    runnerBacklog: () => [],
     // 認証境界の検証では触らない（`GET /runners` は `deps.runners` を直に読み、
     // ここは経由しない）。型を満たすだけの空スタブで足りる。
     runners: () =>
