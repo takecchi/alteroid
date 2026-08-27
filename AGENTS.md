@@ -224,7 +224,7 @@ git -C <main のツリー> apply --check -R /tmp/tail.patch   # 通れば main �
 **判断・設計・レビューは自分が持ち、手を動かす部分を作業者へ委ねる。** 理由は「安いから」ではない — 費用の実測は一定しなかった（調査の厚さのほうが効く）。**品質が落ちないことが条件であり、その条件は「レビューが必ず入る」ことで成り立っている。**
 
 - **切り出すのが不自然な粒度なら無理に切らない。切らなかったなら理由を書く**
-- **検証コマンドを漏れなく列挙して渡す**（`build` / `typecheck` / `lint` / `format:check` / `test`）。**渡さなかった検証は実行されない** — `typecheck` を渡し忘れて型エラー2件が CI まで残った
+- **検証コマンドを漏れなく列挙して渡す**（`build` / `check:web-bundle-node-traces` / `check:web-bundle-size` / `apps/daemon/openapi.json` に差分が無いこと / `typecheck` / `lint` / `format:check` / `test`）。**渡さなかった検証は実行されない** — `typecheck` を渡し忘れて型エラー2件が CI まで残った
   - **通す時機も渡すこと — 検証一式は「最後の変更の後」に通す。** 渡し忘れだけが穴ではない。**渡した後に手を入れれば、通した結果はその時点で古い。** 緑を見てから1行直して push すると、**その1行だけが誰にも検証されていない状態で PR に載る** — 列挙は正しかったので、**渡し漏れとしては現れない。** 直前の項目が「何を渡すか」の穴なら、こちらは「いつ通すか」の穴である（別のマネージャーの自己申告から）
 - **作業者の出力は自分が読んでから通す。** とくに**テストの足場・スタブ・モックは、動くのに嘘をつく** — 固定値を返す `matchMedia` スタブでテストは緑のまま、狭い画面の分岐が静かに死んでいた（この一件の後始末が `apps/web/app/test-support.tsx` である）
 - **作業ツリーの所有権は、常にちょうど1人が持つ。渡したら、返ってくるまで自分は読むだけである。** 器の側の事情（同じ `.git` を複数のプロセスが共有する形）は「自分が走っている器」の「同一の git 作業ツリーを複数のプロセスが同時に書き換えることがある」が持つので、ここには書かない。**ここが持つのは依頼の側 — 所有権を渡したことが依頼文に書かれていないと何が起きるか**である
@@ -558,7 +558,7 @@ git -C <main のツリー> apply --check -R /tmp/tail.patch   # 通れば main �
 
 - 実行系の版は **`mise.toml`**（Node / pnpm）。`mise install` で揃える。CI も同じファイルを読む（`jdx/mise-action`）ので、ここを直せば両方が動く
   - mise を使わないなら Node 22 系 / pnpm は `package.json` の `packageManager` に合わせる（`corepack enable`）
-- `pnpm install` → `pnpm build` → `pnpm typecheck` / `pnpm lint` / `pnpm format:check` / `pnpm test`
+- `pnpm install` → `pnpm build` → `pnpm check:web-bundle-node-traces` / `pnpm check:web-bundle-size` / `apps/daemon/openapi.json` に差分が無いこと / `pnpm typecheck` / `pnpm lint` / `pnpm format:check` / `pnpm test`
 - **build が先。** ワークスペース間の型解決が各パッケージの `dist/` に依存するため、build 前の typecheck / test は失敗する
 - TypeScript は 6 系に固定（typescript-eslint が TS 7 未対応のため。`pnpm-workspace.yaml` の catalog 参照）。TS6 は `@types` を自動で取り込まないので、新パッケージには `@types/node`（`catalog:`）を devDependencies に入れる
 - 新しい依存の追加はバージョンを catalog（`pnpm-workspace.yaml`）に寄せられるか先に検討する
