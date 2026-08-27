@@ -7945,3 +7945,257 @@ describe('token_list（読むだけ。値は返らない）', () => {
     expect(reply).toContain('冷却 ');
   });
 });
+
+/**
+ * issue #426。`journal_read` は `stores.journal.list` が既に持つ `with`
+ * （issue #418）への口を開けていなかった——クローンが `types` だけで
+ * `exchange` の相手を回避するしかなかった実害を塞ぐ。
+ */
+describe('journal_read に with の絞りを足す（issue #426）', () => {
+  it('with で exchange の相手を絞れる（human 以外は出ない）', async () => {
+    const h = harness();
+    await h.stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '人間からの発言',
+    });
+    await h.stores.journal.append({
+      type: 'exchange',
+      with: 'manager',
+      role: 'outbound',
+      text: 'マネージャーとの往復',
+    });
+    await h.stores.journal.append({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text: '内部ターン',
+    });
+    // `with` を持たない種別（`decision` 等）も、絞りを指定した時点で
+    // 1件も返らないはず（store.ts の `JournalQuery.with` の doc）。
+    await h.stores.journal.append({ type: 'decision', decision: '無関係な判断', grounds: '記憶' });
+
+    const reply = await h.call('journal_read', { with: ['human'] });
+
+    expect(reply).toContain('人間からの発言');
+    expect(reply).not.toContain('マネージャーとの往復');
+    expect(reply).not.toContain('内部ターン');
+    expect(reply).not.toContain('無関係な判断');
+  });
+
+  it('with: [] は「絞らない」ではなく0件として扱う（types: [] と同じ0件の契約に揃える）', async () => {
+    const h = harness();
+    await h.stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '人間からの発言',
+    });
+
+    const reply = await h.call('journal_read', { with: [] });
+
+    // **「日誌はまだ空」ではない。** 日誌には行があるが、この絞りが0件を
+    // 指定したという別の意味である——空の日誌と混同すると、絞りの意味が
+    // 「無視される」に化ける。
+    expect(reply).toBe('（その条件に当たる日誌は無い）');
+  });
+
+  it('with は limit（既定20件）より前に効く——#418 と同じ形の穴を作らない', async () => {
+    // **回帰の歯。** `with` を店（store）ではなく道具の層で `limit` の後に
+    // 掛けると、限られた枠を関係ない `with` の行が食い尽くし、狙った行が
+    // 窓の外へ落ちる（#418 の穴の本体）。ここでは新しい順に25件の
+    // manager exchange を積んだ後、より古い5件の human exchange を積む——
+    // `with` がここで正しく効いていれば、limit 20 の既定でも5件とも
+    // 返ってくるはずである（店側の `with` 実装は #418 で既に入っている。
+    // ここで測るのは道具の層がそれを正しく呼んでいるかである）。
+    const h = harness();
+    for (let index = 0; index < 5; index += 1) {
+      await h.stores.journal.append({
+        type: 'exchange',
+        with: 'human',
+        role: 'inbound',
+        text: `古い人間の発言${index}`,
+      });
+    }
+    for (let index = 0; index < 25; index += 1) {
+      await h.stores.journal.append({
+        type: 'exchange',
+        with: 'manager',
+        role: 'outbound',
+        text: `新しいマネージャーとの往復${index}`,
+      });
+    }
+
+    const reply = await h.call('journal_read', { with: ['human'] });
+
+    for (let index = 0; index < 5; index += 1) {
+      expect(reply, `古い人間の発言${index} が窓の外へ落ちた`).toContain(`古い人間の発言${index}`);
+    }
+    expect(reply).not.toContain('マネージャーとの往復');
+  });
+});
+
+/**
+ * issue #426。`commitment_list` には出所（`origin`）で絞る手段が無く、
+ * マネージャーからの一件（`origin: 'manager'`）と人間の依頼が同じ窓へ
+ * 混ざって流れ込んでいた実害を塞ぐ。
+ */
+describe('commitment_list に origin の絞りを足す（issue #426）', () => {
+  it('origin で出所を絞れる（manager 以外は出ない）', async () => {
+    const h = harness();
+    await h.stores.commitments.open({
+      id: 'c-human',
+      at: '2026-01-01T00:00:00.000Z',
+      origin: 'human',
+      body: '人間からの依頼',
+    });
+    await h.stores.commitments.open({
+      id: 'c-manager',
+      at: '2026-01-01T00:00:01.000Z',
+      origin: 'manager',
+      body: 'マネージャーからの一件',
+    });
+    await h.stores.commitments.open({
+      id: 'c-external',
+      at: '2026-01-01T00:00:02.000Z',
+      origin: 'external',
+      body: '外部からのイベント',
+    });
+    await h.stores.commitments.open({
+      id: 'c-self',
+      at: '2026-01-01T00:00:03.000Z',
+      origin: 'self',
+      body: '自分で気づいた宿題',
+    });
+
+    const reply = await h.call('commitment_list', { origin: ['manager'] });
+
+    expect(reply).toContain('c-manager');
+    expect(reply).not.toContain('c-human');
+    expect(reply).not.toContain('c-external');
+    expect(reply).not.toContain('c-self');
+  });
+
+  it('origin: [] は「絞らない」ではなく0件として扱う（journal_read の with と同じ契約）', async () => {
+    const h = harness();
+    await h.stores.commitments.open({
+      id: 'c-1',
+      at: '2026-01-01T00:00:00.000Z',
+      origin: 'self',
+      body: '何か',
+    });
+
+    const reply = await h.call('commitment_list', { origin: [] });
+
+    // **台帳は空ではない。** 「引き受けたまま終わっていない仕事は無い」と
+    // 混同すると、絞りの意味が消える。
+    expect(reply).not.toBe('（引き受けたまま終わっていない仕事は無い）');
+    expect(reply).toContain('絞り込みに当たる行は無い');
+  });
+
+  it('台帳自体に読める行が無いときは「読める行は無い」のまま——origin の絞りのせいだと誤読させない', async () => {
+    // `unreadable` を模して「台帳に読める行が0件」の状態を作る
+    // （`commitment_list は読めない行を隠さない` 節と同じ作法）。
+    const stores = createMemoryStores();
+    const withUnreadable: Stores = {
+      ...stores,
+      commitments: {
+        ...stores.commitments,
+        async list() {
+          return {
+            entries: [],
+            unreadable: [
+              { id: 'c-broken', at: '2026-08-01T00:00:00.000Z', reason: '型が合わない' },
+            ],
+            trimmedClosed: 0,
+          };
+        },
+      },
+    };
+    const tools = createCloneTools({
+      stores: withUnreadable,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+    });
+    const found = tools.find((entry) => entry.name === 'commitment_list');
+    const result = await found?.handler({ origin: ['manager'] } as never, {});
+    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+
+    expect(reply).toContain('読めない行が 1 件ある');
+    // **「origin の絞り込みに当たる行は無い」ではない。** 絞りのせいではなく、
+    // そもそも読める行が0件だったからである。
+    expect(reply).not.toContain('絞り込みに当たる行は無い');
+  });
+
+  it('origin の絞りは文字数の予算（COMMITMENT_LIST_BUDGET）より前に効く——#418 と同じ形の穴を作らない', async () => {
+    // **回帊の歯。** origin を renderListing の後（予算で切った後）に掛けると、
+    // 絞りに当たらない行が予算を食い尽くし、狙った行が窓の外へ落ちる。
+    // ここでは manager origin を多数（予算を超える量）積み、その後に少数の
+    // human origin を積む——`origin: ['human']` を渡したとき、manager の
+    // 行がいくら多くても human の全件が返るはずである。
+    const h = harness();
+    const long = 'あ'.repeat(500);
+    for (let index = 0; index < 25; index += 1) {
+      await h.stores.commitments.open({
+        id: `manager-${index}`,
+        at: `2026-01-01T00:00:${String(index).padStart(2, '0')}.000Z`,
+        origin: 'manager',
+        source: 'mgr-1',
+        body: `マネージャーからの一件${String(index).padStart(3, '0')}: ${long}`,
+      });
+    }
+    for (let index = 0; index < 3; index += 1) {
+      await h.stores.commitments.open({
+        id: `human-${index}`,
+        at: `2026-01-02T00:00:0${index}.000Z`,
+        origin: 'human',
+        body: `人間からの依頼${index}: ${long}`,
+      });
+    }
+
+    const reply = await h.call('commitment_list', { origin: ['human'] });
+
+    for (let index = 0; index < 3; index += 1) {
+      expect(reply, `human-${index} が窓の外へ落ちた`).toContain(`human-${index}`);
+    }
+    expect(reply).not.toContain('manager-');
+    // 予算そのものは origin を絞った後の3件だけなので切れないはず
+    // （切れていたら「省略」の断りが出る——出ないことも見る）。
+    expect(reply).not.toMatch(/…ほか \d+ 件は省略/);
+  });
+
+  it('origin を指定した省略の断り書きは、絞った後の件数だと分かる形で言う（数え違いを「絞る前の全体」と誤読させない）', async () => {
+    const h = harness();
+    const long = 'あ'.repeat(500);
+    const managerCount = 25;
+    const selfCount = 25;
+    for (let index = 0; index < managerCount; index += 1) {
+      await h.stores.commitments.open({
+        id: `manager-${index}`,
+        at: `2026-01-01T00:00:${String(index).padStart(2, '0')}.000Z`,
+        origin: 'manager',
+        body: `マネージャーからの一件${String(index).padStart(3, '0')}: ${long}`,
+      });
+    }
+    for (let index = 0; index < selfCount; index += 1) {
+      await h.stores.commitments.open({
+        id: `self-${index}`,
+        at: `2026-01-01T01:00:${String(index).padStart(2, '0')}.000Z`,
+        origin: 'self',
+        body: `自分の宿題${String(index).padStart(3, '0')}: ${long}`,
+      });
+    }
+
+    const reply = await h.call('commitment_list', { origin: ['manager'] });
+
+    // 予算で実際に切れたこと（そうでなければ omitted は呼ばれておらず、
+    // 下の assert は何も測っていない）。
+    expect(reply).toMatch(/…ほか \d+ 件は省略/);
+    // **`total` は origin で絞った後の母数（manager の25件）でなければ
+    // ならない。** 絞る前の全体（50件）だと、絞りの効き目が嘘になる。
+    expect(reply).toContain(`origin: manager に絞った、未了は ${managerCount} 件あり`);
+    expect(reply).not.toContain(`${managerCount + selfCount} 件あり`);
+    expect(reply).not.toContain('self-');
+  });
+});
