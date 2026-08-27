@@ -5305,6 +5305,87 @@ describe('クローン — 枠（利用上限）が閉じたら保持して次�
 
     await s.clone.stop();
   });
+
+  /**
+   * ## 保持（枠）の間、配り直しの印（`#redelivered`）は消えない ── 解除で戻ってきても断り書きは付く
+   *
+   * **なぜこの歯が要るか。** Issue https://github.com/takecchi/alteroid/issues/351 は
+   * 「枠解除ブロック（この `describe` が検証している `#pump` 先頭の解除処理）が
+   * `#redelivered` / `#redeliveredClosed` の `Map` 2つを触らないので、解除で戻って
+   * きた配り直しの合図は断り書き無しの全文で届く」と書いていた。**これは逆である。**
+   *
+   * - `#redelivered` を**消すのは `#forget` の1箇所だけ**（`clone.ts` の `#forget`）
+   * - 枠で保持する枝（`#settleInboxEvent` の `else if (defer)`）は **`#forget` を
+   *   呼ばない**
+   * - ⟹ **保持している間、印は消えない ⟹ 解除で戻ってきた合図にも断り書きは付く**
+   *
+   * **そしてこれは偶然ではなく、意図して選ばれている。** `#settleInboxEvent` の
+   * 当該枝に逐語でこう書いてある（`grep -Fn -- '保持したことを覚えておく' clone.ts`）:
+   *
+   * > 保持したことを覚えておく（`#heldForUsage` の doc）。**印を消すのは
+   * > `#forget` と同じ側である** ── 保持している間に消すと、解除で戻ってきた
+   * > 合図が「初めて届いたもの」に見えてまとめ読みの対象へ戻る。
+   *
+   * Issue #351 は 2026-08-27 に `not planned` で閉じた（前提が成り立たなかった
+   * ため）。**⟹ 閉じたことで、この振る舞いを守るものが doc のコメントだけになった。
+   * ⟹ だからここに歯を入れる。**
+   *
+   * **筋書き**: (1) 器（`stores.inbox`）に未読の合図を直接残し、前のプロセスが
+   * 死んだ状況を作る → クローンを起こして `#restoreUnread` に拾わせる
+   * （＝ `#redelivered` に印が立つ）。(2) 枠を閉じて、その合図を保持させる。
+   * (3) 枠を解除して、戻ってきた合図が実際にターンへ載るところまで進める。
+   * (4) そのターンの入力に配り直しの断り書き（「これは配り直しである」/
+   * 「回目の配達」）が載っていることを、SDK へ実際に渡った入力（`FakeCall.inputs`）
+   * で見る。**`#redelivered` の Map を直接覗かない** ── private field を覗く形は
+   * 実装を変えた瞬間に意味を失うので、外から見える振る舞い（ターンへ渡る入力）
+   * で固定する。
+   */
+  it('枠で保持された合図が解除で戻ってきても、配り直しの断り書きは付いたまま届く（#351 は逆を主張していたが、印を消すのは #forget だけである）', async () => {
+    const stores = createMemoryStores();
+    const held = humanMessage('一件目');
+    // 前のプロセスが死んだ状況（未読のまま器に残った合図）を直接作る。
+    await stores.inbox.put(held, new Date(0).toISOString());
+
+    const s = setup(undefined, stores, {
+      // turn 0（#restoreUnread が拾い直した一件目の初回試行）だけ枠で失敗させる。
+      // それ以降（解除後の再試行・二件目）は成功させる。
+      resultFor: (turnIndex) =>
+        turnIndex < 1 ? { subtype: 'error_during_execution', text: spendLimitMessage } : undefined,
+    });
+
+    // #restoreUnread が起動直後に一件目を拾い直し、#redelivered に印を立てて配る
+    // （このテストは一件目について `post()` を1度も呼んでいない）。枠で失敗する
+    // ので保持される。
+    await waitForTerminal(s.events);
+    await waitFor(async () => {
+      const pending = await s.stores.inbox.claimPending();
+      return pending.some((p) => p.event.id === held.id);
+    }, '拾い直した一件目が枠で保持される');
+
+    // 新しい合図（二件目）を届けて、枠の解除を試させる。
+    s.clone.post(humanMessage('二件目'));
+    await s.waitForEvents((events) => events.filter((event) => event.type === 'done').length === 2);
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    // turn 0: #restoreUnread からの初回配達。配り直しの断り書きが付く（前提）。
+    expect(inputs[0] ?? '').toContain('一件目');
+    expect(inputs[0] ?? '').toContain('これは配り直しである');
+    expect(inputs[0] ?? '').toContain('回目の配達');
+
+    // turn 1: 枠の解除で戻ってきた同じ一件目。**ここが #351 の逆を確かめる本体**
+    // ―― 保持している間 #forget を呼んでいないので #redelivered は消えておらず、
+    // 解除後の再試行にも断り書きが付く。
+    expect(inputs[1] ?? '').toContain('一件目');
+    expect(inputs[1] ?? '').toContain('これは配り直しである');
+    expect(inputs[1] ?? '').toContain('回目の配達');
+
+    // turn 2: 二件目自身は #restoreUnread を経由していないので、断り書きは付かない
+    // （対照 ―― どんな入力にも常に付くわけではないことを見る）。
+    expect(inputs[2] ?? '').toContain('二件目');
+    expect(inputs[2] ?? '').not.toContain('これは配り直しである');
+
+    await s.clone.stop();
+  });
 });
 
 /**
