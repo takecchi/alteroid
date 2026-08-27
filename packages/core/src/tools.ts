@@ -3567,6 +3567,8 @@ export function createCloneTools(context: ToolContext) {
         'manager_list は抜粋なので、欠落に気づいたらここで全部読むこと。',
         '長い場合は続きの取り方が末尾に出るので、最後まで読み切ること。',
         'それでも足りない（報告に書かれていない中身を確かめたい）ときは manager_transcript で生ログまで降りられる。',
+        'report が「まだ無い」と返ったときは、内部で生ログも見ている（#323）——',
+        '「まだ書いていない」のか「書いたのに配られていない」のかを、応答の文言（⚠ の有無）で見分けられる。',
       ].join(' '),
       {
         managerId: z.string().describe('manager_list に出ている id'),
