@@ -267,6 +267,15 @@ export const STEPS = [
       'いないか確認すること（scripts/check-web-bundle-node-traces.mjs の doc）',
   },
   {
+    name: 'web-bundle-size',
+    cmd: 'pnpm',
+    args: ['check:web-bundle-size'],
+    hint:
+      'apps/web の生成物（apps/web/build/client/assets/*.js）がチャンクのサイズ予算を超えた。' +
+      '閾値を上げる前に、増えた原因を特定すること（scripts/check-web-bundle-size.mjs の doc、' +
+      'https://github.com/takecchi/alteroid/issues/335）',
+  },
+  {
     name: 'openapi',
     cmd: 'git',
     args: ['diff', '--exit-code', 'HEAD', '--', 'apps/daemon/openapi.json'],

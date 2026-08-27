@@ -61,6 +61,16 @@ jobs:
       # doc を見よ。
       - run: pnpm check:web-bundle-node-traces
 
+      # **`apps/web` の生成物のバイト数が閾値を超えていないことを見る（大きさ側の歯）。**
+      # 上の歯（node-traces）と `eslint.config.js` の import 制限は、どちらも
+      # 「事故の原因（サーバ専用コードの混入）」を見る歯である。別の原因で
+      # チャンクが膨らんだら、どちらも鳴らない。この検査は原因を問わず
+      # **大きさそのもの**を見る3本目の歯であり、`/commitments` のチャンクが
+      # 1,198,608 B に膨れて本番で開けなくなった事故そのもの
+      # （https://github.com/takecchi/alteroid/issues/335）が再発すれば必ず捕まえる。
+      # 閾値の根拠・言えないことは `scripts/check-web-bundle-size.mjs` の doc を見よ。
+      - run: pnpm check:web-bundle-size
+
       # **コードと OpenAPI spec がずれたまま気づかない状態を作らない。**
       # spec は経路の zod スキーマから機械生成され、`pnpm build` が毎回書き直す。
       # つまりここに差分が出るのは「コードを変えたのに commit した spec が古い」
