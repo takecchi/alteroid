@@ -20,6 +20,7 @@ import {
   touchLease,
   type LeaseSighting,
 } from './lease.js';
+import { codeSpan } from './markdown-span.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap, type RecentMap } from './recent.js';
 import { reportRunnerRevision, resolveBuildRevision } from './revision.js';
@@ -3093,13 +3094,50 @@ class Pool implements ManagerPool {
         });
 
         if (!shouldEscalateDenial(count)) return;
+        // **Markdown として書かれていない2つの欄を、埋め込む直前に包む**（issue #287）。
+        //
+        // この本文はデーモンが**意図して Markdown で書いた**ものである（`**…**` と
+        // `` `journal_read` `` を持つ）。そこへ Markdown ではない字面をそのまま
+        // 補間していたので、**いま既に化けている**:
+        //
+        // **どう化けるかは実機のレンダラで測った**（`apps/web/app/components/markdown.tsx`
+        // と同じ `react-markdown` ＋ `remark-gfm` ＋ `remark-breaks` の設定。観測
+        // 2026-08-27。詳細は `markdown-span.ts` の doc）:
+        //
+        // - `brief(event.input)` はツール呼び出し引数の JSON ダンプで、Bash の引数が
+        //   素で載る。**バッククォートを含む回は実際に化けた** ——
+        //   `{"command":"echo `date` && rm -rf /"}` の `` `date` `` が本物の `<code>`
+        //   になる。空白で挟まれた `_word_` や空白無しの `*word*` も `<em>` になる
+        // - `event.tool` は SDK のツール名。**こちらは化けなかった** —— MCP の
+        //   `mcp__<server>__<tool>` は、CommonMark がアンダースコアの強調を語中では
+        //   発火させないのでそのまま残る（issue #287 のコメントは「いま既に化ける」と
+        //   書いていたが、それは形からの推定で、実測すると外れていた）。**それでも
+        //   包む**のは、この本文が既に `` `journal_read` `` を識別子として包んでいて、
+        //   ツール名も同じ扱いにするのが揃うからと、`tool` が SDK の任意の字面である
+        //   以上ここだけ素で通す理由が無いからである。**化けを直しているのではない**
+        //
+        // **これは `markup` を立てているのではない。** 1本の文字列に書き手が3人
+        // （デーモン / SDK / マネージャー）居るこの本文に `markup` は立てられない
+        // —— それは `schema.ts` の `textMarkupSchema` の doc が言うとおりで、覆らない。
+        // ここでやっているのは印を立てることではなく、**混ざらないようにすること**
+        // である（`markdown-span.ts` の doc）。
+        //
+        // **`denialSuffix` は包まない。** 中身は SDK が書いた prose（拒否理由・分類・
+        // モデルへの拒否文）で、包むと等幅になり「文章」ではなく「コード」として
+        // 描かれる。SDK の prose をどの面でどう描くかは表示の方針の話であり
+        // （`apps/web/app/routes/reports.tsx` と issue #285 が面ごとに別の判断を
+        // 書いている）、ここはその方針を決める場所ではない。**方針が決まれば覆る
+        // 種類の見送りであって、「立てられない」とは別の理由である。**
+        //
+        // **日誌（上の `#journal`）は包まない。** あちらは別の文字列リテラルで、
+        // Markdown で描かれる面ではない。包めば読み手に無いバッククォートが見える。
         this.#emit(
           event.managerId,
           'report',
-          `${event.tool} の実行が確認へ上がらずに止められた（このマネージャーで ${count} 件目）。` +
+          `${codeSpan(event.tool)} の実行が確認へ上がらずに止められた（このマネージャーで ${count} 件目）。` +
             'モデル分類器か deny 規則がその場で拒否しているので、**この確認はクローンには回ってきていない**。' +
             'マネージャーか作業者の手が止まっている可能性がある。' +
-            `直近の入力: ${brief(event.input)}${denialSuffix}\n` +
+            `直近の入力: ${codeSpan(brief(event.input))}${denialSuffix}\n` +
             '全件は日誌に残っている（`journal_read` で辿れる）。',
         );
         return;
