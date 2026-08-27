@@ -7138,6 +7138,14 @@ describe('クローン — 人間が待っている合図を待ち行列の先�
   const timerMarker = (kind: string): string => `定期ジョブ ${kind} の時刻になった`;
   const humanMarker = (text: string): string => `---\n${text}`;
 
+  /**
+   * 蒸留ターンの目印（`buildDistillPrompt` が書く固定の呼びかけ）。`reason` が
+   * `conversation_end` でも `shutdown` でも同じ文面へ写る（`clone.ts` の
+   * `#handle` の `'distill'` 分岐）ので、この目印だけでは reason を区別できない
+   * ——以下の歯はどれも1テストにつき蒸留を1回しか起こさないので、それで足りる。
+   */
+  const DISTILL_MARKER = '記憶へ移すべきものがあるか確認せよ';
+
   it('人間の発言は、先に積まれていた人間以外を追い越して先に読まれる', async () => {
     const s = setupWithHumanPriority(true, () => 'わかった', { delayMs: 150 });
 
@@ -7443,6 +7451,155 @@ describe('クローン — 人間が待っている合図を待ち行列の先�
 
     await s.clone.stop();
   }, 20_000);
+
+  /**
+   * Issue #43: 「会話を終える」を押した人間が、非人間のイベント全部の後ろで
+   * 待たされていた窓を塞ぐ歯。
+   *
+   * `endConversation`（`POST /chat/:conversationId/end`。route の doc に
+   * 「CLI が chat を抜けるときに叩く」と逐語がある）は `#postAndWait` で
+   * `reason: 'conversation_end'` の蒸留を積み、HTTP ハンドラ（`apps/daemon/src/app.ts`）
+   * がその完了を `await` してから応答を返す ＝ **人間が画面の前で待っている**。
+   * それなのに `#postAndWait` はこれまで常に末尾へ積んでいたので、先に待ち行列に
+   * 積まれていた非人間（`timer` / `manager_message` 等）を全部読み終えるまで
+   * 人間が待たされていた。
+   *
+   * **`isHumanOriginated`（`clone.ts:221`）は広げない。** 型を人間起点にすると
+   * `stop()` が投げる `reason: 'shutdown'`（プロセス終了時。誰も待っていない）
+   * まで人間起点になり、有界性の根拠（`isHumanOriginated` の doc「割り込みは
+   * 人間の速さでしか来ない」）が壊れる。直しは呼び出し側 —— `endConversation`
+   * だけが `#postAndWait` へ割り込みを頼む形にする。
+   */
+  it('endConversation の蒸留は、待ち行列にある非人間より先に読まれ、非人間は1件も消えず到着順も保たれる（Issue #43）', async () => {
+    const s = setupWithHumanPriority(true, () => 'わかった', { delayMs: 150 });
+
+    s.clone.post(humanMessage('先客'));
+    await waitForFirstTurn(s);
+
+    // 非人間A → 非人間B が先に積まれた状態で、人間が「会話を終える」を押す。
+    s.clone.post(managerMessage('evt-mgr-a', 'mgr-a', '非人間A'));
+    s.clone.post(timerEvent('evt-timer-b', '非人間B'));
+    const endPromise = s.clone.endConversation('conv-1');
+
+    const markerA = managerMarker('mgr-a', '非人間A');
+    const markerB = timerMarker('非人間B');
+
+    await waitForAllDelivered(s, [DISTILL_MARKER, markerA, markerB]);
+    await settle();
+    await endPromise;
+
+    const inputs = s.calls[0]?.inputs ?? [];
+    const idxDistill = inputs.findIndex((text) => text.includes(DISTILL_MARKER));
+    const idxA = inputs.findIndex((text) => text.includes(markerA));
+    const idxB = inputs.findIndex((text) => text.includes(markerB));
+
+    expect(idxDistill).toBeGreaterThan(-1);
+    expect(idxA).toBeGreaterThan(-1);
+    expect(idxB).toBeGreaterThan(-1);
+
+    // 待っている人間（HTTP の await）の蒸留が、先に積まれていた非人間2件を追い越す。
+    expect(idxDistill).toBeLessThan(idxA);
+    expect(idxDistill).toBeLessThan(idxB);
+
+    // 非人間は1件も消えず、到着順（A → B）も保たれる。
+    expect(idxA).toBeLessThan(idxB);
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('endConversation の蒸留は、待ち行列にある人間の発言を追い越さない', async () => {
+    const s = setupWithHumanPriority(true, () => 'わかった', { delayMs: 150 });
+
+    s.clone.post(humanMessage('先客'));
+    await waitForFirstTurn(s);
+
+    // 人間の発言が先に積まれている状態で、同じ会話が終わる。
+    s.clone.post(humanMessage('待っている人間'));
+    const endPromise = s.clone.endConversation('conv-1');
+
+    const markerHuman = humanMarker('待っている人間');
+    await waitForAllDelivered(s, [markerHuman, DISTILL_MARKER]);
+    await settle();
+    await endPromise;
+
+    const inputs = s.calls[0]?.inputs ?? [];
+    const idxHuman = inputs.findIndex((text) => text.includes(markerHuman));
+    const idxDistill = inputs.findIndex((text) => text.includes(DISTILL_MARKER));
+
+    expect(idxHuman).toBeGreaterThan(-1);
+    expect(idxDistill).toBeGreaterThan(-1);
+
+    // 先に並んでいた人間の発言を、あとから来た蒸留（人間の待ちであっても）は追い越さない。
+    expect(idxHuman).toBeLessThan(idxDistill);
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('stop() の shutdown 蒸留は割り込まない（待ち行列の末尾のまま）', async () => {
+    const s = setupWithHumanPriority(true, () => 'わかった', { delayMs: 150 });
+
+    s.clone.post(humanMessage('先客'));
+    await waitForFirstTurn(s);
+
+    // プロセス終了時と同じ形 —— stop() を呼ぶ時点で、非人間が先に積まれている。
+    s.clone.post(managerMessage('evt-mgr-a', 'mgr-a', '非人間A'));
+    s.clone.post(timerEvent('evt-timer-b', '非人間B'));
+
+    const markerA = managerMarker('mgr-a', '非人間A');
+    const markerB = timerMarker('非人間B');
+
+    const stopPromise = s.clone.stop();
+    await waitForAllDelivered(s, [markerA, markerB, DISTILL_MARKER]);
+    await settle();
+    await stopPromise;
+
+    const inputs = s.calls[0]?.inputs ?? [];
+    const idxA = inputs.findIndex((text) => text.includes(markerA));
+    const idxB = inputs.findIndex((text) => text.includes(markerB));
+    const idxDistill = inputs.findIndex((text) => text.includes(DISTILL_MARKER));
+
+    expect(idxA).toBeGreaterThan(-1);
+    expect(idxB).toBeGreaterThan(-1);
+    expect(idxDistill).toBeGreaterThan(-1);
+
+    // プロセス終了で誰も待っていない shutdown 蒸留は、先に積まれていた非人間を
+    // 追い越さない（末尾のまま）。endConversation とここが分かれることが本丸。
+    expect(idxA).toBeLessThan(idxDistill);
+    expect(idxB).toBeLessThan(idxDistill);
+  }, 15_000);
+
+  it('humanPriority: false のときは endConversation の蒸留も割り込まない', async () => {
+    const s = setupWithHumanPriority(false, () => 'わかった', { delayMs: 150 });
+
+    s.clone.post(humanMessage('先客'));
+    await waitForFirstTurn(s);
+
+    s.clone.post(managerMessage('evt-mgr-a', 'mgr-a', '非人間A'));
+    s.clone.post(timerEvent('evt-timer-b', '非人間B'));
+    const endPromise = s.clone.endConversation('conv-1');
+
+    const markerA = managerMarker('mgr-a', '非人間A');
+    const markerB = timerMarker('非人間B');
+
+    await waitForAllDelivered(s, [markerA, markerB, DISTILL_MARKER]);
+    await settle();
+    await endPromise;
+
+    const inputs = s.calls[0]?.inputs ?? [];
+    const idxA = inputs.findIndex((text) => text.includes(markerA));
+    const idxB = inputs.findIndex((text) => text.includes(markerB));
+    const idxDistill = inputs.findIndex((text) => text.includes(DISTILL_MARKER));
+
+    expect(idxA).toBeGreaterThan(-1);
+    expect(idxB).toBeGreaterThan(-1);
+    expect(idxDistill).toBeGreaterThan(-1);
+
+    // 切ってあるので純粋な FIFO のまま。蒸留は非人間2件より後ろで読まれる。
+    expect(idxA).toBeLessThan(idxDistill);
+    expect(idxB).toBeLessThan(idxDistill);
+
+    await s.clone.stop();
+  }, 15_000);
 });
 
 /**
