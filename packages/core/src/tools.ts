@@ -3778,7 +3778,9 @@ export function createCloneTools(context: ToolContext) {
                 // 「走行中」と「走行中だがセッション切断」がここでだけ潰れ、
                 // 同じ状態が2つの道具で違う字面になる（#540 が digest で直した
                 // のと同じ潰れ方が、この一覧に残っていた）。
-                shown.map((m) => `${m.managerId}[${describeManagerState(m.status, m.live)}]`).join(', ') +
+                shown
+                  .map((m) => `${m.managerId}[${describeManagerState(m.status, m.live)}]`)
+                  .join(', ') +
                 (rest === 0 ? '' : `, …ほか ${rest} 本は省略（manager_list で全部見える）`),
             );
           }
@@ -3851,7 +3853,9 @@ export function createCloneTools(context: ToolContext) {
           tail.push(
             `どの器か分からない: ${overview.unassigned.length}件（` +
               // 器ごとの内訳と同じ生成元を通す（上の doc と同じ理由）。
-              shown.map((m) => `${m.managerId}[${describeManagerState(m.status, m.live)}]`).join(', ') +
+              shown
+                .map((m) => `${m.managerId}[${describeManagerState(m.status, m.live)}]`)
+                .join(', ') +
               (rest === 0 ? '' : `, …ほか ${rest} 本は省略（manager_list で全部見える）`) +
               '）。runnerId が記録されていない古いマネージャーで、どの器の内訳にも混ぜていない。',
           );

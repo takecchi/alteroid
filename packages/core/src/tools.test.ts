@@ -5942,9 +5942,16 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         runnerId: `runner-${index}`,
         workspacePath: '/workspace',
         revision: { status: 'unknown' as const },
-        managers: h.running.map((m) => ({ managerId: m.managerId, status: m.status })),
+        // `live` も一緒に運ぶ（`RunnerManagerEntry`）。**予算の歯としては
+        // `live: false` のほうが厳しい** — 字面が「/セッション切断」の分だけ
+        // 長くなるので、上限を外す変異がここで生き残りにくくなる。
+        managers: h.running.map((m) => ({ managerId: m.managerId, status: m.status, live: false })),
       })),
-      unassigned: h.running.map((m) => ({ managerId: m.managerId, status: m.status })),
+      unassigned: h.running.map((m) => ({
+        managerId: m.managerId,
+        status: m.status,
+        live: false,
+      })),
       daemonRevision: { status: 'unknown' as const },
     });
     return h;
