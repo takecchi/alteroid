@@ -1822,8 +1822,8 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
       await client.close();
 
       const lines = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
-      const failureLines = lines.filter((line) => line.includes('ストリームが切れました'));
-      const reconnectLines = lines.filter((line) => line.includes('繋ぎ直せた'));
+      const failureLines = lines.filter((line: string) => line.includes('ストリームが切れました'));
+      const reconnectLines = lines.filter((line: string) => line.includes('繋ぎ直せた'));
 
       // 1〜6敗目は待ちが毎回変わる（1000→2000→4000→8000→16000→30000）ので
       // 6行とも書く。cause の code（UND_ERR_BODY_TIMEOUT）も毎回付く。
