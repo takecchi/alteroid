@@ -3164,7 +3164,13 @@ export function createCloneTools(context: ToolContext) {
         const inboxBacklog = describeInboxBacklog(await context.stores.inbox.pending());
         // runner→デーモンの脚も同じ理由で本数と無関係（#358 案b）。
         // `runnerBacklog()` はキャッシュを読むだけ——ここでも往復は増えない。
-        const runnerBacklog = describeRunnerBacklog(context.managers.runnerBacklog?.() ?? []);
+        //
+        // **`?.() ?? []` で読まない。** その形は「この口を持たない実装」と
+        // 「持っているが1件も観測していない」を同じ `[]` へ畳む——**まさに
+        // この一覧が区別しようとしているもの**（#358 の主題）を、呼び出し口の
+        // 型で潰すことになる。だから `ManagerPool.runnerBacklog` は非 optional
+        // にしてある（その doc を参照）。
+        const runnerBacklog = describeRunnerBacklog(context.managers.runnerBacklog());
         if (managers.length === 0) {
           return text(
             ['（マネージャーは1本も居ない）', inboxBacklog, runnerBacklog]

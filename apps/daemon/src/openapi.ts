@@ -1094,6 +1094,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     runners() {
       throw new Error('spec 生成専用のスタブ: 器の一覧は持たない');
     },
+    runnerBacklog() {
+      throw new Error('spec 生成専用のスタブ: 器の滞留は観測していない');
+    },
     transcript() {
       throw new Error('spec 生成専用のスタブ: 生ログは持たない');
     },

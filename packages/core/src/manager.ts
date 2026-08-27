@@ -503,18 +503,25 @@ export interface ManagerPool {
    * いないからである——呼び出し側（`tools.ts` の `manager_list`）は
    * 「行が無い＝0件」と読まないこと。
    *
-   * **`?` を付けて省略可能にしてある——このリポジトリの流儀（`runners` 等）に
-   * 反する。** 理由は実装側の都合ではなく境界の都合である。この道具は
-   * `apps/daemon/src/openapi.ts` の `buildOpenApiDocument()` が spec 生成の
-   * ためだけに用意する `ManagerPool` のスタブ（`throw` を返すだけの構造的な
-   * 実装）とも同じ形を満たす必要があり、そちらへ1行足す作業はこの変更の
-   * 割り当て（`packages/core/src/manager.ts` / `tools.ts` とそのテストのみ）
-   * の外にある。呼び出し側（`tools.ts`）は `context.managers.runnerBacklog?.()
-   * ?? []` の形で読み、`undefined`（この口を持たない実装）と「持っているが
-   * 1件も観測していない」を区別しない——どちらも「読めるものが無い」という
-   * 同じ意味だからである。
+   * **省略可能（`?`）にしない。** 他のメンバと同じ非 optional である。
+   *
+   * 一度は `?` を付けた——`apps/daemon/src/openapi.ts` の
+   * `buildOpenApiDocument()` が spec 生成のためだけに用意する `ManagerPool`
+   * のスタブ（`throw` を返すだけの構造的な実装）へ1行足すのを避けるため
+   * だった。**だがその形は、この道具が守っている区別そのものを壊す。**
+   *
+   * 省略可能にすると呼び出し側は `runnerBacklog?.() ?? []` と書くことになり、
+   * **「この口を持たない実装」と「持っているが1件も観測していない」が同じ
+   * `[]` に畳まれる。** どちらも「行が出ない」に落ちる——**「まだ観測して
+   * いない」と「滞留0」を区別することが #358 の主題であり、呼び出し口の型で
+   * それを潰しては意味が無い。** `${x:-0}` を禁じているのと同じ形である
+   * （取れなかったことを「0 だった」に変えない。AGENTS.md「取れない軸に
+   * 0 の行を作る」）。
+   *
+   * ⟹ スタブの側へ1行足すほうを選んだ。**スタブは spec 生成専用で走らない**
+   * ので、実行時の振る舞いは何も変わらない。
    */
-  runnerBacklog?(): readonly RunnerBacklogSnapshot[];
+  runnerBacklog(): readonly RunnerBacklogSnapshot[];
   /** manager_id からセッションの生ログへ降りる（可観測性の最下段）。 */
   transcript(managerId: string): Promise<string | null>;
   /**
