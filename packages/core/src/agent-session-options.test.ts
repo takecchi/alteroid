@@ -263,6 +263,11 @@ describe('マネージャー（runner）へ渡す Options', () => {
     // 落ちても機能は壊れず、消えるのは観測だけなので、気づく契機がここにしか
     // 無い（PRD「可観測性」）。
     expect(options.hooks?.UserPromptSubmit).toHaveLength(1);
+    // `SubagentStop` も同じ理由の観測専用フック（#357。`runner.ts` の
+    // `#onSubagentStop` の doc）。渡した callback がそのまま `Options` へ
+    // 載っていること自体が「provider を足す側が黙って落とせない」の保証である。
+    expect(options.hooks?.SubagentStop).toHaveLength(1);
+    expect(typeof options.hooks?.SubagentStop?.[0]?.hooks?.[0]).toBe('function');
     expect(options.sessionStore).toBeDefined();
     // childUser を渡していないので spawnClaudeCodeProcess は渡らない。
     expect(options.spawnClaudeCodeProcess).toBeUndefined();

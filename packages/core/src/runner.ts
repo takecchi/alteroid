@@ -613,6 +613,15 @@ const DENIED_MEMORY_LIMIT = 512;
 const SESSION_USAGE_READ_TIMEOUT_MS = 5_000;
 
 /**
+ * `#onSubagentStop` が `note` の `text` へ積む文字数の上限（#357）。
+ *
+ * **黙って落とさない**（AGENTS.md「静かに失敗する道具」）。超えたら切り、
+ * 切ったこと自体を末尾に書く。日誌1行が背景処理の一覧で際限なく伸びるのを
+ * 防ぐための締め切りであって、観測そのものを狭める意図ではない。
+ */
+const SUBAGENT_STOP_NOTE_TEXT_LIMIT = 1_500;
+
+/**
  * control channel の `get_usage` だけを抜き出した顔。
  *
  * **省略可能にしてある。** 実験的な口（長い名前のあれ）は SDK 側で改名・削除され
@@ -868,6 +877,16 @@ class RunnerSession {
   #toolsSinceResult = 0;
   /** このターンで `UserPromptSubmit` がマネージャー自身に発火した回数（`result` で畳む）。 */
   #submitsSinceResult = 0;
+  /**
+   * `SubagentStop` がこのセッションで一度でも発火したか（#357 の観測口。
+   * `#onSubagentStop` の doc を見よ）。
+   *
+   * **これが要る理由 — 「フックが一度も発火していない」と「発火しているが
+   * `background_tasks` が常に空」を後から区別するため。** 区別できないと、
+   * フックが繋がっていない・SDK がまだこの版で発火させていないという静かな
+   * 欠落を、「作業者はいつも背景処理を残さず終わっている」と誤読しかねない。
+   */
+  #subagentStopSeen = false;
   /**
    * `UserPromptSubmit` の `source` ごとの件数（`result` で畳む）。
    *
@@ -1214,6 +1233,9 @@ class RunnerSession {
       // **観測専用**（`worker_wait`）。`{ continue: true }` を返すだけで何も
       // ブロックしない。理由は `#onUserPromptSubmit` の doc を見よ。
       onUserPromptSubmit: (input) => this.#onUserPromptSubmit(input),
+      // **観測専用**（#357）。`{ continue: true }` を返すだけで何もブロック
+      // しない。理由は `#onSubagentStop` の doc を見よ。
+      onSubagentStop: (input) => this.#onSubagentStop(input),
     });
   }
 
@@ -2266,6 +2288,100 @@ class RunnerSession {
         this.#submitSources.set(hook.source, (this.#submitSources.get(hook.source) ?? 0) + 1);
       }
     }
+    return { continue: true };
+  }
+
+  /**
+   * 作業者セッションが停止した瞬間に、追跡中の背景処理の在り高を記録する
+   * （#357 — 作業者が「バックグラウンド処理の完了通知を待つ」形でターンを
+   * 閉じて空転する症状の実測口）。**観測専用。** `{ continue: true }` を返す
+   * だけで、何もブロックしない・`decision` も `additionalContext` も返さない
+   * （ブロックすれば能力の削除になる。挙動を変えないのが今回の判断である）。
+   *
+   * **`note` イベントに乗せる。** `runner-protocol.ts` の欄は増やさない —
+   * デーモンと runner は別々にデプロイされるので、runner が新しく名乗る値を
+   * 足すと古い runner が居る窓が開く。`note` は既存の口で、`manager.ts` の
+   * `case 'note'` が日誌にだけ残し受信箱へは出さないので、雑音にもならない。
+   *
+   * **`note` を出す条件は2つ:**
+   * 1. `background_tasks` が空でないとき — 毎回出す（＝作業者が「追跡中の
+   *    背景処理が在るまま」ターンを閉じた瞬間。これが空転の署名である）
+   * 2. このセッションでこのフックが最初に発火したとき — 中身が空でも1回だけ
+   *    出す。**理由**: これが無いと「フックが1度も発火していない」（配線漏れ・
+   *    この SDK 版がまだ発火させていない、等）と「発火しているが配列が常に
+   *    空」（＝作業者は毎回きれいに畳んでいる）が、日誌の上で区別できない。
+   *    **1回だけにする**のは、毎ターン出すと作業者のターン数だけ日誌が伸びる
+   *    ためである。
+   *
+   * **入力は防御的に読む**（既存フックと同じく `as` で受けて型を仮定しない）。
+   * `text` の組み立てで例外が出ても握り、必ず `{ continue: true }` を返す。
+   * `#markProgressed()` などの既存の副作用は呼ばない（観測専用。挙動を変えない）。
+   */
+  async #onSubagentStop(input: unknown): Promise<{ continue: true }> {
+    const isFirstFire = !this.#subagentStopSeen;
+    this.#subagentStopSeen = true;
+
+    try {
+      const hook = input as {
+        background_tasks?: unknown;
+        session_crons?: unknown;
+        agent_type?: string;
+        agent_id?: string;
+      };
+      const tasks = Array.isArray(hook.background_tasks) ? hook.background_tasks : [];
+      const crons = Array.isArray(hook.session_crons) ? hook.session_crons : [];
+
+      // 条件1（非空なら毎回）でも条件2（最初の1回）でもなければ、何もしない。
+      if (tasks.length === 0 && !isFirstFire) return { continue: true };
+
+      const lines: string[] = [
+        `SubagentStop（作業者: ${hook.agent_type ?? '(不明)'} / agent_id=${hook.agent_id ?? '(不明)'}）: ` +
+          `background_tasks=${tasks.length}件、session_crons=${crons.length}件` +
+          (tasks.length === 0
+            ? '（このセッションで最初の発火なので、空でも1回だけ記録する）'
+            : ''),
+      ];
+      for (const task of tasks) {
+        const t = task as {
+          type?: unknown;
+          status?: unknown;
+          description?: unknown;
+          // `command` は shell タスクにしか付かない任意欄で、SDK 側で既に
+          // 1000文字に切ってある（`BackgroundTaskSummary.command` の doc）。
+          // ここで載せるのは「作業者が待っていた背景処理の中身」を突き合わせる
+          // のに command が最も効くためで、全体の上限（下）で二重に守る。
+          command?: unknown;
+        };
+        const type = typeof t.type === 'string' ? t.type : '(不明)';
+        const status = typeof t.status === 'string' ? t.status : '(不明)';
+        const description = typeof t.description === 'string' ? t.description : '(不明)';
+        const command = typeof t.command === 'string' ? ` command=${t.command}` : '';
+        lines.push(`- type=${type} status=${status} description=${description}${command}`);
+      }
+
+      let text = lines.join('\n');
+      if (text.length > SUBAGENT_STOP_NOTE_TEXT_LIMIT) {
+        text =
+          text.slice(0, SUBAGENT_STOP_NOTE_TEXT_LIMIT) +
+          `…（上限 ${SUBAGENT_STOP_NOTE_TEXT_LIMIT} 文字で切った）`;
+      }
+
+      this.#emit({ type: 'note', managerId: this.#id, text });
+    } catch (error: unknown) {
+      // 観測専用のフックが例外でセッションを止めてはいけない。記録そのものが
+      // 失敗したことだけを、握れる範囲でもう一度 note として上げる。
+      try {
+        this.#emit({
+          type: 'note',
+          managerId: this.#id,
+          text: `SubagentStop の観測に失敗した: ${String(error)}`,
+        });
+      } catch {
+        // ここまで失敗したら、もう上げる手段が無い。観測専用なので黙って諦める
+        // （挙動は変えない＝必ず continue: true を返すことのほうを優先する）。
+      }
+    }
+
     return { continue: true };
   }
 
