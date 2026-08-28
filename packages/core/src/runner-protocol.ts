@@ -338,6 +338,37 @@ export const runnerExecutionResourcesSchema = z.object({
    * でもない——AGENTS.md「取れない軸に 0 の行を作らない」）。
    */
   pids: z.object({ current: z.number().nonnegative(), max: z.number().positive() }).optional(),
+  /**
+   * `pids` の内訳（#315 の可視化）。**`pids` の中には入れない——兄弟として置く**
+   * （`select` が読んでいるのは `pids: { current, max }` の配置そのものなので、
+   * 中へ足すとそちらの形が壊れる）。
+   *
+   * 測るのは runner 自身（`apps/runner/src/tasks.ts` の `TaskBreakdownReader`）
+   * が `/proc` を state 別に集計したもので、`pids.current` と**同じ軸**
+   * （プロセス＋スレッドの総数）を数えている。
+   *
+   * **`.optional()` なのは、この機能より前の runner が欄自体を持たない窓の
+   * ためである** —— 同じ理由で `.optional()` にしてある `pendingEvents`
+   * （このファイル下方）と同じ先例に倣った。
+   *
+   * **`pids.current` と厳密に一致するとは限らない。** 測る主体（走査している
+   * runner 自身）が走査中に増減するので、1〜数本ずれる——`pids` が「器の合計」
+   * であるのと同じ理由で、こちらも「その瞬間の1回の観測」でしかない。
+   *
+   * **生存プロセスの素性は含まない。** 出るのは数（`threads` / `processes` /
+   * `zombies`）と、ゾンビの `comm` だけである（`TaskBreakdown` の doc）。
+   */
+  tasks: z
+    .object({
+      threads: z.number().int().nonnegative(),
+      processes: z.number().int().nonnegative(),
+      zombies: z.number().int().nonnegative(),
+      zombieCommands: z
+        .array(z.object({ command: z.string(), count: z.number().int().positive() }))
+        .optional(),
+      oldestZombieSeconds: z.number().int().nonnegative().optional(),
+    })
+    .optional(),
 });
 
 export type RunnerExecutionResources = z.infer<typeof runnerExecutionResourcesSchema>;

@@ -864,6 +864,27 @@ const RUNNER_MANAGER_LIST_LIMIT = 20;
  */
 const RUNNER_CREDENTIAL_FINGERPRINT_EXCERPT = 400;
 
+/**
+ * ゾンビの年齢（秒）を「H時間M分前」のような字面にする（#315 の可視化、
+ * `runner_list resources: true` のいちばん古いゾンビ専用）。
+ *
+ * `clone.ts` の `formatElapsed` と役目は似るが、こちらは「約19時間」ではなく
+ * 「19時間24分前」まで出す——ゾンビが1本も片付かないまま何時間経っているかを
+ * 見るための数字で、分の位まで丸めると「気づいてから1時間経ったのか23時間
+ * 経ったのか」が見えなくなる。だから共通化せず、この道具専用に書く。
+ */
+function describeZombieAge(seconds: number): string {
+  if (seconds < 60) return `${seconds}秒前`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}分前`;
+  const hours = Math.floor(minutes / 60);
+  const remainderMinutes = minutes % 60;
+  if (hours < 24) return `${hours}時間${remainderMinutes}分前`;
+  const days = Math.floor(hours / 24);
+  const remainderHours = hours % 24;
+  return `${days}日${remainderHours}時間前`;
+}
+
 /** 記憶1件の本文を取りに来たときの1回分。続きは `offset` で取れる。 */
 const MEMORY_PAGE = 8_000;
 /**
@@ -4412,12 +4433,16 @@ export function createCloneTools(context: ToolContext) {
           '別物で、疑う先が違う（前者は器の設定、後者は登録とネットワーク）。' +
           'state が lost の器の版は黙る前に聞いた古い値である。',
         'resources: true を渡すと器ごとの pids（プロセス数）の現在値/上限も出る' +
-          '（#315 案1）。これは器の合計であって内訳ではない——何がその数を持って' +
-          'いるかはこの数字からは分からない。空き（上限 − 現在値）も、次に何本' +
-          '置けるかを意味しない——実測では vitest が1本立ち上がるだけで pids が' +
-          '+131 跳ねている。「runner に訊けなかった」（器が開いていない・応答が' +
-          '無い）と「訊けたが pids が読めない」（cgroup を持たない器）は別の文言で' +
-          '出る——どちらも数字が出ない点は同じだが、疑う先が違う。',
+          '（#315 案1）。**pids の現在値/上限そのものは今も器の合計である**——何が' +
+          'その数を持っているかはこの2つの数字からは分からない。空き（上限 − ' +
+          '現在値）も、次に何本置けるかを意味しない——実測では vitest が1本立ち' +
+          '上がるだけで pids が +131 跳ねている。**対応している runner なら、' +
+          'その合計の内訳（ゾンビ/生存の内訳・ゾンビの comm 別集計・いちばん古い' +
+          'ゾンビの年齢）が別行で出る**（#315 の可視化）——対応していない runner' +
+          '（古い版）ではこの内訳の行自体が出ない。「runner に訊けなかった」' +
+          '（器が開いていない・応答が無い）と「訊けたが pids が読めない」' +
+          '（cgroup を持たない器）は別の文言で出る——どちらも数字が出ない点は' +
+          '同じだが、疑う先が違う。',
       ].join(' '),
       {
         fingerprints: z
@@ -4432,10 +4457,10 @@ export function createCloneTools(context: ToolContext) {
           .boolean()
           .optional()
           .describe(
-            '器ごとの pids（プロセス数）を出すか。既定は出さない——このために' +
-              'ネットワーク往復を足さない側に倒してある。頼んだときだけ各 runner の' +
-              '/health を叩く。合計しか分からず内訳は出ない（#315 の本題である' +
-              '内訳の特定はこれでは解決しない）。',
+            '器ごとの pids（プロセス数）と、対応している runner ならその内訳' +
+              '（ゾンビ/生存の内訳・ゾンビの comm 別集計・いちばん古いゾンビの年齢）を' +
+              '出すか。既定は出さない——このためにネットワーク往復を足さない側に' +
+              '倒してある。頼んだときだけ各 runner の /health を叩く（#315 の可視化）。',
           ),
       },
       async ({ fingerprints, resources }) => {
@@ -4578,6 +4603,38 @@ export function createCloneTools(context: ToolContext) {
             } else {
               const { current, max } = runner.resources.pids;
               lines.push(`  pids: ${current} / ${max}`);
+              /*
+               * **内訳（#315 の可視化）。** `tasks` は runner が `/proc` を
+               * state 別に集計したもので、`pids.current` と厳密には一致しない
+               * （`runnerExecutionResourcesSchema` の `tasks` の doc——測る主体
+               * が走査中に増減するので1〜数本ずれる）。
+               *
+               * **`tasks` が無い runner（古い版）ではこの行を出さない。**
+               * 「0」でも「unknown」でもなく、行そのものを省く——この一覧が
+               * 守っている「読めた/訊けなかった/読めない器」の3状態を、ここで
+               * 新しく混ぜない。
+               */
+              const { tasks } = runner.resources;
+              if (tasks !== undefined) {
+                const aliveThreads = tasks.threads - tasks.zombies;
+                const aliveProcesses = tasks.processes - tasks.zombies;
+                lines.push(
+                  `    内訳: ゾンビ ${tasks.zombies} / 生存 ${aliveThreads}` +
+                    `（${aliveProcesses}プロセス）`,
+                );
+                if (tasks.zombieCommands !== undefined && tasks.zombieCommands.length > 0) {
+                  lines.push(
+                    `    ゾンビの comm: ${tasks.zombieCommands
+                      .map((entry) => `${entry.command} ${entry.count}`)
+                      .join(', ')}`,
+                  );
+                }
+                if (tasks.oldestZombieSeconds !== undefined) {
+                  lines.push(
+                    `    いちばん古いゾンビ: ${describeZombieAge(tasks.oldestZombieSeconds)}`,
+                  );
+                }
+              }
             }
           }
           blocks.push(lines.join('\n'));
@@ -4590,8 +4647,11 @@ export function createCloneTools(context: ToolContext) {
         // **言えないことを書いていない計器は、読む側が言えると思い込む。**
         if (resources === true) {
           tail.push(
-            'pids について: **これは器の合計であって内訳ではない。** 何がその数を持っているかは、' +
-              'この数字からは分からない（#315 の本題である内訳の特定は、まだ誰にもできない）。' +
+            'pids について: **pids の現在値/上限そのものは今も器の合計であって内訳ではない。** ' +
+              'この2つの数字だけからは、何がその数を持っているかは分からない。' +
+              '**対応している runner なら、その内訳（ゾンビ/生存・ゾンビの comm 別・' +
+              'いちばん古いゾンビの年齢）が器ごとのブロックに出る**（#315 の可視化。' +
+              '対応していない runner——古い版——では内訳の行自体が出ない）。' +
               '**空き（上限 − 現在値）は「次に何本置けるか」を意味しない**——実測では ' +
               'vitest が1本立ち上がるだけで pids が +131 跳ねている。',
           );
