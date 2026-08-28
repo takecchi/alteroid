@@ -7627,6 +7627,117 @@ describe('クローン — 人間が待っている合図を待ち行列の先�
     expect(idxB).toBeLessThan(idxDistill);
   }, 15_000);
 
+  /**
+   * Issue #564 (a): `stop()` の shutdown 蒸留も割り込ませる（A-1）。
+   *
+   * すぐ上の歯（「割り込まない（待ち行列の末尾のまま）」）は #43 で入れた旧挙動を
+   * 固定している。**ここから下の3本が #564 (a) で入れ替えた側である。**
+   *
+   * 旧挙動の根拠は「誰も画面の前で待っていない」だったが、#564 が現物で示した
+   * とおり、それは**待ち時間**の根拠であって**完了性**の根拠ではない。強制終了の
+   * 期限（`apps/daemon/src/index.ts:1049-1050` の `setTimeout(() => process.exit(0),
+   * FORCED_EXIT_MS)`）が在る以上、行列の後ろで待つ蒸留は「順番が遅い」ではなく
+   * **切られる**。
+   */
+  it('stop() の shutdown 蒸留は、待ち行列にある非人間より先に読まれる（Issue #564）', async () => {
+    const s = setupWithHumanPriority(true, () => 'わかった', { delayMs: 150 });
+
+    s.clone.post(humanMessage('先客'));
+    await waitForFirstTurn(s);
+
+    // プロセス終了時と同じ形 —— stop() を呼ぶ時点で、非人間が先に積まれている。
+    s.clone.post(managerMessage('evt-mgr-a', 'mgr-a', '非人間A'));
+    s.clone.post(timerEvent('evt-timer-b', '非人間B'));
+
+    const markerA = managerMarker('mgr-a', '非人間A');
+    const markerB = timerMarker('非人間B');
+
+    await s.clone.stop();
+
+    const inputs = s.calls[0]?.inputs ?? [];
+    const idxA = inputs.findIndex((text) => text.includes(markerA));
+    const idxB = inputs.findIndex((text) => text.includes(markerB));
+    const idxDistill = inputs.findIndex((text) => text.includes(DISTILL_MARKER));
+
+    expect(idxDistill).toBeGreaterThan(-1);
+    expect(idxA).toBeGreaterThan(-1);
+    expect(idxB).toBeGreaterThan(-1);
+
+    // shutdown の蒸留が、先に積まれていた非人間2件を追い越す。
+    expect(idxDistill).toBeLessThan(idxA);
+    expect(idxDistill).toBeLessThan(idxB);
+  }, 15_000);
+
+  /**
+   * **割り込ませただけでは持ち越しの穴が開く。**
+   *
+   * `#postAndWait(..., true)` を渡すだけにすると、蒸留は先に読まれるが、待ち行列に
+   * 残っていた非人間は**1件もモデルへ届かなくなる**（捨てているのは
+   * `#inbox.close()` ではなく `this.#query?.close()` のほう。`Inbox#close()` は
+   * 待ち行列を捨てず、`next()` は `#queue.shift()` を先に見る）。だから A-1 は
+   * `#pump()` の Promise を保持して、閉じる前に**読み切る**。
+   *
+   * ここは `waitForAllDelivered` を**使わない。** 使うと「いつかは届く」しか
+   * 測れず、`stop()` が読み切ってから戻ることを測れない —— **`stop()` から戻った
+   * 時点で**全部が SDK へ渡っていることが、この歯の主張である。
+   */
+  it('stop() の shutdown 蒸留が割り込んでも、非人間は1件も消えず到着順も保たれる（Issue #564）', async () => {
+    const s = setupWithHumanPriority(true, () => 'わかった', { delayMs: 150 });
+
+    s.clone.post(humanMessage('先客'));
+    await waitForFirstTurn(s);
+
+    s.clone.post(managerMessage('evt-mgr-a', 'mgr-a', '非人間A'));
+    s.clone.post(timerEvent('evt-timer-b', '非人間B'));
+
+    const markerA = managerMarker('mgr-a', '非人間A');
+    const markerB = timerMarker('非人間B');
+
+    await s.clone.stop();
+
+    const inputs = s.calls[0]?.inputs ?? [];
+    const idxA = inputs.findIndex((text) => text.includes(markerA));
+    const idxB = inputs.findIndex((text) => text.includes(markerB));
+    const idxDistill = inputs.findIndex((text) => text.includes(DISTILL_MARKER));
+
+    // 蒸留は割り込んでいる（この歯が測りたい状況であることの前提）。
+    expect(idxDistill).toBeGreaterThan(-1);
+    expect(idxDistill).toBeLessThan(idxA);
+
+    // それでも非人間は1件も消えず、到着順（A → B）も保たれる。
+    expect(idxA).toBeGreaterThan(-1);
+    expect(idxB).toBeGreaterThan(-1);
+    expect(idxA).toBeLessThan(idxB);
+
+    // 器の側にも未読は残らない（読み切ってから畳んだ ＝ 後始末まで通した）。
+    expect((await s.stores.inbox.pending()).count).toBe(0);
+  }, 15_000);
+
+  it('待ち行列に人間の発言が先に居るとき、stop() の shutdown 蒸留はそれを追い越さない（Issue #564）', async () => {
+    const s = setupWithHumanPriority(true, () => 'わかった', { delayMs: 150 });
+
+    s.clone.post(humanMessage('先客'));
+    await waitForFirstTurn(s);
+
+    // 人間の発言が先に積まれている状態でプロセスが畳まれる。
+    s.clone.post(humanMessage('待っている人間'));
+
+    const markerHuman = humanMarker('待っている人間');
+
+    await s.clone.stop();
+
+    const inputs = s.calls[0]?.inputs ?? [];
+    const idxHuman = inputs.findIndex((text) => text.includes(markerHuman));
+    const idxDistill = inputs.findIndex((text) => text.includes(DISTILL_MARKER));
+
+    expect(idxHuman).toBeGreaterThan(-1);
+    expect(idxDistill).toBeGreaterThan(-1);
+
+    // 割り込みの述語は `isHumanOriginated(queued) ||` を含むので、先に並んでいた
+    // 人間の発言は shutdown の蒸留に追い越されない。
+    expect(idxHuman).toBeLessThan(idxDistill);
+  }, 15_000);
+
   it('humanPriority: false のときは endConversation の蒸留も割り込まない', async () => {
     const s = setupWithHumanPriority(false, () => 'わかった', { delayMs: 150 });
 
