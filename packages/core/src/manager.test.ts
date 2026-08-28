@@ -2061,6 +2061,18 @@ function swappableRunner(runnerId = 'runner-primary') {
      * 聞きに行ったことまで確かめられる。
      */
     listCalls: 0,
+    /**
+     * **`list()` を「聞けなかった」側に倒す**（#563）。
+     *
+     * 器は生きているが一覧だけが読めない状態（起動直後・瞬断・一時的な 5xx）で、
+     * **デーモンはこれを「セッションが無い」と読んではいけない。**
+     */
+    listThrows: false,
+    /**
+     * `send()` が呼ばれた managerId。**本物と同じく、`alive` に無い相手へは 404 を
+     * 返す**ので、届いた回と 404 だった回の両方がここに積まれる（#563）。
+     */
+    sends: [] as string[],
     answers: [] as { managerId: string; requestId: string }[],
     /** 降ろされた実行環境プロファイル。名乗るたびに1本増える。 */
     profiles: [] as string[],
@@ -2091,8 +2103,23 @@ function swappableRunner(runnerId = 'runner-primary') {
         sessionId: command.sessionId,
       });
     },
-    async send() {
-      /* この検証では使わない */
+    /**
+     * **本物と同じ 404 を返す**（#563）。`apps/runner/src/app.ts` の
+     * `POST /managers/:id/messages` は `#sessions` に無い `managerId` へ 404 を返し、
+     * `apps/daemon/src/runner-client.ts` がそれを `RunnerHttpError(..., 404)` にする。
+     *
+     * **ここを黙って成功させていたので、#563 の形はこの fake では作れなかった。**
+     * `state.alive` から消えたセッションへ送っても「届いた」ことになっていて、
+     * 台帳の `attached` が嘘になる窓そのものが再現できていなかった。
+     */
+    async send(managerId) {
+      state.sends.push(managerId);
+      if (!state.alive.some((s) => s.managerId === managerId)) {
+        throw new RunnerHttpError(
+          `runner POST /managers/${managerId}/messages が失敗した (404)`,
+          404,
+        );
+      }
     },
     async answer(managerId, answer) {
       state.answers.push({ managerId, requestId: answer.requestId });
@@ -2107,6 +2134,7 @@ function swappableRunner(runnerId = 'runner-primary') {
     },
     async list() {
       state.listCalls += 1;
+      if (state.listThrows) throw new Error('一覧が読めない（器は生きている）');
       return [...state.alive];
     },
     async transcript() {
@@ -2206,6 +2234,17 @@ function swappableRunner(runnerId = 'runner-primary') {
     /** 前のセッションを開き直せなかった（`recovered: false` なら仕事が止まる）。 */
     resumeFailed(managerId: string, sessionId: string, reason: string, recovered: boolean) {
       emit?.({ type: 'resume_failed', managerId, sessionId, reason, recovered });
+    },
+    /**
+     * **合図を出さずにセッションだけが消える**（#563 の窓そのもの）。
+     *
+     * `closed()` との違いは `emit` を1回も呼ばないことである。デーモンの台帳は
+     * `attached: true` のまま残り、**それが事実として嘘になる。** 実際に起きるのは
+     * runner 側が畳んだ合図（`closed` / `report`）が経路の都合で届かなかったときで、
+     * 台帳からは「走行中」としか見えない。
+     */
+    vanish(managerId: string) {
+      state.alive = state.alive.filter((s) => s.managerId !== managerId);
     },
   };
 }
@@ -7187,6 +7226,195 @@ describe('起動時の引き取りは、1本が投げても後ろを道連れに
     // **抜け殻のまま残さない。** `lost` は像からも外れる（`#retire`）ので、
     // 一覧は「走行中」と数えない。
     expect(listed.find((m) => m.managerId === 'mgr-poison')?.live).toBe(false);
+
+    await s.pool.stop();
+  });
+});
+
+/**
+ * **`[running]` の相手へ送ったら 404 が例外として貫通していた**（Issue #563）。
+ *
+ * `Pool#send()` の `record.attached` が真の枝は `await runner.send(...)` を例外処理
+ * なしで呼んでいた。runner が `#sessions` にそのマネージャーを持たなければ 404 が
+ * 返るが、**それは `ManagerSendResult` のどの `outcome` にもならなかった** —
+ * クローンは生の例外文言を、人間は `app.ts` の `onError` が作る 500（本文に 404 も
+ * 文言も出ない）を受け取っていた。
+ *
+ * **ここが固定しているのは3つである:**
+ *
+ * 1. 例外が貫通しないこと（`send()` が throw しない）
+ * 2. 404 を受けたら台帳を訂正し、**既存の resume 経路で自己修復する**こと
+ * 3. **「聞けなかった」を「セッションが無い」と読まないこと**（最後の1本）。
+ *    ここが逆に倒れると、**実際には走っているマネージャーを一覧が「セッションが
+ *    無い」と名乗る** — `#restoreJobs` と `#reattach` が逐語で持っている歯止めと
+ *    同じクラスの間違いである
+ *
+ * **文言そのものは測らない**（腐る）。測るのは `outcome` と欄の有無である。
+ */
+describe('runner にセッションが無い相手への manager_send（#563）', () => {
+  /** `attached: true` で台帳に載っている、走行中の委譲。 */
+  const attachedJob = {
+    id: 'mgr-orphan',
+    managerId: 'mgr-orphan',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T01:00:00.000Z',
+    status: 'running' as const,
+    summary: '調べもの',
+    request: '調べておいて',
+    cwd: '/work/project',
+    runnerId: 'runner-primary',
+  };
+
+  /**
+   * `restore()` を通して `attached: true` の像を作る。
+   *
+   * **`attached` を直に立てない。** 台帳からではなく「runner が一覧に載せていた」
+   * ことを根拠に立てるのが本物の経路で、そこを迂回すると **`attached` が嘘になる
+   * 窓**（この Issue の主題）を再現したことにならない。
+   */
+  async function attached(sessionId: string | undefined) {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({
+      ...attachedJob,
+      ...(sessionId === undefined ? {} : { sessionId }),
+    });
+    const fake = swappableRunner();
+    fake.state.alive.push({
+      managerId: attachedJob.id,
+      status: 'running',
+      cwd: attachedJob.cwd,
+      request: attachedJob.request,
+      waiting: [],
+      ...(sessionId === undefined ? {} : { sessionId }),
+    });
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+    return { fake, s };
+  }
+
+  const summaryOf = async (pool: ManagerPool) =>
+    (await pool.list()).find((m) => m.managerId === attachedJob.id);
+
+  it('404 を受けて resume に成功したら delivered（例外は貫通しない・印は消える）', async () => {
+    const { fake, s } = await attached('sess-1');
+    // 合図を出さずにセッションだけが消える＝台帳の `attached: true` が嘘になる窓。
+    fake.vanish(attachedJob.id);
+
+    const result = await s.pool.send(attachedJob.id, '続きを頼む');
+
+    // **`unknown` でも例外でもない。** 届いている。
+    expect(result.outcome).toBe('delivered');
+    // **黙って直さない。** 入り直したことが `detail` に出る（文言は測らず、
+    // 「素の届いた」と違うことだけを測る）。
+    expect(result.detail).not.toBe('追加指示として届けた。');
+    // 実際に resume を通っている（＝自己修復した）。
+    expect(fake.state.resumes.map((r) => r.managerId)).toEqual([attachedJob.id]);
+    // 404 を1回受けたうえで resume したので、`send` も1回は試している。
+    expect(fake.state.sends).toEqual([attachedJob.id]);
+
+    // **戻れたのだから印は残らない。** 残ると「いま話しかけられない」と読める欄が
+    // 話しかけられる相手に付いたままになる。
+    const summary = await summaryOf(s.pool);
+    expect(summary?.sessionMissingSince).toBeUndefined();
+    expect(summary?.live).toBe(true);
+
+    await s.pool.stop();
+  });
+
+  it('404 を受けて resume にも失敗したら session_missing（unknown へ畳まない）', async () => {
+    // `sessionId` が無い＝ resume は `no-session` で失敗する（戻る先が無い）。
+    const { fake, s } = await attached(undefined);
+    fake.vanish(attachedJob.id);
+
+    const result = await s.pool.send(attachedJob.id, '続きを頼む');
+
+    // **ここが本題。** `'unknown'` へ畳むと `app.ts` が 404 を返し、「そんなものは
+    // 無い」としてしか読めない終端になる——委譲そのものは台帳に在る。
+    expect(result.outcome).toBe('session_missing');
+    expect(result.outcome).not.toBe('unknown');
+
+    await s.pool.stop();
+  });
+
+  it('send() は例外を投げない（貫通していた壊れ方をそのまま歯にする）', async () => {
+    const { fake, s } = await attached(undefined);
+    fake.vanish(attachedJob.id);
+
+    // **`rejects` ではなく `resolves` を測る。** 直す前はここで
+    // `RunnerHttpError` が `send()` を貫通していた。
+    await expect(s.pool.send(attachedJob.id, '続きを頼む')).resolves.toMatchObject({
+      outcome: 'session_missing',
+    });
+
+    await s.pool.stop();
+  });
+
+  it('resume にも失敗した委譲は、list() が sessionMissingSince を出す（live は落ちない）', async () => {
+    const { fake, s } = await attached(undefined);
+    fake.vanish(attachedJob.id);
+    await s.pool.send(attachedJob.id, '続きを頼む');
+
+    const summary = await summaryOf(s.pool);
+    // **5つ目の形。** 器は答えているが、この委譲のセッションだけが無い。
+    expect(summary?.sessionMissingSince).toBeDefined();
+    // **`status` は動かさない**（`runnerLostSince` と同じ論法）。
+    expect(summary?.status).toBe('running');
+    // **`runnerLostSince` とは別の欄である**（器は黙っていない）。
+    expect(summary?.runnerLostSince).toBeUndefined();
+
+    await s.pool.stop();
+  });
+
+  /*
+   * **次の2本は対で読むこと。** 足場は1文字も違わず、**違うのは `list()` が答えるか
+   * 投げるかだけ**である。
+   *
+   * 片方（印が付く）だけだと「常に付ける」実装でも通り、もう片方（印が付かない）
+   * だけだと**実装が何も無くても通る。** 対にして初めて、
+   * 「**答えたうえで載せなかった**」と「**聞けなかった**」を分けていることが測れる。
+   */
+  it('reattach: runner が答えて一覧に載せず resume も失敗したら、印が付く', async () => {
+    const { fake, s } = await attached(undefined);
+    // runner は答える。ただしこの委譲はもう持っていない。
+    fake.vanish(attachedJob.id);
+
+    // 器が名乗り直す＝ `#reattach` が走る（`send()` は1度も呼んでいない）。
+    fake.reconnect();
+    await expect
+      .poll(async () => (await summaryOf(s.pool))?.sessionMissingSince, { timeout: 2000 })
+      .toBeDefined();
+
+    // **誰も `send()` していない。** この経路は既に払っている往復だけで印を立てる。
+    expect(fake.state.sends).toEqual([]);
+
+    await s.pool.stop();
+  });
+
+  it('reattach: runner が list() に答えられないときは印を付けない（聞けなかった ≠ 無い）', async () => {
+    /*
+     * **⚠️ この1本がいちばん重要である。**
+     *
+     * 「応答が無い」を「セッションが無い」と読むと、**実際には走っているマネージャーを
+     * 一覧が「セッションが無い」と名乗る。** `#restoreJobs` と `#reattach` の両方が
+     * 逐語でこの歯止めを持っており、ここで同じ間違いを作り直さないことを固定する。
+     *
+     * **上の1本との差は `listThrows` だけである。** あちらは印が付く。
+     */
+    const { fake, s } = await attached(undefined);
+    fake.vanish(attachedJob.id);
+    // セッションが在るかどうかは、もう聞けない。
+    fake.state.listThrows = true;
+    fake.state.listCalls = 0;
+
+    fake.reconnect();
+    // 一覧を実際に叩くところまでは進む（＝機構は動いている）。
+    await expect.poll(() => fake.state.listCalls, { timeout: 2000 }).toBeGreaterThan(0);
+
+    const summary = await summaryOf(s.pool);
+    // **聞けなかっただけなので、印は付かない。**
+    expect(summary?.sessionMissingSince).toBeUndefined();
+    // 走っているものを殺していない（台帳の状態も動いていない）。
+    expect(summary?.status).toBe('running');
 
     await s.pool.stop();
   });
