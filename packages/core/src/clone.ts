@@ -1359,17 +1359,25 @@ class Clone implements CloneHost {
         continue;
       }
 
-      // 処理待ちのあいだに積み上がった**続きの発言**を、ここで一緒に取り出す
-      // （`#mergedHumanBatch`）。`null` なら今までどおりこの1件だけを読む。
+      // 処理待ちのあいだに積み上がった**続きの発言・報告**を、ここで一緒に取り出す
+      // （`#mergedHumanBatch` / `#mergedManagerReportBatch`）。両方とも `null`
+      // なら今までどおりこの1件だけを読む。**2つが同時に非 null になることは
+      // 無い** —— 対象の型判定が先頭で分かれている（`event.type ===
+      // 'human_message'` か `isManagerReport(event)` か）ので、両方を毎回計算
+      // しても排他的である。
       //
       // **ここで言う「積み上がった続きの発言」は、かつては到着順で連続して
       // いたものだけを指していた。** いまは人間優先（`CLONE_HUMAN_PRIORITY_ENV_KEY`）
       // により、人間が待っている発言は待ち行列の人間の最後尾へ入り直すので、
       // 到着順では間に人間以外が挟まっていた発言どうしが、並べ替えられた結果
       // として連続することもある（`#mergedHumanBatch` 本体の doc「並びは到着順
-      // とは限らない」）。書かないと、この一文が黙って偽になる。
-      const merged = this.#mergedHumanBatch(event);
-      const batch: InboxEvent[] = merged ?? [event];
+      // とは限らない」）。書かないと、この一文が黙って偽になる。**マネージャーの
+      // 報告は人間優先の並べ替えに乗らない**（`post` が `insertAfterLast` を渡すのは
+      // `isHumanOriginated(event)` が真のときだけ）ので、`#mergedManagerReportBatch`
+      // 側の並びは常に到着順のままである。
+      const mergedHuman = this.#mergedHumanBatch(event);
+      const mergedReports = this.#mergedManagerReportBatch(event);
+      const batch: InboxEvent[] = mergedHuman ?? mergedReports ?? [event];
 
       this.#redeliveryNotice = this.#redeliveryNoticeFor(event);
       // **ここは `try` の外である。** 投げれば `for await` ごと抜けて受信箱の
@@ -1382,8 +1390,9 @@ class Clone implements CloneHost {
         return '';
       });
       try {
-        if (merged === null) await this.#handle(event);
-        else await this.#runHumanTurn(merged);
+        if (mergedHuman !== null) await this.#runHumanTurn(mergedHuman);
+        else if (mergedReports !== null) await this.#runManagerReportBatch(mergedReports);
+        else await this.#handle(event);
       } catch (error) {
         await this.#reportFailure(this.#conversationOf(event), String(error));
         this.#finishTurn();
@@ -1411,7 +1420,15 @@ class Clone implements CloneHost {
   }
 
   /**
-   * 取り出した合図と一緒に1ターンで読む発言を決める。まとめないなら `null`。
+   * 取り出した合図と一緒に1ターンで読む**人間の発言**を決める。まとめないなら
+   * `null`。
+   *
+   * **⚠️ 関数名は人間専用である。** マネージャーからの報告（`kind === 'report'`）
+   * にも同じ動機のまとめ読みがあるが、対象・宛先の決め方・組み立てる本文が違う
+   * ので別の関数（`#mergedManagerReportBatch`、すぐ下）にしてある。**この関数が
+   * 返すのは常に `HumanMessage[]` だけであり、名前が中身より多くを約束しない**
+   * （north_star「能力を削って軽さを実現しない」の裏面 — 逆に、名前が実態より
+   * 広いことを約束してもいけない）。
    *
    * **人間は返事を待っているあいだも喋る。** 先客（走行中のターン・蒸留・
    * マネージャーとの往復）が居るあいだに積み上がった発言を1件ずつ別のターンで
@@ -1424,10 +1441,16 @@ class Clone implements CloneHost {
    * 並べる（`humanTurnText`）。合図そのものも捨てないので、器の未読・台帳・日誌は
    * 件数ぶん残り、後始末（`#settleInboxEvent`）も件数ぶん通る。
    *
-   * 3つは**まとめない**。
+   * 4つは**まとめない**（かつては3つと書いていたが、4つ並べたまま数が合っていな
+   * かった。書いた本人が数え間違えていただけで、対象が3つだったことは一度も無い）。
    *
-   * - **人間の発言以外。** タイマー・外部イベント・マネージャーからの一件・蒸留・
-   *   承認の回答は、それぞれ起点ごとのプロンプトを持つ別の仕事である
+   * - **人間の発言以外のうち、`report` を除いたもの。** タイマー・外部イベント・
+   *   蒸留・承認の回答・マネージャーからの `question`/`permission` は、それぞれ
+   *   起点ごとのプロンプトを持つ別の仕事である。**`report` だけは例外** ——
+   *   `#mergedManagerReportBatch` が同じ `managerId` の連続に限ってまとめる
+   *   （理由はそちらの doc）。**この関数（人間専用）自身は `report` を1文字も
+   *   まとめない** — 対象外にしているのは1行目の型判定であって、ここに書く
+   *   「まとめない」はクローン全体の性質ではなく、この関数の性質である
    * - **会話が違う発言。** 応答の宛先（`#emit` は会話単位）が1つに決まらない。
    *   別のタブ・別の端末で話している相手の画面に、こちらの応答が流れる
    * - **配り直しの合図**（`#redelivered`）。「これは配り直しである（N 回目）」は
@@ -1461,7 +1484,63 @@ class Clone implements CloneHost {
   }
 
   /**
+   * 取り出した合図と一緒に1ターンで読む、**同じマネージャーから連続して届いた
+   * 報告**（`kind === 'report'`）を決める。まとめないなら `null`。
+   *
+   * **`#mergedHumanBatch` の姉妹版である。** 動機は同じ — 先客が居るあいだに
+   * 積み上がった合図を1件ずつ別のターンで読むと、件数がそのままターン数になる
+   * （1ターンは20〜120秒、`inbox.ts` の `drainWhile` の doc）。実測が
+   * `manager.ts` に逐語で残っている（`grep -Fn -- 'きっかり7ターン'
+   * packages/core/src/manager.ts`）: 終了済みマネージャー7本を `manager_stop`
+   * で畳んだところ、7件の停止の知らせがそれぞれ独立したターンとして届き、
+   * きっかり7ターン消費した。あの実測が名指ししているとおり、`manager_message`
+   * は「`#mergedHumanBatch` が常に `null` を返すぶん束ねられない」——**それを
+   * 埋めるのがこの関数である。**
+   *
+   * **`report` だけが対象で、`question` / `permission` は対象外。** `managerPrompt`
+   * は `report` と `question`/`permission` でまったく別の本文を組み立てる
+   * （`report` は「続きが要るなら指示を出せ」、`question`/`permission` は
+   * 「`manager_send` で `requestId` へ返せ」）。**混ぜると宛先が決まらない** ——
+   * 質問・許可確認は返事を待っている相手（`requestId`）が1件ごとに違いうるが、
+   * 報告に相当する応答の型は「続きの指示」の1つしか無く、束ねても意味が保てる。
+   *
+   * **同じ `managerId` に限る。** `#mergedHumanBatch` が会話 id を見るのと同じ
+   * 理由 —— 束ねた本文が言うのは「マネージャー ${managerId} から届いた」の1行
+   * であり、複数のマネージャーを混ぜると「誰からの何件か」が1つの文で言えなく
+   * なる。
+   *
+   * **配り直し（`#redelivered`）・枠での保持（`#heldForUsage`）を外すのは
+   * `#mergedHumanBatch` と同じ理由**（`#mergeable` の doc）。
+   *
+   * **これも畳み込みではない。** `post` の `isTick` 畳み込みとの違いは
+   * `#mergedHumanBatch` と同じ —— 1文字も捨てず、合図そのものも件数ぶん残る
+   * （`managerReportBatchPrompt` が全文を届いた順に並べる）。
+   */
+  #mergedManagerReportBatch(event: InboxEvent): ManagerReportMessage[] | null {
+    if (!isManagerReport(event)) return null;
+    if (!this.#mergeable(event)) return null;
+
+    // **先頭から連続している分だけ**（`Inbox#drainWhile`）。飛び越えて集めない
+    // 理由は `#mergedHumanBatch` と同じ —— 間に別の起点（別のマネージャーの
+    // 報告・`question`/`permission`・人間の発言・タイマー等）が挟まったら
+    // そこで止まる。
+    const rest = this.#inbox.drainWhile(
+      (queued) =>
+        isManagerReport(queued) && queued.managerId === event.managerId && this.#mergeable(queued),
+    );
+    // **1件だけなら `null`**（`#mergedHumanBatch` と同じ理由 —— まとめる側へ
+    // 寄せると、いちばん多い「1件だけ」の本文にまとめ読みの前置きが載る形が
+    // 作れてしまう）。
+    if (rest.length === 0) return null;
+    return [event, ...rest.filter(isManagerReport)];
+  }
+
+  /**
    * その合図を他の発言と1ターンにまとめてよいか。
+   *
+   * **`#mergedHumanBatch` と `#mergedManagerReportBatch` の両方が使う。** 対象
+   * （人間の発言／マネージャーの報告）が違っても、外す理由は共通なので1本に
+   * している。
    *
    * **一度でも「1件として扱う」と決めた合図は、まとめる側へ戻さない。** 配り直し
    * （`#redelivered`）も枠での保持（`#heldForUsage`）も、合図1件ごとの断り書きと
@@ -1497,6 +1576,46 @@ class Clone implements CloneHost {
     const head = events[0];
     if (head === undefined) return;
     await this.#runTurn(head.conversationId, closedNotice ?? humanTurnText(events));
+  }
+
+  /**
+   * マネージャーからの報告を1ターンとして通す。**`#mergedManagerReportBatch` が
+   * `null` を返したときは呼ばれない**（1件だけの経路は今までどおり `#handle` の
+   * `manager_message` 分岐を通す）ので、ここへ来る `events` は常に2件以上である。
+   *
+   * **`#handle` の `manager_message`/`report` 分岐がしていることを、件数ぶん
+   * 繰り返す。** 落とすと、まとめた側だけ日誌への追記や台帳の判定（#391）が
+   * 抜ける形になり、能力の削除になる（AGENTS.md の指示）。
+   *
+   * **配り直しの断り書き（`#closedRedeliveryNoticeFor`）はここでは見ない。**
+   * `#mergeable`（`#mergedManagerReportBatch` が先頭にも `drainWhile` の述語にも
+   * 使っている）が `#redelivered` に載っている合図を弾いているので、この経路に
+   * 来る事象は構造上すべて初回配達である —— `#redeliveredClosed` へ載る条件は
+   * 「`#restoreUnread` が拾い直した」ことで、拾い直した合図は必ず `#redelivered`
+   * にも載る（`#restoreUnread` の doc）。配り直しは常に単独のターンで読まれる。
+   */
+  async #runManagerReportBatch(events: ManagerReportMessage[]): Promise<void> {
+    const settlements: ReportSettlement[] = [];
+    for (const event of events) {
+      // **日誌の書き込みは `#handle` の `manager_message` 分岐と同じ形。** 件数ぶん
+      // 個別に書く —— 1回にまとめると「まとめ読みは全文が届いた順に渡り、合図は
+      // 件数ぶん器に残り、後始末も件数ぶん通る」（`#mergedHumanBatch` の doc）が
+      // 日誌の側で破れる。
+      await this.#journal({
+        type: 'exchange',
+        with: 'manager',
+        role: 'inbound',
+        text: `[${event.managerId}/${event.kind}] ${event.text}`,
+      });
+      // **台帳の判定（#391）も件数ぶん引く。** まとめても「どの報告が片付け済み
+      // か」は1件ごとに違いうるので、1つの判定へ潰さない（落とすと #391 が入れた
+      // 能力の削除になる —— AGENTS.md の指示）。
+      settlements.push(await reportSettlement(this.#stores.commitments, event.id));
+    }
+
+    // **`now` はここで1度だけ取る**（`#handle` の単発経路が `managerPrompt` へ
+    // 渡すのと同じ形。#562 PR-1）。`managerReportBatchPrompt` を純関数のまま保つ。
+    await this.#runInternal(managerReportBatchPrompt(events, settlements, new Date()));
   }
 
   /**
@@ -3954,6 +4073,22 @@ function isHumanMessage(event: InboxEvent): event is HumanMessage {
 }
 
 /**
+ * マネージャーからの一件のうち、報告（`kind === 'report'`）だけを指す。
+ *
+ * `InboxEvent` の `manager_message` は `kind` を `'report' | 'question' |
+ * 'permission'` の単一の enum で持つ（`kind` ごとに別の型が分かれる判別可能な
+ * 共用体ではない）ので、`Extract<InboxEvent, { type: 'manager_message';
+ * kind: 'report' }>` は効かない（`Extract` は共用体のメンバー単位でしか
+ * 絞れず、1つのメンバーの中のフィールドをさらに狭めることはできない）。
+ * `& { kind: 'report' }` の交差型で上書きして表す。
+ */
+type ManagerReportMessage = Extract<InboxEvent, { type: 'manager_message' }> & { kind: 'report' };
+
+function isManagerReport(event: InboxEvent): event is ManagerReportMessage {
+  return event.type === 'manager_message' && event.kind === 'report';
+}
+
+/**
  * 人間の発言をターン1本の本文にする。
  *
  * **1件なら本文そのままである。** 断り書きを足さない — いちばん多いのがこの形で、
@@ -4272,6 +4407,60 @@ function managerPrompt(
   ]
     .filter((line) => line !== '')
     .join('\n');
+}
+
+/**
+ * 同じマネージャーから連続して届いた report をターン1本の本文にする
+ * （`#mergedManagerReportBatch`）。
+ *
+ * **`humanTurnText` の姉妹版。** 全文を届いた順に並べ、要約も間引きもしない
+ * （`#mergedManagerReportBatch` の doc「これも畳み込みではない」）。
+ *
+ * **台帳の判定（#391）は1件ごとに出す。** まとめても「どれが片付け済みか」は
+ * 件によって違いうるので、`events` と `settlements` を同じ添字で対応させ、
+ * 1件ずつ `closedReportNotice` を通す — 1つの判定へ潰さない。
+ *
+ * **1件ごとに「受け取ってからの経過」を出す**（`describeReportAge`。#562 PR-1 が
+ * `managerPrompt` の `report` 分岐へ入れたのと同じもの）。**束ねられる報告は、
+ * 定義上いちばん長く待った報告である** —— 単発の経路にだけ経過が載って、こちらに
+ * 載らないと、**待った証拠がいちばん要る場所でだけ消える。** `now` を引数で受け
+ * 取るのも PR-1 と同じ理由（純関数のまま保ち、歯が時刻で揺れないようにする）。
+ *
+ * **呼び出し元は常に2件以上で呼ぶ**（`#mergedManagerReportBatch` が1件のとき
+ * `null` を返し、`#pump` はそちらを `#handle` の単発経路（`managerPrompt`）へ
+ * 落とすため）。0件・1件の来客には空文字列／`managerPrompt` 相当の形を返す
+ * ようにはしていない —— 呼び出し元の契約を守っている限り届かない分岐に、
+ * 届いたときの見た目を用意しても検証できない。
+ */
+function managerReportBatchPrompt(
+  events: ManagerReportMessage[],
+  settlements: ReportSettlement[],
+  now: Date,
+): string {
+  const head = events[0];
+  if (head === undefined) return '';
+
+  return [
+    `[system] マネージャー ${head.managerId} から届いた。処理待ちのあいだに続けて **${events.length} 件** の報告が届いたので、まとめて渡す（要約していない）。`,
+    '**まとめて読んでから答えよ。** 後の報告が前の報告を補足・訂正していることがある。**最後まで読んでから判断すること。**',
+    '',
+    '---',
+    '',
+    ...events.map((event, index) => {
+      // **印は本文の後ろ、指示の前に置く**（`managerPrompt` の 'report' 分岐と
+      // 同じ理由 —— 本文より前に置くと「読まなくてよい」と読まれて本文を飛ばされる）。
+      const closed = closedReportNotice(settlements[index] ?? { kind: 'unknown' });
+      return [
+        `**(${index + 1})** ${describeReportAge(event.at, now)}`,
+        '',
+        event.text,
+        ...(closed === null ? [] : ['', closed]),
+      ].join('\n');
+    }),
+    '',
+    '続きが要るなら、それぞれの報告に対して `manager_send` で指示を出せ。要らないなら何もしなくてよい。',
+    '学びや判断の基準になったことがあれば記憶へ移すこと。',
+  ].join('\n');
 }
 
 /**

@@ -7660,6 +7660,337 @@ describe('クローン — 人間が待っている合図を待ち行列の先�
 });
 
 /**
+ * Issue #562 PR-2: `#mergedHumanBatch` は人間の発言しか束ねない。マネージャーから
+ * 連続して届いた報告（`kind === 'report'`）は1件ずつ別のターンで読まれ、7本
+ * `manager_stop` が届けば7ターン消費する（`manager.ts` の実測、逐語は
+ * `grep -Fn -- 'きっかり7ターン' packages/core/src/manager.ts`）。
+ *
+ * ここは、同じ `managerId` の連続する `report` を1ターンにまとめて読む
+ * `#mergedManagerReportBatch` / `#runManagerReportBatch` の歯である。
+ *
+ * **`manager_message` はどの起点よりも `#emit` が効かない。** `#conversationOf`
+ * が `manager_message` に対して常に `null` を返すので（`#handle` の
+ * `manager_message` 分岐は内部ターン）、`done` / `error` / `usage_limited` の
+ * どれも chat の購読者には届かない（`#emit` は `conversationId === null` を
+ * 即 return する）。**だからここでは `waitForEvents`/`waitForTerminal`（chat
+ * ストリームを見る）を使わず、`s.calls[0].inputs`（実際に SDK へ渡った入力）を
+ * ポーリングして待つ** —— 既存の「歯2: 中身を持つ合図・別の日のタイマーは
+ * 畳まれず」ブロックが manager_message を混ぜるときと同じ形である。
+ */
+describe('クローン — 同じマネージャーの連続する report をまとめて読む（#562）', () => {
+  const spendLimitMessage = "You've hit your individual spend limit for this account.";
+
+  /** 既定は `kind: 'report'`。question/permission の境界を確かめる歯だけ渡す。 */
+  const managerMessage = (
+    id: string,
+    managerId: string,
+    text: string,
+    kind: 'report' | 'question' | 'permission' = 'report',
+    requestId?: string,
+  ): InboxEvent => ({
+    type: 'manager_message',
+    id,
+    at: new Date().toISOString(),
+    managerId,
+    kind,
+    text,
+    ...(requestId === undefined ? {} : { requestId }),
+  });
+
+  /** 直後の書き込み・後続ターンの発火が無いことを確かめるための、短い据え置き。 */
+  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 400));
+
+  it('同じマネージャーの連続する report 3件が1ターンにまとめて読まれ、全文が届く', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(managerMessage('r1', 'mgr-batch', '報告1本目'));
+    s.clone.post(managerMessage('r2', 'mgr-batch', '報告2本目'));
+    s.clone.post(managerMessage('r3', 'mgr-batch', '報告3本目'));
+
+    await waitFor(
+      () => s.calls[0]?.inputs[1]?.includes('報告3本目') ?? false,
+      'まとめたターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    // **モデル呼び出しは先客 + まとめた1本の計2回。** 3件を別々に読めば4回になる。
+    expect(inputs).toHaveLength(2);
+
+    const merged = inputs[1] ?? '';
+    expect(merged).toContain('報告1本目');
+    expect(merged).toContain('報告2本目');
+    expect(merged).toContain('報告3本目');
+    // 全文が届いた順に並ぶ（要約していない）。
+    expect(merged.indexOf('報告1本目')).toBeLessThan(merged.indexOf('報告2本目'));
+    expect(merged.indexOf('報告2本目')).toBeLessThan(merged.indexOf('報告3本目'));
+
+    // **後始末も3件ぶん通る。** 1件でも取りこぼせば器に未読のまま残り続ける
+    // （`#forget` の doc）。
+    await waitFor(
+      async () => (await s.stores.inbox.claimPending()).length === 0,
+      '3件とも消し込まれる',
+    );
+
+    // **日誌への追記も3件ぶん行われる**（1回にまとめて握り潰していない）。
+    const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as {
+      with: string;
+      text: string;
+    }[];
+    const managerExchanges = exchanges.filter((entry) => entry.with === 'manager');
+    expect(managerExchanges.filter((entry) => entry.text.includes('報告1本目'))).toHaveLength(1);
+    expect(managerExchanges.filter((entry) => entry.text.includes('報告2本目'))).toHaveLength(1);
+    expect(managerExchanges.filter((entry) => entry.text.includes('報告3本目'))).toHaveLength(1);
+
+    await s.clone.stop();
+  }, 15_000);
+
+  // **束ねられる報告は、定義上いちばん長く待った報告である。** 単発の経路
+  // （`managerPrompt`）にだけ「受け取ってからの経過」が載って、こちらに載らないと、
+  // **待った証拠がいちばん要る場所でだけ消える**（#562 PR-1 が入れたもの）。
+  it('まとめた本文にも、1件ごとに受け取ってからの経過が載る', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(managerMessage('age1', 'mgr-age', '報告1本目'));
+    s.clone.post(managerMessage('age2', 'mgr-age', '報告2本目'));
+
+    await waitFor(
+      () => s.calls[0]?.inputs[1]?.includes('報告2本目') ?? false,
+      'まとめたターンが投げられる',
+    );
+    await settle();
+
+    const merged = (s.calls[0] as FakeCall).inputs[1] ?? '';
+    // 2件ぶん、それぞれに経過の行が付く（1つに畳んでいない）。
+    expect(merged.split('受け取ってから').length - 1).toBe(2);
+    // 丸めた値だけでなく、受け取った時刻そのものも併記される
+    // （他のタイムスタンプと突き合わせられるように。`describeReportAge` の doc）。
+    expect(merged).toContain('受け取った時刻:');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('間に別のマネージャーの報告が挟まったら、そこで止まる（飛び越えない）', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(managerMessage('a1', 'mgr-A', 'A1本目'));
+    s.clone.post(managerMessage('a2', 'mgr-A', 'A2本目'));
+    s.clone.post(managerMessage('b1', 'mgr-B', 'B1本目'));
+    s.clone.post(managerMessage('a3', 'mgr-A', 'A3本目'));
+
+    await waitFor(
+      () => s.calls[0]?.inputs[3]?.includes('A3本目') ?? false,
+      '4本目（A3単独）のターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    // 先客 + [A1+A2まとめ] + B1 + A3 = 4本。A1〜A3を1本に飛び越して束ねれば3本になる。
+    expect(inputs).toHaveLength(4);
+
+    expect(inputs[1] ?? '').toContain('A1本目');
+    expect(inputs[1] ?? '').toContain('A2本目');
+    expect(inputs[1] ?? '').not.toContain('B1本目');
+    expect(inputs[1] ?? '').not.toContain('A3本目');
+
+    expect(inputs[2] ?? '').toContain('B1本目');
+    expect(inputs[2] ?? '').not.toContain('A1本目');
+    expect(inputs[2] ?? '').not.toContain('A3本目');
+
+    expect(inputs[3] ?? '').toContain('A3本目');
+    expect(inputs[3] ?? '').not.toContain('A1本目');
+    expect(inputs[3] ?? '').not.toContain('B1本目');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('連続する report の途中に人間の発言が挟まったら、そこで止まる（人間優先を切って純粋な到着順で確かめる）', async () => {
+    // 人間優先を切る理由: 既定だと `insertAfterLast` が人間の発言を待ち行列の
+    // 先頭側へ入れ直すので、「呼んだ順」と「並んだ順」がずれる（`Inbox#push` の
+    // doc）。ここで確かめたいのは「並んだ順で見て、間に別の起点が挟まったら
+    // `drainWhile` が止まる」ことなので、並びを呼んだ順のまま固定する。
+    //
+    // **A1・A2 は連続していて同じマネージャーなのでまとめ読みの対象になる —
+    // それでも間の人間の発言より後ろの A3 まで飛び越して拾ってはいけない。**
+    // A1 単独 + human 単独 + A2 単独（3件とも別々のまま）だと、まとめ読みが
+    // 無い旧実装でも同じ本数になってしまい、赤にならない。A1+A2 を隣り合わせに
+    // 置くことで、「まとめる」と「人間の手前で止める」の両方を同時に測る。
+    const s = setup(undefined, createMemoryStores(), {}, { ALTEROID_CLONE_HUMAN_PRIORITY: '0' });
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(managerMessage('a1', 'mgr-A', 'A1本目'));
+    s.clone.post(managerMessage('a2', 'mgr-A', 'A2本目'));
+    s.clone.post(humanMessage('割り込む人間'));
+    s.clone.post(managerMessage('a3', 'mgr-A', 'A3本目'));
+
+    await waitFor(
+      () => s.calls[0]?.inputs[3]?.includes('A3本目') ?? false,
+      '4本目（A3単独）のターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    // 先客 + [A1+A2まとめ] + 人間 + A3 = 4本。
+    // まとめ読みが無ければ 先客+A1+A2+人間+A3 の5本になる（＝この本数で赤が見える）。
+    expect(inputs).toHaveLength(4);
+
+    expect(inputs[1] ?? '').toContain('A1本目');
+    expect(inputs[1] ?? '').toContain('A2本目');
+    expect(inputs[1] ?? '').not.toContain('割り込む人間');
+    expect(inputs[1] ?? '').not.toContain('A3本目');
+    expect(inputs[2] ?? '').toContain('割り込む人間');
+    expect(inputs[3] ?? '').toContain('A3本目');
+    expect(inputs[3] ?? '').not.toContain('A1本目');
+    expect(inputs[3] ?? '').not.toContain('A2本目');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('question / permission はまとめられない（同じマネージャーの report のすぐ後ろでも止まる）', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(managerMessage('r1', 'mgr-Q', '報告1本目'));
+    s.clone.post(managerMessage('r2', 'mgr-Q', '報告2本目'));
+    s.clone.post(managerMessage('q1', 'mgr-Q', '質問1本目', 'question', 'req-1'));
+
+    await waitFor(
+      () => s.calls[0]?.inputs[2]?.includes('質問1本目') ?? false,
+      '3本目（question単独）のターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    // 先客 + [report×2まとめ] + question = 3本。
+    expect(inputs).toHaveLength(3);
+    expect(inputs[1] ?? '').toContain('報告1本目');
+    expect(inputs[1] ?? '').toContain('報告2本目');
+    expect(inputs[1] ?? '').not.toContain('質問1本目');
+    expect(inputs[2] ?? '').toContain('質問1本目');
+    expect(inputs[2] ?? '').not.toContain('報告1本目');
+    expect(inputs[2] ?? '').not.toContain('報告2本目');
+    // question は答え方の経路も示される（既存の `managerPrompt` 分岐がそのまま
+    // 通っていることの確認 —— まとめ読みの追加で壊れていないか）。
+    expect(inputs[2]).toContain('manager_send');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('#redelivered に載っている報告はまとめられない（配り直しは単独のまま）', async () => {
+    const stores = createMemoryStores();
+    const r1 = managerMessage('r1', 'mgr-X', '前回届いた報告1');
+    const r2 = managerMessage('r2', 'mgr-X', '前回届いた報告2');
+    // 前のプロセスが死んで未読のまま残っていた状況を直接作る（`#restoreUnread` が拾う）。
+    await stores.inbox.put(r1, new Date(0).toISOString());
+    await stores.inbox.put(r2, new Date(1).toISOString());
+
+    const s = setup(undefined, stores);
+
+    await waitFor(
+      () => s.calls[0]?.inputs[1]?.includes('前回届いた報告2') ?? false,
+      '2件目（単独）のターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    // 2件とも単独のターンで読まれる（まとめれば1本になる）。
+    expect(inputs).toHaveLength(2);
+    expect(inputs[0] ?? '').toContain('前回届いた報告1');
+    expect(inputs[0] ?? '').toContain('これは配り直しである');
+    expect(inputs[0] ?? '').not.toContain('前回届いた報告2');
+    expect(inputs[1] ?? '').toContain('前回届いた報告2');
+    expect(inputs[1] ?? '').toContain('これは配り直しである');
+    expect(inputs[1] ?? '').not.toContain('前回届いた報告1');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('枠で保持した report はまとめ読みの対象から外れる（#heldForUsage）', async () => {
+    const s = setup(undefined, createMemoryStores(), {
+      resultFor: (turnIndex) =>
+        turnIndex < 1 ? { subtype: 'error_during_execution', text: spendLimitMessage } : undefined,
+    });
+
+    s.clone.post(managerMessage('r1', 'mgr-Y', '報告1本目')); // turn0: 失敗 → 保持
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) >= 1, '一件目のターンが投げられる');
+    await waitFor(async () => {
+      const pending = await s.stores.inbox.claimPending();
+      return pending.some((p) => p.event.id === 'r1');
+    }, '一件目が未読として保持される');
+
+    s.clone.post(managerMessage('r2', 'mgr-Y', '報告2本目'));
+    s.clone.post(managerMessage('r3', 'mgr-Y', '報告3本目'));
+
+    await waitFor(
+      () => s.calls[0]?.inputs[2]?.includes('報告3本目') ?? false,
+      '2件目・3件目ぶんの入力が投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    // turn0(失敗) + turn1(r1単独の再試行) + turn2(r2+r3まとめ) = 3本。
+    expect(inputs).toHaveLength(3);
+    expect(inputs[1] ?? '').toContain('報告1本目');
+    expect(inputs[1] ?? '').not.toContain('報告2本目');
+    expect(inputs[2] ?? '').toContain('報告2本目');
+    expect(inputs[2] ?? '').toContain('報告3本目');
+    expect(inputs[2] ?? '').not.toContain('報告1本目');
+
+    await s.clone.stop();
+  }, 15_000);
+
+  it('1件だけのときは従来どおりの本文のまま（断り書きが載らない）', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(managerMessage('r1', 'mgr-Z', '単独の報告'));
+
+    await waitFor(
+      () => s.calls[0]?.inputs[1]?.includes('単独の報告') ?? false,
+      '2本目のターンが投げられる',
+    );
+    await settle();
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    expect(inputs).toHaveLength(2);
+    const solo = inputs[1] ?? '';
+    // **`managerPrompt` が出す1件の形をそのまま通していることを見る。**
+    // ⚠️ 逐語の完全一致では固定しない ── 本文には #562 PR-1 が入れた「受け取って
+    // からの経過」が挟まり、その値は時刻に依存する。ここで見たいのは**まとめ読みの
+    // 前置きを足していないこと**なので、単発の経路が持つべき要素の有無で固定する。
+    expect(solo).toContain('[system] マネージャー mgr-Z から届いた。（報告）');
+    expect(solo).toContain('単独の報告');
+    // 単発の経路にも経過は載る（PR-1。まとめた側だけの性質にしない）。
+    expect(solo).toContain('受け取ってから');
+    expect(solo).toContain(
+      '続きが要るなら `manager_send` で指示を出し、要らないなら何もしなくてよい。',
+    );
+    expect(solo).toContain('学びや判断の基準になったことがあれば記憶へ移すこと。');
+    // まとめ読みの前置き（「続けて」「まとめて読んでから」等）が1文字も載らない。
+    expect(solo).not.toContain('続けて');
+    expect(solo).not.toContain('まとめて読んでから');
+    expect(solo).not.toContain('**(1)**');
+
+    await s.clone.stop();
+  }, 15_000);
+});
+
+/**
  * 割り込める起点の集合そのものを固定する。
  *
  * ## なぜ doc では守れないのか
