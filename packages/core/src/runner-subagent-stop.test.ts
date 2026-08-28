@@ -2,7 +2,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mkdtempSync, rmSync } from 'node:fs';
 
-import type { HookJSONOutput, Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
+import type {
+  HookJSONOutput,
+  Options,
+  Query,
+  SDKMessage,
+  query as sdkQuery,
+} from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createRunnerHost, type RunnerHost } from './runner.js';
@@ -186,5 +192,46 @@ describe('SubagentStop の観測（#357）', () => {
     // ことを確かめれば「切られた」ことになる。
     expect(text.length).toBeLessThan(longDescription.length);
     expect(text).toContain('文字で切った');
+  });
+
+  /**
+   * **この1本が無いと、条件1（非空なら毎回）が固定されない。**
+   * 「最初の1回だけ出す」だけの実装でも、上の3本はすべて緑になる
+   * （上は非空を1度しか撃っていないため）。ここで撃ち分ける。
+   */
+  it('非空の入力は2回目以降も毎回 note が出る（最初の1回だけ、ではない）', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    const base = {
+      hook_event_name: 'SubagentStop',
+      stop_hook_active: false,
+      agent_id: 'agent-1',
+      agent_transcript_path: '/tmp/does-not-exist.jsonl',
+      agent_type: 'worker',
+      session_crons: [],
+    };
+
+    // 1回目は空 — 「最初の発火」の枠をここで使い切っておく。
+    await fireSubagentStop(started.options, { ...base, background_tasks: [] });
+    expect(noteEvents(s.events)).toHaveLength(1);
+
+    // 2回目・3回目は非空 — 「最初の発火」ではないので、条件1でしか出ない。
+    for (const n of [1, 2]) {
+      const result = await fireSubagentStop(started.options, {
+        ...base,
+        background_tasks: [
+          { id: `bg-${n}`, type: 'monitor', status: 'running', description: `CI の見張り ${n}` },
+        ],
+      });
+      expect(result).toEqual({ continue: true });
+    }
+
+    const notes = noteEvents(s.events);
+    expect(notes).toHaveLength(3);
+    expect(notes[1]?.text).toContain('type=monitor');
+    expect(notes[2]?.text).toContain('CI の見張り 2');
   });
 });

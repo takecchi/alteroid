@@ -2337,9 +2337,7 @@ class RunnerSession {
       const lines: string[] = [
         `SubagentStop（作業者: ${hook.agent_type ?? '(不明)'} / agent_id=${hook.agent_id ?? '(不明)'}）: ` +
           `background_tasks=${tasks.length}件、session_crons=${crons.length}件` +
-          (tasks.length === 0
-            ? '（このセッションで最初の発火なので、空でも1回だけ記録する）'
-            : ''),
+          (tasks.length === 0 ? '（このセッションで最初の発火なので、空でも1回だけ記録する）' : ''),
       ];
       for (const task of tasks) {
         const t = task as {
