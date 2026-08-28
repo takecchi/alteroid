@@ -45,6 +45,7 @@ import {
 
 import { createApp, parseAllowedOrigins } from './app.js';
 import { startUsagePolling } from './usage-poller.js';
+import { startTurnEndPolling } from './turn-end-poller.js';
 import { planAuth } from './auth.js';
 import { createJournalBus } from './journal-bus.js';
 import {
@@ -866,6 +867,16 @@ export async function main(): Promise<void> {
     ...(storage.sessionStore === undefined ? {} : { sessionStore: storage.sessionStore }),
   });
 
+  /**
+   * 生ログの末尾から「ターンが終わっているらしい」という助言を計算し直す
+   * （Issue #567）。**知らせるだけ** —— `ManagerPool#probeTurnEnds` の doc の
+   * とおり、`status` を動かす・委譲を abort する・貸し出し期限を縮める、の
+   * どれもしない。`clone.managers` が要るので `clone` の後に作る。
+   */
+  const turnEndPoller = startTurnEndPolling({
+    managers: clone.managers,
+  });
+
   // 起動ごとに作り直す。状態ファイルが残っていても、別プロセスを自分だと
   // 誤認させない（PID の再利用で無関係なプロセスを止めないため）。
   const token = randomUUID();
@@ -1029,6 +1040,7 @@ export async function main(): Promise<void> {
     // 長引いても、CLI からは「止まった」と見えるようにする。
     scheduler.stop();
     usagePoller.stop();
+    turnEndPoller.stop();
     server.close();
     // 名簿の挑み直しも畳む（止めたはずのデーモンが背景で runner を叩き続けない）。
     await runners.stop().catch(() => undefined);
