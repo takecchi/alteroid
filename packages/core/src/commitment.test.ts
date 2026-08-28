@@ -310,6 +310,152 @@ describe('引き受けたまま終わっていない仕事', () => {
     ).toBe(false);
   });
 
+  /**
+   * `commitment_edit`（issue #580 の (B)）。**クローンが自分で載せた行
+   * （`origin: 'self'`）の本文を、自分で直せること。**
+   *
+   * 守りたい線は「書き換えられるのは常に自分自身の言葉だけ」であり、これを
+   * 人間側（`PATCH /commitments/:id` — `origin: 'human'` だけ）とクローン側
+   * （この道具 — `origin: 'self'` だけ）で対称にしたものである
+   * （`commitmentSchema.editedAt` の doc）。
+   *
+   * **⚠️ 歯の書き方について。** ここで固定するのは「何が在るか / 何が無いか」
+   * であって、応答や日誌の**文面そのものではない**。文面を完全一致で固定すると、
+   * 守りたいものと無関係な変更まで赤くし、赤の原因が「別の PR が正しく足した
+   * もの」になる。だから応答の文言は見ず、台帳の欄と日誌の中身の**有無**で見る。
+   */
+  describe('commitment_edit（クローンが自分の行の本文を直す。issue #580 の (B)）', () => {
+    /** その `stores` に配線した `commitment_edit` を呼ぶ関数を返す。 */
+    function editor(stores: Stores) {
+      const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+      const found = tools.find((entry) => entry.name === 'commitment_edit');
+      // 道具そのものが無ければ、下の検査は全部「直せなかった」に倒れて緑に
+      // 見えうる。**その状態を「直せないことを確かめた」と読み替えないこと。**
+      expect(found, 'commitment_edit という道具が無い').toBeDefined();
+      return async (args: { id: string; body: string }) => {
+        const result = await found?.handler(args as never, {} as never);
+        return (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+      };
+    }
+
+    /** 日誌に積まれた `decision` の本文だけを取り出す。 */
+    async function decisions(stores: Stores) {
+      const entries = await stores.journal.list({ types: ['decision'] });
+      return entries.map((entry) => (entry.type === 'decision' ? entry.decision : ''));
+    }
+
+    it('origin が self の未了の行は直せる（body/editedAt/editedBy が入り、他の欄は無傷）', async () => {
+      const stores = createMemoryStores();
+      await stores.commitments.open({
+        id: 'c-self',
+        at: '2026-08-12T00:00:00.000Z',
+        origin: 'self',
+        source: 'conv-1',
+        body: 'もとの本文',
+      });
+
+      await editor(stores)({ id: 'c-self', body: '直した本文' });
+
+      const edited = await stores.commitments.get('c-self');
+      // 固定したいこと(1): 本文が入れ替わっていること。
+      expect(edited?.body).toBe('直した本文');
+      // 固定したいこと(2): 「編集した」という事実が欄として残ること
+      //（時刻そのものは器の時計なので値では固定しない——**在ること**を見る）。
+      expect(edited?.editedAt).not.toBeUndefined();
+      // 固定したいこと(3): 書いた主体が 'clone' であること（人間の経路と
+      // 同じ欄を、書いた側で分ける。`closedBy` の 'clone' と同じ語彙）。
+      expect(edited?.editedBy).toBe('clone');
+      // 固定したいこと(4): 本文以外は1つも動かないこと（`editBody` の契約）。
+      expect(edited?.at).toBe('2026-08-12T00:00:00.000Z');
+      expect(edited?.origin).toBe('self');
+      expect(edited?.source).toBe('conv-1');
+      expect(edited?.closedAt).toBeUndefined();
+    });
+
+    it('直したとき、編集前と編集後の本文が両方まとめて日誌に載る', async () => {
+      const stores = createMemoryStores();
+      await stores.commitments.open({
+        id: 'c-self',
+        at: '2026-08-12T00:00:00.000Z',
+        origin: 'self',
+        body: 'もとの本文',
+      });
+
+      await editor(stores)({ id: 'c-self', body: '直した本文' });
+
+      // 固定したいこと: **原文が日誌から読み戻せること。** 台帳が守っている
+      // のは「一字一句が凍ること」ではなく「クローンが過去の自分を追える
+      // こと」で、日誌に前後が逐語で残ることがその条件そのものである
+      //（`commitmentSchema.editedAt` の doc / `PATCH /commitments/:id` の doc）。
+      // **文面ではなく、前後の本文が在るかどうかだけを見る。**
+      const texts = await decisions(stores);
+      expect(texts).toHaveLength(1);
+      expect(texts[0]).toContain('もとの本文');
+      expect(texts[0]).toContain('直した本文');
+      // id も同じ1本に入っている（どの行の編集かが日誌だけで辿れる）。
+      expect(texts[0]).toContain('c-self');
+    });
+
+    it('origin が human / manager の行は直せない（台帳も日誌も動かない）', async () => {
+      const stores = createMemoryStores();
+      await stores.commitments.open({
+        id: 'c-human',
+        at: '2026-08-12T00:00:00.000Z',
+        origin: 'human',
+        body: '人間が頼んだこと',
+      });
+      await stores.commitments.open({
+        id: 'c-manager',
+        at: '2026-08-12T00:00:00.000Z',
+        origin: 'manager',
+        source: 'mgr-1',
+        body: '[report] マネージャーの報告',
+      });
+
+      const edit = editor(stores);
+      await edit({ id: 'c-human', body: '書き換えたい' });
+      await edit({ id: 'c-manager', body: '書き換えたい' });
+
+      // 固定したいこと(1): 本文が1文字も動いていないこと。
+      //（`manager` は `bodyMarkup` の接頭辞の契約が `body` に掛かっている
+      //  ので、直すとその前提が壊れる。`human` は人間自身の言葉である。）
+      expect((await stores.commitments.get('c-human'))?.body).toBe('人間が頼んだこと');
+      expect((await stores.commitments.get('c-manager'))?.body).toBe('[report] マネージャーの報告');
+      // 固定したいこと(2): 「編集した」という跡も付いていないこと
+      //（断られたのに欄だけ立つ、という中途半端な状態を作らない）。
+      expect((await stores.commitments.get('c-human'))?.editedAt).toBeUndefined();
+      expect((await stores.commitments.get('c-manager'))?.editedAt).toBeUndefined();
+      // 固定したいこと(3): 断ったものは日誌にも積まない
+      //（日誌へ載るのは実際に書き換えた分だけである）。
+      expect(await decisions(stores)).toEqual([]);
+    });
+
+    it('片付いた行・無い id は直せない（台帳も日誌も動かない）', async () => {
+      const stores = createMemoryStores();
+      await stores.commitments.open({
+        id: 'c-closed',
+        at: '2026-08-12T00:00:00.000Z',
+        origin: 'self',
+        body: 'もう片付いた仕事',
+      });
+      await stores.commitments.close('c-closed', '2026-08-13T00:00:00.000Z', '片付けた', 'clone');
+
+      const edit = editor(stores);
+      await edit({ id: 'c-closed', body: '後から直したい' });
+      await edit({ id: 'しらない', body: '直したい' });
+
+      // 固定したいこと(1): 片付いた行の本文も片付け方も動かないこと。
+      const closed = await stores.commitments.get('c-closed');
+      expect(closed?.body).toBe('もう片付いた仕事');
+      expect(closed?.closedReason).toBe('片付けた');
+      expect(closed?.editedAt).toBeUndefined();
+      // 固定したいこと(2): 無い id で新しい行が生えないこと。
+      expect(await stores.commitments.get('しらない')).toBeNull();
+      // 固定したいこと(3): どちらも日誌に積まない。
+      expect(await decisions(stores)).toEqual([]);
+    });
+  });
+
   it('渡されたものは起点を問わず載り、起こされただけの合図は載らない', async () => {
     // **判定の基準は「誰かが渡してきたか」である。** 発意 tick で1件増える形にすると
     // 台帳が数時間で読めなくなり、載っているのに見えない仕事が生まれる。
