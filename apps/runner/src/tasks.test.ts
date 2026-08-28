@@ -30,7 +30,13 @@ afterEach(() => {
  * 触るのは state(0) / num_threads(17) / starttime(19) だけである
  * （`tasks.ts` の `readStat` の doc の索引と同じ）。
  */
-function statLine(pid: number, comm: string, state: string, numThreads: number, starttime: number): string {
+function statLine(
+  pid: number,
+  comm: string,
+  state: string,
+  numThreads: number,
+  starttime: number,
+): string {
   const fields: Array<string | number> = [
     state, // [0] state (3列目)
     1, // [1] ppid (4列目)
