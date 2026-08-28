@@ -174,6 +174,27 @@ export interface PersonaStore {
  */
 export type ExchangeWith = Extract<JournalEntry, { type: 'exchange' }>['with'];
 
+/**
+ * `ExchangeWith` の値の一覧（`journal_read` ツールの zod の `enum` を組み立てる
+ * ために要る——zod は型だけからは実行時の値を取り出せない）。
+ *
+ * **`schema.ts` の `journalEntrySchema`（正本）の値をここへ書き写したもので
+ * はない——`satisfies Record<ExchangeWith, true>` で縛ってあるので、正本の
+ * `with` に値が増減して `ExchangeWith` が変われば、ここがコンパイルエラーに
+ * なる（`schema.ts` の `journalEntryTypeNames` が `JOURNAL_ENTRY_TYPES` を
+ * 作るのと同じ形。あちらを踏襲した——`types` と `with` で違う流儀を作らない）。**
+ */
+const exchangeWithNames = {
+  human: true,
+  manager: true,
+  self: true,
+} satisfies Record<ExchangeWith, true>;
+
+export const EXCHANGE_WITH_VALUES = Object.keys(exchangeWithNames) as [
+  ExchangeWith,
+  ...ExchangeWith[],
+];
+
 export interface JournalQuery {
   /**
    * 返す最大件数。
