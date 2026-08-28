@@ -20,6 +20,8 @@ import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { streamSSE } from 'hono/streaming';
 
+import { TaskBreakdownReader } from './tasks.js';
+
 /**
  * manager-runner の HTTP API（roadmap M4）。
  *
@@ -73,6 +75,15 @@ export interface RunnerAppDeps {
    * 差し替える理由が無い。
    */
   sseHeartbeatMs?: number;
+  /**
+   * タスクの state 別内訳を測るリーダー（#315 の可視化）。**主にテスト用。**
+   *
+   * 既定は `new TaskBreakdownReader()`（実物の `/proc` を読む）。`revision` と
+   * 同じ DI の形——本番の起動経路（`apps/runner/src/index.ts`）はこの引数を
+   * 渡さない。テストは偽の `/proc`（一時ディレクトリ）を指すリーダーを注入して
+   * 固定値を確かめる。
+   */
+  taskBreakdownReader?: TaskBreakdownReader;
 }
 
 const AUTH_SCHEME = /^Bearer\s+(.+)$/i;
@@ -279,6 +290,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
   // **プロセスの生存期間ぶん1回だけ解決する**（`INSTANCE_ID` と同じ理由——
   // 焼き込み・実行時の環境変数はどちらもプロセスの寿命の間に変わらない）。
   const revision = deps.revision ?? resolveBuildRevision();
+  const taskBreakdownReader = deps.taskBreakdownReader ?? new TaskBreakdownReader();
 
   /**
    * 制御面の門番。**runner の中から叩けても、鍵が無ければ通らない。**
@@ -337,8 +349,19 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     .use('/credentials', control)
     .use('/profile', control)
 
-    .get('/health', async (c) =>
-      c.json({
+    .get('/health', async (c) => {
+      /**
+       * タスクの state 別内訳（#315 の可視化）。**`readExecutionResources` 自体は
+       * 変えない** ——これは兄弟として `resources` へ合流させるだけの値で、
+       * `pids` の中へは入れない（`runnerExecutionResourcesSchema` の `tasks` の
+       * doc）。`undefined`（`/proc` が無い環境）なら欄ごと出さない。
+       */
+      const tasks = await taskBreakdownReader.read();
+      const resources = {
+        ...(await readExecutionResources()),
+        ...(tasks === undefined ? {} : { tasks }),
+      };
+      return c.json({
         ok: true,
         runnerId: host.runnerId,
         /**
@@ -379,7 +402,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
          * 全部同じ数を報告し、資源で選んでいるつもりで登録順に選ぶことになる
          * （実測は `readExecutionResources`）。
          */
-        resources: await readExecutionResources(),
+        resources,
         /**
          * いま配っている鍵の**指紋だけ**。値は決して出さない。
          *
@@ -404,8 +427,8 @@ export function createRunnerApp(deps: RunnerAppDeps) {
          * （`resolveBuildRevision` の doc）。
          */
         revision,
-      }),
-    )
+      });
+    })
 
     /**
      * 鍵の差し替え。**制御面なので、runner の中のマネージャーからは叩けない。**

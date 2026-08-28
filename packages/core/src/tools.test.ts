@@ -4693,6 +4693,115 @@ describe('runner_list（器の一覧）', () => {
     expect(reply).not.toContain('pids: 0');
     expect(reply).not.toContain('pids: unknown');
   });
+
+  /**
+   * `tasks`（#315 の可視化。器の pids の内訳）が在れば、pids の行に続けて
+   * 内訳・ゾンビの comm 別集計・いちばん古いゾンビの年齢が出る。
+   */
+  it('resources.tasks が在れば、pids の内訳（ゾンビ/生存・comm 別・いちばん古いゾンビ）が出る', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-a',
+          revision: { status: 'unheard' },
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-a',
+          managers: [],
+          resources: {
+            pids: { current: 955, max: 1000 },
+            tasks: {
+              threads: 955,
+              processes: 815,
+              zombies: 779,
+              zombieCommands: [
+                { command: 'esbuild', count: 375 },
+                { command: 'node', count: 214 },
+              ],
+              oldestZombieSeconds: 69_840, // 19時間24分
+            },
+          },
+        },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', { resources: true });
+
+    expect(reply).toContain('pids: 955 / 1000');
+    // 生存スレッド = 955 - 779 = 176、生存プロセス = 815 - 779 = 36。
+    expect(reply).toContain('内訳: ゾンビ 779 / 生存 176（36プロセス）');
+    expect(reply).toContain('ゾンビの comm: esbuild 375, node 214');
+    expect(reply).toContain('いちばん古いゾンビ: 19時間24分前');
+  });
+
+  /**
+   * **`tasks` が無い runner（古い版）では、内訳の行そのものを出さない。** 「0」
+   * にも「unknown」にも潰さない——AGENTS.md「取れない軸に0の行を作る」。
+   */
+  it('resources.tasks が無い runner では、内訳の行そのものが出ない', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-old',
+          revision: { status: 'unheard' },
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-old',
+          managers: [],
+          resources: { pids: { current: 872, max: 1000 } },
+        },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', { resources: true });
+
+    expect(reply).toContain('pids: 872 / 1000');
+    // **4文字の字下げまで含めて否定する。** 末尾の注記（「対応している runner なら
+    // ゾンビ/生存・ゾンビの comm 別・いちばん古いゾンビの年齢が出る」）が同じ語を
+    // 含むので、語だけで否定すると器ごとのブロックではなく注記のほうに当たって落ちる。
+    // 見たいのは「器のブロックにその行が出ていないこと」である。
+    expect(reply).not.toContain('内訳:');
+    expect(reply).not.toContain('    ゾンビの comm');
+    expect(reply).not.toContain('    いちばん古いゾンビ');
+  });
+
+  /**
+   * ゾンビが0本なら `zombieCommands` / `oldestZombieSeconds` は欄ごと省かれる——その省き方どおり出る。
+   * 否定を4文字の字下げ込みで書く理由は、直前のテストのコメントに在る。
+   */
+  it('ゾンビが0本の tasks では、comm 別集計といちばん古いゾンビの行が出ない', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-clean',
+          revision: { status: 'unheard' },
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-clean',
+          managers: [],
+          resources: {
+            pids: { current: 40, max: 1000 },
+            tasks: { threads: 40, processes: 40, zombies: 0 },
+          },
+        },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', { resources: true });
+
+    expect(reply).toContain('内訳: ゾンビ 0 / 生存 40（40プロセス）');
+    expect(reply).not.toContain('    ゾンビの comm');
+    expect(reply).not.toContain('    いちばん古いゾンビ');
+  });
 });
 
 /**
