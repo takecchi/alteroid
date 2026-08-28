@@ -235,11 +235,23 @@ export interface DistillGap {
  * 自分自身を「移されなかった活動」として数えてしまう。**この器が書いた行は、
  * 定義上いまの会話の中に在る。**
  *
- * 境界は `JournalQuery.until`（この時刻**以前**）で効かせる。同じミリ秒に
- * 並んだ行は境界に含まれる側へ倒れる ＝ **「ずれが在る」と言う側へぶれる。**
- * 器の生成と最初の日誌の書き込みが同一ミリ秒に並ぶのは実運用では起きない
- * （器はデーモンの起動時に組み立てられ、最初の合図は早くても人間の速さで来る）
- * が、**倒れる向きは書いておく。**
+ * ### ⚠️ 境界は「以前」ではなく「より前」である（実測で直した）
+ *
+ * `JournalQuery.until` は**その時刻を含む**（`store.ts` の doc:「この時刻以前」）
+ * ので、読み出しの上限としてだけ渡し、**数える側では `at < until` で切り直す。**
+ *
+ * **含む側にしていたら、既存の歯が1本落ちた**（`clone.test.ts` の「新規に開いた
+ * セッションでは resume の断りを出さない」。単体では緑、全件を通したときだけ赤 ——
+ * 2026-08-28 観測）。器の生成と、その直後に `post` された最初の発言の記帳が
+ * **同じミリ秒に並んだ**ためである。`#record` は `post` の中で書き、`post` は
+ * `createClone` の直後に来るので、**「実運用では1ミリ秒以上空く」は成り立たない**
+ * —— 起動時に拾い直した未読（`#restoreUnread`）は `#pump` の中で `post` し直され、
+ * まさに器の生成と同じミリ秒に記帳されうる。
+ *
+ * `at < until` なら、同じミリ秒に並んだ行は**すべて「この器が書いた」側へ倒れる**
+ * ＝ 偽陽性ではなく偽陰性の側へぶれる。落ちたプロセスの最後の書き込みと、次の
+ * プロセスの起動が同一ミリ秒に並ぶことはない（プロセスの入れ替えはミリ秒では
+ * 終わらない）ので、**倒す向きとしてはこちらが正しい。**
  */
 export async function deriveDistillGapFromJournal(
   journal: Pick<JournalStore, 'list'>,
@@ -251,8 +263,12 @@ export async function deriveDistillGapFromJournal(
   // **`decision` だけを引く。** 印は `decision` なので、他の種別を読む理由が無い
   // （`deriveHumanTouchedAtFromJournal` が `types: ['memory_update']` で引くのと
   // 同じ形）。新しい順に返るので、最初に当たったものが「最後に成功した蒸留」。
+  //
+  // **`until` は読み出しの上限としてだけ渡し、境界は `at < until` で切り直す**
+  // （上の doc「境界は『以前』ではなく『より前』である」）。
+  const beforeBoot = (entry: JournalEntry): boolean => entry.at < until;
   const decisions = await journal.list({ types: ['decision'], until });
-  const marker = decisions.find(isDistillSucceededEntry);
+  const marker = decisions.find((entry) => beforeBoot(entry) && isDistillSucceededEntry(entry));
   const lastDistilledAt = marker?.at ?? null;
 
   // 印が在れば、**その行より後ろ**だけを見る（窓は自然に小さい）。印が無ければ
@@ -276,7 +292,9 @@ export async function deriveDistillGapFromJournal(
       ? await journal.list({ until, limit: scanLimit })
       : await journal.list({ order: 'asc', after: { id: marker.id, at: marker.at }, until });
 
-  const activity = entries.filter(countsAsUndistilledActivity);
+  const activity = entries.filter(
+    (entry) => beforeBoot(entry) && countsAsUndistilledActivity(entry),
+  );
   // 1件も無ければずれは無い ＝ 直前の蒸留が最後の活動まで持っていったということ。
   if (activity.length === 0) return null;
   const first = ascending ? activity[0] : activity.at(-1);
@@ -327,7 +345,8 @@ export function describeDistillGap(gap: DistillGap): string {
     '**これは「蒸留を始めた」ではなく「蒸留が成功で終わった」記録で数えている。**' +
       '前のプロセスが蒸留の途中で消えたか、蒸留が失敗して終わったか、そもそも走らなかった、' +
       'のいずれかである。この区間の出来事は**記憶（正本）には入っていない**' +
-      '（セッションを resume していれば会話の履歴には残っているかもしれないが、それは記憶ではない）。',
+      '（前のセッションを引き継いで開き直していれば会話の履歴には残っているかもしれないが、' +
+      'それは記憶ではない）。',
     '',
     `中身は日誌に在る。\`journal_read\` に \`since\`（${gap.firstActivityAt}）と ` +
       `\`until\`（${gap.lastActivityAt}）を渡せばその区間だけを読める。` +

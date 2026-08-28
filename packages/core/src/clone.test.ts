@@ -9082,9 +9082,7 @@ describe('クローン — 蒸留が間に合わなかった区間の検出', ()
   /** 「蒸留が成功で終わった」の印（`decision`）だけを拾う。 */
   async function distillSucceededEntries(stores: Stores): Promise<{ decision: string }[]> {
     const entries = (await stores.journal.list({ types: ['decision'] })) as { decision: string }[];
-    return entries.filter((entry) =>
-      entry.decision.startsWith(DISTILL_SUCCEEDED_DECISION_PREFIX),
-    );
+    return entries.filter((entry) => entry.decision.startsWith(DISTILL_SUCCEEDED_DECISION_PREFIX));
   }
 
   /** 蒸留を**始めた**印（`turnInputEntry` が書く `exchange`）だけを拾う。 */
