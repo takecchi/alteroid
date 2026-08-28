@@ -7711,7 +7711,7 @@ describe('クローン — 同じマネージャーの連続する report をま
     s.clone.post(managerMessage('r3', 'mgr-batch', '報告3本目'));
 
     await waitFor(
-      () => (s.calls[0]?.inputs[1]?.includes('報告3本目') ?? false),
+      () => s.calls[0]?.inputs[1]?.includes('報告3本目') ?? false,
       'まとめたターンが投げられる',
     );
     await settle();
@@ -7760,7 +7760,7 @@ describe('クローン — 同じマネージャーの連続する report をま
     s.clone.post(managerMessage('a3', 'mgr-A', 'A3本目'));
 
     await waitFor(
-      () => (s.calls[0]?.inputs[3]?.includes('A3本目') ?? false),
+      () => s.calls[0]?.inputs[3]?.includes('A3本目') ?? false,
       '4本目（A3単独）のターンが投げられる',
     );
     await settle();
@@ -7807,7 +7807,7 @@ describe('クローン — 同じマネージャーの連続する report をま
     s.clone.post(managerMessage('a3', 'mgr-A', 'A3本目'));
 
     await waitFor(
-      () => (s.calls[0]?.inputs[3]?.includes('A3本目') ?? false),
+      () => s.calls[0]?.inputs[3]?.includes('A3本目') ?? false,
       '4本目（A3単独）のターンが投げられる',
     );
     await settle();
@@ -7840,7 +7840,7 @@ describe('クローン — 同じマネージャーの連続する report をま
     s.clone.post(managerMessage('q1', 'mgr-Q', '質問1本目', 'question', 'req-1'));
 
     await waitFor(
-      () => (s.calls[0]?.inputs[2]?.includes('質問1本目') ?? false),
+      () => s.calls[0]?.inputs[2]?.includes('質問1本目') ?? false,
       '3本目（question単独）のターンが投げられる',
     );
     await settle();
@@ -7872,7 +7872,7 @@ describe('クローン — 同じマネージャーの連続する report をま
     const s = setup(undefined, stores);
 
     await waitFor(
-      () => (s.calls[0]?.inputs[1]?.includes('前回届いた報告2') ?? false),
+      () => s.calls[0]?.inputs[1]?.includes('前回届いた報告2') ?? false,
       '2件目（単独）のターンが投げられる',
     );
     await settle();
@@ -7907,7 +7907,7 @@ describe('クローン — 同じマネージャーの連続する report をま
     s.clone.post(managerMessage('r3', 'mgr-Y', '報告3本目'));
 
     await waitFor(
-      () => (s.calls[0]?.inputs[2]?.includes('報告3本目') ?? false),
+      () => s.calls[0]?.inputs[2]?.includes('報告3本目') ?? false,
       '2件目・3件目ぶんの入力が投げられる',
     );
     await settle();
@@ -7933,7 +7933,7 @@ describe('クローン — 同じマネージャーの連続する report をま
     s.clone.post(managerMessage('r1', 'mgr-Z', '単独の報告'));
 
     await waitFor(
-      () => (s.calls[0]?.inputs[1]?.includes('単独の報告') ?? false),
+      () => s.calls[0]?.inputs[1]?.includes('単独の報告') ?? false,
       '2本目のターンが投げられる',
     );
     await settle();
