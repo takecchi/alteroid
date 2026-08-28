@@ -1087,7 +1087,16 @@ export function createApp(deps: AppDeps) {
       cors({
         // 列挙にあるものだけをそのまま返す。`*` は返さない（`AppDeps` の注記）。
         origin: (origin) => (allowedOrigins.includes(origin) ? origin : null),
-        allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+        // **この配列は経路を追加した人が自動では見に来ない。** #27 でこの並びを
+        // 固定した時点では `PATCH` を使う経路が1つも無かったため、そのときの
+        // 実在するメソッドだけを並べた。`PATCH /commitments/:id`（#512、台帳の
+        // 本文を後から直す唯一の口）が後から増えたときにここは更新されず、
+        // 別オリジンの画面からの編集だけがブラウザの preflight に静かに
+        // 落とされていた（Issue #580）。**新しいメソッドの経路を足したら、
+        // ここも一緒に見ること。** `apps/daemon/src/app.test.ts` の
+        // 「アプリが出しているメソッドは全部 CORS が許している」の歯が、
+        // 名指しに頼らず取りこぼしを拾う。
+        allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
         // `content-type` は `deliberateClient` が、`authorization` は門番が要求する。
         // 後者を落とすと、別オリジンの画面はログイン済みでも何も呼べない。
         allowHeaders: ['content-type', 'authorization'],

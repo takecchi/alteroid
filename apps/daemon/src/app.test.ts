@@ -4304,11 +4304,13 @@ describe('ブラウザからの呼び出しを許すオリジン', () => {
     });
   }
 
-  const preflight = (origin: string) => ({
+  // `requestedMethod` は既定で `POST`（既存の呼び方を1件も変えないため）。
+  // PATCH の preflight を組むときだけ明示で渡す。
+  const preflight = (origin: string, requestedMethod = 'POST') => ({
     method: 'OPTIONS',
     headers: {
       origin,
-      'access-control-request-method': 'POST',
+      'access-control-request-method': requestedMethod,
       'access-control-request-headers': 'content-type',
     },
   });
@@ -4359,6 +4361,51 @@ describe('ブラウザからの呼び出しを許すオリジン', () => {
     });
 
     expect(response.status).toBe(415);
+  });
+
+  it('PATCH（台帳の本文を後から直す）の preflight が通る（Issue #580）', async () => {
+    // **人間の困りごとに直接対応する歯。** `PATCH /commitments/:id` は
+    // アプリ全体で唯一の PATCH 経路（台帳の編集）で、`allowMethods` に
+    // `PATCH` が無かった間はここだけが選択的に落ちていた——一覧・積む・
+    // 閉じる（いずれも GET/POST）は無傷のまま「編集だけできない」という
+    // 症状になる。
+    const app = appWith(['https://www.example.com']);
+    const response = await app.request(
+      '/commitments/some-id',
+      preflight('https://www.example.com', 'PATCH'),
+    );
+
+    expect(response.headers.get('access-control-allow-origin')).toBe('https://www.example.com');
+    expect(response.headers.get('access-control-allow-methods')).toContain('PATCH');
+  });
+
+  it('アプリが出しているメソッドは全部 CORS が許している（取りこぼしを名指しに頼らず拾う）', async () => {
+    // **`PATCH` を名指しで固定するだけでは同じ穴がまた開く。** 次に新しい
+    // メソッドの経路が増えても `allowMethods` の更新を忘れうるので、実際に
+    // 登録されている経路（`app.routes`）から使われているメソッドの集合を
+    // 導き、CORS が返す許可集合がそれを覆っているかをここで確かめる。
+    //
+    // `'ALL'` は `.use('*', ...)` のようなミドルウェア登録が持つ印で、
+    // ブラウザが `access-control-request-method` に積む実在のHTTPメソッドで
+    // はないので対象から外す。`OPTIONS` は preflight 自身が使うメソッドで
+    // hono の `cors()` が別枠で処理するため、経路としては登録されない。
+    const app = appWith(['https://www.example.com']);
+    const declaredMethods = [
+      ...new Set(app.routes.map((route) => route.method).filter((method) => method !== 'ALL')),
+    ];
+    // ここが0件だと「見ていない」を「無かった」と読み違える（歯自身の前提が
+    // 崩れていないことをまず確かめる）。
+    expect(declaredMethods.length).toBeGreaterThan(0);
+
+    const response = await app.request('/health', preflight('https://www.example.com'));
+    const allowed = (response.headers.get('access-control-allow-methods') ?? '')
+      .split(',')
+      .map((method) => method.trim())
+      .filter((method) => method !== '');
+
+    for (const method of declaredMethods) {
+      expect(allowed).toContain(method);
+    }
   });
 });
 
