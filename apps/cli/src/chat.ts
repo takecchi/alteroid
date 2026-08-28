@@ -919,7 +919,20 @@ export async function runSlashCommand(
      * 人間が席に戻ったときに UUID を写す作業をさせないためである。
      */
     case '/approvals': {
-      const response = await client.approvals.$get({ query: {} });
+      // **`order` を明示して呼ぶ。窓（`limit` / `cursor`）は作らない。**
+      // 直しているのは並びの不安定さであって、件数の可視化ではない（ここは全件を
+      // 受け取っているので、応答へ載る `total` は受け取った配列の長さと必ず一致する
+      // 冗長な値である。**だから出さない**）。
+      //
+      // どれも渡さない呼びはストアの生の並びがそのまま返り、その並びは実装ごとに
+      // 違う — `storage-fs` / `testing.ts` は挿入順（`putApproval` が既存の id を
+      // 末尾へ動かす）、`storage-pg` は `createdAt` の昇順。⟹ **どの永続化層で
+      // 動いているかで並びが変わっていた。** `order` を明示するとデーモンが
+      // `(createdAt, id)` の昇順へ揃えるので、実装によらず同じ順になる。
+      //
+      // **ここで番号を振って `/approve <番号>` に使わせている以上、並びが動くのは
+      // そのまま誤爆の経路である**（人間が見た番号と、次に打つ番号がずれる）。
+      const response = await client.approvals.$get({ query: { order: 'asc' } });
       if (!response.ok) {
         stdout.write('承認待ちを読めませんでした\n');
         return 'ok';

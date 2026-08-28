@@ -93,11 +93,37 @@ export function useManagerTranscript(id: string | null) {
   });
 }
 
+/**
+ * 承認待ちの一覧。
+ *
+ * **`order` を明示して呼ぶ。窓（`limit` / `cursor`）は作らない。**
+ *
+ * 直しているのは**並びの不安定さ**であって、件数の可視化ではない。ここは全件を
+ * 受け取っているので、応答へ載る `total` は受け取った配列の長さと必ず一致する
+ * 冗長な値である（**だから画面には出さない** — 出すと「意味の在る数」に見える）。
+ *
+ * **何が不安定だったか。** `order` / `limit` / `cursor` のどれも渡さない呼びは、
+ * デーモンがストアの生の並びをそのまま返す（`apps/daemon/src/app.ts` の
+ * `/approvals`）。そしてその生の並びは**実装ごとに違う**:
+ *
+ * - `packages/storage-fs` / `packages/core/src/testing.ts` — 配列・Map の挿入順。
+ *   `putApproval` が既存の id を**末尾へ動かす**ので、回答するたびに並びが変わる
+ * - `packages/storage-pg` — `orderBy(asc(approvals.createdAt))` で既に作成順
+ *
+ * ⟹ **同じ画面が、どの永続化層で動いているかによって違う順で出ていた。**
+ * `order` を明示すると、デーモンが `(createdAt, id)` の昇順へ揃えるので
+ * （`compareApprovalPagingKey`）、**実装によらず同じ順になる。**
+ *
+ * **既定値と同じ `'asc'` を送っている。** 並びの意味は変えず、「渡した」という
+ * 事実だけで封筒と整列を有効にする（デーモン側は生のクエリで opt-in を判定する）。
+ */
 export function useApprovals(pending = true) {
   const api = useApi();
   return useSWR(KEY.approvals(pending), ({ pending }) =>
     api.api
-      .GET('/approvals', { params: { query: { pending: pending ? 'true' : 'false' } } })
+      .GET('/approvals', {
+        params: { query: { pending: pending ? 'true' : 'false', order: 'asc' } },
+      })
       .then(unwrap),
   );
 }
