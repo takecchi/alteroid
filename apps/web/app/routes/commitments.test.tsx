@@ -716,21 +716,30 @@ describe('本文を origin で Markdown / 素のテキストへ切り分ける',
 });
 
 /**
- * 本文の編集（`origin: 'human'` かつ未了の行だけ）。
+ * 本文の編集（未了の行すべて。`origin` では隠さない）。
  *
  * サーバ側（`PATCH /commitments/:id`）は前段のコミットで既に入っている——
  * ここで固定するのは画面側の線引きとタブの形である（`memory-detail.tsx`
  * に揃えた形。`commitments.tsx` の `CommitmentBodyEditor` の doc）。
  *
- * 1. 編集の入口が出るのは `origin: 'human'` かつ未了の行だけ
- *    （それ以外は 403 で断られるだけの死んだボタンになるため）
- * 2. 既定タブはプレビューで、中身は Markdown へ倒さない（`CommitmentBody` の
- *    描き分けをそのまま守る——編集できることが描き分けを変える理由にはならない）
- * 3. 下書きはタブの外に置くので、往復しても消えない
- * 4. 保存は正しい id と本文で PATCH を叩き、失敗（409 等）は握り潰さず見せる
- * 5. `editedAt` が在る行には「編集済み」の印が出る
+ * **⚠️ 1 は issue #580 の (C) で反転した。** それ以前ここには「編集の入口が
+ * 出るのは `origin: 'human'` かつ未了の行だけ（それ以外は 403 で断られるだけの
+ * 死んだボタンになるため）」と書いてあり、`self` / `manager` / `external` に
+ * 入口が**出ない**ことを固定する歯が在った。**隠すと「なぜ押せないか」が画面から
+ * 消える**ので、`useRemoveSchedule`（`apps/web/app/hooks/mutations.ts`）が持つ線
+ * ——「画面側でボタンを隠して表現しないこと」——へ寄せた。**断りの文面を出すのは
+ * サーバである。**
+ *
+ * 1. 編集の入口は未了の行すべてに出る（`origin` で隠さない）。片付いた行には出ない
+ * 2. 断られたら、サーバが返した理由がその場に出る（403 の本文）
+ * 3. 既定タブはプレビューで、中身はその行の `origin` の描き分けをそのまま守る
+ *    （編集できることが描き分けを変える理由にはならない）
+ * 4. 下書きはタブの外に置くので、往復しても消えない
+ * 5. 保存は正しい id と本文で PATCH を叩き、失敗（409 等）は握り潰さず見せる
+ * 6. `editedAt` が在る行には「編集済み」の印が出る
  */
-describe('本文の編集（origin: human かつ未了）', () => {
+describe('本文の編集（未了の行すべて。origin では隠さない）', () => {
+  // 固定したいもの: 従来どおり human の未了行に編集の入口が在ること（回帰）。
   it('origin が human の未了行には「本文を編集」の入口が出る', async () => {
     stubCommitments([commitment({ origin: 'human' })]);
     renderPage();
@@ -739,17 +748,24 @@ describe('本文の編集（origin: human かつ未了）', () => {
     expect(screen.getByRole('button', { name: '本文を編集' })).toBeTruthy();
   });
 
+  /*
+   * 固定したいもの: `human` 以外の未了行にも編集の入口が**在る**こと（有無だけを
+   * 見る）。ここが「無い」に戻ると、断りの理由を出す経路そのものが画面から消える
+   * ——押せないボタンには 403 も返ってこないので、下の「理由が出る」歯も一緒に
+   * 意味を失う。文面は1文字も見ない（それはサーバの持ち物である）。
+   */
   it.each(['self', 'manager', 'external'] as const)(
-    'origin が %s の行には編集の入口が出ない（403 で断られるだけの死んだボタンにしない）',
+    'origin が %s の未了行にも編集の入口が出る（隠すと「なぜ押せないか」が消える）',
     async (origin) => {
       stubCommitments([commitment({ origin, body: `${origin} の本文` })]);
       renderPage();
 
       await screen.findByText(`${origin} の本文`);
-      expect(screen.queryByRole('button', { name: '本文を編集' })).toBeNull();
+      expect(screen.getByRole('button', { name: '本文を編集' })).toBeTruthy();
     },
   );
 
+  // 固定したいもの: 片付いた行には編集の入口が無いこと（編集できるのは未了だけ）。
   it('片付いた行には origin が human でも編集の入口が出ない', async () => {
     stubCommitments(
       [commitment({ id: 'open-1', body: 'まだ終わっていない' })],
@@ -773,6 +789,7 @@ describe('本文の編集（origin: human かつ未了）', () => {
     expect(screen.getAllByRole('button', { name: '本文を編集' })).toHaveLength(1);
   });
 
+  // 固定したいもの: human の行のプレビューが素テキストのままであること（回帰）。
   it('編集を開くと既定タブはプレビューで、中身が素テキストのまま出る（Markdown へ倒さない）', async () => {
     stubCommitments([commitment({ origin: 'human', body: '## 見出しではない' })]);
     renderPage();
@@ -796,6 +813,82 @@ describe('本文の編集（origin: human かつ未了）', () => {
      */
     const tabsRoot = screen.getByRole('tablist').parentElement!;
     expect(within(tabsRoot).queryByRole('textbox')).toBeNull();
+  });
+
+  /*
+   * 固定したいもの: プレビューが**その行の `origin` の描き分け**に従うこと
+   * （`self` は Markdown の描画経路を通る）。入口を `human` 以外へも出した以上、
+   * プレビューを `PlainBody` 固定にしておくと、`self` の行だけ「編集を開いた
+   * 瞬間に見え方が変わる」ことになる。見るのは経路の有無（heading になるか）で、
+   * Markdown の中身の正しさは `markdown.test.tsx` の持ち物である。
+   */
+  it('self の行のプレビューは、一覧と同じく Markdown の描画経路を通る（下書きも同じ）', async () => {
+    stubCommitments([commitment({ origin: 'self', body: '## 引き受けた見出し' })]);
+    renderPage();
+
+    await screen.findByRole('heading', { name: '引き受けた見出し' });
+    fireEvent.click(screen.getByRole('button', { name: '本文を編集' }));
+
+    // 編集を開いた直後（下書き未入力）も、一覧と同じ見え方のまま。
+    expect(await screen.findByRole('heading', { name: '引き受けた見出し' })).toBeTruthy();
+
+    // 書きかけの本文も同じ経路で映る（プレビューが素テキストへ落ちない）。
+    const tabsRoot = screen.getByRole('tablist').parentElement!;
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    const textarea = await within(tabsRoot).findByRole('textbox');
+    fireEvent.change(textarea, { target: { value: '## 直した見出し' } });
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'プレビュー' }));
+
+    expect(await screen.findByRole('heading', { name: '直した見出し' })).toBeTruthy();
+  });
+
+  /**
+   * 固定したいもの: **保存が 403 で断られたとき、サーバが返した理由の文言が画面に
+   * 出ていること。** これが (C) の本体である——入口を出しても理由が出なければ、
+   * 人間に見えるものは「隠す」形と変わらない。
+   *
+   * **見るのはサーバの本文の一部が現れることだけで、画面の全文は固定しない。**
+   * 完全一致で固定すると、断りの文面が良くなった日（例: `commitment_edit` が
+   * 入って「クローンに頼めば直せる」と言えるようになった日）に、無関係な PR が
+   * この歯で赤くなる。**文面の持ち主はサーバ（`apps/daemon/src/app.ts` の
+   * `PATCH /commitments/:id`）であって、この歯ではない。**
+   */
+  it('保存が 403 で断られると、サーバが返した理由が画面に出る（origin を名指しした本文）', async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      const { url, method } = request;
+      if (method === 'PATCH' && url.includes('/commitments/cmt-7')) {
+        // `apps/daemon/src/app.ts` が実際に返す 403 の本文。
+        return json(
+          {
+            error:
+              "cmt-7 は origin:'self' で、クローンやマネージャーが立てた行は人間からは直せない",
+          },
+          403,
+        );
+      }
+      if (url.includes('/commitments')) {
+        return json({
+          entries: [commitment({ id: 'cmt-7', origin: 'self', body: 'クローンが積んだ行' })],
+        });
+      }
+      return Promise.reject(new TypeError(`Failed to fetch: ${url}`));
+    }) as typeof fetch;
+    renderPage();
+
+    await screen.findByText('クローンが積んだ行');
+    fireEvent.click(screen.getByRole('button', { name: '本文を編集' }));
+    // Tabs.Root の中だけを見て取る（無関係な `Input` と role が衝突するため。
+    // 上の「編集を開くと既定タブは…」テストの注記と同じ理由）。
+    const tabsRoot = screen.getByRole('tablist').parentElement!;
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    const textarea = await within(tabsRoot).findByRole('textbox');
+    fireEvent.change(textarea, { target: { value: '直したい本文' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    const alert = await screen.findByRole('alert');
+    // サーバの本文の一部（その行の origin を名指ししている部分）が出ている。
+    expect(alert.textContent).toContain("origin:'self'");
   });
 
   it('⭐ タブを往復しても下書きが消えない', async () => {
@@ -822,6 +915,8 @@ describe('本文の編集（origin: human かつ未了）', () => {
     expect(textareaAgain.value).toBe('書きかけの本文');
   });
 
+  // 固定したいもの: human の行の編集が従来どおり通ること（回帰。入口を広げた
+  // ことで、これまで通っていた経路の送り先や本文が変わっていない）。
   it('保存すると、正しい id と本文で PATCH /commitments/{id} が呼ばれる', async () => {
     /**
      * 共有の `stubFetch` は URL しか見ないので、method で GET（一覧）と
