@@ -561,7 +561,19 @@ const managerDenialSchema = z.object({
 export const managerSummarySchema = z.object({
   managerId: z.string(),
   status: jobStatusSchema,
-  /** このデーモンから話しかけられるか（宛先を失った分だけ `false`）。 */
+  /**
+   * このデーモンから話しかけられるか（宛先を失った分だけ `false`）。
+   *
+   * **⚠️ `live: false` を「送っても届かない」と読み替えないこと（指差しだけを
+   * 置く。この欄の契約は動かしていない）。** この `false` を作っている
+   * `isLive()` の枝のうち、**器が黙ったことによる `false`（真下の
+   * `runnerLostSince` が立つ側）では、`ManagerPool.send()`（`POST
+   * /managers/:id/messages` が呼ぶ先）が届いた実測がある**（2026-08-28。
+   * `outcome: 'delivered'`）。⟹ **「送っても届かない」ことの証明ではない。**
+   * **逆に「送れば届く」でもない** —— 相手の状態によって `delivered` /
+   * `session_missing` / `unknown` のどれにもなる。実測と構造の根拠は
+   * `packages/core/src/manager.ts` の `isLive()` の doc。
+   */
   live: z.boolean(),
   /**
    * 宛先の器を、名簿が「名乗らなくなった」と判定した時刻。`live: false` の理由を

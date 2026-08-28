@@ -105,6 +105,18 @@ export interface ManagerSummary {
    * **`status: lost` と `live: true` は両立しない。** `lost` は resume を試して
    * 前のセッションへ戻れなかったという事実で、戻る先が無いのだから話しかけ
    * られない。この組を出さないのは `isLive()` の仕事である。
+   *
+   * **⚠️ `live: false` を「送っても届かない」と読み替えないこと（指差しだけを
+   * 置く。この欄の契約は動かしていない）。** `false` になる経路は1つではなく、
+   * **器が黙ったことによる `false`（真下の `runnerLostSince` が立つ側）では
+   * `send()` が届いた実測がある**（2026-08-28。`outcome: 'delivered'`）。⟹
+   * `live: false` は「送っても届かない」ことの**証明ではない** —— デーモン自身が
+   * 同じ水準で名乗っている（`#runnerNotOpenDetail` の逐語「これは『いま開いた
+   * 宛先が無い』という観測であって、戻せないことの証明ではない」）。
+   *
+   * **逆に「送れば届く」でもない。** 実測では相手の状態によって `delivered` /
+   * `session_missing` / `unknown` のどれにもなる。**実測と構造の根拠は
+   * `isLive()` の doc（このファイル内）が持つ。**
    */
   live: boolean;
   /**
@@ -5510,6 +5522,12 @@ function isLive(record: ManagerRecord, silentRunners: ReadonlyMap<string, string
   // **「戻れなかった（`lost`）」と「戻る先が無い（session_id なし）」を潰しては
   // いない** — どちらなのかは `status` と `sessionId` が別々に持ったままで、
   // `live` が言うのは「話しかけられるか」だけである。
+  //
+  // **⚠️ ただし「`live: false` ＝ 送っても届かない」ではない（指差しだけ。この
+  // 関数の返り値は動かしていない）。** 上の `silentRunners` の枝で `false` に
+  // なった委譲へ `send()` が届いた実測がある（その枝の doc）。**ここで言える
+  // 強さは `#runnerNotOpenDetail` が自分の口で名乗っている水準まで** ——
+  // 「戻せないことの証明ではない」。
   return record.job.sessionId !== undefined;
 }
 
