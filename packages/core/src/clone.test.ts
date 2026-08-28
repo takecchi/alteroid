@@ -7969,21 +7969,18 @@ describe('クローン — 同じマネージャーの連続する report をま
     const inputs = (s.calls[0] as FakeCall).inputs;
     expect(inputs).toHaveLength(2);
     const solo = inputs[1] ?? '';
-    // **`managerPrompt` がそのまま出す1件の形が、部分文字列としてそのまま載る。**
-    // 完全一致にしない ── 先客の未了が台帳に残っているので `#commitmentNoticeFor`
-    // の断り書きが前に付く（この直しとは無関係な既存の仕組み）。ここで見たいのは
-    // まとめ読みの前置きを足していないことなので、`managerPrompt` の出力全体が
-    // 1文字も変わらず含まれていることを見る。
+    // **`managerPrompt` が出す1件の形をそのまま通していることを見る。**
+    // ⚠️ 逐語の完全一致では固定しない ── 本文には #562 PR-1 が入れた「受け取って
+    // からの経過」が挟まり、その値は時刻に依存する。ここで見たいのは**まとめ読みの
+    // 前置きを足していないこと**なので、単発の経路が持つべき要素の有無で固定する。
+    expect(solo).toContain('[system] マネージャー mgr-Z から届いた。（報告）');
+    expect(solo).toContain('単独の報告');
+    // 単発の経路にも経過は載る（PR-1。まとめた側だけの性質にしない）。
+    expect(solo).toContain('受け取ってから');
     expect(solo).toContain(
-      [
-        '[system] マネージャー mgr-Z から届いた。（報告）',
-        '',
-        '単独の報告',
-        '',
-        '続きが要るなら `manager_send` で指示を出し、要らないなら何もしなくてよい。',
-        '学びや判断の基準になったことがあれば記憶へ移すこと。',
-      ].join('\n'),
+      '続きが要るなら `manager_send` で指示を出し、要らないなら何もしなくてよい。',
     );
+    expect(solo).toContain('学びや判断の基準になったことがあれば記憶へ移すこと。');
     // まとめ読みの前置き（「続けて」「まとめて読んでから」等）が1文字も載らない。
     expect(solo).not.toContain('続けて');
     expect(solo).not.toContain('まとめて読んでから');
