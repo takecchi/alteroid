@@ -165,6 +165,59 @@ export interface ManagerSummary {
    * それは欠落ではなく、材料をこれ以上増やさないという判断の帰結である。
    */
   sessionMissingSince?: string;
+  /**
+   * **デーモンが生ログの末尾を読んで計算した、直近のターンが終わっているらしい
+   * という助言**（Issue #567）。`probeTurnEnd`（このファイル）が見つけた行の
+   * `timestamp`。見つけていなければ**欄ごと消える**。
+   *
+   * **`sessionMissingSince` と同じ形の欄である。** runner が名乗る値ではなく、
+   * デーモンが自分で計算した値——像が正本で（`ManagerPool#probeTurnEnds`）、
+   * 再起動すれば消え、次のポーリングで計算し直す。台帳（`Job`）へは書かない。
+   *
+   * **判定ではない。** ここに出るのは「本文の有無を問わず、末尾から遡って
+   * 最初に見つかった assistant 行が `tool_use` 以外の `stop_reason` で終わって
+   * いた」という**事実**だけで、「報告が届いていない」「止まっている」という
+   * 結論はこの欄自身は持たない。読む側が `lastReportAt`（`record.job.
+   * lastReportAt` = デーモンが report イベントを受け取った時刻）と突き合わせて
+   * 判定する——`turnEndedAt > lastReportAt` なら、ターンは終わっているのに
+   * その報告がまだ届いていない、という読み方になる。
+   *
+   * **切らない・殺さない・止めない。** この欄が立っても `status` は動かさず、
+   * どの委譲も abort しない、貸し出し期限も縮めない——`ManagerPool#
+   * probeTurnEnds` は知らせるだけである。
+   *
+   * **`AskUserQuestion` が届かず応答待ちで止まる形（#572）はここに映らない。**
+   * あの止まり方の末尾は `stop_reason: 'tool_use'` で、`probeTurnEnd` は
+   * 定義上それを「働いている最中」と読む——射程の外である。
+   */
+  turnEndedAt?: string;
+  /**
+   * **`turnEndedAt` と対で運ぶ**（Issue #567）。上の行が持つ `message.
+   * stop_reason` をそのまま写す（`end_turn` / `stop_sequence` / その他）。
+   *
+   * **枠の壁（`stop_sequence`）と #567 の「ターンが終わったのに報告が届かない」
+   * は別の原因である。** この欄で言い分けられるようにしてあるので、読む側は
+   * `stop_sequence` を「配られていない」と混同しないこと。
+   *
+   * **`probeTurnEnd` が何も見つけなかった（`undefined` を返した）ときは
+   * `turnEndedAt` と一緒に欄ごと消える。** ただし `turnEndedAt` は見つかった
+   * 行が `timestamp` を持たないときに単独で欠けうる（`TurnEndProbe.
+   * timestamp` の doc）——その場合でもこの欄は載る。**「`turnEndedAt` が無い
+   * ＝この欄も無い」ではない。**
+   */
+  turnEndReason?: string;
+  /**
+   * **`turnEndedAt` と対で運ぶ**（Issue #567）。その行の本文
+   * （`type: 'text'` ブロックの連結）の末尾の抜粋。本文が無い行（思考だけ・
+   * 道具だけの行）なら空文字。
+   *
+   * **全文ではない。** 一覧・詳細の応答へそのまま載るので、`manager_transcript`
+   * / `GET /managers/:id/transcript` の全文取得へ案内する代わりに短い抜粋だけを
+   * 添える（`NOTIFY_REPORT_EXCERPT` と同じ理由）。
+   *
+   * 消え方は `turnEndReason` と同じ（直上の doc）。
+   */
+  turnEndTail?: string;
   cwd: string;
   request: string;
   startedAt: string;
@@ -701,6 +754,25 @@ export interface ManagerPool {
    * 載るだけである。
    */
   reattachRunner(runnerId: string): Promise<void>;
+  /**
+   * 走行中のマネージャーについて、生ログの末尾から「ターンが終わっているらしい」
+   * という助言を計算し直す（Issue #567）。
+   *
+   * **知らせるだけである。** 呼んでも `status` は動かず、どの委譲も abort
+   * しない、貸し出し期限も縮まない——結果は `ManagerSummary.turnEndedAt` /
+   * `turnEndReason` / `turnEndTail` へ載るだけで、判定（報告が届いていない
+   * かどうか）は読む側が `lastReportAt` と突き合わせて行う。
+   *
+   * **費用の門があり、判定の門は無い。** 対象を絞るのは「これ以上生ログを
+   * 読みに行くコストを払わない」ためであって、「症状かどうか」を判定する
+   * ためではない——絞り込みの詳細は実装（`apps/daemon/src/turn-end-poller.ts`
+   * から 60 秒ごとに呼ばれる）の doc を参照。
+   *
+   * **1件の失敗で残りを止めない。** ここで投げると、呼び出し元
+   * （デーモンのポーラー）のループごと止まり、以後の全マネージャーの助言が
+   * 更新されなくなる。
+   */
+  probeTurnEnds(): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -873,6 +945,23 @@ interface ManagerRecord {
    */
   sessionMissingSince?: string;
   /**
+   * **デーモンが生ログの末尾を読んで計算した、直近のターンが終わっているらしい
+   * という助言**（Issue #567。`ManagerSummary` の同名の3欄へそのまま出る）。
+   *
+   * **`sessionMissingSince` と同じ扱いである。** プロセス内の像にしか置かない
+   * （`Job` へは書かない）。デーモンを作り直したら消える——次のポーリング
+   * （`ManagerPool#probeTurnEnds`）が計算し直すので、失っても嘘は残らない。
+   *
+   * 3欄は `probeTurnEnd` の1回の呼び出しで一緒に立ち、一緒に消える
+   * （`turnEndedAt` だけ欠けることはある——`TurnEndProbe.timestamp` が
+   * `undefined` のとき）。
+   */
+  turnEndedAt?: string;
+  /** `turnEndedAt` と対で運ぶ（`ManagerSummary.turnEndReason` の doc）。 */
+  turnEndReason?: string;
+  /** `turnEndedAt` と対で運ぶ（`ManagerSummary.turnEndTail` の doc）。 */
+  turnEndTail?: string;
+  /**
    * **一度でもクローンへ配った確認の id。**
    *
    * `waiting` は「いま待っている」ものしか持たない。それだけで重複を見ると、
@@ -956,6 +1045,165 @@ interface ManagerRecord {
  *   の問題ではない — `ambiguous` と同じ言い方をしないための区別である
  */
 type LeaseRefusalKind = 'held' | 'ambiguous' | 'persist-failed';
+
+// -------------------------------------------------------------------------
+// ターン終了の探り（Issue #567）
+// -------------------------------------------------------------------------
+
+/**
+ * 末尾から遡る量（文字）。`tools.ts` の `REPORT_GENERATED_PROBE_CHARS` と
+ * 同じ理由・同じ桁——生ログは MB 級になりうるので（実測で 1.7MB の例がある）、
+ * 全行を `JSON.parse` しない。
+ */
+const TURN_END_PROBE_CHARS = 200_000;
+
+/** `TurnEndProbe.tail` に残す、本文の末尾の厚み。 */
+const TURN_END_TAIL_EXCERPT = 400;
+
+/**
+ * `Pool#probeTurnEnds` の**費用の門**（判定の門ではない）。マネージャーの
+ * `updatedAt` からこれ以上経っていなければ引かない——動いているものを
+ * 生ログの読み直しで叩かない。
+ *
+ * **判定の閾値ではない。** ここで弾かれても「症状ではない」とは言えない
+ * （まだ引いていないだけ）。逆にここを通っても「症状である」とは言わない
+ * （`probeTurnEnd` が改めて計算する）。
+ */
+const TURN_END_PROBE_QUIET_MS = 10 * 60_000;
+
+/**
+ * バックオフ（旗が立っていない＝直前の探りが `undefined` だった相手への
+ * 再探りの間隔）。
+ */
+const TURN_END_PROBE_BACKOFF_MS = 60_000;
+
+/**
+ * バックオフ（旗が立っている＝直前の探りが `TurnEndProbe` を返した相手への
+ * 再探りの間隔）。**立っている相手のほうを長くする**——一度計算した助言は
+ * `probeTurnEnd` の入力（生ログの末尾）が動かない限り変わらないので、
+ * 何度も同じ結論を出すために読み直す必要が薄い。
+ */
+const TURN_END_PROBE_BACKOFF_FLAGGED_MS = 5 * 60_000;
+
+/**
+ * `probeTurnEnd` が生ログの末尾から計算した、直近のターンが終わっているらしい
+ * という**助言**（Issue #567）。
+ *
+ * **判定ではない。** ここに出るのは事実（見つかった行の `timestamp` /
+ * `stop_reason` / 本文の末尾）だけで、「報告が届いていない」「止まっている」
+ * という結論はこの型が持たない——結論は読む側（`ManagerSummary.turnEndedAt`
+ * の doc）が `turnEndedAt` と `lastReportAt` を突き合わせて出す。
+ */
+export interface TurnEndProbe {
+  /** その行の `timestamp`（無ければ `undefined`——古い形式は省略しうる）。 */
+  timestamp: string | undefined;
+  /** その行の `message.stop_reason`（文字列のときしか呼び出し元まで来ない）。 */
+  stopReason: string;
+  /** その行の本文（`type: 'text'` ブロックの連結）の末尾の抜粋。無ければ空文字。 */
+  tail: string;
+}
+
+/**
+ * `probeTurnEnd` が使う、assistant 行の `message.content` から `type: 'text'`
+ * ブロックだけを取り出す。
+ *
+ * **`tools.ts` の `rawAssistantText` と中身はほぼ同じだが、意図的に別関数に
+ * してある。** 統合すると2つの探り（`probeLastAssistantUtterance` と
+ * `probeTurnEnd`）が結合し、どちらかの規則を直したときにもう片方が黙って
+ * 追随する——`probeTurnEnd` の doc が書いている「流用しない」理由の実装面。
+ */
+function turnEndBodyOf(content: unknown): string {
+  if (typeof content === 'string') return content.trim();
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter(
+      (block): block is { type: 'text'; text: string } =>
+        typeof block === 'object' &&
+        block !== null &&
+        (block as { type?: unknown }).type === 'text' &&
+        typeof (block as { text?: unknown }).text === 'string',
+    )
+    .map((block) => block.text)
+    .join('\n')
+    .trim();
+}
+
+/**
+ * 生ログ（Claude Code の JSONL）の末尾から、直近のターンが**もう働いていない**
+ * らしいことを計算する（Issue #567）。**何も切らない・殺さない・止めない**——
+ * この関数は計算だけを行う純関数で、呼び出し側（`ManagerPool#probeTurnEnds`）が
+ * この結果で `status` を書き換えたり委譲を abort したりしないことを保証する。
+ *
+ * **`tools.ts` の `probeLastAssistantUtterance` を流用しない。** あちらは
+ * 「本文が空の行を飛ばして、生成された本文を探す」ための道具で、
+ * `if (body.length === 0) continue;` を持つ——**思考だけの行・道具だけの行を
+ * 読み飛ばして、もっと古い（別の）ターンの assistant 行まで遡ってしまう。**
+ *
+ * この repo の生ログ8本を時点ごとに再生した実測（2026-08-28 観測）:
+ * ```
+ * 既存の規則が「end_turn」と言う時点                          68
+ *  うち 最後の assistant 行が実は tool_use（＝働いている最中）  37   ← 54% が偽陽性
+ * 乖離が続いた最長の窓                                        12.6分
+ * ```
+ * 理由: あるターンが本文を1度も出さずに道具だけを回している間、既存の規則は
+ * 「本文がある行」を探して**1つ前のターンの `end_turn` まで遡ってしまう。**
+ * この関数は逆に、**最初に見つかった assistant 行を無条件に答えとする**
+ * ——本文の有無では1行も飛ばさない。
+ *
+ * 規則:
+ * 1. 末尾から `TURN_END_PROBE_CHARS` 文字だけを切り出す。切り出したら先頭の
+ *    1行を捨てる（途中で切れた行の可能性があるため）。
+ * 2. 末尾の行から遡る。`JSON.parse` に失敗した行は飛ばす。
+ * 3. `type !== 'assistant'` の行、`isSidechain === true` の行（作業者の発言）は
+ *    飛ばす。
+ * 4. それ以外は、**本文の有無を問わず**最初に見つかった行を採用する（思考だけ・
+ *    道具だけの行もその行が答え）。
+ * 5. その行の `message.stop_reason` が文字列でなければ `undefined` を返す
+ *    （分からないものを症状に化けさせない）。
+ * 6. `stop_reason === 'tool_use'` なら `undefined` を返す（働いている最中）。
+ * 7. それ以外（`end_turn` / `stop_sequence` / 未知の値）なら `TurnEndProbe` を
+ *    返す。`tail` は本文の末尾 `TURN_END_TAIL_EXCERPT` 文字程度。
+ * 8. 1行も `assistant` が見つからなければ `undefined`。
+ */
+export function probeTurnEnd(transcript: string): TurnEndProbe | undefined {
+  const truncated = transcript.length > TURN_END_PROBE_CHARS;
+  const window = truncated ? transcript.slice(-TURN_END_PROBE_CHARS) : transcript;
+  const rawLines = window.split('\n');
+  const lines = truncated ? rawLines.slice(1) : rawLines;
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index]!.trim();
+    if (line.length === 0) continue;
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const record = entry as {
+      type?: unknown;
+      isSidechain?: unknown;
+      timestamp?: unknown;
+      message?: { content?: unknown; stop_reason?: unknown };
+    };
+    if (record.type !== 'assistant') continue;
+    if (record.isSidechain === true) continue; // 作業者の発言
+
+    // **本文の有無でここを飛ばさない。** 最初に見つかった assistant 行が答え
+    // （`probeLastAssistantUtterance` との違いそのもの）。
+    const stopReason = record.message?.stop_reason;
+    if (typeof stopReason !== 'string') return undefined;
+    if (stopReason === 'tool_use') return undefined;
+
+    const body = turnEndBodyOf(record.message?.content);
+    return {
+      timestamp: typeof record.timestamp === 'string' ? record.timestamp : undefined,
+      stopReason,
+      tail: body.length > TURN_END_TAIL_EXCERPT ? body.slice(-TURN_END_TAIL_EXCERPT) : body,
+    };
+  }
+  return undefined;
+}
 
 /**
  * 「知らせ」（`#notifyRestored` / `#notifyUnresumable` / `#notifyResumeFallback`）が
@@ -1244,6 +1492,15 @@ class Pool implements ManagerPool {
    * 弱参照なのは、名簿から外れた runner をここが握り続けないためである。
    */
   readonly #connections = new WeakMap<RunnerClient, Promise<void>>();
+  /**
+   * `probeTurnEnds` が最後に生ログを読みに行った時刻（managerId → `#now()`。
+   * Issue #567）。**費用の門のバックオフにしか使わない**——ここに載ったこと
+   * 自体は「症状である」を意味しない。
+   *
+   * **揮発してよい。** デーモンを作り直したら空になり、次の周期で全件を
+   * 対象に取り直す（バックオフが効かないだけで、壊れはしない）。
+   */
+  readonly #turnEndProbedAt = new Map<string, number>();
   /** 名簿の購読を解く（`stop` で外す。外し忘れると止めたプールが後から動く）。 */
   readonly #unsubscribe: () => void;
   #stopped = false;
@@ -1447,6 +1704,9 @@ class Pool implements ManagerPool {
       isLive(record, silent),
       lostSinceOf(record, silent),
       record.sessionMissingSince,
+      record.turnEndedAt,
+      record.turnEndReason,
+      record.turnEndTail,
     );
   }
 
@@ -1707,6 +1967,9 @@ class Pool implements ManagerPool {
           isLive(record, silent),
           lostSinceOf(record, silent),
           record.sessionMissingSince,
+          record.turnEndedAt,
+          record.turnEndReason,
+          record.turnEndTail,
         ),
       );
     }
@@ -1726,6 +1989,9 @@ class Pool implements ManagerPool {
           isLive(fallback, silent),
           lostSinceOf(fallback, silent),
           fallback.sessionMissingSince,
+          fallback.turnEndedAt,
+          fallback.turnEndReason,
+          fallback.turnEndTail,
         ),
       );
     }
@@ -1916,6 +2182,92 @@ class Pool implements ManagerPool {
   }
 
   /**
+   * 走行中のマネージャーについて、生ログの末尾から「ターンが終わっているらしい」
+   * という助言を計算し直す（Issue #567。`ManagerPool` interface の doc に
+   * 「切らない・殺さない・止めない」の約束がある）。
+   *
+   * **対象の門は費用の門であって、判定の門ではない。** 絞るのは「これ以上
+   * 生ログを読みに行くコストを払わない」ためだけで、絞られた側について
+   * 「症状ではない」とは一度も言わない:
+   *
+   * - `record.job.status === 'running'` のものだけ（動いていない委譲を
+   *   読み直しても、その助言は誰の判断にも効かない）
+   * - `record.job.updatedAt` から `TURN_END_PROBE_QUIET_MS` 経っていない
+   *   ものは引かない（動いているものを叩かない）
+   * - 直近に引いたものはバックオフで飛ばす（旗——`turnEndedAt` の有無——で
+   *   間隔を変える。`TURN_END_PROBE_BACKOFF_MS` / `_FLAGGED_MS` の doc）
+   *
+   * **1件の失敗でループを止めない。** `#probeTurnEndOf` は自分の中で例外を
+   * 握るが、呼び出しそのもの（`Map` の走査）が投げないことも二重に守る。
+   */
+  async probeTurnEnds(): Promise<void> {
+    const now = this.#now();
+    for (const record of this.#records.values()) {
+      try {
+        if (record.job.status !== 'running') continue;
+        const updatedAt = Date.parse(record.job.updatedAt);
+        if (!Number.isNaN(updatedAt) && now - updatedAt < TURN_END_PROBE_QUIET_MS) continue;
+
+        const managerId = record.job.id;
+        const lastProbedAt = this.#turnEndProbedAt.get(managerId);
+        const backoffMs =
+          record.turnEndedAt === undefined
+            ? TURN_END_PROBE_BACKOFF_MS
+            : TURN_END_PROBE_BACKOFF_FLAGGED_MS;
+        if (lastProbedAt !== undefined && now - lastProbedAt < backoffMs) continue;
+
+        this.#turnEndProbedAt.set(managerId, now);
+        await this.#probeTurnEndOf(record);
+      } catch {
+        // **1件の失敗で残りを止めない**（interface の doc）。この委譲の3欄は
+        // 更新されないまま残る——古い助言が残ることはあるが、それは
+        // `sessionMissingSince` と同じ「揮発してよい」側の代償である。
+      }
+    }
+  }
+
+  /**
+   * `probeTurnEnds` の1件ぶん。生ログを読み、`probeTurnEnd` へ渡し、結果を
+   * `record` の3欄へ書く。
+   *
+   * **返り値が読めない・解析できないときは3欄を`undefined`に戻す**
+   * （interface の doc「分からないものを症状に化けさせない」の実装）。
+   * 新しい HTTP の口は開かない——`transcript()` が既に持っている3段
+   * （runner のディスク → 退避済みアーカイブ → 預かったセッション）を
+   * そのまま使う。
+   */
+  async #probeTurnEndOf(record: ManagerRecord): Promise<void> {
+    let transcript: string | null;
+    try {
+      transcript = await this.transcript(record.job.id);
+    } catch {
+      transcript = null;
+    }
+    if (transcript === null || transcript.length === 0) {
+      delete record.turnEndedAt;
+      delete record.turnEndReason;
+      delete record.turnEndTail;
+      return;
+    }
+
+    const probe = probeTurnEnd(transcript);
+    if (probe === undefined) {
+      delete record.turnEndedAt;
+      delete record.turnEndReason;
+      delete record.turnEndTail;
+      return;
+    }
+
+    if (probe.timestamp === undefined) {
+      delete record.turnEndedAt;
+    } else {
+      record.turnEndedAt = probe.timestamp;
+    }
+    record.turnEndReason = probe.stopReason;
+    record.turnEndTail = probe.tail;
+  }
+
+  /**
    * 起動時に、走っていたマネージャーを拾い直す。
    *
    * 2通りある。**runner が生きていれば、そのセッションはまだ手を動かしている**
@@ -2065,6 +2417,9 @@ class Pool implements ManagerPool {
             isLive(record, silent),
             lostSinceOf(record, silent),
             record.sessionMissingSince,
+            record.turnEndedAt,
+            record.turnEndReason,
+            record.turnEndTail,
           ),
         );
         continue;
@@ -2163,6 +2518,9 @@ class Pool implements ManagerPool {
             isLive(record, silent),
             lostSinceOf(record, silent),
             record.sessionMissingSince,
+            record.turnEndedAt,
+            record.turnEndReason,
+            record.turnEndTail,
           ),
         );
       } catch (error) {
@@ -5143,6 +5501,9 @@ function summaryOf(
   live: boolean,
   runnerLostSince: string | undefined,
   sessionMissingSince: string | undefined,
+  turnEndedAt: string | undefined,
+  turnEndReason: string | undefined,
+  turnEndTail: string | undefined,
 ): ManagerSummary {
   const { job } = record;
   return {
@@ -5156,6 +5517,14 @@ function summaryOf(
     // 委譲のセッションを持っている」という主張になって外へ出る。呼ぶ側は
     // `record.sessionMissingSince` をそのまま渡せばよい（像が正本である）。
     ...(sessionMissingSince === undefined ? {} : { sessionMissingSince }),
+    // **同上（Issue #567）。** 呼ぶ側は `record.turnEndedAt` 等をそのまま渡せば
+    // よい（像が正本である）。3欄は `probeTurnEnd` の1回の呼び出しで一緒に
+    // 立ち一緒に消えるのが通常だが、`turnEndedAt` だけは元の行が `timestamp`
+    // を持たないとき単独で欠けうる（`TurnEndProbe.timestamp` の doc）ので、
+    // ここでは3つを独立に出し分ける——`turnEndedAt` の有無で残り2つを畳まない。
+    ...(turnEndedAt === undefined ? {} : { turnEndedAt }),
+    ...(turnEndReason === undefined ? {} : { turnEndReason }),
+    ...(turnEndTail === undefined ? {} : { turnEndTail }),
     cwd: job.cwd ?? '',
     request: job.request ?? job.summary,
     startedAt: job.createdAt,

@@ -37,6 +37,7 @@ function stubClone(): CloneHost {
     transcript: () => Promise.resolve(null),
     restore: () => Promise.resolve([]),
     reattachRunner: () => Promise.resolve(),
+    probeTurnEnds: () => Promise.resolve(),
     stop: () => Promise.resolve(),
   };
   return {

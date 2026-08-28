@@ -591,6 +591,32 @@ export const managerSummarySchema = z.object({
    * と同じ断り。落ちると CLI と Web の両方が同時に盲目になる）。
    */
   sessionMissingSince: z.string().optional(),
+  /**
+   * **デーモンが生ログの末尾を読んで計算した、直近のターンが終わっているらしい
+   * という助言**（Issue #567。`packages/core/src/manager.ts` の
+   * `ManagerSummary.turnEndedAt`）。
+   *
+   * **判定ではない。** runner が名乗る値ではなく、デーモンが計算した値——
+   * `sessionMissingSince` と同じ扱いである。`status` を書き換える・委譲を
+   * abort する・貸し出し期限を縮める、のどれもしない。読む側が
+   * `lastReportAt` と突き合わせて判定する。
+   *
+   * **ここに宣言しないと、値が在っても黙って落ちる**（真上の
+   * `sessionMissingSince` と同じ断り）。
+   */
+  turnEndedAt: z.string().optional(),
+  /**
+   * `turnEndedAt` と対で運ぶ（`packages/core/src/manager.ts` の
+   * `ManagerSummary.turnEndReason`）。`end_turn` / `stop_sequence` などの
+   * `stop_reason` をそのまま写す——枠の壁（`stop_sequence`）と #567 の症状
+   * （ターンが終わったのに報告が届かない）を混同しないための欄。
+   */
+  turnEndReason: z.string().optional(),
+  /**
+   * `turnEndedAt` と対で運ぶ（`packages/core/src/manager.ts` の
+   * `ManagerSummary.turnEndTail`）。その行の本文の末尾の抜粋（全文ではない）。
+   */
+  turnEndTail: z.string().optional(),
   cwd: z.string(),
   request: z.string(),
   startedAt: z.string(),
@@ -1165,6 +1191,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     },
     reattachRunner() {
       throw new Error('spec 生成専用のスタブ: 取り直しはしない');
+    },
+    probeTurnEnds() {
+      throw new Error('spec 生成専用のスタブ: ターン終了の探りはしない');
     },
     stop() {
       throw new Error('spec 生成専用のスタブ');
