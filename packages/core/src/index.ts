@@ -273,6 +273,24 @@ export {
   type JournalSearchTarget,
 } from './journal-search.js';
 /**
+ * 蒸留が間に合わなかった区間（＝記憶へ移らなかった区間）の検出（issue #564 の (b)）。
+ * **「蒸留を始めた」ではなく「蒸留が成功で終わった」記録で数える** — 開始で数えると、
+ * 始めたが完了しなかった回（まさに検出したい形）が「蒸留した」として落ちる
+ * （`distill-gap.ts` の doc）。判定の基準はそこ1本に閉じる。
+ */
+export {
+  DISTILL_GAP_ACTIVITY_SCAN_LIMIT,
+  DISTILL_GAP_NOTICE_HEAD,
+  DISTILL_SUCCEEDED_DECISION_PREFIX,
+  countsAsUndistilledActivity,
+  deriveDistillGapFromJournal,
+  describeDistillGap,
+  distillSucceededEntry,
+  isDistillSucceededEntry,
+  type DistillGap,
+  type DistillReason,
+} from './distill-gap.js';
+/**
  * `JournalStore` の `q`（本文を語で探す）の契約（issue #250）。3実装
  * （インメモリ / `storage-fs` / `storage-pg`）それぞれの歯がこれを呼んで
  * 揃っていることを測る — 1つで測って3つとも測ったことにしない
