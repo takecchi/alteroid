@@ -622,6 +622,20 @@ const SESSION_USAGE_READ_TIMEOUT_MS = 5_000;
 const SUBAGENT_STOP_NOTE_TEXT_LIMIT = 1_500;
 
 /**
+ * `#backgroundTaskOwners`（背景タスクの id → それを起こした主体）が持つ件数の
+ * 上限（#570）。
+ *
+ * **超えたら「いちばん古いもの」から捨てる。** `Map` の挿入順をそのまま使う。
+ * 落ちるのが古い側なのは、この表を引くのが `SubagentStop` の瞬間 —— つまり
+ * **登録の直後**だからである（実測: 登録から 1.4 秒後に引いた）。新しい側を
+ * 落とすと、いま畳もうとしている作業者の分がまず消える。
+ *
+ * ⚠️ **捨てたことは外から見えない。** 捨てた分は「所有者を引けない」に落ち、
+ * `#onSubagentStop` の診断（1セッションに1回）でだけ表に出る。
+ */
+const BACKGROUND_TASK_OWNER_LIMIT = 500;
+
+/**
  * control channel の `get_usage` だけを抜き出した顔。
  *
  * **省略可能にしてある。** 実験的な口（長い名前のあれ）は SDK 側で改名・削除され
@@ -878,15 +892,25 @@ class RunnerSession {
   /** このターンで `UserPromptSubmit` がマネージャー自身に発火した回数（`result` で畳む）。 */
   #submitsSinceResult = 0;
   /**
-   * `SubagentStop` がこのセッションで一度でも発火したか（#357 の観測口。
-   * `#onSubagentStop` の doc を見よ）。
+   * 背景タスクの id → **それを起こした主体**（#570）。
    *
-   * **これが要る理由 — 「フックが一度も発火していない」と「発火しているが
-   * `background_tasks` が常に空」を後から区別するため。** 区別できないと、
-   * フックが繋がっていない・SDK がまだこの版で発火させていないという静かな
-   * 欠落を、「作業者はいつも背景処理を残さず終わっている」と誤読しかねない。
+   * 値は作業者の `agent_id`。**マネージャー自身が起こしたものは空文字 `''`**
+   * にする —— 「マネージャーのものだった」と「表に無い（引けなかった）」を
+   * 混ぜないため。混ぜると、経路が壊れて表が空になった状態が「全部マネージャー
+   * のものだった」に化ける。
+   *
+   * **作るのは `#onPostToolUse`、引くのは `#onSubagentStop`。** その間だけ
+   * runner が状態を持つ。寿命はセッションと同じで、`BACKGROUND_TASK_OWNER_LIMIT`
+   * 件を超えたら古い側から捨てる。
    */
-  #subagentStopSeen = false;
+  #backgroundTaskOwners = new Map<string, string>();
+  /**
+   * 「所有者を引けなかった」診断を、このセッションで既に出したか（#570）。
+   *
+   * 診断は**1セッションに1回だけ**出す。毎回出すと、壊れていることの通知が
+   * そのまま雑音になって読まれなくなる。
+   */
+  #ownerLookupFailureNoted = false;
   /**
    * `UserPromptSubmit` の `source` ごとの件数（`result` で畳む）。
    *
@@ -2227,11 +2251,19 @@ class RunnerSession {
     return result;
   }
 
-  /** マネージャーと作業者の全ツール実行をデーモンの日誌へ（監査）。 */
+  /**
+   * マネージャーと作業者の全ツール実行をデーモンの日誌へ（監査）。
+   *
+   * **併せて、背景タスクの所有者を控える**（#570。`#backgroundTaskOwners`）。
+   * ここでしか取れない —— `SubagentStop` の `background_tasks[]` に所有者の欄が
+   * 無く、作業者の生ログ側にも構造化された形では出ないためである（実測: 生ログ
+   * に出るのは `Command running in background with ID: …` という**自由文**だけ）。
+   */
   async #onPostToolUse(input: unknown): Promise<{ continue: true }> {
     const hook = input as {
       tool_name?: string;
       tool_input?: unknown;
+      tool_response?: unknown;
       transcript_path?: string;
       agent_id?: string;
       agent_type?: string;
@@ -2256,7 +2288,43 @@ class RunnerSession {
       input: hook.tool_input,
     });
 
+    this.#recordBackgroundTaskOwner(hook.tool_response, hook.agent_id);
+
     return { continue: true };
+  }
+
+  /**
+   * 背景タスクを起こした主体を控える（#570。`#onPostToolUse` から呼ぶ）。
+   *
+   * **実測（SDK 0.3.247。`out8/hooks.jsonl` の逐語）:**
+   *
+   * ```
+   * PostToolUse  agent_id=aa070833e2cf03a72  tool_name=Bash
+   *              tool_response={… "backgroundTaskId":"b4kk5s3qh"}
+   * SubagentStop agent_id=aa070833e2cf03a72
+   *              background_tasks=[…, {"id":"b4kk5s3qh","type":"shell", …}]
+   * ```
+   *
+   * ⟹ **`tool_response.backgroundTaskId` と `background_tasks[].id` は同じ値**
+   * であり、同じ入力に `agent_id` が在る。これが所有者を引ける唯一の経路である。
+   *
+   * **入力は防御的に読む。** `tool_response` の形は SDK 側の都合で変わりうるので、
+   * 文字列の `backgroundTaskId` が在るときだけ控える（無ければ何もしない）。
+   */
+  #recordBackgroundTaskOwner(toolResponse: unknown, agentId: string | undefined): void {
+    if (typeof toolResponse !== 'object' || toolResponse === null) return;
+    const taskId = (toolResponse as { backgroundTaskId?: unknown }).backgroundTaskId;
+    if (typeof taskId !== 'string' || taskId.length === 0) return;
+
+    // マネージャー自身の分は空文字で控える（「引けなかった」と混ぜないため）。
+    this.#backgroundTaskOwners.set(taskId, agentId ?? '');
+
+    // 上限を超えたら古い側から捨てる（理由は `BACKGROUND_TASK_OWNER_LIMIT`）。
+    while (this.#backgroundTaskOwners.size > BACKGROUND_TASK_OWNER_LIMIT) {
+      const oldest = this.#backgroundTaskOwners.keys().next();
+      if (oldest.done === true) break;
+      this.#backgroundTaskOwners.delete(oldest.value);
+    }
   }
 
   /**
@@ -2303,24 +2371,44 @@ class RunnerSession {
    * 足すと古い runner が居る窓が開く。`note` は既存の口で、`manager.ts` の
    * `case 'note'` が日誌にだけ残し受信箱へは出さないので、雑音にもならない。
    *
+   * ## ⚠️ `background_tasks` が非空であることは、空転の署名では **ない**
+   *
+   * ここは元々「非空＝作業者が背景処理を待って畳んだ署名」として書かれていた。
+   * **実測（SDK 0.3.247。#570 に生 JSON が在る）で反証された:**
+   *
+   * 1. **畳もうとしている当人が必ず配列に入る**（`id` = `agent_id` /
+   *    `type=subagent` / `status=running`）⟹ 発火4回すべてで非空だった。
+   *    ⟹ 「空なら最初の1回だけ記録する」という枝には**到達しない**
+   * 2. **兄弟の作業者も入る** — 道具を1つも使わない作業者の配列に、走っている
+   *    別の作業者が載った ⟹ 件数では「この作業者が待っている」が言えない
+   * 3. **`BackgroundTaskSummary` に所有者の欄が無い**（`id` / `type` / `status` /
+   *    `description` / `command?` / `agent_type?` / `server?` / `tool?` / `name?`）
+   *
+   * ⟹ **だから絞る。** 所有者は `#onPostToolUse` が控えている
+   * （`#recordBackgroundTaskOwner`。`tool_response.backgroundTaskId` と
+   * `background_tasks[].id` が同じ値であることは実測済み）。
+   *
    * **`note` を出す条件は2つ:**
-   * 1. `background_tasks` が空でないとき — 毎回出す（＝作業者が「追跡中の
-   *    背景処理が在るまま」ターンを閉じた瞬間。これが空転の署名である）
-   * 2. このセッションでこのフックが最初に発火したとき — 中身が空でも1回だけ
-   *    出す。**理由**: これが無いと「フックが1度も発火していない」（配線漏れ・
-   *    この SDK 版がまだ発火させていない、等）と「発火しているが配列が常に
-   *    空」（＝作業者は毎回きれいに畳んでいる）が、日誌の上で区別できない。
-   *    **1回だけにする**のは、毎ターン出すと作業者のターン数だけ日誌が伸びる
-   *    ためである。
+   * 1. **当人が起こした背景処理が1件以上残っているとき** — それだけを載せる。
+   *    セッション全体の在庫の件数も併記する（生の値を隠さないため）
+   * 2. **所有者を引けなかったとき** — 1セッションに1回だけ（`#noteOwnerLookupFailure`）
+   *
+   * **当人だけ／兄弟だけのときは、何も出さない。** これがこの直しの本体である。
+   *
+   * ## ⚠️ この `note` が出ないことは「空転が無かった」を意味しない
+   *
+   * **フックの発火そのものが条件付きである。** 実測では、作業者の完了8件のうち
+   * 発火は4件で、**「畳んだ瞬間に親のターンが開いていたか」で8件が8件とも
+   * 割れた**（親が先に閉じていた4件は発火していない）。そして委譲は既定で
+   * `is_backgrounded: true` なので、**親が先に閉じる形が本番では普通である。**
+   * ⟹ 拾えるのは一部である。**同じ断りを `note` の本文にも書いてある**
+   * （片方だけ読んだ人が誤らないため）。
    *
    * **入力は防御的に読む**（既存フックと同じく `as` で受けて型を仮定しない）。
    * `text` の組み立てで例外が出ても握り、必ず `{ continue: true }` を返す。
    * `#markProgressed()` などの既存の副作用は呼ばない（観測専用。挙動を変えない）。
    */
   async #onSubagentStop(input: unknown): Promise<{ continue: true }> {
-    const isFirstFire = !this.#subagentStopSeen;
-    this.#subagentStopSeen = true;
-
     try {
       const hook = input as {
         background_tasks?: unknown;
@@ -2330,16 +2418,29 @@ class RunnerSession {
       };
       const tasks = Array.isArray(hook.background_tasks) ? hook.background_tasks : [];
       const crons = Array.isArray(hook.session_crons) ? hook.session_crons : [];
+      const agentId = hook.agent_id;
 
-      // 条件1（非空なら毎回）でも条件2（最初の1回）でもなければ、何もしない。
-      if (tasks.length === 0 && !isFirstFire) return { continue: true };
+      // **当人が起こしたものだけを残す。** `id` が表に在り、その所有者が
+      // いま畳もうとしている作業者と一致するものだけを数える。
+      const mine = tasks.filter((task) => {
+        const id = (task as { id?: unknown }).id;
+        if (typeof id !== 'string' || agentId === undefined) return false;
+        return this.#backgroundTaskOwners.get(id) === agentId;
+      });
+
+      if (mine.length === 0) {
+        this.#noteOwnerLookupFailure(tasks);
+        return { continue: true };
+      }
 
       const lines: string[] = [
-        `SubagentStop（作業者: ${hook.agent_type ?? '(不明)'} / agent_id=${hook.agent_id ?? '(不明)'}）: ` +
-          `background_tasks=${tasks.length}件、session_crons=${crons.length}件` +
-          (tasks.length === 0 ? '（このセッションで最初の発火なので、空でも1回だけ記録する）' : ''),
+        `SubagentStop（作業者: ${hook.agent_type ?? '(不明)'} / agent_id=${agentId ?? '(不明)'}）: ` +
+          `**この作業者が自分で起こした背景処理が ${mine.length}件 残ったまま畳んだ**` +
+          `（この瞬間のセッション全体の在庫=${tasks.length}件、session_crons=${crons.length}件）。` +
+          '⚠️ この行が出ないことは「空転が無かった」を意味しない — ' +
+          'このフックは、作業者が畳んだ瞬間に親のターンが開いていたときにしか発火しない（#570）。',
       ];
-      for (const task of tasks) {
+      for (const task of mine) {
         const t = task as {
           type?: unknown;
           status?: unknown;
@@ -2381,6 +2482,55 @@ class RunnerSession {
     }
 
     return { continue: true };
+  }
+
+  /**
+   * 「所有者を引く経路が壊れた」ことだけを、1セッションに1回だけ日誌へ出す
+   * （#570）。**観測専用。**
+   *
+   * **これが要る理由 — 直した観測口は、壊れると *無音* になるからである。**
+   * `#onSubagentStop` は「当人が起こした背景処理」が1件も無ければ何も出さない。
+   * ⟹ 表が引けなくなった状態（SDK が `backgroundTaskId` を改名した・上限で
+   * 捨てた・経路が変わった）と、「作業者はきれいに畳んだ」が、日誌の上で同じ
+   * 顔になる。**その2つを分けるためだけの1行である。**
+   *
+   * 出す条件は「`type` が `subagent` でないエントリのうち、id が表に**1件も**
+   * 無いものが在る」。`subagent` を外すのは、委譲そのもの（当人・兄弟）は
+   * `PostToolUse` の `backgroundTaskId` を持たないので、表に無いのが正常だから
+   * である。
+   */
+  #noteOwnerLookupFailure(tasks: readonly unknown[]): void {
+    if (this.#ownerLookupFailureNoted) return;
+
+    const orphans = tasks.filter((task) => {
+      const t = task as { id?: unknown; type?: unknown };
+      if (t.type === 'subagent') return false;
+      return typeof t.id !== 'string' || !this.#backgroundTaskOwners.has(t.id);
+    });
+    if (orphans.length === 0) return;
+
+    this.#ownerLookupFailureNoted = true;
+    const listed = orphans
+      .map((task) => {
+        const t = task as { id?: unknown; type?: unknown };
+        const id = typeof t.id === 'string' ? t.id : '(不明)';
+        const type = typeof t.type === 'string' ? t.type : '(不明)';
+        return `id=${id} type=${type}`;
+      })
+      .join(' / ');
+
+    this.#emit({
+      type: 'note',
+      managerId: this.#id,
+      text:
+        `SubagentStop: 背景処理の**所有者を引けなかった**（${orphans.length}件。${listed}）。` +
+        'この行が出たら計器のほうを疑う — ' +
+        '`PostToolUse` の `tool_response.backgroundTaskId` が改名・消滅したか、' +
+        `表が上限（${BACKGROUND_TASK_OWNER_LIMIT}件）で古い側を捨てたかである。` +
+        '⟹ この Issue（#570）へ、この行と SDK の版を添えて報告してほしい。' +
+        'そのあいだ「自分の背景処理を残して畳んだ作業者」の記録は出なくなる（無音になる）。' +
+        '（雑音にしないため、この診断はセッションに1回だけ出す。）',
+    });
   }
 
   /** 要約に潰される前に全文を上げる（監査は日誌＋アーカイブで担保する）。 */

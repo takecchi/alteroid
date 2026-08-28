@@ -15,16 +15,19 @@ import { createRunnerHost, type RunnerHost } from './runner.js';
 import type { RunnerEvent } from './runner-protocol.js';
 
 /**
- * `SubagentStop` フックの観測口（#357）を確かめる。
+ * `SubagentStop` フックの観測口（#357 / #570）を確かめる。
  *
- * **観測専用であることが本題である。** ここで固定したいのは3つ:
- * 1. `background_tasks` が非空なら `note` が出て、`text` に各タスクの `type` /
- *    `status` が載ること
- * 2. `background_tasks` が空の入力では、そのセッションで最初の1回だけ `note`
- *    が出て、2回目以降は出ないこと（「1度も発火していない」と「発火している
- *    が常に空」を日誌の上で区別するための1回。`runner.ts` の `#onSubagentStop`
- *    の doc）
- * 3. `text` に上限が掛かっていて、超えたら切り、切ったことを末尾に書くこと
+ * **観測専用であることと、「当人が起こしたものだけを出す」ことが本題である。**
+ * 実測（SDK 0.3.247。#570 に生 JSON）で分かったのは3つ:
+ *
+ * 1. `background_tasks` には**畳もうとしている当人**が必ず入る（`id` = `agent_id`）
+ * 2. **兄弟の作業者**も入る（何も待っていない作業者の配列にも載る）
+ * 3. ⟹ **件数では「この作業者が待っている」が言えない。**所有者は
+ *    `PostToolUse` の `tool_response.backgroundTaskId` と `agent_id` から引く
+ *
+ * だからここで固定するのは「**誤爆しないこと**」が中心である —— 当人だけ・
+ * 兄弟だけでは `note` を出さない。出すのは、当人が自分で起こした背景処理が
+ * 残っているときだけである。
  *
  * どのケースでも戻り値は必ず `{ continue: true }`（挙動を変えない。`decision`
  * も `additionalContext` も返さない）。
@@ -32,7 +35,6 @@ import type { RunnerEvent } from './runner-protocol.js';
  * `agent-session-options.test.ts` の `fakeRunnerSdk`（`host.start` が同期に
  * `queryFn` を呼ぶことを利用して `options` を捕まえる形）と同じ足場を使う。
  */
-
 interface Started {
   options: Options;
   finish: () => void;
@@ -79,6 +81,50 @@ async function fireSubagentStop(
   return hook(input as never, undefined, { signal: new AbortController().signal });
 }
 
+/** `options.hooks.PostToolUse[0].hooks[0]` を直接叩く（所有者の表を作る側）。 */
+async function firePostToolUse(
+  options: Options,
+  input: Record<string, unknown>,
+): Promise<HookJSONOutput> {
+  const hook = options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+  if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
+  return hook(input as never, undefined, { signal: new AbortController().signal });
+}
+
+/** 作業者（`agentId`）が背景タスク `taskId` を起こしたことを、表へ登録させる。 */
+async function registerBackgroundTask(
+  options: Options,
+  taskId: string,
+  agentId?: string,
+): Promise<void> {
+  await firePostToolUse(options, {
+    hook_event_name: 'PostToolUse',
+    tool_name: 'Bash',
+    tool_input: { command: 'sleep 90', run_in_background: true },
+    tool_response: { stdout: '', stderr: '', backgroundTaskId: taskId },
+    ...(agentId === undefined ? {} : { agent_id: agentId, agent_type: 'worker' }),
+  });
+}
+
+/** 当人（`type=subagent`。`id` は `agent_id` と同じ値になる）。 */
+function selfEntry(agentId: string) {
+  return {
+    id: agentId,
+    type: 'subagent',
+    status: 'running',
+    description: '当人',
+    agent_type: 'worker',
+  };
+}
+
+const STOP_BASE = {
+  hook_event_name: 'SubagentStop',
+  stop_hook_active: false,
+  agent_transcript_path: '/tmp/does-not-exist.jsonl',
+  agent_type: 'worker',
+  session_crons: [],
+};
+
 type NoteEvent = Extract<RunnerEvent, { type: 'note' }>;
 
 function noteEvents(events: readonly RunnerEvent[]): NoteEvent[] {
@@ -110,58 +156,170 @@ function setup(): { host: RunnerHost; events: RunnerEvent[]; started: Started[] 
   return { host, events, started };
 }
 
-describe('SubagentStop の観測（#357）', () => {
-  it('background_tasks が非空なら note が1本出て、text に type と status が載る', async () => {
+describe('SubagentStop の観測（#357 / #570）', () => {
+  it('当人だけが載った配列では note を出さない（当人は必ず入るので、それは署名ではない）', async () => {
     const s = setup();
     await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
     const started = s.started[0];
     if (started === undefined) throw new Error('セッションが開いていない');
 
     const result = await fireSubagentStop(started.options, {
-      hook_event_name: 'SubagentStop',
-      stop_hook_active: false,
+      ...STOP_BASE,
       agent_id: 'agent-1',
-      agent_transcript_path: '/tmp/does-not-exist.jsonl',
-      agent_type: 'worker',
+      background_tasks: [selfEntry('agent-1')],
+    });
+
+    expect(result).toEqual({ continue: true });
+    expect(noteEvents(s.events)).toHaveLength(0);
+  });
+
+  it('兄弟の作業者が走っているだけでは note を出さない（誤爆しないこと）', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    const result = await fireSubagentStop(started.options, {
+      ...STOP_BASE,
+      agent_id: 'agent-1',
       background_tasks: [
-        { id: 'bg-1', type: 'shell', status: 'running', description: 'pnpm verify を実行中' },
+        selfEntry('agent-1'),
+        {
+          id: 'agent-2',
+          type: 'subagent',
+          status: 'running',
+          description: '兄弟',
+          agent_type: 'worker',
+        },
       ],
-      session_crons: [],
+    });
+
+    expect(result).toEqual({ continue: true });
+    expect(noteEvents(s.events)).toHaveLength(0);
+  });
+
+  it('当人が自分で起こした背景処理が残っていれば note が1本出て、type と status と command が載る', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    await registerBackgroundTask(started.options, 'bg-1', 'agent-1');
+
+    const result = await fireSubagentStop(started.options, {
+      ...STOP_BASE,
+      agent_id: 'agent-1',
+      background_tasks: [
+        selfEntry('agent-1'),
+        {
+          id: 'bg-1',
+          type: 'shell',
+          status: 'running',
+          description: 'pnpm verify を実行中',
+          command: 'pnpm verify',
+        },
+      ],
     });
 
     expect(result).toEqual({ continue: true });
 
     const notes = noteEvents(s.events);
     expect(notes).toHaveLength(1);
-    expect(notes[0]?.text).toContain('type=shell');
-    expect(notes[0]?.text).toContain('status=running');
-    expect(notes[0]?.text).toContain('background_tasks=1件');
+    const text = notes[0]?.text ?? '';
+    expect(text).toContain('type=shell');
+    expect(text).toContain('status=running');
+    expect(text).toContain('command=pnpm verify');
+    // 当人が起こした分の件数と、セッション全体の在庫の件数を両方載せる。
+    expect(text).toContain('1件 残ったまま畳んだ');
+    expect(text).toContain('在庫=2件');
+    // 発火条件の断りを本文にも書く（doc だけに書くと、片方しか読まない人が誤る）。
+    expect(text).toContain('空転が無かった');
   });
 
-  it('空配列の入力では最初の1回だけ note が出て、2回目は出ない', async () => {
+  it('別の作業者が起こした背景処理では note を出さない（所有者が違う）', async () => {
     const s = setup();
     await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
     const started = s.started[0];
     if (started === undefined) throw new Error('セッションが開いていない');
 
-    const emptyInput = {
-      hook_event_name: 'SubagentStop',
-      stop_hook_active: false,
+    await registerBackgroundTask(started.options, 'bg-1', 'agent-2');
+
+    const result = await fireSubagentStop(started.options, {
+      ...STOP_BASE,
       agent_id: 'agent-1',
-      agent_transcript_path: '/tmp/does-not-exist.jsonl',
-      agent_type: 'worker',
-      background_tasks: [],
-      session_crons: [],
+      background_tasks: [selfEntry('agent-1'), { id: 'bg-1', type: 'shell', status: 'running' }],
+    });
+
+    expect(result).toEqual({ continue: true });
+    expect(noteEvents(s.events)).toHaveLength(0);
+  });
+
+  it('マネージャー自身が起こした背景処理では note を出さない（agent_id が付かない実行）', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    // `agent_id` を渡さない = マネージャー自身の実行（実測でそうなる）。
+    await registerBackgroundTask(started.options, 'bg-1');
+
+    const result = await fireSubagentStop(started.options, {
+      ...STOP_BASE,
+      agent_id: 'agent-1',
+      background_tasks: [selfEntry('agent-1'), { id: 'bg-1', type: 'shell', status: 'running' }],
+    });
+
+    expect(result).toEqual({ continue: true });
+    expect(noteEvents(s.events)).toHaveLength(0);
+  });
+
+  it('所有者を引けない背景処理が在ると診断が出る。ただしセッションに1回だけ', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    const input = {
+      ...STOP_BASE,
+      agent_id: 'agent-1',
+      // `bg-unknown` は表に無い（＝ `PostToolUse` の経路が壊れたときの顔）。
+      background_tasks: [
+        selfEntry('agent-1'),
+        { id: 'bg-unknown', type: 'shell', status: 'running' },
+      ],
     };
 
-    const first = await fireSubagentStop(started.options, emptyInput);
+    const first = await fireSubagentStop(started.options, input);
     expect(first).toEqual({ continue: true });
-    expect(noteEvents(s.events)).toHaveLength(1);
+    const notes = noteEvents(s.events);
+    expect(notes).toHaveLength(1);
+    const text = notes[0]?.text ?? '';
+    expect(text).toContain('所有者を引けなかった');
+    expect(text).toContain('bg-unknown');
+    // 読んだ人が次に何をすればよいかを書く（値を出すだけにしない）。
+    expect(text).toContain('#570');
 
-    const second = await fireSubagentStop(started.options, emptyInput);
+    const second = await fireSubagentStop(started.options, input);
     expect(second).toEqual({ continue: true });
-    // 2回目は増えない（1回目のままである）。
     expect(noteEvents(s.events)).toHaveLength(1);
+  });
+
+  it('当人・兄弟しか無いときは、診断も出さない（引けないのではなく、引く対象が無い）', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    await fireSubagentStop(started.options, {
+      ...STOP_BASE,
+      agent_id: 'agent-1',
+      background_tasks: [
+        selfEntry('agent-1'),
+        { id: 'agent-2', type: 'subagent', status: 'running', description: '兄弟' },
+      ],
+    });
+
+    expect(noteEvents(s.events)).toHaveLength(0);
   });
 
   it('text が長すぎる入力では上限で切られ、切ったことが末尾に書かれる', async () => {
@@ -170,17 +328,16 @@ describe('SubagentStop の観測（#357）', () => {
     const started = s.started[0];
     if (started === undefined) throw new Error('セッションが開いていない');
 
+    await registerBackgroundTask(started.options, 'bg-1', 'agent-1');
+
     const longDescription = 'あ'.repeat(5_000);
     const result = await fireSubagentStop(started.options, {
-      hook_event_name: 'SubagentStop',
-      stop_hook_active: false,
+      ...STOP_BASE,
       agent_id: 'agent-1',
-      agent_transcript_path: '/tmp/does-not-exist.jsonl',
-      agent_type: 'worker',
       background_tasks: [
+        selfEntry('agent-1'),
         { id: 'bg-1', type: 'shell', status: 'running', description: longDescription },
       ],
-      session_crons: [],
     });
 
     expect(result).toEqual({ continue: true });
@@ -195,34 +352,22 @@ describe('SubagentStop の観測（#357）', () => {
   });
 
   /**
-   * **この1本が無いと、条件1（非空なら毎回）が固定されない。**
-   * 「最初の1回だけ出す」だけの実装でも、上の3本はすべて緑になる
-   * （上は非空を1度しか撃っていないため）。ここで撃ち分ける。
+   * **この1本が無いと、条件1（当人の分が在れば毎回）が固定されない。**
+   * 「最初の1回だけ出す」だけの実装でも上は緑になりうるので、ここで撃ち分ける。
    */
-  it('非空の入力は2回目以降も毎回 note が出る（最初の1回だけ、ではない）', async () => {
+  it('当人の背景処理が残るたびに note が出る（最初の1回だけ、ではない）', async () => {
     const s = setup();
     await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
     const started = s.started[0];
     if (started === undefined) throw new Error('セッションが開いていない');
 
-    const base = {
-      hook_event_name: 'SubagentStop',
-      stop_hook_active: false,
-      agent_id: 'agent-1',
-      agent_transcript_path: '/tmp/does-not-exist.jsonl',
-      agent_type: 'worker',
-      session_crons: [],
-    };
-
-    // 1回目は空 — 「最初の発火」の枠をここで使い切っておく。
-    await fireSubagentStop(started.options, { ...base, background_tasks: [] });
-    expect(noteEvents(s.events)).toHaveLength(1);
-
-    // 2回目・3回目は非空 — 「最初の発火」ではないので、条件1でしか出ない。
     for (const n of [1, 2]) {
+      await registerBackgroundTask(started.options, `bg-${n}`, 'agent-1');
       const result = await fireSubagentStop(started.options, {
-        ...base,
+        ...STOP_BASE,
+        agent_id: 'agent-1',
         background_tasks: [
+          selfEntry('agent-1'),
           { id: `bg-${n}`, type: 'monitor', status: 'running', description: `CI の見張り ${n}` },
         ],
       });
@@ -230,8 +375,8 @@ describe('SubagentStop の観測（#357）', () => {
     }
 
     const notes = noteEvents(s.events);
-    expect(notes).toHaveLength(3);
-    expect(notes[1]?.text).toContain('type=monitor');
-    expect(notes[2]?.text).toContain('CI の見張り 2');
+    expect(notes).toHaveLength(2);
+    expect(notes[0]?.text).toContain('type=monitor');
+    expect(notes[1]?.text).toContain('CI の見張り 2');
   });
 });
