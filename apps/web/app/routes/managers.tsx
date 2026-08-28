@@ -65,6 +65,26 @@ export function summarizeDenials(denials: ManagerDenial[]) {
 }
 
 /**
+ * `ManagerDenial.actor` を一覧の1件に添える短い印にする。
+ *
+ * **3値が字面の上でも3値のまま出ること。** `undefined`（層が取れていない。
+ * `via: 'result'` は SDK 側に判定材料が無いので常にここに落ちる）を、
+ * 黙って消したりマネージャー側へ混ぜたりしないこと（Issue #373、
+ * 2026-08-24 コメント #5393921053 が指摘した実害と同じ形を再現しないため）。
+ * `packages/core/src/tools.ts` / `apps/cli/src/chat.ts` の同名の書式と
+ * 逐語で揃えてある——片方だけ直すと、クローン・CLI・Web UI で数字の意味が
+ * ずれる。
+ *
+ * **export してあるのは `manager-detail.tsx`（`DenialsCard`）から再利用する
+ * ため。** 同じ画面（Web UI）の中で同じ書式を2箇所に書き写すと、直すときに
+ * 片方だけ直る形が起きる——`tools.ts`/`chat.ts` を分けているのはプロセスが
+ * 別だからで、同一プロセス内の2ファイルにはその理由が無い。
+ */
+export function denialActorTag(actor: ManagerDenial['actor']): string {
+  return actor === 'manager' ? ' [マネージャー]' : actor === 'worker' ? ' [作業者]' : ' [層不明]';
+}
+
+/**
  * 「確認へ上がらず止められた」件数を、**状態に添えて**出す一行。
  *
  * **状態を置き換えない。** 分類器か deny 規則がその場で拒否すると、その仕事は
@@ -79,6 +99,10 @@ export function summarizeDenials(denials: ManagerDenial[]) {
  * **ここでも観測した分しか言わない。** 数えているのは拒否そのものであって、それで
  * 止まったかどうかは見ていない（デーモンに動きを見る手が無い）。だから「止まって
  * いる」ではなく「止まっている可能性がある」と書く。
+ *
+ * **各件に `denialActorTag` で層を添える（Issue #373）。** #549 が `actor` を
+ * デーモンから API まで通したのに、この画面だけが `tool` / `count` の2値の
+ * ままだった——値は届いていたのに描いていなかっただけである。
  */
 export function ManagerDenialNote({ denials }: { denials: ManagerDenial[] }) {
   if (denials.length === 0) return null;
@@ -86,7 +110,9 @@ export function ManagerDenialNote({ denials }: { denials: ManagerDenial[] }) {
   return (
     <p className="mt-1 text-[11px] text-warn">
       ⚠ 確認へ上がらず止められた道具:{' '}
-      {shown.map((entry) => `${entry.tool} ${entry.count}件`).join(' / ')}
+      {shown
+        .map((entry) => `${entry.tool} ${entry.count}件${denialActorTag(entry.actor)}`)
+        .join(' / ')}
       {rest > 0 && `（ほか ${rest} 種、全 ${total} 件）`}
       。この確認はクローンには回ってきていないので、手が止まっている可能性がある。
     </p>
