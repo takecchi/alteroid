@@ -4,6 +4,7 @@ import type {
   RunnerClient,
   RunnerCredentialFingerprint,
   RunnerEvent,
+  RunnerExecutionResources,
   RunnerManagerState,
   RunnerPlacementResources,
   RunnerResumeCommand,
@@ -472,6 +473,42 @@ function revisionReportOf(value: unknown): RunnerRevisionReport {
   return reportRunnerRevision(parsed.data);
 }
 
+/**
+ * `/health` の `resources` を**材料ごとに**検証して畳む。
+ *
+ * **まとめて `safeParse` しない。** この関数が在る理由はそれだけである——
+ * `runnerExecutionResourcesSchema` を丸ごと1回で通すと、**材料が1つ壊れただけで
+ * 残り全部が道連れで消える。** `resources()` の doc が「資源を報告できる器が
+ * 『何も報告しない器』に見える」と書いているのと同じ壊れ方が、`resources` の
+ * **中でも**起きていた（`cpu` / `memory` / `pids` / `tasks` の間で）。
+ *
+ * 同じ規律が、このファイルに既に3箇所ある——`identity()` と `resources()` の
+ * `managers` / `pendingEvents` / `oldestPendingAt`、そして `answer()` の
+ * `decision`。**ここはその規律を1段内側へ当てているだけで、新しい作法ではない。**
+ *
+ * **鍵は数え上げず、スキーマの `shape` を回す。** `cpu` / `memory` / `pids` /
+ * `tasks` と書き並べると、**次に材料が増えたときここが黙って落とす**——
+ * `tasks`（#315）が足されたときこの関数が要らなかったのと同じ性質を、
+ * 増えた後も保ちたい。
+ *
+ * **形が壊れていても投げない。** ネットワーク越しの入力（改造された応答・
+ * 別の版の runner）を信用しない側なので、読めた材料だけを採る
+ * （`revisionReportOf` と同じ構え）。`resources` がそもそもオブジェクトで
+ * なければ、材料は1つも無い。
+ */
+function executionResourcesOf(value: unknown): RunnerExecutionResources {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
+  const raw = value as Record<string, unknown>;
+  const picked: Record<string, unknown> = {};
+  for (const [key, field] of Object.entries(runnerExecutionResourcesSchema.shape)) {
+    const parsed = field.safeParse(raw[key]);
+    // **`undefined` は「読めた」ではない。** 材料が欠けている runner の欄を
+    // 作らない（`RunnerExecutionResources` の「読めなかった材料は名乗らない」）。
+    if (parsed.success && parsed.data !== undefined) picked[key] = parsed.data;
+  }
+  return picked as RunnerExecutionResources;
+}
+
 /** 指紋の配列だけを取り出す（値は runner も返さないし、こちらも持たない）。 */
 function fingerprintsOf(value: unknown): RunnerCredentialFingerprint[] {
   if (!Array.isArray(value)) return [];
@@ -869,11 +906,16 @@ class HttpRunner implements RunnerClient {
    * `managers` だけを名乗り、**それで不利にはならない**（埋めるのは配置側である）。
    * 材料は1つずつ検証する — まとめて弾くと、`cpu` の形が崩れただけで `managers` まで
    * 落ち、資源を報告できる器が「何も報告しない器」に見える。
+   *
+   * **その「1つずつ」は `resources` の中にも掛かる**（`executionResourcesOf`）。
+   * かつてここは `resources` を丸ごと1回 `safeParse` していたので、`cpu` が壊れた
+   * だけで `memory` / `pids` / `tasks` まで道連れで消えた——**外側で避けていた
+   * 壊れ方が、1段内側でそのまま起きていた。** 直したのは深さであって作法ではない。
    */
   async resources(options?: { signal?: AbortSignal }): Promise<RunnerPlacementResources> {
     const response = await this.#call('GET', '/health', undefined, options?.signal);
     const body = (await response.json()) as HealthBody;
-    const parsed = runnerExecutionResourcesSchema.safeParse(body.resources ?? {});
+    const resources = executionResourcesOf(body.resources);
     const managers = runnerPlacementResourcesSchema.shape.managers.safeParse(body.managers);
     // **`managers` と同じ扱い**（#358）——`/health` 直下から1つずつ検証する。
     // まとめて弾くと、`resources` の形が崩れただけで `pendingEvents` /
@@ -886,7 +928,7 @@ class HttpRunner implements RunnerClient {
       body.oldestPendingAt,
     );
     return {
-      ...(parsed.success ? parsed.data : {}),
+      ...resources,
       ...(managers.success && managers.data !== undefined ? { managers: managers.data } : {}),
       ...(pendingEvents.success && pendingEvents.data !== undefined
         ? { pendingEvents: pendingEvents.data }

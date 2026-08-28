@@ -809,6 +809,94 @@ describe('資源による配置の材料', () => {
   });
 
   /**
+   * **直上の歯は、`resources` の *外側* しか測っていなかった。**
+   *
+   * `resources` の中身が `cpu` ひとつだけなので、「まとめて弾く」実装でも
+   * 「1つずつ検証する」実装でも同じ `{ managers: 2 }` になる ——
+   * **どちらでも通るので、名前が約束している「読めた材料は落とさない」を
+   * 測れていない。** ここでは壊れた材料の隣に**読める材料を並べて**、
+   * 道連れが起きないことを単独で撃つ。
+   */
+  it('資源の中で1つの材料だけが壊れていても、残りの材料は落とさない', async () => {
+    const client = await createHttpRunner({
+      baseUrl: 'http://partial.test',
+      token: TOKEN,
+      fetchFn: fetchHealth({
+        ok: true,
+        runnerId: 'runner-partial',
+        workspacePath: '/workspace',
+        managers: 2,
+        resources: {
+          cpu: { cores: 'たくさん' },
+          memory: { limitBytes: 1_000, usedBytes: 100, source: 'cgroup' },
+          pids: { current: 955, max: 1000 },
+        },
+      }),
+    });
+
+    expect(await client.resources?.()).toEqual({
+      managers: 2,
+      memory: { limitBytes: 1_000, usedBytes: 100, source: 'cgroup' },
+      pids: { current: 955, max: 1000 },
+    });
+  });
+
+  /**
+   * **材料が増えるたびに、道連れの面も増える。**
+   *
+   * `tasks`（器の pids の内訳。#315）を足したとき、`resources` はまだ丸ごと
+   * 1回 `safeParse` していた ⟹ **`tasks` の形が崩れただけで `cpu` / `memory` /
+   * `pids` まで消えた。** 内訳を出せる器が「資源を1つも報告しない器」に見える。
+   *
+   * この歯は**いちばん新しい材料の側から**撃つ ——「1つずつ検証する」が
+   * 材料を数え上げずスキーマの `shape` を回している限り、次に足される材料でも
+   * 同じ性質が保たれる。
+   */
+  it('内訳（tasks）の形が壊れていても、cpu / memory / pids は落とさない', async () => {
+    const client = await createHttpRunner({
+      baseUrl: 'http://broken-tasks.test',
+      token: TOKEN,
+      fetchFn: fetchHealth({
+        ok: true,
+        runnerId: 'runner-broken-tasks',
+        workspacePath: '/workspace',
+        managers: 1,
+        resources: {
+          cpu: { cores: 4, source: 'cgroup' },
+          memory: { limitBytes: 2_000, usedBytes: 500, source: 'cgroup' },
+          pids: { current: 178, max: 1000 },
+          // `zombies` が数でない ＝ 内訳だけが壊れている runner。
+          tasks: { threads: 178, processes: 136, zombies: 'たくさん' },
+        },
+      }),
+    });
+
+    expect(await client.resources?.()).toEqual({
+      managers: 1,
+      cpu: { cores: 4, source: 'cgroup' },
+      memory: { limitBytes: 2_000, usedBytes: 500, source: 'cgroup' },
+      pids: { current: 178, max: 1000 },
+    });
+  });
+
+  /** `resources` がオブジェクトですらない応答でも、他の材料まで道連れにしない。 */
+  it('resources がオブジェクトでなくても、managers は落とさない', async () => {
+    const client = await createHttpRunner({
+      baseUrl: 'http://not-object.test',
+      token: TOKEN,
+      fetchFn: fetchHealth({
+        ok: true,
+        runnerId: 'runner-not-object',
+        workspacePath: '/workspace',
+        managers: 4,
+        resources: 'たくさん',
+      }),
+    });
+
+    expect(await client.resources?.()).toEqual({ managers: 4 });
+  });
+
+  /**
    * `pendingEvents` / `oldestPendingAt`（#358）が `/health` から `resources()`
    * まで渡ること。**この欄が `HealthBody` に無かったせいで、runner が正しい値を
    * 返しても読まれずに落ちていた**（Issue #358 の訂正の下流側）。
