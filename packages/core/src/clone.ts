@@ -814,23 +814,6 @@ class Clone implements CloneHost {
   #turn: Turn | null = null;
   #stopped = false;
   /**
-   * **`#stopped` を立てた後、待ち行列を読み切っているあいだだけ真**（Issue #564 (a)）。
-   *
-   * `stop()` は `#stopped` を立ててから `#pump()` の残りを読み切る。その残りは
-   * ふつうのターンとして SDK へ渡す必要があるが、**`#stopped` は
-   * `#inputStream` の終了条件でもある** —— 立てたままだと、入力が一瞬空になった
-   * 時点で入力の generator が `return` し、セッションが閉じて、以降のターンが
-   * 永久に完了しなくなる（`stop()` が `await this.#pumpLoop` で戻らなくなる。
-   * この器での実測: 蒸留の次のターンで固まり、テストは 15 秒で時間切れ）。
-   *
-   * **だから終了条件だけをこの印で保留する。** `post()` の門（`#stopped` を見て
-   * 新しい合図を受け取らない）は保留しない —— 保留すると読み切りが終わらない。
-   *
-   * **`#recycleForToken` に相乗りしないこと。** あちらはセッションを畳んで
-   * *作り直す* ための印で、こちらは畳むのを *遅らせる* ための印である。
-   */
-  #draining = false;
-  /**
    * セッション内で「前回の蒸留以降に、蒸留すべき新しいことがあったか」の印。
    *
    * **`stop()` が無条件に蒸留を投げていたことの直しである。** `endConversation()`
@@ -1069,7 +1052,11 @@ class Clone implements CloneHost {
     // 書き込みは落ちうる（落ちれば `#remember` / `#commit` が stderr へ跡を残す）。
     // 跡の文言はそのことを含む — ここで「次の起動へ回した」と断言すると、
     // 書けなかった回だけ跡が静かに嘘をつく。
-    if (this.#stopped) {
+    // **`#inbox.closed` も見る**（Issue #564 (a)）。`stop()` は受信箱を閉じてから
+    // 待ち行列を読み切り、そのあとで `#stopped` を立てる。⟹ **その間に届いたものを
+    // `#stopped` だけで判定すると、閉じた受信箱へ `push` して投げる**（`Inbox#push`）。
+    // ここが「読み切りが必ず終わる」根拠そのものでもある（`stop()` の doc）。
+    if (this.#stopped || this.#inbox.closed) {
       this.#remember(event);
       this.#commit(event);
       noteDroppedInboxEvent(event);
@@ -1205,7 +1192,10 @@ class Clone implements CloneHost {
   }
 
   async stop(): Promise<void> {
-    if (this.#stopped) return;
+    // **`#inbox.closed` も見る**（Issue #564 (a)）。読み切りのあいだ `#stopped` はまだ
+    // 立っていないので、ここを `#stopped` だけで守ると2度目の呼びが本体をもう一度
+    // 走らせる。受信箱を閉じるのはこの関数だけなので、閉じている＝もう入っている。
+    if (this.#stopped || this.#inbox.closed) return;
 
     // 落ちる前にもう一度だけ記憶へ移す機会を作る（蒸留は生存条件）。
     // 既にセッションが無いなら何も起きない。**ここでは無条件に投げる** —
@@ -1250,9 +1240,6 @@ class Clone implements CloneHost {
       ).catch(() => undefined);
     }
 
-    this.#stopped = true;
-    // 読み切りのあいだだけ、入力の generator の終了条件を保留する（`#draining` の doc）。
-    this.#draining = true;
     this.#inbox.close();
 
     // **割り込ませたら、読み切ってから畳むこと**（Issue #564 (a)）。
@@ -1268,14 +1255,25 @@ class Clone implements CloneHost {
     // 「`for await` は待ち行列に残った分を吐き出しながら回り続ける」）。捨てて
     // いるのは下の `this.#query?.close()` のほうである。⟹ **その手前で待てばよい。**
     //
-    // **止まる根拠**は `post()` の `if (this.#stopped) { … return; }`（すぐ上で
-    // `#stopped` を立てた）である。以後は新しい合図が1件も積まれないので、
-    // 待ち行列は必ず尽きて `#pump` の `for await` が抜ける。
+    // **止まる根拠**は `post()` / `#postAndWait()` の門である。どちらも
+    // `this.#stopped || this.#inbox.closed` を見るので、**受信箱を閉じた時点から
+    // 新しい合図は1件も積まれない**（`#restoreUnread` が既に使っていた形と同じ
+    // 述語）。⟹ 待ち行列は必ず尽きて `#pump` の `for await` が抜ける。
     //
-    // まだ起きていなければ（`null`）何もしない。
+    // **`#stopped` はここでは立てない。下の `await` の後で立てる。** 読み切りの
+    // あいだに立てると、残りのターンが渡る先を自分で閉じてしまう —— 実測で
+    // 壊れ方が2つ出た。(1) `#inputStream` が `if (this.#stopped) return` で
+    // 入力の generator を畳み、蒸留の次のターンから先が永久に完了しない。
+    // (2) `#read` の `finally` が `if (!this.#stopped)` で丸ごと飛ぶので、
+    // セッションが死んだときに宙吊りのターンを誰も解放しない
+    // （`clone.test.ts` の「ターンが失敗しても、発言そのものは日誌に残る」が
+    // これで 5 秒の時間切れになった）。**`#stopped` はセッションを畳んだ印であって、
+    // 新しい仕事を受けない印ではない** —— 後者は `#inbox.closed` が持つ。
+    //
+    // `#pump` がまだ起きていなければ（`null`）何もしない。
     await this.#pumpLoop;
-    this.#draining = false;
 
+    this.#stopped = true;
     this.#wakeInput();
     try {
       this.#query?.close();
@@ -1349,7 +1347,8 @@ class Clone implements CloneHost {
    * `ALTEROID_CLONE_HUMAN_PRIORITY` が有効な器でだけ効く。**
    */
   #postAndWait(event: InboxEvent, interrupt = false): Promise<void> {
-    if (this.#stopped) return Promise.resolve();
+    // 門は `post()` と同じ述語である（理由はそちら。Issue #564 (a)）。
+    if (this.#stopped || this.#inbox.closed) return Promise.resolve();
     return new Promise<void>((resolve) => {
       this.#completions.set(event.id, resolve);
       this.#inbox.push(
@@ -1408,11 +1407,12 @@ class Clone implements CloneHost {
       // 起きない理由）。
       //
       // **片付け中は解除しない（`#inbox.closed` を見る）。** `stop()` は
-      // `#stopped` を立てて `#inbox.close()` を呼ぶが、`for await` は待ち行列に
-      // 残った分を吐き出しながら回り続けるので、**閉じた後にこの地点へ来る**
-      // ことがありうる。`Inbox#unshift` は閉じた受信箱では投げ、しかもここは
-      // 下の `try` の外なので、投げれば `for await` ごと抜けて受信箱のループが
-      // 死ぬ（`#pump` は `void` で起こしてあるので unhandled rejection になる）。
+      // `#inbox.close()` を呼ぶが、`for await` は待ち行列に残った分を吐き出し
+      // ながら回り続けるので、**閉じた後にこの地点へ来る**ことがありうる
+      // （Issue #564 (a) 以降は `stop()` がそれを `await` して待つので、**必ず
+      // 来る**）。`Inbox#unshift` は閉じた受信箱では投げ、しかもここは下の
+      // `try` の外なので、投げれば `for await` ごと抜けて受信箱のループが死ぬ
+      // （`#pumpLoop` の `.catch` が跡を残したうえで再送出する）。
       // 解除しないほうの被害は無い — 保持した分は器に未読のまま残っており
       // （`#settleInboxEvent` が `#forget` を呼んでいない）、次の起動で
       // `#restoreUnread` が拾い直す。**この機構が生死をまたげる理由がそれである。**
@@ -3141,10 +3141,7 @@ class Clone implements CloneHost {
         yield next;
         continue;
       }
-      // **読み切っているあいだは畳まない**（Issue #564 (a)。`#draining` の doc）。
-      // `stop()` は `#stopped` を立ててから待ち行列の残りをターンとして流すので、
-      // ここで素直に `return` すると、その残りが渡る先を自分で閉じてしまう。
-      if (this.#stopped && !this.#draining) return;
+      if (this.#stopped) return;
       // **認証トークンを回したので、このセッションを畳んで作り直す**（Issue #393 PR4）。
       //
       // **ここが「ターンの境界」である** —— 積まれた入力が無く（上の `shift` が
