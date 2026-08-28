@@ -243,9 +243,11 @@ describe('詳細でも、拒否は状態を置き換えずに状態へ添える'
     // **札は差し替えない。** 観測しているのは `running` のままである。
     expect(await screen.findByText('実行中')).toBeTruthy();
     // 一覧の 3 種の上限に引っ張られない（詳細は畳まない）。
-    expect(screen.getByText('Bash')).toBeTruthy();
-    expect(screen.getByText('Write')).toBeTruthy();
-    expect(screen.getByText('WebFetch')).toBeTruthy();
+    // **層の印（`denialActorTag`）が同じ要素へ付くので、完全一致ではなく
+    // 部分一致で見る**（`actor` が無いのでどれも `[層不明]` が付く）。
+    expect(screen.getByText(/^Bash/)).toBeTruthy();
+    expect(screen.getByText(/^Write/)).toBeTruthy();
+    expect(screen.getByText(/^WebFetch/)).toBeTruthy();
     // 状態の隣に総数を並べる。
     expect(screen.getByText(/確認へ上がらず止められた 7 件/)).toBeTruthy();
     // 観測していないことを断定しない。
@@ -259,6 +261,69 @@ describe('詳細でも、拒否は状態を置き換えずに状態へ添える'
 
     expect(await screen.findByText('実行中')).toBeTruthy();
     expect(screen.queryByText(/確認へ上がらず止められた/)).toBeNull();
+  });
+
+  /**
+   * Issue #373 — PR #549 で `ManagerDenial.actor` が API まで届いたのに、詳細
+   * 画面（`manager-detail.tsx` の `DenialsCard`）だけが `tool`/`count` の2値の
+   * ままだった。一覧（`managers.tsx`）と同じ `denialActorTag` を使い、3値の
+   * まま出す。
+   */
+  it('拒否の層（マネージャー／作業者／層不明）が3値のまま出る', async () => {
+    renderDetail({
+      ...BASE,
+      status: 'running',
+      denials: [
+        { tool: 'Bash', count: 2, actor: 'manager' },
+        { tool: 'Edit', count: 1, actor: 'worker' },
+        // `via: 'result'` は SDK 側に判定材料が無いので `actor` キーが無い。
+        { tool: 'Write', count: 3 },
+      ],
+    });
+
+    expect(await screen.findByText(/Bash ?\[マネージャー\]/)).toBeTruthy();
+    expect(screen.getByText(/Edit ?\[作業者\]/)).toBeTruthy();
+    expect(screen.getByText(/Write ?\[層不明\]/)).toBeTruthy();
+  });
+
+  /**
+   * **`actor` が無い回を `[マネージャー]` へ化けさせない。** `undefined`
+   * （層が取れなかった）を「マネージャーだった」と決めつけると、Issue #373 が
+   * 守ろうとしている「層が取れていないことが分かる」が壊れる
+   * （`apps/daemon/src/app.test.ts`「拒否の層（actor）が…」と対になる）。
+   */
+  it('actor が無い回は [層不明] になり、[マネージャー] へは化けない', async () => {
+    renderDetail({
+      ...BASE,
+      status: 'running',
+      denials: [{ tool: 'Bash', count: 1 }],
+    });
+
+    expect(await screen.findByText(/Bash ?\[層不明\]/)).toBeTruthy();
+    expect(screen.queryByText(/\[マネージャー\]/)).toBeNull();
+  });
+
+  /**
+   * **同じ道具が層違いで2件並んでも、React の重複キーで片方が消えたり
+   * 警告が出たりしない（回帰止め）。** `manager.ts` の `denials()` は帳面の
+   * キーを `道具::層`（`denialKey`）で作るので、`Bash`(worker) と
+   * `Bash`(manager) が同時に返ることがある——`key={entry.tool}` のままだと
+   * 直す前はここが重複キーだった。
+   */
+  it('同じ道具が層違いで2件返っても、両方とも表示される', async () => {
+    renderDetail({
+      ...BASE,
+      status: 'running',
+      denials: [
+        { tool: 'Bash', count: 3, actor: 'worker' },
+        { tool: 'Bash', count: 1, actor: 'manager' },
+      ],
+    });
+
+    expect(await screen.findByText(/Bash ?\[作業者\]/)).toBeTruthy();
+    expect(screen.getByText(/Bash ?\[マネージャー\]/)).toBeTruthy();
+    // 総数は2件分（3+1）が合算されていること。
+    expect(screen.getByText(/確認へ上がらず止められた 4 件/)).toBeTruthy();
   });
 });
 

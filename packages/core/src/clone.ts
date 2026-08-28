@@ -3234,6 +3234,8 @@ class Clone implements CloneHost {
           decision_reason?: unknown;
           decision_reason_type?: unknown;
           message?: unknown;
+          agent_id?: unknown;
+          agent_type?: unknown;
         }
       | null
       | undefined;
@@ -3259,14 +3261,43 @@ class Clone implements CloneHost {
       typeof denial?.message === 'string' ? `モデルへの拒否文: ${denial.message}` : undefined,
     ].filter((line): line is string => line !== undefined);
     const why = denialDetails.length > 0 ? `（${denialDetails.join(' / ')}）` : '';
+
+    // **層は `agent_id` で見る（`runner.ts` の `#noteDenial` と同じ判断・同じ
+    // 理由をそのまま当てる）。** クローンも preset 一式を持つので `Task` を
+    // 持ち、作業者（サブエージェント）の道具実行の拒否もこのフックを通って
+    // 来る（`cloneToolActor` が `PostToolUse` で読んでいるのと同じ
+    // `agent_id`）。分けないと「クローン自身の手が止まっている」と
+    // 「作業者の手が止まっている」が同じ一文に潰れ、`journal_read` で追う
+    // 側が誤った層へ次の判断を向けかねない。
+    //
+    // **`via: 'live'` のときだけ載る。** `via: 'result'`（`permissionDenialsOf`
+    // が読む `SDKPermissionDenial`）は `tool_name` / `tool_use_id` /
+    // `tool_input` の3つしか持たず、`agent_id` が原理的に存在しない
+    // （`runner.ts` の同じ doc）。**「クローン本体だった」と決めつけないこと**
+    // —— それは「層が取れた」ではなく「取れなかった」であり、3値目
+    // （どちらの層か不明）のまま文言へ出す。
+    //
+    // **`agent_type` は今のところ常に無い。** `SDKPermissionDeniedMessage` は
+    // `agent_id` は持つが `agent_type` を持たない（`runner.ts` の同じ doc、
+    // SDK `0.3.247` の型で確認済み）。読みはするが、作り物の型名を出さない
+    // （`cloneToolActor` の `UNKNOWN_AGENT_TYPE` と同じ扱い）。
+    const agentId = typeof denial?.agent_id === 'string' ? denial.agent_id : undefined;
+    const agentType = typeof denial?.agent_type === 'string' ? denial.agent_type : undefined;
+    const actorLabel =
+      via !== 'live'
+        ? 'どちらの層か不明'
+        : agentId === undefined
+          ? 'クローン本体'
+          : `作業者（${agentType ?? UNKNOWN_AGENT_TYPE}）`;
+
     await this.#journal({
       type: 'exchange',
       with: 'self',
       role: 'inbound',
       text:
         `${tool} の実行が、確認へ上がらずに止められた${why}。` +
-        `許可モードは ${this.#permissionMode} で、この層に確認を回す相手は居ない` +
-        `（合図の出所: ${via}）。`,
+        `止められたのは ${actorLabel} の手（合図の出所: ${via}）。` +
+        `許可モードは ${this.#permissionMode} で、この層に確認を回す相手は居ない。`,
     });
   }
 

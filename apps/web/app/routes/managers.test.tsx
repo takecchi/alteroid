@@ -169,6 +169,49 @@ describe('拒否は、状態を置き換えずに状態へ添える', () => {
     expect(await screen.findByText('実行中')).toBeTruthy();
     expect(screen.queryByText(/確認へ上がらず止められた/)).toBeNull();
   });
+
+  /**
+   * Issue #373 — PR #549 で `ManagerDenial.actor` が API まで届いたのに、この
+   * 画面（`managers.tsx`）だけが `tool`/`count` の2値のまま描いていた。
+   * `packages/core/src/tools.ts` / `apps/cli/src/chat.ts` の `denialActorTag`
+   * と同じ書式で3値のまま出す——マネージャー自身の拒否と作業者の拒否を
+   * 畳んで見せると、クローンが誤った相手へ指示を出しうる。
+   */
+  it('拒否の層（マネージャー／作業者／層不明）が3値のまま出る', async () => {
+    renderManagers([
+      {
+        ...BASE,
+        denials: [
+          { tool: 'Bash', count: 2, actor: 'manager' },
+          { tool: 'Edit', count: 1, actor: 'worker' },
+          // `via: 'result'` は SDK 側に判定材料が無いので `actor` キーが無い。
+          { tool: 'Write', count: 3 },
+        ],
+      },
+    ]);
+
+    expect(await screen.findByText(/Bash 2件 \[マネージャー\]/)).toBeTruthy();
+    expect(screen.getByText(/Edit 1件 \[作業者\]/)).toBeTruthy();
+    expect(screen.getByText(/Write 3件 \[層不明\]/)).toBeTruthy();
+  });
+
+  /**
+   * **`actor` が無い回（層が取れなかった）を、`[マネージャー]` へ化けさせない。**
+   * `undefined` を「マネージャーだった」と決めつけると、Issue #373 が守ろうと
+   * している「層が取れていないことが分かる」が壊れる
+   * （`apps/daemon/src/app.test.ts`「拒否の層（actor）が…」と対になる）。
+   */
+  it('actor が無い回は [層不明] になり、[マネージャー] へは化けない', async () => {
+    renderManagers([
+      {
+        ...BASE,
+        denials: [{ tool: 'Bash', count: 1 }],
+      },
+    ]);
+
+    expect(await screen.findByText(/Bash 1件 \[層不明\]/)).toBeTruthy();
+    expect(screen.queryByText(/\[マネージャー\]/)).toBeNull();
+  });
 });
 
 /**

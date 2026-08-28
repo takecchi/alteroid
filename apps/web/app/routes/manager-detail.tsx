@@ -22,7 +22,7 @@ import { formatDateTime, formatRelative } from '~/lib/format';
 import type { ManagerDenial, ManagerStatus, ManagerSummary } from '~/lib/types';
 
 import type { Route } from './+types/manager-detail';
-import { ManagerStatusBadge } from './managers';
+import { denialActorTag, ManagerStatusBadge } from './managers';
 
 export function clientLoader({ params }: Route.ClientLoaderArgs) {
   return { id: params.id };
@@ -535,6 +535,15 @@ function denialTotal(denials: ManagerDenial[] | undefined): number {
  * **観測した分しか言わない。** 数えているのは拒否であって、それで止まったかどうか
  * は見ていない。件数がデーモンのプロセス内にしか無いことも書く — 「0 件」を
  * 「止められていない」と読まれると、器を作り直した直後がいちばん静かに見える。
+ *
+ * **各件に `denialActorTag` で層を添える（Issue #373）。** 添えるだけでなく
+ * key も直す必要があった——`manager.ts` の `denials()` は帳面のキーを
+ * `道具::層`（`denialKey`）で作っているので、**同じ道具が層違いで2件
+ * 返りうる**（`Bash`(worker) と `Bash`(manager)）。`key={entry.tool}` のままだと
+ * React の重複キーになり、層を描く前は画面にも見分けの付かない `Bash` の行が
+ * 2つ並んでいた。key は `denialKey` と同じ規則（`${actor ?? 'unresolved'}::${tool}`）
+ * で層込みにする——`denials()` が返す時点で `道具::層` の組ごとに一意なので、
+ * 同じ規則で作れば必ず一意になる。
  */
 function DenialsCard({ denials }: { denials: ManagerDenial[] | undefined }) {
   if (denials === undefined || denials.length === 0) return null;
@@ -548,8 +557,14 @@ function DenialsCard({ denials }: { denials: ManagerDenial[] | undefined }) {
       />
       <ul className="px-4 py-3 text-sm">
         {recent.map((entry) => (
-          <li key={entry.tool} className="flex items-baseline justify-between gap-3 py-0.5">
-            <span className="font-mono text-xs break-all">{entry.tool}</span>
+          <li
+            key={`${entry.actor ?? 'unresolved'}::${entry.tool}`}
+            className="flex items-baseline justify-between gap-3 py-0.5"
+          >
+            <span className="font-mono text-xs break-all">
+              {entry.tool}
+              {denialActorTag(entry.actor)}
+            </span>
             <span className="shrink-0 text-warn">{entry.count} 件</span>
           </li>
         ))}
