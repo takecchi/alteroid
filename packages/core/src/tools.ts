@@ -2886,7 +2886,34 @@ export function createCloneTools(context: ToolContext) {
             `${id} は既に ${existing.closedAt} に片付けてある（${existing.closedReason ?? ''}）。`,
           );
         }
-        await stores.commitments.close(id, new Date().toISOString(), reason, 'clone');
+        // **片付いているかの判定は台帳の戻り値に任せる**（`commitment_edit` の
+        // `editBody` と同じ形）。直前の `get` で読んだ後に、他の経路
+        // （`POST /commitments/:id/close` や別セッションの `commitment_close`）が
+        // 先に閉じていれば `close` は `false` を返す。ここを見ずに進むと、
+        // 実際には閉じていないのに下の日誌へ「片付けた」と書くことになる——
+        // これから足す記録そのものが嘘をつく。
+        if (!(await stores.commitments.close(id, new Date().toISOString(), reason, 'clone'))) {
+          const after = await stores.commitments.get(id);
+          return text(
+            `${id} は既に ${after?.closedAt ?? '不明な時刻'} に片付けてある（${after?.closedReason ?? '理由の記録なし'}）。`,
+          );
+        }
+        // **自分で閉じたことは日誌に残す。** `commitment_open` が「聞かずに
+        // 動いた判断が後から否定できることが最終承認の実体である（north_star）」
+        // という理由で `decision` を書いているのと、根は同じ判断である——
+        // `reason` の説明そのものが「人間はこれを読んで後から否定する」と
+        // 言っている以上、否定する材料は台帳だけでなく日誌にも要る。
+        // **台帳の片付き行は永続とは限らない**（`storage-fs` は保持上限を
+        // 超えた古い片付き行を物理削除する。#416 / #468）。切られたときの
+        // 受け皿は `commitment_list` の「削除された分の内容はここでは二度と
+        // 読めない（日誌側の記録が唯一の手掛かりになる）」であり、この
+        // append を落とすと、その「唯一の手掛かり」に閉じた理由が最初から
+        // 書かれていないことになる（issue #585）。
+        await stores.journal.append({
+          type: 'decision',
+          decision: `引き受けた仕事を自分で片付けた（${id}）: ${reason}`,
+          grounds: 'クローン自身が commitment_close で閉じた（人間はこれを読んで後から否定する）',
+        });
         return text(`${id} を片付けた。`);
       },
     ),

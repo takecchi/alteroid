@@ -456,6 +456,153 @@ describe('引き受けたまま終わっていない仕事', () => {
     });
   });
 
+  /**
+   * `commitment_close`（issue #585）。**クローンが自分で片付けたことも、
+   * `commitment_open` / 人間側の close / 人間側の編集と同じく日誌に残ること。**
+   *
+   * 台帳の片付き行は永続とは限らない（`storage-fs` は保持上限を超えた古い
+   * 片付き行を物理削除する。#416 / #468）。切られた後に残る唯一の手掛かりが
+   * 日誌なので、閉じた理由（`closedReason`）がそこに最初から書かれていないと、
+   * 「何をもって片付いたとしたか」が二度と読めなくなる。
+   *
+   * **⚠️ 歯の書き方は `commitment_edit` の describe と同じ方針を採る。** 固定
+   * するのは「何が在るか / 無いか」であって、日誌の文面そのものではない
+   * （完全一致で固定すると、文面だけを変える無関係な変更まで赤くする）。
+   */
+  describe('commitment_close（クローンが自分で片付けたことを日誌に残す。issue #585）', () => {
+    /** その `stores` に配線した `commitment_close` を呼ぶ関数を返す。 */
+    function closer(stores: Stores) {
+      const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+      const found = tools.find((entry) => entry.name === 'commitment_close');
+      expect(found, 'commitment_close という道具が無い').toBeDefined();
+      return async (args: { id: string; reason: string }) => {
+        const result = await found?.handler(args as never, {} as never);
+        return (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+      };
+    }
+
+    /** その `stores` に配線した `journal_read` を呼ぶ関数を返す（issue #585 の終了条件——クローンの読み口から辿れること）。 */
+    function journalReader(stores: Stores) {
+      const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+      const found = tools.find((entry) => entry.name === 'journal_read');
+      expect(found, 'journal_read という道具が無い').toBeDefined();
+      return async (args: Record<string, unknown>) => {
+        const result = await found?.handler(args as never, {} as never);
+        return (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+      };
+    }
+
+    /** 日誌に積まれた `decision` の本文だけを取り出す。 */
+    async function decisions(stores: Stores) {
+      const entries = await stores.journal.list({ types: ['decision'] });
+      return entries.map((entry) => (entry.type === 'decision' ? entry.decision : ''));
+    }
+
+    it('片付けたとき、id と reason を含む decision が日誌に1本残る', async () => {
+      const stores = createMemoryStores();
+      await stores.commitments.open({
+        id: 'c-close-1',
+        at: '2026-08-12T00:00:00.000Z',
+        origin: 'self',
+        body: '片付ける仕事',
+      });
+
+      await closer(stores)({ id: 'c-close-1', reason: 'やり終えたので閉じた' });
+
+      const texts = await decisions(stores);
+      expect(texts).toHaveLength(1);
+      // 固定したいこと: id と reason が両方載ること（`closedReason` が保持
+      // 上限で消えても、これで「何をもって片付いたか」が辿れる）。
+      expect(texts[0]).toContain('c-close-1');
+      expect(texts[0]).toContain('やり終えたので閉じた');
+    });
+
+    it('その記録は journal_read から読める（issue #585 の終了条件そのもの）', async () => {
+      const stores = createMemoryStores();
+      await stores.commitments.open({
+        id: 'c-close-2',
+        at: '2026-08-12T00:00:00.000Z',
+        origin: 'self',
+        body: '片付ける仕事その2',
+      });
+
+      await closer(stores)({ id: 'c-close-2', reason: '対応済みにした' });
+
+      // `journal_read` はクローン自身が使う読み口。ここから辿れなければ、
+      // 台帳の行が消えた後は結局どこからも読めない。
+      const reply = await journalReader(stores)({ types: ['decision'] });
+      expect(reply).toContain('c-close-2');
+      expect(reply).toContain('対応済みにした');
+    });
+
+    it('「自分で片付けた」と読める――人間側の記録（人間が…）とは取り違えない', async () => {
+      const stores = createMemoryStores();
+      await stores.commitments.open({
+        id: 'c-close-3',
+        at: '2026-08-12T00:00:00.000Z',
+        origin: 'self',
+        body: '片付ける仕事その3',
+      });
+
+      await closer(stores)({ id: 'c-close-3', reason: '確認して閉じた' });
+
+      const texts = await decisions(stores);
+      expect(texts).toHaveLength(1);
+      // 人間側の経路（`POST /commitments/:id/close`、apps/daemon/src/app.ts）
+      // が書く文言は「人間が」で始まる。クローン自身が閉じた記録にこれが
+      // 含まれていたら、日誌からは「どちらが閉じたか」を区別できない
+      // （人間の行がここへ部分文字列として釣れる形になる）。
+      expect(texts[0]).not.toContain('人間が');
+    });
+
+    it('既に片付いている行を閉じようとしても、日誌は増えない', async () => {
+      const stores = createMemoryStores();
+      await stores.commitments.open({
+        id: 'c-close-4',
+        at: '2026-08-12T00:00:00.000Z',
+        origin: 'self',
+        body: 'もう片付いた仕事',
+      });
+      // 人間側の経路で先に閉じてある、という状態を作る。
+      await stores.commitments.close(
+        'c-close-4',
+        '2026-08-13T00:00:00.000Z',
+        '先に閉じた',
+        'human',
+      );
+
+      await closer(stores)({ id: 'c-close-4', reason: '後からもう一度閉じようとした' });
+
+      expect(await decisions(stores)).toEqual([]);
+    });
+
+    it('close の戻り値が false のとき（get の後に別経路が先に閉じた形）、閉じていないのに「閉じた」と日誌へ書かない', async () => {
+      // **これが (1) の guard の裏取りである。** `get` で読んだ時点ではまだ
+      // 開いているが、`close` を呼んだ瞬間には他の経路（人間側の close /
+      // 別セッションの commitment_close）が先に閉じ終えている、という競合を
+      // 模す。戻り値を見ずに進むと、閉じていないのに「閉じた」と日誌へ
+      // 書く——これから足す記録そのものが嘘をつくことになる。
+      const stores = createMemoryStores();
+      await stores.commitments.open({
+        id: 'c-race',
+        at: '2026-08-12T00:00:00.000Z',
+        origin: 'self',
+        body: '競合するかもしれない仕事',
+      });
+      const raced: Stores = {
+        ...stores,
+        commitments: {
+          ...stores.commitments,
+          close: () => Promise.resolve(false),
+        },
+      };
+
+      await closer(raced)({ id: 'c-race', reason: '閉じたつもりだった' });
+
+      expect(await decisions(raced)).toEqual([]);
+    });
+  });
+
   it('渡されたものは起点を問わず載り、起こされただけの合図は載らない', async () => {
     // **判定の基準は「誰かが渡してきたか」である。** 発意 tick で1件増える形にすると
     // 台帳が数時間で読めなくなり、載っているのに見えない仕事が生まれる。
