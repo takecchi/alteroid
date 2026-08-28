@@ -3330,6 +3330,42 @@ describe('クローンの道具', () => {
     expect(reply).toContain('runner_list');
   });
 
+  /**
+   * **⚠️ この注記は一覧の予算（`LIST_BUDGET`）を食う。食ってよいのは異常時だけ
+   * である。**
+   *
+   * `renderListing` は予算で切るので、1件あたりが伸びると **`OUTPUT_CAP` は超え
+   * ないまま、予算内に収まる *件数* が黙って減る**（＝クローンが一覧で見られる
+   * マネージャーが減る。`.claude/skills/listing-and-detail/` が「この repo は同じ
+   * バグを3回踏んでいる」と書いている形の親戚で、能力の削除になりうる）。
+   * **総当たりの歯（「一覧は例外なく件数で壊れない」）はここでは赤くならない**
+   * ——あれは `OUTPUT_CAP` と省略の合図を見るもので、件数の目減りは見ない。
+   *
+   * ⟹ **`runnerLostSince` が立っていない委譲では、この注記が1文字も足さない
+   * ことを測る。** これが成り立つ限り、予算を食うのは「器が黙った」ときだけで
+   * あって、平常時の一覧の件数は変わらない。実測（2026-08-28、この足場）:
+   * 40件すべてに欄が立つと出る件数が 31 → 19 へ減るが、**欄が無ければ 40件の
+   * ままで出力長も1文字も変わらなかった**（5,231 文字で前後一致）。
+   */
+  it('runnerLostSince が立っていない委譲には、この注記を1文字も足さない（予算を食わない）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const quiet = h.running[0];
+    if (!quiet) throw new Error('準備に失敗');
+    // **器は黙っていない。** runnerId は在るが `runnerLostSince` は立たない。
+    quiet.runnerId = 'runner-a';
+
+    const reply = await h.call('manager_list', {});
+
+    // 素の runner 行だけが出る（括弧の注記が付かない）。
+    expect(reply).toContain('runner: runner-a');
+    expect(reply).not.toContain('（この器は');
+    // 注記の語が1つも漏れていない（部分的に出るのが一番たちが悪い）。
+    expect(reply).not.toContain('新しい委譲の宛先からは外れている');
+    expect(reply).not.toContain('話しかけることは塞いでいない');
+    expect(reply).not.toContain('器そのものは runner_list で見る');
+  });
+
   it('黙った器に載っている本数を件数の行にも出す', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
