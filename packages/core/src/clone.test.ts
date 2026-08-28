@@ -27,6 +27,11 @@ import {
 import type { HumanMessage } from './clone.js';
 import type { TokenRotatorObservation } from './token-rotator.js';
 import { fingerprintOf } from './credentials.js';
+import {
+  DISTILL_GAP_NOTICE_HEAD,
+  DISTILL_SUCCEEDED_DECISION_PREFIX,
+  distillSucceededEntry,
+} from './distill-gap.js';
 import type { CloneHost } from './host.js';
 import type { ManagerPool, ManagerSummary } from './manager.js';
 import { renderMemoryDocuments } from './memory.js';
@@ -9061,5 +9066,213 @@ describe('recycleSessionForToken（回した後のセッション作り直し）
     // 止まっていないので、次のターンが走る。
     await waitFor(() => calls.length > 1, '止まらずに次が走ること');
     clone.stop();
+  });
+});
+
+/**
+ * 蒸留が間に合わなかった区間の検出（Issue #564 の (b)。`distill-gap.ts`）。
+ *
+ * **歯が固定しているのは「開始ではなく成功で数える」ことである。** 日誌には
+ * 蒸留を**始めた**印（`ターンの入力: distill`）が前から在り、そちらを使うと
+ * 「開始したが完了しなかった回」——まさに検出したい形——が「蒸留した」として
+ * 数えられる。歯2がそこを直接押す（失敗した蒸留では開始の印だけが残り、成功の
+ * 印は残らない）。
+ */
+describe('クローン — 蒸留が間に合わなかった区間の検出', () => {
+  /** 「蒸留が成功で終わった」の印（`decision`）だけを拾う。 */
+  async function distillSucceededEntries(stores: Stores): Promise<{ decision: string }[]> {
+    const entries = (await stores.journal.list({ types: ['decision'] })) as { decision: string }[];
+    return entries.filter((entry) =>
+      entry.decision.startsWith(DISTILL_SUCCEEDED_DECISION_PREFIX),
+    );
+  }
+
+  /** 蒸留を**始めた**印（`turnInputEntry` が書く `exchange`）だけを拾う。 */
+  async function distillStartedEntries(stores: Stores): Promise<{ text: string }[]> {
+    const entries = (await stores.journal.list({ types: ['exchange'] })) as { text: string }[];
+    return entries.filter((entry) => entry.text.startsWith('ターンの入力: distill'));
+  }
+
+  /**
+   * 器を組み立てる前後に1ミリ秒以上の隙間を作る。
+   *
+   * **待ち合わせではなく境界の作り分けである。** 区間の上端は器が起きた時刻
+   * （`JournalQuery.until`。境界を含む）なので、種を仕込んだ行と器の生成が
+   * 同一ミリ秒に並ぶと、どちらの側に落ちるかが決まらない。実運用では起きない
+   * （器はデーモンの起動時に組み立てられ、最初の合図は人間の速さで来る）が、
+   * テストは同一ミリ秒に並びうるので明示的に離す。
+   */
+  const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 5));
+
+  it('1: 蒸留が成功で終わったら、日誌にその印が残る', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('価値観を伝える'));
+    await waitForDone(s.events);
+    await s.clone.endConversation('conv-1');
+
+    // **`stop()` の前に測る。** この時点で印は下りているので、続く `stop()` の
+    // 蒸留は正しく見送られ、印は増えない（歯Aの管轄。同じ作法が上の歯Dに在る）。
+    const marks = await distillSucceededEntries(s.stores);
+    expect(marks.length).toBe(1);
+    expect(marks[0]?.decision).toContain('reason=conversation_end');
+
+    await s.clone.stop();
+  });
+
+  it('2: 蒸留が失敗して終わったら、成功の印は残らない（開始の印は残る）', async () => {
+    const s = setup(undefined, createMemoryStores(), {
+      // ターン0＝人間の発言、ターン1＝endConversation の蒸留。**蒸留のターンだけ**
+      // を失敗させる（上の歯Cと同じ仕込み）。
+      resultFor: (turnIndex) =>
+        turnIndex === 1 ? { subtype: 'error_during_execution', isError: true } : undefined,
+    });
+
+    s.clone.post(humanMessage('価値観を伝える'));
+    await waitForDone(s.events);
+    await s.clone.endConversation('conv-1');
+
+    // **開始の印は在る。** これが在るのに成功の印が無い、という組み合わせが
+    // 「開始を使っていない」ことの証拠である（開始で数えていれば、この回も
+    // 「蒸留した」と読まれてしまう）。
+    expect((await distillStartedEntries(s.stores)).length).toBe(1);
+    expect(await distillSucceededEntries(s.stores)).toEqual([]);
+
+    await s.clone.stop();
+  });
+
+  it('3: ずれが在れば、次のセッションの最初のターンにだけ断り書きが載る', async () => {
+    const stores = createMemoryStores();
+    // 前のプロセスが蒸留し損ねた活動。**器を組み立てる前に仕込む**（器が起きた
+    // 後に書かれた行は、定義上いまの会話の中に在るので数えない）。
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '前のプロセスで話しかけたが、蒸留される前に落ちた',
+    });
+    await tick();
+
+    const s = setup(undefined, stores);
+    await tick();
+
+    s.clone.post(humanMessage('こんにちは'));
+    await waitForDone(s.events);
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    expect(inputs[0]).toContain(DISTILL_GAP_NOTICE_HEAD);
+
+    // 2ターン目。`s.events` は conv-1 専用なので別の購読を張る（歯Bと同じ形）。
+    const other = wireEvents(s.clone, 'conv-2');
+    s.clone.post(humanMessage('別件です', 'conv-2'));
+    await waitForDone(other.events);
+
+    expect((s.calls[0] as FakeCall).inputs[1]).not.toContain(DISTILL_GAP_NOTICE_HEAD);
+
+    await s.clone.stop();
+  });
+
+  it('4: 正常に蒸留して落ちた器の次のセッションでは、断り書きは載らない（毎回鳴らない）', async () => {
+    // **仕込みではなく、実際に蒸留を1本走らせて日誌を作る。** 蒸留そのものが
+    // 日誌へ書く（開始の印・応答・消費・そして成功の印）うえ、`stop()` の
+    // 見送りは**成功の印より後**に書かれる。素朴に「印より後に日誌の行が在るか」
+    // で数えると、正常に蒸留して静かに落ちた器でも必ず真になる ＝ 断り書きが
+    // 毎回鳴る。ここが偽陽性の本体である。
+    const stores = createMemoryStores();
+    // **累積を毎回増やす。** 固定値にすると増分が 0 になり、`turn_usage` の行が
+    // 最初のターンぶんしか作られない（AGENTS.md「固定値を返すスタブはテストを
+    // 緑にしたまま分岐を殺す」）。増やしておけば蒸留のターンぶんの行も出るので、
+    // 「蒸留自身の `turn_usage`（`site: 'session'`）を数えていない」ことまで押せる。
+    let nth = 0;
+    const first = setup(undefined, stores, {
+      modelUsage: () => {
+        nth += 1;
+        return {
+          'claude-fable-5': {
+            inputTokens: 10 * nth,
+            outputTokens: 20 * nth,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            webSearchRequests: 0,
+            costUSD: 0.5 * nth,
+          },
+        };
+      },
+    });
+
+    first.clone.post(humanMessage('価値観を伝える'));
+    await waitForDone(first.events);
+    await first.clone.endConversation('conv-1');
+    await first.clone.stop();
+    await tick();
+
+    // 器の入れ替わり。**同じ日誌の上で**次のセッションを起こす。
+    const second = setup(undefined, stores);
+    await tick();
+
+    second.clone.post(humanMessage('こんにちは'));
+    await waitForDone(second.events);
+
+    expect((second.calls[0] as FakeCall).inputs[0]).not.toContain(DISTILL_GAP_NOTICE_HEAD);
+
+    await second.clone.stop();
+  });
+
+  it('5: 成功の印と同じミリ秒に積まれた行を、印より後ろと数えない（境界）', async () => {
+    // 活動 → その後に「成功で終わった」印、の順に仕込む。**`at` は器が埋めるので
+    // この2行は同じミリ秒に並びうる。** 時刻で窓を切る（`since: 印の時刻`）と
+    // 境界を含んでしまい、その蒸留がまさに移した活動を「移されなかった」と数える。
+    // 窓は `id` を錨にする `after` で切ってある（`journal-order-with-contract.ts`
+    // の契約9 —— 同じミリ秒に積んだ2行をまたいでも飛ばさず重複しない）。
+    const stores = createMemoryStores();
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '前のプロセスで話しかけた',
+    });
+    await stores.journal.append(distillSucceededEntry('shutdown'));
+    await tick();
+
+    const s = setup(undefined, stores);
+    await tick();
+
+    s.clone.post(humanMessage('こんにちは'));
+    await waitForDone(s.events);
+
+    expect((s.calls[0] as FakeCall).inputs[0]).not.toContain(DISTILL_GAP_NOTICE_HEAD);
+
+    await s.clone.stop();
+  });
+
+  it('6: PreCompact のサイドセッションで蒸留が成功したら、reason=pre_compact の印が残る', async () => {
+    // **受信箱を通らない別経路である。** `#handle` の `'distill'` 分岐にだけ印を
+    // 置くと、「要約の直前に蒸留して、そのまま器が入れ替わった」回が「1度も蒸留
+    // していない」と読まれる。
+    const s = setup();
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const main = s.calls[0] as FakeCall;
+    const dir = await mkdtemp(join(tmpdir(), 'alteroid-distill-gap-'));
+    try {
+      const transcriptPath = join(dir, 'transcript.jsonl');
+      await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
+      const hook = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
+      if (hook === undefined) throw new Error('PreCompact フックが登録されていない');
+      await hook({ session_id: 'sess-fake', transcript_path: transcriptPath } as never, undefined, {
+        signal: new AbortController().signal,
+      } as never);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+
+    const marks = await distillSucceededEntries(s.stores);
+    expect(marks.map((mark) => mark.decision)).toEqual([
+      `${DISTILL_SUCCEEDED_DECISION_PREFIX} reason=pre_compact`,
+    ]);
+
+    await s.clone.stop();
   });
 });

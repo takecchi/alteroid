@@ -13,6 +13,12 @@ import type {
 
 import { buildCloneDistillOptions, buildCloneSessionOptions } from './claude-provider.js';
 import { buildActivityDigest, type ManagerLiveness } from './digest.js';
+import {
+  DISTILL_GAP_ACTIVITY_SCAN_LIMIT,
+  deriveDistillGapFromJournal,
+  describeDistillGap,
+  distillSucceededEntry,
+} from './distill-gap.js';
 import { excerptLine } from './excerpt.js';
 import {
   inboxEventShape,
@@ -882,6 +888,31 @@ class Clone implements CloneHost {
    * （載せ直せば、いま塞いでいる二重載せを自分でやることになる）。
    */
   #resumedHistoryHasMemory = false;
+  /**
+   * この器が組み立てられた時刻。**蒸留が間に合わなかった区間の上端である**
+   * （Issue #564 の (b)。`distill-gap.ts` の `deriveDistillGapFromJournal` の
+   * `until`）。
+   *
+   * **ここで取ることに意味がある。** この時刻より後に日誌へ入った行は、
+   * 定義上いまの器が書いたもの ＝ いまの会話の中に在る。境界を持たずに数えると、
+   * **最初のターンを起こした人間の発言そのもの**（`#record` が `post` の中で
+   * 書く）を「移されなかった活動」として数えてしまい、新しいセッションの
+   * 最初のターンは必ず「ずれが在る」になる。
+   */
+  readonly #bootAt = new Date().toISOString();
+  /**
+   * 蒸留が間に合わなかった区間の断り書きを、まだ1度も添えていないかどうか
+   * （Issue #564 の (b)）。
+   *
+   * **`#resumedHistoryHasMemory` と同じ形で持つ。** 最初のターンで1度だけ
+   * 添えて下ろす。毎ターン添えると、読み飛ばされる定型文が1つ増えるだけで、
+   * しかも会話の履歴に写しが溜まって resume のたびに運ばれる。
+   *
+   * **蒸留のターンでは添えず、印も下ろさない。** 蒸留は記憶へ移すためだけの
+   * 内部ターンで、`stop()` 経由ならこの直後にプロセスが消える
+   * （`#commitmentNoticeFor` が `distill` を弾いているのと同じ理由）。
+   */
+  #distillGapNoticePending = true;
   /** resume を試みた session id。init が来る前に落ちたら捨てる。 */
   #resumedFrom: string | null = null;
   #sawInit = false;
@@ -2495,7 +2526,17 @@ class Clone implements CloneHost {
         // された場合を含む。`outcome.status === 'failed'`）で下ろすと、移せ
         // なかった記憶を「移した」ことにして記憶を落とす（`#hasUndistilledActivity`
         // の doc）。
-        if (outcome.status === 'answered') this.#hasUndistilledActivity = false;
+        if (outcome.status === 'answered') {
+          this.#hasUndistilledActivity = false;
+          // **「成功で終わった」を日誌へ残す**（Issue #564 の (b)）。印は器の
+          // 中にしか無く（`#hasUndistilledActivity`）、プロセスが消えれば一緒に
+          // 消えるので、次のセッションからは「前回どこまで移せたか」が引けない。
+          //
+          // **`#hasUndistilledActivity` を下ろすのと同じ条件・同じ場所に置く。**
+          // 条件を別の行へ写すと、片方だけ直して残りが古い基準のまま、という穴が
+          // できる（`distill-gap.ts` の doc）。
+          await this.#journal(distillSucceededEntry(event.reason));
+        }
         return;
       }
 
@@ -2733,8 +2774,15 @@ class Clone implements CloneHost {
     try {
       await this.#ensureQuery();
       // 配り直しと台帳の断り書きは**ここでだけ**載せる（`#redeliveryNotice` の理由）。
+      // 蒸留が間に合わなかった区間の断り書きも同じ場所へ置く（起点は7か所に
+      // 散っているが、ターンの入口はここ1か所しかない）。
       this.#pushInput(
-        await this.#withFreshMemory(this.#redeliveryNotice + this.#commitmentNotice + text),
+        await this.#withFreshMemory(
+          (await this.#distillGapNotice(kind)) +
+            this.#redeliveryNotice +
+            this.#commitmentNotice +
+            text,
+        ),
       );
       // 入力がモデルへ渡った瞬間から最初の出力までは「考えている」。
       // **`#ensureQuery` より後で送る** — セッションの起動そのものはまだ考え
@@ -3053,6 +3101,43 @@ class Clone implements CloneHost {
           ? outcome.text
           : '（クローンがこの日の日報を残さなかった。日誌から直接辿ること。）',
     });
+  }
+
+  /**
+   * 蒸留が間に合わなかった区間を、最初のターンで1度だけ断る（Issue #564 の (b)）。
+   *
+   * **判定そのものはここに書かない。** 基準は `distill-gap.ts` の
+   * `deriveDistillGapFromJournal` が1本で持つ（`memory.ts` の derive 2本と
+   * 同じ形・同じ理由 —— 基準が散ると、片方だけ直して残りが古い基準のまま、
+   * という穴ができる）。ここが持つのは**いつ載せるか**だけである。
+   *
+   * **蒸留のターンには載せない。** 記憶へ移すためだけの内部ターンであって、
+   * しかも `stop()` 経由の蒸留はこの直後にプロセスが消える
+   * （`#commitmentNoticeFor` が同じ判断を逐語で持っている）。**印も下ろさない**
+   * ので、次の通常のターンで改めて載る。
+   *
+   * **読めなくても空文字を返してターンを進める。** 断り書きが組み立てられない
+   * ことでターンまで止めたら、いま塞いでいる穴より広い穴になる
+   * （`#commitmentNoticeFor` と同じ）。**印は読む前に下ろす** —— 日誌が壊れて
+   * いれば毎ターン同じ読み出しを繰り返すことになり、鳴らない断り書きのために
+   * 全ターンが重くなる。
+   */
+  async #distillGapNotice(kind: 'normal' | 'distill'): Promise<string> {
+    if (kind === 'distill') return '';
+    if (!this.#distillGapNoticePending) return '';
+    this.#distillGapNoticePending = false;
+
+    try {
+      const gap = await deriveDistillGapFromJournal(this.#stores.journal, {
+        until: this.#bootAt,
+        activityScanLimit: DISTILL_GAP_ACTIVITY_SCAN_LIMIT,
+      });
+      if (gap === null) return '';
+      return `${describeDistillGap(gap)}\n\n---\n\n`;
+    } catch (error) {
+      noteDroppedRecord('蒸留の区間の読み出し', `until=${this.#bootAt}`, error);
+      return '';
+    }
   }
 
   /**
@@ -3695,6 +3780,15 @@ class Clone implements CloneHost {
       // `modelUsage` に合算されて分離できない（`usage.ts` の `usageSiteSchema`）。
       // 混ぜて名乗ると、取れていないものを取れたことにする。
       await this.#recordUsage(message, 'distill', 'oneshot');
+      // **この経路の成功も日誌へ残す**（Issue #564 の (b)）。ここは受信箱を
+      // 通らない別経路なので、`#handle` の `'distill'` 分岐に印を置いただけでは
+      // 「要約の直前に蒸留して、そのまま器が入れ替わった」回が「1度も蒸留して
+      // いない」と読まれる。
+      //
+      // **判定は `isSuccessResult` である**（`#recordUsage` が消費を積むのと
+      // 同じ条件。`usage.ts` の doc）。ここは `#runTurn` を通らないサイド
+      // クエリなので `TurnOutcome` が無く、成否は `result` からしか取れない。
+      if (isSuccessResult(message)) await this.#journal(distillSucceededEntry('pre_compact'));
       break;
     }
   }
