@@ -597,19 +597,34 @@ export interface CommitmentStore {
    * `origin` / `source` / `at` / `closedAt` / `closedReason` / `closedBy` には
    * 触れない。
    *
-   * **`origin` が `'human'` かどうかの判定はここでは行わない。** `origin` は
+   * **`origin` が何であるかの判定はここでは行わない。** `origin` は
    * 開いたときから決して変わらない値なので、並行に呼ばれても競合しない——
    * 競合しうるのは「まだ閉じていない」という不変条件だけである。**競合する
-   * 不変条件だけを台帳の1操作へ畳み、競合しない方針判断（`origin` が
-   * `'human'` かどうか）は呼び出し側（`PATCH /commitments/:id`、
-   * `apps/daemon/src/app.ts`）へ残す**（AGENTS.md「不変条件はストアの1操作に
+   * 不変条件だけを台帳の1操作へ畳み、競合しない方針判断（どの `origin` の行を
+   * 直してよいか）は呼び出し側へ残す**（AGENTS.md「不変条件はストアの1操作に
    * 閉じること」と同じ考え方——`close()` が `where ... and closed_at is null`
    * だけを SQL 側へ畳み、`by` の決定は呼び出し側に残しているのと対になる）。
    *
    * **`by` は必須である。** 理由は `close` の `by` と同じ（`close` の doc を
    * 見よ）——optional にすると、呼び出し側が「誰が直したか」を決めずに通せて
-   * しまう。実際の呼び出し元（`PATCH /commitments/:id`）は常に `'human'` を
-   * 渡す（クローン向けの編集ツールは無い）。
+   * しまう。呼び出し元は2つあり、**どちらも「自分が書いた行を自分で直す」形に
+   * なっている**（`commitmentSchema.editedAt` の doc）：
+   *
+   * - `PATCH /commitments/:id`（`apps/daemon/src/app.ts`）— `origin: 'human'`
+   *   の行だけを直し、`'human'` を渡す
+   * - `commitment_edit`（`packages/core/src/tools.ts`）— `origin: 'self'`
+   *   の行だけを直し、`'clone'` を渡す（issue #580 の (B)）
+   *
+   * **⚠️ かつてここには「実際の呼び出し元（`PATCH /commitments/:id`）は常に
+   * `'human'` を渡す（クローン向けの編集ツールは無い）」と書いてあった。
+   * issue #580 でそれが偽になった。**
+   *
+   * **⚠️ そして呼び出し側にはもう1つ義務がある — 編集の前後の本文を日誌へ
+   * 逐語で残すこと。** 台帳が守っているのは不変性ではなく追跡可能性なので
+   * （`commitmentSchema.editedAt` の doc）、原文が日誌から読み戻せない編集の
+   * 口を足すと、その線が壊れる。**ここ（ストア）はそれを強制できない** —
+   * 日誌は別のストアであり、この署名からは見えない。新しい呼び出し元を足す
+   * なら、`journal.append` を必ず対にすること。
    */
   editBody(id: string, body: string, at: string, by: CommitmentEditedBy): Promise<boolean>;
 }

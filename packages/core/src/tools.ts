@@ -236,6 +236,7 @@ export const CLONE_TOOL_NAMES = [
   'commitment_list',
   'commitment_open',
   'commitment_close',
+  'commitment_edit',
   'profile_read',
   'profile_write',
   'token_list',
@@ -2887,6 +2888,70 @@ export function createCloneTools(context: ToolContext) {
         }
         await stores.commitments.close(id, new Date().toISOString(), reason, 'clone');
         return text(`${id} を片付けた。`);
+      },
+    ),
+
+    tool(
+      'commitment_edit',
+      [
+        '台帳に載っている**自分の**行の本文を後から直す（誤字・言葉足らず・状況が変わって書き直したいとき）。',
+        '**直せるのは `origin` が `self` の行、つまりあなた自身が `commitment_open` で載せた行だけである。**',
+        '人間が積んだ行（`human`）は人間自身が Web UI から直す。マネージャーの報告（`manager`）は誰も直せない。',
+        '片付いた行は直せない（積み直すこと）。',
+        '**編集の前後の本文は日誌へ逐語で残る**ので、直した後でも元の本文は読み戻せる。',
+      ].join(' '),
+      {
+        id: z.string().describe('commitment_list に出ている id'),
+        body: z
+          .string()
+          .min(1)
+          .describe(
+            '直した後の本文（全文。差分ではない）。後日のあなたが読んでそのまま動ける粒度で書く',
+          ),
+      },
+      async ({ id, body }) => {
+        const existing = await stores.commitments.get(id);
+        if (existing === null) return text(`引き受けた仕事 ${id} は台帳に無い。`);
+        // **`origin` の判定はここでする**（`CommitmentStore.editBody` の doc —
+        // 競合しない方針判断はストアではなく呼び出し側が持つ）。人間側の口
+        // （`PATCH /commitments/:id`）が `origin !== 'human'` を断るのと対称に、
+        // ここは `origin !== 'self'` を断る。**書き換えられるのは常に自分自身の
+        // 言葉だけ**という線を、人間側とクローン側で同じ形にしてある
+        // （`commitmentSchema.editedAt` の doc）。
+        if (existing.origin !== 'self') {
+          return text(
+            `${id} は origin:'${existing.origin}' なので直せない。` +
+              (existing.origin === 'human'
+                ? '人間が積んだ行は人間自身が Web UI / API から直す。'
+                : 'マネージャーの報告（manager）や外から届いた出来事（external）の本文は誰も直せない。') +
+              '書き換えてよいのは、あなたが commitment_open で載せた行（self）だけである。',
+          );
+        }
+        // **片付いているかの判定は台帳の戻り値に任せる**（`close` と同じ）。
+        // ここで読んだ後に閉じられていても、`editBody` が false を返す。
+        const before = existing.body;
+        if (!(await stores.commitments.editBody(id, body, new Date().toISOString(), 'clone'))) {
+          const after = await stores.commitments.get(id);
+          return text(
+            `${id} は既に ${after?.closedAt ?? '不明な時刻'} に片付けてある` +
+              `（${after?.closedReason ?? '理由の記録なし'}）ので直せない。` +
+              '片付いた行を書き直したいなら、commitment_open で新しく載せること。',
+          );
+        }
+        // **編集の前後を両方、日誌へ逐語で残す。これは任意の付け足しではない。**
+        // 台帳が守っているのは「一字一句が凍ること」ではなく「クローンが過去の
+        // 自分を追えること」であり（`commitmentSchema.editedAt` の doc）、原文が
+        // 日誌から読み戻せることがその条件そのものである。**ここを落とすと、
+        // `PATCH /commitments/:id` の doc が断っている「静かに書き換わる」に
+        // なる。**
+        await stores.journal.append({
+          type: 'decision',
+          decision:
+            `引き受けた仕事の本文を直した（${id}）: ` +
+            `編集前「${before}」→ 編集後「${body}」`,
+          grounds: '自分で載せた行の本文を自分で直した（原文は日誌に残す）',
+        });
+        return text(`${id} の本文を直した（元の本文は日誌に残してある）。`);
       },
     ),
 

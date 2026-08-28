@@ -1112,13 +1112,21 @@ export const commitmentClosedBySchema = z.enum(['clone', 'human']);
 /**
  * `body` を後から直したときの主体を**誰が書いたか**。
  *
- * `commitmentClosedBySchema`（`'clone' | 'human'`）と違い、**既知の値は
- * `'human'` だけである。** 編集を許すのは `origin: 'human'` かつ未了の行の
- * `body` に限ってあり（`commitmentSchema.editedAt` の doc）、その判定を行う
- * のは `PATCH /commitments/:id`（`apps/daemon/src/app.ts`）だけである。
- * クローン向けの編集ツールは無い（`tools.ts` に `commitment_edit` を
- * 足していない——人間だけが直せればよい）ので、この器が実際に書く値は
- * `'human'` の1つに限られる。
+ * **既知の値は `commitmentClosedBySchema` と同じ2つ（`'clone' | 'human'`）
+ * である。** 書き手ごとに、直せる行が `origin` で分かれている：
+ *
+ * - `'human'` — `PATCH /commitments/:id`（`apps/daemon/src/app.ts`）が書く。
+ *   直せるのは `origin: 'human'` かつ未了の行だけである
+ * - `'clone'` — `commitment_edit`（`packages/core/src/tools.ts`）が書く。
+ *   直せるのは `origin: 'self'` かつ未了の行だけである（issue #580 の (B)）
+ *
+ * **⚠️ かつてここには「クローン向けの編集ツールは無い——人間だけが直せれば
+ * よい」と書いてあった。issue #580 でそれが偽になった** — 人間がチャットで
+ * クローンに頼んで積まれた行は `origin: 'self'` になるので、人間の主観では
+ * 「自分が登録した仕事」なのに誰も直せなかった。線は「人間だけが直せる」
+ * ではなく**「書き換えられるのは常に自分自身の言葉だけ」**であり、
+ * `commitment_edit` はそれを人間側とクローン側で対称にしただけである
+ * （`commitmentSchema.editedAt` の doc）。
  *
  * **それでも `commitmentSchema.editedBy` の型はこの enum ではなく
  * `z.string()` で緩く持つ。** 理由は `commitmentClosedBySchema` と全く同じ
@@ -1127,7 +1135,7 @@ export const commitmentClosedBySchema = z.enum(['clone', 'human']);
  * 一覧を丸ごと読めなくするので、書き込み側をこの enum で縛りつつ読み出し側
  * は緩くする、という同じ非対称をここでも採る。
  */
-export const commitmentEditedBySchema = z.enum(['human']);
+export const commitmentEditedBySchema = z.enum(['clone', 'human']);
 
 /**
  * 引き受けたまま終わっていない仕事1件（PRD「自律」の器を、単発の依頼へ広げたもの）。
@@ -1256,24 +1264,45 @@ export const commitmentSchema = z.object({
    * こと」であって「一字一句を凍結すること」ではないので、まだ片付いて
    * いない行の `body` だけは直せるようにする（`CommitmentStore.editBody`）。
    *
-   * **なぜ `origin: 'human'` の行だけか。** `POST /commitments`
-   * （`apps/daemon/src/app.ts`）は `origin` を `'human'` に固定しているので、
-   * Web UI や API から積まれたものは必ず `human` である——人間の困りごとを
-   * 過不足なく覆う。この線で切ると、人間が書き換えられるのは常に人間自身の
-   * 言葉だけになり、クローンが自分で立てた行（`self`）やマネージャーの報告
-   * （`manager`）は誰にも書き換えられない。**台帳は「クローンが何を
-   * 引き受けたか」の記録であり、そこが静かに書き換わるとクローンが過去の
-   * 自分を追えなくなる。** `bodyMarkup`（接頭辞の記法）は `origin: 'manager'`
-   * のときだけ立つので、この線を引けばそちらへは触れずに済む。
+   * **線は「書き換えられるのは常に自分自身の言葉だけ」である。** 直せる
+   * 主体と `origin` の対応は2つだけで、どちらも「自分が書いた行を自分で
+   * 直す」形になっている：
    *
-   * **原文は消えない。** `PATCH /commitments/:id` は編集の前後の本文を
-   * 日誌（`journal.append`。追記専用）へ逐語で残すので、この欄が上書き
-   * されても、直す前の本文は日誌から読み戻せる。
+   * - 人間（`PATCH /commitments/:id`、`apps/daemon/src/app.ts`）は
+   *   `origin: 'human'` の行だけ。`POST /commitments` は `origin` を
+   *   `'human'` に固定しているので、Web UI や API から積まれたものは必ず
+   *   `human` である
+   * - クローン（`commitment_edit`、`packages/core/src/tools.ts`）は
+   *   `origin: 'self'` の行だけ。`commitment_open` が `origin` を
+   *   `'self'` に固定しているので、クローンが自分で立てた行はここに入る
+   *
+   * **⚠️ かつてここには「クローンが自分で立てた行（`self`）やマネージャーの
+   * 報告（`manager`）は誰にも書き換えられない」と書いてあった。`self` に
+   * ついては issue #580 でそれが偽になった** — 人間がチャットでクローンに
+   * 頼んで積まれた行が `self` なので、人間の主観では「自分が登録した仕事」
+   * なのに誰も直せなかった。
+   *
+   * **`origin: 'manager'` の行はいまも誰も直せない。** `bodyMarkup`
+   * （接頭辞の記法）が `origin: 'manager'` のときだけ立ち、`body` は
+   * `` `[${event.kind}] ${event.text}` `` の形で接頭辞を含む
+   * （`bodyMarkup` の doc）——本文を書き換えると、表示側が接頭辞を剥がして
+   * `bodyMarkup` を当てるという両側の前提が壊れる。
+   *
+   * **それでも守っているものは変わらない。台帳は「クローンが何を引き受けたか」
+   * の記録であり、そこが _静かに_ 書き換わるとクローンが過去の自分を
+   * 追えなくなる** — 害として名指されているのは追跡不能であって、不変性
+   * そのものではない（すぐ下の「原文は消えない」がその条件を持つ）。
+   *
+   * **原文は消えない。これは任意の付け足しではなく、上の線が成り立つための
+   * 条件である。** `PATCH /commitments/:id` も `commitment_edit` も、編集の
+   * 前後の本文を日誌（`journal.append`。追記専用）へ逐語で残す。だから
+   * この欄が上書きされても、直す前の本文は日誌から読み戻せる——「静かに
+   * 書き換わる」にならない。**日誌へ前後を残さない編集の口を足さないこと。**
    */
   editedAt: isoDateTime.optional(),
   /**
    * `body` を誰が直したか。**既知の値は `commitmentEditedBySchema`
-   * （`'human'` のみ）だが、ここは `closedBy` と同じ理由で `z.string()` に
+   * （`'clone' | 'human'`）だが、ここは `closedBy` と同じ理由で `z.string()` に
    * 緩めてある**（そちらの doc を見よ——未知の値1件で台帳の一覧が丸ごと
    * 読めなくなることを避けるため）。`undefined` は「一度も編集していない」
    * であって、`closedBy` と同じく既定へは倒さない。
@@ -1282,7 +1311,7 @@ export const commitmentSchema = z.object({
     .string()
     .optional()
     .describe(
-      "既知の値は 'human'（commitmentEditedBySchema）。無ければ一度も編集されていない。" +
+      "既知の値は 'clone' / 'human'（commitmentEditedBySchema）。無ければ一度も編集されていない。" +
         '台帳の完全性より由来の注記の厳密さを優先しないため、型としては任意の文字列を許す。',
     ),
 });
