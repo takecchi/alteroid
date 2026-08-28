@@ -663,6 +663,8 @@ function stubClient(
     memoryDocuments?: MemoryDocLike[];
     /** `GET /journal` が返す一覧。既定は空。 */
     journalEntries?: JournalEntryLike[];
+    /** `GET /reports` が返す一覧。既定は空。 */
+    reports?: { date: string; at: string; body: string; unavailable?: string }[];
     /** `GET /managers` が返す一覧。既定は空（`/managers` `/waiting` `/reply` 等が使う）。 */
     managers?: ManagerListItem[];
     /** `POST /managers/:id/messages` の応答コード。既定は 200。 */
@@ -801,6 +803,12 @@ function stubClient(
       $get: (args: unknown) => {
         calls.push({ route: 'GET /journal', args });
         return Promise.resolve(reply(200, { entries: options.journalEntries ?? [] }));
+      },
+    },
+    reports: {
+      $get: (args: unknown) => {
+        calls.push({ route: 'GET /reports', args });
+        return Promise.resolve(reply(200, { reports: options.reports ?? [] }));
       },
     },
   };
@@ -1548,6 +1556,87 @@ describe('chat の /journal', () => {
     expect(text).toContain('「ナス」に当たる日誌はありません');
     expect(text).toContain('tool_use の input');
     expect(text).not.toContain('日誌はまだ空');
+  });
+
+  /**
+   * **上限に当たったことは一切言っていなかった**（Issue #426 の G3、棚卸しの
+   * 逐語）。0件のときの断りはあっても、`limit` 件ちょうど返ったとき——
+   * つまりこれより古い日誌が隠れているかもしれないとき——には何も言わない
+   * 穴があった。`GET /journal` は総件数を返さないので（`app.ts` の
+   * `journalQuery` の doc）、正確な省略件数は言えない。言えるのは「上限に
+   * ちょうど当たった」ことだけである。
+   */
+  it('返った件数が上限（既定20件）ちょうどなら、これより古いかもしれないと言う', async () => {
+    const read = captureStdout();
+    const journalEntries = Array.from({ length: 20 }, (_, index) => ({
+      id: `j-${index}`,
+      at: `2026-08-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`,
+      type: 'decision',
+      decision: `判断 ${index}`,
+    }));
+    const { client } = stubClient({ journalEntries });
+
+    await runSlashCommand('/journal', client, emptyListed());
+
+    expect(read()).toContain('直近 20 件のみ表示している。これより古い日誌があるかもしれない。');
+  });
+
+  it('上限に達していなければ、その断りは出さない（雑音にしない）', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      journalEntries: [{ id: 'j-1', at: '2026-08-16T10:00:00.000Z', type: 'decision' }],
+    });
+
+    await runSlashCommand('/journal', client, emptyListed());
+
+    expect(read()).not.toContain('これより古い日誌があるかもしれない');
+  });
+});
+
+describe('chat の /reports（一覧）', () => {
+  /**
+   * **断りが無い（Issue #426 の G3、棚卸しの逐語）。** `/reports` は既定14件
+   * 固定で、それに一切触れていなかった。`GET /reports` も総件数を返さない
+   * ので（`app.ts` の `reportsQuery` の doc）、`/journal` と同じ形——正確な
+   * 省略件数ではなく「上限にちょうど当たった」ことだけを言う。
+   */
+  it('返った件数が上限（既定14件）ちょうどなら、これより古いかもしれないと言う', async () => {
+    const read = captureStdout();
+    const reports = Array.from({ length: 14 }, (_, index) => ({
+      date: `2026-06-${String(index + 1).padStart(2, '0')}`,
+      at: `2026-06-${String(index + 1).padStart(2, '0')}T22:00:00.000Z`,
+      body: `${index} 日目の進捗`,
+    }));
+    const { client } = stubClient({ reports });
+
+    await runSlashCommand('/reports', client, emptyListed());
+
+    expect(read()).toContain('直近 14 件のみ表示している。これより古い日報があるかもしれない。');
+  });
+
+  it('上限に達していなければ、その断りは出さない（雑音にしない）', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      reports: [{ date: '2026-06-01', at: '2026-06-01T22:00:00.000Z', body: '進捗' }],
+    });
+
+    await runSlashCommand('/reports', client, emptyListed());
+
+    expect(read()).not.toContain('これより古い日報があるかもしれない');
+  });
+
+  it('件数を指定したときも、その上限ちょうどで断りが出る', async () => {
+    const read = captureStdout();
+    const reports = Array.from({ length: 5 }, (_, index) => ({
+      date: `2026-06-${String(index + 1).padStart(2, '0')}`,
+      at: `2026-06-${String(index + 1).padStart(2, '0')}T22:00:00.000Z`,
+      body: `${index} 日目の進捗`,
+    }));
+    const { client } = stubClient({ reports });
+
+    await runSlashCommand('/reports 5', client, emptyListed());
+
+    expect(read()).toContain('直近 5 件のみ表示している。これより古い日報があるかもしれない。');
   });
 });
 

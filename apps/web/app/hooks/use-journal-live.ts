@@ -37,6 +37,22 @@ export interface JournalLive {
   status: LiveStatus;
   /** 新しい順。接続してから届いたものだけ（履歴は `useJournal` が持つ）。 */
   recent: JournalEntry[];
+  /**
+   * 接続してから届いた出来事の**総数**（`RECENT_LIMIT` で切る前の値）。
+   *
+   * `recent` は `RECENT_LIMIT` 件で頭打ちにしてあるので、`recent.length` は
+   * 「届いた全部のうち何件を出していないか」を答えられない — 200件を超えて
+   * 届いた分だけ、`recent.length` は 200 に貼り付いたまま増えなくなる。
+   * ここは上限を掛けずに1件ごと積むので、呼び出し側（`dashboard.tsx`）は
+   * `receivedCount - (自分が画面に出した件数)` で本当の省略数を出せる。
+   *
+   * **optional にしてあるのは互換のためだけである。** `useJournalLive()` は
+   * 必ずこれを返す（下の実装）。optional なのは、この型を直に組み立てている
+   * 既存のテスト（`journal.test.tsx` 等、この Issue の触ってよい範囲の外）が
+   * この欄を持たないままでも壊れないようにするため——`journal.tsx` 自身は
+   * この値を使わないので、そちらのテストにとっては要らない欄である。
+   */
+  receivedCount?: number;
 }
 
 export function useJournalLive(): JournalLive {
@@ -44,6 +60,7 @@ export function useJournalLive(): JournalLive {
   const { mutate } = useSWRConfig();
   const [status, setStatus] = useState<LiveStatus>('connecting');
   const [recent, setRecent] = useState<JournalEntry[]>([]);
+  const [receivedCount, setReceivedCount] = useState(0);
 
   // `mutate` を購読の effect の依存に入れると、その同一性が崩れた瞬間に
   // SSE を張り直すことになる。購読は張りっぱなしにしたいので ref 越しに読む
@@ -71,6 +88,7 @@ export function useJournalLive(): JournalLive {
           }
           const entry = message.data;
           setRecent((previous) => [entry, ...previous].slice(0, RECENT_LIMIT));
+          setReceivedCount((previous) => previous + 1);
           invalidate(entry, mutateRef.current);
         }
       } catch {
@@ -94,7 +112,7 @@ export function useJournalLive(): JournalLive {
     // 接続先が変わったら張り直す。
   }, [client, baseUrl]);
 
-  return { status, recent };
+  return { status, recent, receivedCount };
 }
 
 /**
