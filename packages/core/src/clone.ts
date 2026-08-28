@@ -1613,7 +1613,9 @@ class Clone implements CloneHost {
       settlements.push(await reportSettlement(this.#stores.commitments, event.id));
     }
 
-    await this.#runInternal(managerReportBatchPrompt(events, settlements));
+    // **`now` はここで1度だけ取る**（`#handle` の単発経路が `managerPrompt` へ
+    // 渡すのと同じ形。#562 PR-1）。`managerReportBatchPrompt` を純関数のまま保つ。
+    await this.#runInternal(managerReportBatchPrompt(events, settlements, new Date()));
   }
 
   /**
@@ -4418,6 +4420,12 @@ function managerPrompt(
  * 件によって違いうるので、`events` と `settlements` を同じ添字で対応させ、
  * 1件ずつ `closedReportNotice` を通す — 1つの判定へ潰さない。
  *
+ * **1件ごとに「受け取ってからの経過」を出す**（`describeReportAge`。#562 PR-1 が
+ * `managerPrompt` の `report` 分岐へ入れたのと同じもの）。**束ねられる報告は、
+ * 定義上いちばん長く待った報告である** —— 単発の経路にだけ経過が載って、こちらに
+ * 載らないと、**待った証拠がいちばん要る場所でだけ消える。** `now` を引数で受け
+ * 取るのも PR-1 と同じ理由（純関数のまま保ち、歯が時刻で揺れないようにする）。
+ *
  * **呼び出し元は常に2件以上で呼ぶ**（`#mergedManagerReportBatch` が1件のとき
  * `null` を返し、`#pump` はそちらを `#handle` の単発経路（`managerPrompt`）へ
  * 落とすため）。0件・1件の来客には空文字列／`managerPrompt` 相当の形を返す
@@ -4427,6 +4435,7 @@ function managerPrompt(
 function managerReportBatchPrompt(
   events: ManagerReportMessage[],
   settlements: ReportSettlement[],
+  now: Date,
 ): string {
   const head = events[0];
   if (head === undefined) return '';
@@ -4442,7 +4451,7 @@ function managerReportBatchPrompt(
       // 同じ理由 —— 本文より前に置くと「読まなくてよい」と読まれて本文を飛ばされる）。
       const closed = closedReportNotice(settlements[index] ?? { kind: 'unknown' });
       return [
-        `**(${index + 1}) ${event.at}**`,
+        `**(${index + 1})** ${describeReportAge(event.at, now)}`,
         '',
         event.text,
         ...(closed === null ? [] : ['', closed]),

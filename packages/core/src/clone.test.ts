@@ -7748,6 +7748,34 @@ describe('クローン — 同じマネージャーの連続する report をま
     await s.clone.stop();
   }, 15_000);
 
+  // **束ねられる報告は、定義上いちばん長く待った報告である。** 単発の経路
+  // （`managerPrompt`）にだけ「受け取ってからの経過」が載って、こちらに載らないと、
+  // **待った証拠がいちばん要る場所でだけ消える**（#562 PR-1 が入れたもの）。
+  it('まとめた本文にも、1件ごとに受け取ってからの経過が載る', async () => {
+    const s = setup();
+
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    s.clone.post(managerMessage('age1', 'mgr-age', '報告1本目'));
+    s.clone.post(managerMessage('age2', 'mgr-age', '報告2本目'));
+
+    await waitFor(
+      () => s.calls[0]?.inputs[1]?.includes('報告2本目') ?? false,
+      'まとめたターンが投げられる',
+    );
+    await settle();
+
+    const merged = (s.calls[0] as FakeCall).inputs[1] ?? '';
+    // 2件ぶん、それぞれに経過の行が付く（1つに畳んでいない）。
+    expect(merged.split('受け取ってから').length - 1).toBe(2);
+    // 丸めた値だけでなく、受け取った時刻そのものも併記される
+    // （他のタイムスタンプと突き合わせられるように。`describeReportAge` の doc）。
+    expect(merged).toContain('受け取った時刻:');
+
+    await s.clone.stop();
+  }, 15_000);
+
   it('間に別のマネージャーの報告が挟まったら、そこで止まる（飛び越えない）', async () => {
     const s = setup();
 
