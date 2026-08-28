@@ -108,7 +108,13 @@ async function registerBackgroundTask(
 
 /** 当人（`type=subagent`。`id` は `agent_id` と同じ値になる）。 */
 function selfEntry(agentId: string) {
-  return { id: agentId, type: 'subagent', status: 'running', description: '当人', agent_type: 'worker' };
+  return {
+    id: agentId,
+    type: 'subagent',
+    status: 'running',
+    description: '当人',
+    agent_type: 'worker',
+  };
 }
 
 const STOP_BASE = {
@@ -277,7 +283,10 @@ describe('SubagentStop の観測（#357 / #570）', () => {
       ...STOP_BASE,
       agent_id: 'agent-1',
       // `bg-unknown` は表に無い（＝ `PostToolUse` の経路が壊れたときの顔）。
-      background_tasks: [selfEntry('agent-1'), { id: 'bg-unknown', type: 'shell', status: 'running' }],
+      background_tasks: [
+        selfEntry('agent-1'),
+        { id: 'bg-unknown', type: 'shell', status: 'running' },
+      ],
     };
 
     const first = await fireSubagentStop(started.options, input);
