@@ -604,10 +604,16 @@ function CommitmentBody({ commitment }: { commitment: Commitment }) {
  * 分かる印を出す」）。
  *
  * **`editedAt` の有無だけを見る。** 誰が直したか（`editedBy`）は現状 `'human'`
- * 一択で（`commitmentEditedBySchema`）、`OpenRow` に編集の入口を出す条件
- * （`origin: 'human'` かつ未了）を通った行しかサーバは書き換えないため、
- * ここへ表示のためだけの網羅性チェック（`assertOriginHandled` 相当）を
- * 足すほどの分岐は無い——`editedBy` の値そのものはラベルに使わない。
+ * 一択で（`commitmentEditedBySchema`）、**サーバ（`PATCH /commitments/:id`）が
+ * 書き換えを通す行しか `editedAt` を持たない**ため、ここへ表示のためだけの
+ * 網羅性チェック（`assertOriginHandled` 相当）を足すほどの分岐は無い——
+ * `editedBy` の値そのものはラベルに使わない。
+ *
+ * **⚠️ この根拠はサーバ側にある。画面の入口の出し方ではない。** 以前ここには
+ * 「`OpenRow` に編集の入口を出す条件（`origin: 'human'` かつ未了）を通った行
+ * しか書き換わらない」と書いてあったが、**入口は未了の行すべてに出るように
+ * なった**（`OpenRow` の「編集の入口は `origin` で隠さない」）。誰が書き換え
+ * られるかを決めているのは最初からサーバだけである。
  *
  * **`OpenRow` / `ClosedRow` の両方に出す。** 編集できるのは未了の行だけだが、
  * `editedAt` は編集後に片付けられても消えない（`commitmentSchema.editedAt`
@@ -623,20 +629,28 @@ const EDITOR_TAB_TRIGGER_CLASS =
 const EDITOR_TAB_TRIGGER_ACTIVE_CLASS = 'border-accent text-fg';
 
 /**
- * 台帳の本文を人間が直接編集する（`origin: 'human'` かつ未了の行だけ、
- * `OpenRow` が呼び出し元でその条件を確かめてから描く）。
+ * 台帳の本文を人間が直接編集する（未了の行なら `origin` を問わず開ける。
+ * `OpenRow` が「編集」を押した行だけに mount する）。
+ *
+ * **誰の行を実際に書き換えられるかを、この部品は知らない。** 判定はサーバ
+ * （`PATCH /commitments/:id`）が持ち、断られたら 403 の本文がそのまま下の
+ * `ErrorNote` に出る（`OpenRow` の「編集の入口は `origin` で隠さない」）。
  *
  * **`memory-detail.tsx` と同じ形。** プレビュー / 編集のタブ、既定はプレビュー、
  * 下書き（`draft`）は `Tabs.Root` の外（この部品自身）に置く——非活性の
  * `Tabs.Content` は unmount されるので、内側に置くとタブを切り替えた瞬間に
  * 入力が消える（`memory-detail.tsx` の `draft` の doc と同じ理由）。
  *
- * **⚠️ プレビューは Markdown へ倒さない。** `memory-detail.tsx` は記憶
- * （AI/人間どちらも書く自由記述）を `<Markdown>` で描くが、ここは
- * `origin: 'human'` の行——`CommitmentBody` の描き分け（doc の表）で
- * 「人間が打った文字を化けさせない」と決めた対象そのものなので、プレビューも
- * `PlainBody` のまま描く。編集できるようにしたことが、表示の描き分けを
- * 変える理由にはならない。
+ * **プレビューは `CommitmentBody` をそのまま通す**（下書きを `body` に差した
+ * 写しを渡す）。`memory-detail.tsx` は記憶（AI/人間どちらも書く自由記述）を
+ * 一律 `<Markdown>` で描くが、台帳は `origin` ごとに描き分けが決まっている
+ * ——`origin: 'human'` は素のまま（「人間が打った文字を化けさせない」）、
+ * `self` / `manager` は Markdown。**編集できるようにしたことが、表示の描き分けを
+ * 変える理由にはならない**ので、プレビューは行の見え方をそのまま映す。
+ *
+ * **⚠️ ここで `origin` を見ているのは「どう描くか」というデータの分岐だけで、
+ * 「誰が直せるか」という規則ではない。** 後者を画面へ写すと、サーバ側の線が
+ * 変わった日に画面だけが黙ってずれる。
  *
  * **台帳の `body` は必ず非空**（`commitmentEditBody` が `z.string().min(1)`
  * で弾く）ので、`memory-detail.tsx` のような「本文が空なら編集を既定にする」
@@ -702,11 +716,11 @@ function CommitmentBodyEditor({
         {/*
           `draft` はこの `Tabs.Root` の外（`CommitmentBodyEditor` 自身）に在る
           （部品冒頭の doc）。プレビューが映すのは保存前の `value`
-          （= draft ?? commitment.body）そのもので、Markdown へは倒さない
-          （`PlainBody` — `origin: 'human'` の描き方をそのまま使う）。
+          （= draft ?? commitment.body）そのもので、描き方はその行の `origin`
+          に従う（`CommitmentBody` — 一覧に出ているのと同じ見え方）。
         */}
         <Tabs.Content value="preview" className="px-2 py-2">
-          <PlainBody body={value} />
+          <CommitmentBody commitment={{ ...commitment, body: value }} />
         </Tabs.Content>
 
         <Tabs.Content value="edit" className="px-2 py-2">
@@ -756,10 +770,27 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
-  // **編集できるのは `origin: 'human'` の行だけ**（サーバの線、
-  // `PATCH /commitments/:id` の doc に合わせる）。それ以外の行に編集の
-  // 入口を出すと、押しても 403 で断られるだけの死んだボタンになる。
-  const editable = commitment.origin === 'human';
+  /*
+   * **編集の入口は `origin` で隠さない。未了の行にはすべて出す。**
+   *
+   * ⚠️ ここには以前 `const editable = commitment.origin === 'human'` が在り、
+   * 「それ以外の行に入口を出すと、押しても 403 で断られるだけの死んだボタンに
+   * なる」と書いてあった。**その判断を覆した**（issue #580 の (C)）。隠すと、
+   * 断られること自体は防げても**なぜ直せないのかが画面から消える**——人間には
+   * 「編集できない」としか見えず、理由は1文字も出ない。
+   *
+   * 乗せた線は、この repo が同じ論点で既に持っているもの
+   * （`apps/web/app/hooks/mutations.ts` の `useRemoveSchedule`）:
+   * 「画面側でボタンを隠して表現しないこと — 隠すと「なぜ押せないか」が
+   * 消える。押せて、断られた理由がその場に出るほうが読める。」
+   *
+   * **⚠️ そして「誰が編集を許されるか」という規則を、ここへ写さないこと。**
+   * 断るのはサーバ（`PATCH /commitments/:id`）で、403 の本文がその行の
+   * `origin` を名指しして理由を言う。それが `CommitmentBodyEditor` の
+   * `ErrorNote` にそのまま出る。**画面が持ってよいのは「この行の `origin` は
+   * 何か」というデータまでで**（バッジと本文の描き分け）、規則を写せば
+   * サーバ側の線が変わった日に画面だけが黙ってずれる。
+   */
   const [editing, setEditing] = useState(false);
 
   async function submit() {
@@ -784,15 +815,13 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
         <span>{formatDateTime(commitment.at)}</span>
         {/* 齢。器は優先度も締切も持たないので、急ぎ方を決める材料はこれだけである。 */}
         <span>({formatRelative(commitment.at)})</span>
-        {editable && (
-          <button
-            type="button"
-            className="ml-auto text-[11px] text-muted underline hover:text-fg"
-            onClick={() => setEditing((current) => !current)}
-          >
-            {editing ? '編集をやめる' : '本文を編集'}
-          </button>
-        )}
+        <button
+          type="button"
+          className="ml-auto text-[11px] text-muted underline hover:text-fg"
+          onClick={() => setEditing((current) => !current)}
+        >
+          {editing ? '編集をやめる' : '本文を編集'}
+        </button>
       </div>
 
       {/*
