@@ -150,8 +150,81 @@ export function ManagerFailureNote({
 }
 
 /**
+ * **宛先の器そのものが名乗らなくなった**ことを、**状態に添えて**出す一行
+ * （`ManagerSummary.runnerLostSince`）。
+ *
+ * **`ManagerSessionMissingNote` と1つの部品に畳んでいない。違う主張だからである。**
+ *
+ * | | `runnerLostSince` | `sessionMissingSince` |
+ * | --- | --- | --- |
+ * | 源 | **名簿**（`ManagerPool#silentRunners()` = 名簿の entry が `state: 'lost'`） | **台帳の像**（`record.sessionMissingSince`） |
+ * | `live` との関係 | **`live: false` を引き起こす側**（`isLive()` が `silentRunners.has(runnerId)` で false を返す） | **`live` を落とさない**ことがその欄の主眼 |
+ * | 次の一手 | 器の側を見る | この委譲の生ログを見る |
+ *
+ * 1つに畳むと、doc が「いまどちらの主張をしているか」を毎回条件で言い分けること
+ * になる。repo の既存の形も「主張1つにつき部品1つ」である（`ManagerDenialNote` /
+ * `ManagerFailureNote` であって汎用の `ManagerNote` ではない）。**`denialActorTag`
+ * の doc が防いでいる「片方だけ直る形」は *同じ* 書式が2ファイルに散ることであって、
+ * *違う* 主張が2つの部品に分かれることではない** — どちらもこのファイルに置いて
+ * `manager-detail.tsx` から import すれば、ファイル間の重複は起きない。
+ *
+ * **2つは排他ではない。同時に立つ**（`packages/core/src/manager.ts` を `ff24ded9`
+ * で引いて確かめた）。`summaryOf()` は2つを独立した spread で組み立てており、排他を
+ * 課している行は1行も無い。`record.sessionMissingSince` を消すのは「resume で戻れた」
+ * ＝ runner が実際に答えた回の2箇所だけなので、**runner が黙っても消えない。** ⟹
+ * 到達順序は「runner がこの委譲について答えない → `sessionMissingSince` が立つ
+ * （`live` は true のまま）→ その後 同じ runner が名乗らなくなる → `runnerLostSince`
+ * が立ち、同時に `live: false`」。**札は「セッション切断」、その下に注記が2本並ぶ。**
+ * CLI（`chat.ts`）が2つを独立した `if` で（`else` 無しで）積み、`tools.ts` も別々の
+ * 配列要素にしているのと同じ形である。
+ *
+ * **⚠️ 「この委譲が失われた」と書かないこと。理由は `sessionMissingSince` とは中身が
+ * 違う。** こちらは「黙っているのが器なのか経路なのかは片側からは決められず、**器の
+ * 中でまだ走っている可能性が残る**」からである（`packages/core/src/manager.ts` の
+ * `ManagerSummary.runnerLostSince` の doc）。⟹ **`status: lost` の札の言葉に寄せない
+ * こと。** `lost` は resume を試して戻れなかったという**確かめた事実**に付く名前で、
+ * ここはまだ何も確かめていない。
+ *
+ * **`DisconnectedNote`（`manager-detail.tsx`）と矛盾していない。** あちらが言うのは
+ * 「送信ボタンは塞いでいない（送信そのものが resume の契機になる）」で、ここが言うのは
+ * 「この器は名簿から外れている」である。詳細画面では2つが縦に並ぶので、**片方を
+ * 「嘘だ」と思って消さないこと** — PR #66 で潰したのは「いま送っても届かない」と
+ * **断定**したことであって、器が黙っている事実の側ではない。
+ *
+ * 文言の核は CLI（`apps/cli/src/chat.ts`）と `manager_list`（`packages/core/src/tools.ts`）
+ * から逐語で取ってある。**「次の一手」の節だけ画面の語へ置き換えた** — CLI にも
+ * `tools.ts` にも器を見に行く道具の名前が出るが、**Web UI には runner の画面が無い**
+ * （`apps/web/app/routes.ts` に `runners` は無い）ので、画面に無いものを名指ししない。
+ *
+ * **時刻の連結詞だけ CLI と違う。** CLI は ISO なので「{ISO} 以降」で読めるが、この
+ * 画面は `formatRelative`（相対時刻）なので「3時間前以降」が日本語として壊れる。
+ * 「から」にしてある——主張は同一である。
+ */
+export function ManagerRunnerLostNote({
+  runnerLostSince,
+  className = 'mt-1 text-[11px] text-danger',
+}: {
+  runnerLostSince: string | undefined;
+  className?: string;
+}) {
+  if (runnerLostSince === undefined || runnerLostSince === null) return null;
+  return (
+    <p className={className}>
+      ⚠ 宛先の器は{formatRelative(runnerLostSince)}
+      から名乗っていない。新しい委譲の宛先からも外れているので、いま話しかけられない。この委譲が失われたという意味ではない
+      —
+      黙っているのが器なのか経路なのかは、ここからは言えない（器の中でまだ走っていることもある）。打つ手はこの委譲の側ではなく器の側にある
+      — 名乗らなくなった器そのものを確かめること。
+    </p>
+  );
+}
+
+/**
  * **runner は答えたが、この委譲のセッションだけが無かった**ことを、**状態に添えて**
  * 出す一行（`ManagerSummary.sessionMissingSince`）。
+ *
+ * **`ManagerRunnerLostNote` とは別の部品である**（畳まない理由はあちらの doc の表）。
+ * **2つは排他ではなく、同時に並ぶことがある。**
  *
  * **状態の札も `live` の描き方も置き換えない。** `status` は `running`（＝画面では
  * 「実行中」）のままだし、`live` も落ちない——`sessionId` が残っていれば
@@ -264,9 +337,20 @@ export default function Managers() {
                     */}
                     <ManagerFailureNote failure={manager.lastFailure} />
                     {/*
+                      `live: false` の理由を、分かる分だけ名指しする。「セッション
+                      切断」の札だけだと、セッションが終わったのか宛先の器が消えた
+                      のかが読めず、打つ手が決まらない。**CLI と `manager_list` は
+                      両方描いていて、この画面だけが両方とも描いていなかった。**
+                    */}
+                    <ManagerRunnerLostNote runnerLostSince={manager.runnerLostSince} />
+                    {/*
                       これも `status` に映らないし、`live` も落ちない（`sessionId`
                       が在れば resume から入り直せる）。⟹ 右の「接続あり」の緑と
                       **同時に**出るのが正しい形である。札は差し替えず隣に添える。
+
+                      **上の `ManagerRunnerLostNote` と排他ではない。** 2本並ぶ形が
+                      在る（`ManagerRunnerLostNote` の doc の到達順序）。CLI も
+                      `manager_list` も `else` を使わず2行積んでいる。
                     */}
                     <ManagerSessionMissingNote sessionMissingSince={manager.sessionMissingSince} />
                     {/*
