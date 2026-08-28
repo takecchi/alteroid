@@ -307,11 +307,22 @@ export default function Dashboard() {
         ) : (
           <>
             {/*
-              ここで言えるのは「届いた分のうち何件を出していないか」までである。
-              購読側（`use-journal-live.ts` の `RECENT_LIMIT`）はさらに古い分を
-              落としているので、**この但し書きは「流れた全部」の残数ではない。**
-              そちらまで数えるには購読側が落とした事実を返す必要があり、ここでは
-              数えられない（`/journal` に全部残っている旨は上のリンクが担う）。
+              **`total` は `live.recent.length` ではなく `live.receivedCount`
+              を使う。** 購読側（`use-journal-live.ts`）は `RECENT_LIMIT`
+              （200件）で頭打ちにしているので、`recent.length` は届いた総数が
+              200 を超えた時点で貼り付いて増えなくなる — それを `total` に
+              使うと、200件を超えて届いた分がここの但し書きから静かに消える
+              （購読側が落とした事実がここでは数えられなかった、という旧来の
+              制約は `receivedCount` を足したことで解消した）。`receivedCount`
+              は上限を掛けずに1件ごと積んだ値なので、ここで両方の切り捨て
+              （購読側の `RECENT_LIMIT` と、この画面が更に絞る `LIVE_LIMIT`）を
+              合わせて「残り何件を出していないか」が言える（`/journal` に
+              全部残っている旨は上のリンクが担う）。
+
+              **`?? live.recent.length` は `receivedCount` を持たない呼び手の
+              ための後方互換のフォールバックである。** 実装（`useJournalLive`）
+              は必ず `receivedCount` を返すので、実際にこの画面が使う値には
+              掛からない — 掛かるのはこの型を直に組み立てるテストダブルだけ。
             */}
             <ul className="max-h-72 overflow-y-auto">
               {live.recent.slice(0, LIVE_LIMIT).map((entry) => (
@@ -330,7 +341,7 @@ export default function Dashboard() {
                 </li>
               ))}
             </ul>
-            <TruncationNote shown={LIVE_LIMIT} total={live.recent.length} />
+            <TruncationNote shown={LIVE_LIMIT} total={live.receivedCount ?? live.recent.length} />
           </>
         )}
       </Card>

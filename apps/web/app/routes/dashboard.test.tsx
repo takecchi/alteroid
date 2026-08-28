@@ -27,7 +27,7 @@ const RECENT: JournalEntry = {
   grounds: '記憶',
 };
 
-const EMPTY_FEED: JournalLive = { status: 'live', recent: [] };
+const EMPTY_FEED: JournalLive = { status: 'live', recent: [], receivedCount: 0 };
 
 let originalFetch: typeof fetch;
 
@@ -310,16 +310,36 @@ describe('日誌は AuthedShell の購読から受け取る', () => {
   const USAGE = { rows: [], since: null, beforeLedger: false };
 
   it('context の recent をそのまま出す', async () => {
-    renderDashboard(USAGE, { status: 'live', recent: [RECENT] });
+    renderDashboard(USAGE, { status: 'live', recent: [RECENT], receivedCount: 1 });
 
     expect(await screen.findByText(summarizeJournalEntry(RECENT))).toBeTruthy();
   });
 
   it('自分では SSE を張らない（購読は AuthedShell の1本だけ）', async () => {
-    const stub = renderDashboard(USAGE, { status: 'live', recent: [RECENT] });
+    const stub = renderDashboard(USAGE, {
+      status: 'live',
+      recent: [RECENT],
+      receivedCount: 1,
+    });
 
     // 画面が出揃うまで待ってから見る（描画前に数えると、張っていても空になる）。
     await screen.findByText(summarizeJournalEntry(RECENT));
     expect(stub.calls.filter((url) => url.includes('/journal/stream'))).toEqual([]);
+  });
+
+  /**
+   * **切ったことを言う（Issue #426 の G3）。** `recent` は購読側
+   * （`use-journal-live.ts`）の `RECENT_LIMIT`（200件）で頭打ちにしてある
+   * ので、`recent.length` を但し書きの `total` に使うと 200件を超えて届いた
+   * 分が消える。`receivedCount`（上限を掛けずに1件ごと積んだ値）を使う
+   * ことで、`recent.length` が小さいままでも本当の総数が出せることを
+   * 固定する — この歯は `total={live.recent.length}` へ戻す変異で赤くなる
+   * （`recent` は1件だけなので、その変異では但し書きが出なくなる）。
+   */
+  it('但し書きの total は recent.length ではなく receivedCount を使う', async () => {
+    renderDashboard(USAGE, { status: 'live', recent: [RECENT], receivedCount: 999 });
+
+    await screen.findByText(summarizeJournalEntry(RECENT));
+    expect(await screen.findByText(/残り 969 件は出していない/)).toBeTruthy();
   });
 });

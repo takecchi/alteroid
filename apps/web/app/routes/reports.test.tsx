@@ -453,4 +453,52 @@ describe('日報', () => {
     const tokens = bodyCard.className.split(/\s+/);
     expect(tokens).toContain('min-w-0');
   });
+
+  /**
+   * **切ったなら切ったと言う（Issue #426 の G3）。** `useReports(60)` は
+   * 窓の大きさ（60）自体を変えない — 決め方が未決だと Issue 本文が書いて
+   * いるので、決まっていない基準で窓を動かすより先に「切ったことと定量を
+   * 言う」ほうを片付ける。
+   *
+   * `GET /reports` は総件数を返さないので、正確な省略件数は言えない。
+   * 言えるのは「返ってきた件数が要求した上限（60）とちょうど一致した」
+   * ことだけ——`tokens.tsx` の `RotationHistory`（`GET /journal` に対する
+   * 同じ形）と揃えてある。
+   */
+  function makeReports(count: number) {
+    return Array.from({ length: count }, (_, index) => ({
+      type: 'daily_report' as const,
+      id: `r-${index}`,
+      at: `2026-06-${String(index + 1).padStart(2, '0')}T22:00:00.000Z`,
+      date: `2026-06-${String(index + 1).padStart(2, '0')}`,
+      body: `${index} 日目の進捗`,
+    }));
+  }
+
+  it('返った件数が上限（60）ちょうどなら、これより古いかもしれないと言う', async () => {
+    const reports = makeReports(60);
+    stubFetch((url) => {
+      if (url.endsWith('/reports') || url.includes('/reports?')) return json({ reports });
+      return undefined;
+    });
+
+    renderReports();
+
+    expect(
+      await screen.findByText(/直近 60 件のみ表示している。これより古い日報があるかもしれない。/),
+    ).toBeTruthy();
+  });
+
+  it('上限に達していなければ、その但し書きは出さない（雑音にしない）', async () => {
+    const reports = makeReports(3);
+    stubFetch((url) => {
+      if (url.endsWith('/reports') || url.includes('/reports?')) return json({ reports });
+      return undefined;
+    });
+
+    renderReports();
+
+    await screen.findByText(/2026-06-03/);
+    expect(screen.queryByText(/これより古い日報があるかもしれない/)).toBeNull();
+  });
 });

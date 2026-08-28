@@ -92,9 +92,35 @@ function reportLabel(report: DailyReport): string {
   return `${report.date} ${formatTime(report.at)}`;
 }
 
+/**
+ * 一覧に読む件数。**窓の大きさそのものは変えない**（Issue #426 の G3。
+ * 決め方が未決なので、決まっていない基準で動かすより「切ったことと定量を
+ * 言う」ほうを先に片付ける）。ここで名前を付けるのは、切ったかどうかの
+ * 判定（下の `isReportsWindowFull`）と読む件数を同じ値に揃えるためで、
+ * 生の `60` を2箇所に書くと片方だけ直して食い違う。
+ */
+const REPORTS_LIMIT = 60;
+
+/**
+ * 返ってきた件数が要求した上限とちょうど一致するか——**これより古い日報が
+ * あるかもしれない**という唯一の合図である。
+ *
+ * **`GET /reports` は総件数を返さない。** `apps/daemon/src/app.ts` の
+ * `/reports` の `describeRoute` が逐語で言っている——
+ * 「**封筒は持たない** — 続きが在るかは `limit` 件ちょうど返ったかで判る。」
+ * （`grep -Fn -- 'ちょうど返ったかで判る' apps/daemon/src/app.ts` で当たる）。だから
+ * `TruncationNote`（正確な `total` が要る）は使えない——`tokens.tsx` の
+ * `RotationHistory` が `GET /journal` に対して既にこの形を採っている。
+ * 日報は日次で単調増加するので、運用日数が `REPORTS_LIMIT` を超えた時点で
+ * この判定は常に真になる（Issue 本文の指摘そのもの）。
+ */
+function isReportsWindowFull(count: number): boolean {
+  return count === REPORTS_LIMIT;
+}
+
 export default function Reports({ loaderData }: Route.ComponentProps) {
   const { date, reportId } = loaderData;
-  const list = useReports(60);
+  const list = useReports(REPORTS_LIMIT);
 
   /*
     **並べ直さない。** 並びはデーモンが決める（`apps/daemon/src/reports.ts` が
@@ -151,42 +177,56 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
           ) : reports.length === 0 ? (
             <Empty>まだ無い。</Empty>
           ) : (
-            <ul>
-              {reports.map((report, index) => (
-                <li key={report.id}>
-                  <Link
-                    to={`/reports/${report.date}/${encodeURIComponent(report.id)}`}
-                    className={cn(
-                      'block px-4 py-2 text-sm hover:bg-surface-2',
-                      /*
-                        **罫線は日付の変わり目にだけ引く。** 同じ日のものが1つの塊に
-                        見えるので、時刻だけが違う行が並んでいることが形から分かる
-                        （1日1件の日は今までと同じ見え方になる）。
+            <>
+              <ul>
+                {reports.map((report, index) => (
+                  <li key={report.id}>
+                    <Link
+                      to={`/reports/${report.date}/${encodeURIComponent(report.id)}`}
+                      className={cn(
+                        'block px-4 py-2 text-sm hover:bg-surface-2',
+                        /*
+                          **罫線は日付の変わり目にだけ引く。** 同じ日のものが1つの塊に
+                          見えるので、時刻だけが違う行が並んでいることが形から分かる
+                          （1日1件の日は今までと同じ見え方になる）。
 
-                        **これは「同じ日の行が隣り合っている」ことに乗っている。**
-                        並びが書いた順だった間は隣り合う保証が無く、遡り生成の日報が
-                        別の日付を挟んで離れると、同じ日に何本も罫線が引かれた。
-                        保証は `apps/daemon/src/reports.ts` が持つ（日付の新しい順）。
-                      */
-                      reports[index + 1]?.date !== report.date && 'border-b border-border',
-                      report.id === selectedId && 'bg-surface-2 text-accent',
-                    )}
-                  >
-                    {reportLabel(report)}
-                    {/*
-                      **印の付いた行は、開く前に分かる形にする。** 印を出さないと
-                      「日報がある行」と同じ顔になり、人間は開くまで気づけない
-                      （本文がエラー文だった穴と同じ形が、一覧の側に残る）。
-                    */}
-                    {isUnavailable(report) && (
-                      <span className="ml-1 text-danger" title="この日の日報は作れなかった">
-                        ⚠
-                      </span>
-                    )}
-                  </Link>
-                </li>
-              ))}
-            </ul>
+                          **これは「同じ日の行が隣り合っている」ことに乗っている。**
+                          並びが書いた順だった間は隣り合う保証が無く、遡り生成の日報が
+                          別の日付を挟んで離れると、同じ日に何本も罫線が引かれた。
+                          保証は `apps/daemon/src/reports.ts` が持つ（日付の新しい順）。
+                        */
+                        reports[index + 1]?.date !== report.date && 'border-b border-border',
+                        report.id === selectedId && 'bg-surface-2 text-accent',
+                      )}
+                    >
+                      {reportLabel(report)}
+                      {/*
+                        **印の付いた行は、開く前に分かる形にする。** 印を出さないと
+                        「日報がある行」と同じ顔になり、人間は開くまで気づけない
+                        （本文がエラー文だった穴と同じ形が、一覧の側に残る）。
+                      */}
+                      {isUnavailable(report) && (
+                        <span className="ml-1 text-danger" title="この日の日報は作れなかった">
+                          ⚠
+                        </span>
+                      )}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+              {/*
+                **`GET /reports` は総件数を返さないので `TruncationNote` は
+                使えない**（あちらは正確な `total` が要る）。取れた件数が
+                要求した上限とちょうど一致するときだけ、「これより古い日報が
+                あるかもしれない」と明示する——黙って切り捨てない
+                （`tokens.tsx` の `RotationHistory` と同じ形。Issue #426 の G3）。
+              */}
+              {isReportsWindowFull(reports.length) && (
+                <p className="border-t border-border px-4 py-2 text-[11px] text-muted">
+                  直近 {REPORTS_LIMIT} 件のみ表示している。これより古い日報があるかもしれない。
+                </p>
+              )}
+            </>
           )}
         </Card>
 

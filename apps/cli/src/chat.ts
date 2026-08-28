@@ -335,6 +335,7 @@ export async function runSlashCommand(
       for (const report of reports) {
         stdout.write(`${renderReportLine(report)}\n`);
       }
+      noteIfAtLimit(reports.length, limit, '日報');
       return 'ok';
     }
 
@@ -517,6 +518,7 @@ export async function runSlashCommand(
         // いなかった。日誌の1件を後から名指しで辿る手がかりが無かった。
         stdout.write(`      id: ${entry.id}\n`);
       }
+      noteIfAtLimit(entries.length, limit, '日誌');
       return 'ok';
     }
 
@@ -1223,6 +1225,29 @@ export function renderReportLine(report: {
 
 function writeReport(report: { date: string; body: string; unavailable?: string }): void {
   stdout.write(renderReport(report));
+}
+
+/**
+ * `/reports` `/journal` が「切ったなら切ったと言う」ための共通の断り書き
+ * （Issue #426 の G3）。**窓の大きさ（`/reports` の既定14件・`/journal` の
+ * 既定20件）はここでは変えない** — 決め方が未決だと Issue 本文が書いている
+ * ので、決まっていない基準で動かすより「切ったことと定量を言う」ほうを
+ * 先に片付ける。
+ *
+ * **`GET /reports` `GET /journal` はどちらも総件数を返さない**
+ * （`apps/daemon/src/app.ts` の `describeRoute`、逐語: 「封筒は持たない ——
+ * 続きが在るかは `limit` 件ちょうど返ったかで判る」。
+ * `grep -Fn -- 'ちょうど返ったかで判る' apps/daemon/src/app.ts` で当たる）。
+ * だから `excerpt.ts` が課す規律
+ * （何件省いたか／全何件か）をそのままの形では守れない —— 正確な省略件数・
+ * 全体件数はどちらも言えない。**言えるのは「返った件数が要求した上限と
+ * ちょうど一致した」という、この API 自身が定めた唯一の合図だけである。**
+ * 黙って切り捨てず、その事実だけを言う（`apps/web` 側の同じ形は
+ * `tokens.tsx` の `RotationHistory` / `reports.tsx` の `isReportsWindowFull`）。
+ */
+function noteIfAtLimit(count: number, limit: string, label: string): void {
+  if (count !== Number(limit)) return;
+  stdout.write(`直近 ${limit} 件のみ表示している。これより古い${label}があるかもしれない。\n`);
 }
 
 /** 一覧で拒否を出す道具の種類数（多い分は件数だけ言う）。 */
