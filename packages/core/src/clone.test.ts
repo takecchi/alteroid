@@ -7896,6 +7896,142 @@ describe('台帳で片付け済みの報告には印が付く（#391）', () => 
 });
 
 /**
+ * マネージャーの報告に「受け取ってから、どれだけ経ったか」を添える（#562）。
+ *
+ * **実害**: 3件とも、クローンが読んだ時点で対象 PR は既に MERGED だった
+ * （「#558 は押せる」等）。報告に時刻も経過も1文字も入らないため、クローンは
+ * 自分がいま読んでいる文が何分・何時間前のものかを知る手段が無かった。
+ *
+ * `event.at` は `Clone#post()` が受理した時点の時刻であって、マネージャーが
+ * 書いた時刻ではない——だからここでは「受け取ってから」でしか主張しない。
+ */
+describe('マネージャーの報告に受け取ってからの経過を添える（#562）', () => {
+  /** `manager_message`（report）を投げて、届いた本文を拾う。 */
+  async function deliverReport(overrides: { at: string; text?: string }): Promise<string> {
+    const s = setup();
+    const text = overrides.text ?? '直しました。CIも緑です。';
+    s.clone.post({
+      type: 'manager_message',
+      id: 'evt-age-report',
+      at: overrides.at,
+      managerId: 'mgr-age',
+      kind: 'report',
+      text,
+    });
+    const inputs = (): string[] => (s.calls[0] as FakeCall).inputs;
+    const delivered = await expect
+      .poll(() => inputs().find((input) => input.includes(text)), { timeout: 3000 })
+      .toBeTruthy()
+      .then(() => inputs().find((input) => input.includes(text)) ?? '');
+    await s.clone.stop();
+    return delivered;
+  }
+
+  /**
+   * **この歯が単独で守るもの**: 経過は閾値を設けず、短くても必ず1行出ること。
+   *
+   * 閾値で「古いときだけ出す」形にすると、「新しい報告に行が出ない」のと
+   * 「この機能自体が無い」のとが出力上で区別できなくなる——`tools.ts` の
+   * `describeInboxBacklog`（#562 のもう一方）が0件で行を消していたのと同じ形。
+   * ここではその逆を確かめる：**いま受け取ったばかりの報告にも行が出る。**
+   */
+  it('経過は閾値を設けず、受け取った直後の報告にも必ず1行出る', async () => {
+    const at = new Date().toISOString();
+    const delivered = await deliverReport({ at });
+
+    // 「書かれた時刻」ではなく「受け取った時刻」の語彙で出ること。
+    expect(delivered).toContain('受け取ってから');
+    expect(delivered).toContain('経過');
+    // 丸めた値だけでなく、`at` そのもの（ISO 文字列）も一緒に出ること
+    // （突き合わせができるように）。
+    expect(delivered).toContain(at);
+  });
+
+  /**
+   * **この歯が単独で守るもの**: 経過は秒／分／時間／日を読みやすく丸めること。
+   *
+   * 3時間前という余裕のある値を使う——テストの実行に数百ms〜数秒かかっても
+   * 4時間には届かないので、丸めの結果が揺れない。
+   */
+  it('経過は時間の単位で読みやすく丸められる', async () => {
+    const at = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+    const delivered = await deliverReport({ at });
+
+    expect(delivered).toContain('約3時間');
+  });
+
+  /** 同じ理由で、日の単位でも丸められることを確かめる（5日前）。 */
+  it('経過は日の単位でも読みやすく丸められる', async () => {
+    const at = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
+    const delivered = await deliverReport({ at });
+
+    expect(delivered).toContain('約5日');
+  });
+
+  /**
+   * **この歯が単独で守るもの**: 経過の行は本文の後ろ・指示の前に置かれること
+   * （#391 の `closedReportNotice` と同じ規則）。
+   *
+   * 本文より前に置くと「読まなくてよい」と読まれて本文を飛ばされる——
+   * その規則をここでも守ること。
+   */
+  it('経過の行は本文の後ろ・指示の前に置かれる', async () => {
+    const text = '経過の位置を確かめる本文';
+    const at = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const delivered = await deliverReport({ at, text });
+
+    const bodyIndex = delivered.indexOf(text);
+    const ageIndex = delivered.indexOf('受け取ってから');
+    const instructionIndex = delivered.indexOf('続きが要るなら `manager_send`');
+
+    expect(bodyIndex).toBeGreaterThanOrEqual(0);
+    expect(ageIndex).toBeGreaterThan(bodyIndex);
+    expect(instructionIndex).toBeGreaterThan(ageIndex);
+  });
+
+  /**
+   * **この歯が単独で守るもの**: `event.at` が parse できないとき、`NaN` や
+   * 「-1分前」のような嘘の値を出さず、取れない理由を書く側へ倒すこと
+   * （AGENTS.md「取れない軸に0の行を作る」と同じ考え方）。
+   */
+  it('at が壊れていたら、嘘の経過を出さず理由を書く', async () => {
+    const delivered = await deliverReport({ at: 'これは日時ではない' });
+
+    expect(delivered).not.toContain('NaN');
+    // 負の経過（-1分前など）も出さない。
+    expect(delivered).not.toMatch(/-\d+(秒|分|時間|日)/);
+    expect(delivered).toContain('経過は測れない');
+  });
+
+  /**
+   * **この歯が単独で守るもの**: `question` / `permission` には経過の行が
+   * 載らないこと（この PR は `kind === 'report'` の分岐だけを変える）。
+   */
+  it('question / permission には経過が載らない', async () => {
+    const s = setup();
+    s.clone.post({
+      type: 'manager_message',
+      id: 'evt-age-question',
+      at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      managerId: 'mgr-age-q',
+      kind: 'question',
+      text: '経過を混ぜてはいけない質問',
+    });
+
+    const inputs = (): string[] => (s.calls[0] as FakeCall).inputs;
+    const delivered = await expect
+      .poll(() => inputs().find((input) => input.includes('経過を混ぜてはいけない質問')), {
+        timeout: 3000,
+      })
+      .toBeTruthy()
+      .then(() => inputs().find((input) => input.includes('経過を混ぜてはいけない質問')) ?? '');
+    await s.clone.stop();
+
+    expect(delivered).not.toContain('受け取ってから');
+  });
+});
+
+/**
  * 認証トークンのプールの現役をクローンへ届ける口（Issue #393 PR3）。
  *
  * **ここで固定するのは3つ** — 呼ばれるたびに読み直すこと（凍らないこと）、
