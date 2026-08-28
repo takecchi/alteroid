@@ -2299,12 +2299,22 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe('マネージャーからの確認を人間に回す場合、その manager_id'),
+        // **生ログの id を渡しても通らない（#572）。** ここが受け取るのは runner が
+        // `#onPermission` で SDK から受け取った control_request の `request_id` で、
+        // 生ログ（CLI の transcript）に出る `toolu_…`（`tool_use_id`）とも
+        // `req_…`（API の request id）とも**名前空間が違う**。実測では、生ログに
+        // control_request の `request_id` は1件も現れない ⟹ **受信箱に届かなかった
+        // 確認へ、生ログを読んで答える手段は無い。** 別物だと書いていなかったので、
+        // 読み手はまず生ログの id を試し、「待っていない」で弾かれていた。
         requestId: z
           .string()
           .optional()
           .describe(
             'マネージャーからの確認を人間に回す場合、受信箱に届いた requestId。' +
-              '人間の回答をこの確認へ返すために必要なので、managerId と必ず対で渡すこと',
+              '人間の回答をこの確認へ返すために必要なので、managerId と必ず対で渡すこと。' +
+              '⚠️ 生ログの id とは別物である——生ログに出る toolu_…（tool_use_id）も ' +
+              'req_…（API の request id）も、ここでは通らない。' +
+              '受信箱に届いていない確認に、生ログから答える手段は無い（#572）',
           ),
       },
       async ({ question, context: background, managerId, requestId }) => {
@@ -3524,12 +3534,19 @@ export function createCloneTools(context: ToolContext) {
           .enum(['allow', 'deny'])
           .optional()
           .describe('許可確認への回答のとき必須。それ以外では不要'),
+        // **生ログの id を渡しても通らない（#572）。** `ask_human` の `requestId` と
+        // 同じ素性で、同じ罠がある——`#choosePending` は `record.waiting` を id で
+        // 線形一致させるだけなので、名前空間の違う id は「待っていない」に落ちる。
+        // **その文言は「まだ届いていない」と見分けが付かない。**
         requestId: z
           .string()
           .optional()
           .describe(
             'どの確認への回答かを示す id（受信箱に届いた requestId）。' +
-              '1本のマネージャーが複数を同時に待つことがあるので、回答では必ず添えること',
+              '1本のマネージャーが複数を同時に待つことがあるので、回答では必ず添えること。' +
+              '⚠️ 生ログの id とは別物である——生ログに出る toolu_…（tool_use_id）も ' +
+              'req_…（API の request id）も、ここでは通らない。' +
+              '受信箱に届いていない確認に、生ログから答える手段は無い（#572）',
           ),
       },
       async ({ managerId, message, decision, requestId }) => {
