@@ -59,6 +59,7 @@ function managerOptions(): Options {
     onPostToolUse: noopHook,
     onPreCompact: noopHook,
     onUserPromptSubmit: noopHook,
+    onSubagentStop: noopHook,
   });
 }
 

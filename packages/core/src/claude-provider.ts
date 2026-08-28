@@ -227,6 +227,16 @@ export interface ManagerSessionOptionsRequest {
    * ことで観測を静かに落とせる（可観測性は要件である。PRD「可観測性」）。
    */
   onUserPromptSubmit: HookCallback;
+  /**
+   * 作業者セッションが停止した瞬間の背景処理の在り高を観測する専用フック
+   * （#357 の実測口）。
+   *
+   * **optional にしない。理由は直上の `onUserPromptSubmit` と同じ** —
+   * 省略できる形にすると、provider を足す側が「渡さない」ことで観測を静かに
+   * 落とせる（可観測性は要件である。PRD「可観測性」）。中身は `runner.ts` の
+   * `#onSubagentStop` の doc を見よ。
+   */
+  onSubagentStop: HookCallback;
 }
 
 /** マネージャーへ渡す `Options`。組み立ての知識は `runner.ts` の旧 `#buildOptions` から移した。 */
@@ -247,6 +257,7 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     onPostToolUse,
     onPreCompact,
     onUserPromptSubmit,
+    onSubagentStop,
   } = request;
 
   return {
@@ -306,6 +317,9 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
       // **観測専用**（`worker_wait`）。`{ continue: true }` を返すだけで何も
       // ブロックしない。理由は `runner.ts` の `#onUserPromptSubmit` の doc を見よ。
       UserPromptSubmit: [{ hooks: [onUserPromptSubmit] }],
+      // **観測専用**（#357）。`{ continue: true }` を返すだけで何もブロック
+      // しない。理由は `runner.ts` の `#onSubagentStop` の doc を見よ。
+      SubagentStop: [{ hooks: [onSubagentStop] }],
     },
   };
 }
