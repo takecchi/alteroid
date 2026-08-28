@@ -191,28 +191,45 @@ export function ManagerFailureNote({
  * 外れているので、**いま話しかけられない**」と書いているが、**Web の面へそのまま
  * 持ってくると `ba4053d`（#67「「いま送っても届かず」の真下に、届く送信ボタンが
  * 並んでいた」）が閉じた欠陥の再発になる。** 詳細画面ではこの注記のすぐ下に
- * `SendMessage` の送信欄が在る。
+ * `SendMessage` の送信欄が在る。#67 はボタンを塞がずに**注記のほうを直した**
+ * （塞ぐと「人間が自分の言葉で繋ぎ直す唯一の手」が消える。north_star 禁止1）。
  *
- * **実測（書き捨ての試験を `packages/core` の足場で走らせた。2026-08-28）:**
+ * **⚠️ #67 の commit 本文が持つ実測表（`delivered` / `unknown` の2値）を
+ * そのまま当てないこと。あれは古い。** `0fb068f`（PR #571「manager_send が
+ * [running] の相手へ 404 を貫通させる」#563）で `ManagerSendResult.outcome` は
+ * **4値**（`answered` / `delivered` / `session_missing` / `unknown`）になった。
+ * **commit 本文は書き換わらないので、いつ偽になったかが本文からは読めない。**
  *
- * 1. 名簿を `state: 'lost'` にした runner に対し、`RunnerRegistry#get()` は
- *    **client を返す**（`null` ではない）。`#markSilent` は `state` を `'lost'` に
- *    するだけで `entry.client` を落とさず、`get()` は `entry.state` を見ていない
- *    （`entry.client?.runnerId` の一致だけ）。`list()` は明示的に `lost` を除くが、
- *    `get()` は除かない
- * 2. `ManagerPool#send()` は `job.runnerId` が在れば `#runnerOf` → `get()` を通る
- *    （`list()` を通るのは `runnerId` が無い古いジョブだけ）。**`runnerLostSince` が
- *    立つのは `runnerId` が在るときだけ**なので（`lostSinceOf`）、必ずこちら側である
- * 3. ⟹ 実測の `outcome` は **`delivered`**（「追加指示として届けた。」）で、runner の
- *    `resume` が実際に叩かれた。器の口も落ちている場合は `RunnerHttpError` が投がる
- *    ——**どちらも #67 の表の3行目（「宛先の runner が居ない」→ `outcome: 'unknown'`）
- *    ではない。** あの3行目は `#runnerOf` が `null` を返す経路で、`state: 'lost'` では
- *    そこへ入らない
+ * **実測（`packages/core` の足場で書き捨ての試験を走らせた。2026-08-28。
+ * commit していない）——名簿が `state: 'lost'` と判定した器に `send()` を撃った:**
+ *
+ * | 場面 | `outcome` |
+ * | --- | --- |
+ * | `session_id` あり／器の口は応える | **`delivered`**「追加指示として届けた。」 |
+ * | attached な記録で器が 404 を返す | **`session_missing`**（「そのものは居る」側） |
+ * | `session_id` 無し | `unknown`「session_id を持っておらず、続きへ戻れない」 |
+ * | （対照）**一度も開けていない**宛先 | `unknown`「いま名簿に開いていない」 |
+ *
+ * ⟹ **「名簿に開いていない」による `unknown` は `lost` では出ない**——出たのは
+ * *一度も開けていない*宛先（`entry.client === null`）だけである。理由: `#markSilent` は
+ * `state` を `'lost'` にするだけで **`entry.client` を落とさず**、`Registry#get()` は
+ * `entry.state` を見ない（`entry.client?.runnerId` の一致だけ）。`list()` は明示的に
+ * `lost` を除くが `get()` は除かない。`send()` は `job.runnerId` が在れば
+ * `#runnerOf` → `get()` を通り、**`runnerLostSince` が立つのは `runnerId` が在るとき
+ * だけ**（`lostSinceOf`）なので必ずこちら側である。
  *
  * ⟹ **デーモンは拒まない。実際に resume を試す。** だからここは送信可否を推論せず、
- * 「新しい委譲の宛先からは外れている」（`list()` が `lost` を除くので真）までに留め、
- * 送信については `DisconnectedNote` と同じ線（塞いでいない・成否は観測してから言う）を
- * 引く。**`DisconnectedNote` と矛盾しないのは、擦り合わせたからではなく実測がそう
+ * 「新しい委譲の宛先からは外れている」（`list()` が `lost` を除くので真）までに留める。
+ * **`session_missing` が返る場合はなおさらである**——その doc は逐語で「そのものは
+ * 居る」「`sessionId` が残っていればもう一度 resume を試せる」と言い、`'unknown'` へ
+ * 畳むことを名指しで禁じている。
+ *
+ * **仮に `unknown` が返る場合でも「話しかけられない」とは書けない。** デーモン自身の
+ * 文言（`#runnerNotOpenDetail`）が逐語で「これは『いま開いた宛先が無い』という観測で
+ * あって、**戻せないことの証明ではない**」と言っており、言い切るのはデーモンが自分の口で
+ * 言っている強さより1段強い。
+ *
+ * **`DisconnectedNote` と矛盾しないのは、擦り合わせたからではなく実測がそう
  * だったからである。**
  *
  * 文言の核は CLI（`apps/cli/src/chat.ts`）と `manager_list`（`packages/core/src/tools.ts`）
@@ -238,9 +255,9 @@ export function ManagerRunnerLostNote({
       から名乗っていない。新しい委譲の宛先からは外れている（置き先として数えない）。この委譲が失われたという意味ではない
       —
       黙っているのが器なのか経路なのかは、ここからは言えない（器の中でまだ走っていることもある）。話しかけることは塞いでいない
-      — 送ると resume
-      を試み、器が応えれば届く。応えなければ送信がエラーになる。打つ手はこの委譲の側ではなく器の側にある
-      — 名乗らなくなった器そのものを確かめること。
+      — 戻る先（session_id）が在れば、送ると resume
+      を試みる（届くとは限らない）。打つ手はこの委譲の側ではなく器の側にある —
+      名乗らなくなった器そのものを確かめること。
     </p>
   );
 }

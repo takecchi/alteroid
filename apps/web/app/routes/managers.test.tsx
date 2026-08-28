@@ -400,7 +400,7 @@ describe('器が黙ったことは、`status` を動かさずに添える', () =
     expect(screen.queryByText(/届かず/)).toBeNull();
     // 塞いでいないことと、成否を断定しないことの両方を言う。
     expect(screen.getByText(/話しかけることは塞いでいない/)).toBeTruthy();
-    expect(screen.getByText(/器が応えれば届く/)).toBeTruthy();
+    expect(screen.getByText(/送ると resume\s*を試みる/)).toBeTruthy();
   });
 
   /**

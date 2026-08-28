@@ -230,10 +230,13 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
               言うだけで理由を言わない——この欄が `live: false` の理由を1つ名指し
               する（`isLive()` は宛先が `silentRunners` に居ると false を返す）。
               **この注記は送信可否を推論しない**（`ManagerRunnerLostNote` の doc の
-              実測）。名簿が `lost` と判定した器でも `RunnerRegistry#get()` は client を
-              返し、`send()` は実際に resume を試して `delivered` を返す ⟹ ここで
-              「いま話しかけられない」と書くと `ba4053d`（#67）が閉じた欠陥
-              ——「いま送っても届かず」の真下に届く送信ボタンが並ぶ形——の再発になる。
+              実測表）。名簿が `lost` と判定した器でも `RunnerRegistry#get()` は client を
+              返し、`send()` の `outcome` は実測で `delivered` / `session_missing` に
+              なった（「名簿に開いていない」の `unknown` は *一度も開けていない* 宛先で
+              しか出ない）⟹ ここで「いま話しかけられない」と書くと `ba4053d`（#67）が
+              閉じた欠陥——「いま送っても届かず」の真下に届く送信ボタンが並ぶ形——の
+              再発になる。**#67 の commit 本文の2値の表は `0fb068f`（PR #571）で
+              4値になったので、そのまま当てないこと。**
             */}
             <ManagerRunnerLostNote
               runnerLostSince={manager.runnerLostSince}
