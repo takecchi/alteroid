@@ -7907,10 +7907,7 @@ describe('台帳で片付け済みの報告には印が付く（#391）', () => 
  */
 describe('マネージャーの報告に受け取ってからの経過を添える（#562）', () => {
   /** `manager_message`（report）を投げて、届いた本文を拾う。 */
-  async function deliverReport(overrides: {
-    at: string;
-    text?: string;
-  }): Promise<string> {
+  async function deliverReport(overrides: { at: string; text?: string }): Promise<string> {
     const s = setup();
     const text = overrides.text ?? '直しました。CIも緑です。';
     s.clone.post({
