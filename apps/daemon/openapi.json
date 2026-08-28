@@ -4798,6 +4798,15 @@
                           "sessionMissingSince": {
                             "type": "string"
                           },
+                          "turnEndedAt": {
+                            "type": "string"
+                          },
+                          "turnEndReason": {
+                            "type": "string"
+                          },
+                          "turnEndTail": {
+                            "type": "string"
+                          },
                           "cwd": {
                             "type": "string"
                           },
@@ -5044,6 +5053,15 @@
                           "type": "string"
                         },
                         "sessionMissingSince": {
+                          "type": "string"
+                        },
+                        "turnEndedAt": {
+                          "type": "string"
+                        },
+                        "turnEndReason": {
+                          "type": "string"
+                        },
+                        "turnEndTail": {
                           "type": "string"
                         },
                         "cwd": {

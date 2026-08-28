@@ -601,6 +601,10 @@ export const managerSummarySchema = z.object({
    * abort する・貸し出し期限を縮める、のどれもしない。読む側が
    * `lastReportAt` と突き合わせて判定する。
    *
+   * **⚠️ `turnEndReason` は在るのにこの欄が無い状態を「症状ではない」と
+   * 読まないこと。** 比較（`turnEndedAt > lastReportAt`）自体が行えないので
+   * 既定は「分からない」——`ManagerSummary.turnEndedAt` の doc を参照。
+   *
    * **ここに宣言しないと、値が在っても黙って落ちる**（真上の
    * `sessionMissingSince` と同じ断り）。
    */

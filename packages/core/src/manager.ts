@@ -182,6 +182,15 @@ export interface ManagerSummary {
    * 判定する——`turnEndedAt > lastReportAt` なら、ターンは終わっているのに
    * その報告がまだ届いていない、という読み方になる。
    *
+   * **⚠️ `turnEndReason` は在るのに、この欄（`turnEndedAt`）が無い状態を
+   * 「症状ではない」と読まないこと。** `turnEndedAt` は見つかった行が
+   * `timestamp` を持たないときに単独で欠けうる（`turnEndReason` の doc）が、
+   * その状態では `turnEndedAt > lastReportAt` の比較そのものが行えない。
+   * **既定は「分からない」である。** `sessionMissingSince` が欠けているとき
+   * 「セッションは在る」と主張しないのと同じで、`turnEndedAt` が欠けている
+   * ときも「ターンは終わっていない」とは主張しない——**判定できないだけ**で、
+   * 読む側はそこを「症状ではない」へ倒さないこと。
+   *
    * **切らない・殺さない・止めない。** この欄が立っても `status` は動かさず、
    * どの委譲も abort しない、貸し出し期限も縮めない——`ManagerPool#
    * probeTurnEnds` は知らせるだけである。
