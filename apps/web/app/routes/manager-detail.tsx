@@ -22,7 +22,13 @@ import { formatDateTime, formatRelative } from '~/lib/format';
 import type { ManagerDenial, ManagerStatus, ManagerSummary } from '~/lib/types';
 
 import type { Route } from './+types/manager-detail';
-import { denialActorTag, ManagerStatusBadge } from './managers';
+/**
+ * **`ManagerSessionMissingNote` は書き写さずに一覧から借りる。** 文言の核は
+ * クローン（`tools.ts`）・CLI（`chat.ts`）と逐語で揃える約束のものなので、同じ
+ * 画面（Web UI）の中で2箇所に写すと直すときに片方だけ直る（`denialActorTag` と
+ * 同じ理由）。ここで変えてよいのは置き場所（`className`）だけである。
+ */
+import { denialActorTag, ManagerSessionMissingNote, ManagerStatusBadge } from './managers';
 
 export function clientLoader({ params }: Route.ClientLoaderArgs) {
   return { id: params.id };
@@ -213,6 +219,18 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
               )}
             </dl>
             <DisconnectedNote live={manager.live} />
+            {/*
+              **`DisconnectedNote` と排他ではない。** あちらは `live: false`
+              （繋がっていない）のときだけ出る。こちらは `live: true` のまま出る
+              のが正しい形で、上の「接続あり」の札と**同時に**並ぶ
+              （`ManagerSessionMissingNote` の doc）。文言は一覧と同じ1箇所から
+              借り、ここでは他の注記（`DisconnectedNote` / `LostNote` /
+              `FailureNote`）と同じ置き場所へ揃えるだけにしてある。
+            */}
+            <ManagerSessionMissingNote
+              sessionMissingSince={manager.sessionMissingSince}
+              className="border-t border-border px-4 py-3 text-xs text-warn"
+            />
             <LostNote status={manager.status} />
             <FailureNote failure={manager.lastFailure} />
           </Card>

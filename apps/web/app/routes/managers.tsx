@@ -149,6 +149,70 @@ export function ManagerFailureNote({
   );
 }
 
+/**
+ * **runner は答えたが、この委譲のセッションだけが無かった**ことを、**状態に添えて**
+ * 出す一行（`ManagerSummary.sessionMissingSince`）。
+ *
+ * **状態の札も `live` の描き方も置き換えない。** `status` は `running`（＝画面では
+ * 「実行中」）のままだし、`live` も落ちない——`sessionId` が残っていれば
+ * `manager_send` が resume から入り直せるので「話しかけられるか」＝`live` は真の
+ * ままで正しい。⟹ **`live: true` とこの行の組が5つ目の形**（runner に生きた
+ * セッションはもう無いが、まだ話しかけられる）**を名指しする**
+ * （`packages/core/src/tools.ts` の `manager_list` の doc が逐語でそう書いている）。
+ *
+ * **⚠️ 「この委譲が失われた」と書かないこと。** 由来が少なくとも2つあり、デーモンは
+ * 台帳から区別できない——(1) 仕事の途中でセッションが失われた、(2) **仕事が完遂した
+ * 後にセッションが畳まれ、終端の合図だけが届かなかった**。どちらも `lastReport` は
+ * 空のまま `status: running` で残る（`packages/core/src/manager.ts` の
+ * `ManagerSummary.sessionMissingSince` / `sendFailureDetail` の doc）。読み手が (1) と
+ * 決めつけると**完遂済みの仕事を委譲し直す**ので、この幅を潰さない。
+ *
+ * **`text-danger` ではなく `text-warn` にしてある。** `lost`（戻れなかったことを
+ * 確かめた事実）と `lastFailure`（SDK が応答ではないと言った事実）は danger だが、
+ * ここは「失われたとは言えない」ことのほうが主張なので、色で言い切らない。
+ *
+ * **主張の核はクローンの `manager_list`（`tools.ts`）と CLI（`chat.ts`）と逐語で
+ * 揃えてある**（「runner がそう答えた。聞けなかったのではない」「この委譲が失われた
+ * という意味ではない」「完遂した後にセッションが畳まれ、終端の合図だけが届かなかった
+ * 回も同じ形に見える」）。**「次の一手」の節だけは面ごとに語が違う** — CLI は
+ * `/manager`、`tools.ts` は `manager_report` / `manager_send` / `manager_start` と、
+ * それぞれ自分の面に在る操作を名指ししている。Web UI にはそのどれも無いので、この
+ * 画面に在るもの（最後の報告・セッションログ・話しかける）で言う。これは既存の
+ * 前例に沿う判断で、下の `status === 'lost'` の注記が CLI 版とは違う語で同じ主張を
+ * 出しているのと同じ形である。**ただし「先に起こし直さない（同じ仕事が2本になる）」
+ * は落とさない** — 人間が実際に踏める地雷で、Web の画面にも同じ操作の入口が在る
+ * （`manager-detail.tsx` の `SendMessage`）。
+ *
+ * **時刻は `formatRelative` で出す。** この画面の作法である（`updatedAt` と同じ）。
+ * CLI / `manager_list` は ISO をそのまま出しており、**書式が違うのは意図である。**
+ *
+ * **`className` を受けるのは、一覧と詳細で置き場所（余白と字の大きさ）だけが違う
+ * から。** 文言は1箇所にしか無い——同じ画面（Web UI）の中で同じ書式を2箇所に書き
+ * 写すと、直すときに片方だけ直る形が起きる（`denialActorTag` の doc と同じ理由。
+ * `tools.ts`/`chat.ts` を分けているのはプロセスが別だからで、同一プロセス内の
+ * 2ファイルにはその理由が無い）。**export してあるのは `manager-detail.tsx` から
+ * 再利用するためである。**
+ */
+export function ManagerSessionMissingNote({
+  sessionMissingSince,
+  className = 'mt-1 text-[11px] text-warn',
+}: {
+  sessionMissingSince: string | undefined;
+  className?: string;
+}) {
+  if (sessionMissingSince === undefined || sessionMissingSince === null) return null;
+  return (
+    <p className={className}>
+      ⚠ 宛先の runner は{formatRelative(sessionMissingSince)}
+      の時点で、この委譲のセッションを持っていなかった（runner
+      がそう答えた。聞けなかったのではない）。この委譲が失われたという意味ではない —
+      完遂した後にセッションが畳まれ、終端の合図だけが届かなかった回も同じ形に見える。まず最後の報告とセッションログ（生）を確かめること（報告が届いていなくても、書き終えた報告がそこに残っていることがある）。話しかければ
+      resume から入り直すので、同じ依頼をもう一度出して起こし直さないこと — 同じ仕事が 2
+      本になる。
+    </p>
+  );
+}
+
 export default function Managers() {
   const { data, error, isLoading } = useManagers();
   const managers = data?.managers ?? [];
@@ -199,6 +263,12 @@ export default function Managers() {
                       まま）。札はそのまま残し、その隣に添える。
                     */}
                     <ManagerFailureNote failure={manager.lastFailure} />
+                    {/*
+                      これも `status` に映らないし、`live` も落ちない（`sessionId`
+                      が在れば resume から入り直せる）。⟹ 右の「接続あり」の緑と
+                      **同時に**出るのが正しい形である。札は差し替えず隣に添える。
+                    */}
+                    <ManagerSessionMissingNote sessionMissingSince={manager.sessionMissingSince} />
                     {/*
                       札だけでは「で、どうすればいいのか」が伝わらない。クローンは
                       `manager_list` で同じ案内を受け取る — 人間の画面にだけ無いと、
