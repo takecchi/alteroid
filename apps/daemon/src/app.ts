@@ -2729,16 +2729,22 @@ export function createApp(deps: AppDeps) {
     /**
      * 人間が1件の本文を後から直す。
      *
-     * **編集できるのは `origin` が `human` かつまだ片付いていない行の `body`
-     * だけ。** `POST /commitments`（上）は `origin` を `human` に固定して
-     * いるので、Web UI / API から積まれたものは必ず `human` である——人間の
-     * 困りごとを過不足なく覆う。この線で切ると、人間が書き換えられるのは
-     * 常に人間自身の言葉だけになり、クローンが自分で立てた行（`self`）や
-     * マネージャーの報告（`manager`）は誰にも書き換えられない。**台帳は
-     * 「クローンが何を引き受けたか」の記録であり、そこが静かに書き換わると
-     * クローンが過去の自分を追えなくなる**（`bodyMarkup` は `manager` の
-     * ときだけ立つので、この線ならそちらへは触れずに済む）。`origin` /
-     * `source` / `at` / `closedAt` / `closedReason` / `closedBy` は直さない。
+     * **この口から編集できるのは `origin` が `human` かつまだ片付いていない
+     * 行の `body` だけ。** `POST /commitments`（上）は `origin` を `human` に
+     * 固定しているので、Web UI / API から積まれたものは必ず `human` である——
+     * 人間の困りごとを過不足なく覆う。この線で切ると、人間が書き換えられるのは
+     * 常に人間自身の言葉だけになる。**台帳は「クローンが何を引き受けたか」の
+     * 記録であり、そこが _静かに_ 書き換わるとクローンが過去の自分を追えなく
+     * なる**（`bodyMarkup` は `manager` のときだけ立つので、この線ならそちらへは
+     * 触れずに済む）。`origin` / `source` / `at` / `closedAt` /
+     * `closedReason` / `closedBy` は直さない。
+     *
+     * **⚠️ 「`self` の行は誰にも書き換えられない」ではない（issue #580 の
+     * (B)）。** クローン自身は `commitment_edit`（`packages/core/src/tools.ts`）
+     * で `origin: 'self'` の行を直せる。**ここの 403 は緩めていない** — 人間が
+     * `self` の行を直せないことは変わらず、線は「書き換えられるのは常に
+     * 自分自身の言葉だけ」を人間側とクローン側で対称にしただけである。
+     * `origin: 'manager'` の行はいまも誰も直せない。
      *
      * **先に `get` で読んで `origin` を確かめてから `editBody` を呼ぶ。**
      * `origin` は開いたときから決して変わらない値なので、ここを先に読んでも
@@ -2747,9 +2753,10 @@ export function createApp(deps: AppDeps) {
      * `close` と同じく、判定そのものは台帳（`editBody` の戻り値）に任せ、
      * 読むのは 404 と 409 を書き分けるためだけにする。
      *
-     * **原文は日誌へ逐語で残す。** 日誌は追記専用なので、編集の前後の本文を
-     * 両方書いておけば、台帳の行が上書きされても過去の自分をそこから読み
-     * 戻せる。
+     * **原文は日誌へ逐語で残す。これが上の「静かに」を消している条件である。**
+     * 日誌は追記専用なので、編集の前後の本文を両方書いておけば、台帳の行が
+     * 上書きされても過去の自分をそこから読み戻せる。**`commitment_edit` も
+     * 同じ義務を負う**（`CommitmentStore.editBody` の doc）。
      */
     .patch(
       '/commitments/:id',
@@ -2795,11 +2802,27 @@ export function createApp(deps: AppDeps) {
         const existing = await stores.commitments.get(id);
         if (existing === null) return c.json({ error: 'not found' as const }, 404);
         if (existing.origin !== 'human') {
+          // **断る理由だけでなく、代わりの出口も同じ文字列へ入れる**（issue #580
+          // の (C)）。画面はこの本文をそのまま出す（`apps/web/app/routes/
+          // commitments.tsx` は断りの文面を1文字も持たない）ので、**ここが
+          // 「なぜ押せないか」の唯一の持ち主である。** 出口を画面側に書くと、
+          // ここの線が動いた日に画面のほうが静かに嘘になる。
+          //
+          // **出口が在るのは `self` の行だけ。** クローン自身は
+          // `commitment_edit`（`packages/core/src/tools.ts`）で直せるので、人間は
+          // チャットで頼める。`manager` / `external` にはその出口が無いので、
+          // 断りだけを返す（**無い出口を案内しない**）。
+          const wayOut =
+            existing.origin === 'self'
+              ? '（この行はクローンが自分で載せたもの。' +
+                'チャットでクローンに頼めば直せる——クローンには commitment_edit が在る）'
+              : '';
           return c.json(
             {
               error:
                 `${id} は origin:'${existing.origin}' で、クローンやマネージャーが立てた行は` +
-                '人間からは直せない',
+                '人間からは直せない' +
+                wayOut,
             },
             403,
           );
