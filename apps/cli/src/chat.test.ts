@@ -2422,3 +2422,37 @@ describe('parseSSEChunk', () => {
     expect(parsed?.json<{ type: string }>()?.type).toBe('done');
   });
 });
+
+/**
+ * `/approvals` が `order` を明示して呼ぶこと（Issue #426 の G4）。
+ *
+ * **見ているのは並びであって、件数ではない。** ここは全件を受け取るので、
+ * 応答へ載る `total` は受け取った配列の長さと必ず一致する冗長な値である
+ * （**だから出さない**）。
+ *
+ * `order` を渡さない呼びは、デーモンがストアの生の並びをそのまま返す。その
+ * 生の並びは実装ごとに違う —— `packages/storage-fs` / `packages/core/src/testing.ts`
+ * は挿入順（`putApproval` が既存の id を末尾へ動かす）、`packages/storage-pg` は
+ * `orderBy(asc(approvals.createdAt))` で既に作成順。**⟹ どの永続化層で動いて
+ * いるかで並びが変わっていた。**
+ *
+ * **ここが番号を振って `/answer` / `/answers` に使わせている以上、並びが動くのは
+ * そのまま誤爆の経路である**（人間が見た番号と、次に打つ番号がずれる）。
+ */
+describe('chat の /approvals（並びを実装によらず揃える）', () => {
+  it('order=asc を明示して呼ぶ。窓（limit / cursor）は作らない', async () => {
+    captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand('/approvals', client, emptyListed());
+
+    const listCalls = calls.filter((call) => call.route === 'GET /approvals');
+    expect(listCalls).toHaveLength(1);
+    const query = (listCalls[0]?.args as { query: Record<string, unknown> }).query;
+    expect(query.order).toBe('asc');
+    // **窓は作らない。** 送ると頁が切れる側へ倒れ、G3 で据え置くと決めた
+    // 「窓の大きさを何で決めるか」の未決を、ここで黙って埋めることになる。
+    expect(query.limit).toBeUndefined();
+    expect(query.cursor).toBeUndefined();
+  });
+});
