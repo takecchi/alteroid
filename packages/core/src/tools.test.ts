@@ -8244,6 +8244,29 @@ describe('journal_read に with の絞りを足す（issue #426）', () => {
     expect(reply).toBe('（その条件に当たる日誌は無い）');
   });
 
+  /**
+   * **`types: []` も同じ0件である（issue #426）。**
+   *
+   * ⚠️ **この歯は、契約の歯では代われない。** `verifyJournalStoreQueryEdgeContract`
+   * は3実装に「`types: []` = 0件」を当てているが、道具の層が `length === 0` を
+   * `{}` へ落としていた間は**値がストアへ届かず、契約の歯は緑のまま素通りしていた。**
+   * ⟹ **歯が在ることと、値がそこへ届くことは別である。**測る場所がここに要る。
+   */
+  it('types: [] も「絞らない」ではなく0件として扱う（with: [] と同じ渡し方であること）', async () => {
+    const h = harness();
+    await h.stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '人間からの発言',
+    });
+    await h.stores.journal.append({ type: 'decision', decision: '無関係な判断', grounds: '記憶' });
+
+    const reply = await h.call('journal_read', { types: [] });
+
+    expect(reply).toBe('（その条件に当たる日誌は無い）');
+  });
+
   it('with は limit（既定20件）より前に効く——#418 と同じ形の穴を作らない', async () => {
     // **回帰の歯。** `with` を店（store）ではなく道具の層で `limit` の後に
     // 掛けると、限られた枠を関係ない `with` の行が食い尽くし、狙った行が

@@ -2089,14 +2089,22 @@ export function createCloneTools(context: ToolContext) {
           limit: requested,
           ...(since === undefined ? {} : { since }),
           ...(until === undefined ? {} : { until }),
-          ...(types === undefined || types.length === 0 ? {} : { types }),
+          // **`[]`（空配列）もそのまま転送する。** `types: []` は
+          // `store.ts` の `JournalQuery.types` の doc で「0件」に決まっている
+          // 契約である（#425）。`length === 0` を `{}` へ落とすと、その契約を
+          // **道具の層で覆して「絞らない」に化けさせる。**
+          //
+          // ⚠️ **そして化けたことは、契約の歯からは見えない。**
+          // `verifyJournalStoreQueryEdgeContract` は3実装に「`types: []` = 0件」を
+          // 当てているが、ここで `{}` へ落とすと**値がストアへ届かない**ので、
+          // その歯は緑のまま素通りする（issue #426）。
+          ...(types === undefined ? {} : { types }),
           ...(q === undefined ? {} : { q }),
-          // **`types` と違い、`[]`（空配列）もそのまま転送する。** `with: []`
-          // は `store.ts` の `JournalQuery.with` の doc で「0件」に決まって
-          // いる契約——`length === 0` を `{}` へ落とすと、その契約を道具の
-          // 層で覆して「絞らない」に化けさせてしまう。すぐ上の `types` は
-          // `length === 0` を `{}` へ落としており、この2つは渡し方が違う
-          // （`types` 側は本 PR の範囲外の既存コード）。
+          // **`[]`（空配列）もそのまま転送する。** 理由はすぐ上の `types` と
+          // 同じで、`with: []` も `store.ts` の doc で「0件」に決まっている
+          // （#418）。**この2つは同じ渡し方である**——かつて `types` だけが
+          // `length === 0` を `{}` へ落としており、同じ道具の隣り合う2行で
+          // 同じ表記が違う意味を持っていた（issue #426 で揃えた）。
           ...(withFilter === undefined ? {} : { with: withFilter }),
         });
         if (entries.length === 0) {
