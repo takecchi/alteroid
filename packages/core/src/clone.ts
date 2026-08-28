@@ -1220,7 +1220,7 @@ class Clone implements CloneHost {
     //    `apps/daemon/src/index.ts:1052` の1件だけで、その手前に
     //    `if (stopping) return; stopping = true;`（`index.ts:1036-1037`。あいだに
     //    `await` が1つも無い同期2行）が在る。入口は3つ（SIGTERM `index.ts:1067` /
-    //    SIGINT `index.ts:1068` / `POST /shutdown` → `index.ts:980`）だが全部この
+    //    SIGINT `index.ts:1068` / `POST /shutdown` → `index.ts:981`）だが全部この
     //    門を通る。⟹ **shutdown の蒸留はプロセスにつき高々1回**であり、
     //    「機械の速さで来る」は成り立たない
     // 2. **完了性には期限が在る。** `apps/daemon/src/index.ts:1049-1050` が
