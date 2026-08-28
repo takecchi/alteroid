@@ -2947,8 +2947,7 @@ export function createCloneTools(context: ToolContext) {
         await stores.journal.append({
           type: 'decision',
           decision:
-            `引き受けた仕事の本文を直した（${id}）: ` +
-            `編集前「${before}」→ 編集後「${body}」`,
+            `引き受けた仕事の本文を直した（${id}）: ` + `編集前「${before}」→ 編集後「${body}」`,
           grounds: '自分で載せた行の本文を自分で直した（原文は日誌に残す）',
         });
         return text(`${id} の本文を直した（元の本文は日誌に残してある）。`);
