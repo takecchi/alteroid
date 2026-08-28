@@ -326,6 +326,32 @@ export const DISTILL_GAP_NOTICE_HEAD =
  * 大きさに比例して最初のターンが重くなり、しかも写した塊は会話の履歴として
  * 残って resume のたびに運ばれる（`RESUMED_MEMORY_NOTICE` が全文を載せ直さない
  * 理由と同じ）。**区間と件数と、掘るための道具の名前だけを渡す。**
+ *
+ * ## ⚠️ `firstActivityAt === lastDistilledAt` になりうる（実装は正しい）
+ *
+ * `deriveDistillGapFromJournal` は窓の下端を `after: { id, at }`（`marker` の
+ * `id` を錨にする形）で切っている。この錨は「印と同じミリ秒に積まれた、印より
+ * 後ろの行」を正しく数え続ける（`journal-order-with-contract.ts` の契約9 —
+ * 同じミリ秒の2行をまたいでも飛ばさず重複しない）。**その結果、印と同じミリ秒に
+ * 積まれた行が区間の始まりになると、`gap.firstActivityAt` は
+ * `gap.lastDistilledAt` と同じ値になる。**
+ *
+ * 素朴にこの2つの時刻をそのまま並べて出すと、「それより後」と言いながら
+ * 区間の始まりに**同じ時刻**が出る文になり、**読み手は実装のほうを疑う**
+ * （2026-08-28、依頼元の指摘）。**実装は誤っていない** — 誤っていたのは
+ * 「時刻が違えば順序も違う」という、読み手にも書き手にも共有されていた
+ * 暗黙の前提のほうである。日誌の時刻はミリ秒までしか無く、`after` は時刻では
+ * なく日誌の並び（`id` の錨）で切っているので、**同じ時刻の中でも前後は
+ * 決まる。** ⟹ この条件が成り立つときだけ、その理由を断り書きへ1文足す
+ * （下の `distilled` の直後、区間を示す文と同じ段落）。**それ以外の場合の文面は
+ * 変えない** — 毎回鳴る注釈は「数えないもの」の doc が警告する「意味を失った
+ * 断り書き」と同じ形になるので、成り立つときだけに絞る。
+ *
+ * 比較は `<=`（`===` で足りるところをあえて安全側に倒す）。`ascending` の窓は
+ * `at < until` と `after` の錨で切っており、`firstActivityAt` が
+ * `lastDistilledAt` を**下回る**ことは無いはずだが、それを前提に `<` にすると
+ * 将来の実装変更がこの断りを静かに欠落させる側へ倒れる。`<=` なら、万一
+ * 前提が崩れても安全側（断りを出す）へ倒れる。
  */
 export function describeDistillGap(gap: DistillGap): string {
   // 印が見つからなかったときは窓で切っているので（`window` は必ず
@@ -336,11 +362,23 @@ export function describeDistillGap(gap: DistillGap): string {
         `${DISTILL_GAP_ACTIVITY_SCAN_LIMIT}件を見た範囲には無かった`
       : `最後に蒸留が成功で終わったのは ${gap.lastDistilledAt}`;
 
+  // **区間の始まりが蒸留の時刻と同じに見える**ときだけ、その理由を区間の文の
+  // すぐ後ろに続ける（上の doc「`firstActivityAt === lastDistilledAt` になり
+  // うる」）。それ以外の場合はこの1文を足さない — 共通の場合の文面を太らせない。
+  const sameMillisecondNotice =
+    gap.lastDistilledAt !== null && gap.firstActivityAt <= gap.lastDistilledAt
+      ? '**区間の始まりが蒸留の時刻と同じに見えるのは、日誌の時刻がミリ秒までしか' +
+        '無いためである。**数えているのは時刻ではなく日誌の並びで、成功の印そのものより' +
+        '後ろに積まれた行だけを数えている（印と同じミリ秒でも、印より前に積まれた行は' +
+        '数えていない）。'
+      : '';
+
   return [
     DISTILL_GAP_NOTICE_HEAD,
     `${distilled}。それより後、この器が起きるまでのあいだに、` +
       `記憶へ移された記録の無い活動が ${gap.activityCount} 件ある` +
-      `（${gap.firstActivityAt} 〜 ${gap.lastActivityAt}）。`,
+      `（${gap.firstActivityAt} 〜 ${gap.lastActivityAt}）。` +
+      sameMillisecondNotice,
     '',
     '**これは「蒸留を始めた」ではなく「蒸留が成功で終わった」記録で数えている。**' +
       '前のプロセスが蒸留の途中で消えたか、蒸留が失敗して終わったか、そもそも走らなかった、' +

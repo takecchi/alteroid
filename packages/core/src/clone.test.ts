@@ -31,8 +31,10 @@ import {
   DISTILL_GAP_NOTICE_HEAD,
   DISTILL_SUCCEEDED_DECISION_PREFIX,
   deriveDistillGapFromJournal,
+  describeDistillGap,
   distillSucceededEntry,
 } from './distill-gap.js';
+import type { DistillGap } from './distill-gap.js';
 import type { CloneHost } from './host.js';
 import type { ManagerPool, ManagerSummary } from './manager.js';
 import { renderMemoryDocuments } from './memory.js';
@@ -9319,5 +9321,53 @@ describe('クローン — 蒸留が間に合わなかった区間の検出', ()
       until: new Date().toISOString(),
     });
     expect(gap?.activityCount).toBe(1);
+  });
+
+  /**
+   * 文面の自己矛盾（Issue #564 続き）。
+   *
+   * **`describeDistillGap` へ直に当てる歯である**（歯7と同じ当て方 —— この
+   * 条件は日誌を仕込んで作るものではなく `DistillGap` の値そのものが決めるので、
+   * クローンのループを通さず値を直に組み立てて渡せる）。
+   *
+   * `deriveDistillGapFromJournal` は窓の下端を `after: { id, at }`（`id` の
+   * 錨）で切っているので、印と同じミリ秒に積まれた「印より後ろの行」が正しく
+   * 区間の始まりに数えられることがあり、そのとき `firstActivityAt` は
+   * `lastDistilledAt` と同じ値になる（`distill-gap.ts` の
+   * `describeDistillGap` の doc）。素朴な文面は「それより後」と言いながら
+   * 区間の始まりに同じ時刻を出し、読み手には実装が矛盾しているように見える。
+   * ここで固定するのは、その場合だけ理由の1文が足されることである。
+   */
+  it('8: 区間の始まりが蒸留の時刻と同じミリ秒のとき、断り書きにその理由が載る', () => {
+    const gap: DistillGap = {
+      lastDistilledAt: '2026-08-28T00:00:00.000Z',
+      firstActivityAt: '2026-08-28T00:00:00.000Z',
+      lastActivityAt: '2026-08-28T00:00:00.500Z',
+      activityCount: 1,
+      window: 'since_last_distill',
+    };
+
+    expect(describeDistillGap(gap)).toContain(
+      '**区間の始まりが蒸留の時刻と同じに見えるのは、日誌の時刻がミリ秒までしか' +
+        '無いためである。**数えているのは時刻ではなく日誌の並びで、成功の印そのものより' +
+        '後ろに積まれた行だけを数えている（印と同じミリ秒でも、印より前に積まれた行は' +
+        '数えていない）。',
+    );
+  });
+
+  /**
+   * 上の歯8の裏 —— 時刻が違うときは、その1文が載らない（共通の場合の文面が
+   * 太らないことの歯）。歯8を「常に足す」へ弱めて壊すと、この歯だけが落ちる。
+   */
+  it('9: 区間の始まりが蒸留の時刻と違うとき、その1文は載らない', () => {
+    const gap: DistillGap = {
+      lastDistilledAt: '2026-08-28T00:00:00.000Z',
+      firstActivityAt: '2026-08-28T00:00:00.500Z',
+      lastActivityAt: '2026-08-28T00:00:01.000Z',
+      activityCount: 1,
+      window: 'since_last_distill',
+    };
+
+    expect(describeDistillGap(gap)).not.toContain('区間の始まりが蒸留の時刻と同じに見えるのは');
   });
 });
