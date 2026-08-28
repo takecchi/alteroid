@@ -5485,8 +5485,24 @@ function isLive(record: ManagerRecord, silentRunners: ReadonlyMap<string, string
   //
   // **`status` は動かさない。** 黙っているのが器なのか経路なのかは片側からは
   // 決められないので、`lost`（＝resume を試して戻れなかったという確かめた事実）
-  // をここで名乗らせることはしない。言えるのは「いま話しかけられない」だけで、
-  // それはまさに `live` が言う内容である。
+  // をここで名乗らせることはしない。
+  //
+  // **⚠️ ここで言えるのは「置き先として数えない」までである。「いま話しかけ
+  // られない」とは言えない —— 実測して偽だと分かっている（2026-08-28）。**
+  // この行が `false` を返す当の委譲へ `ManagerPool.send()` を撃つと
+  // `{ outcome: 'delivered', detail: '追加指示として届けた。' }` が返り、runner の
+  // resume の口が実際に叩かれた（`live: false` / `runnerLostSince` あり /
+  // `status: 'running'` の組で観測）。**この行が見る `silentRunners` と、`send()` が
+  // 通る `Registry#get()` が、同じ名簿の違う面だからである** —— `#markSilent` は
+  // `entry.state` を `'lost'` にするだけで `entry.client` を落とさず、`get()` は
+  // `entry.state` を見ない（`list()` は `lost` を除くが `get()` は除かない）。
+  //
+  // ⟹ **`live: false` を「送っても届かない」と読み替えないこと。** 同じ取り違えを
+  // 閉じたのが `ba4053d`（#67「「いま送っても届かず」の真下に、届く送信ボタンが
+  // 並んでいた」）で、**その commit 本文の実測表（`delivered` / `unknown` の2値）は
+  // `0fb068f`（PR #571、#563）で `ManagerSendResult` が4値になった時点で古い。**
+  // 面（CLI の `/managers`・`manager_list`・Web UI）の文言は 2026-08-28 にこの実測へ
+  // 揃えてある。**この関数の返り値は動かしていない** —— 直すのは言い方だけである。
   if (record.job.runnerId !== undefined && silentRunners.has(record.job.runnerId)) return false;
   // runner にセッションが居るなら、そのまま送れる。
   if (record.attached) return true;

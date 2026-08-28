@@ -3644,10 +3644,47 @@ export function createCloneTools(context: ToolContext) {
               // 打つ手（起こし直すのか、器の側を見るのか）が決まらない。
               // **断定は「器が黙っている」までである** — その中で走っていたか
               // どうかは、この観測からは言えない（`ManagerSummary.runnerLostSince`）。
+              //
+              // **⚠️ 「いま話しかけられない」と書かないこと。実測して嘘だと
+              // 分かっている。**
+              //
+              // 2026-08-28 まで、ここは「新しい委譲の宛先からも外れている ⟹ いま
+              // 話しかけられない」と書いていた。**`packages/core` の足場で実測したら
+              // 偽だった** —— 名簿が `state: 'lost'` と判定した器に載っている委譲へ
+              // `ManagerPool.send()` を撃つと
+              // `{ outcome: 'delivered', detail: '追加指示として届けた。' }` が返り、
+              // runner の resume の口が実際に叩かれる。構造の理由: `#markSilent` は
+              // `entry.state` を `'lost'` にするだけで **`entry.client` を落とさず**、
+              // `Registry#get()` は `entry.state` を見ない（`list()` は `lost` を
+              // 除くが `get()` は除かない）。`send()` は `job.runnerId` が在れば
+              // `#runnerOf` → `get()` を通り、**`runnerLostSince` が立つのは
+              // `runnerId` が在るときだけ**なので必ずこちら側である。
+              //
+              // **これは一度閉じた欠陥と同じ形である。** `ba4053d`（#67「「いま
+              // 送っても届かず」の真下に、届く送信ボタンが並んでいた」）は、届く
+              // 相手に「届かない」と書いた**注記のほうを**直した（送信は塞がなかった
+              // —— 塞ぐと「人間が自分の言葉で繋ぎ直す唯一の手」が消える。
+              // north_star 禁止1）。
+              //
+              // **⚠️ #67 の commit 本文が持つ実測表（`delivered` / `unknown` の
+              // 2値）をそのまま当てないこと。あれは古い。** `0fb068f`（PR #571
+              // 「manager_send が [running] の相手へ 404 を貫通させる」#563）で
+              // `ManagerSendResult.outcome` は**4値**（`answered` / `delivered` /
+              // `session_missing` / `unknown`）になった。**commit 本文は書き換わら
+              // ないので、いつ偽になったかが本文からは読めない。**
+              //
+              // ⟹ **残してよいのは「新しい委譲の宛先からは外れている」まで**
+              // （`list()` が `lost` を除くので実測で真）。落とすのは送信可否の
+              // 推論だけである。生の値は PR #586 のコメント
+              // （`pull/586#issuecomment-5450674492`）に在る。
+              //
+              // **次の一手の語はこの面のものを使う** —— ここはクローンが読む面
+              // なので `manager_send` / `manager_start` / `runner_list` を名指し
+              // する（CLI は `/msg`、Web UI は画面の語）。
               `  runner: ${manager.runnerId ?? '未記録'}${
                 manager.runnerLostSince === undefined
                   ? ''
-                  : `（この器は ${manager.runnerLostSince} 以降 名乗っていない。新しい委譲の宛先からも外れている ⟹ いま話しかけられない。**この委譲が失われたという意味ではない** — 黙っているのが器なのか経路なのかは、ここからは言えない）`
+                  : `（この器は ${manager.runnerLostSince} 以降 名乗っていない。新しい委譲の宛先からは外れている（置き先として数えない）。**この委譲が失われたという意味ではない** — 黙っているのが器なのか経路なのかは、ここからは言えない（器の中でまだ走っていることもある）。話しかけることは塞いでいない — 戻る先（session_id）が在れば manager_send が resume を試みる（届くとは限らない）。**先に manager_start で起こし直さないこと** — 同じ仕事が2本になる。器そのものは runner_list で見る）`
               }`,
               // **`runnerLostSince` と同じ作法で、別の行として出す（#563）。**
               // `describeManagerState` は動かさない——`manager_list` と要約
