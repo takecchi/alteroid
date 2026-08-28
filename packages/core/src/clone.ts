@@ -797,6 +797,20 @@ class Clone implements CloneHost {
 
   #query: Query | null = null;
   #reader: Promise<void> | null = null;
+  /**
+   * 受信箱のループ（`#pump()`）そのもの。**畳むときに読み切るために保持する**
+   * （Issue #564 (a)）。
+   *
+   * かつてここは `void this.#pump().catch(...)` で起こしっぱなしにしてあり、
+   * Promise はどこにも残っていなかった。`stop()` が待ち行列を読み切ってから
+   * 畳むには、その1本を `await` できる形で持っておく必要がある（`stop()` の doc）。
+   *
+   * **`.catch(...)` を外して素の `#pump()` を入れないこと。** 外すと、ループが
+   * 投げたときに `stop()` が待つ前の時点で unhandled rejection になる（理由は
+   * コンストラクタ側の逐語コメント）。ここに入れるのは `.catch(...)` まで
+   * 含めた Promise であり、だから `await` しても投げない。
+   */
+  #pumpLoop: Promise<void> | null = null;
   #turn: Turn | null = null;
   #stopped = false;
   /**
@@ -967,7 +981,11 @@ class Clone implements CloneHost {
     // 生き残ると HTTP は答え続け、受信箱は積まれ続けたまま誰も気づかない。
     // 器が「壊れた」と判定できる材料はプロセスの終了しか無い（`uncaught-net.ts`）。
     // いまは落ちて再起動し、`#restoreUnread` が未読を本文ごと配り直して戻る。
-    void this.#pump().catch((error: unknown) => {
+    // **保持する。** `stop()` が待ち行列を読み切ってから畳むために `await`
+    // できる形にしておく（Issue #564 (a)。`#pumpLoop` の doc）。**`.catch(...)`
+    // まで含めた Promise を入れること** —— 素の `#pump()` を入れると、`stop()` が
+    // 待つより前に投げた分が unhandled rejection になる（すぐ上の理由）。
+    this.#pumpLoop = this.#pump().catch((error: unknown) => {
       noteBackgroundFailure('クローンの受信箱のループ', '', error);
       throw error;
     });
@@ -1034,7 +1052,11 @@ class Clone implements CloneHost {
     // 書き込みは落ちうる（落ちれば `#remember` / `#commit` が stderr へ跡を残す）。
     // 跡の文言はそのことを含む — ここで「次の起動へ回した」と断言すると、
     // 書けなかった回だけ跡が静かに嘘をつく。
-    if (this.#stopped) {
+    // **`#inbox.closed` も見る**（Issue #564 (a)）。`stop()` は受信箱を閉じてから
+    // 待ち行列を読み切り、そのあとで `#stopped` を立てる。⟹ **その間に届いたものを
+    // `#stopped` だけで判定すると、閉じた受信箱へ `push` して投げる**（`Inbox#push`）。
+    // ここが「読み切りが必ず終わる」根拠そのものでもある（`stop()` の doc）。
+    if (this.#stopped || this.#inbox.closed) {
       this.#remember(event);
       this.#commit(event);
       noteDroppedInboxEvent(event);
@@ -1170,7 +1192,10 @@ class Clone implements CloneHost {
   }
 
   async stop(): Promise<void> {
-    if (this.#stopped) return;
+    // **`#inbox.closed` も見る**（Issue #564 (a)）。読み切りのあいだ `#stopped` はまだ
+    // 立っていないので、ここを `#stopped` だけで守ると2度目の呼びが本体をもう一度
+    // 走らせる。受信箱を閉じるのはこの関数だけなので、閉じている＝もう入っている。
+    if (this.#stopped || this.#inbox.closed) return;
 
     // 落ちる前にもう一度だけ記憶へ移す機会を作る（蒸留は生存条件）。
     // 既にセッションが無いなら何も起きない。**ここでは無条件に投げる** —
@@ -1178,23 +1203,79 @@ class Clone implements CloneHost {
     // 分岐に1本化してある（ターンの起動口を受信箱の1か所に保つ設計と同じ理由。
     // `#hasUndistilledActivity` の doc）。ここで先に判定すると、判定が2か所に
     // 散り、`endConversation()` 側だけ判定を足し忘れるような穴が生まれる。
-    // **`interrupt` を渡さない（既定 `false`）。** ここは誰も画面の前で待って
-    // いない（プロセス終了）ので、`endConversation()` と違って割り込む理由が
-    // 無い。待ち行列に積んであるものより先に読ませると、有界性の根拠
-    // （`isHumanOriginated` の doc）を「型」ではなく「呼び出し側」で保っている
-    // 意味が無くなる —— ここで渡してしまえば、機械の速さで起きる shutdown が
-    // 人間の待ちと同じ扱いになる。
+    //
+    // ## `interrupt` を渡す（Issue #564 (a)）
+    //
+    // **かつてここは渡していなかった**（既定 `false`）。その理由は逐語で
+    // 「ここは誰も画面の前で待っていない（プロセス終了）ので、`endConversation()`
+    // と違って割り込む理由が無い」「ここで渡してしまえば、機械の速さで起きる
+    // shutdown が人間の待ちと同じ扱いになる」——つまり**有界性**（`isHumanOriginated`
+    // の doc「割り込みは人間の速さでしか来ない」）を、型ではなく呼び出し側で
+    // 保つための線だった。
+    //
+    // **その線は保ったまま渡せる。** #564 が現物で示したのは、旧来の根拠が
+    // **待ち時間**の話であって**完了性**の話ではなかったことである。
+    //
+    // 1. **有界性は崩れない。** `clone.stop()` を呼ぶ製品コードは
+    //    `apps/daemon/src/index.ts:1052` の1件だけで、その手前に
+    //    `if (stopping) return; stopping = true;`（`index.ts:1036-1037`。あいだに
+    //    `await` が1つも無い同期2行）が在る。入口は3つ（SIGTERM `index.ts:1067` /
+    //    SIGINT `index.ts:1068` / `POST /shutdown` → `index.ts:981`）だが全部この
+    //    門を通る。⟹ **shutdown の蒸留はプロセスにつき高々1回**であり、
+    //    「機械の速さで来る」は成り立たない
+    // 2. **完了性には期限が在る。** `apps/daemon/src/index.ts:1049-1050` が
+    //    `setTimeout(() => process.exit(0), FORCED_EXIT_MS)` を張っており、
+    //    `FORCED_EXIT_MS = SHUTDOWN_GRACE_MS - 5_000 = 55_000`（`index.ts:141,152`）。
+    //    ⟹ 待ち行列が詰まっていれば、蒸留は「順番が遅い」のではなく**切られる**。
+    //    失われるのは会話1区間まるごとである（#564 の観測）
     if (this.#query) {
-      await this.#postAndWait({
-        type: 'distill',
-        id: randomUUID(),
-        at: new Date().toISOString(),
-        reason: 'shutdown',
-      }).catch(() => undefined);
+      await this.#postAndWait(
+        {
+          type: 'distill',
+          id: randomUUID(),
+          at: new Date().toISOString(),
+          reason: 'shutdown',
+        },
+        true,
+      ).catch(() => undefined);
     }
 
-    this.#stopped = true;
     this.#inbox.close();
+
+    // **割り込ませたら、読み切ってから畳むこと**（Issue #564 (a)）。
+    //
+    // 割り込みだけを足すと、待ち行列に残っていた非人間が**1件もモデルへ届かなく
+    // なる**（先行の実測では残り5件が5件とも届かず、器に未読5件が残った。この形は
+    // `clone.test.ts` の「stop() の shutdown 蒸留が割り込んでも、非人間は1件も
+    // 消えず到着順も保たれる（Issue #564）」が押さえている）。
+    // 末尾積みは順序の指定であると同時に、「受信箱を空にしてから閉じる合流点」
+    // としても効いていた —— 先に読ませるなら、その合流点は別に作る必要がある。
+    //
+    // **捨てているのは `#inbox.close()` ではない。** `Inbox#close()` は待ち行列を
+    // 捨てず、`next()` は `#queue.shift()` を先に見るので、閉じた後も残りを吐き
+    // 出す（`inbox.ts` の `next()` / `close()`、および `#pump` の中の逐語
+    // 「`for await` は待ち行列に残った分を吐き出しながら回り続ける」）。捨てて
+    // いるのは下の `this.#query?.close()` のほうである。⟹ **その手前で待てばよい。**
+    //
+    // **止まる根拠**は `post()` / `#postAndWait()` の門である。どちらも
+    // `this.#stopped || this.#inbox.closed` を見るので、**受信箱を閉じた時点から
+    // 新しい合図は1件も積まれない**（`#restoreUnread` が既に使っていた形と同じ
+    // 述語）。⟹ 待ち行列は必ず尽きて `#pump` の `for await` が抜ける。
+    //
+    // **`#stopped` はここでは立てない。下の `await` の後で立てる。** 読み切りの
+    // あいだに立てると、残りのターンが渡る先を自分で閉じてしまう —— 実測で
+    // 壊れ方が2つ出た。(1) `#inputStream` が `if (this.#stopped) return` で
+    // 入力の generator を畳み、蒸留の次のターンから先が永久に完了しない。
+    // (2) `#read` の `finally` が `if (!this.#stopped)` で丸ごと飛ぶので、
+    // セッションが死んだときに宙吊りのターンを誰も解放しない
+    // （`clone.test.ts` の「ターンが失敗しても、発言そのものは日誌に残る」が
+    // これで 5 秒の時間切れになった）。**`#stopped` はセッションを畳んだ印であって、
+    // 新しい仕事を受けない印ではない** —— 後者は `#inbox.closed` が持つ。
+    //
+    // `#pump` がまだ起きていなければ（`null`）何もしない。
+    await this.#pumpLoop;
+
+    this.#stopped = true;
     this.#wakeInput();
     try {
       this.#query?.close();
@@ -1216,27 +1297,60 @@ class Clone implements CloneHost {
    * ## `interrupt` — 「割り込ませるか」を型ではなく呼び出し側で決める（Issue #43）
    *
    * **`isHumanOriginated`（`clone.ts:221`）は広げない。** `distill` を人間起点の
-   * 型にすると、`stop()` が投げる `reason: 'shutdown'`（プロセス終了時。誰も
-   * 待っていない）まで人間起点になり、有界性の根拠（`isHumanOriginated` の doc
-   * 「割り込みは人間の速さでしか来ない」）が崩れる。**だから型を増やさず、
-   * ここに引数を持たせて、呼び出し側（`endConversation` だけ）が渡す形にする。**
+   * 型にすると、蒸留という**型**そのものが常に割り込む側になり、有界性の根拠
+   * （`isHumanOriginated` の doc「割り込みは人間の速さでしか来ない」）を型では
+   * 支えられなくなる。**だから型を増やさず、ここに引数を持たせて、呼び出し側が
+   * 「この1回は割り込ませてよい」を根拠つきで決める形にする。**
    *
    * `interrupt` が真で、かつ人間優先（`#humanPriority`）が有効なときだけ、
    * `Inbox#push` の `insertAfterLast` へ「人間起点、または `conversation_end` の
    * 蒸留」を真にする述語を渡す。**`conversation_end` を述語に含める理由**は、
    * 待ち行列の**queued 側**（＝先に並んでいる要素）に同種の合図が居るときに、
    * それを追い越さないようにするため（`post()` が人間どうしの FIFO を守って
-   * いるのと同じ形。`Inbox#push` の doc）。この reason を作る製品コードは
-   * `endConversation` の1箇所しか無い（`stop()` は `shutdown` を渡す）ので、
-   * 割り込みの量はここでも「HTTP で人間が待っている回数」に有界なままである。
+   * いるのと同じ形。`Inbox#push` の doc）。
+   *
+   * ## 渡す呼び出し側は2つある（`endConversation` と `stop`。Issue #564 (a)）
+   *
+   * **かつては `endConversation` だけだった。** この doc は逐語で「呼び出し側
+   * （`endConversation` だけ）が渡す」「この reason を作る製品コードは
+   * `endConversation` の1箇所しか無い（`stop()` は `shutdown` を渡す）」と書いて
+   * おり、`stop()` の shutdown 蒸留は末尾へ積まれていた。その根拠は「プロセス
+   * 終了なので誰も画面の前で待っていない」だった。
+   *
+   * **#564 が現物で示したのは、その根拠が「待ち時間」の話であって「完了性」の
+   * 話ではなかったことである。** `stop()` にも渡してよい理由は2つで、どちらも
+   * `apps/daemon/src/index.ts` に在る（詳しくは `stop()` の doc）:
+   *
+   * - **有界性**: `clone.stop()` の製品コードの呼びは `index.ts:1052` の1件だけで、
+   *   手前の `if (stopping) return; stopping = true;`（`index.ts:1036-1037`）を
+   *   3つの入口が全部通る ⟹ **プロセスにつき高々1回**
+   * - **完了性の期限**: `index.ts:1049-1050` の
+   *   `setTimeout(() => process.exit(0), FORCED_EXIT_MS)`（`FORCED_EXIT_MS =
+   *   SHUTDOWN_GRACE_MS - 5_000 = 55_000`。`index.ts:141,152`）⟹ 行列の後ろで
+   *   待つ蒸留は**切られる**
+   *
+   * ⟹ **「割り込みの量は人間が待っている回数に有界」は、いまも保たれている。**
+   * shutdown の側が足すのは「プロセスの一生に1回」だからである。
+   *
+   * **述語は広げていない。** `shutdown` を queued 側の条件に足していないのは、
+   * 待ち行列に shutdown の蒸留が2件並ぶ形が上の有界性から作れないためである。
+   *
+   * ## 割り込ませる側は、閉じる前に読み切ること
+   *
+   * `stop()` で渡す場合、**割り込ませるだけでは待ち行列の残りが消える**（実測。
+   * `stop()` の `await this.#pumpLoop` のところに書いてある）。末尾積みは順序の
+   * 指定であると同時に「受信箱を空にしてから閉じる合流点」でもあった。
+   * `endConversation` はセッションを畳まないのでこの手当ては要らない。
    *
    * `interrupt` を渡さない（既定 `false`）呼び出しはこれまでと1文字も変わらず
    * 常に末尾へ積む。`#humanPriority` が無効なときは `this.#humanPriority &&`
    * が門を掛けているので、この割り込みも起きない（`post()` の
-   * `this.#humanPriority && isHumanOriginated(event)` と同じ形）。
+   * `this.#humanPriority && isHumanOriginated(event)` と同じ形）。**⟹ この直しは
+   * `ALTEROID_CLONE_HUMAN_PRIORITY` が有効な器でだけ効く。**
    */
   #postAndWait(event: InboxEvent, interrupt = false): Promise<void> {
-    if (this.#stopped) return Promise.resolve();
+    // 門は `post()` と同じ述語である（理由はそちら。Issue #564 (a)）。
+    if (this.#stopped || this.#inbox.closed) return Promise.resolve();
     return new Promise<void>((resolve) => {
       this.#completions.set(event.id, resolve);
       this.#inbox.push(
@@ -1295,11 +1409,12 @@ class Clone implements CloneHost {
       // 起きない理由）。
       //
       // **片付け中は解除しない（`#inbox.closed` を見る）。** `stop()` は
-      // `#stopped` を立てて `#inbox.close()` を呼ぶが、`for await` は待ち行列に
-      // 残った分を吐き出しながら回り続けるので、**閉じた後にこの地点へ来る**
-      // ことがありうる。`Inbox#unshift` は閉じた受信箱では投げ、しかもここは
-      // 下の `try` の外なので、投げれば `for await` ごと抜けて受信箱のループが
-      // 死ぬ（`#pump` は `void` で起こしてあるので unhandled rejection になる）。
+      // `#inbox.close()` を呼ぶが、`for await` は待ち行列に残った分を吐き出し
+      // ながら回り続けるので、**閉じた後にこの地点へ来る**ことがありうる
+      // （Issue #564 (a) 以降は `stop()` がそれを `await` して待つので、**必ず
+      // 来る**）。`Inbox#unshift` は閉じた受信箱では投げ、しかもここは下の
+      // `try` の外なので、投げれば `for await` ごと抜けて受信箱のループが死ぬ
+      // （`#pumpLoop` の `.catch` が跡を残したうえで再送出する）。
       // 解除しないほうの被害は無い — 保持した分は器に未読のまま残っており
       // （`#settleInboxEvent` が `#forget` を呼んでいない）、次の起動で
       // `#restoreUnread` が拾い直す。**この機構が生死をまたげる理由がそれである。**
