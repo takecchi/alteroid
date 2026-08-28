@@ -71,6 +71,17 @@ interface Harness {
    * 設定しなければ既定で `null`（3段のどこにも無い、を模している）。
    */
   setTranscript(managerId: string, body: string | null): void;
+  /**
+   * `managers.transcript()` を呼ぶと、代わりに例外を投げさせる（読めなかった、
+   * を模す）。`setTranscript` と排他ではない——両方設定したら例外が勝つ。
+   */
+  setTranscriptFailure(managerId: string, message: string): void;
+  /**
+   * `managers.transcript(managerId)` が呼ばれるたびに積む。**往復を無条件に
+   * 増やしていないか**（#323。`part: 'request'` では呼ばれないはず）を数えるための
+   * もので、中身の差し替えは `setTranscript` / `setTranscriptFailure` の仕事。
+   */
+  transcriptCalls: string[];
   /** `runners()` に渡された引数（`fingerprints` / `resources` を渡したかどうかの検査用）。 */
   runnersCalls: { fingerprints?: boolean; resources?: boolean }[];
   /**
@@ -105,6 +116,8 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
   const runnersCalls: { fingerprints?: boolean; resources?: boolean }[] = [];
   let runnerBacklog: RunnerBacklogSnapshot[] = [];
   const transcripts = new Map<string, string>();
+  const transcriptErrors = new Map<string, string>();
+  const transcriptCalls: string[] = [];
   let memoryCause: 'distill' | 'clone' = 'clone';
 
   const managers: ManagerPool = {
@@ -142,6 +155,9 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
       return denied.get(managerId) ?? [];
     },
     async transcript(managerId: string) {
+      transcriptCalls.push(managerId);
+      const failure = transcriptErrors.get(managerId);
+      if (failure !== undefined) throw new Error(failure);
       return transcripts.get(managerId) ?? null;
     },
     async restore() {
@@ -250,6 +266,10 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
       if (body === null) transcripts.delete(managerId);
       else transcripts.set(managerId, body);
     },
+    setTranscriptFailure(managerId, message) {
+      transcriptErrors.set(managerId, message);
+    },
+    transcriptCalls,
     runnersCalls,
     async call(name, args) {
       const found = tools.find((entry) => entry.name === name);
@@ -4324,6 +4344,229 @@ describe('manager_list は件数が増えても壊れない', () => {
     const reply = await h.call('manager_report', { managerId: 'mgr-999' });
 
     expect(reply).toContain('mgr-999');
+  });
+});
+
+/**
+ * `manager_report` が「報告はまだ無い」と答える直前に生ログを見に行く（#323）。
+ *
+ * Issue の症状は「マネージャーは書き終えた（生ログに `end_turn` まで残る）のに、
+ * クローン側は『まだ何も報告していない』としか読めない」——**この2つを区別する
+ * 材料がどちらの層にも無かった**。ここでは `describeMissingReport` が返す
+ * 3つの言い分け（生ログにも無い／生ログには在る＝配られていない／読めなかった・
+ * 判定できない）を1本ずつ固定する。
+ */
+describe('manager_report: 報告が空のとき、生ログを見て言い分ける（#323）', () => {
+  /**
+   * JSONL の1行（assistant、本文つき）。
+   *
+   * **`stopReason` は既定で付けない**（呼び手が明示しない限り、生ログの行に
+   * `stop_reason` 欄が無い状態を作る）。「本文がある＝終わっている」と決め
+   * つけない実装（#323 の偽陽性直し）を測るには、テスト側も「終わっている
+   * ことを示す行」と「そう示していない行」を作り分けで書く必要がある。
+   */
+  function assistantLine(
+    text: string,
+    options: { timestamp?: string; isSidechain?: boolean; stopReason?: string } = {},
+  ) {
+    return JSON.stringify({
+      type: 'assistant',
+      isSidechain: options.isSidechain ?? false,
+      timestamp: options.timestamp ?? '2026-08-26T20:31:59.107Z',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text }],
+        ...(options.stopReason === undefined ? {} : { stop_reason: options.stopReason }),
+      },
+    });
+  }
+
+  it('part: request では生ログを見ない（往復を無条件に増やさない）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    // 依頼文が記録に無い状態を作る（`request` は必須欄なので直接書き換える）。
+    h.running[0]!.request = '';
+    h.setTranscript('mgr-1', assistantLine('この本文は part=request では見に行かれないはず'));
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-1', part: 'request' });
+
+    expect(reply).toContain('依頼文が記録に無い');
+    // 生ログには一度も問い合わせていない。
+    expect(h.transcriptCalls).toEqual([]);
+  });
+
+  it('生ログにも本文が無いとき「まだ無い」のままで、⚠は出さない（本文の無い assistant 行だけの生ログ）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    // lastReport は未設定のまま（＝まだ書いていないかもしれない状態）。
+    // 生ログには assistant の行はあるが、本文（text）を持たない
+    // （tool_use だけの行——道具呼び出しはしたが、まだ喋っていない）。
+    const noBodyTranscript = [
+      JSON.stringify({
+        type: 'user',
+        isSidechain: false,
+        timestamp: '2026-08-26T20:00:00.000Z',
+        message: { role: 'user', content: 'ping' },
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        isSidechain: false,
+        timestamp: '2026-08-26T20:01:00.000Z',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'x', name: 'Bash', input: {} }],
+        },
+      }),
+    ].join('\n');
+    h.setTranscript('mgr-1', noBodyTranscript);
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-1' });
+
+    expect(reply).toContain('まだ無い');
+    expect(reply).toContain('生ログにも本文は無い');
+    expect(reply).not.toContain('⚠');
+    expect(reply).not.toContain('配られていない');
+  });
+
+  it('生ログの最後の発言が end_turn で終わっているとき「⚠ 配られていない」と、timestamp・文字数・manager_transcript の案内を出す', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    const reportBody = '生成されたのに配られなかった報告の全文（テスト用）';
+    const transcript = [
+      JSON.stringify({
+        type: 'user',
+        isSidechain: false,
+        timestamp: '2026-08-26T20:30:00.000Z',
+        message: { role: 'user', content: 'ping' },
+      }),
+      // **stop_reason: 'end_turn' を明示する。** これが無いと「そのターンが
+      // 終わったこと」を示せず、#323 として名乗ってはいけない
+      // （`describeMissingReport` の3分岐——直上の doc）。
+      assistantLine(reportBody, { timestamp: '2026-08-26T20:31:59.107Z', stopReason: 'end_turn' }),
+    ].join('\n');
+    h.setTranscript('mgr-1', transcript);
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-1' });
+
+    expect(reply).toContain('⚠');
+    expect(reply).toContain('配られていない');
+    expect(reply).toContain('#323');
+    expect(reply).toContain('2026-08-26T20:31:59.107Z');
+    expect(reply).toMatch(new RegExp(`約\\s*${reportBody.length}\\s*文字`));
+    expect(reply).toContain('manager_transcript managerId=mgr-1 offset=');
+    // 本文そのものは積まない（返すのは「在る」ことと timestamp・長さだけ）。
+    expect(reply).not.toContain(reportBody);
+  });
+
+  it('生ログの最後の発言が end_turn ではない（ターン途中）とき、断定しない——⚠ も #323 も付けない', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    // 実測（コーディネーターの報告）: 本文（type: 'text'）を持つ行でも
+    // stop_reason が 'tool_use' のことがある——道具を挟む前の語り
+    // （ターンの途中）。健全に働いている最中を欠陥として名乗ってはいけない。
+    const midTurnBody = 'これから道具を呼ぶ前の語り（ターンはまだ終わっていない）';
+    const transcript = [
+      assistantLine(midTurnBody, { timestamp: '2026-08-26T20:31:59.107Z', stopReason: 'tool_use' }),
+    ].join('\n');
+    h.setTranscript('mgr-1', transcript);
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-1' });
+
+    expect(reply).not.toContain('⚠');
+    expect(reply).not.toContain('#323');
+    expect(reply).toContain('2026-08-26T20:31:59.107Z');
+    expect(reply).toContain('stop_reason=tool_use');
+    expect(reply).toContain('まだ終わっていない');
+    // 本文そのものは積まない。
+    expect(reply).not.toContain(midTurnBody);
+  });
+
+  it('生ログの最後の発言に stop_reason 欄が無いとき、終わっているかどちらとも名乗らない', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    // stopReason を渡さない＝ message に stop_reason 欄が無い行を作る
+    // （版が古い・欄が欠けている、を模す）。
+    const unknownBody = '古い形式か何かで stop_reason が欠けている行';
+    const transcript = [assistantLine(unknownBody, { timestamp: '2026-08-26T20:33:00.000Z' })].join(
+      '\n',
+    );
+    h.setTranscript('mgr-1', transcript);
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-1' });
+
+    // 「終わっていない」とも「終わった＝配られていない」とも言わない。
+    expect(reply).not.toContain('⚠');
+    expect(reply).not.toContain('#323');
+    expect(reply).not.toContain('まだ終わっていない');
+    expect(reply).toContain('2026-08-26T20:33:00.000Z');
+    expect(reply).toContain('判定できなかった');
+    expect(reply).toMatch(/stop_reason.*無い/);
+    expect(reply).not.toContain(unknownBody);
+  });
+
+  it('作業者（サブエージェント）の発言は混ぜない（isSidechain: true の行は無視する）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    const workerOnly = [
+      assistantLine('これは作業者の発言（サブエージェント）', { isSidechain: true }),
+    ].join('\n');
+    h.setTranscript('mgr-1', workerOnly);
+
+    const workerOnlyReply = await h.call('manager_report', { managerId: 'mgr-1' });
+
+    // 作業者の発言しか無いなら、マネージャー自身の発言としては見つからない。
+    expect(workerOnlyReply).not.toContain('⚠');
+    expect(workerOnlyReply).toContain('生ログにも本文は無い');
+
+    // マネージャー自身の発言（isSidechain: false）の**後に**作業者の発言が
+    // 続く生ログを作る。末尾から遡る実装が、末尾の作業者の行を素通りして
+    // その手前のマネージャー自身の行まで正しく遡れるかを見る
+    // （末尾がたまたま一致するだけでは検算できないので、順序を逆にする）。
+    const withManagerLine = [
+      assistantLine('マネージャー自身の発言', {
+        timestamp: '2026-08-26T20:32:10.000Z',
+        stopReason: 'end_turn',
+      }),
+      workerOnly,
+    ].join('\n');
+    h.setTranscript('mgr-1', withManagerLine);
+
+    const foundReply = await h.call('manager_report', { managerId: 'mgr-1' });
+
+    expect(foundReply).toContain('⚠');
+    expect(foundReply).toContain('2026-08-26T20:32:10.000Z');
+  });
+
+  it('生ログが読めなかったとき「無い」と言い切らない', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    h.setTranscriptFailure('mgr-1', 'ECONNRESET（テスト用）');
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-1' });
+
+    expect(reply).toContain('読めなかった');
+    expect(reply).toContain('ECONNRESET');
+    expect(reply).not.toContain('生ログにも本文は無い');
+    expect(reply).not.toContain('⚠');
+  });
+
+  it('上限（REPORT_GENERATED_PROBE_CHARS）まで遡っても見つからなかったら「見つからなかった」であって「無い」ではない', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    // 200,000 文字を超え、かつ改行が1つも無い巨大な1行（JSON として parse
+    // できない）。末尾から切り出した断片は「途中で千切れているかもしれない
+    // 先頭」として捨てられるので、この生ログは実質1行も読めない——
+    // 「生ログ全体を見て無かった」とは言えない状態を作る。
+    const huge = 'x'.repeat(250_000);
+    h.setTranscript('mgr-1', huge);
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-1' });
+
+    expect(reply).toContain('まだ無い');
+    expect(reply).toMatch(/遡った/);
+    expect(reply).not.toContain('生ログにも本文は無い');
+    expect(reply).not.toContain('⚠');
+    expect(reply).not.toContain('配られていない');
   });
 });
 
