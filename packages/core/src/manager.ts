@@ -239,6 +239,38 @@ export interface ManagerSummary {
    * 消え方は `turnEndReason` と同じ（直上の doc）。
    */
   turnEndTail?: string;
+  /**
+   * **デーモンが生ログの末尾を読んで計算した、「SDK は道具の応答を待っている」
+   * という事実**（Issue #572）。`probeToolUseStall`（このファイル）が見つけた
+   * 行の `timestamp`。**行が `timestamp` を持たなければ欄ごと消える**
+   * （`turnEndedAt` と同じ——`undefined` を埋めない）。
+   *
+   * **`toolUseStallPending` と対で運ぶ。旗はあちらである**——この欄が
+   * 無くても、あちらが在れば観測は在る。`turnEndedAt` / `turnEndReason` の
+   * 関係とちょうど同じ形である。
+   *
+   * **判定ではない。時刻の閾値でもない。** 「何分経ったか」はこの欄では
+   * 判定しない——読む側（人間）が読む値である。矛盾の成立に経過時間は
+   * 要らない（`probeToolUseStall` の doc）。
+   */
+  toolUseStallAt?: string;
+  /**
+   * **`toolUseStallAt` と対で運ぶ**（Issue #572）。生ログの末尾の assistant 行が
+   * `stop_reason: 'tool_use'` で、その `tool_use` に対応する `tool_result` が
+   * 生ログに見つからなかったもの。**この欄が立っていることが観測が在る印**
+   * （`turnEndReason` と同じ位置づけ）で、`probeToolUseStall` が何も見つけ
+   * なければ `toolUseStallAt` ごと消える。
+   *
+   * **⚠️ これだけでは症状ではない。** `stop_reason: 'tool_use'` は道具を挟む
+   * 途中経過でも普通に出る（`probeTurnEnd` の doc の実測: 68 時点中 37 が
+   * それ）。**3条件目——デーモンの `waiting` が空であること——と突き合わせて
+   * 初めて矛盾になる。** その突き合わせは読む側が行う（`tools.ts` の
+   * `describeToolUseStall`）。`waiting` が非空なら、それは「確認は届いていて、
+   * クローンがまだ答えていない」という正常な状態である。
+   *
+   * **切らない・殺さない・止めない**（`turnEndedAt` と同じ約束）。
+   */
+  toolUseStallPending?: PendingToolUse[];
   cwd: string;
   request: string;
   startedAt: string;
@@ -983,6 +1015,20 @@ interface ManagerRecord {
   /** `turnEndedAt` と対で運ぶ（`ManagerSummary.turnEndTail` の doc）。 */
   turnEndTail?: string;
   /**
+   * **デーモンが生ログの末尾を読んで計算した、「SDK は道具の応答を待っている」
+   * という事実**（Issue #572。`ManagerSummary` の同名の2欄へそのまま出る）。
+   *
+   * **`turnEndedAt` の3欄と同じ扱いである。** プロセス内の像にしか置かない
+   * （`Job` へは書かない）。デーモンを作り直したら消える——次のポーリング
+   * （`ManagerPool#probeTurnEnds`）が計算し直すので、失っても嘘は残らない。
+   *
+   * 2欄は `probeToolUseStall` の1回の呼び出しで一緒に立ち、一緒に消える
+   * （`toolUseStallAt` だけ欠けることはある——行が `timestamp` を持たないとき）。
+   */
+  toolUseStallAt?: string;
+  /** `toolUseStallAt` と対で運ぶ（`ManagerSummary.toolUseStallPending` の doc）。 */
+  toolUseStallPending?: PendingToolUse[];
+  /**
    * **一度でもクローンへ配った確認の id。**
    *
    * `waiting` は「いま待っている」ものしか持たない。それだけで重複を見ると、
@@ -1221,6 +1267,202 @@ export function probeTurnEnd(transcript: string): TurnEndProbe | undefined {
       timestamp: typeof record.timestamp === 'string' ? record.timestamp : undefined,
       stopReason,
       tail: body.length > TURN_END_TAIL_EXCERPT ? body.slice(-TURN_END_TAIL_EXCERPT) : body,
+    };
+  }
+  return undefined;
+}
+
+// -------------------------------------------------------------------------
+// 「道具の応答待ちのまま、誰も待っていない」の探り（Issue #572）
+// -------------------------------------------------------------------------
+
+/**
+ * `ToolUseStallProbe` が運ぶ、応答が返っていない `tool_use` の1件。
+ *
+ * **生ログの値をそのまま写すだけである**（`ManagerSummary.turnEndTail` と
+ * 同じ作法）。`name` は SDK が書かない・文字列でない形がありうるので
+ * `optional`——**「不明」のような文字列を作って埋めない**（AGENTS.md
+ * 「取れない軸に0の行を作る」）。
+ */
+export interface PendingToolUse {
+  /** その `tool_use` ブロックの `id`（`tool_result.tool_use_id` と突き合わせた鍵）。 */
+  id: string;
+  /** その `tool_use` ブロックの `name`（文字列でなければ欄ごと落ちる）。 */
+  name?: string;
+}
+
+/**
+ * `probeToolUseStall` が生ログの末尾から計算した、**「SDK は道具の応答を
+ * 待っているらしい」という事実**（Issue #572）。
+ *
+ * **判定ではない。時刻の閾値も持たない。** ここに出るのは事実（見つかった
+ * 行の `timestamp` と、応答が見当たらない `tool_use` の `id` / `name`）
+ * だけで、「止まっている」という結論はこの型が持たない——結論は読む側
+ * （`tools.ts` の `describeToolUseStall`）が `record.waiting` と突き合わせて
+ * 出す。`TurnEndProbe` と同じ層の分け方である。
+ */
+export interface ToolUseStallProbe {
+  /**
+   * その行の `timestamp`（無ければ `undefined`——古い形式は省略しうる。
+   * `TurnEndProbe.timestamp` と同じ）。
+   *
+   * **この値で経過時間を計算しない。** 何分経ったかを判定するのは人間で
+   * あって、この探りでも `describeToolUseStall` でもない。
+   */
+  timestamp: string | undefined;
+  /**
+   * 対応する `tool_result` が生ログに見つからなかった `tool_use`。
+   * **必ず1件以上**（0件なら `probeToolUseStall` は `undefined` を返す）。
+   */
+  pending: PendingToolUse[];
+}
+
+/**
+ * assistant 行の `message.content` から `type: 'tool_use'` のブロックを拾う。
+ *
+ * **`id` が文字列でないブロックは落とす。** 突き合わせの鍵が無いものは
+ * 「応答が来ていない」と言えない（言えば、鍵の無さを症状に化けさせる）。
+ */
+function toolUsesOf(content: unknown): PendingToolUse[] {
+  if (!Array.isArray(content)) return [];
+  const found: PendingToolUse[] = [];
+  for (const block of content) {
+    if (typeof block !== 'object' || block === null) continue;
+    const typed = block as { type?: unknown; id?: unknown; name?: unknown };
+    if (typed.type !== 'tool_use') continue;
+    if (typeof typed.id !== 'string') continue;
+    found.push({
+      id: typed.id,
+      ...(typeof typed.name === 'string' ? { name: typed.name } : {}),
+    });
+  }
+  return found;
+}
+
+/**
+ * 1行から `type: 'tool_result'` の `tool_use_id` を拾って `sink` へ入れる。
+ *
+ * **行の `type` も `isSidechain` も見ない。** 突き合わせは `id` で行うので
+ * 絞る必要が無く、絞ると「応答は在るのに拾えなかった」＝偽陽性が増える。
+ * **誤検出の代償は非対称だが、こちらは向きが逆である**——`describeTurnEnd`
+ * の doc が言う非対称は「黙る代償のほうが高い」だが、ここで黙るのは
+ * 「応答が実際に在る」ときなので、拾い漏らさない側へ倒すのが正しい。
+ */
+function collectToolResultIds(content: unknown, sink: Set<string>): void {
+  if (!Array.isArray(content)) return;
+  for (const block of content) {
+    if (typeof block !== 'object' || block === null) continue;
+    const typed = block as { type?: unknown; tool_use_id?: unknown };
+    if (typed.type !== 'tool_result') continue;
+    if (typeof typed.tool_use_id !== 'string') continue;
+    sink.add(typed.tool_use_id);
+  }
+}
+
+/**
+ * 生ログ（Claude Code の JSONL）の末尾から、**「SDK は道具の応答を待っている」**
+ * という事実を計算する（Issue #572）。**何も切らない・殺さない・止めない**
+ * ——`probeTurnEnd` と同じく純関数で、呼び出し側（`ManagerPool#probeTurnEnds`）が
+ * この結果で `status` を書き換えたり委譲を abort したりしないことを保証する。
+ *
+ * **`probeTurnEnd` の裏側を撮る関数である。** あちらは規則6 で
+ * `stop_reason === 'tool_use'` を `undefined` にする（＝働いている最中）。
+ * **その規則は正しい**——同 doc の実測（生ログ8本の再生、2026-08-28）で、
+ * 既存の規則が「end_turn」と言った 68 時点のうち 37（54%）は末尾が実は
+ * `tool_use` で、道具を挟む途中経過だった。**だから `stop_reason: 'tool_use'`
+ * だけでは何も決まらない。** この関数はそこへ材料を2つ足す:
+ *
+ * 1. その `tool_use` に対応する `tool_result` が生ログに**無い**
+ * 2. （呼ぶ側で）デーモンの `record.waiting` が**空**
+ *
+ * 2 は生ログに映らないので、この関数は 1 までを計算して事実を返す。
+ * **突き合わせるのは `tools.ts` の `describeToolUseStall` である**——
+ * `TurnEndProbe` の判定を `describeTurnEnd` が持っているのと同じ層の分け方
+ * （Issue #567 が作った前例）。
+ *
+ * **⚠️ 時刻の閾値を1つも置かない。** 「何分経ったか」はこの関数も呼び出し側も
+ * 判定しない。`stop_reason: 'tool_use'` なのに誰も応答を待っていないのは、
+ * **時刻に関係なく矛盾である**——道具を回しているなら、その応答を待っている
+ * のはデーモンのはずだからである。閾値を置くと、それより短い窓の症状が
+ * 出力から消える（#572 の実例は 91 分だったが、それは症状の下限ではない）。
+ *
+ * 規則（1〜4 は `probeTurnEnd` と**同じ窓・同じ選び方**）:
+ * 1. 末尾から `TURN_END_PROBE_CHARS` 文字だけを切り出す。切り出したら先頭の
+ *    1行を捨てる（途中で切れた行の可能性があるため）。
+ * 2. 末尾の行から遡る。`JSON.parse` に失敗した行は飛ばす。
+ * 3. `type !== 'assistant'` の行、`isSidechain === true` の行（作業者の発言）は
+ *    飛ばす。
+ * 4. 本文の有無を問わず、最初に見つかった行を採用する。
+ * 5. その行の `message.stop_reason` が `'tool_use'` **でなければ** `undefined`
+ *    （この検出の対象外。ターンが終わっている形は `probeTurnEnd` の担当）。
+ * 6. その行の `message.content` から `type: 'tool_use'` の `id` / `name` を集める。
+ *    1件も拾えなければ `undefined`（待っている対象が特定できない）。
+ * 7. **その行より後ろの行**だけを見て、`tool_result` の `tool_use_id` を集める。
+ *    **前は見ない**——前に在るのは別の（既に済んだ）呼び出しへの応答である。
+ * 8. 6 のうち 7 に無いものが1件でも残れば `ToolUseStallProbe` を返す。全部
+ *    揃っていれば `undefined`（応答は届いている）。
+ * 9. 1行も `assistant` が見つからなければ `undefined`。
+ *
+ * **⚠️ 窓（`TURN_END_PROBE_CHARS`）の外は見えない。** 採用した行より後ろは
+ * 必ず窓の中に在る（末尾から遡って見つけた行だから）ので、7 の走査が窓で
+ * 欠けることは無い。窓が効くのは 1〜4 の選び方だけで、そこは `probeTurnEnd`
+ * と同じ性質である。
+ */
+export function probeToolUseStall(transcript: string): ToolUseStallProbe | undefined {
+  const truncated = transcript.length > TURN_END_PROBE_CHARS;
+  const window = truncated ? transcript.slice(-TURN_END_PROBE_CHARS) : transcript;
+  const rawLines = window.split('\n');
+  const lines = truncated ? rawLines.slice(1) : rawLines;
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index]!.trim();
+    if (line.length === 0) continue;
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const record = entry as {
+      type?: unknown;
+      isSidechain?: unknown;
+      timestamp?: unknown;
+      message?: { content?: unknown; stop_reason?: unknown };
+    };
+    if (record.type !== 'assistant') continue;
+    if (record.isSidechain === true) continue; // 作業者の発言
+
+    // **ここが `probeTurnEnd` の規則6 の裏側である。** あちらは `tool_use` を
+    // 見た時点で `undefined`（働いている最中）を返す。こちらは `tool_use`
+    // **以外**を見た時点で `undefined` を返す——2つの探りは同じ行を見て、
+    // 重ならない範囲を担当する。
+    if (record.message?.stop_reason !== 'tool_use') return undefined;
+
+    const pending = toolUsesOf(record.message?.content);
+    if (pending.length === 0) return undefined;
+
+    // **後ろの行だけを見る。** 前に在る `tool_result` は、この行より古い
+    // （別の）呼び出しへの応答である。
+    const answered = new Set<string>();
+    for (let after = index + 1; after < lines.length; after += 1) {
+      const laterLine = lines[after]!.trim();
+      if (laterLine.length === 0) continue;
+      let laterEntry: unknown;
+      try {
+        laterEntry = JSON.parse(laterLine);
+      } catch {
+        continue;
+      }
+      const later = laterEntry as { message?: { content?: unknown } };
+      collectToolResultIds(later.message?.content, answered);
+    }
+
+    const unanswered = pending.filter((item) => !answered.has(item.id));
+    if (unanswered.length === 0) return undefined;
+
+    return {
+      timestamp: typeof record.timestamp === 'string' ? record.timestamp : undefined,
+      pending: unanswered,
     };
   }
   return undefined;
@@ -1728,6 +1970,8 @@ class Pool implements ManagerPool {
       record.turnEndedAt,
       record.turnEndReason,
       record.turnEndTail,
+      record.toolUseStallAt,
+      record.toolUseStallPending,
     );
   }
 
@@ -1991,6 +2235,8 @@ class Pool implements ManagerPool {
           record.turnEndedAt,
           record.turnEndReason,
           record.turnEndTail,
+          record.toolUseStallAt,
+          record.toolUseStallPending,
         ),
       );
     }
@@ -2013,6 +2259,8 @@ class Pool implements ManagerPool {
           fallback.turnEndedAt,
           fallback.turnEndReason,
           fallback.turnEndTail,
+          fallback.toolUseStallAt,
+          fallback.toolUseStallPending,
         ),
       );
     }
@@ -2248,11 +2496,22 @@ class Pool implements ManagerPool {
   }
 
   /**
-   * `probeTurnEnds` の1件ぶん。生ログを読み、`probeTurnEnd` へ渡し、結果を
-   * `record` の3欄へ書く。
+   * `probeTurnEnds` の1件ぶん。生ログを読み、`probeTurnEnd` と
+   * `probeToolUseStall` へ**同じ本文を並べて**渡し、結果を `record` の
+   * 5欄（#567 の3欄 + #572 の2欄）へ書く。
    *
-   * **返り値が読めない・解析できないときは3欄を`undefined`に戻す**
-   * （interface の doc「分からないものを症状に化けさせない」の実装）。
+   * **HTTP の往復は1回のままである**（Issue #572）。`transcript()` は既に
+   * 取ってあるので、2つ目の探りのために口を増やさない——`manager_list` が
+   * 「往復を増やさない」を守っているのと同じ判断である。
+   *
+   * **2つの探りは重ならない。** `probeTurnEnd` は末尾の assistant 行の
+   * `stop_reason` が `'tool_use'` **以外**のときだけ値を返し（規則6）、
+   * `probeToolUseStall` は `'tool_use'` のときだけ値を返す。**同じ行を見て、
+   * 両方が同時に立つことは無い**——だから片方を立てるときにもう片方を
+   * 畳む、という調停を書いていない（それぞれが自分の欄だけを見る）。
+   *
+   * **返り値が読めない・解析できないときは、その探りの欄を `undefined` に
+   * 戻す**（interface の doc「分からないものを症状に化けさせない」の実装）。
    * 新しい HTTP の口は開かない——`transcript()` が既に持っている3段
    * （runner のディスク → 退避済みアーカイブ → 預かったセッション）を
    * そのまま使う。
@@ -2268,6 +2527,8 @@ class Pool implements ManagerPool {
       delete record.turnEndedAt;
       delete record.turnEndReason;
       delete record.turnEndTail;
+      delete record.toolUseStallAt;
+      delete record.toolUseStallPending;
       return;
     }
 
@@ -2276,16 +2537,31 @@ class Pool implements ManagerPool {
       delete record.turnEndedAt;
       delete record.turnEndReason;
       delete record.turnEndTail;
-      return;
+    } else {
+      if (probe.timestamp === undefined) {
+        delete record.turnEndedAt;
+      } else {
+        record.turnEndedAt = probe.timestamp;
+      }
+      record.turnEndReason = probe.stopReason;
+      record.turnEndTail = probe.tail;
     }
 
-    if (probe.timestamp === undefined) {
-      delete record.turnEndedAt;
-    } else {
-      record.turnEndedAt = probe.timestamp;
+    // **同じ本文をもう1つの探りへ渡す**（Issue #572）。`probeTurnEnd` が
+    // `undefined` を返した回（＝末尾が `tool_use` だった回）が、こちらの
+    // 出番である。
+    const stall = probeToolUseStall(transcript);
+    if (stall === undefined) {
+      delete record.toolUseStallAt;
+      delete record.toolUseStallPending;
+      return;
     }
-    record.turnEndReason = probe.stopReason;
-    record.turnEndTail = probe.tail;
+    if (stall.timestamp === undefined) {
+      delete record.toolUseStallAt;
+    } else {
+      record.toolUseStallAt = stall.timestamp;
+    }
+    record.toolUseStallPending = stall.pending;
   }
 
   /**
@@ -2441,6 +2717,8 @@ class Pool implements ManagerPool {
             record.turnEndedAt,
             record.turnEndReason,
             record.turnEndTail,
+            record.toolUseStallAt,
+            record.toolUseStallPending,
           ),
         );
         continue;
@@ -2542,6 +2820,8 @@ class Pool implements ManagerPool {
             record.turnEndedAt,
             record.turnEndReason,
             record.turnEndTail,
+            record.toolUseStallAt,
+            record.toolUseStallPending,
           ),
         );
       } catch (error) {
@@ -5547,6 +5827,8 @@ function summaryOf(
   turnEndedAt: string | undefined,
   turnEndReason: string | undefined,
   turnEndTail: string | undefined,
+  toolUseStallAt: string | undefined,
+  toolUseStallPending: PendingToolUse[] | undefined,
 ): ManagerSummary {
   const { job } = record;
   return {
@@ -5568,6 +5850,12 @@ function summaryOf(
     ...(turnEndedAt === undefined ? {} : { turnEndedAt }),
     ...(turnEndReason === undefined ? {} : { turnEndReason }),
     ...(turnEndTail === undefined ? {} : { turnEndTail }),
+    // **同上（Issue #572）。** `turnEndedAt` の3欄と同じ作法で運ぶ——2欄は
+    // `probeToolUseStall` の1回の呼び出しで一緒に立ち一緒に消えるのが通常だが、
+    // `toolUseStallAt` だけは元の行が `timestamp` を持たないとき単独で欠けうる
+    // ので、ここでも2つを独立に出し分ける（片方の有無でもう片方を畳まない）。
+    ...(toolUseStallAt === undefined ? {} : { toolUseStallAt }),
+    ...(toolUseStallPending === undefined ? {} : { toolUseStallPending }),
     cwd: job.cwd ?? '',
     request: job.request ?? job.summary,
     startedAt: job.createdAt,
