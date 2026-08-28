@@ -664,6 +664,63 @@ describe('クローン', () => {
     await s.clone.stop();
   });
 
+  /**
+   * Issue #373 — `runner.ts` の `#noteDenial` は `agent_id` を読んで層
+   * （マネージャー自身／作業者）を判定するが、`clone.ts` の同名メソッドは
+   * 読んでいなかった。クローン自身も preset 一式を持つので `Task`（作業者＝
+   * サブエージェント）を持ち、拒否がクローン本体のものか作業者のものかを
+   * 区別できないと、日誌を追う側が誤った層へ次の手を向けかねない。
+   *
+   * **`via: 'live'` のときだけ層が載る。** `agent_id` は `SDKPermissionDeniedMessage`
+   * （生の合図、`via: 'live'`）にしか原理的に存在しない
+   * （`SDKPermissionDenial`＝`via: 'result'` は3つのフィールドしか持たない）。
+   */
+  it('拒否の層（クローン本体／作業者／どちらの層か不明）が日誌の文言に出る', async () => {
+    const mainThread = { tool_name: 'Bash', tool_use_id: 'tu-main', tool_input: { command: 'ls' } };
+    const subAgent = {
+      tool_name: 'Write',
+      tool_use_id: 'tu-sub',
+      tool_input: { file_path: '/a' },
+      agent_id: 'agent-1',
+      agent_type: 'general-purpose',
+    };
+    const resultOnly = { tool_name: 'Edit', tool_use_id: 'tu-result' };
+    const s = setup(undefined, createMemoryStores(), {
+      beforeAssistant: () => [
+        { type: 'system', subtype: 'permission_denied', ...mainThread } as unknown as SDKMessage,
+        { type: 'system', subtype: 'permission_denied', ...subAgent } as unknown as SDKMessage,
+      ],
+      // `permissionDenials` が読む `result.permission_denials` 側は authoritative
+      // だが `agent_id` を持たない——生の合図（上）とは別の tool_use_id にして
+      // 二重書き防止（`#deniedToolUses`）に引っかからないようにする。
+      permissionDenials: () => [resultOnly],
+    });
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const denied = (await s.stores.journal.list({ types: ['exchange'] })).filter((entry) =>
+      (entry as { text: string }).text.includes('確認へ上がらずに止められた'),
+    );
+    expect(denied.length).toBe(3);
+    const texts = denied.map((entry) => (entry as { text: string }).text);
+
+    const mainText = texts.find((t) => t.includes('Bash'));
+    expect(mainText).toContain('クローン本体');
+    expect(mainText).not.toContain('作業者');
+
+    const subText = texts.find((t) => t.includes('Write'));
+    expect(subText).toContain('作業者');
+    expect(subText).toContain('general-purpose');
+
+    const resultText = texts.find((t) => t.includes('Edit'));
+    expect(resultText).toContain('どちらの層か不明');
+    expect(resultText).not.toContain('クローン本体');
+    expect(resultText).not.toContain('作業者');
+
+    await s.clone.stop();
+  });
+
   it('権限モードの既定は人間が開く Claude Code と同じ（auto）。置けるのは人間だけ', () => {
     // `default` のままだと、答える相手が居ない確認（このセッションに `canUseTool`
     // は無い）がそのまま拒否になり、道具を渡したのに使えない状態になる。
