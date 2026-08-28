@@ -275,3 +275,209 @@ describe('`live` は、繋がっていないことも札で言う', () => {
     expect(screen.queryByText('セッション切断')).toBeNull();
   });
 });
+
+/**
+ * **5つ目の形**——「runner に生きたセッションはもう無いが、まだ話しかけられる」
+ * （`ManagerSummary.sessionMissingSince`）。
+ *
+ * 直す前、`/usr/bin/grep -rn 'sessionMissingSince' apps/web/` は **0件**だった。
+ * デーモンは `GET /managers` でこの欄を返していて、クローンは `manager_list`
+ * （`packages/core/src/tools.ts`）で、人間は CLI の `/manager`
+ * （`apps/cli/src/chat.ts`）で読めていた —— **Web UI だけが値を受け取ったまま
+ * 描いていなかった。** 同じ仕事を見て人間とクローンが違う判断をする形である
+ * （北極星 禁止1 を逆向きに踏む）。
+ *
+ * ここで固定するのは3つ。
+ *
+ * 1. **`live: true`（＝「接続あり」の緑）と同時に出る。** `sessionId` が残って
+ *    いれば resume から入り直せるので `live` は落ちない —— 片方が他方を消す形に
+ *    したら、それがこの欄の主眼を壊している（`live && <札>` を禁じたのと同じ形）
+ * 2. **欄が無いときは何も描かない**（`ManagerFailureNote` と同じ。雑音にしない）
+ * 3. **「失われた」と言い切っていない。** 由来が2つあり（途中で失われた／完遂した
+ *    後にセッションが畳まれて終端の合図だけが届かなかった）、デーモンは台帳から
+ *    区別できない（`packages/core/src/manager.ts` の `sendFailureDetail` の doc）。
+ *    決めつけると**完遂済みの仕事を委譲し直す**
+ */
+describe('セッションが無いことは、`live` も状態も置き換えずに添える', () => {
+  const MISSING = '2026-08-16T03:10:00.000Z';
+
+  it('「実行中」も「接続あり」も残したまま、セッションが無いことを言う', async () => {
+    renderManagers([{ ...BASE, status: 'running', live: true, sessionMissingSince: MISSING }]);
+
+    // 札は差し替えない。観測しているのは `running` のままである。
+    expect(await screen.findByText('実行中')).toBeTruthy();
+    // **ここが本体。** 注記が出たことで「接続あり」が消えていない。
+    expect(screen.getByText('接続あり')).toBeTruthy();
+    expect(screen.queryByText('セッション切断')).toBeNull();
+    // runner は答えている（聞けなかったのではない）。
+    expect(screen.getByText(/runner がそう答えた。聞けなかったのではない/)).toBeTruthy();
+  });
+
+  /**
+   * **文言の核が消えたら赤くなる歯。** ここが落ちたら、画面が観測していないこと
+   * （この委譲が失われた）を断定し始めている。
+   */
+  it('「失われた」と言い切らず、完遂後に畳まれた回も同じ形に見えることを言う', async () => {
+    renderManagers([{ ...BASE, status: 'running', live: true, sessionMissingSince: MISSING }]);
+
+    expect(await screen.findByText(/この委譲が失われたという意味ではない/)).toBeTruthy();
+    expect(
+      screen.getByText(
+        /完遂した後にセッションが畳まれ、終端の合図だけが届かなかった回も同じ形に見える/,
+      ),
+    ).toBeTruthy();
+    // 先に起こし直すと同じ仕事が2本になる（人間が実際に踏める地雷）。
+    expect(screen.getByText(/同じ仕事が2本になる/)).toBeTruthy();
+  });
+
+  it('欄が無いマネージャーには何も足さない（雑音にしない）', async () => {
+    renderManagers([{ ...BASE, status: 'running', live: true }]);
+
+    expect(await screen.findByText('実行中')).toBeTruthy();
+    expect(screen.queryByText(/この委譲のセッションを持っていなかった/)).toBeNull();
+  });
+
+  /**
+   * **時刻はこの画面の作法（`~/lib/format` の `formatRelative`）で出す。**
+   * CLI と `manager_list` は ISO をそのまま出しており、**書式が違うのは意図で
+   * ある。** ISO が素で出ていたら、この画面だけ作法が割れている。
+   */
+  it('時刻は相対表示で、ISO をそのまま出さない', async () => {
+    renderManagers([{ ...BASE, status: 'running', live: true, sessionMissingSince: MISSING }]);
+
+    expect(await screen.findByText(/この委譲のセッションを持っていなかった/)).toBeTruthy();
+    expect(screen.queryByText(new RegExp(MISSING))).toBeNull();
+  });
+});
+
+/**
+ * **宛先の器そのものが名乗らなくなった**こと（`ManagerSummary.runnerLostSince`）。
+ *
+ * これも直す前は `/usr/bin/grep -rn 'runnerLostSince' apps/web/` が **0件**だった。
+ * CLI（`chat.ts`）と `manager_list`（`tools.ts`）は両方描いていて、Web UI だけが
+ * 両方とも描いていなかった —— 札が「セッション切断」としか言わないと、セッションが
+ * 終わったのか宛先の器が消えたのかが読めず、打つ手（起こし直すのか、器の側を見るのか）
+ * が決まらない。
+ *
+ * **`status: lost` の言葉には寄せない。** `lost` は resume を試して戻れなかったと
+ * いう**確かめた事実**に付く名前だが、ここはまだ何も確かめていない —— 黙っているのが
+ * 器なのか経路なのかは片側からは決められず、**器の中でまだ走っている可能性が残る**
+ * （`packages/core/src/manager.ts` の `runnerLostSince` の doc）。
+ */
+describe('器が黙ったことは、`status` を動かさずに添える', () => {
+  const LOST_SINCE = '2026-08-16T03:05:00.000Z';
+
+  it('「実行中」の札を残したまま、器が名乗っていないことを言う', async () => {
+    renderManagers([{ ...BASE, status: 'running', live: false, runnerLostSince: LOST_SINCE }]);
+
+    // `status` は動かない。`live` だけが倒れる。
+    expect(await screen.findByText('実行中')).toBeTruthy();
+    expect(screen.getByText('セッション切断')).toBeTruthy();
+    expect(screen.getByText(/宛先の器は.*から名乗っていない/)).toBeTruthy();
+    expect(screen.getByText(/新しい委譲の宛先からは外れている/)).toBeTruthy();
+  });
+
+  /**
+   * **`ba4053d`（#67「「いま送っても届かず」の真下に、届く送信ボタンが並んでいた」）の
+   * 再発を止める歯。**
+   *
+   * CLI（`chat.ts`）と `manager_list`（`tools.ts`）はこの節を「いま話しかけられない」と
+   * 書いているが、**Web へ逐語で持ってくると嘘になる。** 実測（`packages/core` の足場で
+   * 走らせた書き捨ての試験）: 名簿が `state: 'lost'` と判定した runner でも
+   * `RunnerRegistry#get()` は client を返し（`#markSilent` は `entry.client` を落とさず、
+   * `get()` は `entry.state` を見ない）、`ManagerPool#send()` は `#runnerOf` → `get()` を
+   * 通って **`outcome: 'delivered'`** を返した（runner の `resume` が実際に叩かれた）。
+   *
+   * ⟹ デーモンは拒まない。**送信可否をこの注記が推論してはいけない。**
+   */
+  it('送信可否を推論しない（「いま話しかけられない」と書かない）', async () => {
+    renderManagers([{ ...BASE, status: 'running', live: false, runnerLostSince: LOST_SINCE }]);
+
+    expect(await screen.findByText(/宛先の器は.*から名乗っていない/)).toBeTruthy();
+    // #67 が閉じた欠陥。ここが落ちたら、届く送信の上に「届かない」が戻っている。
+    expect(screen.queryByText(/いま話しかけられない/)).toBeNull();
+    expect(screen.queryByText(/届かない/)).toBeNull();
+    expect(screen.queryByText(/届かず/)).toBeNull();
+    // 塞いでいないことと、成否を断定しないことの両方を言う。
+    expect(screen.getByText(/話しかけることは塞いでいない/)).toBeTruthy();
+    expect(screen.getByText(/送ると resume\s*を試みる/)).toBeTruthy();
+  });
+
+  /**
+   * **「塞いでいない」を無条件に言わない。** 実測 #4（`packages/core` の足場で
+   * 走らせた書き捨ての試験）: 名簿が `lost` の器でも、**`session_id` を持たない
+   * 相手には送信が届かない** —— `outcome` は `unknown`、detail は「session_id を
+   * 持っておらず、続きへ戻れない。新しく起こし直すこと。」で、**runner は一度も
+   * 叩かれない**（`[]`）。画面の側も `SendMessage` の `noWayBack` がボタンを
+   * 塞ぐ。
+   *
+   * ⟹ 条件（「戻る先（session_id）が在れば」）を落として無条件の「塞いでいない」に
+   * すると、**一覧の側で嘘になる**。詳細には `DisconnectedNote` が同じ断りを
+   * 持っているが、**一覧にはこの注記しか無い。**
+   *
+   * **この歯は変異試験で生存が出たので足した**（`n4-drop-session-id-condition`）。
+   * 条件を落とす変異は、他のどの歯でも死ななかった。
+   */
+  it('「塞いでいない」を無条件に言わず、戻る先（session_id）を条件として言う', async () => {
+    renderManagers([{ ...BASE, status: 'running', live: false, runnerLostSince: LOST_SINCE }]);
+
+    expect(await screen.findByText(/宛先の器は.*から名乗っていない/)).toBeTruthy();
+    // ここが落ちたら、送信できない相手にも「塞いでいない」と言っている。
+    expect(screen.getByText(/戻る先（session_id）が在れば/)).toBeTruthy();
+    // 成否も断定しない（実測では delivered / session_missing / unknown が出た）。
+    expect(screen.getByText(/届くとは限らない/)).toBeTruthy();
+  });
+
+  /**
+   * **`sessionMissingSince` とは「失われたと書かない理由」が違う。** あちらは
+   * 「完遂した後に畳まれた回と区別できない」、こちらは「器の中でまだ走っている
+   * 可能性が残る」。核を取り違えたら赤くなる。
+   */
+  it('「失われた」と言い切らず、器の中でまだ走っている可能性を潰さない', async () => {
+    renderManagers([{ ...BASE, status: 'running', live: false, runnerLostSince: LOST_SINCE }]);
+
+    expect(await screen.findByText(/この委譲が失われたという意味ではない/)).toBeTruthy();
+    expect(screen.getByText(/黙っているのが器なのか経路なのかは、ここからは言えない/)).toBeTruthy();
+    // `status: lost` の札の言葉へ寄せていない。
+    expect(screen.queryByText('セッションへ戻れず')).toBeNull();
+  });
+
+  it('欄が無いマネージャーには何も足さない（雑音にしない）', async () => {
+    renderManagers([{ ...BASE, status: 'running', live: false }]);
+
+    expect(await screen.findByText('セッション切断')).toBeTruthy();
+    expect(screen.queryByText(/名乗っていない/)).toBeNull();
+  });
+
+  /**
+   * **2つは排他ではない。同時に立つ。**
+   *
+   * `packages/core/src/manager.ts`（`ff24ded9`）を引いて確かめた: `summaryOf()` は
+   * 2つを独立した spread で組み立てており、排他を課している行は1行も無い。
+   * `record.sessionMissingSince` を消すのは「resume で戻れた」＝ runner が実際に
+   * 答えた回の2箇所だけなので、**runner が黙っても消えない。** ⟹ 到達順序は
+   * 「runner がこの委譲について答えない → `sessionMissingSince` が立つ（`live` は
+   * true のまま）→ その後 同じ runner が名乗らなくなる → `runnerLostSince` が立ち、
+   * 同時に `isLive()` が `live: false` を返す」。
+   *
+   * **この組を測っている歯は repo のどこにも無かった。** CLI も `manager_list` も
+   * `else` 無しで2つ積んでいる（＝2行並ぶ）ので、Web も並ぶのが「合わせる」である。
+   * 片方を `else` にする変異は、この歯でしか死なない。
+   */
+  it('2つの欄が同時に立ったら、注記は2本とも出る（片方が他方を消さない）', async () => {
+    renderManagers([
+      {
+        ...BASE,
+        status: 'running',
+        live: false,
+        runnerLostSince: LOST_SINCE,
+        sessionMissingSince: '2026-08-16T03:10:00.000Z',
+      },
+    ]);
+
+    expect(await screen.findByText('実行中')).toBeTruthy();
+    expect(screen.getByText('セッション切断')).toBeTruthy();
+    expect(screen.getByText(/宛先の器は.*から名乗っていない/)).toBeTruthy();
+    expect(screen.getByText(/この委譲のセッションを持っていなかった/)).toBeTruthy();
+  });
+});

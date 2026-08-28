@@ -968,3 +968,172 @@ describe('横並びの積み替え（本4-A）: 状態カードの dl', () => {
     }
   });
 });
+
+/**
+ * **詳細でも、`sessionMissingSince` / `runnerLostSince` は状態も `live` も
+ * 置き換えずに添える。**
+ *
+ * 一覧（`managers.test.tsx`）と対になっている。直す前、この2欄は
+ * `apps/web/` に**1件も出てこなかった**（`/usr/bin/grep -rn` がどちらも 0 件）。
+ * デーモンは `GET /managers/:id` で返していて、クローンは `manager_list` で、
+ * 人間は CLI の `/manager` で読めていた —— 値は届いていて、Web UI だけが描いて
+ * いなかった。
+ *
+ * **部品は一覧（`managers.tsx`）から import している。書き写していない。** ここで
+ * 測っているのは「詳細の側にも出ること」であって、文言そのものは1箇所にしか無い。
+ */
+describe('詳細でも、セッション不在と器の沈黙は状態を置き換えずに添える', () => {
+  const MISSING = '2026-08-16T03:10:00.000Z';
+  const LOST_SINCE = '2026-08-16T03:05:00.000Z';
+
+  /**
+   * **ここが本体。** `sessionMissingSince` の欄の主眼は「`live` を落とさない」こと
+   * である（`sessionId` が残っていれば `manager_send` が resume から入り直せる）。
+   * ⟹ **「接続あり」の札と同時に出るのが正しい形**で、片方が他方を消したら
+   * それはこの欄が名指ししている5つ目の形を壊している。
+   */
+  it('「接続あり」の札を残したまま、セッションが無いことを言う', async () => {
+    renderDetail({ ...BASE, status: 'running', live: true, sessionMissingSince: MISSING });
+
+    expect(await screen.findByText('実行中')).toBeTruthy();
+    // 札は1つも差し替えない。
+    expect(screen.getByText('接続あり')).toBeTruthy();
+    expect(screen.queryByText('セッション切断')).toBeNull();
+    expect(screen.getByText(/runner がそう答えた。聞けなかったのではない/)).toBeTruthy();
+  });
+
+  /**
+   * **文言の核が消えたら赤くなる歯。** 由来が2つあり（途中で失われた／完遂した後に
+   * セッションが畳まれて終端の合図だけが届かなかった）、デーモンは台帳から区別
+   * できない（`packages/core/src/manager.ts` の `sendFailureDetail` の doc）。
+   * 「失われた」と描くと、読み手は**完遂済みの仕事を委譲し直す**。
+   */
+  it('「失われた」と言い切らない（完遂後に畳まれた回も同じ形に見える）', async () => {
+    renderDetail({ ...BASE, status: 'running', live: true, sessionMissingSince: MISSING });
+
+    expect(await screen.findByText(/この委譲が失われたという意味ではない/)).toBeTruthy();
+    expect(
+      screen.getByText(
+        /完遂した後にセッションが畳まれ、終端の合図だけが届かなかった回も同じ形に見える/,
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText(/同じ仕事が2本になる/)).toBeTruthy();
+  });
+
+  it('欄が無ければ何も描かない（雑音にしない）', async () => {
+    renderDetail({ ...BASE, status: 'running', live: true });
+
+    expect(await screen.findByText('実行中')).toBeTruthy();
+    expect(screen.queryByText(/この委譲のセッションを持っていなかった/)).toBeNull();
+    expect(screen.queryByText(/名乗っていない/)).toBeNull();
+  });
+
+  /**
+   * `runnerLostSince` は `live: false` を**引き起こす側**である（`isLive()` が
+   * `silentRunners.has(runnerId)` で false を返す）。`DisconnectedNote` は
+   * 「繋がっていない」としか言わないので、この注記がその理由を1つ名指しする。
+   *
+   * **2つは矛盾していない。** `DisconnectedNote` が言うのは「送信ボタンは塞いで
+   * いない」で、こちらが言うのは「この器は名簿から外れている」である。並んで出る
+   * のが正しい。
+   */
+  it('器が黙ったときは、切断の注記と並べてその理由を名指しする', async () => {
+    renderDetail({
+      ...BASE,
+      status: 'running',
+      live: false,
+      sessionId: 'sess-1',
+      runnerLostSince: LOST_SINCE,
+    });
+
+    expect(await screen.findByText('実行中')).toBeTruthy();
+    expect(screen.getByText('セッション切断')).toBeTruthy();
+    // `DisconnectedNote` は消えない。
+    expect(screen.getByText('繋がっていない')).toBeTruthy();
+    expect(screen.getByText(/宛先の器は.*から名乗っていない/)).toBeTruthy();
+    // `status: lost` の言葉には寄せない（まだ何も確かめていない）。
+    expect(screen.getByText(/黙っているのが器なのか経路なのかは、ここからは言えない/)).toBeTruthy();
+    expect(screen.queryByText('セッションへ戻れず')).toBeNull();
+  });
+
+  /**
+   * **`ba4053d`（#67）の再発を止める歯 —— 詳細側。ここが本当の現場である。**
+   *
+   * #67 が閉じた欠陥は「「いま送っても届かず」の真下に、届く送信ボタンが並んでいた」で、
+   * その送信欄はこの画面に在る。CLI の `runnerLostSince` の文言には「いま話しかけ
+   * られない」が入っているが、**実測ではデーモンは拒まない** —— 名簿が `lost` と
+   * 判定した runner でも `RunnerRegistry#get()` は client を返し、`send()` は
+   * `outcome: 'delivered'` を返した。
+   *
+   * ⟹ 注記が「話しかけられない」と言い、その下の送信ボタンが有効なまま、という
+   * 組を作らない。**この歯は、注記と送信ボタンの両方を同時に見る。**
+   */
+  it('注記が送信を否定せず、その下の送信ボタンも実際に有効なまま', async () => {
+    renderDetail({
+      ...BASE,
+      status: 'running',
+      live: false,
+      sessionId: 'sess-1',
+      runnerLostSince: LOST_SINCE,
+    });
+
+    expect(await screen.findByText(/宛先の器は.*から名乗っていない/)).toBeTruthy();
+    // #67 が閉じた欠陥そのもの。
+    expect(screen.queryByText(/いま話しかけられない/)).toBeNull();
+    expect(screen.queryByText(/届かず/)).toBeNull();
+    expect(screen.getByText(/話しかけることは塞いでいない/)).toBeTruthy();
+    // **注記の下のボタンが本当に押せること**まで見る（文言だけ直してボタンを
+    // 塞ぐ、の逆向きの取り違えも止める）。**先に入力を埋める** —— 空欄のときは
+    // `noWayBack` とは無関係に `disabled` なので、埋めずに測ると
+    // 「戻る先が無いから塞がれている」と取り違える（実際に一度踏んだ）。
+    fireEvent.change(screen.getByPlaceholderText('追加の指示'), {
+      target: { value: '続けて' },
+    });
+    expect(screen.getByRole('button', { name: '送る' }).hasAttribute('disabled')).toBe(false);
+  });
+
+  /**
+   * **2つは排他ではない。同時に立つ**（`packages/core/src/manager.ts` を
+   * `ff24ded9` で引いて確かめた）。`summaryOf()` は2つを独立した spread で
+   * 組み立てており、排他を課している行は1行も無い。`record.sessionMissingSince`
+   * を消すのは「resume で戻れた」＝ runner が実際に答えた回の2箇所だけなので、
+   * **runner が黙っても消えない。**
+   *
+   * この画面では `ManagerDenialNote` / `ManagerFailureNote` 相当の注記も同時に
+   * 出うるので、**4本並ぶ形が理論上ある。** ここでは2本が両方出ることだけを固定
+   * する（詰まって読めないかは jsdom では測れない —— PR 本文で人間へ回してある）。
+   */
+  it('2つの欄が同時に立ったら、注記は2本とも出る（片方が他方を消さない）', async () => {
+    renderDetail({
+      ...BASE,
+      status: 'running',
+      live: false,
+      sessionId: 'sess-1',
+      runnerLostSince: LOST_SINCE,
+      sessionMissingSince: MISSING,
+    });
+
+    expect(await screen.findByText('実行中')).toBeTruthy();
+    expect(screen.getByText(/宛先の器は.*から名乗っていない/)).toBeTruthy();
+    expect(screen.getByText(/この委譲のセッションを持っていなかった/)).toBeTruthy();
+  });
+
+  /**
+   * **時刻はこの画面の作法（`~/lib/format` の `formatRelative`）。** CLI と
+   * `manager_list` は ISO をそのまま出しており、**書式が違うのは意図である。**
+   */
+  it('時刻は相対表示で、ISO をそのまま出さない', async () => {
+    renderDetail({
+      ...BASE,
+      status: 'running',
+      live: false,
+      sessionId: 'sess-1',
+      runnerLostSince: LOST_SINCE,
+      sessionMissingSince: MISSING,
+    });
+
+    expect(await screen.findByText(/名乗っていない/)).toBeTruthy();
+    expect(screen.queryByText(new RegExp(LOST_SINCE))).toBeNull();
+    expect(screen.queryByText(new RegExp(MISSING))).toBeNull();
+  });
+});

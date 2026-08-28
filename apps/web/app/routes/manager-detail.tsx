@@ -22,7 +22,19 @@ import { formatDateTime, formatRelative } from '~/lib/format';
 import type { ManagerDenial, ManagerStatus, ManagerSummary } from '~/lib/types';
 
 import type { Route } from './+types/manager-detail';
-import { denialActorTag, ManagerStatusBadge } from './managers';
+/**
+ * **`ManagerRunnerLostNote` / `ManagerSessionMissingNote` は書き写さずに一覧から
+ * 借りる。** 文言の核は
+ * クローン（`tools.ts`）・CLI（`chat.ts`）と逐語で揃える約束のものなので、同じ
+ * 画面（Web UI）の中で2箇所に写すと直すときに片方だけ直る（`denialActorTag` と
+ * 同じ理由）。ここで変えてよいのは置き場所（`className`）だけである。
+ */
+import {
+  denialActorTag,
+  ManagerRunnerLostNote,
+  ManagerSessionMissingNote,
+  ManagerStatusBadge,
+} from './managers';
 
 export function clientLoader({ params }: Route.ClientLoaderArgs) {
   return { id: params.id };
@@ -213,6 +225,35 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
               )}
             </dl>
             <DisconnectedNote live={manager.live} />
+            {/*
+              **`DisconnectedNote` の直後に置く。** あちらは「繋がっていない」と
+              言うだけで理由を言わない——この欄が `live: false` の理由を1つ名指し
+              する（`isLive()` は宛先が `silentRunners` に居ると false を返す）。
+              **この注記は送信可否を推論しない**（`ManagerRunnerLostNote` の doc の
+              実測表）。名簿が `lost` と判定した器でも `RunnerRegistry#get()` は client を
+              返し、`send()` の `outcome` は実測で `delivered` / `session_missing` に
+              なった（「名簿に開いていない」の `unknown` は *一度も開けていない* 宛先で
+              しか出ない）⟹ ここで「いま話しかけられない」と書くと `ba4053d`（#67）が
+              閉じた欠陥——「いま送っても届かず」の真下に届く送信ボタンが並ぶ形——の
+              再発になる。**#67 の commit 本文の2値の表は `0fb068f`（PR #571）で
+              4値になったので、そのまま当てないこと。**
+            */}
+            <ManagerRunnerLostNote
+              runnerLostSince={manager.runnerLostSince}
+              className="border-t border-border px-4 py-3 text-xs text-danger"
+            />
+            {/*
+              **`DisconnectedNote` と排他ではない。** あちらは `live: false`
+              （繋がっていない）のときだけ出る。こちらは `live: true` のまま出る
+              のが正しい形で、上の「接続あり」の札と**同時に**並ぶ
+              （`ManagerSessionMissingNote` の doc）。文言は一覧と同じ1箇所から
+              借り、ここでは他の注記（`DisconnectedNote` / `LostNote` /
+              `FailureNote`）と同じ置き場所へ揃えるだけにしてある。
+            */}
+            <ManagerSessionMissingNote
+              sessionMissingSince={manager.sessionMissingSince}
+              className="border-t border-border px-4 py-3 text-xs text-warn"
+            />
             <LostNote status={manager.status} />
             <FailureNote failure={manager.lastFailure} />
           </Card>
