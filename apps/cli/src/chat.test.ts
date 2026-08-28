@@ -111,6 +111,67 @@ describe('renderManagerList', () => {
     expect(text).not.toContain('名乗っていない');
   });
 
+  /**
+   * **⚠️ 「いま話しかけられない」が戻ったら、この歯が赤くなる。それがこの歯の
+   * 全部である。**
+   *
+   * ここは 2026-08-28 まで「新しい委譲の宛先からも外れているので、**いま
+   * 話しかけられない**」と書いていた。**実測で偽である** —— 名簿が
+   * `state: 'lost'` と判定した器に載っている委譲へ `ManagerPool.send()` を撃つと
+   * `{ outcome: 'delivered', detail: '追加指示として届けた。' }` が返り、runner の
+   * resume の口が実際に叩かれる（構造の理由は `packages/core/src/manager.ts` の
+   * `isLive()` の doc。生の値は PR #586 のコメント）。
+   *
+   * **これは一度閉じた欠陥と同じ形である** —— `ba4053d`（#67「「いま送っても
+   * 届かず」の真下に、届く送信ボタンが並んでいた」）。#67 は送信を塞がずに
+   * **注記のほうを**直した（塞ぐと「人間が自分の言葉で繋ぎ直す唯一の手」が
+   * 消える。north_star 禁止1）。
+   *
+   * **⚠️ #67 の commit 本文が持つ実測表（`delivered` / `unknown` の2値）を
+   * そのまま当てないこと。あれは古い。** `0fb068f`（PR #571、#563）で
+   * `ManagerSendResult` は4値になった。**commit 本文は書き換わらないので、
+   * いつ偽になったかが本文からは読めない。**
+   *
+   * **doc の警告だけでは足りないので歯にした。** 次に誰かが「Web と CLI で字面が
+   * 割れている」と言って書き戻すのを止めるのは、この歯と `manager_list` 側の
+   * 対の歯だけである。
+   */
+  it('黙った器の行に「話しかけられない」と書かない（実測で偽）', () => {
+    const text = renderManagerList([
+      manager({ status: 'running', live: false, runnerLostSince: '2026-08-27T09:00:00.000Z' }),
+    ]);
+
+    // **語幹で見る。** 「いま」を外して書き戻されたら抜けてしまう。
+    expect(text).not.toContain('話しかけられない');
+    // **因果も落とした。** 「宛先から外れている」から「送れない」は導けない。
+    expect(text).not.toContain('外れているので');
+    // 残るのは観測だけである（`list()` が `lost` を除くので実測で真）。
+    expect(text).toContain('新しい委譲の宛先からは外れている');
+  });
+
+  /**
+   * **落としただけでは足りない。** 「話しかけられない」を消しただけだと、読み手は
+   * 送れるかどうかを一覧から判断できないままで、結局「たぶん無理」へ倒れる。
+   * だから**塞いでいないこと**と、**無条件ではないこと**を両方書いてある。
+   */
+  it('黙った器の行は、送信が塞がれていないことと、戻る先が要ることを両方言う', () => {
+    const text = renderManagerList([
+      manager({ status: 'running', live: false, runnerLostSince: '2026-08-27T09:00:00.000Z' }),
+    ]);
+
+    // 実測では resume を試みて `delivered` が返った ⟹ 塞いでいない。
+    expect(text).toContain('話しかけることは塞いでいない');
+    // **無条件に「塞いでいない」と書くと、今度はこちらが嘘になる** ——
+    // `session_id` を持たない相手へは runner が一度も叩かれない（実測は `unknown`）。
+    expect(text).toContain('session_id');
+    expect(text).toContain('届くとは限らない');
+    // **この面に在る操作を名指しする。** CLI の入口は `/msg` である。
+    expect(text).toContain('/msg');
+    // **CLI に器（runner）を見る命令は無い**ので、クローンの道具名を借りてこない
+    // （`tools.ts` 側の対の歯が、あちらでは `runner_list` が出ることを測っている）。
+    expect(text).not.toContain('runner_list');
+  });
+
   it('拒否があっても [running] の札を置き換えない（状態に添えるだけ）', () => {
     const text = renderManagerList([
       manager({ status: 'running', denials: [{ tool: 'Bash', count: 1 }] }),
