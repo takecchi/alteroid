@@ -1,12 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
+import { createManagerPool, probeTurnEnd, type ManagerPool, type TurnEndProbe } from './manager.js';
 import {
-  createManagerPool,
-  probeTurnEnd,
-  type ManagerPool,
-  type TurnEndProbe,
-} from './manager.js';
-import { createRunnerRegistry, type RunnerAnswerOutcome, type RunnerClient } from './runner-protocol.js';
+  createRunnerRegistry,
+  type RunnerAnswerOutcome,
+  type RunnerClient,
+} from './runner-protocol.js';
 import { createMemoryStores } from './testing.js';
 
 /**
