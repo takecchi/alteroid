@@ -3257,6 +3257,79 @@ describe('クローンの道具', () => {
     expect(reply).toContain('この委譲が失われたという意味ではない');
   });
 
+  /**
+   * **⚠️ 「いま話しかけられない」が戻ったら、この歯が赤くなる。それがこの歯の
+   * 全部である。**
+   *
+   * ここは 2026-08-28 まで「新しい委譲の宛先からも外れている ⟹ **いま
+   * 話しかけられない**」と書いていた。**実測で偽である** —— 名簿が
+   * `state: 'lost'` と判定した器に載っている委譲へ `ManagerPool.send()` を撃つと
+   * `{ outcome: 'delivered', detail: '追加指示として届けた。' }` が返り、runner の
+   * resume の口が実際に叩かれる。`#markSilent` は `entry.state` を `'lost'` に
+   * するだけで `entry.client` を落とさず、`Registry#get()` は `entry.state` を
+   * 見ない（`list()` は `lost` を除くが `get()` は除かない）からである。生の値は
+   * PR #586 のコメント。
+   *
+   * **これは一度閉じた欠陥と同じ形である** —— `ba4053d`（#67「「いま送っても
+   * 届かず」の真下に、届く送信ボタンが並んでいた」）。**⚠️ #67 の commit 本文が
+   * 持つ実測表（`delivered` / `unknown` の2値）をそのまま当てないこと。あれは
+   * 古い** —— `0fb068f`（PR #571、#563）で `ManagerSendResult` は4値になった。
+   *
+   * **ここはクローンが読む面である。** 出力の字面が偽だと、クローンは「もう
+   * 届かない」と読んで委譲を捨てるか、起こし直して同じ仕事を2本にする。
+   * **人間の画面（#586 で直した）だけが正しくてクローンが嘘を読む形**を、この歯と
+   * CLI 側の対の歯で止める。
+   */
+  it('黙った器の行に「話しかけられない」と書かない（実測で偽）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const orphan = h.running[0];
+    if (!orphan) throw new Error('準備に失敗');
+    orphan.live = false;
+    orphan.runnerId = 'runner-a';
+    orphan.runnerLostSince = '2026-08-27T09:00:00.000Z';
+
+    const reply = await h.call('manager_list', {});
+
+    // **語幹で見る。** 「いま」を外して書き戻されたら抜けてしまう。
+    expect(reply).not.toContain('話しかけられない');
+    // **因果も落とした。** 「宛先から外れている」から「送れない」は導けない。
+    expect(reply).not.toContain('外れている ⟹');
+    // 残るのは観測だけである（`list()` が `lost` を除くので実測で真）。
+    expect(reply).toContain('新しい委譲の宛先からは外れている');
+  });
+
+  /**
+   * **落としただけでは足りない。** 「話しかけられない」を消しただけだと、読み手は
+   * 送れるかどうかを一覧から判断できないままで、結局「たぶん無理」へ倒れる。
+   *
+   * **「先に起こし直さないこと」は落とせない。** それが無いと、この行を読んだ
+   * クローンの一番自然な次の一手が `manager_start` になり、**同じ仕事が2本になる**
+   * （`sessionMissingSince` の行が既に同じ歯止めを持っている）。
+   */
+  it('黙った器の行は、送信が塞がれていないことと、先に起こし直さないことを言う', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const orphan = h.running[0];
+    if (!orphan) throw new Error('準備に失敗');
+    orphan.live = false;
+    orphan.runnerId = 'runner-a';
+    orphan.runnerLostSince = '2026-08-27T09:00:00.000Z';
+
+    const reply = await h.call('manager_list', {});
+
+    // 実測では resume を試みて `delivered` が返った ⟹ 塞いでいない。
+    expect(reply).toContain('話しかけることは塞いでいない');
+    // **無条件に「塞いでいない」と書くと、今度はこちらが嘘になる** ——
+    // `session_id` を持たない相手へは runner が一度も叩かれない（実測は `unknown`）。
+    expect(reply).toContain('session_id');
+    expect(reply).toContain('届くとは限らない');
+    // **この面に在る操作を名指しする**（CLI は `/msg`、Web UI は画面の語）。
+    expect(reply).toContain('manager_send');
+    expect(reply).toContain('先に manager_start で起こし直さないこと');
+    expect(reply).toContain('runner_list');
+  });
+
   it('黙った器に載っている本数を件数の行にも出す', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
