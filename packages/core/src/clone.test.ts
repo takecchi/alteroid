@@ -30,6 +30,7 @@ import { fingerprintOf } from './credentials.js';
 import {
   DISTILL_GAP_NOTICE_HEAD,
   DISTILL_SUCCEEDED_DECISION_PREFIX,
+  deriveDistillGapFromJournal,
   distillSucceededEntry,
 } from './distill-gap.js';
 import type { CloneHost } from './host.js';
@@ -38,7 +39,7 @@ import { renderMemoryDocuments } from './memory.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createScheduler } from './schedule.js';
-import type { ChatStreamEvent, InboxEvent, InboxEventType } from './schema.js';
+import type { ChatStreamEvent, InboxEvent, InboxEventType, JournalEntryInput } from './schema.js';
 import type { Stores } from './store.js';
 import { CLONE_ACTOR_ID, isCloneActor } from './usage.js';
 import { createCloneMcpServer, createCloneTools } from './tools.js';
@@ -9272,5 +9273,51 @@ describe('クローン — 蒸留が間に合わなかった区間の検出', ()
     ]);
 
     await s.clone.stop();
+  });
+
+  it('7: `site` が `session` でない `turn_usage` は活動として数えない（蒸留のサイドセッションの分）', async () => {
+    // **導出（`deriveDistillGapFromJournal`）へ直に当てる歯である。** 上の6本は
+    // クローンのループを通しているが、この条件だけはそこからは押せない ——
+    // `site: 'distill'` を書くのは PreCompact のサイドセッションだけで、そこは
+    // `#recordUsage` → 成功の印 の順に書くので、その行が**印より後ろ**に来る経路が
+    // 器の側に無い（しかも `isSuccessResult` が偽なら両方とも書かれない）。
+    // 順序が守ってくれている条件を、基準そのものの側でも1本押さえる。
+    const usageEntry = (site: 'session' | 'distill'): JournalEntryInput => ({
+      type: 'turn_usage',
+      layer: 'clone',
+      site,
+      managerId: CLONE_ACTOR_ID,
+      models: {
+        'claude-fable-5': {
+          inputTokens: 10,
+          outputTokens: 20,
+          cacheReadInputTokens: 0,
+          cacheCreationInputTokens: 0,
+          webSearchRequests: 0,
+          costUsd: 0.5,
+        },
+      },
+    });
+
+    const stores = createMemoryStores();
+    await stores.journal.append(distillSucceededEntry('pre_compact'));
+    // 印より**後ろ**に置く。素朴に「印より後に日誌の行が在るか」で数えるなら、
+    // これだけで「ずれが在る」になる。
+    await stores.journal.append(usageEntry('distill'));
+    await tick();
+
+    expect(
+      await deriveDistillGapFromJournal(stores.journal, { until: new Date().toISOString() }),
+    ).toBeNull();
+
+    // **逆向きも押す。** `site: 'session'` なら数える —— ここが無いと
+    // 「`turn_usage` を丸ごと数えない」に変異させても緑のままになる。
+    await stores.journal.append(usageEntry('session'));
+    await tick();
+
+    const gap = await deriveDistillGapFromJournal(stores.journal, {
+      until: new Date().toISOString(),
+    });
+    expect(gap?.activityCount).toBe(1);
   });
 });
