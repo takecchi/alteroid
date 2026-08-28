@@ -2802,11 +2802,27 @@ export function createApp(deps: AppDeps) {
         const existing = await stores.commitments.get(id);
         if (existing === null) return c.json({ error: 'not found' as const }, 404);
         if (existing.origin !== 'human') {
+          // **断る理由だけでなく、代わりの出口も同じ文字列へ入れる**（issue #580
+          // の (C)）。画面はこの本文をそのまま出す（`apps/web/app/routes/
+          // commitments.tsx` は断りの文面を1文字も持たない）ので、**ここが
+          // 「なぜ押せないか」の唯一の持ち主である。** 出口を画面側に書くと、
+          // ここの線が動いた日に画面のほうが静かに嘘になる。
+          //
+          // **出口が在るのは `self` の行だけ。** クローン自身は
+          // `commitment_edit`（`packages/core/src/tools.ts`）で直せるので、人間は
+          // チャットで頼める。`manager` / `external` にはその出口が無いので、
+          // 断りだけを返す（**無い出口を案内しない**）。
+          const wayOut =
+            existing.origin === 'self'
+              ? '（この行はクローンが自分で載せたもの。' +
+                'チャットでクローンに頼めば直せる——クローンには commitment_edit が在る）'
+              : '';
           return c.json(
             {
               error:
                 `${id} は origin:'${existing.origin}' で、クローンやマネージャーが立てた行は` +
-                '人間からは直せない',
+                '人間からは直せない' +
+                wayOut,
             },
             403,
           );

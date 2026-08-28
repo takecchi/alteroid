@@ -1822,6 +1822,46 @@ describe('HTTP API', () => {
     expect((await stores.commitments.get('cm-manager'))?.body).toBe('マネージャーの報告');
   });
 
+  /**
+   * **この歯が固定したいのは「出口の案内が在るか／無いか」だけである**（issue
+   * #580 の (B) と (C) の接ぎ目）。断りの文面はこの口が持ち、画面はそれをその
+   * まま出す（`apps/web/app/routes/commitments.tsx`）ので、**`self` の行には
+   * 出口の名前が載っていること・`manager` の行には載っていないこと**の2つを
+   * 見る。**文面そのものは固定しない** — 言い回しを良くする PR をここで赤く
+   * しないため（見るのは道具の名前の有無だけである）。
+   */
+  it('403 の本文は、出口が在る self にだけ commitment_edit を名指しする（manager には出さない）', async () => {
+    await stores.commitments.open({
+      id: 'cm-self',
+      at: '2026-08-12T00:00:00.000Z',
+      origin: 'self',
+      body: 'クローンが自分で立てた仕事',
+    });
+    await stores.commitments.open({
+      id: 'cm-manager',
+      at: '2026-08-12T00:00:00.000Z',
+      origin: 'manager',
+      source: 'mgr-1',
+      body: 'マネージャーの報告',
+    });
+
+    const failures = await Promise.all(
+      ['cm-self', 'cm-manager'].map(async (id) => {
+        const response = await app.request(`/commitments/${id}`, {
+          ...json({ body: '書き換えたい' }),
+          method: 'PATCH',
+        });
+        expect(response.status, id).toBe(403);
+        return ((await response.json()) as { error: string }).error;
+      }),
+    );
+
+    // self には出口が在るので名指しする
+    expect(failures[0]).toContain('commitment_edit');
+    // manager には出口が無いので、無い出口を案内しない
+    expect(failures[1]).not.toContain('commitment_edit');
+  });
+
   it('無い id は 404、既に片付いている行は 409（いつ・どう片付いたかを本文に入れる）', async () => {
     expect(
       (
