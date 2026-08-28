@@ -982,6 +982,17 @@ function denialLine(denials: ManagerDenial[]): string | null {
  * - それ以外（`turnEndedAt > lastReportAt`、または `lastReportAt` が無い）
  *   ⟹ **⚠**
  *
+ * **⚠️ 時刻の比較は文字列ではなく `Date.parse` の数値で行う。** `lastReportAt`
+ * は `new Date().toISOString()` なので必ず同じ形（ミリ秒 + `Z`）だが、
+ * `turnEndedAt` は生ログの行が持っていた `timestamp` をそのまま写した値で
+ * （`probeTurnEnd`）、**デーモンが作った値ではない。** SDK が書く形に依存する
+ * ので、オフセット表記（`+09:00`）やミリ秒なしが来ると文字列比較は静かに
+ * 間違える。**どちらかが `Date.parse` できない（`NaN`）ときも `null`
+ * （症状ではない）へ倒さず、⚠ 側へ落とす** — (A) の分岐（`turnEndedAt` 自体が
+ * 無いとき）と同じ原則で、比較できない＝「分からない」であって「症状では
+ * ない」ではない。**誤検出の代償は非対称である** — 誤って ⚠ を出す代償は
+ * 「読む人が1回よけいに読む」、誤って黙る代償は「止まった委譲が見つからない」。
+ *
  * **健全なマネージャーでは1文字も増えない。** ⚠ が出るのは症状の可能性が
  * あるときだけにする——一覧は文字数の予算に張り付いていて、行を1本増やすと
  * 出る件数が減る（`manager.lastReport` の行の doc と同じ理由）。
@@ -1002,8 +1013,23 @@ function describeTurnEnd(manager: ManagerSummary): string | null {
     );
   }
 
-  if (manager.lastReportAt !== undefined && manager.turnEndedAt <= manager.lastReportAt) {
-    return null;
+  // **数値で比べる。文字列比較にしない**（この関数の doc の「⚠️ 時刻の比較は
+  // 文字列ではなく…」を参照）。`turnEndedAt` は生ログの `timestamp` を写した
+  // だけの値で、`lastReportAt`（デーモンが `new Date().toISOString()` で
+  // 作った値）と同じ形とは限らない。
+  if (manager.lastReportAt !== undefined) {
+    const turnEndedAtMs = Date.parse(manager.turnEndedAt);
+    const lastReportAtMs = Date.parse(manager.lastReportAt);
+    // **どちらかが `NaN`（parse できない）なら ⚠ 側へ落とす。** `null`
+    // （症状ではない）へ倒すと、「分からない」を「症状ではない」に化けさせる
+    // ——(A) の分岐で避けたのと同じ間違いになる。
+    if (
+      !Number.isNaN(turnEndedAtMs) &&
+      !Number.isNaN(lastReportAtMs) &&
+      turnEndedAtMs <= lastReportAtMs
+    ) {
+      return null;
+    }
   }
 
   const stopSequenceNote =
