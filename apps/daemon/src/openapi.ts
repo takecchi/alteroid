@@ -575,6 +575,22 @@ export const managerSummarySchema = z.object({
    * 人間の入口には出ない形になる。
    */
   runnerLostSince: z.string().optional(),
+  /**
+   * **宛先の runner が応答したうえで、この委譲のセッションを一覧に載せなかった**と
+   * 観測した時刻（`packages/core/src/manager.ts` の
+   * `ManagerSummary.sessionMissingSince`）。
+   *
+   * **`runnerLostSince` とは別の欄である。** あちらは「器が黙った」（`live` が
+   * 落ちる）。こちらは**器は答えている**が、この委譲のセッションだけが無い——
+   * `sessionId` が残っていれば resume から入り直せるので `live` は落ちない。
+   * ⟹ **`live: true` とこの欄の組が、5つ目の形を名指しする。**
+   *
+   * **「聞けなかった」ではない。** runner に訊けなかった回はここに出さない。
+   *
+   * **ここに宣言しないと、値が在っても黙って落ちる**（真上の `runnerLostSince`
+   * と同じ断り。落ちると CLI と Web の両方が同時に盲目になる）。
+   */
+  sessionMissingSince: z.string().optional(),
   cwd: z.string(),
   request: z.string(),
   startedAt: z.string(),
@@ -713,11 +729,27 @@ export const managerActionResponseSchema = z.object({
    * `not_stopped` = **止まっていないと確かめた**（同上。`sessionGone === false`。
    * 明確な失敗であって「止めた」ではない）。
    * `unknown` = 確かめられなかった（同上。runner に確認が取れなかった）。
+   * `session_missing` = **runner がこの委譲のセッションを持っておらず、resume でも
+   * 入り直せなかった**（`POST .../messages`。#563）。
    *
    * **居ない（`absent`）はここに出ない。** その場合は 404 で `errorResponseSchema`
    * を返すので、この形には乗らない（`ManagerAbortResult` の doc）。
+   *
+   * **⚠️ `session_missing` は 404 にしない。** 「そのものは居る」側だからである——
+   * 委譲は台帳に在り、`sessionId` が残っていればもう一度 resume を試せる。
+   * `ManagerAbortResult` の doc が逐語で否定した形（「待てば直る状態を 404 という
+   * 機械可読な終端で返す」）をここで作り直さない。**404 は人間もクローンも CLI も
+   * Web も「そんなものは無い」としてしか読めず、文言と違って読み手の解釈で
+   * 救われない。**
    */
-  outcome: z.enum(['answered', 'delivered', 'stopped', 'not_stopped', 'unknown']),
+  outcome: z.enum([
+    'answered',
+    'delivered',
+    'stopped',
+    'not_stopped',
+    'session_missing',
+    'unknown',
+  ]),
   detail: z.string(),
 });
 

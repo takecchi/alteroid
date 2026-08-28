@@ -55,6 +55,9 @@ function fakeClone() {
   // `DELETE /managers/:id` が outcome ごとに正しい HTTP ステータスを写すことを見る
   // ためのノブ。既定は従来どおり `'stopped'`（居れば必ず止まる）。
   let abortOutcome: 'stopped' | 'not_stopped' | 'unknown' = 'stopped';
+  // `POST /managers/:id/messages` が outcome ごとに正しい HTTP ステータスを写すことを
+  // 見るためのノブ（#563）。既定は従来どおり `'delivered'`。
+  let sendOutcome: 'answered' | 'delivered' | 'session_missing' = 'delivered';
 
   const managers: ManagerPool = {
     async start() {
@@ -69,7 +72,13 @@ function fakeClone() {
         text,
         ...(options?.requestId === undefined ? {} : { requestId: options.requestId }),
       });
-      return { outcome: 'delivered' as const, detail: '届けた' };
+      if (sendOutcome === 'session_missing') {
+        return {
+          outcome: 'session_missing' as const,
+          detail: `宛先の runner は ${managerId} のセッションを持っていない（そう答えた）。`,
+        };
+      }
+      return { outcome: sendOutcome, detail: '届けた' };
     },
     async abort(managerId, reason) {
       if (!managerList.some((entry) => entry.managerId === managerId)) {
@@ -155,6 +164,9 @@ function fakeClone() {
     managerAborts,
     setAbortOutcome(outcome: 'stopped' | 'not_stopped' | 'unknown') {
       abortOutcome = outcome;
+    },
+    setSendOutcome(outcome: 'answered' | 'delivered' | 'session_missing') {
+      sendOutcome = outcome;
     },
     setReply(events: ChatStreamEvent[]) {
       reply = events;
@@ -1178,6 +1190,63 @@ describe('HTTP API', () => {
       manager: { runnerLostSince?: string };
     };
     expect(detail.manager.runnerLostSince).toBe('2026-08-27T09:00:00.000Z');
+  });
+
+  /**
+   * **5つ目の形（#563）。** `runnerLostSince` とは別の欄で、**同居しうる**わけでは
+   * なく由来が違う——あちらは器が黙った（`live: false`）。こちらは**器は答えている**
+   * が、この委譲のセッションだけが無い（`sessionId` が在れば resume から入り直せる
+   * ので `live` は落ちない）。⟹ **`live: true` とこの欄の組**が5つ目の形である。
+   *
+   * 宣言していない欄は `.parse()` で黙って落ちるので、真上の1本と同じ理由でここを見る。
+   */
+  it('runner にセッションが無いという観測が、一覧と詳細の両方へ載る', async () => {
+    fake.managerList.push({
+      managerId: 'mgr-missing',
+      status: 'running',
+      // **落とさない。** `sessionId` が在れば話しかけられる（resume から入り直す）。
+      live: true,
+      sessionMissingSince: '2026-08-27T09:00:00.000Z',
+      cwd: '/work/project',
+      request: '調べて',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+      sessionId: 'sess-1',
+      waiting: [],
+    });
+
+    const list = (await (await app.request('/managers')).json()) as {
+      managers: { status: string; live: boolean; sessionMissingSince?: string }[];
+    };
+    expect(list.managers[0]?.sessionMissingSince).toBe('2026-08-27T09:00:00.000Z');
+    // **`live` は落ちない**（`runnerLostSince` の1本との違いはここである）。
+    expect(list.managers[0]?.live).toBe(true);
+    // **`status` は動かさない。**
+    expect(list.managers[0]?.status).toBe('running');
+
+    const detail = (await (await app.request('/managers/mgr-missing')).json()) as {
+      manager: { sessionMissingSince?: string };
+    };
+    expect(detail.manager.sessionMissingSince).toBe('2026-08-27T09:00:00.000Z');
+  });
+
+  /** 観測していない回に空の値を載せない（真上の `runnerLostSince` と同じ理由）。 */
+  it('セッションが在るマネージャーには sessionMissingSince を載せない', async () => {
+    fake.managerList.push({
+      managerId: 'mgr-ok2',
+      status: 'running',
+      live: true,
+      cwd: '/work/project',
+      request: '調べて',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+      waiting: [],
+    });
+
+    const list = (await (await app.request('/managers')).json()) as {
+      managers: Record<string, unknown>[];
+    };
+    expect(list.managers[0]).not.toHaveProperty('sessionMissingSince');
   });
 
   /** 黙っていない回に空の値を載せない（「黙っていない」と「見ていない」を混ぜない）。 */
@@ -3128,6 +3197,48 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     });
     expect(response.status).toBe(404);
     expect(fake.managerSends).toEqual([]);
+  });
+
+  /**
+   * **`session_missing` は 404 でも 500 でもない**（#563）。
+   *
+   * かつて `Pool#send()` は runner の 404 を例外のまま貫通させており、この口は
+   * ハンドラまで到達せずに `base.onError` が **`500 Internal Server Error`**
+   * （text/plain）を作っていた——**404 という情報も文言も応答本文に1文字も出ず、**
+   * 跡は stderr にしか残らなかった。⟹ クローンには文言が届き、人間には 500 しか
+   * 届かないという非対称ができていた。
+   *
+   * **そして 404 へも寄せない。** `ManagerAbortResult` の doc が逐語で否定した形
+   * （待てば直る状態を 404 という機械可読な終端で返す）になる。`session_missing`
+   * は**「そのものは居る」側**——委譲は台帳に在り、時間で解ける理由なら送り直しで
+   * 通る。**200 + `outcome`** で返し、読み手に解釈の余地を残す。
+   */
+  it('runner にセッションが無い相手へ送ったら、200 + outcome で返る（404 にも 500 にもしない）', async () => {
+    fake.managerList.push({
+      managerId: 'mgr-1',
+      status: 'running',
+      live: true,
+      cwd: '/work',
+      request: '実装して',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      waiting: [],
+    });
+    fake.setSendOutcome('session_missing');
+
+    const response = await app.request('/managers/mgr-1/messages', {
+      ...post,
+      body: JSON.stringify({ text: '続きを頼む' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.status).not.toBe(404);
+    expect(response.status).not.toBe(500);
+    // **`outcome` として機械可読に返る**（`detail` の文言に頼らせない）。
+    const body = (await response.json()) as { outcome: string; detail: string };
+    expect(body.outcome).toBe('session_missing');
+    // 応答本文が JSON であること自体も見る（500 は text/plain だった）。
+    expect(typeof body.detail).toBe('string');
   });
 
   it('走っている仕事を1つだけ止められる（器ごと落とさない）', async () => {

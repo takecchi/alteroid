@@ -3307,6 +3307,22 @@ export function createCloneTools(context: ToolContext) {
         'requestId か decision を付けたときだけ回答として扱う（止まっていたその仕事だけが再開する）。',
         'どちらも無い本文は、相手が返事待ちでも回答にはならず追加指示として届く。',
         '許可確認への回答では decision を必ず付けること。',
+        // **5つ目の形を名指しする（#563）。** かつてこの場合は `ManagerSendResult` に
+        // ならず例外として貫通していたので、クローンが受け取るのは生の例外文言だった
+        // ——「何が起きたか」も「次に何をすればよいか」も、この説明文から読めなかった。
+        'manager_list が [running] と出していても、runner の側でセッションが畳まれていることがある' +
+          '（その合図が届かなかった窓）。そのときは resume から入り直して届けるので、' +
+          '返り値にそう書いてある。入り直せなかったときも「そんな id は無い」ではなく' +
+          '「セッションが無い」と返る——委譲そのものは台帳に在るので、manager_start で' +
+          '起こし直す前に、返ってきた文言をそのまま読むこと。',
+        // **「セッションが無い」を「仕事が失われた」と読ませない（#563）。**
+        // 完遂した後に畳まれた回も同じ形に見え、デーモンには区別する材料が無い。
+        // 決めつけたクローンは完遂済みの仕事を委譲し直す（`gh pr create` が二度
+        // 走りうる）。理由の全文は `manager.ts` の `sendFailureDetail` の doc。
+        'セッションが無いことは、その仕事が失われたことを意味しない——完遂した後に' +
+          'セッションが畳まれ、終端イベントだけが届かなかった回も同じ形になる。' +
+          '委譲し直す前に必ず manager_report を見ること（報告が空でも、生ログから' +
+          '「生成されたが配られていない」報告を拾える）。',
       ].join(' '),
       {
         managerId: z.string().describe('manager_start が返した id'),
@@ -3331,6 +3347,20 @@ export function createCloneTools(context: ToolContext) {
           ...(decision === undefined ? {} : { decision }),
           ...(requestId === undefined ? {} : { requestId }),
         });
+        // **`outcome` ごとに言い分ける**（`manager_stop` と同じ形。#563）。
+        // `detail` は既に理由を持っているが、それだけだと「起こし直せばよいのか」が
+        // 読めない——`session_missing` は**そのものは居る**側なので、`manager_start`
+        // で起こし直すと同じ仕事が2本になりうる。そこだけは必ず言い足す。
+        if (result.outcome === 'session_missing') {
+          return text(
+            `[${managerId}] ${result.detail}\n` +
+              '**この委譲そのものは台帳に在る**（「そんな id は無い」ではない）。' +
+              'runner に生きたセッションが無く、resume でも入り直せなかっただけである。' +
+              'manager_list で状態を確かめ、時間で解ける理由（引き取り中・貸し出し期限）' +
+              'なら少し置いてから送り直すこと。**先に manager_start で起こし直さないこと**' +
+              ' — 同じ仕事が2本になる。',
+          );
+        }
         return text(result.detail);
       },
     ),
@@ -3555,6 +3585,25 @@ export function createCloneTools(context: ToolContext) {
                   ? ''
                   : `（この器は ${manager.runnerLostSince} 以降 名乗っていない。新しい委譲の宛先からも外れている ⟹ いま話しかけられない。**この委譲が失われたという意味ではない** — 黙っているのが器なのか経路なのかは、ここからは言えない）`
               }`,
+              // **`runnerLostSince` と同じ作法で、別の行として出す（#563）。**
+              // `describeManagerState` は動かさない——`manager_list` と要約
+              // （`digest.ts`）で字面が割れると、そこで潰れることを防ぐために
+              // 作られた関数の意味が無くなる（あの doc を参照）。
+              //
+              // **`[running]` のままなのは正しい。** `status` は動かさないし、
+              // `live` も落ちない（`sessionId` が在れば resume から入り直せる）。
+              // ⟹ **`live: true` とこの行の組が5つ目の形を名指しする。**
+              // 件数のほうは `describeManagerCounts` が先頭で（予算に切られない
+              // 場所で）名乗る。
+              manager.sessionMissingSince === undefined
+                ? null
+                : `  ⚠ 宛先の runner は ${manager.sessionMissingSince} の時点で、この委譲のセッションを持っていなかった` +
+                  '（runner がそう答えた。聞けなかったのではない）。**この委譲が失われたという意味ではない** — ' +
+                  '完遂した後にセッションが畳まれ、終端イベントだけが届かなかった回も同じ形に見える' +
+                  '（デーモンにこの2つを区別する材料は無い）。まず manager_report を見ること' +
+                  '（報告が空でも、生ログから「生成されたが配られていない」報告を拾える）。' +
+                  'session_id が残っていれば manager_send が resume から入り直す。' +
+                  '**先に manager_start で起こし直さないこと** — 同じ仕事が2本になる。',
               `  cwd: ${manager.cwd}`,
               // **`lost` を状態名だけで済ませない。** 「終わった」と読まれると、
               // 完了していない仕事がそのまま片付く。何が起きたかと、次に何をすれば
@@ -4369,6 +4418,11 @@ function describeManagerCounts(managers: readonly ManagerSummary[]): string {
   // そもそも数えていないのかを読めなくしないため、在るときだけ書く。
   const orphaned = managers.filter((m) => m.runnerLostSince !== undefined).length;
   if (orphaned > 0) parts.push(`宛先の器が名乗らなくなった ${orphaned} 本`);
+  // **同上（#563）。「器が黙った」とは別の区分である** — こちらは器が答えたうえで
+  // この委譲を一覧に載せなかった回で、`live` は落ちない（`sessionId` が在れば
+  // resume から入り直せる）。畳むと打つ手が変わる（器の側を見るのか、送り直すのか）。
+  const sessionMissing = managers.filter((m) => m.sessionMissingSince !== undefined).length;
+  if (sessionMissing > 0) parts.push(`runner にセッションが無い ${sessionMissing} 本`);
   const waiting = managers.filter((m) => m.status === 'waiting_human').length;
   if (waiting > 0) parts.push(`返事待ち ${waiting} 本`);
   return (

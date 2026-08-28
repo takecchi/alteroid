@@ -4795,6 +4795,9 @@
                           "runnerLostSince": {
                             "type": "string"
                           },
+                          "sessionMissingSince": {
+                            "type": "string"
+                          },
                           "cwd": {
                             "type": "string"
                           },
@@ -5038,6 +5041,9 @@
                           "type": "boolean"
                         },
                         "runnerLostSince": {
+                          "type": "string"
+                        },
+                        "sessionMissingSince": {
                           "type": "string"
                         },
                         "cwd": {
@@ -5295,7 +5301,14 @@
                   "properties": {
                     "outcome": {
                       "type": "string",
-                      "enum": ["answered", "delivered", "stopped", "not_stopped", "unknown"]
+                      "enum": [
+                        "answered",
+                        "delivered",
+                        "stopped",
+                        "not_stopped",
+                        "session_missing",
+                        "unknown"
+                      ]
                     },
                     "detail": {
                       "type": "string"
@@ -5421,7 +5434,7 @@
         "description": "これが無いと、人間の言葉はクローンを経由してしか届かない。クローンの代わりに判断するための口ではない（判断はクローンの仕事のまま）。人間が自分の言葉を自分で届けるための口である。許可確認への回答なら `requestId` を付ける。",
         "responses": {
           "200": {
-            "description": "届いた（`answered` / `delivered`）。",
+            "description": "`outcome` を読むこと。`answered` = 止まっていた確認を解いた。`delivered` = 追加指示として届けた（runner にセッションが無く resume から入り直した回も含む。`detail` がそう言う）。`session_missing` = **runner がこの委譲のセッションを持っておらず、resume でも入り直せなかった**（#563。**届いていない**）。`unknown` はここには出ない（404 になる）。⚠️ `session_missing` を 404 にしないのは、**そのものは居る**からである — 委譲は台帳に在り、時間で解ける理由（引き取り中・貸し出し期限）なら送り直しで通る。",
             "content": {
               "application/json": {
                 "schema": {
@@ -5429,7 +5442,14 @@
                   "properties": {
                     "outcome": {
                       "type": "string",
-                      "enum": ["answered", "delivered", "stopped", "not_stopped", "unknown"]
+                      "enum": [
+                        "answered",
+                        "delivered",
+                        "stopped",
+                        "not_stopped",
+                        "session_missing",
+                        "unknown"
+                      ]
                     },
                     "detail": {
                       "type": "string"

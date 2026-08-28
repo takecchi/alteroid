@@ -29,6 +29,7 @@ import {
   describeRunnerEntries,
   isFencedRunnerError,
   isRetryableRunnerError,
+  RunnerHttpError,
 } from './runner-protocol.js';
 import type {
   RunnerClient,
@@ -122,6 +123,48 @@ export interface ManagerSummary {
    * なかったという**確かめた事実**に付く名前なので、ここでその名前を使わない。
    */
   runnerLostSince?: string;
+  /**
+   * **宛先の runner が応答したうえで、この委譲のセッションを一覧に載せなかったと
+   * 観測した時刻**（ISO8601）。観測していなければ**欄ごと消える**。
+   *
+   * **「聞けなかった」ではない。** runner に訊けなかった回はここに出さない。応答が
+   * 無いことを「セッションが無い」と読むと、**実際には走っているマネージャーを一覧が
+   * 「セッションが無い」と名乗る**ことになる（`#restoreJobs` / `#reattach` が
+   * 逐語で持っている歯止めと同じもの）。だから書き手は下の2つだけに限ってある——
+   * **どちらも runner が実際に答えた回である。**
+   *
+   * **`live` は落とさない。** セッションが消えていても `sessionId` が残っていれば
+   * `manager_send` は resume から入り直せるので、「話しかけられるか」＝`live` は
+   * 真のままで正しい。**`live: true` とこの欄の組が、5つ目の形**——「runner に
+   * 生きたセッションはもう無いが、まだ話しかけられる」——**を名指しする。**
+   *
+   * **⚠️ この欄は「この委譲が失われた」を意味しない。** 由来は少なくとも2つあり、
+   * **デーモンは台帳からは区別できない**——(1) 仕事の途中でセッションが失われた、
+   * (2) **仕事が完遂した後にセッションが畳まれ、終端イベント（`report` / `closed`）
+   * だけが届かなかった。** どちらも `lastReport` は空のまま `status: running` で
+   * 残る。読み手が (1) と決めつけると**完遂済みの仕事を委譲し直す**ので、この欄を
+   * 出す面（`tools.ts` / `apps/cli`）はどれもその断りを一緒に出すこと
+   * （`sendFailureDetail` の doc に理由の全文がある）。
+   *
+   * **`status` は動かさない。** `runnerLostSince` と同じ論法である（黙っているのが
+   * 器なのか経路なのかは片側からは決められないので、`lost` という確かめた事実の
+   * 名前をここで名乗らせない）。名乗るのはこの別の欄でやる。
+   *
+   * 立つ契機は2つで、どちらも**「デーモンが既に払った往復」の結果を拾うだけである**
+   * （この欄のために新しい往復を1つも足していない）:
+   *
+   * 1. **`send()` が実際に送って runner が 404 を返し、resume でも入り直せなかった回。**
+   *    台帳の `attached` もそこで `false` へ訂正される（Issue #563 の実体）
+   * 2. **`#reattach()` が runner の一覧に居ないと判定し、resume でも入り直せなかった回。**
+   *    照合の往復は `hello` の受け口が既に払っている
+   *
+   * **`list()` はここへ1バイトも書かない。** `#silentRunners()` と同じく、既に在る像を
+   * 読むだけである——一覧のためにネットワーク往復を足さないという判断は、
+   * `manager_list` の JSDoc と `RunnerBacklogSnapshot` の doc が既に2度明示している
+   * （north_star 禁止2）。**⟹ 誰も送らず `hello` も来ないうちは、この欄は立たない。**
+   * それは欠落ではなく、材料をこれ以上増やさないという判断の帰結である。
+   */
+  sessionMissingSince?: string;
   cwd: string;
   request: string;
   startedAt: string;
@@ -433,9 +476,34 @@ export interface RunnerBacklogSnapshot {
 
 export type ManagerDecision = 'allow' | 'deny';
 
+/**
+ * 「届けた」を4値で言う（`ManagerAbortResult` が2値→4値へ広げたときと同じ形の穴を
+ * 塞ぐ。Issue #563）。
+ *
+ * **以前は3値で、4つ目の形が `outcome` のどれにもならず例外として貫通していた。**
+ * `record.attached` が真の枝は `await runner.send(...)` を例外処理なしで呼んでおり、
+ * runner が `#sessions` にそのマネージャーを持たなければ `POST /managers/:id/messages`
+ * は 404 を返す（`runner-client.ts` の `RunnerHttpError`）。⟹ クローンも CLI も Web も
+ * `ManagerSendResult` を受け取れず、生の例外文言だけを見ることになっていた。
+ * **`ManagerAbortResult` の doc が言う「`outcome` だけを見ると嘘を受け取っていた」と
+ * 同じ形である**（あちらは嘘の値、こちらは値が来ないこと）。
+ *
+ * | 値 | 意味 | HTTP |
+ * | --- | --- | --- |
+ * | `'answered'` | 止まっていた確認を解いた | 200 |
+ * | `'delivered'` | 追加指示として届けた（**runner にセッションが無くて resume から入り直した回も含む。`detail` がそう言う**） | 200 |
+ * | `'session_missing'` | **runner がこの委譲のセッションを持っておらず、resume でも入り直せなかった。** そのものは居る | 200 |
+ * | `'unknown'` | 届けられたか確かめられなかった（宛先の runner が名簿に開いていない・待ちの宛先が決められない・引き取り中 など） | `'unknown'` のみ 404 |
+ *
+ * **`'session_missing'` を `'unknown'` へ畳まないこと。** 畳むと `app.ts` の
+ * `if (result.outcome === 'unknown')` が 404 を返し、`ManagerAbortResult` の doc が
+ * 逐語で否定した形——「待てば直る状態を 404 という機械可読な終端で返す」——に戻る。
+ * **`session_missing` はまさに「そのものは居る」側である**（台帳にはあり、`sessionId`
+ * が残っていればもう一度 resume を試せる）。404 は人間もクローンも CLI も Web も
+ * 「そんなものは無い」としてしか読めず、**文言と違って読み手の解釈で救われない。**
+ */
 export interface ManagerSendResult {
-  /** `answered` = 止まっていた確認を解いた。`delivered` = 追加指示として届けた。 */
-  outcome: 'answered' | 'delivered' | 'unknown';
+  outcome: 'answered' | 'delivered' | 'session_missing' | 'unknown';
   detail: string;
 }
 
@@ -789,6 +857,21 @@ interface ManagerRecord {
   waiting: RunnerWaiting[];
   /** runner に生きたセッションがあるか。無ければ send のときに resume する。 */
   attached: boolean;
+  /**
+   * **`attached` が事実として嘘だったと確かめた時刻**（ISO8601。`ManagerSummary`
+   * の同名の欄へそのまま出る）。
+   *
+   * 立つのは**宛先が答えたうえで「そのセッションは無い」と言った**回だけである:
+   * `send()` が 404 を受けた回と、`#reattach()` が runner の一覧に居ないと判定した回。
+   * どちらもそこで `attached` を `false` へ訂正し、この時刻を置く。
+   * **resume で入り直せたら消す**——直った事実のほうが新しいので、古い観測を残さない。
+   *
+   * **プロセス内の像にしか置かない**（`Job` へは書かない）。`leaseRefusal` と同じ
+   * 扱いで、デーモンを作り直したら観測し直しから始まる——起動時の `#restoreJobs()`
+   * が同じ照合をやり直すので、失っても嘘は残らない（「まだ観測していない」へ戻る
+   * だけで、「セッションが在る」と名乗るわけではない）。
+   */
+  sessionMissingSince?: string;
   /**
    * **一度でもクローンへ配った確認の id。**
    *
@@ -1359,7 +1442,12 @@ class Pool implements ManagerPool {
       text: `[${managerId}] ${input.request}`,
     });
     const silent = this.#silentRunners();
-    return summaryOf(record, isLive(record, silent), lostSinceOf(record, silent));
+    return summaryOf(
+      record,
+      isLive(record, silent),
+      lostSinceOf(record, silent),
+      record.sessionMissingSince,
+    );
   }
 
   /**
@@ -1451,12 +1539,53 @@ class Pool implements ManagerPool {
       return { outcome: 'answered', detail: `${pending.summary} に回答した。` };
     }
 
+    /*
+     * **台帳が「繋がっている」と言っていても、それを確かめずに信じない（#563）。**
+     *
+     * `attached` は「runner に**生きた**セッションが在る」の意味だが、
+     * **イベント駆動でしか更新されない。** runner の側でセッションが畳まれ、その
+     * 合図（`closed` / resume 失敗）がデーモンへ届かなかった窓では、`attached` は
+     * `true` のまま残る——**そのとき `attached: true` は事実として嘘である。**
+     *
+     * かつてここは `await runner.send(...)` を例外処理なしで呼んでいた。runner が
+     * そのマネージャーを持たなければ 404 が返り、**それは `ManagerSendResult` の
+     * どの `outcome` にもならずに例外として `send()` を貫通していた**——クローンは
+     * 生の例外文言を、人間は `app.ts` の `onError` が作る `500`（本文に 404 も
+     * 文言も出ない）を受け取っていた。
+     *
+     * ⟹ **確かめた結果で台帳を訂正し、既存の resume 経路で自己修復する。**
+     * 新しい往復は1つも足していない（`send()` が元から払っている1本の中で分かる）。
+     */
+    let attached = record.attached;
+    /** 台帳が嘘をついていたので resume から入り直した回。`detail` がそう名乗る。 */
+    let reentered = false;
+    if (attached) {
+      const missing = await this.#sendDetectingMissingSession(runner, managerId, message);
+      if (missing) {
+        // **runner が「そのセッションは無い」と答えた。台帳のほうが古い。**
+        record.attached = false;
+        record.sessionMissingSince ??= new Date(this.#now()).toISOString();
+        await this.#persist(record);
+        attached = false;
+      }
+    }
+
     // 待機していた（＝runner にセッションが居ない）相手なら、ここで続きへ戻す。
-    if (!record.attached) {
+    // **直前に 404 で訂正した相手も、まったく同じここを通す**（`#resuming` ガードも
+    // `#resumeOnce` も `resumeFailureDetail` もそのまま通る）。別経路を作ると、
+    // 同じ session を二本起こさないための歯止めが片方にだけ効くことになる。
+    if (!attached) {
+      // **`outcome` の分かれ目はここ1箇所である。** `sessionMissingSince` が立って
+      // いる＝「runner がこの委譲のセッションを持っていない」と確かめてある回で、
+      // そのときの失敗は `'unknown'`（確かめられなかった）ではない。
+      const missing = record.sessionMissingSince !== undefined;
       // 器の入れ替えで取り直している最中に重ねない（同じ session を二本起こす）。
       // **「戻れない」とは別の理由なので、別のことを言う。**
       if (this.#resuming.has(managerId)) {
-        return { outcome: 'unknown', detail: resumeFailureDetail(managerId, 'busy') };
+        return {
+          outcome: missing ? 'session_missing' : 'unknown',
+          detail: sendFailureDetail(managerId, resumeFailureDetail(managerId, 'busy'), missing),
+        };
       }
       const resumed = await this.#resumeOnce(record, runner, message);
       if (resumed !== 'resumed') {
@@ -1464,14 +1593,27 @@ class Pool implements ManagerPool {
          * **言い方の持ち主は `resumeFailureDetail` 1つである。** 貸し出し期限で
          * 断られた回だけは、期限の根拠（誰が握っていて、いつから引き取れるか）が
          * 判定側にしか無いので、その1行を渡して言わせる。
+         *
+         * **`session_missing` を `'unknown'` へ畳まない**（`ManagerSendResult` の
+         * doc の表）。畳むと `app.ts` が 404 を返し、「そのものは無い」という
+         * 読み方しかできない終端になる——台帳には在るし、`sessionId` が残って
+         * いればもう一度 resume を試せるので、それは嘘である。
          */
         return {
-          outcome: 'unknown',
-          detail: resumeFailureDetail(managerId, resumed, record.leaseRefusal),
+          outcome: missing ? 'session_missing' : 'unknown',
+          detail: sendFailureDetail(
+            managerId,
+            resumeFailureDetail(managerId, resumed, record.leaseRefusal),
+            missing,
+          ),
         };
       }
-    } else {
-      await runner.send(managerId, message);
+      if (missing) {
+        // **戻れたのだから、古い観測は捨てる。** 残すと「いま話しかけられない」と
+        // 読める欄が、話しかけられる相手に付いたままになる。
+        record.sessionMissingSince = undefined;
+        reentered = true;
+      }
     }
 
     record.job.status = 'running';
@@ -1482,7 +1624,45 @@ class Pool implements ManagerPool {
       role: 'outbound',
       text: `[${managerId}] ${message}`,
     });
-    return { outcome: 'delivered', detail: '追加指示として届けた。' };
+    return {
+      outcome: 'delivered',
+      // **黙って直さない。** 台帳が嘘をついていたことと、それをどう直したかを
+      // 呼び手へ言う。`outcome` は `'delivered'` のままで正しい（届いたのだから）
+      // が、**届き方が違った**ことは読み手の次の一手に効く——同じ委譲へ続けて
+      // 送る側は、器が入れ替わった後の文脈で走っていることを知っておく必要がある。
+      detail: reentered
+        ? '追加指示として届けた（runner にこの委譲のセッションが無かったので、resume から入り直した）。'
+        : '追加指示として届けた。',
+    };
+  }
+
+  /**
+   * `runner.send()` を呼び、**「runner がこのセッションを持っていない」という答えだけ**を
+   * 例外から値へ変える（#563）。
+   *
+   * **捕まえるのは `RunnerHttpError` の 404 だけである。** それ以外は今までどおり
+   * 投げる——「送れなかった」の理由は 404 以外にもあり（5xx・接続断・fencing の 409）、
+   * それらは**待てば直る**か**別の手当てが要る**もので、「セッションが無い」とは
+   * 別の事実である。ここで広く捕まえると、`send()` が resume を試みる条件が
+   * 「runner が答えなかったとき」まで広がり、**生きている仕事を二重に起こす**
+   * （`#restoreJobs` / `#reattach` が逐語で持っている歯止めと同じクラスの危険）。
+   *
+   * 404 の出どころは `apps/daemon/src/runner-client.ts` の `RunnerHttpError` で、
+   * `apps/runner/src/app.ts` が `#sessions` に無い `managerId` へ返すものである
+   * （**runner 側には何も足していない。既に在る答えを読み替えるだけ**）。
+   */
+  async #sendDetectingMissingSession(
+    runner: RunnerClient,
+    managerId: string,
+    message: string,
+  ): Promise<boolean> {
+    try {
+      await runner.send(managerId, message);
+      return false;
+    } catch (error) {
+      if (error instanceof RunnerHttpError && error.status === 404) return true;
+      throw error;
+    }
   }
 
   /**
@@ -1522,7 +1702,12 @@ class Pool implements ManagerPool {
     for (const record of this.#records.values()) {
       known.set(
         record.job.id,
-        summaryOf(record, isLive(record, silent), lostSinceOf(record, silent)),
+        summaryOf(
+          record,
+          isLive(record, silent),
+          lostSinceOf(record, silent),
+          record.sessionMissingSince,
+        ),
       );
     }
     // 台帳にしか無い分も見せる。**`live: false` を決め打ちしない。** `#retire`
@@ -1536,7 +1721,12 @@ class Pool implements ManagerPool {
       const fallback: ManagerRecord = { job, waiting: [], attached: false };
       known.set(
         job.id,
-        summaryOf(fallback, isLive(fallback, silent), lostSinceOf(fallback, silent)),
+        summaryOf(
+          fallback,
+          isLive(fallback, silent),
+          lostSinceOf(fallback, silent),
+          fallback.sessionMissingSince,
+        ),
       );
     }
     return [...known.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
@@ -1869,7 +2059,14 @@ class Pool implements ManagerPool {
         await this.#persist(record);
         // 「runner の中で走り続けている」は `lost` にも `failed` にも言えない。
         if (attached) this.#notifyRestored(record, 'attached');
-        resumed.push(summaryOf(record, isLive(record, silent), lostSinceOf(record, silent)));
+        resumed.push(
+          summaryOf(
+            record,
+            isLive(record, silent),
+            lostSinceOf(record, silent),
+            record.sessionMissingSince,
+          ),
+        );
         continue;
       }
 
@@ -1960,7 +2157,14 @@ class Pool implements ManagerPool {
           text: `[${job.id}] （再起動後の再開）${nudge}`,
         });
         this.#notifyRestored(record, 'resumed');
-        resumed.push(summaryOf(record, isLive(record, silent), lostSinceOf(record, silent)));
+        resumed.push(
+          summaryOf(
+            record,
+            isLive(record, silent),
+            lostSinceOf(record, silent),
+            record.sessionMissingSince,
+          ),
+        );
       } catch (error) {
         if (isFencedRunnerError(error)) {
           /*
@@ -2538,6 +2742,21 @@ class Pool implements ManagerPool {
         const known = this.#records.get(job.id);
         if (known) known.attached = false;
 
+        /*
+         * **同じ往復から、外へ出せる観測をもう1つ拾う**（#563）。
+         *
+         * ここは「宛先が答えたうえで、この委譲を一覧に載せなかった」を確かめた
+         * 場所である（上の `states === null` で**聞けなかった回は既に抜けている**）。
+         * ＝ `ManagerSummary.sessionMissingSince` が名指しする事実そのもので、
+         * **新しい往復は1つも要らない。**
+         *
+         * **置くのは resume を挑む直前、消すのは戻れたときである**（下）。この順に
+         * するのは、`#resumeOnce` が投げる回（実 I/O の失敗）も「戻れなかった」側へ
+         * 落ちるようにするためで、結果として**この節を抜けた時点で印が立っている
+         * ⟺ resume が成功しなかった**が成り立つ。
+         */
+        const missingAt = new Date(this.#now()).toISOString();
+
         // 手を動かしている最中だったものだけ戻す（`done` は死ではなく待機であり、
         // 話しかけられたら続く。ここで起こすと開いたままの窓を勝手に閉じる）。
         // **判定より前に `#records` へ載せない** — 載せると `list()` が終わった
@@ -2560,6 +2779,8 @@ class Pool implements ManagerPool {
           const message = restartNudge(status, 'runner');
           // 断りが「新しく起きたこと」かを、挑む前の状態で覚えておく（下の日誌の条件）。
           const refusedBefore = record.leaseRefusal !== undefined;
+          // 上の doc の順序。**戻れたら下で消す。**
+          record.sessionMissingSince ??= missingAt;
           const outcome = await this.#resumeOnce(record, runner, message);
           // **引けなかっただけなら諦めない。** 予約して挑み直す（`retry` は runner
           // 単位の予約であって、`#unresumable` のようにこのジョブを恒久に降ろす
@@ -2597,6 +2818,9 @@ class Pool implements ManagerPool {
           if (outcome !== 'resumed') continue;
           // 受理と「戻れた」を取り違えない（`restore` と同じ理由）。
           if (record.job.status === 'lost') continue;
+          // **戻れたので古い観測は捨てる**（#563）。残すと「いま話しかけられない」と
+          // 読める欄が、話しかけられる相手に付いたままになる。
+          record.sessionMissingSince = undefined;
           record.job.status = 'running';
           await this.#persist(record);
           await this.#journal({
@@ -4748,6 +4972,53 @@ function resumeFailureDetail(
   }
 }
 
+/**
+ * `send()` が届けられなかったときの1行に、**確かめてある事実を1つだけ足す**（#563）。
+ *
+ * **`resumeFailureDetail` を置き換えない。** 言い方の持ち主は依然としてあちら1つで、
+ * ここは「宛先の runner がこの委譲のセッションを持っていない（と確かめた）」という
+ * **別の観測**を前に付けるだけである。resume が失敗した理由（貸し出し・生ログ・
+ * 取り直し中）と、セッションが消えていること自体は独立した2つの事実で、片方だけを
+ * 読むと打つ手を間違える:
+ *
+ * - resume の理由だけ → 「待てば直る」と読むが、**戻る先はもう無い**かもしれない
+ * - セッションが無いことだけ → 「起こし直せ」と読むが、**貸し出しで断られただけ**なら
+ *   起こし直すと同じ仕事が2本になる
+ *
+ * **`missing` が偽なら1文字も足さない。** 確かめていないことを言わない
+ * （`ManagerSummary.sessionMissingSince` の「聞けなかった」と同じ歯止め）。
+ *
+ * **⚠️ そして「失われた」と読ませない。** ここは `manager_send` の返り値として
+ * クローンへ直接届く1行で、読んだ側はここに書かれたとおりに行動する——
+ * `resumeFailureDetail` の doc が同じ理由を持っている。**セッションが無いことの
+ * 由来は少なくとも2つあり、デーモンは台帳からは区別できない:**
+ *
+ * 1. 仕事の途中でセッションが失われた
+ * 2. **仕事が完遂した後にセッションが畳まれ、その終端イベント（`report` /
+ *    `closed`）だけがデーモンへ届かなかった**
+ *
+ * どちらも `lastReport` は空のまま `status: running` で残るので、**台帳の側に
+ * 区別する材料が無い。** ⟹ ここで「失われた」と言い切ると、読んだクローンは
+ * **完遂済みの仕事を委譲し直す。** 委譲1本ぶんの浪費では済まず、`gh pr create`
+ * のような取り返しのつかない操作が二度走りうる（AGENTS.md がこの危険を逐語で
+ * 名指ししている）。実例では PR は既にマージ済みで、失われた作業は1バイトも
+ * 無かった（#563 のコメント）。
+ *
+ * **区別できる層は既に在る（出荷済み）。** `manager_report` は報告が空のときに
+ * 生ログの末尾を遡って「生成されたが配られていない」を探す（#323 / PR #565）。
+ * だから断定の代わりに**その口を名指しする。**
+ */
+function sendFailureDetail(managerId: string, resumeDetail: string, missing: boolean): string {
+  if (!missing) return resumeDetail;
+  return (
+    `宛先の runner は ${managerId} のセッションを持っていない（そう答えた）。${resumeDetail} ` +
+    '**この委譲が失われたという意味ではない** — 仕事が完遂した後にセッションが畳まれ、' +
+    'その終端イベントだけが届かなかった回も、台帳からはこれと同じ形に見える' +
+    '（デーモンにこの2つを区別する材料は無い）。**委譲し直す前に manager_report を見ること** — ' +
+    '報告が空でも、生ログまで降りて「生成されたが配られていない」報告を拾う経路がある。'
+  );
+}
+
 type RestartCause = 'daemon' | 'runner';
 
 /** 再起動後に流す一言。**開き直すだけでは仕事は進まない。** */
@@ -4871,6 +5142,7 @@ function summaryOf(
   record: ManagerRecord,
   live: boolean,
   runnerLostSince: string | undefined,
+  sessionMissingSince: string | undefined,
 ): ManagerSummary {
   const { job } = record;
   return {
@@ -4880,6 +5152,10 @@ function summaryOf(
     // **`live` と同じ引数の作法で運ぶ（省略可能な引数にしない）。** 既定を置くと、
     // 足す人が考えなかったことが「宛先の器は黙っていない」という主張になって外へ出る。
     ...(runnerLostSince === undefined ? {} : { runnerLostSince }),
+    // **同上（#563）。** 既定を置くと、足す人が考えなかったことが「runner はこの
+    // 委譲のセッションを持っている」という主張になって外へ出る。呼ぶ側は
+    // `record.sessionMissingSince` をそのまま渡せばよい（像が正本である）。
+    ...(sessionMissingSince === undefined ? {} : { sessionMissingSince }),
     cwd: job.cwd ?? '',
     request: job.request ?? job.summary,
     startedAt: job.createdAt,

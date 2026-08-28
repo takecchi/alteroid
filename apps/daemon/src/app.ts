@@ -2935,7 +2935,15 @@ export function createApp(deps: AppDeps) {
           'ための口である。許可確認への回答なら `requestId` を付ける。',
         responses: {
           200: {
-            description: '届いた（`answered` / `delivered`）。',
+            description:
+              '`outcome` を読むこと。`answered` = 止まっていた確認を解いた。' +
+              '`delivered` = 追加指示として届けた（runner にセッションが無く resume から' +
+              '入り直した回も含む。`detail` がそう言う）。' +
+              '`session_missing` = **runner がこの委譲のセッションを持っておらず、resume でも' +
+              '入り直せなかった**（#563。**届いていない**）。' +
+              '`unknown` はここには出ない（404 になる）。' +
+              '⚠️ `session_missing` を 404 にしないのは、**そのものは居る**からである — ' +
+              '委譲は台帳に在り、時間で解ける理由（引き取り中・貸し出し期限）なら送り直しで通る。',
             content: { 'application/json': { schema: resolver(managerActionResponseSchema) } },
           },
           400: {
@@ -2957,6 +2965,18 @@ export function createApp(deps: AppDeps) {
           ...(requestId === undefined ? {} : { requestId }),
           ...(decision === undefined ? {} : { decision }),
         });
+        // **`unknown` だけが 404 である。そのままにする。**
+        //
+        // **`session_missing` をここへ混ぜない**（#563）。あれは「そのものは居る」側
+        // で、`ManagerAbortResult` の doc が逐語で否定した形（待てば直る状態を 404 と
+        // いう機械可読な終端で返す）になる。200 + `outcome` で返し、読み手に解釈の
+        // 余地を残す。
+        //
+        // **ここは同時に 500 も塞いでいる。** かつて `send()` は runner の 404 を例外の
+        // まま貫通させており、この行まで到達せずに `base.onError` が
+        // `500 Internal Server Error`（text/plain）を作っていた——**404 という情報も
+        // 文言も応答本文に1文字も出ず、跡は stderr にしか残らなかった。** ⟹ クローンには
+        // 文言が届き、人間には 500 しか届かないという非対称ができていた。
         if (result.outcome === 'unknown') return c.json({ error: result.detail }, 404);
         return c.json({ outcome: result.outcome, detail: result.detail });
       },
