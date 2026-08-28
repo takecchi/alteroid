@@ -584,6 +584,12 @@ async function describeMissingReport(
   const { timestamp, length, stopReason } = outcome.utterance;
   const when = timestamp ?? '時刻不明（生ログの行に timestamp が無かった）';
   const resumeOffset = Math.max(0, transcript.length - TRANSCRIPT_PAGE);
+  // **どの枝でも `状態` を落とさない。** 早い3枝（読めなかった／生ログにも
+  // 無い／上限まで遡った）は `base` がこれを持っているのに、下の3枝だけが
+  // 落ちていた——同じ道具の同じ問いへの答えなのに、枝によって取れる軸が
+  // 減る（AGENTS.md 地雷「取れない軸に0の行を作る」の隣の形。ここは軸が
+  // 取れているのに出していない）。
+  const state = `（状態: ${status}）`;
   const found = `生ログには ${when} に本文が在る（約 ${length.toLocaleString('ja-JP')} 文字）`;
   const howToDigIn =
     `manager_transcript managerId=${managerId} offset=${resumeOffset} で読める` +
@@ -597,7 +603,7 @@ async function describeMissingReport(
   if (stopReason === 'end_turn') {
     // これが #323 の形——ターンを終えた（`end_turn`）のに配られていない。
     return (
-      `⚠ マネージャー ${managerId} からの報告としては届いていないが、${found}。` +
+      `⚠ マネージャー ${managerId} からの報告としては届いていない${state}が、${found}。` +
       `＝ 生成されたが配られていない（#323）。${howToDigIn}`
     );
   }
@@ -605,13 +611,13 @@ async function describeMissingReport(
     // 読めた。かつ `end_turn` ではない——まだターンの途中（道具を挟んでいる
     // 最中など）。「配られていない」とは断定しない（健全な途中経過かもしれない）。
     return (
-      `マネージャー ${managerId} は${found}が、そのターンはまだ終わっていない` +
+      `マネージャー ${managerId} からの報告はまだ無い${state}。${found}が、そのターンはまだ終わっていない` +
       `（stop_reason=${stopReason}）。＝ まだ書き終えていない側である。${howToDigIn}`
     );
   }
   // stop_reason が読めなかった——終わっているかどうか、どちらとも名乗らない。
   return (
-    `マネージャー ${managerId} は${found}が、そのターンが終わっているかを判定できなかった` +
+    `マネージャー ${managerId} からの報告はまだ無い${state}。${found}が、そのターンが終わっているかを判定できなかった` +
     `（行に stop_reason が無い）。${howToDigIn}`
   );
 }
