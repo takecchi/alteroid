@@ -374,7 +374,33 @@ describe('器が黙ったことは、`status` を動かさずに添える', () =
     expect(await screen.findByText('実行中')).toBeTruthy();
     expect(screen.getByText('セッション切断')).toBeTruthy();
     expect(screen.getByText(/宛先の器は.*から名乗っていない/)).toBeTruthy();
-    expect(screen.getByText(/新しい委譲の宛先からも外れている/)).toBeTruthy();
+    expect(screen.getByText(/新しい委譲の宛先からは外れている/)).toBeTruthy();
+  });
+
+  /**
+   * **`ba4053d`（#67「「いま送っても届かず」の真下に、届く送信ボタンが並んでいた」）の
+   * 再発を止める歯。**
+   *
+   * CLI（`chat.ts`）と `manager_list`（`tools.ts`）はこの節を「いま話しかけられない」と
+   * 書いているが、**Web へ逐語で持ってくると嘘になる。** 実測（`packages/core` の足場で
+   * 走らせた書き捨ての試験）: 名簿が `state: 'lost'` と判定した runner でも
+   * `RunnerRegistry#get()` は client を返し（`#markSilent` は `entry.client` を落とさず、
+   * `get()` は `entry.state` を見ない）、`ManagerPool#send()` は `#runnerOf` → `get()` を
+   * 通って **`outcome: 'delivered'`** を返した（runner の `resume` が実際に叩かれた）。
+   *
+   * ⟹ デーモンは拒まない。**送信可否をこの注記が推論してはいけない。**
+   */
+  it('送信可否を推論しない（「いま話しかけられない」と書かない）', async () => {
+    renderManagers([{ ...BASE, status: 'running', live: false, runnerLostSince: LOST_SINCE }]);
+
+    expect(await screen.findByText(/宛先の器は.*から名乗っていない/)).toBeTruthy();
+    // #67 が閉じた欠陥。ここが落ちたら、届く送信の上に「届かない」が戻っている。
+    expect(screen.queryByText(/いま話しかけられない/)).toBeNull();
+    expect(screen.queryByText(/届かない/)).toBeNull();
+    expect(screen.queryByText(/届かず/)).toBeNull();
+    // 塞いでいないことと、成否を断定しないことの両方を言う。
+    expect(screen.getByText(/話しかけることは塞いでいない/)).toBeTruthy();
+    expect(screen.getByText(/器が応えれば届く/)).toBeTruthy();
   });
 
   /**

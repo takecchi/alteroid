@@ -229,9 +229,11 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
               **`DisconnectedNote` の直後に置く。** あちらは「繋がっていない」と
               言うだけで理由を言わない——この欄が `live: false` の理由を1つ名指し
               する（`isLive()` は宛先が `silentRunners` に居ると false を返す）。
-              **矛盾していない**: あちらが言うのは「送信ボタンは塞いでいない」で、
-              ここが言うのは「この器は名簿から外れている」である
-              （`ManagerRunnerLostNote` の doc）。
+              **この注記は送信可否を推論しない**（`ManagerRunnerLostNote` の doc の
+              実測）。名簿が `lost` と判定した器でも `RunnerRegistry#get()` は client を
+              返し、`send()` は実際に resume を試して `delivered` を返す ⟹ ここで
+              「いま話しかけられない」と書くと `ba4053d`（#67）が閉じた欠陥
+              ——「いま送っても届かず」の真下に届く送信ボタンが並ぶ形——の再発になる。
             */}
             <ManagerRunnerLostNote
               runnerLostSince={manager.runnerLostSince}

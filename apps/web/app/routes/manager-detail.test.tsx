@@ -1057,6 +1057,42 @@ describe('詳細でも、セッション不在と器の沈黙は状態を置き�
   });
 
   /**
+   * **`ba4053d`（#67）の再発を止める歯 —— 詳細側。ここが本当の現場である。**
+   *
+   * #67 が閉じた欠陥は「「いま送っても届かず」の真下に、届く送信ボタンが並んでいた」で、
+   * その送信欄はこの画面に在る。CLI の `runnerLostSince` の文言には「いま話しかけ
+   * られない」が入っているが、**実測ではデーモンは拒まない** —— 名簿が `lost` と
+   * 判定した runner でも `RunnerRegistry#get()` は client を返し、`send()` は
+   * `outcome: 'delivered'` を返した。
+   *
+   * ⟹ 注記が「話しかけられない」と言い、その下の送信ボタンが有効なまま、という
+   * 組を作らない。**この歯は、注記と送信ボタンの両方を同時に見る。**
+   */
+  it('注記が送信を否定せず、その下の送信ボタンも実際に有効なまま', async () => {
+    renderDetail({
+      ...BASE,
+      status: 'running',
+      live: false,
+      sessionId: 'sess-1',
+      runnerLostSince: LOST_SINCE,
+    });
+
+    expect(await screen.findByText(/宛先の器は.*から名乗っていない/)).toBeTruthy();
+    // #67 が閉じた欠陥そのもの。
+    expect(screen.queryByText(/いま話しかけられない/)).toBeNull();
+    expect(screen.queryByText(/届かず/)).toBeNull();
+    expect(screen.getByText(/話しかけることは塞いでいない/)).toBeTruthy();
+    // **注記の下のボタンが本当に押せること**まで見る（文言だけ直してボタンを
+    // 塞ぐ、の逆向きの取り違えも止める）。**先に入力を埋める** —— 空欄のときは
+    // `noWayBack` とは無関係に `disabled` なので、埋めずに測ると
+    // 「戻る先が無いから塞がれている」と取り違える（実際に一度踏んだ）。
+    fireEvent.change(screen.getByPlaceholderText('追加の指示'), {
+      target: { value: '続けて' },
+    });
+    expect(screen.getByRole('button', { name: '送る' }).hasAttribute('disabled')).toBe(false);
+  });
+
+  /**
    * **2つは排他ではない。同時に立つ**（`packages/core/src/manager.ts` を
    * `ff24ded9` で引いて確かめた）。`summaryOf()` は2つを独立した spread で
    * 組み立てており、排他を課している行は1行も無い。`record.sessionMissingSince`
