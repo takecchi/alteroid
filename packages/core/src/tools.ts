@@ -266,6 +266,16 @@ export const CLONE_TOOL_NAMES = [
 const LIST_REQUEST_EXCERPT = 160;
 const LIST_REPORT_EXCERPT = 240;
 /**
+ * `ManagerSummary.turnEndTail` を一覧の1行へ添えるときの厚み（Issue #567）。
+ *
+ * **`LIST_REPORT_EXCERPT` を使い回さない。** 値がいま同じ桁でも、片方だけを
+ * 直したくなったときに一緒に動いてしまう（用途ごとに別に置く、という
+ * このファイルの既存の分け方——`LIST_REQUEST_EXCERPT` / `LIST_WAITING_EXCERPT`
+ * と同じ理由）。`turnEndTail` 自体の上限は `TURN_END_TAIL_EXCERPT`
+ * （`manager.ts`、400字）で、ここはそれを一覧向けにさらに切る。
+ */
+const LIST_TURN_END_TAIL_EXCERPT = 160;
+/**
  * 返事待ち1件の要約の厚み。
  *
  * **runner 側のキャップをここの根拠にしない。** `brief(input, 200)` が効くのは
@@ -949,6 +959,96 @@ function denialLine(denials: ManagerDenial[]): string | null {
     (rest > 0 ? `（ほか ${rest} 種、全 ${total} 件）` : '') +
     '。この確認はクローンには回ってきていないので、手が止まっている可能性がある' +
     '（全件は journal_read に残っている。件数はデーモンを作り直すと数え直しになる）。'
+  );
+}
+
+/**
+ * 一覧に添える、「ターンが終わっているらしいのに報告が届いていない」への
+ * 助言（Issue #567）。**判定はここで行う** — `ManagerSummary.turnEndedAt` の
+ * doc が「読む側が `lastReportAt` と突き合わせて判定する」と書いている、
+ * その読む側がこの関数である。
+ *
+ * **切らない・殺さない・止めない。** ここが何を返しても `status` は動かず、
+ * どの委譲も abort しない、貸し出し期限も縮まない——伝えるだけである
+ * （`ManagerSummary.turnEndedAt` の doc と同じ約束）。
+ *
+ * 分岐:
+ * - `turnEndReason` が無い ⟹ `null`（この観測自体が無い）
+ * - `turnEndedAt` が無い ⟹ **⚠**。行に `timestamp` が無かっただけで、
+ *   「症状ではない」へは倒さない。**既定は「分からない」**である
+ *   （`ManagerSummary.turnEndedAt` の doc に逐語で在る）
+ * - `turnEndedAt` が在り、`lastReportAt` も在って `turnEndedAt <= lastReportAt`
+ *   ⟹ `null`（ターンが終わった後に報告が届いている＝正常な待機）
+ * - それ以外（`turnEndedAt > lastReportAt`、または `lastReportAt` が無い）
+ *   ⟹ **⚠**
+ *
+ * **⚠️ 時刻の比較は文字列ではなく `Date.parse` の数値で行う。** `lastReportAt`
+ * は `new Date().toISOString()` なので必ず同じ形（ミリ秒 + `Z`）だが、
+ * `turnEndedAt` は生ログの行が持っていた `timestamp` をそのまま写した値で
+ * （`probeTurnEnd`）、**デーモンが作った値ではない。** SDK が書く形に依存する
+ * ので、オフセット表記（`+09:00`）やミリ秒なしが来ると文字列比較は静かに
+ * 間違える。**どちらかが `Date.parse` できない（`NaN`）ときも `null`
+ * （症状ではない）へ倒さず、⚠ 側へ落とす** — (A) の分岐（`turnEndedAt` 自体が
+ * 無いとき）と同じ原則で、比較できない＝「分からない」であって「症状では
+ * ない」ではない。**誤検出の代償は非対称である** — 誤って ⚠ を出す代償は
+ * 「読む人が1回よけいに読む」、誤って黙る代償は「止まった委譲が見つからない」。
+ *
+ * **健全なマネージャーでは1文字も増えない。** ⚠ が出るのは症状の可能性が
+ * あるときだけにする——一覧は文字数の予算に張り付いていて、行を1本増やすと
+ * 出る件数が減る（`manager.lastReport` の行の doc と同じ理由）。
+ */
+function describeTurnEnd(manager: ManagerSummary): string | null {
+  if (manager.turnEndReason === undefined) return null;
+
+  if (manager.turnEndedAt === undefined) {
+    return (
+      '  ⚠ ターンは終わっているらしいが、いつ終わったかが分からない' +
+      `（${manager.turnEndReason}。行に timestamp が無かった）。` +
+      '**分からないだけで、症状ではないとは言えない** — 報告が届いたかどうかを' +
+      'ここでは判定できない。まず manager_report を見ること（本文が空でも生ログから' +
+      '拾える）、manager_transcript で生ログの全文が読める。' +
+      '**先に manager_start で起こし直さないこと** — 同じ仕事が2本になる。' +
+      'この委譲は止まっていない・切っていない — この助言はデーモンが計算しただけで、' +
+      '委譲は動き続けてよい。'
+    );
+  }
+
+  // **数値で比べる。文字列比較にしない**（この関数の doc の「⚠️ 時刻の比較は
+  // 文字列ではなく…」を参照）。`turnEndedAt` は生ログの `timestamp` を写した
+  // だけの値で、`lastReportAt`（デーモンが `new Date().toISOString()` で
+  // 作った値）と同じ形とは限らない。
+  if (manager.lastReportAt !== undefined) {
+    const turnEndedAtMs = Date.parse(manager.turnEndedAt);
+    const lastReportAtMs = Date.parse(manager.lastReportAt);
+    // **どちらかが `NaN`（parse できない）なら ⚠ 側へ落とす。** `null`
+    // （症状ではない）へ倒すと、「分からない」を「症状ではない」に化けさせる
+    // ——(A) の分岐で避けたのと同じ間違いになる。
+    if (
+      !Number.isNaN(turnEndedAtMs) &&
+      !Number.isNaN(lastReportAtMs) &&
+      turnEndedAtMs <= lastReportAtMs
+    ) {
+      return null;
+    }
+  }
+
+  const stopSequenceNote =
+    manager.turnEndReason === 'stop_sequence'
+      ? '**枠の壁（利用上限）の可能性が高い** — Issue #567 の「報告が配られない」とは別の原因である。 '
+      : '';
+  const tailNote =
+    manager.turnEndTail === undefined || manager.turnEndTail === ''
+      ? ''
+      : `末尾の抜粋: ${excerptLine(manager.turnEndTail, LIST_TURN_END_TAIL_EXCERPT)} `;
+  return (
+    `  ⚠ ターンは ${manager.turnEndedAt} に ${manager.turnEndReason} で終わっているが、` +
+    '報告がまだ届いていない。' +
+    stopSequenceNote +
+    tailNote +
+    'まず manager_report を見ること（本文が空でも生ログから拾える）、manager_transcript で' +
+    '生ログの全文が読める。**先に manager_start で起こし直さないこと** — 同じ仕事が2本になる。' +
+    'この委譲は止まっていない・切っていない — この助言はデーモンが計算しただけで、' +
+    '委譲は動き続けてよい。'
   );
 }
 
@@ -3796,6 +3896,12 @@ export function createCloneTools(context: ToolContext) {
                   // の実測を参照）。`lastReportAt` が無い行（古いデータ・版の
                   // ずれ）には何も足さない——「未受信」のような行は作らない。
                   `  直近の報告${manager.lastReportAt === undefined ? '' : `（${manager.lastReportAt} 受信）`}: ${excerptLine(manager.lastReport, LIST_REPORT_EXCERPT)}`,
+              // **Issue #567**: ターンが終わっているらしいのに報告が届いて
+              // いない可能性を、条件つきで添える（`describeTurnEnd` の doc）。
+              // **健全なマネージャーでは `null` を返し、1文字も増えない**——
+              // 予算に張り付いている一覧で行を1本増やすと出る件数が減るため
+              // （すぐ上の `lastReport` 行の doc と同じ理由）。
+              describeTurnEnd(manager),
             ],
           }),
         );

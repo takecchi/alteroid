@@ -3559,6 +3559,136 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * `turnEndedAt` / `turnEndReason` / `turnEndTail`（Issue #567、PR #588）を
+   * `manager_list` で表示する `describeTurnEnd`（`tools.ts`）の歯。
+   * 分岐の設計は同関数の doc を参照。
+   */
+  describe('manager_list はターン終了/報告未着の助言を出す（#567）', () => {
+    it('turnEndReason が無ければ ⚠ を出さない', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      // target.turnEndReason はセットしない。
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).not.toContain('ターンは');
+    });
+
+    it('(B) turnEndedAt <= lastReportAt なら ⚠ を出さない（正常な待機を症状と名乗らない）', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.turnEndedAt = '2026-08-28T09:00:00.000Z';
+      target.turnEndReason = 'end_turn';
+      target.lastReportAt = '2026-08-28T09:05:00.000Z'; // ターンが終わった後に報告が届いている
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).not.toContain('⚠ ターンは');
+    });
+
+    it('(C) turnEndedAt > lastReportAt なら ⚠ を出し、turnEndedAt と turnEndReason を本文に含む', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.turnEndedAt = '2026-08-28T09:10:00.000Z';
+      target.turnEndReason = 'end_turn';
+      target.lastReportAt = '2026-08-28T09:00:00.000Z'; // 報告のほうが古い＝ターンの後まだ届いていない
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('⚠ ターンは');
+      expect(reply).toContain('2026-08-28T09:10:00.000Z');
+      expect(reply).toContain('end_turn');
+    });
+
+    it('(C) lastReportAt が無いときも ⚠ を出す', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.turnEndedAt = '2026-08-28T09:10:00.000Z';
+      target.turnEndReason = 'end_turn';
+      // lastReportAt はセットしない。
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('⚠ ターンは');
+    });
+
+    it('(A) turnEndReason は在るが turnEndedAt が無いなら ⚠ を出し、「分からない」と読める文言にする（「症状ではない」にしない）', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.turnEndReason = 'end_turn';
+      // turnEndedAt はセットしない（行に timestamp が無かった形）。
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('⚠ ターンは終わっているらしいが、いつ終わったかが分からない');
+      expect(reply).toContain('分からないだけで、症状ではないとは言えない');
+      expect(reply).not.toContain('症状ではない）');
+    });
+
+    it('turnEndReason が stop_sequence のときは枠の壁（利用上限）の可能性を言い添え、#567 とは別原因だと言い分ける', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.turnEndedAt = '2026-08-28T09:10:00.000Z';
+      target.turnEndReason = 'stop_sequence';
+      // lastReportAt なし ⟹ (C)。
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('⚠ ターンは');
+      expect(reply).toContain('枠の壁');
+      expect(reply).toContain('利用上限');
+      expect(reply).toContain('Issue #567');
+      expect(reply).toContain('とは別の原因である');
+    });
+
+    it('turnEndTail が長いときは抜粋され、全文はそのまま出ない', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.turnEndedAt = '2026-08-28T09:10:00.000Z';
+      target.turnEndReason = 'end_turn';
+      // TURN_END_TAIL_EXCERPT（manager.ts）の上限（400字）ぶんの長さを模す。
+      target.turnEndTail = 'あ'.repeat(400);
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('末尾の抜粋');
+      expect(reply).not.toContain('あ'.repeat(400));
+    });
+
+    /**
+     * `turnEndedAt` は生ログの `timestamp` をそのまま写した値で、デーモンが
+     * 作った値ではない（`describeTurnEnd` の doc）。`Date.parse` できない形が
+     * 来たとき、`lastReportAt` が新しくても「分からない」を「症状ではない」
+     * へ倒さないことを確かめる（(A) と同じ原則を比較にも当てる）。
+     */
+    it('turnEndedAt が Date.parse できない形のとき、lastReportAt が新しくても ⚠ を出す', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.turnEndedAt = 'not-a-timestamp';
+      target.turnEndReason = 'end_turn';
+      target.lastReportAt = '2026-08-28T09:59:59.000Z'; // 十分新しい
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('⚠ ターンは');
+    });
+  });
+
+  /**
    * クローンの受信箱（`InboxStore`）の滞留は、`renderListing` の外——一覧
    * 全体に1行だけ添える（#358「答えない問い」のうち、デーモン→クローンの脚）。
    *
