@@ -3689,6 +3689,145 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * `toolUseStallAt` / `toolUseStallPending`（Issue #572）を `manager_list` で
+   * 表示する `describeToolUseStall`（`tools.ts`）の歯。
+   *
+   * 生ログ側の2条件（末尾が `stop_reason: 'tool_use'` / 対応する `tool_result`
+   * が無い）は `manager.ts` の `probeToolUseStall` が計算する
+   * （歯は `manager-tool-stall.test.ts`）。**ここで見るのは3条件目——
+   * `waiting` が空であること——との突き合わせと、その言い方である。**
+   */
+  describe('manager_list は「道具の応答待ちのまま、誰も待っていない」を出す（#572）', () => {
+    it('toolUseStallPending が無ければ ⚠ を出さない', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).not.toContain('道具の応答待ち');
+    });
+
+    it('waiting が空で未応答の tool_use が在れば ⚠ を出し、道具の名前・id・timestamp を本文に含む', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.toolUseStallAt = '2026-08-28T09:10:00.000Z';
+      target.toolUseStallPending = [{ id: 'toolu_ask', name: 'AskUserQuestion' }];
+      // waiting は空のまま（＝誰もその応答を待っていない）。
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('⚠ 道具の応答待ちのまま、誰もその応答を待っていない');
+      expect(reply).toContain('AskUserQuestion');
+      expect(reply).toContain('toolu_ask');
+      expect(reply).toContain('2026-08-28T09:10:00.000Z');
+    });
+
+    /**
+     * ⚠️⚠️ 誤検知の歯（これが本命）。
+     *
+     * `waiting` が非空なら、それは「確認は届いていて、クローンがまだ答えて
+     * いないだけ」という**正常な状態**である。一覧には既に「返事待ち
+     * (requestId: …)」の行が出ているので、そこへ ⚠ を重ねると、答えれば済む
+     * ものが異常に見える。**#572 の症状は「クローンの受信箱に一度も現れない」
+     * ことのほうである。**
+     */
+    it('waiting が非空なら ⚠ を出さない（届いていて、まだ答えていないだけの正常な状態）', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.toolUseStallAt = '2026-08-28T09:10:00.000Z';
+      target.toolUseStallPending = [{ id: 'toolu_ask', name: 'AskUserQuestion' }];
+      target.waiting = [
+        {
+          requestId: 'req-1',
+          summary: 'どちらの案にするか',
+          kind: 'question',
+          askedAt: '2026-08-28T09:10:00.000Z',
+        },
+      ];
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('返事待ち(requestId: req-1');
+      expect(reply).not.toContain('道具の応答待ち');
+    });
+
+    /**
+     * 行に `timestamp` が無かっただけで、矛盾そのものは成立している
+     * （`describeTurnEnd` の (A) と同じ原則——「分からない」を「症状では
+     * ない」へ倒さない）。
+     */
+    it('toolUseStallAt が無くても ⚠ を出し、「いつからかは分からない」と読める文言にする', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.toolUseStallPending = [{ id: 'toolu_ask', name: 'AskUserQuestion' }];
+      // toolUseStallAt はセットしない（行に timestamp が無かった形）。
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('⚠ 道具の応答待ちのまま');
+      expect(reply).toContain('いつからかは分からない');
+      expect(reply).not.toContain('undefined');
+    });
+
+    it('name が無い tool_use でも「不明」と分かる形で出し、undefined を出力しない', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.toolUseStallPending = [{ id: 'toolu_noname' }];
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('toolu_noname');
+      expect(reply).not.toContain('undefined');
+    });
+
+    /**
+     * **切ったことは必ず言う**（`MANAGER_WAITING_LIST_LIMIT` と同じ作法）。
+     * 黙って落とすと「3件しか止まっていない」に見える。
+     */
+    it('未応答の道具が上限を超えたら、切ったことと全件数を言う', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.toolUseStallPending = Array.from({ length: 5 }, (_, index) => ({
+        id: `toolu_${index}`,
+        name: 'Bash',
+      }));
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('ほか 2 件、全 5 件');
+    });
+
+    /**
+     * **時刻の閾値を1つも置いていないことの歯。** `manager_list` の出力に
+     * 「何分」「N分以上」のような経過の判定を焼かない——経過を読むのは
+     * 人間であって、この行ではない（`describeToolUseStall` の doc）。
+     */
+    it('⚠ の行は経過時間を判定せず、閾値を置いていないことを明示する', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.toolUseStallAt = '2026-08-28T09:10:00.000Z';
+      target.toolUseStallPending = [{ id: 'toolu_ask', name: 'AskUserQuestion' }];
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('時刻の閾値は置いていない');
+      expect(reply).toContain('timestamp を読んで判断すること');
+    });
+  });
+
+  /**
    * クローンの受信箱（`InboxStore`）の滞留は、`renderListing` の外——一覧
    * 全体に1行だけ添える（#358「答えない問い」のうち、デーモン→クローンの脚）。
    *
@@ -3911,6 +4050,26 @@ describe('クローンの道具', () => {
     // **「常に新しい」とは書いていない**——古い runner は依然 cold になりうる
     // ことも同じ説明文に残っている。
     expect(found?.description).toContain('呼ばない限り一度も warm しない');
+  });
+
+  /**
+   * **道具の説明文（doc ではなく、クローンが毎回読む値そのもの）に、#572 の
+   * ⚠ が何を意味するかが読めること。** JSDoc に書いただけではクローンには
+   * 届かない——上の2本（`resources: true` / 生存確認）と同じ理由の歯である。
+   *
+   * 3つを別々に留める:
+   * - 何を見て出しているのか（`tool_result` が無い）
+   * - **時刻の閾値を置いていない**こと（何分経ったかは判定していない）
+   * - **返事待ちが在るものには出さない**こと（正常な待機を症状と混同させない）
+   */
+  it('manager_list の説明文に、#572 の ⚠（tool_result 未着 / 閾値なし / 返事待ちには出さない）が読める', () => {
+    const stores = createMemoryStores();
+    const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+    const found = tools.find((entry) => entry.name === 'manager_list');
+
+    expect(found?.description).toContain('tool_result');
+    expect(found?.description).toContain('時刻の閾値は置いていない');
+    expect(found?.description).toContain('返事待ちが在るものにはこの行を出さない');
   });
 
   it('委譲先が無い場面（蒸留の内部ターン）は、黙らずにそう返す', async () => {
