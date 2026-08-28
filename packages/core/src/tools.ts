@@ -301,6 +301,15 @@ const MANAGER_WAITING_LIST_LIMIT = 10;
  * 言う**（`denialLine`）。黙って落とすと「3種類しか止められていない」に見える。
  */
 const LIST_DENIED_TOOLS = 3;
+/**
+ * 一覧に添える「応答が返っていない道具」は、この件数まで（Issue #572）。
+ *
+ * **理由は `MANAGER_WAITING_LIST_LIMIT` と同じである。** 1本の assistant 行が
+ * 抱える `tool_use` の件数には上限が無く（並列で道具を回せる）、外側の
+ * `renderListing` は全体の文字数予算しか見ない——ここが伸びると他の
+ * マネージャーが黙って押し出される。**切ったことは必ず言う。**
+ */
+const LIST_TOOL_USE_STALL_LIMIT = 3;
 
 /** `ManagerSummary.waiting` の1件（`@alteroid/core` の `RunnerWaiting` と同じ形）。 */
 type ManagerWaitingItem = ManagerSummary['waiting'][number];
@@ -1068,6 +1077,73 @@ function describeTurnEnd(manager: ManagerSummary): string | null {
     tailNote +
     'まず manager_report を見ること（本文が空でも生ログから拾える）、manager_transcript で' +
     '生ログの全文が読める。**先に manager_start で起こし直さないこと** — 同じ仕事が2本になる。' +
+    'この委譲は止まっていない・切っていない — この助言はデーモンが計算しただけで、' +
+    '委譲は動き続けてよい。'
+  );
+}
+
+/**
+ * 一覧に添える、「**道具の応答待ちのまま、誰も待っていない**」という矛盾への
+ * 助言（Issue #572）。**判定はここで行う** — `ManagerSummary.toolUseStallPending`
+ * の doc が「3条件目との突き合わせは読む側が行う」と書いている、その読む側が
+ * この関数である（`describeTurnEnd` と同じ層の分け方）。
+ *
+ * **切らない・殺さない・止めない。** ここが何を返しても `status` は動かず、
+ * どの委譲も abort しない、貸し出し期限も縮まない——伝えるだけである。
+ *
+ * 3条件（`probeToolUseStall` の doc）:
+ * 1. 生ログの末尾の assistant 行が `stop_reason: 'tool_use'`
+ * 2. その行の `tool_use` に対応する `tool_result` が生ログに無い
+ * 3. **デーモンの `waiting` が空**（＝誰もその応答を待っていない）
+ *
+ * 1・2 は `probeToolUseStall` が生ログから計算して `toolUseStallPending` へ
+ * 載せる。**3 をここで見る。**
+ *
+ * **⚠️ `waiting` が非空なら1文字も出さない。** それは「確認は届いていて、
+ * クローンがまだ答えていないだけ」という**正常な状態**であり、一覧には既に
+ * 「返事待ち(requestId: …)」の行が出ている。そこへ ⚠ を重ねると、答えれば
+ * 済むものが異常に見える。**#572 の症状は「受信箱に一度も現れない」ことの
+ * ほうである。**
+ *
+ * **⚠️ 時刻の閾値を1つも置かない。** 「何分経ったか」はここでは判定しない。
+ * 道具を回しているなら、その応答を待っているのはデーモンのはずである——
+ * **デーモンが待っていないのに SDK が待っているのは、時刻に関係なく矛盾で
+ * ある。** 閾値を置くと、それより短い窓の症状が出力から消える（#572 の実例は
+ * 91 分だったが、それは症状の下限ではない）。**経過は読み手（人間）が
+ * `toolUseStallAt` を読んで判断する。**
+ *
+ * **健全なマネージャーでは1文字も増えない**（`describeTurnEnd` と同じ理由——
+ * 一覧は文字数の予算に張り付いていて、行を1本増やすと出る件数が減る）。
+ */
+function describeToolUseStall(manager: ManagerSummary): string | null {
+  const pending = manager.toolUseStallPending;
+  if (pending === undefined || pending.length === 0) return null;
+  // **3条件目。** 誰かが待っているなら矛盾ではない（正常な返事待ち）。
+  if (manager.waiting.length > 0) return null;
+
+  const shown = pending.slice(0, LIST_TOOL_USE_STALL_LIMIT);
+  const rest = pending.length - shown.length;
+  const names = shown.map((item) => `${item.name ?? '（name 不明）'}(${item.id})`).join(' / ');
+  // **`toolUseStallAt` が無い形をここで潰さない。** 行に `timestamp` が
+  // 無かっただけで、矛盾そのものは成立している（`describeTurnEnd` の (A) と
+  // 同じ原則——「分からない」を「症状ではない」へ倒さない）。
+  const whenNote =
+    manager.toolUseStallAt === undefined
+      ? 'その行に timestamp が無かったので、いつからかは分からない'
+      : `その行の timestamp は ${manager.toolUseStallAt}`;
+
+  return (
+    '  ⚠ 道具の応答待ちのまま、誰もその応答を待っていない（矛盾）。' +
+    `生ログの末尾の assistant 行が stop_reason: tool_use で、対応する tool_result が生ログに無く、` +
+    `かつデーモン側の返事待ち（waiting）が空である。未応答の道具: ${names}` +
+    (rest > 0 ? `（ほか ${rest} 件、全 ${pending.length} 件）` : '') +
+    `。${whenNote}。` +
+    '**時刻の閾値は置いていない** — 何分経ったかはこの行では判定していないので、' +
+    'timestamp を読んで判断すること。' +
+    '道具を回しているなら応答を待っているのはデーモンのはずなので、' +
+    '確認がデーモンまで届いていない（＝クローンの受信箱にも現れない）可能性がある。' +
+    'manager_transcript で生ログの末尾を確かめること。' +
+    '**先に manager_start で起こし直さないこと** — 同じ仕事が2本になる。' +
     'この委譲は止まっていない・切っていない — この助言はデーモンが計算しただけで、' +
     '委譲は動き続けてよい。'
   );
@@ -3764,6 +3840,15 @@ export function createCloneTools(context: ToolContext) {
           '読まないこと。0件だったか、まだ観測していないかのどちらかである。出ている行も' +
           '観測した時点の値であって現在値ではないので、最新の値が要るなら runner_list を' +
           'resources: true で呼び直すこと。',
+        // **#572**: 「道具の応答待ちのまま、誰も待っていない」の ⚠ が何を
+        // 意味するかを、道具の説明文（クローンが毎回読む値そのもの）にも
+        // 書く。JSDoc に書いてもクローンには届かない（`resources: true` の
+        // 説明文を足したときと同じ理由。`tools.test.ts` に歯が在る）。
+        '生ログの末尾が stop_reason: tool_use のまま対応する tool_result が無く、かつ返事待ちが空の' +
+          'ものには ⚠ の行が出る（道具を回しているなら、その応答を待っているのはデーモンのはずなので、' +
+          'これは矛盾である）。この行に時刻の閾値は置いていない——何分経ったかは判定していないので、' +
+          '行に出ている timestamp を読んで判断すること。返事待ちが在るものにはこの行を出さない' +
+          '（確認は届いていて、クローンがまだ答えていないだけの正常な状態である）。',
       ].join(' '),
       {},
       async () => {
@@ -3940,6 +4025,15 @@ export function createCloneTools(context: ToolContext) {
               // 予算に張り付いている一覧で行を1本増やすと出る件数が減るため
               // （すぐ上の `lastReport` 行の doc と同じ理由）。
               describeTurnEnd(manager),
+              // **Issue #572**: 「道具の応答待ちのまま、誰も待っていない」という
+              // 矛盾を、条件つきで添える（`describeToolUseStall` の doc）。
+              // **`describeTurnEnd` とは同時に出ない**——あちらは末尾の
+              // `stop_reason` が `tool_use` **以外**のとき、こちらは `tool_use`
+              // のときにだけ材料が立つ（`ManagerPool#probeTurnEndOf` の doc）。
+              // **健全なマネージャーでは `null` を返し、1文字も増えない。**
+              // **返事待ち（`waiting`）が在るものにも出さない**——それは届いて
+              // いて、クローンがまだ答えていないだけの正常な状態である。
+              describeToolUseStall(manager),
             ],
           }),
         );
