@@ -404,6 +404,31 @@ describe('器が黙ったことは、`status` を動かさずに添える', () =
   });
 
   /**
+   * **「塞いでいない」を無条件に言わない。** 実測 #4（`packages/core` の足場で
+   * 走らせた書き捨ての試験）: 名簿が `lost` の器でも、**`session_id` を持たない
+   * 相手には送信が届かない** —— `outcome` は `unknown`、detail は「session_id を
+   * 持っておらず、続きへ戻れない。新しく起こし直すこと。」で、**runner は一度も
+   * 叩かれない**（`[]`）。画面の側も `SendMessage` の `noWayBack` がボタンを
+   * 塞ぐ。
+   *
+   * ⟹ 条件（「戻る先（session_id）が在れば」）を落として無条件の「塞いでいない」に
+   * すると、**一覧の側で嘘になる**。詳細には `DisconnectedNote` が同じ断りを
+   * 持っているが、**一覧にはこの注記しか無い。**
+   *
+   * **この歯は変異試験で生存が出たので足した**（`n4-drop-session-id-condition`）。
+   * 条件を落とす変異は、他のどの歯でも死ななかった。
+   */
+  it('「塞いでいない」を無条件に言わず、戻る先（session_id）を条件として言う', async () => {
+    renderManagers([{ ...BASE, status: 'running', live: false, runnerLostSince: LOST_SINCE }]);
+
+    expect(await screen.findByText(/宛先の器は.*から名乗っていない/)).toBeTruthy();
+    // ここが落ちたら、送信できない相手にも「塞いでいない」と言っている。
+    expect(screen.getByText(/戻る先（session_id）が在れば/)).toBeTruthy();
+    // 成否も断定しない（実測では delivered / session_missing / unknown が出た）。
+    expect(screen.getByText(/届くとは限らない/)).toBeTruthy();
+  });
+
+  /**
    * **`sessionMissingSince` とは「失われたと書かない理由」が違う。** あちらは
    * 「完遂した後に畳まれた回と区別できない」、こちらは「器の中でまだ走っている
    * 可能性が残る」。核を取り違えたら赤くなる。
