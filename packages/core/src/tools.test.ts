@@ -4603,12 +4603,19 @@ describe('runner_list（器の一覧）', () => {
     const reply = await h.call('runner_list', { resources: true });
 
     expect(reply).toContain('pids: 872 / 1000');
+    // **4文字の字下げまで含めて否定する。** 末尾の注記（「対応している runner なら
+    // ゾンビ/生存・ゾンビの comm 別・いちばん古いゾンビの年齢が出る」）が同じ語を
+    // 含むので、語だけで否定すると器ごとのブロックではなく注記のほうに当たって落ちる。
+    // 見たいのは「器のブロックにその行が出ていないこと」である。
     expect(reply).not.toContain('内訳:');
-    expect(reply).not.toContain('ゾンビの comm');
-    expect(reply).not.toContain('いちばん古いゾンビ');
+    expect(reply).not.toContain('    ゾンビの comm');
+    expect(reply).not.toContain('    いちばん古いゾンビ');
   });
 
-  /** ゾンビが0本なら `zombieCommands` / `oldestZombieSeconds` は欄ごと省かれる——その省き方どおり出る。 */
+  /**
+   * ゾンビが0本なら `zombieCommands` / `oldestZombieSeconds` は欄ごと省かれる——その省き方どおり出る。
+   * 否定を4文字の字下げ込みで書く理由は、直前のテストのコメントに在る。
+   */
   it('ゾンビが0本の tasks では、comm 別集計といちばん古いゾンビの行が出ない', async () => {
     const h = harness();
     h.setRunnersOverview({
@@ -4633,8 +4640,8 @@ describe('runner_list（器の一覧）', () => {
     const reply = await h.call('runner_list', { resources: true });
 
     expect(reply).toContain('内訳: ゾンビ 0 / 生存 40（40プロセス）');
-    expect(reply).not.toContain('ゾンビの comm');
-    expect(reply).not.toContain('いちばん古いゾンビ');
+    expect(reply).not.toContain('    ゾンビの comm');
+    expect(reply).not.toContain('    いちばん古いゾンビ');
   });
 });
 
