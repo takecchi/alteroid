@@ -3450,16 +3450,30 @@ describe('クローンの道具', () => {
   /**
    * クローンの受信箱（`InboxStore`）の滞留は、`renderListing` の外——一覧
    * 全体に1行だけ添える（#358「答えない問い」のうち、デーモン→クローンの脚）。
-   * **0件のときは1文字も出さない**（AGENTS.md「取れない軸に0の行を作る」の
-   * 逆方向——「詰まっていない」という健全な行を毎回積み重ねない）。
+   *
+   * **かつては0件のとき1文字も出さなかった**（AGENTS.md「取れない軸に0の
+   * 行を作る」の逆方向のつもりで——「詰まっていない」という健全な行を毎回
+   * 積み重ねない、という理由だった）。
+   *
+   * **#562 でこの期待値を反転した。** `context.stores.inbox.pending()` は
+   * 呼ぶたびにストアを実際に読む生の値で、キャッシュでも「観測できたか」の
+   * 付帯情報も持たない——**0はここでは本物の測定値であり、「取れない軸」
+   * には当たらない**（`describeInboxBacklog` の doc）。0のとき行を消して
+   * いた結果、「滞留0」と「この道具はその行を出さない」が出力上で同じ顔に
+   * なっていた——それこそが #562 の症状そのものである。**runner 側
+   * （`describeRunnerBacklog`）はキャッシュで「0件か未観測か」を区別できない
+   * ので、あちらは直していない**（非対称性は意図的。同 doc 参照）。
    */
-  it('manager_list は受信箱に未処理が無ければ、その注記を1文字も出さない', async () => {
+  it('manager_list は受信箱に未処理が無くても、0件であることを1行で出す（#562）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
 
     const reply = await h.call('manager_list', {});
 
-    expect(reply).not.toContain('受信箱');
+    expect(reply).toContain('受信箱');
+    expect(reply).toContain('無い');
+    // 滞留0は警告ではない——⚠ は「未処理がある」ときだけの印にする。
+    expect(reply).not.toContain('⚠ クローンの受信箱');
   });
 
   it('manager_list は受信箱に未処理があれば、件数と最も古い時刻を1行で出す', async () => {
@@ -3491,6 +3505,8 @@ describe('クローンの道具', () => {
     expect(reply).toContain('受信箱');
     expect(reply).toContain('2 件');
     expect(reply).toContain('2026-08-24T00:00:00.000Z');
+    // 未処理があるときは、引き続き ⚠ 付きの文言のまま（0件のときとの対比）。
+    expect(reply).toContain('⚠ クローンの受信箱');
     // put しか呼んでいない——claimPending の副作用（配達回数を進める）を
     // 経由していないことの裏取り。
     expect(await h.stores.inbox.pending()).toEqual({

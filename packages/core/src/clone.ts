@@ -2348,7 +2348,10 @@ class Clone implements CloneHost {
           event.kind === 'report'
             ? await reportSettlement(this.#stores.commitments, event.id)
             : { kind: 'unknown' };
-        await this.#runInternal(managerPrompt(event, liveness, settlement));
+        // **`now` はここで1度だけ取り、`managerPrompt` の中では取らない**（#562）。
+        // `managerPrompt` を純関数のまま保つ ——歯に `now` を固定して渡せる形で
+        // なければ、経過を測るテストが時刻に依存して揺れる。
+        await this.#runInternal(managerPrompt(event, liveness, settlement, new Date()));
         return;
       }
 
@@ -4085,6 +4088,68 @@ function closedReportNotice(settlement: ReportSettlement): string | null {
 }
 
 /**
+ * 「受け取ってからどれだけ経ったか」を丸めて言う（#562）。
+ *
+ * ## `at` は「書かれた時刻」ではない
+ *
+ * `event.at` は `Clone#post()` が受理した時点の時刻であって、マネージャーが
+ * その報告を**書いた**時刻ではない（`post()` の doc。受信箱へ積む前に走る
+ * `#commit` もこの同じ `at` を使う）。**だから文言は「受け取ってから」
+ * 「受け取った時刻」で書く** — 「書かれてから」「書かれた時刻」は測っていない
+ * 値を名乗ることになる。
+ *
+ * ## 閾値を設けない
+ *
+ * 経過が短くても必ず1行を出す。閾値で「古いときだけ出す」形にすると、**新しい
+ * 報告に行が出ないのと、この機能自体が無いのとが出力上で同じ顔になる** ——
+ * それは同じ #562 が直そうとしているもう一方のバグ（`tools.ts` の
+ * `describeInboxBacklog` が0件で行そのものを消していたこと）とまったく同じ形
+ * である。**同じ PR で片方を「常に出す」に直しながら、こちらを「閾値超えの
+ * ときだけ出す」に作り込むと、直したはずの形をここで再現することになる。**
+ *
+ * ## `at` そのものも一緒に出す
+ *
+ * 丸めた値（「約2分」等）だけでは、クローンが日誌・台帳の他のタイムスタンプと
+ * 突き合わせられない。ISO 文字列のままの値を必ず併記する。
+ *
+ * ## 壊れた `at` に嘘の値を出さない
+ *
+ * `event.at` が parse できない、または `now` より未来（時計のずれ・順序の乱れ）
+ * のときは、`NaN` や負の経過を出さず、**取れない理由を書く**（AGENTS.md
+ * 「取れない軸に0の行を作る」と同じ考え方。`lease.ts` の `undecidable` の
+ * doc「読めない時刻で断言しない」も同型）。
+ *
+ * ## `now` を引数で受け取る
+ *
+ * `managerPrompt` を純関数のまま保つため、ここでも `new Date()` を直接
+ * 呼ばない。呼び出し元（`#handle` の `'manager_message'` 分岐）から渡す。
+ */
+function describeReportAge(at: string, now: Date): string {
+  const receivedMs = Date.parse(at);
+  if (Number.isNaN(receivedMs)) {
+    return `受け取った時刻（${at}）を解析できないため、経過は測れない。`;
+  }
+  const elapsedMs = now.getTime() - receivedMs;
+  if (elapsedMs < 0) {
+    return `受け取った時刻（${at}）が現在時刻より未来のため、経過は測れない。`;
+  }
+  return `受け取ってから${formatElapsed(elapsedMs)}経過（受け取った時刻: ${at}）。`;
+}
+
+/** 経過ミリ秒を秒／分／時間／日で丸める（{@link describeReportAge} 専用）。 */
+function formatElapsed(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 1) return '1秒未満';
+  if (seconds < 60) return `${seconds}秒`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `約${minutes}分`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `約${hours}時間`;
+  const days = Math.floor(hours / 24);
+  return `約${days}日`;
+}
+
+/**
  * `event`（質問・許可確認）が、いまも `managers.list()` の `waiting` に載って
  * いるかを確かめる。
  *
@@ -4138,11 +4203,17 @@ async function confirmationLiveness(
  *
  * `liveness` は `kind` が `question` / `permission` のときだけ意味を持つ
  * （`confirmationLiveness` の doc）。`report` では読まない。
+ *
+ * `now` は `report` のときだけ意味を持つ（{@link describeReportAge}）。
+ * **純関数として保つため、ここでは `new Date()` を呼ばない** ——呼び出し元
+ * （`#handle` の `'manager_message'` 分岐）から渡す。既定値は本番の呼び出しを
+ * 短く保つためのものであって、テストは明示的に `now` を渡して固定すること。
  */
 function managerPrompt(
   event: Extract<InboxEvent, { type: 'manager_message' }>,
   liveness: ConfirmationLiveness,
   settlement: ReportSettlement = { kind: 'unknown' },
+  now: Date = new Date(),
 ): string {
   const head = `[system] マネージャー ${event.managerId} から届いた。`;
 
@@ -4153,8 +4224,11 @@ function managerPrompt(
       '',
       event.text,
       '',
-      // **印は本文の後ろ、指示の前に置く**（#391）。本文より前に置くと「読まなく
-      // てよい」と読まれて本文を飛ばされる —— 本文を残した意味が消える。
+      // **経過も印も、本文の後ろ・指示の前に置く**（#391 と同じ規則。
+      // 本文より前に置くと「読まなくてよい」と読まれて本文を飛ばされる ——
+      // 本文を残した意味が消える）。
+      describeReportAge(event.at, now),
+      '',
       ...(closed === null ? [] : [closed, '']),
       '続きが要るなら `manager_send` で指示を出し、要らないなら何もしなくてよい。',
       '学びや判断の基準になったことがあれば記憶へ移すこと。',
