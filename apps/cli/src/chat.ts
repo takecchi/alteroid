@@ -1393,6 +1393,24 @@ export function renderManagerList(managers: ManagerListItem[]): string {
           '黙っているのが器なのか経路なのかは、ここからは言えない',
       );
     }
+    // **`runnerLostSince` とは別の欄である（#563）。** あちらは器が黙った
+    // （`live` が落ちる）。こちらは**器は答えている**が、この委譲のセッションだけが
+    // 無い——`sessionId` が在れば resume から入り直せるので `live` は落ちない。
+    // ⟹ 状態は `[running]` のままで、この行だけが5つ目の形を名指しする。
+    //
+    // **「失われた」と読ませない。** 完遂した後にセッションが畳まれ、終端イベント
+    // だけが届かなかった回も同じ形に見え、デーモンには区別する材料が無い
+    // （`packages/core/src/manager.ts` の `sendFailureDetail` の doc）。
+    if (manager.sessionMissingSince !== undefined) {
+      lines.push(
+        `      ⚠ 宛先の runner は ${manager.sessionMissingSince} の時点で、この委譲のセッションを持っていなかった` +
+          '（runner がそう答えた。聞けなかったのではない）。' +
+          '**この委譲が失われたという意味ではない** — ' +
+          '完遂した後にセッションが畳まれ、終端の合図だけが届かなかった回も同じ形に見える。' +
+          'まず /manager で生ログを確かめること（報告が届いていなくても、' +
+          'そこに書き終えた報告が残っていることがある）。話しかければ resume から入り直す',
+      );
+    }
     // **`lost` を状態名だけで済ませない。** クローン（`manager_list`）と Web UI には
     // 但し書きが出るのに、ここだけ `[lost]` としか出ていなかった＝同じ状態を見て
     // 人間とクローンが違う判断をする形になっていた。
