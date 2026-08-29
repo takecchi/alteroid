@@ -2425,7 +2425,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
       expect(secondText).toContain(
         `前回の tick から +${expectedDiff.toLocaleString('en-US')} 文字。`,
       );
-      expect(secondText).toContain('⚠️ 線（セッション構築時点から +10%）を超えている。');
+      expect(secondText).toContain('⚠️ 線（セッション構築時点から +10%）に達している。');
 
       await s.clone.stop();
     });
@@ -2460,6 +2460,56 @@ describe('クローン — 自律（人間以外の起点）', () => {
       // 差分そのものは出るが、線の印は出ない。
       expect(secondText).toMatch(/前回の tick から \+\d/);
       expect(secondText).not.toContain('⚠️ 線（');
+
+      await s.clone.stop();
+    });
+
+    /**
+     * **線ちょうど（+10.0%）でも印が出る**（`>` ではなく `>=` である、の側）。
+     *
+     * 依頼者（クローン）が自分の記憶へ書いている語が「+10% に**達した**ので
+     * 畳んだ」であること、そして「+10.0% と表示しながら印が出ない」という
+     * 表示と判定の食い違いを作らないことの2つが理由（`#memoryFloorDigestLine`
+     * の doc）。**境界そのものを測る歯なので、境界に居ることを歯自身が
+     * 確かめる**——丸めた百分率がちょうど 10.0 でなければ、この歯は境界を
+     * 測っていないことになるので落ちる。
+     */
+    it('線ちょうど（+10.0%）でも印が出る（線に達したら印、の側）', async () => {
+      const stores = createMemoryStores();
+      await stores.persona.write('note', `# Note\n\n${'a'.repeat(5_000)}\n`);
+      const s = setup(() => 'わかった', stores);
+      const call = () => s.calls[0];
+
+      s.clone.post({
+        type: 'self_initiative',
+        id: 'evt-exact-1',
+        at: new Date().toISOString(),
+        reason: '1本目',
+      });
+      await expect.poll(() => (call()?.inputs.length ?? 0) === 1, { timeout: 3000 }).toBe(true);
+
+      // 1本目の tick が組んだセッションの基準。
+      const baseline = measureMemoryFloor(await stores.persona.documents()).totalChars;
+      await stores.persona.write(
+        'note',
+        `# Note\n\n${'a'.repeat(5_000 + Math.round(baseline * 0.1))}\n`,
+      );
+
+      // **歯自身が境界に居ることを確かめる。** 実装と同じ丸め方
+      // （小数第1位）で、ちょうど 10.0 になっていること。
+      const grown = measureMemoryFloor(await stores.persona.documents()).totalChars;
+      expect(Math.round(((grown - baseline) / baseline) * 100 * 10) / 10).toBe(10);
+
+      s.clone.post({
+        type: 'self_initiative',
+        id: 'evt-exact-2',
+        at: new Date().toISOString(),
+        reason: '2本目',
+      });
+      await expect.poll(() => (call()?.inputs.length ?? 0) === 2, { timeout: 3000 }).toBe(true);
+      expect(call()?.inputs[1] ?? '').toContain(
+        '⚠️ 線（セッション構築時点から +10%）に達している。',
+      );
 
       await s.clone.stop();
     });

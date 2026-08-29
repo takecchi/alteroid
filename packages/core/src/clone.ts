@@ -3154,13 +3154,23 @@ class Clone implements CloneHost {
    * の `try/catch` と同じ規律）。この回は `#lastTickMemoryFloorChars` /
    * `#lastTickMemoryBaselineChars` のどちらも更新しない。
    *
-   * ## 線の判定は丸めた後の値で行う
+   * ## 線の判定は丸めた後の値で行う。そして**線に達したら**印を出す
    *
    * `describeMemorySessionDelta` が表示する百分率は小数第1位で丸めている
-   * （`memory.ts` の `formatMemoryPercentDelta`）ので、線を超えたかの判定も
+   * （`memory.ts` の `formatMemoryPercentDelta`）ので、線に達したかの判定も
    * 同じ丸め方をした値で行う——生の値で判定すると「+10.0%」と表示されて
-   * いるのに「超えていない」と書く矛盾を作りうる。線の印は**超えている間
-   * ずっと出す**（越えた最初の1回だけにしない——依頼者の明示指定）。
+   * いるのに印が出ない、という表示と判定の食い違いを作りうる。
+   *
+   * **比較は `>` ではなく `>=` である**（依頼者の明示指定）。読み手（クローン）
+   * が自分の記憶へ毎回書いている語が「床が構築時点から +10% に**達した**ので
+   * 畳んだ」であり、「超えた」ではないため——判定の側を読み手の語に合わせる。
+   * 文言も「超えている」ではなく「達している」にしてある（`>=` のまま
+   * 「超えている」と書くと、ちょうど線上の回に嘘を書くことになる）。
+   * **稀にしか起きない境界だが、倒す費用が0に近い側へ倒してある**——この印の
+   * 読み手は1人で、表示と判定が食い違う形はその1人の判断を1回誤らせる。
+   *
+   * 線の印は**達している間ずっと出す**（達した最初の1回だけにしない——
+   * 依頼者の明示指定）。
    */
   async #memoryFloorDigestLine(): Promise<string> {
     let documents: MemoryDocument[];
@@ -3185,9 +3195,9 @@ class Clone implements CloneHost {
     const thresholdNote =
       injectedMemoryChars === 0
         ? '基準がまだ無いので線の判定は出せない。'
-        : roundToOneDecimal(((afterChars - injectedMemoryChars) / injectedMemoryChars) * 100) >
+        : roundToOneDecimal(((afterChars - injectedMemoryChars) / injectedMemoryChars) * 100) >=
             MEMORY_FLOOR_SESSION_GROWTH_LINE_PERCENT
-          ? `⚠️ 線（セッション構築時点から +${MEMORY_FLOOR_SESSION_GROWTH_LINE_PERCENT}%）を超えている。`
+          ? `⚠️ 線（セッション構築時点から +${MEMORY_FLOOR_SESSION_GROWTH_LINE_PERCENT}%）に達している。`
           : '';
 
     const rebasedNote =
