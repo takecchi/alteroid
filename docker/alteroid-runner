@@ -68,8 +68,12 @@ unset ALTEROID_GOOGLE_CLIENT_SECRET
 # 後のこのシムの内側から `exec` する。**
 #
 # **なぜ `-g` を付けないのか。** `-g` は SIGTERM をプロセスグループ全体へ転送する。
-# デーモンは生ログをこの runner へ渡し切るための60秒の猶予を置いている
-# （Railway `drainingSeconds: 60`）。プロセスグループ全体へ即転送すると、この
-# 猶予をここで頭から潰すことになる。tini は既定でも子（node 1プロセス）へは
-# SIGTERM を転送するので、`-g` が無くても停止自体は届く。
+# **この runner が畳まれるとき、走行中のマネージャーを畳んで生ログをデーモンへ
+# 渡し切るための猶予が60秒ある**（`railway/runner.json` の `drainingSeconds: 60`、
+# `compose.yaml` の `stop_grace_period: 60s`。理由は railway/README.md「畳む時間を
+# 渡す」）。**渡し切る側はこの runner であって、デーモンではない。** `-g` を付けて
+# プロセスグループ全体へ即転送すると、その渡し切りを担うマネージャーの子プロセス
+# ごとここで畳むことになり、猶予を頭から潰す。tini は既定でも直接の子（node 1
+# プロセス）へは SIGTERM を転送するので、`-g` が無くても停止そのものは届く
+# （node 側は SIGTERM から55秒で自分に見切りをつける。同じ README の同じ節）。
 exec tini -- node /app/apps/runner/dist/index.js "$@"
