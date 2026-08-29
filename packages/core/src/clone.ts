@@ -31,7 +31,11 @@ import type { CloneHost } from './host.js';
 import { createRunnerRegistry, type RunnerClient } from './runner-protocol.js';
 import { Inbox } from './inbox.js';
 import { createManagerPool, type ManagerPool, type ManagerSummary } from './manager.js';
-import { renderMemoryDocuments } from './memory.js';
+import {
+  describeMemorySessionDelta,
+  measureMemoryFloor,
+  renderMemoryDocuments,
+} from './memory.js';
 import { placedModelTier, resolveModelTier } from './model-tier.js';
 import {
   placedPermissionMode,
@@ -252,6 +256,37 @@ const DISTILL_TRANSCRIPT_TAIL_BYTES = 60_000;
 
 /** 発意 tick と定期ジョブに渡す「直近」の幅。 */
 const RECENT_DIGEST_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * 「記憶の床」の1行（#553 F2）で、セッション構築時点からの増分（%）が
+ * これを超えたら ⚠️ を付ける線。**暫定値である** — 依頼者の明示指定で、
+ * 実測に基づく調整はまだ行っていない。畳むことを強制する線ではなく、
+ * 読む側が気づく契機を作るためだけの数（`#memoryFloorDigestLine` の doc）。
+ */
+const MEMORY_FLOOR_SESSION_GROWTH_LINE_PERCENT = 10;
+
+/**
+ * 文字数を `en-US` の桁区切りで表す。`memory.ts` の `formatMemoryCharCount`
+ * と同じ書式だが、あちらは export されていない（`AGENTS.md` の指示で
+ * export しに行かない）ので、ここに同等のものを書く。
+ */
+function formatMemoryCharCountLocal(value: number): string {
+  return value.toLocaleString('en-US');
+}
+
+/** 増減の文字数。0 以上には `+` を付ける（`memory.ts` の `formatMemoryCharDelta` と同じ書式）。 */
+function formatSignedMemoryCharCount(delta: number): string {
+  return delta >= 0 ? `+${formatMemoryCharCountLocal(delta)}` : formatMemoryCharCountLocal(delta);
+}
+
+/**
+ * 小数第1位で丸める。`memory.ts` の `formatMemoryPercentDelta` と同じ丸め方
+ * ——線を超えたかの判定を、表示する百分率と同じ丸め方で行うためにここへ
+ * 複製する（`#memoryFloorDigestLine` の doc「線の判定は丸めた後の値で行う」）。
+ */
+function roundToOneDecimal(value: number): number {
+  return Math.round(value * 10) / 10;
+}
 
 /** 日報が既に書かれたかを確かめるときに遡る件数。 */
 const DAILY_REPORT_LOOKUP = 30;
@@ -614,6 +649,26 @@ class Clone implements CloneHost {
    * を組み立てた時点」の値であり、動く数を渡せばその場で嘘になる。
    */
   #promptMemoryChars = 0;
+
+  /**
+   * 直近の tick（`self_initiative` / `timer`）が測った「記憶の床」の絶対値
+   * （`measureMemoryFloor(...).totalChars`）。`null` は「まだこのプロセスで
+   * 一度も測れていない」（＝前回の tick が無い、または在っても測定に失敗した）。
+   *
+   * **永続化しない。** 器が再起動すればここは失われ、再起動後の最初の tick は
+   * 「前回の tick が無い」として扱われる——それが正しい（#553 F2、依頼者の
+   * 明示指定）。測定に失敗した回は更新しない（`#memoryFloorDigestLine` の doc）。
+   */
+  #lastTickMemoryFloorChars: number | null = null;
+  /**
+   * 直近の tick が見た `#promptMemoryChars`（＝そのときの「セッション構築時点」
+   * の基準）。`#lastTickMemoryFloorChars` と対で更新する。
+   *
+   * これを次回の tick 時点の `#promptMemoryChars` と突き合わせることで、
+   * 「セッションが組み直されて基準が取り直された」（resume 等）を検出する
+   * （`#memoryFloorDigestLine` の doc）。**この値も永続化しない。**
+   */
+  #lastTickMemoryBaselineChars: number | null = null;
 
   readonly #inbox = new Inbox();
   readonly #listeners = new Map<string, Set<Listener>>();
@@ -3014,8 +3069,21 @@ class Clone implements CloneHost {
     }
   }
 
-  /** 発意・定期ジョブに渡す直近の状況。 */
+  /**
+   * 発意・定期ジョブに渡す直近の状況。**先頭に「記憶の床」の1行が付く**
+   * （#553 F2）。日報はこれを呼ばない——`#recentDigestBare` を直接呼ぶ
+   * （`#dailyReport` の doc）。
+   */
   async #recentDigest(): Promise<string> {
+    return `${await this.#memoryFloorDigestLine()}\n\n${await this.#recentDigestBare()}`;
+  }
+
+  /**
+   * `#recentDigest` から「記憶の床」の1行を除いた本体。日報（`#dailyReport`）
+   * が呼ぶのはこちら——tick という区切りに数を出す仕組みであって、日報は
+   * その区切りではない（依頼者の明示指定。#553 F2）。
+   */
+  async #recentDigestBare(): Promise<string> {
     try {
       return await buildActivityDigest(
         this.#stores,
@@ -3025,6 +3093,121 @@ class Clone implements CloneHost {
     } catch (error) {
       return `（直近の状況をまとめられなかった: ${String(error)}）`;
     }
+  }
+
+  /**
+   * tick の digest の先頭に載せる「記憶の床」の1行（#553 F2）。
+   *
+   * ## 目的（依頼者の明示指定）
+   *
+   * 書き込みを止める門ではない。畳むことを強制しない。**tick という区切りに
+   * 数が在れば読む**、という1点のためだけに、文字列を1行足すだけである。
+   * 判断（畳むかどうか）は常にクローンが下す——`describeMemorySessionDelta`
+   * の doc の「閾値を置かない」と同じ理由。
+   *
+   * ## 使う計器は書き込み応答と同じもの
+   *
+   * `describeMemorySessionDelta`（`memory.ts`）をそのまま呼ぶ——`tools.ts` の
+   * `memorySessionGrowthNote`（`memory_write` 等の応答）が使っているのと同じ
+   * 関数である。書き込み応答の計器と tick の計器が違う値を出すと、どちらを
+   * 信じるかという要らない判断が増える。
+   *
+   * ## 分母は `#promptMemoryChars`、床の絶対値は `measureMemoryFloor`
+   *
+   * 軸は「セッション構築時点からの増分（%）」。分母（セッション構築時点の値）
+   * は `#promptMemoryChars`——**セッションの間は固定**の値であり、実際に
+   * いま払っている額そのもの（`describeMemorySessionDelta` の doc「なぜ
+   * セッション構築時点を基準にするか」と同じ理由）。床の絶対値は
+   * `measureMemoryFloor(await this.#stores.persona.documents()).totalChars`
+   * ——毎ターン焼き込みに実際に載る分量そのもの。
+   *
+   * ## `#promptMemoryChars === 0`（まだセッションが組まれていない）
+   *
+   * tick は `#runInternal`（＝ `#ensureQuery`）より**前**に digest を作るので、
+   * プロセス起動後・最初のセッションがまだ組まれていない tick が実在しうる。
+   * このとき `#promptMemoryChars` は「セッション構築時点との差」を計れる値
+   * ではなく、単に「まだ組まれていない」ことを意味する——0文字の基準が
+   * 実在するのと区別が付かない値なので、**`describeMemorySessionDelta` へは
+   * `injectedMemoryChars: null` を渡す**（現在値だけを出し、それが構築時点
+   * との差ではないと明記する既存の文言に倒れる）。線の判定も出さない——
+   * 「基準がまだ無いので線の判定は出せない」と書く（`0` を基準として
+   * 「n 文字増えた」と名乗らせない。AGENTS.md 地雷表「取れない軸に 0 の
+   * 行を作る」）。
+   *
+   * ## 前回の tick との差分
+   *
+   * `#lastTickMemoryFloorChars` に、直近の tick が測った床の絶対値を控えて
+   * おく。**永続化しない**——器が再起動すれば失われ、再起動後の最初の tick は
+   * 「前回の tick が無い」として扱う（依頼者の明示指定。それが正しい）。
+   * 測定に失敗した回はこの値を更新しない——「前回」の意味を「直近の
+   * *成功した* 測定」に保つため。
+   *
+   * ## 基準が取り直された（resume 等）
+   *
+   * `#lastTickMemoryBaselineChars`（前回 tick 時点の `#promptMemoryChars`）と
+   * 今回の値が食い違うなら ⚠️ を足す。**両方が0でなく、かつ違うときだけ**
+   * 発火する（私の判断——0 は「まだセッションが無い」を表す番人の値であって
+   * 「基準が0文字だった」という実在の基準ではないので、0 が絡む食い違いは
+   * この「取り直された」の対象にしない。0→非0 は単なる初回の確立であって、
+   * resume が作る「% が説明なく下がる」驚きには当たらない）。
+   *
+   * ## 床が測れなかった
+   *
+   * `persona.documents()` が投げたら、「測れなかった＋理由」だけを書き、
+   * 数を1つも作らない。digest 全体は落とさない（既存の `#recentDigestBare`
+   * の `try/catch` と同じ規律）。この回は `#lastTickMemoryFloorChars` /
+   * `#lastTickMemoryBaselineChars` のどちらも更新しない。
+   *
+   * ## 線の判定は丸めた後の値で行う
+   *
+   * `describeMemorySessionDelta` が表示する百分率は小数第1位で丸めている
+   * （`memory.ts` の `formatMemoryPercentDelta`）ので、線を超えたかの判定も
+   * 同じ丸め方をした値で行う——生の値で判定すると「+10.0%」と表示されて
+   * いるのに「超えていない」と書く矛盾を作りうる。線の印は**超えている間
+   * ずっと出す**（越えた最初の1回だけにしない——依頼者の明示指定）。
+   */
+  async #memoryFloorDigestLine(): Promise<string> {
+    let documents: MemoryDocument[];
+    try {
+      documents = await this.#stores.persona.documents();
+    } catch (error) {
+      return `記憶の床: 測れなかった（理由: ${String(error)}）。`;
+    }
+
+    const afterChars = measureMemoryFloor(documents).totalChars;
+    const injectedMemoryChars = this.#promptMemoryChars;
+    const sessionDelta = describeMemorySessionDelta({
+      afterChars,
+      injectedMemoryChars: injectedMemoryChars === 0 ? null : injectedMemoryChars,
+    });
+
+    const tickDiffNote =
+      this.#lastTickMemoryFloorChars === null
+        ? '前回の tick が無いので差分は出せない（このプロセスでの最初の tick）。'
+        : `前回の tick から ${formatSignedMemoryCharCount(afterChars - this.#lastTickMemoryFloorChars)} 文字。`;
+
+    const thresholdNote =
+      injectedMemoryChars === 0
+        ? '基準がまだ無いので線の判定は出せない。'
+        : roundToOneDecimal(((afterChars - injectedMemoryChars) / injectedMemoryChars) * 100) >
+            MEMORY_FLOOR_SESSION_GROWTH_LINE_PERCENT
+          ? `⚠️ 線（セッション構築時点から +${MEMORY_FLOOR_SESSION_GROWTH_LINE_PERCENT}%）を超えている。`
+          : '';
+
+    const rebasedNote =
+      this.#lastTickMemoryBaselineChars !== null &&
+      this.#lastTickMemoryBaselineChars !== 0 &&
+      injectedMemoryChars !== 0 &&
+      this.#lastTickMemoryBaselineChars !== injectedMemoryChars
+        ? `⚠️ セッションが組み直されて基準が ${formatMemoryCharCountLocal(this.#lastTickMemoryBaselineChars)} → ${formatMemoryCharCountLocal(injectedMemoryChars)} 文字へ取り直された（% が下がったのは畳んだからではない）。`
+        : '';
+
+    this.#lastTickMemoryFloorChars = afterChars;
+    this.#lastTickMemoryBaselineChars = injectedMemoryChars;
+
+    return ['記憶の床:', sessionDelta, tickDiffNote, thresholdNote, rebasedNote]
+      .filter((part) => part !== '')
+      .join(' ');
   }
 
   /**
@@ -3049,7 +3232,7 @@ class Clone implements CloneHost {
     const range = localDayRange(date);
     const digest =
       range === null
-        ? await this.#recentDigest()
+        ? await this.#recentDigestBare()
         : await buildActivityDigest(this.#stores, range, await this.#managerLiveness()).catch(
             (error: unknown) => `（この日の記録をまとめられなかった: ${String(error)}）`,
           );
