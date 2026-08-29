@@ -66,6 +66,13 @@ FROM node:22-bookworm-slim AS runtime
 # `gh` をマネージャーに持たせることになり、その遅れがそのままデグレードになる
 # （新しい subcommand が「マネージャーだと使えない」として現れる）。版を揃える必要が
 # 出たら、固定するのは `gh` 単体ではなくベースイメージごとである。
+#
+# **`tini` は runner の pid 1 になる init である（#315）。** `docker/alteroid-runner`
+# が起動の最後で `exec tini -- node …` する（理由と `-g` を付けない理由はそのシムの
+# 側に書いてある）。ここでは Debian bookworm main のパッケージとして入れるだけで、
+# `apt-get install` の行に足す形は `gh` と同じにする — パッケージが消えたり名前が
+# 変わったら、この `image` ステージのビルドで気づける（下の `tini --version` が
+# 存在確認を兼ねる。`gh --version` と同じ理由）。
 RUN set -eux; \
   apt-get update; \
   apt-get install -y --no-install-recommends ca-certificates curl; \
@@ -76,9 +83,10 @@ RUN set -eux; \
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
     > /etc/apt/sources.list.d/github-cli.list; \
   apt-get update; \
-  apt-get install -y --no-install-recommends git ripgrep jq gh; \
+  apt-get install -y --no-install-recommends git ripgrep jq gh tini; \
   rm -rf /var/lib/apt/lists/*; \
-  gh --version
+  gh --version; \
+  tini --version
 
 # git の資格情報は `gh` から借りる（人間が `gh auth setup-git` でやることと同じ）。
 # **鍵をイメージに焼かない。** ここにあるのは経路だけである。

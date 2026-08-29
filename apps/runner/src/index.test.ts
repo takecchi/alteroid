@@ -65,6 +65,11 @@ describe('器の起動スクリプト', () => {
     // 偽の `node`。**exec された先が何を持っているか**を見たいだけなので、環境を
     // そのまま吐く（本物を起こす必要は無い）。
     fake('node', 'printf "%s\\n" "$@"\nenv');
+    // 偽の `tini`（#315）。素通し — `--` を1枚剥がして残りを exec するだけにして、
+    // 既存のアサーション（`node` に何が渡ったか・どんな環境か）をそのまま測れる
+    // ようにする。`tini` そのものの呼ばれ方（`-g` の有無など）を測る歯は、
+    // 個別に `fake('tini', ...)` で上書きする（下の describe を参照）。
+    fake('tini', '[ "$1" = "--" ] && shift\nexec "$@"');
   });
 
   afterEach(() => {
@@ -114,6 +119,18 @@ describe('器の起動スクリプト', () => {
   it('alteroid-runner: sha256 だけの構成はそのまま通す', async () => {
     const out = await launch('alteroid-runner', { ALTEROID_RUNNER_TOKEN_SHA256: TOKEN_SHA256 });
     expect(out).toContain(`ALTEROID_RUNNER_TOKEN_SHA256=${TOKEN_SHA256}`);
+  });
+
+  it('alteroid-runner: pid 1 を tini にして node を起こす。-g は付けない（#315。60秒の drain を潰さないため）', async () => {
+    // ここだけ `tini` を「渡された引数をそのまま吐く」ものに差し替える。
+    // beforeEach の素通し版だと `tini` 自身の引数（`--` の位置・`-g` の有無）が
+    // 消えてしまい、この歯が測りたいものを測れない。
+    fake('tini', 'printf "%s\\n" "$@"');
+    const out = await launch('alteroid-runner', { ALTEROID_RUNNER_TOKEN: TOKEN });
+    const args = out.split('\n').filter((line) => line.length > 0);
+
+    expect(args).toEqual(['--', 'node', '/app/apps/runner/dist/index.js']);
+    expect(args).not.toContain('-g');
   });
 
   it('alteroidd: 非 root ならそのままデーモンを exec する', async () => {
