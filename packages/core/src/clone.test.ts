@@ -37,7 +37,7 @@ import {
 import type { DistillGap } from './distill-gap.js';
 import type { CloneHost } from './host.js';
 import type { ManagerPool, ManagerSummary } from './manager.js';
-import { renderMemoryDocuments } from './memory.js';
+import { measureMemoryFloor, renderMemoryDocuments } from './memory.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createScheduler } from './schedule.js';
@@ -2300,6 +2300,270 @@ describe('クローン — 自律（人間以外の起点）', () => {
     expect(text).toContain('mgr-dead [running/セッション切断]');
 
     await clone.stop();
+  });
+
+  /**
+   * 「記憶の床」の1行（#553 F2）。挿入点は `#recentDigest()`（`clone.ts`）で、
+   * `self_initiative` / `timer` の両 tick に載り、日報には載らない
+   * （`#recentDigestBare` を切り出した理由）。ここから下の一連の歯が、
+   * その分岐を1つずつ確かめる。
+   */
+  describe('記憶の床（tick の digest 先頭、#553 F2）', () => {
+    it('発意 tick の digest の先頭に床の行が在り、基準未確立・前回tick無しを言う', async () => {
+      const s = setup(() => '今回は動かない');
+
+      s.clone.post({
+        type: 'self_initiative',
+        id: 'evt-floor-first',
+        at: new Date().toISOString(),
+        reason: '定期 tick',
+      });
+
+      await expect
+        .poll(() => inputsOf(s)().includes('以下は直近の状況である。'), { timeout: 3000 })
+        .toBe(true);
+
+      const text = inputsOf(s)();
+      // digest の**先頭**が床の行である（見出しの直後に直接続く）。
+      expect(text).toContain('以下は直近の状況である。\n\n記憶の床:');
+      // tick は `#runInternal`（＝セッション構築）より前に digest を作るので、
+      // プロセス最初のセッションがまだ組まれていない tick が実在する
+      // （`#promptMemoryChars === 0`）。0 を基準として「n 文字増えた」とは
+      // 名乗らない。
+      expect(text).toContain('基準がまだ無いので線の判定は出せない。');
+      // このプロセスで最初の tick なので、前回との差分は出せない。
+      expect(text).toContain(
+        '前回の tick が無いので差分は出せない（このプロセスでの最初の tick）。',
+      );
+
+      await s.clone.stop();
+    });
+
+    it('定期ジョブ（timer）にも床の行が載るが、日報（daily_report）には載らない', async () => {
+      const stores = createMemoryStores();
+      await stores.schedules.put({
+        kind: 'issue-round',
+        spec: { type: 'daily' as const, at: '09:00' },
+        request: '何かする',
+        createdAt: '2026-08-11T00:00:00.000Z',
+        updatedAt: '2026-08-11T00:00:00.000Z',
+      });
+      const s = setup(() => '見た', stores);
+      const call = () => s.calls[0];
+
+      s.clone.post({
+        type: 'timer',
+        id: 'evt-timer-floor',
+        at: '2026-08-12T00:00:00.000Z',
+        kind: 'issue-round',
+      });
+      await expect
+        .poll(() => call()?.inputs.some((input) => input.includes('何かする')), {
+          timeout: 3000,
+        })
+        .toBe(true);
+      expect(call()?.inputs.at(-1)).toContain('以下は直近の状況である。\n\n記憶の床:');
+
+      s.clone.post({
+        type: 'timer',
+        id: 'evt-timer-daily',
+        at: new Date().toISOString(),
+        kind: 'daily_report',
+        target: '2026-08-11',
+      });
+      await expect
+        .poll(() => s.stores.journal.list({ types: ['daily_report'] }), { timeout: 3000 })
+        .toHaveLength(1);
+
+      const dailyPrompt = call()?.inputs.at(-1) ?? '';
+      expect(dailyPrompt).toContain('以下はこの日の記録の要約である。');
+      // ⛔ 日報には床の行を出さない（依頼者の明示指定）。
+      expect(dailyPrompt).not.toContain('記憶の床:');
+
+      await s.clone.stop();
+    });
+
+    it('2回目の tick で「前回の tick から ±N 文字」が出る（1回目では出ない）。線を超えたら印が出る', async () => {
+      const stores = createMemoryStores();
+      await stores.persona.write('note', `# Note\n\n${'a'.repeat(200)}\n`);
+      const s = setup(() => 'わかった', stores);
+      const call = () => s.calls[0];
+
+      s.clone.post({
+        type: 'self_initiative',
+        id: 'evt-diff-1',
+        at: new Date().toISOString(),
+        reason: '1本目',
+      });
+      await expect.poll(() => (call()?.inputs.length ?? 0) === 1, { timeout: 3000 }).toBe(true);
+      const firstText = call()?.inputs[0] ?? '';
+      expect(firstText).toContain(
+        '前回の tick が無いので差分は出せない（このプロセスでの最初の tick）。',
+      );
+      expect(firstText).not.toMatch(/前回の tick から/);
+      // 1本目の tick 自身がセッションを組むので、以後は基準が確立している
+      // （閾値 10% を超えないぶんの増分では、線の印はまだ出ない）。
+      expect(firstText).not.toContain('⚠️ 線（');
+
+      // 1本目の tick が組んだセッションの基準（= このときの床の絶対値）。
+      const baseline = measureMemoryFloor(await stores.persona.documents()).totalChars;
+
+      // 基準から +20% 超の増分を作る（線 = +10% を確実に超える）。
+      const extra = Math.ceil(baseline * 0.2) + 50;
+      await stores.persona.write('note', `# Note\n\n${'a'.repeat(200 + extra)}\n`);
+      const grownFloor = measureMemoryFloor(await stores.persona.documents()).totalChars;
+      const expectedDiff = grownFloor - baseline;
+
+      s.clone.post({
+        type: 'self_initiative',
+        id: 'evt-diff-2',
+        at: new Date().toISOString(),
+        reason: '2本目',
+      });
+      await expect.poll(() => (call()?.inputs.length ?? 0) === 2, { timeout: 3000 }).toBe(true);
+      const secondText = call()?.inputs[1] ?? '';
+      expect(secondText).toContain(
+        `前回の tick から +${expectedDiff.toLocaleString('en-US')} 文字。`,
+      );
+      expect(secondText).toContain('⚠️ 線（セッション構築時点から +10%）を超えている。');
+
+      await s.clone.stop();
+    });
+
+    it('線（+10%）を超えないときは印が出ない', async () => {
+      const stores = createMemoryStores();
+      await stores.persona.write('note', `# Note\n\n${'a'.repeat(400)}\n`);
+      const s = setup(() => 'わかった', stores);
+      const call = () => s.calls[0];
+
+      s.clone.post({
+        type: 'self_initiative',
+        id: 'evt-under-1',
+        at: new Date().toISOString(),
+        reason: '1本目',
+      });
+      await expect.poll(() => (call()?.inputs.length ?? 0) === 1, { timeout: 3000 }).toBe(true);
+
+      const baseline = measureMemoryFloor(await stores.persona.documents()).totalChars;
+      // 基準から +5% ぶんだけ増やす（線 = +10% の半分。確実に超えない）。
+      const smallExtra = Math.max(1, Math.floor(baseline * 0.05));
+      await stores.persona.write('note', `# Note\n\n${'a'.repeat(400 + smallExtra)}\n`);
+
+      s.clone.post({
+        type: 'self_initiative',
+        id: 'evt-under-2',
+        at: new Date().toISOString(),
+        reason: '2本目',
+      });
+      await expect.poll(() => (call()?.inputs.length ?? 0) === 2, { timeout: 3000 }).toBe(true);
+      const secondText = call()?.inputs[1] ?? '';
+      // 差分そのものは出るが、線の印は出ない。
+      expect(secondText).toMatch(/前回の tick から \+\d/);
+      expect(secondText).not.toContain('⚠️ 線（');
+
+      await s.clone.stop();
+    });
+
+    it('記憶の床が測れないとき、0 を名乗らず「測れなかった」と言う（digest 本体は壊れない）', async () => {
+      const base = createMemoryStores();
+      // **床の測定（`#memoryFloorDigestLine`）だけを壊す。** `persona.documents()`
+      // は `#buildOptions`（システムプロンプトの組み立て）や `#withFreshMemory`
+      // からも呼ばれるので、無条件に投げるとセッションの構築そのものが壊れて
+      // ターンが1本も走らなくなる（実測: 無条件に投げると入力がSDKへ一切
+      // 届かずタイムアウトした）。tick の digest は `#runInternal`（＝
+      // `#ensureQuery`）より前に作られるので、**このターンで最初に呼ばれる
+      // 1回**が床の測定である。それだけを壊す。
+      let personaDocumentsCalls = 0;
+      const stores: Stores = {
+        ...base,
+        persona: {
+          ...base.persona,
+          documents: () => {
+            personaDocumentsCalls += 1;
+            return personaDocumentsCalls === 1
+              ? Promise.reject(new Error('persona 読み込み失敗（実測を模す）'))
+              : base.persona.documents();
+          },
+        },
+      };
+      const s = setup(() => '今回は動かない', stores);
+
+      s.clone.post({
+        type: 'self_initiative',
+        id: 'evt-unreadable',
+        at: new Date().toISOString(),
+        reason: '定期 tick',
+      });
+      await expect.poll(() => (s.calls[0]?.inputs.length ?? 0) === 1, { timeout: 3000 }).toBe(true);
+
+      const text = s.calls[0]?.inputs[0] ?? '';
+      expect(text).toContain(
+        '記憶の床: 測れなかった（理由: Error: persona 読み込み失敗（実測を模す））。',
+      );
+      // 床の行の中に数字を1つも作っていない（0 を名乗っていない）。
+      expect(text).not.toMatch(/記憶の床:[^\n]*\d/);
+      // digest 本体（`buildActivityDigest`）は persona を見ないので壊れない。
+      expect(text).toContain('聞かずに動いたなら');
+
+      await s.clone.stop();
+    });
+
+    /**
+     * 「基準が取り直された」（resume 等でセッションが組み直され、% が
+     * 説明なく下がって見える）警告。
+     *
+     * **本当に別の値へ組み直させる**（スタブでの偽装ではない）ために、
+     * 人間の発言で組んだセッション1を `endSessionAfterTurn: 0` で終わらせ
+     * （`#query === null` に戻ることは、既存の歯——このファイルの
+     * 「受信箱が閉じた後に…」歯——が同じ形で頼っている観測点である）、
+     * その間に記憶の中身を書き換えてから発意 tick を2本続ける。
+     *
+     * 1本目の tick 自身は「組み直す前」の基準しか知らない（このtickが
+     * 新しいセッションを組む張本人であり、digest はそのセッション構築より
+     * 前に作られるため）。**基準の食い違いが digest に現れるのは次の
+     * tick である** — これは実装（`#lastTickMemoryBaselineChars` を
+     * 前回tick時点の値として比べる設計）そのものの帰結であって、この歯が
+     * 都合よく2本目まで待っているのではない。
+     */
+    it('セッションが組み直されて基準が取り直されたら ⚠️ の一言が出る', async () => {
+      const stores = createMemoryStores();
+      await stores.persona.write('note', `# Note\n\n${'a'.repeat(80)}\n`);
+      const s = setup(() => 'わかった', stores, { endSessionAfterTurn: 0 });
+
+      s.clone.post(humanMessage('やあ'));
+      await waitForTerminal(s.events);
+
+      const baseline1 = measureMemoryFloor(await stores.persona.documents()).totalChars;
+      await stores.persona.write('note', `# Note\n\n${'a'.repeat(500)}\n`);
+      const baseline2 = measureMemoryFloor(await stores.persona.documents()).totalChars;
+      expect(baseline2).not.toBe(baseline1);
+
+      const flatInputs = () => s.calls.flatMap((call) => call.inputs);
+
+      s.clone.post({
+        type: 'self_initiative',
+        id: 'evt-rebase-1',
+        at: new Date().toISOString(),
+        reason: '1本目のtick',
+      });
+      await waitFor(() => flatInputs().length === 2, '1本目のtickが届く');
+      // このtick自身はまだ組み直す前の基準（baseline1）しか知らない。
+      expect(flatInputs().at(-1)).not.toContain('セッションが組み直されて基準が');
+
+      s.clone.post({
+        type: 'self_initiative',
+        id: 'evt-rebase-2',
+        at: new Date().toISOString(),
+        reason: '2本目のtick',
+      });
+      await waitFor(() => flatInputs().length === 3, '2本目のtickが届く');
+      expect(flatInputs().at(-1)).toContain(
+        `⚠️ セッションが組み直されて基準が ${baseline1.toLocaleString('en-US')} → ` +
+          `${baseline2.toLocaleString('en-US')} 文字へ取り直された（% が下がったのは畳んだからではない）。`,
+      );
+
+      await s.clone.stop();
+    });
   });
 
   it('外部イベントは日誌に残り、中身がクローンに渡る（起点③）', async () => {

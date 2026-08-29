@@ -31,11 +31,7 @@ import type { CloneHost } from './host.js';
 import { createRunnerRegistry, type RunnerClient } from './runner-protocol.js';
 import { Inbox } from './inbox.js';
 import { createManagerPool, type ManagerPool, type ManagerSummary } from './manager.js';
-import {
-  describeMemorySessionDelta,
-  measureMemoryFloor,
-  renderMemoryDocuments,
-} from './memory.js';
+import { describeMemorySessionDelta, measureMemoryFloor, renderMemoryDocuments } from './memory.js';
 import { placedModelTier, resolveModelTier } from './model-tier.js';
 import {
   placedPermissionMode,
