@@ -54,4 +54,22 @@ unset ALTEROID_RUNNER_TOKEN
 unset ALTEROID_GOOGLE_CLIENT_ID
 unset ALTEROID_GOOGLE_CLIENT_SECRET
 
-exec node /app/apps/runner/dist/index.js "$@"
+# **pid 1 を tini にする（#315）。** コンテナで pid 1 になった `node` は init の仕事を
+# 持たない — 孤児として引き取った子孫（マネージャー配下の subprocess の残骸）を
+# reap（wait）せず、ゾンビのまま溜める。実測(2026-08-28 観測、Issue #315):
+# `runner-3` で pids 955/1000 のうち 779（81.6%）が `ppid=1` のゾンビだった。
+# `tini` は SIGCHLD を受けて代わりに wait するだけの小さな init で、それを
+# pid 1 に据えて node をその子にする。
+#
+# **なぜ `ENTRYPOINT ["tini","--"]` ではなくここで `exec` するのか。** ENTRYPOINT
+# 形にすると pid 1（tini）は上の unset より前の環境 — 素の `ALTEROID_RUNNER_TOKEN` と
+# `ALTEROID_GOOGLE_CLIENT_SECRET` を持ったまま起動し、`/proc/1/environ` に残ってしまう。
+# それは上で畳んでいる守りの3枚目を無に帰す。**tini は必ず、合鍵を畳み鍵を落とした
+# 後のこのシムの内側から `exec` する。**
+#
+# **なぜ `-g` を付けないのか。** `-g` は SIGTERM をプロセスグループ全体へ転送する。
+# デーモンは生ログをこの runner へ渡し切るための60秒の猶予を置いている
+# （Railway `drainingSeconds: 60`）。プロセスグループ全体へ即転送すると、この
+# 猶予をここで頭から潰すことになる。tini は既定でも子（node 1プロセス）へは
+# SIGTERM を転送するので、`-g` が無くても停止自体は届く。
+exec tini -- node /app/apps/runner/dist/index.js "$@"
