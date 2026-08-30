@@ -7,14 +7,21 @@ import type {
   Options,
   PermissionResult,
   Query,
-  SDKMessage,
   SDKUserMessage,
   SessionKey,
   SessionStore,
   SessionStoreEntry,
 } from '@anthropic-ai/claude-agent-sdk';
 
-import { buildManagerSessionOptions } from './claude-provider.js';
+import type {
+  AgentContentBlock,
+  AgentDelegationNotified,
+  AgentDelegationStarted,
+  AgentEvent,
+  AgentPermissionDenial,
+  AgentTurnEnded,
+} from './agent-events.js';
+import { buildManagerSessionOptions, foldClaudeMessage } from './claude-provider.js';
 import {
   noteBackgroundFailure,
   noteUnclassifiedFailure,
@@ -45,20 +52,15 @@ import type {
 } from './runner-protocol.js';
 import type { JobStatus } from './schema.js';
 // **クローン（`clone.ts`）と同じ判定を呼ぶ。** 「これは応答ではない」の見分けを
-// 層ごとに書くと、片方だけが SDK の印を見落として非対称になる（実際に
+// 層ごとに書くと、片方だけが印を見落として非対称になる（実際に
 // `result.errors[]` はここにしか無く、クローン側は読んでいなかった）。
-import {
-  assistantFailureOf,
-  resultErrorLines,
-  resultFailureOf,
-  type SdkFailure,
-} from './sdk-failure.js';
-import { classifyUsageNotice, toRateLimitFacts } from './usage-limits.js';
+//
+// **印そのものを読むのは provider の写しである**（`claude-provider.ts` の
+// `foldClaudeMessage`）。ここが受け取るのは、既に中立イベントへ載った印である。
+import { assistantFailureOf, type SdkFailure } from './sdk-failure.js';
+import { classifyUsageNotice } from './usage-limits.js';
 import { settleWithin } from './usage-probe.js';
-// **クローン（`clone.ts`）と同じ実装を呼ぶ。** 層ごとに result の写し取りを
-// 書き分けると、どちらかが SDK の綴りを取り違えたときに片方だけ 0 が積まれ、
-// その差が「その層は安い」と読める（`usage.ts` の `modelUsageOf`）。
-import { hasAnyUsage, isSuccessResult, modelUsageOf, sessionModelUsageOf } from './usage.js';
+import { hasAnyUsage, sessionModelUsageOf } from './usage.js';
 
 /**
  * manager-runner — SDK を隔離して走らせる層（roadmap M4）。
@@ -1374,7 +1376,10 @@ class RunnerSession {
   async #read(q: Query, generation: number): Promise<void> {
     try {
       for await (const message of q) {
-        this.#dispatch(message);
+        // **provider の綴りを読むのはここまでである**（`claude-provider.ts` の
+        // `foldClaudeMessage`）。ここから下へ流れるのは中立イベントだけで、
+        // 次の provider を足しても `#apply` は1本のままになる（#486）。
+        for (const event of foldClaudeMessage(message)) this.#apply(event);
       }
       if (this.#stopped || generation !== this.#generation) return;
       // 一度も手が動かないまま閉じたのなら、resume は効かなかった。
@@ -1516,318 +1521,313 @@ class RunnerSession {
     return 'recovered';
   }
 
-  #dispatch(message: SDKMessage): void {
-    if (message.type === 'system' && message.subtype === 'init') {
-      this.#sessionId = message.session_id;
-      this.#emit({ type: 'session', managerId: this.#id, sessionId: message.session_id });
-      return;
-    }
-
-    // 枠の事実（アカウント単位）。**ターンの頭ごとに来る**ので、ここが
-    // 走行中の唯一の最新情報になる（使い捨ての probe は idle 用）。
-    if (message.type === 'rate_limit_event') {
-      const facts = toRateLimitFacts((message as { rate_limit_info?: unknown }).rate_limit_info);
-      if (facts !== undefined) {
-        this.#emit({ type: 'rate_limit', managerId: this.#id, facts });
+  /**
+   * 中立イベント1件へ反応する（`agent-events.ts` の表の (ii)）。
+   *
+   * **provider の綴りはここには無い。** 何が起きたかを決めるのは
+   * `foldClaudeMessage` で、ここが決めるのは「起きたことへマネージャー層がどう
+   * 反応するか」だけである —— 何を `RunnerEvent` として降ろすか、委譲の区間を
+   * どう数えるか、どこでセッションを畳むか。**クローン層の同じ場所は
+   * `clone.ts` の `#apply` で、副作用は2層で15種あり重なるのは2種だけである。**
+   */
+  #apply(event: AgentEvent): void {
+    switch (event.type) {
+      case 'session_started': {
+        this.#sessionId = event.sessionId;
+        this.#emit({ type: 'session', managerId: this.#id, sessionId: event.sessionId });
+        return;
       }
-      return;
-    }
 
-    // 確認へ上げずにその場で止められた1件（分類器・deny 規則）。
-    //
-    // **`permissionMode: 'auto'` ではここが唯一の生の合図である。** `canUseTool`
-    // は呼ばれないので、この合図を捨てるとマネージャーや作業者の手が止まったこと
-    // は誰にも見えない。SDK 曰くこれは best-effort（取りこぼしうる）で、
-    // authoritative なのは `result.permission_denials` — だから**両方**読む。
-    if (
-      message.type === 'system' &&
-      (message as { subtype?: unknown }).subtype === 'permission_denied'
-    ) {
-      this.#noteDenial(message, 'live');
-      return;
-    }
-
-    // 委譲の区間を追う（`worker_wait`）。**これより下にある system の総取り
-    // `return`（「上限の文言」のブロック）より必ず手前に置くこと** — 後ろに
-    // 置くと、`task_started` / `task_notification` はそこで無条件に捨てられて
-    // 二度と読まれない（実際にそうなっていた。マネージャーが「残り5体を
-    // 待ちます」だけのターンを40回以上回した事故で、40という回数自体は
-    // `report` から日誌に残っていたが、契機がどこにも残っていなかった原因が
-    // これである）。
-    if (
-      message.type === 'system' &&
-      (message as { subtype?: unknown }).subtype === 'task_started'
-    ) {
-      this.#onTaskStarted(message as { task_id?: unknown });
-      return;
-    }
-    if (
-      message.type === 'system' &&
-      (message as { subtype?: unknown }).subtype === 'task_notification'
-    ) {
-      this.#onTaskNotification(message as { task_id?: unknown });
-      return;
-    }
-    // `task_progress` / `task_updated` / `background_tasks_changed` は
-    // **見ないと決めてある**（間引いているのではなく、そもそも数える対象では
-    // ないという判断であることをここに明記する）。
-    //
-    // - `task_progress` は高頻度の進捗 ping で、ターンの契機にはならない
-    // - `task_updated` は `task_started` / `task_notification` の間の状態遷移の
-    //   詳細（`pending` → `running` → `completed` 等）で、区間の開閉には要らない
-    // - `background_tasks_changed` は SDK の JSDoc が「level 信号であり
-    //   `task_started`/`task_notification` の edge と相関させるな」
-    //   「background に回った Task だけの一覧」と言っている。フォアグラウンド
-    //   のまま終わる委譲（＝このセッションで普通に起きる委譲）はここに載らない
-    if (
-      message.type === 'system' &&
-      ((message as { subtype?: unknown }).subtype === 'task_progress' ||
-        (message as { subtype?: unknown }).subtype === 'task_updated' ||
-        (message as { subtype?: unknown }).subtype === 'background_tasks_changed')
-    ) {
-      return;
-    }
-
-    // 上限の文言。**API エラーとしては来ない**（SDK のコメント）ので、
-    // 通知・情報メッセージの本文を見るしかない。ここを見ないと「枠を使い切って
-    // 課金枠に移った」＝止まる一歩前を捉えられない。
-    if (message.type === 'system') {
-      const said =
-        message.subtype === 'notification'
-          ? (message as { text?: unknown }).text
-          : message.subtype === 'informational'
-            ? (message as { content?: unknown }).content
-            : undefined;
-      if (typeof said === 'string') {
-        const notice = classifyUsageNotice(said);
-        if (notice !== undefined) {
-          this.#emit({ type: 'usage_notice', managerId: this.#id, notice });
-        }
+      case 'rate_limit': {
+        // 枠の事実（アカウント単位）。**ターンの頭ごとに来る**ので、ここが
+        // 走行中の唯一の最新情報になる（使い捨ての probe は idle 用）。
+        this.#emit({ type: 'rate_limit', managerId: this.#id, facts: event.facts });
+        return;
       }
-      return;
-    }
 
-    // マネージャーが喋った本文を溜めておく。**作業者の本文は混ぜない** —
-    // `parent_tool_use_id` が付いているものは Task の中の別の層の発言であって、
-    // マネージャーが人間（＝クローン）へ向けて書いたものではない。
-    if (message.type === 'assistant') {
-      if (parentToolUseId(message) === null) {
-        const said = assistantText(message);
-        // **SDK が「これは応答ではない」と印を付けたメッセージは報告に混ぜない。**
-        // 支出上限（`billing_error`）・枠（`rate_limit`）・認証の失敗はここへ来る。
-        // 直す前はこの印を1度も見ておらず、上限の英語文言がそのまま
-        // 「マネージャーの報告」として台帳・日誌・クローンの受信箱へ流れていた
-        // （`sdk-failure.ts` の doc。クローン側の穴と同じ形である）。
-        const rejected = assistantFailureOf(message, said);
-        if (rejected !== undefined) {
-          this.#rejected = rejected;
-          return;
-        }
-        if (said.length > 0) {
-          this.#said.push(said);
-          // **`#flushUnreported()` のための材料**（`#saidUuid` の doc）。
-          // 通常の経路（`result` が来る回）はこの値を1度も読まない。
-          this.#saidUuid = messageUuid(message);
-        }
-      }
-      return;
-    }
-
-    if (message.type !== 'result') return;
-
-    // ターンの区切りで必ず畳む。持ち越すと、前のターンの本文が次の報告に
-    // 混ざって「言っていないことを言った」ことになる。
-    const said = this.#said;
-    this.#said = [];
-    // **`#said` と同じ区切りで畳む**（`#saidUuid` の doc）。
-    this.#saidUuid = undefined;
-    // **印も同じ区切りで畳む。** 持ち越すと、次のターンが成功しても失敗として
-    // 報告されることになる（`#said` を持ち越してはいけないのと同じ理由）。
-    const rejected = this.#rejected;
-    this.#rejected = null;
-
-    // **委譲の契機を数える（`worker_wait`）。** ターンの区切りで必ず畳む —
-    // 持ち越すと次のターンへ漏れる（`#said` を畳むのと同じ理由）。
-    const inputsThisTurn = this.#inputsSinceResult;
-    const notificationsThisTurn = this.#notificationsSinceResult;
-    const toolsThisTurn = this.#toolsSinceResult;
-    const submitsThisTurn = this.#submitsSinceResult;
-    const sourcesThisTurn = this.#submitSources;
-    this.#inputsSinceResult = 0;
-    this.#notificationsSinceResult = 0;
-    this.#toolsSinceResult = 0;
-    this.#submitsSinceResult = 0;
-    this.#submitSources = new Map();
-
-    // **`#window` が非 null なのは、区間が開いている（`#openTasks` が非空）か
-    // 閉じ待ち（`#windowClosing`）のときだけ**である。委譲の外で起きたターン
-    // （人間・クローンと直接話しているだけの回）は数えない。
-    if (this.#window !== null) {
-      const window = this.#window;
-      window.turns += 1;
-      // **契機は排他で1件だけ数える。** 3つの合計が `turns` と必ず一致する
-      // （`runner-wakeup.test.ts` がこの不変を固定する）。
-      if (inputsThisTurn > 0) {
-        window.byCause.input += 1;
-      } else if (notificationsThisTurn > 0) {
-        window.byCause.notification += 1;
-      } else {
-        window.byCause.continuation += 1;
-      }
-      if (toolsThisTurn === 0) window.toolless += 1;
-      window.notifications += notificationsThisTurn;
-      window.submits += submitsThisTurn;
-      for (const [source, count] of sourcesThisTurn) {
-        window.sources.set(source, (window.sources.get(source) ?? 0) + count);
-      }
-      // **最後の完了通知そのものを契機に回ったこのターンを数え終えてから閉じる。**
-      // `#openTasks` が空になった瞬間に閉じないのはこのためである
-      // （`#windowClosing` の doc）。`settled` は渡さない — この時点で
-      // `#openTasks` は必ず空なので（`#windowClosing` はそのときにしか立たない）、
-      // 中で導く `settled` は自動的に `true` になる。
-      if (this.#windowClosing) this.#closeWorkerWaitWindow();
-    }
-
-    // **成否で絞らない。** 拒否は成功したターンにも失敗したターンにも載る（型は
-    // `SDKResultSuccess` と `SDKResultError` の両方が持っている）。`usage` と違って
-    // ゼロ埋めで害が出る値ではないので、ここは落とさず全部見る。
-    for (const denial of permissionDenials(message)) this.#noteDenial(denial, 'result');
-
-    // **SDK が「応答ではない」と言っている印**（`assistant.error` /
-    // `result.subtype` / `subtype: 'success'` なのに `is_error`）。
-    //
-    // **`isSuccessResult` はこれを兼ねられない。** あちらは台帳の問い
-    // （この累積を通してよいか）で `subtype === 'success'` だけを見るので、
-    // `is_error: true` の result を成功として通す（`sdk-failure.ts` の表）。
-    // 下の `#progressed` と `usage` は従来どおり `isSuccessResult` のままにして
-    // あり、変えたのは**報告の扱い**だけである。
-    const failure = resultFailureOf(message) ?? rejected ?? undefined;
-
-    // **`init` が来たことは「戻れた」ことではない。** 実機では、開きはしたが
-    // その回が `error_during_execution` で何も返さずに終わる形も出ている。
-    // 手が動く前の結果なし終了は、この resume が効かなかったということである。
-    if (isSuccessResult(message)) {
-      this.#markProgressed();
-      // 消費の累積を降ろす（台帳へ畳むのはデーモン）。
-      //
-      // **成功した result だけを通す。** SDK は
-      // `crash/startup-error results may carry zeroed values` と言っている。
-      // ゼロを「累積が 0 になった」として通すと、受け取った側の基準が下がり、
-      // 次に届いた本物の累積が丸ごと増分になる＝記録済みの分がもう一度積まれる。
-      //
-      // **絞っても取りこぼさない。** 値は累積なので、失敗した回のぶんも次の成功が
-      // 運んでくる。落ちるのは「セッションが失敗で終わったときの最後の1ターン」
-      // だけで、そこで打ち切りなので後続へ波及しない。
-      const models = modelUsageOf(message);
-      if (models !== undefined) {
-        this.#emit({
-          type: 'usage',
-          managerId: this.#id,
-          sessionId: this.#sessionId,
-          models,
-        });
-      }
-    }
-
-    // **なぜ終わったのかを落とさない。** 実際に支出上限へ当たったとき、
-    // マネージャーは `You've hit your individual spend limit` を返して終わった。
-    // これを「結果なしで終了」だけにすると、上限で止まったのか失敗したのかを
-    // クローンが区別できない — 前者は待つ / 人間に頼む、後者は挑み直す、で
-    // 手が正反対になる。判定は SDK の定数で行う（自前の正規表現は腐る）。
-    //
-    // **成否の分岐の外に出してある。** `assistant.error` で止まった回は `result` が
-    // 成功で返ってくることがあり、`else` の中に置くとその回だけ検知できない。
-    // 分類にかけるのは**SDK が失敗として出した文言だけ**である（マネージャーが
-    // 書いた本文 `said` は通さない — `classifyUsageNotice` は部分一致なので、
-    // 「上限に当たった」と報告に書いた瞬間に上限と誤判定する）。
-    if (failure !== undefined) {
-      let classified = false;
-      for (const candidate of [
-        failure.text,
-        resultText(message).text,
-        ...resultErrorLines(message),
-      ]) {
-        const notice = classifyUsageNotice(candidate);
-        if (notice !== undefined) {
-          this.#emit({ type: 'usage_notice', managerId: this.#id, notice });
-          classified = true;
-          break;
-        }
-      }
-      // **1件も分類できなかった回に跡を残す（Issue #393）。** ここを黙って
-      // 抜けると、**回し手が原理的に聞けない失敗**が何回起きているかがどこにも
-      // 残らない —— 資格が1つも無い器で起こしたときがその形で、マネージャーが
-      // 落ち続けてもプールは何も検知しない。**出す判断は変えていない**
-      // （分類できたら従来どおり `usage_notice` を出し、できなければ従来どおり
-      // 何も出さない）。足したのは数えることだけである。
-      if (!classified) {
-        noteUnclassifiedFailure(this.#unclassifiedFailures, this.#id, failure.via, failure.code);
-      }
-    }
-
-    if (!isSuccessResult(message)) {
-      const outcome = this.#recoverFromFailedResume(`結果なしで終了: ${resultText(message).text}`);
-      if (outcome === 'recovered') return;
-      // **戻れなかった resume を「1ターン終わった」として報告しない。** ここを
-      // 素通りさせると `report` が上がり、台帳には `done`（＝終えて待機中。
-      // 話しかければ続く）が書かれる。実際には腐った session_id しか無いので、
-      // クローンは「まだ続けられるもの」を見せられ、話しかけるたびに失敗する。
-      // 手が動いていないのだから、ここは畳むのが正しい。
-      if (outcome === 'unresumable') {
-        // **落ち方は変えない。「どこで」だけを足す（#438 案D）。**
+      case 'permission_denied': {
+        // 確認へ上げずにその場で止められた1件（分類器・deny 規則）。
         //
-        // **他5箇所（1122 / 1297 / 1300 / 1313 / 1319）のように `await` へ
-        // 揃えることはしていない。** ここを囲む `#dispatch` は同期メソッドで、
-        // 呼び出し元（`#read` の `for await`）も `await` せずに呼んでいる。
-        // 揃えるには両方を非同期へ変えることになり、**メッセージ処理に直列化点が
-        // 1つ増える** —— その影響は測っていないので、この変更には含めない。
-        void this.#finish('lost', `結果なしで終了: ${resultText(message).text}`).catch(
-          (error: unknown) => {
-            noteBackgroundFailure(
-              'セッションの片付け',
-              `managerId=${this.#id} outcome=lost`,
-              error,
+        // **`permissionMode: 'auto'` ではここが唯一の生の合図である。** `canUseTool`
+        // は呼ばれないので、この合図を捨てるとマネージャーや作業者の手が止まったこと
+        // は誰にも見えない。SDK 曰くこれは best-effort（取りこぼしうる）で、
+        // authoritative なのは `result.permission_denials` — だから**両方**読む。
+        this.#noteDenial(event.denial, 'live');
+        return;
+      }
+
+      // 委譲の区間を追う（`worker_wait`）。**どの合図を委譲の開閉として数え、
+      // どれを数えないかは provider の写しが決めている**（`claude-provider.ts` の
+      // `foldClaudeMessage` —— 取りこぼすと契機がどこにも残らなかった事故の
+      // 経緯もあちらに在る）。ここが決めるのは、開閉を受けて区間をどう数えるか
+      // だけである。
+      case 'delegation_started': {
+        this.#onTaskStarted(event);
+        return;
+      }
+
+      case 'delegation_notified': {
+        this.#onTaskNotification(event);
+        return;
+      }
+
+      case 'usage_notice': {
+        // 上限の文言。**API エラーとしては来ない**（SDK のコメント）ので、
+        // 通知・情報メッセージの本文を見るしかない。ここを見ないと「枠を使い切って
+        // 課金枠に移った」＝止まる一歩前を捉えられない。
+        // **文言の分類そのものは provider の写しが済ませている**
+        // （`claude-provider.ts` の `foldClaudeMessage`）。ここへ届く時点で
+        // 「上限の合図である」は確定している。
+        this.#emit({ type: 'usage_notice', managerId: this.#id, notice: event.notice });
+        return;
+      }
+
+      case 'assistant_message': {
+        // マネージャーが喋った本文を溜めておく。**作業者の本文は混ぜない** —
+        // `parentToolUseId` が付いているものは Task の中の別の層の発言であって、
+        // マネージャーが人間（＝クローン）へ向けて書いたものではない。
+        if (event.parentToolUseId === null) {
+          const said = assistantText(event.blocks);
+          // **SDK が「これは応答ではない」と印を付けたメッセージは報告に混ぜない。**
+          // 支出上限（`billing_error`）・枠（`rate_limit`）・認証の失敗はここへ来る。
+          // 直す前はこの印を1度も見ておらず、上限の英語文言がそのまま
+          // 「マネージャーの報告」として台帳・日誌・クローンの受信箱へ流れていた
+          // （`sdk-failure.ts` の doc。クローン側の穴と同じ形である）。
+          const rejected = assistantFailureOf(event.errorCode, said);
+          if (rejected !== undefined) {
+            this.#rejected = rejected;
+            return;
+          }
+          if (said.length > 0) {
+            this.#said.push(said);
+            // **`#flushUnreported()` のための材料**（`#saidUuid` の doc）。
+            // 通常の経路（`result` が来る回）はこの値を1度も読まない。
+            this.#saidUuid = event.id;
+          }
+        }
+        return;
+      }
+
+      // **この層が反応しない事実。** 逐次配信（`text_delta`）はクローン層の画面の
+      // ためのもので、マネージャーの `Options` は `includePartialMessages` を
+      // 立てていない。道具の結果（`tool_result`）も同じく画面の合図である。
+      // **「まだ書いていない」ではなく「この層は見ないと決めてある」である。**
+      case 'text_delta':
+      case 'tool_result':
+        return;
+
+      case 'turn_ended': {
+        // ターンの区切りで必ず畳む。持ち越すと、前のターンの本文が次の報告に
+        // 混ざって「言っていないことを言った」ことになる。
+        const said = this.#said;
+        this.#said = [];
+        // **`#said` と同じ区切りで畳む**（`#saidUuid` の doc）。
+        this.#saidUuid = undefined;
+        // **印も同じ区切りで畳む。** 持ち越すと、次のターンが成功しても失敗として
+        // 報告されることになる（`#said` を持ち越してはいけないのと同じ理由）。
+        const rejected = this.#rejected;
+        this.#rejected = null;
+
+        // **委譲の契機を数える（`worker_wait`）。** ターンの区切りで必ず畳む —
+        // 持ち越すと次のターンへ漏れる（`#said` を畳むのと同じ理由）。
+        const inputsThisTurn = this.#inputsSinceResult;
+        const notificationsThisTurn = this.#notificationsSinceResult;
+        const toolsThisTurn = this.#toolsSinceResult;
+        const submitsThisTurn = this.#submitsSinceResult;
+        const sourcesThisTurn = this.#submitSources;
+        this.#inputsSinceResult = 0;
+        this.#notificationsSinceResult = 0;
+        this.#toolsSinceResult = 0;
+        this.#submitsSinceResult = 0;
+        this.#submitSources = new Map();
+
+        // **`#window` が非 null なのは、区間が開いている（`#openTasks` が非空）か
+        // 閉じ待ち（`#windowClosing`）のときだけ**である。委譲の外で起きたターン
+        // （人間・クローンと直接話しているだけの回）は数えない。
+        if (this.#window !== null) {
+          const window = this.#window;
+          window.turns += 1;
+          // **契機は排他で1件だけ数える。** 3つの合計が `turns` と必ず一致する
+          // （`runner-wakeup.test.ts` がこの不変を固定する）。
+          if (inputsThisTurn > 0) {
+            window.byCause.input += 1;
+          } else if (notificationsThisTurn > 0) {
+            window.byCause.notification += 1;
+          } else {
+            window.byCause.continuation += 1;
+          }
+          if (toolsThisTurn === 0) window.toolless += 1;
+          window.notifications += notificationsThisTurn;
+          window.submits += submitsThisTurn;
+          for (const [source, count] of sourcesThisTurn) {
+            window.sources.set(source, (window.sources.get(source) ?? 0) + count);
+          }
+          // **最後の完了通知そのものを契機に回ったこのターンを数え終えてから閉じる。**
+          // `#openTasks` が空になった瞬間に閉じないのはこのためである
+          // （`#windowClosing` の doc）。`settled` は渡さない — この時点で
+          // `#openTasks` は必ず空なので（`#windowClosing` はそのときにしか立たない）、
+          // 中で導く `settled` は自動的に `true` になる。
+          if (this.#windowClosing) this.#closeWorkerWaitWindow();
+        }
+
+        // **成否で絞らない。** 拒否は成功したターンにも失敗したターンにも載る（型は
+        // `SDKResultSuccess` と `SDKResultError` の両方が持っている）。`usage` と違って
+        // ゼロ埋めで害が出る値ではないので、ここは落とさず全部見る。
+        for (const denial of event.denials) this.#noteDenial(denial, 'result');
+
+        // **SDK が「応答ではない」と言っている印**（`assistant.error` /
+        // `result.subtype` / `subtype: 'success'` なのに `is_error`）。
+        //
+        // **`succeeded` はこれを兼ねられない。** あちらは台帳の問い
+        // （この累積を通してよいか）で `subtype === 'success'` だけを見るので、
+        // `is_error: true` の result を成功として通す（`sdk-failure.ts` の表）。
+        // 下の `#progressed` と `usage` は従来どおり `succeeded`（＝
+        // `usage.ts` の `isSuccessResult`）のままにしてあり、
+        // 変えたのは**報告の扱い**だけである。
+        const failure = event.failure ?? rejected ?? undefined;
+
+        // **`init` が来たことは「戻れた」ことではない。** 実機では、開きはしたが
+        // その回が `error_during_execution` で何も返さずに終わる形も出ている。
+        // 手が動く前の結果なし終了は、この resume が効かなかったということである。
+        if (event.succeeded) {
+          this.#markProgressed();
+          // 消費の累積を降ろす（台帳へ畳むのはデーモン）。
+          //
+          // **成功した result だけを通す。** SDK は
+          // `crash/startup-error results may carry zeroed values` と言っている。
+          // ゼロを「累積が 0 になった」として通すと、受け取った側の基準が下がり、
+          // 次に届いた本物の累積が丸ごと増分になる＝記録済みの分がもう一度積まれる。
+          //
+          // **絞っても取りこぼさない。** 値は累積なので、失敗した回のぶんも次の成功が
+          // 運んでくる。落ちるのは「セッションが失敗で終わったときの最後の1ターン」
+          // だけで、そこで打ち切りなので後続へ波及しない。
+          if (event.usage !== undefined) {
+            this.#emit({
+              type: 'usage',
+              managerId: this.#id,
+              sessionId: this.#sessionId,
+              models: event.usage.models,
+            });
+          }
+        }
+
+        // **なぜ終わったのかを落とさない。** 実際に支出上限へ当たったとき、
+        // マネージャーは `You've hit your individual spend limit` を返して終わった。
+        // これを「結果なしで終了」だけにすると、上限で止まったのか失敗したのかを
+        // クローンが区別できない — 前者は待つ / 人間に頼む、後者は挑み直す、で
+        // 手が正反対になる。判定は SDK の定数で行う（自前の正規表現は腐る）。
+        //
+        // **成否の分岐の外に出してある。** `assistant.error` で止まった回は `result` が
+        // 成功で返ってくることがあり、`else` の中に置くとその回だけ検知できない。
+        // 分類にかけるのは**SDK が失敗として出した文言だけ**である（マネージャーが
+        // 書いた本文 `said` は通さない — `classifyUsageNotice` は部分一致なので、
+        // 「上限に当たった」と報告に書いた瞬間に上限と誤判定する）。
+        if (failure !== undefined) {
+          let classified = false;
+          for (const candidate of [failure.text, resultTextOf(event).text, ...event.errorLines]) {
+            const notice = classifyUsageNotice(candidate);
+            if (notice !== undefined) {
+              this.#emit({ type: 'usage_notice', managerId: this.#id, notice });
+              classified = true;
+              break;
+            }
+          }
+          // **1件も分類できなかった回に跡を残す（Issue #393）。** ここを黙って
+          // 抜けると、**回し手が原理的に聞けない失敗**が何回起きているかがどこにも
+          // 残らない —— 資格が1つも無い器で起こしたときがその形で、マネージャーが
+          // 落ち続けてもプールは何も検知しない。**出す判断は変えていない**
+          // （分類できたら従来どおり `usage_notice` を出し、できなければ従来どおり
+          // 何も出さない）。足したのは数えることだけである。
+          if (!classified) {
+            noteUnclassifiedFailure(
+              this.#unclassifiedFailures,
+              this.#id,
+              failure.via,
+              failure.code,
             );
-            throw error;
-          },
-        );
+          }
+        }
+
+        if (!event.succeeded) {
+          const outcome = this.#recoverFromFailedResume(
+            `結果なしで終了: ${resultTextOf(event).text}`,
+          );
+          if (outcome === 'recovered') return;
+          // **戻れなかった resume を「1ターン終わった」として報告しない。** ここを
+          // 素通りさせると `report` が上がり、台帳には `done`（＝終えて待機中。
+          // 話しかければ続く）が書かれる。実際には腐った session_id しか無いので、
+          // クローンは「まだ続けられるもの」を見せられ、話しかけるたびに失敗する。
+          // 手が動いていないのだから、ここは畳むのが正しい。
+          if (outcome === 'unresumable') {
+            // **落ち方は変えない。「どこで」だけを足す（#438 案D）。**
+            //
+            // **他5箇所（1122 / 1297 / 1300 / 1313 / 1319）のように `await` へ
+            // 揃えることはしていない。** ここを囲む `#dispatch` は同期メソッドで、
+            // 呼び出し元（`#read` の `for await`）も `await` せずに呼んでいる。
+            // 揃えるには両方を非同期へ変えることになり、**メッセージ処理に直列化点が
+            // 1つ増える** —— その影響は測っていないので、この変更には含めない。
+            void this.#finish('lost', `結果なしで終了: ${resultTextOf(event).text}`).catch(
+              (error: unknown) => {
+                noteBackgroundFailure(
+                  'セッションの片付け',
+                  `managerId=${this.#id} outcome=lost`,
+                  error,
+                );
+                throw error;
+              },
+            );
+            return;
+          }
+        }
+
+        // **失敗した回の報告に、失敗であることを載せる。** 直す前は成否によらず
+        // `reportText(said, resultText(message))` を上げていたので、上限の英語文言が
+        // そのまま「マネージャーの報告」として台帳（`lastReport`）・日誌・クローンの
+        // 受信箱へ流れていた。クローンから見て「報告が来た」と「エラーで死んだ」が
+        // 区別できない ＝ クローン側で塞いだのと同じ穴がここに残っていた。
+        //
+        // **本文（`text`）の側でも包む。** 構造化した `failure` だけに頼ると、それを
+        // 見ていない読み手（台帳の `lastReport` を出す画面・日誌を読む人間）には
+        // 依然としてエラー文が報告として見える。
+        //
+        // **失敗で終わった回は `contentless` に含めない。** `failedReportText` は
+        // 必ず本文を作るし、上限に当たった事実はクローンが知る必要がある
+        // （このターン限りは待つ／挑み直すの判断材料）ので、`failure !== undefined`
+        // の枝では `reportText` そのものを呼ばない。
+        const outcome =
+          failure === undefined
+            ? reportText(said, resultTextOf(event))
+            : {
+                text: failedReportText(said, failure, resultTextOf(event).text),
+                contentless: false,
+              };
+        this.#status = this.#pending.length > 0 ? 'waiting_human' : 'done';
+        this.#emit({
+          type: 'report',
+          managerId: this.#id,
+          // **#206: provider がこの結果に払った id を運ぶ。** SDK の `result.uuid` で、
+          // `#onPermission` が `extra.requestId` / `extra.toolUseID` をそのまま
+          // 使うのと同じ作法——runner が新しい値を振るのではなく、SDK 側の
+          // 識別子をそのまま `reportId` として運ぶ（`runnerEventSchema` の
+          // `report.reportId` の doc）。
+          reportId: event.id,
+          text: outcome.text,
+          status: this.#status,
+          ...(failure === undefined ? {} : { failure: { code: failure.code, via: failure.via } }),
+          ...(outcome.contentless ? { contentless: true } : {}),
+        });
+        return;
+      }
+
+      // **枝が増えたらここが型で落ちる（#285 と同じ形）。** 落ちたら「この層は
+      // その事実にどう反応するか」を決めてから通すこと —— 既定で無視へ倒すと、
+      // provider が名乗り始めた事実が黙って網の外へ出る。
+      default: {
+        const unread: never = event;
+        void unread;
         return;
       }
     }
-
-    // **失敗した回の報告に、失敗であることを載せる。** 直す前は成否によらず
-    // `reportText(said, resultText(message))` を上げていたので、上限の英語文言が
-    // そのまま「マネージャーの報告」として台帳（`lastReport`）・日誌・クローンの
-    // 受信箱へ流れていた。クローンから見て「報告が来た」と「エラーで死んだ」が
-    // 区別できない ＝ クローン側で塞いだのと同じ穴がここに残っていた。
-    //
-    // **本文（`text`）の側でも包む。** 構造化した `failure` だけに頼ると、それを
-    // 見ていない読み手（台帳の `lastReport` を出す画面・日誌を読む人間）には
-    // 依然としてエラー文が報告として見える。
-    //
-    // **失敗で終わった回は `contentless` に含めない。** `failedReportText` は
-    // 必ず本文を作るし、上限に当たった事実はクローンが知る必要がある
-    // （このターン限りは待つ／挑み直すの判断材料）ので、`failure !== undefined`
-    // の枝では `reportText` そのものを呼ばない。
-    const outcome =
-      failure === undefined
-        ? reportText(said, resultText(message))
-        : { text: failedReportText(said, failure, resultText(message).text), contentless: false };
-    this.#status = this.#pending.length > 0 ? 'waiting_human' : 'done';
-    this.#emit({
-      type: 'report',
-      managerId: this.#id,
-      // **#206: `message.uuid` を運ぶ。** SDK がこの `result` に払った id で、
-      // `#onPermission` が `extra.requestId` / `extra.toolUseID` をそのまま
-      // 使うのと同じ作法——runner が新しい値を振るのではなく、SDK 側の
-      // 識別子をそのまま `reportId` として運ぶ（`runnerEventSchema` の
-      // `report.reportId` の doc）。
-      reportId: message.uuid,
-      text: outcome.text,
-      status: this.#status,
-      ...(failure === undefined ? {} : { failure: { code: failure.code, via: failure.via } }),
-      ...(outcome.contentless ? { contentless: true } : {}),
-    });
   }
 
   // -------------------------------------------------------------------------
@@ -1835,10 +1835,11 @@ class RunnerSession {
   // -------------------------------------------------------------------------
 
   /** `task_started`。`#openTasks` が 0→1 になった瞬間に区間を開く。 */
-  #onTaskStarted(message: { task_id?: unknown }): void {
-    // 型どおりなら必ず string だが、無ければ取りこぼすより偽の id で数える方を
-    // 選ぶ（他の道具の `brief`/`randomUUID` 系の判断と同じ）。
-    const taskId = typeof message.task_id === 'string' ? message.task_id : randomUUID();
+  #onTaskStarted(event: AgentDelegationStarted): void {
+    // provider が id を名乗らなければ、取りこぼすより偽の id で数える方を選ぶ
+    // （他の道具の `brief`/`randomUUID` 系の判断と同じ）。**代用値をここで作るのは、
+    // 何で埋めるかが層の判断だからである**（`agent-events.ts` の doc）。
+    const taskId = event.taskId ?? randomUUID();
     if (this.#openTasks.size === 0 && this.#window !== null) {
       // 閉じ待ちの間に次の委譲が始まった。**同じ区間として続ける** — ここで
       // 新しい区間を開き直すと、閉じていない集計を上書きして消してしまう。
@@ -1861,8 +1862,8 @@ class RunnerSession {
   }
 
   /** `task_notification`。開いている委譲から1件外し、全部片付いたら閉じ待ちにする。 */
-  #onTaskNotification(message: { task_id?: unknown }): void {
-    const taskId = typeof message.task_id === 'string' ? message.task_id : undefined;
+  #onTaskNotification(event: AgentDelegationNotified): void {
+    const taskId = event.taskId;
     const had = taskId !== undefined && this.#openTasks.delete(taskId);
     // **`worker_wait.notifications` の材料。** 対応する `task_started` を見て
     // いなくても（`had` が false でも）数える — 通知そのものは事実である。
@@ -1921,25 +1922,16 @@ class RunnerSession {
    * あって、手が動いた印ではない。ここで立てると、resume が効かずに終わった回を
    * 「もう作業した」と誤認して生ログからの作り直しを止めてしまう。
    */
-  #noteDenial(source: unknown, via: 'live' | 'result'): void {
-    const denial = source as {
-      tool_name?: unknown;
-      tool_use_id?: unknown;
-      tool_input?: unknown;
-      decision_reason?: unknown;
-      decision_reason_type?: unknown;
-      message?: unknown;
-      agent_id?: unknown;
-      agent_type?: unknown;
-    };
-    const tool = typeof denial.tool_name === 'string' ? denial.tool_name : '(不明な道具)';
-    const input = denial.tool_input;
+  #noteDenial(denial: AgentPermissionDenial, via: 'live' | 'result'): void {
+    const tool = denial.tool ?? '(不明な道具)';
+    const input = denial.input;
     // id が無ければ道具と入力から作る。**取りこぼすより重複を許す** — 決まった
     // 形なので、生の合図と result の記録が同じ1件なら普通はここでも一致する。
-    const toolUseId =
-      typeof denial.tool_use_id === 'string' && denial.tool_use_id.length > 0
-        ? denial.tool_use_id
-        : `${tool}:${brief(input, 120)}`;
+    //
+    // **代用値を作るのはこちら側の仕事である**（`agent-events.ts` の
+    // `AgentPermissionDenial` の doc）。provider の写しは「無かった」をそのまま
+    // 運ぶだけで、何で埋めるかは層が決める。
+    const toolUseId = denial.toolUseId ?? `${tool}:${brief(input, 120)}`;
     if (this.#denied.has(toolUseId)) return;
     this.#denied.set(toolUseId, true);
     // `decision_reason` / `decision_reason_type` / `message` は SDK の走行中の
@@ -1970,8 +1962,8 @@ class RunnerSession {
     // SDK の型に無い情報をここで作り物として埋めることはしない。** 将来
     // SDK がこの欄を持たせてきた場合に備えて読みはするが、現状では
     // 常に `undefined` である。
-    const agentId = typeof denial.agent_id === 'string' ? denial.agent_id : undefined;
-    const agentType = typeof denial.agent_type === 'string' ? denial.agent_type : undefined;
+    const agentId = denial.agentId;
+    const agentType = denial.agentType;
     const actor =
       via === 'live'
         ? agentId === undefined
@@ -1986,11 +1978,9 @@ class RunnerSession {
       input,
       via,
       ...(actor === undefined ? {} : { actor }),
-      ...(typeof denial.decision_reason === 'string' ? { reason: denial.decision_reason } : {}),
-      ...(typeof denial.decision_reason_type === 'string'
-        ? { reasonType: denial.decision_reason_type }
-        : {}),
-      ...(typeof denial.message === 'string' ? { message: denial.message } : {}),
+      ...(denial.reason === undefined ? {} : { reason: denial.reason }),
+      ...(denial.reasonType === undefined ? {} : { reasonType: denial.reasonType }),
+      ...(denial.message === undefined ? {} : { message: denial.message }),
     });
   }
 
@@ -2639,24 +2629,14 @@ function handoffPrompt(input: {
 }
 
 /**
- * 作業者（Task の中）の発言なら親の道具 id が付く。マネージャー自身の発言は `null`。
+ * 応答の本文ブロックを、出た順につないで取り出す。
+ *
+ * **`clone.ts` の同名の写しとは繋ぎ方が違う**（あちらはそのまま繋ぐだけで trim も
+ * しない）。揃えていないのは、繋ぎ方が報告と表示の作法＝層の側の判断だからである。
  */
-function parentToolUseId(message: SDKMessage): string | null {
-  const value = (message as { parent_tool_use_id?: unknown }).parent_tool_use_id;
-  return typeof value === 'string' ? value : null;
-}
-
-/** assistant メッセージの本文ブロックを、出た順につないで取り出す。 */
-function assistantText(message: SDKMessage): string {
-  const content = (message as { message?: { content?: unknown } }).message?.content;
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content
-    .filter(
-      (block): block is { type: 'text'; text: string } =>
-        (block as { type?: unknown }).type === 'text' &&
-        typeof (block as { text?: unknown }).text === 'string',
-    )
+function assistantText(blocks: readonly AgentContentBlock[]): string {
+  return blocks
+    .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
     .map((block) => block.text)
     .join('\n')
     .trim();
@@ -2711,29 +2691,6 @@ function unreportedText(said: readonly string[], reason: string): string {
 }
 
 /**
- * SDK メッセージの `uuid`。**無ければ undefined**（作らない）。
- *
- * `assistantText` / `parentToolUseId` と同じ形——SDK の型に頼らず、
- * 実際に在る値だけを取る。
- */
-function messageUuid(message: SDKMessage): string | undefined {
-  const value = (message as { uuid?: unknown }).uuid;
-  return typeof value === 'string' && value.length > 0 ? value : undefined;
-}
-
-/**
- * `result.permission_denials[]`（確認へ上げずに止められた道具）。無ければ空。
- *
- * SDK 曰くこちらが authoritative な記録である（走行中の合図は取りこぼしうる）。
- * **累積かどうかは型に書かれていない** ので、二度上げないのは呼び出し側の
- * `#denied` の仕事にしてある。
- */
-function permissionDenials(message: SDKMessage): unknown[] {
-  const denials = (message as { permission_denials?: unknown }).permission_denials;
-  return Array.isArray(denials) ? denials.filter((entry) => entry !== null) : [];
-}
-
-/**
  * 失敗で終わったターンの報告本文。
  *
  * **本文の先頭で「応答ではない」と言い切る。** 直す前は成否によらず
@@ -2761,14 +2718,10 @@ function failedReportText(said: readonly string[], failure: SdkFailure, result: 
  * （`AGENTS.md`「テストが書けない構造は、テストが無いのと同じ」への対応 —
  * 文字列を変えずに構造だけを添える）。
  */
-function resultText(message: SDKMessage): { text: string; empty: boolean } {
-  const candidate = message as { result?: unknown; subtype?: string };
-  if (typeof candidate.result === 'string' && candidate.result.length > 0) {
-    return { text: candidate.result, empty: false };
-  }
-  if (candidate.subtype !== undefined && candidate.subtype !== 'success') {
-    return { text: `（結果なしで終了: ${candidate.subtype}）`, empty: false };
-  }
+function resultTextOf(event: AgentTurnEnded): { text: string; empty: boolean } {
+  if (event.body.length > 0) return { text: event.body, empty: false };
+  if (event.outcome !== undefined)
+    return { text: `（結果なしで終了: ${event.outcome}）`, empty: false };
   return { text: '（報告なし）', empty: true };
 }
 

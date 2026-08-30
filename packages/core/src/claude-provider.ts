@@ -3,23 +3,41 @@ import type {
   HookCallback,
   McpServerConfig,
   Options,
+  SDKMessage,
   SessionStore,
   SpawnedProcess,
   SpawnOptions,
 } from '@anthropic-ai/claude-agent-sdk';
 
+import type {
+  AgentContentBlock,
+  AgentEvent,
+  AgentPermissionDenial,
+  AgentRuntimeFacts,
+} from './agent-events.js';
 import type { AgentProvider } from './agent-ports.js';
 import type { PermissionModeName } from './permission-mode.js';
+import { resultErrorLines, resultFailureOf } from './sdk-failure.js';
 import { CLONE_ALLOWED_TOOLS, MCP_SERVER_NAME } from './tools.js';
+import { classifyUsageNotice, toRateLimitFacts } from './usage-limits.js';
+import { isSuccessResult, modelUsageOf } from './usage.js';
 
 /**
- * `Options`（SDK へ渡すセッション設定）を組み立てるのはこのファイルだけにする。
+ * **Claude という provider の形を知っているのはこのファイルだけにする。**
+ *
+ * 向きが2つある。
+ *
+ * | 向き | 何をするか | 出入口 |
+ * | --- | --- | --- |
+ * | 書き側 | `Options`（SDK へ渡すセッション設定）を組み立てる | `buildCloneSessionOptions` / `buildCloneDistillOptions` / `buildManagerSessionOptions` |
+ * | 読み側 | SDK のメッセージを中立イベントへ写す | `foldClaudeMessage`（→ `agent-events.ts`） |
  *
  * **provider を足すときに触る場所を1つにする**ための置き場であって、いま
  * provider は Claude だけである。呼び出し側（`clone.ts` / `runner.ts`）が持つ
  * インスタンスの状態・副作用のある前処理（記憶ドキュメントを読む・観測値を
  * 控える・実行環境プロファイルを重ねるなど）はここへは移さない — ここは
- * 「渡された値をどこへ置くか」だけを知っている純粋な組み立てである。
+ * 「渡された値をどこへ置くか」と「届いた値が何を意味するか」だけを知っている
+ * 純関数の集まりである。
  */
 
 /** PreCompact フック内の蒸留に許す時間（秒）。超えたら compaction を待たせない。 */
@@ -322,4 +340,297 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
       SubagentStop: [{ hooks: [onSubagentStop] }],
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// D. 読み側 —— Claude のメッセージを中立イベントへ写す
+// ---------------------------------------------------------------------------
+
+/**
+ * Claude のメッセージ1件を {@link AgentEvent} へ写す（#486「読み側の中立化」）。
+ *
+ * **ここが「読み取りの判断」の唯一の置き場である。** SDK の綴り（`subtype` の値・
+ * `permission_denials` の欄・`modelUsage` の在り処）を知っているのはこの関数と、
+ * この関数が呼ぶ既に共有済みの判定（`sdk-failure.ts` / `usage-limits.ts` /
+ * `usage.ts`）だけにする。**層（`clone.ts` / `runner.ts`）はもう SDK の綴りを
+ * 読まない** —— 次の provider を足すときに書くのは、この関数と同じ形の写しを
+ * もう1本だけである。
+ *
+ * **純関数である。** 状態を持たないので、ターンを跨ぐ記憶（喋った本文を溜める・
+ * 印を持ち越す・委譲の区間を開く）は層の側に残る。それは「起きたことへの反応」で
+ * あって読み取りの判断ではない（`agent-events.ts` の表の (ii)）。
+ *
+ * **0個返すことがある。** provider が出すもののうち「見ないと決めてある」種類が
+ * あるためで、間引きではなく判断である（下の `task_progress` ほかの doc）。
+ */
+export function foldClaudeMessage(message: SDKMessage): AgentEvent[] {
+  switch (message.type) {
+    case 'system':
+      return foldSystemMessage(message);
+
+    // 枠の事実（アカウント単位）。**ターンの頭ごとに来る**ので、ここが走行中の
+    // 唯一の最新情報になる（使い捨ての probe は idle 用）。
+    case 'rate_limit_event': {
+      const facts = toRateLimitFacts((message as { rate_limit_info?: unknown }).rate_limit_info);
+      return facts === undefined ? [] : [{ type: 'rate_limit', facts }];
+    }
+
+    case 'stream_event': {
+      const text = textDeltaOf((message as { event?: unknown }).event);
+      return text === null ? [] : [{ type: 'text_delta', text }];
+    }
+
+    case 'assistant': {
+      // **印だけを載せ、本文は載せない。** 本文の取り出し方（ブロックをどう繋ぐか）
+      // は層によって違い、そこは表示と報告の作法＝ (ii) の側だからである。
+      const errorCode = (message as { error?: unknown }).error;
+      const messageId = (message as { uuid?: unknown }).uuid;
+      return [
+        {
+          type: 'assistant_message',
+          parentToolUseId: parentToolUseIdOf(message),
+          blocks: contentBlocksOf((message as { message?: unknown }).message),
+          ...(typeof messageId === 'string' && messageId.length > 0 ? { id: messageId } : {}),
+          ...(typeof errorCode === 'string' && errorCode.trim().length > 0 ? { errorCode } : {}),
+        },
+      ];
+    }
+
+    // 道具の結果が返った＝実行は終わり、モデルが次を考え始めた。
+    // `tool_result` を含むときだけにしているのは、人間の発言のエコーや
+    // replay（`SDKUserMessageReplay`）を「考え始めた」と読み違えないため。
+    case 'user': {
+      const returned = contentBlocksRaw((message as { message?: unknown }).message).some(
+        (block) => (block as { type?: unknown }).type === 'tool_result',
+      );
+      return returned ? [{ type: 'tool_result' }] : [];
+    }
+
+    case 'result': {
+      const sessionId = (message as { session_id?: unknown }).session_id;
+      // **成功した result の消費だけを通す。** SDK は
+      // `crash/startup-error results may carry zeroed values` と言っている。
+      // ゼロを「累積が 0 になった」として通すと、受け取った側の基準が下がり、
+      // 次に届いた本物の累積が丸ごと増分になる（`usage.ts` の `isSuccessResult`）。
+      const models = isSuccessResult(message) ? modelUsageOf(message) : undefined;
+      const body = (message as { result?: unknown }).result;
+      const subtype = (message as { subtype?: unknown }).subtype;
+      const id = (message as { uuid?: unknown }).uuid;
+      const failure = resultFailureOf(message);
+      return [
+        {
+          type: 'turn_ended',
+          succeeded: isSuccessResult(message),
+          ...(failure === undefined ? {} : { failure }),
+          body: typeof body === 'string' ? body : '',
+          ...(typeof subtype === 'string' && subtype !== 'success' ? { outcome: subtype } : {}),
+          errorLines: resultErrorLines(message),
+          ...(models === undefined
+            ? {}
+            : {
+                usage: {
+                  models,
+                  ...(typeof sessionId === 'string' ? { sessionId } : {}),
+                },
+              }),
+          ...(typeof id === 'string' && id.length > 0 ? { id } : {}),
+          // **`result` に載っている拒否は authoritative な側である**（走行中の
+          // 合図は取りこぼしうる）。ターンの終わりの事実として一緒に運ぶ理由は
+          // `AgentPermissionDeniedEvent` の doc。
+          denials: permissionDenialsOf(message).map(toAgentPermissionDenial),
+        },
+      ];
+    }
+
+    default:
+      return [];
+  }
+}
+
+/** `system` の枝。**subtype ごとの見分けはここだけが知っている。** */
+function foldSystemMessage(message: SDKMessage & { type: 'system' }): AgentEvent[] {
+  const subtype = (message as { subtype?: unknown }).subtype;
+
+  if (subtype === 'init') {
+    return [
+      {
+        type: 'session_started',
+        sessionId: message.session_id,
+        runtime: runtimeFactsOf(message),
+      },
+    ];
+  }
+
+  // 確認へ上げずにその場で止められた1件（分類器・deny 規則・モード）。
+  //
+  // **`permissionMode: 'auto'` ではここが唯一の生の合図である。** `canUseTool` は
+  // 呼ばれないので、この合図を捨てると手が止められたことが誰にも見えない。SDK 曰く
+  // これは best-effort（取りこぼしうる）で、authoritative なのは
+  // `result.permission_denials` — だから**両方**読む。
+  if (subtype === 'permission_denied') {
+    return [{ type: 'permission_denied', via: 'live', denial: toAgentPermissionDenial(message) }];
+  }
+
+  // 委譲の区間（`worker_wait`）。**下の「上限の文言」の総取りより必ず手前で
+  // 見ること** — 後ろに置くと、`task_started` / `task_notification` はそこで
+  // 無条件に捨てられて二度と読まれない（実際にそうなっていた。マネージャーが
+  // 「残り5体を待ちます」だけのターンを40回以上回した事故で、40という回数自体は
+  // `report` から日誌に残っていたが、契機がどこにも残っていなかった原因がこれ
+  // である）。
+  if (subtype === 'task_started' || subtype === 'task_notification') {
+    const taskId = (message as { task_id?: unknown }).task_id;
+    return [
+      {
+        type: subtype === 'task_started' ? 'delegation_started' : 'delegation_notified',
+        ...(typeof taskId === 'string' ? { taskId } : {}),
+      },
+    ];
+  }
+
+  // `task_progress` / `task_updated` / `background_tasks_changed` は
+  // **見ないと決めてある**（間引いているのではなく、そもそも数える対象では
+  // ないという判断であることをここに明記する）。
+  //
+  // - `task_progress` は高頻度の進捗 ping で、ターンの契機にはならない
+  // - `task_updated` は `task_started` / `task_notification` の間の状態遷移の
+  //   詳細（`pending` → `running` → `completed` 等）で、区間の開閉には要らない
+  // - `background_tasks_changed` は SDK の JSDoc が「level 信号であり
+  //   `task_started`/`task_notification` の edge と相関させるな」
+  //   「background に回った Task だけの一覧」と言っている。フォアグラウンドの
+  //   まま終わる委譲（＝このセッションで普通に起きる委譲）はここに載らない
+  if (
+    subtype === 'task_progress' ||
+    subtype === 'task_updated' ||
+    subtype === 'background_tasks_changed'
+  ) {
+    return [];
+  }
+
+  // 上限の文言。**API エラーとしては来ない**（SDK のコメント）ので、通知・情報
+  // メッセージの本文を見るしかない。ここを見ないと「枠を使い切って課金枠に
+  // 移った」＝止まる一歩前を捉えられない。
+  const said =
+    subtype === 'notification'
+      ? (message as { text?: unknown }).text
+      : subtype === 'informational'
+        ? (message as { content?: unknown }).content
+        : undefined;
+  if (typeof said !== 'string') return [];
+  const notice = classifyUsageNotice(said);
+  return notice === undefined ? [] : [{ type: 'usage_notice', notice }];
+}
+
+/**
+ * init が名乗った実行時の事実。
+ *
+ * **`typeof` で検査し、読めない形は `null` のままにする。** 型定義の上ではどれも
+ * 必須フィールドだが、ここで読み違えて例外を投げるとセッションの起動そのものが
+ * 壊れる。読めなかったことは「まだ分からない」として出せば済む。**`mcp_servers`
+ * も同じ扱いにする（#324）** —— 形が読めなかったときにまで「0本」と主張する
+ * 根拠は無い。読めた配列だけが「0本」を名乗れる。
+ */
+function runtimeFactsOf(message: SDKMessage): AgentRuntimeFacts {
+  const raw = message as unknown as {
+    session_id?: unknown;
+    model?: unknown;
+    claude_code_version?: unknown;
+    apiKeySource?: unknown;
+    permissionMode?: unknown;
+    mcp_servers?: unknown;
+  };
+  return {
+    sessionId: typeof raw.session_id === 'string' ? raw.session_id : null,
+    model: typeof raw.model === 'string' ? raw.model : null,
+    agentVersion: typeof raw.claude_code_version === 'string' ? raw.claude_code_version : null,
+    apiKeySource: typeof raw.apiKeySource === 'string' ? raw.apiKeySource : null,
+    permissionMode: typeof raw.permissionMode === 'string' ? raw.permissionMode : null,
+    mcpServers: Array.isArray(raw.mcp_servers)
+      ? raw.mcp_servers.filter(
+          (entry): entry is { name: string; status: string } =>
+            typeof entry === 'object' &&
+            entry !== null &&
+            typeof (entry as { name?: unknown }).name === 'string' &&
+            typeof (entry as { status?: unknown }).status === 'string',
+        )
+      : null,
+  };
+}
+
+/**
+ * 拒否の1件を中立の形へ写す。
+ *
+ * **走行中の合図（`system/permission_denied`）と `result.permission_denials` の
+ * 両方から呼ばれる。** 欄の揃い方は出所で違う（後者は `tool_name` /
+ * `tool_use_id` / `tool_input` の3つしか持たない）が、**読み方は同じである** ——
+ * だから写しは1本でよい。**無い欄は作り物を出さずキーごと省く。**
+ */
+function toAgentPermissionDenial(source: unknown): AgentPermissionDenial {
+  const denial = source as {
+    tool_name?: unknown;
+    tool_use_id?: unknown;
+    tool_input?: unknown;
+    decision_reason?: unknown;
+    decision_reason_type?: unknown;
+    message?: unknown;
+    agent_id?: unknown;
+    agent_type?: unknown;
+  } | null;
+  return {
+    ...(typeof denial?.tool_name === 'string' ? { tool: denial.tool_name } : {}),
+    ...(typeof denial?.tool_use_id === 'string' && denial.tool_use_id.length > 0
+      ? { toolUseId: denial.tool_use_id }
+      : {}),
+    ...(denial?.tool_input === undefined ? {} : { input: denial.tool_input }),
+    ...(typeof denial?.decision_reason === 'string' ? { reason: denial.decision_reason } : {}),
+    ...(typeof denial?.decision_reason_type === 'string'
+      ? { reasonType: denial.decision_reason_type }
+      : {}),
+    ...(typeof denial?.message === 'string' ? { message: denial.message } : {}),
+    ...(typeof denial?.agent_id === 'string' ? { agentId: denial.agent_id } : {}),
+    ...(typeof denial?.agent_type === 'string' ? { agentType: denial.agent_type } : {}),
+  };
+}
+
+/** `result` に載っている拒否の記録（authoritative な側）。無ければ空。 */
+function permissionDenialsOf(message: SDKMessage): unknown[] {
+  const denials = (message as { permission_denials?: unknown }).permission_denials;
+  return Array.isArray(denials) ? denials.filter((entry) => entry !== null) : [];
+}
+
+/** 作業者（委譲の中）の発言なら親の道具 id が付く。本体の発言は `null`。 */
+function parentToolUseIdOf(message: SDKMessage): string | null {
+  const value = (message as { parent_tool_use_id?: unknown }).parent_tool_use_id;
+  return typeof value === 'string' ? value : null;
+}
+
+/** 逐次配信の1片。text の delta 以外は読まない。 */
+function textDeltaOf(event: unknown): string | null {
+  const candidate = event as { type?: string; delta?: { type?: string; text?: unknown } };
+  if (candidate.type !== 'content_block_delta') return null;
+  if (candidate.delta?.type !== 'text_delta') return null;
+  return typeof candidate.delta.text === 'string' ? candidate.delta.text : null;
+}
+
+/** 中身の塊をそのまま並べる（種類の見分けは呼び出し側）。 */
+function contentBlocksRaw(message: unknown): unknown[] {
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === 'string') return [{ type: 'text', text: content }];
+  return Array.isArray(content) ? content : [];
+}
+
+/**
+ * 中身の塊を中立の3種へ畳む。
+ *
+ * **`text` でも `tool_use` でもないものを捨てずに `other` として残す。** 数と順序が
+ * 保たれるので、層の側が「読み飛ばした塊が在った」ことを見られる。
+ */
+function contentBlocksOf(message: unknown): AgentContentBlock[] {
+  return contentBlocksRaw(message).map((block): AgentContentBlock => {
+    const type = (block as { type?: unknown }).type;
+    const text = (block as { text?: unknown }).text;
+    if (type === 'text' && typeof text === 'string') return { type: 'text', text };
+    const name = (block as { name?: unknown }).name;
+    if (type === 'tool_use' && typeof name === 'string') return { type: 'tool_use', name };
+    return { type: 'other' };
+  });
 }

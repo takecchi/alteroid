@@ -21,17 +21,6 @@ import { classifyUsageNotice } from './usage-limits.js';
 const ORG_SPEND_LIMIT =
   "You've hit your org's monthly spend limit · ask your admin to raise it at claude.ai/settings/usage?from=cc_cli_limit_message";
 
-function assistant(fields: Record<string, unknown>): SDKMessage {
-  return {
-    type: 'assistant',
-    message: { content: [{ type: 'text', text: 'なにか' }] },
-    parent_tool_use_id: null,
-    session_id: 'sess',
-    uuid: 'uuid',
-    ...fields,
-  } as unknown as SDKMessage;
-}
-
 function result(fields: Record<string, unknown>): SDKMessage {
   return {
     type: 'result',
@@ -80,13 +69,20 @@ const SDK_ASSISTANT_ERROR_CODES: SDK_の_error_の語が増えた_この表と_s
     max_output_tokens: true,
   };
 
+/**
+ * **印そのものを渡す形で測る。** `assistant` メッセージのどの欄に印が載るかを
+ * 読むのは `claude-provider.ts` の `foldClaudeMessage` の仕事になったので
+ * （#486「読み側の中立化」）、その読み取りは `claude-provider.test.ts` の
+ * `assistant_message.errorCode` の側で測っている。ここが測るのは
+ * 「印を印として扱うか」だけである。
+ */
 describe('assistantFailureOf — assistant メッセージの失敗の印', () => {
   it('印が無ければ undefined（普通の応答を失敗にしない）', () => {
-    expect(assistantFailureOf(assistant({}), 'なにか')).toBeUndefined();
+    expect(assistantFailureOf(undefined, 'なにか')).toBeUndefined();
   });
 
   it('error が付いていれば、その語と本文をそのまま運ぶ', () => {
-    const failure = assistantFailureOf(assistant({ error: 'billing_error' }), ORG_SPEND_LIMIT);
+    const failure = assistantFailureOf('billing_error', ORG_SPEND_LIMIT);
     expect(failure).toEqual({
       via: 'assistant_error',
       code: 'billing_error',
@@ -99,15 +95,15 @@ describe('assistantFailureOf — assistant メッセージの失敗の印', () =
     // （実機で当たったのは `billing_error`）。網は `SDK_ASSISTANT_ERROR_CODES` が
     // 持っており、あちらは型で全値を縛ってある。
     for (const code of Object.keys(SDK_ASSISTANT_ERROR_CODES)) {
-      expect(assistantFailureOf(assistant({ error: code }), 'x')?.code).toBe(code);
+      expect(assistantFailureOf(code, 'x')?.code).toBe(code);
     }
   });
 
   it('空文字や文字列でない error は印として扱わない（`{}` を印にしない）', () => {
-    expect(assistantFailureOf(assistant({ error: '' }), 'x')).toBeUndefined();
-    expect(assistantFailureOf(assistant({ error: '   ' }), 'x')).toBeUndefined();
-    expect(assistantFailureOf(assistant({ error: 1 }), 'x')).toBeUndefined();
-    expect(assistantFailureOf(assistant({ error: {} }), 'x')).toBeUndefined();
+    expect(assistantFailureOf('', 'x')).toBeUndefined();
+    expect(assistantFailureOf('   ', 'x')).toBeUndefined();
+    expect(assistantFailureOf(1, 'x')).toBeUndefined();
+    expect(assistantFailureOf({}, 'x')).toBeUndefined();
   });
 });
 
@@ -209,9 +205,7 @@ describe('検知に文言を使っていない', () => {
   });
 
   it('印が付いていれば、本文が英語でも日本語でも関係なく失敗（文言に依存しない）', () => {
-    expect(
-      assistantFailureOf(assistant({ error: 'billing_error' }), '内部で何かが壊れた')?.code,
-    ).toBe('billing_error');
+    expect(assistantFailureOf('billing_error', '内部で何かが壊れた')?.code).toBe('billing_error');
     expect(resultFailureOf(result({ is_error: true, result: '普通の返事' }))?.via).toBe(
       'result_is_error',
     );
