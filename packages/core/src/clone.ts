@@ -6,12 +6,23 @@ import type {
   Options,
   PostToolUseHookInput,
   Query,
-  SDKMessage,
   SDKUserMessage,
   SessionStore,
 } from '@anthropic-ai/claude-agent-sdk';
 
-import { buildCloneDistillOptions, buildCloneSessionOptions } from './claude-provider.js';
+import type {
+  AgentContentBlock,
+  AgentEvent,
+  AgentPermissionDenial,
+  AgentRuntimeFacts,
+  AgentTurnEnded,
+  AgentTurnUsage,
+} from './agent-events.js';
+import {
+  buildCloneDistillOptions,
+  buildCloneSessionOptions,
+  foldClaudeMessage,
+} from './claude-provider.js';
 import { buildActivityDigest, type ManagerLiveness } from './digest.js';
 import {
   DISTILL_GAP_ACTIVITY_SCAN_LIMIT,
@@ -72,8 +83,6 @@ import {
   CLONE_ACTOR_ID,
   CLONE_DISTILL_ACTOR_ID,
   CLONE_SUB_ACTOR_PREFIX,
-  isSuccessResult,
-  modelUsageOf,
   usageDate,
   type UsageSite,
   type UsageSnapshot,
@@ -82,18 +91,12 @@ import {
   classifyUsageNotice,
   describeUsageNotice,
   mergeRateLimitFacts,
-  toRateLimitFacts,
   usageTransitionOf,
   type RateLimitFacts,
   type UsageLimitNotice,
 } from './usage-limits.js';
 import type { TokenRotatorObservation } from './token-rotator.js';
-import {
-  assistantFailureOf,
-  resultErrorLines,
-  resultFailureOf,
-  type SdkFailure,
-} from './sdk-failure.js';
+import { assistantFailureOf, type SdkFailure } from './sdk-failure.js';
 import {
   classifyContextWindowFailure,
   describeContextWindowFailure,
@@ -3626,31 +3629,13 @@ class Clone implements CloneHost {
    * 読めなかったときにまで「0本」と主張する根拠は無い。読めた配列だけが「0本」
    * を名乗れる。
    */
-  #captureInitFacts(message: SDKMessage): void {
-    const raw = message as unknown as {
-      session_id?: unknown;
-      model?: unknown;
-      claude_code_version?: unknown;
-      apiKeySource?: unknown;
-      permissionMode?: unknown;
-      mcp_servers?: unknown;
-    };
-    this.#sdkSessionId = typeof raw.session_id === 'string' ? raw.session_id : null;
-    this.#sdkModel = typeof raw.model === 'string' ? raw.model : null;
-    this.#claudeCodeVersion =
-      typeof raw.claude_code_version === 'string' ? raw.claude_code_version : null;
-    this.#apiKeySource = typeof raw.apiKeySource === 'string' ? raw.apiKeySource : null;
-    this.#observedPermissionMode =
-      typeof raw.permissionMode === 'string' ? raw.permissionMode : null;
-    this.#mcpServersInfo = Array.isArray(raw.mcp_servers)
-      ? raw.mcp_servers.filter(
-          (entry): entry is { name: string; status: string } =>
-            typeof entry === 'object' &&
-            entry !== null &&
-            typeof (entry as { name?: unknown }).name === 'string' &&
-            typeof (entry as { status?: unknown }).status === 'string',
-        )
-      : null;
+  #captureInitFacts(facts: AgentRuntimeFacts): void {
+    this.#sdkSessionId = facts.sessionId;
+    this.#sdkModel = facts.model;
+    this.#claudeCodeVersion = facts.agentVersion;
+    this.#apiKeySource = facts.apiKeySource;
+    this.#observedPermissionMode = facts.permissionMode;
+    this.#mcpServersInfo = facts.mcpServers;
   }
 
   /**
@@ -3737,25 +3722,14 @@ class Clone implements CloneHost {
    * **`tool_use` としては記録しない。** 拒否は「道具を使った」ではないので、
    * 混ぜると `digest` の「自分で手を動かした回数」が使えていない回数まで数える。
    */
-  async #noteDenial(source: unknown, via: 'live' | 'result'): Promise<void> {
-    const denial = source as
-      | {
-          tool_name?: unknown;
-          tool_use_id?: unknown;
-          decision_reason?: unknown;
-          decision_reason_type?: unknown;
-          message?: unknown;
-          agent_id?: unknown;
-          agent_type?: unknown;
-        }
-      | null
-      | undefined;
-    const tool = typeof denial?.tool_name === 'string' ? denial.tool_name : UNKNOWN_TOOL_NAME;
+  async #noteDenial(denial: AgentPermissionDenial, via: 'live' | 'result'): Promise<void> {
+    const tool = denial.tool ?? UNKNOWN_TOOL_NAME;
     // id が無ければ道具の名前で代用する。**取りこぼすより重複を許す。**
-    const toolUseId =
-      typeof denial?.tool_use_id === 'string' && denial.tool_use_id.length > 0
-        ? denial.tool_use_id
-        : `${tool}:${via}`;
+    //
+    // **代用値を作るのはこちら側の仕事である**（`agent-events.ts` の
+    // `AgentPermissionDenial` の doc）。provider の写しは「無かった」を
+    // そのまま運ぶだけで、何で埋めるかは層が決める。
+    const toolUseId = denial.toolUseId ?? `${tool}:${via}`;
     if (this.#deniedToolUses.has(toolUseId)) return;
     this.#deniedToolUses.set(toolUseId, true);
 
@@ -3765,11 +3739,9 @@ class Clone implements CloneHost {
     // 作り物を出さず、そのまま行を省く**（`manager.ts` の `permission_denied`
     // 受信での組み立てと同じ形）。
     const denialDetails = [
-      typeof denial?.decision_reason_type === 'string'
-        ? `分類: ${denial.decision_reason_type}`
-        : undefined,
-      typeof denial?.decision_reason === 'string' ? `理由: ${denial.decision_reason}` : undefined,
-      typeof denial?.message === 'string' ? `モデルへの拒否文: ${denial.message}` : undefined,
+      denial.reasonType === undefined ? undefined : `分類: ${denial.reasonType}`,
+      denial.reason === undefined ? undefined : `理由: ${denial.reason}`,
+      denial.message === undefined ? undefined : `モデルへの拒否文: ${denial.message}`,
     ].filter((line): line is string => line !== undefined);
     const why = denialDetails.length > 0 ? `（${denialDetails.join(' / ')}）` : '';
 
@@ -3792,8 +3764,8 @@ class Clone implements CloneHost {
     // `agent_id` は持つが `agent_type` を持たない（`runner.ts` の同じ doc、
     // SDK `0.3.247` の型で確認済み）。読みはするが、作り物の型名を出さない
     // （`cloneToolActor` の `UNKNOWN_AGENT_TYPE` と同じ扱い）。
-    const agentId = typeof denial?.agent_id === 'string' ? denial.agent_id : undefined;
-    const agentType = typeof denial?.agent_type === 'string' ? denial.agent_type : undefined;
+    const agentId = denial.agentId;
+    const agentType = denial.agentType;
     const actorLabel =
       via !== 'live'
         ? 'どちらの層か不明'
@@ -3959,7 +3931,12 @@ class Clone implements CloneHost {
     });
 
     for await (const message of side) {
-      if (message.type !== 'result') continue;
+      // **本セッションと同じ写しを通す**（`claude-provider.ts` の
+      // `foldClaudeMessage`）。読むのはターンの終わりだけなので `#apply` は
+      // 通さない —— こちらは `site`（`distill`）も累積の数え方（`oneshot`）も
+      // 本セッションと違い、**同じ反応をさせてはいけない側**である。
+      const ended = foldClaudeMessage(message).find((event) => event.type === 'turn_ended');
+      if (ended === undefined) continue;
       // **このサイドクエリの `result` を読み捨てないこと。** ここが「要約のたびに
       // 払っている蒸留の費用」の唯一の観測点である。別の `query()` 呼び出しなので
       // 累積は1回で閉じており（SDK: 「during this query() call」）、値はこの1回の
@@ -3968,16 +3945,17 @@ class Clone implements CloneHost {
       // **これは「要約そのものの費用」ではない。** 要約を作る推論は本セッションの
       // `modelUsage` に合算されて分離できない（`usage.ts` の `usageSiteSchema`）。
       // 混ぜて名乗ると、取れていないものを取れたことにする。
-      await this.#recordUsage(message, 'distill', 'oneshot');
+      await this.#recordUsage(ended.usage, 'distill', 'oneshot');
       // **この経路の成功も日誌へ残す**（Issue #564 の (b)）。ここは受信箱を
       // 通らない別経路なので、`#handle` の `'distill'` 分岐に印を置いただけでは
       // 「要約の直前に蒸留して、そのまま器が入れ替わった」回が「1度も蒸留して
       // いない」と読まれる。
       //
-      // **判定は `isSuccessResult` である**（`#recordUsage` が消費を積むのと
-      // 同じ条件。`usage.ts` の doc）。ここは `#runTurn` を通らないサイド
-      // クエリなので `TurnOutcome` が無く、成否は `result` からしか取れない。
-      if (isSuccessResult(message)) await this.#journal(distillSucceededEntry('pre_compact'));
+      // **判定は `succeeded` である**（`#recordUsage` が消費を積むのと同じ条件 ——
+      // 中立イベントの `succeeded` は `usage.ts` の `isSuccessResult` そのもので、
+      // `usage` が載るかどうかもこれで決まる）。ここは `#runTurn` を通らないサイド
+      // クエリなので `TurnOutcome` が無く、成否はターンの終わりからしか取れない。
+      if (ended.succeeded) await this.#journal(distillSucceededEntry('pre_compact'));
       break;
     }
   }
@@ -3993,20 +3971,17 @@ class Clone implements CloneHost {
    * （`manager.ts` の `case 'usage'` と同じ作法）。
    */
   async #recordUsage(
-    message: SDKMessage,
+    usage: AgentTurnUsage | undefined,
     site: UsageSite,
     accumulation: 'cumulative' | 'oneshot',
   ): Promise<void> {
-    // 成功した result だけを通す。理由は `usage.ts` の `isSuccessResult`。
-    if (!isSuccessResult(message)) return;
-    const models = modelUsageOf(message);
-    if (models === undefined) return;
+    // **積める消費が無い回はここで終わる。** 「成功した result だけを通す」の
+    // 判定は provider の写しが済ませている（`claude-provider.ts` の
+    // `foldClaudeMessage` ＋ `usage.ts` の `isSuccessResult`）ので、
+    // `usage` が無いことがそのまま「積む値が無い」である。
+    if (usage === undefined) return;
 
-    const sessionId = (message as { session_id?: unknown }).session_id;
-    const snapshot: UsageSnapshot = {
-      models,
-      ...(typeof sessionId === 'string' ? { sessionId } : {}),
-    };
+    const snapshot: UsageSnapshot = usage;
 
     const at = new Date();
     try {
@@ -4046,7 +4021,7 @@ class Clone implements CloneHost {
           layer: 'clone',
           site,
           managerId: CLONE_ACTOR_ID,
-          ...(typeof sessionId === 'string' ? { sessionId } : {}),
+          ...(usage.sessionId === undefined ? {} : { sessionId: usage.sessionId }),
           models: fold.delta,
           ...(fold.reset === undefined
             ? {}
@@ -4124,7 +4099,10 @@ class Clone implements CloneHost {
 
     try {
       for await (const message of q) {
-        await this.#dispatch(message);
+        // **provider の綴りを読むのはここまでである**（`claude-provider.ts` の
+        // `foldClaudeMessage`）。ここから下へ流れるのは中立イベントだけで、
+        // 次の provider を足しても `#apply` は1本のままになる（#486）。
+        for (const event of foldClaudeMessage(message)) await this.#apply(event);
       }
     } catch (error) {
       failure = String(error);
@@ -4155,15 +4133,25 @@ class Clone implements CloneHost {
     }
   }
 
-  async #dispatch(message: SDKMessage): Promise<void> {
-    switch (message.type) {
-      case 'system': {
-        if (message.subtype === 'init') {
-          this.#sawInit = true;
-          await this.#stores.sessions.setCloneSessionId(message.session_id).catch(() => undefined);
-          this.#captureInitFacts(message);
-          return;
-        }
+  /**
+   * 中立イベント1件へ反応する（`agent-events.ts` の表の (ii)）。
+   *
+   * **provider の綴りはここには無い。** 何が起きたかを決めるのは
+   * `foldClaudeMessage` で、ここが決めるのは「起きたことへクローン層がどう
+   * 反応するか」だけである —— 画面へ何を流すか、日誌へ何を書くか、ターンを
+   * どこで畳むか。**その反応は層ごとに違う**（マネージャー層の同じ場所は
+   * `runner.ts` の `#apply` で、副作用は2層で15種あり重なるのは2種だけである）。
+   */
+  async #apply(event: AgentEvent): Promise<void> {
+    switch (event.type) {
+      case 'session_started': {
+        this.#sawInit = true;
+        await this.#stores.sessions.setCloneSessionId(event.sessionId).catch(() => undefined);
+        this.#captureInitFacts(event.runtime);
+        return;
+      }
+
+      case 'permission_denied': {
         // 確認へ上げずにその場で止められた1件（分類器・deny 規則・モード）。
         //
         // **`permissionMode: 'auto'` で `canUseTool` を繋いでいない以上、拒否は
@@ -4172,51 +4160,43 @@ class Clone implements CloneHost {
         // 「静かになった」と「起きていない」が区別できなくなる（`runner.ts` の
         // 同じ箇所と同じ理由。あちらは受信箱にも出すが、こちらは**自分が**
         // ツール結果でエラーを読むので、要るのは後から辿れる記録だけである）。
-        if ((message as { subtype?: unknown }).subtype === 'permission_denied') {
-          await this.#noteDenial(message, 'live');
-          return;
-        }
+        await this.#noteDenial(event.denial, 'live');
+        return;
+      }
+
+      case 'usage_notice': {
         // 上限の文言。**API エラーとしては来ない**（SDK のコメント）ので、
         // 通知・情報メッセージの本文を見るしかない（`runner.ts` の同じ場面と
         // 同じ理由 — マネージャー側だけがこれを見ていて、クローン側に無いのは
         // 非対称だった）。
-        const said =
-          message.subtype === 'notification'
-            ? (message as { text?: unknown }).text
-            : message.subtype === 'informational'
-              ? (message as { content?: unknown }).content
-              : undefined;
-        if (typeof said === 'string') {
-          const notice = classifyUsageNotice(said);
-          if (notice !== undefined)
-            await this.#noteUsageNotice(notice, this.#turn?.conversationId ?? null, 'text');
-        }
+        // **文言の分類そのものは provider の写しが済ませている**
+        // （`claude-provider.ts` の `foldClaudeMessage`）。ここへ届く時点で
+        // 「上限の合図である」は確定している。
+        await this.#noteUsageNotice(event.notice, this.#turn?.conversationId ?? null, 'text');
         return;
       }
 
       // 枠の事実（アカウント単位）。**ターンの頭ごとに来る**ので、ここが走行中の
       // 唯一の最新情報になる（`runner.ts` の同じ場面と同じ理由）。
-      case 'rate_limit_event': {
-        const facts = toRateLimitFacts((message as { rate_limit_info?: unknown }).rate_limit_info);
-        if (facts !== undefined) {
-          // **回し手へは事実と遷移で渡す**（通知の形へ仕立て直したものではない）。
-          // `#noteUsageNotice` の `source` の doc に理由がある。
-          //
-          // **状態ではなく遷移を渡す。** `rate_limit_event` はターンの頭ごとに
-          // 来るので、状態をそのまま流すと同じ `rejected` で毎ターン回そうと
-          // する。覚えるのは**重ねた形**（`mergeRateLimitFacts`）——届いた1件で
-          // 丸ごと置き換えると、`status` を運んでいない観測が「もう知らせた」と
-          // いう記憶を消す（あちらの doc）。
-          const kind = facts.kind ?? '';
-          const previous = this.#rateLimits.get(kind);
-          const transition = usageTransitionOf(previous, facts);
-          const merged = mergeRateLimitFacts(previous, facts);
-          this.#rateLimits.set(kind, merged);
-          if (transition !== undefined) {
-            await this.#observeForTokenRotation({ facts: merged, transition });
-          }
+      case 'rate_limit': {
+        const facts = event.facts;
+        // **回し手へは事実と遷移で渡す**（通知の形へ仕立て直したものではない）。
+        // `#noteUsageNotice` の `source` の doc に理由がある。
+        //
+        // **状態ではなく遷移を渡す。** `rate_limit_event` はターンの頭ごとに
+        // 来るので、状態をそのまま流すと同じ `rejected` で毎ターン回そうと
+        // する。覚えるのは**重ねた形**（`mergeRateLimitFacts`）——届いた1件で
+        // 丸ごと置き換えると、`status` を運んでいない観測が「もう知らせた」と
+        // いう記憶を消す（あちらの doc）。
+        const kind = facts.kind ?? '';
+        const previous = this.#rateLimits.get(kind);
+        const transition = usageTransitionOf(previous, facts);
+        const merged = mergeRateLimitFacts(previous, facts);
+        this.#rateLimits.set(kind, merged);
+        if (transition !== undefined) {
+          await this.#observeForTokenRotation({ facts: merged, transition });
         }
-        if (facts?.status === 'rejected') {
+        if (facts.status === 'rejected') {
           await this.#noteUsageNotice(
             rejectedRateLimitNotice(facts),
             this.#turn?.conversationId ?? null,
@@ -4226,18 +4206,16 @@ class Clone implements CloneHost {
         return;
       }
 
-      case 'stream_event': {
-        const delta = textDelta(message.event);
-        if (delta === null) return;
+      case 'text_delta': {
         const turn = this.#turn;
         if (turn) turn.streamed = true;
-        this.#emit(turn?.conversationId ?? null, { type: 'text', text: delta });
+        this.#emit(turn?.conversationId ?? null, { type: 'text', text: event.text });
         return;
       }
 
-      case 'assistant': {
+      case 'assistant_message': {
         const turn = this.#turn;
-        const said = assistantTextOf(message.message);
+        const said = assistantTextOf(event.blocks);
 
         // **SDK が「これは応答ではない」と印を付けたメッセージは、応答として
         // 扱わない。** 支出上限（`billing_error`）・枠（`rate_limit`）・認証の失敗は
@@ -4249,20 +4227,20 @@ class Clone implements CloneHost {
         // `classifyUsageNotice` へ渡る）。人間へ `text` として流さないのは、
         // 「返答が来た」と見えてしまうからである — 終端は `result` の分岐が出す
         // `usage_limited` / `error` に任せる。
-        const rejected = assistantFailureOf(message, said);
+        const rejected = assistantFailureOf(event.errorCode, said);
         if (rejected !== undefined) {
           if (turn) turn.rejected = rejected;
           return;
         }
 
-        for (const block of contentBlocks(message.message)) {
-          if (block.type === 'text' && typeof block.text === 'string') {
+        for (const block of event.blocks) {
+          if (block.type === 'text') {
             if (turn) turn.text += block.text;
             // 逐次配信が来ていない環境でも、人間に本文が届かないことは無いようにする
             if (!turn?.streamed) {
               this.#emit(turn?.conversationId ?? null, { type: 'text', text: block.text });
             }
-          } else if (block.type === 'tool_use' && typeof block.name === 'string') {
+          } else if (block.type === 'tool_use') {
             this.#emit(turn?.conversationId ?? null, { type: 'tool', tool: block.name });
           }
         }
@@ -4274,32 +4252,31 @@ class Clone implements CloneHost {
       // もう終わっている実行をまだ続いているように見せてしまう。
       // `tool_result` を含むときだけにしているのは、人間の発言のエコーや
       // replay（`SDKUserMessageReplay`）を「考え始めた」と読み違えないため。
-      case 'user': {
-        if (!contentBlocks(message.message).some((block) => block.type === 'tool_result')) return;
+      case 'tool_result': {
         this.#emit(this.#turn?.conversationId ?? null, { type: 'thinking' });
         return;
       }
 
-      case 'result': {
+      case 'turn_ended': {
         // **クローンの消費も台帳へ載せる。** ここを渡していなかったのは設計判断
         // ではなく抜けで（#45 の本文にも `usage.ts` にも「クローンの分は記録
         // しない」は無い）、その結果クローンは自分がいくら使ったかを読めなかった。
         // 人間は `claude.ai/settings/usage` で見られるので、これは能力の削除に
         // なっていた（north_star 禁止1）。
-        await this.#recordUsage(message, 'session', 'cumulative');
+        await this.#recordUsage(event.usage, 'session', 'cumulative');
 
         // **生の合図と `result` の両方を読む。** SDK は前者を best-effort と言い、
         // 「authoritative なのは `result.permission_denials`」と言っている。
         // **成否で絞らない** — 拒否は成功したターンにも失敗したターンにも載る
         // （`runner.ts` の同じ箇所と同じ判断）。二重に書かないのは `#deniedToolUses`。
-        for (const denial of permissionDenialsOf(message)) {
+        for (const denial of event.denials) {
           await this.#noteDenial(denial, 'result');
         }
 
         const turn = this.#turn;
         // 失敗の印は日誌へ書く前に決める（下の分岐と同じ材料を使う）。**本文を
         // 「クローンの発言」として無印で残せるかどうかがこれで変わる。**
-        const failure = resultFailureOf(message) ?? turn?.rejected ?? undefined;
+        const failure = event.failure ?? turn?.rejected ?? undefined;
 
         if (turn && turn.text.trim().length > 0) {
           // 内部ターン（蒸留・自律）も必ず残す。見えない層を作らない。
@@ -4337,8 +4314,9 @@ class Clone implements CloneHost {
         // `subtype: 'success'` かつ `is_error: true` という組み合わせが SDK の型に
         // あり（`SDKResultSuccess.is_error`）、`isSuccessResult` はそれを成功として
         // 通す — 台帳の問い（累積を通してよいか）と応答の問い（答えとして扱って
-        // よいか）が違うからである（`sdk-failure.ts` の表）。`#recordUsage` は
-        // 上で `isSuccessResult` のまま通してあり、こちらだけを厳しくしている。
+        // よいか）が違うからである（`sdk-failure.ts` の表）。**中立イベントは
+        // 両方を別の欄で運ぶ** —— 台帳へ積む `usage` は `isSuccessResult` で絞られた
+        // 側、`failure` は `isAnsweredResult` で絞られた側である。
         //
         // **`turn.rejected` も見る**（`failure` は上で決めてある）。`assistant.error`
         // が付いたメッセージが来たターンは、たとえ `result` が綺麗な成功で返って
@@ -4358,11 +4336,7 @@ class Clone implements CloneHost {
           // `#usageBlocked` を立てる）。この `await` は下の `#reportFailure`
           // （`error` を emit する）より必ず先に終わる — `usage_limited` は終端では
           // ないので、終端の `error` より先に届いていなければならない。
-          for (const candidate of [
-            failure.text,
-            resultBody(message),
-            ...resultErrorLines(message),
-          ]) {
+          for (const candidate of [failure.text, event.body, ...event.errorLines]) {
             const notice = classifyUsageNotice(candidate);
             if (notice !== undefined) {
               await this.#noteUsageNotice(notice, turn?.conversationId ?? null, 'text');
@@ -4371,7 +4345,7 @@ class Clone implements CloneHost {
           }
           // 失敗した result では `done` を出さない。`#reportFailure` が出す
           // `{ type: 'error' }` を終端にする（成功したことにしない）。
-          await this.#reportFailure(turn?.conversationId ?? null, failureReason(failure, message));
+          await this.#reportFailure(turn?.conversationId ?? null, failureReason(failure, event));
           // 失敗側でも必ず畳む。`#runTurn` は `#finishTurn()` が呼ぶ `turn.resolve()`
           // だけを待っており（`await done`）、`#handle`（`human_message` の分岐）は
           // その `#runTurn` を待つ。呼ばなければ `#runTurn` が永久に返らず、それを
@@ -4414,8 +4388,21 @@ class Clone implements CloneHost {
         return;
       }
 
-      default:
+      // **この層が反応しない事実。** 委譲の区間（`worker_wait`）を数えているのは
+      // マネージャー層（`runner.ts`）で、クローンは `Task` を持つが区間を数えて
+      // いない。**「まだ書いていない」ではなく「この層は見ないと決めてある」である。**
+      case 'delegation_started':
+      case 'delegation_notified':
         return;
+
+      // **枝が増えたらここが型で落ちる（#285 と同じ形）。** 落ちたら「この層は
+      // その事実にどう反応するか」を決めてから通すこと —— 既定で無視へ倒すと、
+      // provider が名乗り始めた事実が黙って網の外へ出る。
+      default: {
+        const unread: never = event;
+        void unread;
+        return;
+      }
     }
   }
 
@@ -5049,29 +5036,21 @@ function safeJson(value: unknown): string {
   }
 }
 
-interface Block {
-  type?: string;
-  text?: unknown;
-  name?: unknown;
-}
-
-function contentBlocks(message: unknown): Block[] {
-  const content = (message as { content?: unknown }).content;
-  if (typeof content === 'string') return [{ type: 'text', text: content }];
-  return Array.isArray(content) ? (content as Block[]) : [];
-}
-
 /**
- * assistant メッセージの text ブロックを1本に繋いだもの。
+ * 応答の text ブロックを1本に繋いだもの。
  *
  * **失敗の印が付いたメッセージの本文を取り出すためにある**（`sdk-failure.ts` の
- * `assistantFailureOf` へ渡す材料）。応答の積み上げ側（`#dispatch` の `assistant`）が
- * ブロックごとに `emit` するのと役割が違うので、そちらは書き換えていない。
+ * `assistantFailureOf` へ渡す材料）。応答の積み上げ側（`#apply` の
+ * `assistant_message`）がブロックごとに `emit` するのと役割が違うので、そちらは
+ * 書き換えていない。
+ *
+ * **`runner.ts` の同名の写しとは繋ぎ方が違う**（あちらは改行で繋いで trim する）。
+ * 揃えていないのは、繋ぎ方が報告と表示の作法＝層の側の判断だからである。
  */
-function assistantTextOf(message: unknown): string {
+function assistantTextOf(blocks: readonly AgentContentBlock[]): string {
   let text = '';
-  for (const block of contentBlocks(message)) {
-    if (block.type === 'text' && typeof block.text === 'string') text += block.text;
+  for (const block of blocks) {
+    if (block.type === 'text') text += block.text;
   }
   return text;
 }
@@ -5097,22 +5076,6 @@ function cloneToolActor(
   return `${CLONE_SUB_ACTOR_PREFIX}${type}`;
 }
 
-/** `result` に載っている拒否の記録（authoritative な側）。無ければ空。 */
-function permissionDenialsOf(message: SDKMessage): unknown[] {
-  const denials = (message as { permission_denials?: unknown }).permission_denials;
-  return Array.isArray(denials) ? denials.filter((entry) => entry !== null) : [];
-}
-
-function textDelta(event: unknown): string | null {
-  const candidate = event as {
-    type?: string;
-    delta?: { type?: string; text?: unknown };
-  };
-  if (candidate.type !== 'content_block_delta') return null;
-  if (candidate.delta?.type !== 'text_delta') return null;
-  return typeof candidate.delta.text === 'string' ? candidate.delta.text : null;
-}
-
 /**
  * 失敗を1行の理由にする。
  *
@@ -5128,26 +5091,14 @@ function textDelta(event: unknown): string | null {
  * `result.subtype` が失敗だったのか、`subtype: 'success'` なのに `is_error` が
  * 立っていたのかは、**次に同じことが起きたときの掘り始めの位置が違う**。
  */
-function failureReason(failure: SdkFailure, message: SDKMessage): string {
+function failureReason(failure: SdkFailure, event: AgentTurnEnded): string {
   const body =
     failure.text.length > 0
       ? failure.text
-      : resultBody(message).length > 0
-        ? resultBody(message)
-        : (resultErrorLines(message)[0] ?? '（本文なし）');
+      : event.body.length > 0
+        ? event.body
+        : (event.errorLines[0] ?? '（本文なし）');
   return `結果なしで終了: ${failure.code}（${failure.via}） / ${body}`;
-}
-
-/**
- * `result.result`（本文）だけを取り出す。無ければ空文字。
- *
- * `resultFailureReason` と同じ材料を見るが、あちらは `subtype` と結合した
- * 表示用の1行を作る一方、こちらは `classifyUsageNotice` に渡す生の文言が要る
- * （SDK の上限の文言は `result` にしか乗らない）。
- */
-function resultBody(message: SDKMessage): string {
-  const candidate = message as { result?: unknown };
-  return typeof candidate.result === 'string' ? candidate.result : '';
 }
 
 /**
