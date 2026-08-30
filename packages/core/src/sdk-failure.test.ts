@@ -21,17 +21,6 @@ import { classifyUsageNotice } from './usage-limits.js';
 const ORG_SPEND_LIMIT =
   "You've hit your org's monthly spend limit · ask your admin to raise it at claude.ai/settings/usage?from=cc_cli_limit_message";
 
-function assistant(fields: Record<string, unknown>): SDKMessage {
-  return {
-    type: 'assistant',
-    message: { content: [{ type: 'text', text: 'なにか' }] },
-    parent_tool_use_id: null,
-    session_id: 'sess',
-    uuid: 'uuid',
-    ...fields,
-  } as unknown as SDKMessage;
-}
-
 function result(fields: Record<string, unknown>): SDKMessage {
   return {
     type: 'result',
