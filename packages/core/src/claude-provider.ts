@@ -384,11 +384,13 @@ export function foldClaudeMessage(message: SDKMessage): AgentEvent[] {
       // **印だけを載せ、本文は載せない。** 本文の取り出し方（ブロックをどう繋ぐか）
       // は層によって違い、そこは表示と報告の作法＝ (ii) の側だからである。
       const errorCode = (message as { error?: unknown }).error;
+      const messageId = (message as { uuid?: unknown }).uuid;
       return [
         {
           type: 'assistant_message',
           parentToolUseId: parentToolUseIdOf(message),
           blocks: contentBlocksOf((message as { message?: unknown }).message),
+          ...(typeof messageId === 'string' && messageId.length > 0 ? { id: messageId } : {}),
           ...(typeof errorCode === 'string' && errorCode.trim().length > 0 ? { errorCode } : {}),
         },
       ];

@@ -164,6 +164,8 @@ export interface AgentAssistantMessage {
   /** 作業者（委譲の中）の発言なら親の道具 id。本体の発言なら `null`。 */
   parentToolUseId: string | null;
   blocks: readonly AgentContentBlock[];
+  /** provider がこのメッセージに払った id。無ければ `undefined`（新しく振らない）。 */
+  id?: string;
   /**
    * **provider 自身が「これは応答ではない」と付けた印。** 支出上限・枠・認証の
    * 失敗はここへ来る（`sdk-failure.ts`）。本文をどう取り出して添えるかは層が
