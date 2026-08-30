@@ -78,13 +78,15 @@ function nonEmpty(value: unknown): string | undefined {
  * 語を列挙せず「空でない文字列」を印として通すので、**知らない語も印になる。**
  * 数え上げているのはこの写しと歯だけである。
  *
- * **本文は呼び出し側が渡す。** ここで `message.message.content` を辿らないのは、
- * text ブロックの取り出しが `clone.ts` と `runner.ts` でそれぞれ既にあり
- * （`contentBlocks` / `assistantText`）、3つ目の写しを作ると綴りの取り違えが
- * 片方だけで起きるからである。
+ * **印も本文も呼び出し側が渡す。** メッセージそのものを受け取らないのは、
+ * SDK の綴り（`error` という欄に印が載ること）を読むのが
+ * `claude-provider.ts` の `foldClaudeMessage` の仕事だからである（#486
+ * 「読み側の中立化」）。本文のほうは層によって取り出し方が違う
+ * （`clone.ts` はブロックをそのまま繋ぎ、`runner.ts` は改行で繋いで trim する）
+ * ので、ここで3つ目の写しを作ると綴りの取り違えが片方だけで起きる。
  */
-export function assistantFailureOf(message: SDKMessage, text: string): SdkFailure | undefined {
-  const code = nonEmpty((message as { error?: unknown }).error);
+export function assistantFailureOf(error: unknown, text: string): SdkFailure | undefined {
+  const code = nonEmpty(error);
   return code === undefined ? undefined : { via: 'assistant_error', code, text };
 }
 
