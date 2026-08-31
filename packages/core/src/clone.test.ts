@@ -3958,16 +3958,27 @@ describe('クローン — ターンの失敗の跡', () => {
      * 暴走の止めに掛かって畳まれない（対照2 がそこを押す）。**固定値のスタブに
      * しない**（`resultFor` の doc と同じ理由）。
      */
-    function setupFold(failText: string) {
+    /**
+     * @param failDistill 蒸留のサイドセッションを**起こせない**形にする。
+     *   **枠が閉じている回の代役である** —— 実測では長さで落ちた24件のうち9件が
+     *   「長さと枠が同時」だった（`#salvageTranscript` の doc）。
+     */
+    function setupFold(failText: string, failDistill = false) {
       const stores = createMemoryStores();
       let failNext = false;
       const { fn, calls } = fakeSdk(undefined, {
         resultFor: () =>
           failNext ? { subtype: 'success', isError: true, text: failText } : undefined,
       });
+      // **サイドセッションだけを落とす。** 本セッションの `prompt` は非同期の
+      // イテレータで来るので、**文字列で来る側が蒸留である。**
+      const queryFn: typeof fn = (args) => {
+        if (failDistill && typeof args.prompt === 'string') throw new Error('枠が閉じている');
+        return fn(args);
+      };
       const clone = createClone({
         stores,
-        queryFn: fn,
+        queryFn,
         env: {},
         runners: createRunnerRegistry([
           createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
@@ -4201,8 +4212,78 @@ describe('クローン — ターンの失敗の跡', () => {
       );
       expect(distillRow?.text).toContain('この区間はどこにも残っていない');
       expect(distillRow?.text).not.toContain('生ログの退避は済んでいる');
+      // **⭐ 墓標も立たない**（#564 E1b の限界）。退避が落ちた回は拾う材料が
+      // 器の外に無いので、指す先が無い。
+      expect(await s.stores.sessions.getTranscriptGrave()).toBeNull();
 
       await s.clone.stop();
+    });
+
+    /**
+     * **⭐ 蒸留が落ちたら、退避の id を墓標として残す**（#564 E1b）。
+     *
+     * ここで蒸留が落ちる主な理由は**枠が閉じていること**で、枠は待てば開く。
+     * ⟹ **印が無ければ、開いた後に拾う手がかりが1つも残らない。**
+     *
+     * 指すのは `archive` の id であってセッション id ではない —— この時点で
+     * セッション id は既に捨ててある（`TranscriptGrave` の doc）。
+     */
+    it('蒸留が落ちたら、退避の id を墓標として残す', async () => {
+      const s = setupFold(tooLong, true);
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.events.some((event) => event.type === 'done'), '1本目が通ること');
+
+      const dir = await mkdtemp(join(tmpdir(), 'alteroid-ctxwin-grave-'));
+      try {
+        const transcriptPath = join(dir, 'transcript.jsonl');
+        await writeFile(transcriptPath, '畳む直前の生ログ', 'utf8');
+        const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+        if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
+        await hook({ tool_name: 'Read', transcript_path: transcriptPath } as never, undefined, {
+          signal: new AbortController().signal,
+        } as never);
+
+        s.failFrom();
+        s.clone.post(humanMessage('やあ'));
+        await waitFor(() => s.events.some((event) => event.type === 'error'), 'ターンが落ちること');
+
+        await waitFor(
+          async () => (await s.stores.sessions.getTranscriptGrave()) !== null,
+          '墓標が立つこと',
+        );
+        const ids = await s.stores.archive.list();
+        expect((await s.stores.sessions.getTranscriptGrave())?.archiveId).toBe(ids[0]);
+      } finally {
+        await s.clone.stop();
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('対照: 蒸留が通った回は墓標を残さない', async () => {
+      const s = setupFold(tooLong);
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.events.some((event) => event.type === 'done'), '1本目が通ること');
+
+      const dir = await mkdtemp(join(tmpdir(), 'alteroid-ctxwin-grave-none-'));
+      try {
+        const transcriptPath = join(dir, 'transcript.jsonl');
+        await writeFile(transcriptPath, '畳む直前の生ログ', 'utf8');
+        const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+        if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
+        await hook({ tool_name: 'Read', transcript_path: transcriptPath } as never, undefined, {
+          signal: new AbortController().signal,
+        } as never);
+
+        s.failFrom();
+        s.clone.post(humanMessage('やあ'));
+        await waitFor(() => s.events.some((event) => event.type === 'error'), 'ターンが落ちること');
+        await waitFor(async () => (await s.stores.archive.list()).length > 0, '退避されること');
+
+        expect(await s.stores.sessions.getTranscriptGrave()).toBeNull();
+      } finally {
+        await s.clone.stop();
+        await rm(dir, { recursive: true, force: true });
+      }
     });
 
     /**
@@ -5588,6 +5669,103 @@ describe('クローン — 蒸留の末尾は全文を読まずに取る（渡�
     // **文言は2つに割れている**（直す前は「退避・蒸留に失敗した」の1本だった）。
     expect(rows.some((entry) => entry.text.includes('PreCompact の退避に失敗した'))).toBe(true);
     expect(rows.some((entry) => entry.text.includes('PreCompact の蒸留に失敗した'))).toBe(false);
+
+    await s.clone.stop();
+  });
+});
+
+/**
+ * 起動時に、**前の器が記憶へ移せなかった区間を拾い直す**（#564 E1b。
+ * `#pickUpTranscriptGrave`）。
+ *
+ * ## なぜ歯が要るか
+ *
+ * 印（墓標）が立つのは蒸留が落ちた回で、**主な理由は枠が閉じていること**である。
+ * 枠は待てば開くが、**拾い直す手が無ければ、開いても誰も戻らない。**
+ *
+ * ## ⚠️ この歯が測っていないこと
+ *
+ * **枠が閉じたまま何度も起動する回**は測っていない（印が残り続けることは
+ * 「印を下ろすのは成功したときだけ」という1本の条件から出るが、実際に回して
+ * いない）。
+ */
+describe('クローン — 起動時に墓標を拾い直す（#564 E1b）', () => {
+  /** 日誌の self/outbound を text で読む。 */
+  async function selfTexts(stores: Stores): Promise<string[]> {
+    const rows = await stores.journal.list({ types: ['exchange'] });
+    return rows
+      .filter((entry) => entry.type === 'exchange' && entry.with === 'self')
+      .map((entry) => (entry.type === 'exchange' ? entry.text : ''));
+  }
+
+  it('墓標が在れば拾って蒸留し、印を下ろす', async () => {
+    const stores = createMemoryStores();
+    const archiveId = await stores.archive.archive(
+      'sess-old',
+      'GRAVE-TRANSCRIPT-MARKER-3c9d 前の器が記憶へ移せなかった区間の生ログ',
+    );
+    await stores.sessions.setTranscriptGrave({ archiveId });
+
+    const s = setup(undefined, stores);
+    await waitFor(
+      async () =>
+        (await selfTexts(stores)).some((text) =>
+          text.includes('前の器が記憶へ移せなかった区間を拾い直す'),
+        ),
+      '拾い直しの1行が日誌に残ること',
+    );
+    // **蒸留のサイドセッションへ中身が渡っている**（日誌の行だけでは、拾っただけで
+    // 何も渡していない形と区別が付かない）。
+    await waitFor(
+      () =>
+        s.calls.some((call) =>
+          call.inputs.some((input) => input.includes('GRAVE-TRANSCRIPT-MARKER-3c9d')),
+        ),
+      '蒸留へ生ログが渡ること',
+    );
+    // **印は下りている**（蒸留が成功したので）。
+    await waitFor(
+      async () => (await stores.sessions.getTranscriptGrave()) === null,
+      '印が下りること',
+    );
+
+    await s.clone.stop();
+  });
+
+  it('退避が見つからないときは、印を下ろして日誌に残す', async () => {
+    const stores = createMemoryStores();
+    await stores.sessions.setTranscriptGrave({ archiveId: 'sess-gone-0001' });
+
+    const s = setup(undefined, stores);
+    await waitFor(
+      async () =>
+        (await selfTexts(stores)).some((text) =>
+          text.includes('退避が見つからないので、印を下ろした'),
+        ),
+      '印を下ろした1行が残ること',
+    );
+    expect(await stores.sessions.getTranscriptGrave()).toBeNull();
+    // **蒸留は起こさない**（渡す中身が無い）。
+    expect(
+      (await selfTexts(stores)).some((text) =>
+        text.includes('前の器が記憶へ移せなかった区間を拾い直す'),
+      ),
+    ).toBe(false);
+
+    await s.clone.stop();
+  });
+
+  it('対照: 墓標が無ければ何も起こさない', async () => {
+    const stores = createMemoryStores();
+    const s = setup(undefined, stores);
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const texts = await selfTexts(stores);
+    expect(texts.some((text) => text.includes('前の器が記憶へ移せなかった区間を拾い直す'))).toBe(
+      false,
+    );
+    expect(texts.some((text) => text.includes('退避が見つからないので、印を下ろした'))).toBe(false);
 
     await s.clone.stop();
   });

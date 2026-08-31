@@ -2500,6 +2500,29 @@ describe('FsSessionRegistry', () => {
     await stores.sessions.setCloneSessionId(null);
     expect(await stores.sessions.getCloneSessionId()).toBeNull();
   });
+
+  /**
+   * **⭐ 墓標はセッション id と別の欄に置く**（#564 E1b）。
+   *
+   * ここが同居していると、**resume を捨てた瞬間に墓標も消える** —— 拾い直すために
+   * 立てた印が、拾う理由ができた瞬間に消える形になる（`SessionRegistry` の doc）。
+   * ⟹ **`setCloneSessionId(null)` を挟んで、墓標が残ることを測る。**
+   */
+  it('墓標を覚えて忘れられる。そして resume 素材を捨てても消えない', async () => {
+    expect(await stores.sessions.getTranscriptGrave()).toBeNull();
+
+    await stores.sessions.setCloneSessionId('sess-1');
+    await stores.sessions.setTranscriptGrave({ archiveId: 'sess-1-2026.jsonl' });
+    expect(await stores.sessions.getTranscriptGrave()).toEqual({ archiveId: 'sess-1-2026.jsonl' });
+
+    // **これが本題である。** resume 素材を捨てる操作は墓標に触らない。
+    await stores.sessions.setCloneSessionId(null);
+    expect(await stores.sessions.getCloneSessionId()).toBeNull();
+    expect(await stores.sessions.getTranscriptGrave()).toEqual({ archiveId: 'sess-1-2026.jsonl' });
+
+    await stores.sessions.setTranscriptGrave(null);
+    expect(await stores.sessions.getTranscriptGrave()).toBeNull();
+  });
 });
 
 /**
