@@ -9474,7 +9474,72 @@ describe('recycleSessionForToken（回した後のセッション作り直し）
     expect(sessions).toHaveLength(1);
   });
 
+  /**
+   * **⭐ 失敗した直後に畳んでも、余計な失敗が1件も増えない。**
+   *
+   * ## なぜこれを先に固定するのか
+   *
+   * 文脈窓（プロンプトの長さ）で落ちた回にセッションを畳み直す設計（#553）が、
+   * この性質に**丸ごと乗っている。** 乗っている先はここである:
+   *
+   * - `#apply` の `case 'turn_ended'` は、失敗した `result` に対して
+   *   `#reportFailure`（`error` を1件 emit する）を打ち、そのあと `#finishTurn()` を
+   *   呼ぶ
+   * - `#finishTurn()` は `#turn` を `null` にしてから境界を起こす
+   * - ⟹ `#inputStream` が境界で `return` し、`#read` の `finally` に届く頃には
+   *   `#turn` は `null` ⟹ `if (turn) { … 'クローンのセッションが終了した' }` が
+   *   偽になる
+   *
+   * **⟹ もしこの順序が崩れると、失敗を1件報告した直後に「セッションが終了した」が
+   * 同じ会話へもう1件届く。** 人間から見ると、1回の失敗が2回に見える ——
+   * しかも2件目は原因を1文字も持たない。
+   *
+   * ## ⚠️ 既存の兄弟の歯とは条件が違う
+   *
+   * 上の「ターンの途中では畳まない」は**成功して終わるターンの途中**で畳む。
+   * こちらは**失敗して終わったターンの直後**に畳む。**`#turn` を片付ける経路が
+   * 別である**（あちらは結果の到着、こちらは失敗側の `#finishTurn()`）ので、
+   * あちらが緑でもこちらは保証されない。
+   *
+   * **⚠️ この歯は `recycleSessionForToken()`（＝トークンを回す側の引き金）で
+   * 畳んでいる。** 文脈窓で畳む引き金はまだ無いので、**固定しているのは
+   * 「畳む引き金が何であれ、失敗の直後に畳んでも余計な報告が出ない」という
+   * 順序の性質だけである。**
+   */
+  it('⚠️ 失敗した直後に畳んでも、余計な失敗が増えない（次は新しいセッションで走る）', async () => {
+    // **固定値のスタブにしない。** 1本目だけ失敗させ、2本目は通す —— 全ターンを
+    // 失敗に固定すると「2本目の失敗」と「余計な報告」が区別できなくなる。
+    let failNext = true;
+    const { clone, calls } = setupRecycle({
+      resultFor: () =>
+        failNext
+          ? { subtype: 'success', isError: true, text: 'Prompt is too long' }
+          : undefined,
+    });
+    const events: string[] = [];
+    clone.subscribe('conv-1', (event) => events.push(event.type));
+
+    say(clone);
+    await waitFor(() => events.includes('error'), '1本目が失敗すること');
+    failNext = false;
+
+    // 失敗の直後に畳む（ターンはもう終わっている ＝ 境界に居る）。
+    clone.recycleSessionForToken();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    say(clone);
+
+    await waitFor(() => calls.length > 1, '2本目のセッションが開くこと');
+    await waitFor(() => events.includes('done'), '2本目が最後まで走ること');
+    await clone.stop();
+
+    // **失敗の報告は1件だけ。**2件目（`クローンのセッションが終了した`）が出ない。
+    expect(events.filter((type) => type === 'error')).toHaveLength(1);
+    // 畳めているので、2本目は別のセッションである。
+    expect(calls.length).toBeGreaterThan(1);
+  });
+
   it('クローン全体の停止（stop）とは別物である', async () => {
+
     // 混ぜると「トークンを回したらクローンが止まる」になる。
     const { clone, calls } = setupRecycle();
     say(clone);
