@@ -4148,6 +4148,64 @@ describe('クローン — ターンの失敗の跡', () => {
     });
 
     /**
+     * **⭐ (i) 退避が落ちても (ii) 蒸留へ進む。**
+     *
+     * 直す前は (i) の `catch` で `return` していた。⟹ (i) は全文を 1 本の文字列に
+     * するので、生ログが伸びて `ERR_STRING_TOO_LONG` になると**蒸留も道連れで
+     * 止まる**（`readTranscriptTail` の doc）。ここはその制御の流れを固定する。
+     *
+     * ## 測り方
+     *
+     * 在り処の控えは残したまま**ファイルを消す**。⟹ (i) も (ii) も読めないので、
+     * **(ii) の行が日誌に在ること自体が「(i) の後に進んだ」証拠になる。**
+     *
+     * ## 併せて、文言が嘘にならないことも測る
+     *
+     * 直す前の (ii) の文言は「生ログの退避は済んでいる」と固定だった。**(i) が
+     * 落ちた回にそう書くと守れない約束になる**（AGENTS.md「静かに失敗する道具」と
+     * 同じ形で、読む側は残っていると信じる）。
+     */
+    it('退避が落ちても蒸留へ進み、日誌は「どこにも残っていない」と言う', async () => {
+      const s = setupFold(tooLong);
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.events.some((event) => event.type === 'done'), '1本目が通ること');
+
+      const dir = await mkdtemp(join(tmpdir(), 'alteroid-ctxwin-gone-'));
+      const transcriptPath = join(dir, 'transcript.jsonl');
+      await writeFile(transcriptPath, '畳む直前の生ログ', 'utf8');
+      const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+      if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
+      await hook({ tool_name: 'Read', transcript_path: transcriptPath } as never, undefined, {
+        signal: new AbortController().signal,
+      } as never);
+      // **控えは残したまま、ファイルだけを消す。** ⟹ (i) と (ii) の両方が読めない。
+      await rm(dir, { recursive: true, force: true });
+
+      s.failFrom();
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.events.some((event) => event.type === 'error'), 'ターンが落ちること');
+
+      await waitFor(
+        async () =>
+          (await exchanges(s.stores)).some((entry) =>
+            entry.text.includes('文脈窓で畳む前の蒸留に失敗した'),
+          ),
+        '蒸留まで進んで、その失敗が日誌に残ること',
+      );
+      const rows = await exchanges(s.stores);
+      expect(
+        rows.some((entry) => entry.text.includes('文脈窓で畳む前の生ログの退避に失敗した')),
+      ).toBe(true);
+      const distillRow = rows.find((entry) =>
+        entry.text.includes('文脈窓で畳む前の蒸留に失敗した'),
+      );
+      expect(distillRow?.text).toContain('この区間はどこにも残っていない');
+      expect(distillRow?.text).not.toContain('生ログの退避は済んでいる');
+
+      await s.clone.stop();
+    });
+
+    /**
      * **⭐ 畳んだ次のターンで、クローン自身にも1度だけ断る**（#553、依頼元の決裁）。
      *
      * ## なぜ人間への1行だけでは足りないのか
@@ -5419,6 +5477,119 @@ describe('クローン — PreCompact サイドセッションの入力を日誌
     expect(fpA).toBe(fingerprintOf(a));
     expect(fpB).toBe(fingerprintOf(b));
     expect(fpA).not.toBe(fpB);
+  });
+});
+
+/**
+ * 蒸留へ渡す末尾は、**全文を 1 本の文字列にせずに**読む（`readTranscriptTail`）。
+ *
+ * ## なぜこの歯が要るか
+ *
+ * `readFile(path, 'utf8')` は中身を 1 本の文字列にするので、JS の文字列の上限
+ * （`node:buffer` の `constants.MAX_STRING_LENGTH`）を超えると
+ * `ERR_STRING_TOO_LONG` で投げる。**クローンの生ログは 1 本のセッションが伸び続ける
+ * 形（resume が同じセッションへ書き足す）なので、伸びるほど確実に当たる側である。**
+ *
+ * ## ⚠️ この歯が測っているのは「単位」である
+ *
+ * `tailOf` が切るのは**文字**であってバイトではない。⟹ 末尾から
+ * `DISTILL_TRANSCRIPT_TAIL_CHARS` **バイト**だけ読む形へ直すと、日本語混じりの生ログでは
+ * 渡る量が 1/3 になる。**そしてそれは赤くならない** —— 短い末尾でも蒸留は成功するので、
+ * 失われたことがどこにも出ない。⟹ **だから長さと中身をここで測る。**
+ */
+describe('クローン — 蒸留の末尾は全文を読まずに取る（渡る量を減らさない）', () => {
+  /** 1 行あたり約 200 文字の日本語（1 文字 3 バイト）を並べた生ログ。 */
+  function japaneseTranscript(lines: number): string {
+    return Array.from(
+      { length: lines },
+      (_, i) => `${String(i).padStart(4, '0')}行目の記録である。${'あ'.repeat(180)}`,
+    ).join('\n');
+  }
+
+  /** `PreCompact` フックを実際に叩いて蒸留のサイドクエリを走らせる。 */
+  async function firePreCompactWith(main: FakeCall, transcript: string): Promise<void> {
+    const dir = await mkdtemp(join(tmpdir(), 'alteroid-clone-tail-'));
+    try {
+      const transcriptPath = join(dir, 'transcript.jsonl');
+      await writeFile(transcriptPath, transcript, 'utf8');
+      const hook = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
+      if (hook === undefined) throw new Error('PreCompact フックが登録されていない');
+      await hook({ session_id: 'sess-fake', transcript_path: transcriptPath } as never, undefined, {
+        signal: new AbortController().signal,
+      } as never);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  it('60,000 文字級の日本語でも、渡る末尾は全文を読んだときと同じである', async () => {
+    const transcript = japaneseTranscript(500);
+    // **前提を先に測る。** ここが偽なら、下の歯は単位の取り違えを検出できない。
+    expect(transcript.length).toBeGreaterThan(60_000);
+    expect(Buffer.byteLength(transcript, 'utf8')).toBeGreaterThan(transcript.length * 2.5);
+
+    const s = setup();
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+    await firePreCompactWith(s.calls[0] as FakeCall, transcript);
+
+    // **末尾 60,000 文字ぶんが渡っている。** バイトで窓を取ると 20,000 文字台になる。
+    const rows = (await s.stores.journal.list({ types: ['exchange'] })).filter(
+      (entry) => entry.type === 'exchange',
+    );
+    const inputRow = rows.find((entry) => entry.text.includes('ターンの入力: pre_compact_distill'));
+    expect(inputRow, '日誌に pre_compact_distill の行が無い').toBeDefined();
+    const chars = Number(/tail\.chars=(\d+)/u.exec(inputRow?.text ?? '')?.[1] ?? '0');
+    expect(chars).toBeGreaterThan(59_000);
+    expect(chars).toBeLessThanOrEqual(60_000);
+
+    // **中身も同じである。** 長さだけでは、別の 60,000 文字を渡しても通る。
+    const prompt = s.calls[1]?.inputs[0] ?? '';
+    expect(prompt).toContain(transcript.slice(-59_000));
+    // 渡すのは末尾だけである（全文は渡らない）。
+    expect(prompt).not.toContain(transcript.slice(0, 200));
+
+    await s.clone.stop();
+  });
+
+  /**
+   * **⭐ 退避が落ちても蒸留へ進む**（`#onPreCompact`）。
+   *
+   * 直す前は 1 つの `try` に (i) 退避と (ii) 蒸留が入っていた。⟹ 全文の `readFile` か
+   * `archive` のどちらかが落ちると**蒸留も走らない。** この経路の doc は逐語で
+   * 「蒸留は生存条件であり、後回しにしてよい機能ではない」と書いているので、
+   * **退避の都合で蒸留が止まる形は、その約束と食い違う。**
+   */
+  it('退避が落ちても蒸留へ進む（PreCompact。文言も2つに割れている）', async () => {
+    const stores = createMemoryStores();
+    const broken: Stores = {
+      ...stores,
+      archive: {
+        archive: async () => {
+          throw new Error('退避先が閉じている');
+        },
+        list: () => stores.archive.list(),
+        read: (id: string) => stores.archive.read(id),
+      },
+    };
+
+    const s = setup(undefined, broken);
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+    await firePreCompactWith(s.calls[0] as FakeCall, 'PRECOMPACT-BROKEN-ARCHIVE の生ログ');
+
+    const rows = (await broken.journal.list({ types: ['exchange'] })).filter(
+      (entry) => entry.type === 'exchange',
+    );
+    // **蒸留は走った**（退避の失敗に巻き込まれていない）。
+    expect(rows.some((entry) => entry.text.includes('ターンの入力: pre_compact_distill'))).toBe(
+      true,
+    );
+    // **文言は2つに割れている**（直す前は「退避・蒸留に失敗した」の1本だった）。
+    expect(rows.some((entry) => entry.text.includes('PreCompact の退避に失敗した'))).toBe(true);
+    expect(rows.some((entry) => entry.text.includes('PreCompact の蒸留に失敗した'))).toBe(false);
+
+    await s.clone.stop();
   });
 });
 
