@@ -807,6 +807,22 @@ class Clone implements CloneHost {
    */
   #recycleForContextWindow = false;
 
+  /**
+   * 文脈窓で畳んだので、**次の通常のターンで1度だけ、クローン自身へ断る。**
+   *
+   * ## なぜクローンにも言う必要があるのか
+   *
+   * 畳んだ次のターンで、クローンは**自分が文脈を失ったことを知らない。**
+   * ⟹ 読み直すべきだと気づけない。⟹ 人間には「なぜか話が通じない」として出る。
+   * **落ちなくなっても、人間から見た症状はそこで残る。**
+   *
+   * ## `#distillGapNoticePending` と同じ形で持つ
+   *
+   * 印を立て、次の通常のターンの入力の先頭へ1度だけ差し込み、印を下ろす。
+   * **蒸留のターンには載せない**（記憶へ移すためだけの内部ターンである）。
+   */
+  #contextWindowFoldNoticePending = false;
+
   readonly #inbox = new Inbox();
   readonly #listeners = new Map<string, Set<Listener>>();
   /** 受信箱に積んだイベントの処理完了を待つための約束。 */
@@ -2699,6 +2715,8 @@ class Clone implements CloneHost {
     if (this.#resumedFrom === null && !this.#sessionAnswered) return 'held';
 
     this.#recycleForContextWindow = true;
+    // **クローン自身への断りも同時に立てる**（`#contextWindowFoldNoticePending`）。
+    this.#contextWindowFoldNoticePending = true;
     try {
       await this.#stores.sessions.setCloneSessionId(null);
     } catch (error) {
@@ -3149,6 +3167,7 @@ class Clone implements CloneHost {
       this.#pushInput(
         await this.#withFreshMemory(
           (await this.#distillGapNotice(kind)) +
+            this.#contextWindowFoldNotice(kind) +
             this.#redeliveryNotice +
             this.#commitmentNotice +
             text,
@@ -3646,6 +3665,39 @@ class Clone implements CloneHost {
       noteDroppedRecord('蒸留の区間の読み出し', `until=${this.#bootAt}`, error);
       return '';
     }
+  }
+
+  /**
+   * 文脈窓で畳んだことを、**次の通常のターンで1度だけクローン自身へ断る**（#553）。
+   *
+   * **`#distillGapNotice` と同じ形にしてある** —— 印を下ろしてから文を返し、
+   * 蒸留のターンには載せない（印も下ろさないので、次の通常のターンで改めて載る）。
+   *
+   * ## ⭐ 読み直す口の名前を書く
+   *
+   * 「読み直せる」だけだと、クローンは次のターンで**口を探すところから始める。**
+   * `conversation_read` と書いてあれば1手で済む。**依頼元（クローン）の逐語の条件
+   * である** —— 読むのはクローン自身なので、そこは読む側が決めた。
+   *
+   * ## ⛔ 「どうすべきか」は書かない
+   *
+   * 読み直すかどうかはクローンの判断である（`usage-limits.ts` の
+   * `describeUsageNotice` と同じ約束）。ここが渡すのは**何が起きたか**と
+   * **どの口で読めるか**だけで、「読め」とは書かない。
+   */
+  #contextWindowFoldNotice(kind: 'normal' | 'distill'): string {
+    if (kind === 'distill') return '';
+    if (!this.#contextWindowFoldNoticePending) return '';
+    this.#contextWindowFoldNoticePending = false;
+    return (
+      '[system] 直前のターンが文脈窓（プロンプトの長さ）に当たって失敗したので、' +
+      'このセッションは前の会話を引き継がずに開き直したものである。' +
+      '**⟹ あなたはそれまでのやりとりを文脈として持っていない。**' +
+      'ただし会話の記録そのものは消えていない（`conversation_read` で読み直せる。' +
+      '生ログはアーカイブに退避してある）。' +
+      '⚠️ 記憶（システムプロンプトの「現在の記憶」）はそのままである' +
+      '——失われたのは会話の文脈だけである。\n\n---\n\n'
+    );
   }
 
   /**

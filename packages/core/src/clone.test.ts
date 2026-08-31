@@ -4147,6 +4147,70 @@ describe('クローン — ターンの失敗の跡', () => {
       expect(selfRows.some((entry) => entry.text.includes('生ログの退避に失敗した'))).toBe(false);
     });
 
+    /**
+     * **⭐ 畳んだ次のターンで、クローン自身にも1度だけ断る**（#553、依頼元の決裁）。
+     *
+     * ## なぜ人間への1行だけでは足りないのか
+     *
+     * 畳んだ次のターンで、クローンは**自分が文脈を失ったことを知らない。**
+     * ⟹ 読み直すべきだと気づけない。⟹ 人間には「なぜか話が通じない」として出る。
+     * **落ちなくなっても、人間から見た症状はそこで残る。**
+     *
+     * ## 対照を2本置く
+     *
+     * 1. **1度だけ** —— 次のターンには載らない（毎ターン載ると文脈を食う）
+     * 2. **畳んでいない失敗では載らない**
+     */
+    it('畳んだ次のターンで、クローン自身へ1度だけ断る（読み口の名前つき）', async () => {
+      const s = setupFold(tooLong);
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.events.some((event) => event.type === 'done'), '1本目が通ること');
+      s.failFrom();
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.events.some((event) => event.type === 'error'), 'ターンが落ちること');
+      await waitFor(
+        async () => (await s.stores.sessions.getCloneSessionId()) === null,
+        '畳むと決まること',
+      );
+
+      // 畳んだ後の新しいセッションで1ターン回す。
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.calls.length > 1, '2本目のセッションが開くこと');
+      const next = s.calls.at(-1) as FakeCall;
+      await waitFor(() => next.inputs.length > 0, '入力が届くこと');
+
+      const first = next.inputs[0] as string;
+      expect(first).toContain('前の会話を引き継がずに開き直した');
+      // **⭐ 読み直す口の名前が在る**（依頼元の条件。無いと口を探すところから始まる）。
+      expect(first).toContain('conversation_read');
+      // **記憶は失われていない**ことも言う（そこを混同すると同一性の話になる）。
+      expect(first).toContain('記憶');
+
+      // 対照1: **1度だけ。**次のターンには載らない。
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => next.inputs.length > 1, '2ターン目の入力が届くこと');
+      await s.clone.stop();
+      expect(next.inputs[1] as string).not.toContain('前の会話を引き継がずに開き直した');
+    });
+
+    it('対照（畳んでいない失敗）: クローンへの断りも載らない', async () => {
+      const s = setupFold('何か別の理由で落ちた');
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.events.some((event) => event.type === 'done'), '1本目が通ること');
+      s.failFrom();
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.events.some((event) => event.type === 'error'), 'ターンが落ちること');
+
+      const main = s.calls[0] as FakeCall;
+      const before = main.inputs.length;
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => main.inputs.length > before, '次の入力が届くこと');
+      await s.clone.stop();
+
+      expect(main.inputs.at(-1) as string).not.toContain('前の会話を引き継がずに開き直した');
+    });
+
     it('対照3: トークンを回すだけでは resume 素材を捨てない（会話が切れない）', async () => {
       const s = setupFold(tooLong);
       s.clone.post(humanMessage('やあ'));
