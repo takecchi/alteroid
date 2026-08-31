@@ -38,6 +38,7 @@ import type {
   CommitmentStore,
   ScheduleStore,
   SessionRegistry,
+  TranscriptGrave,
   Stores,
   TokenPoolStore,
   TranscriptArchive,
@@ -134,6 +135,7 @@ export function createMemoryStores(): Stores {
   const archives = new Map<string, string>();
   const inboxStore = createMemoryInboxStore();
   let cloneSessionId: string | null = null;
+  let transcriptGrave: TranscriptGrave | null = null;
   let envProfile: EnvProfile | null = null;
   let counter = 0;
   const nextId = () => `id-${++counter}`;
@@ -484,6 +486,12 @@ export function createMemoryStores(): Stores {
     },
     async setCloneSessionId(sessionId) {
       cloneSessionId = sessionId;
+    },
+    async getTranscriptGrave() {
+      return transcriptGrave;
+    },
+    async setTranscriptGrave(grave) {
+      transcriptGrave = grave;
     },
   };
 

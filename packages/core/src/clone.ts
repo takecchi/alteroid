@@ -1631,6 +1631,18 @@ class Clone implements CloneHost {
       noteDroppedRecord('未読の読み直し', '', error);
     });
 
+    // **前の器が記憶へ移せなかった区間を拾い直す**（#564 E1b。`#pickUpTranscriptGrave`）。
+    //
+    // **始めるだけで、待たない。** 直上と同じ理由（待つと受信箱のループそのものが
+    // 始まらない）に加えて、**こちらはモデルを呼ぶ** —— 枠が閉じていれば失敗が返るまで
+    // 待つことになり、人間の発言がその間ずっと処理されない。
+    //
+    // **失敗は自分で受ける。** 漏らすと unhandled rejection でデーモンごと落ちる
+    // （走行中のマネージャーも巻き添えになる）。**印は残るので、次の起動でまた試す。**
+    void this.#pickUpTranscriptGrave().catch((error: unknown) => {
+      noteDroppedRecord('墓標の拾い直し', '', error);
+    });
+
     for await (const event of this.#inbox) {
       // **枠（利用上限）の解除はここでだけ行う。`post()` からは行わない。**
       //
@@ -2775,13 +2787,13 @@ class Clone implements CloneHost {
     if (path === null) return;
 
     // **全文を 1 本の文字列にするのはここだけである**（`readTranscriptTail` の doc）。
-    let archived = true;
+    // **id を受ける。** 墓標が指すのはこれである（`TranscriptGrave` の doc）。
+    let archiveId: string | null = null;
     try {
       const transcript = await readFile(path, 'utf8');
-      await this.#stores.archive.archive(this.#sdkSessionId ?? 'clone', transcript);
+      archiveId = await this.#stores.archive.archive(this.#sdkSessionId ?? 'clone', transcript);
     } catch (error) {
       // (i) が落ちた。**「残っているはず」と読まれないように必ず残す。**
-      archived = false;
       await this.#journal({
         type: 'exchange',
         with: 'self',
@@ -2810,10 +2822,91 @@ class Clone implements CloneHost {
         text:
           `文脈窓で畳む前の蒸留に失敗した: ${String(error)}` +
           // **退避が落ちた回に「退避は済んでいる」と書かない**（守れない約束になる）。
-          (archived
-            ? '（生ログの退避は済んでいる。記憶へは移せていない）'
+          (archiveId !== null
+            ? '（生ログの退避は済んでいる。記憶へは移せていない。次の起動で拾い直す）'
             : '（⚠️ 退避も失敗しているので、この区間はどこにも残っていない）'),
       });
+
+      // **⭐ 墓標を立てる**（#564 E1b）。退避が済んでいる区間だけが対象で、
+      // 次の起動が `archive.read` で拾い直して蒸留する（`#pickUpTranscriptGrave`）。
+      //
+      // **⟹ 枠が閉じている回でも待てるようになる。** ここで蒸留が落ちる主な理由は
+      // 枠であり（実測で24件中9件が「長さと枠が同時」）、枠は待てば開く。**印が
+      // 無ければ、開いた後に拾う手がかりが1つも残らない。**
+      //
+      // **投げない。** ここは失敗の報告の途中である（`#noteContextWindowFold` と
+      // 同じ形）。印を立てられなかったことは記録に残すが、報告は続ける。
+      const id = archiveId;
+      if (id !== null) {
+        await this.#stores.sessions
+          .setTranscriptGrave({ archiveId: id })
+          .catch((graveError: unknown) => {
+            noteDroppedRecord('墓標の記録', id, graveError);
+          });
+      }
+    }
+  }
+
+  /**
+   * 起動時に、**前の器が記憶へ移せなかった区間を拾い直す**（#564 E1b）。
+   *
+   * ## なぜ起動時なのか
+   *
+   * 印が立つのは蒸留が落ちた回で、その主な理由は**枠が閉じていること**である。
+   * ⟹ **同じプロセスの中で試し直しても、枠はまだ閉じている。** 次の起動は
+   * 早くても器の入れ替えの後なので、そこが最初の「開いているかもしれない」地点である。
+   *
+   * ## なぜ `load()` ではなく `archive.read` から拾うのか
+   *
+   * 退避は既に済んでいる（印が立つ条件がそれである）。⟹ pg の生ログを全件
+   * 戻す口（`SessionStore.load`）を使う理由が無い。**あちらは 60 秒の予算に
+   * 掛かっている**ので、掛からない側で足りるならそちらを採る。
+   *
+   * ## ⛔ 限界（この経路が拾えないもの）
+   *
+   * **退避そのものが落ちた回は印が立たない。** 材料が器の外に無いので拾うものが
+   * 無い —— そのときは (i) の失敗が日誌に1行残るだけである。
+   */
+  async #pickUpTranscriptGrave(): Promise<void> {
+    const grave = await this.#stores.sessions.getTranscriptGrave();
+    if (grave === null) return;
+
+    const transcript = await this.#stores.archive.read(grave.archiveId);
+    if (transcript === null) {
+      // 退避が消えている（器を作り直した／人が消した）。**印だけを残さない** —
+      // 残すと、拾えないものを起動のたびに引きに行くことになる。
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text:
+          `記憶へ移せていない区間の退避が見つからないので、印を下ろした: ${grave.archiveId}` +
+          '（⚠️ この区間は記憶へ移せていない）',
+      });
+      await this.#stores.sessions.setTranscriptGrave(null);
+      return;
+    }
+
+    // **拾い直したことを日誌へ1行残す。** `#distillFromTranscript` が書く
+    // 「ターンの入力: pre_compact_distill」だけだと、**compaction の蒸留と区別が
+    // 付かない** ⟹ 後から「何回拾い直したか」を数えられなくなる。
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text: `前の器が記憶へ移せなかった区間を拾い直す: ${grave.archiveId}`,
+    });
+
+    await this.#distillFromTranscript(tailOf(transcript));
+
+    // **印を下ろすのは蒸留が成功したときだけである。** 枠が閉じていれば上で投げるので
+    // ここへ来ない ＝ 印が残り、次の起動でまた試す。
+    //
+    // **⚠️ 引き直してから下ろす。** 拾っている間に新しい印が立つ窓が在る（文脈窓で
+    // 畳む回はいつでも起きる）。素で `null` を書くと、**その新しい方を消す。**
+    const current = await this.#stores.sessions.getTranscriptGrave();
+    if (current?.archiveId === grave.archiveId) {
+      await this.#stores.sessions.setTranscriptGrave(null);
     }
   }
 

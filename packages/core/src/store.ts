@@ -878,10 +878,49 @@ export interface UsageStore {
   recordedManagerIds(): Promise<Set<string>>;
 }
 
-/** クローンのセッション id を跨いで覚えておくための最小の永続化。 */
+/**
+ * **記憶へ移せなかった区間の墓標**（Issue #564 E1b）。
+ *
+ * 退避（`TranscriptArchive.archive`）は済んでいるが、蒸留が落ちた区間を指す。
+ * ⟹ 次の起動が `archive.read(archiveId)` で拾い直して蒸留できる。
+ *
+ * ## なぜ指すのが `archive` の id で、セッション id ではないのか
+ *
+ * **印を立てるのは蒸留が落ちた後であり、その時点でセッション id は既に捨てられている**
+ * （`clone.ts` の「resume すると同じ長すぎる会話が戻ってくる」の枝が、畳むと決めた
+ * 瞬間に `setCloneSessionId(null)` を打つ）。⟹ セッション id を控える形にすると
+ * 「捨てるのと印を立てるのを同じ操作にする」という順序の約束が要る。
+ *
+ * **`archive` の id はセッション id の生死と無関係なので、その約束が要らない。**
+ * ⟹ 順序を守り損ねて静かに拾えなくなる形が、構造的に消える。
+ */
+export interface TranscriptGrave {
+  /** `TranscriptArchive.archive()` が返した id。 */
+  archiveId: string;
+}
+
+/**
+ * クローンのセッション id と、記憶へ移せなかった区間の墓標を跨いで覚えておくための
+ * 最小の永続化。
+ *
+ * ## ⚠️ 墓標はセッション id と**別の欄**に置くこと（器の実装の約束）
+ *
+ * `setCloneSessionId(null)` は resume 素材を捨てる操作であり、**fs 実装は置き場の
+ * ファイルを丸ごと消す。** ⟹ 同じレコードに同居させると、resume を捨てた瞬間に
+ * 墓標も消える —— **拾い直すために立てた印が、拾う理由ができた瞬間に消える。**
+ */
 export interface SessionRegistry {
   getCloneSessionId(): Promise<string | null>;
   setCloneSessionId(sessionId: string | null): Promise<void>;
+  /**
+   * 墓標を読む。**高々1つしか持たない。**
+   *
+   * 代償: **2回続けて蒸留に失敗すると、古い方が失われる。** 数える単位を増やす
+   * （列にする）と、拾い切れなかった墓標が積もる側の面倒が入れ替わりで増える。
+   * ⟹ #564 が数えているのは「1区間」なので、高々1つで釣り合う。
+   */
+  getTranscriptGrave(): Promise<TranscriptGrave | null>;
+  setTranscriptGrave(grave: TranscriptGrave | null): Promise<void>;
 }
 
 /** デーモンが必要とするストア一式。 */
