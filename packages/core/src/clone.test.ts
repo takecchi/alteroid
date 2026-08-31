@@ -3880,8 +3880,16 @@ describe('クローン — ターンの失敗の跡', () => {
       // 弱さ（条件2）: 「該当した」だけでなく型合わせであることを書く。
       expect(failure?.text).toContain('契約ではない');
 
-      // 人間へ返す1行（`with: human`）は、他の失敗と同じ既存の文言のまま
-      // ——ここへ目印や生の文言を持ち込む変更ではない（範囲を広げない）。
+      // 人間へ返す1行（`with: human`）に、目印と生の文言を持ち込まない線。
+      //
+      // **⚠️ この歯は「人間へ返す1行は一切変わらない」を測るものではない。**
+      // 測っているのは「ASCII の目印（`context_window_failure`）と生の文言が
+      // 混ざらない」ことだけである。**枠で保持している回には日本語の断り1文が
+      // 足される**（`CONTEXT_WINDOW_ALSO_NOTICE`。下の describe が測る）。
+      //
+      // **そしてこの本は `failWith` で落としているので `#usageBlocked` は立って
+      // いない ＝ 2×2 の左下（枠の保持なし × 長さに当たった）である。⟹ ここは
+      // 意図して変えていない側であり、この歯はその不変の対照でもある。**
       const toHuman = (await exchanges(stores)).find(
         (entry) => entry.with === 'human' && entry.role === 'outbound' && entry.text !== 'やあ',
       );
@@ -3917,6 +3925,101 @@ describe('クローン — ターンの失敗の跡', () => {
       expect(failure?.text).not.toContain('context_window_failure');
 
       await s.clone.stop();
+    });
+  });
+
+  /**
+   * **枠で保持していると言うとき、そのターンが長さにも当たっていたらそう言う。**
+   *
+   * ## なぜこの1マスだけか
+   *
+   * `#reportFailure` が人間へ返す1行は、（枠で保持しているか）×（文脈窓に当たったか）
+   * の 2×2 になる。**嘘になっていたのは「枠で保持 × 長さにも当たった」の1マス
+   * だけである** —— そこは「枠が開いたら試し直して返信する」と言い切るが、長さが
+   * 同じままなら枠が開いても同じところへ落ちる ＝ 守れない約束になる。
+   *
+   * ## 実機の形（依頼元の実測、2026-08-29〜31 に24件。うち9件がこの形）
+   *
+   * ```
+   * Prompt is too long · automatic compaction failed: You've hit your or…
+   * ```
+   *
+   * **1本の文字列に両方が入っている。** CLI が見出し（`Prompt is too long`）と
+   * compaction の失敗の詳細を合成しているためで、`classifyUsageNotice` は
+   * `includes` で `You've hit your` に当たり、`classifyContextWindowFailure` は
+   * `prompt is too long` に当たる。**⟹ 2つとも真になる。**
+   *
+   * ## 対照を2本置く（無いと「常に足す」実装が生き残る）
+   *
+   * 1. **枠で保持 × 長さではない** —— 断りが**出ない**こと
+   * 2. **枠の保持なし × 長さに当たった** —— 断りが**出ない**こと（＝上の
+   *    「目印が入る」の本が測っている左下のマス。**意図して変えていない側**）
+   */
+  describe('枠で保持していて、長さにも当たっていたら、両方言う', () => {
+    /** 実機の (A) 群の形。1本の文字列に枠と長さの両方が入っている。 */
+    const bothMessage =
+      "Prompt is too long · automatic compaction failed: You've hit your org's monthly spend limit";
+    /** 枠だけ（長さの語を含まない）。対照1 用。 */
+    const usageOnlyMessage = "You've hit your individual spend limit for this account.";
+
+    /** 失敗した `result` で1ターン落とし、人間へ返った1行を取り出す。 */
+    async function toHumanAfterFailure(resultText: string): Promise<string | undefined> {
+      const stores = createMemoryStores();
+      const s = setup(undefined, stores, {
+        resultFor: () => ({ subtype: 'success', isError: true, text: resultText }),
+      });
+
+      // **既定の会話（`conv-1`）へ出す。**`setup` が `subscribe` を張っているのは
+      // そこだけなので、別の会話へ出すと `waitForTerminal` が永久に待つ。
+      s.clone.post(humanMessage('やあ'));
+      await waitForTerminal(s.events);
+      await waitFor(
+        async () =>
+          (await exchanges(stores)).some(
+            (entry) => entry.with === 'human' && entry.role === 'outbound' && entry.text !== 'やあ',
+          ),
+        '人間への1行',
+      );
+
+      const toHuman = (await exchanges(stores)).find(
+        (entry) => entry.with === 'human' && entry.role === 'outbound' && entry.text !== 'やあ',
+      );
+      await s.clone.stop();
+      return toHuman?.text;
+    }
+
+    it('枠で保持 × 長さにも当たった: 保持の1行に「枠が開いても落ちる」が足される', async () => {
+      const toHuman = await toHumanAfterFailure(bothMessage);
+
+      // 前半（保持している事実）は否定しない。**保持は正しい** —— compaction は
+      // 本物の枠に当たっており、やめれば閉じた枠を叩き続けることになる。
+      expect(toHuman).toContain('いま利用上限に当たっているので');
+      expect(toHuman).toContain('枠が開いたら試し直して返信する');
+      // 足す側: 長さにも当たっていることと、待つだけでは足りないこと。
+      expect(toHuman).toContain('文脈窓');
+      expect(toHuman).toContain('枠が開いても');
+      // **⛔ ASCII の目印と生の文言は人間へ返す1行に持ち込まない**（日誌側の道具）。
+      expect(toHuman).not.toContain('context_window_failure');
+      expect(toHuman).not.toContain(bothMessage);
+    });
+
+    it('対照1（枠だけ）: 長さの語を含まない上限では、断りが出ない', async () => {
+      const toHuman = await toHumanAfterFailure(usageOnlyMessage);
+
+      expect(toHuman).toContain('枠が開いたら試し直して返信する');
+      // **ここが出たら「常に足す」実装である。**
+      expect(toHuman).not.toContain('文脈窓');
+    });
+
+    it('対照2（保持なし × 長さ）: 枠に当たっていない長さの失敗では、1行は変わらない', async () => {
+      // 枠の文言を1つも含まない（`classifyUsageNotice` に当たらない）長さの失敗。
+      const toHuman = await toHumanAfterFailure('prompt is too long: 1206750 tokens > 1000000');
+
+      // 既存の文言のまま。**⟹ この1マスは意図して変えていない**（依頼元の判定が
+      // 「2×2 の右下1マスだけ」であり、ここは範囲の外）。
+      expect(toHuman).toContain('この発言には返せなかった');
+      expect(toHuman).not.toContain('文脈窓');
+      expect(toHuman).not.toContain('いま利用上限に当たっているので');
     });
   });
 
