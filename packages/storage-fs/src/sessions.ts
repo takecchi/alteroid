@@ -1,11 +1,15 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import type { SessionRegistry, TranscriptGrave } from '@alteroid/core';
+import type { LostSessionGrave, SessionRegistry, TranscriptGrave } from '@alteroid/core';
 import { z } from 'zod';
 
 const stateSchema = z.object({ cloneSessionId: z.string().nullable().default(null) });
 const graveSchema = z.object({ archiveId: z.string().min(1) });
+const lostSessionSchema = z.object({
+  projectKey: z.string().min(1),
+  sessionId: z.string().min(1),
+});
 
 /**
  * クローンのセッション id の置き場。
@@ -24,11 +28,18 @@ export class FsSessionRegistry implements SessionRegistry {
    * resume を捨てた瞬間に墓標も消える（`SessionRegistry` の doc）。
    */
   readonly #gravePath: string;
+  /**
+   * こちらも**別のファイル**である。`#gravePath` と分ける理由は同時に立ちうるからで、
+   * `#path` と分ける理由は `setCloneSessionId(null)` が消すからである
+   * （`SessionRegistry` の doc）。
+   */
+  readonly #lostSessionPath: string;
 
   constructor(dir: string) {
     this.#dir = dir;
     this.#path = join(dir, 'session.json');
     this.#gravePath = join(dir, 'transcript-grave.json');
+    this.#lostSessionPath = join(dir, 'lost-session-grave.json');
   }
 
   async getCloneSessionId(): Promise<string | null> {
@@ -64,5 +75,22 @@ export class FsSessionRegistry implements SessionRegistry {
     }
     await mkdir(this.#dir, { recursive: true });
     await writeFile(this.#gravePath, `${JSON.stringify(grave)}\n`, 'utf8');
+  }
+
+  async getLostSessionGrave(): Promise<LostSessionGrave | null> {
+    try {
+      return lostSessionSchema.parse(JSON.parse(await readFile(this.#lostSessionPath, 'utf8')));
+    } catch {
+      return null;
+    }
+  }
+
+  async setLostSessionGrave(grave: LostSessionGrave | null): Promise<void> {
+    if (grave === null) {
+      await rm(this.#lostSessionPath, { force: true });
+      return;
+    }
+    await mkdir(this.#dir, { recursive: true });
+    await writeFile(this.#lostSessionPath, `${JSON.stringify(grave)}\n`, 'utf8');
   }
 }

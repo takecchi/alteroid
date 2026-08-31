@@ -47,11 +47,30 @@ export * as tables from './schema.js';
  * （docs/architecture.md「非対称な可視性」）。
  */
 export interface PgStores extends Stores {
-  /** SDK のセッション永続化先（クローン・マネージャーの生ログ）。 */
+  /**
+   * SDK のセッション永続化先（クローン・マネージャーの生ログ）。
+   *
+   * **`Stores.sessionTranscriptTail` も同じ実体である**（`PgSessionStore` が両方の
+   * 口を持つ）。⟹ 預けた先と、末尾だけ読む先が食い違う形にならない。
+   */
   sessionStore: PgSessionStore;
   db: Db;
   /** 接続を閉じる。デーモンの停止時に呼ぶ。 */
   close(): Promise<void>;
+}
+
+/**
+ * 生ログの預け先と、その末尾だけを読む口。**同じ実体を2つの名前で渡す。**
+ *
+ * 別々に `new` すると、片方だけ差し替えたときに**預けた先と読む先が食い違う**
+ * （そして食い違っても型では落ちない）。
+ */
+function sessionStores(db: Db): {
+  sessionStore: PgSessionStore;
+  sessionTranscriptTail: PgSessionStore;
+} {
+  const store = new PgSessionStore(db);
+  return { sessionStore: store, sessionTranscriptTail: store };
 }
 
 export interface CreatePgStoresOptions {
@@ -89,7 +108,7 @@ export function createPgStoresFromDb(db: Db, close?: () => Promise<void>): PgSto
     profile: new PgProfileStore(db),
     tokens: new PgTokenPoolStore(db),
     usage: new PgUsageStore(db),
-    sessionStore: new PgSessionStore(db),
+    ...sessionStores(db),
     close: close ?? (async () => undefined),
   };
 }

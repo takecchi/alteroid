@@ -1,4 +1,4 @@
-import type { SessionRegistry, TranscriptGrave } from '@alteroid/core';
+import type { LostSessionGrave, SessionRegistry, TranscriptGrave } from '@alteroid/core';
 import { eq } from 'drizzle-orm';
 
 import type { Db } from './db.js';
@@ -13,6 +13,8 @@ const CLONE_SESSION_KEY = 'clone_session_id';
  * それ自体が欠陥なので（M4 の要件）、両方とも別の欄に揃える。
  */
 const CLONE_TRANSCRIPT_GRAVE_KEY = 'clone_transcript_grave';
+/** resume 素材を捨てた回の墓標（`SessionRegistry` の doc。上の欄とは別物である）。 */
+const CLONE_LOST_SESSION_KEY = 'clone_lost_session';
 
 /**
  * クローンのセッション id の置き場。
@@ -77,6 +79,42 @@ export class PgSessionRegistry implements SessionRegistry {
     await this.#db
       .insert(daemonState)
       .values({ key: CLONE_TRANSCRIPT_GRAVE_KEY, value })
+      .onConflictDoUpdate({ target: daemonState.key, set: { value } });
+  }
+
+  async getLostSessionGrave(): Promise<LostSessionGrave | null> {
+    const rows = await this.#db
+      .select({ value: daemonState.value })
+      .from(daemonState)
+      .where(eq(daemonState.key, CLONE_LOST_SESSION_KEY))
+      .limit(1);
+    const raw = rows[0]?.value ?? null;
+    if (raw === null) return null;
+    // **壊れた1行で起動を止めない**（`getTranscriptGrave` と同じ理由）。
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (typeof parsed !== 'object' || parsed === null) return null;
+      const { projectKey, sessionId } = parsed as {
+        projectKey?: unknown;
+        sessionId?: unknown;
+      };
+      if (typeof projectKey !== 'string' || projectKey.length === 0) return null;
+      if (typeof sessionId !== 'string' || sessionId.length === 0) return null;
+      return { projectKey, sessionId };
+    } catch {
+      return null;
+    }
+  }
+
+  async setLostSessionGrave(grave: LostSessionGrave | null): Promise<void> {
+    if (grave === null) {
+      await this.#db.delete(daemonState).where(eq(daemonState.key, CLONE_LOST_SESSION_KEY));
+      return;
+    }
+    const value = JSON.stringify(grave);
+    await this.#db
+      .insert(daemonState)
+      .values({ key: CLONE_LOST_SESSION_KEY, value })
       .onConflictDoUpdate({ target: daemonState.key, set: { value } });
   }
 }
