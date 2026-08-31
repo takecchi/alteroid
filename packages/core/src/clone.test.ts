@@ -5537,9 +5537,7 @@ describe('クローン — 蒸留の末尾は全文を読まずに取る（渡�
     const rows = (await s.stores.journal.list({ types: ['exchange'] })).filter(
       (entry) => entry.type === 'exchange',
     );
-    const inputRow = rows.find((entry) =>
-      entry.text.includes('ターンの入力: pre_compact_distill'),
-    );
+    const inputRow = rows.find((entry) => entry.text.includes('ターンの入力: pre_compact_distill'));
     expect(inputRow, '日誌に pre_compact_distill の行が無い').toBeDefined();
     const chars = Number(/tail\.chars=(\d+)/u.exec(inputRow?.text ?? '')?.[1] ?? '0');
     expect(chars).toBeGreaterThan(59_000);
@@ -5584,9 +5582,9 @@ describe('クローン — 蒸留の末尾は全文を読まずに取る（渡�
       (entry) => entry.type === 'exchange',
     );
     // **蒸留は走った**（退避の失敗に巻き込まれていない）。
-    expect(
-      rows.some((entry) => entry.text.includes('ターンの入力: pre_compact_distill')),
-    ).toBe(true);
+    expect(rows.some((entry) => entry.text.includes('ターンの入力: pre_compact_distill'))).toBe(
+      true,
+    );
     // **文言は2つに割れている**（直す前は「退避・蒸留に失敗した」の1本だった）。
     expect(rows.some((entry) => entry.text.includes('PreCompact の退避に失敗した'))).toBe(true);
     expect(rows.some((entry) => entry.text.includes('PreCompact の蒸留に失敗した'))).toBe(false);

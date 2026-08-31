@@ -5607,8 +5607,12 @@ async function readTranscriptTail(path: string): Promise<string> {
     const length = Math.min(size, window);
     const buffer = Buffer.alloc(length);
     // 末尾から読む。`size <= window` なら `position` は 0 ＝ 全文である。
-    await handle.read(buffer, 0, length, size - length);
-    return buffer.toString('utf8');
+    //
+    // **`bytesRead` で切る。** `read` は要求より短く返しうるので、`buffer` をそのまま
+    // 文字列にすると**末尾に NUL が並ぶ**。それは蒸留の入力に混ざるうえ、pg 側は NUL を
+    // 落とすので（`storage-pg` の `stripNulls`）**器によって中身が変わる**ことになる。
+    const { bytesRead } = await handle.read(buffer, 0, length, size - length);
+    return buffer.subarray(0, bytesRead).toString('utf8');
   } finally {
     await handle.close();
   }
