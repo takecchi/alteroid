@@ -5772,6 +5772,149 @@ describe('クローン — 起動時に墓標を拾い直す（#564 E1b）', () 
 });
 
 /**
+ * **`init` すら来ずに落ちた回**の区間を、預けた生ログ（pg）から拾い直す
+ * （#564 E1b。`#noteLostSession` / `#pickUpLostSession`）。
+ *
+ * ## PR1（`TranscriptGrave`）では拾えない理由
+ *
+ * この回は道具を1つも使っていないので在り処の控えが `null` で、**退避そのものが
+ * 走っていない。** ⟹ `archive` を指す墓標は立たない。材料は pg に預けた生ログだけである。
+ */
+describe('クローン — 捨てた resume 素材の区間を拾い直す（#564 E1b）', () => {
+  /** 日誌の self を text で読む。 */
+  async function selfTexts(stores: Stores): Promise<string[]> {
+    const rows = await stores.journal.list({ types: ['exchange'] });
+    return rows
+      .filter((entry) => entry.type === 'exchange' && entry.with === 'self')
+      .map((entry) => (entry.type === 'exchange' ? entry.text : ''));
+  }
+
+  /** 末尾だけを返す口を持つ器（pg 構成の代役）。 */
+  function storesWithTail(tail: string | null): {
+    stores: Stores;
+    asked: { key: { projectKey: string; sessionId: string }; maxChars: number }[];
+  } {
+    const base = createMemoryStores();
+    const asked: { key: { projectKey: string; sessionId: string }; maxChars: number }[] = [];
+    const stores: Stores = {
+      ...base,
+      sessionTranscriptTail: {
+        async readTail(key, maxChars) {
+          asked.push({ key, maxChars });
+          return tail;
+        },
+      },
+    };
+    return { stores, asked };
+  }
+
+  /**
+   * **⭐ 捨てる前に立てる。** 捨てた後だと、立てる前にプロセスが死んだ回で id が
+   * どこにも残らない。
+   *
+   * そして拾う鍵（`projectKey`）は**器を跨いだ値**である —— このプロセスでは `append` が
+   * 1度も来ていない（`init` すら来ていないのだから当然である）。**それがこの経路の
+   * 常態なので、前の器が覚えた値から埋める。**
+   */
+  it('resume に失敗して素材を捨てるとき、墓標を残す', async () => {
+    const { stores } = storesWithTail(null);
+    await stores.sessions.setCloneSessionId('stale-session-id');
+    await stores.sessions.setProjectKey('-workspace');
+
+    const s = setup(undefined, stores, { failWith: 'No conversation found with session ID' });
+    s.clone.post(humanMessage('やあ'));
+
+    await expect.poll(() => stores.sessions.getCloneSessionId(), { timeout: 3000 }).toBeNull();
+    expect(await stores.sessions.getLostSessionGrave()).toEqual({
+      projectKey: '-workspace',
+      sessionId: 'stale-session-id',
+    });
+
+    await s.clone.stop();
+  });
+
+  /**
+   * **対照: 生ログの預け先が無い器（fs 構成）では墓標を立てない。**
+   *
+   * 立てても拾う材料が無いので、**残るのは拾えない印だけになる。** そして fs で動かす
+   * たびに同じ1行が積もる。
+   */
+  it('対照: 預けた生ログを読む口が無ければ墓標を立てない', async () => {
+    const stores = createMemoryStores();
+    await stores.sessions.setCloneSessionId('stale-session-id');
+    await stores.sessions.setProjectKey('-workspace');
+
+    const s = setup(undefined, stores, { failWith: 'No conversation found with session ID' });
+    s.clone.post(humanMessage('やあ'));
+
+    await expect.poll(() => stores.sessions.getCloneSessionId(), { timeout: 3000 }).toBeNull();
+    expect(await stores.sessions.getLostSessionGrave()).toBeNull();
+
+    await s.clone.stop();
+  });
+
+  it('墓標が在れば、預けた生ログの末尾から拾って蒸留し、印を下ろす', async () => {
+    const { stores, asked } = storesWithTail('LOST-SESSION-MARKER-8b41 前のセッションの末尾');
+    await stores.sessions.setLostSessionGrave({
+      projectKey: '-workspace',
+      sessionId: 'sess-lost',
+    });
+
+    const s = setup(undefined, stores);
+    await waitFor(
+      async () =>
+        (await selfTexts(stores)).some((text) =>
+          text.includes('捨てたセッションの区間を、預けた生ログから拾い直す'),
+        ),
+      '拾い直しの1行が日誌に残ること',
+    );
+    await waitFor(
+      () =>
+        s.calls.some((call) =>
+          call.inputs.some((input) => input.includes('LOST-SESSION-MARKER-8b41')),
+        ),
+      '蒸留へ末尾が渡ること',
+    );
+    await waitFor(
+      async () => (await stores.sessions.getLostSessionGrave()) === null,
+      '印が下りること',
+    );
+
+    // **⭐ 全件ではなく、有限の窓を要求している**（`load()` を使わない、が設計）。
+    expect(asked[0]?.key).toEqual({ projectKey: '-workspace', sessionId: 'sess-lost' });
+    expect(asked[0]?.maxChars).toBeGreaterThan(0);
+    expect(asked[0]?.maxChars).toBeLessThanOrEqual(1_000_000);
+
+    await s.clone.stop();
+  });
+
+  it('預けた生ログが1件も無ければ、印を下ろして日誌に残す', async () => {
+    const { stores } = storesWithTail(null);
+    await stores.sessions.setLostSessionGrave({
+      projectKey: '-workspace',
+      sessionId: 'sess-empty',
+    });
+
+    const s = setup(undefined, stores);
+    await waitFor(
+      async () =>
+        (await selfTexts(stores)).some((text) =>
+          text.includes('捨てたセッションの生ログが1件も無いので、印を下ろした'),
+        ),
+      '印を下ろした1行が残ること',
+    );
+    expect(await stores.sessions.getLostSessionGrave()).toBeNull();
+    expect(
+      (await selfTexts(stores)).some((text) =>
+        text.includes('捨てたセッションの区間を、預けた生ログから拾い直す'),
+      ),
+    ).toBe(false);
+
+    await s.clone.stop();
+  });
+});
+
+/**
  * `UsageFold.delta`（ターン1回ぶんの増分）は台帳へ積むだけで捨てていた。
  * 台帳は日 × actor × モデル × 層 × 場所に畳むので、「そのターンがいくらだったか」
  * は台帳のどこにも残らない。ここは `#recordUsage` が `turn_usage` として
