@@ -6,6 +6,7 @@ import { z } from 'zod';
 
 const stateSchema = z.object({ cloneSessionId: z.string().nullable().default(null) });
 const graveSchema = z.object({ archiveId: z.string().min(1) });
+const projectKeySchema = z.object({ projectKey: z.string().min(1) });
 const lostSessionSchema = z.object({
   projectKey: z.string().min(1),
   sessionId: z.string().min(1),
@@ -34,12 +35,15 @@ export class FsSessionRegistry implements SessionRegistry {
    * （`SessionRegistry` の doc）。
    */
   readonly #lostSessionPath: string;
+  /** ここも別のファイルである（理由は上の2つと同じ）。 */
+  readonly #projectKeyPath: string;
 
   constructor(dir: string) {
     this.#dir = dir;
     this.#path = join(dir, 'session.json');
     this.#gravePath = join(dir, 'transcript-grave.json');
     this.#lostSessionPath = join(dir, 'lost-session-grave.json');
+    this.#projectKeyPath = join(dir, 'project-key.json');
   }
 
   async getCloneSessionId(): Promise<string | null> {
@@ -92,5 +96,19 @@ export class FsSessionRegistry implements SessionRegistry {
     }
     await mkdir(this.#dir, { recursive: true });
     await writeFile(this.#lostSessionPath, `${JSON.stringify(grave)}\n`, 'utf8');
+  }
+
+  async getProjectKey(): Promise<string | null> {
+    try {
+      return projectKeySchema.parse(JSON.parse(await readFile(this.#projectKeyPath, 'utf8')))
+        .projectKey;
+    } catch {
+      return null;
+    }
+  }
+
+  async setProjectKey(projectKey: string): Promise<void> {
+    await mkdir(this.#dir, { recursive: true });
+    await writeFile(this.#projectKeyPath, `${JSON.stringify({ projectKey })}\n`, 'utf8');
   }
 }

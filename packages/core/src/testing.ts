@@ -138,6 +138,7 @@ export function createMemoryStores(): Stores {
   let cloneSessionId: string | null = null;
   let transcriptGrave: TranscriptGrave | null = null;
   let lostSessionGrave: LostSessionGrave | null = null;
+  let projectKey: string | null = null;
   let envProfile: EnvProfile | null = null;
   let counter = 0;
   const nextId = () => `id-${++counter}`;
@@ -500,6 +501,12 @@ export function createMemoryStores(): Stores {
     },
     async setLostSessionGrave(grave) {
       lostSessionGrave = grave;
+    },
+    async getProjectKey() {
+      return projectKey;
+    },
+    async setProjectKey(value) {
+      projectKey = value;
     },
   };
 

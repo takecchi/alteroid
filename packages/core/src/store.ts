@@ -935,6 +935,24 @@ export interface SessionRegistry {
    */
   getLostSessionGrave(): Promise<LostSessionGrave | null>;
   setLostSessionGrave(grave: LostSessionGrave | null): Promise<void>;
+  /**
+   * SDK が生ログを預けるときの scope（`SessionKey.projectKey`）を、**器を跨いで**覚える。
+   *
+   * ## なぜ持ち越す必要があるのか
+   *
+   * この値は `append` が渡してくるものなので、**`append` が1度も来ていないプロセスは
+   * 知らない。** そして墓標を立てたい回（`init` すら来ずに落ちた回）は、まさに
+   * **そのプロセスで `append` が1度も来ていない回である** —— 起き直して resume に
+   * 失敗した直後がそれで、`#564` が数えている経路そのものである。
+   *
+   * ⟹ 前の器が覚えた値をここから読む。**`cwd` から計算し直さないこと**
+   * （`LostSessionGrave` の doc）。
+   *
+   * ⚠️ **配備してから1度も `append` が来ていないうちは `null` である。** その窓で
+   * 落ちた回は墓標が立たない（拾う鍵が無い）。
+   */
+  getProjectKey(): Promise<string | null>;
+  setProjectKey(projectKey: string): Promise<void>;
 }
 
 /**

@@ -15,6 +15,8 @@ const CLONE_SESSION_KEY = 'clone_session_id';
 const CLONE_TRANSCRIPT_GRAVE_KEY = 'clone_transcript_grave';
 /** resume 素材を捨てた回の墓標（`SessionRegistry` の doc。上の欄とは別物である）。 */
 const CLONE_LOST_SESSION_KEY = 'clone_lost_session';
+/** SDK が生ログを預けるときの scope（`SessionRegistry.getProjectKey` の doc）。 */
+const CLONE_PROJECT_KEY = 'clone_project_key';
 
 /**
  * クローンのセッション id の置き場。
@@ -116,5 +118,23 @@ export class PgSessionRegistry implements SessionRegistry {
       .insert(daemonState)
       .values({ key: CLONE_LOST_SESSION_KEY, value })
       .onConflictDoUpdate({ target: daemonState.key, set: { value } });
+  }
+
+  async getProjectKey(): Promise<string | null> {
+    const rows = await this.#db
+      .select({ value: daemonState.value })
+      .from(daemonState)
+      .where(eq(daemonState.key, CLONE_PROJECT_KEY))
+      .limit(1);
+    // **ここは生の文字列で持つ**（JSON にしない）。`daemon_state` は key/value の
+    // 器で、値そのものが1つなら包む理由が無い。
+    return rows[0]?.value ?? null;
+  }
+
+  async setProjectKey(projectKey: string): Promise<void> {
+    await this.#db
+      .insert(daemonState)
+      .values({ key: CLONE_PROJECT_KEY, value: projectKey })
+      .onConflictDoUpdate({ target: daemonState.key, set: { value: projectKey } });
   }
 }
