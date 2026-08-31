@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { open, readFile } from 'node:fs/promises';
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type {
@@ -251,8 +251,18 @@ export function placedClonePermissionMode(env: NodeJS.ProcessEnv = process.env):
   return placedPermissionMode(env, CLONE_PERMISSION_MODE_ENV_KEY);
 }
 
-/** PreCompact で退避したトランスクリプトのうち、蒸留に渡す末尾のサイズ。 */
-const DISTILL_TRANSCRIPT_TAIL_BYTES = 60_000;
+/**
+ * 退避したトランスクリプトのうち、蒸留に渡す末尾のサイズ。
+ *
+ * **単位は文字（UTF-16 の code unit）であってバイトではない。** 切っているのは
+ * {@link tailOf} の `String.prototype.slice` である。
+ *
+ * **`DISTILL_TRANSCRIPT_TAIL_BYTES` から改名した。** 旧名のまま「末尾 60,000 バイトを
+ * 読めばよい」と読むと、日本語混じりの生ログでは渡る量が半分以下になる（1文字3バイト）。
+ * **実際にその取り違えが1度起きている**（依頼元との読み合わせで止まった）。
+ * ⟹ 名前のほうを直して、次に読む人が同じ取り違えをしないようにする。
+ */
+const DISTILL_TRANSCRIPT_TAIL_CHARS = 60_000;
 
 /** 発意 tick と定期ジョブに渡す「直近」の幅。 */
 const RECENT_DIGEST_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -2747,6 +2757,11 @@ class Clone implements CloneHost {
    * 読まれるのを防ぐためで、**黙って落とすと、直そうとしている形（守れない約束）と
    * 同じになる。**
    *
+   * **そして (i) が落ちても (ii) へ進む。** (i) は全文を1本の文字列にするので、生ログが
+   * 伸びると `ERR_STRING_TOO_LONG` で落ちる側である（`readTranscriptTail` の doc）。
+   * **そこで止めると、いちばん失いたくないもの（記憶へ移すこと）が退避の都合で
+   * 道連れになる。** ⟹ 理由は (ii) の直前のコメントに書いた。
+   *
    * ## ⛔ これは #564 の被害を無くすものではない
    *
    * 会話の文脈は戻らない。**残るのは生ログだけである。⟹ 「1区間まるごと失われる」
@@ -2759,12 +2774,14 @@ class Clone implements CloneHost {
     // 書くと、道具を使う前に落ちた回のたびにノイズが1行増える。
     if (path === null) return;
 
-    let transcript: string;
+    // **全文を 1 本の文字列にするのはここだけである**（`readTranscriptTail` の doc）。
+    let archived = true;
     try {
-      transcript = await readFile(path, 'utf8');
+      const transcript = await readFile(path, 'utf8');
       await this.#stores.archive.archive(this.#sdkSessionId ?? 'clone', transcript);
     } catch (error) {
       // (i) が落ちた。**「残っているはず」と読まれないように必ず残す。**
+      archived = false;
       await this.#journal({
         type: 'exchange',
         with: 'self',
@@ -2773,12 +2790,18 @@ class Clone implements CloneHost {
           `文脈窓で畳む前の生ログの退避に失敗した: ${String(error)}` +
           '（⚠️ この区間の生ログは器の外に残っていない）',
       });
-      return;
     }
 
     // (ii) は best-effort。**枠が閉じていれば落ちる。それは (i) を巻き込まない。**
+    //
+    // **⚠️ (i) が落ちてもここへ進む（直す前は (i) の catch で `return` していた）。**
+    // (i) は全文を 1 本の文字列にするので、生ログが伸びると `ERR_STRING_TOO_LONG` で
+    // 落ちる側である（`readTranscriptTail` の doc）。**そこで `return` すると、いちばん
+    // 失いたくないもの（記憶へ移すこと）が、退避の都合で道連れになる。** 蒸留は末尾だけを
+    // 自分で読むので (i) の成否に依存しない。⟹ (i) と (ii) を別の `try` に割った意図
+    // （どちらか一方の失敗が他方を巻き込まない）を、読む側だけでなく制御の流れにも通す。
     try {
-      await this.#distillFromTranscript(tailOf(transcript));
+      await this.#distillFromTranscript(tailOf(await readTranscriptTail(path)));
     } catch (error) {
       await this.#journal({
         type: 'exchange',
@@ -2786,7 +2809,10 @@ class Clone implements CloneHost {
         role: 'outbound',
         text:
           `文脈窓で畳む前の蒸留に失敗した: ${String(error)}` +
-          '（生ログの退避は済んでいる。記憶へは移せていない）',
+          // **退避が落ちた回に「退避は済んでいる」と書かない**（守れない約束になる）。
+          (archived
+            ? '（生ログの退避は済んでいる。記憶へは移せていない）'
+            : '（⚠️ 退避も失敗しているので、この区間はどこにも残っていない）'),
       });
     }
   }
@@ -4234,18 +4260,37 @@ class Clone implements CloneHost {
       return { continue: true };
     }
 
+    // **(i) 退避と (ii) 蒸留を別の `try` に割る**（`#salvageTranscript` と同じ形）。
+    // 直す前は 1 つの `try` で、しかも全文を 1 本の文字列にしてから両方へ渡していた。
+    // ⟹ **生ログが伸びて `readFile` が `ERR_STRING_TOO_LONG` で落ちると、蒸留も
+    // 一緒に止まる。** それはこの経路の doc（「蒸留は生存条件であり、後回しにしてよい
+    // 機能ではない」）が守ると言っているものが、退避の都合で失われる形である。
     try {
-      // 退避するのは全文（ロードマップの要件）。蒸留に渡すのは末尾だけにする。
+      // 退避するのは全文（ロードマップの要件）。**全文を 1 本の文字列にするのは
+      // ここだけである**（`readTranscriptTail` の doc）。
       const transcript = await readFile(transcriptPath, 'utf8');
       await this.#stores.archive.archive(sessionId ?? 'clone', transcript);
-      if (signal?.aborted !== true) await this.#distillFromTranscript(tailOf(transcript));
     } catch (error) {
       // これはクローンの判断ではなくシステムの失敗なので、判断として記録しない
       await this.#journal({
         type: 'exchange',
         with: 'self',
         role: 'outbound',
-        text: `PreCompact の退避・蒸留に失敗した: ${String(error)}`,
+        text: `PreCompact の退避に失敗した: ${String(error)}`,
+      });
+    }
+
+    // **中断の合図は蒸留にだけ掛かる**（直す前と同じ。退避は中断で飛ばさない）。
+    if (signal?.aborted === true) return { continue: true };
+
+    try {
+      await this.#distillFromTranscript(tailOf(await readTranscriptTail(transcriptPath)));
+    } catch (error) {
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text: `PreCompact の蒸留に失敗した: ${String(error)}`,
       });
     }
 
@@ -5514,12 +5559,68 @@ function rejectedRateLimitNotice(facts: RateLimitFacts): UsageLimitNotice {
 }
 
 /**
+ * UTF-8 で 1 つの UTF-16 code unit を表すのに要るバイト数の**上限**。
+ *
+ * BMP の文字は 1〜3 バイトで 1 code unit、それ以外は 4 バイトで 2 code unit
+ * （サロゲートペア）＝ 1 code unit あたり 2 バイトである。**⟹ 上限は 3 である。**
+ */
+const MAX_UTF8_BYTES_PER_UTF16_UNIT = 3;
+
+/**
+ * 生ログの**末尾だけ**を読む（全文を 1 本の文字列にしない）。
+ *
+ * ## なぜ全文を読まないのか
+ *
+ * `readFile(path, 'utf8')` は中身を **1 本の文字列**にする。JS の文字列には上限が
+ * あり（`node:buffer` の `constants.MAX_STRING_LENGTH`。この器の Node 22 では
+ * 536,870,888 文字）、**超えると `ERR_STRING_TOO_LONG` で投げる。**
+ *
+ * **クローンの生ログは 1 本のセッションが伸び続ける形である** —— resume は同じ
+ * セッションへ書き足すので、ファイルは開始からの累積の全量を持つ。⟹ **伸びるほど
+ * 確実に当たる側であり、当たると蒸留がまるごと止まる**（下の「なぜ退避と別の try か」）。
+ *
+ * ⟹ **蒸留に要るのは末尾だけである**（{@link tailOf}）。全文を文字列にする理由が
+ * 最初から無い。
+ *
+ * ## なぜ {@link MAX_UTF8_BYTES_PER_UTF16_UNIT} 倍読むのか
+ *
+ * {@link tailOf} が切るのは**文字**であってバイトではない。⟹ 末尾から
+ * {@link DISTILL_TRANSCRIPT_TAIL_CHARS} **バイト**だけ読むと、日本語混じりの生ログでは
+ * 渡る文字数が半分以下になる（1 文字 3 バイト）。**それは能力の削減である。**
+ *
+ * 3 倍読めば、末尾 {@link DISTILL_TRANSCRIPT_TAIL_CHARS} code unit 以上を必ず含む
+ * （{@link MAX_UTF8_BYTES_PER_UTF16_UNIT} の doc）。そのうえで {@link tailOf} に
+ * 切らせるので、**渡るものは全文を読んでいたときと同一である。**
+ *
+ * ## 窓の先頭が壊れることは問題にならない
+ *
+ * 窓の先頭は文字の途中を切りうる（`U+FFFD` になる）。{@link tailOf} は切り詰めるときに
+ * **最初の改行より前を捨てる**ので、そこで一緒に落ちる（`tailOf` の doc「行の途中と
+ * 壊れた文字で始めないように整える」がもともとその仕事をしている）。窓がファイル全体に
+ * 届いたときは切り詰めが起きないので、そもそも壊れない。
+ */
+async function readTranscriptTail(path: string): Promise<string> {
+  const handle = await open(path, 'r');
+  try {
+    const { size } = await handle.stat();
+    const window = DISTILL_TRANSCRIPT_TAIL_CHARS * MAX_UTF8_BYTES_PER_UTF16_UNIT;
+    const length = Math.min(size, window);
+    const buffer = Buffer.alloc(length);
+    // 末尾から読む。`size <= window` なら `position` は 0 ＝ 全文である。
+    await handle.read(buffer, 0, length, size - length);
+    return buffer.toString('utf8');
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
  * 蒸留に渡す末尾。全文はアーカイブに残っているので、ここでは直近だけでよい。
  * 行の途中と壊れた文字で始めないように整える。
  */
 function tailOf(transcript: string): string {
-  if (transcript.length <= DISTILL_TRANSCRIPT_TAIL_BYTES) return transcript;
-  const cut = transcript.slice(-DISTILL_TRANSCRIPT_TAIL_BYTES);
+  if (transcript.length <= DISTILL_TRANSCRIPT_TAIL_CHARS) return transcript;
+  const cut = transcript.slice(-DISTILL_TRANSCRIPT_TAIL_CHARS);
   const newline = cut.indexOf('\n');
   return newline === -1 ? cut : cut.slice(newline + 1);
 }
