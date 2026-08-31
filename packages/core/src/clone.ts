@@ -100,6 +100,7 @@ import { assistantFailureOf, type SdkFailure } from './sdk-failure.js';
 import {
   classifyContextWindowFailure,
   describeContextWindowFailure,
+  type ContextWindowFailure,
 } from './context-window-failure.js';
 
 /**
@@ -386,6 +387,46 @@ const CONTEXT_WINDOW_ALSO_NOTICE =
   '⚠️ ただし、このターンは文脈窓（プロンプトの長さ）にも当たっている。' +
   '⟹ 枠が開いても、長さが同じままなら同じところで落ちる。' +
   '待つだけでは返せない可能性がある（詳しい理由は日誌に残してある）。';
+
+/**
+ * 文脈窓で落ちたのでセッションを畳んで作り直す回に、人間へ返す1行の末尾へ足す文
+ * （`#reportFailure`）。
+ *
+ * ## ⚠️ 「会話が失われた」と書かないこと
+ *
+ * **失われていない。** 人間が見ている会話の記録は alteroid のストアの側に在り、
+ * 畳んでも1件も消えない（`conversation_read` で読み直せる）。畳んで失われるのは
+ * **クローンの文脈の連続性だけ**である —— `#pushInput` に載るのは記憶の載せ直しと
+ * 各種の断り書きと人間の発言だけで、過去のやりとりは1文字も入っていない。
+ * ⟹ 連続性を運んでいるのは SDK セッションの生ログだけである。
+ *
+ * **⟹ 「消えた」と書くと、消えていないものを消えたことにする**（AGENTS.md
+ * 「取れない軸に 0 の行を作る」と同じ向きの誤り）。だからここは「私が覚えていない。
+ * 記録は在る」と書く。
+ */
+const CONTEXT_WINDOW_FOLD_NOTICE =
+  'この会話はここで一区切りにして、次の発言から新しく開き直す。' +
+  '⚠️ それまでのやりとりは消えていない（記録は残っている）が、' +
+  '私はその続きを覚えていない状態で始まるので、必要なら読み直す。';
+
+/**
+ * 文脈窓で落ちたが、**畳んでも直らないことが分かっているので畳まなかった**回に
+ * 足す文（`#noteContextWindowFold` の「畳まない」枝）。
+ *
+ * ## なぜ言う必要があるのか
+ *
+ * 畳まずに落ち続ける状態は、外から見ると「なぜか動かない」にしか見えない。
+ * **⟹ 抑止が効いていることが誰にも観測できない。**「印は読み手が使って初めて
+ * 効く」——数を出しても読まれなければ何も変わらないのと同じ形で、**抑止も
+ * 名乗らなければ「壊れている」と読まれる。**
+ *
+ * **⛔ ここに「どうすべきか」は書かない**（`usage-limits.ts` の
+ * `describeUsageNotice` と同じ約束）。材料だけ渡して判断は人間とクローンに残す。
+ */
+const CONTEXT_WINDOW_FOLD_HELD_NOTICE =
+  '⚠️ このセッションは既に会話を引き継がずに開いたもので、まだ1度も答えを返せていない。' +
+  '⟹ もう一度開き直しても同じ材料で同じところへ落ちるので、開き直していない。' +
+  '⟹ プロンプトそのものが収まっていない可能性がある。';
 
 export interface CloneOptions {
   stores: Stores;
@@ -693,6 +734,94 @@ class Clone implements CloneHost {
    * （`#memoryFloorDigestLine` の doc）。**この値も永続化しない。**
    */
   #lastTickMemoryBaselineChars: number | null = null;
+
+  /**
+   * このセッションの生ログ（トランスクリプト）の在り処。**フックの入力から控える。**
+   *
+   * ## なぜ控える必要があるのか
+   *
+   * 生ログを退避・蒸留する既存の経路（`#onPreCompact`）は、在り処を
+   * `PreCompact` フックの入力から受け取っている。**⟹ compaction 自体が失敗した回
+   * （文脈窓を超えて落ちた回）ではそのフックが走らないので、在り処が誰にも
+   * 分からない。** 実測ではその形が 2026-08-29〜31 に 24 件在った（#553）。
+   *
+   * **`transcript_path` は `BaseHookInput` の必須フィールドで、どのフックの入力にも
+   * 必ず載る。⟹ 既に張ってある `PostToolUse` から控えられる**（新しいフックを
+   * 増やさない。増やすと、届かなくなったときに赤くならない）。
+   *
+   * ## ⚠️ 弱さ（そのまま書く）
+   *
+   * **そのセッションで最初の道具呼び出しより前は `null` である。**`PostToolUse` は
+   * ツールの実行後に走るので当然そうなる（`claude-provider.ts` の同じフックの注釈が
+   * 書いている窓と同一である）。**`#withFreshMemory` は道具ではないので、記憶の
+   * 載せ直しでは埋まらない。**
+   *
+   * **⭐ ただしこの窓は、失うものが無い窓と重なる。** 控えが `null` なのは「開いた
+   * ばかりで、まだ道具を1つも使っていないセッション」であり、そこで落ちたなら
+   * **退避する中身も蒸留する中身もほぼ無い**（生ログは1往復ぶんである）。
+   *
+   * ## セッションを跨いで持ち越さない
+   *
+   * `#ensureQuery` で `null` へ戻す。持ち越すと、別のセッションの生ログを
+   * **いまの `sessionId` の名前で**退避することになる（退避の中身と名前が食い違う）。
+   */
+  #transcriptPath: string | null = null;
+
+  /**
+   * このセッションで、**応答として扱える `result` を1度でも受けたか。**
+   *
+   * 文脈窓で落ちたときに畳み直すかどうかの判定にだけ使う（`#reportFailure`）。
+   *
+   * ## ⚠️ 既存の状態からは導けない（測った）
+   *
+   * `turn_ended` の成功枝が触っているのは `#usageBlocked = null`（初期値も `null`
+   * なので「まだ成功していない」と区別できない）と `#emit` と `#finishTurn()` だけ
+   * である。セッションごとに戻る状態（`#sawInit` / `#resumedFrom` /
+   * `#memoryOnRecord` / `#forgetObservedFacts`）にも、成功で立つものは1つも無い。
+   *
+   * **⛔ 台帳（消費）が積まれたかを代用にしない。** あれは「いくら使ったか」の軸で
+   * あって「答えが返ったか」の軸ではない（`usage.ts` が層をモデル名で代用しない
+   * のと同じ形の取り違えになる）。**⟹ 状態を1つ増やす側を採った。**
+   */
+  #sessionAnswered = false;
+
+  /**
+   * 文脈窓（プロンプトの長さ）で落ちたので、**次のターンの境界でセッションを
+   * 畳んで作り直す**（#553。人間の依頼「今後発生した際に落ちないように対策」）。
+   *
+   * **`#recycleForToken` と同じ3段に相乗りする**（新しい系統を作らない）——
+   * 印を立て、`#finishTurn()` が境界を起こし、`#inputStream` が境界で `return`
+   * する。違うのは1点だけで、**こちらは作り直すときに resume しない**
+   * （`setCloneSessionId(null)` を印と同時に打つ）。
+   *
+   * ## なぜ resume しないのか
+   *
+   * resume すると同じ長すぎる会話が戻ってくる。**⟹ 同じところで落ちる。**
+   * `#read` の `catch` に既に在る判断がそのまま当たる —— 逐語で
+   * 「同一性はセッションではなく記憶に宿るので、捨てて困るものは無い」。
+   *
+   * ## ⚠️ `#recycleForToken` と混ぜない
+   *
+   * あちらは**会話を切らない**（`resume` で id を引き継ぐ）。こちらは切る。
+   * 1つの印に畳むと、トークンを回すだけで会話が切れる。
+   */
+  #recycleForContextWindow = false;
+
+  /**
+   * 文脈窓で畳んだので、**次の通常のターンで1度だけ、クローン自身へ断る。**
+   *
+   * ## なぜクローンにも言う必要があるのか
+   *
+   * 畳んだ次のターンで、クローンは**自分が文脈を失ったことを知らない。**
+   * ⟹ 読み直すべきだと気づけない。⟹ 人間には「なぜか話が通じない」として出る。
+   * **落ちなくなっても、人間から見た症状はそこで残る。**
+   *
+   * ## `#distillGapNoticePending` と同じ形で持つ
+   *
+   * 印を立て、次の通常のターンの入力の先頭へ1度だけ差し込み、印を下ろす。
+   * **蒸留のターンには載せない**（記憶へ移すためだけの内部ターンである）。
+   */
+  #contextWindowFoldNoticePending = false;
 
   readonly #inbox = new Inbox();
   readonly #listeners = new Map<string, Set<Listener>>();
@@ -2446,6 +2575,11 @@ class Clone implements CloneHost {
     // いるので、目印はその後ろに足すだけでよい（判定・弱さの断り書きは
     // `context-window-failure.ts` の doc）。
     const contextWindowFailure = classifyContextWindowFailure(message);
+    // **長さで落ちたなら、次の境界でセッションを畳んで作り直す**（#553。人間の依頼
+    // 「今後発生した際に落ちないように対策」）。**判定はここでしかしない** ——
+    // `classifyContextWindowFailure` の呼び出しはこの1か所だけで、`#apply` 側で
+    // もう一度分類すると判定が2本に割れる。
+    const foldingForContextWindow = await this.#noteContextWindowFold(contextWindowFailure);
     const failureText =
       conversationId === null
         ? `内部ターンが失敗した: ${message}`
@@ -2508,13 +2642,153 @@ class Clone implements CloneHost {
       with: 'human',
       role: 'outbound',
       text:
-        this.#usageBlocked === null
+        (this.#usageBlocked === null
           ? 'この発言には返せなかった（ターンが失敗した）。失敗の理由は日誌に残してある。'
           : 'いま利用上限に当たっているので、この発言にはまだ返せない。' +
             '発言は捨てずに保持していて、枠が開いたら試し直して返信する。' +
-            (contextWindowFailure === undefined ? '' : CONTEXT_WINDOW_ALSO_NOTICE),
+            (contextWindowFailure === undefined ? '' : CONTEXT_WINDOW_ALSO_NOTICE)) +
+        // **畳むかどうかは、枠の有無と独立である。⟹ 3軸目として1文足すだけにする**
+        // （2×2 の4マスをそれぞれ書き分けると、同じ内容を4回持つことになる）。
+        (foldingForContextWindow === 'folding'
+          ? CONTEXT_WINDOW_FOLD_NOTICE
+          : foldingForContextWindow === 'held'
+            ? CONTEXT_WINDOW_FOLD_HELD_NOTICE
+            : ''),
       conversationId,
     });
+  }
+
+  /**
+   * フックの入力から生ログの在り処を控える（`#transcriptPath`）。
+   *
+   * **`unknown` から入る値なので、形が読めなければ控えを触らない。** 上書きして
+   * `null` に戻すと、既に控えてあった正しい在り処を捨てることになる。
+   */
+  #noteTranscriptPath(path: string | undefined): void {
+    if (typeof path === 'string' && path.length > 0) this.#transcriptPath = path;
+  }
+
+  /**
+   * 文脈窓（プロンプトの長さ）で落ちたときに、**セッションを畳んで作り直すかを
+   * 決めて印を立てる**（#553。人間の依頼「今後発生した際に落ちないように対策」）。
+   *
+   * 戻り値は人間へ返す1行の分岐にそのまま使う:
+   *
+   * | 戻り値 | 意味 |
+   * | --- | --- |
+   * | `'no'` | 長さの失敗ではない（あるいはセッションが無い）。何もしない |
+   * | `'folding'` | 次の境界で畳む。印を立て、resume 素材を捨てた |
+   * | `'held'` | 長さの失敗だが、**畳んでも直らないので畳まない** |
+   *
+   * ## なぜ「畳んでも直らない」枝が要るのか（暴走の止め）
+   *
+   * **会話を引き継がずに開いたセッションが、1度も答えを返せずに長さで落ちたなら、
+   * もう一度開き直しても材料は同じである。⟹ 落ちる → 畳む → 開く → 落ちる を
+   * 延々繰り返し、そのたびに子プロセスを起こす。⟹ しかも枠が閉じているときほど
+   * 激しく回る**（＝いちばん壊れてほしくない状況で最も回る）。
+   *
+   * **⚠️ これは「ターン数上限で暴走を止める」（AGENTS.md の地雷）ではない。**
+   * あれが防いでいるのは**仕事そのものを止めること**である。ここで止まるのは
+   * **畳み直しだけ**で、ターンは回り続ける。そして**抑止しなくても落ち続ける**
+   * （同じ材料でもう一度開くだけ）ので、**抑止して悪くなるものが1つも無い。**
+   *
+   * ## `setCloneSessionId(null)` は畳んだ後ではなく**印と同時に**打つ
+   *
+   * 畳む前にプロセスが死ぬ窓が在る。そこで打っていなければ、**長すぎるセッション
+   * id が残り、次の起動が resume して同じところで落ちる ＝ 直そうとしていた形へ
+   * 戻る。** 先に打っておけば、その窓で死んでも「resume せずに開く」＝意図した
+   * 結果そのものになる。
+   *
+   * ## 投げない
+   *
+   * ここで投げると、失敗の報告そのものが失敗する（`#reportFailure` の途中である）。
+   * **id を捨てられなかったことは記録に残すが、報告は続ける** ——
+   * `noteDroppedRecord` は `#observeForTokenRotation` が同じ場面で採っている形。
+   */
+  async #noteContextWindowFold(
+    failure: ContextWindowFailure | undefined,
+  ): Promise<'no' | 'folding' | 'held'> {
+    if (failure === undefined) return 'no';
+    // **セッションが無ければ畳むものが無い**（`recycleSessionForToken` の同じ門）。
+    if (this.#query === null) return 'no';
+    // 暴走の止め（上の doc）。
+    if (this.#resumedFrom === null && !this.#sessionAnswered) return 'held';
+
+    this.#recycleForContextWindow = true;
+    // **クローン自身への断りも同時に立てる**（`#contextWindowFoldNoticePending`）。
+    this.#contextWindowFoldNoticePending = true;
+    try {
+      await this.#stores.sessions.setCloneSessionId(null);
+    } catch (error) {
+      noteDroppedRecord('resume 素材の破棄', 'clone', error);
+    }
+    return 'folding';
+  }
+
+  /**
+   * 畳む直前に、生ログを**器の外へ出す**（#553 / #564）。
+   *
+   * ## ⚠️ 2段に割ってある。片方は枠が閉じていても通る
+   *
+   * | 段 | モデルを呼ぶか | 枠が閉じている回で通るか |
+   * | --- | --- | --- |
+   * | (i) 退避（`archive`） | **呼ばない** | **通る** |
+   * | (ii) 蒸留（`#distillFromTranscript`） | 呼ぶ | **通らない** |
+   *
+   * **実測では、長さで落ちた24件のうち9件が「枠も同時に閉じている」形だった**
+   * （#553）。**⟹ その9件では (ii) は原理的に走れない。** だから (i) を先に、
+   * 独立した `try` で通す —— **同じ `try` に入れると、通るはずの (i) が (ii) の
+   * 失敗に巻き込まれる。**
+   *
+   * ## ⚠️ (i) が落ちることも在る。そのときは黙らない
+   *
+   * `archive` はストアへの書き込みなので、ストアが閉じていれば落ちる（長い生ログを
+   * 1本で受け切れるかも測っていない）。**⟹ 落ちたら日誌へ残す。**「残っているはず」と
+   * 読まれるのを防ぐためで、**黙って落とすと、直そうとしている形（守れない約束）と
+   * 同じになる。**
+   *
+   * ## ⛔ これは #564 の被害を無くすものではない
+   *
+   * 会話の文脈は戻らない。**残るのは生ログだけである。⟹ 「1区間まるごと失われる」
+   * から「1区間の生ログは在るが、記憶へは移せていない」へ変わるだけである。**
+   */
+  async #salvageTranscript(): Promise<void> {
+    const path = this.#transcriptPath;
+    // **控えが無い窓は在る**（`#transcriptPath` の doc）。そこは開いたばかりの
+    // セッションで、退避する中身もほぼ無い。**黙って通す側へ倒す** — ここで日誌へ
+    // 書くと、道具を使う前に落ちた回のたびにノイズが1行増える。
+    if (path === null) return;
+
+    let transcript: string;
+    try {
+      transcript = await readFile(path, 'utf8');
+      await this.#stores.archive.archive(this.#sdkSessionId ?? 'clone', transcript);
+    } catch (error) {
+      // (i) が落ちた。**「残っているはず」と読まれないように必ず残す。**
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text:
+          `文脈窓で畳む前の生ログの退避に失敗した: ${String(error)}` +
+          '（⚠️ この区間の生ログは器の外に残っていない）',
+      });
+      return;
+    }
+
+    // (ii) は best-effort。**枠が閉じていれば落ちる。それは (i) を巻き込まない。**
+    try {
+      await this.#distillFromTranscript(tailOf(transcript));
+    } catch (error) {
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text:
+          `文脈窓で畳む前の蒸留に失敗した: ${String(error)}` +
+          '（生ログの退避は済んでいる。記憶へは移せていない）',
+      });
+    }
   }
 
   /**
@@ -2893,6 +3167,7 @@ class Clone implements CloneHost {
       this.#pushInput(
         await this.#withFreshMemory(
           (await this.#distillGapNotice(kind)) +
+            this.#contextWindowFoldNotice(kind) +
             this.#redeliveryNotice +
             this.#commitmentNotice +
             text,
@@ -3393,6 +3668,39 @@ class Clone implements CloneHost {
   }
 
   /**
+   * 文脈窓で畳んだことを、**次の通常のターンで1度だけクローン自身へ断る**（#553）。
+   *
+   * **`#distillGapNotice` と同じ形にしてある** —— 印を下ろしてから文を返し、
+   * 蒸留のターンには載せない（印も下ろさないので、次の通常のターンで改めて載る）。
+   *
+   * ## ⭐ 読み直す口の名前を書く
+   *
+   * 「読み直せる」だけだと、クローンは次のターンで**口を探すところから始める。**
+   * `conversation_read` と書いてあれば1手で済む。**依頼元（クローン）の逐語の条件
+   * である** —— 読むのはクローン自身なので、そこは読む側が決めた。
+   *
+   * ## ⛔ 「どうすべきか」は書かない
+   *
+   * 読み直すかどうかはクローンの判断である（`usage-limits.ts` の
+   * `describeUsageNotice` と同じ約束）。ここが渡すのは**何が起きたか**と
+   * **どの口で読めるか**だけで、「読め」とは書かない。
+   */
+  #contextWindowFoldNotice(kind: 'normal' | 'distill'): string {
+    if (kind === 'distill') return '';
+    if (!this.#contextWindowFoldNoticePending) return '';
+    this.#contextWindowFoldNoticePending = false;
+    return (
+      '[system] 直前のターンが文脈窓（プロンプトの長さ）に当たって失敗したので、' +
+      'このセッションは前の会話を引き継がずに開き直したものである。' +
+      '**⟹ あなたはそれまでのやりとりを文脈として持っていない。**' +
+      'ただし会話の記録そのものは消えていない（`conversation_read` で読み直せる。' +
+      '生ログはアーカイブに退避してある）。' +
+      '⚠️ 記憶（システムプロンプトの「現在の記憶」）はそのままである' +
+      '——失われたのは会話の文脈だけである。\n\n---\n\n'
+    );
+  }
+
+  /**
    * システムプロンプトはセッション開始時に固定されるので、走行中に人間が記憶を
    * 書き換えても届かない。ターンごとに差分を見て、変わっていたら本文の前に
    * 載せ直す（受け入れ基準3: 手編集が次の会話に反映されること）。
@@ -3498,7 +3806,11 @@ class Clone implements CloneHost {
       //
       // **`#stopped` に相乗りしないこと。** あれはクローン全体の停止であり、
       // 混ぜると「トークンを回したらクローンが止まる」になる。
-      if (this.#recycleForToken && this.#turn === null) {
+      // **文脈窓で畳む印も同じ境界で見る**（#553）。理由も条件も上と同じで、
+      // 違うのは作り直すときに resume しない点だけである
+      // （`#recycleForContextWindow` の doc）。**印を2つに分けているのは、
+      // トークンを回すだけで会話が切れないようにするためである。**
+      if ((this.#recycleForToken || this.#recycleForContextWindow) && this.#turn === null) {
         this.#recycleForToken = false;
         return;
       }
@@ -3518,6 +3830,12 @@ class Clone implements CloneHost {
     const resume = await this.#stores.sessions.getCloneSessionId();
     this.#resumedFrom = resume;
     this.#sawInit = false;
+    // **セッションごとに戻す。** 生ログの在り処を持ち越すと、別のセッションの
+    // 生ログをいまの `sessionId` の名前で退避することになる（`#transcriptPath` の
+    // doc）。`#sessionAnswered` を持ち越すと、暴走の止めが前のセッションの成功で
+    // 解けてしまう。
+    this.#transcriptPath = null;
+    this.#sessionAnswered = false;
     // **前のセッションで観測した値を持ち越さない。** ここを残すと、新しい
     // セッションの init が届く前（あるいは届かないまま）に `self_status` が
     // 前のセッションのモデル id や effort を「いまの値」として返す ＝
@@ -3731,6 +4049,7 @@ class Clone implements CloneHost {
     const raw = input as Partial<PostToolUseHookInput> | null | undefined;
     const level = raw?.effort?.level;
     if (typeof level === 'string') this.#effort = level;
+    this.#noteTranscriptPath(raw?.transcript_path);
 
     await this.#journalToolUse(raw, CLONE_ACTOR_ID);
     return { continue: true };
@@ -4189,6 +4508,19 @@ class Clone implements CloneHost {
         // プロンプトを組むことになる（実際には焼き込み直すので嘘にはならないが、
         // 控えの出所が2か所になる）。
         this.#memoryOnRecord.clear();
+        // **文脈窓で畳んだ回は、ここで生ログを器の外へ出す**（#553 / #564）。
+        //
+        // **`this.#query = null` より後に置いてある。** ここは `#read` の
+        // `finally` で、`#read` は `#ensureQuery` から待たれずに走っている
+        // （`this.#reader = this.#read(q)`）。⟹ 退避と蒸留を先に待つと、その間
+        // `#query` が古いまま残り、次のターンが畳んだはずのセッションへ入る。
+        //
+        // **印を先に下ろす。** 下ろさずに `await` すると、その間に届いた失敗が
+        // もう一度畳もうとする。
+        if (this.#recycleForContextWindow) {
+          this.#recycleForContextWindow = false;
+          await this.#salvageTranscript();
+        }
       }
     }
   }
@@ -4443,6 +4775,10 @@ class Clone implements CloneHost {
         // 文言を二度書かない」ためのもので、枠が開いたかどうかとは別の関心
         // である。
         this.#usageBlocked = null;
+        // **このセッションで1度でも答えが返ったことを控える**（#553 の暴走の止め）。
+        // `#usageBlocked` では代用できない —— あれは初期値も `null` なので
+        // 「まだ成功していない」と区別できない（`#sessionAnswered` の doc）。
+        this.#sessionAnswered = true;
         this.#emit(turn?.conversationId ?? null, { type: 'done' });
         this.#finishTurn();
         return;
@@ -4495,7 +4831,7 @@ class Clone implements CloneHost {
     // **ここがターンの境界になった。** 回す印が立っていれば、入力待ちで止まって
     // いる `#inputStream` を起こして畳ませる（Issue #393 PR4）。起こさないと、
     // **次に入力が届くまで古いトークンのまま走り続ける。**
-    if (this.#recycleForToken) this.#wakeInput();
+    if (this.#recycleForToken || this.#recycleForContextWindow) this.#wakeInput();
   }
 
   #emit(conversationId: string | null, event: ChatStreamEvent): void {

@@ -3929,6 +3929,305 @@ describe('クローン — ターンの失敗の跡', () => {
   });
 
   /**
+   * **文脈窓（プロンプトの長さ）で落ちたら、セッションを畳んで作り直す**
+   * （#553。人間の依頼「今後発生した際に落ちないように対策」）。
+   *
+   * ## 何が壊れていたか
+   *
+   * 失敗した `result` は例外ではないので `#read` の `for await` は回り続け、
+   * `#query` は非 null のまま残る。⟹ 次のターンは `#ensureQuery` の早期 return で
+   * **同じセッション**へ入り、同じ長すぎる会話を持ったまま同じところで落ちる。
+   * 実測（#553）: 2026-08-29〜31 に 24 件。
+   *
+   * ## 対照を3本置く（無いと「何でも畳む」実装が生き残る）
+   *
+   * 1. **長さではない失敗** —— 畳まない
+   * 2. **引き継がずに開いて1度も答えていないセッション** —— 畳んでも直らないので
+   *    畳まず、そう名乗る（暴走の止め）
+   * 3. **`#recycleForToken` と混ざっていない** —— トークンを回すだけでは
+   *    `setCloneSessionId(null)` が打たれない（＝会話が切れない）
+   */
+  describe('文脈窓で落ちたら、セッションを畳んで作り直す', () => {
+    /** 長さで落ちる `result`（実測の (B) 群の形）。 */
+    const tooLong = 'Prompt is too long';
+
+    /**
+     * 1本目を成功させ、2本目を長さで落とす。
+     *
+     * **1本目を成功させるのが要点である** —— `#sessionAnswered` が立たないと
+     * 暴走の止めに掛かって畳まれない（対照2 がそこを押す）。**固定値のスタブに
+     * しない**（`resultFor` の doc と同じ理由）。
+     */
+    function setupFold(failText: string) {
+      const stores = createMemoryStores();
+      let failNext = false;
+      const { fn, calls } = fakeSdk(undefined, {
+        resultFor: () =>
+          failNext ? { subtype: 'success', isError: true, text: failText } : undefined,
+      });
+      const clone = createClone({
+        stores,
+        queryFn: fn,
+        env: {},
+        runners: createRunnerRegistry([
+          createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+        ]),
+      });
+      const events: ChatStreamEvent[] = [];
+      clone.subscribe('conv-1', (event) => events.push(event));
+      return { clone, stores, calls, events, failFrom: () => (failNext = true) };
+    }
+
+    /**
+     * 人間へ返った最後の1行（`with: 'human'` / `outbound`）。
+     *
+     * **`exchanges`（この describe の親が持つ）を通す。** 日誌の読み口を自前に
+     * 書き分けると、親の歯と別の並び順・別の絞り方になりうる。
+     */
+    async function lastToHuman(stores: Stores): Promise<string | undefined> {
+      // **`#reportFailure` が書く1行だけを採る。**`with: 'human'` の outbound には
+      // **クローンの発言そのもの**も載る（失敗したターンでも、出ていた本文は
+      // 印を付けて残される）。⟹ 単に最後の1件を採ると、そちらを拾う。
+      const rows = (await exchanges(stores)).filter(
+        (entry) =>
+          entry.with === 'human' &&
+          entry.role === 'outbound' &&
+          (entry.text.startsWith('この発言には返せなかった') ||
+            entry.text.startsWith('いま利用上限に当たっているので')),
+      );
+      return rows[rows.length - 1]?.text;
+    }
+
+    it('畳んで、次のターンは新しいセッションで走る。resume 素材は捨てられている', async () => {
+      const s = setupFold(tooLong);
+
+      // 1本目は成功させる（`#sessionAnswered` を立てる）。
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.events.some((event) => event.type === 'done'), '1本目が通ること');
+      // 成功した時点で session id が控えられている。
+      expect(await s.stores.sessions.getCloneSessionId()).not.toBeNull();
+
+      // 2本目を長さで落とす。
+      s.failFrom();
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.events.some((event) => event.type === 'error'), '2本目が落ちること');
+
+      // **印と同時に resume 素材が捨てられている**（畳んだ後ではない）。
+      await waitFor(
+        async () => (await s.stores.sessions.getCloneSessionId()) === null,
+        'resume 素材が捨てられること',
+      );
+
+      // 3本目は**新しいセッション**で走る。
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.calls.length > 1, '2本目のセッションが開くこと');
+      await s.clone.stop();
+
+      expect(s.calls.length).toBeGreaterThan(1);
+    });
+
+    it('人間へ返す1行で「記録は消えていない」と言う（会話が失われたとは言わない）', async () => {
+      const s = setupFold(tooLong);
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.events.some((event) => event.type === 'done'), '1本目が通ること');
+      s.failFrom();
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.events.some((event) => event.type === 'error'), '2本目が落ちること');
+
+      const text = await lastToHuman(s.stores);
+      await s.clone.stop();
+
+      expect(text).toContain('次の発言から新しく開き直す');
+      // **⛔ 消えていないものを消えたことにしない。**
+      expect(text).toContain('消えていない');
+      expect(text).not.toContain('失われ');
+      // 読み直す口の名前は、クローン側の断りが持つ（ここには出さない）。
+      expect(text).not.toContain('context_window_failure');
+    });
+
+    it('対照1（長さではない失敗）: 畳まない。resume 素材も残る', async () => {
+      const s = setupFold('何か別の理由で落ちた');
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.events.some((event) => event.type === 'done'), '1本目が通ること');
+      s.failFrom();
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.events.some((event) => event.type === 'error'), '2本目が落ちること');
+
+      const text = await lastToHuman(s.stores);
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      // **⭐ ここが「何でも畳む」実装を殺す。**
+      expect(await s.stores.sessions.getCloneSessionId()).not.toBeNull();
+      await s.clone.stop();
+      expect(text).not.toContain('次の発言から新しく開き直す');
+    });
+
+    it('対照2（暴走の止め）: 引き継がずに開いて1度も答えていないなら、畳まずにそう言う', async () => {
+      const s = setupFold(tooLong);
+      // **最初のターンから落とす** ⟹ `#resumedFrom === null` かつ
+      // `#sessionAnswered === false` ＝ 開き直しても材料が同じ状態。
+      s.failFrom();
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.events.some((event) => event.type === 'error'), 'ターンが落ちること');
+
+      const text = await lastToHuman(s.stores);
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      await s.clone.stop();
+
+      // 畳んでいない（＝抑止が効いている）。
+      expect(text).not.toContain('次の発言から新しく開き直す');
+      // **抑止したことを名乗る。** 名乗らないと外から「なぜか動かない」に見える。
+      expect(text).toContain('開き直していない');
+      expect(text).toContain('プロンプトそのものが収まっていない可能性');
+    });
+
+    /**
+     * **⭐ 畳む直前に、生ログが器の外へ出る**（#553 / #564）。
+     *
+     * ## なぜ在り処を `PostToolUse` から控えるのか
+     *
+     * 既存の退避（`#onPreCompact`）は在り処を `PreCompact` フックの入力から
+     * 受け取っている。**⟹ compaction 自体が失敗した回（＝ここで扱う回）は
+     * そのフックが走らないので、在り処が誰にも分からない。**
+     * `transcript_path` は `BaseHookInput` の必須フィールドなので、**既に張って
+     * ある `PostToolUse` から控えられる**（フックを増やさない）。
+     *
+     * ## ⚠️ この歯が測っていないこと
+     *
+     * **蒸留（2段目）が走ったかは測っていない。** あちらはモデルを呼ぶので、
+     * 枠が閉じている回では原理的に落ちる（実測で24件中9件がその形）。**この歯が
+     * 固定しているのは「退避（1段目）はモデルを呼ばないので、そちらだけは通る」
+     * ことである。**
+     */
+    it('畳む直前に生ログを退避する（在り処は PostToolUse から控えたもの）', async () => {
+      const s = setupFold(tooLong);
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.events.some((event) => event.type === 'done'), '1本目が通ること');
+
+      // 道具を1つ使った跡を作る ＝ 在り処が控えられる。**本物と同じ経路で叩く**
+      // （既存の PreCompact / PostToolUse の歯と同じ形）。
+      const dir = await mkdtemp(join(tmpdir(), 'alteroid-ctxwin-'));
+      try {
+        const transcriptPath = join(dir, 'transcript.jsonl');
+        await writeFile(transcriptPath, '畳む直前の生ログ', 'utf8');
+        const hook = (s.calls[0] as FakeCall).options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+        if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
+        await hook({ tool_name: 'Read', transcript_path: transcriptPath } as never, undefined, {
+          signal: new AbortController().signal,
+        } as never);
+
+        s.failFrom();
+        s.clone.post(humanMessage('やあ'));
+        await waitFor(() => s.events.some((event) => event.type === 'error'), 'ターンが落ちること');
+
+        // **退避されている。**
+        await waitFor(async () => (await s.stores.archive.list()).length > 0, '退避されること');
+        const ids = await s.stores.archive.list();
+        expect(await s.stores.archive.read(ids[0] as string)).toBe('畳む直前の生ログ');
+      } finally {
+        await s.clone.stop();
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('対照（在り処を控えていない）: 退避を試みず、日誌にノイズも増やさない', async () => {
+      const s = setupFold(tooLong);
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.events.some((event) => event.type === 'done'), '1本目が通ること');
+      // 道具を1つも使っていない ＝ 控えは空である（`#transcriptPath` の弱さ）。
+      s.failFrom();
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.events.some((event) => event.type === 'error'), 'ターンが落ちること');
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      await s.clone.stop();
+
+      expect(await s.stores.archive.list()).toHaveLength(0);
+      // **黙って通す側へ倒してある。**「退避に失敗した」を毎回書くとノイズになる。
+      const selfRows = (await exchanges(s.stores)).filter((entry) => entry.with === 'self');
+      expect(selfRows.some((entry) => entry.text.includes('生ログの退避に失敗した'))).toBe(false);
+    });
+
+    /**
+     * **⭐ 畳んだ次のターンで、クローン自身にも1度だけ断る**（#553、依頼元の決裁）。
+     *
+     * ## なぜ人間への1行だけでは足りないのか
+     *
+     * 畳んだ次のターンで、クローンは**自分が文脈を失ったことを知らない。**
+     * ⟹ 読み直すべきだと気づけない。⟹ 人間には「なぜか話が通じない」として出る。
+     * **落ちなくなっても、人間から見た症状はそこで残る。**
+     *
+     * ## 対照を2本置く
+     *
+     * 1. **1度だけ** —— 次のターンには載らない（毎ターン載ると文脈を食う）
+     * 2. **畳んでいない失敗では載らない**
+     */
+    it('畳んだ次のターンで、クローン自身へ1度だけ断る（読み口の名前つき）', async () => {
+      const s = setupFold(tooLong);
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.events.some((event) => event.type === 'done'), '1本目が通ること');
+      s.failFrom();
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.events.some((event) => event.type === 'error'), 'ターンが落ちること');
+      await waitFor(
+        async () => (await s.stores.sessions.getCloneSessionId()) === null,
+        '畳むと決まること',
+      );
+
+      // 畳んだ後の新しいセッションで1ターン回す。
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.calls.length > 1, '2本目のセッションが開くこと');
+      const next = s.calls.at(-1) as FakeCall;
+      await waitFor(() => next.inputs.length > 0, '入力が届くこと');
+
+      const first = next.inputs[0] as string;
+      expect(first).toContain('前の会話を引き継がずに開き直した');
+      // **⭐ 読み直す口の名前が在る**（依頼元の条件。無いと口を探すところから始まる）。
+      expect(first).toContain('conversation_read');
+      // **記憶は失われていない**ことも言う（そこを混同すると同一性の話になる）。
+      expect(first).toContain('記憶');
+
+      // 対照1: **1度だけ。**次のターンには載らない。
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => next.inputs.length > 1, '2ターン目の入力が届くこと');
+      await s.clone.stop();
+      expect(next.inputs[1] as string).not.toContain('前の会話を引き継がずに開き直した');
+    });
+
+    it('対照（畳んでいない失敗）: クローンへの断りも載らない', async () => {
+      const s = setupFold('何か別の理由で落ちた');
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.events.some((event) => event.type === 'done'), '1本目が通ること');
+      s.failFrom();
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.events.some((event) => event.type === 'error'), 'ターンが落ちること');
+
+      const main = s.calls[0] as FakeCall;
+      const before = main.inputs.length;
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => main.inputs.length > before, '次の入力が届くこと');
+      await s.clone.stop();
+
+      expect(main.inputs.at(-1) as string).not.toContain('前の会話を引き継がずに開き直した');
+    });
+
+    it('対照3: トークンを回すだけでは resume 素材を捨てない（会話が切れない）', async () => {
+      const s = setupFold(tooLong);
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.events.some((event) => event.type === 'done'), '1本目が通ること');
+
+      s.clone.recycleSessionForToken();
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.calls.length > 1, '2本目のセッションが開くこと');
+      await s.clone.stop();
+
+      // **2つの印が混ざっていない。** 混ざると、鍵を回すだけで会話が切れる。
+      expect(await s.stores.sessions.getCloneSessionId()).not.toBeNull();
+    });
+  });
+
+  /**
    * **枠で保持していると言うとき、そのターンが長さにも当たっていたらそう言う。**
    *
    * ## なぜこの1マスだけか
@@ -9472,6 +9771,68 @@ describe('recycleSessionForToken（回した後のセッション作り直し）
     await clone.stop();
 
     expect(sessions).toHaveLength(1);
+  });
+
+  /**
+   * **⭐ 失敗した直後に畳んでも、余計な失敗が1件も増えない。**
+   *
+   * ## なぜこれを先に固定するのか
+   *
+   * 文脈窓（プロンプトの長さ）で落ちた回にセッションを畳み直す設計（#553）が、
+   * この性質に**丸ごと乗っている。** 乗っている先はここである:
+   *
+   * - `#apply` の `case 'turn_ended'` は、失敗した `result` に対して
+   *   `#reportFailure`（`error` を1件 emit する）を打ち、そのあと `#finishTurn()` を
+   *   呼ぶ
+   * - `#finishTurn()` は `#turn` を `null` にしてから境界を起こす
+   * - ⟹ `#inputStream` が境界で `return` し、`#read` の `finally` に届く頃には
+   *   `#turn` は `null` ⟹ `if (turn) { … 'クローンのセッションが終了した' }` が
+   *   偽になる
+   *
+   * **⟹ もしこの順序が崩れると、失敗を1件報告した直後に「セッションが終了した」が
+   * 同じ会話へもう1件届く。** 人間から見ると、1回の失敗が2回に見える ——
+   * しかも2件目は原因を1文字も持たない。
+   *
+   * ## ⚠️ 既存の兄弟の歯とは条件が違う
+   *
+   * 上の「ターンの途中では畳まない」は**成功して終わるターンの途中**で畳む。
+   * こちらは**失敗して終わったターンの直後**に畳む。**`#turn` を片付ける経路が
+   * 別である**（あちらは結果の到着、こちらは失敗側の `#finishTurn()`）ので、
+   * あちらが緑でもこちらは保証されない。
+   *
+   * **⚠️ この歯は `recycleSessionForToken()`（＝トークンを回す側の引き金）で
+   * 畳んでいる。** 文脈窓で畳む引き金はまだ無いので、**固定しているのは
+   * 「畳む引き金が何であれ、失敗の直後に畳んでも余計な報告が出ない」という
+   * 順序の性質だけである。**
+   */
+  it('⚠️ 失敗した直後に畳んでも、余計な失敗が増えない（次は新しいセッションで走る）', async () => {
+    // **固定値のスタブにしない。** 1本目だけ失敗させ、2本目は通す —— 全ターンを
+    // 失敗に固定すると「2本目の失敗」と「余計な報告」が区別できなくなる。
+    let failNext = true;
+    const { clone, calls } = setupRecycle({
+      resultFor: () =>
+        failNext ? { subtype: 'success', isError: true, text: 'Prompt is too long' } : undefined,
+    });
+    const events: string[] = [];
+    clone.subscribe('conv-1', (event) => events.push(event.type));
+
+    say(clone);
+    await waitFor(() => events.includes('error'), '1本目が失敗すること');
+    failNext = false;
+
+    // 失敗の直後に畳む（ターンはもう終わっている ＝ 境界に居る）。
+    clone.recycleSessionForToken();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    say(clone);
+
+    await waitFor(() => calls.length > 1, '2本目のセッションが開くこと');
+    await waitFor(() => events.includes('done'), '2本目が最後まで走ること');
+    await clone.stop();
+
+    // **失敗の報告は1件だけ。**2件目（`クローンのセッションが終了した`）が出ない。
+    expect(events.filter((type) => type === 'error')).toHaveLength(1);
+    // 畳めているので、2本目は別のセッションである。
+    expect(calls.length).toBeGreaterThan(1);
   });
 
   it('クローン全体の停止（stop）とは別物である', async () => {
