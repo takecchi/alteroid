@@ -2251,6 +2251,50 @@ describe('PgSessionRegistry', () => {
     await stores.sessions.setTranscriptGrave(null);
     expect(await stores.sessions.getTranscriptGrave()).toBeNull();
   });
+
+  /**
+   * **⭐ 墓標は2つの欄に分かれている**（#564 E1b）。
+   *
+   * 文脈窓で畳む回（退避が在る）と、次の起動が開けなかった回（退避が無い）は**別々に
+   * 起きる。** 1つの欄に相乗りさせると、後に立った方が前の方を消す。⟹ **両方を立てて、
+   * 両方残ることを測る。**
+   */
+  it('2つの墓標は互いを消さない。そして resume 素材を捨てても両方残る', async () => {
+    await stores.sessions.setCloneSessionId('sess-1');
+    await stores.sessions.setTranscriptGrave({ archiveId: 'sess-1-2026.jsonl' });
+    await stores.sessions.setLostSessionGrave({
+      projectKey: '-workspace',
+      sessionId: 'sess-old',
+    });
+
+    await stores.sessions.setCloneSessionId(null);
+
+    expect(await stores.sessions.getTranscriptGrave()).toEqual({ archiveId: 'sess-1-2026.jsonl' });
+    expect(await stores.sessions.getLostSessionGrave()).toEqual({
+      projectKey: '-workspace',
+      sessionId: 'sess-old',
+    });
+
+    await stores.sessions.setLostSessionGrave(null);
+    expect(await stores.sessions.getLostSessionGrave()).toBeNull();
+    expect(await stores.sessions.getTranscriptGrave()).toEqual({ archiveId: 'sess-1-2026.jsonl' });
+    await stores.sessions.setTranscriptGrave(null);
+  });
+
+  /**
+   * `projectKey` は**器を跨いで**要る（`SessionRegistry.getProjectKey` の doc）——
+   * 墓標を立てたい回は、まさにそのプロセスで `append` が1度も来ていない回である。
+   */
+  it('生ログの scope を覚える。resume 素材を捨てても消えない', async () => {
+    expect(await stores.sessions.getProjectKey()).toBeNull();
+
+    await stores.sessions.setCloneSessionId('sess-1');
+    await stores.sessions.setProjectKey('-workspace');
+    expect(await stores.sessions.getProjectKey()).toBe('-workspace');
+
+    await stores.sessions.setCloneSessionId(null);
+    expect(await stores.sessions.getProjectKey()).toBe('-workspace');
+  });
 });
 
 describe('PgSessionStore（SDK のセッション永続化）', () => {
@@ -2258,6 +2302,34 @@ describe('PgSessionStore（SDK のセッション永続化）', () => {
 
   it('一度も書かれていない key は null（空配列ではない）', async () => {
     expect(await stores.sessionStore.load(key)).toBeNull();
+  });
+
+  /**
+   * **末尾だけを読む口**（#564 E1b。`SessionTranscriptTail`）。
+   *
+   * `load()` は全件を戻すので、580 MB 級のセッションでは SDK が掛けている 60 秒の
+   * 予算に当たりに行く。⟹ **ここが「全件を戻さない」ことを測る。**
+   */
+  it('末尾だけを、古い順に組み直して返す', async () => {
+    const tailKey = { projectKey: 'proj', sessionId: 'sess-tail' };
+    expect(await stores.sessionStore.readTail(tailKey, 1_000)).toBeNull();
+
+    await stores.sessionStore.append(tailKey, [
+      { type: 'user', uuid: 't1', body: 'OLDEST' },
+      { type: 'assistant', uuid: 't2', body: 'MIDDLE' },
+      { type: 'assistant', uuid: 't3', body: 'NEWEST' },
+    ]);
+
+    const all = await stores.sessionStore.readTail(tailKey, 10_000);
+    expect(all?.split('\n')).toHaveLength(3);
+    // **古い順に戻る**（生ログの JSONL と同じ並び）。
+    expect(all?.indexOf('OLDEST')).toBeLessThan(all?.indexOf('NEWEST') ?? -1);
+
+    // **足りたら止める。** 1行ぶんに満たない予算なら1行だけ返る。
+    const one = await stores.sessionStore.readTail(tailKey, 1);
+    expect(one?.split('\n')).toHaveLength(1);
+    expect(one).toContain('NEWEST');
+    expect(one).not.toContain('OLDEST');
   });
 
   it('積んだ順に読み戻せる', async () => {

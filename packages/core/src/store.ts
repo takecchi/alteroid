@@ -921,6 +921,85 @@ export interface SessionRegistry {
    */
   getTranscriptGrave(): Promise<TranscriptGrave | null>;
   setTranscriptGrave(grave: TranscriptGrave | null): Promise<void>;
+  /**
+   * **resume 素材を捨てた回の墓標**（#564 E1b。`TranscriptGrave` とは別の欄）。
+   *
+   * ## なぜ `TranscriptGrave` と同じ欄にしないのか
+   *
+   * **同時に立ちうるからである。** 文脈窓で畳む回（退避は済んでいる）と、次の起動が
+   * セッションを開けなかった回（退避が無い）は**別々に起きる。** 1つの欄に相乗りさせると、
+   * **後に立った方が前の方を消す** —— 消えた側は誰も拾わない。
+   *
+   * ⟹ 指す先が違い（`archive` / pg の生ログ）、立つ契機も違うので、欄を分ける。
+   * **どちらも「高々1つ」である**（同じ種類が2回続いたら古い方が失われる、は変わらない）。
+   */
+  getLostSessionGrave(): Promise<LostSessionGrave | null>;
+  setLostSessionGrave(grave: LostSessionGrave | null): Promise<void>;
+  /**
+   * SDK が生ログを預けるときの scope（`SessionKey.projectKey`）を、**器を跨いで**覚える。
+   *
+   * ## なぜ持ち越す必要があるのか
+   *
+   * この値は `append` が渡してくるものなので、**`append` が1度も来ていないプロセスは
+   * 知らない。** そして墓標を立てたい回（`init` すら来ずに落ちた回）は、まさに
+   * **そのプロセスで `append` が1度も来ていない回である** —— 起き直して resume に
+   * 失敗した直後がそれで、`#564` が数えている経路そのものである。
+   *
+   * ⟹ 前の器が覚えた値をここから読む。**`cwd` から計算し直さないこと**
+   * （`LostSessionGrave` の doc）。
+   *
+   * ⚠️ **配備してから1度も `append` が来ていないうちは `null` である。** その窓で
+   * 落ちた回は墓標が立たない（拾う鍵が無い）。
+   */
+  getProjectKey(): Promise<string | null>;
+  setProjectKey(projectKey: string): Promise<void>;
+}
+
+/**
+ * **resume 素材を捨てた回に、その区間を後から引くための鍵**（#564 E1b）。
+ *
+ * `init` すら来ずにセッションが落ちた回は、`clone.ts` が resume 素材（セッション id）を
+ * 捨てる。**そこで捨てた id が、pg に載っている生ログを引く唯一の鍵である。**
+ * ⟹ 捨てる前にここへ写しておかないと、区間は pg に在るのに誰も引けなくなる。
+ *
+ * ## なぜ `projectKey` も要るのか
+ *
+ * SDK の `SessionStore` は `projectKey` + `sessionId` の対で引く口しか持たない。
+ * そして **`projectKey` を `cwd` から計算し直さないこと** —— SDK の型定義が逐語で
+ * 「Default: sanitized cwd. Paths longer than 200 characters are truncated and
+ * suffixed with a portable djb2 hash」と書いており、再実装は静かにずれる。
+ * ⟹ `append` が渡してくる値をそのまま控える（`clone.ts` の `withProjectKeyProbe`）。
+ */
+export interface LostSessionGrave {
+  projectKey: string;
+  sessionId: string;
+}
+
+/**
+ * pg に載っている生ログの**末尾だけ**を読む口（#564 E1b）。
+ *
+ * ## なぜ `SessionStore.load()` を使わないのか
+ *
+ * あちらは**全件**を戻す。実測でクローンの生ログは 1 セッションで 580 MB 級に育ち、
+ * SDK は `load()` に **60 秒の予算**を掛けている（`Options.loadTimeoutMs` の既定）。
+ * ⟹ 拾い直しのために全件を戻すと、**その予算に設計が自分から当たりに行く。**
+ *
+ * **蒸留が読むのは末尾だけである**（`clone.ts` の `tailOf`）。⟹ 末尾を返す口を分ける。
+ *
+ * ## ⚠️ pg 構成でだけ付く
+ *
+ * `sessionStore` と同じである（`Stores.sessionStore` の doc）。fs 構成には生ログの
+ * 預け先そのものが無いので、**この口も無い。**
+ */
+export interface SessionTranscriptTail {
+  /**
+   * 末尾から `maxChars` 文字ぶんを返す。**1本も無ければ `null`。**
+   *
+   * 返すのは生ログ（JSONL）の形そのままで、**行の途中から始まりうる。** 整えるのは
+   * 呼び出し側（`tailOf`）である —— 器ごとに整え方が分かれると、蒸留へ渡るものが
+   * 器で変わる。
+   */
+  readTail(key: LostSessionGrave, maxChars: number): Promise<string | null>;
 }
 
 /** デーモンが必要とするストア一式。 */
@@ -989,4 +1068,12 @@ export interface Stores {
    * （docs/architecture.md「非対称な可視性」）。
    */
   sessionStore?: SessionStore;
+  /**
+   * 預けた生ログの**末尾だけ**を読む口（#564 E1b）。`sessionStore` と対で付く。
+   *
+   * **省略可能なのは `sessionStore` と同じ理由である**（M4 のクラウド構成でだけ付く）。
+   * ⟹ fs 構成では拾い直せない。それは能力差だが、**fs には生ログの預け先そのものが
+   * 無い**ので、ここだけ揃えても埋まらない（`SessionTranscriptTail` の doc）。
+   */
+  sessionTranscriptTail?: SessionTranscriptTail;
 }

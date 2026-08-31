@@ -7,6 +7,7 @@ import type {
   PostToolUseHookInput,
   Query,
   SDKUserMessage,
+  SessionKey,
   SessionStore,
 } from '@anthropic-ai/claude-agent-sdk';
 
@@ -648,6 +649,17 @@ class Clone implements CloneHost {
   readonly #queryFn: typeof query;
   readonly #cwd: string | undefined;
   readonly #sessionStore: SessionStore | undefined;
+  /**
+   * SDK が生ログを預けるときの scope（`SessionKey.projectKey`）。
+   *
+   * **`append` が渡してくる値をそのまま控える**（`withProjectKeyProbe`）。**`cwd` から
+   * 計算し直さないこと** —— SDK の型定義が「sanitized cwd。200 文字を超えたら切って
+   * djb2 のハッシュを足す」と書いており、再実装は静かにずれる。
+   *
+   * ⚠️ **このプロセスで `append` が1度も来ていなければ `null` である。** 器を跨いだ値は
+   * `SessionRegistry.getProjectKey()` が持つ（そちらの doc に、なぜ跨ぐ必要があるかを書いた）。
+   */
+  #projectKey: string | null = null;
   readonly #managers: ManagerPool;
   /**
    * このクローンのモデル帯。本セッションと蒸留のサイドクエリで必ず同じものを
@@ -1192,7 +1204,14 @@ class Clone implements CloneHost {
     this.#stores = stores;
     this.#queryFn = queryFn ?? query;
     this.#cwd = cwd;
-    this.#sessionStore = sessionStore;
+    // **預け先を包んで `projectKey` を拾う**（#564 E1b。`withProjectKeyProbe`）。
+    // runner が `key.projectKey` を拾って上げているのと同じ形である。
+    this.#sessionStore =
+      sessionStore === undefined
+        ? undefined
+        : withProjectKeyProbe(sessionStore, (projectKey) => {
+            this.#noteProjectKey(projectKey);
+          });
     const envSource = env ?? process.env;
     this.#model = resolveCloneModel(envSource);
     this.#modelOverridden = placedCloneModel(envSource) !== null;
@@ -1641,6 +1660,13 @@ class Clone implements CloneHost {
     // （走行中のマネージャーも巻き添えになる）。**印は残るので、次の起動でまた試す。**
     void this.#pickUpTranscriptGrave().catch((error: unknown) => {
       noteDroppedRecord('墓標の拾い直し', '', error);
+    });
+
+    // **捨てた resume 素材の側も拾い直す**（#564 E1b。`#pickUpLostSession`）。
+    // **2本に分かれているのは、指す先と拾い方が違うからである**（`archive` の全文 /
+    // pg の生ログの末尾）。同じ関数に畳むと、どちらの材料が無かったのかが日誌から消える。
+    void this.#pickUpLostSession().catch((error: unknown) => {
+      noteDroppedRecord('捨てたセッションの拾い直し', '', error);
     });
 
     for await (const event of this.#inbox) {
@@ -2907,6 +2933,97 @@ class Clone implements CloneHost {
     const current = await this.#stores.sessions.getTranscriptGrave();
     if (current?.archiveId === grave.archiveId) {
       await this.#stores.sessions.setTranscriptGrave(null);
+    }
+  }
+
+  /**
+   * `append` が渡してきた `projectKey` を控える（#564 E1b）。
+   *
+   * **変わったときだけ器へ書く。** `append` はターンの間およそ 100ms ごとに来るので、
+   * 毎回書くと**ターン1本につき数十回の書き込み**になる。値はほぼ不変（`cwd` から
+   * 決まる）なので、メモリ上の控えと違うときだけ書けばよい。
+   *
+   * **投げない。** ここはフックの延長で、失敗しても本体の仕事（生ログを預けること）を
+   * 止める理由が無い。
+   */
+  #noteProjectKey(projectKey: string): void {
+    if (this.#projectKey === projectKey) return;
+    this.#projectKey = projectKey;
+    void this.#stores.sessions.setProjectKey(projectKey).catch((error: unknown) => {
+      noteDroppedRecord('生ログの scope の記録', projectKey, error);
+    });
+  }
+
+  /**
+   * 捨てる resume 素材を墓標として控える（#564 E1b）。**捨てる前に呼ぶこと。**
+   *
+   * ## 空振りする条件（どちらも黙って通す）
+   *
+   * | 条件 | なぜ黙るか |
+   * | --- | --- |
+   * | 生ログの預け先が無い（fs 構成） | 拾う材料そのものが無い。日誌へ書くと、fs で動かす
+   *   たびに同じ1行が積もる |
+   * | `projectKey` を誰も知らない | 配備してから1度も `append` が来ていない窓である
+   *   （`SessionRegistry.getProjectKey` の doc）。**そこは失うものもほぼ無い** ——
+   *   預けた生ログが1件も無いということである |
+   */
+  async #noteLostSession(sessionId: string): Promise<void> {
+    if (this.#stores.sessionTranscriptTail === undefined) return;
+    const projectKey = this.#projectKey ?? (await this.#stores.sessions.getProjectKey());
+    if (projectKey === null) return;
+
+    await this.#stores.sessions
+      .setLostSessionGrave({ projectKey, sessionId })
+      .catch((error: unknown) => {
+        noteDroppedRecord('捨てたセッションの記録', sessionId, error);
+      });
+  }
+
+  /**
+   * 起動時に、**捨てた resume 素材の区間を pg の生ログから拾い直す**（#564 E1b）。
+   *
+   * `#pickUpTranscriptGrave` との違いは材料だけである —— あちらは退避（`archive`）の
+   * 全文、こちらは**預けた生ログの末尾**である。**`load()` は使わない**（全件を戻すと
+   * SDK が掛けている 60 秒の予算に当たりに行く。`SessionTranscriptTail` の doc）。
+   */
+  async #pickUpLostSession(): Promise<void> {
+    const tail = this.#stores.sessionTranscriptTail;
+    if (tail === undefined) return;
+    const grave = await this.#stores.sessions.getLostSessionGrave();
+    if (grave === null) return;
+
+    const transcript = await tail.readTail(grave, DISTILL_TRANSCRIPT_TAIL_CHARS);
+    if (transcript === null) {
+      // 預けた生ログが1件も無い（そのセッションは何も預けずに終わった）。
+      // **印だけを残さない** —— 残すと、拾えないものを起動のたびに引きに行く。
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text:
+          `捨てたセッションの生ログが1件も無いので、印を下ろした: ${grave.sessionId}` +
+          '（⚠️ この区間は記憶へ移せていない）',
+      });
+      await this.#stores.sessions.setLostSessionGrave(null);
+      return;
+    }
+
+    // **拾い直したことを日誌へ1行残す**（`#pickUpTranscriptGrave` と同じ理由 ——
+    // これが無いと compaction の蒸留と区別が付かず、後から数えられない）。
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text: `捨てたセッションの区間を、預けた生ログから拾い直す: ${grave.sessionId}`,
+    });
+
+    await this.#distillFromTranscript(tailOf(transcript));
+
+    // **印を下ろすのは成功したときだけ**／**引き直してから下ろす**（`#pickUpTranscriptGrave`
+    // と同じ形。理由もそちらに書いた）。
+    const current = await this.#stores.sessions.getLostSessionGrave();
+    if (current?.sessionId === grave.sessionId) {
+      await this.#stores.sessions.setLostSessionGrave(null);
     }
   }
 
@@ -4627,6 +4744,13 @@ class Clone implements CloneHost {
       // init すら来ずに落ちたなら resume 素材が腐っている。捨てて作り直す。
       // 同一性はセッションではなく記憶に宿るので、捨てて困るものは無い。
       if (!this.#stopped && !this.#sawInit && this.#resumedFrom !== null) {
+        // **⭐ 捨てる前に墓標を立てる**（#564 E1b）。**順序が要点である** —— 捨てた後だと、
+        // 立てる前にプロセスが死んだ回で id がどこにも残らない。
+        //
+        // **この回は退避が無い**（道具を1つも使っていないので `#transcriptPath` は
+        // `null` で、`#salvageTranscript` は何もしない）。⟹ `TranscriptGrave` の側では
+        // 拾えない。材料は pg に預けた生ログだけである。
+        await this.#noteLostSession(this.#resumedFrom);
         await this.#stores.sessions.setCloneSessionId(null).catch(() => undefined);
       }
     } finally {
@@ -5709,6 +5833,38 @@ async function readTranscriptTail(path: string): Promise<string> {
   } finally {
     await handle.close();
   }
+}
+
+/**
+ * 生ログの預け先を包んで、`append` が渡してくる `projectKey` を拾う（#564 E1b）。
+ *
+ * **`{ ...store }` で包まないこと。** 預け先はクラス（`PgSessionStore`）なので、
+ * 展開しても**プロトタイプのメソッドは1つも写らない** —— 型は通り、実行時に
+ * `append is not a function` で落ちる。⟹ 1つずつ束ねて渡す。
+ *
+ * **任意のメソッドは、在るときだけ写す。** 無い口を `undefined` で持たせると、SDK 側の
+ * 「実装しているか」の判定（`typeof store.listSessions === 'function'` の族）が
+ * 変わりうる。
+ */
+function withProjectKeyProbe(
+  store: SessionStore,
+  note: (projectKey: string) => void,
+): SessionStore {
+  const listSessions = store.listSessions?.bind(store);
+  const listSessionSummaries = store.listSessionSummaries?.bind(store);
+  const remove = store.delete?.bind(store);
+  const listSubkeys = store.listSubkeys?.bind(store);
+  return {
+    append: async (key: SessionKey, entries) => {
+      note(key.projectKey);
+      await store.append(key, entries);
+    },
+    load: store.load.bind(store),
+    ...(listSessions === undefined ? {} : { listSessions }),
+    ...(listSessionSummaries === undefined ? {} : { listSessionSummaries }),
+    ...(remove === undefined ? {} : { delete: remove }),
+    ...(listSubkeys === undefined ? {} : { listSubkeys }),
+  };
 }
 
 /**

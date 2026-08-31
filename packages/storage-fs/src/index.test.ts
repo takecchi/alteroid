@@ -2523,6 +2523,50 @@ describe('FsSessionRegistry', () => {
     await stores.sessions.setTranscriptGrave(null);
     expect(await stores.sessions.getTranscriptGrave()).toBeNull();
   });
+
+  /**
+   * **⭐ 墓標は2つの欄に分かれている**（#564 E1b）。
+   *
+   * 文脈窓で畳む回（退避が在る）と、次の起動が開けなかった回（退避が無い）は**別々に
+   * 起きる。** 1つの欄に相乗りさせると、後に立った方が前の方を消す。⟹ **両方を立てて、
+   * 両方残ることを測る。**
+   */
+  it('2つの墓標は互いを消さない。そして resume 素材を捨てても両方残る', async () => {
+    await stores.sessions.setCloneSessionId('sess-1');
+    await stores.sessions.setTranscriptGrave({ archiveId: 'sess-1-2026.jsonl' });
+    await stores.sessions.setLostSessionGrave({
+      projectKey: '-workspace',
+      sessionId: 'sess-old',
+    });
+
+    await stores.sessions.setCloneSessionId(null);
+
+    expect(await stores.sessions.getTranscriptGrave()).toEqual({ archiveId: 'sess-1-2026.jsonl' });
+    expect(await stores.sessions.getLostSessionGrave()).toEqual({
+      projectKey: '-workspace',
+      sessionId: 'sess-old',
+    });
+
+    await stores.sessions.setLostSessionGrave(null);
+    expect(await stores.sessions.getLostSessionGrave()).toBeNull();
+    expect(await stores.sessions.getTranscriptGrave()).toEqual({ archiveId: 'sess-1-2026.jsonl' });
+    await stores.sessions.setTranscriptGrave(null);
+  });
+
+  /**
+   * `projectKey` は**器を跨いで**要る（`SessionRegistry.getProjectKey` の doc）——
+   * 墓標を立てたい回は、まさにそのプロセスで `append` が1度も来ていない回である。
+   */
+  it('生ログの scope を覚える。resume 素材を捨てても消えない', async () => {
+    expect(await stores.sessions.getProjectKey()).toBeNull();
+
+    await stores.sessions.setCloneSessionId('sess-1');
+    await stores.sessions.setProjectKey('-workspace');
+    expect(await stores.sessions.getProjectKey()).toBe('-workspace');
+
+    await stores.sessions.setCloneSessionId(null);
+    expect(await stores.sessions.getProjectKey()).toBe('-workspace');
+  });
 });
 
 /**

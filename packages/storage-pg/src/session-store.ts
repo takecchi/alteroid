@@ -1,5 +1,6 @@
+import type { LostSessionGrave, SessionTranscriptTail } from '@alteroid/core';
 import type { SessionKey, SessionStore, SessionStoreEntry } from '@anthropic-ai/claude-agent-sdk';
-import { and, asc, eq, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, ne, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { stripNulls } from './db.js';
@@ -17,7 +18,16 @@ import { sessionEntries, sessions } from './schema.js';
  * - `uuid` を持たない行（タイトル・タグ等）はそのまま積む
  * - 一度も書かれていない key には `null` を返す（空配列ではない）
  */
-export class PgSessionStore implements SessionStore {
+/**
+ * `readTail` が末尾から見る行数の上限。
+ *
+ * **文字数で足りるまで積むが、1行の大きさは一定でない**（数十字のものも数 KB の
+ * ものもある）。⟹ 行数の上限は**費用の天井**として置く —— 足りなければ短い末尾に
+ * なるが、蒸留はそれで成立する（`clone.ts` の `tailOf` は、もともと末尾しか読まない）。
+ */
+const TAIL_SCAN_ROWS = 2_000;
+
+export class PgSessionStore implements SessionStore, SessionTranscriptTail {
   readonly #db: Db;
 
   constructor(db: Db) {
@@ -94,6 +104,43 @@ export class PgSessionStore implements SessionStore {
       .orderBy(asc(sessionEntries.seq));
     if (rows.length === 0) return null;
     return rows.map((row) => row.entry as SessionStoreEntry);
+  }
+
+  /**
+   * 末尾だけを返す（#564 E1b。`SessionTranscriptTail`）。
+   *
+   * **`load()` を使わない。** あちらは全件を戻すので、580 MB 級のセッションでは
+   * SDK が `load()` に掛けている 60 秒の予算に当たりに行くことになる。
+   *
+   * **索引の並びをそのまま逆から読む** —— `session_entries_key_idx` は
+   * `(project_key, session_id, subpath, seq)` なので、`desc(seq)` はソートを起こさない。
+   */
+  async readTail(key: LostSessionGrave, maxChars: number): Promise<string | null> {
+    const rows = await this.#db
+      .select({ entry: sessionEntries.entry })
+      .from(sessionEntries)
+      .where(
+        and(
+          eq(sessionEntries.projectKey, key.projectKey),
+          eq(sessionEntries.sessionId, key.sessionId),
+          eq(sessionEntries.subpath, ''),
+        ),
+      )
+      .orderBy(desc(sessionEntries.seq))
+      .limit(TAIL_SCAN_ROWS);
+    if (rows.length === 0) return null;
+
+    // **新しい方から積んで、足りたら止める。** 生ログは1行1レコードの JSONL なので、
+    // ここで組み直したものは器の外に在るファイルと同じ形になる。
+    const lines: string[] = [];
+    let chars = 0;
+    for (const row of rows) {
+      const line = JSON.stringify(row.entry);
+      lines.push(line);
+      chars += line.length + 1;
+      if (chars >= maxChars) break;
+    }
+    return lines.reverse().join('\n');
   }
 
   async listSessions(projectKey: string): Promise<{ sessionId: string; mtime: number }[]> {

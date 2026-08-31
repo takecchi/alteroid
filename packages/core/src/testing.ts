@@ -37,6 +37,7 @@ import type {
   ProfileStore,
   CommitmentStore,
   ScheduleStore,
+  LostSessionGrave,
   SessionRegistry,
   TranscriptGrave,
   Stores,
@@ -136,6 +137,8 @@ export function createMemoryStores(): Stores {
   const inboxStore = createMemoryInboxStore();
   let cloneSessionId: string | null = null;
   let transcriptGrave: TranscriptGrave | null = null;
+  let lostSessionGrave: LostSessionGrave | null = null;
+  let projectKey: string | null = null;
   let envProfile: EnvProfile | null = null;
   let counter = 0;
   const nextId = () => `id-${++counter}`;
@@ -492,6 +495,18 @@ export function createMemoryStores(): Stores {
     },
     async setTranscriptGrave(grave) {
       transcriptGrave = grave;
+    },
+    async getLostSessionGrave() {
+      return lostSessionGrave;
+    },
+    async setLostSessionGrave(grave) {
+      lostSessionGrave = grave;
+    },
+    async getProjectKey() {
+      return projectKey;
+    },
+    async setProjectKey(value) {
+      projectKey = value;
     },
   };
 
