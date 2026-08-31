@@ -9512,9 +9512,7 @@ describe('recycleSessionForToken（回した後のセッション作り直し）
     let failNext = true;
     const { clone, calls } = setupRecycle({
       resultFor: () =>
-        failNext
-          ? { subtype: 'success', isError: true, text: 'Prompt is too long' }
-          : undefined,
+        failNext ? { subtype: 'success', isError: true, text: 'Prompt is too long' } : undefined,
     });
     const events: string[] = [];
     clone.subscribe('conv-1', (event) => events.push(event.type));
@@ -9539,7 +9537,6 @@ describe('recycleSessionForToken（回した後のセッション作り直し）
   });
 
   it('クローン全体の停止（stop）とは別物である', async () => {
-
     // 混ぜると「トークンを回したらクローンが止まる」になる。
     const { clone, calls } = setupRecycle();
     say(clone);
