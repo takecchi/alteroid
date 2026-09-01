@@ -829,6 +829,112 @@ export interface ManagerPool {
   stop(): Promise<void>;
 }
 
+/**
+ * workspace の運用選択（roadmap M5「workspace locator の運用選択」）。
+ *
+ * **方針であって能力の制限ではない**ので設定で切り替わる（north_star 禁止2と
+ * 同じ理由——選べることそのものは能力なので、選ばれなかった分岐を削らない）。
+ * `start()` が台帳へ書く `job.workspace`（{@link WorkspaceLocator}）の形は、
+ * ここで解いた値だけから決まる。
+ */
+export type WorkspacePolicy =
+  | { kind: 'runner-volume' }
+  | { kind: 'shared-volume' }
+  | { kind: 'git'; repository: string; ref: string }
+  /**
+   * 決められなかった。**理由を必ず持つ**（理由の無い「分からない」は値と
+   * 同じである。AGENTS.md の地雷表「取れない軸に 0 の行を作る」）。
+   */
+  | { kind: 'unknown'; reason: string };
+
+/** `ALTEROID_WORKSPACE_KIND` を読む。 */
+export const WORKSPACE_KIND_ENV_KEY = 'ALTEROID_WORKSPACE_KIND';
+/** `=git` のときだけ要る。 */
+export const WORKSPACE_REPOSITORY_ENV_KEY = 'ALTEROID_WORKSPACE_REPOSITORY';
+/** `=git` のときの ref。省略時は `main`。 */
+export const WORKSPACE_REF_ENV_KEY = 'ALTEROID_WORKSPACE_REF';
+
+/**
+ * デーモンからは、この器の `/workspace` がボリュームなのか毎デプロイで消える
+ * のかを知る手段が無い（`start()` の既存のコメントと同じ理由）。運用者が
+ * 明示しない限りは、この理由で `unknown` へ倒す。
+ */
+const UNVERIFIED_WORKSPACE_REASON =
+  '器の workspace がボリュームかどうかを runner が名乗らないので、' +
+  '入れ替えを跨いで残るかを確かめられない（roadmap M5「workspace locator の運用選択」）。';
+
+/**
+ * `ALTEROID_WORKSPACE_KIND` / `_REPOSITORY` / `_REF` を読んで運用選択を決める。
+ * `runner.ts` の `resolveManagerModel(env = process.env)` の作法に揃えてある
+ * ——試験は引数で env を渡し、`process.env` を書き換えない。
+ *
+ * **`ALTEROID_WORKSPACE_PATH` は無い。** `shared-volume` のパスは委譲の `cwd`
+ * をそのまま使う——別の env に書かせると、そこに書かれた値と実際に作業して
+ * いる場所が食い違いうる。locator は「作業がどこに在るか」の記録なので、
+ * 食い違いを作れる口をここでは開けない。
+ *
+ * **⚠️ 読めない設定は `runner-volume` へは倒さない。** 設定の不足から
+ * **肯定的な永続性の主張**を作ることになり、それは {@link WorkspaceLocator}
+ * の `unknown` 変種が存在する理由そのものである（`schema.ts` の doc が逐語で
+ * 「確かめずに `runner-volume` と書くと、台帳が存在しない永続性を主張する」と
+ * 書いている）。倒す先は必ず `unknown` で、しかも理由を持たせる——`unknown` の
+ * `reason` は台帳の行に残るので、起動ログと違って後から行を読む人に届く。
+ */
+function workspaceLocatorFrom(
+  policy: WorkspacePolicy,
+  runnerId: string,
+  cwd: string,
+): WorkspaceLocator {
+  switch (policy.kind) {
+    case 'runner-volume':
+      return { kind: 'runner-volume', runnerId, path: cwd };
+    case 'shared-volume':
+      return { kind: 'shared-volume', path: cwd };
+    case 'git':
+      return { kind: 'git', repository: policy.repository, ref: policy.ref };
+    case 'unknown':
+      return { kind: 'unknown', runnerId, path: cwd, reason: policy.reason };
+    default: {
+      const exhaustive: never = policy;
+      throw new Error(`未知の WorkspacePolicy: ${JSON.stringify(exhaustive)}`);
+    }
+  }
+}
+
+export function resolveWorkspacePolicy(env: NodeJS.ProcessEnv = process.env): WorkspacePolicy {
+  const kindRaw = env[WORKSPACE_KIND_ENV_KEY];
+  const kind = kindRaw === undefined ? '' : kindRaw.trim();
+
+  if (kind.length === 0) {
+    return { kind: 'unknown', reason: UNVERIFIED_WORKSPACE_REASON };
+  }
+  if (kind === 'runner-volume') {
+    return { kind: 'runner-volume' };
+  }
+  if (kind === 'shared-volume') {
+    return { kind: 'shared-volume' };
+  }
+  if (kind === 'git') {
+    const repositoryRaw = env[WORKSPACE_REPOSITORY_ENV_KEY];
+    const repository = repositoryRaw === undefined ? '' : repositoryRaw.trim();
+    if (repository.length === 0) {
+      return {
+        kind: 'unknown',
+        reason:
+          `${WORKSPACE_KIND_ENV_KEY}=git だが ${WORKSPACE_REPOSITORY_ENV_KEY} が無いので、` +
+          '運用選択を決められない。',
+      };
+    }
+    const refRaw = env[WORKSPACE_REF_ENV_KEY];
+    const ref = refRaw === undefined ? '' : refRaw.trim();
+    return { kind: 'git', repository, ref: ref.length === 0 ? 'main' : ref };
+  }
+  return {
+    kind: 'unknown',
+    reason: `${WORKSPACE_KIND_ENV_KEY}=${kind} は読めない（runner-volume / shared-volume / git のどれか）。`,
+  };
+}
+
 export interface ManagerPoolOptions {
   /**
    * いま撒かれている認証トークンの身元（Issue #393 PR3）。**マネージャーの
@@ -894,6 +1000,11 @@ export interface ManagerPoolOptions {
    * であって、本番の既定を変えるためのものではない。
    */
   generateManagerId?: () => string;
+  /**
+   * workspace の運用選択。**省略時は `resolveWorkspacePolicy()`**（＝ この
+   * プロセスの環境変数）。試験と、明示的に配線したい呼び出し元のために口を開けてある。
+   */
+  workspace?: WorkspacePolicy;
 }
 
 export function createManagerPool(options: ManagerPoolOptions): ManagerPool {
@@ -1616,6 +1727,12 @@ class Pool implements ManagerPool {
    */
   readonly #generateManagerId: () => string;
   /**
+   * workspace の運用選択。**`start` のたびに `process.env` を読み直さない**
+   * ——このプールが生きている間は同じ選択を使う（`#now` / `#generateManagerId`
+   * と同じ理由で、起動時に1度だけ解決して保持する）。
+   */
+  readonly #workspace: WorkspacePolicy;
+  /**
    * 直近の枠の事実（種類ごと）。**アカウント単位なのでマネージャーに紐づけない。**
    *
    * 走行中は `rate_limit_event` がターンの頭ごとに来るので、ここが最新になる。
@@ -1779,6 +1896,7 @@ class Pool implements ManagerPool {
     tokenIdentity,
     onUsageObservation,
     syncRunnerToken,
+    workspace,
   }: ManagerPoolOptions) {
     this.#stores = stores;
     this.#post = post;
@@ -1787,6 +1905,7 @@ class Pool implements ManagerPool {
     this.#now = now ?? (() => Date.now());
     this.#leaseTtlMs = leaseTtlMs ?? LEASE_TTL_MS;
     this.#generateManagerId = generateManagerId ?? (() => `mgr-${randomUUID()}`);
+    this.#workspace = workspace ?? resolveWorkspacePolicy();
     this.#tokenIdentity = tokenIdentity;
     this.#onUsageObservation = onUsageObservation;
     this.#syncRunnerToken = syncRunnerToken;
@@ -1922,14 +2041,10 @@ class Pool implements ManagerPool {
         // （名乗りはパスしか運ばない）。断定すると台帳が**存在しない永続性**を
         // 主張し、しかも「復旧できる」と信じる方向へ嘘をつく。分からないのは
         // 永続性だけなので、`runnerId` と `path` は落とさない。
-        workspace: {
-          kind: 'unknown',
-          runnerId: runner.runnerId,
-          path: cwd,
-          reason:
-            '器の workspace がボリュームかどうかを runner が名乗らないので、' +
-            '入れ替えを跨いで残るかを確かめられない（roadmap M5「workspace locator の運用選択」）。',
-        },
+        // **運用者が `ALTEROID_WORKSPACE_KIND` で明示した場合だけ名乗る**
+        // （`resolveWorkspacePolicy`）——デーモンが勝手に断定する話ではないので、
+        // 上のコメントが言っていることはいまも真である。
+        workspace: workspaceLocatorFrom(this.#workspace, runner.runnerId, cwd),
         lease,
       },
       waiting: [],

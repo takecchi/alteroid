@@ -383,6 +383,8 @@ export {
   type RunnerFleetOverview,
   type RunnerManagerEntry,
   type RunnerOverview,
+  resolveWorkspacePolicy,
+  type WorkspacePolicy,
 } from './manager.js';
 /**
  * 貸し出し期限（lease）— 引き取ってよいかを片側だけで言えるようにする材料
