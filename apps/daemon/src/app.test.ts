@@ -2868,6 +2868,7 @@ describe('OpenAPI', () => {
       '/managers/{id}/messages',
       '/runners',
       '/runners/credentials',
+      '/runners/vacate',
       '/archive',
       '/archive/{id}',
       '/shutdown',
@@ -2958,6 +2959,28 @@ describe('OpenAPI', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toContain('text/html');
     expect(await response.text()).toContain('<!doctype html>');
+  });
+});
+
+/**
+ * **HTTP の面がここで見るのは「配線」だけである。** `runnerId` を本文から
+ * 読んで `ManagerPool.vacate()` へそのまま渡すこと・応答の形だけを見る。
+ * `vacate()` 自身の振る舞い（`'vacating'` を先に立てる順序・`status` を
+ * `'stopped'` にしない・`relocateFrom` へ繋ぐ）は `packages/core` の
+ * `manager-relocate.test.ts` が持つ（HTTP 層で二重に測らない）。
+ */
+describe('POST /runners/vacate（#485 PR-2）', () => {
+  it('本文の runnerId を ManagerPool.vacate() へそのまま渡し、200 で { ok: true } を返す', async () => {
+    const response = await app.request('/runners/vacate', json({ runnerId: 'runner-a' }));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect(fake.vacateCalls).toEqual(['runner-a']);
+  });
+
+  it('runnerId を欠いた本文は 400 で拒み、ManagerPool.vacate() を呼ばない', async () => {
+    const response = await app.request('/runners/vacate', json({}));
+    expect(response.status).toBe(400);
+    expect(fake.vacateCalls).toEqual([]);
   });
 });
 
