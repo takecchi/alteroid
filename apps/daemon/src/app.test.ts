@@ -2884,6 +2884,66 @@ describe('OpenAPI', () => {
     expect(Object.keys(journalStreamContent ?? {})).toContain('text/event-stream');
   });
 
+  /**
+   * **`vacating`（#485 PR-1）が spec の面まで届いているかを見る歯。**
+   *
+   * `openapi.ts` の `runnerSummarySchema.state` は手書きの `z.enum([...])` を
+   * やめ、`@alteroid/core` の `runnerLivenessSchema` から引く形にした——ここが
+   * 効いていないと、`RunnerLiveness` に値を足しても `typecheck` は何も言わず、
+   * その値だけが HTTP の面から黙って消える（PR 本文が説明する穴そのもの）。
+   *
+   * **この歯が測っているのは「`runnerLivenessSchema` の値の集合が、生成された
+   * spec の面までそのまま届いていること」である。** ⚠️ **手書きの `z.enum([...])`
+   * への逆行そのものは、この歯では捕まらない。** 6値を漏らさず正しく書き写して
+   * 手書きへ戻せば（結び目を切っても）、`arrayContaining` も `toHaveLength(6)`
+   * も変わらず通る——この歯が実際に落ちるのは「手書きへ戻し、かつ値の集合が
+   * 食い違ったとき」だけである（変異で実測済み。#485 PR-1 の報告に生出力あり）。
+   */
+  it('/runners の state に vacating を含む6値が出る（runnerLivenessSchema の値が spec まで届くことを固定する）', async () => {
+    const spec = (await (await app.request('/openapi.json')).json()) as {
+      paths: Record<
+        string,
+        {
+          get?: {
+            responses?: Record<
+              string,
+              {
+                content?: Record<
+                  string,
+                  {
+                    schema?: {
+                      properties?: {
+                        runners?: {
+                          items?: { properties?: { state?: { enum?: unknown[] } } };
+                        };
+                      };
+                    };
+                  }
+                >;
+              }
+            >;
+          };
+        }
+      >;
+    };
+
+    const stateEnum =
+      spec.paths['/runners']?.get?.responses?.['200']?.content?.['application/json']?.schema
+        ?.properties?.runners?.items?.properties?.state?.enum;
+
+    expect(stateEnum).toEqual(
+      expect.arrayContaining([
+        'connecting',
+        'connected',
+        'unreachable',
+        'unusable',
+        'lost',
+        'vacating',
+      ]),
+    );
+    expect(stateEnum).toHaveLength(6);
+  });
+
   it('/docs は人間向けの画面（HTML）を返す', async () => {
     const response = await app.request('/docs');
     expect(response.status).toBe(200);

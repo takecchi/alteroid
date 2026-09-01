@@ -5750,7 +5750,14 @@
                           },
                           "state": {
                             "type": "string",
-                            "enum": ["connecting", "connected", "unreachable", "unusable", "lost"]
+                            "enum": [
+                              "connecting",
+                              "connected",
+                              "unreachable",
+                              "unusable",
+                              "lost",
+                              "vacating"
+                            ]
                           },
                           "since": {
                             "type": "string"

@@ -403,13 +403,14 @@ describe('落ちた runner の委譲を、別の runner へ移送する（#485 M
 
   /**
    * **`job.runnerId` が無い行を止めているのは2つの門である。** `job.runnerId ===
-   * undefined` で降りる門と、`#isLostRunner` の門である。上の「古いジョブは移送
-   * しない」は後者だけでも通ってしまう——名簿の行がどれも `runnerId` を名乗って
-   * いれば `#isLostRunner(undefined)` は行0本で false を返すからである。
+   * undefined` で降りる門と、`#shouldRelocateFrom`（旧 `#isLostRunner`。#485
+   * PR-1 で改名）の門である。上の「古いジョブは移送しない」は後者だけでも
+   * 通ってしまう——名簿の行がどれも `runnerId` を名乗っていれば
+   * `#shouldRelocateFrom(undefined)` は行0本で false を返すからである。
    *
    * **⚠️ 名乗らないまま黙った宛先が名簿に立つと、そこが割れる。** `RunnerEntry`
    * の `runnerId` は任意なので、`{ runnerId: undefined, state: 'lost' }` の行は
-   * 実在しうる——そのとき `#isLostRunner(undefined)` は真になり、後者の門は
+   * 実在しうる——そのとき `#shouldRelocateFrom(undefined)` は真になり、後者の門は
    * 開く。**ここで見るのは前者の門そのものである。**
    */
   it('名乗らないまま黙った宛先が名簿に在っても、job.runnerId が無い行は移送しない', async () => {
@@ -417,7 +418,7 @@ describe('落ちた runner の委譲を、別の runner へ移送する（#485 M
     await stores.jobs.putJob(jobWith('mgr-9', undefined));
     const fake = createFakeRegistry();
     // **runnerId を名乗らないまま lost になった行。** これが在ると
-    // `#isLostRunner(undefined)` は真を返す（行1本・すべて lost）。
+    // `#shouldRelocateFrom(undefined)` は真を返す（行1本・すべて lost）。
     fake.entries.push(entryOf('名乗らない宛先', 'lost'));
     fake.entries.push(entryOf('runner-b', 'connected', 'runner-b'));
     const runnerB = fakeRunner('runner-b');
@@ -460,6 +461,64 @@ describe('落ちた runner の委譲を、別の runner へ移送する（#485 M
     expect(reports).toHaveLength(1);
     expect(reports[0]?.text).toContain('別の器で開き直した');
     expect(reports[0]?.text).toContain('コミット前の変更も残っている');
+
+    await pool.stop();
+  });
+});
+
+/**
+ * `vacating`（#485 PR-1。意図して空けている最中）を移送の元として扱う。
+ *
+ * **この PR では誰も `vacating` を立てない**（立てる口は PR-2）ので、ここは
+ * `entryOf` で直接その状態の行を作り、`#shouldRelocateFrom`（旧
+ * `#isLostRunner`）が `lost` だけでなく `vacating` でも真になることを固定する。
+ * 上の `describe` と対にして別ブロックにしたのは、`lost` の既存の挙動を
+ * 1つも動かしていないことを、この新しい状態のためのテストと分けて見えるように
+ * するためである。
+ */
+describe('vacating な runner からの移送（#485 PR-1）', () => {
+  it('移送が成立する：runner-a が vacating、runner-b が connected なら、runner-b が resume を受ける', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(jobWith('mgr-vacating-1', 'runner-a'));
+    const fake = createFakeRegistry();
+    fake.entries.push(entryOf('runner-a', 'vacating', 'runner-a'));
+    fake.entries.push(entryOf('runner-b', 'connected', 'runner-b'));
+    const runnerB = fakeRunner('runner-b');
+    fake.addClient(runnerB.client);
+    const { pool } = setup(stores, fake.registry);
+
+    pool.relocateFrom('runner-a');
+    await expect.poll(() => runnerB.resumes.length, { timeout: 2000 }).toBe(1);
+
+    const job = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-vacating-1');
+    expect(job?.runnerId).toBe('runner-b');
+
+    await pool.stop();
+  });
+
+  /**
+   * **`#shouldRelocateFrom` が真になるのは `lost` と `vacating` の2値だけである
+   * ことを固定する。** `unreachable` / `unusable` / `connecting` は「まだ一度も
+   * 開けていない」側で、抱えている仕事は無い（`RunnerLiveness` の doc）ので
+   * 移送の元にはならない——ここでは代表として `unreachable` を採る。この歯は
+   * `#shouldRelocateFrom` の条件式が将来 `!== 'connected'` のような広い否定形へ
+   * 緩められたら落ちる。
+   */
+  it('unreachable な宛先からは移送しない（lost / vacating の2値だけが移送の元）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(jobWith('mgr-vacating-2', 'runner-a'));
+    const fake = createFakeRegistry();
+    fake.entries.push(entryOf('runner-a', 'unreachable', 'runner-a'));
+    fake.entries.push(entryOf('runner-b', 'connected', 'runner-b'));
+    const runnerB = fakeRunner('runner-b');
+    fake.addClient(runnerB.client);
+    const { pool } = setup(stores, fake.registry);
+
+    await pool.reattachRunner('runner-b');
+
+    expect(runnerB.resumes).toEqual([]);
+    const job = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-vacating-2');
+    expect(job?.runnerId).toBe('runner-a');
 
     await pool.stop();
   });

@@ -11,6 +11,7 @@ import {
   memoryDocumentSchema,
   pendingApprovalSchema,
   runnerCredentialFingerprintSchema,
+  runnerLivenessSchema,
   runnerProfileFingerprintSchema,
   scheduleSpecSchema,
   tokenRotationPolicySchema,
@@ -887,8 +888,12 @@ const runnerSummarySchema = z.object({
    * `lost` = 一度は開けたのに名乗り（`/health`）が返らなくなった。**`unreachable`
    * とは別物である** — あちらは「まだ開けていない」宛先で抱えている仕事が無く、
    * こちらは「開けていた」宛先で、走っていた仕事ごと黙った可能性がある。
+   *
+   * `vacating` = 意図して空けている最中（drain）。値の集合は `@alteroid/core` の
+   * `runnerLivenessSchema`（`packages/core/src/runner-protocol.ts`）と同じ6値で、
+   * 二重管理を避けるためにそこから引く。
    */
-  state: z.enum(['connecting', 'connected', 'unreachable', 'unusable', 'lost']),
+  state: runnerLivenessSchema,
   /** この状態になった時刻。 */
   since: z.string(),
   /** 直近の失敗の一行。**原因を見るための窓であって、値は載らない。** */
