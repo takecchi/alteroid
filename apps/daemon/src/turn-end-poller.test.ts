@@ -36,6 +36,9 @@ function fakeManagers(run: () => Promise<void> | void): {
     },
     restore: () => Promise.resolve([]),
     reattachRunner: () => Promise.resolve(),
+    relocateFrom: () => {
+      throw new Error('not implemented');
+    },
     async probeTurnEnds() {
       calls += 1;
       await run();

@@ -808,6 +808,13 @@ export interface ManagerPool {
    */
   reattachRunner(runnerId: string): Promise<void>;
   /**
+   * ある宛先が黙ったので、いま開いている別の器に取り直しを起こす（roadmap M5 PR5）。
+   *
+   * **新しい梯子は作らない** —— `#reattach` の中の既存の予約（`#scheduleReattach`）に
+   * そのまま乗る。貸し出しがまだ生きていれば断られ、期限が切れてから移る。
+   */
+  relocateFrom(lostRunnerId: string): void;
+  /**
    * 走行中のマネージャーについて、生ログの末尾から「ターンが終わっているらしい」
    * という助言を計算し直す（Issue #567）。
    *
@@ -2714,6 +2721,21 @@ class Pool implements ManagerPool {
     await this.#reattach(runnerId);
   }
 
+  relocateFrom(lostRunnerId: string): void {
+    if (this.#stopped) return;
+    // **新しい梯子は作らない。** 各 `runnerId` への `#reattach` は、貸し出しが
+    // まだ生きていれば断って `#scheduleReattach` の梯子に乗る——ここでは
+    // 「どの宛先へ取り直しを試みるか」を決めるだけである。
+    const targets = new Set(
+      this.#runners
+        .entries()
+        .filter((entry) => entry.runnerId !== undefined && entry.runnerId !== lostRunnerId)
+        .filter((entry) => entry.state === 'connected')
+        .map((entry) => entry.runnerId as string),
+    );
+    for (const runnerId of targets) void this.#reattach(runnerId);
+  }
+
   async #restoreExclusive(): Promise<ManagerSummary[]> {
     // **走っていることを、await を挟む前に立てる。** 同一プロセスの runner は
     // `connect()` の中で同期的に名乗るので、ここで立てそこねると `#reattach` が
@@ -3502,10 +3524,26 @@ class Pool implements ManagerPool {
       const alive = new Set(states.map((state) => state.managerId));
 
       for (const job of jobs) {
+        if (alive.has(job.id) || this.#stopped) continue;
         // 宛先が書かれていない古いジョブはここでは触らない（どの runner の器が
         // 入れ替わったのかを、この情報だけでは決められない）。起動時の `restore`
         // が拾って `runner_id` を書くので、次からはこの経路に乗る。
-        if (job.runnerId !== runnerId || alive.has(job.id) || this.#stopped) continue;
+        if (job.runnerId === undefined) continue;
+        // **記録された宛先（`job.runnerId`）が、いま名乗った宛先（`runnerId`）と
+        // 違うことがある——それが移送である（roadmap M5 PR5）。**
+        const relocating = job.runnerId !== runnerId;
+        /*
+         * **移送してよいのは、記録された宛先が `lost` のときだけである。**
+         *
+         * `RunnerLiveness` の doc の逐語: 「`unreachable` と `lost` は似て見えるが
+         * 別物である。前者は『まだ開けていない』宛先で、抱えている仕事は無い。
+         * 後者は『開けていた』宛先で、走っていた仕事ごと黙った可能性がある——
+         * あとで移送の契機になるのはこちらだけである。」
+         * `#isLostRunner` はこの区別を、名簿（`this.#runners.entries()`）に
+         * 実際に立っている行から確かめる——行が無い（＝「黙った」とまだ確かめ
+         * られていない）ときは移送しない。
+         */
+        if (relocating && !this.#isLostRunner(job.runnerId)) continue;
 
         // **一度「挑み直さない」と決めたものは、自動では二度と触らない。** ここを
         // 抜かすと、同じ runner の別ジョブが一時障害で予約を積むたびに巻き込まれ、
@@ -3550,7 +3588,8 @@ class Pool implements ManagerPool {
         // **1本が戻せなくても、残りを道連れにしない。** ここで抜けると、後ろに
         // 並んでいた仕事が誰にも拾われないまま `running` として残る。
         try {
-          const message = restartNudge(status, 'runner', record.job.workspace);
+          const cause: RestartCause = relocating ? 'relocated' : 'runner';
+          const message = restartNudge(status, cause, record.job.workspace);
           // 断りが「新しく起きたこと」かを、挑む前の状態で覚えておく（下の日誌の条件）。
           const refusedBefore = record.leaseRefusal !== undefined;
           // 上の doc の順序。**戻れたら下で消す。**
@@ -3601,9 +3640,9 @@ class Pool implements ManagerPool {
             type: 'exchange',
             with: 'manager',
             role: 'outbound',
-            text: `[${job.id}] （runner 入れ替え後の再開）${message}`,
+            text: `[${job.id}] （${relocating ? '別の器への移送' : 'runner 入れ替え'}後の再開）${message}`,
           });
-          this.#notifyRestored(record, 'resumed', 'runner');
+          this.#notifyRestored(record, 'resumed', cause);
         } catch (error) {
           // **「次の `hello` でまた挑む」は嘘だった。** `hello` は SSE が繋がった
           // ときにしか来ない。器は上がってストリームも安定しているのに resume だけが
@@ -3946,6 +3985,21 @@ class Pool implements ManagerPool {
       ...(only.instanceId === undefined ? {} : { instanceId: only.instanceId }),
       ...(Number.isNaN(since) ? {} : { instanceSince: since }),
     };
+  }
+
+  /**
+   * その宛先が「黙った」と確かめられているか（`#reattach` の移送の関門。
+   * roadmap M5 PR5）。
+   *
+   * 名簿にその宛先の行が1つ以上あり、**そのすべてが `lost`** のときだけ
+   * `true` を返す。行が0本のときは `false` である——「開けていた宛先が黙った」
+   * と確かめられていない以上、移送してよいとは言えない（`RunnerLiveness` の
+   * doc: 「`unreachable` と `lost` は似て見えるが別物である。……あとで移送の
+   * 契機になるのはこちらだけである」）。
+   */
+  #isLostRunner(runnerId: string): boolean {
+    const matches = this.#runners.entries().filter((entry) => entry.runnerId === runnerId);
+    return matches.length > 0 && matches.every((entry) => entry.state === 'lost');
   }
 
   /**
@@ -5441,7 +5495,12 @@ class Pool implements ManagerPool {
     cause: RestartCause = 'daemon',
   ): void {
     const { job } = record;
-    const head = cause === 'runner' ? 'runner の器が作り直された' : 'デーモンが再起動した';
+    const head =
+      cause === 'runner'
+        ? 'runner の器が作り直された'
+        : cause === 'relocated'
+          ? '走らせていた runner が黙ったので、別の器で開き直した'
+          : 'デーモンが再起動した';
     // **日誌は呼び出し元に委ねない（#240）。** `how === 'attached'` の呼び出し元
     // （`restore()` の attach 分岐）は `#post` の前に `#journal` していない —
     // `resumed` 側の呼び出し元（同じ関数内 / `#reattach`）はしているが、それは
@@ -5479,7 +5538,10 @@ class Pool implements ManagerPool {
         // 二重に書かない）。**path は出さない** — 直前の行で既に
         // `作業ディレクトリ: ${job.cwd ?? '(不明)'}` を出しているので、重ねると
         // 読む側が2つの値を突き合わせることになる。
-        cause === 'runner' ? cloneWorkspaceAfterSwapLine(workspaceAfterSwap(job.workspace)) : '',
+        // **`'daemon'` 以外はどちらも器が入れ替わっている**（runner 入れ替え／
+        // 移送）ので、workspace の1行は同じ判定で出す。`'daemon'` の挙動は
+        // 変えない（1バイトも変えないこと）。
+        cause !== 'daemon' ? cloneWorkspaceAfterSwapLine(workspaceAfterSwap(job.workspace)) : '',
       ]
         .filter((line) => line !== '')
         .join('\n'),
@@ -5794,7 +5856,7 @@ function sendFailureDetail(managerId: string, resumeDetail: string, missing: boo
   );
 }
 
-type RestartCause = 'daemon' | 'runner';
+type RestartCause = 'daemon' | 'runner' | 'relocated';
 
 /**
  * 器が入れ替わった後、台帳の locator が作業ディレクトリについて何を言えるか。
@@ -5905,7 +5967,10 @@ function restartNudge(
     cause === 'runner'
       ? '[system] runner の器が作り直された。' +
         workspaceAfterSwapClause(workspaceAfterSwap(locator))
-      : '[system] デーモンが再起動した。';
+      : cause === 'relocated'
+        ? '[system] 走らせていた runner が黙ったので、別の器で続きを開いた。' +
+          workspaceAfterSwapClause(workspaceAfterSwap(locator))
+        : '[system] デーモンが再起動した。';
   if (status === 'waiting_human') {
     return (
       `${head}あなたが待っていた確認は器と一緒に失われている。` +

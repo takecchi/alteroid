@@ -479,6 +479,13 @@ export async function main(): Promise<void> {
    * 残る — 起きるのは稀な順序のときだけなので、**起きたときにしか分からない**。
    */
   let takeOverOnSwap: (runnerId?: string) => void = () => {};
+  /**
+   * 宛先が黙ったときに移送を起こす口。**宛先は後から差し替える。**
+   *
+   * `takeOverOnSwap` と同じ形にしてある（クローンが立ち上がるより先に名簿が
+   * 動きうる）。
+   */
+  let relocateOnLost: (runnerId?: string) => void = () => {};
   const runners = createRunnerRegistry([], {
     notify: ({ label, error }) => {
       announce(
@@ -486,18 +493,28 @@ export async function main(): Promise<void> {
       );
     },
     /**
-     * 一度は繋がった runner が黙った。**知らせるところまでが今の責任である。**
+     * 一度は繋がった runner が黙った。
      *
-     * ここで走っていた仕事を別の器へ移さないのは、二重実行を止める仕組み
-     * （fencing）がまだ無いからである。先に動かすと、実は生きていた器と移送先とで
-     * 同じマネージャーが2本走る — 黙っているのは器かもしれないし、経路かもしれない。
+     * **いまはここが移送の契機でもある（roadmap M5 PR5）。** かつては「知らせる
+     * ところまでが責任」で、走っていた仕事を別の器へ移さずにいた——二重実行を
+     * 止める仕組み（fencing）がまだ無かったからである。**fencing は #160 で
+     * 入っている**（`lease.ts` の `judgeLease` / `ManagerPool` の関門
+     * `#claimForResume` / runner 側が命令ごとに見る `fence`）。
+     *
+     * だからここから `relocateFrom(runnerId)` を呼んで取り直しを起こしてよい。
+     * **奪ってよいかの判定はこの先の関門（貸し出し期限）が持つ** — まだ持ち主が
+     * 握っている委譲は、この呼びでは動かされずに挑み直しの梯子へ載るだけである
+     * （「実は生きていた器と移送先とで同じマネージャーが2本走る」という以前の
+     * 懸念は、この関門が塞いでいる）。
      */
     onLost: ({ label, runnerId, error }) => {
       announce(
         `runner (${label}${runnerId === undefined ? '' : ` / ${runnerId}`}) が` +
-          `名乗らなくなりました。新しい委譲の宛先からは外しています` +
-          `（走っていた仕事の移送はまだ行いません）: ${error}`,
+          `名乗らなくなりました。新しい委譲の宛先からは外し、` +
+          `そこで走っていた委譲の移送を試みます` +
+          `（貸し出し期限が切れていない委譲は、切れてから自動で移します）: ${error}`,
       );
+      relocateOnLost(runnerId);
     },
     /**
      * 同じ宛先に別のプロセスが応え始めた（器が入れ替わった）。
@@ -954,6 +971,16 @@ export async function main(): Promise<void> {
       });
     }
     void takeOver();
+  };
+  /**
+   * 宛先が黙ったので、いま開いている別の器へ移送を試みる（`onLost` の doc。
+   * roadmap M5 PR5）。
+   *
+   * **新しい梯子は作らない** — `relocateFrom` は `ManagerPool` 側の既存の予約
+   * （`#reattach` / `#scheduleReattach`）にそのまま乗る。ここは呼ぶだけである。
+   */
+  relocateOnLost = (runnerId) => {
+    if (runnerId !== undefined) clone.managers.relocateFrom(runnerId);
   };
 
   // 画面（apps/web）を別オリジンに置く配置のための境界設定。既定は空＝今まで通り
