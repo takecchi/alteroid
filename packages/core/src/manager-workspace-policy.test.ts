@@ -182,7 +182,10 @@ function setup(runner: RunnerClient, workspace?: WorkspacePolicy) {
   return { pool, stores, inbox };
 }
 
-async function jobOf(stores: ReturnType<typeof createMemoryStores>, managerId: string): Promise<Job> {
+async function jobOf(
+  stores: ReturnType<typeof createMemoryStores>,
+  managerId: string,
+): Promise<Job> {
   const jobs = await stores.jobs.listJobs();
   const job = jobs.find((j) => j.managerId === managerId);
   if (job === undefined) throw new Error(`job not found: ${managerId}`);
