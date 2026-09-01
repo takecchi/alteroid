@@ -6106,6 +6106,49 @@
         }
       }
     },
+    "/runners/vacate": {
+      "post": {
+        "operationId": "postRunnersVacate",
+        "tags": ["runners"],
+        "summary": "その runner を意図して空ける（drain）",
+        "description": "空けると立てるだけで、その場では終わらない。載っている委譲は「確かめた停止」の握手を経て、貸し出し期限を待たずに他の runner へ移る。**応答は「立てた」ことの確認であって「終わった」ことの確認ではない**——進捗は GET /runners（state: vacating）と GET /managers（runnerId が動いたか）で追う。",
+        "responses": {
+          "200": {
+            "description": "空けると立てた。名簿に無い runnerId でも同じ 200 を返す（`RunnerRegistry#unregister` と同じ作法——名乗ってすらいない宛先を「無かった」と取り立てて言うほどの情報ではない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": ["ok"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "runnerId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["runnerId"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/profile": {
       "get": {
         "operationId": "getProfile",

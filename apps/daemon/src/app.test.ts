@@ -52,6 +52,8 @@ function fakeClone() {
   const transcripts = new Map<string, string>();
   const managerSends: { managerId: string; text: string; requestId?: string }[] = [];
   const managerAborts: { managerId: string; reason?: string }[] = [];
+  // `POST /runners/vacate` が `ManagerPool.vacate()` へ渡した runnerId を記録する。
+  const vacateCalls: string[] = [];
   // `DELETE /managers/:id` が outcome ごとに正しい HTTP ステータスを写すことを見る
   // ためのノブ。既定は従来どおり `'stopped'`（居れば必ず止まる）。
   let abortOutcome: 'stopped' | 'not_stopped' | 'unknown' = 'stopped';
@@ -125,6 +127,12 @@ function fakeClone() {
     async reattachRunner() {},
     // HTTP 境界の検証では触らない（移送の契機もデーモンの配線側、`onLost` にある）。
     relocateFrom() {},
+    // **HTTP 境界そのものが検証対象。** `POST /runners/vacate` がこの口へ
+    // `runnerId` を渡していることを確かめるため、固定値を返す空スタブではなく
+    // 呼ばれた引数を記録する。
+    async vacate(runnerId) {
+      vacateCalls.push(runnerId);
+    },
     // HTTP 境界の検証では触らない（#567 の計算はデーモンのポーラーが起こす）。
     async probeTurnEnds() {},
     async stop() {},
@@ -166,6 +174,7 @@ function fakeClone() {
     transcripts,
     managerSends,
     managerAborts,
+    vacateCalls,
     setAbortOutcome(outcome: 'stopped' | 'not_stopped' | 'unknown') {
       abortOutcome = outcome;
     },
@@ -911,7 +920,7 @@ describe('HTTP API', () => {
    * 窓がある（`packages/core/src/runner-protocol.ts` の `runnerWaitingSchema`
    * の doc、#334）。`managerWaitingSchema` の `kind`/`askedAt` が必須のまま
    * だと、その窓に入ったマネージャーが1件でもいるだけで `.parse()` が投げ、
-   * **一覧そのものが1本も読めなくなる**——`RunnerHttpClient#list()` が
+   * **一覧そのものが1本も読めなくなる**——`HttpRunner#list()` が
    * `safeParse` で要素ごと黙って捨てる形（歯は
    * `apps/daemon/src/runner-client.test.ts`）より広く壊れる。
    *
@@ -2859,6 +2868,7 @@ describe('OpenAPI', () => {
       '/managers/{id}/messages',
       '/runners',
       '/runners/credentials',
+      '/runners/vacate',
       '/archive',
       '/archive/{id}',
       '/shutdown',
@@ -2949,6 +2959,28 @@ describe('OpenAPI', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toContain('text/html');
     expect(await response.text()).toContain('<!doctype html>');
+  });
+});
+
+/**
+ * **HTTP の面がここで見るのは「配線」だけである。** `runnerId` を本文から
+ * 読んで `ManagerPool.vacate()` へそのまま渡すこと・応答の形だけを見る。
+ * `vacate()` 自身の振る舞い（`'vacating'` を先に立てる順序・`status` を
+ * `'stopped'` にしない・`relocateFrom` へ繋ぐ）は `packages/core` の
+ * `manager-relocate.test.ts` が持つ（HTTP 層で二重に測らない）。
+ */
+describe('POST /runners/vacate（#485 PR-2）', () => {
+  it('本文の runnerId を ManagerPool.vacate() へそのまま渡し、200 で { ok: true } を返す', async () => {
+    const response = await app.request('/runners/vacate', json({ runnerId: 'runner-a' }));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect(fake.vacateCalls).toEqual(['runner-a']);
+  });
+
+  it('runnerId を欠いた本文は 400 で拒み、ManagerPool.vacate() を呼ばない', async () => {
+    const response = await app.request('/runners/vacate', json({}));
+    expect(response.status).toBe(400);
+    expect(fake.vacateCalls).toEqual([]);
   });
 });
 

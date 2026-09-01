@@ -7027,6 +7027,7 @@ describe('宛先の器が黙ったことを live が見る', () => {
       select: (input) => registry.select(input),
       register: (source) => registry.register(source),
       unregister: (label) => registry.unregister(label),
+      vacate: (id) => registry.vacate(id),
       subscribe: (onOpen) => registry.subscribe(onOpen),
       stop: () => registry.stop(),
       entries: () =>
@@ -7132,6 +7133,44 @@ describe('宛先の器が黙ったことを live が見る', () => {
     expect(overview.runners.find((r) => r.runnerId === 'runner-a')?.managers).toEqual([
       { managerId: 'mgr-orphan', status: 'running', live: false },
     ]);
+
+    await pool.stop();
+    await real.stop();
+  });
+
+  /**
+   * **#485 PR-2。`vacating`（意図して空けている最中）は `lost`（黙った）とは
+   * 別の理由である。** `#silentRunners()` は `state === 'lost'` だけを数える
+   * ホワイトリストで、`vacating` はそこに入らない——`list()` の置き先からは
+   * 外れていても、名乗り自体は続いているからである（`#silentRunners` の doc）。
+   *
+   * **これは挙動の固定であって新しい挙動の追加ではない。** `vacate()` を立てる
+   * 口（PR-2 の書く側）が無い時点でも、`entries()` が `state: 'vacating'` を
+   * 返しさえすれば `isLive()` は既に `true` を返す——このテストはその事実を
+   * 歯として固定し、次に読む人が `#silentRunners` のホワイトリストへ `vacating`
+   * を足して `false` へ倒すのを止める。
+   */
+  it('drain 中（vacating）の委譲は live: true のままで、runnerLostSince も出ない', async () => {
+    const stores = createMemoryStores();
+    await seed(stores, { id: 'mgr-draining', runnerId: 'runner-a', sessionId: 'sess-a' });
+    const a = new FakePoolRunner('runner-a', { managers: 0 });
+    const real = createRunnerRegistry([a]);
+    const registry = withEntryState(real, 'runner-a', {
+      state: 'vacating',
+      since: '2026-08-27T09:00:00.000Z',
+    });
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    const listed = await pool.list();
+    const draining = listed.find((m) => m.managerId === 'mgr-draining');
+
+    expect(draining?.live).toBe(true);
+    // **欄ごと消える。** `vacating` は `#silentRunners` の材料である
+    // 「名乗らなくなった」ことそのものではないので、黙った理由の欄は立たない。
+    expect(draining).not.toHaveProperty('runnerLostSince');
+    // **`status` も動いていない。** drain は終端ではなく移送の元なので、
+    // ここで `lost` のような確かめた事実の名前を名乗らせない。
+    expect(draining?.status).toBe('running');
 
     await pool.stop();
     await real.stop();

@@ -74,9 +74,15 @@ function entryOf(label: string, state: RunnerLiveness, runnerId?: string): Runne
 }
 
 /**
- * `RunnerRegistry` の8メンバを満たす偽物。**この試験群で使うのは `get` /
+ * `RunnerRegistry` の9メンバを満たす偽物。**この試験群で使うのは `get` /
  * `entries` の2つだけ**（`#reattach` が実際に読むのはこの2つである）。残りは
  * 型を満たすだけで、呼ばれたら「使わない」と分かる形にしてある。
+ *
+ * **`vacate` だけは「使わない」にしていない。** 本物（`Registry#vacate`）と
+ * 同じ効果（`entries` の該当行を `'vacating'` へ倒す）を持たせてある——
+ * `ManagerPool.vacate()`（#485 PR-2）を試験するとき、`fake.entries.push` で
+ * 手で先に `'vacating'` を置く形と、`pool.vacate()` を呼んで名簿側から
+ * 倒させる形の両方を、同じ偽物で試せるようにするためである。
  */
 function createFakeRegistry(): {
   registry: RunnerRegistry;
@@ -106,6 +112,11 @@ function createFakeRegistry(): {
     },
     async unregister() {
       /* この試験群では使わない。 */
+    },
+    vacate(runnerId) {
+      for (const entry of entries) {
+        if (entry.runnerId === runnerId) entry.state = 'vacating';
+      }
     },
     entries() {
       // **試験が直接 push / 変異させた行を、呼ばれるたびに読み直す。** コピーを
@@ -519,6 +530,123 @@ describe('vacating な runner からの移送（#485 PR-1）', () => {
     expect(runnerB.resumes).toEqual([]);
     const job = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-vacating-2');
     expect(job?.runnerId).toBe('runner-a');
+
+    await pool.stop();
+  });
+});
+
+/**
+ * `ManagerPool.vacate()`（#485 PR-2）—— `vacate` を立てる口そのもの。
+ *
+ * 上の2つの `describe` は「`vacating` が立っている前提でどう移送されるか」を
+ * 固定していた。ここで固定するのは「誰が・どの順で `vacating` を立てるか」——
+ * `vacate()` 自身の3段（1. 名簿へ `vacating` を立てる 2.
+ * `#confirmStoppedAndReleaseLease` の握手 3. `relocateFrom`）と、その順序が
+ * 要点である（`ManagerPool.vacate` 宣言側の doc）。
+ */
+describe('ManagerPool.vacate（#485 PR-2）', () => {
+  /**
+   * **順序そのものを固定する歯。** 先に `vacate` を立ててから握手をしないと、
+   * 「セッションを止めて貸し出しを返した直後の窓に新しい委譲が置かれる」
+   * （#485 が塞ごうとしている形そのもの）。ここでは `runner.stop()` が呼ばれた
+   * 瞬間の名簿の状態を横取りして記録し、その時点で既に `'vacating'` に
+   * なっていることを見る——`'connected'` のまま握手していたら、この歯は
+   * `['connected']` を見て落ちる。
+   */
+  it('先に vacating を立ててから「確かめた停止」の握手をする（順序そのものが要点）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(jobWith('mgr-vacate-order', 'runner-a'));
+    const fake = createFakeRegistry();
+    fake.entries.push(entryOf('runner-a', 'connected', 'runner-a'));
+    const runnerA = fakeRunner('runner-a');
+    fake.addClient(runnerA.client);
+    const { pool } = setup(stores, fake.registry);
+
+    const stateAtStop: (RunnerLiveness | undefined)[] = [];
+    const originalStop = runnerA.client.stop;
+    runnerA.client.stop = async (managerId: string) => {
+      stateAtStop.push(fake.entries.find((entry) => entry.runnerId === 'runner-a')?.state);
+      return originalStop(managerId);
+    };
+
+    await pool.vacate('runner-a');
+
+    expect(stateAtStop).toEqual(['vacating']);
+
+    await pool.stop();
+  });
+
+  /**
+   * **`record.job.status` を `'stopped'` にしない。`#retire` も呼ばない。**
+   * `#confirmStoppedAndReleaseLease` の doc「呼び出し元が決めること」の
+   * `vacate()` 側の答えをそのまま固定する——終端にすると `#reattach()` の
+   * `status !== 'running' && status !== 'waiting_human'` の関門に引っかかり、
+   * 二度と移送されなくなる。ここは意図して移送先（runner-b）を登録しない
+   * ——`relocateFrom` の対象が無いので、握手の直後の状態がそのまま観測できる。
+   */
+  it('record.job.status を stopped にしない（移送先が無くても running のまま残る）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(jobWith('mgr-vacate-nostop', 'runner-a'));
+    const fake = createFakeRegistry();
+    fake.entries.push(entryOf('runner-a', 'connected', 'runner-a'));
+    const runnerA = fakeRunner('runner-a');
+    fake.addClient(runnerA.client);
+    const { pool } = setup(stores, fake.registry);
+
+    await pool.vacate('runner-a');
+
+    const job = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-vacate-nostop');
+    expect(job?.status).toBe('running');
+
+    await pool.stop();
+  });
+
+  /**
+   * **貸し出しを先に返してあるので、期限を待たずに移る。** `recentLease` は
+   * ttl を10分で持たせてある——release が効いていなければ、この歯の
+   * `expect.poll`（2秒）には絶対に届かない。`instanceId` を lease と名簿の
+   * 両方に同じ値で持たせているのは、`#confirmStoppedAndReleaseLease` の
+   * 「誰に確かめたか」（`sameHolder`）の関門を通すため（同じ関門を通さない
+   * 形にすると、release 自体が起きない）。
+   */
+  it('貸し出しを先に返してあるので、relocateFrom は期限を待たずに移す', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(
+      jobWith('mgr-vacate-lease', 'runner-a', {
+        lease: { ...recentLease('runner-a'), instanceId: 'inst-a' },
+      }),
+    );
+    const fake = createFakeRegistry();
+    fake.entries.push({ ...entryOf('runner-a', 'connected', 'runner-a'), instanceId: 'inst-a' });
+    fake.entries.push(entryOf('runner-b', 'connected', 'runner-b'));
+    const runnerA = fakeRunner('runner-a');
+    const runnerB = fakeRunner('runner-b');
+    fake.addClient(runnerA.client);
+    fake.addClient(runnerB.client);
+    const { pool } = setup(stores, fake.registry);
+
+    await pool.vacate('runner-a');
+
+    await expect.poll(() => runnerB.resumes.length, { timeout: 2000 }).toBe(1);
+
+    const job = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-vacate-lease');
+    expect(job?.runnerId).toBe('runner-b');
+    expect(job?.status).toBe('running');
+
+    await pool.stop();
+  });
+
+  /**
+   * **名簿に無い runnerId でも投げない。** `RunnerRegistry#vacate` の doc
+   * 「名簿に無い（または一致する runnerId が無い）ときは何もしない」を
+   * `ManagerPool.vacate()` 越しにも固定する——`unregister` と同じ作法。
+   */
+  it('名簿に無い runnerId でも投げずに終わる', async () => {
+    const stores = createMemoryStores();
+    const fake = createFakeRegistry();
+    const { pool } = setup(stores, fake.registry);
+
+    await expect(pool.vacate('runner-ghost')).resolves.toBeUndefined();
 
     await pool.stop();
   });

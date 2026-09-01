@@ -223,6 +223,85 @@ describe('runner の生存判定', () => {
   });
 
   /**
+   * **対になる歯（#485 PR-2）。** 上の「黙った器が戻れば宛先に戻り」は `lost`
+   * （`alive: false`）の回復である。`vacating` は「黙った」のではなく「空けると
+   * 決めた」だけなので、`alive` は `true` のまま——heartbeat が何度成功しても
+   * `#markSeen` の早期 return（`if (entry.alive) { …; return; }`）を通るだけで
+   * `state` には触らない。
+   *
+   * **これは `Registry#vacate` の実装（`entry.alive` を触らない）が持つ約束の
+   * 直接の検算である。** もし `vacate()` が `lost` と同じ形で `alive` を
+   * `false` へ倒していたら、次の成功した heartbeat が「戻ってきた」と誤読し、
+   * この歯は `state: 'connected'`（黙って踏み潰された `vacating`）を見て落ちる。
+   */
+  it('vacating な器は、heartbeat が何度成功しても connected へ黙って戻らない（#485 PR-2）', async () => {
+    const runner = new FakeRunner('runner-a');
+    const registry = createRunnerRegistry();
+    await registry.register({ label: 'http://runner:4518', open: async () => runner });
+    expect(registry.entries()).toMatchObject([{ state: 'connected' }]);
+
+    registry.vacate('runner-a');
+    expect(registry.entries()).toMatchObject([{ state: 'vacating' }]);
+
+    // **器は生きたまま応え続ける。** `lost` と違い、名乗り自体は途切れない。
+    runner.reply = 'ok';
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(runner.pings).toBe(1);
+    expect(registry.entries()).toMatchObject([{ state: 'vacating' }]);
+
+    // 何周しても同じ。**時間が経てば戻る、という性質のものではない。**
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(registry.entries()).toMatchObject([{ state: 'vacating' }]);
+    expect(await registry.list()).toEqual([]);
+
+    await registry.stop();
+  });
+
+  /**
+   * **もう一つの対になる歯（#485 PR-2 のレビューで見つかった穴）。**
+   *
+   * 上の歯が固定したのは「heartbeat が途切れずに成功し続ける」経路である。
+   * だが `vacate()` は `alive` を触らないため、`#markSilent`（黙った判定）の
+   * 側は素通しになる——`entry.alive` が `true` のままなので
+   * `if (!entry.alive) return;` を通り抜け、30秒（`HEARTBEAT_LOST_MS`）
+   * 途切れると `state` が `'vacating'` から `'lost'` へ**上書き**され、
+   * `alive` が `false` になる。
+   *
+   * その後器が戻ると、今度は `#markSeen` の `if (entry.alive)` が偽になって
+   * いるので早期 return を通らず、「黙っていた器が戻ってきた」の分岐
+   * （`entry.alive = true; entry.state = 'connected';`）を踏む——**空けると
+   * 決めた宛先が、黙って置き先に戻る。** #485 が塞ごうとしている形そのもの
+   * （運用者が「空けた、あとは消すだけ」と思っている器へ新しい委譲が入る）で、
+   * Railway の再デプロイ中に普通に起きる長さの断（30秒）で踏む。
+   */
+  it('vacating な器は、30秒以上の断のあと復帰しても connected へ黙って戻らない（#485 PR-2）', async () => {
+    const runner = new FakeRunner('runner-a');
+    const registry = createRunnerRegistry();
+    await registry.register({ label: 'http://runner:4518', open: async () => runner });
+
+    registry.vacate('runner-a');
+    expect(registry.entries()).toMatchObject([{ state: 'vacating' }]);
+
+    // **30秒以上の断。** `#markSilent` が黙った判定をする猶予そのもの。
+    runner.reply = 'error';
+    await vi.advanceTimersByTimeAsync(30_000);
+    // **黙っている間、`vacating` のままであってよい。** `lost` へ上書きされて
+    // いても `list()` からは変わらず外れる（`lost` も `vacating` も並ばない）
+    // ので、この時点ではまだ症状が見えない——次の「戻った」でだけ症状が出る。
+
+    // 器が戻ってきた。
+    runner.reply = 'ok';
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    // **⚠️ ここが本体。** 空けると決めた宛先が、黙って `connected`（置き先）へ
+    // 戻ってはいけない。
+    expect(registry.entries()).toMatchObject([{ state: 'vacating' }]);
+    expect(await registry.list()).toEqual([]);
+
+    await registry.stop();
+  });
+
+  /**
    * **落ちたと判定した器へ新しい委譲を置かない。**
    *
    * 名簿からは消さない（人間には見えている必要がある）が、置き先としては数えない。

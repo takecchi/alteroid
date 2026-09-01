@@ -167,6 +167,8 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     async reattachRunner() {},
     // 移送の契機も同じくデーモン側（`onLost`）にある。
     relocateFrom() {},
+    // drain の契機は HTTP 側（`POST /runners/vacate`）にある。クローンの道具は呼ばない。
+    async vacate() {},
     async abort(managerId: string, reason?: string) {
       aborted.push({ managerId, ...(reason === undefined ? {} : { reason }) });
       const found = running.find((manager) => manager.managerId === managerId);
@@ -3460,7 +3462,7 @@ describe('クローンの道具', () => {
    * `kind`/`askedAt` が届かない）に対する歯。`packages/core/src/runner-protocol.ts`
    * の `runnerWaitingSchema` は `kind`/`askedAt` を `.optional()` にしてある
    * ので、ここでは欠けた形をそのまま `ManagerSummary.waiting` へ渡せる
-   * （`RunnerHttpClient.list()` 側の歯は `apps/daemon/src/runner-client.test.ts`）。
+   * （`HttpRunner.list()` 側の歯は `apps/daemon/src/runner-client.test.ts`）。
    *
    * **`manager_list`（`tools.ts`）は表示側で `kind`/`askedAt` を組み立て直す
    * 唯一の場所である** — `apps/web`（`manager-detail.tsx`）と `apps/cli`

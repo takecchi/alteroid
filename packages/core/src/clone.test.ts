@@ -1274,6 +1274,9 @@ describe('クローン — マネージャーの確認がいまも待たれて�
       relocateFrom: () => {
         throw new Error('not implemented');
       },
+      vacate: () => {
+        throw new Error('not implemented');
+      },
       probeTurnEnds: () => Promise.resolve(),
       stop: () => Promise.resolve(),
     };
@@ -2299,6 +2302,9 @@ describe('クローン — 自律（人間以外の起点）', () => {
       restore: () => Promise.resolve([]),
       reattachRunner: () => Promise.resolve(),
       relocateFrom: () => {
+        throw new Error('not implemented');
+      },
+      vacate: () => {
         throw new Error('not implemented');
       },
       probeTurnEnds: () => Promise.resolve(),

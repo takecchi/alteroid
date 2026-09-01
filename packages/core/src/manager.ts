@@ -810,12 +810,48 @@ export interface ManagerPool {
    */
   reattachRunner(runnerId: string): Promise<void>;
   /**
-   * ある宛先が黙ったので、いま開いている別の器に取り直しを起こす（roadmap M5 PR5）。
+   * ある宛先から、いま開いている別の器へ取り直しを起こす（roadmap M5 PR5）。
+   *
+   * **契機は2つある。** 宛先が黙った（`lost`）ときだけでなく、意図して空けた
+   * （`vacating`。#485 PR-2）ときもここを呼ぶ——引数名を `lostRunnerId` から
+   * `runnerId` へ変えたのはこのため（`#shouldRelocateFrom`
+   * を `#isLostRunner` から改名したのと同じ論法。あちらの doc「`vacating`
+   * （意図して空けている最中）も同じ側に立つ」）。**「その宛先からは動かして
+   * よい」という1つの事実**を運ぶ引数であって、黙ったことの証明ではない。
    *
    * **新しい梯子は作らない** —— `#reattach` の中の既存の予約（`#scheduleReattach`）に
-   * そのまま乗る。貸し出しがまだ生きていれば断られ、期限が切れてから移る。
+   * そのまま乗る。貸し出しがまだ生きていれば断られ、期限が切れてから移る
+   * （drain の握手で貸し出しを先に返しておけば、ここで待たずに移る——
+   * `#confirmStoppedAndReleaseLease` の doc）。
    */
-  relocateFrom(lostRunnerId: string): void;
+  relocateFrom(runnerId: string): void;
+  /**
+   * その runner を意図して空ける（drain。#485 PR-2）。**HTTP の面
+   * （`POST /runners/vacate`）が呼ぶ、唯一の受け口である。**
+   *
+   * 3段で構成する。**順序そのものが要点なので、入れ替えない:**
+   *
+   * 1. **まず名簿へ `'vacating'` を立てる**（`RunnerRegistry#vacate`）。
+   *    ここを最初にするのは、そうしないと `list()` / `select()` が
+   *    まだこの宛先を置き先として返し続けるからである——`stop()` してから
+   *    `vacate()` を呼ぶ順序だと、**セッションを止めて貸し出しを返した直後の
+   *    窓に新しい委譲が置かれうる**（空けている最中に仕事が入り、drain が
+   *    終わらない）。先に立てておけば、その瞬間から置き先を外れる。
+   * 2. その runner に載っている委譲それぞれに「確かめた停止」の握手
+   *    （`#confirmStoppedAndReleaseLease`）をする。**`record.job.status` は
+   *    `'stopped'` にしない。`#retire` も呼ばない**——drain は終わらせるの
+   *    ではなく移すためで、終端にすると `#reattach()` の
+   *    `status !== 'running' && status !== 'waiting_human'` の関門に引っかかり、
+   *    二度と移送されなくなる（`#confirmStoppedAndReleaseLease` の doc「呼び
+   *    出し元が決めること」）。
+   * 3. `relocateFrom(runnerId)` を呼ぶ。貸し出しを先に返してあるので、期限を
+   *    待たずに他の `connected` な runner へ移る。
+   *
+   * **どちらの順序も失敗しうるが、1 を先にする側だけが回復不能な窓を作らない。**
+   * 先に立てて途中で失敗しても安全側に倒れる——`#shouldRelocateFrom` が真の
+   * ままなので移送は続き、貸し出しの関門が二重実行を止める。
+   */
+  vacate(runnerId: string): Promise<void>;
   /**
    * 走行中のマネージャーについて、生ログの末尾から「ターンが終わっているらしい」
    * という助言を計算し直す（Issue #567）。
@@ -2732,7 +2768,7 @@ class Pool implements ManagerPool {
     await this.#reattach(runnerId);
   }
 
-  relocateFrom(lostRunnerId: string): void {
+  relocateFrom(runnerId: string): void {
     if (this.#stopped) return;
     // **新しい梯子は作らない。** 各 `runnerId` への `#reattach` は、貸し出しが
     // まだ生きていれば断って `#scheduleReattach` の梯子に乗る——ここでは
@@ -2740,11 +2776,61 @@ class Pool implements ManagerPool {
     const targets = new Set(
       this.#runners
         .entries()
-        .filter((entry) => entry.runnerId !== undefined && entry.runnerId !== lostRunnerId)
+        .filter((entry) => entry.runnerId !== undefined && entry.runnerId !== runnerId)
         .filter((entry) => entry.state === 'connected')
         .map((entry) => entry.runnerId as string),
     );
-    for (const runnerId of targets) void this.#reattach(runnerId);
+    for (const target of targets) void this.#reattach(target);
+  }
+
+  async vacate(runnerId: string): Promise<void> {
+    if (this.#stopped) return;
+
+    /*
+     * **1. 先に立てる。** ここを最初にしないと `list()` / `select()` は
+     * まだこの宛先を置き先として返す——下の2で貸し出しを返した直後の窓に
+     * 新しい委譲が置かれ、drain が終わらなくなる（`vacate` 宣言側の doc、
+     * 順序そのものが要点である）。
+     */
+    this.#runners.vacate(runnerId);
+
+    /*
+     * **2. その runner に載っている委譲へ「確かめた停止」の握手をする。**
+     * ジョブの一覧は台帳から引く——`#records`（プロセス内の像）はまだこの
+     * ジョブを持っていないことがある（`#reattach` の同じ理由の注記「ジョブの
+     * 一覧は store から引く」）。
+     */
+    const runner = await this.#runners.get(runnerId).catch(() => null);
+    if (runner !== null && !this.#stopped) {
+      const jobs = await this.#stores.jobs.listJobs().catch(() => []);
+      for (const job of jobs) {
+        if (this.#stopped) break;
+        if (job.runnerId !== runnerId) continue;
+        const known = this.#records.get(job.id);
+        const status = known?.job.status ?? job.status;
+        // 走っていないもの（`done` / `stopped` / `lost` / `failed` 等）には
+        // 握手が要らない——`runner.stop()` に届けるものが無い。
+        if (status !== 'running' && status !== 'waiting_human') continue;
+        const record = known ?? (await this.#load(job.id));
+        if (record === null) continue;
+        const { outcome } = await this.#confirmStoppedAndReleaseLease(record, runner, job.id);
+        /*
+         * **`record.job.status` は書かない。`#retire` も呼ばない。** drain は
+         * 終わらせるのではなく移すためで、終端にすると `#reattach()` の
+         * `status !== 'running' && status !== 'waiting_human'` の関門に
+         * 引っかかり、二度と移送されなくなる（`#confirmStoppedAndReleaseLease`
+         * の doc「呼び出し元が決めること」、`vacate` 宣言側の doc）。
+         *
+         * **貸し出しの解放だけは永続化する。** ここを persist しないと、
+         * 下の3が呼ぶ `#reattach` は期限が切れるまで移送を待つ——せっかく
+         * ここで返した貸し出しが、台帳には残ったままになる。
+         */
+        if (outcome === 'stopped') await this.#persist(record);
+      }
+    }
+
+    // **3. 移送を起こす。** 貸し出しを先に返してあるので、期限を待たずに移る。
+    this.relocateFrom(runnerId);
   }
 
   async #restoreExclusive(): Promise<ManagerSummary[]> {
@@ -3018,6 +3104,88 @@ class Pool implements ManagerPool {
     return resumed;
   }
 
+  /**
+   * **「確かめた停止」の定義そのもの。** `abort()` と drain（`vacate()`、#485
+   * PR-2）が共有する——両方とも「runner へ stop を伝えた」で終わらせず、
+   * 実際に消えたことを `list()` で確かめてから、確かめた回だけ貸し出しを返す。
+   *
+   * **切り出した理由。** `abort()` はもともとこの塊をインラインで持っていた
+   * （`stopError` → `sessionGone` → `outcome` → 持ち主が応えているかを見て
+   * 貸し出しを返す、という並び）。drain はこれと**まったく同じ判定**を
+   * 複数のマネージャーぶん繰り返す必要があり、複製すると片方だけ直る形の
+   * 不整合を作る（AGENTS.md「テストが書けない構造は、テストが無いのと同じ」の
+   * 逆——ここは「同じ判定を2箇所に持たない」ための切り出しである）。
+   *
+   * **出力・挙動は1文字も変えていない。** `abort()` 側は元のコードをそのまま
+   * この関数へ移しただけで、呼び出し順・条件・代入先はすべて同じである
+   * （このコミットの diff がその根拠——ロジックの行は移動のみ、呼び出し元は
+   * 分解代入で受け取るだけになった）。
+   *
+   * **呼び出し元が決めること（ここでは決めない）:**
+   * - `record.job.status` を `'stopped'` にするか——`abort()` はする。`vacate()`
+   *   はしない（drain は終わらせるのではなく移すため。終端にすると
+   *   `#reattach()` の `status !== 'running' && status !== 'waiting_human'` の
+   *   関門に引っかかり、二度と移送されなくなる）
+   * - `#retire(managerId)` を呼ぶか——同上の理由で `abort()` だけが呼ぶ
+   * - `record.waiting` / `record.attached` / `#persist()` — `outcome ===
+   *   'stopped'` の後始末は呼び出し元の責任のまま（ここは持ち出さない）
+   *
+   * **⚠️ さらに「誰に確かめたか」を見る。** 止まったかどうかの判定は呼び出し元が
+   * 引いた宛先に `list()` を聞き直して出しているが、`Registry#get` は同じ名前を
+   * 名乗る器が2台あれば先に見つかった方を返す（線形一致）。**持ち主でない器に
+   * 聞いて「無い」と言われただけ**の場合に貸し出しを返すと、走り続けている委譲を
+   * 「止めた」と記録したうえで、唯一の防御まで外すことになる。だから持ち主が
+   * 応えていると言えるときだけ返す（判定できないときは返さない — 期限が来れば
+   * 引き取れる）。
+   */
+  async #confirmStoppedAndReleaseLease(
+    record: ManagerRecord,
+    runner: RunnerClient,
+    managerId: string,
+  ): Promise<{
+    outcome: 'stopped' | 'not_stopped' | 'unknown';
+    stopError: unknown;
+    sessionGone: boolean | undefined;
+  }> {
+    let stopError: unknown;
+    try {
+      await runner.stop(managerId);
+    } catch (error) {
+      stopError = error;
+    }
+
+    // **「受理した」で終わらせない。** `runner.stop()` は該当セッションが手元に
+    // 無ければ黙って何もしない（`#sessions.get(id)?.stop()`）ので、戻り値だけを
+    // 見て「止まった」と言うと、走り続けているものを止めたことにしてしまう。
+    // 実際に畳まれたセッションは runner の一覧から消える（`onClosed`）ので、
+    // そこを見に行く。訊けなかったときは黙って成功にせず undefined のまま返す。
+    // **`stop()` が例外を投げていても、この探りは必ず行う** — 探りが「消えた」と
+    // 答えるなら、stop の RPC が不明のままでも止まったと言い切ってよい。
+    const sessionGone = await runner
+      .list()
+      .then((sessions) => !sessions.some((session) => session.managerId === managerId))
+      .catch(() => undefined);
+
+    const outcome: 'stopped' | 'not_stopped' | 'unknown' =
+      sessionGone === true ? 'stopped' : sessionGone === false ? 'not_stopped' : 'unknown';
+
+    if (outcome === 'stopped') {
+      /*
+       * **止まったと確かめた回だけ貸し出しを返す。** `not_stopped` / `unknown` では
+       * 台帳を1文字も書かないのと同じ理由で、ここでも返さない（確かめていない停止で
+       * 貸し出しを返すと、まだ走っているセッションを別の器が引き取れてしまう）。
+       */
+      const holder = record.job.lease;
+      if (holder !== undefined) {
+        const seen = this.#sighting(holder.runnerId);
+        const sameHolder = holder.instanceId !== undefined && seen.instanceId === holder.instanceId;
+        if (sameHolder) record.job.lease = releaseLease(holder, this.#now());
+      }
+    }
+
+    return { outcome, stopError, sessionGone };
+  }
+
   async abort(
     managerId: string,
     reason?: string,
@@ -3053,50 +3221,16 @@ class Pool implements ManagerPool {
     // が 500 になる — **「止めた事実は日誌に残る」という約束がいちばん要る場面で
     // 消える**。捕まえて、権威は下の `sessionGone` の探りに置く（stop の RPC が
     // 返らなくても、届いていて実際に止まっていることがある）。
-    let stopError: unknown;
-    try {
-      await runner.stop(managerId);
-    } catch (error) {
-      stopError = error;
-    }
-
-    // **「受理した」で終わらせない。** `runner.stop()` は該当セッションが手元に
-    // 無ければ黙って何もしない（`#sessions.get(id)?.stop()`）ので、戻り値だけを
-    // 見て「止まった」と言うと、走り続けているものを止めたことにしてしまう。
-    // 実際に畳まれたセッションは runner の一覧から消える（`onClosed`）ので、
-    // そこを見に行く。訊けなかったときは黙って成功にせず undefined のまま返す。
-    // **`stop()` が例外を投げていても、この探りは必ず行う** — 探りが「消えた」と
-    // 答えるなら、stop の RPC が不明のままでも止まったと言い切ってよい。
-    const sessionGone = await runner
-      .list()
-      .then((sessions) => !sessions.some((session) => session.managerId === managerId))
-      .catch(() => undefined);
-
-    const outcome: 'stopped' | 'not_stopped' | 'unknown' =
-      sessionGone === true ? 'stopped' : sessionGone === false ? 'not_stopped' : 'unknown';
+    const { outcome, stopError, sessionGone } = await this.#confirmStoppedAndReleaseLease(
+      record,
+      runner,
+      managerId,
+    );
 
     if (outcome === 'stopped') {
       record.waiting = [];
       record.attached = false;
       record.job.status = 'stopped';
-      /*
-       * **止まったと確かめた回だけ貸し出しを返す。** `not_stopped` / `unknown` では
-       * 台帳を1文字も書かないのと同じ理由で、ここでも返さない（確かめていない停止で
-       * 貸し出しを返すと、まだ走っているセッションを別の器が引き取れてしまう）。
-       *
-       * **⚠️ さらに「誰に確かめたか」を見る。** 止まったの判定は `#runnerOf` が引いた
-       * 宛先に `list()` を聞き直して出しているが、`Registry#get` は同じ名前を名乗る器が
-       * 2台あれば先に見つかった方を返す（線形一致）。**持ち主でない器に聞いて「無い」と
-       * 言われただけ**の場合に貸し出しを返すと、走り続けている委譲を「止めた」と記録した
-       * うえで、唯一の防御まで外すことになる。だから持ち主が応えていると言えるときだけ
-       * 返す（判定できないときは返さない — 期限が来れば引き取れる）。
-       */
-      const holder = record.job.lease;
-      if (holder !== undefined) {
-        const seen = this.#sighting(holder.runnerId);
-        const sameHolder = holder.instanceId !== undefined && seen.instanceId === holder.instanceId;
-        if (sameHolder) record.job.lease = releaseLease(holder, this.#now());
-      }
       await this.#persist(record);
       // **停止は明示的な終端である。** 台帳には残るので `list()` / `manager_send` は
       // これまでどおり答えられる（`#retire` の JSDoc）。
@@ -6096,6 +6230,37 @@ function isLive(record: ManagerRecord, silentRunners: ReadonlyMap<string, string
   // `0fb068f`（PR #571、#563）で `ManagerSendResult` が4値になった時点で古い。**
   // 面（CLI の `/managers`・`manager_list`・Web UI）の文言は 2026-08-28 にこの実測へ
   // 揃えてある。**この関数の返り値は動かしていない** —— 直すのは言い方だけである。
+  //
+  // **⭐ `vacating`（意図して空けている最中。#485 PR-2）はこの `false` の分岐に
+  // 入らない。** `silentRunners` は `state === 'lost'` だけを数える
+  // （`#silentRunners` の doc）ので、`vacating` な器に載っている委譲はここを
+  // 通り抜けて `true` 側へ進む。**これは材料が足りていないから漏れているのでは
+  // なく、`true` が正しい値だからである。** 理由は3つ（重い順）:
+  //
+  // 1. **`live: false` には「理由を1つだけ名指しする欄」（`runnerLostSince`）が
+  //    対に在り、材料は `#silentRunners()`（＝`lost` だけ）である**
+  //    （`ManagerSummary.live` の doc 逐語「`live: false` の理由を1つだけ
+  //    名指しする欄である」）。`vacating` を `false` へ倒すと、`runnerLostSince`
+  //    が立たないまま `live: false` だけが出る——**理由を名乗れない `false`**が
+  //    できる。その欄が在る理由（`false` を見た側が「セッションが終わったのか」
+  //    「宛先の器が消えたのか」を区別して打つ手を決められるようにする）を
+  //    正面から壊す。
+  // 2. `live` は「話しかけられるか」しか言わない。`vacating` な器は話しかけ
+  //    られる——黙ったのではなく、空けると決めただけで名乗り（heartbeat）は
+  //    続いている。**⟹「置き先から外れること」と「話しかけられること」は
+  //    別である。** `RunnerRegistry#list()` が前者（`vacating` も外れる）、
+  //    `live` はこちらの後者を言う——PR-1 で既にこの2つを分けたので、その
+  //    分け方をここでも使う。
+  // 3. PR-1 で `#silentRunners` を広げなかった判断と整合する（`#silentRunners`
+  //    の doc の逐語「数えているのが『名乗らなくなった』ことそのもの」——
+  //    `vacating` は黙った結果ではなく空けると決めた結果なので、この列挙には
+  //    最初から乗らない）。
+  //
+  // **⚠️ 次に読む人は必ず「`vacating` も置き先から外れるのに、なぜ `live` なのか」
+  // を問う。** 答えがここに無ければ、その人は `#silentRunners` のホワイトリストへ
+  // `vacating` を足して `false` へ倒しに来る（歯: `manager.test.ts` の「drain
+  // 中（vacating）の委譲は live: true のままで、runnerLostSince も出ない」——
+  // このホワイトリストを広げる変異で実際に落ちることを確認済み）。
   if (record.job.runnerId !== undefined && silentRunners.has(record.job.runnerId)) return false;
   // runner にセッションが居るなら、そのまま送れる。
   if (record.attached) return true;

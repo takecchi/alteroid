@@ -964,6 +964,15 @@ export const runnersCredentialsResponseSchema = z.object({
   ),
 });
 
+/**
+ * `POST /runners/vacate` の入力（#485 PR-2）。`runnerId` は `GET /runners` が
+ * 出す `runnerId`（runner が名乗った値）そのもの。`railway/scale-runners.sh`
+ * が既にこの形を名指ししている。
+ */
+export const runnersVacateCommandSchema = z.object({
+  runnerId: z.string(),
+});
+
 // ---------------------------------------------------------------------------
 // 実行環境プロファイル（/profile）
 // ---------------------------------------------------------------------------
@@ -1215,6 +1224,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     },
     relocateFrom() {
       throw new Error('spec 生成専用のスタブ: 移送はしない');
+    },
+    vacate() {
+      throw new Error('spec 生成専用のスタブ: 空けない');
     },
     probeTurnEnds() {
       throw new Error('spec 生成専用のスタブ: ターン終了の探りはしない');

@@ -99,6 +99,7 @@ import {
   reportsResponseSchema,
   runnersCredentialsResponseSchema,
   runnersListResponseSchema,
+  runnersVacateCommandSchema,
   scheduleListResponseSchema,
   tokensPolicyUpdateRequestSchema,
   tokensResponseSchema,
@@ -3218,6 +3219,52 @@ export function createApp(deps: AppDeps) {
           }),
         );
         return c.json(runnersCredentialsResponseSchema.parse({ results }));
+      },
+    )
+
+    /**
+     * その runner を意図して空ける（drain。#485 PR-2）。
+     *
+     * **走行中のマネージャーを畳む操作ではない。** 空けると立てるだけで、その場
+     * では終わらない。載っている委譲は「確かめた停止」の握手を経て、貸し出し
+     * 期限を待たずに他の `connected` な runner へ移る（`ManagerPool.vacate`
+     * の doc）。`railway/scale-runners.sh` が減らす側の運用で既に名指ししている
+     * 口——ただしそのスクリプト自身はまだ呼ばない。どの器を空けるかはクローンの
+     * 判断であって、スクリプトが黙って選ぶものではない。
+     *
+     * 中身は `RunnerRegistry` に置かない（`RunnerRegistry#vacate` は同期・
+     * 往復無しの名簿操作だけを持つ）。ここが呼ぶのは `ManagerPool.vacate()`
+     * ——「確かめた停止」の握手と `relocateFrom` まで含めた、HTTP から見える
+     * 唯一の受け口である。
+     */
+    .post(
+      '/runners/vacate',
+      describeRoute({
+        tags: ['runners'],
+        summary: 'その runner を意図して空ける（drain）',
+        description:
+          '空けると立てるだけで、その場では終わらない。載っている委譲は' +
+          '「確かめた停止」の握手を経て、貸し出し期限を待たずに他の runner へ移る。' +
+          '**応答は「立てた」ことの確認であって「終わった」ことの確認ではない**' +
+          '——進捗は GET /runners（state: vacating）と GET /managers（runnerId が' +
+          '動いたか）で追う。',
+        responses: {
+          200: {
+            description:
+              '空けると立てた。名簿に無い runnerId でも同じ 200 を返す' +
+              '（`RunnerRegistry#unregister` と同じ作法——名乗ってすらいない' +
+              '宛先を「無かった」と取り立てて言うほどの情報ではない）。',
+            content: { 'application/json': { schema: resolver(okResponseSchema) } },
+          },
+        },
+      }),
+      jsonBody(runnersVacateCommandSchema, (where) => ({
+        error: 'runnerId の形が不正（空けていない）' + (where === '' ? '' : `: ${where}`),
+      })),
+      async (c) => {
+        const { runnerId } = c.req.valid('json');
+        await clone.managers.vacate(runnerId);
+        return c.json(okResponseSchema.parse({ ok: true }));
       },
     )
 

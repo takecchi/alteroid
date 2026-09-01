@@ -283,4 +283,60 @@ describe('runner の名簿', () => {
 
     await registry.stop();
   });
+
+  /**
+   * **`Registry#list()` 本体の除外挙動を直接測る歯（#485 PR-1 の残件、PR-2 で
+   * 口ができたので足す）。**
+   *
+   * PR-1（#615）の着地報告は「`vacating` へ至る公開経路が PR-2 まで無いため、
+   * 新しい歯は `manager.ts` 側の偽 registry を通る」「`Registry#list()` 本体の
+   * 除外挙動を直接測るテストが無い」と明記していた（Issue #485 コメント）。
+   * `RunnerRegistry#vacate()`（本 PR）でその公開経路ができたので、ここで
+   * 本物の `Registry`（`createRunnerRegistry()` が返すもの。偽 registry では
+   * ない）に対して直接 `vacate()` を呼び、`list()` から実際に外れることを見る。
+   *
+   * **`unregister` の歯（直前）と対にしてある。** `unregister` は名簿からも
+   * 消えるが、`vacate` は `entries()` には残り `get()` でも引ける——`list()`
+   * （置き先）からだけ外れる。この違いが本体で作られていることを、ここで
+   * 初めて実物を通して確かめる。
+   */
+  it('vacate した runner は list() の置き先から外れるが、entries() には vacating で残り get() でも引ける', async () => {
+    const registry = createRunnerRegistry();
+    await registry.register({
+      label: '同一プロセス',
+      open: async () =>
+        createLocalRunner({
+          runnerId: 'runner-vacating',
+          workspacePath: '/work/project',
+          queryFn: fakeSdk(),
+          env: {},
+        }),
+    });
+    expect(await registry.list()).toHaveLength(1);
+
+    registry.vacate('runner-vacating');
+
+    // **`list()`（置き先）からは即座に外れる。** `lost` と同じ扱い
+    // （`Registry#list` の doc）。
+    expect(await registry.list()).toEqual([]);
+    // **`entries()`（名簿そのもの）には残る。** `unregister` と違い、消えたわけ
+    // ではなく「意図して空けた」と立てただけである。
+    expect(registry.entries()).toMatchObject([
+      { label: '同一プロセス', state: 'vacating', runnerId: 'runner-vacating' },
+    ]);
+    // **`get()` はまだ引ける。** 走っていた委譲へ「確かめた停止」の握手をする側
+    // （`ManagerPool.vacate()`）が、その宛先へまだ話しかけられる必要がある——
+    // `vacate` は宛先そのものを閉じない（`unregister` との違い）。
+    expect(await registry.get('runner-vacating')).not.toBeNull();
+
+    await registry.stop();
+  });
+
+  /** 名簿に無い runnerId でも、`unregister` と同じく何も起きない（投げない）。 */
+  it('名簿に無い runnerId を vacate しても何も起きない', async () => {
+    const registry = createRunnerRegistry();
+    expect(() => registry.vacate('runner-ghost')).not.toThrow();
+    expect(registry.entries()).toEqual([]);
+    await registry.stop();
+  });
 });
