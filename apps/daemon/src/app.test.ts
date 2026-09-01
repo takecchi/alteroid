@@ -2891,12 +2891,15 @@ describe('OpenAPI', () => {
    * やめ、`@alteroid/core` の `runnerLivenessSchema` から引く形にした——ここが
    * 効いていないと、`RunnerLiveness` に値を足しても `typecheck` は何も言わず、
    * その値だけが HTTP の面から黙って消える（PR 本文が説明する穴そのもの）。
-   * **この歯は、誰かが `state` を再び手書きの `z.enum([...])` へ戻すと落ちる**
-   * ——戻した瞬間、手で書き写した値の集合は書いた時点で凍結され、
-   * `runnerLivenessSchema` 側にだけ新しい値が足された将来の変更に追従しなく
-   * なるからである。
+   *
+   * **この歯が測っているのは「`runnerLivenessSchema` の値の集合が、生成された
+   * spec の面までそのまま届いていること」である。** ⚠️ **手書きの `z.enum([...])`
+   * への逆行そのものは、この歯では捕まらない。** 6値を漏らさず正しく書き写して
+   * 手書きへ戻せば（結び目を切っても）、`arrayContaining` も `toHaveLength(6)`
+   * も変わらず通る——この歯が実際に落ちるのは「手書きへ戻し、かつ値の集合が
+   * 食い違ったとき」だけである（変異で実測済み。#485 PR-1 の報告に生出力あり）。
    */
-  it('/runners の state に vacating を含む6値が出る（手書きの enum への逆行を検知する）', async () => {
+  it('/runners の state に vacating を含む6値が出る（runnerLivenessSchema の値が spec まで届くことを固定する）', async () => {
     const spec = (await (await app.request('/openapi.json')).json()) as {
       paths: Record<
         string,
