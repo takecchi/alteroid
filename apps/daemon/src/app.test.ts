@@ -911,7 +911,7 @@ describe('HTTP API', () => {
    * 窓がある（`packages/core/src/runner-protocol.ts` の `runnerWaitingSchema`
    * の doc、#334）。`managerWaitingSchema` の `kind`/`askedAt` が必須のまま
    * だと、その窓に入ったマネージャーが1件でもいるだけで `.parse()` が投げ、
-   * **一覧そのものが1本も読めなくなる**——`RunnerHttpClient#list()` が
+   * **一覧そのものが1本も読めなくなる**——`HttpRunner#list()` が
    * `safeParse` で要素ごと黙って捨てる形（歯は
    * `apps/daemon/src/runner-client.test.ts`）より広く壊れる。
    *

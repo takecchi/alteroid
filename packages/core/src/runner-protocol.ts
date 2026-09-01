@@ -85,7 +85,7 @@ export type WaitingKind = z.infer<typeof waitingKindSchema>;
  * 繋がる、という順序が普通に起きる（`railway/README.md`「4. 落ちた側を待つ /
  * 取り直す」）。その窓では旧 runner の `/managers` 応答にこの2つが乗らない。
  *
- * **必須のままだと `runner-client.ts` の `RunnerHttpClient#list()` が
+ * **必須のままだと `apps/daemon/src/runner-client.ts` の `HttpRunner#list()` が
  * `safeParse` に落ち、`flatMap` で要素ごと黙って捨てる。** すると
  * `manager.ts` の `alive.has(job.id)` が偽になり、`record.waiting = []` で
  * 待っていた確認まで捨てられて、返事待ちのマネージャーだけが起こし直される

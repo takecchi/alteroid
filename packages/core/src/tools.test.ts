@@ -3460,7 +3460,7 @@ describe('クローンの道具', () => {
    * `kind`/`askedAt` が届かない）に対する歯。`packages/core/src/runner-protocol.ts`
    * の `runnerWaitingSchema` は `kind`/`askedAt` を `.optional()` にしてある
    * ので、ここでは欠けた形をそのまま `ManagerSummary.waiting` へ渡せる
-   * （`RunnerHttpClient.list()` 側の歯は `apps/daemon/src/runner-client.test.ts`）。
+   * （`HttpRunner.list()` 側の歯は `apps/daemon/src/runner-client.test.ts`）。
    *
    * **`manager_list`（`tools.ts`）は表示側で `kind`/`askedAt` を組み立て直す
    * 唯一の場所である** — `apps/web`（`manager-detail.tsx`）と `apps/cli`
