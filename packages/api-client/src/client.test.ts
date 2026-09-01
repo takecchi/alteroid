@@ -60,6 +60,8 @@ function fakeClone(stores: Stores) {
     async reattachRunner() {},
     // 移送の契機も同じ理由で触らない。
     relocateFrom() {},
+    // drain の契機（`POST /runners/vacate`）も同じ理由で触らない。
+    async vacate() {},
     async probeTurnEnds() {},
     async stop() {},
   };

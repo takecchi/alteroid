@@ -52,6 +52,8 @@ function fakeClone() {
   const transcripts = new Map<string, string>();
   const managerSends: { managerId: string; text: string; requestId?: string }[] = [];
   const managerAborts: { managerId: string; reason?: string }[] = [];
+  // `POST /runners/vacate` が `ManagerPool.vacate()` へ渡した runnerId を記録する。
+  const vacateCalls: string[] = [];
   // `DELETE /managers/:id` が outcome ごとに正しい HTTP ステータスを写すことを見る
   // ためのノブ。既定は従来どおり `'stopped'`（居れば必ず止まる）。
   let abortOutcome: 'stopped' | 'not_stopped' | 'unknown' = 'stopped';
@@ -125,6 +127,12 @@ function fakeClone() {
     async reattachRunner() {},
     // HTTP 境界の検証では触らない（移送の契機もデーモンの配線側、`onLost` にある）。
     relocateFrom() {},
+    // **HTTP 境界そのものが検証対象。** `POST /runners/vacate` がこの口へ
+    // `runnerId` を渡していることを確かめるため、固定値を返す空スタブではなく
+    // 呼ばれた引数を記録する。
+    async vacate(runnerId) {
+      vacateCalls.push(runnerId);
+    },
     // HTTP 境界の検証では触らない（#567 の計算はデーモンのポーラーが起こす）。
     async probeTurnEnds() {},
     async stop() {},
@@ -166,6 +174,7 @@ function fakeClone() {
     transcripts,
     managerSends,
     managerAborts,
+    vacateCalls,
     setAbortOutcome(outcome: 'stopped' | 'not_stopped' | 'unknown') {
       abortOutcome = outcome;
     },

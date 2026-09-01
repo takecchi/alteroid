@@ -167,6 +167,8 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     async reattachRunner() {},
     // 移送の契機も同じくデーモン側（`onLost`）にある。
     relocateFrom() {},
+    // drain の契機は HTTP 側（`POST /runners/vacate`）にある。クローンの道具は呼ばない。
+    async vacate() {},
     async abort(managerId: string, reason?: string) {
       aborted.push({ managerId, ...(reason === undefined ? {} : { reason }) });
       const found = running.find((manager) => manager.managerId === managerId);
