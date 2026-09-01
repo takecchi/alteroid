@@ -2647,6 +2647,34 @@ class Registry implements RunnerRegistry {
     entry.error = error;
     // 既に落ちたと判定済み。**`onLost` は1回だけ**である。
     if (!entry.alive) return;
+    /*
+     * **意図して空けた宛先は、黙っても `lost` へ倒さない（#485 PR-2 のレビューで
+     * 見つかった穴）。**
+     *
+     * `vacate()` は `alive` を触らない（`RunnerRegistry#vacate` の doc）——
+     * これは「heartbeat が成功し続ける」経路（`#markSeen` の早期 return
+     * `if (entry.alive) { …; return; }`）を正しく通すための設計だが、その
+     * 裏返しとして、ここを素通りさせてしまっていた。この節が無いと:
+     * `alive` が `true` のままなので `if (!entry.alive) return;` を通り抜け、
+     * `HEARTBEAT_LOST_MS`（30秒）黙れば `state` が `'vacating'` から
+     * `'lost'` へ上書きされ、`alive` が `false` になる。その後器が戻ると、
+     * 今度は `#markSeen` の「黙っていた器が戻ってきた」分岐
+     * （`entry.alive` が偽なので早期 return を通らない）を踏み、`state` が
+     * 黙って `'connected'`（置き先）へ戻る——空けると決めた宛先へ、新しい
+     * 委譲が入り始める。#485 が塞ごうとしている形そのもので、Railway の
+     * 再デプロイ中に普通に起きる長さの断（30秒）で踏む。歯は
+     * `runner-heartbeat.test.ts`「vacating な器は、30秒以上の断のあと
+     * 復帰しても connected へ黙って戻らない」。
+     *
+     * **安全側に倒せる根拠。** `vacating` は `lost` と同じく `list()` から
+     * 外れ（`Registry#list` の doc）、`#shouldRelocateFrom` も真である
+     * （#485 PR-1）——`lost` へ倒さないことで失う能力は無い。`onLost` が
+     * 発火しなくなる分だけ `relocateFrom` の契機が1つ減るが、
+     * `ManagerPool.vacate()` は握手のあと `relocateFrom` を無条件に呼んで
+     * いる（`vacate()` 宣言側の doc・実装）ので、移送そのものはこの遷移を
+     * 経由しなくても既に起きている。
+     */
+    if (entry.state === 'vacating') return;
     // **1回の取りこぼしでは動かさない。** 器の再デプロイ中の一瞬や詰まった1回の
     // 応答で宛先を失うと、生きている runner から仕事を取り上げることになる。
     if (at - entry.lastSeen < HEARTBEAT_LOST_MS) return;
