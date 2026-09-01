@@ -58,6 +58,8 @@ function fakeClone(stores: Stores) {
     },
     // この試験は HTTP の口の形だけを見る（引き取りの契機は触らない）。
     async reattachRunner() {},
+    // 移送の契機も同じ理由で触らない。
+    relocateFrom() {},
     async probeTurnEnds() {},
     async stop() {},
   };

@@ -165,6 +165,8 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     },
     // クローンの道具はこの口を呼ばない（引き取りの契機はデーモン側にある）。
     async reattachRunner() {},
+    // 移送の契機も同じくデーモン側（`onLost`）にある。
+    relocateFrom() {},
     async abort(managerId: string, reason?: string) {
       aborted.push({ managerId, ...(reason === undefined ? {} : { reason }) });
       const found = running.find((manager) => manager.managerId === managerId);

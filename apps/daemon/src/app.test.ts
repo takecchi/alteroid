@@ -123,6 +123,8 @@ function fakeClone() {
     },
     // HTTP 境界の検証では触らない（引き取りの契機はデーモンの配線側にある）。
     async reattachRunner() {},
+    // HTTP 境界の検証では触らない（移送の契機もデーモンの配線側、`onLost` にある）。
+    relocateFrom() {},
     // HTTP 境界の検証では触らない（#567 の計算はデーモンのポーラーが起こす）。
     async probeTurnEnds() {},
     async stop() {},
