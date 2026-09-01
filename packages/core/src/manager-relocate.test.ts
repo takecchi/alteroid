@@ -400,4 +400,67 @@ describe('落ちた runner の委譲を、別の runner へ移送する（#485 M
 
     await pool.stop();
   });
+
+  /**
+   * **`job.runnerId` が無い行を止めているのは2つの門である。** `job.runnerId ===
+   * undefined` で降りる門と、`#isLostRunner` の門である。上の「古いジョブは移送
+   * しない」は後者だけでも通ってしまう——名簿の行がどれも `runnerId` を名乗って
+   * いれば `#isLostRunner(undefined)` は行0本で false を返すからである。
+   *
+   * **⚠️ 名乗らないまま黙った宛先が名簿に立つと、そこが割れる。** `RunnerEntry`
+   * の `runnerId` は任意なので、`{ runnerId: undefined, state: 'lost' }` の行は
+   * 実在しうる——そのとき `#isLostRunner(undefined)` は真になり、後者の門は
+   * 開く。**ここで見るのは前者の門そのものである。**
+   */
+  it('名乗らないまま黙った宛先が名簿に在っても、job.runnerId が無い行は移送しない', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(jobWith('mgr-9', undefined));
+    const fake = createFakeRegistry();
+    // **runnerId を名乗らないまま lost になった行。** これが在ると
+    // `#isLostRunner(undefined)` は真を返す（行1本・すべて lost）。
+    fake.entries.push(entryOf('名乗らない宛先', 'lost'));
+    fake.entries.push(entryOf('runner-b', 'connected', 'runner-b'));
+    const runnerB = fakeRunner('runner-b');
+    fake.addClient(runnerB.client);
+    const { pool } = setup(stores, fake.registry);
+
+    await pool.reattachRunner('runner-b');
+
+    expect(runnerB.resumes).toEqual([]);
+
+    await pool.stop();
+  });
+
+  /**
+   * **クローンへ届く報告は2つの部分でできている。** 見出し（「別の器で開き直した」）と、
+   * workspace の1行である。上の「受信箱に出る」は見出ししか見ていないので、
+   * **workspace の1行を出す条件が `'runner'` だけに戻っても気づけない**
+   * ——移送のときだけ黙る、という壊れ方をする。ここでその1行を固定する。
+   */
+  it('クローンへの報告に workspace の1行も出る：shared-volume なら「コミット前の変更も残っている」', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(
+      jobWith('mgr-10', 'runner-a', {
+        workspace: { kind: 'shared-volume', path: '/mnt/shared/proj' },
+      }),
+    );
+    const fake = createFakeRegistry();
+    fake.entries.push(entryOf('runner-a', 'lost', 'runner-a'));
+    fake.entries.push(entryOf('runner-b', 'connected', 'runner-b'));
+    const runnerB = fakeRunner('runner-b');
+    fake.addClient(runnerB.client);
+    const { pool, inbox } = setup(stores, fake.registry);
+
+    await pool.reattachRunner('runner-b');
+
+    const reports = inbox.filter(
+      (event): event is Extract<InboxEvent, { type: 'manager_message' }> =>
+        event.type === 'manager_message' && event.kind === 'report',
+    );
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.text).toContain('別の器で開き直した');
+    expect(reports[0]?.text).toContain('コミット前の変更も残っている');
+
+    await pool.stop();
+  });
 });
