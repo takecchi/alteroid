@@ -28,8 +28,9 @@ import { createMemoryStores } from './testing.js';
  * （存在しない永続性の主張）を読む側から再開することになる。だから
  * `runner-volume` も保守的な側（`unverified` 相当の文言）へ倒す。
  *
- * **`ALTEROID_WORKSPACE_KIND` のような env は登場しない。** `main` に無い
- * knob を人間へ案内しないため、判定はすべて台帳の値だけから作る。
+ * **この一言の文言に、workspace の運用選択を決める env の名は登場しない。**
+ * 判定はすべて台帳の値（`job.workspace`）だけから作る——運用選択がどの env で
+ * 決まったかを、通知の文言の中では案内しない。
  */
 
 /** `swappableRunner`（`manager.test.ts`）の縮小版。器の入れ替えだけを再現する。 */
