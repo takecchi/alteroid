@@ -3018,6 +3018,88 @@ class Pool implements ManagerPool {
     return resumed;
   }
 
+  /**
+   * **「確かめた停止」の定義そのもの。** `abort()` と drain（`vacate()`、#485
+   * PR-2）が共有する——両方とも「runner へ stop を伝えた」で終わらせず、
+   * 実際に消えたことを `list()` で確かめてから、確かめた回だけ貸し出しを返す。
+   *
+   * **切り出した理由。** `abort()` はもともとこの塊をインラインで持っていた
+   * （`stopError` → `sessionGone` → `outcome` → 持ち主が応えているかを見て
+   * 貸し出しを返す、という並び）。drain はこれと**まったく同じ判定**を
+   * 複数のマネージャーぶん繰り返す必要があり、複製すると片方だけ直る形の
+   * 不整合を作る（AGENTS.md「テストが書けない構造は、テストが無いのと同じ」の
+   * 逆——ここは「同じ判定を2箇所に持たない」ための切り出しである）。
+   *
+   * **出力・挙動は1文字も変えていない。** `abort()` 側は元のコードをそのまま
+   * この関数へ移しただけで、呼び出し順・条件・代入先はすべて同じである
+   * （このコミットの diff がその根拠——ロジックの行は移動のみ、呼び出し元は
+   * 分解代入で受け取るだけになった）。
+   *
+   * **呼び出し元が決めること（ここでは決めない）:**
+   * - `record.job.status` を `'stopped'` にするか——`abort()` はする。`vacate()`
+   *   はしない（drain は終わらせるのではなく移すため。終端にすると
+   *   `#reattach()` の `status !== 'running' && status !== 'waiting_human'` の
+   *   関門に引っかかり、二度と移送されなくなる）
+   * - `#retire(managerId)` を呼ぶか——同上の理由で `abort()` だけが呼ぶ
+   * - `record.waiting` / `record.attached` / `#persist()` — `outcome ===
+   *   'stopped'` の後始末は呼び出し元の責任のまま（ここは持ち出さない）
+   *
+   * **⚠️ さらに「誰に確かめたか」を見る。** 止まったかどうかの判定は呼び出し元が
+   * 引いた宛先に `list()` を聞き直して出しているが、`Registry#get` は同じ名前を
+   * 名乗る器が2台あれば先に見つかった方を返す（線形一致）。**持ち主でない器に
+   * 聞いて「無い」と言われただけ**の場合に貸し出しを返すと、走り続けている委譲を
+   * 「止めた」と記録したうえで、唯一の防御まで外すことになる。だから持ち主が
+   * 応えていると言えるときだけ返す（判定できないときは返さない — 期限が来れば
+   * 引き取れる）。
+   */
+  async #confirmStoppedAndReleaseLease(
+    record: ManagerRecord,
+    runner: RunnerClient,
+    managerId: string,
+  ): Promise<{
+    outcome: 'stopped' | 'not_stopped' | 'unknown';
+    stopError: unknown;
+    sessionGone: boolean | undefined;
+  }> {
+    let stopError: unknown;
+    try {
+      await runner.stop(managerId);
+    } catch (error) {
+      stopError = error;
+    }
+
+    // **「受理した」で終わらせない。** `runner.stop()` は該当セッションが手元に
+    // 無ければ黙って何もしない（`#sessions.get(id)?.stop()`）ので、戻り値だけを
+    // 見て「止まった」と言うと、走り続けているものを止めたことにしてしまう。
+    // 実際に畳まれたセッションは runner の一覧から消える（`onClosed`）ので、
+    // そこを見に行く。訊けなかったときは黙って成功にせず undefined のまま返す。
+    // **`stop()` が例外を投げていても、この探りは必ず行う** — 探りが「消えた」と
+    // 答えるなら、stop の RPC が不明のままでも止まったと言い切ってよい。
+    const sessionGone = await runner
+      .list()
+      .then((sessions) => !sessions.some((session) => session.managerId === managerId))
+      .catch(() => undefined);
+
+    const outcome: 'stopped' | 'not_stopped' | 'unknown' =
+      sessionGone === true ? 'stopped' : sessionGone === false ? 'not_stopped' : 'unknown';
+
+    if (outcome === 'stopped') {
+      /*
+       * **止まったと確かめた回だけ貸し出しを返す。** `not_stopped` / `unknown` では
+       * 台帳を1文字も書かないのと同じ理由で、ここでも返さない（確かめていない停止で
+       * 貸し出しを返すと、まだ走っているセッションを別の器が引き取れてしまう）。
+       */
+      const holder = record.job.lease;
+      if (holder !== undefined) {
+        const seen = this.#sighting(holder.runnerId);
+        const sameHolder = holder.instanceId !== undefined && seen.instanceId === holder.instanceId;
+        if (sameHolder) record.job.lease = releaseLease(holder, this.#now());
+      }
+    }
+
+    return { outcome, stopError, sessionGone };
+  }
+
   async abort(
     managerId: string,
     reason?: string,
@@ -3053,50 +3135,16 @@ class Pool implements ManagerPool {
     // が 500 になる — **「止めた事実は日誌に残る」という約束がいちばん要る場面で
     // 消える**。捕まえて、権威は下の `sessionGone` の探りに置く（stop の RPC が
     // 返らなくても、届いていて実際に止まっていることがある）。
-    let stopError: unknown;
-    try {
-      await runner.stop(managerId);
-    } catch (error) {
-      stopError = error;
-    }
-
-    // **「受理した」で終わらせない。** `runner.stop()` は該当セッションが手元に
-    // 無ければ黙って何もしない（`#sessions.get(id)?.stop()`）ので、戻り値だけを
-    // 見て「止まった」と言うと、走り続けているものを止めたことにしてしまう。
-    // 実際に畳まれたセッションは runner の一覧から消える（`onClosed`）ので、
-    // そこを見に行く。訊けなかったときは黙って成功にせず undefined のまま返す。
-    // **`stop()` が例外を投げていても、この探りは必ず行う** — 探りが「消えた」と
-    // 答えるなら、stop の RPC が不明のままでも止まったと言い切ってよい。
-    const sessionGone = await runner
-      .list()
-      .then((sessions) => !sessions.some((session) => session.managerId === managerId))
-      .catch(() => undefined);
-
-    const outcome: 'stopped' | 'not_stopped' | 'unknown' =
-      sessionGone === true ? 'stopped' : sessionGone === false ? 'not_stopped' : 'unknown';
+    const { outcome, stopError, sessionGone } = await this.#confirmStoppedAndReleaseLease(
+      record,
+      runner,
+      managerId,
+    );
 
     if (outcome === 'stopped') {
       record.waiting = [];
       record.attached = false;
       record.job.status = 'stopped';
-      /*
-       * **止まったと確かめた回だけ貸し出しを返す。** `not_stopped` / `unknown` では
-       * 台帳を1文字も書かないのと同じ理由で、ここでも返さない（確かめていない停止で
-       * 貸し出しを返すと、まだ走っているセッションを別の器が引き取れてしまう）。
-       *
-       * **⚠️ さらに「誰に確かめたか」を見る。** 止まったの判定は `#runnerOf` が引いた
-       * 宛先に `list()` を聞き直して出しているが、`Registry#get` は同じ名前を名乗る器が
-       * 2台あれば先に見つかった方を返す（線形一致）。**持ち主でない器に聞いて「無い」と
-       * 言われただけ**の場合に貸し出しを返すと、走り続けている委譲を「止めた」と記録した
-       * うえで、唯一の防御まで外すことになる。だから持ち主が応えていると言えるときだけ
-       * 返す（判定できないときは返さない — 期限が来れば引き取れる）。
-       */
-      const holder = record.job.lease;
-      if (holder !== undefined) {
-        const seen = this.#sighting(holder.runnerId);
-        const sameHolder = holder.instanceId !== undefined && seen.instanceId === holder.instanceId;
-        if (sameHolder) record.job.lease = releaseLease(holder, this.#now());
-      }
       await this.#persist(record);
       // **停止は明示的な終端である。** 台帳には残るので `list()` / `manager_send` は
       // これまでどおり答えられる（`#retire` の JSDoc）。
