@@ -1410,12 +1410,34 @@ export interface RunnerSource {
  * - `unreachable` — 開けなかったが待てば直る種類の失敗。背景で挑み直している
  * - `unusable` — 挑み直しても同じ答えが返る失敗（鍵違い等）。**挑み直さない**
  * - `lost` — 一度は開けたのに、名乗り（`/health`）が返らなくなった。**委譲は置かない**
+ * - `vacating` — 意図して空けている最中（drain）。**委譲は置かない**（`list()` の
+ *   置き先から外れる点は `lost` と同じ）が、**走っていた仕事ごと黙ったわけではない**
+ *   ので移送の元にもなる（`lost` と同じ）。`lost` と違うのは「黙った」のではなく
+ *   「空けると決めた」ことで、この値を立てる口（PR-2）は別 PR に分けてある——
+ *   この PR の時点ではまだ誰もこの値を立てない
  *
  * `unreachable` と `lost` は似て見えるが**別物である**。前者は「まだ開けていない」
  * 宛先で、抱えている仕事は無い。後者は「開けていた」宛先で、**走っていた仕事ごと
  * 黙った**可能性がある — あとで移送の契機になるのはこちらだけである。
+ *
+ * **これはデーモンが計算する値であって、runner から受け取る値ではない。**
+ * 名簿（`RunnerEntry`）の中でこの値を書いている箇所はすべて、接続の結果
+ * （開けた／開けなかった／名乗りが途切れた／空けると決めた）からデーモン自身が
+ * 導いたものであり、runner の応答をそのまま写した箇所は無い。下の
+ * `runnerLivenessSchema` は、この値を HTTP の面（`apps/daemon/src/openapi.ts`）へ
+ * 出す形を1箇所にまとめるためのものであって、runner からの応答を parse する
+ * ためではない。
  */
-export type RunnerLiveness = 'connecting' | 'connected' | 'unreachable' | 'unusable' | 'lost';
+export const runnerLivenessSchema = z.enum([
+  'connecting',
+  'connected',
+  'unreachable',
+  'unusable',
+  'lost',
+  'vacating',
+]);
+
+export type RunnerLiveness = z.infer<typeof runnerLivenessSchema>;
 
 /**
  * runner 1台についての版の状態。`RunnerRevisionReport`（`known` / `unknown`）に
