@@ -3533,17 +3533,20 @@ class Pool implements ManagerPool {
         // 違うことがある——それが移送である（roadmap M5 PR5）。**
         const relocating = job.runnerId !== runnerId;
         /*
-         * **移送してよいのは、記録された宛先が `lost` のときだけである。**
+         * **移送してよいのは、記録された宛先が `lost` または `vacating` の
+         * ときだけである。**
          *
          * `RunnerLiveness` の doc の逐語: 「`unreachable` と `lost` は似て見えるが
          * 別物である。前者は『まだ開けていない』宛先で、抱えている仕事は無い。
          * 後者は『開けていた』宛先で、走っていた仕事ごと黙った可能性がある——
-         * あとで移送の契機になるのはこちらだけである。」
-         * `#isLostRunner` はこの区別を、名簿（`this.#runners.entries()`）に
-         * 実際に立っている行から確かめる——行が無い（＝「黙った」とまだ確かめ
-         * られていない）ときは移送しない。
+         * あとで移送の契機になるのはこちらだけである。」`vacating`（意図して
+         * 空けている最中）も同じ側に立つ——「黙った」のではなく「空けると
+         * 決めた」だけで、走っていた仕事は元の宛先から動かしてよい。
+         * `#shouldRelocateFrom` はこの区別を、名簿（`this.#runners.entries()`）に
+         * 実際に立っている行から確かめる——行が無い（＝まだ確かめられていない）
+         * ときは移送しない。
          */
-        if (relocating && !this.#isLostRunner(job.runnerId)) continue;
+        if (relocating && !this.#shouldRelocateFrom(job.runnerId)) continue;
 
         // **一度「挑み直さない」と決めたものは、自動では二度と触らない。** ここを
         // 抜かすと、同じ runner の別ジョブが一時障害で予約を積むたびに巻き込まれ、
@@ -3988,18 +3991,23 @@ class Pool implements ManagerPool {
   }
 
   /**
-   * その宛先が「黙った」と確かめられているか（`#reattach` の移送の関門。
-   * roadmap M5 PR5）。
+   * その宛先から移送してよいと確かめられているか（`#reattach` の移送の関門。
+   * roadmap M5 PR5。命名は #485 PR-1 で `#isLostRunner` から改めた）。
    *
-   * 名簿にその宛先の行が1つ以上あり、**そのすべてが `lost`** のときだけ
-   * `true` を返す。行が0本のときは `false` である——「開けていた宛先が黙った」
-   * と確かめられていない以上、移送してよいとは言えない（`RunnerLiveness` の
-   * doc: 「`unreachable` と `lost` は似て見えるが別物である。……あとで移送の
-   * 契機になるのはこちらだけである」）。
+   * 名簿にその宛先の行が1つ以上あり、**そのすべてが `lost` または `vacating`**
+   * のときだけ `true` を返す。行が0本のときは `false` である——「開けていた
+   * 宛先から動いてよい」と確かめられていない以上、移送してよいとは言えない
+   * （`RunnerLiveness` の doc: 「`unreachable` と `lost` は似て見えるが別物で
+   * ある。……あとで移送の契機になるのはこちらだけである」）。`vacating` も
+   * 同じ側に立つ——「黙った」のではなく「空けると決めた」だけで、走っていた
+   * 仕事は元の宛先から動かしてよい。
    */
-  #isLostRunner(runnerId: string): boolean {
+  #shouldRelocateFrom(runnerId: string): boolean {
     const matches = this.#runners.entries().filter((entry) => entry.runnerId === runnerId);
-    return matches.length > 0 && matches.every((entry) => entry.state === 'lost');
+    return (
+      matches.length > 0 &&
+      matches.every((entry) => entry.state === 'lost' || entry.state === 'vacating')
+    );
   }
 
   /**

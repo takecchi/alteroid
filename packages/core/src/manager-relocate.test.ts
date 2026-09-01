@@ -403,13 +403,14 @@ describe('落ちた runner の委譲を、別の runner へ移送する（#485 M
 
   /**
    * **`job.runnerId` が無い行を止めているのは2つの門である。** `job.runnerId ===
-   * undefined` で降りる門と、`#isLostRunner` の門である。上の「古いジョブは移送
-   * しない」は後者だけでも通ってしまう——名簿の行がどれも `runnerId` を名乗って
-   * いれば `#isLostRunner(undefined)` は行0本で false を返すからである。
+   * undefined` で降りる門と、`#shouldRelocateFrom`（旧 `#isLostRunner`。#485
+   * PR-1 で改名）の門である。上の「古いジョブは移送しない」は後者だけでも
+   * 通ってしまう——名簿の行がどれも `runnerId` を名乗っていれば
+   * `#shouldRelocateFrom(undefined)` は行0本で false を返すからである。
    *
    * **⚠️ 名乗らないまま黙った宛先が名簿に立つと、そこが割れる。** `RunnerEntry`
    * の `runnerId` は任意なので、`{ runnerId: undefined, state: 'lost' }` の行は
-   * 実在しうる——そのとき `#isLostRunner(undefined)` は真になり、後者の門は
+   * 実在しうる——そのとき `#shouldRelocateFrom(undefined)` は真になり、後者の門は
    * 開く。**ここで見るのは前者の門そのものである。**
    */
   it('名乗らないまま黙った宛先が名簿に在っても、job.runnerId が無い行は移送しない', async () => {
@@ -417,7 +418,7 @@ describe('落ちた runner の委譲を、別の runner へ移送する（#485 M
     await stores.jobs.putJob(jobWith('mgr-9', undefined));
     const fake = createFakeRegistry();
     // **runnerId を名乗らないまま lost になった行。** これが在ると
-    // `#isLostRunner(undefined)` は真を返す（行1本・すべて lost）。
+    // `#shouldRelocateFrom(undefined)` は真を返す（行1本・すべて lost）。
     fake.entries.push(entryOf('名乗らない宛先', 'lost'));
     fake.entries.push(entryOf('runner-b', 'connected', 'runner-b'));
     const runnerB = fakeRunner('runner-b');
