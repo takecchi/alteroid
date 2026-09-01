@@ -465,3 +465,61 @@ describe('落ちた runner の委譲を、別の runner へ移送する（#485 M
     await pool.stop();
   });
 });
+
+/**
+ * `vacating`（#485 PR-1。意図して空けている最中）を移送の元として扱う。
+ *
+ * **この PR では誰も `vacating` を立てない**（立てる口は PR-2）ので、ここは
+ * `entryOf` で直接その状態の行を作り、`#shouldRelocateFrom`（旧
+ * `#isLostRunner`）が `lost` だけでなく `vacating` でも真になることを固定する。
+ * 上の `describe` と対にして別ブロックにしたのは、`lost` の既存の挙動を
+ * 1つも動かしていないことを、この新しい状態のためのテストと分けて見えるように
+ * するためである。
+ */
+describe('vacating な runner からの移送（#485 PR-1）', () => {
+  it('移送が成立する：runner-a が vacating、runner-b が connected なら、runner-b が resume を受ける', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(jobWith('mgr-vacating-1', 'runner-a'));
+    const fake = createFakeRegistry();
+    fake.entries.push(entryOf('runner-a', 'vacating', 'runner-a'));
+    fake.entries.push(entryOf('runner-b', 'connected', 'runner-b'));
+    const runnerB = fakeRunner('runner-b');
+    fake.addClient(runnerB.client);
+    const { pool } = setup(stores, fake.registry);
+
+    pool.relocateFrom('runner-a');
+    await expect.poll(() => runnerB.resumes.length, { timeout: 2000 }).toBe(1);
+
+    const job = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-vacating-1');
+    expect(job?.runnerId).toBe('runner-b');
+
+    await pool.stop();
+  });
+
+  /**
+   * **`#shouldRelocateFrom` が真になるのは `lost` と `vacating` の2値だけである
+   * ことを固定する。** `unreachable` / `unusable` / `connecting` は「まだ一度も
+   * 開けていない」側で、抱えている仕事は無い（`RunnerLiveness` の doc）ので
+   * 移送の元にはならない——ここでは代表として `unreachable` を採る。この歯は
+   * `#shouldRelocateFrom` の条件式が将来 `!== 'connected'` のような広い否定形へ
+   * 緩められたら落ちる。
+   */
+  it('unreachable な宛先からは移送しない（lost / vacating の2値だけが移送の元）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(jobWith('mgr-vacating-2', 'runner-a'));
+    const fake = createFakeRegistry();
+    fake.entries.push(entryOf('runner-a', 'unreachable', 'runner-a'));
+    fake.entries.push(entryOf('runner-b', 'connected', 'runner-b'));
+    const runnerB = fakeRunner('runner-b');
+    fake.addClient(runnerB.client);
+    const { pool } = setup(stores, fake.registry);
+
+    await pool.reattachRunner('runner-b');
+
+    expect(runnerB.resumes).toEqual([]);
+    const job = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-vacating-2');
+    expect(job?.runnerId).toBe('runner-a');
+
+    await pool.stop();
+  });
+});
