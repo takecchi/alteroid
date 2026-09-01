@@ -134,9 +134,7 @@ function jobWith(id: string, workspace: WorkspaceLocator | undefined): Job {
 }
 
 /** マネージャー向け（`restartNudge`）の runner-swap 後の文言を、swap 後の resume から取り出す。 */
-async function runnerSwapNudge(
-  job: Job,
-): Promise<{ message: string; cloneText: string }> {
+async function runnerSwapNudge(job: Job): Promise<{ message: string; cloneText: string }> {
   const stores = createMemoryStores();
   await stores.jobs.putJob(job);
   const fake = swappableRunner();
@@ -258,7 +256,9 @@ describe('runner-swap の一言は job.workspace を読む（#485 の141行目�
 
       await s.pool.restore();
       expect(fake.state.resumes).toHaveLength(1);
-      expect(fake.state.resumes[0]?.message).toBe('[system] デーモンが再起動した。中断していた作業の続きを進めよ。');
+      expect(fake.state.resumes[0]?.message).toBe(
+        '[system] デーモンが再起動した。中断していた作業の続きを進めよ。',
+      );
 
       await s.pool.stop();
     }

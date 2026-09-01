@@ -5718,7 +5718,7 @@ function workspaceAfterSwap(locator: WorkspaceLocator | undefined): WorkspaceAft
       return { kind: 'unverified', path: locator.path };
     default: {
       const exhaustive: never = locator;
-      throw new Error(`unreachable workspace locator: ${JSON.stringify(exhaustive)}`);
+      throw new Error(`未知の workspace locator: ${JSON.stringify(exhaustive)}`);
     }
   }
 }
@@ -5730,9 +5730,7 @@ function workspaceAfterSwap(locator: WorkspaceLocator | undefined): WorkspaceAft
 function workspaceAfterSwapClause(after: WorkspaceAfterSwap): string {
   switch (after.kind) {
     case 'unrecorded':
-      return (
-        '作業ディレクトリが残っているとは限らないので、続きに入る前に手元の状態を確かめよ。'
-      );
+      return '作業ディレクトリが残っているとは限らないので、続きに入る前に手元の状態を確かめよ。';
     case 'unverified':
       return (
         `作業ディレクトリ（${after.path}）が残っているとは限らないので、` +
@@ -5790,7 +5788,8 @@ function restartNudge(
   // 残っている前提で続きを書き始めると、消えた作業を書いたつもりで進む。
   const head =
     cause === 'runner'
-      ? '[system] runner の器が作り直された。' + workspaceAfterSwapClause(workspaceAfterSwap(locator))
+      ? '[system] runner の器が作り直された。' +
+        workspaceAfterSwapClause(workspaceAfterSwap(locator))
       : '[system] デーモンが再起動した。';
   if (status === 'waiting_human') {
     return (
