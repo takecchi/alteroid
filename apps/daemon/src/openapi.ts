@@ -1208,6 +1208,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     reattachRunner() {
       throw new Error('spec 生成専用のスタブ: 取り直しはしない');
     },
+    relocateFrom() {
+      throw new Error('spec 生成専用のスタブ: 移送はしない');
+    },
     probeTurnEnds() {
       throw new Error('spec 生成専用のスタブ: ターン終了の探りはしない');
     },
