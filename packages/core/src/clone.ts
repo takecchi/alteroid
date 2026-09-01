@@ -84,6 +84,7 @@ import {
   CLONE_ACTOR_ID,
   CLONE_DISTILL_ACTOR_ID,
   CLONE_SUB_ACTOR_PREFIX,
+  readSessionUsage,
   usageDate,
   type UsageSite,
   type UsageSnapshot,
@@ -1565,6 +1566,10 @@ class Clone implements CloneHost {
 
     this.#stopped = true;
     this.#wakeInput();
+    // **閉じる前に累積を1回読む**（`#flushSessionUsage` の doc）。デーモンの停止で
+    // ここを通ったぶんは `result` を出さないので、読まなければ台帳に1行も残らない。
+    // `runner.ts` の `stop()` が `#flushUsage()` を同じ位置に置いているのと対である。
+    await this.#flushSessionUsage();
     try {
       this.#query?.close();
     } catch {
@@ -4659,6 +4664,44 @@ class Clone implements CloneHost {
   }
 
   /**
+   * **セッションを畳む直前に、累積を control channel から1回読んで台帳へ積む。**
+   *
+   * ## なぜ要るのか（マネージャー層と同じ穴である）
+   *
+   * `#recordUsage` は `turn_ended` の `usage` からしか積まない。そして
+   * `claude-provider.ts` の `foldClaudeMessage` は逐語「**成功した result の消費だけ
+   * を通す**」なので、**`result` を出さずに終わったターンは `usage` を持たない**
+   * ⟹ `#recordUsage` は逐語「**積める消費が無い回はここで終わる**」で戻る。
+   *
+   * **失われるのは「そのターンぶん」ではなくセッションの末尾ぶんである。** クローン
+   * の台帳は累積（`accumulation: 'cumulative'`）なので、セッションが生きていれば
+   * 次の成功ターンが取り戻す。**取り戻せないのはセッションごと死んだときである**
+   * —— 新しいセッションは累積 0 から始まるので `foldUsageSnapshot` の `detectReset`
+   * が真になり、増分は新しい累積そのものになる。⟹ 前のセッションの、最後に記録
+   * できた点から死ぬまでのぶんは二度と積まれない。
+   *
+   * **マネージャー層は `runner.ts` の `#flushUsage` で既にこれを塞いでいる**
+   * （終わり口2本 `stop()` と `#finish` の両方）。**クローン層だけが塞いでいな
+   * かった。** 読み取りの本体を層で書き分けず `usage.ts` の `readSessionUsage` に
+   * 置いてあるのは、片方だけ消されないためである（そちらの doc に理由の全文）。
+   *
+   * ## 契約
+   *
+   * - **`this.#query?.close()` / `this.#query = null` より先に呼ぶこと。** 閉じた後の
+   *   control channel からは何も取れない
+   * - **投げない。** `readSessionUsage` が口の不在・例外・時間切れを全部
+   *   `undefined` へ畳む。**畳む経路を観測に縛らない**
+   * - **`turnBoundary` は渡さない。** ここはターンの境界ではないので、文脈占有も
+   *   compaction も持たない（`#recordUsage` の `turnBoundary` の doc が蒸留の
+   *   サイドクエリについて言っているのと同じ理由である）
+   */
+  async #flushSessionUsage(): Promise<void> {
+    const models = await readSessionUsage(this.#query);
+    if (models === undefined) return;
+    await this.#recordUsage({ models }, 'session', 'cumulative');
+  }
+
+  /**
    * `result` に載っている消費を台帳へ積む。
    *
    * **モデル id で層を代用しない。** `ALTEROID_CLONE_MODEL` を置けばクローンも
@@ -4847,6 +4890,12 @@ class Clone implements CloneHost {
           );
         }
         this.#finishTurn();
+        // **`#query` を捨てる前に累積を1回読む**（`#flushSessionUsage` の doc）。
+        // ここは直上の逐語のとおり「result を伴わずに終わった」経路 —— 枠切れ
+        // （429）や文脈窓でセッションが落ちた回そのものである。捨ててから読んでも
+        // 何も取れない。`runner.ts` の `#finish` が `#flushUsage()` を `close()` の
+        // 手前に置いているのと対である。
+        await this.#flushSessionUsage();
         this.#query = null;
         // 次のセッションは `#buildOptions` が控え直す。ここで空にしておかないと、
         // 前のセッションで見せた分を「もう見せた」と数えたまま新しいシステム

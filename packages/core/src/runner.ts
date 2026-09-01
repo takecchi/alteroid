@@ -59,8 +59,7 @@ import type { JobStatus } from './schema.js';
 // `foldClaudeMessage`）。ここが受け取るのは、既に中立イベントへ載った印である。
 import { assistantFailureOf, type SdkFailure } from './sdk-failure.js';
 import { classifyUsageNotice } from './usage-limits.js';
-import { settleWithin } from './usage-probe.js';
-import { hasAnyUsage, sessionModelUsageOf } from './usage.js';
+import { readSessionUsage } from './usage.js';
 
 /**
  * manager-runner — SDK を隔離して走らせる層（roadmap M4）。
@@ -602,19 +601,6 @@ const RESOLVED_MEMORY_LIMIT = 512;
 const DENIED_MEMORY_LIMIT = 512;
 
 /**
- * 畳む直前の累積読み取りに与える締め切り。
- *
- * **短くする。** これは観測であって仕事ではないうえ、走っているのは「もう畳むと
- * 決まった後」である。runner 全体の猶予（`apps/runner/src/index.ts` の
- * `SHUTDOWN_GRACE_MS`）はセッション全部で分け合うものなので、1本がここで粘ると
- * 他の本の生ログを渡す時間を食う。**取れなければ取れないままでよい。**
- *
- * これは能力の上限ではなく観測の締め切りである（north_star 禁止2 が禁じているのは
- * 仕事の回数・ターン数の制限であって、best-effort な読み取りの待ち時間ではない）。
- */
-const SESSION_USAGE_READ_TIMEOUT_MS = 5_000;
-
-/**
  * `#onSubagentStop` が `note` の `text` へ積む文字数の上限（#357）。
  *
  * **黙って落とさない**（AGENTS.md「静かに失敗する道具」）。超えたら切り、
@@ -636,18 +622,6 @@ const SUBAGENT_STOP_NOTE_TEXT_LIMIT = 1_500;
  * `#onSubagentStop` の診断（1セッションに1回）でだけ表に出る。
  */
 const BACKGROUND_TASK_OWNER_LIMIT = 500;
-
-/**
- * control channel の `get_usage` だけを抜き出した顔。
- *
- * **省略可能にしてある。** 実験的な口（長い名前のあれ）は SDK 側で改名・削除され
- * うるので、無くなったときに「取れなかった」へ落ちるだけで済むようにする
- * （`usage-probe.ts` の `UsageProbeHandle` と同じ判断）。SDK の `Query` 型では
- * 必須メンバだが、**必須として呼ぶと SDK が1つ改名した瞬間に畳む経路が落ちる。**
- */
-interface SessionUsageReader {
-  usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: () => Promise<unknown>;
-}
 
 /** 返事を待って止まっている1件（許可確認 or 質問）。 */
 interface PendingRequest {
@@ -2018,20 +1992,15 @@ class RunnerSession {
    *   *作らない*ことではない）
    * - 値は累積なので、この1回が `result` 経由の記録と重なっても増分が 0 になるだけ
    *   である（`runner-protocol.ts`「累積なら再送に耐える」）
+   *
+   * **読み取りそのものは `usage.ts` の `readSessionUsage` が持つ。** クローン層の
+   * `clone.ts` の `#flushSessionUsage` が同じものを呼ぶ。**層ごとに書き分けない**
+   * —— 片方だけが直っている状態は、直っていない側の欠落を「使っていない」と
+   * 読ませる（そちらの doc に、なぜ両方要るかを逐語で書いた）。
    */
   async #flushUsage(): Promise<void> {
-    const handle = this.#query as (Query & SessionUsageReader) | null;
-    const read = handle?.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
-    if (handle === null || typeof read !== 'function') return;
-    let answer: Promise<unknown>;
-    try {
-      answer = read.call(handle);
-    } catch {
-      // 呼んだ瞬間に投げる形（transport が既に閉じている）もある。
-      return;
-    }
-    const models = sessionModelUsageOf(await settleWithin(answer, SESSION_USAGE_READ_TIMEOUT_MS));
-    if (models === undefined || !hasAnyUsage(models)) return;
+    const models = await readSessionUsage(this.#query);
+    if (models === undefined) return;
     this.#emit({
       type: 'usage',
       managerId: this.#id,

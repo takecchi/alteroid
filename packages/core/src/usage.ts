@@ -2,6 +2,9 @@ import { z } from 'zod';
 
 // 再輸出（下）とは別に、この中でも使うので取り込む。
 import { USAGE_ESTIMATE_NOTICE, USAGE_LAYERS, USAGE_SITES, ZERO_USAGE } from './usage-format.js';
+// `readSessionUsage` の締め切りに使う。**`usage-probe.ts` はこのファイルを
+// import していない**（SDK の型だけを型 import している）ので、循環しない。
+import { settleWithin } from './usage-probe.js';
 
 /**
  * Claude の利用状況の台帳（消費した側の記録）。
@@ -513,7 +516,7 @@ export function modelUsageOf(message: unknown): Record<string, UsageTotals> | un
  * で確認）。型は `result.modelUsage` と同じ `Record<string, ModelUsage>` で、
  * **意味も同じ累積**である。違うのは `result` を待たずに読めることだけで、だから
  * 「`result` を出さずに死んだセッション」の消費はここからしか取れない
- * （`runner.ts` の `#flushUsage`）。
+ * （{@link readSessionUsage}）。
  *
  * **枠の利用率（`rate_limits`）と混ぜないこと。** 同じ応答に載っているが、あちらは
  * アカウント全体の話で、台帳（自分が使った分の推定）とは別物である
@@ -524,6 +527,82 @@ export function sessionModelUsageOf(response: unknown): Record<string, UsageTota
   const session = (response as { session?: unknown }).session;
   if (typeof session !== 'object' || session === null) return undefined;
   return toModelTotals((session as { model_usage?: unknown }).model_usage);
+}
+
+/**
+ * control channel の `get_usage` だけを抜き出した顔。
+ *
+ * **省略可能にしてある。** 実験的な口（長い名前のあれ）は SDK 側で改名・削除され
+ * うるので、無くなったときに「取れなかった」へ落ちるだけで済むようにする
+ * （`usage-probe.ts` の `UsageProbeHandle` と同じ判断）。SDK の `Query` 型では
+ * 必須メンバだが、**必須として呼ぶと SDK が1つ改名した瞬間に畳む経路が落ちる。**
+ */
+export interface SessionUsageReader {
+  usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: () => Promise<unknown>;
+}
+
+/**
+ * 畳む直前の累積読み取りに与える締め切り。
+ *
+ * **短くする。** これは観測であって仕事ではないうえ、走っているのは「もう畳むと
+ * 決まった後」である。runner 全体の猶予（`apps/runner/src/index.ts` の
+ * `SHUTDOWN_GRACE_MS`）はセッション全部で分け合うものなので、1本がここで粘ると
+ * 他の本の生ログを渡す時間を食う。**取れなければ取れないままでよい。**
+ *
+ * これは能力の上限ではなく観測の締め切りである（north_star 禁止2 が禁じているのは
+ * 仕事の回数・ターン数の制限であって、best-effort な読み取りの待ち時間ではない）。
+ */
+export const SESSION_USAGE_READ_TIMEOUT_MS = 5_000;
+
+/**
+ * **畳む直前に、このセッションの累積を control channel から1回読む。**
+ *
+ * ## なぜ層が2つとも同じこれを呼ぶのか（片方を消さないための逐語）
+ *
+ * 台帳へ入るのは成功した `result` の消費だけである（`modelUsageOf` と
+ * `isSuccessResult`）。⟹ **`result` を出さずに終わったセッションは1行も残さない。**
+ * `runner.ts` の `#finish` はこれを逐語でこう言っている——「ここを通るのは
+ * クラッシュ・`lost`・`failed`、つまり **`result` が出ないまま終わる経路そのもの
+ * である**」。
+ *
+ * **同じ理由がクローン層にも掛かる。** クローンの台帳は累積（`accumulation:
+ * 'cumulative'`）なので、セッションが生きているあいだは次の成功ターンが取り戻す。
+ * **取り戻せないのはセッションごと死んだときである** —— 新しいセッションは累積 0
+ * から始まるので `detectReset` が真になり、増分は新しい累積そのものになる
+ * （`foldUsageSnapshot`）。⟹ **前のセッションの、最後に記録できた点から死ぬまでの
+ * ぶんは二度と積まれない。** 枠切れ（429）でセッションが落ちるたびに、その末尾が
+ * 落ちる。
+ *
+ * ⟹ **層ごとに片方だけ在る状態にしないこと。** 片方だけ直っていると、直って
+ * いない側の欠落は「使っていない」と読める（AGENTS.md 地雷表「取れない軸に 0 の
+ * 行を作る」の、値すら作らない側の顔である）。呼び手は
+ * `runner.ts` の `#flushUsage` と `clone.ts` の `#flushSessionUsage` の2つで、
+ * **どちらも「閉じる前」に置く。**
+ *
+ * ## 契約
+ *
+ * - **`close()` より先に呼ぶこと。** 閉じた後の control channel からは何も取れない
+ * - **投げない。** 口が無い / 呼んだ瞬間に投げる / 返事が来ない のどれでも
+ *   `undefined` を返す。**畳む経路を観測に縛らない**
+ * - **全部ゼロなら `undefined` を返す**（`hasAnyUsage`）。「記録が無い」が
+ *   「$0.00 使った」に化けないため
+ */
+export async function readSessionUsage(
+  handle: unknown,
+): Promise<Record<string, UsageTotals> | undefined> {
+  const reader = handle as SessionUsageReader | null;
+  const read = reader?.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
+  if (reader === null || reader === undefined || typeof read !== 'function') return undefined;
+  let answer: Promise<unknown>;
+  try {
+    answer = read.call(reader);
+  } catch {
+    // 呼んだ瞬間に投げる形（transport が既に閉じている）もある。
+    return undefined;
+  }
+  const models = sessionModelUsageOf(await settleWithin(answer, SESSION_USAGE_READ_TIMEOUT_MS));
+  if (models === undefined || !hasAnyUsage(models)) return undefined;
+  return models;
 }
 
 /**
