@@ -2752,7 +2752,7 @@ class Pool implements ManagerPool {
       const runner = await this.#runnerOf(record);
       if (!runner) continue;
 
-      const nudge = restartNudge(job.status, 'daemon');
+      const nudge = restartNudge(job.status, 'daemon', job.workspace);
       // **1本が戻せなくても、残りを道連れにしない。** ここで抜けると、後ろに
       // 並んでいた仕事が誰にも拾われないまま `running` として残る。
       //
@@ -3435,7 +3435,7 @@ class Pool implements ManagerPool {
         // **1本が戻せなくても、残りを道連れにしない。** ここで抜けると、後ろに
         // 並んでいた仕事が誰にも拾われないまま `running` として残る。
         try {
-          const message = restartNudge(status, 'runner');
+          const message = restartNudge(status, 'runner', record.job.workspace);
           // 断りが「新しく起きたこと」かを、挑む前の状態で覚えておく（下の日誌の条件）。
           const refusedBefore = record.leaseRefusal !== undefined;
           // 上の doc の順序。**戻れたら下で消す。**
@@ -5360,10 +5360,11 @@ class Pool implements ManagerPool {
             '返事待ちだった確認は器と一緒に失われているので、必要ならマネージャーが聞き直してくる。',
         // **作業ディレクトリが空かもしれないことを黙っていない。** 器に永続化が
         // 無ければコミット前の変更は消えている（roadmap M5「workspace 復旧」）。
-        cause === 'runner'
-          ? '器に永続化が無ければ、コミット前の変更は失われている。' +
-            '同じ結果を期待せず、手元の状態から組み立て直させること。'
-          : '',
+        // **判定は `workspaceAfterSwap` に委ねる**（`restartNudge` と同じ判定を
+        // 二重に書かない）。**path は出さない** — 直前の行で既に
+        // `作業ディレクトリ: ${job.cwd ?? '(不明)'}` を出しているので、重ねると
+        // 読む側が2つの値を突き合わせることになる。
+        cause === 'runner' ? cloneWorkspaceAfterSwapLine(workspaceAfterSwap(job.workspace)) : '',
       ]
         .filter((line) => line !== '')
         .join('\n'),
@@ -5680,14 +5681,116 @@ function sendFailureDetail(managerId: string, resumeDetail: string, missing: boo
 
 type RestartCause = 'daemon' | 'runner';
 
+/**
+ * 器が入れ替わった後、台帳の locator が作業ディレクトリについて何を言えるか。
+ *
+ * **言い方の持ち主を1つにする**（`resumeFailureDetail` と同じ理由）。マネージャー
+ * 向けの `restartNudge` とクローン向けの `#notifyRestored` は、どちらも同じ
+ * `job.workspace` から同じ判定を引く。ここを2箇所に書くと、直したつもりが片方
+ * だけになる。
+ */
+type WorkspaceAfterSwap =
+  | { kind: 'kept'; path: string }
+  | { kind: 'rebuild'; repository: string; ref: string }
+  | { kind: 'unverified'; path: string }
+  | { kind: 'unrecorded' };
+
+/**
+ * `locator` から `WorkspaceAfterSwap` を出す。
+ *
+ * **`runner-volume` を `kept` にしない。** `workspaceLocatorSchema` の
+ * `runner-volume` の doc が逐語で言うとおり、あの変種は**それ以前に書かれた行が
+ * 名乗っている値であり、確かめた結果ではない**。行そのものに新旧の目印が無いので
+ * 読む側に区別する手が無い——区別できないまま「volume に在るので残っている」と
+ * 読むと、`unknown` 変種が消したはずの嘘（存在しない永続性の主張）を読む側から
+ * 再開することになる。だから保守的な側（`unverified`）へ倒す。
+ */
+function workspaceAfterSwap(locator: WorkspaceLocator | undefined): WorkspaceAfterSwap {
+  if (locator === undefined) return { kind: 'unrecorded' };
+  switch (locator.kind) {
+    case 'shared-volume':
+      return { kind: 'kept', path: locator.path };
+    case 'git':
+      return { kind: 'rebuild', repository: locator.repository, ref: locator.ref };
+    case 'unknown':
+      return { kind: 'unverified', path: locator.path };
+    case 'runner-volume':
+      return { kind: 'unverified', path: locator.path };
+    default: {
+      const exhaustive: never = locator;
+      throw new Error(`unreachable workspace locator: ${JSON.stringify(exhaustive)}`);
+    }
+  }
+}
+
+/**
+ * `restartNudge` の `cause === 'runner'` の下の句。**`unrecorded` は今日と
+ * 1バイトも違わないこと**（情報が無いなら新しい主張をしない）。
+ */
+function workspaceAfterSwapClause(after: WorkspaceAfterSwap): string {
+  switch (after.kind) {
+    case 'unrecorded':
+      return (
+        '作業ディレクトリが残っているとは限らないので、続きに入る前に手元の状態を確かめよ。'
+      );
+    case 'unverified':
+      return (
+        `作業ディレクトリ（${after.path}）が残っているとは限らないので、` +
+        '続きに入る前に手元の状態を確かめよ。'
+      );
+    case 'kept':
+      return (
+        `作業ディレクトリ（${after.path}）は器を跨いで共有されているので、中身は残っている。` +
+        'ただし書きかけで落ちた可能性はあるので、続きに入る前に手元の状態を確かめよ。'
+      );
+    case 'rebuild':
+      return (
+        `作業ディレクトリは器と一緒に失われている。${after.repository} の ${after.ref} を` +
+        'clone し直してから、続きに入れ。コミットしていなかった変更は残っていないので、' +
+        '必要なら書き直すこと。'
+      );
+  }
+}
+
+/**
+ * `#notifyRestored` の `cause === 'runner'` で足す1行。**`restartNudge` とは
+ * 読み手が違う**（クローン向け）ので文言は別に持つが、判定は同じ
+ * `workspaceAfterSwap` を通す。**`unrecorded` / `unverified` は今日と1バイトも
+ * 違わないこと**（情報が無いなら新しい主張をしない）。**path は出さない** —
+ * 呼び出し元が既に `作業ディレクトリ: ${job.cwd ?? '(不明)'}` を出している。
+ */
+function cloneWorkspaceAfterSwapLine(after: WorkspaceAfterSwap): string {
+  switch (after.kind) {
+    case 'unrecorded':
+    case 'unverified':
+      return (
+        '器に永続化が無ければ、コミット前の変更は失われている。' +
+        '同じ結果を期待せず、手元の状態から組み立て直させること。'
+      );
+    case 'kept':
+      return (
+        '作業ディレクトリは器を跨いで共有されているので、コミット前の変更も残っている。' +
+        'ただし書きかけで落ちた可能性はあるので、手元を確かめさせること。'
+      );
+    case 'rebuild':
+      return (
+        `作業ディレクトリは器と一緒に失われている。${after.repository} の ${after.ref} から` +
+        '作り直させること。コミットしていなかった変更は残っていない。'
+      );
+  }
+}
+
 /** 再起動後に流す一言。**開き直すだけでは仕事は進まない。** */
-function restartNudge(status: JobStatus, cause: RestartCause): string {
+function restartNudge(
+  status: JobStatus,
+  cause: RestartCause,
+  locator: WorkspaceLocator | undefined,
+): string {
   // **runner が入れ替わったことを「デーモンが再起動した」と伝えない。** 手元が
   // 残っている前提で続きを書き始めると、消えた作業を書いたつもりで進む。
   const head =
     cause === 'runner'
-      ? '[system] runner の器が作り直された。作業ディレクトリが残っているとは限らないので、' +
-        '続きに入る前に手元の状態を確かめよ。'
+      ? '[system] runner の器が作り直された。' + workspaceAfterSwapClause(workspaceAfterSwap(locator))
       : '[system] デーモンが再起動した。';
   if (status === 'waiting_human') {
     return (
