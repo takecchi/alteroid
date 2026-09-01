@@ -552,6 +552,7 @@ export {
   runnerEventSchema,
   runnerExecutionResourcesSchema,
   runnerLeaseSchema,
+  runnerLivenessSchema,
   runnerManagerStateSchema,
   runnerMessageCommandSchema,
   runnerPlacementResourcesSchema,
