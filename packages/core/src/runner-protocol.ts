@@ -1627,6 +1627,28 @@ export interface RunnerRegistry {
   register(source: RunnerSource): Promise<void>;
   /** 名簿から外す（背景の挑み直しも畳む）。label は `register` に渡したもの。 */
   unregister(label: string): Promise<void>;
+  /**
+   * その宛先を意図して空ける（drain。#485 PR-2）。**同期で完結し、往復
+   * （RPC）は発生しない。**
+   *
+   * **これはデーモン内部の名簿の操作であって、runner が理解すべき新しいもの
+   * ではない。** 名簿の該当 entry の `state` を `'vacating'` へ倒すだけで、
+   * runner 側には何も投げない——`runnerLivenessSchema` の doc「これはデーモンが
+   * 計算する値であって、runner から受け取る値ではない」と同じ理由で、この口も
+   * `RunnerClient`（runner への口）ではなく `RunnerRegistry`（デーモン内部の
+   * 名簿）に置いてある。
+   *
+   * **効果は `list()` からその瞬間に外れることだけ。** `vacating` は `lost` と
+   * 同じく置き先には並ばない（`Registry#list` の doc）。走っていた委譲を実際に
+   * 移す・止めるのはこの口の仕事ではない——呼び出し元（`ManagerPool`）が
+   * 「確かめた停止」の握手（`#confirmStoppedAndReleaseLease`）と
+   * `relocateFrom` を別に行う（`relocateFrom` の doc）。`relocateFrom` と
+   * 同じ層・同じ形（同期・`void` 返し）に揃えてある。
+   *
+   * 名簿に無い（または一致する `runnerId` が無い）ときは何もしない
+   * （`unregister` と同じ作法）。
+   */
+  vacate(runnerId: string): void;
   /** 登録されている全部。繋がっていないものも並ぶ（`GET /runners` の材料）。 */
   entries(): RunnerEntry[];
   /**
@@ -2085,6 +2107,34 @@ class Registry implements RunnerRegistry {
     // **外した宛先の口は閉じる。** 名簿から消えたのに SSE だけ残ると、誰も宛先と
     // して選べない runner のイベントがデーモンに流れ続ける。
     await entry.client?.close().catch(() => undefined);
+  }
+
+  /**
+   * `runnerId` を名乗った entry を `'vacating'` へ倒す。**インターフェース側の
+   * doc（`vacate` の doc）が持つ約束をそのまま実装するだけで、ここに追加の
+   * 判断は無い。**
+   *
+   * **`alive` はここでは触らない。** `alive` は `#markSeen` / `#markSilent` が
+   * 「黙ったかどうか」を判定するための前回値であって、意図して空けたことは
+   * これとは別の軸である。もし `false` へ倒すと、次の heartbeat が成功した
+   * 瞬間に `#markSeen` の「戻ってきた」分岐（`entry.alive === false` を見る方）
+   * を通り、`entry.state` が黙って `'connected'` へ書き戻される
+   * （`#markSeen` の該当行を参照）。`alive` を `true` のまま残せば、その分岐は
+   * 「一時的にこけていただけ」の早期 return（`if (entry.alive) { … return; }`）
+   * を通るだけで `state` には触らない——生きている heartbeat が `vacating` を
+   * 踏み潰さないのは、この分岐の作りそのものが理由であって、たまたまではない。
+   *
+   * **一致する entry が複数ありうる**（`runnerId` の一意性は roadmap M5 PR4 の
+   * fencing 待ちの既知のギャップ、`#selectByName` の doc）。ここでは `get` の
+   * ような「1台だけ返す」実装は選ばない——空けたいのに片方だけ残ると、その
+   * 生き残りへ新しい委譲が置かれ続ける。だから一致する全部を倒す。
+   */
+  vacate(runnerId: string): void {
+    for (const entry of this.#entries.values()) {
+      if (entry.client?.runnerId !== runnerId) continue;
+      entry.state = 'vacating';
+      entry.since = new Date().toISOString();
+    }
   }
 
   /**

@@ -74,9 +74,15 @@ function entryOf(label: string, state: RunnerLiveness, runnerId?: string): Runne
 }
 
 /**
- * `RunnerRegistry` の8メンバを満たす偽物。**この試験群で使うのは `get` /
+ * `RunnerRegistry` の9メンバを満たす偽物。**この試験群で使うのは `get` /
  * `entries` の2つだけ**（`#reattach` が実際に読むのはこの2つである）。残りは
  * 型を満たすだけで、呼ばれたら「使わない」と分かる形にしてある。
+ *
+ * **`vacate` だけは「使わない」にしていない。** 本物（`Registry#vacate`）と
+ * 同じ効果（`entries` の該当行を `'vacating'` へ倒す）を持たせてある——
+ * `ManagerPool.vacate()`（#485 PR-2）を試験するとき、`fake.entries.push` で
+ * 手で先に `'vacating'` を置く形と、`pool.vacate()` を呼んで名簿側から
+ * 倒させる形の両方を、同じ偽物で試せるようにするためである。
  */
 function createFakeRegistry(): {
   registry: RunnerRegistry;
@@ -106,6 +112,11 @@ function createFakeRegistry(): {
     },
     async unregister() {
       /* この試験群では使わない。 */
+    },
+    vacate(runnerId) {
+      for (const entry of entries) {
+        if (entry.runnerId === runnerId) entry.state = 'vacating';
+      }
     },
     entries() {
       // **試験が直接 push / 変異させた行を、呼ばれるたびに読み直す。** コピーを

@@ -7027,6 +7027,7 @@ describe('宛先の器が黙ったことを live が見る', () => {
       select: (input) => registry.select(input),
       register: (source) => registry.register(source),
       unregister: (label) => registry.unregister(label),
+      vacate: (id) => registry.vacate(id),
       subscribe: (onOpen) => registry.subscribe(onOpen),
       stop: () => registry.stop(),
       entries: () =>

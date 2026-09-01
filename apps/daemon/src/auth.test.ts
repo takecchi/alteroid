@@ -39,6 +39,7 @@ function stubClone(): CloneHost {
     reattachRunner: () => Promise.resolve(),
     // 認証境界の検証では触らない（型を満たすだけの空スタブで足りる）。
     relocateFrom: () => undefined,
+    vacate: () => Promise.resolve(),
     probeTurnEnds: () => Promise.resolve(),
     stop: () => Promise.resolve(),
   };

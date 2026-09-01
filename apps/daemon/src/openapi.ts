@@ -1216,6 +1216,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     relocateFrom() {
       throw new Error('spec 生成専用のスタブ: 移送はしない');
     },
+    vacate() {
+      throw new Error('spec 生成専用のスタブ: 空けない');
+    },
     probeTurnEnds() {
       throw new Error('spec 生成専用のスタブ: ターン終了の探りはしない');
     },

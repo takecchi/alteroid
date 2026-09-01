@@ -826,6 +826,33 @@ export interface ManagerPool {
    */
   relocateFrom(runnerId: string): void;
   /**
+   * その runner を意図して空ける（drain。#485 PR-2）。**HTTP の面
+   * （`POST /runners/vacate`）が呼ぶ、唯一の受け口である。**
+   *
+   * 3段で構成する。**順序そのものが要点なので、入れ替えない:**
+   *
+   * 1. **まず名簿へ `'vacating'` を立てる**（`RunnerRegistry#vacate`）。
+   *    ここを最初にするのは、そうしないと `list()` / `select()` が
+   *    まだこの宛先を置き先として返し続けるからである——`stop()` してから
+   *    `vacate()` を呼ぶ順序だと、**セッションを止めて貸し出しを返した直後の
+   *    窓に新しい委譲が置かれうる**（空けている最中に仕事が入り、drain が
+   *    終わらない）。先に立てておけば、その瞬間から置き先を外れる。
+   * 2. その runner に載っている委譲それぞれに「確かめた停止」の握手
+   *    （`#confirmStoppedAndReleaseLease`）をする。**`record.job.status` は
+   *    `'stopped'` にしない。`#retire` も呼ばない**——drain は終わらせるの
+   *    ではなく移すためで、終端にすると `#reattach()` の
+   *    `status !== 'running' && status !== 'waiting_human'` の関門に引っかかり、
+   *    二度と移送されなくなる（`#confirmStoppedAndReleaseLease` の doc「呼び
+   *    出し元が決めること」）。
+   * 3. `relocateFrom(runnerId)` を呼ぶ。貸し出しを先に返してあるので、期限を
+   *    待たずに他の `connected` な runner へ移る。
+   *
+   * **どちらの順序も失敗しうるが、1 を先にする側だけが回復不能な窓を作らない。**
+   * 先に立てて途中で失敗しても安全側に倒れる——`#shouldRelocateFrom` が真の
+   * ままなので移送は続き、貸し出しの関門が二重実行を止める。
+   */
+  vacate(runnerId: string): Promise<void>;
+  /**
    * 走行中のマネージャーについて、生ログの末尾から「ターンが終わっているらしい」
    * という助言を計算し直す（Issue #567）。
    *
@@ -2754,6 +2781,56 @@ class Pool implements ManagerPool {
         .map((entry) => entry.runnerId as string),
     );
     for (const target of targets) void this.#reattach(target);
+  }
+
+  async vacate(runnerId: string): Promise<void> {
+    if (this.#stopped) return;
+
+    /*
+     * **1. 先に立てる。** ここを最初にしないと `list()` / `select()` は
+     * まだこの宛先を置き先として返す——下の2で貸し出しを返した直後の窓に
+     * 新しい委譲が置かれ、drain が終わらなくなる（`vacate` 宣言側の doc、
+     * 順序そのものが要点である）。
+     */
+    this.#runners.vacate(runnerId);
+
+    /*
+     * **2. その runner に載っている委譲へ「確かめた停止」の握手をする。**
+     * ジョブの一覧は台帳から引く——`#records`（プロセス内の像）はまだこの
+     * ジョブを持っていないことがある（`#reattach` の同じ理由の注記「ジョブの
+     * 一覧は store から引く」）。
+     */
+    const runner = await this.#runners.get(runnerId).catch(() => null);
+    if (runner !== null && !this.#stopped) {
+      const jobs = await this.#stores.jobs.listJobs().catch(() => []);
+      for (const job of jobs) {
+        if (this.#stopped) break;
+        if (job.runnerId !== runnerId) continue;
+        const known = this.#records.get(job.id);
+        const status = known?.job.status ?? job.status;
+        // 走っていないもの（`done` / `stopped` / `lost` / `failed` 等）には
+        // 握手が要らない——`runner.stop()` に届けるものが無い。
+        if (status !== 'running' && status !== 'waiting_human') continue;
+        const record = known ?? (await this.#load(job.id));
+        if (record === null) continue;
+        const { outcome } = await this.#confirmStoppedAndReleaseLease(record, runner, job.id);
+        /*
+         * **`record.job.status` は書かない。`#retire` も呼ばない。** drain は
+         * 終わらせるのではなく移すためで、終端にすると `#reattach()` の
+         * `status !== 'running' && status !== 'waiting_human'` の関門に
+         * 引っかかり、二度と移送されなくなる（`#confirmStoppedAndReleaseLease`
+         * の doc「呼び出し元が決めること」、`vacate` 宣言側の doc）。
+         *
+         * **貸し出しの解放だけは永続化する。** ここを persist しないと、
+         * 下の3が呼ぶ `#reattach` は期限が切れるまで移送を待つ——せっかく
+         * ここで返した貸し出しが、台帳には残ったままになる。
+         */
+        if (outcome === 'stopped') await this.#persist(record);
+      }
+    }
+
+    // **3. 移送を起こす。** 貸し出しを先に返してあるので、期限を待たずに移る。
+    this.relocateFrom(runnerId);
   }
 
   async #restoreExclusive(): Promise<ManagerSummary[]> {
