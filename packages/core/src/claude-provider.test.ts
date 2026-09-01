@@ -362,4 +362,136 @@ describe('foldClaudeMessage — result', () => {
   it('知らない種類のメッセージは0個になる', () => {
     expect(foldClaudeMessage(sdk({ type: 'まだ知らない種類' }))).toEqual([]);
   });
+
+  it('`result.usage`（メインループだけの生の消費）は `mainLoopUsage` として運ぶ。**`modelUsage` とは別物**', () => {
+    const event = only(
+      sdk({
+        type: 'result',
+        subtype: 'success',
+        result: 'できた',
+        session_id: 'sess-9',
+        modelUsage: {
+          'claude-opus-4-1': {
+            inputTokens: 10,
+            outputTokens: 20,
+            costUSD: 0.5,
+            webSearchRequests: 0,
+          },
+        },
+        usage: {
+          input_tokens: 7,
+          output_tokens: 3,
+          cache_read_input_tokens: 100,
+          cache_creation_input_tokens: 40,
+        },
+      }),
+    );
+
+    expect(event).toMatchObject({
+      usage: {
+        mainLoopUsage: {
+          inputTokens: 7,
+          outputTokens: 3,
+          cacheReadInputTokens: 100,
+          cacheCreationInputTokens: 40,
+        },
+      },
+    });
+  });
+
+  it('**失敗した result の `result.usage` も載せない**（`modelUsage` と同じ絞り）', () => {
+    const event = only(
+      sdk({
+        type: 'result',
+        subtype: 'error_during_execution',
+        modelUsage: {
+          'claude-opus-4-1': { inputTokens: 0, outputTokens: 0, costUSD: 0, webSearchRequests: 0 },
+        },
+        usage: {
+          input_tokens: 1,
+          output_tokens: 1,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
+      }),
+    );
+
+    // `modelUsage` が無い＝ `usage` 欄自体が無い（`mainLoopUsage` も道連れで消える）。
+    expect(event).not.toHaveProperty('usage');
+  });
+
+  it('`result.usage` の欄が読めない形なら `mainLoopUsage` を作り物で埋めない', () => {
+    const event = only(
+      sdk({
+        type: 'result',
+        subtype: 'success',
+        result: 'できた',
+        modelUsage: {
+          'claude-opus-4-1': {
+            inputTokens: 10,
+            outputTokens: 20,
+            costUSD: 0.5,
+            webSearchRequests: 0,
+          },
+        },
+        usage: { input_tokens: 7 }, // 他の欄が欠けている
+      }),
+    );
+
+    expect(event.type === 'turn_ended' && event.usage?.mainLoopUsage).toBeUndefined();
+  });
+});
+
+describe('foldClaudeMessage — compact_boundary', () => {
+  it('compaction は trigger / preTokens / postTokens を運ぶ', () => {
+    const event = only(
+      sdk({
+        type: 'system',
+        subtype: 'compact_boundary',
+        compact_metadata: { trigger: 'auto', pre_tokens: 180_000, post_tokens: 42_000 },
+      }),
+    );
+
+    expect(event).toEqual({
+      type: 'compaction',
+      trigger: 'auto',
+      preTokens: 180_000,
+      postTokens: 42_000,
+    });
+  });
+
+  it('`post_tokens` が省かれた回は欄ごと省く（optional なため）', () => {
+    const event = only(
+      sdk({
+        type: 'system',
+        subtype: 'compact_boundary',
+        compact_metadata: { trigger: 'manual', pre_tokens: 100 },
+      }),
+    );
+
+    expect(event).toEqual({ type: 'compaction', trigger: 'manual', preTokens: 100 });
+    expect(event).not.toHaveProperty('postTokens');
+  });
+
+  it('読めない形（`trigger` が2値のどちらでもない・`pre_tokens` が数値でない）は0個になる。作り物を返さない', () => {
+    expect(
+      foldClaudeMessage(
+        sdk({
+          type: 'system',
+          subtype: 'compact_boundary',
+          compact_metadata: { trigger: 'それ以外', pre_tokens: 100 },
+        }),
+      ),
+    ).toEqual([]);
+    expect(
+      foldClaudeMessage(
+        sdk({
+          type: 'system',
+          subtype: 'compact_boundary',
+          compact_metadata: { trigger: 'auto', pre_tokens: '100' },
+        }),
+      ),
+    ).toEqual([]);
+    expect(foldClaudeMessage(sdk({ type: 'system', subtype: 'compact_boundary' }))).toEqual([]);
+  });
 });

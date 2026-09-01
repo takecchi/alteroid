@@ -787,6 +787,10 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
    * これで全て。`#recordUsage` の早期 return（1・3）と `case 'usage'` の
    * `try`/`catch`（2）を読めば数え上げが閉じる。
    *
+   * **これは「行が無い」理由であって、「行の中の欄が無い」理由ではない。**
+   * `contextUsage` / `compactions` / `mainLoopUsage` は行が在っても個別に
+   * 無いことがある —— それぞれの doc に理由がある（取り違えないこと）。
+   *
    * - `id` / `at` はストアが埋める（他の型と同じ）。
    */
   z.object({
@@ -859,6 +863,152 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
       .object({
         fromCostUsd: z.number().nonnegative(),
         toCostUsd: z.number().nonnegative(),
+      })
+      .optional(),
+    /**
+     * ターンの境界で聞いた文脈窓の占有（`clone.ts` の `#observeContextUsage`。
+     * SDK の control channel `Query.getContextUsage()` の写し）。
+     *
+     * ## 何のために置いたか
+     *
+     * `models` はモデル別の**消費**（累積の増分）であって、**残りの窓**を
+     * 言わない。文脈窓は消費と別の理由でも減る — 記憶ファイルの再注入・
+     * MCP 道具のスキーマ・システムプロンプトはどれもターンをまたいで
+     * 焼き込まれ続けるので、「今日いくら使ったか」が同じでも「あと何文字
+     * 積めるか」は日によって違う。ここは後者を、`#recordUsage` が
+     * `turn_usage` を書く直前に1回だけ聞いて添える。
+     *
+     * ## 「観測していない」と「試して失敗した」を区別する
+     *
+     * **欄そのものが無い行は「観測していない」** —— この欄が増える前に
+     * 書かれた行、または `this.#query` が既に無かった回（`clone.ts` の
+     * `#observeContextUsage` は `this.#query === null` のとき呼ばずに
+     * `undefined` を返す）。**欄は在るが `error` が付いている行は「試して
+     * 失敗した」**（`getContextUsage()` が例外を投げた・タイムアウトした
+     * 等）。**`error` が無い行だけが実際に読めた値を持つ。** この3値の
+     * 使い分けは `clone.ts` の `#forgetObservedFacts` が採る「`null` ＝
+     * まだ観測していない」という作法を、日誌の1行という単位へ持ち込んだ
+     * ものである。
+     *
+     * **失敗してもターンは止めない。** `#observeContextUsage` は例外を
+     * 内側で受け止め、`error` として運ぶだけである —— 文脈占有が読めない
+     * ことは、ターンの結果そのものとは無関係である。
+     *
+     * **`error` の文言に秘密を含めない。** `usage-probe.ts` の
+     * `describeProbeError` / `redactEnvSecrets`（既にある伏せ字の作法）を
+     * そのまま再利用している。新しい伏せ字の仕組みは作っていない。
+     *
+     * `durationMs` は成功・失敗を問わず必ず入る —— **この呼び出し自体の
+     * 所要時間**（ターンの境界で毎回1回、control channel の往復が増える
+     * ことの影響を、測らずに「軽いはず」と決めつけないための値。実測は
+     * PR 本文の「言えないこと」を見よ ―― この PR ではこの値そのものは
+     * まだ実機で走らせて確かめていない）。
+     *
+     * **⚠️ この行が無くても「増分ゼロだった」と読めるとは限らない。**
+     * `#recordUsage` は `fold.delta` が空の回、`usage` が `undefined` の回
+     * （失敗したターン）は `turn_usage` の行自体を書かない（`models` の doc
+     * 「行が無い理由は3つある」）。**その回は `#observeContextUsage` を
+     * 呼んでいても、結果は行ごと捨てる** —— 文脈占有を聞くこと自体は
+     * 成功しても、増分が無ければ載せる場所（`turn_usage` の行）が無いため
+     * である。つまりこの行の有無だけでは「その回は観測しなかった」のか
+     * 「観測はしたが増分ゼロで行自体が無い」のかを区別できない —— 区別が
+     * 要るなら `exchange` 等の他の跡と突き合わせること。
+     */
+    contextUsage: z
+      .object({
+        durationMs: z.number().int().nonnegative(),
+        totalTokens: z.number().int().nonnegative().optional(),
+        rawMaxTokens: z.number().int().nonnegative().optional(),
+        percentage: z.number().nonnegative().optional(),
+        autoCompactThreshold: z.number().nonnegative().optional(),
+        isAutoCompactEnabled: z.boolean().optional(),
+        /** 試して失敗した理由（秘密は伏せてある）。無ければ成功。 */
+        error: z.string().optional(),
+      })
+      .optional(),
+    /**
+     * このターンの中で起きた compaction（SDK の
+     * `SDKCompactBoundaryMessage.compact_metadata` の写し）。
+     *
+     * **`turn_ended` は1ターンに1回だが、compaction はターンの途中で届く
+     * 別のメッセージ（`system`/`compact_boundary`）である。** だから
+     * `foldSystemMessage`（`claude-provider.ts`）で中立イベント
+     * （`agent-events.ts` の `AgentCompactionEvent`）へ写し、`clone.ts` が
+     * ターンの間だけ `Turn.compactions` として保持して、ここへまとめて
+     * 載せる。
+     *
+     * **`foldSystemMessage` は元々これを見ていなかった**（`return []` で
+     * 落としていた）。`task_progress` 等の「見ないと決めてある」種類とは
+     * 違い、これは判断ではなく単純な抜けである — compaction はターンの
+     * 途中でトークンを大きく動かすので、消費の増分（`models`）だけを見て
+     * いると「このターンは何もしていないのに高い」という行が説明なく
+     * 現れうる。
+     *
+     * **配列にしてあるのは「1ターンに複数回」を否定できないからである**
+     * （manual と auto が同じターンで両方起きる形を排除する根拠が無い）。
+     * **空配列は作らない** —— 起きなければキーごと省く（AGENTS.md 地雷表
+     * 「取れない軸に0の行を作る」と同じ理由）。「compaction が0回だった」と
+     * 「compaction を見ていない」を区別する必要はここには無い —— 見た上で
+     * 0件なら、それは単に起きなかったという事実である（`contextUsage` の
+     * ような能動的な probe ではなく、provider が出した合図を受け取るだけの
+     * 受動的な観測なので、「試したが失敗した」という第3の状態が無い）。
+     *
+     * **ターンの外で起きた分は拾えない。** `clone.ts` の `#apply` は
+     * `this.#turn` が `null` のとき（人間ともクローン自身とも話していない
+     * 窓）に届いた `compaction` イベントを静かに捨てる —— 対応する
+     * `turn_usage` の行そのものが無いので、持ち帰る先が無い。実機でこの窓に
+     * compaction が実際に起きるかは確かめていない。
+     *
+     * `postTokens` が無い行は、SDK が `post_tokens` を省いた回
+     * （`SDKCompactBoundaryMessage.compact_metadata.post_tokens` は
+     * optional）。
+     */
+    compactions: z
+      .array(
+        z.object({
+          trigger: z.enum(['manual', 'auto']),
+          preTokens: z.number().int().nonnegative(),
+          postTokens: z.number().int().nonnegative().optional(),
+        }),
+      )
+      .optional(),
+    /**
+     * `result.usage`（`NonNullableUsage`）の写し。**`modelUsage` とは別物で、
+     * 台帳には使わない**（`usage.ts` の `modelUsageOf` の doc「`result.usage`
+     * は使わない」）。
+     *
+     * ## これは何のために置いたか、いつ消してよいか
+     *
+     * SDK の型コメント（`@anthropic-ai/claude-agent-sdk@0.3.252` の
+     * `sdk.d.ts` の `SDKResultSuccess.usage`）はこう言う（逐語）——
+     *
+     * > MAIN AGENT LOOP ONLY — excludes Task subagent, sidechain, and
+     * > auxiliary model calls, and is per-turn in streaming-input sessions.
+     * > Prefer modelUsage for token/cost accounting.
+     *
+     * **「メインループだけ」は分かるが、「streaming-input セッションで
+     * per-turn」が (i) そのターンの API 呼び出しを合計した値なのか (ii)
+     * 直近1回ぶんだけなのかを、この文言は決めていない。** `modelUsageOf`
+     * の doc が言うとおり、台帳には `modelUsage`（作業者・compaction を
+     * 含む「正しい」側）を使っており、`result.usage` は使っていない ——
+     * ここへ運ぶのは台帳の代わりではなく、**この問いに決着を付けるための
+     * 観測**である。
+     *
+     * **決着したら、この欄は落とす。** (i)（累積合計）だと分かった時点で、
+     * `models`（`modelUsage` の差分）と重複するだけの欄になる —— 消す判断は
+     * 実測を見た者に委ねる。この PR 自身はどちらであるかを実機で確かめて
+     * いない（型とコメントだけを根拠にした暫定の観測である）。
+     *
+     * **モデル別ではなく1本**（`result.usage` 自体がモデルを跨がない単一の
+     * 形のため）。`costUsd` を持たない —— `NonNullableUsage` はコストの欄を
+     * 持たない。
+     */
+    mainLoopUsage: z
+      .object({
+        inputTokens: z.number().int().nonnegative(),
+        outputTokens: z.number().int().nonnegative(),
+        cacheReadInputTokens: z.number().int().nonnegative(),
+        cacheCreationInputTokens: z.number().int().nonnegative(),
       })
       .optional(),
   }),
