@@ -511,8 +511,14 @@ function fakeSdkForOptions(): { fn: typeof sdkQuery; sessions: FakeSession[] } {
       } as unknown as SDKMessage;
 
       void (async () => {
-        for await (const _ of params.prompt as AsyncIterable<unknown>) {
-          // クローンからの入力は、この歯では読み捨ててよい（配線の確認は不要）。
+        // `for await (const message of ...)` にしないのは、`message` を1本も
+        // 使わないから（この歯が見るのは台数で答えが変わらないことであって、
+        // クローンからの入力の中身ではない）。束縛せずに1件ずつ進める ——
+        // `apps/daemon/src/conversations-usage-limit.test.ts` と同じ形である。
+        const iterator = (params.prompt as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+        for (;;) {
+          const step = await iterator.next();
+          if (step.done === true) break;
         }
       })();
 
