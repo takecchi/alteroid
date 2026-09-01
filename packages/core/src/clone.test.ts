@@ -79,6 +79,12 @@ function fakeSdk(
      * 「固定値を返すスタブはテストを緑にしたまま分岐を殺す」）。
      */
     modelUsage?: (callIndex: number) => Record<string, unknown> | undefined;
+    /**
+     * `result` に載せる `usage`（メインループだけの生の消費。`NonNullableUsage`
+     * の写し。`modelUsage` とは別物）。**固定値を返すスタブにしない**（同じ理由）。
+     * 省略時は `result.usage` を載せない（既存の呼び出し元の挙動を変えない）。
+     */
+    resultUsage?: (callIndex: number) => Record<string, unknown> | undefined;
     /** `result` の `subtype`。既定は `'success'`。 */
     resultSubtype?: string;
     /**
@@ -138,6 +144,18 @@ function fakeSdk(
     beforeAssistant?: (callIndex: number) => SDKMessage[];
     /** `result` に載せる `permission_denials`（authoritative な側の記録）。 */
     permissionDenials?: (callIndex: number) => unknown[] | undefined;
+    /**
+     * `Query.getContextUsage()` の返り値を差し替える。**呼び出し番号
+     * （`callIndex` — 同一セッション内で `query()` が起きた回。ここは1セッション
+     * につき1回しか呼ばれないので、実質「このセッションかどうか」の意味しか
+     * 持たない）ごとに変えられる形にしてある**（固定値のスタブにしないための口。
+     * `modelUsage` と同じ理由）。**省略時は `getContextUsage` そのものを
+     * 実装しない** —— 実機で SDK がこの口を持たない・未接続のときと同じ形で、
+     * `clone.ts` の `#observeContextUsage` の `catch` が `error` として拾う経路を
+     * 通す。**関数が例外を投げれば、そのまま `getContextUsage()` の reject に
+     * なる**（成功・失敗どちらも同じ口で作れる）。
+     */
+    getContextUsage?: (callIndex: number) => unknown;
     /**
      * 指定した番号のターンを出し終えたところで、**セッションそのものを終わらせる**
      * （generator を `return` する）。
@@ -240,6 +258,7 @@ function fakeSdk(
         ...(assistantError === undefined ? {} : { error: assistantError.error }),
       } as unknown as SDKMessage;
       const modelUsage = options.modelUsage?.(callIndex);
+      const resultUsage = options.resultUsage?.(callIndex);
       const resultOverride = options.resultFor?.(turnIndex);
       const denials = options.permissionDenials?.(callIndex);
       yield {
@@ -250,6 +269,7 @@ function fakeSdk(
         uuid: 'uuid-result',
         ...(resultOverride?.isError === undefined ? {} : { is_error: resultOverride.isError }),
         ...(modelUsage === undefined ? {} : { modelUsage }),
+        ...(resultUsage === undefined ? {} : { usage: resultUsage }),
         ...(denials === undefined ? {} : { permission_denials: denials }),
       } as unknown as SDKMessage;
     }
@@ -258,6 +278,9 @@ function fakeSdk(
     return Object.assign(generator, {
       close: () => undefined,
       interrupt: async () => undefined,
+      ...(options.getContextUsage === undefined
+        ? {}
+        : { getContextUsage: async () => options.getContextUsage!(callIndex) }),
     }) as unknown as Query;
   }) as unknown as typeof sdkQuery;
 
@@ -6177,6 +6200,186 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
     expect(stderr.join('')).toContain('日誌を記録できませんでした');
 
     await s.clone.stop();
+  });
+
+  /**
+   * ターンの境界の文脈占有（`contextUsage`）・compaction（`compactions`）・
+   * `result.usage`（`mainLoopUsage`）— この3つが `turn_usage` へちゃんと
+   * 載ることを見る（PR「turn_usage にターン境界の文脈占有・compaction・
+   * result.usage を足す」）。
+   */
+  describe('ターンの境界で聞いた文脈占有・compaction・result.usage', () => {
+    it('`getContextUsage()` が成功すれば `contextUsage` に値が入り、`error` は付かない', async () => {
+      const s = setup(undefined, createMemoryStores(), {
+        modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
+        getContextUsage: () => ({
+          totalTokens: 12_000,
+          rawMaxTokens: 200_000,
+          percentage: 6,
+          autoCompactThreshold: 160_000,
+          isAutoCompactEnabled: true,
+        }),
+      });
+
+      s.clone.post(humanMessage('やあ'));
+      await waitForDone(s.events);
+
+      const entries = await s.stores.journal.list({ types: ['turn_usage'] });
+      const entry = entries[0];
+      if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
+      expect(entry.contextUsage).toEqual({
+        durationMs: expect.any(Number),
+        totalTokens: 12_000,
+        rawMaxTokens: 200_000,
+        percentage: 6,
+        autoCompactThreshold: 160_000,
+        isAutoCompactEnabled: true,
+      });
+      expect(entry.contextUsage?.error).toBeUndefined();
+
+      await s.clone.stop();
+    });
+
+    it('`getContextUsage()` が失敗しても、ターンは止まらず `contextUsage.error` に理由が入る（秘密は伏せる）', async () => {
+      const s = setup(undefined, createMemoryStores(), {
+        modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
+        // **`fakeSdk` 側で `SUPER_SECRET_TOKEN` を投げる。** `process.env` に
+        // 同じ値を置いておき、`describeProbeError` の `redactEnvSecrets` が
+        // それを `[REDACTED]` へ変えることを見る。
+        getContextUsage: () => {
+          throw new Error(`失敗: token=${process.env.ALTEROID_TEST_SECRET_TOKEN}`);
+        },
+      });
+      const previous = process.env.ALTEROID_TEST_SECRET_TOKEN;
+      process.env.ALTEROID_TEST_SECRET_TOKEN = 'sekret-value-12345';
+
+      try {
+        s.clone.post(humanMessage('やあ'));
+        await waitForDone(s.events);
+      } finally {
+        if (previous === undefined) delete process.env.ALTEROID_TEST_SECRET_TOKEN;
+        else process.env.ALTEROID_TEST_SECRET_TOKEN = previous;
+      }
+
+      const entries = await s.stores.journal.list({ types: ['turn_usage'] });
+      const entry = entries[0];
+      if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
+      expect(entry.contextUsage?.error).toBeDefined();
+      expect(entry.contextUsage?.error).toContain('[REDACTED]');
+      expect(entry.contextUsage?.error).not.toContain('sekret-value-12345');
+      // 失敗しても他の欄（成功時だけ載る欄）は無い。
+      expect(entry.contextUsage?.totalTokens).toBeUndefined();
+      // 失敗してもターン自体は完走している（`done` が来た時点で自明だが、
+      // 明示的に置く）。
+      expect(s.events.some((event) => event.type === 'done')).toBe(true);
+
+      await s.clone.stop();
+    });
+
+    it('`getContextUsage` を実装していない `Query`（実機で未対応のときと同じ形）でも、例外を `error` として拾いターンは止めない', async () => {
+      // `getContextUsage` オプションを渡さない ＝ フェイクの `Query` はこの
+      // メソッドを持たない（`fakeSdk` の doc）。
+      const s = setup(undefined, createMemoryStores(), {
+        modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
+      });
+
+      s.clone.post(humanMessage('やあ'));
+      await waitForDone(s.events);
+
+      const entries = await s.stores.journal.list({ types: ['turn_usage'] });
+      const entry = entries[0];
+      if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
+      expect(entry.contextUsage?.error).toBeDefined();
+      expect(typeof entry.contextUsage?.durationMs).toBe('number');
+
+      await s.clone.stop();
+    });
+
+    it('ターンの途中に届いた compact_boundary は `compactions` としてまとめて載る', async () => {
+      const s = setup(undefined, createMemoryStores(), {
+        modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
+        beforeAssistant: () => [
+          {
+            type: 'system',
+            subtype: 'compact_boundary',
+            session_id: 'sess-fake',
+            uuid: 'uuid-compact-1',
+            compact_metadata: { trigger: 'auto', pre_tokens: 180_000, post_tokens: 42_000 },
+          } as unknown as SDKMessage,
+        ],
+      });
+
+      s.clone.post(humanMessage('やあ'));
+      await waitForDone(s.events);
+
+      const entries = await s.stores.journal.list({ types: ['turn_usage'] });
+      const entry = entries[0];
+      if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
+      expect(entry.compactions).toEqual([
+        { trigger: 'auto', preTokens: 180_000, postTokens: 42_000 },
+      ]);
+
+      await s.clone.stop();
+    });
+
+    it('compaction が起きなかったターンは `compactions` の欄自体が無い（空配列を作らない）', async () => {
+      const s = setup(undefined, createMemoryStores(), {
+        modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
+      });
+
+      s.clone.post(humanMessage('やあ'));
+      await waitForDone(s.events);
+
+      const entries = await s.stores.journal.list({ types: ['turn_usage'] });
+      const entry = entries[0];
+      if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
+      expect(entry.compactions).toBeUndefined();
+
+      await s.clone.stop();
+    });
+
+    it('`result.usage` は `mainLoopUsage` として `turn_usage` へ載る（`models` とは別の値のまま潰さない）', async () => {
+      const s = setup(undefined, createMemoryStores(), {
+        modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
+        resultUsage: () => ({
+          input_tokens: 7,
+          output_tokens: 3,
+          cache_read_input_tokens: 100,
+          cache_creation_input_tokens: 40,
+        }),
+      });
+
+      s.clone.post(humanMessage('やあ'));
+      await waitForDone(s.events);
+
+      const entries = await s.stores.journal.list({ types: ['turn_usage'] });
+      const entry = entries[0];
+      if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
+      expect(entry.mainLoopUsage).toEqual({
+        inputTokens: 7,
+        outputTokens: 3,
+        cacheReadInputTokens: 100,
+        cacheCreationInputTokens: 40,
+      });
+
+      await s.clone.stop();
+    });
+
+    it('`result.usage` を渡さない回は `mainLoopUsage` の欄自体が無い（作り物を出さない）', async () => {
+      const s = setup(undefined, createMemoryStores(), {
+        modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
+      });
+
+      s.clone.post(humanMessage('やあ'));
+      await waitForDone(s.events);
+
+      const entries = await s.stores.journal.list({ types: ['turn_usage'] });
+      const entry = entries[0];
+      if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
+      expect(entry.mainLoopUsage).toBeUndefined();
+
+      await s.clone.stop();
+    });
   });
 });
 

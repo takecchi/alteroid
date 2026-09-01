@@ -4738,9 +4738,7 @@ class Clone implements CloneHost {
             : {
                 reset: { fromCostUsd: fold.reset.fromCostUsd, toCostUsd: fold.reset.toCostUsd },
               }),
-          ...(usage.mainLoopUsage === undefined
-            ? {}
-            : { mainLoopUsage: usage.mainLoopUsage }),
+          ...(usage.mainLoopUsage === undefined ? {} : { mainLoopUsage: usage.mainLoopUsage }),
           ...(turnBoundary?.contextUsage === undefined
             ? {}
             : { contextUsage: turnBoundary.contextUsage }),
