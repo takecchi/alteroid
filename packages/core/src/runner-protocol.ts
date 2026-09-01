@@ -1995,10 +1995,16 @@ class Registry implements RunnerRegistry {
    * 落ちたと判定した器を宛先として返すのは「黙って引き下がる」の裏返しで、
    * 新しい仕事を沈黙へ投げ込むことになる。名簿からは消さない（`entries()` には
    * 残って人間から見える）が、置き先としては数えない。
+   *
+   * **`vacating`（意図して空けている最中）も並ばない。** 黙ったわけではないが、
+   * 空けると決めた宛先へ新しい仕事を置くのは drain の意図に反する——理由は
+   * `lost` と別だが、結果（置き先から外す）は同じである。
    */
   async list(): Promise<RunnerClient[]> {
     return [...this.#entries.values()].flatMap((entry) =>
-      entry.client === null || entry.state === 'lost' ? [] : [entry.client],
+      entry.client === null || entry.state === 'lost' || entry.state === 'vacating'
+        ? []
+        : [entry.client],
     );
   }
 
