@@ -6153,6 +6153,37 @@ function isLive(record: ManagerRecord, silentRunners: ReadonlyMap<string, string
   // `0fb068f`（PR #571、#563）で `ManagerSendResult` が4値になった時点で古い。**
   // 面（CLI の `/managers`・`manager_list`・Web UI）の文言は 2026-08-28 にこの実測へ
   // 揃えてある。**この関数の返り値は動かしていない** —— 直すのは言い方だけである。
+  //
+  // **⭐ `vacating`（意図して空けている最中。#485 PR-2）はこの `false` の分岐に
+  // 入らない。** `silentRunners` は `state === 'lost'` だけを数える
+  // （`#silentRunners` の doc）ので、`vacating` な器に載っている委譲はここを
+  // 通り抜けて `true` 側へ進む。**これは材料が足りていないから漏れているのでは
+  // なく、`true` が正しい値だからである。** 理由は3つ（重い順）:
+  //
+  // 1. **`live: false` には「理由を1つだけ名指しする欄」（`runnerLostSince`）が
+  //    対に在り、材料は `#silentRunners()`（＝`lost` だけ）である**
+  //    （`ManagerSummary.live` の doc 逐語「`live: false` の理由を1つだけ
+  //    名指しする欄である」）。`vacating` を `false` へ倒すと、`runnerLostSince`
+  //    が立たないまま `live: false` だけが出る——**理由を名乗れない `false`**が
+  //    できる。その欄が在る理由（`false` を見た側が「セッションが終わったのか」
+  //    「宛先の器が消えたのか」を区別して打つ手を決められるようにする）を
+  //    正面から壊す。
+  // 2. `live` は「話しかけられるか」しか言わない。`vacating` な器は話しかけ
+  //    られる——黙ったのではなく、空けると決めただけで名乗り（heartbeat）は
+  //    続いている。**⟹「置き先から外れること」と「話しかけられること」は
+  //    別である。** `RunnerRegistry#list()` が前者（`vacating` も外れる）、
+  //    `live` はこちらの後者を言う——PR-1 で既にこの2つを分けたので、その
+  //    分け方をここでも使う。
+  // 3. PR-1 で `#silentRunners` を広げなかった判断と整合する（`#silentRunners`
+  //    の doc の逐語「数えているのが『名乗らなくなった』ことそのもの」——
+  //    `vacating` は黙った結果ではなく空けると決めた結果なので、この列挙には
+  //    最初から乗らない）。
+  //
+  // **⚠️ 次に読む人は必ず「`vacating` も置き先から外れるのに、なぜ `live` なのか」
+  // を問う。** 答えがここに無ければ、その人は `#silentRunners` のホワイトリストへ
+  // `vacating` を足して `false` へ倒しに来る（歯: `manager.test.ts` の「drain
+  // 中（vacating）の委譲は live: true のままで、runnerLostSince も出ない」——
+  // このホワイトリストを広げる変異で実際に落ちることを確認済み）。
   if (record.job.runnerId !== undefined && silentRunners.has(record.job.runnerId)) return false;
   // runner にセッションが居るなら、そのまま送れる。
   if (record.attached) return true;
