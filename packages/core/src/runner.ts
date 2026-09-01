@@ -1616,6 +1616,15 @@ class RunnerSession {
       case 'tool_result':
         return;
 
+      // **こちらは「見ないと決めてある」ではなく「まだ書いていない」である。**
+      // compaction の観測は、いまはクローン層の `turn_usage`（`clone.ts` の
+      // `case 'turn_ended'`）にだけ載せてある —— マネージャー層の
+      // `turn_usage`（`manager.ts` の `case 'usage'`）はこのイベントを読んで
+      // いない。同じ形をこちらにも足すかどうかは、この PR の範囲外の判断として
+      // 別途に残す（PR 本文「言えないこと」）。
+      case 'compaction':
+        return;
+
       case 'turn_ended': {
         // ターンの区切りで必ず畳む。持ち越すと、前のターンの本文が次の報告に
         // 混ざって「言っていないことを言った」ことになる。

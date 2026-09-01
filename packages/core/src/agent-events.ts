@@ -117,6 +117,18 @@ export interface AgentTurnUsage {
   models: Record<string, UsageTotals>;
   /** provider がこの結果に添えたセッション id。無ければ省く。 */
   sessionId?: string;
+  /**
+   * `result.usage`（メインループだけの生の消費。`modelUsage` とは別物）。
+   * **台帳には使わない** —— 何のために運ぶか・いつ落としてよいかは
+   * `schema.ts` の `turn_usage.mainLoopUsage` の doc に書いた（二重管理を
+   * 避けるためここには書き写さない）。読み取れなかった・失敗した result では省く。
+   */
+  mainLoopUsage?: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadInputTokens: number;
+    cacheCreationInputTokens: number;
+  };
 }
 
 /** セッションが開いた。 */
@@ -192,6 +204,21 @@ export interface AgentDelegationNotified {
   taskId?: string;
 }
 
+/**
+ * compaction が1回起きた（`SDKCompactBoundaryMessage.compact_metadata` の
+ * 写し）。**ターンの終わり（{@link AgentTurnEnded}）とは別のメッセージとして
+ * ターンの途中で届く。** 何のために拾うか・層がどう保持するかは
+ * `schema.ts` の `turn_usage.compactions` の doc に書いた（二重管理を避ける
+ * ためここには書き写さない）。
+ */
+export interface AgentCompactionEvent {
+  type: 'compaction';
+  trigger: 'manual' | 'auto';
+  preTokens: number;
+  /** **`post_tokens` が省かれた回は無い**（provider 側で optional のため）。 */
+  postTokens?: number;
+}
+
 /** ターンが終わった。 */
 export interface AgentTurnEnded {
   type: 'turn_ended';
@@ -238,4 +265,5 @@ export type AgentEvent =
   | AgentToolResult
   | AgentDelegationStarted
   | AgentDelegationNotified
+  | AgentCompactionEvent
   | AgentTurnEnded;

@@ -14,6 +14,7 @@ import type {
   AgentEvent,
   AgentPermissionDenial,
   AgentRuntimeFacts,
+  AgentTurnUsage,
 } from './agent-events.js';
 import type { AgentProvider } from './agent-ports.js';
 import type { PermissionModeName } from './permission-mode.js';
@@ -413,6 +414,15 @@ export function foldClaudeMessage(message: SDKMessage): AgentEvent[] {
       // ゼロを「累積が 0 になった」として通すと、受け取った側の基準が下がり、
       // 次に届いた本物の累積が丸ごと増分になる（`usage.ts` の `isSuccessResult`）。
       const models = isSuccessResult(message) ? modelUsageOf(message) : undefined;
+      // **観測用の写し。台帳には使わない**（`modelUsageOf` の doc「`result.usage`
+      // は使わない」）。`models` と同じ条件（成功した result だけ）で絞る —— SDK の
+      // 「crash/startup-error では zero 埋め」という注意は `usage` にも同様に効く
+      // ので、失敗した result のこれを運ぶと存在しない消費を観測したことになる。
+      // 何のためにここへ運ぶかは `agent-events.ts` の `AgentTurnUsage.mainLoopUsage`
+      // の doc（→ `schema.ts` の `turn_usage.mainLoopUsage`）に書いてある。
+      const mainLoopUsage = isSuccessResult(message)
+        ? mainLoopUsageOf((message as { usage?: unknown }).usage)
+        : undefined;
       const body = (message as { result?: unknown }).result;
       const subtype = (message as { subtype?: unknown }).subtype;
       const id = (message as { uuid?: unknown }).uuid;
@@ -431,6 +441,7 @@ export function foldClaudeMessage(message: SDKMessage): AgentEvent[] {
                 usage: {
                   models,
                   ...(typeof sessionId === 'string' ? { sessionId } : {}),
+                  ...(mainLoopUsage === undefined ? {} : { mainLoopUsage }),
                 },
               }),
           ...(typeof id === 'string' && id.length > 0 ? { id } : {}),
@@ -445,6 +456,35 @@ export function foldClaudeMessage(message: SDKMessage): AgentEvent[] {
     default:
       return [];
   }
+}
+
+/**
+ * `result.usage`（SDK の `NonNullableUsage`）を中立の形へ写す。
+ *
+ * **`usage.ts` の `usageTotalsSchema` とは意図的に形を揃えていない** ——
+ * `NonNullableUsage` はコスト（`costUsd` に当たる欄）を持たないので、
+ * 台帳の形に寄せると存在しない値を作ることになる。何のための写しかは
+ * `agent-events.ts` の `AgentTurnUsage.mainLoopUsage` の doc を見よ。
+ *
+ * **読めなければ `undefined`。** 必須欄のどれかが数値でなければ、SDK が
+ * 版で形を変えたと見て作り物を返さない（`runtimeFactsOf` と同じ作法）。
+ */
+function mainLoopUsageOf(raw: unknown): AgentTurnUsage['mainLoopUsage'] {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const usage = raw as Record<string, unknown>;
+  const inputTokens = usage.input_tokens;
+  const outputTokens = usage.output_tokens;
+  const cacheReadInputTokens = usage.cache_read_input_tokens;
+  const cacheCreationInputTokens = usage.cache_creation_input_tokens;
+  if (
+    typeof inputTokens !== 'number' ||
+    typeof outputTokens !== 'number' ||
+    typeof cacheReadInputTokens !== 'number' ||
+    typeof cacheCreationInputTokens !== 'number'
+  ) {
+    return undefined;
+  }
+  return { inputTokens, outputTokens, cacheReadInputTokens, cacheCreationInputTokens };
 }
 
 /** `system` の枝。**subtype ごとの見分けはここだけが知っている。** */
@@ -469,6 +509,28 @@ function foldSystemMessage(message: SDKMessage & { type: 'system' }): AgentEvent
   // `result.permission_denials` — だから**両方**読む。
   if (subtype === 'permission_denied') {
     return [{ type: 'permission_denied', via: 'live', denial: toAgentPermissionDenial(message) }];
+  }
+
+  // compaction が1回起きた。**元々ここは `return []`（下の総取り）で落として
+  // いた** —— `task_progress` 等の「見ないと決めてある」種類とは違い、これは
+  // 判断ではなく単純な抜けである（`agent-events.ts` の `AgentCompactionEvent`
+  // の doc）。読めない形（`trigger` が2値のどちらでもない・`pre_tokens` が
+  // 数値でない）は SDK が版で形を変えたと見て0個にする —— 作り物を返さない。
+  if (subtype === 'compact_boundary') {
+    const metadata = (message as { compact_metadata?: unknown }).compact_metadata;
+    if (typeof metadata !== 'object' || metadata === null) return [];
+    const trigger = (metadata as { trigger?: unknown }).trigger;
+    const preTokens = (metadata as { pre_tokens?: unknown }).pre_tokens;
+    const postTokens = (metadata as { post_tokens?: unknown }).post_tokens;
+    if ((trigger !== 'manual' && trigger !== 'auto') || typeof preTokens !== 'number') return [];
+    return [
+      {
+        type: 'compaction',
+        trigger,
+        preTokens,
+        ...(typeof postTokens === 'number' ? { postTokens } : {}),
+      },
+    ];
   }
 
   // 委譲の区間（`worker_wait`）。**下の「上限の文言」の総取りより必ず手前で

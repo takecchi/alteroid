@@ -98,6 +98,7 @@ import {
 } from './usage-limits.js';
 import type { TokenRotatorObservation } from './token-rotator.js';
 import { assistantFailureOf, type SdkFailure } from './sdk-failure.js';
+import { describeProbeError } from './usage-probe.js';
 import {
   classifyContextWindowFailure,
   describeContextWindowFailure,
@@ -598,6 +599,16 @@ interface Turn {
    * 知る手段が無かった。
    */
   failure: string | null;
+  /**
+   * このターンの中で観測した compaction（`AgentCompactionEvent` の写し。
+   * `type` は畳んで捨てる）。**`case 'compaction'` が push し、同じ
+   * `case 'turn_ended'` が読んで `turn_usage` へ載せる**（`schema.ts` の
+   * `turn_usage.compactions` の doc）。
+   *
+   * **配列にしてあるのは「1ターンに複数回」を否定できないからである**
+   * （`schema.ts` の同じ doc と揃える）。
+   */
+  compactions: CompactionObservation[];
   resolve: () => void;
   /**
    * このターンが蒸留のターンか、通常のターンか。`#runTurn` の `kind` 引数を
@@ -610,6 +621,15 @@ interface Turn {
    */
   kind: 'normal' | 'distill';
 }
+
+/**
+ * `turn_usage.contextUsage` / `turn_usage.compactions`（`schema.ts`）の形を
+ * ここで書き直さず、スキーマ側から引く。**二重に定義すると、どちらかを
+ * 直し忘れたときに型は緑のまま日誌の形だけがずれる。**
+ */
+type TurnUsageEntry = Extract<JournalEntry, { type: 'turn_usage' }>;
+type ContextUsageObservation = NonNullable<TurnUsageEntry['contextUsage']>;
+type CompactionObservation = NonNullable<TurnUsageEntry['compactions']>[number];
 
 /**
  * ターン1本の結果。**「文字列」ではなく「状態」で返す。**
@@ -3389,6 +3409,7 @@ class Clone implements CloneHost {
         streamed: false,
         rejected: null,
         failure: null,
+        compactions: [],
         resolve,
         kind,
       };
@@ -4595,6 +4616,49 @@ class Clone implements CloneHost {
   }
 
   /**
+   * ターンの境界の文脈占有を、SDK の control channel から1回だけ聞く
+   * （`schema.ts` の `turn_usage.contextUsage` の doc）。
+   *
+   * **`this.#query` が既に無ければ何も聞かない。** セッションが終わる窓
+   * （`#read` の `finally` が `#query = null` にした後）でここへ来ると
+   * `getContextUsage` を持たない値を呼ぶことになるので、`null` のときは
+   * 呼ばずに `undefined` を返す —— これは「試して失敗した」ではなく
+   * 「まだ観測していない」の側である（`turn_usage.contextUsage` の doc、
+   * 欄そのものが無い行の意味）。
+   *
+   * **失敗してもターンを止めない。** 呼び出しは `try`/`catch` で必ず値を
+   * 返す形にしてあり、呼び出し元（`#apply` の `case 'turn_ended'`）は
+   * ここで例外を待ち受けない。
+   *
+   * **秘密を漏らさない。** 例外・rejection の理由は `usage-probe.ts` の
+   * `describeProbeError`（`redactEnvSecrets` を内側で通す）でしか運ばない
+   * ——新しい伏せ字の仕組みは作っていない。
+   */
+  async #observeContextUsage(): Promise<ContextUsageObservation | undefined> {
+    const q = this.#query;
+    if (q === null) return undefined;
+    const startedAt = Date.now();
+    try {
+      const usage = await q.getContextUsage();
+      return {
+        durationMs: Date.now() - startedAt,
+        totalTokens: usage.totalTokens,
+        rawMaxTokens: usage.rawMaxTokens,
+        percentage: usage.percentage,
+        ...(usage.autoCompactThreshold === undefined
+          ? {}
+          : { autoCompactThreshold: usage.autoCompactThreshold }),
+        isAutoCompactEnabled: usage.isAutoCompactEnabled,
+      };
+    } catch (error) {
+      return {
+        durationMs: Date.now() - startedAt,
+        error: describeProbeError(error, process.env),
+      };
+    }
+  }
+
+  /**
    * `result` に載っている消費を台帳へ積む。
    *
    * **モデル id で層を代用しない。** `ALTEROID_CLONE_MODEL` を置けばクローンも
@@ -4608,6 +4672,18 @@ class Clone implements CloneHost {
     usage: AgentTurnUsage | undefined,
     site: UsageSite,
     accumulation: 'cumulative' | 'oneshot',
+    /**
+     * ターンの境界で聞いた文脈占有と、ターンの間に起きた compaction
+     * （`case 'turn_ended'` だけが渡す）。**蒸留のサイドクエリ（`site: 'distill'`）
+     * からの呼び出しは渡さない** —— あちらはこの層の外の短命セッションで、
+     * `this.#turn` も `this.#query`（本セッションの）も指していないので、
+     * 文脈占有もこのターンの compaction も原理的に持たない（`schema.ts` の
+     * `turn_usage.contextUsage` / `turn_usage.compactions` の doc）。
+     */
+    turnBoundary?: {
+      contextUsage?: ContextUsageObservation;
+      compactions?: CompactionObservation[];
+    },
   ): Promise<void> {
     // **積める消費が無い回はここで終わる。** 「成功した result だけを通す」の
     // 判定は provider の写しが済ませている（`claude-provider.ts` の
@@ -4662,6 +4738,15 @@ class Clone implements CloneHost {
             : {
                 reset: { fromCostUsd: fold.reset.fromCostUsd, toCostUsd: fold.reset.toCostUsd },
               }),
+          ...(usage.mainLoopUsage === undefined
+            ? {}
+            : { mainLoopUsage: usage.mainLoopUsage }),
+          ...(turnBoundary?.contextUsage === undefined
+            ? {}
+            : { contextUsage: turnBoundary.contextUsage }),
+          ...(turnBoundary?.compactions === undefined || turnBoundary.compactions.length === 0
+            ? {}
+            : { compactions: turnBoundary.compactions }),
         });
       }
 
@@ -4911,13 +4996,45 @@ class Clone implements CloneHost {
         return;
       }
 
+      case 'compaction': {
+        // **ターンの間だけ保持する。** compaction は `result`（`turn_ended`）とは
+        // 別のメッセージとして途中で届くので、ここで拾わないと `turn_ended` の
+        // 一瞬しか見ない書き手からは見えなくなる（`schema.ts` の
+        // `turn_usage.compactions` の doc）。
+        //
+        // **ターンの外で届いた分は拾えない。** `this.#turn` が `null`（人間とも
+        // クローン自身とも話していない窓）なら静かに捨てる —— 対応する
+        // `turn_usage` の行そのものが無いので、持ち帰る先が無い。
+        this.#turn?.compactions.push({
+          trigger: event.trigger,
+          preTokens: event.preTokens,
+          ...(event.postTokens === undefined ? {} : { postTokens: event.postTokens }),
+        });
+        return;
+      }
+
       case 'turn_ended': {
+        // **ターンの境界の文脈占有を、日誌へ1行書く前に1回だけ聞く**
+        // （`schema.ts` の `turn_usage.contextUsage` の doc）。失敗しても
+        // このターンの成否には影響させない —— `#observeContextUsage` が
+        // 例外を内側で受け止める。
+        const contextUsage = await this.#observeContextUsage();
+        // **このターンの間に起きた compaction を取り出す。** `this.#turn` は
+        // `#finishTurn()` が呼ばれるまでこの後も生きているので、ここで読んでも
+        // 消えない（畳むのは `#finishTurn()` が `this.#turn = null` にする形
+        // でまとめて行われる —— `#said` を個別に空配列へ戻す必要が無いのと
+        // 同じ理由）。
+        const compactions = this.#turn?.compactions ?? [];
+
         // **クローンの消費も台帳へ載せる。** ここを渡していなかったのは設計判断
         // ではなく抜けで（#45 の本文にも `usage.ts` にも「クローンの分は記録
         // しない」は無い）、その結果クローンは自分がいくら使ったかを読めなかった。
         // 人間は `claude.ai/settings/usage` で見られるので、これは能力の削除に
         // なっていた（north_star 禁止1）。
-        await this.#recordUsage(event.usage, 'session', 'cumulative');
+        await this.#recordUsage(event.usage, 'session', 'cumulative', {
+          contextUsage,
+          compactions,
+        });
 
         // **生の合図と `result` の両方を読む。** SDK は前者を best-effort と言い、
         // 「authoritative なのは `result.permission_denials`」と言っている。

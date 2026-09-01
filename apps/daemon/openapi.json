@@ -1082,6 +1082,95 @@
                             }
                           },
                           "required": ["fromCostUsd", "toCostUsd"]
+                        },
+                        "contextUsage": {
+                          "type": "object",
+                          "properties": {
+                            "durationMs": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "totalTokens": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "rawMaxTokens": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "percentage": {
+                              "type": "number",
+                              "minimum": 0
+                            },
+                            "autoCompactThreshold": {
+                              "type": "number",
+                              "minimum": 0
+                            },
+                            "isAutoCompactEnabled": {
+                              "type": "boolean"
+                            },
+                            "error": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["durationMs"]
+                        },
+                        "compactions": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "trigger": {
+                                "type": "string",
+                                "enum": ["manual", "auto"]
+                              },
+                              "preTokens": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "postTokens": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": ["trigger", "preTokens"]
+                          }
+                        },
+                        "mainLoopUsage": {
+                          "type": "object",
+                          "properties": {
+                            "inputTokens": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "outputTokens": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "cacheReadInputTokens": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "cacheCreationInputTokens": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "inputTokens",
+                            "outputTokens",
+                            "cacheReadInputTokens",
+                            "cacheCreationInputTokens"
+                          ]
                         }
                       },
                       "required": ["type", "id", "at", "layer", "site", "managerId", "models"]
@@ -2328,6 +2417,95 @@
                                   }
                                 },
                                 "required": ["fromCostUsd", "toCostUsd"]
+                              },
+                              "contextUsage": {
+                                "type": "object",
+                                "properties": {
+                                  "durationMs": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "totalTokens": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "rawMaxTokens": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "percentage": {
+                                    "type": "number",
+                                    "minimum": 0
+                                  },
+                                  "autoCompactThreshold": {
+                                    "type": "number",
+                                    "minimum": 0
+                                  },
+                                  "isAutoCompactEnabled": {
+                                    "type": "boolean"
+                                  },
+                                  "error": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["durationMs"]
+                              },
+                              "compactions": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "trigger": {
+                                      "type": "string",
+                                      "enum": ["manual", "auto"]
+                                    },
+                                    "preTokens": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "postTokens": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": ["trigger", "preTokens"]
+                                }
+                              },
+                              "mainLoopUsage": {
+                                "type": "object",
+                                "properties": {
+                                  "inputTokens": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "outputTokens": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheReadInputTokens": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheCreationInputTokens": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "inputTokens",
+                                  "outputTokens",
+                                  "cacheReadInputTokens",
+                                  "cacheCreationInputTokens"
+                                ]
                               }
                             },
                             "required": ["type", "id", "at", "layer", "site", "managerId", "models"]
