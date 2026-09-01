@@ -810,12 +810,21 @@ export interface ManagerPool {
    */
   reattachRunner(runnerId: string): Promise<void>;
   /**
-   * ある宛先が黙ったので、いま開いている別の器に取り直しを起こす（roadmap M5 PR5）。
+   * ある宛先から、いま開いている別の器へ取り直しを起こす（roadmap M5 PR5）。
+   *
+   * **契機は2つある。** 宛先が黙った（`lost`）ときだけでなく、意図して空けた
+   * （`vacating`。#485 PR-2）ときもここを呼ぶ——引数名を `lostRunnerId` から
+   * `runnerId` へ変えたのはこのため（`#shouldRelocateFrom`
+   * を `#isLostRunner` から改名したのと同じ論法。あちらの doc「`vacating`
+   * （意図して空けている最中）も同じ側に立つ」）。**「その宛先からは動かして
+   * よい」という1つの事実**を運ぶ引数であって、黙ったことの証明ではない。
    *
    * **新しい梯子は作らない** —— `#reattach` の中の既存の予約（`#scheduleReattach`）に
-   * そのまま乗る。貸し出しがまだ生きていれば断られ、期限が切れてから移る。
+   * そのまま乗る。貸し出しがまだ生きていれば断られ、期限が切れてから移る
+   * （drain の握手で貸し出しを先に返しておけば、ここで待たずに移る——
+   * `#confirmStoppedAndReleaseLease` の doc）。
    */
-  relocateFrom(lostRunnerId: string): void;
+  relocateFrom(runnerId: string): void;
   /**
    * 走行中のマネージャーについて、生ログの末尾から「ターンが終わっているらしい」
    * という助言を計算し直す（Issue #567）。
@@ -2732,7 +2741,7 @@ class Pool implements ManagerPool {
     await this.#reattach(runnerId);
   }
 
-  relocateFrom(lostRunnerId: string): void {
+  relocateFrom(runnerId: string): void {
     if (this.#stopped) return;
     // **新しい梯子は作らない。** 各 `runnerId` への `#reattach` は、貸し出しが
     // まだ生きていれば断って `#scheduleReattach` の梯子に乗る——ここでは
@@ -2740,11 +2749,11 @@ class Pool implements ManagerPool {
     const targets = new Set(
       this.#runners
         .entries()
-        .filter((entry) => entry.runnerId !== undefined && entry.runnerId !== lostRunnerId)
+        .filter((entry) => entry.runnerId !== undefined && entry.runnerId !== runnerId)
         .filter((entry) => entry.state === 'connected')
         .map((entry) => entry.runnerId as string),
     );
-    for (const runnerId of targets) void this.#reattach(runnerId);
+    for (const target of targets) void this.#reattach(target);
   }
 
   async #restoreExclusive(): Promise<ManagerSummary[]> {
