@@ -8,6 +8,7 @@
  * （`packages/core/src/tools.test.ts` の「一覧の文言は、観測した分しか言わない」
  * と対になっている）。
  */
+import { describeSessionMissingKind } from '@alteroid/core';
 import { cleanup, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -15,7 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ManagerSummary } from '~/lib/types';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
-import Managers from './managers';
+import Managers, { describeSessionMissingKindNote } from './managers';
 
 const BASE: ManagerSummary = {
   managerId: 'mgr-1',
@@ -559,5 +560,52 @@ describe('器が黙ったことは、`status` を動かさずに添える', () =
     expect(screen.getByText('セッション切断')).toBeTruthy();
     expect(screen.getByText(/宛先の器は.*から名乗っていない/)).toBeTruthy();
     expect(screen.getByText(/この委譲のセッションを持っていなかった/)).toBeTruthy();
+  });
+});
+
+/**
+ * **由来の字面が、core（`describeSessionMissingKind`）と Web
+ * （`describeSessionMissingKindNote`）で一致していること**（#579）。
+ *
+ * **なぜ要るか — 2箇所に在るからである。** Web が core の関数をそのまま呼べない
+ * 理由は正当で（`packages/core` の値 import はブラウザバンドルへサーバ専用の
+ * ドメイン層を引き込む。`eslint.config.js` の該当ルールと #294 / #306 の事故）、
+ * 統合するつもりは無い。**問題は、揃っていることを規約でしか守っていなかった
+ * ことである** — 両ファイルの doc は「直すときは両方見ること」と書いているが、
+ * 面ごとのテストはそれぞれ自分の literal を assert しているので、**片方だけ
+ * 直しても両方緑のまま通る。**
+ *
+ * 割れたときに何が起きるかは core 側の doc が書いている——「面ごとに字面が
+ * 割れると、同じ状態が面によって違う次の一手を指すことになる」。
+ *
+ * **テストファイルからの値 import は禁止の対象外である**（`eslint.config.js`
+ * の `no-restricted-imports` の doc が逐語で `*.test.{ts,tsx}` を外している。
+ * テストはルーティングされずブラウザバンドルに入らないため）。先例は
+ * `journal.test.tsx` の `JOURNAL_ENTRY_TYPES` で、**同じ「正本と画面の集合が
+ * 一致すること」を測る歯**である。
+ *
+ * **`ALL_KINDS` を `Record` で持つのは、値が増えたときにここが型で落ちるため。**
+ * 配列だと3つ目が足されても素通りする（＝新しい値の字面が測られないまま増える）。
+ * これはビルド時の網羅性であって、実行時に測っているのは下の一致だけである。
+ */
+describe('sessionMissingKind の字面が core と一致する（#579）', () => {
+  const ALL_KINDS: Record<NonNullable<ManagerSummary['sessionMissingKind']>, true> = {
+    'resume-failed': true,
+    unlisted: true,
+  };
+
+  it('全ての由来で、core の describeSessionMissingKind と文字列として等しい', () => {
+    const kinds = Object.keys(ALL_KINDS) as NonNullable<ManagerSummary['sessionMissingKind']>[];
+    // **空でないことを先に確かめる。** `Object.keys` が空なら下の forEach は
+    // 1回も回らず、この歯は何も測らずに緑になる。
+    expect(kinds.length).toBeGreaterThan(0);
+    for (const kind of kinds) {
+      expect(describeSessionMissingKindNote(kind)).toBe(describeSessionMissingKind(kind));
+    }
+  });
+
+  it('由来が無いときも一致する（どちらも空文字。「不明」と書かない）', () => {
+    expect(describeSessionMissingKindNote(undefined)).toBe(describeSessionMissingKind(undefined));
+    expect(describeSessionMissingKindNote(undefined)).toBe('');
   });
 });

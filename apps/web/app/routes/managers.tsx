@@ -340,6 +340,14 @@ export function ManagerSessionMissingNote({
 /**
  * `sessionMissingKind` の由来を一言で言う（#579）。
  *
+ * **`export` してあるのは歯のためである。** 下の doc のとおり字面は2箇所に
+ * 在り、**揃っていることを規約（「直すときは両方見ること」）で守ると、片方
+ * だけ直しても両方の面のテストが自分の literal を見て緑のまま通る。** だから
+ * `managers.test.tsx` が core の `describeSessionMissingKind` を import して
+ * **2つが文字列として等しいことを直接測る**（テストファイルは
+ * `@alteroid/core` の値 import の禁止から明示的に外してある——`eslint.config.js`
+ * の該当ルールの doc。先例は `journal.test.tsx` の `JOURNAL_ENTRY_TYPES`）。
+ *
  * **字面は `packages/core/src/digest.ts` の `describeSessionMissingKind` と
  * 揃えてある。** ここで自前に書いている理由は、`packages/core` を Web の
  * バンドルへ引き込まないためである（`pnpm check:web-bundle-node-traces` /
@@ -360,7 +368,7 @@ export function ManagerSessionMissingNote({
  * 出た。ここでは主行の主張（この委譲のセッションが無かった、という事実）だけを
  * 残し、由来の一言を静かに省く——データを1文字も消さない安全側）。
  */
-function describeSessionMissingKindNote(kind: ManagerSummary['sessionMissingKind']): string {
+export function describeSessionMissingKindNote(kind: ManagerSummary['sessionMissingKind']): string {
   switch (kind) {
     case 'resume-failed':
       return 'resume でも入り直せなかった。';
