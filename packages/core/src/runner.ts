@@ -2683,14 +2683,14 @@ function assistantText(blocks: readonly AgentContentBlock[]): string {
  * ため（不変な基準を作らない。ソートすれば「同じ内訳なのに順序が変わる」を
  * 心配する必要が無くなる、という程度の理由でしかない）。
  */
-function summarizeBackgroundTasks(
-  tasks: readonly { id: string; taskType: string }[],
-): string {
+function summarizeBackgroundTasks(tasks: readonly { id: string; taskType: string }[]): string {
   const counts = new Map<string, number>();
   for (const task of tasks) {
     counts.set(task.taskType, (counts.get(task.taskType) ?? 0) + 1);
   }
-  return [...counts.entries()].map(([taskType, count]) => `${taskType}×${String(count)}`).join(', ');
+  return [...counts.entries()]
+    .map(([taskType, count]) => `${taskType}×${String(count)}`)
+    .join(', ');
 }
 
 /**

@@ -643,9 +643,7 @@ function runtimeFactsOf(message: SDKMessage): AgentRuntimeFacts {
  * 文字列でなければ `'(不明)'` を当てる——欄自体が壊れていても、要素の
  * 存在（＝背景処理が1件在ること）までは捨てない。
  */
-function liveBackgroundTasksOf(
-  raw: unknown,
-): readonly { id: string; taskType: string }[] | null {
+function liveBackgroundTasksOf(raw: unknown): readonly { id: string; taskType: string }[] | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const tasks = (raw as { tasks?: unknown }).tasks;
   if (!Array.isArray(tasks)) return null;

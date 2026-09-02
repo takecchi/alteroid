@@ -63,7 +63,12 @@ interface ManualRunner {
     },
   ): void;
   /** マネージャーが確認を上げる。 */
-  ask(managerId: string, requestId: string, summary: string, kind?: 'question' | 'permission'): void;
+  ask(
+    managerId: string,
+    requestId: string,
+    summary: string,
+    kind?: 'question' | 'permission',
+  ): void;
   /** runner 側でセッションが本当に閉じた。 */
   closed(managerId: string, status: 'done' | 'lost' | 'failed', reason: string): void;
 }
@@ -251,7 +256,9 @@ describe('manager が握り潰したとき（case "report" の awaitingBackgroun
     await journalHasText(stores, '背景処理の完了待ちで畳んだターンの報告なので受信箱へは回さない');
     const entries = await stores.journal.list({ types: ['decision'] });
     const found = entries.find((entry) =>
-      JSON.stringify(entry).includes('背景処理の完了待ちで畳んだターンの報告なので受信箱へは回さない'),
+      JSON.stringify(entry).includes(
+        '背景処理の完了待ちで畳んだターンの報告なので受信箱へは回さない',
+      ),
     );
     expect(found).toBeDefined();
     expect(JSON.stringify(found)).toContain('mgr-withhold');
@@ -446,9 +453,7 @@ describe('flushWithheldReports（時間で必ず配る逃げ道）', () => {
 // ---------------------------------------------------------------------------
 
 interface FakeSession {
-  backgroundTasksChanged(
-    tasks: readonly { id: string; taskType: string }[],
-  ): Promise<void>;
+  backgroundTasksChanged(tasks: readonly { id: string; taskType: string }[]): Promise<void>;
   say(text: string): Promise<void>;
   finish(text: string): Promise<void>;
 }

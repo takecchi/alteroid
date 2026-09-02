@@ -205,9 +205,9 @@ describe('foldClaudeMessage — background_tasks_changed', () => {
   });
 
   it('`tasks` が配列でなければ0個を返す（「0本」と名乗らない）', () => {
-    expect(
-      foldClaudeMessage(sdk({ type: 'system', subtype: 'background_tasks_changed' })),
-    ).toEqual([]);
+    expect(foldClaudeMessage(sdk({ type: 'system', subtype: 'background_tasks_changed' }))).toEqual(
+      [],
+    );
     expect(
       foldClaudeMessage(
         sdk({ type: 'system', subtype: 'background_tasks_changed', tasks: 'not-an-array' }),
@@ -218,9 +218,7 @@ describe('foldClaudeMessage — background_tasks_changed', () => {
   it('`tasks: []`（本当に0本）は、0個ではなく空配列を持つ1件のイベントになる', () => {
     // **「配列が読めた」場合だけが「0本」を名乗れる**（`runtimeFactsOf` と
     // 同じ作法）。配列そのものが無い（上のテスト）場合と区別する。
-    const event = only(
-      sdk({ type: 'system', subtype: 'background_tasks_changed', tasks: [] }),
-    );
+    const event = only(sdk({ type: 'system', subtype: 'background_tasks_changed', tasks: [] }));
     expect(event).toEqual({ type: 'background_tasks', tasks: [] });
   });
 

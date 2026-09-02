@@ -208,7 +208,9 @@ export interface AgentDelegationNotified {
  * 背景タスクの在り高が変わった（level 信号。**REPLACE 意味論**）。
  *
  * SDK の `SDKBackgroundTasksChangedMessage` の JSDoc から逐語で引く
- * （`@anthropic-ai/claude-agent-sdk@0.3.258` の `sdk.d.ts`）:
+ * （version 0.3.258 同梱の `sdk.d.ts`。**この番人テスト
+ * （`agent-events.test.ts`）自身が SDK パッケージ名の文字列をここへ書く
+ * ことを禁じているので、パッケージ名は書かない** — 版番号だけを残す）:
  *
  * > consumers that only need 'is background work running' should replace
  * > their set with each payload rather than pairing edges, so a missed
