@@ -668,18 +668,83 @@ interface MemoryTocEntry {
 /**
  * 目次の1行に付く「親をたどれなかった」の**種類**。
  *
- * **4つを1つに畳まない。** どれも「親の行が上に無い」という同じ見た目になるが、
+ * **5つを1つに畳まない。** どれも「親の行が上に無い」という同じ見た目になるが、
  * **読み手が次に見に行く先が違う**（`renderMemoryTocIssue` の doc）。畳むと、
  * いちばん多い状態（親は実在していて、この描画に載っていないだけ）が、いちばん
  * 怖い状態（文書がそもそも無い）の言葉で報告される。
+ *
+ * `cycle-outside-render` は5つ目（循環の一部が描画の外の記憶を通る。
+ * `resolveMemoryHierarchy` の `detectCycle` の doc）。
+ *
+ * **`export` してあるのはテストのため。** `memory.test.ts`
+ * が5状態の網羅性を `Record<MemoryTocIssue, true>` で縛る
+ * （this repo の既存の網羅の歯は手書きの配列 + `assertNever` だが、依頼者の門で
+ * 今回は明示的に `Record<...>` 形を指定された）——正本のこの型を直接縛ることで、
+ * 6つ目の状態が増えたときにテスト側の宣言を埋め忘れると `tsc` が落ちる。テスト側に
+ * 別の union を書き写すと、書き写した側が古いままでも気づけない（二重管理になる）。
  */
-type MemoryTocIssue = 'missing-parent' | 'cycle' | 'parent-not-listed' | 'parent-not-rendered';
+export type MemoryTocIssue =
+  'missing-parent' | 'cycle' | 'parent-not-listed' | 'parent-not-rendered' | 'cycle-outside-render';
 
 interface ResolvedTocNode {
   entry: MemoryTocEntry;
   depth: number;
   issue?: MemoryTocIssue;
   children: ResolvedTocNode[];
+}
+
+/**
+ * 記憶の全体を、階層の解決に要る形（在否と `parent`）で引ける索引。
+ *
+ * `resolveMemoryHierarchy` が「この描画（`entries`）の外」を見るときの唯一の
+ * 窓——在否は `slugs`（`Set` の参照。安い）、`parent` は `parentOf`（**遅延**。
+ * `buildMemoryPresence` の doc）で引く。2つを分けてあるのは、在否の判定
+ * （`parent-not-rendered` かどうか）は毎回要るが、`parent` の値（循環の検出）は
+ * 「親がこの描画の外に在る」ときにしか要らないからである。
+ */
+interface MemoryPresence {
+  /** 記憶（ストア）に実在する slug の全体。 */
+  readonly slugs: ReadonlySet<string>;
+  /**
+   * その slug の `parent`（生の frontmatter の値。存在するとは限らない）。
+   * 対象の slug がそもそも記憶に無ければ `undefined`。
+   */
+  parentOf(slug: string): string | undefined;
+}
+
+/**
+ * `documents`（記憶の全体）から `MemoryPresence` を組み立てる。
+ *
+ * **`parentOf` の中身（frontmatter の解析）は遅延させる——初回に呼ばれたときに
+ * だけ全体を1度だけ解析して記憶化し、以降はその結果を使い回す。** `slugs` は
+ * ここで即座に作る（`Set` を作るだけで、`content` は1文字も読まない。安い）。
+ *
+ * **理由は呼び手の頻度である。** `clone.ts` の `#withFreshMemory` は**毎ターン**
+ * この経路を通る。`parentOf` が要るのは「親がこの描画（差分）の外に在る」
+ * ときの循環検出（`resolveMemoryHierarchy` の `detectCycle`）だけであり、
+ * 親が同じ描画の中で全部解決するターン（＝典型的には「変わった文書の親も
+ * 一緒に変わった」か「そもそも親を持たない文書しか変わっていない」ターン）
+ * では `parentOf` は一度も呼ばれず、記憶全体の frontmatter を1文字も解析
+ * しない。全体の `parent` を毎ターン先読みで解析すると、記憶が育つほど
+ * 「更新の無いターン」まで比例して重くなる（依頼者の門3「クローンの呼び出し
+ * 回数に比例する費用を足さない」の同じ精神を、`documents()` の再読み込みだけ
+ * でなく CPU 側にも適用したもの）。
+ */
+function buildMemoryPresence(documents: readonly MemoryPart[]): MemoryPresence {
+  const slugs = new Set(documents.map((doc) => doc.slug));
+  let parentBySlug: Map<string, string | undefined> | undefined;
+  function parentOf(slug: string): string | undefined {
+    if (parentBySlug === undefined) {
+      parentBySlug = new Map(
+        documents.map((doc) => {
+          const frontmatter = parseMemoryFrontmatter(doc.content);
+          return [doc.slug, frontmatter.kind === 'parsed' ? frontmatter.parent : undefined];
+        }),
+      );
+    }
+    return parentBySlug.get(slug);
+  }
+  return { slugs, parentOf };
 }
 
 /**
@@ -699,24 +764,26 @@ interface MemoryHierarchyElsewhere {
    */
   renderedAsPremise?: ReadonlySet<string>;
   /**
-   * **記憶（ストア）に実在する slug の全体。** この描画に含まれる slug を
+   * **記憶の全体を引ける索引。** `slugs` にはこの描画に含まれる slug を
    * 含んでいてよい——描画の中に在るかどうかは先に判定されるので、渡し手は
    * 「今回載せていないもの」を選り分けずに、手元の全体をそのまま渡せばよい
    * （選り分けを渡し手にやらせると、そこが2つ目の間違えどころになる）。
    *
-   * **渡さなければ（既定は空集合）この状態は起こりえない**——記憶の全体を
+   * **渡さなければ（既定は `undefined`）この状態は起こりえない**——記憶の全体を
    * 渡している呼び手（システムプロンプトへの焼き込み・`memory_list`）の
    * 出力を1バイトも変えないための既定値である。
    */
-  presentInMemory?: ReadonlySet<string>;
+  presentInMemory?: MemoryPresence;
 }
 
 /**
  * 親子関係を解決し、木にする。**循環と、存在しない親を指す `parent` を
  * 黙って落とさない**（4-1「階層は『それ自体が目次である文書』で作る」）。
  *
+ * - 親をたどると自分自身に戻る、または祖先の鎖のどこかで輪になる（循環） →
+ *   ルート扱いにし、`issue: 'cycle'`（輪の全員がこの描画に載っている）または
+ *   `issue: 'cycle-outside-render'`（輪の一部がこの描画の外を通る）
  * - 親が存在しない slug を指す → ルート扱いにし、`issue: 'missing-parent'`
- * - 親をたどると自分自身に戻る（循環） → ルート扱いにし、`issue: 'cycle'`
  * - 親はこの `entries`（目次の対象）には無いが、`elsewhere.renderedAsPremise` には
  *   在る（同じ描画の中に premise として全文で載っている） → ルート扱いにし、
  *   `issue: 'parent-not-listed'`
@@ -725,6 +792,12 @@ interface MemoryHierarchyElsewhere {
  *   `issue: 'parent-not-rendered'`
  *
  * どれも文書自体は消えない——ルートとして目次に残り、印がつく。
+ *
+ * **循環の判定を他の4つより先に行う理由**（`renderMemoryTocIssue` の doc の
+ * 表と同じ話）: 読み手の次の一手が違う。`missing-parent` / `parent-not-listed` /
+ * `parent-not-rendered` はどれも「（この場では）何もしなくてよい」だが、循環は
+ * 「どれかの `parent` を直せ」である。循環を「親は外に在る」で覆うと、直すべき
+ * 欠陥が黙る——だから `effectiveParent` は `detectCycle` を最初に呼ぶ。
  *
  * ## `elsewhere` — 「この目次の外にも実在する slug」
  *
@@ -748,25 +821,69 @@ interface MemoryHierarchyElsewhere {
  * 存在していて、この描画の対象ではないだけである。`elsewhere` を渡すことで、
  * この2つを `missing-parent` から分けて名指しできるようにする。
  *
- * ## ⚠️ 循環の検出は、いまも `entries` の中だけで閉じている
+ * ## 循環の検出は、いまは記憶の全体で行う（かつては `entries` の中だけで閉じていた）
  *
- * `elsewhere` が運ぶのは **slug の集合**であって、`parent` の対応表ではない。
- * だから「循環の一部が `entries` の外を通る」形（a → b → c → a で c だけが
- * 差分に無い）は `cycle` として検出できず、`parent-not-rendered` に落ちる。
- * **これは「無い」と言い切る誤りではない**（親は実際に在り、実際にこの描画に
- * 載っていない）が、**言えるはずのことを言えていない。** 直すには記憶の全体の
- * `parent` を毎ターン読み直して渡すことになり、この関数の引数の形が変わる
- * ——範囲が別なので、ここでは直していない。**ここを直すときは
- * `renderMemoryTocIssue` の doc も一緒に読むこと。**
+ * **⚠️ ここは以前「範囲外」として明記していた箇所である。** `elsewhere` が運ぶ
+ * ものが slug の集合だけだった間は、循環の一部が `entries` の外を通る形
+ * （a → b → c → a で c だけが描画に無い）を `cycle` として検出できず、
+ * `parent-not-rendered` に落ちていた。これは「無い」と言い切る誤りではない
+ * （親は実際に在り、実際にこの描画に載っていない）が、言えるはずのことを
+ * 言えていなかった。`elsewhere.presentInMemory` を `MemoryPresence`（`parent`
+ * まで引ける索引）へ変えたことで、`detectCycle` が記憶の全体を辿れるように
+ * なり、この欠落は埋まった。
+ *
+ * **`detectCycle` の辿り方**: `slug` から出発し、各ステップで「その slug が
+ * `entries` に在れば `entries` の `parent`、無ければ `elsewhere.presentInMemory`
+ * の `parent`」を引く。一度でも訪れた slug に戻ったら循環——**その循環が
+ * `entries` の外の slug を1つでも経由していれば `cycle-outside-render`、
+ * 全員が `entries` の中で完結していれば `cycle`**（歩いた経路のどこかで
+ * `bySlug` に無い slug を経由したかどうかで判定する）。`presentInMemory` が
+ * 渡されていなければ（`elsewhere.presentInMemory === undefined`）、`entries` の
+ * 外へ出た時点で歩みを止める——**この場合の結果は、`presentInMemory` を
+ * 渡す前の実装と1文字も変わらない**（既存の歯 `4状態を畳まない` 系列と、
+ * 新設した `presentInMemory を渡さなければ出力が1バイトも変わらない` の歯で
+ * 固定してある）。
+ *
+ * **⚠️ ここでも言えないこと。** `detectCycle` が `presentInMemory.parentOf` を
+ * 呼ぶのは「循環かもしれない経路を実際に歩いているとき」に限られる——
+ * `parent-not-rendered` の中で循環していない大多数（実運用のほとんど）でも、
+ * 経路を1歩でも `entries` の外へ出れば `parentOf` は呼ばれる（そうしないと
+ * その1歩が循環の一部かどうか判定できない）。**「親が全部この描画の中で解決する
+ * ターン」でだけ frontmatter の解析を省ける**のであって、「親が描画の外に在る
+ * turn では省ける」わけではない（`buildMemoryPresence` の doc）。
  */
 function resolveMemoryHierarchy(
   entries: readonly MemoryTocEntry[],
   elsewhere: MemoryHierarchyElsewhere = {},
 ): ResolvedTocNode[] {
   const renderedAsPremise = elsewhere.renderedAsPremise ?? new Set<string>();
-  const presentInMemory = elsewhere.presentInMemory ?? new Set<string>();
+  const presentInMemory = elsewhere.presentInMemory;
   const bySlug = new Map(entries.map((entry) => [entry.slug, entry]));
   const parentOf = new Map(entries.map((entry) => [entry.slug, entry.parent]));
+
+  /**
+   * `slug` の祖先の鎖に輪が在るかを、記憶の全体を辿って判定する
+   * （`resolveMemoryHierarchy` の doc「`detectCycle` の辿り方」）。
+   */
+  function detectCycle(slug: string): 'cycle' | 'cycle-outside-render' | undefined {
+    const seen = new Set<string>([slug]);
+    let cursor = parentOf.get(slug);
+    let touchedOutside = false;
+    for (;;) {
+      if (cursor === undefined || cursor === '') return undefined;
+      if (seen.has(cursor)) return touchedOutside ? 'cycle-outside-render' : 'cycle';
+      seen.add(cursor);
+      if (bySlug.has(cursor)) {
+        cursor = parentOf.get(cursor);
+        continue;
+      }
+      // `cursor` はこの描画の外。索引が無ければ、従来どおりここで歩みを止める
+      // （循環なし——`missing-parent` / `parent-not-rendered` の判定は呼び手側）。
+      if (presentInMemory === undefined) return undefined;
+      touchedOutside = true;
+      cursor = presentInMemory.parentOf(cursor);
+    }
+  }
 
   function effectiveParent(slug: string): {
     parent?: string;
@@ -774,23 +891,15 @@ function resolveMemoryHierarchy(
   } {
     const direct = parentOf.get(slug);
     if (direct === undefined || direct === '') return {};
+    const cycle = detectCycle(slug);
+    if (cycle !== undefined) return { issue: cycle };
     if (!bySlug.has(direct)) {
       // **順に見る。** 「同じ描画の中に premise として載っている」ほうが具体的
       // なので先に当てる——記憶の全体には当然その premise も入っているので、
       // 逆順にすると具体的な言い方のほうが二度と出なくなる。
       if (renderedAsPremise.has(direct)) return { issue: 'parent-not-listed' };
-      if (presentInMemory.has(direct)) return { issue: 'parent-not-rendered' };
+      if (presentInMemory?.slugs.has(direct)) return { issue: 'parent-not-rendered' };
       return { issue: 'missing-parent' };
-    }
-    if (direct === slug) return { issue: 'cycle' };
-    const seen = new Set<string>([slug]);
-    let cursor = direct;
-    for (;;) {
-      if (seen.has(cursor)) return { issue: 'cycle' };
-      seen.add(cursor);
-      const next = parentOf.get(cursor);
-      if (next === undefined || next === '' || !bySlug.has(next)) break;
-      cursor = next;
     }
     return { parent: direct };
   }
@@ -890,14 +999,16 @@ function memoryFreshnessMarker(freshness: MemoryDescriptionFreshness): string {
  * 循環・存在しない親・「目次の外に実在する親」を黙って落とさず、印として
  * 言葉にする。
  *
- * **`missing-parent` / `parent-not-listed` / `parent-not-rendered` を畳まない。**
- * 3つとも「親の行が上に無い」という同じ見た目だが、**読み手が次に疑う先が違う。**
+ * **5つを畳まない。** どれも「親の行が上に無い」という同じ見た目だが、
+ * **読み手が次に疑う先が違う。**
  *
- * | 印                    | 何が起きているか                                         | 読み手が次に見る先                       |
- * | --------------------- | -------------------------------------------------------- | ---------------------------------------- |
- * | `missing-parent`      | その slug の文書がそもそも無い（打ち間違いか、削除された） | `parent` の綴り／消したかどうか          |
- * | `parent-not-listed`   | 文書は実在し、**同じ描画の中に premise として全文が載っている** | この目次のすぐ上                    |
- * | `parent-not-rendered` | 文書は実在するが、**今回の描画そのものに載っていない**     | 記憶の側（`memory_list` を呼ぶ必要は無い） |
+ * | 印                     | 何が起きているか                                          | 読み手が次に見る先                         |
+ * | ---------------------- | --------------------------------------------------------- | ------------------------------------------- |
+ * | `missing-parent`       | その slug の文書がそもそも無い（打ち間違いか、削除された） | `parent` の綴り／消したかどうか             |
+ * | `cycle`                | 親をたどると輪になる。**輪の全員がこの描画に載っている**  | どれかの `parent`（輪の中の全員を疑ってよい） |
+ * | `parent-not-listed`    | 文書は実在し、**同じ描画の中に premise として全文が載っている** | この目次のすぐ上                      |
+ * | `parent-not-rendered`  | 文書は実在するが、**今回の描画そのものに載っていない**     | 記憶の側（`memory_list` を呼ぶ必要は無い）   |
+ * | `cycle-outside-render` | 親をたどると輪になるが、**輪の一部がこの描画の外を通る**   | どれかの `parent`（輪の全員は画面上に無い）  |
  *
  * 本文の在り処は `renderMemoryDocuments` の doc が保証する不変条件（「どの文書も、
  * 全文か目次行かのどちらか一方に必ず現れる」）そのものなので、`parent-not-listed`
@@ -909,8 +1020,12 @@ function memoryFreshnessMarker(freshness: MemoryDescriptionFreshness): string {
  * である。だから言い方も変える。**「見つからない」と書かないことが要点である**
  * ——クローンはそれを「記憶の階層が壊れた」と読んで確かめに行く（実測 2026-09-02）。
  *
- * `cycle` については、循環の一部が描画の外を通ると検出できない（この場合
- * `parent-not-rendered` に落ちる。理由と直し方は `resolveMemoryHierarchy` の doc）。
+ * **`cycle` と `cycle-outside-render` を畳まない理由**（`resolveMemoryHierarchy`
+ * の doc と同じ話をここにも書く）: 輪の一部が画面に無いのに「循環」とだけ言うと、
+ * 読み手は在りもしない輪をこの目次の中だけで探してしまう。
+ * `cycle-outside-render` は「輪は実在するが、全員はここに出ていない」と明言する
+ * ——次に見るべきは `memory_list`（記憶の全体の階層）であって、この目次の中を
+ * 探し直すことではない。
  */
 function renderMemoryTocIssue(node: ResolvedTocNode): string {
   if (node.issue === 'missing-parent') return `［親 ${String(node.entry.parent)} が見つからない］`;
@@ -927,6 +1042,12 @@ function renderMemoryTocIssue(node: ResolvedTocNode): string {
       '（記憶には実在する——消えたのではない）］'
     );
   }
+  if (node.issue === 'cycle-outside-render') {
+    return (
+      `［親 ${String(node.entry.parent)} との間で循環` +
+      '（輪の一部はここに載せた分には含まれない——記憶の側にある）］'
+    );
+  }
   return '';
 }
 
@@ -940,6 +1061,31 @@ function renderMemoryTocLine(node: ResolvedTocNode): string {
 }
 
 /**
+ * この描画（`entries` ∪ `elsewhere.renderedAsPremise`）が記憶の全体を覆っている
+ * かを判定する。
+ *
+ * **`renderMemoryToc` が省略行の文言を選ぶためだけに存在する。** `elsewhere`
+ * を受け取っていない、または受け取っていても `presentInMemory` を渡していない
+ * 呼び手（記憶の全体を渡している呼び手）は無条件に「覆っている」とする——
+ * `presentInMemory` を渡さなければ挙動を1バイトも変えないという既定値の約束を
+ * ここでも守る。渡されているときは、`presentInMemory.slugs` の全員がこの描画
+ * （`entries` の slug と、premise として同じ描画に載っている slug）に含まれて
+ * いるかを見る。
+ */
+function tocEntriesCoverWholeMemory(
+  entries: readonly MemoryTocEntry[],
+  elsewhere: MemoryHierarchyElsewhere,
+): boolean {
+  if (elsewhere.presentInMemory === undefined) return true;
+  const rendered = new Set<string>(entries.map((entry) => entry.slug));
+  for (const slug of elsewhere.renderedAsPremise ?? []) rendered.add(slug);
+  for (const slug of elsewhere.presentInMemory.slugs) {
+    if (!rendered.has(slug)) return false;
+  }
+  return true;
+}
+
+/**
  * `fact` 文書の目次を組み立てる。**保存しない——毎回この関数が
  * 各文書の `description` から組み立て直す**ので、目次と実体が食い違う
  * ことは構造的に起こりえない（4-1）。
@@ -947,9 +1093,16 @@ function renderMemoryTocLine(node: ResolvedTocNode): string {
  * **件数で切ったら、切った件数を必ず出す**（`excerpt.ts` と同じ約束）。
  *
  * `elsewhere` はそのまま `resolveMemoryHierarchy` へ渡す（`parent` がこの目次の
- * 外に実在するときの2つの状態を区別するため。呼び手
+ * 外に実在するときの3つの状態を区別するため。呼び手
  * （`buildMemoryDocumentSections`）が premise の slug 集合と、記憶の全体の
- * slug 集合を渡す）。
+ * `MemoryPresence` を渡す）。
+ *
+ * **省略行の文言は、この描画が記憶の全体を覆っているかで変える**
+ * （`tocEntriesCoverWholeMemory`）。部分だけを描く呼び手（`clone.ts` の
+ * `#withFreshMemory`）の下では「目次の対象は全 N 件」の N が「今回変わった
+ * fact の数」を指してしまい、記憶全体の件数だと誤読される——**判定は省略が
+ * 起きたとき（`omitted > 0`）だけ行う**（実運用では 300 件を超える差分は
+ * まず起きないので、毎回この判定を評価する必要は無い）。
  */
 function renderMemoryToc(
   entries: readonly MemoryTocEntry[],
@@ -964,7 +1117,12 @@ function renderMemoryToc(
     ...shown.map(renderMemoryTocLine),
   ];
   if (omitted > 0) {
-    lines.push(`…ほか ${omitted} 件は目次から省略（目次の対象は全 ${flat.length} 件）。`);
+    lines.push(
+      tocEntriesCoverWholeMemory(entries, elsewhere)
+        ? `…ほか ${omitted} 件は目次から省略（目次の対象は全 ${flat.length} 件）。`
+        : `…ほか ${omitted} 件は目次から省略（この目次に並べたのは全 ${flat.length} 件。` +
+            '記憶の全体ではなく、今回載せた分だけである）。',
+    );
   }
   return lines.join('\n');
 }
@@ -989,7 +1147,7 @@ function renderPremisePart(part: MemoryPart): string {
  */
 function buildMemoryDocumentSections(
   documents: readonly MemoryPart[],
-  presentInMemory?: ReadonlySet<string>,
+  presentInMemory?: readonly MemoryPart[],
 ): {
   premiseParts: MemoryPart[];
   premiseSection: string;
@@ -1022,10 +1180,14 @@ function buildMemoryDocumentSections(
   // として出る（`renderMemoryTocIssue` の 'parent-not-listed' と
   // 'parent-not-rendered'）。
   const premiseSlugs = new Set(premiseParts.map((part) => part.slug));
+  // `MemoryPresence` はここで1回だけ組み立てる（`buildMemoryPresence` の doc
+  // どおり、`parentOf` の中身の解析はさらに遅延する——`presentInMemory` が
+  // 渡されていても、循環検出が実際にこの描画の外へ出ない限り1文字も解析しない）。
+  const presence = presentInMemory === undefined ? undefined : buildMemoryPresence(presentInMemory);
   const tocSection =
     tocEntries.length === 0
       ? ''
-      : renderMemoryToc(tocEntries, { renderedAsPremise: premiseSlugs, presentInMemory });
+      : renderMemoryToc(tocEntries, { renderedAsPremise: premiseSlugs, presentInMemory: presence });
 
   return { premiseParts, premiseSection, tocEntries, tocSection };
 }
@@ -1036,14 +1198,21 @@ function buildMemoryDocumentSections(
  */
 export interface RenderMemoryDocumentsOptions {
   /**
-   * **記憶（ストア）に実在する slug の全体。** `documents` に含まれる slug を
+   * **記憶（ストア）に実在する文書の全体。** `documents` に含まれる文書を
    * 含んでいてよい（選り分けは不要。`MemoryHierarchyElsewhere.presentInMemory`）。
+   *
+   * **型は「slug の集合」ではなく「文書そのもの」（`readonly MemoryPart[]`）。**
+   * 循環の検出（`resolveMemoryHierarchy` の `detectCycle`）が記憶の全体を
+   * 辿れるようにするには、在否（slug）だけでなく `parent`（frontmatter）まで
+   * 引ける必要がある——渡し手は選り分けも変換もせず、手元の文書の配列を
+   * そのまま渡せばよい（`MemoryPresence` への変換はこの関数の内側、
+   * `buildMemoryPresence` が1回だけ行う。frontmatter の解析はそこでも遅延する）。
    *
    * 渡すと、`parent` が `documents` の外を指しているときに「見つからない」
    * （＝文書がそもそも無い）ではなく「在るが、ここに載せた分には含まれない」と
    * 出る。**渡さなければ出力は1バイトも変わらない。**
    */
-  presentInMemory?: ReadonlySet<string>;
+  presentInMemory?: readonly MemoryPart[];
 }
 
 /** `premiseSection` と `tocSection` を、実際に焼き込む1本の文字列へ繋ぐ。 */
@@ -1074,7 +1243,7 @@ function joinMemorySections(premiseSection: string, tocSection: string): string 
  * 全体を渡したときの約束である。** `clone.ts` の `#withFreshMemory` は
  * **変わった文書だけ**を渡す——そのとき「渡されなかった文書」は上にも下にも
  * 現れない。**その状態を「存在しない」と報告しないために、部分だけを渡す呼び手は
- * `options.presentInMemory` に記憶の全体の slug を渡すこと**（渡さないと、親が
+ * `options.presentInMemory` に記憶の全体の文書を渡すこと**（渡さないと、親が
  * 今回変わっていないだけで「親 X が見つからない」と出る）。
  */
 export function renderMemoryDocuments(
@@ -1541,7 +1710,7 @@ export function describeMemoryFloor(input: {
  * 「後の床から逆算しない」のと同じ理由で、ここも `renderMemoryDocuments`
  * を再実装しない。
  *
- * ## 引数は「1回のツール呼び出しで変わった文書すべて」
+ * ## 引数は「1回のツール呼び出しで変わった文書すべて」＋「書き込み後の記憶の全体」
  *
  * `memory_write` / `memory_append` / `memory_frontmatter_set` は1文書しか
  * 変えないので `[written]` の1要素配列を渡す。**`memory_section_move` だけ
@@ -1557,6 +1726,13 @@ export function describeMemoryFloor(input: {
  * ここは2文書をまとめて1回だけ `renderMemoryDocuments` に通し、**単一の
  * 合計**として返す（内訳は文書ごとの区分を並べて示す）。
  *
+ * **`memoryAfter`（第2引数）は `renderMemoryDocuments(parts, { presentInMemory:
+ * memoryAfter })` へそのまま渡す。** 呼び手4箇所（`tools.ts`）は書き込み
+ * **後**に `stores.persona.documents()` を読み直した値をもう手元に持っている
+ * （`memoryFloorNote` / `memorySessionGrowthNote` に渡しているのと同じ変数
+ * `memoryAfter`）——**ここで改めてストアを読み直さない**（依頼者の門3
+ * 「クローンの呼び出し回数に比例する費用を足さない」）。
+ *
  * ## ⚠️ これは予測であって実測ではない（依頼者の明示条件）
  *
  * 1. **「他に何も変わらなければ」という条件付きである。** ここで返す数は
@@ -1569,16 +1745,54 @@ export function describeMemoryFloor(input: {
  * 2. **`memory_section_move` は移動元と移動先の両方を「変わった文書」に
  *    する。** 直上のとおり、ここでは両方をまとめた**合計**を1つの数で返す
  *    （別々に出す選択肢もあったが採らなかった——理由は直上）。
- * 3. **⚠️ `renderMemoryDocuments` へ `presentInMemory` を渡していない。**
- *    ここが持っているのは「今回書いた文書」だけで、記憶の全体を知らない
- *    （呼び手4箇所は `tools.ts` に在り、ストアを渡してこない）。そのため、
- *    書いた文書が **fact で、その `parent` が今回の書き込みに含まれない**
- *    ときだけ、実際に載る印（「在るが、ここに載せた分には含まれない」）より
- *    短い印（「見つからない」）で数えることになり、**数十文字ぶん少なく出る。**
- *    ⟹ 直すには呼び手の側から記憶の全体を渡す必要がある（`tools.ts` の4箇所
- *    の署名が変わる）。ここではその形にしていない。
+ * 3. **`memoryAfter` は「この呼び出しの時点でのスナップショット」である。**
+ *    `read()` から `write()` までの間に人間が `PUT /memory/:slug` で別の
+ *    文書を書き換える窓が理屈のうえでは在る（`describeMemoryFloor` の同種の
+ *    注意と同じ）。次のターンが始まるまでにさらに記憶が動けば、そのぶんは
+ *    この数に入らない——これは1の「他に何も変わらなければ」の条件そのもの
+ *    であって、`memoryAfter` を渡したことで新しく生まれた限界ではない。
  *
- * ## ⚠️ 引数を非空タプルにしてある理由（P3 の同乗、#318）
+ * ### ⭐ 直っていたもの: `presentInMemory` を渡していなかった欠落（#618 の続き）
+ *
+ * **これは以前ここに書かれていた「範囲外」の1つだった。** 第2引数
+ * （`memoryAfter`）が無かった頃、この関数は「今回書いた文書」しか持たず、
+ * 記憶の全体を知らなかった。書いた文書が **fact で、その `parent` が今回の
+ * 書き込みに含まれない**ときだけ、実際に載る印（「在るが、ここに載せた分には
+ * 含まれない」146+32=178文字級）より短い印（「見つからない」146文字級）で
+ * 数えることになり、**数十文字（実測32文字）少なく出ていた**。`memoryAfter`
+ * を必須の第2引数にし、`renderMemoryDocuments` へ `presentInMemory` として
+ * そのまま渡すことで、書く側（この関数）と読む側（`clone.ts` の
+ * `#withFreshMemory`）が同じ「記憶の全体」を見て同じ印を選ぶようになった
+ * ——この一致は `clone-memory-injection.test.ts` の通しの歯（道具の応答から
+ * 見込み文字数を取り出し、次のターンに実際に載る塊の文字数と突き合わせる）
+ * で固定してある。
+ *
+ * ## ⚠️ 引数を必須にしてある理由（第2引数も含む）
+ *
+ * **`memoryAfter` は optional にしていない。** `renderMemoryDocuments` 自身の
+ * `options.presentInMemory` が optional なのとは事情が違う——あちらは「記憶の
+ * 全体を渡す呼び手（システムプロンプトへの焼き込み・`memory_list`）が正当に
+ * 省略する」ための optional だが、こちらの4呼び手はどれも書き込み**後**に
+ * `stores.persona.documents()` を読み直した値をすでに手元に持っており、
+ * 省略する正当な理由が無い。**省略できる形にすると、渡し忘れが黙って
+ * 「見つからない」寄りの短い数へ倒れる**（この関数がいままさに踏んでいた
+ * 欠落そのもの）。必須にして `tsc` に強制させることで、渡し忘れを実行時では
+ * なくビルド時に落とす（依頼者の門4「黙って効かなくなる形を作らない」）。
+ *
+ * **空配列を渡されても `throw` しない。** 呼び手が書き込みの成功
+ * **後**にここを呼ぶ以上、`memoryAfter` が空になるのは「ストアが記憶を
+ * 1件も返さなかった」という異常時だけで、直下の `parts` の非空タプルほど
+ * 型で防げる性質のものではない。**空を渡すと `presentInMemory` を渡さな
+ * かったのと同じ挙動になるだけ**（`renderMemoryDocuments` の既定）で、
+ * 直下の `throw`（`parts` が空のとき）とは扱いが違う——`parts`
+ * の空は呼び手の実装誤りだが `memoryAfter` の空はストアの状態そのものであり、
+ * ここで投げると「記憶は書けているのに応答がエラーになる」形になって
+ * 二重書きを誘発する（直下の「なぜ空を渡しても投げっぱなしにしてよいのか」と
+ * 同じ理由）。**いまの4呼び手が実際に空を渡すことは起こりえない**
+ * （`stores.persona.documents()` は書き込み直後の呼び出しなので、書いた
+ * 文書自身が最低1件返る）。
+ *
+ * ## ⚠️ `parts` を非空タプルにしてある理由（P3 の同乗、#318）
  *
  * 呼び手4箇所（`tools.ts` の `memory_write` / `memory_append` /
  * `memory_frontmatter_set` / `memory_section_move`）は**全部、書き込みが
@@ -1599,12 +1813,13 @@ export function describeMemoryFloor(input: {
  */
 export function describeMemoryReinjectionEstimate(
   parts: readonly [MemoryPart, ...MemoryPart[]],
+  memoryAfter: readonly MemoryPart[],
 ): string {
   if (parts.length === 0) {
     throw new Error('describeMemoryReinjectionEstimate: parts が空（呼び手の実装誤り）');
   }
 
-  const chars = renderMemoryDocuments(parts).length;
+  const chars = renderMemoryDocuments(parts, { presentInMemory: memoryAfter }).length;
   const kindOf = (part: MemoryPart): MemoryDocKind =>
     resolveMemoryDocKind(parseMemoryFrontmatter(part.content));
   const kindLabel = (kind: MemoryDocKind): string =>

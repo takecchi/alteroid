@@ -3986,9 +3986,24 @@ class Clone implements CloneHost {
    * 呼び直している。**この断りの1行目（「ここに出ていない文書は変わっていない」）
    * と正面から矛盾する印を、同じ塊の中で出していた。**
    *
-   * だから `presentInMemory` に**記憶の全体の slug**（`present`。削除の判定に
-   * 使っているものと同じ集合）を渡す。載せる文書は差分のままで、**「無い」と
-   * 「今回載せていない」の区別だけが戻る。**
+   * だから `presentInMemory` に**記憶の全体の文書**（`documents`。ストアから
+   * 読み直したそのままの配列）を渡す。載せる文書は差分（`changed`）のままで、
+   * **「無い」と「今回載せていない」の区別だけが戻る。**
+   *
+   * **`documents` をそのまま渡せる——`present`（slug の `Set`）を新しく作る
+   * 必要は無い。** `RenderMemoryDocumentsOptions.presentInMemory` の型は
+   * `readonly MemoryPart[]`（`memory.ts`）で、`MemoryDocument` はこれへ構造的に
+   * 代入できる。**`present` 自体は消していない**——`removed`（消えた文書名の
+   * 列挙）の判定に引き続き使っているので、ここでは選り分けの手間を
+   * `presentInMemory` の側だけで省いた形になる。
+   *
+   * **循環の検出も記憶の全体で行われるようになった。** `documents` を渡す前は
+   * 「循環の一部が差分の外を通る」形（a → b → c → a で c だけが今回の差分に
+   * 無い）を `cycle` として検出できず、`parent-not-rendered` に落ちていた
+   * （`resolveMemoryHierarchy` の doc）。`documents` を渡す形にしたことで、
+   * その欠落もここで一緒に埋まる——`#withFreshMemory` 側で追加の作業をした
+   * わけではなく、`presentInMemory` の型が「slug の集合」から「文書の全体」へ
+   * 変わったことの副産物である。
    */
   async #withFreshMemory(text: string): Promise<string> {
     let documents: MemoryDocument[];
@@ -4025,7 +4040,7 @@ class Clone implements CloneHost {
       head,
       ...(changed.length === 0
         ? []
-        : ['', renderMemoryDocuments(changed, { presentInMemory: present })]),
+        : ['', renderMemoryDocuments(changed, { presentInMemory: documents })]),
       ...(removed.length === 0
         ? []
         : [
