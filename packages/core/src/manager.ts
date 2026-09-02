@@ -917,6 +917,24 @@ export interface ManagerPool {
    * 更新されなくなる。
    */
   probeTurnEnds(): Promise<void>;
+  /**
+   * **握り潰した「背景処理の完了待ちで畳んだ報告」の逃げ道（時間）**
+   * （`case 'report'` の `event.awaitingBackground` の doc）。
+   *
+   * 握り潰すのは「後で必ず配る」であって「捨てる」ではない——背景処理が
+   * 完了すればマネージャーは SDK に起こされて次のターンを回すので、次の
+   * 本物の報告が `#emit()` を通るときに自動で上書きされる（`#emit` の doc）。
+   * **それが来なかった場合の逃げ道がこれ。** `lastAt` から
+   * `WITHHELD_REPORT_FLUSH_MS` 経っても次のターンが来ていない積みを、
+   * クローンへ配って帳面を空にする。
+   *
+   * 呼ぶのは `apps/daemon/src/turn-end-poller.ts`（60秒周期。
+   * `probeTurnEnds()` の後ろに並べる — `probeTurnEnds` の中には入れない。
+   * あちらは費用の門を持つ別の関心事である）。
+   *
+   * **1件の失敗で残りを止めない**（`probeTurnEnds` と同じ形）。
+   */
+  flushWithheldReports(): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -1825,6 +1843,69 @@ interface UsageNoticeMemory {
   folded: number;
 }
 
+/**
+ * 握り潰した「背景処理の完了待ちで畳んだ報告」の在庫（managerId → これ）
+ * （`case 'report'` の `event.awaitingBackground` の doc）。
+ *
+ * **この帳面は在庫（in-memory）であって記録ではない。** デーモンが再起動
+ * すると消える——消えても**日誌の側は残る**（`case 'report'` が積む前に
+ * 必ず `type: 'decision'` の日誌を1件書くため。`journal_read` / CLI
+ * `/journal` / HTTP API `GET /journal` / Web UI の4面から読める）。
+ */
+interface WithheldReportMemory {
+  /** 積んだ本数（次の本物の報告・`flushWithheldReports()`・`closed` で配って0へ戻る）。 */
+  count: number;
+  /** 最初に積んだ時刻（ISO 8601）。 */
+  firstAt: string;
+  /** 最後に積んだ時刻（ISO 8601）。`flushWithheldReports()` の期限判定はここを見る。 */
+  lastAt: string;
+  /** 最後に積んだ回の本文（末尾の抜粋に使う）。 */
+  lastText: string;
+  /** 最後に積んだ回の `awaitingBackground.breakdown`（診断用の写し）。 */
+  breakdown: string;
+}
+
+/**
+ * `flushWithheldReports()` が「もう次のターンが来ない」と見なすまでの時間。
+ *
+ * **なぜ30分か。** 背景処理は `pnpm test` で4分・作業者の委譲で10分規模が
+ * 実測で普通にある。短くすると、正常に完了を待っているだけの積みまで
+ * 「配っていない」と急かすことになり、握り潰しの意味（同じ知らせで受信箱を
+ * 埋めない）が消える。長すぎると、本当に次のターンが来ない回（マネージャーが
+ * 死んでいる等）で、本物の最終報告に相当する知らせが30分近く寝てしまう——
+ * この2つの間を取った値である。
+ */
+const WITHHELD_REPORT_FLUSH_MS = 30 * 60_000;
+
+/** `case 'report'` の decision 日誌・`#emit` の抜粋に使う文字数（`NOTIFY_REPORT_EXCERPT` と同じ考え方）。 */
+const WITHHELD_REPORT_EXCERPT = 240;
+
+/**
+ * `flushWithheldReports()` が1件を「もう配ってよい（期限切れ）」と判定する
+ * ための純関数。**`Pool#flushWithheldReports` の中の同じ式をそのまま
+ * 切り出しただけで、出力・挙動は1文字も変えていない。**
+ *
+ * **切り出した理由はテスト可能性である**（AGENTS.md「テストが書けない構造は、
+ * テストが無いのと同じ」）。`WithheldReportMemory.lastAt` を書くのは
+ * `#withholdBackgroundReport` の1箇所だけで、そこは常に
+ * `new Date(this.#now()).toISOString()`（＝壊れない ISO 文字列）しか
+ * 書かない。加えて `Pool` の帳面（`#withheldReports`）は真の private
+ * field（`#`）なので、外から壊れた値を注入する手段が無い——`probeTurnEnd`
+ * / `mayClaim` などと同じ形で、判定だけを外へ出す。
+ *
+ * **`lastAt` が読めない（`Date.parse` が `NaN` を返す）ときは、期限切れ
+ * として「配る」側へ倒す（`continue` しない）。** 判別が曖昧なときにどちらへ
+ * 倒すかの選択で、この直しの線は「減らし損ねる（同じ知らせが1回多く付く）
+ * のは許容し、消す（在庫に永久に残ったまま二度と配られない）のは許さない」
+ * である。実運用ではこの枝を通らないはずだが、**「今は起きない」を
+ * 「起きない」の理由にしない** —— 将来ここが壊れても、黙って配達漏れには
+ * しない。
+ */
+export function withheldReportOverdue(lastAt: string, now: number, flushMs: number): boolean {
+  const parsed = Date.parse(lastAt);
+  return Number.isNaN(parsed) || now - parsed >= flushMs;
+}
+
 class Pool implements ManagerPool {
   readonly #stores: Stores;
   readonly #post: (event: InboxEvent) => void;
@@ -1919,6 +2000,18 @@ class Pool implements ManagerPool {
    * 1本の本文に必ず載る（{@link UsageNoticeMemory.folded}）。
    */
   readonly #usageNotices = new Map<string, UsageNoticeMemory>();
+  /**
+   * 握り潰した「背景処理の完了待ちで畳んだ報告」の在庫（managerId → これ）。
+   * doc は {@link WithheldReportMemory}。
+   *
+   * **`#emit()`（`report` / `question` / `permission` の3種すべてが通る
+   * 隘路）が、その managerId に積みがあれば次に配る `text` の末尾へ1行足して
+   * から post し、ここを空にする。** 依頼者（クローン）が「この直しが効き
+   * すぎて本物の報告まで消していないか」を確かめる手段が要るので、日誌
+   * だけでなく push 側にも出す——日誌は引きに行かないと気づけない（気づけ
+   * ないことが症状なので）。
+   */
+  readonly #withheldReports = new Map<string, WithheldReportMemory>();
   /** 起動時の引き取りが走っている間だけ立つ。`#reattach` はこれを待つ。 */
   #restoring: Promise<void> | null = null;
   /**
@@ -2850,6 +2943,36 @@ class Pool implements ManagerPool {
         // **1件の失敗で残りを止めない**（interface の doc）。この委譲の3欄は
         // 更新されないまま残る——古い助言が残ることはあるが、それは
         // `sessionMissingSince` と同じ「揮発してよい」側の代償である。
+      }
+    }
+  }
+
+  /**
+   * 握り潰した「背景処理の完了待ちで畳んだ報告」の逃げ道（時間）。doc は
+   * `ManagerPool` interface を参照。
+   *
+   * **`lastAt` から `WITHHELD_REPORT_FLUSH_MS` 経った積みだけを配る**
+   * （判定は純関数 {@link withheldReportOverdue} に切り出してある。`lastAt`
+   * が読めない場合の扱いもそちらの doc を参照）。まだ経っていない積みは
+   * 触らない——正常に次のターンを待っているだけの委譲を急かさない。
+   *
+   * **`#emit()` を通す**（`case 'closed'` と同じ理由。専用の文面を1本出せば
+   * `#emit` 自身が積みを見つけて末尾へ1行足す）。
+   */
+  async flushWithheldReports(): Promise<void> {
+    const now = this.#now();
+    for (const [managerId, memory] of [...this.#withheldReports.entries()]) {
+      try {
+        if (!withheldReportOverdue(memory.lastAt, now, WITHHELD_REPORT_FLUSH_MS)) continue;
+        this.#emit(
+          managerId,
+          'report',
+          `[${managerId}] 背景処理の完了待ちで畳んだ報告が、次のターンの完了を` +
+            `${String(Math.round(WITHHELD_REPORT_FLUSH_MS / 60_000))}分待っても届かなかった。` +
+            'まとめて配る。',
+        );
+      } catch {
+        // **1件の失敗で残りを止めない**（`probeTurnEnds` と同じ形）。
       }
     }
   }
@@ -4765,6 +4888,44 @@ class Pool implements ManagerPool {
         // 失われる」を作る（R4 のすぐ上の条件とは別の理由でここに置く。
         // R4 は「止めた後」、こちらは「止めていないが中身が無い」）。
         if (event.contentless === true) return;
+        // **背景処理の完了待ちで畳んだターンの報告は、記録は残すが受信箱へは
+        // 回さない。** `contentless`（すぐ上）と完全に同型の直しで、対象を
+        // 広げただけである——「中身の無い報告はクローンのターンを起こさない」
+        // を「背景処理の完了待ちで畳んだターンの報告は起こさない」へ広げた。
+        //
+        // `event.awaitingBackground` は `runner.ts` の `#apply` の
+        // `case 'turn_ended'` が3条件（失敗ではない・`waiting_human` ではない
+        // ・背景タスクの在り高が非0）を全部満たすときだけ立てる構造化された
+        // 印で（`runner-protocol.ts` の `report.awaitingBackground` の doc）、
+        // `event.text` の中身では判定していない。
+        //
+        // **握り潰すのは「後で必ず配る」であって「捨てる」ではない。** 背景
+        // 処理が完了すればマネージャーは SDK に起こされて次のターンを回すので、
+        // 次の本物の報告が `#emit()` を通るときに自動で上書きされる（`#emit`
+        // の doc）。それが来なかった場合の逃げ道が2つ在る——`case 'closed'`
+        // （セッションが畳まれたとき）と `flushWithheldReports()`（時間で
+        // 必ず配る。`ManagerPool` interface の doc）。
+        //
+        // **これが「配らなかったことがどこかに残る」の本籍。** 日誌の
+        // `type: 'decision'` が1件、この判断・件数・breakdown・本文の冒頭の
+        // 抜粋を持つ——`journal_read` / CLI `/journal` / HTTP API
+        // `GET /journal` / Web UI の4面から読める。既存の `exchange` の
+        // 日誌書き込み（このすぐ上）で本文は既に全文残っているので、ここでは
+        // 抜粋でよい。
+        if (event.awaitingBackground !== undefined) {
+          const awaitingBackground = event.awaitingBackground;
+          await this.#journal({
+            type: 'decision',
+            decision: `[${event.managerId}] 背景処理の完了待ちで畳んだターンの報告なので受信箱へは回さない`,
+            grounds:
+              `managerId=${event.managerId} ` +
+              `awaitingBackground.count=${String(awaitingBackground.count)} ` +
+              `breakdown=${awaitingBackground.breakdown} ` +
+              `本文冒頭: ${excerptLine(event.text, WITHHELD_REPORT_EXCERPT)}`,
+          });
+          this.#withholdBackgroundReport(event.managerId, event.text, awaitingBackground);
+          return;
+        }
         // **`event.text` を包まずに渡す（issue #287）。**
         //
         // **書き手**: `runner.ts` の `reportText()` / `failedReportText()`
@@ -5604,8 +5765,32 @@ class Pool implements ManagerPool {
         // `String(error)` を先に `codeSpan()` へ通してから連結する形になる。
         // `manager.ts` の中では覆らない。
         if (event.status === 'failed') this.#emit(event.managerId, 'report', event.reason);
+        // **積みが在れば、それをクローンへ配ってから畳む。** 握り潰した
+        // 「背景処理の完了待ちで畳んだ報告」は「後で必ず配る」約束であって
+        // 「捨てる」ではない（`case 'report'` の `event.awaitingBackground`
+        // の doc）——この委譲はもう走らないので、次のターン（＝次の本物の
+        // 報告が `#emit()` を通って自動で上書きする経路）は二度と来ない。
+        // ここで配らずに `#retire()` を呼ぶと、約束の相手が来ないまま消える。
+        //
+        // **`#emit()` を通す**（空文字の報告を1本 `#emit` するのではなく、
+        // 専用の文面を1本出す）——通せば `#emit` 自身が積みを見つけて末尾へ
+        // 1行足す（`#emit` の doc）ので、ここでは「畳まれた」事実だけを書く。
+        //
+        // **`failed` で上の `#emit` が既に配っていれば、この時点で帳面は
+        // 空になっている**（`#emit` が自分で管理する）ので二重には配らない。
+        if (this.#withheldReports.has(event.managerId)) {
+          this.#emit(
+            event.managerId,
+            'report',
+            `[${event.managerId}] この委譲は終わった（status=${event.status}）。` +
+              '背景処理の完了待ちで畳んでいた報告をまとめて配る。',
+          );
+        }
         // **`closed` は runner 側の `RunnerSession#finish()` を通った印**であり、
         // done / lost / failed のどれであれ、この委譲はもう走っていない。
+        // `#retire` は帳面も一緒に畳む（`#retire` の doc）——上で配って
+        // いれば既に空、配っていなくても（＝上の分岐に来なかった、つまり
+        // 元から積みが無い）ここでの delete は無害な no-op である。
         this.#retire(event.managerId);
         return;
       }
@@ -5811,6 +5996,35 @@ class Pool implements ManagerPool {
   }
 
   /**
+   * 握り潰した「背景処理の完了待ちで畳んだ報告」を在庫へ積む
+   * （`case 'report'` の `event.awaitingBackground` の doc）。
+   *
+   * **`this.#now()` を使う（`lastReportAt` とは違う）。** あちらは「デーモンが
+   * 受け取った瞬間」を記録するだけの情報欄で、以降の判定には使わない
+   * （`case 'report'` の doc「この境界を跨いだ瞬間として `new
+   * Date().toISOString()` を直接使う」）。**ここは違う** —— `lastAt` は
+   * `flushWithheldReports()` が `this.#now()` との差分で期限を判定する
+   * 材料そのものなので、記録する側も同じ時計（`this.#now()`）で揃えないと、
+   * 時計を注入できるテストで期限判定を検査できない（`#now` の doc「テストが
+   * 判定の時刻を持てるようにする」）。
+   */
+  #withholdBackgroundReport(
+    managerId: string,
+    text: string,
+    awaitingBackground: { count: number; breakdown: string },
+  ): void {
+    const now = new Date(this.#now()).toISOString();
+    const existing = this.#withheldReports.get(managerId);
+    this.#withheldReports.set(managerId, {
+      count: (existing?.count ?? 0) + 1,
+      firstAt: existing?.firstAt ?? now,
+      lastAt: now,
+      lastText: text,
+      breakdown: awaitingBackground.breakdown,
+    });
+  }
+
+  /**
    * この一言を「止まっている確認への回答」として消費してよいかを決める。
    *
    * **宛先（`requestId`）か意思（`decision`）のどちらかが在るときだけ消費する。**
@@ -5916,13 +6130,33 @@ class Pool implements ManagerPool {
     // これまでどおり何も渡さない（挙動は変わらない）。
     markup?: TextMarkup,
   ): void {
+    // **`report` / `question` / `permission` の3種すべてが通る隘路。** その
+    // managerId に握り潰した「背景処理の完了待ちで畳んだ報告」（`#withheldReports`）
+    // が積んであれば、いま配るこの `text` の末尾へ1行足してから post し、
+    // 帳面を空にする——「後で必ず配る」を実現する唯一の場所である
+    // （`case 'report'` の `event.awaitingBackground` の doc）。
+    //
+    // **理由は依頼者（クローン）側の検算のため。** この直しが効きすぎて本物の
+    // 報告まで消していないかを確かめる手段が要る。日誌（`type: 'decision'`）
+    // だけだと引きに行かないと気づけない（気づけないことが症状なので）——
+    // だから push 側にも出す。
+    const withheld = this.#withheldReports.get(managerId);
+    let outgoing = text;
+    if (withheld !== undefined) {
+      this.#withheldReports.delete(managerId);
+      outgoing =
+        `${text}\n\n（この間に、背景処理の完了待ちで畳んだターンの報告を ` +
+        `${String(withheld.count)} 本配っていない（最初 ${withheld.firstAt} / ` +
+        `最後 ${withheld.lastAt}）。全文は日誌に在る（\`journal_read\`）。` +
+        `最後の1本の冒頭: ${excerptLine(withheld.lastText, WITHHELD_REPORT_EXCERPT)}）`;
+    }
     this.#post({
       type: 'manager_message',
       id: randomUUID(),
       at: new Date().toISOString(),
       managerId,
       kind,
-      text,
+      text: outgoing,
       ...(requestId === undefined ? {} : { requestId }),
       // **取れない軸に値を作らない**（AGENTS.md 地雷表）。`markup` が
       // `undefined` のときはキーごと書かない — 上の `requestId` と同じ形
@@ -5995,6 +6229,24 @@ class Pool implements ManagerPool {
    */
   #retire(managerId: string): void {
     this.#records.delete(managerId);
+    // **握り潰しの帳面も一緒に畳む（漏れを在庫に残さない）。**
+    //
+    // `case 'closed'` の done/lost/failed 経路は `#retire()` を呼ぶ前に
+    // 積みを `#emit()` で配り切っているので、ここに来た時点で
+    // `#withheldReports` は既に空——この delete は無害な no-op である。
+    //
+    // **`abort()`（R4 の `stopped`）経由で呼ばれたときは、ここが唯一の
+    // 掃除口になる。** その委譲はもう走らないので、「後で必ず配る」の相手
+    // （次の本物の報告）は二度と来ない——**全文は既に日誌の `type:
+    // 'exchange'` 側（`case 'report'` が `awaitingBackground` の分岐へ
+    // 入る前に必ず書く行）に残っている**（`#withheldReports` の doc）。
+    // `type: 'decision'` の日誌はこれとは役割が違い、`excerptLine()` で
+    // 切った冒頭抜粋しか持たない——「配らないと判断した」という判断の
+    // 記録であって、全文の保管場所ではない。ここで静かに畳んでよい理由は
+    // 全文が消えないことであって、`decision` 側が全文を持つからではない。
+    // R4 が「止めた後は受信箱へ回さない」と決めている以上、ここで
+    // `#emit()` して起こすのは R4 の判断そのものを覆す。
+    this.#withheldReports.delete(managerId);
   }
 
   async #journal(entry: JournalEntryInput): Promise<void> {

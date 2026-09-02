@@ -1278,6 +1278,7 @@ describe('クローン — マネージャーの確認がいまも待たれて�
         throw new Error('not implemented');
       },
       probeTurnEnds: () => Promise.resolve(),
+      flushWithheldReports: () => Promise.resolve(),
       stop: () => Promise.resolve(),
     };
 
@@ -2308,6 +2309,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
         throw new Error('not implemented');
       },
       probeTurnEnds: () => Promise.resolve(),
+      flushWithheldReports: () => Promise.resolve(),
       stop: () => Promise.resolve(),
     };
 

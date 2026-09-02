@@ -5243,8 +5243,18 @@ class Clone implements CloneHost {
       // **この層が反応しない事実。** 委譲の区間（`worker_wait`）を数えているのは
       // マネージャー層（`runner.ts`）で、クローンは `Task` を持つが区間を数えて
       // いない。**「まだ書いていない」ではなく「この層は見ないと決めてある」である。**
+      //
+      // **`background_tasks` も同じ理由でここに並べる。** 数えているのは
+      // マネージャー層（`runner.ts` の `#liveBackgroundTasks` →
+      // `report.awaitingBackground`）で、クローンは自分自身の背景処理を
+      // 数えていない——クローン自身が `Bash` を `run_in_background: true`
+      // で起こしても、この事実はクローンの `AgentEvent` としては届く（同じ
+      // `foldClaudeMessage` を通るため）が、「畳んだターンの報告を握り潰す」
+      // という反応そのものをマネージャー層にしか実装していない（クローンの
+      // ターンは人間が読む前提の別の面なので、握り潰す判断はまた別に要る）。
       case 'delegation_started':
       case 'delegation_notified':
+      case 'background_tasks':
         return;
 
       // **枝が増えたらここが型で落ちる（#285 と同じ形）。** 落ちたら「この層は

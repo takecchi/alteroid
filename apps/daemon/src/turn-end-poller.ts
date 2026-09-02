@@ -11,6 +11,15 @@ import type { ManagerPool } from '@alteroid/core';
  *
  * 周期は分単位で足りる（`ManagerPool#probeTurnEnds` 自身の費用の門が10分の
  * 静止＋バックオフを持つので、ここを秒単位にしても大半は門で弾かれるだけである）。
+ *
+ * **この周期に `ManagerPool#flushWithheldReports()` も相乗りする**
+ * （`probeTurnEnds()` の**後ろ**。中には入れない — あちらは費用の門を
+ * 持つ別の関心事で、こちらは時間だけで判定する別物である）。理由は
+ * `flushWithheldReports()` の doc のとおり——マネージャーが背景処理の
+ * 完了待ちで畳んだ報告を握り潰したとき（`manager.ts` の `case 'report'`
+ * の `event.awaitingBackground`）、次の本物の報告が来ればそれが自動で
+ * 上書きするが、来なかった場合の逃げ道がここでしか作れない
+ * （デーモン常駐のポーラーの外に、時間で必ず何かを起こす場所が無いため）。
  */
 export const TURN_END_POLL_INTERVAL_MS = 60_000;
 
@@ -59,6 +68,10 @@ export function startTurnEndPolling(options: TurnEndPollerOptions): TurnEndPolle
     inFlight = options.managers
       .probeTurnEnds()
       .catch(() => undefined) // 例外でプロセスを落とさない。
+      // **`probeTurnEnds()` の後ろに並べる。中には入れない**（上の doc）。
+      // 前者が例外で終わっても後者は走る——別の関心事なので、片方の失敗が
+      // もう片方を道連れにしない。
+      .then(() => options.managers.flushWithheldReports().catch(() => undefined))
       .finally(() => {
         inFlight = null;
       });

@@ -63,6 +63,7 @@ function fakeClone(stores: Stores) {
     // drain の契機（`POST /runners/vacate`）も同じ理由で触らない。
     async vacate() {},
     async probeTurnEnds() {},
+    async flushWithheldReports() {},
     async stop() {},
   };
 
