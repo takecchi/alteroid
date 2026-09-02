@@ -93,6 +93,15 @@ export interface ManagerStartInput {
   runnerId?: string;
 }
 
+/**
+ * `ManagerSummary.sessionMissingSince` が**何を確かめた印なのか**（#579）。
+ *
+ * **`'resume-failed'` のほうが強い観測である**（resume まで試して駄目だった）。
+ * `'unlisted'` は「器が抱えている一覧に載っていなかった」だけで、resume はまだ
+ * 試していない。**読み手の次の一手が違うので、1つに畳まない**（同名の欄の doc）。
+ */
+export type SessionMissingKind = 'resume-failed' | 'unlisted';
+
 export interface ManagerSummary {
   managerId: string;
   status: JobStatus;
@@ -162,21 +171,58 @@ export interface ManagerSummary {
    * 器なのか経路なのかは片側からは決められないので、`lost` という確かめた事実の
    * 名前をここで名乗らせない）。名乗るのはこの別の欄でやる。
    *
-   * 立つ契機は2つで、どちらも**「デーモンが既に払った往復」の結果を拾うだけである**
-   * （この欄のために新しい往復を1つも足していない）:
+   * 立つ契機は3つある。**最初の2つは「デーモンが既に払った往復」の結果を拾うだけ**
+   * である:
    *
    * 1. **`send()` が実際に送って runner が 404 を返し、resume でも入り直せなかった回。**
    *    台帳の `attached` もそこで `false` へ訂正される（Issue #563 の実体）
    * 2. **`#reattach()` が runner の一覧に居ないと判定し、resume でも入り直せなかった回。**
    *    照合の往復は `hello` の受け口が既に払っている
+   * 3. **10秒ごとの生存確認が `GET /managers` を引いて、この委譲を載せていないと
+   *    観測した回**（#579。`Pool#noteMissingSessions`）
    *
-   * **`list()` はここへ1バイトも書かない。** `#silentRunners()` と同じく、既に在る像を
-   * 読むだけである——一覧のためにネットワーク往復を足さないという判断は、
-   * `manager_list` の JSDoc と `RunnerBacklogSnapshot` の doc が既に2度明示している
-   * （north_star 禁止2）。**⟹ 誰も送らず `hello` も来ないうちは、この欄は立たない。**
-   * それは欠落ではなく、材料をこれ以上増やさないという判断の帰結である。
+   * **3つ目だけは新しい往復である。隠さない。** `GET /managers` は `/health` とは
+   * 別の口なので、heartbeat 1周につき1台あたり1本増える（`RunnerClient.list` の
+   * doc に理由を書いた）。**それでも足したのは、1と2 がどちらもイベント駆動で、
+   * 誰も送らず `hello` も来ないうちは、消えたセッションを持つ委譲が `[running]` と
+   * 出続けていたからである**（#579。人間の逐語は「リアルタイムで正しく取れる
+   * ように」）。⚠️ **この doc は2026-09-02 まで「`list()` はここへ1バイトも
+   * 書かない……誰も送らず `hello` も来ないうちは、この欄は立たない。それは欠落では
+   * なく、材料をこれ以上増やさないという判断の帰結である」と書いていた。** 覆した
+   * のはその判断そのもので、経緯は #579 に在る。
+   *
+   * **`manager_list` 側の判断は覆していない。** 禁じられているのは「**一覧の側から
+   * 自動で**往復を払う」形（クローンの opt-in を踏み潰す。north_star 禁止2）で、
+   * `Pool#list` はいまも名簿の像を同期に読むだけである（`#silentRunners()` と
+   * 同じ作法）。増えた往復は heartbeat の側にしか無い。
+   *
+   * **3つ目は観測しかしない。** `attached` も `status` も動かさず、resume も
+   * 挑まない（1と2 は resume を挑んだうえで失敗した回にだけ立つ）。⟹ **この欄が
+   * 立っていても、1・2 の経路と違って「resume も駄目だった」までは意味しない。
+   * その区別は `sessionMissingKind` が名乗る**（畳まない）。
    */
   sessionMissingSince?: string;
+  /**
+   * **`sessionMissingSince` が何を確かめた印なのか**（#579）。時刻が在るときだけ
+   * 載り、消すときは必ず一緒に消える。
+   *
+   * | 値 | 確かめたこと | 読み手の次の一手 |
+   * | --- | --- | --- |
+   * | `'resume-failed'` | 送った・引き取ろうとした結果、**resume でも入り直せなかった** | もう話しかけられない。`manager_report` / 生ログから拾えるものを拾って始末をつける側へ回る |
+   * | `'unlisted'` | 10秒ごとの生存確認で、**器が抱えている一覧に載っていなかった**（resume はまだ試していない） | `manager_send` で入り直せることがある |
+   *
+   * **2つを1つの ⚠ に畳まない。** 畳むと、読み手は前者だと思って諦めるか、
+   * 後者だと思って無駄に送るかのどちらかを必ず間違える——**次にやることが違う**
+   * のに、字面が同じになるからである（`manager_list` / CLI / Web UI の3面とも
+   * この値で言い分けている）。
+   *
+   * **格上げはするが格下げはしない。** 生存確認が先に `'unlisted'` を置いた後で
+   * `send()` が resume まで試して失敗したら `'resume-failed'` へ上がる。逆
+   * （`'resume-failed'` が立っている委譲を、後の生存確認が `'unlisted'` へ
+   * 戻す）は起こさない——resume が駄目だったという事実は、一覧に載っていない
+   * という観測より強い。
+   */
+  sessionMissingKind?: SessionMissingKind;
   /**
    * **デーモンが生ログの末尾を読んで計算した、直近のターンが終わっているらしい
    * という助言**（Issue #567）。`probeTurnEnd`（このファイル）が見つけた行の
@@ -1143,9 +1189,13 @@ interface ManagerRecord {
    * の同名の欄へそのまま出る）。
    *
    * 立つのは**宛先が答えたうえで「そのセッションは無い」と言った**回だけである:
-   * `send()` が 404 を受けた回と、`#reattach()` が runner の一覧に居ないと判定した回。
-   * どちらもそこで `attached` を `false` へ訂正し、この時刻を置く。
+   * `send()` が 404 を受けた回と、`#reattach()` が runner の一覧に居ないと判定した回、
+   * そして**10秒ごとの生存確認が `GET /managers` から同じことを観測した回**
+   * （#579。`#noteMissingSessions`）。前2つはそこで `attached` を `false` へ
+   * 訂正し、この時刻を置く。**3つ目は観測しかしない**——`attached` も `status` も
+   * 動かさず、resume も挑まない（挑むと10秒ごとに全台へ resume を撃つことになる）。
    * **resume で入り直せたら消す**——直った事実のほうが新しいので、古い観測を残さない。
+   * 3つ目の経路も同じで、**runner が「抱えている」と答えた観測がこの時刻より新しければ消す。**
    *
    * **プロセス内の像にしか置かない**（`Job` へは書かない）。`leaseRefusal` と同じ
    * 扱いで、デーモンを作り直したら観測し直しから始まる——起動時の `#restoreJobs()`
@@ -1153,6 +1203,31 @@ interface ManagerRecord {
    * だけで、「セッションが在る」と名乗るわけではない）。
    */
   sessionMissingSince?: string;
+  /**
+   * 上の印が何を確かめたものか（#579。`ManagerSummary.sessionMissingKind` の
+   * 写しで、doc はそちらに在る）。**`sessionMissingSince` と対で立ち、対で消える。**
+   */
+  sessionMissingKind?: SessionMissingKind;
+  /**
+   * **いまの宛先（`job.runnerId`）がこの委譲のセッションを持ったと、デーモンが
+   * 確かめた時刻**（ISO8601。#579）。
+   *
+   * **これは「置いた時刻」ではなく「置けたと確かめた時刻」である。** 書くのは
+   * `start()` / `resume()` が返った後と、runner 自身が `session` を名乗った回
+   * だけで、どれも **runner の側にセッションが在ることが確定した瞬間**である
+   * （`Host#start` は `#sessions` へ載せてから返る）。
+   *
+   * **何のために在るか。** 10秒ごとの生存確認が拾うセッション一覧（#579）は
+   * 観測であって現在値ではない。`start` を投げてから runner が答えるまでの窓に
+   * 当たった観測は、「まだ載っていない」という**正しい**答えを返す——これを
+   * 「セッションが消えた」と読むと、たったいま起こした委譲に ⚠ が付く。
+   * だから **この時刻より古い観測は使わない**（`#noteMissingSessions`）。
+   *
+   * **プロセス内の像にしか置かない**（`sessionMissingSince` と同じ）。無いときは
+   * `job.createdAt`（＝一覧の `startedAt`） まで下がる——デーモンを作り直した直後の像がこれで、その委譲は
+   * 起動より前から在るので、いまの観測はどれもそれより新しい。
+   */
+  runnerSessionSince?: string;
   /**
    * **デーモンが生ログの末尾を読んで計算した、直近のターンが終わっているらしい
    * という助言**（Issue #567。`ManagerSummary` の同名の3欄へそのまま出る）。
@@ -2113,6 +2188,10 @@ class Pool implements ManagerPool {
       this.#records.delete(managerId);
       throw error;
     }
+    // **ここで初めて「器が持っている」が確定する**（#579）。`runner.start()` は
+    // runner がセッションを載せてから返る。これより前の生存確認の観測は、この
+    // 委譲について何も言っていない（`ManagerRecord.runnerSessionSince` の doc）。
+    record.runnerSessionSince = new Date(this.#now()).toISOString();
 
     await this.#persist(record);
     await this.#journal({
@@ -2250,6 +2329,12 @@ class Pool implements ManagerPool {
         // **runner が「そのセッションは無い」と答えた。台帳のほうが古い。**
         record.attached = false;
         record.sessionMissingSince ??= new Date(this.#now()).toISOString();
+        // **由来を上書きする（格上げ）**（#579。`ManagerSummary.sessionMissingKind`）。
+        // ここを抜けた時点で印が残っている ⟺ resume でも入り直せなかった、が
+        // 成り立つ（戻れたら下で両方消す）。生存確認が先に置いた `unlisted` は、
+        // より強い観測で置き換わる。**時刻のほうは `??=` のまま**——最初に
+        // 気づいた時刻を動かさない。
+        record.sessionMissingKind = 'resume-failed';
         await this.#persist(record);
         attached = false;
       }
@@ -2297,6 +2382,9 @@ class Pool implements ManagerPool {
         // **戻れたのだから、古い観測は捨てる。** 残すと「いま話しかけられない」と
         // 読める欄が、話しかけられる相手に付いたままになる。
         record.sessionMissingSince = undefined;
+        // **由来も必ず一緒に消す**（#579）。片方だけ残すと、時刻の無い由来が
+        // 一覧の字面に出ることになる。
+        record.sessionMissingKind = undefined;
         reentered = true;
       }
     }
@@ -2388,9 +2476,111 @@ class Pool implements ManagerPool {
     return silent;
   }
 
+  /**
+   * **10秒ごとの生存確認が聞き取った「その器がいま抱えている委譲」**（#579。
+   * `runnerId` → 委譲 id の集合と、その観測時刻）。
+   *
+   * **ここで新たに runner を叩かない。** `#silentRunners()` と同じく、名簿
+   * （`RunnerRegistry#entries()`）に既に立っている観測を同期に読むだけである
+   * ——往復を払っているのは heartbeat の側で、一覧の側ではない
+   * （`RunnerClient.list` の doc）。
+   *
+   * **`runnerId` が同じ行が複数在るときは、和を採る**（`#sighting` の doc が
+   * 言うとおり、畳まれつつある旧 器と新しい器が同じ `runnerId` で並びうる）。
+   * **どれか1台でも「抱えている」と答えたなら、抱えている側へ倒す** — 片方の
+   * 空の答えで「セッションが消えた」と名乗ると、まだ生きている器を持つ委譲に
+   * ⚠ が付く。観測時刻は答えた行のうち最も新しいものを採る。
+   *
+   * **聞けていない行（`sessions` が無い）は数に入れない。** 「答えたが1本も
+   * 無かった」だけがここへ入る（`RunnerEntry.sessions` の doc）。
+   */
+  #runnerSessions(): ReadonlyMap<string, { ids: ReadonlySet<string>; observedAt: string }> {
+    const seen = new Map<string, { ids: Set<string>; observedAt: string }>();
+    for (const entry of this.#runners.entries()) {
+      if (entry.runnerId === undefined) continue;
+      if (entry.sessions === undefined || entry.sessionsObservedAt === undefined) continue;
+      const before = seen.get(entry.runnerId);
+      if (before === undefined) {
+        seen.set(entry.runnerId, {
+          ids: new Set(entry.sessions),
+          observedAt: entry.sessionsObservedAt,
+        });
+        continue;
+      }
+      for (const id of entry.sessions) before.ids.add(id);
+      if (entry.sessionsObservedAt.localeCompare(before.observedAt) > 0) {
+        before.observedAt = entry.sessionsObservedAt;
+      }
+    }
+    return seen;
+  }
+
+  /**
+   * **生存確認が持ち帰った観測を、台帳の `sessionMissingSince` へ写す**（#579）。
+   *
+   * **観測しかしない。** `attached` も `status` も動かさず、resume も挑まない
+   * （挑めば10秒ごとに全台へ resume を撃つことになる）。`send()` / `#reattach()`
+   * の経路は「resume でも入り直せなかった」まで確かめてから立てるが、ここは
+   * 「runner が一覧に載せなかった」という観測そのものである
+   * （`ManagerSummary.sessionMissingSince` の doc）。
+   *
+   * **見るのは `running` / `waiting_human` の2つだけである。** `done` は死では
+   * なく待機で、**runner がセッションを畳んでいるのが正常な回もある**（完遂した
+   * 後にセッションを閉じた回・デーモンを作り直して過去の `done` を台帳に載せ直した
+   * 回。`restore()` の doc）。ここまで ⚠ を付けると、起動のたびに終わった委譲へ
+   * 警告が並び、**本当に困っている1本が埋もれる。** #579 が名指ししているのは
+   * 「`[running]` と出続ける」ほうである（`#reattach` が同じ2つに絞っているのと
+   * 同じ線）。
+   *
+   * **その委譲がその器に置かれる前の観測は使わない**（`runnerSessionSince`）。
+   * `start` を投げてから runner が答えるまでの窓に当たった観測は「まだ載って
+   * いない」という正しい答えを返すので、それを「消えた」と読まない。
+   */
+  #noteMissingSessions(): void {
+    const sessions = this.#runnerSessions();
+    if (sessions.size === 0) return;
+    for (const record of this.#records.values()) {
+      const runnerId = record.job.runnerId;
+      if (runnerId === undefined) continue;
+      const status = record.job.status;
+      if (status !== 'running' && status !== 'waiting_human') continue;
+      const observed = sessions.get(runnerId);
+      if (observed === undefined) continue;
+      // 置けたと確かめる前の観測は、この委譲について何も言っていない。
+      const since = record.runnerSessionSince ?? record.job.createdAt;
+      if (observed.observedAt.localeCompare(since) <= 0) continue;
+      if (observed.ids.has(record.job.id)) {
+        // **器が「抱えている」と答えた。** 古い観測がそれより前のものなら捨てる
+        // （`#reattach` が resume に成功したとき消すのと同じ理由——直った事実の
+        // ほうが新しい）。**新しい観測でだけ消す** — `send()` が直前に置いた
+        // 印を、それより古い一覧で消さないため。
+        if (
+          record.sessionMissingSince !== undefined &&
+          observed.observedAt.localeCompare(record.sessionMissingSince) > 0
+        ) {
+          record.sessionMissingSince = undefined;
+          record.sessionMissingKind = undefined;
+        }
+        continue;
+      }
+      // **最初に観測した時刻を残す**（`??=`。`send()` / `#reattach()` と同じ）。
+      // **由来は格下げしない** — 既に印が在るなら、それは `send()` /
+      // `#reattach()` が resume まで試した結果かもしれない（#579。
+      // `ManagerSummary.sessionMissingKind`）。ここが名乗れるのは「名簿に
+      // 載っていなかった」までである。
+      if (record.sessionMissingSince === undefined) {
+        record.sessionMissingSince = observed.observedAt;
+        record.sessionMissingKind = 'unlisted';
+      }
+    }
+  }
+
   async list(): Promise<ManagerSummary[]> {
     await this.#ensureConnected();
 
+    // **一覧の側は往復を1つも足さない**（#579）。既に名簿へ立っている観測を
+    // 読んで台帳へ写すだけである（`#noteMissingSessions` / `#silentRunners`）。
+    this.#noteMissingSessions();
     const silent = this.#silentRunners();
     const known = new Map<string, ManagerSummary>();
     for (const record of this.#records.values()) {
@@ -3742,6 +3932,9 @@ class Pool implements ManagerPool {
           const refusedBefore = record.leaseRefusal !== undefined;
           // 上の doc の順序。**戻れたら下で消す。**
           record.sessionMissingSince ??= missingAt;
+          // **由来を上書きする（格上げ）**（#579。`send()` と同じ形——ここを
+          // 抜けて印が残っている ⟺ resume でも入り直せなかった）。
+          record.sessionMissingKind = 'resume-failed';
           const outcome = await this.#resumeOnce(record, runner, message);
           // **引けなかっただけなら諦めない。** 予約して挑み直す（`retry` は runner
           // 単位の予約であって、`#unresumable` のようにこのジョブを恒久に降ろす
@@ -3782,6 +3975,8 @@ class Pool implements ManagerPool {
           // **戻れたので古い観測は捨てる**（#563）。残すと「いま話しかけられない」と
           // 読める欄が、話しかけられる相手に付いたままになる。
           record.sessionMissingSince = undefined;
+          // **由来も一緒に消す**（#579。片方だけ残さない）。
+          record.sessionMissingKind = undefined;
           record.job.status = 'running';
           await this.#persist(record);
           await this.#journal({
@@ -4400,6 +4595,10 @@ class Pool implements ManagerPool {
     });
     record.attached = true;
     record.job.runnerId = runner.runnerId;
+    // **宛先が変わった瞬間でもある**（#579）。`runner.resume()` が返った時点で、
+    // この器がこの委譲を持っている——生存確認の観測をここから数え直す
+    // （`ManagerRecord.runnerSessionSince` の doc）。
+    record.runnerSessionSince = new Date(this.#now()).toISOString();
     // **resume も「セッションが起きる瞬間」である**（`#tokenIdentities` の doc）。
     //
     // ここが抜けていた。`start` と、引き取りで**既に生きていた**セッション
@@ -4483,6 +4682,9 @@ class Pool implements ManagerPool {
       case 'session': {
         record.job.sessionId = event.sessionId;
         record.attached = true;
+        // **器が自分でそう名乗った**（#579）。`start` / `resume` の返りと同じく、
+        // この瞬間は器がこの委譲を持っていることが確定している。
+        record.runnerSessionSince = new Date(this.#now()).toISOString();
         await this.#persist(record);
         return;
       }
@@ -5247,6 +5449,9 @@ class Pool implements ManagerPool {
         if (event.recovered) {
           record.job.status = 'running';
           record.attached = true;
+          // 前の会話へは戻れなかったが、**器は新しいセッションを持っている**
+          // （#579。`ManagerRecord.runnerSessionSince` の doc）。
+          record.runnerSessionSince = new Date(this.#now()).toISOString();
           await this.#persist(record);
           this.#notifyResumeFallback(record, event.sessionId, event.reason);
           return;
@@ -6307,7 +6512,18 @@ function summaryOf(
     // **同上（#563）。** 既定を置くと、足す人が考えなかったことが「runner はこの
     // 委譲のセッションを持っている」という主張になって外へ出る。呼ぶ側は
     // `record.sessionMissingSince` をそのまま渡せばよい（像が正本である）。
-    ...(sessionMissingSince === undefined ? {} : { sessionMissingSince }),
+    ...(sessionMissingSince === undefined
+      ? {}
+      : {
+          sessionMissingSince,
+          // **由来（#579）は時刻と一緒にしか出さない。** 引数を1つ増やさずに
+          // 像から読むのは、**2つが別々に旅をする経路を作らないため**である
+          // ——片方だけ渡し忘れた呼び出しが在ると、時刻の無い由来や、由来の
+          // 無い時刻が外へ出る。ここで対にしておけば、その形は作れない。
+          ...(record.sessionMissingKind === undefined
+            ? {}
+            : { sessionMissingKind: record.sessionMissingKind }),
+        }),
     // **同上（Issue #567）。** 呼ぶ側は `record.turnEndedAt` 等をそのまま渡せば
     // よい（像が正本である）。3欄は `probeTurnEnd` の1回の呼び出しで一緒に
     // 立ち一緒に消えるのが通常だが、`turnEndedAt` だけは元の行が `timestamp`

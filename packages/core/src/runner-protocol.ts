@@ -1306,6 +1306,19 @@ export interface RunnerClient {
    * いない」であって「0」ではない。** 呼び出し側（`#noteInstance`）はこの
    * 区別を保ったまま記録する。
    */
+  /*
+   * ## `managers`（件数）も同じ応答から拾う（#579）
+   *
+   * **新しい往復ではない。** `/health` は `managers`（＝runner が抱えている
+   * セッションの本数。`host.list().length`）を M4 から無条件で返しており、
+   * `resources()` は既にそれを読んでいる。ここでも読むのは、**0 のときに
+   * `list()`（`GET /managers`）を引かずに済ませるため**である——同じ源から
+   * 出ている件数なので、**0 は「一覧が空である」ことの確定**であり、2本目の
+   * 往復を払っても分かることは1つも増えない（`Registry#probe`）。
+   *
+   * **`undefined` は「取れていない」であって「0」ではない**（`pendingEvents`
+   * と同じ）。`managers` を名乗らない器では `list()` を引く側へ落ちる。
+   */
   identity?(options?: { signal?: AbortSignal }): Promise<
     | {
         runnerId?: string;
@@ -1313,6 +1326,7 @@ export interface RunnerClient {
         revision?: RunnerRevisionReport;
         pendingEvents?: number;
         oldestPendingAt?: string;
+        managers?: number;
       }
     | undefined
   >;
@@ -1347,8 +1361,37 @@ export interface RunnerClient {
    */
   answer(managerId: string, answer: RunnerAnswerCommand): Promise<RunnerAnswerOutcome>;
   stop(managerId: string): Promise<void>;
-  /** いま runner が抱えているセッション（再接続時の突き合わせに使う）。 */
-  list(): Promise<RunnerManagerState[]>;
+  /**
+   * いま runner が抱えているセッション（再接続時の突き合わせに使う）。
+   *
+   * ## 10秒ごとの生存確認もここを叩く（#579）
+   *
+   * **これは新しい往復である。** `identity()` / `ping()` / `resources()` は
+   * どれも同じ `GET /health` を叩くので「既に払っている往復から拾うだけ」で
+   * 済んだが、この口だけは別の URL（`GET /managers`）で、**heartbeat 1周に
+   * つき1台あたり1本増える。** 隠さずここに書いておく——`identity()` の doc
+   * が繰り返している「新しい往復ではない」は、この口には掛からない。
+   *
+   * **なぜ払うか。** これを払わないと「宛先の runner が答えたうえで、この委譲の
+   * セッションを一覧に載せなかった」（`ManagerSummary.sessionMissingSince`）を
+   * 名乗れるのが、誰かが `manager_send` を打った回と runner が `hello` を
+   * 送った回だけになる。＝ **誰も送らないうちは、消えたセッションを持つ委譲が
+   * `[running]` と出続ける**（#579。人間の依頼は「リアルタイムで正しく取れる
+   * ように」である）。`manager_list` 側に opt-in を足す形（#579 の案3）では
+   * CLI・HTTP API・Web UI の3面に opt-in を運ぶ経路が無く、同じ穴が残る。
+   *
+   * **払わないと決めてある往復とは別物である。** `manager_list` / `runners()`
+   * の doc が禁じているのは「**一覧の側から自動で** `resources()` を呼ぶ」形で、
+   * 理由はクローンの opt-in（`runner_list` の `resources: true`）を踏み潰さない
+   * ことである（north_star 禁止2）。ここは heartbeat の側であって、
+   * `manager_list` は依然として自分では1本も往復を足さない（`manager.ts` の
+   * `Pool#list` は名簿の像を同期に読むだけである）。
+   *
+   * **`signal` は必須ではない**（実装しない口があってよい）が、受けるなら
+   * heartbeat の期限（`HEARTBEAT_PROBE_MS`）で中断できる。`HttpRunner#list` は
+   * 受ける。
+   */
+  list(options?: { signal?: AbortSignal }): Promise<RunnerManagerState[]>;
   /** runner のローカルにある生ログ。無ければ null。 */
   transcript(managerId: string): Promise<string | null>;
   /**
@@ -1551,6 +1594,22 @@ export interface RunnerEntry {
   oldestPendingAt?: string;
   /** `pendingEvents` / `oldestPendingAt` を観測できた時刻（ISO8601）。 */
   pendingEventsObservedAt?: string;
+  /**
+   * **その runner が「いま抱えている」と答えた委譲の id**（#579。10秒ごとの
+   * 生存確認が `list()`＝`GET /managers` から拾う）。
+   *
+   * **`undefined` は「1本も抱えていない」ではなく「まだ聞けていない」である。**
+   * 空配列（`[]`）のほうが「答えたが1本も無かった」を意味する——この2つを畳むと、
+   * 聞けなかった回を「セッションが消えた」と読むことになり、実際には走っている
+   * マネージャーを一覧が「セッションが無い」と名乗る（`ManagerSummary`
+   * `sessionMissingSince` の doc が持つ歯止めと同じもの）。だから
+   * `pendingEvents` と同じ作法で、**聞けた回にだけ3欄まとめて載せる。**
+   *
+   * **状態ではなく観測である。** `sessionsObservedAt` と必ず対で読むこと。
+   */
+  sessions?: readonly string[];
+  /** `sessions` を観測できた時刻（ISO8601）。`sessions` と対でだけ載る。 */
+  sessionsObservedAt?: string;
 }
 
 /**
@@ -1935,6 +1994,22 @@ interface RegistryEntry {
    * `RunnerBacklogSnapshot.observedAt` と同じ ISO8601 形式で持つ）。
    */
   pendingEventsObservedAt?: string;
+  /**
+   * **その runner が「いま抱えている」と答えた委譲の id の集合**（#579。
+   * `RunnerEntry.sessions` の写し。同じ doc を持つ）。
+   *
+   * **`undefined`（まだ聞けていない）と空集合（答えたが1本も無かった）を
+   * 畳まない。** `#probeSessions` は聞けた回にしか書かず、失敗した回は
+   * **前の観測をそのまま残す**（消すと「聞けなかった」が「1本も無い」に化ける）。
+   */
+  sessions?: ReadonlySet<string>;
+  /** `sessions` をいつ観測できたか（heartbeat の `at`。ISO8601）。 */
+  sessionsObservedAt?: string;
+  /**
+   * `list()` の探りがいま飛んでいるか。**周期より遅い応答を積み上げない**ための
+   * 錠で、`true` の間はこの entry へ次の探りを投げない（`#probeSessions`）。
+   */
+  sessionsProbing?: boolean;
 }
 
 /**
@@ -2066,6 +2141,12 @@ class Registry implements RunnerRegistry {
               ? {}
               : { pendingEventsObservedAt: entry.pendingEventsObservedAt }),
           }),
+      // runner が抱えているセッション（#579）。**`sessionsObservedAt` と対でしか
+      // 渡さない**——観測時刻の無い一覧は「いつの話か」が読めず、`manager.ts` 側が
+      // 「この委譲が置かれる前の観測」を捨てられなくなる（`Pool#runnerSessions`）。
+      ...(entry.sessions === undefined || entry.sessionsObservedAt === undefined
+        ? {}
+        : { sessions: [...entry.sessions], sessionsObservedAt: entry.sessionsObservedAt }),
     }));
   }
 
@@ -2461,6 +2542,7 @@ class Registry implements RunnerRegistry {
           revision?: RunnerRevisionReport;
           pendingEvents?: number;
           oldestPendingAt?: string;
+          managers?: number;
         }
       | undefined;
     try {
@@ -2488,9 +2570,79 @@ class Registry implements RunnerRegistry {
 
     if (failure === null) {
       this.#markSeen(entry, at, client, identity);
+      /*
+       * **1本も抱えていないと答えた回は、`/managers` を引かない**（#579）。
+       *
+       * `/health` の `managers` は `/managers` とまったく同じ源
+       * （runner 側の `host.list()`）から出ている件数なので、**0 は「一覧が空
+       * である」ことの確定である** — 推測ではない。⟹ 2本目の往復を払っても、
+       * 分かることは1つも増えない。
+       *
+       * **これは「聞けなかった」ではない。** 器は答えている（件数0という答え）
+       * ので、空集合として記録してよい——`#probeSessions` の doc が守っている
+       * 「`undefined`（まだ聞けていない）と空集合（答えたが1本も無かった）を
+       * 畳まない」に、こちらから穴を開けていない。
+       *
+       * ⟹ **何も置かれていない器・空になった器に対しては、往復が1本も増えない。**
+       * `managers` を名乗らない器（古い版・`identity()` を持たない実装）では
+       * `undefined` になるので、その場合は下の `#probeSessions` へ落ちる。
+       */
+      if (identity?.managers === 0) {
+        entry.sessions = new Set();
+        entry.sessionsObservedAt = new Date(at).toISOString();
+        return;
+      }
+      // **生死の判定が終わってから、別の口を叩く**（#579）。待たずに投げるのは
+      // `#beat` が全台へ同時に投げるのと同じ理由で、遅い1台の `/managers` が
+      // 次の周期の生死判定を遅らせないためである。
+      void this.#probeSessions(entry, at, client);
       return;
     }
     this.#markSilent(entry, at, failure);
+  }
+
+  /**
+   * **その runner がいま抱えているセッションを聞く**（#579。`GET /managers`）。
+   *
+   * ## これは生死の材料ではない
+   *
+   * **失敗しても `#markSilent` を呼ばない。** 生死は `/health`（`identity()` /
+   * `ping()`）ただ1つで決める、といういまの契約を動かさない——ここで倒すと、
+   * `/managers` だけが詰まった器から仕事を取り上げることになる（`#markSilent`
+   * の「1回の取りこぼしでは動かさない」と同じ配慮を、別の口へ広げない）。
+   *
+   * **失敗した回は前の観測を消さない。** 消すと `sessions` が `undefined` へ
+   * 戻り、「答えたが1本も無かった」と「聞けなかった」を畳んだのと同じ害が出る
+   * （`RegistryEntry.sessions` の doc）。古い観測は `sessionsObservedAt` を
+   * 見れば古いと分かるので、読む側が捨てられる。
+   *
+   * **観測時刻は応答が返った時刻ではなく、聞きに行った周の時刻（`at`）である。**
+   * 期限まで粘って返った回に「その後にできたセッション」まで見たことにしないため
+   * で、`pendingEventsObservedAt`（`#noteInstance`）と同じ作法である。**倒れる
+   * 先は安全側** — 実際より古い時刻で記録するので、読む側（`Pool#runnerSessions`）
+   * が「この委譲が置かれる前の観測」として捨てるほうへ寄る。
+   */
+  async #probeSessions(entry: RegistryEntry, at: number, client: RunnerClient): Promise<void> {
+    // 周期より遅い応答を積み上げない。**錠を取れなかった回は黙って見送る**
+    // （次の10秒でまた聞ける）。
+    if (entry.sessionsProbing === true) return;
+    entry.sessionsProbing = true;
+    try {
+      const states = await withDeadline(
+        (signal) => client.list({ signal }),
+        HEARTBEAT_PROBE_MS,
+        'セッション一覧',
+      );
+      // 聞いている間に外された / 開き直された / 名簿が止まった（`#probe` と同じ関門）。
+      if (this.#stopped) return;
+      if (this.#entries.get(entry.source.label) !== entry || entry.client !== client) return;
+      entry.sessions = new Set(states.map((state) => state.managerId));
+      entry.sessionsObservedAt = new Date(at).toISOString();
+    } catch {
+      // 上の doc のとおり、**何も書かない**（前の観測をそのまま残す）。
+    } finally {
+      entry.sessionsProbing = false;
+    }
   }
 
   /**

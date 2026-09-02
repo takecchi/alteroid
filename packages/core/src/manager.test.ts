@@ -5251,6 +5251,14 @@ class FakePoolRunner implements RunnerClient {
   profileCalls = 0;
   fakeCredentials: RunnerCredentialFingerprint[] = [];
   fakeProfile: RunnerProfileFingerprint | undefined;
+  /**
+   * `list()` が呼ばれた回数（#579）。**既定の挙動（`[]` を返す）は変えない**——
+   * `Pool#list()` 自身は往復を1本も足さない、という設計判断
+   * （`RunnerClient.list` の doc / `tools.ts` の `manager_list` の doc）を
+   * ここで数える。増えた往復は heartbeat の側（`runner-heartbeat.test.ts`）に
+   * しか無い。
+   */
+  listCalls = 0;
 
   constructor(runnerId: string, report?: RunnerPlacementResources) {
     this.runnerId = runnerId;
@@ -5272,6 +5280,7 @@ class FakePoolRunner implements RunnerClient {
   }
   async stop(): Promise<void> {}
   async list(): Promise<RunnerManagerState[]> {
+    this.listCalls += 1;
     return [];
   }
   async transcript(): Promise<string | null> {
@@ -5701,6 +5710,38 @@ describe('runner の滞留のキャッシュ（ManagerPool.runnerBacklog）', ()
 
     expect(a.resourcesCalls).toBe(0);
     expect(pool.runnerBacklog!()).toEqual([]);
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  /**
+   * **対になる歯（#579）。** 上の1本は `runners()` が `resources()` を自動で
+   * 呼ばないことを固定する——こちらは `list()` について同じことを固定する。
+   *
+   * `Pool#list()` は #579 で `#noteMissingSessions()` を呼ぶようになったが、
+   * それは名簿（`RunnerRegistry#entries()`）に**既に立っている**観測を同期に
+   * 読むだけで、そのために `runner.list()` を新しく呼ぶことはしない
+   * （`RunnerClient.list` の doc「10秒ごとの生存確認もここを叩く」——増えた
+   * 往復は heartbeat の側だけである、と doc が書いているとおり）。ここでは
+   * `pool.list()` を何度呼んでも `FakePoolRunner.listCalls` が0のままである
+   * ことを直接確かめる。
+   *
+   * **これが赤くなったら、`manager_list` が自動で往復を払うようになった**
+   * ということであり、north_star 禁止2（クローンの opt-in を一覧の側から
+   * 踏み潰さない）に触れる変更である。
+   */
+  it('pool.list() を何度呼んでも runner.list() は一度も呼ばれない（増えた往復は heartbeat の側だけである）', async () => {
+    const a = new FakePoolRunner('runner-a', { managers: 0 });
+    const stores = createMemoryStores();
+    const registry = createRunnerRegistry([a]);
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    await pool.list();
+    await pool.list();
+    await pool.list();
+
+    expect(a.listCalls).toBe(0);
 
     await pool.stop();
     await registry.stop();
@@ -7456,5 +7497,552 @@ describe('runner にセッションが無い相手への manager_send（#563）'
     expect(summary?.status).toBe('running');
 
     await s.pool.stop();
+  });
+});
+
+/**
+ * `Pool#noteMissingSessions`（#579）——10秒ごとの生存確認が名簿へ持ち帰った
+ * `sessions` の観測を、`pool.list()` が誰も送らず・runner も名乗り直さずに
+ * `sessionMissingSince` へ写す経路そのものの歯。
+ *
+ * **上の `#563` の描く経路（`send()` の404 / `#reattach` の一覧照合）とは別物
+ * である。** あちらは「誰かが実際に話しかけた」「runner が名乗り直した」という
+ * **イベント**を待つ。ここは heartbeat が名簿へ立てた観測を `pool.list()` が
+ * 読むだけで、イベントを一切必要としない——それがこの Issue の本題（人間の
+ * 依頼「リアルタイムで正しく取れるように」）である。
+ *
+ * **実物の heartbeat は回さない。** 観測が `RunnerRegistry#entries()` へ
+ * どう立つか（10秒ごとに `list()` を叩く・失敗しても消さない・期限で中断する）
+ * は `runner-heartbeat.test.ts` が別に固定している。ここで見たいのは「名簿に
+ * 既に立った観測を `Pool` がどう読むか」だけなので、`withEntryState`（上の
+ * describe）と同じ分担で、`entries()` へ `sessions` / `sessionsObservedAt` を
+ * 直接差し込む。
+ */
+describe('生存確認が観測した sessions から sessionMissingSince を立てる（#579）', () => {
+  /**
+   * 名簿の `entries()` へ `sessions` / `sessionsObservedAt` を差し込む薄い皮。
+   *
+   * **`runnerId` ではなく `label` で差し込む。** 同じ `runnerId` の行が複数
+   * 在るとき（下の「和を採る」歯）を作るには、行を label で区別する必要がある
+   * ——`createRunnerRegistry(clients)`（配列版の `adopt`）は `runnerId` を
+   * label にそのまま使うので、1台しか登録しないテストでは `runnerId` で
+   * 差し込むのと同じ結果になる。
+   *
+   * `patches()` は呼ぶたびに評価し直す関数として渡す——同じテストの中で観測を
+   * 差し替えて2周目・3周目の `pool.list()` を呼べるようにするため。
+   */
+  function withEntrySessions(
+    registry: RunnerRegistry,
+    patches: () => ReadonlyMap<string, { sessions: readonly string[]; sessionsObservedAt: string }>,
+  ): RunnerRegistry {
+    return {
+      list: () => registry.list(),
+      get: (id) => registry.get(id),
+      select: (input) => registry.select(input),
+      register: (source) => registry.register(source),
+      unregister: (label) => registry.unregister(label),
+      vacate: (id) => registry.vacate(id),
+      subscribe: (onOpen) => registry.subscribe(onOpen),
+      stop: () => registry.stop(),
+      entries: () =>
+        registry.entries().map((entry) => {
+          const patch = patches().get(entry.label);
+          return patch === undefined ? entry : { ...entry, ...patch };
+        }),
+    };
+  }
+
+  it('走行中の委譲を runner が一覧に載せなくなると、誰も send() を打たず hello も来ないのに pool.list() の sessionMissingSince が立つ（#579 本題）', async () => {
+    let clock = new Date('2026-08-27T09:00:00.000Z').getTime();
+    const a = new FakePoolRunner('runner-a', { managers: 0 });
+    const stores = createMemoryStores();
+    const real = createRunnerRegistry([a]);
+    const patches = new Map<string, { sessions: readonly string[]; sessionsObservedAt: string }>();
+    const registry = withEntrySessions(real, () => patches);
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: registry,
+      now: () => clock,
+    });
+
+    // **誰も send() していない。誰も hello を送っていない（runner を名乗り直させて
+    // いない）。** 起こしたあとは `pool.list()` を呼ぶだけである。
+    const summary = await pool.start({ request: '調べもの' });
+    expect(a.started).toEqual([summary.managerId]);
+
+    // 10秒後の生存確認が、この委譲をもう載せていないと観測した。
+    clock += 10_000;
+    patches.set('runner-a', { sessions: [], sessionsObservedAt: new Date(clock).toISOString() });
+
+    const listed = await pool.list();
+    const found = listed.find((m) => m.managerId === summary.managerId);
+
+    expect(found?.sessionMissingSince).toBeDefined();
+    // **`status` は動かさない**（観測しかしない。`#noteMissingSessions` の doc）。
+    expect(found?.status).toBe('running');
+    // send() を1本も打っていないことの検算——`started` が起こした1回のまま。
+    expect(a.started).toEqual([summary.managerId]);
+
+    await pool.stop();
+    await real.stop();
+  });
+
+  it('runner が載せているうちは立たない', async () => {
+    let clock = new Date('2026-08-27T09:00:00.000Z').getTime();
+    const a = new FakePoolRunner('runner-a', { managers: 0 });
+    const stores = createMemoryStores();
+    const real = createRunnerRegistry([a]);
+    const patches = new Map<string, { sessions: readonly string[]; sessionsObservedAt: string }>();
+    const registry = withEntrySessions(real, () => patches);
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: registry,
+      now: () => clock,
+    });
+
+    const summary = await pool.start({ request: '調べもの' });
+
+    clock += 10_000;
+    patches.set('runner-a', {
+      sessions: [summary.managerId],
+      sessionsObservedAt: new Date(clock).toISOString(),
+    });
+
+    const listed = await pool.list();
+    const found = listed.find((m) => m.managerId === summary.managerId);
+
+    expect(found?.sessionMissingSince).toBeUndefined();
+
+    await pool.stop();
+    await real.stop();
+  });
+
+  /**
+   * **`#noteMissingSessions` が `running` / `waiting_human` だけを見るホワイト
+   * リストの歯。** `done` は「runner がセッションを畳んでいるのが正常な回も
+   * ある」ので、対象外——ここまで ⚠ を付けると本当に困っている1本が埋もれる
+   * （`#noteMissingSessions` の doc）。
+   *
+   * `done` の像は `pool.start()` では作れない（`start()` は必ず `running` で
+   * 始まる）ので、`#563` の `attached()` ヘルパと同じ経路——台帳へ直接
+   * `status: 'done'` を置いて `restore()` に `#records` へ読み込ませる——で作る。
+   */
+  it('待機中（done）の委譲には立たない', async () => {
+    const stores = createMemoryStores();
+    const at = '2026-08-27T00:00:00.000Z';
+    await stores.jobs.putJob({
+      id: 'mgr-done',
+      managerId: 'mgr-done',
+      createdAt: at,
+      updatedAt: at,
+      status: 'done',
+      summary: '終わった',
+      request: '頼んだ',
+      cwd: '/work/project',
+      runnerId: 'runner-a',
+      sessionId: 'sess-done',
+    } as Job);
+    const a = new FakePoolRunner('runner-a', { managers: 0 });
+    const real = createRunnerRegistry([a]);
+    const patches = new Map<string, { sessions: readonly string[]; sessionsObservedAt: string }>();
+    const registry = withEntrySessions(real, () => patches);
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    await pool.restore();
+    // runner はこの委譲をもう載せていない、という観測（本題の歯と同じ形）。
+    patches.set('runner-a', { sessions: [], sessionsObservedAt: '2026-08-27T00:00:10.000Z' });
+
+    const listed = await pool.list();
+    const found = listed.find((m) => m.managerId === 'mgr-done');
+
+    expect(found?.status).toBe('done');
+    expect(found?.sessionMissingSince).toBeUndefined();
+
+    await pool.stop();
+    await real.stop();
+  });
+
+  it('起こした直後の窓では立たない（観測時刻が runnerSessionSince より古い）', async () => {
+    const clock = new Date('2026-08-27T09:00:00.000Z').getTime();
+    const a = new FakePoolRunner('runner-a', { managers: 0 });
+    const stores = createMemoryStores();
+    const real = createRunnerRegistry([a]);
+    const patches = new Map<string, { sessions: readonly string[]; sessionsObservedAt: string }>();
+    const registry = withEntrySessions(real, () => patches);
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: registry,
+      now: () => clock,
+    });
+
+    // **この委譲が置かれる前の観測。** heartbeat が `start()` の直前に拾った
+    // 像を想定する——`sessionsObservedAt` が `runnerSessionSince`（＝ `clock`）
+    // より古い。
+    patches.set('runner-a', {
+      sessions: [],
+      sessionsObservedAt: new Date(clock - 5_000).toISOString(),
+    });
+
+    const summary = await pool.start({ request: '起こしたて' });
+    const listed = await pool.list();
+    const found = listed.find((m) => m.managerId === summary.managerId);
+
+    // 観測が古いので、判定そのものをしない。
+    expect(found?.sessionMissingSince).toBeUndefined();
+
+    await pool.stop();
+    await real.stop();
+  });
+
+  it('一度立った後、より新しい観測で runner が載せていたら消える', async () => {
+    let clock = new Date('2026-08-27T09:00:00.000Z').getTime();
+    const a = new FakePoolRunner('runner-a', { managers: 0 });
+    const stores = createMemoryStores();
+    const real = createRunnerRegistry([a]);
+    const patches = new Map<string, { sessions: readonly string[]; sessionsObservedAt: string }>();
+    const registry = withEntrySessions(real, () => patches);
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: registry,
+      now: () => clock,
+    });
+
+    const summary = await pool.start({ request: '調べもの' });
+
+    // 1周目: 載せていない → 立つ。
+    clock += 10_000;
+    patches.set('runner-a', { sessions: [], sessionsObservedAt: new Date(clock).toISOString() });
+    const first = (await pool.list()).find((m) => m.managerId === summary.managerId);
+    expect(first?.sessionMissingSince).toBeDefined();
+
+    // 2周目: より新しい観測で、runner が抱えていると答えた → 消える。
+    clock += 10_000;
+    patches.set('runner-a', {
+      sessions: [summary.managerId],
+      sessionsObservedAt: new Date(clock).toISOString(),
+    });
+    const second = (await pool.list()).find((m) => m.managerId === summary.managerId);
+    expect(second?.sessionMissingSince).toBeUndefined();
+
+    await pool.stop();
+    await real.stop();
+  });
+
+  /**
+   * **`#runnerSessions` の「和を採る」歯。** 同じ `runnerId` の行が2つ在るのは
+   * 「畳まれつつある旧い器と新しい器が同じ `runnerId` で並ぶ」窓（`#sighting`
+   * の doc）——`register()` を label違いで2回呼び、両方の client に同じ
+   * `runnerId` を持たせて再現する。
+   */
+  it('同じ runnerId の行が2つ在り、片方が抱えていると答えたら立たない（和を採る）', async () => {
+    let clock = new Date('2026-08-27T09:00:00.000Z').getTime();
+    const oldClient = new FakePoolRunner('runner-a', { managers: 0 });
+    const newClient = new FakePoolRunner('runner-a', { managers: 0 });
+    const stores = createMemoryStores();
+    const real = createRunnerRegistry([]);
+    await real.register({ label: 'runner-a-old', open: async () => oldClient });
+    await real.register({ label: 'runner-a-new', open: async () => newClient });
+    const patches = new Map<string, { sessions: readonly string[]; sessionsObservedAt: string }>();
+    const registry = withEntrySessions(real, () => patches);
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: registry,
+      now: () => clock,
+    });
+
+    const summary = await pool.start({ request: '調べもの' });
+
+    clock += 10_000;
+    const observedAt = new Date(clock).toISOString();
+    // 旧い行は抱えていないと答え、新しい行は抱えていると答える。
+    patches.set('runner-a-old', { sessions: [], sessionsObservedAt: observedAt });
+    patches.set('runner-a-new', { sessions: [summary.managerId], sessionsObservedAt: observedAt });
+
+    const listed = await pool.list();
+    const found = listed.find((m) => m.managerId === summary.managerId);
+
+    // **和を採るので、片方が抱えていると答えれば立たない。**
+    expect(found?.sessionMissingSince).toBeUndefined();
+
+    await pool.stop();
+    await real.stop();
+  });
+
+  /**
+   * **通しの歯。** 上のすべての歯は `entries()` を `withEntrySessions` の皮で
+   * 差し替え、観測を直接注入している——名簿の生存確認（`#probeSessions`。
+   * `runner-heartbeat.test.ts` が別に固定する）と、台帳の読み手
+   * （`Pool#runnerSessions` / `#noteMissingSessions`）が**同じ欄名で実際に
+   * 繋がっている**ことまでは、皮を使う歯では測れない。`#probeSessions` が書く
+   * 欄名（`entry.sessions` / `entry.sessionsObservedAt`）と `#runnerSessions()`
+   * が読む欄名が食い違っていても、皮を使う歯は差し込んだ値をそのまま読むだけ
+   * なので緑のままになりうる。
+   *
+   * ここでは皮を1枚も使わず、本物の `createRunnerRegistry([a])`（本物の
+   * `#beat` / `#probe` / `#probeSessions`）を渡し、擬似時計で10秒進めて
+   * heartbeat を実際に1周させる。
+   *
+   * **時計を揃える。** `runnerSessionSince`（`start()` が返った時刻）より
+   * 観測が新しくないと立たないので、`createManagerPool` へ `now` を渡さず、
+   * `Pool` の既定（`Date.now()`）が `vi.useFakeTimers()` の擬似時計をそのまま
+   * 読む形にする（`runnerBacklog()` が `resources()` 由来と `identity()` 由来を
+   * 合流させる歯と同じ理由——時計がずれるとこの歯は別の理由で赤くなる）。
+   */
+  it('通しの歯: 本物の生存確認を1周させると、pool.list() の sessionMissingSince が実際に立つ（皮を使わない）', async () => {
+    vi.useFakeTimers();
+    try {
+      const a = new FakePoolRunner('runner-a', { managers: 0 });
+      const stores = createMemoryStores();
+      const registry = createRunnerRegistry([a]);
+      // **`now` を渡さない。** 既定の `Date.now()` が擬似時計を読む。
+      const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+      const summary = await pool.start({ request: '調べもの' });
+
+      // 生存確認を1周させる。**`a.list()` は既定のまま `[]` を返す**——器は
+      // この委譲を抱えていないと答える。
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(a.listCalls).toBeGreaterThan(0);
+
+      const listed = await pool.list();
+      const found = listed.find((m) => m.managerId === summary.managerId);
+
+      expect(found?.sessionMissingSince).toBeDefined();
+
+      await pool.stop();
+      await registry.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/**
+ * `ManagerSummary.sessionMissingKind`（#579）—— `sessionMissingSince` が**何を
+ * 確かめた印なのか**を名乗る欄そのものの歯。
+ *
+ * 立て方は3つの経路にまたがる（`send()` の404、`#reattach` の一覧照合、
+ * ここまでの生存確認）が、**由来を名乗れるのは前2つ（`'resume-failed'`）と
+ * 生存確認（`'unlisted'`）の2値だけ**で、読み手の次の一手が違うので1つに
+ * 畳まない（`manager.ts` の `ManagerSummary.sessionMissingKind` の doc）。
+ *
+ * ここで固定するのは4つ:
+ * 1. 生存確認由来で立った印は `'unlisted'` である
+ * 2. **格上げする** — `'unlisted'` が立っている委譲へ `send()` して resume でも
+ *    入り直せなかったら `'resume-failed'` へ変わる（時刻は最初のまま動かない）
+ * 3. **格下げしない** — `'resume-failed'` が立っている委譲を、その後の生存確認の
+ *    観測が `'unlisted'` へ戻さない
+ * 4. 消えるときは時刻と由来が必ず一緒に消える（片方だけ残らない）
+ */
+describe('sessionMissingKind: 由来を畳まない（#579）', () => {
+  const jobId = 'mgr-kind';
+  const at = '2026-08-01T00:00:00.000Z';
+
+  /**
+   * `withEntrySessions`（上の #579 describe と同じ皮。ローカルに複製した——
+   * 上のものは1つ上の describe の中に閉じたスコープを持つ関数で、ここからは
+   * 見えない）。名簿の `entries()` へ `sessions` / `sessionsObservedAt` を
+   * 差し込む。
+   */
+  function withEntrySessions(
+    registry: RunnerRegistry,
+    patches: () => ReadonlyMap<string, { sessions: readonly string[]; sessionsObservedAt: string }>,
+  ): RunnerRegistry {
+    return {
+      list: () => registry.list(),
+      get: (id) => registry.get(id),
+      select: (input) => registry.select(input),
+      register: (source) => registry.register(source),
+      unregister: (label) => registry.unregister(label),
+      vacate: (id) => registry.vacate(id),
+      subscribe: (onOpen) => registry.subscribe(onOpen),
+      stop: () => registry.stop(),
+      entries: () =>
+        registry.entries().map((entry) => {
+          const patch = patches().get(entry.label);
+          return patch === undefined ? entry : { ...entry, ...patch };
+        }),
+    };
+  }
+
+  /**
+   * `sessionId` を持たない委譲を1本、`runner-primary` に置いた状態で作る。
+   *
+   * **`sessionId` を持たせない。** `#563` の `attached(undefined)` と同じ理由——
+   * 戻る先が無いので、`send()` の404を受けたあとの resume は必ず `no-session` で
+   * 失敗する。これで「送った・引き取ろうとした結果、resume でも入り直せなかった」
+   * （`'resume-failed'`）を確実に作れる。
+   */
+  async function setupKind() {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({
+      id: jobId,
+      managerId: jobId,
+      createdAt: at,
+      updatedAt: at,
+      status: 'running',
+      summary: '調べもの',
+      request: '調べておいて',
+      cwd: '/work/project',
+      runnerId: 'runner-primary',
+    } as Job);
+    const fake = swappableRunner('runner-primary');
+    fake.state.alive.push({
+      managerId: jobId,
+      status: 'running',
+      cwd: '/work/project',
+      request: '調べておいて',
+      waiting: [],
+    });
+    const real = createRunnerRegistry([fake.runner]);
+    const patches = new Map<string, { sessions: readonly string[]; sessionsObservedAt: string }>();
+    const registry = withEntrySessions(real, () => patches);
+    return { stores, fake, real, patches, registry };
+  }
+
+  it('生存確認由来で立った印は unlisted である', async () => {
+    let clock = new Date('2026-08-27T09:00:00.000Z').getTime();
+    const { stores, registry, patches, real } = await setupKind();
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: registry,
+      now: () => clock,
+    });
+    await pool.restore();
+
+    clock += 10_000;
+    patches.set('runner-primary', {
+      sessions: [],
+      sessionsObservedAt: new Date(clock).toISOString(),
+    });
+
+    const listed = await pool.list();
+    const found = listed.find((m) => m.managerId === jobId);
+
+    expect(found?.sessionMissingSince).toBeDefined();
+    expect(found?.sessionMissingKind).toBe('unlisted');
+
+    await pool.stop();
+    await real.stop();
+  });
+
+  it('格上げ: unlisted が立っている委譲へ send() して resume でも入り直せなかったら resume-failed へ変わる（時刻は最初のまま動かない）', async () => {
+    let clock = new Date('2026-08-27T09:00:00.000Z').getTime();
+    const { stores, fake, registry, patches, real } = await setupKind();
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: registry,
+      now: () => clock,
+    });
+    await pool.restore();
+
+    // 1. 生存確認が先に unlisted を置く。
+    clock += 10_000;
+    const firstAt = new Date(clock).toISOString();
+    patches.set('runner-primary', { sessions: [], sessionsObservedAt: firstAt });
+    const beforeSend = (await pool.list()).find((m) => m.managerId === jobId);
+    expect(beforeSend?.sessionMissingKind).toBe('unlisted');
+    expect(beforeSend?.sessionMissingSince).toBe(firstAt);
+
+    // 2. その後 send() が実際に404を受け、sessionId が無いので resume も
+    //    `no-session` で失敗する。
+    fake.vanish(jobId);
+    clock += 10_000;
+    await pool.send(jobId, '続きを頼む');
+
+    const after = (await pool.list()).find((m) => m.managerId === jobId);
+    expect(after?.sessionMissingKind).toBe('resume-failed');
+    // **時刻は最初のまま動かない**（`??=`。最初に気づいた時刻を保つ）。
+    expect(after?.sessionMissingSince).toBe(firstAt);
+
+    await pool.stop();
+    await real.stop();
+  });
+
+  it('格下げはしない: resume-failed が立っている委譲を、その後の生存確認の観測が unlisted へ戻さない', async () => {
+    let clock = new Date('2026-08-27T09:00:00.000Z').getTime();
+    const { stores, fake, registry, patches, real } = await setupKind();
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: registry,
+      now: () => clock,
+    });
+    await pool.restore();
+
+    // send() の404 → sessionId 無しで resume も失敗 → resume-failed が立つ。
+    fake.vanish(jobId);
+    clock += 5_000;
+    await pool.send(jobId, '続きを頼む');
+    const afterSend = (await pool.list()).find((m) => m.managerId === jobId);
+    expect(afterSend?.sessionMissingKind).toBe('resume-failed');
+    const sinceAfterSend = afterSend?.sessionMissingSince;
+    expect(sinceAfterSend).toBeDefined();
+
+    // その後、生存確認が「（やはり）載っていない」と、より新しい時刻で観測しても、
+    // 由来も時刻も動かない——格下げはしない。
+    clock += 10_000;
+    patches.set('runner-primary', {
+      sessions: [],
+      sessionsObservedAt: new Date(clock).toISOString(),
+    });
+    const afterHeartbeat = (await pool.list()).find((m) => m.managerId === jobId);
+    expect(afterHeartbeat?.sessionMissingKind).toBe('resume-failed');
+    expect(afterHeartbeat?.sessionMissingSince).toBe(sinceAfterSend);
+
+    await pool.stop();
+    await real.stop();
+  });
+
+  it('消えるときは時刻と由来が必ず一緒に消える（片方だけ残らない）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({
+      id: jobId,
+      managerId: jobId,
+      createdAt: at,
+      updatedAt: at,
+      status: 'running',
+      summary: '調べもの',
+      request: '調べておいて',
+      cwd: '/work/project',
+      runnerId: 'runner-primary',
+      // `sessionId` を持たせる——resume が実際に戻れる形にする
+      // （`swappableRunner().resume()` は常に成功する）。
+      sessionId: 'sess-kind',
+    } as Job);
+    const fake = swappableRunner('runner-primary');
+    fake.state.alive.push({
+      managerId: jobId,
+      status: 'running',
+      cwd: '/work/project',
+      request: '調べておいて',
+      waiting: [],
+      sessionId: 'sess-kind',
+    });
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: createRunnerRegistry([fake.runner]),
+    });
+    await pool.restore();
+
+    // 404 → resume は sessionId が在るので成功する。同じ send() の中で、
+    // 一度立った印（時刻・由来とも）が消える。
+    fake.vanish(jobId);
+    await pool.send(jobId, '続きを頼む');
+
+    const listed = await pool.list();
+    const found = listed.find((m) => m.managerId === jobId);
+    expect(found?.sessionMissingSince).toBeUndefined();
+    expect(found?.sessionMissingKind).toBeUndefined();
+
+    await pool.stop();
   });
 });

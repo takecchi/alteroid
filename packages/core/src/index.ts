@@ -205,6 +205,9 @@ export {
   // **字面の生成元を1つに保つために出す。** `apps/cli` が同じ意味の字面を
   // 自前で組んでいて、`live === undefined`（取れていない）を表せていなかった。
   describeManagerState,
+  // **同じ理由で出す（#579）。** `apps/cli` が `sessionMissingKind` の由来を
+  // 自前で書くと、`manager_list`（`tools.ts`）と字面が割れる。
+  describeSessionMissingKind,
   type DigestWindow,
 } from './digest.js';
 /**
@@ -381,6 +384,7 @@ export {
   type ManagerStartInput,
   type ManagerStopActor,
   type ManagerSummary,
+  type SessionMissingKind,
   type RunnerFleetOverview,
   type RunnerManagerEntry,
   type RunnerOverview,

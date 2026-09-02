@@ -605,6 +605,24 @@ export const managerSummarySchema = z.object({
    */
   sessionMissingSince: z.string().optional(),
   /**
+   * **真上の印が何を確かめたものか**（#579。`packages/core/src/manager.ts` の
+   * `ManagerSummary.sessionMissingKind`）。
+   *
+   * - `resume-failed` — 送った／引き取ろうとした結果、**resume でも入り直せなかった**
+   * - `unlisted` — 10秒ごとの生存確認で、**器が抱えている一覧に載っていなかった**
+   *   （resume はまだ試していない）
+   *
+   * **読み手の次の一手が違うので、1つに畳まない。** 前者はもう話しかけられない
+   * ので、拾えるものを拾って始末をつける側へ回る。後者は `manager_send` で
+   * 入り直せることがある。
+   *
+   * **`sessionMissingSince` が在るときだけ載る**（単独では出ない）。
+   *
+   * **ここに宣言しないと、値が在っても黙って落ちる**（真上と同じ断り。落ちると
+   * CLI と Web の両方が同時に、この2つを区別できなくなる）。
+   */
+  sessionMissingKind: z.enum(['resume-failed', 'unlisted']).optional(),
+  /**
    * **デーモンが生ログの末尾を読んで計算した、直近のターンが終わっているらしい
    * という助言**（Issue #567。`packages/core/src/manager.ts` の
    * `ManagerSummary.turnEndedAt`）。

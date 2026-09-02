@@ -5,6 +5,7 @@ import {
   approvalUpdatedAt,
   commitmentUpdatedAt,
   describeManagerState,
+  describeSessionMissingKind,
   usageLayerSchema,
   usageSiteSchema,
   type Commitment,
@@ -1440,6 +1441,10 @@ export function renderManagerList(managers: ManagerListItem[]): string {
       lines.push(
         `      ⚠ 宛先の runner は ${manager.sessionMissingSince} の時点で、この委譲のセッションを持っていなかった` +
           '（runner がそう答えた。聞けなかったのではない）。' +
+          // **由来を畳まない（#579）。** クローンの面（`manager_list`）と同じ
+          // 生成元（`describeSessionMissingKind`）から取る——ここで自前で書くと、
+          // 同じ状態が面によって違う次の一手を指すことになる。
+          describeSessionMissingKind(manager.sessionMissingKind) +
           '**この委譲が失われたという意味ではない** — ' +
           '完遂した後にセッションが畳まれ、終端の合図だけが届かなかった回も同じ形に見える。' +
           'まず /manager で生ログを確かめること（報告が届いていなくても、' +

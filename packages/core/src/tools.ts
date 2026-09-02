@@ -17,7 +17,7 @@ import { isCronExpression } from './cron.js';
 // 生成元。** 片方だけ変えられると区別が潰れる——実際にクローンがそれで誤り、
 // 終わった仕事へ3本目の委譲を出した（`digest.ts` の `describeManagerState` の
 // doc に実害の詳細がある）。
-import { describeManagerState } from './digest.js';
+import { describeManagerState, describeSessionMissingKind } from './digest.js';
 import { RECENT_TRACE_LIMIT, recentDroppedTraces } from './dropped-record.js';
 import { toAgentTokenView, tokenAvailabilityAt } from './token-pool.js';
 import {
@@ -3855,6 +3855,16 @@ export function createCloneTools(context: ToolContext) {
      * の doc、この道具の description の断りを参照。値が出ても**それは
      * 観測した時点の値であって現在値ではない**ので、行には必ず観測時刻を
      * 添える。
+     *
+     * ## この判断は #579 でも変えていない（読む側が確かめられるように書いておく）
+     *
+     * #579 で **heartbeat が `GET /managers` を引くようになった**（`⚠ 宛先の
+     * runner は … セッションを持っていなかった` の行が、誰かが送るのを待たずに
+     * 立つようになった）。**増えた往復は heartbeat の側だけである** — この道具の
+     * ハンドラはいまも `runner.list()` も `resources()` も呼ばず、名簿の像を
+     * 同期に読むだけである（`manager.test.ts` の歯が両方を数えている）。
+     * ⟹ ここが守っているもの（**一覧の側から自動で往復を払わない＝クローンの
+     * opt-in を踏み潰さない**。north_star 禁止2）はそのまま生きている。
      */
     tool(
       'manager_list',
@@ -3865,6 +3875,17 @@ export function createCloneTools(context: ToolContext) {
         // であって「仕事が終わった」ではない。⚠ の行がその差を埋める。
         '状態の名前はデーモンが観測できた範囲でしかないので、⚠ の行まで読むこと。',
         '依頼文と報告は抜粋なので、全文が要るなら manager_report で取ること。',
+        // **#579**: 「runner にセッションが無い」を、誰かが送るまで待たずに
+        // 名乗れるようになった。⚠ の行そのものの字面は変えていない——変えたのは
+        // **立つ時機**である。ここに書くのは、この一覧を読む側が「送るまで
+        // 分からない」という前の性質のまま読み続けないようにするためである
+        // （JSDoc に書いてもクローンには届かない。上の resources: true と同じ理由）。
+        '「runner にセッションが無い」は、10秒ごとの生存確認が runner に一覧を' +
+          '聞いて観測する（走行中・返事待ちのものだけを見る）。誰かが manager_send を' +
+          '打つのを待たない。ただし観測できた回にだけ立つので、**行が出ないことを' +
+          '「セッションは在る」と読まないこと** — 器に聞けなかっただけの回もある。' +
+          '待機中（done）のものはこの観測の対象外である（完遂してセッションを畳んだ' +
+          '回と区別が付かず、区別できないものに ⚠ を付けると本当に困っている1本が埋もれる）。',
         // #358 案b の第2段: `manager_list` 自身はいまも `resources()` を
         // 呼ばない（往復を増やさない、という設計判断は変えていない）。
         // **ただしキャッシュは2つの経路で warm する** — (1) runner_list を
@@ -3990,7 +4011,13 @@ export function createCloneTools(context: ToolContext) {
               manager.sessionMissingSince === undefined
                 ? null
                 : `  ⚠ 宛先の runner は ${manager.sessionMissingSince} の時点で、この委譲のセッションを持っていなかった` +
-                  '（runner がそう答えた。聞けなかったのではない）。**この委譲が失われたという意味ではない** — ' +
+                  '（runner がそう答えた。聞けなかったのではない）。' +
+                  // **由来を畳まない（#579）。** 「resume でも入り直せなかった」と
+                  // 「名簿に載っていなかっただけ」では、読み手の次の一手が違う
+                  // （前者は始末をつける側、後者は manager_send で入り直せる）。
+                  // 字面の生成元は `describeSessionMissingKind` 1箇所である。
+                  describeSessionMissingKind(manager.sessionMissingKind) +
+                  '**この委譲が失われたという意味ではない** — ' +
                   '完遂した後にセッションが畳まれ、終端イベントだけが届かなかった回も同じ形に見える' +
                   '（デーモンにこの2つを区別する材料は無い）。まず manager_report を見ること' +
                   '（報告が空でも、生ログから「生成されたが配られていない」報告を拾える）。' +

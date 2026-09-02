@@ -38,6 +38,20 @@ class FakeRunner implements RunnerClient {
   /** `'ok'` = 応える / `'error'` = 即座にこける / `'hang'` = 黙ったまま返さない。 */
   reply: 'ok' | 'error' | 'hang' = 'ok';
   closed = false;
+  /**
+   * `list()`（`GET /managers`。#579 で生存確認からも叩かれるようになった口）の
+   * 応え方。**`reply` とは独立**——`/health` は答えるが `/managers` だけ黙る、
+   * という組み合わせを再現できないと「生死の材料にしない」ことを確かめられない。
+   * `'ok'` = `sessionsToReturn` を返す / `'error'` = 即座にこける /
+   * `'hang'` = 黙ったまま返さない。
+   */
+  listReply: 'ok' | 'error' | 'hang' = 'ok';
+  /** `listReply === 'ok'` のとき `list()` が返す managerId の一覧。 */
+  sessionsToReturn: string[] = [];
+  /** `list()` を叩かれた回数。 */
+  listCalls = 0;
+  /** 直近の `list()` 呼び出しへ渡された `signal`（期限で中断されるかを見る）。 */
+  lastListSignal: AbortSignal | undefined;
 
   constructor(runnerId: string) {
     this.runnerId = runnerId;
@@ -60,8 +74,21 @@ class FakeRunner implements RunnerClient {
     return { delivered: false };
   }
   async stop(): Promise<void> {}
-  async list(): Promise<RunnerManagerState[]> {
-    return [];
+  async list(options?: { signal?: AbortSignal }): Promise<RunnerManagerState[]> {
+    this.listCalls += 1;
+    this.lastListSignal = options?.signal;
+    if (this.listReply === 'error') throw new Error('managers fetch failed');
+    if (this.listReply === 'hang') {
+      // **黙って死んだ器と同じ形。** `/health` とは別に、この口だけが黙る。
+      await new Promise<never>(() => undefined);
+    }
+    return this.sessionsToReturn.map((managerId) => ({
+      managerId,
+      status: 'running',
+      cwd: '/work/project',
+      request: '',
+      waiting: [],
+    }));
   }
   async transcript(): Promise<string | null> {
     return null;
@@ -339,5 +366,129 @@ describe('runner の生存判定', () => {
     // 畳み残すと、止めたはずの名簿が背景で runner を叩き続ける。
     await vi.advanceTimersByTimeAsync(60_000);
     expect(runner.pings).toBe(1);
+  });
+});
+
+/**
+ * runner が抱えているセッションの観測（#579。`GET /managers`）。
+ *
+ * これは生死判定（上の `describe`）とは別の口である。**目的も別**——生死は
+ * 「宛先が答えるか」を見るだけだが、こちらは「答えた宛先が、いまどの委譲を
+ * 持っているか」を見る。10秒ごとの `#beat` が名乗り（`/health`）を確かめた
+ * *後で*この口も引くので、`entries()` に `sessions` / `sessionsObservedAt` が
+ * 載る（`manager.ts` の `Pool#noteMissingSessions` がこれを読んで
+ * `sessionMissingSince` を立てる——そちらの歯は `manager.test.ts` に在る）。
+ *
+ * **`list()` が投げても生死は倒れない。** `/managers` だけが詰まった器から
+ * 仕事を取り上げないことを、ここで直接固定する。
+ */
+describe('runner が抱えているセッションの観測（#579）', () => {
+  it('10秒ごとの beat が list() も叩き、entries() に sessions と sessionsObservedAt が載る（観測時刻は beat の時刻）', async () => {
+    vi.setSystemTime(new Date('2026-08-27T09:00:00.000Z'));
+    const runner = new FakeRunner('runner-a');
+    runner.sessionsToReturn = ['mgr-1', 'mgr-2'];
+    const registry = createRunnerRegistry([]);
+    await registry.register({ label: 'http://runner:4518', open: async () => runner });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(runner.listCalls).toBe(1);
+    expect(registry.entries()).toMatchObject([
+      {
+        sessions: ['mgr-1', 'mgr-2'],
+        // **観測時刻は beat の時刻である。** 応答が返った時刻ではない
+        // （`Registry#probeSessions` の doc）。
+        sessionsObservedAt: '2026-08-27T09:00:10.000Z',
+      },
+    ]);
+
+    await registry.stop();
+  });
+
+  it('list() が投げても生死を倒さない（state は connected のままで onLost も出ない）', async () => {
+    const lost: { label: string }[] = [];
+    const runner = new FakeRunner('runner-a');
+    runner.listReply = 'error';
+    const registry = createRunnerRegistry([], { onLost: (event) => lost.push(event) });
+    await registry.register({ label: 'http://runner:4518', open: async () => runner });
+
+    // 生死判定の猶予（30秒）を大きく超えても、/health は答え続けている限り倒れない。
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(lost).toEqual([]);
+    expect(registry.entries()).toMatchObject([{ state: 'connected' }]);
+    // 聞けなかっただけで、聞きに行くのはやめていない。
+    expect(runner.listCalls).toBeGreaterThan(0);
+
+    await registry.stop();
+  });
+
+  it('list() が投げた回は前の観測を消さない（1周目の sessions が2周目の失敗後も同じ値のまま残る）', async () => {
+    const runner = new FakeRunner('runner-a');
+    runner.sessionsToReturn = ['mgr-1'];
+    const registry = createRunnerRegistry([]);
+    await registry.register({ label: 'http://runner:4518', open: async () => runner });
+
+    // 1周目: 答える。
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(registry.entries()).toMatchObject([{ sessions: ['mgr-1'] }]);
+    const firstObservedAt = registry.entries()[0]?.sessionsObservedAt;
+    expect(firstObservedAt).toBeDefined();
+
+    // 2周目: 投げる。**それでも前の観測を消さない。**
+    runner.listReply = 'error';
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(registry.entries()).toMatchObject([
+      // `undefined` へ戻っていない——値も観測時刻も1周目のまま。
+      { sessions: ['mgr-1'], sessionsObservedAt: firstObservedAt },
+    ]);
+
+    await registry.stop();
+  });
+
+  it('一度も list() が答えていない間は sessions が undefined（空配列で埋めない）', async () => {
+    const runner = new FakeRunner('runner-a');
+    runner.listReply = 'error';
+    const registry = createRunnerRegistry([]);
+    await registry.register({ label: 'http://runner:4518', open: async () => runner });
+
+    // 登録直後（heartbeat がまだ1周もしていない）。
+    expect(registry.entries()[0]).not.toHaveProperty('sessions');
+    expect(registry.entries()[0]).not.toHaveProperty('sessionsObservedAt');
+
+    // 1周目も投げる。**「聞けなかった」を「1本も無かった」（空配列）に化けさせない。**
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(registry.entries()[0]).not.toHaveProperty('sessions');
+    expect(registry.entries()[0]).not.toHaveProperty('sessionsObservedAt');
+
+    await registry.stop();
+  });
+
+  it('list() が返らないとき、5秒（HEARTBEAT_PROBE_MS）で signal を中断し、次の周でまた list() が呼ばれる（錠が外れている）', async () => {
+    const runner = new FakeRunner('runner-a');
+    runner.listReply = 'hang';
+    const registry = createRunnerRegistry([]);
+    await registry.register({ label: 'http://runner:4518', open: async () => runner });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(runner.listCalls).toBe(1);
+    const firstSignal = runner.lastListSignal;
+    expect(firstSignal).toBeDefined();
+    expect(firstSignal?.aborted).toBe(false);
+
+    // 期限（5秒）に達するまでは、まだ中断していない。
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(firstSignal?.aborted).toBe(false);
+
+    // 期限を過ぎた。**渡した signal が中断される。**
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(firstSignal?.aborted).toBe(true);
+
+    // 中断で `sessionsProbing` の錠が外れている——次の10秒境界でまた聞きに行く。
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(runner.listCalls).toBe(2);
+
+    await registry.stop();
   });
 });
