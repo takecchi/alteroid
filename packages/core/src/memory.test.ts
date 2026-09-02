@@ -35,6 +35,7 @@ import {
   resolveMemoryDocKind,
   scanMemorySections,
   type MemoryPart,
+  type MemoryTocIssue,
 } from './memory.js';
 import type { JournalEntry, MemoryDescriptionFreshness, MemoryProtectionStatus } from './schema.js';
 
@@ -719,6 +720,55 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
     );
     const rendered = renderMemoryDocuments(docs);
     expect(rendered).toContain('…ほか 5 件は目次から省略');
+    // 記憶の全体を渡す呼び手（`presentInMemory` 無し）は従来どおりの文言のまま
+    // ——「今回載せた分だけである」という限定は付かない。
+    expect(rendered).toContain(
+      `…ほか 5 件は目次から省略（目次の対象は全 ${MEMORY_TOC_ENTRY_LIMIT + 5} 件）。`,
+    );
+    expect(rendered).not.toContain('今回載せた分だけである');
+  });
+
+  /**
+   * ⭐ 3（軽い）: 部分だけを描く呼び手（`clone.ts` の `#withFreshMemory` を模す）
+   * の下では、省略行の文言が変わる。
+   *
+   * **「部分か」の判定は `presentInMemory` の有無ではなく、この描画に出ている
+   * slug で記憶の全体を覆えているかで決める**（`tocEntriesCoverWholeMemory`
+   * の doc）——ここでは `presentInMemory` に、描画に出ていない文書
+   * （`outside-doc`）をもう1件足すことで「覆えていない」状態を作る。
+   *
+   * **値は `MEMORY_TOC_ENTRY_LIMIT` を書き写さず参照する**（依頼者の門）。
+   */
+  it('⭐ 部分だけを描く呼び手の下では、省略行が「記憶の全体ではなく、今回載せた分だけ」と明言する', () => {
+    const docs = Array.from({ length: MEMORY_TOC_ENTRY_LIMIT + 5 }, (_, index) =>
+      fact(`fact-${index}`, { description: `要旨${index}`, freshness: { kind: 'fresh' } }),
+    );
+    const outsideDoc = fact('outside-doc', { description: '外', freshness: { kind: 'fresh' } });
+    const rendered = renderMemoryDocuments(docs, { presentInMemory: [...docs, outsideDoc] });
+
+    expect(rendered).toContain(
+      `…ほか 5 件は目次から省略（この目次に並べたのは全 ${MEMORY_TOC_ENTRY_LIMIT + 5} 件。` +
+        '記憶の全体ではなく、今回載せた分だけである）。',
+    );
+    expect(rendered).not.toContain(`目次の対象は全 ${MEMORY_TOC_ENTRY_LIMIT + 5} 件）。`);
+  });
+
+  /**
+   * 対照。`presentInMemory` を渡していても、この描画（`entries`）だけで記憶の
+   * 全体を覆えているなら——たとえば `#withFreshMemory` の差分にたまたま記憶の
+   * 全件が含まれた回——**従来どおりの文言のまま**である。判定が
+   * `presentInMemory` の「有無」ではなく「覆えているか」であることの直接の歯。
+   */
+  it('presentInMemory を渡していても、この描画が記憶の全体を覆っていれば従来どおりの文言のまま', () => {
+    const docs = Array.from({ length: MEMORY_TOC_ENTRY_LIMIT + 5 }, (_, index) =>
+      fact(`fact-${index}`, { description: `要旨${index}`, freshness: { kind: 'fresh' } }),
+    );
+    const rendered = renderMemoryDocuments(docs, { presentInMemory: docs });
+
+    expect(rendered).toContain(
+      `…ほか 5 件は目次から省略（目次の対象は全 ${MEMORY_TOC_ENTRY_LIMIT + 5} 件）。`,
+    );
+    expect(rendered).not.toContain('今回載せた分だけである');
   });
 
   it('切らないときは、切った件数の注記が出ない（切る/切らないは別の it() で測る）', () => {
@@ -821,13 +871,18 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
    * 渡す。親（`parent`）が今回変わっていなければ、その `渡された集合の中でしか
    * 解決できない`ので「親 X が見つからない」（＝そもそも文書が無い）と出て
    * いた——実際には親は記憶に実在し、今回の描画に含まれていないだけである。
-   * `options.presentInMemory` に記憶の全体の slug を渡すと、この2つが
+   * `options.presentInMemory` に記憶の全体の文書を渡すと、この2つが
    * 区別される（→ `parent-not-rendered`）。
+   *
+   * **`presentInMemory` の型は `readonly MemoryPart[]`（文書そのもの）である。**
+   * slug の集合ではなく文書を渡すのは、循環の検出（`cycle-outside-render` の歯）が
+   * 記憶の全体の `parent` まで引ける必要があるため——ここでは循環を測らないので
+   * `core-a` の `content` は空でよい。
    */
   it('⭐ 親が今回の描画に含まれないだけのときは「見つからない」と言わない', () => {
     const rendered = renderMemoryDocuments(
       [fact('child', { description: '子', freshness: { kind: 'fresh' }, parent: 'core-a' })],
-      { presentInMemory: new Set(['core-a', 'child']) },
+      { presentInMemory: [{ slug: 'core-a', content: '' }, fact('child')] },
     );
     expect(rendered).toContain('親 core-a は在るが、ここに載せた分には含まれない');
     expect(rendered).not.toContain('が見つからない');
@@ -842,9 +897,9 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
           parent: 'really-not-exist',
         }),
       ],
-      // `presentInMemory` には子の slug しか無い——親の slug はどこにも無いので、
+      // `presentInMemory` には子の文書しか無い——親の slug はどこにも無いので、
       // 記憶の全体を渡していても状況は変わらない。
-      { presentInMemory: new Set(['child']) },
+      { presentInMemory: [fact('child')] },
     );
     expect(rendered).toContain('親 really-not-exist が見つからない');
     expect(rendered).not.toContain('ここに載せた分には含まれない');
@@ -866,7 +921,7 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
         premise('core-b', '前提B'),
         fact('child', { description: '子', freshness: { kind: 'fresh' }, parent: 'core-a' }),
       ],
-      { presentInMemory: new Set(['core-a', 'core-b', 'child']) },
+      { presentInMemory: [premise('core-a', '前提A'), premise('core-b', '前提B'), fact('child')] },
     );
     expect(rendered).toContain('親 core-a は在るが、この目次は fact だけを列挙する');
     expect(rendered).not.toContain('ここに載せた分には含まれない');
@@ -934,6 +989,180 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
 
   it('記憶が1つも無ければ空文字のまま（従来と同じ）', () => {
     expect(renderMemoryDocuments([])).toBe('');
+  });
+
+  /**
+   * ⭐ `cycle-outside-render`（循環の一部が描画の外を通る）。
+   *
+   * a → b → c → a の輪で、この描画に載っているのは a と b だけ（c は
+   * `presentInMemory` にしか無い）。`entries` の中だけで閉じた循環検出
+   * （直す前の実装）では、a から見ると「親 b はこの描画には無いが記憶には
+   * 実在する」（`parent-not-rendered`）としか言えない——輪の存在そのものが
+   * 見えない。`resolveMemoryHierarchy` の `detectCycle` が記憶の全体
+   * （`presentInMemory`）まで辿るようになったことで、a・b どちらから見ても
+   * 「循環している。ただし輪の一部はこの描画の外」と言えるようになる。
+   *
+   * **`toContain('循環')` だけでは `cycle` と区別できない**（両方に「循環」が
+   * 含まれる）ので、ここでは専用の逐語（「輪の一部はここに載せた分には含まれ
+   * ない」）で確かめる。
+   */
+  it('⭐ 循環の一部がこの描画の外を通るとき、cycle ではなく cycle-outside-render として出る', () => {
+    const ringA = fact('ring-a', {
+      description: 'A',
+      freshness: { kind: 'fresh' },
+      parent: 'ring-b',
+    });
+    const ringB = fact('ring-b', {
+      description: 'B',
+      freshness: { kind: 'fresh' },
+      parent: 'ring-c',
+    });
+    // ring-c はこの描画には出ない——`presentInMemory` にだけ実在する。
+    const ringC = fact('ring-c', {
+      description: 'C',
+      freshness: { kind: 'fresh' },
+      parent: 'ring-a',
+    });
+
+    const rendered = renderMemoryDocuments([ringA, ringB], {
+      presentInMemory: [ringA, ringB, ringC],
+    });
+
+    expect(rendered).toContain('ring-a');
+    expect(rendered).toContain('ring-b');
+    // ring-c 自体はこの描画の対象（fact の目次）には出ない——`presentInMemory`
+    // にしか無いことがこの歯の前提である。
+    expect(rendered).not.toContain('ring-c:');
+    expect(rendered).toContain(
+      '親 ring-b との間で循環（輪の一部はここに載せた分には含まれない——記憶の側にある）',
+    );
+    expect(rendered).toContain(
+      '親 ring-c との間で循環（輪の一部はここに載せた分には含まれない——記憶の側にある）',
+    );
+    // 畳んでいないことの対照——`cycle`（3語版）の逐語は出ない。
+    expect(rendered).not.toContain('親 ring-b との間で循環］');
+    expect(rendered).not.toContain('親 ring-c との間で循環］');
+  });
+
+  /**
+   * 対照。`presentInMemory` を渡していても、輪の全員がこの描画（`entries`）の
+   * 中で完結していれば、従来どおり `cycle`（`cycle-outside-render` ではない）
+   * のままである——種類を畳んでいないことの歯（`cycle-outside-render` を足した
+   * ことで、既存の `cycle` が誤って外側の印に化けていないか）。
+   */
+  it('presentInMemory を渡していても、輪の全員がこの描画の中で完結していれば cycle のまま', () => {
+    const cycleA = fact('closed-a', {
+      description: 'A',
+      freshness: { kind: 'fresh' },
+      parent: 'closed-b',
+    });
+    const cycleB = fact('closed-b', {
+      description: 'B',
+      freshness: { kind: 'fresh' },
+      parent: 'closed-a',
+    });
+
+    const rendered = renderMemoryDocuments([cycleA, cycleB], {
+      presentInMemory: [cycleA, cycleB],
+    });
+
+    expect(rendered).toContain('親 closed-b との間で循環］');
+    expect(rendered).toContain('親 closed-a との間で循環］');
+    expect(rendered).not.toContain('輪の一部');
+  });
+
+  /**
+   * 対照。親が描画の外に在るが、循環していないときは**従来どおり**
+   * `parent-not-rendered` のままである——`cycle-outside-render` を足した
+   * ことで、循環していない「親が外に在るだけ」の状態まで誤って循環側へ
+   * 倒れていないことの歯（`resolveMemoryHierarchy` の doc「循環の判定を他の
+   * 4つより先に行う」が、循環でないものまで循環と誤判定していないか）。
+   */
+  it('対照: 親が描画の外に在るが循環していないときは、従来どおり parent-not-rendered のまま', () => {
+    const core = { slug: 'core', content: '' };
+    const child = fact('child', {
+      description: '子',
+      freshness: { kind: 'fresh' },
+      parent: 'core',
+    });
+
+    const rendered = renderMemoryDocuments([child], { presentInMemory: [core, child] });
+
+    expect(rendered).toContain('親 core は在るが、ここに載せた分には含まれない');
+    expect(rendered).not.toContain('循環');
+  });
+
+  /**
+   * ⭐ 網羅性の歯。`MemoryTocIssue` は5状態——**`Record<MemoryTocIssue, true>`
+   * で縛る**（依頼者の門: この repo の既存の網羅の歯は手書きの配列 +
+   * `assertNever` だが、今回は明示的にこの形を指定された）。6つ目の状態が
+   * 増えると、この宣言に埋め忘れがあれば `tsc` が落ちる——配列に足し忘れても
+   * 実行時まで気づけない、という失敗モードを型で塞ぐ。
+   *
+   * **ループの前に対象が空でないことを確かめる**（`Object.keys` が空のまま
+   * 1回も回らず緑になる事故を防ぐ。依頼者の門）。
+   */
+  it('⭐ MemoryTocIssue の5状態は互いに異なる文言になる（畳んでいない）', () => {
+    const ALL_ISSUES: Record<MemoryTocIssue, true> = {
+      'missing-parent': true,
+      cycle: true,
+      'parent-not-listed': true,
+      'parent-not-rendered': true,
+      'cycle-outside-render': true,
+    };
+    const issues = Object.keys(ALL_ISSUES) as MemoryTocIssue[];
+    // 対象が空でないこと（後続のループが1回も回らず緑になる事故を防ぐ）。
+    expect(issues.length).toBe(5);
+
+    const outputs: Record<MemoryTocIssue, string> = {
+      'missing-parent': renderMemoryDocuments([
+        fact('miss-child', { description: '子', freshness: { kind: 'fresh' }, parent: 'nope' }),
+      ]),
+      'parent-not-listed': renderMemoryDocuments([
+        premise('listed-core'),
+        fact('listed-child', {
+          description: '子',
+          freshness: { kind: 'fresh' },
+          parent: 'listed-core',
+        }),
+      ]),
+      'parent-not-rendered': renderMemoryDocuments(
+        [
+          fact('rendered-child', {
+            description: '子',
+            freshness: { kind: 'fresh' },
+            parent: 'rendered-core',
+          }),
+        ],
+        { presentInMemory: [{ slug: 'rendered-core', content: '' }] },
+      ),
+      cycle: renderMemoryDocuments([
+        fact('closed-a2', { description: 'A', freshness: { kind: 'fresh' }, parent: 'closed-b2' }),
+        fact('closed-b2', { description: 'B', freshness: { kind: 'fresh' }, parent: 'closed-a2' }),
+      ]),
+      'cycle-outside-render': renderMemoryDocuments(
+        [fact('ext-a', { description: 'A', freshness: { kind: 'fresh' }, parent: 'ext-b' })],
+        {
+          presentInMemory: [
+            fact('ext-a', { description: 'A', freshness: { kind: 'fresh' }, parent: 'ext-b' }),
+            fact('ext-b', { description: 'B', freshness: { kind: 'fresh' }, parent: 'ext-c' }),
+            fact('ext-c', { description: 'C', freshness: { kind: 'fresh' }, parent: 'ext-a' }),
+          ],
+        },
+      ),
+    };
+
+    for (const issue of issues) {
+      expect(outputs[issue].length).toBeGreaterThan(0);
+    }
+    // **印そのもの（［…］の中身）を取り出して比べる。** 全文どうしを比べると
+    // slug や description の違いだけで別文字列になり、印を畳む変異（例:
+    // `cycle-outside-render` の文言を `cycle` と同じにする）を見逃す。
+    const bracket = (rendered: string): string => rendered.match(/［[^］]+］/)?.[0] ?? '';
+    const markers = issues.map((issue) => bracket(outputs[issue]));
+    expect(markers.every((marker) => marker.length > 0)).toBe(true);
+    // 5状態が互いに異なる文言であること——これが本体（畳んでいないことの直接の証拠）。
+    expect(new Set(markers).size).toBe(5);
   });
 });
 
@@ -1880,7 +2109,7 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
 describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ載る見込み」の一言', () => {
   it('⭐ premise の文書へ書くと、renderMemoryDocuments([文書]) の全文ぶんの文字数が出る（全文が載る）', () => {
     const doc = premise('about-me-core', 'あ'.repeat(500));
-    const reply = describeMemoryReinjectionEstimate([doc]);
+    const reply = describeMemoryReinjectionEstimate([doc], [doc]);
     const expectedChars = renderMemoryDocuments([doc]).length;
 
     expect(reply).toContain(`${expectedChars.toLocaleString('en-US')} 文字`);
@@ -1896,7 +2125,7 @@ describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ�
     });
     // 本文が長くても、目次1行にしか影響しない（本文自体は载らない）。
     const longFactDoc: MemoryPart = { ...factDoc, content: factDoc.content + 'あ'.repeat(5000) };
-    const reply = describeMemoryReinjectionEstimate([longFactDoc]);
+    const reply = describeMemoryReinjectionEstimate([longFactDoc], [longFactDoc]);
     const expectedChars = renderMemoryDocuments([longFactDoc]).length;
 
     expect(reply).toContain(`${expectedChars.toLocaleString('en-US')} 文字`);
@@ -1916,18 +2145,20 @@ describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ�
     const premiseChars = renderMemoryDocuments([premiseDoc]).length;
     const factChars = renderMemoryDocuments([factDoc]).length;
 
-    expect(describeMemoryReinjectionEstimate([premiseDoc])).toContain(
+    expect(describeMemoryReinjectionEstimate([premiseDoc], [premiseDoc])).toContain(
       `${premiseChars.toLocaleString('en-US')} 文字`,
     );
-    expect(describeMemoryReinjectionEstimate([factDoc])).toContain(
+    expect(describeMemoryReinjectionEstimate([factDoc], [factDoc])).toContain(
       `${factChars.toLocaleString('en-US')} 文字`,
     );
     expect(factChars).toBeLessThan(premiseChars);
   });
 
   it('⚠️「他に何も変わらなければ」という条件付きであることを明言する（単一文書でも複数文書でも）', () => {
-    const single = describeMemoryReinjectionEstimate([premise('a', '本文')]);
-    const multi = describeMemoryReinjectionEstimate([premise('a', '本文'), premise('b', '本文')]);
+    const singleParts: [MemoryPart] = [premise('a', '本文')];
+    const multiParts: [MemoryPart, MemoryPart] = [premise('a', '本文'), premise('b', '本文')];
+    const single = describeMemoryReinjectionEstimate(singleParts, singleParts);
+    const multi = describeMemoryReinjectionEstimate(multiParts, multiParts);
 
     for (const reply of [single, multi]) {
       expect(reply).toContain('予測であって実測ではない');
@@ -1940,7 +2171,7 @@ describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ�
     const fromDoc = premise('about-me', 'あ'.repeat(300));
     const toDoc = premise('about-me-appendix', 'い'.repeat(300));
 
-    const reply = describeMemoryReinjectionEstimate([toDoc, fromDoc]);
+    const reply = describeMemoryReinjectionEstimate([toDoc, fromDoc], [toDoc, fromDoc]);
     const combinedChars = renderMemoryDocuments([toDoc, fromDoc]).length;
     const separateSum =
       renderMemoryDocuments([toDoc]).length + renderMemoryDocuments([fromDoc]).length;
@@ -1953,8 +2184,10 @@ describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ�
   });
 
   it('⚠️ memory_section_move（2文書）だけに「両方の合計である」の注記が出る——1文書のときは出ない', () => {
-    const single = describeMemoryReinjectionEstimate([premise('a', '本文')]);
-    const multi = describeMemoryReinjectionEstimate([premise('a', '本文'), premise('b', '本文')]);
+    const singleParts: [MemoryPart] = [premise('a', '本文')];
+    const multiParts: [MemoryPart, MemoryPart] = [premise('a', '本文'), premise('b', '本文')];
+    const single = describeMemoryReinjectionEstimate(singleParts, singleParts);
+    const multi = describeMemoryReinjectionEstimate(multiParts, multiParts);
 
     expect(single).not.toContain('移動元と移動先の両方');
     expect(multi).toContain('移動元と移動先の両方');
@@ -1967,7 +2200,7 @@ describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ�
       ...fact('appendix', { description: '付録', freshness: { kind: 'fresh' } }),
     };
 
-    const reply = describeMemoryReinjectionEstimate([factDoc, premiseDoc]);
+    const reply = describeMemoryReinjectionEstimate([factDoc, premiseDoc], [factDoc, premiseDoc]);
 
     expect(reply).toContain('appendix（fact・目次1行）');
     expect(reply).toContain('about-me（premise・全文）');
@@ -1980,7 +2213,51 @@ describe('describeMemoryReinjectionEstimate — 「次のターンの会話へ�
     // `as unknown as` で型を迂回する（`describeMemoryReinjectionEstimate` の doc
     // 「引数を非空タプルにしてある理由」）。
     const empty = [] as unknown as [MemoryPart, ...MemoryPart[]];
-    expect(() => describeMemoryReinjectionEstimate(empty)).toThrow();
+    expect(() => describeMemoryReinjectionEstimate(empty, [])).toThrow();
+  });
+
+  /**
+   * 第2引数（`memoryAfter`）も必須である——**空配列を渡しても `throw` しない**
+   * （`describeMemoryReinjectionEstimate` の doc「空配列を渡されても throw
+   * しない」）。空は「`presentInMemory` を渡さなかった」のと同じ挙動になる
+   * だけで、`parts` の非空タプルとは扱いが違う（あちらは呼び手の実装誤りの
+   * 最後の砦、こちらはストアの状態そのもの）。
+   */
+  it('memoryAfter に空配列を渡しても throw しない（presentInMemory 無しと同じ挙動になるだけ）', () => {
+    const doc = fact('orphan', { description: '説明', freshness: { kind: 'fresh' } });
+    expect(() => describeMemoryReinjectionEstimate([doc], [])).not.toThrow();
+  });
+
+  /**
+   * ⭐ 本題（親が今回の書き込みに含まれない fact を書いたとき）。
+   *
+   * これが直る前は、`describeMemoryReinjectionEstimate` は `parts`（今回書いた
+   * 文書）しか見ておらず、`presentInMemory` を渡していなかった。書いた文書の
+   * `parent` が今回の書き込みに含まれない premise を指しているとき、実際に
+   * `#withFreshMemory` が載せる印（「在るが、ここに載せた分には含まれない」）
+   * より短い印（「見つからない」）で数えてしまい、**実測32文字少なく出ていた**
+   * （`memory.ts` の「⭐ 直っていたもの」の doc）。
+   */
+  it('⭐ 親が今回の書き込みに含まれない premise を指す fact を書いたとき、見込みは「見つからない」ではなく「ここに載せた分には含まれない」の印ぶんで数える', () => {
+    const core = premise('core', '前提の本文');
+    const child = fact('child', {
+      description: '子',
+      freshness: { kind: 'fresh' },
+      parent: 'core',
+    });
+    const memoryAfter = [core, child];
+
+    const reply = describeMemoryReinjectionEstimate([child], memoryAfter);
+    const expectedChars = renderMemoryDocuments([child], { presentInMemory: memoryAfter }).length;
+    // 直す前の数え方（presentInMemory を渡さない）と比べて、実際に文字数が
+    // 増えていること（短い印のままではないこと）を対照として見る。
+    const beforeFixChars = renderMemoryDocuments([child]).length;
+
+    expect(reply).toContain(`${expectedChars.toLocaleString('en-US')} 文字`);
+    expect(expectedChars).toBeGreaterThan(beforeFixChars);
+    expect(renderMemoryDocuments([child], { presentInMemory: memoryAfter })).toContain(
+      '親 core は在るが、ここに載せた分には含まれない',
+    );
   });
 });
 

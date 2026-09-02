@@ -6,6 +6,7 @@ import type { CloneHost } from './host.js';
 import type { ChatStreamEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores, humanMessage } from './testing.js';
+import { createCloneTools } from './tools.js';
 
 /**
  * `clone.ts` の `#withFreshMemory()` を SDK 抜きで固定する。
@@ -224,6 +225,109 @@ describe('クローンの記憶注入（差分のみを載せるべき、とい�
     // ものになる）。ここで「そもそも入力が捕まっているか」を独立に確かめる。
     const capturedInputs = (s.calls[0] as FakeCall).inputs;
     expect(capturedInputs.length).toBeGreaterThanOrEqual(2);
+
+    await s.clone.stop();
+  });
+});
+
+/**
+ * ⭐ 通しの歯（依頼者の門5）: `memory_write`（道具）の応答に出る「次のターンの
+ * 会話へ載る見込み: N 文字」の N が、次のターンに `#withFreshMemory` が実際に
+ * 載せる塊の文字数と一致すること。
+ *
+ * **書く側と読む側を同じストアの実物で繋ぐ。** `describeMemoryReinjectionEstimate`
+ * （書く側。`tools.ts` の `memory_write`）と `#withFreshMemory`（読む側。
+ * `clone.ts`）は別々の場所で `renderMemoryDocuments` を呼ぶ——どちらも正しく
+ * 見えても、渡す `presentInMemory` の中身が食い違えば数は合わない。この歯は
+ * `createCloneTools` と `createClone` の両方へ**同じ `createMemoryStores()` の
+ * 実体**を渡し、(1) 道具のハンドラを直接呼んで応答から N を取り出し、
+ * (2) 同じストアで次のターンをクローンへ流して実際に載った塊の文字数を数え、
+ * 両者を突き合わせる。**期待値をこのテストの中で `renderMemoryDocuments(...)`
+ * を呼び直して組み立てない**——呼び直すと実装と同じ式を2度書くだけになり、
+ * 書く側と読む側が食い違っても検出できない（依頼者の門5そのもの）。
+ *
+ * ## シナリオ: 親が今回の書き込みに含まれない fact を書く
+ *
+ * 1ターン目で premise `core` だけを記憶に置く。2ターン目相当のところで
+ * （クローンのターンは経由せず）`memory_write` 道具を直接叩いて、`core` を
+ * 親に持つ fact `child` を**新規作成**する——`core` はこの書き込みには
+ * 含まれない。直す前はここで「見つからない」（短い印）で数えていたため、
+ * 見込みが実際より32文字少なかった（`memory.ts` の「⭐ 直っていたもの」の doc）。
+ * 続けてクローンへ次のターンを流すと、`#withFreshMemory` は `child` だけを
+ * 差分として載せ直す（`core` は今回変わっていないので載らない——「親も
+ * 一緒に載せる」に化けていないことも見る）。
+ */
+describe('通しの歯 — memory_write の見込み文字数と、次のターンに実際に載る塊の文字数が一致する', () => {
+  it('⭐ 親が今回の書き込みに含まれない fact を書いたとき、見込みと実物が一致する（直す前は32文字少なかった）', async () => {
+    const stores = createMemoryStores();
+    await stores.persona.write('core', '# core\n\n前提の本文\n');
+
+    const s = setup(stores);
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    // **道具を直接叩く。** `memory_write` のハンドラは `tools.ts` の実装
+    // そのもの——クローンの中を経由しない分、書く側だけを狙って呼べる。
+    const emitted: ChatStreamEvent[] = [];
+    const tools = createCloneTools({
+      stores,
+      emit: (event) => emitted.push(event),
+      memoryCause: () => 'clone',
+    });
+    const memoryWrite = tools.find((entry) => entry.name === 'memory_write');
+    if (memoryWrite === undefined) throw new Error('memory_write が無い（足場の欠陥）');
+    const result = await memoryWrite.handler(
+      {
+        slug: 'child',
+        content: '---\ntype: fact\ndescription: 子の要旨\nparent: core\n---\n# child\n\n子の本文\n',
+        summary: '子を書いた',
+      } as never,
+      {},
+    );
+    const reply = (result.content ?? [])
+      .map((block) => (block.type === 'text' ? block.text : ''))
+      .join('');
+
+    // 書く側の応答から N を取り出す（`formatMemoryCharCount` は
+    // `toLocaleString('en-US')` で桁区切りを入れうるので、カンマを剥がして戻す）。
+    const match = reply.match(/次のターンの会話へ載る見込み: ([\d,]+) 文字/);
+    const matchedDigits = match?.[1];
+    expect(matchedDigits).toBeDefined();
+    const estimatedChars = Number((matchedDigits ?? '').replaceAll(',', ''));
+
+    // 読む側: 同じストアで次のターンをクローンへ流す。
+    const events: ChatStreamEvent[] = [];
+    s.clone.subscribe('conv-2', (event) => events.push(event));
+    s.clone.post(humanMessage('2回目', 'conv-2'));
+    await waitForDone(events);
+    const secondTurnInput = (s.calls[0] as FakeCall).inputs[1] ?? '';
+
+    // 「親も一緒に載せる」に化けていないこと——`core` の本文（premise としての
+    // 全文）は載せ直しに出てこない（このシナリオでは `core` は変わっていない）。
+    expect(secondTurnInput).not.toContain('前提の本文');
+    expect(secondTurnInput).not.toContain('<!-- memory: core.md -->');
+    expect(secondTurnInput).toContain('親 core は在るが、ここに載せた分には含まれない');
+
+    // **実際に載った塊を取り出す。** `#withFreshMemory`（`clone.ts`）は
+    // `[head, '', renderMemoryDocuments(changed, {...}), '', '---', '', text]`
+    // を `'\n'` で繋ぐ——`renderMemoryDocuments` の直後には必ず空行 +
+    // `---` + 空行が続き、その先が元のターンの本文（`text`。ここでは
+    // commitments の断りと人間の発話がさらに続く）である。この書き込みは
+    // fact 1件だけなので、`renderMemoryDocuments` の出力は目次節
+    // （`<!-- memory: index -->` から始まる）だけになる——だから
+    // その印から、直後に現れる `\n\n---\n\n`（元の本文との区切り。他の場所には
+    // 出ない——出るなら `text` の中の別の区切りで、それはこの印より後ろにしか
+    // 無い）までがそのまま「実際に載った塊」である。
+    const marker = '<!-- memory: index -->';
+    const markerIndex = secondTurnInput.indexOf(marker);
+    expect(markerIndex).toBeGreaterThanOrEqual(0);
+    const boundary = '\n\n---\n\n';
+    const boundaryIndex = secondTurnInput.indexOf(boundary, markerIndex);
+    expect(boundaryIndex).toBeGreaterThan(markerIndex);
+    const actualInjectedChars = secondTurnInput.slice(markerIndex, boundaryIndex).length;
+
+    // **本体。** 書く側（見込み）と読む側（実物）が一致する。
+    expect(actualInjectedChars).toBe(estimatedChars);
 
     await s.clone.stop();
   });

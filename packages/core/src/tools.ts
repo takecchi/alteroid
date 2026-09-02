@@ -1669,7 +1669,7 @@ export function createCloneTools(context: ToolContext) {
           written.content,
           before === null,
         );
-        const reinjection = describeMemoryReinjectionEstimate([written]);
+        const reinjection = describeMemoryReinjectionEstimate([written], memoryAfter);
         const growth = memorySessionGrowthNote(memoryAfter, context.runtime?.());
         return text(
           `記憶 ${slug} を更新した。\n\n${diff}\n\n${floor}\n\n${reinjection}\n\n${growth}`,
@@ -1716,7 +1716,7 @@ export function createCloneTools(context: ToolContext) {
           written.content,
           before === null,
         );
-        const reinjection = describeMemoryReinjectionEstimate([written]);
+        const reinjection = describeMemoryReinjectionEstimate([written], memoryAfter);
         const growth = memorySessionGrowthNote(memoryAfter, context.runtime?.());
         return text(
           `記憶 ${slug} に追記した。\n\n${diff}\n\n${floor}\n\n${reinjection}\n\n${growth}`,
@@ -1965,7 +1965,7 @@ export function createCloneTools(context: ToolContext) {
         // `memory_frontmatter_set` は既存文書にしか使えない（上の `existing === null`
         // の断り）ので `created` は常に false。
         const floor = memoryFloorNote(memoryBefore, memoryAfter, slug, written.content, false);
-        const reinjection = describeMemoryReinjectionEstimate([written]);
+        const reinjection = describeMemoryReinjectionEstimate([written], memoryAfter);
         const growth = memorySessionGrowthNote(memoryAfter, context.runtime?.());
 
         return text(
@@ -2222,7 +2222,10 @@ export function createCloneTools(context: ToolContext) {
         // **移動元・移動先の両方をまとめて渡す。** `memory_section_move` は
         // 次のターンに `#withFreshMemory` がこの2文書をまとめて載せ直す
         // （`describeMemoryReinjectionEstimate` の doc「合計を選んだ理由」）。
-        const reinjection = describeMemoryReinjectionEstimate([toWritten, fromWritten]);
+        const reinjection = describeMemoryReinjectionEstimate(
+          [toWritten, fromWritten],
+          memoryAfter,
+        );
         const growth = memorySessionGrowthNote(memoryAfter, context.runtime?.());
 
         // **古い本文を1文字も出さない。** 出せば文脈に入る（この道具の
