@@ -866,6 +866,7 @@ class HttpRunner implements RunnerClient {
         revision: RunnerRevisionReport;
         pendingEvents?: number;
         oldestPendingAt?: string;
+        managers?: number;
       }
     | undefined
   > {
@@ -874,6 +875,10 @@ class HttpRunner implements RunnerClient {
     const pendingEvents = runnerPlacementResourcesSchema.shape.pendingEvents.safeParse(
       body.pendingEvents,
     );
+    // **`resources()` が読んでいるのと同じ欄を、同じ応答から拾う**（#579。
+    // `RunnerClient.identity` の doc）。**新しい往復ではない。** 0 のときに
+    // `GET /managers` を引かずに済ませるためだけに読む。
+    const managers = runnerPlacementResourcesSchema.shape.managers.safeParse(body.managers);
     const oldestPendingAt = runnerPlacementResourcesSchema.shape.oldestPendingAt.safeParse(
       body.oldestPendingAt,
     );
@@ -891,6 +896,11 @@ class HttpRunner implements RunnerClient {
       ...(oldestPendingAt.success && oldestPendingAt.data !== undefined
         ? { oldestPendingAt: oldestPendingAt.data }
         : {}),
+      // **取れなかった回を 0 で埋めない**（AGENTS.md「取れない軸に0の行を作る」）。
+      // 0 は「1本も抱えていない」という答えであり、取れなかったことと畳むと、
+      // 件数を名乗らない器に対して `GET /managers` を引かなくなる
+      // （＝#579 の直しが黙って効かなくなる）。
+      ...(managers.success && managers.data !== undefined ? { managers: managers.data } : {}),
     };
   }
   /**
@@ -1475,8 +1485,14 @@ class HttpRunner implements RunnerClient {
     await this.#call('DELETE', `/managers/${encodeURIComponent(managerId)}`);
   }
 
-  async list(): Promise<RunnerManagerState[]> {
-    const response = await this.#call('GET', '/managers');
+  /**
+   * **`signal` を受ける（#579）。** 10秒ごとの生存確認がこの口も叩くように
+   * なったので、期限で中断できないと、返らない1回が `RUNNER_CALL_DEADLINE_MS`
+   * （60秒）まで居座り、次の周期の呼び出しと積み重なる。`identity()` /
+   * `ping()` / `resources()` が既に `signal` を受けているのと同じ形である。
+   */
+  async list(options?: { signal?: AbortSignal }): Promise<RunnerManagerState[]> {
+    const response = await this.#call('GET', '/managers', undefined, options?.signal);
     const body = (await response.json()) as { managers?: unknown };
     if (!Array.isArray(body.managers)) return [];
     return body.managers.flatMap((entry) => {

@@ -3370,6 +3370,63 @@ describe('クローンの道具', () => {
     expect(reply).not.toContain('器そのものは runner_list で見る');
   });
 
+  /**
+   * **由来を畳まない（#579）。** ⚠ の行そのものは `sessionMissingSince` の
+   * 有無だけで出るが、その由来（`sessionMissingKind`）で読み手の次の一手が
+   * 違う——`'resume-failed'` はもう話しかけられないので始末をつける側へ回り、
+   * `'unlisted'` は `manager_send` で入り直せることがある。字面の生成元は
+   * `describeSessionMissingKind`（`digest.ts`）1箇所なので、ここでは
+   * `manager_list` がそこから読んだ字面を実際に出していることだけを測る。
+   */
+  it('sessionMissingKind: resume-failed は「resume でも入り直せなかった」を出す', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const orphan = h.running[0];
+    if (!orphan) throw new Error('準備に失敗');
+    orphan.sessionMissingSince = '2026-08-27T09:00:00.000Z';
+    orphan.sessionMissingKind = 'resume-failed';
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('resume でも入り直せなかった。');
+    // 逆の由来の字面は出ない。
+    expect(reply).not.toContain('名簿に載っていなかった');
+  });
+
+  it('sessionMissingKind: unlisted は「名簿に載っていなかった。resume はまだ試していない」を出す', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const orphan = h.running[0];
+    if (!orphan) throw new Error('準備に失敗');
+    orphan.sessionMissingSince = '2026-08-27T09:00:00.000Z';
+    orphan.sessionMissingKind = 'unlisted';
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('名簿に載っていなかった。resume はまだ試していない。');
+    // 逆の由来の字面は出ない。
+    expect(reply).not.toContain('resume でも入り直せなかった');
+  });
+
+  /**
+   * **由来が無い（古いデーモン相当）ときは、どちらの字面も足さない。** 実際には
+   * 2つしかない区別を3つに見せないため——`describeSessionMissingKind` の doc。
+   */
+  it('sessionMissingKind が無いときは、由来の字面を1文字も足さない', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const orphan = h.running[0];
+    if (!orphan) throw new Error('準備に失敗');
+    orphan.sessionMissingSince = '2026-08-27T09:00:00.000Z';
+    // sessionMissingKind は立てない。
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('この委譲のセッションを持っていなかった');
+    expect(reply).not.toContain('resume でも入り直せなかった');
+    expect(reply).not.toContain('名簿に載っていなかった');
+  });
+
   it('黙った器に載っている本数を件数の行にも出す', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -4074,6 +4131,30 @@ describe('クローンの道具', () => {
     expect(found?.description).toContain('tool_result');
     expect(found?.description).toContain('時刻の閾値は置いていない');
     expect(found?.description).toContain('返事待ちが在るものにはこの行を出さない');
+  });
+
+  /**
+   * **道具の説明文に、#579 の断りが読めること。** JSDoc に書いただけでは
+   * クローンには届かない——上の3本（`resources: true` / 生存確認による warm /
+   * #572 の ⚠）と同じ理由の歯である。
+   *
+   * #579 で「runner にセッションが無い」（⚠ の行）が、誰かが `manager_send` を
+   * 打つのを待たずに、10秒ごとの生存確認だけで立つようになった。**これは
+   * `manager_list` 自身が往復を払うようになったという意味ではない**（それは
+   * 上の「runners() を一度も呼ばない」歯が別に守っている）——heartbeat が
+   * 拾った観測を、この道具が読むだけである。ここで固定するのは字面2つ:
+   * - 誰かが送るのを待たずに立つこと（「manager_send を打つのを待たない」）
+   * - 待機中（done）は対象外であること（「done」に触れている）
+   */
+  it('manager_list の説明文に、#579（10秒ごとの生存確認から「セッションが無い」が立つ）が読める', () => {
+    const stores = createMemoryStores();
+    const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+    const found = tools.find((entry) => entry.name === 'manager_list');
+
+    expect(found?.description).toContain('10秒ごとの生存確認');
+    expect(found?.description).toContain('manager_send を');
+    expect(found?.description).toContain('待たない');
+    expect(found?.description).toContain('done');
   });
 
   it('委譲先が無い場面（蒸留の内部ターン）は、黙らずにそう返す', async () => {

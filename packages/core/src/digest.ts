@@ -1,4 +1,8 @@
 import { excerptLine } from './excerpt.js';
+// **型だけを取る**（`import type` は実行時に消えるので、`manager.ts` との間に
+// 実行時の循環を作らない）。字面の生成元をここに置く理由は
+// `describeSessionMissingKind` の doc に在る。
+import type { SessionMissingKind } from './manager.js';
 import { describeScheduleSpec } from './schedule.js';
 import type { JobStatus, JournalEntry } from './schema.js';
 import type { Stores } from './store.js';
@@ -66,6 +70,30 @@ export function describeManagerState(status: JobStatus, live: boolean | undefine
   if (live === true) return status;
   if (live === false) return `${status}/セッション切断`;
   return `${status}/セッション不明`;
+}
+
+/**
+ * 「runner にセッションが無い」の**由来**を一言で言う（#579。
+ * `ManagerSummary.sessionMissingKind`）。
+ *
+ * **`describeManagerState` と同じ理由でここに置く——生成元を1つにする。** この
+ * 一言は `manager_list`（`tools.ts`）と CLI（`apps/cli`）の両方が出す。字面が
+ * 割れると、**同じ状態が面によって違う次の一手を指すことになる。**
+ * （Web UI は同じ文言を自前で書いている。直すときは
+ * `grep -Fn -- 'resume はまだ試していない' apps/web/app/routes/managers.tsx` も
+ * 一緒に見ること。）
+ *
+ * **短くしてある。** ここが出るのは一覧の中で、読み手が毎ターン通る場所である
+ * ——伸ばすと他の行が読まれなくなる。
+ *
+ * **`undefined` は空文字にする（「不明」と書かない）。** 由来を持たない印は、
+ * この欄が足される前の版のデーモンが立てたものだけである。そこへ新しい語を
+ * 出すと、**実際には2つしかない区別が3つに見える。**
+ */
+export function describeSessionMissingKind(kind: SessionMissingKind | undefined): string {
+  if (kind === 'resume-failed') return 'resume でも入り直せなかった。';
+  if (kind === 'unlisted') return '名簿に載っていなかった。resume はまだ試していない。';
+  return '';
 }
 
 /**

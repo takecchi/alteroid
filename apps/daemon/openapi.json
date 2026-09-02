@@ -4976,6 +4976,10 @@
                           "sessionMissingSince": {
                             "type": "string"
                           },
+                          "sessionMissingKind": {
+                            "type": "string",
+                            "enum": ["resume-failed", "unlisted"]
+                          },
                           "turnEndedAt": {
                             "type": "string"
                           },
@@ -5232,6 +5236,10 @@
                         },
                         "sessionMissingSince": {
                           "type": "string"
+                        },
+                        "sessionMissingKind": {
+                          "type": "string",
+                          "enum": ["resume-failed", "unlisted"]
                         },
                         "turnEndedAt": {
                           "type": "string"

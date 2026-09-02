@@ -1029,6 +1029,24 @@ describe('詳細でも、セッション不在と器の沈黙は状態を置き�
   });
 
   /**
+   * **由来（`sessionMissingKind`）も詳細側へ渡っていること。** 文言そのものの
+   * 網羅（`'resume-failed'` / `'unlisted'` の2値、未知の値への倒れ先）は一覧
+   * （`managers.test.tsx`）が測っている——ここで測るのは「一覧と同じ部品を
+   * 使っているので、詳細側にも同じ由来が出ること」だけである（真上の doc）。
+   */
+  it('由来（sessionMissingKind）も詳細側に出る', async () => {
+    renderDetail({
+      ...BASE,
+      status: 'running',
+      live: true,
+      sessionMissingSince: MISSING,
+      sessionMissingKind: 'resume-failed',
+    });
+
+    expect(await screen.findByText(/resume でも入り直せなかった/)).toBeTruthy();
+  });
+
+  /**
    * `runnerLostSince` は `live: false` を**引き起こす側**である（`isLive()` が
    * `silentRunners.has(runnerId)` で false を返す）。`DisconnectedNote` は
    * 「繋がっていない」としか言わないので、この注記がその理由を1つ名指しする。

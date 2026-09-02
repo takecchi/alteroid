@@ -252,6 +252,7 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
             */}
             <ManagerSessionMissingNote
               sessionMissingSince={manager.sessionMissingSince}
+              sessionMissingKind={manager.sessionMissingKind}
               className="border-t border-border px-4 py-3 text-xs text-warn"
             />
             <LostNote status={manager.status} />

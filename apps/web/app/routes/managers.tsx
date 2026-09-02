@@ -308,12 +308,20 @@ export function ManagerRunnerLostNote({
  * `tools.ts`/`chat.ts` を分けているのはプロセスが別だからで、同一プロセス内の
  * 2ファイルにはその理由が無い）。**export してあるのは `manager-detail.tsx` から
  * 再利用するためである。**
+ *
+ * **由来（`sessionMissingKind`）も同じ主行に添える（#579）。** 「resume でも
+ * 入り直せなかった」（`'resume-failed'`）と「名簿に載っていなかっただけ、resume
+ * はまだ試していない」（`'unlisted'`）では読み手の次の一手が違うので、1つの ⚠ に
+ * 畳まない——`packages/core/src/manager.ts` の `ManagerSummary.sessionMissingKind`
+ * の doc と同じ理由。文言は `describeSessionMissingKindNote`（このファイル）が持つ。
  */
 export function ManagerSessionMissingNote({
   sessionMissingSince,
+  sessionMissingKind,
   className = 'mt-1 text-[11px] text-warn',
 }: {
   sessionMissingSince: string | undefined;
+  sessionMissingKind?: ManagerSummary['sessionMissingKind'];
   className?: string;
 }) {
   if (sessionMissingSince === undefined || sessionMissingSince === null) return null;
@@ -321,11 +329,51 @@ export function ManagerSessionMissingNote({
     <p className={className}>
       ⚠ 宛先の runner は{formatRelative(sessionMissingSince)}
       の時点で、この委譲のセッションを持っていなかった（runner
-      がそう答えた。聞けなかったのではない）。この委譲が失われたという意味ではない —
+      がそう答えた。聞けなかったのではない）。{describeSessionMissingKindNote(sessionMissingKind)}
+      この委譲が失われたという意味ではない —
       完遂した後にセッションが畳まれ、終端の合図だけが届かなかった回も同じ形に見える。まず最後の報告とセッションログ（生）を確かめること（報告が届いていなくても、書き終えた報告がそこに残っていることがある）。話しかければ
       resume から入り直すので、同じ依頼をもう一度出して起こし直さないこと — 同じ仕事が2本になる。
     </p>
   );
+}
+
+/**
+ * `sessionMissingKind` の由来を一言で言う（#579）。
+ *
+ * **字面は `packages/core/src/digest.ts` の `describeSessionMissingKind` と
+ * 揃えてある。** ここで自前に書いている理由は、`packages/core` を Web の
+ * バンドルへ引き込まないためである（`pnpm check:web-bundle-node-traces` /
+ * `check:web-bundle-size` がそれを守る）。**文言を直すときは両方見ること**
+ * （`grep -Fn -- 'resume でも入り直せなかった' packages/core/src/digest.ts`）。
+ *
+ * **`undefined` は空文字にする（「不明」と書かない）。** 由来を持たない印は、
+ * この欄が足される前の版のデーモンが立てたものだけである。そこへ新しい語を
+ * 出すと、実際には2つしかない区別が3つに見える（`describeSessionMissingKind`
+ * の doc と同じ理由）。
+ *
+ * **型の網羅性で塞いだうえで、実行時の倒れ先も足す**（AGENTS.md「型で塞いだ
+ * 分岐にも、実行時の倒れ先の歯を足す」）。デーモンと Web は別デプロイなので
+ * 版がずれうる——デーモンが先に3つ目の値を返し、この画面の型定義（生成 spec）
+ * がまだ2値のままという順序が実在しうる。`default` 節は `never` 型の変数へ
+ * 代入するだけで、**その値をそのまま画面に出さない**（#285 で実際に踏まれた
+ * 間違い——`never` 型の変数を本文として描いてしまい、画面に分岐キーの生の値が
+ * 出た。ここでは主行の主張（この委譲のセッションが無かった、という事実）だけを
+ * 残し、由来の一言を静かに省く——データを1文字も消さない安全側）。
+ */
+function describeSessionMissingKindNote(kind: ManagerSummary['sessionMissingKind']): string {
+  switch (kind) {
+    case 'resume-failed':
+      return 'resume でも入り直せなかった。';
+    case 'unlisted':
+      return '名簿に載っていなかった。resume はまだ試していない。';
+    case undefined:
+      return '';
+    default: {
+      const unreachable: never = kind;
+      void unreachable;
+      return '';
+    }
+  }
 }
 
 export default function Managers() {
@@ -394,7 +442,10 @@ export default function Managers() {
                       在る（`ManagerRunnerLostNote` の doc の到達順序）。CLI も
                       `manager_list` も `else` を使わず2行積んでいる。
                     */}
-                    <ManagerSessionMissingNote sessionMissingSince={manager.sessionMissingSince} />
+                    <ManagerSessionMissingNote
+                      sessionMissingSince={manager.sessionMissingSince}
+                      sessionMissingKind={manager.sessionMissingKind}
+                    />
                     {/*
                       札だけでは「で、どうすればいいのか」が伝わらない。クローンは
                       `manager_list` で同じ案内を受け取る — 人間の画面にだけ無いと、

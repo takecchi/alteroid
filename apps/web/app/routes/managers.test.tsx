@@ -348,6 +348,86 @@ describe('セッションが無いことは、`live` も状態も置き換えず
     expect(await screen.findByText(/この委譲のセッションを持っていなかった/)).toBeTruthy();
     expect(screen.queryByText(new RegExp(MISSING))).toBeNull();
   });
+
+  /**
+   * **由来（`sessionMissingKind`）で読み手の次の一手が違うので、1つの ⚠ に
+   * 畳まない**（#579。`ManagerSessionMissingNote` の doc）。字面は
+   * `packages/core/src/digest.ts` の `describeSessionMissingKind` と揃えてある
+   * ——`grep -Fn -- 'resume でも入り直せなかった' packages/core/src/digest.ts`
+   * で当たる逐語をここでも測る。
+   */
+  it('sessionMissingKind: resume-failed は「resume でも入り直せなかった」を言う', async () => {
+    renderManagers([
+      {
+        ...BASE,
+        status: 'running',
+        live: true,
+        sessionMissingSince: MISSING,
+        sessionMissingKind: 'resume-failed',
+      },
+    ]);
+
+    expect(await screen.findByText(/resume でも入り直せなかった/)).toBeTruthy();
+    // 逆の由来の字面は出ない。
+    expect(screen.queryByText(/名簿に載っていなかった/)).toBeNull();
+  });
+
+  it('sessionMissingKind: unlisted は「名簿に載っていなかった。resume はまだ試していない」を言う', async () => {
+    renderManagers([
+      {
+        ...BASE,
+        status: 'running',
+        live: true,
+        sessionMissingSince: MISSING,
+        sessionMissingKind: 'unlisted',
+      },
+    ]);
+
+    expect(
+      await screen.findByText(/名簿に載っていなかった。resume はまだ試していない/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/resume でも入り直せなかった/)).toBeNull();
+  });
+
+  /**
+   * **`sessionMissingKind` が無いとき（古いデーモン相当）は、どちらの由来も
+   * 言わない。「不明」とも書かない。** 実際には2つしかない区別が3つに見える
+   * ことを避ける（`describeSessionMissingKind` の doc と同じ理由）。主行
+   * （セッションが無かったという事実）はそのまま出る——由来の一言だけが無い。
+   */
+  it('sessionMissingKind が無いときは、由来の字面も「不明」も出さない', async () => {
+    renderManagers([{ ...BASE, status: 'running', live: true, sessionMissingSince: MISSING }]);
+
+    expect(await screen.findByText(/この委譲のセッションを持っていなかった/)).toBeTruthy();
+    expect(screen.queryByText(/resume でも入り直せなかった/)).toBeNull();
+    expect(screen.queryByText(/名簿に載っていなかった/)).toBeNull();
+    expect(screen.queryByText(/不明/)).toBeNull();
+  });
+
+  /**
+   * **実行時の倒れ先（AGENTS.md「型で塞いだ分岐にも、実行時の倒れ先の歯を
+   * 足す」）。** デーモンと Web は別デプロイなので版がずれうる——デーモンが
+   * 先に3つ目の値を返し、この画面の型定義（生成 spec）がまだ2値のままという
+   * 順序が実在しうる。ここでは型を `as ManagerSummary` で迂回して未知の値を
+   * 直接渡し、(1) 例外を投げず (2) その生の値を画面に描かない（#285 で実際に
+   * 踏まれた「`never` 型の変数をそのまま本文として描く」間違いの再発防止）
+   * ことを測る。データは1文字も消えない——主行はそのまま出る。
+   */
+  it('sessionMissingKind に未知の値が来ても、例外を投げず生の値も描かない（版のずれに備える）', async () => {
+    renderManagers([
+      {
+        ...BASE,
+        status: 'running',
+        live: true,
+        sessionMissingSince: MISSING,
+        sessionMissingKind: 'future-kind' as ManagerSummary['sessionMissingKind'],
+      },
+    ]);
+
+    expect(await screen.findByText(/この委譲のセッションを持っていなかった/)).toBeTruthy();
+    // 未知の生の値をそのまま画面に出さない。
+    expect(screen.queryByText(/future-kind/)).toBeNull();
+  });
 });
 
 /**
