@@ -717,8 +717,12 @@ interface MemoryHierarchyElsewhere {
  *
  * - 親が存在しない slug を指す → ルート扱いにし、`issue: 'missing-parent'`
  * - 親をたどると自分自身に戻る（循環） → ルート扱いにし、`issue: 'cycle'`
- * - 親はこの `entries`（目次の対象）には無いが、`knownElsewhere` には在る
- *   → ルート扱いにし、`issue: 'parent-not-listed'`
+ * - 親はこの `entries`（目次の対象）には無いが、`elsewhere.renderedAsPremise` には
+ *   在る（同じ描画の中に premise として全文で載っている） → ルート扱いにし、
+ *   `issue: 'parent-not-listed'`
+ * - 親はこの `entries` には無いが、`elsewhere.presentInMemory` には在る
+ *   （記憶には実在するが、この描画そのものには載っていない） → ルート扱いにし、
+ *   `issue: 'parent-not-rendered'`
  *
  * どれも文書自体は消えない——ルートとして目次に残り、印がつく。
  *
