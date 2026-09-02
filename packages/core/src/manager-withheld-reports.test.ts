@@ -1,7 +1,7 @@
 import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createManagerPool, type ManagerPool } from './manager.js';
+import { createManagerPool, withheldReportOverdue, type ManagerPool } from './manager.js';
 import { createLocalRunner } from './runner-local.js';
 import {
   createRunnerRegistry,
@@ -228,6 +228,8 @@ async function journalHasText(stores: Stores, needle: string): Promise<void> {
 }
 
 const AWAITING = { count: 1, breakdown: 'shell×1' };
+/** `flushWithheldReports` の期限（30分。`manager.ts` の同名の定数と同じ値）。 */
+const WITHHELD_REPORT_FLUSH_MS = 30 * 60_000;
 
 describe('manager が握り潰したとき（case "report" の awaitingBackground）', () => {
   it('受信箱（inbox）は増えない', async () => {
@@ -445,6 +447,36 @@ describe('flushWithheldReports（時間で必ず配る逃げ道）', () => {
 
     expect(inbox.length).toBe(before);
     await pool.stop();
+  });
+
+  /**
+   * **`lastAt` が読めない（壊れている）ときは、期限切れとして配る側へ倒す。**
+   *
+   * `Pool#withheldReports` は真の private field（`#`）で、`#withholdBackgroundReport`
+   * の1箇所（常に有効な ISO 文字列しか書かない）以外から書けないので、壊れた
+   * `lastAt` を `Pool` 経由で注入する自然な経路が無い——`withheldReportOverdue`
+   * （純関数として切り出してある）を直接呼んで確かめる（`manager.ts` の doc
+   * 「テストが書けない構造は、テストが無いのと同じ」）。
+   */
+  describe('withheldReportOverdue（lastAt が壊れている場合の判定）', () => {
+    it('壊れた lastAt は期限切れとして扱う（配る側へ倒す）', () => {
+      expect(
+        withheldReportOverdue('これは日時ではない', Date.now(), WITHHELD_REPORT_FLUSH_MS),
+      ).toBe(true);
+      expect(withheldReportOverdue('', Date.now(), WITHHELD_REPORT_FLUSH_MS)).toBe(true);
+    });
+
+    it('読める lastAt は、これまでどおり経過時間で判定する（回帰）', () => {
+      const now = Date.parse('2026-09-01T01:00:00.000Z');
+      // 期限ちょうど前 — まだ配らない。
+      expect(withheldReportOverdue('2026-09-01T00:30:00.001Z', now, WITHHELD_REPORT_FLUSH_MS)).toBe(
+        false,
+      );
+      // 期限ちょうど・それ以降 — 配る。
+      expect(withheldReportOverdue('2026-09-01T00:30:00.000Z', now, WITHHELD_REPORT_FLUSH_MS)).toBe(
+        true,
+      );
+    });
   });
 });
 
