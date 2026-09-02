@@ -186,6 +186,7 @@ export {
   type MemoryListingEntry,
   type MemoryPart,
   type RenderedMemory,
+  type RenderMemoryDocumentsOptions,
 } from './memory.js';
 export type { CloneSystemPromptInput } from './prompt.js';
 export {
