@@ -3976,6 +3976,19 @@ class Clone implements CloneHost {
    *
    * **削除は名前だけで伝える。** 消えた文書の本文を載せ直す意味は無く、載せれば
    * 「消したのに文脈には居る」という一番まぎらわしい状態になる。
+   *
+   * ## ⭐ 「載せていない」を「存在しない」と言わない
+   *
+   * 差分だけを渡すと、`renderMemoryDocuments` は**渡された集合の中でしか
+   * `parent` を解決できない。** 親が今回変わっていないだけで
+   * 「親 X が見つからない」（＝その文書はそもそも無い）と出ていた——実測
+   * 2026-09-02、クローンがこれを「記憶の階層が壊れた」と読んで `memory_list` を
+   * 呼び直している。**この断りの1行目（「ここに出ていない文書は変わっていない」）
+   * と正面から矛盾する印を、同じ塊の中で出していた。**
+   *
+   * だから `presentInMemory` に**記憶の全体の slug**（`present`。削除の判定に
+   * 使っているものと同じ集合）を渡す。載せる文書は差分のままで、**「無い」と
+   * 「今回載せていない」の区別だけが戻る。**
    */
   async #withFreshMemory(text: string): Promise<string> {
     let documents: MemoryDocument[];
@@ -4010,7 +4023,9 @@ class Clone implements CloneHost {
     return [
       ...(resumeNotice === null ? [] : [resumeNotice, '']),
       head,
-      ...(changed.length === 0 ? [] : ['', renderMemoryDocuments(changed)]),
+      ...(changed.length === 0
+        ? []
+        : ['', renderMemoryDocuments(changed, { presentInMemory: present })]),
       ...(removed.length === 0
         ? []
         : [

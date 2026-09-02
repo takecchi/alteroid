@@ -814,6 +814,82 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
     expect(rendered).not.toContain('在るが、この目次は fact だけを列挙する');
   });
 
+  /**
+   * ⭐ `clone.ts` の `#withFreshMemory` が踏んだ欠陥（実測 2026-09-02）の修正。
+   *
+   * 記憶の更新を伝える塊は**変わった文書だけ**を `renderMemoryDocuments` へ
+   * 渡す。親（`parent`）が今回変わっていなければ、その `渡された集合の中でしか
+   * 解決できない`ので「親 X が見つからない」（＝そもそも文書が無い）と出て
+   * いた——実際には親は記憶に実在し、今回の描画に含まれていないだけである。
+   * `options.presentInMemory` に記憶の全体の slug を渡すと、この2つが
+   * 区別される（→ `parent-not-rendered`）。
+   */
+  it('⭐ 親が今回の描画に含まれないだけのときは「見つからない」と言わない', () => {
+    const rendered = renderMemoryDocuments(
+      [fact('child', { description: '子', freshness: { kind: 'fresh' }, parent: 'core-a' })],
+      { presentInMemory: new Set(['core-a', 'child']) },
+    );
+    expect(rendered).toContain('親 core-a は在るが、ここに載せた分には含まれない');
+    expect(rendered).not.toContain('が見つからない');
+  });
+
+  it('親が本当に存在しないなら、`presentInMemory` を渡していても従来どおり「見つからない」', () => {
+    const rendered = renderMemoryDocuments(
+      [
+        fact('child', {
+          description: '子',
+          freshness: { kind: 'fresh' },
+          parent: 'really-not-exist',
+        }),
+      ],
+      // `presentInMemory` には子の slug しか無い——親の slug はどこにも無いので、
+      // 記憶の全体を渡していても状況は変わらない。
+      { presentInMemory: new Set(['child']) },
+    );
+    expect(rendered).toContain('親 really-not-exist が見つからない');
+    expect(rendered).not.toContain('ここに載せた分には含まれない');
+  });
+
+  /**
+   * 優先順位の歯。`resolveMemoryHierarchy` の `effectiveParent` は
+   * `renderedAsPremise` を `presentInMemory` より先に見る——同じ描画の中に
+   * premise として全文が載っているなら、そちらの言い方（「この目次のすぐ上」）
+   * のほうが具体的で、読み手に近い場所を指せる。
+   *
+   * **⚠️ 器は必ず premise 2件 + fact 1件を持つ**（上の「親が premise を指す」
+   * テストと同じ理由）。
+   */
+  it('親が同じ描画の中に premise として載っているなら、`presentInMemory` を渡してもそちらの言い方が勝つ', () => {
+    const rendered = renderMemoryDocuments(
+      [
+        premise('core-a', '前提A'),
+        premise('core-b', '前提B'),
+        fact('child', { description: '子', freshness: { kind: 'fresh' }, parent: 'core-a' }),
+      ],
+      { presentInMemory: new Set(['core-a', 'core-b', 'child']) },
+    );
+    expect(rendered).toContain('親 core-a は在るが、この目次は fact だけを列挙する');
+    expect(rendered).not.toContain('ここに載せた分には含まれない');
+  });
+
+  /**
+   * 互換の保証。`options.presentInMemory` を渡さなければ出力は1バイトも
+   * 変わらない——`renderMemoryDocuments` の doc がそう約束している。ここでは
+   * `toBe` で文字列全体の同一性を見る（部分一致では、既定値の変化が
+   * 「たまたま含まれていた文字列」に隠れうる）。
+   */
+  it('`presentInMemory` を渡さなければ出力が1バイトも変わらない', () => {
+    const docs = [
+      fact('orphan', { description: '説明', freshness: { kind: 'fresh' }, parent: 'not-exist' }),
+    ];
+    const rendered = renderMemoryDocuments(docs);
+    expect(rendered).toBe(
+      '<!-- memory: index -->\n' +
+        '## 記憶の目次（fact。本文は memory_read で開く。階層はインデントで表す）\n' +
+        '- orphan: orphan — 説明［親 not-exist が見つからない］',
+    );
+  });
+
   it('循環する parent を黙って落とさない', () => {
     const rendered = renderMemoryDocuments([
       fact('cycle-a', { description: 'A', freshness: { kind: 'fresh' }, parent: 'cycle-b' }),
@@ -923,7 +999,7 @@ describe('renderMemoryListing — `memory_list` 用の一覧。全区分を対�
    * ⭐ 案4（`renderMemoryTocIssue` の `parent-not-listed`）の副作用が無いこと。
    *
    * `renderMemoryListing` は全区分（premise も fact も）を `entries` に含めて
-   * `resolveMemoryHierarchy(tocEntries)` を呼ぶ——`knownElsewhere` を渡さない。
+   * `resolveMemoryHierarchy(tocEntries)` を呼ぶ——`elsewhere` を渡さない。
    * だから親が premise でも `bySlug` に直接見つかり、新しい3つ目の状態
    * （`parent-not-listed`）は構造的に起こりえない（既定値が空集合なので、
    * `renderMemoryToc` 側の変更はこの経路に一切効かない）。ここではそれを

@@ -3782,6 +3782,49 @@ describe('クローン — 記憶を二重に載せない', () => {
 
     await s.clone.stop();
   });
+
+  /**
+   * ⭐ 端から端まで通す歯（実測 2026-09-02 の欠陥そのもの）。
+   *
+   * `#withFreshMemory` は**変わった文書だけ**を `renderMemoryDocuments` へ
+   * 渡す。`core`（premise）を `parent` に持つ `child`（fact）を器に置き、
+   * `child` だけを書き換えると、載せ直しの差分に `child` しか入らない——
+   * `core` は今回変わっていないので、差分だけを見れば「親 core が見つから
+   * ない」に見える。実際には `core` は記憶に実在し、単に今回の描画に
+   * 含まれていないだけである。`#withFreshMemory` が渡す `presentInMemory`
+   * （記憶の全体の slug）でこの2つが区別されることを確かめる。
+   *
+   * **「親も一緒に載せる」に化けていないこと**も見る —— 直し方が「親を
+   * 差分へ含める」だったら二重載せが復活する（このファイルの表題そのもの）。
+   */
+  it('⭐ 親が差分に含まれないとき、載せ直しは「見つからない」と言わない', async () => {
+    const stores = createMemoryStores();
+    await stores.persona.write('core', '# core\n\n前提の本文\n');
+    await stores.persona.write(
+      'child',
+      '---\ntype: fact\ndescription: 子の要旨\nparent: core\n---\n# child\n\n子の本文\n',
+    );
+    const s = setup(undefined, stores);
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    // child だけを書き換える。core には触れない。
+    await stores.persona.write(
+      'child',
+      '---\ntype: fact\ndescription: 子の要旨（更新）\nparent: core\n---\n# child\n\n子の本文\n',
+    );
+    const second = await secondTurn(s);
+
+    expect(second).toContain('記憶が更新された');
+    expect(second).not.toContain('が見つからない');
+    expect(second).toContain('親 core は在るが、ここに載せた分には含まれない');
+    // 直し方が「親も一緒に載せる」に化けていないこと —— core の本文（premise
+    // としての全文）は載せ直しに出てこない。
+    expect(second).not.toContain('前提の本文');
+    expect(second).not.toContain('<!-- memory: core.md -->');
+
+    await s.clone.stop();
+  });
 });
 
 /**

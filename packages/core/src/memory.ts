@@ -665,11 +665,50 @@ interface MemoryTocEntry {
   parent: string | undefined;
 }
 
+/**
+ * 目次の1行に付く「親をたどれなかった」の**種類**。
+ *
+ * **4つを1つに畳まない。** どれも「親の行が上に無い」という同じ見た目になるが、
+ * **読み手が次に見に行く先が違う**（`renderMemoryTocIssue` の doc）。畳むと、
+ * いちばん多い状態（親は実在していて、この描画に載っていないだけ）が、いちばん
+ * 怖い状態（文書がそもそも無い）の言葉で報告される。
+ */
+type MemoryTocIssue = 'missing-parent' | 'cycle' | 'parent-not-listed' | 'parent-not-rendered';
+
 interface ResolvedTocNode {
   entry: MemoryTocEntry;
   depth: number;
-  issue?: 'missing-parent' | 'cycle' | 'parent-not-listed';
+  issue?: MemoryTocIssue;
   children: ResolvedTocNode[];
+}
+
+/**
+ * 「この目次（`entries`）の外にも実在する slug」を、**在り処ごとに分けて**
+ * 渡す口。`resolveMemoryHierarchy` の第2引数。
+ *
+ * **2つを1つの集合に混ぜないのは、読み手に言うべきことが違うからである。**
+ * 親が同じ描画の中に premise として全文で載っているなら「上を読め」で済むが、
+ * そもそも今回の描画に載っていないなら「載っていないだけで、記憶には在る」と
+ * しか言えない。混ぜると、後者が前者の言い方（「本文が上に載っている」）で
+ * 嘘をつく。
+ */
+interface MemoryHierarchyElsewhere {
+  /**
+   * この目次の対象ではないが、**同じ描画の中に premise として全文が載って
+   * いる** slug（渡し手は `buildMemoryDocumentSections`）。
+   */
+  renderedAsPremise?: ReadonlySet<string>;
+  /**
+   * **記憶（ストア）に実在する slug の全体。** この描画に含まれる slug を
+   * 含んでいてよい——描画の中に在るかどうかは先に判定されるので、渡し手は
+   * 「今回載せていないもの」を選り分けずに、手元の全体をそのまま渡せばよい
+   * （選り分けを渡し手にやらせると、そこが2つ目の間違えどころになる）。
+   *
+   * **渡さなければ（既定は空集合）この状態は起こりえない**——記憶の全体を
+   * 渡している呼び手（システムプロンプトへの焼き込み・`memory_list`）の
+   * 出力を1バイトも変えないための既定値である。
+   */
+  presentInMemory?: ReadonlySet<string>;
 }
 
 /**
@@ -678,43 +717,70 @@ interface ResolvedTocNode {
  *
  * - 親が存在しない slug を指す → ルート扱いにし、`issue: 'missing-parent'`
  * - 親をたどると自分自身に戻る（循環） → ルート扱いにし、`issue: 'cycle'`
- * - 親はこの `entries`（目次の対象）には無いが、`knownElsewhere` には在る
- *   → ルート扱いにし、`issue: 'parent-not-listed'`
+ * - 親はこの `entries`（目次の対象）には無いが、`elsewhere.renderedAsPremise` には
+ *   在る（同じ描画の中に premise として全文で載っている） → ルート扱いにし、
+ *   `issue: 'parent-not-listed'`
+ * - 親はこの `entries` には無いが、`elsewhere.presentInMemory` には在る
+ *   （記憶には実在するが、この描画そのものには載っていない） → ルート扱いにし、
+ *   `issue: 'parent-not-rendered'`
  *
  * どれも文書自体は消えない——ルートとして目次に残り、印がつく。
  *
- * ## `knownElsewhere` — 「目次の外にも実在する slug」
+ * ## `elsewhere` — 「この目次の外にも実在する slug」
  *
- * `renderMemoryDocuments` の目次（`renderMemoryToc`）は **fact だけ**を対象に
- * 組む（premise は全文で別に載っている）。だから `entries`（fact の集合）
- * だけを見て「親が無い」と判定すると、**親が premise として実在していても
- * 「見つからない」と出る**——`memory_list`（`renderMemoryListing`。全区分を
- * 対象にするので `bySlug` に premise も入っている）では同じ関係が正常に
- * 解決するのに、面によって答えが変わる欠陥だった。
+ * **`entries` は「記憶の全部」とは限らない。** ここが取り違えの本体で、実際に
+ * 2通りの形で踏んでいる。
  *
- * `knownElsewhere` に「この `entries` には無いが、文書としては実在する
- * slug」の集合（呼び手＝ `renderMemoryToc` が premise の slug 集合を渡す）を
- * 渡すことで、この3つ目の状態を区別できるようにする。**渡さなければ
- * （既定は空集合）、この状態は起こりえず、従来どおり `missing-parent` に
- * 倒れる**——`renderMemoryListing`（全区分が既に `entries` に入っているので
- * `knownElsewhere` を渡す必要が無い）の出力を1バイトも変えないための既定値
- * である。
+ * 1. `renderMemoryDocuments` の目次（`renderMemoryToc`）は **fact だけ**を対象
+ *    に組む（premise は全文で別に載っている）。だから `entries`（fact の集合）
+ *    だけを見て「親が無い」と判定すると、**親が premise として実在していても
+ *    「見つからない」と出る**——`memory_list`（`renderMemoryListing`。全区分を
+ *    対象にするので `bySlug` に premise も入っている）では同じ関係が正常に
+ *    解決するのに、面によって答えが変わる欠陥だった
+ *    （→ `elsewhere.renderedAsPremise`）
+ * 2. `clone.ts` の `#withFreshMemory` は、記憶が更新されたことを**変わった
+ *    文書だけ**を載せて伝える。だから `entries` はその差分に縮む——**親が
+ *    今回変わっていないだけで「見つからない」と出た**（実測 2026-09-02、
+ *    クローン自身が踏んだ。「記憶の階層が壊れた」と読んで `memory_list` を
+ *    呼び直しに行かせている）（→ `elsewhere.presentInMemory`）
+ *
+ * **どちらも「その文書は存在しない」と読める言葉で報告していた。** 実際には
+ * 存在していて、この描画の対象ではないだけである。`elsewhere` を渡すことで、
+ * この2つを `missing-parent` から分けて名指しできるようにする。
+ *
+ * ## ⚠️ 循環の検出は、いまも `entries` の中だけで閉じている
+ *
+ * `elsewhere` が運ぶのは **slug の集合**であって、`parent` の対応表ではない。
+ * だから「循環の一部が `entries` の外を通る」形（a → b → c → a で c だけが
+ * 差分に無い）は `cycle` として検出できず、`parent-not-rendered` に落ちる。
+ * **これは「無い」と言い切る誤りではない**（親は実際に在り、実際にこの描画に
+ * 載っていない）が、**言えるはずのことを言えていない。** 直すには記憶の全体の
+ * `parent` を毎ターン読み直して渡すことになり、この関数の引数の形が変わる
+ * ——範囲が別なので、ここでは直していない。**ここを直すときは
+ * `renderMemoryTocIssue` の doc も一緒に読むこと。**
  */
 function resolveMemoryHierarchy(
   entries: readonly MemoryTocEntry[],
-  knownElsewhere: ReadonlySet<string> = new Set(),
+  elsewhere: MemoryHierarchyElsewhere = {},
 ): ResolvedTocNode[] {
+  const renderedAsPremise = elsewhere.renderedAsPremise ?? new Set<string>();
+  const presentInMemory = elsewhere.presentInMemory ?? new Set<string>();
   const bySlug = new Map(entries.map((entry) => [entry.slug, entry]));
   const parentOf = new Map(entries.map((entry) => [entry.slug, entry.parent]));
 
   function effectiveParent(slug: string): {
     parent?: string;
-    issue?: 'missing-parent' | 'cycle' | 'parent-not-listed';
+    issue?: MemoryTocIssue;
   } {
     const direct = parentOf.get(slug);
     if (direct === undefined || direct === '') return {};
     if (!bySlug.has(direct)) {
-      return { issue: knownElsewhere.has(direct) ? 'parent-not-listed' : 'missing-parent' };
+      // **順に見る。** 「同じ描画の中に premise として載っている」ほうが具体的
+      // なので先に当てる——記憶の全体には当然その premise も入っているので、
+      // 逆順にすると具体的な言い方のほうが二度と出なくなる。
+      if (renderedAsPremise.has(direct)) return { issue: 'parent-not-listed' };
+      if (presentInMemory.has(direct)) return { issue: 'parent-not-rendered' };
+      return { issue: 'missing-parent' };
     }
     if (direct === slug) return { issue: 'cycle' };
     const seen = new Set<string>([slug]);
@@ -824,12 +890,27 @@ function memoryFreshnessMarker(freshness: MemoryDescriptionFreshness): string {
  * 循環・存在しない親・「目次の外に実在する親」を黙って落とさず、印として
  * 言葉にする。
  *
- * **`missing-parent` と `parent-not-listed` を畳まない。** 前者は「その slug の
- * 文書がそもそも無い（打ち間違いか、削除された）」、後者は「文書は実在するが、
- * この目次（fact だけ）の対象ではない（premise として本文が上に全文で載って
- * いる）」——疑う先が違う。本文の在り処は `renderMemoryDocuments` の doc が
- * 保証する不変条件（「どの文書も、全文か目次行かのどちらか一方に必ず現れる」）
- * そのものなので、ここでも同じ言葉で言う。
+ * **`missing-parent` / `parent-not-listed` / `parent-not-rendered` を畳まない。**
+ * 3つとも「親の行が上に無い」という同じ見た目だが、**読み手が次に疑う先が違う。**
+ *
+ * | 印                    | 何が起きているか                                         | 読み手が次に見る先                       |
+ * | --------------------- | -------------------------------------------------------- | ---------------------------------------- |
+ * | `missing-parent`      | その slug の文書がそもそも無い（打ち間違いか、削除された） | `parent` の綴り／消したかどうか          |
+ * | `parent-not-listed`   | 文書は実在し、**同じ描画の中に premise として全文が載っている** | この目次のすぐ上                    |
+ * | `parent-not-rendered` | 文書は実在するが、**今回の描画そのものに載っていない**     | 記憶の側（`memory_list` を呼ぶ必要は無い） |
+ *
+ * 本文の在り処は `renderMemoryDocuments` の doc が保証する不変条件（「どの文書も、
+ * 全文か目次行かのどちらか一方に必ず現れる」）そのものなので、`parent-not-listed`
+ * ではここでも同じ言葉で言う。
+ *
+ * **⚠️ `parent-not-rendered` の側では、その不変条件は成り立っていない**
+ * ——不変条件は「記憶の全体を渡したとき」の約束であって、部分だけを描く呼び手
+ * （`clone.ts` の `#withFreshMemory`）の下では「上にも下にも無い」が正しい状態
+ * である。だから言い方も変える。**「見つからない」と書かないことが要点である**
+ * ——クローンはそれを「記憶の階層が壊れた」と読んで確かめに行く（実測 2026-09-02）。
+ *
+ * `cycle` については、循環の一部が描画の外を通ると検出できない（この場合
+ * `parent-not-rendered` に落ちる。理由と直し方は `resolveMemoryHierarchy` の doc）。
  */
 function renderMemoryTocIssue(node: ResolvedTocNode): string {
   if (node.issue === 'missing-parent') return `［親 ${String(node.entry.parent)} が見つからない］`;
@@ -838,6 +919,12 @@ function renderMemoryTocIssue(node: ResolvedTocNode): string {
     return (
       `［親 ${String(node.entry.parent)} は在るが、この目次は fact だけを列挙する` +
       '（premise として本文が上に全文で載っている）］'
+    );
+  }
+  if (node.issue === 'parent-not-rendered') {
+    return (
+      `［親 ${String(node.entry.parent)} は在るが、ここに載せた分には含まれない` +
+      '（記憶には実在する——消えたのではない）］'
     );
   }
   return '';
@@ -859,15 +946,16 @@ function renderMemoryTocLine(node: ResolvedTocNode): string {
  *
  * **件数で切ったら、切った件数を必ず出す**（`excerpt.ts` と同じ約束）。
  *
- * `knownElsewhere` はそのまま `resolveMemoryHierarchy` へ渡す（`parent` が
- * この目次の外に実在するときの3つ目の状態を区別するため。呼び手
- * （`buildMemoryDocumentSections`）が premise の slug 集合を渡す）。
+ * `elsewhere` はそのまま `resolveMemoryHierarchy` へ渡す（`parent` がこの目次の
+ * 外に実在するときの2つの状態を区別するため。呼び手
+ * （`buildMemoryDocumentSections`）が premise の slug 集合と、記憶の全体の
+ * slug 集合を渡す）。
  */
 function renderMemoryToc(
   entries: readonly MemoryTocEntry[],
-  knownElsewhere: ReadonlySet<string> = new Set(),
+  elsewhere: MemoryHierarchyElsewhere = {},
 ): string {
-  const flat = flattenMemoryToc(resolveMemoryHierarchy(entries, knownElsewhere));
+  const flat = flattenMemoryToc(resolveMemoryHierarchy(entries, elsewhere));
   const shown = flat.slice(0, MEMORY_TOC_ENTRY_LIMIT);
   const omitted = flat.length - shown.length;
   const lines = [
@@ -899,7 +987,10 @@ function renderPremisePart(part: MemoryPart): string {
  * 集めて目次にする」処理を書くと、どちらか一方だけを直した瞬間に
  * メーターが実物と食い違う——ここへ1本にまとめ、両方がこれを呼ぶ。
  */
-function buildMemoryDocumentSections(documents: readonly MemoryPart[]): {
+function buildMemoryDocumentSections(
+  documents: readonly MemoryPart[],
+  presentInMemory?: ReadonlySet<string>,
+): {
   premiseParts: MemoryPart[];
   premiseSection: string;
   tocEntries: MemoryTocEntry[];
@@ -926,13 +1017,33 @@ function buildMemoryDocumentSections(documents: readonly MemoryPart[]): {
 
   const premiseSection =
     premiseParts.length === 0 ? '' : premiseParts.map(renderPremisePart).join('\n\n');
-  // premise の slug 集合を渡す——fact だけの目次の外にも実在する slug を
-  // `resolveMemoryHierarchy` が区別できるようにする（`renderMemoryTocIssue`
-  // の 'parent-not-listed' を見よ）。
+  // 目次の外にも実在する slug を、**在り処ごとに分けて**渡す——`documents` は
+  // 「記憶の全部」とは限らないので、ここで畳むと実在するものが「見つからない」
+  // として出る（`renderMemoryTocIssue` の 'parent-not-listed' と
+  // 'parent-not-rendered'）。
   const premiseSlugs = new Set(premiseParts.map((part) => part.slug));
-  const tocSection = tocEntries.length === 0 ? '' : renderMemoryToc(tocEntries, premiseSlugs);
+  const tocSection =
+    tocEntries.length === 0
+      ? ''
+      : renderMemoryToc(tocEntries, { renderedAsPremise: premiseSlugs, presentInMemory });
 
   return { premiseParts, premiseSection, tocEntries, tocSection };
+}
+
+/**
+ * `renderMemoryDocuments` の任意引数。**記憶の一部だけを描く呼び手のためだけに
+ * ある**（全体を渡す呼び手は何も渡さなくてよい）。
+ */
+export interface RenderMemoryDocumentsOptions {
+  /**
+   * **記憶（ストア）に実在する slug の全体。** `documents` に含まれる slug を
+   * 含んでいてよい（選り分けは不要。`MemoryHierarchyElsewhere.presentInMemory`）。
+   *
+   * 渡すと、`parent` が `documents` の外を指しているときに「見つからない」
+   * （＝文書がそもそも無い）ではなく「在るが、ここに載せた分には含まれない」と
+   * 出る。**渡さなければ出力は1バイトも変わらない。**
+   */
+  presentInMemory?: ReadonlySet<string>;
 }
 
 /** `premiseSection` と `tocSection` を、実際に焼き込む1本の文字列へ繋ぐ。 */
@@ -956,9 +1067,24 @@ function joinMemorySections(premiseSection: string, tocSection: string): string 
  * frontmatter を1つも持たない文書の集合（`kind: 'none'` のみ）に対しては、
  * 全件が `premise` に分類されるため、出力は frontmatter 導入前の
  * `renderMemoryDocuments` と1バイトも変わらない（受け入れ基準の最上位）。
+ *
+ * ## ⚠️ `documents` が「記憶の全部」でない呼び方がある
+ *
+ * 上の不変条件（どの文書も全文か目次行のどちらか一方に必ず現れる）は、**記憶の
+ * 全体を渡したときの約束である。** `clone.ts` の `#withFreshMemory` は
+ * **変わった文書だけ**を渡す——そのとき「渡されなかった文書」は上にも下にも
+ * 現れない。**その状態を「存在しない」と報告しないために、部分だけを渡す呼び手は
+ * `options.presentInMemory` に記憶の全体の slug を渡すこと**（渡さないと、親が
+ * 今回変わっていないだけで「親 X が見つからない」と出る）。
  */
-export function renderMemoryDocuments(documents: readonly MemoryPart[]): RenderedMemory {
-  const { premiseSection, tocSection } = buildMemoryDocumentSections(documents);
+export function renderMemoryDocuments(
+  documents: readonly MemoryPart[],
+  options: RenderMemoryDocumentsOptions = {},
+): RenderedMemory {
+  const { premiseSection, tocSection } = buildMemoryDocumentSections(
+    documents,
+    options.presentInMemory,
+  );
   return brandRenderedMemory(joinMemorySections(premiseSection, tocSection));
 }
 
@@ -1443,6 +1569,14 @@ export function describeMemoryFloor(input: {
  * 2. **`memory_section_move` は移動元と移動先の両方を「変わった文書」に
  *    する。** 直上のとおり、ここでは両方をまとめた**合計**を1つの数で返す
  *    （別々に出す選択肢もあったが採らなかった——理由は直上）。
+ * 3. **⚠️ `renderMemoryDocuments` へ `presentInMemory` を渡していない。**
+ *    ここが持っているのは「今回書いた文書」だけで、記憶の全体を知らない
+ *    （呼び手4箇所は `tools.ts` に在り、ストアを渡してこない）。そのため、
+ *    書いた文書が **fact で、その `parent` が今回の書き込みに含まれない**
+ *    ときだけ、実際に載る印（「在るが、ここに載せた分には含まれない」）より
+ *    短い印（「見つからない」）で数えることになり、**数十文字ぶん少なく出る。**
+ *    ⟹ 直すには呼び手の側から記憶の全体を渡す必要がある（`tools.ts` の4箇所
+ *    の署名が変わる）。ここではその形にしていない。
  *
  * ## ⚠️ 引数を非空タプルにしてある理由（P3 の同乗、#318）
  *
