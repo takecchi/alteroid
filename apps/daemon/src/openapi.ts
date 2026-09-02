@@ -1249,6 +1249,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     probeTurnEnds() {
       throw new Error('spec 生成専用のスタブ: ターン終了の探りはしない');
     },
+    flushWithheldReports() {
+      throw new Error('spec 生成専用のスタブ: 握り潰した報告は無い');
+    },
     stop() {
       throw new Error('spec 生成専用のスタブ');
     },

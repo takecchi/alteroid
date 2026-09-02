@@ -5,14 +5,22 @@ import { startTurnEndPolling } from './turn-end-poller.js';
 
 /**
  * `ManagerPool` の全メソッドを実装するが、このポーラーが呼ぶのは
- * `probeTurnEnds()` だけ——それ以外は呼ばれない前提で投げる
- * （`usage-poller.test.ts` と同じ足場の作法）。
+ * `probeTurnEnds()` / `flushWithheldReports()` だけ——それ以外は呼ばれない
+ * 前提で投げる（`usage-poller.test.ts` と同じ足場の作法）。
  */
-function fakeManagers(run: () => Promise<void> | void): {
+function fakeManagers(
+  run: () => Promise<void> | void,
+  flush: () => Promise<void> | void = () => undefined,
+): {
   managers: ManagerPool;
   calls: () => number;
+  flushCalls: () => number;
+  /** どちらが先に呼ばれたか記録する（順序を固定する試験用）。 */
+  order: () => readonly string[];
 } {
   let calls = 0;
+  let flushCalls = 0;
+  const order: string[] = [];
   const managers: ManagerPool = {
     start: () => {
       throw new Error('not implemented');
@@ -44,11 +52,17 @@ function fakeManagers(run: () => Promise<void> | void): {
     },
     async probeTurnEnds() {
       calls += 1;
+      order.push('probeTurnEnds');
       await run();
+    },
+    async flushWithheldReports() {
+      flushCalls += 1;
+      order.push('flushWithheldReports');
+      await flush();
     },
     stop: () => Promise.resolve(),
   };
-  return { managers, calls: () => calls };
+  return { managers, calls: () => calls, flushCalls: () => flushCalls, order: () => order };
 }
 
 describe('ターン終了の助言を定期的に取り直す（Issue #567）', () => {
@@ -102,5 +116,56 @@ describe('ターン終了の助言を定期的に取り直す（Issue #567）', 
     const after = calls();
     await new Promise((resolve) => setTimeout(resolve, 60));
     expect(calls()).toBe(after);
+  });
+
+  /**
+   * `flushWithheldReports()`（握り潰した「背景処理の完了待ちで畳んだ報告」を
+   * 時間で必ず配る逃げ道）が、この周期に相乗りすることを固定する
+   * （`turn-end-poller.ts` の doc）。
+   */
+  it('probeTurnEnds() の後ろで flushWithheldReports() も呼ぶ', async () => {
+    const { managers, calls, flushCalls, order } = fakeManagers(
+      () => undefined,
+      () => undefined,
+    );
+    const poller = startTurnEndPolling({ managers, intervalMs: 10_000 });
+
+    await poller.refresh();
+    expect(calls()).toBeGreaterThanOrEqual(1);
+    expect(flushCalls()).toBeGreaterThanOrEqual(1);
+    // **順序そのものが要点**（`probeTurnEnds` の中に入れていないこと）。
+    expect(order()).toEqual(['probeTurnEnds', 'flushWithheldReports']);
+
+    poller.stop();
+  });
+
+  it('probeTurnEnds() が投げても flushWithheldReports() は走る', async () => {
+    const { managers, flushCalls } = fakeManagers(
+      () => {
+        throw new Error('生ログが読めなかった（模擬）');
+      },
+      () => undefined,
+    );
+    const poller = startTurnEndPolling({ managers, intervalMs: 10_000 });
+
+    await expect(poller.refresh()).resolves.toBeUndefined();
+    expect(flushCalls()).toBeGreaterThanOrEqual(1);
+
+    poller.stop();
+  });
+
+  it('flushWithheldReports() が投げても、ポーラー自身は落ちない', async () => {
+    const { managers, calls } = fakeManagers(
+      () => undefined,
+      () => {
+        throw new Error('配り直せなかった（模擬）');
+      },
+    );
+    const poller = startTurnEndPolling({ managers, intervalMs: 10_000 });
+
+    await expect(poller.refresh()).resolves.toBeUndefined();
+    expect(calls()).toBeGreaterThanOrEqual(1);
+
+    poller.stop();
   });
 });

@@ -581,6 +581,44 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * 必ず本文を作り、`contentless` は立たない。
      */
     contentless: z.literal(true).optional(),
+    /**
+     * **このターンが「背景処理の完了待ちで畳んだだけ」であること。**
+     *
+     * マネージャーが `Bash` の `run_in_background: true`（や、背景へ回した
+     * 委譲）の完了を待つためだけに `end_turn` で畳むと、その最後の発話が
+     * そのまま「報告」としてクローンへ配られ、クローンのターンを1本無駄に
+     * 起こしていた（依頼者が生ログで実測。同日に11本）。`contentless` と
+     * 同型の直し —— 「中身の無い報告はクローンのターンを起こさない」を
+     * 「背景処理の完了待ちで畳んだターンの報告は起こさない」へ広げる。
+     *
+     * **`runner.ts` が立てる条件は3つ全部を満たすときだけ**（`#apply` の
+     * `case 'turn_ended'` を参照）——1つでも欠けたら必ず配る側へ倒す:
+     * 1. `failure` が無い（失敗で終わった回は必ず配る）
+     * 2. `status === 'done'`（`waiting_human` ＝ 確認待ちが在る回は必ず配る）
+     * 3. runner が最後に見た背景タスクの在り高（`agent-events.ts` の
+     *    `AgentBackgroundTasksEvent`。REPLACE 意味論）が非0
+     *
+     * `count` は 3 の時点での本数、`breakdown` はその内訳
+     * （`taskType×件数` をカンマで繋いだ文字列）。**`breakdown` は診断用の
+     * 写しであって判定には使わない** —— `manager.ts` 側は握り潰すかどうかを
+     * この欄の**有無**だけで決め、中身の文字列を条件分岐には使わない。
+     *
+     * **`.optional()` にしてあるのは新旧の噛み合わせのため。** デーモン
+     * （`manager.ts`）と runner（`apps/runner`）は別々にデプロイされ、
+     * 入れ替わる順序は保証されない:
+     * - **新デーモン ＋ 旧 runner**: この欄が来ない ⟹ 握り潰さない
+     *   （いまの挙動のまま配る）
+     * - **新 runner ＋ 旧デーモン**: 旧デーモンはこの欄を知らないので
+     *   無視する ⟹ 握り潰さない
+     *
+     * どちらのずれでも「配る」側へ倒れる——握り潰しは新デーモン・新 runner が
+     * 両方揃ったときにしか起きない。`contentless` の doc と同じ非対称
+     * （`.optional()` は「無ければ諦めて配る」であって「無ければ捨てる」
+     * ではない）。
+     */
+    awaitingBackground: z
+      .object({ count: z.number().int().positive(), breakdown: z.string() })
+      .optional(),
   }),
   /**
    * 委譲1区間ぶんの集計（マネージャーが作業者を投げてから、全員が完了通知を

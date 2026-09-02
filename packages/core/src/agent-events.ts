@@ -205,6 +205,34 @@ export interface AgentDelegationNotified {
 }
 
 /**
+ * 背景タスクの在り高が変わった（level 信号。**REPLACE 意味論**）。
+ *
+ * SDK の `SDKBackgroundTasksChangedMessage` の JSDoc から逐語で引く
+ * （`@anthropic-ai/claude-agent-sdk@0.3.258` の `sdk.d.ts`）:
+ *
+ * > consumers that only need 'is background work running' should replace
+ * > their set with each payload rather than pairing edges, so a missed
+ * > bookend cannot wedge a stale running indicator
+ *
+ * **`tasks` は非 ambient のものだけ。** 同じ JSDoc の `ambient` の欄も逐語で
+ * 引く: 「True for housekeeping tasks the CLI does not surface as user
+ * work … hosts should exclude them from activity indicators.」
+ *
+ * **この事実が答える問いは、`claude-provider.ts` の `task_progress` /
+ * `task_updated` が「見ないと決めてある」と言っている問いとは別である。**
+ * あちらは「`worker_wait` の区間の開閉に使えるか」を問い、答えは「使えない」
+ * だった（level 信号なので edge と相関させるな・フォアグラウンドのまま
+ * 終わる委譲はここに載らない、と SDK 自身が言っている）。**この事実が
+ * 答えるのは「いま起こしっぱなしの背景処理が在るか」で、level 信号である
+ * ことはこちらの問いには効かない**（REPLACE 意味論をそのまま「いまの
+ * 在り高」として使えばよい）。
+ */
+export interface AgentBackgroundTasksEvent {
+  type: 'background_tasks';
+  tasks: readonly { id: string; taskType: string }[];
+}
+
+/**
  * compaction が1回起きた（`SDKCompactBoundaryMessage.compact_metadata` の
  * 写し）。**ターンの終わり（{@link AgentTurnEnded}）とは別のメッセージとして
  * ターンの途中で届く。** 何のために拾うか・層がどう保持するかは
@@ -265,5 +293,6 @@ export type AgentEvent =
   | AgentToolResult
   | AgentDelegationStarted
   | AgentDelegationNotified
+  | AgentBackgroundTasksEvent
   | AgentCompactionEvent
   | AgentTurnEnded;

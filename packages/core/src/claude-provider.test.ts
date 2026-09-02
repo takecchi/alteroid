@@ -166,11 +166,81 @@ describe('foldClaudeMessage — system', () => {
   });
 
   it('**見ないと決めてある種類は0個になる**（間引きではなく判断である）', () => {
-    for (const subtype of ['task_progress', 'task_updated', 'background_tasks_changed']) {
+    // **`background_tasks_changed` はここに含めない**（#630 で「見ないと
+    // 決めてある」から外れた——読んで `background_tasks` へ畳む。下の
+    // `foldClaudeMessage — background_tasks_changed` が別に固定する）。
+    for (const subtype of ['task_progress', 'task_updated']) {
       expect(foldClaudeMessage(sdk({ type: 'system', subtype }))).toEqual([]);
     }
     // 知らない subtype も同じく0個（**黙って捨てるのではなく、写す先が無い**）。
     expect(foldClaudeMessage(sdk({ type: 'system', subtype: 'まだ知らない合図' }))).toEqual([]);
+  });
+});
+
+/**
+ * `background_tasks_changed` —— 背景タスクの在り高（level 信号。REPLACE 意味論）。
+ *
+ * **`task_progress` / `task_updated` の「見ないと決めてある」からは外れたが、
+ * 理由（`worker_wait` の区間の開閉には使えない）は変わっていない。** ここで
+ * 固定するのは別の問い（「いま起こしっぱなしの背景処理が在るか」）への
+ * 読み手であること。
+ */
+describe('foldClaudeMessage — background_tasks_changed', () => {
+  it('非 ambient のタスクだけを畳む（ambient は除く）', () => {
+    const event = only(
+      sdk({
+        type: 'system',
+        subtype: 'background_tasks_changed',
+        tasks: [
+          { task_id: 'bg-1', task_type: 'shell', description: 'pnpm test' },
+          { task_id: 'bg-2', task_type: 'skip_transcript', description: '', ambient: true },
+        ],
+      }),
+    );
+
+    expect(event).toEqual({
+      type: 'background_tasks',
+      tasks: [{ id: 'bg-1', taskType: 'shell' }],
+    });
+  });
+
+  it('`tasks` が配列でなければ0個を返す（「0本」と名乗らない）', () => {
+    expect(
+      foldClaudeMessage(sdk({ type: 'system', subtype: 'background_tasks_changed' })),
+    ).toEqual([]);
+    expect(
+      foldClaudeMessage(
+        sdk({ type: 'system', subtype: 'background_tasks_changed', tasks: 'not-an-array' }),
+      ),
+    ).toEqual([]);
+  });
+
+  it('`tasks: []`（本当に0本）は、0個ではなく空配列を持つ1件のイベントになる', () => {
+    // **「配列が読めた」場合だけが「0本」を名乗れる**（`runtimeFactsOf` と
+    // 同じ作法）。配列そのものが無い（上のテスト）場合と区別する。
+    const event = only(
+      sdk({ type: 'system', subtype: 'background_tasks_changed', tasks: [] }),
+    );
+    expect(event).toEqual({ type: 'background_tasks', tasks: [] });
+  });
+
+  it('`task_id` が文字列でない要素は落とし、`task_type` が文字列でなければ (不明) を当てる', () => {
+    const event = only(
+      sdk({
+        type: 'system',
+        subtype: 'background_tasks_changed',
+        tasks: [
+          { task_id: 'bg-1' }, // task_type 無し
+          { task_id: 42, task_type: 'shell' }, // task_id が文字列でない ⟹ 落とす
+          null, // 要素が object でない ⟹ 落とす
+        ],
+      }),
+    );
+
+    expect(event).toEqual({
+      type: 'background_tasks',
+      tasks: [{ id: 'bg-1', taskType: '(不明)' }],
+    });
   });
 });
 

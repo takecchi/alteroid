@@ -549,23 +549,32 @@ function foldSystemMessage(message: SDKMessage & { type: 'system' }): AgentEvent
     ];
   }
 
-  // `task_progress` / `task_updated` / `background_tasks_changed` は
-  // **見ないと決めてある**（間引いているのではなく、そもそも数える対象では
-  // ないという判断であることをここに明記する）。
+  // `task_progress` / `task_updated` は**見ないと決めてある**（間引いている
+  // のではなく、そもそも数える対象ではないという判断であることをここに
+  // 明記する）。
   //
   // - `task_progress` は高頻度の進捗 ping で、ターンの契機にはならない
   // - `task_updated` は `task_started` / `task_notification` の間の状態遷移の
   //   詳細（`pending` → `running` → `completed` 等）で、区間の開閉には要らない
-  // - `background_tasks_changed` は SDK の JSDoc が「level 信号であり
-  //   `task_started`/`task_notification` の edge と相関させるな」
-  //   「background に回った Task だけの一覧」と言っている。フォアグラウンドの
-  //   まま終わる委譲（＝このセッションで普通に起きる委譲）はここに載らない
-  if (
-    subtype === 'task_progress' ||
-    subtype === 'task_updated' ||
-    subtype === 'background_tasks_changed'
-  ) {
+  if (subtype === 'task_progress' || subtype === 'task_updated') {
     return [];
+  }
+
+  // `background_tasks_changed` は「見ないと決めてある」から外れた
+  // ——ただし理由（level 信号なので edge と相関させるな。フォアグラウンドの
+  // まま終わる委譲はここに載らない、と SDK 自身が言っている）は**まだ
+  // 生きている**。上の2種と同じ理由でいまも `worker_wait` の区間の開閉には
+  // 使えない。**ここで新しく足すのは、その開閉とは別の問いの読み手である**
+  // ——「いま起こしっぱなしの背景処理が在るか」（`agent-events.ts` の
+  // `AgentBackgroundTasksEvent` の doc）。level 信号であることはこちらの
+  // 問いには効かないので、そのまま REPLACE 意味論で運ぶ。
+  //
+  // **`tasks` が配列でなければ0個返す**（`runtimeFactsOf` と同じ作法。
+  // 「読めた配列だけが『0本』を名乗れる」）——SDK が版で形を変えたと見て、
+  // 作り物の「0本」を主張しない。
+  if (subtype === 'background_tasks_changed') {
+    const tasks = liveBackgroundTasksOf(message);
+    return tasks === null ? [] : [{ type: 'background_tasks', tasks }];
   }
 
   // 上限の文言。**API エラーとしては来ない**（SDK のコメント）ので、通知・情報
@@ -616,6 +625,40 @@ function runtimeFactsOf(message: SDKMessage): AgentRuntimeFacts {
         )
       : null,
   };
+}
+
+/**
+ * `system/background_tasks_changed` の `tasks` を中立の形へ写す。
+ *
+ * **防御的に読む**（`runtimeFactsOf` と同じ作法）。`raw.tasks` が配列で
+ * なければ `null` を返し、呼び出し元はこれを「0個返す」ではなく
+ * 「イベントそのものを出さない」に使う——読めなかった形にまで「0本」と
+ * 主張する根拠は無い（`runtimeFactsOf` の doc「読めた配列だけが『0本』を
+ * 名乗れる」）。
+ *
+ * 各要素は `task_id` が文字列でなければ落とす。`ambient === true`
+ * （housekeeping task）は除く——SDK の doc「hosts should exclude them
+ * from activity indicators」（`agent-events.ts` の
+ * `AgentBackgroundTasksEvent` の doc に逐語を引いてある）。`task_type` が
+ * 文字列でなければ `'(不明)'` を当てる——欄自体が壊れていても、要素の
+ * 存在（＝背景処理が1件在ること）までは捨てない。
+ */
+function liveBackgroundTasksOf(
+  raw: unknown,
+): readonly { id: string; taskType: string }[] | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const tasks = (raw as { tasks?: unknown }).tasks;
+  if (!Array.isArray(tasks)) return null;
+  const result: { id: string; taskType: string }[] = [];
+  for (const entry of tasks) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const taskId = (entry as { task_id?: unknown }).task_id;
+    if (typeof taskId !== 'string') continue;
+    if ((entry as { ambient?: unknown }).ambient === true) continue;
+    const taskType = (entry as { task_type?: unknown }).task_type;
+    result.push({ id: taskId, taskType: typeof taskType === 'string' ? taskType : '(不明)' });
+  }
+  return result;
 }
 
 /**

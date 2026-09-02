@@ -135,6 +135,7 @@ function fakeClone() {
     },
     // HTTP 境界の検証では触らない（#567 の計算はデーモンのポーラーが起こす）。
     async probeTurnEnds() {},
+    async flushWithheldReports() {},
     async stop() {},
   };
 

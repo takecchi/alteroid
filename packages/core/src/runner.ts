@@ -944,6 +944,21 @@ class RunnerSession {
    * を出す判断も、回し手へ渡すものも、1文字も変えていない。
    */
   readonly #unclassifiedFailures = new Map<string, number>();
+  /**
+   * いま起こしっぱなしの背景処理（`agent-events.ts` の
+   * `AgentBackgroundTasksEvent`）。**REPLACE 意味論**——SDK の JSDoc が
+   * 「missed bookend cannot wedge a stale running indicator」と言っている
+   * とおり、届いた `tasks` で丸ごと入れ替える。加算・削除の差分計算はしない。
+   *
+   * **`session_started` で必ず空に戻す**（SDK の JSDoc「The level is
+   * per-process: nothing is emitted at startup, so consumers must reset to
+   * the empty set whenever the session's CLI process (re)starts」）。
+   *
+   * 読むのは `result` の枝（`awaitingBackground` を報告に載せるかどうかの
+   * 判定）だけ。**`worker_wait` の区間の開閉には使わない**
+   * （`claude-provider.ts` の `foldSystemMessage` の doc）。
+   */
+  #liveBackgroundTasks: readonly { id: string; taskType: string }[] = [];
   #transcriptPath: string | undefined;
   #stopped = false;
   /**
@@ -1508,6 +1523,12 @@ class RunnerSession {
     switch (event.type) {
       case 'session_started': {
         this.#sessionId = event.sessionId;
+        // **背景タスクの在り高は per-process の level 信号。** SDK の
+        // JSDoc「nothing is emitted at startup, so consumers must reset to
+        // the empty set whenever the session's CLI process (re)starts」の
+        // とおり、器（CLI プロセス）が変わればここも空へ戻す
+        // （`#liveBackgroundTasks` の doc）。
+        this.#liveBackgroundTasks = [];
         this.#emit({ type: 'session', managerId: this.#id, sessionId: event.sessionId });
         return;
       }
@@ -1579,6 +1600,13 @@ class RunnerSession {
             this.#saidUuid = event.id;
           }
         }
+        return;
+      }
+
+      case 'background_tasks': {
+        // **REPLACE 意味論。加算・削除の差分計算はしない**
+        // （`#liveBackgroundTasks` の doc）。読むのは `result` の枝だけ。
+        this.#liveBackgroundTasks = event.tasks;
         return;
       }
 
@@ -1785,6 +1813,31 @@ class RunnerSession {
                 contentless: false,
               };
         this.#status = this.#pending.length > 0 ? 'waiting_human' : 'done';
+        // **マネージャーがバックグラウンド実行の完了を待つためだけに畳んだ
+        // ターンの報告に、その旨を載せる（`runner-protocol.ts` の
+        // `report.awaitingBackground` の doc）。**
+        //
+        // 実測の経緯: `Bash` を `run_in_background: true` で起こした直後、
+        // マネージャーが「完了を待つ」とだけ言って `end_turn` で畳むと、その
+        // 最後の発話がそのまま「報告」としてクローンへ配られ、クローンの
+        // ターンを1本無駄に起こしていた（依頼者が生ログで実測、同日に11本）。
+        //
+        // **3条件すべてを満たすときだけ載せる**（1つでも欠けたら必ず配る側
+        // へ倒す）:
+        // 1. `failure === undefined` —— 失敗で終わった回は必ず配る
+        //    （上限・拒否は握り潰さない）
+        // 2. `this.#status === 'done'` —— `waiting_human`（確認待ちが在る）
+        //    回は必ず配る。確認待ちを黙って畳むと人間の判断が止まる
+        // 3. `this.#liveBackgroundTasks.length > 0` —— 起こしっぱなしの
+        //    背景処理が実際に在るときだけ
+        const awaitingBackground =
+          failure === undefined && this.#status === 'done' && this.#liveBackgroundTasks.length > 0
+            ? {
+                count: this.#liveBackgroundTasks.length,
+                // **診断用の写しであって判定には使わない**（doc のとおり）。
+                breakdown: summarizeBackgroundTasks(this.#liveBackgroundTasks),
+              }
+            : undefined;
         this.#emit({
           type: 'report',
           managerId: this.#id,
@@ -1798,6 +1851,7 @@ class RunnerSession {
           status: this.#status,
           ...(failure === undefined ? {} : { failure: { code: failure.code, via: failure.via } }),
           ...(outcome.contentless ? { contentless: true } : {}),
+          ...(awaitingBackground === undefined ? {} : { awaitingBackground }),
         });
         return;
       }
@@ -2618,6 +2672,25 @@ function assistantText(blocks: readonly AgentContentBlock[]): string {
     .map((block) => block.text)
     .join('\n')
     .trim();
+}
+
+/**
+ * `awaitingBackground.breakdown`（`taskType` ごとの内訳）を組み立てる。
+ *
+ * **診断用の写しであって判定には使わない**（`runner-protocol.ts` の
+ * `report.awaitingBackground` の doc）。`Map` の挿入順（＝最初に現れた順）で
+ * 並べる——ソートし直さないのは、届いた `tasks` の並び自体に意味を持たせない
+ * ため（不変な基準を作らない。ソートすれば「同じ内訳なのに順序が変わる」を
+ * 心配する必要が無くなる、という程度の理由でしかない）。
+ */
+function summarizeBackgroundTasks(
+  tasks: readonly { id: string; taskType: string }[],
+): string {
+  const counts = new Map<string, number>();
+  for (const task of tasks) {
+    counts.set(task.taskType, (counts.get(task.taskType) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([taskType, count]) => `${taskType}×${String(count)}`).join(', ');
 }
 
 /**
