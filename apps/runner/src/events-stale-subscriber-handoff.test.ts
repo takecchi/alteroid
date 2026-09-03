@@ -235,23 +235,53 @@ describe('runner の /events: 古い購読者が抱えていた分を新しい�
       // ここで初めて、1本目の書き込みを「実は成功していた」ことにする。
       releaseStuck?.();
 
+      // **1本目の応答を実際に読む。** `firstReader` を一度も読まないままだと、
+      // 誰も消費していない `responseReadable` の backpressure（既定
+      // `highWaterMark=1`）に阻まれて、解放した実書き込み（`realWriteSSE`）
+      // 自体が完了しない——`superseded` の防御が効いているのか、単に書き込みが
+      // 終わっていないだけなのかが区別できなくなる（実測: 読まずに待つと、
+      // このテストは `superseded` の分岐を丸ごと外しても緑のままだった）。
+      // 読むことで、1本目のループが実際に再開まで進めることを保証する。
+      void firstReader.read();
+      void firstReader.read();
+
       // 少し待って、1本目の再開が何か（`recordSent` や `requeue`）をしても
       // `pending` が動かないこと、そして `Last-Event-ID` で読み直しても
       // 二重に届かないことを確かめる。
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 200));
       expect(outbox.pending).toBe(0);
 
-      // 3本目: `Last-Event-ID` に 0 を申告し、控え全部を読み直す。
-      // 二重記録されていれば、同じ event の JSON が2回現れる。
+      // **本題そのもの——`Outbox` の控え（`#sent`）に、同じ出来事が2件目として
+      // 記録されていないこと。** ここが直接の検査対象である
+      // （`Outbox.recordSent` / `Outbox.sentSince` の doc）。バイト読みより
+      // 先にこちらで固定する——読み側（3本目の接続）のタイミング次第で
+      // 「読み切れなかった」と「記録されていない」が区別しづらくなるため。
+      expect(outbox.sentSince(0)).toHaveLength(1);
+
+      // **裏取り。** 3本目が `Last-Event-ID: 0` で読み直しても、同じ出来事が
+      // 2回現れないこと。**`readUntil` で `hello` だけを見て早期に打ち切ると、
+      // その直後に来るはずの2件目を読む前に終わってしまう**——ここでは
+      // 固定の時間だけ読み切ってから数える（早期終了しない）。
       const third = await app.request('/events', {
         headers: bearer({ 'Last-Event-ID': '0' }),
       });
       const thirdBody = third.body;
       if (thirdBody === null) throw new Error('SSE の応答に本文が無い');
       const thirdReader = thirdBody.getReader();
-      const redelivered = await readUntil(thirdReader, 'event: hello', 500);
-      // 追加で少し待って、他に何も届かないことも見る。
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      const decoder = new TextDecoder();
+      let redelivered = '';
+      const deadline = Date.now() + 500;
+      for (;;) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+        const next = await Promise.race([
+          thirdReader.read(),
+          new Promise<'期限切れ'>((resolve) => setTimeout(() => resolve('期限切れ'), remaining)),
+        ]);
+        if (next === '期限切れ') break;
+        if (next.done) break;
+        redelivered += decoder.decode(next.value, { stream: true });
+      }
 
       const needle = JSON.stringify(event);
       const firstIndex = redelivered.indexOf(needle);
