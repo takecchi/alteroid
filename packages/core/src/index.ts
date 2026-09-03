@@ -545,6 +545,7 @@ export {
   type TokenSpreadResult,
 } from './token-rotator.js';
 export {
+  assertNeverRunnerLegStatus,
   createRunnerRegistry,
   isFencedRunnerError,
   isRetryableRunnerError,
@@ -578,6 +579,7 @@ export {
   type RunnerEvent,
   type RunnerExecutionResources,
   type RunnerLease,
+  type RunnerLegState,
   type RunnerLiveness,
   type RunnerManagerState,
   type RunnerPlacementResources,

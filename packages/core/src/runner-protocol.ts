@@ -1166,6 +1166,69 @@ export function isRetryableRunnerError(error: unknown): boolean {
 // ---------------------------------------------------------------------------
 
 /**
+ * runner→デーモンの `/events` の脚（このデーモンが見ている自分の側の端）の状態。
+ *
+ * **これまで公開されていたのは runner 側の端（`Outbox.pending` /
+ * `Outbox.oldestPendingAt`）だけだった。** デーモン側の端 — いまストリームが
+ * 開いているか、最後にバイトを受け取ったのはいつか、いつから繋がっている
+ * （落ちている）か、直近の失敗は何か — は `HttpRunner` の `#pump` / `#stream`
+ * が内部で既に持っていながら、stderr に1行書くだけでクローンからは読めなかった。
+ * ここはその値を**新しい I/O を1本も足さずに**読める形へ引き上げたもの。
+ *
+ * **3値のどれかであり、既定値へは倒さない。**
+ *
+ * - `'connected'`: いまストリームが開いている
+ * - `'down'`: いま開いていない（過去に一度は開いたことがある）
+ * - `'never-connected'`: このプロセスが起きてから一度もストリームが開いたことが
+ *   無い
+ *
+ * **「観測していない」はこの型の外にある。** `RunnerClient.legState` 自体が
+ * 省略可能（`?`）なので、この脚を持たない実装（`LocalRunner`）やテストの
+ * 偽物は単にこの欄を持たない——`'never-connected'` へ倒さないこと。「脚が
+ * 無い」と「脚が繋がっていない」は別の事実である。
+ */
+export type RunnerLegState =
+  | {
+      status: 'connected';
+      /** いまの接続が開いた時刻（ISO8601）。 */
+      since: string;
+      /**
+       * 直近でバイトを受け取った時刻（ISO8601）。**接続はしたがまだ1バイトも
+       * 受け取っていない**窓（`fetch` が応答を返した直後）では省く——0件を
+       * 作らない（AGENTS.md「取れない軸に0の行を作る」）。
+       */
+      lastByteAt?: string;
+    }
+  | {
+      status: 'down';
+      /**
+       * 直前の接続が終わった時刻（ISO8601）。**取れないことがある**（例:
+       * `fetch` そのものが一度も応答を返さないまま待ち続けている段階）ので
+       * 省略可能。
+       */
+      since?: string;
+      /**
+       * 直近の失敗の理由。**例外の文言とは限らない**——例外を投げずに閾値未満で
+       * 静かに閉じた回は、その旨を表す固定文言になる（`#pump` の3つ目の枝と
+       * 同じ区別）。取れなければ省く。
+       */
+      lastFailureReason?: string;
+      /** 次に再接続を試みる時刻（ISO8601）。待っている最中でなければ省く。 */
+      nextRetryAt?: string;
+    }
+  | { status: 'never-connected' };
+
+/**
+ * {@link RunnerLegState} の網羅性を型で強制する（`memory.ts` の
+ * `assertNeverMemoryProtectionStatus` と同じ形）。**呼び出し側が `switch` の
+ * `default` に置くことで、状態が増えたときに `tsc` で落ちる**——実行時にも、
+ * 分岐から漏れた値が黙って通り過ぎない。
+ */
+export function assertNeverRunnerLegStatus(status: never): never {
+  throw new Error(`未知の RunnerLegState.status: ${String(status)}`);
+}
+
+/**
  * runner への口。HTTP でも同一プロセスでも、デーモンはこれしか知らない。
  *
  * **デーモンは特定 runner の実装やローカルパスを前提にしない。** ローカル実行の
@@ -1388,6 +1451,22 @@ export interface RunnerClient {
    * **不利にはしない**（`select`）。
    */
   resources?(options?: { signal?: AbortSignal }): Promise<RunnerPlacementResources | undefined>;
+  /**
+   * runner→デーモンの `/events` の脚について、**このデーモン自身が知っている
+   * 自分の側の端**の状態（{@link RunnerLegState}）。
+   *
+   * **`ping` / `identity` / `resources` とは性質が違う。** あちらは runner へ
+   * 実際に問い合わせる口（`GET /health` を叩く）だが、こちらは**問い合わせない**
+   * ——`HttpRunner` が `#pump` / `#stream` の中で既に更新している自分のフィールドを
+   * そのまま読むだけの、同期的な値である。読むたびに新しい往復が起きるわけでは
+   * ないので、呼び出し側は好きな頻度で読んでよい。
+   *
+   * **省略できる。** この脚がそもそも存在しない実装（`LocalRunner`。同一プロセス
+   * 構成なので `/events` を HTTP で張り直す必要が無い）や、テストの偽物は
+   * この欄を持たない——`ping` などと同じ理由で、持たない実装に「無いので常に
+   * `never-connected`」のような嘘を書かせない。
+   */
+  readonly legState?: RunnerLegState;
   start(command: RunnerStartCommand): Promise<void>;
   resume(command: RunnerResumeCommand): Promise<void>;
   send(managerId: string, text: string): Promise<void>;
@@ -1648,6 +1727,19 @@ export interface RunnerEntry {
   sessions?: readonly string[];
   /** `sessions` を観測できた時刻（ISO8601）。`sessions` と対でだけ載る。 */
   sessionsObservedAt?: string;
+  /**
+   * runner→デーモンの `/events` の脚（このデーモン自身の側の端）の状態
+   * （{@link RunnerLegState}）。`entry.client.legState` の写し——**`entries()`
+   * が呼ばれるたびに読み直す。** 過去の観測を保持するフィールドではないので、
+   * `pendingEvents` のような「観測できた時刻」の対は持たない（常に「いま」を
+   * 答える）。
+   *
+   * **省略できる。** `client` がまだ無い（一度も開けていない）、または
+   * `client.legState` 自体を持たない実装（`LocalRunner`・テストの偽物）では
+   * 出ない——「一度も繋がっていない」（`RunnerLegState` の `'never-connected'`）
+   * とは別の事実である。
+   */
+  legState?: RunnerLegState;
 }
 
 /**
@@ -2185,6 +2277,10 @@ class Registry implements RunnerRegistry {
       ...(entry.sessions === undefined || entry.sessionsObservedAt === undefined
         ? {}
         : { sessions: [...entry.sessions], sessionsObservedAt: entry.sessionsObservedAt }),
+      // runner→デーモンの脚の状態。**`entry.client` からその場で読む——
+      // 保存も間引きもしない**（`RunnerEntry.legState` の doc）。`client` が
+      // 無い、または `legState` を持たない実装では出ない。
+      ...(entry.client?.legState === undefined ? {} : { legState: entry.client.legState }),
     }));
   }
 

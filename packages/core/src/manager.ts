@@ -36,6 +36,7 @@ import type {
   RunnerCredentialFingerprint,
   RunnerEvent,
   RunnerExecutionResources,
+  RunnerLegState,
   RunnerLiveness,
   RunnerProfileFingerprint,
   RunnerRegistry,
@@ -626,6 +627,35 @@ export interface RunnerBacklogSnapshot {
   oldestPendingAt?: string;
   /** この値をいつ観測できたか（`runners({ resources: true })` を呼んだ時刻）。 */
   observedAt: string;
+  /**
+   * この滞留を観測した**あとで**、この runner の `instanceId` が入れ替わったか。
+   *
+   * **新しい往復ではない。** `RunnerEntry.instanceSince`（「いまの相手を初めて
+   * 見た時刻」）と、この snapshot の `observedAt` を比べるだけで分かる —
+   * `instanceSince > observedAt` なら、この滞留を観測した後に器が入れ替わっている
+   * （`instanceId` は起動ごとに変わる乱数なので、同じ値へ戻ることは無い）。
+   *
+   * **`Outbox` はプロセスのメモリだけ**（`apps/runner/src/index.ts` の
+   * `new Outbox()`。永続化は無い）——器が入れ替われば、観測した滞留は
+   * runner 側から二度と配られない。`true` はそれを言うための欄である。
+   *
+   * **`undefined` は「判定できない」。** どちらか一方でも取れていなければ
+   * （runner が `instanceId` を一度も名乗っていない、この runner がいま名簿に
+   * 居ない、など）比べようが無い——`false` へ倒さない。`false` と言えるのは、
+   * 両方が取れたうえで実際に一致を確認できたときだけである。
+   */
+  instanceSwapped?: boolean;
+  /**
+   * runner→デーモンの `/events` の脚（デーモン自身の側の端）の**いまの**状態
+   * （{@link RunnerLegState}）。
+   *
+   * **`observedAt` とは時制が違う。** `pendingEvents` / `oldestPendingAt` /
+   * `instanceSwapped` は「観測できた時点」の値だが、これは `runnerBacklog()`
+   * を呼んだ**いま**の値——`RunnerEntry.legState` と同じく、キャッシュせず
+   * 毎回読み直す。取れない実装（`LocalRunner`・古い記録）では省かれる
+   * （＝「観測していない」）。
+   */
+  legState?: RunnerLegState;
 }
 
 export type ManagerDecision = 'allow' | 'deny';
@@ -2847,12 +2877,24 @@ class Pool implements ManagerPool {
    * 両方とも `new Date(...).toISOString()`（UTC・`Z` 終端）で作っているので、
    * 文字列の辞書式比較がそのまま時系列の比較になる（`RunnerBacklogSnapshot` /
    * `RegistryEntry.pendingEventsObservedAt` のどちらも同じ形）。
+   *
+   * **仕上げに2つ、`entries()` の「いまの」値だけで済む付記をする**
+   * （どちらも新しい往復ではない——`entries()` は1回しか呼んでいない）。
+   *
+   * - `legState`: そのまま `entry.legState` を写す（`observedAt` の対を持たない
+   *   「いまの」値であることは {@link RunnerBacklogSnapshot.legState} の doc
+   *   を参照）。
+   * - `instanceSwapped`: `entry.instanceSince`（いまの相手を初めて見た時刻）が
+   *   この snapshot の `observedAt` より後なら、観測後に器が入れ替わっている
+   *   （{@link RunnerBacklogSnapshot.instanceSwapped} の doc）。どちらかが
+   *   取れなければ付けない（`undefined` のまま＝判定できない）。
    */
   runnerBacklog(): readonly RunnerBacklogSnapshot[] {
+    const liveEntries = this.#runners.entries();
     const merged = new Map<string, RunnerBacklogSnapshot>(
       [...this.#runnerBacklog.values()].map((snapshot) => [snapshot.runnerId, snapshot]),
     );
-    for (const entry of this.#runners.entries()) {
+    for (const entry of liveEntries) {
       // **`pendingEvents` が無ければ、この runner は heartbeat からは
       // 一度も warm していない**（`RunnerEntry.pendingEvents` の doc）。
       // `pendingEventsObservedAt` も必ず一緒に書かれる（`#noteInstance`）ので、
@@ -2877,7 +2919,23 @@ class Pool implements ManagerPool {
         merged.set(entry.runnerId, candidate);
       }
     }
-    return [...merged.values()].sort((a, b) => a.runnerId.localeCompare(b.runnerId));
+    const liveByRunnerId = new Map(
+      liveEntries.flatMap((entry) =>
+        entry.runnerId === undefined ? [] : [[entry.runnerId, entry] as const],
+      ),
+    );
+    return [...merged.values()]
+      .map((snapshot): RunnerBacklogSnapshot => {
+        const live = liveByRunnerId.get(snapshot.runnerId);
+        return {
+          ...snapshot,
+          ...(live?.legState === undefined ? {} : { legState: live.legState }),
+          ...(live?.instanceSince === undefined
+            ? {}
+            : { instanceSwapped: live.instanceSince > snapshot.observedAt }),
+        };
+      })
+      .sort((a, b) => a.runnerId.localeCompare(b.runnerId));
   }
 
   async transcript(managerId: string): Promise<string | null> {

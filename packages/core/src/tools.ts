@@ -13,6 +13,7 @@ import {
   toMessage,
 } from './conversation.js';
 import { isCronExpression } from './cron.js';
+import { assertNeverRunnerLegStatus } from './runner-protocol.js';
 // **`manager_list` と digest の「マネージャー」節で同じ字面を出すための唯一の
 // 生成元。** 片方だけ変えられると区別が潰れる——実際にクローンがそれで誤り、
 // 終わった仕事へ3本目の委譲を出した（`digest.ts` の `describeManagerState` の
@@ -413,6 +414,13 @@ function describeInboxBacklog(pending: { count: number; oldestAt?: string }): st
  * 呼んでいなければ配列にそもそも載らない）ので、この関数の中では「0件だった」
  * ものだけを filter で落とす。`describeInboxBacklog` と同じ理由（何も言う
  * ことが無い行を一覧へ足さない）。
+ *
+ * **各行の末尾に、runner→デーモンの脚（デーモン自身の側の端。
+ * `RunnerBacklogSnapshot.legState`）の状態を添える。** `pendingEvents` /
+ * `oldestPendingAt` / `observedAt` が「runner 側にどれだけ溜まっているか」を
+ * 言うのに対し、こちらは「それが**いつ届くか**」を言う——読んだクローンの
+ * 次の一手（待つか、生ログを拾いに行くか）はここで決まる
+ * （{@link describeRunnerLegState} に4状態の割り当てを持つ）。
  */
 function describeRunnerBacklog(snapshots: readonly RunnerBacklogSnapshot[]): string | null {
   const lines = snapshots
@@ -426,10 +434,62 @@ function describeRunnerBacklog(snapshots: readonly RunnerBacklogSnapshot[]): str
         `⚠ runner ${snapshot.runnerId} に未送出の出来事が ${snapshot.pendingEvents} 件ある${oldest}。` +
         `これは ${snapshot.observedAt} 時点に取った値で、いまの値ではない` +
         '（identity() を持つ runner なら10秒ごとの生存確認でも自動で更新されるが、' +
-        'それでも「いまの値」ではない。すぐ最新が要るなら runner_list を resources: true で呼び直す）。'
+        'それでも「いまの値」ではない。すぐ最新が要るなら runner_list を resources: true で呼び直す）。' +
+        ` ${describeRunnerLegState(snapshot)}`
       );
     });
   return lines.length === 0 ? null : lines.join('\n');
+}
+
+/**
+ * `describeRunnerBacklog` の各行末尾——脚の状態から、読んだクローンの次の
+ * 一手を言い分ける。**優先順位を固定する。**
+ *
+ * 1. **器が入れ替わった**（`instanceSwapped === true`）——脚がいま何であれ、
+ *    観測した滞留を配れる相手はもう居ない。「もう来ない」。
+ * 2. **繋がっている**（`legState.status === 'connected'`）——「まだ届いて
+ *    いない。届く見込みがある」。待ってよい。
+ * 3. **落ちている／一度も繋がっていない**（`'down'` / `'never-connected'`）
+ *    ——「再接続するまで1件も届かない」。生ログから拾いに行く判断ができる。
+ * 4. **観測していない**（`legState === undefined`）——「判定できない」。
+ *    どちらとも言えないことが分かる形で言う（`false` へも `true` へも倒さない）。
+ *
+ * **`instanceSwapped` を先に見る。** 脚がいま `'connected'`（新しい器に
+ * ちゃんと繋がっている）であっても、それは**新しい**器との接続であって、
+ * 観測した滞留を持っていた古い器とは別物である——`legState` だけを見ると
+ * 「繋がっているから待てばよい」という誤った案内になる。
+ */
+function describeRunnerLegState(snapshot: RunnerBacklogSnapshot): string {
+  if (snapshot.instanceSwapped === true) {
+    return (
+      'もう来ない（この滞留を観測した後に器が入れ替わった。runner の Outbox は' +
+      'プロセスのメモリだけなので、溜まっていた分は配られずに消えている——' +
+      '生ログから拾うしかない）'
+    );
+  }
+  const leg = snapshot.legState;
+  if (leg === undefined) {
+    return '判定できない（この runner は脚の状態を報告しない、またはいま名簿に居ない）';
+  }
+  // **網羅性は `assertNeverRunnerLegStatus` が守る**（`RunnerLegState` の
+  // doc）。状態が増えたら `default` の型がここで `tsc` を落とす。
+  switch (leg.status) {
+    case 'connected':
+      return 'まだ届いていない。届く見込みがある（脚は繋がっている。待ってよい）';
+    case 'down': {
+      const detail = [
+        leg.since === undefined ? undefined : `${leg.since} から`,
+        leg.lastFailureReason === undefined ? undefined : `直近の理由: ${leg.lastFailureReason}`,
+        leg.nextRetryAt === undefined ? undefined : `次の再試行: ${leg.nextRetryAt}`,
+      ].filter((part): part is string => part !== undefined);
+      const detailSuffix = detail.length === 0 ? '' : `（${detail.join('、')}）`;
+      return `⚠ 再接続するまで1件も届かない${detailSuffix}`;
+    }
+    case 'never-connected':
+      return '⚠ 再接続するまで1件も届かない（このデーモンが起きてから一度も繋がっていない）';
+    default:
+      return assertNeverRunnerLegStatus(leg);
+  }
 }
 
 /** 全文を取りに来たときの1回分。続きは `offset` で取れる。 */

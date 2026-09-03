@@ -2531,6 +2531,219 @@ describe('死んだ runner への SSE 再接続（バックオフ）', () => {
       expect(client.workspacePathKnown).toBe(true);
     });
   });
+
+  /**
+   * `HttpRunner.legState`（runner→デーモンの `/events` の脚。デーモン自身の
+   * 側の端）が、`#pump` / `#stream` の実際の遷移に沿って動くこと。
+   *
+   * **型の上で状態が在るだけでは、`#pump` が一度も更新しなければ静かに
+   * 効かなくなる**（AGENTS.md「歯」節。まさにこの Issue の発端——runner 側
+   * だけを見ていて、デーモン自身の脚が固着していることに気づけなかった形）。
+   * だからここでは値そのものではなく、**実際にストリームを開閉させて**
+   * 遷移を測る。
+   */
+  describe('legState（脚の状態。デーモン自身の /events の端）', () => {
+    it('接続する前は never-connected', async () => {
+      const { fetchFn } = fetchEvents(() => 'fail');
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+      });
+
+      expect(client.legState).toEqual({ status: 'never-connected' });
+
+      await client.close();
+    });
+
+    it('ストリームが開くと connected になり、バイトを受け取ると lastByteAt が進む', async () => {
+      const fetchFn = (async (input: string | URL | Request) => {
+        const path = pathOf(input);
+        if (path === '/health') {
+          return Response.json({ runnerId: 'runner-leg', workspacePath: '/workspace' });
+        }
+        if (path === '/events') {
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode(HEARTBEAT_FRAME));
+                // **意図的に close しない。** 接続を開いたままにして、
+                // 「開いている」状態を安定して観測できるようにする
+                // （閉じてしまうと `#pump` がすぐ次の周回へ進み、
+                // `connected` を見る前に `down` へ遷移しうる）。
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'text/event-stream' } },
+          );
+        }
+        throw new Error(`想定していない path: ${path}`);
+      }) as typeof fetch;
+
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+      });
+      // **`try/finally` で必ず `close()` する。** この接続はストリームを
+      // 意図的に閉じないので、途中のアサーションが投げると `close()` を
+      // 飛ばして次のテストへ「開いたまま」の接続を持ち越すことになる——
+      // 実際にそれで別のテストと合流させたときにテスト実行そのものが固まる
+      // 形を1回踏んだ（PR 本文に生の再現ログがある）。
+      try {
+        expect(client.legState).toEqual({ status: 'never-connected' });
+
+        await client.connect(() => undefined);
+        // `connect()` は fire-and-forget（`void this.#pump(...)`）なので、
+        // 実際にストリームが開くまで待つ。**上限を明示する**——狙った状態に
+        // ならないまま無期限に待つと、直した先で壊したときに「赤くなる」
+        // ではなく「テストごと固まる」という別の形の壊れ方になる。
+        await vi.waitFor(
+          () => {
+            expect(client.legState?.status).toBe('connected');
+          },
+          { timeout: 2000, interval: 10 },
+        );
+
+        const leg = client.legState;
+        expect(leg?.status).toBe('connected');
+        if (leg?.status === 'connected') {
+          expect(leg.since).toEqual(expect.any(String));
+        }
+        // heartbeat のバイトを1つ流してあるので、いずれ lastByteAt が付く。
+        await vi.waitFor(
+          () => {
+            const current = client.legState;
+            const lastByteAt = current?.status === 'connected' ? current.lastByteAt : undefined;
+            expect(lastByteAt).toEqual(expect.any(String));
+          },
+          { timeout: 2000, interval: 10 },
+        );
+      } finally {
+        await client.close();
+      }
+    }, 10_000);
+
+    /**
+     * **`down` へは「一度は開けた後で終わった」ときだけ遷移する。** 一度も
+     * 開けたことが無ければ、何回失敗しても `never-connected` のままである
+     * （「脚が無い」と「脚が落ちている」を混ぜないのと同じ形で、こちらは
+     * 「まだ一度も繋がっていない」と「繋がってから落ちた」を混ぜない）。
+     */
+    it('一度も開けたことが無ければ、失敗を重ねても never-connected のまま', async () => {
+      const { fetchFn } = fetchEvents(() => 'fail');
+      const waits: number[] = [];
+      let notifyEnough: () => void = () => undefined;
+      const enough = new Promise<void>((resolve) => {
+        notifyEnough = resolve;
+      });
+      const sleepFn = async (ms: number): Promise<void> => {
+        waits.push(ms);
+        if (waits.length >= 3) notifyEnough();
+      };
+
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+        sleepFn,
+      });
+      // **`try/finally` で必ず `close()` する。** `sleepFn` は間を置かず
+      // 即座に解決するので、アサーションが投げて `close()` を飛ばすと
+      // `#pump` が実時間の待ちを1ミリ秒も挟まずに回り続ける——テストが
+      // 「赤くなる」のではなく「テスト実行そのものが固まる」形になる
+      // （PR 本文に生の再現ログがある。この形を実際に1回踏んだ）。
+      try {
+        await client.connect(() => undefined);
+        await enough;
+
+        expect(client.legState).toEqual({ status: 'never-connected' });
+      } finally {
+        await client.close();
+      }
+    });
+
+    /**
+     * **本題。** 一度は開いた接続が終わると `down` になり、いつから・直近の
+     * 理由・次の再試行時刻が読める。
+     */
+    it('開いた接続が終わると down になり、いつから・直近の理由・次の再試行時刻が読める', async () => {
+      // 1回目は healthy（開いて閉じる）、2回目以降は fail（503）。
+      const { fetchFn } = fetchEvents((i) => (i === 0 ? 'healthy' : 'fail'));
+      const waits: number[] = [];
+      let notifyEnough: () => void = () => undefined;
+      const enough = new Promise<void>((resolve) => {
+        notifyEnough = resolve;
+      });
+      const sleepFn = async (ms: number): Promise<void> => {
+        waits.push(ms);
+        if (waits.length >= 2) notifyEnough();
+      };
+
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+        sleepFn,
+        nowFn: nowFnAtExactThreshold(),
+      });
+      // **`try/finally` で必ず `close()` する**（上と同じ理由）。
+      try {
+        await client.connect(() => undefined);
+        await enough;
+
+        const leg = client.legState;
+        expect(leg?.status).toBe('down');
+        if (leg?.status === 'down') {
+          // 1回目（healthy）は開いて閉じたので `since` が付く。
+          expect(leg.since).toEqual(expect.any(String));
+          // 2回目（fail、503）の理由が読める。
+          expect(leg.lastFailureReason).toContain('繋げない');
+          expect(leg.nextRetryAt).toEqual(expect.any(String));
+        }
+      } finally {
+        await client.close();
+      }
+    });
+
+    /**
+     * **例外を投げずに閾値未満で静かに閉じた回も `down` へ落ち、理由欄には
+     * 「持続しないまま終わった」旨が入る。** `#pump` の3つ目の枝（#308）と
+     * 同じ区別を `legState.lastFailureReason` でも保つ。
+     */
+    it('静かに閉じた（例外なし）回でも down になり、その旨が理由に入る', async () => {
+      const { fetchFn } = fetchEvents((i) => (i === 0 ? 'healthy' : 'ok'));
+      const waits: number[] = [];
+      let notifyEnough: () => void = () => undefined;
+      const enough = new Promise<void>((resolve) => {
+        notifyEnough = resolve;
+      });
+      const sleepFn = async (ms: number): Promise<void> => {
+        waits.push(ms);
+        if (waits.length >= 2) notifyEnough();
+      };
+
+      const client = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: TOKEN,
+        fetchFn,
+        sleepFn,
+        nowFn: nowFnAtExactThreshold(),
+      });
+      // **`try/finally` で必ず `close()` する**（上と同じ理由）。
+      try {
+        await client.connect(() => undefined);
+        await enough;
+
+        const leg = client.legState;
+        expect(leg?.status).toBe('down');
+        if (leg?.status === 'down') {
+          expect(leg.lastFailureReason).toBe('ストリームが持続しないまま終わった');
+        }
+      } finally {
+        await client.close();
+      }
+    });
+  });
 });
 
 /**

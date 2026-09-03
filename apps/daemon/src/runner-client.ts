@@ -5,6 +5,7 @@ import type {
   RunnerCredentialFingerprint,
   RunnerEvent,
   RunnerExecutionResources,
+  RunnerLegState,
   RunnerManagerState,
   RunnerPlacementResources,
   RunnerResumeCommand,
@@ -695,6 +696,63 @@ class HttpRunner implements RunnerClient {
    * 突き合わせて破棄する、といった手当ては意図的に入れていない。
    */
   #lastEventId: number | null = null;
+
+  /**
+   * `/events` の脚（{@link RunnerLegState}）のための生フィールド。**新しい
+   * I/O は無い**——`#pump` / `#stream` が既に通っている地点で書き換えるだけ。
+   *
+   * `#legStreamOpenSince` が非 `null` なら「いま開いている」。`#stream()` が
+   * 応答を受け取った直後（`connectedAt` を記録する行）に立て、その接続が
+   * 終わるとき（`#stream` の外側の `finally`）に `null` へ戻す——**健全性の
+   * 閾値（{@link CONNECTION_HEALTHY_THRESHOLD_MS}）とは無関係**である。あちらは
+   * バックオフをリセットしてよいかの判定で、こちらは「ストリームが物理的に
+   * 開いているか」という別の問いに答える。
+   */
+  #legStreamOpenSince: number | null = null;
+  /** 直近でバイトを受け取った時刻。新しい接続が開くたびに `null` へ戻す。 */
+  #legLastByteAt: number | null = null;
+  /** このプロセスが起きてから一度でも `#legStreamOpenSince` を立てたか。 */
+  #legEverConnected = false;
+  /**
+   * 直前の接続が終わった時刻。**「いま開いている」から「開いていない」へ
+   * 遷移した瞬間だけ書き換える**——再試行が重なるたびに現在時刻で上書きすると
+   * 「いつから落ちているか」が再試行のたびに新しくなり、本当に落ちた時刻が
+   * 読めなくなる（`oldestPendingAt` が listener の付け外しのたびに動くのと
+   * 同じ穴を、ここでは避ける）。
+   */
+  #legDownSince: number | null = null;
+  /** 直近の失敗の理由。1行に畳んだ文字列。健全な接続が続く間は前回の値を残す。 */
+  #legLastFailureReason: string | undefined;
+  /** 次に再接続を試みる時刻。待っている間だけ値を持ち、接続を試み始めたら消す。 */
+  #legNextRetryAt: number | null = null;
+
+  /**
+   * {@link RunnerClient.legState} の実装。**読むたびに、上の生フィールドから
+   * 組み立て直す**（キャッシュしない——古い状態を返す余地を作らない）。
+   */
+  get legState(): RunnerLegState {
+    if (this.#legStreamOpenSince !== null) {
+      return {
+        status: 'connected',
+        since: new Date(this.#legStreamOpenSince).toISOString(),
+        ...(this.#legLastByteAt === null
+          ? {}
+          : { lastByteAt: new Date(this.#legLastByteAt).toISOString() }),
+      };
+    }
+    if (!this.#legEverConnected) return { status: 'never-connected' };
+    return {
+      status: 'down',
+      ...(this.#legDownSince === null ? {} : { since: new Date(this.#legDownSince).toISOString() }),
+      ...(this.#legLastFailureReason === undefined
+        ? {}
+        : { lastFailureReason: this.#legLastFailureReason }),
+      ...(this.#legNextRetryAt === null
+        ? {}
+        : { nextRetryAt: new Date(this.#legNextRetryAt).toISOString() }),
+    };
+  }
+
   /**
    * `hello()` が `/health` から実際に `runnerId` を受け取ったか。
    *
@@ -1084,6 +1142,13 @@ class HttpRunner implements RunnerClient {
 
       if (failed) {
         this.#backingOff = true;
+        // **脚の状態（#358 系）——ログの間引きとは独立に、常に最新へ書く。**
+        // 下の `#neverEscapes` は stderr が書けない場合に備えた防御であって、
+        // この代入自体は例外を投げない（ただの文字列組み立てとフィールドの
+        // 代入）ので外に出す。dedup（`#lastLoggedDelayMs` 等）は「同じ行を
+        // 繰り返し書かない」ためのログの間引きであり、`legState` は間引かず
+        // 常に直近の理由を持つ。
+        this.#legLastFailureReason = `${reasonOf(failure)}${causeSuffixOf(causeInfoOf(failure))}`;
         // **ログが書けないことを理由に再接続をやめない**（#323）。ここは
         // `#stream` を包む `catch` の**外側**なので、投げれば `#pump` ごと死ぬ
         // ——そして死ねば、この runner へ二度と繋ぎ直されない（下の
@@ -1134,6 +1199,12 @@ class HttpRunner implements RunnerClient {
         // `markHealthy` の中で、宛先は #551 が決めている。ここでは決め直して
         // いない。
         this.#backingOff = true;
+        // **脚の状態（#358 系）。** 上の失敗（例外）経路と同じ理由で dedup の
+        // 外に置く——「切れました」は使わないが、`legState` としては
+        // 「持続しないまま終わった」ことも直近の失敗理由として持たせてよい
+        // （例外の有無を混同しない、という約束はログの文言側の話であり、
+        // `legState.lastFailureReason` は例外専用の欄ではない）。
+        this.#legLastFailureReason = 'ストリームが持続しないまま終わった';
         this.#neverEscapes(() => {
           if (this.#lastLoggedQuietDelayMs !== waitMs) {
             process.stderr.write(
@@ -1147,6 +1218,21 @@ class HttpRunner implements RunnerClient {
       // 次に使う値を決める。持続した(healthy)なら基準へ戻す。そうでなければ
       // (失敗でも、閾値未満で終わった「静かな」接続でも) 倍々に伸ばして頭打ち。
       this.#nextDelayMs = healthy ? this.#retryBaseMs : Math.min(waitMs * 2, this.#retryMaxMs);
+
+      // **脚の状態（#358 系）——次の再試行の予定時刻。**
+      //
+      // ⚠️ **わざと `this.#nowFn()` を使わない。** `#pump` はここまで
+      // `#nowFn()` を一度も呼んでいない（呼ぶのは `#stream()` の側だけ）。
+      // このループは `#stream()` が一度も接続できない（=毎回失敗する）区間
+      // でも毎周ここを通るので、ここで `#nowFn()` を呼ぶと「最初の呼び出しは
+      // 0、以降は閾値」という足場（`nowFnAtExactThreshold`。onBytes の doc
+      // 参照）の**1回目**を、まだ一度も繋がっていない失敗の周回が横取りして
+      // しまう——その後で初めて成功する周回の `connectedAt` が0を貰えなく
+      // なり、「持続した」判定が二度と成立しなくなる（実測でこの壊れ方を
+      // 確かめた上でこの形にした）。`nextRetryAt` は再接続そのものの正しさ
+      // には使われない観測用の値なので、`#nowFn()` を経由しない
+      // `Date.now()` を使い、上の足場を汚さない。
+      this.#legNextRetryAt = Date.now() + waitMs;
 
       // **差し替えられた待ちが投げても、`#pump` を殺さない**（#323）。ただし
       // **待たずに回り続けもしない** —— それは秒間に何度も runner を叩く形に
@@ -1220,6 +1306,13 @@ class HttpRunner implements RunnerClient {
      * いない」を表すのに時刻は要らない —— `null` で足りる。
      */
     let lastByteAt: number | null = null;
+    /**
+     * `connectedAt`（下）の写し。**脚の状態（`#legDownSince`）のためだけに
+     * 持つ。** `connectedAt` 自体は内側の `try` ブロックのスコープに閉じて
+     * いて外側の `finally` からは読めないので、ここへ写しておく——**新しい
+     * `#nowFn()` 呼び出しはここでは増やさない**（代入するだけ）。
+     */
+    let openedAt: number | null = null;
     /** 見張りが切ったか。**例外の出所を `#pump` へ正しく伝えるために持つ。** */
     let silent = false;
     /**
@@ -1279,6 +1372,15 @@ class HttpRunner implements RunnerClient {
       // だけ経ってからバイトが届いたら、その接続を持続したとみなす（`#pump` の
       // doc）。
       const connectedAt = this.#nowFn();
+      // **脚の状態（#358 系）。** ここは「持続した」判定（上）とは別の問いに
+      // 答える——ストリームが物理的に開いたという事実だけを記録する。
+      // `connectedAt` を使い回すだけで、新しい `#nowFn()` 呼び出しは増やさない
+      // （`nowFnAtExactThreshold` 型の足場を壊さないため。onBytes の doc参照）。
+      this.#legStreamOpenSince = connectedAt;
+      openedAt = connectedAt;
+      this.#legEverConnected = true;
+      this.#legLastByteAt = null;
+      this.#legNextRetryAt = null;
       const reader = response.body.getReader();
       /**
        * この接続で捨てたフレームの数（種別ごと）。**接続1本ぶんである。**
@@ -1311,6 +1413,9 @@ class HttpRunner implements RunnerClient {
           // ——`lastByteAt` の doc を参照。
           const now = this.#nowFn();
           lastByteAt = now;
+          // **同じ `now` を使い回す**（新しい `#nowFn()` 呼び出しを増やさない。
+          // 直上の doc 参照）。
+          this.#legLastByteAt = now;
           if (now - connectedAt >= CONNECTION_HEALTHY_THRESHOLD_MS) markHealthy();
         });
       } finally {
@@ -1327,6 +1432,24 @@ class HttpRunner implements RunnerClient {
       throw error;
     } finally {
       watchdog.cancel?.();
+      // **「開いている」から「開いていない」へ遷移した瞬間だけ書く**
+      // （`#legDownSince` の doc）。この接続で一度も開けていなければ
+      // （`#legStreamOpenSince` が既に `null`）触らない——直前の失敗の時刻を
+      // 上書きしない。
+      //
+      // ⚠️ **ここで新しく `#nowFn()` を呼ばない。** この `finally` は
+      // 「静かに閉じた」区間を含む**全ての**試行の後で必ず走るので、ここで
+      // 呼ぶと `nowFnAtExactThreshold` 型の足場だけでなく、試行回数そのもの
+      // で値を作る足場（`runner-client.test.ts` の「静かに閉じ続けて頭打ちへ
+      // 張り付いた後、healthy へ回復すると」テストが使う、呼び出し番号を直に
+      // 数える `nowFn`）も壊す——実際にこの形で壊し、テストを赤くしてから
+      // この形に直した。代わりに「最後にバイトを受け取った時刻（無ければ
+      // 接続した時刻）」を使い回す——`downSince` の精度としては「本当に
+      // 終わった瞬間」よりわずかに早いが、新しい呼び出しを増やさずに済む。
+      if (this.#legStreamOpenSince !== null) {
+        this.#legDownSince = lastByteAt ?? openedAt;
+        this.#legStreamOpenSince = null;
+      }
     }
   }
 
