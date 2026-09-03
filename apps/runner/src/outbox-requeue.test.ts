@@ -105,6 +105,37 @@ function hangOnRealEvents(): { spy: ReturnType<typeof vi.spyOn>; calls: string[]
   return { spy, calls };
 }
 
+/**
+ * 読み捨てながら、応答が終わる（`done: true`）まで読み進める
+ * （`events-write-deadline.test.ts` の `readUntilClosed` と同じ形）。
+ *
+ * **これが無いと、この統合試験の待ち条件が壊れる。** `outbox.pending` は
+ * 「書きかけの1件」も合算するので（`Outbox.pending` の doc）、締め切りが
+ * 発火する前から発火した後まで、値はずっと `1` のまま変わらない——
+ * `expect.poll(() => outbox.pending).toBe(1)` は**最初の1回で即座に満たされ
+ * てしまい、締め切りが実際に発火するまで待てない。** 応答が閉じたことを
+ * 見て初めて、「畳んで戻した後」の状態を見ていると言える。
+ */
+async function readUntilClosed(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  budgetMs: number,
+): Promise<'closed' | 'timeout'> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<'timeout'>((resolve) => {
+    timer = setTimeout(() => resolve('timeout'), budgetMs);
+    timer.unref?.();
+  });
+  try {
+    for (;;) {
+      const next = await Promise.race([reader.read(), expired]);
+      if (next === 'timeout') return 'timeout';
+      if (next.done) return 'closed';
+    }
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 describe('/events の finally: 畳んで戻したときも元の queuedAt を保つ（(A)+(B) の結線）', () => {
   /**
    * **統合レベル。** (A) の締め切り超過で接続を畳んだとき、`finally` が
@@ -141,8 +172,11 @@ describe('/events の finally: 畳んで戻したときも元の queuedAt を保
       if (body === null) throw new Error('SSE の応答に本文が無い');
       const reader = body.getReader();
 
-      // 締め切りを過ぎて畳まれ、outbox へ戻るまで待つ。
-      await expect.poll(() => outbox.pending, { timeout: 2000 }).toBe(1);
+      // 締め切りを過ぎて畳まれ、応答が実際に終わるまで待つ（`pending` の値
+      // だけでは待てない理由は `readUntilClosed` の doc）。
+      const outcome = await readUntilClosed(reader, 2000);
+      expect(outcome).toBe('closed');
+      expect(outbox.pending).toBe(1);
 
       // **ここが本題**——戻った後の oldestPendingAt が「いま」（2030年）では
       // なく、元の時刻（2020年）のままであること。
