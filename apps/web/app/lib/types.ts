@@ -116,3 +116,12 @@ export type TokenAvailability = 'disabled' | 'invalidated' | 'cooling' | 'ready'
 export type TokenRecovery = NonNullable<AgentTokenView['recovery']>;
 /** 日誌の `token_rotation` 種別1件。`event` の5値を潰さずに読むこと。 */
 export type TokenRotationEntry = Extract<JournalEntry, { type: 'token_rotation' }>;
+
+/**
+ * 握り潰しの跡（`GET /dropped`）。CLI（`alteroid dropped`）・クローンの MCP
+ * 道具 `self_dropped` と同じ帳面を読む（`packages/core/src/dropped-record.ts`）。
+ *
+ * **`origin` は `apps/web/app/routes/dropped.tsx` が字面を複製している**
+ * （`apps/web` は `@alteroid/core` の値 import が禁止されているため）。
+ */
+export type DroppedState = Ok<paths['/dropped']['get']>;

@@ -51,6 +51,7 @@ export const KEY = {
   conversation: (id: string) => ({ type: 'conversation', id }) as const,
   runners: { type: 'runners' } as const,
   tokens: { type: 'tokens' } as const,
+  dropped: { type: 'dropped' } as const,
 };
 
 /** デーモンが応答するか。接続先が合っているかの唯一の手がかりでもある。 */
@@ -248,6 +249,16 @@ export function useRunners() {
 export function useTokens() {
   const api = useApi();
   return useSWR(KEY.tokens, () => api.api.GET('/tokens').then(unwrap));
+}
+
+/**
+ * 握り潰しの跡（`GET /dropped`）。**資格は認証のみ**（`/journal` `/managers`
+ * `/conversations` と同じ強さ。`requireOperator` は付いていない——
+ * `apps/daemon/src/app.ts` の `GET /dropped` の doc）。読み取り専用。
+ */
+export function useDropped() {
+  const api = useApi();
+  return useSWR(KEY.dropped, () => api.api.GET('/dropped').then(unwrap));
 }
 
 /** 日誌エントリを人間が読む1行に潰す（一覧と通知で同じ文言を使うため）。 */
