@@ -256,6 +256,42 @@ describe('クローンの記憶注入（差分のみを載せるべき、とい�
  * 続けてクローンへ次のターンを流すと、`#withFreshMemory` は `child` だけを
  * 差分として載せ直す（`core` は今回変わっていないので載らない——「親も
  * 一緒に載せる」に化けていないことも見る）。
+ *
+ * ## ⚠️ 切り出しは範囲を自己確認する（PR #620 が自己申告で残した限界を閉じる）
+ *
+ * 直後のコードは、載せ直した塊を `<!-- memory: index -->`（marker）から
+ * 最初の `\n\n---\n\n`（boundary）までで切り出して文字数を数える。**PR #620
+ * の本文はこれを「範囲外」として明記していた**——`#withFreshMemory`
+ * （`clone.ts`）の連結の並びが変われば、この切り出しは落ちずに黙って
+ * 別の範囲を測りうる、という自己申告である。
+ *
+ * **現物の連結は、コメントが言うより枝が多い。** `#withFreshMemory` の
+ * `return [...]` は次の可変な枝を持つ（`grep -Fn -- '削除された記憶: '
+ * packages/core/src/clone.ts` / `grep -Fn -- '（記憶は空になった）'
+ * packages/core/src/clone.ts` が当たる）:
+ * - `resumeNotice`（resume 直後の断り）が **`head` より前** に付く枝
+ * - `removed`（削除された文書名の列挙）が **`renderMemoryDocuments` の後・
+ *   boundary の手前** に入る枝
+ * - `documents.length === 0` のとき「（記憶は空になった）」が **同じ位置**
+ *   に入る枝
+ *
+ * このシナリオでは4本ともガードが `false`（resume していない・何も削除して
+ * いない・記憶は空でない）なので、**いまの marker→boundary が緑なのは
+ * これらの枝が1本も立たないからであって、切り出しが頑健だからではない**。
+ * 枝が立てば、marker から最初の boundary までの範囲は「意図した記憶の塊」
+ * より広い／狭いものを指しうる——それでも `estimatedChars`（書く側）は
+ * これらの枝を知らないので、値が一致してしまえば `toBe` だけでは気づけない
+ * （値の食い違いは検出できても、範囲そのものの正しさは示せない）。
+ *
+ * **だから、値の一致とは別に、切り出した範囲そのものを自己確認する歯を足す**
+ * （下の「切り出しの自己確認」ブロック）。少なくとも: (1) marker が入力全体で
+ * ちょうど1回しか現れない（複数あれば、どれを取ったかは運になる）、
+ * (2) 切り出した塊が marker で始まる、(3) 塊が印だけではなく実際の中身
+ * （目次の見出し・`child` の行・「親 core は在るが…」の注記）を含む、
+ * (4) 塊の外に在るはずのもの（`head` の断り文・commitments 相当・人間の
+ * 発話そのもの）を塊が含まない、(5) boundary の直後が元のターンの本文
+ * （このシナリオでは通知が1つも立たないので、人間の発話 `'2回目'` そのもの
+ * と厳密に一致する）であること——を見る。
  */
 describe('通しの歯 — memory_write の見込み文字数と、次のターンに実際に載る塊の文字数が一致する', () => {
   it('⭐ 親が今回の書き込みに含まれない fact を書いたとき、見込みと実物が一致する（直す前は32文字少なかった）', async () => {
@@ -308,16 +344,17 @@ describe('通しの歯 — memory_write の見込み文字数と、次のター�
     expect(secondTurnInput).not.toContain('<!-- memory: core.md -->');
     expect(secondTurnInput).toContain('親 core は在るが、ここに載せた分には含まれない');
 
-    // **実際に載った塊を取り出す。** `#withFreshMemory`（`clone.ts`）は
-    // `[head, '', renderMemoryDocuments(changed, {...}), '', '---', '', text]`
-    // を `'\n'` で繋ぐ——`renderMemoryDocuments` の直後には必ず空行 +
-    // `---` + 空行が続き、その先が元のターンの本文（`text`。ここでは
-    // commitments の断りと人間の発話がさらに続く）である。この書き込みは
-    // fact 1件だけなので、`renderMemoryDocuments` の出力は目次節
-    // （`<!-- memory: index -->` から始まる）だけになる——だから
-    // その印から、直後に現れる `\n\n---\n\n`（元の本文との区切り。他の場所には
-    // 出ない——出るなら `text` の中の別の区切りで、それはこの印より後ろにしか
-    // 無い）までがそのまま「実際に載った塊」である。
+    // **実際に載った塊を取り出す。** `#withFreshMemory`（`clone.ts`）の現物の
+    // 連結は `[...(resumeNotice?), head, ...(changed?), ...(removed?),
+    // ...(documents.length===0?), '', '---', '', text]`——このシナリオでは
+    // resumeNotice / removed / 「空になった」の3枝がいずれも立たないので、
+    // `renderMemoryDocuments` の直後には必ず空行 + `---` + 空行が続き、その先が
+    // 元のターンの本文（`text`）である。この書き込みは fact 1件だけなので、
+    // `renderMemoryDocuments` の出力は目次節（`<!-- memory: index -->` から
+    // 始まる）だけになる——だからその印から、直後に現れる `\n\n---\n\n`
+    // （元の本文との区切り。他の場所には出ない——出るなら `text` の中の別の
+    // 区切りで、それはこの印より後ろにしか無い）までがそのまま
+    // 「実際に載った塊」である。
     const marker = '<!-- memory: index -->';
     const markerIndex = secondTurnInput.indexOf(marker);
     expect(markerIndex).toBeGreaterThanOrEqual(0);
@@ -328,6 +365,79 @@ describe('通しの歯 — memory_write の見込み文字数と、次のター�
 
     // **本体。** 書く側（見込み）と読む側（実物）が一致する。
     expect(actualInjectedChars).toBe(estimatedChars);
+
+    // ## 切り出しの自己確認（依頼者の基準: 測る対象が意図した範囲であることを、
+    // 歯自身が確かめられること）
+    //
+    // 上の `toBe` は「値」が合っているかしか見ない——marker から最初の
+    // boundary までという「範囲」そのものが正しいかは、値の一致だけでは
+    // 保証できない（値が偶然揃えば `toBe` は素通りする）。以下は範囲の正しさを
+    // 直接見る。
+
+    // (1) marker は入力全体でちょうど1回しか現れない。2回以上あれば
+    // `indexOf` がどれを拾うかは実装の詳細に依存する「運」になる。
+    const markerOccurrences = secondTurnInput.split(marker).length - 1;
+    expect(markerOccurrences).toBe(1);
+
+    // 切り出した塊そのもの。
+    const chunk = secondTurnInput.slice(markerIndex, boundaryIndex);
+
+    // (2) 塊は marker で始まる（スライスの定義から自明に見えるが、抽出の
+    // やり方が変われば崩れうる不変条件として明示する）。
+    expect(chunk.startsWith(marker)).toBe(true);
+
+    // (3) 塊は印だけを掴んでいるのではなく、実際に載るはずの中身を含む——
+    // 目次の見出し、`child` の行、そして「親は在るが今回載せた分には
+    // 含まれない」という parent-not-rendered の注記（これが無いと、直す前の
+    // 欠落——親の frontmatter を「見つからない」の短い印で数える——へ戻っても
+    // この歯は気づけない）。
+    expect(chunk).toContain('## 記憶の目次');
+    expect(chunk).toContain('child');
+    expect(chunk).toContain('子の要旨');
+    expect(chunk).toContain('親 core は在るが、ここに載せた分には含まれない');
+    // 塊は印1つぶんより十分に長い——空や印だけを掴んでいる状態ではない。
+    expect(actualInjectedChars).toBeGreaterThan(marker.length + 20);
+
+    // (4) 塊は「塊の外に在るはずのもの」を含まない——`head`（marker より前に
+    // 付くはずの断り文）、`core` の premise 本文、そして元のターンの本文
+    // （人間の発話）そのもの。head が万一 marker と boundary の間へ紛れ込む
+    // 連結（例: head を renderMemoryDocuments の後ろへ動かす）が入っても、
+    // 上の `toBe`（値の一致）だけでは長さがずれて落ちるとは限らない
+    // （head の長さぶんズレるので実際にはここでも落ちるが、値だけに頼らない
+    // ためにここでも明示する）。
+    expect(chunk).not.toContain('[system] 記憶が更新された');
+    expect(chunk).not.toContain('前提の本文');
+    expect(chunk).not.toContain('<!-- memory: core.md -->');
+    expect(chunk).not.toContain('2回目');
+
+    // (5) boundary の直後は元のターンの本文の始まり——具体的には**必ず末尾に
+    // 人間の発話そのものが来る**（`#runTurn` が `#withFreshMemory` へ渡す
+    // 引数は `distillGapNotice + contextWindowFoldNotice + redeliveryNotice +
+    // commitmentNotice + text` で、人間の発話（`text`）は常に最後に足される
+    // ——他の断り書きが何個立っていても、末尾は変わらない）。
+    //
+    // ⚠️ 実測で分かったこと（依頼者の見立てにも `AGENTS.md`「通しの歯…」の
+    // どちらにも無かった限界）: この2ターン目では `#commitmentNotice`
+    // （引き受けたまま終わっていない仕事の断り。1ターン目の人間の発話が
+    // `commitment_close` されずに残っているため立つ）が実際に非空になり、
+    // **その断り自身が `\n\n---\n\n` という区切りをもう1つ内部に持つ**
+    // （`describeDistillGap` などと同じ「本文の直前に `---` を足す」形）。
+    // つまり `secondTurnInput` 全体では `\n\n---\n\n` が2回以上現れうる——
+    // だから「boundary は全体でちょうど1回しか現れない」という不変条件は
+    // **立てられない**（一度そう書いて実測に落とされた。生の失敗はこの節の
+    // すぐ下、PR 本文の変異試験の節に貼ってある）。**それでも
+    // `secondTurnInput.indexOf(boundary, markerIndex)` が拾う最初の1回は、
+    // 塊とその後ろの通知群を隔てる本物の区切りである**——`#withFreshMemory`
+    // 自身の区切り（`'', '---', ''`）は `renderMemoryDocuments` の直後、
+    // `text`（＝ここに埋め込まれた commitmentNotice の区切りより必ず前）に
+    // 置かれるため。**だから「厳密に1回」ではなく「末尾が人間の発話で
+    // 終わる」という、通知の本数に依存しない形で確認する。**
+    const afterBoundary = secondTurnInput.slice(boundaryIndex + boundary.length);
+    expect(afterBoundary.endsWith('2回目')).toBe(true);
+    // そして marker はここまでの (1) で入力全体につき1回だけと確認済みなので、
+    // boundary の後ろ（`afterBoundary`）に記憶の塊が2つ目として紛れ込む
+    // （＝ marker が再度現れる）ことも無い。
+    expect(afterBoundary).not.toContain(marker);
 
     await s.clone.stop();
   });
