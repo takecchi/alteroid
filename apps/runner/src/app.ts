@@ -76,6 +76,21 @@ export interface RunnerAppDeps {
    */
   sseHeartbeatMs?: number;
   /**
+   * `GET /events` の1回の `writeSSE` に許す最長時間（ms）。省略時は
+   * `DEFAULT_SSE_WRITE_DEADLINE_MS`（下で定義。既定 45,000ms）。
+   *
+   * **相手が読まなくなった接続では、`await stream.writeSSE(...)` は原理上
+   * いつまでも返らない**（`hono@4.13.1` の `StreamingApi#write` が
+   * `this.writer.write(input)` の失敗を `catch {}` で握り潰し、書き込みが
+   * 1本 pending のままだと WHATWG Streams の仕様上どちらへも解決しない
+   * ——`/events` ハンドラの doc に実測が在る）。**期限を切らないと、1件の
+   * 詰まりが後続の配送を全部止める**（head-of-line blocking）。
+   *
+   * **環境変数は増やさない** —— `sseHeartbeatMs` と同じ理由（テストで短くする
+   * 以外に差し替える理由が無い）。
+   */
+  sseWriteDeadlineMs?: number;
+  /**
    * タスクの state 別内訳を測るリーダー（#315 の可視化）。**主にテスト用。**
    *
    * 既定は `new TaskBreakdownReader()`（実物の `/proc` を読む）。`revision` と
@@ -204,7 +219,14 @@ export interface OutboxShutdownSnapshot {
 
 export class Outbox {
   readonly #queue: { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[] = [];
-  #listener: ((event: RunnerEvent, seq: OutboxSeq) => void) | null = null;
+  /**
+   * **`queuedAt` も渡す**（元の積まれた時刻。書き直し不可）。{@link requeue} が
+   * 直接配送するときに「いま」で打ち直さないための配線——`push`（新規）は
+   * `requeue(event, this.#now())` に委譲するので、この第3引数は「新規なら今」
+   * 「差し戻しなら元の時刻」のどちらであっても、呼び出し側（listener）が
+   * 自分で選ばずに済む。
+   */
+  #listener: ((event: RunnerEvent, seq: OutboxSeq, queuedAt: string) => void) | null = null;
   /**
    * 購読側が抱えている分を数える口（#358）。**購読が始まったときだけ在る。**
    *
@@ -220,6 +242,17 @@ export class Outbox {
    * いま切れている」を区別するための唯一の材料である。
    */
   #everSubscribed = false;
+  /**
+   * 購読側が抱えている分を同期的に引き渡す口（#新窓）。**購読が始まったときだけ
+   * 在る。** 次の {@link attach} 呼び出し（＝別の購読者が割り込む瞬間）でだけ
+   * 使われる——古い購読者は `writeSSE` の途中で止まっていて自分ではコードを
+   * 走らせられないので、`attach` の側からここを同期的に呼んで強制的に
+   * 引き出す（`/events` ハンドラの `drain` 引数の doc）。
+   *
+   * これが無いと、新しい購読者に黙って置き換わる瞬間に古い購読者の `queue` /
+   * 書きかけの1件が誰にも配られず {@link pending} からも消える（`attach` の doc）。
+   */
+  #drain: (() => { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[]) | null = null;
   readonly #now: () => string;
   #nextSeq: OutboxSeq = 1;
 
@@ -247,12 +280,32 @@ export class Outbox {
 
   /** 割り振った連番を返す（#275）。呼び出し側が `id`（SSE フレーム）へそのまま使う。 */
   push(event: RunnerEvent): OutboxSeq {
+    return this.requeue(event, this.#now());
+  }
+
+  /**
+   * **元の `queuedAt` を保ったまま**箱へ戻す。`push` はこれに
+   * `queuedAt: this.#now()` を渡すだけの薄い委譲——「新規に積む」と「差し戻す」の
+   * 違いは `queuedAt` をどこから取るかだけで、配送そのもの（listener が居れば
+   * 直接渡す・居なければ `#queue` へ積む）は同じである。
+   *
+   * **なぜ要るか。** `/events` ハンドラが確実に配送できなかった分（書きかけの
+   * 1件・締め切り超過で畳んだ接続が抱えていた分）を `push()` でそのまま戻すと、
+   * `queuedAt` が「いま」に打ち直され、`oldestPendingAt` が「戻すたびに新しく
+   * なる」という嘘をつく（7時間待っている報告が、毎回さっき積まれたように
+   * 見える）。差し戻しは連番だけ新しく振り直す——元の連番は既に SSE のフレーム
+   * として使用済み（あるいは未使用のまま失効）で、再送されるフレームは新しい
+   * `id` を持つべきだからである（`Last-Event-ID` の意味を壊さない——古い連番を
+   * 再利用すると、控え（{@link recordSent}/{@link sentSince}）の中の同じ連番と
+   * 衝突しうる）。
+   */
+  requeue(event: RunnerEvent, queuedAt: string): OutboxSeq {
     const seq = this.#nextSeq++;
     if (this.#listener !== null) {
-      this.#listener(event, seq);
+      this.#listener(event, seq, queuedAt);
       return seq;
     }
-    this.#queue.push({ event, queuedAt: this.#now(), seq });
+    this.#queue.push({ event, queuedAt, seq });
     return seq;
   }
 
@@ -261,22 +314,40 @@ export class Outbox {
    *
    * `pending` は**購読側が抱えている分を数える口**である（#358）。渡さなくても
    * 動くが、**渡さなければ購読中の滞留が {@link pending} から消える。**
+   *
+   * `drain` は**購読側が抱えている分を同期的に引き渡す口**である。既に別の
+   * 購読者が居る状態でこれが呼ばれた場合（＝新しい接続が古い接続を黙って
+   * 置き換える瞬間）、**新しい listener へ渡す前に、古い購読者の `#drain` を
+   * 呼んで抱えている分を引き出し、古い順に新しい listener へ渡す。** 古い
+   * 購読者は `writeSSE` の途中で止まっていて自分の `finally` を実行できない
+   * ことがある——そのままだと、古い購読者が抱えていた `queue` と書きかけの
+   * 1件は誰にも配られず {@link pending} からも消える（`#probe` ごと差し替わる
+   * ため）。**呼ばれた側（古い購読者）は自分の状態を空にして返すことが期待
+   * されている**——そうしないと、後で古い購読者自身の `finally` が動いたときに
+   * 同じ分をもう一度差し戻し、二重になる。
    */
   attach(
-    listener: (event: RunnerEvent, seq: OutboxSeq) => void,
+    listener: (event: RunnerEvent, seq: OutboxSeq, queuedAt: string) => void,
     pending?: () => OutboxPending,
+    drain?: () => { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[],
   ): () => void {
+    if (this.#drain !== null) {
+      const stale = this.#drain();
+      for (const item of stale) listener(item.event, item.seq, item.queuedAt);
+    }
     while (this.#queue.length > 0) {
       const item = this.#queue.shift();
-      if (item !== undefined) listener(item.event, item.seq);
+      if (item !== undefined) listener(item.event, item.seq, item.queuedAt);
     }
     this.#listener = listener;
     this.#probe = pending ?? null;
     this.#everSubscribed = true;
+    this.#drain = drain ?? null;
     return () => {
       if (this.#listener !== listener) return;
       this.#listener = null;
       this.#probe = null;
+      this.#drain = null;
     };
   }
 
@@ -537,9 +608,64 @@ function describeSubscriberLine(subscriber: OutboxShutdownSnapshot['subscriber']
  */
 const INSTANCE_ID = randomUUID();
 
+/**
+ * `RunnerAppDeps.sseWriteDeadlineMs` の既定値（45,000ms）。
+ *
+ * **新しいマジックナンバーを置かない —— 既にシステムに在る量
+ * （{@link DEFAULT_SSE_HEARTBEAT_MS}）の3倍として導く。** これは
+ * `apps/daemon/src/runner-client.ts` の `RUNNER_STREAM_SILENCE_TIMEOUT_MS`
+ * （デーモン自身の無音の見張り）と**同じ式**であり、値も一致する
+ * （`DEFAULT_SSE_HEARTBEAT_MS * 3`）。
+ *
+ * **なぜ同じ式を選ぶか。** 「相手が無音を見限るのと同じ長さ以上、箱の中身を
+ * 人質に取らない」という線を引くためである——runner がこれより長く1件を
+ * 抱え込んでも、デーモンはどのみち `RUNNER_STREAM_SILENCE_TIMEOUT_MS` で
+ * その接続を見限って繋ぎ直しに来る。runner 側の締め切りをそれより短くする
+ * 意味は薄く（デーモンがまだ見限っていない接続を runner が先に畳むだけ）、
+ * 長くする意味も無い（デーモンが既に見限った接続を runner がまだ書きかけの
+ * まま抱え続けるだけ）。
+ *
+ * **`DEFAULT_SSE_HEARTBEAT_MS` という定数から導く**（`deps.sseHeartbeatMs` を
+ * 経由しない）——`sseHeartbeatMs` がテストで短縮されていても、書き込みの
+ * 締め切りまで一緒に縮む理由は無い。デーモン側の見張りも、実際の runner の
+ * heartbeat 間隔を知らずに固定の式で見張っている（`RUNNER_STREAM_SILENCE_
+ * TIMEOUT_MS` の doc）——両者が同じ前提（「知らない側の固定の式」）で揃っている
+ * ことが、この線をそのまま導ける理由である。
+ */
+const DEFAULT_SSE_WRITE_DEADLINE_MS = DEFAULT_SSE_HEARTBEAT_MS * 3;
+
+/**
+ * 与えられた非同期処理を期限つきで待つ。**タイマーは必ず片付ける**
+ * （成功しても、期限が来ても——`finally` で `clearTimeout`）。
+ *
+ * `run()` が投げたら、そのまま外へ投げる（握り潰さない）——このプロセスは
+ * 「返らないかもしれない書き込み」に期限を切ることだけが役目で、書き込みが
+ * 例外で終わったときの扱い（#358 の `writing` 経由の差し戻し）は呼び出し側の
+ * 既存の挙動のままにする。
+ */
+async function withDeadline<T>(
+  run: () => Promise<T>,
+  deadlineMs: number,
+): Promise<{ outcome: 'done'; value: T } | { outcome: 'deadline-exceeded' }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<{ outcome: 'deadline-exceeded' }>((resolve) => {
+    timer = setTimeout(() => resolve({ outcome: 'deadline-exceeded' }), deadlineMs);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([
+      run().then((value) => ({ outcome: 'done' as const, value })),
+      deadline,
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export function createRunnerApp(deps: RunnerAppDeps) {
   const { host, outbox } = deps;
   const sseHeartbeatMs = deps.sseHeartbeatMs ?? DEFAULT_SSE_HEARTBEAT_MS;
+  const sseWriteDeadlineMs = deps.sseWriteDeadlineMs ?? DEFAULT_SSE_WRITE_DEADLINE_MS;
   // **プロセスの生存期間ぶん1回だけ解決する**（`INSTANCE_ID` と同じ理由——
   // 焼き込み・実行時の環境変数はどちらもプロセスの寿命の間に変わらない）。
   const revision = deps.revision ?? resolveBuildRevision();
@@ -748,6 +874,21 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         let writing: { event: RunnerEvent; queuedAt: string; seq: OutboxSeq } | null = null;
 
         /**
+         * **自分（この接続）が新しい購読者に置き換えられた**（#新窓）。
+         *
+         * `writing` / `queue` を空にするだけでは足りない——自分がいままさに
+         * `withDeadline(...)` の中で待っている書き込みが、後になって（相手の
+         * 接続が実は生きていた・`stream.abort()` で解放された等）「成功」の形で
+         * 返ってくることがある。そのとき `item`（ループのローカル定数。`writing`
+         * とは別の変数）は差し戻し済みの出来事を指したままなので、ここを見ずに
+         * 処理を続けると `outbox.recordSent(...)` が同じ出来事を二重に記録する
+         * （新しい購読者側の正当な送信と合わせて2回——`Last-Event-ID` で読み直す
+         * 3本目の接続に、同じ出来事が2回届く経路になる）。**この旗は「もう
+         * 何もしない」を保証するためだけに在る。**
+         */
+        let superseded = false;
+
+        /**
          * **無音切断からの復元（#275）。** デーモンは繋ぎ直すとき、直前までに
          * 受け取れた最後の連番を `Last-Event-ID` ヘッダへ乗せてくる
          * （`apps/daemon/src/runner-client.ts`）。runner はそれより新しく
@@ -775,8 +916,13 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         }
 
         const detach = outbox.attach(
-          (event, seq) => {
-            queue.push({ event, queuedAt: new Date().toISOString(), seq });
+          // **`queuedAt` は listener の第3引数からもらう**（`new Date().
+          // toISOString()` で打ち直さない）。`Outbox` 側が「新規なら今・
+          // 差し戻しなら元の時刻」を決めて渡してくるので、ここは渡された
+          // ものをそのまま使うだけでよい——`push()` からの直接配送でも
+          // `requeue()` からの直接配送でも、この1本で正しい値が乗る。
+          (event, seq, queuedAt) => {
+            queue.push({ event, queuedAt, seq });
             wake?.();
           },
           // **この口を渡さないと、購読中の滞留が `outbox.pending` から消える**
@@ -788,6 +934,27 @@ export function createRunnerApp(deps: RunnerAppDeps) {
               count: queue.length + (writing === null ? 0 : 1),
               ...(oldest === undefined ? {} : { oldestAt: oldest.queuedAt }),
             };
+          },
+          // **抱えている分を同期的に引き渡す口。** 自分（この接続）が新しい
+          // 購読者に黙って置き換えられる瞬間に `Outbox.attach` から呼ばれる。
+          // 呼ばれた時点で自分の `writing` / `queue` を空にしておく——
+          // そうしないと、後で自分の `finally` が動いたとき（`writeSSE` の
+          // 締め切り超過や、相手からの実際の切断で動く）に同じ分をもう一度
+          // 差し戻し、二重になる。書きかけの1件（`writing`）が居れば、それが
+          // いちばん古い——`queue` より先に出たものだから、先頭に置く。
+          () => {
+            const drained = writing === null ? [...queue] : [writing, ...queue];
+            queue.length = 0;
+            writing = null;
+            superseded = true;
+            // **自分の接続も終わらせる。** 抱えていた分は新しい購読者へ渡した
+            // ので、この接続をそのまま生かしておく理由が無い（heartbeat が
+            // 空撃ちを続けるだけの応答が残る）。(A) と同じ経路——`abort()` は
+            // pending だった `writeSSE` も解放する（`stream.abort()` の doc /
+            // `RunnerAppDeps.sseWriteDeadlineMs` の doc）ので、自分のループも
+            // ほどなく `superseded` を見て抜ける。
+            stream.abort();
+            return drained;
           },
         );
         stream.onAbort(() => {
@@ -807,7 +974,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
 
         try {
           for (;;) {
-            if (closed || stream.aborted || stream.closed) break;
+            if (closed || stream.aborted || stream.closed || superseded) break;
             const item = queue.shift();
             if (item === undefined) {
               await new Promise<void>((resolve) => {
@@ -821,11 +988,53 @@ export function createRunnerApp(deps: RunnerAppDeps) {
             writing = item;
             // **`id` に連番を乗せる**（#275）。JSON の中身（`RunnerEvent`）は
             // 変えない——SSE のフレーム側だけで完結させる（`OutboxSeq` の doc）。
-            await stream.writeSSE({
-              event: item.event.type,
-              data: JSON.stringify(item.event),
-              id: String(item.seq),
-            });
+            //
+            // **期限つきで待つ**（head-of-line blocking を塞ぐ）。相手が
+            // 読まなくなった接続では `writeSSE` が原理上いつまでも返らない
+            // （`RunnerAppDeps.sseWriteDeadlineMs` の doc）——期限を切らないと、
+            // この1件が後続を全部止める。
+            const result = await withDeadline(
+              () =>
+                stream.writeSSE({
+                  event: item.event.type,
+                  data: JSON.stringify(item.event),
+                  id: String(item.seq),
+                }),
+              sseWriteDeadlineMs,
+            );
+            if (superseded) {
+              // **(C)** 待っているあいだに、自分は新しい購読者へ置き換え
+              // られた。抱えていた分（`item` を含む）は `attach` のドレインで
+              // 既に新しい購読者へ渡っている——ここで `result` を読んで
+              // `recordSent` / 差し戻しへ進むと、同じ出来事を二重に記録する
+              // （`superseded` の doc）。成功していても締め切り超過でも、
+              // 何もせず抜ける。
+              break;
+            }
+            if (result.outcome === 'deadline-exceeded') {
+              // **相手が読まなくなった接続と判断し、畳む。** `writing` は
+              // 意図的に `null` へ戻さない——下の `finally` が元の `queuedAt`
+              // を保ったまま箱へ戻す（`Outbox.requeue` の doc）。
+              //
+              // **`break` だけでは応答が終わらない。** hono の `streamSSE` の
+              // `run()` は `finally { stream.close(); }` を await していないが、
+              // `StreamingApi#close()` の中身（`await this.writer.close()`）は
+              // 書き込みが1本 pending のままだと WHATWG Streams の仕様上解決
+              // しない——デーモンは応答の終わりを一生見ない。`stream.abort()`
+              // を呼ぶと `abortSubscribers` が同期的に走り、内部の
+              // `reader.cancel()` が pending だった `writer.write()` を reject
+              // させる（hono の `write()` の `catch {}` が握り潰すので、いま
+              // 止まっている `writeSSE` はこの後に自然と解決する）。同時に
+              // 上で登録した `stream.onAbort(...)` も呼ばれ `closed = true` に
+              // なる。
+              const stuck = 1 + queue.length;
+              process.stderr.write(
+                `alteroid-runner: /events への書き込みが ${String(sseWriteDeadlineMs)}ms を超えたため接続を畳みます` +
+                  `（書きかけの1件を含め ${String(stuck)} 件を箱へ戻します）\n`,
+              );
+              stream.abort();
+              break;
+            }
             // **投げずに返った直後、控えへ積む**（#275）。hono の `write()`
             // （`hono/dist/utils/stream.js`）は死んだ接続へ書いても例外を出さ
             // ない——ここに来たからといって相手に届いたとは限らない。届いた
@@ -848,8 +1057,12 @@ export function createRunnerApp(deps: RunnerAppDeps) {
           // 流し切れなかった分は箱へ戻す（次に繋がったときに届く）。
           // **書きかけの1件も戻す**（#358）—— 書けたかどうかは分からないので、
           // 落とすより二重に届くほうを選ぶ（#206 が指す冪等化は別の穴である）。
-          if (writing !== null) outbox.push(writing.event);
-          for (const item of queue) outbox.push(item.event);
+          //
+          // **`push` ではなく `requeue` で、元の `queuedAt` を保ったまま戻す。**
+          // `push` だと「いま」で打ち直され、`oldestPendingAt` が戻すたびに
+          // 新しくなる（`Outbox.requeue` の doc）。
+          if (writing !== null) outbox.requeue(writing.event, writing.queuedAt);
+          for (const item of queue) outbox.requeue(item.event, item.queuedAt);
         }
       }),
     )
