@@ -183,9 +183,15 @@ describe('runner の /events: 古い購読者が抱えていた分を新しい�
     // `@typescript-eslint/no-this-alias` に当たらない形。
     const stuckStreams = new WeakSet<SSEStreamingApi>();
     let sawFirstNonHello = false;
-    let releaseStuck: (() => void) | null = null;
+    // **オブジェクトのプロパティとして持つ**（裸の `let` にしない）——`let` へ
+    // Promise executor（クロージャの内側）から代入すると、TS の制御フロー
+    // 解析が `releaseStuck?.()` の型を `never` に絞り込んでしまう（実測、
+    // `tsc` が `TS2349: This expression is not callable. Type 'never' has
+    // no call signatures.` で落ちた）。プロパティなら narrowing の対象に
+    // ならず、素直に `(() => void) | null` のまま残る。
+    const control: { release: (() => void) | null } = { release: null };
     const stuckPromise = new Promise<void>((resolve) => {
-      releaseStuck = resolve;
+      control.release = resolve;
     });
     const spy = vi.spyOn(SSEStreamingApi.prototype, 'writeSSE').mockImplementation(async function (
       this: SSEStreamingApi,
@@ -233,7 +239,7 @@ describe('runner の /events: 古い購読者が抱えていた分を新しい�
       await expect.poll(() => outbox.pending, { timeout: 1000 }).toBe(0);
 
       // ここで初めて、1本目の書き込みを「実は成功していた」ことにする。
-      releaseStuck?.();
+      control.release?.();
 
       // **1本目の応答を実際に読む。** `firstReader` を一度も読まないままだと、
       // 誰も消費していない `responseReadable` の backpressure（既定
