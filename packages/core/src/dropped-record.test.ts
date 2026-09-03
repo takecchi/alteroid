@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   clearRecentTracesForTesting,
+  describeDroppedTraceEmpty,
+  describeDroppedTraceOrigin,
+  describeDroppedTraceRetention,
+  droppedTraceLedgerSince,
   inboxEventShape,
   journalEntryShape,
   journalRowType,
@@ -15,6 +19,7 @@ import {
   RECENT_TRACE_LIMIT,
   recentDroppedTraces,
   runnerEventShape,
+  type DroppedTraceOrigin,
 } from './dropped-record.js';
 import type { RunnerEvent } from './runner-protocol.js';
 import type { InboxEvent, JournalEntryInput } from './schema.js';
@@ -532,5 +537,109 @@ describe('直近の跡を器の中から読み戻す帳面（#242）', () => {
     clearRecentTracesForTesting();
 
     expect(recentDroppedTraces()).toHaveLength(0);
+  });
+});
+
+/**
+ * 帳面が何の跡か・0件の読み方・保持のしかたを言う共有の字面（#242 の HTTP 面）。
+ *
+ * **`apps/daemon/src/app.ts` の `GET /dropped` と `packages/core/src/tools.ts`
+ * の `self_dropped` の両方が、ここで測る3関数をそのまま使う。** 字面は
+ * `apps/web` 側にも複製される見込みで（`describeSessionMissingKind` /
+ * `describeSessionMissingKindNote` と同じ形）、揃っていることは規約ではなく
+ * 歯（文字列一致）で守る——ここは core 側の生成元そのものを固定する。
+ */
+describe('帳面の字面（origin・0件の読み方・保持）', () => {
+  it('describeDroppedTraceOrigin(undefined) は空文字（「不明」と書かない）', () => {
+    expect(describeDroppedTraceOrigin(undefined)).toBe('');
+  });
+
+  /**
+   * **`ALL_ORIGINS` を `Record` で持つのは、値が増えたときにここが型で
+   * 落ちるため。** 配列だと2値目が足されても素通りする（＝新しい値の字面が
+   * 測られないまま増える）。これはビルド時の網羅性であって、実行時に測って
+   * いるのは下の非空チェックだけである（`managers.test.tsx` の
+   * `ALL_KINDS` と同じ形）。
+   */
+  it('DroppedTraceOrigin の全ての値について、空でない文字列を返す', () => {
+    const ALL_ORIGINS: Record<DroppedTraceOrigin, true> = { daemon: true };
+    const origins = Object.keys(ALL_ORIGINS) as DroppedTraceOrigin[];
+    // **空でないことを先に確かめる。** `Object.keys` が空なら下の forEach は
+    // 1回も回らず、この歯は何も測らずに緑になる。
+    expect(origins.length).toBeGreaterThan(0);
+    for (const origin of origins) {
+      expect(describeDroppedTraceOrigin(origin)).not.toBe('');
+    }
+  });
+
+  it('describeDroppedTraceOrigin("daemon") は runner を除外する意味の文言を持つ', () => {
+    const text = describeDroppedTraceOrigin('daemon');
+    expect(text).toContain('デーモン');
+    expect(text).toContain('runner');
+  });
+
+  /**
+   * **上の2つの `toContain` だけでは足りない。** 文中の1文字を変えても
+   * （末尾へ1文字足す等）どちらの部分文字列も壊れないので、変異が生き残る
+   * （実測済み。手順は AGENTS.md「静かに失敗する道具」/
+   * `.claude/skills/mutation-testing/`）。**全文の完全一致**を別に持つことで、
+   * 1文字の変異でも赤くなるようにする。
+   */
+  it('describeDroppedTraceOrigin("daemon") は文字列として完全一致する', () => {
+    expect(describeDroppedTraceOrigin('daemon')).toBe(
+      'デーモンのプロセス（クローンを含む）が残した跡だけである。' +
+        '別プロセスの runner が残した跡はここには出ない。',
+    );
+  });
+
+  it('describeDroppedTraceEmpty() は「0件＝無事」とは読ませない', () => {
+    const text = describeDroppedTraceEmpty();
+    expect(text).not.toBe('');
+    // 0件が「握り潰しが1件も無かった」ことを意味しない、という否定の形を持つ。
+    expect(text).toContain('意味しない');
+    // プロセスの生存中だけの記憶で、再起動・デプロイの入れ替えで消える、という
+    // 理由が付いている。
+    expect(text).toContain('再起動');
+  });
+
+  it('describeDroppedTraceEmpty() は時刻を埋め込まない', () => {
+    // ISO 8601 のタイムスタンプ（`2026-09-03T...` の形）が入っていないこと。
+    // 時刻は面ごとに整形が違うので、埋め込むと字面一致の歯が面ごとの整形差で
+    // 壊れる（このファイル冒頭 doc）。
+    expect(describeDroppedTraceEmpty()).not.toMatch(/\d{4}-\d{2}-\d{2}T/u);
+  });
+
+  it('describeDroppedTraceRetention(limit) は上限の件数を含み、押し出しと在り処を言う', () => {
+    const text = describeDroppedTraceRetention(RECENT_TRACE_LIMIT);
+    expect(text).toContain(String(RECENT_TRACE_LIMIT));
+    expect(text).toContain('押し出される');
+    expect(text).toContain('stderr');
+  });
+});
+
+/**
+ * `droppedTraceLedgerSince()` — 帳面が数え始めた時刻。
+ */
+describe('droppedTraceLedgerSince（帳面が数え始めた時刻）', () => {
+  it('ISO 8601 の時刻を返す', () => {
+    const since = droppedTraceLedgerSince();
+    expect(since).toMatch(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/u);
+    expect(Number.isNaN(Date.parse(since))).toBe(false);
+  });
+
+  it('clearRecentTracesForTesting() が呼ばれると取り直される', async () => {
+    const before = droppedTraceLedgerSince();
+
+    // **時刻の分解能（ミリ秒）より速く2回呼ぶと、取り直っても同じ値になり
+    // うる。** 次の tick まで進めてから取り直す——`vi.useFakeTimers` は
+    // このファイルの他のテストと歩調を揃えるため使わず、実時間を最小限
+    // 待つ（1ms のビジーウェイトは待たない）。
+    await new Promise((resolve) => setTimeout(resolve, 2));
+
+    clearRecentTracesForTesting();
+    const after = droppedTraceLedgerSince();
+
+    expect(after).not.toBe(before);
+    expect(new Date(after).getTime()).toBeGreaterThan(new Date(before).getTime());
   });
 });

@@ -17,6 +17,7 @@ import type {
 } from '@alteroid/core';
 import {
   captureStderr,
+  clearRecentTracesForTesting,
   createAuthProviderRegistry,
   createAuthService,
   createManagerPool,
@@ -26,6 +27,10 @@ import {
   createProfileVessel,
   createRunnerRegistry,
   createTokenPoolService,
+  droppedTraceLedgerSince,
+  noteDroppedRecord,
+  RECENT_TRACE_LIMIT,
+  recentDroppedTraces,
 } from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -2817,6 +2822,89 @@ describe('GET /journal の order/afterId/afterAt（issue #432 の2本目）', ()
       entries: { id: string }[];
     };
     expect(body.entries.map((e) => e.id)).toEqual([first.id]);
+  });
+});
+
+/**
+ * `GET /dropped`（#242 の HTTP 面。PRD「入口の等価性」）。
+ *
+ * **`recentDroppedTraces()` の帳面はプロセス（＝このテストファイル）の生存中
+ * ずっと1つを共有する。** 他の it が積んだ跡と混ざらないよう、断言の前に
+ * 必ず `clearRecentTracesForTesting()` で空にする
+ * （`dropped-record.test.ts` の doc と同じ作法）。
+ */
+describe('GET /dropped（#242 の HTTP 面）', () => {
+  it('跡が0件でも 200 を返す（404 やエラーにしない）', async () => {
+    clearRecentTracesForTesting();
+
+    const response = await app.request('/dropped');
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as {
+      origin: string;
+      since: string;
+      limit: number;
+      total: number;
+      traces: string[];
+    };
+    expect(body.total).toBe(0);
+    expect(body.traces).toEqual([]);
+    expect(body.origin).toBe('daemon');
+    // ISO 8601 の時刻であること。
+    expect(body.since).toMatch(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/u);
+    expect(Number.isNaN(Date.parse(body.since))).toBe(false);
+  });
+
+  it('跡があるとき、recentDroppedTraces() と同じ順序（古い順）で返る', async () => {
+    clearRecentTracesForTesting();
+    await captureStderr(() => {
+      noteDroppedRecord('probe-1', '', new Error('boom-1'));
+      noteDroppedRecord('probe-2', '', new Error('boom-2'));
+      noteDroppedRecord('probe-3', '', new Error('boom-3'));
+    });
+    const expected = recentDroppedTraces();
+    expect(expected).toHaveLength(3);
+
+    const response = await app.request('/dropped');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { total: number; traces: string[] };
+
+    expect(body.total).toBe(3);
+    expect(body.traces).toEqual(expected);
+    // 古い順（末尾が最新）——先頭が probe-1、末尾が probe-3。
+    expect(body.traces[0]).toContain('probe-1');
+    expect(body.traces[2]).toContain('probe-3');
+  });
+
+  it('limit は RECENT_TRACE_LIMIT と一致する（クエリでは絞れない）', async () => {
+    clearRecentTracesForTesting();
+
+    const response = await app.request('/dropped');
+    const body = (await response.json()) as { limit: number };
+
+    expect(body.limit).toBe(RECENT_TRACE_LIMIT);
+  });
+
+  it('since は droppedTraceLedgerSince() と一致する', async () => {
+    clearRecentTracesForTesting();
+
+    const response = await app.request('/dropped');
+    const body = (await response.json()) as { since: string };
+
+    expect(body.since).toBe(droppedTraceLedgerSince());
+  });
+
+  it('本文（跡の中身）を1文字も含まない——秘密が乗らない', async () => {
+    clearRecentTracesForTesting();
+    const secret = 'ghp_000000000000000000000000000000000000';
+    await captureStderr(() => {
+      noteDroppedRecord('probe', `chars=${secret.length}`, new Error('storage is closed'));
+    });
+
+    const response = await app.request('/dropped');
+    const body = (await response.json()) as { traces: string[] };
+
+    expect(JSON.stringify(body)).not.toContain(secret);
   });
 });
 

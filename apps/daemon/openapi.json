@@ -6810,6 +6810,52 @@
         ]
       }
     },
+    "/dropped": {
+      "get": {
+        "operationId": "getDropped",
+        "tags": ["dropped"],
+        "summary": "握り潰しの跡を読む",
+        "description": "デーモンのプロセス（クローンを含む）が残した跡だけを返す。別プロセスの runner が残した跡はここには出ない。跡が0件でも 200 を返す — 0件は 「握り潰しが1件も無かった」ことを意味しない（プロセスの生存中だけの 記憶で、再起動・デプロイの入れ替えで消える）。`limit` のクエリ引数は 無い（帳面自体が `limit` 件で上限を持つので、常に全件を返す）。",
+        "responses": {
+          "200": {
+            "description": "帳面の全件（古い順、末尾が最新）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "origin": {
+                      "type": "string",
+                      "const": "daemon"
+                    },
+                    "since": {
+                      "type": "string"
+                    },
+                    "limit": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "total": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "traces": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": ["origin", "since", "limit", "total", "traces"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/auth/providers": {
       "get": {
         "operationId": "getAuthProviders",

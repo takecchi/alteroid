@@ -30,6 +30,7 @@ import {
   createAuthProviderRegistry,
   createAuthService,
   reachedStart,
+  droppedTraceLedgerSince,
   findUnrecordedManagers,
   isAccountGranted,
   isDailyReport,
@@ -40,6 +41,8 @@ import {
   noteDroppedRecord,
   reasonOf,
   readConversationWindow,
+  RECENT_TRACE_LIMIT,
+  recentDroppedTraces,
   reportRunnerRevision,
   resolveBuildRevision,
   runnerSetCredentialsCommandSchema,
@@ -76,6 +79,7 @@ import {
   commitmentOpenedResponseSchema,
   conversationDetailResponseSchema,
   conversationsResponseSchema,
+  droppedResponseSchema,
   errorResponseSchema,
   eventAcceptedResponseSchema,
   healthResponseSchema,
@@ -3634,6 +3638,75 @@ export function createApp(deps: AppDeps) {
         const body = await stores.archive.read(c.req.param('id'));
         if (body === null) return c.json({ error: 'not found' as const }, 404);
         return c.text(body);
+      },
+    )
+
+    // --- 握り潰しの跡（/dropped） ------------------------------------------
+    // #242 の HTTP 面。PRD「入口の等価性」（docs/PRD.md）——この跡を読む口が
+    // MCP の `self_dropped`（`tools.ts`）にしか無かった。
+
+    /**
+     * クローンが記録・読み出しをしそこねた跡（`noteDroppedRecord` 等が
+     * stderr へ残す行）を、器の外（Web/CLI/HTTP）から読み戻す。
+     *
+     * **資格は `authenticate` だけ（`requireOperator` は付けない）。** 理由は
+     * `/journal` `/managers` `/conversations` と同じ強さにしてあることで、
+     * `/tokens`（`requireOperator`）とは違う扱いにしている。この跡は本文を
+     * 1文字も含まない設計（`dropped-record.ts` 冒頭 doc「本文は出さない」/
+     * #52）で、持ち主の系そのものの診断であって、`/tokens` のように課金の
+     * 主体を決める操作ではない——`access grant` を通しただけのアカウントに
+     * も開いてよい強さである。
+     *
+     * **`limit` のクエリ引数は無い。帳面自体が `RECENT_TRACE_LIMIT`
+     * （200件）で上限を持つので、HTTP の口はいつも全件を返す。** これは
+     * 意図である——`.claude/skills/listing-and-detail/SKILL.md` の逐語:
+     * 「HTTP の口（`GET /commitments` / `GET /usage` / `GET /reports/:date` /
+     * `GET /archive`）は上限を持たない。これは意図である — 人間はブラウザで
+     * 扱えるので、ここを締めると人間側の能力が落ちる。エージェントへ返す口
+     * と混ぜて数えないこと」。**「予算が無い」のではない** ——
+     * エージェント向けの `self_dropped`（MCP）だけが `limit` と文字数予算を
+     * 持ち、この口は持たない、という設計上の非対称である。
+     *
+     * **供給元は1本。** デーモンとクローンは同一プロセスで動く
+     * （`apps/daemon/src/index.ts` の `createClone(...)` と
+     * `createApp({ clone, ... })`、`serve({ fetch: app.fetch, ... })` が
+     * 同じ関数スコープ）ので、`recentDroppedTraces()` はクローンの
+     * `self_dropped` が読むのと同じ帳面である。runner はここには出ない
+     * （別プロセス。`dropped-record.ts` の `DroppedTraceOrigin` の doc）。
+     *
+     * **跡が0件でも 200 を返す。** 「握り潰しが1件も無かった」わけではない
+     * ——プロセスの生存中だけの記憶で、再起動・デプロイの入れ替えで消える
+     * （`describeDroppedTraceEmpty` の doc）。404 やエラーにしない。
+     */
+    .get(
+      '/dropped',
+      describeRoute({
+        tags: ['dropped'],
+        summary: '握り潰しの跡を読む',
+        description:
+          'デーモンのプロセス（クローンを含む）が残した跡だけを返す。別プロセスの ' +
+          'runner が残した跡はここには出ない。跡が0件でも 200 を返す — 0件は ' +
+          '「握り潰しが1件も無かった」ことを意味しない（プロセスの生存中だけの ' +
+          '記憶で、再起動・デプロイの入れ替えで消える）。`limit` のクエリ引数は ' +
+          '無い（帳面自体が `limit` 件で上限を持つので、常に全件を返す）。',
+        responses: {
+          200: {
+            description: '帳面の全件（古い順、末尾が最新）。',
+            content: { 'application/json': { schema: resolver(droppedResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        const traces = recentDroppedTraces();
+        return c.json(
+          droppedResponseSchema.parse({
+            origin: 'daemon',
+            since: droppedTraceLedgerSince(),
+            limit: RECENT_TRACE_LIMIT,
+            total: traces.length,
+            traces,
+          }),
+        );
       },
     )
 

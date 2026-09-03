@@ -1087,6 +1087,42 @@ export const tokensPolicyUpdateRequestSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// 握り潰しの跡（/dropped）——#242 の HTTP 面。PRD「入口の等価性」。
+// ---------------------------------------------------------------------------
+
+/**
+ * `GET /dropped` の `origin`。**いまは `'daemon'` の1値しか無い**
+ * （`packages/core` の `DroppedTraceOrigin` と同じ値）。
+ *
+ * **ここへ書き直しているのは core が zod スキーマを持っていないからである。**
+ * `journalEntrySchema` 等（core が zod で書いている型）はこのファイルの
+ * 冒頭 doc の方針どおり再定義しないが、`dropped-record.ts` は stderr へ
+ * 出す文字列とプレーンな TS の型しか持たない——ここが初めて zod の形にする。
+ */
+export const droppedTraceOriginSchema = z.literal('daemon');
+
+/**
+ * `GET /dropped` の応答。
+ *
+ * - `origin`: 帳面がどのプロセスの跡かを示す。**daemon だけが名乗る**
+ *   （runner は別プロセスで、この帳面には原理的に現れない。
+ *   `dropped-record.ts` の `DroppedTraceOrigin` の doc）。
+ * - `since`: この帳面が数え始めた時刻（`droppedTraceLedgerSince()`）。
+ * - `limit`: 帳面自体の保持件数（`RECENT_TRACE_LIMIT`）。**クエリでは
+ *   絞れない**——`app.ts` の `GET /dropped` の doc を見ること。
+ * - `total`: いま帳面に乗っている件数（`traces.length` と同じ）。
+ * - `traces`: 古い順（末尾が最新）。本文は1文字も含まない
+ *   （`dropped-record.ts` 冒頭 doc「本文は出さない」）。
+ */
+export const droppedResponseSchema = z.object({
+  origin: droppedTraceOriginSchema,
+  since: z.string(),
+  limit: z.number().int(),
+  total: z.number().int(),
+  traces: z.array(z.string()),
+});
+
+// ---------------------------------------------------------------------------
 // アーカイブ（/archive）
 // ---------------------------------------------------------------------------
 

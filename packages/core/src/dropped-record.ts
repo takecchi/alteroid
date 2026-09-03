@@ -453,9 +453,134 @@ export function recentDroppedTraces(): readonly string[] {
  *
  * 帳面はプロセス（＝テストファイル）の生存中ずっと1つを共有するので、
  * 前のテストが積んだ行を次のテストが数え違えないよう、断言の前に呼ぶこと。
+ *
+ * **{@link droppedTraceLedgerSince} も同時に取り直す。** 帳面を空にしたのに
+ * 「数え始めた時刻」だけ古いままだと、`describeDroppedTraceEmpty()` が言う
+ * 「この帳面はプロセスの生存中だけの記憶」という説明と時刻が食い違って
+ * 見える——空にする＝新しい生存区間が始まる、という意味を時刻にも持たせる。
  */
 export function clearRecentTracesForTesting(): void {
   recentTraces.length = 0;
+  ledgerSince = new Date().toISOString();
+}
+
+/**
+ * 帳面（{@link recentDroppedTraces}）がどのプロセスの跡を持っているかを表す。
+ *
+ * **いまは `'daemon'` の1値しか無い。** 供給元は1本——`recentDroppedTraces()`
+ * が読むのはデーモンのプロセスの中だけである。**デーモンとクローンは同一
+ * プロセスで動く**（`apps/daemon/src/index.ts` の `createClone(...)` と
+ * `createApp({ clone, ... })`、`serve({ fetch: app.fetch, ... })` が同じ
+ * 関数スコープにある）ので、クローンが `note()` 経由で残す跡も、デーモンの
+ * HTTP ハンドラから見えるこの帳面も、同じ1本の台帳を指す。
+ *
+ * **runner はここに現れない。** runner は別プロセス（別 bin
+ * `alteroid-runner`）で動いており、この帳面はプロセス内メモリなので、runner
+ * が `note()` 相当の跡を残しても daemon 側のこの帳面からは原理的に読めない
+ * （読めるようにするには runner からデーモンへ跡を運ぶ経路そのものを新設する
+ * 必要があり、それは別の変更である）。**⟹ runner がこの型へ値を足さない
+ * 限り、`'daemon'` は「デーモン (クローン込み) の跡だけ」と言い切れる。** 値を
+ * 足すときは、runner 側の実装と同時にここへ増やすこと——増やさなければ、
+ * この型がそのまま安全側の境界になる。
+ */
+export type DroppedTraceOrigin = 'daemon';
+
+/**
+ * 帳面が何の跡を持っているかを一言で言う（#242 の HTTP 面。
+ * `apps/daemon/src/app.ts` の `GET /dropped` と `self_dropped`（`tools.ts`）
+ * の両方が使う共有の生成元）。
+ *
+ * **字面は core とここ1箇所だけではない。** `apps/web` は `@alteroid/core`
+ * の**値** import が禁じられている（`eslint.config.js` の
+ * `no-restricted-imports`。理由は#294/#306の事故）ので、Web 側はこの文字列を
+ * 自前に複製することになる。**揃っていることは規約ではなく歯（テストの
+ * 文字列一致）で守る**——先例は `describeSessionMissingKind`（`digest.ts`）と
+ * その複製 `describeSessionMissingKindNote`
+ * （`apps/web/app/routes/managers.tsx`）で、`apps/web/app/routes/managers.test.tsx`
+ * が2つの文字列としての等しさを直接測る（テストファイルは値 import の禁止
+ * から明示的に外してある）。**このファイルの文言を直すときは、Web 側の
+ * 複製が在れば必ず一緒に見ること。**
+ *
+ * **`undefined` は空文字にする（「不明」と書かない）。** 由来を持たない印は、
+ * この欄が足される前の版のデーモンが立てたものだけである——そこへ新しい語を
+ * 出すと、実際には1つしかない区別が2つに見える（`describeSessionMissingKind`
+ * の doc と同じ理由）。
+ *
+ * **型の網羅性で塞いだうえで、実行時の倒れ先も足す**（AGENTS.md「型で塞いだ
+ * 分岐にも、実行時の倒れ先の歯を足す」）。デーモンと読み手（CLI・Web の
+ * 複製）は別デプロイなので版がずれうる——デーモンが先に2値目の
+ * `DroppedTraceOrigin` を返し、読み手側の型定義がまだ1値のまま、という順序が
+ * 実在しうる。`default` 節は `never` 型の変数へ代入するだけで、**その値を
+ * そのまま画面に出さない**（#285 で実際に踏まれた間違い——`never` 型の変数を
+ * 本文として描いてしまい、画面に分岐キーの生の値が出た——と同じ形を作らない）。
+ */
+export function describeDroppedTraceOrigin(origin: DroppedTraceOrigin | undefined): string {
+  switch (origin) {
+    case 'daemon':
+      return (
+        'デーモンのプロセス（クローンを含む）が残した跡だけである。' +
+        '別プロセスの runner が残した跡はここには出ない。'
+      );
+    case undefined:
+      return '';
+    default: {
+      const unreachable: never = origin;
+      void unreachable;
+      return '';
+    }
+  }
+}
+
+/**
+ * 跡が0件だったときの読み方を一言で言う。
+ *
+ * **「無事だった」とは読ませない。** この帳面はプロセスの生存中だけの記憶で、
+ * 再起動・デプロイの入れ替えをまたいで残らない——0件は「握り潰しが1件も
+ * 無かった」ことを意味しない（直前の再起動までに何件落としていても、この
+ * 帳面には何も残らない）。
+ *
+ * **時刻は埋め込まない。** CLI・HTTP・MCP・Web の各面は時刻の整形方法が
+ * 違う（人間可読へ直す関数がそれぞれ別）ので、ここへ埋め込むと
+ * {@link describeDroppedTraceOrigin} と同じ「2箇所で揃える」字面一致の歯が、
+ * 面ごとの時刻整形の違いだけで壊れる。**帳面が数え始めた時刻を出したい面は、
+ * この文の隣に自分で {@link droppedTraceLedgerSince} を描くこと。**
+ */
+export function describeDroppedTraceEmpty(): string {
+  return (
+    'このプロセスではまだ跡（記録・読み出しの握り潰し）が1件も残っていない。' +
+    '0件は「握り潰しが1件も無かった」ことを意味しない —— ' +
+    'この帳面はプロセスの生存中だけの記憶で、再起動・デプロイの入れ替えで消える。'
+  );
+}
+
+/**
+ * 帳面の保持のしかた（上限で古い側から押し出される・それより古い分の在り処）
+ * を一言で言う。
+ *
+ * @param limit `RECENT_TRACE_LIMIT` をそのまま渡すこと。**値をここへ焼き
+ *   込まない**——呼び出し側から渡させることで、上限が動いたときにここも
+ *   一緒に動く（`self_dropped` の `limit` 引数の説明文と同じ形）。
+ */
+export function describeDroppedTraceRetention(limit: number): string {
+  return (
+    `直近 ${limit} 件までしか持たず、溢れた古い側から押し出される。` +
+    'それより古い分はこの帳面の中には無く、器の外の stderr を見るしかない。'
+  );
+}
+
+/**
+ * この帳面が数え始めた時刻（ISO 8601、UTC）。モジュール読み込み時
+ * （＝プロセス起動時）に1度だけ決める。
+ *
+ * **{@link clearRecentTracesForTesting} が呼ばれたら取り直す。** テストが
+ * 帳面を空にしたのに「数え始めた時刻」だけ前のテストの起動時刻のままだと、
+ * `describeDroppedTraceEmpty()` が言う「プロセスの生存中だけの記憶」という
+ * 説明と矛盾して見える。
+ */
+let ledgerSince = new Date().toISOString();
+
+export function droppedTraceLedgerSince(): string {
+  return ledgerSince;
 }
 
 /**

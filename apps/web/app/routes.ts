@@ -25,6 +25,7 @@ export default [
     route('reports/:date?/:reportId?', 'routes/reports.tsx'),
     route('usage', 'routes/usage.tsx'),
     route('tokens', 'routes/tokens.tsx'),
+    route('dropped', 'routes/dropped.tsx'),
     route('schedule', 'routes/schedule.tsx'),
     route('settings', 'routes/settings.tsx'),
     route('*', 'routes/not-found.tsx'),

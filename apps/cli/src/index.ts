@@ -10,6 +10,7 @@ import { accessGrantCommand, accessListCommand, accessRevokeCommand } from './ac
 import { chatCommand } from './chat.js';
 import { conversationsListCommand, conversationsShowCommand } from './conversations.js';
 import * as daemon from './daemon.js';
+import { droppedCommand } from './dropped.js';
 import { loginCommand, logoutCommand, whoamiCommand } from './login.js';
 import {
   memoryEditCommand,
@@ -195,6 +196,19 @@ program
   .description('委譲先の器と、デーモン / runner がいま走っている版を見る')
   .action(async () => {
     await runnersCommand();
+  });
+
+/**
+ * 握り潰しの跡（記録・読み出しの失敗の跡。本文は含まない）。
+ *
+ * 経路は `GET /dropped` の1本だけで、Web UI の `/dropped` 画面とクローンの
+ * MCP 道具 `self_dropped` も同じ帳面を見る（`apps/cli/src/dropped.ts`）。
+ */
+program
+  .command('dropped')
+  .description('握り潰しの跡（記録・読み出しの失敗の跡。本文は含まない）を見る')
+  .action(async () => {
+    await droppedCommand();
   });
 
 /**
