@@ -895,21 +895,36 @@ export interface ManagerPool {
    */
   runnerBacklog(): readonly RunnerBacklogSnapshot[];
   /**
-   * この managerId がいま割り当てられている runner の id（#634）。
+   * この managerId が割り当てられている（いた）runner の id（#634）。
    *
-   * **`record.job.runnerId` の写しで、往復を1本も足さない。** プロセス内の
-   * 像（`#records`）を読むだけ——ストアへも runner へも触れない。
-   * `runnerBacklog()` と組み合わせて呼ぶ用途（`manager_transcript` が
-   * 「生ログが無い」を言い分ける材料。`tools.ts` の
-   * `describeTranscriptMissingLeg` の doc）を想定している。
+   * **走行中の像（`#records`）に在ればそれを返す（`record.job.runnerId` の
+   * 写し。追加のI/Oは無い）。** `#records` に無ければ——`#retire()` が
+   * `this.#records.delete(managerId)` を呼ぶ done/lost/failed/stopped の
+   * 委譲がここに当たる（`grep -Fn -- '  #retire(managerId: string): void {'
+   * packages/core/src/manager.ts`）——**台帳（job store）まで降りて
+   * `job.runnerId` を読む。** `transcript()` が使っているのと同じ経路
+   * （`await this.#stores.jobs.listJobs()` から `id` で探す）である。
    *
-   * **走行中の像（`#records`）に無い managerId は `undefined`。** 台帳
-   * （job store）まで降りて探し直すことはしない——`runnerBacklog()` と同じ
-   * 「キャッシュ限定」の口である。退役済み・存在しない managerId のどちらも
-   * 同じ `undefined` になる（この2つを区別する必要が出たら、そのときの
-   * 用途に合わせて別の口を起こすこと）。
+   * **これが要る理由。** この口の主目的（`manager_transcript` が「生ログが
+   * 無い」を言い分ける材料。`tools.ts` の `describeTranscriptMissingLeg` の
+   * doc）は、まさに「器が焼き直されて委譲が畳まれた後、生ログが3段のどこにも
+   * 無い」場面で使われる——**その場面では委譲は既に done/lost/failed のどれか
+   * で `#retire()` 済みであることが多く、`#records` だけを見ると必ず
+   * `undefined` になる。** 言い分けが要る場面でだけ言い分けられない、という
+   * 形を避けるため、`#records` を先に見たうえで台帳へ降りる。
+   *
+   * **これは「新しい往復」ではないと判断している。** ネットワーク（runner
+   * への HTTP）は一切叩かない——ストアを1回読むだけで、しかも `#records` に
+   * 像が残っている（走行中・退役直後で像がまだ在る）場合は0回。加えて
+   * `manager_transcript` は人間・クローンが明示的に叩く道具であり、しかも
+   * 「生ログが3段のどこにも無かった」枝でしか呼ばれない——`manager_list` の
+   * ような巡回のたびに増える経路ではない。
+   *
+   * **像にも台帳にも無い（id 自体が存在しない）ときは `undefined`。** 3状態
+   * （判定できない／まだ引き渡していない／引き渡せずに消えた）の1つ目へ
+   * 素直に落ちる。
    */
-  runnerIdOf(managerId: string): string | undefined;
+  runnerIdOf(managerId: string): Promise<string | undefined>;
   /** manager_id からセッションの生ログへ降りる（可観測性の最下段）。 */
   transcript(managerId: string): Promise<string | null>;
   /**
@@ -3002,8 +3017,16 @@ class Pool implements ManagerPool {
       .sort((a, b) => a.runnerId.localeCompare(b.runnerId));
   }
 
-  runnerIdOf(managerId: string): string | undefined {
-    return this.#records.get(managerId)?.job.runnerId;
+  async runnerIdOf(managerId: string): Promise<string | undefined> {
+    const record = this.#records.get(managerId);
+    // **像が在ればそれで確定。** 像は `runnerId` を持たないこともあるが
+    // （委譲がまだどの runner にも割り当てられていない）、それ自体が正しい
+    // 「いまの」値なので、そこで台帳へ降りて上書きしようとしない。
+    if (record !== undefined) return record.job.runnerId;
+    // 像に無い（`#retire()` 済み）委譲は台帳（job store）まで降りる
+    // （`transcript()` と同じ経路。interface の doc 参照）。
+    const job = (await this.#stores.jobs.listJobs()).find((entry) => entry.id === managerId);
+    return job?.runnerId;
   }
 
   async transcript(managerId: string): Promise<string | null> {

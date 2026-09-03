@@ -45,7 +45,7 @@ function fakeClone(stores: Stores) {
     runnerBacklog() {
       return [];
     },
-    runnerIdOf() {
+    async runnerIdOf() {
       return undefined;
     },
     // 外部クライアントの経路（本ファイルの検証対象）に `runner_list` 相当の

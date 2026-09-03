@@ -200,9 +200,11 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     runnerBacklog() {
       return runnerBacklog;
     },
-    // 本物（`Pool#runnerIdOf`）と同じ「走行中の像から読む」形を真似る——
-    // `running` は `start()` が積んだ物と同じ配列である。
-    runnerIdOf(managerId: string) {
+    // 本物（`Pool#runnerIdOf`）は像→台帳の順で読むが、この偽物は像と台帳を
+    // 分けて持っていない（`running` が両方を兼ねる）ので、単に非同期化するだけ
+    // でよい——像/台帳の使い分けそのものは `manager.test.ts`（本物の `Pool`）
+    // 側の歯が固定する。
+    async runnerIdOf(managerId: string) {
       return running.find((manager) => manager.managerId === managerId)?.runnerId;
     },
     // クローンの道具はこの口を呼ばない（#567 の計算はデーモンのポーラーが起こす）。

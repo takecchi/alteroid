@@ -35,7 +35,7 @@ describe('Outbox.describeForShutdown / formatOutboxShutdownReport（#634）', ()
     expect(formatOutboxShutdownReport(outbox.describeForShutdown())).toBeNull();
   });
 
-  it('#queue の内訳を種別・managerId ごとに数え、archive を含む場合は archive と managerId が文面に出る', () => {
+  it('#queue の内訳を種別・managerId ごとに数え、archive を含む場合は archive と managerId が文面に出る。「残っている」ではなく「失われる」と書く', () => {
     const outbox = new Outbox();
     outbox.push({ type: 'session', managerId: 'mgr-1', sessionId: 'sess-1' });
     outbox.push({ type: 'archive', managerId: 'mgr-1', body: '生ログの控え' });
@@ -44,7 +44,7 @@ describe('Outbox.describeForShutdown / formatOutboxShutdownReport（#634）', ()
 
     const snapshot = outbox.describeForShutdown();
     expect(snapshot.queue.count).toBe(4);
-    expect(snapshot.subscriber).toBeNull();
+    expect(snapshot.subscriber).toEqual({ status: 'never-subscribed' });
 
     const archiveGroups = snapshot.queue.groups.filter((group) => group.type === 'archive');
     expect(archiveGroups).toHaveLength(2);
@@ -56,7 +56,11 @@ describe('Outbox.describeForShutdown / formatOutboxShutdownReport（#634）', ()
     // ⚠️ ここが基準そのもの — archive と managerId が文面に必ず出ること。
     expect(report).toContain('type=archive managerId=mgr-1');
     expect(report).toContain('type=archive managerId=mgr-2');
-    expect(report).toContain('未送出の出来事が 4 件残っている');
+    // ⚠️ ここも基準そのもの — 「残っている」だけでなく「失われる」と読める
+    // 字が出ること（依頼者第一基準:「失われたなら、失われたことが分かる」）。
+    expect(report).toContain('出来事が 4 件、このプロセスの終了と一緒に失われる');
+    expect(report).toContain('process.exit(0)');
+    expect(report).toContain('プロセス内メモリだけ');
   });
 
   it('同じ種別・managerId の複数件は1組にまとまり、いちばん古い queuedAt を持つ', () => {
@@ -87,16 +91,16 @@ describe('Outbox.describeForShutdown / formatOutboxShutdownReport（#634）', ()
     expect(snapshot.queue.groups[0]).not.toHaveProperty('managerId');
   });
 
-  it('購読側（#probe）の内訳は取れない旨を文面に出す。null（購読が一度も無い）とは別の文面', () => {
+  it('購読側（#probe）の内訳は取れない旨を文面に出す。「一度も無い」とは別の文面', () => {
     const noSubscriber: OutboxShutdownSnapshot = {
       queue: { count: 0, groups: [] },
-      subscriber: null,
+      subscriber: { status: 'never-subscribed' },
     };
     expect(formatOutboxShutdownReport(noSubscriber)).toBeNull();
 
     const withSubscriber: OutboxShutdownSnapshot = {
       queue: { count: 0, groups: [] },
-      subscriber: { count: 2, oldestAt: '2026-01-01T00:00:00.000Z' },
+      subscriber: { status: 'subscribed', count: 2, oldestAt: '2026-01-01T00:00:00.000Z' },
     };
     const report = formatOutboxShutdownReport(withSubscriber);
     expect(report).not.toBeNull();
@@ -105,17 +109,104 @@ describe('Outbox.describeForShutdown / formatOutboxShutdownReport（#634）', ()
     expect(report).not.toContain('購読が一度も無い');
   });
 
-  it('購読が一度も無いとき（subscriber: null）と、購読はあったが0件のとき（{ count: 0 }）を混同しない', () => {
-    const outbox = new Outbox();
-    // listener を一度も attach していない状態 = 購読が無い。
-    expect(outbox.describeForShutdown().subscriber).toBeNull();
+  /**
+   * #634 コーディネーター指摘(2) — 「一度も購読が無い」と「購読されていた
+   * が、いま切れている」を同じ `null` で潰さない。3状態それぞれの文面を
+   * 固定する。
+   */
+  describe('購読側の3状態（一度も無い／いま購読されている／切れている）を混同しない', () => {
+    it('一度も購読が無い: never-subscribed', () => {
+      const outbox = new Outbox();
+      expect(outbox.describeForShutdown().subscriber).toEqual({ status: 'never-subscribed' });
+    });
 
-    const detach = outbox.attach(
-      () => undefined,
-      () => ({ count: 0 }),
-    );
-    expect(outbox.describeForShutdown().subscriber).toEqual({ count: 0 });
-    detach();
+    it('いま購読されている（#probe あり）: subscribed に件数・最古時刻が乗る', () => {
+      const outbox = new Outbox();
+      const detach = outbox.attach(
+        () => undefined,
+        () => ({ count: 3, oldestAt: '2026-01-01T00:00:00.000Z' }),
+      );
+      expect(outbox.describeForShutdown().subscriber).toEqual({
+        status: 'subscribed',
+        count: 3,
+        oldestAt: '2026-01-01T00:00:00.000Z',
+      });
+      detach();
+    });
+
+    it('いま購読されている（#probe 無し）: subscribed だが件数は乗らない（0とは違う）', () => {
+      const outbox = new Outbox();
+      const detach = outbox.attach(() => undefined);
+      expect(outbox.describeForShutdown().subscriber).toEqual({ status: 'subscribed' });
+      detach();
+    });
+
+    it('過去に購読されていたが、いま切れている: detached。件数は取れない（0 を書かない）', () => {
+      const outbox = new Outbox();
+      const detach = outbox.attach(
+        () => undefined,
+        () => ({ count: 5, oldestAt: '2026-01-01T00:00:00.000Z' }),
+      );
+      detach();
+      const snapshot = outbox.describeForShutdown();
+      expect(snapshot.subscriber).toEqual({ status: 'detached' });
+      // ⚠️ ここが基準そのもの — 5件という古い値を引きずらないこと
+      // （detach 前の #probe の値を絶対に読まない）。
+      expect(snapshot.subscriber).not.toHaveProperty('count');
+    });
+
+    it('文面: never-subscribed は「該当なし」、detached は「件数は取れない」、subscribed（#probe あり）は件数を出す——3つとも別の字面', () => {
+      const never = formatOutboxShutdownReport({
+        queue: {
+          count: 1,
+          groups: [{ type: 'note', managerId: 'mgr-1', count: 1, oldestAt: 'x' }],
+        },
+        subscriber: { status: 'never-subscribed' },
+      });
+      const detached = formatOutboxShutdownReport({
+        queue: {
+          count: 1,
+          groups: [{ type: 'note', managerId: 'mgr-1', count: 1, oldestAt: 'x' }],
+        },
+        subscriber: { status: 'detached' },
+      });
+      const subscribed = formatOutboxShutdownReport({
+        queue: {
+          count: 1,
+          groups: [{ type: 'note', managerId: 'mgr-1', count: 1, oldestAt: 'x' }],
+        },
+        subscriber: { status: 'subscribed', count: 2, oldestAt: 'y' },
+      });
+
+      expect(never).toContain('購読が一度も無いので該当なし');
+      expect(detached).toContain('過去に購読されていたが、いま切れている');
+      expect(detached).toContain('件数は取れない');
+      expect(subscribed).toContain('購読側が抱えている分: 2 件');
+
+      // 3つとも文面が違うこと（混同していないことの直接証拠）。
+      expect(new Set([never, detached, subscribed]).size).toBe(3);
+    });
+
+    /**
+     * `#queue` が空でも、`detached` なら黙らない（依頼者第4基準——静かに
+     * 失敗する形を作りこまない）。0件だったと決めつけない。
+     */
+    it('#queue が0件でも、detached なら黙らずに「件数不明」と書く', () => {
+      const outbox = new Outbox();
+      const detach = outbox.attach(() => undefined);
+      detach();
+      expect(outbox.pending).toBe(0);
+
+      const snapshot = outbox.describeForShutdown();
+      expect(snapshot.queue.count).toBe(0);
+      expect(snapshot.subscriber).toEqual({ status: 'detached' });
+
+      const report = formatOutboxShutdownReport(snapshot);
+      expect(report).not.toBeNull();
+      expect(report).toContain('残っているものは無いが');
+      expect(report).toContain('切れており');
+      expect(report).toContain('0件だったとは言い切れない');
+    });
   });
 });
 
@@ -127,6 +218,16 @@ describe('Outbox.subscribed（#634）', () => {
     expect(outbox.subscribed).toBe(true);
     detach();
     expect(outbox.subscribed).toBe(false);
+  });
+
+  it('detach 後も subscribed は false のまま——describeForShutdown 側の「一度は購読された」記憶とは別の軸', () => {
+    const outbox = new Outbox();
+    const detach = outbox.attach(() => undefined);
+    detach();
+    expect(outbox.subscribed).toBe(false);
+    // `subscribed` は「いま」だけを見る。「一度でも購読されたか」は
+    // `describeForShutdown().subscriber.status` の側が持つ。
+    expect(outbox.describeForShutdown().subscriber).toEqual({ status: 'detached' });
   });
 });
 

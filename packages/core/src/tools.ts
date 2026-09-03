@@ -512,11 +512,16 @@ function describeRunnerLegState(snapshot: RunnerBacklogSnapshot): string {
  * 言い分け（#634。PR #628 が指した範囲外の穴——3段どこにも無いとき、
  * 「まだ引き渡していない」と「引き渡せずに消えた」が同じ文面になっていた）。
  *
- * **新しい往復を1本も足さない。** `ManagerPool.runnerIdOf()` はプロセス内の
- * 像（`#records`）を読むだけ、`runnerBacklog()` は直近の heartbeat / 明示
- * 呼びが拾って保存しておいたキャッシュを読むだけである
+ * **ネットワークは一切叩かない。** `ManagerPool.runnerIdOf()` はプロセス内の
+ * 像（`#records`）を優先して読み、無ければ台帳（job store）へ1回だけ降りる
+ * （`manager.ts` の interface doc 参照——退役済みの委譲でも言い分けられる
+ * ようにするため）。`runnerBacklog()` は直近の heartbeat / 明示呼びが拾って
+ * 保存しておいたキャッシュを読むだけである
  * （`grep -Fn -- 'ネットワークを一切叩かない' packages/core/src/manager.ts`
- * が当たる doc のとおり）。
+ * が当たる doc のとおり）。**「新しい往復」ではないと判断している**——
+ * ストアの読み出しであって runner への HTTP ではなく、しかも
+ * `manager_transcript` という明示的な呼び出しの、生ログが無かった枝でしか
+ * 走らない（クローンの巡回回数に比例しない）。
  *
  * **`describeRunnerLegState` をそのまま再利用する。** あの関数が持つ優先順位
  * （1. 器が入れ替わった 2. 繋がっている 3. 落ちている／一度も繋がっていない
@@ -534,13 +539,13 @@ function describeRunnerLegState(snapshot: RunnerBacklogSnapshot): string {
  * 無い・観測できた滞留が0件のいずれも「判定できない」へ倒す（0や偽の時刻を
  * 作らない。AGENTS.md「取れない軸に0の行を作る」）。
  */
-function describeTranscriptMissingLeg(pool: ManagerPool, managerId: string): string {
-  const runnerId = pool.runnerIdOf(managerId);
+async function describeTranscriptMissingLeg(pool: ManagerPool, managerId: string): Promise<string> {
+  const runnerId = await pool.runnerIdOf(managerId);
   if (runnerId === undefined) {
     return (
-      '判定できない（この委譲がいま runner に割り当てられている像を持たない —— ' +
-      '一度も割り当てられなかったのか、走行中の像（#records）から外れて' +
-      'いるだけなのかは、この応答だけでは区別できない）。'
+      '判定できない（この委譲に runner が割り当てられたことを、走行中の像・' +
+      '台帳のどちらからも確認できない —— 一度も割り当てられなかったのか、' +
+      'id 自体が存在しないのかは、この応答だけでは区別できない）。'
     );
   }
 
@@ -4729,7 +4734,7 @@ export function createCloneTools(context: ToolContext) {
               `（${managerId} という id 自体が台帳に無い場合と、id はあるが生ログが` +
               '一度も残らなかった場合のどちらも、この応答だけでは区別できない。' +
               'manager_list に出ているかで id の実在は別途確かめられる。）\n\n' +
-              describeTranscriptMissingLeg(context.managers, managerId),
+              (await describeTranscriptMissingLeg(context.managers, managerId)),
           );
         }
 

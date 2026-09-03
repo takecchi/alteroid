@@ -178,13 +178,28 @@ export interface OutboxShutdownSnapshot {
     groups: OutboxPendingGroup[];
   };
   /**
-   * 購読側（`GET /events` ハンドラ）が抱えている分。**`null` は「購読が
-   * 一度も無い」**——`attach()` が呼ばれていなければ `#probe` は立たず、
-   * そもそも尋ねる相手が存在しない。購読はあったが0件のときは
-   * `{ count: 0 }` になる（`null` と `{ count: 0 }` を同じ意味にしない —
-   * AGENTS.md「判定できないという3つ目の状態を持つ」）。
+   * 購読側（`GET /events` ハンドラ）の状態（#634）。**3つを言い分ける**——
+   * コーディネーターの指摘: 直す前は「一度も購読が無い」と「購読されていた
+   * が、いま切れている」が同じ `null` になり、後者にまで「該当なし」という
+   * 正しくない断定を書いていた。これは #628 が `never-connected` と `down`
+   * を分けたのと同じ軸で、しかも今回いちばん知りたいこと（脚が落ちたまま
+   * 畳んだのか、そもそも一度も繋がらなかったのか）そのものである。
+   *
+   * - `'never-subscribed'`: `attach()` が一度も呼ばれていない。そもそも
+   *   尋ねる相手が存在しない
+   * - `'subscribed'`: いま購読されている（`#listener` が付いている）。
+   *   `#probe` が渡されていれば件数・最古時刻を添える——渡されていなければ
+   *   （`attach()` の `pending` 引数を省いた呼び出し）添えない。**0件と
+   *   「取れない」を混同しない**
+   * - `'detached'`: 過去に購読されたことがあるが、いまは切れている。
+   *   **件数は取れない**（`detach()` の時点で `#probe` も外れるので、
+   *   推測で埋めない——0を書くと「何も失っていない」と読めてしまう。
+   *   `AGENTS.md`「取れない軸に0の行を作る」と同じ理由）
    */
-  subscriber: { count: number; oldestAt?: string } | null;
+  subscriber:
+    | { status: 'never-subscribed' }
+    | { status: 'subscribed'; count?: number; oldestAt?: string }
+    | { status: 'detached' };
 }
 
 export class Outbox {
@@ -197,6 +212,14 @@ export class Outbox {
    * （{@link pending} の doc）。
    */
   #probe: (() => OutboxPending) | null = null;
+  /**
+   * `attach()` が一度でも呼ばれたか（#634）。**一度立てたら戻さない**——
+   * `#listener` / `#probe` は detach で `null` に戻るが、こちらは「過去に
+   * 購読されたことがあるか」という別の軸なので、detach では動かさない。
+   * `describeForShutdown()` が「一度も購読が無い」と「購読されていたが、
+   * いま切れている」を区別するための唯一の材料である。
+   */
+  #everSubscribed = false;
   readonly #now: () => string;
   #nextSeq: OutboxSeq = 1;
 
@@ -249,6 +272,7 @@ export class Outbox {
     }
     this.#listener = listener;
     this.#probe = pending ?? null;
+    this.#everSubscribed = true;
     return () => {
       if (this.#listener !== listener) return;
       this.#listener = null;
@@ -362,30 +386,56 @@ export class Outbox {
       }
     }
     const probed = this.#probe?.();
+    // **3状態を作る（#634）。** `#listener` の有無で「いま購読されている」を
+    // 先に見て、外れていれば `#everSubscribed` で「一度も無い」と「切れた」を
+    // 分ける——detach で戻るのは `#listener` / `#probe` だけで、
+    // `#everSubscribed` は戻らない（`#everSubscribed` の doc）。
+    const subscriber: OutboxShutdownSnapshot['subscriber'] =
+      this.#listener !== null
+        ? {
+            status: 'subscribed',
+            ...(probed === undefined
+              ? {}
+              : {
+                  count: probed.count,
+                  ...(probed.oldestAt === undefined ? {} : { oldestAt: probed.oldestAt }),
+                }),
+          }
+        : this.#everSubscribed
+          ? { status: 'detached' }
+          : { status: 'never-subscribed' };
     return {
       queue: {
         count: this.#queue.length,
         ...(this.#queue[0] === undefined ? {} : { oldestAt: this.#queue[0].queuedAt }),
         groups: [...groups.values()],
       },
-      subscriber:
-        probed === undefined
-          ? null
-          : {
-              count: probed.count,
-              ...(probed.oldestAt === undefined ? {} : { oldestAt: probed.oldestAt }),
-            },
+      subscriber,
     };
   }
 }
 
 /**
  * {@link Outbox.describeForShutdown} の結果を、stderr へ書く1つの文字列へ
- * 畳む（#634）。**`shutdown()`（`apps/runner/src/index.ts`）から呼ぶ。**
+ * 畳む（#634）。**`shutdown()`（`apps/runner/src/index.ts`）から呼ぶ。** 呼ぶのは
+ * `waitForOutboxDrain` で待てるだけ待った**後**——このプロセスは、これを
+ * 書いた直後に `process.exit(0)` する（`drainAndReportOutbox` の呼び出し
+ * 順）。それより後にこのイベントループが回ることは無い。
  *
- * **何も残っていなければ `null`。** 呼び出し側はこのとき何も書かない——
- * 「残っていない」は書く価値の無い行ではなく、書かないことそのものが答えで
- * ある（毎回の shutdown で1行増えると、それ自体がログを埋める）。
+ * **「残っている」ではなく「失われる」と書く。** `Outbox` はプロセス内
+ * メモリだけで、ディスクにも DB にも無い（このファイルに実装がある——確かめ
+ * るには `Outbox` クラスの永続化コードを探せばよい。無い）。**この関数が
+ * 呼ばれる時点で残っているものは、この後どの道 process.exit(0) と一緒に
+ * 消える**——「残っている」だけだと「後で届く」とも読めてしまう
+ * （依頼者第一基準:「失われたなら、失われたことが分かること」）。
+ *
+ * **何も残っていない、かつ購読側の状態が完全に分かっているときだけ `null`。**
+ * 呼び出し側はこのとき何も書かない——「残っていない」は書く価値の無い行
+ * ではなく、書かないことそのものが答えである（毎回の shutdown で1行増える
+ * と、それ自体がログを埋める）。**購読が過去にあって、いま切れている
+ * （`subscriber.status === 'detached'`）ときは、`#queue` が0件でも黙らない**
+ * ——切れた側で何件失っているかはここからは分からず、0件だったと決めつける
+ * と静かに失敗する（依頼者第4基準）。
  *
  * **`archive` を含む種別・managerId を必ず名指しする。** #628 の調査が
  * 指した穴そのもの——`#shipArchive()` は `report` / `ask` と同じ1本の脚
@@ -394,19 +444,35 @@ export class Outbox {
  * 分からない。
  */
 export function formatOutboxShutdownReport(snapshot: OutboxShutdownSnapshot): string | null {
-  const subscriberCount = snapshot.subscriber?.count ?? 0;
-  const total = snapshot.queue.count + subscriberCount;
-  if (total === 0) return null;
+  const subscriberKnownCount =
+    snapshot.subscriber.status === 'subscribed' ? (snapshot.subscriber.count ?? 0) : 0;
+  // **購読が切れた後は、そちら側の件数を0とみなさない。** `#probe` はもう
+  // 呼べないので、購読側に何も残っていなかったことを示す材料が無い
+  // （`OutboxShutdownSnapshot.subscriber` の doc）。
+  const subscriberUnknown = snapshot.subscriber.status === 'detached';
+  const total = snapshot.queue.count + subscriberKnownCount;
+  if (total === 0 && !subscriberUnknown) return null;
 
-  const oldestCandidates = [snapshot.queue.oldestAt, snapshot.subscriber?.oldestAt].filter(
-    (value): value is string => value !== undefined,
-  );
+  const oldestCandidates = [
+    snapshot.queue.oldestAt,
+    snapshot.subscriber.status === 'subscribed' ? snapshot.subscriber.oldestAt : undefined,
+  ].filter((value): value is string => value !== undefined);
   oldestCandidates.sort();
   const oldest = oldestCandidates[0];
 
   const lines = [
-    `alteroid-runner: 畳む直前、未送出の出来事が ${total} 件残っている` +
-      `${oldest === undefined ? '' : `（最古 ${oldest}）`}。`,
+    total > 0
+      ? `alteroid-runner: 畳む直前の出来事が ${total} 件、このプロセスの終了と一緒に失われる` +
+        `${oldest === undefined ? '' : `（最古 ${oldest}）`}。Outbox はプロセス内メモリだけで、` +
+        'ディスクにも DB にも無い——この直後に process.exit(0) するので、これより後は無い。' +
+        `${
+          subscriberUnknown
+            ? ' 購読側が過去に抱えていた分は件数不明——それとは別に、さらに失われている可能性がある。'
+            : ''
+        }`
+      : 'alteroid-runner: 畳む直前、自分の待ち行列（#queue）に残っているものは無いが、' +
+        '過去に購読されていた接続がいま切れており、そちら側で何件失っていたかはここからは' +
+        '分からない（0件だったとは言い切れない）。',
   ];
 
   if (snapshot.queue.groups.length === 0) {
@@ -429,15 +495,37 @@ export function formatOutboxShutdownReport(snapshot: OutboxShutdownSnapshot): st
 
 /**
  * 購読側（`GET /events` ハンドラのローカル `queue` と書きかけの1件）の行を
- * 組み立てる。**内訳は取れないことを、取れないと読める字で出す**——`#probe`
- * が返すのは件数と最古時刻までで、`Outbox.describeForShutdown` の doc の
- * とおり `#queue` のような種別・managerId ごとの集計は持っていない。
+ * 組み立てる（#634。3状態——`OutboxShutdownSnapshot.subscriber` の doc）。
+ *
+ * **`'subscribed'` の内訳は取れないことを、取れないと読める字で出す**
+ * ——`#probe` が返すのは件数と最古時刻までで、`Outbox.describeForShutdown`
+ * の doc のとおり `#queue` のような種別・managerId ごとの集計は持たない。
+ *
+ * **`'detached'` は件数そのものが無い**（`#probe` はもう呼べない）——0を
+ * 書くと「何も失っていない」と誤読される。**`'never-subscribed'` とは
+ * 文面をはっきり分ける**（`never-connected` と `down` を分けた #628 と
+ * 同じ理由）。
  */
 function describeSubscriberLine(subscriber: OutboxShutdownSnapshot['subscriber']): string {
-  if (subscriber === null) return '  購読側が抱えている分: 購読が一度も無いので該当なし。';
-  const oldest = subscriber.oldestAt === undefined ? '' : `（最古 ${subscriber.oldestAt}。`;
-  const closing = subscriber.oldestAt === undefined ? '（' : '';
-  return `  購読側が抱えている分: ${subscriber.count} 件${oldest}${closing}内訳は取れない）。`;
+  switch (subscriber.status) {
+    case 'never-subscribed':
+      return '  購読側が抱えている分: 購読が一度も無いので該当なし。';
+    case 'detached':
+      return (
+        '  購読側が抱えている分: 過去に購読されていたが、いま切れている' +
+        '（件数は取れない——0件だったとは言い切れない）。'
+      );
+    case 'subscribed': {
+      const oldest = subscriber.oldestAt === undefined ? '' : `（最古 ${subscriber.oldestAt}。`;
+      const closing = subscriber.oldestAt === undefined ? '（' : '';
+      const count = subscriber.count ?? '不明';
+      return `  購読側が抱えている分: ${count} 件${oldest}${closing}内訳は取れない）。`;
+    }
+    default: {
+      const unreachable: never = subscriber;
+      return `  購読側が抱えている分: 判定できない（未知の状態 ${JSON.stringify(unreachable)}）。`;
+    }
+  }
 }
 
 /**

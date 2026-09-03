@@ -5082,6 +5082,62 @@ describe('#records の寿命（終端で外れる）', () => {
     await s.pool.stop();
   });
 
+  /**
+   * `Pool.runnerIdOf()`（#634）——`#records` から外れた（`#retire()` 済みの）
+   * 委譲でも、台帳（job store）まで降りて `runnerId` を答えられること。
+   *
+   * **これがいちばん効かせたい場面である。** `manager_transcript` が「生ログが
+   * 3段のどこにも無い」と言うのは、たいてい委譲が既に done/lost/failed の
+   * どれかで畳まれた後——つまり `#records` には既に無い。`#records` だけを
+   * 見る実装だと、いちばん言い分けが要る場面でだけ「判定できない」に落ちる
+   * （コーディネーターの指摘）。
+   */
+  (['done', 'lost', 'failed'] as const).forEach((status) => {
+    it(`closed（${status}）で #records から外れた後も、runnerIdOf() は台帳から runnerId を答える`, async () => {
+      const id = `mgr-runnerid-${status}`;
+      const stores = createMemoryStores();
+      await stores.jobs.putJob(job(id));
+      const fake = swappableRunner('runner-test');
+      fake.state.alive.push({
+        managerId: id,
+        status: 'running',
+        cwd: '/work/project',
+        request: 'DB の移行をやって',
+        waiting: [],
+        sessionId: `sess-${id}`,
+      });
+      const s = setup(undefined, { stores, runner: fake.runner });
+      await s.pool.restore();
+
+      // 走行中は像（#records）から答える——`denials()` と同じ「像が生きている」証拠。
+      expect(s.pool.denials(id)).toEqual([]);
+      await expect(s.pool.runnerIdOf(id)).resolves.toBe('runner-test');
+
+      // 終端させる（`#retire()` を通す）。
+      fake.denied(id, 'Bash');
+      expect(s.pool.denials(id)).toEqual([{ tool: 'Bash', count: 1 }]);
+      fake.closed(id, status, `終端: ${status}`);
+      // **`#records` から外れたことの外部から見える証拠**（上の受け入れ条件
+      // テストと同じ確かめ方）。
+      await expect.poll(() => s.pool.denials(id), { timeout: 2000 }).toEqual([]);
+
+      // **本題**: 像が消えた後でも、台帳から runnerId を引ける。
+      await expect(s.pool.runnerIdOf(id)).resolves.toBe('runner-test');
+
+      await s.pool.stop();
+    });
+  });
+
+  it('runnerIdOf() は、像にも台帳にも存在しない managerId には undefined を返す（判定できないへ落ちる）', async () => {
+    const stores = createMemoryStores();
+    const s = setup(undefined, { stores });
+    await s.pool.restore();
+
+    await expect(s.pool.runnerIdOf('mgr-does-not-exist')).resolves.toBeUndefined();
+
+    await s.pool.stop();
+  });
+
   it('resume_failed で lost になって外れても、manager_send で明示的に起こし直せる（送信の経路が壊れない）', async () => {
     // 「lost へ明示的に話しかけて起こし直す経路」（`resume_failed` のコメント）が
     // `#retire` の後でも通ることを見る。`#load()` が台帳から像を作り直し、

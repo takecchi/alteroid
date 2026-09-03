@@ -116,7 +116,7 @@ function fakeClone() {
     runnerBacklog() {
       return [];
     },
-    runnerIdOf(managerId) {
+    async runnerIdOf(managerId) {
       return managerList.find((manager) => manager.managerId === managerId)?.runnerId;
     },
     // **HTTP の面には出ていない。** `GET /runners` は `deps.runners`

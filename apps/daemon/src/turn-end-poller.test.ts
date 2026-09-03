@@ -36,7 +36,7 @@ function fakeManagers(
     },
     denials: () => [],
     runnerBacklog: () => [],
-    runnerIdOf: () => undefined,
+    runnerIdOf: () => Promise.resolve(undefined),
     runners: () => {
       throw new Error('not implemented');
     },
