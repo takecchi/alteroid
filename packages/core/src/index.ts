@@ -653,6 +653,10 @@ export {
  * ストア実装や新しい起点に無防備なまま置き去りになる）。
  */
 export {
+  describeDroppedTraceEmpty,
+  describeDroppedTraceOrigin,
+  describeDroppedTraceRetention,
+  droppedTraceLedgerSince,
   inboxEventShape,
   journalEntryShape,
   journalRowType,
@@ -662,9 +666,23 @@ export {
   noteDroppedRecord,
   noteUncaught,
   reasonOf,
+  RECENT_TRACE_LIMIT,
+  recentDroppedTraces,
   writeStderrSync,
   type DroppedJournalRowReason,
+  type DroppedTraceOrigin,
 } from './dropped-record.js';
+
+/**
+ * `dropped-record.ts` のテスト専用フック（本番の配線には出てこない）。
+ *
+ * **`captureStderr`（`testing.ts` から export 済み）と対で使う。** 帳面
+ * （`recentDroppedTraces()`）はプロセス（＝テストファイル）の生存中ずっと
+ * 1つを共有するので、前のテストが積んだ行と混ざらないよう、断言の前に
+ * 呼ぶこと（`dropped-record.ts` の doc）。`apps/daemon` のテスト
+ * （`GET /dropped`）が、この帳面を daemon 側から検証するために使う。
+ */
+export { clearRecentTracesForTesting } from './dropped-record.js';
 
 /**
  * 未捕捉の例外・未処理の Promise 拒否に**観測だけの網**を張る（#438）。

@@ -6421,11 +6421,18 @@ describe('self_dropped（自分の跡を器の中から読み戻す。#242）', 
     expect(reply).toContain('limit を上げて');
   });
 
-  it('HTTP には出していない道具である（`self_read` / `self_status` と同じ扱い）', () => {
+  it('この道具そのものは HTTP に出していない（`self_read` / `self_status` と同じ扱い）', () => {
     // **`CLONE_ALLOWED_TOOLS` に載る＝MCP 経由でクローンに配られる、を見る。**
-    // HTTP 側に対応する経路が無いことは `apps/daemon/src/app.ts` の現物（触って
-    // いないファイル）で確認済みで、ここでは道具として配られていることだけを
-    // 固定する。
+    // `self_dropped` という名の経路（`limit` 引数・予算での省略）が
+    // `apps/daemon/src/app.ts` に無いことは現物で確認済みで、ここでは道具
+    // として配られていることだけを固定する。
+    //
+    // **ただし材料の帳面（`recentDroppedTraces()`）は HTTP からも読める
+    // ようになった**（`GET /dropped`。デーモンとクローンは同一プロセスで
+    // 動くため、供給元は1本のまま口だけ増えている——`dropped-record.ts` の
+    // `DroppedTraceOrigin` の doc）。ここが固定するのは「`self_dropped` と
+    // 同じ形（`limit`・予算での切り方）を HTTP へ移植してはいない」ことで
+    // あって、「跡そのものが HTTP から一切見えない」ことではない。
     expect(CLONE_ALLOWED_TOOLS).toContain(qualifiedToolName('self_dropped'));
   });
 });

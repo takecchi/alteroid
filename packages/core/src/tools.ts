@@ -18,7 +18,14 @@ import { isCronExpression } from './cron.js';
 // 終わった仕事へ3本目の委譲を出した（`digest.ts` の `describeManagerState` の
 // doc に実害の詳細がある）。
 import { describeManagerState, describeSessionMissingKind } from './digest.js';
-import { RECENT_TRACE_LIMIT, recentDroppedTraces } from './dropped-record.js';
+import {
+  describeDroppedTraceEmpty,
+  describeDroppedTraceOrigin,
+  describeDroppedTraceRetention,
+  droppedTraceLedgerSince,
+  RECENT_TRACE_LIMIT,
+  recentDroppedTraces,
+} from './dropped-record.js';
 import { toAgentTokenView, tokenAvailabilityAt } from './token-pool.js';
 import {
   describePage,
@@ -3544,8 +3551,21 @@ export function createCloneTools(context: ToolContext) {
      * いない——増やせば `JOURNAL_ENTRY_TYPES` 経由で `openapi.json`（外向きの
      * HTTP 面）が動く（`noteDroppedInboxEvent` の doc と同じ判断）。
      *
-     * **HTTP には出さない。** `self_read` / `self_status` と同じ扱いの
-     * MCP 専用の口で、`apps/daemon/src/app.ts` に対応する経路は無い。
+     * **この道具固有の応答（`limit`・予算での省略）は HTTP には出さない。**
+     * `self_read` / `self_status` と同じ扱いの MCP 専用の口である。**ただし
+     * 材料の帳面（`recentDroppedTraces()`）そのものは、デーモンとクローンが
+     * 同一プロセスで動くため（`dropped-record.ts` の `DroppedTraceOrigin` の
+     * doc）、`GET /dropped`（`apps/daemon/src/app.ts`）からも読める** ——
+     * PRD「入口の等価性」に沿って足された別口で、供給元は1本のまま口だけ
+     * 増えている。この道具を「代わりに使ってよい」ではなく、`limit` や
+     * 予算での省略といったこの道具固有の振る舞いは HTTP には移植していない、
+     * という意味である。
+     *
+     * **応答の字面は `dropped-record.ts` の3関数
+     * （`describeDroppedTraceOrigin` / `describeDroppedTraceEmpty` /
+     * `describeDroppedTraceRetention`）を通す。** `GET /dropped` と生成元を
+     * 1つに揃えるためで、`describeSessionMissingKind` と同じ判断
+     * （生成元を1箇所に閉じる）。
      */
     tool(
       'self_dropped',
@@ -3572,9 +3592,11 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ limit = SELF_DROPPED_DEFAULT_LIMIT }) => {
+        const origin = describeDroppedTraceOrigin('daemon');
+        const since = `この帳面が数え始めたのは ${droppedTraceLedgerSince()}。`;
         const all = recentDroppedTraces();
         if (all.length === 0) {
-          return text('このプロセスではまだ跡（記録・読み出しの握り潰し）が1件も残っていない。');
+          return text([describeDroppedTraceEmpty(), origin, since].join(' '));
         }
         const traces = all.slice(-limit);
         return text(
@@ -3584,11 +3606,12 @@ export function createCloneTools(context: ToolContext) {
               omitted: ({ rest, shown, total }) =>
                 `…ほか古い ${rest} 件は省略（この呼び出しで渡した ${total} 件のうち直近 ${shown} 件だけ出した）。`,
             }),
+            origin,
             all.length > traces.length
               ? `（帳面には全 ${all.length} 件のうち直近 ${traces.length} 件だけをここへ渡した。` +
-                `もっと古い分は limit を上げて呼ぶこと。ただし帳面の保持件数（${RECENT_TRACE_LIMIT}） ` +
-                'を超える分はこのプロセスの中には無く、器の外の stderr を見るしかない。）'
-              : '（このプロセスの生存中だけの記録。再起動・デプロイの入れ替えで消える。）',
+                `もっと古い分は limit を上げて呼ぶこと。${describeDroppedTraceRetention(RECENT_TRACE_LIMIT)} ` +
+                `${since}）`
+              : `（${describeDroppedTraceRetention(RECENT_TRACE_LIMIT)} ${since}）`,
           ].join('\n'),
         );
       },
