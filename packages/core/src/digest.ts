@@ -116,7 +116,31 @@ interface EscalationGroup {
   question: string;
   /** マネージャー発の確認ならその manager_id（`escalation` 行のどれかが持つ）。 */
   managerId: string | undefined;
-  /** グループの中で最も新しい行の `at`（表示順の基準。journal は新しい順）。 */
+  /**
+   * グループの中で最も新しい行の `at`。表示順の基準として実際に使う
+   * （`buildActivityDigest` が束ねた直後にこれで降順ソートする）。
+   *
+   * **`managers`（同じファイル内）の並べ替えとは事情が違う——`jobs.listJobs()`
+   * には順序の契約が無い（`store.ts` の `JobStore` の doc を見ること）が、
+   * `escalation` の材料である `journal.list()` には既定 `order: 'desc'`＝
+   * 新しい順を3実装（fs / pg / memory）すべてで保証する契約がある
+   * （`journal-order-with-contract.ts` の逐語:
+   * `grep -Fn -- '既存の挙動を1文字も変えない' packages/core/src/journal-order-with-contract.ts`）。
+   * ⟹ この契約が守られている限り、`groupEscalations` の Map 挿入順は
+   * すでに `at` 降順になっている（束ねる前の並びが新しい順なら、各
+   * `approvalId` を最初に見た時点の行がそのグループの最新行になるため）ので、
+   * ここでの並べ替えは**通常は no-op である**。
+   *
+   * **それでも明示的に並べ替える理由は、この契約への暗黙の依存をこのファイル
+   * の外へ置かないため。** `journal.list()` 側の契約が将来変わる・呼び出し側
+   * （`buildActivityDigest`）が `order` を指定するようになる・束ねる前に
+   * 別の絞り込みを挟む、といった変更が起きても、この節の表示順の正しさは
+   * `digest.ts` を読むだけで分かる形にしておく。**この安全側の並べ替えは、
+   * 現実の `journal.list()` を使う限りテストでは検出できない**（削除しても
+   * 通常の歯は赤くならない——実際に1文字消して確かめた。`digest.test.ts`
+   * の「束ねた後は at の新しい順に並ぶ」は、契約を守らない `journal.list`
+   * へ差し替えることでこの並べ替えだけを切り出して測っている）。
+   */
   at: string;
   /**
    * この期間の日誌行の中に回答済みの行があれば、その回答。
@@ -125,11 +149,13 @@ interface EscalationGroup {
    * 積まれない）が、在ったとしても「いちばん新しい `at` を持つ行」を採る
    * ——古い行が新しい行を上書きして answer が後退することを防ぐ。
    */
-  answeredInWindow: { answer: string; answeredAt: string | undefined; at: string } | undefined;
+  answeredInWindow: { answer: string; at: string } | undefined;
 }
 
 /**
- * `escalation` 行を `approvalId` で束ねる。
+ * `escalation` 行を `approvalId` で束ねる。**並べ替えはしない**——呼び出し側
+ * （`buildActivityDigest`）が `at` で降順に並べ直す（`EscalationGroup.at` の
+ * doc）。
  *
  * **行の処理順に依存しない。** `journal.list` の既定は新しい順だが、この
  * 関数は「そのグループに答えの行が1本でもあるか」を、`at` を比べて決める
@@ -147,7 +173,7 @@ function groupEscalations(
       entry.answer !== undefined &&
       (answeredInWindow === undefined || entry.at > answeredInWindow.at)
     ) {
-      answeredInWindow = { answer: entry.answer, answeredAt: entry.answeredAt, at: entry.at };
+      answeredInWindow = { answer: entry.answer, at: entry.at };
     }
     byId.set(entry.approvalId, {
       approvalId: entry.approvalId,
@@ -161,6 +187,29 @@ function groupEscalations(
 }
 
 /**
+ * この行の `approvalId` がどの id 空間のものかを言う。**`describeEscalationState`
+ * と違い、承認待ちキューを引かない**（store 呼び出しゼロ）。
+ *
+ * `ask_human`（`tools.ts`）が積む escalation 行は `approvalId: approval.id`
+ * ——承認待ちキュー（`PendingApproval.id`）そのもの——を持ち、`managerId` は
+ * 一度も書かない（`grep -Fn -- "approvalId: approval.id" packages/core/src/tools.ts`
+ * の周辺を見ること）。**`manager.ts` の `case 'ask'` が積む行だけが
+ * `managerId` を持ち**、その `approvalId` は承認待ちキューの id ではなく
+ * runner の `requestId` である（`schema.ts` の `escalation.approvalId` の
+ * doc）。⟹ `managerId` の有無だけで、この2つの id 空間を journal だけから
+ * 区別できる——`getApproval` で実在を確かめなくても、**その id を
+ * `approvals_list id=<id>` へ渡してよい id なのか、`manager_send` の
+ * `requestId` として使う id なのか**は決まる。ここを取り違えると、
+ * 読み手が別の id 空間へ同じ意味で問い合わせて空振りする。
+ */
+function escalationIdLabel(group: EscalationGroup): string {
+  if (group.managerId !== undefined) {
+    return `requestId: ${group.approvalId}（マネージャー ${group.managerId} 発。承認待ちキューの id ではない）`;
+  }
+  return `id: ${group.approvalId}`;
+}
+
+/**
  * 束ねた1問の「いま」を人間の次の一手が変わる形で言う。
  *
  * **日誌の行だけでは決めない。** この期間の日誌に答えの行が無いとき、それは
@@ -169,8 +218,21 @@ function groupEscalations(
  * 区別できない。**権威ある出所は承認待ちキューである** — `ask_human` が積む
  * `PendingApproval` は `answerApproval` が同じ id に対して `answeredAt` /
  * `answer` を上書きする（`putApproval` は id で置き換える。`store.ts` の
- * `JobStore`）ので、`listApprovals()`（`pendingOnly` を外せば回答済みも
- * 含めて全件）を引けば、その時点の「本当の」状態が分かる。
+ * `JobStore`）。
+ *
+ * **ただし承認待ちキューを引く回数は、呼び出し側（`buildActivityDigest`）が
+ * 表示する分（`MAX_ITEMS` 件まで）に絞る。** キューの行を消す口が無い
+ * （`JobStore` は `listApprovals` / `getApproval` / `putApproval` だけ）ので、
+ * 運用のあいだ単調に増える表。全件を毎回引くと、聞いた質問が積み上がるほど
+ * digest 1回のコストが増えてしまう。だから：
+ *
+ * 1. まず `pendingById`（`listApprovals({ pendingOnly: true })` の結果。
+ *    直す前の digest と同じ、未回答分だけの**有界な**取得——呼び出し側で
+ *    1回だけ引き、`describeEscalationState` へは既に取れた Map として渡す）
+ *    を無料で見る。見つかれば「未回答でキューに在る」まで店を叩かずに言える。
+ * 2. そこに無ければ、**この1件だけ** `getApproval` を呼ぶ。呼ばれるのは
+ *    `shownEscalations`（`MAX_ITEMS` 件まで）についてだけなので、呼び出し
+ *    回数はそこで頭打ちになる。
  *
  * **マネージャー発の確認（`approvalId` が `requestId`）はキューに無いのが
  * 正常である。** `manager.ts` の `case 'ask'` は承認待ちキューへは積まない
@@ -186,26 +248,34 @@ function groupEscalations(
  * 経路まで無いとは言えない。「判定できない」という第3の状態として出す
  * （AGENTS.md「静かに失敗する道具」「判定できないという3つ目の状態を持つ」）。
  */
-function describeEscalationState(
+async function describeEscalationState(
+  stores: Stores,
   group: EscalationGroup,
-  approvalsById: ReadonlyMap<string, PendingApproval>,
-): string {
+  pendingById: ReadonlyMap<string, PendingApproval>,
+): Promise<string> {
   if (group.answeredInWindow !== undefined) {
     return `回答: ${brief(group.answeredInWindow.answer, 80)}`;
   }
-  const approval = approvalsById.get(group.approvalId);
-  if (approval !== undefined) {
-    if (approval.answeredAt === undefined) {
-      // 次の一手: 待つ／催促する。id は下の「人間の回答待ち」節と同じなので
-      // 突き合わせられる。
-      return '未回答（承認待ちキューに在る。下の「人間の回答待ち」に同じ id で出ている）';
-    }
+  if (pendingById.has(group.approvalId)) {
+    // 次の一手: 待つ／催促する。id は下の「人間の回答待ち」節と同じなので
+    // 突き合わせられる。
+    return '未回答（承認待ちキューに在る。下の「人間の回答待ち」に同じ id で出ている）';
+  }
+  // ここから先だけ、この1件について承認待ちキューを直接引く。`pendingById`
+  // は未回答分しか持たないので、「本当に無い」のか「答えが付いて
+  // pendingOnly の窓から外れた」のかは、これを呼ばないと分からない。
+  const approval = await stores.jobs.getApproval(group.approvalId);
+  if (approval !== null) {
     // 次の一手: この digest では見えない答えを読みに行く（`approvals_list`
     // id=<approvalId> か、この期間より後の journal_read）。「2」（未回答で
     // キューに在る）とは次の一手が違うので、同じ文言にしない。
+    const answerText =
+      approval.answer === undefined
+        ? '（回答の本文が無い記録——answeredAt はあるが answer が欠けている。台帳の破損の可能性がある）'
+        : brief(approval.answer, 80);
     return (
       `この期間の日誌には未回答の行しか無いが、承認待ちキューでは既に回答済み` +
-      `（この期間の外で回答された）: ${brief(approval.answer ?? '', 80)}`
+      `（この期間の外で回答された）: ${answerText}`
     );
   }
   if (group.managerId !== undefined) {
@@ -314,17 +384,16 @@ export async function buildActivityDigest(
   );
 
   const jobs = await stores.jobs.listJobs();
-  // **`pendingOnly` を外して全件取る。** 未回答の一覧（`pending`）に要るのは
-  // これまでどおり未回答分だけだが、エスカレーション節が権威ある出所として
-  // 引く（`describeEscalationState` の doc）には回答済みも要るので、ここで
-  // 1回だけ全件を取り、両方をこの1回の呼び出しから作る（`approvalId` ごとに
-  // `getApproval` を呼び直すと、束ねた問いの数だけ store 往復が増える）。
-  // フィルタは JS 側で行うが、3実装とも `pendingOnly: true` は同じ配列を
-  // 絞るだけなので順序は変わらない（`storage-fs` / `storage-pg` / `testing.ts`
-  // の `listApprovals` を参照）。
-  const allApprovals = await stores.jobs.listApprovals();
-  const pending = allApprovals.filter((approval) => approval.answeredAt === undefined);
-  const approvalsById = new Map(allApprovals.map((approval) => [approval.id, approval] as const));
+  // **直す前と同じ、有界な取得のまま。** 承認待ちキューの行を消す口が無い
+  // （`JobStore` は `listApprovals` / `getApproval` / `putApproval` だけ）ので、
+  // `pendingOnly` を外して全件を毎回引くと、運用のあいだ聞いた質問が積み上がる
+  // ぶんだけ digest 1回のコストが単調に増える——直す前の digest が引いていた
+  // のは「未回答の分」（人間が答えれば減る＝有界）だった。それに戻す。
+  // エスカレーション節が権威ある出所を引く必要があるときは、表示する分
+  // （`MAX_ITEMS` 件まで）だけ `describeEscalationState` の中で個別に引く
+  // （そちらの doc を参照。呼び出し回数はそこで頭打ちになる）。
+  const pending = await stores.jobs.listApprovals({ pendingOnly: true });
+  const pendingById = new Map(pending.map((approval) => [approval.id, approval] as const));
   // 継続中の依頼は期間で切らない。「いま何を頼まれたままか」は常に材料である
   // （これが無いと、発意 tick のたびに頼まれた仕事を思い出せるかの賭けになる）。
   const standing = await stores.schedules.list();
@@ -364,8 +433,13 @@ export async function buildActivityDigest(
   // **`approvalId` で束ねる。** 日誌は追記専用なので、1つの問いに「聞いた」
   // 行と「答えた」行が別々に積まれる（`EscalationGroup` の doc）。束ねずに
   // 行ごとに描くと、同じ問いが「未回答」と「回答あり」の両方として並ぶ。
+  // **束ねた後、`at` の降順に並べ直す**（`EscalationGroup.at` の doc）。
+  // `journal.list()` の既定（`order: 'desc'`）が新しい順を契約として保証
+  // するので、この並べ替えは通常 no-op だが、その契約への依存をこの関数の
+  // 外（`journal-order-with-contract.ts`）へ置かず、ここで明示する
+  // （同 doc に詳しい理由がある）。
   const escalations = of('escalation');
-  const escalationGroups = groupEscalations(escalations);
+  const escalationGroups = groupEscalations(escalations).sort((a, b) => b.at.localeCompare(a.at));
   const memoryUpdates = of('memory_update');
   const externals = of('external_event');
   /**
@@ -546,11 +620,19 @@ export async function buildActivityDigest(
   if (escalationGroups.length > 0) {
     sections.push('', '## エスカレーション');
     // 束ねたグループを切る（行ではなく問いの数で MAX_ITEMS を適用する）。
+    // **承認待ちキューへの個別の問い合わせ（`describeEscalationState` 内の
+    // `getApproval`）は、ここで切った後の分だけに限られる**——切る前の
+    // `escalationGroups` 全件に対して行うと、束ねてもなお呼び出し回数が
+    // 問いの総数に比例してしまう（`describeEscalationState` の doc）。
     const shownEscalations = escalationGroups.slice(0, MAX_ITEMS);
     for (const group of shownEscalations) {
-      sections.push(
-        `- ${brief(group.question)} → ${describeEscalationState(group, approvalsById)}`,
-      );
+      const state = await describeEscalationState(stores, group, pendingById);
+      // **行そのものに id を出す。** 依頼者の指摘どおり、直す前はここに id が
+      // 一度も出ておらず、状態2の文言が「同じ id で出ている」と言いながら
+      // 突き合わせる id を読み手が質問文から探すしかなかった。id の種類
+      // （承認待ちキューの id か、マネージャーの requestId か）は
+      // `escalationIdLabel` が journal だけから決める（store 呼び出し無し）。
+      sections.push(`- ${brief(group.question)} → ${state}（${escalationIdLabel(group)}）`);
     }
     sections.push(
       ...omitted(escalationGroups.length, shownEscalations.length, journalWhere('escalation')),
