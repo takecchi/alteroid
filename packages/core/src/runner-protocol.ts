@@ -1712,6 +1712,22 @@ export interface RunnerEntry {
   /** `pendingEvents` / `oldestPendingAt` を観測できた時刻（ISO8601）。 */
   pendingEventsObservedAt?: string;
   /**
+   * `pendingEvents` を観測できたのと**同じ応答から拾った instanceId**
+   * （#358 追加分。器の入れ替え検出のため）。
+   *
+   * **`instanceId`（この entry のいまの値）と混同しないこと。** あちらは
+   * 「いまの相手」で随時更新されるが、こちらは「この pendingEvents の値を
+   * 観測したとき、相手は誰だったか」を凍結して持つ——`instanceSince`
+   * （前回との比較で「入れ替わった時刻」を出す値）と `pendingEventsObservedAt`
+   * （前回との比較をしない「観測できた時刻」）が別の性質を持つのと同じ理由で、
+   * 時刻の大小比較ではなく instanceId 同士を直接比べるための値である
+   * （`ManagerPool.runnerBacklog()` の `instanceSwapped` の doc）。
+   *
+   * **省略できる。** instanceId を名乗らない runner／まだ一度も聞けていない
+   * 段階では無い。
+   */
+  pendingEventsInstanceId?: string;
+  /**
    * **その runner が「いま抱えている」と答えた委譲の id**（#579。10秒ごとの
    * 生存確認が `list()`＝`GET /managers` から拾う）。
    *
@@ -2125,6 +2141,11 @@ interface RegistryEntry {
    */
   pendingEventsObservedAt?: string;
   /**
+   * `pendingEvents` と同じ観測から拾った instanceId（#358 追加分。
+   * `RunnerEntry.pendingEventsInstanceId` の写し——ここが正本）。
+   */
+  pendingEventsInstanceId?: string;
+  /**
    * **その runner が「いま抱えている」と答えた委譲の id の集合**（#579。
    * `RunnerEntry.sessions` の写し。同じ doc を持つ）。
    *
@@ -2270,6 +2291,9 @@ class Registry implements RunnerRegistry {
             ...(entry.pendingEventsObservedAt === undefined
               ? {}
               : { pendingEventsObservedAt: entry.pendingEventsObservedAt }),
+            ...(entry.pendingEventsInstanceId === undefined
+              ? {}
+              : { pendingEventsInstanceId: entry.pendingEventsInstanceId }),
           }),
       // runner が抱えているセッション（#579）。**`sessionsObservedAt` と対でしか
       // 渡さない**——観測時刻の無い一覧は「いつの話か」が読めず、`manager.ts` 側が
@@ -2897,6 +2921,15 @@ class Registry implements RunnerRegistry {
       entry.pendingEvents = identity.pendingEvents;
       entry.oldestPendingAt = identity.oldestPendingAt;
       entry.pendingEventsObservedAt = new Date(at).toISOString();
+      // **凍結する instanceId は、この呼び出しより前の `entry.instanceId`
+      // （＝このブロックの時点ではまだ書き換えていない）と、この応答が
+      // 一緒に運んできた `identity.instanceId` の、新しいほう（後者を
+      // 優先）。** この応答が instanceId も運んできたなら、それが
+      // pendingEvents とまったく同じ瞬間の値なのでいちばん正確——運んで
+      // こなかったなら、直前まで知っていた相手のままだったと見なす
+      // （どちらの `entry.instanceId` もまだ更新されていないので、ここで
+      // 読むのは必ず「更新前の値」である）。
+      entry.pendingEventsInstanceId = identity.instanceId ?? entry.instanceId;
     }
 
     const instanceId = identity?.instanceId;

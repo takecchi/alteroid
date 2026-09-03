@@ -628,21 +628,48 @@ export interface RunnerBacklogSnapshot {
   /** この値をいつ観測できたか（`runners({ resources: true })` を呼んだ時刻）。 */
   observedAt: string;
   /**
+   * この滞留（`pendingEvents` / `oldestPendingAt`）を観測したのと**同じ応答
+   * から拾った instanceId**（{@link RunnerEntry.pendingEventsInstanceId} の
+   * 写し。`resources()` 由来のときは、その呼び出し時点の `entry.instanceId`）。
+   *
+   * **これ自体は判定結果ではなく、{@link instanceSwapped} を導く材料である。**
+   * 「観測したとき、相手は誰だったか」を凍結して持つ——比べるのは時刻ではなく
+   * instanceId そのもの。
+   */
+  instanceIdAtObservation?: string;
+  /**
    * この滞留を観測した**あとで**、この runner の `instanceId` が入れ替わったか。
    *
-   * **新しい往復ではない。** `RunnerEntry.instanceSince`（「いまの相手を初めて
-   * 見た時刻」）と、この snapshot の `observedAt` を比べるだけで分かる —
-   * `instanceSince > observedAt` なら、この滞留を観測した後に器が入れ替わっている
-   * （`instanceId` は起動ごとに変わる乱数なので、同じ値へ戻ることは無い）。
+   * **新しい往復ではない。** {@link instanceIdAtObservation}（観測した時点の
+   * instanceId）と、いまの `RunnerEntry.instanceId` を直接比べるだけで分かる。
+   *
+   * ## なぜ時刻の大小比較（`instanceSince > observedAt`）ではないのか
+   *
+   * **以前はその形だった。** `RunnerEntry.instanceSince` は「いまの相手を
+   * 初めて見た時刻」であって「入れ替えを観測した時刻」ではない——そして
+   * `#noteInstance`（`runner-protocol.ts`）は `before === undefined`
+   * （instanceId を一度も聞いていなかった）の**初回の1回でも** `instanceSince`
+   * を立てる（入れ替えではないので `onSwap` は鳴らさないが、値は書く）。
+   * ⟹ 滞留の観測（`observedAt`。`resources()` 由来）が、instanceId を初めて
+   * 聞くより前に起きていると、`instanceSince > observedAt` が真になり、
+   * **入れ替わっていないのに「もう来ない」が出る**（偽陽性）。「もう来ない」は
+   * 依頼者が回収を諦める側へ倒す唯一の状態で、偽陽性の代償は他の3状態と
+   * 非対称に大きい——判定できないを安全側へ倒す、という約束の逆を向く。
+   *
+   * **instanceId 同士を直接比べれば、この筋は成立しない。** 初回の観測でも
+   * 入れ替わりの後の観測でも、{@link instanceIdAtObservation} には**その
+   * 瞬間に分かっていた instanceId**（無ければ拾わない）が入るので、
+   * 「初めて聞けた」と「入れ替わった」を時刻の前後関係で見分ける必要が
+   * そもそも無くなる。`>` / `>=` の境界も無い。
    *
    * **`Outbox` はプロセスのメモリだけ**（`apps/runner/src/index.ts` の
    * `new Outbox()`。永続化は無い）——器が入れ替われば、観測した滞留は
    * runner 側から二度と配られない。`true` はそれを言うための欄である。
    *
-   * **`undefined` は「判定できない」。** どちらか一方でも取れていなければ
-   * （runner が `instanceId` を一度も名乗っていない、この runner がいま名簿に
-   * 居ない、など）比べようが無い——`false` へ倒さない。`false` と言えるのは、
-   * 両方が取れたうえで実際に一致を確認できたときだけである。
+   * **`undefined` は「判定できない」。** {@link instanceIdAtObservation} と
+   * いまの `instanceId` のどちらか一方でも取れていなければ比べようが無い
+   * ——`false` へ倒さない。`false` と言えるのは、両方が取れたうえで実際に
+   * 一致を確認できたときだけである。
    */
   instanceSwapped?: boolean;
   /**
@@ -2836,6 +2863,14 @@ class Pool implements ManagerPool {
               ? {}
               : { oldestPendingAt: resources.oldestPendingAt }),
             observedAt: new Date(this.#now()).toISOString(),
+            // **凍結する instanceId（#358 追加分。`instanceSwapped` の doc）。**
+            // `resources()` はそもそも instanceId を運ばない（採らない設計。
+            // `RunnerClient.resources` の doc）ので、名簿がいま知っている
+            // `entry.instanceId`（この行を実行している瞬間の値）を代わりに
+            // 使う——新しい往復ではない。まだ一度も聞けていなければ省く。
+            ...(entry.instanceId === undefined
+              ? {}
+              : { instanceIdAtObservation: entry.instanceId }),
           });
         }
 
@@ -2877,6 +2912,9 @@ class Pool implements ManagerPool {
    * 両方とも `new Date(...).toISOString()`（UTC・`Z` 終端）で作っているので、
    * 文字列の辞書式比較がそのまま時系列の比較になる（`RunnerBacklogSnapshot` /
    * `RegistryEntry.pendingEventsObservedAt` のどちらも同じ形）。
+   * `instanceIdAtObservation`（`entry.pendingEventsInstanceId` の写し）も
+   * 同じ観測から拾う——`pendingEvents` と同じ応答が運んできた値なので、
+   * この合流の対象に含める。
    *
    * **仕上げに2つ、`entries()` の「いまの」値だけで済む付記をする**
    * （どちらも新しい往復ではない——`entries()` は1回しか呼んでいない）。
@@ -2884,10 +2922,12 @@ class Pool implements ManagerPool {
    * - `legState`: そのまま `entry.legState` を写す（`observedAt` の対を持たない
    *   「いまの」値であることは {@link RunnerBacklogSnapshot.legState} の doc
    *   を参照）。
-   * - `instanceSwapped`: `entry.instanceSince`（いまの相手を初めて見た時刻）が
-   *   この snapshot の `observedAt` より後なら、観測後に器が入れ替わっている
-   *   （{@link RunnerBacklogSnapshot.instanceSwapped} の doc）。どちらかが
-   *   取れなければ付けない（`undefined` のまま＝判定できない）。
+   * - `instanceSwapped`: `instanceIdAtObservation`（観測した時点の instanceId）
+   *   と、いまの `entry.instanceId` を**直接比べる**（{@link
+   *   RunnerBacklogSnapshot.instanceSwapped} の doc——以前は時刻の大小
+   *   比較だったが、初回観測を入れ替えと誤読する筋があったため instanceId
+   *   の直接比較へ変えた）。どちらかが取れなければ付けない（`undefined`
+   *   のまま＝判定できない）。
    */
   runnerBacklog(): readonly RunnerBacklogSnapshot[] {
     const liveEntries = this.#runners.entries();
@@ -2911,6 +2951,9 @@ class Pool implements ManagerPool {
         pendingEvents: entry.pendingEvents,
         ...(entry.oldestPendingAt === undefined ? {} : { oldestPendingAt: entry.oldestPendingAt }),
         observedAt: entry.pendingEventsObservedAt,
+        ...(entry.pendingEventsInstanceId === undefined
+          ? {}
+          : { instanceIdAtObservation: entry.pendingEventsInstanceId }),
       };
       const existing = merged.get(entry.runnerId);
       // **新しいほうを採る。同点（同一 observedAt）は resources() 側を残す**
@@ -2930,9 +2973,12 @@ class Pool implements ManagerPool {
         return {
           ...snapshot,
           ...(live?.legState === undefined ? {} : { legState: live.legState }),
-          ...(live?.instanceSince === undefined
+          // **時刻ではなく instanceId を直接比べる**（`instanceSwapped` の
+          // doc「なぜ時刻の大小比較ではないのか」）。両方取れているときだけ
+          // 判定する——片方でも欠ければ `undefined`（判定できない）のまま。
+          ...(snapshot.instanceIdAtObservation === undefined || live?.instanceId === undefined
             ? {}
-            : { instanceSwapped: live.instanceSince > snapshot.observedAt }),
+            : { instanceSwapped: snapshot.instanceIdAtObservation !== live.instanceId }),
         };
       })
       .sort((a, b) => a.runnerId.localeCompare(b.runnerId));

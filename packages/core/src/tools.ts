@@ -474,8 +474,21 @@ function describeRunnerLegState(snapshot: RunnerBacklogSnapshot): string {
   // **網羅性は `assertNeverRunnerLegStatus` が守る**（`RunnerLegState` の
   // doc）。状態が増えたら `default` の型がここで `tsc` を落とす。
   switch (leg.status) {
-    case 'connected':
-      return 'まだ届いていない。届く見込みがある（脚は繋がっている。待ってよい）';
+    case 'connected': {
+      // **取れたものを出す。閾値で「死んでいる」を判定しに行かない**——
+      // 判定を足すと新しい「静かに間違える判定」を作る側になる（依頼者の
+      // 指摘）。デーモン自身の無音の見張り（45,000ms で切る契約。
+      // `RUNNER_STREAM_SILENCE_TIMEOUT_MS`）が既にあるので、それより古い
+      // `lastByteAt` が異常であることは読み手の側で言える。
+      const lastByteAt =
+        leg.lastByteAt === undefined
+          ? '開いてから1バイトも受け取っていない'
+          : `最後にバイトを受け取ったのは ${leg.lastByteAt}`;
+      return (
+        'まだ届いていない。届く見込みがある' +
+        `（脚は繋がっている。待ってよい。${leg.since} から、${lastByteAt}）`
+      );
+    }
     case 'down': {
       const detail = [
         leg.since === undefined ? undefined : `${leg.since} から`,

@@ -4060,7 +4060,7 @@ describe('クローンの道具', () => {
    * その割り当ての歯である。
    */
   describe('runner の滞留の行に、脚（デーモン自身の側の端）の状態を添える', () => {
-    it('繋がっている: 「まだ届いていない。届く見込みがある」（待ってよい）', async () => {
+    it('繋がっている: 「まだ届いていない。届く見込みがある」（待ってよい）。バイトが1つも来ていなければその旨を出す', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
       h.setRunnerBacklog([
@@ -4068,6 +4068,10 @@ describe('クローンの道具', () => {
           runnerId: 'runner-test',
           pendingEvents: 3,
           observedAt: '2026-08-27T00:30:00.000Z',
+          // **`lastByteAt` を意図的に付けない**——「開いてはいるが、まだ
+          // 1バイトも来ていない」（`legState` の doc）を模す。依頼者の
+          // 指摘: 繋がっているのと繋がったまま死んでいるのが同じ文面に
+          // ならないよう、取れた材料（`since` / `lastByteAt`）は必ず出す。
           legState: { status: 'connected', since: '2026-08-27T00:00:00.000Z' },
         },
       ]);
@@ -4076,9 +4080,40 @@ describe('クローンの道具', () => {
 
       expect(reply).toContain('まだ届いていない');
       expect(reply).toContain('待ってよい');
+      // **`since` を出す。**
+      expect(reply).toContain('2026-08-27T00:00:00.000Z');
+      // **`lastByteAt` が無いことがそのまま読める字が出る**（0や偽の時刻を
+      // 作らない——AGENTS.md 地雷表）。
+      expect(reply).toContain('開いてから1バイトも受け取っていない');
       // **落ちている側の文言（「再接続するまで」）と混ざっていないこと。**
       expect(reply).not.toContain('再接続するまで');
       expect(reply).not.toContain('もう来ない');
+    });
+
+    it('繋がっている: バイトを受け取っていれば、その時刻を出す（「繋がっている」と「繋がったまま死んでいる」を同じ文面にしない）', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      h.setRunnerBacklog([
+        {
+          runnerId: 'runner-test',
+          pendingEvents: 3,
+          observedAt: '2026-08-27T00:30:00.000Z',
+          legState: {
+            status: 'connected',
+            since: '2026-08-27T00:00:00.000Z',
+            lastByteAt: '2026-08-27T00:29:55.000Z',
+          },
+        },
+      ]);
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('まだ届いていない');
+      expect(reply).toContain('2026-08-27T00:00:00.000Z');
+      // **`lastByteAt` が読める。** 「1バイトも受け取っていない」とは
+      // 出ない（材料が在るのに無いことにしない）。
+      expect(reply).toContain('2026-08-27T00:29:55.000Z');
+      expect(reply).not.toContain('開いてから1バイトも受け取っていない');
     });
 
     it('落ちている: 「⚠ 再接続するまで1件も届かない」に、いつから・理由・次の再試行を添える', async () => {

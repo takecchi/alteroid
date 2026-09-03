@@ -9,6 +9,7 @@ import type {
   RunnerCredentialFingerprint,
   RunnerLegState,
   RunnerManagerState,
+  RunnerPlacementResources,
   RunnerProfileFingerprint,
   RunnerProfileResult,
 } from './runner-protocol.js';
@@ -23,7 +24,9 @@ import type {
  *    「観測していない」（`legState` を持たない実装）が `'never-connected'`
  *    へ倒れないこと
  * 3. `ManagerPool.runnerBacklog()` が `entries()` の「いまの」`legState` /
- *    `instanceSince` を使って `legState` / `instanceSwapped` を付け足すこと
+ *    `instanceId` を使って `legState` / `instanceSwapped` を付け足すこと
+ *    （観測時に凍結した instanceId といまの instanceId の直接比較——時刻の
+ *    大小比較だと、初回の名乗りを入れ替えと誤読する偽陽性があった）
  *
  * `HttpRunner` 自身が実際に状態を遷移させることは `apps/daemon/src/
  * runner-client.test.ts` 側の歯が持つ（ここは `RunnerClient` の口としての
@@ -102,6 +105,20 @@ class LegStateRunner implements RunnerClient {
     };
   }
 
+  /**
+   * `runners({ resources: true })` の明示呼びから叩かれる、もう1つの由来
+   * （`identity()` の heartbeat とは別の口）。**instanceId を運ばない**——
+   * 実物の `RunnerClient.resources` と同じ作法（`resources()` の doc）。
+   */
+  async resources(): Promise<RunnerPlacementResources | undefined> {
+    if (this.pendingEvents === undefined) return undefined;
+    return {
+      managers: 0,
+      pendingEvents: this.pendingEvents,
+      ...(this.oldestPendingAt === undefined ? {} : { oldestPendingAt: this.oldestPendingAt }),
+    };
+  }
+
   // 以下は名簿が触らない口。
   async connect(): Promise<void> {}
   async start(): Promise<void> {}
@@ -175,7 +192,7 @@ describe('RunnerRegistry#entries() は client.legState をその場で読む', (
 // 3. runnerBacklog() が legState / instanceSwapped を付け足す
 // ---------------------------------------------------------------------------
 
-describe('ManagerPool.runnerBacklog() が legState といまの instanceSince から instanceSwapped を付け足す', () => {
+describe('ManagerPool.runnerBacklog() が legState と、観測時に凍結した instanceId から instanceSwapped を付け足す', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-27T00:00:00.000Z'));
@@ -199,6 +216,7 @@ describe('ManagerPool.runnerBacklog() が legState といまの instanceSince �
         runnerId: 'runner-a',
         pendingEvents: 5,
         observedAt: '2026-08-27T00:00:10.000Z',
+        instanceIdAtObservation: 'boot-1',
         legState: { status: 'connected', since: '2026-08-27T00:00:00.000Z' },
         instanceSwapped: false,
       },
@@ -230,17 +248,18 @@ describe('ManagerPool.runnerBacklog() が legState といまの instanceSince �
    * `instanceSwapped: true`。
    *
    * 仕込み方: t=10s の heartbeat で `pendingEvents=5` / `instanceId='boot-1'`
-   * を初めて観測する（この回、`pendingEventsObservedAt` と `instanceSince`
-   * は同じ heartbeat 呼び出しから同時に書かれるので、同時刻になる——まだ
-   * 入れ替わっていないので `instanceSwapped: false` が正しい）。
+   * を初めて観測する——`entry.pendingEventsInstanceId`（`instanceIdAtObservation`
+   * の元）はこの同じ応答から `'boot-1'` を凍結する。
    *
    * 続く t=20s の heartbeat では **`pendingEvents` を答えない**（新しい器が
    * まだ資源を報告していない状態を模す）まま `instanceId` だけ `'boot-2'`
    * を名乗らせる——`#noteInstance` は `pendingEvents` が無ければ
-   * `entry.pendingEvents` / `pendingEventsObservedAt` に触らない
-   * （`RegistryEntry.pendingEvents` の doc）ので、`observedAt` は t=10s の
-   * まま古い値が残り、`instanceSince` だけが t=20s へ進む。**この食い違いが
-   * `instanceSwapped: true` の材料である。**
+   * `entry.pendingEvents` / `pendingEventsObservedAt` / `pendingEventsInstanceId`
+   * のどれにも触らない（`RegistryEntry.pendingEvents` の doc）ので、
+   * `instanceIdAtObservation` は `'boot-1'` のまま——一方 `entry.instanceId`
+   * （いまの値）は `'boot-2'` へ進む。**この食い違い（凍結した instanceId ≠
+   * いまの instanceId）が `instanceSwapped: true` の材料である**（時刻の
+   * 大小比較ではない——`RunnerBacklogSnapshot.instanceSwapped` の doc）。
    */
   it('滞留を観測した後に器が入れ替わったら instanceSwapped: true', async () => {
     const runner = new LegStateRunner('runner-a', 'boot-1');
@@ -257,6 +276,7 @@ describe('ManagerPool.runnerBacklog() が legState といまの instanceSince �
         runnerId: 'runner-a',
         pendingEvents: 5,
         observedAt: '2026-08-27T00:00:10.000Z',
+        instanceIdAtObservation: 'boot-1',
         legState: { status: 'connected', since: '2026-08-27T00:00:10.000Z' },
         instanceSwapped: false,
       },
@@ -273,12 +293,66 @@ describe('ManagerPool.runnerBacklog() が legState といまの instanceSince �
     // `#noteInstance` が触っていない）。
     expect(snapshot?.pendingEvents).toBe(5);
     expect(snapshot?.observedAt).toBe('2026-08-27T00:00:10.000Z');
+    // **凍結した instanceId も t=10s のまま**（同じ理由）。
+    expect(snapshot?.instanceIdAtObservation).toBe('boot-1');
     // **legState は「いま」の値**（`entries()` を読み直すので、新しい器の
     // `'connected'` がそのまま出る——ここだけを見ると「待ってよい」に
     // 誤読しうる。`instanceSwapped` を必ず一緒に読むべき理由がこれである）。
     expect(snapshot?.legState).toEqual({ status: 'connected', since: '2026-08-27T00:00:20.000Z' });
-    // **本題:入れ替わりを検出できている。**
+    // **本題:入れ替わりを検出できている（凍結した instanceId ≠ いまの instanceId）。**
     expect(snapshot?.instanceSwapped).toBe(true);
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  /**
+   * **偽陽性の確認（依頼者の指摘）。** `instanceSince`（いまの相手を初めて
+   * 見た時刻）を `observedAt` と比べる旧実装では、「滞留を観測した時点で
+   * instanceId をまだ一度も聞けていなかった」ケースで、その後の**初めての**
+   * 名乗り（入れ替えではない）を入れ替えと誤読しうった——`#noteInstance`
+   * は `before === undefined`（一度も聞いていなかった）の初回でも
+   * `instanceSince` を立てるが、それは入れ替えではない（`onSwap` も
+   * 鳴らさない）。
+   *
+   * 仕込み方: `resources()`（`runners({ resources: true })` 由来。
+   * instanceId を運ばない）だけで滞留を観測し（T1）、その時点では
+   * `entry.instanceId` がまだ `undefined`。その後、`identity()` の
+   * heartbeat では **`pendingEvents` を答えない**（キャッシュを新しい
+   * 観測で上書きさせない）まま instanceId だけ初めて名乗らせる（T2 > T1）。
+   * `instanceIdAtObservation` を使う新実装では、T1 の snapshot に
+   * `instanceIdAtObservation` 自体が無い（凍結する材料が無かった）ので
+   * `instanceSwapped` は付かない（`undefined`＝判定できない）——**`true`
+   * にはならない。**
+   */
+  it('滞留を観測した時点で instanceId を一度も聞けていなければ、その後の初めての名乗りを入れ替えと誤読しない（偽陽性の確認）', async () => {
+    const runner = new LegStateRunner('runner-a', undefined);
+    const stores = createMemoryStores();
+    const registry = createRunnerRegistry([runner]);
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    // T1: resources() 由来の観測。instanceId はまだ誰も聞いていない。
+    runner.pendingEvents = 9;
+    runner.oldestPendingAt = '2026-08-20T00:00:00.000Z';
+    await pool.runners({ resources: true });
+
+    let snapshot = pool.runnerBacklog!()[0];
+    expect(snapshot?.pendingEvents).toBe(9);
+    expect(snapshot).not.toHaveProperty('instanceIdAtObservation');
+    expect(snapshot).not.toHaveProperty('instanceSwapped');
+
+    // T2 > T1: heartbeat で instanceId を初めて名乗る（入れ替えではない）。
+    // pendingEvents は答えない——キャッシュ（T1）を上書きさせない。
+    runner.pendingEvents = undefined;
+    runner.instanceId = 'boot-1';
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    snapshot = pool.runnerBacklog!()[0];
+    // 滞留の値は T1 のキャッシュのまま。
+    expect(snapshot?.pendingEvents).toBe(9);
+    // **本題: 偽陽性になっていない。**
+    expect(snapshot?.instanceSwapped).not.toBe(true);
+    expect(snapshot).not.toHaveProperty('instanceSwapped');
 
     await pool.stop();
     await registry.stop();
