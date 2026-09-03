@@ -894,6 +894,22 @@ export interface ManagerPool {
    * ので、実行時の振る舞いは何も変わらない。
    */
   runnerBacklog(): readonly RunnerBacklogSnapshot[];
+  /**
+   * この managerId がいま割り当てられている runner の id（#634）。
+   *
+   * **`record.job.runnerId` の写しで、往復を1本も足さない。** プロセス内の
+   * 像（`#records`）を読むだけ——ストアへも runner へも触れない。
+   * `runnerBacklog()` と組み合わせて呼ぶ用途（`manager_transcript` が
+   * 「生ログが無い」を言い分ける材料。`tools.ts` の
+   * `describeTranscriptMissingLeg` の doc）を想定している。
+   *
+   * **走行中の像（`#records`）に無い managerId は `undefined`。** 台帳
+   * （job store）まで降りて探し直すことはしない——`runnerBacklog()` と同じ
+   * 「キャッシュ限定」の口である。退役済み・存在しない managerId のどちらも
+   * 同じ `undefined` になる（この2つを区別する必要が出たら、そのときの
+   * 用途に合わせて別の口を起こすこと）。
+   */
+  runnerIdOf(managerId: string): string | undefined;
   /** manager_id からセッションの生ログへ降りる（可観測性の最下段）。 */
   transcript(managerId: string): Promise<string | null>;
   /**
@@ -2984,6 +3000,10 @@ class Pool implements ManagerPool {
         };
       })
       .sort((a, b) => a.runnerId.localeCompare(b.runnerId));
+  }
+
+  runnerIdOf(managerId: string): string | undefined {
+    return this.#records.get(managerId)?.job.runnerId;
   }
 
   async transcript(managerId: string): Promise<string | null> {

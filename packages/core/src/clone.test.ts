@@ -1263,6 +1263,7 @@ describe('クローン — マネージャーの確認がいまも待たれて�
       },
       denials: () => [],
       runnerBacklog: () => [],
+      runnerIdOf: () => undefined,
       runners: () => {
         throw new Error('not implemented');
       },
@@ -2294,6 +2295,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
       list: () => Promise.resolve([summaryOf('mgr-alive', true), summaryOf('mgr-dead', false)]),
       denials: () => [],
       runnerBacklog: () => [],
+      runnerIdOf: () => undefined,
       runners: () => {
         throw new Error('not implemented');
       },

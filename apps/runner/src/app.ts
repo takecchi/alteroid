@@ -140,6 +140,53 @@ export interface OutboxPending {
  */
 export type OutboxSeq = number;
 
+/**
+ * `#queue` に残っている分の、種別・managerId ごとの内訳1行（#634）。
+ *
+ * **`#queue` だけの内訳である。** 購読側（`GET /events` ハンドラのローカル
+ * `queue` と書きかけの1件）が抱えている分はここには出ない——`#probe` が
+ * 返すのは件数と最古時刻だけで、中身（`RunnerEvent` そのもの）を持たない
+ * ためである（`Outbox.pending` の doc）。取れないものを取れた顔で出さない
+ * （AGENTS.md の地雷表）。
+ */
+export interface OutboxPendingGroup {
+  /** `RunnerEvent.type`。 */
+  type: string;
+  /** `hello` 以外は必ず持つ。`hello` だけ managerId が無い。 */
+  managerId?: string;
+  count: number;
+  /** この組の中でいちばん古い `queuedAt`。 */
+  oldestAt: string;
+}
+
+/**
+ * 畳む直前に「何を失うのか」を名指しするための、`Outbox` の1回分のスナップ
+ * ショット（#634）。`OutboxPending`（`/health` が返す合計だけの形）とは別に
+ * 用意する——`/health` の応答は増やさない（wire は1バイトも増えない。
+ * `describeForShutdown()` は runner プロセスの内側だけで完結する）。
+ */
+export interface OutboxShutdownSnapshot {
+  /**
+   * `#queue`（まだ一度も listener へ渡していない分）。listener が付いて
+   * いる間は常に空——`push()` は listener が居ればそのまま渡すので、
+   * ここには積まれない（`Outbox.pending` の doc の表と同じ非対称）。
+   */
+  queue: {
+    count: number;
+    /** 1件も無ければ省く。 */
+    oldestAt?: string;
+    groups: OutboxPendingGroup[];
+  };
+  /**
+   * 購読側（`GET /events` ハンドラ）が抱えている分。**`null` は「購読が
+   * 一度も無い」**——`attach()` が呼ばれていなければ `#probe` は立たず、
+   * そもそも尋ねる相手が存在しない。購読はあったが0件のときは
+   * `{ count: 0 }` になる（`null` と `{ count: 0 }` を同じ意味にしない —
+   * AGENTS.md「判定できないという3つ目の状態を持つ」）。
+   */
+  subscriber: { count: number; oldestAt?: string } | null;
+}
+
 export class Outbox {
   readonly #queue: { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[] = [];
   #listener: ((event: RunnerEvent, seq: OutboxSeq) => void) | null = null;
@@ -273,6 +320,124 @@ export class Outbox {
     if (theirs === undefined) return mine;
     return theirs < mine ? theirs : mine;
   }
+
+  /**
+   * いま listener（`GET /events` の購読）が付いているか（#634）。
+   *
+   * **畳む経路が「待ってよいか」を決めるための材料。** 脚が繋がっていなければ
+   * 待っても誰も引き取らない——`#queue` に積まれたままの分は、次にデーモンが
+   * 繋ぎ直すまで動かない。無条件に待つと、器の焼き直しのたびに shutdown が
+   * 延びる（listener が一度も付かない = デーモン側が既に落ちている、という
+   * ありふれた場合を含む）。
+   */
+  get subscribed(): boolean {
+    return this.#listener !== null;
+  }
+
+  /**
+   * 畳む直前に「何が残っているか」を名指しするための1回分のスナップショット
+   * （#634。`OutboxShutdownSnapshot` の doc）。
+   *
+   * **`#queue` は種別・managerId ごとに集計できる**（中身の `RunnerEvent` を
+   * 直接持っているため）。**購読側（`#probe`）は集計できない**（件数と最古
+   * 時刻しか返してこない——`Outbox.pending` の doc）。取れない内訳を推測で
+   * 埋めない。
+   */
+  describeForShutdown(): OutboxShutdownSnapshot {
+    const groups = new Map<string, OutboxPendingGroup>();
+    for (const item of this.#queue) {
+      const managerId = 'managerId' in item.event ? item.event.managerId : undefined;
+      const key = `${item.event.type} ${managerId ?? ''}`;
+      const existing = groups.get(key);
+      if (existing === undefined) {
+        groups.set(key, {
+          type: item.event.type,
+          ...(managerId === undefined ? {} : { managerId }),
+          count: 1,
+          oldestAt: item.queuedAt,
+        });
+      } else {
+        existing.count += 1;
+        if (item.queuedAt < existing.oldestAt) existing.oldestAt = item.queuedAt;
+      }
+    }
+    const probed = this.#probe?.();
+    return {
+      queue: {
+        count: this.#queue.length,
+        ...(this.#queue[0] === undefined ? {} : { oldestAt: this.#queue[0].queuedAt }),
+        groups: [...groups.values()],
+      },
+      subscriber:
+        probed === undefined
+          ? null
+          : {
+              count: probed.count,
+              ...(probed.oldestAt === undefined ? {} : { oldestAt: probed.oldestAt }),
+            },
+    };
+  }
+}
+
+/**
+ * {@link Outbox.describeForShutdown} の結果を、stderr へ書く1つの文字列へ
+ * 畳む（#634）。**`shutdown()`（`apps/runner/src/index.ts`）から呼ぶ。**
+ *
+ * **何も残っていなければ `null`。** 呼び出し側はこのとき何も書かない——
+ * 「残っていない」は書く価値の無い行ではなく、書かないことそのものが答えで
+ * ある（毎回の shutdown で1行増えると、それ自体がログを埋める）。
+ *
+ * **`archive` を含む種別・managerId を必ず名指しする。** #628 の調査が
+ * 指した穴そのもの——`#shipArchive()` は `report` / `ask` と同じ1本の脚
+ * （`emit`）を通るので、脚が落ちたまま畳むと生ログの退避（アーカイブ）も
+ * 他の出来事と同じ箱の中で静かに消える。件数だけでは「何が」失われたのかが
+ * 分からない。
+ */
+export function formatOutboxShutdownReport(snapshot: OutboxShutdownSnapshot): string | null {
+  const subscriberCount = snapshot.subscriber?.count ?? 0;
+  const total = snapshot.queue.count + subscriberCount;
+  if (total === 0) return null;
+
+  const oldestCandidates = [snapshot.queue.oldestAt, snapshot.subscriber?.oldestAt].filter(
+    (value): value is string => value !== undefined,
+  );
+  oldestCandidates.sort();
+  const oldest = oldestCandidates[0];
+
+  const lines = [
+    `alteroid-runner: 畳む直前、未送出の出来事が ${total} 件残っている` +
+      `${oldest === undefined ? '' : `（最古 ${oldest}）`}。`,
+  ];
+
+  if (snapshot.queue.groups.length === 0) {
+    lines.push('  自分の待ち行列（#queue）: 0件。');
+  } else {
+    lines.push('  自分の待ち行列（#queue）の内訳:');
+    for (const group of snapshot.queue.groups) {
+      lines.push(
+        `    type=${group.type}` +
+          `${group.managerId === undefined ? '' : ` managerId=${group.managerId}`}` +
+          ` count=${group.count} oldest=${group.oldestAt}`,
+      );
+    }
+  }
+
+  lines.push(describeSubscriberLine(snapshot.subscriber));
+
+  return `${lines.join('\n')}\n`;
+}
+
+/**
+ * 購読側（`GET /events` ハンドラのローカル `queue` と書きかけの1件）の行を
+ * 組み立てる。**内訳は取れないことを、取れないと読める字で出す**——`#probe`
+ * が返すのは件数と最古時刻までで、`Outbox.describeForShutdown` の doc の
+ * とおり `#queue` のような種別・managerId ごとの集計は持っていない。
+ */
+function describeSubscriberLine(subscriber: OutboxShutdownSnapshot['subscriber']): string {
+  if (subscriber === null) return '  購読側が抱えている分: 購読が一度も無いので該当なし。';
+  const oldest = subscriber.oldestAt === undefined ? '' : `（最古 ${subscriber.oldestAt}。`;
+  const closing = subscriber.oldestAt === undefined ? '（' : '';
+  return `  購読側が抱えている分: ${subscriber.count} 件${oldest}${closing}内訳は取れない）。`;
 }
 
 /**
