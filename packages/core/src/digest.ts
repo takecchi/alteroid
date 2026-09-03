@@ -548,7 +548,9 @@ export async function buildActivityDigest(
     // 束ねたグループを切る（行ではなく問いの数で MAX_ITEMS を適用する）。
     const shownEscalations = escalationGroups.slice(0, MAX_ITEMS);
     for (const group of shownEscalations) {
-      sections.push(`- ${brief(group.question)} → ${describeEscalationState(group, approvalsById)}`);
+      sections.push(
+        `- ${brief(group.question)} → ${describeEscalationState(group, approvalsById)}`,
+      );
     }
     sections.push(
       ...omitted(escalationGroups.length, shownEscalations.length, journalWhere('escalation')),
