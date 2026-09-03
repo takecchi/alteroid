@@ -248,6 +248,336 @@ describe('活動の要約', () => {
 });
 
 /**
+ * `## エスカレーション` 節が `approvalId` で束ねること。
+ *
+ * 日誌は追記専用なので、`ask_human` が積む未回答の行と `answerApproval` が
+ * 積む回答済みの行（同じ `approvalId`、別の行）が同じ digest 期間に両方
+ * 入ることがある。束ねずに行ごとに描くと、同じ問いが「未回答」と
+ * 「回答あり」の両方として並ぶ——実際にクローンがこれで、既に答えを
+ * もらっている件をもう一度聞くか、答えを無視して待ち続ける形の実害が出た。
+ */
+describe('## エスカレーション — approvalId で束ねる（同じ問いの二重表示を直す）', () => {
+  const since = () => new Date(Date.now() - 60_000);
+
+  /**
+   * **これが直した実害そのものの再現。** 「聞いた」行（未回答）と「答えた」行
+   * （回答済み）が同じ `approvalId` を持ち、同じ digest 期間に両方入る
+   * ——実際の観測（2026-09-03、hub への issue 起票の可否）と同じ形。
+   */
+  it('同じ approvalId の「聞いた」行と「答えた」行は1行に束ね、「回答あり」だけを出す（二重表示にしない）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putApproval({
+      id: 'ap-hub-issue',
+      createdAt: new Date().toISOString(),
+      question: 'virchamate の hub に、私が ISSUE を立ててよいですか',
+      answeredAt: new Date().toISOString(),
+      answer: '立てて良いです',
+    });
+    // 「聞いた」行（未回答のまま積まれた最初の行）。
+    await stores.journal.append({
+      type: 'escalation',
+      question: 'virchamate の hub に、私が ISSUE を立ててよいですか',
+      approvalId: 'ap-hub-issue',
+    });
+    // 「答えた」行（`answerApproval` が積む、別の行）。
+    await stores.journal.append({
+      type: 'escalation',
+      question: 'virchamate の hub に、私が ISSUE を立ててよいですか',
+      approvalId: 'ap-hub-issue',
+      answeredAt: new Date().toISOString(),
+      answer: '立てて良いです',
+    });
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    expect(digest).toContain('エスカレーション: 1 件');
+    const escalationLines = digest.split('\n').filter((line) => line.includes('virchamate の hub'));
+    expect(escalationLines).toHaveLength(1);
+    expect(escalationLines[0]).toContain('回答: 立てて良いです');
+    expect(escalationLines[0]).not.toContain('未回答');
+    // **エスカレーション行そのものに id が出る。** `digest.toContain(id)` は
+    // 節をまたいで当たる（承認待ちキューの id が別の節に出ているだけでも
+    // 緑になる）ので、取り出した行に対して直接 assert する。
+    expect(escalationLines[0]).toContain('id: ap-hub-issue');
+  });
+
+  it('未回答で承認待ちキューに在る（次の一手: 待つ／催促する）。回答待ち節と同じ id が行そのものに出る', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putApproval({
+      id: 'ap-pending',
+      createdAt: new Date().toISOString(),
+      question: '本番へ流してよいか',
+    });
+    await stores.journal.append({
+      type: 'escalation',
+      question: '本番へ流してよいか',
+      approvalId: 'ap-pending',
+    });
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    expect(digest).toContain('いま人間の回答を待っているもの: 1 件');
+    const line = digest.split('\n').find((l) => l.includes('本番へ流してよいか →'));
+    expect(line).toContain('承認待ちキューに在る');
+    expect(line).not.toContain('回答あり');
+    // **エスカレーション行そのものに id が出る**（依頼者の指摘: 直す前は
+    // 「同じ id で出ている」と言いながら、その id をこの行から探せなかった）。
+    // 取り出した行に対して直接 assert するので、この行から id を消せば赤に
+    // なる（節をまたいで当たる `digest.toContain` では消しても緑のまま）。
+    expect(line).toContain('id: ap-pending');
+    // 「人間の回答待ち」節の対応する行も同じ id を持つ（突き合わせの確認）。
+    const pendingLine = digest.split('\n').find((l) => l.startsWith('- ap-pending'));
+    expect(pendingLine).toContain('本番へ流してよいか');
+  });
+
+  it('この期間の日誌には未回答の行しか無いが、キューでは既に回答済み（この期間の外で回答された）', async () => {
+    const stores = createMemoryStores();
+    // キュー（権威ある出所）は既に回答済み——digest の窓の外（この後）で
+    // 回答されたことを模す。
+    await stores.jobs.putApproval({
+      id: 'ap-answered-later',
+      createdAt: new Date().toISOString(),
+      question: 'デプロイの時間帯を変えてよいか',
+      answeredAt: new Date().toISOString(),
+      answer: '良い、22時以降にして',
+    });
+    // 日誌にはこの期間のうち「聞いた」行しか無い（「答えた」行はこの期間の
+    // 外＝この digest の窓の外に積まれた、という状況を模している）。
+    await stores.journal.append({
+      type: 'escalation',
+      question: 'デプロイの時間帯を変えてよいか',
+      approvalId: 'ap-answered-later',
+    });
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    const line = digest.split('\n').find((l) => l.includes('デプロイの時間帯を変えてよいか →'));
+    expect(line).toContain('この期間の外で回答された');
+    expect(line).toContain('良い、22時以降にして');
+    // 「2」（未回答でキューに在る）とは次の一手が違うので、同じ文言にしない。
+    expect(line).not.toContain('承認待ちキューに在る。下の');
+    expect(line).toContain('id: ap-answered-later');
+  });
+
+  it('この期間の外で回答されたが、回答の本文が無い記録（answeredAt はあるが answer が欠けている）', async () => {
+    const stores = createMemoryStores();
+    // 通常経路（`answerApproval`）では answeredAt と answer は必ず対で
+    // 積まれるが、schema 上はどちらも独立して optional——台帳の破損などで
+    // answer だけ欠けた記録を模す。
+    await stores.jobs.putApproval({
+      id: 'ap-answer-missing',
+      createdAt: new Date().toISOString(),
+      question: '欠けた回答の確認',
+      answeredAt: new Date().toISOString(),
+    });
+    await stores.journal.append({
+      type: 'escalation',
+      question: '欠けた回答の確認',
+      approvalId: 'ap-answer-missing',
+    });
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    const line = digest.split('\n').find((l) => l.includes('欠けた回答の確認 →'));
+    // 空で終わらない（「中身の無い回答をもらった」と読めてしまうのを避ける）。
+    expect(line).toContain('台帳の破損の可能性がある');
+    // 「回答された）: 」の直後が空文字のまま終わっていない
+    // （`brief(undefined, 80)` を呼んで壊れる／空で終わる、のどちらでもない）。
+    expect(line).not.toMatch(/回答された\):\s*（id:/);
+    expect(line).toContain('id: ap-answer-missing');
+  });
+
+  it('キューに無く managerId が在る＝マネージャー発の確認。id は requestId であって承認待ちキューの id ではない', async () => {
+    const stores = createMemoryStores();
+    // マネージャー発の確認はキューへ積まれない（`manager.ts` の `case
+    // \'ask\'` は `putApproval` を呼ばない）——`approvalId` は `requestId`。
+    await stores.journal.append({
+      type: 'escalation',
+      question: 'この変更を manager がマージしてよいか',
+      approvalId: 'req-1234',
+      managerId: 'mgr-abcd',
+    });
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    const line = digest
+      .split('\n')
+      .find((l) => l.includes('この変更を manager がマージしてよいか →'));
+    expect(line).toContain('マネージャー mgr-abcd 発の確認');
+    expect(line).toContain('欠落ではない');
+    // **id ではなく requestId として出る。** 承認待ちキューの id と読み手が
+    // 混同しない形にする（依頼者の指摘）。「id: req-1234」という素の形は
+    // 出ない——出れば承認待ちキューの id だと誤読される。
+    expect(line).toContain(
+      'requestId: req-1234（マネージャー mgr-abcd 発。承認待ちキューの id ではない）',
+    );
+    expect(line).not.toContain('id: req-1234）');
+  });
+
+  it('キューにも無く managerId も無い＝判定できない。黙ってどちらか（未回答/回答あり）へ倒さない', async () => {
+    const stores = createMemoryStores();
+    // 通常の経路（`ask_human`）では起こらない形——`putApproval` を経ずに
+    // `escalation` 行だけが積まれた状態を模す（台帳の破損・移行前の古い行
+    // などを想定）。
+    await stores.journal.append({
+      type: 'escalation',
+      question: '出所不明の確認',
+      approvalId: 'ap-orphan',
+    });
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    const line = digest.split('\n').find((l) => l.includes('出所不明の確認 →'));
+    expect(line).toContain('判定できない');
+    expect(line).not.toContain('未回答（承認待ちキューに在る');
+    expect(line).not.toContain('回答:');
+    // managerId が無いので requestId 扱いにはしない（素の id として出す）。
+    expect(line).toContain('id: ap-orphan');
+  });
+
+  it('件数の行・回答待ちの一覧・エスカレーション欄の3つが食い違わない（1問=1件として揃う。id も突き合わせられる）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putApproval({
+      id: 'ap-a',
+      createdAt: new Date().toISOString(),
+      question: '質問A',
+    });
+    await stores.journal.append({ type: 'escalation', question: '質問A', approvalId: 'ap-a' });
+    await stores.jobs.putApproval({
+      id: 'ap-b',
+      createdAt: new Date().toISOString(),
+      question: '質問B',
+      answeredAt: new Date().toISOString(),
+      answer: '回答B',
+    });
+    await stores.journal.append({ type: 'escalation', question: '質問B', approvalId: 'ap-b' });
+    await stores.journal.append({
+      type: 'escalation',
+      question: '質問B',
+      approvalId: 'ap-b',
+      answeredAt: new Date().toISOString(),
+      answer: '回答B',
+    });
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    // エスカレーション: 2件（質問A・質問B）——質問Bは日誌に2行あるが1件と数える。
+    expect(digest).toContain('エスカレーション: 2 件');
+    // 回答待ち: 1件（質問Aだけ。質問Bは回答済みなのでここには出ない）。
+    expect(digest).toContain('いま人間の回答を待っているもの: 1 件');
+    const pendingSection = digest.slice(digest.indexOf('## 人間の回答待ち'));
+    expect(pendingSection).toContain('ap-a');
+    expect(pendingSection).not.toContain('ap-b');
+    // エスカレーション欄の各行にも id が出て、回答待ち一覧と機械的に
+    // 突き合わせられる（質問文の一致は brief() で切られると崩れるので、
+    // id で揃える——依頼者の基準3）。
+    const lineA = digest.split('\n').find((l) => l.includes('質問A →'));
+    expect(lineA).toContain('id: ap-a');
+    const lineB = digest.split('\n').find((l) => l.includes('質問B →'));
+    expect(lineB).toContain('id: ap-b');
+  });
+
+  /**
+   * 束ねた後の並び順（`EscalationGroup.at` の doc）。**新しい順**——他の節
+   * （`managers` の並べ替え等）と同じ向き。
+   *
+   * **実物の `journal.list()`（既定 `order: 'desc'`）を素直に使うと、この
+   * テストは `buildActivityDigest` 側の明示的な `.sort()` を消しても赤く
+   * ならない。** `journal.list()` の新しい順の契約（3実装で保証。
+   * `journal-order-with-contract.ts`）のおかげで、束ねる前の入力が既に
+   * 新しい順であり、`groupEscalations` の Map 挿入順もその時点で
+   * 既に正しい順になっているため（`EscalationGroup.at` の doc に証明の
+   * 概要がある）。**だからここでは `journal.list` をあえて契約に反する
+   * 順（古い順）で返す実装に差し替え**、`buildActivityDigest` 自身の
+   * `.sort()` だけを切り出して測る（`stores.commitments.list` を差し替える
+   * 他のテストと同じ足場のパターン）。
+   */
+  it('束ねた後は at の新しい順に並ぶ（journal.list が新しい順を返す契約に頼らない防御的な並べ替えを測る）', async () => {
+    const stores = createMemoryStores();
+    // 古い質問を先に積む。
+    await stores.journal.append({ type: 'escalation', question: '古い質問', approvalId: 'ap-old' });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await stores.journal.append({
+      type: 'escalation',
+      question: '新しい質問',
+      approvalId: 'ap-new',
+    });
+
+    // **契約に反して古い順で返す。** `journal.list()` の既定は新しい順が
+    // 契約だが、ここではそれを守らない実装に差し替え、
+    // `buildActivityDigest` 側の並べ替えだけを切り出す。
+    const originalList = stores.journal.list.bind(stores.journal);
+    stores.journal.list = async (query) => [...(await originalList(query))].reverse();
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+    const section = digest.slice(
+      digest.indexOf('## エスカレーション'),
+      digest.indexOf('## 人間の回答待ち') === -1 ? undefined : digest.indexOf('## 人間の回答待ち'),
+    );
+    const oldIndex = section.indexOf('古い質問');
+    const newIndex = section.indexOf('新しい質問');
+    expect(oldIndex).toBeGreaterThan(-1);
+    expect(newIndex).toBeGreaterThan(-1);
+    expect(newIndex).toBeLessThan(oldIndex);
+  });
+
+  /**
+   * **承認待ちキューの行を消す口が無い**（`JobStore` は `listApprovals` /
+   * `getApproval` / `putApproval` だけ）ので、このテーブルは運用のあいだ
+   * 単調に増える。`describeEscalationState` が個別に引く
+   * （`stores.jobs.getApproval`）回数は、束ねて表示する分（`MAX_ITEMS`
+   * 件まで）に抑えられていること——問いの総数に比例して増えないこと——を
+   * 測る。
+   */
+  it('承認待ちキューへの個別の問い合わせ（getApproval）は MAX_ITEMS 件で頭打ちになる（総数に比例しない）', async () => {
+    const stores = createMemoryStores();
+    const total = MAX_ITEMS + 5; // 20件。表示は15件までのはず。
+    for (let i = 0; i < total; i += 1) {
+      // 全件「この期間の外で回答された」形にする——pendingById（未回答分）に
+      // ヒットしないので、`getApproval` を呼ぶケースを作る。
+      await stores.jobs.putApproval({
+        id: `ap-bound-${i}`,
+        createdAt: new Date().toISOString(),
+        question: `束ねる問い ${i}`,
+        answeredAt: new Date().toISOString(),
+        answer: `回答 ${i}`,
+      });
+      await stores.journal.append({
+        type: 'escalation',
+        question: `束ねる問い ${i}`,
+        approvalId: `ap-bound-${i}`,
+      });
+    }
+
+    let getApprovalCalls = 0;
+    let listApprovalsCalls = 0;
+    const originalGetApproval = stores.jobs.getApproval.bind(stores.jobs);
+    const originalListApprovals = stores.jobs.listApprovals.bind(stores.jobs);
+    stores.jobs.getApproval = async (id) => {
+      getApprovalCalls += 1;
+      return originalGetApproval(id);
+    };
+    stores.jobs.listApprovals = async (options) => {
+      listApprovalsCalls += 1;
+      // **直す前の形（`pendingOnly` を外して全件取る）へ戻っていないこと。**
+      // ここが `undefined` のまま（全件取得）で呼ばれたら、行数が問いの
+      // 総数に比例して増える側に逆戻りしている。
+      expect(options?.pendingOnly).toBe(true);
+      return originalListApprovals(options);
+    };
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    expect(digest).toContain(`エスカレーション: ${total} 件`);
+    // `listApprovals` は1回だけ（`pending` を作る分）。
+    expect(listApprovalsCalls).toBe(1);
+    // `getApproval` は表示する分（MAX_ITEMS）までに抑えられる。
+    expect(getApprovalCalls).toBeLessThanOrEqual(MAX_ITEMS);
+    expect(getApprovalCalls).toBeGreaterThan(0);
+  });
+});
+
+/**
  * `## 記憶の更新` 節が `action` / 前後バイト数を出すこと（#339）。
  *
  * `journal_read`（`tools.ts`）・Web の日誌一覧（`queries.ts`）と同じ穴
