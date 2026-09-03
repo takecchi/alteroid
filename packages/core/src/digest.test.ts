@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildActivityDigest, describeManagerState, MAX_ITEMS } from './digest.js';
+import {
+  buildActivityDigest,
+  describeManagerState,
+  describeSessionMissingKind,
+  MAX_ITEMS,
+} from './digest.js';
+import type { SessionMissingKind } from './manager.js';
 import { createMemoryStores } from './testing.js';
 import { usageDate } from './usage.js';
 
@@ -21,6 +27,90 @@ describe('describeManagerState', () => {
 
   it('live: undefined は「/セッション不明」——否定でも肯定でもない第三の値', () => {
     expect(describeManagerState('running', undefined)).toBe('running/セッション不明');
+  });
+});
+
+/**
+ * `describeSessionMissingKind`（#579）の字面を core 側で完全一致で固定する
+ * （#619 の積み残し）。
+ *
+ * **直す前は、この生成元そのものを字面まで測る歯が `packages/core` に無かった。**
+ * `tools.test.ts` は `manager_list` 経由の `toContain`（部分一致——生成元では
+ * なく消費側を測っている）しか持たず、`apps/web/app/routes/managers.test.tsx`
+ * の `describe('sessionMissingKind の字面が core と一致する（#579）')` は
+ * `describeSessionMissingKindNote` と `describeSessionMissingKind` を `toBe`
+ * で比べる**相対比較**——両側が同じ方向へずれても緑のまま通る。絶対の錨
+ * （core 側の完全一致）がどこにも無かった。
+ *
+ * **倣ったのは `dropped-record.test.ts` の
+ * `describe('帳面の字面（origin・0件の読み方・保持）', …)`。**
+ * `describeDroppedTraceOrigin` が #623 で先に置いた形（`undefined` は空文字・
+ * `Record` で全値を持つ・`toContain` と `toBe` の両方を持つ）を、ここでも
+ * そのまま採る——`describeDroppedTraceOrigin` の doc 自身が「先例は
+ * `describeSessionMissingKind`」と書いていた非対称を埋める。
+ */
+describe('describeSessionMissingKind の字面（#619 の積み残し。#623 の describeDroppedTraceOrigin に倣う）', () => {
+  it('describeSessionMissingKind(undefined) は空文字（「不明」と書かない）', () => {
+    // 理由は describeSessionMissingKind の doc の逐語:
+    // 「由来を持たない印は、この欄が足される前の版のデーモンが立てたものだけ
+    // である。そこへ新しい語を出すと、実際には2つしかない区別が3つに見える。」
+    expect(describeSessionMissingKind(undefined)).toBe('');
+  });
+
+  /**
+   * **`ALL_KINDS` を `Record` で持つのは、値が増えたときにここが型で
+   * 落ちるため。** 配列だと3つ目が足されても素通りする（＝新しい値の字面が
+   * 測られないまま増える）。これはビルド時の網羅性であって、実行時に測って
+   * いるのは下の非空チェックだけである（`dropped-record.test.ts` の
+   * `ALL_ORIGINS` / `managers.test.tsx` の `ALL_KINDS` と同じ形）。
+   */
+  it('SessionMissingKind の全ての値について、空でない文字列を返す', () => {
+    const ALL_KINDS: Record<SessionMissingKind, true> = {
+      'resume-failed': true,
+      unlisted: true,
+    };
+    const kinds = Object.keys(ALL_KINDS) as SessionMissingKind[];
+    // **空でないことを先に確かめる。** `Object.keys` が空なら下の forEach は
+    // 1回も回らず、この歯は何も測らずに緑になる。
+    expect(kinds.length).toBeGreaterThan(0);
+    for (const kind of kinds) {
+      expect(describeSessionMissingKind(kind)).not.toBe('');
+    }
+  });
+
+  it('describeSessionMissingKind("resume-failed") は resume を試みて失敗した意味の文言を持つ', () => {
+    expect(describeSessionMissingKind('resume-failed')).toContain('resume');
+  });
+
+  it('describeSessionMissingKind("unlisted") は名簿に載っていなかった意味の文言を持つ', () => {
+    expect(describeSessionMissingKind('unlisted')).toContain('名簿');
+  });
+
+  /**
+   * **上の2つの `toContain` だけでは足りない。** 文中の1文字を変えても
+   * （末尾へ1文字足す等）どちらの部分文字列も壊れないので、変異が生き残る
+   * （`dropped-record.test.ts` の同型の歯と同じ理由）。**全文の完全一致**を
+   * 別に持つことで、1文字の変異でも赤くなるようにする。
+   */
+  it('describeSessionMissingKind は resume-failed / unlisted それぞれで文字列として完全一致する', () => {
+    expect(describeSessionMissingKind('resume-failed')).toBe('resume でも入り直せなかった。');
+    expect(describeSessionMissingKind('unlisted')).toBe(
+      '名簿に載っていなかった。resume はまだ試していない。',
+    );
+  });
+
+  /**
+   * **片方の実装をもう片方へコピペで潰す変異**（`resume-failed` の分岐が
+   * `unlisted` と同じ文字列を返すようになる、等）は、直上の完全一致2本の
+   * どちらか一方が必ず赤くなるので、理屈のうえではこの歯が無くても捕まる。
+   * それでも明示的に持つのは、完全一致2本を読む側が「この2つは意図的に
+   * 違う字面である」と一目で分かるようにするためであって、検出できない
+   * 変異の形を埋めるためではない（検出できない形は見つかっていない）。
+   */
+  it('resume-failed と unlisted の字面は異なる', () => {
+    expect(describeSessionMissingKind('resume-failed')).not.toBe(
+      describeSessionMissingKind('unlisted'),
+    );
   });
 });
 
