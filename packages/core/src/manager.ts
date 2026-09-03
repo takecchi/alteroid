@@ -20,6 +20,8 @@ import {
   touchLease,
   type LeaseSighting,
 } from './lease.js';
+import { classifyManagerActivity, describeManagerActivityForFlush } from './manager-activity.js';
+import type { ManagerActivityInput } from './manager-activity.js';
 import { codeSpan } from './markdown-span.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap, type RecentMap } from './recent.js';
@@ -2948,6 +2950,30 @@ class Pool implements ManagerPool {
   }
 
   /**
+   * `ManagerRecord`（プロセス内の像。`this.#records`）から
+   * {@link classifyManagerActivity} への入力を作る（`manager-activity.ts`）。
+   *
+   * **`tools.ts` の `managerActivityInputOf`（`ManagerSummary` 版）と対になる、
+   * もう一方の変換点。** 判定のコピーを2つ作らないための唯一の入口を
+   * `ManagerRecord` 側にも1つだけ置く。
+   *
+   * **`record` が無い（台帳に record が無い）場合は「観測が無い」として
+   * `classifyManagerActivity` に渡す**——`turnEndReason` も
+   * `toolUseStallPending` も持たない入力になるので、判定は必ず `'unknown'`
+   * （判定できない）に落ちる。**`'active'`（進んでいる）へは倒れない。**
+   */
+  #activityInputOfRecord(record: ManagerRecord | undefined): ManagerActivityInput {
+    if (record === undefined) return { waitingCount: 0 };
+    return {
+      turnEndReason: record.turnEndReason,
+      turnEndedAt: record.turnEndedAt,
+      lastReportAt: record.job.lastReportAt,
+      toolUseStallPending: record.toolUseStallPending,
+      waitingCount: record.waiting.length,
+    };
+  }
+
+  /**
    * 握り潰した「背景処理の完了待ちで畳んだ報告」の逃げ道（時間）。doc は
    * `ManagerPool` interface を参照。
    *
@@ -2957,19 +2983,36 @@ class Pool implements ManagerPool {
    * 触らない——正常に次のターンを待っているだけの委譲を急かさない。
    *
    * **`#emit()` を通す**（`case 'closed'` と同じ理由。専用の文面を1本出せば
-   * `#emit` 自身が積みを見つけて末尾へ1行足す）。
+   * `#emit` 自身が積みを見つけて末尾へ1行足す）。**`withheldSuffixDetail:
+   * 'flush'` を渡す**——畳んだ本文の240文字抜粋は要らない（全文は日誌に在る）。
+   *
+   * **台帳028ee442の指摘への直し。** 合図（30分、本報告が来ない）だけでは
+   * 「その委譲がいま止まっているのか進んでいるのか」が分からない。
+   * `manager_list`（`tools.ts`）が使っているのと**同じ判定**
+   * （{@link classifyManagerActivity}）を、この委譲の `ManagerRecord`
+   * （`this.#records.get(managerId)`）から作った入力で呼び、結果を短い1行
+   * として添える——**新しい往復は増やさない**（`turn-end-poller.ts` が
+   * `probeTurnEnds()` の直後にこの関数を相乗りさせているので、判定材料は
+   * その周期ぶん既に更新済みである）。
    */
   async flushWithheldReports(): Promise<void> {
     const now = this.#now();
     for (const [managerId, memory] of [...this.#withheldReports.entries()]) {
       try {
         if (!withheldReportOverdue(memory.lastAt, now, WITHHELD_REPORT_FLUSH_MS)) continue;
+        const activity = classifyManagerActivity(
+          this.#activityInputOfRecord(this.#records.get(managerId)),
+        );
         this.#emit(
           managerId,
           'report',
           `[${managerId}] 背景処理の完了待ちで畳んだ報告が、次のターンの完了を` +
             `${String(Math.round(WITHHELD_REPORT_FLUSH_MS / 60_000))}分待っても届かなかった。` +
-            'まとめて配る。',
+            'まとめて配る。' +
+            describeManagerActivityForFlush(activity),
+          undefined,
+          undefined,
+          'flush',
         );
       } catch {
         // **1件の失敗で残りを止めない**（`probeTurnEnds` と同じ形）。
@@ -6129,6 +6172,10 @@ class Pool implements ManagerPool {
     // 既定は `undefined`（＝立てない）— `case 'ask'` 以外の呼び出し元は
     // これまでどおり何も渡さない（挙動は変わらない）。
     markup?: TextMarkup,
+    // **`flushWithheldReports()` だけが `'flush'` を渡す口。** 既定は
+    // `'full'`——`case 'closed'` も「次の本物の報告」も、これまでどおり
+    // 何も渡さないので字面は1バイトも変わらない（下の分岐の doc）。
+    withheldSuffixDetail: 'full' | 'flush' = 'full',
   ): void {
     // **`report` / `question` / `permission` の3種すべてが通る隘路。** その
     // managerId に握り潰した「背景処理の完了待ちで畳んだ報告」（`#withheldReports`）
@@ -6144,11 +6191,20 @@ class Pool implements ManagerPool {
     let outgoing = text;
     if (withheld !== undefined) {
       this.#withheldReports.delete(managerId);
-      outgoing =
+      // **件数・`firstAt` / `lastAt` / `journal_read` の案内は共通の前置き
+      // （`countNote`）に持つ。** 変わるのは末尾の「最後の1本の240文字抜粋」
+      // だけ——`'flush'` のときはそれを付けず、そのまま閉じ括弧を打つ
+      // （台帳028ee442の指摘: 配られる中身は既に日誌に在るので、抜粋を
+      // 再送する意味が無い）。**`'full'`（`case 'closed'` / 次の本物の報告の
+      // 2経路）は元の1本の式のままで、1バイトも変えていない。**
+      const countNote =
         `${text}\n\n（この間に、背景処理の完了待ちで畳んだターンの報告を ` +
         `${String(withheld.count)} 本配っていない（最初 ${withheld.firstAt} / ` +
-        `最後 ${withheld.lastAt}）。全文は日誌に在る（\`journal_read\`）。` +
-        `最後の1本の冒頭: ${excerptLine(withheld.lastText, WITHHELD_REPORT_EXCERPT)}）`;
+        `最後 ${withheld.lastAt}）。全文は日誌に在る（\`journal_read\`）。`;
+      outgoing =
+        withheldSuffixDetail === 'flush'
+          ? `${countNote}）`
+          : `${countNote}最後の1本の冒頭: ${excerptLine(withheld.lastText, WITHHELD_REPORT_EXCERPT)}）`;
     }
     this.#post({
       type: 'manager_message',

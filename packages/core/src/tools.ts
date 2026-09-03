@@ -36,6 +36,8 @@ import {
   renderListingEntry,
   renderListingFromEnd,
 } from './excerpt.js';
+import { classifyManagerActivity } from './manager-activity.js';
+import type { ManagerActivityInput } from './manager-activity.js';
 import type {
   ManagerDenial,
   ManagerPool,
@@ -1000,6 +1002,24 @@ function denialLine(denials: ManagerDenial[]): string | null {
 }
 
 /**
+ * `ManagerSummary` から {@link classifyManagerActivity} への入力を作る。
+ *
+ * **判定のコピーを2つ作らないための唯一の変換点。** `describeTurnEnd` /
+ * `describeToolUseStall` の両方がこれを通して同じ判定を呼ぶ——
+ * `manager.ts` の `flushWithheldReports()` も同じ純関数を、`ManagerRecord`
+ * から作った同型の入力で呼ぶ（`manager-activity.ts` の doc）。
+ */
+function managerActivityInputOf(manager: ManagerSummary): ManagerActivityInput {
+  return {
+    turnEndReason: manager.turnEndReason,
+    turnEndedAt: manager.turnEndedAt,
+    lastReportAt: manager.lastReportAt,
+    toolUseStallPending: manager.toolUseStallPending,
+    waitingCount: manager.waiting.length,
+  };
+}
+
+/**
  * 一覧に添える、「ターンが終わっているらしいのに報告が届いていない」への
  * 助言（Issue #567）。**判定はここで行う** — `ManagerSummary.turnEndedAt` の
  * doc が「読む側が `lastReportAt` と突き合わせて判定する」と書いている、
@@ -1037,6 +1057,15 @@ function denialLine(denials: ManagerDenial[]): string | null {
 function describeTurnEnd(manager: ManagerSummary): string | null {
   if (manager.turnEndReason === undefined) return null;
 
+  // **判定そのものは `classifyManagerActivity` へ切り出してある**
+  // （`manager-activity.ts`）。ここでの分岐はもう判定をやり直さない——
+  // 状態から「どちらの文面を出すか」を選ぶだけである。判定のロジック
+  // （`turnEndedAt` が無い/`lastReportAt` と比べる/`NaN` の扱い）はそちらに
+  // 移してあり、字面はここでは1バイトも変えていない。
+  if (classifyManagerActivity(managerActivityInputOf(manager)) !== 'stalled-turn-end') {
+    return null;
+  }
+
   if (manager.turnEndedAt === undefined) {
     return (
       '  ⚠ ターンは終わっているらしいが、いつ終わったかが分からない' +
@@ -1048,25 +1077,6 @@ function describeTurnEnd(manager: ManagerSummary): string | null {
       'この委譲は止まっていない・切っていない — この助言はデーモンが計算しただけで、' +
       '委譲は動き続けてよい。'
     );
-  }
-
-  // **数値で比べる。文字列比較にしない**（この関数の doc の「⚠️ 時刻の比較は
-  // 文字列ではなく…」を参照）。`turnEndedAt` は生ログの `timestamp` を写した
-  // だけの値で、`lastReportAt`（デーモンが `new Date().toISOString()` で
-  // 作った値）と同じ形とは限らない。
-  if (manager.lastReportAt !== undefined) {
-    const turnEndedAtMs = Date.parse(manager.turnEndedAt);
-    const lastReportAtMs = Date.parse(manager.lastReportAt);
-    // **どちらかが `NaN`（parse できない）なら ⚠ 側へ落とす。** `null`
-    // （症状ではない）へ倒すと、「分からない」を「症状ではない」に化けさせる
-    // ——(A) の分岐で避けたのと同じ間違いになる。
-    if (
-      !Number.isNaN(turnEndedAtMs) &&
-      !Number.isNaN(lastReportAtMs) &&
-      turnEndedAtMs <= lastReportAtMs
-    ) {
-      return null;
-    }
   }
 
   const stopSequenceNote =
@@ -1153,8 +1163,13 @@ function describeTurnEnd(manager: ManagerSummary): string | null {
 function describeToolUseStall(manager: ManagerSummary): string | null {
   const pending = manager.toolUseStallPending;
   if (pending === undefined || pending.length === 0) return null;
-  // **3条件目。** 誰かが待っているなら矛盾ではない（正常な返事待ち）。
-  if (manager.waiting.length > 0) return null;
+  // **判定そのものは `classifyManagerActivity` へ切り出してある**
+  // （`manager-activity.ts`）。3条件目（`waiting` が空か）もそちらで見ている
+  // ——ここでの分岐はもう判定をやり直さない。字面はここでは1バイトも
+  // 変えていない。
+  if (classifyManagerActivity(managerActivityInputOf(manager)) !== 'stalled-tool-use') {
+    return null;
+  }
 
   const shown = pending.slice(0, LIST_TOOL_USE_STALL_LIMIT);
   const rest = pending.length - shown.length;
