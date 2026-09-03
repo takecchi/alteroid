@@ -155,6 +155,68 @@ export interface OutboxPending {
  */
 export type OutboxSeq = number;
 
+/**
+ * `#queue` に残っている分の、種別・managerId ごとの内訳1行（#634）。
+ *
+ * **`#queue` だけの内訳である。** 購読側（`GET /events` ハンドラのローカル
+ * `queue` と書きかけの1件）が抱えている分はここには出ない——`#probe` が
+ * 返すのは件数と最古時刻だけで、中身（`RunnerEvent` そのもの）を持たない
+ * ためである（`Outbox.pending` の doc）。取れないものを取れた顔で出さない
+ * （AGENTS.md の地雷表）。
+ */
+export interface OutboxPendingGroup {
+  /** `RunnerEvent.type`。 */
+  type: string;
+  /** `hello` 以外は必ず持つ。`hello` だけ managerId が無い。 */
+  managerId?: string;
+  count: number;
+  /** この組の中でいちばん古い `queuedAt`。 */
+  oldestAt: string;
+}
+
+/**
+ * 畳む直前に「何を失うのか」を名指しするための、`Outbox` の1回分のスナップ
+ * ショット（#634）。`OutboxPending`（`/health` が返す合計だけの形）とは別に
+ * 用意する——`/health` の応答は増やさない（wire は1バイトも増えない。
+ * `describeForShutdown()` は runner プロセスの内側だけで完結する）。
+ */
+export interface OutboxShutdownSnapshot {
+  /**
+   * `#queue`（まだ一度も listener へ渡していない分）。listener が付いて
+   * いる間は常に空——`push()` は listener が居ればそのまま渡すので、
+   * ここには積まれない（`Outbox.pending` の doc の表と同じ非対称）。
+   */
+  queue: {
+    count: number;
+    /** 1件も無ければ省く。 */
+    oldestAt?: string;
+    groups: OutboxPendingGroup[];
+  };
+  /**
+   * 購読側（`GET /events` ハンドラ）の状態（#634）。**3つを言い分ける**——
+   * コーディネーターの指摘: 直す前は「一度も購読が無い」と「購読されていた
+   * が、いま切れている」が同じ `null` になり、後者にまで「該当なし」という
+   * 正しくない断定を書いていた。これは #628 が `never-connected` と `down`
+   * を分けたのと同じ軸で、しかも今回いちばん知りたいこと（脚が落ちたまま
+   * 畳んだのか、そもそも一度も繋がらなかったのか）そのものである。
+   *
+   * - `'never-subscribed'`: `attach()` が一度も呼ばれていない。そもそも
+   *   尋ねる相手が存在しない
+   * - `'subscribed'`: いま購読されている（`#listener` が付いている）。
+   *   `#probe` が渡されていれば件数・最古時刻を添える——渡されていなければ
+   *   （`attach()` の `pending` 引数を省いた呼び出し）添えない。**0件と
+   *   「取れない」を混同しない**
+   * - `'detached'`: 過去に購読されたことがあるが、いまは切れている。
+   *   **件数は取れない**（`detach()` の時点で `#probe` も外れるので、
+   *   推測で埋めない——0を書くと「何も失っていない」と読めてしまう。
+   *   `AGENTS.md`「取れない軸に0の行を作る」と同じ理由）
+   */
+  subscriber:
+    | { status: 'never-subscribed' }
+    | { status: 'subscribed'; count?: number; oldestAt?: string }
+    | { status: 'detached' };
+}
+
 export class Outbox {
   readonly #queue: { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[] = [];
   /**
@@ -172,6 +234,14 @@ export class Outbox {
    * （{@link pending} の doc）。
    */
   #probe: (() => OutboxPending) | null = null;
+  /**
+   * `attach()` が一度でも呼ばれたか（#634）。**一度立てたら戻さない**——
+   * `#listener` / `#probe` は detach で `null` に戻るが、こちらは「過去に
+   * 購読されたことがあるか」という別の軸なので、detach では動かさない。
+   * `describeForShutdown()` が「一度も購読が無い」と「購読されていたが、
+   * いま切れている」を区別するための唯一の材料である。
+   */
+  #everSubscribed = false;
   /**
    * 購読側が抱えている分を同期的に引き渡す口（#新窓）。**購読が始まったときだけ
    * 在る。** 次の {@link attach} 呼び出し（＝別の購読者が割り込む瞬間）でだけ
@@ -271,6 +341,7 @@ export class Outbox {
     }
     this.#listener = listener;
     this.#probe = pending ?? null;
+    this.#everSubscribed = true;
     this.#drain = drain ?? null;
     return () => {
       if (this.#listener !== listener) return;
@@ -343,6 +414,188 @@ export class Outbox {
     if (mine === undefined) return theirs;
     if (theirs === undefined) return mine;
     return theirs < mine ? theirs : mine;
+  }
+
+  /**
+   * いま listener（`GET /events` の購読）が付いているか（#634）。
+   *
+   * **畳む経路が「待ってよいか」を決めるための材料。** 脚が繋がっていなければ
+   * 待っても誰も引き取らない——`#queue` に積まれたままの分は、次にデーモンが
+   * 繋ぎ直すまで動かない。無条件に待つと、器の焼き直しのたびに shutdown が
+   * 延びる（listener が一度も付かない = デーモン側が既に落ちている、という
+   * ありふれた場合を含む）。
+   */
+  get subscribed(): boolean {
+    return this.#listener !== null;
+  }
+
+  /**
+   * 畳む直前に「何が残っているか」を名指しするための1回分のスナップショット
+   * （#634。`OutboxShutdownSnapshot` の doc）。
+   *
+   * **`#queue` は種別・managerId ごとに集計できる**（中身の `RunnerEvent` を
+   * 直接持っているため）。**購読側（`#probe`）は集計できない**（件数と最古
+   * 時刻しか返してこない——`Outbox.pending` の doc）。取れない内訳を推測で
+   * 埋めない。
+   */
+  describeForShutdown(): OutboxShutdownSnapshot {
+    const groups = new Map<string, OutboxPendingGroup>();
+    for (const item of this.#queue) {
+      const managerId = 'managerId' in item.event ? item.event.managerId : undefined;
+      const key = `${item.event.type} ${managerId ?? ''}`;
+      const existing = groups.get(key);
+      if (existing === undefined) {
+        groups.set(key, {
+          type: item.event.type,
+          ...(managerId === undefined ? {} : { managerId }),
+          count: 1,
+          oldestAt: item.queuedAt,
+        });
+      } else {
+        existing.count += 1;
+        if (item.queuedAt < existing.oldestAt) existing.oldestAt = item.queuedAt;
+      }
+    }
+    const probed = this.#probe?.();
+    // **3状態を作る（#634）。** `#listener` の有無で「いま購読されている」を
+    // 先に見て、外れていれば `#everSubscribed` で「一度も無い」と「切れた」を
+    // 分ける——detach で戻るのは `#listener` / `#probe` だけで、
+    // `#everSubscribed` は戻らない（`#everSubscribed` の doc）。
+    const subscriber: OutboxShutdownSnapshot['subscriber'] =
+      this.#listener !== null
+        ? {
+            status: 'subscribed',
+            ...(probed === undefined
+              ? {}
+              : {
+                  count: probed.count,
+                  ...(probed.oldestAt === undefined ? {} : { oldestAt: probed.oldestAt }),
+                }),
+          }
+        : this.#everSubscribed
+          ? { status: 'detached' }
+          : { status: 'never-subscribed' };
+    return {
+      queue: {
+        count: this.#queue.length,
+        ...(this.#queue[0] === undefined ? {} : { oldestAt: this.#queue[0].queuedAt }),
+        groups: [...groups.values()],
+      },
+      subscriber,
+    };
+  }
+}
+
+/**
+ * {@link Outbox.describeForShutdown} の結果を、stderr へ書く1つの文字列へ
+ * 畳む（#634）。**`shutdown()`（`apps/runner/src/index.ts`）から呼ぶ。** 呼ぶのは
+ * `waitForOutboxDrain` で待てるだけ待った**後**——このプロセスは、これを
+ * 書いた直後に `process.exit(0)` する（`drainAndReportOutbox` の呼び出し
+ * 順）。それより後にこのイベントループが回ることは無い。
+ *
+ * **「残っている」ではなく「失われる」と書く。** `Outbox` はプロセス内
+ * メモリだけで、ディスクにも DB にも無い（このファイルに実装がある——確かめ
+ * るには `Outbox` クラスの永続化コードを探せばよい。無い）。**この関数が
+ * 呼ばれる時点で残っているものは、この後どの道 process.exit(0) と一緒に
+ * 消える**——「残っている」だけだと「後で届く」とも読めてしまう
+ * （依頼者第一基準:「失われたなら、失われたことが分かること」）。
+ *
+ * **何も残っていない、かつ購読側の状態が完全に分かっているときだけ `null`。**
+ * 呼び出し側はこのとき何も書かない——「残っていない」は書く価値の無い行
+ * ではなく、書かないことそのものが答えである（毎回の shutdown で1行増える
+ * と、それ自体がログを埋める）。**購読が過去にあって、いま切れている
+ * （`subscriber.status === 'detached'`）ときは、`#queue` が0件でも黙らない**
+ * ——切れた側で何件失っているかはここからは分からず、0件だったと決めつける
+ * と静かに失敗する（依頼者第4基準）。
+ *
+ * **`archive` を含む種別・managerId を必ず名指しする。** #628 の調査が
+ * 指した穴そのもの——`#shipArchive()` は `report` / `ask` と同じ1本の脚
+ * （`emit`）を通るので、脚が落ちたまま畳むと生ログの退避（アーカイブ）も
+ * 他の出来事と同じ箱の中で静かに消える。件数だけでは「何が」失われたのかが
+ * 分からない。
+ */
+export function formatOutboxShutdownReport(snapshot: OutboxShutdownSnapshot): string | null {
+  const subscriberKnownCount =
+    snapshot.subscriber.status === 'subscribed' ? (snapshot.subscriber.count ?? 0) : 0;
+  // **購読が切れた後は、そちら側の件数を0とみなさない。** `#probe` はもう
+  // 呼べないので、購読側に何も残っていなかったことを示す材料が無い
+  // （`OutboxShutdownSnapshot.subscriber` の doc）。
+  const subscriberUnknown = snapshot.subscriber.status === 'detached';
+  const total = snapshot.queue.count + subscriberKnownCount;
+  if (total === 0 && !subscriberUnknown) return null;
+
+  const oldestCandidates = [
+    snapshot.queue.oldestAt,
+    snapshot.subscriber.status === 'subscribed' ? snapshot.subscriber.oldestAt : undefined,
+  ].filter((value): value is string => value !== undefined);
+  oldestCandidates.sort();
+  const oldest = oldestCandidates[0];
+
+  const lines = [
+    total > 0
+      ? `alteroid-runner: 畳む直前の出来事が ${total} 件、このプロセスの終了と一緒に失われる` +
+        `${oldest === undefined ? '' : `（最古 ${oldest}）`}。Outbox はプロセス内メモリだけで、` +
+        'ディスクにも DB にも無い——この直後に process.exit(0) するので、これより後は無い。' +
+        `${
+          subscriberUnknown
+            ? ' 購読側が過去に抱えていた分は件数不明——それとは別に、さらに失われている可能性がある。'
+            : ''
+        }`
+      : 'alteroid-runner: 畳む直前、自分の待ち行列（#queue）に残っているものは無いが、' +
+        '過去に購読されていた接続がいま切れており、そちら側で何件失っていたかはここからは' +
+        '分からない（0件だったとは言い切れない）。',
+  ];
+
+  if (snapshot.queue.groups.length === 0) {
+    lines.push('  自分の待ち行列（#queue）: 0件。');
+  } else {
+    lines.push('  自分の待ち行列（#queue）の内訳:');
+    for (const group of snapshot.queue.groups) {
+      lines.push(
+        `    type=${group.type}` +
+          `${group.managerId === undefined ? '' : ` managerId=${group.managerId}`}` +
+          ` count=${group.count} oldest=${group.oldestAt}`,
+      );
+    }
+  }
+
+  lines.push(describeSubscriberLine(snapshot.subscriber));
+
+  return `${lines.join('\n')}\n`;
+}
+
+/**
+ * 購読側（`GET /events` ハンドラのローカル `queue` と書きかけの1件）の行を
+ * 組み立てる（#634。3状態——`OutboxShutdownSnapshot.subscriber` の doc）。
+ *
+ * **`'subscribed'` の内訳は取れないことを、取れないと読める字で出す**
+ * ——`#probe` が返すのは件数と最古時刻までで、`Outbox.describeForShutdown`
+ * の doc のとおり `#queue` のような種別・managerId ごとの集計は持たない。
+ *
+ * **`'detached'` は件数そのものが無い**（`#probe` はもう呼べない）——0を
+ * 書くと「何も失っていない」と誤読される。**`'never-subscribed'` とは
+ * 文面をはっきり分ける**（`never-connected` と `down` を分けた #628 と
+ * 同じ理由）。
+ */
+function describeSubscriberLine(subscriber: OutboxShutdownSnapshot['subscriber']): string {
+  switch (subscriber.status) {
+    case 'never-subscribed':
+      return '  購読側が抱えている分: 購読が一度も無いので該当なし。';
+    case 'detached':
+      return (
+        '  購読側が抱えている分: 過去に購読されていたが、いま切れている' +
+        '（件数は取れない——0件だったとは言い切れない）。'
+      );
+    case 'subscribed': {
+      const oldest = subscriber.oldestAt === undefined ? '' : `（最古 ${subscriber.oldestAt}。`;
+      const closing = subscriber.oldestAt === undefined ? '（' : '';
+      const count = subscriber.count ?? '不明';
+      return `  購読側が抱えている分: ${count} 件${oldest}${closing}内訳は取れない）。`;
+    }
+    default: {
+      const unreachable: never = subscriber;
+      return `  購読側が抱えている分: 判定できない（未知の状態 ${JSON.stringify(unreachable)}）。`;
+    }
   }
 }
 

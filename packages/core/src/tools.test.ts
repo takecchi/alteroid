@@ -200,6 +200,13 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     runnerBacklog() {
       return runnerBacklog;
     },
+    // 本物（`Pool#runnerIdOf`）は像→台帳の順で読むが、この偽物は像と台帳を
+    // 分けて持っていない（`running` が両方を兼ねる）ので、単に非同期化するだけ
+    // でよい——像/台帳の使い分けそのものは `manager.test.ts`（本物の `Pool`）
+    // 側の歯が固定する。
+    async runnerIdOf(managerId: string) {
+      return running.find((manager) => manager.managerId === managerId)?.runnerId;
+    },
     // クローンの道具はこの口を呼ばない（#567 の計算はデーモンのポーラーが起こす）。
     async probeTurnEnds() {},
     async flushWithheldReports() {},
@@ -5442,6 +5449,120 @@ describe('manager_transcript（生ログへ降りる）', () => {
     const reply = await h.call('manager_report', { managerId: 'mgr-1' });
 
     expect(reply).toContain('manager_transcript');
+  });
+
+  /**
+   * #634 — 3段のどこにも生ログが無いとき、「まだ引き渡していない」と
+   * 「引き渡せずに消えた」を言い分ける（PR #628 が範囲外として報告した穴）。
+   * 材料は `ManagerPool.runnerIdOf()`（往復なし）と `runnerBacklog()`
+   * （キャッシュ。往復なし）だけで、新しい往復は無い。
+   */
+  describe('生ログが無いとき、脚の状態から「まだ引き渡していない」と「引き渡せずに消えた」を言い分ける（#634）', () => {
+    it('器が入れ替わった後（instanceSwapped: true）: 「引き渡せずに消えた可能性が高い」', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: '調べて' });
+      // setTranscript しない = 3段のどこにも無い。
+      h.setRunnerBacklog([
+        {
+          runnerId: 'runner-test',
+          pendingEvents: 7,
+          oldestPendingAt: '2026-08-27T00:10:00.000Z',
+          observedAt: '2026-08-27T00:30:00.000Z',
+          instanceIdAtObservation: 'instance-old',
+          instanceSwapped: true,
+        },
+      ]);
+
+      const reply = await h.call('manager_transcript', { managerId: 'mgr-1' });
+
+      expect(reply).toContain('引き渡せずに消えた可能性が高い');
+      expect(reply).toContain('7 件');
+      expect(reply).toContain('runner-test');
+      // **「可能性が高い」と「そうである」を混ぜない。** archive が含まれて
+      // いたかは runner が種別を名乗らない以上わからない、と明記すること。
+      expect(reply).toContain('archive が含まれていたかもここからは言えない');
+      // 3つ目の状態（「id 自体が台帳に無い場合と区別できない」）の断りは消さない。
+      expect(reply).toContain('区別できない');
+    });
+
+    it('脚は在るが滞留している（pendingEvents > 0、入れ替わっていない）: 「まだ引き渡していない可能性がある」', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: '調べて' });
+      h.setRunnerBacklog([
+        {
+          runnerId: 'runner-test',
+          pendingEvents: 4,
+          oldestPendingAt: '2026-08-27T00:10:00.000Z',
+          observedAt: '2026-08-27T00:30:00.000Z',
+          legState: { status: 'connected', since: '2026-08-27T00:00:00.000Z' },
+        },
+      ]);
+
+      const reply = await h.call('manager_transcript', { managerId: 'mgr-1' });
+
+      expect(reply).toContain('まだ引き渡していない可能性がある');
+      expect(reply).toContain('4 件');
+      // `describeRunnerLegState` を再利用しているので、待ってよいことも読める。
+      expect(reply).toContain('まだ届いていない。届く見込みがある');
+      expect(reply).not.toContain('引き渡せずに消えた');
+    });
+
+    it('脚が落ちている（down）ときも「まだ引き渡していない可能性がある」側だが、再接続待ちであることが読める', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: '調べて' });
+      h.setRunnerBacklog([
+        {
+          runnerId: 'runner-test',
+          pendingEvents: 2,
+          observedAt: '2026-08-27T00:30:00.000Z',
+          legState: { status: 'down', since: '2026-08-27T00:10:00.000Z' },
+        },
+      ]);
+
+      const reply = await h.call('manager_transcript', { managerId: 'mgr-1' });
+
+      expect(reply).toContain('まだ引き渡していない可能性がある');
+      expect(reply).toContain('⚠ 再接続するまで1件も届かない');
+    });
+
+    it('どちらとも言えない（runnerBacklog に材料が無い）: 「判定できない」', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: '調べて' });
+      // setRunnerBacklog を呼ばない = まだ一度も観測していない。
+
+      const reply = await h.call('manager_transcript', { managerId: 'mgr-1' });
+
+      expect(reply).toContain('判定できない');
+      expect(reply).not.toContain('引き渡せずに消えた可能性が高い');
+      expect(reply).not.toContain('まだ引き渡していない可能性がある');
+    });
+
+    it('どちらとも言えない（観測できた滞留が0件）: 0件を「引き渡し済み」の証拠にしない', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: '調べて' });
+      h.setRunnerBacklog([
+        {
+          runnerId: 'runner-test',
+          pendingEvents: 0,
+          observedAt: '2026-08-27T00:30:00.000Z',
+          legState: { status: 'connected', since: '2026-08-27T00:00:00.000Z' },
+        },
+      ]);
+
+      const reply = await h.call('manager_transcript', { managerId: 'mgr-1' });
+
+      expect(reply).toContain('判定できない');
+    });
+
+    it('runnerId 自体が取れない（この委譲に runner が割り当てられた像を持たない）: 「判定できない」', async () => {
+      const h = harness();
+      h.setAutoRunnerId(undefined);
+      await h.call('manager_start', { request: '調べて' });
+
+      const reply = await h.call('manager_transcript', { managerId: 'mgr-1' });
+
+      expect(reply).toContain('判定できない');
+    });
   });
 });
 

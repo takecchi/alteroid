@@ -1267,6 +1267,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     runnerBacklog() {
       throw new Error('spec 生成専用のスタブ: 器の滞留は観測していない');
     },
+    runnerIdOf() {
+      throw new Error('spec 生成専用のスタブ: 委譲の像は持たない');
+    },
     transcript() {
       throw new Error('spec 生成専用のスタブ: 生ログは持たない');
     },

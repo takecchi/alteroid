@@ -116,6 +116,9 @@ function fakeClone() {
     runnerBacklog() {
       return [];
     },
+    async runnerIdOf(managerId) {
+      return managerList.find((manager) => manager.managerId === managerId)?.runnerId;
+    },
     // **HTTP の面には出ていない。** `GET /runners` は `deps.runners`
     // （`RunnerRegistry`）を直に読み、`ManagerPool.runners()` は経由しない
     // （クローンの道具専用）ので、ここでは型を満たすだけの空スタブで足りる。

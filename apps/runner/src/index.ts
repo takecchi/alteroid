@@ -19,9 +19,17 @@ import {
 } from '@alteroid/core';
 import { createAdaptorServer } from '@hono/node-server';
 
-import { createRunnerApp, Outbox } from './app.js';
+import { createRunnerApp, formatOutboxShutdownReport, Outbox } from './app.js';
 
-export { createRunnerApp, Outbox, type RunnerAppDeps, type RunnerAppType } from './app.js';
+export {
+  createRunnerApp,
+  formatOutboxShutdownReport,
+  Outbox,
+  type OutboxPendingGroup,
+  type OutboxShutdownSnapshot,
+  type RunnerAppDeps,
+  type RunnerAppType,
+} from './app.js';
 
 /**
  * alteroid-runner — マネージャーと作業者を隔離して走らせる常駐プロセス。
@@ -77,6 +85,64 @@ const SHUTDOWN_GRACE_MS = 60_000;
  * 作業時間ではない。
  */
 const FORCED_EXIT_MS = SHUTDOWN_GRACE_MS - 5_000;
+
+/**
+ * 未送出が捌けるのを、`shutdown()` が短く待つ上限（#634）。
+ *
+ * **脚が繋がっている（listener が付いている）ときにしか使わない。** 落ちている
+ * ときに待っても誰も引き取らないうえ、器の焼き直しのたびに shutdown が延びる
+ * ——だから外側のガードは `Outbox.subscribed` である。ここに値を置くのは
+ * 「繋がっているのに1バイトも動かない」ケース（相手が読まなくなった接続。
+ * `outbox-pending.test.ts` の無音固着と同じ形）を短く見限るためで、待つこと
+ * 自体を正当化する値ではない。
+ *
+ * **`FORCED_EXIT_MS`（`SHUTDOWN_GRACE_MS - 5_000` = 55,000ms）の予算の内側に
+ * 十分収まる値を選ぶ。** 待つのは「片付け（`host.shutdown()`）が終わった後」
+ * なので、ここでどれだけ使っても `FORCED_EXIT_MS` の残りを食うだけである——
+ * 待ち過ぎると `host.shutdown()` に使える時間がそのぶん削れる。3秒は、SSE の
+ * 1フレームが書き切るのに十分な余裕を見つつ、片付け側の予算をほぼ残す値と
+ * して選んだ（根拠は実測ではなく判断——揺れがあれば PR で調整すること）。
+ */
+export const DRAIN_WAIT_MS = 3_000;
+
+/** 待つ間隔。`DRAIN_WAIT_MS` を無駄なポーリングで食い潰さない程度に短くする。 */
+export const DRAIN_POLL_INTERVAL_MS = 50;
+
+/**
+ * listener が付いている間だけ、未送出が捌けるのを短く待つ（#634）。
+ *
+ * **`outbox.subscribed` が false になったら即座に諦める**（新たに待っても
+ * 誰も引き取らない）。**タイムアウトしても例外は投げない**——待ち切れなかった
+ * ことは、この後 `formatOutboxShutdownReport` が「まだ残っている」として
+ * そのまま報告する。ここは「待てるだけ待つ」努力目標であって、保証ではない。
+ */
+export async function waitForOutboxDrain(outbox: Outbox, maxWaitMs: number): Promise<void> {
+  const deadline = Date.now() + maxWaitMs;
+  while (outbox.pending > 0 && outbox.subscribed && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, DRAIN_POLL_INTERVAL_MS));
+  }
+}
+
+/**
+ * 畳む本体——待って、残っていれば名指しして stderr へ書く（#634）。
+ *
+ * **`write` を注入できる。** 既定は `writeStderrSync`（本番と同じ同期書き込み。
+ * `index.ts` の他の箇所と同じ理由——fd がパイプだと `process.stderr.write` は
+ * POSIX 上は非同期で、直後の `process.exit()` に書いた行が巻き込まれて消える
+ * ことがある。#248）。テストは fd 2 への実書き込みを迂回して、渡された文字列を
+ * 直接検査する——本番の起動経路（`main()`）はこの引数を渡さないので、実際の
+ * 書き込み方法は1文字も変えていない。
+ */
+export async function drainAndReportOutbox(
+  outbox: Outbox,
+  options: { waitMs?: number; write?: (line: string) => void } = {},
+): Promise<void> {
+  if (outbox.subscribed) {
+    await waitForOutboxDrain(outbox, options.waitMs ?? DRAIN_WAIT_MS);
+  }
+  const report = formatOutboxShutdownReport(outbox.describeForShutdown());
+  if (report !== null) (options.write ?? writeStderrSync)(report);
+}
 
 /** 空文字は「未指定」。 */
 function envValue(env: NodeJS.ProcessEnv, key: string): string | undefined {
@@ -264,6 +330,13 @@ export async function main(): Promise<void> {
     const forced = setTimeout(() => process.exit(0), FORCED_EXIT_MS);
     forced.unref();
     await host.shutdown().catch(() => undefined);
+
+    // **脚が繋がっているときだけ、捌けるのを短く待ってから、残っていれば
+    // 失うものを名指しして stderr へ同期で書く**（#634。`drainAndReportOutbox`
+    // の doc）。落ちている（listener が付いていない）ときは1ミリ秒も待たない
+    // ——待っても誰も引き取らないうえ、器の焼き直しのたびに shutdown が延びる。
+    await drainAndReportOutbox(outbox);
+
     process.exit(0);
   };
 

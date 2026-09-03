@@ -507,6 +507,72 @@ function describeRunnerLegState(snapshot: RunnerBacklogSnapshot): string {
   }
 }
 
+/**
+ * `manager_transcript` が「生ログが無い」と答える直前に添える、脚の状態の
+ * 言い分け（#634。PR #628 が指した範囲外の穴——3段どこにも無いとき、
+ * 「まだ引き渡していない」と「引き渡せずに消えた」が同じ文面になっていた）。
+ *
+ * **ネットワークは一切叩かない。** `ManagerPool.runnerIdOf()` はプロセス内の
+ * 像（`#records`）を優先して読み、無ければ台帳（job store）へ1回だけ降りる
+ * （`manager.ts` の interface doc 参照——退役済みの委譲でも言い分けられる
+ * ようにするため）。`runnerBacklog()` は直近の heartbeat / 明示呼びが拾って
+ * 保存しておいたキャッシュを読むだけである
+ * （`grep -Fn -- 'ネットワークを一切叩かない' packages/core/src/manager.ts`
+ * が当たる doc のとおり）。**「新しい往復」ではないと判断している**——
+ * ストアの読み出しであって runner への HTTP ではなく、しかも
+ * `manager_transcript` という明示的な呼び出しの、生ログが無かった枝でしか
+ * 走らない（クローンの巡回回数に比例しない）。
+ *
+ * **`describeRunnerLegState` をそのまま再利用する。** あの関数が持つ優先順位
+ * （1. 器が入れ替わった 2. 繋がっている 3. 落ちている／一度も繋がっていない
+ * 4. 観測していない）は、ここで求められている「引き渡せずに消えた」
+ * （1に相当）と「まだ引き渡していない」（2・3に相当）の言い分けそのもの
+ * ——同じ判定を2箇所へ別々に書くと、いつか字面が割れる（`manager_list` と
+ * `runner_list` の状態表示を揃えている理由と同じ）。
+ *
+ * **「可能性が高い」と「そうである」を混ぜない。** runner は出来事の種別を
+ * 名乗って届けているわけではない（`Outbox` は種別を見ずにまとめて溜める）
+ * ので、失われた分に `archive` が含まれていたかはデーモン側からは分から
+ * ない——ここで言えるのは「未送出が N 件あった（内訳は不明）」までである。
+ *
+ * **3状態を維持する。** `runnerId` が取れない・`runnerBacklog()` に該当が
+ * 無い・観測できた滞留が0件のいずれも「判定できない」へ倒す（0や偽の時刻を
+ * 作らない。AGENTS.md「取れない軸に0の行を作る」）。
+ */
+async function describeTranscriptMissingLeg(pool: ManagerPool, managerId: string): Promise<string> {
+  const runnerId = await pool.runnerIdOf(managerId);
+  if (runnerId === undefined) {
+    return (
+      '判定できない（この委譲に runner が割り当てられたことを、走行中の像・' +
+      '台帳のどちらからも確認できない —— 一度も割り当てられなかったのか、' +
+      'id 自体が存在しないのかは、この応答だけでは区別できない）。'
+    );
+  }
+
+  const snapshot = pool.runnerBacklog().find((entry) => entry.runnerId === runnerId);
+  if (snapshot === undefined || snapshot.pendingEvents === 0) {
+    return (
+      `判定できない（runner ${runnerId} について、生ログが無い理由と結び付けられる` +
+      '未送出の滞留を観測できていない。滞留が実際に0件だったのか、まだ一度も' +
+      '観測していないだけなのかは、この応答だけでは区別できない）。'
+    );
+  }
+
+  // **`instanceSwapped === true` が最優先**（`describeRunnerLegState` と
+  // 同じ順位）。滞留を観測した後で器が入れ替わっていれば、脚がいま何であれ
+  // その滞留はもう配られない——「引き渡せずに消えた可能性が高い」側である。
+  const prefix =
+    snapshot.instanceSwapped === true
+      ? '引き渡せずに消えた可能性が高い。'
+      : 'まだ引き渡していない可能性がある（この生ログもその中に含まれるかは' + '分からない）。';
+
+  return (
+    `${prefix} runner ${runnerId} について ${snapshot.observedAt} 時点で観測できた` +
+    `未送出の出来事: ${snapshot.pendingEvents} 件（内訳は runner から届いていないので` +
+    `不明——archive が含まれていたかもここからは言えない）。${describeRunnerLegState(snapshot)}`
+  );
+}
+
 /** 全文を取りに来たときの1回分。続きは `offset` で取れる。 */
 const REPORT_PAGE = 8_000;
 
@@ -4657,12 +4723,18 @@ export function createCloneTools(context: ToolContext) {
           // `ManagerPool.transcript()` の実装（`manager.ts`）はこの2つを区別する
           // 値を返してこないので、ここでも区別できない。**畳んでいることを隠さず、
           // そう書く。**
+          //
+          // **その先で、「まだ引き渡していない」と「引き渡せずに消えた」は
+          // 言い分ける（#634）。** 上の断り（id 自体が無い場合との区別が
+          // 付かない）は消さない——3つ目の「判定できない」はここでも生きて
+          // いる（`describeTranscriptMissingLeg` が言えないときはそう返す）。
           return text(
             `マネージャー ${managerId} の生ログは無い。走行中の runner のディスク・` +
               '退避済みアーカイブ・預かったセッションの生ログ、3段のどこにも見当たらなかった。' +
               `（${managerId} という id 自体が台帳に無い場合と、id はあるが生ログが` +
               '一度も残らなかった場合のどちらも、この応答だけでは区別できない。' +
-              'manager_list に出ているかで id の実在は別途確かめられる。）',
+              'manager_list に出ているかで id の実在は別途確かめられる。）\n\n' +
+              (await describeTranscriptMissingLeg(context.managers, managerId)),
           );
         }
 
