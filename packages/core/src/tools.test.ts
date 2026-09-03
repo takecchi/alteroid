@@ -4054,6 +4054,185 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * runner→デーモンの脚（このデーモン自身の側の端。`legState`）——状態ごとに
+   * クローンの次の一手が変わることを、`manager_list` の出力そのもので固定する。
+   * `describeRunnerLegState`（`tools.ts`）が4状態＋器の入れ替えを言い分ける、
+   * その割り当ての歯である。
+   */
+  describe('runner の滞留の行に、脚（デーモン自身の側の端）の状態を添える', () => {
+    it('繋がっている: 「まだ届いていない。届く見込みがある」（待ってよい）。バイトが1つも来ていなければその旨を出す', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      h.setRunnerBacklog([
+        {
+          runnerId: 'runner-test',
+          pendingEvents: 3,
+          observedAt: '2026-08-27T00:30:00.000Z',
+          // **`lastByteAt` を意図的に付けない**——「開いてはいるが、まだ
+          // 1バイトも来ていない」（`legState` の doc）を模す。依頼者の
+          // 指摘: 繋がっているのと繋がったまま死んでいるのが同じ文面に
+          // ならないよう、取れた材料（`since` / `lastByteAt`）は必ず出す。
+          legState: { status: 'connected', since: '2026-08-27T00:00:00.000Z' },
+        },
+      ]);
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('まだ届いていない');
+      expect(reply).toContain('待ってよい');
+      // **`since` を出す。**
+      expect(reply).toContain('2026-08-27T00:00:00.000Z');
+      // **`lastByteAt` が無いことがそのまま読める字が出る**（0や偽の時刻を
+      // 作らない——AGENTS.md 地雷表）。
+      expect(reply).toContain('開いてから1バイトも受け取っていない');
+      // **落ちている側の文言（「再接続するまで」）と混ざっていないこと。**
+      expect(reply).not.toContain('再接続するまで');
+      expect(reply).not.toContain('もう来ない');
+    });
+
+    it('繋がっている: バイトを受け取っていれば、その時刻を出す（「繋がっている」と「繋がったまま死んでいる」を同じ文面にしない）', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      h.setRunnerBacklog([
+        {
+          runnerId: 'runner-test',
+          pendingEvents: 3,
+          observedAt: '2026-08-27T00:30:00.000Z',
+          legState: {
+            status: 'connected',
+            since: '2026-08-27T00:00:00.000Z',
+            lastByteAt: '2026-08-27T00:29:55.000Z',
+          },
+        },
+      ]);
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('まだ届いていない');
+      expect(reply).toContain('2026-08-27T00:00:00.000Z');
+      // **`lastByteAt` が読める。** 「1バイトも受け取っていない」とは
+      // 出ない（材料が在るのに無いことにしない）。
+      expect(reply).toContain('2026-08-27T00:29:55.000Z');
+      expect(reply).not.toContain('開いてから1バイトも受け取っていない');
+    });
+
+    it('落ちている: 「⚠ 再接続するまで1件も届かない」に、いつから・理由・次の再試行を添える', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      h.setRunnerBacklog([
+        {
+          runnerId: 'runner-test',
+          pendingEvents: 3,
+          observedAt: '2026-08-27T00:30:00.000Z',
+          legState: {
+            status: 'down',
+            since: '2026-08-27T00:10:00.000Z',
+            lastFailureReason: 'runner の /events に繋げない (503)',
+            nextRetryAt: '2026-08-27T00:31:00.000Z',
+          },
+        },
+      ]);
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('⚠ 再接続するまで1件も届かない');
+      expect(reply).toContain('2026-08-27T00:10:00.000Z');
+      expect(reply).toContain('runner の /events に繋げない (503)');
+      expect(reply).toContain('2026-08-27T00:31:00.000Z');
+      expect(reply).not.toContain('待ってよい');
+    });
+
+    it('一度も繋がっていない: 「⚠ 再接続するまで1件も届かない」に、その旨を添える', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      h.setRunnerBacklog([
+        {
+          runnerId: 'runner-test',
+          pendingEvents: 3,
+          observedAt: '2026-08-27T00:30:00.000Z',
+          legState: { status: 'never-connected' },
+        },
+      ]);
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('⚠ 再接続するまで1件も届かない');
+      expect(reply).toContain('一度も繋がっていない');
+    });
+
+    /**
+     * **「観測していない」を「繋がっている」にも「落ちている」にも倒さない。**
+     * `legState` を snapshot に一切載せない（`LocalRunner`・古い記録を模す）
+     * ——「判定できない」とだけ言い、どちらとも言えないことが分かる形にする。
+     */
+    it('観測していない（legState を持たない）: 「判定できない」——connected/down のどちらにも倒さない', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      h.setRunnerBacklog([
+        {
+          runnerId: 'runner-test',
+          pendingEvents: 3,
+          observedAt: '2026-08-27T00:30:00.000Z',
+          // legState を意図的に持たせない。
+        },
+      ]);
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('判定できない');
+      expect(reply).not.toContain('まだ届いていない');
+      expect(reply).not.toContain('再接続するまで');
+      expect(reply).not.toContain('もう来ない');
+    });
+
+    /**
+     * **器が入れ替わった: 脚がいま何であれ「もう来ない」を優先する。**
+     * ここでは `legState.status` を意図的に `'connected'`（新しい器への
+     * 接続）にして、`instanceSwapped` を見ずに `legState` だけを読むと
+     * 「待ってよい」という誤った案内になることを固定する。
+     */
+    it('器が入れ替わった: legState が connected でも「もう来ない」を優先する', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      h.setRunnerBacklog([
+        {
+          runnerId: 'runner-test',
+          pendingEvents: 3,
+          observedAt: '2026-08-27T00:30:00.000Z',
+          legState: { status: 'connected', since: '2026-08-27T00:40:00.000Z' },
+          instanceSwapped: true,
+        },
+      ]);
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('もう来ない');
+      expect(reply).toContain('器が入れ替わった');
+      expect(reply).not.toContain('まだ届いていない');
+      expect(reply).not.toContain('待ってよい');
+    });
+
+    it('器が入れ替わっていない（instanceSwapped: false）: 通常どおり legState を読む', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      h.setRunnerBacklog([
+        {
+          runnerId: 'runner-test',
+          pendingEvents: 3,
+          observedAt: '2026-08-27T00:30:00.000Z',
+          legState: { status: 'connected', since: '2026-08-27T00:00:00.000Z' },
+          instanceSwapped: false,
+        },
+      ]);
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('まだ届いていない');
+      expect(reply).not.toContain('もう来ない');
+    });
+  });
+
+  /**
    * **この Issue の設計判断そのものの歯。** `manager_list` から `resources()`
    * を自動で呼ぶ形は採らない（north_star 禁止2「opt-in の判断をクローンから
    * 奪わない」）——`runner_list` の `resources: true` はクローンが明示的に
