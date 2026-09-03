@@ -344,6 +344,16 @@ describe('通しの歯 — memory_write の見込み文字数と、次のター�
     expect(secondTurnInput).not.toContain('<!-- memory: core.md -->');
     expect(secondTurnInput).toContain('親 core は在るが、ここに載せた分には含まれない');
 
+    // このシナリオは resume していない（`#resumedHistoryHasMemory` は
+    // 立っていない）ので、resume 直後の断り（`RESUMED_MEMORY_NOTICE`。
+    // clone.ts）が入力のどこにも現れてはならない。これは marker/boundary の
+    // 範囲の外——連結の先頭（`head` より前）に付く枝なので、marker→boundary
+    // の切り出し（下）だけでは捕まらない。**この節が捕まえるのは、まさに
+    // そこ**（`resumeNotice` を常に先頭へ付けるように変異させると、
+    // marker→boundary の値もその範囲も1文字も変わらないまま、ここだけが
+    // 落ちる——変異試験(a)の実測は PR 本文にある）。
+    expect(secondTurnInput).not.toContain('前のセッションを引き継いで');
+
     // **実際に載った塊を取り出す。** `#withFreshMemory`（`clone.ts`）の現物の
     // 連結は `[...(resumeNotice?), head, ...(changed?), ...(removed?),
     // ...(documents.length===0?), '', '---', '', text]`——このシナリオでは
