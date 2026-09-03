@@ -24,22 +24,27 @@ function pending(id = 'toolu_1'): ManagerActivityInput['toolUseStallPending'] {
   return [{ id, name: 'AskUserQuestion' }];
 }
 
-describe('classifyManagerActivity — 4状態の網羅（依頼者の守る線: 「無い」の種類を潰さない）', () => {
-  /**
-   * ⚠️⚠️ 網羅の歯（これが本命）。**`Record<NonNullable<ManagerActivityKind>,
-   * true>` で縛る**——`ManagerActivityKind` に値が増えてここを足し忘れると
-   * コンパイルエラーで止まる（AGENTS.md「型で塞いだ分岐にも実行時の歯を
-   * 足す」と対になる、コンパイル時の網羅性の歯）。
-   */
-  const ALL_KINDS = {
-    'stalled-turn-end': true,
-    'stalled-tool-use': true,
-    active: true,
-    unknown: true,
-  } satisfies Record<NonNullable<ManagerActivityKind>, true>;
+/**
+ * ⚠️⚠️ 網羅の歯の一覧そのもの（これが本命）。**`Record<NonNullable<
+ * ManagerActivityKind>, true>` で縛る**——`ManagerActivityKind` に値が
+ * 増えてここを足し忘れるとコンパイルエラーで止まる（AGENTS.md「型で
+ * 塞いだ分岐にも実行時の歯を足す」と対になる、コンパイル時の網羅性の歯）。
+ *
+ * **モジュール scope へ置く。** `classifyManagerActivity` の網羅（下の
+ * describe）と `describeManagerActivityForFlush` が「4状態とも非空文字を
+ * 返す」（もう1つ下の describe）の**両方**がこの同じ一覧を回す——一覧を
+ * 2つ持つと、状態が増えたときに片方だけ更新されて静かにずれる。
+ */
+const ALL_MANAGER_ACTIVITY_KINDS = {
+  'stalled-turn-end': true,
+  'stalled-tool-use': true,
+  active: true,
+  unknown: true,
+} satisfies Record<NonNullable<ManagerActivityKind>, true>;
 
+describe('classifyManagerActivity — 4状態の網羅（依頼者の守る線: 「無い」の種類を潰さない）', () => {
   it('4状態すべてがこの一覧に載っている（Object.keys で数え上げる歯）', () => {
-    expect(Object.keys(ALL_KINDS).sort()).toEqual(
+    expect(Object.keys(ALL_MANAGER_ACTIVITY_KINDS).sort()).toEqual(
       ['active', 'stalled-tool-use', 'stalled-turn-end', 'unknown'].sort(),
     );
   });
@@ -176,16 +181,36 @@ describe('describeManagerActivityForFlush — flush が配る短い1行', () => 
     expect(line).toContain('#572');
   });
 
-  it('active は何も出さない（健全な委譲では1文字も増やさない）', () => {
-    expect(describeManagerActivityForFlush('active')).toBe('');
+  it('active は「進んでいる」と読める字を出す。⚠ は付けない（警告ではない）', () => {
+    const line = describeManagerActivityForFlush('active');
+    expect(line).toContain('進んでいる');
+    expect(line).not.toContain('⚠');
   });
 
   it('unknown は「判定できない」と分かる文字を出す。⚠ は付けない（症状の断定ではないため字面で区別する）', () => {
     const line = describeManagerActivityForFlush('unknown');
     expect(line).toContain('判定できない');
-    expect(line).not.toBe('');
-    // **active（空文字）とは字面で区別できる**——依頼者が「進んでいるので
-    // 待つ」と「観測が無いので分からない」を読み違えないため。
+    expect(line).not.toContain('⚠');
+    // **active とは字面で区別できる**——依頼者が「進んでいるので待つ」と
+    // 「観測が無いので分からない」を読み違えないため。
     expect(line).not.toBe(describeManagerActivityForFlush('active'));
+  });
+
+  /**
+   * ⚠️⚠️ これが本命——静かな失敗を作らないための歯。
+   *
+   * 「flush の文面に判定の行が無い」が2つの意味を持つ形（(a) `'active'`
+   * だったので言うことが無い／(b) 結線が壊れて1行も足されなかった）を
+   * 作らないため、**4状態すべてで空文字を返さないこと**を、状態の一覧
+   * （`ALL_MANAGER_ACTIVITY_KINDS`。`classifyManagerActivity` の網羅と
+   * 同じ一覧）を回して測る。**先に「対象が空でないこと」を確かめる**
+   * （依頼者の守る線——空配列を回すループは何も検査せずに緑を返す）。
+   */
+  it('4状態すべてで空文字を返さない（Record<NonNullable<...>, true> を回す）', () => {
+    const kinds = Object.keys(ALL_MANAGER_ACTIVITY_KINDS) as ManagerActivityKind[];
+    expect(kinds.length).toBeGreaterThan(0);
+    for (const kind of kinds) {
+      expect(describeManagerActivityForFlush(kind)).not.toBe('');
+    }
   });
 });

@@ -285,7 +285,7 @@ describe('flushWithheldReports が配る文面に、manager_list と同じ判定
     await pool.stop();
   });
 
-  it('進んでいる／正常な待ち: probe が「正常に終わった」を残した状態で flush すると ⚠ は付かない', async () => {
+  it('進んでいる／正常な待ち: probe が「正常に終わった」を残した状態で flush すると ⚠ は付かず、「進んでいる」の行が載る', async () => {
     const { pool, fake, advance, inbox } = await setup();
 
     // 実時計より確実に過去の timestamp にする——`job.lastReportAt` は
@@ -307,6 +307,9 @@ describe('flushWithheldReports が配る文面に、manager_list と同じ判定
     const text = await lastDeliveredText(inbox, '配っていない');
     expect(text).not.toContain('⚠');
     expect(text).not.toContain('判定できない');
+    // **静かな失敗を作らない歯。** active でも判定の行そのものは載る
+    // （「行が無い」＝「結線が壊れた」と区別できるようにするため）。
+    expect(text).toContain('進んでいる');
 
     await pool.stop();
   });

@@ -138,12 +138,25 @@ export function classifyManagerActivity(input: ManagerActivityInput): ManagerAct
  * `flushWithheldReports()`（`manager.ts`）が配る短い1行。**畳んだ本文の全文
  * ではなく、状態と次の一手だけを言う**——全文は日誌に在る（`journal_read`）。
  *
+ * **4状態すべてで必ず非空文字を返す。** かつては `'active'` を空文字（何も
+ * 足さない）にしていたが、それだと flush の文面から「判定の行そのものが
+ * 無い」ときに2つの意味が生まれてしまう——(a) `'active'` だった（進んで
+ * いるので言うことが無い）／(b) 判定の結線が壊れて1行も足されなかった。
+ * **この2つが字面で区別できないのは「静かに失敗する形」そのものである**
+ * （依頼者の守る線）。だから `'active'` も他の3状態と同じく必ず字を出す
+ * ——`tools.ts` の `describeTurnEnd` / `describeToolUseStall`（一覧。`null`
+ * で黙る）とは事情が違う。あちらは**全マネージャーを毎回並べる**ので健全な
+ * 行を出すと一覧がそのぶん膨らむが、flush の文面は**既に異常（30分、本報告
+ * が1本も無い）と分かっている委譲について30分に1回だけ**出るので、1行増える
+ * 費用は無視できる。
+ *
  * - `'stalled-turn-end'` / `'stalled-tool-use'` ⟹ **⚠** を出す
- * - `'active'` ⟹ 何も出さない（空文字。健全な委譲では1文字も増やさない
- *   ——`describeTurnEnd` / `describeToolUseStall` と同じ作法）
+ * - `'active'` ⟹ **⚠ は付けない**（警告ではない）が、「進んでいる／
+ *   止まっている兆候は無い」と読める字を出す
  * - `'unknown'` ⟹ **「判定できない」と分かる文字**を出す。**`'active'`
- *   （何も出さない）とは字面で区別する**——依頼者が「進んでいるので待つ」
- *   と「観測が無いので分からない」を読み違えないため。
+ *   （止まっている兆候は無い、という積極的な観測）とは字面で区別する**
+ *   ——依頼者が「進んでいるので待つ」と「観測が無いので分からない」を
+ *   読み違えないため。
  */
 export function describeManagerActivityForFlush(kind: ManagerActivityKind): string {
   switch (kind) {
@@ -163,7 +176,7 @@ export function describeManagerActivityForFlush(kind: ManagerActivityKind): stri
         '急かさず、次の一覧まで待つこと。'
       );
     case 'active':
-      return '';
+      return ' 進んでいる（止まっている兆候は無い）。急かさなくてよい。';
     default: {
       const exhaustive: never = kind;
       throw new Error(`未知の ManagerActivityKind: ${JSON.stringify(exhaustive)}`);
