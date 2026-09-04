@@ -1205,6 +1205,13 @@ export interface ManagerPoolOptions {
    * プロセスの環境変数）。試験と、明示的に配線したい呼び出し元のために口を開けてある。
    */
   workspace?: WorkspacePolicy;
+  /**
+   * `flushWithheldReports()` の期限（ms）。**省略時は
+   * `resolveWithheldReportFlushMs()`**（＝ この プロセスの環境変数
+   * `ALTEROID_WITHHELD_REPORT_FLUSH_MS`、既定30分）。`leaseTtlMs` と同じ
+   * 理由で口を開けてある——試験と、明示的に配線したい呼び出し元のため。
+   */
+  withheldReportFlushMs?: number;
 }
 
 export function createManagerPool(options: ManagerPoolOptions): ManagerPool {
@@ -1968,6 +1975,41 @@ interface WithheldReportMemory {
  */
 const WITHHELD_REPORT_FLUSH_MS = 30 * 60_000;
 
+/**
+ * `WITHHELD_REPORT_FLUSH_MS` を人間が差し替えるための環境変数。
+ *
+ * **まだ30分が妥当かを観測していない**——本番でこの値が長すぎる・短すぎると
+ * 分かってからコード変更＋デプロイを待たずに済むよう、口だけ開けてある。
+ * 既定は動かさない（`WITHHELD_REPORT_FLUSH_MS` の doc「なぜ30分か」を参照）。
+ */
+export const WITHHELD_REPORT_FLUSH_MS_ENV_KEY = 'ALTEROID_WITHHELD_REPORT_FLUSH_MS';
+
+/**
+ * 環境変数を見て `flushWithheldReports()` の期限（ms）を決める。
+ *
+ * `runner.ts` の `resolveManagerModel(env = process.env)` の作法に揃えてある
+ * ——試験は引数で env を渡し、`process.env` を書き換えない。
+ *
+ * **読めない・空・0以下・数値でない値は既定（`WITHHELD_REPORT_FLUSH_MS`、
+ * 30分）へ倒す。** 壊れた値のまま走らせて「配る/配らない」の境界が
+ * 揺れることを避ける——`resolveModelTier`（`model-tier.ts`）と同じ「既定へ
+ * 静かに倒す」側を採る。単位は `_MS` の名のとおりミリ秒で、内部の定数と
+ * 単位変換を挟まない（分単位にすると `readScheduleConfig`
+ * （`apps/daemon/src/schedule.ts`）の `ALTEROID_INITIATIVE_EVERY` と同じ
+ * 形になるが、こちらは口を開ける対象がミリ秒の定数そのものなので、
+ * 変換で新しい丸め誤差を作らない側を選んだ）。
+ */
+export function resolveWithheldReportFlushMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[WITHHELD_REPORT_FLUSH_MS_ENV_KEY];
+  if (raw === undefined) return WITHHELD_REPORT_FLUSH_MS;
+  // 空文字（空白のみを含む）は `Number()` が 0 を返すので、下の
+  // `parsed <= 0` が既に拾う——ここで別枝は作らない（歯で「噛んでいない」
+  // 枝を残さない）。
+  const parsed = Number(raw.trim());
+  if (!Number.isFinite(parsed) || parsed <= 0) return WITHHELD_REPORT_FLUSH_MS;
+  return parsed;
+}
+
 /** `case 'report'` の decision 日誌・`#emit` の抜粋に使う文字数（`NOTIFY_REPORT_EXCERPT` と同じ考え方）。 */
 const WITHHELD_REPORT_EXCERPT = 240;
 
@@ -2013,6 +2055,11 @@ class Pool implements ManagerPool {
   readonly #now: () => number;
   /** 貸し出しの猶予。runner へ渡し、runner はこの長さで自己失効する。 */
   readonly #leaseTtlMs: number;
+  /**
+   * `flushWithheldReports()` の期限（ms）。**`#leaseTtlMs` と同じ形**——
+   * 構築時に一度だけ確定し、以後 `process.env` を読み直さない。
+   */
+  readonly #withheldReportFlushMs: number;
   /**
    * 新しい managerId を発行する。**器の乱数を直に読まない**（テストが衝突を
    * 再現できるようにする。`#now` と同じ理由）。
@@ -2196,6 +2243,7 @@ class Pool implements ManagerPool {
     profile,
     now,
     leaseTtlMs,
+    withheldReportFlushMs,
     generateManagerId,
     tokenIdentity,
     onUsageObservation,
@@ -2208,6 +2256,7 @@ class Pool implements ManagerPool {
     this.#profile = profile;
     this.#now = now ?? (() => Date.now());
     this.#leaseTtlMs = leaseTtlMs ?? LEASE_TTL_MS;
+    this.#withheldReportFlushMs = withheldReportFlushMs ?? resolveWithheldReportFlushMs();
     this.#generateManagerId = generateManagerId ?? (() => `mgr-${randomUUID()}`);
     this.#workspace = workspace ?? resolveWorkspacePolicy();
     this.#tokenIdentity = tokenIdentity;
@@ -3125,10 +3174,11 @@ class Pool implements ManagerPool {
    * 握り潰した「背景処理の完了待ちで畳んだ報告」の逃げ道（時間）。doc は
    * `ManagerPool` interface を参照。
    *
-   * **`lastAt` から `WITHHELD_REPORT_FLUSH_MS` 経った積みだけを配る**
-   * （判定は純関数 {@link withheldReportOverdue} に切り出してある。`lastAt`
-   * が読めない場合の扱いもそちらの doc を参照）。まだ経っていない積みは
-   * 触らない——正常に次のターンを待っているだけの委譲を急かさない。
+   * **`lastAt` から `#withheldReportFlushMs`（既定 `WITHHELD_REPORT_FLUSH_MS`、
+   * 環境変数 `ALTEROID_WITHHELD_REPORT_FLUSH_MS` で差し替え可）経った積みだけ
+   * を配る**（判定は純関数 {@link withheldReportOverdue} に切り出してある。
+   * `lastAt` が読めない場合の扱いもそちらの doc を参照）。まだ経っていない
+   * 積みは触らない——正常に次のターンを待っているだけの委譲を急かさない。
    *
    * **`#emit()` を通す**（`case 'closed'` と同じ理由。専用の文面を1本出せば
    * `#emit` 自身が積みを見つけて末尾へ1行足す）。**`withheldSuffixDetail:
@@ -3147,7 +3197,7 @@ class Pool implements ManagerPool {
     const now = this.#now();
     for (const [managerId, memory] of [...this.#withheldReports.entries()]) {
       try {
-        if (!withheldReportOverdue(memory.lastAt, now, WITHHELD_REPORT_FLUSH_MS)) continue;
+        if (!withheldReportOverdue(memory.lastAt, now, this.#withheldReportFlushMs)) continue;
         const activity = classifyManagerActivity(
           this.#activityInputOfRecord(this.#records.get(managerId)),
         );
@@ -3155,7 +3205,7 @@ class Pool implements ManagerPool {
           managerId,
           'report',
           `[${managerId}] 背景処理の完了待ちで畳んだ報告が、次のターンの完了を` +
-            `${String(Math.round(WITHHELD_REPORT_FLUSH_MS / 60_000))}分待っても届かなかった。` +
+            `${String(Math.round(this.#withheldReportFlushMs / 60_000))}分待っても届かなかった。` +
             'まとめて配る。' +
             describeManagerActivityForFlush(activity),
           undefined,
