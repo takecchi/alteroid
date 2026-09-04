@@ -1985,28 +1985,86 @@ const WITHHELD_REPORT_FLUSH_MS = 30 * 60_000;
 export const WITHHELD_REPORT_FLUSH_MS_ENV_KEY = 'ALTEROID_WITHHELD_REPORT_FLUSH_MS';
 
 /**
+ * 上の env が「非空だが読めない」ときに跡へ書く固定文言（`noteUnreadableRecord`
+ * の `what`）。**2箇所（数値として読めない／0以下）から呼ぶので定数に寄せる**
+ * ——書き写すと片方だけ直る形になる。
+ */
+const WITHHELD_FLUSH_MS_UNREADABLE_WHAT = '握り潰しの配り直しの期限の設定';
+
+/**
  * 環境変数を見て `flushWithheldReports()` の期限（ms）を決める。
  *
  * `runner.ts` の `resolveManagerModel(env = process.env)` の作法に揃えてある
  * ——試験は引数で env を渡し、`process.env` を書き換えない。
  *
- * **読めない・空・0以下・数値でない値は既定（`WITHHELD_REPORT_FLUSH_MS`、
- * 30分）へ倒す。** 壊れた値のまま走らせて「配る/配らない」の境界が
- * 揺れることを避ける——`resolveModelTier`（`model-tier.ts`）と同じ「既定へ
- * 静かに倒す」側を採る。単位は `_MS` の名のとおりミリ秒で、内部の定数と
- * 単位変換を挟まない（分単位にすると `readScheduleConfig`
- * （`apps/daemon/src/schedule.ts`）の `ALTEROID_INITIATIVE_EVERY` と同じ
- * 形になるが、こちらは口を開ける対象がミリ秒の定数そのものなので、
- * 変換で新しい丸め誤差を作らない側を選んだ）。
+ * **どの経路でも既定（`WITHHELD_REPORT_FLUSH_MS`、30分）へ倒すが、跡の
+ * 出し方は2つに分ける。** 壊れた値のまま走らせて「配る/配らない」の境界が
+ * 揺れることは避けつつ、**「置かなかった」と「置いたのに読めなかった」を
+ * 同じ沈黙に潰さない**（依頼者の決裁 2026-09-04）:
+ *
+ * | env の状態 | 返す値 | 跡 | 読む側の次の一手 |
+ * | --- | --- | --- | --- |
+ * | 未設定 | 既定30分 | **出さない** | 無い（「指定しない」という正常な意思表示） |
+ * | 空・空白のみ | 既定30分 | **出さない** | 同上 |
+ * | 非空だが数値として読めない | 既定30分 | **残す** | **値を直す** |
+ * | 非空で数値だが 0 以下 | 既定30分 | **残す** | **値を直す** |
+ *
+ * **⚠️ 「全部鳴らせ」ではない。** 正常な状態（未設定・空）に跡を出すと、跡の
+ * 側がノイズで埋まって本物の跡が見えなくなる——固定点は「『無い』の種類を
+ * 潰すな」であって「全部鳴らせ」ではない。分ける基準は**次の一手が変わるか**
+ * であり、上の表の右端がそれである。
+ *
+ * **なぜ跡が要るか。** 跡が無いと、**置いたのに効いていないことが、置いた
+ * 本人から見えない**（静かに失敗する形）。人間は「30分のままだ」という観測
+ * からは、値を置き忘れたのか・置いたが綴りを誤ったのかを区別できず、
+ * 「効かない理由」を探せない。
+ *
+ * **跡の置き場は `dropped-record.ts` の既存の1本を使う**（stderr ＋
+ * リングバッファ → `self_dropped` / `GET /self/dropped` / CLI の `/dropped` /
+ * Web UI の4面から読める）。新しい仕掛けは作らない。**`noteDroppedRecord`
+ * ではなく `noteUnreadableRecord` を呼ぶのは、前者が「記録できませんでした」
+ * と書くからである**——ここで起きたのは書き込みの失敗ではなく「受け取ろうと
+ * したが読めなかった」で、`noteUnreadableRecord` 自身の doc が逐語で
+ * 「読み出しの失敗にその文を当てると、跡そのものが何が起きたかを取り違え
+ * させる」と警告している側に当たる。
+ *
+ * **値そのものは跡に載せない。** `noteUnreadableRecord` の doc（#52）と同じ
+ * 理由で、env に入る文字列は器の外から来る任意の文字列である。載せるのは
+ * 鍵の名前と、どの規則に触れたか（数値として読めない／0以下）だけで、
+ * それだけで置いた本人は自分の env を見に行ける。
+ *
+ * 単位は `_MS` の名のとおりミリ秒で、内部の定数と単位変換を挟まない（分単位に
+ * すると `readScheduleConfig`（`apps/daemon/src/schedule.ts`）の
+ * `ALTEROID_INITIATIVE_EVERY` と同じ形になるが、こちらは口を開ける対象が
+ * ミリ秒の定数そのものなので、変換で新しい丸め誤差を作らない側を選んだ）。
  */
 export function resolveWithheldReportFlushMs(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env[WITHHELD_REPORT_FLUSH_MS_ENV_KEY];
   if (raw === undefined) return WITHHELD_REPORT_FLUSH_MS;
-  // 空文字（空白のみを含む）は `Number()` が 0 を返すので、下の
-  // `parsed <= 0` が既に拾う——ここで別枝は作らない（歯で「噛んでいない」
-  // 枝を残さない）。
-  const parsed = Number(raw.trim());
-  if (!Number.isFinite(parsed) || parsed <= 0) return WITHHELD_REPORT_FLUSH_MS;
+  // **未設定と空は同じ「指定しない」である。** ここを `Number('') === 0`
+  // 経由で下の `parsed <= 0` へ落とすと、**置かなかっただけの人に向かって
+  // 「読めなかった」と鳴る**（上の表の1行目・2行目を、跡を出す側へ潰す）。
+  // この早期返却は重複ではなく**区別**である。
+  const trimmed = raw.trim();
+  if (trimmed === '') return WITHHELD_REPORT_FLUSH_MS;
+
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) {
+    noteUnreadableRecord(
+      WITHHELD_FLUSH_MS_UNREADABLE_WHAT,
+      `${WITHHELD_REPORT_FLUSH_MS_ENV_KEY} chars=${String(trimmed.length)}`,
+      new Error(`数値として読めない。既定の ${String(WITHHELD_REPORT_FLUSH_MS)}ms で走る`),
+    );
+    return WITHHELD_REPORT_FLUSH_MS;
+  }
+  if (parsed <= 0) {
+    noteUnreadableRecord(
+      WITHHELD_FLUSH_MS_UNREADABLE_WHAT,
+      `${WITHHELD_REPORT_FLUSH_MS_ENV_KEY} chars=${String(trimmed.length)}`,
+      new Error(`0 以下は期限にならない。既定の ${String(WITHHELD_REPORT_FLUSH_MS)}ms で走る`),
+    );
+    return WITHHELD_REPORT_FLUSH_MS;
+  }
   return parsed;
 }
 
