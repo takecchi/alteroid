@@ -24,8 +24,10 @@ import type {
 import { buildManagerSessionOptions, foldClaudeMessage } from './claude-provider.js';
 import {
   noteBackgroundFailure,
+  noteMissingRecordSource,
   noteUnclassifiedFailure,
   noteUnclassifiedFailuresSummary,
+  noteUnreadableRecord,
 } from './dropped-record.js';
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
 import { placedModelTier, resolveModelTier } from './model-tier.js';
@@ -1121,13 +1123,44 @@ class RunnerSession {
     return { delivered: true, decision };
   }
 
+  /**
+   * 公開 API（`Host#transcript(managerId)` 等から呼ばれる）。**戻り値の形は
+   * 1バイトも変えない**——ここを3状態にすると呼び出し側（`index.ts` の
+   * export 経由で他パッケージからも見える公開面）へ波及する。3状態の判別は
+   * {@link #readTranscript}（private）へ切り出し、ここはそれを従来の
+   * `string | null` へ薄く畳むだけの層にする。
+   */
   async transcript(): Promise<string | null> {
+    const result = await this.#readTranscript();
+    return result.status === 'ok' ? result.body : null;
+  }
+
+  /**
+   * 生ログの読み取り口。**「無い」の種類を3つに区別して返す**（#630 / #629 が
+   * 「範囲外」として残した2つの穴のうち、`#shipArchive()` 側の穴の直し）。
+   *
+   * - `no-path`: `#transcriptPath` を一度も受け取っていない
+   *   （＝ `PostToolUse` / `PreCompact` フックが一度も走っていない）。
+   *   **疑うべきは計器の配線**（hook が来ていない）。
+   * - `unreadable`: path は在るが `readFile` が投げた。
+   *   **疑うべきはディスク・権限。**
+   * - `ok`: 読めた（本文が0文字のこともある——それは正常。「何も書かれて
+   *   いないセッション」であって、上の2つとは次の一手が違う）。
+   *
+   * **`transcript()`（public）はこの3状態を `string | null` へ畳んで返す**
+   * ——上2つを同じ `null` に潰すのは呼び出し側の判断であって、ここでは潰さない。
+   */
+  async #readTranscript(): Promise<
+    | { status: 'no-path' }
+    | { status: 'unreadable'; error: unknown }
+    | { status: 'ok'; body: string }
+  > {
     const path = this.#transcriptPath;
-    if (path === undefined) return null;
+    if (path === undefined) return { status: 'no-path' };
     try {
-      return await readFile(path, 'utf8');
-    } catch {
-      return null;
+      return { status: 'ok', body: await readFile(path, 'utf8') };
+    } catch (error) {
+      return { status: 'unreadable', error };
     }
   }
 
@@ -2563,10 +2596,35 @@ class RunnerSession {
     return { continue: true };
   }
 
+  /**
+   * **「無い」を3つに言い分ける**（`#readTranscript` の doc）。`archive` を
+   * emit しないのは3状態とも同じ（`runner-archive-leg.test.ts` の「#shipArchive()
+   * は本文が空のとき何も emit しない」が固定している——この歯は残す）。
+   *
+   * **⚠️ ここで `#emit` を通す形にはしない。** `stop()` 経路は器ごと畳まれる
+   * 最中で、この outbox（`RunnerHost` から先）は失われうる（#629 が示した
+   * とおり）。加えて `runner-archive-leg.test.ts` は「`transcript_path` を
+   * 一度も渡さない ⟹ `archive` が emit されない」を固定しており、ここで
+   * `archive` を出す形に変えるとその歯を割る。stderr（`dropped-record.ts`）へ
+   * 出す。
+   *
+   * **本文が0文字（`ok` かつ空文字列）は正常として扱い、跡を出さない。**
+   * 「何も書かれていないセッション」は次の一手が要らない状態であって、
+   * 計器やディスクを疑わせる2状態（`no-path` / `unreadable`）と同列に鳴らすと
+   * 雑音になる（PR 本文にこの判断の理由を書く）。
+   */
   async #shipArchive(): Promise<void> {
-    const body = await this.transcript();
-    if (body === null || body.length === 0) return;
-    this.#emit({ type: 'archive', managerId: this.#id, body });
+    const result = await this.#readTranscript();
+    if (result.status === 'no-path') {
+      noteMissingRecordSource('生ログ', `managerId=${this.#id} transcript_path`);
+      return;
+    }
+    if (result.status === 'unreadable') {
+      noteUnreadableRecord('生ログ', `managerId=${this.#id}`, result.error);
+      return;
+    }
+    if (result.body.length === 0) return;
+    this.#emit({ type: 'archive', managerId: this.#id, body: result.body });
   }
 
   /** 待たせたまま消えない。止まっている確認は理由付きで全部解く。 */

@@ -962,17 +962,56 @@ export function createRunnerApp(deps: RunnerAppDeps) {
           wake?.();
         });
 
-        await stream.writeSSE({
-          event: 'hello',
-          data: JSON.stringify({ type: 'hello', runnerId: host.runnerId }),
-        });
-
-        // heartbeat は SSE のコメント行を流す（読む側は読み捨てる —— デーモンの
-        // `#read` は `data:` で始まる行だけを拾うので、跡にも数えられない）。
-        // 死んだ接続の掃除の契機でもある（詳細は `@alteroid/core` の `sse-heartbeat.ts`）。
-        const stopHeartbeat = startSseHeartbeat(stream, sseHeartbeatMs, () => wake?.());
+        let stopHeartbeat: (() => void) | null = null;
 
         try {
+          /**
+           * **`hello` にも締め切りを掛ける**（入口の head-of-line blocking）。
+           * 相手が既に読まなくなった接続へ書けば、本ループの `withDeadline`
+           * （下）と同じ理由で `await stream.writeSSE(...)` は原理上いつまでも
+           * 返らない（`RunnerAppDeps.sseWriteDeadlineMs` の doc）——ただし
+           * ここは本ループへ入る*前*なので、heartbeat も本ループも一度も
+           * 始まらないまま固着する。#358 / #630 が本ループの1件で塞いだのと
+           * 同じ形の詰まりが、まだ入口に残っていた。
+           *
+           * **本ループの `deadline-exceeded` 枝の文言をそのまま流用しない。**
+           * ここでは `writing` は必ず `null`（本ループへまだ入っていないので、
+           * `writing` へ代入する機会が無い）——「書きかけの1件」は存在しない。
+           * 積んでいるとすれば、`Last-Event-ID` の控え流し込みと
+           * `outbox.attach(...)` が同期的に流し込んだ既存の滞留（`queue`）
+           * だけである。
+           */
+          const helloResult = await withDeadline(
+            () =>
+              stream.writeSSE({
+                event: 'hello',
+                data: JSON.stringify({ type: 'hello', runnerId: host.runnerId }),
+              }),
+            sseWriteDeadlineMs,
+          );
+          if (superseded) {
+            // **本ループの `superseded` 分岐と同じ理由。** 待っているあいだに
+            // 新しい購読者へ置き換えられた——抱えていた分（あれば）は
+            // `attach` のドレインで既に渡っている。ここで何もしなければ
+            // `finally` の後始末（`stopHeartbeat` 未起動・`detach` は
+            // no-op・`queue` は既に空）がそのまま正しく効く。
+          } else if (helloResult.outcome === 'deadline-exceeded') {
+            // **`hello` すら届かない接続と判断し、畳む。** heartbeat はまだ
+            // 起こしていないので、起こさないまま `finally` へ落として後始末
+            // する（`stopHeartbeat` は `null` のまま）。
+            process.stderr.write(
+              `alteroid-runner: /events への hello 書き込みが ${String(sseWriteDeadlineMs)}ms を超えたため接続を畳みます` +
+                `（この接続が抱えていた ${String(queue.length)} 件を箱へ戻します）\n`,
+            );
+            stream.abort();
+            return;
+          }
+
+          // heartbeat は SSE のコメント行を流す（読む側は読み捨てる —— デーモンの
+          // `#read` は `data:` で始まる行だけを拾うので、跡にも数えられない）。
+          // 死んだ接続の掃除の契機でもある（詳細は `@alteroid/core` の `sse-heartbeat.ts`）。
+          stopHeartbeat = startSseHeartbeat(stream, sseHeartbeatMs, () => wake?.());
+
           for (;;) {
             if (closed || stream.aborted || stream.closed || superseded) break;
             const item = queue.shift();
@@ -1051,8 +1090,10 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         } finally {
           // **タイマーを先に止める。** 止めないと、ストリームが終わった後も
           // 15秒ごとに死んだ相手へ書き続ける（`write()` は例外を出さないので
-          // 残っていても壊れて見えない）。
-          stopHeartbeat();
+          // 残っていても壊れて見えない）。**`hello` 自体が締め切りを超えて
+          // 畳んだとき（または `hello` の途中で `superseded` になったとき）は、
+          // まだ起こしていないので `null` のまま——呼ばない。**
+          stopHeartbeat?.();
           detach();
           // 流し切れなかった分は箱へ戻す（次に繋がったときに届く）。
           // **書きかけの1件も戻す**（#358）—— 書けたかどうかは分からないので、

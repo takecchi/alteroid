@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createRunnerHost, type RunnerHost } from './runner.js';
 import type { RunnerEvent } from './runner-protocol.js';
+import { captureStderr } from './testing.js';
 
 /**
  * **`#shipArchive()` が `report` / `ask` と同じ1本の脚（`this.#emit`）を通る
@@ -199,7 +200,7 @@ describe('#shipArchive() は report / ask と同じ1本の脚（emit）を通る
     expect(askEvent?.managerId).toBe('mgr-archive-leg');
   });
 
-  it('#shipArchive() は本文が空のとき何も emit しない（既存挙動——「送らずに黙る」経路の確認）', async () => {
+  it('#shipArchive() は transcript_path を一度も受け取っていないとき何も emit しない（既存挙動）が、跡は残す', async () => {
     const events: RunnerEvent[] = [];
     const { fn } = fakeSdk();
     const host = createRunnerHost({
@@ -210,11 +211,100 @@ describe('#shipArchive() は report / ask と同じ1本の脚（emit）を通る
     });
     hosts.push(host);
 
-    // transcript_path を一度も渡さない — transcript() は null を返すので
-    // #shipArchive() は無条件で return する（`runner.ts` の該当 doc）。
-    await host.start({ managerId: 'mgr-archive-empty', request: '調べて', cwd: '/work/project' });
-    await host.stop('mgr-archive-empty');
+    // transcript_path を一度も渡さない — #readTranscript() は
+    // { status: 'no-path' } を返すので #shipArchive() は archive を出さずに
+    // 戻る（`runner.ts` の該当 doc）。**この歯は残す**（archive を出さないのは
+    // 正しい）。足すのは、同じ回に「path を一度も受け取っていない」という跡が
+    // stderr へ出ること——`no-path` と「読めたが本文が0文字」（もう1本の
+    // テスト）は「次の一手」が違うので、同じ沈黙にしない。
+    const lines = await captureStderr(async () => {
+      await host.start({ managerId: 'mgr-archive-empty', request: '調べて', cwd: '/work/project' });
+      await host.stop('mgr-archive-empty');
+    });
 
     expect(events.some((event) => event.type === 'archive')).toBe(false);
+    const noted = lines.filter((line) => line.includes('生ログ'));
+    expect(noted).toHaveLength(1);
+    expect(noted[0]).toContain('の取得元を一度も受け取っていません');
+    expect(noted[0]).toContain('managerId=mgr-archive-empty');
+    // **本文は乗らない**（`noteMissingRecordSource` の doc、#52 と同じ理由）。
+    expect(noted[0]).not.toContain('調べて');
+  });
+
+  it('#shipArchive() は transcript_path はあるが読めないとき、archive を emit せず「読めなかった」の跡を残す', async () => {
+    const events: RunnerEvent[] = [];
+    const { fn, sessions } = fakeSdk();
+    const host = createRunnerHost({
+      runnerId: 'runner-archive-leg-unreadable-test',
+      workspacePath: '/work/project',
+      emit: (event) => events.push(event),
+      queryFn: fn,
+    });
+    hosts.push(host);
+
+    await host.start({
+      managerId: 'mgr-archive-unreadable',
+      request: '調べて',
+      cwd: '/work/project',
+    });
+    const session = sessions[0];
+    if (session === undefined) throw new Error('セッションが開いていない');
+
+    // path は在るが、実際には存在しないファイルを指す — readFile が投げる側
+    // （`#readTranscript` の `unreadable`）。`no-path`（上のテスト）とは別の
+    // 状況であることを、同じ管理で区別できることを見る。
+    const missingPath = join(dir, 'does-not-exist.jsonl');
+    await session.postToolUse({
+      tool_name: 'Bash',
+      tool_input: {},
+      transcript_path: missingPath,
+    });
+
+    const lines = await captureStderr(async () => {
+      await host.stop('mgr-archive-unreadable');
+    });
+
+    expect(events.some((event) => event.type === 'archive')).toBe(false);
+    const noted = lines.filter((line) => line.includes('生ログ'));
+    expect(noted).toHaveLength(1);
+    expect(noted[0]).toContain('生ログを読み出せませんでした');
+    expect(noted[0]).toContain('managerId=mgr-archive-unreadable');
+    // `no-path` の文言（「取得元を一度も受け取っていません」）とは別の文言である
+    // ことも見ておく——同じ文に潰していないことの確認。
+    expect(noted[0]).not.toContain('取得元を一度も受け取っていません');
+  });
+
+  it('#shipArchive() は読めたが本文が0文字のとき、正常として何も跡を出さない（この PR の判断）', async () => {
+    const events: RunnerEvent[] = [];
+    const { fn, sessions } = fakeSdk();
+    const host = createRunnerHost({
+      runnerId: 'runner-archive-leg-blank-test',
+      workspacePath: '/work/project',
+      emit: (event) => events.push(event),
+      queryFn: fn,
+    });
+    hosts.push(host);
+
+    await host.start({ managerId: 'mgr-archive-blank', request: '調べて', cwd: '/work/project' });
+    const session = sessions[0];
+    if (session === undefined) throw new Error('セッションが開いていない');
+
+    // path は在り、実際に読める——ただし中身が0文字（「何も書かれていない
+    // セッション」）。`no-path` / `unreadable` とは違い、次の一手が要らない
+    // 状態なので、跡を出さない（PR 本文にこの判断とその理由を書く）。
+    const blankPath = join(dir, 'blank-transcript.jsonl');
+    writeFileSync(blankPath, '', 'utf8');
+    await session.postToolUse({
+      tool_name: 'Bash',
+      tool_input: {},
+      transcript_path: blankPath,
+    });
+
+    const lines = await captureStderr(async () => {
+      await host.stop('mgr-archive-blank');
+    });
+
+    expect(events.some((event) => event.type === 'archive')).toBe(false);
+    expect(lines.some((line) => line.includes('生ログ'))).toBe(false);
   });
 });
