@@ -120,8 +120,17 @@ describe('runner の /events: 古い購読者が抱えていた分を新しい�
       if (firstBody === null) throw new Error('SSE の応答に本文が無い');
       const firstReader = firstBody.getReader();
 
-      // 1本目が「書きかけの1件（event1）＋ queue に event2, event3」を
-      // 抱えていることを、outbox 側の合算（#probe 経由）で確かめる。
+      // **1本目が実際に non-hello の1件目（event1）の書き込みを試みる（＝
+      // `stuckStreams` へ登録される）まで待つ。** `outbox.pending` だけを
+      // 見て次へ進むと、`hello` の書き込みが（締め切り付きになった分の余分な
+      // マイクロタスクぶん）まだ終わっていない段階でも `pending` は既に3を
+      // 返す——`queue=[event1,event2,event3], writing=null` でも
+      // `writing=event1, queue=[event2,event3]` でも合計は同じ3だからである。
+      // 前者のまま2本目を張ると、`stuckStreams` に登録されるのが1本目ではなく
+      // **2本目**になり、この歯が測ろうとしている状況（1本目が書きかけの
+      // まま止まっている）を作れない。
+      await expect.poll(() => sawFirstNonHello, { timeout: 1000 }).toBe(true);
+      // 上の登録が済んだ時点で合算も3のはず——念のため確認する。
       await expect.poll(() => outbox.pending, { timeout: 1000 }).toBe(3);
 
       // 2本目を張る——1本目が FIN を返していないのに新しい接続が張られる
@@ -226,6 +235,11 @@ describe('runner の /events: 古い購読者が抱えていた分を新しい�
       if (firstBody === null) throw new Error('SSE の応答に本文が無い');
       const firstReader = firstBody.getReader();
 
+      // **1本目が実際に non-hello の1件目の書き込みを試み、`stuckPromise` で
+      // 止まるまで待つ。** 理由は上のテストと同じ（`sawFirstNonHello` の
+      // doc）——`outbox.pending` だけでは「1本目がまだ hello すら終えていない」
+      // ケースと区別できない。
+      await expect.poll(() => sawFirstNonHello, { timeout: 1000 }).toBe(true);
       await expect.poll(() => outbox.pending, { timeout: 1000 }).toBe(1);
 
       const second = await app.request('/events', { headers: bearer() });
