@@ -159,10 +159,36 @@ export type TurnInput =
       request: boolean;
       digest: string;
     }
-  /** 発意 tick（`buildSelfInitiativePrompt`）。 */
-  | { type: 'self_initiative'; reason: string; digest: string }
-  /** 日報（`buildDailyReportPrompt`）。 */
-  | { type: 'daily_report'; date: string; digest: string };
+  /**
+   * 発意 tick（`buildSelfInitiativePrompt`）。
+   *
+   * **`cause` は `timer` と同じ3値・同じ意味。** 発意 tick も `TimerScheduler`
+   * の既定の仕込みの1つで、`#seedBase` が「取りこぼしの拾い直し」を判定しうる
+   * （`schema.ts` の `inboxEventSchema` `self_initiative.cause` の doc）。
+   */
+  | {
+      type: 'self_initiative';
+      reason: string;
+      cause: 'schedule' | 'schedule_catchup' | 'manual';
+      digest: string;
+    }
+  /**
+   * 日報（`buildDailyReportPrompt`）。
+   *
+   * **`cause` は `timer` と同じ3値・同じ意味。** 定刻の発火
+   * （`dailyReportEntry.event`）は `schedule`、起動時の後追い
+   * （`apps/daemon/src/index.ts` の `missingDailyReportDates` の呼び出し口）は
+   * `schedule_catchup`、`POST /schedule/daily_report/run` は `manual`
+   * （`Scheduler.run` が上書きする）。**日報自身の `#seedBase` は `catchUpMissed:
+   * false` なので `schedule_catchup` にはならない** — 後追いの発生源は
+   * `missingDailyReportDates` だけである（`dailyReportEntry` の doc）。
+   */
+  | {
+      type: 'daily_report';
+      date: string;
+      cause: 'schedule' | 'schedule_catchup' | 'manual';
+      digest: string;
+    };
 
 /**
  * ターンの入力から、日誌へ追記する1件を作る。
@@ -233,12 +259,12 @@ function describeTurnInput(input: TurnInput): string {
       );
     case 'self_initiative':
       return (
-        `ターンの入力: self_initiative reason=${tag(input.reason)} ` +
+        `ターンの入力: self_initiative reason=${tag(input.reason)} cause=${tag(input.cause)} ` +
         `${size(input.digest, 'digest')}${DIGEST_NOTE}`
       );
     case 'daily_report':
       return (
-        `ターンの入力: daily_report date=${tag(input.date)} ` +
+        `ターンの入力: daily_report date=${tag(input.date)} cause=${tag(input.cause)} ` +
         `${size(input.digest, 'digest')}${DIGEST_NOTE}`
       );
   }

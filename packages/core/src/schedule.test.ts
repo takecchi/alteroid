@@ -249,6 +249,8 @@ describe('既定の仕込みの位相', () => {
     s.scheduler.start();
 
     expect(s.scheduler.tick(at(2026, 8, 12, 12, 30))).toEqual([SELF_INITIATIVE_KIND]);
+    // 拾い直しは日誌の上で区別できる印を持つ（`#seedBase` が `.catchUp` を読む）
+    expect(s.posted[0]).toMatchObject({ type: 'self_initiative', cause: 'schedule_catchup' });
     // まとめ撃ちしない（2時間半ぶん溜まっていても1回）
     expect(s.scheduler.tick(at(2026, 8, 12, 12, 31))).toEqual([]);
 
@@ -269,6 +271,9 @@ describe('既定の仕込みの位相', () => {
 
     expect(nextOf(s.scheduler, SELF_INITIATIVE_KIND)).toBe(at(2026, 8, 12, 11, 0).toISOString());
     expect(s.scheduler.tick(at(2026, 8, 12, 11, 0))).toEqual([SELF_INITIATIVE_KIND]);
+    // 陰性対照: 過ぎていない再起動（＝取りこぼしではない）は cause が付かない
+    // （省略時の既定＝定刻どおり）
+    expect(s.posted[0]).not.toHaveProperty('cause');
 
     s.scheduler.stop();
   });
@@ -361,6 +366,9 @@ describe('既定の仕込みの位相', () => {
       lastScheduledRunAt: at(2026, 8, 12, 10, 0).toISOString(),
     });
     expect(nextOf(s.scheduler, SELF_INITIATIVE_KIND)).toBe(at(2026, 8, 12, 11, 0).toISOString());
+    // 手で起こしたことは cause=manual として運ばれる（省略すると、手動実行だけ
+    // 省略時の既定＝schedule に落ち、「定刻どおりに起きた」と嘘をつくことになる）
+    expect(s.posted[0]).toMatchObject({ type: 'self_initiative', cause: 'manual' });
 
     s.scheduler.stop();
   });
@@ -379,6 +387,17 @@ describe('既定の仕込みの位相', () => {
 
     expect(nextOf(s.scheduler, DAILY_REPORT_KIND)).toBe(at(2026, 8, 14, 22, 0).toISOString());
     expect(s.scheduler.tick(at(2026, 8, 14, 10, 0))).not.toContain(DAILY_REPORT_KIND);
+
+    // 陰性対照: 押し出された本来の予定で発火しても、`#catchUp` には一度も
+    // 入っていないので `cause` は付かない（`missingDailyReportDates` と `#catchUp`
+    // の二重で拾わない、という線を `#seedBase` の変更（catchUp を読むようにした）
+    // が壊していないことをここで確かめる）。
+    expect(s.scheduler.tick(at(2026, 8, 14, 22, 0))).toContain(DAILY_REPORT_KIND);
+    const dailyReportPosted = s.posted.filter(
+      (event) => event.type === 'timer' && event.kind === DAILY_REPORT_KIND,
+    );
+    expect(dailyReportPosted).toHaveLength(1);
+    expect(dailyReportPosted[0]).not.toHaveProperty('cause');
 
     s.scheduler.stop();
   });

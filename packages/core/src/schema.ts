@@ -331,6 +331,10 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
      * （`Scheduler.run` の契約）。ここで区別しないと、受け取った側が予定の基準を
      * 手動実行の時刻へ動かしてしまい、再起動後に位相がずれる。省略時は `schedule`
      * （定刻どおり）である。
+     *
+     * **`self_initiative.cause`（このファイルの下）も同じ3値・同じ軸である。**
+     * 発意 tick は `kind` を持たない別の型なのでここへは合流させず、対になる欄を
+     * 別に持たせてある。
      */
     cause: z.enum(['schedule', 'schedule_catchup', 'manual']).optional(),
   }),
@@ -347,6 +351,16 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
     id: z.string(),
     at: isoDateTime,
     reason: z.string(),
+    /**
+     * 定刻どおりに起きたのか、取りこぼしを拾って起きたのか、人間が手で起こしたのか。
+     *
+     * **`timer.cause`（このファイルの上）と同じ軸・同じ3値。** 発意 tick も
+     * `TimerScheduler#seedBase()` → `dueFromSeed` を経由する「既定の仕込み」の
+     * ひとつで、取りこぼしの拾い直し（器を作り直しても位相が残る形）と定刻どおりの
+     * 発火が、この欄が無いと日誌の上で区別できなかった。省略時は `schedule`
+     * （定刻どおり）である。
+     */
+    cause: z.enum(['schedule', 'schedule_catchup', 'manual']).optional(),
   }),
   z.object({
     type: z.literal('manager_message'),
