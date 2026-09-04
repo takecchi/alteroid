@@ -12,6 +12,11 @@ import {
   searchExchanges,
   toMessage,
 } from './conversation.js';
+import {
+  commitmentPosition,
+  encodeCommitmentCursor,
+  resolveCommitmentCursor,
+} from './commitment-cursor.js';
 import { isCronExpression } from './cron.js';
 import { assertNeverRunnerLegStatus } from './runner-protocol.js';
 // **`manager_list` と digest の「マネージャー」節で同じ字面を出すための唯一の
@@ -3026,20 +3031,21 @@ export function createCloneTools(context: ToolContext) {
         'どれを先にやるかの順序はここには無い。記憶にある目的と価値観に照らして毎回決め直すこと。',
         '1件の全文（依頼本文と、片付けたならその理由）が要るなら id を渡す。片付いた件も id で読める。',
         'origin で出所を絞れる（他の絞りと併用できる）。',
+        '一覧が予算で切れたら、断り書きが次に打つ cursor を案内する。それを cursor へ渡すと続きから読める。',
       ].join(' '),
       {
         id: z
           .string()
           .optional()
           .describe(
-            'この1件を全文で読む（一覧に出ている id）。片付いた件も読める。他の条件は無視される',
+            'この1件を全文で読む（一覧に出ている id）。片付いた件も読める。他の条件は無視される（cursor も含む）',
           ),
         offset: z
           .number()
           .int()
           .min(0)
           .optional()
-          .describe('id で全文を読むとき、何文字目から読むか'),
+          .describe('id で全文を読むとき、何文字目から読むか（件数ではなく文字数）'),
         includeClosed: z
           .boolean()
           .optional()
@@ -3048,8 +3054,16 @@ export function createCloneTools(context: ToolContext) {
           .array(z.enum(commitmentOriginSchema.options))
           .optional()
           .describe('出所（human/manager/external/self）で絞る。省略すると絞らない'),
+        cursor: z
+          .string()
+          .optional()
+          .describe(
+            '一覧モードの続きを読む位置。前回の応答の断り書きに出た cursor をそのまま渡す' +
+              '（自分で組み立てない）。省略すると先頭（古い方）から。' +
+              'includeClosed はカーソルを取った呼びと揃えること（食い違うと明示のエラーになる）',
+          ),
       },
-      async ({ id, offset = 0, includeClosed, origin }) => {
+      async ({ id, offset = 0, includeClosed, origin, cursor }) => {
         // --- 全文モード（1件だけ） ---
         if (id !== undefined) {
           // **片付いた件も読める。`includeClosed` は要求しない。** id で名指し
@@ -3135,7 +3149,40 @@ export function createCloneTools(context: ToolContext) {
           origin === undefined
             ? allEntries
             : allEntries.filter((entry) => origin.includes(entry.origin));
-        const items = entries.map((entry) =>
+        // **`cursor` も `origin` と同じ側（予算で切る前）で効かせる。** #418 が
+        // 塞いだのと同じ形の穴——継続点を `renderListing` の後（予算で切った
+        // 後）で解決すると、次の頁の起点が「切った後に残った行」からずれる。
+        // ここで `entries`（origin 絞り後）に対して解決するので、`origin` →
+        // `cursor` → 予算、の順が保たれる。
+        //
+        // **判定できないカーソル（壊れている／`includeClosed` が食い違う）は
+        // 黙って先頭からへ倒さない。** `resolveCommitmentCursor` の doc、
+        // AGENTS.md「判定できないという3つ目の状態を持つ」と同じ理由——
+        // 黙って先頭へ戻すと、呼び手は「続きを読んだつもり」で同じ行を
+        // 繰り返し読む（気づきようが無い）。
+        const cursorOutcome = resolveCommitmentCursor(entries, includeClosed === true, cursor);
+        if (cursorOutcome.kind === 'malformed') {
+          return text(
+            'cursor が壊れている（この道具が返したものではないか、書き換えられている）。' +
+              '一覧を先頭から読み直すには cursor を付けずに commitment_list を呼ぶこと。',
+          );
+        }
+        if (cursorOutcome.kind === 'includeClosed-mismatch') {
+          return text(
+            `cursor は includeClosed=${cursorOutcome.cursorIncludeClosed} の一覧から出た続きの` +
+              `位置で、いまの呼び（includeClosed=${includeClosed === true}）と食い違う。` +
+              `commitment_list includeClosed=${cursorOutcome.cursorIncludeClosed} ` +
+              `cursor=${cursor} のように includeClosed を揃えて呼び直すか、` +
+              'cursor を付けずに先頭から呼び直すこと。',
+          );
+        }
+        // **`view` が空になりうる。** cursor が一覧のいちばん後ろを指していた
+        // ——つまりこれが最後の頁で、これはエラーではない（下の `lines[0]` の
+        // 分岐で「続きは無い」と明示する。`entries.length === 0` の2つの文言
+        // と混同しないこと——あちらは絞り込みの結果0件、こちらは0件では
+        // なかったものを cursor で辿り切った結果である）。
+        const view = cursorOutcome.view;
+        const items = view.map((entry) =>
           renderListingEntry({
             id: entry.id,
             // 出所と `source` は先頭行の札が持つので、他の行では繰り返さない。
@@ -3161,31 +3208,72 @@ export function createCloneTools(context: ToolContext) {
               allEntries.length === 0
               ? '（読める行は無い）'
               : '（この origin の絞り込みに当たる行は無い）'
-            : renderListing(items, {
-                budget: COMMITMENT_LIST_BUDGET,
-                // **続きの取り方を案内する（#218 で口ができた）。** かつてここには
-                // 「この台帳には詳細へ降りる道具が無いので案内すると嘘になる」と
-                // 書いてあった。`commitment_list id=<id>` を足したので、いまは
-                // 案内できる。**案内する口が実在することは歯で固定してある**
-                // （導線が空振りする形は、無い口を案内するのと同じだけ嘘である）。
-                // **`includeClosed` のときは「未了は」と言わないこと。** `total` には
-                // 片付いたものも含まれるので、そのまま「未了は N 件」と言うと片付いた
-                // 分まで未了として数えた嘘になる（数が大きく出る方向の嘘）。
-                // **`origin` を指定したときも同じ理由で断る。** `total` はここでは
-                // 既に `entries`（`origin` で絞った後の母数）から来ているので値
-                // そのものは正しいが、断りが無いと「絞る前の全体」だと読める——
-                // それも数が大きく出る方向の同じ形の嘘になる。
-                omitted: ({ rest, shown, total }) =>
-                  `…ほか ${rest} 件は省略（${
-                    origin === undefined ? '' : `origin: ${origin.join(', ')} に絞った、`
-                  }${
-                    includeClosed === true
-                      ? `片付けた分を含めて ${total} 件あり`
-                      : `未了は ${total} 件あり`
-                  }、古い順に ${shown} 件だけ出した。落ちた分も含め、1件の全文は commitment_list id=<id> で取れる）。`,
-              }),
+            : view.length === 0
+              ? // **cursor が一覧の末尾を指していた（最後の頁）。** `entries` は
+                // 0件ではない（上の分岐を通らなかった）のに `view` が0件なので、
+                // 絞り込みの結果ではなく「もうこれ以上先が無い」ことを明示する。
+                '（cursor より後ろの行は無い。これが最後の頁）'
+              : renderListing(items, {
+                  budget: COMMITMENT_LIST_BUDGET,
+                  // **続きの取り方を案内する（#218 で口ができた）。** かつてここには
+                  // 「この台帳には詳細へ降りる道具が無いので案内すると嘘になる」と
+                  // 書いてあった。`commitment_list id=<id>` を足したので、いまは
+                  // 案内できる。**案内する口が実在することは歯で固定してある**
+                  // （導線が空振りする形は、無い口を案内するのと同じだけ嘘である）。
+                  // **`includeClosed` のときは「未了は」と言わないこと。** `total` には
+                  // 片付いたものも含まれるので、そのまま「未了は N 件」と言うと片付いた
+                  // 分まで未了として数えた嘘になる（数が大きく出る方向の嘘）。
+                  // **`origin` を指定したときも同じ理由で断る。** `total` は
+                  // ここではあえて `renderListing` が渡す値（`view.length`
+                  // ——cursor 以降の残り）を使わず、`entries.length`（`origin`
+                  // で絞った後・cursor を当てる前の母数）を使う。HTTP の
+                  // `GET /commitments` の `total` と同じ約束——「窓を当てる前の
+                  // 件数」を毎頁で同じ意味のまま出す（`apps/daemon/src/app.ts`
+                  // の `commitmentsQuery` 実装、逐語: 「`total` は窓を当てる前の
+                  // 件数」）。cursor で頁が進んでも、この数は変わらない。
+                  omitted: ({ rest, shown }) => {
+                    const total = entries.length;
+                    const lastShown = view[shown - 1];
+                    // **`renderListing` は `items.length > 0`（＝`rest > 0`
+                    // ゆえに `omitted` が呼ばれる分岐）のとき必ず最低1件を
+                    // 先頭に出す。** `view.length === 0` は上で早期に別文へ
+                    // 分けてあるので、ここに来る時点で `shown >= 1` は保証
+                    // される（`lastShown` は必ず定義される）。
+                    const nextCursor = encodeCommitmentCursor({
+                      ...commitmentPosition(lastShown!),
+                      includeClosed: includeClosed === true,
+                    });
+                    const scopeNote =
+                      origin === undefined ? '' : `origin: ${origin.join(', ')} に絞った、`;
+                    const countNote =
+                      includeClosed === true
+                        ? `片付けた分を含めて ${total} 件あり`
+                        : `未了は ${total} 件あり`;
+                    // **落ちているのが「新しい側」であることを明示する。** 未了
+                    // （open）は `at` 昇順＝古い順に並ぶので、予算で切って
+                    // 落ちるのは末尾＝より新しい依頼である。`includeClosed` の
+                    // ときは片付いた段（closed）が `closedAt` 降順＝新しい順
+                    // なので、そちらの末尾で落ちるのはより古い記録になる——
+                    // 2段の向きが逆なので、両方を言う。
+                    const directionNote =
+                      includeClosed === true
+                        ? '省いたのは、未了ならこれより新しい依頼、片付いた分ならこれより古い記録である。'
+                        : '省いたのは、これより新しい依頼である。';
+                    return (
+                      `…ほか ${rest} 件は省略（${scopeNote}${countNote}、古い順に ${shown} 件だけ` +
+                      `出した。${directionNote}続きは commitment_list cursor=${nextCursor} で取れる` +
+                      `（includeClosed=${includeClosed === true} のまま呼ぶこと）。` +
+                      '1件の全文は commitment_list id=<id> で取れる）。'
+                    );
+                  },
+                }),
         ];
-        if (entries.length > 0) {
+        // **`view.length`（今回の応答に実際に載った件数）で見る。** `entries`
+        // ではなく `view` にしたのは、cursor で最後の頁（`view.length === 0`）
+        // に到達したとき、1件も出していないのにこの2行だけが付く見た目を
+        // 避けるため——`entries.length > 0` のままだと、その頁でも常に付いて
+        // しまう（`entries` は cursor を当てる前の母数なので0にならない）。
+        if (view.length > 0) {
           lines.push(
             '（本文は240字の抜粋。1件の全文は commitment_list id=<id> で取れる。片付いた件も読める）',
             '（更新＝この1件が最後に変わった時刻。まだ片付けていなければ、受け取った時刻と同じ）',

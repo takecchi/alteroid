@@ -4,7 +4,6 @@ import type {
   AccountUsageState,
   ChatStreamEvent,
   CloneHost,
-  Commitment,
   JournalEntry,
   JournalEntryType,
   ManagerPool,
@@ -25,7 +24,9 @@ import {
   approvalUpdatedAt,
   chatStreamEventSchema,
   collectConversations,
+  commitmentPosition,
   commitmentUpdatedAt,
+  compareCommitmentPosition,
   conversationMessages,
   createAuthProviderRegistry,
   createAuthService,
@@ -630,35 +631,14 @@ const commitmentsCursorSchema = z.object({
   includeClosed: z.enum(['true', 'false']),
 });
 
-type CommitmentPos = { segment: 'open' | 'closed'; key: string; id: string };
-
-/** `Commitment` から、頁の錨として使う位置を取り出す。 */
-function commitmentPos(entry: Pick<Commitment, 'id' | 'at' | 'closedAt'>): CommitmentPos {
-  return entry.closedAt === undefined
-    ? { segment: 'open', key: entry.at, id: entry.id }
-    : { segment: 'closed', key: entry.closedAt, id: entry.id };
-}
-
-/**
- * 段（segment）を持つ keyset の比較。**未了(open) が先、片付き(closed) が後。**
- * `open` の中は `key`（＝ `at`）昇順 → 同値は `id` 昇順。`closed` の中は `key`
- * （＝ `closedAt`）降順 → 同値は `id` 昇順。
- *
- * **opt-in しなければこの比較は1回も通らない**（後述のハンドラで `optedIn` の
- * ときにしか呼ばれない）——ストアの生の並びに乗るだけなら、この関数を通す理由が
- * 無い。既定の呼びの応答が opt-in の前後でバイト単位で一致するのは、この形が
- * 支えている。
- */
-function compareCommitmentPos(a: CommitmentPos, b: CommitmentPos): number {
-  if (a.segment !== b.segment) return a.segment === 'open' ? -1 : 1;
-  if (a.segment === 'open') {
-    if (a.key !== b.key) return a.key < b.key ? -1 : 1;
-  } else {
-    if (a.key !== b.key) return a.key > b.key ? -1 : 1;
-  }
-  if (a.id !== b.id) return a.id < b.id ? -1 : 1;
-  return 0;
-}
+// **位置の取り出し（`commitmentPosition`）と keyset の比較
+// （`compareCommitmentPosition`）は `@alteroid/core` から import する。** かつて
+// ここに `commitmentPos` / `compareCommitmentPos` という1バイト違わない実装が
+// 別々に置いてあった——`commitment_list`（クローンの道具、`packages/core/src/
+// tools.ts`）が同じ並び順（`CommitmentStore.list` の契約）に対して継続点を
+// 足したときに見つかった重複で、`@alteroid/core`（`commitment-cursor.ts`）へ
+// 寄せた。**挙動は1バイトも変えていない**——呼び出し側（下）の引数の順序・
+// 比較の向きはそのままで、呼ぶ関数の場所だけが変わっている。
 
 const loginBody = z.object({
   provider: z.string().min(1),
@@ -2567,14 +2547,20 @@ export function createApp(deps: AppDeps) {
         // これは「無い」でも「片付いた」でもない第3の状態（issue #296）で、
         // 窓で切ると2頁目以降から読めない行が消え、まさに #296 が塞いだ穴が
         // 再び開く。
+        // **opt-in しなければ `compareCommitmentPosition` は1回も通らない**
+        // （`optedIn` のときにしか呼ばれない）——ストアの生の並びに乗るだけなら、
+        // この関数を通す理由が無い。既定の呼びの応答が opt-in の前後でバイト
+        // 単位で一致するのは、この形が支えている。
         let view = entries;
         if (optedIn) {
           view = [...entries].sort((a, b) =>
-            compareCommitmentPos(commitmentPos(a), commitmentPos(b)),
+            compareCommitmentPosition(commitmentPosition(a), commitmentPosition(b)),
           );
           if (cursorPayload !== undefined) {
             const pivot = cursorPayload;
-            view = view.filter((entry) => compareCommitmentPos(commitmentPos(entry), pivot) > 0);
+            view = view.filter(
+              (entry) => compareCommitmentPosition(commitmentPosition(entry), pivot) > 0,
+            );
           }
         }
 
@@ -2596,7 +2582,7 @@ export function createApp(deps: AppDeps) {
         if (optedIn) {
           responseBody.total = total;
           if (hasMore && lastOfPage !== undefined) {
-            const pos = commitmentPos(lastOfPage);
+            const pos = commitmentPosition(lastOfPage);
             responseBody.nextCursor = encodeCursor({
               segment: pos.segment,
               key: pos.key,
