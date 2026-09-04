@@ -168,7 +168,10 @@ interface ManualSetup {
  * これで `fake.report(...)` / `fake.closed(...)` が `#onEvent` へ実際に届く
  * 状態を作る。
  */
-async function runningManualSetup(managerId = 'mgr-withhold'): Promise<ManualSetup> {
+async function runningManualSetup(
+  managerId = 'mgr-withhold',
+  options: { withheldReportFlushMs?: number } = {},
+): Promise<ManualSetup> {
   const job: Job = {
     id: managerId,
     createdAt: '2026-09-01T00:00:00.000Z',
@@ -201,6 +204,7 @@ async function runningManualSetup(managerId = 'mgr-withhold'): Promise<ManualSet
     post: (event) => inbox.push(event),
     runners: registry,
     now: () => clock,
+    withheldReportFlushMs: options.withheldReportFlushMs,
   });
 
   await pool.restore();
@@ -573,6 +577,83 @@ describe('flushWithheldReports（時間で必ず配る逃げ道）', () => {
         true,
       );
     });
+  });
+});
+
+/**
+ * `ManagerPoolOptions.withheldReportFlushMs`（`ALTEROID_WITHHELD_REPORT_FLUSH_MS`
+ * を解いた値を渡す口）が、`flushWithheldReports()` の期限判定と、配られる
+ * 文言の両方に実際に効くことを固定する。
+ *
+ * env 自体の解決（`resolveWithheldReportFlushMs`）は
+ * `withheld-report-flush-ms.test.ts` が持つ。ここで確かめるのは「解いた値が
+ * `Pool` の判定まで届くか」——口を開けただけで配線し忘れる形を捕まえる。
+ */
+describe('ManagerPoolOptions.withheldReportFlushMs（口が実際に効くこと）', () => {
+  it('既定（30分）より短い値を渡すと、既定なら配られない時点で配られる', async () => {
+    const { pool, inbox, fake, advance } = await runningManualSetup('mgr-withhold', {
+      withheldReportFlushMs: 5 * 60_000,
+    });
+    const before = inbox.length;
+
+    fake.report('mgr-withhold', '握り潰される回', 'done', { awaitingBackground: AWAITING });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // 10分——既定30分ならまだ配られないはずの時点。
+    advance(10 * 60_000);
+    await pool.flushWithheldReports();
+
+    const delivered = await vi.waitFor(() => {
+      const found = inbox.slice(before).find((event) => event.type === 'manager_message');
+      if (!found) throw new Error('まだ届いていない');
+      return found as { text: string };
+    });
+    expect(delivered.text).toContain('配っていない');
+
+    await pool.stop();
+  });
+
+  it('配られる文言の「N分待っても届かなかった」が、渡した値に追随する', async () => {
+    const { pool, inbox, fake, advance } = await runningManualSetup('mgr-withhold', {
+      withheldReportFlushMs: 5 * 60_000,
+    });
+    const before = inbox.length;
+
+    fake.report('mgr-withhold', '握り潰される回', 'done', { awaitingBackground: AWAITING });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    advance(5 * 60_000 + 1);
+    await pool.flushWithheldReports();
+
+    const delivered = await vi.waitFor(() => {
+      const found = inbox.slice(before).find((event) => event.type === 'manager_message');
+      if (!found) throw new Error('まだ届いていない');
+      return found as { text: string };
+    });
+    expect(delivered.text).toContain('5分待っても届かなかった。');
+    expect(delivered.text).not.toContain('30分待っても届かなかった。');
+
+    await pool.stop();
+  });
+
+  it('陰性対照: option も env も無いときは、これまでどおり既定30分（文言も「30分」）', async () => {
+    const { pool, inbox, fake, advance } = await runningManualSetup();
+    const before = inbox.length;
+
+    fake.report('mgr-withhold', '握り潰される回', 'done', { awaitingBackground: AWAITING });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    advance(30 * 60_000 + 1);
+    await pool.flushWithheldReports();
+
+    const delivered = await vi.waitFor(() => {
+      const found = inbox.slice(before).find((event) => event.type === 'manager_message');
+      if (!found) throw new Error('まだ届いていない');
+      return found as { text: string };
+    });
+    expect(delivered.text).toContain('30分待っても届かなかった。');
+
+    await pool.stop();
   });
 });
 
