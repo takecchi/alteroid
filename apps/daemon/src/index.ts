@@ -58,6 +58,7 @@ import {
   type RunnerUnknownReport,
 } from './runner-client.js';
 import { clearRuntimeInfo, writeRuntimeInfo } from './runtime.js';
+import { noteRunnerSwap } from './runner-swap-notice.js';
 import { buildSchedule, readScheduleConfig } from './schedule.js';
 import {
   createAgentTokenHolder,
@@ -462,14 +463,26 @@ export async function main(): Promise<void> {
   });
 
   /**
+   * クローンの受信箱へ入れる口。**クローンが立ち上がるより先に名簿が動きうる**ので、
+   * 宛先は後から差し替える（`takeOverOnSwap` / `relocateOnLost` と同じ形。
+   * `announce` を `let` にして丸ごと差し替えるのではなく、こちらだけを `let` にして
+   * `announce` は `const` にしてある — こうすると `announce` の中身（stderr へは
+   * 必ず書く、クローンへは持てるときだけ渡す）が起動の前半・後半で変わらず、
+   * 読む側が2つの定義を突き合わせる必要が無い。
+   */
+  let postToClone: ((text: string) => void) | undefined = undefined;
+  /**
    * 挑み直しても直らない失敗の行き先。
    *
    * **人間（stderr）とクローン（受信箱）の両方へ出す。** 片方だけだと、ログを
-   * 見ていない人間か、事実を知らないクローンのどちらかが取り残される。クローンが
-   * 立ち上がるより先に失敗しうるので、宛先は後から差し替える。
+   * 見ていない人間か、事実を知らないクローンのどちらかが取り残される。stderr は
+   * 最初から使えるので直接書き、クローンの受信箱は `postToClone` が持てるように
+   * なってから届く（それまでは黙って落ちる——起動直後にここへ来る事象は稀で、
+   * 稀だからこそ stderr にだけでも残る形にしてある）。
    */
-  let announce = (text: string): void => {
+  const announce = (text: string): void => {
     process.stderr.write(`alteroidd: ${text}\n`);
+    postToClone?.(text);
   };
   /**
    * 器の入れ替えを見たときに引き取りを起こす口。**宛先は後から差し替える。**
@@ -546,15 +559,61 @@ export async function main(): Promise<void> {
      * **知らせる相手は人間とクローンの両方。** 入れ替わった器の中で走っていた
      * マネージャーは消えている可能性があるので、クローンが `manager_list` を見て
      * 判断できるようにする。ログだけに出すと、その判断材料がクローンへ届かない。
+     *
+     * ## ただし、クローンを起こすのは対象が1本以上ありそうなときだけ
+     *
+     * runner は3台あり、デプロイのたびに最低3回ここが呼ばれる。以前は
+     * `announce(...)` を無条件に呼んでいたため、**引き取り対象の委譲が0本の
+     * ときも毎回クローンを起こしていた**——依頼者は24時間で6回起こされ、6回とも
+     * 「何もしない」と答えている。
+     *
+     * **stderr へは今まで通り無条件に書く**（人間はログを見れば全部わかる）。
+     * クローンを起こすかどうかだけを `noteRunnerSwap`
+     * （`runner-swap-notice.ts`）に委ねる——台帳と名簿を突き合わせ、対象が
+     * 0本と積極的に数え切れたときだけ起こさない。**数えられない・読めないときは
+     * 必ず起こす側へ倒す**（`runner-swap-notice.ts` の doc「設計の芯」）。
+     *
+     * 起こさなかった回も、判断そのもの（何本と数えて起こさなかったか）は
+     * `journal` の `decision` として必ず残る——`reportRunnerUnknown` /
+     * `reportRunnerDropped` が `external_event` を直に書くのと同じ「クローンを
+     * 起こさずに記録だけ残す」作法だが、こちらは `decision` を使う。
+     * `external_event` にすると `clone.post({ type: 'external', ... })` と
+     * 同じ見え方になり、「起こしたのか起こしていないのか」が日誌から区別できなく
+     * なるためである。
      */
     onSwap: ({ label, runnerId, before, after }) => {
-      announce(
+      const text =
         `runner (${label}${runnerId === undefined ? '' : ` / ${runnerId}`}) に` +
-          `別のプロセスが応え始めました（器の入れ替え）。` +
-          `そこで走っていた委譲の引き取りを試みます` +
-          `（貸し出し期限が切れていない委譲は、切れてから自動で引き取ります）: ` +
-          `${before} → ${after}`,
-      );
+        `別のプロセスが応え始めました（器の入れ替え）。` +
+        `そこで走っていた委譲の引き取りを試みます` +
+        `（貸し出し期限が切れていない委譲は、切れてから自動で引き取ります）: ` +
+        `${before} → ${after}`;
+      process.stderr.write(`alteroidd: ${text}\n`);
+      // `runners` はこのコールバックを包む `createRunnerRegistry(...)` の戻り値を
+      // 束ねる `const` で、参照するのはコールバックが実際に呼ばれる実行時
+      // （構築が終わった後）なので TDZ にはならない。**万一それでも投げたら**
+      // `aliveRunnerIds()` の try/catch がそれを拾い、「名簿を読めなかった」＝
+      // 起こす側へ倒れる（`noteRunnerSwap` の doc）。
+      void noteRunnerSwap({
+        notice: text,
+        runnerId,
+        listJobs: () => stores.jobs.listJobs(),
+        // 「生きている」＝ `state === 'connected'`。`relocateFrom`
+        // （`packages/core/src/manager.ts`）が移送先を選ぶときと同じ条件——
+        // `RunnerEntry` は `alive` という欄を持たない（それは内部の
+        // `RegistryEntry` にしか無い）ので、公開の名簿が持つ `state` で揃える。
+        aliveRunnerIds: () =>
+          new Set(
+            runners
+              .entries()
+              .flatMap((entry) =>
+                entry.state === 'connected' && entry.runnerId !== undefined ? [entry.runnerId] : [],
+              ),
+          ),
+        journal: (entry) => stores.journal.append(entry),
+        wake: postToClone,
+        warn: (message) => process.stderr.write(`alteroidd: ${message}\n`),
+      });
       takeOverOnSwap(runnerId);
     },
   });
@@ -918,8 +977,9 @@ export async function main(): Promise<void> {
 
   // 挑み直しても直らない失敗は、ここからクローンの受信箱にも入る（次のターンで
   // 気づける）。日誌にも残るので、後から「いつ繋がらなくなったか」を追える。
-  announce = (text: string): void => {
-    process.stderr.write(`alteroidd: ${text}\n`);
+  // stderr への書き出しは `announce` 本体が既に持っているので、ここでは
+  // クローンへの経路だけを差し替える。
+  postToClone = (text: string): void => {
     clone.post({
       type: 'external',
       id: randomUUID(),
