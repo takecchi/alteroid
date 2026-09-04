@@ -3309,7 +3309,13 @@ class Clone implements CloneHost {
           return;
         }
 
+        // ストア（`claimRun` / `completeRun`）は「定期の予定の基準を動かすか」だけを
+        // 知ればよいので、いまも2値のまま（`schedule_catchup` も基準を進める側なので
+        // `schedule` 扱い）。**日誌の側はここで分けない** — 「なぜこの時刻に起きたか」
+        // （定刻どおりか、取りこぼしを拾ったか）を追えるようにするのが#5の直しなので、
+        // `event.cause` が運んできた3値（`schema.ts` の `timer` の doc）をそのまま書く。
         const cause = event.cause === 'manual' ? 'manual' : 'schedule';
+        const journalCause = event.cause ?? 'schedule';
         const plan = claimed.status === 'ok' ? claimed.plan : null;
         const timerDigest = await this.#recentDigest();
         // **このターンへ何が入ったかを残す**（#243）。digest の全文は書かない —
@@ -3319,7 +3325,7 @@ class Clone implements CloneHost {
           turnInputEntry({
             type: 'timer',
             kind: event.kind,
-            cause,
+            cause: journalCause,
             ...(event.target === undefined ? {} : { target: event.target }),
             request: plan !== null,
             digest: timerDigest,
