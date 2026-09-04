@@ -6,6 +6,7 @@ import {
   noteDroppedRecord,
   noteManagerIdCollision,
   noteUnreadableRecord,
+  noteWithheldReportsDiscarded,
   runnerEventShape,
 } from './dropped-record.js';
 import { excerptLine, renderListing } from './excerpt.js';
@@ -3730,11 +3731,32 @@ class Pool implements ManagerPool {
       managerId,
     );
 
+    // **止めた委譲が「握り潰した報告」を抱えたまま終わったという事実を、
+    // 依頼者（クローン）へ能動的に届けるための控え。**
+    //
+    // `#retire(managerId)` は下の `if` の中で呼ぶが、呼んだ瞬間に
+    // `#withheldReports` からそのエントリが消える（`#retire` の JSDoc）——
+    // だから読むのは必ず `#retire()` より前でなければならない。
+    //
+    // **中身（`lastText`）は載せない（R4）。** 「止めた後は受信箱へ回さない」
+    // という R4 の判断そのものは覆さない——ここで作るのは「積みが在った」
+    // という事実の告知だけで、`#emit()` が通常の配達でやる「積みを配る」
+    // ことはしない。件数・時刻・`journal_read` への案内という形は、
+    // `#emit()` の `countNote`（同じファイル内）が既に固定している形に
+    // 揃えた。
+    let withheldNote = '';
     if (outcome === 'stopped') {
       record.waiting = [];
       record.attached = false;
       record.job.status = 'stopped';
       await this.#persist(record);
+      const withheld = this.#withheldReports.get(managerId);
+      if (withheld !== undefined) {
+        withheldNote =
+          ` このマネージャーは、背景処理の完了待ちで畳んだ報告を ${String(withheld.count)} ` +
+          `本抱えたまま止まった（最初 ${withheld.firstAt} / 最後 ${withheld.lastAt}）。` +
+          'もう配られない（R4「止めた後は受信箱へ回さない」）。全文は日誌に在る（`journal_read`）。';
+      }
       // **停止は明示的な終端である。** 台帳には残るので `list()` / `manager_send` は
       // これまでどおり答えられる（`#retire` の JSDoc）。
       this.#retire(managerId);
@@ -3754,9 +3776,11 @@ class Pool implements ManagerPool {
       reason === undefined ? `${who}が停止を試みた。` : `${who}が停止を試みた: ${reason}`;
     const stoppedBase =
       reason === undefined ? `${who}が停止させた。` : `${who}が停止させた: ${reason}`;
+    // **`withheldNote` は `outcome === 'stopped'` のときしか値を持たない**
+    // （上の控えの doc）ので、他の分岐へは影響しない。
     const detail =
       outcome === 'stopped'
-        ? `${stoppedBase}${stopErrorNote}`
+        ? `${stoppedBase}${stopErrorNote}${withheldNote}`
         : outcome === 'not_stopped'
           ? `${attemptedBase}runner には ${managerId} のセッションがまだ残っている。止まっていない。${stopErrorNote}`
           : `${attemptedBase}runner に確認が取れず、止まったかは未確認。${stopErrorNote}`;
@@ -3771,9 +3795,14 @@ class Pool implements ManagerPool {
     });
     // **outcome ごとに言い分ける。** 止まっていない・不明のときまで「停止させ
     // ました」と言うと、クローンは止まったつもりで次の判断へ進む（R1 の再発）。
+    // **`withheldNote` は人間発（`by === 'human'`）のときだけ配達される。**
+    // クローン発（`by === 'clone'`）はこの下で `#post` 自体が省かれるので、
+    // ここへ足しても受信箱には出ない——クローンには `manager_stop` の
+    // 戻り値（`result.detail`。上の `detail` から来る）でしか届かない。
+    // 新しい配達経路は増やしていない（既存の1本の中で名指ししているだけ）。
     const messageText =
       outcome === 'stopped'
-        ? `${managerId} を${who}が停止させました。${reason === undefined ? '' : `理由: ${reason}`}`
+        ? `${managerId} を${who}が停止させました。${reason === undefined ? '' : `理由: ${reason}`}${withheldNote}`
         : outcome === 'not_stopped'
           ? `${managerId} を${who}が止めようとしましたが、まだ止まっていません` +
             `（runner にセッションが残っています）。`
@@ -3822,11 +3851,13 @@ class Pool implements ManagerPool {
     // 1. **新しい情報が無い。** クローンは `manager_stop` ツール
     //    （`packages/core/src/tools.ts`）の戻り値として、この `messageText`
     //    が言えることを**同じターンの中で同期的に**既に受け取っている——
-    //    戻り値は `detail`（`who` / `reason` / `stopErrorNote` を含む）に加え、
-    //    止めた後の状態（`after.status` / `live`）や `done` だった場合の
-    //    但し書きまで返す。対して非同期の `messageText` はここで組み立てた
-    //    `${managerId} を${who}が停止させました。理由: ${reason}` だけであり、
-    //    **戻り値の真部分集合である**。読み手が同じ・ターンも同じ・情報も
+    //    戻り値は `detail`（`who` / `reason` / `stopErrorNote` / `withheldNote`
+    //    を含む）に加え、止めた後の状態（`after.status` / `live`）や `done`
+    //    だった場合の但し書きまで返す。対して非同期の `messageText` はここで
+    //    組み立てた `${managerId} を${who}が停止させました。理由: ${reason}`
+    //    ＋（積みが在れば）`withheldNote` だけであり、**戻り値の真部分集合
+    //    である**（`withheldNote` は `detail` にも同じ文字列で乗る——下の
+    //    「握り潰した報告」の控え）。読み手が同じ・ターンも同じ・情報も
     //    戻り値に含まれる以上、配る先に新しい事実は1文字も無い。
     // 2. **配る費用が本数に比例する。** 実測（2026-08-23）: 終了済み
     //    マネージャー7本を `manager_stop` で畳んだところ、台帳は1件も増え
@@ -6449,6 +6480,28 @@ class Pool implements ManagerPool {
     // 全文が消えないことであって、`decision` 側が全文を持つからではない。
     // R4 が「止めた後は受信箱へ回さない」と決めている以上、ここで
     // `#emit()` して起こすのは R4 の判断そのものを覆す。
+    //
+    // **ただし「握り潰したまま終わった」という事実そのものは、受信箱を
+    // 経由せずに stderr へ残す（`noteWithheldReportsDiscarded`）。** R4 が
+    // 禁じているのは本文を受信箱へ流すことであって、事実の存在を一切
+    // 出さないことではない——ここで何も残さないと、`abort()` 以外の経路
+    // （resume 断念・世代衝突などで `#retire()` を直接呼ぶ箇所。この
+    // ファイル内の他の `#retire(` 呼び出し箇所）でこの状態に来たとき、
+    // 握り潰しが空でないまま消えた事実がどこにも残らない。`abort()` 自身は
+    // これとは別に `ManagerAbortResult.detail` と日誌へも書くので、
+    // `abort()` 経由のときはここが重ねての跡になる——それでも呼び出し元で
+    // 分岐させないのは、`#retire()` 自身に置けば呼び出し元がどれであっても
+    // 同じ1行が漏れなく残るためである（`noteWithheldReportsDiscarded` の
+    // doc）。
+    const withheldBeforeDelete = this.#withheldReports.get(managerId);
+    if (withheldBeforeDelete !== undefined && withheldBeforeDelete.count > 0) {
+      noteWithheldReportsDiscarded(
+        managerId,
+        withheldBeforeDelete.count,
+        withheldBeforeDelete.firstAt,
+        withheldBeforeDelete.lastAt,
+      );
+    }
     this.#withheldReports.delete(managerId);
   }
 
