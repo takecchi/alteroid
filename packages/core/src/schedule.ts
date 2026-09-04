@@ -306,7 +306,15 @@ class TimerScheduler implements Scheduler {
     // **手で起こしたことを運ぶ。** 予定をずらさないのはここのメモリ上だけでは足りず、
     // 受け取った側が「定期の予定の基準」を手動実行の時刻へ動かさないことまで要る
     // （動かすと、次にデーモンを作り直した瞬間に位相がずれる）。
-    this.#post(event.type === 'timer' ? { ...event, cause: 'manual' } : event);
+    // **`timer` / `self_initiative` の両方に効かせる。** 省略すると、手動実行だけ
+    // `cause` が乗らずに省略時の既定（＝`schedule`＝定刻どおり）へ落ち、
+    // `/run self_initiative` が「定刻どおりに起きた」と嘘をつく（いまの「無い」を
+    // より悪い「間違った有る」へ変えてしまう）。
+    this.#post(
+      event.type === 'timer' || event.type === 'self_initiative'
+        ? { ...event, cause: 'manual' }
+        : event,
+    );
     return true;
   }
 
@@ -478,10 +486,17 @@ class TimerScheduler implements Scheduler {
       if (phase.lastScheduledRunAt === undefined) continue;
       const seed = new Date(phase.lastScheduledRunAt);
       if (Number.isNaN(seed.getTime())) continue;
-      // **既定の仕込み（日報・発意）は、拾い直しか定刻どおりかを日誌で区別しない
-      // （#5 の範囲外。`inputsOf`/journal に `cause` を持つのは継続中の依頼
-      // だけである）。** ここでは `dueFromSeed` の `.at` だけを使う。
-      this.#due.set(entry.kind, dueFromSeed(entry, seed, this.#now()).at.getTime());
+      // **既定の仕込み（日報・発意）も、継続中の依頼（`#reconcile`）と同じ形で
+      // `#catchUp` を立てる。** 発意 tick は `catchUpMissed` を指定していない
+      // （`selfInitiativeEntry` の doc）ので `dueFromSeed` の catch-up 側へ入る
+      // ことがあり、日報は `catchUpMissed: false` なので `dueFromSeed` は常に
+      // `catchUp: false` を返す（`dailyReportEntry` の doc。後追いは
+      // `missingDailyReportDates` だけが持つ、という線はここでは動かさない）。
+      // `tick()` はこの印を読んで `cause: 'schedule_catchup'` を日誌へ運ぶ。
+      const due = dueFromSeed(entry, seed, this.#now());
+      this.#due.set(entry.kind, due.at.getTime());
+      if (due.catchUp) this.#catchUp.add(entry.kind);
+      else this.#catchUp.delete(entry.kind);
     }
   }
 
@@ -575,11 +590,16 @@ class TimerScheduler implements Scheduler {
       // 失敗しても時計は止まらない（`#recordPhase` に倒れる向きを書いてある）。
       this.#recordPhase(entry, now, 'schedule');
       const event = entry.event(now);
-      // **`cause` を上書きするのは `timer` 型で、かつ本当に catch-up のときだけ。**
-      // 既定の仕込み（`daily_report` / `self_initiative`）は `#catchUp` に一度も
-      // 入らない（`#seedBase` は `.at` だけを使う）ので、ここは継続中の依頼だけに効く。
+      // **`cause` を上書きするのは `timer` / `self_initiative` 型で、かつ本当に
+      // catch-up のときだけ。** 継続中の依頼（`timer`）と発意 tick
+      // （`self_initiative`）は `#seedBase` / `#reconcile` の両方が `#catchUp` を
+      // 立てうる（`#seedBase` の doc）。日報（`timer` だが `kind` が
+      // `DAILY_REPORT_KIND`）は `catchUpMissed: false` なので `#catchUp` に
+      // 一度も入らず、ここを素通りする。
       this.#post(
-        event.type === 'timer' && catchUp ? { ...event, cause: 'schedule_catchup' } : event,
+        (event.type === 'timer' || event.type === 'self_initiative') && catchUp
+          ? { ...event, cause: 'schedule_catchup' }
+          : event,
       );
     }
     return fired;
@@ -705,14 +725,27 @@ function atTimeOnDay(day: Date, time: TimeOfDay): Date {
   return new Date(day.getFullYear(), day.getMonth(), day.getDate(), time.hour, time.minute, 0, 0);
 }
 
-/** 日報の発火イベント。対象日を運ぶのはここ1箇所に寄せる（後追いの生成でも同じ形）。 */
-export function dailyReportEvent(target: string, at: Date = new Date()): InboxEvent {
+/**
+ * 日報の発火イベント。対象日を運ぶのはここ1箇所に寄せる（後追いの生成でも同じ形）。
+ *
+ * **`cause` は省略時 `schedule`（定刻どおり）。** 定刻の発火（`dailyReportEntry.event`）
+ * は渡さない。後追い（`apps/daemon/src/index.ts` の `missingDailyReportDates` の
+ * 呼び出し口）だけが `schedule_catchup` を渡す — 締め時刻を過ぎてから起き直した
+ * 当日ぶんの後追いは `target` も発火時刻も定刻発火と一致しうるので、`cause` 以外に
+ * 区別する手段が無い。
+ */
+export function dailyReportEvent(
+  target: string,
+  at: Date = new Date(),
+  cause?: 'schedule_catchup',
+): InboxEvent {
   return {
     type: 'timer',
     id: randomUUID(),
     at: at.toISOString(),
     kind: DAILY_REPORT_KIND,
     target,
+    ...(cause === undefined ? {} : { cause }),
   };
 }
 

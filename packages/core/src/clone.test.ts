@@ -2211,6 +2211,32 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
 describe('クローン — 自律（人間以外の起点）', () => {
   const inputsOf = (s: Setup) => () => (s.calls[0]?.inputs ?? []).join('\n');
 
+  /**
+   * 日誌に残った `ターンの入力: self_initiative …` 行から `cause=…` の断片だけを
+   * 取り出す。`timer` の既存テスト（下の「取りこぼしを拾った発火は…」）と同じ形
+   * — ストア（`claimRun`/`completeRun`）ではなく日誌の側で見る。
+   */
+  async function selfInitiativeCauseLines(s: Setup): Promise<string[]> {
+    const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as {
+      with: string;
+      text: string;
+    }[];
+    return exchanges
+      .filter((e) => e.with === 'self' && e.text.startsWith('ターンの入力: self_initiative'))
+      .map((e) => e.text.match(/cause=\S+/)?.[0] ?? 'cause=(無し)');
+  }
+
+  /** 同じ形の抽出を `daily_report` の行に対して行う（`selfInitiativeCauseLines` と対）。 */
+  async function dailyReportCauseLines(s: Setup): Promise<string[]> {
+    const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as {
+      with: string;
+      text: string;
+    }[];
+    return exchanges
+      .filter((e) => e.with === 'self' && e.text.startsWith('ターンの入力: daily_report'))
+      .map((e) => e.text.match(/cause=\S+/)?.[0] ?? 'cause=(無し)');
+  }
+
   it('発意 tick で、人間が黙っていても自分の判断が動く（起点④）', async () => {
     const s = setup(() => '今回は動かない');
 
@@ -2226,6 +2252,57 @@ describe('クローン — 自律（人間以外の起点）', () => {
       .toBe(true);
     // 人間には見せない内部ターンなので chat には出ない
     expect(s.events).toEqual([]);
+    // 陰性対照: cause を省略した発火（＝定刻どおり）は日誌に cause=schedule と残る
+    // （省略時の既定。付いた印が増えるわけではない）
+    expect(await selfInitiativeCauseLines(s)).toEqual(['cause=schedule']);
+
+    await s.clone.stop();
+  });
+
+  /**
+   * `self_initiative` の `cause`（#635 が `timer` に足した3値と同じ軸・同じ意味）が、
+   * `daily_report` を除く「日誌にも記録されない」の穴を塞ぐ #5 の続き。
+   *
+   * `TimerScheduler#seedBase()` は `dueFromSeed` の `.catchUp` を読むようになった
+   * （直す前は `.at` だけを使い、拾い直しか定刻どおりかを日誌の上で区別できなかった）。
+   * ここでは `clone.ts` の `case 'self_initiative'` が `event.cause` をそのまま
+   * `turnInputEntry` へ運ぶことだけを確かめる（`#seedBase` / `tick()` 側の判定
+   * そのものは `schedule.test.ts` が持つ）。
+   */
+  it('取りこぼしを拾った発意 tick は、日誌に cause=schedule_catchup として残る', async () => {
+    const s = setup(() => '取りこぼしを拾って動いた');
+
+    s.clone.post({
+      type: 'self_initiative',
+      id: 'evt-self-catchup',
+      at: new Date().toISOString(),
+      reason: '定期 tick',
+      cause: 'schedule_catchup',
+    });
+
+    await expect
+      .poll(() => inputsOf(s)().includes('次にやることがあるか'), { timeout: 3000 })
+      .toBe(true);
+    expect(await selfInitiativeCauseLines(s)).toEqual(['cause=schedule_catchup']);
+
+    await s.clone.stop();
+  });
+
+  it('手で起こした（/run self_initiative）発意 tick は、日誌に cause=manual として残る', async () => {
+    const s = setup(() => '手で起こされて動いた');
+
+    s.clone.post({
+      type: 'self_initiative',
+      id: 'evt-self-manual',
+      at: new Date().toISOString(),
+      reason: '定期 tick',
+      cause: 'manual',
+    });
+
+    await expect
+      .poll(() => inputsOf(s)().includes('次にやることがあるか'), { timeout: 3000 })
+      .toBe(true);
+    expect(await selfInitiativeCauseLines(s)).toEqual(['cause=manual']);
 
     await s.clone.stop();
   });
@@ -2699,6 +2776,56 @@ describe('クローン — 自律（人間以外の起点）', () => {
       body: expect.stringContaining('ログイン周り'),
     });
     expect(inputsOf(s)()).toContain('2026-08-11 を締める');
+    // 陰性対照: cause を省略した発火（＝定刻どおり）は日誌に cause=schedule と残る
+    expect(await dailyReportCauseLines(s)).toEqual(['cause=schedule']);
+
+    await s.clone.stop();
+  });
+
+  /**
+   * `daily_report` の後追い（`missingDailyReportDates` →
+   * `apps/daemon/src/index.ts` の起動時のループ）が、定刻どおりの発火と日誌の上で
+   * 区別できることを確かめる（#635 の「範囲外で気づいたが直さなかったこと」の
+   * 続き）。**`clone.ts` の `case 'timer'` は `DAILY_REPORT_KIND` を
+   * `journalCause` を組み立てる手前で `#dailyReport` へ逃がしていたので、#635 の
+   * 直しは daily_report 経路に一切届いていなかった。**
+   */
+  it('後追いで作られた日報は、日誌に cause=schedule_catchup として残る', async () => {
+    const s = setup(() => '後追いで締めた');
+
+    s.clone.post({
+      type: 'timer',
+      id: 'evt-timer-catchup',
+      at: new Date().toISOString(),
+      kind: 'daily_report',
+      target: '2026-08-12',
+      cause: 'schedule_catchup',
+    });
+
+    await expect
+      .poll(() => s.stores.journal.list({ types: ['daily_report'] }), { timeout: 3000 })
+      .toHaveLength(1);
+    expect(await dailyReportCauseLines(s)).toEqual(['cause=schedule_catchup']);
+
+    await s.clone.stop();
+  });
+
+  it('手で起こした（/run daily_report）日報は、日誌に cause=manual として残る', async () => {
+    const s = setup(() => '手で起こされて締めた');
+
+    s.clone.post({
+      type: 'timer',
+      id: 'evt-timer-manual',
+      at: new Date().toISOString(),
+      kind: 'daily_report',
+      target: '2026-08-12',
+      cause: 'manual',
+    });
+
+    await expect
+      .poll(() => s.stores.journal.list({ types: ['daily_report'] }), { timeout: 3000 })
+      .toHaveLength(1);
+    expect(await dailyReportCauseLines(s)).toEqual(['cause=manual']);
 
     await s.clone.stop();
   });

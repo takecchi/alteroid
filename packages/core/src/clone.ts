@@ -3285,7 +3285,13 @@ class Clone implements CloneHost {
 
       case 'timer': {
         if (event.kind === DAILY_REPORT_KIND) {
-          await this.#dailyReport(event.target ?? localDate(new Date(event.at)));
+          // **省略時は `schedule`（定刻どおり）。** この分岐は下の journalCause の
+          // 計算より前で return するので、同じ既定をここで別に持つ
+          // （`dailyReportEvent` の doc。後追いだけが `schedule_catchup` を運ぶ）。
+          await this.#dailyReport(
+            event.target ?? localDate(new Date(event.at)),
+            event.cause ?? 'schedule',
+          );
           return;
         }
         // 依頼の本文は**いま**読み、読んだその版で発火を確定させる。イベントに
@@ -3369,9 +3375,16 @@ class Clone implements CloneHost {
       case 'self_initiative': {
         const digest = await this.#recentDigest();
         // **このターンへ何が入ったかを残す**（#243。digest の全文を書かない理由は
-        // `turn-input.ts` の doc）。
+        // `turn-input.ts` の doc）。`cause` は `timer` の `journalCause` と同じ形
+        // （省略時は `schedule`＝定刻どおり。`schema.ts` の
+        // `inboxEventSchema` `self_initiative.cause` の doc）。
         await this.#journal(
-          turnInputEntry({ type: 'self_initiative', reason: event.reason, digest }),
+          turnInputEntry({
+            type: 'self_initiative',
+            reason: event.reason,
+            cause: event.cause ?? 'schedule',
+            digest,
+          }),
         );
         await this.#runInternal(buildSelfInitiativePrompt({ reason: event.reason, digest }));
         return;
@@ -3840,7 +3853,10 @@ class Clone implements CloneHost {
    * `unavailable`（`schema.ts` の doc）の印が付いた行だけで、**本文は日報では
    * ないと分かる形にする**。
    */
-  async #dailyReport(date: string): Promise<void> {
+  async #dailyReport(
+    date: string,
+    cause: 'schedule' | 'schedule_catchup' | 'manual' = 'schedule',
+  ): Promise<void> {
     const range = localDayRange(date);
     const digest =
       range === null
@@ -3851,8 +3867,12 @@ class Clone implements CloneHost {
 
     // **このターンへ何が入ったかを残す**（#243）。日報は結果（`daily_report` の行）
     // しか残っていなかったので、「何を材料に書いたか」が後から取れなかった。digest の
-    // 全文は書かない（`turn-input.ts` の doc）。
-    await this.#journal(turnInputEntry({ type: 'daily_report', date, digest }));
+    // 全文は書かない（`turn-input.ts` の doc）。`cause` は呼び出し側
+    // （`case 'timer'`）が運んできた値をそのまま載せる — 定刻どおりか、起動時の
+    // 後追い（`missingDailyReportDates`）か、`POST /schedule/daily_report/run`
+    // による手動実行かを日誌の上で区別できるようにする（`turn-input.ts` の
+    // `daily_report` の doc）。
+    await this.#journal(turnInputEntry({ type: 'daily_report', date, cause, digest }));
 
     const outcome = await this.#runInternal(buildDailyReportPrompt({ date, digest }));
 

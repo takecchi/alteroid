@@ -1129,7 +1129,11 @@ export async function main(): Promise<void> {
       );
       return [];
     });
-    for (const date of missed) clone.post(dailyReportEvent(date));
+    // **後追いだと日誌の上で分かるように `schedule_catchup` を運ぶ。** 定刻の発火
+    // （`dailyReportEntry.event`）は `cause` を渡さない ＝ 省略時の既定
+    // （`schedule`）のまま。ここだけが後追いの発生源（`missingDailyReportDates`）
+    // なので、区別する印を付けられるのもここだけである。
+    for (const date of missed) clone.post(dailyReportEvent(date, new Date(), 'schedule_catchup'));
     if (missed.length > 0) {
       process.stdout.write(`alteroidd: 取りこぼした日報を作ります: ${missed.join(', ')}\n`);
     }
