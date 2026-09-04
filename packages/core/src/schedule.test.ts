@@ -1041,6 +1041,116 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     s.scheduler.stop();
   });
 
+  /**
+   * 依頼者の観測（再現して確かめた）: `schedule_create` で既存の `kind` の周期を
+   * 差し替えると、次の定刻を待たずその場で1回余計に発火していた。原因は、
+   * `tools.ts` が `lastScheduledRunAt`（古い格子の上の時刻）を引き継いだまま、
+   * `#firstDue` がそれを**新しい格子**へそのまま通していたこと — 新しい格子では
+   * 一度も本当には取りこぼしていないのに、「過ぎている」とだけ見て
+   * `dueFromSeed` の catch-up が誤って発動していた（`main` 上で再現・確認済み）。
+   */
+  it('周期を差し替えても、真の取りこぼしが無ければ即時発火しない（新しい格子の上で数え直す）', async () => {
+    // **既定の仕込み（日報）を混ぜない** — `entries: []` で `watch` の発火だけを見る
+    // （日報の定刻をまたぐ時刻へ跳ぶので、混ぜると無関係な発火が紛れ込む）。
+    const stores = createMemoryStores();
+    const posted: InboxEvent[] = [];
+    let clock = BASE;
+    const scheduler = createScheduler({
+      entries: [],
+      post: (event) => posted.push(event),
+      now: () => clock,
+      schedules: stores.schedules,
+    });
+
+    // 2026-08-10 09:00 に daily で最後に動いていた依頼
+    await stores.schedules.put({
+      ...plan('watch', { type: 'daily', at: '09:00' }),
+      lastRunAt: at(2026, 8, 10, 9, 0).toISOString(),
+      lastScheduledRunAt: at(2026, 8, 10, 9, 0).toISOString(),
+    });
+    await scheduler.refresh();
+    scheduler.start();
+
+    // BASE（2026-08-12 08:00）の時点で、周期を daily → every 60分 へ差し替える
+    // （`tools.ts` の schedule_create と同じく lastScheduledRunAt を引き継ぐ）
+    await stores.schedules.put({
+      ...plan('watch', { type: 'every', minutes: 60 }),
+      lastRunAt: at(2026, 8, 10, 9, 0).toISOString(),
+      lastScheduledRunAt: at(2026, 8, 10, 9, 0).toISOString(),
+    });
+    await scheduler.refresh();
+
+    // 次回は「新しい格子（60分ごと、錨は plan.createdAt=BASE）の上で、いまより後の
+    // 最初の点」— BASE そのもの（＝即時発火）にはならない
+    const status = scheduler.list().find((item) => item.kind === 'watch');
+    expect(status?.nextAt).toBe(at(2026, 8, 12, 9, 0).toISOString());
+    expect(scheduler.tick(clock)).toEqual([]);
+
+    // 新しい格子の定刻が来れば、定刻どおりの発火として届く（catch-up ではない）
+    clock = at(2026, 8, 12, 9, 0);
+    expect(scheduler.tick(clock)).toEqual(['watch']);
+    const fired = posted.at(-1);
+    expect(fired).toMatchObject({ type: 'timer', kind: 'watch' });
+    // 定刻どおりの発火は `cause` を持たない（省略＝`'schedule'`。`schema.ts` の doc）
+    expect(fired && 'cause' in fired ? fired.cause : undefined).toBeUndefined();
+
+    scheduler.stop();
+  });
+
+  /**
+   * `#catchUp` の印は「取りこぼしの拾い直しである」ことだけを表す。配り直し
+   * （`pendingRun` の再送）を挟むと、その印を次の発火まで持ち越してはいけない
+   * — 持ち越すと、配り直しの**次**に来る本当に定刻どおりの発火まで
+   * `schedule_catchup` に化けてしまう（この歯が無いと再現する退行）。
+   */
+  it('取りこぼしの拾い直しの印は、配り直し（pendingRun）を挟むと次の発火まで持ち越さない', async () => {
+    const stores = createMemoryStores();
+    const posted: InboxEvent[] = [];
+    let clock = at(2026, 8, 13, 10, 0);
+    const scheduler = createScheduler({
+      entries: [],
+      post: (event) => posted.push(event),
+      now: () => clock,
+      schedules: stores.schedules,
+    });
+
+    await stores.schedules.put({
+      ...plan('watch', { type: 'every', minutes: 1440 }),
+      lastRunAt: at(2026, 8, 11, 22, 0).toISOString(),
+      lastScheduledRunAt: at(2026, 8, 11, 22, 0).toISOString(),
+    });
+    // ここで本当の取りこぼしとして #catchUp が立つ
+    await scheduler.refresh();
+    scheduler.start();
+
+    // 発火の直前に、claim だけ進んで完了せずに落ちた状態を作る（pendingRun が付く）
+    const held = await stores.schedules.get('watch');
+    await stores.schedules.claimRun(
+      'watch',
+      held?.updatedAt ?? '',
+      at(2026, 8, 13, 10, 0).toISOString(),
+      'schedule',
+    );
+    // spec は変えていないので #firstDue は呼ばれ直さない（`existing?.spec === spec`
+    // で早期 continue）。#catchUp はここでは触られない。
+    await scheduler.refresh();
+
+    // 配り直し経路で発火する（同じ回を pendingRun として引き受け直す）
+    expect(scheduler.tick(clock)).toEqual(['watch']);
+    expect(posted.at(-1)).toMatchObject({ cause: 'schedule' });
+
+    // 完了させ、次の本来の発火（本当に定刻どおり）が catch-up 扱いに化けないこと
+    await stores.schedules.completeRun('watch', at(2026, 8, 13, 10, 0).toISOString(), 'schedule');
+    await scheduler.refresh();
+    clock = at(2026, 8, 14, 10, 0);
+    expect(scheduler.tick(clock)).toEqual(['watch']);
+    const fired = posted.at(-1);
+    expect(fired).toMatchObject({ type: 'timer', kind: 'watch' });
+    expect(fired && 'cause' in fired ? fired.cause : undefined).toBeUndefined();
+
+    scheduler.stop();
+  });
+
   it('外した依頼はもう起きない', async () => {
     const s = setup(at(2026, 8, 12, 8, 0));
     await s.stores.schedules.put(plan('watch', { type: 'every', minutes: 10 }));
@@ -1085,6 +1195,13 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     s.scheduler.start();
 
     expect(s.scheduler.tick(at(2026, 8, 13, 10, 0))).toEqual(['watch']);
+    // **本当の取りこぼしは `cause: 'schedule_catchup'` で届く**（定刻どおりの
+    // 発火 `cause` 省略＝`'schedule'` と、日誌の上で区別できるように）。
+    expect(s.posted.at(-1)).toMatchObject({
+      type: 'timer',
+      kind: 'watch',
+      cause: 'schedule_catchup',
+    });
     // 拾うのは1回だけ。溜まった回数ぶん撃たない
     expect(s.scheduler.tick(at(2026, 8, 13, 10, 1))).toEqual([]);
 

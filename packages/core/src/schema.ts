@@ -316,14 +316,23 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
      */
     target: z.string().optional(),
     /**
-     * 定期の予定で来たのか、人間が手で起こしたのか（`POST /schedule/:kind/run`）。
+     * 定期の予定どおりに来たのか、取りこぼしを拾って来たのか、人間が手で起こしたのか
+     * （`POST /schedule/:kind/run`）。
      *
-     * **同じ形で運ぶが、意味が違う。** 手で起こした1回は「余分に1回」であって
-     * 定期の予定をずらすものではない（`Scheduler.run` の契約）。ここで区別しないと、
-     * 受け取った側が予定の基準を手動実行の時刻へ動かしてしまい、再起動後に位相が
-     * ずれる。省略時は定期の予定である。
+     * **`schedule` と `schedule_catchup` は、ストア（`ScheduleStore.claimRun` /
+     * `completeRun`）にとっては同じ扱いである** — どちらも定期の予定の基準
+     * （`lastScheduledRunAt`）を進める。分けているのは日誌の側で、**なぜこの時刻に
+     * 起きたのかを後から追えるようにするため**（`schedule.ts` の `TimerScheduler`
+     * が `#catchUp` で判定する。周期を差し替えた直後の余計な即時発火はここに
+     * 落ちてこない — 差し替えの瞬間は「取りこぼし」ではなく `entry.nextAt(now)`
+     * で新しい格子の上から数え直す。`schedule.ts` の `#firstDue` の doc）。
+     *
+     * `manual` は「余分に1回」であって定期の予定をずらすものではない
+     * （`Scheduler.run` の契約）。ここで区別しないと、受け取った側が予定の基準を
+     * 手動実行の時刻へ動かしてしまい、再起動後に位相がずれる。省略時は `schedule`
+     * （定刻どおり）である。
      */
-    cause: z.enum(['schedule', 'manual']).optional(),
+    cause: z.enum(['schedule', 'schedule_catchup', 'manual']).optional(),
   }),
   z.object({
     type: z.literal('external'),

@@ -3141,6 +3141,59 @@ describe('クローン — 自律（人間以外の起点）', () => {
     await s.clone.stop();
   });
 
+  /**
+   * 依頼者の観測「その発火が日誌にも記録されない」は、現物と食い違っていた
+   * （`main` で再現・確認済み — `turnInputEntry` は定期の発火を毎回1行記録する）。
+   * ただし `cause` はもともと `schedule` / `manual` の2値しか無く、「定刻どおり」と
+   * 「取りこぼしを拾った」が同じ字面に潰れていた。ここではその3値目
+   * （`schedule_catchup`）が、ストア側の呼び出し（`claimRun` / `completeRun` は
+   * 引き続き2値のまま）とは独立に、日誌の側だけで区別できることを確かめる。
+   */
+  it('取りこぼしを拾った発火は、日誌に cause=schedule_catchup として残り、定期の基準も進む', async () => {
+    const stores = createMemoryStores();
+    await stores.schedules.put({
+      kind: 'issue-round',
+      spec: { type: 'every' as const, minutes: 60 },
+      request: 'open issue を見て実装を進める',
+      createdAt: '2026-08-12T08:00:00.000Z',
+      updatedAt: '2026-08-12T08:00:00.000Z',
+    });
+
+    const s = setup(() => '取りこぼしを拾って見た', stores);
+    // スケジューラが「本当の取りこぼし」を拾ったときに付ける印
+    // （`schedule.ts` の `tick()` — `#catchUp` が立っているときだけ）
+    s.clone.post({
+      type: 'timer',
+      id: 'evt-catchup',
+      at: '2026-08-13T00:00:00.000Z',
+      kind: 'issue-round',
+      cause: 'schedule_catchup',
+    });
+
+    await expect
+      .poll(() => inputsOf(s)().includes('open issue を見て'), { timeout: 3000 })
+      .toBe(true);
+
+    // ストアの呼び出し（claimRun/completeRun）は引き続き2値のまま —
+    // 「取りこぼし」でも定期の基準（lastScheduledRunAt）は普通に進む
+    const after = (await stores.schedules.list())[0];
+    expect(after?.lastRunAt).toBe('2026-08-13T00:00:00.000Z');
+    expect(after?.lastScheduledRunAt).toBe('2026-08-13T00:00:00.000Z');
+
+    // 日誌の側は3値目のまま残る（「なぜこの時刻に起きたか」が後から追える）
+    const exchanges = (await stores.journal.list({ types: ['exchange'] })) as {
+      with: string;
+      text: string;
+    }[];
+    const turnInputLines = exchanges
+      .filter((e) => e.with === 'self' && e.text.startsWith('ターンの入力: timer'))
+      .map((e) => e.text);
+    expect(turnInputLines).toHaveLength(1);
+    expect(turnInputLines[0]).toContain('cause=schedule_catchup');
+
+    await s.clone.stop();
+  });
+
   it('読んでから確定するまでに人間が消したら、取り消された依頼は動かさない', async () => {
     const stores = createMemoryStores();
     const plan = {

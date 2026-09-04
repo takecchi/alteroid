@@ -154,24 +154,35 @@ const MAX_SLEEP_MS = 60_000;
  * 錨（前回それで動いた時刻）から数えた次の予定。**現在時刻を基準にしない。**
  *
  * - 過ぎているなら「いま」（落ちていた間に取りこぼした分を**1回だけ**拾う。
- *   溜まった回数ぶん撃たない）
- * - まだなら本来の予定。ただし `nextAt(now)` より後ろにはしない — 時計のずれや
- *   人為的に未来の日付が入った場合に永久に沈黙しないため（黙って止まるより遅れて
- *   起きる方がよい）
+ *   溜まった回数ぶん撃たない）。このとき `catchUp: true` を返す — **これは
+ *   「同じ格子の上で本当に過ぎていた」ときだけ呼ばれることが前提**であって、
+ *   格子そのものを引き直した直後の呼び出しをここへ通してはいけない（`seed` が
+ *   古い格子の上の時刻のまま、新しい格子で「過ぎている」と判定されるだけになる
+ *   — それは取りこぼしではない。呼び出し側の責務は `#firstDue` の doc）
+ * - まだなら本来の予定（`catchUp: false`）。ただし `nextAt(now)` より後ろには
+ *   しない — 時計のずれや人為的に未来の日付が入った場合に永久に沈黙しないため
+ *   （黙って止まるより遅れて起きる方がよい）
  *
  * **継続中の依頼（`#firstDue`）と既定の仕込み（`#seedBase`）で同じ算術を使うために
  * 切り出してある。** 2箇所に書くと片方だけ直され、「依頼では拾えるのに既定では
  * 拾えない」が戻る（それがこの関数が生まれた原因の欠陥である）。
  *
- * 拾うかどうかの判断（`catchUpMissed`）は entry 側が持つ。
+ * 拾うかどうかの判断（`catchUpMissed`）は entry 側が持つ。`catchUpMissed === false`
+ * （日報）の側は、過ぎていても「今すぐ」ではなく次回へ送るだけなので、あちらは
+ * 常に `catchUp: false` である（撃っていないので拾い直しではない）。
  */
-function dueFromSeed(entry: ScheduleEntry, seed: Date, now: Date): Date {
+function dueFromSeed(entry: ScheduleEntry, seed: Date, now: Date): { at: Date; catchUp: boolean } {
   const fromSeed = entry.nextAt(seed);
   if (fromSeed.getTime() <= now.getTime()) {
     // 拾い直しを別の経路が持っている場合（日報）は、ここでは撃たない。
-    return entry.catchUpMissed === false ? entry.nextAt(now) : now;
+    return entry.catchUpMissed === false
+      ? { at: entry.nextAt(now), catchUp: false }
+      : { at: now, catchUp: true };
   }
-  return new Date(Math.min(fromSeed.getTime(), entry.nextAt(now).getTime()));
+  return {
+    at: new Date(Math.min(fromSeed.getTime(), entry.nextAt(now).getTime())),
+    catchUp: false,
+  };
 }
 
 export function createScheduler(options: SchedulerOptions): Scheduler {
@@ -203,6 +214,17 @@ class TimerScheduler implements Scheduler {
    * 二重の仕事になる）。
    */
   readonly #redelivered = new Map<string, string>();
+  /**
+   * 継続中の依頼のうち、いま `#due` に積んでいる時刻が「取りこぼしの拾い直し」で
+   * あるものの kind。
+   *
+   * **`#firstDue` が `dueFromSeed` の catch-up 側を通ったときだけ立つ。** 周期を
+   * 差し替えた直後（`specChanged`）はここを経由しない（`#firstDue` の doc）ので、
+   * 立たない。`tick()` の本線で発火する瞬間にここを読んで `cause` を決め、読んだら
+   * 消す — 次に積む `due`（`entry.nextAt(now)`）は必ず前向きの本来の予定であって、
+   * 拾い直しではないため。
+   */
+  readonly #catchUp = new Set<string>();
   readonly #onError: (message: string) => void;
   /**
    * 既定の仕込みの位相（ストアから読んだもの＋この器で進めた分）。
@@ -339,7 +361,17 @@ class TimerScheduler implements Scheduler {
       }
       const entry = scheduledRequestEntry(plan);
       this.#requests.set(plan.kind, { entry, spec, plan });
-      this.#due.set(plan.kind, this.#firstDue(entry, plan, now).getTime());
+      // **`existing !== undefined` ＝ この kind をこの器で既に追っていたが、
+      // 周期（spec）が前回と違う。** ＝ 人間・クローンが `schedule_create` で
+      // 周期そのものを差し替えた瞬間である。`existing === undefined` は
+      // （器を作り直した直後、または初めて仕込まれた）どちらでも「この spec を
+      // この器で見るのは初めて」で、本当の取りこぼしを拾ってよい場面
+      // （`#firstDue` の doc）。
+      const specChanged = existing !== undefined;
+      const due = this.#firstDue(entry, plan, now, specChanged);
+      this.#due.set(plan.kind, due.at.getTime());
+      if (due.catchUp) this.#catchUp.add(plan.kind);
+      else this.#catchUp.delete(plan.kind);
     }
 
     for (const kind of [...this.#requests.keys()]) {
@@ -347,6 +379,7 @@ class TimerScheduler implements Scheduler {
       this.#requests.delete(kind);
       this.#due.delete(kind);
       this.#redelivered.delete(kind);
+      this.#catchUp.delete(kind);
     }
 
     // 仕込みが増えたなら、次の見張りをその予定に合わせ直す
@@ -354,7 +387,8 @@ class TimerScheduler implements Scheduler {
   }
 
   /**
-   * 依頼自身の時間軸で次の予定を決める。**現在時刻を基準にしない。**
+   * 依頼自身の時間軸で次の予定を決める。**現在時刻を基準にしない —
+   * ただし `specChanged` のときだけは例外である（下）。**
    *
    * 予定は「前回動いた時刻（無ければ仕込んだ時刻）から数えた次」である。ここを
    * `now` から数え直すと2つ壊れる。
@@ -367,17 +401,47 @@ class TimerScheduler implements Scheduler {
    * 逆に、その予定が既に過ぎているなら落ちていた間に取りこぼしているので、いま
    * 起こす。日報の後追い（`missingDailyReportDates`）と同じ考え方で、**1回だけ**拾う
    * （溜まった回数ぶん撃たない）。
+   *
+   * ### `specChanged` — 周期を差し替えた直後は「現在時刻を基準にしない」を破る
+   *
+   * **`seed`（`lastScheduledRunAt` ／ `createdAt`）は古い周期の格子の上で刻まれた
+   * 時刻である。** 周期を差し替えた直後にその `seed` を新しい格子（`entry.nextAt`）
+   * へそのまま通すと、「取りこぼした」わけでもないのに新しい格子の上でだけ過去へ
+   * 落ちて、`dueFromSeed` の catch-up が誤って発火する（依頼者の観測 — `main` で
+   * 再現・確認済み。周期を daily → every 60分 に差し替えると、直したその場で
+   * 1回余計に起きる）。**「取りこぼしの拾い直し」は同じ格子の上で本当に取りこぼした
+   * ときの仕組みであって、格子そのものを引き直した瞬間には当たらない。**
+   *
+   * だから `specChanged` のときは `seed` を経由せず、`entry.nextAt(now)`
+   * ＝新しい格子の上で「いまより後」の最初の点を、そのまま次回にする。過去に
+   * 落ちても拾い直さない（＝ `catchUp: false`）。**`entry.nextAt` 自身の錨
+   * （`every` なら `plan.createdAt`）は変わらない**ので、格子そのもの（どの時刻の
+   * 上に等間隔で並ぶか）は保たれる — 動くのは「いまはどの格子の上のどの点を
+   * 見ているか」だけである。
+   *
+   * **`existing !== undefined`（＝この器で前回と違う spec を追っていた）だけを
+   * `specChanged` とする。** `existing === undefined`（器の作り直し・初めての仕込み）
+   * は、前回と同じ spec のまま器だけが変わった場合を含むので、**本当の取りこぼしを
+   * 拾えなければならない**（呼び出し側 `#reconcile` の doc）。
    */
-  #firstDue(entry: ScheduleEntry, plan: ScheduledRequest, now: Date): Date {
+  #firstDue(
+    entry: ScheduleEntry,
+    plan: ScheduledRequest,
+    now: Date,
+    specChanged: boolean,
+  ): { at: Date; catchUp: boolean } {
     // **引き受けたまま終わっていない発火があるなら、まずそれを配り直す。**
     // claim の直後に器が落ちると、モデルには何も届いていないのに印だけが残る。
     // ここで拾わないと、日次なら翌日・週次なら翌週までその回が消える。
-    if (plan.pendingRun !== undefined) return now;
+    // `specChanged` より先に見る — 周期を差し替えても配り直しは止めない。
+    if (plan.pendingRun !== undefined) return { at: now, catchUp: false };
+
+    if (specChanged) return { at: entry.nextAt(now), catchUp: false };
 
     // 基準は**定期の予定で動いた時刻**。`lastRunAt`（手で起こした分も動く）を使うと、
     // 人間が余分に1回起こすたびに位相が動く（`run()` は予定をずらさない契約である）。
     const seed = new Date(plan.lastScheduledRunAt ?? plan.createdAt);
-    if (Number.isNaN(seed.getTime())) return entry.nextAt(now);
+    if (Number.isNaN(seed.getTime())) return { at: entry.nextAt(now), catchUp: false };
 
     return dueFromSeed(entry, seed, now);
   }
@@ -414,7 +478,10 @@ class TimerScheduler implements Scheduler {
       if (phase.lastScheduledRunAt === undefined) continue;
       const seed = new Date(phase.lastScheduledRunAt);
       if (Number.isNaN(seed.getTime())) continue;
-      this.#due.set(entry.kind, dueFromSeed(entry, seed, this.#now()).getTime());
+      // **既定の仕込み（日報・発意）は、拾い直しか定刻どおりかを日誌で区別しない
+      // （#5 の範囲外。`inputsOf`/journal に `cause` を持つのは継続中の依頼
+      // だけである）。** ここでは `dueFromSeed` の `.at` だけを使う。
+      this.#due.set(entry.kind, dueFromSeed(entry, seed, this.#now()).at.getTime());
     }
   }
 
@@ -480,6 +547,14 @@ class TimerScheduler implements Scheduler {
         // 次の予定は依頼の格子の上で決まる（`nextAt` が錨から数えるので、配り直した
         // 発火の時刻や現在時刻で位相が動かない）。過去を残さないので余分な発火も続かない。
         this.#due.set(entry.kind, entry.nextAt(now).getTime());
+        // **配り直しは「取りこぼしの拾い直し」ではない。** 別の軸（`resume.cause` が
+        // 元の `schedule` / `manual` を運ぶ）で既に区別されているので、`#catchUp` は
+        // ここでは読まない。ただし、この発火の直前に付いていたかもしれない印は
+        // 必ず捨てる — 捨てないと、この次に来る本当に定刻どおりの発火まで
+        // 「取りこぼしの拾い直し」のまま残ってしまう（この印は `dueFromSeed` の
+        // catch-up 側でしか立たず、配り直しの経路では一度も見ていないため、
+        // 持ち越す理由が無い）。
+        this.#catchUp.delete(entry.kind);
         fired.push(entry.kind);
         const event = entry.event(now);
         this.#post(
@@ -488,6 +563,10 @@ class TimerScheduler implements Scheduler {
         continue;
       }
 
+      // この発火が「取りこぼしの拾い直し」だったかを、次の予定を積む前に確定させる
+      // （`#catchUp.delete` は「読んで、同時に消す」— 次に積む due は必ず前向きの
+      // 本来の予定なので、消さないと次回まで印が残る）。
+      const catchUp = this.#catchUp.delete(entry.kind);
       // 次の予定を先に決める。イベント投入で例外が出ても、同じ発火を
       // 取りこぼしなく繰り返し続ける（＝暴走する）ことがないように。
       this.#due.set(entry.kind, entry.nextAt(now).getTime());
@@ -495,7 +574,13 @@ class TimerScheduler implements Scheduler {
       // 位相も post の前に進める（`#due` と同じ理由）。既定の仕込みだけが対象で、
       // 失敗しても時計は止まらない（`#recordPhase` に倒れる向きを書いてある）。
       this.#recordPhase(entry, now, 'schedule');
-      this.#post(entry.event(now));
+      const event = entry.event(now);
+      // **`cause` を上書きするのは `timer` 型で、かつ本当に catch-up のときだけ。**
+      // 既定の仕込み（`daily_report` / `self_initiative`）は `#catchUp` に一度も
+      // 入らない（`#seedBase` は `.at` だけを使う）ので、ここは継続中の依頼だけに効く。
+      this.#post(
+        event.type === 'timer' && catchUp ? { ...event, cause: 'schedule_catchup' } : event,
+      );
     }
     return fired;
   }

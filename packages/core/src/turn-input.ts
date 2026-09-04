@@ -140,11 +140,20 @@ export type TurnInput =
   | { type: 'human_answer'; approvalId: string; text: string }
   /** 片付け済みの配り直しで、本文の代わりに断り書きだけを配ったターン。 */
   | { type: 'human_answer_closed'; approvalId: string; text: string }
-  /** 日報以外の定期ジョブ（`buildTimerPrompt`）。 */
+  /**
+   * 日報以外の定期ジョブ（`buildTimerPrompt`）。
+   *
+   * **`cause` はストア側の2値（`ScheduleStore.claimRun` / `completeRun` の
+   * `'schedule' | 'manual'`）より1つ多い。** `schedule_catchup`（取りこぼしを
+   * 拾って起きた）はストアには渡さず `schedule` として扱う（`lastScheduledRunAt`
+   * を進める側は同じ）が、日誌には別の値のまま書く — 「定刻どおりか、取りこぼしを
+   * 拾ったか」は次の一手が違う（`schema.ts` の `inboxEventSchema` `timer.cause`
+   * の doc）。
+   */
   | {
       type: 'timer';
       kind: string;
-      cause: 'schedule' | 'manual';
+      cause: 'schedule' | 'schedule_catchup' | 'manual';
       target?: string;
       /** 継続中の依頼の本文を渡したか（本文そのものは器＝`schedules` に在る）。 */
       request: boolean;
