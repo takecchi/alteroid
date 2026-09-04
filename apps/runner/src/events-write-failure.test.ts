@@ -119,6 +119,16 @@ describe('runner の /events: writeSSE が投げても出来事を失わない�
       if (firstBody === null) throw new Error('SSE の応答に本文が無い');
       const firstReader = firstBody.getReader();
 
+      // **まず、1本目が実際にこの1件（event）の書き込みを試み、投げたことを
+      // 待つ。** `outbox.pending` は「`hello` の書き込みがまだ終わっていない
+      // （＝ `queue` に1件溜まっているだけで `writing` は空）」状態でも
+      // 「1本目が既に投げて `#queue` へ戻した」状態でも同じ1を返す
+      // （`hello` に締め切りが付いた分、前者に余分なマイクロタスクが挟まる
+      // ようになった——`thrown` を見ないと、2本目を開くタイミングが早すぎて
+      // 「1本目ではなく2本目が最初の書き込みで投げる」という別の状況を
+      // 作ってしまう）。
+      await expect.poll(() => thrown, { timeout: 1000 }).toBe(true);
+
       // **`finally` が走り切って `outbox` へ戻すのを待つ。** カウンタは
       // 見かけ上動かない（doc 参照）ので「1のまま保たれている」ことだけを
       // ここでは見る——「消えていない」の本体は下の2本目の接続で見る。

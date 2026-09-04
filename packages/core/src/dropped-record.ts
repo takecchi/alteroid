@@ -57,6 +57,31 @@ export function noteUnreadableRecord(what: string, detail: string, error: unknow
 }
 
 /**
+ * 読み出そうとした記録の**取得元そのものを一度も受け取っていない**ことを
+ * stderr へ1行だけ残す。
+ *
+ * **`noteUnreadableRecord` を流用しないのは、あれが「読み出そうとしたが
+ * 失敗した」ときの跡だからである。** ここはまだ読み出しを試みてすらいない
+ * ——取得元（例: フックが渡すファイルパス）が一度も届いていない状態で、
+ * 疑うべき先は `noteUnreadableRecord` の側（ディスク・権限）とは違う。
+ * **計器の配線**（呼ぶはずの hook・通知が来ていない）を疑うべき状況で、
+ * 同じ文言に潰すと読む側はディスクを疑いに行き、的を外す。逆にディスクの
+ * 障害をこちらの文言で報告すると、今度は配線を疑いに行って的を外す
+ * ——`noteManagerIdCollision` の doc が言う「取り違えさせる」と同じ形の害が
+ * 双方向に起きる。
+ *
+ * **本文は出さない。** 理由は `noteDroppedRecord` / `noteUnreadableRecord` と
+ * 同じ（#52）。
+ *
+ * @param what 何の取得元が届いていないか（固定文言。呼び出し側が書く）
+ * @param detail 本文を含まない見分け
+ */
+export function noteMissingRecordSource(what: string, detail: string): void {
+  const tail = detail === '' ? '' : `（${detail}）`;
+  note(`${what}の取得元を一度も受け取っていません${tail}`);
+}
+
+/**
  * 発行した id が既に使われていて、引き直したことを stderr へ1行だけ残す（#238）。
  *
  * **`noteDroppedRecord` を流用しないのは、あれが「記録できませんでした」と
