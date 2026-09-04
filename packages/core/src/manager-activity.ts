@@ -22,7 +22,7 @@
  * `manager.ts`（`ManagerRecord` / `record.job.lastReportAt` から作る）。
  *
  * **新しい I/O は増やさない。** ここは計算だけを行う純関数で、渡された値だけを
- * 見る。呼び出し元がその値をどう手に入れるか（`turn-end-poller.ts` の60秒周期
+ * 見る。呼び出し元がその値をどう手に入れるか（`manager-poller.ts` の60秒周期
  * に相乗りしている）はこのファイルの関知するところではない。
  */
 
