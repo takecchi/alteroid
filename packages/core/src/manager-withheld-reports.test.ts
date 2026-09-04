@@ -11,7 +11,7 @@ import {
   type RunnerManagerState,
 } from './runner-protocol.js';
 import type { InboxEvent, Job, JobStatus } from './schema.js';
-import { createMemoryStores } from './testing.js';
+import { captureStderr, createMemoryStores } from './testing.js';
 import type { Stores } from './store.js';
 
 /**
@@ -168,7 +168,10 @@ interface ManualSetup {
  * これで `fake.report(...)` / `fake.closed(...)` が `#onEvent` へ実際に届く
  * 状態を作る。
  */
-async function runningManualSetup(managerId = 'mgr-withhold'): Promise<ManualSetup> {
+async function runningManualSetup(
+  managerId = 'mgr-withhold',
+  options: { withheldReportFlushMs?: number } = {},
+): Promise<ManualSetup> {
   const job: Job = {
     id: managerId,
     createdAt: '2026-09-01T00:00:00.000Z',
@@ -201,6 +204,7 @@ async function runningManualSetup(managerId = 'mgr-withhold'): Promise<ManualSet
     post: (event) => inbox.push(event),
     runners: registry,
     now: () => clock,
+    withheldReportFlushMs: options.withheldReportFlushMs,
   });
 
   await pool.restore();
@@ -405,6 +409,102 @@ describe('closed で積みが配られる／stopped では配られない', () =
   });
 });
 
+/**
+ * **止めた委譲が握り潰した報告を抱えたまま終わったことを、依頼者（クローン）が
+ * 知る手段が無い、という穴を塞ぐ。**
+ *
+ * 直上の describe が固定しているのは「積みの**本文**は abort() 後には配らない
+ * （R4）」であって、「積みが在ったという**事実**も一切出さない」ではない——
+ * この2つを混同すると、握り潰したまま終わったことに気づく引き金が無くなる。
+ *
+ * ここで固定するのは3つ:
+ * 1. クローン発（`by: 'clone'`）は `ManagerAbortResult.detail`（`manager_stop`
+ *    の戻り値の元）に件数・時刻・`journal_read` の案内が乗り、**本文
+ *    （`lastText`）は乗らない**——**受信箱（inbox）は増えない**（R4 は破って
+ *    いない。クローンへの配達は同期の戻り値のみ）。
+ * 2. 人間発（`by` 省略＝`'human'`）は、既存の停止メッセージ1本の中に同じ
+ *    案内が乗る——**受信箱はちょうど1件しか増えない**（新しいターンを
+ *    起こしていない）。
+ * 3. 陰性対照: 積みが無いときは detail にもメッセージにも何も足さない
+ *    （回帰。何もしていないことを確かめる歯が無いと、足す条件が壊れて
+ *    常に足すようになっても気づけない）。
+ *
+ * 加えて、`#retire()` が stderr へ残す跡（`noteWithheldReportsDiscarded`）も
+ * ここで一緒に確かめる——abort() の中でも `#retire()` は必ず呼ばれるので、
+ * 積みが在れば同じ呼び出しの中でこの跡も出る（`manager.ts` の `#retire()` の
+ * doc「呼び出し元がどれであっても同じ1行が漏れなく残る」）。
+ */
+describe('abort() で止めた委譲が握り潰した積みを抱えていた場合、事実が依頼者へ届く', () => {
+  it('クローン発: detail に件数・時刻・journal_read の案内が乗り、本文は乗らない。受信箱は増えない', async () => {
+    const { pool, inbox, fake } = await runningManualSetup();
+
+    fake.report('mgr-withhold', '握り潰される回・秘密の本文', 'done', {
+      awaitingBackground: AWAITING,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const before = inbox.length;
+    const lines = await captureStderr(async () => {
+      const result = await pool.abort('mgr-withhold', '理由', 'clone');
+      expect(result.outcome).toBe('stopped');
+      expect(result.detail).toContain('背景処理の完了待ちで畳んだ報告を 1 本抱えたまま止まった');
+      expect(result.detail).toContain('journal_read');
+      // **本文（lastText）は乗らない（R4）。**
+      expect(result.detail).not.toContain('握り潰される回・秘密の本文');
+    });
+
+    // **`by: 'clone'` は #post しない（Issue #320）——ここでも増やしていない。**
+    expect(inbox.length).toBe(before);
+
+    // `#retire()` の stderr の跡（本文は乗らない）。
+    const joined = lines.join('');
+    expect(joined).toContain('握り潰した報告を配らずに捨てました');
+    expect(joined).toContain('managerId=mgr-withhold');
+    expect(joined).not.toContain('握り潰される回・秘密の本文');
+
+    await pool.stop();
+  });
+
+  it('人間発: 既存の停止メッセージ1本の中に案内が乗る（新しいターンを増やさない）', async () => {
+    const { pool, inbox, fake } = await runningManualSetup();
+
+    fake.report('mgr-withhold', '握り潰される回', 'done', { awaitingBackground: AWAITING });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const before = inbox.length;
+    const result = await pool.abort('mgr-withhold', '人間が止めた');
+    expect(result.outcome).toBe('stopped');
+
+    // **ちょうど1件しか増えない**（新しいターンを起こしていない）。
+    expect(inbox.length).toBe(before + 1);
+    const posted = inbox.at(-1) as { text: string };
+    expect(posted.text).toContain('を人間が停止させました');
+    expect(posted.text).toContain('背景処理の完了待ちで畳んだ報告を 1 本抱えたまま止まった');
+    expect(posted.text).toContain('journal_read');
+
+    await pool.stop();
+  });
+
+  it('陰性対照: 積みが無いときは detail にもメッセージにも何も足さない（stderr の跡も出ない）', async () => {
+    const { pool, inbox } = await runningManualSetup();
+    const before = inbox.length;
+
+    const lines = await captureStderr(async () => {
+      const result = await pool.abort('mgr-withhold', '積みなしで止めた');
+      expect(result.outcome).toBe('stopped');
+      expect(result.detail).not.toContain('抱えたまま止まった');
+      expect(result.detail).not.toContain('journal_read');
+    });
+
+    expect(inbox.length).toBe(before + 1);
+    const posted = inbox.at(-1) as { text: string };
+    expect(posted.text).not.toContain('抱えたまま止まった');
+    expect(lines.join('')).not.toContain('握り潰した報告を配らずに捨てました');
+
+    await pool.stop();
+  });
+});
+
 describe('flushWithheldReports（時間で必ず配る逃げ道）', () => {
   it('期限を過ぎた積みを配る', async () => {
     const { pool, inbox, fake, advance } = await runningManualSetup();
@@ -477,6 +577,83 @@ describe('flushWithheldReports（時間で必ず配る逃げ道）', () => {
         true,
       );
     });
+  });
+});
+
+/**
+ * `ManagerPoolOptions.withheldReportFlushMs`（`ALTEROID_WITHHELD_REPORT_FLUSH_MS`
+ * を解いた値を渡す口）が、`flushWithheldReports()` の期限判定と、配られる
+ * 文言の両方に実際に効くことを固定する。
+ *
+ * env 自体の解決（`resolveWithheldReportFlushMs`）は
+ * `withheld-report-flush-ms.test.ts` が持つ。ここで確かめるのは「解いた値が
+ * `Pool` の判定まで届くか」——口を開けただけで配線し忘れる形を捕まえる。
+ */
+describe('ManagerPoolOptions.withheldReportFlushMs（口が実際に効くこと）', () => {
+  it('既定（30分）より短い値を渡すと、既定なら配られない時点で配られる', async () => {
+    const { pool, inbox, fake, advance } = await runningManualSetup('mgr-withhold', {
+      withheldReportFlushMs: 5 * 60_000,
+    });
+    const before = inbox.length;
+
+    fake.report('mgr-withhold', '握り潰される回', 'done', { awaitingBackground: AWAITING });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // 10分——既定30分ならまだ配られないはずの時点。
+    advance(10 * 60_000);
+    await pool.flushWithheldReports();
+
+    const delivered = await vi.waitFor(() => {
+      const found = inbox.slice(before).find((event) => event.type === 'manager_message');
+      if (!found) throw new Error('まだ届いていない');
+      return found as { text: string };
+    });
+    expect(delivered.text).toContain('配っていない');
+
+    await pool.stop();
+  });
+
+  it('配られる文言の「N分待っても届かなかった」が、渡した値に追随する', async () => {
+    const { pool, inbox, fake, advance } = await runningManualSetup('mgr-withhold', {
+      withheldReportFlushMs: 5 * 60_000,
+    });
+    const before = inbox.length;
+
+    fake.report('mgr-withhold', '握り潰される回', 'done', { awaitingBackground: AWAITING });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    advance(5 * 60_000 + 1);
+    await pool.flushWithheldReports();
+
+    const delivered = await vi.waitFor(() => {
+      const found = inbox.slice(before).find((event) => event.type === 'manager_message');
+      if (!found) throw new Error('まだ届いていない');
+      return found as { text: string };
+    });
+    expect(delivered.text).toContain('5分待っても届かなかった。');
+    expect(delivered.text).not.toContain('30分待っても届かなかった。');
+
+    await pool.stop();
+  });
+
+  it('陰性対照: option も env も無いときは、これまでどおり既定30分（文言も「30分」）', async () => {
+    const { pool, inbox, fake, advance } = await runningManualSetup();
+    const before = inbox.length;
+
+    fake.report('mgr-withhold', '握り潰される回', 'done', { awaitingBackground: AWAITING });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    advance(30 * 60_000 + 1);
+    await pool.flushWithheldReports();
+
+    const delivered = await vi.waitFor(() => {
+      const found = inbox.slice(before).find((event) => event.type === 'manager_message');
+      if (!found) throw new Error('まだ届いていない');
+      return found as { text: string };
+    });
+    expect(delivered.text).toContain('30分待っても届かなかった。');
+
+    await pool.stop();
   });
 });
 

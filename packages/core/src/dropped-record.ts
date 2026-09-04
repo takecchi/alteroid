@@ -106,6 +106,47 @@ export function noteManagerIdCollision(managerId: string, attempt: number): void
 }
 
 /**
+ * `#retire()`（`manager.ts`）が、空でない「握り潰した報告」の在庫
+ * （`WithheldReportMemory`）を積んだまま像を畳んだことを stderr へ1行だけ
+ * 残す。
+ *
+ * **`noteDroppedRecord` を流用しないのは、これが失敗ではないからである。**
+ * `#retire()` がここへ来るのは「もうこの委譲は走らない」という正常な終端
+ * 判定の結果で、書き込みや読み出しが失敗したわけではない——`noteManagerIdCollision`
+ * と同じ「第三の状況」で、専用の文言を持つ。
+ *
+ * **`abort()`（R4 の `stopped`）経由の呼び出しは、同じ事実を
+ * `ManagerAbortResult.detail` と日誌（`type: 'exchange'`）へも既に書いている
+ * ので、ここは重ねての跡になる。** それでも `#retire()` 自身に置くのは、
+ * `#retire()` の呼び出し元が `abort()` の他にも複数あり（`manager.ts` の
+ * `#retire()` の JSDoc）、そちらは同じ事実を能動的には出していないからである
+ * ——`#retire()` 自身に置けば、呼び出し元がどれであっても同じ1行が漏れなく
+ * 残る（`abort()` の側にだけ置くと、他の呼び出し元でこの状態が起きたときに
+ * 跡が1つも残らない）。
+ *
+ * **本文（`lastText`）は出さない。** 理由は `noteDroppedRecord` と同じで、
+ * ここへ渡ってくる `count` / `firstAt` / `lastAt` はこちらが管理する数値と
+ * 時刻だけであり、`managerId` はこちらが発行した id である——自由文は
+ * 1つも混ざらない。
+ *
+ * @param managerId どの委譲か（こちらが発行した id）。
+ * @param count 捨てた本数。
+ * @param firstAt 最初に積んだ時刻（ISO 8601）。
+ * @param lastAt 最後に積んだ時刻（ISO 8601）。
+ */
+export function noteWithheldReportsDiscarded(
+  managerId: string,
+  count: number,
+  firstAt: string,
+  lastAt: string,
+): void {
+  note(
+    `握り潰した報告を配らずに捨てました（managerId=${tag(managerId)} count=${String(count)} ` +
+      `firstAt=${firstAt} lastAt=${lastAt}）`,
+  );
+}
+
+/**
  * **背景で起こした処理**（`void f()` の形で切り離したもの）が例外で終わったことを
  * stderr へ1行だけ残す（#438 案D）。
  *
