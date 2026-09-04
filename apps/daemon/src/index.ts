@@ -45,7 +45,7 @@ import {
 
 import { createApp, parseAllowedOrigins } from './app.js';
 import { startUsagePolling } from './usage-poller.js';
-import { startTurnEndPolling } from './turn-end-poller.js';
+import { startManagerPolling } from './manager-poller.js';
 import { planAuth } from './auth.js';
 import { createJournalBus } from './journal-bus.js';
 import {
@@ -890,7 +890,7 @@ export async function main(): Promise<void> {
    * とおり、`status` を動かす・委譲を abort する・貸し出し期限を縮める、の
    * どれもしない。`clone.managers` が要るので `clone` の後に作る。
    */
-  const turnEndPoller = startTurnEndPolling({
+  const managerPoller = startManagerPolling({
     managers: clone.managers,
   });
 
@@ -1067,7 +1067,7 @@ export async function main(): Promise<void> {
     // 長引いても、CLI からは「止まった」と見えるようにする。
     scheduler.stop();
     usagePoller.stop();
-    turnEndPoller.stop();
+    managerPoller.stop();
     server.close();
     // 名簿の挑み直しも畳む（止めたはずのデーモンが背景で runner を叩き続けない）。
     await runners.stop().catch(() => undefined);

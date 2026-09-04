@@ -999,7 +999,7 @@ export interface ManagerPool {
    *
    * **費用の門があり、判定の門は無い。** 対象を絞るのは「これ以上生ログを
    * 読みに行くコストを払わない」ためであって、「症状かどうか」を判定する
-   * ためではない——絞り込みの詳細は実装（`apps/daemon/src/turn-end-poller.ts`
+   * ためではない——絞り込みの詳細は実装（`apps/daemon/src/manager-poller.ts`
    * から 60 秒ごとに呼ばれる）の doc を参照。
    *
    * **1件の失敗で残りを止めない。** ここで投げると、呼び出し元
@@ -1018,7 +1018,7 @@ export interface ManagerPool {
    * `WITHHELD_REPORT_FLUSH_MS` 経っても次のターンが来ていない積みを、
    * クローンへ配って帳面を空にする。
    *
-   * 呼ぶのは `apps/daemon/src/turn-end-poller.ts`（60秒周期。
+   * 呼ぶのは `apps/daemon/src/manager-poller.ts`（60秒周期。
    * `probeTurnEnds()` の後ろに並べる — `probeTurnEnds` の中には入れない。
    * あちらは費用の門を持つ別の関心事である）。
    *
@@ -3138,7 +3138,7 @@ class Pool implements ManagerPool {
    * `manager_list`（`tools.ts`）が使っているのと**同じ判定**
    * （{@link classifyManagerActivity}）を、この委譲の `ManagerRecord`
    * （`this.#records.get(managerId)`）から作った入力で呼び、結果を短い1行
-   * として添える——**新しい往復は増やさない**（`turn-end-poller.ts` が
+   * として添える——**新しい往復は増やさない**（`manager-poller.ts` が
    * `probeTurnEnds()` の直後にこの関数を相乗りさせているので、判定材料は
    * その周期ぶん既に更新済みである）。
    */

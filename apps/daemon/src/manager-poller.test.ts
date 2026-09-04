@@ -1,7 +1,7 @@
 import type { ManagerPool } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
-import { startTurnEndPolling } from './turn-end-poller.js';
+import { startManagerPolling } from './manager-poller.js';
 
 /**
  * `ManagerPool` の全メソッドを実装するが、このポーラーが呼ぶのは
@@ -69,7 +69,7 @@ function fakeManagers(
 describe('ターン終了の助言を定期的に取り直す（Issue #567）', () => {
   it('起動直後に1回、待たずに叩く', async () => {
     const { managers, calls } = fakeManagers(() => undefined);
-    const poller = startTurnEndPolling({ managers, intervalMs: 10_000 });
+    const poller = startManagerPolling({ managers, intervalMs: 10_000 });
 
     await poller.refresh();
     expect(calls()).toBeGreaterThanOrEqual(1);
@@ -83,7 +83,7 @@ describe('ターン終了の助言を定期的に取り直す（Issue #567）', 
       release = resolve;
     });
     const { managers, calls } = fakeManagers(() => gate);
-    const poller = startTurnEndPolling({ managers, intervalMs: 10_000 });
+    const poller = startManagerPolling({ managers, intervalMs: 10_000 });
 
     // 起動直後の1回がまだ `gate` で止まっている間に、追加で3本 refresh を重ねる。
     const inFlight = Promise.all([poller.refresh(), poller.refresh(), poller.refresh()]);
@@ -100,7 +100,7 @@ describe('ターン終了の助言を定期的に取り直す（Issue #567）', 
     const { managers, calls } = fakeManagers(() => {
       throw new Error('生ログが読めなかった（模擬）');
     });
-    const poller = startTurnEndPolling({ managers, intervalMs: 10_000 });
+    const poller = startManagerPolling({ managers, intervalMs: 10_000 });
 
     await expect(poller.refresh()).resolves.toBeUndefined();
     expect(calls()).toBeGreaterThanOrEqual(1);
@@ -110,7 +110,7 @@ describe('ターン終了の助言を定期的に取り直す（Issue #567）', 
 
   it('止めたら以後取りに行かない', async () => {
     const { managers, calls } = fakeManagers(() => undefined);
-    const poller = startTurnEndPolling({ managers, intervalMs: 5 });
+    const poller = startManagerPolling({ managers, intervalMs: 5 });
     await poller.refresh();
     poller.stop();
 
@@ -122,14 +122,14 @@ describe('ターン終了の助言を定期的に取り直す（Issue #567）', 
   /**
    * `flushWithheldReports()`（握り潰した「背景処理の完了待ちで畳んだ報告」を
    * 時間で必ず配る逃げ道）が、この周期に相乗りすることを固定する
-   * （`turn-end-poller.ts` の doc）。
+   * （`manager-poller.ts` の doc）。
    */
   it('probeTurnEnds() の後ろで flushWithheldReports() も呼ぶ', async () => {
     const { managers, calls, flushCalls, order } = fakeManagers(
       () => undefined,
       () => undefined,
     );
-    const poller = startTurnEndPolling({ managers, intervalMs: 10_000 });
+    const poller = startManagerPolling({ managers, intervalMs: 10_000 });
 
     await poller.refresh();
     expect(calls()).toBeGreaterThanOrEqual(1);
@@ -147,7 +147,7 @@ describe('ターン終了の助言を定期的に取り直す（Issue #567）', 
       },
       () => undefined,
     );
-    const poller = startTurnEndPolling({ managers, intervalMs: 10_000 });
+    const poller = startManagerPolling({ managers, intervalMs: 10_000 });
 
     await expect(poller.refresh()).resolves.toBeUndefined();
     expect(flushCalls()).toBeGreaterThanOrEqual(1);
@@ -162,7 +162,7 @@ describe('ターン終了の助言を定期的に取り直す（Issue #567）', 
         throw new Error('配り直せなかった（模擬）');
       },
     );
-    const poller = startTurnEndPolling({ managers, intervalMs: 10_000 });
+    const poller = startManagerPolling({ managers, intervalMs: 10_000 });
 
     await expect(poller.refresh()).resolves.toBeUndefined();
     expect(calls()).toBeGreaterThanOrEqual(1);

@@ -1,7 +1,8 @@
 import type { ManagerPool } from '@alteroid/core';
 
 /**
- * `ManagerPool#probeTurnEnds()` を定期的に回す（Issue #567）。
+ * `ManagerPool` の2つの関心事を定期的に回す——`probeTurnEnds()`
+ * （Issue #567）と `flushWithheldReports()`。
  *
  * **`packages/core/src/runner-protocol.ts` の `Registry#beat()`（10秒周期）に
  * 相乗りしない。** あそこは軽い `identity()` を投げるだけの場所で、コメントに
@@ -21,9 +22,9 @@ import type { ManagerPool } from '@alteroid/core';
  * 上書きするが、来なかった場合の逃げ道がここでしか作れない
  * （デーモン常駐のポーラーの外に、時間で必ず何かを起こす場所が無いため）。
  */
-export const TURN_END_POLL_INTERVAL_MS = 60_000;
+export const MANAGER_POLL_INTERVAL_MS = 60_000;
 
-export interface TurnEndPollerOptions {
+export interface ManagerPollerOptions {
   managers: ManagerPool;
   /** 主にテスト用。 */
   intervalMs?: number;
@@ -31,7 +32,7 @@ export interface TurnEndPollerOptions {
   signal?: AbortSignal;
 }
 
-export interface TurnEndPoller {
+export interface ManagerPoller {
   /** いま取り直す（テスト用。本番はタイマーが自動で回す）。 */
   refresh(): Promise<void>;
   stop(): void;
@@ -46,8 +47,8 @@ export interface TurnEndPoller {
  * 二重に握る——`probeTurnEnds` の契約が将来変わっても、このポーラーが原因で
  * デーモンごと落ちることはない。
  */
-export function startTurnEndPolling(options: TurnEndPollerOptions): TurnEndPoller {
-  const interval = options.intervalMs ?? TURN_END_POLL_INTERVAL_MS;
+export function startManagerPolling(options: ManagerPollerOptions): ManagerPoller {
+  const interval = options.intervalMs ?? MANAGER_POLL_INTERVAL_MS;
 
   let inFlight: Promise<void> | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
