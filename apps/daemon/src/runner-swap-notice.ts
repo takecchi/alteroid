@@ -229,8 +229,6 @@ export async function noteRunnerSwap(deps: NoteRunnerSwapDeps): Promise<void> {
   try {
     await deps.journal({ type: 'decision', decision: decisionText, grounds });
   } catch (error: unknown) {
-    deps.warn(
-      `器の入れ替えの判断を日誌へ残せませんでした: ${String(error)}\n  ${decisionText}`,
-    );
+    deps.warn(`器の入れ替えの判断を日誌へ残せませんでした: ${String(error)}\n  ${decisionText}`);
   }
 }

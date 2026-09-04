@@ -470,7 +470,7 @@ export async function main(): Promise<void> {
    * 必ず書く、クローンへは持てるときだけ渡す）が起動の前半・後半で変わらず、
    * 読む側が2つの定義を突き合わせる必要が無い。
    */
-  let postToClone: ((text: string) => void) | undefined;
+  let postToClone: ((text: string) => void) | undefined = undefined;
   /**
    * 挑み直しても直らない失敗の行き先。
    *
