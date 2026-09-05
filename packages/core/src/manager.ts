@@ -5427,12 +5427,33 @@ class Pool implements ManagerPool {
       case 'note': {
         // runner の内側の事実。マネージャーの発言ではないので受信箱へは出さず、
         // 日誌にだけ残す（`resume_failed` の記録と同じ置き場所）。
+        // **この挙動は `escalate` の有無で変えない —— 全件、これまでどおり
+        // 日誌へ残す。** `escalate: true` のときだけ、下で受信箱へも追加で
+        // 1本上げる（日誌への記録を置き換えるのではなく、足す）。
         await this.#journal({
           type: 'exchange',
           with: 'manager',
           role: 'inbound',
           text: `[${event.managerId}] ${event.text}`,
         });
+
+        // **文字列で本文を嗅いで判定しない。欄（`event.escalate`）で判定する**
+        // （`runner-protocol.ts` の `note` スキーマの doc）。`case
+        // 'permission_denied'` の escalation と同じ口（`#emit(..., 'report',
+        // …)`）でクローンの受信箱へ上げる —— 起こし直しの上限（#570 の
+        // 追跡。`runner.ts` の `SUBAGENT_WAKEUP_LIMIT`）に達し、この作業者を
+        // 自動では再開できなくなったことを、クローンが見に行かなくても
+        // 気づける形にするためである。
+        if (event.escalate === true) {
+          this.#emit(
+            event.managerId,
+            'report',
+            `[${event.managerId}] 作業者が自分で起こした背景処理を残したまま畳もうとする回が、` +
+              '起こし直しの上限に達した。**この作業者は自動では再開しない**（委譲がここで止まっている）。\n' +
+              `詳細（何が残っているか・何回目だったか）: ${event.text}\n` +
+              '全件は日誌に残っている（`journal_read` で辿れる）。',
+          );
+        }
         return;
       }
 

@@ -826,7 +826,35 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
    * ときの口**である — 上限に達して古い記憶を捨てた、といった事実がどこにも
    * 残らないと、後から表に出た異常を誰も原因へ辿れない（黙って落とさない）。
    */
-  z.object({ type: z.literal('note'), managerId: z.string(), text: z.string() }),
+  z.object({
+    type: z.literal('note'),
+    managerId: z.string(),
+    text: z.string(),
+    /**
+     * **任意欄。`.optional()`（#570 の起こし直し。`runner.ts` の
+     * `#onSubagentStop`）。** 立っているときだけ `manager.ts` の
+     * `case 'note'` が日誌に加えてクローンの受信箱へも1本上げる
+     * （`case 'permission_denied'` の escalation と同じ口）。立っていない
+     * ときの挙動（日誌にだけ残す）はこれまでどおり変えない。
+     *
+     * **なぜ任意欄が安全か —— `packages/core` は daemon と runner の両方が
+     * 取り込むが、両サービスは別々にデプロイされ、入れ替わる順序は保証
+     * されない。**
+     *
+     * - **新 runner ＋ 旧デーモン**: runner がこの欄を載せても、旧デーモンの
+     *   zod は`z.object`の既定（strict ではない）どおり**未知の欄を黙って
+     *   落とす**ので、日誌にだけ残る＝いまと同じ。起こし直しそのものは
+     *   `additionalContext`（`note` とは別の返り値）で runner 側だけで完結
+     *   するので、この欄が届くかどうかに関係なく効く
+     * - **旧 runner ＋ 新デーモン**: `escalate` が来ない（`undefined`）ので、
+     *   新デーモンの `event.escalate === true` の分岐が立たない＝いまと同じ
+     *
+     * ⟹ **どちらが先にデプロイされても壊れない。** 文字列で本文を嗅いで
+     * 判定すると表記ゆれで壊れるので、判定は必ずこの欄で行う
+     * （`manager.ts` の `case 'note'`）。
+     */
+    escalate: z.boolean().optional(),
+  }),
   z.object({
     type: z.literal('tool_use'),
     managerId: z.string(),

@@ -626,6 +626,35 @@ const SUBAGENT_STOP_NOTE_TEXT_LIMIT = 1_500;
  */
 const BACKGROUND_TASK_OWNER_LIMIT = 500;
 
+/**
+ * 同じ作業者（`agent_id`）を、自分で起こした背景処理が残ったまま畳もうと
+ * した回に対して起こし直す（`additionalContext` を返す）回数の上限（#570 の
+ * 追跡）。
+ *
+ * **`export` してある。** テストがこの数字を直書きしないで済むようにする
+ * ためで、値そのものの意味は変わらない。
+ *
+ * **なぜ上限が要るか。** 起こし直しても作業者が同じ背景処理を残したまま
+ * また畳もうとする回（進んでいない回）が続くなら、無限に起こし続けるのは
+ * 空転を直す側が空転する形になる。上限に達したら起こし直しをやめ、その旨を
+ * `escalate: true` の `note` で日誌とクローンの受信箱の両方へ上げる
+ * （`manager.ts` の `case 'note'`）。
+ */
+export const SUBAGENT_WAKEUP_LIMIT = 2;
+
+/**
+ * `#subagentWakeups`（作業者の `agent_id` → 起こし直した回数）が持つ件数の
+ * 上限。**`BACKGROUND_TASK_OWNER_LIMIT` と同じ形**（超えたら「いちばん
+ * 古いもの」から捨てる。`Map` の挿入順をそのまま使う）。
+ *
+ * `agent_id` は使い回されないので、件数は増え続ける一方である。放置すると
+ * 長時間走るセッションでメモリが際限なく伸びるので、同じ理由・同じ形の蓋を
+ * 掛ける。**捨てたことは外から見えない** — 捨てられた `agent_id` はカウント
+ * 0から再スタートするので、上限に近い側から捨てるより古い側から捨てるほうが
+ * 実害が小さい（`BACKGROUND_TASK_OWNER_LIMIT` の doc と同じ理由）。
+ */
+const SUBAGENT_WAKEUP_TRACKING_LIMIT = 500;
+
 /** 返事を待って止まっている1件（許可確認 or 質問）。 */
 interface PendingRequest {
   id: string;
@@ -896,6 +925,33 @@ class RunnerSession {
    * そのまま雑音になって読まれなくなる。
    */
   #ownerLookupFailureNoted = false;
+  /**
+   * 作業者の `agent_id` → **その作業者を、自分で起こした背景処理が残った
+   * まま畳もうとした回に対して起こし直した回数**（#570 の追跡。
+   * `SUBAGENT_WAKEUP_LIMIT` の doc）。
+   *
+   * **ターン境界ではリセットしない。理由は2つ、両方必須。**
+   *
+   * 1. **リセットすると上限が意味を失う。** `case 'session_started'` は
+   *    `event.sessionId` が変わった（＝ SDK 側のセッションが本当に差し替わった）
+   *    ときにだけ `#liveBackgroundTasks` を空へ戻すが、あれは「いま生きている
+   *    背景タスクの一覧」という**その時点の事実**を持つ表だからリセットが
+   *    正しい。こちらは逆に「これまで何回起こし直したか」という**積算**を
+   *    持つ表なので、同じ理由でリセットすると上限が毎ターン（あるいは毎
+   *    セッション再開）再装填され、同じ作業者を実質無限に起こし続けられて
+   *    しまう —— 上限を置いた目的（#570 の追跡冒頭）がそのまま消える。
+   * 2. **`agent_id` は使い回されない。** だから「リセットしないと際限
+   *    なく増える」という心配は無く、リセットしない側に倒して安全に倒れる。
+   *    増え続ける件数のほうは `SUBAGENT_WAKEUP_TRACKING_LIMIT` の LRU で
+   *    別に抑える。
+   *
+   * ⚠️ **次にこのフィールドを読む人が、`#liveBackgroundTasks` や
+   * `#backgroundTaskOwners` に揃えて「ターンの頭でリセットする」形を足し
+   * たくなったら、それは誤り である** —— PR #643 は `#liveBackgroundTasks`
+   * を毎ターンリセットしていたのが誤りだったと直した回で、こちらは逆に
+   *「リセットしないことが正しい」側である。同じ形に見えても意味が違う。
+   */
+  #subagentWakeups = new Map<string, number>();
   /**
    * `UserPromptSubmit` の `source` ごとの件数（`result` で畳む）。
    *
@@ -2531,14 +2587,38 @@ class RunnerSession {
   /**
    * 作業者セッションが停止した瞬間に、追跡中の背景処理の在り高を記録する
    * （#357 — 作業者が「バックグラウンド処理の完了通知を待つ」形でターンを
-   * 閉じて空転する症状の実測口）。**観測専用。** `{ continue: true }` を返す
-   * だけで、何もブロックしない・`decision` も `additionalContext` も返さない
-   * （ブロックすれば能力の削除になる。挙動を変えないのが今回の判断である）。
+   * 閉じて空転する症状の実測口）。
+   *
+   * ## ⚠️ ここは観測専用ではない（PR #594 が観測専用にしていたのを、この PR で変えた）
+   *
+   * `#onSubagentStop`（#570 / PR #594）は「当人が自分で起こした背景処理が
+   * 残ったまま畳もうとした」ことを正しく検出していたが、`note` を1本出して
+   * `{ continue: true }` を返すだけだった。**この検出できている瞬間にこそ、
+   * 作業者をその場で継続させる。** 根拠は SDK の型定義（逐語。
+   * `SubagentStopHookSpecificOutput` の doc、`sdk.d.ts`）:
+   *
+   * > Hook-specific output for the SubagentStop event. additionalContext is
+   * > non-error feedback delivered to the subagent; the subagent continues
+   * > so it can act on it.
+   *
+   * ## ⚠️ `decision: 'block'` ではなく `additionalContext` を使う理由
+   *
+   * **`additionalContext` は「非エラーのフィードバックを渡すと作業者が
+   * 継続する」口であって、止める口ではない。** `decision: 'block'` は
+   * 逆方向 —— 止める・拒む側の口で、これを使うと AGENTS.md の地雷
+   * 「ターン数上限・実行回数上限で暴走を止める」（能力の削除）に当たる。
+   * こちらは能力を削っておらず、**むしろ委譲が黙って止まっていた状態から
+   * 継続する能力を足す側**なので、その地雷には当たらない。だから
+   * `decision` は一度も使わず、`additionalContext` だけを返す。
    *
    * **`note` イベントに乗せる。** `runner-protocol.ts` の欄は増やさない —
    * デーモンと runner は別々にデプロイされるので、runner が新しく名乗る値を
-   * 足すと古い runner が居る窓が開く。`note` は既存の口で、`manager.ts` の
-   * `case 'note'` が日誌にだけ残し受信箱へは出さないので、雑音にもならない。
+   * 足すと古い runner が居る窓が開く。`note` に足した任意欄 `escalate`
+   * （`runner-protocol.ts` の doc）は旧デーモンの zod が黙って落とすので、
+   * 同じ理由で安全である。**起こし直し自体はこの欄に依存しない** —
+   * `hookSpecificOutput.additionalContext` は `note` とは別の返り値なので、
+   * 旧デーモン・新デーモンのどちらが相手でも runner 側だけで完結する
+   * （デプロイの順序は PR 本文を見よ）。
    *
    * ## ⚠️ `background_tasks` が非空であることは、空転の署名では **ない**
    *
@@ -2557,37 +2637,69 @@ class RunnerSession {
    * （`#recordBackgroundTaskOwner`。`tool_response.backgroundTaskId` と
    * `background_tasks[].id` が同じ値であることは実測済み）。
    *
-   * **`note` を出す条件は2つ:**
-   * 1. **当人が起こした背景処理が1件以上残っているとき** — それだけを載せる。
-   *    セッション全体の在庫の件数も併記する（生の値を隠さないため）
-   * 2. **所有者を引けなかったとき** — 1セッションに1回だけ（`#noteOwnerLookupFailure`）
+   * **当人だけ／兄弟だけ／道具を使い終えて畳んだとき（`mine.length === 0`）は、
+   * 一切触らない。** `#noteOwnerLookupFailure` の分岐だけを通り、
+   * `additionalContext` も `escalate` も無い、これまでどおりの `note`（または
+   * 無音）である。**ここを広げると、終わった作業者や兄弟だけの作業者まで
+   * 無駄に起こすことになる。**
    *
-   * **当人だけ／兄弟だけのときは、何も出さない。** これがこの直しの本体である。
+   * **`mine.length > 0` のとき（当人が自分で起こした背景処理が残っている）
+   * は、`#subagentWakeups`（`agent_id` → 起こし直した回数）を見て2つに割る:**
    *
-   * ## ⚠️ この `note` が出ないことは「空転が無かった」を意味しない
+   * 1. **上限（`SUBAGENT_WAKEUP_LIMIT`）未満 —— 起こし直す。** カウントを
+   *    +1 したうえで `note` を出し、`hookSpecificOutput.additionalContext`
+   *    を返す。本文には (a) 残っている背景処理の件数と各件の
+   *    type/status/description（`command` があれば要点） (b) 「その完了
+   *    通知は親のセッションへ届く。あなたは自動では再開しない」 (c) どう
+   *    すればよいか（前景で待ち直す／諦めるなら「背景処理を残したまま終える」
+   *    と報告に明記する。**黙って畳まない**） (d) いま何回目・上限は何回かを
+   *    必ず入れる。
+   * 2. **上限に達していたら —— 起こし直さない。** `additionalContext` は
+   *    返さず（＝ `{ continue: true }` のみ）、`escalate: true` を立てた
+   *    `note` を出す。`manager.ts` の `case 'note'` はこれを見て、日誌に
+   *    加えてクローンの受信箱へも1本上げる。
+   *
+   * **同じ `agent_id` で2回目の `SubagentStop` が来た**（＝ 起こし直しても
+   * 作業者が進まなかった）ときは、`note` の「n 回目」の数字が変わることで
+   * 「起こし直しても進まなかった」と「起こし直して初めて進んだ」を区別できる
+   * ようにしてある。
+   *
+   * ## ⚠️ この `note`（および `additionalContext`）が出ないことは「空転が無かった」を意味しない
    *
    * **フックの発火そのものが条件付きである。** 実測では、作業者の完了8件のうち
    * 発火は4件で、**「畳んだ瞬間に親のターンが開いていたか」で8件が8件とも
    * 割れた**（親が先に閉じていた4件は発火していない）。そして委譲は既定で
    * `is_backgrounded: true` なので、**親が先に閉じる形が本番では普通である。**
    * ⟹ 拾えるのは一部である。**同じ断りを `note` の本文にも書いてある**
-   * （片方だけ読んだ人が誤らないため）。
+   * （片方だけ読んだ人が誤らないため）。**この直しはこの断りを覆さない** —
+   * 発火した回は確実に作業者を継続させられるようになったが、発火しない回は
+   * 今までどおり止まる。
    *
    * **入力は防御的に読む**（既存フックと同じく `as` で受けて型を仮定しない）。
-   * `text` の組み立てで例外が出ても握り、必ず `{ continue: true }` を返す。
-   * `#markProgressed()` などの既存の副作用は呼ばない（観測専用。挙動を変えない）。
+   * `additionalContext` の組み立てで例外が出ても、起こし直さずに
+   * `{ continue: true }` へ倒す（下の `catch`）。必ず `{ continue: true }`
+   * 相当を返す。`#markProgressed()` などの既存の副作用は呼ばない
+   * （挙動を変えるのは継続の合図だけで、それ以外の観測は変えない）。
    */
-  async #onSubagentStop(input: unknown): Promise<{ continue: true }> {
+  async #onSubagentStop(input: unknown): Promise<{
+    continue: true;
+    hookSpecificOutput?: { hookEventName: 'SubagentStop'; additionalContext: string };
+  }> {
     try {
       const hook = input as {
         background_tasks?: unknown;
         session_crons?: unknown;
         agent_type?: string;
         agent_id?: string;
+        stop_hook_active?: unknown;
       };
       const tasks = Array.isArray(hook.background_tasks) ? hook.background_tasks : [];
       const crons = Array.isArray(hook.session_crons) ? hook.session_crons : [];
       const agentId = hook.agent_id;
+      // **取れたときだけ載せる。** 取れない回に既定値の行を作らない
+      // （AGENTS.md 地雷「取れない軸に0の行を作る」）。
+      const stopHookActive =
+        typeof hook.stop_hook_active === 'boolean' ? hook.stop_hook_active : undefined;
 
       // **当人が起こしたものだけを残す。** `id` が表に在り、その所有者が
       // いま畳もうとしている作業者と一致するものだけを数える。
@@ -2601,14 +2713,11 @@ class RunnerSession {
         this.#noteOwnerLookupFailure(tasks);
         return { continue: true };
       }
+      // **型のためのガード。** `mine.length > 0` は上の filter の条件から
+      // `agentId` が文字列であることを含意するので、実際にはここへは来ない。
+      if (agentId === undefined) return { continue: true };
 
-      const lines: string[] = [
-        `SubagentStop（作業者: ${hook.agent_type ?? '(不明)'} / agent_id=${agentId ?? '(不明)'}）: ` +
-          `**この作業者が自分で起こした背景処理が ${mine.length}件 残ったまま畳んだ**` +
-          `（この瞬間のセッション全体の在庫=${tasks.length}件、session_crons=${crons.length}件）。` +
-          '⚠️ この行が出ないことは「空転が無かった」を意味しない — ' +
-          'このフックは、作業者が畳んだ瞬間に親のターンが開いていたときにしか発火しない（#570）。',
-      ];
+      const taskLines: string[] = [];
       for (const task of mine) {
         const t = task as {
           type?: unknown;
@@ -2624,20 +2733,86 @@ class RunnerSession {
         const status = typeof t.status === 'string' ? t.status : '(不明)';
         const description = typeof t.description === 'string' ? t.description : '(不明)';
         const command = typeof t.command === 'string' ? ` command=${t.command}` : '';
-        lines.push(`- type=${type} status=${status} description=${description}${command}`);
+        taskLines.push(`- type=${type} status=${status} description=${description}${command}`);
       }
 
-      let text = lines.join('\n');
-      if (text.length > SUBAGENT_STOP_NOTE_TEXT_LIMIT) {
-        text =
-          text.slice(0, SUBAGENT_STOP_NOTE_TEXT_LIMIT) +
-          `…（上限 ${SUBAGENT_STOP_NOTE_TEXT_LIMIT} 文字で切った）`;
+      const stopHookActiveText =
+        stopHookActive === undefined ? '' : ` stop_hook_active=${String(stopHookActive)}。`;
+      const disclaimer =
+        '⚠️ この行が出ないことは「空転が無かった」を意味しない — ' +
+        'このフックは、作業者が畳んだ瞬間に親のターンが開いていたときにしか発火しない（#570）。';
+
+      const wakeupCount = this.#subagentWakeups.get(agentId) ?? 0;
+
+      if (wakeupCount < SUBAGENT_WAKEUP_LIMIT) {
+        // **上限未満 —— 起こし直す。**
+        const newCount = wakeupCount + 1;
+        this.#subagentWakeups.set(agentId, newCount);
+        while (this.#subagentWakeups.size > SUBAGENT_WAKEUP_TRACKING_LIMIT) {
+          const oldest = this.#subagentWakeups.keys().next();
+          if (oldest.done === true) break;
+          this.#subagentWakeups.delete(oldest.value);
+        }
+
+        const noteLines = [
+          `SubagentStop（作業者: ${hook.agent_type ?? '(不明)'} / agent_id=${agentId}）: ` +
+            `**この作業者が自分で起こした背景処理が ${mine.length}件 残ったまま畳もうとした**` +
+            `（この瞬間のセッション全体の在庫=${tasks.length}件、session_crons=${crons.length}件）。` +
+            `**起こし直した**（${newCount}回目 / 上限 ${SUBAGENT_WAKEUP_LIMIT}）。${stopHookActiveText}`,
+          ...taskLines,
+          disclaimer,
+        ];
+        this.#emit({
+          type: 'note',
+          managerId: this.#id,
+          text: this.#truncateSubagentStopText(noteLines.join('\n')),
+        });
+
+        const contextLines = [
+          `あなたが自分で起こした背景処理が ${mine.length}件、残ったまま畳もうとした ` +
+            `（この瞬間のセッション全体の在庫=${tasks.length}件、session_crons=${crons.length}件）。`,
+          ...taskLines,
+          'この完了通知は**親のセッション**（マネージャー）へ届く。**あなたは自動では再開しない** — ' +
+            'このまま黙って畳むと、委譲がここで止まる。',
+          'どうすればよいか: 前景で待ち直す（出力ファイルの行数が増えるかを見る、等）。' +
+            '諦めて畳むなら、報告に「背景処理を残したまま終える」と明記すること。' +
+            'どちらでもよいが、黙って畳まないこと。',
+          `これは ${newCount}回目（上限 ${SUBAGENT_WAKEUP_LIMIT}）。` +
+            '上限に達すると、次回からは自動では起こさない。',
+        ];
+        const additionalContext = this.#truncateSubagentStopText(contextLines.join('\n'));
+
+        return {
+          continue: true,
+          hookSpecificOutput: { hookEventName: 'SubagentStop', additionalContext },
+        };
       }
 
-      this.#emit({ type: 'note', managerId: this.#id, text });
+      // **上限に達していた —— 起こし直さない。** `escalate: true` を立て、
+      // `manager.ts` の `case 'note'` が日誌とクローンの受信箱の両方へ上げる。
+      const noteLines = [
+        `SubagentStop（作業者: ${hook.agent_type ?? '(不明)'} / agent_id=${agentId}）: ` +
+          `**この作業者が自分で起こした背景処理が ${mine.length}件 残ったまま畳もうとした**` +
+          `（この瞬間のセッション全体の在庫=${tasks.length}件、session_crons=${crons.length}件）。` +
+          `**上限（${SUBAGENT_WAKEUP_LIMIT}回）に達したため、起こし直さなかった**` +
+          `（既に ${wakeupCount}回 起こし直し済み）。${stopHookActiveText}`,
+        ...taskLines,
+        disclaimer,
+      ];
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text: this.#truncateSubagentStopText(noteLines.join('\n')),
+        escalate: true,
+      });
+
+      return { continue: true };
     } catch (error: unknown) {
-      // 観測専用のフックが例外でセッションを止めてはいけない。記録そのものが
-      // 失敗したことだけを、握れる範囲でもう一度 note として上げる。
+      // フックが例外でセッションを止めてはいけない。記録そのものが失敗した
+      // ことだけを、握れる範囲でもう一度 note として上げる。
+      // **`additionalContext` の組み立てで例外が出たら、起こし直さずに
+      // `{ continue: true }` へ倒す**（起こし直しよりも「必ず continue: true
+      // 相当を返す」ことのほうを優先する）。
       try {
         this.#emit({
           type: 'note',
@@ -2645,12 +2820,25 @@ class RunnerSession {
           text: `SubagentStop の観測に失敗した: ${String(error)}`,
         });
       } catch {
-        // ここまで失敗したら、もう上げる手段が無い。観測専用なので黙って諦める
+        // ここまで失敗したら、もう上げる手段が無い。黙って諦める
         // （挙動は変えない＝必ず continue: true を返すことのほうを優先する）。
       }
+      return { continue: true };
     }
+  }
 
-    return { continue: true };
+  /**
+   * `#onSubagentStop` が `note` / `additionalContext` へ積む文字列を
+   * `SUBAGENT_STOP_NOTE_TEXT_LIMIT` で切る。**黙って落とさない**
+   * （AGENTS.md「静かに失敗する道具」）。超えたら切り、切ったこと自体を
+   * 末尾に書く。
+   */
+  #truncateSubagentStopText(text: string): string {
+    if (text.length <= SUBAGENT_STOP_NOTE_TEXT_LIMIT) return text;
+    return (
+      text.slice(0, SUBAGENT_STOP_NOTE_TEXT_LIMIT) +
+      `…（上限 ${SUBAGENT_STOP_NOTE_TEXT_LIMIT} 文字で切った）`
+    );
   }
 
   /**
