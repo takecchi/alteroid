@@ -9,6 +9,27 @@
 export * from './schema.js';
 export * from './store.js';
 /**
+ * 台帳（`Commitment`）の並び順・継続点（keyset cursor）の共通実装。
+ *
+ * **`commitment_list`（クローンの道具、`tools.ts`）と `GET /commitments`
+ * （`apps/daemon/src/app.ts`）の両方が、`CommitmentStore.list` の契約
+ * （未了は `at` 昇順・片付きは `closedAt` 降順で連結）に対して同じ位置の
+ * 取り出し方・同じ比較を使う。** かつては2箇所に同じ実装（1バイト違わない
+ * `commitmentPos` / `compareCommitmentPos`）が別々に書かれていて、
+ * 「契約の一致を歯で見張る」つもりの doc が実際には見張りとして成立して
+ * いなかった（片方の歯はもう片方の実装を一度も読まない）。ここへ寄せて
+ * `apps/daemon/src/app.ts` はこれを import する側になった。
+ */
+export {
+  commitmentPosition,
+  compareCommitmentPosition,
+  encodeCommitmentCursor,
+  decodeCommitmentCursor,
+  resolveCommitmentCursor,
+  type CommitmentPosition,
+  type CommitmentCursor,
+} from './commitment-cursor.js';
+/**
  * 利用状況の台帳（alteroid 自身が使った分）。
  *
  * 出所は SDK の `result.modelUsage` であって `usage` ではない（後者はメイン

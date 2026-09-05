@@ -9383,3 +9383,283 @@ describe('commitment_list に origin の絞りを足す（issue #426）', () => 
     expect(reply).not.toContain('self-');
   });
 });
+
+/**
+ * `commitment_list` の一覧モードに継続点（`cursor`）を足す。
+ *
+ * **直した穴**: 一覧モードは未了の台帳を古い順に並べ、予算
+ * （`COMMITMENT_LIST_BUDGET`）に入るところまでを出す。落ちるのは常に末尾
+ * （＝より新しい依頼）で、旧い実装はそこへ到達する口を1つも持たなかった
+ * （断り書きが案内する `commitment_list id=<id>` は1件の全文を読む口で、
+ * 予算からあふれた側の id そのものを教えない）。
+ *
+ * **`resolveCommitmentCursor`（`commitment-cursor.ts`）の分岐（B1〜B10）は
+ * そちらの歯（`commitment-cursor.test.ts`）が I/O 無しで直接測っている。**
+ * ここで測るのは、その純関数を実際の道具（ストア・zod スキーマ・
+ * `renderListing` の予算切り・既存の `origin`/`includeClosed` との組み合わせ）
+ * に配線した結果——`commitment_list` ツールとしての分岐対応表（T1〜T9）。
+ *
+ * | 分岐 | 内容 | 歯 |
+ * | --- | --- | --- |
+ * | T1 | cursor 無し・予算内 → 従来どおり（cursor 案内は出ない） | `T1: 予算内なら cursor の案内は出ない（回帰）` |
+ * | T2 | 予算で切れたら、断り書きが cursor=<値> を案内する | `T2: 予算で切れたら次に打つ cursor がそのまま案内される` |
+ * | T3 | 案内された cursor で呼ぶと、あふれていた「新しい側」に届く（実際の事故の再現） | `T3（事故の再現）: 25件の未了行の後に届いた新しい依頼が、cursor で読める` |
+ * | T4 | cursor が壊れている → 明示のエラー（黙って先頭へ倒さない） | `T4: 壊れた cursor は明示のエラーで、黙って先頭からへ倒さない` |
+ * | T5 | cursor の includeClosed が今回の呼びと食い違う → 明示のエラー | `T5: includeClosed が食い違う cursor は明示のエラー` |
+ * | T6 | cursor が末尾を指す（最後の頁） → 空一覧とは違う文言 | `T6: 最後の頁は「もう続きは無い」であって「絞り込みに0件」ではない` |
+ * | T7 | id（全文モード）と cursor が同時に来たら cursor は無視される | `T7: id が在るとき cursor は無視される（他の条件と同じ規約）` |
+ * | T8 | origin の絞りと cursor を併用しても、絞った後の並びで正しく続く | `T8: origin と cursor を併用しても絞った後の並びで正しく続く` |
+ * | T9 | includeClosed の cursor が open→closed の段を跨いでも正しく続く | `T9: includeClosed の cursor は open→closed の段を跨いでも正しく続く` |
+ */
+describe('commitment_list の一覧モードに継続点（cursor）を足す', () => {
+  function extractCursor(reply: string): string {
+    const match = /cursor=([A-Za-z0-9\-_]+)/.exec(reply);
+    if (!match) throw new Error(`cursor が案内に無い: ${reply}`);
+    return match[1]!;
+  }
+
+  it('T1: 予算内なら cursor の案内は出ない（回帰）', async () => {
+    const h = harness();
+    await h.stores.commitments.open({
+      id: 'c-1',
+      at: '2026-01-01T00:00:00.000Z',
+      origin: 'self',
+      body: '短い宿題',
+    });
+
+    const reply = await h.call('commitment_list', {});
+
+    expect(reply).not.toMatch(/…ほか \d+ 件は省略/);
+    expect(reply).not.toContain('cursor=');
+  });
+
+  it('T2: 予算で切れたら次に打つ cursor がそのまま案内される', async () => {
+    const h = harness();
+    const long = 'あ'.repeat(500);
+    for (let index = 0; index < 25; index += 1) {
+      await h.stores.commitments.open({
+        id: `c-${String(index).padStart(3, '0')}`,
+        at: `2026-01-01T00:00:${String(index).padStart(2, '0')}.000Z`,
+        origin: 'self',
+        body: `約束${String(index).padStart(3, '0')}: ${long}`,
+      });
+    }
+
+    const reply = await h.call('commitment_list', {});
+
+    expect(reply).toMatch(/…ほか \d+ 件は省略/);
+    expect(reply).toContain('cursor=');
+    // **「落ちているのは新しい側」であることを明示する。**
+    expect(reply).toContain('省いたのは、これより新しい依頼である。');
+    // 次に打てる形そのものが書いてあること（そのまま呼べる）。
+    expect(reply).toMatch(/続きは commitment_list cursor=[A-Za-z0-9\-_]+ で取れる/);
+  });
+
+  it('T3（事故の再現）: 25件の未了行の後に届いた新しい依頼が、cursor で読める', async () => {
+    // **2026-09-04T22:33 の実害の再現。** 1本のマネージャーから25件が
+    // 連続して台帳へ積まれ（同一 origin: manager）、閉じられないまま先頭を
+    // 占め続けた。その後にオーナーの依頼（origin: human）が届く——旧い
+    // 実装ではこれが予算からあふれ、かつ到達する口が無かった。
+    const h = harness();
+    const long = 'あ'.repeat(500);
+    for (let index = 0; index < 25; index += 1) {
+      await h.stores.commitments.open({
+        id: `mgr-report-${String(index).padStart(3, '0')}`,
+        at: `2026-09-04T22:33:${String(index).padStart(2, '0')}.000Z`,
+        origin: 'manager',
+        source: 'mgr-1',
+        body: `Poller draining. No change. ${long}`,
+      });
+    }
+    await h.stores.commitments.open({
+      id: 'human-request',
+      at: '2026-09-04T22:40:00.000Z',
+      origin: 'human',
+      body: 'オーナーからの新しい依頼——これが埋もれてはいけない',
+    });
+
+    const first = await h.call('commitment_list', {});
+    // 前提: 実際に予算で切れていること（そうでなければ何も測っていない）。
+    expect(first).toMatch(/…ほか \d+ 件は省略/);
+    expect(first).not.toContain('human-request');
+
+    const cursor = extractCursor(first);
+    const second = await h.call('commitment_list', { cursor });
+
+    expect(second).toContain('human-request');
+    expect(second).toContain('オーナーからの新しい依頼——これが埋もれてはいけない');
+  });
+
+  it('T4: 壊れた cursor は明示のエラーで、黙って先頭からへ倒さない', async () => {
+    const h = harness();
+    await h.stores.commitments.open({
+      id: 'c-1',
+      at: '2026-01-01T00:00:00.000Z',
+      origin: 'self',
+      body: '何か',
+    });
+
+    const reply = await h.call('commitment_list', { cursor: 'this-is-not-a-real-cursor' });
+
+    expect(reply).toContain('cursor が壊れている');
+    // **黙って先頭から返していない証拠。** 先頭から返していれば一覧の
+    // 内容（'c-1' を含む renderListingEntry の行）が出るはずだが、出ない。
+    expect(reply).not.toContain('c-1');
+  });
+
+  it('T5: includeClosed が食い違う cursor は明示のエラー', async () => {
+    const h = harness();
+    await h.stores.commitments.open({
+      id: 'c-open',
+      at: '2026-01-01T00:00:00.000Z',
+      origin: 'self',
+      body: '未了',
+    });
+    await h.stores.commitments.open({
+      id: 'c-closed',
+      at: '2026-01-02T00:00:00.000Z',
+      origin: 'self',
+      body: '片付いた',
+    });
+    await h.stores.commitments.close('c-closed', '2026-01-03T00:00:00.000Z', '済み', 'clone');
+
+    // **`includeClosed: true` の呼びから発行された cursor を模す。** 台帳の
+    // 中身は `commitment_list` を経由して作らせず、`encodeCommitmentCursor`
+    // を直接呼んで組み立てる——ここで測りたいのは「食い違う cursor を渡した
+    // ときの道具側の反応」であって、cursor の発行そのものは
+    // `commitment-cursor.test.ts`（B4）が別に測っている。
+    const { encodeCommitmentCursor } = await import('./commitment-cursor.js');
+    const cursor = encodeCommitmentCursor({
+      segment: 'open',
+      key: '2026-01-01T00:00:00.000Z',
+      id: 'c-open',
+      includeClosed: true,
+    });
+
+    // includeClosed を渡さない（＝ false 相当）呼びへ、true で発行された cursor を渡す。
+    const reply = await h.call('commitment_list', { cursor });
+
+    expect(reply).toContain('cursor は includeClosed=true');
+    expect(reply).toContain('食い違う');
+  });
+
+  it('T6: 最後の頁は「もう続きは無い」であって「絞り込みに0件」ではない', async () => {
+    const h = harness();
+    const { encodeCommitmentCursor, commitmentPosition } = await import('./commitment-cursor.js');
+    const only = {
+      id: 'c-only',
+      at: '2026-01-01T00:00:00.000Z',
+      origin: 'self' as const,
+      body: '唯一の未了',
+    };
+    await h.stores.commitments.open(only);
+    const cursor = encodeCommitmentCursor({
+      ...commitmentPosition(only),
+      includeClosed: false,
+    });
+
+    const reply = await h.call('commitment_list', { cursor });
+
+    expect(reply).toContain('cursor より後ろの行は無い。これが最後の頁');
+    // **絞り込みの0件文言と混同していないこと。**
+    expect(reply).not.toContain('絞り込みに当たる行は無い');
+    expect(reply).not.toContain('読める行は無い');
+  });
+
+  it('T7: id が在るとき cursor は無視される（他の条件と同じ規約）', async () => {
+    const h = harness();
+    await h.stores.commitments.open({
+      id: 'c-detail',
+      at: '2026-01-01T00:00:00.000Z',
+      origin: 'self',
+      body: '全文を読みたい依頼',
+    });
+
+    // 壊れた cursor を同時に渡しても、id が優先されて全文が返る
+    // （cursor のエラー文言が出ない）。
+    const reply = await h.call('commitment_list', {
+      id: 'c-detail',
+      cursor: 'garbage-cursor-value',
+    });
+
+    expect(reply).toContain('全文を読みたい依頼');
+    expect(reply).not.toContain('cursor が壊れている');
+  });
+
+  it('T8: origin と cursor を併用しても絞った後の並びで正しく続く', async () => {
+    const h = harness();
+    const long = 'あ'.repeat(500);
+    for (let index = 0; index < 25; index += 1) {
+      await h.stores.commitments.open({
+        id: `manager-${String(index).padStart(3, '0')}`,
+        at: `2026-01-01T00:00:${String(index).padStart(2, '0')}.000Z`,
+        origin: 'manager',
+        source: 'mgr-1',
+        body: `マネージャーからの一件${String(index).padStart(3, '0')}: ${long}`,
+      });
+    }
+    // human は manager の"間"の時刻に混ぜて積む——origin 絞り後の並びが
+    // 正しく保たれているかを見るため。
+    for (let index = 0; index < 5; index += 1) {
+      await h.stores.commitments.open({
+        id: `human-${index}`,
+        at: `2026-01-01T00:00:${String(index).padStart(2, '0')}.500Z`,
+        origin: 'human',
+        body: `人間からの依頼${index}: ${long}`,
+      });
+    }
+
+    const first = await h.call('commitment_list', { origin: ['human'] });
+    expect(first).not.toContain('manager-');
+    // human 側は5件しかなく予算内に収まるはずなので、cursor 案内は出ない
+    // （そもそも切れていない）。
+    expect(first).not.toMatch(/…ほか \d+ 件は省略/);
+    for (let index = 0; index < 5; index += 1) {
+      expect(first, `human-${index} が origin 絞りの一覧から落ちた`).toContain(`human-${index}`);
+    }
+  });
+
+  it('T9: includeClosed の cursor は open→closed の段を跨いでも正しく続く', async () => {
+    const h = harness();
+    const long = 'あ'.repeat(500);
+    // open を1件（予算を圧迫するほど長くはしない——open→closed の境界で
+    // ちょうど切れることを狙うため、まず1件だけにする）。
+    await h.stores.commitments.open({
+      id: 'c-open-only',
+      at: '2026-01-01T00:00:00.000Z',
+      origin: 'self',
+      body: '唯一の未了',
+    });
+    // closed を予算を超える数だけ積む（closedAt 降順で並ぶ）。
+    for (let index = 0; index < 25; index += 1) {
+      const id = `c-closed-${String(index).padStart(3, '0')}`;
+      await h.stores.commitments.open({
+        id,
+        at: `2025-01-01T00:00:${String(index).padStart(2, '0')}.000Z`,
+        origin: 'self',
+        body: `片付いた${String(index).padStart(3, '0')}: ${long}`,
+      });
+      await h.stores.commitments.close(
+        id,
+        `2026-02-01T00:00:${String(index).padStart(2, '0')}.000Z`,
+        '対応済み',
+        'clone',
+      );
+    }
+
+    const first = await h.call('commitment_list', { includeClosed: true });
+    expect(first).toContain('c-open-only');
+    expect(first).toMatch(/…ほか \d+ 件は省略/);
+    // 段を跨ぐときの向きも明示していること。
+    expect(first).toContain(
+      '省いたのは、未了ならこれより新しい依頼、片付いた分ならこれより古い記録である。',
+    );
+
+    const cursor = extractCursor(first);
+    const second = await h.call('commitment_list', { includeClosed: true, cursor });
+
+    // 続きは closed 段（open は既に唯一の1件を読み終えている）。
+    expect(second).not.toContain('c-open-only');
+    expect(second).toContain('c-closed-000');
+  });
+});
