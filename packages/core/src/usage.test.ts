@@ -63,8 +63,7 @@ describe('累積スナップショットを増分へ畳む', () => {
   });
 
   it('累積を足さずに差分だけ入れる（同じ累積が2回来ても二重計上しない）', () => {
-    // SDK の型コメント: 「each result carries the running total so far, so read the
-    // latest result rather than summing across results」。ここを足すとターン数だけ
+    // SDK の型コメント: 「each result carries the running total so far, so read the latest result rather than summing across results」 [sdk-verbatim SDKResultSuccess.modelUsage]。ここを足すとターン数だけ
     // 費用が膨らむ。
     const first = foldUsageSnapshot(
       null,

@@ -535,7 +535,7 @@ describe('クローン', () => {
       {
         tool_name: 'Grep',
         tool_input: { pattern: 'x' },
-        // SDK: 「Use this field (not agent_type) to distinguish subagent calls」
+        // SDK: 「Use this field (not agent_type) to distinguish subagent calls」[sdk-verbatim BaseHookInput.agent_id]
         agent_id: 'sub-1',
         agent_type: 'general-purpose',
       } as never,
@@ -5676,7 +5676,9 @@ describe('クローンの消費が台帳に載る（誰が・どこで）', () =
   });
 
   it('失敗した result は台帳へ入らない（ゼロで基準を下げない）', async () => {
-    // SDK は `crash/startup-error results may carry zeroed values` と言っている。
+    // `modelUsage` 自身の doc がそう言っている。
+    // [sdk-verbatim SDKResultError.modelUsage]
+    // crash/startup-error results may carry zeroed usage
     // ゼロを「累積が 0 になった」として通すと基準が下がり、次に届いた本物の累積が
     // 丸ごと増分になる ＝ 記録済みの分がもう一度積まれる。
     //

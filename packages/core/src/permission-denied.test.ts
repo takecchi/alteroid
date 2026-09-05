@@ -124,9 +124,10 @@ function liveDenialAsSdkSends(tool: string, toolUseId: string): SDKMessage {
 /**
  * 走行中の合図（`system/permission_denied`）を、**作業者（Task subagent）の
  * 内側で拒否された形**で作る。SDK の `SDKPermissionDeniedMessage.agent_id`
- * （サブエージェント起源のときだけ付く。`agent_id?: string` doc:
- * "Subagent ID when the denied tool call originated inside a subagent."
- * `@anthropic-ai/claude-agent-sdk@0.3.247` の型で確認済み）を模す。
+ * （サブエージェント起源のときだけ付く。`agent_id?: string` の doc（逐語）: [sdk-verbatim SDKPermissionDeniedMessage.agent_id]
+ * Subagent ID when the denied tool call originated inside a subagent.
+ *
+ * `@anthropic-ai/claude-agent-sdk@0.3.261` の型で確認済み）を模す。
  */
 function liveDenialFromWorker(tool: string, toolUseId: string, agentId = 'agent-1'): SDKMessage {
   return {

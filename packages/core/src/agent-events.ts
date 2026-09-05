@@ -208,17 +208,28 @@ export interface AgentDelegationNotified {
  * 背景タスクの在り高が変わった（level 信号。**REPLACE 意味論**）。
  *
  * SDK の `SDKBackgroundTasksChangedMessage` の JSDoc から逐語で引く
- * （version 0.3.258 同梱の `sdk.d.ts`。**この番人テスト
+ * （version 0.3.261 同梱の `sdk.d.ts`。**この番人テスト
  * （`agent-events.test.ts`）自身が SDK パッケージ名の文字列をここへ書く
- * ことを禁じているので、パッケージ名は書かない** — 版番号だけを残す）:
+ * ことを禁じているので、パッケージ名は書かない** — 版番号だけを残す）。
+ * **引用は折り返さず1行に置く** — 折り返すと `grep -F` で当たらなくなり、
+ * `scripts/check-sdk-quotes-core.mjs` の門も当てられなくなる:
  *
- * > consumers that only need 'is background work running' should replace
- * > their set with each payload rather than pairing edges, so a missed
- * > bookend cannot wedge a stale running indicator
+ * [sdk-verbatim SDKBackgroundTasksChangedMessage]
+ * > consumers that only need 'is background work running' should replace their set with each payload rather than pairing edges, so a missed bookend cannot wedge a stale running indicator
  *
- * **`tasks` は非 ambient のものだけ。** 同じ JSDoc の `ambient` の欄も逐語で
- * 引く: 「True for housekeeping tasks the CLI does not surface as user
- * work … hosts should exclude them from activity indicators.」
+ * **`tasks` は非 ambient のものだけ。** 同じ JSDoc の `ambient` の欄も逐語で引く:
+ *
+ * [sdk-verbatim SDKBackgroundTasksChangedMessage.ambient]
+ * > True for tasks that are not activity (every skip_transcript task, plus every live-update watcher, requested or auto-started); hosts should exclude them from activity indicators.
+ *
+ * **⚠️ この欄の文言は 0.3.261 で書き換わった**（#639 の SDK 更新。差分は lock と
+ * catalog の2ファイルだけで、**ソースに触れていないのにここの引用が嘘になった**）。
+ * 0.3.259 までは `True for housekeeping tasks the CLI does not surface as user work
+ * (every skip_transcript task, plus auto-started live-update watchers); ...` だった。
+ * **除外の指示は変わっていないが、集合は広がっている** — 「auto-started な
+ * live-update watcher」だけでなく「requested or auto-started」の全部が `ambient` になる。
+ * **だから「housekeeping」という語をこの repo の説明の拠り所にしないこと。**
+ * その語はもう SDK の doc に無い。
  *
  * **この事実が答える問いは、`claude-provider.ts` の `task_progress` /
  * `task_updated` が「見ないと決めてある」と言っている問いとは別である。**

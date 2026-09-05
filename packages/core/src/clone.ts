@@ -4791,7 +4791,7 @@ class Clone implements CloneHost {
       if (ended === undefined) continue;
       // **このサイドクエリの `result` を読み捨てないこと。** ここが「要約のたびに
       // 払っている蒸留の費用」の唯一の観測点である。別の `query()` 呼び出しなので
-      // 累積は1回で閉じており（SDK: 「during this query() call」）、値はこの1回の
+      // 累積は1回で閉じており（SDK: 「during this query() call」）[sdk-verbatim SDKResultSuccess.modelUsage]、値はこの1回の
       // 総量そのものである ＝ 基準を持たせない（`usage.ts` の `foldOneshotUsage`）。
       //
       // **これは「要約そのものの費用」ではない。** 要約を作る推論は本セッションの
@@ -6082,8 +6082,12 @@ function assistantTextOf(blocks: readonly AgentContentBlock[]): string {
 /**
  * どの層の手だったかを `PostToolUse` の合図から決める。
  *
- * **`agent_id` で見る**（SDK: "Use this field (not agent_type) to distinguish
- * subagent calls from main-thread calls"）。クローンは preset 一式を持つので
+ * **`agent_id` で見る**。SDK の doc も逐語でそう言っている。
+ *
+ * [sdk-verbatim BaseHookInput.agent_id]
+ * > Use this field (not agent_type) to distinguish subagent calls from main-thread calls.
+ *
+ * クローンは preset 一式を持つので
  * `Task` も持っており、サブエージェントの中の道具実行もこのフックを通って来る。
  * ここを分けないと「クローンが自分で叩いた回数」がサブエージェントの分だけ
  * 膨らみ、**日誌が答えるべき問い（自分でやったのか委ねたのか）に嘘の数を返す。**

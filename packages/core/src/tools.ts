@@ -1089,9 +1089,14 @@ const CONVERSATION_PAGE = 8_000;
  * 自作ツールは確認なしで通す（能力の削除ではなく、道具が道具として使えること）。
  *
  * **これは「使える道具の一覧」ではない。** `allowedTools` は確認を省く側の一覧で
- * あって、ここに無い道具が使えなくなるわけではない（SDK: "To restrict which tools
- * are available, use the `tools` option instead."）。ここへ組み込みツールを
- * 書き足す／ここから消すことで、クローンの能力を調整しようとしないこと。
+ * あって、ここに無い道具が使えなくなるわけではない。`allowedTools` 自身の doc も
+ * 逐語でそう言っている。
+ *
+ * [sdk-verbatim Options.allowedTools]
+ * > To restrict which tools are available, use the `tools` option instead.
+ *
+ * ここへ組み込みツールを書き足す／ここから消すことで、クローンの能力を調整
+ * しようとしないこと。
  */
 export const CLONE_ALLOWED_TOOLS = CLONE_TOOL_NAMES.map(qualifiedToolName);
 

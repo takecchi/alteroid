@@ -84,12 +84,16 @@ export interface UsageProbeOptions {
   /**
    * probe のサブプロセスへ足す環境変数の上書き。
    *
-   * **`@anthropic-ai/claude-agent-sdk@0.3.241` の `sdk.d.ts` は `Options.env` の doc に
+   * **`@anthropic-ai/claude-agent-sdk@0.3.261` の `sdk.d.ts` は `Options.env` の doc に
    * 逐語でこう書いている**（`grep -Fn -- 'REPLACES the subprocess environment entirely'
    * node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts` で当たる）:
    *
-   * > When set, this value REPLACES the subprocess environment entirely — it is
-   * > not merged with process.env.
+   * [sdk-verbatim Options.env]
+   * > this value REPLACES the subprocess environment entirely
+   *
+   * 続く一文は「process.env とはマージしない。子プロセスへ継承させたい変数
+   * （`PATH` / `HOME` など）は自分で `process.env` を展開すること」という意味を
+   * 述べている（意訳。英語の逐語は上の1行だけを引く）。
    *
    * **だから、ここへ渡された値は素通しせず `{ ...process.env, ...env }` へ広げてから
    * `Options.env` へ載せる。** 広げずに渡すと `PATH` も `HOME` も消え、probe の

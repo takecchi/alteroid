@@ -679,7 +679,7 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     /**
      * この区間で始まった委譲（Task）の件数。`task_started` の**件数**であって
      * 作業者の**人数**ではない — 同じ `task_id` が二度来れば二度数える。
-     * `skip_transcript: true` の ambient/housekeeping task も間引かずに含む。
+     * `skip_transcript: true` の ambient task（SDK 曰く activity ではない task）も間引かずに含む。
      */
     tasks: z.number().int().nonnegative(),
     /** この区間の間にマネージャーのセッションが回った `result` の回数。 */
@@ -760,7 +760,7 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * **両者が食い違うこと自体が観測になる**（片方だけを信じないこと）。
      *
      * **`sources` が無いことは「機械に起こされていない」ではない。** 同じ
-     * JSDoc は「Payloads may omit it while the field rolls out」と言っており、
+     * JSDoc は「Payloads may omit it while the field rolls out」[sdk-verbatim UserPromptSubmitHookInput.source] と言っており、
      * 付かない回が今も在る。0.3.237 まではもっと強く「外部のペイロードには
      * 付かない」と書かれていた（経緯は `runner.ts` の `#submitSources` の doc）。
      */

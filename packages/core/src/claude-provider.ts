@@ -104,10 +104,13 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
     // は方針＝システムプロンプトで表す（`prompt.ts`）。
     //
     // **`allowedTools` は「確認なしで通す一覧」であって「使える道具の一覧」では
-    // ない**（SDK: "To restrict which tools are available, use the `tools`
-    // option instead."）。だからここに自作ツールだけを並べても組み込みツールは
-    // 1つも減らない。並べてあるのは、自分の道具が権限の判断に晒されないように
-    // するためである。
+    // ない。** 同じ `sdk.d.ts` の `allowedTools` 自身の doc も逐語でそう言っている。
+    //
+    // [sdk-verbatim Options.allowedTools]
+    // To restrict which tools are available, use the `tools` option instead.
+    //
+    // だからここに自作ツールだけを並べても組み込みツールは1つも減らない。並べて
+    // あるのは、自分の道具が権限の判断に晒されないようにするためである。
     allowedTools: CLONE_ALLOWED_TOOLS,
     // 人間が開く Claude Code と同じ既定（`auto`）。**`default` のまま道具を渡すと
     // 「渡したのに使えない」になる** — このセッションには `canUseTool` が無く、
@@ -409,8 +412,12 @@ export function foldClaudeMessage(message: SDKMessage): AgentEvent[] {
 
     case 'result': {
       const sessionId = (message as { session_id?: unknown }).session_id;
-      // **成功した result の消費だけを通す。** SDK は
-      // `crash/startup-error results may carry zeroed values` と言っている。
+      // **成功した result の消費だけを通す。** `modelUsage` 自身の doc がそう
+      // 言っている。
+      //
+      // [sdk-verbatim SDKResultSuccess.modelUsage]
+      // crash/startup-error results may carry zeroed usage
+      //
       // ゼロを「累積が 0 になった」として通すと、受け取った側の基準が下がり、
       // 次に届いた本物の累積が丸ごと増分になる（`usage.ts` の `isSuccessResult`）。
       const models = isSuccessResult(message) ? modelUsageOf(message) : undefined;
@@ -636,12 +643,15 @@ function runtimeFactsOf(message: SDKMessage): AgentRuntimeFacts {
  * 主張する根拠は無い（`runtimeFactsOf` の doc「読めた配列だけが『0本』を
  * 名乗れる」）。
  *
- * 各要素は `task_id` が文字列でなければ落とす。`ambient === true`
- * （housekeeping task）は除く——SDK の doc「hosts should exclude them
- * from activity indicators」（`agent-events.ts` の
- * `AgentBackgroundTasksEvent` の doc に逐語を引いてある）。`task_type` が
- * 文字列でなければ `'(不明)'` を当てる——欄自体が壊れていても、要素の
- * 存在（＝背景処理が1件在ること）までは捨てない。
+ * 各要素は `task_id` が文字列でなければ落とす。`ambient === true` は除く——
+ * SDK の doc がそう線引きしている。
+ *
+ * [sdk-verbatim SDKBackgroundTasksChangedMessage.ambient]
+ * > True for tasks that are not activity (every skip_transcript task, plus every live-update watcher, requested or auto-started); hosts should exclude them from activity indicators.
+ *
+ * （`agent-events.ts` の `AgentBackgroundTasksEvent` の doc にも同じ逐語を
+ * 引いてある）。`task_type` が文字列でなければ `'(不明)'` を当てる——欄自体が
+ * 壊れていても、要素の存在（＝背景処理が1件在ること）までは捨てない。
  */
 function liveBackgroundTasksOf(raw: unknown): readonly { id: string; taskType: string }[] | null {
   if (typeof raw !== 'object' || raw === null) return null;

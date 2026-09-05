@@ -17,25 +17,22 @@ import { settleWithin } from './usage-probe.js';
  * ## 出所は `modelUsage` であって `usage` ではない
  *
  * SDK の `result` は両方を運ぶが、`usage` には型のコメントで
- * **「MAIN AGENT LOOP ONLY — excludes Task subagent, sidechain ... Prefer
- * modelUsage for token/cost accounting」** と書いてある。alteroid は委譲が主役
+ * **「MAIN AGENT LOOP ONLY — excludes Task subagent, sidechain, and auxiliary model calls, and is per-turn in streaming-input sessions. Prefer modelUsage for token/cost accounting」** [sdk-verbatim SDKResultSuccess.usage] と書いてある。alteroid は委譲が主役
  * （クローン → マネージャー → 作業者）なので、`usage` を採ると**作業者の消費が
  * 丸ごと落ちる**。落ちるのは階層の末端＝いちばん数が多い層である。
  *
  * ## 累積値は足してはいけない
  *
  * 同じ型のコメントにこうある —
- * **「cumulative across turns in streaming-input sessions — each result carries
- * the running total so far, so read the latest result rather than summing across
- * results」**。マネージャーは streaming-input で長く走るので、ターンごとの
+ * **「cumulative across turns in streaming-input sessions — each result carries the running total so far, so read the latest result rather than summing across results」** [sdk-verbatim SDKResultSuccess.total_cost_usd]。マネージャーは streaming-input で長く走るので、ターンごとの
  * `result` を足すと二重計上になる。**差分を取る。**
  *
  * さらに同じコメントが3つの落とし穴を明示している。
  *
- * - `resumed sessions start fresh` — alteroid はデーモン再起動で resume する
+ * - 「resumed sessions start fresh」 [sdk-verbatim SDKResultSuccess.total_cost_usd] — alteroid はデーモン再起動で resume する
  *   （AGENTS.md「デーモン再起動時の引き取りは2通り」）ので、**必ず踏む**
- * - `a mid-session /clear resets the running total`
- * - `crash/startup-error results may carry zeroed values`
+ * - 「a mid-session /clear resets the running total」 [sdk-verbatim SDKResultSuccess.total_cost_usd]
+ * - 「Crash/startup-error results may carry zeroed values」 [sdk-verbatim SDKResultSuccess.total_cost_usd]
  *
  * 最後のものが一番危ない。ゼロを「累積が 0 になった」として採用すると、記録済みの
  * 消費が消える。**失敗が成功として観測されるのと同じ形の壊れ方**である。だから
@@ -45,7 +42,7 @@ import { settleWithin } from './usage-probe.js';
  *
  * ## 推定値である
  *
- * 型のコメントに **「An estimate, not a billing statement」** と明記されている。
+ * 型のコメントに **「An estimate, not a billing statement」** [sdk-verbatim SDKResultSuccess.total_cost_usd] と明記されている。
  * **この一文を落とさないこと。** 台帳の数字を見せる口（API / CLI / Web / クローンの
  * 道具）はすべて {@link USAGE_ESTIMATE_NOTICE} を一緒に運ぶ。
  */
@@ -107,9 +104,7 @@ export type UsageTotals = z.infer<typeof usageTotalsSchema>;
  *
  * **取れないので値を作らない。** 作業者はマネージャーのセッションの中の Task
  * subagent であり、その消費はマネージャーの `result.modelUsage` に合算されて
- * 降りてくる。SDK の宣言（`sdk.d.ts` の `modelUsage`）が「every model call made
- * through the query pipeline during this query() call — main loop, **Task
- * subagents**, sidechains, and internal calls such as compaction」と言っており、
+ * 降りてくる。SDK の宣言（`sdk.d.ts` の `modelUsage`）が「every model call made through the query pipeline during this query() call — main loop, Task subagents, sidechains, and internal calls such as compaction」 [sdk-verbatim SDKResultSuccess.modelUsage] と言っており、
  * **分けて出す口が無い。**
  *
  * ここに `worker` を置いて 0 を積むのが最悪の選択である（「作業者は使って
@@ -131,8 +126,7 @@ export type UsageLayer = z.infer<typeof usageLayerSchema>;
  *
  * ## `compaction`（要約そのもの）という値が無い理由
  *
- * **取れないので値を作らない。** 上と同じ一文が「internal calls such as
- * **compaction**」を `modelUsage` に含むと明言していて、分けて出す口が無い。
+ * **取れないので値を作らない。** 上と同じ一文が「internal calls such as compaction」 [sdk-verbatim SDKResultSuccess.modelUsage] を `modelUsage` に含むと明言していて、分けて出す口が無い。
  * 合図の側が運ぶのは大きさと回数だけである — `system`/`compact_boundary` の
  * `compact_metadata` に `trigger` / `pre_tokens` / `post_tokens` / `duration_ms`、
  * `PreCompactHookInput` に `trigger` / `custom_instructions`、
@@ -148,8 +142,7 @@ export type UsageLayer = z.infer<typeof usageLayerSchema>;
  *
  * ## どの層にも出てこない消費がある
  *
- * 同じ一文が「Internal helper calls outside the query pipeline (e.g. the
- * permission classifier, token-count probes) are excluded」と言っている。
+ * 同じ一文が「Internal helper calls outside the query pipeline (e.g. the permission classifier, token-count probes) are excluded」 [sdk-verbatim SDKResultSuccess.modelUsage] と言っている。
  * **台帳の合計は「alteroid が使った分の全部」ではない。**
  */
 export const usageSiteSchema = z.enum(USAGE_SITES);
@@ -209,8 +202,7 @@ export function isCloneActor(actor: string): boolean {
 /**
  * 累積の器がどこで閉じるか。**`site` から導出しないこと。**
  *
- * 累積は SDK の `query()` 呼び出しの寿命で閉じる（`sdk.d.ts`: 「Per-model totals
- * for every model call ... during this query() call」）。**どこで使ったかでは
+ * 累積は SDK の `query()` 呼び出しの寿命で閉じる（`sdk.d.ts`: 「Per-model totals for every model call made through the query pipeline during this query() call」 [sdk-verbatim SDKResultSuccess.modelUsage]）。**どこで使ったかでは
  * 決まらない** — 同じ `site` でも寿命の違う呼び出しはありうる。
  *
  * - `cumulative` — streaming-input の長寿命セッション（クローン本体・マネージャー）。
@@ -381,7 +373,7 @@ export function hasAnyUsage(models: Record<string, UsageTotals>): boolean {
  *  → 数え直しとして $3.00 を加算する。台帳の合計は $8.00 で、実際に使った額と合う。
  *
  * **全部ゼロのスナップショットは「情報なし」として捨てる**（基準を持っているとき）。
- * SDK は `crash/startup-error results may carry zeroed values` と言っている。ゼロを
+ * SDK は「Crash/startup-error results may carry zeroed values」 [sdk-verbatim SDKResultSuccess.total_cost_usd] と言っている。ゼロを
  * 数え直しとして採用すると基準が 0 まで下がり、**次に届いた本物の累積がまるごと
  * 増分になって二重計上になる**（記録済みの $5.00 がもう一度積まれる）。
  *
@@ -441,7 +433,7 @@ export function foldUsageSnapshot(
  *
  * 蒸留のサイドクエリ（`clone.ts` の `#distillFromTranscript`）は毎回新しい
  * `query()` で、`persistSession: false`・resume なしである。SDK の宣言が累積の
- * 器を「during this query() call」と言っているので、**その `result` はその1回の
+ * 器を「during this query() call」 [sdk-verbatim SDKResultSuccess.modelUsage] と言っているので、**その `result` はその1回の
  * 総量そのもの**であり、前回の値との差ではない。
  *
  * **ここに基準を持たせてはいけない。** 持たせると壊れ方が片側だけになる —
@@ -449,7 +441,7 @@ export function foldUsageSnapshot(
  * 今回 $0.02 の回は減少なので数え直しとして全量が積まれる。つまり
  * **高くついた回だけが黙って縮む。** 失敗が成功として観測される形である。
  *
- * ゼロの `result`（`crash/startup-error results may carry zeroed values`）は
+ * ゼロの `result`（「Crash/startup-error results may carry zeroed values」 [sdk-verbatim SDKResultSuccess.total_cost_usd]）は
  * 0 の行を作らずに落ちる（`isZero` の判定は {@link foldUsageSnapshot} と同じ）。
  */
 export function foldOneshotUsage(snapshot: UsageSnapshot): UsageFold {
@@ -478,7 +470,7 @@ function usdAmount(value: unknown): number {
  * 「1ターンを最後まで走り切った」結果か。
  *
  * **台帳へ通すのは成功した result だけである。** SDK は
- * `crash/startup-error results may carry zeroed values` と言っている。ゼロを
+ * 「Crash/startup-error results may carry zeroed values」 [sdk-verbatim SDKResultSuccess.total_cost_usd] と言っている。ゼロを
  * 「累積が 0 になった」として通すと基準が下がり、次に届いた本物の累積が丸ごと
  * 増分になる ＝ 記録済みの分がもう一度積まれる。
  *
@@ -494,7 +486,7 @@ export function isSuccessResult(message: unknown): boolean {
  *
  * SDK の型コメントがはっきり分けている — `usage` は
  * **MAIN AGENT LOOP ONLY（Task subagent / sidechain を除く）** で、`modelUsage` が
- * **「The correct field for token/cost accounting」**（メインループ・Task 作業者・
+ * **「The correct field for token/cost accounting」** [sdk-verbatim SDKResultSuccess.modelUsage]（メインループ・Task 作業者・
  * sidechain・compaction を全部含む）。alteroid は委譲が主役なので、`usage` を採ると
  * **作業者の消費が丸ごと落ちる**。落ちるのは階層の末端＝いちばん数が多い層である。
  *
@@ -512,7 +504,7 @@ export function modelUsageOf(message: unknown): Record<string, UsageTotals> | un
 /**
  * control channel の `get_usage` 応答から、**このセッションの累積**を取り出す。
  *
- * 出所は `SDKControlGetUsageResponse.session.model_usage`（SDK 0.3.228 の `sdk.d.ts`
+ * 出所は `SDKControlGetUsageResponse.session.model_usage`（SDK 0.3.261 の `sdk.d.ts`
  * で確認）。型は `result.modelUsage` と同じ `Record<string, ModelUsage>` で、
  * **意味も同じ累積**である。違うのは `result` を待たずに読めることだけで、だから
  * 「`result` を出さずに死んだセッション」の消費はここからしか取れない

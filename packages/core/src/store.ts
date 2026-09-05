@@ -966,8 +966,8 @@ export interface SessionRegistry {
  *
  * SDK の `SessionStore` は `projectKey` + `sessionId` の対で引く口しか持たない。
  * そして **`projectKey` を `cwd` から計算し直さないこと** —— SDK の型定義が逐語で
- * 「Default: sanitized cwd. Paths longer than 200 characters are truncated and
- * suffixed with a portable djb2 hash」と書いており、再実装は静かにずれる。
+ * 「Default: sanitized cwd.」 [sdk-verbatim SessionKey.projectKey] と言い、
+ * 長すぎるパス（200文字超）については「characters are truncated and suffixed with a portable djb2 hash」 [sdk-verbatim SessionKey.projectKey] とも言っており、再実装は静かにずれる。
  * ⟹ `append` が渡してくる値をそのまま控える（`clone.ts` の `withProjectKeyProbe`）。
  */
 export interface LostSessionGrave {
