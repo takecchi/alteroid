@@ -752,6 +752,207 @@ describe('クローン', () => {
     await s.clone.stop();
   });
 
+  /**
+   * `denial-shape.ts` の配線 — 拒否の日誌に「入力の形」が正しく載るか、
+   * 同じ `tool_use_id` の二度目の記録（`via: 'result'`）が来たときに
+   * 追記の1行だけが増えるか、増えないべき順では増えないかを見る
+   * （PR「拒否の入力の形」）。
+   */
+
+  it('live だけの拒否は「入力の形」が空にならず、入力が無い理由が載る（C1）', async () => {
+    // `via: 'live'` の合図には `tool_input` が原理的に付かない
+    // （`runner-protocol.ts` の doc）。ここで空文字に落ちると、
+    // 「入力が空だった」と「そもそも入力の欄が無い経路だった」が同じ字面に
+    // 見えてしまう——`denialInputAbsence` がそれを分けていることを確かめる。
+    const denial = { tool_name: 'Bash', tool_use_id: 'tu-c1' };
+    const s = setup(undefined, createMemoryStores(), {
+      beforeAssistant: () => [
+        { type: 'system', subtype: 'permission_denied', ...denial } as unknown as SDKMessage,
+      ],
+    });
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const denied = (await s.stores.journal.list({ types: ['exchange'] })).filter((entry) =>
+      (entry as { text: string }).text.includes('確認へ上がらずに止められた'),
+    );
+    expect(denied.length).toBe(1);
+    const text = (denied[0] as { text: string }).text;
+    expect(text).toContain('入力の形: 入力は付いていない（走行中の合図には入力の欄が無い。');
+
+    await s.clone.stop();
+  });
+
+  it('result だけの拒否は入力の形（欄・先頭の語・長さ）が日誌に載る（C2）', async () => {
+    const denial = {
+      tool_name: 'Bash',
+      tool_use_id: 'tu-c2',
+      tool_input: { command: 'git push origin main' },
+    };
+    const s = setup(undefined, createMemoryStores(), {
+      permissionDenials: () => [denial],
+    });
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const denied = (await s.stores.journal.list({ types: ['exchange'] })).filter((entry) =>
+      (entry as { text: string }).text.includes('確認へ上がらずに止められた'),
+    );
+    expect(denied.length).toBe(1);
+    const text = (denied[0] as { text: string }).text;
+    expect(text).toContain('入力の形: 欄=command');
+    expect(text).toContain('先頭の語=git');
+    expect(text).toMatch(/chars=\d+/);
+
+    await s.clone.stop();
+  });
+
+  it('live→result（同じ tool_use_id）では、拒否の行のあとに形だけの行がもう1本増える（C3）', async () => {
+    const bare = { tool_name: 'Bash', tool_use_id: 'tu-c3' };
+    const withInput = {
+      tool_name: 'Bash',
+      tool_use_id: 'tu-c3',
+      tool_input: { command: 'rm -rf /tmp/x' },
+    };
+    const s = setup(undefined, createMemoryStores(), {
+      beforeAssistant: () => [
+        { type: 'system', subtype: 'permission_denied', ...bare } as unknown as SDKMessage,
+      ],
+      permissionDenials: () => [withInput],
+    });
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const exchanges = await s.stores.journal.list({ types: ['exchange'] });
+    // 拒否そのものの行は、あとから入力が分かっても増えない（1本のまま）。
+    const denialLines = exchanges.filter((entry) =>
+      (entry as { text: string }).text.includes('確認へ上がらずに止められた'),
+    );
+    expect(denialLines.length).toBe(1);
+
+    // 追記の行——値ではなく形だけを書く——がちょうど1本増える。
+    const laterLines = exchanges.filter((entry) =>
+      (entry as { text: string }).text.includes('ターン終わりの記録（合図の出所: result）に'),
+    );
+    expect(laterLines.length).toBe(1);
+    const laterText = (laterLines[0] as { text: string }).text;
+    expect(laterText).toContain('欄=command');
+    expect(laterText).toContain('先頭の語=rm');
+
+    await s.clone.stop();
+  });
+
+  it('live→result→result でも、追記の行は1本のまま増えない（C4）', async () => {
+    const bare = { tool_name: 'Bash', tool_use_id: 'tu-c4' };
+    const withInput = {
+      tool_name: 'Bash',
+      tool_use_id: 'tu-c4',
+      tool_input: { command: 'curl https://example.com' },
+    };
+    const s = setup(undefined, createMemoryStores(), {
+      beforeAssistant: () => [
+        { type: 'system', subtype: 'permission_denied', ...bare } as unknown as SDKMessage,
+      ],
+      // 同じ拒否が result の一覧に重複して2件載る形（SDK が累積で返す場合の
+      // 最悪ケース）を再現する。追記が二重に書かれないことを確かめる。
+      permissionDenials: () => [withInput, withInput],
+    });
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const exchanges = await s.stores.journal.list({ types: ['exchange'] });
+    const laterLines = exchanges.filter((entry) =>
+      (entry as { text: string }).text.includes('ターン終わりの記録（合図の出所: result）に'),
+    );
+    expect(laterLines.length).toBe(1);
+
+    await s.clone.stop();
+  });
+
+  it('result→live の順では、行は1本のまま増えない（C5）', async () => {
+    // 1本目のターンの result で入力込みの記録が先に立ち、2本目のターンの
+    // live で同じ tool_use_id の（入力を持たない）合図が遅れて届く——という
+    // 順番。入力は既に降りているので、追記は起きないし拒否の行も増えない。
+    const withInput = {
+      tool_name: 'Bash',
+      tool_use_id: 'tu-c5',
+      tool_input: { command: 'git push' },
+    };
+    const bare = { tool_name: 'Bash', tool_use_id: 'tu-c5' };
+    let beforeAssistantCalls = 0;
+    let permissionDenialCalls = 0;
+    const s = setup(undefined, createMemoryStores(), {
+      beforeAssistant: () => {
+        beforeAssistantCalls += 1;
+        return beforeAssistantCalls === 2
+          ? [{ type: 'system', subtype: 'permission_denied', ...bare } as unknown as SDKMessage]
+          : [];
+      },
+      permissionDenials: () => {
+        permissionDenialCalls += 1;
+        return permissionDenialCalls === 1 ? [withInput] : undefined;
+      },
+    });
+
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    let denied = (await s.stores.journal.list({ types: ['exchange'] })).filter((entry) =>
+      (entry as { text: string }).text.includes('確認へ上がらずに止められた'),
+    );
+    expect(denied.length).toBe(1);
+
+    s.events.length = 0;
+    s.clone.post(humanMessage('2回目'));
+    await waitForDone(s.events);
+
+    denied = (await s.stores.journal.list({ types: ['exchange'] })).filter((entry) =>
+      (entry as { text: string }).text.includes('確認へ上がらずに止められた'),
+    );
+    expect(denied.length).toBe(1);
+    const laterLines = (await s.stores.journal.list({ types: ['exchange'] })).filter((entry) =>
+      (entry as { text: string }).text.includes('ターン終わりの記録（合図の出所: result）に'),
+    );
+    expect(laterLines.length).toBe(0);
+
+    await s.clone.stop();
+  });
+
+  it('入力に秘密が入っていても、日誌のどの行にも値そのものは現れない（C6・秘密の歯）', async () => {
+    // ダミーの秘密（本物のトークンではない）。先頭が代入なので headWordOf は
+    // 弾く（`SAFE_HEAD_WORD` が `=` を許さない）はずで、先頭の語も
+    // 「(伏せた)」に落ちる。live→result で同じ tool_use_id を通し、追記の
+    // 行でも値が漏れないことまで確かめる。
+    const secretCommand = 'TOKEN=ghp_XXXXXXXXXXXX curl "https://api.example.com/?token=s3cr3t"';
+    const bare = { tool_name: 'Bash', tool_use_id: 'tu-c6' };
+    const withSecret = {
+      tool_name: 'Bash',
+      tool_use_id: 'tu-c6',
+      tool_input: { command: secretCommand },
+    };
+    const s = setup(undefined, createMemoryStores(), {
+      beforeAssistant: () => [
+        { type: 'system', subtype: 'permission_denied', ...bare } as unknown as SDKMessage,
+      ],
+      permissionDenials: () => [withSecret],
+    });
+
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    const exchanges = await s.stores.journal.list({ types: ['exchange'] });
+    const joined = exchanges.map((entry) => (entry as { text?: string }).text ?? '').join('\n');
+    expect(joined).not.toContain('ghp_XXXXXXXXXXXX');
+    expect(joined).not.toContain('s3cr3t');
+    expect(joined).not.toContain('TOKEN=');
+
+    await s.clone.stop();
+  });
+
   it('権限モードの既定は人間が開く Claude Code と同じ（auto）。置けるのは人間だけ', () => {
     // `default` のままだと、答える相手が居ない確認（このセッションに `canUseTool`
     // は無い）がそのまま拒否になり、道具を渡したのに使えない状態になる。

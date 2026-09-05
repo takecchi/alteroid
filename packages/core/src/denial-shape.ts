@@ -17,7 +17,8 @@
  * - **欄の名前**（`command` / `file_path` / …）。これは道具のスキーマ由来で
  *   あって、モデルが書いた値ではない。**原理的に秘密になりえない**
  * - **長さ**（`chars=N`）。値そのものではなく、値の大きさ
- * - **`command` の先頭の語**——ただし {@link SAFE_HEAD_WORD} に合う形のときだけ
+ * - **`command` 欄の先頭の語**——ただし {@link SAFE_HEAD_WORD} に合う形のときだけ。
+ *   **入力が素の文字列のときは出さない**（下の「先頭の語をどこまで出すか」）
  *
  * **出さない:** それ以外の値。引数も、パスも、URL も、`command` の2語目以降も。
  *
@@ -33,11 +34,20 @@
  * だから {@link SAFE_HEAD_WORD} は `=` も `:` も `/` も許さず、長さも 32 で
  * 切る。**代入・URL・長い塊は先頭の語として出さない。**
  *
+ * **そして先頭の語を見るのは `command` 欄だけである。** 入力が素の文字列で
+ * 来た回には当てない —— 道具の入力は普通オブジェクトなので、文字列がそのまま
+ * 来る形はシェルのコマンド行ではなく、そこで先頭の語を取ると**入力が 1 語
+ * だったとき（＝値そのものが鍵だったとき）に鍵をまるごと出す**。得るものが
+ * 無い側なので当てない。
+ *
  * **それでも塞げていないものを書いておく**（`redactEnvSecrets` の doc と同じ
- * 作法——塞げないと分かっていることを塞いだことにしない）: **秘密そのものが
- * プログラム名の位置にあり、かつ 32 文字以内で `[A-Za-z0-9._+-]` だけから
- * できている**とき、この関数はそれを出す。実際にそう書かれる形
- * （`ghp_… <引数>` を実行しようとする）は考えにくいが、**不可能ではない**。
+ * 作法——塞げないと分かっていることを塞いだことにしない）: **`command` 欄の
+ * 先頭に秘密が単独で置かれ、かつ 32 文字以内で `[A-Za-z0-9._+-]` だけから
+ * できている**とき、この関数はそれを出す（`{ command: 'hunter2' }` の形）。
+ * 実際にそう書かれる形——秘密をプログラム名の位置に置いて実行しようとする——は
+ * 考えにくいが、**不可能ではない**。GitHub / Anthropic のトークンも AWS の
+ * アクセスキー id も {@link SECRET_ISH_MIN_LENGTH} で落ちるが、**英字だけ・
+ * 数字だけでできた短い秘密**（`hunter2` のようなパスワード）は落ちない。
  * ここを完全に塞ぐには先頭の語を一切出さないしかなく、そうすると Bash の
  * 拒否がすべて「欄=command / chars=N」だけになり、この関数を足した意味
  * （誤検知か正当な拒否かを読む側が判断できること）が消える。**その交換を
@@ -95,6 +105,24 @@ export function denialInputAbsence(via: 'live' | 'result'): string {
  */
 const SAFE_HEAD_WORD = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,31}$/;
 
+/**
+ * 「英数字が混ざっていて、この長さ以上」なら先頭の語を出さない。
+ *
+ * **鍵の典型がここで落ちる。** GitHub の PAT（`ghp_` + 36 文字）、Anthropic の
+ * API 鍵、AWS のアクセスキー id（20 文字の英大文字＋数字）は、どれも
+ * **英数字が混ざった 12 文字以上**である。{@link SAFE_HEAD_WORD} だけでは
+ * これらを素通しする（`=` も `:` も `/` も含まないため）ので、もう1条件だけ
+ * 足す。
+ *
+ * **実在するプログラム名はほとんど落ちない。** 数字を含む名前は短い
+ * （`python3` / `gpg2` / `sha256sum` / `base64`）か、数字を含まないまま長い
+ * （`docker-compose` / `update-alternatives`）かのどちらかである。落ちる側に
+ * 回るのは `x86_64-linux-gnu-gcc-13` のような長いツールチェーンの名前で、
+ * **そのときは `(伏せた)` になる**——読める語が1つ減るだけで、道具の名前
+ * （`Bash`）と欄と長さは残る。**この交換は「出さない側へ倒す」で選んでいる。**
+ */
+const SECRET_ISH_MIN_LENGTH = 12;
+
 /** 先頭の語を出さないときに置く字面。**空にしない**——「見なかった」と「隠した」を分ける。 */
 const WITHHELD_HEAD_WORD = '(伏せた)';
 
@@ -120,7 +148,12 @@ const COMMAND_KEYS = new Set(['command']);
 function headWordOf(value: string): string | undefined {
   const head = value.trimStart().split(/\s/, 1)[0];
   if (head === undefined || head === '') return undefined;
-  return SAFE_HEAD_WORD.test(head) ? head : undefined;
+  if (!SAFE_HEAD_WORD.test(head)) return undefined;
+  // **英数字が混ざった長い語は出さない**（{@link SECRET_ISH_MIN_LENGTH}）。
+  if (head.length >= SECRET_ISH_MIN_LENGTH && /[0-9]/.test(head) && /[A-Za-z]/.test(head)) {
+    return undefined;
+  }
+  return head;
 }
 
 /** `JSON.stringify` が落ちない形で長さを測る。測れなければ `undefined`。 */
@@ -151,10 +184,12 @@ export function denialInputShape(input: unknown): string | undefined {
   const chars = charsOf(input);
   const size = chars === undefined ? '長さ不明' : `chars=${chars}`;
 
-  if (typeof input === 'string') {
-    const head = headWordOf(input);
-    return `文字列 / 先頭の語=${head ?? WITHHELD_HEAD_WORD} / ${size}`;
-  }
+  // **素の文字列には先頭の語を出さない。** 道具の入力は普通オブジェクトで、
+  // 文字列がそのまま来る形はシェルのコマンド行ではない。そこへ先頭の語の規則を
+  // 当てると、**値そのものが 1 語だったとき（＝入力全体が鍵だったとき）に、
+  // その鍵をまるごと出す**。先頭の語で得られるもの（プログラム名が読める）が
+  // 無い側なので、出さない側へ倒す。
+  if (typeof input === 'string') return `文字列 / ${size}`;
   if (typeof input !== 'object') return `${typeof input} / ${size}`;
   if (Array.isArray(input)) return `配列 / 要素=${input.length} / ${size}`;
 

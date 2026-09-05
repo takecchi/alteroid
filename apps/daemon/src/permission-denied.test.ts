@@ -149,6 +149,22 @@ async function deniedLines(stores: Stores): Promise<string[]> {
     .reverse();
 }
 
+/**
+ * 日誌に落ちた `note`（`#noteDenial`（`packages/core/src/runner.ts`）が「先に
+ * 降ろした拒否に、後から入力が付いた」ときにだけ降ろす1件）を取り出す。
+ * `deniedLines` の文言（確認へ上がらずに止められた）とは別なので分けて拾う。
+ */
+async function noteLines(stores: Stores): Promise<string[]> {
+  const entries = (await stores.journal.list({ types: ['exchange'] })) as JournalEntry[];
+  return entries
+    .filter(
+      (entry): entry is Extract<JournalEntry, { type: 'exchange' }> =>
+        entry.type === 'exchange' && entry.text.includes('先に降ろした'),
+    )
+    .map((entry) => entry.text)
+    .reverse();
+}
+
 describe('確認へ上がらずに止められた実行（HTTP 境界）', () => {
   it('走行中の合図と result の記録が、境界越しに日誌と受信箱まで届く', async () => {
     const r = await open();
@@ -169,7 +185,27 @@ describe('確認へ上がらずに止められた実行（HTTP 境界）', () =>
     } as unknown as SDKMessage);
 
     await expect.poll(async () => (await deniedLines(r.stores)).length, { timeout: 2000 }).toBe(1);
-    expect((await deniedLines(r.stores))[0]).toContain('chat.test.tsx');
+    // **期待値の反転（`packages/core/src/denial-shape.ts` 導入）。**
+    //
+    // 変更した事実: このテストは元々「ファイルパスの値そのもの
+    // （`chat.test.tsx`）が境界越しに日誌へ残ること」を固定していた。いまは
+    // `manager.ts` の `case 'permission_denied'` が `brief(event.input)`（生の
+    // JSON ダンプ）ではなく `denialInputShape(event.input)` を使うので、値では
+    // なく形（`欄=file_path / chars=49`）しか残らない。
+    //
+    // なぜ必要になったか: 道具の入力には環境変数の値・トークン・URL に埋まった
+    // 鍵が入りうる。日誌は消えない記録なので、値をそのまま書くと鍵がそこへ
+    // 焼き付く（`denial-shape.ts` の doc）。
+    //
+    // なぜ保証が弱くなっていないか: 「何が拒否されたのかが分かる形で残る」と
+    // いう元の意図は、欄の名前（`file_path`）と長さ（`chars=`）が境界を越えて
+    // 残ることで保たれている。弱くなったのは「どの値か」の解像度であって、
+    // 「何が起きたか追える」という要件そのものではない。値が出なくなったことも
+    // 形は残ることも、両方をここで固定する。
+    const line = (await deniedLines(r.stores))[0];
+    expect(line).toContain('欄=file_path');
+    expect(line).toMatch(/chars=\d+/);
+    expect(line).not.toContain('chat.test.tsx');
 
     // ターン終わりの記録。走行中に見た1件は二度上げず、見ていなかった1件を拾う
     session.push({
@@ -321,5 +357,61 @@ describe('確認へ上がらずに止められた実行（HTTP 境界）', () =>
     expect(line).not.toContain('理由:');
     expect(line).not.toContain('モデルへの拒否文:');
     expect(line).not.toContain('（不明）');
+  }, 15_000);
+
+  /**
+   * **新しく降ろすようになった `note` イベントが、HTTP 境界を越えてデーモンの
+   * 日誌まで届くこと。**
+   *
+   * `runner.ts` の `#noteDenial` は、先に入力を持たない記録（`via: 'live'`）が
+   * 降りていて、後から入力を持つ記録（`via: 'result'`）が同じ `tool_use_id` で
+   * 届いたときに限り、`permission_denied` をもう一度降ろす代わりに既存の
+   * `note` イベントで形だけを1本足す（`runner-protocol.ts` に種別も欄も足さない
+   * ための選択）。**`note` はここでは何も新設していないので同一プロセスの
+   * テストでも境界は割と壊れにくいが**、`runner-protocol.ts` 冒頭の doc
+   * （「回帰テストは JSON.parse(JSON.stringify(...)) を通すか、HTTP 境界を実際に
+   * 越える apps/daemon 側で書くこと」）に従い、ここは本物の HTTP
+   * （`fetchInto` 経由で hono の app へ）を通して固定する。
+   */
+  it('先に届いた入力なしの拒否に、後から入力ありの記録が続くと、note が境界越しに日誌まで届く', async () => {
+    const r = await open();
+    await r.pool.start({ request: 'テストを直して' });
+    await expect.poll(() => r.sessions.length, { timeout: 2000 }).toBe(1);
+    const session = r.sessions[0];
+    if (!session) throw new Error('マネージャーのセッションが無い');
+
+    // 走行中の合図（実機の SDK が実際に送ってくる形。`tool_input` を持たない）
+    session.push({
+      type: 'system',
+      subtype: 'permission_denied',
+      tool_name: 'Bash',
+      tool_use_id: 'toolu_1',
+      session_id: 'sess-1',
+      uuid: 'uuid-denied-1',
+    } as unknown as SDKMessage);
+    await expect.poll(async () => (await deniedLines(r.stores)).length, { timeout: 2000 }).toBe(1);
+
+    // ターン終わりの記録。同じ id に、今度は入力が付いて届く。
+    session.push({
+      type: 'result',
+      subtype: 'success',
+      result: '終わった',
+      permission_denials: [
+        { tool_name: 'Bash', tool_use_id: 'toolu_1', tool_input: { command: 'git diff' } },
+      ],
+      session_id: 'sess-1',
+      uuid: 'uuid-result-1',
+    } as unknown as SDKMessage);
+
+    await expect.poll(async () => (await noteLines(r.stores)).length, { timeout: 2000 }).toBe(1);
+    const note = (await noteLines(r.stores))[0];
+    expect(note).toContain('Bash');
+    // 値ではなく形が載る（欄名と先頭の語）。
+    expect(note).toContain('欄=command');
+    expect(note).toContain('先頭の語=git');
+
+    // **拒否の行そのものは増えない。** `permission_denied` を二度降ろすと
+    // デーモンの件数が二重計上になる（`runner.ts` の `#noteDenial` の doc）。
+    expect(await deniedLines(r.stores)).toHaveLength(1);
   }, 15_000);
 });
