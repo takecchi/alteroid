@@ -894,6 +894,15 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * #226 を見ること）。**この欄へ後から詰めようとしないこと** — SDK の
      * 走行中の合図に無い値を runner 側で埋めれば、それは推測であって事実では
      * ない（このファイル冒頭のとおり、ここは事実だけを運ぶ場所である）。
+     *
+     * **「何を実行しようとしたか」は、いまは `note` で後から届く。**
+     * 同じ拒否は `via: 'result'` にも載り、そちらは `tool_input` を持つ。
+     * runner の `#noteDenial`（`runner.ts`）は `tool_use_id` で二重排除
+     * しているが、**先に来た `live` が入力を持たなかったときに限り**、
+     * 後から来た `result` の入力の**形だけ**（本文ではない。
+     * `denial-shape.ts`）を `note` として1度降ろす。**それでもこの欄は
+     * 埋めない** —— 埋めると「走行中の合図に入力が付いていた」という嘘に
+     * なるからで、上の禁止はそのまま生きている。
      */
     input: z.unknown().optional(),
     /**

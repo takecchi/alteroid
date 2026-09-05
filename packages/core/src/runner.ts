@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
@@ -22,6 +22,7 @@ import type {
   AgentTurnEnded,
 } from './agent-events.js';
 import { buildManagerSessionOptions, foldClaudeMessage } from './claude-provider.js';
+import { denialInputShape, type DeniedRecord } from './denial-shape.js';
 import {
   noteBackgroundFailure,
   noteMissingRecordSource,
@@ -715,8 +716,14 @@ class RunnerSession {
    * 記録**（`result.permission_denials`）の両方に載る。しかも `result` が
    * 累積かどうかは SDK の型に書かれていない（`modelUsage` には「累積」と明記が
    * あるが、こちらには無い）ので、**どちらでも壊れないように id で落とす**。
+   *
+   * **値は「その id について、入力を持つ記録を既に降ろしたか」である。**
+   * `true` を置くだけだと「降ろした」しか覚えられず、**入力を持たない
+   * `via: 'live'` が先に鍵を立てたとき、入力を持つ `via: 'result'` を
+   * 区別できずに捨てる**（それが直している穴である）。`false` のまま残って
+   * いる id にだけ、後から形を1度足す（`#noteDenial`）。
    */
-  readonly #denied = createRecentMap<true>({
+  readonly #denied = createRecentMap<DeniedRecord>({
     limit: DENIED_MEMORY_LIMIT,
     // **忘れたことを黙らない。** 忘れた id が `result` にもう一度載っていれば、
     // 同じ拒否が新しい拒否として上がる（デーモン側の件数も二重に増える）。
@@ -2001,9 +2008,56 @@ class RunnerSession {
     // **代用値を作るのはこちら側の仕事である**（`agent-events.ts` の
     // `AgentPermissionDenial` の doc）。provider の写しは「無かった」をそのまま
     // 運ぶだけで、何で埋めるかは層が決める。
-    const toolUseId = denial.toolUseId ?? `${tool}:${brief(input, 120)}`;
-    if (this.#denied.has(toolUseId)) return;
-    this.#denied.set(toolUseId, true);
+    //
+    // **入力そのものを鍵に混ぜない。** ここは以前 `brief(input, 120)` を素で
+    // 連結していたが、この鍵は `#denied` の `onForget` が**日誌へそのまま並べる**
+    // （`ids.join(', ')`）。道具の入力には環境変数の値やトークンが入りうるので、
+    // 記憶が上限に達した回にだけコマンド本文が日誌へ出る経路が開いていた。
+    // **同じ文字列は同じ鍵になる**ので、畳み方（＝重複排除の効き方）は変わらない。
+    const toolUseId = denial.toolUseId ?? `${tool}:${digestOf(brief(input, 120))}`;
+    // **既に降ろしてある1件でも、入力を持つ記録が後から来たら形だけ足す。**
+    //
+    // 同じ拒否は `via: 'live'`（走行中の合図）と `via: 'result'`（ターン終わりの
+    // 記録）の両方に載るが、**入力を持っているのは後者だけ**である
+    // （`runner-protocol.ts` の `input` の doc）。ここが `has` だけで弾いて
+    // いたので、入力を持つ authoritative な記録が丸ごと捨てられ、日誌には
+    // 「何を実行しようとしたか」が1件も残らなかった——読む側は「良性のコマンドが
+    // 誤検知された」と「拒否されるべきコマンドだった」を区別できず、次の一手を
+    // 選べない。
+    //
+    // **これは `input` の欄を後から詰めているのではない**（`runner-protocol.ts`
+    // の `input` の doc が禁じているのはそちら）。降ろしているのは SDK が
+    // `result.permission_denials` で実際に名乗った値であって、推測ではない。
+    //
+    // **本文は載せず形だけ載せる**（`denial-shape.ts`）。**足すのは1度だけ** ——
+    // `result` が累積かどうかは SDK の型に書かれていない（この帳面の doc）ので、
+    // 2度目以降は下の早期返却が落とす。
+    //
+    // **`permission_denied` をもう一度降ろさない。** デーモン（`manager.ts`）は
+    // 拒否を1件ずつ数えており、`shouldEscalateDenial` は「1ずつ増える数」を
+    // 前提にしている。2本目を降ろすと二重計上になり、段（3件目・10件目…）を
+    // 跨いで escalation が飛ぶ。**だから既存の `note` で足す** —— protocol に
+    // 種別も欄も足さないので、デーモンと runner のデプロイ順序がどちらでも
+    // 壊れない（新しい種別を足すと、まだ知らないデーモンでは
+    // `runnerEventSchema` の `safeParse` が落ちて `unknown-shape` の
+    // 取りこぼしとして鳴る。`apps/daemon/src/runner-client.ts`）。
+    const seen = this.#denied.get(toolUseId);
+    if (seen !== undefined) {
+      if (seen.input || input === undefined) return;
+      this.#denied.set(toolUseId, { input: true });
+      const shape = denialInputShape(input);
+      if (shape !== undefined) {
+        this.#emit({
+          type: 'note',
+          managerId: this.#id,
+          text:
+            `先に降ろした ${tool} の拒否について、ターン終わりの記録（via: result）に` +
+            `入力が載っていた。値には鍵が入りうるので本文は残さず、形だけ残す: ${shape}`,
+        });
+      }
+      return;
+    }
+    this.#denied.set(toolUseId, { input: input !== undefined });
     // `decision_reason` / `decision_reason_type` / `message` は SDK の走行中の
     // 合図（`via: 'live'`）にしか付かない任意フィールドである（`result` の
     // `SDKPermissionDenial` は理由を持たない）。**文字列であることを確かめて
@@ -2907,6 +2961,18 @@ export function decideAnswer(
 ): 'allow' | 'deny' {
   if (kind === 'question') return 'allow';
   return decision ?? inferDecision(message);
+}
+
+/**
+ * 文字列を短い16進へ畳む。**中身を復元できない形にするためだけに使う。**
+ *
+ * 暗号としての強度が要る場所ではない（署名でも認証でもない）。要るのは
+ * 「同じ文字列は同じ鍵になる」ことと、「鍵を見ても元の文字列が読めない」ことの
+ * 2つだけである。前者が重複排除を保ち、後者が `onForget` の日誌行から本文を
+ * 締め出す（`#noteDenial` の `toolUseId` の doc）。
+ */
+function digestOf(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 16);
 }
 
 export function brief(value: unknown, limit = 200): string {

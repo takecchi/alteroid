@@ -24,6 +24,7 @@ import {
   buildCloneSessionOptions,
   foldClaudeMessage,
 } from './claude-provider.js';
+import { denialInputAbsence, denialInputShape, type DeniedRecord } from './denial-shape.js';
 import { buildActivityDigest, type ManagerLiveness } from './digest.js';
 import {
   DISTILL_GAP_ACTIVITY_SCAN_LIMIT,
@@ -732,7 +733,7 @@ class Clone implements CloneHost {
    * `result.permission_denials` にもう一度載れば、同じ拒否がもう一度日誌へ載る
    * （`runner.ts` の `#denied` の `onForget` が明示している代償と同じ形）。
    */
-  readonly #deniedToolUses = createRecentMap<true>({
+  readonly #deniedToolUses = createRecentMap<DeniedRecord>({
     limit: DENIED_TOOL_USE_MEMORY_LIMIT,
     onForget: (ids) => {
       void this.#journal({
@@ -4427,8 +4428,28 @@ class Clone implements CloneHost {
     // `AgentPermissionDenial` の doc）。provider の写しは「無かった」を
     // そのまま運ぶだけで、何で埋めるかは層が決める。
     const toolUseId = denial.toolUseId ?? `${tool}:${via}`;
-    if (this.#deniedToolUses.has(toolUseId)) return;
-    this.#deniedToolUses.set(toolUseId, true);
+    // **既に書いてある1件でも、入力を持つ記録が後から来たら形だけ足す。**
+    // 理由・形とも `runner.ts` の `#noteDenial` と同じである（層ごとに
+    // 書き分けない）——入力を持つのは `via: 'result'` だけなので、`has` で
+    // 弾くと「何を実行しようとしたか」が日誌に1件も残らない。
+    const seen = this.#deniedToolUses.get(toolUseId);
+    if (seen !== undefined) {
+      if (seen.input || denial.input === undefined) return;
+      this.#deniedToolUses.set(toolUseId, { input: true });
+      const later = denialInputShape(denial.input);
+      if (later !== undefined) {
+        await this.#journal({
+          type: 'exchange',
+          with: 'self',
+          role: 'inbound',
+          text:
+            `先に書いた ${tool} の拒否について、ターン終わりの記録（合図の出所: result）に` +
+            `入力が載っていた。値には鍵が入りうるので本文は残さず、形だけ残す: ${later}`,
+        });
+      }
+      return;
+    }
+    this.#deniedToolUses.set(toolUseId, { input: denial.input !== undefined });
 
     // `decision_reason` / `decision_reason_type` / `message` は3つとも
     // `via: 'result'` では必ず欠け、`via: 'live'` でも SDK が付けてこなければ
@@ -4477,6 +4498,11 @@ class Clone implements CloneHost {
       text:
         `${tool} の実行が、確認へ上がらずに止められた${why}。` +
         `止められたのは ${actorLabel} の手（合図の出所: ${via}）。` +
+        // **入力は形だけ残す。値は残さない**（`denial-shape.ts`）。ここは元から
+        // 入力を1文字も書いていなかったので、読む側は「良性の道具呼び出しが
+        // 誤検知された」と「止められるべきだった」を分けられなかった。
+        // **かといって本文は書けない** —— 道具の入力には鍵が入りうる。
+        `入力の形: ${denialInputShape(denial.input) ?? denialInputAbsence(via)}。` +
         `許可モードは ${this.#permissionMode} で、この層に確認を回す相手は居ない。`,
     });
   }
