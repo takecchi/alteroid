@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { denialInputAbsence, denialInputShape } from './denial-shape.js';
 import {
   journalEntryShape,
   noteBackgroundFailure,
@@ -5492,6 +5493,19 @@ class Pool implements ManagerPool {
           event.message === undefined ? undefined : `モデルへの拒否文: ${event.message}`,
         ].filter((line): line is string => line !== undefined);
         const denialSuffix = denialDetails.length > 0 ? ` [${denialDetails.join(' / ')}]` : '';
+        // **入力は形だけ残す。値は残さない。** 道具の入力には環境変数の値・
+        // トークン・URL に埋まった鍵が入りうるので、`brief(event.input)` で
+        // 本文をそのまま日誌へ書いていたのをやめる（`denial-shape.ts` に線を
+        // 引いた）。**それでも「何も分からない」へは戻さない** —— 先頭の語と
+        // 欄の名前と長さが残るので、読む側は「良性のコマンドが誤検知された」と
+        // 「拒否されるべきコマンドだった」を分けられる。
+        //
+        // **「無い」の種類を潰さない。** 入力が付いていない回にこれまでは空文字が
+        // 落ちており（`brief(undefined)` は `''`）、字面の上では「空のコマンド
+        // だった」と「そもそも入力が届かない経路だった」が同じに見えていた。
+        // 経路ごとに、なぜ無いのかを言う。
+        const inputShape = denialInputShape(event.input);
+        const inputText = inputShape ?? denialInputAbsence(event.via);
         // **層の字面も日誌に残す。** `undefined`（取れていない）を「マネージャー」
         // へ読み替えない——journal_read で後から追う人が誤読しないように、
         // 3値のまま言う。
@@ -5510,7 +5524,7 @@ class Pool implements ManagerPool {
             `[${event.managerId}] ${event.tool} の実行が確認へ上がらずに止められた` +
             `（${actorLabel} / このマネージャーのこの組で ${count} 件目 / ` +
             `${event.via === 'live' ? '走行中の合図' : 'result の記録'}）: ` +
-            `${brief(event.input)}${denialSuffix}`,
+            `${inputText}${denialSuffix}`,
         });
 
         if (!shouldEscalateDenial(toolTotal)) return;
@@ -5524,10 +5538,19 @@ class Pool implements ManagerPool {
         // と同じ `react-markdown` ＋ `remark-gfm` ＋ `remark-breaks` の設定。観測
         // 2026-08-27。詳細は `markdown-span.ts` の doc）:
         //
-        // - `brief(event.input)` はツール呼び出し引数の JSON ダンプで、Bash の引数が
-        //   素で載る。**バッククォートを含む回は実際に化けた** ——
-        //   `{"command":"echo `date` && rm -rf /"}` の `` `date` `` が本物の `<code>`
-        //   になる。空白で挟まれた `_word_` や空白無しの `*word*` も `<em>` になる
+        // - 入力の欄は、いまは本文ではなく**形**（`denialInputShape`）である。
+        //   **それでも包む必要は消えていない** —— 形には道具のスキーマ由来の欄名が
+        //   そのまま載るので、`欄=file_path,old_string,new_string` のように
+        //   アンダースコアが並ぶ。空白で挟まれた `_word_` や空白無しの `*word*` は
+        //   `<em>` になる。**本文を載せていた頃はもっと激しく化けた** ——
+        //   `{"command":"echo `date` && rm -rf /"}` の `` `date` `` が本物の
+        //   `<code>` になった（実測）。本文をやめたのは化けのためではなく、
+        //   値に鍵が入りうるためである（上の `inputShape` の doc）
+        //
+        // - **入力が付いていない回の一文は包まない。** あちらはこちらが書いた
+        //   日本語の散文で、包むと等幅になり「文章」ではなく「コード」として
+        //   描かれる（`denialSuffix` を包まないのと同じ理由）。散文の側に
+        //   アンダースコアや `*` を書かないことで揃えてある
         // - `event.tool` は SDK のツール名。**こちらは化けなかった** —— MCP の
         //   `mcp__<server>__<tool>` は、CommonMark がアンダースコアの強調を語中では
         //   発火させないのでそのまま残る（issue #287 のコメントは「いま既に化ける」と
@@ -5569,7 +5592,7 @@ class Pool implements ManagerPool {
           `${codeSpan(event.tool)} の実行が確認へ上がらずに止められた（${actorLabel} / このマネージャーで ${toolTotal} 件目・道具ごとの合計）。` +
             'モデル分類器か deny 規則がその場で拒否しているので、**この確認はクローンには回ってきていない**。' +
             `${stuckWho}。` +
-            `直近の入力: ${codeSpan(brief(event.input))}${denialSuffix}\n` +
+            `直近の入力の形: ${inputShape === undefined ? inputText : codeSpan(inputShape)}${denialSuffix}\n` +
             '全件は日誌に残っている（`journal_read` で辿れる）。',
         );
         return;
