@@ -598,6 +598,13 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * 3. runner が最後に見た背景タスクの在り高（`agent-events.ts` の
      *    `AgentBackgroundTasksEvent`。REPLACE 意味論）が非0
      *
+     *    **この在り高は、器（CLI プロセス）が本当に入れ替わったときにしか
+     *    空へ戻らない**（`runner.ts` の `#liveBackgroundTasks` の doc）。
+     *    ターン境界ごとに来る `init`（SDK の `SDKSystemMessage`）だけでは
+     *    戻らない——以前はここを取り違えており、ターンの頭ごとに在り高が
+     *    0へ落ちて 3 が常に false になり、背景処理が実際に残っていても
+     *    `awaitingBackground` が付かなかった。
+     *
      * `count` は 3 の時点での本数、`breakdown` はその内訳
      * （`taskType×件数` をカンマで繋いだ文字列）。**`breakdown` は診断用の
      * 写しであって判定には使わない** —— `manager.ts` 側は握り潰すかどうかを

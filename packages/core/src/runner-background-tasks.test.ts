@@ -24,8 +24,29 @@ interface FakeSession {
   ): Promise<void>;
   /** 1ターンを畳む。既定は成功。 */
   finish(text: string, options?: { subtype?: string; isError?: boolean }): Promise<void>;
-  /** 器（CLI プロセス）が入れ替わったことにする — 新しい `init` を流す。 */
-  restart(): Promise<void>;
+  /**
+   * もう一度 `init`（`session_started`）を流す。**`sessionId` を明示させる。**
+   *
+   * 同じ値を渡せば「同じ器のまま次のターンが始まっただけ」（`SDKSystemMessage`
+   * の JSDoc: "emits at the start of each turn"）を、違う値を渡せば「SDK 側で
+   * セッションが差し替わった」（`SDKBackgroundTasksChangedMessage` の JSDoc の
+   * "(re)starts"）を表す——**この2つは SDK の別々の JSDoc が指す別の事象で、
+   * `init` の再送という見た目だけでは区別できない**（`runner.ts` の
+   * `case 'session_started'` のコメント）。呼び出し側にどちらのつもりかを
+   * 毎回書かせることで、このテストファイル自身が両者を混同しないようにする。
+   *
+   * ⚠️ 以前はここが引数を取らず、常に同じ `session_id` を流していた
+   * （＝実質「ターン境界の再 init」しか表せていなかった）にもかかわらず、
+   * コメントは「器（CLI プロセス）が入れ替わったことにする」と名乗っていた。
+   * この食い違いが、直した穴そのものの誤読と同型である。
+   */
+  restart(sessionId: string): Promise<void>;
+  /**
+   * クエリのストリームを閉じる（`null` を流して generator を終える）。
+   * `#recoverFromFailedResume` の「手が動かないまま閉じた」経路を踏むために
+   * 使う（`resume()` 直後、進捗が1つも無い状態で呼ぶこと）。
+   */
+  close(): void;
   /**
    * マネージャーが確認を上げる（`waiting_human` を作る）。**わざと待たない**
    * ——`#onPermission` は最初の `await` の手前で `#pending` へ同期的に積むので
@@ -84,14 +105,17 @@ function fakeSdk(): { fn: typeof sdkQuery; sessions: FakeSession[] } {
         } as unknown as SDKMessage);
         await new Promise((resolve) => setTimeout(resolve, 0));
       },
-      async restart() {
+      async restart(sessionId) {
         push({
           type: 'system',
           subtype: 'init',
-          session_id: 'sess-mgr',
+          session_id: sessionId,
           uuid: `uuid-init-${String(Math.random())}`,
         } as unknown as SDKMessage);
         await new Promise((resolve) => setTimeout(resolve, 0));
+      },
+      close() {
+        if (emit) emit(null);
       },
       ask(toolName, input) {
         const canUseTool = (params.options ?? {}).canUseTool;
@@ -176,6 +200,15 @@ async function firstSession(sessions: readonly FakeSession[]): Promise<FakeSessi
   });
 }
 
+/** `#open()` が同じ `Host` インスタンス内で作り直した2本目のセッション。 */
+async function secondSession(sessions: readonly FakeSession[]): Promise<FakeSession> {
+  return vi.waitFor(() => {
+    const found = sessions[1];
+    if (!found) throw new Error('作り直し後のセッションがまだ開いていない');
+    return found;
+  });
+}
+
 type ReportEvent = Extract<RunnerEvent, { type: 'report' }>;
 
 async function reportEvents(events: readonly RunnerEvent[], expected: number) {
@@ -249,18 +282,107 @@ describe('report イベントの awaitingBackground（3条件すべてを満た�
   });
 });
 
-describe('session_started で背景タスクの在り高が空に戻る', () => {
-  it('resume（器の入れ替え）を挟むと、古い在り高は次の報告に引き継がれない', async () => {
+describe('在り高のリセット — 器（CLI プロセス）が本当に入れ替わったときだけ', () => {
+  /**
+   * **これが直した穴そのものである。** `SDKSystemMessage` の JSDoc（逐語）:
+   * 「Session metadata the CLI emits at the start of each turn, normally
+   * ahead of every other message of that turn」——`init` はターンの頭ごとに
+   * 来る。器が入れ替わっていなくても来る。
+   *
+   * 実測の再現（依頼者が生ログで確認済み）: ターンAで
+   * `backgroundTasksChanged([bg-1,bg-2,bg-3])` → `finish` →
+   * `awaitingBackground={count:3}` ✅ のあと、ターン間で
+   * `backgroundTasksChanged([bg-2,bg-3])` → **同じ `session_id` のまま
+   * `init` を再送** → `finish` → `awaitingBackground=undefined` ❌
+   * （直す前はここで無条件にリセットしていた）。このテストはこの並びを
+   * そのまま再現する。
+   */
+  it('同じ session_id のままターン境界の init が来ても在り高を保つ', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const session = await firstSession(s.sessions);
+
+    // ターンA: 3件の背景タスクが在るまま終わる。
+    await session.backgroundTasksChanged([
+      { id: 'bg-1', taskType: 'local_agent' },
+      { id: 'bg-2', taskType: 'local_agent' },
+      { id: 'bg-3', taskType: 'local_agent' },
+    ]);
+    await session.say('1本目、完了を待つ');
+    await session.finish('1本目、完了を待つ');
+
+    const [firstReport] = await reportEvents(s.events, 1);
+    expect(firstReport?.awaitingBackground).toEqual({ count: 3, breakdown: 'local_agent×3' });
+
+    // ターン間: 1件片付き、2件が残る。session_id は変えない
+    // （＝器は入れ替わっていない、ターンが変わっただけ）。
+    await session.backgroundTasksChanged([
+      { id: 'bg-2', taskType: 'local_agent' },
+      { id: 'bg-3', taskType: 'local_agent' },
+    ]);
+    await session.restart('sess-mgr');
+    await session.say('2本目、まだ待つ');
+    await session.finish('2本目、まだ待つ');
+
+    const [, secondReport] = await reportEvents(s.events, 2);
+    expect(secondReport?.awaitingBackground).toEqual({ count: 2, breakdown: 'local_agent×2' });
+  });
+
+  it('event.sessionId が直前と違う init が来たらリセットする（配る側への保険）', async () => {
     const s = setup();
     await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
     const session = await firstSession(s.sessions);
 
     await session.backgroundTasksChanged([{ id: 'bg-1', taskType: 'shell' }]);
-    // **`init` をもう一度流す**（新しいプロセスが立ったのと同じ形）——
-    // `#liveBackgroundTasks` が空へ戻るはずである。
-    await session.restart();
+    // **SDK 側でセッションが差し替わった場合の保険**（`case 'session_started'`
+    // のコメント）。`init` の再送そのものではなく、session_id が変わったこと
+    // がリセットの契機である。
+    await session.restart('sess-mgr-2');
     await session.say('完了を待つ');
     await session.finish('完了を待つ');
+
+    const [report] = await reportEvents(s.events, 1);
+    expect(report?.awaitingBackground).toBeUndefined();
+  });
+
+  /**
+   * **`#open()` が同じ `RunnerSession` インスタンスの中で開き直す経路**
+   * （`#recoverFromFailedResume` の `recovered` 分岐）を通しても、在り高が
+   * リセットされることを確かめる。
+   *
+   * ⚠️ **この経路では `#sessionId` も同時に `undefined` へ戻される**
+   * （`#recoverFromFailedResume` が resume 失敗の作り直し時に行う）ので、
+   * このテストは「`#open()` の再オープンそのもの」と「session_id が
+   * `undefined` に変わったこと」のどちらが効いているかまでは分離できない
+   * ——3つの契機のうち2番目単独を隔離して踏める経路は、いまの `#open()` の
+   * 3つの呼び出し元（`begin()` / `resume()` / このリカバリ経路）を洗った
+   * 限り見つからなかった（`begin()` は初回で `#sessionId` が既に
+   * `undefined`、`resume()` は必ず新しいインスタンス）。それでも、
+   * `#open()` の再オープン経路そのものが在り高をリセットすることの
+   * 回帰は、このテストが見る。
+   */
+  it('#open() が同じインスタンスで開き直すと在り高をリセットする（resume 失敗からの回復経路）', async () => {
+    const s = setup();
+    await s.host.resume({
+      managerId: 'mgr-1',
+      sessionId: 'sess-mgr',
+      cwd: '/work/project',
+      request: '調べて',
+      // renderSessionLog が null を返すと `unresumable`（作り直さない）へ
+      // 倒れてしまうため、読める材料を1件だけ渡す。
+      entries: [{ type: 'user', message: { role: 'user', content: 'つづき' } }],
+    });
+    const first = await firstSession(s.sessions);
+
+    await first.backgroundTasksChanged([{ id: 'bg-1', taskType: 'shell' }]);
+    // 手が動く前にストリームを閉じる —— `#recoverFromFailedResume` が
+    // 「resume は効かなかった」と判定し、同じインスタンスの `#open()` を
+    // 作り直す（`runner.ts` の `#recoverFromFailedResume`）。
+    first.close();
+
+    const second = await secondSession(s.sessions);
+    await second.say('作り直し後の1本目');
+    await second.finish('作り直し後の1本目');
 
     const [report] = await reportEvents(s.events, 1);
     expect(report?.awaitingBackground).toBeUndefined();
