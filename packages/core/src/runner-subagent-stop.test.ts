@@ -696,6 +696,100 @@ describe('SubagentStop の観測（#357 / #570）', () => {
   });
 
   /**
+   * **`#backgroundTaskOwners` の LRU 上限**（`runner.ts` の
+   * `BACKGROUND_TASK_OWNER_LIMIT`。直上の歯と同じ形——超えたら「いちばん古い
+   * もの」から捨てる）。**この定数も `export` していない**（`export` を求められて
+   * いるのは `SUBAGENT_WAKEUP_LIMIT` だけ）ので、直上の歯と同じ理由で値を
+   * 直書きする。ずれたらこの歯が壊れる形自体が、直書きしたことの検算になる。
+   *
+   * **`#backgroundTaskOwners` は private なので、中身は直接覗けない。**
+   * 観測できるのは `#onSubagentStop` の振る舞いの変化だけである —— 所有者を
+   * 引けているあいだは `mine.length > 0` になり起こし直し側
+   * （`hookSpecificOutput.additionalContext`）へ落ちるが、表から追い出された
+   * 瞬間に `mine.length === 0` へ倒れ、`#noteOwnerLookupFailure` の診断
+   * （「所有者を引けなかった」note。1セッションに1回だけ出る）へ落ちる。
+   * **この2つの分岐を行き来することそのものが、追い出しが起きたことの証拠に
+   * なる**（直上の歯の「カウントが0から再スタートする」と同じ間接観測の形）。
+   *
+   * **登録は `PostToolUse` だけでよい。** 直上の歯（`#subagentWakeups`）は
+   * `SubagentStop` を経由してしか増えないので登録のたびに `fireSubagentStop`
+   * も挟んでいたが、`#backgroundTaskOwners` は `#onPostToolUse` から
+   * （`registerBackgroundTask` 経由で）増える表なので、`fireSubagentStop` は
+   * 最後の観測の1回だけで足りる。
+   *
+   * **⚠️ 対照が要る。** 直後の歯で、501件積まなければ同じ形の呼び出しが
+   * 起こし直し側へ落ちることを確かめる —— 対照が無いと、この歯は
+   * `#recordBackgroundTaskOwner` の `while` ループそのものを壊して
+   * 「何も捨てなくなる」変異にしか強くならない。
+   */
+  it('#backgroundTaskOwners は上限（500件）を超えたら、いちばん古い所有者から捨てる（引けなくなる）', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    const ownerLimit = 500;
+
+    // `bg-owner-1` を含む 501 件の所有者を登録する。
+    for (let n = 1; n <= ownerLimit + 1; n += 1) {
+      await registerBackgroundTask(started.options, `bg-owner-${n}`, `agent-owner-${n}`);
+    }
+
+    // **501件目を登録した時点で、いちばん古い `bg-owner-1` の所有者が表から
+    // 捨てられているはず。** `agent-owner-1` が `bg-owner-1` を残して畳もうと
+    // しても、所有者を引けないので「自分の分」に数えられず、
+    // `#noteOwnerLookupFailure` の診断へ落ちる。
+    const result = await fireSubagentStop(started.options, {
+      ...STOP_BASE,
+      agent_id: 'agent-owner-1',
+      background_tasks: [
+        selfEntry('agent-owner-1'),
+        { id: 'bg-owner-1', type: 'shell', status: 'running' },
+      ],
+    });
+
+    // 起こし直し側（`hookSpecificOutput`）へは落ちない —— 所有者が引けない
+    // ので `mine.length === 0` のまま、素の `{ continue: true }` を返す。
+    expect(result).toEqual({ continue: true });
+    const notes = noteEvents(s.events);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]?.text).toContain('所有者を引けなかった');
+    expect(notes[0]?.text).toContain('bg-owner-1');
+  });
+
+  // 直上の歯の対照。501件積まなければ、同じ形の呼び出しで所有者が引けて
+  // 起こし直し側（`hookSpecificOutput.additionalContext`）へ落ちる ——
+  // これが無いと、直上の歯は LRU の `while` ループを丸ごと壊す変異にしか
+  // 強くならない。
+  it('（対照）501件積まなければ、同じ所有者は引けて起こし直し側へ落ちる', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    await registerBackgroundTask(started.options, 'bg-owner-1', 'agent-owner-1');
+
+    const result = await fireSubagentStop(started.options, {
+      ...STOP_BASE,
+      agent_id: 'agent-owner-1',
+      background_tasks: [
+        selfEntry('agent-owner-1'),
+        { id: 'bg-owner-1', type: 'shell', status: 'running' },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      continue: true,
+      hookSpecificOutput: { hookEventName: 'SubagentStop' },
+    });
+    const notes = noteEvents(s.events);
+    expect(notes).toHaveLength(1);
+    // 所有者を引けている（＝ LRU に捨てられていない）ので、追い出し時の
+    // 診断（直上の歯が見ているもの）とは別の note（起こし直しの記録）になる。
+    expect(notes[0]?.text).not.toContain('所有者を引けなかった');
+  });
+
+  /**
    * **`stop_hook_active`（`SubagentStopHookInput` の欄）は取れたときだけ載せる。**
    * 既存のすべてのテストは `STOP_BASE` 経由で常に `false`（＝取れている）を
    * 渡していたので、「取れない」側（欄そのものが無い）を通す歯がここまで

@@ -649,7 +649,9 @@ export const SUBAGENT_WAKEUP_LIMIT = 2;
  * 上限。**`BACKGROUND_TASK_OWNER_LIMIT` と同じ形**（超えたら「いちばん
  * 古いもの」から捨てる。`Map` の挿入順をそのまま使う）。
  *
- * `agent_id` は使い回されないので、件数は増え続ける一方である。放置すると
+ * `agent_id` は使い回されないので、件数は増え続ける一方である（**この前提を
+ * 何で測ったか・どこまで言えるかは `#subagentWakeups` の doc の「2.」に在る**）。
+ * 放置すると
  * 長時間走るセッションでメモリが際限なく伸びるので、同じ理由・同じ形の蓋を
  * 掛ける。**捨てたことは外から見えない** — 捨てられた `agent_id` はカウント
  * 0から再スタートするので、上限に近い側から捨てるより古い側から捨てるほうが
@@ -942,10 +944,47 @@ class RunnerSession {
    *    持つ表なので、同じ理由でリセットすると上限が毎ターン（あるいは毎
    *    セッション再開）再装填され、同じ作業者を実質無限に起こし続けられて
    *    しまう —— 上限を置いた目的（#570 の追跡冒頭）がそのまま消える。
-   * 2. **`agent_id` は使い回されない。** だから「リセットしないと際限
-   *    なく増える」という心配は無く、リセットしない側に倒して安全に倒れる。
-   *    増え続ける件数のほうは `SUBAGENT_WAKEUP_TRACKING_LIMIT` の LRU で
-   *    別に抑える。
+   * 2. **`agent_id` は使い回されない（測った。⚠️ ただし SDK の契約ではない）。**
+   *    だから「リセットしないと際限なく増える」という心配は無く、リセット
+   *    しない側に倒して安全に倒れる。増え続ける件数のほうは
+   *    `SUBAGENT_WAKEUP_TRACKING_LIMIT` の LRU で別に抑える。
+   *
+   *    **何で測ったか**（2026-09-06。`@anthropic-ai/claude-agent-sdk@0.3.261`
+   *    同梱の `claude` 実行バイナリを追った。**⚠️ この読み取りは委譲先が行った
+   *    ものを写したもので、この doc を書いた側は再導出していない**）:
+   *
+   *    ```js
+   *    import{createHash as kn,randomBytes as xn}from"crypto";
+   *    var Cn=new RegExp(`^a(?:${Xe}-)?[0-9a-f]{16}$`);
+   *    function bh(e){ … let t=xn(8).toString("hex"); return e?`a${e}-${t}`:`a${t}` }
+   *    ```
+   *
+   *    ⟹ `agent_id` は **`'a'` + `crypto.randomBytes(8)` の16進**（64bit の乱数）
+   *    で、新規スポーンのたびに引き直される。使い回す経路として見つかったのは
+   *    **明示的な resume（同じ論理エージェントの続行）だけ**で、それは意味の上
+   *    でも「同じ作業者」なのでこの表の設計と矛盾しない。集めた実値10件は
+   *    すべて相異なり、全件がこの形だった。
+   *
+   *    ⚠️ **これは SDK の契約ではない。** `sdk.d.ts` の `BaseHookInput.agent_id`
+   *    は一意性にも再利用にも触れていない（逐語）: [sdk-verbatim BaseHookInput.agent_id]
+   *    > Subagent identifier. Present only when the hook fires from within a subagent (e.g., a tool called by an AgentTool worker). Absent for the main thread, even in --agent sessions. Use this field (not agent_type) to distinguish subagent calls from main-thread calls.
+   *
+   *    ⚠️ **そして、この前提が腐っても CI は赤くならない。**
+   *    `scripts/check-sdk-quotes-core.mjs` が読むのは `sdk.d.ts` / `sdk-tools.d.ts`
+   *    の2枚だけで、**同梱バイナリ内の文字列は明示的に検査対象の外に置いてある**
+   *    （PR #646 が「印を付けなかったもの（意図）」として名指ししている）。
+   *    ⟹ **上の `bh()` が次の版で変わっても、気づく口はここに無い。** 直上の
+   *    `sdk-verbatim` の印は d.ts 側の一文が変わったときにだけ赤くなる、**部分的な
+   *    仕掛けである**（`agent_id` の意味が変わるならまずこの一文が変わる見込みが
+   *    高い、という賭けに乗っているだけである）。
+   *
+   *    **⭐ 腐ったときに何が起きるか。** 使い回された `agent_id` は前の作業者の
+   *    カウントを引き継ぐので、**起こし直しを1回も受けないまま `escalate` へ
+   *    落ちうる**。⟹ その作業者は自動では起こされない。**ただし `escalate` の
+   *    `note` はクローンの受信箱まで届く**（`manager.ts` の `case 'note'`）ので、
+   *    **止まったこと自体は黙らない** —— 失われるのは自動の起こし直しだけで、
+   *    #644 以前の状態（＝ 検出はできるが継続はしない）へ戻る。**黙って壊れる
+   *    側ではない**ことが、この前提をこのまま置いておける理由である。
    *
    * ⚠️ **次にこのフィールドを読む人が、`#liveBackgroundTasks` や
    * `#backgroundTaskOwners` に揃えて「ターンの頭でリセットする」形を足し
