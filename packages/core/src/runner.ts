@@ -959,9 +959,27 @@ class RunnerSession {
    * 「missed bookend cannot wedge a stale running indicator」と言っている
    * とおり、届いた `tasks` で丸ごと入れ替える。加算・削除の差分計算はしない。
    *
-   * **`session_started` で必ず空に戻す**（SDK の JSDoc「The level is
-   * per-process: nothing is emitted at startup, so consumers must reset to
-   * the empty set whenever the session's CLI process (re)starts」）。
+   * **空へ戻すのは「器（CLI プロセス）が本当に入れ替わったとき」だけ**
+   * ——契機は3つに限る:
+   *
+   * 1. フィールド初期化（このデフォルト値）——新しい `RunnerSession`
+   *    インスタンス＝新しい器
+   * 2. `#open()` が実際に SDK セッションを開いた／開き直したとき
+   *    （`#open()` のコメント）
+   * 3. `init`（`session_started`）が来て、`event.sessionId` が直前の
+   *    `this.#sessionId` と違っていたとき（`case 'session_started'` の
+   *    コメント）
+   *
+   * **⚠️ 以前はここに「`session_started` で必ず空に戻す」と書いてあったが、
+   * それは誤りだった。** `init` はターンの頭ごとに来る（`SDKSystemMessage`
+   * の JSDoc）のであって、器の (re)start の合図ではない——器の (re)start を
+   * 言っているのは `SDKBackgroundTasksChangedMessage` の JSDoc のほうで、
+   * こちらは「背景タスクの level 信号が per-process である」ことの説明に
+   * すぎない。**この2つの JSDoc は別のことを言っている**——逐語は
+   * `case 'session_started'` のコメントに置いた。誤読の結果、ターンの頭
+   * ごとに在り高が0へ落ち、そのターン中に `background_tasks_changed` が
+   * 来なければ `awaitingBackground` が付かず、報告が畳まれずクローンを
+   * 起こしていた（実測: K 本並列に出すと K-1 回よけいに起こす）。
    *
    * 読むのは `result` の枝（`awaitingBackground` を報告に載せるかどうかの
    * 判定）だけ。**`worker_wait` の区間の開閉には使わない**
@@ -1245,6 +1263,15 @@ class RunnerSession {
 
   #open(resume?: string): void {
     if (this.#query) return;
+    // **ここが「器（CLI プロセス）を実際に開く／開き直す」唯一の場所である**
+    // ——SDK の `SDKBackgroundTasksChangedMessage` の JSDoc が言う
+    // 「whenever the session's CLI process (re)starts」に正確に対応するのは
+    // ここであって、次に来る `init`（`case 'session_started'`）ではない
+    // （`init` はターンの頭ごとに来るだけで、器の (re)start を意味しない
+    // ——詳しくは `#liveBackgroundTasks` の doc）。`#recoverFromFailedResume`
+    // が `#openTasks.clear()` を「前のセッションの task_id を持ち越さない」
+    // ために置いているのと同じ理由で、ここでも前の器の在り高を持ち越さない。
+    this.#liveBackgroundTasks = [];
     const generation = this.#generation;
     const q = this.#queryFn({ prompt: this.#inputStream(), options: this.#buildOptions(resume) });
     this.#query = q;
@@ -1562,13 +1589,46 @@ class RunnerSession {
   #apply(event: AgentEvent): void {
     switch (event.type) {
       case 'session_started': {
+        // **`init` そのものはリセットの契機にしない。** `SDKSystemMessage`
+        // の JSDoc（逐語。version 0.3.259 同梱の sdk.d.ts）:
+        //
+        // > Session metadata the CLI emits at the start of each turn,
+        // > normally ahead of every other message of that turn: session_id,
+        // > model, working directory, tools, MCP servers, slash commands,
+        // > permission mode, and the capabilities list for feature
+        // > detection.
+        //
+        // **＝ init はターンの頭ごとに来る。** 器（CLI プロセス）が
+        // (re)start したときにしか来ないのではない。
+        //
+        // 一方 `SDKBackgroundTasksChangedMessage` の JSDoc（同じく逐語）が
+        // 言っているのは：
+        //
+        // > The level is per-process: nothing is emitted at startup, so
+        // > consumers must reset to the empty set whenever the session's
+        // > CLI process (re)starts and let the next membership change
+        // > repopulate it.
+        //
+        // ここが言っているのは「背景タスクの level 信号が per-process で
+        // ある」ことだけで、「init はプロセス起動時にしか来ない」ではない。
+        // **以前のここのコメントは、この一節を init の発火条件の説明として
+        // 誤って流用していた。** 同じ session_id のまま来る init は、ターン
+        // が変わっただけで器は入れ替わっていない——ここで無条件にリセット
+        // すると、ターンの頭ごとに在り高が0へ落ち、そのターン中に
+        // `background_tasks_changed` が来なければ `awaitingBackground` が
+        // 付かず、報告が畳まれずクローンを起こしていた（実測: K 本並列に
+        // 出すと K-1 回よけいに起こす）。
+        //
+        // **器が本当に入れ替わったかは `#open()`（フィールド初期化・reopen
+        // 側）が既に見ている**（`#liveBackgroundTasks` の doc の契機1・2）。
+        // ここで見るのは、SDK 側でセッションが差し替わった場合の保険——
+        // `event.sessionId` が直前の `this.#sessionId` と違うときだけ、
+        // 判定できないときは配る側へ倒すという原則に沿ってリセットする。
+        // **比較は `this.#sessionId` を更新する前に行う。** 初回は
+        // `#sessionId === undefined` なので必ずリセット側に倒れる
+        // （空→空で無害）。
+        if (this.#sessionId !== event.sessionId) this.#liveBackgroundTasks = [];
         this.#sessionId = event.sessionId;
-        // **背景タスクの在り高は per-process の level 信号。** SDK の
-        // JSDoc「nothing is emitted at startup, so consumers must reset to
-        // the empty set whenever the session's CLI process (re)starts」の
-        // とおり、器（CLI プロセス）が変わればここも空へ戻す
-        // （`#liveBackgroundTasks` の doc）。
-        this.#liveBackgroundTasks = [];
         this.#emit({ type: 'session', managerId: this.#id, sessionId: event.sessionId });
         return;
       }
