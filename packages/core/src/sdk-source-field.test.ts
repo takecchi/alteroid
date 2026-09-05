@@ -86,6 +86,7 @@ describe('SDK の UserPromptSubmitHookInput.source（worker_wait.sources の前�
     // 検出器が非0を出せることと、出す先が正しいことを先に見せる。ここが
     // `sdk.d.ts` 全文だったら、この2つは区別できない。
     const doc = sourceFieldJsDoc();
+    // [sdk-verbatim UserPromptSubmitHookInput.source] 「Who authored/injected the prompt」
     expect(doc).toContain('Who authored/injected the prompt');
     expect(doc).not.toContain('hook_event_name');
   });
@@ -94,6 +95,7 @@ describe('SDK の UserPromptSubmitHookInput.source（worker_wait.sources の前�
     // `byCause.notification` / `byCause.continuation` が分けようとしている当の
     // ものが、SDK 側ではこの1語に畳まれている。ここが変わったら
     // `runner-protocol.ts` の `sources` の doc の「割れない」が嘘になる。
+    // [sdk-verbatim UserPromptSubmitHookInput.source] 「`system` = other machine-injected turns (peer/channel messages, task notifications, auto-continuation)」
     expect(sourceFieldJsDoc()).toContain(
       '`system` = other machine-injected turns (peer/channel messages, task notifications, auto-continuation)',
     );
@@ -101,6 +103,7 @@ describe('SDK の UserPromptSubmitHookInput.source（worker_wait.sources の前�
 
   it('取れる見込みは「付かないこともある」であって「外部には付かない」ではない', () => {
     const doc = sourceFieldJsDoc();
+    // [sdk-verbatim UserPromptSubmitHookInput.source] 「Payloads may omit it while the field rolls out.」
     expect(doc).toContain('Payloads may omit it while the field rolls out.');
     // 0.3.237 の文言。**戻ったら落とす** — 戻ったなら `sources` は外部
     // セッションでは死んでいるので、doc の書き方を変えなければならない。

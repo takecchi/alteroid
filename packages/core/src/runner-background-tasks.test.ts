@@ -27,10 +27,15 @@ interface FakeSession {
   /**
    * もう一度 `init`（`session_started`）を流す。**`sessionId` を明示させる。**
    *
-   * 同じ値を渡せば「同じ器のまま次のターンが始まっただけ」（`SDKSystemMessage`
-   * の JSDoc: "emits at the start of each turn"）を、違う値を渡せば「SDK 側で
-   * セッションが差し替わった」（`SDKBackgroundTasksChangedMessage` の JSDoc の
-   * "(re)starts"）を表す——**この2つは SDK の別々の JSDoc が指す別の事象で、
+   * 同じ値を渡せば「同じ器のまま次のターンが始まっただけ」を、違う値を渡せば
+   * 「SDK 側でセッションが差し替わった」を表す——前者は `SDKSystemMessage` の
+   * JSDoc（逐語）: [sdk-verbatim SDKSystemMessage]
+   * emits at the start of each turn
+   *
+   * 後者は `SDKBackgroundTasksChangedMessage` の JSDoc（逐語）: [sdk-verbatim SDKBackgroundTasksChangedMessage]
+   * (re)starts
+   *
+   * ——**この2つは SDK の別々の JSDoc が指す別の事象で、
    * `init` の再送という見た目だけでは区別できない**（`runner.ts` の
    * `case 'session_started'` のコメント）。呼び出し側にどちらのつもりかを
    * 毎回書かせることで、このテストファイル自身が両者を混同しないようにする。
@@ -284,10 +289,10 @@ describe('report イベントの awaitingBackground（3条件すべてを満た�
 
 describe('在り高のリセット — 器（CLI プロセス）が本当に入れ替わったときだけ', () => {
   /**
-   * **これが直した穴そのものである。** `SDKSystemMessage` の JSDoc（逐語）:
-   * 「Session metadata the CLI emits at the start of each turn, normally
-   * ahead of every other message of that turn」——`init` はターンの頭ごとに
-   * 来る。器が入れ替わっていなくても来る。
+   * **これが直した穴そのものである。** `SDKSystemMessage` の JSDoc（逐語）: [sdk-verbatim SDKSystemMessage]
+   * 「Session metadata the CLI emits at the start of each turn, normally ahead of every other message of that turn」
+   *
+   * ——`init` はターンの頭ごとに来る。器が入れ替わっていなくても来る。
    *
    * 実測の再現（依頼者が生ログで確認済み）: ターンAで
    * `backgroundTasksChanged([bg-1,bg-2,bg-3])` → `finish` →

@@ -169,7 +169,7 @@ export function judgeTokenCandidate(state: AccountUsageState): TokenCandidateVer
  * `CLAUDE_CODE_HOST_CREDS_FILE` などが別の群に在る）、**「他の資格を全部落とす」
  * を名前の一覧で書くと、SDK が1つ足すたびに静かに穴が開く。** `AccountUsage` の
  * `tokenSource` で「どの出所で認証したか」を検査することも考えたが、SDK の型は
- * `tokenSource?: string`（自由文字列）で取りうる値を宣言していないので、
+ * 「tokenSource?: string」 [sdk-verbatim AccountInfo.tokenSource]（自由文字列）で取りうる値を宣言していないので、
  * **こちらも数え上げになる。**
  *
  * **⟹ この口の契約は「候補を観測する」ではなく「候補の env を渡して観測を試みる」

@@ -26,7 +26,16 @@
 - **クローン**: `cwd` は `paths.root`＝`ALTEROID_HOME`（`apps/daemon/src/index.ts` の `createClone({ cwd: paths.root })`、`Dockerfile` の `ENV ALTEROID_HOME=/data/alteroid`）。**そこにこの文書は無いので、載らない。これはバグではなく設計である** — 同じ箇所に「クローン自身の cwd は workspace とは別に渡す。クローンへ渡している `cwd` と同じ値でなければ、自己認識が嘘になる」と逐語で書いてある。**だから「cwd を repo にすれば直る」はクローンには当てられない**
 - **マネージャー**: `cwd` は `runner.workspacePath`＝`ALTEROID_WORKSPACE`（`apps/runner/src/index.ts`、`Dockerfile` の `ENV ALTEROID_WORKSPACE=/workspace`、`manager.ts` の `input.cwd ?? runner.workspacePath`）。**この文書は `/workspace/<マネージャーID>/repo/` の中で、`cwd` の直下ではない。だからセッション開始時には載らない。** ただし**後から載る導線が別に在る**（次の項目）
 - **作業者**: マネージャーと同じ導線で届く（作業者自身の直接観測）。`buildWorkerPrompt()`（`packages/core/src/prompt.ts`）は固定の4行を返すだけで本文を1文字も含まないので、**作業者へ届く経路はこの導線だけである**
-- **後から載る導線とは何か。** SDK の型定義に `InstructionsLoaded` フックが在り、`load_reason` は `session_start` / `nested_traversal` / `path_glob_match` / `include` / `compact` の5値を取る（`@anthropic-ai/claude-agent-sdk@0.3.239` 同梱 CLI 2.1.239 の `sdk.d.ts` の `InstructionsLoadedHookInput`）。**`session_start` 以外はすべてセッション途中の読み込み理由である。** 同じ `sdk.d.ts` は `settingSources` について「Must include `'project'` to load CLAUDE.md files」とも書いている
+- **後から載る導線とは何か。** SDK の型定義に `InstructionsLoaded` フックが在り、`InstructionsLoadedHookInput` の `load_reason` は次の5値を取る（`@anthropic-ai/claude-agent-sdk@0.3.261` 同梱の `sdk.d.ts`）。
+
+  > [sdk-verbatim InstructionsLoadedHookInput.load_reason]
+  > load_reason: 'session_start' | 'nested_traversal' | 'path_glob_match' | 'include' | 'compact';
+
+  **`session_start` 以外はすべてセッション途中の読み込み理由である。** そして同じ `sdk.d.ts` は、`Options.settingSources` について別のことも逐語で言っている。
+
+  > [sdk-verbatim Options.settingSources]
+  > Must include `'project'` to load CLAUDE.md files.
+
 - **いつ載るかの機構は特定されていない。** 実測が4つあり、**4つとも形が違う**（すべて 2026-08-22、別々のセッション）
   - **マネージャー(1)**: `Bash` の `cat` / `sed -n` / `grep` を repo 配下へ何度打っても載らず、**`Read` ツールで repo のファイルを1つ開いた直後に**全文が差し込まれた。2回目以降の `Read` では再送されなかった
   - **作業者**: 同じく `cat` で読み進めるあいだは載らず、**`Read` を使った後で載った。** 別の作業者は「セッションのごく最初期に載った」と報告しているが、その直前に `.claude/skills/` の `SKILL.md` を開いている
@@ -39,7 +48,12 @@
 
 **だから「ここへ書けば全員に届く」を前提にしないこと。** 載っていない層があり、載る層でも**セッション開始時には載っていない。** 実際、「載っていない」と報告したマネージャー2本は、どちらもこの文書を `cat` / `sed -n` で読んでいた。**うち1本はその後、作業中に載ったと訂正している** — つまり「載っていない」は、**その時点の観測であって恒久的な性質ではない。** 自分に載っているかどうかは、自分の文脈を見る以外に確かめる方法が無い。
 
-**毎ターン再送されるかは確かめていない。** マネージャー層でも作業者層でも観測できたのは**1セッションにつき1回**で、2回目以降の `Read` では差し込まれなかった。一度載れば以降は会話履歴として残り続けるので、「毎ターン新しく送られる」のか「1回載って残るだけ」なのかは**この観測では区別できていない**（`sdk.d.ts` の `FileReadOutput` に `source?: "seeded"` があり、CLAUDE.md が `Read` と同じ重複排除に乗ることは読める）。**ただし compaction を跨げば読み直される** — CLI の実装が compaction のときに既読フラグ（`loadedNestedMemoryPaths`）と `readFileState` を丸ごと消しているのを、バイナリ内の文字列で確認した。**実際に起きるところは見ていない。**
+**毎ターン再送されるかは確かめていない。** マネージャー層でも作業者層でも観測できたのは**1セッションにつき1回**で、2回目以降の `Read` では差し込まれなかった。一度載れば以降は会話履歴として残り続けるので、「毎ターン新しく送られる」のか「1回載って残るだけ」なのかは**この観測では区別できていない**（`sdk-tools.d.ts` の `FileReadOutput` の `source` 欄の doc が、CLAUDE.md が `Read` と同じ重複排除に乗ることを逐語で言っている）。
+
+> [sdk-verbatim FileReadOutput.source]
+> Set when the dedup matched a startup-seeded entry (CLAUDE.md / nested memory) rather than a prior Read tool_result
+
+**ただし compaction を跨げば読み直される** — CLI の実装が compaction のときに既読フラグ（`loadedNestedMemoryPaths`）と `readFileState` を丸ごと消しているのを、バイナリ内の文字列で確認した。**実際に起きるところは見ていない。**
 
 **それでもここが太れば、届いた層はそのぶん重くなる。** 枠は有限で、枠は成果物の量そのものなので、**書く先を2つにするという結論は変わらない。変わったのは理由と桁である** — 効くのは「届いた層 × そのセッションに1回」であって、「全員 × 全ターン」ではない。**そして新しい理由で言えるのはそこまでである。** 「全員が同時に重くなる」とは、もう言えない。
 
@@ -59,7 +73,13 @@
 
 **スキルへ移すときは移すだけで、要約も短縮もしない**（north_star 禁止2。能力を削って軽さを実現しない）。移設は「載る時機を変える」ことであって「読めるものを減らす」ことではない。**移した先で内容が縮んでいたら、それは移設ではなく削減である。**
 
-- スキルの一覧（名前と説明）は `skills: 'all'` で載る、と書いてあったが、**それが効くのはクローンとマネージャーだけである。作業者には載らない。** `buildManagerSessionOptions`（`packages/core/src/claude-provider.ts`）は `agents` エントリに `skills` を書いていないので（`AgentDefinition.skills` が `'all'` を受けないため意図してそうしてある）。**SDK 側の裏も取れている** — `sdk.d.ts` の `Options.skills` に「Applies to the main session only; subagents use `AgentDefinition.skills`」と在り、`AgentDefinition.skills` の型は `string[]` のみである（`@anthropic-ai/claude-agent-sdk@0.3.239` / 同梱 CLI 2.1.239）、**作業者に見えているのはハーネス既定の汎用スキルだけで、このリポジトリのスキルは1つも載っていない**（作業者層での直接観測、2026-08-22T09:35Z）。**だから作業者へ委ねるとき、スキルの中身が要るなら「`.claude/skills/<名前>/SKILL.md` を読め」と依頼文で名指しすること** — 「スキルを引け」だけでは、作業者はその一覧を持っていない
+- スキルの一覧（名前と説明）は `skills: 'all'` で載る、と書いてあったが、**それが効くのはクローンとマネージャーだけである。作業者には載らない。** `buildManagerSessionOptions`（`packages/core/src/claude-provider.ts`）は `agents` エントリに `skills` を書いていないので（`AgentDefinition.skills` が `'all'` を受けないため意図してそうしてある）。**SDK 側の裏も取れている** — `sdk.d.ts` の `Options.skills` の doc も逐語でそう言っている。
+
+  > [sdk-verbatim Options.skills]
+  > Applies to the main session only; subagents use AgentDefinition.skills
+
+  `AgentDefinition.skills` の型は `string[]` のみである（`@anthropic-ai/claude-agent-sdk@0.3.261` 同梱の `sdk.d.ts`）、**作業者に見えているのはハーネス既定の汎用スキルだけで、このリポジトリのスキルは1つも載っていない**（作業者層での直接観測、2026-08-22T09:35Z）。**だから作業者へ委ねるとき、スキルの中身が要るなら「`.claude/skills/<名前>/SKILL.md` を読め」と依頼文で名指しすること** — 「スキルを引け」だけでは、作業者はその一覧を持っていない
+
 - マネージャー層では、`cwd`（`/workspace`）配下へ clone した後に `<相対パス>:<スキル名>` の形で一覧が現れた観測例が2本ある（別のマネージャーの報告）。**現れる時機と条件は確かめていない** — 自分では未観測である
 - **ここに一覧を書き写さないこと** — 数え上げの持ち主は `.claude/skills/` そのものであって、写せば必ずずれる
 - 一覧が載っていない器で走っていたら、`.claude/skills/` を直接読めばよい。**`skills` はコンテキストのフィルタであってサンドボックスではない**（SDK の型定義に明記がある）ので、一覧に出なくてもファイルはディスク上にあり `Read` / `Bash` から到達できる

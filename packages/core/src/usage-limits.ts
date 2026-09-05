@@ -164,7 +164,7 @@ export function describeUsageNotice(notice: UsageLimitNotice): string {
  * {@link RateLimitFacts.overageDisabledReason} は、SDK が**閉じた union として
  * 型宣言している構造化された値**である（実測 2026-08-25 観測、
  * `@anthropic-ai/claude-agent-sdk@0.3.241` の `sdk.d.ts`。逐語は
- * `overageDisabledReason?: 'overage_not_provisioned'` で始まる行）。
+ * 「overageDisabledReason?: 'overage_not_provisioned'」 [sdk-verbatim SDKRateLimitInfo.overageDisabledReason] で始まる行。同じ構造は 0.3.261 でも変わらない）。
  * `org_level_disabled_until` のように、**時間の含みが値の名前に出ているもの**まで
  * 在る。
  *
@@ -261,7 +261,7 @@ export function matchedUsageLimitPrefix(text: string): string | undefined {
  *
  * `classifyUsageNotice` と**同じ順序で見る**——組織方針を先に見る。SDK 自身が
  * 「上限のカードへ回すな」と言っているものであり、待っても直らない
- * （`ORG_POLICY_LIMIT_PREFIXES` の doc: `This service is disabled for your org`）。
+ * （`ORG_POLICY_LIMIT_PREFIXES` の doc: 「This service is disabled for your org」 [sdk-verbatim ORG_POLICY_LIMIT_PREFIXES]）。
  *
  * **接近警告（`warning`）と課金枠への遷移（`transition`）は、ここへ来ても
  * `unknown` になる。** どちらも「まだ動いている」状態で、回復の見込みを問う対象

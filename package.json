@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "pnpm -r build",
+    "check:sdk-quotes": "node ./scripts/check-sdk-quotes.mjs",
     "check:web-bundle-node-traces": "node ./scripts/check-web-bundle-node-traces.mjs",
     "check:web-bundle-size": "node ./scripts/check-web-bundle-size.mjs",
     "check:web-css-comment-classnames": "node ./scripts/check-web-css-comment-classnames.mjs",

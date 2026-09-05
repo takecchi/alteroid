@@ -37,7 +37,7 @@ export const USAGE_SITES = ['session', 'distill'] as const;
 /**
  * 数字を見せるときに必ず添える但し書き。**どの口でも落とさないこと。**
  *
- * SDK の型コメントが `An estimate, not a billing statement` と明記している。
+ * SDK の型コメントが「An estimate, not a billing statement」と明記している。 [sdk-verbatim SDKResultSuccess.total_cost_usd]
  * 台帳に積んだ値を確定として見せると、それは黙って嘘をつくことになる。
  */
 export const USAGE_ESTIMATE_NOTICE =

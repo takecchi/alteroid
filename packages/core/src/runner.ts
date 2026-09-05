@@ -854,7 +854,7 @@ class RunnerSession {
    * いま開いている作業者への委譲（Task）の `task_id` 集合。
    *
    * `task_started` で追加、`task_notification` で削除する。**`skip_transcript:
-   * true` の `task_started`（SDK の JSDoc 曰く ambient/housekeeping task）も
+   * true` の `task_started`（SDK の JSDoc 曰く ambient = activity ではない task）も
    * 間引かずに数える** — 何を除外してよいかの判断を誰も持っていないので、
    * 数える側では絞らない。
    */
@@ -1012,7 +1012,7 @@ class RunnerSession {
   /**
    * いま起こしっぱなしの背景処理（`agent-events.ts` の
    * `AgentBackgroundTasksEvent`）。**REPLACE 意味論**——SDK の JSDoc が
-   * 「missed bookend cannot wedge a stale running indicator」と言っている
+   * 「missed bookend cannot wedge a stale running indicator」と言っている [sdk-verbatim SDKBackgroundTasksChangedMessage]
    * とおり、届いた `tasks` で丸ごと入れ替える。加算・削除の差分計算はしない。
    *
    * **空へ戻すのは「器（CLI プロセス）が本当に入れ替わったとき」だけ**
@@ -1321,7 +1321,7 @@ class RunnerSession {
     if (this.#query) return;
     // **ここが「器（CLI プロセス）を実際に開く／開き直す」唯一の場所である**
     // ——SDK の `SDKBackgroundTasksChangedMessage` の JSDoc が言う
-    // 「whenever the session's CLI process (re)starts」に正確に対応するのは
+    // 「whenever the session's CLI process (re)starts」[sdk-verbatim SDKBackgroundTasksChangedMessage] に正確に対応するのは
     // ここであって、次に来る `init`（`case 'session_started'`）ではない
     // （`init` はターンの頭ごとに来るだけで、器の (re)start を意味しない
     // ——詳しくは `#liveBackgroundTasks` の doc）。`#recoverFromFailedResume`
@@ -1646,13 +1646,10 @@ class RunnerSession {
     switch (event.type) {
       case 'session_started': {
         // **`init` そのものはリセットの契機にしない。** `SDKSystemMessage`
-        // の JSDoc（逐語。version 0.3.259 同梱の sdk.d.ts）:
+        // の JSDoc（逐語。version 0.3.261 同梱の sdk.d.ts）:
         //
-        // > Session metadata the CLI emits at the start of each turn,
-        // > normally ahead of every other message of that turn: session_id,
-        // > model, working directory, tools, MCP servers, slash commands,
-        // > permission mode, and the capabilities list for feature
-        // > detection.
+        // [sdk-verbatim SDKSystemMessage]
+        // > Session metadata the CLI emits at the start of each turn, normally ahead of every other message of that turn: session_id, model, working directory, tools, MCP servers, slash commands, permission mode, and the capabilities list for feature detection.
         //
         // **＝ init はターンの頭ごとに来る。** 器（CLI プロセス）が
         // (re)start したときにしか来ないのではない。
@@ -1660,10 +1657,8 @@ class RunnerSession {
         // 一方 `SDKBackgroundTasksChangedMessage` の JSDoc（同じく逐語）が
         // 言っているのは：
         //
-        // > The level is per-process: nothing is emitted at startup, so
-        // > consumers must reset to the empty set whenever the session's
-        // > CLI process (re)starts and let the next membership change
-        // > repopulate it.
+        // [sdk-verbatim SDKBackgroundTasksChangedMessage]
+        // > The level is per-process: nothing is emitted at startup, so consumers must reset to the empty set whenever the session's CLI process (re)starts and let the next membership change repopulate it.
         //
         // ここが言っているのは「背景タスクの level 信号が per-process で
         // ある」ことだけで、「init はプロセス起動時にしか来ない」ではない。
@@ -1861,7 +1856,7 @@ class RunnerSession {
           // 消費の累積を降ろす（台帳へ畳むのはデーモン）。
           //
           // **成功した result だけを通す。** SDK は
-          // `crash/startup-error results may carry zeroed values` と言っている。
+          // 「Crash/startup-error results may carry zeroed values」と言っている。 [sdk-verbatim SDKResultSuccess.total_cost_usd]
           // ゼロを「累積が 0 になった」として通すと、受け取った側の基準が下がり、
           // 次に届いた本物の累積が丸ごと増分になる＝記録済みの分がもう一度積まれる。
           //
@@ -2597,9 +2592,8 @@ class RunnerSession {
    * 作業者をその場で継続させる。** 根拠は SDK の型定義（逐語。
    * `SubagentStopHookSpecificOutput` の doc、`sdk.d.ts`）:
    *
-   * > Hook-specific output for the SubagentStop event. additionalContext is
-   * > non-error feedback delivered to the subagent; the subagent continues
-   * > so it can act on it.
+   * [sdk-verbatim SubagentStopHookSpecificOutput]
+   * > Hook-specific output for the SubagentStop event. additionalContext is non-error feedback delivered to the subagent; the subagent continues so it can act on it.
    *
    * ## ⚠️ `decision: 'block'` ではなく `additionalContext` を使う理由
    *
