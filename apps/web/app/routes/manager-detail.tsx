@@ -31,6 +31,7 @@ import type { Route } from './+types/manager-detail';
  */
 import {
   denialActorTag,
+  ManagerAwaitingBackgroundNote,
   ManagerRunnerLostNote,
   ManagerSessionMissingNote,
   ManagerStatusBadge,
@@ -254,6 +255,17 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
               sessionMissingSince={manager.sessionMissingSince}
               sessionMissingKind={manager.sessionMissingKind}
               className="border-t border-border px-4 py-3 text-xs text-warn"
+            />
+            {/*
+              **「待機中」の札のすぐ下に置く。** 札だけだと、背景処理の完了を
+              待っているマネージャーが「手が空いている」に見える——クローンの
+              `manager_list` は `done/背景処理待ち×N` と読むので、この画面にだけ
+              材料が無いと同じ状態を見て人間とクローンが違う判断をすることになる
+              （`ManagerAwaitingBackgroundNote` の doc）。
+            */}
+            <ManagerAwaitingBackgroundNote
+              awaitingBackground={manager.awaitingBackground}
+              className="border-t border-border px-4 py-3 text-xs text-muted"
             />
             <LostNote status={manager.status} />
             <FailureNote failure={manager.lastFailure} />

@@ -355,6 +355,20 @@ export {
   type RevisionSource,
   type RunnerRevisionReport,
 } from './revision.js';
+/**
+ * クローンのターンの入口へ載せる「いまの全体」（doc は `situation.ts`）。
+ *
+ * **外へ出しているのは純関数だけである。** `clone.ts` が `ManagerPool` を読んで
+ * 渡す形なので、ここから出るものは I/O をしない——歯（テスト）が `ManagerPool` の
+ * 足場を組まずに分岐へ直接当てられる（`runner-swap-notice.ts` と同じ作法）。
+ */
+export {
+  countManagerSituation,
+  countRunnerStates,
+  describeSituation,
+  describeSituationUnavailable,
+  type ManagerSituationCounts,
+} from './situation.js';
 export { CRON_EXPRESSION_MAX, isCronExpression, parseCron, type CronSchedule } from './cron.js';
 /**
  * SSE のコメント行 heartbeat。**SSE を出す側が3経路（デーモンの `POST /chat` と
@@ -395,6 +409,7 @@ export {
   WORKER_MODEL,
   WITHHELD_ENV_KEYS,
   createManagerPool,
+  type ManagerAwaitingBackground,
   type ManagerDecision,
   type ManagerDenial,
   type ManagerPool,

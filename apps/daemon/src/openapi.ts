@@ -696,6 +696,34 @@ export const managerSummarySchema = z.object({
    * 古びる。出すのは材料だけである。
    */
   lease: jobSchema.shape.lease,
+  /**
+   * **背景処理（`run_in_background` の子・作業者への委譲）の完了待ちで畳んだ
+   * 報告が握り潰されていること**（#621 / #643。`packages/core/src/manager.ts` の
+   * `ManagerSummary.awaitingBackground`）。
+   *
+   * **`status` とは別の軸なので、`status` を置き換えない。** 台帳の
+   * `status` はこの回も `done` のままである（`case 'report'` が
+   * `record.job.status = event.status;` を分岐より前に実行するため）——
+   * 「手が空いた」と「待って畳んだ」を `status` だけでは言い分けられない。
+   *
+   * **握り潰しが在るときだけ載る（`optional`）。** 常に載せると「待っていない」と
+   * 「この器では観測していない」が同じ形になる——この欄を送らない古い runner が
+   * 在るので、無いことは「そうではない」ではなく「そう名乗られていない」である。
+   *
+   * **ここに宣言しないと、値が在っても黙って落ちる**（真上の `lastReportAt` /
+   * `runnerLostSince` と同じ断り）。**落ちると CLI と Web の両方が同時に盲目に
+   * なり、クローンの `manager_list` にだけ出る形になる。**
+   */
+  awaitingBackground: z
+    .object({
+      /** 器が最後に名乗った背景タスクの在り高。 */
+      tasks: z.number(),
+      /** 握り潰した報告の本数（**在り高とは別の観測**。1つに畳まない）。 */
+      withheldReports: z.number(),
+      breakdown: z.string(),
+      since: z.string(),
+    })
+    .optional(),
   waiting: z.array(managerWaitingSchema),
   /**
    * 確認へ上がらずに止められた道具と件数（**古い順**）。

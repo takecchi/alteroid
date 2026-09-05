@@ -1373,7 +1373,11 @@ export function renderManagerList(managers: ManagerListItem[]): string {
     // **番号を振る。** `/manager` `/stop` `/msg` がこの並びを引く（#336）。
     lines.push(
       `  [${index + 1}] ${manager.managerId}  ` +
-        `[${describeManagerState(manager.status, manager.live)}]  ` +
+        // **第3引数まで通す（#621 / #643）。** ここで落とすと、人間の入口
+        // だけが「手が空いた」と「背景処理の完了を待って畳んだ」を潰した字面を
+        // 出すことになる（この関数がそもそも直した「面によって字面が割れる」形の
+        // 再発である）。
+        `[${describeManagerState(manager.status, manager.live, manager.awaitingBackground)}]  ` +
         `${summarizeText(manager.request)}`,
     );
     lines.push(`      cwd: ${manager.cwd}`);

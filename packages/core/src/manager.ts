@@ -107,6 +107,52 @@ export interface ManagerStartInput {
  */
 export type SessionMissingKind = 'resume-failed' | 'unlisted';
 
+/**
+ * **背景処理（自分が起こした `run_in_background` の子・作業者への委譲）の完了を
+ * 待って畳んだだけ**という観測（`runner-protocol.ts` の `report.awaitingBackground`）。
+ *
+ * **`status` では表せない。** `case 'report'` は `record.job.status = event.status;`
+ * を `awaitingBackground` の分岐**より前**に実行するので、`status` は必ず
+ * `'done'` へ潰れる——「手が空いた」と「待って畳んだ」が台帳の軸では同じ顔になる。
+ * だから `status` は動かさず（`ManagerDenial` / `runnerLostSince` と同じ作法）、
+ * **状態に添える**形で外へ出す。
+ *
+ * **在庫（`ManagerPool` の `#withheldReports`）の写しである。** デーモンを作り
+ * 直すと消える（台帳には載らない）——消えても日誌の `type: 'decision'` は残る
+ * （`WithheldReportMemory` の doc）。**`undefined` は「背景処理は無い」ではなく
+ * 「そう名乗られていない」である**（この欄を送らない古い runner が在る）。
+ */
+export interface ManagerAwaitingBackground {
+  /**
+   * 器が最後に名乗った**背景タスクの在り高**
+   * （`runner-protocol.ts` の `report.awaitingBackground.count` の写し）。
+   *
+   * **`withheldReports` と1つに畳まない。** 「背景タスクが3つ残っている」と
+   * 「報告を2本握り潰した」は別の観測である——同じ1本のマネージャーが、
+   * 3つのタスクを待ちながら2回畳めば `tasks: 3` / `withheldReports: 2` になる。
+   */
+  tasks: number;
+  /** 握り潰した報告の本数（`WithheldReportMemory.count` の写し）。 */
+  withheldReports: number;
+  /**
+   * 最後に積んだ回の内訳（`taskType×件数` をカンマで繋いだ文字列。
+   * `local_agent×3` のように**作業者への委譲も数に入る**）。
+   *
+   * **判定には使わない**（`runner-protocol.ts` の `report.awaitingBackground` の
+   * doc と同じ——診断用の写しである）。
+   */
+  breakdown: string;
+  /**
+   * **最初に積んだ時刻**（`WithheldReportMemory.firstAt` の写し。ISO8601）。
+   *
+   * **`lastAt` ではない。** 読む側が知りたいのは「いつから待っているか」で、
+   * 期限の判定（`flushWithheldReports()`）に使う `lastAt` とは別の問いである。
+   * 判定そのものはここへ載せない（時刻で答えが変わるものを一覧に焼かない——
+   * `lease` と同じ作法）。
+   */
+  since: string;
+}
+
 export interface ManagerSummary {
   managerId: string;
   status: JobStatus;
@@ -384,6 +430,16 @@ export interface ManagerSummary {
    * 5分前の確認か4時間前の確認かで打つ手が変わる（#323）。
    */
   waiting: RunnerWaiting[];
+  /**
+   * **背景処理の完了待ちで畳んだ報告が握り潰されていること**（doc は
+   * {@link ManagerAwaitingBackground}）。握り潰しが無ければ**欄ごと消える**。
+   *
+   * **`undefined` ＝「そうではない」ではなく「そう名乗られていない」。**
+   * `runnerLostSince` / `sessionMissingSince` と同じ作法で、`status` は動かさず
+   * 状態に**添える**（`ManagerAwaitingBackground` の doc）。字面にするのは
+   * `describeManagerState`（`digest.ts`）1箇所だけである。
+   */
+  awaitingBackground?: ManagerAwaitingBackground;
 }
 
 /**
@@ -483,6 +539,18 @@ export interface RunnerManagerEntry {
   status: JobStatus;
   /** このデーモンから話しかけられるか（`ManagerSummary.live` の写し）。 */
   live: boolean;
+  /**
+   * 背景処理の完了待ちで畳んだ報告の握り潰し（`ManagerSummary.awaitingBackground`
+   * の写し）。**`live` と同じ理由でここにも運ぶ**——運ばないと、`manager_list` が
+   * 区別している「手が空いた」と「背景処理を待っている」が `runner_list` の側で
+   * だけ潰れる（この interface の doc が `live` について言っているのと同じ潰れ方）。
+   *
+   * **`live` と違って省略可能である。** あちらは常に取れる値（`isLive()` が必ず
+   * 答える）だが、こちらは**握り潰しが在るときだけ立つ印**なので、`undefined` が
+   * 正常な状態そのものである。既定を持たせても「取れているのに取れていないと
+   * 名乗る」形にはならない。
+   */
+  awaitingBackground?: ManagerAwaitingBackground;
 }
 
 /**
@@ -1962,6 +2030,16 @@ interface WithheldReportMemory {
   lastText: string;
   /** 最後に積んだ回の `awaitingBackground.breakdown`（診断用の写し）。 */
   breakdown: string;
+  /**
+   * 最後に積んだ回の `awaitingBackground.count`（＝ runner が最後に見た**背景
+   * タスクの在り高**。`breakdown` と同じ回の写し）。
+   *
+   * **真上の `count`（積んだ報告の本数）とは別物である。1つに畳まない。**
+   * 「報告を2本握り潰した」と「背景タスクが3つ残っている」は別の観測で、
+   * 読み手の次の一手も違う（前者は配り直しの話、後者は待ち時間の話）。
+   * `flushWithheldReports()` の文言が数えているのは前者のほうである。
+   */
+  taskCount: number;
 }
 
 /**
@@ -2503,6 +2581,7 @@ class Pool implements ManagerPool {
       record.turnEndTail,
       record.toolUseStallAt,
       record.toolUseStallPending,
+      this.#awaitingBackgroundOf(record.job.id),
     );
   }
 
@@ -2888,6 +2967,7 @@ class Pool implements ManagerPool {
           record.turnEndTail,
           record.toolUseStallAt,
           record.toolUseStallPending,
+          this.#awaitingBackgroundOf(record.job.id),
         ),
       );
     }
@@ -2912,6 +2992,7 @@ class Pool implements ManagerPool {
           fallback.turnEndTail,
           fallback.toolUseStallAt,
           fallback.toolUseStallPending,
+          this.#awaitingBackgroundOf(job.id),
         ),
       );
     }
@@ -2952,6 +3033,11 @@ class Pool implements ManagerPool {
         managerId: manager.managerId,
         status: manager.status,
         live: manager.live,
+        // **`live` と同じ理由で運ぶ**（`RunnerManagerEntry` の doc）。材料は
+        // すぐ上の `list()` が既に載せてある——ここでも往復は増えない。
+        ...(manager.awaitingBackground === undefined
+          ? {}
+          : { awaitingBackground: manager.awaitingBackground }),
       };
       if (manager.runnerId === undefined) {
         unassigned.push(item);
@@ -3566,6 +3652,7 @@ class Pool implements ManagerPool {
             record.turnEndTail,
             record.toolUseStallAt,
             record.toolUseStallPending,
+            this.#awaitingBackgroundOf(record.job.id),
           ),
         );
         continue;
@@ -3669,6 +3756,7 @@ class Pool implements ManagerPool {
             record.turnEndTail,
             record.toolUseStallAt,
             record.toolUseStallPending,
+            this.#awaitingBackgroundOf(record.job.id),
           ),
         );
       } catch (error) {
@@ -6394,7 +6482,40 @@ class Pool implements ManagerPool {
       lastAt: now,
       lastText: text,
       breakdown: awaitingBackground.breakdown,
+      // **在り高は上書きする（足し込まない）。** `awaitingBackground.count` は
+      // runner がその回に見た**在り高**（REPLACE 意味論。`runner.ts` の
+      // `#liveBackgroundTasks` の doc）であって増分ではない——足すと、同じ
+      // タスクを畳んだ回数だけ二重に数えることになる。`breakdown` を上書きして
+      // いるのと同じ理由・同じ扱いである。
+      taskCount: awaitingBackground.count,
     });
+  }
+
+  /**
+   * 在庫（`#withheldReports`）を `ManagerSummary` / `RunnerManagerEntry` が
+   * 出せる形へ写す（doc は {@link ManagerAwaitingBackground}）。
+   *
+   * **`WithheldReportMemory` をそのまま外へ出さない。** あちらは
+   * `flushWithheldReports()` のための帳面で、`lastAt`（期限判定の材料）と
+   * `lastText`（配り直すときの本文）を持つ。前者は読む側の問い（「いつから
+   * 待っているか」）とは別の時点、後者は**報告の本文そのもの**で、一覧の1行へ
+   * 出すものではない（一覧に本文を全文で載せない——`listing-and-detail`）。
+   * だから `count` / `breakdown` / `firstAt` の3つだけを選んで写す。
+   *
+   * **読むだけで、在庫は動かさない。** 消すのは `#emit()` /
+   * `flushWithheldReports()` / `case 'closed'` の3経路だけである——一覧を
+   * 開いたことで握り潰しが配られたことになると、`manager_list` を呼ぶたびに
+   * 受信箱が動く（クローンの opt-in を踏み潰す形。north_star 禁止2）。
+   */
+  #awaitingBackgroundOf(managerId: string): ManagerAwaitingBackground | undefined {
+    const withheld = this.#withheldReports.get(managerId);
+    if (withheld === undefined) return undefined;
+    return {
+      tasks: withheld.taskCount,
+      withheldReports: withheld.count,
+      breakdown: withheld.breakdown,
+      since: withheld.firstAt,
+    };
   }
 
   /**
@@ -7160,6 +7281,7 @@ function summaryOf(
   turnEndTail: string | undefined,
   toolUseStallAt: string | undefined,
   toolUseStallPending: PendingToolUse[] | undefined,
+  awaitingBackground: ManagerAwaitingBackground | undefined,
 ): ManagerSummary {
   const { job } = record;
   return {
@@ -7233,5 +7355,14 @@ function summaryOf(
      * 読んだ瞬間から古びる）。**出すのは材料だけで、判定は読む側がその時刻でやる。**
      */
     ...(job.lease === undefined ? {} : { lease: job.lease }),
+    /*
+     * **`live` と同じ引数の作法で運ぶ（省略可能な引数にしない）。** 材料は台帳
+     * ではなく `Pool` の在庫（`#withheldReports`）なので、`record` からは読め
+     * ない——だから引数で受け、呼ぶ側に `#awaitingBackgroundOf()` を必ず書か
+     * せる。既定を置くと、足す人が考えなかったことが「背景処理は待っていない」
+     * という主張になって外へ出る（`ManagerAwaitingBackground` の doc——
+     * `undefined` は「そうではない」ではなく「そう名乗られていない」である）。
+     */
+    ...(awaitingBackground === undefined ? {} : { awaitingBackground }),
   };
 }

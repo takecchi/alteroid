@@ -2,7 +2,7 @@ import { excerptLine } from './excerpt.js';
 // **型だけを取る**（`import type` は実行時に消えるので、`manager.ts` との間に
 // 実行時の循環を作らない）。字面の生成元をここに置く理由は
 // `describeSessionMissingKind` の doc に在る。
-import type { SessionMissingKind } from './manager.js';
+import type { ManagerAwaitingBackground, SessionMissingKind } from './manager.js';
 import { describeScheduleSpec } from './schedule.js';
 import type { JobStatus, JournalEntry, PendingApproval } from './schema.js';
 import type { Stores } from './store.js';
@@ -50,6 +50,19 @@ export const MAX_ITEMS = 15;
 export type ManagerLiveness = ReadonlyMap<string, boolean>;
 
 /**
+ * マネージャーの id から「背景処理の完了待ちで畳んだ報告を握り潰しているか」への
+ * 写像（`ManagerLiveness` と同じ理由で持つ）。
+ *
+ * **ジョブ台帳の軸ではない。** 材料は `ManagerPool` のプロセス内の在庫
+ * （`#withheldReports`）なので、`buildActivityDigest` は自分では取れず、
+ * 呼び出し側（`clone.ts`）に渡してもらう。**`ManagerLiveness` と別の Map に
+ * してあるのは、片方だけ取れた回を潰さないためである**——1つの Map に畳むと、
+ * `live` は取れたが握り潰しは無かった委譲と、そもそも何も取れなかった委譲が
+ * 同じ「載っていない」になる。
+ */
+export type ManagerAwaitingBackgroundMap = ReadonlyMap<string, ManagerAwaitingBackground>;
+
+/**
  * マネージャー1本の状態を、`manager_list`（`tools.ts`）と**同じ字面**で言う。
  *
  * **`describeManagerState` を通す側と通さない側で字面が割れると、「走行中」と
@@ -65,8 +78,48 @@ export type ManagerLiveness = ReadonlyMap<string, boolean>;
  * ここでは呼ぶ側（`liveness?.get(job.id)`）が構造的に `undefined` を返しうる
  * ので、必須にする代わりに**否定でも肯定でもない第三の値**（`/セッション不明`）
  * を既定にして、同じ轍（省略が黙って「繋がっている」と名乗ること）を避ける。
+ *
+ * ## 第3引数（`awaitingBackground`）— 「手が空いた」と「背景処理を待っている」を潰さない
+ *
+ * `status: 'done'` は2つの状態を同じ字面へ潰していた。**手が空いた**（次の指示を
+ * 待っている）と、**自分が起こした背景処理・作業者の完了を待って畳んだだけ**である。
+ * runner は最初から区別して報告しており（`runner-protocol.ts` の
+ * `report.awaitingBackground`。作業者への委譲も `local_agent` として数に入る）、
+ * デーモンもそれを受け取って在庫（`manager.ts` の `#withheldReports`）に持って
+ * いるが、`job.status` へは写らない——`case 'report'` が
+ * `record.job.status = event.status;` を `awaitingBackground` の分岐**より前**に
+ * 実行するので、`status` は必ず `'done'` へ潰れる。**潰れたぶんを字面の側で戻す。**
+ *
+ * **`undefined` ＝「そうではない」ではなく「そう名乗られていない」である。**
+ * この欄が立つのは runner が `awaitingBackground` を送ってきた回だけで、その欄を
+ * まだ送らない古い runner では、実際に背景処理を待っていても立たない（`report.
+ * awaitingBackground` の `.optional()` の doc——ずれはどちらの向きでも「配る」側へ
+ * 倒れる）。**だから `undefined` に「背景処理は無い」と言わせない**——この関数は
+ * 何も書き足さないだけである（`live` の `undefined` を `true` へ倒さないのと同じ
+ * 向きの判断で、**言っていないことを言わせない**）。
+ *
+ * **`live` の字面の後ろに足す。** 2つは別の軸で、同時に立つ（話しかけられない
+ * まま背景処理を待っていることがある）——`done/セッション切断/背景処理待ち×3` の
+ * ように両方が並ぶ形にしてあり、片方がもう片方を隠さない。
  */
-export function describeManagerState(status: JobStatus, live: boolean | undefined): string {
+export function describeManagerState(
+  status: JobStatus,
+  live: boolean | undefined,
+  awaitingBackground?: { tasks: number },
+): string {
+  const base = describeLiveState(status, live);
+  // **背景タスクの在り高だけを足す。** `breakdown`（`local_agent×3` のような内訳）はここへ
+  // 載せない——一覧の1行に出る字面で、件数に比例して伸びるものを載せると、
+  // 溜まっているときほど一覧が重くなる（`listing-and-detail` の性質1）。
+  // 内訳が要るなら `manager_report` / 日誌（`type: 'decision'` の `grounds`）に
+  // 全文が在る。
+  return awaitingBackground === undefined
+    ? base
+    : `${base}/背景処理待ち×${awaitingBackground.tasks}`;
+}
+
+/** `describeManagerState` の `live` の部分だけ（3値の分岐は1文字も変えていない）。 */
+function describeLiveState(status: JobStatus, live: boolean | undefined): string {
   if (live === true) return status;
   if (live === false) return `${status}/セッション切断`;
   return `${status}/セッション不明`;
@@ -372,11 +425,19 @@ function usageOmitted(total: number, shown: number, axis: string, unit: string):
  * `/セッション不明` になる——**黙って「繋がっている」と名乗ることが
  * 起こり得ない**ので、省略は静かに嘘をつかず、出力に「取れていない」と
  * そのまま出る（`describeManagerState` の doc と同じ理由）。
+ * @param awaitingBackground マネージャーの id から「背景処理の完了待ちで畳んだ
+ * 報告を握り潰しているか」への写像（`ManagerAwaitingBackgroundMap` の doc）。
+ * **`liveness` と同じ理由で必須にしない。** 省略時は
+ * `describeManagerState` が全件 `undefined` を受け取り、**何も書き足さない**
+ * ——それは「背景処理を待っていない」という主張ではなく「そう名乗られていない」
+ * である（`ManagerAwaitingBackground` の doc）。⟹ 省略しても、取れていない
+ * ことを「手が空いている」と偽る側へは倒れない。
  */
 export async function buildActivityDigest(
   stores: Stores,
   window: DigestWindow,
   liveness?: ManagerLiveness,
+  awaitingBackground?: ManagerAwaitingBackgroundMap,
 ): Promise<string> {
   const until = window.until ?? new Date(Date.now() + 1);
   const entries = (await stores.journal.list({ since: window.since.toISOString() })).filter(
@@ -595,7 +656,7 @@ export async function buildActivityDigest(
     const shownManagers = managers.slice(0, MAX_ITEMS);
     for (const job of shownManagers) {
       sections.push(
-        `- ${job.id} [${describeManagerState(job.status, liveness?.get(job.id))}] ${brief(job.request ?? job.summary)}` +
+        `- ${job.id} [${describeManagerState(job.status, liveness?.get(job.id), awaitingBackground?.get(job.id))}] ${brief(job.request ?? job.summary)}` +
           (job.lastReport === undefined ? '' : `\n  直近の報告: ${brief(job.lastReport)}`),
       );
     }

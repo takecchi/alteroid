@@ -28,6 +28,43 @@ describe('describeManagerState', () => {
   it('live: undefined は「/セッション不明」——否定でも肯定でもない第三の値', () => {
     expect(describeManagerState('running', undefined)).toBe('running/セッション不明');
   });
+
+  /**
+   * 第3引数（#621 / #643）。**`status: 'done'` は「手が空いた」と「背景処理の
+   * 完了を待って畳んだ」を潰している**——潰れたぶんを字面の側で戻す。
+   * （`manager.ts` の `case 'report'` が `record.job.status = event.status;` を
+   * 握り潰しの分岐より前に実行するので、`status` は必ず `'done'` になる。）
+   */
+  it('背景処理待ちのときは件数を足す（done が2つの状態を潰したままにしない）', () => {
+    expect(describeManagerState('done', true, { tasks: 3 })).toBe('done/背景処理待ち×3');
+  });
+
+  /**
+   * **2つは別の軸で、同時に立つ。** 片方がもう片方を隠さないことを固定する
+   * ——隠すと、話しかけられないまま背景処理を待っている委譲が、どちらか一方
+   * にしか見えなくなる。
+   */
+  it('セッション切断と背景処理待ちは両方並ぶ（片方が片方を隠さない）', () => {
+    expect(describeManagerState('done', false, { tasks: 1 })).toBe(
+      'done/セッション切断/背景処理待ち×1',
+    );
+    expect(describeManagerState('done', undefined, { tasks: 2 })).toBe(
+      'done/セッション不明/背景処理待ち×2',
+    );
+  });
+
+  /**
+   * **`undefined` は「背景処理は無い」ではなく「そう名乗られていない」である。**
+   * この欄を送らない古い runner が在るので、`undefined` に何かを言わせない——
+   * この関数は**何も書き足さない**だけである（`live` の `undefined` を `true` へ
+   * 倒さないのと同じ向き）。
+   */
+  it('第3引数を省略しても、直す前と1文字も変わらない', () => {
+    expect(describeManagerState('done', true)).toBe('done');
+    expect(describeManagerState('done', true, undefined)).toBe('done');
+    expect(describeManagerState('done', false, undefined)).toBe('done/セッション切断');
+    expect(describeManagerState('done', undefined, undefined)).toBe('done/セッション不明');
+  });
 });
 
 /**
