@@ -175,25 +175,40 @@ describe('describeSituation', () => {
     expect(text).toContain('話しかけられるのは 1 本');
   });
 
+  /**
+   * **5つの区分に、それぞれ違う本数を割り当てる。** 同じ数を2つの区分へ置くと、
+   * その2つを取り違える変異が緑のまま通る——実際に踏んだ: `手が空いている
+   * ${counts.idle}` を `${counts.other}` へ差し替える変異が、`idle === other === 1`
+   * だったこの歯では生き残り、`clone-situation-notice.test.ts`（`idle: 1` /
+   * `other: 0`）だけが殺していた（変異試験の実測。この歯はその後に直した形）。
+   */
   it('数えた本数がそのまま出る（背景処理待ちと手が空いているを取り違えない）', () => {
     const text = describeSituation({
       managers: [
         summary('a', 'running', true),
-        summary('b', 'waiting_human', true),
-        summary('c', 'done', true, BG),
-        summary('d', 'done', true, BG),
-        summary('e', 'done', true),
-        summary('f', 'lost', false),
+        summary('b', 'running', true),
+        summary('c', 'running', true),
+        summary('d', 'waiting_human', true),
+        summary('e', 'waiting_human', true),
+        summary('f', 'waiting_human', true),
+        summary('g', 'waiting_human', true),
+        summary('h', 'done', true, BG),
+        summary('i', 'done', true, BG),
+        summary('j', 'done', true),
+        summary('k', 'lost', false),
+        summary('l', 'failed', false),
       ],
       runners: [],
     });
-    expect(text).toContain('委譲 全 6 本');
-    expect(text).toContain('走行中 1');
-    expect(text).toContain('返事待ち 1');
+    expect(text).toContain('委譲 全 12 本');
+    // 走行中3 / 返事待ち4 / 背景処理待ち2 / 手が空いている1 / その他2 —— **どの2つも
+    // 同じ数にしない**（同じ数だと、その2つを入れ替える変異が捕まらない）。
+    expect(text).toContain('走行中 3');
+    expect(text).toContain('返事待ち 4');
     expect(text).toContain('背景処理待ち 2');
     expect(text).toContain('手が空いている 1');
-    expect(text).toContain('その他 1');
-    expect(text).toContain('話しかけられるのは 5 本');
+    expect(text).toContain('その他 2');
+    expect(text).toContain('話しかけられるのは 10 本');
   });
 
   /**
