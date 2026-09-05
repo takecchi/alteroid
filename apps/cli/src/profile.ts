@@ -144,9 +144,9 @@ async function put(script: string, known?: Target): Promise<void> {
   for (const runner of result.runners) report(runner.runnerId, runner);
 
   // **どこまで届いたかを正直に言う。** 器を焼き直す手順を探させないために
-  // 「即座に効く」ことは言うが、走行中の仕事に全部届くとは言わない — bash が
-  // `BASH_ENV` を読むのはスクリプトとして起こされたときだけで、SDK の Bash は
-  // セッションごとの永続シェルなので、既に走っている仕事の環境は変わらない。
+  // 「即座に効く」ことは言うが、走行中の仕事に全部届くとは言わない — `BASH_ENV`
+  // は非対話の bash なら `bash -c` でも読まれるものの、実測では届く相手と届かない
+  // 相手が混在する（`packages/core/src/profile.ts` のモジュール doc）。
   // ここを大きく書くと、効いていない相手が居ることに誰も気づけなくなる。
   if (script.trim().length > 0) {
     stdout.write('（これから起こす仕事には即座に効きます。走行中の仕事は gh / git だけが\n');

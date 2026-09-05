@@ -38,9 +38,11 @@ afterEach(() => {
 /**
  * 実物の bash に `BASH_ENV` として読ませて、1行を出させる。
  *
- * **スクリプトファイルとして起こす。** `bash -c` は、stdin が端末でないと
- * `BASH_ENV` を読まない（Node から起こすと必ずそうなる）。ここで見たいのは
- * 「読まれたときに後始末が効くか」なので、確実に読まれる形で起こす。
+ * **スクリプトファイルとして起こす。** ここで見たいのは「読まれたときに後始末が
+ * 効くか」なので、読まれる形で起こす。**`bash -c` でも読まれる**（読まないのは
+ * 対話シェルだけ。下の `describe('BASH_ENV が読まれる条件')` が実物で測っている）
+ * — かつてここには「`bash -c` は stdin が端末でないと読まない」と書いてあったが、
+ * 実物は逆である。
  */
 function viaBashEnv(dir: string, script: string, profilePath: string): string {
   const runner = join(dir, `run-${randomUUID().slice(0, 8)}.sh`);
@@ -114,6 +116,82 @@ describe('器に置く形', () => {
       });
       expect(out).toBe('1');
     });
+  });
+});
+
+/**
+ * **`BASH_ENV` が読まれる条件を、実物の bash で測る。**
+ *
+ * この repo は長らく「`bash -c`（stdin が端末でない）では `BASH_ENV` を読まない」と
+ * 書いていた。**実物の挙動は逆である。読まないのは対話シェルだけ**で、`bash -c` も
+ * `bash -lc` も読む。「stdin が端末でない」という条件は、bash の実際の挙動とは
+ * **逆向き**である（端末でないほうが読む側である）。
+ *
+ * **この誤りは事故になった**（2026-09-05）。委譲先が対照実験のために
+ * `env -u <鍵> …` で鍵を外して走らせたが、入れ子の `bash -c` が `BASH_ENV` から
+ * プロファイルを読み直して鍵を再 `export` したため、**外れないまま本物の API を
+ * 叩いた。** 外れなかったことは**エラーにならない** — 鍵が在るので動いてしまう。
+ *
+ * **コメントは実行されないが、歯は実行される。** 誤った記述は6箇所に分かれて
+ * 3週間以上残り、そのどれも赤くならなかった。ここが赤くなったら、**記述のほうを
+ * 実物に合わせ直すこと**（この歯を緩めるのではなく）。
+ */
+describe('BASH_ENV が読まれる条件', () => {
+  /**
+   * 実物の bash を、**器の環境を1つも継がずに**起こす（`env -i` に当たる）。
+   *
+   * 継ぐと、測っているものが器の状態に依存するうえ、**器が配っている本物の鍵が
+   * 測定対象に混ざる。** この歯が触ってよいのはダミーだけである。
+   */
+  const marker = (args: readonly string[], profilePath: string): string =>
+    execFileSync('/bin/bash', [...args, 'printf %s "${ALTEROID_PROFILE_TEST_MARKER:-none}"'], {
+      encoding: 'utf8',
+      env: { BASH_ENV: profilePath },
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+
+  let path: string;
+
+  beforeEach(() => {
+    path = join(dir, 'profile.sh');
+    writeFileSync(path, 'export ALTEROID_PROFILE_TEST_MARKER=read\n');
+  });
+
+  it('bash -c は BASH_ENV を読む', () => {
+    expect(marker(['-c'], path)).toBe('read');
+  });
+
+  it('非対話のログインシェル（bash -lc）も読む', () => {
+    expect(marker(['-lc'], path)).toBe('read');
+  });
+
+  it('読まないのは対話シェル（bash -ic）だけである', () => {
+    expect(marker(['-ic'], path)).toBe('none');
+  });
+
+  /**
+   * **帰結。これが事故の形そのものである。**
+   *
+   * `env -u <名前>` が作るのは「その名前を持たない env」である。そこに `BASH_ENV`
+   * が残っていると、起きた bash がプロファイルを読み直して**同じ名前を入れ直す。**
+   * 外したい側は **`BASH_ENV` も一緒に外す**必要がある。
+   *
+   * 値はダミーである。**実物の鍵をこの歯に持ち込まないこと。**
+   */
+  it('env から名前を外しても、BASH_ENV が残っていればプロファイルが入れ直す', async () => {
+    const vessel = createProfileVessel({ path });
+    await vessel.set('export ALTEROID_PROFILE_TEST_MARKER=read');
+
+    // `env -u ALTEROID_PROFILE_TEST_MARKER` に当たる env（その名前を持たない）
+    expect(marker(['-c'], path)).toBe('read');
+    // `BASH_ENV` も一緒に外した場合だけ、外したものが外れたままになる
+    expect(
+      execFileSync('/bin/bash', ['-c', 'printf %s "${ALTEROID_PROFILE_TEST_MARKER:-none}"'], {
+        encoding: 'utf8',
+        env: {},
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }),
+    ).toBe('none');
   });
 });
 

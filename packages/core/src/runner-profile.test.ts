@@ -17,8 +17,9 @@ import { createRunnerHost, WITHHELD_ENV_KEYS, type RunnerHost } from './runner.j
  * - **評価済みの env**（本命）。これを継承した先でマネージャーも作業者も
  *   MCP サーバも走る ＝ これから起こす仕事には即座に効く
  * - **`BASH_ENV` の所在**。効く場面のための口で、**走行中の仕事への配達を
- *   ここに期待しない**（`bash -c` では読まれず、SDK の Bash は永続シェルである）。
- *   走行中へ届くのは `gh` シムがファイルを読み直す経路だけ
+ *   ここに期待しない**（`bash -c` でも読まれるが、届く相手と届かない相手が
+ *   混在する。`profile.ts` のモジュール doc）。走行中へ確実に届くのは `gh` シムが
+ *   ファイルを読み直す経路だけ
  */
 
 interface Started {
