@@ -292,7 +292,7 @@ git -C <main のツリー> apply --check -R /tmp/tail.patch   # 通れば main �
 
 - **パイプの終了コードは、既定で最後のコマンドのものである** — `tail` / `grep` / `jq` / `wc` は入力が空でも成功する。上流の結果が要るなら `PIPESTATUS` を見る
 - **⚠️ その前に — `grep` と打っても GNU grep が走るとは限らない。この器では走らない。** Claude Code が profile で `grep` という bash 関数を注入していて、実体は `claude` バイナリを `ARGV0=ugrep` で起こしたもの（`ugrep`、固定引数 `-G --ignore-files --hidden -I --exclude-dir=.git …`）である。`type -a grep` で見える。**本物の GNU grep は `command grep` で呼ぶ。** そして **node / dash / CI から呼ぶと GNU grep に戻る**（bash の profile を通らないため）。⟹ **同じ `grep …` が、打つ主体で別の道具になる** — Bash で打つ AI（ugrep）／歯や CI が spawn したもの（GNU grep）／人間の端末（**未確認**）の3つに分かれる。**正規表現の方言も既定のオプションも違うので、下の5つを読む前に「いま自分はどちらを打っているか」を決めること**（実測 2026-08-25 観測、`ugrep 7.8.4` / `GNU grep 3.8`）
-- **`grep` が静かに取りこぼす形は5つある。1と3と5は探し方を変えても見つからない（道具が見ていない／嘘をつく）。2と4は探し方を変えれば見つかる（見ているのに探し方の側で取りこぼす）。前者は道具の話、後者は注意の話である。⚠️ そして3と5は道具を替えれば見つかる — 直上の「どの grep か」の軸である**
+- **`grep` が静かに取りこぼす形は6つある。1と3と5と6は探し方を変えても見つからない（道具が見ていない／嘘をつく）。2と4は探し方を変えれば見つかる（見ているのに探し方の側で取りこぼす）。前者は道具の話、後者は注意の話である。⚠️ そして3と5と6は道具を替えれば見つかる — 直上の「どの grep か」の軸である**
   1. **終了コード・件数が嘘をつく。** `grep -c` が返す 0 は2つの意味を持つ — 該当が無い / 上流が落ちて何も出力しなかった
   2. **検索語が識別子の一部で、前後が付いた形（camelCase の複合語）に一致しない。** 大文字小文字を区別する既定では、語が複合語に取り込まれた瞬間に境界の文字が大文字化し、素の語と一致しなくなる（`startedHere` で探すと `setStartedHere` を取りこぼす、という形。この具体例自体は別途報告されたもので、今回の実測ではない）。**実測で見つかった実例**（`apps/web/app/test-support.tsx`）: `grep -c 'viewportWidth' apps/web/app/test-support.tsx` は `5`（変数名としての行のみ）を返すが、`setViewportWidth`（`export function setViewportWidth` の定義行を含む）3行を取りこぼす。`-i` を付けると `8` になる。**対策: `-i` を併用する、または識別子の一部として現れる形を想定して短く切って探す**
   3. **ファイルがバイナリ判定され、中身を一切見ない。⚠️ ただしこれは道具に依存する — 下の実例は shim（ugrep の `-I`）の挙動であって、GNU grep 3.8 では起きない**（実測 2026-08-25。後述）**。** 実例（`main` の `69057f1`、PR #92。`apps/web/app/routes/chat.tsx` に生の NUL が2バイト入っていた。PR #102 が撤去）:
@@ -354,6 +354,36 @@ git -C <main のツリー> apply --check -R /tmp/tail.patch   # 通れば main �
      ```
 
      **⚠️ D より B のほうが静かである。** D は 0 件なので「測れていない 0 かもしれない」と疑う契機が在るが、**B は結果が返る。欠落したぶんは出力にも exit code にも `PIPESTATUS` にも現れない。** ⟹ **数え上げの分母が黙って縮む。** **対策: 生成物・依存・`dist` を含めたいなら `command grep -rn` か `rg --no-ignore` を使う。全走査で数を根拠にするなら、shim・`command grep`・`rg --no-ignore` の3本で取って突き合わせる**
+
+  6. **`-v` と `-c` を併せたときだけ、件数が1少なくなる。** shim（ugrep）の欠陥で、GNU grep には無い。**条件は「入力の末尾に改行が無い」ことだけ**である。⚠️ **`-c` 単独は正しく、`-v` 単独（行を出す側）も正しい。壊れるのは併せたときの件数だけ**なので、**「`-c` が合っているから `-vc` も合っている」と読むと踏む。** **誤差は必ず 0 の側へ倒れる**（返るのは `max(正しい件数 − 1, 0)`）⟹ **「未完は無い」「該当なし」「問題なし」を _作る_ 向きにしか壊れない**（実測 2026-09-06 観測、`ugrep 7.8.4` / `GNU grep 3.8`、Claude Code 2.1.261）:
+
+     ```
+     $ printf 'a\nb' | grep -vc 'x'                    → 1   # 正しくは 2（shim）
+     $ printf 'a\nb' | command grep -vc 'x'            → 2   # GNU grep
+     $ printf 'a\nb' | rg -vc 'x'                      → 2   # rg
+     $ printf 'a\nb' | grep -c '.'                     → 2   # ← -c 単独は正しい
+     $ printf 'a\nb\n' | grep -vc 'x'                  → 2   # ← 末尾に改行が在れば正しい
+     # 1件が0件に化ける形 ＝「該当なし」を作る経路
+     $ printf 'a' | grep -vc 'x'                       → 0   # 正しくは 1
+     # 書き方は関係ない（-cv / -v -c / 長い形、どれも同じ）
+     $ printf 'a\nb' | grep --invert-match --count 'x' → 1
+     ```
+
+     **`$(...)` は末尾の改行を落とす。** ⟹ コマンド置換で受けた変数を `printf '%s' "$VAR" |` で流す形は**必ず**この条件に入る。**逆に `echo "$VAR" |` ・ `<<< "$VAR"` ・コマンドから直接パイプする形は改行が付くので踏まない**（実測 2026-09-06 観測）:
+
+     ```
+     $ V=$(git log --oneline -3)                # 末尾の改行はここで落ちる
+     $ printf '%s' "$V" | grep -vc 'ZZZ'        → 2   # 正しくは 3
+     $ echo "$V"        | grep -vc 'ZZZ'        → 3
+     $ git log --oneline -3 | grep -vc 'ZZZ'    → 3
+     $ printf '%s' "$V" | grep -v 'ZZZ' | wc -l → 3   # ← 分ければどの実装でも正しい
+     ```
+
+     **件数が 0 に化けると exit code も 1（該当なし）になる。** 数と exit code が揃って「無い」側へ倒れるので、`if` で受けても気づけない。**⚠️ ただし stdout を `/dev/null` へ捨てたときだけ exit 0 が返った**（同日実測。`> ファイル`・コマンド置換・パイプでは exit 1）。**この食い違いの機序は分かっていない。**
+
+     **ファイル引数でも同じに壊れる**（末尾に改行の無いファイルを名指ししたとき）。**対策: 数えるときは `-v` と `-c` を併せない — `grep -v … | wc -l` に分ける。** `command grep -vc` / `rg -vc` でもよい。**この形を repo に書き込ませない歯が在る**（逐語は `grep -Fn -- '-v と -c を併せた grep' scripts/check-no-grep-vc.test.ts`）
+
+     **⚠️ CI では起きない。** GitHub Actions の `ubuntu-latest` に shim は無く、`grep -vc` は正しい値を返す（実測 2026-09-06 観測、`ubuntu-24.04` / `GNU grep 3.11`。`~/.claude/shell-snapshots/` が存在しない）。⟹ **手元で数えた件数と CI で数え直した件数が食い違う。** 直上の「どの grep か」が、そのままこの項目の軸である
 - **対策は `trap ... EXIT` で必ず1行出す形にすること。** 出ていなければ「静かに死んだ」と読める
 - **「判定できない」という3つ目の状態を持つ。** 2値にすると、判定できない場合がどちらかへ黙って倒れる
 - **`cd` はコマンド列の先頭ごとに置き、失敗したら即終了する** — cwd が戻ったことに気づかず、`gh` が `not a git repository` で20分黙って死んだ。別のマネージャーも PR #91 の作業中に同じ `gh` の `not a git repository` を踏んだと報告している（前面・バックグラウンドどちらの呼びの組み合わせで踏んだかは記録されていない）。**前面のコマンドとバックグラウンドで起動したコマンドは `cd` の寿命の閉じ方が違う** — 実測（2026-08-20T07:44Z）: `run_in_background: true` で `cd /workspace/worker-1aa8c87d/repo && pwd` を起こすと出力ファイルには `cd` 後のパスが書かれるが、直後の前面呼びの `pwd` は元の session cwd のまま変わらなかった（ツール自身も `Session cwd remains ...; directory changes made by the backgrounded command do not apply to subsequent commands.` と明示する）。**バックグラウンドの `cd` はその実行中しか効かず、前面の session cwd には一度も反映されない**のに対し、前面の `cd` は同じ1呼びの中でだけ効いて次の呼びで同じ元の cwd に戻る
