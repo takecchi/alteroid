@@ -200,12 +200,26 @@ describe('denialInputShape（秘密が漏れないこと）', () => {
       forbidden: ['ghp_XXXXXXXXXXXX', 'hunter2', 'hunter3'],
     },
     {
-      // GitHub の PAT は `ghp_` + 36文字。プログラム名の位置（先頭の語）に
-      // 単独で来た、現実的な長さの鍵の形。SECRET_ISH_MIN_LENGTH（英数字混在・
-      // 12文字以上を伏せる）が狙って落とす対象そのもの。
+      // GitHub の PAT は `ghp_` + 36文字＝40文字。プログラム名の位置（先頭の語）に
+      // 単独で来た、現実的な長さの鍵の形。
+      //
+      // **この1本を守っているのは SAFE_HEAD_WORD の32文字上限であって、
+      // SECRET_ISH_MIN_LENGTH ではない**（変異試験で測った——
+      // SECRET_ISH_MIN_LENGTH を無効にしてもこの歯は落ちない）。
+      // 2段目だけが守る範囲は次のケースが撃つ。
       label: '鍵が現実的な形でプログラム名の位置に来た回（ghp_ + 36文字ダミー）',
       input: { command: 'ghp_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX push' },
       forbidden: ['ghp_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'],
+    },
+    {
+      // **SECRET_ISH_MIN_LENGTH だけが守っている範囲**（英数字混在・12〜32文字）。
+      // AWS のアクセスキー id は20文字の英大文字＋数字で、`=` も `:` も `/` も
+      // 含まないので SAFE_HEAD_WORD は素通しする。値は AWS の公式ドキュメントが
+      // 例として載せているダミー（`EXAMPLE` で終わる）で、本物ではない。
+      label:
+        '長さ上限では落ちない鍵がプログラム名の位置に来た回（AWS のアクセスキー id 相当・20文字）',
+      input: { command: 'AKIAIOSFODNN7EXAMPLE --profile x' },
+      forbidden: ['AKIAIOSFODNN7EXAMPLE'],
     },
   ];
 
