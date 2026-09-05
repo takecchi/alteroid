@@ -5138,6 +5138,24 @@
                             },
                             "required": ["runnerId", "fence", "grantedAt", "seenAt", "ttlMs"]
                           },
+                          "awaitingBackground": {
+                            "type": "object",
+                            "properties": {
+                              "tasks": {
+                                "type": "number"
+                              },
+                              "withheldReports": {
+                                "type": "number"
+                              },
+                              "breakdown": {
+                                "type": "string"
+                              },
+                              "since": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["tasks", "withheldReports", "breakdown", "since"]
+                          },
                           "waiting": {
                             "type": "array",
                             "items": {
@@ -5398,6 +5416,24 @@
                             }
                           },
                           "required": ["runnerId", "fence", "grantedAt", "seenAt", "ttlMs"]
+                        },
+                        "awaitingBackground": {
+                          "type": "object",
+                          "properties": {
+                            "tasks": {
+                              "type": "number"
+                            },
+                            "withheldReports": {
+                              "type": "number"
+                            },
+                            "breakdown": {
+                              "type": "string"
+                            },
+                            "since": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["tasks", "withheldReports", "breakdown", "since"]
                         },
                         "waiting": {
                           "type": "array",

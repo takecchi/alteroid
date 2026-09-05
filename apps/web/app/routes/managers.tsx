@@ -315,6 +315,63 @@ export function ManagerRunnerLostNote({
  * 畳まない——`packages/core/src/manager.ts` の `ManagerSummary.sessionMissingKind`
  * の doc と同じ理由。文言は `describeSessionMissingKindNote`（このファイル）が持つ。
  */
+/**
+ * **背景処理の完了待ちで畳んだ報告が握り潰されている**ことを、状態の札に
+ * 添える（#621 / #643。`packages/core/src/manager.ts` の
+ * `ManagerSummary.awaitingBackground`）。
+ *
+ * ## なぜ札を差し替えないのか
+ *
+ * `status` は `done`（画面では「待機中」）のままである——`case 'report'` が
+ * `record.job.status = event.status;` を握り潰しの分岐**より前**に実行するので、
+ * 台帳の軸ではこの2つが同じ顔になる。**それでも札は動かさない**
+ * （`ManagerDenialNote` / `ManagerFailureNote` / `ManagerRunnerLostNote` と
+ * 同じ作法——状態を置き換えるものではなく、状態に**添える**）。
+ *
+ * ## 主張1つにつき部品1つ
+ *
+ * 直上の2つ（器が黙った／runner にセッションが無い）とは**別の主張**である
+ * ——こちらは器も答えていてセッションも在り、`live` も落ちない。**手が空いた
+ * ように見えて、実は自分が起こした背景処理を待っている**という1点だけを言う。
+ * （`ManagerSessionMissingNote` の doc が引いている線と同じ。1つに畳むと、
+ * doc が「いまどちらの主張をしているか」を毎回条件で言い分けることになる。）
+ *
+ * ## クローンの `manager_list` と同じ材料を出す
+ *
+ * クローンの側は `describeManagerState`（`packages/core/src/digest.ts`）を通して
+ * `done/背景処理待ち×N` と読む。**この画面にだけ材料が無いと、同じ状態を見て
+ * 人間とクローンが違う判断をすることになる**（この一覧が `ManagerRunnerLostNote`
+ * について既に書いている理由と同じ）。**字面までは揃えていない**——ここは札では
+ * なく注記で、`packages/core` を Web のバンドルへ引き込まない
+ * （`describeSessionMissingKindNote` の doc）。
+ *
+ * ## `undefined` は「背景処理は無い」ではない
+ *
+ * この印は runner が `awaitingBackground` を名乗った回にだけ立つ。まだこの欄を
+ * 送らない器では、実際に待っていても立たない（`runner-protocol.ts` の
+ * `report.awaitingBackground` の `.optional()` の doc）。**だから注記が無い
+ * ことを「手が空いている」と読ませない文言にはしない**——**何も描かない**だけに
+ * する（無いものについて何か書けば、それが主張になる）。
+ */
+export function ManagerAwaitingBackgroundNote({
+  awaitingBackground,
+  className = 'mt-1 text-[11px] text-muted',
+}: {
+  awaitingBackground: ManagerSummary['awaitingBackground'];
+  className?: string;
+}) {
+  if (awaitingBackground === undefined || awaitingBackground === null) return null;
+  return (
+    <p className={className}>
+      背景処理の完了待ちで畳んだターンである（手が空いたのではない）。器が最後に名乗った在り高は
+      {awaitingBackground.tasks} 件（{awaitingBackground.breakdown}）で、
+      {formatRelative(awaitingBackground.since)}
+      から待っている。この間の報告 {awaitingBackground.withheldReports}{' '}
+      本はクローンへ配っていない（捨てたのではない — 完了すれば次の報告と一緒に届く）。
+    </p>
+  );
+}
+
 export function ManagerSessionMissingNote({
   sessionMissingSince,
   sessionMissingKind,
@@ -434,6 +491,13 @@ export default function Managers() {
                       まま）。札はそのまま残し、その隣に添える。
                     */}
                     <ManagerFailureNote failure={manager.lastFailure} />
+                    {/*
+                      これも `status` に映らない（`done` のまま）。札は差し替えず
+                      隣に添える（`ManagerAwaitingBackgroundNote` の doc）。
+                    */}
+                    <ManagerAwaitingBackgroundNote
+                      awaitingBackground={manager.awaitingBackground}
+                    />
                     {/*
                       `live: false` の理由を、分かる分だけ名指しする。「セッション
                       切断」の札だけだと、セッションが終わったのか宛先の器が消えた

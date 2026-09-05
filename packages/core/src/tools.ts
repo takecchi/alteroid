@@ -4044,7 +4044,7 @@ export function createCloneTools(context: ToolContext) {
           return text(
             `[${managerId}] ${result.detail}\n` +
               `**止まっていない。** runner には ${managerId} のセッションがまだ残っている。` +
-              `いまの状態: ${after === undefined ? '一覧から消えている' : describeManagerState(after.status, after.live)}。` +
+              `いまの状態: ${after === undefined ? '一覧から消えている' : describeManagerState(after.status, after.live, after.awaitingBackground)}。` +
               ' manager_list で確かめ、必要ならもう一度止めること。',
           );
         }
@@ -4076,7 +4076,7 @@ export function createCloneTools(context: ToolContext) {
         lines.push(
           after === undefined
             ? '一覧からも消えている。'
-            : `いまの状態: ${describeManagerState(after.status, after.live)}。`,
+            : `いまの状態: ${describeManagerState(after.status, after.live, after.awaitingBackground)}。`,
         );
         return text(lines.join('\n'));
       },
@@ -4142,6 +4142,15 @@ export function createCloneTools(context: ToolContext) {
         // あって「進んでいる」ではなく、done は「マネージャーのターンが終わった」
         // であって「仕事が終わった」ではない。⚠ の行がその差を埋める。
         '状態の名前はデーモンが観測できた範囲でしかないので、⚠ の行まで読むこと。',
+        // **#621 / #643**: `done` が「手が空いた」と「背景処理の完了を待って
+        // 畳んだ」を潰していた。字面（`done/背景処理待ち×N`）を足しただけでは
+        // クローンには届かない——道具の説明文に何を意味するかを書く（上の
+        // `resources: true` / #572 の行と同じ理由）。
+        'done/背景処理待ち×N は、そのマネージャーが自分で起こした背景処理（run_in_background の子）や' +
+          '作業者への委譲の完了を待って畳んだだけで、手が空いたのではないという意味である。' +
+          'N はそのとき握り潰した報告の本数で、内訳は manager_report と日誌（decision）に在る。' +
+          '**この印は器が名乗った分にだけ立つ** — この欄を送らない古い器では、背景処理を待っていても' +
+          '立たない。だから **印が無いことを「手が空いている」と読まないこと。**',
         '依頼文と報告は抜粋なので、全文が要るなら manager_report で取ること。',
         // **#579**: 「runner にセッションが無い」を、誰かが送るまで待たずに
         // 名乗れるようになった。⚠ の行そのものの字面は変えていない——変えたのは
@@ -4211,7 +4220,10 @@ export function createCloneTools(context: ToolContext) {
         const items = managers.map((manager) =>
           renderListingEntry({
             id: manager.managerId,
-            title: `[${describeManagerState(manager.status, manager.live)}]`,
+            // **第3引数まで通す（#621 / #643）。** `status: 'done'` は
+            // 「手が空いた」と「背景処理の完了を待って畳んだ」を潰している——
+            // 潰れたぶんを戻すのは `describeManagerState` 1箇所である。
+            title: `[${describeManagerState(manager.status, manager.live, manager.awaitingBackground)}]`,
             createdAt: manager.startedAt,
             updatedAt: manager.updatedAt,
             summary: `依頼: ${excerptLine(manager.request, LIST_REQUEST_EXCERPT)}`,
@@ -4852,13 +4864,23 @@ export function createCloneTools(context: ToolContext) {
         'ここで数えている本数はデーモンの台帳から見た数である。新しいマネージャーを' +
           'どこへ置くか（資源による自動配置）の判断が使う本数は runner 自身が /health で' +
           '名乗る別の値で、この一覧とはずれうる——混ぜて配置の判断を予測しないこと。',
-        'state は5値（connecting/connected/unreachable/unusable/lost）のまま出る。' +
-          'unreachable（まだ開けていない）と lost（開けていたのに黙った）は別物である。',
+        // **6値である**（`runner-protocol.ts` の `runnerLivenessSchema`。
+        // `manager.ts` の `RunnerOverview.state` の doc も6値だと言っている）。
+        // ここだけが5値のまま `vacating` を落としていた——**クローンは道具の
+        // 説明しか読まない**ので、`vacating` の器が出たときその字面を知らない
+        // ことになる。
+        'state は6値（connecting/connected/unreachable/unusable/lost/vacating）のまま出る。' +
+          'unreachable（まだ開けていない）と lost（開けていたのに黙った）は別物である。' +
+          'vacating は「意図して空けている最中」（drain）で、黙ったのではなく空けると決めた側である——' +
+          'lost と同じく新しい委譲の置き先からは外れるが、走っていた仕事ごと黙ったわけではない。',
         // **マネージャーの状態の字面は manager_list と揃える。** 片方だけが
         // 「セッション切断」を出すと、同じ相手を2つの道具で見たクローンが
         // どちらが本当かを判定できない（#540 と同じ潰れ方）。
         '器ごとの内訳に出るマネージャーの状態は manager_list と同じ字面である' +
-          '（running / running/セッション切断 / running/セッション不明）。' +
+          '（running / running/セッション切断 / running/セッション不明 / done/背景処理待ち×N）。' +
+          '「背景処理待ち」は、そのマネージャーが自分で起こした背景処理や作業者の完了を待って' +
+          '畳んだだけで、手が空いたのではないという意味である（器が名乗った分だけ出る——' +
+          'この欄を送らない古い器では、待っていても出ない）。' +
           '「セッション切断」は、その委譲にこのデーモンからもう話しかけられないという意味で、' +
           '仕事が終わったという意味ではない。',
         'デーモン自身の版と、各 runner が名乗った版（コミット sha）も出る。' +
@@ -4989,7 +5011,10 @@ export function createCloneTools(context: ToolContext) {
                 // 同じ状態が2つの道具で違う字面になる（#540 が digest で直した
                 // のと同じ潰れ方が、この一覧に残っていた）。
                 shown
-                  .map((m) => `${m.managerId}[${describeManagerState(m.status, m.live)}]`)
+                  .map(
+                    (m) =>
+                      `${m.managerId}[${describeManagerState(m.status, m.live, m.awaitingBackground)}]`,
+                  )
                   .join(', ') +
                 (rest === 0 ? '' : `, …ほか ${rest} 本は省略（manager_list で全部見える）`),
             );
@@ -5099,7 +5124,10 @@ export function createCloneTools(context: ToolContext) {
             `どの器か分からない: ${overview.unassigned.length}件（` +
               // 器ごとの内訳と同じ生成元を通す（上の doc と同じ理由）。
               shown
-                .map((m) => `${m.managerId}[${describeManagerState(m.status, m.live)}]`)
+                .map(
+                  (m) =>
+                    `${m.managerId}[${describeManagerState(m.status, m.live, m.awaitingBackground)}]`,
+                )
                 .join(', ') +
               (rest === 0 ? '' : `, …ほか ${rest} 本は省略（manager_list で全部見える）`) +
               '）。runnerId が記録されていない古いマネージャーで、どの器の内訳にも混ぜていない。',

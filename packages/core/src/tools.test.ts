@@ -3766,6 +3766,93 @@ describe('クローンの道具', () => {
    * （歯は `manager-tool-stall.test.ts`）。**ここで見るのは3条件目——
    * `waiting` が空であること——との突き合わせと、その言い方である。**
    */
+  /**
+   * **`done` が2つの状態を潰していたのを、字面の側で戻す**（#621 / #643）。
+   *
+   * `manager.ts` の `case 'report'` は `record.job.status = event.status;` を
+   * 握り潰しの分岐**より前**に実行するので、背景処理の完了待ちで畳んだ回も
+   * `status` は `'done'` になる。実測（2026-09-05）で `runner_list` の47本が
+   * 全部 `[done]` に見えたのがこの潰れ方である。
+   *
+   * **字面そのものの固定は `digest.test.ts` の `describeManagerState` の歯が
+   * 持つ。** ここで見るのは、この一覧がその生成元へ第3引数まで渡していること
+   * である。
+   */
+  describe('manager_list は「背景処理待ち」と「手が空いた」を潰さない（#621 / #643）', () => {
+    it('握り潰しが在れば done/背景処理待ち×N と出る', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.status = 'done';
+      target.awaitingBackground = {
+        tasks: 3,
+        withheldReports: 2,
+        breakdown: 'local_agent×3',
+        since: '2026-09-05T00:00:00.000Z',
+      };
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('[done/背景処理待ち×3]');
+    });
+
+    /**
+     * **陰性対照。** 握り潰しが無ければ1文字も足さない——`undefined` は
+     * 「背景処理は無い」ではなく「そう名乗られていない」なので、ここで
+     * 何かを書くとそれが主張になる。
+     */
+    it('握り潰しが無ければ done のままで、背景処理の語を1つも足さない', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.status = 'done';
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('[done]');
+      expect(reply).not.toContain('背景処理待ち×');
+    });
+
+    /**
+     * **内訳（`breakdown`）は一覧の1行へ載せない**（`listing-and-detail` の
+     * 性質1——件数に比例して伸びるものを毎行に積まない）。全文は
+     * `manager_report` と日誌に在る。
+     */
+    it('内訳（breakdown）は一覧の行へ載せない', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.status = 'done';
+      target.awaitingBackground = {
+        tasks: 3,
+        withheldReports: 2,
+        breakdown: 'BREAKDOWN-MARKER-a91f',
+        since: '2026-09-05T00:00:00.000Z',
+      };
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('[done/背景処理待ち×3]');
+      expect(reply).not.toContain('BREAKDOWN-MARKER-a91f');
+    });
+
+    /**
+     * **道具の説明文にも書く。** 字面を足しただけではクローンには届かない
+     * （JSDoc は読まれない。`resources: true` / #572 の行と同じ理由）。
+     */
+    it('道具の説明文が「印が無い＝手が空いている」ではないと断る', () => {
+      const stores = createMemoryStores();
+      const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+      const description = tools.find((entry) => entry.name === 'manager_list')?.description;
+
+      expect(description).toContain('done/背景処理待ち×N');
+      expect(description).toContain('印が無いことを「手が空いている」と読まないこと');
+    });
+  });
+
   describe('manager_list は「道具の応答待ちのまま、誰も待っていない」を出す（#572）', () => {
     it('toolUseStallPending が無ければ ⚠ を出さない', async () => {
       const h = harness();
@@ -4653,6 +4740,75 @@ describe('runner_list（器の一覧）', () => {
    * どの器か分からない委譲についてだけ `[running]` へ潰れたままになる——
    * そこは「古い委譲」が集まる場所なので、いちばん切れている確率が高い。
    */
+  /**
+   * **器ごとの内訳でも「背景処理待ち」を潰さない**（#621 / #643）。潰すと、
+   * `manager_list` が区別している2つが `runner_list` の側でだけ潰れる——
+   * 直上の「セッション切断」と完全に同じ潰れ方である。
+   */
+  it('内訳のマネージャーの「背景処理待ち」も manager_list と同じ字面で出す', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-a',
+          revision: { status: 'unheard' },
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-a',
+          managers: [
+            {
+              managerId: 'mgr-bg',
+              status: 'done',
+              live: true,
+              awaitingBackground: {
+                tasks: 3,
+                withheldReports: 1,
+                breakdown: 'local_agent×3',
+                since: '2026-09-05T00:00:00.000Z',
+              },
+            },
+            { managerId: 'mgr-idle', status: 'done', live: true },
+          ],
+        },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', {});
+
+    expect(reply).toContain('mgr-bg[done/背景処理待ち×3]');
+    // 陰性対照: 握り潰しの無い側には1文字も足さない。
+    expect(reply).toContain('mgr-idle[done]');
+  });
+
+  /**
+   * **説明文が名乗る state の数を、実装（`runnerLivenessSchema`）と合わせる。**
+   * 直す前は5値と書いてあり、`vacating` が落ちていた——**クローンは道具の
+   * 説明しか読まない**ので、`vacating` の器が出たときその字面を知らないまま
+   * になる（`manager.ts` の `RunnerOverview.state` の doc は6値だと正しく
+   * 言っていた）。
+   */
+  it('説明文が state を6値で名乗り、vacating が何かを添える', () => {
+    const stores = createMemoryStores();
+    const tools = createCloneTools({ stores, emit: () => undefined, memoryCause: () => 'clone' });
+    const description = tools.find((entry) => entry.name === 'runner_list')?.description ?? '';
+    for (const state of [
+      'connecting',
+      'connected',
+      'unreachable',
+      'unusable',
+      'lost',
+      'vacating',
+    ]) {
+      expect(description, `state（${state}）が説明文に無い`).toContain(state);
+    }
+    expect(description).toContain('state は6値');
+    expect(description).not.toContain('state は5値');
+    // 名前を並べるだけにしない——読んだ側が次の一手を決められる説明を添える。
+    expect(description).toContain('意図して空けている最中');
+  });
+
   it('別枠（どの器か分からない）のマネージャーも同じ字面で出す', async () => {
     const h = harness();
     h.setRunnersOverview({

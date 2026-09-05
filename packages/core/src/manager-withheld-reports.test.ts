@@ -505,6 +505,170 @@ describe('abort() で止めた委譲が握り潰した積みを抱えていた�
   });
 });
 
+/**
+ * **握り潰しが一覧から見えること**（#621 / #643 の続き）。
+ *
+ * 直す前、この在庫（`#withheldReports`）は日誌と private な帳面にしか残らず、
+ * `ManagerSummary` にも `job.status` にも1文字も写らなかった。**`case 'report'`
+ * は `record.job.status = event.status;` を握り潰しの分岐より前に実行するので、
+ * `status` は必ず `'done'` へ潰れる**——読む側からは「手が空いた」と区別が
+ * つかない。実測（2026-09-05）で `runner_list` の47本が全部 `[done]` に見えた
+ * のがこの潰れ方である。
+ */
+/**
+ * **在庫（`#withheldReports`）が積まれるまで待つ。**
+ *
+ * ⚠️ **台帳（`lastReport`）の更新を合図にしないこと。** `case 'report'` は
+ * `#persist` → 日誌 → `#withholdBackgroundReport` の順で走るので、台帳が
+ * 更新された時点では在庫はまだ積まれていない。実際にそれで踏んだ——
+ * 台帳を合図にして時計を進めたら、**時計を進めた後で1本目が積まれ**、
+ * `since`（最初に積んだ時刻）が進んだ時刻に化けた。
+ *
+ * **在庫そのものを外から読める口（`list()`）で待つ。** 待ち切れは
+ * `vi.waitFor` の時間切れとして出るが、**判定は `expect` に撃たせる**
+ * （呼び出し側で改めて中身を見る。`.claude/skills/mutation-testing/`）。
+ */
+async function waitForWithheld(pool: ManagerPool, managerId: string, withheldReports: number) {
+  return vi.waitFor(async () => {
+    const summary = (await pool.list()).find((entry) => entry.managerId === managerId);
+    if (summary?.awaitingBackground?.withheldReports !== withheldReports) {
+      throw new Error('在庫がまだ積まれていない');
+    }
+    return summary;
+  });
+}
+
+/** 在庫が空になるまで待つ（`waitForWithheld` の対。理由は同じ doc）。 */
+async function waitForNoWithheld(pool: ManagerPool, managerId: string) {
+  return vi.waitFor(async () => {
+    const summary = (await pool.list()).find((entry) => entry.managerId === managerId);
+    if (summary?.awaitingBackground !== undefined) throw new Error('在庫がまだ残っている');
+    return summary;
+  });
+}
+
+describe('握り潰しは一覧（ManagerSummary / RunnerManagerEntry）から見える', () => {
+  it('list() の要約に tasks / withheldReports / breakdown / since が載る', async () => {
+    const { pool, fake } = await runningManualSetup();
+
+    fake.report('mgr-withhold', '完了を待つ', 'done', {
+      awaitingBackground: { count: 3, breakdown: 'local_agent×3' },
+    });
+    const summary = await waitForWithheld(pool, 'mgr-withhold', 1);
+    // **在り高（tasks）と握り潰した本数（withheldReports）は別の観測である。**
+    // ここでは背景タスクが3つ、握り潰した報告は1本——1つに畳んでいたら、
+    // どちらかの数がもう片方に化ける。
+    expect(summary?.awaitingBackground).toEqual({
+      tasks: 3,
+      withheldReports: 1,
+      breakdown: 'local_agent×3',
+      // 時計は `runningManualSetup` が固定している（`now: () => clock`）。
+      since: '2026-09-01T00:00:00.000Z',
+    });
+
+    // **`status` は動かさない**（`runnerLostSince` / `ManagerDenial` と同じ作法）。
+    // 動かすと、この欄が在ることと status の値が二重に同じことを言い始める。
+    expect(summary?.status).toBe('done');
+
+    await pool.stop();
+  });
+
+  /**
+   * **`since` は `firstAt`（最初に積んだ時刻）であって `lastAt` ではない。**
+   * 読む側が知りたいのは「いつから待っているか」で、期限の判定
+   * （`flushWithheldReports()`）が見る `lastAt` とは別の問いである。
+   */
+  it('2本目を積んでも since は最初の時刻のまま、握り潰した本数だけが増える', async () => {
+    const { pool, fake, advance } = await runningManualSetup();
+
+    fake.report('mgr-withhold', '1本目', 'done', { awaitingBackground: AWAITING });
+    // **1本目が積まれてから時計を進める**（真上の `waitForWithheld` の doc）。
+    await waitForWithheld(pool, 'mgr-withhold', 1);
+
+    advance(5 * 60_000);
+    fake.report('mgr-withhold', '2本目', 'done', { awaitingBackground: AWAITING });
+    const summary = await waitForWithheld(pool, 'mgr-withhold', 2);
+    // **握り潰した本数だけが増え、在り高（`AWAITING.count` = 1）は上書きである。**
+    expect(summary?.awaitingBackground?.withheldReports).toBe(2);
+    expect(summary?.awaitingBackground?.tasks).toBe(1);
+    expect(summary?.awaitingBackground?.since).toBe('2026-09-01T00:00:00.000Z');
+
+    await pool.stop();
+  });
+
+  /**
+   * **一覧を開いても在庫は動かない。** `list()` が配る側の副作用を持つと、
+   * `manager_list` を呼ぶたびに受信箱が動く（クローンの opt-in を踏み潰す形。
+   * north_star 禁止2）。
+   */
+  it('list() を何度呼んでも在庫は配られない（受信箱も増えない）', async () => {
+    const { pool, inbox, fake } = await runningManualSetup();
+
+    fake.report('mgr-withhold', '完了を待つ', 'done', { awaitingBackground: AWAITING });
+    await waitForWithheld(pool, 'mgr-withhold', 1);
+
+    const before = inbox.length;
+    const first = (await pool.list()).find((entry) => entry.managerId === 'mgr-withhold');
+    const second = (await pool.list()).find((entry) => entry.managerId === 'mgr-withhold');
+    expect(first?.awaitingBackground).toEqual(second?.awaitingBackground);
+    expect(first?.awaitingBackground?.withheldReports).toBe(1);
+    expect(inbox.length).toBe(before);
+
+    await pool.stop();
+  });
+
+  /**
+   * **配ったら欄ごと消える。** 残ると、もう配り終えた委譲がいつまでも
+   * 「背景処理待ち」に見える——「手が空いている」を数える側がそのぶん減る。
+   */
+  it('積みが配られた後は欄ごと消える', async () => {
+    const { pool, fake } = await runningManualSetup();
+
+    fake.report('mgr-withhold', '握り潰される回', 'done', { awaitingBackground: AWAITING });
+    // **先に、欄が立つことを確かめる。** これが無いと下の `toBeUndefined()` は
+    // 空振りで真になる（一度も立たない世界でも通ってしまう）。
+    expect((await waitForWithheld(pool, 'mgr-withhold', 1)).awaitingBackground).toBeDefined();
+
+    fake.report('mgr-withhold', '本物の報告', 'done');
+    const summary = await waitForNoWithheld(pool, 'mgr-withhold');
+    expect(summary?.awaitingBackground).toBeUndefined();
+    expect(summary?.status).toBe('done');
+
+    await pool.stop();
+  });
+
+  /**
+   * **`runner_list` の器ごとの内訳にも運ぶ。** 運ばないと、`manager_list` が
+   * 区別している2つが `runner_list` の側でだけ潰れる（`RunnerManagerEntry` の
+   * doc が `live` について言っているのと同じ潰れ方）。
+   */
+  it('runners() の器ごとの内訳にも載る', async () => {
+    const { pool, fake } = await runningManualSetup();
+
+    fake.report('mgr-withhold', '完了を待つ', 'done', {
+      awaitingBackground: { count: 2, breakdown: 'local_agent×2' },
+    });
+    await waitForWithheld(pool, 'mgr-withhold', 1);
+
+    const overview = await pool.runners();
+    const entry = overview.runners
+      .flatMap((runner) => runner.managers)
+      .find((manager) => manager.managerId === 'mgr-withhold');
+    expect(entry?.awaitingBackground?.tasks).toBe(2);
+    expect(entry?.awaitingBackground?.withheldReports).toBe(1);
+    expect(entry?.awaitingBackground?.breakdown).toBe('local_agent×2');
+    // 陰性対照: 握り潰しが無ければ欄は立たない。
+    fake.report('mgr-withhold', '本物の報告', 'done');
+    await waitForNoWithheld(pool, 'mgr-withhold');
+    const after = (await pool.runners()).runners
+      .flatMap((runner) => runner.managers)
+      .find((manager) => manager.managerId === 'mgr-withhold');
+    expect(after?.awaitingBackground).toBeUndefined();
+
+    await pool.stop();
+  });
+});
+
 describe('flushWithheldReports（時間で必ず配る逃げ道）', () => {
   it('期限を過ぎた積みを配る', async () => {
     const { pool, inbox, fake, advance } = await runningManualSetup();

@@ -92,6 +92,37 @@ describe('renderManagerList', () => {
   });
 
   /**
+   * **人間の入口だけが `done` を潰したままにならないこと**（#621 / #643）。
+   *
+   * `describeManagerState` に第3引数（背景処理の完了待ち）が増えたとき、ここが
+   * 渡し忘れると**この画面だけが「手が空いた」と「背景処理を待って畳んだ」を
+   * 同じ `[done]` で出す**——この関数がそもそも直した「面によって字面が割れる」
+   * 形の再発である。字面そのものの固定は core の
+   * `digest.test.ts` が持ち、ここで見るのは渡していることだけである。
+   */
+  it('背景処理の完了待ちも describeManagerState と同じ字面で出す（第3引数を渡している）', () => {
+    const text = renderManagerList([
+      manager({
+        status: 'done',
+        live: true,
+        awaitingBackground: {
+          tasks: 3,
+          withheldReports: 1,
+          breakdown: 'local_agent×3',
+          since: '2026-09-05T00:00:00.000Z',
+        },
+      }),
+    ]);
+
+    expect(text).toContain('[done/背景処理待ち×3]');
+    // 陰性対照: 握り潰しが無ければ1文字も足さない。
+    expect(renderManagerList([manager({ status: 'done', live: true })])).toContain('[done]');
+    expect(renderManagerList([manager({ status: 'done', live: true })])).not.toContain(
+      '背景処理待ち',
+    );
+  });
+
+  /**
    * **`live: false` の理由を、分かる分だけ名指しする。** 状態名だけだと
    * 「セッションが終わった」のか「宛先の器が消えた」のかが読めず、人間の打つ手が
    * 決まらない。**断定は「器が黙っている」までである。**

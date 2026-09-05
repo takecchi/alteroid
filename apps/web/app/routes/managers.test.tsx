@@ -258,6 +258,52 @@ describe('失敗も、状態を置き換えずに状態へ添える', () => {
  * どちらも `[running/セッション切断]` と明示している — Web だけが肯定側しか
  * 描いていなかった（北極星 禁止1 を逆向きに踏む）。
  */
+/**
+ * **「待機中」が2つの状態を潰していた**（#621 / #643）。手が空いた委譲と、
+ * 自分が起こした背景処理・作業者の完了を待って畳んだ委譲は、台帳ではどちらも
+ * `done` である（`case 'report'` が `record.job.status = event.status;` を
+ * 握り潰しの分岐より前に実行するため）。
+ *
+ * クローンは `manager_list` で `done/背景処理待ち×N` と読む——**この画面にだけ
+ * 材料が無いと、同じ状態を見て人間とクローンが違う判断をすることになる**
+ * （`sessionMissingSince` のときと同じ形。北極星 禁止1 を逆向きに踏む）。
+ */
+describe('背景処理の完了待ちは、`status` も `live` も置き換えずに添える', () => {
+  const AWAITING = {
+    tasks: 3,
+    withheldReports: 2,
+    breakdown: 'local_agent×3',
+    since: '2026-08-16T03:10:00.000Z',
+  };
+
+  it('札は「待機中」のまま、在り高・内訳・配っていない本数を隣に添える', async () => {
+    renderManagers([{ ...BASE, status: 'done', live: true, awaitingBackground: AWAITING }]);
+
+    // **札は差し替えない**（観測しているのは `done` のままである）。
+    expect(await screen.findByText('待機中')).toBeTruthy();
+    // **`live` も落ちない**——「接続あり」と同時に出るのが正しい形である。
+    expect(screen.getByText('接続あり')).toBeTruthy();
+    expect(screen.getByText(/手が空いたのではない/)).toBeTruthy();
+    expect(screen.getByText(/local_agent×3/)).toBeTruthy();
+    // **「捨てた」ではないことまで書く**——書かないと、配っていない報告が
+    // 失われたと読める。
+    expect(screen.getByText(/捨てたのではない/)).toBeTruthy();
+  });
+
+  /**
+   * **陰性対照。** この印は runner が名乗った回にだけ立つ——まだこの欄を送らない
+   * 器では、実際に待っていても立たない。だから**無いときは何も描かない**
+   * （無いものについて何か書けば、それが主張になる）。
+   */
+  it('握り潰しが無いマネージャーには何も足さない', async () => {
+    renderManagers([{ ...BASE, status: 'done', live: true }]);
+
+    expect(await screen.findByText('待機中')).toBeTruthy();
+    expect(screen.queryByText(/手が空いたのではない/)).toBeNull();
+    expect(screen.queryByText(/背景処理/)).toBeNull();
+  });
+});
+
 describe('`live` は、繋がっていないことも札で言う', () => {
   it('「走っている扱いだが繋がっていない」でも、実行中の札は残したまま切断を言う', async () => {
     renderManagers([{ ...BASE, status: 'running', live: false }]);

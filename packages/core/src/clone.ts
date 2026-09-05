@@ -25,7 +25,11 @@ import {
   foldClaudeMessage,
 } from './claude-provider.js';
 import { denialInputAbsence, denialInputShape, type DeniedRecord } from './denial-shape.js';
-import { buildActivityDigest, type ManagerLiveness } from './digest.js';
+import {
+  buildActivityDigest,
+  type ManagerAwaitingBackgroundMap,
+  type ManagerLiveness,
+} from './digest.js';
 import {
   DISTILL_GAP_ACTIVITY_SCAN_LIMIT,
   deriveDistillGapFromJournal,
@@ -54,6 +58,7 @@ import {
 import type { ProfileApplier } from './profile.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap } from './recent.js';
+import { describeSituation, describeSituationUnavailable } from './situation.js';
 import type { RunnerRegistry } from './runner-protocol.js';
 import {
   buildCloneSystemPrompt,
@@ -1039,6 +1044,19 @@ class Clone implements CloneHost {
    * その起点にだけ生まれる。ターンの入口は1か所しかない。
    */
   #commitmentNotice = '';
+  /**
+   * いまの全体（委譲の状態別の本数と、器の台数・state の内訳）。ターンの本文の
+   * 先頭に載る。**doc は `situation.ts` が持つ。**
+   *
+   * **`#commitmentNotice` と同じ場所に置く理由も同じである**（プロンプトの
+   * 組み立ては起点の数だけ散っていて、どれか1か所へ入れ忘れると、その起点にだけ
+   * 全体の見えないターンが生まれる。ターンの入口は1か所しかない）。
+   *
+   * **それでも `#commitmentNoticeFor` には混ぜない。** 材料の器も、読めなかった
+   * ときの倒れ先も違う（`situation.ts` 冒頭。`turn-input.ts` の「規則が違うものを
+   * 同じ場所に置かない」）。
+   */
+  #situationNotice = '';
 
   /** SDK へ流す入力の待ち行列。 */
   readonly #input: SDKUserMessage[] = [];
@@ -1817,6 +1835,15 @@ class Clone implements CloneHost {
         noteDroppedRecord('未了の断り書きの組み立て', inboxEventShape(event), error);
         return '';
       });
+      // **ここも `try` の外である**（直上と同じ理由——投げれば受信箱のループごと
+      // 死ぬ）。**ただし倒れ先が違う。** 台帳の断り書きは読めなければ空文字＝節が
+      // 消えるが、こちらは消さずに「数えられなかった」と名乗る行を出す
+      // （`describeSituationUnavailable`）。0 で埋めると「全部片付いている」と
+      // 読めるので、いちばん見落としたい向きへ倒れる。
+      this.#situationNotice = await this.#situationNoticeFor(batch).catch((error: unknown) => {
+        noteDroppedRecord('いまの全体の組み立て', inboxEventShape(event), error);
+        return describeSituationUnavailable(error);
+      });
       try {
         if (mergedHuman !== null) await this.#runHumanTurn(mergedHuman);
         else if (mergedReports !== null) await this.#runManagerReportBatch(mergedReports);
@@ -1827,6 +1854,7 @@ class Clone implements CloneHost {
       } finally {
         this.#redeliveryNotice = '';
         this.#commitmentNotice = '';
+        this.#situationNotice = '';
         // **枠のせいで処理できなかったかは、ここで初めて分かることがある。**
         // `#handle` の中（`#dispatch` の `result` / `rate_limit_event` /
         // `system` 通知）で今回の合図が枠に当たったと判明したなら、この時点で
@@ -2362,6 +2390,51 @@ class Clone implements CloneHost {
       '',
     ];
     return lines.join('\n');
+  }
+
+  /**
+   * ターンの本文の先頭に載せる、「いまの全体」の節（doc の本体は `situation.ts`）。
+   *
+   * ## 何を読むか（`ManagerPool` を2回読む理由）
+   *
+   * 委譲の本数は `list()` から、器の台数と state は `runners()` から取る。
+   * **`runners()` の内訳（`RunnerFleetOverview`）から委譲を数え直さない**——
+   * あちらは名簿に在る器ごとに束ねた像なので、`unregister()` で名簿から消えた器を
+   * `runnerId` に持つ委譲は、どの束にも `unassigned` にも載らずに落ちる。
+   * **数え上げの分母が黙って縮む**ので、本数はいつも `list()` から取る。
+   *
+   * ⟹ `runners()` は内部でもう一度 `list()` を呼ぶので、**台帳の読み
+   * （`listJobs()`）は1ターンにつき2回**になる。**新しい種類の I/O は増えない**
+   * ——`list()` は名簿の像を同期に読むだけで runner へは1本も往復を払わず
+   * （`ManagerPool.list` の doc）、`runners()` も `fingerprints` /
+   * `resources` を渡さない限り `credentials()` / `profile()` / `resources()` を
+   * 呼ばない（`ManagerPool.runners` の doc「既定では `resources()` を呼ばない」）。
+   * ここでは**どちらも渡さない。**
+   *
+   * ## 蒸留には載せない
+   *
+   * `#commitmentNoticeFor` と同じ理由である——記憶へ移すためだけの内部ターンで、
+   * `stop()` 経由の蒸留はこの直後にプロセスが消える。畳んでいる最中に「手が
+   * 空いているものが5本ある」と渡すのは、新しい仕事を始めさせることでしかない。
+   *
+   * ## 読めなくても行を消さない
+   *
+   * `#commitmentNoticeFor` は読めなければ空文字を返す（節が消える）が、**こちらは
+   * 消さない。** 0 で埋めるのも消すのも「全部片付いている」と読める側へ倒れる——
+   * `describeSituationUnavailable` が「数えられなかった」と名乗る
+   * （`situation.ts` の doc）。
+   */
+  async #situationNoticeFor(events: InboxEvent[]): Promise<string> {
+    const event = events[0];
+    if (event === undefined) return '';
+    if (event.type === 'distill') return '';
+    try {
+      const managers = await this.#managers.list();
+      const fleet = await this.#managers.runners();
+      return describeSituation({ managers, runners: fleet.runners });
+    } catch (error) {
+      return describeSituationUnavailable(error);
+    }
   }
 
   /**
@@ -3452,6 +3525,7 @@ class Clone implements CloneHost {
             this.#contextWindowFoldNotice(kind) +
             this.#redeliveryNotice +
             this.#commitmentNotice +
+            this.#situationNotice +
             text,
         ),
       );
@@ -3665,7 +3739,8 @@ class Clone implements CloneHost {
 
   /**
    * `manager_list`（`tools.ts`）が使う「話しかけられるか」を、digest の
-   * マネージャー節でも同じ字面で出すための材料。
+   * マネージャー節でも同じ字面で出すための材料（**握り潰しの軸と一緒に
+   * `#managerDigestAxes()` が返す**——真下）。
    *
    * `ManagerPool#list()` は実行時に `isLive()`（`manager.ts`）を計算する——
    * ジョブ台帳（`stores.jobs`）が持たない軸なので、`buildActivityDigest`
@@ -3675,13 +3750,42 @@ class Clone implements CloneHost {
    * いない」がそのまま出力に出る側であって、黙って「繋がっている」に倒れる
    * 側ではない（`digest.ts` の `describeManagerState` / `buildActivityDigest`
    * の doc と同じ理由）。
+   *
+   * ## もう1つの軸（#621 / #643 — 背景処理の完了待ち）
+   *
+   * `ManagerSummary.awaitingBackground` も同じ理由でここから運ぶ——材料は
+   * `ManagerPool` のプロセス内の在庫（`#withheldReports`）で、ジョブ台帳には
+   * 載らない。**2つを別の `Map` にしてある**（`digest.ts` の
+   * `ManagerAwaitingBackgroundMap` の doc）——1つに畳むと、`live` は取れたが
+   * 握り潰しは無かった委譲と、そもそも何も取れなかった委譲が同じ「載っていない」
+   * になる。
+   *
+   * **`list()` を2回呼ばない。** 軸ごとに読みに行く形にすると、digest 1本の
+   * ために台帳を軸の数だけ読むことになり、軸が増えるたびに読みも増える。
+   * ——この関数の名前が `#managerLiveness` から変わったのはそのためである
+   * （返す軸が2つになった）。
    */
-  async #managerLiveness(): Promise<ManagerLiveness> {
+  async #managerDigestAxes(): Promise<{
+    liveness: ManagerLiveness;
+    awaitingBackground: ManagerAwaitingBackgroundMap;
+  }> {
     try {
       const managers = await this.#managers.list();
-      return new Map(managers.map((manager) => [manager.managerId, manager.live]));
+      return {
+        liveness: new Map(managers.map((manager) => [manager.managerId, manager.live])),
+        // **握り潰しが在る分だけを載せる。** 無い分を `undefined` で載せても
+        // `describeManagerState` の側では同じだが、`Map` の側で「載っていない」
+        // と「`undefined` が載っている」が別の意味を持たないようにしておく。
+        awaitingBackground: new Map(
+          managers.flatMap((manager) =>
+            manager.awaitingBackground === undefined
+              ? []
+              : [[manager.managerId, manager.awaitingBackground] as const],
+          ),
+        ),
+      };
     } catch {
-      return new Map();
+      return { liveness: new Map(), awaitingBackground: new Map() };
     }
   }
 
@@ -3701,10 +3805,12 @@ class Clone implements CloneHost {
    */
   async #recentDigestBare(): Promise<string> {
     try {
+      const axes = await this.#managerDigestAxes();
       return await buildActivityDigest(
         this.#stores,
         { since: new Date(Date.now() - RECENT_DIGEST_WINDOW_MS) },
-        await this.#managerLiveness(),
+        axes.liveness,
+        axes.awaitingBackground,
       );
     } catch (error) {
       return `（直近の状況をまとめられなかった: ${String(error)}）`;
@@ -3859,12 +3965,16 @@ class Clone implements CloneHost {
     cause: 'schedule' | 'schedule_catchup' | 'manual' = 'schedule',
   ): Promise<void> {
     const range = localDayRange(date);
+    const axes = range === null ? null : await this.#managerDigestAxes();
     const digest =
-      range === null
+      range === null || axes === null
         ? await this.#recentDigestBare()
-        : await buildActivityDigest(this.#stores, range, await this.#managerLiveness()).catch(
-            (error: unknown) => `（この日の記録をまとめられなかった: ${String(error)}）`,
-          );
+        : await buildActivityDigest(
+            this.#stores,
+            range,
+            axes.liveness,
+            axes.awaitingBackground,
+          ).catch((error: unknown) => `（この日の記録をまとめられなかった: ${String(error)}）`);
 
     // **このターンへ何が入ったかを残す**（#243）。日報は結果（`daily_report` の行）
     // しか残っていなかったので、「何を材料に書いたか」が後から取れなかった。digest の
