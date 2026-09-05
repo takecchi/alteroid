@@ -2231,6 +2231,16 @@ function swappableRunner(runnerId = 'runner-primary') {
         via: 'live',
       });
     },
+    /**
+     * runner の内側の事実（`runner.ts` の `#onSubagentStop` 等が積む `note`）。
+     *
+     * `escalate` を省くと従来どおり日誌にだけ残る回、`true` を渡すと
+     * `manager.ts` の `case 'note'` がクローンの受信箱へも1本上げる回になる
+     * （#570 の起こし直しが上限に達した回）。
+     */
+    note(managerId: string, text: string, escalate?: true) {
+      emit?.({ type: 'note', managerId, text, ...(escalate === undefined ? {} : { escalate }) });
+    },
     /** 前のセッションを開き直せなかった（`recovered: false` なら仕事が止まる）。 */
     resumeFailed(managerId: string, sessionId: string, reason: string, recovered: boolean) {
       emit?.({ type: 'resume_failed', managerId, sessionId, reason, recovered });
@@ -5358,6 +5368,128 @@ class FakePoolRunner implements RunnerClient {
   }
   async close(): Promise<void> {}
 }
+
+/**
+ * **#570 の追跡 —— `note.escalate` の配り分け。**
+ *
+ * `runner.ts` の `#onSubagentStop` は、作業者が自分で起こした背景処理を
+ * 残したまま畳もうとする回に、起こし直しの上限（`SUBAGENT_WAKEUP_LIMIT`）に
+ * 達したら `escalate: true` を立てた `note` を出す。`manager.ts` の
+ * `case 'note'` は、この欄が立っているときだけ、日誌に加えてクローンの
+ * 受信箱へも1本上げる。
+ *
+ * **この挙動は文字列で嗅がず欄で判定している。** 本文に日本語の説明を
+ * 入れたテストであっても、`escalate` を渡さなければ受信箱へは出ない
+ * ことを歯にする（欄で判定していることの検算）。
+ */
+describe('note.escalate（#570 の起こし直しが上限に達した回）', () => {
+  function job(id: string): Job {
+    return {
+      id,
+      managerId: id,
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      status: 'running',
+      summary: '走らせておいて',
+      request: 'CI を見張っておいて',
+      cwd: '/work/project',
+      sessionId: `sess-${id}`,
+      runnerId: 'runner-test',
+    };
+  }
+
+  function alive(id: string) {
+    return {
+      managerId: id,
+      status: 'running' as const,
+      cwd: '/work/project',
+      request: 'CI を見張っておいて',
+      waiting: [],
+      sessionId: `sess-${id}`,
+    };
+  }
+
+  it('escalate を伴わない note は、日誌にだけ残り受信箱へは出ない（従来どおり）', async () => {
+    const id = 'mgr-note-no-escalate';
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job(id));
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push(alive(id));
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+    // **`restore()` 自体が引き取りの通知を受信箱へ1本出す**（`#notifyRestored`）。
+    // それを「escalate の跡」と混同しないよう、note を出す前の件数を基準にする。
+    const before = s.inbox.length;
+
+    fake.note(id, `[${id}] 起こし直した（1回目 / 上限 2）。`);
+
+    // **`#onEvent` は非同期で、`emit()` はそれを待たない**ので `expect.poll` で
+    // 日誌への反映を待つ（`swappableRunner` を使う他のテストと同じ作法）。
+    await expect
+      .poll(
+        async () => {
+          const entries = await stores.journal.list({ types: ['exchange'] });
+          return entries.some((entry) => 'text' in entry && entry.text.includes('起こし直した'));
+        },
+        { timeout: 2000 },
+      )
+      .toBe(true);
+
+    expect(s.inbox.length).toBe(before);
+
+    await s.pool.stop();
+  });
+
+  it('escalate: true の note は、日誌に加えて受信箱にも1本上がる', async () => {
+    const id = 'mgr-note-escalate';
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job(id));
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push(alive(id));
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+    // 直上のテストと同じ理由（`restore()` 自体が1本出す）で、差分を見る。
+    const before = s.inbox.filter(
+      (event) => event.type === 'manager_message' && event.managerId === id,
+    ).length;
+
+    fake.note(
+      id,
+      `[${id}] 上限（2回）に達したため、起こし直さなかった（既に 2回 起こし直し済み）。`,
+      true,
+    );
+
+    // **日誌側は escalate の有無で変えない。** 全件これまでどおり残る。
+    // **`#onEvent` は非同期で、`emit()` はそれを待たない**（`swappableRunner` の
+    // `connect` の doc と同じ形）ので、`await` を挟まない同期の直後チェックは
+    // 完了前を掴みうる。`expect.poll` で完了を待つ（他の `swappableRunner` を
+    // 使うテストと同じ作法）。
+    await expect
+      .poll(
+        async () => {
+          const entries = await stores.journal.list({ types: ['exchange'] });
+          return entries.some(
+            (entry) => 'text' in entry && entry.text.includes('起こし直さなかった'),
+          );
+        },
+        { timeout: 2000 },
+      )
+      .toBe(true);
+
+    // **受信箱側は escalate: true のときだけ追加で1本。**
+    const managerMessagesOf = (managerId: string) =>
+      s.inbox.filter(
+        (event) => event.type === 'manager_message' && event.managerId === managerId,
+      ) as { kind: string; text: string }[];
+    await expect.poll(() => managerMessagesOf(id).length, { timeout: 2000 }).toBe(before + 1);
+    const escalated = managerMessagesOf(id).at(-1);
+    expect(escalated?.kind).toBe('report');
+    expect(escalated?.text).toContain('自動では再開しない');
+    expect(escalated?.text).toContain('journal_read');
+
+    await s.pool.stop();
+  });
+});
 
 describe('runner の指名（Pool.start の runnerId）', () => {
   it('runnerId を指名すると、その runner が起こされる（自動配置の点数計算を通していない）', async () => {
