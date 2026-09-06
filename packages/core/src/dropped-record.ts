@@ -887,6 +887,23 @@ export function journalEntryShape(entry: JournalEntryInput): string {
         (entry.noticeText === undefined ? '' : ` ${size(entry.noticeText, 'noticeText')}`) +
         ` ${size(entry.text)}`
       );
+    // **全欄が runner 自身の数え上げ（`agentId` は SDK が決める id、
+    // `agentType` は `.claude/agents/*.md` で定義された小さい語彙、
+    // `ownedTaskCount`/`sessionTaskCount`/`wakeupCount` は整数、`outcome` は
+    // 列挙値）で、自由文は `text` の1つだけ。** `agentId` は `managerId` /
+    // `sessionId` と同じ判定基準（「値を誰が決めるか」）で id としてそのまま
+    // 載せてよい。`agentType` はサブエージェントの種類名で、値を決めるのは
+    // このリポジトリ（`.claude/agents/` にどんな作業者を定義するか）であって
+    // 外部の入力ではないので、`turn_usage` のモデル id と同じ扱いで
+    // `tag()` に載せる。
+    case 'subagent_stall':
+      return (
+        `subagent_stall agentId=${tag(entry.agentId)}` +
+        (entry.agentType === undefined ? '' : ` agentType=${tag(entry.agentType)}`) +
+        ` ownedTaskCount=${entry.ownedTaskCount} sessionTaskCount=${entry.sessionTaskCount}` +
+        ` wakeupCount=${entry.wakeupCount} outcome=${tag(entry.outcome)}` +
+        ` ${size(entry.text)}`
+      );
   }
 }
 

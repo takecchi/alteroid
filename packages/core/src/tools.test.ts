@@ -6745,6 +6745,54 @@ describe('journalEntrySchema の memory_update（action の後方互換）', () 
 });
 
 /**
+ * `journalEntrySchema` の `subagent_stall`（Issue #357）。`token_rotation` と
+ * 同じ形で `text` と構造の両方を持つ——ここでは構造側（`safeParse` の可否）を
+ * 固定する。人間が読む本文側の描画は `renderJournalEntry` の歯
+ * （「journal_read で subagent_stall を絞れる」describe）が持つ。
+ */
+describe('journalEntrySchema の subagent_stall（Issue #357）', () => {
+  const full = {
+    type: 'subagent_stall' as const,
+    id: 'j-1',
+    at: '2026-08-01T00:00:00.000Z',
+    agentId: 'agent-1',
+    agentType: 'worker',
+    ownedTaskCount: 1,
+    sessionTaskCount: 2,
+    wakeupCount: 1,
+    outcome: 'woken' as const,
+    text: '起こし直した（1回目 / 上限 2）。',
+  };
+
+  it('全欄が揃っていれば通る', () => {
+    const result = journalEntrySchema.safeParse(full);
+    expect(result.success).toBe(true);
+  });
+
+  it('agentType を省いても通る（取れなかった回）', () => {
+    const withoutAgentType: Record<string, unknown> = { ...full };
+    delete withoutAgentType.agentType;
+    const result = journalEntrySchema.safeParse(withoutAgentType);
+    expect(result.success).toBe(true);
+  });
+
+  it.each(['agentId', 'ownedTaskCount', 'sessionTaskCount', 'wakeupCount', 'outcome', 'text'])(
+    '必須欄 %s が欠けると落ちる',
+    (key) => {
+      const broken: Record<string, unknown> = { ...full };
+      delete broken[key];
+      const result = journalEntrySchema.safeParse(broken);
+      expect(result.success).toBe(false);
+    },
+  );
+
+  it('outcome が未知の値だと落ちる（2値を潰さない設計の検算）', () => {
+    const result = journalEntrySchema.safeParse({ ...full, outcome: 'unknown' });
+    expect(result.success).toBe(false);
+  });
+});
+
+/**
  * `journal_read`（クローンが読む面）が `memory_update` の `action` /
  * `bytesBefore` / `bytesAfter` を出すこと（#339）。
  *
@@ -9373,6 +9421,91 @@ describe('journal_read に with の絞りを足す（issue #426）', () => {
       expect(reply, `古い人間の発言${index} が窓の外へ落ちた`).toContain(`古い人間の発言${index}`);
     }
     expect(reply).not.toContain('マネージャーとの往復');
+  });
+});
+
+/**
+ * Issue #357。`subagent_stall`（委譲の空転）を `exchange` から切り出した
+ * 目的そのもの——`journal_read` の `types` で絞れることを確かめる。
+ * 絞る前は `{ type: 'exchange', with: 'manager' }` の雑多入れに埋もれて
+ * いたので、`types: ['exchange']` では当たらないことも対で固定する。
+ */
+describe('journal_read で subagent_stall を絞れる（Issue #357）', () => {
+  it('types: ["subagent_stall"] で当たり、見出しに outcome と各カウントが載る', async () => {
+    const h = harness();
+    await h.stores.journal.append({
+      type: 'subagent_stall',
+      agentId: 'agent-1',
+      agentType: 'worker',
+      ownedTaskCount: 1,
+      sessionTaskCount: 2,
+      wakeupCount: 1,
+      outcome: 'woken',
+      text: '[mgr-1] 起こし直した（1回目 / 上限 2）。',
+    });
+    // 混ぜても取りこぼさない・誤って混ざらないことを見るため、無関係な
+    // exchange も1件積む。
+    await h.stores.journal.append({
+      type: 'exchange',
+      with: 'manager',
+      role: 'inbound',
+      text: '[mgr-1] 無関係な note。',
+    });
+
+    const reply = await h.call('journal_read', { types: ['subagent_stall'] });
+
+    expect(reply).toContain('subagent_stall');
+    expect(reply).toContain('woken');
+    expect(reply).toContain('agent=agent-1');
+    expect(reply).toContain('owned=1');
+    expect(reply).toContain('session=2');
+    expect(reply).toContain('wakeup=1');
+    expect(reply).toContain('起こし直した（1回目 / 上限 2）');
+    expect(reply).not.toContain('無関係な note');
+  });
+
+  it('types: ["exchange"] では subagent_stall は当たらない（雑多入れへ埋もれない）', async () => {
+    const h = harness();
+    await h.stores.journal.append({
+      type: 'subagent_stall',
+      agentId: 'agent-1',
+      ownedTaskCount: 1,
+      sessionTaskCount: 1,
+      wakeupCount: 1,
+      outcome: 'woken',
+      text: '[mgr-1] 起こし直した（1回目 / 上限 2）。',
+    });
+    await h.stores.journal.append({
+      type: 'exchange',
+      with: 'manager',
+      role: 'inbound',
+      text: '[mgr-1] 別件の note。',
+    });
+
+    const reply = await h.call('journal_read', { types: ['exchange'] });
+
+    expect(reply).toContain('別件の note');
+    expect(reply).not.toContain('起こし直した（1回目 / 上限 2）');
+  });
+
+  it('agentType が無いとき（取れなかった回）は見出しに /agentType を作らない', async () => {
+    const h = harness();
+    await h.stores.journal.append({
+      type: 'subagent_stall',
+      agentId: 'agent-1',
+      ownedTaskCount: 1,
+      sessionTaskCount: 1,
+      wakeupCount: 1,
+      outcome: 'limit_reached',
+      text: '[mgr-1] 起こし直さなかった。',
+    });
+
+    const reply = await h.call('journal_read', { types: ['subagent_stall'] });
+
+    // **取れなかった回に既定値の行を作らない**（AGENTS.md 地雷「取れない軸に
+    // 0の行を作る」）。`/` 区切りの agentType が付かないことで確かめる。
+    expect(reply).toContain('agent=agent-1 owned=1');
+    expect(reply).not.toContain('agent=agent-1/');
   });
 });
 

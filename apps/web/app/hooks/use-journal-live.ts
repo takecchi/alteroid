@@ -197,6 +197,15 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
     case 'token_rotation':
       void mutate(KEY.tokens);
       break;
+    // **落とす先が無い。** `worker_wait` / `turn_usage` と同じ理由——この種別は
+    // 日誌にしか現れない（`schema.ts` の `subagent_stall` の doc。会話・記憶・
+    // 台帳のどれの状態も動かさない、作業者が自分で起こした背景処理を残したまま
+    // 畳もうとした、という observation だけである）。この種別専用の画面・SWR
+    // キーは無いので、冒頭で束にした日誌一覧の無効化だけで十分。**惰性で
+    // `exchange`（マネージャー・生ログを束で落とす）と同じにしないこと** ——
+    // `subagent_stall` はマネージャーの詳細や生ログの中身を変える出来事ではない。
+    case 'subagent_stall':
+      break;
     default: {
       // 網羅性チェック本体。ここへ来る値があれば、上の case が
       // `JournalEntryType` の全種別を尽くしていない（型エラーになる）。

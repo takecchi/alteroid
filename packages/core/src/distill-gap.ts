@@ -151,10 +151,18 @@ export function isDistillSucceededEntry(entry: JournalEntry): boolean {
  * ## 数えないもの と その理由
  *
  * `decision` / `escalation` / `tool_use` / `memory_update` / `daily_report` /
- * `worker_wait` / `token_rotation` / `exchange`(`with: 'self'`) /
- * `turn_usage`(`site: 'distill'`)。**どれも蒸留のターンそのものか、器の記帳が
- * 書きうる型である。** 数に入れると、正常に蒸留して静かに落ちただけの器でも
- * 毎回「ずれが在る」と言うことになる ＝ 断り書きが毎回出て、意味を失う。
+ * `worker_wait` / `token_rotation` / `subagent_stall` /
+ * `exchange`(`with: 'self'`) / `turn_usage`(`site: 'distill'`)。**どれも蒸留の
+ * ターンそのものか、器の記帳が書きうる型である。** 数に入れると、正常に蒸留して
+ * 静かに落ちただけの器でも毎回「ずれが在る」と言うことになる ＝ 断り書きが
+ * 毎回出て、意味を失う。
+ *
+ * **`subagent_stall` も器の記帳である。** `runner.ts` の `#onSubagentStop` が
+ * 作業者のターンの外側で機構的に書くもので、`token_rotation` と同じ性質
+ * （「ターンが1本走った」の痕跡ではない）。数えると、空転を検出しただけの
+ * 回まで「まだ記憶へ移っていない活動」に数えてしまう——空転そのものは
+ * `journal_read types=['subagent_stall']` で辿るべきもので、蒸留のずれとは
+ * 別の軸である。
  *
  * ## 取りこぼす側（正直に書く）
  *
@@ -174,6 +182,11 @@ export function countsAsUndistilledActivity(entry: JournalEntry): boolean {
       return entry.site === 'session';
     case 'external_event':
       return true;
+    // **明示して `false`。** `default` に落としても結果は同じだが、この種別を
+    // 数えないことを決めた（上の doc）ことを、次に種別が増えたときの読み手に
+    // 見える形で残す。
+    case 'subagent_stall':
+      return false;
     default:
       return false;
   }

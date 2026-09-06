@@ -38,6 +38,17 @@ const TONE: Record<JournalEntryType, 'neutral' | 'ok' | 'warn' | 'danger' | 'acc
   // `exhausted`（全層が止まる）が普通の行と同じ色で並ぶ。**色は種別ごとに1つしか
   // 選べないので、いちばん重い側に合わせる。**
   token_rotation: 'warn',
+  // **`warn` にしてある。** この種別は `outcome` に `woken`（起こし直した＝その場
+  // で回復した）と `limit_reached`（上限に達して起こし直さなかった＝自動では
+  // 再開しない。`runner.ts` の `#onSubagentStop` の doc）の2値を持つが、**色は
+  // 種別ごとに1つしかない**ので、`token_rotation` と同じ理由でいちばん重い側
+  // （`limit_reached`）に合わせる。`neutral` にすると、要対応の状態が「作業者が
+  // 空回りしただけ」の行と同じ色で並んでしまう。**`danger` にはしていない** —
+  // `danger` はこの画面の他所（`manager-detail.tsx` の「セッション切断」等）で
+  // 「その場で壊れて動いていない」ことに使っており、`token_rotation` の
+  // `exhausted`（全層が止まる、こちらのほうが重い）ですら `warn` に留めている
+  // 釣り合いに合わせた。
+  subagent_stall: 'warn',
 };
 
 /**

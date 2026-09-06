@@ -5353,6 +5353,23 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
         body: `${entry.text}${earliest}`,
       };
     }
+    case 'subagent_stall': {
+      // **見出しに `outcome` と回数を出す。** クローンがこの種別で絞ったとき、
+      // いちばん見たいのは「起こし直したのか、それとも自動では再開しない
+      // ところまで来たのか」であって、本文の言い回しではない
+      // （`token_rotation` の `event` と同じ理由）。
+      const agentType = entry.agentType === undefined ? '' : `/${entry.agentType}`;
+      return {
+        head:
+          `[subagent_stall ${entry.outcome} agent=${entry.agentId}${agentType} ` +
+          `owned=${entry.ownedTaskCount} session=${entry.sessionTaskCount} ` +
+          `wakeup=${entry.wakeupCount}]`,
+        // **本文は runner が組み立てた整形済みの行をそのまま出す**
+        // （`token_rotation` と同じ設計 — 人間が読む面の言い方の持ち主は
+        // `runner.ts` の `#onSubagentStop` 1つである）。
+        body: entry.text,
+      };
+    }
   }
 }
 

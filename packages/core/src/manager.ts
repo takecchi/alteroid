@@ -5518,12 +5518,37 @@ class Pool implements ManagerPool {
         // **この挙動は `escalate` の有無で変えない —— 全件、これまでどおり
         // 日誌へ残す。** `escalate: true` のときだけ、下で受信箱へも追加で
         // 1本上げる（日誌への記録を置き換えるのではなく、足す）。
-        await this.#journal({
-          type: 'exchange',
-          with: 'manager',
-          role: 'inbound',
-          text: `[${event.managerId}] ${event.text}`,
-        });
+        //
+        // **記録する日誌の種別は `event.stall` の有無で分ける（Issue #357）。**
+        // `stall` が立っていれば、型付きの種別 `subagent_stall`
+        // （`schema.ts`）として記録する——`journal_read` の `types` で
+        // 「委譲の空転」だけを絞れるようにするのがこの分岐の目的そのもの
+        // である。`stall` が立っていなければ、これまでどおり
+        // `{ type: 'exchange', with: 'manager' }` に落とす——旧 runner から
+        // 届く note（`stall` を知らない）はこちらに落ちる
+        // （`runner-protocol.ts` の `note.stall` の doc、両方向のデプロイ
+        // 順序を書いてある）。**判定は必ず `event.stall` の欄で行い、
+        // 文字列で本文を嗅がない**（直下の `escalate` の判定と同じ理由・
+        // 同じ欄の哲学）。
+        if (event.stall === undefined) {
+          await this.#journal({
+            type: 'exchange',
+            with: 'manager',
+            role: 'inbound',
+            text: `[${event.managerId}] ${event.text}`,
+          });
+        } else {
+          await this.#journal({
+            type: 'subagent_stall',
+            agentId: event.stall.agentId,
+            ...(event.stall.agentType === undefined ? {} : { agentType: event.stall.agentType }),
+            ownedTaskCount: event.stall.ownedTaskCount,
+            sessionTaskCount: event.stall.sessionTaskCount,
+            wakeupCount: event.stall.wakeupCount,
+            outcome: event.stall.outcome,
+            text: `[${event.managerId}] ${event.text}`,
+          });
+        }
 
         // **文字列で本文を嗅いで判定しない。欄（`event.escalate`）で判定する**
         // （`runner-protocol.ts` の `note` スキーマの doc）。`case

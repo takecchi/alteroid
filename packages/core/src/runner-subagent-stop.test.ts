@@ -12,7 +12,7 @@ import type {
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createRunnerHost, type RunnerHost, SUBAGENT_WAKEUP_LIMIT } from './runner.js';
-import type { RunnerEvent } from './runner-protocol.js';
+import { runnerEventSchema, type RunnerEvent } from './runner-protocol.js';
 
 /**
  * `SubagentStop` フックの観測口（#357 / #570）を確かめる。
@@ -309,6 +309,22 @@ describe('SubagentStop の観測（#357 / #570）', () => {
     expect(notes[0]?.escalate).toBeUndefined();
     // 直上の additionalContext と対にして、note 側も短ければ切られないことを見る。
     expect(text).not.toContain('文字で切った');
+
+    /**
+     * **型付き種別（`journalEntrySchema` の `subagent_stall`）へ渡す構造欄。**
+     * `manager.ts` の `case 'note'` はこの `stall` の有無で日誌の種別を
+     * 振り分ける（`stall` が有れば `subagent_stall`、無ければ `exchange`）。
+     * ここで固定するのは「上限未満（起こし直した）分岐」が正しい形の
+     * `stall` を載せることである。
+     */
+    expect(notes[0]?.stall).toEqual({
+      agentId: 'agent-1',
+      agentType: 'worker',
+      ownedTaskCount: 1,
+      sessionTaskCount: 2,
+      wakeupCount: 1,
+      outcome: 'woken',
+    });
   });
 
   // ⚠️ 同上（`mine.length === 0` は不変。所有者が一致しないので当人の分が無い）。
@@ -539,6 +555,23 @@ describe('SubagentStop の観測（#357 / #570）', () => {
       expect(escalated?.text).toContain(`上限（${SUBAGENT_WAKEUP_LIMIT}回）`);
       // それより前の回は escalate していない。
       for (const note of notes.slice(0, -1)) expect(note.escalate).toBeUndefined();
+
+      /**
+       * **上限到達分岐の `stall`。** `outcome: 'limit_reached'` で、
+       * `wakeupCount` は「起こし直した回数」ではなく「既に起こし直し
+       * 済みの回数」（`SUBAGENT_WAKEUP_LIMIT` と同じ値）が載ることを見る
+       * —— 起こし直していないのでこの回のぶんは足されない。
+       */
+      expect(escalated?.stall).toEqual({
+        agentId: 'agent-1',
+        agentType: 'worker',
+        ownedTaskCount: 1,
+        sessionTaskCount: 2,
+        wakeupCount: SUBAGENT_WAKEUP_LIMIT,
+        outcome: 'limit_reached',
+      });
+      // 上限未満の回（起こし直した側）は `outcome: 'woken'` のまま。
+      for (const note of notes.slice(0, -1)) expect(note.stall?.outcome).toBe('woken');
     });
 
     it('agent_id が違えば上限は独立している', async () => {
@@ -874,5 +907,136 @@ describe('SubagentStop の観測（#357 / #570）', () => {
     expect(notes[0]?.text).toContain('SubagentStop の観測に失敗した');
     expect(notes[0]?.text).toContain('boom-test-570');
     expect(notes[0]?.escalate).toBeUndefined();
+    // **`catch` は観測の失敗であって空転の記録ではない**——`stall` は載らない
+    // （`manager.ts` の `case 'note'` が `exchange` へ落とす側のまま）。
+    expect(notes[0]?.stall).toBeUndefined();
+  });
+});
+
+/**
+ * `note.stall`（Issue #357）の境界のスキーマ。デーモンと runner の間は
+ * HTTP（JSON）なので、`permission-denied.test.ts` の
+ * 「runner から降ろす出来事が境界のスキーマを通る」と同じ理由・同じ形で
+ * `JSON.parse(JSON.stringify(...))` を通す —— 同一プロセスのテストは
+ * `undefined` の欄がキーごと落ちる境界の壊れ方を再現しない
+ * （`runner-protocol.ts` の冒頭の doc）。
+ */
+describe('note.stall のスキーマ（境界を越える形。Issue #357）', () => {
+  it('stall 無しの note は今までどおり境界を通る（後方互換）', () => {
+    const parsed = runnerEventSchema.safeParse(
+      JSON.parse(
+        JSON.stringify({
+          type: 'note',
+          managerId: 'mgr-1',
+          text: '旧 runner からの note',
+        }),
+      ),
+    );
+    expect(parsed.success).toBe(true);
+  });
+
+  it('stall 付きの note（agentType 有り）が境界を通り、値がそのまま保たれる', () => {
+    const parsed = runnerEventSchema.safeParse(
+      JSON.parse(
+        JSON.stringify({
+          type: 'note',
+          managerId: 'mgr-1',
+          text: '起こし直した（1回目 / 上限 2）。',
+          stall: {
+            agentId: 'agent-1',
+            agentType: 'worker',
+            ownedTaskCount: 1,
+            sessionTaskCount: 2,
+            wakeupCount: 1,
+            outcome: 'woken',
+          },
+        }),
+      ),
+    );
+    expect(parsed.success).toBe(true);
+    if (parsed.success && parsed.data.type === 'note') {
+      expect(parsed.data.stall).toEqual({
+        agentId: 'agent-1',
+        agentType: 'worker',
+        ownedTaskCount: 1,
+        sessionTaskCount: 2,
+        wakeupCount: 1,
+        outcome: 'woken',
+      });
+    }
+  });
+
+  /**
+   * `agentType` が取れない回（`hook.agent_type` が無かった実測。ファイル
+   * 冒頭の doc）でも、キー自体が無い形で境界を通る——`undefined` を
+   * 渡すのではなく、`JSON.stringify` がキーごと落とす実機の形を
+   * `JSON.parse(JSON.stringify(...))` で再現する。
+   */
+  it('stall.agentType が無くても境界を通る（取れなかった回の実機の形）', () => {
+    const parsed = runnerEventSchema.safeParse(
+      JSON.parse(
+        JSON.stringify({
+          type: 'note',
+          managerId: 'mgr-1',
+          text: '起こし直さなかった。',
+          stall: {
+            agentId: 'agent-1',
+            ownedTaskCount: 1,
+            sessionTaskCount: 1,
+            wakeupCount: 2,
+            outcome: 'limit_reached',
+          },
+        }),
+      ),
+    );
+    expect(parsed.success).toBe(true);
+    if (parsed.success && parsed.data.type === 'note') {
+      expect(parsed.data.stall).not.toHaveProperty('agentType');
+    }
+  });
+
+  /**
+   * **必須欄が欠けると落ちる。** `stall` を名乗った以上、`ownedTaskCount`
+   * のような構造の欄を省いた不完全な形まで通してしまうと、`manager.ts` の
+   * `case 'note'` がその不完全な値をそのまま日誌へ書き込むことになる。
+   */
+  it('stall の必須欄（ownedTaskCount）が欠けると境界のスキーマで落ちる', () => {
+    const parsed = runnerEventSchema.safeParse(
+      JSON.parse(
+        JSON.stringify({
+          type: 'note',
+          managerId: 'mgr-1',
+          text: '不完全な stall。',
+          stall: {
+            agentId: 'agent-1',
+            sessionTaskCount: 1,
+            wakeupCount: 1,
+            outcome: 'woken',
+          },
+        }),
+      ),
+    );
+    expect(parsed.success).toBe(false);
+  });
+
+  /** `outcome` は列挙値。未知の値は落ちる（2値を潰さない設計の検算）。 */
+  it('stall.outcome が未知の値だと境界のスキーマで落ちる', () => {
+    const parsed = runnerEventSchema.safeParse(
+      JSON.parse(
+        JSON.stringify({
+          type: 'note',
+          managerId: 'mgr-1',
+          text: 'おかしな outcome。',
+          stall: {
+            agentId: 'agent-1',
+            ownedTaskCount: 1,
+            sessionTaskCount: 1,
+            wakeupCount: 1,
+            outcome: 'unknown_outcome',
+          },
+        }),
+      ),
+    );
+    expect(parsed.success).toBe(false);
   });
 });

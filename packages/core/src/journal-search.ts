@@ -83,6 +83,14 @@ const SEARCHABLE_FIELDS_BY_TYPE = {
   exchange: ['text'],
   decision: ['decision', 'grounds'],
   token_rotation: ['text', 'noticeText'],
+  /**
+   * `text` だけ。**`agentId` / `agentType` / `outcome` は入れない** —— 上の doc の
+   * 「識別子・列挙値の欄」の線であり、混ぜると `q: "woken"` が `outcome: 'woken'` の
+   * 全行に当たる（**空転を絞る口は `types: ['subagent_stall']` として既に在る**）。
+   * カウント3つは数なので、そもそも `journalSearchText` の `typeof value === 'string'`
+   * を通らない。
+   */
+  subagent_stall: ['text'],
   escalation: ['question', 'answer'],
   /** `input` は対象外（上の doc）。他に自由文の欄が無い。 */
   tool_use: [],
