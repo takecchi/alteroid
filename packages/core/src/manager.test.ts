@@ -5574,6 +5574,20 @@ describe('note.stall（Issue #357 — 空転の型付き記録への振り分け
     const stallEntries = await stores.journal.list({ types: ['subagent_stall'] });
     expect(stallEntries).toHaveLength(0);
 
+    // **種別だけでなく `with` / `role` も固定する。** 「`exchange` である」
+    // だけを見ていると、`with` を `'self'` へ倒す変異が素通りする（実測:
+    // 変異 `m6b-manager-exchange-fallback-with` が生存した）。**`with: 'self'`
+    // は「人間に見せない内部ターン」の意味**（`schema.ts` の `exchange.with`）
+    // なので、ここが倒れると旧 runner の note が人間の目から静かに消える。
+    const fallback = (await stores.journal.list({ types: ['exchange'] })).find(
+      (entry) => 'text' in entry && entry.text.includes('旧 runner からの note'),
+    );
+    if (fallback === undefined || fallback.type !== 'exchange') {
+      throw new Error('fallback の exchange が見つからない');
+    }
+    expect(fallback.with).toBe('manager');
+    expect(fallback.role).toBe('inbound');
+
     await s.pool.stop();
   });
 
@@ -5662,6 +5676,22 @@ describe('note.stall（Issue #357 — 空転の型付き記録への振り分け
         { timeout: 2000 },
       )
       .toBe(1);
+
+    // **`outcome` は上限側でも実物を確かめる。** 片側（`woken`）だけを見て
+    // いると、`manager.ts` が `event.stall.outcome` を素通しにせず定数
+    // `'woken'` を書き込む変異が**両方のテストを通り抜ける**（実測: 変異
+    // `m5-manager-outcome-passthrough` が生存した）。**2値を潰さない設計は、
+    // 2値それぞれに歯を当てて初めて測れる。**
+    const [stallEntry] = await stores.journal.list({ types: ['subagent_stall'] });
+    if (stallEntry === undefined || stallEntry.type !== 'subagent_stall') {
+      throw new Error('subagent_stall の日誌が見つからない');
+    }
+    expect(stallEntry.outcome).toBe('limit_reached');
+    expect(stallEntry.agentId).toBe('agent-9');
+    expect(stallEntry.agentType).toBe('Explore');
+    expect(stallEntry.ownedTaskCount).toBe(3);
+    expect(stallEntry.sessionTaskCount).toBe(5);
+    expect(stallEntry.wakeupCount).toBe(2);
 
     const managerMessagesOf = (managerId: string) =>
       s.inbox.filter(
