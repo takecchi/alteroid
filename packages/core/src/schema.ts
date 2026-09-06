@@ -1058,12 +1058,10 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      *
      * ## これは何のために置いたか、いつ消してよいか
      *
-     * SDK の型コメント（`@anthropic-ai/claude-agent-sdk@0.3.252` の
+     * SDK の型コメント（`@anthropic-ai/claude-agent-sdk@0.3.261` の
      * `sdk.d.ts` の `SDKResultSuccess.usage`）はこう言う（逐語）——
      *
-     * > MAIN AGENT LOOP ONLY — excludes Task subagent, sidechain, and
-     * > auxiliary model calls, and is per-turn in streaming-input sessions.
-     * > Prefer modelUsage for token/cost accounting.
+     * **「MAIN AGENT LOOP ONLY — excludes Task subagent, sidechain, and auxiliary model calls, and is per-turn in streaming-input sessions. Prefer modelUsage for token/cost accounting」** [sdk-verbatim SDKResultSuccess.usage]
      *
      * **「メインループだけ」は分かるが、「streaming-input セッションで
      * per-turn」が (i) そのターンの API 呼び出しを合計した値なのか (ii)

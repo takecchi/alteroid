@@ -25,11 +25,11 @@
  * / `result.subtype` / `result.is_error`）で確定させ、文言には頼らない。
  * ここでも同じ選び方をしたかったが、**文脈窓超過には構造化された印が無い**。
  *
- * - `SDKAssistantMessageError`（`sdk.d.ts`）は `'authentication_failed' |
- *   'oauth_org_not_allowed' | 'account_on_hold' | 'billing_error' |
- *   'rate_limit' | 'overloaded' | 'invalid_request' | 'model_not_found' |
- *   'server_error' | 'unknown' | 'max_output_tokens'` の11値で、文脈窓専用の
- *   値は無い。
+ * - `SDKAssistantMessageError`（`sdk.d.ts`）は次の11値で、**文脈窓専用の値は無い**
+ *   （逐語。**折り返さず1行に置く** — 折り返すと `grep -F` で当たらなくなり、
+ *   `scripts/check-sdk-quotes-core.mjs` の門が当てられなくなる）:
+ *   [sdk-verbatim SDKAssistantMessageError]
+ *   > 'authentication_failed' | 'oauth_org_not_allowed' | 'account_on_hold' | 'billing_error' | 'rate_limit' | 'overloaded' | 'invalid_request' | 'model_not_found' | 'server_error' | 'unknown' | 'max_output_tokens'
  * - `stop_reason` は `string | null`（型付けされた列挙ではない）。実際には
  *   ランタイムが `model_context_window_exceeded` という値を使うことがある
  *   （下記の実測）が、**公開された型には出てこない**ので、ここへ依存すると
