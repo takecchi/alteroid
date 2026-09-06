@@ -339,5 +339,30 @@ export function summarizeJournalEntry(entry: JournalEntry): string {
       // **見出しの `event` は落とさない** — 一覧の1行しか読まない人が、
       // `exhausted`（全層が止まる）と `not_rotated`（正常）を見分けられなくなる。
       return `[${entry.event}] ${entry.text}`;
+    case 'subagent_stall': {
+      // **`token_rotation` と違い、`text` をそのまま出さない。** `entry.text`
+      // は `runner.ts` の `#onSubagentStop` が組み立てた `note.text` そのままで、
+      // 残っている背景処理の一覧（`taskLines`）と「この行が出ないことは空転が
+      // 無かったを意味しない」という断り書きを含む複数行である——`token_rotation`
+      // の `text`（`describeTokenRotation` が作る本当の1行）とは密度が違う。
+      // この関数の役目は「一覧と通知で同じ文言を使うための、潰した1行」なので、
+      // 丸ごと連結すると一覧の1行がこの種別だけ極端に長くなる。ここでは
+      // `entry.text` に既に書かれている事情を、必要な欄だけ拾って組み直す。
+      //
+      // **`outcome` の2値は潰さない** — `woken`（起こし直した。まだ委譲が進む
+      // 見込みがある）と `limit_reached`（上限に達して起こし直さなかった。
+      // 自動では再開しない＝人が要る）は性質が違う
+      // （`schema.ts` の `subagent_stall.outcome` の doc と同じ理由）。
+      const agentType = entry.agentType === undefined ? '' : `/${entry.agentType}`;
+      const outcome =
+        entry.outcome === 'woken'
+          ? `起こし直した（${entry.wakeupCount}回目）`
+          : `上限に達し、起こし直さなかった（要対応。既に${entry.wakeupCount}回起こし直し済み）`;
+      return (
+        `作業者 ${entry.agentId}${agentType} が自分で起こした背景処理を ` +
+        `${entry.ownedTaskCount}件 残したまま畳もうとした（セッション全体 ${entry.sessionTaskCount}件）: ` +
+        outcome
+      );
+    }
   }
 }

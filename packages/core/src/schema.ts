@@ -528,6 +528,62 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     /** 人間が読む1行（整形済み）。 */
     text: z.string(),
   }),
+  /**
+   * 作業者が自分で起こした背景処理を残したまま畳もうとした（Issue #357 —
+   * 「委譲の空転」。`runner.ts` の `#onSubagentStop`）。
+   *
+   * **`exchange` では数えられないので種別を分けてある。** 直す前はここが
+   * `{ type: 'exchange', with: 'manager' }` で、`exchange` は**非テストで
+   * 53箇所**が書く雑多入れだった（`token_rotation` の doc と同じ理由・同じ
+   * 数）。`journal_read` は `types` でしか絞れないのに絞る先が無く、
+   * Issue #357 の34コメントに出てくる「空転が1日で3回」「31件以上」は
+   * すべて自然文を読んだ人間/AIの自己申告で、生ログから数えた値ではなかった
+   * （検出そのものは PR #644 で機構的になっていたが、記録先が `exchange`
+   * のままだったので、数えるには自然文を正規表現で舐めるしかなかった）。
+   *
+   * **⚠️ この種別の件数は「空転の総数」ではなく下限である。** `SubagentStop`
+   * フックは**作業者が畳んだ瞬間に親のターンが開いていたときにしか発火
+   * しない**（`runner.ts` の `#onSubagentStop` の doc。#570 の実測で、
+   * 作業者の完了8件のうち発火は4件だった。親が先に閉じていた4件は発火して
+   * いない）。委譲は既定で `is_backgrounded: true` なので、**親が先に
+   * 閉じる形が本番では普通である。** ⟹ **この種別が0件でも「空転が無かった」
+   * を意味しない。** 同じ断りは `runner.ts` の `#onSubagentStop` が組み立てる
+   * `note.text`（`disclaimer` という変数名で持っている。
+   * `grep -Fn -- 'この行が出ないことは「空転が無かった」を意味しない' runner.ts`）
+   * にも書いてあるが、**数える人が最初に読むのは schema であってログの1行
+   * ではない**ので、同じ趣旨をここにも置く。
+   *
+   * **`text` と構造の両方を持つ。** `text` は人間が読む1行（`runner.ts` の
+   * `#onSubagentStop` が組み立てた `note.text` そのまま）で、構造の側は
+   * クローンが分岐に使う（`token_rotation` と同じ設計）。
+   */
+  z.object({
+    type: z.literal('subagent_stall'),
+    id: z.string(),
+    at: isoDateTime,
+    /** 畳もうとしていた作業者の `agent_id`。 */
+    agentId: z.string(),
+    /**
+     * `hook.agent_type`。**取れたときだけ載せる**——SDK 側の事情で無いことが
+     * ある（`runner-protocol.ts` の `note.stall.agentType` の doc）。
+     */
+    agentType: z.string().optional(),
+    /** 当人が自分で起こした背景処理のうち、残っていた件数。 */
+    ownedTaskCount: z.number().int().nonnegative(),
+    /** その瞬間のセッション全体の在庫（在庫全体には兄弟の分も含まれる）。 */
+    sessionTaskCount: z.number().int().nonnegative(),
+    /** この `agent_id` を起こし直した回数（今回を含む）。 */
+    wakeupCount: z.number().int().nonnegative(),
+    /**
+     * 起こし直したか（`woken`）、上限に達して起こし直さなかったか
+     * （`limit_reached`）。**2値を潰さないこと**——前者はまだ委譲が進む
+     * 見込みがある空転、後者は自動では再開しない空転で、性質が違う
+     * （`token_rotation.event` の doc「6値を潰さないこと」と同じ理由）。
+     */
+    outcome: z.enum(['woken', 'limit_reached']),
+    /** 人間が読む1行（整形済み。`note.text` そのまま）。 */
+    text: z.string(),
+  }),
   z.object({
     type: z.literal('escalation'),
     id: z.string(),
@@ -1080,6 +1136,7 @@ const journalEntryTypeNames = {
   worker_wait: true,
   turn_usage: true,
   token_rotation: true,
+  subagent_stall: true,
 } satisfies Record<JournalEntryType, true>;
 
 export const JOURNAL_ENTRY_TYPES = Object.keys(journalEntryTypeNames) as [

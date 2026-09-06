@@ -854,6 +854,65 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * （`manager.ts` の `case 'note'`）。
      */
     escalate: z.boolean().optional(),
+    /**
+     * **任意欄。`.optional()`（Issue #357 の数え上げ。`runner.ts` の
+     * `#onSubagentStop`）。** 立っているときだけ `manager.ts` の `case 'note'`
+     * は日誌エントリの種別を `subagent_stall`（`schema.ts`）にする。立って
+     * いなければ、これまでどおり `{ type: 'exchange', with: 'manager' }` で
+     * 記録する——`escalate` の扱い（受信箱へ上げるかどうか）とは完全に独立で、
+     * この欄はどちらの `escalate` の値とも組み合わさる。
+     *
+     * **中の欄をすべて optional にしていない理由——`stall` 自体が optional
+     * なので、旧 runner からは `stall` というキーそのものが来ない。中の
+     * 欄を必須にしても、新 runner が送るときには全部揃えて送るので、
+     * `stall` が存在する限り安全である。** ただし `agentType` だけは別
+     * 理由で `.optional()` にしてある——`hook.agent_type`（`runner.ts` の
+     * `#onSubagentStop`）自体が SDK 側の事情で無いことがあるため
+     * （`agent_type` を欠いた `SubagentStopHookInput` が実測されている。
+     * ファイル冒頭 `STOP_BASE` を参照）、この欄だけは「取れたときだけ
+     * 載せる」（AGENTS.md 地雷「取れない軸に0の行を作る」）の対象になる。
+     *
+     * **なぜ任意欄が安全か——`escalate` と同じ理由だが、この欄自身について
+     * 具体的に書く。**
+     *
+     * - **新 runner ＋ 旧デーモン**: runner がこの欄（`stall` ごと）を
+     *   載せても、旧デーモンの zod は未知の欄を黙って落とす。旧デーモンの
+     *   `case 'note'` は `event.escalate` の有無だけを見るので、`stall` の
+     *   有無に関係なくこれまでどおり動く（`{ type: 'exchange' }` として
+     *   記録され、`escalate` があれば受信箱へも上げる）。**新種別
+     *   `subagent_stall` としては記録されない**——これは新デーモンへ
+     *   入れ替わるまでの間、数え上げが `exchange` 側に留まるという意味で
+     *   あって、記録そのものが失われるわけではない
+     * - **旧 runner ＋ 新デーモン**: `stall` が来ない（`undefined`）ので、
+     *   新デーモンの `event.stall !== undefined` の分岐が立たず、
+     *   `{ type: 'exchange' }` として記録される＝新デーモンが `stall` を
+     *   知る前の挙動と同じ
+     *
+     * ⟹ **どちらが先にデプロイされても壊れない。** 判定は必ずこの欄で行い、
+     * `note.text` の文言（日本語の言い回し）では判定しない
+     * （`manager.ts` の `case 'note'`）。
+     */
+    stall: z
+      .object({
+        /** 畳もうとしていた作業者の `agent_id`。 */
+        agentId: z.string(),
+        /** `hook.agent_type`。**取れたときだけ載せる**（上の doc）。 */
+        agentType: z.string().optional(),
+        /** 当人が自分で起こした背景処理のうち、残っていた件数（`mine.length`）。 */
+        ownedTaskCount: z.number().int().nonnegative(),
+        /** その瞬間のセッション全体の在庫（`tasks.length`）。 */
+        sessionTaskCount: z.number().int().nonnegative(),
+        /** この `agent_id` を起こし直した回数（今回を含む）。 */
+        wakeupCount: z.number().int().nonnegative(),
+        /**
+         * 起こし直したか（`woken`）、上限に達して起こし直さなかったか
+         * （`limit_reached`）。**2値を潰さないこと**——前者はまだ委譲が
+         * 進む見込みがある空転、後者は自動では再開しない空転で、数える側は
+         * この2つを区別したい（`token_rotation.event` の doc と同じ理由）。
+         */
+        outcome: z.enum(['woken', 'limit_reached']),
+      })
+      .optional(),
   }),
   z.object({
     type: z.literal('tool_use'),

@@ -2237,9 +2237,25 @@ function swappableRunner(runnerId = 'runner-primary') {
      * `escalate` を省くと従来どおり日誌にだけ残る回、`true` を渡すと
      * `manager.ts` の `case 'note'` がクローンの受信箱へも1本上げる回になる
      * （#570 の起こし直しが上限に達した回）。
+     *
+     * `stall` を渡すと、`case 'note'` が日誌の種別を `subagent_stall`
+     * （Issue #357）にする回になる。省けばこれまでどおり `exchange` に
+     * 落ちる——`escalate` とは独立した欄なので、この2つは自由に組み合わさる
+     * （`runner-protocol.ts` の `note.stall` の doc）。
      */
-    note(managerId: string, text: string, escalate?: true) {
-      emit?.({ type: 'note', managerId, text, ...(escalate === undefined ? {} : { escalate }) });
+    note(
+      managerId: string,
+      text: string,
+      escalate?: true,
+      stall?: Extract<RunnerEvent, { type: 'note' }>['stall'],
+    ) {
+      emit?.({
+        type: 'note',
+        managerId,
+        text,
+        ...(escalate === undefined ? {} : { escalate }),
+        ...(stall === undefined ? {} : { stall }),
+      });
     },
     /** 前のセッションを開き直せなかった（`recovered: false` なら仕事が止まる）。 */
     resumeFailed(managerId: string, sessionId: string, reason: string, recovered: boolean) {
@@ -5486,6 +5502,167 @@ describe('note.escalate（#570 の起こし直しが上限に達した回）', (
     expect(escalated?.kind).toBe('report');
     expect(escalated?.text).toContain('自動では再開しない');
     expect(escalated?.text).toContain('journal_read');
+
+    await s.pool.stop();
+  });
+});
+
+/**
+ * **Issue #357 の追跡 —— `note.stall` の日誌種別への振り分け。**
+ *
+ * `runner.ts` の `#onSubagentStop` が「委譲の空転」を検出した回に `stall`
+ * （`runner-protocol.ts` の doc）を載せる。`manager.ts` の `case 'note'` は、
+ * この欄の有無だけで日誌の種別を分ける——`stall` が有れば `subagent_stall`
+ * （`journal_read` の `types` で絞れる型付き種別）、無ければこれまでどおり
+ * `exchange` に落ちる（旧 runner からの note が通る経路）。
+ *
+ * **`escalate` の扱いとは完全に独立である。** ここでは `stall` の有無だけを
+ * 動かし、`escalate` は別の describe（`note.escalate`）が既に固定している
+ * ことの検算として、`escalate` を渡さない形で確かめる。
+ */
+describe('note.stall（Issue #357 — 空転の型付き記録への振り分け）', () => {
+  function job(id: string): Job {
+    return {
+      id,
+      managerId: id,
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      status: 'running',
+      summary: '走らせておいて',
+      request: 'CI を見張っておいて',
+      cwd: '/work/project',
+      sessionId: `sess-${id}`,
+      runnerId: 'runner-test',
+    };
+  }
+
+  function alive(id: string) {
+    return {
+      managerId: id,
+      status: 'running' as const,
+      cwd: '/work/project',
+      request: 'CI を見張っておいて',
+      waiting: [],
+      sessionId: `sess-${id}`,
+    };
+  }
+
+  it('stall 無しの note は、これまでどおり exchange として日誌に残る', async () => {
+    const id = 'mgr-note-stall-absent';
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job(id));
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push(alive(id));
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.note(id, `[${id}] 旧 runner からの note（stall を知らない）。`);
+
+    await expect
+      .poll(
+        async () => {
+          const entries = await stores.journal.list({ types: ['exchange'] });
+          return entries.some(
+            (entry) => 'text' in entry && entry.text.includes('旧 runner からの note'),
+          );
+        },
+        { timeout: 2000 },
+      )
+      .toBe(true);
+
+    // **`subagent_stall` としては1件も記録されない。**
+    const stallEntries = await stores.journal.list({ types: ['subagent_stall'] });
+    expect(stallEntries).toHaveLength(0);
+
+    await s.pool.stop();
+  });
+
+  it('stall 付きの note は subagent_stall として日誌に残り、構造の欄がそのまま渡る', async () => {
+    const id = 'mgr-note-stall-present';
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job(id));
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push(alive(id));
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.note(id, `[${id}] 起こし直した（1回目 / 上限 2）。`, undefined, {
+      agentId: 'agent-1',
+      agentType: 'worker',
+      ownedTaskCount: 1,
+      sessionTaskCount: 2,
+      wakeupCount: 1,
+      outcome: 'woken',
+    });
+
+    await expect
+      .poll(async () => {
+        const entries = await stores.journal.list({ types: ['subagent_stall'] });
+        return entries.length;
+      }, { timeout: 2000 })
+      .toBe(1);
+
+    const [entry] = await stores.journal.list({ types: ['subagent_stall'] });
+    if (entry === undefined || entry.type !== 'subagent_stall') {
+      throw new Error('subagent_stall の日誌が見つからない');
+    }
+    expect(entry.agentId).toBe('agent-1');
+    expect(entry.agentType).toBe('worker');
+    expect(entry.ownedTaskCount).toBe(1);
+    expect(entry.sessionTaskCount).toBe(2);
+    expect(entry.wakeupCount).toBe(1);
+    expect(entry.outcome).toBe('woken');
+    expect(entry.text).toContain('起こし直した');
+
+    // **`exchange` としては記録されない**（種別が置き換わる。二重に残らない）。
+    const exchangeEntries = await stores.journal.list({ types: ['exchange'] });
+    expect(
+      exchangeEntries.some((e) => 'text' in e && e.text.includes('起こし直した（1回目')),
+    ).toBe(false);
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **受信箱への escalate も、`stall` と組み合わさって独立に効く。**
+   * `stall` の有無（日誌の種別）と `escalate` の有無（受信箱へ上げるか）は
+   * 別欄なので、両方を同時に立てた回で両方の効果が同時に出ることを見る
+   * （直上の2本は `escalate` を渡していないので、ここが唯一の組み合わせの歯）。
+   */
+  it('stall と escalate を両方伴う note は、subagent_stall として残りかつ受信箱にも上がる', async () => {
+    const id = 'mgr-note-stall-and-escalate';
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job(id));
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push(alive(id));
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+    const before = s.inbox.filter(
+      (event) => event.type === 'manager_message' && event.managerId === id,
+    ).length;
+
+    fake.note(id, `[${id}] 起こし直さなかった（既に 2回 起こし直し済み）。`, true, {
+      agentId: 'agent-9',
+      agentType: 'Explore',
+      ownedTaskCount: 3,
+      sessionTaskCount: 5,
+      wakeupCount: 2,
+      outcome: 'limit_reached',
+    });
+
+    await expect
+      .poll(async () => {
+        const entries = await stores.journal.list({ types: ['subagent_stall'] });
+        return entries.length;
+      }, { timeout: 2000 })
+      .toBe(1);
+
+    const managerMessagesOf = (managerId: string) =>
+      s.inbox.filter(
+        (event) => event.type === 'manager_message' && event.managerId === managerId,
+      ) as { kind: string; text: string }[];
+    await expect.poll(() => managerMessagesOf(id).length, { timeout: 2000 }).toBe(before + 1);
+    expect(managerMessagesOf(id).at(-1)?.kind).toBe('report');
 
     await s.pool.stop();
   });

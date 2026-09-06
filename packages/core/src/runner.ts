@@ -2816,6 +2816,17 @@ class RunnerSession {
           type: 'note',
           managerId: this.#id,
           text: this.#truncateSubagentStopText(noteLines.join('\n')),
+          stall: {
+            agentId,
+            // **取れたときだけ載せる**（AGENTS.md 地雷「取れない軸に0の行を
+            // 作る」。`hook.agent_type` は SDK 側の事情で無いことがある —
+            // `runner-protocol.ts` の `note.stall.agentType` の doc）。
+            ...(hook.agent_type === undefined ? {} : { agentType: hook.agent_type }),
+            ownedTaskCount: mine.length,
+            sessionTaskCount: tasks.length,
+            wakeupCount: newCount,
+            outcome: 'woken',
+          },
         });
 
         const contextLines = [
@@ -2854,6 +2865,15 @@ class RunnerSession {
         managerId: this.#id,
         text: this.#truncateSubagentStopText(noteLines.join('\n')),
         escalate: true,
+        stall: {
+          agentId,
+          // 同上（「取れたときだけ載せる」）。
+          ...(hook.agent_type === undefined ? {} : { agentType: hook.agent_type }),
+          ownedTaskCount: mine.length,
+          sessionTaskCount: tasks.length,
+          wakeupCount,
+          outcome: 'limit_reached',
+        },
       });
 
       return { continue: true };

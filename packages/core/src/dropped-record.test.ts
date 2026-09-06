@@ -197,6 +197,44 @@ describe('落とした記録の跡', () => {
     );
   });
 
+  /**
+   * `subagent_stall`（Issue #357）は `agentId`/`ownedTaskCount`/
+   * `sessionTaskCount`/`wakeupCount`/`outcome` を数値・列挙値・id として
+   * そのまま載せ、自由文は `text` の1つだけを長さで出す。`agentType` は
+   * `.claude/agents/*.md` が定義する小さい語彙（外部入力ではない）なので
+   * `turn_usage` のモデル id と同じ扱いで `tag()` に載せる（`agentType` が
+   * 無い回は欄自体が出ない——「取れない軸に0の行を作る」を跡でも守る）。
+   */
+  it('subagent_stall は数値・列挙値・id をそのまま載せ、text だけ長さにする', () => {
+    const shape = journalEntryShape({
+      type: 'subagent_stall',
+      agentId: 'agent-1',
+      agentType: 'worker',
+      ownedTaskCount: 1,
+      sessionTaskCount: 2,
+      wakeupCount: 1,
+      outcome: 'woken',
+      text: secret,
+    });
+
+    expect(shape).not.toContain(secret);
+    expect(shape).toBe(
+      'subagent_stall agentId=agent-1 agentType=worker ownedTaskCount=1 sessionTaskCount=2 ' +
+        `wakeupCount=1 outcome=woken chars=${secret.length}`,
+    );
+
+    const withoutAgentType = journalEntryShape({
+      type: 'subagent_stall',
+      agentId: 'agent-1',
+      ownedTaskCount: 1,
+      sessionTaskCount: 1,
+      wakeupCount: 2,
+      outcome: 'limit_reached',
+      text: 'あ',
+    });
+    expect(withoutAgentType).not.toContain('agentType');
+  });
+
   it('理由は1行に切る（ドライバが本文を添えて返してくることがある）', async () => {
     const lines = await captureStderr(() => {
       noteDroppedRecord('日誌', '', new Error(`connection lost\nDETAIL: 送った本文 ${secret}`));
