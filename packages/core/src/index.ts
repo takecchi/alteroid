@@ -30,6 +30,28 @@ export {
   type CommitmentCursor,
 } from './commitment-cursor.js';
 /**
+ * 承認待ち（`PendingApproval`）の並び順・継続点（keyset cursor）の共通実装。
+ *
+ * **`approvals_list`（クローンの道具、`tools.ts`）と `GET /approvals`
+ * （`apps/daemon/src/app.ts`）の両方が、`(createdAt, id)` の同じ比較で頁を
+ * 繰る。** `JobStore.listApprovals` は並び順を契約していない（`store.ts` の
+ * `JobStore`）ので、並びを決めているのはストアではなくこの比較のほうである。
+ * 台帳（直上）が同じ実装を2箇所に持って「歯で見張る」形から寄せる形へ移った
+ * のと同じ理由で、こちらは最初から1箇所に置く——`apps/daemon/src/app.ts` の
+ * `ApprovalPagingKey` / `compareApprovalPagingKeyAsc` /
+ * `compareApprovalPagingKey` をここへ移設し、app.ts は import する側になった
+ * （移設の時点で中身は1バイトも変えていない）。
+ */
+export {
+  compareApprovalPagingKeyAsc,
+  compareApprovalPagingKey,
+  encodeApprovalCursor,
+  decodeApprovalCursor,
+  resolveApprovalCursor,
+  type ApprovalPagingKey,
+  type ApprovalCursor,
+} from './approval-cursor.js';
+/**
  * 利用状況の台帳（alteroid 自身が使った分）。
  *
  * 出所は SDK の `result.modelUsage` であって `usage` ではない（後者はメイン

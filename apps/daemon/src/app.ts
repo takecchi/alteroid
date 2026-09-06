@@ -26,6 +26,7 @@ import {
   collectConversations,
   commitmentPosition,
   commitmentUpdatedAt,
+  compareApprovalPagingKey,
   compareCommitmentPosition,
   conversationMessages,
   createAuthProviderRegistry,
@@ -55,6 +56,7 @@ import {
   usageDateSchema,
   usageLayerSchema,
   usageSiteSchema,
+  type ApprovalPagingKey,
   type AuthAccount,
   type AuthService,
 } from '@alteroid/core';
@@ -435,23 +437,15 @@ const approvalsCursorSchema = z.object({
   order: z.enum(['asc', 'desc']),
 });
 
-type ApprovalPagingKey = { id: string; createdAt: string };
-
-/** `(createdAt, id)` の昇順比較。同時刻は `id` で決める。 */
-function compareApprovalPagingKeyAsc(a: ApprovalPagingKey, b: ApprovalPagingKey): number {
-  if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;
-  if (a.id !== b.id) return a.id < b.id ? -1 : 1;
-  return 0;
-}
-
-/** `order` に応じた向きの比較。`desc` は昇順比較を反転しただけ（別の比較関数を書かない）。 */
-function compareApprovalPagingKey(
-  order: 'asc' | 'desc',
-): (a: ApprovalPagingKey, b: ApprovalPagingKey) => number {
-  return order === 'asc'
-    ? compareApprovalPagingKeyAsc
-    : (a, b) => compareApprovalPagingKeyAsc(b, a);
-}
+// **位置の型（`ApprovalPagingKey`）と keyset の比較（`compareApprovalPagingKeyAsc`
+// / `compareApprovalPagingKey`）は `@alteroid/core` から import する。** かつて
+// ここに置いてあったものを、`approvals_list`（クローンの道具、
+// `packages/core/src/tools.ts`）が同じ `(createdAt, id)` の比較で継続点を足した
+// ときに `@alteroid/core`（`approval-cursor.ts`）へ移設した。**挙動は1バイトも
+// 変えていない**——呼び出し側（下）の引数の順序・比較の向きはそのままで、呼ぶ
+// 関数の場所だけが変わっている。台帳の側（`commitmentPosition` /
+// `compareCommitmentPosition`。下のコメント）が「2箇所に同じ実装を置いて歯で
+// 見張る」形から寄せる形へ移ったのと同じ理由で、こちらは初めから寄せてある。
 /**
  * 会話は日誌から組み立てる。`scan` はどこまで遡るかで、`limit` は返す本数。
  * **黙って打ち切らない** — 応答に `scanned` を返して、遡り切れていないことが
