@@ -59,7 +59,7 @@ import {
   type AuthService,
 } from '@alteroid/core';
 
-import { bearerOf, isOperator, type AuthPlan, type AuthVariables } from './auth.js';
+import { bearerOf, isOperator, type AuthPlan, type AuthVariables, type Principal } from './auth.js';
 import type { JournalBus } from './journal-bus.js';
 import { Scalar } from '@scalar/hono-api-reference';
 import { Hono } from 'hono';
@@ -859,6 +859,34 @@ function managerView(managers: ManagerPool, summary: ManagerSummary) {
 }
 
 /** 一覧・詳細で返すアカウント（identity を畳んで、秘密は載せない）。 */
+/**
+ * **誰がこの操作をしたか。** `grantedBy`（正本）と日誌の `grounds`（読み物）の
+ * 両方を、ここ1箇所から導く。
+ *
+ * **2026-09-06 の同格化まで、`/access/*` は `requireOperator` を通っていた**ので
+ * 「叩いた者＝実行環境の持ち主」が保証されており、固定の `'operator'` を書いても
+ * 事実として正しかった。**同格化でその保証が消えたのに固定値が残っていた**ので、
+ * 許可されたアカウントが叩いても「実行環境の持ち主による操作」と記録されていた。
+ *
+ * **`grantedBy` は「誰が許可したか」を持つ欄である。** そこが常に同じ値なら、
+ * この欄は情報を1ビットも運ばない——「事後に追えることが『最終承認』の実体で
+ * ある」（PRD「可観測性」）が、記録の側から崩れる。
+ *
+ * **2つに分けてあるのは、正本と読み物で要るものが違うからである。**
+ * `grantedBy` は後から突き合わせる値なので id だけを入れる。`grounds` は人間が
+ * 読む文なので、どちらの資格で叩いたかが文として分かる形にする。
+ */
+function actorOf(principal: Principal): string {
+  return principal.kind === 'operator' ? 'operator' : principal.account.id;
+}
+
+/** 日誌の `grounds` に載せる、人間が読む形の「誰が」。 */
+function describeActor(principal: Principal): string {
+  return principal.kind === 'operator'
+    ? '実行環境の持ち主による操作'
+    : `許可されたアカウント（${principal.account.id}）による操作`;
+}
+
 async function accountView(
   stores: Stores,
   account: AuthAccount,
@@ -4029,7 +4057,10 @@ export function createApp(deps: AppDeps) {
       }),
       deliberateClient,
       async (c) => {
-        const result = await authService.grant(c.req.param('accountId'), 'operator');
+        const result = await authService.grant(
+          c.req.param('accountId'),
+          actorOf(c.get('principal')),
+        );
         if (result.status === 'not_found') return c.json({ error: 'not found' as const }, 404);
         if (result.status === 'conflict') {
           return c.json(
@@ -4047,7 +4078,7 @@ export function createApp(deps: AppDeps) {
         await stores.journal.append({
           type: 'decision',
           decision: `アクセス許可を付与: ${describeAccount(result.account)}`,
-          grounds: '実行環境の持ち主による操作（alteroid access grant）',
+          grounds: `${describeActor(c.get('principal'))}（alteroid access grant）`,
         });
         return c.json(
           accessAccountResponseSchema.parse({ account: await accountView(stores, result.account) }),
@@ -4101,7 +4132,7 @@ export function createApp(deps: AppDeps) {
         await stores.journal.append({
           type: 'decision',
           decision: `アクセス許可を取り消し: ${describeAccount(account)}`,
-          grounds: '実行環境の持ち主による操作（alteroid access revoke）',
+          grounds: `${describeActor(c.get('principal'))}（alteroid access revoke）`,
         });
         return c.json(
           accessAccountResponseSchema.parse({ account: await accountView(stores, account) }),
