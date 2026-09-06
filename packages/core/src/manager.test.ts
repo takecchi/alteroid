@@ -5596,10 +5596,13 @@ describe('note.stall（Issue #357 — 空転の型付き記録への振り分け
     });
 
     await expect
-      .poll(async () => {
-        const entries = await stores.journal.list({ types: ['subagent_stall'] });
-        return entries.length;
-      }, { timeout: 2000 })
+      .poll(
+        async () => {
+          const entries = await stores.journal.list({ types: ['subagent_stall'] });
+          return entries.length;
+        },
+        { timeout: 2000 },
+      )
       .toBe(1);
 
     const [entry] = await stores.journal.list({ types: ['subagent_stall'] });
@@ -5616,9 +5619,9 @@ describe('note.stall（Issue #357 — 空転の型付き記録への振り分け
 
     // **`exchange` としては記録されない**（種別が置き換わる。二重に残らない）。
     const exchangeEntries = await stores.journal.list({ types: ['exchange'] });
-    expect(
-      exchangeEntries.some((e) => 'text' in e && e.text.includes('起こし直した（1回目')),
-    ).toBe(false);
+    expect(exchangeEntries.some((e) => 'text' in e && e.text.includes('起こし直した（1回目'))).toBe(
+      false,
+    );
 
     await s.pool.stop();
   });
@@ -5651,10 +5654,13 @@ describe('note.stall（Issue #357 — 空転の型付き記録への振り分け
     });
 
     await expect
-      .poll(async () => {
-        const entries = await stores.journal.list({ types: ['subagent_stall'] });
-        return entries.length;
-      }, { timeout: 2000 })
+      .poll(
+        async () => {
+          const entries = await stores.journal.list({ types: ['subagent_stall'] });
+          return entries.length;
+        },
+        { timeout: 2000 },
+      )
       .toBe(1);
 
     const managerMessagesOf = (managerId: string) =>

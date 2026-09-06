@@ -6770,7 +6770,8 @@ describe('journalEntrySchema の subagent_stall（Issue #357）', () => {
   });
 
   it('agentType を省いても通る（取れなかった回）', () => {
-    const { agentType: _agentType, ...withoutAgentType } = full;
+    const withoutAgentType: Record<string, unknown> = { ...full };
+    delete withoutAgentType.agentType;
     const result = journalEntrySchema.safeParse(withoutAgentType);
     expect(result.success).toBe(true);
   });
