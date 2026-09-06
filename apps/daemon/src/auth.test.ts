@@ -396,6 +396,110 @@ describe('認証が有効なとき', () => {
     );
   });
 
+  /**
+   * **日誌の「誰が」は、叩いた principal から導かれること。**
+   *
+   * 2026-09-06 の同格化まで `/access/*` は `requireOperator` を通っていたので、
+   * 「叩いた者＝実行環境の持ち主」が保証されており、固定の文言で正しかった。
+   * **同格化でその保証が消えた。** 許可されたアカウントが叩いても「実行環境の
+   * 持ち主による操作」と記録されるなら、事後に追えること（PRD「可観測性」）が
+   * 記録の側から崩れる。
+   *
+   * **両側から測る。** 片側だけだと「常に持ち主の文言を出す」形へ倒しても
+   * 気づかない。**文言は値をここへ複製してある**——`app.ts` から import すると
+   * 自己整合して、ずれてもこの歯が落ちなくなる。
+   */
+  describe('日誌の「誰が」', () => {
+    async function lastGrounds(): Promise<string> {
+      // **既定の `order` は `desc`（新しい順）。** 先頭が最新である
+      // （`packages/core/src/testing.ts` の `list`: 「既定 `desc` は従来どおり
+      // push の逆順（新しい順）」）。**`at(-1)` は最古を取る**ので使わない。
+      const entries = await stores.journal.list({ types: ['decision'] });
+      const newest = entries[0];
+      if (newest === undefined || !('grounds' in newest)) throw new Error('decision の記録が無い');
+      return newest.grounds;
+    }
+
+    it('② 実行環境の持ち主が付与したら、そう記録される（今日の挙動は変わらない）', async () => {
+      const claimed = await loginThrough(app);
+      await app.request(`/access/${claimed.account.id}/grant`, {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+      });
+
+      expect(await lastGrounds()).toBe('実行環境の持ち主による操作（alteroid access grant）');
+    });
+
+    it('① 許可されたアカウントが付与したら、そのアカウントが記録される', async () => {
+      const claimed = await loginThrough(app);
+      await app.request(`/access/${claimed.account.id}/grant`, {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+      });
+      const self = { authorization: `Bearer ${claimed.token}` };
+
+      const response = await app.request(`/access/${claimed.account.id}/grant`, {
+        ...post,
+        headers: { ...post.headers, ...self },
+      });
+      expect(response.status).toBe(200);
+
+      const grounds = await lastGrounds();
+      expect(grounds).toContain(claimed.account.id);
+      expect(grounds).toContain('許可されたアカウント');
+      // **鳴ってはいけない側。** ここが持ち主の文言なら、記録が嘘をついている。
+      expect(grounds).not.toContain('実行環境の持ち主');
+    });
+
+    it('① 許可されたアカウントが取り消したら、そのアカウントが記録される（revoke 側）', async () => {
+      const claimed = await loginThrough(app);
+      await app.request(`/access/${claimed.account.id}/grant`, {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+      });
+      const self = { authorization: `Bearer ${claimed.token}` };
+
+      const response = await app.request(`/access/${claimed.account.id}/revoke`, {
+        ...post,
+        headers: { ...post.headers, ...self },
+      });
+      expect(response.status).toBe(200);
+
+      const grounds = await lastGrounds();
+      expect(grounds).toContain(claimed.account.id);
+      expect(grounds).toContain('（alteroid access revoke）');
+      expect(grounds).not.toContain('実行環境の持ち主');
+    });
+
+    /**
+     * **`grantedBy` の側は、①が書き換える経路がいまは無い。** その前提を測る。
+     *
+     * - 既に許可済みのアカウントへの再 grant は、`grantExclusive` が**書き込まずに**
+     *   既存の記録を返す（`packages/storage-fs/src/auth.ts` と `testing.ts` の
+     *   `grantExclusive` — `account.grantedAt !== null` なら `next: null`）
+     * - 別のアカウントを追加で通そうとすれば 409（持ち主は高々1つ）
+     *
+     * ⟹ **①が `grantedBy` に値を書ける経路が存在しない。** だから `grantedBy` は
+     * いま嘘をついていない。**この歯は、その前提が崩れたら鳴る**——再 grant が
+     * 書き換える形に変わったら、`actorOf` の側の分岐が本番で効き始めるので、
+     * そのときここを読み直すこと。
+     */
+    it('①の再 grant では grantedBy が書き換わらない（前提の固定）', async () => {
+      const claimed = await loginThrough(app);
+      await app.request(`/access/${claimed.account.id}/grant`, {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+      });
+
+      const response = await app.request(`/access/${claimed.account.id}/grant`, {
+        ...post,
+        headers: { ...post.headers, authorization: `Bearer ${claimed.token}` },
+      });
+      const body = (await response.json()) as { account: { grantedBy: string | null } };
+      expect(body.account.grantedBy).toBe('operator');
+    });
+  });
+
   it('許可の付与はブラウザの単純リクエストでは通らない（content-type の門番）', async () => {
     const claimed = await loginThrough(app);
     const response = await app.request(`/access/${claimed.account.id}/grant`, {

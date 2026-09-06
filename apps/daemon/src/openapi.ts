@@ -144,7 +144,10 @@ const accountViewSchema = z.object({
   lastLoginAt: isoDateTimeSchema.nullable(),
   /** 許可の2値。`null` なら未許可＝ログインはできるが alteroid は使えない。 */
   grantedAt: isoDateTimeSchema.nullable(),
-  /** 誰が許可したか（`operator` = 状態ファイルを読める実行環境の持ち主）。 */
+  /**
+   * 誰が許可したか。`operator` = 状態ファイルを読める実行環境の持ち主。**それ以外は
+   * 許可を与えたアカウントの id**（2026-09-06 の同格化以降）。
+   */
   grantedBy: z.string().nullable(),
 });
 

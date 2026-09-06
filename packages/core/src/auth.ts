@@ -47,7 +47,15 @@ export const authAccountSchema = z.object({
    * 付与は CLI（`alteroid access grant`）から行う。
    */
   grantedAt: isoDateTime.nullable(),
-  /** 誰が許可したか（`operator` = 状態ファイルを読める実行環境の持ち主）。 */
+  /**
+   * 誰が許可したか。
+   *
+   * - `operator` = 状態ファイルを読める実行環境の持ち主
+   * - **それ以外は、許可を与えたアカウントの id**（2026-09-06 の同格化で、許可された
+   *   アカウントも `/access/*` を叩けるようになったため）
+   *
+   * **固定値を書かないこと。** ここが常に同じ値なら、この欄は情報を運ばない。
+   */
   grantedBy: z.string().nullable(),
 });
 
