@@ -70,7 +70,7 @@
     },
     {
       "name": "access",
-      "description": "アクセス許可の付与・剥奪。実行環境の持ち主（状態ファイルを読める者）だけが叩ける"
+      "description": "アクセス許可の付与・剥奪。alteroid を使う許可（access grant 済み）があれば実行環境の持ち主と同格に叩ける（2026-09-06 のオーナー決定）"
     },
     {
       "name": "tokens",
@@ -82,7 +82,7 @@
       "bearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "description": "2種類のトークンが同じ形で通る。①**アクセストークン**（`alt_` で始まる。`alteroid login` で発行し、許可されたアカウントのものだけが通る）。②**実行環境の持ち主のトークン**（`~/.alteroid/state/daemon.json` の `token`。CLI がこれを使う。ここを読めること自体が境界であり、`/access/*`（許可の付与）はこちらでしか通らない）。\n\n`ALTEROID_AUTH=off`（既定はログイン手段が未設定のとき）では認証を要求しない。"
+        "description": "2種類のトークンが同じ形で通る。①**アクセストークン**（`alt_` で始まる。`alteroid login` で発行し、許可されたアカウントのものだけが通る）。②**実行環境の持ち主のトークン**（`~/.alteroid/state/daemon.json` の `token`。CLI がこれを使う。ここを読めること自体が境界である）。\n\n**`/access/*` `/tokens*` は①②どちらでも通る**（2026-09-06 のオーナー決定——alteroid を使う許可があれば実行環境の持ち主と同格）。**②でしか通らないのは `/profile`（実行環境そのものを差し替える口）だけである。**\n\n`ALTEROID_AUTH=off`（既定はログイン手段が未設定のとき）では認証を要求しない。"
       }
     }
   },
@@ -6594,7 +6594,7 @@
             }
           },
           "403": {
-            "description": "実行環境の持ち主ではない。",
+            "description": "alteroid を使う許可が無い（ログインしているが `access grant` されていない）。資格そのものが無い場合は 401。",
             "content": {
               "application/json": {
                 "schema": {
@@ -6720,7 +6720,7 @@
             }
           },
           "403": {
-            "description": "実行環境の持ち主ではない。",
+            "description": "alteroid を使う許可が無い（ログインしているが `access grant` されていない）。資格そのものが無い場合は 401。",
             "content": {
               "application/json": {
                 "schema": {
@@ -6845,7 +6845,7 @@
             }
           },
           "403": {
-            "description": "実行環境の持ち主ではない。",
+            "description": "alteroid を使う許可が無い（ログインしているが `access grant` されていない）。資格そのものが無い場合は 401。",
             "content": {
               "application/json": {
                 "schema": {
@@ -7576,7 +7576,7 @@
         "operationId": "getAccess",
         "tags": ["access"],
         "summary": "ログインしたアカウントと許可の一覧",
-        "description": "実行環境の持ち主だけが読める（メールと identity が並ぶため）。",
+        "description": "alteroid を使う許可があれば読める（実行環境の持ち主と同格。2026-09-06 のオーナー決定）。メールと identity が並ぶ一覧である点は変わらない。",
         "responses": {
           "200": {
             "description": "アカウントの一覧。",
@@ -7714,7 +7714,7 @@
             }
           },
           "403": {
-            "description": "実行環境の持ち主ではない。",
+            "description": "alteroid を使う許可が無い（ログインしているが `access grant` されていない）。資格そのものが無い場合は 401。",
             "content": {
               "application/json": {
                 "schema": {
@@ -7881,7 +7881,7 @@
             }
           },
           "403": {
-            "description": "実行環境の持ち主ではない。",
+            "description": "alteroid を使う許可が無い（ログインしているが `access grant` されていない）。資格そのものが無い場合は 401。",
             "content": {
               "application/json": {
                 "schema": {
@@ -8106,7 +8106,7 @@
             }
           },
           "403": {
-            "description": "実行環境の持ち主ではない。",
+            "description": "alteroid を使う許可が無い（ログインしているが `access grant` されていない）。資格そのものが無い場合は 401。",
             "content": {
               "application/json": {
                 "schema": {
