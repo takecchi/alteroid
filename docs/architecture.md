@@ -420,6 +420,7 @@ packages/api-client  生成 spec から起こした外部向けクライアン�
 | アクセストークン（`alt_…`） | `alteroid login` した端末・画面・外部アプリ | 許可されていれば API 全般 |
 | 実行環境の持ち主のトークン | `state/daemon.json` を読める者 | API 全般 ＋ `/profile`（実行環境プロファイルの読み書き） |
 
+- **どちらの資格も要らずに通る経路が7本ある。** ログインそのものの経路（`/auth` とその配下。ただし `/auth/me` は認証が要る）と、`/health` `/openapi.json` `/docs` である。**上の表は「資格を持つ者に何ができるか」を言っているだけで、「資格が要る経路の一覧」ではない。** 正本は `isPublicPath`（`grep -Fn -- 'function isPublicPath' apps/daemon/src/app.ts`）で、本数はそこから数え直せる
 - **ログインしただけでは使えない。** 使う許可は人間が `alteroid access grant` で与える。これは PRD「権限境界」とは別の層である — あちらは「クローンが何を人間へ確認するか」を記憶で決める話で、こちらは「そもそも誰が API に触れるか」であり、持つのは許可されているか否かの2値だけ（行為の一覧を持たない）
 - **入口ごとに認証を作らない。** CLI・HTTP API・Web UI は同じ門番を通る（PRD「インターフェース」）
 - 資格は `Authorization: Bearer` だけで運ぶ。Cookie は受けない（[Web UI](#web-ui--画面とデーモンのオリジンが違うこと)の項）
