@@ -1009,7 +1009,14 @@ export function createApp(deps: AppDeps) {
     await next();
   });
 
-  /** 許可の付与・剥奪は実行環境の持ち主だけ（最初の1人を誰が通すかの出口）。 */
+  /**
+   * 実行環境の持ち主だけに絞る門。**⚠️ 2026-09-06 のオーナー決定で、`/tokens`
+   * `/access/*` はここを外れ `authenticate` だけになった**（alteroid を使う許可
+   * ＝ `access grant` 済みのアカウントを、実行環境の持ち主と同格に扱う）。
+   * いま実際にこの門を通るのは `GET /profile` `PUT /profile` の2経路だけ
+   * （下の doc に開けない理由がある）。定義そのものはこの決定でも変えていない
+   * ——変えたのは経路ごとの配線（どこへ引数として渡すか）である。
+   */
   const requireOperator = createMiddleware<{ Variables: AuthVariables }>(async (c, next) => {
     if (c.get('principal').kind !== 'operator') {
       return c.json({ error: '実行環境の持ち主だけが操作できる' as const }, 403);
@@ -2443,9 +2450,12 @@ export function createApp(deps: AppDeps) {
     // 台帳がクローンの内側だけの器になる（PRD「可観測性」）。
     //
     // **資格は `/schedule` と同じ（`authenticate` だけ）。`requireOperator` にしない。**
-    // あちらは実行環境そのものを差し替える資格（`/profile` `/access`）であって、
-    // 台帳の読み書きはそこまでの資格ではない。ここを持ち主だけにすると、
-    // 「使ってよい」の2値を通ったアカウントから台帳だけが見えなくなる。
+    // あちらは実行環境そのものを差し替える資格（`/profile`）であって、
+    // 台帳の読み書きはそこまでの資格ではない。**`/access` はかつてここに並んでいたが、
+    // 2026-09-06 のオーナー決定（alteroid を使う許可を実行環境の持ち主と同格にする）で
+    // `authenticate` だけへ変わり、いまは `/tokens` ともどもこちら側である。** ここを
+    // 持ち主だけにすると、「使ってよい」の2値を通ったアカウントから台帳だけが
+    // 見えなくなる。
     //
     // **これは「やることの一覧」ではない。** 器が持つのは「何を頼まれたか」と
     // 「まだ片付いていない」の2値だけで、順序も優先度も締切も持たない。だから
@@ -3263,7 +3273,13 @@ export function createApp(deps: AppDeps) {
     /**
      * 人間が置いた実行環境プロファイル（`.zprofile` 相当）。
      *
-     * **実行環境の持ち主だけ**（`requireOperator`）。`/access/*` と同じ資格である。
+     * **実行環境の持ち主だけ**（`requireOperator`）。**⚠️ 2026-09-06 のオーナー決定
+     * （alteroid を使う許可＝ `access grant` 済みのアカウントを実行環境の持ち主と
+     * 同格にする）の対象外——`/tokens` `/access/*` はその決定で `authenticate` だけに
+     * 変わったが、ここは変えていない。** 理由: ①は端末・画面・外部アプリへ配られる
+     * bearer token で、②はサーバ上のファイルである。`GET /profile` は本文をそのまま
+     * 返し、そこには鍵が入りうる。同格にすることは「鍵に届く資格」を*外へ配られる側*
+     * へ持たせることであり、①のトークンが1つ漏れれば鍵が読める。
      *
      * 単一の持ち主しか許可できない以上、`access grant` 済みのアカウントも同じ人間の
      * はずだが、**この口だけは「使ってよい」より一段強い**。理由は下の `PUT` にある
@@ -3325,6 +3341,13 @@ export function createApp(deps: AppDeps) {
      * そのものであり、評価中の出力は応答にも返る。`access grant` を通っただけの
      * アカウントに、実行環境そのものを差し替える資格まで渡さない
      * （許可が持っているのは「使ってよい」の2値だけである）。
+     *
+     * **⚠️ 2026-09-06 のオーナー決定（`/tokens` `/access/*` を `authenticate` だけへ
+     * 開き、alteroid を使う許可があれば実行環境の持ち主と同格にする）の対象外。**
+     * 理由: ①は端末・画面・外部アプリへ配られる bearer token で、②はサーバ上の
+     * ファイルである。ここは②側の鍵（`GH_TOKEN` のような値）をまるごと運ぶ口なので、
+     * 同格にすることは「鍵に届く資格」を*外へ配られる側*へ持たせることになり、
+     * ①のトークンが1つ漏れれば鍵そのものが読み書きできてしまう。
      *
      * **壊れているものは保存もしない。** プロファイルは人間が書いたシェル
      * スクリプトなので、構文を間違えれば読めない。それを保存すると、以後の
@@ -3415,9 +3438,11 @@ export function createApp(deps: AppDeps) {
     /**
      * プールの一覧と、回す契機・冷却の設定。
      *
-     * **実行環境の持ち主だけ**（`requireOperator`）——課金の主体を決める操作
-     * なので、`access grant` を通しただけのアカウントには開けない（`/profile`
-     * と同じ強さ）。
+     * **資格は `authenticate` だけ（`requireOperator` は付けない）。** ⚠️ 2026-09-06
+     * のオーナー決定——alteroid を使う許可（`access grant` 済み）があれば、実行環境の
+     * 持ち主と同格に扱う——により、以前ここに在った `requireOperator` を外した。
+     * `/profile`（鍵そのものを運ぶ）とは違い、ここが持つのは課金の設定であって
+     * 鍵の値ではないため、この決定の対象に含まれる。
      *
      * **値は決して出さない。** `TokenPoolService.list()` が返すのは
      * `AgentTokenView`（label と指紋だけ）で、`AgentToken`（`value` 付き）は
@@ -3437,12 +3462,13 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(tokensResponseSchema) } },
           },
           403: {
-            description: '実行環境の持ち主ではない。',
+            description:
+              'alteroid を使う許可が無い（ログインしているが `access grant` されて' +
+              'いない）。資格そのものが無い場合は 401。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
       }),
-      requireOperator,
       async (c) => {
         if (deps.tokens === undefined) {
           return c.json(
@@ -3461,6 +3487,9 @@ export function createApp(deps: AppDeps) {
      *
      * `normalizeTokenPool` が投げたら 400 で理由を返す——**理由の本文にトークン
      * の値は含めない**（投げるメッセージは id / label だけを含む）。
+     *
+     * **資格は `authenticate` だけ（`requireOperator` は付けない）。** `GET /tokens`
+     * と同じ理由（2026-09-06 のオーナー決定）。
      */
     .put(
       '/tokens',
@@ -3486,12 +3515,13 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           403: {
-            description: '実行環境の持ち主ではない。',
+            description:
+              'alteroid を使う許可が無い（ログインしているが `access grant` されて' +
+              'いない）。資格そのものが無い場合は 401。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
       }),
-      requireOperator,
       /**
        * **既定の 400 を使わない。** `hook` を渡さないと
        * `@hono/standard-validator` は
@@ -3550,7 +3580,8 @@ export function createApp(deps: AppDeps) {
     /**
      * 回す契機・冷却の既定を変える。3つとも部分更新（省略した項目は現状維持）。
      *
-     * **実行環境の持ち主だけ**（`/tokens` と同じ強さ）。
+     * **資格は `authenticate` だけ（`/tokens` と同じ強さ）。** `requireOperator` は
+     * 付けない（2026-09-06 のオーナー決定）。
      */
     .put(
       '/tokens/policy',
@@ -3568,12 +3599,13 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           403: {
-            description: '実行環境の持ち主ではない。',
+            description:
+              'alteroid を使う許可が無い（ログインしているが `access grant` されて' +
+              'いない）。資格そのものが無い場合は 401。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
       }),
-      requireOperator,
       jsonBody(tokensPolicyUpdateRequestSchema, (where) => ({
         error: '設定の入力の形が不正' + (where === '' ? '' : `: ${where}`),
       })),
@@ -3636,11 +3668,14 @@ export function createApp(deps: AppDeps) {
      * stderr へ残す行）を、器の外（Web/CLI/HTTP）から読み戻す。
      *
      * **資格は `authenticate` だけ（`requireOperator` は付けない）。** 理由は
-     * `/journal` `/managers` `/conversations` と同じ強さにしてあることで、
-     * `/tokens`（`requireOperator`）とは違う扱いにしている。この跡は本文を
+     * `/journal` `/managers` `/conversations` `/tokens` `/access/*` と同じ強さに
+     * してあることで、**`/profile`（`requireOperator`。実行環境の持ち主だけ）**
+     * とは違う扱いにしている。（`/tokens` `/access/*` は 2026-09-06 のオーナー
+     * 決定——alteroid を使う許可を実行環境の持ち主と同格にする——より前は
+     * `requireOperator` 側にいたが、いまはここと同じ側である。）この跡は本文を
      * 1文字も含まない設計（`dropped-record.ts` 冒頭 doc「本文は出さない」/
-     * #52）で、持ち主の系そのものの診断であって、`/tokens` のように課金の
-     * 主体を決める操作ではない——`access grant` を通しただけのアカウントに
+     * #52）で、持ち主の系そのものの診断であって、`/profile` のように鍵を
+     * まるごと扱う操作ではない——`access grant` を通しただけのアカウントに
      * も開いてよい強さである。
      *
      * **`limit` のクエリ引数は無い。帳面自体が `RECENT_TRACE_LIMIT`
@@ -3911,24 +3946,32 @@ export function createApp(deps: AppDeps) {
     // 禁じている「確認が要る行為の一覧」と同じ形であり、クローンの判断を設定で
     // 置き換えることになる。
 
+    /**
+     * **資格は `authenticate` だけ（`requireOperator` は付けない）。** ⚠️ 2026-09-06
+     * のオーナー決定——alteroid を使う許可（`access grant` 済み）があれば実行環境の
+     * 持ち主と同格に扱う——により、以前ここに在った `requireOperator` を外した。
+     */
     .get(
       '/access',
       describeRoute({
         tags: ['access'],
         summary: 'ログインしたアカウントと許可の一覧',
-        description: '実行環境の持ち主だけが読める（メールと identity が並ぶため）。',
+        description:
+          'alteroid を使う許可があれば読める（実行環境の持ち主と同格。2026-09-06 の' +
+          'オーナー決定）。メールと identity が並ぶ一覧である点は変わらない。',
         responses: {
           200: {
             description: 'アカウントの一覧。',
             content: { 'application/json': { schema: resolver(accessListResponseSchema) } },
           },
           403: {
-            description: '実行環境の持ち主ではない。',
+            description:
+              'alteroid を使う許可が無い（ログインしているが `access grant` されて' +
+              'いない）。資格そのものが無い場合は 401。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
       }),
-      requireOperator,
       async (c) => {
         const accounts = await stores.auth.listAccounts();
         return c.json(
@@ -3939,6 +3982,13 @@ export function createApp(deps: AppDeps) {
       },
     )
 
+    /**
+     * **資格は `authenticate` だけ（`requireOperator` は付けない）。** ⚠️ 2026-09-06
+     * のオーナー決定——alteroid を使う許可（`access grant` 済み）があれば実行環境の
+     * 持ち主と同格に扱う——により、以前ここに在った `requireOperator` を外した。
+     * 持ち主は依然として高々1人（下の `grantExclusive` の 409）——同格にしたのは
+     * 「誰が叩けるか」であって「何人まで許可できるか」ではない。
+     */
     .post(
       '/access/:accountId/grant',
       describeRoute({
@@ -3961,7 +4011,9 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(accessAccountResponseSchema) } },
           },
           403: {
-            description: '実行環境の持ち主ではない。',
+            description:
+              'alteroid を使う許可が無い（ログインしているが `access grant` されて' +
+              'いない）。資格そのものが無い場合は 401。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           404: {
@@ -3975,7 +4027,6 @@ export function createApp(deps: AppDeps) {
           ...noBodyPostResponses(),
         },
       }),
-      requireOperator,
       deliberateClient,
       async (c) => {
         const result = await authService.grant(c.req.param('accountId'), 'operator');
@@ -4004,6 +4055,13 @@ export function createApp(deps: AppDeps) {
       },
     )
 
+    /**
+     * **資格は `authenticate` だけ（`requireOperator` は付けない）。** ⚠️ 2026-09-06
+     * のオーナー決定——alteroid を使う許可（`access grant` 済み）があれば実行環境の
+     * 持ち主と同格に扱う——により、以前ここに在った `requireOperator` を外した。
+     * 同格である以上、いまは許可されたアカウントが自分自身を revoke することもできる
+     * （自分の許可を自分で手放す）。
+     */
     .post(
       '/access/:accountId/revoke',
       describeRoute({
@@ -4024,7 +4082,9 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(accessAccountResponseSchema) } },
           },
           403: {
-            description: '実行環境の持ち主ではない。',
+            description:
+              'alteroid を使う許可が無い（ログインしているが `access grant` されて' +
+              'いない）。資格そのものが無い場合は 401。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           404: {
@@ -4034,7 +4094,6 @@ export function createApp(deps: AppDeps) {
           ...noBodyPostResponses(),
         },
       }),
-      requireOperator,
       deliberateClient,
       async (c) => {
         const account = await authService.revoke(c.req.param('accountId'));

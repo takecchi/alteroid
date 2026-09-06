@@ -3764,9 +3764,10 @@ describe('宣言と実物の一致（/profile）', () => {
  * 認証トークンのプール（Issue #393「PR1 プールの器」）。
  *
  * **回さない。** ここで固定するのは器の口（`GET` / `PUT` / `PUT .../policy`）が
- * 正しく `requireOperator` を通ること、値が応答のどこにも出ないこと、プールが
- * 空の既定構成の挙動が変わらないことの3つである。検知・切替（PR2 以降）はここに
- * 無い。
+ * 正しく認証の門（`authenticate`）を通ること、値が応答のどこにも出ないこと、
+ * プールが空の既定構成の挙動が変わらないことの3つである。検知・切替（PR2 以降）
+ * はここに無い。**⚠️ 2026-09-06 のオーナー決定で、この3経路から `requireOperator`
+ * は外れた**（下の「alteroid を使う許可があれば実行環境の持ち主と同格」参照）。
  */
 describe('認証トークンのプール', () => {
   it('プールが空でも 200 を返し、既定の設定（free_exhausted）を返す（受け入れ基準7）', async () => {
@@ -4005,8 +4006,22 @@ describe('認証トークンのプール', () => {
    * 「この3経路が確かに `requireOperator` を通っている」ことだけを見る——
    * **許可されたアカウントでも 403** になることまで確かめる（`OPERATOR` トークンだけ
    * 通って「許可されてさえいれば通る」ように見えるのを防ぐため）。
+   *
+   * **⚠️ 2026-09-06、オーナー決定でここを反転した。** alteroid を使う許可
+   * （`access grant` 済み）を実行環境の持ち主と同格に扱う——`GET/PUT /tokens`
+   * `PUT /tokens/policy` `GET /access` `POST /access/:id/grant`
+   * `POST /access/:id/revoke` の6経路から `requireOperator` を外し、資格は
+   * `authenticate` だけにした。**上のコメントが書いていた「許可されたアカウントでも
+   * 403」は、いまこの6経路には当てはまらない**——`/profile` の GET/PUT だけは
+   * 変えていない（`auth.test.ts`「実行環境プロファイルは持ち主だけ」が固定してい
+   * て、ここでは触らない）。この describe がいま測るのは次の4つである:
+   * ①実行環境の持ち主は今日どおり6経路とも通る ②許可されたアカウントも同格に
+   * 通る（新しく足したもの） ③境界そのもの（未ログイン＝401、ログイン済みだが
+   * 未 grant＝403）は変わっていない ④「持ち主は高々1つ」（`grantExclusive`）は
+   * 同格になった側から叩いても崩れない。
    */
-  describe('実行環境の持ち主だけ（403）', () => {
+  describe('alteroid を使う許可があれば実行環境の持ち主と同格（6経路）', () => {
+    let nextSubject = 'sub-tokens-test';
     const FAKE_PROVIDER = {
       kind: 'oauth2' as const,
       id: 'fake',
@@ -4014,14 +4029,18 @@ describe('認証トークンのプール', () => {
       authorizationUrl: (request: { state: string }) =>
         `https://example.test/authorize?state=${request.state}`,
       exchange: async () => ({
-        subject: 'sub-tokens-test',
-        email: 'sub-tokens-test@example.test',
+        subject: nextSubject,
+        email: `${nextSubject}@example.test`,
         emailVerified: true,
-        displayName: 'sub-tokens-test',
+        displayName: nextSubject,
       }),
     };
     const post = { method: 'POST', headers: { 'content-type': 'application/json' } };
     const OPERATOR = { authorization: 'Bearer operator-token' };
+
+    beforeEach(() => {
+      nextSubject = 'sub-tokens-test';
+    });
 
     function buildAuthedApp() {
       const authStores = createMemoryStores();
@@ -4048,8 +4067,10 @@ describe('認証トークンのプール', () => {
       });
     }
 
-    /** ログインさせて、実行環境の持ち主として許可（grant）まで通す。 */
-    async function grantedAccountToken(app: ReturnType<typeof createApp>): Promise<string> {
+    /** ログインだけさせる（許可はしない）。`nextSubject` を先に変えて呼ぶこと。 */
+    async function loginOnly(
+      app: ReturnType<typeof createApp>,
+    ): Promise<{ token: string; accountId: string }> {
       const started = (await (
         await app.request('/auth/login', { ...post, body: JSON.stringify({ provider: 'fake' }) })
       ).json()) as { requestId: string; authorizationUrl: string; claimSecret: string };
@@ -4061,31 +4082,53 @@ describe('認証トークンのプール', () => {
           body: JSON.stringify({ claimSecret: started.claimSecret }),
         })
       ).json()) as { token: string; account: { id: string } };
-      await app.request(`/access/${claimed.account.id}/grant`, {
+      return { token: claimed.token, accountId: claimed.account.id };
+    }
+
+    /** ログインさせて、実行環境の持ち主として許可（grant）まで通す。 */
+    async function grantedAccountToken(
+      app: ReturnType<typeof createApp>,
+    ): Promise<{ token: string; accountId: string }> {
+      const logged = await loginOnly(app);
+      await app.request(`/access/${logged.accountId}/grant`, {
         ...post,
         headers: { ...post.headers, ...OPERATOR },
       });
-      return claimed.token;
+      return logged;
     }
 
-    it('資格が無ければ 401', async () => {
+    it('①資格が無ければ 401（⚠️ 認証が有効な構成でのみ。無効な既定構成の素通りは別の it で見る）', async () => {
       const withAuth = buildAuthedApp();
       expect((await withAuth.request('/tokens')).status).toBe(401);
+      expect((await withAuth.request('/access')).status).toBe(401);
+      expect(
+        (
+          await withAuth.request('/access/does-not-matter/grant', {
+            ...post,
+          })
+        ).status,
+      ).toBe(401);
+      expect(
+        (
+          await withAuth.request('/access/does-not-matter/revoke', {
+            ...post,
+          })
+        ).status,
+      ).toBe(401);
     });
 
-    it('許可されたアカウントでも 403（実行環境の持ち主だけが通る）', async () => {
+    it('①ログイン済みだが未 grant なら6経路とも 403（alteroid を使う許可そのものが無い）', async () => {
       const withAuth = buildAuthedApp();
-      const granted = { authorization: `Bearer ${await grantedAccountToken(withAuth)}` };
+      nextSubject = 'sub-not-granted';
+      const { token, accountId } = await loginOnly(withAuth);
+      const notGranted = { authorization: `Bearer ${token}` };
 
-      // 許可されている ＝ 他の経路（記憶）には触れる、という前提を先に確かめる。
-      expect((await withAuth.request('/memory', { headers: granted })).status).toBe(200);
-
-      expect((await withAuth.request('/tokens', { headers: granted })).status).toBe(403);
+      expect((await withAuth.request('/tokens', { headers: notGranted })).status).toBe(403);
       expect(
         (
           await withAuth.request('/tokens', {
             method: 'PUT',
-            headers: { 'content-type': 'application/json', ...granted },
+            headers: { 'content-type': 'application/json', ...notGranted },
             body: JSON.stringify({ tokens: [] }),
           })
         ).status,
@@ -4094,15 +4137,84 @@ describe('認証トークンのプール', () => {
         (
           await withAuth.request('/tokens/policy', {
             method: 'PUT',
-            headers: { 'content-type': 'application/json', ...granted },
+            headers: { 'content-type': 'application/json', ...notGranted },
             body: JSON.stringify({}),
+          })
+        ).status,
+      ).toBe(403);
+      expect((await withAuth.request('/access', { headers: notGranted })).status).toBe(403);
+      expect(
+        (
+          await withAuth.request(`/access/${accountId}/grant`, {
+            ...post,
+            headers: { ...post.headers, ...notGranted },
+          })
+        ).status,
+      ).toBe(403);
+      expect(
+        (
+          await withAuth.request(`/access/${accountId}/revoke`, {
+            ...post,
+            headers: { ...post.headers, ...notGranted },
           })
         ).status,
       ).toBe(403);
     });
 
-    it('実行環境の持ち主は3経路とも通る', async () => {
+    it('②許可されたアカウントも6経路とも通る（実行環境の持ち主と同格。オーナー決定 2026-09-06）', async () => {
       const withAuth = buildAuthedApp();
+      const { token, accountId } = await grantedAccountToken(withAuth);
+      const granted = { authorization: `Bearer ${token}` };
+
+      // 許可されている ＝ 他の経路（記憶）には触れる、という前提を先に確かめる。
+      expect((await withAuth.request('/memory', { headers: granted })).status).toBe(200);
+
+      expect((await withAuth.request('/tokens', { headers: granted })).status).toBe(200);
+      expect(
+        (
+          await withAuth.request('/tokens', {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json', ...granted },
+            body: JSON.stringify({ tokens: [] }),
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await withAuth.request('/tokens/policy', {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json', ...granted },
+            body: JSON.stringify({}),
+          })
+        ).status,
+      ).toBe(200);
+      expect((await withAuth.request('/access', { headers: granted })).status).toBe(200);
+      // 既に許可済みの自分自身への grant は冪等に 200
+      // （`grantExclusive` は同一アカウントを conflict ではなく granted として返す）。
+      expect(
+        (
+          await withAuth.request(`/access/${accountId}/grant`, {
+            ...post,
+            headers: { ...post.headers, ...granted },
+          })
+        ).status,
+      ).toBe(200);
+      // revoke は最後に——自分自身の許可を手放す操作なので、これ以降の
+      // アサーションには使わない。
+      expect(
+        (
+          await withAuth.request(`/access/${accountId}/revoke`, {
+            ...post,
+            headers: { ...post.headers, ...granted },
+          })
+        ).status,
+      ).toBe(200);
+    });
+
+    it('①実行環境の持ち主は6経路とも通る（今日の挙動は変わらない）', async () => {
+      const withAuth = buildAuthedApp();
+      nextSubject = 'sub-for-operator-test';
+      const { accountId } = await loginOnly(withAuth);
 
       expect((await withAuth.request('/tokens', { headers: OPERATOR })).status).toBe(200);
       expect(
@@ -4123,7 +4235,114 @@ describe('認証トークンのプール', () => {
           })
         ).status,
       ).toBe(200);
+      expect((await withAuth.request('/access', { headers: OPERATOR })).status).toBe(200);
+      expect(
+        (
+          await withAuth.request(`/access/${accountId}/grant`, {
+            ...post,
+            headers: { ...post.headers, ...OPERATOR },
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await withAuth.request(`/access/${accountId}/revoke`, {
+            ...post,
+            headers: { ...post.headers, ...OPERATOR },
+          })
+        ).status,
+      ).toBe(200);
     });
+
+    it('④持ち主は高々1つのまま——同格になった側が grant を叩いても2人目は409', async () => {
+      const withAuth = buildAuthedApp();
+      const first = await grantedAccountToken(withAuth);
+      const granted = { authorization: `Bearer ${first.token}` };
+
+      nextSubject = 'sub-second-account';
+      const second = await loginOnly(withAuth);
+
+      // ⚠️ 叩いているのは OPERATOR ではなく、同格になった側（許可された
+      // アカウント自身のトークン）である。ここが 409 のままであることが、
+      // 「①を複数人にする話ではない」ことの証明になる。
+      const response = await withAuth.request(`/access/${second.accountId}/grant`, {
+        ...post,
+        headers: { ...post.headers, ...granted },
+      });
+      expect(response.status).toBe(409);
+    });
+  });
+});
+
+/**
+ * ⚠️ 狭めすぎていないことの証明——認証を設定していない既定構成（`ALTEROID_AUTH`
+ * 未設定など）では、`/access/*` `/tokens*` も含めて今日どおり無条件に素通りする。
+ * `requireOperator` を外した6経路が、副作用として「既定でも認証を要求する」側へ
+ * 倒れていないことを確かめる（north_star 禁止「境界の導入をデグレードにしない」
+ * と同じ形——ここでは逆に「境界を広げた変更が、無効な構成の挙動まで変えていない
+ * こと」を見る）。
+ */
+describe('認証が無効な既定構成では /access も /tokens も今日どおり素通りする', () => {
+  it('狭めていない: 未ログイン・トークン無しでも6経路とも通る', async () => {
+    // **トークンのプールの器を配線した専用の app を使う。** 共有 `app`
+    // フィクスチャは `tokens` を渡していないので、`PUT /tokens` `PUT
+    // /tokens/policy` は `deps.tokens === undefined` の 400 に落ちる——それは
+    // 認証境界とは無関係な別の分岐であり、ここで見たいものではない。
+    const passthrough = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      tokens: createTokenPoolService({ stores }),
+    });
+    await stores.auth.putAccount({
+      id: 'acct-passthrough',
+      displayName: 'Someone',
+      email: 'someone@example.test',
+      createdAt: new Date().toISOString(),
+      lastLoginAt: null,
+      grantedAt: null,
+      grantedBy: null,
+    });
+
+    expect((await passthrough.request('/tokens')).status).toBe(200);
+    expect(
+      (
+        await passthrough.request('/tokens', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ tokens: [] }),
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await passthrough.request('/tokens/policy', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({}),
+        })
+      ).status,
+    ).toBe(200);
+    expect((await passthrough.request('/access')).status).toBe(200);
+    expect(
+      (
+        await passthrough.request('/access/acct-passthrough/grant', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: '{}',
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await passthrough.request('/access/acct-passthrough/revoke', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: '{}',
+        })
+      ).status,
+    ).toBe(200);
   });
 });
 

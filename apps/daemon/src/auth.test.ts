@@ -19,7 +19,13 @@ import { accountWithIdentitiesSchema } from './openapi.js';
  * ここで固定したいのは、**能力の削除ではなく境界であること**の実装上の帰結である。
  * ①設定していなければ従来どおり通る（境界の導入がデグレードにならない）
  * ②ログインしただけでは通らない（許可は人間が別に与える）
- * ③許可を与える口は実行環境の持ち主だけが叩ける（最初の1人の出口）
+ * ③**⚠️ 2026-09-06 のオーナー決定で変わった**——`/access/*` は `authenticate` だけに
+ * なり、alteroid を使う許可（`access grant` 済み）があれば実行環境の持ち主と同格に
+ * 叩ける。最初の1人（誰も許可されていない状態からの grant）は依然として実行環境の
+ * 持ち主にしか通せない——ここを開けると「誰も許可されていない」状態そのものが
+ * 突破できてしまう（`grantExclusive` が持ち主の不在を検査してから書く1操作で
+ * あることの帰結）。この対比は下の describe が固定する。`/profile` は変えていない
+ * （鍵をまるごと運ぶ口。理由は `app.ts` の `requireOperator` 呼び出し箇所の doc）。
  */
 
 function stubClone(): CloneHost {
@@ -254,23 +260,40 @@ describe('認証が有効なとき', () => {
     expect((await app.request('/memory', { headers: auth })).status).toBe(403);
   });
 
-  it('許可の付与は実行環境の持ち主だけができる（許可された利用者でも 403）', async () => {
+  /**
+   * ⚠️ 2026-09-06、オーナー決定で反転した。以前はここで「許可の付与は実行環境の
+   * 持ち主だけができる（許可された利用者でも 403）」を固定していた——`自分で
+   * 自分を通せてしまうと、境界が成り立たない`という理由からで、`/access/:id/grant`
+   * と `GET /access` は `requireOperator` を通っていた。
+   *
+   * いまは alteroid を使う許可（`access grant` 済み）を実行環境の持ち主と同格に
+   * 扱う（`apps/daemon/src/app.ts` の `requireOperator` の doc）ので、この2経路は
+   * `authenticate` だけになった。**「自分で自分を通せる」ことは、もう境界の
+   * 崩壊ではない**——「持ち主は高々1つ」（`grantExclusive`）はここでは崩れておらず
+   * （同一アカウントへの再 grant は conflict ではなく idempotent な granted を
+   * 返すだけ）、別アカウントを追加で通せる訳ではないことは
+   * 「許可できるアカウントは高々1つ（2人目の grant は 409）」が別に固定している。
+   * `/profile` はこの決定の対象外のままで、`403` を固定するテストは
+   * 「実行環境プロファイルは持ち主だけ」に残る。
+   */
+  it('許可されたアカウントも実行環境の持ち主と同格——自分自身への再 grant も GET /access も通る', async () => {
     const claimed = await loginThrough(app);
     await app.request(`/access/${claimed.account.id}/grant`, {
       ...post,
       headers: { ...post.headers, ...OPERATOR },
     });
 
-    // 自分で自分を通せてしまうと、境界が成り立たない。
+    // 既に許可済みの自分自身への grant は冪等に 200
+    // （`grantExclusive` は同一アカウントを conflict ではなく granted として返す）。
     const response = await app.request(`/access/${claimed.account.id}/grant`, {
       ...post,
       headers: { ...post.headers, authorization: `Bearer ${claimed.token}` },
     });
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(200);
     expect(
       (await app.request('/access', { headers: { authorization: `Bearer ${claimed.token}` } }))
         .status,
-    ).toBe(403);
+    ).toBe(200);
   });
 
   it('実行環境プロファイルは持ち主だけ（許可された利用者でも 403）', async () => {
@@ -292,7 +315,21 @@ describe('認証が有効なとき', () => {
     expect((await app.request('/memory', { headers: auth })).status).toBe(200);
 
     // それでもプロファイルには触れない
-    expect((await app.request('/profile', { headers: auth })).status).toBe(403);
+    const forbidden = await app.request('/profile', { headers: auth });
+    expect(forbidden.status).toBe(403);
+
+    // **⭐ 本文まで固定する。** 2026-09-06 に `/tokens` と `/access/*` を「alteroid を
+    // 使う許可」と同格にしたので、`requireOperator` の 403 を**産む経路はこの
+    // `/profile` の2本しか残っていない**（他は `authenticate` の「許可が無い」403 に
+    // なる）。⟹ **唯一の生産者なので、ここが壊れても他に気づく者が居ない。**
+    //
+    // そして CLI はこの本文を見て「デーモンと同じ器の中で実行してください」と案内を
+    // 選ぶ（`apps/cli/src/target.ts` の `forbiddenKindOf`）。文言がずれると案内は
+    // 「理由を判別できなかった」側へ黙って倒れる。
+    //
+    // **値はここへ複製してある。**`app.ts` から import すると、文言がずれても歯まで
+    // 一緒にずれて自己整合し、ずれを検出できなくなる。
+    expect(await forbidden.json()).toEqual({ error: '実行環境の持ち主だけが操作できる' });
     expect(
       (
         await app.request('/profile', {

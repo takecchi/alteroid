@@ -1026,10 +1026,12 @@ export const runnersVacateCommandSchema = z.object({
 /**
  * 人間が置いたプロファイル。
  *
- * **本文を返す。** ここは持ち主だけが通る口であり（`/access` と同じ資格）、
- * 人間が自分で書いたものを読み直せないと、typo ひとつ直せない。指紋しか返さない
- * のは runner の制御面のほうで、あちらは「マネージャーが読めてはいけない」から
- * そうしている。守っている相手が違う。
+ * **本文を返す。** ここは実行環境の持ち主だけが通る口である。**⚠️ `/access` とは
+ * もう同じ資格ではない**（2026-09-06 のオーナー決定で `/access` `/tokens` は
+ * alteroid を使う許可があれば通るよう緩めたが、ここは変えていない——鍵をまるごと
+ * 運ぶ口だからである）。人間が自分で書いたものを読み直せないと、typo ひとつ
+ * 直せない。指紋しか返さないのは runner の制御面のほうで、あちらは「マネージャーが
+ * 読めてはいけない」からそうしている。守っている相手が違う。
  */
 export const profileResponseSchema = z.object({
   script: z.string(),
@@ -1226,7 +1228,8 @@ export const openApiDocumentation: GenerateSpecOptions['documentation'] = {
     {
       name: 'access',
       description:
-        'アクセス許可の付与・剥奪。実行環境の持ち主（状態ファイルを読める者）だけが叩ける',
+        'アクセス許可の付与・剥奪。alteroid を使う許可（access grant 済み）があれば' +
+        '実行環境の持ち主と同格に叩ける（2026-09-06 のオーナー決定）',
     },
     {
       name: 'tokens',
@@ -1244,8 +1247,10 @@ export const openApiDocumentation: GenerateSpecOptions['documentation'] = {
           '2種類のトークンが同じ形で通る。①**アクセストークン**（`alt_` で始まる。' +
           '`alteroid login` で発行し、許可されたアカウントのものだけが通る）。' +
           '②**実行環境の持ち主のトークン**（`~/.alteroid/state/daemon.json` の ' +
-          '`token`。CLI がこれを使う。ここを読めること自体が境界であり、' +
-          '`/access/*`（許可の付与）はこちらでしか通らない）。\n\n' +
+          '`token`。CLI がこれを使う。ここを読めること自体が境界である）。\n\n' +
+          '**`/access/*` `/tokens*` は①②どちらでも通る**（2026-09-06 のオーナー決定' +
+          '——alteroid を使う許可があれば実行環境の持ち主と同格）。**②でしか通らない' +
+          'のは `/profile`（実行環境そのものを差し替える口）だけである。**\n\n' +
           '`ALTEROID_AUTH=off`（既定はログイン手段が未設定のとき）では認証を要求しない。',
       },
     },

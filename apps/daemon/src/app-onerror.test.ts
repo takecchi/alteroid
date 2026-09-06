@@ -18,10 +18,14 @@ import { createApp } from './app.js';
  * `app.test.ts` が並べているルートごとの応答とは観点が違う。runner 側
  * （`apps/runner/src/app-onerror.test.ts`）と対になる。
  *
- * `/access` を踏み台に使う。`GET /access` は `requireOperator` を通ったあと
- * `stores.auth.listAccounts()` を await するだけで、呼び出し側は try/catch を
- * 持たない——投げれば素通りで `createApp` の `.onError` に落ちる、いちばん
- * 単純な実在の経路である。
+ * `/access` を踏み台に使う。`GET /access` は認証の門（`authenticate`）を通った
+ * あと `stores.auth.listAccounts()` を await するだけで、呼び出し側は try/catch
+ * を持たない——投げれば素通りで `createApp` の `.onError` に落ちる、いちばん
+ * 単純な実在の経路である。**⚠️ 2026-09-06 のオーナー決定で `GET /access` から
+ * `requireOperator` は外れたが、このテストは `auth` を渡さずに `createApp` する
+ * ので `authPlan.enabled` は false のまま——素の `authenticate` が無条件に
+ * `operator` を名乗らせて次へ通す（`app.ts` の doc）。踏み台としての経路は
+ * `requireOperator` の有無に関係なく同じ形のまま残る。**
  */
 
 /**
