@@ -243,8 +243,9 @@ export function useRunners() {
 /**
  * 認証トークンのプールと、回す契機・冷却の設定（`GET /tokens`）。
  *
- * **実行環境の持ち主だけ**（`requireOperator`）——`account grant` を通しただけの
- * アカウントには 403 が返る。読み取り専用（`PUT /tokens` はこの画面からは呼ばない）。
+ * **alteroid を使う許可があれば読める**（2026-09-06 の同格化で `requireOperator` が
+ * 外れた。それ以前は実行環境の持ち主だけだった）。読み取り専用（`PUT /tokens` は
+ * この画面からは呼ばない）。
  */
 export function useTokens() {
   const api = useApi();

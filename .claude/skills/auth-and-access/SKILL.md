@@ -10,7 +10,7 @@ description: ログイン・アクセス許可（alteroid login / access grant�
 **PRD「権限境界」と混同しないこと。** あちらは「クローンが何を人間へ確認するか」を*記憶*で決める話で、行為の一覧を持ってはいけない。ここは「そもそも誰が HTTP API に触れるか」の話であり、north_star 禁止2 が制限の表現方法として**認めている実行環境の境界**（認証情報の配布範囲）そのものである。持っているのは**許可されているか否かの2値だけ**で、クローン・マネージャー・作業者の道具は1つも減らない。
 
 - マルチユーザーではない（PRD 非ゴール）。**持ち主が複数の端末・複数のログイン手段から入れるようにするための層**であって、利用者ごとにデータを分けない
-- **通る資格は2種類**。①`Authorization: Bearer <アクセストークン>`（`alteroid login` で発行。許可されたアカウントのものだけ通る）②`Authorization: Bearer <state/daemon.json の token>`（＝**実行環境の持ち主**。CLI が使う。この口だけが `/access/*` を叩ける）
+- **通る資格は2種類**。①`Authorization: Bearer <アクセストークン>`（`alteroid login` で発行。許可されたアカウントのものだけ通る）②`Authorization: Bearer <state/daemon.json の token>`（＝**実行環境の持ち主**。CLI が使う）。**`/access/*` と `/tokens` は①②のどちらでも叩ける**（2026-09-06 のオーナー決定で同格にした）。**②でなければ叩けないのは `/profile` の2本だけである**
   - ②が「最初の1人を誰が通すか」の出口である。守っているのは**ファイルの許可**であって新しい秘密ではない。これが無いと誰も `access grant` を実行できない
 - **既定では認証を要求しない。** `ALTEROID_GOOGLE_CLIENT_ID` と `ALTEROID_GOOGLE_CLIENT_SECRET` が揃うと自動で有効になり、`ALTEROID_AUTH=off` で明示的に切れる。設定していない人の `alteroid chat` が突然通らなくなるのは、境界の導入が実質のデグレードになる典型なので、**既定を「要求する」に倒さないこと**
 - **ログインしただけでは使えない。** `alteroid access list` で見て `alteroid access grant <id>` で通す。取り消しは `revoke` で、**発行済みトークンを消さなくても即座に効く**（許可はリクエストごとに見ている）

@@ -50,7 +50,7 @@ curl -X PUT http://127.0.0.1:4517/tokens \
   -d '{"tokens":[{"label":"<名前>","value":"<あなたのトークン>"}]}'
 ```
 
-- `/tokens` は**実行環境の持ち主だけ**（`requireOperator`。`/profile` `/access/*` と同じ強さ）。課金の主体を決める操作なので、`access grant` を通しただけのアカウントには開けない
+- `/tokens` は **alteroid を使う許可があれば通る**（`authenticate` だけ。`requireOperator` は付いていない）。**2026-09-06 のオーナー決定**で、`access grant` を通したアカウントを実行環境の持ち主と同格にした（それ以前は `requireOperator` で「課金の主体を決める操作だから」と閉じていた）。**`/profile` だけが同格の外に在る** — あちらは `GET` が本文ごと鍵を返すので、外へ配られる bearer token の側には開けない
 - `PUT /tokens` は**全文置換**。並べ替え・改名・`disabled` の切り替えだけなら `value` を省略してよい（省略すると既存の値を引き継ぐ——他の行の秘密を貼り直す必要が無い）
 - **⚠️ curl の例をそのまま打つときも、シェルの履歴にトークンの値が残る。** ヒアドキュメントや `-d @file.json`（ファイルは使い終わったら消す）を使うほうが安全である
 
