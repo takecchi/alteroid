@@ -315,7 +315,21 @@ describe('認証が有効なとき', () => {
     expect((await app.request('/memory', { headers: auth })).status).toBe(200);
 
     // それでもプロファイルには触れない
-    expect((await app.request('/profile', { headers: auth })).status).toBe(403);
+    const forbidden = await app.request('/profile', { headers: auth });
+    expect(forbidden.status).toBe(403);
+
+    // **⭐ 本文まで固定する。** 2026-09-06 に `/tokens` と `/access/*` を「alteroid を
+    // 使う許可」と同格にしたので、`requireOperator` の 403 を**産む経路はこの
+    // `/profile` の2本しか残っていない**（他は `authenticate` の「許可が無い」403 に
+    // なる）。⟹ **唯一の生産者なので、ここが壊れても他に気づく者が居ない。**
+    //
+    // そして CLI はこの本文を見て「デーモンと同じ器の中で実行してください」と案内を
+    // 選ぶ（`apps/cli/src/target.ts` の `forbiddenKindOf`）。文言がずれると案内は
+    // 「理由を判別できなかった」側へ黙って倒れる。
+    //
+    // **値はここへ複製してある。**`app.ts` から import すると、文言がずれても歯まで
+    // 一緒にずれて自己整合し、ずれを検出できなくなる。
+    expect(await forbidden.json()).toEqual({ error: '実行環境の持ち主だけが操作できる' });
     expect(
       (
         await app.request('/profile', {
