@@ -2155,8 +2155,22 @@ class RunnerSession {
   #noteDenial(denial: AgentPermissionDenial, via: 'live' | 'result'): void {
     const tool = denial.tool ?? '(不明な道具)';
     const input = denial.input;
-    // id が無ければ道具と入力から作る。**取りこぼすより重複を許す** — 決まった
-    // 形なので、生の合図と result の記録が同じ1件なら普通はここでも一致する。
+    // id が無ければ道具と入力から作る。**取りこぼすより重複を許す。**
+    //
+    // **⚠️ この代用鍵は live と result で一致しない。** 走行中の合図に入力は付かず
+    // （`input` は `undefined`）、ターン終わりの記録には付くので、同じ1件の拒否が
+    // 別々のハッシュになる。すると下の重複排除が効かず、`permission_denied` が2本
+    // 降りて道具ごとの合計が1件で2つ増え、`shouldEscalateDenial` の exact-equality
+    // （`manager.ts`）が段を跨いで**クローンへの escalation を飛ばす。**
+    //
+    // **それでも道具名だけで束ねない。** id の無い回に live 側が持つのは理由と分類、
+    // result 側が持つのは入力で、共有する識別子は道具名しか残らない。道具名で束ねると
+    // 「同じ拒否の2度目」と「live を見逃した初出」が潰れる —— SDK は**その両方が
+    // 起きうる**と書いており（`permission-denied.test.ts` の逐語）、どちらの「無い」も
+    // 消せない。**束ねる材料が無いので束ねず、前提のほうへ歯を置いた** ——
+    // `tool_use_id` は SDK の型で live / result の両方とも必須なので、この経路は
+    // いま踏まれない。**必須でなくなったら `pnpm typecheck` が落ちる**
+    // （`permission-denied.test.ts` の「SDK の型の前提」）。
     //
     // **代用値を作るのはこちら側の仕事である**（`agent-events.ts` の
     // `AgentPermissionDenial` の doc）。provider の写しは「無かった」をそのまま

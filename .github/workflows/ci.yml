@@ -107,6 +107,16 @@ jobs:
             exit 1
           }
 
+      # **同梱 SDK から逐語で引いたコメントが、いまの版でも逐語であることを当てる。**
+      # 引き写した先はこの repo のソースなので、SDK の版を上げても差分には出ない —— #639
+      # （0.3.259 → 0.3.261）は lock と catalog の2ファイルだけで、それでも
+      # `agent-events.ts` の逐語は同じ更新で嘘になった（#646）。**引用は外の版に依存して
+      # おり、依存はコンパイラにもレビューにも見えない。**
+      #
+      # **この検査は #646 で入ったが、どの門からも呼ばれていなかった**（`package.json` に
+      # script は在り、`scripts/verify-core.mjs` の STEPS にも ci.yml にも無かった）。
+      # 在るのに効いていない道具は、静かに失敗する（`AGENTS.md`「静かに失敗する道具」）。
+      - run: pnpm check:sdk-quotes
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm format:check

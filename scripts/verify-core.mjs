@@ -281,6 +281,15 @@ export const STEPS = [
     args: ['diff', '--exit-code', 'HEAD', '--', 'apps/daemon/openapi.json'],
     hint: 'apps/daemon/openapi.json が古い。`pnpm build` の結果を commit すること',
   },
+  {
+    name: 'sdk-quotes',
+    cmd: 'pnpm',
+    args: ['check:sdk-quotes'],
+    hint:
+      '同梱 SDK の型定義から逐語で引いたコメント（sdk-verbatim の印が付いた行）が、' +
+      'いまの版に当たらなくなった。引用を書き換える前に、その引用を根拠にしている判断が' +
+      'まだ成り立つかを確かめること（scripts/check-sdk-quotes-core.mjs の doc）',
+  },
   { name: 'typecheck', cmd: 'pnpm', args: ['typecheck'] },
   { name: 'lint', cmd: 'pnpm', args: ['lint'] },
   { name: 'format:check', cmd: 'pnpm', args: ['format:check'], hint: '`pnpm format` で直る' },

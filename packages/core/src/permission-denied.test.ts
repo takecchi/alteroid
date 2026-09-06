@@ -1,4 +1,11 @@
-import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import type {
+  query as sdkQuery,
+  Options,
+  Query,
+  SDKMessage,
+  SDKPermissionDenial,
+  SDKPermissionDeniedMessage,
+} from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
 import { denialInputAbsence, denialInputShape } from './denial-shape.js';
@@ -1106,4 +1113,86 @@ describe('live / result の到着順（denial-shape.ts 導入）', () => {
 
     await s.pool.stop();
   }, 15_000);
+});
+
+/**
+ * **代用鍵が踏まれない前提を、SDK の型そのものへ当てる。**
+ *
+ * `runner.ts` の `#noteDenial` は、SDK が `tool_use_id` を寄越さなかった回だけ
+ * `${tool}:${digestOf(brief(input, 120))}` を代用の鍵にする。**この代用鍵は
+ * live と result で必ず食い違う** —— 走行中の合図に入力は付かず（`input` は
+ * `undefined`）、ターン終わりの記録には付くので、同じ1件の拒否が別々のハッシュ
+ * になる。すると重複排除が効かず `permission_denied` が2本降り、道具ごとの合計が
+ * 1件の拒否で2つ増える。`shouldEscalateDenial` は `step === count` の
+ * exact-equality で段（3件目・9件目…）を見ているので（`manager.ts` の doc が
+ * 「1ずつ増える数」を前提だと書いている）、**段を跨いだ回はクローンへの
+ * escalation が丸ごと飛ぶ。**
+ *
+ * **いま踏まれないのは、SDK の型が `tool_use_id` を両方で必須にしているからだけ
+ * である。** 型が変われば経路は静かに開く —— そして開き方が「知らせが減る」側
+ * なので、**開いても誰も気づかない。**
+ *
+ * ## なぜ鍵のほうを直さないか
+ *
+ * id が無い回に live 側が持つのは理由と分類、result 側が持つのは入力で、
+ * **共有する識別子は道具の名前しか残らない。** 道具名だけで束ねると、
+ * 「同じ拒否の2度目」と「live を見逃した初出」が1つに潰れる。そして SDK 自身が
+ * **その両方が実際に起きうる**と書いている:
+ *
+ * 「Best-effort advisory: in rare races a denial can book without a frame or a frame can lack a booking twin — result.permission_denials is the authoritative record.」 [sdk-verbatim SDKPermissionDeniedMessage]
+ *
+ * ⟹ **どちらの「無い」も消せない。** 束ねる材料が無いので束ねず、**前提のほうへ
+ * 歯を置く。**
+ *
+ * ## 形の選び方（`@ts-expect-error` ではなく型の値で当てる）
+ *
+ * この repo には `@ts-expect-error` が「不要な抑制」になった瞬間に
+ * `pnpm typecheck` が落ちる形の先例が在る（`prompt.test.ts` の branded type）。
+ * **ここでは採らない** —— あの形は「エラーが消えたら落ちる」ので、欄が
+ * **optional になった**回は捕まえるが、欄が**丸ごと消えた**回は別のエラーに
+ * すり替わって抑制が効いたままになり、緑で通る。**これは推論ではなく実測である** ——
+ * `@ts-expect-error` 形の対照を1行置いて `tool_use_id` の欄ごと消す変異を当てたところ、
+ * 対照はエラーを1件も出さず、下の `HasRequiredKey` だけが赤くなった（2026-09-06）。
+ *
+ * **欄が丸ごと消えるのは、代用鍵が常に踏まれるようになるということで、optional 化より
+ * 悪い。** 下の `HasRequiredKey` は「無い」も「任意」も同じ `false` に落とすので、
+ * どちらでも赤くなる。
+ *
+ * ## この歯が言えないこと
+ *
+ * **実機で分類器が Bash を止めた回に、`result.permission_denials` が本当に
+ * 載ってくるかは見ていない。** 見ているのは同梱の型定義だけである（上の逐語も
+ * ベンダーの主張であって、この repo の実測ではない）。
+ */
+
+/** `K` が `T` に**必須の欄として**在るか。無い欄も任意の欄も `false` に落ちる。 */
+type HasRequiredKey<T, K extends PropertyKey> = K extends keyof T
+  ? undefined extends T[K]
+    ? false
+    : true
+  : false;
+
+/** `K` が `T` の欄として在るか（必須・任意を問わない）。 */
+type HasKey<T, K extends PropertyKey> = K extends keyof T ? true : false;
+
+describe('SDK の型の前提（腐ったら typecheck が落ちる）', () => {
+  it('result の記録（SDKPermissionDenial）は tool_use_id を必須で持つ', () => {
+    // 必須でなくなった瞬間、この型は `false` になって代入が型エラーになる。
+    const required: HasRequiredKey<SDKPermissionDenial, 'tool_use_id'> = true;
+    expect(required).toBe(true);
+  });
+
+  it('走行中の合図（SDKPermissionDeniedMessage）は tool_use_id を必須で持つ', () => {
+    const required: HasRequiredKey<SDKPermissionDeniedMessage, 'tool_use_id'> = true;
+    expect(required).toBe(true);
+  });
+
+  it('走行中の合図は tool_input の欄を持たない（denialInputAbsence の根拠）', () => {
+    // **これが `denialInputAbsence('live')` の一文の根拠である** ——
+    // 「走行中の合図には入力の欄が無い」とクローンへ言い切っているので、SDK が
+    // この欄を持つようになったら、あの一文は嘘になる。持った瞬間にこの型は
+    // `true` になり、代入が型エラーになる。
+    const present: HasKey<SDKPermissionDeniedMessage, 'tool_input'> = false;
+    expect(present).toBe(false);
+  });
 });
