@@ -2246,8 +2246,11 @@ class RunnerSession {
     //
     // **`agent_type` は今のところ常に無い。** `SDKPermissionDeniedMessage`
     // （`via: 'live'` の合図）は `agent_id` は持つが `agent_type` を持たない
-    // （`PostToolUseHookInput` にはあるが、この合図には無い。SDK
-    // `0.3.247` の型で確認済み）。だから作業者の拒否は `WORKER_AGENT_NAME`
+    // （`PostToolUseHookInput` にはあるが、この合図には無い。**この不在には
+    // 歯が在る** —— `permission-denied.test.ts` の
+    // `走行中の合図は agent_type の欄を持たない`。**⚠️ 版番号を根拠に書かない。**
+    // 不在は `check:sdk-quotes` では守れず（あの門は「在ること」しか言えない）、
+    // 守っているのは型の歯のほうである）。だから作業者の拒否は `WORKER_AGENT_NAME`
     // （`worker`）に落ちる ——`#onPostToolUse` のように呼び出した Task の
     // 具体的な agent_type までは分からない。**揃えられなかった点であり、
     // SDK の型に無い情報をここで作り物として埋めることはしない。** 将来

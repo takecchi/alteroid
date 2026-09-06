@@ -100,7 +100,14 @@ export interface AgentPermissionDenial {
    * 「本体だった」と決めつけず、取れなかったこととして扱う。
    */
   agentId?: string;
-  /** 作業者の型名。**いまのところ provider はこの欄を持たない。** */
+  /**
+   * 作業者の型名。**いまのところ provider はこの欄を持たない** —— 出所の
+   * `SDKPermissionDeniedMessage` が `agent_type` を持たないからである。**この不在に
+   * は歯が在る**（`permission-denied.test.ts` の
+   * `走行中の合図は agent_type の欄を持たない`）。**⚠️ `check:sdk-quotes` では
+   * 守れない** —— あの門は「在ること」しか言えない
+   * （`check-sdk-quotes-core.mjs` の「この検査が言えないこと」）。
+   */
   agentType?: string;
 }
 

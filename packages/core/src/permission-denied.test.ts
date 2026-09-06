@@ -1195,4 +1195,24 @@ describe('SDK の型の前提（腐ったら typecheck が落ちる）', () => {
     const present: HasKey<SDKPermissionDeniedMessage, 'tool_input'> = false;
     expect(present).toBe(false);
   });
+
+  it('走行中の合図は agent_type の欄を持たない（作業者の種類名を出さない根拠）', () => {
+    // **これが `clone.ts` / `runner.ts` の「`agent_type` は今のところ常に無い」の
+    // 根拠である。** 両者はこの不在を前提に `agentType ?? UNKNOWN_AGENT_TYPE` /
+    // `?? WORKER_AGENT_NAME` へ倒しており、**倒れ先のほうが常用の経路**になって
+    // いる。SDK がこの欄を生やしたら、その一文（「作り物の型名を出さない」）は
+    // 嘘になり、日誌へ本物の種類名が出はじめる。生えた瞬間にこの型は `true` に
+    // なり、代入が型エラーになる。
+    //
+    // **⚠️ この不在は `check:sdk-quotes` では守れない。** あの門が当てるのは
+    // 「文言が在る」ことだけで、**不在には当てる文言が無い**
+    // （`scripts/check-sdk-quotes-core.mjs` の「この検査が言えないこと」）。
+    // ⟹ 不在はここでしか守れない。
+    //
+    // 読む側（`claude-provider.ts`）は `agent_type` を
+    // `typeof denial?.agent_type === 'string'` で拾うので、欄が無いいまは
+    // `agentType` が常に `undefined` になる。**歯が落ちたら、まずその前提を疑うこと。**
+    const present: HasKey<SDKPermissionDeniedMessage, 'agent_type'> = false;
+    expect(present).toBe(false);
+  });
 });
