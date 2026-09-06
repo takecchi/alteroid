@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { stdin, stdout } from 'node:process';
 
-import { describeAuthFailure, resolveTarget, type Target } from './target.js';
+import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 
 /**
  * `alteroid profile` — 実行環境プロファイル（人間の `.zprofile` に当たるもの）。
@@ -197,16 +197,38 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
   });
 
   if (!response.ok) {
-    // **403 の意味が `access` とは違う。** ここは許可の有無ではなく「実行環境の
-    // 持ち主か」を見ている。同じ文言を出すと `access grant` を促してしまい、
-    // 通したところで直らない（許可が持っているのは「使ってよい」の2値だけで、
-    // 実行環境そのものを差し替える資格はそこに含まれない）。
+    // **403 の意味が `access` とは違うことがある。** ここは基本「実行環境の
+    // 持ち主か」を見ているが、**403 はそれ以外の理由でも返る**——ログイン済み
+    // だが未 grant のとき、デーモンの `authenticate` が別の本文で 403 を返す。
+    // 本文を見ずに固定の文言を出すと、未 grant の人にまで「持ち主だけです」と
+    // 案内してしまい、`access grant` で直る状況で直らない手順を勧めることに
+    // なる（許可が持っているのは「使ってよい」の2値だけで、実行環境そのものを
+    // 差し替える資格はそこに含まれない、という線引きは変えていない——本文で
+    // 出し分けるようにしただけである）。
     if (response.status === 403) {
+      const body = await response.json().catch(() => ({}));
+      const kind = forbiddenKindOf(body);
+      if (kind === 'not_operator') {
+        throw new Error(
+          '実行環境プロファイルを触れるのは、その実行環境の持ち主だけです。\n' +
+            'デーモンが動いているのと同じ環境で実行してください:\n' +
+            '  docker compose exec app alteroid profile edit\n' +
+            '（人間が ~/.zshenv を直すのも、その人が持っている箱の上である、という線引きです）',
+        );
+      }
+      if (kind === 'not_granted') {
+        throw new Error(
+          describeAuthFailure(403, target) ??
+            'このアカウントには alteroid を使う許可がありません。',
+        );
+      }
+      // **⭐ `kind === 'unknown'`——本文からはどちらの理由かが判別できない。**
+      // 「器の中で実行しろ」と「access grant しろ」は意味も解決策も正反対で、
+      // どちらかを当てずっぽうで出せば半分の状況では必ず嘘になる。分からない
+      // ときは、解決策を書かずに止める。
       throw new Error(
-        '実行環境プロファイルを触れるのは、その実行環境の持ち主だけです。\n' +
-          'デーモンが動いているのと同じ環境で実行してください:\n' +
-          '  docker compose exec app alteroid profile edit\n' +
-          '（人間が ~/.zshenv を直すのも、その人が持っている箱の上である、という線引きです）',
+        '実行環境プロファイルへのアクセスが拒否されました（403）。理由を判別でき' +
+          'なかったため、次にすべきことは案内しません。',
       );
     }
     const described = describeAuthFailure(response.status, target);

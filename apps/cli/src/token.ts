@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { stdin, stdout } from 'node:process';
 
-import { describeAuthFailure, resolveTarget, type Target } from './target.js';
+import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 
 /**
  * `alteroid token` — 認証トークンのプール（Issue #393「PR1 プールの器」）。
@@ -282,11 +282,35 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
     // **`/tokens` は実行環境の持ち主だけ**（`/profile` / `/access` と同じ強さ）。
     // 課金の主体を決める操作なので、`access grant` を通しただけのアカウントには
     // 開けない——同じ 403 でも `access` とは意味が違うので、専用の文言にする。
+    //
+    // **ただし 403 は「持ち主でない」以外の理由でも返る**（ログイン済みだが
+    // 未 grant のとき、デーモンの `authenticate` が別の本文で 403 を返す）。
+    // 本文を見ずに固定の文言を出すと、未 grant の人にも「器の中で実行しろ」と
+    // 案内してしまう——`access grant` を打てば直る状況で、直らない手順を勧める
+    // ことになる。だから本文で分ける。
     if (response.status === 403) {
+      const body = await response.json().catch(() => ({}));
+      const kind = forbiddenKindOf(body);
+      if (kind === 'not_operator') {
+        throw new Error(
+          '認証トークンのプールを触れるのは、その実行環境の持ち主だけです。\n' +
+            'デーモンが動いているのと同じ環境で実行してください:\n' +
+            '  docker compose exec app alteroid token list\n',
+        );
+      }
+      if (kind === 'not_granted') {
+        throw new Error(
+          describeAuthFailure(403, target) ??
+            'このアカウントには alteroid を使う許可がありません。',
+        );
+      }
+      // **⭐ `kind === 'unknown'`——本文からはどちらの理由かが判別できない。**
+      // 「器の中で実行しろ」と「access grant しろ」は意味も解決策も正反対で、
+      // どちらかを当てずっぽうで出せば半分の状況では必ず嘘になる。分からない
+      // ときは、解決策を書かずに止める。
       throw new Error(
-        '認証トークンのプールを触れるのは、その実行環境の持ち主だけです。\n' +
-          'デーモンが動いているのと同じ環境で実行してください:\n' +
-          '  docker compose exec app alteroid token list\n',
+        '認証トークンのプールへのアクセスが拒否されました（403）。理由を判別できな' +
+          'かったため、次にすべきことは案内しません。',
       );
     }
     const described = describeAuthFailure(response.status, target);

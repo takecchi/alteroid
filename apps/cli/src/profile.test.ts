@@ -21,10 +21,16 @@ import { captureStdout } from './test-support.js';
  * `$EDITOR` を起こす（`memory.ts` の `openEditor` と同型）。この器に実際の
  * エディタは無いので、即座に `close(0)` を返す形にする。
  */
-vi.mock('./target.js', () => ({
+/**
+ * **`./target.js` は `resolveTarget` だけ差し替える。** `forbiddenKindOf` と
+ * `describeAuthFailure` は**本物を使う**——403 の案内を分けているのはこの2つ
+ * なので、ここを偽物にすると、この歯が測るのは偽物の分岐になり、赤が出ても
+ * 出どころが自分のアサーションだと言えなくなる。
+ */
+vi.mock('./target.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./target.js')>()),
   resolveTarget: () =>
     Promise.resolve({ baseUrl: 'http://127.0.0.1:4517', headers: {}, note: null, remote: false }),
-  describeAuthFailure: () => null,
 }));
 
 vi.mock('node:child_process', () => ({
@@ -212,5 +218,58 @@ describe('alteroid profile edit', () => {
     expect(read()).toBe('変更はありません。\n');
     // PUT を1件も打っていない（変更が無ければ反映もしない）。
     expect(sent.some((s) => s.method === 'PUT')).toBe(false);
+  });
+});
+
+/**
+ * 403 の案内を、**サーバが返した本文で分ける**（`token.test.ts` と同じ形）。
+ *
+ * **`/profile` は今回 ① へ開けなかった2本である。** 開けなかった側でも、403 の
+ * *案内*は正しくなければならない——資格の線と、案内の正しさは別の話である。
+ */
+describe('403（本文で理由を分ける）', () => {
+  /**
+   * **この2つの逐語は `apps/daemon/src/app.ts` が返す本文の複製である。**
+   * `target.ts` の定数も `apps/daemon` も import しない——対象と同じ値を
+   * 参照すると、文言がずれても歯まで一緒にずれて自己整合し、ずれを検出でき
+   * なくなる。**値はここへ書き写し、ずれたらこの歯が落ちる形にしてある。**
+   */
+  const NOT_OPERATOR = { error: '実行環境の持ち主だけが操作できる' };
+  const NOT_GRANTED = { error: 'このアカウントには alteroid を使う許可が無い' };
+
+  /** 投げられた文言そのものを取る（どちらの手順が出たかを両側から見るため）。 */
+  async function messageOf(run: () => Promise<unknown>): Promise<string> {
+    try {
+      await run();
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+    throw new Error('403 で拒否されるはずが、成功してしまった');
+  }
+
+  it('持ち主でないときは専用の文言を出す', async () => {
+    setReply('GET', '/profile', { status: 403, body: NOT_OPERATOR });
+
+    const message = await messageOf(() => profileShowCommand());
+    expect(message).toContain('実行環境の持ち主だけです');
+    expect(message).toContain('docker compose exec');
+    expect(message).not.toContain('access grant');
+  });
+
+  it('未 grant のときは access grant を促す（器の中で実行しろ、と言わない）', async () => {
+    setReply('GET', '/profile', { status: 403, body: NOT_GRANTED });
+
+    const message = await messageOf(() => profileShowCommand());
+    expect(message).toContain('access grant');
+    expect(message).not.toContain('docker compose exec');
+  });
+
+  it('判別できない本文なら、どちらの手順も出さない', async () => {
+    setReply('GET', '/profile', { status: 403, body: {} });
+
+    const message = await messageOf(() => profileShowCommand());
+    expect(message).toContain('403');
+    expect(message).not.toContain('docker compose exec');
+    expect(message).not.toContain('access grant');
   });
 });

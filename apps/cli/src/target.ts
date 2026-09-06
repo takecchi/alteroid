@@ -79,6 +79,42 @@ async function remoteTarget(baseUrl: string): Promise<Target> {
 }
 
 /**
+ * デーモンが返す 403 の本文（`apps/daemon/src/app.ts`）のうち、案内を分ける
+ * 根拠にする2つの逐語。
+ *
+ * **ここへ複製する。`apps/daemon` からは import しない。** import すれば
+ * `forbiddenKindOf` はデーモン側の定数と自己整合するだけになり、デーモンの
+ * 文言が変わった瞬間に気づかず追随してしまう（変わったことを検出する歯が
+ * 無くなる）。CLI はサーバの契約として本文を受け取る側なので、その契約を
+ * 自分の言葉で1回だけ書き写しておく——ずれたら CLI 側のテストが落ちる形に
+ * するためである。
+ */
+const NOT_OPERATOR_ERROR = '実行環境の持ち主だけが操作できる';
+const NOT_GRANTED_ERROR = 'このアカウントには alteroid を使う許可が無い';
+
+/**
+ * 403 の理由。`not_operator` と `not_granted` は意味も解決策も正反対
+ * （前者は「器の中で実行しろ」、後者は「持ち主に access grant してもらえ」）。
+ * `unknown` は「本文からはどちらとも判別できない」——当てずっぽうで片方を
+ * 出すと、状況によっては必ず嘘の案内になる。
+ */
+export type ForbiddenKind = 'not_operator' | 'not_granted' | 'unknown';
+
+/**
+ * 403 の応答本文から、どちらの理由で拒否されたかを判別する。
+ *
+ * 判別できないときは `'unknown'` を返す。呼び出し側はこのとき解決策を
+ * 書かないこと（`token.ts` / `profile.ts` / `access.ts` の doc を見よ）。
+ */
+export function forbiddenKindOf(body: unknown): ForbiddenKind {
+  if (typeof body !== 'object' || body === null) return 'unknown';
+  const error = (body as { error?: unknown }).error;
+  if (error === NOT_OPERATOR_ERROR) return 'not_operator';
+  if (error === NOT_GRANTED_ERROR) return 'not_granted';
+  return 'unknown';
+}
+
+/**
  * 認証まわりの失敗を、人間が次にやることの分かる文言にする。
  *
  * 401 と 403 は意味がまるで違う（やり直せば直るのか、人間の操作が要るのか）ので、

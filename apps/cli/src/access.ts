@@ -1,6 +1,6 @@
 import { stdout } from 'node:process';
 
-import { describeAuthFailure, resolveTarget, type Target } from './target.js';
+import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 
 /**
  * `alteroid access` — 誰が alteroid を使えるかを決める。
@@ -100,13 +100,37 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
   });
 
   if (!response.ok) {
-    const described = describeAuthFailure(response.status, target);
-    if (response.status === 403 && !target.remote) {
+    // **`target.remote` から推測しない。** 遠隔のデーモンでも、叩いているのが
+    // 実行環境の持ち主でないという理由で 403 が返ることはある（`access grant`
+    // 済みのアカウントを別の環境から使っている場合など）。`remote` で場合分け
+    // すると、その状況でも「access grant してください」という直らない案内を
+    // 出してしまう（`access grant` を打った本人に `access grant` を勧める形に
+    // なる）。本文で判別する。
+    if (response.status === 403) {
+      const body = await response.json().catch(() => ({}));
+      const kind = forbiddenKindOf(body);
+      if (kind === 'not_operator') {
+        throw new Error(
+          'このデーモンの実行環境の持ち主として認識されませんでした。\n' +
+            'デーモンが動いているのと同じ環境（コンテナなら docker compose exec app …）で実行してください。',
+        );
+      }
+      if (kind === 'not_granted') {
+        throw new Error(
+          describeAuthFailure(403, target) ??
+            'このアカウントには alteroid を使う許可がありません。',
+        );
+      }
+      // **⭐ `kind === 'unknown'`——本文からはどちらの理由かが判別できない。**
+      // 「器の中で実行しろ」と「access grant しろ」は意味も解決策も正反対で、
+      // どちらかを当てずっぽうで出せば半分の状況では必ず嘘になる。分からない
+      // ときは、解決策を書かずに止める。
       throw new Error(
-        'このデーモンの実行環境の持ち主として認識されませんでした。\n' +
-          'デーモンが動いているのと同じ環境（コンテナなら docker compose exec app …）で実行してください。',
+        'アクセス許可の操作が拒否されました（403）。理由を判別できなかったため、' +
+          '次にすべきことは案内しません。',
       );
     }
+    const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
     if (response.status === 404) throw new Error('該当するアカウントがありません');
     if (response.status === 409) {
