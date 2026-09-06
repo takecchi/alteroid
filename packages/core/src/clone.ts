@@ -2759,9 +2759,26 @@ class Clone implements CloneHost {
     // Prompt is too long · automatic compaction failed: You've hit your or…
     // ```
     //
-    // これは CLI が**合成した1本の文字列**である（`@anthropic-ai/claude-agent-sdk-linux-x64@0.3.251`
-    // 同梱の `claude` バイナリに `automatic compaction failed: ` を挟む合成と、
-    // 見出しの定数 `Prompt is too long` が実在する。`command grep -a -o` で再現できる）。
+    // これは CLI が**合成した1本の文字列**である。**同梱の `claude` バイナリに、
+    // 見出しの定数と `automatic compaction failed: ` を挟む合成の両方が実在する。**
+    // 初出の実測は `0.3.251` だが、**版番号もミニファイ後の関数名も錨にしない**
+    // ——どちらも版ごとに変わるので、錨にすると「静かに何も返さないコマンド」に
+    // なる（この判断の理由と `$F` の出し方は `context-window-failure.ts` の
+    // 「既知の文言はどこから来たか」の節に在る）。下は同梱の `0.3.261` で
+    // 確かめた（2026-09-06）:
+    //
+    // ```sh
+    // command grep -a -o -E '[A-Za-z_$]+="Prompt is too long"|return`\$\{[A-Za-z_$]+\} \\xB7 automatic compaction failed: `' "$F"
+    // ```
+    //
+    // 出力（`\xB7` は `·`。**2行が合わさって、上の1本の文字列になる**。⚠️ 何も
+    // 返らなければ「確かめ損ねた」ではなく「この合成が無くなった」である）:
+    //
+    // ```js
+    // gC="Prompt is too long"
+    // return`${gC} \xB7 automatic compaction failed: `
+    // ```
+    //
     // **⟹ マーカーの後ろに在るのはこのターンの失敗ではなく、「compaction という
     // 別の呼び出しがなぜ失敗したか」である。**
     //
@@ -4589,9 +4606,15 @@ class Clone implements CloneHost {
     // （どちらの層か不明）のまま文言へ出す。
     //
     // **`agent_type` は今のところ常に無い。** `SDKPermissionDeniedMessage` は
-    // `agent_id` は持つが `agent_type` を持たない（`runner.ts` の同じ doc、
-    // SDK `0.3.247` の型で確認済み）。読みはするが、作り物の型名を出さない
-    // （`cloneToolActor` の `UNKNOWN_AGENT_TYPE` と同じ扱い）。
+    // `agent_id` は持つが `agent_type` を持たない（`runner.ts` の同じ doc）。
+    // 読みはするが、作り物の型名を出さない（`cloneToolActor` の
+    // `UNKNOWN_AGENT_TYPE` と同じ扱い）。
+    //
+    // **この不在には歯が在る**（`permission-denied.test.ts` の
+    // `走行中の合図は agent_type の欄を持たない`）。**⚠️ 版番号を根拠に書かない**
+    // ——不在は `check:sdk-quotes` では守れない（あの門は「在ること」しか
+    // 言えない。`check-sdk-quotes-core.mjs` の「この検査が言えないこと」）ので、
+    // 守っているのは型の歯のほうである。
     const agentId = denial.agentId;
     const agentType = denial.agentType;
     const actorLabel =

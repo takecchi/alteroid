@@ -51,48 +51,83 @@
  * 作るのはコンパイル済みの CLI バイナリ本体
  * （`@anthropic-ai/claude-agent-sdk-linux-x64`）である。**そのバイナリ自身が、
  * 同じ問題（プロバイダの文言から「文脈窓に当たったか」を判定する）を既に
- * 解いていた。** 以下は実測（2026-08-27、`@anthropic-ai/claude-agent-sdk-linux-x64@0.3.245`。
- * `pnpm-lock.yaml` に固定された版）で、`command grep -a -o` でバイナリ本体
- * から見つけた逐語である（この版のバイナリはこのリポジトリの
- * `node_modules` に実在するので、以下のコマンドでいつでも再現できる）:
+ * 解いていた。** 以下は `command grep -a` でバイナリ本体から見つけた逐語である
+ * （初出の実測は 2026-08-27 の `0.3.245`。下のコマンドを同梱の `0.3.261` に対して
+ * 走らせ直し、同じ述語が在ることを確かめてある——2026-09-06）。
+ *
+ * **⚠️ 版番号でもミニファイ後の関数名でも探さないこと。どちらも版ごとに変わる。**
+ * この doc に元々在ったコマンドは、パスに `0.3.245` を焼き込み、`function c(n){…}`
+ * という**ミニファイ後の名前**で探していた。**0.3.261 に対しては、パスを直しても
+ * 何も返さない** —— `c` / `g` / `h` は `EPe` / `TPe` / `kot` へ変わり、引数名も
+ * `n` → `e` になり、3つが隣接して並ぶ前提も崩れていたからである。**⟹ 下の
+ * コマンドは、この判定が実際に依存している文言そのものを錨にしてある。**
+ *
+ * **⚠️ 何も返らなかったときの読み方。** それは「該当が見つからなかった（＝
+ * 確かめ損ねた）」ではない。**錨は下の `PATTERNS` と同じ文言なので、空で返るのは
+ * 「その文言がバイナリから消えた」＝ この判定が実際に腐った、という意味である。**
+ * そのときは下の「⚠️ 弱さ」の節が現実になっている。
  *
  * ```sh
- * F=node_modules/.pnpm/@anthropic-ai+claude-agent-sdk-linux-x64@0.3.245/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude
- * command grep -a -o 'function c(n){[^}]*}function g(n){[^}]*}function h(n){[^}]*}' "$F"
+ * # 同梱バイナリの在り処は版とハッシュを含む。**パスを文字列で組み立てない**
+ * # （`scripts/check-sdk-quotes-core.mjs` の `resolveSdkTypes` と同じ引き方）。
+ * F=$(node -e 'const{createRequire:R}=require("module");const e=R(`${process.cwd()}/packages/core/package.json`).resolve("@anthropic-ai/claude-agent-sdk");console.log(R(e).resolve("@anthropic-ai/claude-agent-sdk-linux-x64/claude"))')
+ *
+ * # 1. 判定の述語そのもの（下の PATTERNS の出所）
+ * command grep -a -o -E 'function [A-Za-z_$]+\([A-Za-z_$]+\)\{[^}]*\.includes\("(prompt is too long|input length and `max_tokens` exceed context limit|context window)"\)[^}]*\}' "$F"
+ *
+ * # 2. その述語が ASCII のタグへ分類される所
+ * command grep -a -o -E 'function [A-Za-z_$]+\([^)]{0,20}\)\{[^}]{0,120}"(prompt_too_long|max_tokens_context_overflow)"[^}]{0,60}\}' "$F"
+ *
+ * # 3. ターン中に当たった回の assistant content（`apiError` に何が立つかも一緒に出る）
+ * command grep -a -o -E 'content:`\$\{[A-Za-z_$]+\}: The model has reached its context window limit\.`,apiError:"[a-z_]+"' "$F"
  * ```
  *
- * 出力（ミニファイ後の関数名 `c` / `g` / `h`。読みやすさのため改行を足した
- * ——文字そのものは1文字も変えていない）:
+ * 1 の出力（`0.3.261`、2026-09-06。読みやすさのため改行を足した——文字そのものは
+ * 1文字も変えていない）。**⚠️ 関数名（`EPe` / `TPe` / `kot`）は版ごとに変わる。
+ * ここで意味を持つのは二重引用符の中の文言だけである** —— 周りの名前が腐っても
+ * 害が無いのは、文言のほうを上のコマンドで引き直せるからである
+ * （`check-sdk-quotes-core.mjs` が版番号の但し書きについて言っているのと同じ理屈）:
  *
  * ```js
- * function c(n) {
- *   let e = n.toLowerCase();
- *   return e.includes("prompt is too long") ||
- *     e.includes("input is too long for requested model");
+ * function EPe(e) {
+ *   let t = e.toLowerCase();
+ *   return t.includes("prompt is too long") ||
+ *     t.includes("input is too long for requested model");
  * }
- * function g(n) {
- *   return n.toLowerCase().includes("context window");
+ * function TPe(e) {
+ *   return e.toLowerCase().includes("context window");
  * }
- * function h(n) {
- *   return n.toLowerCase().includes("input length and `max_tokens` exceed context limit");
+ * function kot(e) {
+ *   return e.toLowerCase().includes("input length and `max_tokens` exceed context limit");
  * }
  * ```
  *
- * さらに `c` は `"prompt_too_long"`、`h` は `"max_tokens_context_overflow"`
- * という ASCII のタグへ分類され（`function jX(e){...jd(e.message,
- * "prompt_too_long")}` / `function cV(e){...jd(e.message,
- * "max_tokens_context_overflow"))}`）、CLI 内部のリトライ判定・エラー
- * メッセージのパース（`/input length and \`max_tokens\` exceed context
- * limit: (\d+) \+ (\d+) > (\d+)/` という正規表現も同じバイナリに実在する）
- * に使われている。**`g`（ゆるい `"context window"` 部分一致）はここでは
- * 採らない** — 文脈窓の話題に触れただけの地の文（例えば人間やクローンが
- * 「文脈窓が心配だ」と発言しただけの回）まで拾う恐れがあり、`c` / `h` より
- * 誤検知の幅が広い。
+ * 2 の出力。**「プロンプトが長い」側の述語は `"prompt_too_long"`、「入力＋
+ * `max_tokens` が溢れる」側は `"max_tokens_context_overflow"` という ASCII の
+ * タグと同じ所で束ねられている**（`V_(…, "<タグ>")` は CLI が別経路で立てた
+ * 同じ分類を拾う側）。このタグは CLI 内部のリトライ判定・エラーメッセージの
+ * パース（`/input length and \`max_tokens\` exceed context limit: (\d+) \+ (\d+) > (\d+)/`
+ * という正規表現も同じバイナリに実在する）に使われている:
  *
- * `"The model has reached its context window limit."`
- * （ターン中に `stop_reason === "model_context_window_exceeded"` になった
- * 回の assistant content。上の実測と同じコマンドで見つかる）も同じ理由で
- * 含めた——実際に流れる文言として確認できている。
+ * ```js
+ * function gq(e){if(!(e instanceof Error))return!1;return EPe(e.message)||V_(e.message,"prompt_too_long")}
+ * function hq(e){return e instanceof Error&&(kot(e.message)||V_(e.message,"max_tokens_context_overflow"))}
+ * ```
+ *
+ * **`TPe`（ゆるい `"context window"` 部分一致）はここでは採らない** — 文脈窓の
+ * 話題に触れただけの地の文（例えば人間やクローンが「文脈窓が心配だ」と発言した
+ * だけの回）まで拾う恐れがあり、`EPe` / `kot` より誤検知の幅が広い。上のコマンドで
+ * わざわざ一緒に取り出しているのは、**採らなかったものを名指しで残すため**である。
+ *
+ * 3 の出力。`"The model has reached its context window limit."`（ターン中に
+ * `stop_reason === "model_context_window_exceeded"` になった回の assistant
+ * content）も同じ理由で含めた——実際に流れる文言として確認できている。
+ * **この1行は、上の「印は `"max_output_tokens"` のままだった」という実測の裏も
+ * 同時に取っている**（`apiError` に立つ値がそこに出ている）:
+ *
+ * ```js
+ * content:`${Ul}: The model has reached its context window limit.`,apiError:"max_output_tokens"
+ * ```
  *
  * ## ⚠️ 弱さ（取りこぼす）
  *
