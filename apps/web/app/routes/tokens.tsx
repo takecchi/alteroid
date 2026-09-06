@@ -47,18 +47,23 @@ export default function Tokens() {
 function PoolAndSettings() {
   const { data, error, isLoading } = useTokens();
 
-  // **403 は「実行環境の持ち主だけが見られる」であって、ただの失敗ではない。**
-  // `requireOperator` は `/profile` `/access/*` と同じ強さ（課金の主体を決める
-  // 操作なので、`access grant` を通しただけのアカウントには開けない）。汎用の
-  // `ErrorNote` に投げっぱなしにすると、この理由が読み手に伝わらない。
+  // **403 は「alteroid を使う許可が無い」であって、ただの失敗ではない。**
+  //
+  // 2026-09-06 の同格化で `/tokens` から `requireOperator` が外れたので、ここへ
+  // 来る 403 は `authenticate` の「許可が無い」だけになった（実行環境の持ち主か
+  // どうかは、もうこの画面の資格に関係しない）。
+  //
+  // **そして普通はここまで来ない** —— 未 grant なら `use-auth` が `ungranted` を
+  // 返し、`shell` がログイン画面へ振る。残してあるのは、その手前をすり抜けた
+  // 場合に汎用の `ErrorNote` へ投げっぱなしにしないためである。
   if (error instanceof ApiError && error.status === 403) {
     return (
       <Card>
         <CardHeader title="プール一覧・回転の設定" />
         <div className="px-4 py-3 text-sm text-muted">
-          この一覧は実行環境の持ち主だけが見られる（
+          この一覧は alteroid を使う許可があるアカウントだけが見られる（
           <code className="font-mono">alteroid token list</code>{' '}
-          と同じ資格）。いま繋いでいるアカウントには、この資格が無い。
+          と同じ資格）。いま繋いでいるアカウントには、この許可が無い。
         </div>
       </Card>
     );

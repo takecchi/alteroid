@@ -425,7 +425,7 @@ describe('/tokens 画面 — 空のプール', () => {
 });
 
 describe('/tokens 画面 — 403', () => {
-  it('実行環境の持ち主でなければ、専用の文言を出す（汎用のエラー表示に投げない）', async () => {
+  it('alteroid を使う許可が無ければ、専用の文言を出す（汎用のエラー表示に投げない）', async () => {
     stubScreen({ tokensStatus: 403 });
 
     render(
@@ -434,7 +434,7 @@ describe('/tokens 画面 — 403', () => {
       </Providers>,
     );
 
-    expect(await screen.findByText(/実行環境の持ち主だけが見られる/)).toBeTruthy();
+    expect(await screen.findByText(/使う許可があるアカウントだけが見られる/)).toBeTruthy();
     expect(screen.getByText('alteroid token list')).toBeTruthy();
   });
 });

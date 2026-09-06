@@ -32,7 +32,13 @@ export interface AuthState {
   providers: AuthProvider[];
   /** ログイン済みなら、このデーモンでの自分。 */
   account: StoredAccount | null;
-  /** 実行環境の持ち主のトークンで通っている（`/access` を叩ける）。 */
+  /**
+   * 実行環境の持ち主のトークンで通っている。
+   *
+   * **`/access` を叩けるかどうかとは、もう一致しない** — 2026-09-06 の同格化で、
+   * 許可されたアカウントも `/access/*` と `/tokens` を叩ける。この旗が今も
+   * 意味を持つのは `/profile` の2本だけである。
+   */
   operator: boolean;
 }
 

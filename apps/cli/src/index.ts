@@ -247,7 +247,9 @@ program
  */
 const accessCommand = program
   .command('access')
-  .description('誰が alteroid を使えるかを決める（実行環境の持ち主だけが操作できる）');
+  .description(
+    '誰が alteroid を使えるかを決める（実行環境の持ち主、または alteroid を使う許可を得たアカウント）',
+  );
 
 accessCommand
   .command('list')
