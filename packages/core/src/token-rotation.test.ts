@@ -358,7 +358,7 @@ describe('#680: 覚えている事実から期限を選ぶ', () => {
       ],
       NOW,
     );
-    expect(chosen).toBe(NOW + 10_000);
+    expect(chosen).toEqual({ at: NOW + 10_000, source: 'quota_reset' });
   });
 
   it('過ぎた期限は使わない（その窓はもう開いている）', () => {
@@ -383,7 +383,7 @@ describe('#680: 覚えている事実から期限を選ぶ', () => {
       ],
       NOW,
     );
-    expect(chosen).toBe(NOW + 5_000);
+    expect(chosen).toEqual({ at: NOW + 5_000, source: 'quota_reset' });
   });
 
   it('期限を運んでいない事実しか無ければ undefined（既定へ倒す side へ返す）', () => {
@@ -401,7 +401,7 @@ describe('#680: 覚えている事実から期限を選ぶ', () => {
         [{ kind: 'five_hour', status: 'rejected', overageResetsAt: NOW + 3_000 }],
         NOW,
       ),
-    ).toBe(NOW + 3_000);
+    ).toEqual({ at: NOW + 3_000, source: 'overage_reset' });
   });
 });
 

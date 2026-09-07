@@ -542,6 +542,7 @@ export {
 export {
   agentTokenInputSchema,
   agentTokenViewSchema,
+  cooldownSourceSchema,
   DEFAULT_TOKEN_COOLDOWN_MS,
   DEFAULT_TOKEN_ROTATION_POLICY,
   DEFAULT_TOKEN_ROTATION_SETTINGS,
@@ -562,6 +563,8 @@ export {
   type AgentToken,
   type AgentTokenInput,
   type AgentTokenView,
+  type AuthoritativeCooldownSource,
+  type CooldownSource,
   type NormalizeTokenPoolOptions,
   type TokenCredential,
   type TokenFailureObservation,
@@ -569,6 +572,7 @@ export {
   type TokenRotationSettings,
 } from './token-pool.js';
 export {
+  cooldownDeadlineFrom,
   cooldownUntilFrom,
   decideTokenRotation,
   earliestRememberedCooldown,

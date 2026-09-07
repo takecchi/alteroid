@@ -3,6 +3,8 @@ import {
   tokenAvailabilityAt,
   type ActiveAgentToken,
   type AgentToken,
+  type AuthoritativeCooldownSource,
+  type CooldownSource,
   type TokenRotationPolicy,
 } from './token-pool.js';
 
@@ -341,8 +343,24 @@ function signalOf(
  * （`markTokenUnusable` の doc）。
  */
 export function cooldownUntilFrom(facts: RateLimitFacts | undefined): number | undefined {
+  return cooldownDeadlineFrom(facts)?.at;
+}
+
+/**
+ * 同じ判定に**出所を添えて**返す（#683）。
+ *
+ * **優先順の判定はここ1箇所である。** {@link cooldownUntilFrom} はこれを呼ぶだけの
+ * 包みで、`describeCooldownFacts`（`token-rotator.ts`）もここを通る ——**同じ順序を
+ * 3箇所に書くと、ずれたときに記録が実際と違う出所を主張する。**
+ */
+export function cooldownDeadlineFrom(
+  facts: RateLimitFacts | undefined,
+): { at: number; source: AuthoritativeCooldownSource } | undefined {
   if (facts === undefined) return undefined;
-  return facts.resetsAt ?? facts.overageResetsAt;
+  if (facts.resetsAt !== undefined) return { at: facts.resetsAt, source: 'quota_reset' };
+  if (facts.overageResetsAt !== undefined)
+    return { at: facts.overageResetsAt, source: 'overage_reset' };
+  return undefined;
 }
 
 /**
@@ -379,12 +397,12 @@ export function cooldownUntilFrom(facts: RateLimitFacts | undefined): number | u
 export function earliestRememberedCooldown(
   facts: Iterable<RateLimitFacts>,
   at: number,
-): number | undefined {
-  let earliest: number | undefined;
+): { at: number; source: AuthoritativeCooldownSource } | undefined {
+  let earliest: { at: number; source: AuthoritativeCooldownSource } | undefined;
   for (const one of facts) {
-    const until = cooldownUntilFrom(one);
-    if (until === undefined || until <= at) continue;
-    if (earliest === undefined || until < earliest) earliest = until;
+    const deadline = cooldownDeadlineFrom(one);
+    if (deadline === undefined || deadline.at <= at) continue;
+    if (earliest === undefined || deadline.at < earliest.at) earliest = deadline;
   }
   return earliest;
 }
@@ -462,7 +480,16 @@ export type TokenSelection =
        * 無いことを `0` や `now` で埋めないこと（AGENTS.md 地雷「取れない軸に 0 の
        * 行を作る」）——埋めると「すぐ戻る」と読める。
        */
-      earliest?: { tokenId: string; label: string; cooldownUntil: number };
+      earliest?: {
+        tokenId: string;
+        label: string;
+        cooldownUntil: number;
+        /**
+         * その期限の出所（#683。{@link CooldownSource}）。**行が持っていなければ
+         * 無い** —— 埋めると「推測だと観測した」という嘘になる。
+         */
+        cooldownSource?: CooldownSource;
+      };
       /** 人間とクローンへ出す1行。**トークンの値を含まない。** */
       why: string;
     };
@@ -535,7 +562,13 @@ export function selectNextToken(
 
   return {
     kind: 'none',
-    earliest: { tokenId: first.id, label: first.label, cooldownUntil: first.cooldownUntil },
+    earliest: {
+      tokenId: first.id,
+      label: first.label,
+      cooldownUntil: first.cooldownUntil,
+      // **行が持っていなければ載せない**（#683。既定で埋めない）。
+      ...(first.cooldownSource === undefined ? {} : { cooldownSource: first.cooldownSource }),
+    },
     why: `候補が全部冷却中である。いちばん早く戻るのは「${first.label}」`,
   };
 }

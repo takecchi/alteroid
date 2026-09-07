@@ -1691,6 +1691,74 @@ describe('tokenRotationEntry / tokenRestoreEntry', () => {
     expect(exhausted?.earliestAt).toBe(new Date(1_800_000_000_000).toISOString());
   });
 
+  /**
+   * **#683**: `earliestAt` の出所を日誌が覚える。
+   *
+   * 日誌には既に `earliestAt` が在ったが**出所は無かった** ⟹ 行を見ても
+   * 「その時刻が本物か、5時間足しただけか」が言えなかった。
+   */
+  describe('#683: earliestAt の出所', () => {
+    it('parked の行に出所が載る', () => {
+      const entry = tokenRotationEntry({
+        kind: 'parked',
+        fromTokenId: 'tok-a',
+        tokenId: 'tok-b',
+        label: '予備1',
+        generation: 5,
+        cooldownUntil: 1_800_000_000_000,
+        cooldownSource: 'quota_reset',
+        signal: 'reached',
+        freshness: 'current',
+        spread: [{ target: 'runner-primary', ok: true }],
+        why: 'いま通る鍵が無い',
+      });
+
+      expect(entry?.event).toBe('parked');
+      expect(entry?.cooldownSource).toBe('quota_reset');
+      // **人間が読む1行にも出す**（構造だけだと画面と CLI で言い方が割れる）。
+      expect(entry?.text).toContain('出所は枠の resetsAt');
+    });
+
+    it('exhausted の earliest にも載る', () => {
+      const entry = tokenRotationEntry({
+        kind: 'exhausted',
+        earliest: {
+          tokenId: 'tok-a',
+          label: '予備1',
+          cooldownUntil: 1_800_000_000_000,
+          cooldownSource: 'default',
+        },
+        signal: 'reached',
+        freshness: 'current',
+        why: '全部冷却中',
+      });
+
+      expect(entry?.cooldownSource).toBe('default');
+      // **推測であることを、推測の回にだけ黙らない形で言う。**
+      expect(entry?.text).toContain('ただの推測');
+    });
+
+    it('⚠️ 出所を持たない行では欄を作らない（既定で埋めない）', () => {
+      // **無いのは「言えなかった」である。** `default` で埋めると「推測だと
+      // 観測した」という嘘になり、読む側は本物の値を推測として捨てうる。
+      const entry = tokenRotationEntry({
+        kind: 'parked',
+        tokenId: 'tok-b',
+        label: '予備1',
+        generation: 5,
+        cooldownUntil: 1_800_000_000_000,
+        signal: 'reached',
+        freshness: 'current',
+        spread: [{ target: 'runner-primary', ok: true }],
+        why: 'いま通る鍵が無い',
+      });
+
+      expect(entry?.event).toBe('parked');
+      expect(entry).not.toHaveProperty('cooldownSource');
+      expect(entry?.text).not.toContain('出所は');
+    });
+  });
+
   it('戻る見込みの候補が1本も無いとき earliestAt を埋めない（「すぐ戻る」と混ぜない）', () => {
     const entry = tokenRotationEntry({
       kind: 'exhausted',

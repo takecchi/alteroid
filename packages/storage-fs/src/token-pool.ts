@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 
 import {
   activeAgentTokenSchema,
+  cooldownSourceSchema,
   DEFAULT_TOKEN_ROTATION_SETTINGS,
   tokenRotationSettingsSchema,
   type ActiveAgentToken,
@@ -26,6 +27,13 @@ const agentTokenRowSchema = z.object({
   order: z.number().int(),
   disabledAt: z.string().optional(),
   cooldownUntil: z.number().optional(),
+  /**
+   * 冷却の期限の出所（#683。`@alteroid/core` の `CooldownSource`）。
+   *
+   * **無い行が在る**（#683 より前に書かれたファイル）。**既定値を持たせない**
+   * ——`default` で埋めると「推測だと観測した」という嘘になる。
+   */
+  cooldownSource: cooldownSourceSchema.optional(),
   lastRejectedAt: z.string().optional(),
   lastRejectedReason: z.string().optional(),
   invalidatedAt: z.string().optional(),

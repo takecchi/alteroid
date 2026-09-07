@@ -376,17 +376,103 @@ describe('markTokenUnusable / markTokenUsable', () => {
   const base: AgentToken = { id: 'tok-a', label: 'a', value: 'secret-value', order: 0 };
   const MESSAGE = "You've hit your org's monthly spend limit";
 
-  it('いつ・何と言われたか・いつ戻る見込みかの3つを書く', () => {
+  it('いつ・何と言われたか・いつ戻る見込みか・どこから採ったかの4つを書く', () => {
     const marked = markTokenUnusable(base, {
       at: AT,
       message: MESSAGE,
-      resetsAt: 1_800_000_000_000,
+      resets: { at: 1_800_000_000_000, source: 'quota_reset' },
       fallbackCooldownMs: FALLBACK,
     });
     expect(marked.lastRejectedAt).toBe(AT);
     expect(marked.lastRejectedReason).toBe(MESSAGE);
     expect(marked.cooldownUntil).toBe(1_800_000_000_000);
+    // **#683**: 行を見て「本物か推測か」が言えること。
+    expect(marked.cooldownSource).toBe('quota_reset');
     expect(marked.updatedAt).toBe(AT);
+  });
+
+  /**
+   * **#683**: 出所を行が覚える。
+   *
+   * ここが固定するのは3つ —— (a) 権威ある値のときも必ず書く (b) 推測は `default`
+   * と名乗る (c) **言えない回は書かない**（`default` で埋めない）。
+   */
+  describe('#683: 冷却の期限の出所', () => {
+    it('課金枠から採った回は overage_reset と書く（権威ある / 推測の2値へ潰さない）', () => {
+      const marked = markTokenUnusable(base, {
+        at: AT,
+        message: MESSAGE,
+        resets: { at: Date.parse(AT) + 60_000, source: 'overage_reset' },
+        fallbackCooldownMs: FALLBACK,
+      });
+      expect(marked.cooldownSource).toBe('overage_reset');
+    });
+
+    it('既定へ倒れた回は default と書く（推測であることが行から読める）', () => {
+      const marked = markTokenUnusable(base, {
+        at: AT,
+        message: MESSAGE,
+        fallbackCooldownMs: FALLBACK,
+      });
+      expect(marked.cooldownUntil).toBe(Date.parse(AT) + FALLBACK);
+      expect(marked.cooldownSource).toBe('default');
+    });
+
+    it('記録が勝った回は、記録の側の出所を引き継ぐ（default と書かない）', () => {
+      // 値が動かないなら出所も動かない。**`default` と書くと、権威ある値を
+      // 推測だと名乗ることになる。**
+      const authoritative = Date.parse('2026-09-07T13:10:00.000Z');
+      const marked = markTokenUnusable(
+        { ...base, cooldownUntil: authoritative, cooldownSource: 'quota_reset' },
+        {
+          at: '2026-09-07T11:42:22.701Z',
+          message: "You've hit your session limit · resets 10:10pm (Asia/Tokyo)",
+          fallbackCooldownMs: FALLBACK,
+        },
+      );
+      expect(marked.cooldownUntil).toBe(authoritative);
+      expect(marked.cooldownSource).toBe('quota_reset');
+    });
+
+    it('⚠️ 記録が勝ったが、その出所が無い行では欄を作らない', () => {
+      // **#683 より前に置かれた行がこれである。** `default` で埋めると
+      // 「推測だと観測した」という嘘になる（`createdAt` が無い行を `now()` で
+      // 埋め直さないのと同じ理由）。
+      const authoritative = Date.parse('2026-09-07T13:10:00.000Z');
+      const marked = markTokenUnusable(
+        { ...base, cooldownUntil: authoritative },
+        {
+          at: '2026-09-07T11:42:22.701Z',
+          message: MESSAGE,
+          fallbackCooldownMs: FALLBACK,
+        },
+      );
+      expect(marked.cooldownUntil).toBe(authoritative);
+      expect(marked).not.toHaveProperty('cooldownSource');
+    });
+
+    it('推測が勝った回は default と書く（前の行の出所を残さない）', () => {
+      // 残すと、**いま書いた期限の出所として読まれる。**
+      const faraway = Date.parse(AT) + 34 * 60 * 60 * 1000;
+      const marked = markTokenUnusable(
+        { ...base, cooldownUntil: faraway, cooldownSource: 'quota_reset' },
+        { at: AT, message: MESSAGE, fallbackCooldownMs: FALLBACK },
+      );
+      expect(marked.cooldownUntil).toBe(Date.parse(AT) + FALLBACK);
+      expect(marked.cooldownSource).toBe('default');
+    });
+
+    it('使えることを確かめられたら、期限と組で消える', () => {
+      // 期限が無い行に出所だけ残ると、**何の出所なのか指す先が無い。**
+      const marked = markTokenUnusable(base, {
+        at: AT,
+        message: MESSAGE,
+        fallbackCooldownMs: FALLBACK,
+      });
+      const usable = markTokenUsable(marked, '2026-08-25T04:00:00.000Z');
+      expect(usable).not.toHaveProperty('cooldownUntil');
+      expect(usable).not.toHaveProperty('cooldownSource');
+    });
   });
 
   it('文言をそのまま持つ（言い換えると分類が unknown へ落ちる）', () => {
@@ -483,7 +569,7 @@ describe('markTokenUnusable / markTokenUsable', () => {
       {
         at: AT,
         message: MESSAGE,
-        resetsAt: later,
+        resets: { at: later, source: 'quota_reset' },
         fallbackCooldownMs: FALLBACK,
       },
     );
@@ -495,7 +581,7 @@ describe('markTokenUnusable / markTokenUsable', () => {
     const marked = markTokenUnusable(base, {
       at: AT,
       message: MESSAGE,
-      resetsAt: past,
+      resets: { at: past, source: 'quota_reset' },
       fallbackCooldownMs: FALLBACK,
     });
     expect(marked.cooldownUntil).toBe(past);

@@ -10,9 +10,11 @@ import {
   type TokenCredential,
   type ActiveAgentToken,
   type AgentToken,
+  type CooldownSource,
   type TokenRotationSettings,
 } from './token-pool.js';
 import {
+  cooldownDeadlineFrom,
   cooldownUntilFrom,
   decideTokenRotation,
   earliestRememberedCooldown,
@@ -230,6 +232,15 @@ export type TokenRotationOutcome =
       generation: number;
       /** その鍵が通るようになる見込みの時刻（epoch ミリ秒）。 */
       cooldownUntil: number;
+      /**
+       * 上の期限の**出所**（#683。{@link CooldownSource}）。
+       *
+       * **無いことがある。** 撒いた行が出所を持っていない（#683 より前に冷却が
+       * 書かれた行）ときで、**既定で埋めない** —— 「推測だと観測した」という嘘に
+       * なる。⟹ **`earliestAt` を読む側は、出所が無いことを「権威ある値である」と
+       * 読まないこと。**
+       */
+      cooldownSource?: CooldownSource;
       signal: TokenRotationSignal;
       freshness?: ObservationFreshness;
       reason?: TokenReconsiderReason;
@@ -251,8 +262,17 @@ export type TokenRotationOutcome =
        *    候補が在るので、`earliest` は測っていない（付かない）
        */
       kind: 'exhausted';
-      /** いちばん早く戻るもの。**無いことがある**（上の1と3）。 */
-      earliest?: { tokenId: string; label: string; cooldownUntil: number };
+      /**
+       * いちばん早く戻るもの。**無いことがある**（上の1と3）。
+       *
+       * `cooldownSource` はその期限の出所（#683）。**行が持っていなければ無い。**
+       */
+      earliest?: {
+        tokenId: string;
+        label: string;
+        cooldownUntil: number;
+        cooldownSource?: CooldownSource;
+      };
       /**
        * **候補を試し切る前に打ち切ったか**（Issue #393）。付くのは
        * `'budget'`（壁時計の持ち時間を使い切った）のときだけである。
@@ -604,16 +624,16 @@ function describeCooldownFacts(facts: RateLimitFacts | undefined): string {
   // 行を作る」）。
   if (facts.kind !== undefined) parts.push(`枠: ${facts.kind}`);
   if (facts.status !== undefined) parts.push(`status: ${facts.status}`);
-  // **期限をどの欄から採ったかを書く。** {@link cooldownUntilFrom} と同じ順で
-  // 見る —— **判定を2回書かないこと**（ずれたら、記録が実際と違う出所を主張する）。
-  if (facts.resetsAt !== undefined) {
-    parts.push(`冷却の期限は枠の resetsAt から: ${new Date(facts.resetsAt).toISOString()}`);
-  } else if (facts.overageResetsAt !== undefined) {
-    parts.push(
-      `冷却の期限は課金枠の overageResetsAt から: ${new Date(facts.overageResetsAt).toISOString()}`,
-    );
-  } else {
+  // **期限をどの欄から採ったかを書く。** 判定は {@link cooldownDeadlineFrom} に
+  // 任せる —— **判定を2回書かないこと**（ずれたら、記録が実際と違う出所を主張する）。
+  // **#683 で判定そのものを1箇所へ寄せた。文言は1文字も変えていない。**
+  const deadline = cooldownDeadlineFrom(facts);
+  if (deadline === undefined) {
     parts.push('冷却の期限は設定の既定から（resetsAt も overageResetsAt も届いていない）');
+  } else if (deadline.source === 'quota_reset') {
+    parts.push(`冷却の期限は枠の resetsAt から: ${new Date(deadline.at).toISOString()}`);
+  } else {
+    parts.push(`冷却の期限は課金枠の overageResetsAt から: ${new Date(deadline.at).toISOString()}`);
   }
   return `${head}。${parts.join(' / ')}`;
 }
@@ -771,8 +791,8 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
     observation: TokenRotatorObservation,
   ): Promise<AgentToken[]> {
     const at = now().toISOString();
-    const resetsAt =
-      cooldownUntilFrom(observation.facts) ??
+    const resets =
+      cooldownDeadlineFrom(observation.facts) ??
       // **覚えている側は「いまも先の期限」だけを採る**（過ぎた窓はもう開いている）。
       // 判定に混ぜないこと・鍵に世代を入れない理由は
       // {@link rememberedRejections} の doc。
@@ -788,7 +808,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
               // **文言が無いときは、観測できた事実のほうを書く**（人間の決定
               // 2026-09-07）。ここは `describeCooldownFacts` が組み立てる。
               message: observation.notice?.text ?? describeCooldownFacts(observation.facts),
-              ...(resetsAt === undefined ? {} : { resetsAt }),
+              ...(resets === undefined ? {} : { resets }),
               fallbackCooldownMs: settings.cooldownMs,
             })
           : token,
@@ -890,7 +910,13 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           ? markTokenUnusable(token, {
               at,
               message: verdict.reason,
-              ...(verdict.retryAt === undefined ? {} : { resetsAt: verdict.retryAt }),
+              // **probe の `retryAt` は `/usage` の枠のリセット時刻である**
+              // （`judgeTokenCandidate` が窓の `resetsAt` から作る）⟹ 出所は
+              // `quota_reset` である（#683）。**`default` ではない** —— これは
+              // claude.ai が言っている値で、こちらが足した推測ではない。
+              ...(verdict.retryAt === undefined
+                ? {}
+                : { resets: { at: verdict.retryAt, source: 'quota_reset' as const } }),
               fallbackCooldownMs: settings.cooldownMs,
             })
           : token,
@@ -1068,6 +1094,10 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           label: row.label,
           generation: placed.generation,
           cooldownUntil: earliest.cooldownUntil,
+          // **行が持っていなければ載せない**（#683。既定で埋めない）。
+          ...(earliest.cooldownSource === undefined
+            ? {}
+            : { cooldownSource: earliest.cooldownSource }),
           ...common,
           spread: placed.spread,
           why:
@@ -1424,9 +1454,11 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
                 ? markTokenUnusable(token, {
                     at,
                     message: currentVerdict.reason,
+                    // 出所は `quota_reset`（`/usage` の枠のリセット時刻。#683 —
+                    // 上の `sweepCandidates` の同じ箇所と同じ理由）。
                     ...(currentVerdict.retryAt === undefined
                       ? {}
-                      : { resetsAt: currentVerdict.retryAt }),
+                      : { resets: { at: currentVerdict.retryAt, source: 'quota_reset' as const } }),
                     fallbackCooldownMs: settings.cooldownMs,
                   })
                 : token,
@@ -1572,6 +1604,38 @@ function isThinnedMilestone(count: number): boolean {
   return false;
 }
 
+/**
+ * 冷却の期限に添える、**出所の1語**（#683）。
+ *
+ * ## 権威ある値のときも言う
+ *
+ * 「推測のときだけ言う」形にすると、**何も書いていないことが「推測ではない」と
+ * 「まだ対応していない版である」の両方を意味する**（#683 の成果物が逐語でそう
+ * 書いている。`AGENTS.md` の地雷「取れない軸に 0 の行を作る」の裏返し）。
+ *
+ * ⟹ **無いときだけ黙る。** そのときは本当に言えない（行が出所を持っていない）。
+ *
+ * **⚠️ 「書いた時点の事実」であって、いまの正しさではない**
+ * （`token-pool.ts` の `CooldownSource`）。だから「権威ある値である」ではなく
+ * 「どこから採ったか」を書く。
+ */
+export function describeCooldownSource(source: CooldownSource | undefined): string {
+  switch (source) {
+    case 'quota_reset':
+      return '。出所は枠の resetsAt（権威ある値）';
+    case 'overage_reset':
+      return '。出所は課金枠の overageResetsAt（権威ある値。枠そのものではない）';
+    case 'default':
+      return '。**出所は設定の既定（ただの推測である）**';
+    // **無いときは黙る。** 「言えなかった」を `default` として書くと、推測だと
+    // 観測したという嘘になる。**`switch` の網羅性（型）とは別に、実行時の
+    // 倒れ先がここに要る**（`AGENTS.md`「型で塞いだ分岐にも、実行時の倒れ先の
+    // 歯を足す」——日誌は別デプロイの画面からも読まれる）。
+    default:
+      return '';
+  }
+}
+
 export function describeTokenRotation(
   outcome: TokenRotationOutcome,
   observed?: { noticeText?: string },
@@ -1616,7 +1680,7 @@ export function describeTokenRotation(
         ? '**まだ試していない候補が残っている**（戻る見込みは測っていない）'
         : outcome.earliest === undefined
           ? '**戻る見込みの立っている候補が1本も無い**'
-          : `いちばん早く戻るのは「${outcome.earliest.label}」（${new Date(outcome.earliest.cooldownUntil).toISOString()}）`;
+          : `いちばん早く戻るのは「${outcome.earliest.label}」（${new Date(outcome.earliest.cooldownUntil).toISOString()}${describeCooldownSource(outcome.earliest.cooldownSource)}）`;
     return `認証トークン: **回せなかった**（${outcome.signal}）。${outcome.why}。${earliest}${tail}`;
   }
 
@@ -1629,7 +1693,7 @@ export function describeTokenRotation(
       `${from} → 「${outcome.label}」（id ${outcome.tokenId}）。${outcome.why}\n` +
       `${describeSpread(outcome.spread)}\n` +
       // **「回った」と読ませない。** 撒いた鍵はまだ通らない。
-      `**⚠️ この鍵は ${new Date(outcome.cooldownUntil).toISOString()} まで通らない** — ` +
+      `**⚠️ この鍵は ${new Date(outcome.cooldownUntil).toISOString()}${describeCooldownSource(outcome.cooldownSource)} まで通らない** — ` +
       'それまでのターンは失敗する。撒いてあるのは「開いた瞬間にそのまま通る」ため' +
       `である（回し手をもう一度通らずに復帰する）${tail}`
     );
@@ -1721,6 +1785,8 @@ export function tokenRotationEntry(
       // `exhausted` の同じ欄（「いちばん早く戻る候補の時刻」）と**同じ意味である**
       // ——`parked` はまさにその候補を撒いた回だからである。
       earliestAt: new Date(outcome.cooldownUntil).toISOString(),
+      // **その時刻が本物か推測かを、行が覚える**（#683）。**無い回は書かない。**
+      ...(outcome.cooldownSource === undefined ? {} : { cooldownSource: outcome.cooldownSource }),
     };
   }
   if (outcome.kind === 'exhausted') {
@@ -1738,6 +1804,10 @@ export function tokenRotationEntry(
             tokenId: outcome.earliest.tokenId,
             label: outcome.earliest.label,
             earliestAt: new Date(outcome.earliest.cooldownUntil).toISOString(),
+            // 出所（#683）。**無い回は書かない**（`parked` と同じ規律）。
+            ...(outcome.earliest.cooldownSource === undefined
+              ? {}
+              : { cooldownSource: outcome.earliest.cooldownSource }),
           }),
     };
   }

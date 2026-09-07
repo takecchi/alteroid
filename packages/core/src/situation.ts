@@ -1,5 +1,6 @@
 import type { ManagerSummary } from './manager.js';
 import type { RunnerLiveness } from './runner-protocol.js';
+import type { CooldownSource } from './token-pool.js';
 
 /**
  * クローンのターンの入口（`clone.ts` の `#runTurn`）に載せる「いまの全体」。
@@ -245,7 +246,19 @@ export function describeTokenSituation(input: {
     const state = tokenStateOf(row, input.at);
     const until =
       state === 'cooling' && row.cooldownUntil !== undefined
-        ? '。冷却明けは ' + new Date(row.cooldownUntil).toISOString()
+        ? '。冷却明けは ' +
+          new Date(row.cooldownUntil).toISOString() +
+          // **出所を添える（#683）。** ここは「冷却中でも1手も始まらないとは
+          // 言えない」を言う行なので、**その期限が推測なのかどうかは判断に効く。**
+          '（' +
+          (row.cooldownSource === undefined
+            ? '出所の記録が無い'
+            : row.cooldownSource === 'default'
+              ? '**出所は設定の既定。ただの推測である**'
+              : '出所は' +
+                (row.cooldownSource === 'quota_reset' ? '枠' : '課金枠') +
+                'のリセット時刻') +
+          '）'
         : '';
     return '現役は「' + row.label + '」（記録の上では ' + TOKEN_STATE_LABEL[state] + until + '）';
   })();
@@ -273,6 +286,11 @@ export interface TokenSituationRow {
   readonly disabledAt?: string;
   readonly invalidatedAt?: string;
   readonly cooldownUntil?: number;
+  /**
+   * 冷却の期限の出所（#683。{@link CooldownSource}）。**無い行が在る** ——
+   * 既定で埋めないこと（「推測だと観測した」という嘘になる）。
+   */
+  readonly cooldownSource?: CooldownSource;
 }
 
 const TOKEN_STATE_LABEL: Record<'ready' | 'cooling' | 'disabled' | 'invalidated', string> = {
