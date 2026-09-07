@@ -225,7 +225,8 @@ export function decideTokenRotation(
    * **遷移が取れなかった回も拾う**（#668）。ただし状態の側は
    * `freshness === 'current'` に限る —— 上の doc「`unknown` では状態で回さない」。
    */
-  const rejected = transition === 'rejected' || (statusNow === 'rejected' && freshness === 'current');
+  const rejected =
+    transition === 'rejected' || (statusNow === 'rejected' && freshness === 'current');
 
   // 1. 組織の方針。**どの設定でも回さない。**
   if (notice?.kind === 'org_policy') {

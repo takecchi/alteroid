@@ -243,11 +243,7 @@ describe('#668: 状態でも回る（ただし観測がいまの世代を名乗�
   });
 
   it('org_policy なら状態でも回らない（受け入れ基準9）', () => {
-    const d = decideTokenRotation(
-      'free_exhausted',
-      { ...restated, notice: orgPolicy },
-      'current',
-    );
+    const d = decideTokenRotation('free_exhausted', { ...restated, notice: orgPolicy }, 'current');
     expect(d.rotate).toBe(false);
     expect(d.signal).toBe('org_policy');
   });
