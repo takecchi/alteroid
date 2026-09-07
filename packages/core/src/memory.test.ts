@@ -1669,6 +1669,17 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
     }
   });
 
+  /**
+   * 予算（`MEMORY_OUTLINE_BUDGET`）を確実に超える文書を組む。
+   *
+   * **節ごとに中身を変えてある。** 中身まで同一の節は節id が衝突し、
+   * `renderMemoryOutline` がその行へ ⚠ を付ける（＝測りたい形ではない行が混じる）。
+   */
+  const flood = (count: number): string =>
+    Array.from({ length: count }, (_, index) => `## 節${index}\n${'あ'.repeat(50)}${index}\n`).join(
+      '\n',
+    );
+
   describe('renderMemoryOutline', () => {
     it('本文を1文字も出さない（出るのは節id・見出し行・文字数だけ）', () => {
       const doc = ['# 見出し', 'SECRET-XYZ-999', '', '## 子', 'SECRET-XYZ-999', ''].join('\n');
@@ -1712,15 +1723,125 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
     });
 
     it('件数ではなく文字数の予算で切り、切ったことを必ず言う', () => {
-      const many = Array.from(
-        { length: 400 },
-        (_, index) => `## 節${index}\n${'あ'.repeat(50)}\n`,
-      ).join('\n');
+      const outline = renderMemoryOutline(scanMemorySections(flood(400)).sections);
 
-      const outline = renderMemoryOutline(scanMemorySections(many).sections);
-
-      expect(outline).toMatch(/ほか \d+ 節は省略/);
+      expect(outline).toMatch(/末尾 \d+ 節は省略/);
       expect(outline).toContain('全 400 件');
+    });
+
+    /**
+     * ## `side` — 目次に**方向**を持たせた分
+     *
+     * **直している詰まりは「肥大化を防ぐ道具が、肥大化そのものによって
+     * 使えなくなる」である。** 予算は先頭から詰めるので、大きな文書では
+     * **末尾側の節id が目次に出てこない** ＝ `memory_section_move` の指し先が
+     * 手に入らない。⟹ 割りたい文書ほど割れない。
+     *
+     * **⚠️ ここで測っているのは向きだけである。** 中央（どちらの端からも予算の
+     * 外に出る節）は `head` でも `tail` でも出ない——それは欠落ではなく、この
+     * 引数が言えないことである（`renderMemoryOutline` の doc の表）。
+     */
+    describe("side（予算で落とす側を選ぶ。既定は 'head'）", () => {
+      /** 予算を確実に超える文書。**節ごとに中身を変える**（同一だと id が衝突して ⚠ が混じる）。 */
+      const many = flood(400);
+      const sectionsOf = () => scanMemorySections(many).sections;
+      /** 目次に出た節id を、出た順に並べて取る。 */
+      const idsIn = (outline: string): string[] =>
+        [...outline.matchAll(/\[([0-9a-f]{8}-[0-9a-f]{8})\]/g)].map((match) => match[1] as string);
+
+      it("⭐ side='tail' は、既定の目次には出てこない末尾側の節id を出す", () => {
+        const sections = sectionsOf();
+        const first = sections[0]!;
+        const last = sections[sections.length - 1]!;
+
+        const head = renderMemoryOutline(sections);
+        const tail = renderMemoryOutline(sections, 'tail');
+
+        // 既定では末尾が落ちている ＝ この節id は手に入らない。
+        expect(head).toContain(first.id);
+        expect(head).not.toContain(last.id);
+        // 向きを渡すと取れる。落ちるのは先頭側になる。
+        expect(tail).toContain(last.id);
+        expect(tail).not.toContain(first.id);
+      });
+
+      /**
+       * **「0件」と「問い方が違う」を区別できるようにするための歯である。**
+       * どちら側を省いたかが出力に無いと、読み手は「その節は無い」と読む。
+       */
+      it('⭐ 断り書きが「どちら側を」「何節」省いたかを言う（どちらの向きでも）', () => {
+        const sections = sectionsOf();
+
+        expect(renderMemoryOutline(sections)).toMatch(
+          /…末尾 \d+ 節は省略（節は全 400 件あり、先頭から \d+ 件だけ出した）。/,
+        );
+        expect(renderMemoryOutline(sections, 'tail')).toMatch(
+          /…先頭 \d+ 節は省略（節は全 400 件あり、末尾から \d+ 件だけ出した）。/,
+        );
+      });
+
+      /** 続きの取り方を書く（`ListingBudget.omitted` の doc）。口が実在するのはこの版からである。 */
+      it('断り書きが続きの取り方を案内する（既定は side=tail へ、tail は既定へ）', () => {
+        const sections = sectionsOf();
+
+        expect(renderMemoryOutline(sections)).toContain('side=tail');
+        expect(renderMemoryOutline(sections, 'tail')).toContain('side を渡さずに呼べば出る');
+        // ⚠ **言えないこと**（中央はどちらの向きでも出ない）も、どちらの断り書きにも書く。
+        // 「中央」の語だけを測ると、逆のことを言う文面（「中央も出る」）が素通りする。
+        expect(renderMemoryOutline(sections)).toContain('どちらの向きでも出ない');
+        expect(renderMemoryOutline(sections, 'tail')).toContain('どちらの向きでも出ない');
+      });
+
+      it('断り書きは穴が空いている側へ置く（既定は最後の行、tail は先頭の行）', () => {
+        const head = renderMemoryOutline(sectionsOf()).split('\n');
+        const tail = renderMemoryOutline(sectionsOf(), 'tail').split('\n');
+
+        expect(head.at(-1)).toContain('節は省略');
+        expect(head[0]).not.toContain('節は省略');
+        expect(tail[0]).toContain('節は省略');
+        expect(tail.at(-1)).not.toContain('節は省略');
+      });
+
+      it("引数を渡さないのは side='head' と同じ（既定の向きを変えていない）", () => {
+        const sections = sectionsOf();
+
+        expect(renderMemoryOutline(sections)).toBe(renderMemoryOutline(sections, 'head'));
+      });
+
+      /**
+       * ⭐ **節id は向きに依存しない**（`memorySectionId` の材料はその節の見出し行と
+       * 中身だけで、目次のどこを切って出したかは材料に入っていない）。⟹ **向きを
+       * 足しても版の照合は弱まらない。** 併せて、**行の並びが文書順のままである**
+       * ことも測る（`tail` は詰める向きが違うだけで、並べ替えではない）。
+       */
+      it('⭐ 出る節id は並びの端そのもので、向きで1文字も変わらない', () => {
+        const sections = sectionsOf();
+        const all = sections.map((section) => section.id);
+
+        const headIds = idsIn(renderMemoryOutline(sections));
+        const tailIds = idsIn(renderMemoryOutline(sections, 'tail'));
+
+        expect(headIds.length).toBeGreaterThan(1);
+        expect(tailIds.length).toBeGreaterThan(1);
+        expect(all.slice(0, headIds.length)).toEqual(headIds);
+        expect(all.slice(-tailIds.length)).toEqual(tailIds);
+      });
+
+      it('予算に入りきる文書では、向きを渡しても出力が1文字も変わらない（切っていない）', () => {
+        const sections = scanMemorySections(withFrontmatter).sections;
+
+        expect(renderMemoryOutline(sections, 'tail')).toBe(renderMemoryOutline(sections, 'head'));
+        expect(renderMemoryOutline(sections, 'tail')).not.toContain('節は省略');
+      });
+
+      it("side='tail' でも本文を1文字も出さない（向きを足しても消えない性質）", () => {
+        const doc = ['# 見出し', 'SECRET-XYZ-999', '', '## 子', 'SECRET-XYZ-999', ''].join('\n');
+
+        const outline = renderMemoryOutline(scanMemorySections(doc).sections, 'tail');
+
+        expect(outline).not.toContain('SECRET-XYZ-999');
+        expect(outline).toContain('## 子');
+      });
     });
   });
 });

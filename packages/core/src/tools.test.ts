@@ -2133,14 +2133,38 @@ describe('クローンの道具', () => {
       '',
     ].join('\n');
 
+    /**
+     * `memory_outline` を実際に呼び、**出力そのもの**と、そこから引いた
+     * `{ id, heading }` の列（出た順）を返す。
+     *
+     * **`outlineId` と分けてあるのは、赤の出どころをアサーションにするためである。**
+     * `outlineId` は見つからないと生の例外を投げるので、「目次にこの節が出るか」を
+     * 測る歯がそれに頼ると、**落ちた理由が自分のアサーションではなくヘルパの
+     * throw になる** — 変異試験でそれが実際に起きた（`side` を無視する変異で、
+     * 端から端までの歯だけ AssertionError が出ずに落ちた）。
+     */
+    async function outlineOf(
+      h: Harness,
+      slug: string,
+      side?: 'head' | 'tail',
+    ): Promise<{ outline: string; entries: { id: string; heading: string }[] }> {
+      const outline = await h.call(
+        'memory_outline',
+        side === undefined ? { slug } : { slug, side },
+      );
+      const entries = outline.split('\n').flatMap((line) => {
+        const match = /^\s*\[([0-9a-f]{8}-[0-9a-f]{8})\] (.+?) — /.exec(line);
+        return match === null ? [] : [{ id: match[1] as string, heading: match[2] as string }];
+      });
+      return { outline, entries };
+    }
+
     /** `memory_outline` の出力から節id を引く（本物の経路を通す）。 */
     async function outlineId(h: Harness, slug: string, heading: string): Promise<string> {
-      const outline = await h.call('memory_outline', { slug });
-      for (const line of outline.split('\n')) {
-        const match = /^\s*\[([0-9a-f]{8}-[0-9a-f]{8})\] (.+?) — /.exec(line);
-        if (match && match[2] === heading) return match[1] as string;
-      }
-      throw new Error(`節 ${heading} が目次に無い:\n${outline}`);
+      const { outline, entries } = await outlineOf(h, slug);
+      const hit = entries.find((entry) => entry.heading === heading);
+      if (hit === undefined) throw new Error(`節 ${heading} が目次に無い:\n${outline}`);
+      return hit.id;
     }
 
     async function seed(h: Harness, slug = 'about-me', content = source): Promise<void> {
@@ -2169,6 +2193,57 @@ describe('クローンの道具', () => {
         const h = harness();
 
         expect(await h.call('memory_outline', { slug: 'nope' })).toContain('存在しない');
+      });
+
+      /**
+       * ⭐ **この歯がこの改修の受け入れ基準そのものである。**
+       *
+       * 直している詰まりは「**肥大化を防ぐ道具が、肥大化そのものによって
+       * 使えなくなる**」——目次の予算は先頭から詰めるので、大きな文書では
+       * **末尾側の節id が出てこない** ⟹ `memory_section_move` の指し先が手に
+       * 入らない ⟹ 割りたい文書ほど割れない。25万字級の `premise` で実際に
+       * この形へ入っている。
+       *
+       * **だから測るのは「向きが出せること」ではなく「取った id が実際に
+       * 移せること」である。** 目次の文言だけを測る歯は、`memory_section_move`
+       * が受け取れない形の id を出しても緑のままになる。
+       *
+       * 足場は**節ごとに見出しも中身も変えてある** — 中身まで同一の節は節id が
+       * 衝突し、`renderMemoryOutline` がその行へ ⚠ を付ける（動かせない行に
+       * なるので、測りたい形ではない）。
+       */
+      it('⭐ side=tail で取った節id は、そのまま memory_section_move へ渡せる（既定の目次には出てこない節）', async () => {
+        const h = harness();
+        const last = `# 節0239: ${'み'.repeat(40)}`;
+        const body = Array.from({ length: 240 }, (_, index) => {
+          const pad = String(index).padStart(4, '0');
+          return `# 節${pad}: ${'み'.repeat(40)}\n\n本文${pad}\n`;
+        }).join('\n');
+        await seed(h, 'big', `---\ndescription: 節の多い文書\ntype: premise\n---\n${body}`);
+
+        // 既定の目次には末尾の節が出てこない（＝ここが詰まりである）。
+        const head = await outlineOf(h, 'big');
+        expect(head.entries.map((entry) => entry.heading)).not.toContain(last);
+        expect(head.outline).toMatch(/…末尾 \d+ 節は省略/);
+        expect(head.outline).toContain('side=tail');
+
+        // 向きを渡すと取れる。**取れたことをアサーションで測る**（ヘルパの
+        // 生の例外に頼ると、赤の出どころが自分のアサーションでなくなる）。
+        const tail = await outlineOf(h, 'big', 'tail');
+        const hit = tail.entries.filter((entry) => entry.heading === last);
+        expect(hit).toHaveLength(1);
+
+        // 取った id はそのまま移し先へ通る。
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'big',
+          section: hit[0]!.id,
+          toSlug: 'big-appendix',
+          summary: '末尾の節を付録へ移した',
+        });
+
+        expect(reply).toContain('移した');
+        expect((await h.stores.persona.read('big-appendix'))?.content).toContain(last);
+        expect((await h.stores.persona.read('big'))?.content).not.toContain(last);
       });
 
       it('malformed な文書でも目次は返すが、移動は断られると書く（能力を消さず、理由を見せる）', async () => {
@@ -7223,10 +7298,26 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
      * `self_status` で通った道と同じ）。
      */
     {
-      label: 'memory_outline',
+      label: 'memory_outline（既定＝先頭から）',
       name: 'memory_outline',
       args: { slug: OUTLINE_FLOOD_SLUG },
-      mark: /…ほか \d+ 節は省略（節は全 \d+ 件あり、\d+ 件だけ出した）。/,
+      mark: /…末尾 \d+ 節は省略（節は全 \d+ 件あり、先頭から \d+ 件だけ出した）。/,
+    },
+    /*
+     * **向きごとに名指しする。** `side` は積む向きを変える（`renderListing` と
+     * `renderListingFromEnd`）ので、**片方を測っても他方は何も測れていない。**
+     * `conversation_read` が同じ理由でモードごとに4件へ分けてあるのと同じ形で
+     * ある（`.claude/skills/listing-and-detail/SKILL.md` の「1つの道具が複数の
+     * 一覧モードを持つなら、モードごとに名指しすること」）。
+     *
+     * `mark` は**どちら側を省いたか**まで測る。「N 節省略」だけを測る形にすると、
+     * 向きを取り違えた実装（`tail` を渡しても先頭から出す）が緑のまま通る。
+     */
+    {
+      label: 'memory_outline（side=tail＝末尾から）',
+      name: 'memory_outline',
+      args: { slug: OUTLINE_FLOOD_SLUG, side: 'tail' },
+      mark: /…先頭 \d+ 節は省略（節は全 \d+ 件あり、末尾から \d+ 件だけ出した）。/,
     },
     /*
      * **`memory_write` は一覧の道具ではない。応答の中に一覧が1節ある** —
