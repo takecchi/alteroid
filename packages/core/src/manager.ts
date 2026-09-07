@@ -7193,9 +7193,14 @@ function cloneWorkspaceAfterSwapLine(after: WorkspaceAfterSwap): string {
  * ここは**この直後に人間・クローンの指示が続く**ので、その句は次に何をするかを
  * 二重に指図することになる（人間が別のことを頼んでいれば食い違う）。
  *
- * **`status` を見ないのも意図である。** 待っていた確認の扱い（`restartNudge` の
- * `waiting_human` の枝）はこの経路の話ではない — 器が入れ替わっているなら、
- * その確認は `#reattach` の側で既に落ちている。
+ * **`status` を見ないのも意図である**（人間の決定。resume の経路を通る委譲すべてに
+ * 同じものを当て、`done` だけの特別扱いを作らない）。だから `restartNudge` の
+ * `waiting_human` の枝（「あなたが待っていた確認は器と一緒に失われている」）は
+ * ここには持ち込まない。**⚠️ その句がここでは要らないと確かめたわけではない** —
+ * `#reattach` を通った回は `record.waiting = []` がその手前で走っているので待ちは
+ * 既に落ちているが、`#reattach` を一度も通っていない `waiting_human` が
+ * `send()` の resume へ来る筋を追い切っていない。**残っているなら別の Issue で
+ * 扱うこと**（ここへ status の分岐を足す形では入れない）。
  *
  * **判定は `workspaceAfterSwap` に委ねる**（`restartNudge` / `#notifyRestored` と
  * 同じ1つ）。ここに別の判定を書くと、直したつもりが片方だけになる。
