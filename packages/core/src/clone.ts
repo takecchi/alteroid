@@ -59,6 +59,7 @@ import type { ProfileApplier } from './profile.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap } from './recent.js';
 import { describeSituation, describeSituationUnavailable } from './situation.js';
+import { toAgentTokenView } from './token-pool.js';
 import type { RunnerRegistry } from './runner-protocol.js';
 import {
   buildCloneSystemPrompt,
@@ -2481,7 +2482,33 @@ class Clone implements CloneHost {
     try {
       const managers = await this.#managers.list();
       const fleet = await this.#managers.runners();
-      return describeSituation({ managers, runners: fleet.runners });
+      /**
+       * **鍵の材料も渡す**（人間の決定 2026-09-07。`describeTokenSituation` の doc）。
+       *
+       * **読めなくても状況ごと落とさない。** 委譲と器の数え上げは鍵とは無関係なので、
+       * 鍵だけ `undefined` で渡して「読めなかった」と書かせる —— `catch` を外まで
+       * 広げると、鍵の読みが落ちた回に**委譲の本数も器の台数も消える。**
+       *
+       * **値は一度も通らない。** 渡すのは `toAgentTokenView` の顔（`value` を
+       * 持たない型）だけである。
+       */
+      const pool = await Promise.all([
+        this.#stores.tokens.list().then(
+          (rows) => rows.map(toAgentTokenView),
+          () => undefined,
+        ),
+        this.#stores.tokens.readActive().then(
+          (active) => active,
+          () => undefined,
+        ),
+      ]);
+      return describeSituation({
+        managers,
+        runners: fleet.runners,
+        tokens: pool[0],
+        active: pool[1],
+        at: Date.now(),
+      });
     } catch (error) {
       return describeSituationUnavailable(error);
     }
