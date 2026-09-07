@@ -3097,7 +3097,17 @@ export function createApp(deps: AppDeps) {
         // 先頭の1件が `done` だっただけで 0 件を返す）。錨を `limit` より後に
         // 当てても同じ形で壊れる——継続点を切った後に解決すると次の頁の起点が
         // ずれる（issue #418 が `/commitments` で塞いだ穴）。
-        let view = statuses === undefined ? managers : managers.filter((m) => statuses.includes(m.status));
+        //
+        // **`status=`（空）は絞らない。** 0件へ倒すと、絞りを解除した画面が
+        // 「マネージャーが消えた」ように見える（`journalQuery` の `q` / `type`
+        // と同じ倒し方——`/journal` のハンドラも `types.length === 0` を
+        // 「渡さなかった」と同じに扱う）。**渡さないのと同じ結果になる**ので、
+        // 呼ぶ側は空のときにパラメタを外す判断をしなくてよい。
+        const active = statuses;
+        let view =
+          active === undefined || active.length === 0
+            ? managers
+            : managers.filter((m) => active.includes(m.status));
 
         // **並べ直すのは opt-in のときだけ。** `list()` の並び（`startedAt` 降順）は
         // 同着の相対順を決めていないので、錨で辿るには補助キー（`managerId`）まで
