@@ -1,6 +1,6 @@
 ---
 name: token-pool
-description: 認証トークンのプール（alteroid token、Issue #393、CLAUDE_CODE_OAUTH_TOKEN を複数本持って枠に当たったら回す仕組み）を触るときに読む。登録手順（CLI・HTTP 両方）、値を argv で渡さない理由、rotateOn の3値と既定、回す契機が2系統あること（セッション由来の観測と、記録から決める reconsider ＝ signal が stranded の側。契機は tick / startup / pool_changed / settings_changed / runner_connected / account_probe）、通る候補が無いとき最速回復の鍵を撒いて待つこと（event が parked）、セッションを1本も使わない枠の probe が現役を測って回す・戻す（recovered）こと、通る鍵に戻ったらクローンとマネージャーを起こすこと（2026-08-25 の「受信箱へ通知を入れない」を再開の契機の側だけ覆した）、runner が再接続した瞬間に現役が降りる3経路、回った後に何が起きるか（撒く先2つ・走行中には届かない）、GET /tokens が値を返さないこと、止まった事実の記録と回復見込みの分類（time / action / unknown、扱いは当面一律）、失効しても回らないという非対称、台帳の tokenId 軸（4つの口の引き方と、tokensSince が null なのを「1本で全部使った」と読まないこと）、詰まったときの引き方（日誌は types=token_rotation で絞る。event を潰さない。プールは token_list）、最初に置いたときに見るべき3点。
+description: 認証トークンのプール（alteroid token、Issue #393、CLAUDE_CODE_OAUTH_TOKEN を複数本持って枠に当たったら回す仕組み）を触るときに読む。登録手順（CLI・HTTP 両方）、値を argv で渡さない理由、rotateOn の3値と既定、回す契機が2系統あること（セッション由来の観測と、記録から決める reconsider ＝ signal が stranded の側。契機は tick / startup / pool_changed / settings_changed / runner_connected / account_probe）、通る候補が無いとき最速回復の鍵を撒いて待つこと（event が parked）、セッションを1本も使わない枠の probe が現役を測って回す・戻す（recovered）こと、その probe はアカウントの枠しか見えないのでセッション上限には効かず復帰の下限が5分になること、通る鍵に戻ったらクローンとマネージャーを起こすこと（2026-08-25 の「受信箱へ通知を入れない」を再開の契機の側だけ覆した）、runner が再接続した瞬間に現役が降りる3経路、回った後に何が起きるか（撒く先2つ・走行中には届かない）、GET /tokens が値を返さないこと、止まった事実の記録と回復見込みの分類（time / action / unknown、扱いは当面一律）、失効しても回らないという非対称、台帳の tokenId 軸（4つの口の引き方と、tokensSince が null なのを「1本で全部使った」と読まないこと）、詰まったときの引き方（日誌は types=token_rotation で絞る。event を潰さない。プールは token_list）、最初に置いたときに見るべき3点。
 ---
 
 # 認証トークンのプール（枠に当たったら回す候補）
@@ -109,6 +109,33 @@ curl -X PUT http://127.0.0.1:4517/tokens \
 | `undecidable` | **記録だけで判定する。** probe の失敗・通信断・締め切りはここへ落ちるので、**器が混んでいる回に現役を冷却へ入れることはない**                   |
 
 **⚠️ この probe は 2026-09-07 まで「器の環境変数のトークン」を測っていた**（`Options.env` を渡していなかったので子プロセスが `process.env` を継承した）。⟹ **回した後は降りた鍵のアカウントの枠を報告し続けていた**（`GET /usage` の `account` とクローンが見る `accountUsage` の両方）。いまは現役の値を渡す。
+
+### ⚠️ 復帰の下限は目盛りの60秒ではなく、probe の5分である（実運用のレビューで判明。2026-09-07）
+
+**「記録の上で現役が `ready`」の状態からは、目盛りは何回鳴っても動かない**（それが「健全な鍵から勝手に移らない」の歯止めそのもの）。記録を `ready` から動かせるのは2つだけである:
+
+| 誰が                              | 何を書くか                                    | 周期             |
+| --------------------------------- | --------------------------------------------- | ---------------- |
+| `observe`（セッション由来の観測） | 降りる鍵の冷却                                | 観測が届いたとき |
+| **`account_probe`**               | `currentVerdict: 'unusable'` で**現役**の冷却 | **5分**          |
+
+**`currentVerdict` を渡す口は1つだけである**（`token-watch.ts` の `run('account_probe', verdict)`）⟹ `tick` / `pool_changed` / `runner_connected` / `startup` は**記録しか見ない。**
+
+**そして観測が飲まれる形は実在する**（どちらもこの PR では触っていない既存の挙動）:
+
+- `observe` の `freshness === 'stale'` は**冷却を書く手前で `return` する** ⟹ 降りるべき鍵に冷却が書かれない
+- `manager.ts` の `case 'rate_limit'` は `if (transition === undefined) return;`（`grep -Fn -- 'if (transition === undefined) return;' packages/core/src/manager.ts`）。`#rateLimits` が `kind` ごとに `rejected` を覚えているので、**同じ `kind` の2度目の `rejected` は回し手へ一度も届かない**
+
+⟹ **その状態からの復帰は 5 分刻みである。** 観測が1本でも新鮮なら `observe` が冷却を書くので、そのときは次の目盛り＝60秒以内。
+
+### ⚠️ probe はセッション上限を見られない —— `usable` は「セッションが起きる」の証明ではない
+
+probe が読むのは**アカウントの枠**（`five_hour` / `seven_day` / … と課金枠）で、**セッション単位の上限に対応する枠が無い**（`usage-snapshot.ts` の窓の一覧）。⟹ `You've hit your session limit` で止まっている鍵に対して `usable` が返りうる:
+
+1. **その形は `unusable` として検出できない** —— 上の「塞ぐ本体」が効くのはアカウントの枠を使い切った形だけである
+2. **`usable` で止まった記録を消すと、通らない鍵を `ready` に戻しうる。** そこから先は自己修復する（起こされた層が失敗し、**その失敗が新鮮な観測になって** `observe` が冷却を書き、次の候補へ回る）が、**1ターンぶんの空振りを払う**
+
+**⟹ 起こすことは「仕事を再開させる」だけではない。「飲まれていた観測を新鮮にし直す」でもある** —— 引き取られたセッションは `#rememberTokenIdentity` を通るので、いまの世代を名乗る（`manager.ts` の3箇所: 新規の `start` / 引き取り / `resume`）。**`stale` で全部飲まれていた状態は、起こした時点で解ける。**
 
 ## 通る鍵に戻ったら、止まっていた層を起こす（2026-09-07）
 

@@ -379,6 +379,21 @@ export interface TokenRotator {
    *     もっと早く開いていた回がここで直る
    *   - `undecidable` / 省略 → **記録だけで判定する**（判定材料が無いことを
    *     `unusable` へ丸めない。`judgeTokenCandidate` の doc と同じ規律）
+   *
+   *   **⚠️ この判定が見ているのはアカウントの枠だけである**（`five_hour` /
+   *   `seven_day` / … と課金枠。`usage-snapshot.ts` の窓の一覧に**セッション
+   *   単位の上限に対応する枠は無い**）。⟹ `You've hit your session limit` で
+   *   止まっている鍵に対して `usable` が返りうる:
+   *
+   *   - **その形は `unusable` として検出できない** —— 上の「塞ぐ本体」が効くのは
+   *     アカウントの枠を使い切った形だけである
+   *   - **`usable` で記録を消すと、通らない鍵を `ready` に戻しうる。** そこから
+   *     先は自己修復する（起こされた層が失敗し、その失敗が新鮮な観測になって
+   *     `observe` が冷却を書く）が、**1ターンぶんの空振りを払う**
+   *
+   *   **⟹ `usable` は「アカウントの枠は空いている」であって「次のセッションが
+   *   起きる」ではない。** 呼ぶ側の言葉での同じ注意は
+   *   `apps/daemon/src/token-watch.ts` の doc に在る。
    */
   reconsider(input: {
     reason: TokenReconsiderReason;
