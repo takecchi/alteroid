@@ -206,6 +206,11 @@ export interface JournalQuery {
    *
    * - `limit: 0` = 0件
    * - `limit: N`（`N >= 1`）は従来どおり N 件で切る——1文字も変えていない
+   *
+   * **⚠️ この契約が掛かるのは「ストアの問い合わせ」の引数だけである。** 面の側の
+   * 絞り（ストアを1文字も通らないもの）は別で、`manager_list`（`tools.ts`）の
+   * `status` は **`[]` を「絞らない」へ倒してある**（理由はそちらの doc。逐語:
+   * `grep -Fn -- 'は「絞らない」へ倒す。**この面の他の一覧とは逆である**' packages/core/src/tools.ts`）。
    */
   limit?: number;
   /**
@@ -223,6 +228,11 @@ export interface JournalQuery {
    * - 未指定 = 絞らない（既存の挙動を1文字も変えない）
    * - 指定 = その種別だけを返す
    * - `[]` = 0件
+   *
+   * **⚠️ この契約が掛かるのは「ストアの問い合わせ」の引数だけである。** 面の側の
+   * 絞り（ストアを1文字も通らないもの）は別で、`manager_list`（`tools.ts`）の
+   * `status` は **`[]` を「絞らない」へ倒してある**（理由はそちらの doc。逐語:
+   * `grep -Fn -- 'は「絞らない」へ倒す。**この面の他の一覧とは逆である**' packages/core/src/tools.ts`）。
    */
   types?: JournalEntryType[];
   /** ISO 8601。この時刻以降のエントリだけ返す。 */
@@ -252,6 +262,15 @@ export interface JournalQuery {
    *   おり（インメモリ / fs は0件、pg は絞らない）、ここは`別に決めた`契約
    *   だった。#425 で `types` もここへ揃えた**（上の `types` の doc）ので、
    *   いまは同じ契約である
+   *   - **⚠️ この契約が掛かるのは「ストアの問い合わせ」の引数だけである。** 面の
+   *     側の絞り（ストアを1文字も通らないもの）は別で、`manager_list`
+   *     （`tools.ts`）の `status` は **`[]` を「絞らない」へ倒してある**
+   *     （人間の `GET /managers?status=` との等価性が、あの引数を足した理由
+   *     そのものだからである。逐語:
+   *     `grep -Fn -- 'は「絞らない」へ倒す。**この面の他の一覧とは逆である**' packages/core/src/tools.ts`）。
+   *     **ここを新しい絞りの正本として読む人が、その例外に気づけるようにする
+   *     ための1行である**（`manager_list` 側にしか記録が無いと、この doc から
+   *     見ると存在しないのと同じになる）
    * - **`limit` より前に効く。** ここが要点である — `GET /conversations` /
    *   `GET /conversations/:id` / `conversation_read` はいずれも
    *   `types: ['exchange']` で件数の窓を切ってから `with === 'human'` に
