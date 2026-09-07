@@ -43,6 +43,7 @@ function stubClone(): CloneHost {
       Promise.resolve({ runners: [], unassigned: [], daemonRevision: { status: 'unknown' } }),
     transcript: () => Promise.resolve(null),
     restore: () => Promise.resolve([]),
+    resumeStoppedByUsage: () => Promise.resolve([]),
     reattachRunner: () => Promise.resolve(),
     // 認証境界の検証では触らない（型を満たすだけの空スタブで足りる）。
     relocateFrom: () => undefined,

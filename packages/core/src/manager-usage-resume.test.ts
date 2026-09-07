@@ -83,8 +83,14 @@ function nudgeRunner() {
     async answer(): Promise<RunnerAnswerOutcome> {
       return { delivered: false };
     },
-    async stop() {
-      /* この検証では使わない */
+    async stop(managerId) {
+      // **本物と同じく、止めたセッションは一覧から消える。** ここを何もしない
+      // ままにすると `abort()` が「止まったと確かめられない」側へ落ち、台帳が
+      // `stopped` にならない ⟹ **`stopped` を測るつもりの歯が、実は `running`
+      // を測ることになる**（実際にそうなっていて、ホワイトリストを黒リストへ
+      // 変える変異が生き残った）。
+      const at = alive.findIndex((state) => state.managerId === managerId);
+      if (at >= 0) alive.splice(at, 1);
     },
     async list() {
       return [...alive];
@@ -256,11 +262,17 @@ describe('枠で止まった委譲を、鍵が通る状態へ戻った時点で�
     expect(nudged).toEqual([]);
     expect(s.fake.sends).toHaveLength(0);
     expect(s.fake.resumes).toHaveLength(0);
+    // **`status=stopped` まで見る。** 「起こさなかった」だけを見ると、別の理由
+    // （届かなかった・像が無かった）で起きなかった回と区別できない。
+    const jobs = await s.stores.jobs.listJobs();
+    expect(jobs[0]?.status).toBe('stopped');
     const entries = await s.stores.journal.list({ limit: 200 });
     expect(
       entries.some(
         (entry) =>
-          entry.type === 'decision' && entry.decision.includes('この委譲は起こし直さない'),
+          entry.type === 'decision' &&
+          entry.decision.includes('この委譲は起こし直さない') &&
+          entry.decision.includes('status=stopped'),
       ),
     ).toBe(true);
   });
