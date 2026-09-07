@@ -2562,6 +2562,11 @@ class Pool implements ManagerPool {
     // runner がセッションを載せてから返る。これより前の生存確認の観測は、この
     // 委譲について何も言っていない（`ManagerRecord.runnerSessionSince` の doc）。
     record.runnerSessionSince = new Date(this.#now()).toISOString();
+    // **セッションが実際にこの器へ載った**（#669。`Job.sessionInstanceId` の doc）。
+    // 写すのは、この回に貸し出しを立てた相手である——名簿を引き直さない。
+    // **名乗らない値では上書きしない**（`undefined` を書くと、一度名乗った器の
+    // 値まで消えて以後ずっと判定できなくなる）。
+    if (lease.instanceId !== undefined) record.job.sessionInstanceId = lease.instanceId;
 
     await this.#persist(record);
     await this.#journal({
@@ -2728,7 +2733,39 @@ class Pool implements ManagerPool {
           detail: sendFailureDetail(managerId, resumeFailureDetail(managerId, 'busy'), missing),
         };
       }
-      const resumed = await this.#resumeOnce(record, runner, message);
+      /*
+       * **器が入れ替わっていたら、人間・クローンの言葉の前に1行混ぜる（#669）。**
+       *
+       * `done` は3枚のホワイトリスト（`#reattach` / `#noteMissingSessions` /
+       * `decideRunnerSwapNotice`）すべてから外れるので、器の入れ替えが**誰からも
+       * 伝わらない**。3枚が揃っていること自体は意図（終わった委譲へ ⚠ を並べると
+       * 本当に困っている1本が埋もれる）なので境界は動かさず、**実際に話しかけた回
+       * にだけ**払う形にしてある。
+       *
+       * **`status` で分岐しない。** resume から入り直す委譲すべてに同じ判定を
+       * 当てる——`running` / `waiting_human` は `#reattach` が入れ替えの時点で
+       * 既に告げ、そのとき `#claimForResume` が貸し出しを新しい `instanceId` で
+       * 貸し直しているので、ここでは判定が成り立たず二重には告げない。
+       * `#reattach` が断られた（`held-by-lease`）回は貸し直していない＝まだ誰も
+       * 告げていないので、ここで告げるのが正しい。
+       *
+       * **判定は `#resumeOnce` より前に置く。** `#claimForResume` が貸し出しを
+       * 貸し直すので、この欄より前に作られたジョブ（貸し出しへ落ちる筋。
+       * `#runnerSwappedSinceSession` の「限界」）では、後で読むと
+       * 「入れ替わっていない」としか見えなくなる。
+       *
+       * **⚠️ ここで告げたことを、この場で「告げた」として記録しない。**
+       * 記録が進むのは `#resume` が `runner.resume()` の戻りまで到達した回だけで
+       * ある（`Job.sessionInstanceId`）——**関門を通った後に resume が失敗した回に
+       * 記録だけ進めると、届いていない1行を「届いた」と数えて二度と告げられなく
+       * なる**（それがこの実装の1つ前の版の穴だった）。
+       */
+      const swapped = this.#runnerSwappedSinceSession(record, runner);
+      const resumed = await this.#resumeOnce(
+        record,
+        runner,
+        swapped ? `${runnerSwapNudge(record.job.workspace)}\n\n${message}` : message,
+      );
       if (resumed !== 'resumed') {
         /*
          * **言い方の持ち主は `resumeFailureDetail` 1つである。** 貸し出し期限で
@@ -4872,6 +4909,79 @@ class Pool implements ManagerPool {
   }
 
   /**
+   * **この委譲のセッションが最後に実際に載った器と、いまこの宛先に応えている器が
+   * 違うか**（#669）。
+   *
+   * 判定材料は台帳（`job.sessionInstanceId`）と名簿（`#sighting`）だけで、
+   * **どちらもプロセス内で読める** — 新しい往復は1つも足していない。
+   *
+   * ## 判定材料は貸し出しではない（ここが要点である）
+   *
+   * `job.lease.instanceId` を材料にしていた版には穴が在った。`#claimForResume` は
+   * **`runner.resume()` を出す前に**新しい `instanceId` を台帳へ書き込むので、
+   * **関門を通った後に resume が失敗した回**（`unreadable` / `runner.resume()` が
+   * 投げた）では「貸し出しは進んだが告げる1行は届いていない」状態になり、次に
+   * 話しかけたとき「もう告げた」と読めて**二度と告げられなくなる。**
+   *
+   * だから見るのは `job.sessionInstanceId`（**セッションが実際に載ったことを
+   * 確かめた回にだけ進む欄**。`Job.sessionInstanceId` の doc）である。
+   * **`#claimForResume` の書き込みの順序は動かしていない** — あれは「奪う操作だけは
+   * 書けたことを条件にする」という別の正しい理由でそうなっている。
+   *
+   * ## 作法は `RunnerBacklogSnapshot.instanceSwapped` の踏襲である
+   *
+   * - **時刻ではなく `instanceId` 同士を直接比べる。** 時刻の比較（`instanceSince`
+   *   と貸した時刻の大小）は、初回観測を入れ替えと誤読する筋がある
+   * - **どちらか一方でも取れなければ「判定できない」。** 取れないときに「入れ替わった」
+   *   と言わない（AGENTS.md「判定できないという3つ目の状態を持つ」）。ここでは
+   *   3通りが同じ `false` へ落ちる: 記録が無い／セッションの器を名乗っていない／
+   *   いま応えている側が名乗らない。**併存（同じ `runnerId` を名乗る器が2台以上）も
+   *   自動でここへ落ちる** — `#sighting` はそのとき `instanceId` を返さない
+   *   （どちらと突き合わせるか決める材料が無い。#200）
+   *
+   * ## 宛先の名前（`runnerId`）は見ない
+   *
+   * 台帳が別の宛先を指していても（移送）、**`instanceId` が違えば別のプロセス＝別の
+   * `/workspace` である**ことは同じように言える。ここで宛先の名前を条件に足すと、
+   * 移送された委譲にだけ告げない穴ができる。
+   *
+   * ## デーモンの再起動を跨ぐか — 跨ぐ（`Job` の欄なので台帳に残る）
+   *
+   * **像（`ManagerRecord`）ではなく `Job` に持たせたのは、跨がせるためである。**
+   * 像にだけ持たせると、デーモンの再起動で判定材料が消え、`done` の委譲は
+   * **告げる機会をそこでも失う** — `restore()`（`#restoreJobs`）も `#reattach` も
+   * `running` / `waiting_human` しか見ないので、`done` はどちらの経路でも
+   * 告げられない（3枚のホワイトリストはこの PR で1枚も動かしていない）。
+   * **確かめた**（`#restoreJobs` 側の関門。すぐ上のコメントが「待機（`done`）だった
+   * ものは台帳に載せるだけにする」と逐語で言っている):
+   * `grep -Fn -- "if (job.status !== 'running' && job.status !== 'waiting_human') continue;" packages/core/src/manager.ts`
+   * ＝ 器の入れ替えとデーモンの再起動が重なるたびに、いちばん静かな形で穴が開く。
+   * 保存は Job 丸ごとの JSON（pg は `jobs.job` 列、fs は JSON ファイル）なので、
+   * **移行は要らない。**
+   *
+   * ## ⚠️ 限界: この欄より前に作られたジョブでは、まだ貸し出しへ落ちる
+   *
+   * 古い行にこの欄は無い。そこで**この欄が無いときだけ** `lease.instanceId` を
+   * 使う。**新しい行では絶対にこちらへ来ない**（`start()` と `#resume()` の成功が
+   * 必ず書くので、セッションが1度でも載った委譲は欄を持つ）。⟹ 上の穴が残るのは
+   * 「この変更より前に `done` になっていた委譲の、最初の1回」だけである。
+   *
+   * **落とすほうを選んだ理由**: 落とさなければ、その古い行は
+   * `sessionInstanceId` が無いので「判定できない」＝**1回も告げない**。落とせば
+   * 1回は告げられて、成功すれば以後は新しい欄で回る。**失敗した回だけ、元の穴と
+   * 同じところへ落ちる** — つまり落とす側は、どの筋でも落とさない側より悪くならない。
+   */
+  #runnerSwappedSinceSession(record: ManagerRecord, runner: RunnerClient): boolean {
+    // **`??` で書くこと。** `sessionInstanceId` が在ればそれだけを見る（貸し出しは
+    // 見ない）。無い＝この欄より前に作られたジョブのときだけ貸し出しへ落ちる。
+    const recorded = record.job.sessionInstanceId ?? record.job.lease?.instanceId;
+    if (recorded === undefined) return false;
+    const answering = this.#sighting(runner.runnerId).instanceId;
+    if (answering === undefined) return false;
+    return recorded !== answering;
+  }
+
+  /**
    * その宛先から移送してよいと確かめられているか（`#reattach` の移送の関門。
    * roadmap M5 PR5。命名は #485 PR-1 で `#isLostRunner` から改めた）。
    *
@@ -5140,6 +5250,22 @@ class Pool implements ManagerPool {
     // この器がこの委譲を持っている——生存確認の観測をここから数え直す
     // （`ManagerRecord.runnerSessionSince` の doc）。
     record.runnerSessionSince = new Date(this.#now()).toISOString();
+    /*
+     * **セッションが実際にこの器へ載った**（#669。`Job.sessionInstanceId` の doc）。
+     *
+     * **ここより後に `'resumed'` 以外へ落ちる枝は無い**（この関数はこの下で
+     * `return 'resumed'` するだけである）ので、この地点は「resume が成功した回」
+     * と一致する。**逆に、ここより前で返る枝（`held-by-lease` /
+     * `workspace-path-unknown` / `unreadable`、および `runner.resume()` が
+     * 投げた回）ではこの欄が動かない** — そこが要点で、**貸し出しだけが新しい器へ
+     * 進んで告げる1行が届かなかった回に、次の `send()` がもう一度告げられる。**
+     *
+     * 写すのは、この回に関門（`#claimForResume`）が判定した相手である
+     * （`grantLease` / `touchLease` が直前に置いた値）。**名簿を引き直さない** —
+     * 理由は `Job.sessionInstanceId` の doc「値の出どころは…」に在る。
+     */
+    const placed = record.job.lease?.instanceId;
+    if (placed !== undefined) record.job.sessionInstanceId = placed;
     // **resume も「セッションが起きる瞬間」である**（`#tokenIdentities` の doc）。
     //
     // ここが抜けていた。`start` と、引き取りで**既に生きていた**セッション
@@ -7117,6 +7243,36 @@ function cloneWorkspaceAfterSwapLine(after: WorkspaceAfterSwap): string {
         '作り直させること。コミットしていなかった変更は残っていない。'
       );
   }
+}
+
+/**
+ * **話しかけられた委譲へ、器の入れ替えを告げる1行**（#669）。人間・クローンの言葉の
+ * 前に混ぜる。
+ *
+ * ## なぜ `restartNudge` をそのまま呼ばないか
+ *
+ * あちらは**デーモン・器の側が起こし直した回**の一言なので、末尾が必ず
+ * 「中断していた作業の続きを進めよ」（`waiting_human` なら「聞き直し…」）になる。
+ * ここは**この直後に人間・クローンの指示が続く**ので、その句は次に何をするかを
+ * 二重に指図することになる（人間が別のことを頼んでいれば食い違う）。
+ *
+ * **`status` を見ないのも意図である**（人間の決定。resume の経路を通る委譲すべてに
+ * 同じものを当て、`done` だけの特別扱いを作らない）。だから `restartNudge` の
+ * `waiting_human` の枝（「あなたが待っていた確認は器と一緒に失われている」）は
+ * ここには持ち込まない。**⚠️ その句がここでは要らないと確かめたわけではない** —
+ * `#reattach` を通った回は `record.waiting = []` がその手前で走っているので待ちは
+ * 既に落ちているが、`#reattach` を一度も通っていない `waiting_human` が
+ * `send()` の resume へ来る筋を追い切っていない。**残っているなら別の Issue で
+ * 扱うこと**（ここへ status の分岐を足す形では入れない）。
+ *
+ * **判定は `workspaceAfterSwap` に委ねる**（`restartNudge` / `#notifyRestored` と
+ * 同じ1つ）。ここに別の判定を書くと、直したつもりが片方だけになる。
+ */
+function runnerSwapNudge(locator: WorkspaceLocator | undefined): string {
+  return (
+    '[system] この委譲を最後に走らせていた器は、もう居ない（別の器がこの宛先に応えている）。' +
+    workspaceAfterSwapClause(workspaceAfterSwap(locator))
+  );
 }
 
 /** 再起動後に流す一言。**開き直すだけでは仕事は進まない。** */
