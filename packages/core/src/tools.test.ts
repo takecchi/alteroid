@@ -5613,6 +5613,176 @@ describe('manager_list は走行中・返事待ちを窓から落とさない（
 });
 
 /**
+ * `manager_list` が `lost`（判断待ち）を第2群として扱うこと、と件数の行が
+ * `lost` の本数を名乗ること（#688）。
+ *
+ * **直した穴**: `lost` は「前のセッションへ戻れなかった」の1点しか観測しておらず、
+ * **成果がリモート（PR・ブランチ・コミット）まで届いていることがある**（逐語:
+ * `grep -Fn -- '**ただし `lost` は「成果が無い」ではない。**' packages/core/src/schema.ts`）。
+ * ⟹ 誰かが確かめるまで終われない状態なのに、**本数がどの面からも読めなかった**
+ * ——`describeManagerCounts` は1度も数えず、`compareManagerAttention`（#689）は
+ * `lost` を終端の袋に入れたままだったので古い側から窓の外へ落ちた。
+ *
+ * **日報（`buildActivityDigest`）は1バイトも変えていない。** `isManagerInFlight` に
+ * `lost` を足すと `MAX_ITEMS` の枠を食う（`digest.ts` の
+ * `isManagerAwaitingJudgement` の doc）——だから群は**この一覧の側だけ**で3つに
+ * している。
+ */
+describe('manager_list は lost を判断待ちの群として窓に入れる（#688）', () => {
+  /** 並びの起点。**時刻は全部ここからの引き算で作る**（手で書き並べない）。 */
+  const NEWEST = Date.parse('2026-09-07T12:00:00.000Z');
+  const minutesBefore = (minutes: number) => new Date(NEWEST - minutes * 60_000).toISOString();
+
+  /**
+   * 委譲1本ぶんの足場。**`request` を厚くしてある**——1件の行の長さはここで
+   * 決まる（`LIST_REQUEST_EXCERPT` で抜粋される）ので、`LIST_BUDGET` を実際に
+   * 溢れさせるために要る。
+   */
+  function entry(managerId: string, status: JobStatus, minutesAgo: number): ManagerSummary {
+    return {
+      managerId,
+      status,
+      live: status === 'running' || status === 'waiting_human',
+      cwd: '/workspace/repo',
+      request: `依頼 ${managerId}: ${'あ'.repeat(400)}`,
+      startedAt: minutesBefore(minutesAgo),
+      updatedAt: minutesBefore(minutesAgo),
+      waiting: [],
+      runnerId: 'runner-test',
+    };
+  }
+
+  /**
+   * 台帳を作る。**渡した順ではなく `startedAt` 降順で積む**——偽物の `list()` は
+   * `running` 配列をそのまま写して返すので、ここで順序を崩すと**本物では起きない
+   * 並びを測ることになる**（#689 の `flooded` と同じ理由）。
+   */
+  function pool(entries: readonly ManagerSummary[]): Harness {
+    const h = harness();
+    for (const item of [...entries].sort((a, b) => b.startedAt.localeCompare(a.startedAt))) {
+      h.running.push(item);
+    }
+    return h;
+  }
+
+  /**
+   * ⭐ **この節の本体。** 終端（`done` / `failed` / `stopped`）が予算を溢れさせても、
+   * `lost` は本文に出る。
+   *
+   * **⭐ `lost` は `startedAt` の*古い側*に置く。** 新しい側に置くと、**群を分ける
+   * 実装を消しても偶然通ってしまい、この歯は何も測れなくなる**（`ManagerPool.list()`
+   * の並びが `startedAt` 降順なので、新しい側に置けば並べ直しが無くても先頭に来る）。
+   */
+  it('⭐ 終端が大量に溜まっても、lost は必ず本文に出る（古い側に置いても落ちない）', async () => {
+    const terminal = Array.from({ length: 60 }, (_, index) =>
+      // 新しい側を終端で埋める（0〜59 分前）。
+      entry(
+        `mgr-term-${String(index).padStart(4, '0')}`,
+        index % 2 === 0 ? 'done' : 'failed',
+        index,
+      ),
+    );
+    const lost = Array.from({ length: 3 }, (_, index) =>
+      // **いちばん古い側**（20,000 分前〜）。
+      entry(`mgr-lost-${String(index).padStart(2, '0')}`, 'lost', 20_000 + index),
+    );
+    const h = pool([...terminal, ...lost]);
+
+    const reply = await h.call('manager_list', {});
+
+    // **予算を実際に溢れさせたこと。** 溢れていなければ、下の assert は
+    // 「窓から落ちない」を1文字も測っていない（`renderListing` が全件出す）。
+    expect(reply).toMatch(/…ほか \d+ 件は省略/);
+    for (const id of ['mgr-lost-00', 'mgr-lost-01', 'mgr-lost-02']) {
+      expect(reply, `${id} が窓の外へ落ちた`).toContain(id);
+    }
+    // **id が出るだけでは足りない**——終端より先に出ていることまで見る。
+    expect(reply.indexOf('mgr-lost-00')).toBeLessThan(reply.indexOf('mgr-term-0000'));
+  });
+
+  /**
+   * **群の順序は 走行中・返事待ち → `lost` → その他である**（3群）。
+   *
+   * **⭐ 測定条件を反転させてある**——`lost` を**新しい側**、走行中・返事待ちを
+   * **いちばん古い側**に置く。こうしないと、群の順位を入れ替える変異
+   * （`lost` を第1群、走行中を第2群にする）が `startedAt` の並びのおかげで
+   * 偶然通る。
+   */
+  it('走行中・返事待ちは lost より先に出る（lost を新しい側に置いても順序が逆にならない）', async () => {
+    const lost = Array.from({ length: 3 }, (_, index) =>
+      // **いちばん新しい側**（0〜2 分前）。
+      entry(`mgr-lost-${String(index).padStart(2, '0')}`, 'lost', index),
+    );
+    const terminal = Array.from({ length: 60 }, (_, index) =>
+      entry(`mgr-term-${String(index).padStart(4, '0')}`, 'done', 1_000 + index),
+    );
+    const inFlight = (['running', 'waiting_human'] as const).map((status, index) =>
+      // **いちばん古い側**（30,000 分前〜）。
+      entry(`mgr-live-${String(index).padStart(2, '0')}`, status, 30_000 + index),
+    );
+    const h = pool([...lost, ...terminal, ...inFlight]);
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toMatch(/…ほか \d+ 件は省略/);
+    // 3群とも窓に入っていること（入っていなければ順序は測れない）。
+    for (const id of ['mgr-live-00', 'mgr-live-01', 'mgr-lost-00', 'mgr-term-0000']) {
+      expect(reply, `${id} が窓の外へ落ちた`).toContain(id);
+    }
+    // 第1群 → 第2群 → 第3群。
+    expect(reply.indexOf('mgr-live-00')).toBeLessThan(reply.indexOf('mgr-lost-00'));
+    expect(reply.indexOf('mgr-live-01')).toBeLessThan(reply.indexOf('mgr-lost-00'));
+    expect(reply.indexOf('mgr-lost-00')).toBeLessThan(reply.indexOf('mgr-term-0000'));
+  });
+
+  /**
+   * **件数の行は予算に切られない場所である**（`describeManagerCounts` の doc）。
+   * ⟹ 一覧の本文から `lost` が落ちても、本数だけは必ず読める。
+   *
+   * **到達口の綴りまで測る。** 本数だけ出ても名指しできない（本文は `LIST_BUDGET`
+   * で切られる）ので、`status: ["lost"]` を渡せることが本文から読めなければ
+   * 直っていない。
+   */
+  it('件数の行が lost の本数と、名指しの引き方を出す', async () => {
+    const h = pool([
+      entry('mgr-lost-00', 'lost', 10),
+      entry('mgr-lost-01', 'lost', 11),
+      entry('mgr-done-00', 'done', 12),
+    ]);
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('件数: 全 3 本');
+    expect(reply).toContain('戻れなかった(lost) 2 本');
+    // 「終わった」と読ませない。
+    expect(reply).toContain('「戻れなかった(lost)」は「終わった」ではない');
+    // 名指しで引く綴り（#689 で入った到達口）。
+    expect(reply).toContain('status: ["lost"]');
+    // **確かめる前に起こし直させない**（同じ仕事が2本になる）。
+    expect(reply).toContain('確かめる前に manager_start で起こし直さないこと');
+  });
+
+  /**
+   * ⭐ **`lost` が 0 本のときは、件数の行に区分ごと出さない**（#688）。
+   *
+   * `describeManagerCounts` の既存の作法（「0 の行は作らない」）に揃える——
+   * 「戻れなかった 0本」と書くと、観測して 0 だったのか、そもそも数えていない
+   * のかが読めなくなる（AGENTS.md の地雷「取れない軸に 0 の行を作る」）。
+   */
+  it('⭐ lost が 0 本なら件数の行にも断り書きにも1文字も出ない（0 の行を作らない）', async () => {
+    const h = pool([entry('mgr-done-00', 'done', 10), entry('mgr-fail-00', 'failed', 11)]);
+
+    const reply = await h.call('manager_list', {});
+
+    // 件数の行は出ている（＝この歯が測っているのは「区分が無いこと」だけである）。
+    expect(reply).toContain('件数: 全 2 本');
+    // 区分の見出しも、それに付く断り書きも1文字も出ない。
+    expect(reply).not.toContain('戻れなかった(lost)');
+    expect(reply).not.toContain('status: ["lost"]');
+  });
+});
+
+/**
  * `manager_report` が「報告はまだ無い」と答える直前に生ログを見に行く（#323）。
  *
  * Issue の症状は「マネージャーは書き終えた（生ログに `end_turn` まで残る）のに、
