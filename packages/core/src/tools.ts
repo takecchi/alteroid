@@ -23,7 +23,13 @@ import { assertNeverRunnerLegStatus } from './runner-protocol.js';
 // 生成元。** 片方だけ変えられると区別が潰れる——実際にクローンがそれで誤り、
 // 終わった仕事へ3本目の委譲を出した（`digest.ts` の `describeManagerState` の
 // doc に実害の詳細がある）。
-import { describeManagerState, describeSessionMissingKind } from './digest.js';
+// **`isManagerInFlight` も同じ理由で同じ場所から取る**——あちらは字面ではなく
+// **群の分け方**（走行中・返事待ちを先に出す側か）の唯一の生成元である。
+import {
+  describeManagerState,
+  describeSessionMissingKind,
+  isManagerInFlight,
+} from './digest.js';
 import {
   describeDroppedTraceEmpty,
   describeDroppedTraceOrigin,
@@ -87,6 +93,7 @@ import {
   approvalUpdatedAt,
   commitmentOriginSchema,
   commitmentUpdatedAt,
+  jobStatusSchema,
   scheduleKindSchema,
   scheduleSpecSchema,
 } from './schema.js';
@@ -4264,9 +4271,29 @@ export function createCloneTools(context: ToolContext) {
           'これは矛盾である）。この行に時刻の閾値は置いていない——何分経ったかは判定していないので、' +
           '行に出ている timestamp を読んで判断すること。返事待ちが在るものにはこの行を出さない' +
           '（確認は届いていて、クローンがまだ答えていないだけの正常な状態である）。',
+        // **並びを名乗る（#679 の直し）。** ここに書いてある順序と実装が食い違うと、
+        // クローンは「出ていない＝無い」と読む。実装が実際にやっていることだけを書く。
+        '走行中・返事待ち（running / waiting_human）を先に出し、そのあとに終端したもの（done / failed / lost / stopped）を出す。' +
+          '各群の中は startedAt の新しい順である。',
+        'status で状態を絞れる（省略すると絞らない）。先頭の件数の行は**絞る前の全体**を出すので、絞っても全体の実像は消えない。',
       ].join(' '),
-      {},
-      async () => {
+      {
+        // **人間の入口（`GET /managers`）にだけ在った絞りを、クローンにも渡す**
+        // （#670 / PR #672 で HTTP 側に入った。片方だけが持つのは能力の削除＝
+        // north_star 禁止1）。**知らない値は zod が弾く**——`jobStatusSchema`
+        // をそのまま使うのは、綴りを間違えた呼びが「その状態のものは0件」として
+        // 返る形（絞り込みが効いていないことに気づけない形）を作らないためである
+        // （`apps/daemon/src/app.ts` の `managersQuery.status` の doc と同じ理由）。
+        status: z
+          .array(jobStatusSchema)
+          .optional()
+          .describe(
+            '状態（running / waiting_human / done / failed / lost / stopped）で絞る。' +
+              '省略すると絞らない。走っているものだけを見たいなら ["running","waiting_human"]。' +
+              '先頭の件数の行は絞る前の全体を出す',
+          ),
+      },
+      async ({ status }) => {
         if (!context.managers) return NO_POOL;
         const managers = await context.managers.list();
         // **デーモン→クローンの脚（受信箱）の滞留は、マネージャーの本数と無関係**
@@ -4290,10 +4317,39 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
+        // **走行中・返事待ちを先に出す（#679）。** `ManagerPool.list()` の並びは
+        // `startedAt` の降順で、**稼働状態を1度も見ていない**（逐語:
+        // `grep -Fn -- 'return [...known.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt));' packages/core/src/manager.ts`）。
+        // ⟹ 終端した委譲が溜まると、走行中・返事待ちが文字数の予算
+        // （`LIST_BUDGET`）の窓の外へ押し出され、**id が本文に出ないので
+        // `manager_report` で名指しもできなくなる**（実測 2026-09-07: 台帳
+        // 10,000 本・走行中3本を古い側に置くと、本文に出た12件は全部終端で、
+        // 走行中は0件だった）。
+        //
+        // **`ManagerPool.list()` は1行も変えない。** HTTP の錨
+        // （`apps/daemon/src/app.ts` の `compareManagerPagingKey`）と digest の
+        // 契約があの並びに依存している（`managersQuery` の doc の「`order` は
+        // 足さない」）。**並べ直すのはこの一覧の中だけである。**
+        //
+        // **この一覧の線はここまでである** —— 保証するのは「走行中・返事待ちが
+        // 窓から落ちない」ことだけで、押し出された終端の全件を辿る継続点は
+        // **足さない**（#662 が持つ。あの Issue は「継続点を足す前に並びの向きを
+        // 決めるのが先だ」と書いていて、これがその並びの側である）。
+        const attention = [...managers].sort(compareManagerAttention);
+        // **絞りは文字数の予算より前に当てる。** 予算の後に当てると、絞りに
+        // 当たらない行が窓を食い尽くし、狙った行が窓の外へ落ちる——#418 の穴の
+        // 本体そのもので、`commitment_list` の `origin` が同じ順序で塞いである
+        // （そちらの逐語:
+        // `grep -Fn -- '`origin` は、`renderListing` が文字数の予算で切る前' packages/core/src/tools.ts`）。
+        // **未指定＝絞らない**（同じ契約）。
+        const view =
+          status === undefined
+            ? attention
+            : attention.filter((manager) => status.includes(manager.status));
         // **予算を先に決めて、入るところまで積む。** 件数から出力量を決めると、
         // 何件で壊れるかが運任せになる。切ったなら必ずそう言う。
         // 積む形そのものは `renderListing` が持つ（一覧ごとに手で書かない）。
-        const items = managers.map((manager) =>
+        const items = view.map((manager) =>
           renderListingEntry({
             id: manager.managerId,
             // **第3引数まで通す（#621 / #643）。** `status: 'done'` は
@@ -4467,12 +4523,39 @@ export function createCloneTools(context: ToolContext) {
             // `omitted`）ので、**出ている行を数えても全体の本数にはならない。**
             // クローンは実際にこれで誤り、「いま走っている」を数え上げて
             // 終わった仕事へ委譲を重ねかけた。切られない場所に置くこと。
+            // **件数は絞る前の全件で出す（`status` を渡した呼びでも動かさない）。**
+            // ここは予算に切られない場所で、絞りのせいで全体の実像が見えなくなる
+            // 形にしてはいけない——この行が在る理由そのものが「一覧を数えて
+            // 本数を答えさせない」ことだからである（`describeManagerCounts` の doc）。
             describeManagerCounts(managers),
-            renderListing(items, {
-              budget: LIST_BUDGET,
-              omitted: ({ rest, total }) =>
-                `…ほか ${rest} 件は省略（全 ${total} 件）。走っているものから順に出している。`,
-            }),
+            // **絞ったことは、件数の行とは別の行で言う。** 件数の行に混ぜると
+            // 「絞る前の全体」と「絞った後」が1行の中で並び、どちらの数なのかを
+            // 読み分ける負担が読み手に移る。
+            status === undefined
+              ? null
+              : `絞り込み: status: ${status.join(',')} に当たるのは ${view.length} 件で、` +
+                'この一覧はその中だけを出している（すぐ上の件数は絞る前の全体である）。',
+            // **絞った結果が0件なのと、委譲が1本も無いのを分ける。** 「無い」と
+            // 読めると、絞りが厳しかっただけなのに台帳の側を疑うことになる
+            // （`commitment_list` の `origin` が同じ分け方をしている）。
+            view.length === 0
+              ? '（この status の絞り込みに当たる委譲は無い。絞る前の件数は上の行に在る）'
+              : renderListing(items, {
+                  budget: LIST_BUDGET,
+                  // **並びを実装と一致させる（#679）。** ここは「走っているものから
+                  // 順に出している」と書いてあったが、実装は稼働状態を1度も見て
+                  // いなかった（`ManagerPool.list()` は `startedAt` 降順）。
+                  // **絞ったときは「絞った後の件数」だと分かる形で言う**——
+                  // `total` を絞る前の全体と読まれると、絞りの効き目が嘘になる
+                  // （`commitment_list` の `origin` の断り書きと同じ約束）。
+                  omitted: ({ rest, shown, total }) =>
+                    `…ほか ${rest} 件は省略（` +
+                    (status === undefined
+                      ? `全 ${total} 件`
+                      : `status: ${status.join(',')} に絞った ${total} 件のうち ${shown} 件を出した`) +
+                    '）。走行中・返事待ちを先に出し、各群の中は startedAt の新しい順である。' +
+                    '**省略されたのは終端したもの（またはより古いもの）の側である。**',
+                }),
             '（依頼と報告は抜粋。全文は manager_report <managerId> で取れる）',
             inboxBacklog,
             runnerBacklog,
@@ -5224,6 +5307,40 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
   ];
+}
+
+/**
+ * `manager_list` の並び。**走行中・返事待ちを先に、各群の中は `startedAt` の
+ * 新しい順**（#679）。
+ *
+ * **なぜ一覧の側で並べ直すのか。** `ManagerPool.list()` は `startedAt` の降順で、
+ * 稼働状態を1度も見ていない（逐語:
+ * `grep -Fn -- 'return [...known.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt));' packages/core/src/manager.ts`）。
+ * この一覧は文字数の予算（`LIST_BUDGET`）で末尾から切るので、**終端した委譲が
+ * 溜まると走行中・返事待ちが窓の外へ落ちる。** 落ちると id が本文に出ないので、
+ * `manager_report` で名指しして中を見ることもできない（＝到達できない委譲が
+ * 生まれる）。
+ *
+ * **`ManagerPool.list()` 側を並べ替えて解かない。** あの並びには別の契約が
+ * 乗っている——HTTP の窓の錨（`apps/daemon/src/app.ts` の
+ * `compareManagerPagingKey`）と、`order` を足さないという判断（同じファイルの
+ * `managersQuery` の doc）である。**直す場所はこの一覧の中だけである。**
+ *
+ * **群の判定は `isManagerInFlight`（`digest.ts`）から取る。** 日報の
+ * 「マネージャー」節が同じ分け方を持っており、2箇所に書き下ろすと*分け方*が
+ * 割れる（`describeManagerState` を1箇所に閉じたのと同じ理由。あちらの doc は
+ * 字面が割れて実害が出た経緯を持つ）。
+ *
+ * **各群の中の `startedAt` 降順は明示する。** 入力（`list()` の並び）が既に
+ * そうなっているので `0` を返しても現状では同じ結果になるが、その暗黙の依存を
+ * この関数の外へ置かない（`digest.ts` の `EscalationGroup.at` の doc と同じ
+ * 判断——安全側の並べ替えを、読めば分かる場所に書いておく）。
+ */
+function compareManagerAttention(a: ManagerSummary, b: ManagerSummary): number {
+  const aInFlight = isManagerInFlight(a.status);
+  const bInFlight = isManagerInFlight(b.status);
+  if (aInFlight !== bInFlight) return aInFlight ? -1 : 1;
+  return b.startedAt.localeCompare(a.startedAt);
 }
 
 /**
