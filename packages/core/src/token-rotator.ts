@@ -275,6 +275,14 @@ export interface TokenRotatorObservation {
   facts?: RateLimitFacts;
   transition?: 'entered_overage' | 'rejected';
   /**
+   * **この1件が運んできた** `status`（重ねる前の生の観測）。
+   *
+   * **遷移が取れなかった回の材料である**（#668）。理由と、単独では回さない
+   * （`freshness === 'current'` が要る）ことは `token-rotation.ts` の
+   * `TokenRotationObservation.statusNow` の doc にある。
+   */
+  statusNow?: RateLimitFacts['status'];
+  /**
    * その観測が**どのトークンで走っていたときのものか**。
    *
    * **省略できるようにしてあるのは、身元を運べない検知点が実在するからである**
@@ -1083,18 +1091,42 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         ]);
 
         const freshness = observationFreshness(active, observation.observedBy ?? {});
-        const decision = decideTokenRotation(settings.rotateOn, observation);
+        // **`freshness` を判定へ渡す。** 遷移が取れなかった回の `rejected` を
+        // 状態で拾うのに要る（#668。あちらの doc に「毎ターン回す」を塞ぐ機構が
+        // 遷移から世代へ移った理由がある）。
+        const decision = decideTokenRotation(settings.rotateOn, observation, freshness);
 
         // **遅れて届いた通知は、判定より先に捨てる。** 判定が「回す」でも、
         // それは*前の現役*についての話である。
         //
         // **⚠️ ここは冷却を書く処理（下の `coolDown`）より手前で `return` する。**
-        // ⟹ 捨てた回は**記録に何も残らない** —— 実運用で「記録は `ready`、実際は
-        // 429」の状態が観測されている（2026-09-07。走行中の alteroid の日誌）。
-        // **追跡は #667。** いまは `reconsider` が枠の probe（5分ごと）の判定で
-        // 記録が `ready` でも冷却を書けるので塞がっているが、**そのぶん復帰の下限が
-        // 目盛りの60秒ではなく5分になる**（`apps/daemon/src/token-watch.ts` の doc）。
-        // **捨てる判断そのものを変えるときは、あちらを一緒に読むこと。**
+        // ⟹ 捨てた回は**トークンの記録に何も残らない**（日誌には残る。下の
+        // `staleRun`）。#667 がこれを追跡していた。
+        //
+        // ## この `return` は残す（#667 の候補1・2 は両方とも採らない）
+        //
+        // **候補1「`stale` でも冷却は書く」を採らない理由 —— 冷却が縮む。**
+        // `markTokenUnusable` は `cooldownUntil` を**上書きする**（延長しない。
+        // 逐語は `grep -Fn -- '**`cooldownUntil` に過去の時刻が入りうる。**' packages/core/src/token-pool.ts`）
+        // ⟹ 遅れて届いた観測が `resetsAt` を運んでいなければ
+        // `now + fallbackCooldownMs` が書かれ、**本物の期限が未来に在る鍵を
+        // 早く `ready` に見せる。** 「記録を腐らせない」つもりの書き込みが、
+        // 記録をもっと嘘にする側へ倒れる。
+        //
+        // **候補2「世代は古いが `tokenId` は現役と同じ観測を `current` にする」を
+        // 採らない理由 ——** {@link observationFreshness} の doc が `generation` を
+        // 見る理由として挙げている形（同じ鍵が冷却明けにもう一度選ばれた後の、
+        // 前の在任期間ぶんの遅れた通知）をそのまま取り込む。
+        //
+        // ## ⟹ #667 が心配していた帰結は、こちら側では直せない。塞いだのは #668 の側である
+        //
+        // `stale` な観測が名乗っているのは**前の世代の鍵**なので、いまの現役が
+        // 通るかどうかについて1文字も言っていない。**「記録は `ready`、実際は
+        // 429」を作っていたのは、いまの現役を名乗る観測が回し手へ届かない**
+        // ことであって、この `return` ではない —— そちらは遷移の門（#668）で
+        // 落ちていた。⟹ **状態でも回すようにした**（直上の `decideTokenRotation`
+        // へ `freshness` を渡す）。**復帰の下限は probe の5分ではなく、
+        // 観測が届いた時点へ戻る**（`apps/daemon/src/token-watch.ts` の doc）。
         if (freshness === 'stale') {
           // **捨てた回数を数える。捨てる判断そのものは変えない。** ここで足して
           // いるのは「その判断が何回効いたか」だけである（{@link staleRun}）。

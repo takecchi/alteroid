@@ -103,8 +103,35 @@ export interface TokenRotationObservation {
    *
    * **状態ではなく遷移を受けるのは、`rate_limit_event` がターンの頭ごとに来るから
    * である。** 状態をそのまま判定に流すと、同じ `rejected` で毎ターン回そうとする。
+   *
+   * **⚠️ ただし遷移だけを受けると、2度目の当たりが1度も届かない**（#668）。
+   * 遷移の判定材料（`#rateLimits`）は**そのインスタンスの寿命ぶん残る**ので、
+   * 同じ `kind` の `rejected` が別のトークンで再発しても `undefined` になる。
+   * ⟹ 取りこぼす側の材料を {@link statusNow} が別に運ぶ。
    */
   transition?: 'entered_overage' | 'rejected';
+  /**
+   * **この1件が運んできた** `status`（重ねる前の生の観測）。#668 の材料。
+   *
+   * ## なぜ {@link facts} の `status` を見ないのか
+   *
+   * `facts` は**重ねた形**（`mergeRateLimitFacts`）で渡ってくる。あれは
+   * 「省略は『無くなった』ではなく『何も言っていない』」として扱うので、
+   * **一度書かれた `rejected` は上書きされるまで残り続ける** —— しかも帳面は
+   * `kind` ごとで**アカウントを跨いで生き残る**（回した後の新しい鍵の観測が
+   * `status` を省略すれば、前の鍵の `rejected` がそのまま残る）。⟹ 重ねた形を
+   * 回す契機の材料にすると、**回した直後の健全な鍵でもう一度回る**形が作れる。
+   *
+   * **ここは重ねない値だけを運ぶ。** 「いま届いた1件が `rejected` と言っている」
+   * は現在形の観測であって、記憶ではない。
+   *
+   * ## 単独では回さない
+   *
+   * これが `rejected` でも、{@link decideTokenRotation} は
+   * `freshness === 'current'`（＝観測がいまの世代を名乗っている）でなければ
+   * 回さない。理由と、それが「毎ターン回す」を塞ぐ機構はあちらの doc にある。
+   */
+  statusNow?: RateLimitFacts['status'];
 }
 
 /** 課金枠も閉じているか。**「取れなかった」を「閉じている」と読まない。** */
@@ -146,12 +173,59 @@ function overageClosed(facts: RateLimitFacts | undefined): boolean {
  *
  * **これは実装側の推論であって、人間の決定として記録されているものではない。**
  * 逆にしたい（`free_exhausted` では `reached` で回さない）なら、ここを1行変える。
+ *
+ * ## `freshness` を受けるのはなぜか（#668）
+ *
+ * **遷移だけでは、2度目の当たりが1度も届かない。** 遷移の判定材料
+ * （`manager.ts` / `clone.ts` の `#rateLimits`）は**そのインスタンスの寿命ぶん
+ * 残る**ので、同じ `kind` の `rejected` が**別のトークンで**再発しても
+ * `usageTransitionOf` は `undefined` を返す ⟹ 回し手には一度も届かない。
+ * 実運用で20分以上の停止として観測されている（2026-09-07）。
+ *
+ * **⟹ 状態（{@link TokenRotationObservation.statusNow}）でも回す。ただし
+ * 「毎ターン回す」を塞ぐ歯を、遷移から世代へ移す。**
+ *
+ * | 何が「1回の当たりで1回だけ」を保証するか | 効く範囲 |
+ * | --- | --- |
+ * | 遷移（`transition`。**これまで**） | **そのインスタンスの寿命**（＝2度目が落ちる） |
+ * | 世代（`freshness === 'current'`。**これから**） | **いまの現役1本ぶん** |
+ *
+ * **世代のほうが正しい単位である。** 回せば世代が上がるので、同じセッションから
+ * 続いて届く turn head の観測は `stale` になって捨てられる
+ * （{@link observationFreshness}）—— つまり**回した後は自動で黙る。** 逆に
+ * 「別の鍵で再発した」は世代が上がった後の新しい観測なので、ちゃんと届く。
+ *
+ * ## ⚠️ `unknown` では状態で回さない
+ *
+ * 回し手は `unknown`（身元を持たない観測）を `current` として扱う
+ * （{@link ObservationFreshness} の doc「飲み込むほうが悪い」）が、**ここはその
+ * 規則を状態の側へ広げない。** 広げると、身元を運ばない観測しか無い器では
+ * 上の「回した後は自動で黙る」が成立しない（世代を照合できないので、`rejected`
+ * が続くあいだ**毎ターン回してプールを食い潰す**）—— 遷移の門が本来塞いでいた
+ * 害はここに残っている。⟹ **状態で回すのは、観測がいまの世代を名乗ったときだけ
+ * である。** 名乗らない観測は従来どおり遷移だけで回る。
+ *
+ * ## `entered_overage` は状態で回さない（意図して広げていない）
+ *
+ * #668 が観測したのは `rejected` の再発だけである。そして `usingOverage` は
+ * **重ねた形に残りやすい**（{@link TokenRotationObservation.statusNow} の doc）
+ * ので、状態で拾うと回した直後の健全な鍵でもう一度回る形が作れる。**同じ穴だと
+ * 言える線が引けないので広げない**（AGENTS.md「範囲を広げるなら、広げると同時に
+ * 新しい線を引くこと」）。`entered_overage` は遷移でいまも回る。
  */
 export function decideTokenRotation(
   policy: TokenRotationPolicy,
   observation: TokenRotationObservation,
+  freshness?: ObservationFreshness,
 ): TokenRotationDecision {
-  const { notice, facts, transition } = observation;
+  const { notice, facts, transition, statusNow } = observation;
+  /**
+   * 枠から追い返されている、と読める観測か。
+   *
+   * **遷移が取れなかった回も拾う**（#668）。ただし状態の側は
+   * `freshness === 'current'` に限る —— 上の doc「`unknown` では状態で回さない」。
+   */
+  const rejected = transition === 'rejected' || (statusNow === 'rejected' && freshness === 'current');
 
   // 1. 組織の方針。**どの設定でも回さない。**
   if (notice?.kind === 'org_policy') {
@@ -182,11 +256,15 @@ export function decideTokenRotation(
 
   if (policy === 'overage_exhausted') {
     // 課金枠まで使ってから回す設定。**`rejected` だけでは回らない。**
-    if (transition === 'rejected' && overageClosed(facts)) {
+    if (rejected && overageClosed(facts)) {
       return {
         rotate: true,
         signal: 'overage_closed',
-        why: '枠が尽きたうえに課金枠も閉じている（overage_exhausted）',
+        why:
+          transition === 'rejected'
+            ? '枠が尽きたうえに課金枠も閉じている（overage_exhausted）'
+            : // 直下の `free_exhausted` 側と同じ理由で、状態で回した回はそう書く（#668）。
+              '枠が尽きたうえに課金枠も閉じている状態がいまの現役について届いた（overage_exhausted。遷移は取れていないが、観測がいまの世代を名乗っている）',
       };
     }
     return {
@@ -197,11 +275,16 @@ export function decideTokenRotation(
   }
 
   // 4. 既定（`free_exhausted`）。課金枠を焼く前に回す。
-  if (transition === 'rejected') {
+  if (rejected) {
     return {
       rotate: true,
       signal: overageClosed(facts) ? 'overage_closed' : 'quota_rejected',
-      why: '無料枠が尽きた（free_exhausted。課金枠を焼く前に回す）',
+      why:
+        transition === 'rejected'
+          ? '無料枠が尽きた（free_exhausted。課金枠を焼く前に回す）'
+          : // **遷移ではなく状態で回した回は、そう書く。** 同じ文言にすると、
+            // 日誌から「遷移の門を通れなかった観測が効いた」が消える（#668）。
+            '無料枠が尽きた状態がいまの現役について届いた（free_exhausted。遷移は取れていないが、観測がいまの世代を名乗っている）',
     };
   }
   if (transition === 'entered_overage') {
