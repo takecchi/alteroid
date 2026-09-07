@@ -16,7 +16,7 @@ import type {
 } from './manager.js';
 import { measureMemoryFloor, renderMemoryDocuments } from './memory.js';
 import { createProfileService } from './profile-service.js';
-import { journalEntrySchema, type ChatStreamEvent } from './schema.js';
+import { journalEntrySchema, type ChatStreamEvent, type JobStatus } from './schema.js';
 import type { ScheduleStatus } from './schedule.js';
 import type { CloneRuntimeFacts } from './self.js';
 import type { Stores } from './store.js';
@@ -5376,6 +5376,239 @@ describe('manager_list は件数が増えても壊れない', () => {
     const reply = await h.call('manager_report', { managerId: 'mgr-999' });
 
     expect(reply).toContain('mgr-999');
+  });
+});
+
+/**
+ * `manager_list` の並びと `status` の絞り（#688 の3）。
+ *
+ * **直した穴**: この一覧は「走っているものから順に出している」と名乗っていたのに、
+ * 実装は稼働状態を1度も見ていなかった——並びは `ManagerPool.list()` の
+ * `startedAt` 降順そのままである（逐語:
+ * `grep -Fn -- 'return [...known.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt));' packages/core/src/manager.ts`）。
+ * ⟹ 終端した委譲（`done` / `lost` / `failed` / `stopped`）が溜まると、走行中・
+ * 返事待ちが文字数の予算（`LIST_BUDGET`）の窓の外へ押し出され、**id が本文に
+ * 出ないので `manager_report` で名指しもできなくなる。**
+ *
+ * **`ManagerPool.list()` は1行も変えていない**（HTTP の窓の錨と digest の契約が
+ * あの並びに依存している）。並べ直しているのは `manager_list` の中だけである。
+ */
+describe('manager_list は走行中・返事待ちを窓から落とさない（#688 の3）', () => {
+  /**
+   * 並びの起点。**新しいほうから引き算で作る**——「走行中を古い側に置く」ことが
+   * この節の測定条件そのものなので、時刻を手で書き並べない。
+   */
+  const NEWEST = Date.parse('2026-09-07T12:00:00.000Z');
+  const minutesBefore = (minutes: number) => new Date(NEWEST - minutes * 60_000).toISOString();
+
+  /**
+   * 委譲1本ぶんの足場。**`request` を厚くしてある**——1件の行の長さはここで
+   * 決まる（`LIST_REQUEST_EXCERPT` で抜粋される）ので、予算を実際に溢れさせる
+   * ために要る。
+   */
+  function entry(
+    managerId: string,
+    status: JobStatus,
+    startedAt: string,
+    live = status === 'running' || status === 'waiting_human',
+  ): ManagerSummary {
+    return {
+      managerId,
+      status,
+      live,
+      cwd: '/workspace/repo',
+      request: `依頼 ${managerId}: ${'あ'.repeat(400)}`,
+      startedAt,
+      updatedAt: startedAt,
+      waiting: [],
+      runnerId: 'runner-test',
+    };
+  }
+
+  /**
+   * 終端した委譲が溜まった台帳。
+   *
+   * **⭐ 走行中・返事待ちは `startedAt` の古い側に置く。** 新しい側に置くと、
+   * **並べ直しを削っても偶然通ってしまい、この節は何も測れなくなる**
+   * （`ManagerPool.list()` の並びが `startedAt` 降順なので、新しい側に置けば
+   * 並べ直しが無くても先頭に来る）。
+   *
+   * **配列の順序も本物の `list()` と同じ（`startedAt` 降順）にしてある**——
+   * 偽物の `list()` は `running` 配列をそのまま写して返すので、ここで順序を
+   * 崩すと本物では起きない並びを測ることになる。
+   */
+  function flooded(options: { terminal: number; inFlight: readonly JobStatus[] }): Harness {
+    const h = harness();
+    for (let index = 0; index < options.terminal; index += 1) {
+      h.running.push(
+        entry(`mgr-done-${String(index).padStart(4, '0')}`, 'done', minutesBefore(index), false),
+      );
+    }
+    options.inFlight.forEach((status, index) => {
+      h.running.push(
+        entry(`mgr-live-${String(index).padStart(2, '0')}`, status, minutesBefore(10_000 + index)),
+      );
+    });
+    return h;
+  }
+
+  /**
+   * ⭐ **この節の本体。** 実測（2026-09-07T15:20:39Z、台帳 10,000 本・走行中3本を
+   * 古い側に置いた）では、本文に出た12件が全部終端で、走行中は0件だった。
+   */
+  it('終端が大量に溜まっても、走行中・返事待ちは必ず本文に出る', async () => {
+    const h = flooded({ terminal: 60, inFlight: ['running', 'waiting_human', 'running'] });
+
+    const reply = await h.call('manager_list', {});
+
+    // **予算を実際に溢れさせたこと。** 溢れていなければ、下の assert は
+    // 「窓から落ちない」を1文字も測っていない（`renderListing` が全件出す）。
+    expect(reply).toMatch(/…ほか \d+ 件は省略/);
+    for (const id of ['mgr-live-00', 'mgr-live-01', 'mgr-live-02']) {
+      expect(reply, `${id} が窓の外へ落ちた`).toContain(id);
+    }
+    // **id が出るだけでは足りない**——先に出ていることまで見る（終端が先に
+    // 積まれると、そのぶん走行中の件数が窓を分け合うことになる）。
+    expect(reply.indexOf('mgr-live-00')).toBeLessThan(reply.indexOf('mgr-done-0000'));
+  });
+
+  it('省略の断り書きは、実装が実際にやっている並びを言う（「走っているものから順に」は嘘だった）', async () => {
+    const h = flooded({ terminal: 60, inFlight: ['running'] });
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toMatch(/…ほか \d+ 件は省略（全 61 件）。走行中・返事待ちを先に出し/);
+    // **稼働状態を1度も見ていなかった時代の字面。** 戻ったらここで赤くなる。
+    expect(reply).not.toContain('走っているものから順に出している');
+  });
+
+  it('status の絞りは文字数の予算（LIST_BUDGET）より前に効く——#418 と同じ形の穴を作らない', async () => {
+    // 予算の後に絞ると、絞りに当たらない行（ここでは終端60件）が窓を食い尽くし、
+    // 狙った行が窓の外へ落ちる。`commitment_list` の `origin` と同じ形の歯である。
+    const h = flooded({ terminal: 60, inFlight: ['running', 'running'] });
+
+    const reply = await h.call('manager_list', { status: ['running'] });
+
+    expect(reply).toContain('mgr-live-00');
+    expect(reply).toContain('mgr-live-01');
+    expect(reply).not.toContain('mgr-done-');
+    // 絞った後は2件しか無いので、予算は拘束条件にならない（切れたら赤くなる）。
+    expect(reply).not.toMatch(/…ほか \d+ 件は省略/);
+  });
+
+  it('絞ったときの省略の断り書きは、絞った後の件数だと分かる形で言う', async () => {
+    const h = flooded({
+      terminal: 20,
+      inFlight: Array.from({ length: 40 }, (): JobStatus => 'running'),
+    });
+
+    const reply = await h.call('manager_list', { status: ['running'] });
+
+    // 予算で実際に切れたこと（切れていなければ断り書きは出ておらず、
+    // 下の assert は何も測っていない）。
+    expect(reply).toMatch(/…ほか \d+ 件は省略/);
+    // **母数は絞った後の40件でなければならない。** 絞る前の60件だと、絞りの
+    // 効き目が嘘になる。
+    expect(reply).toContain('status: running に絞った 40 件のうち');
+    expect(reply).not.toContain('全 60 件');
+  });
+
+  it('件数の行は絞る前の全件を出す（絞ったせいで全体の実像が消えない）', async () => {
+    const h = flooded({ terminal: 5, inFlight: ['running'] });
+
+    const reply = await h.call('manager_list', { status: ['running'] });
+
+    // 予算に切られない場所に置いてある行。**絞っても動かさない。**
+    expect(reply).toContain('件数: 全 6 本');
+    // 絞ったことは、件数の行とは別の1行で読める。
+    expect(reply).toContain('絞り込み: status: running に当たるのは 1 件');
+    expect(reply).not.toContain('mgr-done-');
+  });
+
+  /**
+   * **`status: []` は「絞らない」へ倒す。この面の他の一覧とは逆である。**
+   *
+   * 人間の入口に揃えた（逐語:
+   * `grep -Fn -- '**`status=`（空）は絞らない。**' apps/daemon/src/app.ts` —
+   * 「0件へ倒すと、絞りを解除した画面が『マネージャーが消えた』ように見える」）。
+   *
+   * **⚠️ MCP 側の既存の契約は逆である** —— `journal_read` の `types` / `with`、
+   * `commitment_list` の `origin` は `[]` を0件として扱う（逐語:
+   * `grep -Fn -- '**`[]`（空配列）= 0件。** 「どれにも当たらない」という指定として扱う。' packages/core/src/store.ts`）。
+   * **どちらへ倒したかを歯で固定しておかないと、コードを読むまで分からない。**
+   * 倒した理由は `tools.ts` の `view` の doc が持つ（ストアの問い合わせではなく、
+   * `GET /managers?status=` との等価性がこの引数を足した理由そのものだから）。
+   *
+   * **黙って無視しないことも一緒に測る** —— 逆の契約に慣れた呼び手が「0件だ」と
+   * 読まないように、絞らなかったことを出力の側で言う。
+   */
+  it('status: [] は絞らない（0件へ倒さない）。ただし黙って無視せず、絞らなかったと言う', async () => {
+    const h = flooded({ terminal: 3, inFlight: ['running'] });
+
+    const empty = await h.call('manager_list', { status: [] });
+    const plain = await h.call('manager_list', {});
+
+    // 0件へ倒れていないこと（＝ `[].includes(...)` が常に false になる形が戻ったら赤くなる）
+    expect(empty).toContain('mgr-live-00');
+    expect(empty).toContain('mgr-done-0000');
+    expect(empty).not.toContain('絞り込みに当たる委譲は無い');
+    // 絞ったと嘘を言わないこと（母数は全体のまま）
+    expect(empty).not.toMatch(/status:\s*に絞った/);
+    // **黙って無視しない。**
+    expect(empty).toContain('絞り込み: status に空の配列が渡ったので、絞らずに全件を出した');
+    // **出る委譲そのものは、渡さなかった呼びと1バイトも違わない**（注記の行だけが増える）。
+    expect(
+      empty
+        .split('\n')
+        .filter((line) => !line.startsWith('絞り込み:'))
+        .join('\n'),
+    ).toBe(plain);
+  });
+
+  it('絞った結果が0件なのと、委譲が1本も居ないのを混ぜない', async () => {
+    const h = flooded({ terminal: 3, inFlight: [] });
+
+    const reply = await h.call('manager_list', { status: ['waiting_human'] });
+
+    expect(reply).toContain('この status の絞り込みに当たる委譲は無い');
+    expect(reply).not.toContain('マネージャーは1本も居ない');
+    // 絞る前の実像は残っている。
+    expect(reply).toContain('件数: 全 3 本');
+  });
+
+  /**
+   * **`status` を渡さない呼びは、並び以外を1文字も変えない**（opt-in）。
+   *
+   * 測り方: 6値すべてを渡した呼び（＝1本も落ちない絞り）と、渡さない呼びを
+   * 突き合わせる。**絞り込みの注記の1行を除いて、残りが1バイトも違わない**
+   * ことを見る（`GET /managers` が `managersQuery` の doc で逐語に言っている
+   * 「クエリを1つも渡さない呼びは、この変更の前と応答が1バイトも変わらない」と
+   * 同じ約束を、こちらの面でも測る）。
+   *
+   * **⚠️ 断り書きの字面は、この歯の対象外である。** あれは #688 の3 を直した
+   * ときに意図して変えた（実装が実際にやっていることを言わせるため）ので、
+   * 上の別の歯が持つ。
+   * ここは足場を小さくして予算に切らせない——切らせると意図した変更のほうが
+   * 混ざり込む。
+   */
+  it('status を渡さない呼びは、絞り込みの注記が付かないだけで他と同じものを出す', async () => {
+    const h = flooded({ terminal: 3, inFlight: ['running'] });
+
+    const plain = await h.call('manager_list', {});
+    const all = await h.call('manager_list', {
+      status: ['running', 'waiting_human', 'done', 'failed', 'lost', 'stopped'],
+    });
+
+    expect(plain).not.toContain('絞り込み');
+    expect(plain).not.toMatch(/…ほか \d+ 件は省略/);
+    const note = all.split('\n').find((line) => line.startsWith('絞り込み: status:'));
+    expect(note, '絞ったのに注記が無い').toBeDefined();
+    expect(
+      all
+        .split('\n')
+        .filter((line) => line !== note)
+        .join('\n'),
+    ).toBe(plain);
   });
 });
 

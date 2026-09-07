@@ -150,6 +150,27 @@ export function describeSessionMissingKind(kind: SessionMissingKind | undefined)
 }
 
 /**
+ * その委譲を「いまの状態」として**先に出す側**か（`running` / `waiting_human`）。
+ *
+ * **`describeManagerState` と同じ理由でここに置く——生成元を1つにする。** この
+ * 分け方は日報（この下の `buildActivityDigest` の「マネージャー」節）と
+ * `manager_list`（`tools.ts`）の両方が使う。**字面ではなく*分け方*が割れると、
+ * 片方の面だけで走行中の委譲が窓の外へ落ちる**——`describeManagerState` の doc が
+ * 逐語で記録している事故（字面が割れて、クローンが終わった仕事へ3本目の委譲を
+ * 出した）と同じ形が、並びの側で起きる。
+ *
+ * **どちらの面でも、これは「進んでいるか」ではない。** `running` は「走らせた」
+ * であって「進んでいる」ではなく（`schema.ts` の `jobStatusSchema` の doc）、
+ * ここが答えるのは「まだ人間・クローンの側に手番が残っている可能性がある側か」
+ * までである。終端（`done` / `failed` / `lost` / `stopped`）を落とすためではなく、
+ * **順序を決めるため**にある——落とすと到達できない委譲が生まれる（north_star
+ * 禁止2）。
+ */
+export function isManagerInFlight(status: JobStatus): boolean {
+  return status === 'running' || status === 'waiting_human';
+}
+
+/**
  * `escalation` の journal 行を `approvalId` で束ねた、1つの問い（クローンが
  * 何を聞いて何を答えてもらえたか）。
  *
@@ -517,7 +538,9 @@ export async function buildActivityDigest(
   const delegatedToolUses = toolUses.filter((entry) => !isCloneActor(entry.actor));
 
   // 走行中・返事待ちは期間の外で始まったものも「いまの状態」として要る
-  const inFlight = (status: JobStatus) => status === 'running' || status === 'waiting_human';
+  // （判定は `isManagerInFlight`（このファイルの上）。**`manager_list` と同じ
+  // 分け方を使うため、ここに書き下ろさない**——そちらの doc を参照）。
+  const inFlight = isManagerInFlight;
   // **上限で切っても「いまの状態」が落ちない順に並べる。** 材料の順序は器ごとに
   // 違う（pg は `createdAt` 昇順・fs は最終更新順・memory は挿入順）ので、並べ直さ
   // ないと、上で期間の外からわざわざ拾った走行中・返事待ちが古い `done` に押し
