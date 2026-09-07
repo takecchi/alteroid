@@ -165,6 +165,24 @@ export function describeSessionMissingKind(kind: SessionMissingKind | undefined)
  * までである。終端（`done` / `failed` / `lost` / `stopped`）を落とすためではなく、
  * **順序を決めるため**にある——落とすと到達できない委譲が生まれる（north_star
  * 禁止2）。
+ *
+ * ## ⚠️ `lost` をここへ足さないこと（#688）。見たいなら {@link isManagerAwaitingJudgement}
+ *
+ * `lost` は「判断待ち」（成果がリモートへ届いているかを誰も確かめていない）なので
+ * 前へ出したくなるが、**この述語へ混ぜると日報が壊れる。** 日報のマネージャー節は
+ * この述語を第1キーにして `sort` し、そのあと {@link MAX_ITEMS} で `slice` する
+ * ——`lost` が第1群へ移ると**枠を食って、最近終わった委譲が押し出される**
+ * （`lost` が `MAX_ITEMS` 本を超えれば第2群は1行も出ない）。⟹ **#689 が
+ * `manager_list` で直した穴と同じ形を、日報の側に作ることになる。**
+ *
+ * **だから `lost` は別の述語が持つ**（{@link isManagerAwaitingJudgement}。この
+ * すぐ下に在る）。使う側が2つを組み合わせて群を作る——`manager_list` は3群、
+ * **日報は2群のままである。** 判断の全文はそちらの doc に在る。
+ *
+ * **ここは逐語の `grep` ではなく `{@link}` で指している。** この文自身が指す先の
+ * 見出しを引用してしまう形になり、**`grep` が自分の citation にも当たって2件
+ * 返す**（AGENTS.md が「誤爆——読み手には正しい出典に見える」と言う形である）。
+ * 指す先が**同じファイルのすぐ下**なので、シンボル名で指せば曖昧さが無い。
  */
 export function isManagerInFlight(status: JobStatus): boolean {
   return status === 'running' || status === 'waiting_human';
