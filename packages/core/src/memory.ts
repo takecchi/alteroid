@@ -2279,27 +2279,121 @@ export function lookupMemorySection(
 }
 
 /**
- * 節を切り取った後の `content` と、切り取った文字列を返す。
+ * 複数の節をまとめて切り取った後の `content` と、切り取った文字列を返す
+ * （`memory_section_move` が1回で複数の節id を移せるようにするために足した。
+ * 節が1個のときも同じ関数を通す——単体版は残していない。1節しか渡されない
+ * 呼び出しは `sections` に1要素の配列を渡すだけでよく、実装を2本持つ理由が
+ * 無い）。
  *
- * **組み立ては継ぎ足しである。** `content.slice(0, section.start)` と
- * `content.slice(section.end)` を繋ぐだけなので、**frontmatter のバイト列は
- * 添字で運ばれるだけで一度も書き直されない**（`memoryBodyStart` の doc）。
- * `section.start` は必ず `memoryBodyStart(content)` 以上なので、frontmatter が
- * 切り取りの範囲に入ることは無い。
+ * ## 組み立て
  *
- * **それでも書き込み前に検査すること**——この関数が正しいことと、次にここを
- * 触る人が組み直す形に変えないことは別である（`memory_section_move` の
- * 第3層。`tools.ts` を読むこと）。
+ * 1. `sections` を **`start` の昇順に並べ替える**——呼び手が渡した順ではない
+ *    （`memory_section_move` の `sections` 引数の doc「渡す順ではなく文書に
+ *    現れる順」）。
+ * 2. `nextContent` は範囲の**間**の slice を繋いで作る（先頭の節の前・
+ *    節と節の間・末尾の節の後ろ）。
+ * 3. `cut` は範囲の中身を**文書に現れる順**で繋ぐ。呼び手が逆順（後ろの
+ *    節を先に）渡しても、移し先には元の文書に現れる順で並ぶ。
+ *
+ * **継ぎ足しであることは1節のときと変わらない。** `slice` を繋ぐだけで
+ * `serializeMemoryFrontmatter` を一度も通さない。`section.start` は必ず
+ * `memoryBodyStart(content)` 以上（`MemorySection` の doc）なので、
+ * frontmatter のバイト列がどの節の範囲にも入らないことも変わらない
+ * （`memoryBodyStart` の doc）。**それでも書き込み前に検査すること**——
+ * この関数が正しいことと、次にここを触る人が組み直す形に変えないことは
+ * 別である（`memory_section_move` の第3層。`tools.ts` を読むこと）。
+ *
+ * ## ⚠️ 並べ替えた列（`ordered`）も返す——並び順の所有権はここにある
+ *
+ * 呼び手（`memory_section_move`）は、移した節を応答の一覧に**文書順で**並べる
+ * ためにこの並びを要る。そこで呼び手が自分でもう一度並べ替えると、**同じ規則が
+ * 2箇所に立つ**——片方を壊しても、もう片方が結果を正しくしてしまうので、
+ * 「渡す順ではなく文書順で並ぶ」という保証を変異で撃っても歯が1本も赤く
+ * ならなくなる（実測 2026-09-08。変異試験で見つけた）。**規則を1箇所に置き、
+ * 並べ替えの結果そのものを返して呼び手に使わせる。**
+ *
+ * ## ⚠️ 範囲が重ならないことは呼び手の責任である
+ *
+ * ここには重なりを検出する分岐を置いていない。重なった範囲を渡すと、
+ * 昇順に並べた次の節の `start` が前の節の `end` より手前に来て、
+ * 「間」の slice が負の範囲になったり同じ文字列を2回運んだりする——
+ * その検出は `findOverlappingMemorySections` の仕事であり、
+ * `memory_section_move` はこの関数を呼ぶ前にそちらで断る
+ * （`tools.ts` を読むこと）。ここに同じ検査を重ねて置くと、片方を
+ * 直したときにもう片方が古いままになる経路ができるので、重ねない。
  */
-export function cutMemorySection(
+export function cutMemorySections(
   content: string,
-  section: MemorySection,
-): { nextContent: string; cut: string } {
-  return {
-    nextContent: content.slice(0, section.start) + content.slice(section.end),
-    cut: content.slice(section.start, section.end),
-  };
+  sections: readonly MemorySection[],
+): { nextContent: string; cut: string; ordered: readonly MemorySection[] } {
+  const ordered = [...sections].sort((a, b) => a.start - b.start);
+
+  let nextContent = '';
+  let cut = '';
+  let cursor = 0;
+  for (const section of ordered) {
+    nextContent += content.slice(cursor, section.start);
+    cut += content.slice(section.start, section.end);
+    cursor = section.end;
+  }
+  nextContent += content.slice(cursor);
+
+  return { nextContent, cut, ordered };
 }
+
+/**
+ * 複数の節id を渡されたとき、範囲が重なっている組が無いかを確かめる
+ * （`memory_section_move` が複数節を移す前の全件先出しの検査の一部）。
+ *
+ * `start` の昇順に並べ、**隣り合う組だけ**を見る。範囲が重ならないなら
+ * ソート後は隣り合う組ごとに `prev.end <= next.start` が成り立つはずなので、
+ * それが崩れた最初の組を返せば十分——3つ以上にまたがる重なりも、
+ * どこかの隣り合う組で必ず引っかかる。重なりが無ければ `null`。
+ *
+ * ## 捕まえるのは2つの形
+ *
+ * 1. **親と子を同時に指した。** `MemorySection.end` は子込み（同じ深さ
+ *    以下の次の見出しの直前まで）なので、親を切り取ると子も一緒に
+ *    消える——気づかずに子の節id も渡していると、同じ節を実質2回
+ *    動かす指示になる。
+ * 2. **同じ節id を2回渡した。** `lookupMemorySection` で同じ節を指す
+ *    id を2つ渡すと、範囲（`start` と `end`）が完全に一致するので、
+ *    これも重なりとして拾われる。
+ *
+ * ## ⚠️ 兄弟（隣り合う節）は重なりではない
+ *
+ * 兄弟どうしは前の節の `end` が次の節の `start` に一致する
+ * （`prev.end === next.start`）。ここでの判定は**厳密な** `next.start < prev.end`
+ * なので、これは重なりとして拾われない。`<=` にすると、1つの見出しの
+ * 下に並ぶ複数の兄弟節を一度に移すだけの正当な呼び出しまで断ることに
+ * なる——複数の兄弟をまとめて移すのは複数節対応そのものの使い道なので、
+ * ここを断る分岐は足さない。
+ */
+export function findOverlappingMemorySections(
+  sections: readonly MemorySection[],
+): { first: MemorySection; second: MemorySection } | null {
+  const sorted = [...sections].sort((a, b) => a.start - b.start);
+  for (let index = 1; index < sorted.length; index += 1) {
+    const prev = sorted[index - 1] as MemorySection;
+    const next = sorted[index] as MemorySection;
+    if (next.start < prev.end) return { first: prev, second: next };
+  }
+  return null;
+}
+
+/**
+ * `memory_section_move` が応答に並べる「移した節の一覧」の文字数予算。
+ *
+ * **件数ではなく文字数で切る**——`MEMORY_OUTLINE_BUDGET` と同じ思想
+ * （見出しの長さは節ごとにばらばらなので、件数で切ると出力量が見出しの
+ * 長さ次第で暴れる。AGENTS.md の地雷表）。渡された節id が90個でも応答が
+ * 際限なく伸びないための歯止めであり、ここで切れるのは**一覧の表示**
+ * だけである——移動そのものは、この一覧を組む前に全件先出しの検査
+ * （`findOverlappingMemorySections` を含む）を通って一括で終わっている
+ * ので、「一覧から省略」であって「移動していない」ではない
+ * （`tools.ts` の `memory_section_move` の doc）。
+ */
+export const MEMORY_SECTION_MOVE_LIST_BUDGET = 2_000;
 
 /** 目次の予算（文字数）。件数では切らない（AGENTS.md の地雷表）。 */
 export const MEMORY_OUTLINE_BUDGET = 8_000;

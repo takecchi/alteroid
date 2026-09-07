@@ -10,7 +10,7 @@ import {
   assertNeverMemoryFrontmatterState,
   assertNeverMemoryProtectionStatus,
   containsMemoryFrontmatterLineBreak,
-  cutMemorySection,
+  cutMemorySections,
   deriveMemoryCreatedAtFromJournal,
   deriveMemoryFrontmatter,
   describeMemoryFloor,
@@ -19,6 +19,7 @@ import {
   describeMemoryReinjectionEstimate,
   describeMemorySessionDelta,
   describeMemoryWriteDiff,
+  findOverlappingMemorySections,
   isKnownMemoryDocKind,
   lookupMemorySection,
   measureMemoryFloor,
@@ -35,6 +36,7 @@ import {
   resolveMemoryDocKind,
   scanMemorySections,
   type MemoryPart,
+  type MemorySection,
   type MemoryTocIssue,
 } from './memory.js';
 import type { JournalEntry, MemoryDescriptionFreshness, MemoryProtectionStatus } from './schema.js';
@@ -1473,7 +1475,7 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       const scan = scanMemorySections(withFrontmatter);
       const parentBefore = scan.sections.find((section) => section.heading === '### だから');
       const child = scan.sections.find((section) => section.heading === '#### さらに');
-      const { nextContent } = cutMemorySection(withFrontmatter, child as never);
+      const { nextContent } = cutMemorySections(withFrontmatter, [child as never]);
       const parentAfter = scanMemorySections(nextContent).sections.find(
         (section) => section.heading === '### だから',
       );
@@ -1588,7 +1590,7 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
     const target = scanMemorySections(fenced).sections.find(
       (section) => section.heading === '## 例',
     );
-    const { nextContent, cut } = cutMemorySection(fenced, target as never);
+    const { nextContent, cut } = cutMemorySections(fenced, [target as never]);
 
     // 切り取った側にフェンスが丸ごと入っている（開きと閉じが同数）。
     expect((cut.match(/^```/gm) ?? []).length).toBe(2);
@@ -1610,7 +1612,7 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
     expect(headingsOf(broken)).toEqual(['# ログ']);
   });
 
-  describe('cutMemorySection は継ぎ足しである（frontmatter を書き直さない）', () => {
+  describe('cutMemorySections は継ぎ足しである（frontmatter を書き直さない）', () => {
     it('frontmatter のバイト列が1バイトも変わらない（キーの順序も空白も含めて）', () => {
       // わざとキーの順序を `type` → `description` にし、余分な空白も入れる。
       const doc = [
@@ -1627,7 +1629,7 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       ].join('\n');
       const scan = scanMemorySections(doc);
       const target = scan.sections.find((section) => section.heading === '# A');
-      const { nextContent } = cutMemorySection(doc, target as never);
+      const { nextContent } = cutMemorySections(doc, [target as never]);
 
       expect(nextContent.slice(0, scan.bodyStart)).toBe(doc.slice(0, scan.bodyStart));
       expect(nextContent).toContain('type:  premise');
@@ -1638,11 +1640,115 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
     it('切り取った文字列と残った文字列を繋ぐと、必ず元に戻る（1文字も落とさない・増やさない）', () => {
       const scan = scanMemorySections(withFrontmatter);
       for (const section of scan.sections) {
-        const { nextContent, cut } = cutMemorySection(withFrontmatter, section);
+        const { nextContent, cut } = cutMemorySections(withFrontmatter, [section]);
         expect(nextContent.slice(0, section.start) + cut + nextContent.slice(section.start)).toBe(
           withFrontmatter,
         );
       }
+    });
+  });
+
+  /**
+   * `cutMemorySections` の複数節版（`memory_section_move` が1回で複数の節id を
+   * 移せるようにするために足した）。上の「1節だけ」の歯とは別に、**複数・
+   * 飛び飛び・逆順**の3つを固定する。
+   */
+  describe('cutMemorySections（複数節をまとめて切り取る）', () => {
+    /** 兄弟が3つ並ぶだけの単純な文書。中の1つ（B）を飛ばして A・C だけを選ぶ。 */
+    const multiDoc = [
+      '---',
+      'type:  premise',
+      'description:   複数節',
+      '---',
+      '# A',
+      '本文A',
+      '',
+      '# B',
+      '本文B',
+      '',
+      '# C',
+      '本文C',
+      '',
+    ].join('\n');
+    const find = (heading: string): MemorySection =>
+      scanMemorySections(multiDoc).sections.find(
+        (section) => section.heading === heading,
+      ) as MemorySection;
+
+    it('cutMemorySections は継ぎ足しである — 切り取った文字列と残った文字列から元が復元できる（複数節・飛び飛びでも）', () => {
+      const a = find('# A');
+      const b = find('# B');
+      const c = find('# C');
+      const header = multiDoc.slice(0, a.start);
+      const pieceA = multiDoc.slice(a.start, a.end);
+      const pieceB = multiDoc.slice(b.start, b.end);
+      const pieceC = multiDoc.slice(c.start, c.end);
+
+      // B を飛ばして A と C だけを切り取る（飛び飛び）。
+      const { nextContent, cut } = cutMemorySections(multiDoc, [a, c]);
+
+      // 残った側には間の B だけが残る。
+      expect(nextContent).toBe(header + pieceB);
+      // 切り取った側は A と C（文書に現れる順で繋がる）。
+      expect(cut).toBe(pieceA + pieceC);
+      // 3つの断片を正しい位置へ並べ直すと元の文書に戻る
+      // ——これが「継ぎ足しである」ことの中身である。
+      expect(header + pieceA + pieceB + pieceC).toBe(multiDoc);
+    });
+
+    it('cutMemorySections は frontmatter のバイト列を1バイトも動かさない（複数節でも）', () => {
+      const scan = scanMemorySections(multiDoc);
+
+      const { nextContent } = cutMemorySections(multiDoc, [find('# A'), find('# C')]);
+
+      expect(nextContent.slice(0, scan.bodyStart)).toBe(multiDoc.slice(0, scan.bodyStart));
+      expect(nextContent).toContain('type:  premise');
+      expect(nextContent).toContain('description:   複数節');
+    });
+
+    it('cutMemorySections は渡す順に依存しない（逆順に渡しても結果が同じ）', () => {
+      const a = find('# A');
+      const c = find('# C');
+
+      const forward = cutMemorySections(multiDoc, [a, c]);
+      const backward = cutMemorySections(multiDoc, [c, a]);
+
+      expect(backward).toEqual(forward);
+    });
+  });
+
+  describe('findOverlappingMemorySections（範囲の重なりの検査）', () => {
+    const sections = () => scanMemorySections(withFrontmatter).sections;
+    const find = (heading: string): MemorySection =>
+      sections().find((section) => section.heading === heading) as MemorySection;
+
+    it('親と子を同時に指すと重なりとして拾う（end は子込みなので、親を切ると子も一緒に動く）', () => {
+      const parent = find('## 経歴');
+      const child = find('### だから');
+
+      const overlap = findOverlappingMemorySections([parent, child]);
+
+      expect(overlap).not.toBeNull();
+      expect([overlap?.first.heading, overlap?.second.heading]).toEqual(['## 経歴', '### だから']);
+    });
+
+    it('同じ節id を2回渡すのも重なりとして拾う（範囲が完全に一致する）', () => {
+      const section = find('## 例');
+
+      expect(findOverlappingMemorySections([section, section])).not.toBeNull();
+    });
+
+    it('隣り合う兄弟は重なりではない（誤検出しない。渡す順にも依存しない）', () => {
+      const keireki = find('## 経歴');
+      const rei = find('## 例');
+
+      expect(findOverlappingMemorySections([keireki, rei])).toBeNull();
+      expect(findOverlappingMemorySections([rei, keireki])).toBeNull();
+    });
+
+    it('空配列・1件だけなら null（重なりようがない）', () => {
+      expect(findOverlappingMemorySections([])).toBeNull();
+      expect(findOverlappingMemorySections([find('## 経歴')])).toBeNull();
     });
   });
 
@@ -1888,7 +1994,7 @@ describe('節の切り取りは frontmatter の解釈を変えない（乗っ取
       const scan = scanMemorySections(content);
       const priorKind = parseMemoryFrontmatter(content).kind;
       for (const section of scan.sections) {
-        const { nextContent } = cutMemorySection(content, section);
+        const { nextContent } = cutMemorySections(content, [section]);
         expect(nextContent.slice(0, scan.bodyStart)).toBe(content.slice(0, scan.bodyStart));
         expect(parseMemoryFrontmatter(nextContent).kind).toBe(priorKind);
       }
@@ -1898,7 +2004,7 @@ describe('節の切り取りは frontmatter の解釈を変えない（乗っ取
   it('切り取った文字列は必ず見出し行から始まる（移し先の先頭に frontmatter を作れない）', () => {
     for (const content of documents) {
       for (const section of scanMemorySections(content).sections) {
-        const { cut } = cutMemorySection(content, section);
+        const { cut } = cutMemorySections(content, [section]);
         expect(cut.split('\n')[0]).toMatch(/^#{1,6}\s/);
       }
     }

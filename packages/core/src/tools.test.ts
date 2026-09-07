@@ -874,7 +874,7 @@ describe('クローンの道具', () => {
 
       const reply = await h.call('memory_section_move', {
         fromSlug: 'about-me',
-        section: id,
+        sections: [id],
         toSlug: 'about-me-appendix',
         summary: '事例を付録へ移した',
       });
@@ -1085,7 +1085,7 @@ describe('クローンの道具', () => {
 
       const reply = await h.call('memory_section_move', {
         fromSlug: 'about-me',
-        section: id,
+        sections: [id],
         toSlug: 'about-me-appendix',
         summary: '事例を付録へ移した',
       });
@@ -2138,6 +2138,31 @@ describe('クローンの道具', () => {
     ].join('\n');
 
     /**
+     * **複数節を1回で移す歯のための足場。** 兄弟が3つ（節A・節B・節C）並ぶ
+     * だけの単純な文書——`source` は兄弟が2つ（`## 事例` / `## 次`）しか無い
+     * ので、「3節まとめて」を測る歯にはこちらを使う。目印は節ごとに変える
+     * （同一だと節id が衝突する。`outlineId` の doc と同じ理由）。
+     */
+    const multi = [
+      '---',
+      'description: 複数節',
+      'type: premise',
+      '---',
+      '# 表紙',
+      '芯である。',
+      '',
+      '## 節A',
+      `${SECRET}-A を含む節Aの本文である。`,
+      '',
+      '## 節B',
+      `${SECRET}-B を含む節Bの本文である。`,
+      '',
+      '## 節C',
+      `${SECRET}-C を含む節Cの本文である。`,
+      '',
+    ].join('\n');
+
+    /**
      * `memory_outline` を実際に呼び、**出力そのもの**と、そこから引いた
      * `{ id, heading }` の列（出た順）を返す。
      *
@@ -2240,7 +2265,7 @@ describe('クローンの道具', () => {
         // 取った id はそのまま移し先へ通る。
         const reply = await h.call('memory_section_move', {
           fromSlug: 'big',
-          section: hit[0]!.id,
+          sections: [hit[0]!.id],
           toSlug: 'big-appendix',
           summary: '末尾の節を付録へ移した',
         });
@@ -2269,7 +2294,7 @@ describe('クローンの道具', () => {
 
         const reply = await h.call('memory_section_move', {
           fromSlug: 'about-me',
-          section: id,
+          sections: [id],
           toSlug: 'about-me-appendix',
           summary: '事例を付録へ移した',
         });
@@ -2306,7 +2331,7 @@ describe('クローンの道具', () => {
 
         const reply = await h.call('memory_section_move', {
           fromSlug: 'about-me',
-          section: id,
+          sections: [id],
           toSlug: 'about-me-appendix',
           summary: '事例を付録へ移した',
         });
@@ -2345,7 +2370,7 @@ describe('クローンの道具', () => {
 
         await h.call('memory_section_move', {
           fromSlug: 'odd',
-          section: id,
+          sections: [id],
           toSlug: 'odd-appendix',
           summary: '移した',
         });
@@ -2375,7 +2400,7 @@ describe('クローンの道具', () => {
 
         await h.call('memory_section_move', {
           fromSlug: 'log',
-          section: id,
+          sections: [id],
           toSlug: 'log-appendix',
           summary: '移した',
         });
@@ -2400,7 +2425,7 @@ describe('クローンの道具', () => {
 
         const reply = await h.call('memory_section_move', {
           fromSlug: 'about-me',
-          section: id,
+          sections: [id],
           toSlug: 'about-me-appendix',
           summary: '移した',
         });
@@ -2419,7 +2444,7 @@ describe('クローンの道具', () => {
 
         const reply = await h.call('memory_section_move', {
           fromSlug: 'about-me',
-          section: id,
+          sections: [id],
           toSlug: 'about-me-appendix',
           summary: '移した',
         });
@@ -2439,7 +2464,7 @@ describe('クローンの道具', () => {
 
         await h.call('memory_section_move', {
           fromSlug: 'about-me',
-          section: id,
+          sections: [id],
           toSlug: 'about-me-appendix',
           summary: '事例を付録へ移した',
         });
@@ -2461,6 +2486,91 @@ describe('クローンの道具', () => {
         // 本文は日誌へ写さない。
         for (const entry of entries) expect(JSON.stringify(entry)).not.toContain(SECRET);
       });
+
+      /**
+       * ⭐ **複数節に対応したことの中心の保証。** `cutMemorySections` は
+       * 渡す順ではなく文書に現れる順で繋ぐ（`cutMemorySections` の doc
+       * 「渡す順に依存しない」）。⚠ ここでは**わざと文書順と逆に**渡し、
+       * それでも移し先の中身が文書順になることを測る——渡した順のまま
+       * 並べてしまう実装ならここが赤くなる。
+       */
+      it('⭐ 複数の節を1回で移せる。移し先には文書に現れる順で並ぶ', async () => {
+        const h = harness();
+        await seed(h, 'multi', multi);
+        const idA = await outlineId(h, 'multi', '## 節A');
+        const idC = await outlineId(h, 'multi', '## 節C');
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'multi',
+          sections: [idC, idA], // 文書順（A→C）とは逆に渡す。
+          toSlug: 'multi-appendix',
+          summary: '節A・節Cを付録へ移した',
+        });
+
+        const to = (await h.stores.persona.read('multi-appendix'))?.content as string;
+        const from = (await h.stores.persona.read('multi'))?.content as string;
+        expect(to).toContain('## 節A');
+        expect(to).toContain('## 節C');
+        // 渡した順（C→A）ではなく、文書に現れた順（A→C）で並ぶ。
+        expect(to.indexOf('## 節A')).toBeLessThan(to.indexOf('## 節C'));
+        // 動かしていない節B は出どころに残る。
+        expect(from).toContain('## 節B');
+        expect(reply).toContain('移した');
+      });
+
+      it('複数節でも日誌は move_in / move_out の2件のまま（節数に比例しない）', async () => {
+        const h = harness();
+        await seed(h, 'multi', multi);
+        const idA = await outlineId(h, 'multi', '## 節A');
+        const idB = await outlineId(h, 'multi', '## 節B');
+        const idC = await outlineId(h, 'multi', '## 節C');
+
+        await h.call('memory_section_move', {
+          fromSlug: 'multi',
+          sections: [idA, idB, idC],
+          toSlug: 'multi-appendix',
+          summary: '3節まとめて付録へ移した',
+        });
+
+        const entries = await h.stores.journal.list({ types: ['memory_update'] });
+        const moveOuts = entries.filter(
+          (entry) => 'action' in entry && entry.action === 'move_out',
+        );
+        const moveIns = entries.filter((entry) => 'action' in entry && entry.action === 'move_in');
+        expect(moveOuts).toHaveLength(1);
+        expect(moveIns).toHaveLength(1);
+      });
+
+      /**
+       * **⭐ この道具の存在理由そのものを測る歯（複数節版）。** 節が1個の
+       * ときの「応答に古い本文が1文字も出ない」歯と同じ形——3節まとめて
+       * 移しても、どの節の目印も1つも漏れないことを測る。
+       */
+      it('⭐ 複数節でも応答に古い本文が1文字も出ない', async () => {
+        const h = harness();
+        await seed(h, 'multi', multi);
+        const idA = await outlineId(h, 'multi', '## 節A');
+        const idB = await outlineId(h, 'multi', '## 節B');
+        const idC = await outlineId(h, 'multi', '## 節C');
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'multi',
+          sections: [idA, idB, idC],
+          toSlug: 'multi-appendix',
+          summary: '3節まとめて付録へ移した',
+        });
+
+        expect(reply).not.toContain(`${SECRET}-A`);
+        expect(reply).not.toContain(`${SECRET}-B`);
+        expect(reply).not.toContain(`${SECRET}-C`);
+        // 呼び手が「意図した節か」を確かめられるだけの名指しはする。
+        expect(reply).toContain('## 節A');
+        expect(reply).toContain('## 節B');
+        expect(reply).toContain('## 節C');
+        expect(reply).toContain(idA);
+        expect(reply).toContain(idB);
+        expect(reply).toContain(idC);
+      });
     });
 
     describe('断るとき（どの断りでも、from も to も1文字も変わらない）', () => {
@@ -2472,7 +2582,7 @@ describe('クローンの道具', () => {
 
         const reply = await h.call('memory_section_move', {
           fromSlug: 'about-me',
-          section: id,
+          sections: [id],
           toSlug: 'about-me',
           summary: '移した',
         });
@@ -2486,7 +2596,7 @@ describe('クローンの道具', () => {
 
         const reply = await h.call('memory_section_move', {
           fromSlug: 'nope',
-          section: 'deadbeef-cafebabe',
+          sections: ['deadbeef-cafebabe'],
           toSlug: 'somewhere',
           summary: '移した',
         });
@@ -2503,7 +2613,7 @@ describe('クローンの道具', () => {
 
         const reply = await h.call('memory_section_move', {
           fromSlug: 'broken',
-          section: 'deadbeef-cafebabe',
+          sections: ['deadbeef-cafebabe'],
           toSlug: 'elsewhere',
           summary: '移した',
         });
@@ -2531,7 +2641,7 @@ describe('クローンの道具', () => {
 
         const reply = await h.call('memory_section_move', {
           fromSlug: 'about-me',
-          section: id,
+          sections: [id],
           toSlug: 'about-me-appendix',
           summary: '移した',
         });
@@ -2556,7 +2666,7 @@ describe('クローンの道具', () => {
 
         const reply = await h.call('memory_section_move', {
           fromSlug: 'about-me',
-          section: id,
+          sections: [id],
           toSlug: 'about-me-appendix',
           summary: '移した',
         });
@@ -2578,13 +2688,13 @@ describe('クローンの道具', () => {
 
         const absent = await h.call('memory_section_move', {
           fromSlug: 'about-me',
-          section: 'deadbeef-cafebabe',
+          sections: ['deadbeef-cafebabe'],
           toSlug: 'appendix',
           summary: '移した',
         });
         const stale = await h.call('memory_section_move', {
           fromSlug: 'about-me',
-          section: staleId,
+          sections: [staleId],
           toSlug: 'appendix',
           summary: '移した',
         });
@@ -2619,7 +2729,7 @@ describe('クローンの道具', () => {
 
         const reply = await h.call('memory_section_move', {
           fromSlug: 'dup',
-          section: id,
+          sections: [id],
           toSlug: 'dup-appendix',
           summary: '移した',
         });
@@ -2628,6 +2738,159 @@ describe('クローンの道具', () => {
         expect(reply).toContain('選ばずに断る');
         expect((await h.stores.persona.read('dup'))?.content).toBe(original);
         expect(await h.stores.persona.read('dup-appendix')).toBeNull();
+      });
+
+      /**
+       * ⭐ **全件先出しの照合（当たり・複数節版）。** 2つ渡して、2つ目だけを
+       * 外から書き換えてから呼ぶ——1つでも古ければ、**もう1つの方も含めて**
+       * 1文字も動かさない。⚠ ここで測るのは「断りの文言が出た」ではなく
+       * 「from も to も1バイトも変わっていない」——to は呼ぶ前に存在させて
+       * おき、前後で文字列比較する。
+       */
+      it('⭐ 1つでも古い節id が混ざっていたら、1節も動かさない', async () => {
+        const h = harness();
+        await seed(h, 'multi', multi);
+        const idA = await outlineId(h, 'multi', '## 節A');
+        const idB = await outlineId(h, 'multi', '## 節B');
+        // to は呼ぶ前に存在させておく（前後で文字列比較するため）。
+        await seed(h, 'multi-appendix', '# 付録\n既存の本文\n');
+        const toBefore = (await h.stores.persona.read('multi-appendix'))?.content as string;
+
+        // 目次を読んだ後、節Bだけが外から書き換えられた（idB は古くなる）。
+        const edited = multi.replace('節Bの本文である', '節Bの本文を書き換えた');
+        await h.stores.persona.write('multi', edited);
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'multi',
+          sections: [idA, idB],
+          toSlug: 'multi-appendix',
+          summary: '移した',
+        });
+
+        expect(reply).toContain('古い');
+        // idA は当たりのままだが、idB が古いので1節も動かない——from・to
+        // どちらも1バイトも変わっていないことをバイト比較で測る。
+        expect((await h.stores.persona.read('multi'))?.content).toBe(edited);
+        expect((await h.stores.persona.read('multi-appendix'))?.content).toBe(toBefore);
+      });
+
+      /**
+       * ⭐ **複数節に対応したことで新たに要った断り。** `MemorySection.end` は
+       * 子込みなので、親を切ると渡していないつもりの子も一緒に動く——親子
+       * まとめて指すのを断る（`findOverlappingMemorySections` の doc）。
+       */
+      it('⭐ 親と子を同時に指したら断る（from も to も1バイトも変わらない）', async () => {
+        const h = harness();
+        await seed(h);
+        const parentId = await outlineId(h, 'about-me', '## 事例');
+        const childId = await outlineId(h, 'about-me', '### だから');
+        const original = (await h.stores.persona.read('about-me'))?.content as string;
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'about-me',
+          sections: [parentId, childId],
+          toSlug: 'about-me-appendix',
+          summary: '移した',
+        });
+
+        expect(reply).toContain('重なっている');
+        expect((await h.stores.persona.read('about-me'))?.content).toBe(original);
+        expect(await h.stores.persona.read('about-me-appendix')).toBeNull();
+      });
+
+      it('⭐ 同じ節id を2回渡したら断る（from も to も1バイトも変わらない）', async () => {
+        const h = harness();
+        await seed(h);
+        const id = await outlineId(h, 'about-me', '## 事例');
+        const original = (await h.stores.persona.read('about-me'))?.content as string;
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'about-me',
+          sections: [id, id],
+          toSlug: 'about-me-appendix',
+          summary: '移した',
+        });
+
+        expect(reply).toContain('重なっている');
+        expect((await h.stores.persona.read('about-me'))?.content).toBe(original);
+        expect(await h.stores.persona.read('about-me-appendix')).toBeNull();
+      });
+
+      /**
+       * **対照 — 検出器が誤爆しないことを測る。** 上の2本（親子・重複）と
+       * 対にして置く——`findOverlappingMemorySections` を「常に断る」へ
+       * 変異させたら、上の2本は緑のままここだけが赤くなる。
+       */
+      it('隣り合う兄弟の節は重なりではないので、2つまとめて移せる', async () => {
+        const h = harness();
+        await seed(h);
+        const eventId = await outlineId(h, 'about-me', '## 事例');
+        const nextId = await outlineId(h, 'about-me', '## 次');
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'about-me',
+          sections: [eventId, nextId],
+          toSlug: 'about-me-appendix',
+          summary: '移した',
+        });
+
+        expect(reply).toContain('移した');
+        const to = (await h.stores.persona.read('about-me-appendix'))?.content as string;
+        expect(to).toContain('## 事例');
+        expect(to).toContain('## 次');
+      });
+
+      /**
+       * **id を全部並べない。** 90個渡されても応答がその数だけ膨らまない
+       * ようにするための仕様——1件目だけ今までと同じ疑う先の文言を残し、
+       * 残りは種類ごとの件数だけを言う（`describeMemorySectionLookupFailure`
+       * が最初の1件で既に疑う先の違いを説明している）。
+       */
+      it('解決できなかった節が2件以上あるとき、1件目は今までと同じ文言で、残りは件数で数え上げる（id を全部並べない）', async () => {
+        const h = harness();
+        await seed(h);
+        const id = await outlineId(h, 'about-me', '## 事例');
+        const staleId = `${id.split('-')[0]}-00000000`;
+        const secondAbsentId = 'baadf00d-01234567';
+        const original = (await h.stores.persona.read('about-me'))?.content as string;
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'about-me',
+          sections: ['deadbeef-cafebabe', staleId, secondAbsentId],
+          toSlug: 'about-me-appendix',
+          summary: '移した',
+        });
+
+        // 1件目（絶対に無い id）は、今までと同じ疑う先の文言。
+        expect(reply).toContain('打ち間違い');
+        // 残りの id は本文に並べない——件数だけで数え上げる。
+        expect(reply).not.toContain(staleId);
+        expect(reply).not.toContain(secondAbsentId);
+        expect(reply).toContain(
+          'ほかにも解決できなかった節id が 2 件ある（無い 1 件・古い 1 件・曖昧 0 件）。',
+        );
+        expect(reply).toContain('今回指定した他の 2 節も含めて1節も移していない。');
+        expect((await h.stores.persona.read('about-me'))?.content).toBe(original);
+        expect(await h.stores.persona.read('about-me-appendix')).toBeNull();
+      });
+
+      it('1節だけ渡して解決に失敗したときの応答は、複数節対応の前と同じ文言のまま（追加の行が出ない）', async () => {
+        const h = harness();
+        await seed(h);
+        const id = await outlineId(h, 'about-me', '## 事例');
+        const staleId = `${id.split('-')[0]}-00000000`;
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'about-me',
+          sections: [staleId],
+          toSlug: 'about-me-appendix',
+          summary: '移した',
+        });
+
+        expect(reply).toContain('古い');
+        // 複数節対応で足された行は、1件だけのときには出ない。
+        expect(reply).not.toContain('ほかにも解決できなかった');
+        expect(reply).not.toContain('この口は全件が見つかったときしか動かさない');
       });
     });
 
@@ -2640,13 +2903,37 @@ describe('クローンの道具', () => {
 
         const reply = await h.call('memory_section_move', {
           fromSlug: 'about-me',
-          section: id,
+          sections: [id],
           toSlug: 'about-me-appendix',
           summary: '移したつもり',
         });
 
         expect(reply).toContain('断った');
         // 断り文が出たことだけを測らない（断ってから書いてしまう実装が生存する）。
+        expect((await h.stores.persona.read('about-me'))?.content).toBe(source);
+        expect(await h.stores.persona.read('about-me-appendix')).toBeNull();
+      });
+
+      /**
+       * ⭐ **上と同じ歯の複数節版。** `guardFullReplace` は `fromSlug` に
+       * 対して1回だけ呼ばれる（節ごとではない）ので、複数節でも人間の
+       * 書き込みの履歴がある文書からは1節も動かせないはずである。
+       */
+      it('⭐ 蒸留の走行からは、人間が書いた文書の複数節も移せない。from も to も1文字も変わらない', async () => {
+        const h = harness();
+        await markHuman(h, 'about-me', source);
+        const eventId = await outlineId(h, 'about-me', '## 事例');
+        const nextId = await outlineId(h, 'about-me', '## 次');
+        h.setMemoryCause('distill');
+
+        const reply = await h.call('memory_section_move', {
+          fromSlug: 'about-me',
+          sections: [eventId, nextId],
+          toSlug: 'about-me-appendix',
+          summary: '移したつもり',
+        });
+
+        expect(reply).toContain('断った');
         expect((await h.stores.persona.read('about-me'))?.content).toBe(source);
         expect(await h.stores.persona.read('about-me-appendix')).toBeNull();
       });
@@ -2659,7 +2946,7 @@ describe('クローンの道具', () => {
 
         const reply = await h.call('memory_section_move', {
           fromSlug: 'about-me',
-          section: id,
+          sections: [id],
           toSlug: 'about-me-appendix',
           summary: '移したつもり',
         });
@@ -2681,7 +2968,7 @@ describe('クローンの道具', () => {
 
         const reply = await h.call('memory_section_move', {
           fromSlug: 'about-me',
-          section: id,
+          sections: [id],
           toSlug: 'about-me-appendix',
           summary: '移した',
         });
@@ -2697,7 +2984,7 @@ describe('クローンの道具', () => {
 
         const reply = await h.call('memory_section_move', {
           fromSlug: 'about-me',
-          section: id,
+          sections: [id],
           toSlug: 'about-me-appendix',
           summary: '移した',
         });
@@ -2719,7 +3006,7 @@ describe('クローンの道具', () => {
 
         const reply = await h.call('memory_section_move', {
           fromSlug: 'about-me',
-          section: id,
+          sections: [id],
           toSlug: 'appendix',
           summary: '移した',
         });
@@ -2751,7 +3038,7 @@ describe('クローンの道具', () => {
 
       const reply = await h.call('memory_section_move', {
         fromSlug: 'about-me',
-        section: id,
+        sections: [id],
         toSlug: 'about-me-appendix',
         summary: '移した',
       });
