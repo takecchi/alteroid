@@ -375,15 +375,11 @@ describe('ターンの入力を日誌に残す（#243）— 人間の回答は�
     expect(await stores.commitments.close('evt-answer', AT, 'もう対応済み', 'clone')).toBe(true);
 
     const reborn = bootClone(stores);
-    // **ターンの入力を待つ形にはできない**（起こさないことを測っている）。畳んだ跡
-    // を待って、`stop()` で受信箱のループを読み切らせる。
-    await waitFor(
-      async () =>
-        (await stores.journal.list({ types: ['exchange'] })).some(
-          (entry) => entry.type === 'exchange' && entry.text.includes('ターンを起こさずに畳んだ'),
-        ),
-      '畳んだ跡',
-    );
+    // **ターンの入力を待つ形にはできない**（起こさないことを測っている）。そして
+    // 「畳んだ跡」を待つ形にもしない —— 畳まない側の壊れ方が待ちの時間切れとして
+    // 出ると、赤の出どころが自分のアサーションでなくなる。**両方の世界で必ず
+    // 起きること**＝消し込みを待って、`stop()` で受信箱のループを読み切らせる。
+    await waitFor(async () => (await stores.inbox.claimPending()).length === 0, '未読の消し込み');
     await reborn.clone.stop();
 
     expect(reborn.inputs).toEqual([]);

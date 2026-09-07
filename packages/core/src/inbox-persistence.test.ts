@@ -500,11 +500,13 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
     ).toBe(true);
 
     const reborn = bootClone(stores);
-    // **ターンの入力を待つ形にはできない。** 起こさないことを測っているので、待て
-    // ば必ず時間切れになる。代わりに畳んだ跡を待ち、`stop()` で読み切らせる
-    // （`stop()` は `#pumpLoop` を await してから返るので、その後は「もう1本も
-    // 起きない」と言える地点である）。
-    await waitForJournal(stores, 'ターンを起こさずに畳んだ');
+    // **ターンの入力を待つ形にはできない**（起こさないことを測っている）。そして
+    // 「畳んだ跡」を待つ形にもしない —— **畳まない側の壊れ方が、待ちの時間切れ
+    // （ヘルパの生の throw）として出てしまう**ので、赤の出どころが自分の
+    // アサーションでなくなる。**両方の世界で必ず起きること**＝消し込みを待って、
+    // `stop()` で受信箱のループを読み切らせる（`stop()` は `#pumpLoop` を await
+    // してから返るので、その後は「もう1本も起きない」と言える地点である）。
+    await waitForNoUnread(stores);
     await reborn.clone.stop();
 
     // **ターンは1本も起きていない。** 本文も断り書きもモデルへ渡っていない。
@@ -564,7 +566,8 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
     ).toBe(true);
 
     const reborn = bootClone(stores);
-    await waitForJournal(stores, 'ターンを起こさずに畳んだ');
+    // 待ちの形とその理由は1本目の歯と同じ（消し込みを待つ）。
+    await waitForNoUnread(stores);
     await reborn.clone.stop();
 
     expect(reborn.inputs).toEqual([]);
@@ -624,7 +627,8 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
     ).toBe(true);
 
     const reborn = bootClone(stores);
-    await waitForJournal(stores, 'ターンを起こさずに畳んだ');
+    // 待ちの形とその理由は1本目の歯と同じ（消し込みを待つ）。
+    await waitForNoUnread(stores);
     await reborn.clone.stop();
 
     expect(reborn.inputs).toEqual([]);
