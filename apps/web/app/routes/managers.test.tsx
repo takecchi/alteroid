@@ -9,14 +9,33 @@
  * と対になっている）。
  */
 import { describeSessionMissingKind } from '@alteroid/core';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { MANAGERS_PAGE } from '~/hooks/use-managers-window';
 import type { ManagerSummary } from '~/lib/types';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import Managers, { describeSessionMissingKindNote } from './managers';
+
+/**
+ * **一覧の中だけを見る。**
+ *
+ * issue #670 で `status` の絞り込みチップが付き、**札と同じ言葉（「待機中」
+ * 「失敗」「セッションへ戻れず」…）がチップのボタンとしても画面に現れる**
+ * ようになった。⟹ 「この札は出ていない」を画面全体で見ると、チップに当たって
+ * しまう。
+ *
+ * **これは条件の緩めではなく、対象の特定である**（AGENTS.md「対象をスコープ
+ * して特定する ＝ 保証が強くなる」）。元のテストが言いたかったのは「**この
+ * マネージャーの行に**その札が付いていない」であって、「その語が画面のどこにも
+ * 無い」ではない。スコープを効かせたぶん、チップの側で同じ語が出ても保証は
+ * 動かない。
+ */
+function row() {
+  return within(screen.getByRole('list'));
+}
 
 const BASE: ManagerSummary = {
   managerId: 'mgr-1',
@@ -106,8 +125,9 @@ describe('一覧の札は、観測した分しか言わない', () => {
     renderManagers([{ ...BASE, status: 'stopped', live: false }]);
 
     expect(await screen.findByText('停止済み')).toBeTruthy();
-    expect(screen.queryByText('待機中')).toBeNull();
-    expect(screen.queryByText('完了')).toBeNull();
+    // **一覧の中だけを見る**（`row()` の doc。チップにも「待機中」が在る）。
+    expect(row().queryByText('待機中')).toBeNull();
+    expect(row().queryByText('完了')).toBeNull();
   });
 });
 
@@ -233,7 +253,8 @@ describe('失敗も、状態を置き換えずに状態へ添える', () => {
 
     // **札は差し替えない。** 観測しているのは `done`（終えて待機中）である。
     expect(await screen.findByText('待機中')).toBeTruthy();
-    expect(screen.queryByText('失敗')).toBeNull();
+    // **一覧の中だけを見る**（`row()` の doc。チップにも「失敗」が在る）。
+    expect(row().queryByText('失敗')).toBeNull();
     // SDK の語をそのまま（`billing_error` と `rate_limit` は次の一手が違う）。
     expect(screen.getByText(/billing_error/)).toBeTruthy();
     expect(screen.getByText(/assistant_error/)).toBeTruthy();
@@ -565,8 +586,9 @@ describe('器が黙ったことは、`status` を動かさずに添える', () =
 
     expect(await screen.findByText(/この委譲が失われたという意味ではない/)).toBeTruthy();
     expect(screen.getByText(/黙っているのが器なのか経路なのかは、ここからは言えない/)).toBeTruthy();
-    // `status: lost` の札の言葉へ寄せていない。
-    expect(screen.queryByText('セッションへ戻れず')).toBeNull();
+    // `status: lost` の札の言葉へ寄せていない。**一覧の中だけを見る**
+    // （`row()` の doc。チップにも「セッションへ戻れず」が在る）。
+    expect(row().queryByText('セッションへ戻れず')).toBeNull();
   });
 
   it('欄が無いマネージャーには何も足さない（雑音にしない）', async () => {
@@ -653,5 +675,362 @@ describe('sessionMissingKind の字面が core と一致する（#579）', () =>
   it('由来が無いときも一致する（どちらも空文字。「不明」と書かない）', () => {
     expect(describeSessionMissingKindNote(undefined)).toBe(describeSessionMissingKind(undefined));
     expect(describeSessionMissingKindNote(undefined)).toBe('');
+  });
+});
+
+/**
+ * **`status` の絞り込みと「もっと見る」**（issue #670）。
+ *
+ * **なぜ Web でも使うのか。** 台帳（`jobs`）に行を消す口が無いので、一覧の
+ * 件数はその環境で今までに起こした委譲の総数と等しくなる。**人間が困って
+ * いるのはこの一覧そのものである**（#432 のときは API だけに足して画面は
+ * 別 issue にしたが、こちらは画面が主題である）。
+ *
+ * ここで固定するのは4つ。
+ *
+ * 1. **絞りはサーバへ投げる**（画面側で `filter` して捨てない——捨てると
+ *    「窓に読み込んだぶんの中でしか絞れない」層ができる）
+ * 2. **「もっと見る」が錨で継ぎ足す**（前の頁が消えない）
+ * 3. **札と注記が窓や絞りで消えない**（`ManagerStatusBadge` /
+ *    `ManagerRunnerLostNote` / `ManagerSessionMissingNote` /
+ *    `ManagerDenialNote` / `ManagerFailureNote` /
+ *    `ManagerAwaitingBackgroundNote` / 接続表示）
+ * 4. **押せなくなった条件が読み手に見える**（黙って終端に見せない）
+ */
+describe('status の絞り込みと「もっと見る」（issue #670）', () => {
+  /** `startedAt` の降順（デーモンの契約）で N 件。 */
+  function page(count: number, offset = 0, status: ManagerSummary['status'] = 'running') {
+    return Array.from({ length: count }, (_, index) => ({
+      ...BASE,
+      managerId: `mgr-${offset + index}`,
+      // **行を見分けられる本文にする。** `BASE.request` のままだと全行が
+      // 同じ文字列になり、「前の頁が消えていない」を測れない。
+      request: `req-mgr-${offset + index}`,
+      status,
+      startedAt: new Date(Date.UTC(2026, 7, 16, 3, 0, 0) - (offset + index) * 60_000).toISOString(),
+    }));
+  }
+
+  /**
+   * URL ごとに応答を差し替える足場。**自前のスタブは書かない**
+   * （`~/test-support` の `stubFetch` / `json` を使う。
+   * `.claude/skills/apps-web/SKILL.md`）。
+   */
+  function renderWithRoutes(respond: (url: string) => object | undefined) {
+    const stub = stubFetch((url) => {
+      if (!url.includes('/managers')) return undefined;
+      const body = respond(url);
+      return body === undefined ? json({ managers: [] }) : json(body);
+    });
+    const router = createMemoryRouter([{ path: '/', Component: Managers }], {
+      initialEntries: ['/'],
+    });
+    render(
+      <Providers>
+        <RouterProvider router={router} />
+      </Providers>,
+    );
+    return stub;
+  }
+
+  /**
+   * **引数なしの呼びは `?` を1文字も付けない。**
+   *
+   * デーモン側は生のクエリ（`c.req.query('limit') !== undefined`）で opt-in を
+   * 判定するので、空の値を1つ送った時点で窓の掛かった呼びに化ける。**ここは
+   * `openapi-fetch@0.17.0` の `createFinalURL` の挙動（空の search なら `?` を
+   * 付けない）に乗った主張なので、版が上がったらこの歯が落ちる**
+   * （`queries.ts` の `useManagers` の doc）。
+   *
+   * `dashboard.tsx` が `useManagers()` を引数なしで呼んでいる——**そちらの
+   * 応答がこの変更で1バイトも変わらないことを支えているのはこの1本である。**
+   */
+  it('dashboard 相当の引数なしの呼びは、クエリ文字列を付けない', async () => {
+    const { useManagers } = await import('~/hooks/queries');
+    const stub = stubFetch((url) =>
+      url.includes('/managers') ? json({ managers: [] }) : undefined,
+    );
+    function Probe() {
+      useManagers();
+      return null;
+    }
+    render(
+      <Providers>
+        <Probe />
+      </Providers>,
+    );
+
+    await waitFor(() => {
+      expect(stub.calls.some((url) => url.includes('/managers'))).toBe(true);
+    });
+    const call = stub.calls.find((url) => url.includes('/managers')) as string;
+    expect(call).not.toContain('?');
+  });
+
+  /**
+   * **絞りはサーバへ投げる**（`STATUSES` の doc）。画面側で捨てると、CLI や
+   * クローンではできることが Web でだけできない層ができる。
+   */
+  it('チップを押すと status= がサーバへ渡る（画面側で filter して捨てない）', async () => {
+    const stub = renderWithRoutes(() => ({ managers: page(1) }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('list')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole('button', { name: '人間待ち' }));
+
+    await waitFor(() => {
+      expect(stub.calls.some((url) => url.includes('status=waiting_human'))).toBe(true);
+    });
+  });
+
+  it('チップを複数押すとカンマ区切りで渡る', async () => {
+    const stub = renderWithRoutes(() => ({ managers: page(1) }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('list')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole('button', { name: '実行中' }));
+    fireEvent.click(screen.getByRole('button', { name: 'セッションへ戻れず' }));
+
+    await waitFor(() => {
+      expect(stub.calls.some((url) => url.includes('status=running%2Clost'))).toBe(true);
+    });
+  });
+
+  it('絞りを解除すると status= を渡さなくなる', async () => {
+    const stub = renderWithRoutes(() => ({ managers: page(1) }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('list')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole('button', { name: '実行中' }));
+    await waitFor(() => {
+      expect(stub.calls.some((url) => url.includes('status=running'))).toBe(true);
+    });
+
+    const before = stub.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: '解除' }));
+    await waitFor(() => {
+      expect(stub.calls.length).toBeGreaterThan(before);
+    });
+    const after = stub.calls.slice(before);
+    expect(after.some((url) => url.includes('/managers'))).toBe(true);
+    expect(after.filter((url) => url.includes('/managers')).at(-1)).not.toContain('status=');
+  });
+
+  /**
+   * **絞りで表示が変わる。** サーバが返したものをそのまま出す（画面側で
+   * 並べ直したり足したりしない）。
+   */
+  it('絞りに当たるものだけが表示される', async () => {
+    renderWithRoutes((url) =>
+      url.includes('status=lost')
+        ? { managers: [{ ...BASE, managerId: 'mgr-lost', status: 'lost' as const, live: false }] }
+        : { managers: page(1) },
+    );
+
+    await waitFor(() => {
+      expect(row().getByText('req-mgr-0')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'セッションへ戻れず' }));
+
+    await waitFor(() => {
+      expect(row().getByText('PR を出して')).toBeTruthy();
+    });
+    expect(row().queryByText('req-mgr-0')).toBeNull();
+  });
+
+  /**
+   * **絞りに1件も当たらないときの空表示を、素の空と混ぜない。** 「まだ1体も
+   * 起きていない」と出すと、絞っているせいで空なのだと分からない。
+   */
+  it('絞りで0件になったとき「まだ1体も起きていない」とは言わない', async () => {
+    renderWithRoutes((url) => (url.includes('status=') ? { managers: [] } : { managers: page(1) }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('list')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole('button', { name: '失敗' }));
+
+    expect(await screen.findByText(/この状態のマネージャーは無い/)).toBeTruthy();
+    expect(screen.queryByText(/まだ1体も起きていない/)).toBeNull();
+  });
+
+  /**
+   * **「もっと見る」が錨で継ぎ足す。** 前の頁が消えず、2頁目が末尾に並ぶ。
+   *
+   * **押せる条件は「`MANAGERS_PAGE` 件ちょうど返ったか」だけである**——
+   * `GET /managers` は封筒（`total` / `nextCursor`）を持たないので、これが
+   * 唯一の合図である（CLI の `noteIfAtLimit` と同じ流儀）。
+   */
+  it('「もっと見る」で継ぎ足される（前の頁が消えない・錨を渡している）', async () => {
+    const stub = renderWithRoutes((url) =>
+      url.includes('afterId=')
+        ? { managers: page(1, MANAGERS_PAGE) }
+        : { managers: page(MANAGERS_PAGE) },
+    );
+
+    await waitFor(() => {
+      expect(row().getByText('req-mgr-0')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /もっと見る/ }));
+
+    await waitFor(() => {
+      expect(row().getByText(`req-mgr-${MANAGERS_PAGE}`)).toBeTruthy();
+    });
+    // 前の頁は消えていない。
+    expect(row().getByText('req-mgr-0')).toBeTruthy();
+    // 錨は**組で**渡る（片方だけはデーモンが 400 にする）。
+    const load = stub.calls.find((url) => url.includes('afterId=')) as string;
+    expect(load).toContain(`afterId=mgr-${MANAGERS_PAGE - 1}`);
+    expect(load).toContain('afterStartedAt=');
+  });
+
+  /**
+   * **`MANAGERS_PAGE` に届かない頁が返ったら、そこで終い。** ボタンを出し
+   * 続けると、押しても何も増えない形になる。
+   */
+  it('限度に届かない頁が返ったら「もっと見る」を出さず、終端だと言う', async () => {
+    renderWithRoutes(() => ({ managers: page(2) }));
+
+    await waitFor(() => {
+      expect(row().getByText('req-mgr-0')).toBeTruthy();
+    });
+    expect(screen.queryByRole('button', { name: /もっと見る/ })).toBeNull();
+    expect(screen.getByText(/これより古い委譲は無い（全 2 件）/)).toBeTruthy();
+  });
+
+  /**
+   * **押せなくなった理由を出す（黙って終端に見せない）。**
+   *
+   * いちばん起きる形は錨の 400 で、頁を読む間にその委譲の `status` が動いて
+   * 絞りの外へ出た場合である（デーモンは黙って先頭から返さず 400 にする）。
+   * **ここが落ちたら、進めなくなった状態が「全部読み終えた」と同じ顔で
+   * 出ている。**
+   */
+  it('「もっと見る」が失敗したら、終端と混ぜずに理由と押し直しを出す', async () => {
+    const stub = stubFetch((url) => {
+      if (!url.includes('/managers')) return undefined;
+      if (url.includes('afterId=')) {
+        return {
+          ok: false,
+          status: 400,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: () => Promise.resolve({ error: 'afterId/afterStartedAt が指す行が見当たらない' }),
+          text: () => Promise.resolve('{"error":"afterId/afterStartedAt が指す行が見当たらない"}'),
+        } as unknown as Response;
+      }
+      return json({ managers: page(MANAGERS_PAGE) });
+    });
+    const router = createMemoryRouter([{ path: '/', Component: Managers }], {
+      initialEntries: ['/'],
+    });
+    render(
+      <Providers>
+        <RouterProvider router={router} />
+      </Providers>,
+    );
+
+    await waitFor(() => {
+      expect(row().getByText('req-mgr-0')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /もっと見る/ }));
+
+    // **終端の文言は出さない。**
+    expect(await screen.findByText(/自動では進めない/)).toBeTruthy();
+    expect(screen.queryByText(/これより古い委譲は無い/)).toBeNull();
+    // 全部読み終えたのではないことを言い、押し直しの口も残す。
+    expect(screen.getByText(/全部読み終えたのではない/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'もう一度試す' })).toBeTruthy();
+    // 読み込めた分は消えない（1頁目はそのまま在る）。
+    expect(row().getByText('req-mgr-0')).toBeTruthy();
+    expect(stub.calls.some((url) => url.includes('afterId='))).toBe(true);
+  });
+
+  /**
+   * **札と注記は、窓と絞りを通しても1つも落ちない**（依頼の受け入れ条件）。
+   *
+   * 窓は行を選ぶだけで、選んだ行の欄を削らない——**デーモン側の歯
+   * （`app.test.ts`「窓を掛けても、返る1行の欄は素の呼びと同じ」）と対に
+   * なっている。**あちらは応答の形、こちらは描かれるかを測る。
+   */
+  it('絞りと窓を通しても、札・注記・接続表示が全部出る', async () => {
+    renderWithRoutes(() => ({
+      managers: [
+        {
+          ...BASE,
+          managerId: 'mgr-loud',
+          status: 'running' as const,
+          live: false,
+          runnerLostSince: '2026-08-16T03:05:00.000Z',
+          sessionMissingSince: '2026-08-16T03:10:00.000Z',
+          sessionMissingKind: 'unlisted' as const,
+          denials: [{ tool: 'Bash', count: 2, actor: 'manager' as const }],
+          lastFailure: {
+            code: 'billing_error',
+            via: 'assistant_error',
+            at: '2026-08-20T10:00:00.000Z',
+          },
+          awaitingBackground: {
+            tasks: 3,
+            withheldReports: 2,
+            breakdown: 'local_agent×3',
+            since: '2026-08-16T03:10:00.000Z',
+          },
+        },
+      ],
+    }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('list')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole('button', { name: '実行中' }));
+
+    // 札（`ManagerStatusBadge`）
+    expect(await waitFor(() => row().getByText('実行中'))).toBeTruthy();
+    // 接続表示（`live: false` の側も描く）
+    expect(row().getByText('セッション切断')).toBeTruthy();
+    // `ManagerDenialNote`
+    expect(row().getByText(/Bash 2件 \[マネージャー\]/)).toBeTruthy();
+    // `ManagerFailureNote`
+    expect(row().getByText(/billing_error/)).toBeTruthy();
+    // `ManagerAwaitingBackgroundNote`
+    expect(row().getByText(/手が空いたのではない/)).toBeTruthy();
+    // `ManagerRunnerLostNote`
+    expect(row().getByText(/宛先の器は.*から名乗っていない/)).toBeTruthy();
+    // `ManagerSessionMissingNote`（由来まで）
+    expect(row().getByText(/この委譲のセッションを持っていなかった/)).toBeTruthy();
+    expect(row().getByText(/名簿に載っていなかった/)).toBeTruthy();
+  });
+
+  /**
+   * **チップの一覧は札の正本（`STATUS`）から起こす。**
+   *
+   * 固定リストを別に持つと、札を足したのにチップに出ない状態ができる
+   * （`journal.tsx` の `TYPES` が `TONE` から起こしているのと同じ理由）。
+   * **6値ぜんぶがチップとして出ることを測る**——`Record` で縛ってあるので
+   * 値が増えたらここが型で落ちる。
+   */
+  it('6値すべてがチップとして出る（札の正本から起こしている）', async () => {
+    const LABELS: Record<ManagerSummary['status'], string> = {
+      running: '実行中',
+      waiting_human: '人間待ち',
+      done: '待機中',
+      failed: '失敗',
+      lost: 'セッションへ戻れず',
+      stopped: '停止済み',
+    };
+    renderWithRoutes(() => ({ managers: page(1) }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('list')).toBeTruthy();
+    });
+    const labels = Object.values(LABELS);
+    // **空でないことを先に確かめる**（空なら下のループは何も測らない）。
+    expect(labels.length).toBe(6);
+    for (const label of labels) {
+      expect(screen.getByRole('button', { name: label })).toBeTruthy();
+    }
   });
 });

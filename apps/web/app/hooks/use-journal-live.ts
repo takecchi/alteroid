@@ -141,7 +141,7 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
   switch (entry.type) {
     case 'escalation':
       void mutate((key) => isKeyOfType(key, 'approvals'));
-      void mutate(KEY.managers);
+      void mutate((key) => isKeyOfType(key, 'managers'));
       // マネージャー詳細・生ログも束で落とす。理由は下の `invalidateManagerDetail` に。
       invalidateManagerDetail(mutate);
       break;
@@ -159,13 +159,13 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
       // 動いていないのに `/managers` と開いている詳細・生ログを取り直すと、
       // クローンが自分で作業しているあいだ画面が再取得を続けることになる。
       if (!isCloneActor(entry.actor)) {
-        void mutate(KEY.managers);
+        void mutate((key) => isKeyOfType(key, 'managers'));
         invalidateManagerDetail(mutate);
       }
       break;
     case 'exchange':
       if (entry.with === 'manager') {
-        void mutate(KEY.managers);
+        void mutate((key) => isKeyOfType(key, 'managers'));
         invalidateManagerDetail(mutate);
       }
       if (entry.with === 'human') {

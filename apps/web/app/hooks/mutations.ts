@@ -261,7 +261,7 @@ export function useSendManagerMessage() {
       const result = await api.api
         .POST('/managers/{id}/messages', { params: { path: { id } }, body })
         .then(unwrap);
-      await Promise.all([mutate(KEY.managers), mutate(KEY.manager(id))]);
+      await Promise.all([mutate((key) => isKeyOfType(key, 'managers')), mutate(KEY.manager(id))]);
       return result;
     },
     [api, mutate],
@@ -285,7 +285,7 @@ export function useAbortManager() {
           body: reason === undefined || reason === '' ? {} : { reason },
         })
         .then(unwrap);
-      await Promise.all([mutate(KEY.managers), mutate(KEY.manager(id))]);
+      await Promise.all([mutate((key) => isKeyOfType(key, 'managers')), mutate(KEY.manager(id))]);
       return result;
     },
     [api, mutate],

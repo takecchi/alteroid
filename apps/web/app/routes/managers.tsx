@@ -1,8 +1,10 @@
+import { useState } from 'react';
 import { Link } from 'react-router';
 
 import { Page } from '~/components/page';
 import { Badge, Card, Empty, ErrorNote, Spinner } from '~/components/ui';
-import { useManagers } from '~/hooks/queries';
+import { useManagersWindow } from '~/hooks/use-managers-window';
+import { cn } from '~/lib/cn';
 import { formatRelative } from '~/lib/format';
 import type { ManagerDenial, ManagerStatus, ManagerSummary } from '~/lib/types';
 
@@ -441,21 +443,92 @@ export function describeSessionMissingKindNote(kind: ManagerSummary['sessionMiss
   }
 }
 
+/**
+ * 絞り込みチップに出す状態の一覧。**`STATUS` から `Object.keys` で起こす**
+ * ——`journal.tsx` の `TYPES` が `TONE` から起こしているのと同じ形で、
+ * **正本を1つにして**「札を足したのにチップに出ない状態」を構造的に無くす。
+ *
+ * **表示順は `STATUS` の宣言順が正本になる**（`Object.keys` は文字列キーの
+ * 宣言順を保つ）。
+ *
+ * **絞り込みはサーバに投げる**（`GET /managers?status=`）。画面側で
+ * `filter` して捨てると「窓に読み込んだぶんの中でしか絞れない」層ができ、
+ * **CLI やクローンではできることが Web でだけできない**形になる
+ * （`journal.tsx` の `TYPES` の doc に同じ逐語が在る）。
+ */
+const STATUSES = Object.keys(STATUS) as [ManagerStatus, ...ManagerStatus[]];
+
 export default function Managers() {
-  const { data, error, isLoading } = useManagers();
-  const managers = data?.managers ?? [];
+  const [selected, setSelected] = useState<readonly ManagerStatus[]>([]);
+
+  function toggle(status: ManagerStatus) {
+    setSelected((previous) =>
+      previous.includes(status) ? previous.filter((s) => s !== status) : [...previous, status],
+    );
+  }
 
   return (
     <Page
       title="マネージャー"
       description="クローンが起こした仕事。人間が Claude Code に頼んだのと同じ位置にいる"
     >
+      <div className="mb-4 flex flex-wrap items-center gap-1.5">
+        {STATUSES.map((status) => (
+          <button
+            key={status}
+            type="button"
+            onClick={() => toggle(status)}
+            aria-pressed={selected.includes(status)}
+            className={cn(
+              'rounded border px-2 py-1 text-[11px] transition-colors',
+              selected.includes(status)
+                ? 'border-accent bg-accent/15 text-accent'
+                : 'border-border text-muted hover:text-fg',
+            )}
+          >
+            {STATUS[status].label}
+          </button>
+        ))}
+        {selected.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setSelected([])}
+            className="ml-1 text-[11px] text-muted underline hover:text-fg"
+          >
+            解除
+          </button>
+        )}
+      </div>
+
+      {/*
+        **`key={selected.join(',')}` で丸ごと作り直す。** 絞りが変われば
+        `useManagersWindow` の内部状態（読み足した分・終端の判定）を初期値へ
+        戻したいが、「prop が変わったら effect の中で reset する」形は
+        `apps/web` の eslint（`react-hooks/set-state-in-effect`）に落ちる
+        （`use-managers-window.ts` 冒頭の doc）。`journal.tsx` の
+        `JournalBody` と同じ形である。
+      */}
+      <ManagersBody key={selected.join(',')} selected={selected} />
+    </Page>
+  );
+}
+
+function ManagersBody({ selected }: { selected: readonly ManagerStatus[] }) {
+  const { managers, isLoadingInitial, error, olderStatus, isLoadingOlder, olderError, loadOlder } =
+    useManagersWindow(selected);
+
+  return (
+    <>
       <ErrorNote error={error} className="mb-4" />
-      {isLoading ? (
+      {isLoadingInitial ? (
         <Spinner />
       ) : managers.length === 0 ? (
         <Card>
-          <Empty>まだ1体も起きていない。会話で依頼するか、発意 tick を待つ。</Empty>
+          <Empty>
+            {selected.length === 0
+              ? 'まだ1体も起きていない。会話で依頼するか、発意 tick を待つ。'
+              : 'この状態のマネージャーは無い（絞りを解除すれば他の状態も出る）。'}
+          </Empty>
         </Card>
       ) : (
         <Card>
@@ -555,6 +628,56 @@ export default function Managers() {
           </ul>
         </Card>
       )}
-    </Page>
+
+      {/*
+        **黙って終端に見せない。** 3つの状態を別々の顔で出す——まだ続く
+        （押せる）／これで終い／自動では進めない。畳むと、進めなくなった
+        状態が「全部読み終えた」と同じ顔で出る
+        （`use-managers-window.ts` の `ManagersOlderStatus` の doc）。
+      */}
+      {!isLoadingInitial && managers.length > 0 && (
+        <div className="mt-3">
+          {olderStatus === 'progress' && (
+            <button
+              type="button"
+              onClick={loadOlder}
+              disabled={isLoadingOlder}
+              className="w-full rounded-md border border-border py-2 text-sm text-muted hover:text-fg disabled:opacity-60"
+            >
+              {isLoadingOlder ? '読み込み中…' : `もっと見る（いま ${managers.length} 件）`}
+            </button>
+          )}
+          {olderStatus === 'end' && (
+            <p className="py-2 text-center text-xs text-muted">
+              これより古い委譲は無い（全 {managers.length} 件）。
+            </p>
+          )}
+          {/*
+            **押せなくなった理由を出す。** いちばん起きる形は錨の 400 で、
+            頁を読む間にその委譲の `status` が動いて絞りの外へ出た場合である
+            （デーモンは黙って先頭から返さず 400 にする）。**押し直しの口も
+            残す**——一時的な失敗なら次で通るし、絞りの外へ出た場合は
+            `key` の作り直し（絞りを変える）で先頭から読み直せる。
+          */}
+          {olderStatus === 'blocked' && (
+            <div>
+              <ErrorNote error={olderError} className="mb-2" />
+              <p className="mb-2 text-xs text-muted">
+                これより古い委譲へ自動では進めない（いま {managers.length}{' '}
+                件。全部読み終えたのではない）。読んでいる間にその委譲の状態が動いて、絞りの外へ出た場合に起きる。もう一度押すか、絞りを変えて先頭から読み直すこと。
+              </p>
+              <button
+                type="button"
+                onClick={loadOlder}
+                disabled={isLoadingOlder}
+                className="w-full rounded-md border border-border py-2 text-sm text-muted hover:text-fg disabled:opacity-60"
+              >
+                {isLoadingOlder ? '読み込み中…' : 'もう一度試す'}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </>
   );
 }

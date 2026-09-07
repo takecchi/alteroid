@@ -658,7 +658,12 @@ export async function runSlashCommand(
     }
 
     case '/managers': {
-      const response = await client.managers.$get();
+      const response = await client.managers.$get({
+        // **窓は渡さない**（issue #670。渡さなければ応答は1バイトも変わらない
+        // ＝この呼びの挙動は何も変えていない。CLI へ窓を通すかは別 issue で、
+        // ここは 型の追随だけである。`ManagerListItem` の doc）。
+        query: {},
+      });
       if (!response.ok) {
         stdout.write('マネージャーの一覧を読めませんでした\n');
         return 'ok';
@@ -679,7 +684,12 @@ export async function runSlashCommand(
      * ある（並列に呼ばれた道具はそれぞれ別の確認として降りてくる）。
      */
     case '/waiting': {
-      const response = await client.managers.$get();
+      const response = await client.managers.$get({
+        // **窓は渡さない**（issue #670。渡さなければ応答は1バイトも変わらない
+        // ＝この呼びの挙動は何も変えていない。CLI へ窓を通すかは別 issue で、
+        // ここは 型の追随だけである。`ManagerListItem` の doc）。
+        query: {},
+      });
       if (!response.ok) {
         stdout.write('マネージャーの一覧を読めませんでした\n');
         return 'ok';
@@ -1271,8 +1281,19 @@ const LIST_DENIED_TOOLS = 3;
  * `GET /managers` が返す1本ぶん。**クライアントが実際に受け取る形**から導く
  * （core の `ManagerSummary` ではない — 拒否件数はデーモンの外向きの面でだけ
  * 合流するので、そちらには無い）。
+ *
+ * **status（`200`）を明示するのは issue #670 で 400 が生えたからである。**
+ * あの口は `status` / `limit` / 錨（`afterId` ＋ `afterStartedAt`）を受け取る
+ * ようになり、不正なクエリ・見当たらない錨を 400 で断る ⟹ `$get` の返りが
+ * 応答の union になり、`InferEndpointType`（`hono@4.13.1` の
+ * `dist/types/client/types.d.ts`）の `U extends ClientResponse<infer O, ...>`
+ * が union の上では解けなくなった。**200 を名指しすれば元の1本に戻る。**
+ *
+ * **これは型の追随であって、CLI に窓を足したのではない**（下の
+ * `$get({ query: {} })` も同じ）。CLI とクローンの `manager_list` へ窓を通すかは
+ * 別 issue である（#432 の受け入れ条件5の踏襲）。
  */
-type ManagerListItem = InferResponseType<DaemonClient['managers']['$get']>['managers'][number];
+type ManagerListItem = InferResponseType<DaemonClient['managers']['$get'], 200>['managers'][number];
 type ManagerDenial = NonNullable<ManagerListItem['denials']>[number];
 
 /**
@@ -1724,7 +1745,12 @@ async function resolveWaitingTarget(
     return { ok: true, managerId: entry.managerId, requestId: entry.requestId };
   }
 
-  const response = await client.managers.$get();
+  const response = await client.managers.$get({
+    // **窓は渡さない**（issue #670。渡さなければ応答は1バイトも変わらない
+    // ＝この呼びの挙動は何も変えていない。CLI へ窓を通すかは別 issue で、
+    // ここは 型の追随だけである。`ManagerListItem` の doc）。
+    query: {},
+  });
   if (!response.ok) {
     return { ok: false, message: 'マネージャーの一覧を読めませんでした' };
   }
@@ -1772,7 +1798,12 @@ type DecisionOnlyTarget = { ok: true; managerId: string } | { ok: false; message
 async function resolveDecisionOnlyManager(
   client: ReturnType<typeof createClient>,
 ): Promise<DecisionOnlyTarget> {
-  const response = await client.managers.$get();
+  const response = await client.managers.$get({
+    // **窓は渡さない**（issue #670。渡さなければ応答は1バイトも変わらない
+    // ＝この呼びの挙動は何も変えていない。CLI へ窓を通すかは別 issue で、
+    // ここは 型の追随だけである。`ManagerListItem` の doc）。
+    query: {},
+  });
   if (!response.ok) {
     return { ok: false, message: 'マネージャーの一覧を読めませんでした' };
   }

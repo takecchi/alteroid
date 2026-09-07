@@ -5080,6 +5080,7 @@
         "operationId": "getManagers",
         "tags": ["managers"],
         "summary": "委譲先マネージャーの一覧",
+        "description": "委譲先マネージャーの一覧と状態。**行は1つも消えない**——台帳（`jobs`）に削除の口は無く、終端した委譲もそのまま残る（issue #670。`ManagerPool#retire` の doc）。⟹ 件数はその環境で今までに起こした委譲の総数と等しくなるので、`status` で絞り、`limit` と錨（`afterId` ＋ `afterStartedAt`）で窓を掛けられる。`status` はカンマ区切りで複数指定できる（`running` / `waiting_human` / `done` / `failed` / `lost` / `stopped`。**知らない値は 400**——黙って無視すると、綴りを間違えた呼びが「0件」として返り、絞り込みが効いていないことに気づけない）。`afterId` と `afterStartedAt` は必ず組で渡す（片方だけは 400）。**指す行が見当たらないときも 400**——黙って先頭から返さない（`apps/daemon/src/cursor.ts` の「判定できないを黙って先頭へ倒さない」と同じ理由。この口は照合できる——台帳の行が消えないので、「無い」は「消えた」ではなく「そんな錨は刷っていない」である）。**並びは `startedAt` の降順で固定**（`ManagerPool.list()` の契約）で、ここでは選べない——`order` は足さない。⟹ 錨の「次」は*より古い*側である。**封筒（`total` / `nextCursor`）は持たない**——続きが在るかは `limit` 件ちょうど返ったかで判る（応答に新しい欄を1つも足さない）。当てる順序は **`status` 絞り → 錨 → `limit`** である（先に窓で切ると、次の頁の起点がずれる。issue #418 が `/commitments` で塞いだ穴と同じ形）。**クエリを1つも渡さない呼びは、この変更の前と応答が1バイトも変わらない**（opt-in）。**CLI とクローンの `manager_list` はこの窓を使っていない**（別 issue）。",
         "responses": {
           "200": {
             "description": "マネージャーの一覧と状態。",
@@ -5359,8 +5360,75 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "クエリが不正（`limit` は1以上1000以下の整数）、`status` に知らない値が入っている、`afterId` / `afterStartedAt` の片方だけが渡された、`afterStartedAt` の形式が不正、または錨が指す行が見当たらない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {},
+                        "error": {
+                          "type": "array",
+                          "items": {}
+                        },
+                        "success": {
+                          "type": "boolean",
+                          "const": false
+                        }
+                      },
+                      "required": ["data", "error", "success"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["error"]
+                    }
+                  ]
+                }
+              }
+            }
           }
-        }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            }
+          },
+          {
+            "in": "query",
+            "name": "afterId",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "afterStartedAt",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/managers/{id}": {

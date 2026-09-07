@@ -2829,6 +2829,468 @@ describe('GET /journal の order/afterId/afterAt（issue #432 の2本目）', ()
 });
 
 /**
+ * `GET /managers` の `status` / `limit` / 錨（issue #670）。
+ *
+ * **台帳（`jobs`）に行を消す口が無いので、一覧の件数はその環境で今までに
+ * 起こした委譲の総数と等しくなる。** 直し方は「古い行を消す」ではなく
+ * 絞り込みと窓である（`ManagerPool#retire` の doc が上限で刈る形を逐語で
+ * 禁じている——north_star 禁止2）。
+ *
+ * ここで固定するのは4つ。
+ *
+ * 1. **クエリを渡さない呼びの応答が1バイトも変わらない**（opt-in）
+ * 2. 絞り込み・窓・錨が効き、**判定できない入力は黙って倒さず 400**
+ * 3. **当てる順序が `status` 絞り → 錨 → `limit`** である（順序を入れ替えると
+ *    答えが変わる入力で測る）
+ * 4. 錨で辿った結果が、窓を掛けない全件と重複なく一致する
+ */
+describe('GET /managers の status/limit/錨（issue #670）', () => {
+  /**
+   * **`startedAt` は降順に並ぶように置く（`ManagerPool.list()` の契約）。**
+   * 偽クローンの `list()` は `managerList` をそのまま返すので、並べ替えは
+   * ここで自分で用意する——実装が opt-in のときにだけ並べ直すことを測るには、
+   * 素の並びが既に降順であるほうが「並べ替えたから通った」と紛れない。
+   */
+  function seed(entries: { managerId: string; status: ManagerSummary['status'] }[]): void {
+    entries.forEach((entry, index) => {
+      fake.managerList.push({
+        managerId: entry.managerId,
+        status: entry.status,
+        live: true,
+        cwd: '/work/project',
+        request: `req-${entry.managerId}`,
+        // index が大きいほど古い（降順に並ぶ）。
+        startedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, 0) - index * 60_000).toISOString(),
+        updatedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, 0) - index * 60_000).toISOString(),
+        waiting: [],
+      });
+    });
+  }
+
+  async function ids(url: string): Promise<string[]> {
+    const response = await app.request(url);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { managers: { managerId: string }[] };
+    return body.managers.map((m) => m.managerId);
+  }
+
+  /**
+   * **いちばん重い保証。** ここが落ちたら、クエリを渡していない既存の呼び手
+   * （dashboard・CLI・`GET /managers` を直に叩くもの）の応答が変わっている。
+   *
+   * **`toMatchObject` を使わない**——あれは「宣言した分が入っているか」しか
+   * 見ないので、鍵が増えても緑のまま通る（#435）。`Object.keys` を
+   * `toEqual` で留める。
+   */
+  it('クエリを渡さない呼びは、応答の鍵も件数も並びも変わらない', async () => {
+    seed([
+      { managerId: 'mgr-a', status: 'running' },
+      { managerId: 'mgr-b', status: 'done' },
+      { managerId: 'mgr-c', status: 'running' },
+    ]);
+
+    const response = await app.request('/managers');
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(Object.keys(body)).toEqual(['managers']);
+    expect(await ids('/managers')).toEqual(['mgr-a', 'mgr-b', 'mgr-c']);
+  });
+
+  /**
+   * **既定の呼びは並べ直しを1回も通らない。**
+   *
+   * 直上の歯では測れない——`startedAt` が降順に並んだ足場では、並べ直しても
+   * 同じ並びになる（**変異試験で実測した。`optedIn` を `true` に固定する変異が
+   * 生き残る**）。⟹ **`ManagerPool.list()` の並びと、実装の並べ直しの結果が
+   * 食い違う足場を作る必要がある。**
+   *
+   * `startedAt` が同着の2本を「b → a」の順で積む。`list()` の契約は `startedAt`
+   * だけで決まるので同着の相対順は積んだ順のまま（＝ b, a）だが、
+   * `compareManagerPagingKey` は補助キー（`managerId` の降順）まで見るので
+   * 並べ直すと「b, a」…ではなく `managerId` 降順の「mgr-tie-b, mgr-tie-a」に
+   * なる。**だから積む順を `managerId` 昇順（a → b）にしておく**——そうすれば
+   * `list()` の順（a, b）と並べ直しの順（b, a）が食い違い、既定の呼びが
+   * どちらを返したかが観測できる。
+   */
+  it('既定の呼びは並べ直しを通らない（list() の並びをそのまま返す）', async () => {
+    const at = '2026-01-01T00:00:00.000Z';
+    for (const managerId of ['mgr-tie-a', 'mgr-tie-b']) {
+      fake.managerList.push({
+        managerId,
+        status: 'running',
+        live: true,
+        cwd: '/w',
+        request: 'r',
+        startedAt: at,
+        updatedAt: at,
+        waiting: [],
+      });
+    }
+
+    // `list()` が返した順（積んだ順）そのまま。**並べ直すと逆になる。**
+    expect(await ids('/managers')).toEqual(['mgr-tie-a', 'mgr-tie-b']);
+    // 対照: opt-in すると並べ直しを通り、`managerId` の降順になる。
+    expect(await ids('/managers?limit=2')).toEqual(['mgr-tie-b', 'mgr-tie-a']);
+  });
+
+  /**
+   * **窓を渡しても応答の封筒は増えない**（`managersQuery` の doc「応答に新しい
+   * 欄を1つも足さなくてよい」）。続きが在るかは `limit` 件ちょうど返ったかで
+   * 判る形なので、`total` / `nextCursor` は持たない。
+   */
+  it('status / limit / 錨 を渡しても応答の鍵は増えない', async () => {
+    seed([
+      { managerId: 'mgr-a', status: 'running' },
+      { managerId: 'mgr-b', status: 'running' },
+    ]);
+
+    const first = (await (await app.request('/managers?status=running&limit=1')).json()) as {
+      managers: { managerId: string; startedAt: string }[];
+    };
+    expect(Object.keys(first)).toEqual(['managers']);
+
+    const anchor = first.managers[0] as { managerId: string; startedAt: string };
+    const qs = new URLSearchParams({
+      status: 'running',
+      limit: '1',
+      afterId: anchor.managerId,
+      afterStartedAt: anchor.startedAt,
+    });
+    const next = (await (await app.request(`/managers?${qs.toString()}`)).json()) as Record<
+      string,
+      unknown
+    >;
+    expect(Object.keys(next)).toEqual(['managers']);
+  });
+
+  it('status の単一指定で、その状態だけが返る', async () => {
+    seed([
+      { managerId: 'mgr-a', status: 'running' },
+      { managerId: 'mgr-b', status: 'done' },
+      { managerId: 'mgr-c', status: 'lost' },
+    ]);
+
+    expect(await ids('/managers?status=running')).toEqual(['mgr-a']);
+    expect(await ids('/managers?status=done')).toEqual(['mgr-b']);
+  });
+
+  it('status の複数指定（カンマ区切り）で、指した状態が全部返る', async () => {
+    seed([
+      { managerId: 'mgr-a', status: 'running' },
+      { managerId: 'mgr-b', status: 'done' },
+      { managerId: 'mgr-c', status: 'lost' },
+      { managerId: 'mgr-d', status: 'stopped' },
+    ]);
+
+    expect(await ids('/managers?status=running,lost')).toEqual(['mgr-a', 'mgr-c']);
+  });
+
+  /**
+   * **黙って無視しない。** 綴りを間違えた呼びを 200 で通すと、「その状態の
+   * ものは0件」として返り、絞り込みが効いていないことに気づけない
+   * （AGENTS.md「静かに失敗する道具」の形をこちらから作ることになる）。
+   */
+  it('status に知らない値を渡すと400（黙って無視して全件へ倒さない）', async () => {
+    seed([{ managerId: 'mgr-a', status: 'running' }]);
+
+    const response = await app.request('/managers?status=runnnig');
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error?: string };
+    // 使える値を出力に書く（読んだ人が自分で直せる形にする）。
+    expect(body.error).toContain('runnnig');
+    expect(body.error).toContain('waiting_human');
+  });
+
+  it('status に既知と未知が混ざっていても400（既知の分だけ通さない）', async () => {
+    seed([{ managerId: 'mgr-a', status: 'running' }]);
+
+    expect((await app.request('/managers?status=running,nope')).status).toBe(400);
+  });
+
+  /** `status=`（空）は絞らない（`/journal` の `type=` と同じ形）。 */
+  it('status=（空文字列）は絞らない', async () => {
+    seed([
+      { managerId: 'mgr-a', status: 'running' },
+      { managerId: 'mgr-b', status: 'done' },
+    ]);
+
+    expect(await ids('/managers?status=')).toEqual(['mgr-a', 'mgr-b']);
+  });
+
+  it('limit で件数が切れる', async () => {
+    seed([
+      { managerId: 'mgr-a', status: 'running' },
+      { managerId: 'mgr-b', status: 'running' },
+      { managerId: 'mgr-c', status: 'running' },
+    ]);
+
+    expect(await ids('/managers?limit=2')).toEqual(['mgr-a', 'mgr-b']);
+  });
+
+  it('limit が上限（1000）を超えると400', async () => {
+    seed([{ managerId: 'mgr-a', status: 'running' }]);
+
+    expect((await app.request('/managers?limit=1001')).status).toBe(400);
+    // 上限そのものは通る（境界を off-by-one で締めていない）。
+    expect((await app.request('/managers?limit=1000')).status).toBe(200);
+  });
+
+  it('limit が 0 / 負 / 整数でないと400', async () => {
+    seed([{ managerId: 'mgr-a', status: 'running' }]);
+
+    expect((await app.request('/managers?limit=0')).status).toBe(400);
+    expect((await app.request('/managers?limit=-1')).status).toBe(400);
+    expect((await app.request('/managers?limit=1.5')).status).toBe(400);
+    expect((await app.request('/managers?limit=abc')).status).toBe(400);
+  });
+
+  it('錨（afterId + afterStartedAt）で続きが取れる', async () => {
+    seed([
+      { managerId: 'mgr-a', status: 'running' },
+      { managerId: 'mgr-b', status: 'running' },
+      { managerId: 'mgr-c', status: 'running' },
+    ]);
+
+    const first = (await (await app.request('/managers?limit=1')).json()) as {
+      managers: { managerId: string; startedAt: string }[];
+    };
+    const anchor = first.managers[0] as { managerId: string; startedAt: string };
+    const qs = new URLSearchParams({
+      limit: '1',
+      afterId: anchor.managerId,
+      afterStartedAt: anchor.startedAt,
+    });
+    expect(await ids(`/managers?${qs.toString()}`)).toEqual(['mgr-b']);
+  });
+
+  it('錨を辿った結果は、窓を掛けない全件と重複なく一致する', async () => {
+    seed(
+      Array.from({ length: 7 }, (_, index) => ({
+        managerId: `mgr-${index}`,
+        status: 'running' as const,
+      })),
+    );
+
+    const full = await ids('/managers');
+    expect(full).toHaveLength(7);
+
+    const collected: string[] = [];
+    let anchor: { managerId: string; startedAt: string } | undefined;
+    for (;;) {
+      const qs = new URLSearchParams({ limit: '2' });
+      if (anchor !== undefined) {
+        qs.set('afterId', anchor.managerId);
+        qs.set('afterStartedAt', anchor.startedAt);
+      }
+      const body = (await (await app.request(`/managers?${qs.toString()}`)).json()) as {
+        managers: { managerId: string; startedAt: string }[];
+      };
+      if (body.managers.length === 0) break;
+      collected.push(...body.managers.map((m) => m.managerId));
+      if (body.managers.length < 2) break;
+      const last = body.managers[body.managers.length - 1] as {
+        managerId: string;
+        startedAt: string;
+      };
+      anchor = { managerId: last.managerId, startedAt: last.startedAt };
+    }
+    expect(collected).toEqual(full);
+  });
+
+  /**
+   * **同じミリ秒に始まった2本をまたいでも飛ばさず重複しない。**
+   * `ManagerPool.list()` の並びは `startedAt` だけで決まるので、補助キー
+   * （`managerId`）が無いとここが割れる（`compareManagerPagingKey` の doc）。
+   */
+  it('startedAt が同着の2本をまたいでも、錨が飛ばさず重複しない', async () => {
+    const at = '2026-01-01T00:00:00.000Z';
+    fake.managerList.push(
+      {
+        managerId: 'mgr-same-b',
+        status: 'running',
+        live: true,
+        cwd: '/w',
+        request: 'r',
+        startedAt: at,
+        updatedAt: at,
+        waiting: [],
+      },
+      {
+        managerId: 'mgr-same-a',
+        status: 'running',
+        live: true,
+        cwd: '/w',
+        request: 'r',
+        startedAt: at,
+        updatedAt: at,
+        waiting: [],
+      },
+    );
+
+    const first = await ids('/managers?limit=1');
+    expect(first).toHaveLength(1);
+    const qs = new URLSearchParams({
+      limit: '1',
+      afterId: first[0] as string,
+      afterStartedAt: at,
+    });
+    const second = await ids(`/managers?${qs.toString()}`);
+    expect(second).toHaveLength(1);
+    // 飛ばさず（2本とも出た）重複しない（同じ id が2回出ない）。
+    expect(new Set([...first, ...second]).size).toBe(2);
+  });
+
+  it('錨は片方だけ渡すと400（両方向）', async () => {
+    seed([{ managerId: 'mgr-a', status: 'running' }]);
+
+    expect((await app.request('/managers?afterId=mgr-a')).status).toBe(400);
+    expect(
+      (
+        await app.request(
+          `/managers?afterStartedAt=${encodeURIComponent('2026-01-01T00:00:00.000Z')}`,
+        )
+      ).status,
+    ).toBe(400);
+  });
+
+  it('afterStartedAt の形式が不正なら400', async () => {
+    seed([{ managerId: 'mgr-a', status: 'running' }]);
+
+    expect(
+      (await app.request('/managers?afterId=mgr-a&afterStartedAt=not-a-datetime')).status,
+    ).toBe(400);
+  });
+
+  /**
+   * **黙って先頭から返さない**（`apps/daemon/src/cursor.ts` の
+   * 「判定できないという3つ目の状態を持つ」）。ここを 200 で通すと、
+   * 呼ぶ側は同じ頁を無限に読み続ける（終端に着いたことが分からない）。
+   */
+  it('実在しない錨を渡すと400（黙って先頭から返さない）', async () => {
+    seed([{ managerId: 'mgr-a', status: 'running' }]);
+
+    const qs = new URLSearchParams({
+      afterId: 'mgr-nope',
+      afterStartedAt: '2026-01-01T00:00:00.000Z',
+    });
+    const response = await app.request(`/managers?${qs.toString()}`);
+    expect(response.status).toBe(400);
+  });
+
+  it('managerId は在るが startedAt が食い違う錨も400', async () => {
+    seed([{ managerId: 'mgr-a', status: 'running' }]);
+
+    const qs = new URLSearchParams({
+      afterId: 'mgr-a',
+      afterStartedAt: '1999-01-01T00:00:00.000Z',
+    });
+    expect((await app.request(`/managers?${qs.toString()}`)).status).toBe(400);
+  });
+
+  /**
+   * **当てる順序 1/3: `status` 絞り → `limit`。**
+   *
+   * 逆（`limit` → `status`）だと、先頭の1件が絞りに当たらないだけで 0 件が
+   * 返る——「その状態のものが全部で何件あるか」に一切届かない形になる。
+   */
+  it('順序: status で絞ってから limit を当てる（先に切ると 0 件になる入力で測る）', async () => {
+    seed([
+      { managerId: 'mgr-a', status: 'done' },
+      { managerId: 'mgr-b', status: 'running' },
+      { managerId: 'mgr-c', status: 'running' },
+    ]);
+
+    // 先に limit=1 を当てると `mgr-a`(done) だけが残り、status=running で 0 件になる。
+    expect(await ids('/managers?status=running&limit=1')).toEqual(['mgr-b']);
+  });
+
+  /**
+   * **当てる順序 2/3: 錨 → `limit`。**
+   *
+   * 逆（`limit` → 錨）だと、`limit=1` で先頭1件に切った後にその先頭を錨で
+   * 落とすので 0 件になる（issue #418 が `/commitments` で塞いだ穴と同じ形——
+   * 継続点を切った後に解決すると次の頁の起点がずれる）。
+   */
+  it('順序: 錨を解決してから limit を当てる（先に切ると 0 件になる入力で測る）', async () => {
+    seed([
+      { managerId: 'mgr-a', status: 'running' },
+      { managerId: 'mgr-b', status: 'running' },
+    ]);
+
+    const first = (await (await app.request('/managers?limit=1')).json()) as {
+      managers: { managerId: string; startedAt: string }[];
+    };
+    const anchor = first.managers[0] as { managerId: string; startedAt: string };
+    const qs = new URLSearchParams({
+      limit: '1',
+      afterId: anchor.managerId,
+      afterStartedAt: anchor.startedAt,
+    });
+    expect(await ids(`/managers?${qs.toString()}`)).toEqual(['mgr-b']);
+  });
+
+  /**
+   * **当てる順序 3/3: `status` 絞り → 錨。**
+   *
+   * 錨を先に解決すると、絞りに当たらない行を錨として受け付けてしまう
+   * （`done` の行を錨にして `status=running` の続きが返る）。**それは
+   * 「刷っていない錨」である**——`status=running` の一覧にその行は1度も
+   * 載っていないので、呼ぶ側がその値を応答から得る経路が無い。
+   */
+  it('順序: status で絞ってから錨を解決する（絞りの外の錨は 400 になる）', async () => {
+    seed([
+      { managerId: 'mgr-a', status: 'running' },
+      { managerId: 'mgr-b', status: 'done' },
+      { managerId: 'mgr-c', status: 'running' },
+    ]);
+
+    const all = (await (await app.request('/managers')).json()) as {
+      managers: { managerId: string; status: string; startedAt: string }[];
+    };
+    const done = all.managers.find((m) => m.status === 'done') as {
+      managerId: string;
+      startedAt: string;
+    };
+
+    // 絞りの外の錨: 400（順序が逆なら 200 で `mgr-c` が返る）。
+    const outside = new URLSearchParams({
+      status: 'running',
+      afterId: done.managerId,
+      afterStartedAt: done.startedAt,
+    });
+    expect((await app.request(`/managers?${outside.toString()}`)).status).toBe(400);
+
+    // 対照: 絞りの中の錨なら通り、続きが返る。
+    const inside = new URLSearchParams({
+      status: 'running',
+      afterId: 'mgr-a',
+      afterStartedAt: all.managers.find((m) => m.managerId === 'mgr-a')?.startedAt ?? '',
+    });
+    expect(await ids(`/managers?${inside.toString()}`)).toEqual(['mgr-c']);
+  });
+
+  /**
+   * **札・注記の材料を窓が落とさない。** 窓は行を選ぶだけで、選んだ行の欄を
+   * 削らない（`managerView` を通した後の形が変わっていないこと）。
+   */
+  it('窓を掛けても、返る1行の欄は素の呼びと同じ', async () => {
+    seed([
+      { managerId: 'mgr-a', status: 'running' },
+      { managerId: 'mgr-b', status: 'running' },
+    ]);
+    fake.managerDenials.set('mgr-a', [{ tool: 'Bash', count: 2, actor: 'manager' }]);
+
+    const plain = (await (await app.request('/managers')).json()) as {
+      managers: Record<string, unknown>[];
+    };
+    const windowed = (await (await app.request('/managers?status=running&limit=1')).json()) as {
+      managers: Record<string, unknown>[];
+    };
+    expect(windowed.managers).toHaveLength(1);
+    expect(windowed.managers[0]).toEqual(plain.managers[0]);
+  });
+});
+
+/**
  * `GET /dropped`（#242 の HTTP 面。PRD「入口の等価性」）。
  *
  * **`recentDroppedTraces()` の帳面はプロセス（＝このテストファイル）の生存中
@@ -2984,6 +3446,36 @@ describe('OpenAPI', () => {
 
     const journalStreamContent = spec.paths['/journal/stream']?.get?.responses?.['200']?.content;
     expect(Object.keys(journalStreamContent ?? {})).toContain('text/event-stream');
+  });
+
+  /**
+   * **`/managers` の窓が spec の面まで届いているか**（issue #670）。
+   *
+   * spec は `validator('query', managersQuery)` から機械生成されるので、
+   * `validator` を外す・スキーマから欄を落とすと、**ハンドラは 200 を返し
+   * 続けるのに spec からだけ静かに消える**（`apps/api-client` の生成型も
+   * 一緒に消え、Web が `params.query` を渡せなくなる）。
+   *
+   * **`offset` という名前が入っていないことも併せて測る**
+   * （`apps/daemon/src/cursor.ts` の doc が引く線——HTTP の口に `offset` は
+   * 1つも無い）。
+   */
+  it('/managers に status / limit / afterId / afterStartedAt のクエリが載る（offset は増えない）', async () => {
+    const spec = (await (await app.request('/openapi.json')).json()) as {
+      paths: Record<
+        string,
+        { get?: { parameters?: { in: string; name: string; schema?: Record<string, unknown> }[] } }
+      >;
+    };
+    const parameters = spec.paths['/managers']?.get?.parameters ?? [];
+    const names = parameters.filter((p) => p.in === 'query').map((p) => p.name);
+    expect(names).toEqual(['status', 'limit', 'afterId', 'afterStartedAt']);
+    expect(names).not.toContain('offset');
+    // 上限も spec に出る（呼ぶ側が 400 を踏む前に読める）。
+    const limit = parameters.find((p) => p.name === 'limit');
+    expect(limit?.schema).toMatchObject({ minimum: 1, maximum: 1000 });
+    // **既定値を持たない**（未指定＝全件。既定で切ると渡していない呼びの応答が変わる）。
+    expect(limit?.schema).not.toHaveProperty('default');
   });
 
   /**
