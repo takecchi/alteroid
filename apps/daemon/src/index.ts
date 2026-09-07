@@ -1180,11 +1180,36 @@ export async function main(): Promise<void> {
         });
         // **待たない。** 引き取りは runner へ問い合わせる（落ちうる・遅い）ので、
         // 回した結果の記録をそれに縛らない。**黙って落とさない**（跡を残す）。
-        void clone.managers.restore().catch((error: unknown) => {
-          process.stderr.write(
-            `alteroidd: 認証トークンが戻った後のマネージャーの引き継ぎに失敗しました: ${String(error)}\n`,
-          );
-        });
+        //
+        // **2本を順に通す。片方だけでは届かない相手が居る:**
+        //
+        // | 口 | 起こす相手 |
+        // | --- | --- |
+        // | `restore()` | 台帳にしか無い委譲（デーモンが入れ替わった等）で、`running` / `waiting_human` の分 |
+        // | `resumeStoppedByUsage()` | **枠で止まった委譲**（像は在り、台帳は `done` / `failed` / `lost`）。`restore()` は先頭の `#records.has` で必ず見送る |
+        //
+        // **順番はこの向きで固定する。** `restore()` が先に台帳の分を `running`
+        // へ戻すので、同じ委譲が両方に当たっても後者のホワイトリスト
+        // （`done` / `failed` / `lost`）から外れて二重には起こさない。逆順・
+        // 並行にすると、同じ委譲へ一言が2つ入る窓ができる（`#resuming` の
+        // 歯止めは同じ session を二本起こすことは防ぐが、`send()` が2回
+        // 通ることそのものは止めない）。
+        void clone.managers
+          .restore()
+          .then(() => clone.managers.resumeStoppedByUsage())
+          .then((nudged) => {
+            // **0本のときは黙る。** 枠で止まった委譲が無い回（既定の構成では
+            // ほとんどがそれ）に毎回1行出ると、意味のある行が埋もれる。
+            if (nudged.length === 0) return;
+            process.stdout.write(
+              `alteroidd: 認証トークンが戻ったので、枠で止まっていた委譲へ続きを促しました: ${nudged.join(', ')}\n`,
+            );
+          })
+          .catch((error: unknown) => {
+            process.stderr.write(
+              `alteroidd: 認証トークンが戻った後のマネージャーの引き継ぎに失敗しました: ${String(error)}\n`,
+            );
+          });
       };
       if (recycled === 'now') wake();
       else pendingTokenWake = wake;

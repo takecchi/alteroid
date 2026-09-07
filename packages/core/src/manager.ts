@@ -1003,6 +1003,34 @@ export interface ManagerPool {
    */
   restore(): Promise<ManagerSummary[]>;
   /**
+   * **枠で止まっていた委譲を、鍵が通る状態へ戻った時点で続きから起こす。**
+   * 戻り値は実際に一言が届いた managerId。
+   *
+   * ## `restore()` では届かない（両方要る）
+   *
+   * あちらは**プロセス内の像に無い**委譲だけを拾う（`#restoreJobs` の先頭が
+   * `if (this.#records.has(job.id)) continue;`）うえに、resume するのは台帳が
+   * `running` / `waiting_human` の分だけである。**枠で止まった委譲はどちらの
+   * 条件からも外れる** ——デーモンは走り続けているので像は在り、枠で終わった
+   * ターンは台帳に `done`（報告として終わった）か `failed` / `lost`
+   * （セッションごと落ちた）で残る。⟹ **`restore()` を何度呼んでも1本も
+   * 起きない。**
+   *
+   * ## 何を起こすのか（トークンを撒くことでは足りない）
+   *
+   * 撒いた鍵で走るのは**次にセッションを起こすとき**からで、`runner` 側の
+   * 畳み直し（`runner.ts` の `#reopenForTokenRotation`）が保つのは会話であって
+   * 仕事ではない。**開き直したセッションは、誰かが話しかけるまで何もしない。**
+   * ここが投げる一言がその「話しかける」である。
+   *
+   * ## 呼ぶ側
+   *
+   * 回し手が「通る鍵に戻った」と判定した回（`rotated` / `recovered`）だけ
+   * （`apps/daemon/src/index.ts` の `reopenedTokenOf`）。**`parked` では呼ばない**
+   * ——撒いた鍵はまだ通らないので、起こしても同じところで止まる。
+   */
+  resumeStoppedByUsage(): Promise<string[]>;
+  /**
    * **その宛先の器が入れ替わったので、走っていた委譲を取り直す**（M5 PR4）。
    *
    * `restore()` とは拾う対象が違う。あちらは**台帳にしか無い**委譲（`#records` に
@@ -2219,6 +2247,26 @@ class Pool implements ManagerPool {
   readonly #onUsageObservation:
     ((observation: TokenRotatorObservation) => Promise<void>) | undefined;
   readonly #rateLimits = new Map<string, RateLimitFacts>();
+  /**
+   * **枠で止まった委譲**の managerId（`case 'usage_notice'` の `reached` で立ち、
+   * {@link Pool.resumeStoppedByUsage} が下ろす）。
+   *
+   * ## なぜ「枠の事実」（直上の `#rateLimits`）とは別に持つのか
+   *
+   * あちらはアカウント単位の事実で、**誰が止まったかを言わない。** 鍵が通る状態へ
+   * 戻ったときに起こし直す相手を決めるには、**どの委譲がそれで止まったか**が要る。
+   *
+   * ## 揮発してよい（デーモンを作り直したら消える）
+   *
+   * 消えて困るのは「起こし直す相手を1本忘れる」ことだが、デーモンが作り直された
+   * 回は起動時の引き取り（`#restoreJobs`）が走り、台帳に `running` /
+   * `waiting_human` で残っている分はそちらが続きへ戻す。**残るのは
+   * 「台帳が `done` / `failed` で、しかもデーモンが入れ替わった」場合だけ**で、
+   * そこはクローンの判断（枠に当たった報告は受信箱に残っている）へ落ちる。
+   * **台帳の欄にしないのは、この印がプロセスの寿命より長く意味を持たないためで
+   * ある**（次に起こすかどうかは、その時点の台帳の状態から決まる）。
+   */
+  readonly #usageStopped = new Set<string>();
   /**
    * `runnerBacklog()` が読む2つの由来のうち、`resources()` 側（#358 案b）。
    * runnerId → 最後に観測できた値（`RunnerBacklogSnapshot` の doc）。
@@ -3496,6 +3544,97 @@ class Pool implements ManagerPool {
       () => undefined,
     );
     return run;
+  }
+
+  async resumeStoppedByUsage(): Promise<string[]> {
+    if (this.#stopped) return [];
+    /*
+     * **挑むのは1回きり。印は挑む前に全部下ろす。**
+     *
+     * 残す形（成功した分だけ下ろす）にすると、戻れない委譲（`lost` で生ログも
+     * 無い等）が**回転のたびに一言を投げられ続ける**——鍵が回る頻度は枠の単位
+     * （5時間）で決まるので暴走はしないが、失敗が並ぶだけの行が増える。
+     *
+     * **落としているのではない。** 起こせなかったことは下で日誌に残り、枠に
+     * 当たった報告そのものはクローンの受信箱に残っている（`case 'usage_notice'`
+     * が `#emit` する）ので、判断はクローンの側に在る。
+     */
+    const ids = [...this.#usageStopped];
+    this.#usageStopped.clear();
+    const nudged: string[] = [];
+    for (const managerId of ids) {
+      // **止められたら残りは起こさない**（`#stopped` はプール全体の停止）。
+      if (this.#stopped) break;
+      /*
+       * **1本が落ちても残りを道連れにしない。** `send()` の先には実 I/O
+       * （runner への HTTP・ストアへの書き込み）が在り、投げうる——ここで
+       * 抜けると、後ろに並んだ委譲は誰にも起こされないまま枠で止まった状態で
+       * 残る（`#restoreJobs` のジョブループが同じ理由で同じ形にしてある）。
+       */
+      try {
+        const record = this.#records.get(managerId) ?? (await this.#load(managerId));
+        // 台帳から消えている（人間が消した等）。起こす相手が居ない。
+        if (record === null) continue;
+        const status = record.job.status;
+        /*
+         * **起こすのは「もう走っていない」委譲だけである。**
+         *
+         * | `status` | 起こすか | なぜ |
+         * | --- | --- | --- |
+         * | `done` | **起こす** | ターンが枠の失敗で終わって待機している。続きが在る |
+         * | `failed` / `lost` | **起こす** | 枠でセッションごと落ちた。`send()` が resume で戻す |
+         * | `running` | 起こさない | 走っている（畳み直しは runner 側が境界で行う） |
+         * | `waiting_human` | 起こさない | 待っているのは枠ではなく人間の回答である |
+         * | `stopped` | 起こさない | 人間・クローンが止めた委譲を甦らせない（R4） |
+         *
+         * **ホワイトリストで書く**（`!== 'running' && …` の形にしない）。状態が
+         * 増えたとき、既定が「起こす」＝1ターン焼く側へ倒れるのを避ける
+         * （`#restoreJobs` の `attached` 判定と同じ論法）。
+         */
+        if (status !== 'done' && status !== 'failed' && status !== 'lost') {
+          // **何もしなかったことを判断として残す。** 「起こさなかった」は日誌から
+          // 消えやすいが、これは欠落ではなく判断である（根拠も一緒に残す）。
+          await this.#journal({
+            type: 'decision',
+            decision:
+              `[${managerId}] 認証トークンが通る状態へ戻ったが、この委譲は起こし直さない` +
+              `（status=${status}）。`,
+            grounds:
+              '走っている・人間の回答を待っている・止めた委譲は、枠で止まっているのではない。',
+          });
+          continue;
+        }
+        /*
+         * **`send()` に相乗りする（新しい経路を作らない）。** 生きたセッションが
+         * 在れば push、無ければ同じ `sessionId` で resume まで、あちらが1本で
+         * 持っている——**どちらの道でも会話は続く**ので、最初からやり直しには
+         * ならない（AGENTS.md「新しい梯子は作らない」と同じ作法）。
+         */
+        const result = await this.send(managerId, usageRotationNudge());
+        if (result.outcome === 'delivered' || result.outcome === 'answered') {
+          nudged.push(managerId);
+          continue;
+        }
+        await this.#journal({
+          type: 'exchange',
+          with: 'manager',
+          role: 'outbound',
+          text:
+            `[${managerId}] 認証トークンが通る状態へ戻ったので続きを促したが、届かなかった` +
+            `（outcome=${result.outcome}）: ${result.detail}`,
+        });
+      } catch (error) {
+        await this.#journal({
+          type: 'exchange',
+          with: 'manager',
+          role: 'outbound',
+          text:
+            `[${managerId}] 認証トークンが通る状態へ戻ったので続きを促したが、落ちた: ` +
+            String(error),
+        });
+      }
+    }
+    return nudged;
   }
 
   async reattachRunner(runnerId: string): Promise<void> {
@@ -5412,6 +5551,20 @@ class Pool implements ManagerPool {
         // `exactOptionalPropertyTypes` で通らないため。
         if (event.failure === undefined) {
           delete record.job.lastFailure;
+          /*
+           * **自力でターンを終えたのだから、枠で止まった印は下ろす**
+           * （`#usageStopped`。{@link Pool.resumeStoppedByUsage}）。
+           *
+           * 印は `reached` の通知で立つが、その通知は**ターンの途中**でも届く
+           * （`runner.ts` の `case 'usage_notice'`。SDK の通知・情報メッセージ
+           * 由来のもの）。⟹ 立てたまま素通りさせると、**課金枠で通り切って
+           * 普通に報告したマネージャーが「枠で止まっている」ことになり、鍵が
+           * 回るたびに要らない一言を投げる**（＝1ターン焼く）。
+           *
+           * **失敗で終わった回（`else` 側）では下ろさない。** そこが起こし直し
+           * たい相手そのものである。
+           */
+          this.#usageStopped.delete(event.managerId);
         } else {
           record.job.lastFailure = { ...event.failure, at: new Date().toISOString() };
         }
@@ -5967,6 +6120,36 @@ class Pool implements ManagerPool {
       }
 
       case 'usage_notice': {
+        /*
+         * **この委譲は枠で止まった、という印を立てる**（`#usageStopped`）。
+         *
+         * `kind === 'reached'` の意味は `usageLimitKindSchema` が逐語で持っている
+         * ——「もう通らない。仕事は止まっている」。⟹ **鍵が通る状態へ戻ったら、
+         * この委譲は続きから起こし直す対象である**（{@link Pool.resumeStoppedByUsage}）。
+         *
+         * **`transition` / `warning` / `org_policy` では立てない。** 前2つはまだ
+         * 動いている（起こす必要が無い）し、`org_policy` は待っても直らない
+         * ——鍵を回しても同じところで止まるので、起こすと1ターン無駄に焼く
+         * （`usageLimitKindSchema` の doc「上限と混ぜないこと」）。
+         *
+         * **⚠️ `await` の手前で立てる。この位置は速さの都合ではない。**
+         * `#onEvent` は `void this.#onEvent(event)` で起こされる（`#connectTo`）
+         * ので、**同じターンの `usage_notice` と `report` は並行に走る。**
+         * `runner.ts` は枠で死んだ result の中で `usage_notice` → `report` の
+         * 順に出すが、この印を `await` の後ろへ置くと**後から届いた `report` の
+         * 側の下ろし（`case 'report'` の `failure === undefined` の枝）が先に
+         * 走り**、その後で印が立つ ⟹ **自力で終えた委譲に印が残り、回転のたびに
+         * 要らない一言を投げる。** 実際に歯（`manager-usage-resume.test.ts` の
+         * 「自力でターンを終えた委譲は起こさない」）がこの順序で落ちた。
+         *
+         * **畳み（下の `delivered`）より手前でもある。** あれはクローンへ同じ
+         * 知らせを何度も配らないための門であって、起こし直しの対象を決める話とは
+         * 別である——後ろに置くと、**同じ文言で2本目が当たった回に印が立たない**
+         * （`#observeForTokenRotation` を手前へ置いてある理由と同じで、#666 が
+         * 回し手の側で踏んだ形そのものである）。
+         */
+        if (event.notice.kind === 'reached') this.#usageStopped.add(event.managerId);
+
         // **ここは `report` / `ask` / `closed` / `resume_failed` と違い、`stopped`
         // ガードを意図的に足していない。** あの4つが運ぶのは**このマネージャー
         // の**仕事の出来事（報告・確認・終了・再開の成否）で、そのマネージャーを
@@ -7297,6 +7480,31 @@ function runnerSwapNudge(locator: WorkspaceLocator | undefined): string {
   return (
     '[system] この委譲を最後に走らせていた器は、もう居ない（別の器がこの宛先に応えている）。' +
     workspaceAfterSwapClause(workspaceAfterSwap(locator))
+  );
+}
+
+/**
+ * **枠で止まっていた委譲へ、鍵が通る状態へ戻ったことを告げる1行**
+ * （{@link ManagerPool.resumeStoppedByUsage}）。
+ *
+ * ## なぜ `restartNudge` をそのまま呼ばないか
+ *
+ * あちらの `waiting_human` の枝は「あなたが待っていた確認は器と一緒に失われて
+ * いる」と言う。**ここではそれが嘘になる** ——セッションは畳まれていないか、
+ * 畳まれても同じ `sessionId` で resume されているので、会話も待ちも失われて
+ * いない。`runnerSwapNudge` を別に立ててあるのと同じ理由である。
+ *
+ * ## 「最初からやり直すな」を明示する
+ *
+ * 枠で死んだのは**そのターンだけ**で、それまでの作業と会話は残っている。ここを
+ * 書かないと、報告が失敗で終わっている（`lastFailure` が立っている）ぶん、
+ * やり直しから入る余地を残す——**焼き直しはトークンを二重に使う。**
+ */
+function usageRotationNudge(): string {
+  return (
+    '[system] 認証トークンが枠で止まっていたが、通る鍵に戻った。' +
+    'この会話はそのまま続いている（最初からやり直さないこと）。' +
+    '枠で落ちたターンだけをやり直し、中断していた作業の続きを進めよ。'
   );
 }
 
