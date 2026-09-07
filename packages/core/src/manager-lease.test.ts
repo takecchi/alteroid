@@ -42,6 +42,13 @@ import { createMemoryStores } from './testing.js';
  * 判定の入力なので、そこを直に作る（`identity()` が最初から `boot-2` を名乗り、
  * 台帳の貸し出しは `boot-1` を持つ）。入れ替えの検知自体は `runner-swap.test.ts`
  * が別に固定している。
+ *
+ * ## このファイルの2つ目の describe について（#669）
+ *
+ * 末尾の「器が入れ替わった後の manager_send」は関門の試験ではないが、**要る足場が
+ * 1バイト違わず同じ**である（台帳の貸し出しが古いプロセスを指し、いま応えているのは
+ * 別のプロセス）。別ファイルへ写すと偽 runner を丸ごと複製することになり、片方だけ
+ * 直る形を自分で作ることになるので、ここへ置いている。
  */
 
 /** 名乗るプロセスを差し替えられる偽 runner。**受けた命令を全部記録する。** */
@@ -60,17 +67,30 @@ class LeasedRunner implements RunnerClient {
   instanceId: string | undefined = 'boot-2';
   /** 次の resume で投げる失敗（世代で拒む 409 を作るため）。 */
   resumeFailure: unknown;
+  /**
+   * 次の `send` で投げる失敗（**#669**）。台帳が「繋がっている」と言っているのに
+   * runner はそのセッションを持っていない回（#563）を作り、`send()` を resume の
+   * 経路へもう一度通すために持つ。
+   */
+  sendFailure: unknown;
   // **#390: `#reattach` が関門より前で走らせる2つの副作用を数える。**
   // `setProfile` は `#pushProfile` が誤解決した相手へ環境プロファイルを
   // 押し込んでいないかを、`list` は誤った `alive` を作っていないかを見るため。
   setProfileCalled = 0;
   listCalled = 0;
+  /**
+   * **#669: 器の入れ替えの判定が新しい往復を足していないことを測るために数える。**
+   * 名簿の heartbeat（10秒間隔）もここを通るので、**差分で見ること**（絶対値は
+   * テストが走った長さに依存する）。
+   */
+  identityCalled = 0;
 
   constructor(runnerId = 'runner-primary') {
     this.runnerId = runnerId;
   }
 
   async identity(): Promise<{ runnerId?: string; instanceId?: string } | undefined> {
+    this.identityCalled += 1;
     return {
       runnerId: this.runnerId,
       ...(this.instanceId === undefined ? {} : { instanceId: this.instanceId }),
@@ -100,7 +120,9 @@ class LeasedRunner implements RunnerClient {
     this.resumes.push(command);
     this.hold(command.managerId);
   }
-  async send(): Promise<void> {}
+  async send(): Promise<void> {
+    if (this.sendFailure !== undefined) throw this.sendFailure;
+  }
   async answer(): Promise<RunnerAnswerOutcome> {
     return { delivered: false };
   }
@@ -936,5 +958,249 @@ describe('引き取りの関門（貸し出し期限）', () => {
         await h.close();
       });
     });
+  });
+});
+
+/** 待機中（`done`）の委譲。**貸し出しは返されている**（`closed` が通った印）。 */
+function doneJob(lease: JobLease | undefined, overrides: Partial<Job> = {}): Job {
+  return { ...runningJob(lease), status: 'done', ...overrides };
+}
+
+/** 返却済みの貸し出し（`releaseLease` は `releasedAt` を立てるだけで持ち主を残す）。 */
+function leaseReleasedBy(instanceId: string | undefined, fence = 4): JobLease {
+  return leaseHeldBy(instanceId, fence, {
+    releasedAt: new Date(Date.now() - 500).toISOString(),
+  });
+}
+
+/**
+ * 器の入れ替えを、待機中（`done`）のマネージャーへ伝える経路（Issue #669）。
+ *
+ * ## ここで守っているもの
+ *
+ * `done` は3枚のホワイトリスト（`#reattach` / `#noteMissingSessions` /
+ * `decideRunnerSwapNotice`）すべてから同じ理由で外れる。**外れていること自体は
+ * 意図である**（終わった委譲へ ⚠ を並べると、本当に困っている1本が埋もれる）。
+ * だが外れた結果、器が入れ替わったことが**誰からも伝わらない** — その後で人間や
+ * クローンが `manager_send` を打つと、そのマネージャーは `/workspace` が消えている
+ * ことを知らないまま「続き」を書き始める。
+ *
+ * **だから伝えるのは「話しかけた回」だけである。** 3枚の境界は1枚も動かさず、
+ * `send()` が resume から入り直すときにだけ1行を混ぜる。
+ *
+ * ## 判定の作法（`RunnerBacklogSnapshot.instanceSwapped` の踏襲）
+ *
+ * - **時刻ではなく `instanceId` 同士を直接比べる**（時刻の比較は初回観測を入れ替えと
+ *   誤読する）
+ * - **どちらか一方でも取れなければ「判定できない」**。取れないときに「入れ替わった」
+ *   と言わない
+ */
+describe('器が入れ替わった後の manager_send（#669）', () => {
+  it('done の委譲へ、器が入れ替わった後に送ると、入れ替えを告げる行が人間の言葉の前に付く', async () => {
+    const h = await harnessOf();
+    // 台帳の貸し出しは `boot-1`、いま応えているのは `boot-2`（＝入れ替わっている）。
+    await h.stores.jobs.putJob(doneJob(leaseReleasedBy('boot-1')));
+
+    const result = await h.pool.send('mgr-1', '続きをやって');
+
+    expect(result.outcome).toBe('delivered');
+    expect(h.runner.resumes).toHaveLength(1);
+    const message = h.runner.resumes[0]?.message ?? '';
+    // `[system]` の接頭辞と「手元を確かめよ」の趣旨（`restartNudge` と同じ側）。
+    expect(message).toContain('[system]');
+    expect(message).toContain('手元の状態を確かめよ');
+    // **人間の言葉を置き換えない。混ぜるのである。**
+    expect(message).toContain('続きをやって');
+    // 順序も固定する（告げる行が先。後ろに付けると人間の指示に埋もれる）。
+    expect(message.indexOf('[system]')).toBeLessThan(message.indexOf('続きをやって'));
+
+    await h.close();
+  });
+
+  /**
+   * **作業ディレクトリについて何を言えるかは `workspaceAfterSwap` が持つ。**
+   * ここで別の判定を書くと、直したつもりが片方だけになる（`restartNudge` /
+   * `cloneWorkspaceAfterSwapLine` と同じ理由）。locator を変えると文言が変わる
+   * ことで、その1つを通っていることを押さえる。
+   */
+  it('作業ディレクトリの言い方は locator から引く（判定を二重に持たない）', async () => {
+    const h = await harnessOf();
+    await h.stores.jobs.putJob(
+      doneJob(leaseReleasedBy('boot-1'), {
+        workspace: { kind: 'git', repository: 'takecchi/alteroid', ref: 'main' },
+      }),
+    );
+
+    await h.pool.send('mgr-1', '続きをやって');
+
+    const message = h.runner.resumes[0]?.message ?? '';
+    expect(message).toContain('takecchi/alteroid の main');
+    expect(message).toContain('clone し直してから');
+    // locator が `git` のときは「残っているとは限らない」と言わない（別の主張）。
+    expect(message).not.toContain('残っているとは限らない');
+
+    await h.close();
+  });
+
+  it('器が入れ替わっていなければ、その行は付かない（人間の言葉だけが渡る）', async () => {
+    const h = await harnessOf();
+    // 台帳の貸し出しも、いま応えているのも `boot-2`。
+    await h.stores.jobs.putJob(doneJob(leaseReleasedBy('boot-2')));
+
+    await h.pool.send('mgr-1', '続きをやって');
+
+    expect(h.runner.resumes).toHaveLength(1);
+    expect(h.runner.resumes[0]?.message).toBe('続きをやって');
+
+    await h.close();
+  });
+
+  /**
+   * **判定できないときに嘘をつかない**（AGENTS.md「判定できないという3つ目の状態を
+   * 持つ」）。3通りとも「入れ替わっていない」とは言えていない — だが「入れ替わった」
+   * とも言えないので、告げない側へ倒す。
+   */
+  describe('判定できないときは告げない', () => {
+    it('台帳の貸し出しが持ち主を名乗っていないとき', async () => {
+      const h = await harnessOf();
+      await h.stores.jobs.putJob(doneJob(leaseReleasedBy(undefined)));
+
+      await h.pool.send('mgr-1', '続きをやって');
+
+      expect(h.runner.resumes).toHaveLength(1);
+      expect(h.runner.resumes[0]?.message).toBe('続きをやって');
+
+      await h.close();
+    });
+
+    it('いま応えている側が名乗らないとき', async () => {
+      const h = await harnessOf({ silent: true });
+      await h.stores.jobs.putJob(doneJob(leaseReleasedBy('boot-1')));
+
+      await h.pool.send('mgr-1', '続きをやって');
+
+      expect(h.runner.resumes).toHaveLength(1);
+      expect(h.runner.resumes[0]?.message).toBe('続きをやって');
+
+      await h.close();
+    });
+
+    /**
+     * 併存（同じ `runnerId` を名乗る器が2台以上。#200）。**どちらの `instanceId` と
+     * 突き合わせるかを決める材料が無い** ——`#sighting` はこのとき `instanceId` を
+     * 返さないので、この経路も自動で「判定できない」へ落ちる。
+     */
+    it('同じ runnerId を名乗る器が2台あるとき', async () => {
+      const h = await harnessOf();
+      const duplicate = new LeasedRunner('runner-primary');
+      await h.registry.register({ label: 'http://runner-dup:4518', open: async () => duplicate });
+      await h.stores.jobs.putJob(doneJob(leaseReleasedBy('boot-1')));
+
+      await h.pool.send('mgr-1', '続きをやって');
+
+      // どちらが resume を受けたかは名寄せ次第なので、両方を見る。
+      const messages = [...h.runner.resumes, ...duplicate.resumes].map(
+        (command) => command.message,
+      );
+      expect(messages).toEqual(['続きをやって']);
+
+      await h.close();
+    });
+  });
+
+  /**
+   * **2回目には付かない。** 告げた回の `#claimForResume` が貸し出しを新しい
+   * `instanceId` で貸し直す（`grantLease`）ので、記録された持ち主は自動で追いつく。
+   * ここを別に持たせると、更新を書き忘れた版が「毎回同じ1行が付く」形で残る。
+   */
+  it('同じ委譲へ2回目を送っても、同じ1行は付かない（貸し直しで持ち主が追いつく）', async () => {
+    const h = await harnessOf();
+    await h.stores.jobs.putJob(doneJob(leaseReleasedBy('boot-1')));
+
+    await h.pool.send('mgr-1', '続きをやって');
+    expect(h.runner.resumes[0]?.message).toContain('[system]');
+    // 台帳の持ち主が、いま応えているプロセスへ入れ替わっている。
+    expect((await jobOf(h.stores))?.lease).toMatchObject({ instanceId: 'boot-2' });
+
+    /*
+     * **2回目も resume から入り直させる。** そうしないと「resume を通らなかった
+     * から付かなかった」だけになり、判定そのものを測れない——runner が
+     * 「そのセッションは無い」と答える回（#563）を作って、同じ経路をもう一度通す。
+     */
+    h.runner.sendFailure = new RunnerHttpError('そのセッションは無い', 404);
+    const second = await h.pool.send('mgr-1', 'もう一言');
+
+    expect(second.outcome).toBe('delivered');
+    expect(h.runner.resumes).toHaveLength(2);
+    expect(h.runner.resumes[1]?.message).toBe('もう一言');
+
+    await h.close();
+  });
+
+  /**
+   * **`status` / `live` / `sessionMissingSince` を1バイトも動かしていない。**
+   *
+   * 入れ替えを告げるかどうかで、外から見える3つの欄が変わってはいけない
+   * （`isLive()` の契約も `done` の札も、この Issue の主張ではない）。
+   * **告げた側と告げなかった側を並べて比べる** — 片側だけを見ると、両方が同じだけ
+   * 壊れた変異を見逃す。
+   */
+  it('入れ替えを告げても、status / live / sessionMissingSince は告げない回と同じ', async () => {
+    const swapped = await harnessOf();
+    await swapped.stores.jobs.putJob(doneJob(leaseReleasedBy('boot-1')));
+    await swapped.pool.send('mgr-1', '続きをやって');
+
+    const same = await harnessOf();
+    await same.stores.jobs.putJob(doneJob(leaseReleasedBy('boot-2')));
+    await same.pool.send('mgr-1', '続きをやって');
+
+    const view = async (h: Harness) => {
+      const summary = (await h.pool.list()).find((manager) => manager.managerId === 'mgr-1');
+      return {
+        status: summary?.status,
+        live: summary?.live,
+        sessionMissingSince: summary?.sessionMissingSince,
+      };
+    };
+
+    // 告げた側で実際に1行が付いていること（この対照が空振りしていない証拠）。
+    expect(swapped.runner.resumes[0]?.message).toContain('[system]');
+    expect(same.runner.resumes[0]?.message).toBe('続きをやって');
+    expect(await view(swapped)).toEqual(await view(same));
+
+    await swapped.close();
+    await same.close();
+  });
+
+  /**
+   * **新しい往復を1つも足していない。** 判定の材料は名簿（`#sighting`。プロセス内の
+   * `entries()` を読むだけ）と台帳の貸し出しだけで、どちらも `send()` が元から
+   * 払っているものである。
+   *
+   * **絶対値ではなく差分で見る** — 名簿の heartbeat（10秒間隔）も `identity()` を
+   * 通るので、絶対値はテストが走った長さに依存する。
+   */
+  it('判定のために新しい往復を1つも足していない', async () => {
+    const h = await harnessOf();
+    await h.stores.jobs.putJob(doneJob(leaseReleasedBy('boot-1')));
+    // 接続と名乗りの分をここまでに済ませる（`send()` の中の `#ensureConnected`）。
+    await h.pool.list();
+
+    const before = {
+      identity: h.runner.identityCalled,
+      list: h.runner.listCalled,
+      setProfile: h.runner.setProfileCalled,
+    };
+    await h.pool.send('mgr-1', '続きをやって');
+
+    expect({
+      identity: h.runner.identityCalled,
+      list: h.runner.listCalled,
+      setProfile: h.runner.setProfileCalled,
+    }).toEqual(before);
+    // 増えたのは resume の1本だけ（`send()` が元から払う往復）。
+    expect(h.runner.resumes).toHaveLength(1);
+
+    await h.close();
   });
 });
