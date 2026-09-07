@@ -9,7 +9,7 @@
  * と対になっている）。
  */
 import { describeSessionMissingKind } from '@alteroid/core';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -17,6 +17,24 @@ import type { ManagerSummary } from '~/lib/types';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import Managers, { describeSessionMissingKindNote } from './managers';
+
+/**
+ * **一覧の中だけを見る。**
+ *
+ * issue #670 で `status` の絞り込みチップが付き、**札と同じ言葉（「待機中」
+ * 「失敗」「セッションへ戻れず」…）がチップのボタンとしても画面に現れる**
+ * ようになった。⟹ 「この札は出ていない」を画面全体で見ると、チップに当たって
+ * しまう。
+ *
+ * **これは条件の緩めではなく、対象の特定である**（AGENTS.md「対象をスコープ
+ * して特定する ＝ 保証が強くなる」）。元のテストが言いたかったのは「**この
+ * マネージャーの行に**その札が付いていない」であって、「その語が画面のどこにも
+ * 無い」ではない。スコープを効かせたぶん、チップの側で同じ語が出ても保証は
+ * 動かない。
+ */
+function row() {
+  return within(screen.getByRole('list'));
+}
 
 const BASE: ManagerSummary = {
   managerId: 'mgr-1',
@@ -106,8 +124,9 @@ describe('一覧の札は、観測した分しか言わない', () => {
     renderManagers([{ ...BASE, status: 'stopped', live: false }]);
 
     expect(await screen.findByText('停止済み')).toBeTruthy();
-    expect(screen.queryByText('待機中')).toBeNull();
-    expect(screen.queryByText('完了')).toBeNull();
+    // **一覧の中だけを見る**（`row()` の doc。チップにも「待機中」が在る）。
+    expect(row().queryByText('待機中')).toBeNull();
+    expect(row().queryByText('完了')).toBeNull();
   });
 });
 
@@ -233,7 +252,8 @@ describe('失敗も、状態を置き換えずに状態へ添える', () => {
 
     // **札は差し替えない。** 観測しているのは `done`（終えて待機中）である。
     expect(await screen.findByText('待機中')).toBeTruthy();
-    expect(screen.queryByText('失敗')).toBeNull();
+    // **一覧の中だけを見る**（`row()` の doc。チップにも「失敗」が在る）。
+    expect(row().queryByText('失敗')).toBeNull();
     // SDK の語をそのまま（`billing_error` と `rate_limit` は次の一手が違う）。
     expect(screen.getByText(/billing_error/)).toBeTruthy();
     expect(screen.getByText(/assistant_error/)).toBeTruthy();
@@ -565,8 +585,9 @@ describe('器が黙ったことは、`status` を動かさずに添える', () =
 
     expect(await screen.findByText(/この委譲が失われたという意味ではない/)).toBeTruthy();
     expect(screen.getByText(/黙っているのが器なのか経路なのかは、ここからは言えない/)).toBeTruthy();
-    // `status: lost` の札の言葉へ寄せていない。
-    expect(screen.queryByText('セッションへ戻れず')).toBeNull();
+    // `status: lost` の札の言葉へ寄せていない。**一覧の中だけを見る**
+    // （`row()` の doc。チップにも「セッションへ戻れず」が在る）。
+    expect(row().queryByText('セッションへ戻れず')).toBeNull();
   });
 
   it('欄が無いマネージャーには何も足さない（雑音にしない）', async () => {

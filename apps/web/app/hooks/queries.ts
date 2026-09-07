@@ -8,7 +8,13 @@
 import useSWR from 'swr';
 
 import { unwrap, useApi } from '~/lib/api';
-import type { JournalEntry, JournalEntryType, UsageLayer, UsageSite } from '~/lib/types';
+import type {
+  JournalEntry,
+  JournalEntryType,
+  ManagerStatus,
+  UsageLayer,
+  UsageSite,
+} from '~/lib/types';
 
 export interface UsageQuery {
   from?: string;
@@ -20,6 +26,31 @@ export interface UsageQuery {
    */
   layer?: UsageLayer;
   site?: UsageSite;
+}
+
+/**
+ * `GET /managers` の絞り込みと窓（issue #670）。
+ *
+ * **全部 optional で、1つも渡さない呼びはクエリ文字列を1文字も付けない。**
+ * デーモン側が opt-in（渡さなければ応答が1バイトも変わらない）なので、
+ * 画面側でも「渡さない」を渡せる形にしておく必要がある——ここで既定値を
+ * 埋めると、`dashboard.tsx` の `useManagers()`（引数なし）が黙って窓の
+ * 掛かった呼びに変わる。
+ *
+ * **`status` は配列で受けてカンマ区切りへ畳む**（`useJournal` の `types` と
+ * 同じ形）。**空配列は「絞らない」** ——`status=` を送るのと同じ結果に
+ * なるが、そもそもパラメタを付けない側に倒す（クエリ文字列が空のままなら、
+ * 上の opt-in がそのまま効く）。
+ *
+ * **錨は `managerId` ＋ `startedAt` の組で渡す**（片方だけは 400）。値は
+ * 応答に載っている `managerId` / `startedAt` をそのまま使う——封筒
+ * （`total` / `nextCursor`）は無い（`apps/daemon/src/app.ts` の
+ * `managersQuery` の doc）。
+ */
+export interface ManagersQuery {
+  status?: readonly ManagerStatus[];
+  limit?: number;
+  after?: { managerId: string; startedAt: string };
 }
 
 /**
@@ -35,7 +66,28 @@ export function isKeyOfType(key: unknown, type: string): boolean {
 
 export const KEY = {
   health: { type: 'health' } as const,
-  managers: { type: 'managers' } as const,
+  /**
+   * **窓ごとに別のキーになる**（issue #670）。かつてここは
+   * `{ type: 'managers' }` の1つだけで、`mutate(KEY.managers)` が呼べていた。
+   *
+   * **⚠️ その形はもう使えない。** 関数になった `KEY.managers` を
+   * `mutate(KEY.managers)` へ渡すと、SWR は**キーではなく絞り込みの述語**
+   * として受け取る（`mutate(fn)` の形）。述語は毎回真値のオブジェクトを
+   * 返すので、**キャッシュの全キーが落ちる**——型検査は通り、画面は
+   * 「よく効いている」ように見えるので、気づく契機が無い。
+   *
+   * ⟹ **落とすときは必ず束で指すこと**（`mutate((key) => isKeyOfType(key,
+   * 'managers'))`）。`journal` / `reports` / `conversations` / `approvals` が
+   * 既にそうしている形と同じである。
+   */
+  managers: (query: ManagersQuery = {}) =>
+    ({
+      type: 'managers',
+      status: [...(query.status ?? [])].join(','),
+      limit: query.limit,
+      afterId: query.after?.managerId,
+      afterStartedAt: query.after?.startedAt,
+    }) as const,
   manager: (id: string) => ({ type: 'manager', id }) as const,
   transcript: (id: string) => ({ type: 'transcript', id }) as const,
   approvals: (pending: boolean) => ({ type: 'approvals', pending }) as const,
@@ -64,9 +116,55 @@ export function useHealth() {
   });
 }
 
-export function useManagers() {
+/**
+ * 委譲先マネージャーの一覧（issue #670 で絞り込みと窓が付いた）。
+ *
+ * **引数なしの呼びは、クエリ文字列を1文字も付けない。** デーモン側が opt-in
+ * なので、`dashboard.tsx` の `useManagers()` はこの変更の前と1バイトも同じ
+ * 応答を受ける（`managersToQuery` がそれを支えている——空の欄を落とすのは
+ * 見た目の整えではなく、この保証そのものである）。
+ *
+ * **空の `query` を渡しても URL は変わらない。** `openapi-fetch` の
+ * `createFinalURL` は `querySerializer(params.query ?? {})` の結果が空文字なら
+ * `?` そのものを付けない（`openapi-fetch@0.17.0` の `createFinalURL`）。
+ * ⟹ ここで `params` を条件付きで外す必要は無い。**この主張は
+ * `managers.test.tsx` の「引数なしの呼びは `?` を付けない」で測ってある**
+ * ——上流の実装に乗った主張なので、版が上がったら歯の側が落ちる。
+ */
+export function useManagers(query: ManagersQuery = {}) {
   const api = useApi();
-  return useSWR(KEY.managers, () => api.api.GET('/managers').then(unwrap));
+  const params = managersToQuery(query);
+  return useSWR(KEY.managers(query), () =>
+    api.api.GET('/managers', { params: { query: params } }).then(unwrap),
+  );
+}
+
+/**
+ * `ManagersQuery` を `GET /managers` のクエリへ畳む。
+ *
+ * **空の欄は付けない**（`undefined` の欄すら作らない）。これは見た目の整えでは
+ * なく、**デーモン側の opt-in を成り立たせているものである**——あちらは
+ * 生のクエリ（`c.req.query('limit') !== undefined`）で「渡されたか」を判定する
+ * ので、空の値を送った時点で窓の掛かった呼びに化ける。
+ *
+ * **`status` の空配列は「絞らない」。** `status=` を送っても同じ結果になる
+ * （デーモン側が空を「渡さなかった」と同じに扱う）が、送らない側に倒せば
+ * 上の opt-in がそのまま効く。
+ */
+export function managersToQuery(query: ManagersQuery): {
+  status?: string;
+  limit?: number;
+  afterId?: string;
+  afterStartedAt?: string;
+} {
+  const status = [...(query.status ?? [])].join(',');
+  return {
+    ...(status === '' ? {} : { status }),
+    ...(query.limit === undefined ? {} : { limit: query.limit }),
+    ...(query.after === undefined
+      ? {}
+      : { afterId: query.after.managerId, afterStartedAt: query.after.startedAt }),
+  };
 }
 
 export function useManager(id: string) {
