@@ -171,6 +171,49 @@ export function isManagerInFlight(status: JobStatus): boolean {
 }
 
 /**
+ * その委譲が**判断待ち**か（`lost`。#688）。
+ *
+ * ## `lost` は「終わった」ではない。「終わったかどうかを観測していない」である
+ *
+ * 終端の4値（`done` / `failed` / `lost` / `stopped`）のうち、**`lost` だけが
+ * 成果の有無を1度も見ていない。** 台帳の doc が逐語でそう言っている
+ * （`grep -Fn -- '**ただし `lost` は「成果が無い」ではない。**' packages/core/src/schema.ts`）し、
+ * `manager_list` の但し書きも同じことを言う
+ * （`grep -Fn -- '1分半後の器の作り直しで `lost` になり、この行が「途中で失われて' packages/core/src/tools.ts`）。
+ * ⟹ **人間・クローンがリモート（PR・ブランチ・コミット）を確かめるまで終われない。**
+ *
+ * **`failed` / `stopped` に同じ記述は無い**（repo 内で0件）。だからここは
+ * `lost` 1値だけを見る——「終端をまとめて後ろへ送る」述語ではない。
+ *
+ * ## なぜ1値の判定に名前を付けるのか（`status === 'lost'` と直に書かない）
+ *
+ * この分け方を使う面が**2つ**在る——`situation.ts` の `countManagerSituation`
+ * （毎ターンの入口で数える側）と、`tools.ts` の `compareManagerAttention`
+ * （`manager_list` の並びの側）である。
+ * **`status === 'lost'` を2箇所に書き下ろすと、上の意味論を持つ場所が消える**
+ * ——次に読む者には「終端の1つを特別扱いしている」ようにしか見えず、
+ * `failed` を足す変更が自然に見えてしまう。{@link isManagerInFlight} /
+ * {@link describeManagerState} と同じ理由で、生成元を1つにする。
+ *
+ * ## ⚠️ この述語を {@link isManagerInFlight} へ足さないこと（日報が壊れる）
+ *
+ * 「判断待ちも先に出したい」から `isManagerInFlight` に `lost` を混ぜたくなるが、
+ * **あれは日報（この下の `buildActivityDigest` の「マネージャー」節）と
+ * `manager_list` が共有する正本**で、日報側は `MAX_ITEMS` で `slice` する。
+ * ⟹ `lost` が第1群へ移ると**枠を食って、最近終わった委譲が押し出される**
+ * （`lost` が `MAX_ITEMS` 本を超えれば第2群は1行も出ない）。#689 が
+ * `manager_list` で直した穴と同じ形を、日報の側に作ることになる。
+ *
+ * **だから2つを別の述語として並べて置く。** 使う側が「いまの状態」（`inFlight`）と
+ * 「判断待ち」（こちら）を組み合わせて群を作る（`manager_list` は3群、日報は
+ * 2群のまま）。**日報はこの述語を1度も呼ばない**——呼ばないことが #688 の
+ * 候補2を採らなかった判断そのものである（Issue #688 のコメント）。
+ */
+export function isManagerAwaitingJudgement(status: JobStatus): boolean {
+  return status === 'lost';
+}
+
+/**
  * `escalation` の journal 行を `approvalId` で束ねた、1つの問い（クローンが
  * 何を聞いて何を答えてもらえたか）。
  *
