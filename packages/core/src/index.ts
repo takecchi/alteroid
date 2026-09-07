@@ -571,6 +571,7 @@ export {
 export {
   cooldownUntilFrom,
   decideTokenRotation,
+  earliestRememberedCooldown,
   observationFreshness,
   selectNextToken,
   type ObservationFreshness,

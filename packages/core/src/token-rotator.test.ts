@@ -223,6 +223,154 @@ describe('#668 / #667: 状態だけを運ぶ観測', () => {
   });
 });
 
+/**
+ * **#680**: 文言で検知した拒否（`signal: 'reached'`）が枠の事実を1つも運ばないので、
+ * 冷却が設定の既定（5時間）へ倒れていた。
+ *
+ * **測るのは「どこから期限を採ったか」である** —— 冷却の期限が `resetsAt` と一致
+ * するか、`now + 既定` と一致するか。本番でこの2つを見分けたのも同じやり方だった
+ * （ミリ秒が `.000` で分も丸い ⟹ `resetsAt` / ミリ秒まで `last_rejected_at + 5h`
+ * と一致 ⟹ 既定）。
+ */
+describe('#680: 文言だけの拒否でも、覚えている枠の事実から期限を採る', () => {
+  /** 既定の冷却（5時間）を足しただけの期限。**これが倒れ先である。** */
+  const GUESS = Date.parse(AT) + 5 * 60 * 60_000;
+  /** 覚えさせる `resetsAt`（既定より早い、まだ先の時刻）。 */
+  const RESETS_AT = Date.parse(AT) + 90 * 60_000;
+
+  /**
+   * 事実を1件覚えさせる。**回らない形で渡す**（身元を運ばない観測は状態だけでは
+   * 回らない —— `decideTokenRotation` の doc）。⟹ 世代が上がらないので、この後の
+   * 文言だけの観測は同じ鍵についてのものになる。
+   */
+  async function remember(h: Harness, facts: Parameters<typeof h.rotator.observe>[0]['facts']) {
+    const outcome = await h.rotator.observe({ facts, statusNow: 'rejected' });
+    // **前提を固定する。** ここが `rotated` になっていたら、この後のテストは
+    // 「覚えた事実が効いた」ではなく別のものを測っている。
+    expect(outcome.kind).toBe('ignored');
+    expect(await isCooling(h, 'tok-a')).toBe(false);
+  }
+
+  async function cooldownOf(h: Harness, id: string): Promise<number | undefined> {
+    return (await h.stores.tokens.list()).find((token) => token.id === id)?.cooldownUntil;
+  }
+
+  it('覚えている resetsAt を使う（5時間の推測へ倒れない）', async () => {
+    const h = harness();
+    await seedTwo(h);
+    await remember(h, { kind: 'five_hour', status: 'rejected', resetsAt: RESETS_AT });
+
+    const outcome = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(outcome.kind).toBe('rotated');
+    // **これが直した穴そのものである。**
+    expect(await cooldownOf(h, 'tok-a')).toBe(RESETS_AT);
+    expect(await cooldownOf(h, 'tok-a')).not.toBe(GUESS);
+  });
+
+  it('この回の観測が事実を運んでいれば、そちらが勝つ（覚えている側は古い）', async () => {
+    const h = harness();
+    await seedTwo(h);
+    await remember(h, { kind: 'five_hour', status: 'rejected', resetsAt: RESETS_AT });
+
+    const fresh = Date.parse(AT) + 30 * 60_000;
+    const outcome = await h.rotator.observe({
+      notice: reached,
+      facts: { kind: 'five_hour', status: 'rejected', resetsAt: fresh },
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(outcome.kind).toBe('rotated');
+    expect(await cooldownOf(h, 'tok-a')).toBe(fresh);
+  });
+
+  it('別のトークンについて覚えた事実は使わない', async () => {
+    // **一致を見ないと、回した後の新しい鍵に前の鍵の枠のリセット時刻を当てる。**
+    const h = harness();
+    await seedTwo(h);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-b', generation: 1, rotatedAt: AT });
+    await h.rotator.observe({
+      facts: { kind: 'five_hour', status: 'rejected', resetsAt: RESETS_AT },
+      statusNow: 'rejected',
+    });
+    // 現役を tok-a へ戻す（tok-b について覚えた事実が残っている状態）。
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 2, rotatedAt: AT });
+
+    await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 2 },
+    });
+
+    expect(await cooldownOf(h, 'tok-a')).toBe(GUESS);
+  });
+
+  it('拒否を名乗っていない事実は覚えない（重ねた形の status を見ない）', async () => {
+    // `facts.status` は重ねた形なので、一度書かれた `rejected` が残り続ける。
+    // ⟹ 見るのは `statusNow`（この1件が運んできた生の観測）だけである。
+    const h = harness();
+    await seedTwo(h);
+    await h.rotator.observe({
+      facts: { kind: 'five_hour', status: 'rejected', resetsAt: RESETS_AT },
+      // **`statusNow` を渡さない** ＝ この1件は拒否を名乗っていない。
+    });
+
+    await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(await cooldownOf(h, 'tok-a')).toBe(GUESS);
+  });
+
+  it('覚えている期限が過ぎていたら使わない（既定へ倒れる）', async () => {
+    const h = harness();
+    await seedTwo(h);
+    await remember(h, {
+      kind: 'five_hour',
+      status: 'rejected',
+      resetsAt: Date.parse(AT) - 60_000,
+    });
+
+    await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    expect(await cooldownOf(h, 'tok-a')).toBe(GUESS);
+  });
+
+  it('⚠️ 覚えた事実を判定へ混ぜない（signal も倒れ先も動かさない）', async () => {
+    // **混ぜると `overageClosed(facts)` が古い記憶で立つ** ⟹ `signal` が
+    // `quota_rejected` → `overage_closed` に化け、設定が `overage_exhausted` の
+    // 器では**回らないはずの回が回る。**
+    const h = harness();
+    await seedTwo(h);
+    await h.stores.tokens.writeSettings({ rotateOn: 'overage_exhausted', cooldownMs: 18_000_000 });
+    // 課金枠も閉じている事実を覚えさせる（身元を運ばないので回らない）。
+    await remember(h, {
+      kind: 'five_hour',
+      status: 'rejected',
+      overageStatus: 'rejected',
+      resetsAt: RESETS_AT,
+    });
+
+    // いまの世代を名乗るが、**この回は事実を運んでいない**観測。
+    const outcome = await h.rotator.observe({
+      statusNow: 'rejected',
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    // 混ざっていたら `overage_closed` で回る。混ざっていなければ回らない。
+    expect(outcome.kind).toBe('ignored');
+    expect(outcome.signal).not.toBe('overage_closed');
+    expect(await isCooling(h, 'tok-a')).toBe(false);
+    expect(h.spreadCalls).toEqual([]);
+  });
+});
+
 describe('受け入れ基準1: 1本目が止まったら2本目へ回る', () => {
   it('回して、正本を書き換えて、撒く', async () => {
     const h = harness();

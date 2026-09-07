@@ -15,6 +15,7 @@ import {
 import {
   cooldownUntilFrom,
   decideTokenRotation,
+  earliestRememberedCooldown,
   observationFreshness,
   selectNextToken,
   type ObservationFreshness,
@@ -636,6 +637,103 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
    */
   let staleRun: { key: string; count: number } | null = null;
 
+  /**
+   * **枠が実際に拒否した回の事実**を、枠の種類ごとに覚えておく（#680）。
+   *
+   * ## 何のために覚えるのか —— 文言だけの回に、権威ある期限を渡す
+   *
+   * 文言で検知した拒否（`signal: 'reached'`）は事実を1つも運んでこないので、
+   * 冷却が設定の既定（5時間）へ倒れていた。**事実そのものは同じプロセスに届いて
+   * いる**（`rate_limit_event` の経路。`signal: 'overage_closed'` の行がその証拠）
+   * ⟹ 覚えておけば、文言だけの回でも `resetsAt` を使える
+   * （{@link earliestRememberedCooldown}）。
+   *
+   * ## ⚠️ 覚えるのは「回し手の側」である。層の側ではない
+   *
+   * `clone.ts` / `manager.ts` はそれぞれ自分の `#rateLimits` を持つが、**あれは
+   * インスタンスごと（クローン1体 / プール1つ）である。** 文言はクローンから、
+   * 事実はマネージャーから届く組み合わせが普通に起こるので、層の側で足すと
+   * **どちらか片方の記憶しか使えない。** ここは全層の観測が合流する1点なので、
+   * 誰から届いた事実でも効く。
+   *
+   * ## ⚠️ これを判定へ混ぜない
+   *
+   * 使うのは**冷却の期限だけ**である（`coolDown`）。`decideTokenRotation` へ渡すと:
+   *
+   * - `overageClosed(facts)` が古い記憶で立ち、`signal` が
+   *   `quota_rejected` → `overage_closed` に化ける
+   * - 設定が `overage_exhausted` の器で、**回らないはずの回が回る**
+   *
+   * ⟹ **判定はこの回の観測だけで決める。** #680 の地雷「覚えてある事実を無条件に
+   * 新しい観測へ混ぜないこと」がここに効く（あちらが挙げている害——古い `rejected`
+   * を新しい観測として配ってクローンのターンを焼く——は `usageTransitionOf` を
+   * 通る層の側の話で、回し手は知らせを配らないので起きない。**それでも判定へは
+   * 混ぜない。**）
+   *
+   * ## 鍵は「どのトークンの、どの枠か」である
+   *
+   * 覚えた事実は、**その事実が届いた時点の現役のトークン**に紐づける。冷やす相手
+   * （`outgoingId`）と一致するときだけ使う —— 一致を見ないと、回した後の新しい鍵に
+   * **前の鍵の枠のリセット時刻**を当てることになる。
+   *
+   * **⚠️ 世代（`generation`）は鍵に入れない。意図してそうしてある。**
+   * `observationFreshness` が世代を見る理由（同じ鍵が冷却明けにもう一度選ばれた
+   * 後に届く、前の在任期間ぶんの遅れた通知）は**回すかどうかの判断**に効くもので、
+   * ここが持つのは**期限**だけである。枠のリセット時刻は**アカウントの窓の性質**
+   * であって在任期間の性質ではない ⟹ 在任期間を跨いでも、**まだ先の時刻なら
+   * まだ真である。**
+   *
+   * そして跨いだときに害が出ないことは、2つの条件が支えている:
+   *
+   * - **`at` より後のものしか使わない**（{@link earliestRememberedCooldown}）
+   *   ⟹ 前の在任期間で書いた期限は、その鍵がもう一度選ばれる時点で過ぎている
+   *   （選ばれたということは冷却が明けたということである）
+   * - **判定へ混ぜない**（直上）⟹ 古い記憶が「回す / 回さない」を動かすことはない
+   *
+   * **プロセスの寿命でしか持たない**（`staleRun` と同じ。事実の記録は日誌と
+   * トークンの行の側に在る）。
+   */
+  const rememberedRejections = new Map<string, { tokenId: string; facts: RateLimitFacts }>();
+
+  /** 現役の身元を1本の鍵にする。**まだ指名していなければ `none`。** */
+  function identityOf(active: ActiveAgentToken | null): string {
+    return active === null ? 'none' : `${active.tokenId}#${String(active.generation)}`;
+  }
+
+  /**
+   * **この1件が「枠から追い返された」と言っているなら覚える**（#680）。
+   *
+   * **`statusNow` を見る。`facts.status` を見ない。** あちらは重ねた形なので、
+   * 一度書かれた `rejected` が上書きされるまで残り続ける（`token-rotation.ts` の
+   * `TokenRotationObservation.statusNow` の doc）⟹ 重ねた形で覚えると、**枠が
+   * 開いた後の観測まで「拒否された」として覚える。**
+   *
+   * **期限を運んでいない事実は覚えない。** 覚えても期限が取れないので、
+   * 覚えたことが「取れる」という嘘になる（読む側は件数しか見えない）。
+   *
+   * **まだ一度も指名していない回は覚えない。** 紐づける相手（トークンの id）が
+   * 無く、`'none'` のような鍵を作ると**どの行のものでもない事実**が溜まる。
+   */
+  function rememberRejection(
+    active: ActiveAgentToken | null,
+    observation: TokenRotatorObservation,
+  ): void {
+    if (active === null || observation.statusNow !== 'rejected') return;
+    const facts = observation.facts;
+    if (facts === undefined || cooldownUntilFrom(facts) === undefined) return;
+    rememberedRejections.set(`${active.tokenId}#${facts.kind ?? ''}`, {
+      tokenId: active.tokenId,
+      facts,
+    });
+  }
+
+  /** そのトークンについて覚えている、拒否した枠の事実（#680）。 */
+  function rememberedFactsFor(tokenId: string): RateLimitFacts[] {
+    return [...rememberedRejections.values()]
+      .filter((entry) => entry.tokenId === tokenId)
+      .map((entry) => entry.facts);
+  }
+
   let tail: Promise<unknown> = Promise.resolve();
   function serial<T>(work: () => Promise<T>): Promise<T> {
     const next = tail.then(work, work);
@@ -655,6 +753,16 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
    *
    * **`resetsAt` が権威ある期限である**（`cooldownUntilFrom`）。取れなければ設定の
    * 既定へ倒す——**この関数の中に既定を持たない。**
+   *
+   * ## 期限を探す順（#680。**この順序は「新しさ」ではなく「権威」で並べてある**）
+   *
+   * 1. **この回の観測が運んできた事実**（`rate_limit_event` 由来）
+   * 2. **いまの現役について覚えている、拒否した枠の事実**（{@link rememberedRejections}）
+   *    —— 文言だけの回（`signal: 'reached'`）がここで救われる
+   * 3. 無ければ設定の既定（`markTokenUnusable` が `fallbackCooldownMs` から作る推測）
+   *
+   * **2 を 1 より前に置かないこと。** 覚えている事実は前のターンのもので、この回の
+   * 観測のほうが新しい。
    */
   async function coolDown(
     tokens: readonly AgentToken[],
@@ -663,7 +771,12 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
     observation: TokenRotatorObservation,
   ): Promise<AgentToken[]> {
     const at = now().toISOString();
-    const resetsAt = cooldownUntilFrom(observation.facts);
+    const resetsAt =
+      cooldownUntilFrom(observation.facts) ??
+      // **覚えている側は「いまも先の期限」だけを採る**（過ぎた窓はもう開いている）。
+      // 判定に混ぜないこと・鍵に世代を入れない理由は
+      // {@link rememberedRejections} の doc。
+      earliestRememberedCooldown(rememberedFactsFor(outgoingId), Date.parse(at));
     return stores.tokens.replace(
       tokens.map((token) =>
         token.id === outgoingId
@@ -1140,7 +1253,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         if (freshness === 'stale') {
           // **捨てた回数を数える。捨てる判断そのものは変えない。** ここで足して
           // いるのは「その判断が何回効いたか」だけである（{@link staleRun}）。
-          const key = active === null ? 'none' : `${active.tokenId}#${String(active.generation)}`;
+          const key = identityOf(active);
           staleRun = staleRun?.key === key ? { key, count: staleRun.count + 1 } : { key, count: 1 };
           return {
             kind: 'ignored' as const,
@@ -1150,6 +1263,14 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
             why: 'もう回した後の通知（世代が合わない）',
           };
         }
+
+        // **枠が拒否した事実は、回さない回でも覚える**（#680）。
+        //
+        // **`stale` の後・判定の前に置く。** 後ろに置くと、回らなかった回
+        // （設定が `overage_exhausted` で課金枠が生きている等）の事実が落ちる
+        // ——**その事実こそ、次に文言だけの拒否が来たときに使うものである。**
+        // `stale` より前に置くと、前の世代の鍵の期限を今の鍵として覚える。
+        rememberRejection(active, observation);
 
         if (!decision.rotate) {
           return {
