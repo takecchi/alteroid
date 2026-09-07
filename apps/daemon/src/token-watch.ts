@@ -5,6 +5,7 @@ import {
   type TokenReconsiderReason,
   type TokenRotationOutcome,
   type TokenRotator,
+  type TokenVerdictOrigin,
 } from '@alteroid/core';
 
 /**
@@ -176,6 +177,24 @@ export interface TokenRotationWatch {
    * （冷却が明けたかどうか）がその回だけ走らなくなる。
    */
   observeAccount(state: AccountUsageState): void;
+  /**
+   * **ターンが実際に成功したという観測**を渡す（#681 (1)。`usable` の2本目の
+   * 生産者。`manager.ts` の `case 'usage':` / `clone.ts` の `case 'turn_ended':`
+   * の成功枝から `apps/daemon/src/index.ts` の `onUsageObservation` 経由で
+   * 届く）。
+   *
+   * **`account_probe` の穴を埋める。** あちらが読むのはアカウントの枠だけで、
+   * セッション単位の上限（`You've hit your session limit`）には効かない
+   * （`TokenRotator.reconsider` の doc）。成功はどんな枠でも「いまの現役が
+   * 通った」直接の証拠になる。
+   *
+   * **`tokenId` / `generation` のどちらかでも欠けていたら何もしない。**
+   * 世代を名乗れない観測は `TokenRotator.reconsider` の世代の門
+   * （`observationFreshness`）を通れないので、そもそも上げない——上げても
+   * 型（`TokenVerdictOrigin` の `turn_success` は `observedBy` を必須にする）
+   * が受け付けない。
+   */
+  observeTurnSuccess(observedBy: { tokenId?: string; generation?: number } | undefined): void;
   stop(): void;
 }
 
@@ -256,14 +275,14 @@ export function startTokenRotationWatch(options: TokenRotationWatchOptions): Tok
    */
   function run(
     reason: TokenReconsiderReason,
-    currentVerdict?: TokenCandidateVerdict,
+    current?: { verdict: TokenCandidateVerdict; origin: TokenVerdictOrigin },
   ): Promise<void> {
     lastStartedAt = now();
     const work = (async () => {
       try {
         const outcome = await options.rotator.reconsider({
           reason,
-          ...(currentVerdict === undefined ? {} : { currentVerdict }),
+          ...(current === undefined ? {} : { current }),
         });
         await options.onOutcome(outcome);
       } catch (error) {
@@ -333,7 +352,40 @@ export function startTokenRotationWatch(options: TokenRotationWatchOptions): Tok
         pending ??= 'account_probe';
         return;
       }
-      void run('account_probe', verdict);
+      // **身元を持たない観測**（{@link TokenVerdictOrigin} の doc）。世代の門は
+      // 掛からない——照合する相手がそもそも無い。
+      void run('account_probe', { verdict, origin: { source: 'account_probe' } });
+    },
+    observeTurnSuccess: (observedBy) => {
+      if (stopped) return;
+      // **どちらかでも欠けていたら何もしない**（このメソッドの doc）。世代を
+      // 名乗れない成功は `TokenVerdictOrigin` の型で作れない——上げても
+      // `TokenRotator.reconsider` 側の世代の門を素通りできないので、そもそも
+      // 上げない。
+      if (observedBy?.tokenId === undefined || observedBy.generation === undefined) return;
+      const origin: TokenVerdictOrigin = {
+        source: 'turn_success',
+        observedBy: { tokenId: observedBy.tokenId, generation: observedBy.generation },
+      };
+      if (inFlight !== null) {
+        // **溜めずに捨てる。** 直上の `observeAccount` は契機だけ `pending` へ
+        // 溜めるが、ここで同じことをしてはいけない —— `pending` は
+        // {@link TokenReconsiderReason} しか運べず、`origin`（＝世代）が落ちる。
+        // ⟹ 後から `run('turn_succeeded')` が `current` 無しで走る。
+        // `reconsider` の世代の門も、成功では回さないための分岐も、どちらも
+        // 「`current` が在ること」を条件にしているので**両方とも素通りし、
+        // 通常の回転判定へ落ちる** —— 成功が回す契機に化け、しかも日誌には
+        // `reason: 'turn_succeeded'` と出る（回転と無関係な成功のせいで回った
+        // ように読める）。
+        //
+        // **捨てて安全なのは、成功が何度でも来るからである。** probe は5分に
+        // 1回しか来ないので契機を溜める価値があるが、ターンの成功は次のターンで
+        // また上がる。そして溜めた世代は、走っている見直しが終わる頃には古く
+        // なっていることがある —— **古い観測を後から効かせない**のが #668 の
+        // 門の趣旨そのものであり、`pending` へ溜めるのはその逆をやることになる。
+        return;
+      }
+      void run('turn_succeeded', { verdict: { verdict: 'usable' }, origin });
     },
     stop,
   };

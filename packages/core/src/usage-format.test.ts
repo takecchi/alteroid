@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  describeAccountUsage,
   describeUnrecordedManagers,
   findUnrecordedManagers,
   type UnrecordedManagerCandidate,
 } from './usage-format.js';
+import type { AccountUsageState } from './usage-snapshot.js';
 
 /**
  * 「台帳が取りこぼした委譲」（Issue #98）の突き合わせと整形。
@@ -141,5 +143,54 @@ describe('describeUnrecordedManagers', () => {
     expect(text).toContain('running');
     expect(text).toContain('2026-08-25T13:20:00.000Z');
     expect(text).toContain('1件');
+  });
+});
+
+/**
+ * `describeAccountUsage` の `apiKeySource` 行（#681 (2)）。
+ *
+ * この関数の文言は4つの口（クローンの `usage_read` / CLI の `alteroid usage`
+ * と `/usage` / Web の `/usage` 画面）が単独で共有するので、ここに1本通せば
+ * 全面に効く。**逆に、ここに出さなければクローンは `apiKeySource` を一切
+ * 読めない**——それがこの改修の目的そのものである。
+ */
+describe('describeAccountUsage の apiKeySource 行（#681 (2)）', () => {
+  function okState(over: Partial<Extract<AccountUsageState, { state: 'ok' }>['usage']>) {
+    return {
+      state: 'ok' as const,
+      usage: {
+        at: '2026-08-14T10:00:00.000Z',
+        limitsAvailable: true,
+        windows: [],
+        ...over,
+      },
+    };
+  }
+
+  it('apiKeySource が取れているとき、値をそのまま出す', () => {
+    const text = describeAccountUsage(okState({ apiKeySource: 'none' })).join('\n');
+    expect(text).toContain('none');
+  });
+
+  /**
+   * ⚠️ `'none'` を「ログインしていない」と読ませないこと（`tokenSource` の
+   * doc と同型の注意）。`'none'` は「API キーを使っていない」（claude.ai の
+   * OAuth ログイン等）という意味で、鍵が無いことではない。
+   */
+  it('apiKeySource: none を「API キーを使っていない」という意味で出す', () => {
+    const text = describeAccountUsage(okState({ apiKeySource: 'none' })).join('\n');
+    expect(text).toContain('API キーを使っていない');
+  });
+
+  it('判定には使っていない観測であることが文言から読める', () => {
+    const text = describeAccountUsage(okState({ apiKeySource: 'none' })).join('\n');
+    expect(text).toContain('判定には使っていない');
+  });
+
+  it('apiKeySource が取れなかったとき、埋めずに「（取れなかった）」と言う', () => {
+    const text = describeAccountUsage(okState({})).join('\n');
+    expect(text).toContain('（取れなかった）');
+    // 架空の値（'none' 等）で埋めていないことも確かめる。
+    expect(text).not.toContain('apiKeySource. none');
   });
 });

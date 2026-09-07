@@ -615,6 +615,7 @@ export {
   type TokenRotatorOptions,
   type TokenSpreadPort,
   type TokenSpreadResult,
+  type TokenVerdictOrigin,
 } from './token-rotator.js';
 export {
   assertNeverRunnerLegStatus,

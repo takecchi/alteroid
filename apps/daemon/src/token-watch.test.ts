@@ -4,6 +4,7 @@ import type {
   TokenReconsiderReason,
   TokenRotationOutcome,
   TokenRotator,
+  TokenVerdictOrigin,
 } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
@@ -19,7 +20,10 @@ import { startTokenRotationWatch } from './token-watch.js';
  */
 interface Fake {
   rotator: TokenRotator;
-  calls: { reason: TokenReconsiderReason; currentVerdict?: TokenCandidateVerdict }[];
+  calls: {
+    reason: TokenReconsiderReason;
+    current?: { verdict: TokenCandidateVerdict; origin: TokenVerdictOrigin };
+  }[];
   outcomes: TokenRotationOutcome[];
   /** `reconsider` を待たせる（重なりの検査で使う）。 */
   hold: (gate: Promise<void>) => void;
@@ -38,7 +42,7 @@ function fake(): Fake {
     observe: () => Promise.resolve(ignored),
     reconsider: async (input: {
       reason: TokenReconsiderReason;
-      currentVerdict?: TokenCandidateVerdict;
+      current?: { verdict: TokenCandidateVerdict; origin: TokenVerdictOrigin };
     }) => {
       calls.push(input);
       if (gate !== undefined) await gate;
@@ -234,7 +238,9 @@ describe('見張り: 枠の観測を judgeTokenCandidate へ通す', () => {
 
     expect(f.calls).toHaveLength(1);
     expect(f.calls[0]?.reason).toBe('account_probe');
-    expect(f.calls[0]?.currentVerdict?.verdict).toBe('unusable');
+    expect(f.calls[0]?.current?.verdict.verdict).toBe('unusable');
+    // **身元を運ばない観測**（`account_probe` は世代を照合しない）。
+    expect(f.calls[0]?.current?.origin).toEqual({ source: 'account_probe' });
   });
 
   it('通る観測は usable として渡る（止まった記録を消す材料になる）', async () => {
@@ -250,7 +256,8 @@ describe('見張り: 枠の観測を judgeTokenCandidate へ通す', () => {
     await settle();
     watch.stop();
 
-    expect(f.calls[0]?.currentVerdict).toEqual({ verdict: 'usable' });
+    expect(f.calls[0]?.current?.verdict).toEqual({ verdict: 'usable' });
+    expect(f.calls[0]?.current?.origin).toEqual({ source: 'account_probe' });
   });
 
   it('probe が失敗した観測は undecidable として渡る（unusable へ丸めない）', async () => {
@@ -269,7 +276,7 @@ describe('見張り: 枠の観測を judgeTokenCandidate へ通す', () => {
     await settle();
     watch.stop();
 
-    expect(f.calls[0]?.currentVerdict?.verdict).toBe('undecidable');
+    expect(f.calls[0]?.current?.verdict.verdict).toBe('undecidable');
   });
 
   it('走っている最中の観測は判定を捨てて契機だけ溜める（古い probe を後から効かせない）', async () => {
@@ -298,6 +305,108 @@ describe('見張り: 枠の観測を judgeTokenCandidate へ通す', () => {
     expect(f.calls).toHaveLength(2);
     expect(f.calls[1]).toEqual({ reason: 'account_probe' });
     // **判定は付いていない**（記録だけで判定し直す）。
-    expect(f.calls[1]?.currentVerdict).toBeUndefined();
+    expect(f.calls[1]?.current).toBeUndefined();
+  });
+});
+
+describe('見張り: ターンの成功を2本目の生産者へ渡す（#681 (1)）', () => {
+  it('揃っていれば turn_succeeded で reconsider を呼ぶ（verdict は常に usable）', async () => {
+    const f = fake();
+    const watch = startTokenRotationWatch({
+      rotator: f.rotator,
+      onOutcome: () => Promise.resolve(),
+      tickMs: 1_000_000,
+      minGapMs: 0,
+    });
+
+    watch.observeTurnSuccess({ tokenId: 'tok-a', generation: 3 });
+    await settle();
+    watch.stop();
+
+    expect(f.calls).toHaveLength(1);
+    expect(f.calls[0]?.reason).toBe('turn_succeeded');
+    expect(f.calls[0]?.current).toEqual({
+      verdict: { verdict: 'usable' },
+      origin: { source: 'turn_success', observedBy: { tokenId: 'tok-a', generation: 3 } },
+    });
+  });
+
+  it('⚠️ tokenId が欠けていたら何もしない（世代を名乗れない観測は上げない）', async () => {
+    const f = fake();
+    const watch = startTokenRotationWatch({
+      rotator: f.rotator,
+      onOutcome: () => Promise.resolve(),
+      tickMs: 1_000_000,
+      minGapMs: 0,
+    });
+
+    watch.observeTurnSuccess({ generation: 3 });
+    await settle();
+    watch.stop();
+
+    expect(f.calls).toEqual([]);
+  });
+
+  it('⚠️ generation が欠けていたら何もしない', async () => {
+    const f = fake();
+    const watch = startTokenRotationWatch({
+      rotator: f.rotator,
+      onOutcome: () => Promise.resolve(),
+      tickMs: 1_000_000,
+      minGapMs: 0,
+    });
+
+    watch.observeTurnSuccess({ tokenId: 'tok-a' });
+    await settle();
+    watch.stop();
+
+    expect(f.calls).toEqual([]);
+  });
+
+  it('⚠️ observedBy が undefined でも何もしない', async () => {
+    const f = fake();
+    const watch = startTokenRotationWatch({
+      rotator: f.rotator,
+      onOutcome: () => Promise.resolve(),
+      tickMs: 1_000_000,
+      minGapMs: 0,
+    });
+
+    watch.observeTurnSuccess(undefined);
+    await settle();
+    watch.stop();
+
+    expect(f.calls).toEqual([]);
+  });
+
+  it('⚠️ 走っている最中の成功は溜めずに捨てる（契機だけ溜めると回す契機に化ける）', async () => {
+    const f = fake();
+    let open: () => void = () => undefined;
+    f.hold(
+      new Promise<void>((resolve) => {
+        open = resolve;
+      }),
+    );
+    const watch = startTokenRotationWatch({
+      rotator: f.rotator,
+      onOutcome: () => Promise.resolve(),
+      tickMs: 1_000_000,
+      minGapMs: 0,
+    });
+
+    watch.poke('startup');
+    await settle();
+    watch.observeTurnSuccess({ tokenId: 'tok-a', generation: 1 });
+    f.hold(Promise.resolve());
+    open();
+    await settle();
+    watch.stop();
+
+    // **2本目は無い。** `pending` は `TokenReconsiderReason` しか運べないので、
+    // ここで溜めると `current`（＝世代）の落ちた `'turn_succeeded'` が後から
+    // 走る。その形は `reconsider` の世代の門も「成功では回さない」分岐も
+    // 素通りして**通常の回転判定へ落ちる** —— 成功が回す契機に化ける。
+    expect(f.calls).toHaveLength(1);
+    expect(f.calls.map((call) => call.reason)).toEqual(['startup']);
   });
 });
