@@ -61,17 +61,19 @@ import {
   applyMemoryFrontmatterPatch,
   assertNeverMemoryProtectionStatus,
   containsMemoryFrontmatterLineBreak,
-  cutMemorySection,
+  cutMemorySections,
   describeMemoryFloor,
   describeMemoryPremiseRanking,
   describeMemoryReinjectionEstimate,
   describeMemorySessionDelta,
   describeMemoryWriteDiff,
+  findOverlappingMemorySections,
   formatMemoryCreatedAt,
   isKnownMemoryDocKind,
   lookupMemorySection,
   measureMemoryFloor,
   MEMORY_OUTLINE_SIDES,
+  MEMORY_SECTION_MOVE_LIST_BUDGET,
   parseMemoryFrontmatter,
   renderMemoryDocuments,
   renderMemoryListing,
@@ -2272,7 +2274,7 @@ export function createCloneTools(context: ToolContext) {
     ),
 
     /**
-     * 節id で指した節を、別の文書の末尾へ移す口（#318 案 (b)）。
+     * 節id（複数可）で指した節を、別の文書の末尾へまとめて移す口（#318 案 (b)）。
      *
      * ## この口の存在理由 — **本文が0文字である**
      *
@@ -2285,7 +2287,52 @@ export function createCloneTools(context: ToolContext) {
      * **この口は、本文がツール呼び出しにも応答にも一度も現れない（0文字）。**
      * `memory_frontmatter_set` が持っていた「切れることが起こりえない」と
      * 同じ性質である。歯（`tools.test.ts`）が、節に置いた目印の文字列が
-     * 応答に1文字も出ないことを測っている。
+     * 応答に1文字も出ないことを測っている。**複数節を渡せるようにしても
+     * この性質は1文字も緩めていない**——`sections` に何個渡しても、運ぶのは
+     * `cutMemorySections` が繋いだ添字だけである。
+     *
+     * ## ⚠️ なぜ複数の節id を1回で受けるのか
+     *
+     * 最初の実装は節id を1つしか受けなかった。**そのとき、文書を割る費用は
+     * 節の数に比例する**——クローンにとって1回のツール呼び出しは1ターンで
+     * あり、ターンそのものがこの系のいちばん高い部品である。実測（クローンの
+     * 報告、2026-09-08）: 884 節・294,752 文字の `premise` 文書から4節を移して
+     * 2,535 文字、毎ターンの床は 0.3% 減った。**この比で 10% 削るには約90回の
+     * 呼び出し ＝ 約90ターン要る。**
+     *
+     * **⚠️ そして「回数が多い」だけでは済まない——1つずつでは届かない節が在る。**
+     * `memory_outline` は文字数の予算（`MEMORY_OUTLINE_BUDGET`）で切られ、
+     * `side` は `head` / `tail` の2値しか無い（`MEMORY_OUTLINE_SIDES` の doc）。
+     * ⟹ 節が数百ある文書では**中央の節を指す id がそもそも手に入らない**。
+     * その doc が言うとおり、届く道は「端の節を `memory_section_move` で移して
+     * 文書を縮める」1本だけである。**1回でまとめて移せると、その距離が節の数
+     * ではなく呼び出しの回数で縮む。** 複数節に対応した理由の重心はここに在る
+     * （速いことではなく、端から削る歩幅が変わること）。
+     *
+     * **版の照合は1つも緩めていない。** 節id は指し先であると同時に版の照合で
+     * あり（`memorySectionId` の doc）、それは**渡した1つ1つについて**今までと
+     * 同じように効く——下の「全件を先に照合してから動かす」がその扱いである。
+     *
+     * ## ⚠️ なぜ全件を先に照合してから動かすのか（部分成功を許さない）
+     *
+     * 節id の解決も範囲の重なりの検査も、**全件終えてから**初めて
+     * `cutMemorySections` を呼ぶ。「見つかった節から動かし始めて、途中の
+     * 1件で断る」という組み方は選んでいない。**部分的に成功すると、呼び手は
+     * 「どこまで動いてどこから動いていないか」を応答から逆算しなければ
+     * ならなくなる**——動いた節と動いていない節が同じ応答の中に混在すると、
+     * 次に何をやり直せばよいかが1回読んだだけでは分からない。**1つでも
+     * 解決できなければ1文字も動かさない**ほうが、断りの文言だけ見て
+     * 「全部やり直せばよい」と機械的に判断できる。
+     *
+     * ## ⚠️ なぜ書き込みが節の数に比例しないのか
+     *
+     * `cutMemorySections` が複数の節をまとめて1つの `cut` 文字列へ繋ぐので、
+     * 移し先への追記（`persona.append`）も出どころへの書き込み
+     * （`persona.write`）も**1回ずつ**で済む。日誌も `move_in` / `move_out` の
+     * 2件のまま増えない。節が1個でも90個でも、この口が触る書き込みの回数は
+     * 変わらない——下の「順序」節が言う「途中で落ちたときに残るのは重複で
+     * あって消失ではない」という性質も、書き込みが常に2回1組だから節数に
+     * 関係なく保てる。
      *
      * ## ⚠️ 順序は「先に足して、後で消す」
      *
@@ -2303,7 +2350,20 @@ export function createCloneTools(context: ToolContext) {
      * **`guardFullReplace` をそのまま呼ぶ。判定を書き直さない**
      * （`guardFullReplace` の doc）。**「移す」であって「消す」ではないが、
      * 出どころの文書からは節が消える**ので守りの対象である。移した先には
-     * 掛けない（追記なので。`memory_append` と同じ線）。
+     * 掛けない（追記なので。`memory_append` と同じ線）。呼ぶのは
+     * `fromSlug` に対して1回だけ——節が複数でも文書は from/to の2つしか
+     * 無いので、節ごとに呼び直す理由が無い。
+     *
+     * ## 重なりの検査（複数節に対応したことで新たに要った断り）
+     *
+     * 節を1個しか渡せなかった頃には存在しなかった断りである。渡された
+     * 節id を `scanMemorySections` の結果へ**全件先に**照合したうえで、
+     * `findOverlappingMemorySections` で範囲の重なりを見る——親と子を
+     * 同時に指した場合（`end` は子込みなので、親を切ると渡していない
+     * つもりの子も一緒に動く）と、同じ節id を2回渡した場合（範囲が完全に
+     * 一致する）を1つの検査で捕まえる（`findOverlappingMemorySections` の
+     * doc）。ここでも部分的に動かさず、重なりが1組でも見つかったら
+     * **1文字も書かずに**断る。
      *
      * ## frontmatter を触らないことは3層で守る
      *
@@ -2311,10 +2371,11 @@ export function createCloneTools(context: ToolContext) {
      *    見出しにしか発行されない（`scanMemorySections`）。frontmatter を
      *    名指しする値がそもそも無い——行番号方式・オフセット方式を採らな
      *    かった理由がここである
-     * 2. **組み立ては継ぎ足し。** `cutMemorySection` は `slice` を2つ繋ぐ
+     * 2. **組み立ては継ぎ足し。** `cutMemorySections` は `slice` を繋ぐ
      *    だけで、**frontmatter のバイト列は添字で運ばれるだけで一度も
      *    書き直されない**（`serializeMemoryFrontmatter` を通さないので、
-     *    キーの順序の正規化すら起きない）
+     *    キーの順序の正規化すら起きない）。節が複数でも繋ぐ回数が増える
+     *    だけで、組み立ての形そのものは変わらない
      * 3. **書き込み前に確かめる。** frontmatter のバイト列が同一であることと
      *    `parseMemoryFrontmatter().kind` が変わっていないことを検査し、
      *    外れたら**断って何も書かない**
@@ -2328,9 +2389,12 @@ export function createCloneTools(context: ToolContext) {
      * 呼び手が渡す任意の文字列が在るが、**移動には呼び手の文字列が1つも無い。**
      *
      * **実際、この断りへ到達する入力を1つも構成できなかった。** 切り取りは
-     * `slice` を2つ繋ぐだけで、`section.start` は必ず `memoryBodyStart` 以上、
+     * `slice` を繋ぐだけで、どの `section.start` も必ず `memoryBodyStart` 以上、
      * かつ切り取り後の1行目は見出し行（`#` で始まる）か空文字にしかならない。
-     * ⟹ `parseMemoryFrontmatter().kind` は動きようが無い。
+     * ⟹ `parseMemoryFrontmatter().kind` は動きようが無い。**複数節に対応
+     * しても理由は同じである**——`cutMemorySections` は1節版と同じ添字の
+     * 繋ぎ方をしているだけで、繋ぐ相手が増えても frontmatter 側の事情は
+     * 1つも変わらない。
      *
      * **それでも残す。** 1層目・2層目が守っているのは「frontmatter を
      * 書き換えないこと」だけで、**「本文だったものが frontmatter に化ける」は
@@ -2345,21 +2409,27 @@ export function createCloneTools(context: ToolContext) {
     tool(
       'memory_section_move',
       [
-        'memory_outline が出した節id で指した節を、別の文書の末尾へ移す（切り取って足す）。移し先が無ければ作る。',
+        'memory_outline が出した節id（複数可）で指した節を、別の文書の末尾へまとめて移す（切り取って足す）。移し先が無ければ作る。',
         '本文はこの呼び出しにも応答にも一度も現れない（0文字）——これがこの道具の存在理由である。大きな文書を割るのに本文を作り直さなくてよい。',
         '節の範囲は見出し行から「同じ深さ以下の次の見出しの直前」までで、入れ子の子は一緒に動く。frontmatter は節ではないので指せない。',
         '先に移し先へ足し、後から出どころを消す——途中で落ちれば同じ節が両方に残る（重複するが、失われない）。そのときはそう返る。',
-        '断るのは5つ: from と to が同じ／その id の節が無い／その id は古い（中身が書き換えられた。memory_outline を取り直すこと）／中身まで同じ節が複数あって id が曖昧（どちらかを選ばずに断る）／frontmatter が壊れている。',
+        '断るのは6つ: from と to が同じ／その id の節が無い／その id は古い（中身が書き換えられた。memory_outline を取り直すこと）／中身まで同じ節が複数あって id が曖昧（どちらかを選ばずに断る）／指定した節どうしの範囲が重なっている（親子関係や同じ id の重複）／frontmatter が壊れている。',
+        '⭐1つでも断りに当たれば、1節も動かさない——一部だけ動いて残りが断られる、ということは起きない。',
         '**統合の走行（distill）からは、人間が一度でも書いた文書・履歴の無い文書からは節を移せない**',
         '（断られる。ask_human で人間に確認を通せば次のターンで実行できる）。会話の中の移動は通る。移し先には歯が掛からない（追記なので）。',
       ].join(' '),
       {
         fromSlug: z.string().describe('節を切り取る側の文書のスラッグ'),
-        section: z.string().describe('memory_outline が出した節id（`[...]` の中身）'),
+        sections: z
+          .array(z.string())
+          .min(1)
+          .describe(
+            'memory_outline が出した節id（`[...]` の中身）。複数渡せる——1回で全部移る。渡す順ではなく文書に現れる順で移し先の末尾に並ぶ',
+          ),
         toSlug: z.string().describe('節を足す側の文書のスラッグ（無ければ作る）'),
         summary: z.string().describe('なぜ移したかの一行要約（日誌に残る。本文は残らない）'),
       },
-      async ({ fromSlug, section, toSlug, summary }) => {
+      async ({ fromSlug, sections: ids, toSlug, summary }) => {
         if (fromSlug === toSlug) {
           return text(
             `from と to が同じ文書（${fromSlug}）である。節の移動先は別の文書でなければならない` +
@@ -2385,23 +2455,88 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
+        // **全件先出しの照合。** 1つでも解決できなければ1文字も書かない
+        // （上の doc「なぜ全件を先に照合してから動かすのか」）。
+        // `lookupMemorySection` は純粋関数なので、1回の `scanMemorySections`
+        // の結果へ渡された全 id をそのまま照合できる——id ごとに読み直す
+        // 理由が無い。
         const scan = scanMemorySections(existing.content);
-        const lookup = lookupMemorySection(scan.sections, section);
-        if (lookup.kind !== 'found') {
-          return text(describeMemorySectionLookupFailure(fromSlug, section, lookup));
+        const lookups = ids.map((id) => ({ id, lookup: lookupMemorySection(scan.sections, id) }));
+        const failures = lookups.filter(
+          (
+            entry,
+          ): entry is { id: string; lookup: Exclude<MemorySectionLookup, { kind: 'found' }> } =>
+            entry.lookup.kind !== 'found',
+        );
+        if (failures.length > 0) {
+          const first = failures[0] as {
+            id: string;
+            lookup: Exclude<MemorySectionLookup, { kind: 'found' }>;
+          };
+          const base = describeMemorySectionLookupFailure(fromSlug, first.id, first.lookup);
+          // **1節だけ渡して失敗した応答は、複数節対応の前とバイト同一に
+          // する**——既存の歯がこの文言を測っている。以下の追記は「渡した
+          // 節が2つ以上のとき」だけに限る。
+          if (ids.length === 1) return text(base);
+
+          const rest = failures.slice(1);
+          const restCounts = { absent: 0, stale: 0, ambiguous: 0 } as Record<
+            Exclude<MemorySectionLookup, { kind: 'found' }>['kind'],
+            number
+          >;
+          for (const entry of rest) restCounts[entry.lookup.kind] += 1;
+          // **id を全部並べない。** 90個渡されたときに応答がその数だけ
+          // 膨らむことを避ける——ここで言うべきは「あと何件、どんな種類で」
+          // 失敗したかであって、どの id かではない（疑う先の違いは
+          // `describeMemorySectionLookupFailure` が最初の1件で既に説明
+          // している）。
+          const restLine =
+            rest.length > 0
+              ? `\nほかにも解決できなかった節id が ${rest.length} 件ある` +
+                `（無い ${restCounts.absent} 件・古い ${restCounts.stale} 件・曖昧 ${restCounts.ambiguous} 件）。`
+              : '';
+          const allOrNothingLine =
+            '\nこの口は全件が見つかったときしか動かさない——1つでも解決できなければ、' +
+            `今回指定した他の ${ids.length - 1} 節も含めて1節も移していない。`;
+          return text(`${base}${restLine}${allOrNothingLine}`);
         }
-        const target = lookup.section;
-        const { nextContent, cut } = cutMemorySection(existing.content, target);
+
+        const targets = lookups.flatMap((entry) =>
+          entry.lookup.kind === 'found' ? [entry.lookup.section] : [],
+        );
+
+        // **重なりの検査。** 複数節を受けるようにしたことで新たに要った
+        // 断り（上の doc「重なりの検査」）。ここも1組でも重なっていたら
+        // 1文字も書かない。
+        const overlap = findOverlappingMemorySections(targets);
+        if (overlap !== null) {
+          return text(
+            `節id ${overlap.first.id}（「${overlap.first.heading}」）と ${overlap.second.id}` +
+              `（「${overlap.second.heading}」）の範囲が重なっている。片方がもう片方の中に` +
+              '入れ子になっている節を親子まとめて指した（`end` は子込みなので、親を切ると' +
+              '渡していないつもりの子も一緒に動く）か、同じ節id を2回渡したか（範囲が完全に' +
+              '一致する）のどちらかである——**どちらの形でも断る**。memory_outline で目次を' +
+              '取り直し、重ならない組で渡し直すこと。何も変わっていない' +
+              '（出どころも移し先も、1文字も動いていない）。',
+          );
+        }
+
+        // **`ordered` は文書に現れる順**（呼び手が渡した順ではない）。ここで
+        // 自分で並べ替え直さないこと——並び順の規則は `cutMemorySections` が
+        // 1箇所で持っており、応答の一覧も失敗時の断りもその結果を使う
+        // （`cutMemorySections` の doc「並び順の所有権はここにある」）。
+        const { nextContent, cut, ordered } = cutMemorySections(existing.content, targets);
 
         // **第3層。** 1層目（指す値が存在しない）と2層目（継ぎ足し）を
         // すり抜ける形が1つある——「本文だったものが frontmatter に化ける」。
-        // 上の doc を読むこと。**外れたら何も書かない。**
+        // 上の doc を読むこと。**外れたら何も書かない。**複数節でもここへ
+        // 到達しない理由は同じである（`cutMemorySections` の doc）。
         const priorHeader = existing.content.slice(0, scan.bodyStart);
         const nextHeader = nextContent.slice(0, scan.bodyStart);
         const nextFrontmatter = parseMemoryFrontmatter(nextContent);
         if (nextHeader !== priorHeader || nextFrontmatter.kind !== priorFrontmatter.kind) {
           return text(
-            `記憶 ${fromSlug} からこの節を切り取ると、frontmatter の解釈が変わってしまう` +
+            `記憶 ${fromSlug} から指定した節を切り取ると、frontmatter の解釈が変わってしまう` +
               `（${priorFrontmatter.kind} → ${nextFrontmatter.kind}）。断った——この道具は` +
               'frontmatter を1バイトも動かさないと約束しているので、約束が破れる切り取りは行わない。' +
               '何も変わっていない（出どころも移し先も、1文字も動いていない）。',
@@ -2434,9 +2569,9 @@ export function createCloneTools(context: ToolContext) {
           // 気づけない。落ちたのは2手目なので、1手目（移し先への追記）は
           // 済んでいる＝**同じ節が両方に在る。何も失われていない。**
           return text(
-            `⚠ 節「${target.heading}」を ${toSlug} の末尾へ足すところまでは済んだが、` +
+            `⚠ ${ordered.length} 節（合計 ${cut.length.toLocaleString('en-US')} 文字）を ${toSlug} の末尾へ足すところまでは済んだが、` +
               `${fromSlug} からの切り取りに失敗した（${error instanceof Error ? error.message : String(error)}）。` +
-              `いま同じ節が ${fromSlug} と ${toSlug} の両方に在る——**重複しているが、失われてはいない。**` +
+              `いま同じ ${ordered.length} 節が ${fromSlug} と ${toSlug} の両方に在る——**重複しているが、失われてはいない。**` +
               `${fromSlug} 側は1文字も変わっていない。memory_outline で ${fromSlug} を読み直し、` +
               '同じ操作をやり直すか、重複したままにするかを決めること。',
           );
@@ -2475,11 +2610,24 @@ export function createCloneTools(context: ToolContext) {
         const growth = memorySessionGrowthNote(memoryAfter, context.runtime?.());
 
         // **古い本文を1文字も出さない。** 出せば文脈に入る（この道具の
-        // 存在理由が消える）。名指しするのは見出しと節id だけ——呼び手が
-        // 「意図した節か」を確かめるのに要る最小限である。
+        // 存在理由が消える）。名指しするのは見出しと節id と文字数だけ——
+        // 呼び手が「意図した節か」を確かめるのに要る最小限である。
+        const listing = renderListing(
+          ordered.map(
+            (section) =>
+              `- 「${section.heading}」（節id ${section.id}、${section.chars.toLocaleString('en-US')} 文字）`,
+          ),
+          {
+            budget: MEMORY_SECTION_MOVE_LIST_BUDGET,
+            omitted: ({ rest }) => `…ほか ${rest} 節は一覧から省略（移動は済んでいる）。`,
+          },
+        );
+
         return text(
           [
-            `記憶 ${fromSlug} の節「${target.heading}」（節id ${target.id}、${target.chars.toLocaleString('en-US')} 文字）を ${toSlug} の末尾へ移した。`,
+            `記憶 ${fromSlug} から ${ordered.length} 節（合計 ${cut.length.toLocaleString('en-US')} 文字）を ${toSlug} の末尾へ移した。`,
+            '',
+            listing,
             '',
             `移した先 ${toSlug}:`,
             describeMemoryWriteDiff(toBefore === null ? null : toBefore.content, toWritten.content),
