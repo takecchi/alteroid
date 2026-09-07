@@ -4952,6 +4952,9 @@ class Pool implements ManagerPool {
    * **告げる機会をそこでも失う** — `restore()`（`#restoreJobs`）も `#reattach` も
    * `running` / `waiting_human` しか見ないので、`done` はどちらの経路でも
    * 告げられない（3枚のホワイトリストはこの PR で1枚も動かしていない）。
+   * **確かめた**（`#restoreJobs` 側の関門。すぐ上のコメントが「待機（`done`）だった
+   * ものは台帳に載せるだけにする」と逐語で言っている):
+   * `grep -Fn -- "if (job.status !== 'running' && job.status !== 'waiting_human') continue;" packages/core/src/manager.ts`
    * ＝ 器の入れ替えとデーモンの再起動が重なるたびに、いちばん静かな形で穴が開く。
    * 保存は Job 丸ごとの JSON（pg は `jobs.job` 列、fs は JSON ファイル）なので、
    * **移行は要らない。**
