@@ -4,6 +4,7 @@ import type {
   AccountUsageState,
   ChatStreamEvent,
   CloneHost,
+  JobStatus,
   JournalEntry,
   JournalEntryType,
   ManagerPool,
@@ -36,6 +37,7 @@ import {
   findUnrecordedManagers,
   isAccountGranted,
   isDailyReport,
+  jobStatusSchema,
   journalEntrySchema,
   localDayRange,
   memorySlugSchema,
@@ -633,6 +635,112 @@ const commitmentsCursorSchema = z.object({
 // 足したときに見つかった重複で、`@alteroid/core`（`commitment-cursor.ts`）へ
 // 寄せた。**挙動は1バイトも変えていない**——呼び出し側（下）の引数の順序・
 // 比較の向きはそのままで、呼ぶ関数の場所だけが変わっている。
+
+/**
+ * `status` / `limit` / `afterId` / `afterStartedAt`（issue #670）。
+ *
+ * **既定は現状維持。何も渡さない呼びは応答が1バイトも変わらない（opt-in）。**
+ * 判定は生のクエリで行う（下のハンドラ）——`c.req.valid('query')` は既定値を
+ * 埋めるので「渡されたか」を答えない。
+ *
+ * ## カーソルは `/journal` 形（可視の複合キー）
+ *
+ * 応答（`managerSummarySchema`。`apps/daemon/src/openapi.ts`）には既に
+ * `managerId` と `startedAt` が載っているので、呼ぶ側は前の頁の最後の行の
+ * `managerId`/`startedAt` を読んで次の要求を自分で組み立てられる——**応答に
+ * 新しい欄を1つも足さなくてよい**（`journalQuery` の doc が言う条件そのもの）。
+ * **`/commitments` 形の不透明カーソル（`cursor.ts`）は使わない。** 封筒
+ * （`total` / `nextCursor`）も足さない——続きが在るかは「`limit` 件ちょうど
+ * 返ったか」で呼ぶ側が判る（CLI の `noteIfAtLimit`、`reports.tsx` の
+ * `isReportsWindowFull` と同じ流儀）。
+ *
+ * ## `order` は足さない
+ *
+ * 並びは `ManagerPool.list()` が固定している（`startedAt` の降順）。ここで
+ * 選べるようにすると、#432 が `/commitments` で守った「既定は現状のまま」を
+ * こちらで崩すことになる。窓はその固定された順序の上に頁を切るだけである。
+ *
+ * ## `limit` の既定を作らない（未指定＝全件）
+ *
+ * 既定で切ると、**渡していない呼びの応答が変わる**うえに、到達できない行が
+ * 生まれる（north_star 禁止2、`ManagerPool#retire` の doc「上限を持たせると、
+ * 走行中のマネージャーが増えただけで無関係な1本が押し出される」）。
+ *
+ * ## `max` を 1000 にした理由
+ *
+ * **この数値は資源を守らない。** 既定が全件なのだから、頁の大きさに上限を
+ * 置いても守れるものは何も無い（`approvalsQuery` の doc が逐語でそう言って
+ * いて、あちらとこちらの `/commitments` はどちらも `max` を持たない）。
+ * ここに置く理由は1つだけ——**窓の形を `/journal` と揃えたことである。**
+ * `/managers` の窓は `/journal` と同じ「可視の複合キー＋封筒なし」で、
+ * `limit` の受け取り方まで同じにしておけば、片方を読んだ人がもう片方で
+ * 違う挙動に当たらない。**数値を `/journal` と別に決めると「なぜ違うのか」を
+ * 説明できない**ので、説明できる側（揃える）に倒した。
+ */
+const managersQuery = z.object({
+  /**
+   * カンマ区切りの状態（`jobStatusSchema` の6値）。**知らない値は 400 で
+   * 断る**（ハンドラで検査する。黙って無視すると、綴りを間違えた呼びが
+   * 「その状態のものは0件」として返り、絞り込みが効いていないことに
+   * 気づけない）。
+   */
+  status: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(1000).optional(),
+  /**
+   * ページングの足がかり（`afterStartedAt` と組で渡す）。**「次」は返る順序
+   * の意味——`startedAt` の降順なので、錨より*古い*側が返る。**
+   */
+  afterId: z.string().optional(),
+  /** ISO 8601。`afterId` と組で渡す（上の注意を見よ）。 */
+  afterStartedAt: z.string().optional(),
+});
+
+/**
+ * `/managers` の窓の位置。**`(startedAt, managerId)` の比較で辿る（keyset）。**
+ *
+ * `managerId` は同時刻の同着を割るための補助キーである（`startedAt` は
+ * `toISOString()` のミリ秒精度なので、ぴったり同じ値が2件ありえないわけでは
+ * ない——`approvalsCursorSchema` の doc と同じ理由）。**`ManagerPool.list()` の
+ * 並びは `startedAt` だけで決まるので、同着の相対順はそこでは決まっていない**
+ * （プロセス内の像と台帳を `Map` で合流させた順に落ちる）。⟹ 補助キーを足して
+ * 初めて、頁を辿っても飛ばさず重複しないことが言える。
+ */
+interface ManagerPagingKey {
+  startedAt: string;
+  managerId: string;
+}
+
+/**
+ * 返る順序（`startedAt` の降順、同着は `managerId` の降順）での前後。
+ *
+ * 負なら `a` が先（＝より新しい側）。**`localeCompare` を使う**——
+ * `ManagerPool.list()` の並べ替えと同じ比較にしておかないと、ここで並べ直した
+ * 結果があちらの並びと食い違う（`grep -Fn -- "b.startedAt.localeCompare(a.startedAt)" packages/core/src/manager.ts`）。
+ */
+function compareManagerPagingKey(a: ManagerPagingKey, b: ManagerPagingKey): number {
+  const byStartedAt = b.startedAt.localeCompare(a.startedAt);
+  if (byStartedAt !== 0) return byStartedAt;
+  return b.managerId.localeCompare(a.managerId);
+}
+
+/**
+ * `status` のカンマ区切りを 6 値へ照合する。
+ *
+ * **知らない値は捨てずに返す**（呼び出し側が 400 にする）。空の要素
+ * （`status=,,`）は落とす——`/journal` の `type` と同じ形である
+ * （`grep -Fn -- "type?.split(',').filter((value) => value.length > 0)" apps/daemon/src/app.ts`）。
+ */
+function parseManagerStatuses(raw: string): { statuses: JobStatus[]; unknown: string[] } {
+  const statuses: JobStatus[] = [];
+  const unknown: string[] = [];
+  for (const value of raw.split(',')) {
+    if (value.length === 0) continue;
+    const parsed = jobStatusSchema.safeParse(value);
+    if (parsed.success) statuses.push(parsed.data);
+    else unknown.push(value);
+  }
+  return { statuses, unknown };
+}
 
 const loginBody = z.object({
   provider: z.string().min(1),
@@ -2895,18 +3003,140 @@ export function createApp(deps: AppDeps) {
       describeRoute({
         tags: ['managers'],
         summary: '委譲先マネージャーの一覧',
+        description:
+          '委譲先マネージャーの一覧と状態。**行は1つも消えない**——台帳（`jobs`）に削除の口は無く、' +
+          '終端した委譲もそのまま残る（issue #670。`ManagerPool#retire` の doc）。' +
+          '⟹ 件数はその環境で今までに起こした委譲の総数と等しくなるので、`status` で絞り、' +
+          '`limit` と錨（`afterId` ＋ `afterStartedAt`）で窓を掛けられる。' +
+          '`status` はカンマ区切りで複数指定できる（`running` / `waiting_human` / `done` / ' +
+          '`failed` / `lost` / `stopped`。**知らない値は 400**——黙って無視すると、綴りを' +
+          '間違えた呼びが「0件」として返り、絞り込みが効いていないことに気づけない）。' +
+          '`afterId` と `afterStartedAt` は必ず組で渡す（片方だけは 400）。' +
+          '**指す行が見当たらないときも 400**——黙って先頭から返さない' +
+          '（`apps/daemon/src/cursor.ts` の「判定できないを黙って先頭へ倒さない」と同じ理由。' +
+          'この口は照合できる——台帳の行が消えないので、「無い」は「消えた」ではなく' +
+          '「そんな錨は刷っていない」である）。' +
+          '**並びは `startedAt` の降順で固定**（`ManagerPool.list()` の契約）で、ここでは選べない' +
+          '——`order` は足さない。⟹ 錨の「次」は*より古い*側である。' +
+          '**封筒（`total` / `nextCursor`）は持たない**——続きが在るかは `limit` 件ちょうど' +
+          '返ったかで判る（応答に新しい欄を1つも足さない）。' +
+          '当てる順序は **`status` 絞り → 錨 → `limit`** である（先に窓で切ると、次の頁の' +
+          '起点がずれる。issue #418 が `/commitments` で塞いだ穴と同じ形）。' +
+          '**クエリを1つも渡さない呼びは、この変更の前と応答が1バイトも変わらない**（opt-in）。' +
+          '**CLI とクローンの `manager_list` はこの窓を使っていない**（別 issue）。',
         responses: {
           200: {
             description: 'マネージャーの一覧と状態。',
             content: { 'application/json': { schema: resolver(managersListResponseSchema) } },
           },
+          400: {
+            description:
+              'クエリが不正（`limit` は1以上1000以下の整数）、`status` に知らない値が入っている、' +
+              '`afterId` / `afterStartedAt` の片方だけが渡された、`afterStartedAt` の形式が不正、' +
+              'または錨が指す行が見当たらない。',
+            content: {
+              'application/json': {
+                schema: resolver(z.union([validationErrorResponseSchema, errorResponseSchema])),
+              },
+            },
+          },
         },
       }),
+      validator('query', managersQuery),
       async (c) => {
+        const { status, limit, afterId, afterStartedAt } = c.req.valid('query');
+        // **opt-in の判定は生のクエリで行う**（`commitmentsQuery` のハンドラと同じ理由
+        // ——「渡されなかった」を「既定値と同じ値が渡された」と混同しない）。
+        // **`status` は含めない。** あちらの `includeClosed` と同じで、窓とは別の
+        // 絞り込みだからである——`status` だけを渡した呼びは並べ直しを通らず、
+        // `list()` の生の並びに乗ったまま絞られる。
+        const optedIn =
+          c.req.query('limit') !== undefined ||
+          c.req.query('afterId') !== undefined ||
+          c.req.query('afterStartedAt') !== undefined;
+
+        // **片方だけでは境界が決まらない**（`/journal` の `afterId`/`afterAt` と
+        // 同じ形。`managersQuery` の doc）。この2つの if で TypeScript が
+        // `afterId`/`afterStartedAt` を以降 `string` に絞る。
+        if (afterId === undefined && afterStartedAt !== undefined) {
+          return c.json({ error: 'afterId と afterStartedAt は両方一緒に渡す' as const }, 400);
+        }
+        if (afterId !== undefined && afterStartedAt === undefined) {
+          return c.json({ error: 'afterId と afterStartedAt は両方一緒に渡す' as const }, 400);
+        }
+        if (
+          afterId !== undefined &&
+          afterStartedAt !== undefined &&
+          Number.isNaN(Date.parse(afterStartedAt))
+        ) {
+          return c.json({ error: 'afterStartedAt は ISO 8601 で指定する' as const }, 400);
+        }
+
+        let statuses: JobStatus[] | undefined;
+        if (status !== undefined) {
+          const parsed = parseManagerStatuses(status);
+          if (parsed.unknown.length > 0) {
+            return c.json(
+              {
+                error:
+                  `status に知らない値が入っている: ${parsed.unknown.join(', ')}` +
+                  `（使えるのは ${jobStatusSchema.options.join(' / ')}）`,
+              },
+              400,
+            );
+          }
+          statuses = parsed.statuses;
+        }
+
         const managers = await clone.managers.list();
+
+        // **当てる順序は `status` 絞り → 錨 → `limit`。**
+        //
+        // 先に `limit` で切ると、切った窓の中から絞ることになって「その状態の
+        // ものが全部で何件あるか」に一切届かない（`status=running&limit=1` が、
+        // 先頭の1件が `done` だっただけで 0 件を返す）。錨を `limit` より後に
+        // 当てても同じ形で壊れる——継続点を切った後に解決すると次の頁の起点が
+        // ずれる（issue #418 が `/commitments` で塞いだ穴）。
+        let view = statuses === undefined ? managers : managers.filter((m) => statuses.includes(m.status));
+
+        // **並べ直すのは opt-in のときだけ。** `list()` の並び（`startedAt` 降順）は
+        // 同着の相対順を決めていないので、錨で辿るには補助キー（`managerId`）まで
+        // 含めた順序が要る（`compareManagerPagingKey` の doc）。opt-in しなければ
+        // この関数は1回も通らない——既定の呼びの応答がバイト単位で一致するのは、
+        // この形が支えている（`/commitments` の `optedIn` と同じ）。
+        if (optedIn) {
+          view = [...view].sort(compareManagerPagingKey);
+          if (afterId !== undefined && afterStartedAt !== undefined) {
+            const pivot = { managerId: afterId, startedAt: afterStartedAt };
+            // **実在を確かめる（`/approvals` / `/commitments` とはここが違う）。**
+            // あちらは「答えた行が絞り込みから消えると続きが取れなくなる」ので
+            // 実在検査を要求しない（`cursor.ts` の `decodeCursor` の doc）。
+            // **この口にその事情は無い**——台帳の行は消えないし、`status` を跨いで
+            // 動くこともない（`status` が変われば錨も同じ一覧の中で動くだけ）。
+            // ⟹ 見当たらないのは「消えた」ではなく「そんな錨は刷っていない」で
+            // あって、黙って先頭から返すと呼ぶ側は同じ頁を無限に読む。
+            const exists = view.some(
+              (m) => m.managerId === afterId && m.startedAt === afterStartedAt,
+            );
+            if (!exists) {
+              return c.json(
+                {
+                  error:
+                    `afterId/afterStartedAt が指す行が見当たらない（${afterId} / ${afterStartedAt}）。` +
+                    '応答に載っていた managerId と startedAt をそのまま渡すこと',
+                },
+                400,
+              );
+            }
+            view = view.filter((m) => compareManagerPagingKey(m, pivot) > 0);
+          }
+        }
+
+        const page = optedIn && limit !== undefined ? view.slice(0, limit) : view;
+
         return c.json(
           managersListResponseSchema.parse({
-            managers: managers.map((summary) => managerView(clone.managers, summary)),
+            managers: page.map((summary) => managerView(clone.managers, summary)),
           }),
         );
       },
